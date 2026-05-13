@@ -21,17 +21,26 @@ test('new task isolates prior session history even with explicit current refs', 
   assert.equal(policy.historyReuse.allowed, false);
   assert.equal(policy.pollutionGuard.dropStaleHistory, true);
   assert.deepEqual(policy.referencePriority.explicitReferences, ['current.json']);
-  assert.equal(shouldIsolateHistory({ prompt: 'new task' }), true);
+  assert.equal(shouldIsolateHistory({ goalSnapshot: { taskRelation: 'new-task' } }), true);
 });
 
 test('continuation and repair intents select bounded history scopes', () => {
-  const continuePolicy = buildConversationContextPolicy({ prompt: '继续上一轮，把报告补完。' });
+  const continuePolicy = buildConversationContextPolicy({ goalSnapshot: { taskRelation: 'continue' } });
   assert.equal(continuePolicy.mode, 'continue');
   assert.equal(continuePolicy.historyReuse.allowed, true);
   assert.equal(continuePolicy.historyReuse.scope, 'same-task-recent-turns');
 
-  const repairPolicy = buildConversationContextPolicy({ prompt: '修复上一轮失败，根据日志重跑。' });
+  const repairPolicy = buildConversationContextPolicy({ goalSnapshot: { taskRelation: 'repair' } });
   assert.equal(repairPolicy.mode, 'repair');
   assert.equal(repairPolicy.repairPolicy?.includeFailureEvidence, true);
   assert.equal(repairPolicy.historyReuse.scope, 'previous-run-and-failure-evidence');
+});
+
+test('prompt keywords alone do not switch context reuse mode', () => {
+  const policy = buildConversationContextPolicy({
+    prompt: '继续 previous report latest no execution AgentServer',
+  });
+
+  assert.equal(policy.mode, 'isolate');
+  assert.equal(policy.historyReuse.allowed, false);
 });

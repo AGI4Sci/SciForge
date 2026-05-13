@@ -1,4 +1,5 @@
 import type { SciForgeSharedSkillDomain } from './handoff';
+import { toolPayloadShapeContractSummary } from './tool-payload-shape';
 
 const DEFAULT_ARTIFACT_TYPE_BY_SKILL_DOMAIN: Record<SciForgeSharedSkillDomain, string> = {
   literature: 'paper-list',
@@ -8,8 +9,34 @@ const DEFAULT_ARTIFACT_TYPE_BY_SKILL_DOMAIN: Record<SciForgeSharedSkillDomain, s
 };
 
 const RESEARCH_REPORT_ARTIFACT_TYPE = 'research-report';
+const RUNTIME_CONTEXT_SUMMARY_ARTIFACT_TYPE = 'runtime-context-summary';
 const OMICS_DIFFERENTIAL_EXPRESSION_ARTIFACT_TYPE = 'omics-differential-expression';
 const TEXT_MARKDOWN_ARTIFACT_TYPE_PATTERN = /report|summary|markdown|text/i;
+
+export const BIBLIOGRAPHIC_VERIFICATION_POLICY_CONTRACT_ID = 'sciforge.bibliographic-verification.v1' as const;
+export const BIBLIOGRAPHIC_RECORD_CONTRACT_ID = 'sciforge.bibliographic-record.v1' as const;
+export const BIBLIOGRAPHIC_ARTIFACT_TYPES = [
+  'paper-list',
+  'bibliography',
+  'citation-record',
+  'bibliographic-record',
+  'literature-reproduction-feasibility',
+] as const;
+export const BIBLIOGRAPHIC_COMPONENT_IDS = ['paper-card-list'] as const;
+export const BIBLIOGRAPHIC_CAPABILITY_IDS = [
+  'citation.verification',
+  'literature.retrieval',
+  'agentserver.generate.literature',
+] as const;
+
+const BIBLIOGRAPHIC_ARTIFACT_TYPE_SET = new Set<string>(BIBLIOGRAPHIC_ARTIFACT_TYPES);
+const BIBLIOGRAPHIC_COMPONENT_ID_SET = new Set<string>(BIBLIOGRAPHIC_COMPONENT_IDS);
+const BIBLIOGRAPHIC_CAPABILITY_ID_SET = new Set<string>(BIBLIOGRAPHIC_CAPABILITY_IDS);
+const BIBLIOGRAPHIC_SKILL_DOMAIN_SET = new Set<string>(['literature']);
+const BIBLIOGRAPHIC_POLICY_CONTRACT_SET = new Set<string>([
+  BIBLIOGRAPHIC_VERIFICATION_POLICY_CONTRACT_ID,
+  BIBLIOGRAPHIC_RECORD_CONTRACT_ID,
+]);
 
 export const CURRENT_REFERENCE_GATE_TOOL_ID = 'sciforge.current-reference-gate' as const;
 export const CURRENT_REFERENCE_DIGEST_RECOVERY_TOOL_ID = 'sciforge.current-reference-digest-recovery' as const;
@@ -26,6 +53,12 @@ export const CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_DETAIL =
   'The recovery output keeps the same user-visible contract: report artifact, object references, and execution audit.' as const;
 export const CURRENT_REFERENCE_DIGEST_RECOVERY_LOG_LINE =
   'SciForge recovered from bounded current-reference digests.\n' as const;
+export const CURRENT_REFERENCE_EVIDENCE_POLICY_DEFAULT_ACTION =
+  'Use current references as explicit user-provided evidence; resolve large payloads by ref and bounded summary. Treat stdoutRef/stderrRef as audit refs unless a structured harness/context policy grants bounded raw log expansion.' as const;
+export const EXECUTION_LOG_REF_AUDIT_NOTE =
+  'stdoutRef/stderrRef are audit and provenance refs by default; raw log expansion requires a structured harness/context policy grant.' as const;
+export const EXECUTION_LOG_REF_EXPANSION_POLICY =
+  'cite stdoutRef/stderrRef for audit; expand only when structured harness/context policy grants bounded log inspection' as const;
 
 export interface DirectContextFastPathItem {
   kind: string;
@@ -39,13 +72,14 @@ export interface DirectContextFastPathInputs {
   uiArtifacts?: unknown;
   references?: unknown;
   currentReferences?: unknown;
+  currentReferenceDigests?: unknown;
   recentExecutionRefs?: unknown;
   executionUnits?: unknown;
 }
 
 export const DIRECT_CONTEXT_FAST_PATH_POLICY = {
   reportArtifactId: 'direct-context-summary',
-  reportArtifactType: RESEARCH_REPORT_ARTIFACT_TYPE,
+  reportArtifactType: RUNTIME_CONTEXT_SUMMARY_ARTIFACT_TYPE,
   source: 'direct-context-fast-path',
   policyOwner: 'python-conversation-policy',
   claimId: 'direct-context-claim',
@@ -58,7 +92,7 @@ export const DIRECT_CONTEXT_FAST_PATH_POLICY = {
   defaultClaimText: 'Existing session context is available.',
   reasoningTraceLines: [
     'Python conversation-policy selected direct-context-answer.',
-    'SciForge executed the direct-context fast path from existing artifacts, references, and execution refs only.',
+    'SciForge executed the direct-context fast path from current reference digests, artifacts, references, and execution refs only.',
   ],
   contextLimits: {
     artifacts: 12,
@@ -70,6 +104,18 @@ export const DIRECT_CONTEXT_FAST_PATH_POLICY = {
   fallbackRefs: {
     artifact: 'artifact:',
     executionUnit: 'execution-unit:',
+  },
+  missingExpectedArtifacts: {
+    claimId: 'direct-context-missing-expected-artifacts',
+    claimType: 'missing-expected-artifacts',
+    status: 'needs-work',
+    artifactType: 'runtime-diagnostic',
+    messageHeader: '当前会话有可复用 refs，但缺少本轮 follow-up 需要的结构化产物，不能把上下文摘要当作任务成功。',
+    nextStepTemplate: 'Resume or repair the prior run before answering this follow-up; missing expected artifacts: {{missing}}.',
+    recoverActions: [
+      'Resume or repair the prior run using preserved execution refs.',
+      'Generate the missing expected artifact before answering the format/change/audit follow-up.',
+    ],
   },
 } as const;
 
@@ -113,6 +159,27 @@ export function defaultArtifactSchemaForSkillDomain(skillDomain: SciForgeSharedS
 
 export function buildDirectContextFastPathItems(inputs: DirectContextFastPathInputs): DirectContextFastPathItem[] {
   const items: DirectContextFastPathItem[] = [];
+  for (const digest of recordRows(inputs.currentReferenceDigests).slice(-DIRECT_CONTEXT_FAST_PATH_POLICY.contextLimits.references)) {
+    const summary = directContextDigestSummary(digest);
+    if (!summary) continue;
+    const sourceRef = stringField(digest.sourceRef)
+      ?? stringField(digest.path)
+      ?? stringField(digest.clickableRef)
+      ?? stringField(digest.ref);
+    const digestRef = stringField(digest.digestRef) ?? stringField(digest.digestPath);
+    const ref = digestRef ?? sourceRef;
+    const label = stringField(digest.title)
+      ?? stringField(digest.label)
+      ?? sourceRef
+      ?? digestRef
+      ?? 'current reference digest';
+    items.push({
+      kind: 'current-reference-digest',
+      label,
+      ref,
+      summary,
+    });
+  }
   for (const artifact of [...recordRows(inputs.artifacts), ...recordRows(inputs.uiArtifacts)].slice(-DIRECT_CONTEXT_FAST_PATH_POLICY.contextLimits.artifacts)) {
     const id = stringField(artifact.id) ?? stringField(artifact.type) ?? 'artifact';
     const type = stringField(artifact.type) ?? stringField(artifact.artifactType) ?? 'artifact';
@@ -222,9 +289,10 @@ export function normalizeArtifactDataWithPolicy(
 }
 
 export function agentServerToolPayloadProtocolContractLines() {
+  const shape = toolPayloadShapeContractSummary();
   return [
-    'ToolPayload schema is strict: uiManifest, claims, executionUnits, and artifacts must be arrays; every uiManifest slot must be an object with componentId and a string artifactRef when present; every artifact must have non-empty id and type. Do not put result rows inside uiManifest; put data in artifacts[].data or artifacts[].dataRef.',
-    'Use uiManifest only as view routing metadata. All user-visible result content, tables, lists, reports, raw provider traces, and files must be represented as artifacts with durable dataRef/path or inline data that SciForge can persist.',
+    `ToolPayload schema is strict (${shape.contractId}): ${shape.arrayFields.join(', ')} must be arrays; every uiManifest slot must be an object with componentId and a string artifactRef when present; every artifact must have non-empty id and type. Do not put result rows inside uiManifest; put data in artifacts[].data or artifacts[].dataRef.`,
+    `Use uiManifest only as view routing metadata. ${shape.contentRule}. All user-visible result content, tables, lists, reports, raw provider traces, and files must be represented as artifacts with durable dataRef/path or inline data that SciForge can persist.`,
     'When repairing schema failures, preserve the task-specific componentId/artifactRef/artifact type from selectedComponentIds, expectedArtifactTypes, incoming uiManifest, or generated artifacts. If none is known, use a generic unknown-artifact-inspector slot bound to a runtime-result artifact; do not force literature/report-specific components into unrelated scenarios.',
   ];
 }
@@ -248,8 +316,116 @@ export function agentServerBibliographicVerificationPromptPolicyLines() {
   return [
     'Bibliographic verification contract: never mark a PMID, DOI, trial id, citation, or paper record as corrected/verified unless the returned title, year, journal, and identifier correspond to the same work as the source claim.',
     'If an identifier lookup returns a title mismatch, topic mismatch, unrelated journal, or only a broad review when the source claim is a trial/cohort/paper, preserve the original claim and mark it needs-verification with the mismatch reason and search terms. Do not substitute the unrelated record as a correction.',
+    'Plain paper titles, author-year strings, journal names, or citation-looking text are not verified citations by themselves. If no provider/raw/evidence refs or identifier lookup evidence were produced in this run, mark literature records unverified or needs-verification and keep any bibliography in an uncertainty/checklist artifact.',
+    'When the user asks not to retrieve, search, browse, or use external providers, do not emit fabricated DOI/PMID/trial ids or verified bibliography. Emit a bounded plan, acceptance criteria, and evidence gaps instead.',
     'For literature artifacts, keep original_title, verified_title, title_match, identifier_match, verification_status, and verification_notes fields when correcting references so SciForge and users can audit the match.',
   ];
+}
+
+export interface BibliographicVerificationPromptPolicyGateInput {
+  skillDomain?: unknown;
+  expectedArtifactTypes?: unknown;
+  selectedComponentIds?: unknown;
+  selectedCapabilityIds?: unknown;
+  selectedCapabilities?: unknown;
+  artifacts?: unknown;
+  schemas?: unknown;
+  verificationPolicies?: unknown;
+}
+
+export function agentServerShouldIncludeBibliographicVerificationPromptPolicy(input: BibliographicVerificationPromptPolicyGateInput) {
+  return bibliographicVerificationPolicyScopeEnabled(input);
+}
+
+export function bibliographicVerificationPolicyScopeEnabled(input: BibliographicVerificationPromptPolicyGateInput) {
+  return policyTokenInSet(input.skillDomain, BIBLIOGRAPHIC_SKILL_DOMAIN_SET)
+    || policyTokensInSet(input.expectedArtifactTypes, BIBLIOGRAPHIC_ARTIFACT_TYPE_SET)
+    || policyTokensInSet(input.selectedComponentIds, BIBLIOGRAPHIC_COMPONENT_ID_SET)
+    || policyTokensInSet(input.selectedCapabilityIds, BIBLIOGRAPHIC_CAPABILITY_ID_SET)
+    || valueDeclaresBibliographicVerificationPolicy(input.selectedCapabilities, 'capability')
+    || valueDeclaresBibliographicVerificationPolicy(input.artifacts, 'artifact')
+    || valueDeclaresBibliographicVerificationPolicy(input.schemas, 'schema')
+    || valueDeclaresBibliographicVerificationPolicy(input.verificationPolicies, 'policy');
+}
+
+export function valueDeclaresBibliographicVerificationPolicy(value: unknown, scope: 'artifact' | 'capability' | 'schema' | 'policy' | 'record' = 'policy'): boolean {
+  if (Array.isArray(value)) return value.some((entry) => valueDeclaresBibliographicVerificationPolicy(entry, scope));
+  if (!isRecord(value)) {
+    if (scope !== 'record' && policyTokenInSet(value, BIBLIOGRAPHIC_POLICY_CONTRACT_SET)) return true;
+    return scope === 'artifact'
+      ? policyTokenInSet(value, BIBLIOGRAPHIC_ARTIFACT_TYPE_SET)
+      : scope === 'capability'
+        ? policyTokenInSet(value, BIBLIOGRAPHIC_CAPABILITY_ID_SET)
+        : false;
+  }
+
+  if (truthyPolicyFlag(value.requiresBibliographicVerification)
+    || truthyPolicyFlag(value.bibliographicVerificationRequired)
+    || truthyPolicyFlag(value.citationVerificationRequired)) {
+    return true;
+  }
+
+  const policy = isRecord(value.policy) ? value.policy : undefined;
+  if (policy && (
+    truthyPolicyFlag(policy.requiresBibliographicVerification)
+    || truthyPolicyFlag(policy.bibliographicVerificationRequired)
+    || truthyPolicyFlag(policy.citationVerificationRequired)
+  )) {
+    return true;
+  }
+
+  if (policyTokenInSet(value.contractId, BIBLIOGRAPHIC_POLICY_CONTRACT_SET)
+    || policyTokenInSet(value.verificationContract, BIBLIOGRAPHIC_POLICY_CONTRACT_SET)
+    || policyTokenInSet(value.recordContract, BIBLIOGRAPHIC_POLICY_CONTRACT_SET)
+    || policyTokenInSet(value.dataContract, BIBLIOGRAPHIC_POLICY_CONTRACT_SET)) {
+    return true;
+  }
+
+  if (policyTokensInSet(value.verificationPolicies, BIBLIOGRAPHIC_POLICY_CONTRACT_SET)
+    || policyTokensInSet(value.policyContracts, BIBLIOGRAPHIC_POLICY_CONTRACT_SET)) {
+    return true;
+  }
+
+  if (scope === 'artifact' || scope === 'schema') {
+    return policyTokenInSet(value.type, BIBLIOGRAPHIC_ARTIFACT_TYPE_SET)
+      || policyTokenInSet(value.artifactType, BIBLIOGRAPHIC_ARTIFACT_TYPE_SET)
+      || policyTokenInSet(value.acceptsArtifactType, BIBLIOGRAPHIC_ARTIFACT_TYPE_SET)
+      || policyTokensInSet(value.acceptsArtifactTypes, BIBLIOGRAPHIC_ARTIFACT_TYPE_SET)
+      || valueDeclaresBibliographicVerificationPolicy(value.metadata, 'policy')
+      || valueDeclaresBibliographicVerificationPolicy(value.schema, 'schema');
+  }
+
+  if (scope === 'capability') {
+    return policyTokenInSet(value.id, BIBLIOGRAPHIC_CAPABILITY_ID_SET)
+      || policyTokenInSet(value.capabilityId, BIBLIOGRAPHIC_CAPABILITY_ID_SET)
+      || valueDeclaresBibliographicVerificationPolicy(value.metadata, 'policy')
+      || valueDeclaresBibliographicVerificationPolicy(value.policy, 'policy');
+  }
+
+  if (scope === 'record') {
+    return policyTokenInSet(value.recordContract, BIBLIOGRAPHIC_POLICY_CONTRACT_SET)
+      || policyTokenInSet(value.schemaVersion, BIBLIOGRAPHIC_POLICY_CONTRACT_SET)
+      || policyTokenInSet(value.type, new Set(['bibliographic-record', 'citation-record', 'paper-record']))
+      || policyTokenInSet(value.kind, new Set(['bibliographic-record', 'citation-record', 'paper-record']));
+  }
+
+  return false;
+}
+
+function policyTokensInSet(value: unknown, allowed: Set<string>) {
+  return toStringList(value).some((entry) => policyTokenInSet(entry, allowed))
+    || (Array.isArray(value) && value.some((entry) => policyTokenInSet(entry, allowed)));
+}
+
+function policyTokenInSet(value: unknown, allowed: Set<string>) {
+  const token = stringField(value)?.trim().toLowerCase();
+  return Boolean(token && allowed.has(token));
+}
+
+function truthyPolicyFlag(value: unknown) {
+  if (value === true) return true;
+  const text = stringField(value)?.trim().toLowerCase();
+  return text === 'true' || text === 'required';
 }
 
 export function currentReferenceDigestFailureCanRecover(failureReason: string) {
@@ -553,6 +729,27 @@ function directContextArtifactSummary(artifact: ArtifactPolicyRecord): string {
     ?? JSON.stringify(clipJsonForDirectContext(artifact, 2)).slice(0, DIRECT_CONTEXT_FAST_PATH_POLICY.contextLimits.summaryChars);
 }
 
+function directContextDigestSummary(digest: ArtifactPolicyRecord): string | undefined {
+  const candidates = [
+    digest.digestText,
+    digest.summary,
+    digest.text,
+    digest.preview,
+    digest.content,
+    directContextDigestExcerpts(digest.excerpts),
+  ];
+  return candidates.map(stringField).find(Boolean);
+}
+
+function directContextDigestExcerpts(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const text = value
+    .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+    .slice(0, 3)
+    .join(' ');
+  return text ? text.slice(0, DIRECT_CONTEXT_FAST_PATH_POLICY.contextLimits.summaryChars) : undefined;
+}
+
 function directContextDataPreview(value: unknown): string | undefined {
   if (typeof value === 'string') return value.slice(0, DIRECT_CONTEXT_FAST_PATH_POLICY.contextLimits.summaryChars);
   if (!isRecord(value)) return undefined;
@@ -640,4 +837,10 @@ function clipJsonForDirectContext(value: unknown, depth: number, seen = new Weak
 
 function stringField(value: unknown) {
   return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function toStringList(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : [];
 }

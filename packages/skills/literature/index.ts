@@ -18,8 +18,22 @@ import {
 
 export type LiteratureRetrievalStatus = 'success' | 'partial' | 'failed';
 export type LiteratureProviderAttemptStatus = 'success' | 'empty' | 'timeout' | 'error' | 'skipped';
-export type CitationVerificationStatus = 'verified' | 'mismatch' | 'missing-identifiers';
+export type CitationVerificationStatus = 'verified' | 'mismatch' | 'missing-identifiers' | 'unverified';
 export type LiteratureSourceTrustLevel = 'high' | 'medium' | 'low';
+
+export interface LiteratureRetrievalArtifactRefs {
+  paperList: string;
+  evidenceMatrix: string;
+  researchReport: string;
+}
+
+export interface LiteratureDerivedArtifactRefs {
+  citationCorrection: string;
+  bilingualReport: string;
+  bilingualExecutiveSummary: string;
+  bilingualGlossary: string;
+  reproductionFeasibility: string;
+}
 
 export interface LiteratureRetrievalRequest {
   query: string;
@@ -33,6 +47,7 @@ export interface LiteratureRetrievalRequest {
   fullTextPolicy?: 'metadata-only' | 'abstracts' | 'bounded-full-text';
   dedupePolicy?: 'doi-pmid-arxiv-title-year' | 'provider-native' | 'none';
   excludedProviderIds?: string[];
+  artifactRefs?: Partial<LiteratureRetrievalArtifactRefs>;
 }
 
 export interface LiteratureRetrievalBudget {
@@ -95,7 +110,7 @@ export interface LiteratureEvidenceMatrixRow {
 
 export interface LiteratureResearchReportArtifact {
   artifactType: 'research-report';
-  ref: 'artifact:research-report';
+  ref: string;
   title: string;
   boundedSummary: string;
   fullTextPolicy: 'metadata-only' | 'abstracts' | 'bounded-summary';
@@ -135,7 +150,7 @@ export interface LiteratureWorkEvidence {
   kind: 'literature-retrieval';
   capabilityId: 'literature.retrieval';
   query: string;
-  artifactRefs: Array<'artifact:paper-list' | 'artifact:evidence-matrix' | 'artifact:research-report'>;
+  artifactRefs: string[];
   providerAttemptRefs: string[];
   budget: LiteratureRetrievalBudget;
   diagnosticCodes: string[];
@@ -159,6 +174,9 @@ export interface LiteratureProviderAttempt {
 export interface CitationVerificationResult {
   paperId: string;
   providerIds: string[];
+  providerRecordRefs: string[];
+  evidenceRefs: string[];
+  verificationContract: 'sciforge.bibliographic-record.v1';
   checkedFields: Array<'doi' | 'pmid' | 'arxivId' | 'title' | 'year' | 'journal'>;
   status: CitationVerificationStatus;
   mismatchFields: string[];
@@ -182,6 +200,7 @@ export interface LiteratureRetrievalDiagnostic {
 
 export interface OfflineLiteratureRetrievalOutput {
   status: LiteratureRetrievalStatus;
+  artifactRefs: LiteratureRetrievalArtifactRefs;
   paperList: NormalizedLiteraturePaper[];
   evidenceMatrix: LiteratureEvidenceMatrixRow[];
   researchReport: LiteratureResearchReportArtifact;
@@ -205,12 +224,13 @@ export interface LiteratureCitationCorrectionInput {
   };
   reason: string;
   action?: LiteratureCitationCorrectionAction;
+  artifactRefs?: Partial<Pick<LiteratureDerivedArtifactRefs, 'citationCorrection'>>;
 }
 
 export interface LiteratureCitationCorrectionArtifact {
   artifactType: 'citation-correction';
-  ref: 'artifact:citation-correction';
-  targetArtifactRef?: 'artifact:paper-list' | 'artifact:evidence-matrix' | 'artifact:research-report';
+  ref: string;
+  targetArtifactRef?: string;
   targetPaperId?: string;
   targetProviderRecordRefs: string[];
   sourceRefs: string[];
@@ -250,6 +270,7 @@ export interface LiteratureBilingualReportInput {
     sourceRefs?: string[];
   };
   glossaryTerms?: LiteratureBilingualGlossaryTermInput[];
+  artifactRefs?: Partial<Pick<LiteratureDerivedArtifactRefs, 'bilingualReport' | 'bilingualExecutiveSummary' | 'bilingualGlossary'>>;
 }
 
 export interface LiteratureBilingualGlossaryEntry {
@@ -269,32 +290,32 @@ export interface LiteratureDerivedArtifactMetadata {
 
 export interface LiteratureBilingualReportArtifact {
   artifactType: 'bilingual-literature-report';
-  ref: 'artifact:bilingual-literature-report';
-  parentArtifactRef: 'artifact:research-report';
+  ref: string;
+  parentArtifactRef: string;
   metadata: LiteratureDerivedArtifactMetadata;
-  derivedArtifactRefs: Array<'artifact:bilingual-executive-summary' | 'artifact:bilingual-glossary'>;
-  sourceArtifactRefs: Array<'artifact:research-report' | 'artifact:paper-list' | 'artifact:evidence-matrix'>;
+  derivedArtifactRefs: string[];
+  sourceArtifactRefs: string[];
   sourceLanguage: string;
   targetLanguage: string;
   status: LiteratureBilingualReportStatus;
   sourceReport: {
-    ref: 'artifact:research-report';
+    ref: string;
     title: string;
     boundedSummary: string;
     sourceRefs: string[];
   };
   englishExecutiveSummary: {
     artifactType: 'bilingual-executive-summary';
-    ref: 'artifact:bilingual-executive-summary';
-    parentArtifactRef: 'artifact:research-report';
+    ref: string;
+    parentArtifactRef: string;
     metadata: LiteratureDerivedArtifactMetadata;
     text: string;
     sourceRefs: string[];
   };
   glossary: {
     artifactType: 'bilingual-glossary';
-    ref: 'artifact:bilingual-glossary';
-    parentArtifactRef: 'artifact:research-report';
+    ref: string;
+    parentArtifactRef: string;
     metadata: LiteratureDerivedArtifactMetadata;
     entries: LiteratureBilingualGlossaryEntry[];
     sourceRefs: string[];
@@ -329,6 +350,7 @@ export interface LiteratureReproductionFeasibilityInput {
   paperEvidence?: LiteratureReproductionEvidenceInput[];
   objective?: string;
   maxPlanSteps?: number;
+  artifactRefs?: Partial<Pick<LiteratureDerivedArtifactRefs, 'reproductionFeasibility'>>;
 }
 
 export interface LiteratureReproductionFeasibilityRankedPaper {
@@ -354,10 +376,10 @@ export interface LiteratureReproductionFeasibilityRankedPaper {
 
 export interface LiteratureReproductionFeasibilityArtifact {
   artifactType: 'literature-reproduction-feasibility';
-  ref: 'artifact:literature-reproduction-feasibility';
-  parentArtifactRef: 'artifact:research-report';
+  ref: string;
+  parentArtifactRef: string;
   metadata: LiteratureDerivedArtifactMetadata;
-  sourceArtifactRefs: Array<'artifact:paper-list' | 'artifact:evidence-matrix' | 'artifact:research-report'>;
+  sourceArtifactRefs: string[];
   status: LiteratureReproductionFeasibilityStatus;
   paperIds: string[];
   rankedPapers: LiteratureReproductionFeasibilityRankedPaper[];
@@ -382,6 +404,12 @@ const DEFAULT_LITERATURE_RETRIEVAL_BUDGET: LiteratureRetrievalBudget = {
   maxDownloadBytes: 25000000,
 };
 
+const DEFAULT_LITERATURE_RETRIEVAL_ARTIFACT_REFS: LiteratureRetrievalArtifactRefs = {
+  paperList: 'artifact:paper-list',
+  evidenceMatrix: 'artifact:evidence-matrix',
+  researchReport: 'artifact:research-report',
+};
+
 const DEFAULT_PROVIDER_IDS = ['pubmed', 'crossref', 'semantic-scholar', 'openalex', 'arxiv', 'web-search', 'scp-biomedical-search'];
 const CITATION_FIELDS: CitationVerificationResult['checkedFields'] = ['doi', 'pmid', 'arxivId', 'title', 'year', 'journal'];
 
@@ -394,8 +422,46 @@ interface LiteratureSourceRecordForProvenance extends LiteratureSourceProvenance
   arxivId?: string;
 }
 
+export function literatureRetrievalArtifactRefs(overrides?: Partial<LiteratureRetrievalArtifactRefs>): LiteratureRetrievalArtifactRefs {
+  return {
+    ...DEFAULT_LITERATURE_RETRIEVAL_ARTIFACT_REFS,
+    ...definedStringFields(overrides),
+  };
+}
+
+function literatureSourceArtifactRefs(refs: LiteratureRetrievalArtifactRefs): string[] {
+  return unique([
+    refs.paperList,
+    refs.evidenceMatrix,
+    refs.researchReport,
+  ]);
+}
+
+function literatureDerivedArtifactRefs(
+  parentArtifactRef: string,
+  overrides?: Partial<LiteratureDerivedArtifactRefs>,
+): LiteratureDerivedArtifactRefs {
+  return {
+    citationCorrection: overrides?.citationCorrection ?? derivedLiteratureArtifactRef(parentArtifactRef, 'citation-correction'),
+    bilingualReport: overrides?.bilingualReport ?? derivedLiteratureArtifactRef(parentArtifactRef, 'bilingual-literature-report'),
+    bilingualExecutiveSummary: overrides?.bilingualExecutiveSummary ?? derivedLiteratureArtifactRef(parentArtifactRef, 'bilingual-executive-summary'),
+    bilingualGlossary: overrides?.bilingualGlossary ?? derivedLiteratureArtifactRef(parentArtifactRef, 'bilingual-glossary'),
+    reproductionFeasibility: overrides?.reproductionFeasibility ?? derivedLiteratureArtifactRef(parentArtifactRef, 'literature-reproduction-feasibility'),
+  };
+}
+
+function derivedLiteratureArtifactRef(parentArtifactRef: string, artifactType: string): string {
+  return `${parentArtifactRef}#derived:${slug(artifactType)}`;
+}
+
+function definedStringFields<T extends Record<string, unknown>>(record: T | undefined): Partial<T> {
+  if (!record) return {};
+  return Object.fromEntries(Object.entries(record).filter(([, value]) => typeof value === 'string' && value.trim())) as Partial<T>;
+}
+
 export function runOfflineLiteratureRetrieval(input: OfflineLiteratureRetrievalRunnerInput): OfflineLiteratureRetrievalOutput {
   const budget = { ...DEFAULT_LITERATURE_RETRIEVAL_BUDGET, ...input.budget };
+  const artifactRefs = literatureRetrievalArtifactRefs(input.request.artifactRefs);
   const requestMaxResults = input.request.maxResults ?? budget.maxResults;
   const maxResults = Math.min(requestMaxResults, budget.maxResults);
   const requestedProviders = normalizeRequestedProviders(input.request.databases);
@@ -570,7 +636,7 @@ export function runOfflineLiteratureRetrieval(input: OfflineLiteratureRetrievalR
   }));
   const status = finalStatus(paperList, diagnostics);
   const sourceProvenance = paperList.map((paper) => sourceProvenanceForPaper(paper, sourceRecordsByPaper.get(paper.id) ?? []));
-  const artifactRefs: LiteratureWorkEvidence['artifactRefs'] = ['artifact:paper-list', 'artifact:evidence-matrix', 'artifact:research-report'];
+  const workArtifactRefs: LiteratureWorkEvidence['artifactRefs'] = literatureSourceArtifactRefs(artifactRefs);
   const providerAttemptRefs = providerAttempts.map((attempt) => `providerAttempt:${attempt.id}`);
   const workEvidenceRef = `workEvidence:literature-retrieval:${slug(input.request.query)}`;
   const budgetDebitRecord = createLiteratureRetrievalBudgetDebitRecord({
@@ -585,7 +651,8 @@ export function runOfflineLiteratureRetrieval(input: OfflineLiteratureRetrievalR
     selectedProviderIds,
     status,
     workEvidenceRef,
-    artifactRefs,
+    artifactRefs: workArtifactRefs,
+    paperListArtifactRef: artifactRefs.paperList,
   });
   const budgetDebitRefs = [budgetDebitRecord.debitId];
   for (const attempt of providerAttempts) {
@@ -594,11 +661,12 @@ export function runOfflineLiteratureRetrieval(input: OfflineLiteratureRetrievalR
 
   return {
     status,
+    artifactRefs,
     paperList,
     evidenceMatrix,
     researchReport: {
       artifactType: 'research-report',
-      ref: 'artifact:research-report',
+      ref: artifactRefs.researchReport,
       title: `Literature retrieval report: ${input.request.query}`,
       boundedSummary: paperList.length
         ? paperList.map((paper) => `${paper.title}${paper.year ? ` (${paper.year})` : ''}`).join('; ')
@@ -613,7 +681,7 @@ export function runOfflineLiteratureRetrieval(input: OfflineLiteratureRetrievalR
       kind: 'literature-retrieval',
       capabilityId: 'literature.retrieval',
       query: input.request.query,
-      artifactRefs,
+      artifactRefs: workArtifactRefs,
       providerAttemptRefs,
       budget,
       diagnosticCodes: unique(diagnostics.map((diagnostic) => diagnostic.code)),
@@ -628,9 +696,21 @@ export function runOfflineLiteratureRetrieval(input: OfflineLiteratureRetrievalR
 
 export function validateOfflineLiteratureRetrievalOutput(output: OfflineLiteratureRetrievalOutput): string[] {
   const failures: string[] = [];
+  const artifactRefs = output.artifactRefs;
+  if (!artifactRefs?.paperList || !artifactRefs.evidenceMatrix || !artifactRefs.researchReport) {
+    failures.push('artifactRefs must declare paperList, evidenceMatrix, and researchReport refs');
+  }
   if (!Array.isArray(output.paperList)) failures.push('paperList must be an array');
   if (!Array.isArray(output.evidenceMatrix)) failures.push('evidenceMatrix must be an array');
-  if (output.researchReport?.ref !== 'artifact:research-report') failures.push('researchReport must expose artifact:research-report');
+  if (artifactRefs?.researchReport && output.researchReport?.ref !== artifactRefs.researchReport) {
+    failures.push('researchReport.ref must match artifactRefs.researchReport');
+  }
+  if (output.workEvidence.some((evidence) => (
+    artifactRefs
+    && !literatureSourceArtifactRefs(artifactRefs).every((ref) => evidence.artifactRefs.includes(ref))
+  ))) {
+    failures.push('workEvidence artifactRefs must include declared retrieval artifact refs');
+  }
   if (!Array.isArray(output.sourceProvenance)) failures.push('sourceProvenance must be an array');
   if (!output.workEvidence.length) failures.push('workEvidence must include at least one audit row');
   if (!output.providerAttempts.length) failures.push('providerAttempts must include selected provider outcomes');
@@ -655,9 +735,12 @@ export function validateOfflineLiteratureRetrievalOutput(output: OfflineLiteratu
 
 export function deriveLiteratureBilingualReport(input: LiteratureBilingualReportInput): LiteratureBilingualReportArtifact {
   const output = input.output;
+  const sourceArtifactRefs = literatureSourceArtifactRefs(output.artifactRefs);
+  const parentArtifactRef = output.artifactRefs.researchReport;
+  const derivedRefs = literatureDerivedArtifactRefs(parentArtifactRef, input.artifactRefs);
   const paperIds = output.paperList.map((paper) => paper.id);
   const sourceRefs = unique([
-    output.researchReport.ref,
+    parentArtifactRef,
     ...output.researchReport.sourceRefs,
     ...output.paperList.flatMap((paper) => paper.providerRecordRefs),
   ]);
@@ -672,6 +755,7 @@ export function deriveLiteratureBilingualReport(input: LiteratureBilingualReport
     kind: 'rewrite',
     role: 'bilingual-report',
     language: `${input.sourceLanguage ?? 'source'}-${input.targetLanguage ?? 'en'}`,
+    parentArtifactRef,
     sourceRefs,
     sourceLanguage: input.sourceLanguage,
     targetLanguage: input.targetLanguage ?? 'en',
@@ -681,6 +765,7 @@ export function deriveLiteratureBilingualReport(input: LiteratureBilingualReport
     kind: 'summary',
     role: 'executive-summary',
     language: input.targetLanguage ?? 'en',
+    parentArtifactRef,
     sourceRefs: executiveSummaryRefs,
     sourceLanguage: input.sourceLanguage,
     targetLanguage: input.targetLanguage ?? 'en',
@@ -690,6 +775,7 @@ export function deriveLiteratureBilingualReport(input: LiteratureBilingualReport
     kind: 'glossary',
     role: 'glossary',
     language: `${input.sourceLanguage ?? 'source'}-${input.targetLanguage ?? 'en'}`,
+    parentArtifactRef,
     sourceRefs: glossaryRefs.length ? glossaryRefs : sourceRefs,
     sourceLanguage: input.sourceLanguage,
     targetLanguage: input.targetLanguage ?? 'en',
@@ -697,11 +783,11 @@ export function deriveLiteratureBilingualReport(input: LiteratureBilingualReport
   });
   return {
     artifactType: 'bilingual-literature-report',
-    ref: 'artifact:bilingual-literature-report',
-    parentArtifactRef: 'artifact:research-report',
+    ref: derivedRefs.bilingualReport,
+    parentArtifactRef,
     metadata: rootDerivation,
-    derivedArtifactRefs: ['artifact:bilingual-executive-summary', 'artifact:bilingual-glossary'],
-    sourceArtifactRefs: ['artifact:research-report', 'artifact:paper-list', 'artifact:evidence-matrix'],
+    derivedArtifactRefs: [derivedRefs.bilingualExecutiveSummary, derivedRefs.bilingualGlossary],
+    sourceArtifactRefs,
     sourceLanguage: input.sourceLanguage ?? 'source',
     targetLanguage: input.targetLanguage ?? 'en',
     status: glossaryEntries.length ? 'ready' : 'needs-review',
@@ -713,16 +799,16 @@ export function deriveLiteratureBilingualReport(input: LiteratureBilingualReport
     },
     englishExecutiveSummary: {
       artifactType: 'bilingual-executive-summary',
-      ref: 'artifact:bilingual-executive-summary',
-      parentArtifactRef: 'artifact:research-report',
+      ref: derivedRefs.bilingualExecutiveSummary,
+      parentArtifactRef,
       metadata: summaryDerivation,
       text: executiveSummary,
       sourceRefs: executiveSummaryRefs,
     },
     glossary: {
       artifactType: 'bilingual-glossary',
-      ref: 'artifact:bilingual-glossary',
-      parentArtifactRef: 'artifact:research-report',
+      ref: derivedRefs.bilingualGlossary,
+      parentArtifactRef,
       metadata: glossaryDerivation,
       entries: glossaryEntries,
       sourceRefs: glossaryRefs.length ? glossaryRefs : sourceRefs,
@@ -730,9 +816,9 @@ export function deriveLiteratureBilingualReport(input: LiteratureBilingualReport
     paperIds,
     sourceRefs,
     lineage: [
-      'artifact:research-report -> artifact:bilingual-executive-summary',
-      'artifact:research-report -> artifact:bilingual-glossary',
-      'artifact:bilingual-executive-summary + artifact:bilingual-glossary -> artifact:bilingual-literature-report',
+      `${parentArtifactRef} -> ${derivedRefs.bilingualExecutiveSummary}`,
+      `${parentArtifactRef} -> ${derivedRefs.bilingualGlossary}`,
+      `${derivedRefs.bilingualExecutiveSummary} + ${derivedRefs.bilingualGlossary} -> ${derivedRefs.bilingualReport}`,
     ],
     diagnostics: output.diagnostics,
   };
@@ -742,13 +828,14 @@ export function deriveLiteratureReproductionFeasibility(
   input: LiteratureReproductionFeasibilityInput,
 ): LiteratureReproductionFeasibilityArtifact {
   const output = input.output;
+  const sourceArtifactRefs = literatureSourceArtifactRefs(output.artifactRefs);
+  const parentArtifactRef = output.artifactRefs.researchReport;
+  const derivedRefs = literatureDerivedArtifactRefs(parentArtifactRef, input.artifactRefs);
   const paperIds = output.paperList.map((paper) => paper.id);
   const evidenceByPaper = mergeReproductionEvidence(input.paperEvidence ?? []);
   const ignoredEvidencePaperIds = [...evidenceByPaper.keys()].filter((paperId) => !paperIds.includes(paperId));
   const sourceRefs = unique([
-    'artifact:paper-list',
-    'artifact:evidence-matrix',
-    output.researchReport.ref,
+    ...sourceArtifactRefs,
     ...output.researchReport.sourceRefs,
     ...output.paperList.flatMap((paper) => paper.providerRecordRefs),
     ...output.evidenceMatrix.flatMap((row) => row.evidenceRefs),
@@ -778,16 +865,17 @@ export function deriveLiteratureReproductionFeasibility(
 
   return {
     artifactType: 'literature-reproduction-feasibility',
-    ref: 'artifact:literature-reproduction-feasibility',
-    parentArtifactRef: 'artifact:research-report',
+    ref: derivedRefs.reproductionFeasibility,
+    parentArtifactRef,
     metadata: artifactDerivationMetadata({
       kind: 'analysis-plan',
       role: 'reproduction-feasibility-ranking',
       language: 'source',
+      parentArtifactRef,
       sourceRefs,
       verificationStatus: status === 'ready' ? 'unverified' : 'needs-review',
     }),
-    sourceArtifactRefs: ['artifact:paper-list', 'artifact:evidence-matrix', 'artifact:research-report'],
+    sourceArtifactRefs,
     status,
     paperIds,
     rankedPapers: rankedWithPlanSteps,
@@ -821,11 +909,11 @@ export function validateLiteratureReproductionFeasibilityArtifact(
 ): string[] {
   const failures: string[] = [];
   if (artifact.artifactType !== 'literature-reproduction-feasibility') failures.push('artifactType must be literature-reproduction-feasibility');
-  if (artifact.ref !== 'artifact:literature-reproduction-feasibility') failures.push('ref must be artifact:literature-reproduction-feasibility');
-  if (artifact.parentArtifactRef !== 'artifact:research-report') failures.push('parentArtifactRef must remain artifact:research-report');
-  if (!artifact.sourceArtifactRefs.includes('artifact:paper-list')) failures.push('sourceArtifactRefs must include artifact:paper-list');
-  if (!artifact.sourceArtifactRefs.includes('artifact:evidence-matrix')) failures.push('sourceArtifactRefs must include artifact:evidence-matrix');
-  if (!artifact.sourceArtifactRefs.includes('artifact:research-report')) failures.push('sourceArtifactRefs must include artifact:research-report');
+  if (!artifact.ref) failures.push('ref must be a non-empty artifact ref');
+  if (!artifact.parentArtifactRef) failures.push('parentArtifactRef must be a non-empty source artifact ref');
+  if (!artifact.sourceArtifactRefs.includes(artifact.parentArtifactRef)) {
+    failures.push('sourceArtifactRefs must include parentArtifactRef');
+  }
   if (!artifact.sourceRefs.length) failures.push('sourceRefs must include retrieval and evidence refs');
   if (artifact.rankedPapers.some((paper) => !artifact.paperIds.includes(paper.paperId))) {
     failures.push('rankedPapers must only reference paperIds from the source retrieval output');
@@ -860,6 +948,7 @@ function artifactDerivationMetadata(input: {
   kind: RuntimeArtifactDerivation['kind'];
   role: string;
   language: string;
+  parentArtifactRef: string;
   sourceRefs: string[];
   sourceLanguage?: string;
   targetLanguage?: string;
@@ -871,7 +960,7 @@ function artifactDerivationMetadata(input: {
     derivation: {
       schemaVersion: 'sciforge.artifact-derivation.v1',
       kind: input.kind,
-      parentArtifactRef: 'artifact:research-report',
+      parentArtifactRef: input.parentArtifactRef,
       sourceRefs: input.sourceRefs,
       sourceLanguage: input.sourceLanguage,
       targetLanguage: input.targetLanguage,
@@ -1200,10 +1289,11 @@ function normalizeBilingualGlossaryTerms(
 export function deriveLiteratureCitationCorrection(input: LiteratureCitationCorrectionInput): LiteratureCitationCorrectionArtifact {
   const targetMatches = findCitationCorrectionTargets(input.output, input.target);
   const allPaperIds = input.output.paperList.map((paper) => paper.id);
+  const derivedRefs = literatureDerivedArtifactRefs(input.output.artifactRefs.researchReport, input.artifactRefs);
   if (targetMatches.length === 0) {
     return {
       artifactType: 'citation-correction',
-      ref: 'artifact:citation-correction',
+      ref: derivedRefs.citationCorrection,
       targetProviderRecordRefs: unique([input.target.providerRecordRef, input.target.evidenceRef].filter((ref): ref is string => Boolean(ref))),
       sourceRefs: [],
       correctionStatus: 'not-found',
@@ -1220,7 +1310,7 @@ export function deriveLiteratureCitationCorrection(input: LiteratureCitationCorr
   if (targetMatches.length > 1) {
     return {
       artifactType: 'citation-correction',
-      ref: 'artifact:citation-correction',
+      ref: derivedRefs.citationCorrection,
       targetProviderRecordRefs: unique(targetMatches.flatMap((match) => match.providerRecordRefs)),
       sourceRefs: unique(targetMatches.flatMap((match) => match.providerRecordRefs)),
       correctionStatus: 'ambiguous',
@@ -1257,8 +1347,8 @@ export function deriveLiteratureCitationCorrection(input: LiteratureCitationCorr
 
   return {
     artifactType: 'citation-correction',
-    ref: 'artifact:citation-correction',
-    targetArtifactRef: 'artifact:research-report',
+    ref: derivedRefs.citationCorrection,
+    targetArtifactRef: input.output.artifactRefs.researchReport,
     targetPaperId: target.paper.id,
     targetProviderRecordRefs: target.providerRecordRefs,
     sourceRefs: unique([...target.providerRecordRefs, ...target.evidenceRows.flatMap((row) => row.evidenceRefs)]),
@@ -1358,6 +1448,7 @@ function createLiteratureRetrievalBudgetDebitRecord(input: {
   status: LiteratureRetrievalStatus;
   workEvidenceRef: string;
   artifactRefs: LiteratureWorkEvidence['artifactRefs'];
+  paperListArtifactRef: string;
 }): CapabilityInvocationBudgetDebitRecord {
   const invocationSlug = slug(input.input.request.query);
   const providerAttemptWallLines: CapabilityBudgetDebitLine[] = input.providerAttempts.map((attempt) => ({
@@ -1389,7 +1480,7 @@ function createLiteratureRetrievalBudgetDebitRecord(input: {
       limit: input.maxResults,
       remaining: input.maxResults - input.normalizedResultItemCount,
       reason: 'normalized literature result items before emission truncation',
-      sourceRef: 'artifact:paper-list',
+      sourceRef: input.paperListArtifactRef,
     },
     ...providerAttemptWallLines,
   ];
@@ -1469,11 +1560,22 @@ function paperKey(
 function citationVerificationForPaper(paper: NormalizedLiteraturePaper, citationMatches: boolean): CitationVerificationResult {
   const missingIdentifierFields = (['doi', 'pmid', 'arxivId'] as const).filter((field) => !paper[field]);
   const hasStableIdentifier = missingIdentifierFields.length < 3;
+  const hasRecordScopedEvidence = paper.providerRecordRefs.length > 1;
+  const status: CitationVerificationStatus = !citationMatches
+    ? 'mismatch'
+    : hasStableIdentifier && hasRecordScopedEvidence
+      ? 'verified'
+      : hasStableIdentifier
+        ? 'unverified'
+        : 'missing-identifiers';
   return {
     paperId: paper.id,
     providerIds: [...paper.sourceProviderIds],
+    providerRecordRefs: [...paper.providerRecordRefs],
+    evidenceRefs: [...paper.providerRecordRefs],
+    verificationContract: 'sciforge.bibliographic-record.v1',
     checkedFields: CITATION_FIELDS,
-    status: citationMatches ? (hasStableIdentifier ? 'verified' : 'missing-identifiers') : 'mismatch',
+    status,
     mismatchFields: citationMatches ? [] : ['doi', 'pmid', 'arxivId', 'title', 'year', 'journal'],
     missingIdentifierFields,
   };

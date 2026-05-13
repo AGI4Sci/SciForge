@@ -134,9 +134,9 @@ function protocolStatusFromPayload(payload: ToolPayload, units: RuntimeExecution
   const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
   const explicit = stringField(displayIntent.protocolStatus);
   if (isTaskProtocolStatus(explicit)) return explicit;
-  const text = `${payload.claimType} ${payload.evidenceLevel} ${payload.message} ${stringField(displayIntent.status) ?? ''}`.toLowerCase();
-  if (/cancelled|canceled|user abort/.test(text)) return 'cancelled';
-  if (/background|running|continuing/.test(text) || units.some((unit) => unit.status === 'running' || unit.status === 'planned')) return 'running';
+  const displayStatus = stringField(displayIntent.status);
+  if (displayStatus === 'cancelled') return 'cancelled';
+  if (displayStatus === 'running' || units.some((unit) => unit.status === 'running' || unit.status === 'planned')) return 'running';
   if (units.some((unit) => ['failed', 'failed-with-reason', 'repair-needed'].includes(unit.status))) return 'protocol-failed';
   if (payload.message || payload.artifacts.length || units.length || payload.claims.length) return 'protocol-success';
   return 'not-run';
@@ -172,7 +172,8 @@ function userSatisfactionProxyFromPayload(
   ]);
   const needsHuman = units.some((unit) => String(unit.status) === 'needs-human');
   const explicitFailure = protocolStatus === 'protocol-failed';
-  const answeredLatestRequest = hasHumanAnswer(payload) && !looksLikeOnlyPlanPromise(payload.message) && !hasCurrentReferenceFailure(payload);
+  const explicitAnswerStatus = explicitAnswerStatusFromPayload(payload);
+  const answeredLatestRequest = explicitAnswerStatus === 'satisfied' && !hasCurrentReferenceFailure(payload);
   const usableResultVisible = hasUsableVisibleResult(payload);
   const expectedArtifactsPresent = expectedArtifactTypes.length === 0 || expectedArtifactTypes.some((type) => {
     return payload.artifacts.some((artifact) => isRecord(artifact) && String(artifact.type || artifact.artifactType || '') === type);
@@ -181,7 +182,7 @@ function userSatisfactionProxyFromPayload(
   const preservesWorkRefs = refs.length > 0;
   const avoidsDuplicateWork = !explicitFailure || preservesWorkRefs || usableResultVisible;
   const reasons = [
-    answeredLatestRequest ? 'latest request has a visible answer' : 'latest request is not visibly answered yet',
+    answeredLatestRequest ? 'structured task outcome marks the latest request satisfied' : 'latest request is not marked satisfied by structured outcome metadata',
     usableResultVisible ? 'usable answer/artifact evidence is visible' : 'no usable visible result or artifact was detected',
     expectedArtifactsPresent ? 'expected artifact coverage is present or not required' : 'one or more expected artifact types are missing',
     structuredNextStep ? 'structured next step is available' : 'structured next step is missing',
@@ -255,11 +256,13 @@ function failureSignaturesFromPayload(payload: ToolPayload): FailureSignatureInp
   const fromUnits = units.flatMap((unit): FailureSignatureInput[] => {
     const message = stringField(unit.failureReason) ?? stringField(unit.error) ?? stringField(unit.message);
     const status = stringField(unit.status);
-    if (!message && !/failed|repair-needed|needs-human/i.test(status ?? '')) return [];
+    if (!message && !['failed', 'failed-with-reason', 'repair-needed', 'needs-human'].includes(status ?? '')) return [];
+    const externalTransient = stringField(unit.externalDependencyStatus) === transientUnavailableStatus;
     return [{
+      kind: externalTransient ? 'external-transient' : undefined,
       message: message ?? status ?? 'Execution unit did not complete successfully.',
       layer: layerFromExecutionUnit(unit),
-      retryable: stringField(unit.externalDependencyStatus) === 'transient-unavailable' ? true : undefined,
+      retryable: externalTransient ? true : undefined,
       refs: unitRefs(unit),
     }];
   });
@@ -337,22 +340,24 @@ function layerFromExecutionUnit(unit: Record<string, unknown>): TaskAttributionL
   if (isRecord(refs.validationFailure)) return 'payload-normalization';
   if (isRecord(refs.backendFailure)) return 'agentserver-parser';
   if (['fail', 'uncertain', 'needs-human'].includes(String(unit.verificationVerdict))) return 'verification';
-  if (/missing ref|stale ref|deleted artifact|not found/i.test(String(unit.failureReason ?? unit.message ?? ''))) return 'resume';
+  if (stringField(unit.failureKind) === 'missing-ref' || stringField(unit.failureCode) === 'missing-ref') return 'resume';
   if (stringField(unit.stderrRef) || stringField(unit.stdoutRef) || stringField(unit.outputRef)) return 'runtime-server';
   return 'unknown';
 }
 
 function defaultNextStepForPayload(payload: ToolPayload, refs: TaskRunCardRef[]) {
-  const text = `${payload.claimType} ${payload.evidenceLevel} ${payload.message}`.toLowerCase();
-  if (/transient|rate.?limit|too many requests|timeout|service unavailable|429|503/.test(text)) {
+  const units = toRecordList(payload.executionUnits);
+  if (units.some((unit) => stringField(unit.externalDependencyStatus) === transientUnavailableStatus)) {
     return 'Retry after provider backoff, or continue with cached evidence and label freshness explicitly.';
   }
-  if (/failed|repair-needed|failure|失败/.test(text)) {
+  if (units.some((unit) => ['failed', 'failed-with-reason', 'repair-needed'].includes(String(unit.status)))) {
     return refs.length
       ? 'Inspect preserved refs and repair the generic failing layer before rerunning expensive work.'
       : 'Inspect the backend failure and return a structured failed-with-reason payload before rerun.';
   }
-  if (/partial|missing|unavailable|insufficient|unverified/.test(text)) {
+  const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
+  if (['partial', 'needs-work', 'unverified'].includes(String(displayIntent.status))
+    || payload.verificationResults?.some((result) => result.verdict !== 'pass')) {
     return 'Continue from preserved partial refs, fill the missing evidence, or ask the user to adjust scope.';
   }
   return 'Inspect generated artifacts and preserve refs for follow-up, export, or audit.';
@@ -368,38 +373,34 @@ function reasonForLayer(layer: TaskAttributionLayer) {
   return 'The next step belongs to the runtime gateway because it owns task execution state, refs, and recovery.';
 }
 
-function hasHumanAnswer(payload: ToolPayload) {
-  const text = payload.message.replace(/\s+/g, ' ').trim();
-  if (text.length < 12) return false;
-  if (/^\s*[{[]/.test(text)) return false;
-  if (/taskFiles|uiManifest|reasoningTrace|executionUnits/.test(text) && text.length < 240) return false;
-  return true;
-}
-
 function hasUsableVisibleResult(payload: ToolPayload) {
-  return hasHumanAnswer(payload) || payload.artifacts.some((artifact) => {
+  return payload.artifacts.some((artifact) => {
     if (!isRecord(artifact)) return false;
+    const artifactType = stringField(artifact.type) ?? stringField(artifact.artifactType);
+    if (artifactType === 'runtime-diagnostic') return false;
     return Boolean(
       stringField(artifact.title)
-      || stringField(artifact.content)
       || stringField(artifact.path)
       || stringField(artifact.dataRef)
       || stringField(artifact.imageRef)
       || isRecord(artifact.data)
     );
-  });
+  }) || toRecordList(payload.uiManifest).some((slot) => Boolean(stringField(slot.artifactRef)));
+}
+
+function explicitAnswerStatusFromPayload(payload: ToolPayload) {
+  const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
+  const taskOutcome = stringField(displayIntent.taskOutcome);
+  if (taskOutcome === 'satisfied') return 'satisfied';
+  if (['needs-work', 'needs-human', 'blocked', 'unknown'].includes(taskOutcome ?? '')) return taskOutcome;
+  const answerStatus = stringField(displayIntent.answerStatus) ?? stringField(displayIntent.userGoalStatus);
+  if (answerStatus === 'satisfied' || answerStatus === 'answered') return 'satisfied';
+  if (['needs-work', 'needs-human', 'blocked', 'unknown'].includes(answerStatus ?? '')) return answerStatus;
+  return undefined;
 }
 
 function hasCurrentReferenceFailure(payload: ToolPayload) {
-  return /current-turn reference contract failed/i.test(payload.message)
-    || toRecordList(payload.executionUnits).some((unit) => String(unit.id || '').startsWith('current-reference-usage-'));
-}
-
-function looksLikeOnlyPlanPromise(value: unknown) {
-  const text = typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
-  if (!text) return false;
-  return /^(?:i(?:['’]ll|\s+(?:will|would|can|am going to|plan to|intend to|need to|shall))|we(?:['’]ll|\s+(?:will|would|can|are going to|plan to|intend to|need to|shall)))\s+(?:retrieve|fetch|search|look\s+up|analy[sz]e|investigate|review|read|compare|summari[sz]e|generate|create|build|run|perform|collect|download|query|parse|extract|write|prepare)\b/i.test(text)
-    || /^(?:我(?:将|会|来|需要|可以)|接下来我(?:会|将)|下一步(?:我)?(?:会|将))\s*(?:检索|搜索|分析|调研|读取|查看|比较|总结|生成|创建|运行|下载|查询|提取|撰写|准备)/.test(text);
+  return toRecordList(payload.executionUnits).some((unit) => String(unit.id || '').startsWith('current-reference-usage-'));
 }
 
 function artifactRef(artifact: Record<string, unknown>) {

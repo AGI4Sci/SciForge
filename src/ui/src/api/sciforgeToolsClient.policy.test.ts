@@ -231,15 +231,48 @@ test('UI handoff does not synthesize verification policy defaults or pass throug
 
   const legacyUiState = bodies[1]?.uiState as {
     scenarioOverride?: Record<string, unknown>;
-    ignoredLegacyVerificationPolicySources?: Array<Record<string, unknown>>;
   } | undefined;
   assert.equal(bodies[1]?.verificationPolicy, undefined);
   assert.equal(legacyUiState?.scenarioOverride?.verificationPolicy, undefined);
-  assert.deepEqual(legacyUiState?.ignoredLegacyVerificationPolicySources?.map((source) => source.source), [
-    'request.uiState.scenarioOverride.verificationPolicy',
-  ]);
   assert.deepEqual(bodies[1]?.humanApprovalPolicy, { required: true, mode: 'required-before-action' });
   assert.equal(bodies[1]?.unverifiedReason, 'explicitly allowed for draft handoff');
+});
+
+test('UI handoff filters agentserver selected skill overrides when current turn forbids AgentServer', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_input, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return streamResponse([
+      {
+        result: {
+          message: 'Workspace result ready.',
+          executionUnits: [{ id: 'unit-1', status: 'done' }],
+          artifacts: [],
+        },
+      },
+    ]);
+  }) as typeof fetch;
+
+  await sendSciForgeToolMessage(messageInput({
+    selectedSkillIds: [
+      'agentserver.generate.literature',
+      'AgentServer.experimental.override',
+      'scp.biomedical-web-search',
+      'local.pdf-extract',
+    ],
+    turnExecutionConstraints: directContextTurnExecutionConstraints(),
+  }, {
+    prompt: 'Summarize the current refs.',
+    references: [{ id: 'ref-1', kind: 'file', title: 'Existing evidence', ref: 'file:.sciforge/refs/ref-1.json' }],
+  }), {});
+
+  assert.deepEqual(bodies[0]?.availableSkills, ['scp.biomedical-web-search', 'local.pdf-extract']);
+  assert.equal(
+    ((bodies[0]?.uiState as { turnExecutionConstraints?: { agentServerForbidden?: boolean } } | undefined)
+      ?.turnExecutionConstraints?.agentServerForbidden),
+    true,
+  );
+  assert.deepEqual(bodies[0]?.selectedToolIds, []);
 });
 
 test('UI handoff compacts large multi-turn session context before transport', async () => {
@@ -500,5 +533,29 @@ function messageInput(
       ...scenarioOverride,
     } : undefined,
     ...overrides,
+  };
+}
+
+function directContextTurnExecutionConstraints() {
+  return {
+    schemaVersion: 'sciforge.turn-execution-constraints.v1',
+    policyId: 'sciforge.current-turn-execution-constraints.v1',
+    source: 'runtime-contract.turn-constraints',
+    contextOnly: true,
+    agentServerForbidden: true,
+    workspaceExecutionForbidden: true,
+    externalIoForbidden: true,
+    codeExecutionForbidden: true,
+    preferredCapabilityIds: ['runtime.direct-context-answer'],
+    executionModeHint: 'direct-context-answer',
+    initialResponseModeHint: 'direct-context-answer',
+    reasons: ['upstream policy forbids AgentServer dispatch'],
+    evidence: {
+      hasPriorContext: true,
+      referenceCount: 1,
+      artifactCount: 0,
+      executionRefCount: 0,
+      runCount: 0,
+    },
   };
 }

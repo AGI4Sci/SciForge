@@ -6,7 +6,6 @@ import { isToolPayload } from './tool-payload-contract.js';
 import { normalizeRuntimeVerificationResultsOrUndefined } from './verification-results.js';
 import {
   directAnswerArtifactNeedsRepair,
-  directAnswerPlainTextResultPolicy,
   directAnswerResultPolicyIds,
   ensureDirectAnswerReportArtifactPolicy,
   normalizeDirectAnswerArtifacts,
@@ -45,36 +44,7 @@ export function toolPayloadFromPlainAgentOutput(text: string, request: GatewayRe
   const nested = extractNestedAgentServerPayloadFromText(text);
   if (nested) return ensureDirectAnswerReportArtifact(nested, request, directAnswerResultPolicyIds.structuredAnswerSource);
   const directTextGuard = classifyPlainAgentText(text);
-  if (directTextGuard.kind !== 'human-answer') return guardedDirectTextDiagnosticPayload(text, request, directTextGuard);
-  const expected = expectedArtifactTypesForRequest(request);
-  const directAnswerPolicy = directAnswerPlainTextResultPolicy(text, {
-    prompt: request.prompt,
-    skillDomain: request.skillDomain,
-    expectedArtifactTypes: expected,
-  });
-  return {
-    message: text,
-    confidence: 0.72,
-    claimType: 'evidence-summary',
-    evidenceLevel: 'agentserver-direct',
-    reasoningTrace: 'AgentServer returned plain text; SciForge converted it into a ToolPayload so the work remains visible and auditable.',
-    claims: [{
-      text: text.split('\n').map((line) => line.trim()).find(Boolean)?.slice(0, 240) || 'AgentServer completed the request.',
-      type: 'inference',
-      confidence: 0.72,
-      evidenceLevel: 'agentserver-direct',
-      supportingRefs: [],
-      opposingRefs: [],
-    }],
-    uiManifest: directAnswerPolicy.uiManifest,
-    executionUnits: [{
-      id: `agentserver-direct-${sha1(text).slice(0, 8)}`,
-      status: 'done',
-      tool: directAnswerResultPolicyIds.directTextTool,
-      params: JSON.stringify({ expectedArtifactTypes: expected, prompt: request.prompt.slice(0, 200) }),
-    }],
-    artifacts: directAnswerPolicy.artifacts,
-  };
+  return guardedDirectTextDiagnosticPayload(text, request, directTextGuard);
 }
 
 export type PlainAgentTextClassificationKind =
@@ -132,13 +102,13 @@ function guardedDirectTextDiagnosticPayload(
     claimType: 'runtime-diagnostic',
     evidenceLevel: 'agentserver-direct-text-guard',
     reasoningTrace: [
-      'Plain AgentServer text was blocked by the direct-text fallback guard.',
+      'Plain AgentServer text was blocked by the strict ToolPayload boundary.',
       `classification=${classification.kind}`,
       `reason=${classification.reason}`,
     ].join('\n'),
     claims: [{
       id: `claim-direct-text-guard-${id}`,
-      text: 'Plain AgentServer output looked like raw generated work, logs, code, or debug payload rather than a final answer.',
+      text: 'Plain AgentServer output was not a structured ToolPayload or taskFiles response and cannot be promoted to a final answer.',
       type: 'runtime-diagnostic',
       confidence: 0,
       evidenceLevel: 'agentserver-direct-text-guard',
@@ -166,7 +136,7 @@ function guardedDirectTextDiagnosticPayload(
       failureReason: classification.reason,
       recoverActions: [
         'Ask the backend to return a structured ToolPayload with artifacts, executionUnits, and uiManifest.',
-        'If this is code or logs, materialize it as a file/log artifact and cite the ref instead of presenting it as final prose.',
+        'If this is prose, return it inside a strict ToolPayload with structured claims, refs, artifacts, and displayIntent.',
       ],
       nextStep: 'Retry with structured output or inspect the preserved diagnostic artifact.',
     }],

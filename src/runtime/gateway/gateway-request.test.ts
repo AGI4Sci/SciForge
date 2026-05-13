@@ -39,7 +39,7 @@ test('gateway request carries normalized LLM endpoint on full requests', () => {
   });
 });
 
-test('gateway request ignores legacy verificationPolicy request fields with audit', () => {
+test('gateway request drops deprecated verificationPolicy request fields before runtime policy projection', () => {
   const request = normalizeGatewayRequest({
     skillDomain: 'literature',
     prompt: 'Summarize this report.',
@@ -57,12 +57,46 @@ test('gateway request ignores legacy verificationPolicy request fields with audi
   assert.equal(request.verificationPolicy, undefined);
   assert.equal(request.uiState?.verificationPolicy, undefined);
   assert.deepEqual(request.uiState?.scenarioOverride, { title: 'Generated scenario' });
-  assert.deepEqual(
-    (request.uiState?.ignoredLegacyVerificationPolicySources as Array<Record<string, unknown>> | undefined)?.map((entry) => entry.source),
-    [
-      'request.verificationPolicy',
-      'request.uiState.verificationPolicy',
-      'request.uiState.scenarioOverride.verificationPolicy',
-    ],
-  );
+});
+
+test('gateway request does not derive turn constraints from prompt-only text', () => {
+  const request = normalizeGatewayRequest({
+    skillDomain: 'literature',
+    prompt: '不要重跑、不要执行、不要调用 AgentServer。只基于当前会话 refs/digest 列出证据缺口。',
+    references: [{ ref: 'artifact:prior-report' }],
+    artifacts: [],
+  });
+
+  assert.equal(request.uiState?.turnExecutionConstraints, undefined);
+});
+
+test('gateway request preserves versioned structured turn constraints', () => {
+  const request = normalizeGatewayRequest({
+    skillDomain: 'literature',
+    prompt: 'Summarize current refs.',
+    artifacts: [],
+    turnExecutionConstraints: {
+      schemaVersion: 'sciforge.turn-execution-constraints.v1',
+      policyId: 'sciforge.current-turn-execution-constraints.v1',
+      source: 'runtime-contract.turn-constraints',
+      contextOnly: true,
+      agentServerForbidden: true,
+      workspaceExecutionForbidden: true,
+      externalIoForbidden: true,
+      codeExecutionForbidden: true,
+      preferredCapabilityIds: ['runtime.direct-context-answer'],
+      executionModeHint: 'direct-context-answer',
+      initialResponseModeHint: 'direct-context-answer',
+      reasons: ['upstream policy forbids execution'],
+      evidence: {
+        hasPriorContext: true,
+        referenceCount: 1,
+        artifactCount: 0,
+        executionRefCount: 0,
+        runCount: 0,
+      },
+    },
+  });
+
+  assert.equal((request.uiState?.turnExecutionConstraints as { agentServerForbidden?: boolean } | undefined)?.agentServerForbidden, true);
 });

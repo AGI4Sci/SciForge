@@ -9,12 +9,18 @@ import { expectedArtifactsForCurrentTurn, selectedComponentsForCurrentTurn } fro
 import { normalizeAgentResponse } from './agentClient';
 import { DEFAULT_AGENT_REQUEST_TIMEOUT_MS, buildSharedAgentHandoffContract } from '@sciforge-ui/runtime-contract/handoff';
 import { buildAgentHandoffPayload } from '@sciforge-ui/runtime-contract/handoff-payload';
+import { collectRuntimeRefsFromValue } from '@sciforge-ui/runtime-contract/references';
 import {
+  CURRENT_REFERENCE_EVIDENCE_POLICY_DEFAULT_ACTION,
+  EXECUTION_LOG_REF_AUDIT_NOTE,
+  EXECUTION_LOG_REF_EXPANSION_POLICY,
   buildSilentStreamDecisionRecord,
   buildSilentStreamRunId,
+  normalizeTurnExecutionConstraints,
   projectToolDoneEvent,
   projectToolStartedEvent,
   type SilentStreamDecisionRecord,
+  type TurnExecutionConstraints,
 } from '@sciforge-ui/runtime-contract';
 import { selectedToolContractForRuntime } from '@sciforge-skill/packages/tool-skills-runtime';
 import {
@@ -68,7 +74,8 @@ export async function sendSciForgeToolMessage(
       ? input.scenarioOverride.defaultComponents
       : SCENARIO_SPECS[builtInScenarioId].componentPolicy.defaultComponents);
   const selectedComponentIds = selectedComponentsForCurrentTurn(input.prompt, configuredComponentIds);
-  const selectedSkillIds = selectedRuntimeSkillIds(input, skillDomain);
+  const turnExecutionConstraints = normalizeTurnExecutionConstraints(input.scenarioOverride?.turnExecutionConstraints);
+  const selectedSkillIds = selectedRuntimeSkillIds(input, skillDomain, turnExecutionConstraints);
   const selectedToolIds = selectedRuntimeToolIds(input);
   const selectedToolContracts = selectedRuntimeToolContracts(selectedToolIds);
   const expectedArtifactTypes = expectedArtifactsForCurrentTurn({
@@ -179,7 +186,6 @@ export async function sendSciForgeToolMessage(
     const humanApprovalPolicy = configuredHumanApprovalPolicy(input);
     const unverifiedReason = asString(input.scenarioOverride?.unverifiedReason);
     const scenarioOverride = scenarioOverrideForTransport(input.scenarioOverride);
-    const ignoredLegacyVerificationPolicySources = ignoredLegacyScenarioVerificationPolicySources(input);
     const targetInstanceContext = compactTargetInstanceContext(input);
     const repairHandoffRunner = buildRepairHandoffRunnerPayload(input);
     const requestBody = buildAgentHandoffPayload({
@@ -223,13 +229,12 @@ export async function sendSciForgeToolMessage(
         silentStreamRunId,
         scopeCheck: {
           source: sharedAgentContract.source,
-          decisionOwner: 'AgentServer',
+          decisionOwner: 'runtime-policy',
           dispatchPolicy: sharedAgentContract.dispatchPolicy,
           answerPolicy: sharedAgentContract.answerPolicy,
-          note: 'SciForge does not route or reject current-turn intent by keyword; AgentServer decides from rawUserPrompt and context.',
+          note: 'SciForge dispatch is constrained by versioned current-turn policy records before any AgentServer generation is allowed.',
         },
         scenarioOverride,
-        ignoredLegacyVerificationPolicySources,
         scenarioPackageRef: input.scenarioPackageRef,
         skillPlanRef: input.skillPlanRef,
         uiPlanRef: input.uiPlanRef,
@@ -240,6 +245,7 @@ export async function sendSciForgeToolMessage(
         targetInstance: targetInstanceContext,
         targetInstanceContext,
         repairHandoffRunner,
+        turnExecutionConstraints,
         recentExecutionRefs,
         recentRuns: compactTransportRuns(input.runs ?? []),
         failureRecoveryPolicy,
@@ -247,7 +253,7 @@ export async function sendSciForgeToolMessage(
         artifactExpectationMode: expectedArtifactTypes.length ? 'explicit-current-turn' : 'backend-decides',
         rawUserPrompt: input.prompt,
         contextPolicyOwner: 'python-conversation-policy',
-        agentDispatchPolicy: 'agentserver-decides',
+        agentDispatchPolicy: 'runtime-policy-decides',
       },
       agentContext: buildTransportAgentContext(input, configuredComponentIds, selectedToolContracts, repairHandoffRunner),
     });
@@ -434,15 +440,16 @@ function stableSessionMessages(input: SendAgentMessageInput) {
     .map((message) => ({
       id: message.id,
       role: message.role,
-      content: compactConversationContent(message.content, 1600),
+      content: omittedTransportTextDigestLabel('session-message', message.content),
+      contentDigest: transportTextDigest(message.content),
       createdAt: message.createdAt,
       status: message.status,
       references: message.references?.slice(-8).map(compactSciForgeReference),
       objectReferences: message.objectReferences?.slice(-12),
       guidanceQueue: message.guidanceQueue ? {
         ...message.guidanceQueue,
-        prompt: compactConversationContent(message.guidanceQueue.prompt, 800),
-        reason: message.guidanceQueue.reason ? compactConversationContent(message.guidanceQueue.reason, 500) : undefined,
+        prompt: omittedTransportTextDigestLabel('guidance-prompt', message.guidanceQueue.prompt),
+        reason: message.guidanceQueue.reason ? omittedTransportTextDigestLabel('guidance-reason', message.guidanceQueue.reason) : undefined,
       } : undefined,
     }));
 }
@@ -496,8 +503,10 @@ function compactTransportRuns(runs: NonNullable<SendAgentMessageInput['runs']>) 
     id: run.id,
     scenarioId: run.scenarioId,
     status: run.status,
-    prompt: compactConversationContent(run.prompt, 1200),
-    response: compactConversationContent(run.response, 1600),
+    prompt: omittedTransportTextDigestLabel('previous-run-prompt', run.prompt),
+    response: omittedTransportTextDigestLabel('previous-run-response', run.response),
+    promptDigest: transportTextDigest(run.prompt),
+    responseDigest: transportTextDigest(run.response),
     createdAt: run.createdAt,
     completedAt: run.completedAt,
     references: run.references?.slice(-8).map(compactSciForgeReference),
@@ -517,20 +526,112 @@ function compactTransportRuns(runs: NonNullable<SendAgentMessageInput['runs']>) 
 function compactTransportRunRaw(raw: unknown) {
   if (!isRecord(raw)) return undefined;
   const streamProcess = isRecord(raw.streamProcess) ? raw.streamProcess : undefined;
+  const backgroundCompletion = isRecord(raw.backgroundCompletion) ? raw.backgroundCompletion : undefined;
   return {
-    ...compactRecord(raw),
+    termination: compactTransportRawRecord(raw.termination),
+    cancelBoundary: compactTransportRawRecord(raw.cancelBoundary),
+    historicalEditConflict: compactTransportRawRecord(raw.historicalEditConflict),
+    guidanceQueue: Array.isArray(raw.guidanceQueue)
+      ? raw.guidanceQueue.slice(-8).map((entry) => compactTransportRawRecord(entry)).filter(Boolean)
+      : undefined,
+    backgroundCompletion: backgroundCompletion ? {
+      status: asString(backgroundCompletion.status),
+      stage: asString(backgroundCompletion.stage),
+      runId: asString(backgroundCompletion.runId),
+      termination: compactTransportRawRecord(backgroundCompletion.termination),
+      lastEventSummary: compactTransportRawEventSummary(backgroundCompletion.lastEvent),
+      refs: transportRefsFromValue(backgroundCompletion).slice(0, 16),
+    } : undefined,
+    refs: transportRefsFromValue(raw).slice(0, 24),
+    bodySummary: {
+      omitted: 'run-raw-body',
+      keys: Object.keys(raw).slice(0, 16),
+    },
     streamProcess: streamProcess ? {
       eventCount: typeof streamProcess.eventCount === 'number' ? streamProcess.eventCount : undefined,
-      summary: typeof streamProcess.summary === 'string' ? compactConversationContent(streamProcess.summary, 1400) : undefined,
+      summaryDigest: compactTransportDigest(streamProcess.summaryDigest),
+      eventTypes: Array.isArray(streamProcess.events)
+        ? streamProcess.events.slice(-24).map(compactTransportRawEventSummary).filter(Boolean)
+        : undefined,
     } : undefined,
   };
 }
 
-function selectedRuntimeSkillIds(input: SendAgentMessageInput, skillDomain: string) {
+function compactTransportRawRecord(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  const out: Record<string, unknown> = {};
+  for (const key of ['schemaVersion', 'id', 'status', 'reason', 'mode', 'sideEffectPolicy', 'nextStep', 'branchId', 'requiresUserConfirmation', 'handlingRunId']) {
+    const entry = value[key];
+    if (typeof entry === 'string' || typeof entry === 'boolean' || typeof entry === 'number') out[key] = entry;
+  }
+  const refs = transportRefsFromValue(value).slice(0, 12);
+  if (refs.length) out.refs = refs;
+  return Object.keys(out).length ? out : undefined;
+}
+
+function compactTransportRawEventSummary(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  return {
+    type: asString(value.type),
+    status: asString(value.status),
+    source: asString(value.source),
+    messageDigest: transportTextDigest(value.message),
+    refs: transportRefsFromValue(value).slice(0, 12),
+  };
+}
+
+function transportRefsFromValue(value: unknown, depth = 0): string[] {
+  return collectRuntimeRefsFromValue(value, { maxDepth: 5 - depth, maxRefs: 32, includeIds: true });
+}
+
+function transportTextDigest(value: unknown) {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  return {
+    omitted: 'text-body',
+    chars: value.length,
+    hash: stableTextHash(value),
+    refs: transportRefsFromValue(value).slice(0, 12),
+  };
+}
+
+function compactTransportDigest(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  const hash = asString(value.hash);
+  if (!hash) return undefined;
+  return {
+    omitted: asString(value.omitted) ?? 'text-body',
+    chars: typeof value.chars === 'number' ? value.chars : undefined,
+    hash,
+    refs: asStringArray(value.refs)?.slice(0, 12),
+  };
+}
+
+function stableTextHash(value: string) {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `fnv1a-${(hash >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+function selectedRuntimeSkillIds(
+  input: SendAgentMessageInput,
+  skillDomain: string,
+  constraints?: TurnExecutionConstraints,
+) {
+  const overrideSkillIds = input.scenarioOverride?.selectedSkillIds ?? [];
+  if (constraints?.agentServerForbidden) {
+    return uniqueStrings(overrideSkillIds.filter((skillId) => !isAgentServerSkillId(skillId)));
+  }
   return uniqueStrings([
-    ...(input.scenarioOverride?.selectedSkillIds ?? []),
+    ...overrideSkillIds,
     `agentserver.generate.${skillDomain}`,
   ]);
+}
+
+function isAgentServerSkillId(value: string) {
+  return /^agentserver(?:\.|$)/i.test(value.trim());
 }
 
 function selectedRuntimeToolIds(input: SendAgentMessageInput) {
@@ -559,7 +660,7 @@ function selectedRuntimeToolContracts(selectedToolIds: string[]) {
 function buildReferencePolicy(references: Array<Record<string, unknown>>) {
   return {
     mode: 'explicit-refs-first',
-    defaultAction: 'Use current references as explicit user-provided evidence; resolve large payloads by ref and bounded summary. Treat stdoutRef/stderrRef as audit refs unless the user explicitly asks for raw log contents or failure diagnosis.',
+    defaultAction: CURRENT_REFERENCE_EVIDENCE_POLICY_DEFAULT_ACTION,
     currentReferenceCount: references.length,
   };
 }
@@ -576,17 +677,6 @@ function scenarioOverrideForTransport(input: SendAgentMessageInput['scenarioOver
   return out;
 }
 
-function ignoredLegacyScenarioVerificationPolicySources(input: SendAgentMessageInput) {
-  const configured = input.scenarioOverride?.verificationPolicy;
-  if (!isRecord(configured)) return undefined;
-  return [{
-    source: 'request.uiState.scenarioOverride.verificationPolicy',
-    decision: 'ignored',
-    keys: Object.keys(configured).sort().slice(0, 12),
-    reason: 'Legacy scenarioOverride.verificationPolicy is ignored by UI transport; structured contract projection records runtime verification settings.',
-  }];
-}
-
 function compactSciForgeReference(reference: NonNullable<SendAgentMessageInput['references']>[number]) {
   return {
     id: reference.id,
@@ -597,27 +687,42 @@ function compactSciForgeReference(reference: NonNullable<SendAgentMessageInput['
     runId: reference.runId,
     locator: reference.locator,
     summary: reference.summary,
-    payload: compactReferencePayload(reference.payload),
+    payloadDigest: compactReferencePayload(reference.payload),
   };
 }
 
-function compactReferencePayload(payload: unknown): unknown {
-  if (typeof payload === 'string') return payload.slice(0, 1600);
-  if (Array.isArray(payload)) return payload.slice(0, 8);
-  if (!isRecord(payload)) return payload;
-  const compact: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(payload).slice(0, 12)) {
-    if (typeof value === 'string') {
-      compact[key] = value.slice(0, 1600);
-    } else if (Array.isArray(value)) {
-      compact[key] = value.slice(0, 8);
-    } else if (isRecord(value)) {
-      compact[key] = compactRecord(value);
-    } else {
-      compact[key] = value;
-    }
+function compactReferencePayload(payload: unknown) {
+  if (payload === undefined) return undefined;
+  const stable = typeof payload === 'string'
+    ? payload
+    : JSON.stringify(compactTransportRecordValue(payload, 0));
+  return {
+    omitted: 'reference-payload-body',
+    hash: stableTextHash(stable ?? String(payload)),
+    shape: transportValueShape(payload),
+    refs: transportRefsFromValue(payload).slice(0, 12),
+  };
+}
+
+function transportValueShape(value: unknown): Record<string, unknown> {
+  if (typeof value === 'string') return { type: 'string', chars: value.length };
+  if (typeof value === 'number') return { type: 'number' };
+  if (typeof value === 'boolean') return { type: 'boolean' };
+  if (value === null) return { type: 'null' };
+  if (Array.isArray(value)) {
+    return {
+      type: 'array',
+      length: value.length,
+      itemTypes: Array.from(new Set(value.slice(0, 12).map((item) => Array.isArray(item) ? 'array' : item === null ? 'null' : typeof item))),
+    };
   }
-  return compact;
+  if (!isRecord(value)) return { type: typeof value };
+  const keys = Object.keys(value);
+  return {
+    type: 'object',
+    keyCount: keys.length,
+    keys: keys.slice(0, 12),
+  };
 }
 
 function compactRecord(value: unknown) {
@@ -803,7 +908,7 @@ function buildTransportAgentContext(
     notes: [
       'User prompt is carried separately as the authoritative request.',
       'The browser only transports UI/session facts; Python conversation-policy owns context selection, digests, capability brief, handoff, acceptance, and recovery.',
-      'stdoutRef/stderrRef are audit and provenance refs by default; do not expand raw log contents on continuation/export turns unless the user explicitly asks for logs or failure diagnosis.',
+      EXECUTION_LOG_REF_AUDIT_NOTE,
       'When local.vision-sense is selected, treat it as an optional vision sense plugin: build text + screenshot/image modality requests, emit text-form Computer Use commands, and keep trace refs compact across follow-up turns.',
     ],
   };
@@ -845,9 +950,9 @@ function buildFailureRecoveryPolicy(executionUnits: unknown[], runs: unknown[]) 
       ...(asStringArray(unit.outputArtifacts) ?? []),
     ]),
   }));
-  const latestFailedRun = failedRuns.findLast((run) => asString(run.response) || streamProcessSummaryFromRun(run));
+  const latestFailedRun = failedRuns.findLast((run) => streamProcessSummaryFromRun(run) || transportTextDigest(run.response));
   const priorFailureReason = attemptHistory.findLast((attempt) => attempt.failureReason)?.failureReason
-    || asString(latestFailedRun?.response)
+    || failedRunResponseDigestSummary(latestFailedRun)
     || (latestFailedRun ? streamProcessSummaryFromRun(latestFailedRun) : undefined);
   const recoverActions = uniqueStringList(attemptHistory.flatMap((attempt) => attempt.recoverActions ?? [])).slice(0, 6);
   const attemptHistoryRefs = uniqueStringList(attemptHistory.flatMap((attempt) => attempt.evidenceRefs ?? [])).slice(0, 12);
@@ -855,7 +960,7 @@ function buildFailureRecoveryPolicy(executionUnits: unknown[], runs: unknown[]) 
     mode: 'preserve-context',
     evidenceExpansionPolicy: {
       defaultAction: 'refs-and-digests-only',
-      logRefs: 'cite stdoutRef/stderrRef for audit; expand only for explicit log inspection or failure diagnosis',
+      logRefs: EXECUTION_LOG_REF_EXPANSION_POLICY,
       artifactRefs: 'prefer dataRef, path, markdownRef, or currentReferenceDigests before reading full artifact bodies',
     },
     priorFailureReason: joinFailureAndProcessSummary(priorFailureReason, latestFailedRun ? streamProcessSummaryFromRun(latestFailedRun) : undefined),
@@ -866,10 +971,27 @@ function buildFailureRecoveryPolicy(executionUnits: unknown[], runs: unknown[]) 
   };
 }
 
+function omittedTransportTextDigestLabel(label: string, value: string) {
+  const digest = transportTextDigest(value);
+  return digest?.hash
+    ? `[${label} omitted; digest=${digest.hash}; chars=${digest.chars ?? value.length}]`
+    : `[${label} omitted]`;
+}
+
+function failedRunResponseDigestSummary(run: Record<string, unknown> | undefined) {
+  const digest = transportTextDigest(run?.response);
+  return digest?.hash
+    ? `Prior failed run response omitted from prompt payload; digest=${digest.hash}${digest.chars ? `, chars=${digest.chars}` : ''}.`
+    : undefined;
+}
+
 function streamProcessSummaryFromRun(run: Record<string, unknown>) {
   const raw = isRecord(run.raw) ? run.raw : {};
   const streamProcess = isRecord(raw.streamProcess) ? raw.streamProcess : {};
-  return asString(streamProcess.summary);
+  const digest = isRecord(streamProcess.summaryDigest) ? streamProcess.summaryDigest : undefined;
+  const hash = asString(digest?.hash);
+  const chars = typeof digest?.chars === 'number' ? digest.chars : undefined;
+  return hash ? `Stream process transcript omitted from prompt payload; digest=${hash}${chars ? `, chars=${chars}` : ''}.` : undefined;
 }
 
 function joinFailureAndProcessSummary(reason: string | undefined, summary: string | undefined) {

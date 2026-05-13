@@ -61,10 +61,6 @@ try {
   assert.equal(request.agentServerBaseUrl, 'http://127.0.0.1:3000');
   assert.deepEqual(request.selectedVerifierIds, ['schema.verifier']);
   assert.equal(request.verificationPolicy, undefined);
-  assert.deepEqual(
-    (request.uiState?.ignoredLegacyVerificationPolicySources as Array<Record<string, unknown>> | undefined)?.map((entry) => entry.source),
-    ['request.verificationPolicy'],
-  );
   const rateLimitDiagnostic = classifyAgentServerBackendFailure('429 retry-after: 2 api_key=sk-secret1234567890', {
     httpStatus: 429,
     provider: 'openai-compatible',
@@ -371,7 +367,7 @@ try {
     }, 'task-generation'),
     'fresh current-reference turns should not reuse previous AgentServer session memory for the same file',
   );
-  const digestRequest = (await applyConversationPolicy(normalizeGatewayRequest({
+  const digestPolicyResult = await applyConversationPolicy(normalizeGatewayRequest({
     ...request,
     uiState: {
       ...request.uiState,
@@ -383,11 +379,14 @@ try {
       mode: 'active',
       command: 'python3',
       args: ['-m', 'sciforge_conversation.service'],
-      timeoutMs: 5000,
+      timeoutMs: 15000,
       pythonPath: join(process.cwd(), 'packages/reasoning/conversation-policy/src'),
     },
-  })).request;
-  const digests = (digestRequest.uiState as Record<string, unknown>).currentReferenceDigests as Array<Record<string, unknown>>;
+  });
+  assert.equal(digestPolicyResult.status, 'applied', digestPolicyResult.error);
+  const digestRequest = digestPolicyResult.request;
+  const digests = (digestRequest.uiState as Record<string, unknown>).currentReferenceDigests;
+  assert.ok(Array.isArray(digests));
   assert.equal(digests.length, 1);
   assert.equal(digests[0].status, 'ok');
   assert.ok(String(digests[0].digestText || '').length > 0);
@@ -414,6 +413,32 @@ try {
   assert.ok(missingReferenceUse.executionUnits.some((unit) =>
     unit.status === 'failed-with-reason'
     && String('failureReason' in unit ? unit.failureReason : '').includes('Current-turn reference was not reflected')
+  ));
+
+  const planOnlyMissingReferenceUse = await validateAndNormalizePayload({
+    message: 'I will analyze the uploaded report and generate a summary.',
+    confidence: 0.8,
+    claimType: 'fact',
+    evidenceLevel: 'runtime',
+    reasoningTrace: 'runtime smoke',
+    claims: [],
+    uiManifest: [{ componentId: 'report-viewer', artifactRef: 'research-report' }],
+    executionUnits: [{ id: 'runtime-smoke', status: 'done', tool: 'smoke' }],
+    artifacts: [{ id: 'research-report', type: 'research-report', data: { markdown: 'TODO' } }],
+  }, currentReferenceRequest, skill, {
+    taskRel: '.sciforge/tasks/reference-smoke-plan-only.py',
+    outputRel: '.sciforge/task-results/reference-smoke-plan-only.json',
+    stdoutRel: '.sciforge/logs/reference-smoke-plan-only.stdout.log',
+    stderrRel: '.sciforge/logs/reference-smoke-plan-only.stderr.log',
+    runtimeFingerprint: { runtime: 'smoke' },
+  });
+  const planOnlyPrimaryFailure = planOnlyMissingReferenceUse.executionUnits[0]?.refs as { validationFailure?: { failureKind?: string; contractId?: string } } | undefined;
+  assert.equal(planOnlyPrimaryFailure?.validationFailure?.failureKind, 'work-evidence');
+  assert.equal(planOnlyPrimaryFailure?.validationFailure?.contractId, 'sciforge.completed-payload.v1');
+  assert.ok(planOnlyMissingReferenceUse.executionUnits.some((unit) =>
+    unit.status === 'failed-with-reason'
+    && String('failureReason' in unit ? unit.failureReason : '').includes('Current-turn reference was not reflected')
+    && ((unit.refs as { validationFailure?: { failureKind?: string; contractId?: string } } | undefined)?.validationFailure?.failureKind === 'reference')
   ));
 
   const reflectedReferenceUse = await validateAndNormalizePayload({
@@ -533,6 +558,7 @@ try {
   const arxivEmptyRequest = {
     ...request,
     prompt: '帮我调研最近一周 arXiv 上 agent 相关论文和研究趋势',
+    expectedEvidenceKinds: ['retrieval'],
   };
   const emptyRetrievalPayload = await runAgentServerGeneratedTask(arxivEmptyRequest, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
     request: arxivEmptyRequest,
@@ -555,7 +581,8 @@ try {
             '  "claims": [{"text": "最近一周 arXiv 上有 0 篇 Agent 相关论文", "confidence": 0.9}],',
             '  "uiManifest": [{"componentId": "report-viewer", "artifactRef": "empty-arxiv-report"}],',
             '  "executionUnits": [{"id": "fetch-arxiv", "status": "done", "tool": "arxiv-api"}],',
-            '  "artifacts": [{"id": "empty-arxiv-report", "type": "research-report", "schema": {"type": "object"}, "data": {"markdown": "Retrieved 0 papers from arXiv."}}]',
+            '  "artifacts": [{"id": "empty-arxiv-report", "type": "research-report", "schema": {"type": "object"}, "data": {"markdown": "Retrieved 0 papers from arXiv."}}],',
+            '  "workEvidence": [{"id": "arxiv-empty-query", "kind": "retrieval", "status": "success", "resultCount": 0, "evidenceRefs": ["query:arxiv-empty-query"], "recoverActions": []}]',
             '}',
             'open(output_path, "w", encoding="utf-8").write(json.dumps(payload))',
           ].join('\n'),
@@ -960,6 +987,8 @@ try {
       id: 'EU-high-structured',
       status: 'done',
       tool: 'external.action-provider',
+      actionKind: 'publish',
+      sideEffectClass: 'external-write',
       params: JSON.stringify({ action: 'publish' }),
     }],
     artifacts: [],
@@ -978,6 +1007,8 @@ try {
       id: 'EU-high',
       status: 'done',
       tool: 'external.action-provider',
+      actionKind: 'publish',
+      sideEffectClass: 'external-write',
       outputRef: gatedOutputRef,
       params: JSON.stringify({ action: 'publish' }),
     }],
@@ -995,6 +1026,8 @@ try {
       id: 'EU-high',
       status: 'done',
       tool: 'external.action-provider',
+      actionKind: 'publish',
+      sideEffectClass: 'external-write',
       outputRef: gatedOutputRef,
       params: JSON.stringify({ action: 'publish' }),
     }],

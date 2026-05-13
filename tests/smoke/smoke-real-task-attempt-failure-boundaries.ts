@@ -33,8 +33,9 @@ const allowedLoosePayload = await validateAndNormalizePayload(looseBackendPayloa
   stderrRel: refs.codeDriftStderr,
   runtimeFingerprint: { smoke: 'real-task-attempt-failure-boundaries' },
 });
-assert.equal(firstExecutionStatus(allowedLoosePayload), 'done');
-assert.match(JSON.stringify(allowedLoosePayload.logs ?? []), /allowed-structural-drift/);
+assert.equal(firstExecutionStatus(allowedLoosePayload), 'repair-needed');
+assert.match(JSON.stringify(allowedLoosePayload.logs ?? []), /payload-normalization-audit/);
+assert.match(JSON.stringify(allowedLoosePayload.logs ?? []), /refused/);
 
 const missingEnvelopePayload = await validateAndNormalizePayload(missingEnvelopePayloadFixture(), gatewayRequest(), skill(), {
   taskRel: '.sciforge/tasks/r-code-02-malformed-backend.ts',

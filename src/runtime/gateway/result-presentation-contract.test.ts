@@ -92,6 +92,29 @@ test('attachResultPresentationContract separates protocol success from unmet tas
   assert.match(String(card?.nextStep), /requested report|preserved table refs/i);
 });
 
+test('attachResultPresentationContract does not treat message text alone as satisfied task outcome', () => {
+  const attached = attachResultPresentationContract(payload({
+    message: 'Looks complete, but no structured task outcome was declared.',
+    artifacts: [],
+    executionUnits: [{ id: 'status-only', status: 'done', tool: 'workspace-task' }],
+  }), {
+    request: {
+      skillDomain: 'literature',
+      prompt: 'Summarize the current task.',
+      artifacts: [],
+    },
+  });
+
+  const projection = attached.displayIntent?.taskOutcomeProjection as Record<string, unknown> | undefined;
+  const proxy = projection?.userSatisfactionProxy as Record<string, unknown> | undefined;
+  const card = attached.displayIntent?.taskRunCard as Record<string, unknown> | undefined;
+
+  assert.equal(projection?.protocolSuccess, true);
+  assert.equal(projection?.taskSuccess, false);
+  assert.equal(card?.taskOutcome, 'needs-work');
+  assert.equal(proxy?.answeredLatestRequest, false);
+});
+
 test('attachResultPresentationContract attributes transient failure next step to external provider', () => {
   const attached = attachResultPresentationContract(payload({
     message: 'External provider returned 429 Too Many Requests; partial metadata is preserved.',

@@ -62,6 +62,7 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         "memoryPlan": memory_plan,
         "currentReferenceDigests": current_reference_digests,
         "capabilityBrief": capability_brief,
+        "turnExecutionConstraints": _turn_execution_constraints(policy_input, goal_snapshot),
     })
     context_session = _mapping_from_plan(turn_composition, "contextSession")
     clickable_refs = _build_clickable_refs({
@@ -72,6 +73,7 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
     execution_mode_plan = classify_execution_mode(
         _mapping_from_plan(turn_composition, "executionClassifierInput")
     )
+    turn_execution_constraints = _turn_execution_constraints(policy_input, goal_snapshot)
     handoff_plan = plan_handoff({
         "prompt": policy_input["prompt"],
         "goal": goal_snapshot,
@@ -101,6 +103,7 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         "artifactIndex": clickable_refs,
         "capabilityBrief": capability_brief,
         "executionModePlan": execution_mode_plan,
+        "turnExecutionConstraints": turn_execution_constraints,
         "handoffPlan": handoff_plan,
         "recoveryPlan": recovery_plan,
         "latencyPolicy": latency_policy,
@@ -131,6 +134,7 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         artifactIndex=clickable_refs,
         capabilityBrief=capability_brief,
         executionModePlan=execution_mode_plan,
+        turnExecutionConstraints=turn_execution_constraints,
         handoffPlan=handoff_plan,
         acceptancePlan=_mapping_from_plan(service_plan, "acceptancePlan"),
         recoveryPlan=recovery_plan,
@@ -236,6 +240,16 @@ def _capability_request(policy_input: JsonMap, goal_snapshot: JsonMap) -> JsonMa
         "availableConfig": hints.get("availableConfig", {}),
         "history": hints.get("capabilityHistory", {}),
     }
+
+
+def _turn_execution_constraints(policy_input: JsonMap, goal_snapshot: JsonMap) -> JsonMap:
+    constraints = goal_snapshot.get("turnExecutionConstraints")
+    if isinstance(constraints, dict):
+        return constraints
+    ts_decisions = policy_input.get("tsDecisions", {})
+    if isinstance(ts_decisions, dict) and isinstance(ts_decisions.get("turnExecutionConstraints"), dict):
+        return ts_decisions["turnExecutionConstraints"]
+    return {}
 
 
 def _handoff_budget(policy_input: JsonMap) -> JsonMap:

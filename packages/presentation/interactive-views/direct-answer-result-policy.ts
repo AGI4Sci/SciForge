@@ -70,8 +70,7 @@ export function directAnswerPlainTextResultPolicy(text: string, request: DirectA
 }
 
 export function directAnswerNeedsReportArtifact(request: DirectAnswerResultPolicyRequest) {
-  return (request.expectedArtifactTypes ?? []).includes(REPORT_ARTIFACT_TYPE)
-    || /report|summary|报告|总结/.test(request.prompt.toLowerCase());
+  return (request.expectedArtifactTypes ?? []).includes(REPORT_ARTIFACT_TYPE);
 }
 
 export function ensureDirectAnswerReportArtifactPolicy<T extends DirectAnswerPayloadLike>(
@@ -249,14 +248,8 @@ export function directAnswerArtifactNeedsRepair(artifact: Record<string, unknown
   return status.includes('repair') || status.includes('fail') || /placeholder|missing|failed|repair/.test(reason);
 }
 
-export function existingArtifactFollowupPromptPolicy(prompt: string) {
-  const text = prompt.trim().toLowerCase();
-  if (!text) return false;
-  const asksForExistingArtifact = /markdown|\bmd\b|报告|report|查看|看看|看一下|展示|show|view|复制|copy|导出|export|下载报告|download report|格式|format/.test(text);
-  if (!asksForExistingArtifact) return false;
-  const explicitlyFreshWork = /重新|重跑|再跑|再检索|重新检索|检索一下|搜索|查找|最新|过去一周|下载并阅读|阅读全文|生成新的|rerun|run again|search|retrieve|fetch|latest/.test(text);
-  const pointsToPriorResult = /已有|现有|当前|刚才|上面|之前|previous|existing|current|that report|this report/.test(text);
-  return !explicitlyFreshWork || pointsToPriorResult;
+export function existingArtifactFollowupPromptPolicy(_prompt: string) {
+  return false;
 }
 
 export function preferredExistingArtifactFollowupArtifact<T extends ExistingArtifactFollowupArtifactLike>(artifacts: T[]) {

@@ -4,18 +4,20 @@ import type { GatewayRequest, LlmEndpointConfig, SciForgeSkillDomain, SkillAvail
 import { agentHandoffSourceMetadata } from '@sciforge-ui/runtime-contract/handoff';
 import { extractAgentServerCurrentUserRequest, normalizeConfiguredAgentServerLlmEndpoint } from '@sciforge-ui/runtime-contract/agentserver-prompt-policy';
 import { expectedArtifactTypesForRequest, normalizeLlmEndpoint, selectedComponentIdsForRequest } from './gateway-request.js';
-import { buildCapabilityBrokerBriefForAgentServer, buildContextEnvelope, expectedArtifactSchema, summarizeArtifactRefs, summarizeConversationLedger, summarizeConversationPolicyForAgentServer, summarizeExecutionRefs, summarizeTaskAttemptsForAgentServer, workspaceTreeSummary, type AgentServerContextMode } from './context-envelope.js';
+import { buildCapabilityBrokerBriefForAgentServer, buildContextEnvelope, expectedArtifactSchema, summarizeArtifactRefs, summarizeConversationLedger, summarizeConversationPolicyForAgentServer, summarizeExecutionRefs, summarizeTaskAttemptsForAgentServer, summarizeVerificationRecordForEnvelope, summarizeVerificationResultRecords, workspaceTreeSummary, type AgentServerContextMode } from './context-envelope.js';
 import { agentServerAgentId, agentServerContextPolicy, contextWindowMetadata, fetchAgentServerContextSnapshot } from './agentserver-context-window.js';
-import { cleanUrl, clipForAgentServerJson, clipForAgentServerPrompt, errorMessage, excerptAroundFailureLine, extractLikelyErrorLine, hashJson, headForAgentServer, isRecord, readTextIfExists, tailForAgentServer, toRecordList, toStringList, uniqueStrings } from '../gateway-utils.js';
+import { cleanUrl, clipForAgentServerJson, clipForAgentServerPrompt, errorMessage, extractLikelyErrorLine, hashJson, isRecord, readTextIfExists, toRecordList, toStringList, uniqueStrings } from '../gateway-utils.js';
 import { normalizeBackendHandoff } from '../workspace-task-input.js';
 import { sessionBundleRelForRequest } from '../session-bundle.js';
 import { readRecentTaskAttempts } from '../task-attempt-history.js';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { parseJsonErrorMessage, redactSecretText, sanitizeAgentServerError } from './backend-failure-diagnostics.js';
-import { applyRepairContextPolicyForAgentServer, ignoredLegacyRepairContextPolicyAuditForAgentServer, repairContextPolicySummaryForAgentServer } from './agentserver-repair-context-policy.js';
-import { agentServerArtifactSelectionPromptPolicyLines, agentServerBibliographicVerificationPromptPolicyLines, agentServerCurrentReferencePromptPolicyLines, agentServerToolPayloadProtocolContractLines } from '@sciforge-ui/runtime-contract/artifact-policy';
-import { agentServerBackendDecisionPromptPolicyLines, agentServerCapabilityRoutingPromptPolicyLines, agentServerContinuationPromptPolicyLines, agentServerCurrentTurnSnapshotPromptPolicyLines, agentServerExecutionModePromptPolicyLines, agentServerExternalIoReliabilityContractLines, agentServerFreshRetrievalPromptPolicyLines, agentServerGeneratedTaskPromptPolicyLines, agentServerGenerationOutputContract, agentServerGenerationOutputContractLines, agentServerLargeFilePromptContractLines, agentServerPriorAttemptsPromptPolicyLines, agentServerRepairPromptPolicyLines, agentServerViewSelectionPromptPolicyLines, agentServerWorkspaceTaskRepairPromptPolicyLines, agentServerWorkspaceTaskRoutingPromptPolicyLines } from '../../../packages/skills/runtime-policy';
+import { ignoredLegacyRepairContextPolicyAuditForAgentServer, repairContextPolicySummaryForAgentServer } from './agentserver-repair-context-policy.js';
+import { agentServerArtifactSelectionPromptPolicyLines, agentServerBibliographicVerificationPromptPolicyLines, agentServerCurrentReferencePromptPolicyLines, agentServerShouldIncludeBibliographicVerificationPromptPolicy, agentServerToolPayloadProtocolContractLines } from '@sciforge-ui/runtime-contract/artifact-policy';
+import { collectRuntimeRefsFromValue, runtimePayloadKeyLooksLikeBodyCarrier } from '@sciforge-ui/runtime-contract/references';
+import { normalizeTurnExecutionConstraints } from '@sciforge-ui/runtime-contract/turn-constraints';
+import { agentServerBackendDecisionPromptPolicyLines, agentServerCapabilityRoutingPromptPolicyLines, agentServerContinuationPromptPolicyLines, agentServerCurrentTurnSnapshotPromptPolicyLines, agentServerExecutionModePromptPolicyLines, agentServerExternalIoReliabilityContractLines, agentServerFreshRetrievalPromptPolicyLines, agentServerGeneratedTaskPromptPolicyLines, agentServerGenerationOutputContract, agentServerGenerationOutputContractLines, agentServerLargeFilePromptContractLines, agentServerPriorAttemptsPromptPolicyLines, agentServerRepairPromptPolicyLines, agentServerToolPayloadShapeContract, agentServerViewSelectionPromptPolicyLines, agentServerWorkspaceTaskRepairPromptPolicyLines, agentServerWorkspaceTaskRoutingPromptPolicyLines } from '../../../packages/skills/runtime-policy';
 import { minimalValidInteractiveToolPayloadExample } from '../../../packages/presentation/interactive-views/runtime-ui-manifest-policy';
 
 export const AGENT_BACKEND_ANSWER_PRINCIPLE = [
@@ -358,27 +360,20 @@ export async function buildCompactRepairContext(params: {
   failureReason: string;
   priorAttempts: unknown[];
 }) {
-  const taskAbs = join(params.workspace, params.run.spec.taskRel);
   const inputRel = `.sciforge/task-inputs/${params.run.spec.id}.json`;
-  const [code, stdout, stderr, output, input] = await Promise.all([
-    readTextIfExists(taskAbs),
-    readTextIfExists(join(params.workspace, params.run.stdoutRef)),
-    readTextIfExists(join(params.workspace, params.run.stderrRef)),
-    readTextIfExists(join(params.workspace, params.run.outputRef)),
-    readTextIfExists(join(params.workspace, inputRel)),
-  ]);
-  const outputWorkEvidenceSummary = summarizeWorkEvidenceForHandoff(parseJsonIfPossible(output));
-  const failureEvidence = outputWorkEvidenceSummary
-    ? params.failureReason
-    : `${params.failureReason}\n${stderr}\n${stdout}`;
+  const canExpandRepairOutput = bodyExpansionAllowedForRepairContext(params.request);
+  const output = canExpandRepairOutput ? await readTextIfExists(join(params.workspace, params.run.outputRef)) : '';
+  const outputWorkEvidenceSummary = canExpandRepairOutput
+    ? summarizeWorkEvidenceForHandoff(parseJsonIfPossible(output))
+    : undefined;
+  const diagnosticText = repairDiagnosticTextForLikelyError(params.failureReason, params.schemaErrors, outputWorkEvidenceSummary);
   const rawContext = {
     version: 'sciforge.repair-context.v1',
+    schemaVersion: 'sciforge.agentserver.repair-context.ref-first.v1',
     createdAt: new Date().toISOString(),
     projectFacts: {
       project: 'SciForge',
       runtimeRole: 'scenario-first AI4Science workspace runtime',
-      taskCodePolicy: 'Generated tasks live in workspace .sciforge/tasks and must be runnable from inputPath/outputPath. They may compose installed/workspace tools when those tools are more reliable than handwritten code.',
-      completionPolicy: 'The final user-visible result must come from executing the repaired task and writing a valid ToolPayload, not from code generation alone.',
       toolPayloadContract: ['message', 'confidence', 'claimType', 'evidenceLevel', 'reasoningTrace', 'claims', 'displayIntent', 'uiManifest', 'executionUnits', 'artifacts', 'objectReferences'],
     },
     currentGoal: {
@@ -406,37 +401,294 @@ export async function buildCompactRepairContext(params: {
       exitCode: params.run.exitCode,
       failureReason: clipForAgentServerPrompt(params.failureReason, 4000),
       schemaErrors: params.schemaErrors.slice(0, 16).map((entry) => clipForAgentServerPrompt(entry, 600)).filter(Boolean),
-      likelyErrorLine: extractLikelyErrorLine(failureEvidence),
-      stderrTail: outputWorkEvidenceSummary ? undefined : tailForAgentServer(stderr, 8000),
-      stdoutTail: outputWorkEvidenceSummary ? undefined : tailForAgentServer(stdout, 4000),
-      outputHead: outputWorkEvidenceSummary
-        ? JSON.stringify({ workEvidenceSummary: outputWorkEvidenceSummary }, null, 2)
-        : headForAgentServer(output, 4000),
+      likelyErrorLine: extractLikelyErrorLine(diagnosticText),
       workEvidenceSummary: outputWorkEvidenceSummary,
     },
-    code: {
-      sha1: sha1(code),
-      excerpt: excerptAroundFailureLine(code, failureEvidence),
-      head: headForAgentServer(code, code.length > 24000 ? 4000 : 8000),
-      tail: tailForAgentServer(code, code.length > 24000 ? 4000 : 8000),
-      fullTextIncluded: code.length <= 24000,
-      fullText: code.length <= 24000 ? code : undefined,
-    },
-    inputSummary: {
-      head: headForAgentServer(input, 4000),
-      sha1: input ? sha1(input) : undefined,
-    },
+    repairMaterials: repairMaterialRefs(params.run, inputRel),
     sessionSummary: summarizeUiStateForAgentServer(params.request.uiState, 'delta'),
     artifacts: summarizeArtifactRefs(params.request.artifacts),
     recentExecutionRefs: summarizeExecutionRefs(toRecordList(params.request.uiState?.recentExecutionRefs)),
     priorAttempts: summarizeTaskAttemptsForAgentServer(params.priorAttempts).slice(0, 4),
   };
   const repairContextPolicySummary = repairContextPolicySummaryForAgentServer(params.request, rawContext);
-  const compactRepairContext = applyRepairContextPolicyForAgentServer(rawContext, repairContextPolicySummary) ?? rawContext;
+  const compactRepairContext = applyRefFirstRepairContextPolicyForAgentServer(rawContext, repairContextPolicySummary);
+  const refFirstRepairContext = projectRepairContextForAgentServerPrompt(compactRepairContext);
   return withIgnoredLegacyRepairContextPolicyAudit(
-    compactRepairContext,
+    refFirstRepairContext,
     ignoredLegacyRepairContextPolicyAuditForAgentServer(params.request, rawContext),
-  ) ?? compactRepairContext;
+  ) ?? refFirstRepairContext;
+}
+
+function bodyExpansionAllowedForRepairContext(request: GatewayRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const constraints = normalizeTurnExecutionConstraints(uiState.turnExecutionConstraints);
+  if (!constraints) return true;
+  return !(
+    constraints.agentServerForbidden
+    || constraints.workspaceExecutionForbidden
+    || constraints.codeExecutionForbidden
+    || constraints.externalIoForbidden
+  );
+}
+
+function repairDiagnosticTextForLikelyError(
+  failureReason: string,
+  schemaErrors: string[],
+  workEvidenceSummary: unknown,
+) {
+  const workEvidenceDiagnostics = toRecordList(isRecord(workEvidenceSummary) ? workEvidenceSummary.items : {})
+    .flatMap((item) => [
+      stringField(item.failureReason),
+      ...toStringList(item.diagnostics),
+      ...toStringList(item.recoverActions),
+      stringField(item.nextStep),
+    ]);
+  return [
+    failureReason,
+    ...schemaErrors,
+    ...workEvidenceDiagnostics,
+  ].filter(Boolean).join('\n');
+}
+
+function repairMaterialRefs(run: WorkspaceTaskRunResult, inputRef: string) {
+  return [
+    repairMaterialRef('code', run.spec.taskRel, 'task-source'),
+    repairMaterialRef('input', inputRef, 'task-input'),
+    repairMaterialRef('output', run.outputRef, 'task-output'),
+    repairMaterialRef('stdout', run.stdoutRef, 'process-log'),
+    repairMaterialRef('stderr', run.stderrRef, 'process-log'),
+  ].filter(Boolean);
+}
+
+function repairMaterialRef(kind: string, ref: string | undefined, role: string) {
+  if (!ref) return undefined;
+  return { kind, ref, role };
+}
+
+function applyRefFirstRepairContextPolicyForAgentServer(
+  repairContext: Record<string, unknown>,
+  policy: ReturnType<typeof repairContextPolicySummaryForAgentServer>,
+) {
+  if (!policy) return repairContext;
+  const workspaceRefs = isRecord(repairContext.workspaceRefs) ? repairContext.workspaceRefs : {};
+  const filtered: Record<string, unknown> = {
+    ...repairContext,
+    repairContextPolicy: {
+      source: policy.source,
+      sourceKind: policy.sourceKind,
+      contractRef: policy.contractRef,
+      traceRef: policy.traceRef,
+      deterministicDecisionRef: policy.deterministicDecisionRef,
+      kind: policy.kind,
+      maxAttempts: policy.maxAttempts,
+      includeStdoutSummary: policy.includeStdoutSummary,
+      includeStderrSummary: policy.includeStderrSummary,
+      includeValidationFindings: policy.includeValidationFindings,
+      includePriorAttemptRefs: policy.includePriorAttemptRefs,
+      allowedFailureEvidenceRefs: policy.allowedFailureEvidenceRefs,
+      blockedFailureEvidenceRefs: policy.blockedFailureEvidenceRefs,
+    },
+  };
+  const audit = refFirstRepairContextPolicyAudit(policy);
+  const failure = isRecord(repairContext.failure) ? { ...repairContext.failure } : {};
+  applyRefFirstFailureFieldPolicy(failure, 'failureReason', repairPolicyRefs(workspaceRefs.outputRef, 'failureReason', 'failure:reason'), true, policy, audit);
+  applyRefFirstFailureFieldPolicy(failure, 'workEvidenceSummary', repairPolicyRefs(workspaceRefs.outputRef, 'output', 'workEvidenceSummary'), true, policy, audit);
+  filterRefFirstSchemaErrors(failure, repairPolicyRefs(workspaceRefs.outputRef, 'validation:findings', 'validator:findings', 'schemaErrors'), policy, audit);
+  recordRefFirstEvidenceDecision(audit, 'diagnostics.stdoutRef', refFirstRepairEvidenceDecision(repairPolicyRefs(workspaceRefs.stdoutRef, 'stdout', 'stdoutSummary'), policy, policy.includeStdoutSummary));
+  recordRefFirstEvidenceDecision(audit, 'diagnostics.stderrRef', refFirstRepairEvidenceDecision(repairPolicyRefs(workspaceRefs.stderrRef, 'stderr', 'stderrSummary'), policy, policy.includeStderrSummary));
+  filtered.failure = failure;
+  filtered.priorAttempts = policy.includePriorAttemptRefs ? repairContext.priorAttempts : [];
+  if (!policy.includePriorAttemptRefs && Array.isArray(repairContext.priorAttempts) && repairContext.priorAttempts.length) {
+    recordRefFirstEvidenceDecision(audit, 'priorAttempts', { include: false, reason: 'disabled', refs: ['priorAttempts'] });
+  }
+  filtered.repairContextPolicyAudit = audit;
+  return filtered;
+}
+
+function applyRefFirstFailureFieldPolicy(
+  failure: Record<string, unknown>,
+  field: string,
+  refs: string[],
+  enabled: boolean,
+  policy: NonNullable<ReturnType<typeof repairContextPolicySummaryForAgentServer>>,
+  audit: Record<string, unknown>,
+) {
+  if (failure[field] === undefined) return;
+  const decision = refFirstRepairEvidenceDecision(refs, policy, enabled);
+  recordRefFirstEvidenceDecision(audit, `failure.${field}`, decision);
+  if (!decision.include) delete failure[field];
+}
+
+function filterRefFirstSchemaErrors(
+  failure: Record<string, unknown>,
+  refs: string[],
+  policy: NonNullable<ReturnType<typeof repairContextPolicySummaryForAgentServer>>,
+  audit: Record<string, unknown>,
+) {
+  if (!Array.isArray(failure.schemaErrors)) return;
+  const decision = refFirstRepairEvidenceDecision(refs, policy, policy.includeValidationFindings);
+  recordRefFirstEvidenceDecision(audit, 'failure.schemaErrors', decision);
+  if (!decision.include) delete failure.schemaErrors;
+}
+
+function refFirstRepairEvidenceDecision(
+  refs: string[],
+  policy: NonNullable<ReturnType<typeof repairContextPolicySummaryForAgentServer>>,
+  enabled = true,
+) {
+  const normalizedRefs = uniqueStrings(refs);
+  if (!enabled) return { include: false, reason: 'disabled', refs: normalizedRefs };
+  const blocked = normalizedRefs.filter((ref) => policy.blockedFailureEvidenceRefs.includes(ref));
+  if (blocked.length) return { include: false, reason: 'blocked', refs: blocked };
+  if (policy.allowedFailureEvidenceRefs.length) {
+    const allowed = normalizedRefs.filter((ref) => policy.allowedFailureEvidenceRefs.includes(ref));
+    if (!allowed.length) return { include: false, reason: 'not-allowed', refs: normalizedRefs };
+    return { include: true, refs: allowed };
+  }
+  return { include: true, refs: normalizedRefs };
+}
+
+function recordRefFirstEvidenceDecision(
+  audit: Record<string, unknown>,
+  path: string,
+  decision: { include: boolean; reason?: string; refs: string[] },
+) {
+  if (decision.include) {
+    audit.includedFailureEvidenceRefs = uniqueStrings([
+      ...toStringList(audit.includedFailureEvidenceRefs),
+      ...decision.refs,
+    ]);
+    return;
+  }
+  audit.omittedFailureEvidenceRefs = uniqueStrings([
+    ...toStringList(audit.omittedFailureEvidenceRefs),
+    ...decision.refs,
+  ]);
+  const omittedFields = Array.isArray(audit.omittedFields) ? audit.omittedFields.filter(isRecord) : [];
+  omittedFields.push({ path, reason: decision.reason, refs: decision.refs });
+  audit.omittedFields = omittedFields;
+}
+
+function refFirstRepairContextPolicyAudit(
+  policy: NonNullable<ReturnType<typeof repairContextPolicySummaryForAgentServer>>,
+) {
+  return {
+    schemaVersion: 'sciforge.agentserver.repair-context-policy-audit.v1',
+    source: policy.source,
+    sourceKind: policy.sourceKind,
+    contractRef: policy.contractRef,
+    traceRef: policy.traceRef,
+    deterministicDecisionRef: policy.deterministicDecisionRef,
+    deterministic: true,
+    allowedFailureEvidenceRefs: policy.allowedFailureEvidenceRefs,
+    blockedFailureEvidenceRefs: policy.blockedFailureEvidenceRefs,
+    includeStdoutSummary: policy.includeStdoutSummary,
+    includeStderrSummary: policy.includeStderrSummary,
+    includeValidationFindings: policy.includeValidationFindings,
+    includePriorAttemptRefs: policy.includePriorAttemptRefs,
+    ignoredLegacySources: policy.ignoredLegacySources,
+    includedFailureEvidenceRefs: [],
+    omittedFailureEvidenceRefs: [],
+    omittedFields: [],
+  };
+}
+
+function repairPolicyRefs(...refs: unknown[]) {
+  return uniqueStrings(refs.flatMap((ref) => {
+    const value = stringField(ref);
+    return value ? [value] : [];
+  }));
+}
+
+function projectRepairContextForAgentServerPrompt(repairContext: Record<string, unknown>) {
+  const workspaceRefs = isRecord(repairContext.workspaceRefs) ? repairContext.workspaceRefs : {};
+  const existingRefs = isRecord(repairContext.refs) ? repairContext.refs : {};
+  const failure = isRecord(repairContext.failure) ? repairContext.failure : {};
+  const existingDiagnostics = isRecord(repairContext.diagnostics) ? repairContext.diagnostics : undefined;
+  const projectFacts = isRecord(repairContext.projectFacts) ? repairContext.projectFacts : {};
+  const existingTaskContract = isRecord(repairContext.taskContract) ? repairContext.taskContract : {};
+  const repairMaterials = toRecordList(repairContext.repairMaterials);
+  const existingMaterials = toRecordList(existingRefs.materials);
+  const out: Record<string, unknown> = {
+    version: repairContext.version,
+    schemaVersion: 'sciforge.agentserver.repair-context.ref-first.v1',
+    createdAt: repairContext.createdAt,
+    promptOrder: 'diagnostic-first/ref-first',
+    diagnostics: Object.keys(failure).length
+      ? repairDiagnosticsForPrompt(failure, repairContext)
+      : existingDiagnostics,
+    refs: {
+      workspacePath: workspaceRefs.workspacePath ?? existingRefs.workspacePath,
+      generatedTaskId: workspaceRefs.generatedTaskId ?? existingRefs.generatedTaskId,
+      materials: repairMaterials.length
+        ? repairMaterials
+        : existingMaterials.length ? existingMaterials : repairMaterialRefsFromWorkspaceRefs(workspaceRefs),
+    },
+    currentGoal: repairContext.currentGoal,
+    selectedSkill: repairContext.selectedSkill,
+    taskContract: {
+      ...existingTaskContract,
+      outputPayloadKeys: toStringList(projectFacts.toolPayloadContract).length
+        ? toStringList(projectFacts.toolPayloadContract)
+        : existingTaskContract.outputPayloadKeys,
+      ...agentServerToolPayloadShapeContract(),
+    },
+    sessionSummary: repairContext.sessionSummary,
+    artifacts: repairContext.artifacts,
+    recentExecutionRefs: repairContext.recentExecutionRefs,
+    priorAttempts: repairContext.priorAttempts,
+    repairContextPolicy: repairContext.repairContextPolicy,
+    repairContextPolicyAudit: repairContext.repairContextPolicyAudit,
+    repairContextPolicyIgnoredLegacyAudit: repairContext.repairContextPolicyIgnoredLegacyAudit,
+    agentServerCoreSnapshot: repairContext.agentServerCoreSnapshot,
+  };
+  return removeUndefinedFields(sanitizePromptHandoffValue(out, 'repairContext') as Record<string, unknown>);
+}
+
+function repairDiagnosticsForPrompt(
+  failure: Record<string, unknown>,
+  repairContext: Record<string, unknown>,
+) {
+  return removeUndefinedFields({
+    exitCode: failure.exitCode,
+    failureReason: failure.failureReason,
+    schemaErrors: failure.schemaErrors,
+    likelyErrorLine: failure.likelyErrorLine,
+    workEvidenceSummary: failure.workEvidenceSummary,
+    evidenceRefs: repairDiagnosticEvidenceRefs(repairContext),
+    materialBodies: 'omitted-ref-first',
+  });
+}
+
+function repairDiagnosticEvidenceRefs(repairContext: Record<string, unknown>) {
+  const workspaceRefs = isRecord(repairContext.workspaceRefs) ? repairContext.workspaceRefs : {};
+  const policyAudit = isRecord(repairContext.repairContextPolicyAudit) ? repairContext.repairContextPolicyAudit : {};
+  const included = toStringList(policyAudit.includedFailureEvidenceRefs);
+  const omitted = toStringList(policyAudit.omittedFailureEvidenceRefs);
+  const refs = [
+    repairMaterialRef('output', stringField(workspaceRefs.outputRef), omitted.includes('output') ? 'omitted-by-policy' : 'diagnostic-ref'),
+    repairMaterialRef('stdout', stringField(workspaceRefs.stdoutRef), included.includes('stdout') ? 'included-by-policy' : omitted.includes('stdout') ? 'omitted-by-policy' : 'diagnostic-ref'),
+    repairMaterialRef('stderr', stringField(workspaceRefs.stderrRef), included.includes('stderr') ? 'included-by-policy' : omitted.includes('stderr') ? 'omitted-by-policy' : 'diagnostic-ref'),
+  ].filter(Boolean);
+  return refs.length ? refs : undefined;
+}
+
+function repairMaterialRefsFromWorkspaceRefs(workspaceRefs: Record<string, unknown>) {
+  return [
+    repairMaterialRef('code', stringField(workspaceRefs.codeRef), 'task-source'),
+    repairMaterialRef('input', stringField(workspaceRefs.inputRef), 'task-input'),
+    repairMaterialRef('output', stringField(workspaceRefs.outputRef), 'task-output'),
+    repairMaterialRef('stdout', stringField(workspaceRefs.stdoutRef), 'process-log'),
+    repairMaterialRef('stderr', stringField(workspaceRefs.stderrRef), 'process-log'),
+  ].filter(Boolean);
+}
+
+function removeUndefinedFields<T extends Record<string, unknown>>(value: T): T {
+  const out: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (entry !== undefined) out[key] = entry;
+  }
+  return out as T;
 }
 
 function parseJsonIfPossible(value: string) {
@@ -472,12 +724,16 @@ export function buildAgentServerRepairPrompt(params: {
   repairContext?: Record<string, unknown>;
 }) {
   const repairContextPolicySummary = repairContextPolicySummaryForAgentServer(params.request, params.repairContext);
-  const repairContext = withIgnoredLegacyRepairContextPolicyAudit(
-    applyRepairContextPolicyForAgentServer(params.repairContext, repairContextPolicySummary),
+  const repairContextWithAudit = withIgnoredLegacyRepairContextPolicyAudit(
+    params.repairContext,
     ignoredLegacyRepairContextPolicyAuditForAgentServer(params.request, params.repairContext),
   );
+  const repairContext = repairContextWithAudit
+    ? projectRepairContextForAgentServerPrompt(repairContextWithAudit)
+    : undefined;
   return [
     ...agentServerWorkspaceTaskRepairPromptPolicyLines('intro'),
+    ...agentServerRepairPromptPolicyLines(),
     ...agentServerExternalIoReliabilityContractLines(),
     ...agentServerToolPayloadProtocolContractLines(),
     ...agentServerWorkspaceTaskRepairPromptPolicyLines('completion'),
@@ -611,7 +867,7 @@ export function buildAgentServerGenerationPrompt(request: {
     ...agentServerWorkspaceTaskRoutingPromptPolicyLines('new-task'),
     ...agentServerCapabilityRoutingPromptPolicyLines(),
     ...agentServerLargeFilePromptContractLines(),
-    ...agentServerBibliographicVerificationPromptPolicyLines(),
+    ...agentServerBibliographicPolicyLinesForRequest(request, scenarioFacts),
     ...agentServerArtifactSelectionPromptPolicyLines(),
     ...agentServerViewSelectionPromptPolicyLines(),
     ...agentServerContinuationPromptPolicyLines(),
@@ -628,6 +884,7 @@ export function buildAgentServerGenerationPrompt(request: {
       taskContract: {
         argv: ['inputPath', 'outputPath'],
         outputPayloadKeys: ['message', 'confidence', 'claimType', 'evidenceLevel', 'reasoningTrace', 'claims', 'displayIntent', 'uiManifest', 'executionUnits', 'artifacts', 'objectReferences'],
+        ...agentServerToolPayloadShapeContract(),
       },
     }), null, 2),
   ].join('\n');
@@ -646,8 +903,14 @@ function compactGenerationRequestForAgentServer(
     metadata: _metadata,
     ...rest
   } = request;
+  const artifacts = toRecordList(rest.artifacts);
+  const recentExecutionRefs = toRecordList(rest.recentExecutionRefs);
+  const sanitizedRest = sanitizePromptHandoffValue(rest, 'generationRequest');
   return {
-    ...rest,
+    ...(isRecord(sanitizedRest) ? sanitizedRest : {}),
+    artifacts: artifacts.length ? summarizeArtifactRefs(artifacts) : undefined,
+    recentExecutionRefs: recentExecutionRefs.length ? summarizeExecutionRefs(recentExecutionRefs) : undefined,
+    uiStateSummary: sanitizeUiStateSummaryForPrompt(rest.uiStateSummary),
     contextEnvelope: compactContextEnvelopeForAgentServer(contextEnvelope),
     capabilityBrokerBrief,
     promptRenderPlanSummary,
@@ -658,6 +921,23 @@ function compactGenerationRequestForAgentServer(
       reason: 'T116 default backend handoff consumes compact broker briefs and keeps full schemas/examples/docs lazy.',
     },
   };
+}
+
+function agentServerBibliographicPolicyLinesForRequest(
+  request: Parameters<typeof buildAgentServerGenerationPrompt>[0],
+  scenarioFacts: Record<string, unknown>,
+) {
+  const include = agentServerShouldIncludeBibliographicVerificationPromptPolicy({
+    skillDomain: request.skillDomain,
+    expectedArtifactTypes: request.expectedArtifactTypes,
+    selectedComponentIds: request.selectedComponentIds,
+    selectedCapabilityIds: [
+      ...toStringList(scenarioFacts.selectedToolIds),
+      ...toStringList(scenarioFacts.selectedSenseIds),
+      ...toStringList(scenarioFacts.selectedVerifierIds),
+    ],
+  });
+  return include ? agentServerBibliographicVerificationPromptPolicyLines() : [];
 }
 
 function compactCapabilityBrokerRouteSummary(value: Record<string, unknown> | undefined) {
@@ -675,12 +955,42 @@ function compactCapabilityBrokerRouteSummary(value: Record<string, unknown> | un
     } : undefined,
     briefs: briefs.slice(0, maxBriefs).map(compactCapabilityBriefForPrompt),
     omittedBriefCount: Math.max(0, briefs.length - maxBriefs),
+    harnessInputAudit: compactHarnessInputAuditForPrompt(value.harnessInputAudit),
     inputSummary: isRecord(value.inputSummary) ? {
       objectRefs: value.inputSummary.objectRefs,
       artifactIndexEntries: value.inputSummary.artifactIndexEntries,
       failureHistoryEntries: value.inputSummary.failureHistoryEntries,
       toolBudgetKeys: toStringList(value.inputSummary.toolBudgetKeys).slice(0, 16),
     } : undefined,
+  };
+}
+
+function compactHarnessInputAuditForPrompt(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  const consumed = isRecord(value.consumed) ? value.consumed : {};
+  return {
+    schemaVersion: stringField(value.schemaVersion),
+    status: stringField(value.status),
+    source: stringField(value.source),
+    enablement: stringField(value.enablement),
+    contractRef: stringField(value.contractRef),
+    traceRef: stringField(value.traceRef),
+    profileId: stringField(value.profileId),
+    consumed: {
+      skillHints: value.consumed && typeof consumed.skillHints === 'number' ? consumed.skillHints : undefined,
+      blockedCapabilities: value.consumed && typeof consumed.blockedCapabilities === 'number' ? consumed.blockedCapabilities : undefined,
+      preferredCapabilityIds: value.consumed && typeof consumed.preferredCapabilityIds === 'number' ? consumed.preferredCapabilityIds : undefined,
+      providerAvailability: value.consumed && typeof consumed.providerAvailability === 'number' ? consumed.providerAvailability : undefined,
+      toolBudgetKeys: toStringList(consumed.toolBudgetKeys).slice(0, 16),
+      verificationPolicyKeys: toStringList(consumed.verificationPolicyKeys).slice(0, 16),
+      verificationPolicyMode: stringField(consumed.verificationPolicyMode),
+    },
+    sources: toRecordList(value.sources).slice(0, 8).map((source) => ({
+      source: stringField(source.source),
+      contractRef: stringField(source.contractRef),
+      traceRef: stringField(source.traceRef),
+      profileId: stringField(source.profileId),
+    })),
   };
 }
 
@@ -723,11 +1033,11 @@ function compactContextEnvelopeForAgentServer(value: unknown) {
       continue;
     }
     if (key === 'sessionFacts' || key === 'scenarioFacts') {
-      const facts = omitRawPromptRenderPlanCarriers(entry);
+      const facts = sanitizeContextFactsForPrompt(entry, key);
       if (facts) out[key] = facts;
       continue;
     }
-    out[key] = entry;
+    out[key] = sanitizePromptHandoffValue(entry, key);
   }
   return out;
 }
@@ -760,6 +1070,95 @@ function omitRawPromptRenderPlanCarriers(value: unknown) {
     out[key] = entry;
   }
   return out;
+}
+
+function sanitizeContextFactsForPrompt(value: unknown, source: string) {
+  if (!isRecord(value)) return undefined;
+  const out: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === 'agentHarnessHandoff' || key === 'promptRenderPlan') continue;
+    if (key === 'verificationResult') {
+      const summary = summarizeVerificationRecordForEnvelope(entry, `${source}.${key}`);
+      if (summary) out[key] = summary;
+      continue;
+    }
+    if (key === 'recentVerificationResults' || key === 'verificationResults') {
+      const summary = summarizeVerificationResultRecords(toRecordList(entry), `${source}.${key}`);
+      if (summary.length) out[key] = summary;
+      continue;
+    }
+    if (key === 'artifacts') {
+      const artifacts = summarizeArtifactRefs(toRecordList(entry));
+      if (artifacts.length) out[key] = artifacts;
+      continue;
+    }
+    if (key === 'recentExecutionRefs' || key === 'executionUnits') {
+      const refs = summarizeExecutionRefs(toRecordList(entry));
+      if (refs.length) out[key] = refs;
+      continue;
+    }
+    out[key] = sanitizePromptHandoffValue(entry, `${source}.${key}`);
+  }
+  return out;
+}
+
+function sanitizeUiStateSummaryForPrompt(value: unknown) {
+  if (!isRecord(value)) return sanitizePromptHandoffValue(value, 'uiStateSummary');
+  return sanitizeContextFactsForPrompt(value, 'uiStateSummary');
+}
+
+function sanitizePromptHandoffValue(value: unknown, path = ''): unknown {
+  if (value === undefined || value === null) return value;
+  if (typeof value === 'string') return clipForAgentServerPrompt(value, 1800);
+  if (typeof value !== 'object') return value;
+  if (Array.isArray(value)) {
+    const limit = path.endsWith('.messages') || path.endsWith('.recentConversation') ? 12 : 16;
+    return value.slice(-limit).map((entry, index) => sanitizePromptHandoffValue(entry, `${path}[${index}]`));
+  }
+  if (!isRecord(value)) return undefined;
+  const out: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === 'agentHarnessHandoff' || key === 'promptRenderPlan') continue;
+    if (isBodyCarrierKey(key)) {
+      const summary = promptBodyCarrierSummary(key, entry);
+      if (summary) out[key] = summary;
+      continue;
+    }
+    if (key === 'verificationResult') {
+      const summary = summarizeVerificationRecordForEnvelope(entry, `${path}.${key}`);
+      if (summary) out[key] = summary;
+      continue;
+    }
+    if (key === 'verificationResults' || key === 'recentVerificationResults') {
+      const summary = summarizeVerificationResultRecords(toRecordList(entry), `${path}.${key}`);
+      if (summary.length) out[key] = summary;
+      continue;
+    }
+    out[key] = sanitizePromptHandoffValue(entry, path ? `${path}.${key}` : key);
+  }
+  return out;
+}
+
+function isBodyCarrierKey(key: string) {
+  return runtimePayloadKeyLooksLikeBodyCarrier(key);
+}
+
+function promptBodyCarrierSummary(key: string, value: unknown) {
+  if (value === undefined) return undefined;
+  return {
+    omitted: `prompt-handoff-${key}-body`,
+    shape: promptValueShape(value),
+    refs: collectRuntimeRefsFromValue(value, { maxRefs: 16 }),
+    hash: hashJson(value),
+  };
+}
+
+function promptValueShape(value: unknown): Record<string, unknown> {
+  if (typeof value === 'string') return { kind: 'string', chars: value.length };
+  if (typeof value === 'number' || typeof value === 'boolean') return { kind: typeof value };
+  if (Array.isArray(value)) return { kind: 'array', count: value.length };
+  if (isRecord(value)) return { kind: 'object', keys: Object.keys(value).slice(0, 16) };
+  return { kind: value === null ? 'null' : typeof value };
 }
 
 function promptRenderPlanSummaryForAgentServer(

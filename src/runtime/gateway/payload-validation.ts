@@ -7,7 +7,6 @@ import {
   type CapabilityBudgetDebitLine,
 } from '@sciforge-ui/runtime-contract/capability-budget';
 import {
-  previewPathHasRecognizedFileExtension,
   previewPathHasStableDeliverableExtension,
 } from '@sciforge-ui/artifact-preview';
 import {
@@ -19,7 +18,7 @@ import {
 import type { GatewayRequest, SkillAvailability, ToolPayload } from '../runtime-types.js';
 import { runWorkspaceTask, sha1 } from '../workspace-task-runner.js';
 import { composeRuntimeUiManifest } from '../runtime-ui-manifest.js';
-import { isRecord } from '../gateway-utils.js';
+import { isRecord, toRecordList } from '../gateway-utils.js';
 import { repairNeededPayload as buildRepairNeededPayload, type RepairPolicyRefs } from './repair-policy.js';
 import { contextCompactionMetadata } from './agentserver-context-window.js';
 import { normalizeArtifactsForPayload, persistArtifactRefsForPayload } from './artifact-materializer.js';
@@ -53,13 +52,13 @@ type AgentServerGenerationFailureDiagnostics = {
 };
 
 const PAYLOAD_NORMALIZATION_AUDIT_SCHEMA_VERSION = 'sciforge.payload-normalization-audit.v1' as const;
-const SCHEMA_NORMALIZATION_WHITELIST_POLICY_ID = 'sciforge.schema-normalization-whitelist.v1' as const;
+const STRICT_PAYLOAD_SCHEMA_POLICY_ID = 'sciforge.strict-payload-schema.v1' as const;
 
 interface PayloadNormalizationAudit {
   schemaVersion: typeof PAYLOAD_NORMALIZATION_AUDIT_SCHEMA_VERSION;
-  status: 'no-op' | 'allowed-structural-drift' | 'refused';
-  policy: 'explicit-whitelist';
-  policyId: typeof SCHEMA_NORMALIZATION_WHITELIST_POLICY_ID;
+  status: 'no-op' | 'refused';
+  policy: 'strict-contract';
+  policyId: typeof STRICT_PAYLOAD_SCHEMA_POLICY_ID;
   allowedRepairs: string[];
   refusedErrors: string[];
   notes: string[];
@@ -120,6 +119,9 @@ export async function validateAndNormalizePayload(
     normalizedArtifacts,
     refs,
   );
+  const referenceFailures = currentReferenceUsageFailures(contractPayload, persistedArtifacts, request);
+  const referenceValidationFailure = referenceValidationFailureFromFailures(referenceFailures, request, skill, refs);
+  const referenceFailureUnits = referenceFailureExecutionUnits(referenceFailures, referenceValidationFailure);
   const completedContractFailures = completedPayloadContractFailures(contractPayload, persistedArtifacts, refs);
   if (completedContractFailures.length) {
     const validationFailure = contractValidationFailureFromErrors(completedContractFailures, {
@@ -137,40 +139,25 @@ export async function validateAndNormalizePayload(
       ],
       nextStep: 'Regenerate the backend payload as a real completed result, or report the blocker as repair-needed/failed-with-reason.',
     });
-    const repairRefs = repairRefsWithValidationRepairAudit(request, skill, validationFailure, refs);
+    const repairRefs = repairRefsWithValidationRepairAudit(request, skill, validationFailure, refs, {
+      additionalValidationFailures: referenceValidationFailure ? [referenceValidationFailure] : [],
+    });
+    const repairPayload = repairNeededPayload(request, skill, validationFailure.failureReason, repairRefs);
     return attachPayloadValidationBudgetDebit(
-      repairNeededPayload(request, skill, validationFailure.failureReason, repairRefs),
+      referenceFailureUnits.length
+        ? {
+          ...repairPayload,
+          executionUnits: [
+            ...repairPayload.executionUnits,
+            ...referenceFailureUnits,
+          ],
+        }
+        : repairPayload,
       skill,
       validationFailure,
       repairRefs,
     );
   }
-  const referenceFailures = currentReferenceUsageFailures(contractPayload, persistedArtifacts, request);
-  const referenceValidationFailure = referenceFailures.length
-    ? contractValidationFailureFromErrors(referenceFailures, {
-      capabilityId: skill.id,
-      failureKind: 'reference',
-      schemaPath: 'src/runtime/gateway/payload-validation.ts#currentReferenceUsageFailures',
-      contractId: 'sciforge.current-reference-usage.v1',
-      expected: 'Payload message, claims, or artifacts reflect each required current-turn reference',
-      actual: 'One or more required current-turn references were absent from payload text/artifacts',
-      relatedRefs: [
-        ...relatedRefsFromRepairRefs(refs),
-        ...currentTurnReferenceRecords(request).map((reference) => stringField(reference.ref)).filter((ref): ref is string => Boolean(ref)),
-      ],
-    })
-    : undefined;
-  const referenceFailureUnits = referenceFailures.map((failure, index) => ({
-    id: `current-reference-usage-${index + 1}`,
-    status: 'failed-with-reason',
-    tool: CURRENT_REFERENCE_GATE_TOOL_ID,
-    failureReason: failure,
-    recoverActions: [
-      'Read the current-turn reference by ref/path/dataRef.',
-      'Regenerate the final answer/artifacts from that reference, or report the ref as unreadable with nextStep.',
-    ],
-    refs: referenceValidationFailure ? { validationFailure: referenceValidationFailure } : undefined,
-  }));
   const normalizedPayload: ToolPayload = withPayloadNormalizationAudit({
     message: referenceFailures.length
       ? `Current-turn reference contract failed: ${referenceFailures.join('; ')}`
@@ -281,27 +268,25 @@ function payloadNormalizationAudit(
     return {
       schemaVersion: PAYLOAD_NORMALIZATION_AUDIT_SCHEMA_VERSION,
       status: 'refused',
-      policy: 'explicit-whitelist',
-      policyId: SCHEMA_NORMALIZATION_WHITELIST_POLICY_ID,
+      policy: 'strict-contract',
+      policyId: STRICT_PAYLOAD_SCHEMA_POLICY_ID,
       allowedRepairs,
       refusedErrors,
       notes: [
-        'Payload normalization refused to repair fields outside the explicit structural drift whitelist.',
-        'Semantic content, safety boundaries, invalid UI refs, and required envelope omissions must fail closed.',
+        'Payload validation refused to normalize invalid ToolPayload shape.',
+        'Backends must emit the strict contract; semantic content, safety boundaries, invalid UI refs, legacy aliases, and required envelope omissions fail closed.',
       ],
       auditNotes,
     };
   }
   return {
     schemaVersion: PAYLOAD_NORMALIZATION_AUDIT_SCHEMA_VERSION,
-    status: allowedRepairs.length ? 'allowed-structural-drift' : 'no-op',
-    policy: 'explicit-whitelist',
-    policyId: SCHEMA_NORMALIZATION_WHITELIST_POLICY_ID,
+    status: 'no-op',
+    policy: 'strict-contract',
+    policyId: STRICT_PAYLOAD_SCHEMA_POLICY_ID,
     allowedRepairs,
     refusedErrors: [],
-    notes: allowedRepairs.length
-      ? ['Only whitelisted structural drift was normalized; semantic and safety-impacting errors remain fail-closed.']
-      : [],
+    notes: [],
     auditNotes,
   };
 }
@@ -320,40 +305,18 @@ function payloadNormalizationDecision(error: string, sourcePayload: unknown, nor
     repair: repair ?? `blocked ${path}`,
     auditNote: {
       kind: 'schema-normalization',
-      status: repair ? 'applied' : 'blocked',
-      boundary: repair ? 'structural-drift' : 'semantic-or-safety',
-      policyId: SCHEMA_NORMALIZATION_WHITELIST_POLICY_ID,
+      status: 'blocked',
+      boundary: 'semantic-or-safety',
+      policyId: STRICT_PAYLOAD_SCHEMA_POLICY_ID,
       message: repair
         ? `Applied whitelisted schema normalization: ${repair}.`
-        : `Refused schema normalization outside the structural drift whitelist: ${error}.`,
+        : `Refused schema normalization outside the strict ToolPayload contract: ${error}.`,
       paths: [path],
     },
   };
 }
 
-function allowedPayloadNormalizationRepair(error: string, sourcePayload: unknown, normalizedPayload: unknown) {
-  if (!isRecord(sourcePayload) || !isRecord(normalizedPayload)) return undefined;
-  if (/^artifacts must be an array$/i.test(error) && isRecord(sourcePayload.artifacts) && Array.isArray(normalizedPayload.artifacts)) {
-    return 'artifacts object map -> artifacts array';
-  }
-  if (/^reasoningTrace must be a string$/i.test(error) && Array.isArray(sourcePayload.reasoningTrace) && typeof normalizedPayload.reasoningTrace === 'string') {
-    return 'reasoningTrace array -> newline-delimited string';
-  }
-  if (/^uiManifest must be an array$/i.test(error) && isRecord(sourcePayload.uiManifest) && Array.isArray(normalizedPayload.uiManifest)) {
-    return 'uiManifest object descriptor -> uiManifest array';
-  }
-  const componentIdMatch = error.match(/^uiManifest\[(\d+)]\.componentId must be a non-empty string/i);
-  if (componentIdMatch && aliasedUiManifestSlot(sourcePayload, Number(componentIdMatch[1]))) {
-    return 'uiManifest component/id alias -> componentId';
-  }
-  const artifactRefMatch = error.match(/^uiManifest\[(\d+)]\.artifactRef must be a non-empty string when present/i);
-  if (artifactRefMatch && emptyUiManifestArtifactRef(sourcePayload, Number(artifactRefMatch[1]))) {
-    return 'empty uiManifest artifactRef removed';
-  }
-  const artifactTypeMatch = error.match(/^artifacts\[(\d+)]\.type must be a non-empty string/i);
-  if (artifactTypeMatch && aliasedArtifactType(sourcePayload, Number(artifactTypeMatch[1]))) {
-    return 'artifact artifactType alias -> type';
-  }
+function allowedPayloadNormalizationRepair(_error: string, _sourcePayload: unknown, _normalizedPayload: unknown) {
   return undefined;
 }
 
@@ -364,31 +327,11 @@ function schemaErrorPath(error: string) {
   return explicitPath?.[1] ?? '$';
 }
 
-function aliasedUiManifestSlot(sourcePayload: unknown, index: number) {
-  if (!isRecord(sourcePayload) || !Array.isArray(sourcePayload.uiManifest)) return false;
-  const slot = sourcePayload.uiManifest[index];
-  return isRecord(slot) && (stringField(slot.component) || stringField(slot.id));
-}
-
-function emptyUiManifestArtifactRef(sourcePayload: unknown, index: number) {
-  if (!isRecord(sourcePayload) || !Array.isArray(sourcePayload.uiManifest)) return false;
-  const slot = sourcePayload.uiManifest[index];
-  return isRecord(slot)
-    && 'artifactRef' in slot
-    && (slot.artifactRef === '' || slot.artifactRef === null || slot.artifactRef === undefined);
-}
-
-function aliasedArtifactType(sourcePayload: unknown, index: number) {
-  if (!isRecord(sourcePayload) || !Array.isArray(sourcePayload.artifacts)) return false;
-  const artifact = sourcePayload.artifacts[index];
-  return isRecord(artifact) && Boolean(stringField(artifact.artifactType));
-}
-
 function recoverActionsForRefusedNormalization(audit: PayloadNormalizationAudit | undefined) {
   if (audit?.status !== 'refused') return [];
   return [
-    'Only apply payload normalization for explicitly whitelisted structural drift such as artifact maps or reasoningTrace arrays.',
-    'Do not infer missing required envelope fields, invalid UI references, semantic content, or safety-sensitive values during normalization.',
+    'Regenerate the payload to match the strict ToolPayload contract exactly.',
+    'Do not infer missing envelope fields, alias legacy keys, or normalize semantic/safety-sensitive values during validation.',
   ];
 }
 
@@ -595,7 +538,10 @@ function repairRefsWithValidationRepairAudit(
   skill: SkillAvailability,
   validationFailure: NonNullable<RepairPolicyRefs['validationFailure']>,
   refs: RepairPolicyRefs,
-  options: { forceFailClosed?: boolean } = {},
+  options: {
+    forceFailClosed?: boolean;
+    additionalValidationFailures?: Array<NonNullable<RepairPolicyRefs['validationFailure']>>;
+  } = {},
 ): RepairPolicyRefs {
   const chainId = payloadValidationChainId(skill, validationFailure, refs);
   const currentRefs = currentTurnReferenceRecords(request)
@@ -619,7 +565,10 @@ function repairRefsWithValidationRepairAudit(
       artifactRefs: [],
       currentRefs,
     },
-    contractValidationFailures: [validationFailure],
+    contractValidationFailures: [
+      validationFailure,
+      ...(options.additionalValidationFailures ?? []),
+    ],
     relatedRefs,
     repairBudget: options.forceFailClosed
       ? {
@@ -815,10 +764,52 @@ function currentReferenceUsageFailures(
 ) {
   const references = currentTurnReferenceRecords(request).filter(shouldRequireCurrentReferenceUse);
   if (!references.length) return [];
+  const structuredRefs = payloadStructuredReferenceSet(payload, artifacts);
   const haystack = payloadReferenceUseHaystack(payload, artifacts);
   return references
-    .filter((reference) => !referenceTokens(reference).some((token) => containsMeaningfulReferenceToken(haystack, token)))
+    .filter((reference) =>
+      !referenceStructuredRefVariants(reference).some((token) => structuredRefs.has(token))
+      && !referenceTokens(reference).some((token) => containsMeaningfulReferenceToken(haystack, token)))
     .map((reference) => `Current-turn reference was not reflected in answer/artifacts: ${stringField(reference.ref) ?? stringField(reference.title) ?? 'unknown-ref'}`);
+}
+
+function referenceValidationFailureFromFailures(
+  failures: string[],
+  request: GatewayRequest,
+  skill: SkillAvailability,
+  refs: RepairPolicyRefs,
+) {
+  return failures.length
+    ? contractValidationFailureFromErrors(failures, {
+      capabilityId: skill.id,
+      failureKind: 'reference',
+      schemaPath: 'src/runtime/gateway/payload-validation.ts#currentReferenceUsageFailures',
+      contractId: 'sciforge.current-reference-usage.v1',
+      expected: 'Payload message, claims, or artifacts reflect each required current-turn reference',
+      actual: 'One or more required current-turn references were absent from payload text/artifacts',
+      relatedRefs: [
+        ...relatedRefsFromRepairRefs(refs),
+        ...currentTurnReferenceRecords(request).map((reference) => stringField(reference.ref)).filter((ref): ref is string => Boolean(ref)),
+      ],
+    })
+    : undefined;
+}
+
+function referenceFailureExecutionUnits(
+  failures: string[],
+  validationFailure: ReturnType<typeof referenceValidationFailureFromFailures>,
+) {
+  return failures.map((failure, index) => ({
+    id: `current-reference-usage-${index + 1}`,
+    status: 'failed-with-reason',
+    tool: CURRENT_REFERENCE_GATE_TOOL_ID,
+    failureReason: failure,
+    recoverActions: [
+      'Read the current-turn reference by ref/path/dataRef.',
+      'Regenerate the final answer/artifacts from that reference, or report the ref as unreadable with nextStep.',
+    ],
+    refs: validationFailure ? { validationFailure } : undefined,
+  }));
 }
 
 function completedPayloadContractFailures(
@@ -944,14 +935,19 @@ function payloadReferenceUseHaystack(payload: ToolPayload, artifacts: Array<Reco
     ...payload.claims.flatMap((claim) => isRecord(claim) ? [
       claim.text,
       claim.claim,
+      claim.summary,
       Array.isArray(claim.supportingRefs) ? claim.supportingRefs.join(' ') : undefined,
       Array.isArray(claim.opposingRefs) ? claim.opposingRefs.join(' ') : undefined,
+      Array.isArray(claim.evidenceRefs) ? claim.evidenceRefs.join(' ') : undefined,
+      Array.isArray(claim.sourceRefs) ? claim.sourceRefs.join(' ') : undefined,
+      Array.isArray(claim.references) ? claim.references.join(' ') : undefined,
     ] : [String(claim)]),
     ...artifacts.flatMap((artifact) => [
       artifact.id,
       artifact.type,
       artifact.path,
       artifact.dataRef,
+      artifact.contentRef,
       JSON.stringify(isRecord(artifact.metadata) ? artifact.metadata : {}),
       compactArtifactDataForReferenceUse(artifact.data),
     ]),
@@ -1028,7 +1024,74 @@ function decodeURIComponentSafe(value: string) {
 function looksLikeReferencePath(value: string) {
   return /^(?:file|artifact|folder|url):/i.test(value)
     || /[\\/]/.test(value)
-    || previewPathHasRecognizedFileExtension(value);
+    || /\.[a-z0-9]{2,12}(?:[?#].*)?$/i.test(value);
+}
+
+function payloadStructuredReferenceSet(payload: ToolPayload, artifacts: Array<Record<string, unknown>>) {
+  const refs = new Set<string>();
+  const add = (value: unknown) => {
+    if (typeof value !== 'string' || !value.trim()) return;
+    for (const variant of normalizedRefVariants(value)) refs.add(variant);
+  };
+  for (const claim of payload.claims) {
+    if (!isRecord(claim)) continue;
+    for (const key of ['supportingRefs', 'opposingRefs', 'evidenceRefs', 'sourceRefs', 'references']) {
+      for (const ref of stringList(claim[key])) add(ref);
+    }
+  }
+  for (const reference of toRecordList(payload.objectReferences)) {
+    add(reference.ref);
+    add(reference.sourceRef);
+  }
+  for (const unit of toRecordList(payload.executionUnits)) {
+    for (const key of ['codeRef', 'stdoutRef', 'stderrRef', 'outputRef', 'diffRef', 'verificationRef', 'traceRef']) {
+      add(unit[key]);
+    }
+  }
+  for (const slot of toRecordList(payload.uiManifest)) add(slot.artifactRef);
+  for (const artifact of artifacts) {
+    add(artifact.ref);
+    add(artifact.path);
+    add(artifact.dataRef);
+    add(artifact.contentRef);
+    const id = stringField(artifact.id);
+    if (id) {
+      add(id);
+      add(`artifact:${id}`);
+    }
+    const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+    for (const key of ['ref', 'path', 'dataRef', 'reportRef', 'markdownRef', 'outputRef', 'sourceRef', 'providerRecordRef']) {
+      add(metadata[key]);
+    }
+    for (const key of ['sourceRefs', 'evidenceRefs', 'supportingRefs']) {
+      for (const ref of stringList(metadata[key])) add(ref);
+    }
+  }
+  return refs;
+}
+
+function referenceStructuredRefVariants(reference: Record<string, unknown>) {
+  return [
+    ...normalizedRefVariants(reference.ref),
+    ...normalizedRefVariants(reference.sourceId),
+  ];
+}
+
+function normalizedRefVariants(value: unknown) {
+  if (typeof value !== 'string' || !value.trim()) return [];
+  const raw = value.trim();
+  const withoutFile = raw.replace(/^file:/i, '');
+  const withoutArtifact = raw.replace(/^artifact:/i, '');
+  return Array.from(new Set([
+    raw,
+    raw.toLowerCase(),
+    withoutFile,
+    withoutFile.toLowerCase(),
+    withoutArtifact,
+    withoutArtifact.toLowerCase(),
+    raw.startsWith('artifact:') ? withoutArtifact : `artifact:${raw}`,
+    raw.startsWith('file:') ? withoutFile : `file:${raw}`,
+  ].filter((entry) => entry.trim().length > 0)));
 }
 
 export function repairNeededPayload(

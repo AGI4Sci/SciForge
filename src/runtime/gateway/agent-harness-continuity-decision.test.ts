@@ -43,7 +43,7 @@ test('explicit continuation signals still reuse AgentServer context', () => {
   assert.ok(decision.reasons.includes('intent-continuity'));
 });
 
-test('current-turn references still get scoped continuity handling', () => {
+test('current-turn references stay fresh unless harness intent asks for continuity', () => {
   const decision = agentHarnessContinuityDecision({
     skillDomain: 'literature',
     prompt: 'Summarize this selected paper.',
@@ -53,7 +53,8 @@ test('current-turn references still get scoped continuity handling', () => {
     },
   } as GatewayRequest);
 
-  assert.equal(decision.useContinuity, true);
-  assert.equal(decision.decision, 'continuity');
+  assert.equal(decision.useContinuity, false);
+  assert.equal(decision.decision, 'fresh');
   assert.ok(decision.reasons.includes('current-reference'));
+  assert.equal(decision.runtimeSignals.currentReferenceCount, 1);
 });

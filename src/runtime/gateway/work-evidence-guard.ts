@@ -26,7 +26,18 @@ export function contractValidationFailureFromWorkEvidenceFinding(
 }
 
 export function evaluateToolPayloadEvidence(payload: ToolPayload, request: GatewayRequest): WorkEvidenceGuardFinding | undefined {
-  return evaluateWorkEvidencePolicy(payload as unknown as WorkEvidencePolicyPayload, { prompt: request.prompt });
+  return evaluateWorkEvidencePolicy(payload as unknown as WorkEvidencePolicyPayload, {
+    skillDomain: request.skillDomain,
+    expectedArtifactTypes: request.expectedArtifactTypes,
+    selectedComponentIds: request.selectedComponentIds,
+    expectedEvidenceKinds: request.expectedEvidenceKinds,
+    externalIoRequired: request.externalIoRequired,
+    selectedCapabilityIds: [
+      ...stringList(request.selectedToolIds),
+      ...stringList(request.selectedSenseIds),
+      ...stringList(request.selectedVerifierIds),
+    ],
+  });
 }
 
 export function validationFindingProjectionFromWorkEvidenceGuardFinding(
@@ -64,4 +75,8 @@ export function validationFindingProjectionFromWorkEvidenceGuardFinding(
 
 function relatedRefsFromRepairRefs(refs: RepairPolicyRefs) {
   return [refs.taskRel, refs.outputRel, refs.stdoutRel, refs.stderrRel].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+}
+
+function stringList(value: unknown) {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : [];
 }

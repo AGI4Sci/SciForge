@@ -4,8 +4,8 @@ import test from 'node:test';
 import {
   RELEASE_GATE_CONTRACT_ID,
   buildReleaseGateAudit,
-  releaseGateAllowsPush,
   releaseGateAllowsSync,
+  releaseGateHasSyncActionSignal,
 } from './release-gate';
 
 const RELEASE_GATE_REQUIRED_COMMAND = 'npm run verify:full';
@@ -14,7 +14,7 @@ const RELEASE_GATE_POLICY = {
   syncActionSignals: ['git push'],
 };
 
-test('release gate allows push only after full verify, service restart, summary, git target, and audit refs pass', () => {
+test('release gate allows external sync only after full verify, service restart, summary, git target, and audit refs pass', () => {
   const audit = buildReleaseGateAudit({
     policy: RELEASE_GATE_POLICY,
     gateId: 'gate-ready',
@@ -40,8 +40,6 @@ test('release gate allows push only after full verify, service restart, summary,
   assert.equal(audit.contract, RELEASE_GATE_CONTRACT_ID);
   assert.equal(audit.status, 'passed');
   assert.equal(audit.syncAllowed, true);
-  assert.equal(audit.pushAllowed, true);
-  assert.equal(releaseGateAllowsPush(audit), true);
   assert.equal(releaseGateAllowsSync(audit), true);
   assert.deepEqual(audit.missing, []);
   assert.equal(audit.steps.some((step) => step.kind === 'audit-record' && step.status === 'passed'), true);
@@ -65,12 +63,19 @@ test('release gate policy can use a custom command and sync label without projec
   });
 
   assert.equal(audit.status, 'passed');
-  assert.equal(audit.pushAllowed, true);
+  assert.equal(audit.syncAllowed, true);
   assert.equal(audit.requiredCommand, 'python -m verifier.release --strict');
   assert.match(audit.nextActions[0] ?? '', /artifact publish is allowed/);
 });
 
-test('release gate blocks push when verify full evidence is missing', () => {
+test('release gate sync action signals match structured command prefixes', () => {
+  assert.equal(releaseGateHasSyncActionSignal('git push origin main', RELEASE_GATE_POLICY), true);
+  assert.equal(releaseGateHasSyncActionSignal('git push', RELEASE_GATE_POLICY), true);
+  assert.equal(releaseGateHasSyncActionSignal('git status', RELEASE_GATE_POLICY), false);
+  assert.equal(releaseGateHasSyncActionSignal('git pushish origin main', RELEASE_GATE_POLICY), false);
+});
+
+test('release gate blocks external sync when verify full evidence is missing', () => {
   const audit = buildReleaseGateAudit({
     policy: RELEASE_GATE_POLICY,
     changeSummary: 'Prepared a change summary without the full gate.',
@@ -85,8 +90,8 @@ test('release gate blocks push when verify full evidence is missing', () => {
   });
 
   assert.equal(audit.status, 'blocked');
-  assert.equal(audit.pushAllowed, false);
-  assert.equal(releaseGateAllowsPush(audit), false);
+  assert.equal(audit.syncAllowed, false);
+  assert.equal(releaseGateAllowsSync(audit), false);
   assert.ok(audit.missing.includes(RELEASE_GATE_REQUIRED_COMMAND));
   assert.match(audit.nextActions[0] ?? '', /Do not complete/);
 });
@@ -112,7 +117,7 @@ test('release gate fails closed when full verify fails', () => {
   });
 
   assert.equal(audit.status, 'failed');
-  assert.equal(audit.pushAllowed, false);
+  assert.equal(audit.syncAllowed, false);
   assert.deepEqual(audit.failureReasons, ['typecheck failed']);
   assert.match(audit.nextActions[0] ?? '', /Do not complete/);
 });

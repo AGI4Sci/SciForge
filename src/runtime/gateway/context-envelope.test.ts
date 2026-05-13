@@ -7,7 +7,7 @@ import test from 'node:test';
 import { VERIFICATION_RESULT_ARTIFACT_TYPE } from '@sciforge-ui/runtime-contract/verification-result';
 import type { GatewayRequest, SkillAvailability, WorkspaceTaskRunResult } from '../runtime-types';
 import { requestWithoutInlineAgentHarness } from './agent-harness-shadow';
-import { buildCompactRepairContext } from './agentserver-prompts';
+import { buildAgentServerGenerationPrompt, buildCompactRepairContext } from './agentserver-prompts';
 import { buildContextEnvelope, summarizeTaskAttemptsForAgentServer } from './context-envelope';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types';
 
@@ -85,7 +85,8 @@ test('context envelope keeps ref-backed artifact bodies and log refs bounded for
   assert.deepEqual(artifactSummary?.dataSummary?.refs, ['.sciforge/artifacts/report.json']);
   assert.doesNotMatch(JSON.stringify(artifactSummary), /large evidence body large evidence body/);
   assert.equal(envelope.scenarioFacts.evidenceExpansionPolicy?.stdoutStderrRefs, 'cite-only-by-default');
-  assert.match(String(envelope.scenarioFacts.evidenceExpansionPolicy?.continuationGuard), /without reading raw logs/);
+  assert.equal(envelope.scenarioFacts.evidenceExpansionPolicy?.logBodyExpansion, 'requires-explicit-policy');
+  assert.equal(envelope.scenarioFacts.evidenceExpansionPolicy?.structuredRefTransport, 'refs-and-digests-first');
 });
 
 test('context envelope carries compact state digest refs after history compaction', () => {
@@ -154,6 +155,90 @@ test('context envelope summarizes recent runs instead of carrying raw large log 
   const serialized = JSON.stringify(envelope.sessionFacts.recentRuns);
   assert.doesNotMatch(serialized, /RAW_RUN_LOG_SENTINEL_HEAD|RAW_RUN_LOG_SENTINEL_TAIL/);
   assert.match(serialized, /run-large\.stdout\.log/);
+});
+
+test('context envelope and AgentServer prompt keep verification bodies as bounded summaries', () => {
+  const rawVerification = `RAW_VERIFICATION_SENTINEL ${'provider payload '.repeat(2000)}`;
+  const request = {
+    skillDomain: 'knowledge',
+    prompt: '第二轮：只压缩上一轮接受标准，不要读取 verification raw body。',
+    artifacts: [{
+      id: 'verify-artifact',
+      type: VERIFICATION_RESULT_ARTIFACT_TYPE,
+      dataRef: '.sciforge/verifications/verify-artifact.json',
+      data: {
+        verdict: 'failed',
+        rawProviderPayload: rawVerification,
+      },
+    }],
+    verificationResult: {
+      id: 'verify-current',
+      verdict: 'failed',
+      confidence: 0.2,
+      evidenceRefs: ['file:.sciforge/verifications/verify-current.json'],
+      critique: `rawProviderPayload should stay out ${rawVerification}`,
+      repairHints: [`providerResponse should stay out ${rawVerification}`],
+      data: { rawProviderPayload: rawVerification },
+    },
+    recentVerificationResults: [{
+      id: 'verify-recent',
+      verdict: 'failed',
+      confidence: 0.2,
+      evidenceRefs: ['file:.sciforge/verifications/verify-recent.json'],
+      raw: rawVerification,
+    }],
+    uiState: {
+      verificationResult: {
+        id: 'verify-ui',
+        verdict: 'failed',
+        confidence: 0.2,
+        evidenceRefs: ['file:.sciforge/verifications/verify-ui.json'],
+        data: { rawProviderPayload: rawVerification },
+      },
+      recentVerificationResults: [{
+        id: 'verify-ui-recent',
+        verdict: 'failed',
+        confidence: 0.2,
+        evidenceRefs: ['file:.sciforge/verifications/verify-ui-recent.json'],
+        data: { rawProviderPayload: rawVerification },
+      }],
+      recentRuns: [{
+        id: 'run-raw',
+        status: 'failed',
+        outputRef: '.sciforge/task-results/run-raw.json',
+        raw: {
+          backgroundCompletion: {
+            lastEvent: {
+              verificationResults: [{ rawProviderPayload: rawVerification }],
+            },
+          },
+        },
+      }],
+    },
+  } as GatewayRequest;
+
+  const envelope = buildContextEnvelope(request, { workspace: '/tmp/sciforge-test' });
+  const envelopeJson = JSON.stringify(envelope);
+  assert.doesNotMatch(envelopeJson, /RAW_VERIFICATION_SENTINEL/);
+  assert.match(envelopeJson, /verification-payload-body/);
+  assert.match(envelopeJson, /bounded-session-refs/);
+  assert.match(envelopeJson, /verify-current\.json/);
+
+  const prompt = buildAgentServerGenerationPrompt({
+    prompt: request.prompt,
+    skillDomain: request.skillDomain,
+    contextEnvelope: envelope,
+    workspaceTreeSummary: [],
+    availableSkills: [],
+    artifactSchema: {},
+    uiManifestContract: {},
+    uiStateSummary: request.uiState,
+    artifacts: request.artifacts,
+    priorAttempts: [],
+  });
+  assert.doesNotMatch(prompt, /RAW_VERIFICATION_SENTINEL/);
+  assert.match(prompt, /prompt-handoff/);
+  assert.match(prompt, /verify-current\.json/);
 });
 
 test('context envelope can audit harness contract refs and context budget slimming behind feature flag', () => {
@@ -556,9 +641,10 @@ test('repair context extracts WorkEvidence summary from failed output ref', asyn
       priorAttempts: [],
     });
 
-    const failure = context.failure as { workEvidenceSummary?: { items?: Array<{ resultCount?: number; nextStep?: string }> } };
-    assert.equal(failure.workEvidenceSummary?.items?.[0]?.resultCount, 0);
-    assert.equal(failure.workEvidenceSummary?.items?.[0]?.nextStep, 'Ask whether to broaden scope.');
+    const diagnostics = context.diagnostics as { workEvidenceSummary?: { items?: Array<{ resultCount?: number; nextStep?: string }> } };
+    assert.equal(diagnostics.workEvidenceSummary?.items?.[0]?.resultCount, 0);
+    assert.equal(diagnostics.workEvidenceSummary?.items?.[0]?.nextStep, 'Ask whether to broaden scope.');
+    assert.match(JSON.stringify(context), /diagnostic-first\/ref-first/);
     assert.doesNotMatch(JSON.stringify(context), /RAW_PAYLOAD_SHOULD_NOT_APPEAR/);
   } finally {
     await rm(root, { recursive: true, force: true });

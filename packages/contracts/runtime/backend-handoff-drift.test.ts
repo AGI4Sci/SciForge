@@ -72,5 +72,19 @@ test('backend handoff drift separates human plain text from guarded raw text', (
   assert.equal(guarded.kind, 'guarded-plain-text');
   assert.equal(guarded.status, 'blocked');
   assert.equal(guarded.shouldMaterializeDiagnostic, true);
-  assert.ok(backendHandoffDriftSignals({ text: guarded.message }).length);
+  assert.ok(backendHandoffDriftSignals({
+    text: guarded.message,
+    plainTextClassificationKind: 'runtime-log',
+  }).length);
+});
+
+test('backend handoff drift blocks unclassified plain text instead of recovering it', () => {
+  const classification = classifyBackendHandoffDrift({
+    text: 'The analysis is complete, but this text has no classifier result.',
+  });
+
+  assert.equal(classification.kind, 'unknown-output');
+  assert.equal(classification.status, 'blocked');
+  assert.equal(classification.shouldMaterializeDiagnostic, true);
+  assert.equal(classification.signals.includes('plain-text'), false);
 });

@@ -2,11 +2,6 @@ export const CONVERSATION_CONTEXT_POLICY_SCHEMA_VERSION = 'sciforge.conversation
 
 type JsonMap = Record<string, unknown>;
 
-const REPAIR_HINTS = ['repair', 'fix', 'debug', 'failed', 'failure', 'error', 'log', 'rerun', '修复', '失败', '报错', '日志', '重跑', '排查'];
-const CONTINUE_HINTS = ['continue', 'follow up', 'follow-up', 'previous', 'prior', 'last round', '接着', '继续', '上一轮', '刚才', '前面'];
-const LOCATION_HINTS = ['where is', 'where are', 'location', 'path', 'file ref', 'file refs', 'artifact ref', 'artifact refs', '文件在哪', '文件哪里', '位置', '路径', '报告', '图表'];
-const NEW_TASK_HINTS = ['new task', 'start over', 'ignore previous', 'unrelated', '另一个任务', '新任务', '重新开始', '不要沿用', '别用上一轮'];
-
 export interface ConversationContextPolicy {
   schemaVersion: typeof CONVERSATION_CONTEXT_POLICY_SCHEMA_VERSION;
   mode: string;
@@ -18,7 +13,6 @@ export interface ConversationContextPolicy {
 
 export function buildConversationContextPolicy(request: unknown): ConversationContextPolicy {
   const data = recordValue(request) ?? {};
-  const prompt = textValue(firstValue(data, 'prompt', 'rawPrompt', 'message'));
   const snapshot = firstRecord(data.goalSnapshot, data.goal_snapshot);
   const explicitRefs = stringListValue(
     firstValue(data, 'references', 'refs') ?? snapshot.requiredReferences ?? [],
@@ -27,9 +21,9 @@ export function buildConversationContextPolicy(request: unknown): ConversationCo
   const priorGoal = lastPriorGoal(session);
   const relation = textValue(snapshot.taskRelation);
 
-  const mode = inferMode(prompt, relation, explicitRefs.length > 0);
+  const mode = inferMode(relation, explicitRefs.length > 0);
   let allowHistory = ['continue', 'repair'].includes(mode) && mode !== 'isolate';
-  if (explicitRefs.length > 0 && mode === 'continue' && !hasAny(prompt, CONTINUE_HINTS)) {
+  if (explicitRefs.length > 0 && mode === 'continue' && relation !== 'continue') {
     allowHistory = false;
   }
 
@@ -50,7 +44,7 @@ export function buildConversationContextPolicy(request: unknown): ConversationCo
       dropStaleHistory: mode === 'isolate' || explicitRefs.length > 0,
       requireCurrentReferenceGrounding: explicitRefs.length > 0,
       previousGoal: priorGoal,
-      reason: reason(mode, prompt, explicitRefs, priorGoal),
+      reason: reason(mode, explicitRefs, priorGoal),
     },
   };
   if (mode === 'repair') {
@@ -69,10 +63,9 @@ export function shouldIsolateHistory(request: unknown): boolean {
   return buildConversationContextPolicy(request).mode === 'isolate';
 }
 
-function inferMode(prompt: string, relation: string, hasExplicitRefs: boolean): string {
-  if (relation === 'repair' || hasAny(prompt, REPAIR_HINTS)) return 'repair';
-  if (hasAny(prompt, NEW_TASK_HINTS)) return 'isolate';
-  if (relation === 'continue' || hasAny(prompt, CONTINUE_HINTS) || hasAny(prompt, LOCATION_HINTS)) return 'continue';
+function inferMode(relation: string, hasExplicitRefs: boolean): string {
+  if (relation === 'repair') return 'repair';
+  if (relation === 'continue') return 'continue';
   if (relation === 'new-task') return 'isolate';
   if (hasExplicitRefs) return 'isolate';
   return 'isolate';
@@ -85,7 +78,7 @@ function historyScope(mode: string, explicitRefs: string[]): string {
   return 'none';
 }
 
-function reason(mode: string, prompt: string, explicitRefs: string[], priorGoal: string): string {
+function reason(mode: string, explicitRefs: string[], priorGoal: string): string {
   if (mode === 'repair') return 'repair intent detected; include only prior failure context and current refs';
   if (mode === 'continue') return 'continuation intent detected; reuse same-task recent context';
   if (explicitRefs.length > 0) return 'explicit current references outrank old session memory';
@@ -127,11 +120,6 @@ function recordValue(value: unknown): JsonMap | undefined {
 
 function arrayValue(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
-}
-
-function hasAny(text: string, hints: string[]): boolean {
-  const lowered = text.toLowerCase();
-  return hints.some((hint) => lowered.includes(hint.toLowerCase()));
 }
 
 function textValue(value: unknown): string {

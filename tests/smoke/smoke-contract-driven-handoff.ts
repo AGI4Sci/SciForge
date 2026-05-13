@@ -196,8 +196,12 @@ try {
 
   for (const dispatch of dispatches) {
     const payloadHandoff = handoff(dispatch);
-    assert.deepEqual(dispatch.runtimeMetadata.agentHarnessHandoff, payloadHandoff);
-    assert.deepEqual(dispatch.topLevelMetadata.agentHarnessHandoff, payloadHandoff);
+    assert.equal(dispatch.runtimeMetadata.agentHarnessHandoff, undefined, 'runtime metadata must carry handoff refs, not a second handoff copy');
+    assert.equal(dispatch.topLevelMetadata.agentHarnessHandoff, undefined, 'top-level metadata must carry handoff refs, not a second handoff copy');
+    assert.equal(dispatch.runtimeMetadata.harnessContractRef, payloadHandoff.harnessContractRef);
+    assert.equal(dispatch.runtimeMetadata.harnessTraceRef, payloadHandoff.harnessTraceRef);
+    assert.equal(dispatch.topLevelMetadata.harnessContractRef, payloadHandoff.harnessContractRef);
+    assert.equal(dispatch.topLevelMetadata.harnessTraceRef, payloadHandoff.harnessTraceRef);
     assertBackendSelectionDecision(dispatch);
     assertPromptDirectivesAreSourced(payloadHandoff);
     assertPromptRenderPlanIsSourced(payloadHandoff);
@@ -275,9 +279,8 @@ function assertContinuityDecision(dispatch: Dispatch, expected: {
   useContinuity: boolean;
   intentMode: string;
 }) {
-  const metadataDecision = record(dispatch.metadata.agentHarnessContinuityDecision);
-  const handoffDecision = record(handoff(dispatch).continuityDecision);
-  assert.deepEqual(handoffDecision, metadataDecision);
+  assert.equal(dispatch.metadata.agentHarnessContinuityDecision, undefined, 'continuity decision must live under the canonical agentHarnessHandoff contract');
+  const metadataDecision = record(handoff(dispatch).continuityDecision);
   assert.equal(metadataDecision.schemaVersion, 'sciforge.agent-harness-continuity-decision.v1');
   assert.equal(metadataDecision.shadowMode, true);
   assert.equal(metadataDecision.decisionOwner, 'AgentServer');
@@ -295,9 +298,8 @@ function assertContinuityDecision(dispatch: Dispatch, expected: {
 }
 
 function assertBackendSelectionDecision(dispatch: Dispatch) {
-  const metadataDecision = record(dispatch.metadata.agentHarnessBackendSelectionDecision);
-  const handoffDecision = record(handoff(dispatch).backendSelectionDecision);
-  assert.deepEqual(handoffDecision, metadataDecision);
+  assert.equal(dispatch.metadata.agentHarnessBackendSelectionDecision, undefined, 'backend selection decision must live under the canonical agentHarnessHandoff contract');
+  const metadataDecision = record(handoff(dispatch).backendSelectionDecision);
   assert.equal(metadataDecision.schemaVersion, 'sciforge.agentserver-backend-selection-decision.v1');
   assert.equal(metadataDecision.shadowMode, true);
   assert.equal(metadataDecision.decisionOwner, 'AgentServer');

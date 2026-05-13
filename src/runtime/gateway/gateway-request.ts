@@ -1,13 +1,20 @@
 import type { SciForgeSkillDomain, GatewayRequest, LlmEndpointConfig, VerificationMode, VerificationRiskLevel } from '../runtime-types.js';
-import { cleanUrl, isRecord, toRecordList, toStringList, uniqueStrings } from '../gateway-utils.js';
+import { cleanUrl, isRecord, toStringList, uniqueStrings } from '../gateway-utils.js';
 import { buildSharedAgentHandoffContract, normalizeAgentHandoffSource, normalizeSharedSkillDomain, type SciForgeAgentHandoffSource } from '@sciforge-ui/runtime-contract/handoff';
 import { normalizeRuntimeLlmEndpoint } from '@sciforge-ui/runtime-contract/agent-backend-policy';
+import { normalizeTurnExecutionConstraints } from '@sciforge-ui/runtime-contract/turn-constraints';
 
 export function normalizeGatewayRequest(body: Record<string, unknown>): GatewayRequest {
   const skillDomain = normalizeSharedSkillDomain(body.skillDomain) as SciForgeSkillDomain | undefined;
   if (!skillDomain) throw new Error(`Unsupported SciForge skill domain: ${String(body.skillDomain || '')}`);
   const handoffSource = normalizeAgentHandoffSource(body.handoffSource, 'cli');
   const uiState = normalizeGatewayUiState(body);
+  const artifacts = Array.isArray(body.artifacts) ? body.artifacts.filter(isRecord) : [];
+  const references = Array.isArray(body.references) ? body.references.filter(isRecord) : undefined;
+  const normalizedUiState = normalizeGatewayTurnConstraints({
+    body,
+    uiState,
+  });
   return {
     skillDomain,
     prompt: String(body.prompt || ''),
@@ -23,50 +30,68 @@ export function normalizeGatewayRequest(body: Record<string, unknown>): GatewayR
     scenarioPackageRef: normalizeScenarioPackageRef(body.scenarioPackageRef),
     skillPlanRef: typeof body.skillPlanRef === 'string' ? body.skillPlanRef : undefined,
     uiPlanRef: typeof body.uiPlanRef === 'string' ? body.uiPlanRef : undefined,
-    artifacts: Array.isArray(body.artifacts) ? body.artifacts.filter(isRecord) : [],
-    references: Array.isArray(body.references) ? body.references.filter(isRecord) : undefined,
-    uiState,
+    artifacts,
+    references,
+    uiState: normalizedUiState,
     availableSkills: Array.isArray(body.availableSkills) ? body.availableSkills.map(String) : undefined,
     selectedToolIds: Array.isArray(body.selectedToolIds) ? uniqueStrings(body.selectedToolIds.map(String)) : undefined,
     selectedSenseIds: uniqueStrings([
       ...(Array.isArray(body.selectedSenseIds) ? body.selectedSenseIds.map(String) : []),
-      ...toStringList(uiState?.selectedSenseIds),
+      ...toStringList(normalizedUiState?.selectedSenseIds),
     ]),
     selectedActionIds: uniqueStrings([
       ...(Array.isArray(body.selectedActionIds) ? body.selectedActionIds.map(String) : []),
-      ...toStringList(uiState?.selectedActionIds),
+      ...toStringList(normalizedUiState?.selectedActionIds),
     ]),
     expectedArtifactTypes: Array.isArray(body.expectedArtifactTypes) ? uniqueStrings(body.expectedArtifactTypes.map(String)) : undefined,
+    expectedEvidenceKinds: uniqueStrings([
+      ...(Array.isArray(body.expectedEvidenceKinds) ? body.expectedEvidenceKinds.map(String) : []),
+      ...toStringList(normalizedUiState?.expectedEvidenceKinds),
+    ]),
+    externalIoRequired: booleanField(body.externalIoRequired) ?? booleanField(normalizedUiState?.externalIoRequired),
     selectedComponentIds: Array.isArray(body.selectedComponentIds) ? uniqueStrings(body.selectedComponentIds.map(String)) : undefined,
     selectedVerifierIds: uniqueStrings([
       ...(Array.isArray(body.selectedVerifierIds) ? body.selectedVerifierIds.map(String) : []),
-      ...toStringList(uiState?.selectedVerifierIds),
+      ...toStringList(normalizedUiState?.selectedVerifierIds),
     ]),
-    riskLevel: normalizeOptionalVerificationRiskLevel(body.riskLevel, uiState?.riskLevel),
+    riskLevel: normalizeOptionalVerificationRiskLevel(body.riskLevel, normalizedUiState?.riskLevel),
     actionSideEffects: uniqueStrings([
       ...(Array.isArray(body.actionSideEffects) ? body.actionSideEffects.map(String) : []),
-      ...toStringList(uiState?.actionSideEffects),
+      ...toStringList(normalizedUiState?.actionSideEffects),
     ]),
-    userExplicitVerification: normalizeOptionalVerificationMode(body.userExplicitVerification, uiState?.userExplicitVerification),
-    artifactPolicy: normalizeRecord(body.artifactPolicy, uiState?.artifactPolicy),
-    referencePolicy: normalizeRecord(body.referencePolicy, uiState?.referencePolicy),
-    failureRecoveryPolicy: normalizeRecord(body.failureRecoveryPolicy, uiState?.failureRecoveryPolicy),
-    humanApprovalPolicy: normalizeRecord(body.humanApprovalPolicy, uiState?.humanApprovalPolicy),
-    humanApproval: normalizeHumanApproval(body.humanApproval, uiState?.humanApproval),
+    userExplicitVerification: normalizeOptionalVerificationMode(body.userExplicitVerification, normalizedUiState?.userExplicitVerification),
+    artifactPolicy: normalizeRecord(body.artifactPolicy, normalizedUiState?.artifactPolicy),
+    referencePolicy: normalizeRecord(body.referencePolicy, normalizedUiState?.referencePolicy),
+    failureRecoveryPolicy: normalizeRecord(body.failureRecoveryPolicy, normalizedUiState?.failureRecoveryPolicy),
+    humanApprovalPolicy: normalizeRecord(body.humanApprovalPolicy, normalizedUiState?.humanApprovalPolicy),
+    humanApproval: normalizeHumanApproval(body.humanApproval, normalizedUiState?.humanApproval),
     unverifiedReason: typeof body.unverifiedReason === 'string'
       ? body.unverifiedReason
-      : typeof uiState?.unverifiedReason === 'string'
-        ? uiState.unverifiedReason
+      : typeof normalizedUiState?.unverifiedReason === 'string'
+        ? normalizedUiState.unverifiedReason
         : undefined,
-    verificationResult: normalizeRecord(body.verificationResult, uiState?.verificationResult),
-    recentVerificationResults: normalizeRecordList(body.recentVerificationResults, uiState?.recentVerificationResults),
+    verificationResult: normalizeRecord(body.verificationResult, normalizedUiState?.verificationResult),
+    recentVerificationResults: normalizeRecordList(body.recentVerificationResults, normalizedUiState?.recentVerificationResults),
+  };
+}
+
+function normalizeGatewayTurnConstraints(input: {
+  body: Record<string, unknown>;
+  uiState: GatewayRequest['uiState'];
+}): GatewayRequest['uiState'] {
+  const uiState = input.uiState ? { ...input.uiState } : {};
+  const existing = normalizeTurnExecutionConstraints(uiState.turnExecutionConstraints)
+    ?? normalizeTurnExecutionConstraints(input.body.turnExecutionConstraints);
+  if (!existing) return uiState;
+  return {
+    ...uiState,
+    turnExecutionConstraints: existing,
   };
 }
 
 function normalizeGatewayUiState(body: Record<string, unknown>): GatewayRequest['uiState'] {
   const rawUiState = isRecord(body.uiState) ? body.uiState : undefined;
-  const ignoredLegacySources = ignoredLegacyVerificationPolicySources(body, rawUiState);
-  if (!rawUiState && !ignoredLegacySources.length) return undefined;
+  if (!rawUiState) return undefined;
   const uiState: Record<string, unknown> = rawUiState ? { ...rawUiState } : {};
   delete uiState.verificationPolicy;
   const scenarioOverride = isRecord(uiState.scenarioOverride) ? { ...uiState.scenarioOverride } : undefined;
@@ -74,37 +99,7 @@ function normalizeGatewayUiState(body: Record<string, unknown>): GatewayRequest[
     delete scenarioOverride.verificationPolicy;
     uiState.scenarioOverride = scenarioOverride;
   }
-  if (ignoredLegacySources.length) {
-    uiState.ignoredLegacyVerificationPolicySources = [
-      ...toRecordList(uiState.ignoredLegacyVerificationPolicySources),
-      ...ignoredLegacySources,
-    ];
-  }
   return uiState;
-}
-
-function ignoredLegacyVerificationPolicySources(
-  body: Record<string, unknown>,
-  uiState: Record<string, unknown> | undefined,
-) {
-  return [
-    ignoredLegacyVerificationPolicySource('request.verificationPolicy', body.verificationPolicy),
-    ignoredLegacyVerificationPolicySource('request.uiState.verificationPolicy', uiState?.verificationPolicy),
-    ignoredLegacyVerificationPolicySource(
-      'request.uiState.scenarioOverride.verificationPolicy',
-      isRecord(uiState?.scenarioOverride) ? uiState.scenarioOverride.verificationPolicy : undefined,
-    ),
-  ].filter((entry) => entry !== undefined);
-}
-
-function ignoredLegacyVerificationPolicySource(source: string, value: unknown): Record<string, unknown> | undefined {
-  if (!isRecord(value)) return undefined;
-  return {
-    source,
-    decision: 'ignored',
-    keys: Object.keys(value).sort().slice(0, 12),
-    reason: 'Legacy verificationPolicy request fields are ignored; structured contract projection records runtime verification settings.',
-  };
 }
 
 function normalizeSharedAgentContract(value: unknown, source: SciForgeAgentHandoffSource): GatewayRequest['sharedAgentContract'] {
@@ -125,6 +120,8 @@ export function normalizeLlmEndpoint(value: unknown): LlmEndpointConfig | undefi
 }
 
 export function expectedArtifactTypesForRequest(request: GatewayRequest) {
+  const constraints = normalizeTurnExecutionConstraints(request.uiState?.turnExecutionConstraints);
+  if (constraints?.contextOnly && constraints.preferredCapabilityIds.includes('runtime.direct-context-answer')) return [];
   return uniqueStrings([
     ...(request.expectedArtifactTypes ?? []),
     ...toStringList(request.uiState?.expectedArtifactTypes),
@@ -163,6 +160,10 @@ function normalizeOptionalVerificationRiskLevel(...values: unknown[]): Verificat
 function normalizeHumanApproval(...values: unknown[]): GatewayRequest['humanApproval'] {
   const record = values.find(isRecord);
   return record ? record : undefined;
+}
+
+function booleanField(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined;
 }
 
 function normalizeRecord(...values: unknown[]) {

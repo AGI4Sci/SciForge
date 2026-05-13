@@ -585,7 +585,16 @@ export function requestNeedsAgentServerContinuity(request: GatewayRequest) {
 }
 
 export function currentTurnReferences(request: GatewayRequest) {
-  return toRecordList(request.uiState?.currentReferences);
+  return [
+    ...toRecordList(request.uiState?.currentReferences),
+    ...toRecordList(request.uiState?.currentReferenceDigests).map((digest) => ({
+      kind: 'current-reference-digest',
+      ref: stringField(digest.digestRef) ?? stringField(digest.digestPath) ?? stringField(digest.sourceRef) ?? stringField(digest.path) ?? stringField(digest.ref),
+      title: stringField(digest.title) ?? stringField(digest.sourceRef) ?? stringField(digest.path),
+      sourceId: stringField(digest.id) ?? stringField(digest.sourceId),
+      status: stringField(digest.status),
+    })).filter((digest) => digest.ref),
+  ];
 }
 
 function currentReferenceScopeKey(request: GatewayRequest) {

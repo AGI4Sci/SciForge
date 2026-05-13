@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import {
   buildReleaseGateAudit,
-  releaseGateAllowsPush,
+  releaseGateAllowsSync,
 } from '@sciforge-ui/runtime-contract/release-gate';
 import { attachIntentFirstVerification } from '../../src/runtime/gateway/intent-first-verification.js';
 import { applyRuntimeVerificationPolicy } from '../../src/runtime/gateway/verification-policy.js';
@@ -37,8 +37,8 @@ const readyAudit = buildReleaseGateAudit({
   }],
 });
 
-assert.equal(readyAudit.pushAllowed, true);
-assert.equal(releaseGateAllowsPush(readyAudit), true);
+assert.equal(readyAudit.syncAllowed, true);
+assert.equal(releaseGateAllowsSync(readyAudit), true);
 
 const blockedAudit = buildReleaseGateAudit({
   policy: RELEASE_GATE_POLICY,
@@ -53,7 +53,7 @@ const blockedAudit = buildReleaseGateAudit({
   }],
 });
 
-assert.equal(blockedAudit.pushAllowed, false);
+assert.equal(blockedAudit.syncAllowed, false);
 assert.ok(blockedAudit.missing.includes(RELEASE_GATE_REQUIRED_COMMAND));
 
 const intentPayload = attachIntentFirstVerification(basePayload({
@@ -71,18 +71,25 @@ const intentPayload = attachIntentFirstVerification(basePayload({
       }],
     },
   },
-}), baseRequest({ prompt: '等完整验证通过再推 GitHub。' }), { runWorkVerify: true });
+}), baseRequest({
+  prompt: 'git push after npm run verify:full.',
+  uiState: {
+    sessionId: 'session-release-gate',
+    sessionCreatedAt: '2026-05-13T00:00:00.000Z',
+    releaseGatePolicy: RELEASE_GATE_POLICY,
+  },
+}), { runWorkVerify: true });
 
 const intentEnvelope = intentPayload.displayIntent?.intentFirstVerification as {
   routing?: { mode?: string; blockingPolicy?: string };
-  jobs?: Array<{ command?: string; status?: string; releaseGate?: { pushAllowed?: boolean } }>;
+  jobs?: Array<{ command?: string; status?: string; releaseGate?: { syncAllowed?: boolean } }>;
   verdicts?: Array<{ verdict?: string }>;
 } | undefined;
 
 assert.equal(intentEnvelope?.routing?.mode, 'release');
 assert.equal(intentEnvelope?.routing?.blockingPolicy, 'release');
 assert.equal(intentEnvelope?.jobs?.[0]?.command, RELEASE_GATE_REQUIRED_COMMAND);
-assert.equal(intentEnvelope?.jobs?.[0]?.releaseGate?.pushAllowed, false);
+assert.equal(intentEnvelope?.jobs?.[0]?.releaseGate?.syncAllowed, false);
 assert.equal(intentEnvelope?.verdicts?.[0]?.verdict, 'pending');
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-release-gate-'));
@@ -176,7 +183,7 @@ const customPolicyPayload = attachIntentFirstVerification(basePayload({
     status: 'done',
   }],
 }), baseRequest({
-  prompt: 'run release verify before publishing.',
+  prompt: 'publish artifact bundle after python -m verifier.release --strict.',
   uiState: {
     sessionId: 'session-release-gate-custom',
     sessionCreatedAt: '2026-05-13T00:00:00.000Z',
@@ -184,12 +191,12 @@ const customPolicyPayload = attachIntentFirstVerification(basePayload({
   },
 }), { runWorkVerify: true });
 const customIntentEnvelope = customPolicyPayload.displayIntent?.intentFirstVerification as {
-  jobs?: Array<{ command?: string; releaseGate?: { status?: string; pushAllowed?: boolean; policy?: { syncActionLabel?: string } } }>;
+  jobs?: Array<{ command?: string; releaseGate?: { status?: string; syncAllowed?: boolean; policy?: { syncActionLabel?: string } } }>;
   verdicts?: Array<{ verdict?: string }>;
 } | undefined;
 assert.equal(customIntentEnvelope?.jobs?.[0]?.command, customPolicy.requiredCommand);
 assert.equal(customIntentEnvelope?.jobs?.[0]?.releaseGate?.policy?.syncActionLabel, customPolicy.syncActionLabel);
-assert.equal(customIntentEnvelope?.jobs?.[0]?.releaseGate?.pushAllowed, true);
+assert.equal(customIntentEnvelope?.jobs?.[0]?.releaseGate?.syncAllowed, true);
 assert.equal(customIntentEnvelope?.verdicts?.[0]?.verdict, 'passed');
 } finally {
   await rm(workspace, { recursive: true, force: true });

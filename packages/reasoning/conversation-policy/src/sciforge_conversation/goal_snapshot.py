@@ -11,6 +11,20 @@ REPAIR_HINTS = re.compile(r"\b(repair|fix|debug|failed|failure|error|log|rerun)\
 CONTINUE_HINTS = re.compile(r"\b(continue|follow[- ]?up|previous|prior|last round)\b|接着|继续|上一轮|刚才|前面", re.I)
 NEW_TASK_HINTS = re.compile(r"\b(new task|start over|ignore previous|unrelated)\b|另一个任务|新任务|重新开始|不要沿用|别用上一轮", re.I)
 LATEST_HINTS = re.compile(r"\b(latest|current|today|up to date)\b|最新|当前|今天|现在", re.I)
+LOCATION_HINTS = re.compile(r"\b(where is|where are|location|path|file refs?|artifact refs?)\b|文件在哪|文件在哪里|位置|路径", re.I)
+NO_EXECUTION_HINTS = re.compile(
+    r"\b(?:do\s+not|don't|without|no)\s+(?:re-?run|run|execute|dispatch|call|invoke|browse|search|retrieve|fetch|read)\b"
+    r"|不要(?:重跑|运行|执行|调用|派发|检索|搜索|浏览|读取|访问)"
+    r"|不(?:重跑|运行|执行|调用|派发|检索|搜索|浏览)",
+    re.I,
+)
+CONTEXT_ONLY_HINTS = re.compile(
+    r"\b(?:current|existing|provided)\s+(?:context|refs?|references?|digests?|artifacts?)\s+only\b"
+    r"|\b(?:from|using|based on)\s+(?:current|existing|provided)\s+(?:context|refs?|references?|digests?|artifacts?)\b"
+    r"|只(?:基于|使用|用)(?:当前|已有|提供的)?(?:上下文|引用|refs?|digest|摘要|产物)",
+    re.I,
+)
+AGENTSERVER_HINTS = re.compile(r"\bagent\s*server\b|\bagentserver\b|AgentServer", re.I)
 
 REF_PATTERN = re.compile(
     r"(?P<ref>"
@@ -37,7 +51,7 @@ def build_goal_snapshot(request: Mapping[str, Any] | Any) -> dict[str, Any]:
     goal_type = _infer_goal_type(prompt, explicit_refs)
     required_formats = _infer_formats(prompt, goal_type)
     required_artifacts = _infer_artifacts(prompt, goal_type)
-    task_relation = _infer_task_relation(prompt, bool(explicit_refs))
+    task_relation = _infer_task_relation(prompt, bool(explicit_refs), _has_prior_context(request))
 
     snapshot: dict[str, Any] = {
         "schemaVersion": "sciforge.conversation.goal-snapshot.v1",
@@ -57,6 +71,9 @@ def build_goal_snapshot(request: Mapping[str, Any] | Any) -> dict[str, Any]:
         "uiExpectations": _infer_ui_expectations(prompt),
         "acceptanceCriteria": _acceptance_criteria(prompt, explicit_refs, task_relation),
     }
+    turn_execution_constraints = _turn_execution_constraints(prompt, explicit_refs, request)
+    if turn_execution_constraints:
+        snapshot["turnExecutionConstraints"] = turn_execution_constraints
     freshness = _infer_freshness(prompt, task_relation)
     if freshness:
         snapshot["freshness"] = freshness
@@ -75,7 +92,7 @@ def _infer_goal_type(prompt: str, refs: list[str]) -> str:
     return "analysis"
 
 
-def _infer_task_relation(prompt: str, has_explicit_refs: bool) -> str:
+def _infer_task_relation(prompt: str, has_explicit_refs: bool, has_prior_context: bool) -> str:
     if NEW_TASK_HINTS.search(prompt):
         return "new-task"
     if REPAIR_HINTS.search(prompt) and CONTINUE_HINTS.search(prompt):
@@ -83,6 +100,8 @@ def _infer_task_relation(prompt: str, has_explicit_refs: bool) -> str:
     if REPAIR_HINTS.search(prompt):
         return "repair"
     if CONTINUE_HINTS.search(prompt):
+        return "continue"
+    if has_prior_context and LOCATION_HINTS.search(prompt):
         return "continue"
     if has_explicit_refs:
         return "new-task"
@@ -151,6 +170,47 @@ def _infer_freshness(prompt: str, task_relation: str) -> dict[str, str] | None:
     return None
 
 
+def _turn_execution_constraints(prompt: str, explicit_refs: list[str], request: Mapping[str, Any] | Any) -> dict[str, Any] | None:
+    no_execution = bool(NO_EXECUTION_HINTS.search(prompt))
+    context_only = bool(CONTEXT_ONLY_HINTS.search(prompt))
+    if not no_execution and not context_only:
+        return None
+    forbidden = no_execution or context_only
+    agentserver_forbidden = forbidden and (AGENTSERVER_HINTS.search(prompt) is not None or context_only)
+    session = _get(request, "session")
+    artifacts = _get(session, "artifacts") if isinstance(session, Mapping) else []
+    execution_units = _get(session, "executionUnits") if isinstance(session, Mapping) else []
+    runs = _get(session, "runs") if isinstance(session, Mapping) else []
+    return {
+        "schemaVersion": "sciforge.turn-execution-constraints.v1",
+        "policyId": "sciforge.current-turn-execution-constraints.v1",
+        "source": "runtime-contract.turn-constraints",
+        "contextOnly": context_only or no_execution,
+        "agentServerForbidden": bool(agentserver_forbidden),
+        "workspaceExecutionForbidden": bool(forbidden),
+        "externalIoForbidden": bool(forbidden),
+        "codeExecutionForbidden": bool(forbidden),
+        "preferredCapabilityIds": ["runtime.direct-context-answer"],
+        "executionModeHint": "direct-context-answer",
+        "initialResponseModeHint": "direct-context-answer",
+        "reasons": [
+            "current turn requested context-only or no-execution handling",
+            *(
+                ["AgentServer dispatch forbidden by current turn"]
+                if agentserver_forbidden
+                else []
+            ),
+        ],
+        "evidence": {
+            "hasPriorContext": bool(explicit_refs or artifacts or execution_units or runs),
+            "referenceCount": len(explicit_refs),
+            "artifactCount": len(artifacts) if isinstance(artifacts, list) else 0,
+            "executionRefCount": len(execution_units) if isinstance(execution_units, list) else 0,
+            "runCount": len(runs) if isinstance(runs, list) else 0,
+        },
+    }
+
+
 def _extract_refs(prompt: str) -> list[str]:
     refs = []
     for match in REF_PATTERN.finditer(prompt):
@@ -164,6 +224,17 @@ def _get(value: Mapping[str, Any] | Any, key: str) -> Any:
     if isinstance(value, Mapping):
         return value.get(key)
     return getattr(value, key, None)
+
+
+def _has_prior_context(request: Mapping[str, Any] | Any) -> bool:
+    session = _get(request, "session")
+    if not isinstance(session, Mapping):
+        return False
+    for key in ("artifacts", "executionUnits", "runs", "messages"):
+        value = session.get(key)
+        if isinstance(value, list) and value:
+            return True
+    return False
 
 
 def _text(value: Any) -> str:

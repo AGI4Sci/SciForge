@@ -583,6 +583,7 @@ export interface ScenarioRuntimeOverride {
   selectedSenseIds?: string[];
   selectedActionIds?: string[];
   selectedVerifierIds?: string[];
+  turnExecutionConstraints?: Record<string, unknown>;
   artifactPolicy?: Record<string, unknown>;
   referencePolicy?: Record<string, unknown>;
   failureRecoveryPolicy?: Record<string, unknown>;

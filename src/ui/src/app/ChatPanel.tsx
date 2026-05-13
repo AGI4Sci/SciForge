@@ -8,7 +8,7 @@ import { builtInScenarioIdForRuntimeInput } from '@sciforge/scenario-core/scenar
 import { resetSession } from '../sessionStore';
 import { buildRequestAcceptedProgressEvent, buildSilentStreamProgressEvent, silentStreamWaitThresholdMs } from '../processProgress';
 import { assistantDraftFromStreamEvents, coalesceStreamEvents, streamEventCounts } from '../streamEventPresentation';
-import { makeId, nowIso, type AgentContextWindowState, type AgentStreamEvent, type GuidanceQueueRecord, type SciForgeConfig, type SciForgeMessage, type SciForgeReference, type SciForgeRun, type SciForgeSession, type ObjectReference, type ScenarioInstanceId, type ScenarioRuntimeOverride, type TimelineEventRecord } from '../domain';
+import { makeId, nowIso, type AgentContextWindowState, type AgentStreamEvent, type GuidanceQueueRecord, type GuidanceQueueStatus, type SciForgeConfig, type SciForgeMessage, type SciForgeReference, type SciForgeRun, type SciForgeSession, type ObjectReference, type ScenarioInstanceId, type ScenarioRuntimeOverride, type TimelineEventRecord } from '../domain';
 import { exportJsonFile } from './exportUtils';
 import { Badge, ClaimTag, ConfidenceBar, EvidenceTag, cx } from './uiPrimitives';
 import { AcceptancePanel } from './chat/AcceptancePanel';
@@ -28,7 +28,7 @@ import { CURRENT_TARGET_INSTANCE_VALUE, enabledPeerInstances, selectedPeerInstan
 import { MessageContent, inlineObjectReferencesForMessage, unmentionedObjectReferencesForMessage } from './chat/MessageContent';
 import { addComposerReferenceWithMarker, addPendingComposerReference, promptForComposerSend, removeComposerReference } from './chat/composerReferences';
 import { runPromptOrchestrator } from './chat/runOrchestrator';
-import { appendRunningGuidanceRecord, appendUploadMessageToSession, attachGuidanceQueueToSessionRun, createGuidanceQueueRecord, mergeAgentResponseIntoSession, resolveGuidanceQueueAfterRun, rollbackSessionBeforeMessage, updateGuidanceQueueRecords } from './chat/sessionTransforms';
+import { appendRunningGuidanceRecord, appendUploadMessageToSession, applyHistoricalUserMessageEdit, attachGuidanceQueueToSessionRun, createGuidanceQueueRecord, mergeAgentResponseIntoSession, resolveGuidanceQueueAfterRun, updateGuidanceQueueRecords } from './chat/sessionTransforms';
 import { attachStreamProcessToFailedSession, attachStreamProcessToResponse, compactFailureNotice, guidanceBadgeVariant, guidanceStatusLabel, latestTokenUsage } from './chat/runPresentation';
 import { RunVerificationTag, runIdForMessage } from './chat/messageRunPresentation';
 import { runReadiness, runningMessageContentFromStream } from './chat/runStatusPresentation';
@@ -425,7 +425,7 @@ export function ChatPanel({
     highlightReferencedContent(reference);
   }
 
-  async function runPrompt(prompt: string, baseSession: SciForgeSession, references: SciForgeReference[] = []) {
+  async function runPrompt(prompt: string, baseSession: SciForgeSession, references: SciForgeReference[] = [], sourceGuidance?: GuidanceQueueRecord) {
     const preflightStreamEvents = streamEventsRef.current;
     onInputChange('');
     inputRef.current = '';
@@ -450,6 +450,8 @@ export function ChatPanel({
     const controller = new AbortController();
     abortRef.current = controller;
     userAbortRequestedRef.current = false;
+    let runFailed = false;
+    let runEndedReason: string | undefined;
     try {
       const handleStreamEvent = (event: AgentStreamEvent) => {
         const next = coalesceStreamEvents(streamEventsRef.current, event).slice(-160);
@@ -489,21 +491,29 @@ export function ChatPanel({
         },
       });
       if (result.status === 'failed') {
+        runFailed = true;
+        runEndedReason = '当前 run 失败；追加引导已保留为 deferred，等待用户确认、修复或重新运行后再合并。';
+        const activeGuidanceForRun = guidanceForCurrentRun(sourceGuidance, guidanceQueueRef.current);
         const failedSessionWithProcess = attachGuidanceQueueToSessionRun(
           attachStreamProcessToFailedSession(result.failedSession, result.failedRunId, streamEventsRef.current),
           result.failedRunId,
-          guidanceQueueRef.current,
+          activeGuidanceForRun,
           'deferred',
           '当前 run 失败或中断前已接收追加引导，等待 run orchestration 下一轮处理。',
         );
         const failedMessage = failedSessionWithProcess.messages.at(-1)?.content ?? result.message;
         setErrorText(compactFailureNotice(failedMessage));
-        onSessionChange(failedSessionWithProcess);
-        activeSessionRef.current = failedSessionWithProcess;
+        const failedSessionWithHandledGuidance = markGuidanceTerminalOutcome(failedSessionWithProcess, sourceGuidance, {
+          status: 'deferred',
+          handlingRunId: result.failedRunId,
+          reason: runEndedReason,
+        });
+        onSessionChange(failedSessionWithHandledGuidance);
+        activeSessionRef.current = failedSessionWithHandledGuidance;
         onActiveRunChange(result.failedRunId);
         return;
       }
-      const finalResponseWithProcess = attachStreamProcessToResponse(result.finalResponse, streamEventsRef.current, guidanceQueueRef.current);
+      const finalResponseWithProcess = attachStreamProcessToResponse(result.finalResponse, streamEventsRef.current, guidanceForCurrentRun(sourceGuidance, guidanceQueueRef.current));
       const mergedSession = mergeAgentResponseIntoSession({
         baseSession: activeSessionRef.current,
         response: finalResponseWithProcess,
@@ -511,9 +521,27 @@ export function ChatPanel({
         skillPlanRef,
         uiPlanRef,
       });
-      onSessionChange(mergedSession);
-      activeSessionRef.current = mergedSession;
+      const mergedSessionWithHandledGuidance = markGuidanceHandledByRun(mergedSession, sourceGuidance, finalResponseWithProcess.run.id);
+      onSessionChange(mergedSessionWithHandledGuidance);
+      activeSessionRef.current = mergedSessionWithHandledGuidance;
       onActiveRunChange(finalResponseWithProcess.run.id);
+    } catch (error) {
+      const wasUserCancelled = userAbortRequestedRef.current;
+      runFailed = !wasUserCancelled;
+      runEndedReason = wasUserCancelled
+        ? '用户显式中断当前 backend run；正在处理的追加引导已跨过 cancel boundary，不能自动恢复。'
+        : '当前 run 在 backend orchestration 期间异常结束；追加引导已保留为 deferred，等待用户确认、修复或重新运行后再合并。';
+      const message = error instanceof Error ? error.message : String(error);
+      setErrorText(compactFailureNotice(message || runEndedReason));
+      const sessionWithSourceGuidance = markGuidanceTerminalOutcome(activeSessionRef.current, sourceGuidance, {
+        status: wasUserCancelled ? 'rejected' : 'deferred',
+        handlingRunId: wasUserCancelled ? 'cancelled-before-run-result' : 'orchestrator-throw',
+        reason: runEndedReason,
+      });
+      if (sessionWithSourceGuidance !== activeSessionRef.current) {
+        activeSessionRef.current = sessionWithSourceGuidance;
+        onSessionChange(sessionWithSourceGuidance);
+      }
     } finally {
       const wasUserCancelled = userAbortRequestedRef.current;
       setIsSending(false);
@@ -522,6 +550,8 @@ export function ChatPanel({
       userAbortRequestedRef.current = false;
       const guidanceResolution = resolveGuidanceQueueAfterRun(activeSessionRef.current, guidanceQueueRef.current, {
         userCancelled: wasUserCancelled,
+        runFailed,
+        runEndedReason,
       });
       if (guidanceResolution.session !== activeSessionRef.current) {
         activeSessionRef.current = guidanceResolution.session;
@@ -532,10 +562,44 @@ export function ChatPanel({
       const nextGuidance = guidanceResolution.nextGuidance;
       if (nextGuidance) {
         window.setTimeout(() => {
-          void runPrompt(nextGuidance.prompt, activeSessionRef.current);
+          void runPrompt(nextGuidance.prompt, activeSessionRef.current, [], nextGuidance);
         }, 80);
       }
     }
+  }
+
+  function markGuidanceHandledByRun(session: SciForgeSession, guidance: GuidanceQueueRecord | undefined, handlingRunId: string) {
+    return markGuidanceTerminalOutcome(session, guidance, {
+      status: 'merged',
+      handlingRunId,
+      reason: '排队引导已作为独立下一轮发送，并绑定到实际处理 run。',
+    });
+  }
+
+  function markGuidanceTerminalOutcome(
+    session: SciForgeSession,
+    guidance: GuidanceQueueRecord | undefined,
+    outcome: { status: GuidanceQueueStatus; handlingRunId: string; reason: string },
+  ) {
+    if (!guidance) return session;
+    return updateGuidanceQueueRecords(session, [guidance.id], {
+      status: outcome.status,
+      handlingRunId: outcome.handlingRunId,
+      reason: outcome.reason,
+    });
+  }
+
+  function guidanceForCurrentRun(sourceGuidance: GuidanceQueueRecord | undefined, queue: GuidanceQueueRecord[]) {
+    const records = [
+      ...(sourceGuidance ? [sourceGuidance] : []),
+      ...queue.filter((item) => item.status === 'queued'),
+    ];
+    const seen = new Set<string>();
+    return records.filter((item) => {
+      if (seen.has(item.id)) return false;
+      seen.add(item.id);
+      return true;
+    });
   }
 
   function handleRunningGuidance(prompt: string) {
@@ -551,7 +615,9 @@ export function ChatPanel({
     onInputChange('');
     inputRef.current = '';
     setComposerExpanded(false);
-    setGuidanceQueue((current) => [...current, guidance]);
+    const nextQueue = [...guidanceQueueRef.current, guidance];
+    guidanceQueueRef.current = nextQueue;
+    setGuidanceQueue(nextQueue);
     setStreamEvents((current) => [...current.slice(-32), guidanceQueuedEvent({ id: makeId('evt'), createdAt: now }, guidance)]);
   }
 
@@ -624,7 +690,19 @@ export function ChatPanel({
     setEditingContent('');
     if (editedMessage?.role === 'user') {
       if (isSending) abortRef.current?.abort();
-      void runPrompt(content, rollbackSessionBeforeMessage(session, editingMessageId), editedMessage.references ?? []);
+      const editResult = applyHistoricalUserMessageEdit({
+        session,
+        messageId: editingMessageId,
+        content,
+        mode: 'continue',
+      });
+      activeSessionRef.current = editResult.session;
+      onSessionChange(editResult.session);
+      if (editResult.branch?.requiresUserConfirmation) {
+        setErrorText('历史消息已更新；下游结果存在冲突，请确认是否保留受影响 refs 或从编辑边界重新运行。');
+        return;
+      }
+      void runPrompt(content, editResult.session, editedMessage.references ?? []);
       return;
     }
     onEditMessage(editingMessageId, content);

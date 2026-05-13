@@ -9,6 +9,7 @@ import {
   DIRECT_CONTEXT_FAST_PATH_POLICY,
   agentServerArtifactSelectionPromptPolicyLines,
   agentServerBibliographicVerificationPromptPolicyLines,
+  agentServerShouldIncludeBibliographicVerificationPromptPolicy,
   agentServerCurrentReferencePromptPolicyLines,
   agentServerToolPayloadProtocolContractLines,
   artifactDataForUnparsedPathText,
@@ -32,6 +33,8 @@ test('runtime artifact policy owns AgentServer ToolPayload prompt contract', () 
 
   const protocol = agentServerToolPayloadProtocolContractLines().join('\n');
   assert.match(protocol, /ToolPayload schema is strict/);
+  assert.match(protocol, /claims, uiManifest, executionUnits, artifacts must be arrays/);
+  assert.match(protocol, /Do not put result rows inside uiManifest/);
   assert.match(protocol, /unknown-artifact-inspector/);
 
   const selection = agentServerArtifactSelectionPromptPolicyLines().join('\n');
@@ -45,6 +48,9 @@ test('runtime artifact policy owns AgentServer ToolPayload prompt contract', () 
   const bibliography = agentServerBibliographicVerificationPromptPolicyLines().join('\n');
   assert.match(bibliography, /Bibliographic verification contract/);
   assert.match(bibliography, /verified_title/);
+  assert.match(bibliography, /Plain paper titles/);
+  assert.match(bibliography, /no provider\/raw\/evidence refs/);
+  assert.match(bibliography, /asks not to retrieve/);
 });
 
 test('runtime artifact policy owns current-reference digest recovery payload shape', () => {
@@ -117,9 +123,14 @@ test('runtime artifact policy normalizes report markdown and path text', () => {
 
 test('runtime artifact policy owns direct context fast path semantics', () => {
   assert.equal(DIRECT_CONTEXT_FAST_PATH_POLICY.executionToolId, 'sciforge.direct-context-fast-path');
-  assert.equal(DIRECT_CONTEXT_FAST_PATH_POLICY.reportArtifactType, 'research-report');
+  assert.equal(DIRECT_CONTEXT_FAST_PATH_POLICY.reportArtifactType, 'runtime-context-summary');
 
   const items = buildDirectContextFastPathItems({
+    currentReferenceDigests: [{
+      sourceRef: 'file:paper.md',
+      digestRef: '.sciforge/digests/paper.md',
+      digestText: 'Digest says the current paper covers bounded context.',
+    }],
     artifacts: [{
       id: 'report-1',
       type: 'research-report',
@@ -129,14 +140,32 @@ test('runtime artifact policy owns direct context fast path semantics', () => {
     executionUnits: [{ id: 'run-1', outputRef: 'runtime://out', stderrRef: 'runtime://err' }],
   });
 
-  assert.deepEqual(items.map((item) => item.kind), ['artifact', 'file', 'execution-unit']);
-  assert.equal(items[0]?.summary, '## Summary A compact report.');
+  assert.deepEqual(items.map((item) => item.kind), ['current-reference-digest', 'artifact', 'file', 'execution-unit']);
+  assert.equal(items[0]?.summary, 'Digest says the current paper covers bounded context.');
+  assert.equal(items[1]?.summary, '## Summary A compact report.');
   assert.deepEqual(directContextFastPathSupportingRefs(items), [
+    '.sciforge/digests/paper.md',
     'artifact:report-1',
     'file:paper.md',
     'runtime://out',
   ]);
-  assert.match(directContextFastPathMessage(items), /1\. research-report report-1: ## Summary A compact report\./);
+  assert.match(directContextFastPathMessage(items), /1\. file:paper\.md: Digest says the current paper covers bounded context\./);
+});
+
+test('bibliographic prompt policy is enabled only by structured scope contracts', () => {
+  assert.equal(agentServerShouldIncludeBibliographicVerificationPromptPolicy({
+    promptRenderPlanSummary: { renderedEntries: [{ text: 'write about papers and DOI strings' }] },
+    capabilityBrokerBrief: { summary: 'citation looking text' },
+  } as never), false);
+  assert.equal(agentServerShouldIncludeBibliographicVerificationPromptPolicy({
+    expectedArtifactTypes: ['paper-list'],
+  }), true);
+  assert.equal(agentServerShouldIncludeBibliographicVerificationPromptPolicy({
+    selectedCapabilityIds: ['citation.verification'],
+  }), true);
+  assert.equal(agentServerShouldIncludeBibliographicVerificationPromptPolicy({
+    artifacts: [{ id: 'records', type: 'dataset', verificationContract: 'sciforge.bibliographic-verification.v1' }],
+  }), true);
 });
 
 test('runtime artifact policy normalizes omics differential expression refs', () => {

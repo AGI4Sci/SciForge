@@ -97,7 +97,7 @@ try {
   assert.ok(missingFieldsToolPayload.logs?.some((entry) => entry.kind === 'capability-budget-debit-audit' && hasBudgetDebitRef(entry, schemaDebit.debitId)));
 
   const structuralDriftPayload = await validateAndNormalizePayload({
-    message: 'Whitelisted schema drift smoke',
+    message: 'Strict schema drift smoke',
     confidence: 0.7,
     claimType: 'fact',
     evidenceLevel: 'runtime',
@@ -109,12 +109,12 @@ try {
       report: { type: 'research-report', data: { markdown: '# Report\n\nWhitelisted structural drift.' } },
     },
   } as unknown as ToolPayload, request, skill, refs);
-  assert.equal(structuralDriftPayload.executionUnits[0]?.status, 'done');
+  assert.equal(structuralDriftPayload.executionUnits[0]?.status, 'repair-needed');
   const normalizationLog = structuralDriftPayload.logs?.find((entry) => entry.kind === 'payload-normalization-audit') as Record<string, unknown> | undefined;
-  assert.equal(normalizationLog?.status, 'allowed-structural-drift');
-  assert.equal(normalizationLog?.policyId, 'sciforge.schema-normalization-whitelist.v1');
+  assert.equal(normalizationLog?.status, 'refused');
+  assert.equal(normalizationLog?.policyId, 'sciforge.strict-payload-schema.v1');
   assert.ok(Array.isArray(normalizationLog?.auditNotes));
-  assert.match(JSON.stringify(normalizationLog), /reasoningTrace array|artifacts object map/);
+  assert.match(JSON.stringify(normalizationLog), /reasoningTrace must be a string|artifacts must be an array/);
   assert.ok(missingFieldsToolPayload.logs?.some((entry) => {
     return isRecord(entry)
       && entry.kind === 'payload-normalization-audit'
@@ -194,7 +194,7 @@ try {
   assert.equal(refFailure.failureKind, 'reference');
   assert.deepEqual(refFailure.invalidRefs, ['file:.sciforge/uploads/current-input.pdf']);
   assert.ok(refFailure.relatedRefs.includes('file:.sciforge/uploads/current-input.pdf'));
-  assert.match(JSON.stringify(refFailure), /Current-turn reference was not reflected/);
+  assert.match(JSON.stringify(refFailure), /Current-turn reference was not cited by structured refs/);
   const refDebit = invalidRefPayload.budgetDebits?.[0];
   assert.ok(refDebit, 'current-reference validation failure should emit a capability budget debit');
   assert.equal(refDebit.contract, CAPABILITY_BUDGET_DEBIT_CONTRACT_ID);
@@ -219,7 +219,14 @@ try {
     claimType: 'fact',
     evidenceLevel: 'runtime',
     reasoningTrace: 'runtime smoke',
-    claims: [],
+    claims: [{
+      text: 'Analyzed the uploaded structure file.',
+      type: 'fact',
+      confidence: 0.82,
+      evidenceLevel: 'runtime',
+      supportingRefs: ['file:.sciforge/uploads/1crn.cif'],
+      opposingRefs: [],
+    }],
     uiManifest: [],
     executionUnits: [{ id: 'structure-ref-smoke', status: 'done', tool: 'smoke' }],
     artifacts: [],
@@ -271,7 +278,7 @@ try {
   }, request, skill, refs);
   assert.equal(planWithPreviewDeliverablePayload.executionUnits[0]?.status, 'done');
 
-  const whitelistedNormalizationPayload = await validateAndNormalizePayload({
+  const strictNormalizationPayload = await validateAndNormalizePayload({
     message: 'Artifact map normalization smoke produced a report.',
     confidence: 0.82,
     claimType: 'fact',
@@ -284,14 +291,12 @@ try {
       report: { type: 'research-report', data: { markdown: 'This report body is long enough to count as delivered text for the runtime contract.' } },
     },
   } as unknown as ToolPayload, request, skill, refs);
-  assert.equal(whitelistedNormalizationPayload.executionUnits[0]?.status, 'done');
-  assert.ok(Array.isArray(whitelistedNormalizationPayload.artifacts));
-  assert.equal(whitelistedNormalizationPayload.artifacts[0]?.id, 'report');
-  const normalizationAudit = whitelistedNormalizationPayload.logs?.find((entry) => isRecord(entry) && entry.kind === 'payload-normalization-audit') as Record<string, unknown> | undefined;
-  assert.equal(normalizationAudit?.status, 'allowed-structural-drift');
-  assert.deepEqual(normalizationAudit?.refusedErrors, []);
-  assert.ok(JSON.stringify(normalizationAudit?.allowedRepairs).includes('artifacts object map'));
-  assert.ok(JSON.stringify(normalizationAudit?.allowedRepairs).includes('reasoningTrace array'));
+  assert.equal(strictNormalizationPayload.executionUnits[0]?.status, 'repair-needed');
+  const normalizationAudit = strictNormalizationPayload.logs?.find((entry) => isRecord(entry) && entry.kind === 'payload-normalization-audit') as Record<string, unknown> | undefined;
+  assert.equal(normalizationAudit?.status, 'refused');
+  assert.ok(Array.isArray(normalizationAudit?.refusedErrors));
+  assert.ok(JSON.stringify(normalizationAudit?.refusedErrors).includes('artifacts must be an array'));
+  assert.ok(JSON.stringify(normalizationAudit?.refusedErrors).includes('reasoningTrace must be a string'));
 
   const workEvidenceRepair = repairNeededPayload(
     request,
@@ -311,6 +316,8 @@ try {
   const emptyRetrievalRequest = normalizeGatewayRequest({
     ...request,
     prompt: 'Retrieve the latest papers about contract-aware scientific agents.',
+    externalIoRequired: true,
+    expectedEvidenceKinds: ['external-io'],
   });
   const emptyRetrievalPayload: ToolPayload = {
     message: 'Completed literature retrieval. Web search retrieved 0 papers for the requested query.',

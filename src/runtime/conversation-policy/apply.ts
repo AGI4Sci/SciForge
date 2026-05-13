@@ -1,6 +1,7 @@
 import type { GatewayRequest, WorkspaceRuntimeCallbacks } from '../runtime-types.js';
 import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
 import { clipForAgentServerJson, isRecord, toRecordList, toStringList } from '../gateway-utils.js';
+import { sha1 } from '../workspace-task-runner.js';
 import {
   CONVERSATION_POLICY_REQUEST_VERSION,
   SAFE_DEFAULT_BACKGROUND_PLAN,
@@ -11,6 +12,7 @@ import {
   type ConversationPolicyRequest,
   type ConversationPolicyResponse,
 } from '@sciforge-ui/runtime-contract/conversation-policy';
+import { normalizeTurnExecutionConstraints } from '@sciforge-ui/runtime-contract/turn-constraints';
 import { CONVERSATION_POLICY_EVENT_TYPE, WORKSPACE_RUNTIME_SOURCE } from '@sciforge-ui/runtime-contract/events';
 import { callPythonConversationPolicy, conversationPolicyBridgeConfig, type ConversationPolicyBridgeConfig } from './python-bridge.js';
 
@@ -37,19 +39,24 @@ export async function applyConversationPolicy(
 
   const policyRequest = buildConversationPolicyRequest(request, {
     workspace: options.workspace,
-    tsDecisions: {},
   });
   const result = await callPythonConversationPolicy(policyRequest, config);
   if (!result.ok) {
+    const failedRequest = requestWithFailedConversationPolicy(request, result.error, result.stderr);
     emitWorkspaceRuntimeEvent(callbacks, {
       type: CONVERSATION_POLICY_EVENT_TYPE,
       source: WORKSPACE_RUNTIME_SOURCE,
       status: 'failed',
-      message: 'Python conversation policy failed; continuing with transport-only request fallback.',
+      message: 'Python conversation policy failed; continuing only with versioned transport constraints and fail-closed runtime gates.',
       detail: result.error,
       raw: clipForAgentServerJson({ error: result.error, stderr: result.stderr }, 3),
     });
-    return { request, status: 'failed', error: result.error, stderr: result.stderr };
+    return {
+      request: failedRequest,
+      status: 'failed',
+      error: result.error,
+      stderr: result.stderr,
+    };
   }
 
   const enriched = requestWithPolicyResponse(request, result.response);
@@ -62,6 +69,35 @@ export async function applyConversationPolicy(
     raw: clipForAgentServerJson(result.response, 4),
   });
   return { request: enriched, response: result.response, status: 'applied', stderr: result.stderr };
+}
+
+function requestWithFailedConversationPolicy(
+  request: GatewayRequest,
+  error: string,
+  stderr?: string,
+): GatewayRequest {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  return {
+    ...request,
+    uiState: {
+      ...uiState,
+      conversationPolicy: {
+        applicationStatus: 'failed',
+        policySource: 'python-conversation-policy',
+        error,
+        stderrDigest: stderr ? sha1(stderr) : undefined,
+        latencyPolicy: { ...SAFE_DEFAULT_LATENCY_POLICY },
+        responsePlan: { ...SAFE_DEFAULT_RESPONSE_PLAN },
+        backgroundPlan: { ...SAFE_DEFAULT_BACKGROUND_PLAN },
+        cachePolicy: { ...SAFE_DEFAULT_CACHE_POLICY },
+        turnExecutionConstraints: isRecord(uiState.turnExecutionConstraints) ? uiState.turnExecutionConstraints : undefined,
+      },
+      latencyPolicy: { ...SAFE_DEFAULT_LATENCY_POLICY },
+      responsePlan: { ...SAFE_DEFAULT_RESPONSE_PLAN },
+      backgroundPlan: { ...SAFE_DEFAULT_BACKGROUND_PLAN },
+      cachePolicy: { ...SAFE_DEFAULT_CACHE_POLICY },
+    },
+  };
 }
 
 export function requestWithPolicyResponse(
@@ -80,6 +116,8 @@ export function requestWithPolicyResponse(
   const responsePlan = isRecord(response.responsePlan) ? response.responsePlan : { ...SAFE_DEFAULT_RESPONSE_PLAN };
   const backgroundPlan = isRecord(response.backgroundPlan) ? response.backgroundPlan : { ...SAFE_DEFAULT_BACKGROUND_PLAN };
   const cachePolicy = isRecord(response.cachePolicy) ? response.cachePolicy : { ...SAFE_DEFAULT_CACHE_POLICY };
+  const turnExecutionConstraints = normalizeTurnExecutionConstraints(response.turnExecutionConstraints)
+    ?? normalizeTurnExecutionConstraints(uiState.turnExecutionConstraints);
   const executionModeDecision = executionModeDecisionFromPolicy(response.executionModePlan);
   const artifactPolicy = isRecord(handoffPayload.policy) ? handoffPayload.policy : isRecord(handoffPlan) ? handoffPlan : undefined;
   const currentReferences = response.currentReferences?.length
@@ -101,10 +139,13 @@ export function requestWithPolicyResponse(
       ...uiState,
       conversationPolicy: {
         ...response,
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
         latencyPolicy,
         responsePlan,
         backgroundPlan,
         cachePolicy,
+        turnExecutionConstraints,
       },
       latencyPolicy,
       responsePlan,
@@ -126,6 +167,7 @@ export function requestWithPolicyResponse(
       acceptancePlan,
       recoveryPlan,
       userVisiblePlan: response.userVisiblePlan,
+      turnExecutionConstraints,
     },
   };
 }
@@ -134,25 +176,24 @@ function buildConversationPolicyRequest(
   request: GatewayRequest,
   params: {
     workspace?: string;
-    tsDecisions: Record<string, unknown>;
   },
 ): ConversationPolicyRequest {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   const ledger = toRecordList(uiState.conversationLedger);
   const ledgerTail = toRecordList(isRecord(uiState.conversationLedger) ? uiState.conversationLedger.tail : undefined);
-  const currentReferences = mergeRecordsByRef([
+  const recentExecutionRefs = toRecordList(uiState.recentExecutionRefs);
+  const turnExecutionConstraints = normalizeTurnExecutionConstraints(uiState.turnExecutionConstraints);
+  const currentTurnReferences = mergeRecordsByRef([
     ...toRecordList(request.references),
     ...toRecordList(uiState.currentReferences),
   ]);
-  const sessionMessages = toRecordList(uiState.sessionMessages).length
-    ? toRecordList(uiState.sessionMessages)
-    : toRecordList(uiState.messages);
+  const sessionMessages = policySessionMessages(uiState);
   return {
     schemaVersion: CONVERSATION_POLICY_REQUEST_VERSION,
     turn: {
       turnId: stringField(uiState.currentTurnId) ?? stringField(uiState.turnId),
       prompt: request.prompt,
-      references: currentReferences.slice(0, 24),
+      references: currentTurnReferences.slice(0, 24),
     },
     session: {
       sessionId: stringField(uiState.sessionId),
@@ -162,7 +203,10 @@ function buildConversationPolicyRequest(
         : toStringList(uiState.recentConversation).slice(-12),
       runs: toRecordList(uiState.recentRuns).slice(-12),
       artifacts: request.artifacts.slice(-24),
-      executionUnits: ledgerTail.length ? ledgerTail.slice(-24) : ledger.slice(-24),
+      executionUnits: mergeRecordsByRef([
+        ...(ledgerTail.length ? ledgerTail.slice(-24) : ledger.slice(-24)),
+        ...recentExecutionRefs.slice(-24),
+      ]).slice(-24),
       contextReusePolicy: isRecord(uiState.contextReusePolicy) ? uiState.contextReusePolicy : undefined,
     },
     workspace: {
@@ -178,13 +222,51 @@ function buildConversationPolicyRequest(
       selectedVerifierIds: request.selectedVerifierIds ?? [],
       selectedComponentIds: request.selectedComponentIds ?? toStringList(request.uiState?.selectedComponentIds),
       expectedArtifactTypes: request.expectedArtifactTypes ?? [],
+      allowAgentServerGeneration: turnExecutionConstraints?.agentServerForbidden === true ? false : undefined,
     }),
     limits: {
       maxContextWindowTokens: request.maxContextWindowTokens,
       maxInlineChars: 2400,
     },
-    tsDecisions: params.tsDecisions,
+    tsDecisions: {
+      turnExecutionConstraints: isRecord(uiState.turnExecutionConstraints) ? uiState.turnExecutionConstraints : undefined,
+    },
   };
+}
+
+function policySessionMessages(uiState: Record<string, unknown>) {
+  const source = toRecordList(uiState.sessionMessages).length
+    ? toRecordList(uiState.sessionMessages)
+    : toRecordList(uiState.messages);
+  return source.map((message, index) => {
+    const existingDigest = isRecord(message.contentDigest) ? message.contentDigest : undefined;
+    const bodyStatus = stringField(message.bodyStatus) ?? (message.contentOmitted === true || existingDigest ? 'omitted' : undefined);
+    const content = bodyStatus === 'omitted' ? undefined : typeof message.content === 'string' ? message.content : undefined;
+    const text = bodyStatus === 'omitted' ? undefined : typeof message.text === 'string' ? message.text : undefined;
+    const prompt = bodyStatus === 'omitted' ? undefined : typeof message.prompt === 'string' ? message.prompt : undefined;
+    const body = content ?? text ?? prompt ?? '';
+    return {
+      id: stringField(message.id) ?? `session-message-${index + 1}`,
+      role: stringField(message.role) ?? 'unknown',
+      bodyStatus: bodyStatus ?? (body ? 'omitted' : undefined),
+      contentOmitted: Boolean(body) || bodyStatus === 'omitted',
+      contentDigest: existingDigest ?? (body ? {
+        omitted: 'session-message-body',
+        chars: body.length,
+        hash: sha1(body),
+      } : undefined),
+      references: toRecordList(message.references).slice(-8),
+      objectReferences: toRecordList(message.objectReferences).slice(-12),
+      guidanceQueue: isRecord(message.guidanceQueue)
+        ? {
+          status: stringField(message.guidanceQueue.status),
+          refs: toStringList(message.guidanceQueue.refs).slice(-8),
+        }
+        : undefined,
+      status: stringField(message.status),
+      createdAt: stringField(message.createdAt),
+    };
+  });
 }
 
 function executionModeDecisionFromPolicy(value: unknown): Record<string, unknown> {

@@ -1,5 +1,6 @@
 import type { ToolPayload } from '../runtime-types.js';
 import { isRecord } from '../gateway-utils.js';
+import { TOOL_PAYLOAD_ARRAY_FIELDS } from '@sciforge-ui/runtime-contract/tool-payload-shape';
 
 export function isToolPayload(value: unknown): value is ToolPayload {
   if (!isRecord(value)) return false;
@@ -8,16 +9,13 @@ export function isToolPayload(value: unknown): value is ToolPayload {
     && typeof value.claimType === 'string'
     && typeof value.evidenceLevel === 'string'
     && typeof value.reasoningTrace === 'string'
-    && Array.isArray(value.claims)
-    && Array.isArray(value.uiManifest)
-    && Array.isArray(value.executionUnits)
-    && Array.isArray(value.artifacts);
+    && TOOL_PAYLOAD_ARRAY_FIELDS.every((key) => Array.isArray(value[key]));
 }
 
 export function schemaErrors(payload: unknown) {
   if (!isRecord(payload)) return ['payload is not an object'];
   const errors: string[] = [];
-  for (const key of ['message', 'claims', 'uiManifest', 'executionUnits', 'artifacts']) {
+  for (const key of ['message', ...TOOL_PAYLOAD_ARRAY_FIELDS]) {
     if (!(key in payload)) errors.push(`missing ${key}`);
   }
   if ('message' in payload && typeof payload.message !== 'string') errors.push('message must be a string');
@@ -25,10 +23,9 @@ export function schemaErrors(payload: unknown) {
   if ('claimType' in payload && typeof payload.claimType !== 'string') errors.push('claimType must be a string');
   if ('evidenceLevel' in payload && typeof payload.evidenceLevel !== 'string') errors.push('evidenceLevel must be a string');
   if ('reasoningTrace' in payload && typeof payload.reasoningTrace !== 'string') errors.push('reasoningTrace must be a string');
-  if (!Array.isArray(payload.claims)) errors.push('claims must be an array');
-  if (!Array.isArray(payload.uiManifest)) errors.push('uiManifest must be an array');
-  if (!Array.isArray(payload.executionUnits)) errors.push('executionUnits must be an array');
-  if (!Array.isArray(payload.artifacts)) errors.push('artifacts must be an array');
+  for (const key of TOOL_PAYLOAD_ARRAY_FIELDS) {
+    if (!Array.isArray(payload[key])) errors.push(`${key} must be an array`);
+  }
   if (Array.isArray(payload.uiManifest)) {
     payload.uiManifest.forEach((slot, index) => {
       if (!isRecord(slot)) {

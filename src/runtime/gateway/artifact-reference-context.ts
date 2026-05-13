@@ -1,6 +1,7 @@
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { artifactMatchesReferenceScope } from '@sciforge-ui/runtime-contract/artifact-reference-policy';
+import { normalizeTurnExecutionConstraints } from '@sciforge-ui/runtime-contract/turn-constraints';
 import type { GatewayRequest, TaskAttemptRecord } from '../runtime-types.js';
 import { readRecentTaskAttempts } from '../task-attempt-history.js';
 import { fileExists } from '../workspace-task-runner.js';
@@ -18,6 +19,14 @@ function artifactNeedsRepair(artifact: Record<string, unknown>) {
 }
 
 export async function collectArtifactReferenceContext(request: GatewayRequest) {
+  if (bodyExpansionForbiddenByTurnConstraints(request)) {
+    const combinedArtifacts = request.artifacts.filter(isRecord);
+    return combinedArtifacts.length ? { combinedArtifacts } : undefined;
+  }
+  if (currentTurnReferencesAreIsolated(request)) {
+    const combinedArtifacts = request.artifacts.filter(isRecord);
+    return combinedArtifacts.length ? { combinedArtifacts } : undefined;
+  }
   const workspace = resolve(request.workspacePath || process.cwd());
   const recentExecutionRefs = toRecordList(request.uiState?.recentExecutionRefs);
   let priorAttempts = await readRecentTaskAttempts(workspace, request.skillDomain, 8, {
@@ -60,6 +69,31 @@ export async function collectArtifactReferenceContext(request: GatewayRequest) {
   return {
     combinedArtifacts,
   };
+}
+
+function currentTurnReferencesAreIsolated(request: GatewayRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const currentRefs = toRecordList(uiState.currentReferences).length + toRecordList(uiState.currentReferenceDigests).length;
+  if (!currentRefs) return false;
+  const policy = isRecord(uiState.contextReusePolicy)
+    ? uiState.contextReusePolicy
+    : isRecord(uiState.contextIsolation)
+      ? uiState.contextIsolation
+      : {};
+  const mode = stringField(policy.mode) ?? '';
+  const historyReuse = isRecord(policy.historyReuse) ? policy.historyReuse : {};
+  return historyReuse.allowed !== true && mode !== 'continue' && mode !== 'repair';
+}
+
+function bodyExpansionForbiddenByTurnConstraints(request: GatewayRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const constraints = normalizeTurnExecutionConstraints(uiState.turnExecutionConstraints);
+  return Boolean(constraints && (
+    constraints.agentServerForbidden
+    || constraints.workspaceExecutionForbidden
+    || constraints.codeExecutionForbidden
+    || constraints.externalIoForbidden
+  ));
 }
 
 function artifactBelongsToRequest(artifact: Record<string, unknown>, request: GatewayRequest) {

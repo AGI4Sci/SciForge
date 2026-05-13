@@ -192,7 +192,7 @@ function assertFeasibilityArtifact(
   retrieval: OfflineLiteratureRetrievalOutput,
 ): void {
   assert.equal(artifact.artifactType, 'literature-reproduction-feasibility');
-  assert.equal(artifact.ref, 'artifact:literature-reproduction-feasibility');
+  assert.equal(artifact.ref, 'artifact:research-report#derived:literature-reproduction-feasibility');
   assert.equal(artifact.parentArtifactRef, 'artifact:research-report');
   assert.deepEqual(artifact.sourceArtifactRefs, ['artifact:paper-list', 'artifact:evidence-matrix', 'artifact:research-report']);
   assert.deepEqual(new Set(artifact.paperIds), new Set(retrieval.paperList.map((paper) => paper.id)));

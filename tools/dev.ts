@@ -1,7 +1,9 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { connect } from 'node:net';
-import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { formatUiDevServerHealth, readUiDevServerHealth } from './dev-health';
+import { isOwnedSciForgeViteDevProcess, parseListeningPids, type DevProcessOwnershipRecord } from './dev-process';
 
 applyInstanceDefaults();
 
@@ -63,9 +65,22 @@ if (workspaceHealth.ok) {
 }
 
 if (await isListening(UI_PORT)) {
-  console.log(`SciForge UI already running: http://127.0.0.1:${UI_PORT}`);
+  const uiHealth = await readUiDevServerHealth(UI_PORT);
+  if (uiHealth.ok) {
+    console.log(`SciForge UI already running: http://127.0.0.1:${UI_PORT}`);
+  } else {
+    console.warn(`SciForge UI is listening on http://127.0.0.1:${UI_PORT}, but its health check failed: ${formatUiDevServerHealth(uiHealth)}`);
+    const allowStaleRestart = process.env.SCIFORGE_DEV_RESTART_STALE_UI === '1' || process.argv.includes('--restart-stale-ui');
+    const restarted = allowStaleRestart ? await stopStaleViteDevServer(UI_PORT) : false;
+    if (restarted) {
+      children.push(startUiDevServer());
+    } else {
+      if (!allowStaleRestart) console.warn('Automatic stale UI restart is disabled by default; set SCIFORGE_DEV_RESTART_STALE_UI=1 or pass --restart-stale-ui to opt in.');
+      console.warn(`Stop the stale UI server on port ${UI_PORT} and rerun npm run dev.`);
+    }
+  }
 } else {
-  children.push(start('ui', ['run', 'dev:ui', '--', '--host', '0.0.0.0', '--port', String(UI_PORT), '--strictPort']));
+  children.push(startUiDevServer());
 }
 
 process.once('SIGINT', shutdown);
@@ -109,6 +124,25 @@ function start(
   return child;
 }
 
+function startUiDevServer() {
+  const token = `sciforge-ui-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const child = start('ui', ['run', 'dev:ui', '--', '--host', '0.0.0.0', '--port', String(UI_PORT), '--strictPort'], process.cwd(), {
+    SCIFORGE_DEV_LAUNCHER_TOKEN: token,
+  });
+  writeUiDevPidfile({
+    service: 'ui',
+    repoRoot: process.cwd(),
+    port: UI_PORT,
+    instance: process.env.SCIFORGE_INSTANCE_ID || process.env.SCIFORGE_INSTANCE,
+    launcherPid: process.pid,
+    childPid: child.pid,
+    token,
+    startedAt: new Date().toISOString(),
+  });
+  child.once('exit', () => removeUiDevPidfile(token));
+  return child;
+}
+
 function shutdown() {
   shuttingDown = true;
   for (const child of children) {
@@ -138,6 +172,124 @@ async function readHealth(port: number) {
   } catch {
     return { ok: false, capabilities: [] };
   }
+}
+
+async function stopStaleViteDevServer(port: number) {
+  const ownership = readUiDevPidfile(port);
+  if (!ownership) {
+    console.warn(`No SciForge UI lifecycle pidfile found for port ${port}; refusing to terminate an unowned dev server.`);
+    return false;
+  }
+  const pids = await listeningPids(port);
+  const vitePids: number[] = [];
+  for (const pid of pids) {
+    const command = await processCommand(pid);
+    const cwd = await processCwd(pid);
+    const envText = await processEnvironment(pid);
+    if (isOwnedSciForgeViteDevProcess({ command, cwd, envText, repoRoot: process.cwd(), port, record: ownership })) {
+      vitePids.push(pid);
+    }
+  }
+  if (!vitePids.length) {
+    console.warn(`Lifecycle pidfile exists for port ${port}, but no listening Vite process carries the matching launcher token; refusing to kill unknown PIDs ${pids.join(', ') || '(none)'}.`);
+    return false;
+  }
+  console.warn(`Restarting stale owned SciForge Vite dev server on port ${port}: ${vitePids.join(', ')}`);
+  for (const pid of vitePids) {
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch {
+      // The process may already have exited between lsof and kill.
+    }
+  }
+  const stopped = await waitForPortOffline(port, 5000);
+  if (stopped) return true;
+  for (const pid of vitePids) {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // The process may already have exited between SIGTERM and SIGKILL.
+    }
+  }
+  return await waitForPortOffline(port, 2000);
+}
+
+async function listeningPids(port: number) {
+  const stdout = await execFileText('lsof', ['-n', '-P', `-tiTCP:${port}`, '-sTCP:LISTEN']);
+  return parseListeningPids(stdout);
+}
+
+async function processCommand(pid: number) {
+  return (await execFileText('ps', ['-p', String(pid), '-o', 'command='])).trim();
+}
+
+async function processCwd(pid: number) {
+  const stdout = await execFileText('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn']);
+  const line = stdout.split('\n').find((entry) => entry.startsWith('n'));
+  return line ? line.slice(1).trim() : '';
+}
+
+async function processEnvironment(pid: number) {
+  return (await execFileText('ps', ['eww', '-p', String(pid), '-o', 'command='])).trim();
+}
+
+function uiDevPidfilePath(port: number) {
+  const instance = process.env.SCIFORGE_INSTANCE_ID || process.env.SCIFORGE_INSTANCE || 'main';
+  return resolve('.sciforge', 'dev', `ui-${instance}-${port}.pid.json`);
+}
+
+function writeUiDevPidfile(record: DevProcessOwnershipRecord) {
+  const file = uiDevPidfilePath(record.port);
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `${JSON.stringify(record, null, 2)}\n`);
+  } catch (error) {
+    console.warn(`Could not write SciForge UI lifecycle pidfile: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function readUiDevPidfile(port: number): DevProcessOwnershipRecord | undefined {
+  const file = uiDevPidfilePath(port);
+  try {
+    if (!existsSync(file)) return undefined;
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as DevProcessOwnershipRecord;
+    if (parsed.service !== 'ui' || parsed.port !== port || resolve(parsed.repoRoot) !== process.cwd()) return undefined;
+    return parsed;
+  } catch {
+    return undefined;
+  }
+}
+
+function removeUiDevPidfile(token: string) {
+  const file = uiDevPidfilePath(UI_PORT);
+  try {
+    if (!existsSync(file)) return;
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as DevProcessOwnershipRecord;
+    if (parsed.token === token) unlinkSync(file);
+  } catch {
+    // Leaving an unreadable lifecycle file is safer than deleting the wrong one.
+  }
+}
+
+function execFileText(command: string, args: string[]) {
+  return new Promise<string>((resolveText) => {
+    execFile(command, args, { timeout: 1500 }, (error, stdout) => {
+      resolveText(error ? '' : stdout.toString());
+    });
+  });
+}
+
+async function waitForPortOffline(port: number, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!await isListening(port)) return true;
+    await sleep(120);
+  }
+  return !await isListening(port);
+}
+
+function sleep(ms: number) {
+  return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 }
 
 function applyInstanceDefaults() {

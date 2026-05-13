@@ -1,5 +1,6 @@
 export const CONVERSATION_POLICY_REQUEST_VERSION = 'sciforge.conversation-policy.request.v1' as const;
 export const CONVERSATION_POLICY_RESPONSE_VERSION = 'sciforge.conversation-policy.response.v1' as const;
+export const CONVERSATION_POLICY_TOOL_ID = 'sciforge.conversation-policy' as const;
 export const CONVERSATION_POLICY_SELECTED_TOOL_ADAPTER = 'runtime:selected-tool' as const;
 export const CONVERSATION_POLICY_SELECTED_SENSE_ADAPTER = 'runtime:selected-sense' as const;
 export const CONVERSATION_POLICY_SELECTED_VERIFIER_ADAPTER = 'runtime:selected-verifier' as const;
@@ -14,6 +15,7 @@ export interface SelectedConversationPolicyCapabilityManifestInput {
   selectedVerifierIds?: unknown[];
   selectedComponentIds?: unknown[];
   expectedArtifactTypes?: unknown[];
+  allowAgentServerGeneration?: boolean;
 }
 
 export interface ConversationPolicyRequest {
@@ -53,6 +55,7 @@ export interface ConversationPolicyResponse {
   artifactIndex?: Record<string, unknown>;
   capabilityBrief?: Record<string, unknown>;
   executionModePlan?: Record<string, unknown>;
+  turnExecutionConstraints?: Record<string, unknown>;
   handoffPlan?: Record<string, unknown>;
   acceptancePlan?: Record<string, unknown>;
   recoveryPlan?: Record<string, unknown>;
@@ -108,16 +111,18 @@ export function selectedConversationPolicyCapabilityManifests(
       internalAgent: 'none',
     });
   }
-  manifests.push({
-    id: `scenario.${input.skillDomain}.agentserver-generation`,
-    kind: 'skill',
-    domain: [input.skillDomain],
-    summary: `General AgentServer generation for ${input.skillDomain} tasks.`,
-    triggers: [input.skillDomain, 'agentserver', 'generation'],
-    artifacts: uniquePolicyStrings(input.expectedArtifactTypes ?? []),
-    adapter: CONVERSATION_POLICY_AGENTSERVER_GENERATION_ADAPTER,
-    internalAgent: 'required',
-  });
+  if (input.allowAgentServerGeneration !== false) {
+    manifests.push({
+      id: `scenario.${input.skillDomain}.agentserver-generation`,
+      kind: 'skill',
+      domain: [input.skillDomain],
+      summary: `General AgentServer generation for ${input.skillDomain} tasks.`,
+      triggers: [input.skillDomain, 'agentserver', 'generation'],
+      artifacts: uniquePolicyStrings(input.expectedArtifactTypes ?? []),
+      adapter: CONVERSATION_POLICY_AGENTSERVER_GENERATION_ADAPTER,
+      internalAgent: 'required',
+    });
+  }
   return uniquePolicyManifestsById(manifests);
 }
 
@@ -171,6 +176,11 @@ export function currentUserRequestFromPrompt(prompt: string): string {
   return userLine ? userLine.replace(/^user\s*:\s*/i, '') : prompt;
 }
 
+export function conversationSummaryLooksDigestOnly(summary: unknown): boolean {
+  return typeof summary === 'string'
+    && /\b(?:omitted|digest|hash|refs=)\b/i.test(summary);
+}
+
 export function normalizeConversationPolicyResponse(value: unknown): ConversationPolicyResponse | undefined {
   const record = isRecord(value) && isRecord(value.data) ? value.data : value;
   if (!isRecord(record)) return undefined;
@@ -185,6 +195,7 @@ export function normalizeConversationPolicyResponse(value: unknown): Conversatio
     artifactIndex: optionalRecord(record.artifactIndex),
     capabilityBrief: optionalRecord(record.capabilityBrief),
     executionModePlan: optionalRecord(record.executionModePlan),
+    turnExecutionConstraints: optionalRecord(record.turnExecutionConstraints),
     handoffPlan: optionalRecord(record.handoffPlan),
     acceptancePlan: optionalRecord(record.acceptancePlan),
     recoveryPlan: optionalRecord(record.recoveryPlan),

@@ -61,6 +61,8 @@ test('task run cards separate protocol success from task outcome and keep failur
       skillDomain: 'literature',
       skillId: 'code-repair',
       attempt: 1,
+      failureCode: 'rate-limit',
+      httpStatus: 429,
       status: 'repair-needed',
       failureReason: 'HTTP Error 429: rate limited while fetching external issue metadata',
       codeRef: '.sciforge/generated-tasks/task.py',
@@ -154,6 +156,7 @@ test('task attempt history records a run-level failure signature registry across
       ...base,
       id: 'timeout-run',
       attempt: 1,
+      failureCode: 'timeout',
       failureReason: 'AgentServer generation request timed out after 30000ms.',
       createdAt: '2026-05-12T00:02:00.000Z',
     } as TaskAttemptRecord);
@@ -161,6 +164,7 @@ test('task attempt history records a run-level failure signature registry across
       ...base,
       id: 'repair-noop-run',
       attempt: 1,
+      failureCode: 'repair-no-op',
       failureReason: 'Repair no-op: repeated same failure with no change.',
       createdAt: '2026-05-12T00:03:00.000Z',
     } as TaskAttemptRecord);
@@ -168,6 +172,8 @@ test('task attempt history records a run-level failure signature registry across
       ...base,
       id: 'external-transient-run',
       attempt: 1,
+      failureCode: 'rate-limit',
+      httpStatus: 429,
       failureReason: 'HTTP Error 429: rate limited for request 12345.',
       createdAt: '2026-05-12T00:04:00.000Z',
     } as TaskAttemptRecord);
@@ -175,6 +181,8 @@ test('task attempt history records a run-level failure signature registry across
       ...base,
       id: 'external-transient-run',
       attempt: 1,
+      failureCode: 'rate-limit',
+      httpStatus: 429,
       failureReason: 'HTTP Error 429: rate limited for request 12345.',
       createdAt: '2026-05-12T00:04:00.000Z',
     } as TaskAttemptRecord);

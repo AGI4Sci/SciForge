@@ -14,12 +14,16 @@ import {
 test('dedupes failure signatures across noisy transient provider messages', () => {
   const first = createFailureSignature({
     message: 'HTTP Error 429: rate limit for request 12345 at 2026-05-12T01:02:03.000Z',
+    code: 'rate-limit',
+    httpStatus: 429,
     providerId: 'arxiv',
     operation: 'paper-search',
     refs: ['log:stderr-a'],
   });
   const second = createFailureSignature({
     message: 'HTTP Error 429: rate limit for request 98765 at 2026-05-12T09:10:11.000Z',
+    code: 'rate-limit',
+    httpStatus: 429,
     providerId: 'arxiv',
     operation: 'paper-search',
     refs: ['log:stderr-b'],
@@ -34,6 +38,8 @@ test('dedupes failure signatures across noisy transient provider messages', () =
 test('classifies rate limited wording as provider-neutral transient failure', () => {
   const signature = createFailureSignature({
     message: 'HTTP Error 429: rate limited while fetching external issue metadata',
+    code: 'rate-limit',
+    httpStatus: 429,
     providerId: 'issue-api',
     operation: 'metadata-fetch',
   });
@@ -46,9 +52,12 @@ test('classifies rate limited wording as provider-neutral transient failure', ()
 test('classifies runtime timeout separately from provider transient timeout', () => {
   const runtime = createFailureSignature({
     message: 'AgentServer generation request timed out after 30000ms.',
+    code: 'timeout',
   });
   const provider = createFailureSignature({
     message: 'External provider timed out after 30000ms.',
+    code: 'external-transient',
+    httpStatus: 504,
   });
 
   assert.equal(runtime.kind, 'timeout');
@@ -60,10 +69,14 @@ test('classifies runtime timeout separately from provider transient timeout', ()
 test('classifies partial PDF retrieval boundaries as external provider failures', () => {
   const forbidden = createFailureSignature({
     message: 'PDF download failed with HTTP 403 forbidden.',
+    code: 'external-transient',
+    httpStatus: 403,
     operation: 'pdf-download',
   });
   const tooLarge = createFailureSignature({
     message: 'PDF content-length exceeds max download bytes.',
+    code: 'external-transient',
+    httpStatus: 413,
     operation: 'pdf-download',
   });
   const registry = mergeFailureSignaturesIntoRegistry(createFailureSignatureRegistry(), {
@@ -94,10 +107,10 @@ test('merges tracked failure signatures into a run-level registry', () => {
     refs: ['stderr:1'],
     failureSignatures: [
       { kind: 'schema-drift', message: 'Missing required field artifacts[123].id', schemaPath: 'displayIntent.artifacts' },
-      { message: 'AgentServer generation request timed out after 30000ms.' },
-      { message: 'Repair no-op: repeated same failure with no change.' },
-      { message: 'HTTP Error 429: rate limited for request 12345' },
-      { message: 'A semantic verifier is uncertain.' },
+      { code: 'timeout', message: 'AgentServer generation request timed out after 30000ms.' },
+      { code: 'repair-no-op', message: 'Repair no-op: repeated same failure with no change.' },
+      { code: 'rate-limit', httpStatus: 429, message: 'HTTP Error 429: rate limited for request 12345' },
+      { code: 'validation-failure', message: 'A semantic verifier is uncertain.' },
     ],
   });
   const second = mergeFailureSignaturesIntoRegistry(first, {
@@ -109,10 +122,10 @@ test('merges tracked failure signatures into a run-level registry', () => {
     refs: ['stderr:2'],
     failureSignatures: [
       { kind: 'schema-drift', message: 'Missing required field artifacts[987].id', schemaPath: 'displayIntent.artifacts' },
-      { message: 'AgentServer generation request timed out after 45000ms.' },
-      { message: 'Repair no-op: repeated same failure with no change.' },
-      { message: 'HTTP Error 429: rate limited for request 67890' },
-      { message: 'A semantic verifier is uncertain.' },
+      { code: 'timeout', message: 'AgentServer generation request timed out after 45000ms.' },
+      { code: 'repair-no-op', message: 'Repair no-op: repeated same failure with no change.' },
+      { code: 'rate-limit', httpStatus: 429, message: 'HTTP Error 429: rate limited for request 67890' },
+      { code: 'validation-failure', message: 'A semantic verifier is uncertain.' },
     ],
   });
   const idempotent = mergeFailureSignaturesIntoRegistry(second, {
@@ -123,7 +136,7 @@ test('merges tracked failure signatures into a run-level registry', () => {
     createdAt: '2026-05-12T00:01:00.000Z',
     refs: ['stderr:2'],
     failureSignatures: second.entries.flatMap((entry) => entry.kind === 'external-transient'
-      ? [{ message: 'HTTP Error 429: rate limited for request 67890' }]
+      ? [{ code: 'rate-limit', httpStatus: 429, message: 'HTTP Error 429: rate limited for request 67890' }]
       : []),
   });
 
@@ -173,7 +186,7 @@ test('builds a compact card from execution units and preserved refs', () => {
       failureReason: 'Service unavailable HTTP 503',
       recoverActions: ['Retry after provider backoff.'],
     }],
-    failureSignatures: [{ message: 'Service unavailable HTTP 503', providerId: 'pubmed' }],
+    failureSignatures: [{ code: 'service-unavailable', httpStatus: 503, message: 'Service unavailable HTTP 503', providerId: 'pubmed' }],
     verificationRefs: ['verification:v1'],
   });
 

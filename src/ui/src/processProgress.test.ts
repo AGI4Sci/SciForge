@@ -417,9 +417,7 @@ test('recovers latest progress model from compact session history summary after 
     }],
   });
 
-  assert.equal(model?.title, '正在执行');
-  assert.equal(model?.phase, PROCESS_PROGRESS_PHASE.EXECUTE);
-  assert.equal(model?.status, PROCESS_PROGRESS_STATUS.CANCELLED);
+  assert.equal(model, undefined);
   assert.doesNotMatch(formatProgressHeadline(model) ?? '', /PROMPT_TEXT_SHOULD_NOT_DECIDE/);
   assert.doesNotMatch(formatProgressHeadline(model) ?? '', /SCENARIO_TEXT_SHOULD_NOT_DECIDE/);
 });

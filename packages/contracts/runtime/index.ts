@@ -105,6 +105,14 @@ export type {
   BackendHandoffDriftStatus,
 } from './backend-handoff-drift';
 export {
+  TURN_EXECUTION_CONSTRAINTS_SCHEMA_VERSION,
+  TURN_EXECUTION_CONSTRAINTS_TOOL_ID,
+  normalizeTurnExecutionConstraints,
+} from './turn-constraints';
+export type {
+  TurnExecutionConstraints,
+} from './turn-constraints';
+export {
   BACKEND_COMPARISON_CONTRACT_ID,
   BACKEND_COMPARISON_SCHEMA_VERSION,
   backendComparisonHasBackendNeutralFix,
@@ -156,7 +164,6 @@ export {
   buildReleaseGateAudit,
   releaseGateHasSyncActionSignal,
   normalizeReleaseGatePolicy,
-  releaseGateAllowsPush,
   releaseGateAllowsSync,
   releaseGateHasRequiredVerifyCommand,
 } from './release-gate';
@@ -269,6 +276,15 @@ export type {
   ArtifactReferenceScope,
 } from './artifact-reference-policy';
 export {
+  TOOL_PAYLOAD_ARRAY_FIELDS,
+  TOOL_PAYLOAD_SHAPE_CONTRACT_ID,
+  toolPayloadShapeContract,
+  toolPayloadShapeContractSummary,
+} from './tool-payload-shape';
+export type {
+  ToolPayloadShapeContract,
+} from './tool-payload-shape';
+export {
   CURRENT_REFERENCE_DIGEST_RECOVERY_CLAIM_TYPE,
   CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_DETAIL,
   CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_MESSAGE,
@@ -281,15 +297,25 @@ export {
   CURRENT_REFERENCE_DIGEST_RECOVERY_TOOL_ID,
   CURRENT_REFERENCE_GATE_TOOL_ID,
   DIRECT_CONTEXT_FAST_PATH_POLICY,
+  CURRENT_REFERENCE_EVIDENCE_POLICY_DEFAULT_ACTION,
+  EXECUTION_LOG_REF_AUDIT_NOTE,
+  EXECUTION_LOG_REF_EXPANSION_POLICY,
+  BIBLIOGRAPHIC_ARTIFACT_TYPES,
+  BIBLIOGRAPHIC_CAPABILITY_IDS,
+  BIBLIOGRAPHIC_COMPONENT_IDS,
+  BIBLIOGRAPHIC_RECORD_CONTRACT_ID,
+  BIBLIOGRAPHIC_VERIFICATION_POLICY_CONTRACT_ID,
   agentServerArtifactSelectionPromptPolicyLines,
   agentServerBibliographicVerificationPromptPolicyLines,
   agentServerCurrentReferencePromptPolicyLines,
+  agentServerShouldIncludeBibliographicVerificationPromptPolicy,
   agentServerToolPayloadProtocolContractLines,
   artifactDataForUnparsedPathText,
   artifactDataReadRequestsForPolicy,
   buildCurrentReferenceDigestRecoveryMarkdown,
   buildCurrentReferenceDigestRecoveryPayload,
   buildDirectContextFastPathItems,
+  bibliographicVerificationPolicyScopeEnabled,
   currentReferenceDigestFailureCanRecover,
   currentReferenceDigestRecoveryCandidates,
   currentReferenceDigestRecoveryMarkdownSections,
@@ -299,6 +325,7 @@ export {
   materializedMarkdownMetadataForArtifact,
   materializedMarkdownTextForArtifact,
   normalizeArtifactDataWithPolicy,
+  valueDeclaresBibliographicVerificationPolicy,
 } from './artifact-policy';
 export type {
   ArtifactPolicyReadKind,
@@ -308,6 +335,7 @@ export type {
   CurrentReferenceDigestRecoveryCandidate,
   CurrentReferenceDigestRecoveryPayloadRequest,
   CurrentReferenceDigestRecoverySource,
+  BibliographicVerificationPromptPolicyGateInput,
   DirectContextFastPathInputs,
   DirectContextFastPathItem,
 } from './artifact-policy';
@@ -358,8 +386,11 @@ export type {
   SciForgeReferenceKind,
 } from './references';
 export {
+  collectRuntimeRefsFromValue,
+  looksLikeRuntimeReference,
   objectActions,
   objectReferenceKinds,
+  runtimePayloadKeyLooksLikeBodyCarrier,
 } from './references';
 export {
   CONTRACT_VALIDATION_FAILURE_CONTRACT_ID,
@@ -903,6 +934,7 @@ export {
   CONVERSATION_POLICY_AGENTSERVER_GENERATION_ADAPTER,
   CONVERSATION_POLICY_REQUEST_VERSION,
   CONVERSATION_POLICY_RESPONSE_VERSION,
+  CONVERSATION_POLICY_TOOL_ID,
   CONVERSATION_POLICY_SELECTED_COMPONENT_ADAPTER,
   CONVERSATION_POLICY_SELECTED_COMPONENT_KIND,
   CONVERSATION_POLICY_SELECTED_SENSE_ADAPTER,

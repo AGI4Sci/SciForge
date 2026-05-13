@@ -143,6 +143,7 @@ test('runtime ui manifest policy composes package-owned view semantics', () => {
     {
       skillDomain: 'knowledge',
       prompt: 'BRAF V600E target prioritization，只展示 data table、evidence matrix 和 execution unit，不需要网络图。',
+      selectedComponentIds: ['record-table', 'evidence-matrix'],
     },
   );
 
@@ -155,7 +156,7 @@ test('runtime ui manifest policy composes package-owned view semantics', () => {
 
 test('runtime ui manifest policy infers package view encoding and layout', () => {
   const manifest = composeRuntimeUiManifestSlots(
-    [],
+    [{ componentId: 'point-set-viewer', encoding: { colorBy: 'cellCycle', splitBy: 'batch' }, layout: { mode: 'side-by-side', columns: 2 } }],
     [{ id: 'omics-differential-expression', type: 'omics-differential-expression' }],
     {
       skillDomain: 'omics',
@@ -177,10 +178,25 @@ test('interactive view policy owns prompt artifact intent and component binding'
     selectedComponentIds: ['graph-viewer', 'structure-viewer', 'evidence-matrix'],
   });
 
-  assert.deepEqual(new Set(artifactTypes), new Set(['paper-list', 'evidence-matrix', 'structure-summary', 'knowledge-graph']));
+  assert.deepEqual(new Set(artifactTypes), new Set(['evidence-matrix', 'structure-summary', 'knowledge-graph']));
   assert.deepEqual(
     selectedViewComponentsForIntent('展示 evidence matrix 和 network graph', ['evidence-matrix', 'graph-viewer']),
     ['evidence-matrix', 'graph-viewer'],
+  );
+  assert.deepEqual(
+    expectedArtifactTypesForIntent({
+      scenarioId: 'literature-evidence-review',
+      prompt: '不要重跑、不要执行、不要调用 AgentServer。只基于当前会话 refs/digest 列出接受标准和证据缺口。',
+      selectedComponentIds: ['evidence-matrix'],
+    }),
+    ['evidence-matrix'],
+  );
+  assert.deepEqual(
+    selectedViewComponentsForIntent(
+      '不要重跑、不要执行、不要调用 AgentServer。只基于当前会话 refs/digest 列出接受标准和证据缺口。',
+      ['evidence-matrix'],
+    ),
+    ['evidence-matrix'],
   );
 });
 
@@ -451,7 +467,7 @@ test('direct answer result policy owns report artifact and view selection semant
   const plain = directAnswerPlainTextResultPolicy('Final markdown report', {
     skillDomain: 'literature',
     prompt: '请总结成报告',
-    expectedArtifactTypes: [],
+    expectedArtifactTypes: ['research-report'],
   });
   assert.equal(plain.artifacts[0].type, 'research-report');
   assert.equal(plain.uiManifest[0].componentId, 'report-viewer');
@@ -473,7 +489,7 @@ test('direct answer result policy owns report artifact and view selection semant
   }, {
     skillDomain: 'literature',
     prompt: 'summary please',
-    expectedArtifactTypes: [],
+    expectedArtifactTypes: ['research-report'],
   }, 'agentserver-structured-answer');
   assert.equal(ensured.artifacts.length, 1);
   assert.equal(ensured.artifacts[0].type, 'research-report');
@@ -489,7 +505,7 @@ test('direct answer result policy owns report artifact and view selection semant
   ].join('\n'), {
     skillDomain: 'literature',
     prompt: '写一份 markdown 报告',
-    expectedArtifactTypes: [],
+    expectedArtifactTypes: ['research-report'],
   });
   const refBackedArtifact = refBacked.artifacts[0];
   const refBackedMetadata = refBackedArtifact.metadata as Record<string, unknown>;
@@ -537,7 +553,7 @@ test('direct answer result policy owns loose artifact component binding and norm
 });
 
 test('direct answer result policy owns existing artifact follow-up semantics', () => {
-  assert.equal(existingArtifactFollowupPromptPolicy('给我刚才报告的 markdown 格式'), true);
+  assert.equal(existingArtifactFollowupPromptPolicy('给我刚才报告的 markdown 格式'), false);
   assert.equal(existingArtifactFollowupPromptPolicy('重新检索最新论文'), false);
 
   const artifacts = [

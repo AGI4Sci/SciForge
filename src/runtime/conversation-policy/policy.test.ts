@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { GatewayRequest } from '../runtime-types';
+import type { GatewayRequest, WorkspaceRuntimeEvent } from '../runtime-types';
 import { buildAgentServerGenerationPrompt, summarizeUiStateForAgentServer } from '../gateway/agentserver-prompts';
 import { buildContextEnvelope } from '../gateway/context-envelope';
-import { requestWithPolicyResponse } from './apply';
+import { applyConversationPolicy, requestWithPolicyResponse } from './apply';
 import { CONVERSATION_POLICY_RESPONSE_VERSION, normalizeConversationPolicyResponse, type ConversationPolicyResponse } from '@sciforge-ui/runtime-contract/conversation-policy';
+import { TURN_EXECUTION_CONSTRAINTS_SCHEMA_VERSION } from '@sciforge-ui/runtime-contract/turn-constraints';
 
 test('normalizes T098 strategy fields and request enrichment exposes stable uiState paths', () => {
   const response = normalizeConversationPolicyResponse({
@@ -77,6 +78,116 @@ test('missing T098 strategy fields fail closed without declaring background comp
   assert.equal((request.uiState?.backgroundPlan as Record<string, unknown>).enabled, false);
 });
 
+test('applied Python conversation policy publishes structured turn constraints', () => {
+  const turnExecutionConstraints = directContextTurnExecutionConstraints();
+  const response = normalizeConversationPolicyResponse({
+    schemaVersion: CONVERSATION_POLICY_RESPONSE_VERSION,
+    executionModePlan: { executionMode: 'direct-context-answer' },
+    turnExecutionConstraints,
+    latencyPolicy: { blockOnContextCompaction: false },
+    responsePlan: { initialResponseMode: 'direct-context-answer' },
+    backgroundPlan: {},
+    cachePolicy: {},
+  });
+
+  assert.ok(response);
+  const request = requestWithPolicyResponse(baseRequest(), response);
+  const conversationPolicy = request.uiState?.conversationPolicy as ConversationPolicyResponse | undefined;
+  assert.deepEqual(conversationPolicy?.turnExecutionConstraints, turnExecutionConstraints);
+  assert.deepEqual(request.uiState?.turnExecutionConstraints, turnExecutionConstraints);
+});
+
+test('failed Python conversation policy preserves turn execution constraints fail-closed', async () => {
+  const turnExecutionConstraints = directContextTurnExecutionConstraints();
+  const events: WorkspaceRuntimeEvent[] = [];
+  const result = await applyConversationPolicy({
+    ...baseRequest(),
+    uiState: {
+      ...baseRequest().uiState,
+      turnExecutionConstraints,
+    },
+  }, {
+    onEvent: (event) => events.push(event),
+  }, {
+    config: {
+      mode: 'active',
+      command: process.execPath,
+      args: ['-e', 'console.error("policy boom"); process.exit(42);'],
+      timeoutMs: 500,
+    },
+  });
+
+  const conversationPolicy = result.request.uiState?.conversationPolicy as Record<string, unknown> | undefined;
+  assert.equal(result.status, 'failed');
+  assert.equal(conversationPolicy?.applicationStatus, 'failed');
+  assert.deepEqual(conversationPolicy?.turnExecutionConstraints, turnExecutionConstraints);
+  assert.deepEqual(result.request.uiState?.turnExecutionConstraints, turnExecutionConstraints);
+  assert.equal(events[0]?.type, 'conversation-policy');
+  assert.equal(events[0]?.status, 'failed');
+});
+
+test('timed out Python conversation policy preserves turn execution constraints fail-closed', async () => {
+  const turnExecutionConstraints = directContextTurnExecutionConstraints();
+  const result = await applyConversationPolicy({
+    ...baseRequest(),
+    uiState: {
+      ...baseRequest().uiState,
+      turnExecutionConstraints,
+    },
+  }, {}, {
+    config: {
+      mode: 'active',
+      command: process.execPath,
+      args: ['-e', 'setTimeout(() => {}, 1000);'],
+      timeoutMs: 10,
+    },
+  });
+
+  const conversationPolicy = result.request.uiState?.conversationPolicy as Record<string, unknown> | undefined;
+  assert.equal(result.status, 'failed');
+  assert.match(result.error ?? '', /timed out/);
+  assert.equal(conversationPolicy?.applicationStatus, 'failed');
+  assert.deepEqual(conversationPolicy?.turnExecutionConstraints, turnExecutionConstraints);
+  assert.deepEqual(result.request.uiState?.turnExecutionConstraints, turnExecutionConstraints);
+});
+
+test('conversation policy keeps recent execution refs out of current-turn references', async () => {
+  const result = await applyConversationPolicy({
+    ...baseRequest(),
+    references: [{ kind: 'file', ref: 'file:current-input.md', title: 'Current input' }],
+    uiState: {
+      ...baseRequest().uiState,
+      currentReferences: [{ kind: 'artifact', ref: 'artifact:current-report', title: 'Current report' }],
+      recentExecutionRefs: [{ id: 'execution-unit:old-run', ref: 'execution-unit:old-run', status: 'done' }],
+    },
+  }, {}, {
+    config: {
+      mode: 'active',
+      command: process.execPath,
+      args: ['-e', `
+        const fs = require('node:fs');
+        const request = JSON.parse(fs.readFileSync(0, 'utf8'));
+        if (JSON.stringify(request.turn.references).includes('execution-unit:old-run')) process.exit(7);
+        process.stdout.write(JSON.stringify({
+          schemaVersion: 'sciforge.conversation-policy.response.v1',
+          currentReferences: request.turn.references,
+          latencyPolicy: {},
+          responsePlan: {},
+          backgroundPlan: {},
+          cachePolicy: {}
+        }));
+      `],
+      timeoutMs: 500,
+    },
+  });
+
+  const currentRefs = (result.request.uiState?.currentReferences as Array<Record<string, unknown>> | undefined)
+    ?.map((reference) => String(reference.ref || '')) ?? [];
+  assert.equal(result.status, 'applied');
+  assert.deepEqual(currentRefs, ['file:current-input.md', 'artifact:current-report']);
+  assert.equal(currentRefs.includes('execution-unit:old-run'), false);
+});
+
 test('context envelope and AgentServer prompt carry only clipped policy summaries', () => {
   const longRaw = 'RAW_POLICY_SHOULD_NOT_BE_COPIED '.repeat(40);
   const response = normalizeConversationPolicyResponse({
@@ -134,6 +245,11 @@ test('context envelope and AgentServer prompt carry only clipped policy summarie
     priorAttempts: [],
   });
   assert.match(prompt, /conversationPolicySummary/);
+  assert.match(prompt, /"arrayFields"/);
+  assert.match(prompt, /"uiManifestShape"/);
+  assert.match(prompt, /forbiddenShape/);
+  assert.match(prompt, /Plain paper titles/);
+  assert.match(prompt, /asks not to retrieve/);
   assert.doesNotMatch(prompt, /RAW_POLICY_SHOULD_NOT_BE_COPIED/);
 });
 
@@ -188,6 +304,34 @@ function baseRequest(): GatewayRequest {
     uiState: {
       sessionId: 'session-1',
       recentConversation: ['user: continue'],
+    },
+  };
+}
+
+function directContextTurnExecutionConstraints() {
+  return {
+    schemaVersion: TURN_EXECUTION_CONSTRAINTS_SCHEMA_VERSION,
+    policyId: 'sciforge.current-turn-execution-constraints.v1',
+    source: 'runtime-contract.turn-constraints',
+    contextOnly: true,
+    agentServerForbidden: true,
+    workspaceExecutionForbidden: true,
+    externalIoForbidden: true,
+    codeExecutionForbidden: true,
+    preferredCapabilityIds: ['runtime.direct-context-answer'],
+    executionModeHint: 'direct-context-answer',
+    initialResponseModeHint: 'direct-context-answer',
+    reasons: [
+      'current-context-only directive',
+      'workspace execution forbidden by current turn',
+      'AgentServer generation forbidden by current turn',
+    ],
+    evidence: {
+      hasPriorContext: true,
+      referenceCount: 1,
+      artifactCount: 0,
+      executionRefCount: 0,
+      runCount: 0,
     },
   };
 }

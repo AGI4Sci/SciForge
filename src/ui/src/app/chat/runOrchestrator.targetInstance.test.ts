@@ -216,7 +216,7 @@ describe('runPromptOrchestrator target instance guard', () => {
     assert.equal(requestBodies.length, 1);
     assert.equal(requestBodies[0].prompt, prompt);
     assert.equal((requestBodies[0].uiState as { rawUserPrompt?: string }).rawUserPrompt, prompt);
-    assert.equal((requestBodies[0].uiState as { agentDispatchPolicy?: string }).agentDispatchPolicy, 'agentserver-decides');
+    assert.equal((requestBodies[0].uiState as { agentDispatchPolicy?: string }).agentDispatchPolicy, 'runtime-policy-decides');
     assert.equal((requestBodies[0].artifacts as Array<{ id?: string }>)[0]?.id, 'research-report');
     assert.equal(result.finalResponse.message.content, 'Backend rendered report follow-up.');
     assert.equal(result.finalResponse.executionUnits[0]?.tool, 'capability.report.followup');
@@ -266,7 +266,7 @@ describe('runPromptOrchestrator target instance guard', () => {
     assert.equal(requestBodies.length, 1);
     assert.equal(requestBodies[0].prompt, prompt);
     assert.equal((requestBodies[0].uiState as { rawUserPrompt?: string }).rawUserPrompt, prompt);
-    assert.equal((requestBodies[0].uiState as { agentDispatchPolicy?: string }).agentDispatchPolicy, 'agentserver-decides');
+    assert.equal((requestBodies[0].uiState as { agentDispatchPolicy?: string }).agentDispatchPolicy, 'runtime-policy-decides');
     assert.equal((requestBodies[0].artifacts as Array<{ id?: string; type?: string }>)[0]?.id, 'volcano-plot');
     assert.equal((requestBodies[0].artifacts as Array<{ id?: string; type?: string }>)[0]?.type, 'figure');
     assert.equal(result.finalResponse.message.content, 'Backend inspected artifact follow-up.');
@@ -317,7 +317,7 @@ describe('runPromptOrchestrator target instance guard', () => {
     assert.equal(requestBodies.length, 1);
     assert.equal(requestBodies[0].prompt, prompt);
     assert.equal((requestBodies[0].uiState as { rawUserPrompt?: string }).rawUserPrompt, prompt);
-    assert.equal((requestBodies[0].uiState as { agentDispatchPolicy?: string }).agentDispatchPolicy, 'agentserver-decides');
+    assert.equal((requestBodies[0].uiState as { agentDispatchPolicy?: string }).agentDispatchPolicy, 'runtime-policy-decides');
     assert.equal(failureRecoveryPolicy.mode, 'preserve-context');
     assert.match(failureRecoveryPolicy.priorFailureReason ?? '', /schema validation failed/);
     assert.deepEqual(failureRecoveryPolicy.recoverActions, ['Regenerate the report artifact with schemaVersion=1.']);

@@ -2,8 +2,17 @@ import { createHash } from 'node:crypto';
 
 import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceTaskRunResult } from '../runtime-types.js';
 
-const TRANSIENT_EXTERNAL_FAILURE_PATTERN = /\b(?:http(?:\s+error)?\s*(?:403|408|413|425|429|500|502|503|504)|forbidden|too many requests|rate.?limit(?:ed)?|quota|throttl|temporar(?:y|ily)|timeout|timed out|econnreset|etimedout|eai_again|enotfound|network is unreachable|service unavailable|too large|content-length|exceeds?(?:ed)?\s+(?:max|limit|budget)|max(?:imum)?\s+(?:download|file)?\s*bytes|payload too large|request entity too large)\b/i;
-const literatureDomainId = ['lit', 'erature'].join('');
+const TRANSIENT_EXTERNAL_FAILURE_CODES = new Set([
+  'transient-unavailable',
+  'external-transient',
+  'external-dependency-transient',
+  'rate-limited',
+  'quota-exceeded',
+  'network-timeout',
+  'service-unavailable',
+  'temporary-unavailable',
+]);
+const transientUnavailableStatus = 'transient-unavailable';
 const reportViewerComponentId = ['report', 'viewer'].join('-');
 const executionUnitTableComponentId = ['execution', 'unit', 'table'].join('-');
 const workspaceRuntimeGatewayToolId = ['sciforge', 'workspace-runtime-gateway'].join('.');
@@ -43,7 +52,8 @@ function payloadHasReadableArtifact(payload: ToolPayload) {
 }
 
 export function isTransientExternalFailure(reason: string | undefined) {
-  return Boolean(reason && TRANSIENT_EXTERNAL_FAILURE_PATTERN.test(reason));
+  const normalized = normalizeFailureCode(reason);
+  return Boolean(normalized && TRANSIENT_EXTERNAL_FAILURE_CODES.has(normalized));
 }
 
 export function externalFailureRecoverActions(reason: string) {
@@ -53,17 +63,6 @@ export function externalFailureRecoverActions(reason: string) {
     'Use cached/mirrored evidence if available, and label freshness/coverage explicitly.',
     'For partial multi-fetch runs, keep already downloaded full text and metadata refs; continue the partial report from those refs before repeating failed downloads.',
   ];
-}
-
-function compactWhitespace(value: string) {
-  return value.replace(/\s+/g, ' ').trim();
-}
-
-function transientFailureLine(text: string) {
-  return text
-    .split(/\r?\n/)
-    .map((line) => compactWhitespace(line))
-    .find((line) => isTransientExternalFailure(line));
 }
 
 function stableId(value: string) {
@@ -125,17 +124,17 @@ function uniqueObject(value: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined && entry !== ''));
 }
 
-export function transientExternalFailureReasonFromRun(run: Pick<WorkspaceTaskRunResult, 'stderr' | 'stdout'>) {
-  const combined = [run.stderr, run.stdout].filter(Boolean).join('\n');
-  if (!isTransientExternalFailure(combined)) return undefined;
-  const line = transientFailureLine(combined);
-  if (line) return line;
-  return compactWhitespace(combined).slice(0, 320) || 'Transient external dependency failure.';
+export function transientExternalFailureReasonFromRun(run: Pick<WorkspaceTaskRunResult, 'stderr' | 'stdout' | 'runtimeFingerprint'>) {
+  const structured = structuredTransientExternalFailure(run.runtimeFingerprint)
+    ?? structuredTransientExternalFailureFromJsonLines(run.stderr)
+    ?? structuredTransientExternalFailureFromJsonLines(run.stdout);
+  return structured?.reason;
 }
 
 export function firstTransientExternalFailureReason(payload: ToolPayload) {
   for (const unit of payload.executionUnits) {
     if (!isRecord(unit)) continue;
+    if (unitHasStructuredTransientExternalFailure(unit)) return failureReason(unit) ?? transientUnavailableStatus;
     const reason = failureReason(unit);
     if (isTransientExternalFailure(reason)) return reason;
   }
@@ -146,8 +145,7 @@ export function payloadHasOnlyTransientExternalDependencyFailures(payload: ToolP
   const problematicUnits = payload.executionUnits.filter((unit) => isRecord(unit)
     && /failed|error|repair-needed|needs-human/i.test(String(unit.status || ''))) as Array<Record<string, unknown>>;
   if (!problematicUnits.length) return false;
-  return problematicUnits.every((unit) => unit.externalDependencyStatus === 'transient-unavailable'
-    && isTransientExternalFailure(failureReason(unit)));
+  return problematicUnits.every((unit) => unit.externalDependencyStatus === transientUnavailableStatus);
 }
 
 export function transientExternalDependencyPayload(input: {
@@ -159,7 +157,7 @@ export function transientExternalDependencyPayload(input: {
   const id = stableId(`${input.skill.id}:${input.request.skillDomain}:${input.run.outputRef}:${input.reason}`);
   const message = '外部数据源暂时不可用，运行证据已保留；请稍后重试或提供缓存证据后继续。';
   const recoverActions = externalFailureRecoverActions(input.reason);
-  const retryAfterMs = retryAfterMsFromText([input.reason, input.run.stdout, input.run.stderr].filter(Boolean).join('\n'));
+  const retryAfterMs = retryAfterMsFromText(input.reason);
   const providerAttemptRefs = uniqueStrings([input.run.stdoutRef, input.run.stderrRef]);
   const preservedRefs = uniqueStrings([input.run.stdoutRef, input.run.stderrRef, input.run.outputRef]);
   const diagnostic = [
@@ -275,7 +273,7 @@ export function transientExternalDependencyPayload(input: {
 }
 
 function defaultExternalWorkKind(skillDomain: string | undefined) {
-  return skillDomain === literatureDomainId ? 'retrieval' : 'fetch';
+  return skillDomain ? 'external-io' : 'fetch';
 }
 
 export function downgradeTransientExternalFailures(payload: ToolPayload): ToolPayload {
@@ -286,8 +284,8 @@ export function downgradeTransientExternalFailures(payload: ToolPayload): ToolPa
   const providerAttemptRefs: string[] = [];
   const executionUnits = payload.executionUnits.map((unit) => {
     if (!isRecord(unit) || !isFailureStatus(unit.status)) return unit;
-    const reason = failureReason(unit);
-    if (!isTransientExternalFailure(reason)) return unit;
+    if (!unitHasStructuredTransientExternalFailure(unit)) return unit;
+    const reason = failureReason(unit) ?? transientUnavailableStatus;
     const transientReason = reason ?? 'transient external dependency failure';
     changed = true;
     const recoverActions = Array.from(new Set([
@@ -338,6 +336,63 @@ export function downgradeTransientExternalFailures(payload: ToolPayload): ToolPa
       'Transient external dependency failure was preserved as needs-human instead of marking the whole run failed; generated artifacts remain inspectable with explicit recovery actions.',
     ].filter(Boolean).join('\n'),
   };
+}
+
+function unitHasStructuredTransientExternalFailure(unit: Record<string, unknown>) {
+  return unit.externalDependencyStatus === transientUnavailableStatus
+    || isTransientExternalFailure(stringField(unit.failureKind))
+    || isTransientExternalFailure(stringField(unit.failureCode))
+    || isTransientExternalFailure(stringField(unit.failureCategory));
+}
+
+function structuredTransientExternalFailureFromJsonLines(text: string | undefined) {
+  if (!text) return undefined;
+  for (const line of text.split(/\r?\n/)) {
+    const parsed = parseJsonRecord(line);
+    const structured = structuredTransientExternalFailure(parsed);
+    if (structured) return structured;
+  }
+  return undefined;
+}
+
+function structuredTransientExternalFailure(value: unknown): { reason: string } | undefined {
+  if (!isRecord(value)) return undefined;
+  const direct = structuredTransientExternalFailureRecord(value);
+  if (direct) return direct;
+  for (const key of ['externalFailure', 'externalDependency', 'failure', 'diagnostic']) {
+    const nested = structuredTransientExternalFailure(value[key]);
+    if (nested) return nested;
+  }
+  return undefined;
+}
+
+function structuredTransientExternalFailureRecord(record: Record<string, unknown>): { reason: string } | undefined {
+  const status = stringField(record.externalDependencyStatus) ?? stringField(record.status);
+  const code = stringField(record.failureKind) ?? stringField(record.failureCode) ?? stringField(record.code) ?? stringField(record.kind);
+  if (status !== transientUnavailableStatus && !isTransientExternalFailure(code)) return undefined;
+  return {
+    reason: stringField(record.failureReason)
+      ?? stringField(record.reason)
+      ?? stringField(record.message)
+      ?? code
+      ?? transientUnavailableStatus,
+  };
+}
+
+function parseJsonRecord(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return undefined;
+  try {
+    const parsed = JSON.parse(trimmed);
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeFailureCode(value: string | undefined) {
+  if (!value) return undefined;
+  return value.trim().toLowerCase().replace(/[\s_]+/g, '-');
 }
 
 function annotateTransientArtifact(

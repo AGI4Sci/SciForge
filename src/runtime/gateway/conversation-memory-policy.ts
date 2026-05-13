@@ -52,12 +52,11 @@ export function buildConversationLedger(messages: unknown[], runs: unknown[] | n
   const ledger: JsonMap[] = [];
   messages.forEach((message, index) => {
     const item = recordValue(message) ?? {};
-    const content = sanitizeText(textValue(item.content));
     ledger.push({
       kind: 'message',
       id: textValue(item.id) || `message-${index + 1}`,
       role: textValue(item.role) || 'unknown',
-      summary: clip(content, 220),
+      summary: digestSummary(item, 'session-message-body'),
       refs: refsFromItem(item),
     });
   });
@@ -132,7 +131,8 @@ function compactMessage(item: JsonMap): JsonMap {
   return {
     id: textValue(item.id),
     role: textValue(item.role) || 'unknown',
-    content: clip(sanitizeText(textValue(item.content)), 900),
+    contentOmitted: true,
+    contentDigest: digestRecord(item, 'session-message-body'),
     refs: refsFromItem(item),
   };
 }
@@ -148,13 +148,7 @@ function compactRun(item: JsonMap): JsonMap {
 
 function itemMentionsRefs(item: JsonMap, refs: string[]): boolean {
   if (!refs.length) return false;
-  const haystack = [
-    textValue(item.content),
-    textValue(item.summary),
-    textValue(item.message),
-    textValue(item.error),
-    ...refsFromItem(item),
-  ].join('\n').toLowerCase();
+  const haystack = refsFromItem(item).join('\n').toLowerCase();
   return refs.some((ref) => haystack.includes(ref.toLowerCase()));
 }
 
@@ -164,7 +158,41 @@ function refsFromItem(item: JsonMap): string[] {
     refs.push(...stringListValue(item[key]));
   }
   refs.push(...stringListValue(item.objectReferences));
+  for (const key of ['contentDigest', 'messageDigest', 'payloadDigest', 'responseDigest', 'promptDigest']) {
+    const digest = recordValue(item[key]);
+    if (digest) refs.push(...stringListValue(digest.refs));
+  }
   return dedupe(refs);
+}
+
+function digestRecord(item: JsonMap, fallbackOmitted: string): JsonMap {
+  const existing = firstRecord(
+    item.contentDigest,
+    item.messageDigest,
+    item.payloadDigest,
+    item.responseDigest,
+    item.promptDigest,
+  );
+  if (Object.keys(existing).length) return {
+    omitted: textValue(existing.omitted) || fallbackOmitted,
+    chars: typeof existing.chars === 'number' ? existing.chars : undefined,
+    hash: textValue(existing.hash),
+    refs: stringListValue(existing.refs),
+  };
+  const body = textValue(item.content) || textValue(item.text) || textValue(item.prompt);
+  return body
+    ? { omitted: fallbackOmitted, chars: body.length, hash: stableTextHash(body), refs: refsFromItem({ ...item, content: undefined, text: undefined, prompt: undefined }) }
+    : { omitted: fallbackOmitted, chars: 0, refs: refsFromItem({ ...item, content: undefined, text: undefined, prompt: undefined }) };
+}
+
+function digestSummary(item: JsonMap, fallbackOmitted: string) {
+  const digest = digestRecord(item, fallbackOmitted);
+  const hash = textValue(digest.hash) || 'none';
+  const chars = typeof digest.chars === 'number' ? digest.chars : 0;
+  const refs = stringListValue(digest.refs);
+  return refs.length
+    ? `${fallbackOmitted} omitted; hash=${hash}; chars=${chars}; refs=${refs.slice(0, 4).join(', ')}`
+    : `${fallbackOmitted} omitted; hash=${hash}; chars=${chars}`;
 }
 
 function sanitizeText(text: string): string {
@@ -175,6 +203,15 @@ function clip(text: string, limit: number): string {
   const compact = text.replace(/\s+/g, ' ').trim();
   if (compact.length <= limit) return compact;
   return `${compact.slice(0, Math.max(0, limit - 24)).trimEnd()} [truncated]`;
+}
+
+function stableTextHash(value: string) {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `fnv1a-${(hash >>> 0).toString(16).padStart(8, '0')}`;
 }
 
 function firstValue(record: JsonMap, ...keys: string[]): unknown {

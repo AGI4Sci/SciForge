@@ -34,7 +34,7 @@ test('context follow-up protocol enables direct context answer even when AgentSe
 
   assert.ok(payload);
   assert.equal(payload.executionUnits[0]?.tool, 'sciforge.direct-context-fast-path');
-  assert.equal(payload.artifacts[0]?.type, 'research-report');
+  assert.equal(payload.artifacts[0]?.type, 'runtime-context-summary');
   assert.match(payload.message, /research-report|report/i);
 });
 
@@ -82,6 +82,213 @@ test('context follow-up protocol does not direct-answer fresh work requests', ()
           capabilityPolicy: { preferredCapabilityIds: [] },
         },
       },
+    },
+  };
+
+  assert.equal(directContextFastPathPayload(request), undefined);
+});
+
+test('explicit no-execution context summary uses direct fast path from applied conversation policy', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: '不要重跑、不要执行、不要调用 AgentServer。只基于当前会话 refs/digest 列出 3 条接受标准。',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    expectedArtifactTypes: ['evidence-matrix'],
+    artifacts: [{
+      id: 'runtime-diagnostic',
+      type: 'runtime-diagnostic',
+      data: { markdown: 'Prior run failed after preserving refs.' },
+    }],
+    uiState: {
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        executionModePlan: {
+          executionMode: 'direct-context-answer',
+          signals: ['context-summary', 'no-execution-directive'],
+        },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+        latencyPolicy: { blockOnContextCompaction: false },
+      },
+      turnExecutionConstraints: {
+        schemaVersion: 'sciforge.turn-execution-constraints.v1',
+        policyId: 'sciforge.current-turn-execution-constraints.v1',
+        source: 'runtime-contract.turn-constraints',
+        contextOnly: true,
+        agentServerForbidden: true,
+        workspaceExecutionForbidden: true,
+        externalIoForbidden: true,
+        codeExecutionForbidden: true,
+        preferredCapabilityIds: ['runtime.direct-context-answer'],
+        executionModeHint: 'direct-context-answer',
+        initialResponseModeHint: 'direct-context-answer',
+        reasons: ['current-context-only directive'],
+        evidence: {
+          hasPriorContext: true,
+          referenceCount: 1,
+          artifactCount: 1,
+          executionRefCount: 1,
+          runCount: 0,
+        },
+      },
+      currentReferenceDigests: [{
+        sourceRef: 'workspace/output-toolpayload.json',
+        digestRef: '.sciforge/digests/output-toolpayload.md',
+        digestText: 'Digest: prior run preserved failed output refs but did not produce acceptance evidence.',
+      }],
+      recentExecutionRefs: [{
+        id: 'unit-failed',
+        status: 'repair-needed',
+        outputRef: '.sciforge/task-results/failed.json',
+        stderrRef: '.sciforge/logs/failed.stderr.log',
+      }],
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.equal(payload.executionUnits[0]?.tool, 'sciforge.direct-context-fast-path');
+  assert.equal(payload.executionUnits[0]?.status, 'done');
+  assert.match(payload.message, /Digest: prior run preserved failed output refs/);
+  assert.match(payload.message, /failed\.json|failed\.stderr\.log/);
+});
+
+test('applied direct context policy does not answer from historical execution refs alone', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'Use current refs only and do not dispatch AgentServer.',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [],
+    uiState: {
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        executionModePlan: {
+          executionMode: 'direct-context-answer',
+          signals: ['context-summary', 'no-execution-directive'],
+        },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+        latencyPolicy: { blockOnContextCompaction: false },
+      },
+      recentExecutionRefs: [{
+        id: 'unit-old-failure',
+        status: 'failed-with-reason',
+        outputRef: '.sciforge/old/task-results/failed.json',
+      }],
+    },
+  };
+
+  assert.equal(directContextFastPathPayload(request), undefined);
+});
+
+test('local execution diagnostics do not authorize direct fast path without applied policy', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: '不要重跑、不要执行、不要调用 AgentServer。只基于当前会话 refs/digest 列出 3 条接受标准。',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [{
+      id: 'runtime-diagnostic',
+      type: 'runtime-diagnostic',
+      data: { markdown: 'Prior run failed after preserving refs.' },
+    }],
+    uiState: {
+      executionModeDiagnostics: {
+        executionMode: 'direct-context-answer',
+        signals: ['context-summary', 'no-execution-directive'],
+      },
+      recentExecutionRefs: [{
+        id: 'unit-failed',
+        status: 'repair-needed',
+        outputRef: '.sciforge/task-results/failed.json',
+      }],
+    },
+  };
+
+  assert.equal(directContextFastPathPayload(request), undefined);
+});
+
+test('prompt-only no-execution text does not authorize direct fast path without structured execution decision', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: '不要重跑、不要执行、不要调用 AgentServer。只基于当前会话 refs/digest 列出 3 条接受标准。',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [{
+      id: 'runtime-diagnostic',
+      type: 'runtime-diagnostic',
+      data: { markdown: 'Prior run failed after preserving refs.' },
+    }],
+    uiState: {
+      recentExecutionRefs: [{
+        id: 'unit-failed',
+        status: 'repair-needed',
+        outputRef: '.sciforge/task-results/failed.json',
+      }],
+    },
+  };
+
+  assert.equal(directContextFastPathPayload(request), undefined);
+});
+
+test('structured turn constraints alone do not authorize direct context when policy times out', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: '不要重跑、不要执行、不要调用 AgentServer。只基于当前会话 refs/digest 列出 3 条接受标准。',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [{
+      id: 'runtime-diagnostic',
+      type: 'runtime-diagnostic',
+      metadata: { outputRef: '.sciforge/task-results/failed.json' },
+    }],
+    uiState: {
+      turnExecutionConstraints: {
+        schemaVersion: 'sciforge.turn-execution-constraints.v1',
+        policyId: 'sciforge.current-turn-execution-constraints.v1',
+        source: 'runtime-contract.turn-constraints',
+        contextOnly: true,
+        agentServerForbidden: true,
+        workspaceExecutionForbidden: true,
+        externalIoForbidden: true,
+        codeExecutionForbidden: true,
+        preferredCapabilityIds: ['runtime.direct-context-answer'],
+        executionModeHint: 'direct-context-answer',
+        initialResponseModeHint: 'direct-context-answer',
+        reasons: ['current-context-only directive'],
+        evidence: {
+          hasPriorContext: true,
+          referenceCount: 0,
+          artifactCount: 1,
+          executionRefCount: 1,
+          runCount: 0,
+        },
+      },
+      recentExecutionRefs: [{
+        id: 'unit-failed',
+        status: 'repair-needed',
+        outputRef: '.sciforge/task-results/failed.json',
+      }],
+    },
+  };
+
+  assert.equal(directContextFastPathPayload(request), undefined);
+});
+
+test('explicit no-read old context does not direct-answer fresh lookup requests', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: '不要读取旧日志，但请搜索最新来源并总结。',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [{
+      id: 'research-report',
+      type: 'research-report',
+      metadata: { reportRef: '.sciforge/task-results/report.md' },
+    }],
+    uiState: {
+      recentExecutionRefs: [{
+        id: 'unit-report',
+        tool: 'capability.report.generate',
+        outputRef: '.sciforge/task-results/report.json',
+      }],
     },
   };
 

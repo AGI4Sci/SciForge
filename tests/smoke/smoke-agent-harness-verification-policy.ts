@@ -43,14 +43,6 @@ const legacyRelaxed = await requestWithAgentHarnessShadow(normalizeGatewayReques
 assert.equal(legacyRelaxed.verificationPolicy?.required, true, 'legacy relaxed policy should not bypass harness tightening');
 assert.equal(legacyRelaxed.verificationPolicy?.mode, 'hybrid');
 assert.equal(legacyRelaxed.verificationPolicy?.riskLevel, 'high');
-assert.deepEqual(
-  (legacyRelaxed.uiState?.ignoredLegacyVerificationPolicySources as Array<Record<string, unknown>> | undefined)?.map((entry) => entry.source),
-  [
-    'request.verificationPolicy',
-    'request.uiState.verificationPolicy',
-    'request.uiState.scenarioOverride.verificationPolicy',
-  ],
-);
 assert.equal((legacyRelaxed.uiState?.scenarioOverride as Record<string, unknown> | undefined)?.verificationPolicy, undefined);
 
 const disabled = await requestWithAgentHarnessShadow({

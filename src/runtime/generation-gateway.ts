@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { agentServerGenerationSkill, loadSkillRegistry } from './skill-registry.js';
 import { appendTaskAttempt, readRecentTaskAttempts, readTaskAttempts } from './task-attempt-history.js';
 import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceRuntimeEvent, WorkspaceTaskRunResult } from './runtime-types.js';
-import { fileExists, runWorkspaceTask } from './workspace-task-runner.js';
+import { fileExists, runWorkspaceTask, sha1 } from './workspace-task-runner.js';
 import { maybeWriteSkillPromotionProposal } from './skill-promotion.js';
 import { emitWorkspaceRuntimeEvent, throwIfRuntimeAborted } from './workspace-runtime-events.js';
 import { composeRuntimeUiManifest } from './runtime-ui-manifest.js';
@@ -160,6 +160,8 @@ import {
   backendHandoffDriftEvent,
   classifyBackendHandoffDrift,
 } from '@sciforge-ui/runtime-contract/backend-handoff-drift';
+import { CONVERSATION_POLICY_TOOL_ID } from '@sciforge-ui/runtime-contract/conversation-policy';
+import { normalizeTurnExecutionConstraints, TURN_EXECUTION_CONSTRAINTS_TOOL_ID } from '@sciforge-ui/runtime-contract/turn-constraints';
 
 configureDirectAnswerArtifactContext(collectArtifactReferenceContext);
 configurePayloadValidationContext(attemptPlanRefs);
@@ -193,11 +195,31 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, 
       telemetry.markVerificationEnd();
       return finalizeGatewayPayload(telemetry.emitFinal(verified) ?? verified, request, runtimeReplayRecorder, telemetry.callbacks);
     }
+    const runtimeForbiddenPayload = runtimeExecutionForbiddenPayload(request);
+    if (runtimeForbiddenPayload) {
+      telemetry.markVerificationStart();
+      const verified = await recordValidationRepairTelemetryForPayload(
+        await applyRuntimeVerificationPolicy(runtimeForbiddenPayload, request),
+        request,
+      );
+      telemetry.markVerificationEnd();
+      return finalizeGatewayPayload(telemetry.emitFinal(verified) ?? verified, request, runtimeReplayRecorder, telemetry.callbacks);
+    }
     const visionSensePayload = await tryRunVisionSenseRuntime(request, telemetry.callbacks);
     if (visionSensePayload) {
       telemetry.markVerificationStart();
       const verified = await recordValidationRepairTelemetryForPayload(
         await applyRuntimeVerificationPolicy(visionSensePayload, request),
+        request,
+      );
+      telemetry.markVerificationEnd();
+      return finalizeGatewayPayload(telemetry.emitFinal(verified) ?? verified, request, runtimeReplayRecorder, telemetry.callbacks);
+    }
+    const forbiddenPayload = agentServerDispatchForbiddenPayload(request);
+    if (forbiddenPayload) {
+      telemetry.markVerificationStart();
+      const verified = await recordValidationRepairTelemetryForPayload(
+        await applyRuntimeVerificationPolicy(forbiddenPayload, request),
         request,
       );
       telemetry.markVerificationEnd();
@@ -226,6 +248,171 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, 
   } finally {
     await runtimeReplayRecorder.flush?.();
   }
+}
+
+function runtimeExecutionForbiddenPayload(request: GatewayRequest): ToolPayload | undefined {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const constraints = normalizeTurnExecutionConstraints(uiState.turnExecutionConstraints);
+  const policyFailure = conversationPolicyFailure(uiState);
+  const runtimeForbidden = Boolean(constraints && (
+    constraints.workspaceExecutionForbidden
+    || constraints.codeExecutionForbidden
+    || constraints.externalIoForbidden
+  ));
+  if (!policyFailure && !runtimeForbidden) return undefined;
+  const refs = requestContextRefs(request, uiState);
+  const reasons = [
+    ...(constraints?.reasons ?? []),
+    policyFailure ? `conversation policy failed: ${policyFailure.error}` : undefined,
+  ].filter((reason): reason is string => Boolean(reason));
+  return runtimeConstraintDiagnosticPayload(request, {
+    artifactId: 'runtime-execution-forbidden',
+    executionUnitId: 'EU-runtime-execution-forbidden',
+    toolId: policyFailure ? CONVERSATION_POLICY_TOOL_ID : TURN_EXECUTION_CONSTRAINTS_TOOL_ID,
+    title: policyFailure ? 'Runtime policy unavailable' : 'Runtime execution forbidden',
+    message: policyFailure
+      ? '当前回合的 conversation policy 未能成功应用；SciForge 已 fail-closed，没有启动新的 runtime、workspace 或 AgentServer 执行。请重试，或提供结构化引用摘要与明确的执行授权。'
+      : '当前回合的结构化 turn constraints 禁止新的 runtime 与 workspace 执行；SciForge 已 fail-closed，没有启动新的执行路径。请提供可用引用摘要，或明确允许执行后再继续。',
+    limitationText: policyFailure
+      ? 'Runtime execution was not started because the current-turn conversation policy failed to apply.'
+      : 'Runtime execution was not started because current-turn constraints forbid workspace/code/external execution.',
+    nextStep: policyFailure
+      ? 'Retry after policy recovery, or provide structured refs/digests with explicit execution authorization.'
+      : 'Continue with explicit refs/digests or grant execution permission.',
+    constraints,
+    policyFailure,
+    refs,
+    reasons,
+  });
+}
+
+function agentServerDispatchForbiddenPayload(request: GatewayRequest): ToolPayload | undefined {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const constraints = normalizeTurnExecutionConstraints(uiState.turnExecutionConstraints);
+  if (!constraints?.agentServerForbidden) return undefined;
+  const refs = requestContextRefs(request, uiState);
+  return runtimeConstraintDiagnosticPayload(request, {
+    artifactId: 'agentserver-dispatch-forbidden',
+    executionUnitId: 'EU-agentserver-dispatch-forbidden',
+    toolId: TURN_EXECUTION_CONSTRAINTS_TOOL_ID,
+    title: 'AgentServer dispatch forbidden',
+    message: '当前回合禁止 AgentServer 或新的 workspace 执行；SciForge 已按结构化 turn constraints fail-closed，没有启动 AgentServer。请提供可用 refs/digest，或明确允许执行后再继续。',
+    limitationText: 'AgentServer dispatch was not started because current-turn constraints forbid it.',
+    nextStep: 'Continue with explicit refs/digests or grant execution permission.',
+    constraints,
+    refs,
+    reasons: constraints.reasons,
+  });
+}
+
+function runtimeConstraintDiagnosticPayload(
+  request: GatewayRequest,
+  params: {
+    artifactId: string;
+    executionUnitId: string;
+    toolId: string;
+    title: string;
+    message: string;
+    limitationText: string;
+    nextStep: string;
+    constraints?: ReturnType<typeof normalizeTurnExecutionConstraints>;
+    policyFailure?: Record<string, unknown>;
+    refs: Array<Record<string, unknown>>;
+    reasons: string[];
+  },
+): ToolPayload {
+  return {
+    message: params.message,
+    confidence: 0.68,
+    claimType: 'runtime-diagnostic',
+    evidenceLevel: 'runtime',
+    reasoningTrace: [
+      params.policyFailure ? 'Conversation policy failed; runtime execution failed closed.' : 'Turn execution constraints forbade runtime dispatch.',
+      ...params.reasons.map((reason) => `constraint: ${reason}`),
+    ].join('\n'),
+    displayIntent: {
+      protocolStatus: 'protocol-success',
+      taskOutcome: 'needs-work',
+      status: 'needs-human',
+    },
+    claims: [{
+      id: params.artifactId,
+      type: 'limitation',
+      text: params.limitationText,
+      confidence: 0.86,
+      evidenceLevel: 'runtime',
+      supportingRefs: params.refs.flatMap((ref) => typeof ref.ref === 'string' ? [ref.ref] : []),
+      opposingRefs: [],
+    }],
+    uiManifest: [{
+      componentId: 'runtime-diagnostic',
+      artifactRef: params.artifactId,
+      title: params.title,
+      priority: 1,
+    }],
+    executionUnits: [{
+      id: params.executionUnitId,
+      tool: params.toolId,
+      status: 'needs-human',
+      params: JSON.stringify({
+        policyId: params.constraints?.policyId,
+        reasons: params.reasons,
+        policyFailure: params.policyFailure,
+      }),
+      hash: sha1(JSON.stringify({ constraints: params.constraints, policyFailure: params.policyFailure, reasons: params.reasons })).slice(0, 16),
+      recoverActions: [
+        'Provide current refs/digests that can satisfy the request without execution.',
+        'Or explicitly allow AgentServer/workspace execution for this turn.',
+      ],
+      nextStep: params.nextStep,
+    }],
+    artifacts: [{
+      id: params.artifactId,
+      type: 'runtime-diagnostic',
+      producerScenario: request.skillDomain,
+      schemaVersion: '1',
+      metadata: {
+        source: params.policyFailure ? 'conversation-policy-fail-closed' : 'turn-execution-constraints',
+        policyId: params.constraints?.policyId,
+        agentServerForbidden: params.constraints?.agentServerForbidden === true,
+      },
+      data: {
+        constraints: params.constraints,
+        policyFailure: params.policyFailure,
+        refs: params.refs,
+      },
+    }],
+    objectReferences: params.refs.flatMap((ref, index) => {
+      const stableRef = typeof ref.ref === 'string' ? ref.ref : undefined;
+      if (!stableRef) return [];
+      return [{
+        id: `obj-forbidden-context-${index + 1}`,
+        kind: typeof ref.kind === 'string' ? ref.kind : 'reference',
+        title: typeof ref.title === 'string' ? ref.title : stableRef,
+        ref: stableRef,
+        status: 'available',
+      }];
+    }),
+  };
+}
+
+function conversationPolicyFailure(uiState: Record<string, unknown>) {
+  const policy = isRecord(uiState.conversationPolicy) ? uiState.conversationPolicy : {};
+  if (policy.applicationStatus !== 'failed') return undefined;
+  return {
+    applicationStatus: 'failed',
+    policySource: typeof policy.policySource === 'string' ? policy.policySource : undefined,
+    error: typeof policy.error === 'string' ? policy.error : 'conversation policy failed',
+    stderrDigest: typeof policy.stderrDigest === 'string' ? policy.stderrDigest : undefined,
+  };
+}
+
+function requestContextRefs(request: GatewayRequest, uiState: Record<string, unknown>) {
+  return [
+    ...toRecordList(request.references),
+    ...toRecordList(uiState.currentReferences),
+    ...toRecordList(uiState.recentExecutionRefs),
+  ].slice(0, 12);
 }
 
 function finalizeGatewayPayload(
@@ -857,6 +1044,7 @@ async function requestAgentServerGeneration(params: {
       llmEndpoint: llmRuntime.llmEndpoint,
       startupContextEnvelope: contextEnvelope.startupContextEnvelope as Record<string, unknown> | undefined,
     });
+    const harnessRefMetadata = agentHarnessRefMetadata(harnessMetadata);
     emitWorkspaceRuntimeEvent(params.callbacks, {
       type: 'contextWindowState',
       source: 'workspace-runtime',
@@ -940,7 +1128,7 @@ async function requestAgentServerGeneration(params: {
             generateRunnableTaskForExternalWork: true,
             finalJsonFirst: true,
           },
-          ...harnessMetadata,
+          ...harnessRefMetadata,
         },
       },
       metadata: {
@@ -969,7 +1157,7 @@ async function requestAgentServerGeneration(params: {
           generateRunnableTaskForExternalWork: true,
           finalJsonFirst: true,
         },
-        ...harnessMetadata,
+        ...harnessRefMetadata,
       },
     };
     const normalizedHandoff = await normalizeBackendHandoff(runPayload, {
@@ -1283,6 +1471,14 @@ function withAgentServerDispatchMetadata<T>(
     ...metadata,
   };
   return next as T;
+}
+
+function agentHarnessRefMetadata(metadata: Record<string, unknown>) {
+  const {
+    agentHarnessHandoff: _agentHarnessHandoff,
+    ...refMetadata
+  } = metadata;
+  return refMetadata;
 }
 
 function emitBackendHandoffDrift(

@@ -22,7 +22,7 @@ export function agentHarnessContinuityDecision(request: GatewayRequest) {
   const trace = isRecord(agentHarness.trace) ? agentHarness.trace : undefined;
   const intentMode = stringField(contract?.intentMode) ?? stringField(summary?.intentMode);
   const intentUseContinuity = intentMode === 'continuation' || intentMode === 'repair' || intentMode === 'audit';
-  const useContinuity = intentUseContinuity || currentReferenceCount > 0 || recentRefCount > 0 || artifactCount > 0;
+  const useContinuity = intentUseContinuity;
   const reasons = [
     policyAllowsReuse ? 'reuse-policy-advisory' : undefined,
     intentUseContinuity ? 'intent-continuity' : undefined,

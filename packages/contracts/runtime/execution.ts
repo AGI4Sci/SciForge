@@ -17,6 +17,10 @@ export interface RuntimeExecutionUnit {
   params: string;
   status: ExecutionUnitStatus;
   hash: string;
+  runId?: string;
+  sourceRunId?: string;
+  producerRunId?: string;
+  agentServerRunId?: string;
   code?: string;
   language?: string;
   codeRef?: string;

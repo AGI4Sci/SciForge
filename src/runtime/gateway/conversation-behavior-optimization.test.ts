@@ -38,6 +38,7 @@ test('stops foreground escalation when partial evidence answers the speed-first 
 test('requires more evidence for report granularity without table-like support', () => {
   const decision = optimizeConversationBehavior({
     prompt: '生成 report',
+    intentSignals: ['report'],
     evidence: [{ status: 'success', evidenceRefs: ['trace:one'] }],
   });
 

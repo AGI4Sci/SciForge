@@ -139,6 +139,7 @@ test('completed runs with partial retrieval notes do not open failure audit by d
       params: '{}',
       status: 'partial' as never,
       hash: 'hash-partial',
+      runId: 'project-literature-evidence-review-run',
       failureReason: 'Some papers could not be fully retrieved',
       outputRef: '.sciforge/task-results/project-literature-evidence-review-run.json',
     }],
@@ -377,11 +378,11 @@ test('ResultsRenderer execution table separates verification states from complet
     ...emptySession(),
     runs: [completedRun('run-verification-states')],
     executionUnits: [
-      { id: 'EU-ordinary', tool: 'report.emit', params: '{}', status: 'done', hash: 'ordinary', outputRef: 'artifact:ordinary' },
-      { id: 'EU-unverified', tool: 'report.emit', params: '{}', status: 'done', hash: 'unverified', verificationVerdict: 'unverified', verificationRef: 'verification:unverified' },
-      { id: 'EU-verifying', tool: 'report.emit', params: '{}', status: 'running', hash: 'verifying', outputRef: 'artifact:partial' },
-      { id: 'EU-verification-failed', tool: 'verifier.run', params: '{}', status: 'done', hash: 'failed', verificationVerdict: 'fail', verificationRef: 'verification:failed' },
-      { id: 'EU-release-verified', tool: 'verifier.run', params: '{}', status: 'done', hash: 'passed', verificationVerdict: 'pass', verificationRef: 'verification:passed' },
+      { id: 'EU-ordinary', tool: 'report.emit', params: '{}', status: 'done', hash: 'ordinary', outputRef: 'run:run-verification-states#ordinary' },
+      { id: 'EU-unverified', tool: 'report.emit', params: '{}', status: 'done', hash: 'unverified', outputRef: 'run:run-verification-states#unverified', verificationVerdict: 'unverified', verificationRef: 'verification:unverified' },
+      { id: 'EU-verifying', tool: 'report.emit', params: '{}', status: 'running', hash: 'verifying', outputRef: 'run:run-verification-states#partial' },
+      { id: 'EU-verification-failed', tool: 'verifier.run', params: '{}', status: 'done', hash: 'failed', outputRef: 'run:run-verification-states#failed', verificationVerdict: 'fail', verificationRef: 'verification:failed' },
+      { id: 'EU-release-verified', tool: 'verifier.run', params: '{}', status: 'done', hash: 'passed', outputRef: 'run:run-verification-states#passed', verificationVerdict: 'pass', verificationRef: 'verification:passed' },
     ],
   };
 
@@ -413,8 +414,8 @@ test('ResultsRenderer execution focus scopes execution units to the active run',
       },
     ] as never,
     executionUnits: [
-      { id: 'EU-old', tool: 'old.tool', params: '{}', status: 'done', hash: 'old', outputRef: 'artifact:old-report' },
-      { id: 'EU-new', tool: 'new.tool', params: '{}', status: 'done', hash: 'new', outputRef: 'artifact:new-report' },
+      { id: 'EU-old', tool: 'old.tool', params: '{}', status: 'done', hash: 'old', outputRef: 'run:run-old#old-report' },
+      { id: 'EU-new', tool: 'new.tool', params: '{}', status: 'done', hash: 'new', outputRef: 'run:run-new#new-report' },
     ],
   };
 
@@ -581,6 +582,7 @@ test('ResultsRenderer explains missing artifact fields through the package empty
     type: 'research-report',
     producerScenario: 'literature-evidence-review',
     schemaVersion: '1',
+    metadata: { runId: 'run-broken-report' },
     data: { notes: 'contract drift: markdown was not produced' },
   };
   const session: SciForgeSession = {
@@ -605,6 +607,7 @@ test('ResultsRenderer falls back from mismatched manifest component to artifact-
     type: 'research-report',
     producerScenario: 'literature-evidence-review',
     schemaVersion: '1',
+    metadata: { runId: 'run-mismatch' },
     data: { markdown: '# Artifact-owned report\n\nThe report renderer should own this payload.' },
   };
   const session: SciForgeSession = {
@@ -820,7 +823,7 @@ function contractFailureSession(): SciForgeSession {
       raw: {
         contractValidationFailure: failure,
         acceptanceRepair: {
-          sourceRunId: 'run-original',
+          sourceRunId: 'run-contract-failure',
           repairRunId: 'run-repair-1',
           failureReason: 'backend artifact repair timed out',
           recoverActions: ['inspect repair stderr and rerun bounded validator'],
@@ -831,7 +834,7 @@ function contractFailureSession(): SciForgeSession {
             status: 'failed-with-reason',
             startedAt: '2026-05-09T00:00:10.000Z',
             completedAt: '2026-05-09T00:00:40.000Z',
-            sourceRunId: 'run-original',
+            sourceRunId: 'run-contract-failure',
             repairRunId: 'run-repair-1',
             reason: 'backend artifact repair timed out',
           }],

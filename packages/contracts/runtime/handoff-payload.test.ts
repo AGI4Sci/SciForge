@@ -2,9 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  EXECUTION_LOG_REF_EXPANSION_POLICY,
+} from './artifact-policy';
+import {
   buildAgentHandoffPayload,
   isAgentHandoffArtifactPolicy,
   isAgentHandoffReferencePolicy,
+  isFailureRecoveryEvidenceExpansionPolicy,
   isAgentHandoffVerificationSnapshot,
   isFailureRecoveryAttemptSnapshot,
   isFailureRecoveryPolicy,
@@ -129,6 +133,11 @@ test('exports narrow handoff policy guards without breaking loose transport reco
     attemptHistoryRefs: ['file:.sciforge/logs/run.err'],
     attemptHistory: [attempt],
     evidenceRefs: ['file:.sciforge/logs/run.err'],
+    evidenceExpansionPolicy: {
+      defaultAction: 'refs-and-digests-only',
+      logRefs: EXECUTION_LOG_REF_EXPANSION_POLICY,
+      artifactRefs: 'prefer ref-backed artifacts before body expansion',
+    },
     nextStep: 'repair dependency',
   } satisfies FailureRecoveryPolicy;
   const verificationSnapshot = {
@@ -143,11 +152,13 @@ test('exports narrow handoff policy guards without breaking loose transport reco
   assert.equal(isAgentHandoffArtifactPolicy(artifactPolicy), true);
   assert.equal(isAgentHandoffReferencePolicy(referencePolicy), true);
   assert.equal(isFailureRecoveryAttemptSnapshot(attempt), true);
+  assert.equal(isFailureRecoveryEvidenceExpansionPolicy(failureRecoveryPolicy.evidenceExpansionPolicy), true);
   assert.equal(isFailureRecoveryPolicy(failureRecoveryPolicy), true);
   assert.equal(isAgentHandoffVerificationSnapshot(verificationSnapshot), true);
 
   assert.equal(isAgentHandoffArtifactPolicy({ mode: 'inline-everything' }), false);
   assert.equal(isAgentHandoffReferencePolicy({ mode: 'explicit-refs-first', requiredRefs: [42] }), false);
+  assert.equal(isFailureRecoveryEvidenceExpansionPolicy({ logRefs: EXECUTION_LOG_REF_EXPANSION_POLICY }), false);
   assert.equal(isFailureRecoveryPolicy({ mode: 'preserve-context', attemptHistory: [{ evidenceRefs: [42] }] }), false);
   assert.equal(isAgentHandoffVerificationSnapshot({ verdict: 'pass', evidenceRefs: [42] }), false);
 

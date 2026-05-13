@@ -113,13 +113,13 @@ try {
   assert.equal(dispatches[0]?.metadata.harnessContractRef, first.summary.contractRef);
   assert.equal(dispatches[0]?.metadata.harnessTraceRef, first.summary.traceRef);
   assert.equal(dispatches[0]?.metadata.harnessDecisionOwner, 'AgentServer');
-  const defaultContinuityDecision = dispatches[0]?.metadata.agentHarnessContinuityDecision as Record<string, unknown>;
+  const defaultContinuityDecision = (dispatches[0]?.metadata.agentHarnessHandoff as Record<string, unknown>).continuityDecision as Record<string, unknown>;
   assert.equal(defaultContinuityDecision.schemaVersion, 'sciforge.agent-harness-continuity-decision.v1');
   assert.equal(defaultContinuityDecision.shadowMode, true);
   assert.equal(defaultContinuityDecision.decisionOwner, 'AgentServer');
   assert.equal(defaultContinuityDecision.decision, 'fresh');
   assert.equal(defaultContinuityDecision.useContinuity, false);
-  const defaultBackendSelectionDecision = dispatches[0]?.metadata.agentHarnessBackendSelectionDecision as Record<string, unknown>;
+  const defaultBackendSelectionDecision = (dispatches[0]?.metadata.agentHarnessHandoff as Record<string, unknown>).backendSelectionDecision as Record<string, unknown>;
   assert.equal(defaultBackendSelectionDecision.schemaVersion, 'sciforge.agentserver-backend-selection-decision.v1');
   assert.equal(defaultBackendSelectionDecision.shadowMode, true);
   assert.equal(defaultBackendSelectionDecision.decisionOwner, 'AgentServer');
@@ -135,6 +135,8 @@ try {
   assert.equal(handoff.decisionOwner, 'AgentServer');
   assert.deepEqual(handoff.continuityDecision, defaultContinuityDecision);
   assert.deepEqual(handoff.backendSelectionDecision, defaultBackendSelectionDecision);
+  assert.equal(dispatches[0]?.metadata.agentHarnessContinuityDecision, undefined, 'continuity audit should not be duplicated outside canonical handoff');
+  assert.equal(dispatches[0]?.metadata.agentHarnessBackendSelectionDecision, undefined, 'backend selection audit should not be duplicated outside canonical handoff');
   const generatedHandoffEnvelope = buildContextEnvelope({
     skillDomain: 'literature',
     prompt: 'Render the generated harness handoff through the compact broker payload.',
@@ -206,15 +208,15 @@ try {
   assert.equal(progressAudit.schemaVersion, 'sciforge.agent-harness-progress-plan-projection.v1');
   assert.equal(progressAudit.contractRef, progressOptIn.summary.contractRef);
   assert.equal(progressAudit.source, 'request.uiState.agentHarness.contract.progressPlan');
-  const continuityDecision = dispatches[4]?.metadata.agentHarnessContinuityDecision as Record<string, unknown>;
+  const progressHandoff = dispatches[4]?.metadata.agentHarnessHandoff as Record<string, unknown>;
+  const continuityDecision = progressHandoff.continuityDecision as Record<string, unknown>;
   assert.equal(continuityDecision.schemaVersion, 'sciforge.agent-harness-continuity-decision.v1');
   assert.equal(continuityDecision.shadowMode, true);
   assert.equal(continuityDecision.decisionOwner, 'AgentServer');
   assert.equal(continuityDecision.decision, 'fresh');
   assert.equal(continuityDecision.useContinuity, false);
-  const continuityHandoff = dispatches[4]?.metadata.agentHarnessHandoff as Record<string, unknown>;
-  assert.deepEqual(continuityHandoff.continuityDecision, continuityDecision);
-  const backendSelectionDecision = dispatches[4]?.metadata.agentHarnessBackendSelectionDecision as Record<string, unknown>;
+  assert.deepEqual(progressHandoff.continuityDecision, continuityDecision);
+  const backendSelectionDecision = progressHandoff.backendSelectionDecision as Record<string, unknown>;
   assert.equal(backendSelectionDecision.schemaVersion, 'sciforge.agentserver-backend-selection-decision.v1');
   assert.equal(backendSelectionDecision.shadowMode, true);
   assert.equal(backendSelectionDecision.decisionOwner, 'AgentServer');
@@ -239,16 +241,18 @@ try {
   assert.equal(backendTraceHarness.externalHookStage, 'beforeAgentDispatch');
   assert.equal(backendTraceHarness.externalHookDeclaredBy, 'HARNESS_EXTERNAL_HOOK_STAGES');
   assert.equal(backendTraceHarness.externalHookDeclared, true);
-  assert.deepEqual(continuityHandoff.backendSelectionDecision, backendSelectionDecision);
+  assert.deepEqual(progressHandoff.backendSelectionDecision, backendSelectionDecision);
+  assert.equal(dispatches[4]?.metadata.agentHarnessContinuityDecision, undefined, 'continuity audit should not be duplicated outside canonical handoff');
+  assert.equal(dispatches[4]?.metadata.agentHarnessBackendSelectionDecision, undefined, 'backend selection audit should not be duplicated outside canonical handoff');
   const uiProgress = progressModelFromEvent(projected as unknown as Parameters<typeof progressModelFromEvent>[0]);
   assert.ok(String(projectedRaw.phase || ''), 'projected progress event should expose a contract phase');
   assert.ok(String(uiProgress?.phase || ''), 'UI progress should preserve a visible phase');
   assert.equal(uiProgress?.status, 'running');
   assert.equal(uiProgress?.reason, 'progress-plan-projection');
   assert.equal(backendDecisionDisabled.event.status, 'completed');
-  assert.equal(dispatches[5]?.metadata.agentHarnessBackendSelectionDecision, undefined, 'explicit kill switch should omit backend selection decision audit');
+  assert.equal(((dispatches[5]?.metadata.agentHarnessHandoff as Record<string, unknown>)?.backendSelectionDecision), undefined, 'explicit kill switch should omit backend selection decision audit');
   assert.equal(continuityDecisionDisabled.event.status, 'completed');
-  assert.equal(dispatches[6]?.metadata.agentHarnessContinuityDecision, undefined, 'explicit kill switch should omit continuity decision audit');
+  assert.equal(((dispatches[6]?.metadata.agentHarnessHandoff as Record<string, unknown>)?.continuityDecision), undefined, 'explicit kill switch should omit continuity decision audit');
   assert.equal(dispatches.length, 7);
   console.log('[ok] agent harness shadow contract is stable, traced, profiled, and metadata-only');
 } finally {

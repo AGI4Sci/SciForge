@@ -1,8 +1,10 @@
 import type { ContractValidationFailure, ContractValidationFailureKind } from '@sciforge-ui/runtime-contract';
+import { DIRECT_CONTEXT_FAST_PATH_POLICY } from '@sciforge-ui/runtime-contract/artifact-policy';
+import { collectRuntimeRefsFromValue, runtimePayloadKeyLooksLikeBodyCarrier } from '@sciforge-ui/runtime-contract/references';
 import type { RuntimeArtifact, SciForgeRun, SciForgeSession } from '../domain';
 import type { RuntimeResolvedViewPlan } from './results/viewPlanResolver';
 import { asString, asStringList, isRecord } from './results/resultArtifactHelpers';
-import { artifactsForRun, executionUnitsForRun } from './results/executionUnitsForRun';
+import { artifactsForRun, executionUnitsForRun, runUsesContextOnlyFastPath } from './results/executionUnitsForRun';
 
 export type BackendRepairState = {
   id: string;
@@ -55,9 +57,8 @@ export function runPresentationState(session: SciForgeSession, activeRun?: SciFo
   const presentation = resultPresentationForRun(run);
   const availableArtifacts = presentationArtifacts(session, run, viewPlan);
   const progress = runPresentationProgress(run, units, availableArtifacts, presentation);
-  const needsHuman = runNeedsHuman(run) || units.some((unit) => unit.status === 'needs-human' || unit.verificationVerdict === 'needs-human') || textHasNeedsHuman(presentation);
-  const partial = textHasPartial(presentation)
-    || textHasPartial(run?.response)
+  const needsHuman = runNeedsHuman(run, presentation) || units.some((unit) => unit.status === 'needs-human' || unit.verificationVerdict === 'needs-human');
+  const partial = structuredHasPartial(run, presentation)
     || (run?.status === 'running' && (availableArtifacts.length > 0 || progress.completedParts.length > 0));
   const failed = run?.status === 'failed' || blockers.length > 0 || validationFailures.length > 0;
   const recoverable = recoverActions.length > 0
@@ -165,10 +166,11 @@ function isBlockingExecutionUnitStatus(status: unknown) {
 export function runAuditBlockers(session: SciForgeSession, activeRun?: SciForgeRun) {
   const run = activeRun ?? session.runs.at(-1);
   const raw = isRecord(run?.raw) ? run?.raw : undefined;
+  const currentFailureBoundary = runHasCurrentFailureBoundary(run);
   const lines = [
     run?.status === 'failed' ? `blocker: run ${run.id} failed` : undefined,
-    asString(raw?.blocker) ? `blocker: ${asString(raw?.blocker)}` : undefined,
-    asString(raw?.failureReason) ? `failureReason: ${asString(raw?.failureReason)}` : undefined,
+    currentFailureBoundary && asString(raw?.blocker) ? `blocker: ${asString(raw?.blocker)}` : undefined,
+    currentFailureBoundary && asString(raw?.failureReason) ? `failureReason: ${asString(raw?.failureReason)}` : undefined,
     ...failedExecutionUnits(session, run).map((unit) => `failureReason: ${unit.failureReason || unit.id}`),
     ...contractValidationFailures(session, run).map((failure) => `ContractValidationFailure(${failure.failureKind}): ${failure.failureReason}`),
     ...backendRepairStates(session, run).flatMap((state) => state.failureReason ? [`backend repair ${state.label}: ${state.failureReason}`] : []),
@@ -179,8 +181,9 @@ export function runAuditBlockers(session: SciForgeSession, activeRun?: SciForgeR
 export function runRecoverActions(session: SciForgeSession, activeRun?: SciForgeRun) {
   const run = activeRun ?? session.runs.at(-1);
   const raw = isRecord(run?.raw) ? run?.raw : undefined;
+  const currentFailureBoundary = runHasCurrentFailureBoundary(run);
   return Array.from(new Set([
-    ...asStringList(raw?.recoverActions),
+    ...(currentFailureBoundary ? asStringList(raw?.recoverActions) : []),
     ...contractValidationFailures(session, run).flatMap((failure) => failure.recoverActions),
     ...backendRepairStates(session, run).flatMap((state) => state.recoverActions),
     ...failedExecutionUnits(session, run).flatMap((unit) => unit.recoverActions ?? []),
@@ -222,6 +225,7 @@ export function contractValidationFailures(session: SciForgeSession, activeRun?:
 export function backendRepairStates(session: SciForgeSession, activeRun?: SciForgeRun): BackendRepairState[] {
   const run = activeRun ?? session.runs.at(-1);
   const raw = isRecord(run?.raw) ? run?.raw : undefined;
+  const currentFailureBoundary = runHasCurrentFailureBoundary(run);
   const candidates = [
     backendRepairStateFromRecord('acceptanceRepair', raw?.acceptanceRepair),
     backendRepairStateFromRecord('backendRepair', raw?.backendRepair),
@@ -236,10 +240,19 @@ export function backendRepairStates(session: SciForgeSession, activeRun?: SciFor
       refs: run.acceptance.objectReferences.map((reference) => reference.ref),
       history: run.acceptance.repairHistory.map((entry) => `${entry.status}: attempt=${entry.attempt}; action=${entry.action}; repairRunId=${entry.repairRunId ?? 'n/a'}${entry.reason ? `; reason=${entry.reason}` : ''}`),
     } : undefined,
-  ].filter((state): state is BackendRepairState => Boolean(state));
+  ].filter((state): state is BackendRepairState => Boolean(state))
+    .filter((state) => backendRepairStateBelongsToRun(state, run, currentFailureBoundary));
   const byId = new Map<string, BackendRepairState>();
   for (const state of candidates) byId.set(state.id, state);
   return Array.from(byId.values());
+}
+
+function backendRepairStateBelongsToRun(state: BackendRepairState, run: SciForgeRun | undefined, currentFailureBoundary: boolean) {
+  if (!run) return true;
+  const explicitIds = [state.sourceRunId, state.repairRunId].filter((id): id is string => Boolean(id));
+  if (explicitIds.includes(run.id)) return true;
+  if (!explicitIds.length) return currentFailureBoundary;
+  return currentFailureBoundary && run.status === 'failed';
 }
 
 function backendRepairStateFromRecord(label: string, value: unknown): BackendRepairState | undefined {
@@ -381,10 +394,11 @@ function parseMaybeJsonObject(value: string): Record<string, unknown> | undefine
 export function rawAuditItems(session: SciForgeSession, activeRun: SciForgeRun | undefined, viewPlan: RuntimeResolvedViewPlan) {
   const run = activeRun ?? session.runs.at(-1);
   const scopedExecutionUnits = executionUnitsForRun(session, run);
+  const scopedArtifacts = artifactsForRun(session, run);
   return [
-    run ? { id: `run-${run.id}`, label: `run ${run.id}`, value: JSON.stringify(run.raw ?? run, null, 2) } : undefined,
-    session.artifacts.length ? { id: 'artifacts', label: `artifacts (${session.artifacts.length})`, value: JSON.stringify(session.artifacts, null, 2) } : undefined,
-    scopedExecutionUnits.length ? { id: 'execution-units', label: `ExecutionUnit JSON (${scopedExecutionUnits.length})`, value: JSON.stringify(scopedExecutionUnits, null, 2) } : undefined,
+    run ? { id: `run-${run.id}`, label: `run ${run.id}`, value: JSON.stringify(sanitizeAuditValue(run.raw ?? run), null, 2) } : undefined,
+    scopedArtifacts.length ? { id: 'artifacts', label: `artifacts (${scopedArtifacts.length})`, value: JSON.stringify(sanitizeAuditValue(scopedArtifacts), null, 2) } : undefined,
+    scopedExecutionUnits.length ? { id: 'execution-units', label: `ExecutionUnit JSON (${scopedExecutionUnits.length})`, value: JSON.stringify(sanitizeAuditValue(scopedExecutionUnits), null, 2) } : undefined,
     session.notebook.length ? { id: 'notebook', label: `timeline JSON (${session.notebook.length})`, value: JSON.stringify(session.notebook, null, 2) } : undefined,
     viewPlan.allItems.length ? { id: 'view-plan', label: `resolved view plan (${viewPlan.allItems.length})`, value: JSON.stringify(viewPlan.allItems, null, 2) } : undefined,
   ].filter((item): item is { id: string; label: string; value: string } => Boolean(item));
@@ -393,14 +407,17 @@ export function rawAuditItems(session: SciForgeSession, activeRun: SciForgeRun |
 function resultPresentationForRun(run?: SciForgeRun): Record<string, unknown> | undefined {
   const raw = isRecord(run?.raw) ? run?.raw : undefined;
   const displayIntent = isRecord(raw?.displayIntent) ? raw.displayIntent : undefined;
-  const payload = isRecord(raw?.payload) ? raw.payload : undefined;
-  const parsedResponse = parseMaybeJsonObject(run?.response ?? '');
-  return firstRecord(
+  const candidates = [
     raw?.resultPresentation,
     displayIntent?.resultPresentation,
-    payload?.resultPresentation,
-    parsedResponse?.resultPresentation,
-  );
+  ].filter(isRecord);
+  if (run && runUsesContextOnlyFastPath(run)) {
+    return candidates.find((candidate) =>
+      recordExplicitlyBelongsToRun(candidate, run)
+      || recordLinksDirectContextArtifact(candidate)
+    );
+  }
+  return firstRecord(...candidates);
 }
 
 function firstRecord(...values: unknown[]): Record<string, unknown> | undefined {
@@ -607,7 +624,36 @@ function normalizeSafeActionKind(value: string | undefined): RunPresentationProg
 
 function backgroundCompletionForRun(run?: SciForgeRun) {
   const raw = isRecord(run?.raw) ? run.raw : undefined;
-  return isRecord(raw?.backgroundCompletion) ? raw.backgroundCompletion : undefined;
+  const background = isRecord(raw?.backgroundCompletion) ? raw.backgroundCompletion : undefined;
+  if (!background || !run) return background;
+  return recordBelongsToRun(background, run) ? background : undefined;
+}
+
+function recordBelongsToRun(record: Record<string, unknown>, run: SciForgeRun) {
+  const ids = [
+    asString(record.runId),
+    asString(record.sourceRunId),
+    asString(record.targetRunId),
+    asString(record.parentRunId),
+  ].filter((id): id is string => Boolean(id));
+  return !ids.length || ids.includes(run.id);
+}
+
+function recordExplicitlyBelongsToRun(record: Record<string, unknown>, run: SciForgeRun) {
+  const ids = [
+    asString(record.runId),
+    asString(record.sourceRunId),
+    asString(record.targetRunId),
+    asString(record.parentRunId),
+  ].filter((id): id is string => Boolean(id));
+  return ids.includes(run.id);
+}
+
+function recordLinksDirectContextArtifact(record: Record<string, unknown>) {
+  const serialized = JSON.stringify(record);
+  return serialized.includes(DIRECT_CONTEXT_FAST_PATH_POLICY.outputRef)
+    || serialized.includes(`artifact:${DIRECT_CONTEXT_FAST_PATH_POLICY.reportArtifactId}`)
+    || serialized.includes(`artifact::${DIRECT_CONTEXT_FAST_PATH_POLICY.reportArtifactId}`);
 }
 
 function artifactTitle(artifact: RuntimeArtifact) {
@@ -638,7 +684,7 @@ function primaryPresentationReason({
     || asString(processSummary?.summary)
     || asString(presentation?.reason)
     || asString(presentation?.failureReason)
-    || asString((run?.raw as Record<string, unknown> | undefined)?.failureReason);
+    || (runHasCurrentFailureBoundary(run) ? asString((run?.raw as Record<string, unknown> | undefined)?.failureReason) : undefined);
   if (explicit) return compactHumanReason(explicit);
   const validationReason = validationFailures[0]?.failureReason;
   if (validationReason) return compactHumanReason(validationReason);
@@ -658,20 +704,77 @@ function compactHumanReason(value: string) {
   return text.length > 320 ? `${text.slice(0, 317).trim()}...` : text;
 }
 
-function runNeedsHuman(run?: SciForgeRun) {
-  const text = [
+function runHasCurrentFailureBoundary(run?: SciForgeRun) {
+  if (!run) return false;
+  const raw = isRecord(run.raw) ? run.raw : undefined;
+  if (runUsesContextOnlyFastPath(run)) return false;
+  if (run.status === 'failed') return true;
+  const rawStatus = String(raw?.status ?? '').toLowerCase();
+  if (['failed', 'repair-needed', 'needs-human'].includes(rawStatus)) return true;
+  return Boolean(asString(raw?.failureReason) || asString(raw?.blocker));
+}
+
+function runNeedsHuman(run?: SciForgeRun, presentation?: Record<string, unknown>) {
+  return structuredStatusIncludes([run?.status, rawField(run, 'status'), rawField(run, 'kind'), presentation?.status, presentation?.kind], ['needs-human'])
+    || rawField(run, 'requiresHuman') === true
+    || rawField(run, 'requiresUserInput') === true
+    || presentation?.requiresHuman === true
+    || presentation?.requiresUserInput === true;
+}
+
+function structuredHasPartial(run?: SciForgeRun, presentation?: Record<string, unknown>) {
+  return structuredStatusIncludes([
     run?.status,
-    run?.response,
-    isRecord(run?.raw) ? run.raw.status : undefined,
-    isRecord(run?.raw) ? run.raw.reason : undefined,
-  ].map((value) => String(value ?? '').toLowerCase()).join(' ');
-  return /needs-human|need human|human input|人工|需要用户|需要人工/.test(text);
+    rawField(run, 'status'),
+    rawField(run, 'kind'),
+    rawField(run, 'resultStatus'),
+    rawField(run, 'completionStatus'),
+    presentation?.status,
+    presentation?.kind,
+    presentation?.resultStatus,
+  ], ['partial', 'partially-complete', 'incomplete', 'insufficient', 'unverified']);
 }
 
-function textHasNeedsHuman(value: unknown) {
-  return /needs-human|need human|human input|人工|需要用户|需要人工/.test(JSON.stringify(value ?? '').toLowerCase());
+function rawField(run: SciForgeRun | undefined, key: string) {
+  return isRecord(run?.raw) ? run.raw[key] : undefined;
 }
 
-function textHasPartial(value: unknown) {
-  return /partial|partially|incomplete|insufficient|unverified|missing|部分|不完整/.test(JSON.stringify(value ?? '').toLowerCase());
+function structuredStatusIncludes(values: unknown[], allowed: readonly string[]) {
+  const allowedStatuses = new Set(allowed);
+  return values.some((value) => typeof value === 'string' && allowedStatuses.has(value.trim().toLowerCase()));
+}
+
+function sanitizeAuditValue(value: unknown, key = '', depth = 0): unknown {
+  if (value === undefined || value === null) return value;
+  if (typeof value === 'string') {
+    if (runtimePayloadKeyLooksLikeBodyCarrier(key)) return summarizeAuditBody(value);
+    return value.length > 1000 ? summarizeAuditBody(value) : value;
+  }
+  if (typeof value !== 'object') return value;
+  if (Array.isArray(value)) {
+    if (depth > 5) return { omitted: 'max-depth', length: value.length };
+    return value.slice(0, 80).map((item) => sanitizeAuditValue(item, key, depth + 1));
+  }
+  if (depth > 5) return { omitted: 'max-depth', keys: Object.keys(value as Record<string, unknown>).slice(0, 16) };
+  const record = value as Record<string, unknown>;
+  if (runtimePayloadKeyLooksLikeBodyCarrier(key)) {
+    return {
+      omitted: 'body-carrier',
+      keys: Object.keys(record).slice(0, 16),
+      refs: collectRuntimeRefsFromValue(record, { maxDepth: 4, maxRefs: 16, includeIds: true }),
+    };
+  }
+  const out: Record<string, unknown> = {};
+  for (const [childKey, child] of Object.entries(record)) {
+    out[childKey] = sanitizeAuditValue(child, childKey, depth + 1);
+  }
+  return out;
+}
+
+function summarizeAuditBody(value: string) {
+  return {
+    omitted: 'body-carrier',
+    chars: value.length,
+    refs: collectRuntimeRefsFromValue(value, { maxRefs: 12 }),
+  };
 }

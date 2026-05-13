@@ -400,8 +400,11 @@ assert.equal(bilingualReport.parentArtifactRef, 'artifact:research-report');
 assert.equal(bilingualReport.metadata.derivation.schemaVersion, 'sciforge.artifact-derivation.v1');
 assert.equal(bilingualReport.metadata.derivation.kind, 'rewrite');
 assert.ok(bilingualReport.metadata.derivation.sourceRefs.includes('artifact:research-report'));
-assert.deepEqual(bilingualReport.derivedArtifactRefs, ['artifact:bilingual-executive-summary', 'artifact:bilingual-glossary']);
-assert.deepEqual(bilingualReport.sourceArtifactRefs, ['artifact:research-report', 'artifact:paper-list', 'artifact:evidence-matrix']);
+assert.deepEqual(bilingualReport.derivedArtifactRefs, [
+  'artifact:research-report#derived:bilingual-executive-summary',
+  'artifact:research-report#derived:bilingual-glossary',
+]);
+assert.deepEqual(bilingualReport.sourceArtifactRefs, ['artifact:paper-list', 'artifact:evidence-matrix', 'artifact:research-report']);
 assert.equal(bilingualReport.sourceLanguage, 'zh');
 assert.equal(bilingualReport.targetLanguage, 'en');
 assert.equal(bilingualReport.status, 'ready');
@@ -419,8 +422,8 @@ assert.ok(bilingualReport.glossary.entries.some((entry) => (
   && entry.paperIds.includes('paper:doi:10.5555/sciforge.2026.1')
   && entry.sourceRefs.includes('artifact:evidence-matrix')
 )));
-assert.ok(bilingualReport.lineage.includes('artifact:research-report -> artifact:bilingual-executive-summary'));
-assert.ok(bilingualReport.lineage.includes('artifact:research-report -> artifact:bilingual-glossary'));
+assert.ok(bilingualReport.lineage.includes('artifact:research-report -> artifact:research-report#derived:bilingual-executive-summary'));
+assert.ok(bilingualReport.lineage.includes('artifact:research-report -> artifact:research-report#derived:bilingual-glossary'));
 assert.equal(success.researchReport.boundedSummary, originalSuccessReportSummary, 'bilingual report must be derived without mutating the original report');
 
 console.log('[ok] literature.retrieval capability has offline provider runner/normalizer contract with auditable outputs and failure outcomes');

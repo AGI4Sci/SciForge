@@ -84,19 +84,19 @@ test('plain AgentServer text guard blocks raw task files and logs from final-ans
   assert.equal(payload.claimType, 'runtime-diagnostic');
   assert.equal(payload.executionUnits[0]?.status, 'needs-human');
   assert.equal(payload.artifacts[0]?.type, 'runtime-diagnostic');
-  assert.match(payload.reasoningTrace, /direct-text fallback guard/i);
+  assert.match(payload.reasoningTrace, /strict ToolPayload boundary/i);
 });
 
-test('plain AgentServer text guard still allows human-facing prose answers', () => {
+test('plain AgentServer text guard blocks human-facing prose without structured ToolPayload', () => {
   const payload = toolPayloadFromPlainAgentOutput('The report is ready. I found two evidence gaps and listed the next steps.', {
     skillDomain: 'knowledge',
     prompt: 'Summarize the result.',
     artifacts: [],
   });
 
-  assert.notEqual(payload.claimType, 'runtime-diagnostic');
-  assert.equal(payload.executionUnits[0]?.status, 'done');
-  assert.match(payload.reasoningTrace, /plain text/i);
+  assert.equal(payload.claimType, 'runtime-diagnostic');
+  assert.equal(payload.executionUnits[0]?.status, 'needs-human');
+  assert.match(payload.reasoningTrace, /strict ToolPayload boundary/i);
 });
 
 test('plain AgentServer text guard allows prose that references taskFiles without raw metadata', () => {
@@ -110,6 +110,6 @@ test('plain AgentServer text guard allows prose that references taskFiles withou
     artifacts: [],
   });
 
-  assert.notEqual(payload.claimType, 'runtime-diagnostic');
-  assert.equal(payload.executionUnits[0]?.status, 'done');
+  assert.equal(payload.claimType, 'runtime-diagnostic');
+  assert.equal(payload.executionUnits[0]?.status, 'needs-human');
 });

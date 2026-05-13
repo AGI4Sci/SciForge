@@ -25,6 +25,7 @@ import {
   normalizeRunTermination,
   type RunTerminationRecord,
 } from '@sciforge-ui/runtime-contract/events';
+import { compactRunRawForRequestPayload } from './runRawCompaction';
 
 const REQUEST_PAYLOAD_MESSAGE_LIMIT = 12;
 const REQUEST_PAYLOAD_ARTIFACT_LIMIT = 16;
@@ -228,7 +229,7 @@ export function updateGuidanceQueueRecords(
     messages: session.messages.map((message) => message.guidanceQueue && idSet.has(message.guidanceQueue.id)
       ? {
           ...message,
-          status: patch.status === 'rejected' || patch.status === 'merged' ? 'completed' : message.status,
+          status: patch.status === 'rejected' || patch.status === 'merged' || patch.status === 'deferred' ? 'completed' : message.status,
           guidanceQueue: updateRecord(message.guidanceQueue),
         }
       : message),
@@ -244,7 +245,7 @@ export function updateGuidanceQueueRecords(
 export function resolveGuidanceQueueAfterRun(
   session: SciForgeSession,
   guidanceQueue: GuidanceQueueRecord[],
-  options: { userCancelled?: boolean; runEndedReason?: string } = {},
+  options: { userCancelled?: boolean; runFailed?: boolean; runEndedReason?: string } = {},
 ): { session: SciForgeSession; remainingQueue: GuidanceQueueRecord[]; nextGuidance?: GuidanceQueueRecord } {
   if (!guidanceQueue.length) return { session, remainingQueue: [] };
   if (options.userCancelled) {
@@ -256,11 +257,35 @@ export function resolveGuidanceQueueAfterRun(
       remainingQueue: [],
     };
   }
-  const [nextGuidance, ...remainingQueue] = guidanceQueue;
+  if (options.runFailed) {
+    const reason = options.runEndedReason ?? '当前 run 失败；排队引导保留为 deferred，等待用户确认、修复或重新运行后再合并。';
+    const updatedQueue = guidanceQueue.map((item) => ({
+      ...item,
+      status: 'deferred' as const,
+      reason,
+      updatedAt: nowIso(),
+    }));
+    return {
+      session: updateGuidanceQueueRecords(session, guidanceQueue.map((item) => item.id), {
+        status: 'deferred',
+        reason,
+      }),
+      remainingQueue: updatedQueue,
+    };
+  }
+  const nextGuidance = guidanceQueue.find((item) => item.status === 'queued');
+  if (!nextGuidance) {
+    return {
+      session,
+      remainingQueue: guidanceQueue,
+    };
+  }
+  const remainingQueue = guidanceQueue.filter((item) => item.id !== nextGuidance.id);
   return {
     session: updateGuidanceQueueRecords(session, [nextGuidance.id], {
       status: 'merged',
       reason: options.runEndedReason ?? '当前 run 已结束，已按 run orchestration contract 合并为下一轮用户引导。',
+      handlingRunId: 'pending-next-run',
     }),
     remainingQueue,
     nextGuidance,
@@ -744,6 +769,12 @@ export function attachProcessRecoveryToFailedSession({
   events: Array<Pick<AgentStreamEvent, 'type' | 'label' | 'detail' | 'createdAt'>>;
 }): SciForgeSession {
   if (!transcript) return session;
+  const eventSummaries = events.slice(-24).map((event) => ({
+    type: event.type,
+    label: event.label,
+    createdAt: event.createdAt,
+    detailDigest: digestTextField(event.detail),
+  }));
   return {
     ...session,
     runs: session.runs.map((run) => run.id === failedRunId
@@ -753,13 +784,31 @@ export function attachProcessRecoveryToFailedSession({
             ...(typeof run.raw === 'object' && run.raw !== null ? run.raw : {}),
             streamProcess: {
               eventCount: events.length,
-              summary: transcript,
-              events,
+              summaryDigest: digestTextField(transcript),
+              eventSummaries,
             },
           },
         }
       : run),
   };
+}
+
+function digestTextField(value: unknown) {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  return {
+    omitted: 'text-body',
+    chars: value.length,
+    hash: stableTextHash(value),
+  };
+}
+
+function stableTextHash(value: string) {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `fnv1a-${(hash >>> 0).toString(16).padStart(8, '0')}`;
 }
 
 export function requestPayloadForTurn(session: SciForgeSession, userMessage: SciForgeMessage, references: SciForgeReference[]) {
@@ -771,7 +820,7 @@ export function requestPayloadForTurn(session: SciForgeSession, userMessage: Sci
     || session.artifacts.length > 0
     || session.executionUnits.length > 0;
   if (hasPriorWork || hasExplicitReferences) {
-    const messages = compactMessagesForRequestPayload(session.messages);
+    const messages = compactMessagesForRequestPayload(session.messages, userMessage.id);
     return {
       messages,
       artifacts: session.artifacts.slice(-REQUEST_PAYLOAD_ARTIFACT_LIMIT).map(compactArtifactForRequestPayload),
@@ -787,14 +836,19 @@ export function requestPayloadForTurn(session: SciForgeSession, userMessage: Sci
   };
 }
 
-function compactMessagesForRequestPayload(messages: SciForgeMessage[]) {
+function compactMessagesForRequestPayload(messages: SciForgeMessage[], currentMessageId: string) {
   return messages
     .filter((message) => !message.id.startsWith('seed'))
     .slice(-REQUEST_PAYLOAD_MESSAGE_LIMIT)
     .map((message) => ({
       ...message,
-      content: clipText(message.content, REQUEST_PAYLOAD_MESSAGE_TEXT_LIMIT),
-      expandable: clipOptionalText(message.expandable, REQUEST_PAYLOAD_MESSAGE_TEXT_LIMIT),
+      content: message.id === currentMessageId
+        ? clipText(message.content, REQUEST_PAYLOAD_MESSAGE_TEXT_LIMIT)
+        : omittedTextDigestLabel('previous-message', message.content),
+      expandable: message.id === currentMessageId
+        ? clipOptionalText(message.expandable, REQUEST_PAYLOAD_MESSAGE_TEXT_LIMIT)
+        : undefined,
+      contentDigest: message.id === currentMessageId ? undefined : digestTextField(message.content),
       references: message.references?.slice(-8),
       objectReferences: message.objectReferences?.slice(-12),
     }));
@@ -842,16 +896,26 @@ function compactExecutionUnitForRequestPayload(unit: RuntimeExecutionUnit): Runt
 }
 
 function compactRunForRequestPayload(run: SciForgeRun): SciForgeRun {
-  const raw = compactRunRaw(run.raw);
+  const raw = compactRunRawForRequestPayload(run.raw, {
+    rawTextLimit: REQUEST_PAYLOAD_RAW_TEXT_LIMIT,
+    runTextLimit: REQUEST_PAYLOAD_RUN_TEXT_LIMIT,
+  });
   const cancelBoundary = cancelBoundaryForRun(run);
   return {
     ...run,
-    prompt: clipText(run.prompt, REQUEST_PAYLOAD_RUN_TEXT_LIMIT),
-    response: clipText(run.response, REQUEST_PAYLOAD_RUN_TEXT_LIMIT),
+    prompt: omittedTextDigestLabel('previous-run-prompt', run.prompt),
+    response: omittedTextDigestLabel('previous-run-response', run.response),
     raw: cancelBoundary ? { ...(isCompactRecord(raw) ? raw : {}), cancelBoundary } : raw,
     references: run.references?.slice(-8),
     objectReferences: run.objectReferences?.slice(-12),
   };
+}
+
+function omittedTextDigestLabel(label: string, value: string) {
+  const digest = digestTextField(value);
+  return digest?.hash
+    ? `[${label} omitted; digest=${digest.hash}; chars=${digest.chars ?? value.length}]`
+    : `[${label} omitted]`;
 }
 
 function cancelBoundaryForRun(run: SciForgeRun) {
@@ -886,23 +950,6 @@ function terminationReasonFromRaw(raw: unknown) {
 
 function isCompactRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function compactRunRaw(raw: unknown) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return compactInlineValue(raw, REQUEST_PAYLOAD_RAW_TEXT_LIMIT).value;
-  const record = raw as Record<string, unknown>;
-  const streamProcess = record.streamProcess && typeof record.streamProcess === 'object' && !Array.isArray(record.streamProcess)
-    ? record.streamProcess as Record<string, unknown>
-    : undefined;
-  return {
-    ...compactRecord(record, REQUEST_PAYLOAD_RAW_TEXT_LIMIT),
-    streamProcess: streamProcess
-      ? {
-          eventCount: streamProcess.eventCount,
-          summary: clipOptionalText(typeof streamProcess.summary === 'string' ? streamProcess.summary : undefined, REQUEST_PAYLOAD_RUN_TEXT_LIMIT),
-        }
-      : undefined,
-  };
 }
 
 function compactRecord(record: Record<string, unknown> | undefined, maxChars: number) {

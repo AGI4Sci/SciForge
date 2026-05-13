@@ -8,7 +8,7 @@ export const RELEASE_GATE_STEP_KINDS = [
   'release-verify',
   'service-restart',
   'audit-record',
-  'push',
+  'external-sync',
 ] as const;
 
 export const RELEASE_GATE_STEP_STATUSES = ['passed', 'failed', 'pending', 'skipped'] as const;
@@ -93,7 +93,6 @@ export interface ReleaseGateAudit {
   gateId: string;
   status: ReleaseGateStatus;
   syncAllowed: boolean;
-  pushAllowed: boolean;
   requiredCommand: string;
   policy: ReleaseGatePolicy;
   changeSummary?: string;
@@ -177,7 +176,6 @@ export function buildReleaseGateAudit(input: ReleaseGateAuditInput = {}): Releas
     gateId: normalizedText(input.gateId) ?? 'release-gate',
     status,
     syncAllowed,
-    pushAllowed: syncAllowed,
     requiredCommand: policy.requiredCommand,
     policy,
     changeSummary,
@@ -192,10 +190,6 @@ export function buildReleaseGateAudit(input: ReleaseGateAuditInput = {}): Releas
     nextActions: releaseGateNextActions(status, missing, failureReasons, policy),
     createdAt: normalizedText(input.createdAt) ?? 'pending-clock',
   };
-}
-
-export function releaseGateAllowsPush(audit: ReleaseGateAudit): boolean {
-  return releaseGateAllowsSync(audit);
 }
 
 export function releaseGateAllowsSync(audit: ReleaseGateAudit): boolean {
@@ -226,8 +220,9 @@ export function releaseGateHasSyncActionSignal(text: string | undefined, policyI
   const normalized = normalizedText(text)?.toLowerCase();
   if (!normalized) return false;
   return policy.syncActionSignals.some((signal) => {
-    const lowered = signal.toLowerCase();
-    return normalized === lowered || normalized.includes(lowered);
+    const normalizedSignal = normalizedText(signal)?.toLowerCase();
+    if (!normalizedSignal) return false;
+    return normalized === normalizedSignal || normalized.startsWith(`${normalizedSignal} `);
   });
 }
 
@@ -238,7 +233,7 @@ export function releaseGateHasRequiredVerifyCommand(command: string | undefined,
   const normalized = normalizedText(command)?.toLowerCase();
   if (!normalized) return false;
   const requiredCommand = policy.requiredCommand.toLowerCase();
-  return normalized === requiredCommand || normalized.includes(requiredCommand);
+  return normalized === requiredCommand;
 }
 
 function normalizeReleaseGateSteps(steps: ReleaseGateStepInput[], verifyCommand: string, policy: ReleaseGatePolicy): ReleaseGateStep[] {

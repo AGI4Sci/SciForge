@@ -170,8 +170,6 @@ export function agentHarnessHandoffMetadata(request: GatewayRequest, runtime: {
     harnessDecisionOwner: decisionOwner,
     ...(startupContextSummary ? { startupContextRef: startupContextSummary.envelopeId, startupContextSummary } : {}),
     harnessSummary,
-    ...(includeContinuityAudit ? { agentHarnessContinuityDecision: continuityDecision } : {}),
-    ...(backendSelectionDecision ? { agentHarnessBackendSelectionDecision: backendSelectionDecision } : {}),
     agentHarnessHandoff: {
       schemaVersion: AGENT_HARNESS_HANDOFF_SCHEMA_VERSION,
       shadowMode: true,

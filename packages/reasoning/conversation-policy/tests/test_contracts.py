@@ -66,12 +66,20 @@ class ConversationPolicyContractTest(unittest.TestCase):
 
     def test_response_fixture_round_trips(self):
         payload = _read_fixture("response_basic.json")
+        payload["turnExecutionConstraints"] = {
+            "schemaVersion": "sciforge.turn-execution-constraints.v1",
+            "policyId": "sciforge.current-turn-execution-constraints.v1",
+            "source": "runtime-contract.turn-constraints",
+            "contextOnly": True,
+            "agentServerForbidden": True,
+        }
         response = response_from_json(payload)
 
         self.assertEqual(response.status, "ok")
         self.assertEqual(response.goalSnapshot["taskRelation"], "continue")
         self.assertEqual(response.contextPolicy["mode"], "continue")
         self.assertEqual(response.capabilityBrief["selected"], [])
+        self.assertTrue(response.turnExecutionConstraints["agentServerForbidden"])
         self.assertEqual(to_json_dict(response)["schemaVersion"], RESPONSE_SCHEMA_VERSION)
 
     def test_service_matches_basic_golden_fixture(self):
@@ -87,6 +95,7 @@ class ConversationPolicyContractTest(unittest.TestCase):
         self.assertEqual(result["memoryPlan"]["schemaVersion"], "sciforge.conversation.memory-plan.v1")
         self.assertEqual(result["handoffPlan"]["status"], "ready")
         self.assertEqual(result["executionModePlan"]["executionMode"], "repair-or-continue-project")
+        self.assertIn("turnExecutionConstraints", result)
         self.assertEqual(result["latencyPolicy"]["schemaVersion"], "sciforge.conversation.latency-policy.v1")
         self.assertEqual(result["responsePlan"]["schemaVersion"], "sciforge.conversation.response-plan.v1")
         self.assertEqual(result["backgroundPlan"]["schemaVersion"], "sciforge.conversation.background-plan.v1")
@@ -97,6 +106,21 @@ class ConversationPolicyContractTest(unittest.TestCase):
         self.assertIn("capabilityBrief", result)
         self.assertNotIn("capabilityBriefs", result)
         self.assertTrue(result["userVisiblePlan"])
+
+    def test_service_emits_no_execution_turn_constraints(self):
+        request = {
+            "schemaVersion": REQUEST_SCHEMA_VERSION,
+            "requestId": "no-exec-current-ref",
+            "turn": {
+                "text": "Do not rerun or dispatch AgentServer; use current refs only.",
+                "refs": [{"kind": "path", "ref": "reports/current.md"}],
+            },
+        }
+        result = handle_payload(request)
+
+        self.assertEqual(result["turnExecutionConstraints"]["executionModeHint"], "direct-context-answer")
+        self.assertTrue(result["turnExecutionConstraints"]["agentServerForbidden"])
+        self.assertEqual(result["executionModePlan"]["executionMode"], "direct-context-answer")
 
     def test_service_returns_structured_stdio_json(self):
         request_text = json.dumps(_read_fixture("request_basic.json"))

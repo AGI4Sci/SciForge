@@ -378,6 +378,7 @@ function normalizeHandoffObject(value: Record<string, unknown>, context: {
 }) {
   const lowerPath = context.path.map((part) => part.toLowerCase());
   if (looksLikeArtifact(value) || lowerPath.includes('artifacts')) return normalizeHandoffArtifact(value, context);
+  if (context.path.at(-1) === 'agentHarnessHandoff') return normalizeAgentHarnessHandoff(value, context);
   if (
     context.path.length > 0
     && !shouldPreserveHandoffContainer(context.path)
@@ -431,6 +432,89 @@ function normalizeHandoffObject(value: Record<string, unknown>, context: {
       ...pickReferenceFields(value),
       ...handoffSummary(value, context, 'large-json'),
     };
+  }
+  return out;
+}
+
+function normalizeAgentHarnessHandoff(value: Record<string, unknown>, context: {
+  budget: BackendHandoffBudget;
+  rawRef: string;
+  path: string[];
+  depth: number;
+  siblingRefs: Record<string, string | undefined>;
+  decisions: BackendHandoffBudgetDecision[];
+}) {
+  const out: Record<string, unknown> = {};
+  for (const key of [
+    'schemaVersion',
+    'shadowMode',
+    'decisionOwner',
+    'harnessProfileId',
+    'harnessContractRef',
+    'harnessTraceRef',
+    'intentMode',
+    'explorationMode',
+    'startupContextRef',
+  ]) {
+    if (value[key] !== undefined) out[key] = normalizeHandoffValue(value[key], {
+      ...context,
+      path: [...context.path, key],
+      depth: context.depth + 1,
+    });
+  }
+  for (const key of [
+    'contextRefs',
+    'contextBudget',
+    'repairContextPolicy',
+    'promptDirectives',
+    'startupContextSummary',
+    'budgetSummary',
+    'summary',
+    'continuityDecision',
+    'backendSelectionDecision',
+  ]) {
+    if (value[key] === undefined) continue;
+    out[key] = normalizeHandoffValue(value[key], {
+      ...context,
+      path: [...context.path, key],
+      depth: Math.min(context.depth + 1, 1),
+    });
+  }
+  if (isRecord(value.promptRenderPlan)) {
+    out.promptRenderPlan = normalizeAgentHarnessPromptRenderPlan(value.promptRenderPlan, context);
+  }
+  return out;
+}
+
+function normalizeAgentHarnessPromptRenderPlan(value: Record<string, unknown>, context: {
+  budget: BackendHandoffBudget;
+  rawRef: string;
+  path: string[];
+  depth: number;
+  siblingRefs: Record<string, string | undefined>;
+  decisions: BackendHandoffBudgetDecision[];
+}) {
+  const out: Record<string, unknown> = {};
+  for (const key of ['schemaVersion', 'renderMode', 'deterministic', 'renderDigest']) {
+    if (value[key] !== undefined) out[key] = value[key];
+  }
+  for (const key of ['sourceRefs', 'strategyRefs', 'moduleDirectivePreviews', 'directiveRefs', 'selectedContextRefs']) {
+    if (value[key] === undefined) continue;
+    out[key] = normalizeHandoffValue(value[key], {
+      ...context,
+      path: [...context.path, 'promptRenderPlan', key],
+      depth: 1,
+    });
+  }
+  if (Array.isArray(value.renderedEntries)) {
+    out.renderedEntries = value.renderedEntries.slice(0, 32).map((entry, index) => normalizeHandoffValue(entry, {
+      ...context,
+      path: [...context.path, 'promptRenderPlan', 'renderedEntries', String(index)],
+      depth: 1,
+    }));
+  }
+  if (typeof value.renderedText === 'string' && value.renderedText.length <= context.budget.maxInlineStringChars) {
+    out.renderedText = value.renderedText;
   }
   return out;
 }

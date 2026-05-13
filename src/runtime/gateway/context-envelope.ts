@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
-import { currentUserRequestFromPrompt } from '@sciforge-ui/runtime-contract/conversation-policy';
+import { conversationSummaryLooksDigestOnly, currentUserRequestFromPrompt } from '@sciforge-ui/runtime-contract/conversation-policy';
 import { defaultArtifactSchemaForSkillDomain } from '@sciforge-ui/runtime-contract/artifact-policy';
+import { collectRuntimeRefsFromValue } from '@sciforge-ui/runtime-contract/references';
 import { runtimeVerificationResultArtifacts } from '@sciforge-ui/runtime-contract/verification-result';
 import { buildStartupContextEnvelope, type StartupCapabilityBriefInput } from '../../../packages/agent-harness/src/startup-context.js';
 import type { CapabilityCostClass, CapabilityLatencyClass, CapabilitySideEffectClass, LatencyTier, StartupContextEnvelope } from '../../../packages/agent-harness/src/contracts.js';
@@ -194,13 +195,31 @@ export function buildContextEnvelope(
       ...executionModeDecision,
       recentConversation: visibleRecentConversation,
       conversationLedger: summarizeConversationLedger(conversationLedger, mode),
+      boundedSessionRefs: boundedSessionRefsForEnvelope({
+        artifacts: request.artifacts,
+        recentExecutionRefs,
+        verificationResults: [
+          request.verificationResult,
+          ...(request.recentVerificationResults ?? []),
+          uiState.verificationResult,
+          ...toRecordList(uiState.recentVerificationResults),
+          ...toRecordList(uiState.verificationResults),
+        ],
+        stateDigestRefs,
+      }),
       contextReusePolicy: contextReusePolicy ? clipForAgentServerJson(contextReusePolicy, 3) : undefined,
       recentRuns: Array.isArray(uiState.recentRuns)
         ? summarizeRecentRunsForEnvelope(uiState.recentRuns, mode)
         : undefined,
       recentFailures: recentFailures.length ? recentFailures : undefined,
-      verificationResult: request.verificationResult ?? (isRecord(uiState.verificationResult) ? uiState.verificationResult : undefined),
-      recentVerificationResults: request.recentVerificationResults ?? toRecordList(uiState.recentVerificationResults),
+      verificationResult: summarizeVerificationRecordForEnvelope(
+        request.verificationResult ?? uiState.verificationResult,
+        'sessionFacts.verificationResult',
+      ),
+      recentVerificationResults: summarizeVerificationResultRecords([
+        ...(request.recentVerificationResults ?? []),
+        ...toRecordList(uiState.recentVerificationResults),
+      ], 'sessionFacts.recentVerificationResults'),
     },
     longTermRefs: {
       artifacts: summarizeArtifactRefs(request.artifacts),
@@ -214,24 +233,35 @@ export function buildContextEnvelope(
   };
 }
 
-const rawLogInspectionPattern = /\b(raw\s+logs?|log\s+(?:text|contents?)|(?:stdout|stderr)\s+(?:text|contents?|logs?)|failure diagnosis|debug logs?|原始日志|日志内容|标准输出内容|错误输出内容|失败诊断|调试日志)\b/i;
-
 function evidenceExpansionPolicySummaryForEnvelope(request: GatewayRequest) {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
-  const requestText = request.prompt;
-  const requestedRawLogInspection = rawLogInspectionPattern.test(requestText);
+  const policyRecord = isRecord(uiState.failureRecoveryPolicy) && isRecord(uiState.failureRecoveryPolicy.evidenceExpansionPolicy)
+    ? uiState.failureRecoveryPolicy.evidenceExpansionPolicy
+    : undefined;
+  const transportPolicy = policyRecord ? clipForAgentServerJson(policyRecord, 2) : undefined;
   return {
     schemaVersion: 'sciforge.evidence-expansion-policy.v1',
+    authority: 'agent-harness-contract-or-runtime-policy',
     defaultAction: 'refs-and-digests-first',
-    stdoutStderrRefs: requestedRawLogInspection ? 'may-expand-for-current-user-request' : 'cite-only-by-default',
+    stdoutStderrRefs: 'cite-only-by-default',
     artifactBodies: 'prefer dataRef, path, markdownRef, or currentReferenceDigests; expand bounded excerpts only when needed',
-    continuationGuard: 'For continuation, export, or audit-summary turns, list log refs and structured artifact refs without reading raw logs unless explicitly requested.',
-    requestedRawLogInspection,
-    source: 'context-envelope',
-    uiTransportPolicy: isRecord(uiState.failureRecoveryPolicy) && isRecord(uiState.failureRecoveryPolicy.evidenceExpansionPolicy)
-      ? clipForAgentServerJson(uiState.failureRecoveryPolicy.evidenceExpansionPolicy, 2)
-      : undefined,
+    logBodyExpansion: 'requires-explicit-policy',
+    structuredRefTransport: 'refs-and-digests-first',
+    currentTurnRawLogRequestSignal: rawLogExpansionAuthorizedByPolicy(policyRecord),
+    expansionRequiresPolicyTrace: true,
+    source: 'runtime-context-projection',
+    uiTransportPolicy: transportPolicy,
   };
+}
+
+function rawLogExpansionAuthorizedByPolicy(policy: unknown) {
+  if (!isRecord(policy)) return false;
+  const mode = stringField(policy.rawLogMode) ?? stringField(policy.logExpansionMode) ?? stringField(policy.stdoutStderrMode);
+  return policy.allowRawLogExpansion === true
+    || policy.allowStdoutStderrExpansion === true
+    || mode === 'allow-bounded'
+    || mode === 'allowed'
+    || mode === 'required';
 }
 
 function continuityPolicySummaryForEnvelope(
@@ -832,16 +862,34 @@ function failureEvidenceRefs(value: unknown) {
 function policyConversationEntries(value: unknown) {
   if (!Array.isArray(value)) return [];
   return value.flatMap((entry) => {
-    if (typeof entry === 'string') return [entry];
+    if (typeof entry === 'string') return [conversationTextDigestLine('unknown', entry, [])];
     if (!isRecord(entry)) return [];
     const role = typeof entry.role === 'string' ? entry.role : 'unknown';
-    const content = typeof entry.content === 'string'
-      ? entry.content
-      : typeof entry.summary === 'string'
-        ? entry.summary
-        : '';
-    return content.trim() ? [`${role}: ${content}`] : [];
+    const refs = [
+      ...toStringList(entry.refs),
+      ...toStringList(entry.references),
+      ...toStringList(entry.objectReferences),
+      ...digestRefs(entry.contentDigest),
+      ...digestRefs(entry.messageDigest),
+      ...digestRefs(entry.payloadDigest),
+    ];
+    if (typeof entry.content === 'string') return [conversationTextDigestLine(role, entry.content, refs)];
+    const digest = firstRecord(entry.contentDigest, entry.messageDigest, entry.payloadDigest);
+    if (digest) {
+      const hash = stringField(digest.hash) ?? 'none';
+      const chars = typeof digest.chars === 'number' ? digest.chars : 0;
+      return [`${role}: session-message-body omitted; hash=${hash}; chars=${chars}${refs.length ? `; refs=${refs.slice(0, 4).join(', ')}` : ''}`];
+    }
+    return refs.length ? [`${role}: session-message-body omitted; refs=${refs.slice(0, 4).join(', ')}`] : [];
   });
+}
+
+function conversationTextDigestLine(role: string, text: string, refs: string[]) {
+  return `${role}: session-message-body omitted; hash=${hashJson(text)}; chars=${text.length}${refs.length ? `; refs=${refs.slice(0, 4).join(', ')}` : ''}`;
+}
+
+function digestRefs(value: unknown) {
+  return isRecord(value) ? toStringList(value.refs) : [];
 }
 
 function stateDigestForEnvelope(uiState: Record<string, unknown>) {
@@ -1073,6 +1121,179 @@ export function summarizeExecutionRefs(refs: Array<Record<string, unknown>>) {
   }));
 }
 
+export function boundedSessionRefsForEnvelope(input: {
+  artifacts?: Array<Record<string, unknown>>;
+  recentExecutionRefs?: Array<Record<string, unknown>>;
+  verificationResults?: unknown[];
+  stateDigestRefs?: string[];
+}) {
+  const artifacts = summarizeArtifactRefs(input.artifacts ?? []);
+  const recentExecutionRefs = summarizeExecutionRefs(input.recentExecutionRefs ?? []);
+  const verificationResults = summarizeVerificationResultRecords(
+    input.verificationResults ?? [],
+    'sessionFacts.boundedSessionRefs.verificationResults',
+  );
+  const artifactRefs = artifacts.flatMap((entry) => refsFromRecord(entry));
+  const executionRefs = recentExecutionRefs.flatMap((entry) => refsFromRecord(entry));
+  const verificationRefs = verificationResults.flatMap((entry) => [
+    ...toStringList(entry.evidenceRefs),
+    ...toStringList(entry.refs),
+  ]);
+  const allRefs = uniqueStrings([
+    ...artifactRefs,
+    ...executionRefs,
+    ...verificationRefs,
+    ...(input.stateDigestRefs ?? []),
+  ]).slice(0, 48);
+  if (!artifacts.length && !recentExecutionRefs.length && !verificationResults.length && !allRefs.length) return undefined;
+  return pruneUndefined({
+    schemaVersion: 'sciforge.bounded-session-refs.v1',
+    policy: 'refs-and-digests-only; expand artifact, log, task-result, or verification bodies only when current-turn policy explicitly requests it',
+    artifacts,
+    recentExecutionRefs,
+    verificationResults,
+    stateDigestRefs: uniqueStrings(input.stateDigestRefs ?? []).slice(0, 16),
+    allRefs,
+  });
+}
+
+export function summarizeVerificationResultRecords(values: unknown[], source = 'verificationResults') {
+  return values
+    .map((entry, index) => summarizeVerificationRecordForEnvelope(entry, `${source}[${index}]`))
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    .slice(-6);
+}
+
+export function summarizeVerificationRecordForEnvelope(value: unknown, source = 'verificationResult') {
+  if (!isRecord(value)) return undefined;
+  const refs = verificationRecordRefs(value);
+  const diagnostics = isRecord(value.diagnostics) ? value.diagnostics : undefined;
+  const data = value.data ?? value.raw ?? value.payload ?? value.result;
+  return pruneUndefined({
+    schemaVersion: stringField(value.schemaVersion),
+    source,
+    id: stringField(value.id) ?? stringField(value.verificationId),
+    verdict: stringField(value.verdict),
+    status: stringField(value.status),
+    dataRef: stringField(value.dataRef) ?? stringField(value.data_ref),
+    rawRef: stringField(value.rawRef) ?? stringField(value.raw_ref),
+    verificationRef: stringField(value.verificationRef) ?? stringField(value.verification_ref),
+    confidence: numberField(value.confidence),
+    reward: numberField(value.reward),
+    critique: verificationTextSummary(value.critique ?? value.summary ?? value.message, 600),
+    evidenceRefs: uniqueStrings([
+      ...toStringList(value.evidenceRefs),
+      ...toStringList(value.evidence_refs),
+      ...toStringList(value.sourceRefs),
+      ...toStringList(value.source_refs),
+    ]).slice(0, 12),
+    repairHints: toStringList(value.repairHints).slice(0, 8).map((hint) => verificationTextSummary(hint, 240)).filter(Boolean),
+    refs,
+    dataSummary: verificationPayloadSummary(data),
+    diagnosticsSummary: diagnostics ? verificationPayloadSummary(diagnostics) : undefined,
+    keys: Object.keys(value).slice(0, 16),
+    hash: hashJson(value),
+  }) as Record<string, unknown>;
+}
+
+function verificationTextSummary(value: unknown, limit: number) {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (!text) return undefined;
+  if (looksLikeRawCarrierText(text)) {
+    return `[omitted raw-like verification text; chars=${text.length}; hash=${hashJson(text)}]`;
+  }
+  return clipForAgentServerPrompt(text, limit);
+}
+
+function looksLikeRawCarrierText(text: string) {
+  if (text.length > 1200) return true;
+  return /rawProviderPayload|providerResponse|task-results|stdout|stderr|traceback|stack trace|<html|<!doctype|%pdf|BEGIN [A-Z ]+|fullText|raw payload/i.test(text);
+}
+
+function verificationRecordRefs(record: Record<string, unknown>) {
+  const refs = new Set<string>();
+  for (const key of [
+    'ref',
+    'dataRef',
+    'data_ref',
+    'rawRef',
+    'raw_ref',
+    'providerRawRef',
+    'provider_raw_ref',
+    'verificationRef',
+    'verification_ref',
+    'sourceRef',
+    'source_ref',
+    'traceRef',
+    'trace_ref',
+    'outputRef',
+    'output_ref',
+    'reportRef',
+    'report_ref',
+    'artifactRef',
+    'artifact_ref',
+    'path',
+  ]) {
+    const ref = stringField(record[key]);
+    if (ref) refs.add(ref);
+  }
+  for (const key of ['evidenceRefs', 'evidence_refs', 'sourceRefs', 'source_refs', 'artifactRefs', 'artifact_refs']) {
+    for (const ref of toStringList(record[key])) refs.add(ref);
+  }
+  return Array.from(refs).slice(0, 16);
+}
+
+function refsFromRecord(record: Record<string, unknown>) {
+  return uniqueStrings([
+    ...['ref', 'path', 'dataRef', 'outputRef', 'stdoutRef', 'stderrRef', 'codeRef', 'inputRef']
+      .map((key) => stringField(record[key]))
+      .filter((entry): entry is string => Boolean(entry)),
+    ...toStringList(record.artifactRefs),
+    ...toStringList(record.refs),
+  ]).slice(0, 16);
+}
+
+function verificationPayloadSummary(value: unknown): Record<string, unknown> | undefined {
+  if (value === undefined) return undefined;
+  return pruneUndefined({
+    omitted: 'verification-payload-body',
+    ...payloadShapeSummary(value),
+    refs: refsInValue(value).slice(0, 16),
+    hash: hashJson(value),
+  }) as Record<string, unknown>;
+}
+
+function payloadShapeSummary(value: unknown): Record<string, unknown> {
+  if (typeof value === 'string') return { kind: 'string', chars: value.length };
+  if (typeof value === 'number' || typeof value === 'boolean') return { kind: typeof value };
+  if (Array.isArray(value)) {
+    return {
+      kind: 'array',
+      count: value.length,
+      itemKinds: uniqueStrings(value.slice(0, 12).map((entry) => Array.isArray(entry) ? 'array' : typeof entry)).slice(0, 6),
+    };
+  }
+  if (isRecord(value)) {
+    return {
+      kind: 'object',
+      keys: Object.keys(value).slice(0, 16),
+      nestedRecordCount: recordsInValue(value).length,
+    };
+  }
+  return { kind: value === null ? 'null' : typeof value };
+}
+
+function refsInValue(value: unknown, depth = 0): string[] {
+  return collectRuntimeRefsFromValue(value, { maxDepth: 5 - depth, maxRefs: 32 });
+}
+
+function recordsInValue(value: unknown, depth = 0): Record<string, unknown>[] {
+  if (depth > 5 || value === undefined || value === null) return [];
+  if (Array.isArray(value)) return value.flatMap((entry) => recordsInValue(entry, depth + 1));
+  if (!isRecord(value)) return [];
+  return [value, ...Object.values(value).flatMap((entry) => recordsInValue(entry, depth + 1))];
+}
+
 export function summarizeConversationPolicyForAgentServer(value: unknown) {
   const source = isRecord(value) ? value : {};
   const latency = isRecord(source.latencyPolicy) ? source.latencyPolicy : source;
@@ -1118,17 +1339,23 @@ export function summarizeConversationPolicyForAgentServer(value: unknown) {
 
 function summarizeVerificationResults(request: GatewayRequest) {
   const fromArtifacts = runtimeVerificationResultArtifacts(request.artifacts)
-    .map((artifact) => ({
+    .map((artifact, index) => summarizeVerificationRecordForEnvelope({
       id: artifact.id,
+      type: artifact.type,
       dataRef: artifact.dataRef,
-      metadata: isRecord(artifact.metadata) ? clipForAgentServerJson(artifact.metadata, 2) : undefined,
-      data: isRecord(artifact.data) ? clipForAgentServerJson(artifact.data, 2) : undefined,
-    }));
+      metadata: artifact.metadata,
+      data: artifact.data,
+    }, `longTermRefs.verificationResults.artifact[${index}]`));
   const fromUiState = toRecordList(request.uiState?.verificationResults)
-    .map((entry) => clipForAgentServerJson(entry, 2));
-  const explicit = request.verificationResult ? [clipForAgentServerJson(request.verificationResult, 2)] : [];
-  const recent = (request.recentVerificationResults ?? []).map((entry) => clipForAgentServerJson(entry, 2));
-  const combined = [...fromArtifacts, ...fromUiState, ...recent, ...explicit].slice(-6);
+    .map((entry, index) => summarizeVerificationRecordForEnvelope(entry, `longTermRefs.verificationResults.uiState[${index}]`));
+  const explicit = request.verificationResult
+    ? [summarizeVerificationRecordForEnvelope(request.verificationResult, 'longTermRefs.verificationResults.explicit')]
+    : [];
+  const recent = (request.recentVerificationResults ?? [])
+    .map((entry, index) => summarizeVerificationRecordForEnvelope(entry, `longTermRefs.verificationResults.recent[${index}]`));
+  const combined = [...fromArtifacts, ...fromUiState, ...recent, ...explicit]
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    .slice(-6);
   return combined.length ? combined : undefined;
 }
 

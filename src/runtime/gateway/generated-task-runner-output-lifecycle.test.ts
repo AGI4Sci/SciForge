@@ -53,7 +53,14 @@ test('pre-output generated task failure preserves session-bundle partial artifac
     stdoutRef: `${sessionBundleRel}/logs/generated-literature-timeout.stdout.log`,
     stderrRef: `${sessionBundleRel}/logs/generated-literature-timeout.stderr.log`,
     outputRef: outputRel,
-    runtimeFingerprint: { language: 'python', command: 'python3' },
+    runtimeFingerprint: {
+      language: 'python',
+      command: 'python3',
+      externalFailure: {
+        externalDependencyStatus: 'transient-unavailable',
+        failureReason: 'network-timeout: external PDF retrieval budget exhausted',
+      },
+    },
   } as unknown as WorkspaceTaskRunResult;
 
   const payload = await completeGeneratedTaskRunOutputLifecycle({
@@ -150,7 +157,14 @@ test('partial PDF retrieval failures keep downloaded full text and metadata inst
     stdoutRef: `${sessionBundleRel}/logs/generated-literature-downloads.stdout.log`,
     stderrRef: `${sessionBundleRel}/logs/generated-literature-downloads.stderr.log`,
     outputRef: outputRel,
-    runtimeFingerprint: { language: 'python', command: 'python3' },
+    runtimeFingerprint: {
+      language: 'python',
+      command: 'python3',
+      externalFailure: {
+        externalDependencyStatus: 'transient-unavailable',
+        failureReason: 'rate-limited: PDF provider rejected several downloads; preserve partial evidence',
+      },
+    },
   } as unknown as WorkspaceTaskRunResult;
 
   const payload = await completeGeneratedTaskRunOutputLifecycle({
@@ -196,8 +210,7 @@ test('partial PDF retrieval failures keep downloaded full text and metadata inst
 
   const serialized = JSON.stringify(payload);
   assert.equal(repairAttempted, false);
-  assert.match(serialized, /HTTP 403 forbidden/);
-  assert.match(serialized, /content-length exceeds max download bytes/);
+  assert.match(serialized, /rate-limited: PDF provider rejected several downloads/);
   assert.match(serialized, /generated-task-partial-evidence/);
   assert.ok(payload.objectReferences?.some((ref) => ref.ref === pdfRel));
   assert.ok(payload.objectReferences?.some((ref) => ref.ref === metadataRel));

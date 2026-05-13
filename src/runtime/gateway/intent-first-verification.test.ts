@@ -31,8 +31,8 @@ test('intent match check is lightweight and does not imply work verification', (
 
   assert.equal(check.schemaVersion, INTENT_FIRST_VERIFICATION_SCHEMA_VERSION);
   assert.equal(check.verdict, 'pass');
-  assert.equal(check.requestedActionType, 'advice');
-  assert.ok(check.explicitConstraints.includes('negative-or-skip-instruction'));
+  assert.equal(check.requestedActionType, 'answer');
+  assert.deepEqual(check.explicitConstraints, []);
   assert.equal(check.answerCoverage, 'covered');
 });
 
@@ -49,18 +49,31 @@ test('verify routing keeps work verification in the background by default', () =
 });
 
 test('verify routing blocks only when user asks to wait or release risk is explicit', () => {
-  assert.equal(verifyRoutingDecision(baseRequest({ prompt: '等验证完成后再给最终结论。' })).blockingPolicy, 'user-requested-wait');
-  assert.equal(verifyRoutingDecision(baseRequest({ prompt: 'run release verify before merge.' })).blockingPolicy, 'release');
+  assert.equal(verifyRoutingDecision(baseRequest({
+    prompt: '等验证完成后再给最终结论。',
+    uiState: { verifyPolicy: { mode: 'wait' } },
+  })).blockingPolicy, 'user-requested-wait');
+  assert.equal(verifyRoutingDecision(baseRequest({ prompt: 'run release verify for merge.' })).blockingPolicy, 'non-blocking');
+  assert.equal(verifyRoutingDecision(baseRequest({
+    prompt: 'git push after npm run verify:full.',
+    uiState: { releaseGatePolicy: RELEASE_GATE_POLICY },
+  })).blockingPolicy, 'release');
   assert.equal(verifyRoutingDecision(baseRequest({
     prompt: '删除生产数据。',
     riskLevel: 'high',
-    actionSideEffects: ['delete external production records'],
+    actionSideEffects: ['external-write'],
   })).blockingPolicy, 'high-risk');
-  assert.equal(verifyRoutingDecision(baseRequest({ prompt: 'skip verify, just show the draft.' })).mode, 'skip');
+  assert.equal(verifyRoutingDecision(baseRequest({
+    prompt: 'skip verify, just show the draft.',
+    uiState: { verifyPolicy: { mode: 'skip' } },
+  })).mode, 'skip');
 });
 
-test('release routing creates a verify full gate and blocks push when evidence is missing', () => {
-  const request = baseRequest({ prompt: '等完整验证通过再推 GitHub。' });
+test('release routing creates a verify full gate and blocks external sync when evidence is missing', () => {
+  const request = baseRequest({
+    prompt: '准备 git push，release gate 要求 npm run verify:full 已通过。',
+    uiState: { releaseGatePolicy: RELEASE_GATE_POLICY },
+  });
   const payload = basePayload({
     displayIntent: {
       releaseGate: {
@@ -81,17 +94,17 @@ test('release routing creates a verify full gate and blocks push when evidence i
   const jobs = buildVerifyJobs(payload, routing);
   const attached = attachIntentFirstVerification(payload, request, { runWorkVerify: true });
   const envelope = attached.displayIntent?.intentFirstVerification as {
-    jobs?: Array<{ command?: string; status?: string; releaseGate?: { pushAllowed?: boolean; missing?: string[] } }>;
+    jobs?: Array<{ command?: string; status?: string; releaseGate?: { syncAllowed?: boolean; missing?: string[] } }>;
     verdicts?: Array<{ verdict?: string }>;
   } | undefined;
 
   assert.equal(routing.mode, 'release');
   assert.equal(jobs[0]?.command, RELEASE_GATE_REQUIRED_COMMAND);
   assert.equal(jobs[0]?.blockingPolicy, 'release');
-  assert.equal(jobs[0]?.releaseGate?.pushAllowed, false);
+  assert.equal(jobs[0]?.releaseGate?.syncAllowed, false);
   assert.ok(jobs[0]?.releaseGate?.missing.includes(RELEASE_GATE_REQUIRED_COMMAND));
   assert.equal(envelope?.jobs?.[0]?.status, 'running');
-  assert.equal(envelope?.jobs?.[0]?.releaseGate?.pushAllowed, false);
+  assert.equal(envelope?.jobs?.[0]?.releaseGate?.syncAllowed, false);
   assert.equal(envelope?.verdicts?.[0]?.verdict, 'pending');
 });
 
@@ -103,7 +116,7 @@ test('release routing consumes release policy injected through uiState', () => {
     requiredStepKinds: ['release-verify', 'audit-record'] as const,
   };
   const request = baseRequest({
-    prompt: 'run release verify before publishing.',
+    prompt: 'publish artifact bundle after python -m verifier.release --strict.',
     uiState: { releaseGatePolicy: customPolicy },
   });
   const routing = verifyRoutingDecision(request);
@@ -137,24 +150,27 @@ test('release routing passes only when verify full, services, summary, git targe
   };
   const payload = attachIntentFirstVerification(basePayload({
     displayIntent: { releaseGate },
-  }), baseRequest({ prompt: 'run release verify before git push.' }), {
+  }), baseRequest({
+    prompt: 'git push after npm run verify:full.',
+    uiState: { releaseGatePolicy: RELEASE_GATE_POLICY },
+  }), {
     runWorkVerify: true,
     now: () => '2026-05-13T00:00:00.000Z',
   });
   const status = payload.displayIntent?.verificationStatus as {
     work?: string;
-    releaseGate?: { status?: string; pushAllowed?: boolean };
+    releaseGate?: { status?: string; syncAllowed?: boolean };
   } | undefined;
   const envelope = payload.displayIntent?.intentFirstVerification as {
-    jobs?: Array<{ status?: string; releaseGate?: { status?: string; pushAllowed?: boolean } }>;
+    jobs?: Array<{ status?: string; releaseGate?: { status?: string; syncAllowed?: boolean } }>;
     verdicts?: Array<{ verdict?: string }>;
   } | undefined;
 
   assert.equal(status?.work, 'verify passed');
   assert.equal(status?.releaseGate?.status, 'passed');
-  assert.equal(status?.releaseGate?.pushAllowed, true);
+  assert.equal(status?.releaseGate?.syncAllowed, true);
   assert.equal(envelope?.jobs?.[0]?.status, 'passed');
-  assert.equal(envelope?.jobs?.[0]?.releaseGate?.pushAllowed, true);
+  assert.equal(envelope?.jobs?.[0]?.releaseGate?.syncAllowed, true);
   assert.equal(envelope?.verdicts?.[0]?.verdict, 'passed');
 });
 
@@ -180,6 +196,7 @@ test('attaches intent-first verification status without blocking payload deliver
 test('skip route records an intent-only verification job instead of heavy checks', () => {
   const payload = attachIntentFirstVerification(basePayload(), baseRequest({
     prompt: 'skip verify and give me the draft.',
+    uiState: { verifyPolicy: { mode: 'skip' } },
   }));
   const envelope = payload.displayIntent?.intentFirstVerification as {
     routing?: { mode?: string; level?: string };

@@ -148,10 +148,11 @@ test('compacts prior work payloads for multi-turn requests', () => {
   assert.equal(payload.artifacts[0]?.metadata?.inlineDataOmittedFromChatPayload, true);
   assert.ok((payload.executionUnits[0]?.params.length ?? 0) < 1_600);
   assert.doesNotMatch(JSON.stringify(payload.runs[0]?.raw), /event-39/);
-  assert.match((payload.runs[0]?.raw as { streamProcess?: { summary?: string } }).streamProcess?.summary ?? '', /recent status/);
+  assert.doesNotMatch(JSON.stringify(payload.runs[0]?.raw), /recent status recent status/);
+  assert.equal((payload.runs[0]?.raw as { streamProcess?: { summaryDigest?: { hash?: string } } }).streamProcess?.summaryDigest, undefined);
 });
 
-test('compact prior run payload can still recover recent process progress from stream summary', () => {
+test('compact prior run payload keeps stream transcript as digest only', () => {
   const userMessage = message('msg-user', 'user', 'continue', '2026-05-07T01:00:00.000Z');
   const priorRun = {
     id: 'run-progress',
@@ -178,9 +179,9 @@ test('compact prior run payload can still recover recent process progress from s
   const model = latestProgressModelFromCompactTrace(payload);
 
   assert.doesNotMatch(JSON.stringify(payload.runs[0]?.raw), /event-79/);
-  assert.equal(model?.phase, 'wait');
-  assert.equal(model?.waitingFor, '后端返回新事件');
-  assert.equal(model?.lastEvent?.label, '读取');
+  assert.doesNotMatch(JSON.stringify(payload.runs[0]?.raw), /最近 读取/);
+  assert.equal((payload.runs[0]?.raw as { streamProcess?: { summaryDigest?: { hash?: string } } }).streamProcess?.summaryDigest, undefined);
+  assert.equal(model, undefined);
 });
 
 test('rolls back an edited user message and prunes later run-owned state', () => {
@@ -528,7 +529,8 @@ test('running guidance keeps queue status in UI message, event transcript, final
   assert.equal(responseWithGuidance.run.guidanceQueue?.[0]?.status, 'deferred');
   assert.equal((responseWithGuidance.run.raw as { guidanceQueue?: Array<{ prompt: string }> }).guidanceQueue?.[0]?.prompt, guidance.prompt);
   assert.equal(mergedForNextTurn.messages.find((item) => item.guidanceQueue?.id === guidance.id)?.guidanceQueue?.status, 'merged');
-  assert.match(nextPayload.messages.map((item) => item.content).join('\n'), /运行中引导：skip broad web fetches/);
+  assert.equal(mergedForNextTurn.messages.find((item) => item.guidanceQueue?.id === guidance.id)?.guidanceQueue?.handlingRunId, 'run-guidance');
+  assert.match(nextPayload.messages.map((item) => item.content).join('\n'), /skip broad web fetches/);
   assert.equal(nextPayload.runs.at(-1)?.guidanceQueue?.[0]?.status, 'merged');
 });
 
@@ -547,6 +549,67 @@ test('user cancel rejects queued guidance instead of replaying it across the can
   const queuedMessage = resolved.session.messages.find((item) => item.guidanceQueue?.id === guidance.id);
   assert.equal(queuedMessage?.guidanceQueue?.status, 'rejected');
   assert.match(queuedMessage?.guidanceQueue?.reason ?? '', /cancel boundary|不可逆 side effect/);
+});
+
+test('failed run defers queued guidance instead of auto-replaying into another backend generation', () => {
+  const guidance = createGuidanceQueueRecord('narrow the report after the current run', {
+    id: 'guidance-failed-run',
+    receivedAt: '2026-05-08T00:01:00.000Z',
+  });
+  const queued = appendRunningGuidanceRecord(session({
+    messages: [message('msg-user', 'user', 'start long task', '2026-05-08T00:00:00.000Z')],
+  }), guidance).session;
+  const resolved = resolveGuidanceQueueAfterRun(queued, [guidance], {
+    runFailed: true,
+    runEndedReason: '当前 run 失败；等待用户确认。',
+  });
+
+  assert.equal(resolved.nextGuidance, undefined);
+  assert.equal(resolved.remainingQueue[0]?.status, 'deferred');
+  assert.match(resolved.remainingQueue[0]?.reason ?? '', /run 失败/);
+  const queuedMessage = resolved.session.messages.find((item) => item.guidanceQueue?.id === guidance.id);
+  assert.equal(queuedMessage?.guidanceQueue?.status, 'deferred');
+  assert.equal(queuedMessage?.status, 'completed');
+});
+
+test('deferred guidance remains parked after a later successful run until the user confirms it', () => {
+  const deferred = createGuidanceQueueRecord('do not replay without confirmation', {
+    id: 'guidance-deferred',
+    receivedAt: '2026-05-08T00:01:00.000Z',
+    status: 'deferred',
+    reason: 'previous run failed',
+  });
+  const queued = appendRunningGuidanceRecord(session({
+    messages: [message('msg-user', 'user', 'start long task', '2026-05-08T00:00:00.000Z')],
+  }), deferred).session;
+  const resolved = resolveGuidanceQueueAfterRun(queued, [deferred]);
+
+  assert.equal(resolved.nextGuidance, undefined);
+  assert.equal(resolved.remainingQueue[0]?.status, 'deferred');
+  const queuedMessage = resolved.session.messages.find((item) => item.guidanceQueue?.id === deferred.id);
+  assert.equal(queuedMessage?.guidanceQueue?.status, 'deferred');
+});
+
+test('successful run only selects queued guidance and leaves deferred guidance parked', () => {
+  const deferred = createGuidanceQueueRecord('old failed-run guidance', {
+    id: 'guidance-old',
+    receivedAt: '2026-05-08T00:01:00.000Z',
+    status: 'deferred',
+  });
+  const queuedGuidance = createGuidanceQueueRecord('new running guidance', {
+    id: 'guidance-new',
+    receivedAt: '2026-05-08T00:02:00.000Z',
+  });
+  const queued = appendRunningGuidanceRecord(appendRunningGuidanceRecord(session(), deferred).session, queuedGuidance).session;
+  const resolved = resolveGuidanceQueueAfterRun(queued, [deferred, queuedGuidance]);
+
+  assert.equal(resolved.nextGuidance?.id, 'guidance-new');
+  assert.deepEqual(resolved.remainingQueue.map((item) => item.id), ['guidance-old']);
+  const newMessage = resolved.session.messages.find((item) => item.guidanceQueue?.id === queuedGuidance.id);
+  const oldMessage = resolved.session.messages.find((item) => item.guidanceQueue?.id === deferred.id);
+  assert.equal(newMessage?.guidanceQueue?.status, 'merged');
+  assert.equal(newMessage?.guidanceQueue?.handlingRunId, 'pending-next-run');
+  assert.equal(oldMessage?.guidanceQueue?.status, 'deferred');
 });
 
 test('failed runs preserve silent waiting recovery clues for the next turn payload', () => {
@@ -578,12 +641,14 @@ test('failed runs preserve silent waiting recovery clues for the next turn paylo
   });
   const nextUser = message('msg-next', 'user', '继续上一轮', '2026-05-08T00:02:00.000Z');
   const nextPayload = requestPayloadForTurn({ ...recovered, messages: [...recovered.messages, nextUser] }, nextUser, []);
+  const failedRunPayload = nextPayload.runs.find((run) => run.id === failed.failedRunId);
 
   assert.doesNotMatch(recovered.messages.at(-1)?.content ?? '', /工作过程摘要/);
   assert.doesNotMatch(recovered.runs.at(-1)?.response ?? '', /安全中止当前 stream/);
-  assert.deepEqual((recovered.runs.at(-1)?.raw as { streamProcess?: { events?: unknown[] } }).streamProcess?.events?.length, 1);
-  assert.match((nextPayload.runs.at(-1)?.raw as { streamProcess?: { summary?: string } }).streamProcess?.summary ?? '', /最近 读取/);
-  assert.match((nextPayload.runs.at(-1)?.raw as { streamProcess?: { summary?: string } }).streamProcess?.summary ?? '', /继续补充指令/);
+  assert.deepEqual((recovered.runs.at(-1)?.raw as { streamProcess?: { eventSummaries?: unknown[] } }).streamProcess?.eventSummaries?.length, 1);
+  assert.doesNotMatch(JSON.stringify(failedRunPayload?.raw), /最近 读取/);
+  assert.doesNotMatch(JSON.stringify(failedRunPayload?.raw), /继续补充指令/);
+  assert.match(String((failedRunPayload?.raw as { streamProcess?: { summaryDigest?: { hash?: string } } } | undefined)?.streamProcess?.summaryDigest?.hash ?? ''), /^fnv1a-/);
 });
 
 test('background completion initial response creates a running run and assistant message with stable refs', () => {
@@ -638,6 +703,42 @@ test('background completion success finalizes the same run and exposes results t
   assert.equal(final.runs[0].status, 'completed');
   assert.equal(final.messages[0].content, '最终报告已完成。');
   assert.match(JSON.stringify(payload.runs), /we-1/);
+});
+
+test('next-turn run payload omits raw background verification and WorkEvidence bodies', () => {
+  const rawSentinel = `RAW_BACKGROUND_SENTINEL ${'verification body '.repeat(400)}`;
+  const base = session({
+    messages: [message('msg-user', 'user', 'start task', '2026-05-08T01:00:00.000Z')],
+    runs: [{
+      id: 'run-with-raw',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'start task',
+      response: 'done',
+      createdAt: '2026-05-08T01:00:00.000Z',
+      completedAt: '2026-05-08T01:01:00.000Z',
+      raw: {
+        backgroundCompletion: {
+          status: 'completed',
+          lastEvent: {
+            type: 'background-finalization',
+            verificationResults: [{ rawProviderPayload: rawSentinel, evidenceRefs: ['file:.sciforge/verifications/raw.json'] }],
+            workEvidence: [{ id: 'we-raw', kind: 'fetch', evidenceRefs: ['file:.sciforge/evidence/raw.json'], rawRef: 'file:.sciforge/evidence/raw-provider.json' }],
+          },
+        },
+        finalResponse: { message: rawSentinel },
+        workEvidence: [{ outputSummary: rawSentinel, evidenceRefs: ['file:.sciforge/evidence/root.json'] }],
+      },
+    }],
+  });
+  const nextUser = message('msg-next-raw', 'user', '继续上一轮，只列 refs', '2026-05-08T01:02:00.000Z');
+  const payload = requestPayloadForTurn({ ...base, messages: [...base.messages, nextUser] }, nextUser, []);
+  const serialized = JSON.stringify(payload.runs);
+
+  assert.doesNotMatch(serialized, /RAW_BACKGROUND_SENTINEL/);
+  assert.match(serialized, /run-raw-body/);
+  assert.match(serialized, /raw-provider\.json/);
+  assert.match(serialized, /we-raw/);
 });
 
 test('background completion failure writes recovery context without inventing scenario state', () => {

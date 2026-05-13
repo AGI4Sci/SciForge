@@ -101,6 +101,10 @@ function normalizeExecutionUnits(value: unknown, fallback: RuntimeExecutionUnit)
         ? record.status
         : 'failed-with-reason',
       hash: asString(record.hash) || fallback.hash,
+      runId: asString(record.runId),
+      sourceRunId: asString(record.sourceRunId),
+      producerRunId: asString(record.producerRunId),
+      agentServerRunId: asString(record.agentServerRunId),
       code: asString(record.code) || asString(record.command),
       language: asString(record.language),
       codeRef: asString(record.codeRef),
@@ -194,6 +198,7 @@ export function normalizeAgentResponse(
     params: `prompt=${prompt.slice(0, 80)}`,
     status: contractValidationFailure ? 'failed-with-reason' : runStatus === 'completed' ? 'done' : 'failed',
     hash: runId.slice(0, 10),
+    runId,
     time: asString(runRecord.completedAt) ? 'archived' : undefined,
     failureReason: contractValidationFailure?.failureReason,
     recoverActions: contractValidationFailure?.recoverActions,

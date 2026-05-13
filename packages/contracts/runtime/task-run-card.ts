@@ -211,9 +211,6 @@ export interface TaskRunCard {
   updatedAt: string;
 }
 
-const TRANSIENT_EXTERNAL_PATTERN = /\b(?:http(?:\s+error)?\s*(?:403|408|413|425|429|500|502|503|504)|forbidden|too many requests|rate.?limit(?:ed)?|quota|throttl|temporar(?:y|ily)|timeout|timed out|econnreset|etimedout|eai_again|enotfound|network is unreachable|service unavailable|too large|content-length|exceeds?(?:ed)?\s+(?:max|limit|budget)|max(?:imum)?\s+(?:download|file)?\s*bytes|payload too large|request entity too large)\b/i;
-const EXTERNAL_TRANSIENT_CONTEXT_PATTERN = /\b(?:http|provider|external|network|dns|quota|rate.?limit(?:ed)?|too many requests|throttl|econnreset|etimedout|eai_again|enotfound|service unavailable|forbidden|download|pdf|content-length|max(?:imum)?\s+(?:download|file)?\s*bytes|too large|payload too large)\b/i;
-
 export function createFailureSignature(input: FailureSignatureInput): FailureSignature {
   const message = stringField(input.message) ?? stringField(input.code) ?? 'Unclassified failure.';
   const normalizedMessage = normalizeFailureMessage(message);
@@ -438,17 +435,37 @@ function inferTaskOutcome(protocolStatus: TaskProtocolStatus, input: TaskRunCard
 }
 
 function inferFailureSignatureKind(input: FailureSignatureInput, normalizedMessage: string): FailureSignatureKind {
-  const joined = [input.code, normalizedMessage, input.schemaPath].filter(Boolean).join(' ');
-  if ((TRANSIENT_EXTERNAL_PATTERN.test(joined) && EXTERNAL_TRANSIENT_CONTEXT_PATTERN.test(joined))
-    || (input.httpStatus !== undefined && [408, 425, 429, 500, 502, 503, 504].includes(input.httpStatus))) return 'external-transient';
-  if (/\btimeout|timed out|deadline\b/i.test(joined)) return 'timeout';
-  if (/\brepair\b.*\b(no.?op|no change|same failure|repeated)\b/i.test(joined)) return 'repair-no-op';
-  if (/\bschema|payload|missing field|invalid json|fenced json|contract\b/i.test(joined)) return 'schema-drift';
-  if (/\bmissing ref|stale ref|not found|deleted artifact\b/i.test(joined)) return 'missing-ref';
-  if (/\bvalidation|verifier|verification\b/i.test(joined)) return 'validation-failure';
-  if (/\bcancelled|canceled|user abort\b/i.test(joined)) return 'user-cancelled';
-  if (/\bbackend|handoff|agentserver\b/i.test(joined)) return 'backend-handoff';
+  const code = normalizeFailureCode(input.code);
+  if (input.httpStatus !== undefined && [408, 425, 429, 500, 502, 503, 504].includes(input.httpStatus)) return 'external-transient';
+  if (code && FAILURE_KIND_BY_CODE[code]) return FAILURE_KIND_BY_CODE[code];
   return 'unknown';
+}
+
+const FAILURE_KIND_BY_CODE: Record<string, FailureSignatureKind> = {
+  'external-transient': 'external-transient',
+  'provider-transient': 'external-transient',
+  'rate-limit': 'external-transient',
+  'service-unavailable': 'external-transient',
+  timeout: 'timeout',
+  deadline: 'timeout',
+  'repair-no-op': 'repair-no-op',
+  'schema-drift': 'schema-drift',
+  'payload-schema': 'schema-drift',
+  'contract-validation': 'schema-drift',
+  'missing-ref': 'missing-ref',
+  'stale-ref': 'missing-ref',
+  'validation-failure': 'validation-failure',
+  verifier: 'validation-failure',
+  'user-cancelled': 'user-cancelled',
+  cancelled: 'user-cancelled',
+  'backend-handoff': 'backend-handoff',
+  'agentserver-handoff': 'backend-handoff',
+};
+
+function normalizeFailureCode(value: unknown) {
+  return typeof value === 'string'
+    ? value.trim().toLowerCase().replaceAll(/[\s_]+/g, '-')
+    : '';
 }
 
 function layerForFailureSignatureKind(kind: FailureSignatureKind): TaskAttributionLayer {
@@ -659,21 +676,11 @@ function failureSignatureRegistryDedupeKey(signature: FailureSignature) {
 }
 
 function registryCategoryForFailureSignature(signature: FailureSignature) {
-  const text = `${signature.code ?? ''} ${signature.normalizedMessage}`.toLowerCase();
   if (signature.kind === 'external-transient') {
     if (signature.httpStatus !== undefined) return `http-${signature.httpStatus}`;
-    if (/\b(?:403|forbidden)\b/i.test(text)) return 'forbidden';
-    if (/\b(?:413|too large|content-length|exceeds?(?:ed)?\s+(?:max|limit|budget)|max(?:imum)?\s+(?:download|file)?\s*bytes|payload too large|request entity too large)\b/i.test(text)) return 'download-too-large';
-    if (/\b(?:429|too many requests|rate.?limit(?:ed)?|throttl)\b/i.test(text)) return 'rate-limit';
-    if (/\b(?:quota)\b/i.test(text)) return 'quota';
-    if (/\b(?:eai_again|enotfound|dns|network is unreachable|econnreset)\b/i.test(text)) return 'network';
-    if (/\b(?:408|timeout|timed out|etimedout)\b/i.test(text)) return 'external-timeout';
-    if (/\b(?:500|502|503|504|service unavailable)\b/i.test(text)) return 'service-unavailable';
-    return signature.normalizedMessage;
+    return normalizeFailureCode(signature.code) || 'external-transient';
   }
-  if (signature.kind === 'schema-drift') return signature.normalizedMessage;
-  if (signature.kind === 'timeout') return signature.normalizedMessage;
-  if (signature.kind === 'repair-no-op') return signature.normalizedMessage;
+  if (signature.code) return normalizeFailureCode(signature.code);
   return signature.dedupeKey;
 }
 

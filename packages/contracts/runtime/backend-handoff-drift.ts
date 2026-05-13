@@ -93,8 +93,8 @@ export function classifyBackendHandoffDrift(input: BackendHandoffDriftInput): Ba
     };
   }
   const plainKind = normalizedString(input.plainTextClassificationKind);
-  if (signals.includes('plain-text')) {
-    const humanAnswer = plainKind === 'human-answer' || !plainKind;
+  if (signals.includes('classified-plain-text')) {
+    const humanAnswer = plainKind === 'human-answer';
     return {
       ...base,
       kind: humanAnswer ? 'plain-text-answer' : 'guarded-plain-text',
@@ -157,13 +157,14 @@ export function backendHandoffDriftSignals(input: BackendHandoffDriftInput): str
   const signals = new Set<string>();
   if (input.parsedGeneration) signals.add('parsed-generation-response');
   if (input.parsedToolPayload) signals.add('parsed-tool-payload');
+  const plainKind = normalizedString(input.plainTextClassificationKind);
+  if (plainKind) signals.add('classified-plain-text');
   const text = [
     normalizedString(input.text),
-    textFromRaw(input.raw),
   ].filter(Boolean).join('\n');
   if (!text.trim() && !input.raw) signals.add('empty-output');
   if (text.trim()) {
-    signals.add('plain-text');
+    if (plainKind) signals.add('plain-text');
     if (taskFilesMarkerPattern.test(text)) signals.add('task-files-marker');
     if (toolPayloadMarkerPattern.test(text)) signals.add('tool-payload-marker');
     if (runtimeTraceMarkerPattern.test(text)) signals.add('runtime-trace-marker');
@@ -193,16 +194,4 @@ function rawHasKey(value: unknown, key: string): boolean {
 
 function rawHasAnyKey(value: unknown, keys: string[]) {
   return keys.some((key) => rawHasKey(value, key));
-}
-
-function textFromRaw(value: unknown, depth = 0): string {
-  if (depth > 5 || value === undefined || value === null) return '';
-  if (typeof value === 'string') return value;
-  if (typeof value !== 'object') return '';
-  if (Array.isArray(value)) return value.map((item) => textFromRaw(item, depth + 1)).filter(Boolean).join('\n');
-  const record = value as Record<string, unknown>;
-  return ['result', 'text', 'finalText', 'handoffSummary', 'outputSummary', 'error', 'output', 'data']
-    .map((key) => textFromRaw(record[key], depth + 1))
-    .filter(Boolean)
-    .join('\n');
 }

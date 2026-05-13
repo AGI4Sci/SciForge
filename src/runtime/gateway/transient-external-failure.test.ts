@@ -25,9 +25,10 @@ function payload(overrides: Partial<ToolPayload> = {}): ToolPayload {
 }
 
 test('detects provider rate limits and network timeouts as transient external failures', () => {
-  assert.equal(isTransientExternalFailure('HTTP Error 429: Unknown Error'), true);
-  assert.equal(isTransientExternalFailure('HTTP Error 429: rate limited by provider'), true);
-  assert.equal(isTransientExternalFailure('provider timed out after 30s'), true);
+  assert.equal(isTransientExternalFailure('rate-limited'), true);
+  assert.equal(isTransientExternalFailure('network-timeout'), true);
+  assert.equal(isTransientExternalFailure('transient-unavailable'), true);
+  assert.equal(isTransientExternalFailure('HTTP Error 429: Unknown Error'), false);
   assert.equal(isTransientExternalFailure('schema validation failed'), false);
 });
 
@@ -37,6 +38,7 @@ test('downgrades transient external unit failures when readable artifacts exist'
       id: 'fetch-primary',
       status: 'failed-with-reason',
       failureReason: 'HTTP Error 429: Unknown Error',
+      externalDependencyStatus: 'transient-unavailable',
     }],
     artifacts: [{
       id: 'report',
@@ -96,7 +98,12 @@ test('builds a diagnostic payload for pre-output transient external failures', (
     outputRef: '.sciforge/task-results/task-1.json',
     stdout: 'HTTP 429 (rate limited), retry 1/5 after 5s\nNetwork error: The read operation timed out',
     stderr: '',
-    runtimeFingerprint: {},
+    runtimeFingerprint: {
+      externalFailure: {
+        externalDependencyStatus: 'transient-unavailable',
+        failureReason: 'rate-limited: HTTP 429 from provider; retry-after 5s',
+      },
+    },
   };
   const request: GatewayRequest = {
     skillDomain: 'literature',
@@ -120,7 +127,7 @@ test('builds a diagnostic payload for pre-output transient external failures', (
   assert.equal(diagnostic.claimType, 'runtime-diagnostic');
   assert.equal(diagnostic.executionUnits[0]?.status, 'needs-human');
   assert.equal(diagnostic.executionUnits[0]?.externalDependencyStatus, 'transient-unavailable');
-  assert.equal(diagnostic.workEvidence?.[0]?.kind, 'retrieval');
+  assert.equal(diagnostic.workEvidence?.[0]?.kind, 'external-io');
   assert.equal(diagnostic.workEvidence?.[0]?.status, 'failed-with-reason');
   assert.deepEqual(diagnostic.workEvidence?.[0]?.evidenceRefs, [
     '.sciforge/debug/task-1/stdout.log',

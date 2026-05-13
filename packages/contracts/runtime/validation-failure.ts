@@ -220,7 +220,7 @@ function contractValidationIssueFromError(error: string): ContractValidationIssu
   const nonEmptyStringMatch = error.match(/^([A-Za-z0-9_.[\]-]+) must be a non-empty string/i);
   const bracketPathMatch = error.match(/^([A-Za-z0-9_.[\]-]+)\s+/);
   const invalidRefMatch = error.match(/(?:invalid|unresolved|missing|unreadable)[^:]*ref(?:erence)?[^:]*:\s*([^;]+)/i);
-  const currentRefMatch = error.match(/Current-turn reference was not reflected in answer\/artifacts:\s*([^;]+)/i);
+  const currentRefMatch = error.match(/Current-turn reference was not (?:reflected in answer\/artifacts|cited by structured refs\/objectReferences):\s*([^;]+)/i);
   const unresolvedUriMatch = error.match(/unresolved\s+(?:uri|url):\s*([^;]+)/i);
   const guardIssue = runtimeGuardIssueForError(error);
   const missingField = missingMatch ? String(missingMatch[1]) : nonEmptyStringMatch?.[1];

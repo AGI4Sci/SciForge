@@ -24,6 +24,23 @@ test('policy input composition is runtime-owned', () => {
   assert.deepEqual(input.limits, { maxInlineChars: 1200, maxCapabilities: 4 });
 });
 
+test('policy input accepts canonical prompt and references fields', () => {
+  const input = buildConversationPolicyInput({
+    schemaVersion: 'sciforge.conversation-policy.request.v1',
+    requestId: 'request-canonical',
+    turn: {
+      turnId: 'turn-canonical',
+      prompt: 'Do not rerun; answer from current refs only.',
+      references: [{ kind: 'file', ref: 'report.md' }],
+    },
+    session: {},
+  });
+
+  assert.equal(input.prompt, 'Do not rerun; answer from current refs only.');
+  assert.deepEqual(input.references, [{ kind: 'file', ref: 'report.md' }]);
+  assert.deepEqual(input.refs, [{ kind: 'file', ref: 'report.md' }]);
+});
+
 test('turn composition scopes session facts for isolated turns', () => {
   const composition = buildConversationTurnComposition({
     policyInput: {
@@ -43,8 +60,15 @@ test('turn composition scopes session facts for isolated turns', () => {
   assert.deepEqual(composition.contextSession.artifacts, []);
   assert.deepEqual(composition.contextSession.executionUnits, []);
   assert.deepEqual(composition.contextSession.runs, []);
-  assert.deepEqual(composition.contextSession.messages, [{ id: 'm1', content: 'prior task' }]);
+  assert.deepEqual(composition.contextSession.messages, []);
   assert.deepEqual(composition.currentReferences, [{
+    kind: 'file',
+    ref: 'reports/current.md',
+    title: 'current.md',
+    source: 'runtime-reference-digest',
+    digestId: 'digest-1',
+  }]);
+  assert.deepEqual(composition.executionClassifierInput?.refs, [{
     kind: 'file',
     ref: 'reports/current.md',
     title: 'current.md',
@@ -82,6 +106,39 @@ test('turn composition owns execution and recovery turn inputs', () => {
   assert.equal(composition.recoveryPlan.action, 'digest-recovery');
   assert.deepEqual(composition.executionClassifierInput?.selectedTools, [{ id: 'workspace.shell' }]);
   assert.deepEqual(composition.executionClassifierInput?.selectedCapabilities, [{ id: 'literature.agent' }]);
+});
+
+test('explicit refs do not reopen historical session facts for isolated turns', () => {
+  const explicitRef = { kind: 'file', ref: 'inputs/current.csv', title: 'current.csv' };
+  const composition = buildConversationTurnComposition({
+    policyInput: {
+      session: {
+        artifacts: [{ id: 'old-artifact' }],
+        executionUnits: [{ id: 'old-unit' }],
+        runs: [{ id: 'old-run' }],
+        messages: [{ id: 'old-message' }],
+      },
+      references: [explicitRef],
+      tsDecisions: {
+        turnExecutionConstraints: {
+          schemaVersion: 'sciforge.turn-execution-constraints.v1',
+          contextOnly: true,
+          agentServerForbidden: true,
+        },
+      },
+    },
+    contextPolicy: { mode: 'isolate', historyReuse: { allowed: false } },
+    memoryPlan: { currentReferenceFocus: ['inputs/current.csv'] },
+    currentReferenceDigests: [],
+  });
+
+  assert.deepEqual(composition.contextSession.artifacts, []);
+  assert.deepEqual(composition.contextSession.executionUnits, []);
+  assert.deepEqual(composition.contextSession.runs, []);
+  assert.deepEqual(composition.contextSession.messages, []);
+  assert.deepEqual(composition.currentReferences, [explicitRef]);
+  assert.deepEqual(composition.executionClassifierInput?.currentReferences, [explicitRef]);
+  assert.equal((composition.executionClassifierInput?.turnExecutionConstraints as Record<string, unknown>).agentServerForbidden, true);
 });
 
 test('turn composition keeps session for continuation and preserves explicit refs', () => {

@@ -32,13 +32,15 @@ test('package verification policy fail-closes high-risk self-reported action suc
     executionUnits: [{
       id: 'send-1',
       tool: 'browser.action',
-      action: 'send external-write',
+      actionProvider: true,
+      actionKind: 'send',
+      sideEffectClass: 'external-write',
       status: 'done',
     }],
   };
   const request = {
     prompt: 'send an approval email',
-    selectedActionIds: ['send-email'],
+    selectedActionIds: ['send'],
     selectedVerifierIds: ['human-approval'],
   };
   const policy = normalizeRuntimeVerificationPolicy(request, payload);
@@ -57,7 +59,9 @@ test('package verification policy lets explicit human approval satisfy the gate'
     executionUnits: [{
       id: 'publish-1',
       tool: 'external.executor',
-      action: 'publish',
+      actionProvider: true,
+      actionKind: 'publish',
+      sideEffectClass: 'external-write',
       status: 'done',
     }],
   };
@@ -74,7 +78,7 @@ test('package verification policy lets explicit human approval satisfy the gate'
   assert.equal(gate.result.diagnostics?.source, 'human-approval');
 });
 
-test('package verification policy blocks completed GitHub push until the release gate passes', () => {
+test('package verification policy blocks completed external sync until the release gate passes', () => {
   const payload = {
     displayIntent: {
       releaseGate: {
@@ -94,6 +98,7 @@ test('package verification policy blocks completed GitHub push until the release
       id: 'push-1',
       tool: 'git',
       command: 'git push origin main',
+      syncActionSignal: 'git push',
       status: 'done',
     }],
   };
@@ -109,10 +114,10 @@ test('package verification policy blocks completed GitHub push until the release
   assert.equal(gate.blocked, true);
   assert.equal(gate.result.verdict, 'needs-human');
   assert.match(gate.reason ?? '', /Do not complete/);
-  assert.equal((gate.result.diagnostics?.releaseGate as { pushAllowed?: boolean }).pushAllowed, false);
+  assert.equal((gate.result.diagnostics?.releaseGate as { syncAllowed?: boolean }).syncAllowed, false);
 });
 
-test('package verification policy allows GitHub push after the release gate audit passes', () => {
+test('package verification policy allows external sync after the release gate audit passes', () => {
   const payload = {
     displayIntent: {
       releaseGate: {
@@ -139,6 +144,7 @@ test('package verification policy allows GitHub push after the release gate audi
       id: 'push-1',
       tool: 'git',
       command: 'git push origin main',
+      syncActionSignal: 'git push',
       status: 'done',
     }],
   };
@@ -176,6 +182,7 @@ test('package verification policy consumes custom release gate policy for non-gi
       id: 'publish-1',
       tool: 'artifact-publisher',
       command: 'publish artifact bundle',
+      syncActionSignal: 'publish artifact bundle',
       status: 'done',
     }],
   };

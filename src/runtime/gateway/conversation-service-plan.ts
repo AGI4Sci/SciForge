@@ -104,7 +104,14 @@ export function buildConversationPolicyInput(request: unknown): JsonMap {
   const turn = recordValue(data.turn);
   const history = recordList(data.history);
   const session = sessionForPolicy(data.session, history);
-  const refs = recordList(turn.refs);
+  const prompt = stringValue(turn.text) ?? stringValue(turn.prompt) ?? stringValue(data.prompt) ?? '';
+  const refs = recordList(turn.refs).length
+    ? recordList(turn.refs)
+    : recordList(turn.references).length
+      ? recordList(turn.references)
+      : recordList(data.references).length
+        ? recordList(data.references)
+        : recordList(data.refs);
   const limits = {
     ...recordValue(data.limits),
     ...recordValue(data.policyHints),
@@ -115,10 +122,10 @@ export function buildConversationPolicyInput(request: unknown): JsonMap {
     requestId: data.requestId,
     turn: {
       turnId: turn.turnId,
-      prompt: turn.text,
+      prompt,
       references: refs,
     },
-    prompt: turn.text,
+    prompt,
     turnId: turn.turnId,
     references: refs,
     refs,
@@ -173,6 +180,11 @@ export function buildConversationTurnComposition(request: unknown): Conversation
   const selectedTools = selectedPolicyList(policyInput, 'selectedTools', 'tools');
   const selectedSenses = selectedPolicyList(policyInput, 'selectedSenses', 'senses');
   const selectedVerifiers = selectedPolicyList(policyInput, 'selectedVerifiers', 'verifiers');
+  const tsDecisions = recordValue(policyInput.tsDecisions);
+  const turnExecutionConstraints = optionalRecord(data.turnExecutionConstraints)
+    ?? optionalRecord(recordValue(data.goalSnapshot).turnExecutionConstraints)
+    ?? optionalRecord(tsDecisions.turnExecutionConstraints)
+    ?? {};
 
   return {
     contextSession,
@@ -186,8 +198,16 @@ export function buildConversationTurnComposition(request: unknown): Conversation
     recoveryPlan: recoveryPlanForTurn(policyInput, currentReferenceDigests, priorAttempts),
     executionClassifierInput: {
       prompt: policyInput.prompt,
-      refs: recordList(policyInput.references).length > 0 ? recordList(policyInput.references) : recordList(policyInput.refs),
+      refs: classifierRefsForTurn(policyInput, currentReferences),
+      currentReferences,
+      currentReferenceDigests,
       artifacts: recordList(contextSession.artifacts),
+      contextPolicy,
+      memoryPlan,
+      goalSnapshot: recordValue(data.goalSnapshot),
+      capabilityBrief: recordValue(data.capabilityBrief),
+      turnExecutionConstraints,
+      tsDecisions,
       expectedArtifactTypes: arrayValue(recordValue(data.goalSnapshot).requiredArtifacts),
       selectedCapabilities: arrayValue(recordValue(data.capabilityBrief).selected),
       selectedTools,
@@ -246,13 +266,13 @@ function contextSessionForPolicy(session: JsonMap, contextPolicy: JsonMap, memor
   const mode = stringValue(contextPolicy.mode) ?? '';
   const historyReuse = recordValue(contextPolicy.historyReuse);
   const allowHistory = historyReuse.allowed === true || ['continue', 'repair'].includes(mode);
-  const explicitRefs = Array.isArray(memoryPlan.currentReferenceFocus) ? memoryPlan.currentReferenceFocus : [];
-  if (allowHistory || explicitRefs.length > 0) return session;
+  if (allowHistory) return session;
   return {
     ...session,
     artifacts: [],
     executionUnits: [],
     runs: [],
+    messages: [],
   };
 }
 
@@ -283,6 +303,14 @@ function currentReferencesForTurn(policyInput: JsonMap, currentReferenceDigests:
       digestId: digest.id,
     }];
   });
+}
+
+function classifierRefsForTurn(policyInput: JsonMap, currentReferences: JsonMap[]): JsonMap[] {
+  const explicit = recordList(policyInput.references).length > 0
+    ? recordList(policyInput.references)
+    : recordList(policyInput.refs);
+  if (explicit.length > 0) return explicit;
+  return currentReferences;
 }
 
 function recoveryPlanForTurn(policyInput: JsonMap, currentReferenceDigests: JsonMap[], priorAttempts: unknown[]): JsonMap {

@@ -42,7 +42,7 @@ export function decideEvidenceMode(
 ): EvidenceModeDecision {
   const evidencePolicy = collectPolicyRecords(data, 'evidencePolicy');
   const strict = evidencePolicy.some((policy) => booleanValue(policy.strict) || policyMode(policy) === 'strict')
-    || hasPromptEvidenceStrictness(data);
+    || structuredEvidenceMode(data) === 'strict';
   const fullTextPolicy = decideFullTextPolicy(data, budget);
   const evidenceGaps = buildEvidenceGaps(data, evidence, strict);
   const hasGaps = evidenceGaps.length > 0 || evidence.level !== 'sufficient';
@@ -172,7 +172,6 @@ function firstFullTextPolicyMode(data: JsonMap): FullTextPolicyMode | undefined 
     const normalized = normalizeFullTextPolicyMode(value);
     if (normalized) return normalized;
   }
-  if (hasPromptMetadataOnlyRequest(data)) return 'metadata-only';
   return undefined;
 }
 
@@ -194,31 +193,13 @@ function normalizeFullTextPolicyMode(value: unknown): FullTextPolicyMode | undef
   return undefined;
 }
 
-function hasPromptMetadataOnlyRequest(data: JsonMap): boolean {
-  const text = stringValue(data.prompt).toLowerCase();
-  return Boolean(text && (
-    evidenceMetadataTokenPattern.test(text) && evidenceNoFullTextPattern.test(text)
-    || evidenceMetadataOnlyZhPattern.test(text)
-  ));
+function structuredEvidenceMode(data: JsonMap): string {
+  for (const policy of collectPolicyRecords(data, 'evidencePolicy')) {
+    const mode = policyMode(policy);
+    if (mode) return mode;
+  }
+  return '';
 }
-
-function hasPromptEvidenceStrictness(data: JsonMap): boolean {
-  const text = stringValue(data.prompt).toLowerCase();
-  return Boolean(text && (
-    evidenceNoGuessPattern.test(text)
-    || evidenceStrictPattern.test(text)
-    || evidenceUncertainPattern.test(text)
-    || evidenceStrictZhPattern.test(text)
-  ));
-}
-
-const evidenceMetadataTokenPattern = /\bmetadata\b/;
-const evidenceNoFullTextPattern = /\b(?:no|skip|without|defer)\s+full[-\s]?text\b/;
-const evidenceMetadataOnlyZhPattern = /不要下载全文|不下载全文|先用\s*metadata|metadata\s*快速判断/i;
-const evidenceNoGuessPattern = /\b(?:do not|don't|dont|never)\s+guess\b/;
-const evidenceStrictPattern = /\bstrict\s+evidence\b/;
-const evidenceUncertainPattern = /\bmark\s+uncertain(?:ty)?\b/;
-const evidenceStrictZhPattern = /不要猜|别猜|不确定就标注|严格证据|证据不足/;
 
 function normalizePolicyToken(value: string): string {
   return value.toLowerCase().trim().replaceAll(/[\s_]+/g, '-');

@@ -80,6 +80,7 @@ for (const builderName of Object.keys(frozenHardcodedPolicyProse) as PromptBuild
 
 const generationBody = extractFunctionBody('buildAgentServerGenerationPrompt').text;
 const repairBody = extractFunctionBody('buildAgentServerRepairPrompt').text;
+const compactRepairContextBody = extractFunctionBody('buildCompactRepairContext').text;
 const trustedGenerationSpreads = generationBody.match(trustedPolicySpreadPattern) ?? [];
 const trustedRepairSpreads = repairBody.match(trustedPolicySpreadPattern) ?? [];
 const untrustedGenerationProviderSpreads = collectUntrustedPolicyProviderSpreads(generationBody, trustedPolicyProviderNames);
@@ -104,8 +105,24 @@ if (!source.includes(promptRenderSummarySchema)) {
 if (!/promptRenderPlanSummary,\n\s*currentReferences/.test(generationBody)) {
   errors.push('buildAgentServerGenerationPrompt must keep promptRenderPlanSummary in CURRENT TURN SNAPSHOT.');
 }
-if (!/\.\.\.compactGenerationRequestForAgentServer\(request, capabilityBrokerBrief, promptRenderPlanSummary\)/.test(generationBody)) {
+if (!/\.\.\.compactGenerationRequestForAgentServer\(request,\s*\w+,\s*promptRenderPlanSummary\)/.test(generationBody)) {
   errors.push('buildAgentServerGenerationPrompt must pass promptRenderPlanSummary into compactGenerationRequestForAgentServer.');
+}
+if (/readTextIfExists\(join\(params\.workspace,\s*params\.run\.(?:stdoutRef|stderrRef)\)\)/.test(compactRepairContextBody)) {
+  errors.push('buildCompactRepairContext must not read stdout/stderr bodies; repair prompts stay ref-first and carry only diagnostic summaries.');
+}
+const forbiddenRepairStuffing = [
+  'headForAgentServer',
+  'tailForAgentServer',
+  'excerptAroundFailureLine',
+  'stdoutTail',
+  'stderrTail',
+  'outputHead',
+  'fullText',
+];
+const leakedRepairStuffing = forbiddenRepairStuffing.filter((token) => compactRepairContextBody.includes(token));
+if (leakedRepairStuffing.length) {
+  errors.push(`buildCompactRepairContext must not stuff raw/code/log bodies into repair prompts: ${leakedRepairStuffing.join(', ')}`);
 }
 
 const promptRenderCandidateBody = extractFunctionBody('promptRenderPlanSummaryForAgentServer').text;

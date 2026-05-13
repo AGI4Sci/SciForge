@@ -32,6 +32,11 @@ test('conversation policy response normalizer fails closed for missing strategy 
     data: {
       schemaVersion: CONVERSATION_POLICY_RESPONSE_VERSION,
       currentReferences: [{ ref: 'artifact:paper-list' }, 'not-a-record'],
+      turnExecutionConstraints: {
+        schemaVersion: 'sciforge.turn-execution-constraints.v1',
+        contextOnly: true,
+        agentServerForbidden: true,
+      },
       backgroundPlan: 'invalid',
       cachePolicy: undefined,
     },
@@ -39,6 +44,7 @@ test('conversation policy response normalizer fails closed for missing strategy 
 
   assert.ok(response);
   assert.deepEqual(response.currentReferences, [{ ref: 'artifact:paper-list' }]);
+  assert.equal(response.turnExecutionConstraints?.agentServerForbidden, true);
   assert.deepEqual(response.backgroundPlan, SAFE_DEFAULT_BACKGROUND_PLAN);
   assert.deepEqual(response.cachePolicy, SAFE_DEFAULT_CACHE_POLICY);
 });
@@ -73,4 +79,15 @@ test('conversation policy owns selected capability manifest projection', () => {
   ]);
   assert.equal(manifests[1].internalAgent, 'optional');
   assert.deepEqual(manifests[4].artifacts, ['paper-list']);
+});
+
+test('conversation policy capability projection can omit AgentServer generation', () => {
+  const manifests = selectedConversationPolicyCapabilityManifests({
+    skillDomain: 'literature',
+    selectedToolIds: ['runtime.direct-context-answer'],
+    allowAgentServerGeneration: false,
+  });
+
+  assert.deepEqual(manifests.map((item) => item.id), ['runtime.direct-context-answer']);
+  assert.equal(manifests.some((item) => String(item.id).includes('agentserver-generation')), false);
 });

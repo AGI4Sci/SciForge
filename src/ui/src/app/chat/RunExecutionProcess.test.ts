@@ -48,7 +48,8 @@ test('execution process scopes execution units to the selected run artifact refs
           prompt: 'old report',
           response: 'done',
           createdAt: '2026-05-12T00:00:00.000Z',
-          objectReferences: [{ kind: 'artifact', ref: 'artifact:old-report', title: 'old report' }],
+          objectReferences: [{ kind: 'artifact', ref: 'artifact:old-report', title: 'old report', runId: 'run-old' }],
+          raw: { payload: { executionUnits: [executionUnit({ id: 'EU-old', tool: 'old.tool', outputRef: 'artifact:old-report' })] } },
         },
         {
           id: 'run-new',
@@ -57,13 +58,11 @@ test('execution process scopes execution units to the selected run artifact refs
           prompt: 'new report',
           response: 'done',
           createdAt: '2026-05-12T00:05:00.000Z',
-          objectReferences: [{ kind: 'artifact', ref: 'artifact:new-report', title: 'new report' }],
+          objectReferences: [{ kind: 'artifact', ref: 'artifact:new-report', title: 'new report', runId: 'run-new' }],
+          raw: { payload: { executionUnits: [executionUnit({ id: 'EU-new', tool: 'new.tool', outputRef: 'artifact:new-report' })] } },
         },
       ] as never,
-      executionUnits: [
-        executionUnit({ id: 'EU-old', tool: 'old.tool', outputRef: 'artifact:old-report' }),
-        executionUnit({ id: 'EU-new', tool: 'new.tool', outputRef: 'artifact:new-report' }),
-      ],
+      executionUnits: [],
     },
     onObjectFocus: () => undefined,
   }));
@@ -171,6 +170,7 @@ function session(executionUnits: RuntimeExecutionUnit[]): SciForgeSession {
       prompt: 'make report',
       response: 'done',
       createdAt: '2026-05-12T00:00:00.000Z',
+      raw: { payload: { executionUnits } },
     }],
     uiManifest: [],
     claims: [],
@@ -189,6 +189,7 @@ function executionUnit(overrides: Partial<RuntimeExecutionUnit>): RuntimeExecuti
     params: '',
     status: 'done',
     hash: 'hash',
+    runId: 'run-1',
     ...overrides,
   };
 }

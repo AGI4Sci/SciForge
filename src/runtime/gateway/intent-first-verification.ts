@@ -6,7 +6,6 @@ import {
   explicitIntentConstraintsForText,
   intentTextHasHighRiskSignal,
   requestedActionTypeForIntentText,
-  verifyRouteModeForIntentText,
   type IntentRequestedActionType,
   type VerifyRouteMode,
 } from '@sciforge-ui/runtime-contract/intent-first-verification-policy';
@@ -19,6 +18,7 @@ import {
 import {
   buildReleaseGateAudit,
   normalizeReleaseGatePolicy,
+  releaseGateAllowsSync,
   releaseGateHasRequiredVerifyCommand,
   type ReleaseGateAudit,
   type ReleaseGatePolicy,
@@ -204,7 +204,7 @@ export function attachIntentFirstVerification(
         releaseGate: releaseGate
           ? {
             status: releaseGate.status,
-            pushAllowed: releaseGate.pushAllowed,
+            syncAllowed: releaseGate.syncAllowed,
             requiredCommand: releaseGate.requiredCommand,
             missing: releaseGate.missing,
           }
@@ -259,10 +259,9 @@ export function buildIntentMatchCheck(request: GatewayRequest, payload?: ToolPay
 export function verifyRoutingDecision(request: GatewayRequest): VerifyRoutingDecision {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   const policy = isRecord(uiState.verifyPolicy) ? uiState.verifyPolicy : isRecord(uiState.verificationRouting) ? uiState.verificationRouting : {};
-  const prompt = latestIntentText(request).toLowerCase();
   const explicitMode = stringField(policy.mode) ?? stringField(policy.route) ?? stringField(policy.level);
   const mode = normalizeRouteMode(explicitMode)
-    ?? promptRouteMode(prompt)
+    ?? releaseGateRouteModeFromStructuredState(request)
     ?? 'background';
   const riskBlocking = highRiskRequest(request);
   const blockingPolicy: VerifyBlockingPolicy = mode === 'release'
@@ -397,7 +396,7 @@ export function runBackgroundWorkVerify(
           recommendedFix: releaseGate.nextActions[0],
         };
       }
-      if (releaseGate.pushAllowed) {
+      if (releaseGateAllowsSync(releaseGate)) {
         return {
           ...job,
           status: 'passed',
@@ -507,8 +506,23 @@ function normalizeRouteMode(value: string | undefined): VerifyRouteMode | undefi
   return undefined;
 }
 
-function promptRouteMode(prompt: string): VerifyRouteMode | undefined {
-  return verifyRouteModeForIntentText(prompt);
+function releaseGatePolicyInputForRequest(request: GatewayRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const releaseGate = isRecord(uiState.releaseGate) ? uiState.releaseGate : {};
+  const policy = isRecord(releaseGate.policy)
+    ? releaseGate.policy
+    : isRecord(uiState.releaseGatePolicy)
+      ? uiState.releaseGatePolicy
+      : undefined;
+  return policy;
+}
+
+function releaseGateRouteModeFromStructuredState(request: GatewayRequest): VerifyRouteMode | undefined {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  if (isRecord(uiState.releaseGate)) return 'release';
+  const policy = releaseGatePolicyInputForRequest(request);
+  if (policy) return 'release';
+  return undefined;
 }
 
 function highRiskRequest(request: GatewayRequest) {
@@ -601,15 +615,10 @@ function releaseGateAuditForPayload(payload: ToolPayload, request?: GatewayReque
       : undefined,
     auditRefs: uniqueStrings([
       ...stringList(explicit?.auditRefs),
-      ...((payload.logs ?? []).map((log) => isRecord(log) ? stringField(log.ref) ?? '' : '').filter((ref) => /audit|release-gate|verify/i.test(ref))),
-      ...payload.artifacts.flatMap((artifact) => isRecord(artifact) && /audit|release-gate|verification/i.test(String(artifact.type ?? artifact.id ?? ''))
-        ? refsFromRecord(artifact)
-        : []),
     ]),
     gitRefs: uniqueStrings([
       ...stringList(explicit?.gitRefs),
       ...stringList(gitRecord(request)?.gitRefs),
-      ...((payload.logs ?? []).map((log) => isRecord(log) ? stringField(log.ref) ?? '' : '').filter((ref) => /^commit:|^push:|^git:/.test(ref))),
     ]),
     createdAt: stringField(explicit?.createdAt),
   });
@@ -657,29 +666,21 @@ function releaseGateStepsFromUnknown(value: unknown): ReleaseGateStepInput[] {
 
 function releaseGateStepsFromExecutionUnit(unit: Record<string, unknown>, policy: ReleaseGatePolicy): ReleaseGateStepInput[] {
   if (!isRecord(unit)) return [];
-  const text = compactGateText([unit.tool, unit.command, unit.params, unit.input, unit.outputSummary]);
   const status = releaseGateStepStatusFromRuntimeStatus(unit.status);
   const refs = refsFromRecord(unit);
-  if (releaseGateHasRequiredVerifyCommand(text, policy)) {
-    const fallbackRef = stringField(unit.id) ? `execution-unit:${stringField(unit.id)}` : 'execution-unit:release-verify';
-    return [{
-      kind: 'release-verify',
-      status,
-      command: policy.requiredCommand,
-      failureReason: stringField(unit.failureReason) ?? stringField(unit.error),
-      evidenceRefs: refs.length ? refs : [fallbackRef],
-    }];
-  }
-  if (/service|restart|health|ready|server|daemon|process/i.test(text)) {
-    return [{
-      kind: 'service-restart',
-      status,
-      summary: stringField(unit.outputSummary),
-      failureReason: stringField(unit.failureReason) ?? stringField(unit.error),
-      evidenceRefs: refs,
-    }];
-  }
-  return [];
+  const explicit = releaseGateStepRecord(unit);
+  const kind = releaseGateStepKind(explicit.kind);
+  if (!kind) return [];
+  if (kind === 'release-verify' && !releaseGateHasRequiredVerifyCommand(explicit.command, policy)) return [];
+  const fallbackRef = stringField(unit.id) ? `execution-unit:${stringField(unit.id)}` : 'execution-unit:release-gate-step';
+  return [{
+    kind,
+    status,
+    command: explicit.command,
+    summary: explicit.summary ?? stringField(unit.outputSummary),
+    failureReason: explicit.failureReason ?? stringField(unit.failureReason) ?? stringField(unit.error),
+    evidenceRefs: refs.length ? refs : [fallbackRef],
+  }];
 }
 
 function releaseGateStepsFromWorkEvidence(entry: {
@@ -691,28 +692,19 @@ function releaseGateStepsFromWorkEvidence(entry: {
   evidenceRefs: string[];
   failureReason?: string;
 }, policy: ReleaseGatePolicy): ReleaseGateStepInput[] {
-  const text = compactGateText([entry.kind, entry.provider, entry.input, entry.outputSummary, ...entry.evidenceRefs]);
   const status = releaseGateStepStatusFromRuntimeStatus(entry.status);
-  if (releaseGateHasRequiredVerifyCommand(text, policy)) {
-    return [{
-      kind: 'release-verify' as const,
-      status,
-      command: policy.requiredCommand,
-      summary: entry.outputSummary,
-      failureReason: entry.failureReason,
-      evidenceRefs: entry.evidenceRefs,
-    }];
-  }
-  if (/service|restart|health|ready|server|daemon|process/i.test(text)) {
-    return [{
-      kind: 'service-restart' as const,
-      status,
-      summary: entry.outputSummary,
-      failureReason: entry.failureReason,
-      evidenceRefs: entry.evidenceRefs,
-    }];
-  }
-  return [];
+  const explicit = releaseGateStepRecord(entry as unknown as Record<string, unknown>);
+  const kind = releaseGateStepKind(explicit.kind);
+  if (!kind) return [];
+  if (kind === 'release-verify' && !releaseGateHasRequiredVerifyCommand(explicit.command, policy)) return [];
+  return [{
+    kind,
+    status,
+    command: explicit.command,
+    summary: explicit.summary ?? entry.outputSummary,
+    failureReason: explicit.failureReason ?? entry.failureReason,
+    evidenceRefs: entry.evidenceRefs,
+  }];
 }
 
 function releaseGateStepsFromVerificationResult(result: {
@@ -721,12 +713,14 @@ function releaseGateStepsFromVerificationResult(result: {
   critique?: string;
   evidenceRefs: string[];
 }, policy: ReleaseGatePolicy): ReleaseGateStepInput[] {
-  const text = compactGateText([result.id, result.critique, ...result.evidenceRefs]);
-  if (!releaseGateHasRequiredVerifyCommand(text, policy)) return [];
+  const explicit = releaseGateStepRecord(result as unknown as Record<string, unknown>);
+  const kind = releaseGateStepKind(explicit.kind);
+  if (kind !== 'release-verify') return [];
+  if (!releaseGateHasRequiredVerifyCommand(explicit.command, policy)) return [];
   return [{
     kind: 'release-verify' as const,
     status: result.verdict === 'pass' ? 'passed' : result.verdict === 'fail' || result.verdict === 'needs-human' ? 'failed' : 'pending',
-    command: policy.requiredCommand,
+    command: explicit.command,
     failureReason: result.verdict === 'pass' ? undefined : result.critique,
     evidenceRefs: result.evidenceRefs,
   }];
@@ -738,7 +732,7 @@ function releaseGateStepKind(value: unknown): ReleaseGateStepKind | undefined {
     || value === 'release-verify'
     || value === 'service-restart'
     || value === 'audit-record'
-    || value === 'push'
+    || value === 'external-sync'
     ? value
     : undefined;
 }
@@ -761,12 +755,14 @@ function uniqueReleaseGateSteps(steps: ReleaseGateStepInput[]) {
   });
 }
 
-function compactGateText(values: unknown[]) {
-  return values.map((value) => {
-    if (typeof value === 'string') return value;
-    if (value === undefined || value === null) return '';
-    return JSON.stringify(value);
-  }).join('\n');
+function releaseGateStepRecord(record: Record<string, unknown>) {
+  const nested = isRecord(record.releaseGateStep) ? record.releaseGateStep : {};
+  return {
+    kind: stringField(nested.kind),
+    command: stringField(nested.command),
+    summary: stringField(nested.summary),
+    failureReason: stringField(nested.failureReason),
+  };
 }
 
 function emitBackgroundWorkVerifyEvent(input: {

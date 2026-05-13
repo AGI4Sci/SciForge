@@ -67,7 +67,7 @@ export function latestProgressModelFromCompactTrace(source: unknown): ProcessPro
 
 export function progressModelsFromCompactTrace(source: unknown): ProcessProgressModel[] {
   return compactProgressCandidates(source)
-    .map((candidate) => progressModelFromCompactEvent(candidate) ?? progressModelFromCompactText(candidate))
+    .map((candidate) => progressModelFromCompactEvent(candidate))
     .filter((model): model is ProcessProgressModel => Boolean(model));
 }
 
@@ -262,7 +262,6 @@ function normalizeProgressModel(progress: Record<string, unknown>, event: AgentS
 
 function compactProgressCandidates(source: unknown, depth = 0): unknown[] {
   if (depth > 5 || source === undefined || source === null) return [];
-  if (typeof source === 'string') return [source];
   if (Array.isArray(source)) return source.flatMap((item) => compactProgressCandidates(item, depth + 1));
   if (!isRecord(source)) return [];
 
@@ -271,13 +270,12 @@ function compactProgressCandidates(source: unknown, depth = 0): unknown[] {
   const streamProcess = isRecord(source.streamProcess) ? source.streamProcess : undefined;
   if (streamProcess) {
     direct.push(...compactProgressCandidates(streamProcess.events, depth + 1));
-    if (typeof streamProcess.summary === 'string') direct.push(streamProcess.summary);
+    direct.push(...compactProgressCandidates(streamProcess.eventSummaries, depth + 1));
   }
   if (Array.isArray(source.runs)) direct.push(...compactProgressCandidates(source.runs, depth + 1));
   if (isRecord(source.raw)) direct.push(...compactProgressCandidates(source.raw, depth + 1));
   if (Array.isArray(source.events)) direct.push(...compactProgressCandidates(source.events, depth + 1));
-  if (isRecord(source.session)) direct.push(...compactProgressCandidates(source.session, depth + 1));
-  if (typeof source.summary === 'string') direct.push(source.summary);
+  if (isRecord(source.progress)) direct.push({ type: PROCESS_PROGRESS_EVENT_TYPE, progress: source.progress });
   return direct;
 }
 
@@ -293,10 +291,10 @@ function progressModelFromCompactEvent(value: unknown): ProcessProgressModel | u
   if (!isRecord(value)) return undefined;
   const type = asString(value.type) ?? PROCESS_PROGRESS_EVENT_TYPE;
   const label = asString(value.label) ?? type;
-  const compactDetail = asString(value.detail) ?? asString(value.summary) ?? '';
+  const compactDetail = asString(value.detail) ?? '';
   const detail = isInteractionProgressCompactType(type)
     ? compactDetail
-    : compactDetail || asString(value.message) || asString(value.text) || '';
+    : compactDetail;
   const createdAt = asString(value.createdAt) ?? asString(value.created_at) ?? nowIso();
   if (isRecord(value.progress)) {
     return progressModelFromEvent({
@@ -323,36 +321,13 @@ function progressModelFromCompactEvent(value: unknown): ProcessProgressModel | u
   if (model && (model.phase !== PROCESS_PROGRESS_PHASE.OBSERVE || type !== PROCESS_PROGRESS_EVENT_TYPE || isRecord(raw.progress))) {
     return model;
   }
-  return progressModelFromCompactText(`${label}: ${detail}`);
+  return undefined;
 }
 
 function compactEventRaw(value: Record<string, unknown>, type: string, label: string, detail: string): Record<string, unknown> {
   if (isRecord(value.raw)) return value.raw;
   if (value.schemaVersion === 'sciforge.interaction-progress-event.v1') return value;
   if (isRecord(value.progress)) return { type, progress: value.progress };
-  if (type === PROCESS_PROGRESS_EVENT_TYPE) {
-    const recovered = progressModelFromCompactText(`${label}: ${detail}`);
-    if (recovered) {
-      return {
-        type,
-        progress: {
-          phase: recovered.phase,
-          title: recovered.title,
-          detail: recovered.detail,
-          reading: recovered.reading,
-          writing: recovered.writing,
-          waitingFor: recovered.waitingFor,
-          nextStep: recovered.nextStep,
-          lastEvent: recovered.lastEvent,
-          reason: recovered.reason,
-          recoveryHint: recovered.recoveryHint,
-          canAbort: recovered.canAbort,
-          canContinue: recovered.canContinue,
-          status: recovered.status,
-        },
-      };
-    }
-  }
   return { type };
 }
 

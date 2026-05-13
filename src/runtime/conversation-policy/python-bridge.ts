@@ -37,7 +37,7 @@ export function conversationPolicyBridgeConfig(env: NodeJS.ProcessEnv = process.
     mode,
     command,
     args: ['-m', moduleName],
-    timeoutMs: Number.isFinite(timeout) && timeout > 0 ? timeout : 3500,
+    timeoutMs: Number.isFinite(timeout) && timeout > 0 ? timeout : 8000,
     pythonPath,
   };
 }

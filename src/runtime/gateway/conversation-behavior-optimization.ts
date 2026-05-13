@@ -201,16 +201,6 @@ type NormalizedWorkKey = RepeatedWorkKey & {
   sourceType: WorkKeySource;
 };
 
-const INTENT_TOKENS: Record<ConversationBehaviorIntentSignal, string[]> = {
-  long: ['long', 'large', 'complex', 'comprehensive', 'exhaustive', 'multi-step', 'batch', 'all', '长期', '复杂', '全面', '完整', '批量'],
-  report: ['report', 'brief', 'markdown', 'table', 'summary', 'deliverable', '报告', '总结', '表格', '交付'],
-  research: ['research', 'survey', 'review', 'source', 'citation', 'evidence', 'search', '调研', '综述', '来源', '引用', '证据', '检索'],
-  recovery: ['recover', 'repair', 'retry', 'resume', 'failed', 'failure', 'timeout', '恢复', '修复', '重试', '失败', '超时'],
-  followup: ['continue', 'previous', 'prior', 'last', 'followup', 'again', '继续', '接着', '上一轮', '刚才', '前面'],
-  'scope-change': ['change', 'adjust', 'only', 'exclude', 'include', 'instead', 'constraint', '改成', '调整', '只要', '不要', '排除', '约束'],
-  'speed-first': ['quick', 'fast', 'first', 'partial', 'draft', 'now', '先', '快', '尽快', '部分', '草稿', '马上'],
-};
-
 const SIGNAL_FROM_EXECUTION: Record<string, ConversationBehaviorIntentSignal> = {
   research: 'research',
   'systematic-research': 'research',
@@ -268,18 +258,15 @@ export function optimizeConversationBehavior(request: ConversationBehaviorOptimi
 export const buildConversationBehaviorOptimization = optimizeConversationBehavior;
 
 function classifyBehaviorIntent(data: JsonMap): ConversationIntentSignals {
-  const promptTokens = tokenSet(stringValue(data.prompt));
   const confidence = Object.fromEntries(
-    (Object.keys(INTENT_TOKENS) as ConversationBehaviorIntentSignal[]).map((signal) => [signal, 0]),
+    (['long', 'report', 'research', 'recovery', 'followup', 'scope-change', 'speed-first'] as ConversationBehaviorIntentSignal[])
+      .map((signal) => [signal, 0]),
   ) as Record<ConversationBehaviorIntentSignal, number>;
   const reasonCodes: string[] = [];
 
-  for (const [signal, tokens] of Object.entries(INTENT_TOKENS) as Array<[ConversationBehaviorIntentSignal, string[]]>) {
-    const hits = tokens.filter((token) => promptTokens.has(token) || promptTokens.has(token.replace('-', ' '))).length;
-    if (hits > 0) {
-      confidence[signal] = Math.max(confidence[signal], Math.min(0.85, 0.42 + hits * 0.12));
-      reasonCodes.push(`intent:${signal}:prompt`);
-    }
+  for (const signal of structuredIntentSignals(data)) {
+    confidence[signal] = Math.max(confidence[signal], 0.82);
+    reasonCodes.push(`intent:${signal}:structured`);
   }
 
   const execution = recordValue(data.executionModePlan) ?? {};
@@ -310,6 +297,26 @@ function classifyBehaviorIntent(data: JsonMap): ConversationIntentSignals {
   const signals = (Object.keys(confidence) as ConversationBehaviorIntentSignal[])
     .filter((signal) => confidence[signal] >= 0.5);
   return { signals, confidence, reasonCodes: uniqueStrings(reasonCodes) };
+}
+
+function structuredIntentSignals(data: JsonMap): ConversationBehaviorIntentSignal[] {
+  const candidates = [
+    ...toStringList(data.intentSignals),
+    ...toStringList(recordValue(data.intent)?.signals),
+    ...toStringList(recordValue(data.conversationPolicy)?.intentSignals),
+    ...toStringList(recordValue(data.behaviorPolicy)?.intentSignals),
+  ];
+  return candidates.filter(isConversationBehaviorIntentSignal);
+}
+
+function isConversationBehaviorIntentSignal(value: string): value is ConversationBehaviorIntentSignal {
+  return value === 'long'
+    || value === 'report'
+    || value === 'research'
+    || value === 'recovery'
+    || value === 'followup'
+    || value === 'scope-change'
+    || value === 'speed-first';
 }
 
 function decideEvidenceSufficiency(data: JsonMap, intent: ConversationIntentSignals): EvidenceSufficiencyDecision {
@@ -819,14 +826,6 @@ function remainingRatio(remaining: unknown, max: unknown): number | undefined {
   const right = numberValue(max);
   if (left === undefined || right === undefined || right <= 0) return undefined;
   return Math.max(0, Math.min(1, left / right));
-}
-
-function tokenSet(text: string): Set<string> {
-  const normalized = text.toLowerCase().replaceAll(/[^\p{Letter}\p{Number}\-]+/gu, ' ');
-  const tokens = normalized.split(' ').map((token) => token.trim()).filter(Boolean);
-  const grams: string[] = [];
-  for (let index = 0; index < tokens.length - 1; index += 1) grams.push(`${tokens[index]} ${tokens[index + 1]}`);
-  return new Set([...tokens, ...grams, ...Array.from(text)]);
 }
 
 function stableStatus(status: string): boolean {

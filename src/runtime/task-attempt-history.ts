@@ -137,27 +137,7 @@ function matchesAttemptScope(
   }
   const prompt = scope.prompt?.trim();
   if (!prompt) return true;
-  return promptSimilarity(prompt, attempt.prompt) >= 0.22;
-}
-
-function promptSimilarity(left: string, right: string) {
-  const leftTokens = promptTokens(left);
-  const rightTokens = promptTokens(right);
-  if (!leftTokens.size || !rightTokens.size) return 0;
-  let overlap = 0;
-  for (const token of leftTokens) {
-    if (rightTokens.has(token)) overlap += 1;
-  }
-  return overlap / Math.min(leftTokens.size, rightTokens.size);
-}
-
-function promptTokens(value: string) {
-  return new Set(value
-    .toLowerCase()
-    .replace(/[^\p{Letter}\p{Number}]+/gu, ' ')
-    .split(/\s+/)
-    .filter((token) => token.length >= 3)
-    .slice(0, 80));
+  return prompt === attempt.prompt.trim();
 }
 
 async function readAttempts(path: string): Promise<TaskAttemptRecord[]> {
@@ -347,6 +327,10 @@ function failureSignaturesForAttempt(record: TaskAttemptRecord): FailureSignatur
   const signatures: FailureSignatureInput[] = [];
   if (record.failureReason) {
     signatures.push({
+      kind: record.failureKind,
+      layer: record.failureLayer,
+      code: record.failureCode,
+      httpStatus: record.httpStatus,
       message: record.failureReason,
       operation: record.skillId,
       refs: [record.stderrRef, record.stdoutRef, record.outputRef].filter((ref): ref is string => Boolean(ref)),

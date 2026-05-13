@@ -20,6 +20,10 @@ export type AgentHandoffReferencePolicyMode =
   | 'backend-decides'
   | 'none';
 export type FailureRecoveryMode = 'preserve-context' | 'repair-first' | 'fail-closed' | 'none';
+export type FailureRecoveryEvidenceExpansionDefaultAction =
+  | 'refs-and-digests-only'
+  | 'refs-and-digests-first'
+  | 'fail-closed';
 
 export interface VerificationPolicy {
   required: boolean;
@@ -75,6 +79,14 @@ export interface FailureRecoveryAttemptSnapshot {
   workEvidenceSummary?: Record<string, unknown>;
 }
 
+export interface FailureRecoveryEvidenceExpansionPolicy {
+  defaultAction: FailureRecoveryEvidenceExpansionDefaultAction | string;
+  logRefs?: string;
+  artifactRefs?: string;
+  authority?: string;
+  policyRef?: AgentHandoffRef;
+}
+
 export interface FailureRecoveryPolicy {
   mode: FailureRecoveryMode;
   priorFailureReason?: string;
@@ -83,6 +95,7 @@ export interface FailureRecoveryPolicy {
   attemptHistory?: FailureRecoveryAttemptSnapshot[];
   nextStep?: string;
   evidenceRefs?: AgentHandoffRef[];
+  evidenceExpansionPolicy?: FailureRecoveryEvidenceExpansionPolicy;
 }
 
 export interface AgentHandoffVerificationSnapshot {
@@ -170,8 +183,18 @@ export function isFailureRecoveryPolicy(value: unknown): value is FailureRecover
     && optionalStringList(value.attemptHistoryRefs)
     && optionalString(value.nextStep)
     && optionalStringList(value.evidenceRefs)
+    && (value.evidenceExpansionPolicy === undefined || isFailureRecoveryEvidenceExpansionPolicy(value.evidenceExpansionPolicy))
     && (value.attemptHistory === undefined
       || (Array.isArray(value.attemptHistory) && value.attemptHistory.every(isFailureRecoveryAttemptSnapshot)));
+}
+
+export function isFailureRecoveryEvidenceExpansionPolicy(value: unknown): value is FailureRecoveryEvidenceExpansionPolicy {
+  if (!isRecord(value)) return false;
+  return typeof value.defaultAction === 'string'
+    && optionalString(value.logRefs)
+    && optionalString(value.artifactRefs)
+    && optionalString(value.authority)
+    && optionalString(value.policyRef);
 }
 
 export function isFailureRecoveryAttemptSnapshot(value: unknown): value is FailureRecoveryAttemptSnapshot {

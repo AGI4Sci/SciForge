@@ -1,4 +1,5 @@
 import { basename, dirname, extname, join, resolve } from 'node:path';
+import { toolPayloadShapeContract } from '@sciforge-ui/runtime-contract/tool-payload-shape';
 
 export type SkillPackageDomain = 'literature' | 'structure' | 'omics' | 'knowledge';
 export const SKILL_ENTRYPOINT_TYPES = ['workspace-task', 'inspector', 'agentserver-generation', 'markdown-skill'] as const;
@@ -278,15 +279,24 @@ export function agentServerGeneratedTaskPromptPolicyLines() {
     'If you physically write task files into the workspace, prefer a compact path-only taskFiles object (path + language, content may be omitted/empty) and return JSON immediately. Do not cat/read full generated source back into the final response just to inline it.',
     'Entrypoint contract: entrypoint.path must be executable task code supported by the runner (.py/.r/.sh, or language=cli with an explicit command). Do not set a markdown/text/json/pdf/report artifact as entrypoint. For report-only answers, return a direct ToolPayload; for generated tasks, make the executable write report/data artifacts.',
     'Generated task interface contract: executable task code must read the SciForge inputPath argument for prompt/current refs/artifacts and write a valid ToolPayload JSON to the outputPath argument. Do not generate static scripts that merely embed the current answer or a document-specific report in source code.',
+    'Generated ToolPayload construction contract: initialize top-level claims, uiManifest, executionUnits, and artifacts as arrays. Append uiManifest slots as array entries such as {"componentId":"table-viewer","artifactRef":"artifact-id"}; never use an object descriptor such as {"preferredView":...,"views":[...]} for uiManifest.',
+    'View/content separation contract: uiManifest only routes components to artifact ids. Put preferred views, tables, report markdown, rows, provider traces, and layout/content details in artifacts[].data, artifacts[].metadata, or artifacts[].dataRef.',
   ];
 }
 
+export function agentServerToolPayloadShapeContract() {
+  return toolPayloadShapeContract();
+}
+
 export function agentServerGenerationOutputContract() {
+  const shapeContract = agentServerToolPayloadShapeContract();
   return {
     finalOutput: 'exactly one compact JSON object',
     alternatives: ['AgentServerGenerationResponse', 'SciForge ToolPayload'],
     taskFiles: 'array of { path, language, content? }; omit content only when the file was physically written in workspace',
     entrypoint: 'object { language, path, command?, args? } for executable code path only; report/data files are artifacts, not entrypoints',
+    toolPayloadArrayFields: `${shapeContract.arrayFields.join(', ')} are arrays at the top level`,
+    uiManifest: `${shapeContract.uiManifestShape.type} of component slots; each slot is { componentId, artifactRef?, title?, priority? }; never an object containing preferredView/views/items`,
     externalIo: 'bounded timeouts, backoff retries for 429/5xx/network timeout/empty-result, and valid failed-with-reason ToolPayload on exhausted retrieval',
     projectGuidanceAdoption: 'If TaskProject userGuidanceQueue is present, include executionUnits[].guidanceDecisions with every queued/deferred item marked adopted, deferred, or rejected with a reason.',
   };
@@ -317,6 +327,7 @@ export function agentServerGenerationOutputContractLines(group: 'all' | 'json-en
     ],
     'tool-payload': [
       'Final output must be only compact JSON: either AgentServerGenerationResponse or SciForge ToolPayload.',
+      'ToolPayload array contract: claims, uiManifest, executionUnits, and artifacts must be arrays; uiManifest is an array of component slots, not an object-shaped view descriptor.',
       'When returning a SciForge ToolPayload, use displayIntent to describe the user-visible view need, and objectReferences to cite key artifacts/files/runs that the user can click on demand.',
       'objectReferences refs must use controlled prefixes: artifact:*, file:*, folder:*, run:*, execution-unit:*, scenario-package:*, or url:*.',
     ],
@@ -386,7 +397,7 @@ export function agentServerWorkspaceTaskRepairPromptPolicyLines(group: 'all' | '
   const groups = {
     intro: [
       'Repair this SciForge workspace task and leave the workspace ready for SciForge to rerun it.',
-      'Use the compact repair context below: it contains the current user goal, workspace refs, failure evidence, and relevant code/log excerpts.',
+      'Use the compact repair context below: it contains the current user goal, workspace refs, structured diagnostics, and material refs for code/log/input/output files.',
       'Edit the referenced task file or adjacent helper files only as needed. SciForge will rerun the task after you finish.',
       'The repaired task must execute the user goal end-to-end, not merely generate code or report that code was generated.',
     ],

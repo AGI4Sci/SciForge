@@ -1,3 +1,7 @@
+import {
+  bibliographicVerificationPolicyScopeEnabled,
+  valueDeclaresBibliographicVerificationPolicy,
+} from './artifact-policy';
 import { collectWorkEvidence, type WorkEvidence } from './work-evidence';
 
 export interface WorkEvidencePolicyPayload {
@@ -15,6 +19,12 @@ export interface WorkEvidencePolicyPayload {
 
 export interface WorkEvidencePolicyRequest {
   prompt?: unknown;
+  skillDomain?: unknown;
+  expectedArtifactTypes?: unknown;
+  selectedComponentIds?: unknown;
+  selectedCapabilityIds?: unknown;
+  expectedEvidenceKinds?: unknown;
+  externalIoRequired?: unknown;
 }
 
 export interface WorkEvidencePolicyFinding {
@@ -24,7 +34,8 @@ export interface WorkEvidencePolicyFinding {
     | 'command-failed-but-successful-payload'
     | 'fetch-failure-swallowed-by-success'
     | 'external-io-without-durable-evidence-ref'
-    | 'referenced-artifact-without-data-contract';
+    | 'referenced-artifact-without-data-contract'
+    | 'verified-bibliographic-record-without-evidence';
   severity: 'repair-needed' | 'failed-with-reason';
   reason: string;
 }
@@ -77,6 +88,14 @@ export function evaluateWorkEvidencePolicy(
     };
   }
 
+  if (verifiedBibliographicRecordWithoutEvidence(payload, request)) {
+    return {
+      kind: 'verified-bibliographic-record-without-evidence',
+      severity: payloadHasExplicitFailureEvidence(payload) ? 'failed-with-reason' : 'repair-needed',
+      reason: 'A bibliographic record is marked verified but has no durable provider/raw/evidence refs from an identifier lookup or citation verification run.',
+    };
+  }
+
   const emptyExternalRetrieval = externalEmptyResultWithoutDiagnostics(payload, request);
   if (emptyExternalRetrieval) {
     return {
@@ -93,50 +112,51 @@ export function evaluateWorkEvidencePolicy(
 
 function externalIoWithoutDurableEvidenceRef(payload: WorkEvidencePolicyPayload) {
   return collectWorkEvidence(payload).some((evidence) => {
-    if (!/^(retrieval|fetch)$/i.test(String(evidence.kind))) return false;
-    if (!/^(success|partial|empty)$/i.test(String(evidence.status))) return false;
+    if (!externalRetrievalKind(evidence.kind)) return false;
+    if (!['success', 'partial', 'empty'].includes(normalizePolicyToken(evidence.status))) return false;
     return evidence.evidenceRefs.length === 0 && !evidence.rawRef;
   });
 }
 
 function externalEmptyResultWithoutDiagnostics(payload: WorkEvidencePolicyPayload, request: WorkEvidencePolicyRequest) {
-  if (!isExternalRetrievalRequest(request)) return false;
+  if (!requestRequiresExternalRetrievalEvidence(request)) return false;
   if (payloadHasExplicitFailureEvidence(payload)) return false;
   if (workEvidenceHasProviderDiagnostics(payload)) return false;
-  const haystack = collectPayloadText(payload).join('\n').toLowerCase();
-  if (!haystack) return false;
-  return mentionsExternalRetrieval(haystack) && saysZeroResults(haystack);
+  return collectWorkEvidence(payload).some((evidence) =>
+    externalRetrievalKind(evidence.kind)
+    && ['success', 'empty'].includes(normalizePolicyToken(evidence.status))
+    && evidence.resultCount === 0
+  );
 }
 
-function isExternalRetrievalRequest(request: WorkEvidencePolicyRequest) {
-  const prompt = String(request.prompt || '').toLowerCase();
-  return /\b(doi|pmid|paper|papers|literature|latest|recent|last\s+\d+\s+(?:day|days|week|weeks)|web|api|search|fetch|retrieve)\b|论文|文献|最近|最新|近\s*\d+\s*(?:天|周)|一周|检索|搜索|调研|抓取/.test(prompt);
+const EXTERNAL_RETRIEVAL_EVIDENCE_KIND_SET = new Set(['retrieval', 'fetch', 'external-io', 'provider-lookup', 'identifier-lookup']);
+const EXTERNAL_RETRIEVAL_CAPABILITY_ID_SET = new Set([
+  'literature.retrieval',
+  'pdf.extraction',
+  'citation.verification',
+  'web.search',
+  'web.fetch',
+  'metadata-search',
+  'full-text-download',
+]);
+
+function requestRequiresExternalRetrievalEvidence(request: WorkEvidencePolicyRequest) {
+  if (truthyPolicyFlag(request.externalIoRequired)) return true;
+  return policyTokensInSet(request.expectedEvidenceKinds, EXTERNAL_RETRIEVAL_EVIDENCE_KIND_SET)
+    || policyTokensInSet(request.selectedCapabilityIds, EXTERNAL_RETRIEVAL_CAPABILITY_ID_SET);
 }
 
-function mentionsExternalRetrieval(text: string) {
-  return /\b(doi|pmid|web|api|http|provider|source|query|url|retriev|search|fetch|download)\b|文献|论文|检索|搜索|抓取|下载/.test(text);
-}
-
-function saysZeroResults(text: string) {
-  return [
-    /\bretrieved\s+0\s+(?:paper|papers|record|records|result|results|entr(?:y|ies)|item|items)\b/,
-    /\bfound\s+0\s+(?:paper|papers|record|records|result|results|entr(?:y|ies)|item|items)\b/,
-    /\b0\s+(?:paper|papers|record|records|result|results|entr(?:y|ies)|item|items)\b/,
-    /检索到\s*(?:\*\*)?0(?:\*\*)?\s*(?:篇|条|个)/,
-    /找到\s*(?:\*\*)?0(?:\*\*)?\s*(?:篇|条|个)/,
-    /共\s*(?:检索到|找到)?\s*(?:\*\*)?0(?:\*\*)?\s*(?:篇|条|个)/,
-  ].some((pattern) => pattern.test(text));
+function externalRetrievalKind(kind: string) {
+  return EXTERNAL_RETRIEVAL_EVIDENCE_KIND_SET.has(normalizePolicyToken(kind));
 }
 
 function payloadHasExplicitFailureEvidence(payload: WorkEvidencePolicyPayload) {
   if (workEvidenceHasFailureOrRecovery(payload)) return true;
-  if (String(payload.claimType || '').toLowerCase().includes('error')) return true;
   if ((Array.isArray(payload.executionUnits) ? payload.executionUnits : [])
-    .some((unit) => isRecord(unit) && /failed|error|repair-needed/i.test(String(unit.status || '')))) {
+    .some((unit) => isRecord(unit) && isFailureStatus(unit.status))) {
     return true;
   }
-  const haystack = collectPayloadText(payload).join('\n').toLowerCase();
-  return /failed-with-reason|repair-needed|rate exceeded|rate limit|http\s*429|too many requests|provider status|http status|status code|fallback (?:query|attempt|provider)|(?:tried|attempted) fallback|secondary provider|retry|api may be unreachable|network.*(?:failed|error)|timeout|timed out|no results after fallback|empty result after fallback/.test(haystack);
+  return false;
 }
 
 function claimVerifiedWithoutEvidence(payload: WorkEvidencePolicyPayload) {
@@ -149,7 +169,7 @@ function claimVerifiedWithoutEvidence(payload: WorkEvidencePolicyPayload) {
   return claims.some((claim) => {
     if (!isRecord(claim)) return false;
     if (!recordClaimsVerified(claim)) return false;
-    return collectEvidenceRefs(claim, workEvidence).length === 0 && !hasEvidenceBearingRef(claim);
+    return !recordHasDirectEvidenceRefs(claim) && !hasBoundWorkEvidenceRefs(claim, workEvidence);
   });
 }
 
@@ -158,21 +178,183 @@ function commandFailedButPayloadSuccessful(payload: WorkEvidencePolicyPayload) {
 }
 
 function fetchFailureSwallowedBySuccess(payload: WorkEvidencePolicyPayload) {
-  const text = collectPayloadText(payload).join('\n').toLowerCase();
-  if (!/(?:http\s*)?429|too many requests|rate[-\s]?limit|timed?\s*out|timeout/.test(text)) return false;
+  const structuredFailure = collectWorkEvidence(payload).some((evidence) =>
+    externalRetrievalKind(evidence.kind) && isFailureStatus(evidence.status)
+  ) || (Array.isArray(payload.executionUnits) ? payload.executionUnits : []).filter(isRecord).some((unit) =>
+    unit.externalDependencyStatus === 'transient-unavailable'
+    || isFailureStatus(unit.status)
+  );
+  if (!structuredFailure) return false;
   if (!highConfidenceSuccess(payload)) return false;
-  if (collectWorkEvidence(payload).some((evidence) => /failed|repair-needed/i.test(evidence.status))) return true;
+  if (collectWorkEvidence(payload).some((evidence) => isFailureStatus(evidence.status))) return true;
   return !hasRecoveryEvidence(payload);
 }
 
 function referencedArtifactWithoutDataContract(payload: WorkEvidencePolicyPayload) {
   const referencedIds = referencedArtifactIds(payload.uiManifest);
   if (referencedIds.size === 0) return false;
-  return (Array.isArray(payload.artifacts) ? payload.artifacts : []).some((artifact) => {
-    if (!isRecord(artifact)) return false;
+  const artifacts = (Array.isArray(payload.artifacts) ? payload.artifacts : []).filter(isRecord);
+  const byId = new Map<string, Record<string, unknown>>();
+  for (const artifact of artifacts) {
     const id = artifactId(artifact);
-    return id !== undefined && referencedIds.has(id) && !hasArtifactDataContract(artifact);
+    if (id) byId.set(normalizeArtifactRefId(id), artifact);
+    const type = stringField(artifact.type);
+    if (type && !byId.has(normalizeArtifactRefId(type))) byId.set(normalizeArtifactRefId(type), artifact);
+  }
+  for (const referencedId of referencedIds) {
+    const artifact = byId.get(referencedId);
+    if (!artifact || !hasArtifactDataContract(artifact)) return true;
+  }
+  return false;
+}
+
+function verifiedBibliographicRecordWithoutEvidence(payload: WorkEvidencePolicyPayload, request: WorkEvidencePolicyRequest) {
+  const workEvidence = collectWorkEvidence(payload);
+  const artifacts = Array.isArray(payload.artifacts) ? payload.artifacts.filter(isRecord) : [];
+  const gatedRecords = [
+    ...artifacts.flatMap((artifact) => bibliographicArtifactScopeEnabled(artifact, request)
+      ? recordsInValue(isRecord(artifact.data) || Array.isArray(artifact.data) ? artifact.data : artifact)
+      : []),
+    ...recordsInValue(payload).filter(recordDeclaresBibliographicRecordContract),
+  ];
+  return uniqueRecords(gatedRecords).some((record) => {
+    if (!recordClaimsBibliographicVerified(record)) return false;
+    return !hasBibliographicVerificationEvidence(record, workEvidence);
   });
+}
+
+function bibliographicArtifactScopeEnabled(artifact: Record<string, unknown>, request: WorkEvidencePolicyRequest) {
+  if (valueDeclaresBibliographicVerificationPolicy(artifact, 'artifact')) return true;
+  if (requestEnablesBibliographicScope(request)) return true;
+  const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+  const schema = isRecord(artifact.schema) ? artifact.schema : {};
+  return valueDeclaresBibliographicVerificationPolicy(metadata, 'policy')
+    || valueDeclaresBibliographicVerificationPolicy(schema, 'schema');
+}
+
+function requestEnablesBibliographicScope(request: WorkEvidencePolicyRequest) {
+  return bibliographicVerificationPolicyScopeEnabled({
+    skillDomain: request.skillDomain,
+    expectedArtifactTypes: request.expectedArtifactTypes,
+    selectedComponentIds: request.selectedComponentIds,
+    selectedCapabilityIds: request.selectedCapabilityIds,
+  });
+}
+
+function recordDeclaresBibliographicRecordContract(record: Record<string, unknown>) {
+  return valueDeclaresBibliographicVerificationPolicy(record, 'record');
+}
+
+function recordClaimsBibliographicVerified(record: Record<string, unknown>) {
+  return ['verification_status', 'verificationStatus', 'citationVerificationStatus', 'bibliographicVerificationStatus']
+    .some((key) => verifiedText(record[key]))
+    || (stringField(record.verified_title) && (truthyMatch(record.title_match) || truthyMatch(record.identifier_match)));
+}
+
+function hasBibliographicVerificationEvidence(record: Record<string, unknown>, workEvidence: WorkEvidence[]) {
+  return workEvidence.some((evidence) => bibliographicWorkEvidenceMatchesRecord(evidence, record) && workEvidenceHasDurableRefs(evidence));
+}
+
+function recordBibliographicIdentifier(record: Record<string, unknown>) {
+  return stringField(record.doi)
+    ?? stringField(record.pmid)
+    ?? stringField(record.trialId)
+    ?? stringField(record.trial_id)
+    ?? stringField(record.identifier);
+}
+
+function bibliographicWorkEvidenceMatchesRecord(evidence: WorkEvidence, record: Record<string, unknown>) {
+  if (!bibliographicEvidenceKind(evidence.kind)) return false;
+  const recordKeys = new Set(bibliographicRecordBindingKeys(record).map(normalizeBindingText));
+  const evidenceKeys = bibliographicEvidenceBindingKeys(evidence).map(normalizeBindingText);
+  return evidenceKeys.some((key) => key && recordKeys.has(key));
+}
+
+function workEvidenceHasDurableRefs(evidence: WorkEvidence) {
+  return evidence.evidenceRefs.some((ref) => ref.trim().length > 0) || Boolean(evidence.rawRef);
+}
+
+function bibliographicRecordBindingKeys(record: Record<string, unknown>) {
+  return [
+    recordBibliographicIdentifier(record),
+    stringField(record.id),
+    stringField(record.paperId),
+    stringField(record.paper_id),
+    stringField(record.recordId),
+    stringField(record.record_id),
+  ].filter((entry): entry is string => Boolean(entry && entry.trim().length >= 3));
+}
+
+const BIBLIOGRAPHIC_EVIDENCE_KIND_SET = new Set([
+  'citation-verification',
+  'bibliographic-verification',
+  'identifier-lookup',
+  'literature-retrieval',
+  'retrieval',
+  'fetch',
+]);
+
+function bibliographicEvidenceKind(kind: string) {
+  return BIBLIOGRAPHIC_EVIDENCE_KIND_SET.has(kind.trim().toLowerCase());
+}
+
+function bibliographicEvidenceBindingKeys(evidence: WorkEvidence) {
+  const input = isRecord(evidence.input) ? evidence.input : {};
+  return [
+    stringField(input.doi),
+    stringField(input.pmid),
+    stringField(input.trialId),
+    stringField(input.trial_id),
+    stringField(input.identifier),
+    stringField(input.recordId),
+    stringField(input.record_id),
+    stringField(input.paperId),
+    stringField(input.paper_id),
+    stringField(input.sourceRecordId),
+    stringField(input.source_record_id),
+    stringField((evidence as WorkEvidence & Record<string, unknown>).recordId),
+    stringField((evidence as WorkEvidence & Record<string, unknown>).paperId),
+    stringField((evidence as WorkEvidence & Record<string, unknown>).identifier),
+  ].filter((entry): entry is string => Boolean(entry && entry.trim().length >= 3));
+}
+
+function normalizeBindingText(value: string) {
+  return value
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[^\p{Letter}\p{Number}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizePolicyToken(value: unknown) {
+  return typeof value === 'string'
+    ? value.toLowerCase().trim().replaceAll(/[\s_]+/g, '-')
+    : '';
+}
+
+function policyTokensInSet(value: unknown, allowed: Set<string>) {
+  if (typeof value === 'string') return allowed.has(value.trim().toLowerCase());
+  return Array.isArray(value) && value.some((entry) => typeof entry === 'string' && allowed.has(entry.trim().toLowerCase()));
+}
+
+function truthyPolicyFlag(value: unknown) {
+  if (value === true) return true;
+  return typeof value === 'string' && /^(true|required|yes)$/i.test(value.trim());
+}
+
+function uniqueRecords(records: Array<Record<string, unknown>>) {
+  const seen = new Set<Record<string, unknown>>();
+  return records.filter((record) => {
+    if (seen.has(record)) return false;
+    seen.add(record);
+    return true;
+  });
+}
+
+function truthyMatch(value: unknown) {
+  if (typeof value === 'boolean') return value;
+  return /^(true|yes|match|matched|pass|passed)$/i.test(String(value || '').trim());
 }
 
 function referencedArtifactIds(uiManifest: unknown) {
@@ -180,16 +362,33 @@ function referencedArtifactIds(uiManifest: unknown) {
   for (const record of recordsInValue(uiManifest)) {
     for (const key of ['artifactId', 'artifactRef', 'artifact', 'dataArtifactId', 'sourceArtifactId']) {
       const value = stringField(record[key]);
-      if (value) ids.add(value);
+      if (value && artifactRefRequiresDataContract(value)) ids.add(normalizeArtifactRefId(value));
     }
   }
   return ids;
+}
+
+function artifactRefRequiresDataContract(value: string) {
+  const normalized = value.trim().toLowerCase();
+  return !(
+    normalized.startsWith('runtime:')
+    || normalized.startsWith('runtime://')
+    || normalized.startsWith('presentation:')
+    || normalized.startsWith('result-presentation:')
+    || normalized.startsWith('view:')
+    || normalized.startsWith('execution-unit:')
+    || normalized === 'runtime-result'
+    || normalized.endsWith('-runtime-result')
+  );
 }
 
 function hasArtifactDataContract(artifact: Record<string, unknown>) {
   return Boolean(
     stringField(artifact.dataRef)
     || stringField(artifact.data_ref)
+    || stringField(artifact.path)
+    || stringField(artifact.ref)
+    || hasNonEmptyInlineData(artifact.data)
     || artifact.schema !== undefined
     || artifact.schemaRef !== undefined
     || artifact.schema_ref !== undefined
@@ -201,26 +400,32 @@ function artifactId(artifact: Record<string, unknown>) {
   return stringField(artifact.id) ?? stringField(artifact.artifactId) ?? stringField(artifact.ref) ?? stringField(artifact.name);
 }
 
+function normalizeArtifactRefId(value: string) {
+  return value.trim().replace(/^artifact::?/i, '');
+}
+
+function hasNonEmptyInlineData(value: unknown) {
+  if (value === undefined || value === null) return false;
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  if (isRecord(value)) return Object.keys(value).length > 0;
+  return typeof value === 'number' || typeof value === 'boolean';
+}
+
 function payloadMarkedSuccessful(payload: WorkEvidencePolicyPayload) {
   const statuses = recordsInPayload(payload)
     .map((record) => stringField(record.status))
     .filter((value): value is string => Boolean(value));
-  const hasFailure = statuses.some((status) => /failed|error|repair-needed|needs-human/i.test(status));
-  const hasSuccess = statuses.some((status) => /done|success|succeeded|completed|pass/i.test(status));
+  const hasFailure = statuses.some(isFailureStatus);
+  const hasSuccess = statuses.some(isSuccessStatus);
   return !hasFailure && (hasSuccess || highConfidenceSuccess(payload));
 }
 
 function highConfidenceSuccess(payload: WorkEvidencePolicyPayload) {
   if (Number(payload.confidence || 0) < 0.8) return false;
-  if (/failed|error|repair-needed|failed-with-reason/i.test(String(payload.claimType || ''))) return false;
-  const haystack = collectPayloadText({
-    message: payload.message,
-    claimType: payload.claimType,
-    evidenceLevel: payload.evidenceLevel,
-    reasoningTrace: payload.reasoningTrace,
-  }).join('\n').toLowerCase();
-  return /\bsuccess(?:ful|fully)?\b|\bcompleted\b|\bdone\b|\bpass(?:ed)?\b|高置信|成功|完成|已完成|验证通过/.test(haystack)
-    || /high|verified|pass/.test(String(payload.evidenceLevel || '').toLowerCase());
+  if (isFailureStatus(payload.claimType)) return false;
+  return isSuccessStatus(payload.evidenceLevel)
+    || (Array.isArray(payload.executionUnits) ? payload.executionUnits : []).filter(isRecord).some((unit) => isSuccessStatus(unit.status));
 }
 
 function workEvidenceHasProviderDiagnostics(payload: WorkEvidencePolicyPayload) {
@@ -233,7 +438,7 @@ function workEvidenceHasProviderDiagnostics(payload: WorkEvidencePolicyPayload) 
 
 function workEvidenceHasFailureOrRecovery(payload: WorkEvidencePolicyPayload) {
   return collectWorkEvidence(payload).some((evidence) => {
-    return /failed|repair-needed|partial|empty/i.test(evidence.status)
+    return ['failed', 'failed-with-reason', 'repair-needed', 'partial', 'empty'].includes(normalizePolicyToken(evidence.status))
       || Boolean(evidence.failureReason)
       || evidence.recoverActions.length > 0;
   });
@@ -241,11 +446,10 @@ function workEvidenceHasFailureOrRecovery(payload: WorkEvidencePolicyPayload) {
 
 function hasRecoveryEvidence(payload: WorkEvidencePolicyPayload) {
   const workEvidence = collectWorkEvidence(payload);
-  if (workEvidence.some((evidence) => evidence.recoverActions.length > 0 || /partial/i.test(evidence.status))) {
+  if (workEvidence.some((evidence) => evidence.recoverActions.length > 0 || normalizePolicyToken(evidence.status) === 'partial')) {
     return true;
   }
-  const text = collectPayloadText(payload).join('\n').toLowerCase();
-  return /fallback|retry|retried|recovered|degraded|failed-with-reason|repair-needed|降级|重试|恢复|补救/.test(text);
+  return false;
 }
 
 function collectEvidenceRefs(value: unknown, workEvidence: WorkEvidence[] = []) {
@@ -275,13 +479,70 @@ function hasEvidenceBearingRef(record: Record<string, unknown>) {
   return ['rawRef', 'raw_ref', 'dataRef', 'data_ref', 'sourceRef', 'source_ref'].some((key) => stringField(record[key]));
 }
 
+function recordHasDirectEvidenceRefs(record: Record<string, unknown>) {
+  return collectEvidenceRefs(record).length > 0 || hasEvidenceBearingRef(record);
+}
+
+function hasBoundWorkEvidenceRefs(record: Record<string, unknown>, workEvidence: WorkEvidence[]) {
+  return workEvidence.some((evidence) => genericWorkEvidenceMatchesRecord(evidence, record) && workEvidenceHasDurableRefs(evidence));
+}
+
+function genericWorkEvidenceMatchesRecord(evidence: WorkEvidence, record: Record<string, unknown>) {
+  const bindingKeys = genericRecordBindingKeys(record);
+  if (!bindingKeys.length) return false;
+  const evidenceKeys = genericWorkEvidenceBindingKeys(evidence).map(normalizeBindingText);
+  return bindingKeys.map(normalizeBindingText).some((key) => evidenceKeys.includes(key));
+}
+
+function genericRecordBindingKeys(record: Record<string, unknown>) {
+  return [
+    stringField(record.id),
+    stringField(record.ref),
+    stringField(record.claimId),
+    stringField(record.claim_id),
+    stringField(record.claimRef),
+    stringField(record.claim_ref),
+    stringField(record.recordId),
+    stringField(record.record_id),
+    stringField(record.artifactId),
+    stringField(record.artifact_id),
+  ].filter((entry): entry is string => Boolean(entry && entry.trim().length >= 3));
+}
+
+function genericWorkEvidenceBindingKeys(evidence: WorkEvidence) {
+  const input = isRecord(evidence.input) ? evidence.input : {};
+  return [
+    evidence.id,
+    stringField(input.id),
+    stringField(input.ref),
+    stringField(input.claimId),
+    stringField(input.claim_id),
+    stringField(input.claimRef),
+    stringField(input.claim_ref),
+    stringField(input.recordId),
+    stringField(input.record_id),
+    stringField(input.artifactId),
+    stringField(input.artifact_id),
+    stringField((evidence as WorkEvidence & Record<string, unknown>).recordId),
+    stringField((evidence as WorkEvidence & Record<string, unknown>).claimId),
+  ].filter((entry): entry is string => Boolean(entry && entry.trim().length >= 3));
+}
+
 function recordClaimsVerified(record: Record<string, unknown>) {
   return ['status', 'verdict', 'verificationStatus', 'verification', 'evidenceLevel']
     .some((key) => verifiedText(record[key]));
 }
 
 function verifiedText(value: unknown) {
-  return /(?:^|\b)(verified|validated|confirmed|pass(?:ed)?)(?:\b|$)|已验证|验证通过|已核验|已确认/.test(String(value || '').toLowerCase());
+  return ['verified', 'validated', 'confirmed', 'pass', 'passed'].includes(normalizePolicyToken(value));
+}
+
+function isFailureStatus(value: unknown) {
+  return ['failed', 'error', 'failed-with-reason', 'repair-needed', 'needs-human'].includes(normalizePolicyToken(value));
+}
+
+function isSuccessStatus(value: unknown) {
+  return ['done', 'success', 'succeeded', 'completed', 'pass', 'passed', 'verified'].includes(normalizePolicyToken(value));
 }
 
 function hasNonZeroExitCode(record: Record<string, unknown>) {
