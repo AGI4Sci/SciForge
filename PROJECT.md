@@ -1,6 +1,6 @@
 # SciForge - PROJECT.md
 
-最后更新：2026-05-13
+最后更新：2026-05-14
 
 ## 当前目标
 
@@ -37,6 +37,20 @@
 - 不用“无限追加上下文”换取正确性；多轮稳定性必须依赖 state digest、refs、cache、checkpoint 和按需展开。
 
 ## 任务板
+
+### 2026-05-14 Milestone：设计文档最终形态正文化
+
+本轮按最新实现状态更新 `docs/Architecture.md`，目标是让设计文档正文直接表达 Conversation Kernel v2 的最终形态，而不是把最终形态留在尾部建议或实现清单里。
+
+- [x] 将 `docs/Architecture.md` 的“当前最终形态”更新为 **Backend-first, Capability-driven, Harness-governed, Event-sourced**，以 `Event -> State -> Contract -> Decision -> Projection` 作为核心心智模型。
+- [x] 把 `ConversationEventLog`、`ConversationStateMachine`、contract gates、`HarnessDecisionRecorded`、`HarnessContract`、`ConversationProjection`、UI projection shell 和 audit export 写入正文架构链路。
+- [x] 删除尾部重复的“最终形态修改建议”，避免设计文档同时存在旧最终形态与新建议。
+- [x] 精简冗余代码说明：删除关键代码清单、验收命令清单和 Workspace Writer 端点枚举，保留架构职责、边界和运行观察项。
+
+本轮验证：
+
+- [x] `rg` 扫描 `docs/Architecture.md`，确认不再出现 `最终形态修改建议`、`Backend-first Capability Architecture`、`关键代码` 或 `验收命令`。
+- [x] 文档 diff 人工复核，确认 final-shape big idea 已进入正文且没有改动 runtime 代码。
 
 ### 2026-05-13 Milestone：Conversation Kernel v2 最小切片与 Harness 薄腰
 
@@ -272,135 +286,6 @@
 - [ ] `packages/skills/literature/index.ts` 当前超过 1500 行。后续应拆为 `literature-search-provider`、`literature-download-provider`、`literature-report-synthesis`、`literature-contract-normalizer` 等语义模块，主入口只保留 capability 编排和导出。
 - [x] `src/ui/src/app/chat/sessionTransforms.ts` 已完成第二刀：projection continuation 在 `sessionProjectionContinuation.ts`，history edit/revert 在 `sessionHistoryEdit.ts`；主文件当前约 1139 行，继续 watch 但不再是超过 1500 行的治理阻塞。
 
-## 最终形态修改建议
+## 架构参考
 
-当前多轮稳定性问题已经不是单点 bug，而是旧链路中存在多个半真相源：UI state、session records、runs、executionUnits、task attempts、repair diagnostics、verification 和 history restore 都在局部推断“当前任务到底是什么状态”。继续在这些链路上补丁式修复会越来越难保证稳定、流畅和可审计。
-
-基于 agent backend 已经足够通用且能力很强这一前提，最终形态需要进一步调整为：
-
-> **Backend maximal reasoning, SciForge minimal orchestration.**
-
-SciForge 不应成为第二个 agent，也不应在 UI、gateway、prompt builder 或 repair loop 里重新判断用户语义。Backend 负责最大化通用推理、能力选择、多轮指代、研究策略、胶水代码生成、报告撰写和基于结构化错误的修复；SciForge 只负责 backend 很难天然稳定保证的运行秩序：capability contract、event log、refs/artifacts 持久化、runtime/safety boundary、failure owner classification、verification gate、background continuation 和 UI projection。
-
-最终心智模型应保持为 5 个原语，而不是把 9 层实现流水线当成新的复杂架构：
-
-```text
-Event -> State -> Contract -> Decision -> Projection
-```
-
-`Event` 记录事实，`State` 约束合法转换，`Contract` 判断结果边界是否可信，`Decision` 记录下一步策略，`Projection` 给 UI 和后续轮次消费。其它模块都只是这 5 个原语的实现细分。
-
-因此，最佳长期方向仍是直接重写为 **Conversation Kernel v2**，但它的定位必须是“薄而硬的运行内核”，不是“更聪明的业务路由器”。不考虑旧兼容性，只保留旧 session 的只读 archive viewer。新会话全部进入一个 event-sourced conversation kernel：
-
-```text
-TurnReceived
-  -> Planned
-  -> Dispatched
-  -> PartialReady
-  -> OutputMaterialized
-  -> Validated
-  -> Satisfied | DegradedResult | ExternalBlocked | RepairNeeded | NeedsHuman | BackgroundRunning
-```
-
-核心原则：
-
-- SciForge 少做语义判断，多做运行秩序；只约束、执行、记录、验证和展示 backend 的工作，不替 backend 推理用户想要什么。
-- 只保留一个 append-only `ConversationEventLog` 作为多轮状态唯一真相源；UI、runtime、repair、verification、history restore 都从 projection 派生。
-- 删除散落在 UI/localStorage、task attempts、runs、executionUnits 和 repair 分支中的状态推断逻辑；这些对象可以作为事件 payload 或 projection 结果，但不能再反向驱动状态机。
-- UI 只消费 `ConversationProjection`：`currentTurn`、`visibleAnswer`、`activeRun`、`artifacts`、`executionProcess`、`recoverActions`、`verificationState`、`backgroundState`。
-- repair 先做失败归属分类，再决定动作。`external-provider`、`payload-contract`、`runtime-runner`、`backend-generation`、`verification`、`ui-presentation` 必须明确分层；HTTP 429、timeout、remote closed、DNS/5xx 等外部瞬时失败进入 `ExternalBlocked`，保留 refs 和 partial，不触发代码 repair loop。
-- 前台永远 fast-first：3 秒内必须展示当前阶段、已保存 refs、是否后台继续、用户现在可查看的 partial 或诊断。全文下载、深验证、补证据和长报告扩展转后台 revision 合并。
-- Harness contract 成为唯一策略入口。context budget、repair budget、verification level、background policy、capability hints、progress policy 都来自 harness profile/callback，不再散落到 gateway、prompt builder、UI 或 repair runner。
-- Harness 的最终实现形态应是可组合的 `ContractFn` + `HookFn` 代数，而不是一组继续膨胀的 gateway if/else。SciForge 提供稳定 contract gates、状态归一化和 hook 合并规则；backend 负责推理、规划和生成任务。
-- 旧 session 不迁移为新状态机。旧数据只读展示；新 kernel 不为旧 records shape 写兼容 fallback。
-
-更彻底的抽象建议：
-
-```ts
-export type ContractFn<Input, Output> = (input: Input) => ContractResult<Output>;
-
-export type HookFn<Facts, Decision> = (
-  facts: Facts,
-  prior: readonly ContractResult<unknown>[],
-) => HookDecision<Decision>;
-
-export interface HarnessProfile {
-  id: string;
-  defaults: HarnessDefaults;
-  contracts: readonly ContractFn<unknown, unknown>[];
-  hooks: readonly HookFn<HarnessFacts, HarnessDecision>[];
-  mergePolicy: HarnessMergePolicy;
-}
-```
-
-`ContractFn` 必须是纯函数、确定性、可 fixture 测试；它只做格式校验、refs/artifacts 可解析性检查、状态转换合法性检查、failure owner 最小归一化和可见结果约束。它不做用户意图推理，不按论文/任务/backend 写领域特例。
-
-`HookFn` 只基于 current facts、contract results 和 profile defaults 做策略选择，例如 latency tier、context refs、capability budget、verification depth、repair action、background continuation 和 progress projection。Hook 可以表达偏好和收紧约束，但不能直接改写 event log、伪造 artifact 或绕过 contract gate。
-
-`HarnessProfile` 是 harness 的组合单位：`fast-answer`、`research-grade`、`strict-evidence`、`low-cost`、`privacy-strict`、`debug-repair` 都应该只是 defaults + hook pipeline + merge policy 的不同组合，而不是不同 gateway 分支。用户需求变化时，SciForge 组装 profile；backend 仍接收一个清晰、可审计、refs-first 的 contract envelope。
-
-Conversation Kernel v2 的完整层级职责以 [`docs/Architecture.md`](docs/Architecture.md) 为准：`User turn -> ConversationEventLog -> ConversationStateMachine -> contract gates + harness hooks -> HarnessContract -> capability/backend dispatch -> materialized refs/artifacts/execution evidence -> validation/failure classification -> ConversationProjection -> UI rendering / background continuation / audit export`。任何实现都应先确认自己新增逻辑属于哪一层；无法归层的逻辑默认不应加入主链路。
-
-Contract 不能弱到只检查 JSON shape。它至少要保证以下最小语义不变量：
-
-- `Satisfied` 必须有用户可见答案、artifact ref 或明确 empty-result 说明。
-- `DegradedResult` 必须有可用结果、质量/证据/完整性缺口、可复用 refs 和可选补救路径，不能伪装成完整成功。
-- `Failed` / `ExternalBlocked` 必须有 owner layer、reason、evidenceRefs 和 nextStep。
-- `Verified` 必须有 verifier evidence ref；未验证只能展示为未验证。
-- `BackgroundRunning` 必须有 checkpoint refs、revision plan 和前台 partial。
-- 所有 refs 必须可解析、可 stale-check、可在 event log replay 后重建 projection。
-
-Contract boundary 是必须的，但不能发展成重型领域 contract 系统。SciForge 至少保留四类薄 contract：
-
-- `PayloadContract`：backend/runtime 返回的数据形状、状态字段和 machine-readable envelope 是否可信。
-- `RefArtifactContract`：所有产物是否通过 ref、digest、size、mime、checkpoint 和 stale-check 边界进入系统。
-- `StateContract`：每个 terminal/wait state 是否满足最小可展示、可恢复、可审计不变量。
-- `CapabilityIOContract`：每个 capability 的输入、输出、副作用、失败形态和 repair hint 是否可验证。
-
-Contract 不判断用户真正想要什么，不替 backend 做领域推理，不为单个任务写专属 schema。它只决定 SciForge 何时可以信任、展示、恢复、重试、降级或拒绝一个结果。
-
-防腐化约束必须进入接口和测试，而不是只靠文档：
-
-- `ConversationStateMachine` 只能消费 event types 和 transition metadata；`ContractFn` 只能消费 materialized outputs、refs 和 schema descriptors。两者不能共享 provider、paper、backend、scenario 等领域 enum。
-- `ConversationEventLog` 必须区分小型 `InlineEvent` 与大内容 `RefEvent`；stdout/stderr、generated code、PDF text、report body、raw stream 和 task files 只能通过 ref/digest/checkpoint 进入 log。
-- `HookFn` 的 decision 必须记录为 event；replay、restore、audit 和跨标签同步只消费 recorded decision，不能重新执行依赖时间、预算或 provider health 的 hook。
-- Failure owner 是 next-action router，不是责任归因标签。保留独立 owner 的前提是它会改变 retry、repair、supplement、needs-human、fail-closed 或 degraded-result 路径。
-- 主 UI 只能接收 `ConversationProjection` 和 ref preview API；raw runs/task attempts/executionUnits/backend stream 只能作为 audit/debug channel，不能参与主状态或 visible answer 判定。
-- 每个 `HarnessProfile` 必须有 canonical fixture：给定 event log、profile id 和 materialized refs，输出确定的 `HarnessContract`、decision trace、merge diagnostics 和 digest。
-
-应删除或禁止回流的旧逻辑：
-
-- UI 按 prompt、scenario、artifact type 或最近 run 猜测当前用户意图。
-- gateway 中为某个任务、论文、backend、文件名或错误文本写语义特例。
-- prompt builder 承担策略真相源，把 context/repair/latency/verification policy 写成散落自然语言。
-- repair loop 默认把失败交给 backend 改代码，而不是先做 owner layer 分类。
-- 多套 records 同时维护主状态，并互相覆盖 `completed`、`failed`、`repair-needed`、`verified`。
-- direct-text fallback 把代码、trace、taskFiles、日志或过程叙述包装成最终答案。
-
-建议新增/收敛目录：
-
-```text
-src/runtime/conversation-kernel/
-  event-log.ts
-  state-machine.ts
-  projection.ts
-  turn-runner.ts
-  failure-classifier.ts
-  background-continuation.ts
-  verification-gate.ts
-
-packages/agent-harness/
-  src/contract-fns.ts
-  src/hook-fns.ts
-  src/profiles.ts
-  src/merge-policy.ts
-  src/trace.ts
-```
-
-推荐实施切片：
-
-1. 冻结旧多轮状态链路，禁止新增状态推断分支。
-2. 建立最小 event log、状态机和 projection，只覆盖一次用户请求、一次 generated task、一次 partial、一次失败分类、一次刷新恢复。
-3. 把 external-provider 失败分类从 repair loop 前移到 kernel failure classifier。
-4. 让 UI workbench 只渲染 `ConversationProjection`，不直接读取 task attempts/runs 推断主状态。
-5. 再逐步迁入 background continuation、history edit/revert、verification gate 和 export bundle。
+Conversation Kernel v2 的最终形态、分层职责和防腐化约束以 [`docs/Architecture.md`](docs/Architecture.md) 正文为准。`PROJECT.md` 只保留当前目标、任务板、milestone、验证记录和后续 TODO；不要再在这里维护第二份长篇架构说明。
