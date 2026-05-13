@@ -13,6 +13,9 @@ import type {
   SideEffectPolicy,
   VerificationPolicy,
 } from './contracts';
+import type { ContractFn } from './contract-fns';
+import type { HookFn } from './hook-fns';
+import { evaluateThinWaist, stableHarnessDigest, type ThinWaistEvaluation } from './trace';
 
 const baseContextBudget: ContextBudget = {
   maxPromptTokens: 6000,
@@ -980,4 +983,83 @@ export const harnessProfiles: Record<string, HarnessProfile> = {
 
 export function getHarnessProfile(profileId: HarnessProfileId = 'balanced-default'): HarnessProfile {
   return harnessProfiles[profileId] ?? harnessProfiles['balanced-default'];
+}
+
+export interface DeterministicProfileFixture<Input = unknown, Facts = unknown, Decision = unknown> {
+  schemaVersion: 'sciforge.agent-harness-deterministic-profile-fixture.v1';
+  fixtureId: string;
+  profileId: HarnessProfileId;
+  input: Readonly<Input>;
+  facts: Readonly<Facts>;
+  contracts: readonly ContractFn<Input, unknown>[];
+  hooks: readonly HookFn<Facts, Decision>[];
+  materializedRefs: readonly string[];
+  eventLog: readonly unknown[];
+}
+
+export function createDeterministicProfileFixture<Input = unknown, Facts = unknown, Decision = unknown>(options: {
+  profileId?: HarnessProfileId;
+  fixtureId?: string;
+  input: Readonly<Input>;
+  facts: Readonly<Facts>;
+  contracts?: readonly ContractFn<Input, unknown>[];
+  hooks?: readonly HookFn<Facts, Decision>[];
+  materializedRefs?: readonly string[];
+  eventLog?: readonly unknown[];
+}): DeterministicProfileFixture<Input, Facts, Decision> {
+  const profileId = options.profileId ?? 'balanced-default';
+  const materializedRefs = sortedUnique(options.materializedRefs ?? []);
+  const eventLog = [...(options.eventLog ?? [])];
+  const fixtureSeed = {
+    profileId,
+    input: options.input,
+    facts: options.facts,
+    materializedRefs,
+    eventLog,
+  };
+  return {
+    schemaVersion: 'sciforge.agent-harness-deterministic-profile-fixture.v1',
+    fixtureId: options.fixtureId ?? `profile-fixture-${stableHarnessDigest(fixtureSeed).slice(0, 12)}`,
+    profileId,
+    input: options.input,
+    facts: options.facts,
+    contracts: options.contracts ?? [],
+    hooks: options.hooks ?? [],
+    materializedRefs,
+    eventLog,
+  };
+}
+
+export function evaluateDeterministicProfileFixture<Input = unknown, Facts = unknown, Decision = unknown>(
+  fixture: DeterministicProfileFixture<Input, Facts, Decision>,
+): ThinWaistEvaluation<Input, Facts, Decision> & {
+  profile: HarnessProfile;
+  fixtureId: string;
+  materializedRefs: readonly string[];
+  eventLogDigest: string;
+} {
+  const profile = getHarnessProfile(fixture.profileId);
+  const evaluation = evaluateThinWaist<Input, Facts, Decision>({
+    input: fixture.input,
+    facts: fixture.facts,
+    contracts: fixture.contracts,
+    hooks: fixture.hooks,
+    traceId: `fixture-${stableHarnessDigest({
+      fixtureId: fixture.fixtureId,
+      profileId: fixture.profileId,
+      eventLog: fixture.eventLog,
+      materializedRefs: fixture.materializedRefs,
+    }).slice(0, 12)}`,
+  });
+  return {
+    ...evaluation,
+    profile,
+    fixtureId: fixture.fixtureId,
+    materializedRefs: fixture.materializedRefs,
+    eventLogDigest: stableHarnessDigest(fixture.eventLog),
+  };
+}
+
+function sortedUnique(values: readonly string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean))).sort((left, right) => left.localeCompare(right));
 }

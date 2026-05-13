@@ -653,3 +653,114 @@ Timeline、decision、belief graph 和 wet-lab summary 当前是 UI domain contr
 兼容 adapter 只能在 request 已选择对应 observe/action capability，且 action boundary 允许时接管普通 AgentServer 路径。它不能用 prompt 文案扩展新的语义路由，也不能把 `packages/senses` 重新作为新增能力落点。
 
 如果 desktop bridge 未启用，runtime 返回 fail-closed diagnostic payload，不假装执行成功。实际图像理解、grounding、window-local 坐标、scheduler lock 和 trace 验证详见 vision-sense 与 computer-use 包 README。
+
+## 最终形态修改建议
+
+架构最终形态应从 backend-first capability architecture 进一步收敛到 **Conversation Kernel v2**：一个 event-sourced、多轮状态唯一真相源的 runtime kernel。现有 gateway、task-attempt、runs、executionUnits、session records、repair loop、verification 和 UI restore 中的状态判断应逐步删除，改为消费 kernel projection。
+
+建议目标分层：
+
+```text
+User turn
+  -> ConversationEventLog
+  -> ConversationStateMachine
+  -> contract gates + harness hooks
+  -> HarnessContract
+  -> capability/backend dispatch
+  -> materialized refs/artifacts/execution evidence
+  -> validation/failure classification
+  -> ConversationProjection
+  -> UI rendering / background continuation / audit export
+```
+
+这条 9 层链路是实现展开，不是新的心智复杂度。最终架构的核心原语只有 5 个：
+
+```text
+Event -> State -> Contract -> Decision -> Projection
+```
+
+`Event` 是事实，`State` 是合法状态，`Contract` 是可信边界，`Decision` 是事件化策略，`Projection` 是只读视图。所有实现模块都应能归入这 5 个原语；无法归入的逻辑默认不应进入主链路。
+
+每层职责边界：
+
+- `User turn` 是用户本轮输入与显式上下文的原始边界，包括消息文本、当前选区、用户点选的 artifact/ref、上传文件、手动约束和可见 UI 状态。它只表达用户刚刚给出的事实和意图线索，不读取历史、不推断执行策略，也不直接决定是否调用 backend。
+- `ConversationEventLog` 是 append-only 的唯一事实账本。它记录 turn received、plan decision、dispatch、stream event、artifact materialization、validation result、failure decision、background revision 和 user edit 等事件。它不保存派生 UI 状态，也不允许被 runner/UI 反向改写；刷新、恢复、审计和跨标签同步都从这里 replay。
+- `ConversationStateMachine` 把 event log 折叠成当前会话状态，负责合法状态转换、ordering、并发冲突、cancel boundary、edit/revert boundary 和 terminal/wait state 判定。它不做领域语义推理，也不选择具体能力；它只回答“现在允许进入哪个状态、下一步是否还可继续”。
+- `contract gates + harness hooks` 是 thin-waist 策略层。`ContractFn` 做确定性格式校验、refs/artifacts 可解析性、状态不变量、failure owner 最小归一化和 verification/background checkpoint 检查；`HookFn` 做 latency、context、capability budget、verification depth、repair action、background continuation 和 progress policy 选择。Hooks 不能绕过 contracts，contracts 不能扩展成领域 agent。
+- `HarnessContract` 是本轮唯一可执行策略契约。它把 state machine 的状态、contract gate 结果和 hook decision 合并成 backend/capability 可消费的 envelope，包括 allowed refs、blocked refs、budget、side-effect boundary、verification level、repair policy、progress policy、background policy 和 trace refs。Prompt、gateway、UI、repair loop 都只能消费它，不能各自重判策略。
+- `capability/backend dispatch` 负责把 `HarnessContract` 转成具体执行：选择 capability、准备 refs-first context、调用 AgentServer/backend、启动 workspace runner 或调用 verifier。它只做编排和边界执行，不把 backend 输出直接视作成功，也不在这里写 prompt 关键词特例。
+- `materialized refs/artifacts/execution evidence` 是所有副作用和产物的落地点，包括 generated code、stdout/stderr、output JSON、report、paper list、diagnostic、verification evidence、execution unit 和 provenance。大文本、文件正文、日志和运行证据都以 ref/digest/checkpoint 进入系统，避免再次把大 payload 塞回 prompt 或 UI state。
+- `validation/failure classification` 对 materialized 结果做 contract validation、artifact/ref stale check、verification gate 和 failure owner 分类。它区分 `external-provider`、`payload-contract`、`runtime-runner`、`backend-generation`、`verification`、`ui-presentation`，并产出 retry、repair、supplement、needs-human 或 fail-closed 决策。外部 429/timeout/DNS/5xx 这类失败在这里归为 `ExternalBlocked`，不进入代码 repair loop。
+- `ConversationProjection` 是给 UI 和后续轮次消费的只读派生视图。它包含 `currentTurn`、`visibleAnswer`、`activeRun`、`artifacts`、`executionProcess`、`recoverActions`、`verificationState`、`backgroundState` 和 audit refs。它可以被丢弃并从 event log 重建，不能成为新的事实来源。
+- `UI rendering / background continuation / audit export` 只消费 projection 和 refs。UI 负责展示、筛选、交互和用户下一步选择；background continuation 负责按 checkpoint 追加 revision；audit export 负责打包 event log、contract、trace、refs 和 artifacts。它们不能按 prompt、最近 run 或 artifact 文件名重新推断任务状态。
+
+这里的关键架构收敛是把 SciForge 做成 thin-waist harness kernel：`ContractFn` 负责 deterministic validation / normalization，`HookFn` 负责 policy decision，`HarnessProfile` 负责把用户需求组合成一条可审计策略流水线。Backend 继续负责通用推理和任务生成；SciForge 只维护 contract gates、event replay、runtime boundary、refs/artifacts、failure owner、verification 和 projection。
+
+Contract gates 不能只检查 JSON shape，也不能扩展成领域 agent。它们只维护最小运行不变量：完成态必须有 visible result 或 empty-result 说明；失败态必须有 owner layer、reason、evidence refs 和 next step；验证态必须绑定 verifier evidence；后台态必须有 checkpoint refs 和 revision plan；所有 refs 必须能在 event log replay 后重新解析。
+
+Contract 是必须的，因为没有 contract boundary，SciForge 就只能相信 backend 的自然语言声明，UI 和 repair 又会退回按 prompt、最近 run 或 artifact 文件名猜状态。但必须的是薄 contract boundary，不是重型领域 schema 系统。最小 contract 集合为：
+
+- `PayloadContract`：确认 backend/runtime 输出是机器可读 envelope，而不是日志、代码、过程叙述或半截 taskFiles。
+- `RefArtifactContract`：确认 artifact、stdout/stderr、报告、PDF text、large JSON 和 verification evidence 都通过 ref/digest/checkpoint 进入系统。
+- `StateContract`：确认 `Satisfied`、`DegradedResult`、`ExternalBlocked`、`RepairNeeded`、`NeedsHuman`、`BackgroundRunning` 等状态满足可展示、可恢复、可审计不变量。
+- `CapabilityIOContract`：确认 capability 的输入、输出、副作用、失败类型和 repair hint 可验证。
+
+Contract 不推断用户意图，不选择研究策略，不拥有任务领域知识。它只决定一个 backend/capability 结果能否被信任、展示、恢复、重试、降级或 fail closed。
+
+Hooks 不能绕过 contract gates。它们只选择 latency、context、capability budget、verification depth、repair action、background continuation 和 progress projection，并通过 merge policy 合并为 `HarnessContract`。不同用户模式，例如 fast answer、research grade、strict evidence、low cost、privacy strict 和 debug repair，应该是 profile 组合，不是架构分支。
+
+新的状态机只允许以下 terminal 或 wait states 驱动 UI：
+
+- `Satisfied`：用户当前请求已有可用结果和必要验证状态。
+- `ExternalBlocked`：外部 provider 限流、超时、连接关闭、DNS/5xx 等导致无法继续；保留 partial 和 retry/backoff 建议，不进入代码 repair。
+- `RepairNeeded`：payload contract、backend generation、runtime runner 或 verification gate 有可修复结构性问题。
+- `NeedsHuman`：需要用户补输入、授权、选择范围或接受不确定性。
+- `BackgroundRunning`：前台已有 partial，后台继续补证据、下载、验证或生成 revision。
+- `DegradedResult`：后台已结束或当前执行已停止，系统有可用结果，但完整性、证据覆盖、外部来源可用性或验证等级低于本轮目标。它必须展示缺口、可复用 refs 和可选的补救路径，不能伪装成完整 `Satisfied`，也不能误判为结构性 `RepairNeeded`。
+
+防腐化约束：
+
+- State machine 与 contract gates 必须在类型层面隔离。`ConversationStateMachine` 只接受 `ConversationEvent`、event id、causal ordering、actor、timestamp、previous state 和 transition metadata；不能 import capability id、provider id、paper schema、artifact domain enum 或 backend-specific failure enum。`ContractFn` 只接受 materialized output、refs、schema descriptors 和 contract metadata；不能读取 state machine 内部 transition table 或改写 event log。
+- Event log 必须区分 `InlineEvent` 与 `RefEvent`。`InlineEvent` 只允许小型结构化 metadata；stdout/stderr、generated code、PDF text、report body、large JSON、raw backend stream 和 task files 必须落成 artifact/ref，再以 digest、mime、size、pointer 和 preview 写入 `RefEvent`。event schema 应设置 inline content 阈值，超阈值直接 validation fail。
+- Hook decision 必须事件化。`HookFn` 首次执行时产出 `HarnessDecisionRecorded` 或等价 event；replay、刷新、跨标签恢复和 audit export 只能消费历史 decision，不能重新运行依赖时间、token budget、provider health、model availability 或外部配置的 hook 逻辑。
+- Failure classification 的目标是选择 next action，不是归责。每个 owner layer 必须映射到清晰且不同的 retry、repair、supplement、needs-human、fail-closed 或 degraded-result 路径；如果两个 owner layer 对同类证据产生同一动作，应优先合并或引入 subreason，而不是制造并列归因。
+- `backend-generation` 与 `payload-contract` 的边界按 next action 判定：如果最佳动作是让 backend 重新生成符合 handoff/payload 形态的结果，归 `backend-generation`；如果最佳动作是对已 materialized payload 做 contract-approved normalization、补充 ref 或 fail-closed validation，归 `payload-contract`。
+- Profile 必须可单独测试。每个 `HarnessProfile` 都需要 canonical fixture：给定 event log、current facts、materialized refs 和 profile id，输出确定的 `HarnessContract`、decision trace 和 merge diagnostics。Profile 回归测试不能依赖完整 E2E。
+- UI/projection 纪律必须编码进 interface，而不是只靠文档。主 UI renderer 只能接收 `ConversationProjection` 与 ref preview API；raw runs、task attempts、executionUnits、backend stream 和 validation trace 只能通过 audit/debug channel 读取，并且不能参与主状态、主按钮或 visible answer 的判定。
+
+架构删除建议：
+
+- 删除 UI 对 runs/task attempts/executionUnits 的主状态推断，只渲染 `ConversationProjection`。
+- 删除 repair loop 中“失败就让 AgentServer 改代码”的默认路径；先由 `failure-classifier` 判断 owner layer。
+- 删除多处 session restore fallback；旧 session 只读 archive，新 session 不兼容旧 records shape。
+- 删除 prompt builder 中的策略真相；prompt 只渲染 HarnessContract 和当前 projection refs。
+
+建议新增固定平台模块与 harness 薄腰包：
+
+```text
+src/runtime/conversation-kernel/
+  event-log.ts
+  state-machine.ts
+  projection.ts
+  turn-runner.ts
+  failure-classifier.ts
+  background-continuation.ts
+  verification-gate.ts
+
+packages/agent-harness/
+  src/contract-fns.ts
+  src/hook-fns.ts
+  src/profiles.ts
+  src/merge-policy.ts
+  src/trace.ts
+```
+
+验收标准：
+
+- 刷新、恢复历史、编辑历史、后台完成、失败重试都能从 event log 重建相同 projection。
+- 同一失败只能由一个 owner layer 负责下一步。
+- 外部瞬时失败不会触发代码 repair loop。
+- UI 首屏永远能展示 partial/diagnostic/progress，而不是等待长任务最终完成。
+- `HookFn` decision replay 不重新执行 hook，恢复后的 `HarnessContract` digest 与首次执行一致。
+- event log 中没有超阈值 inline payload；大内容只能通过 ref/digest/checkpoint 进入 replay。
+- 每个 profile 至少有一个 canonical contract fixture，证明 profile 组合不是 gateway 分支。

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { chmod, mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -113,4 +113,36 @@ test('workspace task runner resolves bare entrypoint path placeholders from gene
     inputArg: true,
     outputArg: true,
   });
+});
+
+test('workspace task runner treats bare input and output json argv names as runtime path placeholders', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-bare-json-argv-placeholders-'));
+  const taskRel = '.sciforge/sessions/2026-05-11_demo_session-3/tasks/run.py';
+  await mkdir(dirname(join(workspace, taskRel)), { recursive: true });
+  await writeFile(join(workspace, taskRel), [
+    'import json, os, sys',
+    'input_path, output_path = sys.argv[1], sys.argv[2]',
+    'with open(output_path, "w", encoding="utf-8") as f:',
+    '    json.dump({"inputExists": os.path.exists(input_path), "usedSessionOutput": ".sciforge/sessions/" in output_path}, f)',
+  ].join('\n'), 'utf8');
+
+  const run = await runWorkspaceTask(workspace, {
+    id: 'bare-json-argv-placeholders',
+    language: 'python',
+    entrypoint: 'main',
+    entrypointArgs: ['./input.json', './output.json'],
+    taskRel,
+    inputRel: '.sciforge/sessions/2026-05-11_demo_session-3/task-inputs/task-input.json',
+    input: {},
+    outputRel: '.sciforge/sessions/2026-05-11_demo_session-3/task-results/task-output.json',
+    stdoutRel: '.sciforge/sessions/2026-05-11_demo_session-3/logs/task.stdout.log',
+    stderrRel: '.sciforge/sessions/2026-05-11_demo_session-3/logs/task.stderr.log',
+  });
+
+  assert.equal(run.exitCode, 0);
+  assert.deepEqual(JSON.parse(await readFile(join(workspace, run.outputRef), 'utf8')), {
+    inputExists: true,
+    usedSessionOutput: true,
+  });
+  await assert.rejects(access(join(workspace, 'output.json')));
 });

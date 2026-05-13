@@ -275,6 +275,53 @@ test('UI handoff filters agentserver selected skill overrides when current turn 
   assert.deepEqual(bodies[0]?.selectedToolIds, []);
 });
 
+test('UI handoff preserves bounded text-selection payload for explicit composer references', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_input, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return streamResponse([
+      {
+        result: {
+          message: 'Workspace result ready.',
+          executionUnits: [{ id: 'unit-1', status: 'done' }],
+          artifacts: [],
+        },
+      },
+    ]);
+  }) as typeof fetch;
+
+  await sendSciForgeToolMessage(messageInput(undefined, {
+    prompt: 'Continue from ※1',
+    references: [{
+      id: 'ref-text-1',
+      kind: 'ui',
+      title: '选中文本 · inspect the UMAP',
+      ref: 'ui-text:message#abc',
+      summary: 'inspect the UMAP',
+      payload: {
+        composerMarker: '※1',
+        selectedText: 'inspect the UMAP',
+        sourceTitle: 'Browser smoke reference seed message',
+        sourceRef: 'message:seed',
+        sourceKind: 'message',
+        sourceSummary: 'Seed message preview',
+        textPreview: 'x'.repeat(10_000),
+      },
+    }],
+  }), {});
+
+  const reference = (bodies[0]?.references as Array<Record<string, unknown>>)[0];
+  assert.deepEqual(reference.payload, {
+    composerMarker: '※1',
+    selectedText: 'inspect the UMAP',
+    sourceTitle: 'Browser smoke reference seed message',
+    sourceRef: 'message:seed',
+    sourceKind: 'message',
+    sourceSummary: 'Seed message preview',
+  });
+  assert.ok(reference.payloadDigest, 'large raw payload should still be summarized by digest');
+});
+
 test('UI handoff compacts large multi-turn session context before transport', async () => {
   const bodies: Array<Record<string, unknown>> = [];
   globalThis.fetch = (async (_input, init) => {

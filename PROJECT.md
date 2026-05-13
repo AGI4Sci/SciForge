@@ -4,31 +4,15 @@
 
 ## 当前目标
 
-优化 SciForge 的多轮聊天用户体验，让复杂长对话在真实使用场景中保持 **稳定、流畅、正确、token 高效、响应更快**。
-
-稳定：重启、刷新、恢复历史、中断继续、编辑历史消息、后台任务回访等情况下，系统都能恢复清晰的任务状态，不丢失关键上下文，不重复执行危险 side effect。
-
-流畅：用户不需要长时间等待黑盒执行；系统必须尽早产出可读 partial、明确当前进度、说明仍在后台继续的部分，并支持随时继续、暂停、恢复或改变目标。
-
-正确：多轮追问必须引用正确的 artifact、run、execution unit 和历史分支；失败、过期、不确定、证据不足时要明确说明，而不是假装完成或只展示 raw trace。
-
-Token 高效：每轮只携带当前任务真正需要的 state digest、refs、摘要和约束，避免重复塞入完整历史、完整 trace、完整文件或已稳定 artifact 内容；需要展开时按需读取。
-
-响应更快：默认先走最小可行路径，优先产出 first readable result；长任务、深验证、补证据、审计和报告扩展可以后台继续，不阻塞用户看到当前可用结果。
-
-本阶段重点不是扩展新能力，也不是为某个固定案例打补丁，而是建立通用的多轮对话状态、恢复、历史编辑、分支、token budget、回答速度、benchmark 和指标体系，让任意场景下的 agent 行为都更可预测、更可审计、更贴近用户期望。
+按照设计文档[`docs/Architecture.md`](docs/Architecture.md)中的最终形态去实现SciForge, 旧版本实现、旧逻辑不需要兼容，建议删除后重写，确保代码逻辑干净
 
 
 
 ## 开工前必读
-
 任何 agent 在执行本项目任务前，必须先读本文件和与任务相关的设计文档，避免凭局部代码印象破坏系统边界。
 
 - [`docs/Architecture.md`](docs/Architecture.md)：SciForge 总体架构、Backend-first / Contract-enforced / Capability-driven / Harness-governed 方向、`src` 与 `packages` 边界。
 - [`docs/AgentHarnessStandard.md`](docs/AgentHarnessStandard.md)：harness runtime、profile、stage hook、contract、trace、merge 规则和行为治理入口。
-- [`docs/Usage.md`](docs/Usage.md)：网页端使用流程、多 backend、论文复现/自我进化/Computer Use 操作路径。
-- [`docs/Extending.md`](docs/Extending.md)：新增 capability、artifact、view、scenario、package 时的扩展方式。
-- [`README.md`](README.md)：产品定位、快速启动、核心概念和当前能力范围。
 
 ## 不变原则
 
@@ -49,815 +33,167 @@ Token 高效：每轮只携带当前任务真正需要的 state digest、refs、
 
 ## 任务板
 
+### 2026-05-13 Milestone：Conversation Kernel v2 最小切片与 Harness 薄腰
 
-### 2026-05-12 Milestone：并行网页 E2E 与通用修复落地
+本轮按最终形态继续推进 **Backend maximal reasoning, SciForge minimal orchestration**，并使用多个 sub agents 并行实现 runtime kernel、agent-harness 薄腰、网页端验证和 smoke 验收。
 
-本轮使用多个 sub agents 并行从网页端检查 `http://127.0.0.1:5173/` 的首页、设置、聊天输入、失败 run、结果区和运行过程展示；主流程未白屏，Runtime Health 可达，输入栏禁用/启用正确。根据 E2E 暴露的问题，已完成以下通用修复：
-
-- [x] 新增 runtime `TaskRunCard` / `FailureSignature` / `NoHardcodeReview` contract 与测试，支撑失败模式去重、protocol success 与 task success 分离、refs/下一步/归因层沉淀。
-- [x] 为 AgentServer direct-text fallback 增加 guard：taskFiles、JSON、trace、日志、代码和过程输出不再被轻易包装成最终报告。
-- [x] 修复 ExecutionUnit 失败态展示：`repair-needed`、`needs-human`、`failed-with-reason` 不再显示成 `Checked`，并优先展示 failureReason / recoverActions / nextStep。
-- [x] 修复失败结果首屏可读性：复杂 ContractValidationFailure 首屏展示紧凑用户态原因，完整 raw trace 仍保留在 audit details。
-- [x] 修复 report-viewer 对 AgentServer generation response / taskFiles 的处理：优先使用 `.md` report ref，不把后端 JSON、脚本或 stdout/stderr 当最终报告正文。
-- [x] 扩展 deep manifest H022 evidence 字段：session bundle、runtime events、task inputs/outputs、stdout/stderr、verification results 和最终可见结果 ref。
-- [x] 补齐网页端 favicon，避免本地 UI 启动后产生无意义资源 404。
-
-本轮仍保留为后续通用任务的问题：
-
-- [x] 统一 ExecutionUnit chip/table/timeline 的状态枚举、计数和文案。
-- [x] 让“只看执行单元”过滤模式更纯粹，避免仍显示 notebook timeline / Inspector 的混合上下文。
-- [x] 改进历史 session 列表摘要，突出失败边界、可复用 refs 和下一步。
-- [x] 补充 partial/background continuation 的真实网页 fixture，验证长任务中途刷新和后台完成合并。
-
-### 2026-05-12 Milestone：网页 E2E 二轮收敛
-
-本轮继续开启多个 sub agents 使用 Computer Use 从网页端并行检查执行单元状态、历史恢复、partial/background、Runtime Health 和结果过滤。根据报告完成第二轮通用修复：
-
-- [x] 新增共享 `executionStatusPresentation`，统一 EU chip、工作过程、执行表的失败/修复/人工介入文案；`blocked` execution-unit 引用不再显示成生硬的 `BLOCKED`。
-- [x] 修复 timeline run 计数：只把真实 ExecutionUnit refs 计入 `units=`，不再把 skill plan、UI plan 或 package ref 混入计数。
-- [x] `只看执行单元` 模式现在只展示 ExecutionUnit 表、环境定义、stdout/stderr/code/output refs；普通 artifact preview、运行摘要、notebook timeline、raw audit 和 view state 被切到其他模式。
-- [x] 历史会话列表新增 compact run summary：run id 短码、失败边界/完成产物、关键 refs、恢复动作和恢复影响说明。
-- [x] Runtime Health 每个 item 增加可访问分组标签，避免读屏/AX tree 把 `Model Backend` 与下一项 `optional` 文案误连。
-- [x] 研究时间线增加 partial first result / background continuation demo，网页端可直接验证长任务先给 partial、后台再合并 revision 的展示入口。
+- [x] 新增 `src/runtime/conversation-kernel/` 最小 runtime：append-only event log、InlineEvent/RefEvent 边界、状态机 replay、ConversationProjection、failure owner 分类、verification gate 和 background continuation contract。
+- [x] 新增 `packages/agent-harness` 薄腰代数：`ContractFn`、`HookFn`、`ContractResult`、`HookDecision`、failure-owner route、确定性 merge、trace digest 和 profile fixture helper。
+- [x] 新增 thin-waist smoke，防止 conversation kernel / harness contract 层回流领域 enum、大 inline payload 或 package-owned UI/component 语义。
+- [x] 修复 workspace generated task 的裸 `input.json` / `output.json` argv：这些常见占位符会映射到 session-scoped input/output refs，避免任务把输出写到 workspace 根目录。
+- [x] 修复网页端显式文本引用 handoff：`ui-text:` 引用会保留 bounded selected text / composer marker，其它大 payload 仍走 digest，确保 backend 能解析 prompt 中的引用标记。
+- [x] 使用 Computer Use 打开 `http://127.0.0.1:5173/` 验证网页端：主界面无白屏，工作区、场景工作台、失败 run、结果区、可复现 ExecutionUnit 和恢复诊断均可见。
 
 本轮验证：
 
-- [x] Computer Use：刷新首页、进入工作台、切换只看执行单元、进入研究时间线，确认 UI 行为符合预期。
-- [x] `node --import tsx --test ...` 针对 ResultsRenderer、RunExecutionProcess、ArchiveDrawer、workspaceState、alignment display、scenario demo、runtime health。
-- [x] `npm run typecheck`
-- [x] `npm run smoke:runtime-contracts`
-- [x] `npm run smoke:deep-report`
-- [x] `npm run smoke:agentserver-direct-text`
-- [x] `npm run build`
-
-### 2026-05-12 Milestone：Task outcome 投影与 Run-scoped E2E 收敛
-
-本轮继续以多个 sub agents 并行检查 TODO-GEN、网页 E2E、partial/background、active run 范围和本地服务验证；主线程使用 Computer Use 打开 `http://127.0.0.1:5173/`，确认首页、Runtime Health、Scenario Library、Workspace Writer、AgentServer 和 Model Backend 均可见且 online。根据并行报告完成以下通用修复：
-
-- [x] task attempt ledger 自动生成 `TaskRunCard`，把 goal、round、refs、failure signatures、session bundle、protocol status、task outcome、next step 和 NoHardcodeReview 一起持久化到 attempt 记录。
-- [x] gateway `resultPresentation` 同步挂载 `taskOutcomeProjection`：区分 protocol success 与 task success，生成 user satisfaction proxy 和 next-step attribution，不按 prompt、场景、文件名或 backend 写特例。
-- [x] 扩展 provider-neutral transient failure 识别：`rate limited` 与已有 HTTP 429/5xx、quota、timeout、DNS/network 类失败统一归为 external transient。
-- [x] partial/background completion 只要带 artifact、verification、workEvidence、refs 或失败/取消信息，就合成可审计 ExecutionUnit，并在执行面板展示 verificationRef / verificationVerdict。
-- [x] 抽出 run-scoped ExecutionUnit 匹配，ResultsRenderer、RunExecutionProcess、失败审计、recover actions 和 raw audit 只展示 active run 相关执行单元，避免同 session 多 run 串上下文。
-- [x] 修复 browser smoke 的本地服务隔离：离线 Runtime Health 不再被主实例 `5174/config` fallback 污染，结构场景 fixture 会写入临时 workspace state，覆盖真实刷新恢复路径。
-
-本轮验证：
-
-- [x] Computer Use：打开本地主页，确认 Runtime Health 中 Web UI、Workspace Writer、AgentServer、Model Backend、Scenario Library 均 online，页面无白屏。
-- [x] `node --import tsx --test src/runtime/task-attempt-history.test.ts packages/contracts/runtime/task-run-card.test.ts src/runtime/gateway/transient-external-failure.test.ts src/runtime/gateway/result-presentation-contract.test.ts`
-- [x] `node --import tsx tests/smoke/smoke-result-presentation-contract.ts`
-- [x] `node --import tsx --test src/ui/src/app/chat/sessionTransforms.test.ts src/ui/src/app/ResultsRenderer.test.ts src/ui/src/app/chat/RunExecutionProcess.test.ts src/ui/src/app/chat/ArchiveDrawer.test.tsx src/ui/src/app/results-renderer-execution-model.test.ts`
-- [x] `npm run typecheck`
-- [x] `npm run smoke:runtime-contracts`
+- [x] `node --import tsx --test src/runtime/conversation-kernel.test.ts`
+- [x] `node --import tsx --test packages/agent-harness/src/*.test.ts`
+- [x] `node --import tsx --test src/runtime/workspace-task-runner.test.ts`
+- [x] `node --import tsx --test src/ui/src/api/sciforgeToolsClient.policy.test.ts src/ui/src/app/chat/composerReferences.test.ts`
+- [x] `npx tsx tests/smoke/smoke-conversation-kernel-thin-waist.ts`
 - [x] `npm run smoke:browser`
-- [x] `npm run build`
-
-后续保留：
-
-- [x] 建立 FailureSignature run-level registry，跨 run 去重 schema drift、timeout、repair no-op 和 external transient。
-- [x] 将 TaskRunCard 暴露到 task-attempt API / 历史摘要 UI，替换当前部分自建 compact summary。
-- [x] 给 schema normalization 增加 contract-approved normalization 与 audit note，区分可批准结构漂移修复和语义/安全错误 fail-closed validation。
-
-### 2026-05-12 Milestone：Failure Registry、TaskRunCard API 与 Schema Normalization Fail-closed
-
-本轮继续开启多个 sub agents 并行推进三条后续保留工程线，并使用网页端 E2E 检查 `http://127.0.0.1:5173/`。首页无白屏，Runtime Health 可见 Web UI、Workspace Writer、AgentServer、Model Backend 和 Scenario Library 状态；执行单元过滤模式保持纯净，partial/background continuation demo 可见。根据并行报告完成以下通用修复：
-
-- [x] 新增 workspace 级 `FailureSignatureRegistry`：只追踪 `schema-drift`、`timeout`、`repair-no-op`、`external-transient` 四类通用失败，按 run-level dedupe key 跨 run 合并，同一 run 重写保持幂等。
-- [x] `appendTaskAttempt` 在生成 `TaskRunCard` 后同步记录 failure registry，registry 持久化到 `.sciforge/failure-signatures/registry.json`。
-- [x] task-attempt API 的 `list` / `get` 显式返回 `taskRunCards`，历史摘要 UI 优先消费 `TaskRunCard` / `taskOutcomeProjection.taskRunCard`，旧 raw compact summary 仅作为 fallback。
-- [x] payload validation 在宽松 normalization 前执行 schema error 识别，只允许 contract-approved 结构漂移修复；缺 required envelope、invalid UI ref、语义/安全敏感字段进入 `ContractValidationFailure` fail-closed。
-- [x] `ContractValidationFailure` 增加 `auditNotes`，schema normalization 的 applied/blocked 决策投影到 validation-repair audit diagnostics；成功 contract-approved normalization 写入 `payload-normalization-audit` log。
-
-本轮验证：
-
-- [x] 网页 E2E：确认首页、Runtime Health、历史/结果区、只看执行单元、partial/background continuation demo；页面无 console error/pageerror/failed request。
-- [x] `node --import tsx --test packages/contracts/runtime/task-run-card.test.ts src/runtime/task-attempt-history.test.ts src/runtime/gateway/transient-external-failure.test.ts src/runtime/gateway/result-presentation-contract.test.ts`
-- [x] `node --import tsx --test src/ui/src/app/chat/ArchiveDrawer.test.tsx`
-- [x] `node --import tsx --test src/runtime/gateway/direct-answer-payload.test.ts src/runtime/gateway/result-presentation-contract.test.ts`
-- [x] `node --import tsx tests/smoke/smoke-contract-validation-failure.ts`
-- [x] `node --import tsx tests/smoke/smoke-validation-repair-audit-chain.ts`
-- [x] `npm run typecheck`
-- [x] `npm run smoke:runtime-contracts`
-- [x] `npm run smoke:result-presentation-contract`
-- [x] `npm run smoke:task-attempt-api`
-- [x] `npm run smoke:browser`
-
-
-### 2026-05-12 Milestone：真实任务压测、Continuation 边界与失败投影收敛
-
-本轮按 H022 要求继续用真实任务压测，并让多个 sub agents 并行检查本地网页与 runtime 边界。浏览器侧只允许 Codex 内置/隔离 headless 路线，不使用 Edge。真实压测覆盖 R-LIT-01、R-LIT-02、R-LIT-08、R-CODE-02、R-RUN-01、R-RUN-02、R-RUN-07、R-UI-04、R-DATA-05。
-
-- [x] R-LIT-02 低预算空结果恢复：窄 query 返回空结果后自动扩展 query，保留 empty boundary、生成中文 partial 报告、paper-list refs、verification ref 和 6 个 ExecutionUnit/log refs。
-- [x] 修复 continuation token 膨胀：UI transport 对 ref-backed artifact data 改为 refs+shape summary；context envelope 增加 evidence expansion policy；AgentServer policy 明确 stdoutRef/stderrRef 默认只作审计引用，除非用户明确要求原始日志或失败诊断。
-- [x] R-LIT-01 真实 arXiv/PDF 压测：AgentServer 生成真实任务并下载 4 个 PDF 后失败，保留 session bundle、task code、task input/output/log、verification 和 evidence bundle；失败不再被后续 direct-context 包装成满意答案。
-- [x] direct-context fast path 遇到 expected artifacts 缺失时返回 `repair-needed` runtime diagnostic，要求先 resume/repair 生成缺失 artifact，不再把上下文摘要当作 task success。
-- [x] R-CODE-02 / R-RUN-01 / R-RUN-02 / R-RUN-07 增加真实 failure-boundary smoke：schema drift contract-approved normalization、missing envelope fail-closed validation、repair no-op registry 聚合、failed run TaskRunCard/session bundle refs。
-- [x] 修复 `TaskRunCard` 投影在 `SkillAvailability.manifest` 缺失时崩溃，避免 malformed payload 压测进入 outcome projection 时 TypeError。
-- [x] 网页 E2E failed-run 投影收敛：failed run raw payload 中的真实 ExecutionUnit 会进入详情、timeline 和执行过程；timeline/artifact refs 按 active run scoped，不再串入上一轮结果。
-- [x] stale artifact preview 收敛：workspace file / preview descriptor / derivative 读取增加 in-flight 去重与 400/404 stale 负缓存；缺 path/dataRef 或 stale ref 时显示 fallback，不再反复污染 console。
-
-Failure/Improvement Notes：
-
-- R-LIT-01：外部多 PDF 下载会耗尽 120s runner budget，失败前未写 partial ToolPayload；通用入口是 generated-task runner early checkpoint、partial lineage materialization、repair scope guard。
-- R-LIT-02 continuation：把上一轮完整 result/artifact/raw run 重新塞回 handoff 会触发 AgentServer 反复读 stdout/log 并命中 convergence guard；通用入口是 refs-first transport、context evidence expansion policy、log ref cite-only contract。
-- R-CODE-02：malformed payload 在 `manifest` 缺失时打崩 outcome projection；通用入口是 runtime projection 对 optional skill metadata fail-soft。
-- R-UI/R-DATA：缺失 artifact 文件应 stale-check 并降级展示，不应每次 render 都打 workspace/file 400。
-
-后续保留：
-
-- [x] external multi-fetch generated task 必须早写 partial ToolPayload/checkpoint，并把已下载 PDF/metadata refs 投影到 failed run。
-- [x] repair agent 只能修改 generated task 或允许的 adjacent files；越界源码编辑应 reject 并生成 repair-boundary diagnostic。
-- [x] generated-task payload schema 可在昂贵执行前 preflight 常见 shape 错误，例如 object-shaped uiManifest、artifact 缺 id/type。
-- [x] 历史恢复应直接回到最近 active failed run/workbench，而不是只在 timeline 中可见。
-
-本轮验证：
-
-- [x] `node --import tsx --test src/ui/src/api/sciforgeToolsClient.policy.test.ts src/runtime/gateway/context-envelope.test.ts src/runtime/gateway/direct-context-fast-path.test.ts`
-- [x] `node --import tsx tests/smoke/smoke-real-task-attempt-failure-boundaries.ts`
-- [x] `node --import tsx --test src/ui/src/api/workspaceClient.preview-cache.test.ts src/ui/src/app/results/WorkspaceObjectPreview.test.ts src/ui/src/api/workspaceClient.feedback.test.ts src/ui/src/app/results/previewDescriptor.test.ts src/ui/src/app/ResultsRenderer.test.ts src/ui/src/app/appShell/workspaceState.test.ts src/ui/src/app/chat/RunExecutionProcess.test.ts src/ui/src/app/results-renderer-execution-model.test.ts src/ui/src/app/results/viewPlanResolver.test.ts`
-- [x] `npm run typecheck`
-
-### 2026-05-12 Milestone：Partial Checkpoint、Repair Boundary 与失败恢复直达
-
-本轮继续开启多个 sub agents 并行推进 H022 暴露出的四条通用修复线，并用真实 smoke 压测 runtime、repair、payload preflight 和网页恢复路径。浏览器侧遵守“不占用 Edge”：`npm run smoke:browser` 使用隔离 Chrome for Testing；Codex in-app browser 本轮两次握手超时，已记录为工具链风险，未切到 Edge。
-
-- [x] generated workspace task 在失败/超时且未写 final output 时，会在 session bundle 中扫描新增 partial 文件并写入标准 `partial-checkpoint` ToolPayload；failed run、TaskRunCard 和 attempt ledger 都能投影 partial artifact refs。
-- [x] AgentServer repair 增加 repair-boundary 前后快照：repair 只能修改当前 generated task 与允许的 session bundle debug/handoff 文件；越界改 `PROJECT.md`、`src/`、`docs/`、`package*` 等源码/配置时拒绝 rerun，返回 `repair-boundary` diagnostic 并落盘审计。
-- [x] generated-task payload 增加执行前 preflight：常见 envelope 缺失、object-shaped `uiManifest`、artifact 缺 id/type 等 shape 错误会在昂贵下载/分析前进入 repair-needed，而不是先浪费 runner budget。
-- [x] pre-output / parse / external dependency failure payload 会携带 session-bundle partial evidence refs，`failedTaskPayload`、repair diagnostics 和 TaskRunCard 不再只剩 stdout/stderr。
-- [x] 历史恢复会优先定位最近 recoverable failed/repair-needed run，刷新后直接回到 workbench 的 active run，而不是只在 timeline 中留下失败痕迹。
-- [x] workspace state/session compaction 保留最近 repair-needed refs，避免 quota compact 后丢掉失败恢复入口。
-- [x] browser workflow fixture 增加 failed-run restore 压测，并移除 Edge executable candidate，避免与用户浏览器冲突。
-- [x] repair smoke 与 compact repair smoke 统一走 task-attempt API 读取 attempt history，覆盖 root `.sciforge/task-attempts` 与 session bundle `records/task-attempts` 两种存储路径。
-
-Failure/Improvement Notes：
-
-- Codex in-app browser 插件本轮连接 `http://127.0.0.1:23917/` 两次超时；网页端实际压测由隔离 Chrome for Testing 完成。后续需要把 in-app browser 连接稳定性纳入工具链 smoke，或给项目侧增加可观测的 browser-connection diagnostic。
-- partial checkpoint 当前只扫描 session bundle 内新增/更新文件；如果任务把 partial 写到任意 workspace 路径，仍需要显式 ref 或后续扩大受控扫描范围。
-- repair-boundary 采用 repair 前后快照比对；如果越界文件被改后又完全恢复，当前审计不会保留违规痕迹。
-- `direct-answer-payload.ts`、`generated-task-runner-validation-lifecycle.ts` 进入 1000 行 watch list；当前低于 1500 行阈值，但后续应继续把 payload preflight、diagnostic projection、repair audit sink 拆到语义模块。
-
-本轮验证：
-
-- [x] `node --import tsx tests/smoke/smoke-workspace-server-agentserver-repair.ts`
-- [x] `node --import tsx tests/smoke/smoke-agentserver-compact-repair.ts`
-- [x] `node --import tsx tests/smoke/smoke-agentserver-repair.ts`
-- [x] `node --import tsx tests/smoke/smoke-generated-task-failed-payload-repair.ts`
-- [x] `node --import tsx tests/smoke/smoke-repair-boundary-guard.ts`
-- [x] `node --import tsx tests/smoke/smoke-generated-task-payload-preflight.ts`
-- [x] `node --import tsx tests/smoke/smoke-runtime-gateway-modules.ts`
-- [x] `node --import tsx tests/smoke/smoke-contract-validation-failure.ts`
-- [x] `node --import tsx tests/smoke/smoke-validation-repair-audit-chain.ts`
-- [x] `node --import tsx --test src/runtime/gateway/generated-task-runner-execution-lifecycle.test.ts src/runtime/gateway/generated-task-runner-output-lifecycle.test.ts src/runtime/gateway/direct-answer-payload.test.ts src/ui/src/app/appShell/workspaceState.test.ts src/ui/src/app/chat/sessionTransforms.test.ts src/ui/src/sessionStore.test.ts`
-- [x] `npm run smoke:task-attempt-api`
-- [x] `npm run smoke:browser`
-- [x] `npm run smoke:long-file-budget`
-- [x] `npm run typecheck`
-- [x] `npm run build`
-- [x] `git diff --check`
-
-
-### 2026-05-13 Milestone：Ownership Layer、Session Bundle Checklist 与 Verification UI 收敛
-
-本轮继续开启多个 sub agents 并行推进 runtime contract、session bundle、网页 E2E 和 UI presentation。Codex/Computer Use 手动打开 `http://127.0.0.1:5173/` 检查首页、Runtime Health、聊天输入、失败 run、结果区过滤；并行 E2E worker 运行 `npm run smoke:browser`，覆盖 onboarding、Settings、Workspace、Timeline、failed-run restore、Builder publish/open flow、mobile layout、partial/background demo 和 reference follow-up preview。
-
-- [x] `TaskRunCard` 新增 `ownershipLayerSuggestions`：真实任务结束后按稳定 runtime 信号自动建议归属层，覆盖 harness、runtime-server、AgentServer parser、payload normalization、presentation、verification、resume、UI、external-provider、workspace，不依赖 prompt、文件名、论文名或 backend 特例。
-- [x] gateway `taskOutcomeProjection` 同步暴露 ownership layer suggestions，task-attempt history 会把 runtime profile、UI plan 和 route fallback 等通用元数据纳入建议。
-- [x] session bundle manifest 增加 pack/restore/audit checklist：声明 session/messages/runs/execution-units/task-attempts、generated work、handoff、verification、debug、version、README 和 runtime event refs。
-- [x] 新增 `auditSessionBundle` / `writeSessionBundleAudit`，workspace snapshot 和 task-attempt API 会生成并返回 `records/session-bundle-audit.json`，TaskRunCard refs 中保留 audit ref，支撑一键打包/恢复/审计。
-- [x] UI 执行表和运行过程展示独立 verification 状态，区分 `No verification requested`、`Unverified`、`Verifying`、`Verification failed`、`Verification passed`，不再把 release verification 与 execution success 混在一个 chip 里。
-- [x] stale artifact preview 收敛：artifact 已携带可读 inline payload 时，WorkspaceObjectPreview 先展示 artifact 记录本身，不抢先请求可能 stale 的 workspace dataRef，避免真实 workspace 首屏产生无意义 400。
-
-Failure/Improvement Notes：
-
-- Safari 现有 tab 的 localStorage 残留旧 Workspace Writer 端口 `21431`，Runtime Health 显示 offline；隔离浏览器和 smoke 使用当前 `5174` 正常 online。归因层是 UI/local config persistence，后续可增加“本地配置端口漂移”诊断或一键恢复默认 writer URL。
-- 当前真实 workspace 中 `bad-report` 指向 `.sciforge/artifacts/no-such.md` 的 stale dataRef；已通过 inline artifact fallback 避免首屏 400，但仍应继续保留 stale negative cache 与用户可见 fallback 作为通用策略。
-- `R-RUN-09` 版本漂移恢复需要 capability/schema/runtime fingerprint 与迁移策略，不适合作为小 milestone；先保留为后续架构项。
-- 真实 `R-LIT-03` 多来源检索外部依赖较重，后续应先 fixture 化 provider-neutral provenance/dedupe contract，再跑真实网络版本。
-
-本轮验证：
-
-- [x] Computer Use / Safari：打开本地 5173，检查工作台、Runtime Health、失败 run、只看执行单元过滤和设置弹窗；发现并记录本地端口配置漂移。
-- [x] `npm run smoke:browser`
-- [x] `node --import tsx --test packages/contracts/runtime/task-run-card.test.ts src/runtime/task-attempt-history.test.ts src/runtime/gateway/result-presentation-contract.test.ts src/runtime/session-bundle.test.ts`
-- [x] `node --import tsx --test src/ui/src/app/results/WorkspaceObjectPreview.test.ts src/ui/src/api/workspaceClient.preview-cache.test.ts src/ui/src/app/chat/RunExecutionProcess.test.ts src/ui/src/app/ResultsRenderer.test.ts src/ui/src/app/results-renderer-execution-model.test.ts src/ui/src/app/results/viewPlanResolver.test.ts`
-- [x] `npm run smoke:runtime-contracts`
-- [x] `npm run smoke:task-attempt-api`
-- [x] `npm run smoke:workspace-file-api`
-- [x] `npm run smoke:bundle-import`
-- [x] `npm run typecheck`
-- [x] `git diff --check`
-
-
-### 2026-05-13 Milestone：Refs-first 恢复、Cancel Boundary 与 Run-scoped 导出收敛
-
-本轮继续开启多个 sub agents 并行推进大文件/压缩恢复、active run 导出、PDF 部分下载失败、历史文献诊断和取消边界；网页端 smoke 覆盖 failed-run restore、reference follow-up preview、context meter compact UX 和运行过程折叠。根据并行报告完成以下通用修复：
-
-- [x] refs-first 大文件恢复：Backend handoff 和 context envelope 对 stdout/stderr、ref-backed markdown/log/raw text 只携带摘要、hash、schema 和 durable refs，不再把 head/tail 原文塞回 prompt；压缩后 `stateDigest` 的 run/artifact/file refs 会进入 long-term refs、startup context 和 capability broker object refs。
-- [x] cancel boundary 收敛：用户显式 cancel 后，下一轮 payload 携带 `sciforge.cancel-boundary.v1`，side effect policy 为 `do-not-auto-resume`；运行中排队的 guidance 会被拒绝并写入 UI message/event transcript，不会跨 cancel boundary 自动重放。
-- [x] active-run 审计导出：ExecutionPanel 导出 JSON bundle 时以当前 active run 和已 scoped ExecutionUnit 为准，导出 session bundle refs、task graph、data lineage、execution commands、artifact refs 和 audit refs，不再被同 session 后续空 run 或 blocked artifact 污染。
-- [x] PDF partial failure 边界：PDF 下载遇到 timeout、HTTP 403、413/过大或 content-length 超限时，进入外部 provider 失败诊断，保留已下载全文、metadata、partial report refs，并提示先复用 retained refs，只有用户明确确认后才重跑失败下载。
-- [x] 历史文献恢复只诊断：ArchiveDrawer 和 browser failed-run restore fixture 展示失败边界、file refs、partial artifact 和下一步选项，并明确恢复历史会话不会自动重跑历史任务。
-- [x] export bundle 补强 compact run：导出策略能从 `TaskRunCard` ref 对象数组提取 bundle/artifact/audit refs；单 run compact session 即使缺少显式 run refs，也会导出可用 ExecutionUnit 和 artifact，而不是生成空 bundle。
-
-Failure/Improvement Notes：
-
-- Browser smoke 发现 active failed run 显示 `0 EU / empty` 时导出的 JSON 仍混入旧 run 的 executionUnits/artifacts；已将导出入口改为 active-run scoped，并把 later empty state 作为回归测试。
-- PDF 403/过大不应触发 repair rerun；通用归因层是 external-provider/download boundary，恢复策略是 retained refs first、explicit retry second。
-- Cancel 后继续不是普通 continuation；任何 queued guidance 都必须先跨 cancel boundary 变成 rejected/needs-confirmation，而不是静默变成下一轮 prompt。
-- `R-RUN-09` 仍保留为后续架构项：版本漂移恢复需要 capability/schema/runtime fingerprint 和迁移策略，不应混入本轮 cancel/refs-first 修复。
-
-本轮验证：
-
-- [x] `node --import tsx --test src/ui/src/app/chat/sessionTransforms.test.ts src/ui/src/processProgress.test.ts`
-- [x] `node --import tsx --test src/ui/src/exportPolicy.test.ts src/runtime/session-bundle.test.ts src/ui/src/app/ResultsRenderer.test.ts src/ui/src/app/results-renderer-execution-model.test.ts`
-- [x] `node --import tsx --test src/runtime/workspace-task-input.test.ts src/runtime/gateway/context-envelope.test.ts packages/contracts/runtime/task-run-card.test.ts src/runtime/gateway/generated-task-runner-output-lifecycle.test.ts`
-- [x] `node --import tsx --test src/ui/src/app/chat/ArchiveDrawer.test.tsx`
-- [x] `node --import tsx tests/smoke/smoke-refs-first-large-file-recovery.ts`
-- [x] `node --import tsx tests/smoke/smoke-workspace-task-input-compaction.ts`
-- [x] `node --import tsx tests/smoke/smoke-current-reference-prompt-path-digests.ts`
-- [x] `npm run typecheck`
-- [x] `npm run smoke:runtime-contracts`
-- [x] `npm run smoke:long-file-budget`
-- [x] `npm run smoke:browser`
-- [x] `npm run build`
-- [x] `npm run test`（706 tests pass）
-- [x] `git diff --check`
-
-
-### 2026-05-13 Milestone：历史编辑、多标签冲突、Artifact 引用与结果空态收敛
-
-本轮继续开启多个 sub agents 并行推进会话分支、结果区 presentation、reference authority、多标签写入冲突、后台 continuation、literature provenance 和网页端回归；主线程补齐 Runtime Health 对旧 Workspace Writer 端口漂移的诊断。根据并行报告完成以下通用修复：
-
-- [x] 历史消息编辑新增 `applyHistoricalUserMessageEdit`：`revert` 会废弃编辑边界后的派生 messages/runs/artifacts/executionUnits/claims 并记录 invalidated refs；`continue` 会保留已有结果，同时标注 affected refs、affected conclusions、conflicts、requiresUserConfirmation 和 next step。
-- [x] 多标签并发写入增加 session revision/base revision guard：localStorage 或 workspace state 写入前会检测 stale base / ordering conflict，保留当前状态并记录 recoverable `SessionWriteConflictDiagnostic`，不再静默覆盖另一个 tab 的同 session 更新。
-- [x] Artifact 选择追问改为 selected ObjectReference authoritative：inline link 和 object chip 的 `data-sciforge-reference` 携带被点选对象本身，composer payload 写入 `currentReference/objectReference`，避免“基于这个继续”被最近 artifact 抢权。
-- [x] 结果区新增 `runPresentationState`：失败、recoverable、empty、partial、needs-human、running、ready 被投影为首屏可读状态；completed 但无 artifact 不再显示成 ready，raw JSON 仍留在审计细节。
-- [x] `resultPresentation.artifactActions` 参与 active-run scoped view plan：report、paper-list、diagnostic、verification 混合存在时按 presentation action 稳定排序，focus mode 切换不混入其他 run 的 artifact。
-- [x] background continuation smoke 覆盖 artifact revision 合并与 passive disconnect：前端断开不会 abort 后端 long task，后台完成后保留 revision 标注和下一轮 payload refs。
-- [x] literature retrieval offline runner 增加 `sourceProvenance`：多 provider 结果按 DOI/PMID/arXiv/title-year 去重，记录来源差异、trust level、被用户移除的低可信来源，并在重写报告时排除低可信来源内容。
-- [x] Runtime Health 在配置的 Workspace Writer URL 离线但默认 writer 在线时，展示端口漂移诊断和 Settings 修复动作；browser smoke 允许该更具体的恢复路径。
-
-Failure/Improvement Notes：
-
-- R-LIT-03 本轮采用 provider-neutral fixture contract，不再把真实 arXiv/Semantic Scholar/PubMed/网页网络调用作为工程收敛阻塞；真实网络版本后续只作为 provider availability 验证。
-- 多标签冲突不能用浏览器 tab 名、焦点或 localStorage 写入顺序判断；本轮只基于 session revision、base revision 和集合级变更判断。
-- 历史编辑 `continue` 不应自动宣称旧结论仍成立；需要用户确认后才能把受影响 refs 当作 current conclusions。
-- `src/ui/src/app/chat/sessionTransforms.ts` 已超过 1500 行 hard threshold；后续继续追加历史/分支/refs 合并逻辑前必须优先拆出 `historyEditTransforms`、`sessionRunProjectionTransforms` 或相关语义模块，不能再把新治理堆进主文件。
-
-本轮验证：
-
-- [x] `node --import tsx --test src/ui/src/app/chat/sessionTransforms.test.ts src/ui/src/sessionStore.test.ts src/ui/src/app/appShell/workspaceState.test.ts`
-- [x] `node --import tsx --test src/ui/src/app/chat/composerReferences.test.ts src/ui/src/app/chat/MessageContent.test.tsx src/ui/src/app/chat/finalMessagePresentation.test.tsx src/ui/src/app/chat/RunExecutionProcess.test.ts`
-- [x] `node --import tsx --test src/ui/src/app/ResultsRenderer.test.ts src/ui/src/app/results-renderer-execution-model.test.ts src/ui/src/app/results/viewPlanResolver.test.ts`
-- [x] `npm run smoke:background-completion`
-- [x] `npm run smoke:literature-retrieval-capability`
-- [x] `node --import tsx --test src/ui/src/runtimeHealth.test.ts`
-- [x] `npm run smoke:runtime-contracts`
-- [x] `npm run smoke:long-file-budget`
-- [x] `npm run smoke:browser`
-- [x] `npm run typecheck`
-- [x] `npm run build`
-- [x] `npm run test`（717 tests pass）
-- [x] `git diff --check`
-
-
-### 2026-05-13 Milestone：Partial-first 运行态、版本漂移恢复与服务生命周期收敛
-
-本轮继续开启新一批 sub agents 并行复核 partial presentation、runtime drift、service lifecycle 和剩余真实场景 backlog；主线程吸收复核约束后落地三条通用修复线：
-
-- [x] R-UI-02 partial-first 运行态：`runPresentationState` 增加结构化 `progress`，展示已完成部分、当前阶段、后台状态和 safe actions；running run 已有 artifact / done ExecutionUnit / background stage 时优先呈现 `partial`，而不是只显示“仍在运行”。
-- [x] R-RUN-09 版本漂移恢复：session 持久化增加 `RuntimeCompatibilityFingerprint` 与 `RuntimeCompatibilityDiagnostic`，基于 schema/capability/runtime contract fingerprint 检测 missing fingerprint、schema drift 和 capability drift；诊断在结果区可见，建议先检查 refs、迁移 payload 或明确重跑，不自动恢复旧 side effect。
-- [x] R-CODE-10 服务生命周期验证：Workspace Writer `/health` 暴露 pid、startedAt、instanceId 和 lifecycle token；新增动态端口 `smoke:service-lifecycle`，验证旧 writer 退出、新 writer ready、同端口 health identity 更新；Vite runtime launcher 对 Workspace Writer 要求 `workspace-snapshot` capability，避免把未知 `/health` 服务误判为在线。
-- [x] `PROJECT.md` 补充本轮 milestone 与 backlog 状态，记录剩余场景中哪些适合 fixture/smoke 化，哪些继续作为真实任务 backlog。
-
-Failure/Improvement Notes：
-
-- R-UI-02 不能依赖 `ExecutionUnitStatus='partial'` 的非 contract 字段；本轮改为从 TaskRun/resultPresentation、backgroundCompletion、已完成 ExecutionUnit 和 artifact refs 投影 partial progress。
-- R-RUN-09 fingerprint 不能使用时间戳、workspace 绝对路径、模型配置或 backend URL；本轮只哈希稳定 runtime contract/schema/enum/capability 信号，且 fingerprint 更新不进入 session content revision，避免制造多标签写冲突。
-- R-CODE-10 不应 `pkill node` 或按固定端口清理残留进程；本轮 smoke 只停止自己用 lifecycle token 启动的进程。
-- `src/ui/src/sessionStore.ts` 已进入 1063 行 watch 区；下一轮继续扩展 session migration/write-guard/drift 时，应优先拆出 runtime compatibility 与 write guard helper 模块。
-- 适合下一轮 fixture/smoke 化的 backlog：R-LIT-05、R-LIT-10、R-DATA-01/02/04；R-WF-01/02/06、R-DATA-06 和真实 R-LIT-06/07 质量评估继续保留为真实场景压测。
-
-本轮验证：
-
-- [x] `node --import tsx --test src/ui/src/sessionStore.test.ts src/ui/src/app/results-renderer-execution-model.test.ts src/ui/src/app/ResultsRenderer.test.ts`
-- [x] `npm run smoke:service-lifecycle`
-- [x] `npm run smoke:runtime-contracts`
-- [x] `npm run smoke:long-file-budget`
-- [x] `npm run typecheck`
-- [x] `npm run build`
-- [x] `npm run test`（722 tests pass）
-- [x] `npm run smoke:browser`
-- [x] `git diff --check`
-
-
-### 2026-05-13 Milestone：证据模式、外部瞬时失败与网页状态漂移收敛
-
-本轮继续开启 5 个 sub agents 并行复核 literature correction、workflow policy、CSV/mapping、chart lineage 与网页 smoke；主线程使用 Computer Use 在 `http://127.0.0.1:5173/` 复现并修复 Runtime Health 已恢复但 Scenario Library / Skill Proposals 仍显示旧 Workspace Writer 端口错误的问题。落地以下通用修复：
-
-- [x] R-WF-08 低预算 / metadata-first：`ConversationBehaviorOptimization` 增加结构化 `evidenceMode.fullTextPolicy`，从 `budget`、`executionModePlan.policyOverrides`、`contextPolicy` 和显式 `fullTextPolicy` 归一化；低预算降级会禁用 `full-text-download`，保留 `metadata-search`、`citation-metadata`、`durable-refs` 和用户可见 partial，并给出 `allow-bounded-full-text` escalation path。
-- [x] R-WF-09 严格证据模式：新增 `evidenceMode.evidenceGaps` 与 `confidencePolicy`，严格证据或 evidence gap 存在时要求 gap disclosure，并把 claim confidence ceiling 降到结构化上限；backend handoff directive 追加 `handoff:strict-evidence` / `handoff:evidence-gaps-required`，禁止 inline claim-beyond-evidence。
-- [x] R-DATA-07 外部数据源限流：`transientExternalDependencyPayload` 与 partial artifact 降级路径都写出 provider-neutral `workEvidence`、`transientPolicy`、`providerAttemptRefs`、`preservedRefs` 和 retry actions；pre-output 与 partial-output 两类 transient failure 都保持 `needs-human` + `externalDependencyStatus='transient-unavailable'`。
-- [x] 网页配置漂移状态清理：Scenario Library 和 Skill Proposals 在成功刷新后清空旧错误状态，避免 Workspace Writer 从旧端口恢复到新端口后继续显示 stale diagnostic。
-
-Failure/Improvement Notes：
-
-- R-WF-08/09 不能只靠中文 prompt 特判；本轮以结构化 policy 为主，prompt token 只作为兜底输入，handoff 仍输出 backend-neutral policy/directive code。
-- R-DATA-07 不能把所有 429/timeout 都包装为成功；只有 pre-output diagnostic payload 或已有 readable artifact 的 partial run 会被降级为 transient-unavailable，schema/code 错误仍保持 blocking。
-- 网页 runtime health 成功不代表所有派生面板状态已收敛；面板级 `status` 必须在成功刷新时主动清空。
-- `src/runtime/gateway/conversation-behavior-optimization.ts` 本轮进入 1084 行 watch 区；下一轮继续扩展 workflow/evidence policy 时应优先抽出 evidence mode / handoff directive helper，不能继续堆主文件。
-
-本轮验证：
-
-- [x] Computer Use：Safari 打开并刷新 `http://127.0.0.1:5173/`，确认 Runtime Health online，Scenario Library / Skill Proposals 不再显示旧 `127.0.0.1:21431` Workspace Writer 错误。
-- [x] `node --import tsx --test src/runtime/gateway/conversation-behavior-optimization.test.ts src/runtime/gateway/transient-external-failure.test.ts`
-- [x] `npm run typecheck`
-- [x] `npm run smoke:browser`
-- [x] `npm run test`（723 tests pass）
-- [x] `git diff --check`
-
-
-### 2026-05-13 Milestone：图表派生视图 identity 与 action lineage 收敛
-
-本轮在上一阶段推送后重启 worker/explorer，优先落地 R-DATA-04 的最小通用 contract。主线程吸收 chart lineage 复核结论后，把图表迭代从“同一 artifact 只保留一个视图”改为“同一 artifact 可以有多个结构化 action identity / view composition”：
-
-- [x] R-DATA-04 图表迭代：`ResultPresentationArtifactAction` 增加 `presentationKey`、`parentArtifactRef`、`revision`、`revisionRef`、`encoding`、`layout`、`selection`、`sync`、`transform`、`compare`、`exportProfile`，用于表达换坐标、换颜色、筛选子集、导出 profile 等派生视图。
-- [x] `viewPlanResolver` 从 resultPresentation action 中保留上述 view params，写入 slot 与 `slot.props.artifactIdentity`，并把 action/revision/transform digest 纳入 item identity，避免同一 `artifact:base-plot` 的多个 revision 被去重吞掉。
-- [x] interactive view presentation dedupe 优先读取 `slot.props.artifactIdentity`，让 action-level identity 可以覆盖 artifact-level semantic identity，同时保持普通 artifact dedupe 逻辑不变。
-
-Failure/Improvement Notes：
-
-- R-DATA-04 不应写成 chart 专用字段或依赖颜色/坐标文案；本轮使用通用 resultPresentation action + UIManifestSlot view params，结构上适用于 plot、figure、table-like view 和 export bundle。
-- 同一 artifact 的多个派生 action 必须以 action/revision/transform identity 区分；只按 artifact id 去重会丢失用户“换坐标/筛选/导出”的历史意图。
-- `src/ui/src/app/results/viewPlanResolver.ts` 本轮 636 行，仍低于 PROJECT watch 阈值；后续继续扩展 result presentation action 时再考虑抽 action normalization helper。
-
-本轮验证：
-
-- [x] `node --import tsx --test src/ui/src/app/results/viewPlanResolver.test.ts packages/presentation/interactive-views/index.test.ts packages/contracts/runtime/result-presentation.test.ts`
-- [x] `npm run typecheck`
-- [x] `npm run smoke:view`
-- [x] `npm run test`（724 tests pass）
-- [x] `npm run smoke:browser`
-- [x] `git diff --check`
-
-
-### 2026-05-13 Milestone：文献引用修正派生 artifact 收敛
-
-本轮继续利用 R-LIT-05 explorer 的字段复核结果，落地 literature retrieval 的纯派生 citation correction contract。修复目标是不重写原检索输出、不靠标题/数组序号/文本切段硬匹配，而是从 artifact/ref 层定位目标 paper 与 provider record：
-
-- [x] R-LIT-05 引用修正多轮：新增 `deriveLiteratureCitationCorrection()`，输入 `OfflineLiteratureRetrievalOutput` 与 `paperId/providerRecordRef/evidenceRef` target，输出 `artifact:citation-correction`，包含 `targetPaperId`、`targetProviderRecordRefs`、`sourceRefs`、`verificationStatus`、`correctedSegment`、`affectedEvidenceRows`、`untouchedPaperIds` 与 diagnostics。
-- [x] 引用修正只派生目标 paper 的 correction segment/report；原 `paperList`、`evidenceMatrix`、`researchReport.boundedSummary` 不被突变，其他 paper 的 evidence row 不进入 correction artifact。
-- [x] smoke fixture 覆盖低可信 `web-search` 与高可信 `pubmed` 命中同一 DOI、另有 `arxiv` 对照 paper 的场景，断言 providerRecordRef 精确命中目标，控制 paper 保持 untouched。
-
-Failure/Improvement Notes：
-
-- R-LIT-05 不能依赖论文标题、报告句子或“第 N 条引用”；本轮定位只基于 `paperId`、`providerRecordRef`、evidence ref、`sourceProvenance` 和 `citationVerificationResults`。
-- 当前 `researchReport.boundedSummary` 仍没有段落级锚点；citation correction 先输出结构化 correction artifact，后续若要 UI 内联替换，应从 `targetPaperId/sourceRefs` 派生段落 anchor，而不是文本搜索报告内容。
-
-本轮验证：
-
-- [x] `npm run smoke:literature-retrieval-capability`
-- [x] `npm run typecheck`
-- [x] `npm run test`（724 tests pass）
-- [x] `git diff --check`
-
-
-### 2026-05-13 Milestone：CSV refs-first 摘要与 Field Mapping artifact refs 收敛
-
-本轮继续吸收 R-DATA-01/02 explorer 对 CSV 多轮分析与两表字段映射的复核结果，优先收敛 refs-first 与 artifact lineage 这两个通用边界，避免后续多轮分析靠 raw table 内容、临时映射文本或最近 artifact 猜测上下文：
-
-- [x] R-DATA-01 CSV 多轮分析：`ConversationReferenceDigest` 的 CSV 摘要改为 schema/profile digest，只保留 header、列数、行宽采样、headerHash/schemaFingerprint 和 omitted policy；行值不再内联进 prompt digest，敏感单元格只能通过 ref 按需读取。
-- [x] R-DATA-02 两表合并冲突：TaskProject stage 现在从 ToolPayload `artifacts`、`objectReferences`、`metadata`、`provenance` 中统一收集 `artifactRef/ref/dataRef/path/outputRef/rawRef`，裸 `.sciforge/...` 路径归一化为 `file:` ref，field-mapping artifact 可以随 stage 持久化并被下一轮复用。
-- [x] 复杂多轮 fixture 的 `T10-04` 增加 field-mapping artifact、required object ref、lineage 与 identity assertion，要求 mapping artifact 保留 source table refs、`dataRef/path`、column identity 与 provenance。
-
-Failure/Improvement Notes：
-
-- CSV digest 不能用“采样前几行 JSON”换 token，因为真实用户表格常含隐私、密钥、实验 ID 或异常值；默认只暴露 schema/profile，具体行值必须通过 workspace ref 受控展开。
-- field mapping 不能只靠 artifact title、最近输出或用户文本规则恢复；mapping 的 `dataRef/path/provenance` 必须进入 stage artifact refs，否则多轮重算会丢失两表合并的列身份和来源。
-
-本轮验证：
-
-- [x] `npx tsx tests/smoke/smoke-current-reference-prompt-path-digests.ts`
-- [x] `node --import tsx --test src/runtime/task-projects.test.ts src/runtime/gateway/context-envelope.test.ts`
-- [x] `npm run smoke:complex-multiturn-fixtures`
-- [x] `npm run smoke:complex-multiturn-chat`
-- [x] `npm run typecheck`
-- [x] `npm run test`（725 tests pass）
-- [x] `git diff --check`
-
-
-### 2026-05-13 Milestone：Evidence Mode 语义模块拆分
-
-本轮按前一阶段 long-file watch note 做代码膨胀治理，把 evidence mode 的 full-text policy、evidence gap 和 confidence ceiling 规则从 `conversation-behavior-optimization.ts` 抽到独立语义模块，主入口回到行为编排职责：
-
-- [x] 新增 `conversation-behavior-evidence-mode.ts`，集中导出 `decideEvidenceMode`、`EvidenceModeDecision`、`FullTextPolicyDecision`、`EvidenceGapDecision`、`EvidenceConfidencePolicy` 与 full-text/evidence gap 类型。
-- [x] `conversation-behavior-optimization.ts` 只 import/re-export evidence mode contract，保留 backend handoff、latency、budget、parallel plan 等编排逻辑；文件从 1084 行降到 875 行，退出 1000 行 watch list。
-- [x] `smoke:long-file-budget` 确认 evidence 主入口不再出现在 watch 列表，后续扩 evidence policy 应优先进入新模块而不是回堆主文件。
-
-Failure/Improvement Notes：
-
-- evidence mode 是可继续扩展的策略资产，不能和 latency、parallel plan、handoff 拼在一个大函数文件里；否则后续严格证据、metadata-first、confidence ceiling 会再次制造隐式第二入口。
-- 本轮只做语义模块拆分，不改 policy 行为；backend handoff directive 暂留主文件，因为它同时依赖 intent、budget、state refs 与 evidence mode，后续若继续膨胀再按 `*-handoff-directive` 单独抽。
-
-本轮验证：
-
-- [x] `node --import tsx --test src/runtime/gateway/conversation-behavior-optimization.test.ts`
-- [x] `npm run typecheck`
-- [x] `npm run smoke:long-file-budget`
-- [x] `npm run test`（725 tests pass）
-- [x] `git diff --check`
-
-
-### 2026-05-13 Milestone：通用 artifact derivation 与双语报告 lineage 收敛
-
-本轮落地 R-LIT-10 的最小通用 contract，同时补齐通用 artifact derivation 元数据与结果展示传播：双语报告不是重写原检索输出，也不是靠最近报告文本生成孤立摘要，而是从检索输出声明的 research-report artifact ref 派生英文 executive summary 与中英术语表，并保留 paper/provider/evidence refs：
-
-- [x] 新增 `deriveLiteratureBilingualReport()`，输入 `OfflineLiteratureRetrievalOutput`、目标语言、executive summary 和 glossary terms，输出从父 report ref 派生的 bilingual report artifact ref。
-- [x] `RuntimeArtifact.metadata.derivation` 增加 `sciforge.artifact-derivation.v1` 通用元数据，覆盖 `summary`、`translation`、`glossary`、`correction`、`rewrite` 等派生关系；ResultPresentation action 和 legacy gateway adapter 会传播 `parentArtifactRef`、`sourceRefs`、`derivationKind`。
-- [x] Artifact Inspector lineage 展示 derivation kind、parent 和 sources，避免派生摘要/术语表只显示 producer skill 而丢掉来源 artifact。
-- [x] 派生 artifact 显式包含参数化 `parentArtifactRef`、`derivedArtifactRefs`、`sourceArtifactRefs`、source report snapshot、paperIds、sourceRefs、metadata.derivation 和 lineage，确保中文报告、英文摘要、术语表之间可审计且多报告不会撞 ref。
-- [x] literature capability manifest 补齐 runner 已实际产出的 `sourceProvenance` output schema / expectedRefs / metadata producesArtifactTypes。
-- [x] smoke fixture 验证英文 executive summary 和 bilingual glossary 都携带 parent report ref / provider refs / evidence-matrix refs，且不突变原 `researchReport.boundedSummary`。
-
-Failure/Improvement Notes：
-
-- R-LIT-10 不应把翻译结果覆盖回原 `researchReport`，否则后续引用修正、审计导出和中文报告恢复都会丢失原始 artifact 身份；本轮采用纯派生 artifact。
-- glossary 不能只是一段 markdown 文本；每个 term 必须有 sourceRefs、paperIds 与 confidence，方便后续用户要求“只改术语表”或“按某篇论文改术语”时命中正确来源。
-
-本轮验证：
-
-- [x] `npm run smoke:literature-retrieval-capability`
-- [x] `node --import tsx --test packages/contracts/runtime/capability-evolution.test.ts`
-- [x] `node --import tsx --test packages/contracts/runtime/result-presentation.test.ts src/runtime/gateway/result-presentation-adapter.test.ts src/ui/src/app/ResultsRenderer.test.ts`
-- [x] `npm run typecheck`
-- [x] `npm run smoke:runtime-contracts`
-- [x] `npm run test`（727 tests pass）
-- [x] `git diff --check`
-
-
-### 2026-05-13 Milestone：Backend Handoff Drift 分类与恢复收敛
-
-本轮继续并行调研 AgentServer 四类输出漂移：`taskFiles`、direct `ToolPayload`、plain text 和 malformed generation response。落地重点是把原本散在 parser、gateway 分流和 direct-text guard 里的隐式判断提成可审计 contract，避免后端 handoff 漂移被误包装成最终答案或重复执行旧摘要中的任务：
-
-- [x] 新增 `sciforge.backend-handoff-drift.v1` contract，统一分类 `task-files`、`direct-tool-payload`、`plain-text-answer`、`guarded-plain-text`、`malformed-generation-response`、`empty-output` 和 `unknown-output`，并给出 strict retry / diagnostic materialization / blocked 的恢复策略。
-- [x] AgentServer generation gateway 在四个出口统一发出 `agentserver-handoff-drift` runtime event：runnable taskFiles、direct ToolPayload、plain text bridge、malformed generation strict retry 都可在运行事件中审计。
-- [x] `parseGenerationResponse` 只从 authoritative `result/text/finalText` 路径解析新 runnable task，不再从 `handoffSummary` / `outputSummary` 中抽旧 taskFiles JSON 当作新任务执行。
-- [x] direct-text guard 保持 fail closed：raw taskFiles/log/trace/code 进入 runtime diagnostic；自然语言里提到 taskFiles 作为历史引用仍可作为普通答案恢复。
-- [x] 新增 `smoke:backend-handoff-drift`，串测四类真实 gateway 输出：taskFiles 执行、direct ToolPayload materialize、plain text report bridge、malformed generation-looking text strict retry 后执行。
-
-Failure/Improvement Notes：
-
-- handoff summary 是摘要证据，不是执行授权；如果里面包含旧 `taskFiles` JSON，只能作为引用/诊断，不应被 parser 当成新 generation response。
-- plain text fallback 必须先分类再恢复；否则代码、日志、trace 或 taskFiles 片段会被错误放进最终报告。
-- 后续如继续扩展 backend 输出形态，应先扩 `backend-handoff-drift` contract 与 smoke，再接 gateway/UI 展示。
-
-本轮验证：
-
-- [x] `node --import tsx --test packages/contracts/runtime/backend-handoff-drift.test.ts src/runtime/gateway/agentserver-run-output.test.ts src/runtime/gateway/direct-answer-payload.test.ts`
-- [x] `npm run smoke:backend-handoff-drift`
-- [x] `npx tsx tests/smoke/smoke-agentserver-text-generation-fallback.ts`
-- [x] `npm run smoke:agentserver-direct-text`
-- [x] `npm run smoke:agentserver-generation`
-- [x] `npm run typecheck`
-- [x] `npm run smoke:runtime-contracts`
-- [x] `npm run smoke:no-src-capability-semantics`
-- [x] `npm run verify:full`（759 tests pass；backend comparison smoke、browser smoke、production build 与 artifacts index 通过）
-- [x] `npm run verify:full`（754 tests pass；repair handoff runner、browser smoke、production build 与 artifacts index 通过）
-- [x] `npm run verify:full`（750 tests pass；browser smoke、production build 与 artifacts index 通过）
-- [x] `npm run smoke:no-legacy-paths`
-- [x] `npm run smoke:runtime-gateway-modules`
-
-
-### 2026-05-13 Milestone：Notebook Branch Replay 与 TaskProject 分支收敛
-
-本轮把 R-DATA-06 从“Notebook 风格交互”抽象成可验证的运行时能力：用户回到第 2 个分析步骤改参数时，系统必须保留上游中间文件、在新 branch 上重跑该步骤及下游步骤，并把原下游输出标成 branch-invalid，不允许静默复用旧结果：
-
-- [x] 新增 `sciforge.notebook-branch.v1` / `sciforge.notebook-branch-replay.v1` contract，产出 retained upstream、branch-local rerun、invalidated downstream、affected refs、parameter digest 和 `fork-before-write` side-effect policy。
-- [x] 新增 `forkTaskProjectStage`，把 Notebook branch replay 落到 TaskProject runtime：分支 stage 复用 base stage code/input，写入 `TaskStageBranchMetadata`、branch evidence、parameter patch refs、preserved refs 和 invalidated refs。
-- [x] 分支运行继续复用 `runTaskProjectStage`，branch output 的 `artifactRefs` / `evidenceRefs` / stdout/stderr / ToolPayload lineage 进入原有 TaskProject 持久化链路。
-- [x] 新增 `smoke:notebook-branch`，覆盖三步 notebook fixture：保留第 1 步中间文件、从第 2 步改 `model.alpha` 分支、使第 2/3 步旧输出失效，并记录新的 branch artifact lineage。
-
-Failure/Improvement Notes：
-
-- Notebook branch 不能等同于 conversation history edit；前者是数据分析步骤分支，落点应是 TaskProject stage/evidence/artifact lineage，后者只负责消息历史的 revert/continue 冲突。
-- “回到第 2 步换参数”必须是 fork-before-write：旧第 2/3 步输出可作为 source evidence，但不能作为新 branch 结果复用。
-- 后续 UI 可在 `notebook-timeline` / `workflow-provenance` 上投影 branch metadata；contract owner 仍应留在 runtime 层。
-
-本轮验证：
-
-- [x] `node --import tsx --test packages/contracts/runtime/notebook-branch.test.ts src/runtime/task-projects.test.ts`
-- [x] `npm run smoke:notebook-branch`
-- [x] `npm run typecheck`
-- [x] `npm run smoke:runtime-contracts`
-- [x] `npm run smoke:no-src-capability-semantics`
-- [x] `git diff --check`
-- [x] `npm run verify:full`（745 tests pass；browser smoke 与 artifacts index 通过）
-
-
-### 2026-05-13 Milestone：用户反馈收敛与通用 TODO 归因
-
-本轮完成 R-WF-07：把“慢、崩、看不懂、引用错、重复跑”这类连续用户反馈从收件箱展示/交接，提升为可审计的 runtime contract。核心目标是把反馈稳定折叠成通用 TODO，而不是逐条道歉或按中文短句写 prompt 特判：
-
-- [x] 新增 `sciforge.user-feedback-convergence.v1` contract，定义 `latency`、`crash`、`unclear-result`、`citation-mismatch`、`duplicate-work`、`goal-miss`、`unknown` 信号，并产出 `FeedbackTodoCandidate`。
-- [x] TODO candidate 显式包含 `ownerLayer`、`dedupeKey`、`sourceSignalIds`、`taskRunCardRefs`、`failureSignatureRefs`、`acceptanceCriteria`、`nextStep` 和 `NoHardcodeReview`，复用 TaskRunCard / FailureSignatureRegistry / attribution layer，而不是污染 failure signature 语义。
-- [x] `feedbackWorkspace` 增加 `createFeedbackConvergenceFromComments`，可从真实 `FeedbackCommentRecord` 生成收敛计划，并保留 session/run/artifact/execution/screenshot/GitHub refs。
-- [x] 新增 `smoke:user-feedback-convergence`，串联 TaskAttempt、TaskRunCard、FailureSignatureRegistry 与反馈信号，验证 slow/crash/unclear/citation/duplicate 会折叠成通用 TODO，重复 complaint 只增加 occurrence/source refs。
-
-Failure/Improvement Notes：
-
-- Feedback Inbox 当前是收集、筛选、GitHub/repair handoff 层；它不应拥有“慢/崩/引用错”的分类语义。分类语义应在 contract 层，UI 只展示和交接结果。
-- 用户反馈不是运行时 failure；不能把所有 feedback 塞进 `FailureSignatureKind`。只有已有 failure evidence 可以作为 TODO 的 supporting refs。
-- 文本匹配只做信号归一化；TODO 归属必须结合 TaskRunCard、FailureSignatureRegistry、refs 和 owner layer，避免 “R-WF-07 字面短句” 特例。
-
-本轮验证：
-
-- [x] `node --import tsx --test packages/contracts/runtime/user-feedback-convergence.test.ts src/ui/src/feedback/feedbackWorkspace.test.ts`
-- [x] `npm run smoke:user-feedback-convergence`
-- [x] `npm run typecheck`
-- [x] `npm run smoke:runtime-contracts`
-- [x] `npm run smoke:no-src-capability-semantics`
-
-
-### 2026-05-13 Milestone：Dirty Worktree 协作保护
-
-本轮完成 R-CODE-06：把“用户已有未提交改动时，agent 只修另一区域且不能 reset/revert 用户改动”做成可复用 runtime contract，而不是只依赖操作者记得谨慎：
-
-- [x] 新增 `sciforge.dirty-worktree-collaboration.v1` contract，可解析 `git status --porcelain`，把 dirty paths 归为 user-owned protected paths，并对 agent planned changes 做路径重叠检查。
-- [x] contract 输出 `writeAllowed`、`protectedPaths`、`allowedChanges`、`blockedChanges`、`pathConflicts`、`commandDecisions`、`prohibitedCommands` 和 `NoHardcodeReview`，用于提交前只 stage 目标文件。
-- [x] 阻断 `git reset --hard`、`git checkout -- path`、`git restore`、`git clean -f`、`git stash` 等会丢失或挪走用户 dirty state 的命令；即使计划路径不重叠也 fail closed。
-- [x] Repair handoff runner 接入 dirty preflight：AgentServer 只收到 isolated worktree contract，不再收到原 target workspace 路径；runner 对 user-owned dirty paths 做 before/after 快照，patch overlap 或原路径被改动时返回 `needs-follow-up`。
-- [x] 新增 `smoke:dirty-worktree-collaboration` 与增强 `smoke:repair-handoff-runner`，在临时 git repo 中模拟用户改 tracked 文件和 untracked 目录，验证 agent 只能写 disjoint path，不能覆盖用户文件或执行 destructive git 命令。
-
-Failure/Improvement Notes：
-
-- Untracked 目录在 porcelain status 中可能只显示为目录级 `scratch/`，保护逻辑必须支持目录与子路径 overlap，不能只按单文件精确匹配。
-- dirty worktree 协作不是 release gate，也不是 repair runner；它应作为 workspace preflight contract 独立存在，供修复、提交和 handoff 前复用。
-- `git status --porcelain` 不能用通用 trim 读取；第一行可能以空格开头，trim 会吞掉 tracked modified path 的首字母。
-- `allowUserOwnedPaths` 保留为显式人工授权逃生口；默认所有 user/unknown dirty paths 都应受保护。
-
-本轮验证：
-
-- [x] `node --import tsx --test packages/contracts/runtime/dirty-worktree-collaboration.test.ts`
-- [x] `npm run smoke:dirty-worktree-collaboration`
-- [x] `npm run smoke:repair-handoff-runner`
-- [x] `npm run typecheck`
-- [x] `npm run smoke:runtime-contracts`
-- [x] `npm run smoke:no-src-capability-semantics`
-
-
-### 2026-05-13 Milestone：Backend-neutral 对比与修复归因
-
-本轮完成 R-CODE-09：把“同一任务在多个 backend 上跑，比较失败模式并提炼 backend-neutral 修复”收敛为轻量 runtime contract，不再把 Codex/OpenTeam 或某个 backend pair 写成特例：
-
-- [x] 新增 `sciforge.backend-comparison.v1` contract，输入多个 backend run，统一归一化 `supported`、provider、capabilities、compact fallback、handoff drift、failure categories 和 evidence refs。
-- [x] contract 复用 `SUPPORTED_RUNTIME_AGENT_BACKENDS`、`runtimeAgentBackendCapabilities`、`compactCapabilityForAgentBackend`、`runtimeAgentBackendFailureCategories`、`runtimeAgentBackendIsRateLimitKind` 与 `classifyBackendHandoffDrift`，不维护第二套 backend 列表或失败正则。
-- [x] 输出 `BackendComparisonReport`、invariants、`BackendNeutralFixCandidate` 与 `NoHardcodeReview`；metadata backend 不一致或 unsupported backend 会先 `blocked`，不会直接推导修复。
-- [x] 新增 `smoke:backend-comparison`，覆盖全 supported backend 一致 direct ToolPayload、任意两 backend 的共享 schema failure、divergent handoff drift、unsupported backend guard，且不真实调用 provider、不写大报告 artifact。
-
-Failure/Improvement Notes：
-
-- 现有 `smoke:agentserver-backend-matrix` 已覆盖 6 backend x 3 turns，并会写 `docs/test-artifacts/AgentBackendMultiturnTestReport.md`；R-CODE-09 的最小新增应是 contract-level invariant smoke，而不是再复制一个长矩阵。
-- Backend 差异不等于 backend-specific 修复；只有在 metadata、capability 和 handoff contract 都归一化后，才能判断是 shared schema/context/rate-limit/network 修复，还是真实 backend drift。
-- 测试 fixture 必须从 `SUPPORTED_RUNTIME_AGENT_BACKENDS` 派生 backend pair；禁止把 `codex/openteam_agent` pair 当成唯一真实路径。
-
-本轮验证：
-
-- [x] `node --import tsx --test packages/contracts/runtime/backend-comparison.test.ts`
-- [x] `npm run smoke:backend-comparison`
-- [x] `npm run typecheck`
-- [x] `npm run smoke:runtime-contracts`
-- [x] `npm run smoke:no-src-capability-semantics`
-
-
-### 2026-05-13 Milestone：论文复现可行性筛选
-
-本轮完成 R-LIT-07：把“检索论文后按代码可用性、数据集可用性、计算成本、复现风险排序，并导出复现计划”落成 provider-neutral 派生 artifact，不把论文标题、数组序号、GitHub/GEO/Zenodo 等 provider 名称写成判定路径：
-
-- [x] 新增 `deriveLiteratureReproductionFeasibility()`，从 `OfflineLiteratureRetrievalOutput` 派生 instance-scoped reproduction feasibility artifact ref，保留声明的 paper-list/evidence-matrix/research-report refs、provider refs、evidence refs、code/data/compute/risk refs。
-- [x] 排序只基于结构化 `paperId` evidence：`codeAvailability`、`datasetAvailability`、`computeCost`、`reproductionRisk` 与 refs；未知/缺失 evidence 会保留为 gap，不偷换成特定 provider 或论文名规则。
-- [x] 复现计划复用 runtime scientific reproduction contract 的 `AnalysisPlan`，包含 claimIds、steps、inputRefs、expectedArtifacts、verifier refs 和 fallback policy，并通过 `validateScientificReproductionArtifact()` 校验。
-- [x] 新增 `smoke:literature-reproduction-feasibility` 并接入 `smoke:all`，覆盖 ready / needs-data-or-code / high-risk 排序、refs-first analysis plan、原 retrieval output 不突变、orphan paper evidence 被忽略但审计记录保留。
-
-Failure/Improvement Notes：
-
-- R-LIT-07 不应重新触发真实网络检索或执行训练/下载；它是 retrieval output 之上的 triage/export contract，真正复现实验继续交给 scientific reproduction workflow。
-- Literature 层只建模候选排序、证据缺口和推荐；一旦进入实验计划、notebook、dataset inventory、claim verdict，必须复用 `sciforge.scientific-reproduction.v1`。
-- 缺少 evidence 不等于 unavailable；本轮保留 `unknown` / `partial` / `unavailable` 的结构化区别，并把缺口写入 `missingEvidence` 与 `fallbackPolicy`。
-- 本轮让 `packages/skills/literature/index.ts` 跨过 1500 行 long-file 阈值；已在 backlog 增加 R-LIT-11，后续应按 retrieval runner、derived artifacts、reproduction feasibility、citation/bilingual helpers 拆成语义模块。
-
-本轮验证：
-
-- [x] `npm run smoke:literature-reproduction-feasibility`
-- [x] `npm run smoke:literature-retrieval-capability`
-- [x] `npm run smoke:scientific-reproduction`
-- [x] `npm run typecheck`
-- [x] `npm run verify:full`（759 tests pass；R-LIT-07 smoke、scientific reproduction smoke、long-file budget、browser smoke、production build 与 artifacts index 通过）
-
-
-### 2026-05-13 Milestone：No-hardcode 审计与 Release Gate 策略注入收敛
-
-本轮按用户要求复核从 `8f730c45d28e83d7d8b5c9b7e8be37b44115b7a2` 到当前 HEAD 的修改是否符合“所有修改必须通用、不能为当前案例打补丁”。并行 sub agents 重点审计 PROJECT.md、harness 边界、runtime contract、gateway、literature skill 与 smoke；根据发现完成以下通用修复：
-
-- [x] release gate 不再把 `npm run verify:full`、GitHub push 或固定服务名作为生产真相源；新增 `ReleaseGatePolicy`，通过 `requiredCommand`、`requiredStepKinds`、`syncActionLabel` 与 `syncActionSignals` 注入 profile/harness 的发布策略。
-- [x] intent-first verification 与 runtime verification gate 都消费同一 release gate policy；仅 `uiState.releaseGatePolicy` 注入时也能保持初始 verify job、后台验证和 gate audit 一致。
-- [x] 外部同步动作不再靠生产代码里的 GitHub/deploy/上线正则识别；必须来自 policy 的结构化 sync signals，避免把当前发布案例扩散成隐式策略。
-- [x] release verification result 不再因文本里出现 `release` 或 `verify-full` 就伪装成已执行配置命令；只有匹配 policy `requiredCommand` 或显式 gate step 的证据会进入 release-verify。
-- [x] 删除 direct-text fallback 的测试 sentinel 分支，把 raw ToolPayload 识别改成通用 payload/metadata 形态判断。
-- [x] Literature reproduction feasibility 的 `noHardcodeReview` 统一使用 runtime `NoHardcodeReview` contract；backend comparison、dirty worktree、user feedback convergence 的 no-hardcode metadata 去掉 R-* 编号、项目名和当前 backend pair 字面量。
-- [x] 新增/更新 policy 注入 smoke，覆盖自定义验证命令、自定义 sync label、非 GitHub 外部同步和仅从 `uiState.releaseGatePolicy` 注入的 release gate。
-
-Failure/Improvement Notes：
-
-- 已删除 `pushAllowed` / `releaseGateAllowsPush` 兼容字段，统一使用 `syncAllowed` / `releaseGateAllowsSync`，不再维护 GitHub/push 专用语义分支。
-- `packages/skills/literature/index.ts` 当前仍超过 1500 行；PROJECT 已把 R-LIT-11 扩展为语义拆分 + instance-scoped artifact ref contract 任务，后续拆模块时不能回退到固定单例 refs。
-- 更大范围的 gateway 策略散落已继续收敛：task outcome projection、conversation behavior optimization、evidence mode、task-attempt scope 和 WorkEvidence policy 都删除 prompt/free-text 关键词决策，改为结构化 status/code/policy/WorkEvidence 字段。
-
-本轮验证：
-
-- [x] `node --import tsx --test packages/contracts/runtime/release-gate.test.ts packages/contracts/runtime/verification-policy.test.ts packages/contracts/runtime/intent-first-verification-policy.test.ts src/runtime/gateway/intent-first-verification.test.ts src/runtime/gateway/direct-answer-payload.test.ts`
-- [x] `node --import tsx tests/smoke/smoke-release-gate-contract.ts`
-- [x] `node --import tsx tests/smoke/smoke-literature-reproduction-feasibility.ts`
-- [x] `git diff --check`
-- [x] `npm run verify:full`（762 tests pass；runtime contract smoke、release gate smoke、literature reproduction feasibility smoke、scientific reproduction smoke、long-file budget、module boundary/no-legacy/no-src-capability-semantics、browser smoke、production build 与 artifacts index 通过）
-
-
-### 2026-05-13 Milestone：Refs-only Direct Context 与证据绑定通用化收敛
-
-本轮从 commit `8f730c45d28e83d7d8b5c9b7e8be37b44115b7a2` 以来的改动重新复核“不能为当前案例打补丁”原则，并开启多个 sub agents 并行审查 PROJECT.md 的“不变原则 / 开工前必读”约束。主线程使用 Computer Use 在真实 Safari 会话中复现多轮失败追问：旧会话连续第二到第五轮进入 AgentServer convergence guard；修复后 no-execution follow-up 已能走 direct-context fast path 并完成 runtime context summary artifact。但第九轮真实 Safari 压测仍失败，暴露 stale Workspace Writer 配置残留与 AgentServer 泄漏/复入边界，不能把本轮 Safari 结果记为完全通过。
-
-- [x] 删除 TS prompt execution classifier；执行模式只消费 Python conversation-policy 的 applied contract 或 harness/context 显式能力，gateway 不再从 prompt/free-text 推断 no-run/no-read/fresh-work。
-- [x] 把 runtime ref/body-carrier 识别迁入 `packages/contracts/runtime/references.ts`，AgentServer prompt、context envelope、UI transport 和 session transform 共享同一 refs-only helper，`smoke:no-src-capability-semantics` 保持 0 新增命中。
-- [x] direct-context fast path 增加显式 no-execution summary 安全边界：有当前 refs/artifacts 且 Python policy 或 harness capability 授权时才直答；TS 本地诊断不能授权 direct-context。
-- [x] AgentServer generation prompt 的 bibliographic verification prose 改为 structured request/scenario contract gate，不再扫描 capability brief、promptRenderPlan 或 prompt 文案。
-- [x] WorkEvidence bibliographic 检查改为 contract/artifact/capability gated：普通 `title/year/verification_status` 记录不再误伤；verified bibliography 必须绑定 record-scoped WorkEvidence，shared/copied ref、错误 DOI、相似标题但 identifier/year/journal 冲突都会 fail closed。
-- [x] verification/context handoff 对 `rawProviderPayload`、`providerResponse`、`payload/body/content/fullText`、verification `critique/repairHints` 等 raw-like carriers 只保留 shape/hash/refs，不把正文塞回 prompt。
-- [x] dev UI stale restart 改为 fail-closed lifecycle ownership：默认不杀未知 Vite；只有显式 opt-in 且 lifecycle pidfile/token 证明端口进程归当前 launcher 所有时才终止，命令/cwd/port 仅作为诊断。
-- [x] UI current-run ownership 改成 strict runId/ref/uiManifest/artifact intersection：无 provenance 的历史 executionUnits/artifacts 不再自动盖当前 runId，也不再从 `message/text/error` 正文解析 artifact。
-- [x] 多轮 handoff 改成 refs/digest-only：历史 message、run prompt/response、stream transcript 和 raw body 不再作为正文进入下一轮 payload；compact progress 只从结构化 progress/interaction events 恢复，不从 summary/message/text 解析。
-- [x] intent-first verification、runtime verification、release gate、task outcome projection、conversation behavior optimization、evidence mode、WorkEvidence policy 和 task-attempt scope 都删除 prompt/free-text 关键词决策；只消费结构化 policy/status/code/ref/WorkEvidence 字段。
-- [x] Literature skill 保留 artifact type vocabulary，但 artifact instance refs、parent refs、derived refs、sourceArtifactRefs 和 reproduction feasibility refs 全部从输入/output 声明派生；citation verification 只有 record-scoped provider evidence 才能标 `verified`。
-- [x] 新增 ToolPayload shape contract 与 runtime package manifest smoke；dev UI health probe 覆盖 SciForge index、Vite client 和 runtime contract barrel。
-- [x] 本轮通用修复继续收敛 no-execution direct-context、refs-only handoff、raw carrier hash/ref 化、current-run ownership、dev UI lifecycle ownership 和 ToolPayload shape validation；这些修复以 contract/harness/runtime 信号为入口，不以当前失败 prompt、Safari tab 或 backend 文案作为特例。
-
-Failure/Improvement Notes：
-
-- 真实网页回归曾进入 AgentServer 的根因不是 token 压缩，而是 no-execution summary 没有在 dispatch 边界 fail-closed；本轮把该策略放到 Python conversation-policy / harness capability 与 direct-context fast path，不按中文 prompt 精确匹配。
-- 第九轮真实 Safari 压测没有通过：页面状态暴露 stale Workspace Writer URL/health identity 残留，同时 AgentServer 仍存在跨轮泄漏或复入路径；该结果只能作为 failure evidence 和后续 TODO 输入，不能写成 Safari 验证成功。
-- bibliography policy 不能凭字段猜测全局生效；必须由 artifact/schema/capability contract 开启，并且 evidenceRefs 不能单独证明“同一条记录”绑定。
-- Vite stale restart 不能用“看起来像同 repo Vite”作为 kill 授权；ownership 必须来自 lifecycle token/pidfile。
-- `src/runtime/gateway/agentserver-prompts.ts`、`src/runtime/gateway/context-envelope.ts` 仍在长文件 watch list；`src/ui/src/app/chat/sessionTransforms.ts` 已超过 1500 行，必须拆语义模块；generated catalog / generated index 类文件按生成物豁免，但需要保留生成源与校验命令，不能手写扩展。
-- 旧失败 run 仍会在结果区作为 recoverable 诊断展示，这是正确状态；当前 direct-context run 已 completed，并新增 runtime context summary artifact。
-
-本轮验证：
-
-- [x] Computer Use / Safari：在 `http://127.0.0.1:5173/` 真实多轮会话中发送 no-execution follow-up，确认 direct-context 修复能生成 runtime context summary；第九轮真实 Safari 压测失败并暴露 stale writer 与 AgentServer leak，后续必须保留 trace/evidence 后再收敛。
-- [x] `node --import tsx --test packages/contracts/runtime/work-evidence-policy.test.ts packages/contracts/runtime/task-run-card.test.ts src/runtime/gateway/task-outcome-projection.test.ts src/runtime/gateway/conversation-behavior-optimization.test.ts src/runtime/gateway/conversation-behavior-evidence-mode.test.ts src/ui/src/processProgress.test.ts src/ui/src/app/chat/sessionTransforms.test.ts src/ui/src/api/sciforgeToolsClient.policy.test.ts`
-- [x] `node --import tsx tests/smoke/smoke-literature-retrieval-capability.ts && node --import tsx tests/smoke/smoke-literature-reproduction-feasibility.ts`
-- [x] `npm run smoke:no-src-capability-semantics`
-- [x] `npm run smoke:agentserver-prompt-policy-prose`
-- [x] `npm run smoke:service-lifecycle`
-- [x] `npm run smoke:runtime-contracts`
-- [x] `npm run smoke:release-gate`
-- [x] `npx tsx tests/smoke/smoke-dev-ui-health.ts`
-- [x] `npm run typecheck`
-
-后续保留：
-
-- [ ] 持久化 Computer Use 真实网页压测 trace：保存 Safari tab 状态、localStorage/config drift、Workspace Writer health identity、AgentServer run ids/events 和失败截图/日志，作为 release/smoke evidence，而不是只写人工观察结论。
-- [ ] 将 turn constraints 正式提升为 harness capability 与 stage hook：no-execution、refs-only、side-effect boundary、verification depth、context expansion 和 retry/repair budget 必须通过 profile/stage contract 注入，gateway/UI 只能消费 applied constraints。
-- [ ] 继续治理 `sessionTransforms.ts` 超 1500 行：先拆 history edit、run projection、reference/lineage normalization 与 compaction helpers；generated catalog/index 文件只允许作为生成物豁免，并由 long-file budget smoke 校验来源。
-
-
-### 2026-05-13 Milestone：Turn Constraints Dispatch 边界与截断安全收敛
-
-本轮回答并修复“是否所有信息都需要通过 AgentServer 判断，以及 SciForge 截断信息后是否会答非所问”的核心边界：AgentServer 不是所有信息的统一裁判；当前轮执行约束、refs/digests、历史展开边界和 fail-closed 诊断必须先由 SciForge runtime / conversation policy 决定，只有明确允许生成或执行时才进入 AgentServer。
-
-- [x] Python conversation policy 输出并贯穿 `turnExecutionConstraints`：`contextOnly`、`agentServerForbidden`、workspace/code/external execution forbidden、preferred direct-context mode 和结构化 evidence，作为当前轮路由约束。
-- [x] execution classifier 改为消费结构化 current refs、currentReferenceDigests、artifacts、goal snapshot、context policy、tool/capability manifests、expected artifact contract 和 failure state；历史失败、prior attempts 或 prompt 文案本身不再授权直答或 AgentServer dispatch。
-- [x] direct-context fast path 支持当前轮 digest，并要求至少有当前轮非 execution-only 上下文；digest 不足时返回 `needs-work` / `runtime-execution-forbidden` 诊断，而不是用截断历史拼一个看似完成的回答。
-- [x] AgentServer continuity 与 context window 不再因为“有当前 ref”就自动复用旧 session；current refs/digests 在 no-history-reuse 约束下不会展开旧 `.sciforge/artifacts`、stdout/log、verification 正文或 prior attempts。
-- [x] no-execution/context-only 当前轮会清空 expected artifact 派生需求，并在 gateway dispatch 前 fail-closed，防止截断后被误判为需要重新生成 report 或继续失败 run。
-- [x] UI handoff 将 `preferredCapabilityIds` 保留在 `turnExecutionConstraints`，不再混入 `selectedToolIds`；策略偏好和用户显式工具选择保持两条干净链路。
-- [x] UI / gateway / presentation 中的 prompt/free-text 关键词路由继续收敛到 runtime contract、harness/profile policy、artifact/schema/capability 信号，避免为当前中文压测 prompt 写特例。
-
-Failure/Improvement Notes：
-
-- 如果 SciForge 先无结构地截断历史，再把剩余片段交给 AgentServer 判断，确实会出现答非所问、重复执行或把历史失败当成本轮失败的风险。本轮把边界前移到 current-turn constraints、refs/digest isolation 和 dispatch fail-closed。
-- AgentServer 仍适合处理需要生成、执行、repair、深分析的任务；不适合被当作“所有信息都先问它”的全局路由器。当前轮约束禁止执行时，AgentServer 必须被视为不可用能力。
-- 第九轮真实 Safari 压测是在旧 workspace server 未重启时失败，作为旧链路泄漏 evidence 保留；重启 `workspace:server` 后第十轮真实 Safari 压测返回 `runtime-execution-forbidden`，没有再调用 `agentserver.generate.literature`。
-
-本轮验证：
-
-- [x] Computer Use / Safari：在 `http://127.0.0.1:5173/` 发送“不要重跑、不要执行、不要读取旧 task-results/log/verification 正文，也不要调用 AgentServer；只允许当前轮 refs/digest”的第十轮真实多轮压测，页面生成 `runtime-execution-forbidden` artifact，并展示“当前回合结构化 turn constraints 禁止新的 runtime 与 workspace 执行；已 fail-closed”。
-- [x] 终端 runtime 直连压测：同类 prompt + 当前 digest 返回 `sciforge.direct-context-fast-path`，无 AgentServer dispatch。
-- [x] `node --import tsx --test src/ui/src/api/sciforgeToolsClient.policy.test.ts src/runtime/conversation-policy/policy.test.ts src/runtime/gateway/direct-context-fast-path.test.ts src/runtime/gateway/conversation-service-plan.test.ts src/runtime/gateway/agentserver-context-window.test.ts src/runtime/gateway/artifact-reference-context.test.ts src/runtime/gateway/gateway-request.test.ts`
-- [x] `PYTHONPATH=packages/reasoning/conversation-policy/src pytest packages/reasoning/conversation-policy/tests/test_execution_classifier.py packages/reasoning/conversation-policy/tests/test_contracts.py -q`
-- [x] `npm run typecheck`
-- [x] `npm run smoke:runtime-contracts`
-- [x] `npm run smoke:runtime-gateway-modules`
+- [x] `npm run smoke:agent-harness-contract`
 - [x] `npm run smoke:contract-driven-handoff`
+- [x] `npm run smoke:no-scattered-harness-policy`
+- [x] `npm run typecheck`
 - [x] `npm run smoke:no-src-capability-semantics`
+- [x] `npm run smoke:long-file-budget`
+- [x] `npm run build`
 
+长文件治理：
 
+- [ ] `packages/skills/literature/index.ts` 当前超过 1500 行。后续应拆为 `literature-search-provider`、`literature-download-provider`、`literature-report-synthesis`、`literature-contract-normalizer` 等语义模块，主入口只保留 capability 编排和导出。
+- [ ] `src/ui/src/app/chat/sessionTransforms.ts` 当前超过 1500 行。后续应拆为 `session-message-projection`、`session-run-projection`、`session-reference-projection`、`session-archive-projection` 等语义模块，避免聊天状态恢复继续膨胀。
 
-### H022 Real-world Complex Task Backlog for SciForge Hardening
+## 最终形态修改建议
 
-职责：沉淀更多真实、多轮、可复现的用户任务，用这些任务持续压测 SciForge 的通用能力边界。每个任务都必须像真实用户一样提出目标、补充约束、引用中间结果、追问失败原因、要求继续或导出，而不是只跑单轮 happy path。后续修复必须从任务暴露的问题中抽象出通用 runtime、harness、payload、artifact、verification、resume、presentation 或 backend handoff 改造，禁止为某个 prompt、某篇论文、某个文件名、某个 backend 写硬编码。
+当前多轮稳定性问题已经不是单点 bug，而是旧链路中存在多个半真相源：UI state、session records、runs、executionUnits、task attempts、repair diagnostics、verification 和 history restore 都在局部推断“当前任务到底是什么状态”。继续在这些链路上补丁式修复会越来越难保证稳定、流畅和可审计。
 
-执行规则：
+基于 agent backend 已经足够通用且能力很强这一前提，最终形态需要进一步调整为：
 
-- 每个真实任务都要保留 session bundle、runtime events、task inputs、task outputs、stdout/stderr、artifact refs、executionUnits、verification verdict 和最终用户可见结果。
-- 每个任务结束后必须补一条 `Failure/Improvement Note`：问题现象、最小复现步骤、通用归因层、建议修复入口、不能采用的特例修复。
-- 如果任务失败但产生了可用 partial，必须继续追问一次“复用已有结果继续”，测试 checkpoint 和 artifact lineage。
-- 如果任务成功，必须继续追问一次“换范围/换格式/补证据/导出审计”，测试多轮引用和状态继承。
-- 每类任务至少覆盖一个长任务、一个外部依赖不稳定、一个 schema/payload 漂移、一个用户中途改范围、一个历史恢复或刷新继续。
-- 所有 TODO 默认是待跑真实任务，不代表已经实现修复；跑完后再把发现的问题拆成 H018-H021 或新 H 项下的通用工程任务。
+> **Backend maximal reasoning, SciForge minimal orchestration.**
 
-文献与科研调研真实任务：
+SciForge 不应成为第二个 agent，也不应在 UI、gateway、prompt builder 或 repair loop 里重新判断用户语义。Backend 负责最大化通用推理、能力选择、多轮指代、研究策略、胶水代码生成、报告撰写和基于结构化错误的修复；SciForge 只负责 backend 很难天然稳定保证的运行秩序：capability contract、event log、refs/artifacts 持久化、runtime/safety boundary、failure owner classification、verification gate、background continuation 和 UI projection。
 
-- [x] R-LIT-01 今日 arXiv agent 论文深调研：检索今日/最近 agent 论文，下载 PDF，阅读全文，产出中文 markdown 报告；随后要求按方法、数据集、评测指标、主要结论重排；再要求导出审计包。已压测真实失败边界，保留 evidence bundle；后续修复见本轮 notes。
-- [x] R-LIT-02 arXiv 空结果恢复：限定一个很窄主题和当天日期，预期可能空结果；要求系统自动说明 empty result、扩展 query、保留不确定性，并继续生成 partial 报告。
-- [x] R-LIT-03 多来源文献对照：同一主题分别检索 arXiv、Semantic Scholar/PubMed/网页来源，去重并标注来源差异；用户要求删除低可信来源后重写结论。已完成 provider-neutral fixture contract；真实网络调用仅作为后续 provider availability 验证。
-- [x] R-LIT-04 全文下载失败恢复：要求下载 10 篇论文全文，其中部分 PDF 超时/403/过大；系统必须保留已下载全文、标注失败原因、继续基于 metadata 补 partial。
-- [x] R-LIT-05 引用修正多轮：先生成报告，再让用户指出某条引用不可信；系统必须定位原 artifact/ref，修正该段，不污染其他结论。已覆盖 providerRecordRef/paperId 定位、citation-correction 派生 artifact、目标 evidence row 修正和非目标 paper untouched。
-- [ ] R-LIT-06 研究方向综述迭代：先做宽泛综述，再要求缩小到 robotics agent，再要求排除 benchmark 论文，再要求只保留开源代码论文。
-- [x] R-LIT-07 论文复现可行性筛选：检索论文后按代码可用性、数据集可用性、计算成本、复现风险排序，并导出复现计划。已完成 instance-scoped reproduction feasibility artifact、结构化 code/data/compute/risk 评分、refs-first `AnalysisPlan` 导出、orphan evidence guard 和 smoke 覆盖。
-- [x] R-LIT-08 反事实追问：报告完成后用户问“如果只看非 LLM agent 呢”，系统必须复用已有检索 refs 并说明哪些需要刷新。已覆盖“缺少可用 paper-list/report 时必须先 repair/resume”的失败边界。
-- [x] R-LIT-09 历史文献任务恢复：打开昨天失败的 literature session，要求只看诊断不重跑；系统必须展示失败边界、可复用 refs 和下一步选项。
-- [x] R-LIT-10 双语报告：同一调研先生成中文报告，再要求英文 executive summary，再要求中英术语表，验证 artifact 派生关系。已覆盖通用 `metadata.derivation`、parent report ref 到 bilingual executive summary / glossary / report 的派生 lineage、source refs、paperIds 和原报告不突变。
-- [ ] R-LIT-11 Literature skill 语义模块拆分与 artifact ref contract：`packages/skills/literature/index.ts` 已超过 1500 行，需按 retrieval runner、provider provenance、citation correction、bilingual derivation、reproduction feasibility 拆分到职责清晰的模块；拆分时继续保持 instance-scoped refs、参数化 parent ref、record-scoped citation verification evidence，主入口只保留导出与轻量编排。
+最终心智模型应保持为 5 个原语，而不是把 9 层实现流水线当成新的复杂架构：
 
-代码修复与工程任务：
+```text
+Event -> State -> Contract -> Decision -> Projection
+```
 
-- [ ] R-CODE-01 端到端 bug 修复：用户贴浏览器失败截图，要求定位原因、写通用修复、跑测试、重启服务、同步 GitHub；过程中用户中断一次后继续。
-- [x] R-CODE-02 Schema drift 修复：构造 backend 返回宽松 JSON、fenced JSON、缺字段 payload、空 artifactRef 等情况，要求系统统一归一化而非 repair loop。
-- [x] R-CODE-03 长任务 stream 稳定性：运行超过前端 timeout 的任务，刷新浏览器、关闭标签、恢复历史，验证后端不被 passive disconnect 杀掉。
-- [ ] R-CODE-04 多模块改造：让 agent 同时改 gateway、UI presentation、runtime contract、tests；用户中途要求缩小范围，只保留 runtime 修复。
-- [ ] R-CODE-05 测试失败恢复：第一次 patch 后 typecheck/test 失败，用户要求解释失败并做最小通用修复，不能回滚无关改动。
-- [x] R-CODE-06 Dirty worktree 协作：预先放入用户未提交改动，再让 agent 修复另一区域，验证不会 reset/revert 用户改动。已完成 `sciforge.dirty-worktree-collaboration.v1`、porcelain status parser、user-owned protected paths、destructive git command blocker、repair handoff runner enforcement、disjoint/overlap path smoke 覆盖。
-- [x] R-CODE-07 Release verify 请求：用户要求“等完整验证再推 GitHub”，系统必须阻塞到指定测试完成，失败时不推送。已新增 `sciforge.release-gate.v1` 与可注入 `ReleaseGatePolicy`，由 profile/harness 提供 `requiredCommand`、`requiredStepKinds` 和 `syncActionSignals`；缺少验证、服务健康、变更摘要、git target 或 audit refs 时保持 pending/needs-human，不允许把外部同步视作完成。
-- [x] R-CODE-08 Backend handoff 漂移：AgentServer 返回 taskFiles、direct ToolPayload、plain text、malformed generation response 四类输出，要求统一分类和可恢复。已新增 `sciforge.backend-handoff-drift.v1` 分类 contract 与 `agentserver-handoff-drift` runtime event，覆盖 taskFiles 执行、direct ToolPayload materialize、plain text bridge、guarded raw text diagnostic、malformed generation-looking text strict retry，以及 handoffSummary 不再触发旧任务重跑。
-- [x] R-CODE-09 多 backend 对比修复：同一任务用 Codex/OpenTeam 两个 backend 跑，比较失败模式，提炼 backend-neutral 修复。已完成 `sciforge.backend-comparison.v1`、supported backend invariant、handoff drift/failure category 归一化、backend-neutral fix candidate、unsupported backend guard 和 smoke 覆盖。
-- [x] R-CODE-10 项目服务生命周期：修改代码后自动重启 dev server，确认端口占用、旧进程退出、新服务 ready、浏览器页面可刷新。已覆盖 Workspace Writer health identity、动态端口 restart smoke 和 Vite capability gate；真实 UI dev server 热更新仍由 `npm run smoke:browser` 持续覆盖。
+`Event` 记录事实，`State` 约束合法转换，`Contract` 判断结果边界是否可信，`Decision` 记录下一步策略，`Projection` 给 UI 和后续轮次消费。其它模块都只是这 5 个原语的实现细分。
 
-数据分析与文件 artifact 任务：
+因此，最佳长期方向仍是直接重写为 **Conversation Kernel v2**，但它的定位必须是“薄而硬的运行内核”，不是“更聪明的业务路由器”。不考虑旧兼容性，只保留旧 session 的只读 archive viewer。新会话全部进入一个 event-sourced conversation kernel：
 
-- [x] R-DATA-01 CSV 多轮分析：上传/引用 CSV，先做摘要统计，再改分组口径，再要求异常值解释，再导出 markdown 报告和复现代码。已覆盖 CSV refs-first schema/profile digest、敏感行值不内联、按 ref 受控展开边界。
-- [x] R-DATA-02 两表合并冲突：A/B 两个表字段不一致，用户给映射规则，系统重算并保留 mapping artifact。已覆盖 ToolPayload/objectReferences/provenance 中 mapping artifact refs 的 stage 持久化与复杂多轮 fixture lineage。
-- [x] R-DATA-03 大文件摘要：读取大文本/日志文件，只允许摘要和 refs，不允许把全文塞入 prompt；后续追问必须按需读取片段。
-- [x] R-DATA-04 图表迭代：先生成图表 artifact，再要求换坐标、换颜色、筛选子集、导出最终报告，测试 artifact identity。已覆盖 resultPresentation action-level lineage、revisionRef、view transform/exportProfile 和同一 artifact 多派生视图保留。
-- [x] R-DATA-05 缺失文件恢复：历史 artifact 指向的文件被删除/移动，用户要求继续，系统必须 stale-check 并进入安全恢复。
-- [x] R-DATA-06 Notebook 风格任务：连续执行多个分析步骤，每步都有中间文件；用户要求回到第 2 步换参数后继续生成分支结果。已完成 `sciforge.notebook-branch.v1` 分支重放 contract、TaskProject `forkTaskProjectStage` runtime helper、branch metadata/evidence refs、fork-before-write invalidation 和 smoke fixture 覆盖。
-- [x] R-DATA-07 外部数据源限流：调用外部 API 拉数据遇到 429/timeout，系统必须输出 transient-unavailable 诊断和重试建议。已覆盖 pre-output diagnostic payload、partial artifact 降级、provider-neutral workEvidence、transientPolicy 和 retry refs。
-- [x] R-DATA-08 审计导出：分析完成后用户只要求导出 task graph、数据 lineage、执行命令和 artifact refs，不重新计算。
+```text
+TurnReceived
+  -> Planned
+  -> Dispatched
+  -> PartialReady
+  -> OutputMaterialized
+  -> Validated
+  -> Satisfied | DegradedResult | ExternalBlocked | RepairNeeded | NeedsHuman | BackgroundRunning
+```
 
-Runtime、恢复与会话生命周期任务：
+核心原则：
 
-- [x] R-RUN-01 失败 run 诊断：用户点选 failed run，要求解释为什么失败、哪些文件可用、是否能继续、下一步怎么做。
-- [x] R-RUN-02 Repair loop 防护：制造 repeated repair no-op，要求系统停止重复修复并给通用失败分类。
-- [x] R-RUN-03 Background continuation：启动长任务后用户继续问另一个问题，后台完成后要求合并结果并标注 revision。
-- [x] R-RUN-04 多标签并发：两个浏览器标签对同一 session 发送消息，验证 ordering/conflict guard。
-- [x] R-RUN-05 编辑历史 revert：修改早期用户目标并选择 revert，系统必须废弃后续派生 runs/artifacts。
-- [x] R-RUN-06 编辑历史 continue：修改早期目标但保留已有结果，系统必须标注冲突和受影响结论。
-- [x] R-RUN-07 跨 session 恢复：新开页面恢复旧 session，只依赖持久化 state，不依赖前端内存。
-- [x] R-RUN-08 取消边界：用户显式 cancel 后要求继续，系统必须说明 cancel boundary，不自动恢复不可逆 side effect。
-- [x] R-RUN-09 版本漂移恢复：代码更新后打开旧 session，系统检测 capability/schema/version drift 并建议迁移或重跑。已完成 provider-neutral runtime compatibility fingerprint、drift diagnostic、compact 持久化和结果区建议展示。
-- [x] R-RUN-10 压缩后恢复：模拟只剩 state digest 和 refs，继续多轮任务，检查 artifact/run/ref 是否仍能命中。
+- SciForge 少做语义判断，多做运行秩序；只约束、执行、记录、验证和展示 backend 的工作，不替 backend 推理用户想要什么。
+- 只保留一个 append-only `ConversationEventLog` 作为多轮状态唯一真相源；UI、runtime、repair、verification、history restore 都从 projection 派生。
+- 删除散落在 UI/localStorage、task attempts、runs、executionUnits 和 repair 分支中的状态推断逻辑；这些对象可以作为事件 payload 或 projection 结果，但不能再反向驱动状态机。
+- UI 只消费 `ConversationProjection`：`currentTurn`、`visibleAnswer`、`activeRun`、`artifacts`、`executionProcess`、`recoverActions`、`verificationState`、`backgroundState`。
+- repair 先做失败归属分类，再决定动作。`external-provider`、`payload-contract`、`runtime-runner`、`backend-generation`、`verification`、`ui-presentation` 必须明确分层；HTTP 429、timeout、remote closed、DNS/5xx 等外部瞬时失败进入 `ExternalBlocked`，保留 refs 和 partial，不触发代码 repair loop。
+- 前台永远 fast-first：3 秒内必须展示当前阶段、已保存 refs、是否后台继续、用户现在可查看的 partial 或诊断。全文下载、深验证、补证据和长报告扩展转后台 revision 合并。
+- Harness contract 成为唯一策略入口。context budget、repair budget、verification level、background policy、capability hints、progress policy 都来自 harness profile/callback，不再散落到 gateway、prompt builder、UI 或 repair runner。
+- Harness 的最终实现形态应是可组合的 `ContractFn` + `HookFn` 代数，而不是一组继续膨胀的 gateway if/else。SciForge 提供稳定 contract gates、状态归一化和 hook 合并规则；backend 负责推理、规划和生成任务。
+- 旧 session 不迁移为新状态机。旧数据只读展示；新 kernel 不为旧 records shape 写兼容 fallback。
 
-UI 与 presentation 真实任务：
+更彻底的抽象建议：
 
-- [x] R-UI-01 失败结果可读性：失败时右侧结果必须先展示用户可理解的原因、可用产物、下一步，而不是 raw trace 优先。
-- [x] R-UI-02 Partial 优先：长任务运行中必须展示已完成部分、当前阶段、后台状态和可安全中止/继续的操作。已由 `runPresentationState.progress` 与 ResultsRenderer 首屏 partial-first summary 覆盖。
-- [x] R-UI-03 Artifact 选择追问：用户点选某个 file/artifact 后追问“基于这个继续”，系统必须使用被点选对象而不是最近对象。
-- [x] R-UI-04 ExecutionUnit 展示：运行结果中 execution unit 必须包含 codeRef/stdoutRef/stderrRef/outputRef、状态、失败原因和 recoverActions。
-- [x] R-UI-05 Verification 状态：普通结果、未验证结果、后台验证中、验证失败、release verify 通过五种状态 UI 必须可区分。
-- [x] R-UI-06 空结果页面：没有 artifact 时不能显示误导性 completed；必须展示 empty/needs-human/recoverable 的准确状态。
-- [x] R-UI-07 多 artifact 比较：结果区同时出现 report、paper-list、diagnostic、verification，用户切换 focus mode 后仍保持正确排序。
-- [x] R-UI-08 导出 bundle：用户要求导出 JSON bundle/审计包，UI 必须能引用正确 session bundle 而不是当前空状态。
+```ts
+export type ContractFn<Input, Output> = (input: Input) => ContractResult<Output>;
 
-真实用户工作流任务：
+export type HookFn<Facts, Decision> = (
+  facts: Facts,
+  prior: readonly ContractResult<unknown>[],
+) => HookDecision<Decision>;
 
-- [ ] R-WF-01 科研选题助手：用户从模糊方向开始，逐步要求找热点、筛论文、列可做实验、评估新颖性、生成计划。
-- [ ] R-WF-02 论文审稿助手：上传/引用论文 PDF，要求总结贡献、找弱点、查相关工作、生成审稿意见，再要求改成温和语气。
-- [ ] R-WF-03 复现实验计划：从论文出发，提取环境、数据、训练命令、评测指标、风险，生成 step-by-step 复现 checklist。
-- [ ] R-WF-04 项目周报：读取 workspace 最近任务、失败 run、已完成 artifact，生成周报；用户要求隐藏敏感路径后重写。
-- [ ] R-WF-05 多同学协作分工：基于当前 PROJECT 和代码结构，给 3-5 个同学拆分任务；后续要求按风险/收益重排。
-- [ ] R-WF-06 调研到代码任务：先调研某技术方案，再要求在 SciForge 中实现最小通用修复，再生成测试计划。
-- [x] R-WF-07 用户反馈收敛：用户连续指出“慢、崩、看不懂、引用错、重复跑”，系统把反馈归类到通用 TODO，而不是逐条道歉。已完成 `sciforge.user-feedback-convergence.v1`、feedback comment 到 convergence plan helper、TaskRunCard/FailureSignature evidence refs、NoHardcodeReview 和 smoke 覆盖。
-- [x] R-WF-08 低预算模式：用户要求“不要下载全文，先用 metadata 快速判断”，后续再允许补全文，测试 budget escalation。已覆盖结构化 fullTextPolicy、低预算 disabled/retained work 与 handoff metadata-first directive。
-- [x] R-WF-09 严格证据模式：用户要求“不要猜，不确定就标注”，系统必须降低 claim confidence 并输出 evidence gaps。已覆盖 evidenceMode.evidenceGaps、confidencePolicy ceiling 与 strict-evidence handoff。
-- [x] R-WF-10 发布前检查：用户要求把本地改动外部同步前做 release verify、写变更摘要、重启服务，并保留审计记录。已覆盖 release gate audit、intent-first verification 展示状态、runtime verification fail-closed gate 和 `smoke:release-gate`；配置的 release verify 失败或证据缺失时不会允许同步。
+export interface HarnessProfile {
+  id: string;
+  defaults: HarnessDefaults;
+  contracts: readonly ContractFn<unknown, unknown>[];
+  hooks: readonly HookFn<HarnessFacts, HarnessDecision>[];
+  mergePolicy: HarnessMergePolicy;
+}
+```
 
-通用修复 TODO 池：
+`ContractFn` 必须是纯函数、确定性、可 fixture 测试；它只做格式校验、refs/artifacts 可解析性检查、状态转换合法性检查、failure owner 最小归一化和可见结果约束。它不做用户意图推理，不按论文/任务/backend 写领域特例。
 
-- [x] TODO-GEN-01 为每个真实任务自动生成 `TaskRunCard`：目标、轮次、状态、refs、失败模式、通用归因层、下一步。
-- [x] TODO-GEN-02 建立 `FailureSignature` 去重：相同 schema drift、timeout、repair no-op、external transient 不重复开新诊断。
-- [x] TODO-GEN-03 建立 `NoHardcodeReview` checklist：每次修复必须说明适用场景、反例、为什么不是 prompt/file/backend 特例。
-- [x] TODO-GEN-04 让真实任务跑完后自动建议归属：harness、runtime server、AgentServer parser、payload normalization、presentation、verification、resume、UI。
-- [x] TODO-GEN-05 为“成功但不满足用户真实目标”的情况增加状态：protocol success 不等于 task success，必须进入 needs-work/needs-human。
-- [x] TODO-GEN-06 为 direct-text fallback 增加 guard：像代码、taskFiles、JSON、trace、日志的内容不能轻易包装成最终报告。
-- [x] TODO-GEN-07 为 schema normalization 建立 contract-approved normalization / fail-closed validation 边界：只修复已批准的结构漂移，不吞掉真实语义错误或安全错误。
-- [x] TODO-GEN-08 为 external transient 建立 provider-neutral policy：HTTP、DNS、timeout、rate limit、quota、service unavailable 统一分类。
-- [x] TODO-GEN-09 为 session bundle 增加“一键打包/恢复/审计”检查清单，确保每个多轮任务可独立迁移。
-- [x] TODO-GEN-10 为复杂任务新增“用户满意度 proxy”：是否回答了最新请求、是否展示可用结果、是否给出下一步、是否避免重复劳动。
+`HookFn` 只基于 current facts、contract results 和 profile defaults 做策略选择，例如 latency tier、context refs、capability budget、verification depth、repair action、background continuation 和 progress projection。Hook 可以表达偏好和收紧约束，但不能直接改写 event log、伪造 artifact 或绕过 contract gate。
+
+`HarnessProfile` 是 harness 的组合单位：`fast-answer`、`research-grade`、`strict-evidence`、`low-cost`、`privacy-strict`、`debug-repair` 都应该只是 defaults + hook pipeline + merge policy 的不同组合，而不是不同 gateway 分支。用户需求变化时，SciForge 组装 profile；backend 仍接收一个清晰、可审计、refs-first 的 contract envelope。
+
+Conversation Kernel v2 的完整层级职责以 [`docs/Architecture.md`](docs/Architecture.md) 为准：`User turn -> ConversationEventLog -> ConversationStateMachine -> contract gates + harness hooks -> HarnessContract -> capability/backend dispatch -> materialized refs/artifacts/execution evidence -> validation/failure classification -> ConversationProjection -> UI rendering / background continuation / audit export`。任何实现都应先确认自己新增逻辑属于哪一层；无法归层的逻辑默认不应加入主链路。
+
+Contract 不能弱到只检查 JSON shape。它至少要保证以下最小语义不变量：
+
+- `Satisfied` 必须有用户可见答案、artifact ref 或明确 empty-result 说明。
+- `DegradedResult` 必须有可用结果、质量/证据/完整性缺口、可复用 refs 和可选补救路径，不能伪装成完整成功。
+- `Failed` / `ExternalBlocked` 必须有 owner layer、reason、evidenceRefs 和 nextStep。
+- `Verified` 必须有 verifier evidence ref；未验证只能展示为未验证。
+- `BackgroundRunning` 必须有 checkpoint refs、revision plan 和前台 partial。
+- 所有 refs 必须可解析、可 stale-check、可在 event log replay 后重建 projection。
+
+Contract boundary 是必须的，但不能发展成重型领域 contract 系统。SciForge 至少保留四类薄 contract：
+
+- `PayloadContract`：backend/runtime 返回的数据形状、状态字段和 machine-readable envelope 是否可信。
+- `RefArtifactContract`：所有产物是否通过 ref、digest、size、mime、checkpoint 和 stale-check 边界进入系统。
+- `StateContract`：每个 terminal/wait state 是否满足最小可展示、可恢复、可审计不变量。
+- `CapabilityIOContract`：每个 capability 的输入、输出、副作用、失败形态和 repair hint 是否可验证。
+
+Contract 不判断用户真正想要什么，不替 backend 做领域推理，不为单个任务写专属 schema。它只决定 SciForge 何时可以信任、展示、恢复、重试、降级或拒绝一个结果。
+
+防腐化约束必须进入接口和测试，而不是只靠文档：
+
+- `ConversationStateMachine` 只能消费 event types 和 transition metadata；`ContractFn` 只能消费 materialized outputs、refs 和 schema descriptors。两者不能共享 provider、paper、backend、scenario 等领域 enum。
+- `ConversationEventLog` 必须区分小型 `InlineEvent` 与大内容 `RefEvent`；stdout/stderr、generated code、PDF text、report body、raw stream 和 task files 只能通过 ref/digest/checkpoint 进入 log。
+- `HookFn` 的 decision 必须记录为 event；replay、restore、audit 和跨标签同步只消费 recorded decision，不能重新执行依赖时间、预算或 provider health 的 hook。
+- Failure owner 是 next-action router，不是责任归因标签。保留独立 owner 的前提是它会改变 retry、repair、supplement、needs-human、fail-closed 或 degraded-result 路径。
+- 主 UI 只能接收 `ConversationProjection` 和 ref preview API；raw runs/task attempts/executionUnits/backend stream 只能作为 audit/debug channel，不能参与主状态或 visible answer 判定。
+- 每个 `HarnessProfile` 必须有 canonical fixture：给定 event log、profile id 和 materialized refs，输出确定的 `HarnessContract`、decision trace、merge diagnostics 和 digest。
+
+应删除或禁止回流的旧逻辑：
+
+- UI 按 prompt、scenario、artifact type 或最近 run 猜测当前用户意图。
+- gateway 中为某个任务、论文、backend、文件名或错误文本写语义特例。
+- prompt builder 承担策略真相源，把 context/repair/latency/verification policy 写成散落自然语言。
+- repair loop 默认把失败交给 backend 改代码，而不是先做 owner layer 分类。
+- 多套 records 同时维护主状态，并互相覆盖 `completed`、`failed`、`repair-needed`、`verified`。
+- direct-text fallback 把代码、trace、taskFiles、日志或过程叙述包装成最终答案。
+
+建议新增/收敛目录：
+
+```text
+src/runtime/conversation-kernel/
+  event-log.ts
+  state-machine.ts
+  projection.ts
+  turn-runner.ts
+  failure-classifier.ts
+  background-continuation.ts
+  verification-gate.ts
+
+packages/agent-harness/
+  src/contract-fns.ts
+  src/hook-fns.ts
+  src/profiles.ts
+  src/merge-policy.ts
+  src/trace.ts
+```
+
+推荐实施切片：
+
+1. 冻结旧多轮状态链路，禁止新增状态推断分支。
+2. 建立最小 event log、状态机和 projection，只覆盖一次用户请求、一次 generated task、一次 partial、一次失败分类、一次刷新恢复。
+3. 把 external-provider 失败分类从 repair loop 前移到 kernel failure classifier。
+4. 让 UI workbench 只渲染 `ConversationProjection`，不直接读取 task attempts/runs 推断主状态。
+5. 再逐步迁入 background continuation、history edit/revert、verification gate 和 export bundle。

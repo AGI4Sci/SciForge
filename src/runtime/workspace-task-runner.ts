@@ -231,13 +231,27 @@ function normalizeEntrypointArgTemplate(args: string[] | undefined, taskPath: st
 }
 
 function normalizeEntrypointArgToken(arg: string, taskPath: string, inputPath: string, outputPath: string) {
-  if (/^(?:\{inputPath\}|<inputPath>|INPUT_PATH|inputPath)$/.test(arg)) return inputPath;
-  if (/^(?:\{outputPath\}|<outputPath>|OUTPUT_PATH|outputPath)$/.test(arg)) return outputPath;
+  if (isInputPathPlaceholder(arg)) return inputPath;
+  if (isOutputPathPlaceholder(arg)) return outputPath;
   if (/^(?:\{taskPath\}|<taskPath>|TASK_PATH|taskPath)$/.test(arg)) return taskPath;
   return arg
     .replace(/\{inputPath\}|<inputPath>|INPUT_PATH/g, inputPath)
     .replace(/\{outputPath\}|<outputPath>|OUTPUT_PATH/g, outputPath)
     .replace(/\{taskPath\}|<taskPath>|TASK_PATH/g, taskPath);
+}
+
+function isInputPathPlaceholder(value: string) {
+  const normalized = normalizeEntrypointArgPathLike(value);
+  return /^(?:\{inputPath\}|<inputPath>|INPUT_PATH|inputPath|input\.json|task-input\.json)$/.test(normalized);
+}
+
+function isOutputPathPlaceholder(value: string) {
+  const normalized = normalizeEntrypointArgPathLike(value);
+  return /^(?:\{outputPath\}|<outputPath>|OUTPUT_PATH|outputPath|output\.json|task-output\.json)$/.test(normalized);
+}
+
+function normalizeEntrypointArgPathLike(value: string) {
+  return value.trim().replace(/\\/g, '/').replace(/^\.\//, '');
 }
 
 function stripEntrypointCommandTokens(args: string[], taskPath: string, entrypoint: string) {

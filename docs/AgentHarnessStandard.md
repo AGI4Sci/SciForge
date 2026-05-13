@@ -612,3 +612,96 @@ Runtime adapters stay in `src/runtime/**`; reusable policy and contracts live in
 - 每个 profile 必须有最小实验 fixture 和 trace assertion。
 - 每个 callback 必须声明 owned stages、input facts、decision fields、merge behavior 和测试覆盖。
 - 研究 prompt/policy 时先读 [`HarnessResearchGuide.md`](HarnessResearchGuide.md)；fresh/continuity/tool-use/repair/latency 策略不能重新写进 AgentServer prompt builder。
+
+## 最终形态修改建议
+
+Harness 的最终落点不应只是 gateway 前的一组策略 helper，而应成为 **Conversation Kernel v2** 的策略层。Kernel 负责事件、状态机、projection 和 runtime enforcement；harness 负责每个阶段的策略决策，并把决策写入可审计 `HarnessContract` / `HarnessTrace`。
+
+最终 harness 不应继续增长成“微型 agent”。它应收敛成可组合的 contract functions 与 hook functions：
+
+```ts
+export type ContractFn<Input, Output> = (input: Input) => ContractResult<Output>;
+
+export type HookFn<Facts, Decision> = (
+  facts: Facts,
+  prior: readonly ContractResult<unknown>[],
+) => HookDecision<Decision>;
+
+export interface HarnessProfile {
+  id: string;
+  defaults: HarnessDefaults;
+  contracts: readonly ContractFn<unknown, unknown>[];
+  hooks: readonly HookFn<HarnessFacts, HarnessDecision>[];
+  mergePolicy: HarnessMergePolicy;
+}
+```
+
+`ContractFn` 只负责确定性 contract gate：payload shape、refs/artifacts 可解析性、状态转换合法性、failure owner 最小归一化、verification evidence、visible result 和 background checkpoint。它可以做最小语义不变量检查，但不能做领域推理、prompt 关键词路由或 provider/backend 特例。
+
+Contract boundary 是 harness 的必需薄腰。没有 contract，profile/hook 的输出无法被 replay、验证或替换 backend；但 contract 不能变成领域模型或任务模板。Harness 层只承认四类最小 contract：`PayloadContract`、`RefArtifactContract`、`StateContract` 和 `CapabilityIOContract`。它们分别验证 machine-readable envelope、refs/artifacts 边界、terminal/wait state 不变量，以及 capability 输入输出/副作用/失败形态。
+
+`HookFn` 只负责策略选择：latency tier、context refs、capability budget、verification depth、repair/background/progress decision。Hook 可以返回偏好、预算和约束收紧，但不能写 event log、直接生成 artifact、绕过 contract validation 或把自然语言 prompt 当作策略真相源。
+
+`HarnessProfile` 是组合单位。`fast-answer`、`research-grade`、`strict-evidence`、`low-cost`、`privacy-strict`、`debug-repair` 应通过 defaults + ordered hooks + merge policy 组合出来，而不是在 gateway、prompt builder 或 UI 中分叉实现。新增用户需求优先新增 profile/hook/contract fixture，再考虑 backend prompt 变化。
+
+防腐化约束：
+
+- `HookFn` 的执行结果必须记录为 decision event。首次运行 profile 时可以执行 hook；replay、restore、audit、跨标签同步时只能读取已记录 decision 和 trace，不能重新运行依赖时间、预算、provider health 或外部配置的 hook。
+- `ContractFn` 与 state machine 类型必须隔离。Contract 只看 materialized outputs、refs、schema descriptors 和 contract metadata；state machine 只看 event types 和 transition metadata。两者不能共享领域 enum，避免把 provider、paper、backend 或 scenario 判断塞入核心层。
+- 每个 profile 必须有 canonical fixture：给定 event log + profile id + materialized refs，输出确定的 `HarnessContract`、decision trace、merge diagnostics 和 contract digest。Profile 的正确性不能只靠 E2E 验证。
+- `HarnessContract` 的 digest 必须可 replay。相同 event log、相同 recorded decisions、相同 materialized refs 应得到相同 contract digest；如果 external provider health 或 token budget 变化影响策略，只能生成新的 decision event，不能静默改变旧 projection。
+- 主 UI 与主 repair loop 不能读取 raw hook internals。它们只能消费 `HarnessContract`、`FailureOwnerDecision`、`ConversationProjection` 和 refs；trace 只能作为 audit/debug 数据。
+
+建议新增或收敛的 harness stage：
+
+- `classifyTurn`：fresh、continuation、repair、audit、file-grounded、interactive。
+- `selectLatencyTier`：instant、quick、bounded、deep、background。
+- `selectContextRefs`：只允许 refs/digests/checkpoints，不允许无界历史展开。
+- `planBackgroundContinuation`：哪些任务前台阻塞，哪些任务后台 revision。
+- `classifyFailureOwner`：external-provider、payload-contract、runtime-runner、backend-generation、verification、ui-presentation。
+- `selectRepairAction`：repair-rerun、supplement、retry-after-backoff、ask-user、needs-human、fail-closed。
+- `projectUserVisibleProgress`：首屏 partial、后台状态、可恢复 refs 和下一步。
+
+`FailureOwnerDecision` 应成为稳定 contract：
+
+```ts
+export interface FailureOwnerDecision {
+  ownerLayer:
+    | 'external-provider'
+    | 'payload-contract'
+    | 'runtime-runner'
+    | 'backend-generation'
+    | 'verification'
+    | 'ui-presentation';
+  action:
+    | 'retry-after-backoff'
+    | 'repair-rerun'
+    | 'supplement'
+    | 'ask-user'
+    | 'needs-human'
+    | 'fail-closed';
+  retryable: boolean;
+  reason: string;
+  evidenceRefs: string[];
+  nextStep: string;
+}
+```
+
+关键策略要求：
+
+- HTTP 429、timeout、remote closed、DNS/5xx、quota、service unavailable 等外部瞬时失败必须归到 `external-provider`，动作为 `retry-after-backoff` 或 `needs-human`，不能进入代码 repair loop。
+- payload schema、missing artifact ref、malformed uiManifest 等 contract 问题才进入 `payload-contract` repair。
+- generated task argv、输出路径、sandbox、runtime crash 等执行边界问题归 `runtime-runner`。
+- backend 返回 process narration、path-only taskFiles、无法解析 generation response 等归 `backend-generation`。
+- verifier verdict 缺失或 release gate 未满足归 `verification`。
+- UI 展示错序、stale preview、filter/focus 串状态归 `ui-presentation`。
+- Failure owner 是 next-action router，不是责任归因标签。若两个 owner 对同一证据映射到相同 action，应合并 owner 或保留为 subreason；保留独立 owner 的前提是它会改变 retry、repair、supplement、needs-human、fail-closed 或 degraded-result 路径。
+- `backend-generation` 与 `payload-contract` 的边界按动作划分：需要 backend 重新生成 handoff/payload 形态时归 `backend-generation`；能在已 materialized payload 上做 contract-approved normalization、ref 补充或 fail-closed validation 时归 `payload-contract`。
+
+实施建议：
+
+1. 先让 harness 只产生 `FailureOwnerDecision`，不改变现有行为。
+2. 将 repair loop 的入口改为消费该 decision。
+3. 将 ConversationProjection 的 progress/nextStep 字段改为消费 harness progress decision。
+4. 删除 gateway、prompt builder、UI 中重复判断 repair/continuation/latency 的分支。
+5. 为每个 owner layer 建立最小 fixture，验证同一失败不会被多个 layer 重复处理。

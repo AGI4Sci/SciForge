@@ -678,6 +678,7 @@ function scenarioOverrideForTransport(input: SendAgentMessageInput['scenarioOver
 }
 
 function compactSciForgeReference(reference: NonNullable<SendAgentMessageInput['references']>[number]) {
+  const payload = compactReferenceInlinePayload(reference);
   return {
     id: reference.id,
     kind: reference.kind,
@@ -687,8 +688,37 @@ function compactSciForgeReference(reference: NonNullable<SendAgentMessageInput['
     runId: reference.runId,
     locator: reference.locator,
     summary: reference.summary,
+    payload,
     payloadDigest: compactReferencePayload(reference.payload),
   };
+}
+
+function compactReferenceInlinePayload(reference: NonNullable<SendAgentMessageInput['references']>[number]) {
+  const payload = isRecord(reference.payload) ? reference.payload : undefined;
+  if (!payload) return undefined;
+  const out: Record<string, unknown> = {};
+  const composerMarker = clippedString(payload.composerMarker, 16);
+  if (composerMarker) out.composerMarker = composerMarker;
+  if (reference.kind === 'ui' && reference.ref.startsWith('ui-text:')) {
+    const selectedText = clippedString(payload.selectedText, 2400);
+    const sourceTitle = clippedString(payload.sourceTitle, 160);
+    const sourceRef = clippedString(payload.sourceRef, 600);
+    const sourceKind = clippedString(payload.sourceKind, 40);
+    const sourceSummary = clippedString(payload.sourceSummary, 600);
+    if (selectedText) out.selectedText = selectedText;
+    if (sourceTitle) out.sourceTitle = sourceTitle;
+    if (sourceRef) out.sourceRef = sourceRef;
+    if (sourceKind) out.sourceKind = sourceKind;
+    if (sourceSummary) out.sourceSummary = sourceSummary;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+function clippedString(value: unknown, maxChars: number) {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  return trimmed.length > maxChars ? `${trimmed.slice(0, maxChars)}...` : trimmed;
 }
 
 function compactReferencePayload(payload: unknown) {

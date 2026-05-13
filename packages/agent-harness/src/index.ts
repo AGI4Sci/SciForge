@@ -1,4 +1,63 @@
 export type {
+  ContractFn,
+  ContractIssue,
+  ContractIssueSeverity,
+  ContractResult,
+  ContractResultKind,
+  FailureOwnerDecision,
+  FailureOwnerInput,
+  FailureOwnerLayer,
+  FailureOwnerNextStep,
+} from './contract-fns';
+export {
+  classifyFailureOwner,
+  contractFail,
+  contractPass,
+  contractWarn,
+  createFailureOwnerDecision,
+  failureOwnerContract,
+  normalizeContractResult,
+  normalizeFailureOwnerDecision,
+} from './contract-fns';
+export type {
+  FailureOwnerRouteDecision,
+  HookAuditNote,
+  HookDecision,
+  HookDecisionKind,
+  HookFn,
+} from './hook-fns';
+export {
+  failureOwnerRouteHook,
+  hookBlock,
+  hookContinue,
+  hookTighten,
+  mostRecentFailureOwner,
+  normalizeHookDecision,
+} from './hook-fns';
+export type {
+  ThinWaistMergeDiagnostics,
+  ThinWaistMergeResult,
+} from './merge-policy';
+export {
+  mergeContractResults,
+  mergeFailureOwnerDecisions,
+  mergeHookDecisions,
+  mergeThinWaistDecisions,
+} from './merge-policy';
+export type {
+  ContractFnTraceRecord,
+  HookFnTraceRecord,
+  ThinWaistEvaluation,
+  ThinWaistEvaluationTrace,
+} from './trace';
+export {
+  evaluateContractFns,
+  evaluateHookFns,
+  evaluateThinWaist,
+  stableHarnessDigest,
+  stableStringify,
+} from './trace';
+export type {
   BudgetExhaustedPolicy,
   CapabilityBudget,
   CapabilityCostClass,
@@ -139,7 +198,13 @@ export {
 export { getHarnessModule, harnessModules, moduleStackForTier } from './modules';
 export { createParallelWorkPlan, materializeParallelWorkResult } from './parallel-work';
 export type { CreateParallelWorkPlanInput, MaterializeParallelWorkResultInput } from './parallel-work';
-export { getHarnessProfile, harnessProfiles } from './profiles';
+export {
+  createDeterministicProfileFixture,
+  evaluateDeterministicProfileFixture,
+  getHarnessProfile,
+  harnessProfiles,
+} from './profiles';
+export type { DeterministicProfileFixture } from './profiles';
 export { createHarnessRuntime, evaluateHarness } from './runtime';
 export {
   buildStartupContextEnvelope,
