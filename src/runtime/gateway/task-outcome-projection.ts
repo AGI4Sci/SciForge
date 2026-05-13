@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   createTaskRunCard,
   validateTaskRunCard,
@@ -17,6 +18,7 @@ import {
   isConversationEventLog,
   projectConversation,
   replayConversationState,
+  type ConversationEvent,
   type ConversationEventLog,
   type ConversationEventType,
   type ConversationProjection,
@@ -276,6 +278,17 @@ function conversationKernelFromTaskOutcome(input: {
       summary: input.request?.prompt ?? input.payload.message,
     },
   }).log;
+  const harnessDecisionEvent = harnessDecisionEventFromTaskOutcome({
+    payload: input.payload,
+    request: input.request,
+    conversationId,
+    timestamp,
+    turnId,
+    runId,
+  });
+  if (harnessDecisionEvent) {
+    log = appendConversationEvent(log, harnessDecisionEvent).log;
+  }
   log = appendConversationEvent(log, {
     id: `${conversationId}:dispatch`,
     type: 'Dispatched',
@@ -378,6 +391,206 @@ function conversationKernelFromTaskOutcome(input: {
     log,
     projection: projectConversation(log, replayConversationState(log)),
   };
+}
+
+function harnessDecisionEventFromTaskOutcome(input: {
+  payload: ToolPayload;
+  request?: GatewayRequest;
+  conversationId: string;
+  timestamp: string;
+  turnId: string;
+  runId: string;
+}): ConversationEvent | undefined {
+  const decision = harnessDecisionFromAvailableSources(input.request, input.payload, input.turnId);
+  if (!decision) return undefined;
+  return {
+    id: `${input.conversationId}:harness-decision`,
+    type: 'HarnessDecisionRecorded',
+    actor: 'kernel',
+    storage: 'ref',
+    timestamp: input.timestamp,
+    turnId: input.turnId,
+    runId: input.runId,
+    payload: {
+      schemaVersion: 'sciforge.harness-decision-record.v1',
+      decisionId: decision.decisionId,
+      profileId: decision.profileId,
+      digest: decision.digest,
+      summary: decision.summary,
+      source: decision.source,
+      contractRef: decision.contractRef,
+      traceRef: decision.traceRef,
+      refs: decision.refs,
+    },
+  };
+}
+
+function harnessDecisionFromAvailableSources(
+  request: GatewayRequest | undefined,
+  payload: ToolPayload,
+  turnId: string,
+) {
+  const candidates = harnessDecisionCandidates(request, payload);
+  const profileId = stringFromCandidates(candidates, ['profileId', 'harnessProfileId']);
+  const contractRef = stringFromCandidates(candidates, ['contractRef', 'harnessContractRef']);
+  const traceRef = stringFromCandidates(candidates, ['traceRef', 'harnessTraceRef']);
+  const refs = uniqueConversationRefs([
+    ...conversationRefsFromHarnessCandidates(candidates),
+    ...(contractRef ? [{ ref: contractRef, label: 'harness contract' }] : []),
+    ...(traceRef ? [{ ref: traceRef, label: 'harness trace' }] : []),
+  ]);
+  if (!profileId || refs.length === 0) return undefined;
+  const decisionId = stringFromCandidates(candidates, ['decisionId', 'harnessDecisionId']) ?? `${turnId}:harness-decision`;
+  const summary = harnessDecisionSummary(candidates, profileId);
+  const source = candidates.find((candidate) => {
+    return stringField(candidate.record.profileId)
+      || stringField(candidate.record.harnessProfileId)
+      || stringField(candidate.record.contractRef)
+      || stringField(candidate.record.harnessContractRef)
+      || stringField(candidate.record.traceRef)
+      || stringField(candidate.record.harnessTraceRef);
+  })?.source;
+  const digest = stringFromCandidates(candidates, ['digest', 'decisionDigest', 'harnessDecisionDigest'])
+    ?? digestHarnessDecision({
+      decisionId,
+      profileId,
+      summary,
+      contractRef,
+      traceRef,
+      refs: refs.map((ref) => ref.ref),
+    });
+  return {
+    decisionId,
+    profileId,
+    digest,
+    summary,
+    source,
+    contractRef,
+    traceRef,
+    refs,
+  };
+}
+
+function harnessDecisionCandidates(request: GatewayRequest | undefined, payload: ToolPayload) {
+  const requestRecord = (isRecord(request) ? request : {}) as Record<string, unknown>;
+  const uiState = isRecord(request?.uiState) ? request.uiState : {};
+  const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
+  const requestMetadata = isRecord(requestRecord.metadata) ? requestRecord.metadata : {};
+  const payloadRecord = payload as unknown as Record<string, unknown>;
+  const payloadMetadata = isRecord(payloadRecord.metadata) ? payloadRecord.metadata : {};
+  const displayMetadata = isRecord(displayIntent.metadata) ? displayIntent.metadata : {};
+  const candidates: Array<{ source: string; record: Record<string, unknown> }> = [];
+  const add = (source: string, value: unknown) => {
+    if (!isRecord(value)) return;
+    candidates.push({ source, record: value });
+    if (isRecord(value.summary)) candidates.push({ source: `${source}.summary`, record: value.summary });
+  };
+
+  add('request.uiState.agentHarness', uiState.agentHarness);
+  add('request.uiState.agentHarnessHandoff', uiState.agentHarnessHandoff);
+  add('request.uiState', uiState);
+  add('request.metadata.agentHarness', requestMetadata.agentHarness);
+  add('request.metadata.agentHarnessHandoff', requestMetadata.agentHarnessHandoff);
+  add('request.metadata.harnessDecision', requestMetadata.harnessDecision);
+  add('payload.metadata.agentHarness', payloadMetadata.agentHarness);
+  add('payload.metadata.agentHarnessHandoff', payloadMetadata.agentHarnessHandoff);
+  add('payload.metadata.harnessDecision', payloadMetadata.harnessDecision);
+  add('payload.displayIntent.agentHarness', displayIntent.agentHarness);
+  add('payload.displayIntent.agentHarnessHandoff', displayIntent.agentHarnessHandoff);
+  add('payload.displayIntent.harnessDecision', displayIntent.harnessDecision);
+  add('payload.displayIntent.metadata.agentHarness', displayMetadata.agentHarness);
+  add('payload.displayIntent.metadata.agentHarnessHandoff', displayMetadata.agentHarnessHandoff);
+  add('payload.displayIntent.metadata.harnessDecision', displayMetadata.harnessDecision);
+  return candidates;
+}
+
+function stringFromCandidates(
+  candidates: Array<{ record: Record<string, unknown> }>,
+  fields: string[],
+) {
+  for (const candidate of candidates) {
+    for (const field of fields) {
+      const value = stringField(candidate.record[field]);
+      if (value) return value;
+    }
+  }
+  return undefined;
+}
+
+function harnessDecisionSummary(
+  candidates: Array<{ record: Record<string, unknown> }>,
+  profileId: string,
+) {
+  const explicit = stringFromCandidates(candidates, ['decisionSummary', 'summaryText', 'description', 'summary']);
+  if (explicit) return explicit;
+  const intentMode = stringFromCandidates(candidates, ['intentMode']);
+  const explorationMode = stringFromCandidates(candidates, ['explorationMode']);
+  return [
+    `profile=${profileId}`,
+    intentMode ? `intent=${intentMode}` : undefined,
+    explorationMode ? `exploration=${explorationMode}` : undefined,
+  ].filter(Boolean).join('; ');
+}
+
+function conversationRefsFromHarnessCandidates(candidates: Array<{ record: Record<string, unknown> }>): ConversationRef[] {
+  const refs: ConversationRef[] = [];
+  for (const candidate of candidates) {
+    refs.push(
+      ...refsFromUnknown(candidate.record.refs),
+      ...refsFromUnknown(candidate.record.auditRefs),
+      ...refsFromUnknown(candidate.record.sourceRefs),
+      ...refsFromUnknown(candidate.record.promptDirectives),
+    );
+    const decisionRef = stringField(candidate.record.decisionRef) ?? stringField(candidate.record.harnessDecisionRef) ?? stringField(candidate.record.ref);
+    if (decisionRef) refs.push({ ref: decisionRef, label: 'harness decision' });
+    const contractRef = stringField(candidate.record.contractRef) ?? stringField(candidate.record.harnessContractRef);
+    if (contractRef) refs.push({ ref: contractRef, label: 'harness contract' });
+    const traceRef = stringField(candidate.record.traceRef) ?? stringField(candidate.record.harnessTraceRef);
+    if (traceRef) refs.push({ ref: traceRef, label: 'harness trace' });
+  }
+  return refs;
+}
+
+function refsFromUnknown(value: unknown): ConversationRef[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item): ConversationRef[] => {
+    if (typeof item === 'string' && item.trim()) return [{ ref: item.trim() }];
+    if (!isRecord(item)) return [];
+    const ref = stringField(item.ref) ?? stringField(item.id);
+    if (!ref) return [];
+    return [{
+      ref,
+      digest: stringField(item.digest),
+      mime: stringField(item.mime),
+      sizeBytes: typeof item.sizeBytes === 'number' ? item.sizeBytes : undefined,
+      label: stringField(item.label) ?? stringField(item.title) ?? stringField(item.kind),
+    }];
+  });
+}
+
+function uniqueConversationRefs(refs: ConversationRef[]): ConversationRef[] {
+  const byRef = new Map<string, ConversationRef>();
+  for (const ref of refs) {
+    if (!ref.ref.trim()) continue;
+    if (!byRef.has(ref.ref)) byRef.set(ref.ref, ref);
+  }
+  return [...byRef.values()];
+}
+
+function digestHarnessDecision(value: Record<string, unknown>) {
+  return `sha256:${createHash('sha256').update(stableStringify(value)).digest('hex')}`;
+}
+
+function stableStringify(value: unknown): string {
+  if (value === undefined) return 'null';
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .filter((key) => record[key] !== undefined)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`)
+    .join(',')}}`;
 }
 
 function terminalEventTypeForOutcome(

@@ -156,18 +156,14 @@ test('failure audit extracts ContractValidationFailure recover actions, related 
   const session = contractFailureSession();
 
   assert.equal(shouldOpenRunAuditDetails(session, session.runs[0]), true);
-  assert.equal(contractValidationFailures(session, session.runs[0]).length, 1);
-  assert.deepEqual(runRecoverActions(session, session.runs[0]), [
-    'regenerate report artifact with markdownRef',
-    'inspect repair stderr and rerun bounded validator',
-    'rerun validator after artifact repair',
-  ]);
+  assert.equal(contractValidationFailures(session, session.runs[0]).length, 0);
+  assert.deepEqual(runRecoverActions(session, session.runs[0]), []);
   assert.ok(runAuditRefs(session, session.runs[0]).includes('execution-unit:EU-report'));
   assert.ok(runAuditRefs(session, session.runs[0]).includes('agentserver://repair/stderr'));
-  assert.equal(backendRepairStates(session, session.runs[0])[0]?.failureReason, 'backend artifact repair timed out');
+  assert.equal(backendRepairStates(session, session.runs[0]).length, 0);
 });
 
-test('ResultsRenderer renders ContractValidationFailure diagnostics without synthesizing a successful answer', () => {
+test('ResultsRenderer keeps raw ContractValidationFailure audit-only without synthesizing a main failure state', () => {
   const session = contractFailureSession();
   const html = renderToStaticMarkup(createElement(ResultsRenderer, {
     scenarioId: 'literature-evidence-review',
@@ -184,17 +180,17 @@ test('ResultsRenderer renders ContractValidationFailure diagnostics without synt
     onWorkspaceFileEditorChange: () => undefined,
   }));
 
-  assert.match(html, /ContractValidationFailure/);
+  assert.match(html, /主结果等待 ConversationProjection/);
+  assert.doesNotMatch(html, /运行需要处理/);
+  assert.match(html, /sciforge\.contract-validation-failure\.v1/);
   assert.match(html, /artifact-schema/);
-  assert.match(html, /relatedRef: execution-unit:EU-report/);
-  assert.match(html, /Backend repair state/);
+  assert.match(html, /EU-report/);
   assert.match(html, /backend artifact repair timed out/);
   assert.match(html, /regenerate report artifact with markdownRef/);
-  assert.match(html, /未合成成功答案/);
   assert.doesNotMatch(html, /已完成报告|ready result/);
 });
 
-test('ResultsRenderer keeps first-screen failure summary compact while preserving raw audit details', () => {
+test('ResultsRenderer keeps raw failure text out of the first-screen main summary while preserving audit details', () => {
   const session = contractFailureSession();
   const longReason = [
     'ContractValidationFailure work-evidence; contractId=sciforge.work-evidence.v1; schemaPath=packages/contracts/runtime/work-evidence-policy.ts#evaluateWorkEvidencePolicy;',
@@ -209,11 +205,11 @@ test('ResultsRenderer keeps first-screen failure summary compact while preservin
   };
 
   const html = renderResultsRenderer(session, { activeRunId: 'run-contract-failure' });
-  const summaryStart = html.indexOf('运行需要处理');
+  const summaryStart = html.indexOf('主结果等待 ConversationProjection');
   const auditStart = html.indexOf('查看运行细节');
   const summaryHtml = html.slice(summaryStart, auditStart);
 
-  assert.match(summaryHtml, /External retrieval returned zero results while the task marked itself completed/);
+  assert.doesNotMatch(summaryHtml, /External retrieval returned zero results while the task marked itself completed/);
   assert.doesNotMatch(summaryHtml, /retry\/fallback attempts, rate-limit diagnostics, and durable refs/);
   assert.match(html, /retry\/fallback attempts, rate-limit diagnostics, and durable refs/);
 });
@@ -227,8 +223,8 @@ test('ResultsRenderer empty completed run is presented as empty rather than read
   const html = renderResultsRenderer(session, { activeRunId: 'run-empty-artifacts' });
 
   assert.match(html, /本轮没有生成可展示 artifact/);
-  assert.match(html, /没有写入可供右侧结果区渲染的 artifact/);
-  assert.match(html, /重新运行或要求生成可展示 artifact/);
+  assert.match(html, /没有 ConversationProjection 或可展示产物/);
+  assert.doesNotMatch(html, /重新运行或要求生成可展示 artifact/);
   assert.doesNotMatch(html, /ready result/);
 });
 
@@ -278,6 +274,71 @@ test('ResultsRenderer lets projection satisfied state suppress raw failed run an
   assert.doesNotMatch(html, /LEGACY_RAW_FAILURE_SHOULD_NOT_RENDER/);
   assert.doesNotMatch(html, /LEGACY_EXECUTION_UNIT_SHOULD_NOT_RENDER/);
   assert.doesNotMatch(html, /查看运行细节/);
+});
+
+test('ResultsRenderer restores projection from ConversationEventLog before stale raw projection', () => {
+  const session: SciForgeSession = {
+    ...emptySession(),
+    runs: [{
+      ...completedRun('run-event-log-authoritative'),
+      status: 'failed',
+      response: 'legacy failed response',
+      raw: {
+        displayIntent: {
+          conversationEventLog: {
+            schemaVersion: 'sciforge.conversation-event-log.v1',
+            conversationId: 'conversation-event-log-authoritative',
+            events: [
+              {
+                id: 'turn-event-log',
+                type: 'TurnReceived',
+                storage: 'inline',
+                actor: 'user',
+                timestamp: '2026-05-13T00:00:00.000Z',
+                turnId: 'turn-event-log',
+                payload: { prompt: 'restore from event log' },
+              },
+              {
+                id: 'blocked-event-log',
+                type: 'ExternalBlocked',
+                storage: 'ref',
+                actor: 'runtime',
+                timestamp: '2026-05-13T00:00:01.000Z',
+                turnId: 'turn-event-log',
+                runId: 'run-event-log-authoritative',
+                payload: {
+                  summary: 'provider transport failed',
+                  reason: 'RECORDED_EVENT_LOG_FAILURE',
+                  refs: [{ ref: 'log:event-log-provider-stderr', digest: 'sha256:event-log' }],
+                },
+              },
+            ],
+          },
+          conversationProjection: {
+            schemaVersion: 'sciforge.conversation-projection.v1',
+            conversationId: 'stale-projection',
+            visibleAnswer: {
+              status: 'satisfied',
+              text: 'STALE_RAW_PROJECTION_SHOULD_NOT_RENDER',
+              artifactRefs: [],
+            },
+            artifacts: [],
+            executionProcess: [],
+            recoverActions: [],
+            verificationState: { status: 'not-required' },
+            auditRefs: [],
+            diagnostics: [],
+          },
+        },
+      },
+    }],
+  };
+
+  const html = renderResultsRenderer(session, { activeRunId: 'run-event-log-authoritative' });
+  const mainHtml = html.slice(0, html.indexOf('Raw JSON / stdout / stderr refs'));
+
+  assert.match(html, /RECORDED_EVENT_LOG_FAILURE/);
+  assert.doesNotMatch(mainHtml, /STALE_RAW_PROJECTION_SHOULD_NOT_RENDER/);
 });
 
 test('ResultsRenderer uses projection execution process instead of raw execution units in execution focus', () => {
@@ -381,7 +442,7 @@ test('ResultsRenderer surfaces runtime compatibility drift without rerunning old
   assert.doesNotMatch(html, /正在重新运行|auto.?resume/i);
 });
 
-test('ResultsRenderer shows partial-first progress while a run is still running', () => {
+test('ResultsRenderer does not let raw running progress drive the main summary without projection', () => {
   const session: SciForgeSession = {
     ...emptySession(),
     runs: [{
@@ -418,13 +479,12 @@ test('ResultsRenderer shows partial-first progress while a run is still running'
 
   const html = renderResultsRenderer(session, { activeRunId: 'run-partial-first' });
 
-  assert.match(html, /已有部分结果，后台仍在继续/);
-  assert.match(html, /已完成部分/);
-  assert.match(html, /report: Partial report/);
-  assert.match(html, /当前阶段：stage fulltext · running|当前阶段：fulltext · running/);
-  assert.match(html, /后台状态：running/);
-  assert.match(html, /safe · 安全中止当前后台任务/);
-  assert.match(html, /safe · Use completed refs/);
+  assert.match(html, /本轮没有生成可展示 artifact/);
+  assert.doesNotMatch(html, /report: Partial report/);
+  assert.doesNotMatch(html, /已有部分结果，后台仍在继续/);
+  assert.doesNotMatch(html, /当前阶段：stage fulltext · running|当前阶段：fulltext · running/);
+  assert.doesNotMatch(html, /safe · 安全中止当前后台任务/);
+  assert.doesNotMatch(html, /safe · Use completed refs/);
 });
 
 test('ResultsRenderer execution focus renders only execution unit body', () => {
@@ -564,7 +624,9 @@ test('ResultsRenderer failed run audit renders execution units from failed paylo
 
   const html = renderResultsRenderer(session, { activeRunId: 'run-failed-payload' });
 
-  assert.match(html, /1 failure/);
+  assert.match(html, /主结果等待 ConversationProjection/);
+  assert.doesNotMatch(html, /运行需要处理/);
+  assert.match(html, /1 EU/);
   assert.match(html, /EU-failed-payload/);
   assert.match(html, /web\.probe/);
   assert.match(html, /probe failed before rendering/);

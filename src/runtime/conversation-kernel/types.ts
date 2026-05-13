@@ -128,6 +128,7 @@ export interface ConversationState {
   verification?: VerificationState;
   background?: BackgroundState;
   historyEdit?: HistoryEditState;
+  harnessDecision?: HarnessDecisionState;
 }
 
 export interface VerificationState {
@@ -154,6 +155,18 @@ export interface HistoryEditState {
   projectionInvalidated: boolean;
   requiresUserConfirmation: boolean;
   nextStep: string;
+}
+
+export interface HarnessDecisionState {
+  schemaVersion: 'sciforge.harness-decision-record.v1';
+  decisionId: string;
+  profileId: string;
+  digest: string;
+  summary?: string;
+  refs: string[];
+  contractRef?: string;
+  traceRef?: string;
+  source?: string;
 }
 
 export interface ConversationProjection {
@@ -184,6 +197,7 @@ export interface ConversationProjection {
   verificationState: VerificationState;
   backgroundState?: BackgroundState;
   historyEdit?: HistoryEditState;
+  harnessDecision?: HarnessDecisionState;
   auditRefs: string[];
   diagnostics: ConversationKernelDiagnostic[];
 }

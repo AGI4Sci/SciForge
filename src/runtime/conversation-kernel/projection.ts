@@ -50,6 +50,7 @@ export function projectConversation(log: ConversationEventLog, state: Conversati
     verificationState: state.verification ?? defaultVerification(),
     backgroundState: state.background,
     historyEdit: state.historyEdit,
+    harnessDecision: state.harnessDecision,
     auditRefs,
     diagnostics: state.diagnostics,
   };

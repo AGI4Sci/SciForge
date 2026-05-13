@@ -27,7 +27,7 @@
 - 算法相关的代码优先用Python实现，方便人类用户优化、检查算法
 - 代码路径保持唯一真相源：发现冗余链路时删除、合并或降级旧链路，避免长期并行实现。
 - 不需要考虑旧兼容性，可以直接删除旧逻辑代码重写，保持代码链条绝对干净
-- 代码膨胀必须自动触发治理：源码文件超过 1000 行进入 watch list；超过 1500 行必须在 PROJECT.md 有模块化拆分任务、语义 part 计划或生成文件豁免；超过 2000 行优先拆分；超过 3000 行视为维护风险。后续开发若让文件越过阈值，应优先抽模块、删除冗余逻辑或补拆分 TODO，而不是继续堆主文件。
+- 代码膨胀必须自动触发治理：源码文件超过 1000 行进入 watch list；超过 2000 行优先拆分；超过 3000 行视为维护风险。后续开发若让文件越过阈值，应优先抽模块、删除冗余逻辑或补拆分 TODO，而不是继续堆主文件。
 - 长文件拆分必须按职责命名，不能机械切成 part1/part2；如果暂时不能完全解耦，也要拆成有语义的文件，例如 *-event-normalizer、*-runner、*-diagnostics、*-state-machine，并保持主入口只做流程编排。
 - 推进项目的时候尽可能多开sub agents，并行加速推进
 - Prompt builder 不是策略真相源；策略必须来自 harness contract、capability manifest 或可信 runtime policy。
@@ -184,6 +184,32 @@
 - [x] `npm run build`
 - [x] `git diff --check`
 
+### 2026-05-13 Milestone：Final-shape 设计复核与核心缺口收口
+
+本轮重新对照 `docs/Architecture.md` 的 Conversation Kernel v2 最终形态，并用 Kepler、Dirac、Avicenna、Raman 并行审计 runtime、UI、harness decision 和长文件治理。结论是仍存在可执行缺口：hook decision 只存在类型名、UI 无 projection 时仍让 raw run 驱动主状态、export restore 复制 replay switch、`sessionTransforms.ts` 超 1500 行。主线程随后合并并补齐这些缺口；全局 session-level append-only ledger 和主 renderer prop 级纯 projection interface 属于更大架构替换，当前先用 event-log restore、projection-first 行为和 smoke guard 锁住可验证边界。
+
+- [x] `HarnessDecisionRecorded` 增加专用 ref-backed payload contract，要求 `decisionId`、`profileId`、稳定 digest 和 decision/contract/trace refs；state replay 与 `ConversationProjection` 保留 harness decision 摘要与 refs。
+- [x] gateway task outcome 的 `ConversationEventLog` 在 `TurnReceived` 后、`Dispatched` 前写入 `HarnessDecisionRecorded`，并从 `agentHarness` / `agentHarnessHandoff` / metadata 中提取可 replay 的 contract/trace refs。
+- [x] UI 主结果状态和 view plan 收紧为 projection/event-log 优先：`conversationProjectionForRun` 先 replay `ConversationEventLog`，stale raw projection 不再覆盖事实账本；没有 projection 时 raw run、ExecutionUnit、validation、resultPresentation 只保留在 audit/legacy 路径。
+- [x] export bundle 的 restored projection 改为复用 runtime `projectConversation(log)`，删除 UI/export 内第二套 replay switch。
+- [x] `sessionTransforms.ts` 第二刀拆分完成，history edit/revert event-log、projection invalidation、ref invalidation、conflict 标记进入 `sessionHistoryEdit.ts`；主文件从约 1648 行降到约 1139 行。
+- [x] `smoke-conversation-kernel-final-shape` 增加 recorded harness decision replay 覆盖；browser T097 fixture 升级为 event-log/projection 驱动，避免旧 raw resultPresentation 依赖。
+- [x] `conversation-kernel` 的 digest 计算拆到 node-only `event-log-digest.ts`，browser-safe event-log validation/projection replay 不再把 `node:crypto` 或 `Buffer` 带入网页端。
+
+本轮验证：
+
+- [x] `npm run typecheck`
+- [x] `node --import tsx --test src/runtime/conversation-kernel.test.ts src/runtime/gateway/result-presentation-contract.test.ts src/ui/src/exportPolicy.test.ts src/ui/src/app/chat/sessionTransforms.test.ts`
+- [x] `node --import tsx --test src/ui/src/app/ResultsRenderer.test.ts src/ui/src/app/results-renderer-execution-model.test.ts src/ui/src/app/results/viewPlanResolver.test.ts`
+- [x] `npm run smoke:conversation-kernel-final-shape`
+- [x] `npm run smoke:runtime-contracts`
+- [x] `npm run smoke:result-presentation-contract`
+- [x] `npm run smoke:no-src-capability-semantics`
+- [x] `npm run smoke:long-file-budget`
+- [x] `npm run build`
+- [x] `npm run smoke:browser`
+- [x] `git diff --check`
+
 ### Active：第三轮 final-shape raw-run 回流收敛
 
 - [x] D / owner: Kuhn / `viewPlanResolver` projection-first
@@ -237,13 +263,14 @@
 
 - [x] 接入 history edit/revert 到 event-sourced kernel。
 - [x] export bundle 改为导出 event log、projection、refs manifest 和 audit-only raw attachments。
+- [x] `sessionTransforms.ts` 第二刀拆分，history edit/revert 语义进入 `sessionHistoryEdit.ts`，主入口回到 watch 级。
 - [ ] 拆分 watch list 长文件：`src/runtime/generation-gateway.ts`、`src/runtime/gateway/context-envelope.ts`、`src/ui/src/app/ChatPanel.tsx`。
 - [x] 将 `tests/smoke/smoke-conversation-kernel-final-shape.ts` 加入 package script 与 `smoke:all`；`verify:fast` 先运行轻量 guard 防止 final-shape smoke 脱链。
 
 长文件治理：
 
 - [ ] `packages/skills/literature/index.ts` 当前超过 1500 行。后续应拆为 `literature-search-provider`、`literature-download-provider`、`literature-report-synthesis`、`literature-contract-normalizer` 等语义模块，主入口只保留 capability 编排和导出。
-- [ ] `src/ui/src/app/chat/sessionTransforms.ts` 已完成第一刀：projection continuation 已拆到 `src/ui/src/app/chat/sessionProjectionContinuation.ts`。在并行 history edit 改动叠加后主文件当前约 1648 行，仍超过 1500 行；后续应继续拆为 `session-message-projection`、`session-run-projection`、`session-reference-projection`、`session-archive-projection` 等语义模块，避免聊天状态恢复继续膨胀。
+- [x] `src/ui/src/app/chat/sessionTransforms.ts` 已完成第二刀：projection continuation 在 `sessionProjectionContinuation.ts`，history edit/revert 在 `sessionHistoryEdit.ts`；主文件当前约 1139 行，继续 watch 但不再是超过 1500 行的治理阻塞。
 
 ## 最终形态修改建议
 

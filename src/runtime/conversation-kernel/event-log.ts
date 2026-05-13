@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import type {
   ConversationEvent,
   ConversationEventLog,
@@ -8,6 +7,7 @@ import type {
 import { validateBackgroundContinuationEvent } from './background-continuation';
 import { validateVerificationRecordedEvent } from './verification-gate';
 import { validateHistoryEditedEvent } from './history-edit';
+import { validateHarnessDecisionRecordedEvent } from './harness-decision';
 
 export const CONVERSATION_INLINE_EVENT_MAX_BYTES = 8 * 1024;
 
@@ -40,11 +40,12 @@ export function validateConversationEvent(
 ): ConversationKernelDiagnostic | undefined {
   const eventContractDiagnostic = validateBackgroundContinuationEvent(event)
     ?? validateVerificationRecordedEvent(event)
-    ?? validateHistoryEditedEvent(event);
+    ?? validateHistoryEditedEvent(event)
+    ?? validateHarnessDecisionRecordedEvent(event);
   if (eventContractDiagnostic) return eventContractDiagnostic;
 
   if (event.storage === 'inline') {
-    const payloadBytes = Buffer.byteLength(JSON.stringify(event.payload), 'utf8');
+    const payloadBytes = utf8ByteLength(JSON.stringify(event.payload));
     if (payloadBytes > inlineMaxBytes) {
       return {
         severity: 'error',
@@ -130,10 +131,6 @@ export function isConversationEventLog(value: unknown): value is ConversationEve
   return validateConversationEventLog(value).length === 0;
 }
 
-export function conversationEventLogDigest(log: ConversationEventLog): string {
-  return `sha256:${createHash('sha256').update(stableStringify(log)).digest('hex')}`;
-}
-
 export function eventRefs(event: ConversationEvent): string[] {
   if (event.storage !== 'ref') return [];
   return event.payload.refs.map((ref) => ref.ref);
@@ -161,18 +158,10 @@ function isConversationEvent(value: unknown): value is ConversationEvent {
   return false;
 }
 
-function stableStringify(value: unknown): string {
-  if (value === undefined) return 'null';
-  if (value === null || typeof value !== 'object') return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record)
-    .filter((key) => record[key] !== undefined)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`)
-    .join(',')}}`;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
 }

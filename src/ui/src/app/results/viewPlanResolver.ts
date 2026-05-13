@@ -5,13 +5,12 @@ import type { ScenarioId } from '../../data';
 import { artifactForObjectReference, syntheticArtifactForObjectReference } from '../../../../../packages/support/object-references';
 import {
   conversationProjectionArtifactRefs,
-  conversationProjectionAuditRefs,
   conversationProjectionForRun,
   conversationProjectionPrimaryDiagnostic,
   conversationProjectionVisibleText,
   type UiConversationProjection,
 } from '../conversation-projection-view-model';
-import { artifactsForRun, auditExecutionUnitsForRun } from './executionUnitsForRun';
+import { auditExecutionUnitsForRun } from './executionUnitsForRun';
 import type { ResultFocusMode } from './ResultShell';
 import {
   blockedInteractiveViewDesignForIntent,
@@ -46,10 +45,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function asString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
-}
-
-function asStringList(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : [];
 }
 
 function uniqueStrings(values: string[]) {
@@ -132,16 +127,14 @@ export function resolveViewPlan({
   const projection = conversationProjectionForRun(effectiveRun);
   const resultArtifacts = projection
     ? artifactsForConversationProjection(session, projection)
-    : artifactsForResultPresentation(session, effectiveRun);
-  const resultExecutionUnits = projection ? [] : auditExecutionUnitsForResultPlan(session, effectiveRun);
+    : artifactsForProjectionlessMainPlan(session, effectiveRun);
+  const resultExecutionUnits: [] = [];
   const displayIntent = projection
     ? displayIntentFromConversationProjection(projection, resultArtifacts)
-    : effectiveRun?.status === 'failed'
-    ? inferDisplayIntentFromInteractiveArtifacts(resultArtifacts, uiModuleRegistry)
-    : extractDisplayIntent(effectiveRun) ?? inferDisplayIntentFromInteractiveArtifacts(resultArtifacts, uiModuleRegistry);
+    : inferDisplayIntentFromInteractiveArtifacts(resultArtifacts, uiModuleRegistry);
   const presentationArtifactActions = projection
     ? projectionArtifactActions(projection, resultArtifacts)
-    : resultPresentationArtifactActions(effectiveRun);
+    : [];
   const presentationActionArtifactIds = new Set(presentationArtifactActions
     .map((action) => stripArtifactRef(action.ref ?? ''))
     .filter(Boolean));
@@ -152,10 +145,12 @@ export function resolveViewPlan({
     : runtimeSlots;
   const seedSlots = (projection
     ? projectionRuntimeSlots
-    : runtimeSlots.length ? runtimeSlots : defaultSlots?.length ? defaultSlots : defaultSlotsForAgent(scenarioId))
+    : resultArtifacts.length
+      ? runtimeSlots.length ? runtimeSlots : defaultSlots?.length ? defaultSlots : defaultSlotsForAgent(scenarioId)
+      : [])
     .slice()
     .sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99));
-  const diagnostics: string[] = [];
+  const diagnostics: string[] = projection ? [] : projectionlessAuditDiagnostics(session, effectiveRun);
   const items: ResolvedViewPlanItem[] = [];
   const seen = new Set<string>();
 
@@ -328,50 +323,6 @@ export function resolveViewPlan({
   };
 }
 
-function extractDisplayIntent(activeRun?: SciForgeRun): DisplayIntent | undefined {
-  const candidates = [
-    activeRun?.raw,
-    isRecord(activeRun?.raw) ? activeRun?.raw.displayIntent : undefined,
-    parseMaybeJsonObject(activeRun?.response)?.displayIntent,
-  ];
-  for (const candidate of candidates) {
-    if (!isRecord(candidate)) continue;
-    const resultPresentationIntent = displayIntentFromResultPresentation(candidate.resultPresentation);
-    if (resultPresentationIntent) return resultPresentationIntent;
-    const primaryGoal = asString(candidate.primaryGoal) || asString(candidate.goal) || asString(candidate.title);
-    if (!primaryGoal) continue;
-    return {
-      primaryGoal,
-      requiredArtifactTypes: asStringList(candidate.requiredArtifactTypes),
-      preferredModules: asStringList(candidate.preferredModules),
-      fallbackAcceptable: asStringList(candidate.fallbackAcceptable),
-      acceptanceCriteria: asStringList(candidate.acceptanceCriteria),
-      source: 'agentserver',
-    };
-  }
-  return undefined;
-}
-
-function displayIntentFromResultPresentation(value: unknown): DisplayIntent | undefined {
-  if (!isRecord(value)) return undefined;
-  const artifactActions = Array.isArray(value.artifactActions) ? value.artifactActions.filter(isRecord) : [];
-  const requiredArtifactTypes = uniqueStrings(artifactActions
-    .map((action) => asString(action.artifactType))
-    .filter((type): type is string => Boolean(type)));
-  if (!requiredArtifactTypes.length) return undefined;
-  const firstAction = artifactActions.find((action) => asString(action.label));
-  const answerBlocks = Array.isArray(value.answerBlocks) ? value.answerBlocks.filter(isRecord) : [];
-  const firstAnswer = answerBlocks.find((block) => asString(block.text));
-  return {
-    primaryGoal: asString(firstAction?.label) ?? asString(firstAnswer?.text) ?? '展示 result presentation 产物',
-    requiredArtifactTypes,
-    preferredModules: [],
-    fallbackAcceptable: [],
-    acceptanceCriteria: ['render-from-result-presentation-contract'],
-    source: 'agentserver',
-  };
-}
-
 function displayIntentFromConversationProjection(
   projection: UiConversationProjection,
   artifacts: RuntimeArtifact[],
@@ -423,52 +374,6 @@ function projectionArtifactActions(
     .filter((action) => action.ref || action.artifactType);
 }
 
-function resultPresentationArtifactActions(activeRun?: SciForgeRun): ResultPresentationArtifactAction[] {
-  const candidates = [
-    activeRun?.raw,
-    isRecord(activeRun?.raw) ? activeRun?.raw.resultPresentation : undefined,
-    isRecord(activeRun?.raw) && isRecord(activeRun?.raw.displayIntent) ? activeRun?.raw.displayIntent.resultPresentation : undefined,
-    parseMaybeJsonObject(activeRun?.response)?.resultPresentation,
-  ];
-  const resultPresentation = candidates.filter(isRecord).find((candidate) => Array.isArray(candidate.artifactActions));
-  const artifactActions = Array.isArray(resultPresentation?.artifactActions) ? resultPresentation.artifactActions.filter(isRecord) : [];
-  return artifactActions.map((action) => ({
-    ...viewCompositionFromPresentationAction(action),
-    id: asString(action.id),
-    label: asString(action.label),
-    ref: asString(action.ref),
-    artifactType: asString(action.artifactType),
-    componentId: asString(action.componentId),
-    moduleId: asString(action.moduleId),
-    presentationKey: actionStringField(action, 'presentationKey'),
-    parentArtifactRef: actionStringField(action, 'parentArtifactRef'),
-    revision: actionStringOrNumberField(action, 'revision'),
-    revisionRef: actionStringField(action, 'revisionRef'),
-  })).filter((action) => action.ref || action.artifactType);
-}
-
-function viewCompositionFromPresentationAction(action: Record<string, unknown>): Partial<ResultPresentationArtifactAction> {
-  const metadata = isRecord(action.metadata) ? action.metadata : {};
-  const transformParams = isRecord(action.transformParams)
-    ? action.transformParams
-    : isRecord(metadata.transformParams)
-      ? metadata.transformParams
-      : {};
-  return {
-    encoding: actionRecordField(action, transformParams, 'encoding') as UIManifestSlot['encoding'],
-    layout: actionRecordField(action, transformParams, 'layout') as UIManifestSlot['layout'],
-    selection: actionRecordField(action, transformParams, 'selection') as UIManifestSlot['selection'],
-    sync: actionRecordField(action, transformParams, 'sync') as UIManifestSlot['sync'],
-    transform: actionTransformField(action, transformParams),
-    compare: actionRecordField(action, transformParams, 'compare') as UIManifestSlot['compare'],
-    exportProfile: actionRecordField(action, transformParams, 'exportProfile'),
-    presentationKey: actionStringField(action, 'presentationKey') ?? actionStringField(metadata, 'presentationKey'),
-    parentArtifactRef: actionStringField(action, 'parentArtifactRef') ?? actionStringField(metadata, 'parentArtifactRef'),
-    revision: actionStringOrNumberField(action, 'revision') ?? actionStringOrNumberField(metadata, 'revision'),
-    revisionRef: actionStringField(action, 'revisionRef') ?? actionStringField(metadata, 'revisionRef'),
-  };
-}
-
 function actionSlotProps(action: ResultPresentationArtifactAction, artifact?: RuntimeArtifact): Record<string, unknown> | undefined {
   const artifactIdentity = compactRecord({
     actionId: action.id,
@@ -514,44 +419,6 @@ function presentationActionItemIdentity(action: ResultPresentationArtifactAction
     `index:${index}`,
   ]);
   return segments.join(':');
-}
-
-function actionStringField(action: Record<string, unknown>, key: string) {
-  const value = asString(action[key]);
-  if (value) return value;
-  const metadata = isRecord(action.metadata) ? action.metadata : {};
-  return asString(metadata[key]);
-}
-
-function actionStringOrNumberField(action: Record<string, unknown>, key: string): string | number | undefined {
-  const value = action[key];
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  return actionStringField(action, key);
-}
-
-function actionRecordField(
-  action: Record<string, unknown>,
-  transformParams: Record<string, unknown>,
-  key: string,
-): Record<string, unknown> | undefined {
-  return recordField(action[key]) ?? recordField(transformParams[key]);
-}
-
-function actionTransformField(
-  action: Record<string, unknown>,
-  transformParams: Record<string, unknown>,
-): UIManifestSlot['transform'] | undefined {
-  const value = Array.isArray(action.transform) ? action.transform : transformParams.transform;
-  return Array.isArray(value) ? value.filter(isViewTransform) : undefined;
-}
-
-function recordField(value: unknown): Record<string, unknown> | undefined {
-  return isRecord(value) ? value : undefined;
-}
-
-function isViewTransform(value: unknown): value is NonNullable<UIManifestSlot['transform']>[number] {
-  if (!isRecord(value)) return false;
-  return ['filter', 'sort', 'limit', 'group', 'derive'].includes(asString(value.type) ?? '');
 }
 
 function compactRecord(value: Record<string, unknown>): Record<string, unknown> | undefined {
@@ -604,7 +471,6 @@ function artifactsForConversationProjection(session: SciForgeSession, projection
   const refs = uniqueStrings([
     ...conversationProjectionArtifactRefs(projection),
     ...projection.artifacts.map((artifact) => artifact.ref),
-    ...conversationProjectionAuditRefs(projection).filter((ref) => ref.startsWith('artifact:')),
   ]);
   const byId = new Map(session.artifacts.map((artifact) => [artifact.id, artifact]));
   const byRef = new Map(session.artifacts.flatMap((artifact) => [
@@ -623,30 +489,87 @@ function artifactsForConversationProjection(session: SciForgeSession, projection
   return Array.from(unique.values());
 }
 
-function artifactsForResultPresentation(session: SciForgeSession, activeRun?: SciForgeRun) {
-  const runArtifacts = artifactsForRun(session, activeRun);
-  if (activeRun?.status === 'failed') {
-    const diagnostics = runArtifacts.filter(isFailedRunDiagnosticArtifact);
-    return diagnostics.length ? diagnostics : session.artifacts.filter(isFailedRunDiagnosticArtifact);
-  }
-  if (runArtifacts.length) return runArtifacts;
-  if (!activeRun || session.runs.length <= 1) return session.artifacts;
-  const objectArtifactIds = new Set((activeRun.objectReferences ?? [])
-    .filter((reference) => reference.kind === 'artifact' && (!reference.runId || reference.runId === activeRun.id))
-    .map((reference) => stripArtifactRef(reference.ref)));
-  if (objectArtifactIds.size) return session.artifacts.filter((artifact) => objectArtifactIds.has(artifact.id));
-  const actionArtifactIds = new Set(resultPresentationArtifactActions(activeRun)
-    .map((action) => stripArtifactRef(action.ref ?? ''))
-    .filter(Boolean));
-  return actionArtifactIds.size
-    ? session.artifacts.filter((artifact) => actionArtifactIds.has(artifact.id))
+function artifactsForProjectionlessMainPlan(session: SciForgeSession, activeRun?: SciForgeRun) {
+  if (!activeRun) return session.runs.length ? [] : session.artifacts;
+  if (projectionlessRunHasBlockingAudit(session, activeRun)) return [];
+  const byId = new Map(session.artifacts.map((artifact) => [artifact.id, artifact]));
+  const explicitArtifactIds = new Set([
+    ...(activeRun.objectReferences ?? [])
+      .filter((reference) => reference.kind === 'artifact' && (!reference.runId || reference.runId === activeRun.id))
+      .map((reference) => stripArtifactRef(reference.ref)),
+    ...(activeRun.references ?? [])
+      .filter((reference) => (!reference.runId || reference.runId === activeRun.id) && reference.ref.includes('artifact:'))
+      .map((reference) => stripArtifactRef(reference.ref)),
+  ]);
+  const explicitArtifacts = [...explicitArtifactIds]
+    .map((id) => byId.get(id))
+    .filter((artifact): artifact is RuntimeArtifact => Boolean(artifact));
+  const ownedArtifacts = session.artifacts.filter((artifact) => artifactBelongsToRun(artifact, activeRun));
+  if (explicitArtifacts.length || ownedArtifacts.length) return uniqueArtifacts([...explicitArtifacts, ...ownedArtifacts]);
+  return session.runs.length <= 1 ? session.artifacts : [];
+}
+
+function projectionlessAuditDiagnostics(session: SciForgeSession, activeRun?: SciForgeRun) {
+  return projectionlessRunHasAuditMaterial(session, activeRun)
+    ? ['没有 ConversationProjection；raw run、resultPresentation、validation 与 ExecutionUnit 仅作为审计材料，不生成主 view plan。']
     : [];
 }
 
-function auditExecutionUnitsForResultPlan(session: SciForgeSession, activeRun?: SciForgeRun) {
-  const scoped = auditExecutionUnitsForRun(session, activeRun);
-  if (scoped.length || activeRun?.status !== 'failed') return scoped;
-  return session.executionUnits;
+function projectionlessRunHasBlockingAudit(session: SciForgeSession, activeRun?: SciForgeRun) {
+  const raw = isRecord(activeRun?.raw) ? activeRun.raw : undefined;
+  const rawStatus = String(raw?.status ?? '').trim().toLowerCase();
+  return Boolean(
+    activeRun?.status === 'failed'
+    || ['failed', 'repair-needed', 'needs-human'].includes(rawStatus)
+    || asString(raw?.failureReason)
+    || asString(raw?.blocker)
+    || rawHasValidationFailure(raw)
+    || auditExecutionUnitsForRun(session, activeRun).some((unit) => isBlockingExecutionUnitStatus(unit.status)),
+  );
+}
+
+function projectionlessRunHasAuditMaterial(session: SciForgeSession, activeRun?: SciForgeRun) {
+  const raw = isRecord(activeRun?.raw) ? activeRun.raw : undefined;
+  return Boolean(
+    projectionlessRunHasBlockingAudit(session, activeRun)
+    || isRecord(raw?.resultPresentation)
+    || isRecord(raw?.displayIntent)
+    || auditExecutionUnitsForRun(session, activeRun).length,
+  );
+}
+
+function rawHasValidationFailure(raw: Record<string, unknown> | undefined) {
+  if (!raw) return false;
+  return Boolean(
+    raw.contractValidationFailure
+    || raw.validationFailure
+    || raw.failure
+    || (Array.isArray(raw.contractValidationFailures) && raw.contractValidationFailures.length)
+    || (Array.isArray(raw.validationFailures) && raw.validationFailures.length)
+    || (Array.isArray(raw.failures) && raw.failures.length),
+  );
+}
+
+function isBlockingExecutionUnitStatus(status: unknown) {
+  return status === 'failed'
+    || status === 'failed-with-reason'
+    || status === 'repair-needed'
+    || status === 'needs-human';
+}
+
+function artifactBelongsToRun(artifact: RuntimeArtifact, run: SciForgeRun) {
+  const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+  return asString(metadata.runId) === run.id
+    || asString(metadata.sourceRunId) === run.id
+    || asString(metadata.producerRunId) === run.id;
+}
+
+function uniqueArtifacts(artifacts: RuntimeArtifact[]) {
+  const byId = new Map<string, RuntimeArtifact>();
+  for (const artifact of artifacts) {
+    if (artifact.id && !byId.has(artifact.id)) byId.set(artifact.id, artifact);
+  }
+  return Array.from(byId.values());
 }
 
 function diagnosticArtifactFallbackItems(
@@ -683,36 +606,6 @@ function diagnosticArtifactFallbackItems(
 function artifactTitle(artifact?: RuntimeArtifact) {
   const metadata = isRecord(artifact?.metadata) ? artifact.metadata : {};
   return asString(metadata.title) ?? asString(metadata.label) ?? asString(metadata.name);
-}
-
-function isFailedRunDiagnosticArtifact(artifact: RuntimeArtifact) {
-  const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
-  const data = isRecord(artifact.data) ? artifact.data : {};
-  const status = [
-    artifact.type,
-    metadata.status,
-    metadata.validationStatus,
-    data.status,
-  ].map((value) => String(value || '').toLowerCase()).join(' ');
-  return artifact.type === 'runtime-diagnostic'
-    || artifact.type === 'repair-diagnostic'
-    || artifact.type === 'backend-failure'
-    || artifact.type === 'contract-validation-failure'
-    || /\b(?:repair-needed|failed-with-reason|failed)\b/.test(status)
-    || metadata.preservedFromMalformedPayload === true;
-}
-
-function parseMaybeJsonObject(value: unknown): Record<string, unknown> | undefined {
-  if (isRecord(value)) return value;
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  if (!trimmed.startsWith('{')) return undefined;
-  try {
-    const parsed = JSON.parse(trimmed);
-    return isRecord(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 export function itemsForFocusMode(plan: RuntimeResolvedViewPlan, focusMode: ResultFocusMode) {

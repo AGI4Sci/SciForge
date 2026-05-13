@@ -1,7 +1,6 @@
 import type { ContractValidationFailure, ContractValidationFailureKind } from '@sciforge-ui/runtime-contract';
-import { DIRECT_CONTEXT_FAST_PATH_POLICY } from '@sciforge-ui/runtime-contract/artifact-policy';
 import { collectRuntimeRefsFromValue, runtimePayloadKeyLooksLikeBodyCarrier } from '@sciforge-ui/runtime-contract/references';
-import type { RuntimeArtifact, SciForgeRun, SciForgeSession } from '../domain';
+import type { RuntimeArtifact, RuntimeExecutionUnit, SciForgeRun, SciForgeSession } from '../domain';
 import type { RuntimeResolvedViewPlan } from './results/viewPlanResolver';
 import { asString, asStringList, isRecord } from './results/resultArtifactHelpers';
 import { artifactsForRun, auditExecutionUnitsForRun, runUsesContextOnlyFastPath } from './results/executionUnitsForRun';
@@ -58,9 +57,9 @@ export function shouldOpenRunAuditDetails(session: SciForgeSession, activeRun?: 
   }
   return Boolean(
     run?.status === 'failed'
-    || failedExecutionUnits(session, run).length
-    || contractValidationFailures(session, run).length
-    || backendRepairStates(session, run).some((state) => state.failureReason || state.status === 'failed' || state.status === 'failed-with-reason'),
+    || auditFailedExecutionUnits(session, run).length
+    || auditContractValidationFailures(session, run).length
+    || auditBackendRepairStates(session, run).some((state) => state.failureReason || state.status === 'failed' || state.status === 'failed-with-reason'),
   );
 }
 
@@ -69,108 +68,55 @@ export function runPresentationState(session: SciForgeSession, activeRun?: SciFo
   const projection = conversationProjectionForRun(run);
   const availableArtifacts = presentationArtifacts(session, run, viewPlan);
   if (projection) return runPresentationStateFromProjection(projection, run, availableArtifacts);
-  const blockers = runAuditBlockers(session, run);
-  const recoverActions = runRecoverActions(session, run);
-  const validationFailures = contractValidationFailures(session, run);
-  const repairStates = backendRepairStates(session, run);
-  const units = auditExecutionUnitsForRun(session, run);
-  const presentation = resultPresentationForRun(run);
-  const progress = runPresentationProgress(run, units, availableArtifacts, presentation);
-  const needsHuman = runNeedsHuman(run, presentation) || units.some((unit) => unit.status === 'needs-human' || unit.verificationVerdict === 'needs-human');
-  const partial = structuredHasPartial(run, presentation)
-    || (run?.status === 'running' && (availableArtifacts.length > 0 || progress.completedParts.length > 0));
-  const failed = run?.status === 'failed' || blockers.length > 0 || validationFailures.length > 0;
-  const recoverable = recoverActions.length > 0
-    || repairStates.some((state) => state.status || state.failureReason || state.recoverActions.length)
-    || units.some((unit) => unit.status === 'repair-needed' || unit.status === 'failed-with-reason');
+  return projectionlessRunPresentationState(session, run, availableArtifacts);
+}
+
+function projectionlessRunPresentationState(
+  session: SciForgeSession,
+  run: SciForgeRun | undefined,
+  availableArtifacts: RunPresentationState['availableArtifacts'],
+): RunPresentationState {
+  const hasAuditDiagnostics = projectionlessAuditHasDiagnostics(session, run);
+  const mainArtifacts = hasAuditDiagnostics ? [] : availableArtifacts;
   const refs = runAuditRefs(session, run).slice(0, 8);
-  const nextSteps = Array.from(new Set([
-    ...recoverActions,
-    ...resultPresentationNextActions(presentation),
-    ...validationFailures.map((failure) => failure.nextStep).filter((step): step is string => Boolean(step)),
-    ...units.map((unit) => unit.nextStep).filter((step): step is string => Boolean(step)),
-    ...(needsHuman ? ['补充缺失输入或确认下一步后继续。'] : []),
-    ...(!recoverActions.length && failed ? ['查看运行细节中的失败单元，修复后重新运行。'] : []),
-    ...(!availableArtifacts.length && !failed && !needsHuman && !partial && run?.status === 'completed' ? ['重新运行或要求生成可展示 artifact。'] : []),
-  ])).slice(0, 5);
-  const reason = primaryPresentationReason({
-    presentation,
-    blockers,
-    validationFailures,
-    repairStates,
-    units,
-    run,
-    availableArtifacts,
-  });
-  if (failed) {
+  if (mainArtifacts.length) {
     return {
-      kind: recoverable ? 'recoverable' : 'failed',
-      title: recoverable ? '运行失败，但可恢复' : '运行失败',
-      reason,
-      progress,
-      nextSteps,
-      availableArtifacts,
-      refs,
-    };
-  }
-  if (needsHuman) {
-    return {
-      kind: 'needs-human',
-      title: '需要人工处理后继续',
-      reason,
-      progress,
-      nextSteps,
-      availableArtifacts,
-      refs,
-    };
-  }
-  if (partial) {
-    return {
-      kind: 'partial',
-      title: run?.status === 'running'
-        ? '已有部分结果，后台仍在继续'
-        : availableArtifacts.length ? '只得到部分结果' : '部分结果尚不可展示',
-      reason,
-      progress,
-      nextSteps,
-      availableArtifacts,
-      refs,
-    };
-  }
-  if (run?.status === 'running') {
-    return {
-      kind: 'running',
-      title: '运行仍在进行',
-      reason,
-      progress,
-      nextSteps,
-      availableArtifacts,
-      refs,
-    };
-  }
-  if (!availableArtifacts.length) {
-    return {
-      kind: recoverable ? 'recoverable' : 'empty',
-      title: recoverable ? '结果需要恢复后展示' : '本轮没有生成可展示 artifact',
-      reason,
-      progress,
-      nextSteps,
-      availableArtifacts,
+      kind: 'ready',
+      title: '结果可展示',
+      reason: `${mainArtifacts.length} 个显式 legacy/ref 产物可用于右侧展示。`,
+      nextSteps: [],
+      availableArtifacts: mainArtifacts,
       refs,
     };
   }
   return {
-    kind: 'ready',
-    title: '结果可展示',
-    reason,
-    progress,
-    nextSteps,
-    availableArtifacts,
+    kind: 'empty',
+    title: hasAuditDiagnostics ? '主结果等待 ConversationProjection' : '本轮没有生成可展示 artifact',
+    reason: hasAuditDiagnostics
+      ? '没有 ConversationProjection；raw run、ExecutionUnit、validation 与 resultPresentation 已保留在审计中，不驱动主状态。'
+      : '当前 run 没有 ConversationProjection 或可展示产物。',
+    nextSteps: [],
+    availableArtifacts: [],
     refs,
   };
 }
 
-export function failedExecutionUnits(session: SciForgeSession, activeRun?: SciForgeRun) {
+function projectionlessAuditHasDiagnostics(session: SciForgeSession, run?: SciForgeRun) {
+  return Boolean(
+    runHasCurrentFailureBoundary(run)
+    || auditFailedExecutionUnits(session, run).length
+    || auditContractValidationFailures(session, run).length
+    || auditBackendRepairStates(session, run).some((state) => state.failureReason || state.status === 'failed' || state.status === 'failed-with-reason'),
+  );
+}
+
+export function failedExecutionUnits(session: SciForgeSession, activeRun?: SciForgeRun): RuntimeExecutionUnit[] {
+  const run = activeRun ?? session.runs.at(-1);
+  if (conversationProjectionForRun(run)) return [];
+  return [];
+}
+
+function auditFailedExecutionUnits(session: SciForgeSession, activeRun?: SciForgeRun) {
   const run = activeRun ?? session.runs.at(-1);
   return auditExecutionUnitsForRun(session, run).filter((unit) => isBlockingExecutionUnitStatus(unit.status));
 }
@@ -192,32 +138,14 @@ export function runAuditBlockers(session: SciForgeSession, activeRun?: SciForgeR
       ...projection.diagnostics.map((diagnostic) => diagnostic.message),
     ].filter((line): line is string => Boolean(line))));
   }
-  const raw = isRecord(run?.raw) ? run?.raw : undefined;
-  const currentFailureBoundary = runHasCurrentFailureBoundary(run);
-  const lines = [
-    run?.status === 'failed' ? `blocker: run ${run.id} failed` : undefined,
-    currentFailureBoundary && asString(raw?.blocker) ? `blocker: ${asString(raw?.blocker)}` : undefined,
-    currentFailureBoundary && asString(raw?.failureReason) ? `failureReason: ${asString(raw?.failureReason)}` : undefined,
-    ...failedExecutionUnits(session, run).map((unit) => `failureReason: ${unit.failureReason || unit.id}`),
-    ...contractValidationFailures(session, run).map((failure) => `ContractValidationFailure(${failure.failureKind}): ${failure.failureReason}`),
-    ...backendRepairStates(session, run).flatMap((state) => state.failureReason ? [`backend repair ${state.label}: ${state.failureReason}`] : []),
-  ].filter((line): line is string => Boolean(line));
-  return Array.from(new Set(lines));
+  return [];
 }
 
 export function runRecoverActions(session: SciForgeSession, activeRun?: SciForgeRun) {
   const run = activeRun ?? session.runs.at(-1);
   const projection = conversationProjectionForRun(run);
   if (projection) return conversationProjectionRecoverActions(projection);
-  const raw = isRecord(run?.raw) ? run?.raw : undefined;
-  const currentFailureBoundary = runHasCurrentFailureBoundary(run);
-  return Array.from(new Set([
-    ...(currentFailureBoundary ? asStringList(raw?.recoverActions) : []),
-    ...contractValidationFailures(session, run).flatMap((failure) => failure.recoverActions),
-    ...backendRepairStates(session, run).flatMap((state) => state.recoverActions),
-    ...failedExecutionUnits(session, run).flatMap((unit) => unit.recoverActions ?? []),
-    ...auditExecutionUnitsForRun(session, run).flatMap((unit) => unit.status === 'repair-needed' ? unit.recoverActions ?? [] : []),
-  ]));
+  return [];
 }
 
 export function runAuditRefs(session: SciForgeSession, activeRun?: SciForgeRun) {
@@ -228,12 +156,12 @@ export function runAuditRefs(session: SciForgeSession, activeRun?: SciForgeRun) 
   return Array.from(new Set([
     ...asStringList(raw?.refs),
     ...asStringList(raw?.auditRefs),
-    ...contractValidationFailures(session, run).flatMap((failure) => [
+    ...auditContractValidationFailures(session, run).flatMap((failure) => [
       ...failure.relatedRefs,
       ...failure.invalidRefs,
       ...failure.unresolvedUris,
     ]),
-    ...backendRepairStates(session, run).flatMap((state) => state.refs),
+    ...auditBackendRepairStates(session, run).flatMap((state) => state.refs),
     ...(run?.references ?? []).map((ref) => ref.ref),
     ...auditExecutionUnitsForRun(session, run).flatMap((unit) => [unit.codeRef, unit.stdoutRef, unit.stderrRef, unit.outputRef, unit.diffRef]).filter((ref): ref is string => Boolean(ref)),
   ]));
@@ -243,6 +171,12 @@ const CONTRACT_VALIDATION_FAILURE_CONTRACT = 'sciforge.contract-validation-failu
 const contractValidationFailureKinds: ContractValidationFailureKind[] = ['payload-schema', 'artifact-schema', 'reference', 'ui-manifest', 'work-evidence', 'verifier', 'unknown'];
 
 export function contractValidationFailures(session: SciForgeSession, activeRun?: SciForgeRun): ContractValidationFailure[] {
+  const run = activeRun ?? session.runs.at(-1);
+  if (conversationProjectionForRun(run)) return [];
+  return [];
+}
+
+function auditContractValidationFailures(session: SciForgeSession, activeRun?: SciForgeRun): ContractValidationFailure[] {
   const run = activeRun ?? session.runs.at(-1);
   const failures = [
     ...contractValidationFailureCandidates(run?.raw),
@@ -254,6 +188,12 @@ export function contractValidationFailures(session: SciForgeSession, activeRun?:
 }
 
 export function backendRepairStates(session: SciForgeSession, activeRun?: SciForgeRun): BackendRepairState[] {
+  const run = activeRun ?? session.runs.at(-1);
+  if (conversationProjectionForRun(run)) return [];
+  return [];
+}
+
+function auditBackendRepairStates(session: SciForgeSession, activeRun?: SciForgeRun): BackendRepairState[] {
   const run = activeRun ?? session.runs.at(-1);
   const raw = isRecord(run?.raw) ? run?.raw : undefined;
   const currentFailureBoundary = runHasCurrentFailureBoundary(run);
@@ -435,33 +375,6 @@ export function rawAuditItems(session: SciForgeSession, activeRun: SciForgeRun |
   ].filter((item): item is { id: string; label: string; value: string } => Boolean(item));
 }
 
-function resultPresentationForRun(run?: SciForgeRun): Record<string, unknown> | undefined {
-  const raw = isRecord(run?.raw) ? run?.raw : undefined;
-  const displayIntent = isRecord(raw?.displayIntent) ? raw.displayIntent : undefined;
-  const candidates = [
-    raw?.resultPresentation,
-    displayIntent?.resultPresentation,
-  ].filter(isRecord);
-  if (run && runUsesContextOnlyFastPath(run)) {
-    return candidates.find((candidate) =>
-      recordExplicitlyBelongsToRun(candidate, run)
-      || recordLinksDirectContextArtifact(candidate)
-    );
-  }
-  return firstRecord(...candidates);
-}
-
-function firstRecord(...values: unknown[]): Record<string, unknown> | undefined {
-  return values.find(isRecord);
-}
-
-function resultPresentationNextActions(presentation?: Record<string, unknown>) {
-  if (!presentation) return [];
-  return recordList(presentation.nextActions)
-    .map((action) => asString(action.label) || asString(action.action) || asString(action.nextStep))
-    .filter((action): action is string => Boolean(action));
-}
-
 function presentationArtifacts(session: SciForgeSession, run?: SciForgeRun, viewPlan?: RuntimeResolvedViewPlan) {
   const artifacts = viewPlan
     ? viewPlan.allItems
@@ -597,254 +510,9 @@ function projectionPresentationProgress(
   };
 }
 
-function runPresentationProgress(
-  run: SciForgeRun | undefined,
-  units: ReturnType<typeof auditExecutionUnitsForRun>,
-  availableArtifacts: RunPresentationState['availableArtifacts'],
-  presentation?: Record<string, unknown>,
-): RunPresentationProgress {
-  const background = backgroundCompletionForRun(run);
-  const stages = recordList(background?.stages);
-  const processSummary = isRecord(presentation?.processSummary) ? presentation.processSummary : undefined;
-  const completedParts = completedProgressParts(units, availableArtifacts, stages);
-  const currentStage = currentProgressStage(stages, units, processSummary);
-  const backgroundStatus = asString(background?.status)
-    || asString(processSummary?.status)
-    || (run?.status === 'running' ? 'running' : undefined);
-  return {
-    completedParts,
-    currentStage,
-    backgroundStatus,
-    safeActions: safePresentationActions(run, presentation, background, completedParts),
-  };
-}
-
-function completedProgressParts(
-  units: ReturnType<typeof auditExecutionUnitsForRun>,
-  availableArtifacts: RunPresentationState['availableArtifacts'],
-  stages: Record<string, unknown>[],
-) {
-  const parts = new Map<string, { id: string; label: string; ref?: string; status?: string }>();
-  for (const artifact of availableArtifacts) {
-    parts.set(`artifact:${artifact.id}`, {
-      id: artifact.id,
-      label: artifact.title ? `${artifact.type}: ${artifact.title}` : artifact.type,
-      ref: `artifact:${artifact.id}`,
-      status: 'available',
-    });
-  }
-  for (const unit of units) {
-    if (unit.status !== 'done' && unit.status !== 'record-only' && unit.status !== 'self-healed') continue;
-    const ref = unit.outputRef ?? unit.diffRef ?? unit.stdoutRef ?? unit.codeRef;
-    parts.set(`unit:${unit.id}`, {
-      id: unit.id,
-      label: `${unit.tool} · ${unit.status}`,
-      ref,
-      status: unit.status,
-    });
-  }
-  for (const stage of stages) {
-    const status = asString(stage.status);
-    if (status !== 'completed' && status !== 'done' && status !== 'record-only') continue;
-    const stageId = asString(stage.stageId) ?? asString(stage.id) ?? 'stage';
-    parts.set(`stage:${stageId}`, {
-      id: stageId,
-      label: `stage ${stageId} · ${status}`,
-      ref: asString(stage.ref),
-      status,
-    });
-  }
-  return Array.from(parts.values()).slice(0, 8);
-}
-
-function currentProgressStage(
-  stages: Record<string, unknown>[],
-  units: ReturnType<typeof auditExecutionUnitsForRun>,
-  processSummary?: Record<string, unknown>,
-) {
-  const runningStage = [...stages].reverse().find((stage) => asString(stage.status) === 'running');
-  const latestStage = runningStage ?? stages.at(-1);
-  if (latestStage) {
-    const id = asString(latestStage.stageId) ?? asString(latestStage.id) ?? 'stage';
-    const status = asString(latestStage.status) ?? 'running';
-    return {
-      id,
-      label: asString(latestStage.label) ?? asString(latestStage.title) ?? `stage ${id}`,
-      status,
-      ref: asString(latestStage.ref),
-    };
-  }
-  const runningUnit = units.find((unit) => unit.status === 'running' || unit.status === 'planned');
-  if (runningUnit) {
-    return {
-      id: runningUnit.id,
-      label: runningUnit.tool,
-      status: runningUnit.status,
-      ref: runningUnit.outputRef ?? runningUnit.stdoutRef ?? runningUnit.codeRef,
-    };
-  }
-  const current = asString(processSummary?.currentStage) ?? asString(processSummary?.stage);
-  if (!current) return undefined;
-  return {
-    id: current,
-    label: current,
-    status: asString(processSummary?.status) ?? 'running',
-  };
-}
-
-function safePresentationActions(
-  run: SciForgeRun | undefined,
-  presentation: Record<string, unknown> | undefined,
-  background: Record<string, unknown> | undefined,
-  completedParts: RunPresentationProgress['completedParts'],
-): RunPresentationProgress['safeActions'] {
-  const explicitActions = recordList(presentation?.nextActions).flatMap((action) => {
-    const label = asString(action.label) || asString(action.action) || asString(action.nextStep);
-    if (!label) return [];
-    return [{
-      kind: normalizeSafeActionKind(asString(action.kind) || asString(action.action)),
-      label,
-      ref: asString(action.ref),
-      safe: action.safe === false ? false : true,
-      reason: asString(action.reason),
-    }];
-  });
-  const actions: RunPresentationProgress['safeActions'] = [
-    ...explicitActions,
-    ...(run ? [{
-      kind: 'inspect' as const,
-      label: '查看已落盘 refs 与运行细节',
-      ref: `run:${run.id}`,
-      safe: true,
-      reason: '只读检查，不会重跑或修改已有产物。',
-    }] : []),
-  ];
-  if (run?.status === 'running') {
-    actions.push({
-      kind: 'cancel',
-      label: '安全中止当前后台任务',
-      ref: run ? `run:${run.id}` : undefined,
-      safe: true,
-      reason: completedParts.length ? '已完成部分会保留为 refs；后续 side effect 不会自动恢复。' : '停止后需要重新确认是否继续。',
-    });
-    if (completedParts.length) {
-      actions.push({
-        kind: 'continue',
-        label: '基于已完成部分继续追问',
-        ref: completedParts[0]?.ref,
-        safe: true,
-        reason: '只复用已落盘 refs，不自动执行未完成阶段。',
-      });
-    }
-  }
-  if (run?.status === 'cancelled' || background?.termination) {
-    actions.push({
-      kind: 'confirm',
-      label: '确认后复用 partial refs 或新开运行',
-      ref: run ? `run:${run.id}` : undefined,
-      safe: true,
-      reason: '跨 cancel boundary 需要用户确认，不自动恢复不可逆 side effect。',
-    });
-  }
-  if (run?.status === 'failed') {
-    actions.push({
-      kind: 'rerun',
-      label: '修复阻塞项后重新运行',
-      ref: run ? `run:${run.id}` : undefined,
-      safe: false,
-      reason: '重新运行可能产生新的 workspace side effect。',
-    });
-  }
-  const byKey = new Map<string, RunPresentationProgress['safeActions'][number]>();
-  for (const action of actions) byKey.set(`${action.kind}:${action.label}:${action.ref ?? ''}`, action);
-  return Array.from(byKey.values()).slice(0, 6);
-}
-
-function normalizeSafeActionKind(value: string | undefined): RunPresentationProgress['safeActions'][number]['kind'] {
-  const normalized = String(value ?? '').toLowerCase();
-  if (normalized.includes('cancel') || normalized.includes('stop') || normalized.includes('abort')) return 'cancel';
-  if (normalized.includes('resume')) return 'resume';
-  if (normalized.includes('rerun') || normalized.includes('retry')) return 'rerun';
-  if (normalized.includes('confirm')) return 'confirm';
-  if (normalized.includes('continue')) return 'continue';
-  return 'inspect';
-}
-
-function backgroundCompletionForRun(run?: SciForgeRun) {
-  const raw = isRecord(run?.raw) ? run.raw : undefined;
-  const background = isRecord(raw?.backgroundCompletion) ? raw.backgroundCompletion : undefined;
-  if (!background || !run) return background;
-  return recordBelongsToRun(background, run) ? background : undefined;
-}
-
-function recordBelongsToRun(record: Record<string, unknown>, run: SciForgeRun) {
-  const ids = [
-    asString(record.runId),
-    asString(record.sourceRunId),
-    asString(record.targetRunId),
-    asString(record.parentRunId),
-  ].filter((id): id is string => Boolean(id));
-  return !ids.length || ids.includes(run.id);
-}
-
-function recordExplicitlyBelongsToRun(record: Record<string, unknown>, run: SciForgeRun) {
-  const ids = [
-    asString(record.runId),
-    asString(record.sourceRunId),
-    asString(record.targetRunId),
-    asString(record.parentRunId),
-  ].filter((id): id is string => Boolean(id));
-  return ids.includes(run.id);
-}
-
-function recordLinksDirectContextArtifact(record: Record<string, unknown>) {
-  const serialized = JSON.stringify(record);
-  return serialized.includes(DIRECT_CONTEXT_FAST_PATH_POLICY.outputRef)
-    || serialized.includes(`artifact:${DIRECT_CONTEXT_FAST_PATH_POLICY.reportArtifactId}`)
-    || serialized.includes(`artifact::${DIRECT_CONTEXT_FAST_PATH_POLICY.reportArtifactId}`);
-}
-
 function artifactTitle(artifact: RuntimeArtifact) {
   const metadata = isRecord(artifact.metadata) ? artifact.metadata : undefined;
   return asString(metadata?.title) || asString(metadata?.label) || artifact.id;
-}
-
-function primaryPresentationReason({
-  presentation,
-  blockers,
-  validationFailures,
-  repairStates,
-  units,
-  run,
-  availableArtifacts,
-}: {
-  presentation?: Record<string, unknown>;
-  blockers: string[];
-  validationFailures: ContractValidationFailure[];
-  repairStates: BackendRepairState[];
-  units: ReturnType<typeof auditExecutionUnitsForRun>;
-  run?: SciForgeRun;
-  availableArtifacts: RunPresentationState['availableArtifacts'];
-}) {
-  const processSummary = isRecord(presentation?.processSummary) ? presentation?.processSummary : undefined;
-  const explicit = asString(presentation?.summary)
-    || asString(presentation?.message)
-    || asString(processSummary?.summary)
-    || asString(presentation?.reason)
-    || asString(presentation?.failureReason)
-    || (runHasCurrentFailureBoundary(run) ? asString((run?.raw as Record<string, unknown> | undefined)?.failureReason) : undefined);
-  if (explicit) return compactHumanReason(explicit);
-  const validationReason = validationFailures[0]?.failureReason;
-  if (validationReason) return compactHumanReason(validationReason);
-  const repairReason = repairStates.find((state) => state.failureReason)?.failureReason;
-  if (repairReason) return compactHumanReason(repairReason);
-  const unitReason = units.find((unit) => unit.failureReason || unit.selfHealReason)?.failureReason
-    || units.find((unit) => unit.selfHealReason)?.selfHealReason;
-  if (unitReason) return compactHumanReason(unitReason);
-  if (blockers[0]) return compactHumanReason(blockers[0]);
-  if (!availableArtifacts.length && run?.status === 'completed') return '运行已结束，但没有写入可供右侧结果区渲染的 artifact。';
-  if (run?.status === 'running') return '后台仍在生成结果，当前只显示已经落盘的产物。';
-  return availableArtifacts.length ? `${availableArtifacts.length} 个产物可用于右侧展示。` : '当前 run 没有可展示产物。';
 }
 
 function compactHumanReason(value: string) {
@@ -860,36 +528,6 @@ function runHasCurrentFailureBoundary(run?: SciForgeRun) {
   const rawStatus = String(raw?.status ?? '').toLowerCase();
   if (['failed', 'repair-needed', 'needs-human'].includes(rawStatus)) return true;
   return Boolean(asString(raw?.failureReason) || asString(raw?.blocker));
-}
-
-function runNeedsHuman(run?: SciForgeRun, presentation?: Record<string, unknown>) {
-  return structuredStatusIncludes([run?.status, rawField(run, 'status'), rawField(run, 'kind'), presentation?.status, presentation?.kind], ['needs-human'])
-    || rawField(run, 'requiresHuman') === true
-    || rawField(run, 'requiresUserInput') === true
-    || presentation?.requiresHuman === true
-    || presentation?.requiresUserInput === true;
-}
-
-function structuredHasPartial(run?: SciForgeRun, presentation?: Record<string, unknown>) {
-  return structuredStatusIncludes([
-    run?.status,
-    rawField(run, 'status'),
-    rawField(run, 'kind'),
-    rawField(run, 'resultStatus'),
-    rawField(run, 'completionStatus'),
-    presentation?.status,
-    presentation?.kind,
-    presentation?.resultStatus,
-  ], ['partial', 'partially-complete', 'incomplete', 'insufficient', 'unverified']);
-}
-
-function rawField(run: SciForgeRun | undefined, key: string) {
-  return isRecord(run?.raw) ? run.raw[key] : undefined;
-}
-
-function structuredStatusIncludes(values: unknown[], allowed: readonly string[]) {
-  const allowedStatuses = new Set(allowed);
-  return values.some((value) => typeof value === 'string' && allowedStatuses.has(value.trim().toLowerCase()));
 }
 
 function sanitizeAuditValue(value: unknown, key = '', depth = 0): unknown {

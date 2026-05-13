@@ -254,6 +254,72 @@ describe('execution bundle export policy', () => {
     assert.equal(bundle.auditOnlyRawAttachments.boundary, 'audit-only');
     assert.deepEqual(bundle.auditOnlyRawAttachments.executionUnits.map((unit) => unit.id), ['EU-export']);
   });
+
+  it('replays HarnessDecisionRecorded through the kernel without inferring answer, background, or verification state', () => {
+    const session = fixtureSession({
+      id: 'artifact-harness-decision',
+      exportPolicy: 'allowed',
+      metadata: { runId: 'run-1' },
+    });
+    session.runs[0] = {
+      ...session.runs[0]!,
+      raw: {
+        displayIntent: {
+          conversationEventLog: {
+            schemaVersion: 'sciforge.conversation-event-log.v1',
+            conversationId: 'conversation-harness-decision',
+            events: [
+              {
+                id: 'event-turn',
+                type: 'TurnReceived',
+                actor: 'user',
+                storage: 'inline',
+                timestamp: '2026-05-13T00:00:00.000Z',
+                turnId: 'turn-1',
+                payload: { prompt: 'record harness decision' },
+              },
+              {
+                id: 'event-harness-decision',
+                type: 'HarnessDecisionRecorded',
+                actor: 'kernel',
+                storage: 'inline',
+                timestamp: '2026-05-13T00:00:01.000Z',
+                turnId: 'turn-1',
+                runId: 'run-1',
+                payload: {
+                  summary: 'hook decision recorded',
+                  status: 'satisfied',
+                  text: 'This must not become the visible answer.',
+                  artifactRefs: ['artifact:should-not-count'],
+                  verificationRef: 'artifact:should-not-count-verification',
+                  backgroundState: {
+                    checkpointRefs: ['checkpoint:should-not-count'],
+                    revisionPlan: 'do not infer background state from harness decision payload',
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    const decision = evaluateExecutionBundleExport(session, { activeRun: session.runs[0] });
+    const bundle = buildExecutionBundle(session, decision, { activeRun: session.runs[0] });
+    const projection = bundle.restoredConversationProjections[0]?.projection;
+
+    assert.equal(projection?.conversationId, 'conversation-harness-decision');
+    assert.deepEqual(
+      projection?.executionProcess.map((event) => event.type),
+      ['TurnReceived', 'HarnessDecisionRecorded'],
+    );
+    assert.deepEqual(projection?.activeRun, { id: 'run-1', status: 'planned' });
+    assert.equal(projection?.visibleAnswer, undefined);
+    assert.equal(projection?.verificationState.status, 'unverified');
+    assert.equal(projection?.backgroundState, undefined);
+    assert.deepEqual(projection?.recoverActions, []);
+    assert.deepEqual(projection?.auditRefs, []);
+  });
 });
 
 function fixtureSession(artifact: Pick<RuntimeArtifact, 'id'> & Partial<RuntimeArtifact>): SciForgeSession {

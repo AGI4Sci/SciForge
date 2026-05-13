@@ -1,4 +1,6 @@
 import type { SciForgeRun } from '../domain';
+import { isConversationEventLog } from '../../../runtime/conversation-kernel/event-log';
+import { projectConversation } from '../../../runtime/conversation-kernel/projection';
 
 export type UiConversationProjectionStatus =
   | 'idle'
@@ -113,6 +115,14 @@ export function conversationProjectionForRun(run?: SciForgeRun): UiConversationP
   const taskOutcomeProjection = isRecord(displayIntent?.taskOutcomeProjection) ? displayIntent.taskOutcomeProjection : undefined;
   const response = parseMaybeJsonObject(run?.response);
   const responseResultPresentation = isRecord(response?.resultPresentation) ? response.resultPresentation : undefined;
+  const fromEventLog = [
+    displayIntent?.conversationEventLog,
+    taskOutcomeProjection?.conversationEventLog,
+    resultPresentation?.conversationEventLog,
+    displayResultPresentation?.conversationEventLog,
+    responseResultPresentation?.conversationEventLog,
+  ].map(projectConversationEventLogForUi).find(Boolean);
+  if (fromEventLog) return fromEventLog;
   return [
     resultPresentation?.conversationProjection,
     displayIntent?.conversationProjection,
@@ -120,6 +130,11 @@ export function conversationProjectionForRun(run?: SciForgeRun): UiConversationP
     taskOutcomeProjection?.conversationProjection,
     responseResultPresentation?.conversationProjection,
   ].map(normalizeConversationProjection).find(Boolean);
+}
+
+function projectConversationEventLogForUi(value: unknown): UiConversationProjection | undefined {
+  if (!isConversationEventLog(value)) return undefined;
+  return normalizeConversationProjection(projectConversation(value));
 }
 
 export function conversationProjectionStatus(projection?: UiConversationProjection): UiConversationProjectionStatus {

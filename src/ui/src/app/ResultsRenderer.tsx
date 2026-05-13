@@ -456,11 +456,10 @@ function RunStatusSummary({ session, activeRun, viewPlan }: { session: SciForgeS
   const recoverActions = runRecoverActions(session, activeRun).slice(0, 4);
   const presentationState = runPresentationState(session, activeRun, viewPlan);
   const shouldShowPresentationState = presentationState.kind !== 'ready' || presentationState.nextSteps.length > 0;
-  const rawRunFailed = !projection && run?.status === 'failed';
-  const failureDriven = failures.length || validationFailures.length || rawRunFailed;
+  const failureDriven = failures.length || validationFailures.length;
   const projectionStateDriven = projection && presentationState.kind !== 'ready';
   const statusDriven = failureDriven || projectionStateDriven;
-  if (!failures.length && !blockers.length && !validationFailures.length && !repairStates.length && !runtimeDriftDiagnostics.length && !recoverActions.length && !rawRunFailed && !shouldShowPresentationState) return null;
+  if (!failures.length && !blockers.length && !validationFailures.length && !repairStates.length && !runtimeDriftDiagnostics.length && !recoverActions.length && !shouldShowPresentationState) return null;
   return (
     <Card className={cx('run-status-summary', failureDriven ? 'failed' : presentationState.kind)}>
       <SectionHeader
@@ -744,7 +743,7 @@ function ViewPlanSummary({ viewPlan, session, activeRun }: { viewPlan: RuntimeRe
     : contractValidationFailures(session, activeRun).length + failedExecutionUnits(session, activeRun).length;
   const runFailed = projection
     ? presentationState.kind === 'failed' || presentationState.kind === 'recoverable' || presentationState.kind === 'needs-human'
-    : run?.status === 'failed';
+    : false;
   const summary = interactiveViewResultSummaryPresentation({
     items: viewPlan.allItems,
     diagnosticCount,

@@ -18,35 +18,30 @@ test('results renderer execution model projects failure audit data without React
   const activeRun = session.runs[0];
   const failures = contractValidationFailures(session, activeRun);
   const repairStates = backendRepairStates(session, activeRun);
+  const state = runPresentationState(session, activeRun);
+  const rawItems = rawAuditItems(session, activeRun, { allItems: [] } as never);
 
   assert.equal(shouldOpenRunAuditDetails(session, activeRun), true);
-  assert.equal(failures.length, 1);
-  assert.equal(failures[0]?.failureKind, 'artifact-schema');
-  assert.deepEqual(runRecoverActions(session, activeRun), [
-    'regenerate report artifact',
-    'rerun validator',
-  ]);
+  assert.equal(state.kind, 'empty');
+  assert.equal(state.title, '主结果等待 ConversationProjection');
+  assert.equal(failures.length, 0);
+  assert.deepEqual(runRecoverActions(session, activeRun), []);
+  assert.deepEqual(runAuditBlockers(session, activeRun), []);
   assert.ok(runAuditRefs(session, activeRun).includes('artifact:bad-report'));
-  assert.ok(runAuditBlockers(session, activeRun).some((line) => line.includes('ContractValidationFailure(artifact-schema)')));
-  assert.equal(repairStates[0]?.label, 'backendRepair');
-  assert.ok(repairStates[0]?.refs.includes('log:repair-stderr'));
-  assert.equal(rawAuditItems(session, activeRun, { allItems: [] } as never).some((item) => item.id === 'execution-units'), true);
+  assert.ok(runAuditRefs(session, activeRun).includes('log:repair-stderr'));
+  assert.equal(repairStates.length, 0);
+  assert.equal(rawItems.some((item) => item.id === 'execution-units'), true);
+  assert.match(rawItems.find((item) => item.id === `run-${activeRun?.id}`)?.value ?? '', /sciforge\.contract-validation-failure\.v1/);
 });
 
-test('results renderer execution model normalizes response JSON failures and refs', () => {
+test('results renderer execution model keeps response JSON failures audit-only', () => {
   const session = responseFailureSession();
   const activeRun = session.runs[0];
   const failures = contractValidationFailures(session, activeRun);
 
-  assert.equal(failures.length, 1);
-  assert.equal(failures[0]?.failureKind, 'unknown');
-  assert.equal(failures[0]?.failureReason, 'citation URI is unavailable');
-  assert.deepEqual(failures[0]?.relatedRefs, [
-    'artifact:evidence-matrix',
-    'artifact:missing-citation',
-    'agentserver://run/citation-404',
-  ]);
-  assert.deepEqual(runRecoverActions(session, activeRun), ['repair citations']);
+  assert.equal(shouldOpenRunAuditDetails(session, activeRun), true);
+  assert.equal(failures.length, 0);
+  assert.deepEqual(runRecoverActions(session, activeRun), []);
   assert.deepEqual(runAuditRefs(session, activeRun), [
     'artifact:evidence-matrix',
     'artifact:missing-citation',
@@ -129,14 +124,13 @@ test('results renderer execution model scopes failure units through active run a
     recoverActions: ['wrong run action'],
   });
 
-  const failures = runAuditBlockers(session, session.runs[0]);
   const refs = runAuditRefs(session, session.runs[0]);
   const recoverActions = runRecoverActions(session, session.runs[0]);
 
-  assert.ok(failures.some((line) => line.includes('EU-report')));
+  assert.deepEqual(runAuditBlockers(session, session.runs[0]), []);
   assert.ok(refs.includes('artifact:bad-report'));
   assert.equal(refs.includes('artifact:other-report'), false);
-  assert.equal(recoverActions.includes('wrong run action'), false);
+  assert.deepEqual(recoverActions, []);
 });
 
 test('results renderer execution model does not call completed empty runs ready', () => {
@@ -169,7 +163,7 @@ test('results renderer execution model does not call completed empty runs ready'
 
   assert.equal(state.kind, 'empty');
   assert.equal(state.title, '本轮没有生成可展示 artifact');
-  assert.match(state.reason, /没有写入可供右侧结果区渲染的 artifact/);
+  assert.match(state.reason, /没有 ConversationProjection 或可展示产物/);
 });
 
 test('results renderer execution model lets conversation projection override raw failed state', () => {
@@ -535,19 +529,18 @@ test('results renderer execution model scopes failed direct-context runs by stru
     updatedAt: '2026-05-13T00:00:10.000Z',
   };
 
-  const blockers = runAuditBlockers(session, session.runs[0]);
+  const rawItems = rawAuditItems(session, session.runs[0], { allItems: [] } as never);
   const state = runPresentationState(session, session.runs[0]);
 
   assert.equal(failedExecutionUnits(session, session.runs[0]).some((unit) => unit.id === 'EU-old-failed'), false);
   assert.equal(failedExecutionUnits(session, session.runs[0]).some((unit) => unit.id === 'EU-old-embedded'), false);
-  assert.ok(failedExecutionUnits(session, session.runs[0]).some((unit) => unit.id === 'EU-direct-context-missing'));
-  assert.equal(blockers.some((line) => line.includes('Historical AgentServer')), false);
-  assert.equal(blockers.some((line) => line.includes('Historical embedded')), false);
-  assert.equal(state.kind, 'recoverable');
-  assert.equal(state.reason, 'Missing expected artifacts: evidence-matrix');
-  assert.equal(state.nextSteps.includes('inspect old raw stderr'), false);
-  assert.equal(runRecoverActions(session, session.runs[0]).includes('inspect old embedded diagnostic'), false);
+  assert.equal(failedExecutionUnits(session, session.runs[0]).some((unit) => unit.id === 'EU-direct-context-missing'), false);
+  assert.deepEqual(runAuditBlockers(session, session.runs[0]), []);
+  assert.equal(state.kind, 'empty');
+  assert.match(state.reason, /已保留在审计中，不驱动主状态/);
+  assert.deepEqual(runRecoverActions(session, session.runs[0]), []);
   assert.equal(state.availableArtifacts.some((artifact) => artifact.id === 'old-runtime-diagnostic'), false);
+  assert.match(rawItems.find((item) => item.id === 'execution-units')?.value ?? '', /EU-direct-context-missing/);
 });
 
 test('results renderer execution model keeps current-run repair state scoped to the active run', () => {
@@ -586,12 +579,14 @@ test('results renderer execution model keeps current-run repair state scoped to 
 
   const state = runPresentationState(session, session.runs[0]);
 
-  assert.equal(state.kind, 'recoverable');
-  assert.deepEqual(runRecoverActions(session, session.runs[0]), ['regenerate current artifact']);
-  assert.ok(runAuditBlockers(session, session.runs[0]).some((line) => line.includes('Current artifact contract failed')));
+  assert.equal(state.kind, 'empty');
+  assert.match(state.reason, /已保留在审计中，不驱动主状态/);
+  assert.deepEqual(runRecoverActions(session, session.runs[0]), []);
+  assert.deepEqual(runAuditBlockers(session, session.runs[0]), []);
+  assert.ok(runAuditRefs(session, session.runs[0]).includes('log:current-repair'));
 });
 
-test('results renderer execution model surfaces partial-first progress for running runs', () => {
+test('results renderer execution model does not let raw running progress drive main state', () => {
   const session: SciForgeSession = {
     schemaVersion: 2,
     sessionId: 'session-running-partial',
@@ -643,17 +638,13 @@ test('results renderer execution model surfaces partial-first progress for runni
 
   const state = runPresentationState(session, session.runs[0]);
 
-  assert.equal(state.kind, 'partial');
-  assert.match(state.title, /已有部分结果/);
+  assert.equal(state.kind, 'ready');
+  assert.equal(state.progress, undefined);
   assert.ok(state.availableArtifacts.some((artifact) => artifact.id === 'partial-report'));
-  assert.ok(state.progress?.completedParts.some((part) => part.ref === 'artifact:partial-report'));
-  assert.equal(state.progress?.currentStage?.id, 'fulltext');
-  assert.equal(state.progress?.backgroundStatus, 'running');
-  assert.ok(state.progress?.safeActions.some((action) => action.kind === 'cancel' && action.safe));
-  assert.ok(state.progress?.safeActions.some((action) => action.kind === 'continue' && action.ref === 'artifact:partial-report'));
+  assert.deepEqual(state.nextSteps, []);
 });
 
-test('results renderer execution model separates needs-human from empty artifacts', () => {
+test('results renderer execution model keeps raw needs-human resultPresentation audit-only', () => {
   const session = responseFailureSession();
   session.runs[0]!.status = 'completed';
   session.runs[0]!.response = 'needs-human: choose one provider credential before retry';
@@ -670,10 +661,9 @@ test('results renderer execution model separates needs-human from empty artifact
 
   const state = runPresentationState(session, session.runs[0]);
 
-  assert.equal(state.kind, 'needs-human');
-  assert.match(state.title, /人工/);
-  assert.match(state.reason, /Provider credentials are missing/);
-  assert.ok(state.nextSteps.includes('Add provider credential'));
+  assert.equal(state.kind, 'empty');
+  assert.doesNotMatch(state.reason, /Provider credentials are missing/);
+  assert.deepEqual(state.nextSteps, []);
 });
 
 test('results renderer execution model rejects unowned embedded payload units and artifacts', () => {

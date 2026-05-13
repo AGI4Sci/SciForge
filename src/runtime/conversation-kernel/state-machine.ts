@@ -5,6 +5,7 @@ import type {
   ConversationState,
 } from './types';
 import { classifyFailureOwner } from './failure-classifier';
+import { harnessDecisionStateFromEvent } from './harness-decision';
 import { historyEditStateFromEvent } from './history-edit';
 
 const terminalStatuses = new Set<ConversationKernelStatus>([
@@ -46,8 +47,14 @@ export function applyConversationEvent(state: ConversationState, event: Conversa
     case 'TurnReceived':
       return { ...next, status: 'planned', terminal: false };
     case 'Planned':
-    case 'HarnessDecisionRecorded':
       return { ...next, status: 'planned', terminal: false };
+    case 'HarnessDecisionRecorded':
+      return {
+        ...next,
+        status: 'planned',
+        terminal: false,
+        harnessDecision: harnessDecisionStateFromEvent(event) ?? next.harnessDecision,
+      };
     case 'Dispatched':
       return { ...next, status: 'dispatched', terminal: false };
     case 'PartialReady':

@@ -4,6 +4,14 @@ import {
   runtimeArtifactPathRefSource,
   runtimeArtifactRef,
 } from '@sciforge-ui/runtime-contract/artifacts';
+import { projectConversation } from '../../runtime/conversation-kernel/projection';
+import type {
+  ConversationEvent,
+  ConversationEventLog,
+  ConversationEventType,
+  ConversationProjection,
+  ConversationRef,
+} from '../../runtime/conversation-kernel/types';
 
 type ExportBundleRefBoundary = 'event-log-truth' | 'restored-projection' | 'artifact-summary' | 'audit-only-raw-attachment';
 
@@ -69,76 +77,10 @@ export interface ExportBundleFinalShape {
   };
 }
 
-interface ConversationRefForExport {
-  ref: string;
-  digest?: string;
-  mime?: string;
-  sizeBytes?: number;
-  label?: string;
-}
-
-interface ConversationEventForExport {
-  id: string;
-  type: string;
-  timestamp: string;
-  actor?: string;
-  turnId?: string;
-  runId?: string;
-  storage: 'inline' | 'ref';
-  payload: Record<string, unknown> & { refs?: ConversationRefForExport[] };
-}
-
-interface ConversationEventLogForExport {
-  schemaVersion: 'sciforge.conversation-event-log.v1';
-  conversationId: string;
-  events: ConversationEventForExport[];
-}
-
-interface RestoredConversationProjectionForExport {
-  schemaVersion: 'sciforge.conversation-projection.v1';
-  conversationId: string;
-  currentTurn?: {
-    id: string;
-    prompt?: string;
-  };
-  visibleAnswer?: {
-    status: string;
-    text?: string;
-    artifactRefs: string[];
-    diagnostic?: string;
-  };
-  activeRun?: {
-    id: string;
-    status: string;
-  };
-  artifacts: ConversationRefForExport[];
-  executionProcess: Array<{
-    eventId: string;
-    type: string;
-    summary: string;
-    timestamp: string;
-  }>;
-  recoverActions: string[];
-  verificationState: {
-    status: string;
-    verifierRef?: string;
-    verdict?: string;
-  };
-  backgroundState?: {
-    status: string;
-    checkpointRefs: string[];
-    revisionPlan: string;
-    foregroundPartialRef?: string;
-  };
-  auditRefs: string[];
-  diagnostics: Array<{
-    severity: 'error' | 'warning' | 'info';
-    code: string;
-    message: string;
-    eventId?: string;
-    refs?: ConversationRefForExport[];
-  }>;
-}
+type ConversationRefForExport = ConversationRef;
+type ConversationEventForExport = ConversationEvent;
+type ConversationEventLogForExport = ConversationEventLog;
+type RestoredConversationProjectionForExport = ConversationProjection;
 
 export function evaluateExecutionBundleExport(session: SciForgeSession, options: ExecutionBundleExportOptions = {}): ExportPolicyDecision {
   const artifacts = scopedArtifacts(session, options.activeRun, uniqueById(options.executionUnits ?? scopedExecutionUnits(session, options.activeRun)));
@@ -335,148 +277,72 @@ function normalizeConversationEventLogForExport(value: unknown): ConversationEve
 function normalizeConversationEventForExport(value: unknown): ConversationEventForExport | undefined {
   const event = parseJsonRecord(value);
   const id = stringField(event?.id);
-  const type = stringField(event?.type);
+  const type = conversationEventTypeField(event?.type);
   const timestamp = stringField(event?.timestamp);
+  const actor = conversationActorField(event?.actor);
   const storage = event?.storage === 'ref' ? 'ref' : event?.storage === 'inline' ? 'inline' : undefined;
   const payload = parseJsonRecord(event?.payload);
-  if (!event || !id || !type || !timestamp || !storage || !payload) return undefined;
-  const refs = storage === 'ref' ? normalizeConversationRefsForExport(payload.refs) : undefined;
-  if (storage === 'ref' && (!refs || refs.length === 0)) return undefined;
-  return {
+  if (!event || !id || !type || !timestamp || !actor || !storage || !payload) return undefined;
+  const base = {
     id,
     type,
     timestamp,
-    actor: stringField(event.actor),
+    actor,
     turnId: stringField(event.turnId),
     runId: stringField(event.runId),
+    causationId: stringField(event.causationId),
+  };
+  if (storage === 'ref') {
+    const refs = normalizeConversationRefsForExport(payload.refs);
+    if (refs.length === 0) return undefined;
+    return {
+      ...base,
+      storage,
+      payload: { ...payload, refs },
+    };
+  }
+  return {
+    ...base,
     storage,
-    payload: refs ? { ...payload, refs } : payload,
+    payload,
   };
 }
 
 function restoreConversationProjectionForExport(log: ConversationEventLogForExport): RestoredConversationProjectionForExport {
-  const state = replayConversationStateForExport(log);
-  const currentTurnEvent = [...log.events].reverse().find((event) => event.type === 'TurnReceived');
-  const answerEvent = [...log.events].reverse().find((event) => terminalAnswerEventTypes.has(event.type));
-  const artifacts = uniqueConversationRefs(log.events.flatMap((event) => event.storage === 'ref' ? event.payload.refs ?? [] : []));
-  const auditRefs = unique([
-    ...artifacts.map((ref) => ref.ref),
-    ...(state.verificationState.verifierRef ? [state.verificationState.verifierRef] : []),
-    ...(state.backgroundState?.checkpointRefs ?? []),
-  ]);
-  return {
-    schemaVersion: 'sciforge.conversation-projection.v1',
-    conversationId: log.conversationId,
-    currentTurn: currentTurnEvent ? {
-      id: currentTurnEvent.turnId ?? currentTurnEvent.id,
-      prompt: stringField(currentTurnEvent.payload.prompt),
-    } : undefined,
-    visibleAnswer: answerEvent ? {
-      status: state.status,
-      text: stringField(answerEvent.payload.text),
-      artifactRefs: answerEvent.storage === 'ref'
-        ? (answerEvent.payload.refs ?? []).map((ref) => ref.ref)
-        : asStringArray(answerEvent.payload.artifactRefs),
-      diagnostic: state.diagnostics[0]?.message,
-    } : undefined,
-    activeRun: state.activeRunId ? { id: state.activeRunId, status: state.status } : undefined,
-    artifacts,
-    executionProcess: log.events.map((event) => ({
-      eventId: event.id,
-      type: event.type,
-      summary: eventSummaryForExport(event),
-      timestamp: event.timestamp,
-    })),
-    recoverActions: recoverActionsForProjectionState(state),
-    verificationState: state.verificationState,
-    backgroundState: state.backgroundState,
-    auditRefs,
-    diagnostics: state.diagnostics,
-  };
+  return projectConversation(log);
 }
 
-const terminalAnswerEventTypes = new Set(['Satisfied', 'DegradedResult', 'ExternalBlocked', 'RepairNeeded', 'NeedsHuman']);
+type ConversationActor = ConversationEvent['actor'];
 
-function replayConversationStateForExport(log: ConversationEventLogForExport) {
-  let status = 'idle';
-  let activeRunId: string | undefined;
-  const diagnostics: RestoredConversationProjectionForExport['diagnostics'] = [];
-  let verificationState: RestoredConversationProjectionForExport['verificationState'] = { status: 'unverified' };
-  let backgroundState: RestoredConversationProjectionForExport['backgroundState'];
-  for (const event of log.events) {
-    activeRunId = event.runId ?? activeRunId;
-    if (event.type === 'TurnReceived' || event.type === 'Planned' || event.type === 'HarnessDecisionRecorded') status = 'planned';
-    else if (event.type === 'Dispatched') status = 'dispatched';
-    else if (event.type === 'PartialReady') status = 'partial-ready';
-    else if (event.type === 'OutputMaterialized') status = 'output-materialized';
-    else if (event.type === 'Validated') status = 'validated';
-    else if (event.type === 'Satisfied') status = 'satisfied';
-    else if (event.type === 'DegradedResult') status = 'degraded-result';
-    else if (event.type === 'ExternalBlocked') {
-      status = 'external-blocked';
-      diagnostics.push(failureDiagnosticForExport(event, 'external-provider'));
-    } else if (event.type === 'RepairNeeded') {
-      status = 'repair-needed';
-      diagnostics.push(failureDiagnosticForExport(event, 'payload-contract'));
-    } else if (event.type === 'NeedsHuman') status = 'needs-human';
-    else if (event.type === 'BackgroundRunning' || event.type === 'BackgroundCompleted') {
-      status = event.type === 'BackgroundCompleted' ? 'degraded-result' : 'background-running';
-      backgroundState = backgroundStateForExport(event);
-    } else if (event.type === 'VerificationRecorded') {
-      verificationState = verificationStateForExport(event);
-    }
-  }
-  return { status, activeRunId, diagnostics, verificationState, backgroundState };
+const conversationEventTypes = [
+  'TurnReceived',
+  'Planned',
+  'HarnessDecisionRecorded',
+  'Dispatched',
+  'PartialReady',
+  'OutputMaterialized',
+  'Validated',
+  'Satisfied',
+  'DegradedResult',
+  'ExternalBlocked',
+  'RepairNeeded',
+  'NeedsHuman',
+  'HistoryEdited',
+  'BackgroundRunning',
+  'BackgroundCompleted',
+  'VerificationRecorded',
+] as const satisfies readonly ConversationEventType[];
+
+const conversationActors = ['user', 'kernel', 'backend', 'runtime', 'verifier', 'ui'] as const satisfies readonly ConversationActor[];
+
+function conversationEventTypeField(value: unknown): ConversationEventType | undefined {
+  const type = stringField(value);
+  return type && (conversationEventTypes as readonly string[]).includes(type) ? type as ConversationEventType : undefined;
 }
 
-function failureDiagnosticForExport(event: ConversationEventForExport, fallbackCode: string): RestoredConversationProjectionForExport['diagnostics'][number] {
-  const refs = event.storage === 'ref' ? event.payload.refs ?? [] : [];
-  return {
-    severity: 'error',
-    code: fallbackCode,
-    message: stringField(event.payload.reason)
-      ?? stringField(event.payload.failureReason)
-      ?? stringField(event.payload.summary)
-      ?? 'Conversation event recorded a recoverable failure.',
-    eventId: event.id,
-    refs,
-  };
-}
-
-function backgroundStateForExport(event: ConversationEventForExport): NonNullable<RestoredConversationProjectionForExport['backgroundState']> {
-  return {
-    status: event.type === 'BackgroundCompleted' ? 'completed' : 'running',
-    checkpointRefs: event.storage === 'ref'
-      ? (event.payload.refs ?? []).map((ref) => ref.ref)
-      : asStringArray(event.payload.checkpointRefs),
-    revisionPlan: stringField(event.payload.revisionPlan) ?? '',
-    foregroundPartialRef: stringField(event.payload.foregroundPartialRef),
-  };
-}
-
-function verificationStateForExport(event: ConversationEventForExport): RestoredConversationProjectionForExport['verificationState'] {
-  const verifierRef = event.storage === 'ref' ? event.payload.refs?.[0]?.ref : stringField(event.payload.verifierRef);
-  const verdict = stringField(event.payload.verdict);
-  if (!verifierRef) return { status: 'unverified', verdict };
-  return {
-    status: verdict === 'failed' || verdict === 'fail' ? 'failed' : 'verified',
-    verifierRef,
-    verdict,
-  };
-}
-
-function recoverActionsForProjectionState(state: ReturnType<typeof replayConversationStateForExport>) {
-  if (state.diagnostics.length) return unique(state.diagnostics.map((diagnostic) => diagnostic.message));
-  if (state.backgroundState?.revisionPlan) return [state.backgroundState.revisionPlan];
-  if (state.status === 'degraded-result') return ['Reuse available refs or request a supplement for missing evidence.'];
-  return [];
-}
-
-function eventSummaryForExport(event: ConversationEventForExport) {
-  return stringField(event.payload.summary)
-    ?? stringField(event.payload.prompt)
-    ?? stringField(event.payload.text)
-    ?? (event.storage === 'ref' ? `${event.type} referenced ${event.payload.refs?.length ?? 0} refs` : event.type);
+function conversationActorField(value: unknown): ConversationActor | undefined {
+  const actor = stringField(value);
+  return actor && (conversationActors as readonly string[]).includes(actor) ? actor as ConversationActor : undefined;
 }
 
 function buildRefsManifestForExport(input: {

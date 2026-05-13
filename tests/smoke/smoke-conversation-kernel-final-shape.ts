@@ -65,6 +65,19 @@ assert.equal(
 const replayLog = appendAll(createConversationEventLog('smoke-replay-projection'), [
   inlineEvent('turn-replay', 'TurnReceived', { prompt: 'summarize retained evidence refs' }, { turnId: 't-replay' }),
   inlineEvent('planned-replay', 'Planned', { summary: 'plan from harness decision' }, { turnId: 't-replay' }),
+  refEvent('harness-decision-replay', 'HarnessDecisionRecorded', {
+    schemaVersion: 'sciforge.harness-decision-record.v1',
+    decisionId: 'decision-replay',
+    profileId: 'balanced-default',
+    digest: 'sha256:decision-replay',
+    summary: 'recorded harness decision replayed without rerunning hooks',
+    contractRef: 'runtime://agent-harness/contracts/replay',
+    traceRef: 'runtime://agent-harness/traces/replay',
+    refs: [
+      { ref: 'runtime://agent-harness/contracts/replay', digest: 'sha256:contract', mime: 'application/json', sizeBytes: 256 },
+      { ref: 'runtime://agent-harness/traces/replay', digest: 'sha256:trace', mime: 'application/json', sizeBytes: 384 },
+    ],
+  }, { turnId: 't-replay', runId: 'run-replay' }),
   inlineEvent('dispatch-replay', 'Dispatched', { summary: 'dispatch generated task' }, { turnId: 't-replay', runId: 'run-replay' }),
   refEvent('partial-replay', 'PartialReady', {
     summary: 'partial answer materialized',
@@ -95,18 +108,36 @@ assert.equal(replayProjection.schemaVersion, 'sciforge.conversation-projection.v
 assert.equal(replayProjection.currentTurn?.id, 't-replay');
 assert.equal(replayProjection.currentTurn?.prompt, 'summarize retained evidence refs');
 assert.deepEqual(replayProjection.activeRun, { id: 'run-replay', status: 'satisfied' });
+assert.equal(replayState.harnessDecision?.profileId, 'balanced-default');
+assert.equal(replayProjection.harnessDecision?.digest, 'sha256:decision-replay');
+assert.deepEqual(replayProjection.harnessDecision?.refs, [
+  'runtime://agent-harness/contracts/replay',
+  'runtime://agent-harness/traces/replay',
+]);
 assert.equal(replayProjection.visibleAnswer?.text, 'Answer is available from retained refs.');
 assert.deepEqual(replayProjection.visibleAnswer?.artifactRefs, ['artifact:final-report']);
 assert.equal(replayProjection.verificationState.status, 'verified');
 assert.equal(replayProjection.verificationState.verifierRef, 'artifact:verification-evidence');
 assert.deepEqual(
   replayProjection.auditRefs,
-  ['artifact:partial-answer', 'artifact:final-report', 'artifact:verification-evidence'],
+  [
+    'runtime://agent-harness/contracts/replay',
+    'runtime://agent-harness/traces/replay',
+    'artifact:partial-answer',
+    'artifact:final-report',
+    'artifact:verification-evidence',
+  ],
 );
 assert.equal(replayProjection.executionProcess.length, replayLog.events.length);
 assert.deepEqual(
   replayProjection.artifacts.map((ref) => ref.ref),
-  ['artifact:partial-answer', 'artifact:final-report', 'artifact:verification-evidence'],
+  [
+    'runtime://agent-harness/contracts/replay',
+    'runtime://agent-harness/traces/replay',
+    'artifact:partial-answer',
+    'artifact:final-report',
+    'artifact:verification-evidence',
+  ],
 );
 
 const backgroundLog = appendAll(createConversationEventLog('smoke-background-recorded'), [
@@ -231,7 +262,7 @@ for (const field of ['currentTurn', 'visibleAnswer', 'activeRun', 'artifacts', '
   );
 }
 
-console.log(`[ok] conversation kernel final-shape smoke passed: external-provider repair routing, replay projection, recorded background/verification contracts, UI projection bridge (${uiBridge.files.join(', ')})`);
+console.log(`[ok] conversation kernel final-shape smoke passed: external-provider repair routing, replay projection, recorded harness/background/verification contracts, UI projection bridge (${uiBridge.files.join(', ')})`);
 
 function appendAll(log: ConversationEventLog, events: ConversationEvent[]): ConversationEventLog {
   let next = log;

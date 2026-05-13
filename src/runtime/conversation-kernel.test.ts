@@ -3,12 +3,15 @@ import test from 'node:test';
 
 import {
   appendConversationEvent,
+  conversationEventLogDigest,
   createConversationEventLog,
   projectConversation,
   replayConversationState,
   validateBackgroundContinuation,
   validateVerificationGate,
+  type ConversationEvent,
 } from './conversation-kernel';
+import { materializeTaskOutcomeProjection } from './gateway/task-outcome-projection';
 
 test('conversation kernel rejects large inline payloads and requires refs for large evidence', () => {
   const log = createConversationEventLog('c-large');
@@ -226,6 +229,115 @@ test('conversation projection does not infer background or verification state fr
   assert.deepEqual(projection.auditRefs, []);
 });
 
+test('conversation kernel requires dedicated harness decision payload fields', () => {
+  const cases: Array<[string, Record<string, unknown>]> = [
+    ['harness-decision-id-required', {
+      profileId: 'research-grade',
+      digest: 'sha256:decision',
+      refs: [{ ref: 'runtime://agent-harness/contracts/contract-1' }],
+    }],
+    ['harness-decision-profile-required', {
+      decisionId: 'decision-1',
+      digest: 'sha256:decision',
+      refs: [{ ref: 'runtime://agent-harness/contracts/contract-1' }],
+    }],
+    ['harness-decision-digest-required', {
+      decisionId: 'decision-1',
+      profileId: 'research-grade',
+      refs: [{ ref: 'runtime://agent-harness/contracts/contract-1' }],
+    }],
+    ['harness-decision-ref-required', {
+      decisionId: 'decision-1',
+      profileId: 'research-grade',
+      digest: 'sha256:decision',
+      refs: [],
+    }],
+  ];
+
+  for (const [code, payload] of cases) {
+    const result = appendConversationEvent(
+      createConversationEventLog(`c-${code}`),
+      harnessDecisionEvent(payload),
+    );
+    assert.equal(result.rejected?.code, code);
+    assert.equal(result.log.events.length, 0);
+  }
+});
+
+test('gateway outcome event log records harness decision before dispatch and replays audit refs', () => {
+  const contractRef = 'runtime://agent-harness/contracts/research-grade-contract';
+  const traceRef = 'runtime://agent-harness/traces/research-grade-trace';
+  const projection = materializeTaskOutcomeProjection({
+    payload: {
+      message: 'The requested research report is available.',
+      confidence: 0.92,
+      claimType: 'summary',
+      evidenceLevel: 'contract-backed',
+      reasoningTrace: '',
+      claims: [],
+      uiManifest: [],
+      executionUnits: [{ id: 'answer', status: 'done', tool: 'workspace-runtime-gateway' }],
+      artifacts: [{
+        id: 'report-1',
+        type: 'research-report',
+        title: 'Research report',
+        dataRef: 'artifact:report-1',
+      }],
+      displayIntent: {
+        protocolStatus: 'protocol-success',
+        taskOutcome: 'satisfied',
+        updatedAt: '2026-05-13T02:00:00.000Z',
+      },
+    },
+    request: {
+      skillDomain: 'literature',
+      prompt: 'Find papers and produce a research report.',
+      artifacts: [],
+      uiState: {
+        agentHarness: {
+          decisionId: 'decision-research-grade-1',
+          profileId: 'research-grade',
+          contractRef,
+          traceRef,
+          summary: {
+            decisionSummary: 'Use research-grade contract and preserve trace refs.',
+            profileId: 'research-grade',
+            contractRef,
+            traceRef,
+          },
+          contract: { intentMode: 'research', explorationMode: 'evidence-first' },
+          trace: { stages: [{ stage: 'onDispatch', callbackId: 'trace:onDispatch' }] },
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(
+    projection.conversationEventLog.events.slice(0, 3).map((event) => event.type),
+    ['TurnReceived', 'HarnessDecisionRecorded', 'Dispatched'],
+  );
+  const decisionEvent = projection.conversationEventLog.events.find((event) => event.type === 'HarnessDecisionRecorded');
+  assert.equal(decisionEvent?.storage, 'ref');
+  assert.equal(decisionEvent?.payload.profileId, 'research-grade');
+  assert.match(String(decisionEvent?.payload.digest), /^sha256:/);
+  assert.deepEqual(
+    projection.conversationProjection.auditRefs.filter((ref) => ref === contractRef || ref === traceRef),
+    [contractRef, traceRef],
+  );
+  assert.equal(projection.conversationProjection.harnessDecision?.contractRef, contractRef);
+  assert.equal(projection.conversationProjection.harnessDecision?.traceRef, traceRef);
+
+  const replayedState = replayConversationState(projection.conversationEventLog);
+  assert.equal(replayedState.harnessDecision?.summary, 'Use research-grade contract and preserve trace refs.');
+  assert.deepEqual(
+    replayedState.harnessDecision?.refs.filter((ref) => ref === contractRef || ref === traceRef),
+    [contractRef, traceRef],
+  );
+  const replayedProjection = projectConversation(projection.conversationEventLog, replayedState);
+  assert.deepEqual(replayedProjection.harnessDecision, projection.conversationProjection.harnessDecision);
+  assert.equal(conversationEventLogDigest(projection.conversationEventLog), projection.conversationEventLogDigest);
+});
+
 test('conversation kernel replays history edits as projection and ref invalidation boundaries', () => {
   let log = createConversationEventLog('c-history-edit');
   log = appendConversationEvent(log, {
@@ -286,3 +398,14 @@ test('conversation kernel requires projection invalidation metadata for history 
   assert.equal(result.rejected?.code, 'history-edit-projection-invalidation-required');
   assert.equal(result.log.events.length, 0);
 });
+
+function harnessDecisionEvent(payload: Record<string, unknown>): ConversationEvent {
+  return {
+    id: `event-${String(payload.decisionId ?? 'missing')}`,
+    type: 'HarnessDecisionRecorded',
+    storage: 'ref',
+    actor: 'kernel',
+    timestamp: '2026-05-13T02:00:00.000Z',
+    payload,
+  } as ConversationEvent;
+}
