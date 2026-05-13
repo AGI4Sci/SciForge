@@ -4,7 +4,7 @@ import { collectRuntimeRefsFromValue, runtimePayloadKeyLooksLikeBodyCarrier } fr
 import type { RuntimeArtifact, SciForgeRun, SciForgeSession } from '../domain';
 import type { RuntimeResolvedViewPlan } from './results/viewPlanResolver';
 import { asString, asStringList, isRecord } from './results/resultArtifactHelpers';
-import { artifactsForRun, executionUnitsForRun, runUsesContextOnlyFastPath } from './results/executionUnitsForRun';
+import { artifactsForRun, auditExecutionUnitsForRun, runUsesContextOnlyFastPath } from './results/executionUnitsForRun';
 import {
   conversationProjectionArtifactRefs,
   conversationProjectionAuditRefs,
@@ -73,7 +73,7 @@ export function runPresentationState(session: SciForgeSession, activeRun?: SciFo
   const recoverActions = runRecoverActions(session, run);
   const validationFailures = contractValidationFailures(session, run);
   const repairStates = backendRepairStates(session, run);
-  const units = executionUnitsForRun(session, run);
+  const units = auditExecutionUnitsForRun(session, run);
   const presentation = resultPresentationForRun(run);
   const progress = runPresentationProgress(run, units, availableArtifacts, presentation);
   const needsHuman = runNeedsHuman(run, presentation) || units.some((unit) => unit.status === 'needs-human' || unit.verificationVerdict === 'needs-human');
@@ -172,7 +172,7 @@ export function runPresentationState(session: SciForgeSession, activeRun?: SciFo
 
 export function failedExecutionUnits(session: SciForgeSession, activeRun?: SciForgeRun) {
   const run = activeRun ?? session.runs.at(-1);
-  return executionUnitsForRun(session, run).filter((unit) => isBlockingExecutionUnitStatus(unit.status));
+  return auditExecutionUnitsForRun(session, run).filter((unit) => isBlockingExecutionUnitStatus(unit.status));
 }
 
 function isBlockingExecutionUnitStatus(status: unknown) {
@@ -216,7 +216,7 @@ export function runRecoverActions(session: SciForgeSession, activeRun?: SciForge
     ...contractValidationFailures(session, run).flatMap((failure) => failure.recoverActions),
     ...backendRepairStates(session, run).flatMap((state) => state.recoverActions),
     ...failedExecutionUnits(session, run).flatMap((unit) => unit.recoverActions ?? []),
-    ...executionUnitsForRun(session, run).flatMap((unit) => unit.status === 'repair-needed' ? unit.recoverActions ?? [] : []),
+    ...auditExecutionUnitsForRun(session, run).flatMap((unit) => unit.status === 'repair-needed' ? unit.recoverActions ?? [] : []),
   ]));
 }
 
@@ -235,7 +235,7 @@ export function runAuditRefs(session: SciForgeSession, activeRun?: SciForgeRun) 
     ]),
     ...backendRepairStates(session, run).flatMap((state) => state.refs),
     ...(run?.references ?? []).map((ref) => ref.ref),
-    ...executionUnitsForRun(session, run).flatMap((unit) => [unit.codeRef, unit.stdoutRef, unit.stderrRef, unit.outputRef, unit.diffRef]).filter((ref): ref is string => Boolean(ref)),
+    ...auditExecutionUnitsForRun(session, run).flatMap((unit) => [unit.codeRef, unit.stdoutRef, unit.stderrRef, unit.outputRef, unit.diffRef]).filter((ref): ref is string => Boolean(ref)),
   ]));
 }
 
@@ -424,7 +424,7 @@ function parseMaybeJsonObject(value: string): Record<string, unknown> | undefine
 
 export function rawAuditItems(session: SciForgeSession, activeRun: SciForgeRun | undefined, viewPlan: RuntimeResolvedViewPlan) {
   const run = activeRun ?? session.runs.at(-1);
-  const scopedExecutionUnits = executionUnitsForRun(session, run);
+  const scopedExecutionUnits = auditExecutionUnitsForRun(session, run);
   const scopedArtifacts = artifactsForRun(session, run);
   return [
     run ? { id: `run-${run.id}`, label: `run ${run.id}`, value: JSON.stringify(sanitizeAuditValue(run.raw ?? run), null, 2) } : undefined,
@@ -599,7 +599,7 @@ function projectionPresentationProgress(
 
 function runPresentationProgress(
   run: SciForgeRun | undefined,
-  units: ReturnType<typeof executionUnitsForRun>,
+  units: ReturnType<typeof auditExecutionUnitsForRun>,
   availableArtifacts: RunPresentationState['availableArtifacts'],
   presentation?: Record<string, unknown>,
 ): RunPresentationProgress {
@@ -620,7 +620,7 @@ function runPresentationProgress(
 }
 
 function completedProgressParts(
-  units: ReturnType<typeof executionUnitsForRun>,
+  units: ReturnType<typeof auditExecutionUnitsForRun>,
   availableArtifacts: RunPresentationState['availableArtifacts'],
   stages: Record<string, unknown>[],
 ) {
@@ -659,7 +659,7 @@ function completedProgressParts(
 
 function currentProgressStage(
   stages: Record<string, unknown>[],
-  units: ReturnType<typeof executionUnitsForRun>,
+  units: ReturnType<typeof auditExecutionUnitsForRun>,
   processSummary?: Record<string, unknown>,
 ) {
   const runningStage = [...stages].reverse().find((stage) => asString(stage.status) === 'running');
@@ -822,7 +822,7 @@ function primaryPresentationReason({
   blockers: string[];
   validationFailures: ContractValidationFailure[];
   repairStates: BackendRepairState[];
-  units: ReturnType<typeof executionUnitsForRun>;
+  units: ReturnType<typeof auditExecutionUnitsForRun>;
   run?: SciForgeRun;
   availableArtifacts: RunPresentationState['availableArtifacts'];
 }) {

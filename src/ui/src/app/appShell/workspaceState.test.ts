@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { SciForgeSession, SciForgeWorkspaceState, TimelineEventRecord } from '../../domain';
 import { sessionWriteConflictsForState, withSessionWriteGuard } from '../../sessionStore';
-import { appendTimelineEventToWorkspace, applySessionUpdateToWorkspace, recoverableRunFocusForSession, touchWorkspaceUpdatedAt, tryApplySessionUpdateToWorkspace, workspaceRecoveryFocusForState } from './workspaceState';
+import { appendTimelineEventToWorkspace, applySessionUpdateToWorkspace, recoverableRunAuditFallbackForSession, recoverableRunFocusForSession, touchWorkspaceUpdatedAt, tryApplySessionUpdateToWorkspace, workspaceRecoveryFocusForState } from './workspaceState';
 
 function session(runs: SciForgeSession['runs'] = []): SciForgeSession {
   return {
@@ -192,7 +192,7 @@ test('run timeline includes failed execution units from the failed run payload',
   assert.deepEqual(next.timelineEvents?.[0].executionUnitRefs, ['EU-failed-payload']);
 });
 
-test('recoverable focus selects repair-needed run instead of timeline-only history', () => {
+test('recoverable focus selects projection-level repair-needed run instead of timeline-only or raw history', () => {
   const oldFailedSession = session([{
     id: 'run-old-failed',
     scenarioId: 'scenario-any',
@@ -202,6 +202,29 @@ test('recoverable focus selects repair-needed run instead of timeline-only histo
     createdAt: '2026-05-07T01:00:00.000Z',
     completedAt: '2026-05-07T01:02:00.000Z',
   }]);
+  const rawRepairSession = {
+    ...session([{
+      id: 'run-raw-repair-needed',
+      scenarioId: 'scenario-raw-repair',
+      status: 'completed' as const,
+      prompt: 'raw repair',
+      response: 'partial',
+      createdAt: '2026-05-07T03:00:00.000Z',
+      completedAt: '2026-05-07T03:02:00.000Z',
+    }]),
+    sessionId: 'session-raw-repair',
+    scenarioId: 'scenario-raw-repair',
+    executionUnits: [{
+      id: 'unit-raw-repair',
+      tool: 'validator',
+      params: '{}',
+      status: 'repair-needed' as const,
+      hash: 'repair',
+      outputRef: 'run:run-raw-repair-needed/result.json',
+      failureReason: 'legacy raw repair state remains audit-only',
+      recoverActions: ['resume failed run with existing refs'],
+    }],
+  };
   const recentRepairSession = {
     ...session([{
       id: 'run-repair-needed',
@@ -211,24 +234,31 @@ test('recoverable focus selects repair-needed run instead of timeline-only histo
       response: 'partial',
       createdAt: '2026-05-07T02:00:00.000Z',
       completedAt: '2026-05-07T02:02:00.000Z',
+      raw: {
+        resultPresentation: {
+          conversationProjection: {
+            schemaVersion: 'sciforge.conversation-projection.v1',
+            conversationId: 'conversation-repair',
+            visibleAnswer: { status: 'satisfied', text: 'Partial result is available.', artifactRefs: [] },
+            activeRun: { id: 'run-repair-needed', status: 'repair-needed' },
+            artifacts: [],
+            executionProcess: [],
+            recoverActions: [],
+            verificationState: { status: 'unverified' },
+            auditRefs: ['audit:projection-repair'],
+            diagnostics: [],
+          },
+        },
+      },
     }]),
     sessionId: 'session-repair',
     scenarioId: 'scenario-repair',
-    executionUnits: [{
-      id: 'unit-repair',
-      tool: 'validator',
-      params: '{}',
-      status: 'repair-needed' as const,
-      hash: 'repair',
-      outputRef: 'run:run-repair-needed/result.json',
-      failureReason: 'artifact schema still needs repair',
-      recoverActions: ['resume failed run with existing refs'],
-    }],
   };
   const state = {
     ...workspace(oldFailedSession),
     sessionsByScenario: {
       [oldFailedSession.scenarioId]: oldFailedSession,
+      [rawRepairSession.scenarioId]: rawRepairSession,
       [recentRepairSession.scenarioId]: recentRepairSession,
     } as SciForgeWorkspaceState['sessionsByScenario'],
     timelineEvents: [{
@@ -245,6 +275,10 @@ test('recoverable focus selects repair-needed run instead of timeline-only histo
     }],
   };
 
+  assert.equal(recoverableRunFocusForSession(oldFailedSession), undefined);
+  assert.equal(recoverableRunFocusForSession(rawRepairSession), undefined);
+  assert.equal(recoverableRunAuditFallbackForSession(oldFailedSession)?.activeRunId, 'run-old-failed');
+  assert.equal(recoverableRunAuditFallbackForSession(rawRepairSession)?.activeRunId, 'run-raw-repair-needed');
   assert.equal(recoverableRunFocusForSession(recentRepairSession)?.activeRunId, 'run-repair-needed');
   assert.deepEqual(workspaceRecoveryFocusForState(state), {
     scenarioId: 'scenario-repair',
@@ -311,6 +345,65 @@ test('recoverable focus follows conversation projection before raw run status', 
   assert.equal(recoverableRunFocusForSession(projectedSatisfied), undefined);
   assert.equal(recoverableRunFocusForSession(projectedRepair)?.activeRunId, 'run-projected-repair');
   assert.equal(recoverableRunFocusForSession(projectedRepair)?.reason, 'repair-needed-run');
+});
+
+test('recoverable focus can be driven by projection verification and background state', () => {
+  const projectedVerification = session([{
+    id: 'run-projected-verification',
+    scenarioId: 'scenario-any',
+    status: 'completed' as const,
+    prompt: 'projected verification',
+    response: 'legacy complete',
+    createdAt: '2026-05-07T01:00:00.000Z',
+    raw: {
+      resultPresentation: {
+        conversationProjection: {
+          schemaVersion: 'sciforge.conversation-projection.v1',
+          conversationId: 'conversation-projected-verification',
+          visibleAnswer: { status: 'satisfied', text: 'Visible result is ready.', artifactRefs: [] },
+          activeRun: { id: 'run:run-projected-verification', status: 'satisfied' },
+          artifacts: [],
+          executionProcess: [],
+          recoverActions: [],
+          verificationState: { status: 'failed', verifierRef: 'verification:projection' },
+          auditRefs: [],
+          diagnostics: [],
+        },
+      },
+    },
+  }]);
+  const projectedBackground = session([{
+    id: 'run-projected-background',
+    scenarioId: 'scenario-any',
+    status: 'completed' as const,
+    prompt: 'projected background',
+    response: 'legacy complete',
+    createdAt: '2026-05-07T02:00:00.000Z',
+    raw: {
+      displayIntent: {
+        conversationProjection: {
+          schemaVersion: 'sciforge.conversation-projection.v1',
+          conversationId: 'conversation-projected-background',
+          visibleAnswer: { status: 'satisfied', text: 'Foreground partial is ready.', artifactRefs: [] },
+          activeRun: { id: 'run-projected-background', status: 'satisfied' },
+          artifacts: [],
+          executionProcess: [],
+          recoverActions: [],
+          verificationState: { status: 'unverified' },
+          backgroundState: {
+            status: 'running',
+            checkpointRefs: ['checkpoint:background'],
+            revisionPlan: 'Merge the background revision when it completes.',
+          },
+          auditRefs: [],
+          diagnostics: [],
+        },
+      },
+    },
+  }]);
+
+  assert.equal(recoverableRunFocusForSession(projectedVerification)?.activeRunId, 'run-projected-verification');
+  assert.equal(recoverableRunFocusForSession(projectedBackground)?.activeRunId, 'run-projected-background');
 });
 
 test('run timeline scopes artifact refs to the run that produced them', () => {

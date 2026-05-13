@@ -52,6 +52,7 @@ export type BackgroundCompletionStatus = 'running' | 'completed' | 'failed' | 'c
 export const BACKGROUND_COMPLETION_CONTRACT_ID = 'sciforge.background-completion.v1' as const;
 export const BACKGROUND_COMPLETION_TOOL_ID = 'sciforge.background-completion' as const;
 export const ACCEPTANCE_REPAIR_RERUN_TOOL_ID = 'sciforge.acceptance-repair-rerun' as const;
+export const CONVERSATION_PROJECTION_CONTINUATION_TOOL_ID = 'conversation.projection.continuation' as const;
 
 export interface BackgroundCompletionRef {
   ref: string;

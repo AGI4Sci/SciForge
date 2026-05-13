@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { guidanceQueuedEvent } from '@sciforge-ui/runtime-contract';
-import type { BackgroundCompletionRuntimeEvent, NormalizedAgentResponse, RuntimeArtifact, RuntimeExecutionUnit, SciForgeMessage, SciForgeSession, UserGoalSnapshot } from '../../domain';
+import type { BackgroundCompletionRuntimeEvent, NormalizedAgentResponse, RuntimeArtifact, RuntimeExecutionUnit, SciForgeMessage, SciForgeRun, SciForgeSession, UserGoalSnapshot } from '../../domain';
 import {
   applyHistoricalUserMessageEdit,
   applyBackgroundCompletionEventToSession,
@@ -182,6 +182,107 @@ test('compact prior run payload keeps stream transcript as digest only', () => {
   assert.doesNotMatch(JSON.stringify(payload.runs[0]?.raw), /最近 读取/);
   assert.equal((payload.runs[0]?.raw as { streamProcess?: { summaryDigest?: { hash?: string } } }).streamProcess?.summaryDigest, undefined);
   assert.equal(model, undefined);
+});
+
+test('next-turn payload prefers conversation projection and keeps raw execution state audit-only', () => {
+  const userMessage = message('msg-user', 'user', 'continue from the verified artifact', '2026-05-07T01:00:00.000Z');
+  const rawBody = `RAW_SESSION_RUN_BODY ${'provider payload '.repeat(500)}`;
+  const projectedRun: SciForgeRun = {
+    id: 'run-projected',
+    scenarioId: 'literature-evidence-review',
+    status: 'failed',
+    prompt: 'make the report',
+    response: rawBody,
+    createdAt: '2026-05-07T00:00:00.000Z',
+    raw: {
+      providerPayload: rawBody,
+      resultPresentation: {
+        conversationProjection: {
+          schemaVersion: 'sciforge.conversation-projection.v1',
+          conversationId: 'session-1',
+          currentTurn: { id: 'turn-projected', prompt: rawBody },
+          visibleAnswer: {
+            status: 'degraded-result',
+            text: `Visible bounded answer ${'summary '.repeat(200)}`,
+            artifactRefs: ['artifact:report-1'],
+            diagnostic: 'External verifier stopped after partial evidence.',
+          },
+          activeRun: { id: 'run-projected', status: 'degraded-result' },
+          artifacts: [{ ref: 'artifact:report-1', digest: 'sha256-report', label: 'Report' }],
+          executionProcess: [],
+          recoverActions: ['Resume from checkpoint without resending raw provider payload.'],
+          verificationState: { status: 'uncertain', verifierRef: 'file:.sciforge/verifier.json', verdict: 'uncertain' },
+          backgroundState: {
+            status: 'running',
+            checkpointRefs: ['file:.sciforge/checkpoints/run-projected.json'],
+            revisionPlan: 'Continue the remaining verification pass.',
+          },
+          auditRefs: ['file:.sciforge/audit/provider.log', 'execution-unit:unit-audit'],
+          diagnostics: [{
+            severity: 'warning',
+            code: 'partial-verification',
+            message: 'Verification was partial.',
+            refs: [{ ref: 'file:.sciforge/diagnostics/partial.json' }],
+          }],
+        },
+      },
+    },
+  };
+  const rawExecutionUnit: RuntimeExecutionUnit = {
+    id: 'unit-raw-old',
+    tool: 'raw.provider.tool',
+    params: `RAW_EXECUTION_PARAMS ${'large params '.repeat(400)}`,
+    status: 'done',
+    hash: 'raw-old',
+    runId: 'old-run',
+  };
+  const auditExecutionUnit: RuntimeExecutionUnit = {
+    id: 'unit-audit',
+    tool: 'verifier.audit',
+    params: `AUDIT_PARAMS ${'large params '.repeat(400)}`,
+    status: 'failed',
+    hash: 'audit-hash',
+    runId: 'run-projected',
+    stdoutRef: 'file:.sciforge/audit/provider.log',
+    outputArtifacts: ['report-1'],
+    failureReason: rawBody,
+    recoverActions: ['legacy raw recover action should not drive continuation'],
+  };
+
+  const payload = requestPayloadForTurn(session({
+    messages: [message('msg-old', 'user', 'old', '2026-05-07T00:00:00.000Z'), userMessage],
+    runs: [projectedRun],
+    executionUnits: [rawExecutionUnit, auditExecutionUnit],
+  }), userMessage, [{
+    id: 'selected-ref-1',
+    kind: 'message',
+    title: 'Selected prior answer',
+    ref: 'message:prior',
+    summary: 'User selected the prior answer.',
+    payload: { textPreview: 'large selected text should not be copied here'.repeat(200) },
+  }]);
+
+  const projectionUnit = payload.executionUnits.find((unit) => unit.tool === 'conversation.projection.continuation');
+  const auditUnit = payload.executionUnits.find((unit) => unit.id === 'unit-audit');
+  const rawRun = payload.runs[0]?.raw as {
+    projectionAudit?: { auditRefs?: string[]; selectedRefs?: string[] };
+    streamProcess?: unknown;
+  } | undefined;
+  const serialized = JSON.stringify(payload);
+
+  assert.ok(projectionUnit, 'projection continuation unit should be present');
+  assert.equal(payload.executionUnits.some((unit) => unit.id === 'unit-raw-old'), false);
+  assert.equal(auditUnit?.params.includes('RAW_EXECUTION_PARAMS'), false);
+  assert.equal(auditUnit?.recoverActions, undefined);
+  assert.match(projectionUnit?.params ?? '', /conversation-projection-continuation-set/);
+  assert.match(projectionUnit?.params ?? '', /degraded-result/);
+  assert.match(projectionUnit?.params ?? '', /message:prior/);
+  assert.match(rawRun?.projectionAudit?.auditRefs?.join('\n') ?? '', /provider\.log|verifier\.json/);
+  assert.deepEqual(rawRun?.projectionAudit?.selectedRefs, ['message:prior']);
+  assert.equal(rawRun?.streamProcess, undefined);
+  assert.doesNotMatch(serialized, /RAW_SESSION_RUN_BODY provider payload/);
+  assert.doesNotMatch(serialized, /RAW_EXECUTION_PARAMS large params/);
+  assert.doesNotMatch(serialized, /legacy raw recover action/);
 });
 
 test('rolls back an edited user message and prunes later run-owned state', () => {

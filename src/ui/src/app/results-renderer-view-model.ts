@@ -118,7 +118,7 @@ export function emptyResultsState(focusMode: ResultFocusMode, dismissedAllInFilt
     };
   }
   if (focusMode === 'all') {
-    if (presentationState && presentationState.kind !== 'ready') {
+    if (presentationState && (presentationState.kind !== 'ready' || presentationState.reason)) {
       return {
         title: presentationState.title,
         detail: [

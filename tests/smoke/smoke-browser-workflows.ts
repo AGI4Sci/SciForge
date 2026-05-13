@@ -188,8 +188,13 @@ try {
     await failedRestorePage.goto(`http://127.0.0.1:${uiPort}/`, { waitUntil: 'domcontentloaded' });
     logStep('workspace restore opens the latest recoverable failed run directly in the workbench');
     await failedRestorePage.locator('.active-run-banner', { hasText: 'run-browser-failed-restore' }).waitFor({ timeout: 15_000 });
-    await failedRestorePage.locator('.run-status-summary', { hasText: '运行需要处理' }).waitFor({ timeout: 15_000 });
-    await failedRestorePage.locator('.run-status-summary', { hasText: 'PDF retrieval partially failed' }).waitFor({ timeout: 15_000 });
+    await failedRestorePage.getByLabel('结果区 focus mode').getByRole('button', { name: '全部', exact: true }).evaluate((button) => {
+      if (button instanceof HTMLElement) button.click();
+    });
+    const failedRestoreSummary = failedRestorePage.locator('.run-status-summary').first();
+    await failedRestoreSummary.waitFor({ timeout: 15_000 });
+    await failedRestoreSummary.getByRole('heading', { name: /运行需要(恢复|处理)/ }).waitFor({ timeout: 15_000 });
+    await failedRestoreSummary.getByText('PDF retrieval partially failed', { exact: false }).first().waitFor({ timeout: 15_000 });
     await failedRestorePage.locator('.run-recover-actions', { hasText: 'inspect diagnostics without rerun' }).first().waitFor({ timeout: 15_000 });
     await failedRestorePage.locator('.run-recover-actions', { hasText: 'rerun failed PDF downloads only after explicit confirmation' }).first().waitFor({ timeout: 15_000 });
     await failedRestorePage.locator('code', { hasText: 'file:.sciforge/task-results/failed-restore.bundle.json' }).first().waitFor({ timeout: 15_000 });

@@ -14,7 +14,7 @@ import {
   type UiConversationProjection,
 } from '../conversation-projection-view-model';
 import { executionStatusLabel, executionStatusShortLabel, executionVerificationPresentation } from '../results/executionStatusPresentation';
-import { executionUnitsForRun } from '../results/executionUnitsForRun';
+import { auditExecutionUnitsForRun } from '../results/executionUnitsForRun';
 
 type ExecutionProcessStep = {
   id: string;
@@ -38,7 +38,7 @@ export function RunExecutionProcess({
 }) {
   const run = session.runs.find((item) => item.id === runId);
   const projection = conversationProjectionForRun(run);
-  const units = projection ? [] : executionUnitsForRun(session, run).slice(-8);
+  const units = projection ? [] : auditExecutionUnitsForRun(session, run).slice(-8);
   if (!run && !units.length && !trace) return null;
   const auditObjectReferences = projection
     ? objectReferencesForProjection(projection, session, runId)

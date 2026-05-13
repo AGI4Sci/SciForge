@@ -273,10 +273,70 @@ test('ResultsRenderer lets projection satisfied state suppress raw failed run an
 
   const html = renderResultsRenderer(session, { activeRunId: 'run-projection-visible-ready' });
 
+  assert.match(html, /Projection-visible answer is authoritative/);
   assert.doesNotMatch(html, /运行需要处理/);
   assert.doesNotMatch(html, /LEGACY_RAW_FAILURE_SHOULD_NOT_RENDER/);
   assert.doesNotMatch(html, /LEGACY_EXECUTION_UNIT_SHOULD_NOT_RENDER/);
   assert.doesNotMatch(html, /查看运行细节/);
+});
+
+test('ResultsRenderer uses projection execution process instead of raw execution units in execution focus', () => {
+  const session: SciForgeSession = {
+    ...emptySession(),
+    runs: [{
+      ...completedRun('run-projection-execution'),
+      status: 'failed',
+      response: 'legacy failed response',
+      raw: {
+        resultPresentation: {
+          conversationProjection: {
+            schemaVersion: 'sciforge.conversation-projection.v1',
+            conversationId: 'conversation-projection-execution',
+            currentTurn: { id: 'turn-projection-execution', prompt: 'summarize refs' },
+            visibleAnswer: {
+              status: 'satisfied',
+              text: 'Projection-visible answer is authoritative.',
+              artifactRefs: [],
+            },
+            artifacts: [],
+            executionProcess: [{
+              eventId: 'event-projection-output',
+              type: 'OutputMaterialized',
+              summary: 'Projection output was materialized from event log.',
+              timestamp: '2026-05-13T00:00:01.000Z',
+            }],
+            recoverActions: [],
+            verificationState: { status: 'not-required' },
+            auditRefs: ['execution-unit:EU-legacy-raw'],
+            diagnostics: [],
+          },
+        },
+      },
+    }],
+    executionUnits: [{
+      id: 'EU-legacy-raw',
+      tool: 'legacy.raw.execution',
+      params: '{}',
+      status: 'repair-needed',
+      hash: 'legacy',
+      failureReason: 'LEGACY_RAW_EU_SHOULD_NOT_RENDER_IN_MAIN_EXECUTION_FOCUS',
+    }],
+  };
+
+  const html = renderResultsRenderer(session, { activeRunId: 'run-projection-execution', initialFocusMode: 'execution' });
+  const model = createResultsRendererViewModel({
+    scenarioId: 'literature-evidence-review',
+    session,
+    defaultSlots: [{ componentId: 'report-viewer', artifactRef: 'missing-report' }] as never,
+    activeRun: session.runs[0],
+    focusMode: 'all',
+  });
+
+  assert.match(html, /Projection 执行过程/);
+  assert.match(html, /OutputMaterialized: Projection output was materialized from event log/);
+  assert.doesNotMatch(html, /legacy\.raw\.execution/);
+  assert.doesNotMatch(html, /LEGACY_RAW_EU_SHOULD_NOT_RENDER_IN_MAIN_EXECUTION_FOCUS/);
+  assert.equal(model.viewPlan.allItems.some((item) => item.module.moduleId === 'execution-provenance-table'), false);
 });
 
 test('ResultsRenderer surfaces runtime compatibility drift without rerunning old sessions', () => {

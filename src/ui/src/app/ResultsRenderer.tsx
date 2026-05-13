@@ -29,7 +29,7 @@ import {
   isRecord,
   toRecordList,
 } from './results/resultArtifactHelpers';
-import { executionUnitsForRun } from './results/executionUnitsForRun';
+import { auditExecutionUnitsForRun } from './results/executionUnitsForRun';
 import {
   descriptorCanUseWorkspacePreview,
   descriptorDerivativeKind,
@@ -417,10 +417,30 @@ function PrimaryResult({
 }
 
 function ExecutionOnlyResult({ session, activeRun }: { session: SciForgeSession; activeRun?: SciForgeRun }) {
-  const units = executionUnitsForRun(session, activeRun);
+  const projection = conversationProjectionForRun(activeRun ?? session.runs.at(-1));
+  if (projection) return <ProjectionExecutionOnlyResult projection={projection} />;
+  const units = auditExecutionUnitsForRun(session, activeRun);
   return (
     <div className="stack">
       <ExecutionPanel session={session} executionUnits={units} activeRun={activeRun} embedded />
+    </div>
+  );
+}
+
+function ProjectionExecutionOnlyResult({ projection }: { projection: UiConversationProjection }) {
+  const events = projection.executionProcess.slice(-12);
+  return (
+    <div className="stack">
+      <Card className="code-card">
+        <SectionHeader icon={Terminal} title="Projection 执行过程" subtitle={conversationProjectionStatus(projection)} />
+        {events.length ? (
+          <div className="run-status-lines">
+            {events.map((event) => (
+              <span key={event.eventId}>{event.type}: {event.summary || event.eventId}</span>
+            ))}
+          </div>
+        ) : <p className="empty-state">当前 ConversationProjection 没有声明执行过程事件。</p>}
+      </Card>
     </div>
   );
 }
@@ -438,12 +458,14 @@ function RunStatusSummary({ session, activeRun, viewPlan }: { session: SciForgeS
   const shouldShowPresentationState = presentationState.kind !== 'ready' || presentationState.nextSteps.length > 0;
   const rawRunFailed = !projection && run?.status === 'failed';
   const failureDriven = failures.length || validationFailures.length || rawRunFailed;
+  const projectionStateDriven = projection && presentationState.kind !== 'ready';
+  const statusDriven = failureDriven || projectionStateDriven;
   if (!failures.length && !blockers.length && !validationFailures.length && !repairStates.length && !runtimeDriftDiagnostics.length && !recoverActions.length && !rawRunFailed && !shouldShowPresentationState) return null;
   return (
     <Card className={cx('run-status-summary', failureDriven ? 'failed' : presentationState.kind)}>
       <SectionHeader
-        icon={runtimeDriftDiagnostics.length && !failureDriven ? Shield : AlertTriangle}
-        title={failureDriven ? '运行需要处理' : runtimeDriftDiagnostics.length ? '历史 session 需要兼容性检查' : presentationState.title}
+        icon={runtimeDriftDiagnostics.length && !statusDriven ? Shield : AlertTriangle}
+        title={failureDriven ? '运行需要处理' : projectionStateDriven ? presentationState.title : runtimeDriftDiagnostics.length ? '历史 session 需要兼容性检查' : presentationState.title}
         subtitle={run ? `${run.id} · ${presentationState.kind}` : '当前 session'}
       />
       <RunPresentationStateSummary state={presentationState} />
@@ -560,7 +582,7 @@ function RunAuditDetails({
 }) {
   const rawItems = rawAuditItems(session, activeRun, viewPlan);
   const failureCount = failedExecutionUnits(session, activeRun).length;
-  const units = executionUnitsForRun(session, activeRun ?? session.runs.at(-1));
+  const units = auditExecutionUnitsForRun(session, activeRun ?? session.runs.at(-1));
   return (
     <details className="result-details-panel audit-details-panel" open={defaultOpen}>
       <summary>

@@ -3,7 +3,7 @@ import { DIRECT_CONTEXT_FAST_PATH_POLICY } from '@sciforge-ui/runtime-contract/a
 
 const FAILURE_BOUNDARY_STATUSES = new Set(['failed', 'repair-needed', 'needs-human']);
 
-export function executionUnitsForRun(session: SciForgeSession, run?: SciForgeRun): RuntimeExecutionUnit[] {
+export function auditExecutionUnitsForRun(session: SciForgeSession, run?: SciForgeRun): RuntimeExecutionUnit[] {
   const visibleUnits = visibleExecutionUnits([
     ...session.executionUnits,
     ...(!run ? session.runs.flatMap(executionUnitsFromRunPayload) : []),

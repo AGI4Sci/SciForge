@@ -64,6 +64,11 @@ export interface UiConversationProjection {
   }>;
 }
 
+export interface UiConversationProjectionRecoverFocusSignal {
+  activeRunId?: string;
+  reason: 'active-run' | 'recover-actions' | 'verification' | 'background';
+}
+
 const projectionStatuses = new Set<UiConversationProjectionStatus>([
   'idle',
   'planned',
@@ -77,6 +82,27 @@ const projectionStatuses = new Set<UiConversationProjectionStatus>([
   'repair-needed',
   'needs-human',
   'background-running',
+]);
+
+const recoverFocusRunStatuses = new Set<UiConversationProjectionStatus>([
+  'degraded-result',
+  'external-blocked',
+  'repair-needed',
+  'needs-human',
+  'background-running',
+]);
+
+const recoverFocusVerificationStatuses = new Set([
+  'failed',
+  'rejected',
+  'required',
+]);
+
+const recoverFocusBackgroundStatuses = new Set([
+  'running',
+  'background-running',
+  'pending',
+  'queued',
 ]);
 
 export function conversationProjectionForRun(run?: SciForgeRun): UiConversationProjection | undefined {
@@ -104,6 +130,27 @@ export function conversationProjectionIsRecoverable(projection?: UiConversationP
   if (!projection) return false;
   return ['degraded-result', 'external-blocked', 'repair-needed', 'needs-human'].includes(conversationProjectionStatus(projection))
     || conversationProjectionRecoverActions(projection).length > 0;
+}
+
+export function conversationProjectionRecoverFocusSignal(projection?: UiConversationProjection): UiConversationProjectionRecoverFocusSignal | undefined {
+  if (!projection) return undefined;
+  if (projection.activeRun && recoverFocusRunStatuses.has(projection.activeRun.status)) {
+    return { activeRunId: projection.activeRun.id, reason: 'active-run' };
+  }
+  if (conversationProjectionRecoverActions(projection).length > 0) {
+    return { activeRunId: projection.activeRun?.id, reason: 'recover-actions' };
+  }
+  if (projection.verificationState?.status && recoverFocusVerificationStatuses.has(projection.verificationState.status)) {
+    return { activeRunId: projection.activeRun?.id, reason: 'verification' };
+  }
+  const backgroundStatus = projection.backgroundState?.status;
+  if (
+    (backgroundStatus && recoverFocusBackgroundStatuses.has(backgroundStatus))
+    || Boolean(projection.backgroundState?.revisionPlan)
+  ) {
+    return { activeRunId: projection.activeRun?.id, reason: 'background' };
+  }
+  return undefined;
 }
 
 export function conversationProjectionRecoverActions(projection?: UiConversationProjection): string[] {

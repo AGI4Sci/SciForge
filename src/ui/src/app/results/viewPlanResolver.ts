@@ -3,7 +3,15 @@ import { uiModuleRegistry, type RuntimeUIModule } from '../../uiModuleRegistry';
 import type { DisplayIntent, ObjectReference, ResolvedViewPlan, RuntimeArtifact, ScenarioInstanceId, SciForgeRun, SciForgeSession, UIManifestSlot, ViewPlanSection } from '../../domain';
 import type { ScenarioId } from '../../data';
 import { artifactForObjectReference, syntheticArtifactForObjectReference } from '../../../../../packages/support/object-references';
-import { artifactsForRun, executionUnitsForRun } from './executionUnitsForRun';
+import {
+  conversationProjectionArtifactRefs,
+  conversationProjectionAuditRefs,
+  conversationProjectionForRun,
+  conversationProjectionPrimaryDiagnostic,
+  conversationProjectionVisibleText,
+  type UiConversationProjection,
+} from '../conversation-projection-view-model';
+import { artifactsForRun, auditExecutionUnitsForRun } from './executionUnitsForRun';
 import type { ResultFocusMode } from './ResultShell';
 import {
   blockedInteractiveViewDesignForIntent,
@@ -121,17 +129,30 @@ export function resolveViewPlan({
   pinnedObjectReferences?: ObjectReference[];
 }): RuntimeResolvedViewPlan {
   const effectiveRun = activeRun ?? session.runs.at(-1);
-  const resultArtifacts = artifactsForResultPresentation(session, effectiveRun);
-  const resultExecutionUnits = executionUnitsForRun(session, effectiveRun);
-  const displayIntent = effectiveRun?.status === 'failed'
+  const projection = conversationProjectionForRun(effectiveRun);
+  const resultArtifacts = projection
+    ? artifactsForConversationProjection(session, projection)
+    : artifactsForResultPresentation(session, effectiveRun);
+  const resultExecutionUnits = projection ? [] : auditExecutionUnitsForResultPlan(session, effectiveRun);
+  const displayIntent = projection
+    ? displayIntentFromConversationProjection(projection, resultArtifacts)
+    : effectiveRun?.status === 'failed'
     ? inferDisplayIntentFromInteractiveArtifacts(resultArtifacts, uiModuleRegistry)
     : extractDisplayIntent(effectiveRun) ?? inferDisplayIntentFromInteractiveArtifacts(resultArtifacts, uiModuleRegistry);
-  const presentationArtifactActions = resultPresentationArtifactActions(effectiveRun);
+  const presentationArtifactActions = projection
+    ? projectionArtifactActions(projection, resultArtifacts)
+    : resultPresentationArtifactActions(effectiveRun);
   const presentationActionArtifactIds = new Set(presentationArtifactActions
     .map((action) => stripArtifactRef(action.ref ?? ''))
     .filter(Boolean));
   const runtimeSlots = session.runs.length && session.uiManifest.length ? session.uiManifest : [];
-  const seedSlots = (runtimeSlots.length ? runtimeSlots : defaultSlots?.length ? defaultSlots : defaultSlotsForAgent(scenarioId))
+  const projectionArtifactIds = projection ? new Set(resultArtifacts.map((artifact) => artifact.id)) : undefined;
+  const projectionRuntimeSlots = projectionArtifactIds
+    ? runtimeSlots.filter((slot) => slot.artifactRef && projectionArtifactIds.has(stripArtifactRef(slot.artifactRef)))
+    : runtimeSlots;
+  const seedSlots = (projection
+    ? projectionRuntimeSlots
+    : runtimeSlots.length ? runtimeSlots : defaultSlots?.length ? defaultSlots : defaultSlotsForAgent(scenarioId))
     .slice()
     .sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99));
   const diagnostics: string[] = [];
@@ -223,7 +244,9 @@ export function resolveViewPlan({
   for (const artifactType of displayIntent.requiredArtifactTypes ?? []) {
     if (presentationArtifactActions.some((action) => action.artifactType === artifactType && (action.ref || findBestInteractiveArtifactForType(resultArtifacts, artifactType)))) continue;
     const artifact = findBestInteractiveArtifactForType(resultArtifacts, artifactType);
-    const module = findBestInteractiveViewModuleForArtifactType(uiModuleRegistry, artifact?.type ?? artifactType, displayIntent.preferredModules);
+    const module = artifact && isPresentationDiagnosticArtifact(artifact.type)
+      ? findInteractiveViewModuleById(uiModuleRegistry, interactiveViewFallbackModuleIds.genericInspector)
+      : findBestInteractiveViewModuleForArtifactType(uiModuleRegistry, artifact?.type ?? artifactType, displayIntent.preferredModules);
     if (module) {
       addItem(module, artifact, interactiveViewPlanSourceIds.displayIntent, {}, artifact ? undefined : `等待 artifact type=${artifactType}`);
     } else {
@@ -233,14 +256,23 @@ export function resolveViewPlan({
 
   for (const artifact of resultArtifacts.slice(0, 12)) {
     if (presentationActionArtifactIds.has(artifact.id)) continue;
-    const module = findBestInteractiveViewModuleForArtifact(uiModuleRegistry, artifact);
-    if (module) addItem(module, artifact, interactiveViewPlanSourceIds.artifactInferred);
+    const module = isPresentationDiagnosticArtifact(artifact.type)
+      ? findInteractiveViewModuleById(uiModuleRegistry, interactiveViewFallbackModuleIds.genericInspector)
+      : findBestInteractiveViewModuleForArtifact(uiModuleRegistry, artifact);
+    if (module) addItem(
+      module,
+      artifact,
+      isPresentationDiagnosticArtifact(artifact.type) ? interactiveViewPlanSourceIds.displayIntent : interactiveViewPlanSourceIds.artifactInferred,
+    );
   }
 
   for (const slot of seedSlots) {
     const artifact = findRenderableInteractiveArtifact(resultArtifacts, slot.artifactRef);
-    const currentModule = uiModuleRegistry.find((module) => module.componentId === slot.componentId && interactiveViewModuleAcceptsArtifact(module, artifact?.type ?? slot.artifactRef));
-    const replacementModule = artifact ? findBestInteractiveViewModuleForArtifact(uiModuleRegistry, artifact) : uiModuleRegistry.find((module) => module.componentId === slot.componentId);
+    const diagnosticModule = artifact && isPresentationDiagnosticArtifact(artifact.type)
+      ? findInteractiveViewModuleById(uiModuleRegistry, interactiveViewFallbackModuleIds.genericInspector)
+      : undefined;
+    const currentModule = diagnosticModule ? undefined : uiModuleRegistry.find((module) => module.componentId === slot.componentId && interactiveViewModuleAcceptsArtifact(module, artifact?.type ?? slot.artifactRef));
+    const replacementModule = diagnosticModule ?? (artifact ? findBestInteractiveViewModuleForArtifact(uiModuleRegistry, artifact) : uiModuleRegistry.find((module) => module.componentId === slot.componentId));
     const module = currentModule ?? replacementModule ?? findInteractiveViewModuleById(uiModuleRegistry, interactiveViewFallbackModuleIds.genericInspector);
     if (!module) continue;
     if (artifact && slot.componentId !== module.componentId) {
@@ -262,12 +294,16 @@ export function resolveViewPlan({
     addItem(findInteractiveViewModuleById(uiModuleRegistry, interactiveViewFallbackModuleIds.executionProvenance) ?? uiModuleRegistry[4], undefined, interactiveViewPlanSourceIds.fallback);
   }
 
-  const ordered = compactInteractiveViewPlanItems(items, {
+  let ordered = compactInteractiveViewPlanItems(items, {
     artifacts: resultArtifacts,
     claimCount: session.claims.length,
     executionUnitCount: resultExecutionUnits.length,
     notebookEntryCount: session.notebook.length,
   }).sort(compareInteractiveViewPlanOrder);
+  if (!ordered.length) {
+    ordered = diagnosticArtifactFallbackItems(resultArtifacts, displayIntent)
+      .sort(compareInteractiveViewPlanOrder);
+  }
   const sections: RuntimeResolvedViewPlan['sections'] = {
     primary: [],
     supporting: [],
@@ -334,6 +370,57 @@ function displayIntentFromResultPresentation(value: unknown): DisplayIntent | un
     acceptanceCriteria: ['render-from-result-presentation-contract'],
     source: 'agentserver',
   };
+}
+
+function displayIntentFromConversationProjection(
+  projection: UiConversationProjection,
+  artifacts: RuntimeArtifact[],
+): DisplayIntent {
+  const artifactTypes = uniqueStrings([
+    ...projectionArtifactActions(projection, artifacts)
+      .map((action) => action.artifactType)
+      .filter((type): type is string => Boolean(type)),
+    ...artifacts.map((artifact) => artifact.type),
+  ]);
+  const firstProjectionArtifact = projection.artifacts.find((artifact) => artifact.label || artifact.ref);
+  return {
+    primaryGoal: conversationProjectionVisibleText(projection)
+      ?? firstProjectionArtifact?.label
+      ?? conversationProjectionPrimaryDiagnostic(projection)
+      ?? '展示 ConversationProjection 产物',
+    requiredArtifactTypes: artifactTypes,
+    preferredModules: [],
+    fallbackAcceptable: [],
+    acceptanceCriteria: ['render-from-conversation-projection'],
+    source: 'runtime-artifact',
+  };
+}
+
+function projectionArtifactActions(
+  projection: UiConversationProjection,
+  artifacts: RuntimeArtifact[],
+): ResultPresentationArtifactAction[] {
+  const artifactsById = new Map(artifacts.map((artifact) => [artifact.id, artifact]));
+  const projectionArtifactsByRef = new Map(projection.artifacts.map((artifact) => [artifact.ref, artifact]));
+  return uniqueStrings([
+    ...conversationProjectionArtifactRefs(projection),
+    ...projection.artifacts.map((artifact) => artifact.ref),
+  ])
+    .filter((ref) => ref.startsWith('artifact:'))
+    .map((ref, index) => {
+      const id = stripArtifactRef(ref);
+      const artifact = artifactsById.get(id);
+      const projectionArtifact = projectionArtifactsByRef.get(ref)
+        ?? projectionArtifactsByRef.get(`artifact:${id}`)
+        ?? projectionArtifactsByRef.get(`artifact::${id}`);
+      return {
+        id: `projection-artifact-${index}`,
+        label: projectionArtifact?.label ?? artifactTitle(artifact) ?? artifact?.id ?? id,
+        ref,
+        artifactType: artifact?.type ?? projectionArtifact?.mime,
+      };
+    })
+    .filter((action) => action.ref || action.artifactType);
 }
 
 function resultPresentationArtifactActions(activeRun?: SciForgeRun): ResultPresentationArtifactAction[] {
@@ -513,10 +600,89 @@ function isPresentationDiagnosticArtifact(artifactType: string) {
   return /diagnostic|verification|validation|failure|repair/i.test(artifactType);
 }
 
+function artifactsForConversationProjection(session: SciForgeSession, projection: UiConversationProjection) {
+  const refs = uniqueStrings([
+    ...conversationProjectionArtifactRefs(projection),
+    ...projection.artifacts.map((artifact) => artifact.ref),
+    ...conversationProjectionAuditRefs(projection).filter((ref) => ref.startsWith('artifact:')),
+  ]);
+  const byId = new Map(session.artifacts.map((artifact) => [artifact.id, artifact]));
+  const byRef = new Map(session.artifacts.flatMap((artifact) => [
+    [`artifact:${artifact.id}`, artifact],
+    [`artifact::${artifact.id}`, artifact],
+    [artifact.path, artifact],
+    [artifact.dataRef, artifact],
+  ].filter((entry): entry is [string, RuntimeArtifact] => Boolean(entry[0]))));
+  const ordered = refs
+    .map((ref) => byRef.get(ref) ?? byId.get(stripArtifactRef(ref)))
+    .filter((artifact): artifact is RuntimeArtifact => Boolean(artifact));
+  const unique = new Map<string, RuntimeArtifact>();
+  for (const artifact of ordered) {
+    if (!unique.has(artifact.id)) unique.set(artifact.id, artifact);
+  }
+  return Array.from(unique.values());
+}
+
 function artifactsForResultPresentation(session: SciForgeSession, activeRun?: SciForgeRun) {
   const runArtifacts = artifactsForRun(session, activeRun);
-  if (activeRun?.status === 'failed') return runArtifacts.filter(isFailedRunDiagnosticArtifact);
-  return runArtifacts;
+  if (activeRun?.status === 'failed') {
+    const diagnostics = runArtifacts.filter(isFailedRunDiagnosticArtifact);
+    return diagnostics.length ? diagnostics : session.artifacts.filter(isFailedRunDiagnosticArtifact);
+  }
+  if (runArtifacts.length) return runArtifacts;
+  if (!activeRun || session.runs.length <= 1) return session.artifacts;
+  const objectArtifactIds = new Set((activeRun.objectReferences ?? [])
+    .filter((reference) => reference.kind === 'artifact' && (!reference.runId || reference.runId === activeRun.id))
+    .map((reference) => stripArtifactRef(reference.ref)));
+  if (objectArtifactIds.size) return session.artifacts.filter((artifact) => objectArtifactIds.has(artifact.id));
+  const actionArtifactIds = new Set(resultPresentationArtifactActions(activeRun)
+    .map((action) => stripArtifactRef(action.ref ?? ''))
+    .filter(Boolean));
+  return actionArtifactIds.size
+    ? session.artifacts.filter((artifact) => actionArtifactIds.has(artifact.id))
+    : [];
+}
+
+function auditExecutionUnitsForResultPlan(session: SciForgeSession, activeRun?: SciForgeRun) {
+  const scoped = auditExecutionUnitsForRun(session, activeRun);
+  if (scoped.length || activeRun?.status !== 'failed') return scoped;
+  return session.executionUnits;
+}
+
+function diagnosticArtifactFallbackItems(
+  artifacts: RuntimeArtifact[],
+  displayIntent: DisplayIntent,
+): ResolvedViewPlanItem[] {
+  const module = findInteractiveViewModuleById(uiModuleRegistry, interactiveViewFallbackModuleIds.genericInspector);
+  if (!module) return [];
+  return artifacts
+    .filter((artifact) => isPresentationDiagnosticArtifact(artifact.type))
+    .slice(0, 4)
+    .map((artifact) => {
+      const slot: UIManifestSlot = {
+        componentId: module.componentId,
+        title: artifactTitle(artifact) ?? module.title,
+        artifactRef: artifact.id,
+        priority: module.priority,
+      };
+      const validation = validateInteractiveViewModuleBinding(module, artifact);
+      return {
+        id: `raw-${module.moduleId}-${artifact.id}`,
+        slot,
+        module,
+        artifact,
+        section: resolveInteractiveViewPlanSection({ module, displayIntent, artifact, source: interactiveViewPlanSourceIds.artifactInferred }),
+        source: interactiveViewPlanSourceIds.artifactInferred,
+        status: validation.status,
+        reason: validation.reason,
+        missingFields: validation.missingFields,
+      };
+    });
+}
+
+function artifactTitle(artifact?: RuntimeArtifact) {
+  const metadata = isRecord(artifact?.metadata) ? artifact.metadata : {};
+  return asString(metadata.title) ?? asString(metadata.label) ?? asString(metadata.name);
 }
 
 function isFailedRunDiagnosticArtifact(artifact: RuntimeArtifact) {

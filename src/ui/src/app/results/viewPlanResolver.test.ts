@@ -295,6 +295,99 @@ test('result presentation artifact actions can drive Results view selection', ()
   assert.equal(displayIntentItems.some((item) => item.artifact?.id === 'analysis-report'), true);
 });
 
+test('conversation projection drives result plan before raw display intent or response payloads', () => {
+  const projectedReport: RuntimeArtifact = {
+    id: 'projection-report',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    data: { markdown: '# Projection report' },
+  };
+  const auditDiagnostic: RuntimeArtifact = {
+    id: 'projection-diagnostic',
+    type: 'runtime-diagnostic',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    data: { status: 'validated', message: 'Projection audit diagnostic.' },
+  };
+  const rawReport: RuntimeArtifact = {
+    id: 'raw-report',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    metadata: { runId: 'run-projection-first' },
+    data: { markdown: '# Raw report that should not drive the result plan' },
+  };
+  const activeRun: SciForgeRun = {
+    id: 'run-projection-first',
+    scenarioId: 'literature-evidence-review',
+    status: 'failed',
+    prompt: 'Use the projection',
+    response: JSON.stringify({
+      displayIntent: {
+        primaryGoal: 'Raw response intent',
+        requiredArtifactTypes: ['paper-list'],
+        preferredModules: ['paper-table'],
+      },
+      resultPresentation: {
+        artifactActions: [{ id: 'raw-response', label: 'Open raw response report', ref: 'artifact:raw-report', artifactType: 'research-report' }],
+      },
+    }),
+    createdAt: '2026-05-07T00:00:01.000Z',
+    raw: {
+      displayIntent: {
+        primaryGoal: 'Raw display intent',
+        requiredArtifactTypes: ['paper-list'],
+        preferredModules: ['paper-table'],
+        resultPresentation: {
+          artifactActions: [{ id: 'raw-display', label: 'Open raw report', ref: 'artifact:raw-report', artifactType: 'research-report' }],
+        },
+      },
+      resultPresentation: {
+        conversationProjection: {
+          schemaVersion: 'sciforge.conversation-projection.v1',
+          conversationId: 'conversation-projection-first',
+          currentTurn: { id: 'turn-projection-first', prompt: 'Use the projection' },
+          visibleAnswer: {
+            status: 'satisfied',
+            text: 'Projection answer is the visible result.',
+            artifactRefs: ['artifact:projection-report'],
+          },
+          artifacts: [{ ref: 'artifact:projection-report', label: 'Projection report', mime: 'research-report' }],
+          executionProcess: [],
+          recoverActions: [],
+          verificationState: { status: 'pass', verifierRef: 'verification:projection-first' },
+          auditRefs: ['artifact:projection-diagnostic', 'execution-unit:raw-legacy-unit'],
+          diagnostics: [],
+        },
+      },
+    },
+  } as never;
+  const session = baseSession({
+    runs: [activeRun],
+    artifacts: [projectedReport, auditDiagnostic, rawReport],
+    executionUnits: [{
+      id: 'raw-legacy-unit',
+      tool: 'legacy.raw',
+      params: '{}',
+      status: 'repair-needed',
+      hash: 'raw-legacy-unit',
+      outputArtifacts: ['artifact:raw-report'],
+    }],
+    uiManifest: [{ componentId: 'report-viewer', artifactRef: 'raw-report', title: 'Raw report' }],
+  });
+
+  const plan = resolveViewPlan({ scenarioId: 'literature-evidence-review', session, activeRun, defaultSlots: [] });
+  const allItems = itemsForFocusMode(plan, 'all');
+
+  assert.equal(plan.displayIntent.primaryGoal, 'Projection answer is the visible result.');
+  assert.deepEqual(plan.displayIntent.acceptanceCriteria, ['render-from-conversation-projection']);
+  assert.equal(allItems.some((item) => item.artifact?.id === 'projection-report'), true);
+  assert.equal(allItems.some((item) => item.artifact?.id === 'projection-diagnostic'), true);
+  assert.equal(allItems.some((item) => item.artifact?.id === 'raw-report'), false);
+  assert.equal(allItems.some((item) => item.module.componentId === 'execution-unit-table'), false);
+});
+
 test('result presentation artifact actions preserve chart revision identity and view transforms', () => {
   const plot: RuntimeArtifact = {
     id: 'base-plot',

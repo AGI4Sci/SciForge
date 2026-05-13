@@ -444,6 +444,56 @@ export function failedRunRestoreWorkspaceState(workspacePath: string) {
               'execution-unit:EU-failed-restore-fetch',
             ],
             resultPresentation: {
+              conversationProjection: {
+                schemaVersion: 'sciforge.conversation-projection.v1',
+                conversationId: 'session-failed-run-restore',
+                currentTurn: {
+                  id: 'msg-failed-run-user',
+                  prompt: 'Restore directly to the failed literature run without using timeline search.',
+                },
+                visibleAnswer: {
+                  status: 'repair-needed',
+                  diagnostic: 'PDF retrieval partially failed after preserving downloaded full text and metadata refs.',
+                  artifactRefs: ['artifact:failed-restore-partial-report'],
+                },
+                activeRun: {
+                  id: 'run-browser-failed-restore',
+                  status: 'repair-needed',
+                },
+                artifacts: [{
+                  ref: 'artifact:failed-restore-partial-report',
+                  mime: 'research-report',
+                  label: 'Failed restore partial report',
+                }],
+                executionProcess: [{
+                  eventId: 'execution-unit:EU-failed-restore-fetch',
+                  type: 'external-provider-blocked',
+                  summary: 'PDF retrieval partially failed; durable partial report and refs were retained.',
+                  timestamp: now,
+                }],
+                recoverActions: ['inspect diagnostics without rerun', 'reuse downloaded full text and metadata refs', 'rerun failed PDF downloads only after explicit confirmation'],
+                verificationState: {
+                  status: 'failed',
+                  verifierRef: 'verification:failed-restore',
+                  verdict: 'external-provider blocked partial PDF retrieval',
+                },
+                auditRefs: [
+                  'file:.sciforge/task-results/failed-restore.bundle.json',
+                  'artifact:failed-restore-partial-report',
+                  'execution-unit:EU-failed-restore-fetch',
+                  'verification:failed-restore',
+                ],
+                diagnostics: [{
+                  severity: 'error',
+                  code: 'external-provider.pdf-download.partial-failure',
+                  message: 'PDF retrieval partially failed: one timeout, one HTTP 403, one file exceeded max download bytes.',
+                  refs: [
+                    { ref: 'file:.sciforge/task-results/pdfs/downloaded-paper.pdf' },
+                    { ref: 'file:.sciforge/data/downloaded-paper.metadata.json' },
+                    { ref: 'file:.sciforge/logs/failed-restore.stderr.log' },
+                  ],
+                }],
+              },
               taskRunCard: {
                 schemaVersion: 'sciforge.task-run-card.v1',
                 id: 'task-card:failed-restore',

@@ -1,5 +1,5 @@
 import { nowIso, type SciForgeRun, type SciForgeSession, type TimelineEventRecord } from '../../domain';
-import { artifactsForRun, executionUnitsForRun } from '../results/executionUnitsForRun';
+import { artifactsForRun, auditExecutionUnitsForRun } from '../results/executionUnitsForRun';
 
 export function mergeRunTimelineEvents(events: TimelineEventRecord[], previousSession: SciForgeSession | undefined, nextSession: SciForgeSession) {
   const previousRunIds = new Set(previousSession?.runs.map((run) => run.id) ?? []);
@@ -16,7 +16,7 @@ function timelineEventFromStoredRun(session: SciForgeSession, run: SciForgeRun):
     .slice(0, 8)
     .map((artifact) => artifact.id);
   const runUnitRefs = [
-    ...executionUnitsForRun(session, run)
+    ...auditExecutionUnitsForRun(session, run)
       .slice(0, 8)
       .map((unit) => unit.id),
   ].filter((value): value is string => Boolean(value));

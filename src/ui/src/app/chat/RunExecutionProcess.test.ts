@@ -130,6 +130,55 @@ test('execution process renders failed execution units preserved in run raw payl
   assert.match(html, /probe failed before rendering/);
 });
 
+test('execution process uses projection events instead of raw audit execution units when projection exists', () => {
+  const html = renderToStaticMarkup(createElement(RunExecutionProcess, {
+    runId: 'run-projection-process',
+    session: {
+      ...session([]),
+      runs: [{
+        id: 'run-projection-process',
+        scenarioId: 'literature-evidence-review',
+        status: 'failed',
+        prompt: 'summarize refs',
+        response: 'legacy failed response',
+        createdAt: '2026-05-12T00:00:00.000Z',
+        raw: {
+          resultPresentation: {
+            conversationProjection: {
+              schemaVersion: 'sciforge.conversation-projection.v1',
+              conversationId: 'conversation-projection-process',
+              currentTurn: { id: 'turn-projection-process', prompt: 'summarize refs' },
+              visibleAnswer: { status: 'satisfied', text: 'Projection-visible answer.', artifactRefs: [] },
+              artifacts: [],
+              executionProcess: [{
+                eventId: 'event-projection-process',
+                type: 'OutputMaterialized',
+                summary: 'Projection output materialized.',
+                timestamp: '2026-05-13T00:00:01.000Z',
+              }],
+              recoverActions: [],
+              verificationState: { status: 'not-required' },
+              auditRefs: ['execution-unit:EU-legacy-audit'],
+              diagnostics: [],
+            },
+          },
+        },
+      }],
+      executionUnits: [executionUnit({
+        id: 'EU-legacy-audit',
+        tool: 'legacy.raw.audit',
+        status: 'repair-needed',
+        failureReason: 'LEGACY_RAW_AUDIT_UNIT_SHOULD_NOT_RENDER',
+      })],
+    },
+    onObjectFocus: () => undefined,
+  }));
+
+  assert.match(html, /Projection 事件：Projection output materialized/);
+  assert.doesNotMatch(html, /legacy\.raw\.audit/);
+  assert.doesNotMatch(html, /LEGACY_RAW_AUDIT_UNIT_SHOULD_NOT_RENDER/);
+});
+
 test('execution process distinguishes verification states from execution success', () => {
   const html = renderProcess([
     executionUnit({ id: 'ordinary', status: 'done' }),

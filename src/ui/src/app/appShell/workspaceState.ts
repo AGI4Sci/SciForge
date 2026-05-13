@@ -19,10 +19,10 @@ import {
 } from '../../sessionStore';
 import { applyArtifactHandoffToWorkspace } from '../../workspace/artifactHandoff';
 import { handoffAutoRunPrompt } from '../results/autoRunPrompts';
-import { artifactsForRun, executionUnitsForRun } from '../results/executionUnitsForRun';
+import { artifactsForRun, auditExecutionUnitsForRun } from '../results/executionUnitsForRun';
 import {
   conversationProjectionForRun,
-  conversationProjectionIsRecoverable,
+  conversationProjectionRecoverFocusSignal,
 } from '../conversation-projection-view-model';
 import type { HandoffAutoRunRequest } from '../results/viewPlanResolver';
 
@@ -91,15 +91,35 @@ export function tryApplySessionUpdateToWorkspace(
 }
 
 export function recoverableRunFocusForSession(session: SciForgeSession): WorkspaceRecoveryFocus | undefined {
+  const candidate = [...session.runs].reverse().map((run) => {
+    const focus = recoverableReasonForRun(session, run);
+    if (!focus) return undefined;
+    const activeRun = runForProjectedActiveRun(session, run, focus.activeRunId);
+    return {
+      run: activeRun,
+      reason: focus.reason,
+    };
+  }).find((focus): focus is { run: SciForgeRun; reason: WorkspaceRecoveryFocus['reason'] } => Boolean(focus));
+  if (!candidate) return undefined;
+  return {
+    scenarioId: session.scenarioId,
+    sessionId: session.sessionId,
+    activeRunId: candidate.run.id,
+    reason: candidate.reason,
+    updatedAt: runActivityTime(candidate.run, session),
+  };
+}
+
+export function recoverableRunAuditFallbackForSession(session: SciForgeSession): WorkspaceRecoveryFocus | undefined {
   const candidate = [...session.runs]
     .reverse()
-    .find((run) => recoverableReasonForRun(session, run));
+    .find((run) => legacyRawRecoverableReasonForRun(session, run));
   if (!candidate) return undefined;
   return {
     scenarioId: session.scenarioId,
     sessionId: session.sessionId,
     activeRunId: candidate.id,
-    reason: recoverableReasonForRun(session, candidate) ?? 'failed-run',
+    reason: legacyRawRecoverableReasonForRun(session, candidate) ?? 'failed-run',
     updatedAt: runActivityTime(candidate, session),
   };
 }
@@ -169,7 +189,7 @@ function timelineArtifactRefsForRun(session: SciForgeSession, run: SciForgeRun) 
 }
 
 function timelineExecutionUnitRefsForRun(session: SciForgeSession, run: SciForgeRun) {
-  const scoped = executionUnitsForRun(session, run)
+  const scoped = auditExecutionUnitsForRun(session, run)
     .map((unit) => unit.id)
     .filter((value): value is string => Boolean(value));
   if (scoped.length) return uniqueTimelineRefs(scoped);
@@ -226,17 +246,30 @@ function uniqueTimelineRefs(values: string[]) {
   return Array.from(new Set(values.filter((value) => value.trim().length > 0)));
 }
 
-function recoverableReasonForRun(session: SciForgeSession, run: SciForgeRun): WorkspaceRecoveryFocus['reason'] | undefined {
+function recoverableReasonForRun(session: SciForgeSession, run: SciForgeRun): { reason: WorkspaceRecoveryFocus['reason']; activeRunId?: string } | undefined {
   const projection = conversationProjectionForRun(run);
-  if (projection) {
-    if (conversationProjectionIsRecoverable(projection)) return 'repair-needed-run';
-    return undefined;
-  }
+  const focusSignal = conversationProjectionRecoverFocusSignal(projection);
+  if (focusSignal) return { reason: 'repair-needed-run', activeRunId: focusSignal.activeRunId };
+  return undefined;
+}
+
+function legacyRawRecoverableReasonForRun(session: SciForgeSession, run: SciForgeRun): WorkspaceRecoveryFocus['reason'] | undefined {
+  if (conversationProjectionForRun(run)) return undefined;
   if (RECOVERABLE_RUN_STATUSES.has(run.status)) return 'failed-run';
-  if (executionUnitsForRun(session, run).some(isRecoverableExecutionUnit)) return 'repair-needed-run';
+  if (auditExecutionUnitsForRun(session, run).some(isRecoverableExecutionUnit)) return 'repair-needed-run';
   if (run.acceptance?.severity === 'failed' || run.acceptance?.severity === 'repairable') return 'repair-needed-run';
   if (rawHasRecoverableTaskState(run.raw) || rawHasRecoverableTaskState(parseJsonObject(run.response))) return 'repair-needed-run';
   return undefined;
+}
+
+function runForProjectedActiveRun(session: SciForgeSession, carrierRun: SciForgeRun, projectedActiveRunId: string | undefined): SciForgeRun {
+  const normalizedId = projectedActiveRunId ? stripRunRefPrefix(projectedActiveRunId) : undefined;
+  if (!normalizedId) return carrierRun;
+  return session.runs.find((run) => run.id === projectedActiveRunId || run.id === normalizedId) ?? carrierRun;
+}
+
+function stripRunRefPrefix(value: string) {
+  return value.replace(/^run::?/i, '');
 }
 
 function isRecoverableExecutionUnit(unit: RuntimeExecutionUnit) {

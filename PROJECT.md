@@ -6,6 +6,11 @@
 
 按照设计文档[`docs/Architecture.md`](docs/Architecture.md)中的最终形态去实现SciForge, 旧版本实现、旧逻辑不需要兼容，建议删除后重写，确保代码逻辑干净
 
+## 重要
+同时开启多个sub agents，并行使用computer use能力从网页端并调试、修复，实现所有的任务，并行度越高越好。完成milestone后更新PROJECT.md、同步到github，直到完成为止。然后继续同时开启多个sub agents并行工作，实现所有的任务，并行度越高越好，在一个阶段完成后，你可以删掉没用的sub agents，重启新的sub agents，持续不间断地并行实现目标。步伐越大越好，尽快实现目标。
+
+当你觉得任务已经完成，或者觉得余下任务没必要做、不合理的时候，可以停下。不合理的任务你可以把它改得合理；你也可以加上新的任务。
+
 
 
 ## 开工前必读
@@ -124,11 +129,71 @@
 
 下一步 final-shape 收敛任务：
 
-- [ ] `viewPlanResolver` 输入改为 projection artifacts / visibleAnswer / ref preview，避免主结果模块继续从 raw run/displayIntent/response 推断。
-- [ ] `sessionTransforms` 下一轮请求 payload 改为携带 projection、selected refs、audit refs 按需展开，避免把 raw session.runs / executionUnits 当 continuation 真相源。
-- [ ] 拆分 `executionUnitsForRun` 为 audit-only helper 与 projection-owned execution process，禁止主 UI 直接依赖 raw EU 聚合器。
-- [ ] `SciForgeWorkbench` active recover focus 改为 projection-level focus；raw failure focus 只进入 audit/debug。
+- [x] `viewPlanResolver` 输入改为 projection artifacts / visibleAnswer / ref preview，避免主结果模块继续从 raw run/displayIntent/response 推断。
+- [x] `sessionTransforms` 下一轮请求 payload 改为携带 projection、selected refs、audit refs 按需展开，避免把 raw session.runs / executionUnits 当 continuation 真相源。
+- [x] 拆分 `executionUnitsForRun` 为 audit-only helper 与 projection-owned execution process，禁止主 UI 直接依赖 raw EU 聚合器。
+- [x] `SciForgeWorkbench` active recover focus 改为 projection-level focus；raw failure focus 只进入 audit/debug。
 - [ ] 接入 history edit/revert 和 export bundle 到同一 event-sourced kernel。
+
+## 当前并行任务板
+
+更新时间：2026-05-13 23:xx Asia/Shanghai。任何 agent 开始新任务前必须先更新或确认这里的任务状态；完成后把验证命令和结果写回对应 milestone，再提交/推送。
+
+### Active：第三轮 final-shape raw-run 回流收敛
+
+- [x] D / owner: Kuhn / `viewPlanResolver` projection-first
+  - 写入范围：`src/ui/src/app/results/**`、`src/ui/src/app/results-renderer-view-model.ts`、相关 `ResultsRenderer` tests。
+  - 目标：有 `ConversationProjection` 时主结果模块选择只从 `projection.artifacts`、`visibleAnswer`、ref preview 和 projection audit refs 派生；`activeRun.raw` / parsed response / displayIntent 只作为无 projection 时的 audit fallback。
+  - 验收：通过 `node --import tsx --test src/ui/src/app/results/viewPlanResolver.test.ts src/ui/src/app/ResultsRenderer.test.ts src/ui/src/app/results-renderer-execution-model.test.ts`，`npm run typecheck`。
+- [x] E / owner: Meitner / `sessionTransforms` request payload projection-first
+  - 写入范围：`src/ui/src/app/chat/sessionTransforms.ts` 与对应 tests。
+  - 目标：下一轮请求 payload 优先携带 `ConversationProjection`、selected refs、audit refs bounded summary；避免把 raw `session.runs` / `executionUnits` 当 continuation 真相源。
+  - 验收：通过 `node --import tsx --test src/ui/src/app/chat/sessionTransforms.test.ts src/ui/src/app/chat/runOrchestrator.targetInstance.test.ts src/ui/src/api/sciforgeToolsClient.policy.test.ts`，`npm run typecheck`。
+- [x] F / owner: Banach / raw execution units audit-only
+  - 写入范围：`src/ui/src/app/results/executionUnitsForRun.ts`、调用方和对应 tests。
+  - 目标：将 raw EU 聚合器明确命名为 audit-only helper；主 UI 在 projection 存在时不能调用 raw EU 聚合器，历史/审计 fallback 保留。
+  - 当前状态：已完成调用方迁移；projection 存在时 execution focus 展示 projection execution process，raw EU 只保留 audit/history fallback。
+  - 验收：通过 `node --import tsx --test src/ui/src/app/results-renderer-execution-model.test.ts src/ui/src/app/appShell/workspaceState.test.ts src/ui/src/app/chat/RunExecutionProcess.test.ts`，`npm run typecheck`。
+- [x] G / owner: Carson / recover focus projection-level
+  - 写入范围：`src/ui/src/app/sciforgeApp/SciForgeWorkbench.tsx`、`src/ui/src/app/appShell/workspaceState.ts`、projection helpers 和 tests。
+  - 目标：active recover focus 优先由 projection 的 activeRun / recoverActions / verification / background 决定；raw failed run focus 只作为 audit/debug fallback。
+  - 验收：通过 `node --import tsx --test src/ui/src/app/appShell/workspaceState.test.ts src/ui/src/app/sciforgeApp/appStateModels.test.ts src/ui/src/app/ResultsRenderer.test.ts`，`npm run typecheck`。
+
+### 2026-05-13 Milestone：Raw-run 回流第三轮收敛
+
+本轮由 Kuhn、Meitner、Banach、Carson 并行推进，主线程负责集成、网页端 smoke 和 `PROJECT.md` 任务状态收口。目标是把剩余主 UI / continuation / recover focus 入口从 raw run 与 raw execution units 回流到 `ConversationProjection`。
+
+- [x] `viewPlanResolver` 在 projection 存在时只从 projection artifact refs、visible answer、audit refs 和 ref preview 派生主结果 plan；raw resultPresentation / response / displayIntent 只作为无 projection fallback。
+- [x] 下一轮 request payload 新增 projection continuation record-only unit，携带 bounded projection summary、selected refs 和 audit refs；raw runs/executionUnits 降级为 audit-only 上下文。
+- [x] `executionUnitsForRun` 改名为 `auditExecutionUnitsForRun`，调用方按 audit/history/fallback 语义收口；projection 存在时执行视图展示 projection execution process。
+- [x] workbench recovery focus 只由 projection-level activeRun、recoverActions、verification、background signal 驱动；legacy raw failure focus 暴露为 audit fallback helper。
+- [x] browser failed-run restore fixture 升级为 `ConversationProjection` 驱动，并修复 projection recoverable 状态被 runtime compatibility drift 抢标题的问题。
+- [x] `conversation.projection.continuation` tool id 移入 runtime contract events policy，避免 UI `src` 持有 package-owned tool literal。
+
+本轮验证：
+
+- [x] `npm run typecheck`
+- [x] `node --import tsx --test src/ui/src/app/results/viewPlanResolver.test.ts src/ui/src/app/ResultsRenderer.test.ts src/ui/src/app/results-renderer-execution-model.test.ts`
+- [x] `node --import tsx --test src/ui/src/app/chat/sessionTransforms.test.ts src/ui/src/app/chat/runOrchestrator.targetInstance.test.ts src/ui/src/api/sciforgeToolsClient.policy.test.ts`
+- [x] `node --import tsx --test src/ui/src/app/results-renderer-execution-model.test.ts src/ui/src/app/appShell/workspaceState.test.ts src/ui/src/app/chat/RunExecutionProcess.test.ts`
+- [x] `node --import tsx --test src/ui/src/app/appShell/workspaceState.test.ts src/ui/src/app/sciforgeApp/appStateModels.test.ts src/ui/src/app/ResultsRenderer.test.ts`
+- [x] `node --import tsx --test src/ui/src/app/chat/sessionTransforms.test.ts packages/contracts/runtime/events.test.ts`
+- [x] `npx tsx tests/smoke/smoke-conversation-kernel-final-shape.ts`
+- [x] `npx tsx tests/smoke/smoke-conversation-kernel-thin-waist.ts`
+- [x] `npm run smoke:result-presentation-contract`
+- [x] `npm run smoke:runtime-contracts`
+- [x] `npm run smoke:no-src-capability-semantics`
+- [x] `npm run smoke:browser`
+- [x] `npm run smoke:long-file-budget`
+- [x] `npm run build`
+- [x] `git diff --check`
+
+### Todo：后续 final-shape
+
+- [ ] 接入 history edit/revert 到 event-sourced kernel。
+- [ ] export bundle 改为导出 event log、projection、refs manifest 和 audit-only raw attachments。
+- [ ] 拆分 watch list 长文件：`src/runtime/generation-gateway.ts`、`src/runtime/gateway/context-envelope.ts`、`src/ui/src/app/ChatPanel.tsx`。
+- [ ] 将 `tests/smoke/smoke-conversation-kernel-final-shape.ts` 加入 package script 或 verify 链路，防止 final-shape guard 被遗忘。
 
 长文件治理：
 
