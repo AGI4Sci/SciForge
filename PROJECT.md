@@ -654,6 +654,33 @@ Failure/Improvement Notes：
 - [x] `npm run verify:full`（759 tests pass；R-LIT-07 smoke、scientific reproduction smoke、long-file budget、browser smoke、production build 与 artifacts index 通过）
 
 
+### 2026-05-13 Milestone：No-hardcode 审计与 Release Gate 策略注入收敛
+
+本轮按用户要求复核从 `8f730c45d28e83d7d8b5c9b7e8be37b44115b7a2` 到当前 HEAD 的修改是否符合“所有修改必须通用、不能为当前案例打补丁”。并行 sub agents 重点审计 PROJECT.md、harness 边界、runtime contract、gateway、literature skill 与 smoke；根据发现完成以下通用修复：
+
+- [x] release gate 不再把 `npm run verify:full`、GitHub push 或固定服务名作为生产真相源；新增 `ReleaseGatePolicy`，通过 `requiredCommand`、`requiredStepKinds`、`syncActionLabel` 与 `syncActionSignals` 注入 profile/harness 的发布策略。
+- [x] intent-first verification 与 runtime verification gate 都消费同一 release gate policy；仅 `uiState.releaseGatePolicy` 注入时也能保持初始 verify job、后台验证和 gate audit 一致。
+- [x] 外部同步动作不再靠生产代码里的 GitHub/deploy/上线正则识别；必须来自 policy 的结构化 sync signals，避免把当前发布案例扩散成隐式策略。
+- [x] release verification result 不再因文本里出现 `release` 或 `verify-full` 就伪装成已执行配置命令；只有匹配 policy `requiredCommand` 或显式 gate step 的证据会进入 release-verify。
+- [x] 删除 direct-text fallback 的测试 sentinel 分支，把 raw ToolPayload 识别改成通用 payload/metadata 形态判断。
+- [x] Literature reproduction feasibility 的 `noHardcodeReview` 统一使用 runtime `NoHardcodeReview` contract；backend comparison、dirty worktree、user feedback convergence 的 no-hardcode metadata 去掉 R-* 编号、项目名和当前 backend pair 字面量。
+- [x] 新增/更新 policy 注入 smoke，覆盖自定义验证命令、自定义 sync label、非 GitHub 外部同步和仅从 `uiState.releaseGatePolicy` 注入的 release gate。
+
+Failure/Improvement Notes：
+
+- `pushAllowed` / `releaseGateAllowsPush` 仍作为兼容字段保留；本轮新增 `syncAllowed` / `releaseGateAllowsSync` 作为通用语义，后续可逐步迁移 UI 和旧测试命名。
+- `packages/skills/literature/index.ts` 当前仍超过 1500 行；PROJECT 已保留 R-LIT-11 语义拆分任务，本轮未扩大该职责范围。
+- 更大范围的 gateway 策略散落（如 task outcome projection、repair boundary、context evidence policy）仍应继续迁入 harness/profile hook；本轮优先处理已引入修改中的硬编码和 release gate 语义回流。
+
+本轮验证：
+
+- [x] `node --import tsx --test packages/contracts/runtime/release-gate.test.ts packages/contracts/runtime/verification-policy.test.ts packages/contracts/runtime/intent-first-verification-policy.test.ts src/runtime/gateway/intent-first-verification.test.ts src/runtime/gateway/direct-answer-payload.test.ts`
+- [x] `node --import tsx tests/smoke/smoke-release-gate-contract.ts`
+- [x] `node --import tsx tests/smoke/smoke-literature-reproduction-feasibility.ts`
+- [x] `git diff --check`
+- [x] `npm run verify:full`（762 tests pass；runtime contract smoke、release gate smoke、literature reproduction feasibility smoke、scientific reproduction smoke、long-file budget、module boundary/no-legacy/no-src-capability-semantics、browser smoke、production build 与 artifacts index 通过）
+
+
 
 ### H022 Real-world Complex Task Backlog for SciForge Hardening
 
@@ -690,7 +717,7 @@ Failure/Improvement Notes：
 - [ ] R-CODE-04 多模块改造：让 agent 同时改 gateway、UI presentation、runtime contract、tests；用户中途要求缩小范围，只保留 runtime 修复。
 - [ ] R-CODE-05 测试失败恢复：第一次 patch 后 typecheck/test 失败，用户要求解释失败并做最小通用修复，不能回滚无关改动。
 - [x] R-CODE-06 Dirty worktree 协作：预先放入用户未提交改动，再让 agent 修复另一区域，验证不会 reset/revert 用户改动。已完成 `sciforge.dirty-worktree-collaboration.v1`、porcelain status parser、user-owned protected paths、destructive git command blocker、repair handoff runner enforcement、disjoint/overlap path smoke 覆盖。
-- [x] R-CODE-07 Release verify 请求：用户要求“等完整验证再推 GitHub”，系统必须阻塞到指定测试完成，失败时不推送。已新增 `sciforge.release-gate.v1`，把 release/push intent 映射到 `npm run verify:full`，并在缺少 full verify、服务重启、变更摘要、git target 或 audit refs 时保持 pending/needs-human，不允许把 GitHub push 视作完成。
+- [x] R-CODE-07 Release verify 请求：用户要求“等完整验证再推 GitHub”，系统必须阻塞到指定测试完成，失败时不推送。已新增 `sciforge.release-gate.v1` 与可注入 `ReleaseGatePolicy`，由 profile/harness 提供 `requiredCommand`、`requiredStepKinds` 和 `syncActionSignals`；缺少验证、服务健康、变更摘要、git target 或 audit refs 时保持 pending/needs-human，不允许把外部同步视作完成。
 - [x] R-CODE-08 Backend handoff 漂移：AgentServer 返回 taskFiles、direct ToolPayload、plain text、malformed generation response 四类输出，要求统一分类和可恢复。已新增 `sciforge.backend-handoff-drift.v1` 分类 contract 与 `agentserver-handoff-drift` runtime event，覆盖 taskFiles 执行、direct ToolPayload materialize、plain text bridge、guarded raw text diagnostic、malformed generation-looking text strict retry，以及 handoffSummary 不再触发旧任务重跑。
 - [x] R-CODE-09 多 backend 对比修复：同一任务用 Codex/OpenTeam 两个 backend 跑，比较失败模式，提炼 backend-neutral 修复。已完成 `sciforge.backend-comparison.v1`、supported backend invariant、handoff drift/failure category 归一化、backend-neutral fix candidate、unsupported backend guard 和 smoke 覆盖。
 - [x] R-CODE-10 项目服务生命周期：修改代码后自动重启 dev server，确认端口占用、旧进程退出、新服务 ready、浏览器页面可刷新。已覆盖 Workspace Writer health identity、动态端口 restart smoke 和 Vite capability gate；真实 UI dev server 热更新仍由 `npm run smoke:browser` 持续覆盖。
@@ -741,7 +768,7 @@ UI 与 presentation 真实任务：
 - [x] R-WF-07 用户反馈收敛：用户连续指出“慢、崩、看不懂、引用错、重复跑”，系统把反馈归类到通用 TODO，而不是逐条道歉。已完成 `sciforge.user-feedback-convergence.v1`、feedback comment 到 convergence plan helper、TaskRunCard/FailureSignature evidence refs、NoHardcodeReview 和 smoke 覆盖。
 - [x] R-WF-08 低预算模式：用户要求“不要下载全文，先用 metadata 快速判断”，后续再允许补全文，测试 budget escalation。已覆盖结构化 fullTextPolicy、低预算 disabled/retained work 与 handoff metadata-first directive。
 - [x] R-WF-09 严格证据模式：用户要求“不要猜，不确定就标注”，系统必须降低 claim confidence 并输出 evidence gaps。已覆盖 evidenceMode.evidenceGaps、confidencePolicy ceiling 与 strict-evidence handoff。
-- [x] R-WF-10 发布前检查：用户要求把本地改动推 GitHub 前做 release verify、写变更摘要、重启服务，并保留审计记录。已覆盖 release gate audit、intent-first verification 展示状态、runtime verification fail-closed gate 和 `smoke:release-gate`；`verify:full` 失败或证据缺失时不会允许推送。
+- [x] R-WF-10 发布前检查：用户要求把本地改动外部同步前做 release verify、写变更摘要、重启服务，并保留审计记录。已覆盖 release gate audit、intent-first verification 展示状态、runtime verification fail-closed gate 和 `smoke:release-gate`；配置的 release verify 失败或证据缺失时不会允许同步。
 
 通用修复 TODO 池：
 

@@ -3,9 +3,11 @@ import {
   type RuntimeVerificationResult,
 } from './verification-result';
 import {
-  RELEASE_GATE_REQUIRED_COMMAND,
   buildReleaseGateAudit,
+  releaseGateHasSyncActionSignal,
+  normalizeReleaseGatePolicy,
   releaseGateHasRequiredVerifyCommand,
+  type ReleaseGatePolicy,
   type ReleaseGateStepInput,
   type ReleaseGateStepKind,
 } from './release-gate';
@@ -158,7 +160,7 @@ export function evaluateRuntimeVerificationGate(
         repairHints: releaseGate.audit.nextActions,
         diagnostics: {
           source: 'release-gate',
-          requiredCommand: RELEASE_GATE_REQUIRED_COMMAND,
+          requiredCommand: releaseGate.audit.requiredCommand,
           releaseGate: releaseGate.audit,
         },
       },
@@ -374,7 +376,7 @@ function executionUnitHasHighRiskActionSignal(unit: Record<string, unknown>) {
 }
 
 function highRiskActionToken(text: string) {
-  return /\b(delete|remove|destroy|drop|publish|send|push|deploy|merge|release|github|pay|purchase|authorize|credential|secret|external-write|production)\b|\u5220\u9664|\u53d1\u5e03|\u53d1\u9001|\u63a8\s*github|\u540c\u6b65.*github|\u652f\u4ed8|\u6388\u6743|\u51ed\u636e|\u751f\u4ea7\u73af\u5883/.test(text.toLowerCase());
+  return /\b(delete|remove|destroy|drop|publish|send|push|deploy|merge|release|pay|purchase|authorize|credential|secret|external-write|production)\b|\u5220\u9664|\u53d1\u5e03|\u53d1\u9001|\u63a8|\u540c\u6b65|\u652f\u4ed8|\u6388\u6743|\u51ed\u636e|\u751f\u4ea7\u73af\u5883/.test(text.toLowerCase());
 }
 
 function actionProviderSelfReportsSuccess(payload: RuntimeVerificationPolicyPayload) {
@@ -421,19 +423,22 @@ function releaseGateRequirement(
   payload: RuntimeVerificationPolicyPayload,
   request: RuntimeVerificationPolicyRequest,
 ) {
-  const audit = releaseGateAuditForRuntime(payload, request);
-  const actionCompleted = releaseSyncActionCompleted(payload);
-  const required = actionCompleted || releaseGateRequested(request, payload);
+  const policy = releaseGatePolicyForRuntime(payload, request);
+  const audit = releaseGateAuditForRuntime(payload, request, policy);
+  const actionCompleted = releaseSyncActionCompleted(payload, policy);
+  const required = actionCompleted || Boolean(explicitReleaseGateRecord(payload, request)) || releaseGateRequested(request, payload, policy);
   return { audit, actionCompleted, required };
 }
 
 function releaseGateAuditForRuntime(
   payload: RuntimeVerificationPolicyPayload,
   request: RuntimeVerificationPolicyRequest,
+  policy: ReleaseGatePolicy,
 ) {
   const explicit = explicitReleaseGateRecord(payload, request);
   const git = gitRecord(request);
   return buildReleaseGateAudit({
+    policy,
     gateId: stringField(explicit?.gateId) ?? stringField(explicit?.id),
     changeSummary: stringField(explicit?.changeSummary) ?? stringField(explicit?.summary),
     currentBranch: stringField(explicit?.currentBranch) ?? stringField(git?.currentBranch) ?? stringField(git?.branch),
@@ -441,9 +446,9 @@ function releaseGateAuditForRuntime(
     targetBranch: stringField(explicit?.targetBranch) ?? stringField(git?.targetBranch),
     steps: uniqueReleaseGateSteps([
       ...releaseGateStepsFromUnknown(explicit?.steps),
-      ...executionUnitRecords(payload).flatMap(releaseGateStepsFromExecutionUnit),
-      ...toRecordList(payload.workEvidence).flatMap(releaseGateStepsFromWorkEvidence),
-      ...toRecordList(payload.verificationResults).flatMap(releaseGateStepsFromVerificationResult),
+      ...executionUnitRecords(payload).flatMap((unit) => releaseGateStepsFromExecutionUnit(unit, policy)),
+      ...toRecordList(payload.workEvidence).flatMap((entry) => releaseGateStepsFromWorkEvidence(entry, policy)),
+      ...toRecordList(payload.verificationResults).flatMap((result) => releaseGateStepsFromVerificationResult(result, policy)),
     ]),
     serviceHealth: Array.isArray(explicit?.serviceHealth)
       ? explicit.serviceHealth.filter(isRecord).map((service) => ({
@@ -469,6 +474,16 @@ function releaseGateAuditForRuntime(
   });
 }
 
+function releaseGatePolicyForRuntime(
+  payload: RuntimeVerificationPolicyPayload,
+  request: RuntimeVerificationPolicyRequest,
+) {
+  const explicit = explicitReleaseGateRecord(payload, request);
+  return normalizeReleaseGatePolicy(
+    isRecord(explicit?.policy) ? explicit.policy : isRecord(request.uiState?.releaseGatePolicy) ? request.uiState.releaseGatePolicy : undefined,
+  );
+}
+
 function explicitReleaseGateRecord(
   payload: RuntimeVerificationPolicyPayload,
   request: RuntimeVerificationPolicyRequest,
@@ -485,32 +500,32 @@ function explicitReleaseGateRecord(
 function releaseGateRequested(
   request: RuntimeVerificationPolicyRequest,
   payload: RuntimeVerificationPolicyPayload,
+  policy: ReleaseGatePolicy,
 ) {
   const text = compactEvidenceText([
-    request.prompt,
     request.verificationPolicy,
     request.uiState?.verifyPolicy,
     request.uiState?.verificationRouting,
     payload.verificationPolicy,
-    payload.message,
   ]);
-  return releaseGateTextSignal(text);
+  return releaseGateTextSignal(text, policy);
 }
 
-function releaseSyncActionCompleted(payload: RuntimeVerificationPolicyPayload) {
+function releaseSyncActionCompleted(payload: RuntimeVerificationPolicyPayload, policy: ReleaseGatePolicy) {
   return executionUnitRecords(payload).some((unit) =>
     isSuccessfulStatus(unit.status)
-    && releaseSyncActionSignal(actionProviderEvidenceText(unit))
+    && releaseSyncActionSignal(actionProviderEvidenceText(unit), policy)
   );
 }
 
-function releaseGateTextSignal(text: string) {
-  return releaseSyncActionSignal(text)
-    || /\brelease\s+verify\b|\bfull\s+verify\b|\bverify:full\b|npm\s+run\s+verify:full|\u5b8c\u6574\u9a8c\u8bc1|\u4e0a\u7ebf\u9a8c\u8bc1|\u53d1\u5e03\u9a8c\u8bc1/.test(text.toLowerCase());
+function releaseGateTextSignal(text: string, policy: ReleaseGatePolicy) {
+  return releaseGateHasSyncActionSignal(text, policy)
+    || releaseGateHasRequiredVerifyCommand(text, policy)
+    || /\brelease\s+verify\b|\bfull\s+verify\b|\bverify:full\b|\u5b8c\u6574\u9a8c\u8bc1|\u4e0a\u7ebf\u9a8c\u8bc1|\u53d1\u5e03\u9a8c\u8bc1/.test(text.toLowerCase());
 }
 
-function releaseSyncActionSignal(text: string) {
-  return /\bgit\s+push\b|\bpush\s+(?:to\s+)?github\b|\bgithub\s+push\b|\bdeploy\b|\brelease\b|\bmerge\b|\u63a8\s*github|\u540c\u6b65.*github|\u4e0a\u7ebf/.test(text.toLowerCase());
+function releaseSyncActionSignal(text: string, policy: ReleaseGatePolicy) {
+  return releaseGateHasSyncActionSignal(text, policy);
 }
 
 function releaseGateStepsFromUnknown(value: unknown): ReleaseGateStepInput[] {
@@ -529,20 +544,20 @@ function releaseGateStepsFromUnknown(value: unknown): ReleaseGateStepInput[] {
   });
 }
 
-function releaseGateStepsFromExecutionUnit(unit: Record<string, unknown>): ReleaseGateStepInput[] {
+function releaseGateStepsFromExecutionUnit(unit: Record<string, unknown>, policy: ReleaseGatePolicy): ReleaseGateStepInput[] {
   const text = compactEvidenceText([unit.tool, unit.command, unit.params, unit.input, unit.outputSummary]);
   const status = releaseGateStepStatusFromRuntimeStatus(unit.status);
   const refs = refsFromRecord(unit);
-  if (releaseGateHasRequiredVerifyCommand(text)) {
+  if (releaseGateHasRequiredVerifyCommand(text, policy)) {
     return [{
       kind: 'release-verify',
       status,
-      command: RELEASE_GATE_REQUIRED_COMMAND,
+      command: policy.requiredCommand,
       failureReason: stringField(unit.failureReason) ?? stringField(unit.error),
       evidenceRefs: refs.length ? refs : [`execution-unit:${stringField(unit.id) ?? 'release-verify'}`],
     }];
   }
-  if (/service|restart|dev server|workspace writer|agentserver|vite/i.test(text)) {
+  if (/service|restart|health|ready|server|daemon|process/i.test(text)) {
     return [{
       kind: 'service-restart',
       status,
@@ -554,21 +569,21 @@ function releaseGateStepsFromExecutionUnit(unit: Record<string, unknown>): Relea
   return [];
 }
 
-function releaseGateStepsFromWorkEvidence(entry: Record<string, unknown>): ReleaseGateStepInput[] {
+function releaseGateStepsFromWorkEvidence(entry: Record<string, unknown>, policy: ReleaseGatePolicy): ReleaseGateStepInput[] {
   const evidenceRefs = toStringList(entry.evidenceRefs);
   const text = compactEvidenceText([entry.kind, entry.provider, entry.input, entry.outputSummary, ...evidenceRefs]);
   const status = releaseGateStepStatusFromRuntimeStatus(entry.status);
-  if (releaseGateHasRequiredVerifyCommand(text)) {
+  if (releaseGateHasRequiredVerifyCommand(text, policy)) {
     return [{
       kind: 'release-verify',
       status,
-      command: RELEASE_GATE_REQUIRED_COMMAND,
+      command: policy.requiredCommand,
       summary: stringField(entry.outputSummary),
       failureReason: stringField(entry.failureReason),
       evidenceRefs,
     }];
   }
-  if (/service|restart|health|ready|workspace writer|agentserver|vite/i.test(text)) {
+  if (/service|restart|health|ready|server|daemon|process/i.test(text)) {
     return [{
       kind: 'service-restart',
       status,
@@ -580,15 +595,15 @@ function releaseGateStepsFromWorkEvidence(entry: Record<string, unknown>): Relea
   return [];
 }
 
-function releaseGateStepsFromVerificationResult(result: Record<string, unknown>): ReleaseGateStepInput[] {
+function releaseGateStepsFromVerificationResult(result: Record<string, unknown>, policy: ReleaseGatePolicy): ReleaseGateStepInput[] {
   const evidenceRefs = toStringList(result.evidenceRefs);
   const text = compactEvidenceText([result.id, result.critique, ...evidenceRefs]);
-  if (!releaseGateHasRequiredVerifyCommand(text) && !/verify-full|release/i.test(text)) return [];
+  if (!releaseGateHasRequiredVerifyCommand(text, policy)) return [];
   const verdict = stringField(result.verdict);
   return [{
     kind: 'release-verify',
     status: verdict === 'pass' ? 'passed' : verdict === 'fail' || verdict === 'needs-human' ? 'failed' : 'pending',
-    command: RELEASE_GATE_REQUIRED_COMMAND,
+    command: policy.requiredCommand,
     failureReason: verdict === 'pass' ? undefined : stringField(result.critique),
     evidenceRefs,
   }];

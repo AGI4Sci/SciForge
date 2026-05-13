@@ -7,7 +7,12 @@ import {
   normalizeRuntimeVerificationPolicy,
   verificationIsNonBlocking,
 } from './verification-policy';
-import { RELEASE_GATE_REQUIRED_COMMAND } from './release-gate';
+
+const RELEASE_GATE_REQUIRED_COMMAND = 'npm run verify:full';
+const RELEASE_GATE_POLICY = {
+  requiredCommand: RELEASE_GATE_REQUIRED_COMMAND,
+  syncActionSignals: ['git push'],
+};
 
 test('package verification policy records unverified as visible non-pass for low-risk payloads', () => {
   const policy = normalizeRuntimeVerificationPolicy({ prompt: 'summarize local notes', selectedVerifierIds: ['schema'] }, {
@@ -73,6 +78,7 @@ test('package verification policy blocks completed GitHub push until the release
   const payload = {
     displayIntent: {
       releaseGate: {
+        policy: RELEASE_GATE_POLICY,
         changeSummary: 'Prepared release notes but did not finish verify.',
         currentBranch: 'main',
         targetRemote: 'origin',
@@ -102,7 +108,7 @@ test('package verification policy blocks completed GitHub push until the release
 
   assert.equal(gate.blocked, true);
   assert.equal(gate.result.verdict, 'needs-human');
-  assert.match(gate.reason ?? '', /Do not push/);
+  assert.match(gate.reason ?? '', /Do not complete/);
   assert.equal((gate.result.diagnostics?.releaseGate as { pushAllowed?: boolean }).pushAllowed, false);
 });
 
@@ -110,6 +116,7 @@ test('package verification policy allows GitHub push after the release gate audi
   const payload = {
     displayIntent: {
       releaseGate: {
+        policy: RELEASE_GATE_POLICY,
         changeSummary: 'Release gate contract and smoke coverage added.',
         currentBranch: 'main',
         targetRemote: 'origin',
@@ -143,6 +150,42 @@ test('package verification policy allows GitHub push after the release gate audi
   assert.equal(gate.result.verdict, 'pass');
   assert.equal(gate.result.diagnostics?.source, 'release-gate');
   assert.ok(gate.result.evidenceRefs.includes('run:verify-full'));
+});
+
+test('package verification policy consumes custom release gate policy for non-git sync actions', () => {
+  const customPolicy = {
+    requiredCommand: 'python -m verifier.release --strict',
+    syncActionLabel: 'artifact publish',
+    syncActionSignals: ['publish artifact bundle'],
+    requiredStepKinds: ['release-verify', 'audit-record'],
+  };
+  const payload = {
+    displayIntent: {
+      releaseGate: {
+        policy: customPolicy,
+        auditRefs: ['audit:artifact-publish'],
+        steps: [{
+          kind: 'release-verify',
+          status: 'passed',
+          command: customPolicy.requiredCommand,
+          evidenceRefs: ['verification:artifact-publish'],
+        }],
+      },
+    },
+    executionUnits: [{
+      id: 'publish-1',
+      tool: 'artifact-publisher',
+      command: 'publish artifact bundle',
+      status: 'done',
+    }],
+  };
+  const request = { prompt: 'publish after release verification' };
+  const policy = normalizeRuntimeVerificationPolicy(request, payload);
+  const gate = evaluateRuntimeVerificationGate(payload, request, policy);
+
+  assert.equal(gate.blocked, false);
+  assert.equal(gate.result.verdict, 'pass');
+  assert.equal((gate.result.diagnostics?.releaseGate as { requiredCommand?: string }).requiredCommand, customPolicy.requiredCommand);
 });
 
 test('package verification policy exposes artifact and non-blocking helpers', () => {

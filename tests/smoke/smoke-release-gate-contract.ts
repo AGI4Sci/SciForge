@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  RELEASE_GATE_REQUIRED_COMMAND,
   buildReleaseGateAudit,
   releaseGateAllowsPush,
 } from '@sciforge-ui/runtime-contract/release-gate';
@@ -12,7 +11,14 @@ import { attachIntentFirstVerification } from '../../src/runtime/gateway/intent-
 import { applyRuntimeVerificationPolicy } from '../../src/runtime/gateway/verification-policy.js';
 import type { GatewayRequest, ToolPayload } from '../../src/runtime/runtime-types.js';
 
+const RELEASE_GATE_REQUIRED_COMMAND = 'npm run verify:full';
+const RELEASE_GATE_POLICY = {
+  requiredCommand: RELEASE_GATE_REQUIRED_COMMAND,
+  syncActionSignals: ['git push'],
+};
+
 const readyAudit = buildReleaseGateAudit({
+  policy: RELEASE_GATE_POLICY,
   changeSummary: 'Release gate blocks GitHub push until full verification evidence is present.',
   currentBranch: 'main',
   targetRemote: 'origin',
@@ -35,6 +41,7 @@ assert.equal(readyAudit.pushAllowed, true);
 assert.equal(releaseGateAllowsPush(readyAudit), true);
 
 const blockedAudit = buildReleaseGateAudit({
+  policy: RELEASE_GATE_POLICY,
   changeSummary: 'Summary exists, but full verification has not run.',
   currentBranch: 'main',
   targetRemote: 'origin',
@@ -52,6 +59,7 @@ assert.ok(blockedAudit.missing.includes(RELEASE_GATE_REQUIRED_COMMAND));
 const intentPayload = attachIntentFirstVerification(basePayload({
   displayIntent: {
     releaseGate: {
+      policy: RELEASE_GATE_POLICY,
       changeSummary: 'Summary exists, but full verification has not run.',
       currentBranch: 'main',
       targetRemote: 'origin',
@@ -82,6 +90,7 @@ try {
   const blocked = await applyRuntimeVerificationPolicy(basePayload({
     displayIntent: {
       releaseGate: {
+        policy: RELEASE_GATE_POLICY,
         changeSummary: 'Summary exists, but full verification has not run.',
         currentBranch: 'main',
         targetRemote: 'origin',
@@ -104,11 +113,12 @@ try {
 
   assert.equal(blocked.verificationResults?.[0]?.verdict, 'needs-human');
   assert.equal(blocked.executionUnits[0]?.status, 'needs-human');
-  assert.match(blocked.verificationResults?.[0]?.critique ?? '', /Do not push/);
+  assert.match(blocked.verificationResults?.[0]?.critique ?? '', /Do not complete/);
 
   const allowed = await applyRuntimeVerificationPolicy(basePayload({
     displayIntent: {
       releaseGate: {
+        policy: RELEASE_GATE_POLICY,
         changeSummary: 'Release gate blocks GitHub push until full verification evidence is present.',
         currentBranch: 'main',
         targetRemote: 'origin',
@@ -139,12 +149,53 @@ try {
   assert.equal(allowed.verificationResults?.[0]?.verdict, 'pass');
   assert.equal(allowed.executionUnits[0]?.status, 'done');
   const allowedVerification = allowed.displayIntent?.verification as { verdict?: string } | undefined;
-  assert.equal(allowedVerification?.verdict, 'pass');
+assert.equal(allowedVerification?.verdict, 'pass');
+
+const customPolicy = {
+  requiredCommand: 'python -m verifier.release --strict',
+  syncActionLabel: 'artifact publish',
+  syncActionSignals: ['publish artifact bundle'],
+  requiredStepKinds: ['release-verify', 'audit-record'] as const,
+};
+const customPolicyPayload = attachIntentFirstVerification(basePayload({
+  displayIntent: {
+    releaseGate: {
+      auditRefs: ['audit:artifact-publish'],
+      steps: [{
+        kind: 'release-verify',
+        status: 'passed',
+        command: customPolicy.requiredCommand,
+        evidenceRefs: ['verification:artifact-publish'],
+      }],
+    },
+  },
+  executionUnits: [{
+    id: 'publish-custom',
+    tool: 'artifact-publisher',
+    command: 'publish artifact bundle',
+    status: 'done',
+  }],
+}), baseRequest({
+  prompt: 'run release verify before publishing.',
+  uiState: {
+    sessionId: 'session-release-gate-custom',
+    sessionCreatedAt: '2026-05-13T00:00:00.000Z',
+    releaseGatePolicy: customPolicy,
+  },
+}), { runWorkVerify: true });
+const customIntentEnvelope = customPolicyPayload.displayIntent?.intentFirstVerification as {
+  jobs?: Array<{ command?: string; releaseGate?: { status?: string; pushAllowed?: boolean; policy?: { syncActionLabel?: string } } }>;
+  verdicts?: Array<{ verdict?: string }>;
+} | undefined;
+assert.equal(customIntentEnvelope?.jobs?.[0]?.command, customPolicy.requiredCommand);
+assert.equal(customIntentEnvelope?.jobs?.[0]?.releaseGate?.policy?.syncActionLabel, customPolicy.syncActionLabel);
+assert.equal(customIntentEnvelope?.jobs?.[0]?.releaseGate?.pushAllowed, true);
+assert.equal(customIntentEnvelope?.verdicts?.[0]?.verdict, 'passed');
 } finally {
   await rm(workspace, { recursive: true, force: true });
 }
 
-console.log('[ok] release gate requires npm run verify:full, service health, summary, git refs, and audit refs before GitHub push');
+console.log('[ok] release gate requires configured verification, service health, summary, git refs, and audit refs before external sync');
 
 function baseRequest(overrides: Partial<GatewayRequest> = {}): GatewayRequest {
   return {

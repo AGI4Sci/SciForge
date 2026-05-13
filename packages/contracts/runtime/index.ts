@@ -148,18 +148,23 @@ export type {
   VerifyRouteMode,
 } from './intent-first-verification-policy';
 export {
+  DEFAULT_RELEASE_GATE_POLICY,
   RELEASE_GATE_CONTRACT_ID,
-  RELEASE_GATE_REQUIRED_COMMAND,
   RELEASE_GATE_SCHEMA_VERSION,
   RELEASE_GATE_STEP_KINDS,
   RELEASE_GATE_STEP_STATUSES,
   buildReleaseGateAudit,
+  releaseGateHasSyncActionSignal,
+  normalizeReleaseGatePolicy,
   releaseGateAllowsPush,
+  releaseGateAllowsSync,
   releaseGateHasRequiredVerifyCommand,
 } from './release-gate';
 export type {
   ReleaseGateAudit,
   ReleaseGateAuditInput,
+  ReleaseGatePolicy,
+  ReleaseGatePolicyInput,
   ReleaseGateServiceHealth,
   ReleaseGateStatus,
   ReleaseGateStep,

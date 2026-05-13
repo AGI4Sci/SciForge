@@ -17,10 +17,11 @@ import {
   type BackgroundCompletionRuntimeEvent,
 } from '@sciforge-ui/runtime-contract/events';
 import {
-  RELEASE_GATE_REQUIRED_COMMAND,
   buildReleaseGateAudit,
+  normalizeReleaseGatePolicy,
   releaseGateHasRequiredVerifyCommand,
   type ReleaseGateAudit,
+  type ReleaseGatePolicy,
   type ReleaseGateStepInput,
   type ReleaseGateStepKind,
 } from '@sciforge-ui/runtime-contract/release-gate';
@@ -116,7 +117,7 @@ export function attachIntentFirstVerification(
 ): ToolPayload {
   const intentCheck = buildIntentMatchCheck(request, payload);
   const routing = verifyRoutingDecision(request);
-  const initialJobs = buildVerifyJobs(payload, routing);
+  const initialJobs = buildVerifyJobs(payload, routing, request);
   const workVerify = options.runWorkVerify || options.callbacks
     ? runBackgroundWorkVerify(payload, request, initialJobs, routing, options)
     : pendingWorkVerify(initialJobs);
@@ -287,7 +288,7 @@ export function verifyRoutingDecision(request: GatewayRequest): VerifyRoutingDec
   };
 }
 
-export function buildVerifyJobs(payload: ToolPayload, routing: VerifyRoutingDecision): VerifyJob[] {
+export function buildVerifyJobs(payload: ToolPayload, routing: VerifyRoutingDecision, request?: GatewayRequest): VerifyJob[] {
   if (routing.mode === 'skip') {
     return [{
       schemaVersion: INTENT_FIRST_VERIFICATION_SCHEMA_VERSION,
@@ -302,10 +303,11 @@ export function buildVerifyJobs(payload: ToolPayload, routing: VerifyRoutingDeci
     }];
   }
   if (routing.mode === 'release') {
-    const releaseGate = releaseGateAuditForPayload(payload);
+    const releaseGate = releaseGateAuditForPayload(payload, request);
+    const requiredCommand = releaseGate.requiredCommand;
     const targetRefs = uniqueStrings([
       ...targetRefsForPayload(payload),
-      `release-gate:${RELEASE_GATE_REQUIRED_COMMAND}`,
+      `release-gate:${requiredCommand}`,
     ]);
     return [{
       schemaVersion: INTENT_FIRST_VERIFICATION_SCHEMA_VERSION,
@@ -314,7 +316,7 @@ export function buildVerifyJobs(payload: ToolPayload, routing: VerifyRoutingDeci
       level: 'release',
       status: 'running',
       blockingPolicy: 'release',
-      command: RELEASE_GATE_REQUIRED_COMMAND,
+      command: requiredCommand,
       targetRefs,
       evidenceRefs: uniqueStrings([
         ...targetRefs,
@@ -323,7 +325,7 @@ export function buildVerifyJobs(payload: ToolPayload, routing: VerifyRoutingDeci
         ...releaseGate.steps.flatMap((step) => step.evidenceRefs),
       ]),
       releaseGate,
-      recommendedFix: releaseGate.nextActions[0] ?? 'Run npm run verify:full before pushing to GitHub.',
+      recommendedFix: releaseGate.nextActions[0] ?? `Run ${requiredCommand} before completing the external sync action.`,
     }];
   }
   const targetRefs = targetRefsForPayload(payload);
@@ -574,13 +576,15 @@ function evaluatePayloadForWorkVerify(payload: ToolPayload) {
 
 function releaseGateAuditForPayload(payload: ToolPayload, request?: GatewayRequest) {
   const explicit = releaseGateRecord(payload, request);
+  const policy = releaseGatePolicyForPayload(payload, request);
   const steps = uniqueReleaseGateSteps([
     ...releaseGateStepsFromUnknown(explicit?.steps),
-    ...payload.executionUnits.flatMap(releaseGateStepsFromExecutionUnit),
-    ...(payload.workEvidence ?? []).flatMap(releaseGateStepsFromWorkEvidence),
-    ...(payload.verificationResults ?? []).flatMap(releaseGateStepsFromVerificationResult),
+    ...payload.executionUnits.flatMap((unit) => releaseGateStepsFromExecutionUnit(unit, policy)),
+    ...(payload.workEvidence ?? []).flatMap((entry) => releaseGateStepsFromWorkEvidence(entry, policy)),
+    ...(payload.verificationResults ?? []).flatMap((result) => releaseGateStepsFromVerificationResult(result, policy)),
   ]);
   return buildReleaseGateAudit({
+    policy,
     gateId: stringField(explicit?.gateId) ?? stringField(explicit?.id),
     changeSummary: stringField(explicit?.changeSummary) ?? stringField(explicit?.summary),
     currentBranch: stringField(explicit?.currentBranch) ?? stringField(gitRecord(request)?.currentBranch) ?? stringField(gitRecord(request)?.branch),
@@ -609,6 +613,14 @@ function releaseGateAuditForPayload(payload: ToolPayload, request?: GatewayReque
     ]),
     createdAt: stringField(explicit?.createdAt),
   });
+}
+
+function releaseGatePolicyForPayload(payload: ToolPayload, request?: GatewayRequest) {
+  const explicit = releaseGateRecord(payload, request);
+  const uiState = isRecord(request?.uiState) ? request.uiState : {};
+  return normalizeReleaseGatePolicy(
+    isRecord(explicit?.policy) ? explicit.policy : isRecord(uiState.releaseGatePolicy) ? uiState.releaseGatePolicy : undefined,
+  );
 }
 
 function releaseGateRecord(payload: ToolPayload, request?: GatewayRequest) {
@@ -643,22 +655,22 @@ function releaseGateStepsFromUnknown(value: unknown): ReleaseGateStepInput[] {
   });
 }
 
-function releaseGateStepsFromExecutionUnit(unit: Record<string, unknown>): ReleaseGateStepInput[] {
+function releaseGateStepsFromExecutionUnit(unit: Record<string, unknown>, policy: ReleaseGatePolicy): ReleaseGateStepInput[] {
   if (!isRecord(unit)) return [];
   const text = compactGateText([unit.tool, unit.command, unit.params, unit.input, unit.outputSummary]);
   const status = releaseGateStepStatusFromRuntimeStatus(unit.status);
   const refs = refsFromRecord(unit);
-  if (releaseGateHasRequiredVerifyCommand(text)) {
+  if (releaseGateHasRequiredVerifyCommand(text, policy)) {
     const fallbackRef = stringField(unit.id) ? `execution-unit:${stringField(unit.id)}` : 'execution-unit:release-verify';
     return [{
       kind: 'release-verify',
       status,
-      command: RELEASE_GATE_REQUIRED_COMMAND,
+      command: policy.requiredCommand,
       failureReason: stringField(unit.failureReason) ?? stringField(unit.error),
       evidenceRefs: refs.length ? refs : [fallbackRef],
     }];
   }
-  if (/service|restart|dev server|workspace writer|agentserver|vite/i.test(text)) {
+  if (/service|restart|health|ready|server|daemon|process/i.test(text)) {
     return [{
       kind: 'service-restart',
       status,
@@ -678,20 +690,20 @@ function releaseGateStepsFromWorkEvidence(entry: {
   outputSummary?: string;
   evidenceRefs: string[];
   failureReason?: string;
-}): ReleaseGateStepInput[] {
+}, policy: ReleaseGatePolicy): ReleaseGateStepInput[] {
   const text = compactGateText([entry.kind, entry.provider, entry.input, entry.outputSummary, ...entry.evidenceRefs]);
   const status = releaseGateStepStatusFromRuntimeStatus(entry.status);
-  if (releaseGateHasRequiredVerifyCommand(text)) {
+  if (releaseGateHasRequiredVerifyCommand(text, policy)) {
     return [{
       kind: 'release-verify' as const,
       status,
-      command: RELEASE_GATE_REQUIRED_COMMAND,
+      command: policy.requiredCommand,
       summary: entry.outputSummary,
       failureReason: entry.failureReason,
       evidenceRefs: entry.evidenceRefs,
     }];
   }
-  if (/service|restart|health|ready|workspace writer|agentserver|vite/i.test(text)) {
+  if (/service|restart|health|ready|server|daemon|process/i.test(text)) {
     return [{
       kind: 'service-restart' as const,
       status,
@@ -708,13 +720,13 @@ function releaseGateStepsFromVerificationResult(result: {
   verdict: string;
   critique?: string;
   evidenceRefs: string[];
-}): ReleaseGateStepInput[] {
+}, policy: ReleaseGatePolicy): ReleaseGateStepInput[] {
   const text = compactGateText([result.id, result.critique, ...result.evidenceRefs]);
-  if (!releaseGateHasRequiredVerifyCommand(text) && !/verify-full|release/i.test(text)) return [];
+  if (!releaseGateHasRequiredVerifyCommand(text, policy)) return [];
   return [{
     kind: 'release-verify' as const,
     status: result.verdict === 'pass' ? 'passed' : result.verdict === 'fail' || result.verdict === 'needs-human' ? 'failed' : 'pending',
-    command: RELEASE_GATE_REQUIRED_COMMAND,
+    command: policy.requiredCommand,
     failureReason: result.verdict === 'pass' ? undefined : result.critique,
     evidenceRefs: result.evidenceRefs,
   }];

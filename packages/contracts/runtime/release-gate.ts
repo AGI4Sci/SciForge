@@ -1,6 +1,6 @@
 export const RELEASE_GATE_CONTRACT_ID = 'sciforge.release-gate.v1' as const;
 export const RELEASE_GATE_SCHEMA_VERSION = 1 as const;
-export const RELEASE_GATE_REQUIRED_COMMAND = 'npm run verify:full' as const;
+const DEFAULT_RELEASE_VERIFICATION_COMMAND = 'release-verification-command' as const;
 
 export const RELEASE_GATE_STEP_KINDS = [
   'change-summary',
@@ -16,6 +16,36 @@ export const RELEASE_GATE_STEP_STATUSES = ['passed', 'failed', 'pending', 'skipp
 export type ReleaseGateStepKind = typeof RELEASE_GATE_STEP_KINDS[number];
 export type ReleaseGateStepStatus = typeof RELEASE_GATE_STEP_STATUSES[number];
 export type ReleaseGateStatus = 'passed' | 'failed' | 'blocked' | 'pending';
+
+export interface ReleaseGatePolicyInput {
+  id?: string;
+  requiredCommand?: string;
+  requiredStepKinds?: readonly ReleaseGateStepKind[];
+  syncActionLabel?: string;
+  syncActionSignals?: readonly string[];
+}
+
+export interface ReleaseGatePolicy {
+  id: string;
+  requiredCommand: string;
+  requiredStepKinds: ReleaseGateStepKind[];
+  syncActionLabel: string;
+  syncActionSignals: string[];
+}
+
+export const DEFAULT_RELEASE_GATE_POLICY: ReleaseGatePolicy = {
+  id: 'default-release-gate-policy',
+  requiredCommand: DEFAULT_RELEASE_VERIFICATION_COMMAND,
+  requiredStepKinds: [
+    'change-summary',
+    'git-target',
+    'release-verify',
+    'service-restart',
+    'audit-record',
+  ],
+  syncActionLabel: 'external sync action',
+  syncActionSignals: [],
+};
 
 export interface ReleaseGateStepInput {
   kind: ReleaseGateStepKind;
@@ -40,6 +70,7 @@ export interface ReleaseGateAuditInput {
   targetRemote?: string;
   targetBranch?: string;
   verifyCommand?: string;
+  policy?: ReleaseGatePolicyInput;
   steps?: ReleaseGateStepInput[];
   serviceHealth?: ReleaseGateServiceHealth[];
   auditRefs?: string[];
@@ -61,8 +92,10 @@ export interface ReleaseGateAudit {
   schemaVersion: typeof RELEASE_GATE_SCHEMA_VERSION;
   gateId: string;
   status: ReleaseGateStatus;
+  syncAllowed: boolean;
   pushAllowed: boolean;
-  requiredCommand: typeof RELEASE_GATE_REQUIRED_COMMAND;
+  requiredCommand: string;
+  policy: ReleaseGatePolicy;
   changeSummary?: string;
   currentBranch?: string;
   targetRemote?: string;
@@ -77,10 +110,11 @@ export interface ReleaseGateAudit {
 }
 
 export function buildReleaseGateAudit(input: ReleaseGateAuditInput = {}): ReleaseGateAudit {
-  const verifyCommand = normalizedText(input.verifyCommand) ?? RELEASE_GATE_REQUIRED_COMMAND;
+  const policy = normalizeReleaseGatePolicy(input.policy);
+  const verifyCommand = normalizedText(input.verifyCommand) ?? policy.requiredCommand;
   const auditRefs = uniqueStrings(input.auditRefs ?? []);
   const gitRefs = uniqueStrings(input.gitRefs ?? []);
-  const steps = normalizeReleaseGateSteps(input.steps ?? [], verifyCommand);
+  const steps = normalizeReleaseGateSteps(input.steps ?? [], verifyCommand, policy);
   const changeSummary = normalizedText(input.changeSummary);
   const currentBranch = normalizedText(input.currentBranch);
   const targetRemote = normalizedText(input.targetRemote);
@@ -125,7 +159,7 @@ export function buildReleaseGateAudit(input: ReleaseGateAuditInput = {}): Releas
     currentBranch,
     targetRemote,
     auditRefs,
-  });
+  }, policy);
   const failureReasons = steps
     .filter((step) => step.status === 'failed')
     .map((step) => step.failureReason ?? `${step.kind} failed.`);
@@ -136,13 +170,16 @@ export function buildReleaseGateAudit(input: ReleaseGateAuditInput = {}): Releas
       ? 'blocked'
       : 'passed';
 
+  const syncAllowed = status === 'passed';
   return {
     contract: RELEASE_GATE_CONTRACT_ID,
     schemaVersion: RELEASE_GATE_SCHEMA_VERSION,
     gateId: normalizedText(input.gateId) ?? 'release-gate',
     status,
-    pushAllowed: status === 'passed',
-    requiredCommand: RELEASE_GATE_REQUIRED_COMMAND,
+    syncAllowed,
+    pushAllowed: syncAllowed,
+    requiredCommand: policy.requiredCommand,
+    policy,
     changeSummary,
     currentBranch,
     targetRemote,
@@ -152,22 +189,59 @@ export function buildReleaseGateAudit(input: ReleaseGateAuditInput = {}): Releas
     failureReasons,
     auditRefs,
     gitRefs,
-    nextActions: releaseGateNextActions(status, missing, failureReasons),
+    nextActions: releaseGateNextActions(status, missing, failureReasons, policy),
     createdAt: normalizedText(input.createdAt) ?? 'pending-clock',
   };
 }
 
 export function releaseGateAllowsPush(audit: ReleaseGateAudit): boolean {
-  return audit.pushAllowed && audit.status === 'passed' && audit.missing.length === 0 && audit.failureReasons.length === 0;
+  return releaseGateAllowsSync(audit);
 }
 
-export function releaseGateHasRequiredVerifyCommand(command: string | undefined): boolean {
+export function releaseGateAllowsSync(audit: ReleaseGateAudit): boolean {
+  return audit.syncAllowed && audit.status === 'passed' && audit.missing.length === 0 && audit.failureReasons.length === 0;
+}
+
+export function normalizeReleaseGatePolicy(input?: ReleaseGatePolicyInput | Record<string, unknown>): ReleaseGatePolicy {
+  const requiredStepKinds = uniqueStepKinds(
+    Array.isArray(input?.requiredStepKinds)
+      ? input.requiredStepKinds.filter((value): value is ReleaseGateStepKind => RELEASE_GATE_STEP_KINDS.includes(value as ReleaseGateStepKind))
+      : DEFAULT_RELEASE_GATE_POLICY.requiredStepKinds,
+  );
+  return {
+    id: normalizedText(input?.id) ?? DEFAULT_RELEASE_GATE_POLICY.id,
+    requiredCommand: normalizedText(input?.requiredCommand) ?? DEFAULT_RELEASE_GATE_POLICY.requiredCommand,
+    requiredStepKinds,
+    syncActionLabel: normalizedText(input?.syncActionLabel) ?? DEFAULT_RELEASE_GATE_POLICY.syncActionLabel,
+    syncActionSignals: uniqueStrings(
+      Array.isArray(input?.syncActionSignals)
+        ? input.syncActionSignals.filter((value): value is string => typeof value === 'string')
+        : DEFAULT_RELEASE_GATE_POLICY.syncActionSignals,
+    ),
+  };
+}
+
+export function releaseGateHasSyncActionSignal(text: string | undefined, policyInput?: ReleaseGatePolicyInput | ReleaseGatePolicy): boolean {
+  const policy = normalizeReleaseGatePolicy(policyInput);
+  const normalized = normalizedText(text)?.toLowerCase();
+  if (!normalized) return false;
+  return policy.syncActionSignals.some((signal) => {
+    const lowered = signal.toLowerCase();
+    return normalized === lowered || normalized.includes(lowered);
+  });
+}
+
+export function releaseGateHasRequiredVerifyCommand(command: string | undefined, policyInput?: ReleaseGatePolicyInput | string): boolean {
+  const policy = typeof policyInput === 'string'
+    ? normalizeReleaseGatePolicy({ requiredCommand: policyInput })
+    : normalizeReleaseGatePolicy(policyInput);
   const normalized = normalizedText(command)?.toLowerCase();
   if (!normalized) return false;
-  return normalized === RELEASE_GATE_REQUIRED_COMMAND || normalized.includes(RELEASE_GATE_REQUIRED_COMMAND);
+  const requiredCommand = policy.requiredCommand.toLowerCase();
+  return normalized === requiredCommand || normalized.includes(requiredCommand);
 }
 
-function normalizeReleaseGateSteps(steps: ReleaseGateStepInput[], verifyCommand: string): ReleaseGateStep[] {
+function normalizeReleaseGateSteps(steps: ReleaseGateStepInput[], verifyCommand: string, policy: ReleaseGatePolicy): ReleaseGateStep[] {
   return steps
     .map((step): ReleaseGateStep | undefined => {
       if (!RELEASE_GATE_STEP_KINDS.includes(step.kind)) return undefined;
@@ -175,7 +249,7 @@ function normalizeReleaseGateSteps(steps: ReleaseGateStepInput[], verifyCommand:
       const status = normalizeStepStatus(step.status);
       return {
         kind: step.kind,
-        status: step.kind === 'release-verify' && !releaseGateHasRequiredVerifyCommand(command ?? verifyCommand)
+        status: step.kind === 'release-verify' && !releaseGateHasRequiredVerifyCommand(command ?? verifyCommand, policy)
           ? 'pending'
           : status,
         command,
@@ -193,21 +267,21 @@ function missingReleaseGateRequirements(input: {
   currentBranch?: string;
   targetRemote?: string;
   auditRefs: string[];
-}) {
+}, policy: ReleaseGatePolicy) {
   const missing: string[] = [];
-  if (!input.changeSummary && !passedStep(input.steps, 'change-summary')) missing.push('change-summary');
-  if (!input.currentBranch || !input.targetRemote) missing.push('git-target');
-  if (!input.auditRefs.length && !passedStep(input.steps, 'audit-record')) missing.push('audit-record');
-  if (!passedRequiredVerify(input.steps)) missing.push(RELEASE_GATE_REQUIRED_COMMAND);
-  if (!passedStep(input.steps, 'service-restart')) missing.push('service-restart');
+  if (policy.requiredStepKinds.includes('change-summary') && !input.changeSummary && !passedStep(input.steps, 'change-summary')) missing.push('change-summary');
+  if (policy.requiredStepKinds.includes('git-target') && (!input.currentBranch || !input.targetRemote)) missing.push('git-target');
+  if (policy.requiredStepKinds.includes('audit-record') && !input.auditRefs.length && !passedStep(input.steps, 'audit-record')) missing.push('audit-record');
+  if (policy.requiredStepKinds.includes('release-verify') && !passedRequiredVerify(input.steps, policy)) missing.push(policy.requiredCommand);
+  if (policy.requiredStepKinds.includes('service-restart') && !passedStep(input.steps, 'service-restart')) missing.push('service-restart');
   return uniqueStrings(missing);
 }
 
-function passedRequiredVerify(steps: ReleaseGateStep[]) {
+function passedRequiredVerify(steps: ReleaseGateStep[], policy: ReleaseGatePolicy) {
   return steps.some((step) =>
     step.kind === 'release-verify'
     && step.status === 'passed'
-    && releaseGateHasRequiredVerifyCommand(step.command ?? RELEASE_GATE_REQUIRED_COMMAND)
+    && releaseGateHasRequiredVerifyCommand(step.command ?? policy.requiredCommand, policy)
     && step.evidenceRefs.length > 0
   );
 }
@@ -216,12 +290,12 @@ function passedStep(steps: ReleaseGateStep[], kind: ReleaseGateStepKind) {
   return steps.some((step) => step.kind === kind && step.status === 'passed');
 }
 
-function releaseGateNextActions(status: ReleaseGateStatus, missing: string[], failureReasons: string[]) {
-  if (status === 'passed') return ['Push is allowed; preserve the release audit refs with the GitHub sync record.'];
-  if (failureReasons.length > 0) return ['Do not push. Repair the failed release check, rerun npm run verify:full, and refresh the release audit.'];
+function releaseGateNextActions(status: ReleaseGateStatus, missing: string[], failureReasons: string[], policy: ReleaseGatePolicy) {
+  if (status === 'passed') return [`${policy.syncActionLabel} is allowed; preserve release audit refs with the sync record.`];
+  if (failureReasons.length > 0) return [`Do not complete the ${policy.syncActionLabel}. Repair the failed release check, rerun ${policy.requiredCommand}, and refresh the release audit.`];
   return [
-    `Do not push until these release gate requirements are recorded: ${missing.join(', ')}.`,
-    'Run npm run verify:full, restart services, write the change summary, and keep audit refs before syncing to GitHub.',
+    `Do not complete the ${policy.syncActionLabel} until these release gate requirements are recorded: ${missing.join(', ')}.`,
+    `Run ${policy.requiredCommand}, refresh service health, write the change summary, and keep audit refs before external sync.`,
   ];
 }
 
@@ -252,4 +326,8 @@ function normalizedText(value: unknown) {
 
 function uniqueStrings(values: string[]) {
   return [...new Set(values.filter((value) => value.trim().length > 0))];
+}
+
+function uniqueStepKinds(values: readonly ReleaseGateStepKind[]) {
+  return [...new Set(values.filter((value) => RELEASE_GATE_STEP_KINDS.includes(value)))];
 }

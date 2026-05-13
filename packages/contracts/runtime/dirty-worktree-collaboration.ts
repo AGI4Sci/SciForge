@@ -375,14 +375,14 @@ function dirtyWorktreeNoHardcodeReview(): NoHardcodeReview {
     appliesGenerally: true,
     generalityStatement: 'Dirty worktree collaboration is decided from git status paths, ownership, planned write paths, and command risk; it does not branch on a specific milestone, filename, prompt phrase, repository name, or backend.',
     counterExamples: [
-      'Blocks an overlap even when the path is not part of R-CODE-06.',
+      'Blocks an overlap for any protected dirty path, independent of milestone or task label.',
       'Allows disjoint agent edits while preserving user-owned untracked files.',
       'Blocks git reset --hard, git checkout -- path, git restore, git clean -f, and git stash regardless of requested wording.',
     ],
     forbiddenSpecialCases: [
-      'R-CODE-06 literal milestone branch',
-      'PROJECT.md-only dirty tree exception',
-      'SciForge repository name allowlist',
+      'specific milestone literal branch',
+      'single-file dirty tree exception',
+      'repository-name allowlist',
       'prompt-specific “do not revert” string check',
       'backend-specific repair path exemption',
     ],

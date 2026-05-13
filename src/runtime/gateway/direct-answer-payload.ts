@@ -93,9 +93,8 @@ export interface PlainAgentTextClassification {
 
 export function classifyPlainAgentText(text: string): PlainAgentTextClassification {
   const trimmed = text.trim();
-  const lower = trimmed.toLowerCase();
   if (!trimmed) return { kind: 'runtime-log', reason: 'empty direct text cannot satisfy the user-visible result contract' };
-  if (/"(?:message|claims|uiManifest|executionUnits|artifacts)"\s*:/.test(trimmed) || /\bToolPayload\b/.test(trimmed)) {
+  if (/"(?:message|claims|uiManifest|executionUnits|artifacts)"\s*:/.test(trimmed) || /\bToolPayload\b|raw[_\s-]*tool[_\s-]*payload/i.test(trimmed)) {
     return { kind: 'tool-payload-json', reason: 'direct text looks like an unparsed ToolPayload or payload fragment' };
   }
   if (/"taskFiles"\s*:|taskFiles\s*[:=]|\b(outputRel|stdoutRel|stderrRel|taskRel)\b/.test(trimmed)) {
@@ -115,9 +114,6 @@ export function classifyPlainAgentText(text: string): PlainAgentTextClassificati
   if (/^(?:i(?:'|’)ll|i will|let me|now i(?:'|’)ll|next i(?:'|’)ll|checking|inspecting|running|reading)\b/i.test(trimmed)
     && !/[.!?]\s*$/.test(trimmed.slice(0, 240))) {
     return { kind: 'process-narration', reason: 'direct text looks like intermediate process narration rather than a final answer' };
-  }
-  if (lower.includes('raw_tool_payload_should_not_render')) {
-    return { kind: 'trace-or-debug-payload', reason: 'direct text includes raw payload sentinel text' };
   }
   return { kind: 'human-answer', reason: 'direct text appears to be a user-facing answer' };
 }

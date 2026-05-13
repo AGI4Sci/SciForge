@@ -155,9 +155,10 @@ assert.equal(feasibility.metadata.role, 'reproduction-feasibility-ranking');
 assert.equal(feasibility.metadata.derivation.parentArtifactRef, 'artifact:research-report');
 assert.ok(feasibility.metadata.derivation.sourceRefs.includes('artifact:research-report'));
 assert.ok(feasibility.metadata.derivation.sourceRefs.some((ref) => ref.startsWith('provider:')));
-assert.equal(feasibility.noHardcodeReview.passed, true);
-assert.ok(feasibility.noHardcodeReview.checks.some((check) => /title/i.test(check)));
-assert.ok(feasibility.noHardcodeReview.checks.some((check) => /array.index/i.test(check)));
+assert.equal(feasibility.noHardcodeReview.status, 'pass');
+assert.equal(feasibility.noHardcodeReview.appliesGenerally, true);
+assert.ok(feasibility.noHardcodeReview.forbiddenSpecialCases.some((item) => /title/i.test(item)));
+assert.ok(feasibility.noHardcodeReview.forbiddenSpecialCases.some((item) => /array.index/i.test(item)));
 
 const ignoredEvidence = deriveLiteratureReproductionFeasibility({
   output: retrievalOutput,
@@ -173,7 +174,8 @@ const ignoredEvidence = deriveLiteratureReproductionFeasibility({
 assert.deepEqual(ignoredEvidence.ignoredEvidencePaperIds, ['paper:missing-from-retrieval']);
 assert.equal(ignoredEvidence.rankedPapers.length, retrievalOutput.paperList.length);
 assert.equal(ignoredEvidence.rankedPapers.some((paper) => paper.evidenceRefs.includes('artifact:code:orphan')), false);
-assert.equal(ignoredEvidence.noHardcodeReview.passed, true);
+assert.equal(ignoredEvidence.noHardcodeReview.status, 'pass');
+assert.equal(ignoredEvidence.noHardcodeReview.appliesGenerally, true);
 assert.deepEqual(validateLiteratureReproductionFeasibilityArtifact(ignoredEvidence), []);
 
 console.log('[ok] literature retrieval output can be ranked into reproduction feasibility with refs-first analysis plan');

@@ -468,14 +468,14 @@ function noHardcodeReviewForFeedback(ownerLayer: TaskAttributionLayer, kind: Use
   return {
     schemaVersion: NO_HARDCODE_REVIEW_SCHEMA_VERSION,
     appliesGenerally: true,
-    generalityStatement: `User feedback convergence maps normalized complaint kind (${kind}) plus stable runtime evidence refs to owner-layer TODOs; it is not tied to R-WF-07, an exact phrase, a file name, a paper title, or a backend.`,
+    generalityStatement: `User feedback convergence maps normalized complaint kind (${kind}) plus stable runtime evidence refs to owner-layer TODOs; it is not tied to a specific milestone, exact phrase, file name, paper title, or backend.`,
     counterExamples: [
       'The same latency TODO must cover "slow", "stuck", "timeout", and equivalent localized wording.',
       'A citation mismatch must use evidence refs and not a paper-title-specific branch.',
       'Duplicate work complaints must converge by side-effect/resume evidence instead of one prompt string.',
     ],
     forbiddenSpecialCases: [
-      'exact R-WF-07 phrase branch',
+      'specific milestone phrase branch',
       'prompt-specific apology branch',
       'file-name-specific fix path',
       'paper-title-specific citation fix',

@@ -430,8 +430,8 @@ function backendComparisonNoHardcodeReview(): NoHardcodeReview {
       'Unsupported backend metadata blocks the comparison before any repair recommendation.',
     ],
     forbiddenSpecialCases: [
-      'Codex versus OpenTeam literal-only comparison',
-      'R-CODE-09 phrase branch',
+      'specific backend-pair literal-only comparison',
+      'specific milestone phrase branch',
       'backend-name-specific success path',
       'prompt-specific repair instruction',
       'file-name-specific backend workaround',

@@ -13,7 +13,12 @@ import {
   runBackgroundWorkVerify,
   verifyRoutingDecision,
 } from './intent-first-verification.js';
-import { RELEASE_GATE_REQUIRED_COMMAND } from '@sciforge-ui/runtime-contract/release-gate';
+
+const RELEASE_GATE_REQUIRED_COMMAND = 'npm run verify:full';
+const RELEASE_GATE_POLICY = {
+  requiredCommand: RELEASE_GATE_REQUIRED_COMMAND,
+  syncActionSignals: ['git push'],
+};
 
 test('intent match check is lightweight and does not imply work verification', () => {
   const check = buildIntentMatchCheck(baseRequest({
@@ -59,6 +64,7 @@ test('release routing creates a verify full gate and blocks push when evidence i
   const payload = basePayload({
     displayIntent: {
       releaseGate: {
+        policy: RELEASE_GATE_POLICY,
         changeSummary: 'Prepared release summary.',
         currentBranch: 'main',
         targetRemote: 'origin',
@@ -89,8 +95,29 @@ test('release routing creates a verify full gate and blocks push when evidence i
   assert.equal(envelope?.verdicts?.[0]?.verdict, 'pending');
 });
 
+test('release routing consumes release policy injected through uiState', () => {
+  const customPolicy = {
+    requiredCommand: 'python -m verifier.release --strict',
+    syncActionLabel: 'artifact publish',
+    syncActionSignals: ['publish artifact bundle'],
+    requiredStepKinds: ['release-verify', 'audit-record'] as const,
+  };
+  const request = baseRequest({
+    prompt: 'run release verify before publishing.',
+    uiState: { releaseGatePolicy: customPolicy },
+  });
+  const routing = verifyRoutingDecision(request);
+  const jobs = buildVerifyJobs(basePayload(), routing, request);
+
+  assert.equal(routing.mode, 'release');
+  assert.equal(jobs[0]?.command, customPolicy.requiredCommand);
+  assert.equal(jobs[0]?.releaseGate?.policy.syncActionLabel, customPolicy.syncActionLabel);
+  assert.ok(jobs[0]?.releaseGate?.missing.includes(customPolicy.requiredCommand));
+});
+
 test('release routing passes only when verify full, services, summary, git target, and audit refs are present', () => {
   const releaseGate = {
+    policy: RELEASE_GATE_POLICY,
     changeSummary: 'Release verification gate shipped.',
     currentBranch: 'main',
     targetRemote: 'origin',

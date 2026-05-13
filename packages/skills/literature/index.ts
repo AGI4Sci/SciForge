@@ -4,9 +4,11 @@ import {
   type CapabilityInvocationBudgetDebitRecord,
 } from '@sciforge-ui/runtime-contract/capability-budget';
 import {
+  NO_HARDCODE_REVIEW_SCHEMA_VERSION,
   SCIENTIFIC_REPRODUCTION_SCHEMA_VERSION,
   validateScientificReproductionArtifact,
   type AnalysisPlan,
+  type NoHardcodeReview,
   type RuntimeArtifactDerivation,
   type ScientificEvidenceRef,
   type ScientificReproductionArtifactType,
@@ -362,11 +364,7 @@ export interface LiteratureReproductionFeasibilityArtifact {
   analysisPlan: AnalysisPlan;
   sourceRefs: string[];
   ignoredEvidencePaperIds: string[];
-  noHardcodeReview: {
-    schemaVersion: 'sciforge.no-hardcode-review.v1';
-    passed: boolean;
-    checks: string[];
-  };
+  noHardcodeReview: NoHardcodeReview;
   diagnostics: LiteratureRetrievalDiagnostic[];
 }
 
@@ -797,15 +795,22 @@ export function deriveLiteratureReproductionFeasibility(
     sourceRefs,
     ignoredEvidencePaperIds,
     noHardcodeReview: {
-      schemaVersion: 'sciforge.no-hardcode-review.v1',
-      passed: true,
-      checks: [
-        'rank-by-paperId-and-ref-evidence',
-        'do-not-select-by-title-or-array-index',
-        'do not select by title or array index',
-        'derive-from-existing-paper-list-evidence-matrix-and-research-report',
-        'export-scientific-reproduction-analysis-plan',
+      schemaVersion: NO_HARDCODE_REVIEW_SCHEMA_VERSION,
+      appliesGenerally: true,
+      generalityStatement: 'Literature reproduction feasibility is ranked from structured paper ids, retrieval refs, and explicit code/data/compute/risk evidence; it does not select papers by title text, array index, provider name, or current prompt wording.',
+      counterExamples: [
+        'A paper with available code and data should rank well regardless of its title wording.',
+        'Evidence for a paper id absent from the retrieval output is ignored and reported instead of being forced into the ranking.',
+        'The exported analysis plan uses scientific reproduction refs instead of embedding full text or executing reproduction work.',
       ],
+      forbiddenSpecialCases: [
+        'title-or-array-index candidate selection',
+        'provider-name-specific availability shortcut',
+        'paper-title-specific reproduction score',
+        'prompt-phrase-specific ranking rule',
+      ],
+      ownerLayer: 'harness',
+      status: 'pass',
     },
     diagnostics: output.diagnostics,
   };
@@ -839,10 +844,13 @@ export function validateLiteratureReproductionFeasibilityArtifact(
   if (!planValidation.ok) {
     failures.push(`analysisPlan must satisfy scientific reproduction contract: ${planValidation.issues.map((issue) => issue.path).join(', ')}`);
   }
-  if (artifact.noHardcodeReview.schemaVersion !== 'sciforge.no-hardcode-review.v1') {
+  if (artifact.noHardcodeReview.schemaVersion !== NO_HARDCODE_REVIEW_SCHEMA_VERSION) {
     failures.push('noHardcodeReview must carry sciforge.no-hardcode-review.v1');
   }
-  if (!artifact.noHardcodeReview.checks.includes('do-not-select-by-title-or-array-index')) {
+  if (artifact.noHardcodeReview.status === 'pass' && artifact.noHardcodeReview.appliesGenerally !== true) {
+    failures.push('passing noHardcodeReview must apply generally');
+  }
+  if (!artifact.noHardcodeReview.forbiddenSpecialCases.includes('title-or-array-index candidate selection')) {
     failures.push('noHardcodeReview must forbid title/index based selection');
   }
   return failures;

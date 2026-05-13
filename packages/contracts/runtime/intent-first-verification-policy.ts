@@ -21,7 +21,7 @@ const REQUESTED_ACTION_PATTERNS: Array<{ type: IntentRequestedActionType; patter
 
 const PROMPT_ROUTE_PATTERNS: Array<{ mode: VerifyRouteMode; pattern: RegExp }> = [
   { mode: 'skip', pattern: /skip verify|no verify|不要验证|不需要验证|跳过验证/i },
-  { mode: 'release', pattern: /release verify|full verify|verify:full|npm run verify:full|git\s+push|push.*github|发布验证|上线验证|合并前验证|完整验证|完整.*验证.*github|推.*github/i },
+  { mode: 'release', pattern: /release verify|full verify|verify:full|发布验证|上线验证|合并前验证|完整验证/i },
   { mode: 'background', pattern: /background verify|verify in background|后台验证|后台.*verify/i },
   { mode: 'wait', pattern: /wait.*verify|verify.*before|等.*验证|验证.*再/i },
   { mode: 'careful', pattern: /careful verify|deep verify|仔细验证|深度验证|更稳/i },
