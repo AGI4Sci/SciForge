@@ -133,11 +133,56 @@
 - [x] `sessionTransforms` 下一轮请求 payload 改为携带 projection、selected refs、audit refs 按需展开，避免把 raw session.runs / executionUnits 当 continuation 真相源。
 - [x] 拆分 `executionUnitsForRun` 为 audit-only helper 与 projection-owned execution process，禁止主 UI 直接依赖 raw EU 聚合器。
 - [x] `SciForgeWorkbench` active recover focus 改为 projection-level focus；raw failure focus 只进入 audit/debug。
-- [ ] 接入 history edit/revert 和 export bundle 到同一 event-sourced kernel。
+- [x] 接入 history edit/revert 到同一 event-sourced kernel；export bundle 已接入 event-log/projection/audit-only raw 边界。
 
 ## 当前并行任务板
 
 更新时间：2026-05-13 23:xx Asia/Shanghai。任何 agent 开始新任务前必须先更新或确认这里的任务状态；完成后把验证命令和结果写回对应 milestone，再提交/推送。
+
+### Active：第四轮 final-shape history/export/verify/拆分
+
+- [x] H / owner: Faraday / history edit-revert event-sourced
+  - 写入范围：`src/ui/src/app/chat/sessionTransforms.ts` 与 tests、`src/runtime/conversation-kernel/**`、相关 runtime contract。
+  - 目标：history edit/revert/continue 携带或写入可审计 event-log / projection invalidation / ref invalidation 信息，避免只作为 UI/session 局部状态。
+  - 当前状态：`HistoryEdited` 进入 conversation-kernel event contract/replay/projection；UI historical edit branch 写入 compact `ConversationEventLog`、projection invalidation 和 ref invalidation contract，revert/continue 后续 refs 不再只是 session 局部状态。
+  - 验收：通过 `node --import tsx --test src/runtime/conversation-kernel.test.ts`、`node --import tsx --test src/ui/src/app/chat/sessionTransforms.test.ts`、`npm run typecheck`。
+- [x] I / owner: Rawls / export bundle final-shape
+  - 写入范围：export/download/bundle 相关 helper 与 tests、result presentation/conversation-kernel helper。
+  - 目标：bundle 导出包含 `ConversationEventLog`、restored `ConversationProjection`、refs manifest 和 audit-only raw attachments 边界。
+  - 当前状态：`buildExecutionBundle` 新增 final-shape export 子结构，导出 scoped `ConversationEventLog`、由 event log replay 的 projection、refs manifest，并将 raw runs / executionUnits 标记为 audit-only attachments；UI 下载路径继续复用同一 helper。
+  - 验收：通过 `node --import tsx --test src/ui/src/exportPolicy.test.ts`、`npx tsx tests/smoke/smoke-conversation-kernel-final-shape.ts`、`npm run typecheck`。
+- [x] J / owner: Euler / final-shape smoke verify 链路
+  - 写入范围：`package.json` scripts、verify/smoke guard、`PROJECT.md`。
+  - 目标：`tests/smoke/smoke-conversation-kernel-final-shape.ts` 进入 package script 或 verify 链路，防止 guard 被遗忘。
+  - 当前状态：新增 `smoke:conversation-kernel-final-shape` 并接入 `smoke:all`；新增 `smoke:final-shape-verify-guard` 并接入 `verify:fast`，guard 会检查 final-shape smoke 仍在 package verify 链路中。
+  - 验收：通过 `npm run smoke:final-shape-verify-guard`、`npm run smoke:conversation-kernel-final-shape`。
+- [x] K / owner: Hume / `sessionTransforms` 语义拆分第一刀
+  - 写入范围：`src/ui/src/app/chat/sessionTransforms.ts`、新建语义模块与 tests。
+  - 目标：抽出 projection continuation 逻辑，降低主文件职责压力，保持行为不变。
+  - 当前状态：已抽出 `src/ui/src/app/chat/sessionProjectionContinuation.ts`，主文件保留 request payload 编排；projection continuation 行为继续由 `sessionTransforms.test.ts` 覆盖。
+  - 验收：`node --import tsx --test src/ui/src/app/chat/sessionTransforms.test.ts`、`npm run typecheck`、`npm run smoke:long-file-budget`。
+
+### 2026-05-13 Milestone：History/Edit、Export Bundle 与 Verify 链路收敛
+
+第四轮由 Faraday、Rawls、Euler、Hume 并行推进，主线程负责合并、边界 guard 修复和最终验证。目标是把第三轮剩余的 event-sourced history、portable export、final-shape smoke 和长文件治理第一刀同时收口。
+
+- [x] `HistoryEdited` 进入 conversation-kernel event contract / replay / projection；history edit/revert/continue 分支携带 compact `ConversationEventLog`、projection invalidation 和 ref invalidation。
+- [x] export bundle final-shape 子结构导出 scoped `ConversationEventLog`、event-log restored `ConversationProjection`、refs manifest 和 audit-only raw attachments。
+- [x] `smoke:conversation-kernel-final-shape` 接入 `smoke:all`，`verify:fast` 增加 `smoke:final-shape-verify-guard` 防止 smoke 脱链。
+- [x] projection continuation 从 `sessionTransforms.ts` 抽到 `sessionProjectionContinuation.ts`；主文件仍在 watch list，但职责边界已往语义模块拆分。
+- [x] export refs manifest 的 artifact ref 构造移入 runtime contract helper，保持 `src` 不持有 package-owned artifact ref literal。
+
+本轮验证：
+
+- [x] `npm run typecheck`
+- [x] `node --import tsx --test src/runtime/conversation-kernel.test.ts src/ui/src/app/chat/sessionTransforms.test.ts src/ui/src/exportPolicy.test.ts`
+- [x] `node --import tsx --test src/ui/src/exportPolicy.test.ts packages/contracts/runtime/artifact-reference-policy.test.ts`
+- [x] `npm run smoke:final-shape-verify-guard`
+- [x] `npm run smoke:conversation-kernel-final-shape`
+- [x] `npm run smoke:long-file-budget`
+- [x] `npm run smoke:no-src-capability-semantics`
+- [x] `npm run build`
+- [x] `git diff --check`
 
 ### Active：第三轮 final-shape raw-run 回流收敛
 
@@ -190,15 +235,15 @@
 
 ### Todo：后续 final-shape
 
-- [ ] 接入 history edit/revert 到 event-sourced kernel。
-- [ ] export bundle 改为导出 event log、projection、refs manifest 和 audit-only raw attachments。
+- [x] 接入 history edit/revert 到 event-sourced kernel。
+- [x] export bundle 改为导出 event log、projection、refs manifest 和 audit-only raw attachments。
 - [ ] 拆分 watch list 长文件：`src/runtime/generation-gateway.ts`、`src/runtime/gateway/context-envelope.ts`、`src/ui/src/app/ChatPanel.tsx`。
-- [ ] 将 `tests/smoke/smoke-conversation-kernel-final-shape.ts` 加入 package script 或 verify 链路，防止 final-shape guard 被遗忘。
+- [x] 将 `tests/smoke/smoke-conversation-kernel-final-shape.ts` 加入 package script 与 `smoke:all`；`verify:fast` 先运行轻量 guard 防止 final-shape smoke 脱链。
 
 长文件治理：
 
 - [ ] `packages/skills/literature/index.ts` 当前超过 1500 行。后续应拆为 `literature-search-provider`、`literature-download-provider`、`literature-report-synthesis`、`literature-contract-normalizer` 等语义模块，主入口只保留 capability 编排和导出。
-- [ ] `src/ui/src/app/chat/sessionTransforms.ts` 当前超过 1500 行。后续应拆为 `session-message-projection`、`session-run-projection`、`session-reference-projection`、`session-archive-projection` 等语义模块，避免聊天状态恢复继续膨胀。
+- [ ] `src/ui/src/app/chat/sessionTransforms.ts` 已完成第一刀：projection continuation 已拆到 `src/ui/src/app/chat/sessionProjectionContinuation.ts`。在并行 history edit 改动叠加后主文件当前约 1648 行，仍超过 1500 行；后续应继续拆为 `session-message-projection`、`session-run-projection`、`session-reference-projection`、`session-archive-projection` 等语义模块，避免聊天状态恢复继续膨胀。
 
 ## 最终形态修改建议
 

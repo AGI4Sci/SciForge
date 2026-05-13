@@ -5,6 +5,7 @@ import type {
   ConversationState,
 } from './types';
 import { classifyFailureOwner } from './failure-classifier';
+import { historyEditStateFromEvent } from './history-edit';
 
 const terminalStatuses = new Set<ConversationKernelStatus>([
   'satisfied',
@@ -65,6 +66,27 @@ export function applyConversationEvent(state: ConversationState, event: Conversa
       return withFailure(next, 'repair-needed', event);
     case 'NeedsHuman':
       return { ...next, status: 'needs-human', terminal: true };
+    case 'HistoryEdited': {
+      const historyEdit = historyEditStateFromEvent(event);
+      return {
+        ...next,
+        status: historyEdit?.requiresUserConfirmation ? 'needs-human' : 'planned',
+        terminal: historyEdit?.requiresUserConfirmation === true,
+        historyEdit,
+        diagnostics: historyEdit?.projectionInvalidated
+          ? [
+              ...next.diagnostics,
+              {
+                severity: 'warning',
+                code: 'history-edit-projection-invalidated',
+                eventId: event.id,
+                message: historyEdit.nextStep,
+                refs: historyEdit.invalidatedRefs.map((ref) => ({ ref })),
+              },
+            ]
+          : next.diagnostics,
+      };
+    }
     case 'BackgroundRunning':
       return {
         ...next,

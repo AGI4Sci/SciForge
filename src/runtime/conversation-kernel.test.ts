@@ -225,3 +225,64 @@ test('conversation projection does not infer background or verification state fr
   assert.equal(projection.backgroundState, undefined);
   assert.deepEqual(projection.auditRefs, []);
 });
+
+test('conversation kernel replays history edits as projection and ref invalidation boundaries', () => {
+  let log = createConversationEventLog('c-history-edit');
+  log = appendConversationEvent(log, {
+    id: 'history-edit-1',
+    type: 'HistoryEdited',
+    storage: 'inline',
+    actor: 'ui',
+    timestamp: '2026-05-13T01:00:00.000Z',
+    turnId: 'message:msg-1',
+    payload: {
+      summary: 'Historical edit reverted downstream work.',
+      branchId: 'history-edit-1',
+      mode: 'revert',
+      sourceMessageRef: 'message:msg-1',
+      boundaryAt: '2026-05-13T00:00:00.000Z',
+      invalidatedRefs: ['run:r-late', 'artifact:late-report'],
+      affectedRefs: ['run:r-late', 'artifact:late-report'],
+      projectionInvalidation: {
+        schemaVersion: 'sciforge.history-edit-projection-invalidation.v1',
+        invalidatesProjection: true,
+        staleProjectionRefs: ['artifact:late-report'],
+      },
+      requiresUserConfirmation: false,
+      nextStep: 'Start the next run from the edited message boundary.',
+    },
+  }).log;
+
+  const state = replayConversationState(log);
+  const projection = projectConversation(log, state);
+
+  assert.equal(state.status, 'planned');
+  assert.equal(state.historyEdit?.mode, 'revert');
+  assert.equal(state.historyEdit?.projectionInvalidated, true);
+  assert.deepEqual(state.historyEdit?.invalidatedRefs, ['run:r-late', 'artifact:late-report']);
+  assert.equal(projection.historyEdit?.sourceMessageRef, 'message:msg-1');
+  assert.match(projection.visibleAnswer?.diagnostic ?? '', /edited message boundary/);
+  assert.deepEqual(projection.recoverActions, ['Start the next run from the edited message boundary.']);
+  assert.equal(projection.diagnostics[0]?.code, 'history-edit-projection-invalidated');
+});
+
+test('conversation kernel requires projection invalidation metadata for history edits', () => {
+  const result = appendConversationEvent(createConversationEventLog('c-history-invalid'), {
+    id: 'history-edit-missing-projection',
+    type: 'HistoryEdited',
+    storage: 'inline',
+    actor: 'ui',
+    timestamp: '2026-05-13T01:00:00.000Z',
+    payload: {
+      branchId: 'history-edit-missing-projection',
+      mode: 'continue',
+      sourceMessageRef: 'message:msg-1',
+      boundaryAt: '2026-05-13T00:00:00.000Z',
+      affectedRefs: ['run:r-late'],
+      invalidatedRefs: [],
+    },
+  });
+
+  assert.equal(result.rejected?.code, 'history-edit-projection-invalidation-required');
+  assert.equal(result.log.events.length, 0);
+});

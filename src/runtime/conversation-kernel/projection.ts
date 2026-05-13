@@ -16,6 +16,7 @@ export function projectConversation(log: ConversationEventLog, state: Conversati
     || event.type === 'ExternalBlocked'
     || event.type === 'RepairNeeded'
     || event.type === 'NeedsHuman'
+    || event.type === 'HistoryEdited'
   );
   const artifacts = uniqueRefs(log.events.flatMap((event) => event.storage === 'ref' ? event.payload.refs : []));
   const auditRefs = uniqueStrings(log.events.flatMap(eventRefs));
@@ -34,7 +35,7 @@ export function projectConversation(log: ConversationEventLog, state: Conversati
           status: state.status,
           text: typeof answerEvent.payload.text === 'string' ? answerEvent.payload.text : undefined,
           artifactRefs: answerEvent.storage === 'ref' ? answerEvent.payload.refs.map((ref) => ref.ref) : stringArray(answerEvent.payload.artifactRefs),
-          diagnostic: state.failureOwner?.reason,
+          diagnostic: state.failureOwner?.reason ?? state.historyEdit?.nextStep,
         }
       : undefined,
     activeRun: state.activeRunId ? { id: state.activeRunId, status: state.status } : undefined,
@@ -48,12 +49,14 @@ export function projectConversation(log: ConversationEventLog, state: Conversati
     recoverActions: recoverActionsForState(state),
     verificationState: state.verification ?? defaultVerification(),
     backgroundState: state.background,
+    historyEdit: state.historyEdit,
     auditRefs,
     diagnostics: state.diagnostics,
   };
 }
 
 function recoverActionsForState(state: ConversationState): string[] {
+  if (state.historyEdit?.nextStep) return [state.historyEdit.nextStep];
   if (state.failureOwner) return [state.failureOwner.nextStep];
   if (state.status === 'background-running') return ['Open checkpoint refs while background revision continues.'];
   if (state.status === 'degraded-result') return ['Reuse available refs or request a supplement for missing evidence.'];

@@ -17,26 +17,22 @@ import type {
 } from '../../domain';
 import { makeId, nowIso } from '../../domain';
 import { mergeObjectReferences } from '../../../../../packages/support/object-references';
-import { collectRuntimeRefsFromValue } from '@sciforge-ui/runtime-contract/references';
 import { normalizeScenarioPromptTitle } from '@sciforge/scenario-core/scenario-routing-policy';
 import {
   ACCEPTANCE_REPAIR_RERUN_TOOL_ID,
   BACKGROUND_COMPLETION_CONTRACT_ID,
   BACKGROUND_COMPLETION_TOOL_ID,
-  CONVERSATION_PROJECTION_CONTINUATION_TOOL_ID,
   normalizeRunTermination,
   type RunTerminationRecord,
 } from '@sciforge-ui/runtime-contract/events';
 import {
-  conversationProjectionArtifactRefs,
-  conversationProjectionAuditRefs,
-  conversationProjectionForRun,
-  conversationProjectionPrimaryDiagnostic,
-  conversationProjectionStatus,
-  conversationProjectionVisibleText,
-  type UiConversationProjection,
-} from '../conversation-projection-view-model';
+  compactProjectionExecutionUnitsForRequestPayload,
+  compactRunRawAuditForProjectionPayload,
+  projectionContinuationContexts,
+  type ProjectionContinuationContext,
+} from './sessionProjectionContinuation';
 import { compactRunRawForRequestPayload } from './runRawCompaction';
+import type { ConversationEventLog } from '../../../../runtime/conversation-kernel/types';
 
 const REQUEST_PAYLOAD_MESSAGE_LIMIT = 12;
 const REQUEST_PAYLOAD_ARTIFACT_LIMIT = 16;
@@ -46,10 +42,6 @@ const REQUEST_PAYLOAD_MESSAGE_TEXT_LIMIT = 6_000;
 const REQUEST_PAYLOAD_RUN_TEXT_LIMIT = 2_000;
 const REQUEST_PAYLOAD_RAW_TEXT_LIMIT = 2_500;
 const REQUEST_PAYLOAD_INLINE_DATA_LIMIT = 3_000;
-const REQUEST_PAYLOAD_PROJECTION_LIMIT = 4;
-const REQUEST_PAYLOAD_PROJECTION_TEXT_LIMIT = 360;
-const REQUEST_PAYLOAD_SELECTED_REF_LIMIT = 8;
-const REQUEST_PAYLOAD_AUDIT_REF_LIMIT = 24;
 const HISTORY_EDIT_BRANCH_SCHEMA_VERSION = 'sciforge.history-edit-branch.v1';
 
 export type HistoricalMessageEditMode = 'revert' | 'continue';
@@ -96,6 +88,26 @@ export interface HistoricalMessageEditBranch {
   conflicts: HistoricalMessageEditConflict[];
   requiresUserConfirmation: boolean;
   nextStep: string;
+  kernelEventLog: ConversationEventLog;
+  kernelEventLogDigest: string;
+  projectionInvalidation: HistoricalMessageEditProjectionInvalidation;
+  refInvalidation: HistoricalMessageEditRefInvalidation;
+}
+
+export interface HistoricalMessageEditProjectionInvalidation {
+  schemaVersion: 'sciforge.history-edit-projection-invalidation.v1';
+  source: 'history-edit-event-log';
+  invalidatesProjection: true;
+  reason: 'edited-message-boundary';
+  boundaryAt: string;
+  staleProjectionRefs: string[];
+}
+
+export interface HistoricalMessageEditRefInvalidation {
+  schemaVersion: 'sciforge.history-edit-ref-invalidation.v1';
+  mode: HistoricalMessageEditMode;
+  invalidatedRefs: string[];
+  affectedRefs: string[];
 }
 
 export type HistoricalMessageEditSession = SciForgeSession & {
@@ -854,105 +866,6 @@ export function requestPayloadForTurn(session: SciForgeSession, userMessage: Sci
   };
 }
 
-interface ProjectionContinuationContext {
-  sourceRunId: string;
-  projection: UiConversationProjection;
-  summary: ConversationProjectionContinuationSummary;
-  auditRefs: string[];
-}
-
-interface ConversationProjectionContinuationSummary {
-  schemaVersion: 'sciforge.conversation-projection-continuation.v1';
-  source: 'conversation-projection';
-  sourceRunId: string;
-  status: string;
-  currentTurnId?: string;
-  visibleText?: string;
-  diagnostic?: string;
-  artifactRefs: string[];
-  recoverActions: string[];
-  backgroundState?: {
-    status?: string;
-    checkpointRefs?: string[];
-    revisionPlan?: string;
-  };
-  verificationState?: {
-    status?: string;
-    verifierRef?: string;
-    verdict?: string;
-  };
-  selectedRefs: Array<{
-    id: string;
-    kind: string;
-    ref: string;
-    title?: string;
-    summary?: string;
-  }>;
-  auditRefs: string[];
-}
-
-function projectionContinuationContexts(runs: SciForgeRun[], references: SciForgeReference[]): ProjectionContinuationContext[] {
-  const selectedRefs = compactSelectedRefsForProjectionContinuation(references);
-  return runs
-    .map((run) => {
-      const projection = conversationProjectionForRun(run);
-      if (!projection) return undefined;
-      const auditRefs = uniqueStringRefs([
-        ...conversationProjectionAuditRefs(projection),
-        ...collectRuntimeRefsFromValue(run.raw, { maxDepth: 5, maxRefs: REQUEST_PAYLOAD_AUDIT_REF_LIMIT, includeIds: false }),
-      ]).slice(0, REQUEST_PAYLOAD_AUDIT_REF_LIMIT);
-      return {
-        sourceRunId: run.id,
-        projection,
-        auditRefs,
-        summary: compactConversationProjectionForRequestPayload(run.id, projection, selectedRefs, auditRefs),
-      };
-    })
-    .filter((context): context is ProjectionContinuationContext => Boolean(context))
-    .slice(-REQUEST_PAYLOAD_PROJECTION_LIMIT);
-}
-
-function compactConversationProjectionForRequestPayload(
-  sourceRunId: string,
-  projection: UiConversationProjection,
-  selectedRefs: ConversationProjectionContinuationSummary['selectedRefs'],
-  auditRefs: string[],
-): ConversationProjectionContinuationSummary {
-  return {
-    schemaVersion: 'sciforge.conversation-projection-continuation.v1',
-    source: 'conversation-projection',
-    sourceRunId,
-    status: conversationProjectionStatus(projection),
-    currentTurnId: projection.currentTurn?.id,
-    visibleText: clipOptionalText(conversationProjectionVisibleText(projection), REQUEST_PAYLOAD_PROJECTION_TEXT_LIMIT),
-    diagnostic: clipOptionalText(conversationProjectionPrimaryDiagnostic(projection), 600),
-    artifactRefs: conversationProjectionArtifactRefs(projection).slice(0, 12),
-    recoverActions: projection.recoverActions.slice(0, 6).map((action) => clipText(action, 500)),
-    backgroundState: projection.backgroundState ? {
-      status: projection.backgroundState.status,
-      checkpointRefs: projection.backgroundState.checkpointRefs?.slice(0, 8),
-      revisionPlan: clipOptionalText(projection.backgroundState.revisionPlan, 600),
-    } : undefined,
-    verificationState: projection.verificationState ? {
-      status: projection.verificationState.status,
-      verifierRef: projection.verificationState.verifierRef,
-      verdict: projection.verificationState.verdict,
-    } : undefined,
-    selectedRefs,
-    auditRefs: auditRefs.slice(0, REQUEST_PAYLOAD_AUDIT_REF_LIMIT),
-  };
-}
-
-function compactSelectedRefsForProjectionContinuation(references: SciForgeReference[]) {
-  return references.slice(-REQUEST_PAYLOAD_SELECTED_REF_LIMIT).map((reference) => ({
-    id: reference.id,
-    kind: reference.kind,
-    ref: reference.ref,
-    title: clipOptionalText(reference.title, 160),
-    summary: clipOptionalText(reference.summary, 360),
-  }));
-}
-
 function compactMessagesForRequestPayload(messages: SciForgeMessage[], currentMessageId: string) {
   return messages
     .filter((message) => !message.id.startsWith('seed'))
@@ -969,109 +882,6 @@ function compactMessagesForRequestPayload(messages: SciForgeMessage[], currentMe
       references: message.references?.slice(-8),
       objectReferences: message.objectReferences?.slice(-12),
     }));
-}
-
-function compactProjectionExecutionUnitsForRequestPayload(
-  units: RuntimeExecutionUnit[],
-  contexts: ProjectionContinuationContext[],
-): RuntimeExecutionUnit[] {
-  const auditRefs = new Set(contexts.flatMap((context) => context.auditRefs));
-  const sourceRunIds = new Set(contexts.map((context) => context.sourceRunId));
-  const auditUnits = units
-    .filter((unit) => executionUnitBelongsToProjectionAudit(unit, auditRefs, sourceRunIds))
-    .slice(-(REQUEST_PAYLOAD_EXECUTION_UNIT_LIMIT - 1))
-    .map(compactExecutionUnitAuditForRequestPayload);
-  return [
-    ...auditUnits,
-    projectionContinuationExecutionUnit(contexts),
-  ];
-}
-
-function projectionContinuationExecutionUnit(contexts: ProjectionContinuationContext[]): RuntimeExecutionUnit {
-  const params = projectionContinuationParams(contexts);
-  return {
-    id: `projection-continuation-${contexts.at(-1)?.sourceRunId ?? 'session'}`,
-    tool: CONVERSATION_PROJECTION_CONTINUATION_TOOL_ID,
-    params,
-    status: 'record-only',
-    hash: stableTextHash(params),
-    runId: contexts.at(-1)?.sourceRunId,
-    sourceRunId: contexts.at(-1)?.sourceRunId,
-  };
-}
-
-function projectionContinuationParams(contexts: ProjectionContinuationContext[]) {
-  const build = (projections: ConversationProjectionContinuationSummary[]) => JSON.stringify({
-    schemaVersion: 'sciforge.conversation-projection-continuation-set.v1',
-    policy: 'projection-first; raw runs and execution units are audit refs only',
-    projections,
-  });
-  const full = build(contexts.map((context) => context.summary));
-  if (full.length <= 900) return full;
-  const compact = build(contexts.slice(-1).map((context) => ({
-    ...context.summary,
-    visibleText: context.summary.visibleText ? omittedTextDigestLabel('projection-visible-text', context.summary.visibleText) : undefined,
-    diagnostic: clipOptionalText(context.summary.diagnostic, 160),
-    recoverActions: context.summary.recoverActions.map((action) => clipText(action, 160)).slice(0, 3),
-    selectedRefs: context.summary.selectedRefs.map((ref) => ({
-      ...ref,
-      title: clipOptionalText(ref.title, 60),
-      summary: undefined,
-    })),
-    auditRefs: context.summary.auditRefs.slice(0, 12),
-  })));
-  if (compact.length <= 900) return compact;
-  return build(contexts.slice(-1).map((context) => ({
-    schemaVersion: context.summary.schemaVersion,
-    source: context.summary.source,
-    sourceRunId: context.summary.sourceRunId,
-    status: context.summary.status,
-    currentTurnId: context.summary.currentTurnId,
-    artifactRefs: context.summary.artifactRefs.slice(0, 4),
-    recoverActions: [],
-    selectedRefs: context.summary.selectedRefs.map((ref) => ({
-      id: ref.id,
-      kind: ref.kind,
-      ref: ref.ref,
-    })).slice(0, 4),
-    auditRefs: context.summary.auditRefs.slice(0, 8),
-  })));
-}
-
-function executionUnitBelongsToProjectionAudit(
-  unit: RuntimeExecutionUnit,
-  auditRefs: Set<string>,
-  sourceRunIds: Set<string>,
-) {
-  if (sourceRunIds.has(unit.runId ?? '') || sourceRunIds.has(unit.sourceRunId ?? '') || sourceRunIds.has(unit.producerRunId ?? '')) return true;
-  const candidateRefs = executionUnitAuditRefs(unit);
-  return candidateRefs.some((ref) => auditRefs.has(ref) || auditRefs.has(`execution-unit:${unit.id}`));
-}
-
-function compactExecutionUnitAuditForRequestPayload(unit: RuntimeExecutionUnit): RuntimeExecutionUnit {
-  return {
-    id: unit.id,
-    tool: unit.tool,
-    params: omittedTextDigestLabel('execution-unit-params', unit.params),
-    status: unit.status,
-    hash: unit.hash,
-    runId: unit.runId,
-    sourceRunId: unit.sourceRunId,
-    producerRunId: unit.producerRunId,
-    agentServerRunId: unit.agentServerRunId,
-    codeRef: unit.codeRef,
-    stdoutRef: unit.stdoutRef,
-    stderrRef: unit.stderrRef,
-    outputRef: unit.outputRef,
-    diffRef: unit.diffRef,
-    artifacts: unit.artifacts?.slice(-8),
-    outputArtifacts: unit.outputArtifacts?.slice(-8),
-    verificationRef: unit.verificationRef,
-    verificationVerdict: unit.verificationVerdict,
-    scenarioPackageRef: unit.scenarioPackageRef,
-    skillPlanRef: unit.skillPlanRef,
-    uiPlanRef: unit.uiPlanRef,
-  };
 }
 
 function compactArtifactForRequestPayload(artifact: RuntimeArtifact): RuntimeArtifact {
@@ -1135,49 +945,6 @@ function compactRunForRequestPayload(run: SciForgeRun, projectionContexts: Proje
   };
 }
 
-function compactRunRawAuditForProjectionPayload(
-  raw: unknown,
-  context: ProjectionContinuationContext,
-) {
-  const record = isCompactRecord(raw) ? raw : {};
-  const backgroundCompletion = isCompactRecord(record.backgroundCompletion) ? record.backgroundCompletion : undefined;
-  return {
-    termination: record.termination,
-    cancelBoundary: record.cancelBoundary,
-    historicalEditConflict: record.historicalEditConflict,
-    guidanceQueue: record.guidanceQueue,
-    backgroundCompletion: backgroundCompletion ? {
-      status: backgroundCompletion.status,
-      stage: backgroundCompletion.stage,
-      runId: backgroundCompletion.runId,
-      termination: backgroundCompletion.termination,
-      refs: uniqueStringRefs([
-        ...(Array.isArray(backgroundCompletion.refs) ? backgroundCompletion.refs : []),
-        ...context.auditRefs,
-      ]).slice(0, 16),
-    } : undefined,
-    projectionAudit: {
-      schemaVersion: 'sciforge.conversation-projection-audit.v1',
-      source: 'conversation-projection',
-      sourceRunId: context.sourceRunId,
-      projectionDigest: stableTextHash(JSON.stringify(context.summary)),
-      auditRefs: context.auditRefs.slice(0, REQUEST_PAYLOAD_AUDIT_REF_LIMIT),
-      selectedRefs: context.summary.selectedRefs.map((ref) => ref.ref),
-    },
-    refs: uniqueStringRefs([
-      ...(Array.isArray(record.refs) ? record.refs : []),
-      ...context.auditRefs,
-    ]).slice(0, REQUEST_PAYLOAD_AUDIT_REF_LIMIT),
-    bodySummary: {
-      omitted: 'run-raw-body',
-      keys: Array.isArray((record.bodySummary as { keys?: unknown } | undefined)?.keys)
-        ? ((record.bodySummary as { keys?: unknown[] }).keys ?? []).filter((key): key is string => typeof key === 'string').slice(0, 16)
-        : Object.keys(record).slice(0, 16),
-      projectionFirst: true,
-    },
-  };
-}
-
 function omittedTextDigestLabel(label: string, value: string) {
   const digest = digestTextField(value);
   return digest?.hash
@@ -1217,20 +984,6 @@ function terminationReasonFromRaw(raw: unknown) {
 
 function isCompactRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function executionUnitAuditRefs(unit: RuntimeExecutionUnit) {
-  return uniqueStringRefs([
-    `execution-unit:${unit.id}`,
-    unit.codeRef,
-    unit.stdoutRef,
-    unit.stderrRef,
-    unit.outputRef,
-    unit.diffRef,
-    unit.verificationRef,
-    ...(unit.artifacts ?? []).map((id) => id.startsWith('artifact:') ? id : `artifact:${id}`),
-    ...(unit.outputArtifacts ?? []).map((id) => id.startsWith('artifact:') ? id : `artifact:${id}`),
-  ]);
 }
 
 function uniqueStringRefs(values: unknown[]) {
@@ -1329,6 +1082,8 @@ export function applyHistoricalUserMessageEdit({
     ? impact.refs.map((ref) => ({ ...ref, reason: 'invalidated-after-edit' as const }))
     : [];
   const sourceMessageRef = `message:${messageId}`;
+  const projectionInvalidation = historicalEditProjectionInvalidation(mode, impact, invalidatedRefs);
+  const refInvalidation = historicalEditRefInvalidation(mode, invalidatedRefs, affectedRefs);
   const branch: HistoricalMessageEditBranch = {
     schemaVersion: HISTORY_EDIT_BRANCH_SCHEMA_VERSION,
     id: branchId,
@@ -1345,7 +1100,17 @@ export function applyHistoricalUserMessageEdit({
     conflicts: mode === 'continue' ? historicalEditConflicts(sourceMessageRef, impact) : [],
     requiresUserConfirmation: mode === 'continue' && impact.refs.length > 0,
     nextStep: historicalEditNextStep(mode, impact.refs.length),
+    kernelEventLog: {
+      schemaVersion: 'sciforge.conversation-event-log.v1',
+      conversationId: `session:${session.sessionId}:history-edit:${branchId}`,
+      events: [],
+    },
+    kernelEventLogDigest: '',
+    projectionInvalidation,
+    refInvalidation,
   };
+  branch.kernelEventLog = historicalEditKernelEventLog(session, branch);
+  branch.kernelEventLogDigest = stableTextHash(stableJson(branch.kernelEventLog));
   const editedMessage = updateHistoricalEditMessage(target, content, editedAt);
   const nextSession = mode === 'revert'
     ? revertHistoricalEditSession(session, index, editedMessage, impact, editedAt)
@@ -1595,6 +1360,90 @@ function historicalEditNextStep(mode: HistoricalMessageEditMode, affectedRefCoun
   return affectedRefCount > 0
     ? 'Ask the user to confirm whether to keep the affected downstream results or rerun from the edited message boundary before using those refs as current conclusions.'
     : 'No downstream results conflict with the edit; continue normally.';
+}
+
+function historicalEditProjectionInvalidation(
+  mode: HistoricalMessageEditMode,
+  impact: HistoricalEditImpact,
+  invalidatedRefs: HistoricalMessageEditRef[],
+): HistoricalMessageEditProjectionInvalidation {
+  const staleProjectionRefs = mode === 'revert'
+    ? invalidatedRefs.map((ref) => ref.ref)
+    : impact.refs.map((ref) => ref.ref);
+  return {
+    schemaVersion: 'sciforge.history-edit-projection-invalidation.v1',
+    source: 'history-edit-event-log',
+    invalidatesProjection: true,
+    reason: 'edited-message-boundary',
+    boundaryAt: impact.cutoff,
+    staleProjectionRefs: uniqueStrings(staleProjectionRefs).slice(0, 64),
+  };
+}
+
+function historicalEditRefInvalidation(
+  mode: HistoricalMessageEditMode,
+  invalidatedRefs: HistoricalMessageEditRef[],
+  affectedRefs: HistoricalMessageEditRef[],
+): HistoricalMessageEditRefInvalidation {
+  return {
+    schemaVersion: 'sciforge.history-edit-ref-invalidation.v1',
+    mode,
+    invalidatedRefs: uniqueStrings(invalidatedRefs.map((ref) => ref.ref)).slice(0, 64),
+    affectedRefs: uniqueStrings(affectedRefs.map((ref) => ref.ref)).slice(0, 64),
+  };
+}
+
+function historicalEditKernelEventLog(session: SciForgeSession, branch: HistoricalMessageEditBranch): ConversationEventLog {
+  const originalContentDigest = digestTextField(branch.originalContent);
+  const editedContentDigest = digestTextField(branch.editedContent);
+  return {
+    schemaVersion: 'sciforge.conversation-event-log.v1',
+    conversationId: `session:${session.sessionId}:history-edit:${branch.id}`,
+    events: [{
+      id: `${branch.id}:history-edited`,
+      type: 'HistoryEdited',
+      storage: 'inline',
+      actor: 'ui',
+      timestamp: branch.editedAt,
+      turnId: branch.sourceMessageRef,
+      payload: {
+        summary: `Historical message ${branch.mode} at ${branch.sourceMessageRef}`,
+        branchId: branch.id,
+        mode: branch.mode,
+        sourceMessageRef: branch.sourceMessageRef,
+        messageId: branch.messageId,
+        boundaryAt: branch.boundaryAt,
+        editedAt: branch.editedAt,
+        originalContentDigest,
+        editedContentDigest,
+        invalidatedRefs: branch.refInvalidation.invalidatedRefs,
+        affectedRefs: branch.refInvalidation.affectedRefs,
+        affectedConclusionRefs: branch.affectedConclusions.map((claim) => claim.ref).slice(0, 64),
+        conflicts: branch.conflicts.map((conflict) => ({
+          id: conflict.id,
+          kind: conflict.kind,
+          affectedRefs: conflict.affectedRefs.slice(0, 16),
+          affectedConclusionRefs: conflict.affectedConclusionRefs.slice(0, 16),
+        })),
+        requiresUserConfirmation: branch.requiresUserConfirmation,
+        nextStep: branch.nextStep,
+        projectionInvalidation: branch.projectionInvalidation,
+        refInvalidation: branch.refInvalidation,
+      },
+    }],
+  };
+}
+
+function stableJson(value: unknown): string {
+  if (value === undefined) return 'null';
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .filter((key) => record[key] !== undefined)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+    .join(',')}}`;
 }
 
 function stringField(value: unknown) {

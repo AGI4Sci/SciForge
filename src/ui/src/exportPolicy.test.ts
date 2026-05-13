@@ -149,6 +149,111 @@ describe('execution bundle export policy', () => {
     assert.ok(bundle.sessionBundleRefs.includes('.sciforge/sessions/2026-05-13_lit_session-card'));
     assert.ok(bundle.sessionBundleRefs.includes('.sciforge/sessions/2026-05-13_lit_session-card/records/session-bundle-audit.json'));
   });
+
+  it('exports final-shape event log, restored projection, refs manifest, and audit-only raw boundary', () => {
+    const session = fixtureSession({
+      id: 'artifact-final-shape',
+      exportPolicy: 'allowed',
+      dataRef: '.sciforge/sessions/2026-05-13_lit_session-final/artifacts/report.md',
+      metadata: { runId: 'run-1' },
+    });
+    session.runs[0] = {
+      ...session.runs[0]!,
+      raw: {
+        displayIntent: {
+          conversationEventLogRef: '.sciforge/sessions/2026-05-13_lit_session-final/records/conversation-event-log.json',
+          conversationEventLogDigest: 'sha256:event-log',
+          conversationEventLog: {
+            schemaVersion: 'sciforge.conversation-event-log.v1',
+            conversationId: 'conversation-final-shape',
+            events: [
+              {
+                id: 'event-turn',
+                type: 'TurnReceived',
+                actor: 'user',
+                storage: 'inline',
+                timestamp: '2026-05-13T00:00:00.000Z',
+                turnId: 'turn-1',
+                payload: { prompt: 'export final shape', summary: 'export final shape' },
+              },
+              {
+                id: 'event-dispatch',
+                type: 'Dispatched',
+                actor: 'kernel',
+                storage: 'inline',
+                timestamp: '2026-05-13T00:00:01.000Z',
+                turnId: 'turn-1',
+                runId: 'run-1',
+                payload: { summary: 'dispatched' },
+              },
+              {
+                id: 'event-output',
+                type: 'OutputMaterialized',
+                actor: 'runtime',
+                storage: 'ref',
+                timestamp: '2026-05-13T00:00:02.000Z',
+                turnId: 'turn-1',
+                runId: 'run-1',
+                payload: {
+                  summary: 'materialized report',
+                  refs: [
+                    {
+                      ref: 'artifact:artifact-final-shape',
+                      digest: 'sha256:artifact',
+                      mime: 'text/markdown',
+                      label: 'report',
+                    },
+                  ],
+                },
+              },
+              {
+                id: 'event-satisfied',
+                type: 'Satisfied',
+                actor: 'runtime',
+                storage: 'ref',
+                timestamp: '2026-05-13T00:00:03.000Z',
+                turnId: 'turn-1',
+                runId: 'run-1',
+                payload: {
+                  text: 'Report is ready.',
+                  summary: 'Report is ready.',
+                  refs: [{ ref: 'artifact:artifact-final-shape', label: 'report' }],
+                },
+              },
+            ],
+          },
+        },
+      },
+    };
+    session.executionUnits[0] = {
+      ...session.executionUnits[0]!,
+      stdoutRef: '.sciforge/sessions/2026-05-13_lit_session-final/logs/stdout.log',
+      stderrRef: '.sciforge/sessions/2026-05-13_lit_session-final/logs/stderr.log',
+      outputArtifacts: ['artifact-final-shape'],
+    };
+
+    const decision = evaluateExecutionBundleExport(session, { activeRun: session.runs[0] });
+    const bundle = buildExecutionBundle(session, decision, { activeRun: session.runs[0] });
+
+    assert.equal(bundle.finalShape.truthSource, 'ConversationEventLog');
+    assert.equal(bundle.conversationEventLogs[0]?.eventLog.conversationId, 'conversation-final-shape');
+    assert.equal(bundle.restoredConversationProjections[0]?.projection.visibleAnswer?.status, 'satisfied');
+    assert.equal(bundle.restoredConversationProjections[0]?.projection.visibleAnswer?.text, 'Report is ready.');
+    assert.equal(
+      bundle.refsManifest.refs.find((ref) => ref.ref === 'artifact:artifact-final-shape')?.boundary,
+      'event-log-truth',
+    );
+    assert.equal(
+      bundle.refsManifest.refs.find((ref) => ref.ref.endsWith('/artifacts/report.md'))?.boundary,
+      'artifact-summary',
+    );
+    assert.equal(
+      bundle.refsManifest.refs.find((ref) => ref.ref.endsWith('/logs/stdout.log'))?.boundary,
+      'audit-only-raw-attachment',
+    );
+    assert.equal(bundle.auditOnlyRawAttachments.boundary, 'audit-only');
+    assert.deepEqual(bundle.auditOnlyRawAttachments.executionUnits.map((unit) => unit.id), ['EU-export']);
+  });
 });
 
 function fixtureSession(artifact: Pick<RuntimeArtifact, 'id'> & Partial<RuntimeArtifact>): SciForgeSession {

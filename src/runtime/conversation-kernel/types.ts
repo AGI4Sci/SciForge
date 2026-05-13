@@ -12,6 +12,8 @@ export type ConversationKernelStatus =
   | 'needs-human'
   | 'background-running';
 
+export type ConversationHistoryEditMode = 'revert' | 'continue';
+
 export type FailureOwnerLayer =
   | 'external-provider'
   | 'payload-contract'
@@ -81,6 +83,7 @@ export type ConversationEventType =
   | 'ExternalBlocked'
   | 'RepairNeeded'
   | 'NeedsHuman'
+  | 'HistoryEdited'
   | 'BackgroundRunning'
   | 'BackgroundCompleted'
   | 'VerificationRecorded';
@@ -124,6 +127,7 @@ export interface ConversationState {
   failureOwner?: FailureOwnerDecision;
   verification?: VerificationState;
   background?: BackgroundState;
+  historyEdit?: HistoryEditState;
 }
 
 export interface VerificationState {
@@ -137,6 +141,19 @@ export interface BackgroundState {
   checkpointRefs: string[];
   revisionPlan: string;
   foregroundPartialRef?: string;
+}
+
+export interface HistoryEditState {
+  schemaVersion: 'sciforge.conversation-history-edit.v1';
+  branchId: string;
+  mode: ConversationHistoryEditMode;
+  sourceMessageRef: string;
+  boundaryAt: string;
+  invalidatedRefs: string[];
+  affectedRefs: string[];
+  projectionInvalidated: boolean;
+  requiresUserConfirmation: boolean;
+  nextStep: string;
 }
 
 export interface ConversationProjection {
@@ -166,6 +183,7 @@ export interface ConversationProjection {
   recoverActions: string[];
   verificationState: VerificationState;
   backgroundState?: BackgroundState;
+  historyEdit?: HistoryEditState;
   auditRefs: string[];
   diagnostics: ConversationKernelDiagnostic[];
 }

@@ -427,6 +427,24 @@ test('reverts a historical user message edit and records invalidated downstream 
     'message:msg-answer-2',
     'run:run-after',
   ]);
+  assert.equal(edited.branch?.kernelEventLog.schemaVersion, 'sciforge.conversation-event-log.v1');
+  assert.match(edited.branch?.kernelEventLogDigest ?? '', /^fnv1a-/);
+  assert.equal(edited.branch?.kernelEventLog.events[0]?.type, 'HistoryEdited');
+  assert.equal(edited.branch?.projectionInvalidation.invalidatesProjection, true);
+  assert.deepEqual(edited.branch?.refInvalidation.invalidatedRefs.sort(), [
+    'artifact:artifact-after',
+    'claim:claim-after',
+    'execution-unit:unit-after',
+    'message:msg-answer-2',
+    'run:run-after',
+  ]);
+  assert.deepEqual((edited.branch?.kernelEventLog.events[0]?.payload as { invalidatedRefs?: string[] }).invalidatedRefs?.sort(), [
+    'artifact:artifact-after',
+    'claim:claim-after',
+    'execution-unit:unit-after',
+    'message:msg-answer-2',
+    'run:run-after',
+  ]);
 });
 
 test('continues after a historical user message edit with conflict and confirmation metadata', () => {
@@ -474,6 +492,11 @@ test('continues after a historical user message edit with conflict and confirmat
   assert.deepEqual(continued.session.artifacts.map((item) => item.id), ['report-original']);
   assert.equal(continued.branch?.mode, 'continue');
   assert.deepEqual(continued.branch?.invalidatedRefs, []);
+  assert.equal(continued.branch?.projectionInvalidation.invalidatesProjection, true);
+  assert.deepEqual(continued.branch?.refInvalidation.invalidatedRefs, []);
+  assert.ok(continued.branch?.refInvalidation.affectedRefs.includes('run:run-answer'));
+  assert.equal(continued.branch?.kernelEventLog.events[0]?.type, 'HistoryEdited');
+  assert.equal((continued.branch?.kernelEventLog.events[0]?.payload as { requiresUserConfirmation?: boolean }).requiresUserConfirmation, true);
   assert.equal(continued.branch?.requiresUserConfirmation, true);
   assert.match(continued.branch?.nextStep ?? '', /confirm whether to keep/);
   assert.deepEqual(continued.branch?.affectedConclusions.map((item) => item.ref), ['claim:claim-answer']);

@@ -7,6 +7,7 @@ import type {
 } from './types';
 import { validateBackgroundContinuationEvent } from './background-continuation';
 import { validateVerificationRecordedEvent } from './verification-gate';
+import { validateHistoryEditedEvent } from './history-edit';
 
 export const CONVERSATION_INLINE_EVENT_MAX_BYTES = 8 * 1024;
 
@@ -37,7 +38,9 @@ export function validateConversationEvent(
   event: ConversationEvent,
   inlineMaxBytes = CONVERSATION_INLINE_EVENT_MAX_BYTES,
 ): ConversationKernelDiagnostic | undefined {
-  const eventContractDiagnostic = validateBackgroundContinuationEvent(event) ?? validateVerificationRecordedEvent(event);
+  const eventContractDiagnostic = validateBackgroundContinuationEvent(event)
+    ?? validateVerificationRecordedEvent(event)
+    ?? validateHistoryEditedEvent(event);
   if (eventContractDiagnostic) return eventContractDiagnostic;
 
   if (event.storage === 'inline') {

@@ -37,3 +37,15 @@ export interface RuntimeArtifact {
   sensitiveDataFlags?: string[];
   exportPolicy?: RuntimeArtifactExportPolicy;
 }
+
+export function runtimeArtifactRef(id: string) {
+  return `artifact:${id}`;
+}
+
+export function runtimeArtifactDataRefSource(id: string) {
+  return `${runtimeArtifactRef(id)}:dataRef`;
+}
+
+export function runtimeArtifactPathRefSource(id: string) {
+  return `${runtimeArtifactRef(id)}:path`;
+}
