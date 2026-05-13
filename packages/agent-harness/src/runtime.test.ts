@@ -31,6 +31,8 @@ test('evaluateHarness produces stable contract and trace for the same input', as
   assert.equal(first.trace.schemaVersion, 'sciforge.agent-harness-trace.v1');
   assert.equal(first.contract.latencyTier, 'instant');
   assert.equal(first.trace.latencyTier, first.contract.latencyTier);
+  assert.equal(first.contract.conversationPlan.answerStrategy, 'direct');
+  assert.equal(first.contract.conversationPlan.refsFirst, true);
   assert.equal(first.contract.allowedContextRefs.join(','), 'ref:a,ref:b');
   assert.ok(first.trace.auditNotes.some((note) => note.sourceCallbackId === 'harness-runtime.stage-coverage'));
   assert.ok(Array.isArray(first.trace.auditHooks));
@@ -141,6 +143,7 @@ test('harness module registry covers the latency-first module stack', () => {
       'research',
     ],
   );
+  assert.ok(getHarnessModule('presentation')?.outputs.includes('conversationPlan'));
   assert.ok(moduleStackForTier('background').some((module) => module.id === 'audit'));
 });
 
@@ -174,6 +177,31 @@ test('latency defaults expose cheap-first capability tiers, verification layers,
   assert.equal(quick.contract.repairContextPolicy.tierBudgets?.quick?.maxAttempts, 0);
   assert.equal(deep.contract.repairContextPolicy.checkpointArtifacts, true);
   assert.ok(deep.contract.repairContextPolicy.tierBudgets?.deep?.maxAttempts);
+});
+
+test('latency tiers publish conversation plans for answer timing, refs-first evidence, and audit hydration', async () => {
+  const instant = await evaluateHarness({ requestId: 'req-instant-conversation', latencyTier: 'instant' });
+  const quick = await evaluateHarness({ requestId: 'req-quick-conversation', latencyTier: 'quick' });
+  const deep = await evaluateHarness({ requestId: 'req-deep-conversation', latencyTier: 'deep' });
+  const background = await evaluateHarness({ requestId: 'req-background-conversation', latencyTier: 'background' });
+
+  assert.deepEqual(instant.contract.conversationPlan, {
+    answerStrategy: 'direct',
+    evidenceMode: 'minimal-inline',
+    refsFirst: true,
+    auditHydration: 'none',
+    maxInlineEvidenceRefs: 1,
+    maxInlineAuditNotes: 0,
+    exposeAuditDrawer: false,
+  });
+  assert.equal(quick.contract.conversationPlan.answerStrategy, 'answer-first');
+  assert.equal(quick.contract.conversationPlan.evidenceMode, 'refs-first');
+  assert.equal(quick.contract.conversationPlan.auditHydration, 'on-demand');
+  assert.equal(deep.contract.conversationPlan.answerStrategy, 'evidence-first');
+  assert.equal(deep.contract.conversationPlan.evidenceMode, 'expanded');
+  assert.equal(deep.contract.conversationPlan.auditHydration, 'required');
+  assert.equal(background.contract.conversationPlan.auditHydration, 'background');
+  assert.equal(background.contract.conversationPlan.maxInlineEvidenceRefs, 2);
 });
 
 test('balanced profile owns context audit follow-up intent', async () => {
@@ -299,6 +327,15 @@ test('merge rules union blocks, tighten budgets, escalate verification, and fail
             stopConditions: ['no-code-change', 'no-new-evidence'],
             partialFirst: true,
           },
+          conversationPlan: {
+            answerStrategy: 'defer-until-verified',
+            evidenceMode: 'expanded',
+            refsFirst: false,
+            auditHydration: 'required',
+            maxInlineEvidenceRefs: 12,
+            maxInlineAuditNotes: 12,
+            exposeAuditDrawer: false,
+          },
           capabilityHints: {
             sideEffects: { network: 'allow' },
             candidateTiers: { 'single-tool': ['cap:single'] },
@@ -332,12 +369,21 @@ test('merge rules union blocks, tighten budgets, escalate verification, and fail
   assert.deepEqual(result.contract.verificationPolicy.verificationLayers, ['shape', 'reference', 'claim']);
   assert.equal(result.contract.verificationPolicy.requireCitations, true);
   assert.equal(result.contract.capabilityPolicy.sideEffects.network, 'requires-approval');
+  assert.equal(result.contract.conversationPlan.answerStrategy, 'defer-until-verified');
+  assert.equal(result.contract.conversationPlan.evidenceMode, 'expanded');
+  assert.equal(result.contract.conversationPlan.auditHydration, 'required');
+  assert.equal(result.contract.conversationPlan.refsFirst, true);
+  assert.equal(result.contract.conversationPlan.exposeAuditDrawer, true);
+  assert.equal(result.contract.conversationPlan.maxInlineEvidenceRefs, 2);
+  assert.equal(result.contract.conversationPlan.maxInlineAuditNotes, 1);
   assert.deepEqual(result.contract.capabilityPolicy.candidateTiers?.['single-tool'], ['cap:single']);
   assert.ok(result.contract.capabilityPolicy.escalationPlan?.some((step) => step.tier === 'single-tool' && step.candidateIds.includes('cap:single')));
   assert.equal(result.contract.repairContextPolicy.tierBudgets?.bounded?.maxWallMs, 10000);
   assert.deepEqual(result.contract.repairContextPolicy.stopConditions, ['repeated-failure', 'no-code-change', 'no-new-evidence']);
   assert.ok(result.trace.conflicts.some((conflict) => conflict.field === 'capabilityPolicy.sideEffects.network'));
   assert.ok(result.trace.conflicts.some((conflict) => conflict.field === 'verificationPolicy.intensity'));
+  assert.ok(result.trace.conflicts.some((conflict) => conflict.field === 'conversationPlan.refsFirst'));
+  assert.ok(result.trace.conflicts.some((conflict) => conflict.field === 'conversationPlan.exposeAuditDrawer'));
 });
 
 test('criticalPathOnly evaluation defers audit callbacks and keeps critical trace', async () => {

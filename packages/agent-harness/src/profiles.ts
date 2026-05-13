@@ -1,5 +1,6 @@
 import type {
   CapabilityBudget,
+  ConversationPlan,
   ContextBudget,
   HarnessCallback,
   HarnessDefaults,
@@ -130,6 +131,16 @@ const basePresentation: PresentationPlan = {
   diagnosticsVisibility: 'collapsed',
   processVisibility: 'collapsed',
   roleMode: 'standard',
+};
+
+const baseConversation: ConversationPlan = {
+  answerStrategy: 'answer-first',
+  evidenceMode: 'refs-first',
+  refsFirst: true,
+  auditHydration: 'on-demand',
+  maxInlineEvidenceRefs: 2,
+  maxInlineAuditNotes: 1,
+  exposeAuditDrawer: true,
 };
 
 function cheapFirstCapabilityPolicy(overrides: Partial<LatencyTierPolicy['capabilityPolicy']> = {}): LatencyTierPolicy['capabilityPolicy'] {
@@ -264,6 +275,15 @@ const latencyTierPolicies: Record<LatencyTier, LatencyTierPolicy> = {
       silenceTimeoutMs: 5000,
       silencePolicy: { ...baseProgress.silencePolicy!, timeoutMs: 5000, status: 'Preparing answer', auditRequired: false },
     },
+    conversationPlan: {
+      answerStrategy: 'direct',
+      evidenceMode: 'minimal-inline',
+      refsFirst: true,
+      auditHydration: 'none',
+      maxInlineEvidenceRefs: 1,
+      maxInlineAuditNotes: 0,
+      exposeAuditDrawer: false,
+    },
     presentationPlan: {
       ...clonePresentationPlan(basePresentation),
       defaultExpandedSections: ['answer', 'key-findings', 'next-actions'],
@@ -303,6 +323,7 @@ const latencyTierPolicies: Record<LatencyTier, LatencyTierPolicy> = {
       silenceTimeoutMs: 10000,
       silencePolicy: { ...baseProgress.silencePolicy!, timeoutMs: 10000, status: 'Preparing a concise answer', maxRetries: 0 },
     },
+    conversationPlan: cloneConversationPlan(baseConversation),
     presentationPlan: {
       ...clonePresentationPlan(basePresentation),
       defaultExpandedSections: ['answer', 'key-findings', 'evidence', 'next-actions'],
@@ -327,6 +348,11 @@ const latencyTierPolicies: Record<LatencyTier, LatencyTierPolicy> = {
       backgroundAfterMs: 180000,
       silenceTimeoutMs: 20000,
       silencePolicy: { ...baseProgress.silencePolicy!, timeoutMs: 20000, status: 'Still within the bounded plan' },
+    },
+    conversationPlan: {
+      ...cloneConversationPlan(baseConversation),
+      maxInlineEvidenceRefs: 3,
+      maxInlineAuditNotes: 2,
     },
     presentationPlan: clonePresentationPlan(basePresentation),
   },
@@ -361,6 +387,15 @@ const latencyTierPolicies: Record<LatencyTier, LatencyTierPolicy> = {
       backgroundAfterMs: 180000,
       silenceTimeoutMs: 45000,
       silencePolicy: { ...baseProgress.silencePolicy!, timeoutMs: 45000, status: 'Researching and verifying' },
+    },
+    conversationPlan: {
+      answerStrategy: 'evidence-first',
+      evidenceMode: 'expanded',
+      refsFirst: true,
+      auditHydration: 'required',
+      maxInlineEvidenceRefs: 4,
+      maxInlineAuditNotes: 3,
+      exposeAuditDrawer: true,
     },
     presentationPlan: clonePresentationPlan(basePresentation),
   },
@@ -400,6 +435,15 @@ const latencyTierPolicies: Record<LatencyTier, LatencyTierPolicy> = {
       silencePolicy: { ...baseProgress.silencePolicy!, timeoutMs: 30000, decision: 'background', status: 'Continuing in background' },
       backgroundPolicy: { enabled: true, status: 'Continuing in background', notifyOnCompletion: true },
     },
+    conversationPlan: {
+      answerStrategy: 'answer-first',
+      evidenceMode: 'refs-first',
+      refsFirst: true,
+      auditHydration: 'background',
+      maxInlineEvidenceRefs: 2,
+      maxInlineAuditNotes: 1,
+      exposeAuditDrawer: true,
+    },
     presentationPlan: {
       ...clonePresentationPlan(basePresentation),
       primaryMode: 'answer-first',
@@ -436,6 +480,7 @@ function defaults(overrides: Partial<HarnessDefaults>): HarnessDefaults {
     },
     repairContextPolicy: cloneRepairPolicy(tierPolicy.repairContextPolicy),
     progressPlan: cloneProgressPlan(tierPolicy.progressPlan),
+    conversationPlan: cloneConversationPlan(tierPolicy.conversationPlan),
     presentationPlan: clonePresentationPlan(tierPolicy.presentationPlan),
     promptDirectives: [],
     ...overrides,
@@ -456,6 +501,7 @@ export function getLatencyTierPolicy(latencyTier: LatencyTier): LatencyTierPolic
     },
     repairContextPolicy: cloneRepairPolicy(policy.repairContextPolicy),
     progressPlan: cloneProgressPlan(policy.progressPlan),
+    conversationPlan: cloneConversationPlan(policy.conversationPlan),
     presentationPlan: clonePresentationPlan(policy.presentationPlan),
   };
 }
@@ -490,6 +536,10 @@ function cloneProgressPlan(plan: ProgressPlan): ProgressPlan {
     cancelPolicy: plan.cancelPolicy ? { ...plan.cancelPolicy } : undefined,
     interactionPolicy: plan.interactionPolicy ? { ...plan.interactionPolicy } : undefined,
   };
+}
+
+function cloneConversationPlan(plan: ConversationPlan): ConversationPlan {
+  return { ...plan };
 }
 
 function clonePresentationPlan(plan: PresentationPlan): PresentationPlan {
@@ -569,6 +619,15 @@ const profileCallbacks: Record<string, HarnessCallback[]> = {
         },
         verification: { intensity: 'light', requireCurrentRefs: true, requireArtifactRefs: true },
         progress: { initialStatus: 'Answering from current context', visibleMilestones: ['context', 'answer'], silenceTimeoutMs: 10000 },
+        conversationPlan: {
+          answerStrategy: 'direct',
+          evidenceMode: 'refs-first',
+          refsFirst: true,
+          auditHydration: 'on-demand',
+          maxInlineEvidenceRefs: 2,
+          maxInlineAuditNotes: 1,
+          exposeAuditDrawer: true,
+        },
         promptDirectives: [{
           id: 'direct-context-audit-answer',
           priority: 90,
@@ -612,6 +671,15 @@ const profileCallbacks: Record<string, HarnessCallback[]> = {
         },
       },
       progress: { initialStatus: 'Answering', visibleMilestones: ['answer'], silenceTimeoutMs: 10000 },
+      conversationPlan: {
+        answerStrategy: 'answer-first',
+        evidenceMode: 'refs-first',
+        refsFirst: true,
+        auditHydration: 'on-demand',
+        maxInlineEvidenceRefs: 1,
+        maxInlineAuditNotes: 0,
+        exposeAuditDrawer: true,
+      },
     }), ['setExplorationBudget', 'onBudgetAllocate', 'beforeUserProgressEvent']),
   ],
   researchGrade: [
@@ -635,6 +703,15 @@ const profileCallbacks: Record<string, HarnessCallback[]> = {
       },
       verification: { intensity: 'strict', requireCitations: true, requireCurrentRefs: true, requireArtifactRefs: true },
       progress: { initialStatus: 'Researching', visibleMilestones: ['search', 'evidence', 'synthesis', 'verification'], silenceTimeoutMs: 45000 },
+      conversationPlan: {
+        answerStrategy: 'evidence-first',
+        evidenceMode: 'expanded',
+        refsFirst: true,
+        auditHydration: 'required',
+        maxInlineEvidenceRefs: 4,
+        maxInlineAuditNotes: 3,
+        exposeAuditDrawer: true,
+      },
     }), ['setExplorationBudget', 'onBudgetAllocate', 'beforeResultValidation']),
   ],
   debugRepair: [
@@ -645,6 +722,15 @@ const profileCallbacks: Record<string, HarnessCallback[]> = {
         toolBudget: { maxRetries: 2, maxActionSteps: 4, maxWallMs: 180000 },
       },
       progress: { initialStatus: 'Repairing', visibleMilestones: ['failure', 'patch', 'validate'] },
+      conversationPlan: {
+        answerStrategy: 'evidence-first',
+        evidenceMode: 'refs-first',
+        refsFirst: true,
+        auditHydration: 'required',
+        maxInlineEvidenceRefs: 2,
+        maxInlineAuditNotes: 2,
+        exposeAuditDrawer: true,
+      },
     }), ['classifyIntent', 'onRepairRequired', 'beforeRepairDispatch']),
   ],
   lowCost: [
@@ -788,6 +874,15 @@ const profileCallbacks: Record<string, HarnessCallback[]> = {
         phaseNames: ['refs', 'capabilities', 'reproduction', 'verification', 'handoff'],
         silenceTimeoutMs: 60000,
         interactionPolicy: { clarification: 'allow', humanApproval: 'allow', guidanceQueue: 'allow' },
+      },
+      conversationPlan: {
+        answerStrategy: 'evidence-first',
+        evidenceMode: 'expanded',
+        refsFirst: true,
+        auditHydration: 'required',
+        maxInlineEvidenceRefs: 4,
+        maxInlineAuditNotes: 3,
+        exposeAuditDrawer: true,
       },
       promptDirectives: [
         {

@@ -333,15 +333,21 @@ function compactAgentServerRunPayload(value: Record<string, unknown>, context: {
   });
   const input = isRecord(value.input) ? value.input : {};
   const text = typeof input.text === 'string' ? input.text : '';
+  const inputMetadata = input.metadata === undefined
+    ? undefined
+    : normalizeAgentServerMetadata(input.metadata, ctx(['input', 'metadata']));
+  const canonicalHandoff = isRecord(inputMetadata) && isRecord(inputMetadata.agentHarnessHandoff)
+    ? inputMetadata.agentHarnessHandoff
+    : undefined;
   return {
     agent: normalizeHandoffValue(value.agent, ctx(['agent'])),
     input: {
       text: compactBackendInputText(text, ctx(['input', 'text'])),
-      metadata: input.metadata === undefined ? undefined : normalizeHandoffValue(input.metadata, ctx(['input', 'metadata'])),
+      metadata: inputMetadata,
     },
     contextPolicy: value.contextPolicy === undefined ? undefined : normalizeHandoffValue(value.contextPolicy, ctx(['contextPolicy'])),
-    runtime: value.runtime === undefined ? undefined : normalizeHandoffValue(value.runtime, ctx(['runtime'])),
-    metadata: value.metadata === undefined ? undefined : normalizeHandoffValue(value.metadata, ctx(['metadata'])),
+    runtime: value.runtime === undefined ? undefined : normalizeAgentServerRuntime(value.runtime, ctx(['runtime']), canonicalHandoff),
+    metadata: value.metadata === undefined ? undefined : normalizeAgentServerMetadata(value.metadata, ctx(['metadata']), canonicalHandoff),
     _sciforgeCompacted: {
       kind: 'backend-handoff-envelope',
       reason: 'preserve-agentserver-contract',
@@ -349,6 +355,108 @@ function compactAgentServerRunPayload(value: Record<string, unknown>, context: {
       originalBytes: estimateBytes(value),
     },
   };
+}
+
+function normalizeAgentServerMetadata(value: unknown, context: {
+  budget: BackendHandoffBudget;
+  rawRef: string;
+  path: string[];
+  depth: number;
+  siblingRefs: Record<string, string | undefined>;
+  decisions: BackendHandoffBudgetDecision[];
+}, canonicalHandoff?: Record<string, unknown>) {
+  const normalized = normalizeHandoffValue(value, context);
+  if (!isRecord(normalized) || !isRecord(value)) return normalized;
+  const preserved = { ...normalized };
+  // These decision records are small audit contracts; preserving their shape keeps
+  // top-level metadata and the canonical handoff consistent after strict slimming.
+  if (isRecord(value.agentHarnessContinuityDecision)) {
+    preserved.agentHarnessContinuityDecision = value.agentHarnessContinuityDecision;
+  }
+  if (isRecord(value.agentHarnessBackendSelectionDecision)) {
+    preserved.agentHarnessBackendSelectionDecision = value.agentHarnessBackendSelectionDecision;
+  }
+  const sourceHandoff = isRecord(value.agentHarnessHandoff) ? value.agentHarnessHandoff : undefined;
+  const aligned = alignAgentHarnessHandoffDecisions(preserved, sourceHandoff);
+  return canonicalHandoff && isRecord(aligned.agentHarnessHandoff)
+    ? { ...aligned, agentHarnessHandoff: canonicalHandoff }
+    : aligned;
+}
+
+function normalizeAgentServerRuntime(value: unknown, context: {
+  budget: BackendHandoffBudget;
+  rawRef: string;
+  path: string[];
+  depth: number;
+  siblingRefs: Record<string, string | undefined>;
+  decisions: BackendHandoffBudgetDecision[];
+}, canonicalHandoff?: Record<string, unknown>) {
+  const normalized = normalizeHandoffValue(value, context);
+  if (!isRecord(normalized) || !isRecord(value) || value.metadata === undefined) return normalized;
+  return {
+    ...normalized,
+    metadata: normalizeAgentServerMetadata(value.metadata, {
+      ...context,
+      path: [...context.path, 'metadata'],
+      depth: context.depth + 1,
+      siblingRefs: {},
+    }, canonicalHandoff),
+  };
+}
+
+function alignAgentHarnessHandoffDecisions(metadata: Record<string, unknown>, sourceHandoff?: Record<string, unknown>) {
+  const handoff = isRecord(metadata.agentHarnessHandoff) ? { ...metadata.agentHarnessHandoff } : undefined;
+  if (!handoff) return metadata;
+  let changed = false;
+  if (sourceHandoff) {
+    for (const key of ['contextRefs', 'contextBudget', 'repairContextPolicy', 'promptDirectives']) {
+      if (sourceHandoff[key] !== undefined) {
+        handoff[key] = sourceHandoff[key];
+        changed = true;
+      }
+    }
+    if (isRecord(sourceHandoff.promptRenderPlan)) {
+      handoff.promptRenderPlan = compactAgentHarnessPromptRenderPlan(sourceHandoff.promptRenderPlan);
+      changed = true;
+    }
+  }
+  if (metadata.agentHarnessContinuityDecision !== undefined) {
+    handoff.continuityDecision = metadata.agentHarnessContinuityDecision;
+    changed = true;
+  }
+  if (metadata.agentHarnessBackendSelectionDecision !== undefined) {
+    handoff.backendSelectionDecision = metadata.agentHarnessBackendSelectionDecision;
+    changed = true;
+  }
+  return changed ? { ...metadata, agentHarnessHandoff: handoff } : metadata;
+}
+
+function compactAgentHarnessPromptRenderPlan(value: Record<string, unknown>) {
+  return {
+    schemaVersion: value.schemaVersion,
+    renderMode: value.renderMode,
+    deterministic: value.deterministic,
+    sourceRefs: value.sourceRefs,
+    strategyRefs: compactPromptRenderEntries(value.strategyRefs),
+    moduleDirectivePreviews: compactPromptRenderEntries(value.moduleDirectivePreviews),
+    directiveRefs: compactPromptRenderEntries(value.directiveRefs),
+    renderedEntries: compactPromptRenderEntries(value.renderedEntries),
+    selectedContextRefs: compactPromptRenderEntries(value.selectedContextRefs),
+    renderedText: value.renderedText,
+    renderDigest: value.renderDigest,
+  };
+}
+
+function compactPromptRenderEntries(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord).map((entry) => ({
+    kind: entry.kind,
+    id: entry.id,
+    sourceCallbackId: entry.sourceCallbackId,
+    text: entry.text,
+    priority: entry.priority,
+    ref: entry.ref,
+  }));
 }
 
 function normalizeHandoffValue(value: unknown, context: {

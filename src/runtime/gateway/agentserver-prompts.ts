@@ -673,6 +673,7 @@ function compactCapabilityBrokerRouteSummary(value: Record<string, unknown> | un
       contractExpansion: stringField(value.routingPolicy.contractExpansion),
       defaultPayload: stringField(value.routingPolicy.defaultPayload),
     } : undefined,
+    harnessInputAudit: compactHarnessInputAuditForPrompt(value.harnessInputAudit),
     briefs: briefs.slice(0, maxBriefs).map(compactCapabilityBriefForPrompt),
     omittedBriefCount: Math.max(0, briefs.length - maxBriefs),
     inputSummary: isRecord(value.inputSummary) ? {
@@ -681,6 +682,18 @@ function compactCapabilityBrokerRouteSummary(value: Record<string, unknown> | un
       failureHistoryEntries: value.inputSummary.failureHistoryEntries,
       toolBudgetKeys: toStringList(value.inputSummary.toolBudgetKeys).slice(0, 16),
     } : undefined,
+  };
+}
+
+function compactHarnessInputAuditForPrompt(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  return {
+    schemaVersion: stringField(value.schemaVersion),
+    enablement: stringField(value.enablement),
+    source: stringField(value.source),
+    contractRef: stringField(value.contractRef),
+    traceRef: stringField(value.traceRef),
+    profileId: stringField(value.profileId),
   };
 }
 

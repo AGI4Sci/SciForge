@@ -67,6 +67,14 @@ export type RepairStopCondition =
   | 'budget-exhausted'
   | 'human-required';
 export type ResultPresentationStatus = 'complete' | 'partial' | 'needs-human' | 'background-running' | 'failed';
+export type ConversationAnswerStrategy =
+  | 'direct'
+  | 'answer-first'
+  | 'artifact-first'
+  | 'evidence-first'
+  | 'defer-until-verified';
+export type ConversationEvidenceMode = 'minimal-inline' | 'refs-first' | 'expanded';
+export type ConversationAuditHydration = 'none' | 'on-demand' | 'background' | 'required';
 export type HarnessInteractionProgressEventType =
   | 'process-progress'
   | 'partial-result'
@@ -245,6 +253,7 @@ export interface HarnessDecision {
   verification?: Partial<VerificationDecision>;
   repair?: Partial<RepairDecision>;
   progress?: Partial<ProgressDecision>;
+  conversationPlan?: Partial<ConversationPlan>;
   presentation?: Partial<PresentationPlan>;
   promptDirectives?: PromptDirective[];
   blockedRefs?: string[];
@@ -265,6 +274,7 @@ export interface HarnessDefaults {
   verificationPolicy: VerificationPolicy;
   repairContextPolicy: RepairContextPolicy;
   progressPlan: ProgressPlan;
+  conversationPlan?: ConversationPlan;
   presentationPlan: PresentationPlan;
   promptDirectives: PromptDirective[];
 }
@@ -345,6 +355,7 @@ export interface LatencyTierPolicy {
   verificationPolicy: VerificationPolicy;
   repairContextPolicy: RepairContextPolicy;
   progressPlan: ProgressPlan;
+  conversationPlan: ConversationPlan;
   presentationPlan: PresentationPlan;
 }
 
@@ -459,6 +470,16 @@ export interface ProgressPlan {
   backgroundPolicy?: BackgroundPolicy;
   cancelPolicy?: CancelPolicy;
   interactionPolicy?: InteractionPolicy;
+}
+
+export interface ConversationPlan {
+  answerStrategy: ConversationAnswerStrategy;
+  evidenceMode: ConversationEvidenceMode;
+  refsFirst: boolean;
+  auditHydration: ConversationAuditHydration;
+  maxInlineEvidenceRefs: number;
+  maxInlineAuditNotes: number;
+  exposeAuditDrawer: boolean;
 }
 
 export type PresentationPrimaryMode = 'answer-first' | 'artifact-first' | 'failure-first' | 'diagnostic-first';
@@ -972,6 +993,7 @@ export interface HarnessContract {
   verificationPolicy: VerificationPolicy;
   repairContextPolicy: RepairContextPolicy;
   progressPlan: ProgressPlan;
+  conversationPlan: ConversationPlan;
   presentationPlan: PresentationPlan;
   promptDirectives: PromptDirective[];
   traceRef?: string;

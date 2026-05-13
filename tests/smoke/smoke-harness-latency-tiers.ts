@@ -2,7 +2,14 @@ import assert from 'node:assert/strict';
 
 import { createHarnessRuntime } from '../../packages/agent-harness/src/runtime';
 import { getHarnessProfile } from '../../packages/agent-harness/src/profiles';
-import type { HarnessProfile, LatencyTier, ResultPresentationStatus } from '../../packages/agent-harness/src/contracts';
+import type {
+  ConversationAnswerStrategy,
+  ConversationAuditHydration,
+  ConversationEvidenceMode,
+  HarnessProfile,
+  LatencyTier,
+  ResultPresentationStatus,
+} from '../../packages/agent-harness/src/contracts';
 import {
   materializeResultPresentationContract,
   validateResultPresentationContract,
@@ -19,6 +26,12 @@ interface LatencyCase {
     minPhaseCount: number;
     status: ResultPresentationStatus;
     background: boolean;
+    conversation: {
+      answerStrategy: ConversationAnswerStrategy;
+      evidenceMode: ConversationEvidenceMode;
+      auditHydration: ConversationAuditHydration;
+      maxInlineEvidenceRefs: number;
+    };
   };
 }
 
@@ -41,6 +54,7 @@ const latencyCases: LatencyCase[] = [
       minPhaseCount: 2,
       status: 'complete',
       background: false,
+      conversation: { answerStrategy: 'answer-first', evidenceMode: 'refs-first', auditHydration: 'on-demand', maxInlineEvidenceRefs: 1 },
     },
   },
   {
@@ -54,6 +68,7 @@ const latencyCases: LatencyCase[] = [
       minPhaseCount: 4,
       status: 'complete',
       background: false,
+      conversation: { answerStrategy: 'answer-first', evidenceMode: 'refs-first', auditHydration: 'on-demand', maxInlineEvidenceRefs: 3 },
     },
   },
   {
@@ -67,6 +82,7 @@ const latencyCases: LatencyCase[] = [
       minPhaseCount: 5,
       status: 'complete',
       background: false,
+      conversation: { answerStrategy: 'evidence-first', evidenceMode: 'expanded', auditHydration: 'required', maxInlineEvidenceRefs: 4 },
     },
   },
   {
@@ -80,6 +96,7 @@ const latencyCases: LatencyCase[] = [
       minPhaseCount: 4,
       status: 'background-running',
       background: true,
+      conversation: { answerStrategy: 'answer-first', evidenceMode: 'refs-first', auditHydration: 'background', maxInlineEvidenceRefs: 2 },
     },
   },
   {
@@ -93,6 +110,7 @@ const latencyCases: LatencyCase[] = [
       minPhaseCount: 4,
       status: 'failed',
       background: false,
+      conversation: { answerStrategy: 'answer-first', evidenceMode: 'refs-first', auditHydration: 'on-demand', maxInlineEvidenceRefs: 3 },
     },
   },
 ];
@@ -117,6 +135,11 @@ for (const testCase of latencyCases) {
   assert.ok(contract.progressPlan.backgroundAfterMs >= contract.progressPlan.firstResultDeadlineMs, `${testCase.id}: background follows first result`);
   assert.ok(contract.toolBudget.maxToolCalls <= testCase.expected.maxToolCalls, `${testCase.id}: tool budget`);
   assert.equal(contract.progressPlan.backgroundContinuation, testCase.expected.background, `${testCase.id}: background continuation`);
+  assert.equal(contract.conversationPlan.answerStrategy, testCase.expected.conversation.answerStrategy, `${testCase.id}: conversation answer strategy`);
+  assert.equal(contract.conversationPlan.evidenceMode, testCase.expected.conversation.evidenceMode, `${testCase.id}: conversation evidence mode`);
+  assert.equal(contract.conversationPlan.refsFirst, true, `${testCase.id}: refs-first conversation plan`);
+  assert.equal(contract.conversationPlan.auditHydration, testCase.expected.conversation.auditHydration, `${testCase.id}: audit hydration`);
+  assert.equal(contract.conversationPlan.maxInlineEvidenceRefs, testCase.expected.conversation.maxInlineEvidenceRefs, `${testCase.id}: inline evidence budget`);
   assert.equal(contract.presentationPlan.status, testCase.expected.status, `${testCase.id}: presentation status`);
   assert.ok(!contract.presentationPlan.defaultExpandedSections.includes('raw-payload'), `${testCase.id}: raw payload must stay folded`);
   assert.ok(trace.latencyTier === testCase.latencyTier, `${testCase.id}: trace latency tier`);
@@ -131,6 +154,7 @@ for (const testCase of latencyCases) {
     firstResultDeadlineMs: contract.progressPlan.firstResultDeadlineMs,
     backgroundAfterMs: contract.progressPlan.backgroundAfterMs,
     maxToolCalls: contract.toolBudget.maxToolCalls,
+    conversation: contract.conversationPlan,
     status: contract.presentationPlan.status,
   });
 }

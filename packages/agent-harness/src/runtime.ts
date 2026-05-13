@@ -3,6 +3,9 @@ import type {
   CapabilityBudget,
   CapabilityEscalationStep,
   CapabilityEscalationTier,
+  ConversationAuditHydration,
+  ConversationEvidenceMode,
+  ConversationPlan,
   HarnessCallback,
   HarnessContract,
   HarnessContext,
@@ -286,6 +289,7 @@ function contractFromDefaults(profile: HarnessProfile, input: HarnessInput): Har
     verificationPolicy: { ...defaults.verificationPolicy },
     repairContextPolicy: { ...defaults.repairContextPolicy },
     progressPlan: cloneProgressPlan(defaults.progressPlan),
+    conversationPlan: cloneConversationPlan(defaults.conversationPlan ?? baseConversationPlan()),
     presentationPlan: clonePresentationPlan(defaults.presentationPlan ?? basePresentationPlan()),
     promptDirectives: sortPromptDirectives(defaults.promptDirectives),
   };
@@ -373,6 +377,7 @@ function mergeDecision(contract: HarnessContract, decision: HarnessDecision, con
   }
   if (decision.repair) next.repairContextPolicy = mergeRepair(next.repairContextPolicy, decision.repair);
   if (decision.progress) next.progressPlan = mergeProgress(next.progressPlan, decision.progress);
+  if (decision.conversationPlan) next.conversationPlan = mergeConversationPlan(next.conversationPlan, decision.conversationPlan, context, conflicts);
   if (decision.presentation) next.presentationPlan = mergePresentation(next.presentationPlan, decision.presentation);
   if (decision.promptDirectives) {
     next.promptDirectives = sortPromptDirectives([...next.promptDirectives, ...decision.promptDirectives]);
@@ -412,11 +417,18 @@ function mergeRawDecision(left: HarnessDecision, right: HarnessDecision): Harnes
       ...(selectedVerifierIds.length > 0 ? { selectedVerifierIds } : {}),
     }
     : undefined;
+  const conversationPlan = left.conversationPlan || right.conversationPlan
+    ? mergeConversationPlan(
+      left.conversationPlan ? mergeConversationPlan(baseConversationPlan(), left.conversationPlan) : baseConversationPlan(),
+      right.conversationPlan ?? {},
+    )
+    : undefined;
 
   return {
     ...left,
     ...right,
     ...(verification ? { verification } : {}),
+    ...(conversationPlan ? { conversationPlan } : {}),
     presentation: left.presentation || right.presentation
       ? mergePresentation(basePresentationPlan(), { ...left.presentation, ...right.presentation })
       : undefined,
@@ -590,6 +602,44 @@ function mergeProgress(current: HarnessContract['progressPlan'], incoming: Progr
   };
 }
 
+function mergeConversationPlan(
+  current: HarnessContract['conversationPlan'],
+  incoming: Partial<ConversationPlan>,
+  context?: MergeContext,
+  conflicts: HarnessMergeConflict[] = [],
+): HarnessContract['conversationPlan'] {
+  const base = normalizeConversationPlan(current);
+  const evidenceMode = incoming.evidenceMode
+    ? strictestEvidenceMode(base.evidenceMode, incoming.evidenceMode)
+    : base.evidenceMode;
+  if (incoming.evidenceMode && evidenceMode !== incoming.evidenceMode && context) {
+    conflicts.push(conflict('conversationPlan.evidenceMode', base.evidenceMode, incoming.evidenceMode, evidenceMode, 'evidence disclosure only escalates', context));
+  }
+  const auditHydration = incoming.auditHydration
+    ? strictestAuditHydration(base.auditHydration, incoming.auditHydration)
+    : base.auditHydration;
+  if (incoming.auditHydration && auditHydration !== incoming.auditHydration && context) {
+    conflicts.push(conflict('conversationPlan.auditHydration', base.auditHydration, incoming.auditHydration, auditHydration, 'audit hydration only escalates', context));
+  }
+  const refsFirst = base.refsFirst || incoming.refsFirst === true;
+  if (incoming.refsFirst === false && base.refsFirst && context) {
+    conflicts.push(conflict('conversationPlan.refsFirst', base.refsFirst, incoming.refsFirst, refsFirst, 'refs-first stays enabled once required', context));
+  }
+  const exposeAuditDrawer = base.exposeAuditDrawer || incoming.exposeAuditDrawer === true;
+  if (incoming.exposeAuditDrawer === false && base.exposeAuditDrawer && context) {
+    conflicts.push(conflict('conversationPlan.exposeAuditDrawer', base.exposeAuditDrawer, incoming.exposeAuditDrawer, exposeAuditDrawer, 'audit drawer stays available once required', context));
+  }
+  return normalizeConversationPlan({
+    answerStrategy: incoming.answerStrategy ?? base.answerStrategy,
+    evidenceMode,
+    refsFirst,
+    auditHydration,
+    maxInlineEvidenceRefs: minDefined(base.maxInlineEvidenceRefs, incoming.maxInlineEvidenceRefs),
+    maxInlineAuditNotes: minDefined(base.maxInlineAuditNotes, incoming.maxInlineAuditNotes),
+    exposeAuditDrawer,
+  });
+}
+
 function mergePresentation(current: HarnessContract['presentationPlan'], incoming: Partial<PresentationPlan>): HarnessContract['presentationPlan'] {
   const expanded = orderedUnique([
     ...current.defaultExpandedSections,
@@ -626,6 +676,29 @@ function mergePresentation(current: HarnessContract['presentationPlan'], incomin
     processVisibility: incoming.processVisibility === 'expanded' ? current.processVisibility : incoming.processVisibility ?? current.processVisibility,
     roleMode: incoming.roleMode ?? current.roleMode,
   };
+}
+
+function normalizeConversationPlan(plan?: Partial<ConversationPlan>): ConversationPlan {
+  const base = baseConversationPlan();
+  return {
+    answerStrategy: plan?.answerStrategy ?? base.answerStrategy,
+    evidenceMode: plan?.evidenceMode ?? base.evidenceMode,
+    refsFirst: plan?.refsFirst ?? base.refsFirst,
+    auditHydration: plan?.auditHydration ?? base.auditHydration,
+    maxInlineEvidenceRefs: Math.max(0, Math.floor(plan?.maxInlineEvidenceRefs ?? base.maxInlineEvidenceRefs)),
+    maxInlineAuditNotes: Math.max(0, Math.floor(plan?.maxInlineAuditNotes ?? base.maxInlineAuditNotes)),
+    exposeAuditDrawer: plan?.exposeAuditDrawer ?? base.exposeAuditDrawer,
+  };
+}
+
+function strictestEvidenceMode(current: ConversationEvidenceMode, incoming: ConversationEvidenceMode): ConversationEvidenceMode {
+  const order: ConversationEvidenceMode[] = ['minimal-inline', 'refs-first', 'expanded'];
+  return order[Math.max(order.indexOf(current), order.indexOf(incoming))];
+}
+
+function strictestAuditHydration(current: ConversationAuditHydration, incoming: ConversationAuditHydration): ConversationAuditHydration {
+  const order: ConversationAuditHydration[] = ['none', 'on-demand', 'background', 'required'];
+  return order[Math.max(order.indexOf(current), order.indexOf(incoming))];
 }
 
 function mergeSideEffect(current: SideEffectAllowance, incoming: SideEffectAllowance, context: MergeContext): SideEffectAllowance {
@@ -671,6 +744,7 @@ function normalizeContract(contract: HarnessContract): HarnessContract {
       phaseDeadlines: normalizePhaseDeadlines(contract.progressPlan.phaseDeadlines, contract.progressPlan.phaseNames ?? contract.progressPlan.visibleMilestones),
       backgroundAfterMs: contract.progressPlan.backgroundAfterMs ?? contract.toolBudget.maxWallMs,
     },
+    conversationPlan: normalizeConversationPlan(contract.conversationPlan),
     presentationPlan: mergePresentation(basePresentationPlan(), contract.presentationPlan ?? basePresentationPlan()),
   };
 }
@@ -708,6 +782,7 @@ function applyLatencyTierPolicy(contract: HarnessContract, latencyTier: LatencyT
     verificationPolicy: { ...policy.verificationPolicy },
     repairContextPolicy: { ...policy.repairContextPolicy },
     progressPlan: cloneProgressPlan(policy.progressPlan),
+    conversationPlan: cloneConversationPlan(policy.conversationPlan),
     presentationPlan: clonePresentationPlan(policy.presentationPlan),
   };
 }
@@ -729,6 +804,10 @@ function cloneProgressPlan(progressPlan: HarnessContract['progressPlan']): Harne
   };
 }
 
+function cloneConversationPlan(conversationPlan: HarnessContract['conversationPlan']): HarnessContract['conversationPlan'] {
+  return { ...conversationPlan };
+}
+
 function clonePresentationPlan(presentationPlan: HarnessContract['presentationPlan']): HarnessContract['presentationPlan'] {
   return {
     ...presentationPlan,
@@ -740,6 +819,18 @@ function clonePresentationPlan(presentationPlan: HarnessContract['presentationPl
       primaryActions: [...presentationPlan.artifactActionPolicy.primaryActions],
       secondaryActions: [...presentationPlan.artifactActionPolicy.secondaryActions],
     },
+  };
+}
+
+function baseConversationPlan(): ConversationPlan {
+  return {
+    answerStrategy: 'answer-first',
+    evidenceMode: 'refs-first',
+    refsFirst: true,
+    auditHydration: 'on-demand',
+    maxInlineEvidenceRefs: 2,
+    maxInlineAuditNotes: 1,
+    exposeAuditDrawer: true,
   };
 }
 

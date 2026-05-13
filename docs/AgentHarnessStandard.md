@@ -274,12 +274,12 @@ Runner 只执行，不重新判断策略。
 | Hook | 作用 | 典型输出 |
 | --- | --- | --- |
 | `beforeUserProgressEvent` | 生成标准 process-progress event | progress model |
-| `beforeResultPresentation` | 生成结果呈现策略，不生成答案内容 | presentation plan |
+| `beforeResultPresentation` | 生成对话与结果呈现策略，不生成答案内容 | conversation plan, presentation plan |
 | `onInteractionRequested` | 澄清、人工确认、运行中 guidance | interaction event |
 | `onBackgroundContinuation` | 后台完成和可恢复状态 | background policy |
 | `onCancelRequested` | 用户取消语义 | cancel decision |
 
-UI 只能消费 stream event、`HarnessContract.presentationPlan`、runtime materialized `ResultPresentationContract` 和 refs，不直接推断任务语义。标准事件优先使用：
+UI 只能消费 stream event、`HarnessContract.conversationPlan`、`HarnessContract.presentationPlan`、runtime materialized `ResultPresentationContract` 和 refs，不直接推断任务语义。标准事件优先使用：
 
 - `process-progress`
 - `result-presentation`
@@ -288,6 +288,20 @@ UI 只能消费 stream event、`HarnessContract.presentationPlan`、runtime mate
 - `human-approval-required`
 - `guidance-queued`
 - `run-cancelled`
+
+`ConversationPlan` 是 harness 对本轮“怎么高效对话”的最终结构化决策。它把 answer-first、refs-first、审计补水和内联证据预算变成 contract 字段，避免 UI 或 prompt builder 根据用户自然语言重新判断：
+
+```ts
+export interface ConversationPlan {
+  answerStrategy: 'direct' | 'answer-first' | 'artifact-first' | 'evidence-first' | 'defer-until-verified';
+  evidenceMode: 'minimal-inline' | 'refs-first' | 'expanded';
+  refsFirst: boolean;
+  auditHydration: 'none' | 'on-demand' | 'background' | 'required';
+  maxInlineEvidenceRefs: number;
+  maxInlineAuditNotes: number;
+  exposeAuditDrawer: boolean;
+}
+```
 
 `ProgressPlan` 必须携带结构化策略，而不是只携带展示文案：
 
@@ -423,9 +437,20 @@ export interface HarnessContract {
   verificationPolicy: VerificationPolicy;
   repairContextPolicy: RepairContextPolicy;
   progressPlan: ProgressPlan;
+  conversationPlan: ConversationPlan;
   presentationPlan: PresentationPlan;
   promptDirectives: PromptDirective[];
   traceRef?: string;
+}
+
+export interface ConversationPlan {
+  answerStrategy: 'direct' | 'answer-first' | 'artifact-first' | 'evidence-first' | 'defer-until-verified';
+  evidenceMode: 'minimal-inline' | 'refs-first' | 'expanded';
+  refsFirst: boolean;
+  auditHydration: 'none' | 'on-demand' | 'background' | 'required';
+  maxInlineEvidenceRefs: number;
+  maxInlineAuditNotes: number;
+  exposeAuditDrawer: boolean;
 }
 
 export interface CapabilityBudget {
@@ -455,6 +480,7 @@ Decision merge 必须 deterministic。
 - budget 只能收紧，不能放宽，除非 profile merge policy 明确允许。
 - risk/verification 只能升级，不能降级，除非 human approval 已满足。
 - side-effect allowance 默认 fail closed。
+- `conversationPlan` 中 `evidenceMode`、`auditHydration`、`refsFirst` 和 `exposeAuditDrawer` 只能升级或保持可审计；`maxInlineEvidenceRefs` / `maxInlineAuditNotes` 默认取更小值，避免审计材料淹没主答复。
 - prompt directives 必须带 `sourceCallbackId`，并由 renderer 去重、排序、裁剪。
 - prompt render plan 必须保留 `sourceRefs.contractRef` / `sourceRefs.traceRef`、结构化 `renderedEntries` 和 deterministic `renderDigest`，使 prompt 策略句可以从 `HarnessContract` / `HarnessTrace` refs 重建，而不是只能从自然语言 prompt 反推。
 - prompt render plan 必须为当前 profile `moduleStack` 输出 bounded module directive preview；preview 用于研究比较，不能替代 module/callback 的结构化决策。

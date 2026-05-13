@@ -68,6 +68,8 @@ for (const [profileId, profile] of Object.entries(harnessProfiles)) {
     assert.equal(evaluation.contract.verificationPolicy.intensity, 'strict', `${profileId} must require strict verification`);
     assert.equal(evaluation.contract.verificationPolicy.requireCitations, true, `${profileId} must require citation verification`);
     assert.equal(evaluation.contract.verificationPolicy.requireArtifactRefs, true, `${profileId} must require artifact refs`);
+    assert.equal(evaluation.contract.conversationPlan.refsFirst, true, `${profileId} must preserve refs-first conversation output`);
+    assert.equal(evaluation.contract.conversationPlan.auditHydration, 'required', `${profileId} must require hydrated audit evidence`);
     assert.ok(
       evaluation.contract.verificationPolicy.selectedVerifierIds?.includes('verifier.scientific-reproduction'),
       `${profileId} must select the scientific reproduction verifier`,
