@@ -7,8 +7,18 @@ import {
   type TaskOutcomeStatus,
   type TaskProtocolStatus,
   type TaskRunCard,
+  type TaskRunCardConversationProjectionSummary,
   type TaskRunCardRef,
 } from '@sciforge-ui/runtime-contract/task-run-card';
+import {
+  appendConversationEvent,
+  createConversationEventLog,
+  projectConversation,
+  replayConversationState,
+  type ConversationEventType,
+  type ConversationProjection,
+  type ConversationRef,
+} from '../conversation-kernel/index.js';
 import type { RuntimeExecutionUnit } from '@sciforge-ui/runtime-contract/execution';
 import type { GatewayRequest, SkillAvailability, ToolPayload } from '../runtime-types.js';
 import { isRecord, toRecordList, toStringList, uniqueStrings } from '../gateway-utils.js';
@@ -58,6 +68,7 @@ export interface GatewayTaskOutcomeProjection {
   taskSuccess: boolean;
   userSatisfactionProxy: UserSatisfactionProxy;
   nextStepAttribution: NextStepAttribution;
+  conversationProjection: ConversationProjection;
   ownershipLayerSuggestions: OwnershipLayerSuggestion[];
   projectionRules: string[];
 }
@@ -77,6 +88,9 @@ export function attachTaskOutcomeProjection(
       ...displayIntent,
       taskRunCard: isValidTaskRunCard(displayIntent.taskRunCard) ? displayIntent.taskRunCard : projection.taskRunCard,
       taskOutcomeProjection: projection,
+      conversationProjection: isConversationProjection(displayIntent.conversationProjection)
+        ? displayIntent.conversationProjection
+        : projection.conversationProjection,
     },
   };
 }
@@ -91,6 +105,30 @@ export function materializeTaskOutcomeProjection(input: GatewayTaskOutcomeProjec
   const nextStepAttribution = nextStepAttributionFromPayload(input.payload, refs, failures);
   const userSatisfactionProxy = userSatisfactionProxyFromPayload(input.payload, input.request, refs, protocolStatus, nextStepAttribution);
   const taskOutcome = taskOutcomeFromProjection(protocolStatus, input.payload, userSatisfactionProxy);
+  const preliminaryCard = createTaskRunCard({
+    taskId: input.skill?.id,
+    title: input.skill?.manifest?.description ?? input.request?.skillDomain,
+    goal: input.request?.prompt ?? input.payload.message,
+    protocolStatus,
+    taskOutcome,
+    refs,
+    executionUnits: units,
+    verificationRefs: verificationRefsFromPayload(input.payload),
+    failureSignatures: failures,
+    genericAttributionLayer: nextStepAttribution.ownerLayer,
+    nextStep: nextStepAttribution.nextStep,
+  });
+  const conversationProjection = conversationProjectionFromTaskOutcome({
+    payload: input.payload,
+    request: input.request,
+    refs,
+    taskRunCard: preliminaryCard,
+    protocolStatus,
+    taskOutcome,
+    nextStepAttribution,
+  });
+  const conversationProjectionRef = conversationProjectionRefFromContext(input.refs);
+  const conversationProjectionSummary = conversationProjectionSummaryFromProjection(conversationProjection, nextStepAttribution);
   const taskRunCard = createTaskRunCard({
     taskId: input.skill?.id,
     title: input.skill?.manifest?.description ?? input.request?.skillDomain,
@@ -103,6 +141,8 @@ export function materializeTaskOutcomeProjection(input: GatewayTaskOutcomeProjec
     failureSignatures: failures,
     genericAttributionLayer: nextStepAttribution.ownerLayer,
     nextStep: nextStepAttribution.nextStep,
+    conversationProjectionRef,
+    conversationProjectionSummary,
     noHardcodeReview: {
       appliesGenerally: true,
       generalityStatement: 'Gateway task outcome projection is derived from runtime payload status, evidence refs, expected artifacts, and execution unit semantics, not from prompt, scenario, paper, file, or backend names.',
@@ -121,13 +161,228 @@ export function materializeTaskOutcomeProjection(input: GatewayTaskOutcomeProjec
     taskSuccess: taskOutcome === 'satisfied',
     userSatisfactionProxy,
     nextStepAttribution,
+    conversationProjection,
     ownershipLayerSuggestions: taskRunCard.ownershipLayerSuggestions,
     projectionRules: [
       'Protocol success means the backend returned a parseable contract; task success means the current user goal appears satisfied.',
       'User satisfaction proxy is inferred from visible answer quality, usable artifacts/refs, next-step detail, and repeat-work avoidance.',
       'Next-step attribution names the generic failing or owning runtime layer without prompt/scenario hardcoding.',
+      'ConversationProjection is replayed from derived kernel events so UI and follow-up turns have a single projection-shaped state surface.',
     ],
   };
+}
+
+function conversationProjectionFromTaskOutcome(input: {
+  payload: ToolPayload;
+  request?: GatewayRequest;
+  refs: TaskRunCardRef[];
+  taskRunCard: TaskRunCard;
+  protocolStatus: TaskProtocolStatus;
+  taskOutcome: TaskOutcomeStatus;
+  nextStepAttribution: NextStepAttribution;
+}): ConversationProjection {
+  const conversationId = `task-outcome:${input.taskRunCard.id}`;
+  const turnId = `turn:${input.taskRunCard.id}`;
+  const runId = `run:${input.taskRunCard.id}`;
+  const timestamp = timestampFromPayload(input.payload);
+  let log = createConversationEventLog(conversationId);
+  log = appendConversationEvent(log, {
+    id: `${conversationId}:turn`,
+    type: 'TurnReceived',
+    actor: 'user',
+    storage: 'inline',
+    timestamp,
+    turnId,
+    payload: {
+      prompt: input.request?.prompt ?? input.payload.message,
+      summary: input.request?.prompt ?? input.payload.message,
+    },
+  }).log;
+  log = appendConversationEvent(log, {
+    id: `${conversationId}:dispatch`,
+    type: 'Dispatched',
+    actor: 'kernel',
+    storage: 'inline',
+    timestamp,
+    turnId,
+    runId,
+    payload: {
+      summary: `protocol=${input.protocolStatus}; task=${input.taskOutcome}`,
+    },
+  }).log;
+  const materializedRefs = conversationRefsFromTaskRefs(input.refs);
+  if (materializedRefs.length) {
+    log = appendConversationEvent(log, {
+      id: `${conversationId}:materialized`,
+      type: 'OutputMaterialized',
+      actor: 'runtime',
+      storage: 'ref',
+      timestamp,
+      turnId,
+      runId,
+      payload: {
+        summary: 'Materialized refs from runtime payload.',
+        refs: materializedRefs,
+      },
+    }).log;
+  }
+  const terminalEventType = terminalEventTypeForOutcome(input.protocolStatus, input.taskOutcome, input.nextStepAttribution.ownerLayer);
+  const terminalRefs = materializedRefs.length ? materializedRefs : [{ ref: `task-card:${input.taskRunCard.id}`, label: 'TaskRunCard' }];
+  log = appendConversationEvent(log, {
+    id: `${conversationId}:terminal`,
+    type: terminalEventType,
+    actor: 'runtime',
+    storage: 'ref',
+    timestamp,
+    turnId,
+    runId,
+    payload: {
+      text: input.payload.message,
+      summary: input.payload.message || input.nextStepAttribution.nextStep,
+      reason: input.nextStepAttribution.reason,
+      failureReason: input.nextStepAttribution.reason,
+      refs: terminalRefs,
+    },
+  }).log;
+  const background = backgroundStateFromPayload(input.payload);
+  if (background) {
+    log = background.checkpointRefs.length
+      ? appendConversationEvent(log, {
+          id: `${conversationId}:background`,
+          type: background.status === 'completed' ? 'BackgroundCompleted' : 'BackgroundRunning',
+          actor: 'runtime',
+          storage: 'ref',
+          timestamp,
+          turnId,
+          runId,
+          payload: {
+            summary: 'Background continuation state attached to task outcome projection.',
+            revisionPlan: background.revisionPlan,
+            refs: background.checkpointRefs.map((ref) => ({ ref, label: 'background checkpoint' })),
+          },
+        }).log
+      : appendConversationEvent(log, {
+          id: `${conversationId}:background`,
+          type: background.status === 'completed' ? 'BackgroundCompleted' : 'BackgroundRunning',
+          actor: 'runtime',
+          storage: 'inline',
+          timestamp,
+          turnId,
+          runId,
+          payload: {
+            summary: 'Background continuation state attached to task outcome projection.',
+            revisionPlan: background.revisionPlan,
+            checkpointRefs: background.checkpointRefs,
+          },
+        }).log;
+  }
+  const verificationRef = verificationRefsFromPayload(input.payload)[0];
+  if (verificationRef) {
+    log = appendConversationEvent(log, {
+      id: `${conversationId}:verification`,
+      type: 'VerificationRecorded',
+      actor: 'verifier',
+      storage: 'ref',
+      timestamp,
+      turnId,
+      runId,
+      payload: {
+        summary: 'Verification evidence attached to task outcome projection.',
+        verdict: verificationVerdictForKernel(input.payload.verificationResults?.[0]?.verdict),
+        refs: [{ ref: verificationRef, label: 'verification' }],
+      },
+    }).log;
+  }
+  return projectConversation(log, replayConversationState(log));
+}
+
+function terminalEventTypeForOutcome(
+  protocolStatus: TaskProtocolStatus,
+  taskOutcome: TaskOutcomeStatus,
+  ownerLayer: TaskAttributionLayer,
+): ConversationEventType {
+  if (ownerLayer === externalServiceLayer) return 'ExternalBlocked';
+  if (protocolStatus === 'protocol-failed') return 'RepairNeeded';
+  if (taskOutcome === 'satisfied') return 'Satisfied';
+  if (taskOutcome === 'needs-human') return 'NeedsHuman';
+  if (taskOutcome === 'needs-work') return 'DegradedResult';
+  return 'RepairNeeded';
+}
+
+function conversationRefsFromTaskRefs(refs: TaskRunCardRef[]): ConversationRef[] {
+  return refs.map((ref) => ({
+    ref: ref.ref,
+    label: ref.label,
+  }));
+}
+
+function conversationProjectionRefFromContext(refs: GatewayTaskOutcomeProjectionContext['refs']) {
+  return refs?.outputRel ? `${refs.outputRel}#displayIntent.conversationProjection` : undefined;
+}
+
+function conversationProjectionSummaryFromProjection(
+  projection: ConversationProjection,
+  fallback: NextStepAttribution,
+): TaskRunCardConversationProjectionSummary {
+  const visibleAnswer = projection.visibleAnswer;
+  const failureDiagnostic = projection.diagnostics.find((diagnostic) => diagnostic.severity === 'error' || diagnostic.code);
+  const recoverActions = uniqueStrings(projection.recoverActions);
+  return {
+    schemaVersion: 'sciforge.task-run-card.conversation-projection-summary.v1',
+    conversationId: projection.conversationId,
+    status: visibleAnswer?.status ?? projection.activeRun?.status ?? 'idle',
+    activeRunId: projection.activeRun?.id,
+    failureOwner: failureDiagnostic
+      ? {
+          ownerLayer: failureDiagnostic.code || fallback.ownerLayer,
+          reason: failureDiagnostic.message || fallback.reason,
+          evidenceRefs: (failureDiagnostic.refs ?? []).map((ref) => ref.ref),
+          nextStep: recoverActions[0] ?? fallback.nextStep,
+        }
+      : fallback.ownerLayer !== 'unknown' && recoverActions.length
+        ? {
+            ownerLayer: fallback.ownerLayer,
+            reason: fallback.reason,
+            evidenceRefs: fallback.sourceRefs,
+            nextStep: recoverActions[0] ?? fallback.nextStep,
+          }
+        : undefined,
+    recoverActions,
+    verificationState: projection.verificationState,
+    backgroundState: projection.backgroundState,
+  };
+}
+
+function backgroundStateFromPayload(payload: ToolPayload): TaskRunCardConversationProjectionSummary['backgroundState'] | undefined {
+  const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
+  const candidate = isRecord(displayIntent.backgroundState)
+    ? displayIntent.backgroundState
+    : isRecord(displayIntent.backgroundContinuation)
+      ? displayIntent.backgroundContinuation
+      : undefined;
+  if (!candidate) return undefined;
+  const status = stringField(candidate.status);
+  if (!status || !['queued', 'running', 'completed', 'failed', 'cancelled'].includes(status)) return undefined;
+  return {
+    status,
+    checkpointRefs: uniqueStrings(toStringList(candidate.checkpointRefs)),
+    revisionPlan: stringField(candidate.revisionPlan),
+  };
+}
+
+function verificationVerdictForKernel(value: unknown) {
+  const text = String(value || '');
+  if (text === 'pass') return 'pass';
+  if (['fail', 'failed', 'uncertain', 'needs-human'].includes(text)) return 'failed';
+  if (text === 'unverified') return 'unverified';
+  return text || undefined;
+}
+
+function timestampFromPayload(payload: ToolPayload) {
+  const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
+  return stringField(displayIntent.updatedAt)
+    ?? stringField(displayIntent.createdAt)
+    ?? '1970-01-01T00:00:00.000Z';
 }
 
 function protocolStatusFromPayload(payload: ToolPayload, units: RuntimeExecutionUnit[]): TaskProtocolStatus {
@@ -486,6 +741,11 @@ function isGatewayTaskOutcomeProjection(value: unknown): value is GatewayTaskOut
   return isRecord(value)
     && value.schemaVersion === TASK_OUTCOME_PROJECTION_SCHEMA_VERSION
     && isValidTaskRunCard(value.taskRunCard);
+}
+
+function isConversationProjection(value: unknown): value is ConversationProjection {
+  return isRecord(value)
+    && value.schemaVersion === 'sciforge.conversation-projection.v1';
 }
 
 function isValidTaskRunCard(value: unknown): value is TaskRunCard {

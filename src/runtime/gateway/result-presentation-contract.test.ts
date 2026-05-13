@@ -88,6 +88,10 @@ test('attachResultPresentationContract separates protocol success from unmet tas
   assert.equal(card?.status, 'needs-work');
   assert.equal(proxy?.status, 'needs-work');
   assert.equal(proxy?.usableResultVisible, true);
+  const conversationProjection = projection?.conversationProjection as Record<string, unknown> | undefined;
+  const visibleAnswer = conversationProjection?.visibleAnswer as Record<string, unknown> | undefined;
+  assert.equal(conversationProjection?.schemaVersion, 'sciforge.conversation-projection.v1');
+  assert.equal(visibleAnswer?.status, 'degraded-result');
   assert.ok(Array.isArray(proxy?.reasons));
   assert.match(String(card?.nextStep), /requested report|preserved table refs/i);
 });
@@ -142,14 +146,79 @@ test('attachResultPresentationContract attributes transient failure next step to
   const projection = attached.displayIntent?.taskOutcomeProjection as Record<string, unknown> | undefined;
   const card = attached.displayIntent?.taskRunCard as Record<string, unknown> | undefined;
   const attribution = projection?.nextStepAttribution as Record<string, unknown> | undefined;
+  const conversationProjection = projection?.conversationProjection as Record<string, unknown> | undefined;
+  const visibleAnswer = conversationProjection?.visibleAnswer as Record<string, unknown> | undefined;
+  const displayProjection = attached.displayIntent?.conversationProjection as Record<string, unknown> | undefined;
   const failures = card?.failureSignatures as Array<Record<string, unknown>> | undefined;
   const suggestions = projection?.ownershipLayerSuggestions as Array<Record<string, unknown>> | undefined;
 
   assert.equal(card?.taskOutcome, 'needs-human');
   assert.equal(card?.status, 'needs-human');
   assert.equal(attribution?.ownerLayer, 'external-provider');
+  assert.equal(conversationProjection?.schemaVersion, 'sciforge.conversation-projection.v1');
+  assert.equal(displayProjection?.schemaVersion, 'sciforge.conversation-projection.v1');
+  assert.equal(visibleAnswer?.status, 'external-blocked');
   assert.equal(failures?.[0]?.kind, 'external-transient');
   assert.ok(suggestions?.some((suggestion) => suggestion.layer === 'external-provider'));
   assert.ok(suggestions?.some((suggestion) => suggestion.layer === 'runtime-server'));
   assert.match(String(attribution?.nextStep), /provider backoff/i);
+});
+
+test('attachResultPresentationContract maps failed runs through ConversationProjection recovery state', () => {
+  const attached = attachResultPresentationContract(payload({
+    message: 'Workspace task failed validation; checkpoint is preserved for repair.',
+    claimType: 'runtime-diagnostic',
+    evidenceLevel: 'runtime-log',
+    executionUnits: [{
+      id: 'validate-report',
+      status: 'failed-with-reason',
+      tool: 'workspace-task',
+      outputRef: '.sciforge/task-results/report.json',
+      stderrRef: '.sciforge/debug/report.stderr.log',
+      failureReason: 'Verifier failed release gate for missing evidence.',
+      recoverActions: ['Supplement verifier evidence before presenting as verified.'],
+      verificationRef: 'verification:release-gate',
+      verificationVerdict: 'fail',
+    }],
+    verificationResults: [{
+      id: 'release-gate',
+      verdict: 'fail',
+      confidence: 0.8,
+      evidenceRefs: ['.sciforge/debug/report.stderr.log'],
+      repairHints: ['Supplement verifier evidence before presenting as verified.'],
+    }],
+    displayIntent: {
+      backgroundState: {
+        status: 'running',
+        checkpointRefs: ['.sciforge/checkpoints/report-repair.json'],
+        revisionPlan: 'Repair the missing verifier evidence.',
+      },
+    },
+  }), {
+    refs: {
+      outputRel: '.sciforge/task-results/report.json',
+      stderrRel: '.sciforge/debug/report.stderr.log',
+    },
+    request: {
+      skillDomain: 'knowledge',
+      prompt: 'Produce and verify a report.',
+      artifacts: [],
+    },
+  });
+
+  const projection = attached.displayIntent?.taskOutcomeProjection as Record<string, any> | undefined;
+  const card = attached.displayIntent?.taskRunCard as Record<string, any> | undefined;
+  const conversationProjection = projection?.conversationProjection as Record<string, any> | undefined;
+  const summary = card?.conversationProjectionSummary as Record<string, any> | undefined;
+  const resultPresentation = attached.displayIntent?.resultPresentation as Record<string, any> | undefined;
+
+  assert.equal(conversationProjection?.schemaVersion, 'sciforge.conversation-projection.v1');
+  assert.equal(conversationProjection?.verificationState?.status, 'failed');
+  assert.equal(conversationProjection?.backgroundState?.status, 'running');
+  assert.ok(conversationProjection?.recoverActions?.some((action: string) => /verifier evidence/i.test(action)));
+  assert.equal(summary?.failureOwner?.ownerLayer, 'verification');
+  assert.equal(summary?.verificationState?.status, 'failed');
+  assert.equal(summary?.backgroundState?.status, 'running');
+  assert.equal(card?.conversationProjectionRef, '.sciforge/task-results/report.json#displayIntent.conversationProjection');
+  assert.equal(resultPresentation?.conversationProjectionSummary?.failureOwner?.ownerLayer, 'verification');
 });

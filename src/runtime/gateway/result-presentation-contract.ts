@@ -45,13 +45,19 @@ export function attachResultPresentationContract(
     }, context);
   }
 
-  return attachTaskOutcomeProjection({
+  const payloadWithOutcome = attachTaskOutcomeProjection({
     ...payload,
     displayIntent: {
       ...displayIntent,
-      resultPresentation: materializeResultPresentationContract({ payload }),
     },
   }, context);
+  return {
+    ...payloadWithOutcome,
+    displayIntent: {
+      ...(isRecord(payloadWithOutcome.displayIntent) ? payloadWithOutcome.displayIntent : {}),
+      resultPresentation: materializeResultPresentationContract({ payload: payloadWithOutcome }),
+    },
+  };
 }
 
 function stringField(value: unknown) {

@@ -646,6 +646,7 @@ export type {
   OwnershipLayerSuggestion,
   OwnershipLayerSuggestionConfidence,
   TaskAttributionLayer,
+  TaskRunCardConversationProjectionSummary,
   TaskOutcomeStatus,
   TaskProtocolStatus,
   TaskRoundStatus,

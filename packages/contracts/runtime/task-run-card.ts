@@ -171,6 +171,32 @@ export interface OwnershipLayerSuggestion {
   nextStep: string;
 }
 
+export interface TaskRunCardConversationProjectionSummary {
+  schemaVersion: 'sciforge.task-run-card.conversation-projection-summary.v1';
+  conversationId: string;
+  status: string;
+  activeRunId?: string;
+  failureOwner?: {
+    ownerLayer: TaskAttributionLayer | string;
+    action?: string;
+    retryable?: boolean;
+    reason: string;
+    evidenceRefs: string[];
+    nextStep?: string;
+  };
+  recoverActions: string[];
+  verificationState?: {
+    status: string;
+    verifierRef?: string;
+    verdict?: string;
+  };
+  backgroundState?: {
+    status: string;
+    checkpointRefs: string[];
+    revisionPlan?: string;
+  };
+}
+
 export interface TaskRunCardInput {
   id?: string;
   taskId?: string;
@@ -186,6 +212,8 @@ export interface TaskRunCardInput {
   genericAttributionLayer?: TaskAttributionLayer;
   ownershipLayerSuggestions?: Array<Partial<OwnershipLayerSuggestion>>;
   nextStep?: string;
+  conversationProjectionRef?: string;
+  conversationProjectionSummary?: Partial<TaskRunCardConversationProjectionSummary>;
   noHardcodeReview?: Partial<NoHardcodeReview>;
   updatedAt?: string;
 }
@@ -207,6 +235,8 @@ export interface TaskRunCard {
   genericAttributionLayer: TaskAttributionLayer;
   ownershipLayerSuggestions: OwnershipLayerSuggestion[];
   nextStep: string;
+  conversationProjectionRef?: string;
+  conversationProjectionSummary?: TaskRunCardConversationProjectionSummary;
   noHardcodeReview: NoHardcodeReview;
   updatedAt: string;
 }
@@ -260,6 +290,9 @@ export function createTaskRunCard(input: TaskRunCardInput): TaskRunCard {
     ...(input.refs ?? []),
     ...executionUnitRefs.map((ref): TaskRunCardRef => ({ kind: 'execution-unit', ref })),
     ...uniqueStrings(input.verificationRefs ?? []).map((ref): TaskRunCardRef => ({ kind: 'verification', ref })),
+    ...(stringField(input.conversationProjectionRef)
+      ? [{ kind: 'other' as const, ref: stringField(input.conversationProjectionRef) as string, label: 'conversation projection' }]
+      : []),
   ]);
   const genericAttributionLayer = input.genericAttributionLayer
     ?? failureSignatures[0]?.layer
@@ -294,6 +327,8 @@ export function createTaskRunCard(input: TaskRunCardInput): TaskRunCard {
     genericAttributionLayer,
     ownershipLayerSuggestions,
     nextStep,
+    conversationProjectionRef: stringField(input.conversationProjectionRef),
+    conversationProjectionSummary: normalizeConversationProjectionSummary(input.conversationProjectionSummary),
     noHardcodeReview: createNoHardcodeReview(input.noHardcodeReview, genericAttributionLayer),
     updatedAt: stringField(input.updatedAt) ?? new Date(0).toISOString(),
   };
@@ -375,6 +410,15 @@ export function validateTaskRunCard(card: unknown): string[] {
   }
   if (!Array.isArray(card.refs)) issues.push('refs must be an array.');
   if (!Array.isArray(card.failureSignatures)) issues.push('failureSignatures must be an array.');
+  if (card.conversationProjectionSummary !== undefined) {
+    if (!isRecord(card.conversationProjectionSummary)) {
+      issues.push('conversationProjectionSummary must be an object when present.');
+    } else {
+      if (!stringField(card.conversationProjectionSummary.conversationId)) issues.push('conversationProjectionSummary.conversationId is required.');
+      if (!stringField(card.conversationProjectionSummary.status)) issues.push('conversationProjectionSummary.status is required.');
+      if (!Array.isArray(card.conversationProjectionSummary.recoverActions)) issues.push('conversationProjectionSummary.recoverActions must be an array.');
+    }
+  }
   if (card.ownershipLayerSuggestions !== undefined && !Array.isArray(card.ownershipLayerSuggestions)) {
     issues.push('ownershipLayerSuggestions must be an array when present.');
   }
@@ -423,6 +467,48 @@ function inferProtocolStatus(input: TaskRunCardInput): TaskProtocolStatus {
   if (input.executionUnits?.some((unit) => unit.status === 'failed' || unit.status === 'failed-with-reason' || unit.status === 'repair-needed')) return 'protocol-failed';
   if (input.rounds?.length || input.executionUnits?.length || input.refs?.length) return 'protocol-success';
   return 'not-run';
+}
+
+function normalizeConversationProjectionSummary(
+  summary: Partial<TaskRunCardConversationProjectionSummary> | undefined,
+): TaskRunCardConversationProjectionSummary | undefined {
+  if (!summary || !stringField(summary.conversationId) || !stringField(summary.status)) return undefined;
+  const failureOwner = isRecord(summary.failureOwner)
+    ? {
+        ownerLayer: stringField(summary.failureOwner.ownerLayer) ?? 'unknown',
+        action: stringField(summary.failureOwner.action),
+        retryable: typeof summary.failureOwner.retryable === 'boolean' ? summary.failureOwner.retryable : undefined,
+        reason: stringField(summary.failureOwner.reason) ?? 'Conversation projection reported a failure owner.',
+        evidenceRefs: uniqueStrings(Array.isArray(summary.failureOwner.evidenceRefs)
+          ? summary.failureOwner.evidenceRefs.filter(isString)
+          : []),
+        nextStep: stringField(summary.failureOwner.nextStep),
+      }
+    : undefined;
+  return {
+    schemaVersion: 'sciforge.task-run-card.conversation-projection-summary.v1',
+    conversationId: stringField(summary.conversationId) as string,
+    status: stringField(summary.status) as string,
+    activeRunId: stringField(summary.activeRunId),
+    failureOwner,
+    recoverActions: uniqueStrings(Array.isArray(summary.recoverActions) ? summary.recoverActions.filter(isString) : []),
+    verificationState: isRecord(summary.verificationState)
+      ? {
+          status: stringField(summary.verificationState.status) ?? 'unverified',
+          verifierRef: stringField(summary.verificationState.verifierRef),
+          verdict: stringField(summary.verificationState.verdict),
+        }
+      : undefined,
+    backgroundState: isRecord(summary.backgroundState)
+      ? {
+          status: stringField(summary.backgroundState.status) ?? 'running',
+          checkpointRefs: uniqueStrings(Array.isArray(summary.backgroundState.checkpointRefs)
+            ? summary.backgroundState.checkpointRefs.filter(isString)
+            : []),
+          revisionPlan: stringField(summary.backgroundState.revisionPlan),
+        }
+      : undefined,
+  };
 }
 
 function inferTaskOutcome(protocolStatus: TaskProtocolStatus, input: TaskRunCardInput): TaskOutcomeStatus {

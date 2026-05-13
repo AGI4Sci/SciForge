@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -205,6 +205,69 @@ test('task attempt history records a run-level failure signature registry across
     ]);
     assert.equal(external?.occurrenceCount, 1);
     assert.equal(external?.runRefs[0]?.runId, 'task-attempt:external-transient-run:1');
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('task attempt history hydrates ConversationProjection summary from task output', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-task-conversation-projection-'));
+  try {
+    const outputRef = '.sciforge/task-results/failed-run.json';
+    await mkdir(join(workspace, '.sciforge/task-results'), { recursive: true });
+    await writeFile(join(workspace, outputRef), JSON.stringify({
+      displayIntent: {
+        conversationProjection: {
+          schemaVersion: 'sciforge.conversation-projection.v1',
+          conversationId: 'conversation:failed-run',
+          visibleAnswer: {
+            status: 'repair-needed',
+            diagnostic: 'Verifier failed release gate for missing evidence.',
+            artifactRefs: ['.sciforge/task-results/failed-run.json'],
+          },
+          activeRun: { id: 'run:failed-run', status: 'repair-needed' },
+          recoverActions: ['Supplement verifier evidence before presenting as verified.'],
+          verificationState: { status: 'failed', verifierRef: 'verification:release-gate', verdict: 'failed' },
+          backgroundState: {
+            status: 'running',
+            checkpointRefs: ['.sciforge/checkpoints/failed-run.json'],
+            revisionPlan: 'Continue verifier repair.',
+          },
+          diagnostics: [{
+            severity: 'error',
+            code: 'verification',
+            message: 'Verifier failed release gate for missing evidence.',
+            refs: [{ ref: '.sciforge/debug/failed-run.stderr.log' }],
+          }],
+          artifacts: [],
+          executionProcess: [],
+          auditRefs: [],
+        },
+      },
+    }), 'utf8');
+
+    const attempt: TaskAttemptRecord = {
+      id: 'failed-run-with-conversation-projection',
+      prompt: 'verify report and preserve recovery state',
+      skillDomain: 'knowledge',
+      skillId: 'generic-task',
+      attempt: 1,
+      status: 'repair-needed',
+      outputRef,
+      stderrRef: '.sciforge/debug/failed-run.stderr.log',
+      createdAt: '2026-05-12T00:00:00.000Z',
+    } as TaskAttemptRecord;
+
+    await appendTaskAttempt(workspace, attempt);
+    const [stored] = await readTaskAttempts(workspace, attempt.id);
+    const summary = stored?.taskRunCard?.conversationProjectionSummary;
+
+    assert.equal(stored?.taskRunCard?.conversationProjectionRef, `${outputRef}#displayIntent.conversationProjection`);
+    assert.equal(summary?.failureOwner?.ownerLayer, 'verification');
+    assert.equal(summary?.verificationState?.status, 'failed');
+    assert.equal(summary?.backgroundState?.status, 'running');
+    assert.ok(stored?.taskRunCard?.ownershipLayerSuggestions.some((suggestion) => suggestion.layer === 'verification' && suggestion.confidence === 'high'));
+    assert.ok(stored?.taskRunCard?.failureSignatures.some((signature) => signature.layer === 'verification'));
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

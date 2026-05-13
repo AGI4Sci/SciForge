@@ -225,3 +225,32 @@ test('auto-suggests generic ownership layers from runtime contract signals', () 
   assert.match(verification?.reason ?? '', /verifier verdicts|evidence checks/i);
   assert.deepEqual(validateTaskRunCard(card), []);
 });
+
+test('carries conversation projection refs and compact kernel summaries', () => {
+  const card = createTaskRunCard({
+    goal: 'Recover a failed run from its kernel projection.',
+    protocolStatus: 'protocol-failed',
+    taskOutcome: 'needs-work',
+    conversationProjectionRef: '.sciforge/task-results/run.json#displayIntent.conversationProjection',
+    conversationProjectionSummary: {
+      schemaVersion: 'sciforge.task-run-card.conversation-projection-summary.v1',
+      conversationId: 'conversation:run-1',
+      status: 'repair-needed',
+      failureOwner: {
+        ownerLayer: 'runtime-runner',
+        reason: 'Workspace task exited with code 1.',
+        evidenceRefs: ['.sciforge/debug/stderr.log'],
+        nextStep: 'Repair runtime execution inputs, argv, sandbox, or output path and rerun.',
+      },
+      recoverActions: ['Repair runtime execution inputs, argv, sandbox, or output path and rerun.'],
+      verificationState: { status: 'failed', verifierRef: 'verification:v1', verdict: 'failed' },
+      backgroundState: { status: 'running', checkpointRefs: ['checkpoint:run-1'] },
+    },
+  });
+
+  assert.equal(card.conversationProjectionRef, '.sciforge/task-results/run.json#displayIntent.conversationProjection');
+  assert.equal(card.conversationProjectionSummary?.failureOwner?.ownerLayer, 'runtime-runner');
+  assert.deepEqual(card.conversationProjectionSummary?.recoverActions, ['Repair runtime execution inputs, argv, sandbox, or output path and rerun.']);
+  assert.ok(card.refs.some((ref) => ref.ref === '.sciforge/task-results/run.json#displayIntent.conversationProjection'));
+  assert.deepEqual(validateTaskRunCard(card), []);
+});

@@ -9,6 +9,7 @@ import {
   type TaskOutcomeStatus,
   type TaskProtocolStatus,
   type TaskRoundStatus,
+  type TaskRunCardConversationProjectionSummary,
   type TaskRunCardRef,
 } from '@sciforge-ui/runtime-contract/task-run-card';
 import type { TaskAttemptRecord } from './runtime-types.js';
@@ -34,9 +35,10 @@ export async function appendTaskAttempt(workspacePath: string, record: TaskAttem
   const recordWithEvidence = await withWorkEvidenceSummary(workspace, record);
   const recordWithAudit = await withValidationRepairAuditMetadata(workspace, recordWithEvidence);
   const recordWithBundleAudit = await withSessionBundleAuditMetadata(workspace, recordWithAudit, true);
-  const normalizedRecord = recordWithBundleAudit.status === 'done'
-    ? { ...recordWithBundleAudit, failureReason: undefined }
-    : recordWithBundleAudit;
+  const recordWithConversationProjection = await withConversationProjectionMetadata(workspace, recordWithBundleAudit);
+  const normalizedRecord = recordWithConversationProjection.status === 'done'
+    ? { ...recordWithConversationProjection, failureReason: undefined }
+    : recordWithConversationProjection;
   const normalizedRecordWithCard = withTaskRunCard(normalizedRecord);
   const path = normalizedRecord.sessionBundleRef
     ? join(workspace, normalizedRecord.sessionBundleRef, 'records', 'task-attempts', `${safeName(record.id)}.json`)
@@ -156,7 +158,8 @@ async function withAttemptDerivedMetadata(workspace: string, attempts: TaskAttem
     const withAudit = await withValidationRepairAuditMetadata(workspace, withEvidence);
     const withTelemetry = await withValidationRepairTelemetryMetadata(workspace, withAudit);
     const withBundleAudit = await withSessionBundleAuditMetadata(workspace, withTelemetry);
-    return withTaskRunCard(withBundleAudit);
+    const withConversationProjection = await withConversationProjectionMetadata(workspace, withBundleAudit);
+    return withTaskRunCard(withConversationProjection);
   }));
 }
 
@@ -164,6 +167,7 @@ function withTaskRunCard(record: TaskAttemptRecord): TaskAttemptRecord {
   const refs = taskRunCardRefsForAttempt(record);
   const failureSignatures = failureSignaturesForAttempt(record);
   const genericAttributionLayer = genericAttributionLayerForAttempt(failureSignatures);
+  const conversationProjection = conversationProjectionMetadataFromAttempt(record);
   return {
     ...record,
     taskRunCard: createTaskRunCard({
@@ -185,6 +189,8 @@ function withTaskRunCard(record: TaskAttemptRecord): TaskAttemptRecord {
       failureSignatures,
       genericAttributionLayer,
       ownershipLayerSuggestions: ownershipLayerSuggestionsForAttempt(record, genericAttributionLayer),
+      conversationProjectionRef: conversationProjection.ref,
+      conversationProjectionSummary: conversationProjection.summary,
       updatedAt: record.createdAt,
       noHardcodeReview: {
         appliesGenerally: true,
@@ -204,6 +210,42 @@ function ownershipLayerSuggestionsForAttempt(
   genericAttributionLayer: TaskAttributionLayer,
 ): Array<Partial<OwnershipLayerSuggestion>> {
   const suggestions: Array<Partial<OwnershipLayerSuggestion>> = [];
+  const conversationProjection = conversationProjectionMetadataFromAttempt(record).summary;
+  if (conversationProjection?.failureOwner) {
+    const layer = attributionLayerFromProjectionOwner(conversationProjection.failureOwner.ownerLayer);
+    suggestions.push({
+      layer,
+      confidence: 'high',
+      reason: `ConversationProjection failure owner maps this attempt to ${conversationProjection.failureOwner.ownerLayer}.`,
+      signals: [
+        `conversation:${conversationProjection.conversationId}`,
+        `kernelStatus:${conversationProjection.status}`,
+        `failureOwner:${conversationProjection.failureOwner.ownerLayer}`,
+      ],
+      nextStep: conversationProjection.failureOwner.nextStep ?? conversationProjection.recoverActions[0] ?? 'Review kernel projection recovery actions before rerun.',
+    });
+  }
+  if (conversationProjection?.verificationState?.status === 'failed') {
+    suggestions.push({
+      layer: 'verification',
+      confidence: 'high',
+      reason: 'ConversationProjection verification state is failed, so verifier evidence owns the next improvement.',
+      signals: [`verification:${conversationProjection.verificationState.verdict ?? 'failed'}`],
+      nextStep: conversationProjection.recoverActions[0] ?? 'Supplement verifier evidence before marking the task satisfied.',
+    });
+  }
+  if (conversationProjection?.backgroundState && conversationProjection.backgroundState.status !== 'completed') {
+    suggestions.push({
+      layer: 'runtime-server',
+      confidence: 'medium',
+      reason: 'ConversationProjection has an unfinished background continuation state.',
+      signals: [
+        `background:${conversationProjection.backgroundState.status}`,
+        ...conversationProjection.backgroundState.checkpointRefs.map((ref) => `checkpoint:${ref}`),
+      ],
+      nextStep: conversationProjection.recoverActions[0] ?? 'Resume background continuation from preserved checkpoint refs.',
+    });
+  }
   if (record.runtimeProfileId) {
     suggestions.push({
       layer: 'harness',
@@ -266,12 +308,14 @@ function roundStatusForAttempt(record: TaskAttemptRecord): TaskRoundStatus {
 }
 
 function observedAttemptSummary(record: TaskAttemptRecord) {
+  const conversationProjection = conversationProjectionMetadataFromAttempt(record).summary;
   const parts = [
     `status=${record.status}`,
     record.exitCode !== undefined ? `exitCode=${record.exitCode}` : '',
     record.failureReason ? `failure=${record.failureReason}` : '',
     record.schemaErrors?.length ? `schemaErrors=${record.schemaErrors.length}` : '',
     record.workEvidenceSummary ? `workEvidence=${record.workEvidenceSummary.count}` : '',
+    conversationProjection ? `conversation=${conversationProjection.status}` : '',
   ].filter(Boolean);
   return parts.join('; ') || 'Attempt recorded without additional diagnostics.';
 }
@@ -325,6 +369,16 @@ function taskRef(
 
 function failureSignaturesForAttempt(record: TaskAttemptRecord): FailureSignatureInput[] {
   const signatures: FailureSignatureInput[] = [];
+  const conversationProjection = conversationProjectionMetadataFromAttempt(record).summary;
+  if (conversationProjection?.failureOwner) {
+    signatures.push({
+      message: conversationProjection.failureOwner.reason,
+      layer: attributionLayerFromProjectionOwner(conversationProjection.failureOwner.ownerLayer),
+      code: String(conversationProjection.failureOwner.ownerLayer),
+      retryable: conversationProjection.failureOwner.retryable,
+      refs: conversationProjection.failureOwner.evidenceRefs,
+    });
+  }
   if (record.failureReason) {
     signatures.push({
       kind: record.failureKind,
@@ -353,6 +407,202 @@ function failureSignaturesForAttempt(record: TaskAttemptRecord): FailureSignatur
     });
   }
   return signatures;
+}
+
+async function withConversationProjectionMetadata(workspace: string, record: TaskAttemptRecord): Promise<TaskAttemptRecord> {
+  const fromAttempt = conversationProjectionMetadataFromAttempt(record);
+  const fromOutput = record.outputRef
+    ? await conversationProjectionMetadataFromOutput(workspace, record.outputRef)
+    : {};
+  const summary = fromAttempt.summary ?? fromOutput.summary;
+  const ref = fromAttempt.ref ?? fromOutput.ref;
+  if (!summary && !ref) return record;
+  const current = record as TaskAttemptRecord & { refs?: Record<string, unknown> };
+  return {
+    ...record,
+    conversationProjectionRef: ref,
+    conversationProjectionSummary: summary,
+    refs: {
+      ...(isRecord(current.refs) ? current.refs : {}),
+      ...(ref ? { conversationProjection: [ref] } : {}),
+    },
+  } as TaskAttemptRecord;
+}
+
+function conversationProjectionMetadataFromAttempt(record: TaskAttemptRecord): {
+  ref?: string;
+  summary?: TaskRunCardConversationProjectionSummary;
+} {
+  const current = record as TaskAttemptRecord & {
+    conversationProjectionRef?: unknown;
+    conversationProjectionSummary?: unknown;
+    refs?: Record<string, unknown>;
+  };
+  const ref = stringField(current.conversationProjectionRef)
+    ?? (isRecord(current.refs) ? firstString(current.refs.conversationProjection) : undefined);
+  const summary = normalizeConversationProjectionSummary(current.conversationProjectionSummary);
+  return { ref, summary };
+}
+
+async function conversationProjectionMetadataFromOutput(
+  workspace: string,
+  outputRef: string,
+): Promise<{ ref?: string; summary?: TaskRunCardConversationProjectionSummary }> {
+  const outputPath = workspaceSafePath(workspace, outputRef);
+  if (!outputPath || !await fileExists(outputPath)) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(outputPath, 'utf8'));
+  } catch {
+    return {};
+  }
+  return conversationProjectionMetadataFromPayload(parsed, `${outputRef}#displayIntent.conversationProjection`);
+}
+
+function conversationProjectionMetadataFromPayload(payload: unknown, fallbackRef?: string): {
+  ref?: string;
+  summary?: TaskRunCardConversationProjectionSummary;
+} {
+  const root = isRecord(payload) ? payload : {};
+  const displayIntent = isRecord(root.displayIntent) ? root.displayIntent : root;
+  const projection = isRecord(displayIntent.conversationProjection)
+    ? displayIntent.conversationProjection
+    : isRecord(displayIntent.taskOutcomeProjection) && isRecord(displayIntent.taskOutcomeProjection.conversationProjection)
+      ? displayIntent.taskOutcomeProjection.conversationProjection
+      : undefined;
+  const embeddedCard = isRecord(displayIntent.taskRunCard)
+    ? displayIntent.taskRunCard
+    : isRecord(displayIntent.taskOutcomeProjection) && isRecord(displayIntent.taskOutcomeProjection.taskRunCard)
+      ? displayIntent.taskOutcomeProjection.taskRunCard
+      : undefined;
+  const embeddedSummary = normalizeConversationProjectionSummary(embeddedCard?.conversationProjectionSummary);
+  const explicitRef = stringField(displayIntent.conversationProjectionRef) ?? stringField(embeddedCard?.conversationProjectionRef);
+  return {
+    ref: explicitRef ?? (projection ? fallbackRef : undefined),
+    summary: embeddedSummary ?? conversationProjectionSummaryFromProjection(projection),
+  };
+}
+
+function conversationProjectionSummaryFromProjection(projection: unknown): TaskRunCardConversationProjectionSummary | undefined {
+  if (!isRecord(projection) || projection.schemaVersion !== 'sciforge.conversation-projection.v1') return undefined;
+  const conversationId = stringField(projection.conversationId);
+  if (!conversationId) return undefined;
+  const visibleAnswer = isRecord(projection.visibleAnswer) ? projection.visibleAnswer : {};
+  const activeRun = isRecord(projection.activeRun) ? projection.activeRun : {};
+  const diagnostics = Array.isArray(projection.diagnostics)
+    ? projection.diagnostics.filter(isRecord)
+    : [];
+  const recoverActions = uniqueStrings(Array.isArray(projection.recoverActions)
+    ? projection.recoverActions.filter((action): action is string => typeof action === 'string' && action.trim().length > 0)
+    : []);
+  const failureDiagnostic = diagnostics.find((diagnostic) => stringField(diagnostic.code) || diagnostic.severity === 'error');
+  const verificationState = isRecord(projection.verificationState) ? projection.verificationState : undefined;
+  const backgroundState = isRecord(projection.backgroundState) ? projection.backgroundState : undefined;
+  return normalizeConversationProjectionSummary({
+    schemaVersion: 'sciforge.task-run-card.conversation-projection-summary.v1',
+    conversationId,
+    status: stringField(visibleAnswer.status) ?? stringField(activeRun.status) ?? 'idle',
+    activeRunId: stringField(activeRun.id),
+    failureOwner: failureDiagnostic
+      ? {
+          ownerLayer: stringField(failureDiagnostic.code) ?? 'unknown',
+          reason: stringField(failureDiagnostic.message) ?? 'ConversationProjection reported a failure diagnostic.',
+          evidenceRefs: Array.isArray(failureDiagnostic.refs)
+            ? failureDiagnostic.refs
+                .filter(isRecord)
+                .map((ref) => stringField(ref.ref))
+                .filter((ref): ref is string => Boolean(ref))
+            : [],
+          nextStep: recoverActions[0],
+        }
+      : undefined,
+    recoverActions,
+    verificationState: verificationState
+      ? {
+          status: stringField(verificationState.status) ?? 'unverified',
+          verifierRef: stringField(verificationState.verifierRef),
+          verdict: stringField(verificationState.verdict),
+        }
+      : undefined,
+    backgroundState: backgroundState
+      ? {
+          status: stringField(backgroundState.status) ?? 'running',
+          checkpointRefs: Array.isArray(backgroundState.checkpointRefs)
+            ? backgroundState.checkpointRefs.filter((ref): ref is string => typeof ref === 'string')
+            : [],
+          revisionPlan: stringField(backgroundState.revisionPlan),
+        }
+      : undefined,
+  });
+}
+
+function normalizeConversationProjectionSummary(value: unknown): TaskRunCardConversationProjectionSummary | undefined {
+  if (!isRecord(value)) return undefined;
+  const conversationId = stringField(value.conversationId);
+  const status = stringField(value.status);
+  if (!conversationId || !status) return undefined;
+  const failureOwner = isRecord(value.failureOwner) ? value.failureOwner : undefined;
+  const verificationState = isRecord(value.verificationState) ? value.verificationState : undefined;
+  const backgroundState = isRecord(value.backgroundState) ? value.backgroundState : undefined;
+  return {
+    schemaVersion: 'sciforge.task-run-card.conversation-projection-summary.v1',
+    conversationId,
+    status,
+    activeRunId: stringField(value.activeRunId),
+    failureOwner: failureOwner
+      ? {
+          ownerLayer: stringField(failureOwner.ownerLayer) ?? 'unknown',
+          action: stringField(failureOwner.action),
+          retryable: typeof failureOwner.retryable === 'boolean' ? failureOwner.retryable : undefined,
+          reason: stringField(failureOwner.reason) ?? 'ConversationProjection reported a failure owner.',
+          evidenceRefs: Array.isArray(failureOwner.evidenceRefs)
+            ? failureOwner.evidenceRefs.filter((ref): ref is string => typeof ref === 'string')
+            : [],
+          nextStep: stringField(failureOwner.nextStep),
+        }
+      : undefined,
+    recoverActions: Array.isArray(value.recoverActions)
+      ? uniqueStrings(value.recoverActions.filter((action): action is string => typeof action === 'string'))
+      : [],
+    verificationState: verificationState
+      ? {
+          status: stringField(verificationState.status) ?? 'unverified',
+          verifierRef: stringField(verificationState.verifierRef),
+          verdict: stringField(verificationState.verdict),
+        }
+      : undefined,
+    backgroundState: backgroundState
+      ? {
+          status: stringField(backgroundState.status) ?? 'running',
+          checkpointRefs: Array.isArray(backgroundState.checkpointRefs)
+            ? uniqueStrings(backgroundState.checkpointRefs.filter((ref): ref is string => typeof ref === 'string'))
+            : [],
+          revisionPlan: stringField(backgroundState.revisionPlan),
+        }
+      : undefined,
+  };
+}
+
+function attributionLayerFromProjectionOwner(ownerLayer: unknown): TaskAttributionLayer {
+  const owner = String(ownerLayer || '');
+  if (owner === 'external-provider') return 'external-provider';
+  if (owner === 'payload-contract') return 'payload-normalization';
+  if (owner === 'runtime-runner') return 'runtime-server';
+  if (owner === 'backend-generation') return 'agentserver-parser';
+  if (owner === 'verification') return 'verification';
+  if (owner === 'ui-presentation') return 'presentation';
+  if (owner === 'payload-normalization' || owner === 'runtime-server' || owner === 'agentserver-parser' || owner === 'presentation') return owner;
+  return 'unknown';
+}
+
+function firstString(value: unknown) {
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (Array.isArray(value)) return value.find((item): item is string => typeof item === 'string' && item.trim().length > 0)?.trim();
+  return undefined;
+}
+
+function stringField(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 async function withWorkEvidenceSummary(workspace: string, record: TaskAttemptRecord): Promise<TaskAttemptRecord> {
@@ -520,4 +770,8 @@ function workspaceSafePath(workspace: string, ref: string) {
 
 function safeName(value: string) {
   return value.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120);
+}
+
+function uniqueStrings(values: string[]) {
+  return Array.from(new Set(values.filter((value) => value.trim().length > 0)));
 }

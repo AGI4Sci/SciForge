@@ -1,4 +1,5 @@
 import type { ViewCompare, ViewEncoding, ViewLayout, ViewSelection, ViewSync, ViewTransform } from './view';
+import type { TaskRunCardConversationProjectionSummary } from './task-run-card';
 
 export const RESULT_PRESENTATION_SCHEMA_VERSION = 'sciforge.result-presentation-contract.v1' as const;
 import type { RuntimeArtifactDerivation } from './artifacts';
@@ -185,6 +186,8 @@ export interface ResultPresentationContract {
   processSummary?: ResultPresentationProcessSummary;
   diagnosticsRefs: ResultPresentationDiagnosticsRef[];
   defaultExpandedSections: ResultPresentationSection[];
+  conversationProjectionRef?: string;
+  conversationProjectionSummary?: TaskRunCardConversationProjectionSummary;
   fieldOrigins?: ResultPresentationFieldOrigins;
   generatedBy?: ResultPresentationFieldSource;
 }
@@ -223,6 +226,8 @@ export function createResultPresentationContract(input: Partial<ResultPresentati
     processSummary: input.processSummary,
     diagnosticsRefs: input.diagnosticsRefs ?? [],
     defaultExpandedSections: input.defaultExpandedSections ?? [...RESULT_PRESENTATION_DEFAULT_EXPANDED_SECTIONS],
+    conversationProjectionRef: stringField(input.conversationProjectionRef),
+    conversationProjectionSummary: input.conversationProjectionSummary,
     fieldOrigins: input.fieldOrigins,
     generatedBy: input.generatedBy ?? 'runtime-adapter',
   };
@@ -327,6 +332,7 @@ export function resultPresentationFromPayload(input: {
   const diagnosticsRefs = diagnosticsRefsFromPayload(payload);
   const recoverActions = recoverActionsFromPayload(payload);
   const status = resultStatusFromPayload(payload);
+  const conversationProjection = conversationProjectionFromPayload(payload);
   return createResultPresentationContract({
     status,
     answerBlocks: [{
@@ -354,7 +360,67 @@ export function resultPresentationFromPayload(input: {
     },
     diagnosticsRefs,
     defaultExpandedSections: ['answer', 'evidence', 'artifacts', 'actions', 'next-actions'],
+    conversationProjectionRef: conversationProjection.ref,
+    conversationProjectionSummary: conversationProjection.summary,
   });
+}
+
+function conversationProjectionFromPayload(payload: Record<string, unknown>): {
+  ref?: string;
+  summary?: TaskRunCardConversationProjectionSummary;
+} {
+  const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
+  const explicitRef = stringField(displayIntent.conversationProjectionRef);
+  const projection = isRecord(displayIntent.conversationProjection)
+    ? displayIntent.conversationProjection
+    : isRecord(displayIntent.taskOutcomeProjection) && isRecord(displayIntent.taskOutcomeProjection.conversationProjection)
+      ? displayIntent.taskOutcomeProjection.conversationProjection
+      : undefined;
+  if (!projection) return { ref: explicitRef };
+  const conversationId = stringField(projection.conversationId);
+  if (!conversationId) return { ref: explicitRef };
+  const visibleAnswer = isRecord(projection.visibleAnswer) ? projection.visibleAnswer : {};
+  const activeRun = isRecord(projection.activeRun) ? projection.activeRun : {};
+  const diagnostics = recordList(projection.diagnostics);
+  const recoverActions = stringList(projection.recoverActions);
+  const failureDiagnostic = diagnostics.find((diagnostic) => {
+    const severity = stringField(diagnostic.severity);
+    return severity === 'error' || stringField(diagnostic.code);
+  });
+  const verificationState = isRecord(projection.verificationState) ? projection.verificationState : undefined;
+  const backgroundState = isRecord(projection.backgroundState) ? projection.backgroundState : undefined;
+  return {
+    ref: explicitRef,
+    summary: {
+      schemaVersion: 'sciforge.task-run-card.conversation-projection-summary.v1',
+      conversationId,
+      status: stringField(visibleAnswer.status) ?? stringField(activeRun.status) ?? 'idle',
+      activeRunId: stringField(activeRun.id),
+      failureOwner: failureDiagnostic
+        ? {
+            ownerLayer: stringField(failureDiagnostic.code) ?? 'unknown',
+            reason: stringField(failureDiagnostic.message) ?? 'Conversation projection reported a failure.',
+            evidenceRefs: stringList(failureDiagnostic.refs),
+            nextStep: recoverActions[0],
+          }
+        : undefined,
+      recoverActions,
+      verificationState: verificationState
+        ? {
+            status: stringField(verificationState.status) ?? 'unverified',
+            verifierRef: stringField(verificationState.verifierRef),
+            verdict: stringField(verificationState.verdict),
+          }
+        : undefined,
+      backgroundState: backgroundState
+        ? {
+            status: stringField(backgroundState.status) ?? 'running',
+            checkpointRefs: stringList(backgroundState.checkpointRefs),
+            revisionPlan: stringField(backgroundState.revisionPlan),
+          }
+        : undefined,
+    },
+  };
 }
 
 function findingFromClaim(claim: Record<string, unknown>, index: number, citations: ResultPresentationInlineCitation[]): ResultPresentationKeyFinding {
