@@ -629,6 +629,31 @@ Failure/Improvement Notes：
 - [x] `npm run smoke:no-src-capability-semantics`
 
 
+### 2026-05-13 Milestone：论文复现可行性筛选
+
+本轮完成 R-LIT-07：把“检索论文后按代码可用性、数据集可用性、计算成本、复现风险排序，并导出复现计划”落成 provider-neutral 派生 artifact，不把论文标题、数组序号、GitHub/GEO/Zenodo 等 provider 名称写成判定路径：
+
+- [x] 新增 `deriveLiteratureReproductionFeasibility()`，从 `OfflineLiteratureRetrievalOutput` 派生 `artifact:literature-reproduction-feasibility`，保留 `artifact:paper-list`、`artifact:evidence-matrix`、`artifact:research-report`、provider refs、evidence refs、code/data/compute/risk refs。
+- [x] 排序只基于结构化 `paperId` evidence：`codeAvailability`、`datasetAvailability`、`computeCost`、`reproductionRisk` 与 refs；未知/缺失 evidence 会保留为 gap，不偷换成特定 provider 或论文名规则。
+- [x] 复现计划复用 runtime scientific reproduction contract 的 `AnalysisPlan`，包含 claimIds、steps、inputRefs、expectedArtifacts、verifier refs 和 fallback policy，并通过 `validateScientificReproductionArtifact()` 校验。
+- [x] 新增 `smoke:literature-reproduction-feasibility` 并接入 `smoke:all`，覆盖 ready / needs-data-or-code / high-risk 排序、refs-first analysis plan、原 retrieval output 不突变、orphan paper evidence 被忽略但审计记录保留。
+
+Failure/Improvement Notes：
+
+- R-LIT-07 不应重新触发真实网络检索或执行训练/下载；它是 retrieval output 之上的 triage/export contract，真正复现实验继续交给 scientific reproduction workflow。
+- Literature 层只建模候选排序、证据缺口和推荐；一旦进入实验计划、notebook、dataset inventory、claim verdict，必须复用 `sciforge.scientific-reproduction.v1`。
+- 缺少 evidence 不等于 unavailable；本轮保留 `unknown` / `partial` / `unavailable` 的结构化区别，并把缺口写入 `missingEvidence` 与 `fallbackPolicy`。
+- 本轮让 `packages/skills/literature/index.ts` 跨过 1500 行 long-file 阈值；已在 backlog 增加 R-LIT-11，后续应按 retrieval runner、derived artifacts、reproduction feasibility、citation/bilingual helpers 拆成语义模块。
+
+本轮验证：
+
+- [x] `npm run smoke:literature-reproduction-feasibility`
+- [x] `npm run smoke:literature-retrieval-capability`
+- [x] `npm run smoke:scientific-reproduction`
+- [x] `npm run typecheck`
+- [x] `npm run verify:full`（759 tests pass；R-LIT-07 smoke、scientific reproduction smoke、long-file budget、browser smoke、production build 与 artifacts index 通过）
+
+
 
 ### H022 Real-world Complex Task Backlog for SciForge Hardening
 
@@ -651,10 +676,11 @@ Failure/Improvement Notes：
 - [x] R-LIT-04 全文下载失败恢复：要求下载 10 篇论文全文，其中部分 PDF 超时/403/过大；系统必须保留已下载全文、标注失败原因、继续基于 metadata 补 partial。
 - [x] R-LIT-05 引用修正多轮：先生成报告，再让用户指出某条引用不可信；系统必须定位原 artifact/ref，修正该段，不污染其他结论。已覆盖 providerRecordRef/paperId 定位、citation-correction 派生 artifact、目标 evidence row 修正和非目标 paper untouched。
 - [ ] R-LIT-06 研究方向综述迭代：先做宽泛综述，再要求缩小到 robotics agent，再要求排除 benchmark 论文，再要求只保留开源代码论文。
-- [ ] R-LIT-07 论文复现可行性筛选：检索论文后按代码可用性、数据集可用性、计算成本、复现风险排序，并导出复现计划。
+- [x] R-LIT-07 论文复现可行性筛选：检索论文后按代码可用性、数据集可用性、计算成本、复现风险排序，并导出复现计划。已完成 `artifact:literature-reproduction-feasibility`、结构化 code/data/compute/risk 评分、refs-first `AnalysisPlan` 导出、orphan evidence guard 和 smoke 覆盖。
 - [x] R-LIT-08 反事实追问：报告完成后用户问“如果只看非 LLM agent 呢”，系统必须复用已有检索 refs 并说明哪些需要刷新。已覆盖“缺少可用 paper-list/report 时必须先 repair/resume”的失败边界。
 - [x] R-LIT-09 历史文献任务恢复：打开昨天失败的 literature session，要求只看诊断不重跑；系统必须展示失败边界、可复用 refs 和下一步选项。
 - [x] R-LIT-10 双语报告：同一调研先生成中文报告，再要求英文 executive summary，再要求中英术语表，验证 artifact 派生关系。已覆盖通用 `metadata.derivation`、`artifact:research-report` 到 bilingual executive summary / glossary / report 的派生 lineage、source refs、paperIds 和原报告不突变。
+- [ ] R-LIT-11 Literature skill 语义模块拆分：`packages/skills/literature/index.ts` 已超过 1500 行，需按 retrieval runner、provider provenance、citation correction、bilingual derivation、reproduction feasibility 拆分到职责清晰的模块，主入口只保留导出与轻量编排。
 
 代码修复与工程任务：
 

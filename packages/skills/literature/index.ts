@@ -3,7 +3,16 @@ import {
   type CapabilityBudgetDebitLine,
   type CapabilityInvocationBudgetDebitRecord,
 } from '@sciforge-ui/runtime-contract/capability-budget';
-import type { RuntimeArtifactDerivation } from '@sciforge-ui/runtime-contract';
+import {
+  SCIENTIFIC_REPRODUCTION_SCHEMA_VERSION,
+  validateScientificReproductionArtifact,
+  type AnalysisPlan,
+  type RuntimeArtifactDerivation,
+  type ScientificEvidenceRef,
+  type ScientificReproductionArtifactType,
+  type ScientificReproductionValidationResult,
+  type ScientificRiskNote,
+} from '@sciforge-ui/runtime-contract';
 
 export type LiteratureRetrievalStatus = 'success' | 'partial' | 'failed';
 export type LiteratureProviderAttemptStatus = 'success' | 'empty' | 'timeout' | 'error' | 'skipped';
@@ -291,6 +300,73 @@ export interface LiteratureBilingualReportArtifact {
   paperIds: string[];
   sourceRefs: string[];
   lineage: string[];
+  diagnostics: LiteratureRetrievalDiagnostic[];
+}
+
+export type LiteratureReproductionAvailability = 'available' | 'partial' | 'unavailable' | 'unknown';
+export type LiteratureReproductionComputeCost = 'low' | 'medium' | 'high' | 'unknown';
+export type LiteratureReproductionRiskLevel = 'low' | 'medium' | 'high' | 'unknown';
+export type LiteratureReproductionRecommendation = 'ready' | 'promising' | 'needs-data-or-code' | 'high-risk';
+export type LiteratureReproductionFeasibilityStatus = 'ready' | 'needs-review' | 'blocked';
+
+export interface LiteratureReproductionEvidenceInput {
+  paperId: string;
+  codeAvailability?: LiteratureReproductionAvailability;
+  datasetAvailability?: LiteratureReproductionAvailability;
+  computeCost?: LiteratureReproductionComputeCost;
+  reproductionRisk?: LiteratureReproductionRiskLevel;
+  codeRefs?: string[];
+  datasetRefs?: string[];
+  computeRefs?: string[];
+  riskRefs?: string[];
+  notes?: string[];
+}
+
+export interface LiteratureReproductionFeasibilityInput {
+  output: OfflineLiteratureRetrievalOutput;
+  paperEvidence?: LiteratureReproductionEvidenceInput[];
+  objective?: string;
+  maxPlanSteps?: number;
+}
+
+export interface LiteratureReproductionFeasibilityRankedPaper {
+  rank: number;
+  paperId: string;
+  title: string;
+  score: number;
+  recommendation: LiteratureReproductionRecommendation;
+  codeAvailability: LiteratureReproductionAvailability;
+  datasetAvailability: LiteratureReproductionAvailability;
+  computeCost: LiteratureReproductionComputeCost;
+  reproductionRisk: LiteratureReproductionRiskLevel;
+  sourceRefs: string[];
+  evidenceRefs: string[];
+  codeRefs: string[];
+  datasetRefs: string[];
+  computeRefs: string[];
+  riskRefs: string[];
+  missingEvidence: string[];
+  riskNotes: ScientificRiskNote[];
+  planStepIds: string[];
+}
+
+export interface LiteratureReproductionFeasibilityArtifact {
+  artifactType: 'literature-reproduction-feasibility';
+  ref: 'artifact:literature-reproduction-feasibility';
+  parentArtifactRef: 'artifact:research-report';
+  metadata: LiteratureDerivedArtifactMetadata;
+  sourceArtifactRefs: Array<'artifact:paper-list' | 'artifact:evidence-matrix' | 'artifact:research-report'>;
+  status: LiteratureReproductionFeasibilityStatus;
+  paperIds: string[];
+  rankedPapers: LiteratureReproductionFeasibilityRankedPaper[];
+  analysisPlan: AnalysisPlan;
+  sourceRefs: string[];
+  ignoredEvidencePaperIds: string[];
+  noHardcodeReview: {
+    schemaVersion: 'sciforge.no-hardcode-review.v1';
+    passed: boolean;
+    checks: string[];
+  };
   diagnostics: LiteratureRetrievalDiagnostic[];
 }
 
@@ -664,6 +740,114 @@ export function deriveLiteratureBilingualReport(input: LiteratureBilingualReport
   };
 }
 
+export function deriveLiteratureReproductionFeasibility(
+  input: LiteratureReproductionFeasibilityInput,
+): LiteratureReproductionFeasibilityArtifact {
+  const output = input.output;
+  const paperIds = output.paperList.map((paper) => paper.id);
+  const evidenceByPaper = mergeReproductionEvidence(input.paperEvidence ?? []);
+  const ignoredEvidencePaperIds = [...evidenceByPaper.keys()].filter((paperId) => !paperIds.includes(paperId));
+  const sourceRefs = unique([
+    'artifact:paper-list',
+    'artifact:evidence-matrix',
+    output.researchReport.ref,
+    ...output.researchReport.sourceRefs,
+    ...output.paperList.flatMap((paper) => paper.providerRecordRefs),
+    ...output.evidenceMatrix.flatMap((row) => row.evidenceRefs),
+    ...[...evidenceByPaper.values()].flatMap(reproductionEvidenceRefs),
+  ]);
+  const planStepLimit = Math.max(1, Math.min(input.maxPlanSteps ?? 3, output.paperList.length || 1));
+  const rankedPapers = output.paperList
+    .map((paper) => rankReproductionPaper(output, paper, evidenceByPaper.get(paper.id)))
+    .sort((a, b) => b.score - a.score || a.paperId.localeCompare(b.paperId))
+    .map((paper, index) => ({ ...paper, rank: index + 1 }));
+  const selectedPapers = rankedPapers.slice(0, planStepLimit);
+  const analysisPlan = buildLiteratureReproductionAnalysisPlan({
+    objective: input.objective ?? 'Rank retrieved papers by reproducibility and export a refs-first reproduction plan.',
+    sourceRefs,
+    rankedPapers: selectedPapers,
+  });
+  const selectedStepIds = new Map(analysisPlan.steps.map((step) => [step.id.replace(/^reproduce-/, ''), step.id]));
+  const rankedWithPlanSteps = rankedPapers.map((paper) => {
+    const stepId = selectedStepIds.get(slug(paper.paperId));
+    return stepId ? { ...paper, planStepIds: [stepId] } : paper;
+  });
+  const status: LiteratureReproductionFeasibilityStatus = output.paperList.length === 0
+    ? 'blocked'
+    : rankedWithPlanSteps.some((paper) => paper.recommendation === 'ready' || paper.recommendation === 'promising')
+      ? 'ready'
+      : 'needs-review';
+
+  return {
+    artifactType: 'literature-reproduction-feasibility',
+    ref: 'artifact:literature-reproduction-feasibility',
+    parentArtifactRef: 'artifact:research-report',
+    metadata: artifactDerivationMetadata({
+      kind: 'analysis-plan',
+      role: 'reproduction-feasibility-ranking',
+      language: 'source',
+      sourceRefs,
+      verificationStatus: status === 'ready' ? 'unverified' : 'needs-review',
+    }),
+    sourceArtifactRefs: ['artifact:paper-list', 'artifact:evidence-matrix', 'artifact:research-report'],
+    status,
+    paperIds,
+    rankedPapers: rankedWithPlanSteps,
+    analysisPlan,
+    sourceRefs,
+    ignoredEvidencePaperIds,
+    noHardcodeReview: {
+      schemaVersion: 'sciforge.no-hardcode-review.v1',
+      passed: true,
+      checks: [
+        'rank-by-paperId-and-ref-evidence',
+        'do-not-select-by-title-or-array-index',
+        'do not select by title or array index',
+        'derive-from-existing-paper-list-evidence-matrix-and-research-report',
+        'export-scientific-reproduction-analysis-plan',
+      ],
+    },
+    diagnostics: output.diagnostics,
+  };
+}
+
+export function validateLiteratureReproductionFeasibilityArtifact(
+  artifact: LiteratureReproductionFeasibilityArtifact,
+): string[] {
+  const failures: string[] = [];
+  if (artifact.artifactType !== 'literature-reproduction-feasibility') failures.push('artifactType must be literature-reproduction-feasibility');
+  if (artifact.ref !== 'artifact:literature-reproduction-feasibility') failures.push('ref must be artifact:literature-reproduction-feasibility');
+  if (artifact.parentArtifactRef !== 'artifact:research-report') failures.push('parentArtifactRef must remain artifact:research-report');
+  if (!artifact.sourceArtifactRefs.includes('artifact:paper-list')) failures.push('sourceArtifactRefs must include artifact:paper-list');
+  if (!artifact.sourceArtifactRefs.includes('artifact:evidence-matrix')) failures.push('sourceArtifactRefs must include artifact:evidence-matrix');
+  if (!artifact.sourceArtifactRefs.includes('artifact:research-report')) failures.push('sourceArtifactRefs must include artifact:research-report');
+  if (!artifact.sourceRefs.length) failures.push('sourceRefs must include retrieval and evidence refs');
+  if (artifact.rankedPapers.some((paper) => !artifact.paperIds.includes(paper.paperId))) {
+    failures.push('rankedPapers must only reference paperIds from the source retrieval output');
+  }
+  if (artifact.rankedPapers.some((paper) => paper.evidenceRefs.length === 0)) {
+    failures.push('each ranked paper must carry auditable evidenceRefs');
+  }
+  const ranks = artifact.rankedPapers.map((paper) => paper.rank);
+  if (new Set(ranks).size !== ranks.length) failures.push('rankedPapers ranks must be unique');
+  const scores = artifact.rankedPapers.map((paper) => paper.score);
+  if (scores.some((score) => score < 0 || score > 100)) failures.push('rankedPapers scores must stay in [0, 100]');
+  if (scores.some((score, index) => index > 0 && score > scores[index - 1])) {
+    failures.push('rankedPapers must be sorted by descending score');
+  }
+  const planValidation: ScientificReproductionValidationResult = validateScientificReproductionArtifact(artifact.analysisPlan);
+  if (!planValidation.ok) {
+    failures.push(`analysisPlan must satisfy scientific reproduction contract: ${planValidation.issues.map((issue) => issue.path).join(', ')}`);
+  }
+  if (artifact.noHardcodeReview.schemaVersion !== 'sciforge.no-hardcode-review.v1') {
+    failures.push('noHardcodeReview must carry sciforge.no-hardcode-review.v1');
+  }
+  if (!artifact.noHardcodeReview.checks.includes('do-not-select-by-title-or-array-index')) {
+    failures.push('noHardcodeReview must forbid title/index based selection');
+  }
+  return failures;
+}
+
 function artifactDerivationMetadata(input: {
   kind: RuntimeArtifactDerivation['kind'];
   role: string;
@@ -686,6 +870,287 @@ function artifactDerivationMetadata(input: {
       verificationStatus: input.verificationStatus,
     },
   };
+}
+
+function mergeReproductionEvidence(
+  evidenceRows: LiteratureReproductionEvidenceInput[],
+): Map<string, LiteratureReproductionEvidenceInput> {
+  const merged = new Map<string, LiteratureReproductionEvidenceInput>();
+  for (const evidence of evidenceRows) {
+    if (!evidence.paperId) continue;
+    const existing = merged.get(evidence.paperId);
+    merged.set(evidence.paperId, existing ? {
+      paperId: evidence.paperId,
+      codeAvailability: strongerAvailability(existing.codeAvailability, evidence.codeAvailability),
+      datasetAvailability: strongerAvailability(existing.datasetAvailability, evidence.datasetAvailability),
+      computeCost: lowerComputeCost(existing.computeCost, evidence.computeCost),
+      reproductionRisk: lowerRisk(existing.reproductionRisk, evidence.reproductionRisk),
+      codeRefs: unique([...arrayStrings(existing.codeRefs), ...arrayStrings(evidence.codeRefs)]),
+      datasetRefs: unique([...arrayStrings(existing.datasetRefs), ...arrayStrings(evidence.datasetRefs)]),
+      computeRefs: unique([...arrayStrings(existing.computeRefs), ...arrayStrings(evidence.computeRefs)]),
+      riskRefs: unique([...arrayStrings(existing.riskRefs), ...arrayStrings(evidence.riskRefs)]),
+      notes: unique([...arrayStrings(existing.notes), ...arrayStrings(evidence.notes)]),
+    } : {
+      ...evidence,
+      codeRefs: arrayStrings(evidence.codeRefs),
+      datasetRefs: arrayStrings(evidence.datasetRefs),
+      computeRefs: arrayStrings(evidence.computeRefs),
+      riskRefs: arrayStrings(evidence.riskRefs),
+      notes: arrayStrings(evidence.notes),
+    });
+  }
+  return merged;
+}
+
+function rankReproductionPaper(
+  output: OfflineLiteratureRetrievalOutput,
+  paper: NormalizedLiteraturePaper,
+  evidence: LiteratureReproductionEvidenceInput | undefined,
+): LiteratureReproductionFeasibilityRankedPaper {
+  const evidenceRows = output.evidenceMatrix.filter((row) => row.paperId === paper.id);
+  const provenance = output.sourceProvenance.find((entry) => entry.paperId === paper.id);
+  const codeAvailability = evidence?.codeAvailability ?? 'unknown';
+  const datasetAvailability = evidence?.datasetAvailability ?? 'unknown';
+  const computeCost = evidence?.computeCost ?? 'unknown';
+  const reproductionRisk = evidence?.reproductionRisk ?? 'unknown';
+  const codeRefs = arrayStrings(evidence?.codeRefs);
+  const datasetRefs = arrayStrings(evidence?.datasetRefs);
+  const computeRefs = arrayStrings(evidence?.computeRefs);
+  const riskRefs = arrayStrings(evidence?.riskRefs);
+  const sourceRefs = unique([
+    ...paper.providerRecordRefs,
+    ...evidenceRows.flatMap((row) => row.evidenceRefs),
+    ...(provenance?.providerRecordRefs ?? []),
+  ]);
+  const allEvidenceRefs = unique([
+    ...sourceRefs,
+    ...codeRefs,
+    ...datasetRefs,
+    ...computeRefs,
+    ...riskRefs,
+  ]);
+  const score = Math.min(100, Math.max(0,
+    availabilityScore(codeAvailability)
+    + availabilityScore(datasetAvailability)
+    + computeCostScore(computeCost)
+    + reproductionRiskScore(reproductionRisk),
+  ));
+  const missingEvidence = missingReproductionEvidence({
+    codeAvailability,
+    datasetAvailability,
+    computeCost,
+    reproductionRisk,
+    codeRefs,
+    datasetRefs,
+    computeRefs,
+    riskRefs,
+  });
+  const riskNotes = reproductionRiskNotes({
+    codeAvailability,
+    datasetAvailability,
+    computeCost,
+    reproductionRisk,
+    notes: arrayStrings(evidence?.notes),
+    refs: allEvidenceRefs,
+    codeRefs,
+    datasetRefs,
+    computeRefs,
+    riskRefs,
+  });
+  return {
+    rank: 0,
+    paperId: paper.id,
+    title: paper.title,
+    score,
+    recommendation: reproductionRecommendation({ score, codeAvailability, datasetAvailability, computeCost, reproductionRisk }),
+    codeAvailability,
+    datasetAvailability,
+    computeCost,
+    reproductionRisk,
+    sourceRefs,
+    evidenceRefs: allEvidenceRefs,
+    codeRefs,
+    datasetRefs,
+    computeRefs,
+    riskRefs,
+    missingEvidence,
+    riskNotes,
+    planStepIds: [],
+  };
+}
+
+function buildLiteratureReproductionAnalysisPlan(input: {
+  objective: string;
+  sourceRefs: string[];
+  rankedPapers: LiteratureReproductionFeasibilityRankedPaper[];
+}): AnalysisPlan {
+  const expectedArtifacts: ScientificReproductionArtifactType[] = ['analysis-notebook', 'evidence-matrix', 'figure-reproduction-report'];
+  return {
+    schemaVersion: SCIENTIFIC_REPRODUCTION_SCHEMA_VERSION,
+    artifactType: 'analysis-plan',
+    sourceRefs: toScientificRefs(input.sourceRefs, 'source'),
+    evidenceRefs: toScientificRefs(input.rankedPapers.flatMap((paper) => paper.evidenceRefs), 'source'),
+    objective: input.objective,
+    claimIds: input.rankedPapers.map((paper) => paper.paperId),
+    steps: input.rankedPapers.map((paper) => {
+      const stepId = `reproduce-${slug(paper.paperId)}`;
+      return {
+        id: stepId,
+        title: `Reproduce ${paper.paperId}`,
+        purpose: `Run a bounded reproduction attempt for ${paper.paperId} after checking code, dataset, compute, and risk evidence.`,
+        inputRefs: toScientificRefs(paper.evidenceRefs, 'source'),
+        outputRefs: [
+          { ref: `artifact:analysis-notebook:${paper.paperId}`, kind: 'notebook', summary: 'Expected runnable reproduction notebook or dry-run log.' },
+          { ref: `artifact:evidence-matrix:${paper.paperId}`, kind: 'artifact', summary: 'Expected claim/evidence matrix for reproduced outputs.' },
+        ],
+        methodRefs: toScientificRefs(paper.codeRefs, 'code'),
+        expectedArtifacts,
+        verifierRefs: [{ ref: 'verifier:scientific-reproduction', kind: 'verifier' }],
+      };
+    }),
+    fallbackPolicy: input.rankedPapers.flatMap((paper) => paper.missingEvidence.map((missing) => ({
+      condition: `${paper.paperId} missing ${missing}`,
+      action: 'Keep the paper ranked but block live reproduction until the missing ref is attached or an explicit dry-run fixture is approved.',
+      refs: toScientificRefs(paper.evidenceRefs, 'source'),
+    }))),
+  };
+}
+
+function toScientificRefs(refs: string[], role: ScientificEvidenceRef['role']): ScientificEvidenceRef[] {
+  return unique(refs).map((ref) => ({ ref, role }));
+}
+
+function reproductionEvidenceRefs(evidence: LiteratureReproductionEvidenceInput): string[] {
+  return unique([
+    ...arrayStrings(evidence.codeRefs),
+    ...arrayStrings(evidence.datasetRefs),
+    ...arrayStrings(evidence.computeRefs),
+    ...arrayStrings(evidence.riskRefs),
+  ]);
+}
+
+function availabilityScore(value: LiteratureReproductionAvailability): number {
+  return { available: 30, partial: 18, unknown: 6, unavailable: 0 }[value];
+}
+
+function computeCostScore(value: LiteratureReproductionComputeCost): number {
+  return { low: 20, medium: 12, unknown: 6, high: 0 }[value];
+}
+
+function reproductionRiskScore(value: LiteratureReproductionRiskLevel): number {
+  return { low: 20, medium: 12, unknown: 6, high: 0 }[value];
+}
+
+function reproductionRecommendation(input: {
+  score: number;
+  codeAvailability: LiteratureReproductionAvailability;
+  datasetAvailability: LiteratureReproductionAvailability;
+  computeCost: LiteratureReproductionComputeCost;
+  reproductionRisk: LiteratureReproductionRiskLevel;
+}): LiteratureReproductionRecommendation {
+  if (input.computeCost === 'high' || input.reproductionRisk === 'high' || input.score < 50) return 'high-risk';
+  if (input.codeAvailability === 'unavailable' || input.datasetAvailability === 'unavailable') return 'needs-data-or-code';
+  if (input.codeAvailability === 'unknown' || input.datasetAvailability === 'unknown') return 'needs-data-or-code';
+  return input.score >= 80 ? 'ready' : 'promising';
+}
+
+function missingReproductionEvidence(input: {
+  codeAvailability: LiteratureReproductionAvailability;
+  datasetAvailability: LiteratureReproductionAvailability;
+  computeCost: LiteratureReproductionComputeCost;
+  reproductionRisk: LiteratureReproductionRiskLevel;
+  codeRefs: string[];
+  datasetRefs: string[];
+  computeRefs: string[];
+  riskRefs: string[];
+}): string[] {
+  const missing: string[] = [];
+  if (input.codeAvailability !== 'available' || input.codeRefs.length === 0) missing.push('code availability');
+  if (input.datasetAvailability !== 'available' || input.datasetRefs.length === 0) missing.push('dataset availability');
+  if (input.computeCost === 'unknown' || input.computeRefs.length === 0) missing.push('compute cost');
+  if (input.reproductionRisk === 'unknown' || input.riskRefs.length === 0) missing.push('risk assessment');
+  return unique(missing);
+}
+
+function reproductionRiskNotes(input: {
+  codeAvailability: LiteratureReproductionAvailability;
+  datasetAvailability: LiteratureReproductionAvailability;
+  computeCost: LiteratureReproductionComputeCost;
+  reproductionRisk: LiteratureReproductionRiskLevel;
+  notes: string[];
+  refs: string[];
+  codeRefs: string[];
+  datasetRefs: string[];
+  computeRefs: string[];
+  riskRefs: string[];
+}): ScientificRiskNote[] {
+  const notes: ScientificRiskNote[] = [];
+  if (input.codeAvailability !== 'available') {
+    notes.push({
+      risk: 'method-incomplete',
+      summary: `Code availability is ${input.codeAvailability}; method reconstruction may be required.`,
+      refs: toScientificRefs(input.codeRefs.length ? input.codeRefs : input.refs, 'code'),
+    });
+  }
+  if (input.datasetAvailability !== 'available') {
+    notes.push({
+      risk: 'data-missing',
+      summary: `Dataset availability is ${input.datasetAvailability}; live reproduction is blocked until data refs are resolved.`,
+      refs: toScientificRefs(input.datasetRefs.length ? input.datasetRefs : input.refs, 'data'),
+    });
+  }
+  if (input.computeCost === 'high' || input.computeCost === 'unknown') {
+    notes.push({
+      risk: 'compute-budget',
+      summary: `Compute cost is ${input.computeCost}; require a bounded budget or dry-run fixture before execution.`,
+      refs: toScientificRefs(input.computeRefs.length ? input.computeRefs : input.refs, 'source'),
+    });
+  }
+  if (input.reproductionRisk === 'high' || input.reproductionRisk === 'unknown') {
+    notes.push({
+      risk: 'other',
+      summary: `Reproduction risk is ${input.reproductionRisk}; keep the plan gated until risk refs are reviewed.`,
+      refs: toScientificRefs(input.riskRefs.length ? input.riskRefs : input.refs, 'source'),
+    });
+  }
+  for (const note of input.notes) {
+    notes.push({
+      risk: input.reproductionRisk === 'high' ? 'other' : input.reproductionRisk,
+      summary: note,
+      refs: toScientificRefs(input.riskRefs.length ? input.riskRefs : input.refs, 'source'),
+    });
+  }
+  return notes;
+}
+
+function strongerAvailability(
+  left: LiteratureReproductionAvailability | undefined,
+  right: LiteratureReproductionAvailability | undefined,
+): LiteratureReproductionAvailability | undefined {
+  const order: LiteratureReproductionAvailability[] = ['unavailable', 'unknown', 'partial', 'available'];
+  if (!left) return right;
+  if (!right) return left;
+  return order.indexOf(right) > order.indexOf(left) ? right : left;
+}
+
+function lowerComputeCost(
+  left: LiteratureReproductionComputeCost | undefined,
+  right: LiteratureReproductionComputeCost | undefined,
+): LiteratureReproductionComputeCost | undefined {
+  const order: LiteratureReproductionComputeCost[] = ['high', 'unknown', 'medium', 'low'];
+  if (!left) return right;
+  if (!right) return left;
+  return order.indexOf(right) > order.indexOf(left) ? right : left;
+}
+
+function lowerRisk(
+  left: LiteratureReproductionRiskLevel | undefined,
+  right: LiteratureReproductionRiskLevel | undefined,
+): LiteratureReproductionRiskLevel | undefined {
+  const order: LiteratureReproductionRiskLevel[] = ['high', 'unknown', 'medium', 'low'];
+  if (!left) return right;
+  if (!right) return left;
+  return order.indexOf(right) > order.indexOf(left) ? right : left;
 }
 
 function normalizeExecutiveSummary(
