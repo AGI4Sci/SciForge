@@ -11,6 +11,10 @@ import {
   type ConversationEvent,
   type ConversationEventLog,
 } from '../../src/runtime/conversation-kernel/index.js';
+import {
+  attachTaskOutcomeProjection,
+  materializeTaskOutcomeProjection,
+} from '../../src/runtime/gateway/task-outcome-projection.js';
 
 const root = process.cwd();
 let eventSecond = 0;
@@ -105,6 +109,111 @@ assert.deepEqual(
   ['artifact:partial-answer', 'artifact:final-report', 'artifact:verification-evidence'],
 );
 
+const backgroundLog = appendAll(createConversationEventLog('smoke-background-recorded'), [
+  inlineEvent('turn-bg', 'TurnReceived', { prompt: 'return a partial answer and continue verification' }, { turnId: 't-bg' }),
+  refEvent('bg-running', 'BackgroundRunning', {
+    summary: 'background revision continues from checkpoint',
+    refs: [
+      { ref: 'artifact:bg-partial-answer', digest: 'sha256:bgpartial', mime: 'text/markdown', sizeBytes: 128 },
+      { ref: 'checkpoint:bg-revision-1', digest: 'sha256:bgcheckpoint', mime: 'application/json', sizeBytes: 96 },
+    ],
+    revisionPlan: 'verify remaining claims and merge a revised answer',
+    foregroundPartialRef: 'artifact:bg-partial-answer',
+  }, { turnId: 't-bg', runId: 'run-bg' }),
+]);
+const backgroundProjection = projectConversation(backgroundLog);
+assert.equal(backgroundProjection.activeRun?.status, 'background-running');
+assert.equal(backgroundProjection.backgroundState?.revisionPlan, 'verify remaining claims and merge a revised answer');
+assert.equal(backgroundProjection.backgroundState?.foregroundPartialRef, 'artifact:bg-partial-answer');
+assert.deepEqual(
+  backgroundProjection.backgroundState?.checkpointRefs,
+  ['artifact:bg-partial-answer', 'checkpoint:bg-revision-1'],
+);
+
+const recordedOnlyLog = appendAll(createConversationEventLog('smoke-recorded-only'), [
+  inlineEvent('turn-recorded-only', 'TurnReceived', { prompt: 'show final answer' }, { turnId: 't-recorded' }),
+  inlineEvent('satisfied-recorded-only', 'Satisfied', {
+    text: 'Done.',
+    verificationRef: 'artifact:unrecorded-verification',
+    backgroundState: {
+      checkpointRefs: ['checkpoint:unrecorded'],
+      revisionPlan: 'not a kernel event',
+    },
+  }, { turnId: 't-recorded', runId: 'run-recorded' }),
+]);
+const recordedOnlyProjection = projectConversation(recordedOnlyLog);
+assert.equal(recordedOnlyProjection.verificationState.status, 'unverified');
+assert.equal(recordedOnlyProjection.verificationState.verifierRef, undefined);
+assert.equal(recordedOnlyProjection.backgroundState, undefined);
+
+const gatewayProjection = materializeTaskOutcomeProjection({
+  payload: {
+    message: 'Partial result is available; final report still needs verifier evidence.',
+    confidence: 0.7,
+    claimType: 'result',
+    evidenceLevel: 'medium',
+    reasoningTrace: 'runtime trace',
+    claims: [],
+    uiManifest: [],
+    executionUnits: [{ id: 'gateway-run', status: 'done', tool: 'workspace-task', nextStep: 'Supplement verifier evidence from preserved refs.' }],
+    artifacts: [{ id: 'partial-report', type: 'research-report', title: 'Partial report', dataRef: '.sciforge/task-results/partial-report.md' }],
+  },
+  refs: {
+    outputRel: '.sciforge/task-results/gateway-output.json',
+  },
+  request: {
+    skillDomain: 'knowledge',
+    prompt: 'Produce a verified report.',
+    expectedArtifactTypes: ['verified-report'],
+    artifacts: [],
+  },
+});
+
+assert.equal(gatewayProjection.conversationEventLog.schemaVersion, 'sciforge.conversation-event-log.v1');
+assert.match(gatewayProjection.conversationEventLogDigest, /^sha256:/);
+assert.equal(gatewayProjection.conversationEventLogRef, '.sciforge/task-results/gateway-output.json#displayIntent.conversationEventLog');
+assert.equal(gatewayProjection.projectionRestore.source, 'conversation-event-log');
+assert.equal(gatewayProjection.projectionRestore.eventCount, gatewayProjection.conversationEventLog.events.length);
+assert.equal(gatewayProjection.conversationProjection.visibleAnswer?.status, 'degraded-result');
+
+const restoredPayload = attachTaskOutcomeProjection({
+  message: 'Projection restore should ignore this stale satisfied status.',
+  confidence: 0.7,
+  claimType: 'result',
+  evidenceLevel: 'medium',
+  reasoningTrace: 'runtime trace',
+  claims: [],
+  uiManifest: [],
+  executionUnits: [],
+  artifacts: [],
+  displayIntent: {
+    taskOutcomeProjection: {
+      ...gatewayProjection,
+      conversationProjection: {
+        ...gatewayProjection.conversationProjection,
+        visibleAnswer: {
+          ...gatewayProjection.conversationProjection.visibleAnswer,
+          status: 'satisfied',
+        },
+      },
+    },
+    conversationProjection: {
+      ...gatewayProjection.conversationProjection,
+      visibleAnswer: {
+        ...gatewayProjection.conversationProjection.visibleAnswer,
+        status: 'satisfied',
+      },
+    },
+    conversationEventLog: gatewayProjection.conversationEventLog,
+    conversationEventLogRef: gatewayProjection.conversationEventLogRef,
+  },
+});
+const restoredOutcome = (restoredPayload.displayIntent as Record<string, any>).taskOutcomeProjection;
+const restoredDisplayProjection = (restoredPayload.displayIntent as Record<string, any>).conversationProjection;
+assert.equal(restoredOutcome.conversationProjection.visibleAnswer.status, 'degraded-result');
+assert.equal(restoredDisplayProjection.visibleAnswer.status, 'degraded-result');
+assert.equal(restoredOutcome.conversationEventLogDigest, gatewayProjection.conversationEventLogDigest);
+
 const uiBridge = await findUiProjectionBridgeEvidence();
 assert.ok(
   uiBridge.files.length > 0,
@@ -122,7 +231,7 @@ for (const field of ['currentTurn', 'visibleAnswer', 'activeRun', 'artifacts', '
   );
 }
 
-console.log(`[ok] conversation kernel final-shape smoke passed: external-provider repair routing, replay projection, UI projection bridge (${uiBridge.files.join(', ')})`);
+console.log(`[ok] conversation kernel final-shape smoke passed: external-provider repair routing, replay projection, recorded background/verification contracts, UI projection bridge (${uiBridge.files.join(', ')})`);
 
 function appendAll(log: ConversationEventLog, events: ConversationEvent[]): ConversationEventLog {
   let next = log;

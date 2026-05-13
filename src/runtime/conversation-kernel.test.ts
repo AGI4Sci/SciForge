@@ -88,9 +88,140 @@ test('conversation kernel validates verification and background restoration cont
     status: 'running',
     checkpointRefs: ['artifact:partial-1'],
     revisionPlan: 'continue verifier',
+    foregroundPartialRef: 'artifact:partial-1',
   }), undefined);
   assert.equal(validateBackgroundContinuation({
     status: 'running',
     checkpointRefs: [],
+    revisionPlan: '',
   })?.code, 'background-checkpoint-required');
+});
+
+test('conversation kernel records background and verification contracts instead of inferring them', () => {
+  const base = createConversationEventLog('c-contracts');
+
+  const rejectedBackground = appendConversationEvent(base, {
+    id: 'bg-inline',
+    type: 'BackgroundRunning',
+    storage: 'inline',
+    actor: 'kernel',
+    timestamp: '2026-05-13T00:00:00.000Z',
+    turnId: 't-bg',
+    runId: 'r-bg',
+    payload: {
+      checkpointRefs: ['artifact:checkpoint-inline'],
+      revisionPlan: 'continue in background',
+      foregroundPartialRef: 'artifact:partial-inline',
+    },
+  });
+  assert.equal(rejectedBackground.rejected?.code, 'background-checkpoint-required');
+  assert.equal(rejectedBackground.log.events.length, 0);
+
+  const rejectedVerification = appendConversationEvent(base, {
+    id: 'verify-inline',
+    type: 'VerificationRecorded',
+    storage: 'inline',
+    actor: 'verifier',
+    timestamp: '2026-05-13T00:00:01.000Z',
+    turnId: 't-bg',
+    runId: 'r-bg',
+    payload: {
+      verifierRef: 'artifact:verification-inline',
+      verdict: 'supported',
+    },
+  });
+  assert.equal(rejectedVerification.rejected?.code, 'verification-ref-required');
+  assert.equal(rejectedVerification.log.events.length, 0);
+
+  let log = appendConversationEvent(base, {
+    id: 'turn-bg',
+    type: 'TurnReceived',
+    storage: 'inline',
+    actor: 'user',
+    timestamp: '2026-05-13T00:00:02.000Z',
+    turnId: 't-bg',
+    payload: { prompt: 'continue the long verification in the background' },
+  }).log;
+  log = appendConversationEvent(log, {
+    id: 'bg-running',
+    type: 'BackgroundRunning',
+    storage: 'ref',
+    actor: 'kernel',
+    timestamp: '2026-05-13T00:00:03.000Z',
+    turnId: 't-bg',
+    runId: 'r-bg',
+    payload: {
+      summary: 'background verifier continues from checkpoint',
+      refs: [
+        { ref: 'artifact:partial-answer', digest: 'sha256:partial', mime: 'text/markdown', sizeBytes: 128 },
+        { ref: 'checkpoint:bg-1', digest: 'sha256:checkpoint', mime: 'application/json', sizeBytes: 96 },
+      ],
+      revisionPlan: 'verify remaining claims and merge a revised answer',
+      foregroundPartialRef: 'artifact:partial-answer',
+    },
+  }).log;
+  log = appendConversationEvent(log, {
+    id: 'verify-ref',
+    type: 'VerificationRecorded',
+    storage: 'ref',
+    actor: 'verifier',
+    timestamp: '2026-05-13T00:00:04.000Z',
+    turnId: 't-bg',
+    runId: 'r-bg',
+    payload: {
+      summary: 'verifier evidence saved',
+      refs: [{ ref: 'artifact:verification-evidence', digest: 'sha256:verify', mime: 'application/json', sizeBytes: 64 }],
+      verdict: 'supported',
+    },
+  }).log;
+
+  const state = replayConversationState(log);
+  const projection = projectConversation(log, state);
+
+  assert.equal(state.status, 'background-running');
+  assert.deepEqual(state.background?.checkpointRefs, ['artifact:partial-answer', 'checkpoint:bg-1']);
+  assert.equal(state.background?.revisionPlan, 'verify remaining claims and merge a revised answer');
+  assert.equal(state.background?.foregroundPartialRef, 'artifact:partial-answer');
+  assert.equal(projection.backgroundState?.foregroundPartialRef, 'artifact:partial-answer');
+  assert.equal(projection.verificationState.status, 'verified');
+  assert.equal(projection.verificationState.verifierRef, 'artifact:verification-evidence');
+  assert.deepEqual(projection.auditRefs, ['artifact:partial-answer', 'checkpoint:bg-1', 'artifact:verification-evidence']);
+});
+
+test('conversation projection does not infer background or verification state from answer payloads', () => {
+  let log = createConversationEventLog('c-recorded-only');
+  log = appendConversationEvent(log, {
+    id: 'turn-recorded-only',
+    type: 'TurnReceived',
+    storage: 'inline',
+    actor: 'user',
+    timestamp: '2026-05-13T00:00:00.000Z',
+    turnId: 't-recorded',
+    payload: { prompt: 'show the final answer' },
+  }).log;
+  log = appendConversationEvent(log, {
+    id: 'satisfied-recorded-only',
+    type: 'Satisfied',
+    storage: 'inline',
+    actor: 'backend',
+    timestamp: '2026-05-13T00:00:01.000Z',
+    turnId: 't-recorded',
+    runId: 'r-recorded',
+    payload: {
+      text: 'Done.',
+      verificationRef: 'artifact:should-not-count',
+      backgroundState: {
+        checkpointRefs: ['checkpoint:should-not-count'],
+        revisionPlan: 'this was not recorded as a kernel event',
+      },
+    },
+  }).log;
+
+  const projection = projectConversation(log);
+
+  assert.equal(projection.visibleAnswer?.status, 'satisfied');
+  assert.equal(projection.verificationState.status, 'unverified');
+  assert.equal(projection.verificationState.verifierRef, undefined);
+  assert.equal(projection.backgroundState, undefined);
+  assert.deepEqual(projection.auditRefs, []);
 });

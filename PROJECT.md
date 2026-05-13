@@ -90,10 +90,45 @@
 
 下一步 final-shape 收敛任务：
 
-- [ ] 新会话写入完整 `ConversationEventLog`，让 UI/main history 从 projection restore，而不是从 run/task attempt 反推。
-- [ ] 将 raw run / executionUnits / task attempts 降为 audit/debug channel，主 workbench 只接收 `ConversationProjection` 与 ref preview API。
-- [ ] 接入 background continuation、history edit/revert、verification gate 和 export bundle 到同一 event-sourced kernel。
+- [x] 新会话 gateway outcome 写入可 replay 的 `ConversationEventLog`，让 task outcome / result presentation 可从 event log restore projection，而不是信任临时 projection。
+- [x] 将 raw run / executionUnits 在主 workbench 与聊天执行过程里继续降级：有 `ConversationProjection` 时主状态、verification tag、execution process、archive badge 都优先 projection，raw 只作为 audit fallback。
+- [x] 将 background continuation 与 verification gate 收紧为记录事件契约：`BackgroundRunning` / `BackgroundCompleted` 必须有 checkpoint refs、revision plan 和 foreground partial；`VerificationRecorded` 必须有 verifier evidence ref。
 - [ ] 拆分 watch list 长文件，尤其是 `src/runtime/generation-gateway.ts`、`src/runtime/gateway/context-envelope.ts`、`src/ui/src/app/ChatPanel.tsx`，避免 final-shape 迁移继续堆主入口。
+
+### 2026-05-13 Milestone：EventLog Restore 与 Projection 主 Surface 收紧
+
+第二轮继续并行推进 final-shape：runtime event-log、kernel contract、UI projection surface、边界扫描四条线同时推进，并在主线程集成。目标是让 projection 从“可携带的显示对象”升级为“可从事件日志确定性恢复的主状态”，并继续压缩 raw run / executionUnits 对主 UI 的影响面。
+
+- [x] `GatewayTaskOutcomeProjection` 新增 `conversationEventLog`、`conversationEventLogRef`、`conversationEventLogDigest` 和 `projectionRestore`，重新 attach 时优先 replay event log 生成 `ConversationProjection` 和 task card summary。
+- [x] `ConversationEventLog` 增加 schema/event 校验、稳定 digest 和类型守卫，防止污染后的 stale projection 覆盖记录事实。
+- [x] `BackgroundRunning` / `BackgroundCompleted` 事件必须记录 checkpoint refs、revision plan 和 foreground partial ref；`VerificationRecorded` 必须携带 verifier evidence ref。
+- [x] State replay / projection 不再从 answer payload 中推断 background 或 verification；只有记录事件才能改变这些状态。
+- [x] `ResultsRenderer`、`RunExecutionProcess`、message verification tag、ArchiveDrawer 在 projection 存在时忽略 raw failed run / failed execution unit 的主状态展示，raw 信息保留在审计/调试路径。
+- [x] 边界扫描列出了仍需继续收敛的 raw-run 入口：`viewPlanResolver`、`sessionTransforms` request payload、`executionUnitsForRun` 拆分、`SciForgeWorkbench` recover focus 等。
+- [x] 使用 Computer Use 打开 `http://127.0.0.1:22966/` 验证网页端，工作台、失败 run、结果区、恢复动作、refs 和 ExecutionUnit 审计信息可见。
+
+本轮验证：
+
+- [x] `npm run typecheck`
+- [x] `node --import tsx --test src/runtime/conversation-kernel.test.ts src/runtime/gateway/result-presentation-contract.test.ts src/ui/src/app/results-renderer-execution-model.test.ts src/ui/src/app/ResultsRenderer.test.ts src/ui/src/app/ChatPanel.test.ts src/ui/src/app/chat/ArchiveDrawer.test.tsx`
+- [x] `node --import tsx --test src/runtime/gateway/generated-task-runner-output-lifecycle.test.ts src/runtime/gateway/transient-external-failure.test.ts src/runtime/task-attempt-history.test.ts src/ui/src/app/appShell/workspaceState.test.ts`
+- [x] `npx tsx tests/smoke/smoke-conversation-kernel-final-shape.ts`
+- [x] `npx tsx tests/smoke/smoke-conversation-kernel-thin-waist.ts`
+- [x] `npm run smoke:result-presentation-contract`
+- [x] `npm run smoke:runtime-contracts`
+- [x] `npm run smoke:no-src-capability-semantics`
+- [x] `npm run smoke:browser`
+- [x] `npm run smoke:long-file-budget`
+- [x] `npm run build`
+- [x] `git diff --check`
+
+下一步 final-shape 收敛任务：
+
+- [ ] `viewPlanResolver` 输入改为 projection artifacts / visibleAnswer / ref preview，避免主结果模块继续从 raw run/displayIntent/response 推断。
+- [ ] `sessionTransforms` 下一轮请求 payload 改为携带 projection、selected refs、audit refs 按需展开，避免把 raw session.runs / executionUnits 当 continuation 真相源。
+- [ ] 拆分 `executionUnitsForRun` 为 audit-only helper 与 projection-owned execution process，禁止主 UI 直接依赖 raw EU 聚合器。
+- [ ] `SciForgeWorkbench` active recover focus 改为 projection-level focus；raw failure focus 只进入 audit/debug。
+- [ ] 接入 history edit/revert 和 export bundle 到同一 event-sourced kernel。
 
 长文件治理：
 

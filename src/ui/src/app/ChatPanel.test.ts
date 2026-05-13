@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { PROCESS_PROGRESS_EVENT_TYPE, PROCESS_PROGRESS_PHASE, PROCESS_PROGRESS_STATUS } from '@sciforge-ui/runtime-contract';
 import { runIdForMessage } from './chat/messageRunPresentation';
+import { RunExecutionProcess, RunKeyInfo } from './chat/RunExecutionProcess';
 import { runningMessageContentFromStream } from './chat/runStatusPresentation';
-import type { AgentStreamEvent, SciForgeMessage, SciForgeRun } from '../domain';
+import type { AgentStreamEvent, SciForgeMessage, SciForgeRun, SciForgeSession } from '../domain';
 
 const messages: SciForgeMessage[] = [
   { id: 'system-upload', role: 'system', content: '已上传 1 个文件', createdAt: '2026-05-07T00:00:00.000Z' },
@@ -87,4 +90,86 @@ test('running message follows structured progress fields instead of prompt or sc
   assert.doesNotMatch(content, /SCENARIO_TEXT_SHOULD_NOT_DECIDE/);
   assert.doesNotMatch(content, /search write failed approval/);
   assert.doesNotMatch(content, /retrieval repair blocked/);
+});
+
+test('chat run process and key info prefer projection over raw failed execution units', () => {
+  const session: SciForgeSession = {
+    schemaVersion: 2,
+    sessionId: 'session-chat-projection',
+    scenarioId: 'literature-evidence-review',
+    title: 'chat projection',
+    createdAt: '2026-05-13T00:00:00.000Z',
+    updatedAt: '2026-05-13T00:00:10.000Z',
+    messages: [],
+    runs: [{
+      id: 'run-chat-projection',
+      scenarioId: 'literature-evidence-review',
+      status: 'failed',
+      prompt: 'summarize projected artifacts',
+      response: 'legacy failed response',
+      createdAt: '2026-05-13T00:00:00.000Z',
+      raw: {
+        resultPresentation: {
+          conversationProjection: {
+            schemaVersion: 'sciforge.conversation-projection.v1',
+            conversationId: 'conversation-chat-projection',
+            currentTurn: { id: 'turn-chat-projection', prompt: 'summarize projected artifacts' },
+            visibleAnswer: {
+              status: 'satisfied',
+              text: 'Projection answer is ready.',
+              artifactRefs: ['artifact:projection-report'],
+            },
+            artifacts: [{ ref: 'artifact:projection-report', label: 'Projection Report', mime: 'research-report' }],
+            executionProcess: [{
+              eventId: 'event-projection-summary',
+              type: 'Satisfied',
+              summary: 'Projection summarized the durable report ref.',
+              timestamp: '2026-05-13T00:00:05.000Z',
+            }],
+            recoverActions: [],
+            verificationState: { status: 'pass', verifierRef: 'verification:projection' },
+            auditRefs: ['artifact:projection-report', 'execution-unit:EU-projection-audit'],
+            diagnostics: [],
+          },
+        },
+      },
+    }],
+    uiManifest: [],
+    claims: [],
+    executionUnits: [{
+      id: 'EU-legacy-failed',
+      tool: 'legacy.raw',
+      params: '{}',
+      status: 'repair-needed',
+      hash: 'legacy',
+      failureReason: 'LEGACY_EXECUTION_UNIT_SHOULD_NOT_RENDER',
+    }],
+    artifacts: [{
+      id: 'projection-report',
+      type: 'research-report',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: '1',
+      metadata: { title: 'Projection Report', runId: 'run-chat-projection' },
+    }],
+    notebook: [],
+    versions: [],
+    hiddenResultSlotIds: [],
+  };
+  const processHtml = renderToStaticMarkup(createElement(RunExecutionProcess, {
+    runId: 'run-chat-projection',
+    session,
+    onObjectFocus: () => undefined,
+  }));
+  const keyInfoHtml = renderToStaticMarkup(createElement(RunKeyInfo, {
+    runId: 'run-chat-projection',
+    session,
+    onObjectFocus: () => undefined,
+  }));
+
+  assert.match(processHtml, /Projection summarized the durable report ref/);
+  assert.match(processHtml, /状态：satisfied/);
+  assert.doesNotMatch(processHtml, /LEGACY_EXECUTION_UNIT_SHOULD_NOT_RENDER/);
+  assert.doesNotMatch(processHtml, /legacy\.raw/);
+  assert.match(keyInfoHtml, /本轮结果/);
+  assert.match(keyInfoHtml, /Projection Report/);
 });

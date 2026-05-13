@@ -6,6 +6,13 @@ import {
   mergeObjectReferences,
   objectReferenceForArtifactSummary,
 } from '../../../../../packages/support/object-references';
+import {
+  conversationProjectionArtifactRefs,
+  conversationProjectionAuditRefs,
+  conversationProjectionForRun,
+  conversationProjectionStatus,
+  type UiConversationProjection,
+} from '../conversation-projection-view-model';
 import { executionStatusLabel, executionStatusShortLabel, executionVerificationPresentation } from '../results/executionStatusPresentation';
 import { executionUnitsForRun } from '../results/executionUnitsForRun';
 
@@ -30,10 +37,15 @@ export function RunExecutionProcess({
   onObjectFocus: (reference: ObjectReference) => void;
 }) {
   const run = session.runs.find((item) => item.id === runId);
-  const units = executionUnitsForRun(session, run).slice(-8);
+  const projection = conversationProjectionForRun(run);
+  const units = projection ? [] : executionUnitsForRun(session, run).slice(-8);
   if (!run && !units.length && !trace) return null;
-  const auditObjectReferences = objectReferencesForAudit(run, session, runId);
-  const steps = executionProcessSteps(run, units, auditObjectReferences, trace);
+  const auditObjectReferences = projection
+    ? objectReferencesForProjection(projection, session, runId)
+    : objectReferencesForAudit(run, session, runId);
+  const steps = projection
+    ? projectionExecutionProcessSteps(projection, auditObjectReferences)
+    : executionProcessSteps(run, units, auditObjectReferences, trace);
   if (!steps.length) return null;
   return (
     <div className="execution-process-thread" aria-label="按顺序记录的工作过程">
@@ -62,6 +74,44 @@ export function RunExecutionProcess({
       })}
     </div>
   );
+}
+
+function projectionExecutionProcessSteps(
+  projection: UiConversationProjection,
+  objectReferences: ObjectReference[],
+): ExecutionProcessStep[] {
+  const steps: ExecutionProcessStep[] = [];
+  if (projection.currentTurn?.prompt) {
+    steps.push({
+      id: 'projection-turn',
+      kind: 'Received',
+      title: compactAuditText(projection.currentTurn.prompt, 96),
+      content: `接收任务：${projection.currentTurn.prompt}`,
+    });
+  }
+  projection.executionProcess.slice(-12).forEach((event) => {
+    steps.push({
+      id: `projection-${event.eventId}`,
+      kind: event.type,
+      title: compactAuditText(event.summary || event.type, 96),
+      meta: [conversationProjectionStatus(projection), event.timestamp].filter(Boolean).join(' · '),
+      content: [
+        `Projection 事件：${event.summary || event.type}。`,
+        `状态：${conversationProjectionStatus(projection)}。`,
+      ].join('\n'),
+      references: objectReferences,
+    });
+  });
+  producedObjectLines(objectReferences).forEach((line, index) => {
+    steps.push({
+      id: `projection-object-${index}`,
+      kind: 'Created',
+      title: compactAuditText(line, 96),
+      content: line,
+      references: objectReferences,
+    });
+  });
+  return steps.slice(0, 24);
 }
 
 function executionProcessSteps(
@@ -124,6 +174,39 @@ function objectReferencesForAudit(run: SciForgeRun | undefined, session: SciForg
     .filter((artifact) => runArtifactRefs.has(artifact.id) || artifact.metadata?.runId === runId)
     .map((artifact) => objectReferenceForArtifactSummary(artifact, runId));
   return mergeObjectReferences(run.objectReferences ?? [], runArtifacts, 40);
+}
+
+function objectReferencesForProjection(projection: UiConversationProjection, session: SciForgeSession, runId: string) {
+  const artifactIds = new Set(conversationProjectionArtifactRefs(projection).map((ref) => ref.replace(/^artifact::?/i, '')));
+  const projectionArtifacts = session.artifacts
+    .filter((artifact) => artifactIds.has(artifact.id))
+    .map((artifact) => objectReferenceForArtifactSummary(artifact, runId));
+  const refObjects = conversationProjectionAuditRefs(projection)
+    .slice(0, 24)
+    .map((ref, index) => objectReferenceFromProjectionRef(ref, runId, index));
+  return mergeObjectReferences(projectionArtifacts, refObjects, 40);
+}
+
+function objectReferenceFromProjectionRef(ref: string, runId: string, index: number): ObjectReference {
+  const normalized = ref.trim();
+  const kind = projectionRefKind(normalized);
+  return {
+    id: `projection-ref-${runId}-${index}`,
+    kind,
+    title: normalized,
+    ref: normalized,
+    runId,
+    status: normalized.startsWith('http') ? 'external' : 'available',
+  };
+}
+
+function projectionRefKind(ref: string): ObjectReference['kind'] {
+  if (/^artifact::?/i.test(ref)) return 'artifact';
+  if (/^execution-unit::?/i.test(ref)) return 'execution-unit';
+  if (/^run::?/i.test(ref)) return 'run';
+  if (/^https?:\/\//i.test(ref)) return 'url';
+  if (/^(file|folder)::?/i.test(ref) || /^\.?\/?[\w.-/]+(?:\.[a-z0-9]+)(?:[#?].*)?$/i.test(ref)) return 'file';
+  return 'run';
 }
 
 function cursorStepKindForUnit(unit: RuntimeExecutionUnit, verb: string) {
@@ -209,9 +292,13 @@ export function RunKeyInfo({
   onObjectFocus?: (reference: ObjectReference) => void;
 }) {
   const run = session.runs.find((item) => item.id === runId);
-  if (run?.status === 'failed') return null;
+  const projection = conversationProjectionForRun(run);
+  if (!projection && run?.status === 'failed') return null;
   const objectRefs = run?.objectReferences ?? [];
   const artifactRefIds = new Set(objectRefs.filter((ref) => ref.kind === 'artifact').map((ref) => ref.ref.replace(/^artifact:/, '')));
+  for (const ref of projection ? conversationProjectionArtifactRefs(projection) : []) {
+    artifactRefIds.add(ref.replace(/^artifact::?/i, ''));
+  }
   const artifacts = session.artifacts
     .filter((artifact) => artifactRefIds.has(artifact.id) || artifact.metadata?.runId === runId)
     .slice(0, 4);

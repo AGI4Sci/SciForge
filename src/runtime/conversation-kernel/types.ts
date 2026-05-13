@@ -135,7 +135,8 @@ export interface VerificationState {
 export interface BackgroundState {
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
   checkpointRefs: string[];
-  revisionPlan?: string;
+  revisionPlan: string;
+  foregroundPartialRef?: string;
 }
 
 export interface ConversationProjection {

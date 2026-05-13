@@ -147,8 +147,10 @@ test('archive drawer prefers conversation projection summary over legacy raw run
   }));
 
   assert.match(html, /需恢复：Projection repair boundary is authoritative/);
+  assert.match(html, /projection 需恢复/);
   assert.match(html, /execution-unit:EU-projection/);
   assert.match(html, /Continue from projection refs/);
+  assert.doesNotMatch(html, /last run failed/);
   assert.doesNotMatch(html, /LEGACY_RAW_FAILURE_SHOULD_NOT_RENDER/);
   assert.doesNotMatch(html, /legacy raw action should not render/);
 });

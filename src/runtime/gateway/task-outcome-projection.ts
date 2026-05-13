@@ -12,9 +12,12 @@ import {
 } from '@sciforge-ui/runtime-contract/task-run-card';
 import {
   appendConversationEvent,
+  conversationEventLogDigest,
   createConversationEventLog,
+  isConversationEventLog,
   projectConversation,
   replayConversationState,
+  type ConversationEventLog,
   type ConversationEventType,
   type ConversationProjection,
   type ConversationRef,
@@ -28,6 +31,11 @@ export const USER_SATISFACTION_PROXY_SCHEMA_VERSION = 'sciforge.user-satisfactio
 export const NEXT_STEP_ATTRIBUTION_SCHEMA_VERSION = 'sciforge.next-step-attribution.v1' as const;
 const externalServiceLayer = ['external', 'provider'].join('-') as TaskAttributionLayer;
 const transientUnavailableStatus = ['transient', 'unavailable'].join('-');
+
+type GatewayBackgroundProjectionState = NonNullable<TaskRunCardConversationProjectionSummary['backgroundState']> & {
+  revisionPlan?: string;
+  foregroundPartialRef?: string;
+};
 
 export interface GatewayTaskOutcomeProjectionContext {
   request?: GatewayRequest;
@@ -68,6 +76,16 @@ export interface GatewayTaskOutcomeProjection {
   taskSuccess: boolean;
   userSatisfactionProxy: UserSatisfactionProxy;
   nextStepAttribution: NextStepAttribution;
+  conversationEventLog: ConversationEventLog;
+  conversationEventLogRef?: string;
+  conversationEventLogDigest: string;
+  projectionRestore: {
+    schemaVersion: 'sciforge.gateway-projection-restore.v1';
+    source: 'conversation-event-log';
+    eventCount: number;
+    digest: string;
+    ref?: string;
+  };
   conversationProjection: ConversationProjection;
   ownershipLayerSuggestions: OwnershipLayerSuggestion[];
   projectionRules: string[];
@@ -79,19 +97,65 @@ export function attachTaskOutcomeProjection(
 ): ToolPayload {
   const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
   const existingProjection = isGatewayTaskOutcomeProjection(displayIntent.taskOutcomeProjection)
-    ? displayIntent.taskOutcomeProjection
+    ? restoreTaskOutcomeProjectionFromEventLog(displayIntent.taskOutcomeProjection, displayIntent)
     : undefined;
   const projection = existingProjection ?? materializeTaskOutcomeProjection({ payload, ...context });
   return {
     ...payload,
     displayIntent: {
       ...displayIntent,
-      taskRunCard: isValidTaskRunCard(displayIntent.taskRunCard) ? displayIntent.taskRunCard : projection.taskRunCard,
+      taskRunCard: projection.taskRunCard,
       taskOutcomeProjection: projection,
-      conversationProjection: isConversationProjection(displayIntent.conversationProjection)
-        ? displayIntent.conversationProjection
-        : projection.conversationProjection,
+      conversationEventLog: isConversationEventLog(displayIntent.conversationEventLog)
+        ? displayIntent.conversationEventLog
+        : projection.conversationEventLog,
+      conversationEventLogRef: stringField(displayIntent.conversationEventLogRef) ?? projection.conversationEventLogRef,
+      conversationEventLogDigest: projection.conversationEventLogDigest,
+      conversationProjection: projection.conversationProjection,
     },
+  };
+}
+
+function restoreTaskOutcomeProjectionFromEventLog(
+  projection: GatewayTaskOutcomeProjection,
+  displayIntent: Record<string, unknown>,
+): GatewayTaskOutcomeProjection {
+  const log = isConversationEventLog(displayIntent.conversationEventLog)
+    ? displayIntent.conversationEventLog
+    : isConversationEventLog(projection.conversationEventLog)
+      ? projection.conversationEventLog
+      : undefined;
+  if (!log) return projection;
+  const conversationProjection = projectConversation(log, replayConversationState(log));
+  const conversationEventLogDigestValue = conversationEventLogDigest(log);
+  const conversationEventLogRef = stringField(displayIntent.conversationEventLogRef)
+    ?? projection.conversationEventLogRef;
+  const conversationProjectionSummary = conversationProjectionSummaryFromProjection(
+    conversationProjection,
+    projection.nextStepAttribution,
+  );
+  const taskRunCard = {
+    ...projection.taskRunCard,
+    conversationProjectionRef: projection.taskRunCard.conversationProjectionRef
+      ?? conversationProjectionRefFromEventLogRef(conversationEventLogRef),
+    conversationProjectionSummary,
+    refs: withConversationEventLogRef(projection.taskRunCard.refs, conversationEventLogRef),
+  };
+  return {
+    ...projection,
+    taskRunCard,
+    conversationEventLog: log,
+    conversationEventLogRef,
+    conversationEventLogDigest: conversationEventLogDigestValue,
+    projectionRestore: {
+      schemaVersion: 'sciforge.gateway-projection-restore.v1',
+      source: 'conversation-event-log',
+      eventCount: log.events.length,
+      digest: conversationEventLogDigestValue,
+      ref: conversationEventLogRef,
+    },
+    conversationProjection,
+    ownershipLayerSuggestions: taskRunCard.ownershipLayerSuggestions,
   };
 }
 
@@ -105,20 +169,23 @@ export function materializeTaskOutcomeProjection(input: GatewayTaskOutcomeProjec
   const nextStepAttribution = nextStepAttributionFromPayload(input.payload, refs, failures);
   const userSatisfactionProxy = userSatisfactionProxyFromPayload(input.payload, input.request, refs, protocolStatus, nextStepAttribution);
   const taskOutcome = taskOutcomeFromProjection(protocolStatus, input.payload, userSatisfactionProxy);
+  const conversationProjectionRef = conversationProjectionRefFromContext(input.refs);
+  const conversationEventLogRef = conversationEventLogRefFromContext(input.refs);
   const preliminaryCard = createTaskRunCard({
     taskId: input.skill?.id,
     title: input.skill?.manifest?.description ?? input.request?.skillDomain,
     goal: input.request?.prompt ?? input.payload.message,
     protocolStatus,
     taskOutcome,
-    refs,
+    refs: withConversationEventLogRef(refs, conversationEventLogRef),
     executionUnits: units,
     verificationRefs: verificationRefsFromPayload(input.payload),
     failureSignatures: failures,
     genericAttributionLayer: nextStepAttribution.ownerLayer,
     nextStep: nextStepAttribution.nextStep,
+    conversationProjectionRef,
   });
-  const conversationProjection = conversationProjectionFromTaskOutcome({
+  const kernelProjection = conversationKernelFromTaskOutcome({
     payload: input.payload,
     request: input.request,
     refs,
@@ -127,7 +194,8 @@ export function materializeTaskOutcomeProjection(input: GatewayTaskOutcomeProjec
     taskOutcome,
     nextStepAttribution,
   });
-  const conversationProjectionRef = conversationProjectionRefFromContext(input.refs);
+  const conversationProjection = kernelProjection.projection;
+  const conversationEventLogDigestValue = conversationEventLogDigest(kernelProjection.log);
   const conversationProjectionSummary = conversationProjectionSummaryFromProjection(conversationProjection, nextStepAttribution);
   const taskRunCard = createTaskRunCard({
     taskId: input.skill?.id,
@@ -135,7 +203,7 @@ export function materializeTaskOutcomeProjection(input: GatewayTaskOutcomeProjec
     goal: input.request?.prompt ?? input.payload.message,
     protocolStatus,
     taskOutcome,
-    refs,
+    refs: withConversationEventLogRef(refs, conversationEventLogRef),
     executionUnits: units,
     verificationRefs: verificationRefsFromPayload(input.payload),
     failureSignatures: failures,
@@ -161,18 +229,28 @@ export function materializeTaskOutcomeProjection(input: GatewayTaskOutcomeProjec
     taskSuccess: taskOutcome === 'satisfied',
     userSatisfactionProxy,
     nextStepAttribution,
+    conversationEventLog: kernelProjection.log,
+    conversationEventLogRef,
+    conversationEventLogDigest: conversationEventLogDigestValue,
+    projectionRestore: {
+      schemaVersion: 'sciforge.gateway-projection-restore.v1',
+      source: 'conversation-event-log',
+      eventCount: kernelProjection.log.events.length,
+      digest: conversationEventLogDigestValue,
+      ref: conversationEventLogRef,
+    },
     conversationProjection,
     ownershipLayerSuggestions: taskRunCard.ownershipLayerSuggestions,
     projectionRules: [
       'Protocol success means the backend returned a parseable contract; task success means the current user goal appears satisfied.',
       'User satisfaction proxy is inferred from visible answer quality, usable artifacts/refs, next-step detail, and repeat-work avoidance.',
       'Next-step attribution names the generic failing or owning runtime layer without prompt/scenario hardcoding.',
-      'ConversationProjection is replayed from derived kernel events so UI and follow-up turns have a single projection-shaped state surface.',
+      'ConversationEventLog is the replayable truth source persisted with the outcome; ConversationProjection is restored by replaying that log.',
     ],
   };
 }
 
-function conversationProjectionFromTaskOutcome(input: {
+function conversationKernelFromTaskOutcome(input: {
   payload: ToolPayload;
   request?: GatewayRequest;
   refs: TaskRunCardRef[];
@@ -180,7 +258,7 @@ function conversationProjectionFromTaskOutcome(input: {
   protocolStatus: TaskProtocolStatus;
   taskOutcome: TaskOutcomeStatus;
   nextStepAttribution: NextStepAttribution;
-}): ConversationProjection {
+}): { log: ConversationEventLog; projection: ConversationProjection } {
   const conversationId = `task-outcome:${input.taskRunCard.id}`;
   const turnId = `turn:${input.taskRunCard.id}`;
   const runId = `run:${input.taskRunCard.id}`;
@@ -246,6 +324,7 @@ function conversationProjectionFromTaskOutcome(input: {
   }).log;
   const background = backgroundStateFromPayload(input.payload);
   if (background) {
+    const foregroundPartialRef = background.foregroundPartialRef ?? materializedRefs[0]?.ref ?? background.checkpointRefs[0];
     log = background.checkpointRefs.length
       ? appendConversationEvent(log, {
           id: `${conversationId}:background`,
@@ -258,6 +337,7 @@ function conversationProjectionFromTaskOutcome(input: {
           payload: {
             summary: 'Background continuation state attached to task outcome projection.',
             revisionPlan: background.revisionPlan,
+            foregroundPartialRef,
             refs: background.checkpointRefs.map((ref) => ({ ref, label: 'background checkpoint' })),
           },
         }).log
@@ -272,6 +352,7 @@ function conversationProjectionFromTaskOutcome(input: {
           payload: {
             summary: 'Background continuation state attached to task outcome projection.',
             revisionPlan: background.revisionPlan,
+            foregroundPartialRef,
             checkpointRefs: background.checkpointRefs,
           },
         }).log;
@@ -293,7 +374,10 @@ function conversationProjectionFromTaskOutcome(input: {
       },
     }).log;
   }
-  return projectConversation(log, replayConversationState(log));
+  return {
+    log,
+    projection: projectConversation(log, replayConversationState(log)),
+  };
 }
 
 function terminalEventTypeForOutcome(
@@ -318,6 +402,20 @@ function conversationRefsFromTaskRefs(refs: TaskRunCardRef[]): ConversationRef[]
 
 function conversationProjectionRefFromContext(refs: GatewayTaskOutcomeProjectionContext['refs']) {
   return refs?.outputRel ? `${refs.outputRel}#displayIntent.conversationProjection` : undefined;
+}
+
+function conversationEventLogRefFromContext(refs: GatewayTaskOutcomeProjectionContext['refs']) {
+  return refs?.outputRel ? `${refs.outputRel}#displayIntent.conversationEventLog` : undefined;
+}
+
+function conversationProjectionRefFromEventLogRef(ref: string | undefined) {
+  return ref?.endsWith('#displayIntent.conversationEventLog')
+    ? ref.replace(/#displayIntent\.conversationEventLog$/, '#displayIntent.conversationProjection')
+    : undefined;
+}
+
+function withConversationEventLogRef(refs: TaskRunCardRef[], ref: string | undefined): TaskRunCardRef[] {
+  return ref ? uniqueTaskRefs([...refs, { kind: 'other', ref, label: 'conversation event log' }]) : refs;
 }
 
 function conversationProjectionSummaryFromProjection(
@@ -353,7 +451,7 @@ function conversationProjectionSummaryFromProjection(
   };
 }
 
-function backgroundStateFromPayload(payload: ToolPayload): TaskRunCardConversationProjectionSummary['backgroundState'] | undefined {
+function backgroundStateFromPayload(payload: ToolPayload): GatewayBackgroundProjectionState | undefined {
   const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
   const candidate = isRecord(displayIntent.backgroundState)
     ? displayIntent.backgroundState
@@ -367,6 +465,7 @@ function backgroundStateFromPayload(payload: ToolPayload): TaskRunCardConversati
     status,
     checkpointRefs: uniqueStrings(toStringList(candidate.checkpointRefs)),
     revisionPlan: stringField(candidate.revisionPlan),
+    foregroundPartialRef: stringField(candidate.foregroundPartialRef) ?? uniqueStrings(toStringList(candidate.checkpointRefs))[0],
   };
 }
 
@@ -741,11 +840,6 @@ function isGatewayTaskOutcomeProjection(value: unknown): value is GatewayTaskOut
   return isRecord(value)
     && value.schemaVersion === TASK_OUTCOME_PROJECTION_SCHEMA_VERSION
     && isValidTaskRunCard(value.taskRunCard);
-}
-
-function isConversationProjection(value: unknown): value is ConversationProjection {
-  return isRecord(value)
-    && value.schemaVersion === 'sciforge.conversation-projection.v1';
 }
 
 function isValidTaskRunCard(value: unknown): value is TaskRunCard {

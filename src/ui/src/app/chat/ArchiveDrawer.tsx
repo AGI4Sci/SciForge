@@ -269,6 +269,8 @@ function sessionHistoryPackageLabel(session: SciForgeSession) {
 function sessionHistoryLastRunLabel(session: SciForgeSession) {
   const lastRun = session.runs.at(-1);
   if (!lastRun) return undefined;
+  const projection = conversationProjectionForRun(lastRun);
+  if (projection) return `projection ${conversationProjectionStatusLabel(conversationProjectionStatus(projection))}`;
   return `last run ${lastRun.status}`;
 }
 
@@ -282,10 +284,21 @@ function compactHistoryText(value: string) {
 }
 
 function sessionHistoryLastRunVariant(session: SciForgeSession): 'info' | 'success' | 'warning' | 'danger' | 'muted' {
-  const status = session.runs.at(-1)?.status;
+  const lastRun = session.runs.at(-1);
+  const projection = conversationProjectionForRun(lastRun);
+  if (projection) return projectionStatusVariant(conversationProjectionStatus(projection));
+  const status = lastRun?.status;
   if (status === 'completed') return 'success';
   if (status === 'failed') return 'danger';
   if (status === 'idle') return 'muted';
+  return 'info';
+}
+
+function projectionStatusVariant(status: ReturnType<typeof conversationProjectionStatus>): 'info' | 'success' | 'warning' | 'danger' | 'muted' {
+  if (status === 'satisfied') return 'success';
+  if (status === 'idle') return 'muted';
+  if (status === 'external-blocked' || status === 'repair-needed' || status === 'needs-human') return 'warning';
+  if (status === 'degraded-result' || status === 'partial-ready' || status === 'background-running') return 'info';
   return 'info';
 }
 

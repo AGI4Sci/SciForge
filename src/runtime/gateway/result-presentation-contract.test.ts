@@ -222,3 +222,47 @@ test('attachResultPresentationContract maps failed runs through ConversationProj
   assert.equal(card?.conversationProjectionRef, '.sciforge/task-results/report.json#displayIntent.conversationProjection');
   assert.equal(resultPresentation?.conversationProjectionSummary?.failureOwner?.ownerLayer, 'verification');
 });
+
+test('attachResultPresentationContract restores ConversationProjection from persisted event log', () => {
+  const first = attachResultPresentationContract(payload({
+    message: 'Search completed and a compact table is available.',
+    artifacts: [{ id: 'paper-table', type: 'data-table', title: 'Paper table', dataRef: '.sciforge/task-results/table.json' }],
+    executionUnits: [{ id: 'search', status: 'done', tool: 'workspace-task', nextStep: 'Generate the requested report from preserved table refs.' }],
+  }), {
+    refs: {
+      outputRel: '.sciforge/task-results/search-output.json',
+    },
+    request: {
+      skillDomain: 'literature',
+      prompt: 'Find papers and produce a research-report artifact.',
+      expectedArtifactTypes: ['research-report'],
+      artifacts: [],
+    },
+  });
+
+  const firstOutcome = first.displayIntent?.taskOutcomeProjection as Record<string, any> | undefined;
+  assert.equal(firstOutcome?.conversationEventLog?.schemaVersion, 'sciforge.conversation-event-log.v1');
+  assert.match(String(firstOutcome?.conversationEventLogDigest), /^sha256:/);
+  assert.equal(firstOutcome?.conversationEventLogRef, '.sciforge/task-results/search-output.json#displayIntent.conversationEventLog');
+  assert.equal(firstOutcome?.projectionRestore?.source, 'conversation-event-log');
+
+  const polluted = JSON.parse(JSON.stringify(first)) as ToolPayload & { displayIntent: Record<string, any> };
+  polluted.displayIntent.conversationProjection.visibleAnswer.status = 'satisfied';
+  polluted.displayIntent.taskOutcomeProjection.conversationProjection.visibleAnswer.status = 'satisfied';
+  polluted.displayIntent.taskRunCard.conversationProjectionSummary.status = 'satisfied';
+
+  const restored = attachResultPresentationContract(polluted, {
+    refs: {
+      outputRel: '.sciforge/task-results/search-output.json',
+    },
+  });
+  const restoredOutcome = restored.displayIntent?.taskOutcomeProjection as Record<string, any> | undefined;
+  const restoredDisplayProjection = restored.displayIntent?.conversationProjection as Record<string, any> | undefined;
+  const restoredCard = restored.displayIntent?.taskRunCard as Record<string, any> | undefined;
+
+  assert.equal(restoredOutcome?.conversationProjection?.visibleAnswer?.status, 'degraded-result');
+  assert.equal(restoredDisplayProjection?.visibleAnswer?.status, 'degraded-result');
+  assert.equal(restoredCard?.conversationProjectionSummary?.status, 'degraded-result');
+  assert.equal(restoredOutcome?.conversationEventLogDigest, firstOutcome?.conversationEventLogDigest);
+  assert.equal(restoredOutcome?.projectionRestore?.eventCount, firstOutcome?.conversationEventLog?.events?.length);
+});

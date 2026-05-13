@@ -232,6 +232,53 @@ test('ResultsRenderer empty completed run is presented as empty rather than read
   assert.doesNotMatch(html, /ready result/);
 });
 
+test('ResultsRenderer lets projection satisfied state suppress raw failed run and execution unit UI', () => {
+  const session: SciForgeSession = {
+    ...emptySession(),
+    runs: [{
+      ...completedRun('run-projection-visible-ready'),
+      status: 'failed',
+      response: 'legacy failed response',
+      raw: {
+        failureReason: 'LEGACY_RAW_FAILURE_SHOULD_NOT_RENDER',
+        resultPresentation: {
+          conversationProjection: {
+            schemaVersion: 'sciforge.conversation-projection.v1',
+            conversationId: 'conversation-visible-ready',
+            currentTurn: { id: 'turn-ready', prompt: 'summarize refs' },
+            visibleAnswer: {
+              status: 'satisfied',
+              text: 'Projection-visible answer is authoritative.',
+              artifactRefs: [],
+            },
+            artifacts: [],
+            executionProcess: [],
+            recoverActions: [],
+            verificationState: { status: 'not-required' },
+            auditRefs: ['run:projection-visible-ready'],
+            diagnostics: [],
+          },
+        },
+      },
+    }],
+    executionUnits: [{
+      id: 'EU-legacy-failed',
+      tool: 'legacy.raw',
+      params: '{}',
+      status: 'repair-needed',
+      hash: 'legacy',
+      failureReason: 'LEGACY_EXECUTION_UNIT_SHOULD_NOT_RENDER',
+    }],
+  };
+
+  const html = renderResultsRenderer(session, { activeRunId: 'run-projection-visible-ready' });
+
+  assert.doesNotMatch(html, /运行需要处理/);
+  assert.doesNotMatch(html, /LEGACY_RAW_FAILURE_SHOULD_NOT_RENDER/);
+  assert.doesNotMatch(html, /LEGACY_EXECUTION_UNIT_SHOULD_NOT_RENDER/);
+  assert.doesNotMatch(html, /查看运行细节/);
+});
+
 test('ResultsRenderer surfaces runtime compatibility drift without rerunning old sessions', () => {
   const session: SciForgeSession = {
     ...emptySession(),

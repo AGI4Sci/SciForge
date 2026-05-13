@@ -1,5 +1,6 @@
 import type { SciForgeMessage, SciForgeRun } from '../../domain';
 import { Badge, type BadgeVariant } from '../uiPrimitives';
+import { conversationProjectionForRun } from '../conversation-projection-view-model';
 
 type VerificationTagModel = {
   label: string;
@@ -55,6 +56,15 @@ function normalizeRunPrompt(value: string) {
 
 function verificationTagForRun(runs: SciForgeRun[], runId: string): VerificationTagModel | undefined {
   const run = runs.find((item) => item.id === runId);
+  const projection = conversationProjectionForRun(run);
+  const projectionVerdict = projection?.verificationState?.verdict ?? projection?.verificationState?.status;
+  if (projection && projectionVerdict) {
+    return {
+      label: `Verification: ${verificationVerdictLabel(projectionVerdict)}`,
+      title: projection.verificationState?.verifierRef ?? `Projection verification ${projectionVerdict}`,
+      variant: verificationVerdictVariant(projectionVerdict),
+    };
+  }
   const raw = isRecord(run?.raw) ? run.raw : undefined;
   const result = firstVerificationResult(raw);
   const displayIntent = isRecord(raw?.displayIntent) ? raw.displayIntent : undefined;

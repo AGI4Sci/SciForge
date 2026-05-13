@@ -41,6 +41,11 @@ import {
 import { UploadedDataUrlPreview, WorkspaceObjectPreview } from './results/WorkspaceObjectPreview';
 import type { SciForgeConfig, SciForgeRun, SciForgeSession, ObjectAction, ObjectReference, PreviewDescriptor, RuntimeArtifact, RuntimeCompatibilityDiagnostic, UIManifestSlot } from '../domain';
 import {
+  conversationProjectionForRun,
+  conversationProjectionStatus,
+  type UiConversationProjection,
+} from './conversation-projection-view-model';
+import {
   backendRepairStates,
   contractValidationFailureKey,
   contractValidationFailures,
@@ -421,21 +426,24 @@ function ExecutionOnlyResult({ session, activeRun }: { session: SciForgeSession;
 }
 
 function RunStatusSummary({ session, activeRun, viewPlan }: { session: SciForgeSession; activeRun?: SciForgeRun; viewPlan: RuntimeResolvedViewPlan }) {
-  const failures = failedExecutionUnits(session, activeRun);
   const run = activeRun ?? session.runs.at(-1);
+  const projection = conversationProjectionForRun(run);
+  const failures = projection ? [] : failedExecutionUnits(session, activeRun);
   const blockers = runAuditBlockers(session, activeRun);
-  const validationFailures = contractValidationFailures(session, activeRun);
-  const repairStates = backendRepairStates(session, activeRun);
+  const validationFailures = projection ? [] : contractValidationFailures(session, activeRun);
+  const repairStates = projection ? [] : backendRepairStates(session, activeRun);
   const runtimeDriftDiagnostics = runtimeCompatibilityDiagnosticsForPresentation(session);
   const recoverActions = runRecoverActions(session, activeRun).slice(0, 4);
   const presentationState = runPresentationState(session, activeRun, viewPlan);
   const shouldShowPresentationState = presentationState.kind !== 'ready' || presentationState.nextSteps.length > 0;
-  if (!failures.length && !blockers.length && !validationFailures.length && !repairStates.length && !runtimeDriftDiagnostics.length && !recoverActions.length && run?.status !== 'failed' && !shouldShowPresentationState) return null;
+  const rawRunFailed = !projection && run?.status === 'failed';
+  const failureDriven = failures.length || validationFailures.length || rawRunFailed;
+  if (!failures.length && !blockers.length && !validationFailures.length && !repairStates.length && !runtimeDriftDiagnostics.length && !recoverActions.length && !rawRunFailed && !shouldShowPresentationState) return null;
   return (
-    <Card className={cx('run-status-summary', failures.length || validationFailures.length || run?.status === 'failed' ? 'failed' : presentationState.kind)}>
+    <Card className={cx('run-status-summary', failureDriven ? 'failed' : presentationState.kind)}>
       <SectionHeader
-        icon={runtimeDriftDiagnostics.length && !failures.length && !validationFailures.length && run?.status !== 'failed' ? Shield : AlertTriangle}
-        title={failures.length || validationFailures.length || run?.status === 'failed' ? '运行需要处理' : runtimeDriftDiagnostics.length ? '历史 session 需要兼容性检查' : presentationState.title}
+        icon={runtimeDriftDiagnostics.length && !failureDriven ? Shield : AlertTriangle}
+        title={failureDriven ? '运行需要处理' : runtimeDriftDiagnostics.length ? '历史 session 需要兼容性检查' : presentationState.title}
         subtitle={run ? `${run.id} · ${presentationState.kind}` : '当前 session'}
       />
       <RunPresentationStateSummary state={presentationState} />
@@ -706,8 +714,15 @@ function compactVisibleFailureText(value: string) {
 }
 
 function ViewPlanSummary({ viewPlan, session, activeRun }: { viewPlan: RuntimeResolvedViewPlan; session: SciForgeSession; activeRun?: SciForgeRun }) {
-  const diagnosticCount = contractValidationFailures(session, activeRun).length + failedExecutionUnits(session, activeRun).length;
-  const runFailed = (activeRun ?? session.runs.at(-1))?.status === 'failed';
+  const run = activeRun ?? session.runs.at(-1);
+  const projection = conversationProjectionForRun(run);
+  const presentationState = runPresentationState(session, activeRun, viewPlan);
+  const diagnosticCount = projection
+    ? projectionDiagnosticsForViewSummary(projection, presentationState)
+    : contractValidationFailures(session, activeRun).length + failedExecutionUnits(session, activeRun).length;
+  const runFailed = projection
+    ? presentationState.kind === 'failed' || presentationState.kind === 'recoverable' || presentationState.kind === 'needs-human'
+    : run?.status === 'failed';
   const summary = interactiveViewResultSummaryPresentation({
     items: viewPlan.allItems,
     diagnosticCount,
@@ -721,6 +736,14 @@ function ViewPlanSummary({ viewPlan, session, activeRun }: { viewPlan: RuntimeRe
         <span>{summary.summaryText}</span>
       </div>
     </div>
+  );
+}
+
+function projectionDiagnosticsForViewSummary(projection: UiConversationProjection, presentationState: RunPresentationState) {
+  if (presentationState.kind === 'ready') return 0;
+  return Math.max(
+    projection.diagnostics.length,
+    conversationProjectionStatus(projection) === 'satisfied' ? 0 : 1,
   );
 }
 

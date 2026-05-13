@@ -122,24 +122,28 @@ function withFailure(
 }
 
 function backgroundFromEvent(event: ConversationEvent, fallbackStatus: NonNullable<ConversationState['background']>['status']) {
-  const checkpointRefs = event.storage === 'ref'
+  const checkpointRefs = event.storage === 'ref' && Array.isArray(event.payload.refs)
     ? event.payload.refs.map((ref) => ref.ref)
     : Array.isArray(event.payload.checkpointRefs)
       ? event.payload.checkpointRefs.filter((ref): ref is string => typeof ref === 'string')
       : [];
+  const foregroundPartialRef = stringOrUndefined(event.payload.foregroundPartialRef);
   return {
     status: event.type === 'BackgroundCompleted' ? 'completed' as const : fallbackStatus,
     checkpointRefs,
-    revisionPlan: typeof event.payload.revisionPlan === 'string' ? event.payload.revisionPlan : undefined,
+    revisionPlan: stringOrUndefined(event.payload.revisionPlan) ?? '',
+    foregroundPartialRef,
   };
 }
 
 function verificationFromEvent(event: ConversationEvent): NonNullable<ConversationState['verification']> {
-  const verifierRef = event.storage === 'ref' ? event.payload.refs[0]?.ref : stringOrUndefined(event.payload.verifierRef);
+  const verifierRef = event.storage === 'ref' && Array.isArray(event.payload.refs)
+    ? event.payload.refs[0]?.ref
+    : stringOrUndefined(event.payload.verifierRef);
   const verdict = stringOrUndefined(event.payload.verdict);
+  if (!verifierRef) return { status: 'unverified', verdict };
   if (verdict === 'failed') return { status: 'failed', verifierRef, verdict };
-  if (verifierRef) return { status: 'verified', verifierRef, verdict };
-  return { status: 'not-required', verdict };
+  return { status: 'verified', verifierRef, verdict };
 }
 
 function stringOrUndefined(value: unknown): string | undefined {
