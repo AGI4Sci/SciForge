@@ -105,6 +105,54 @@ test('archive drawer prefers TaskRunCard contract over legacy raw compact summar
   assert.doesNotMatch(html, /LEGACY_RAW_FAILURE_SHOULD_NOT_RENDER/);
 });
 
+test('archive drawer prefers conversation projection summary over legacy raw run boundary', () => {
+  const html = renderToStaticMarkup(createElement(ArchiveDrawer, {
+    currentSession: session({ sessionId: 'current', title: 'current' }),
+    archivedSessions: [session({
+      sessionId: 'projection-session',
+      title: 'projection-backed run',
+      runs: [{
+        id: 'run-projection-abcdef123456',
+        scenarioId: 'literature-evidence-review',
+        status: 'failed',
+        prompt: 'summarize projected run',
+        response: 'legacy response',
+        createdAt: '2026-05-12T00:00:00.000Z',
+        raw: {
+          failureReason: 'LEGACY_RAW_FAILURE_SHOULD_NOT_RENDER',
+          recoverActions: ['legacy raw action should not render'],
+          resultPresentation: {
+            conversationProjection: {
+              schemaVersion: 'sciforge.conversation-projection.v1',
+              conversationId: 'conversation-archive-projection',
+              visibleAnswer: {
+                status: 'repair-needed',
+                diagnostic: 'Projection repair boundary is authoritative.',
+                artifactRefs: ['artifact:projection-report'],
+              },
+              artifacts: [{ ref: 'artifact:projection-report', label: 'projection report' }],
+              executionProcess: [],
+              recoverActions: ['Continue from projection refs.'],
+              verificationState: { status: 'failed', verifierRef: 'verification:projection' },
+              auditRefs: ['execution-unit:EU-projection'],
+              diagnostics: [],
+            },
+          },
+        },
+      }],
+    })],
+    onRestore: () => undefined,
+    onDelete: () => undefined,
+    onClear: () => undefined,
+  }));
+
+  assert.match(html, /需恢复：Projection repair boundary is authoritative/);
+  assert.match(html, /execution-unit:EU-projection/);
+  assert.match(html, /Continue from projection refs/);
+  assert.doesNotMatch(html, /LEGACY_RAW_FAILURE_SHOULD_NOT_RENDER/);
+  assert.doesNotMatch(html, /legacy raw action should not render/);
+});
+
 test('archive drawer shows diagnostic-only boundary for historical literature download failures', () => {
   const taskRunCard = createTaskRunCard({
     id: 'task-card:run-lit-history:1',

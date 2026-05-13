@@ -216,3 +216,122 @@ test('partial PDF retrieval failures keep downloaded full text and metadata inst
   assert.ok(payload.objectReferences?.some((ref) => ref.ref === metadataRel));
   assert.ok(payload.objectReferences?.some((ref) => ref.ref === partialReportRel));
 });
+
+test('unstructured provider 429 payload is external blocked instead of repair-rerun', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-generated-external-owner-'));
+  const sessionBundleRel = '.sciforge/sessions/2026-05-13_literature-evidence-review_external-owner';
+  await mkdir(join(workspace, sessionBundleRel, 'task-results'), { recursive: true });
+  const outputRel = `${sessionBundleRel}/task-results/generated-provider-429.json`;
+  await writeFile(join(workspace, outputRel), `${JSON.stringify({
+    message: 'Provider fetch failed before enough evidence was available.',
+    confidence: 0,
+    claimType: 'runtime-diagnostic',
+    evidenceLevel: 'runtime-log',
+    reasoningTrace: 'external provider fetch failed',
+    claims: [],
+    uiManifest: [],
+    executionUnits: [{
+      id: 'provider-fetch',
+      status: 'failed-with-reason',
+      failureReason: 'HTTP Error 429: Too Many Requests; retry-after 3s',
+      stderrRef: `${sessionBundleRel}/logs/generated-provider-429.stderr.log`,
+      outputRef: outputRel,
+    }],
+    artifacts: [],
+  }, null, 2)}\n`);
+
+  let repairAttempted = false;
+  const request = {
+    workspacePath: workspace,
+    skillDomain: 'literature',
+    prompt: 'Retrieve current papers from an external provider.',
+    artifacts: [],
+    uiState: {
+      sessionId: 'session-external-owner',
+      sessionCreatedAt: '2026-05-13T05:00:00.000Z',
+    },
+    scenarioPackageRef: { id: 'literature-evidence-review', version: '1.0.0', source: 'built-in' },
+  } as GatewayRequest;
+  const skill = {
+    id: 'literature-test',
+    kind: 'builtin',
+    available: true,
+    checkedAt: '2026-05-13T05:00:00.000Z',
+    reason: 'test',
+  } as unknown as SkillAvailability;
+  const run = {
+    spec: {
+      id: 'generated-provider-429',
+      language: 'python',
+      entrypoint: 'main',
+      taskRel: `${sessionBundleRel}/tasks/generated-provider-429/task.py`,
+    },
+    workspace,
+    command: 'python3',
+    args: [],
+    exitCode: 1,
+    stdout: '',
+    stderr: 'HTTP Error 429: Too Many Requests; retry-after 3s',
+    stdoutRef: `${sessionBundleRel}/logs/generated-provider-429.stdout.log`,
+    stderrRef: `${sessionBundleRel}/logs/generated-provider-429.stderr.log`,
+    outputRef: outputRel,
+    runtimeFingerprint: {
+      language: 'python',
+      command: 'python3',
+    },
+  } as unknown as WorkspaceTaskRunResult;
+
+  const payload = await completeGeneratedTaskRunOutputLifecycle({
+    workspace,
+    request,
+    skill,
+    skills: [skill],
+    taskId: 'generated-provider-429',
+    generation: {
+      ok: true,
+      runId: 'run-provider-429',
+      response: {
+        taskFiles: [],
+        entrypoint: { language: 'python', path: 'tasks/generated-provider-429/task.py' },
+        environmentRequirements: {},
+        validationCommand: '',
+        expectedArtifacts: ['research-report'],
+      },
+    },
+    run,
+    taskRel: run.spec.taskRel,
+    inputRel: `${sessionBundleRel}/task-inputs/generated-provider-429.json`,
+    outputRel,
+    stdoutRel: run.stdoutRef,
+    stderrRel: run.stderrRef,
+    supplementArtifactTypes: [],
+    runGeneratedTask: async () => undefined,
+    deps: {
+      attemptPlanRefs: () => ({}),
+      failedTaskPayload,
+      tryAgentServerRepairAndRerun: async () => {
+        repairAttempted = true;
+        return undefined;
+      },
+      validateAndNormalizePayload: async (value: ToolPayload) => value,
+      coerceWorkspaceTaskPayload: () => undefined,
+      schemaErrors: () => [],
+      firstPayloadFailureReason: (value: ToolPayload) => {
+        const unit = value.executionUnits.find((entry) => typeof entry === 'object' && entry !== null) as Record<string, unknown> | undefined;
+        return typeof unit?.failureReason === 'string' ? unit.failureReason : undefined;
+      },
+      payloadHasFailureStatus: (value: ToolPayload) => value.executionUnits.some((entry) => {
+        const status = typeof entry === 'object' && entry !== null ? (entry as Record<string, unknown>).status : undefined;
+        return /failed|error/i.test(String(status || ''));
+      }),
+      repairNeededPayload: failedTaskPayload as never,
+    } as never,
+  });
+
+  assert.equal(repairAttempted, false);
+  assert.equal(payload.executionUnits[0]?.externalDependencyStatus, 'transient-unavailable');
+  assert.equal(payload.executionUnits[0]?.conversationKernelStatus, 'external-blocked');
+  assert.equal((payload.executionUnits[0]?.failureOwner as Record<string, unknown> | undefined)?.ownerLayer, 'external-provider');
+  assert.equal((payload.executionUnits[0]?.failureOwner as Record<string, unknown> | undefined)?.action, 'retry-after-backoff');
+  assert.match(JSON.stringify(payload), /External provider appears transiently unavailable/);
+});

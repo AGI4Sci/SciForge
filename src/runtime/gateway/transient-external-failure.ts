@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 
 import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceTaskRunResult } from '../runtime-types.js';
+import { classifyFailureOwner } from '../conversation-kernel/failure-classifier.js';
+import type { FailureOwnerDecision } from '../conversation-kernel/types.js';
 
 const TRANSIENT_EXTERNAL_FAILURE_CODES = new Set([
   'transient-unavailable',
@@ -54,6 +56,21 @@ function payloadHasReadableArtifact(payload: ToolPayload) {
 export function isTransientExternalFailure(reason: string | undefined) {
   const normalized = normalizeFailureCode(reason);
   return Boolean(normalized && TRANSIENT_EXTERNAL_FAILURE_CODES.has(normalized));
+}
+
+export function externalProviderFailureDecision(input: {
+  reason?: string;
+  evidenceRefs?: string[];
+}): FailureOwnerDecision | undefined {
+  const reason = stringField(input.reason);
+  if (!reason) return undefined;
+  const decision = classifyFailureOwner({
+    reason,
+    evidenceRefs: input.evidenceRefs,
+  });
+  return decision.ownerLayer === 'external-provider' && decision.action === 'retry-after-backoff'
+    ? decision
+    : undefined;
 }
 
 export function externalFailureRecoverActions(reason: string) {
@@ -128,7 +145,9 @@ export function transientExternalFailureReasonFromRun(run: Pick<WorkspaceTaskRun
   const structured = structuredTransientExternalFailure(run.runtimeFingerprint)
     ?? structuredTransientExternalFailureFromJsonLines(run.stderr)
     ?? structuredTransientExternalFailureFromJsonLines(run.stdout);
-  return structured?.reason;
+  return structured?.reason
+    ?? externalProviderFailureReasonFromText(run.stderr)
+    ?? externalProviderFailureReasonFromText(run.stdout);
 }
 
 export function firstTransientExternalFailureReason(payload: ToolPayload) {
@@ -136,7 +155,7 @@ export function firstTransientExternalFailureReason(payload: ToolPayload) {
     if (!isRecord(unit)) continue;
     if (unitHasStructuredTransientExternalFailure(unit)) return failureReason(unit) ?? transientUnavailableStatus;
     const reason = failureReason(unit);
-    if (isTransientExternalFailure(reason)) return reason;
+    if (isTransientExternalFailure(reason) || externalProviderFailureDecision({ reason })) return reason;
   }
   return undefined;
 }
@@ -157,6 +176,10 @@ export function transientExternalDependencyPayload(input: {
   const id = stableId(`${input.skill.id}:${input.request.skillDomain}:${input.run.outputRef}:${input.reason}`);
   const message = '外部数据源暂时不可用，运行证据已保留；请稍后重试或提供缓存证据后继续。';
   const recoverActions = externalFailureRecoverActions(input.reason);
+  const failureOwner = externalProviderFailureDecision({
+    reason: input.reason,
+    evidenceRefs: uniqueStrings([input.run.stdoutRef, input.run.stderrRef, input.run.outputRef]),
+  });
   const retryAfterMs = retryAfterMsFromText(input.reason);
   const providerAttemptRefs = uniqueStrings([input.run.stdoutRef, input.run.stderrRef]);
   const preservedRefs = uniqueStrings([input.run.stdoutRef, input.run.stderrRef, input.run.outputRef]);
@@ -222,6 +245,8 @@ export function transientExternalDependencyPayload(input: {
       outputRef: input.run.outputRef,
       exitCode: input.run.exitCode,
       externalDependencyStatus: 'transient-unavailable',
+      conversationKernelStatus: 'external-blocked',
+      failureOwner,
       failureReason: input.reason,
       recoverActions,
       nextStep: 'Retry after provider backoff/rate-limit reset, or attach cached evidence and rerun.',
@@ -244,7 +269,10 @@ export function transientExternalDependencyPayload(input: {
           retryAfterMs,
           recoverActions,
           reasonCodes: ['transient:external-dependency', 'transient:pre-output'],
+          failureOwner,
         },
+        conversationKernelStatus: 'external-blocked',
+        failureOwner,
         retryAfterMs,
         providerAttemptRefs,
         preservedRefs,
@@ -266,8 +294,9 @@ export function transientExternalDependencyPayload(input: {
       { kind: 'stderr', ref: input.run.stderrRef },
     ],
     displayIntent: {
-      status: 'needs-human',
+      status: 'external-blocked',
       reason: 'transient-external-dependency',
+      failureOwner,
     },
   };
 }
@@ -342,7 +371,21 @@ function unitHasStructuredTransientExternalFailure(unit: Record<string, unknown>
   return unit.externalDependencyStatus === transientUnavailableStatus
     || isTransientExternalFailure(stringField(unit.failureKind))
     || isTransientExternalFailure(stringField(unit.failureCode))
-    || isTransientExternalFailure(stringField(unit.failureCategory));
+    || isTransientExternalFailure(stringField(unit.failureCategory))
+    || Boolean(externalProviderFailureDecision({
+      reason: [
+        failureReason(unit),
+        stringField(unit.failureKind),
+        stringField(unit.failureCode),
+        stringField(unit.failureCategory),
+      ].filter(Boolean).join(' | '),
+      evidenceRefs: uniqueStrings([
+        stringField(unit.stdoutRef),
+        stringField(unit.stderrRef),
+        stringField(unit.outputRef),
+        stringField(unit.rawRef),
+      ]),
+    }));
 }
 
 function structuredTransientExternalFailureFromJsonLines(text: string | undefined) {
@@ -393,6 +436,16 @@ function parseJsonRecord(value: string) {
 function normalizeFailureCode(value: string | undefined) {
   if (!value) return undefined;
   return value.trim().toLowerCase().replace(/[\s_]+/g, '-');
+}
+
+function externalProviderFailureReasonFromText(text: string | undefined) {
+  if (!text) return undefined;
+  for (const line of text.split(/\r?\n/)) {
+    const reason = line.trim();
+    if (externalProviderFailureDecision({ reason })) return reason;
+  }
+  const clipped = text.trim().slice(0, 600);
+  return externalProviderFailureDecision({ reason: clipped }) ? clipped : undefined;
 }
 
 function annotateTransientArtifact(

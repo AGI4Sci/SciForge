@@ -260,6 +260,59 @@ test('recoverable focus selects repair-needed run instead of timeline-only histo
   }), undefined);
 });
 
+test('recoverable focus follows conversation projection before raw run status', () => {
+  const projectedSatisfied = session([{
+    id: 'run-projected-satisfied',
+    scenarioId: 'scenario-any',
+    status: 'failed' as const,
+    prompt: 'legacy failed but projected satisfied',
+    response: 'legacy failure',
+    createdAt: '2026-05-07T01:00:00.000Z',
+    raw: {
+      resultPresentation: {
+        conversationProjection: {
+          schemaVersion: 'sciforge.conversation-projection.v1',
+          conversationId: 'conversation-projected-satisfied',
+          visibleAnswer: { status: 'satisfied', text: 'Done.', artifactRefs: [] },
+          artifacts: [],
+          executionProcess: [],
+          recoverActions: [],
+          verificationState: { status: 'not-required' },
+          auditRefs: [],
+          diagnostics: [],
+        },
+      },
+    },
+  }]);
+  const projectedRepair = session([{
+    id: 'run-projected-repair',
+    scenarioId: 'scenario-any',
+    status: 'completed' as const,
+    prompt: 'projected repair',
+    response: 'legacy complete',
+    createdAt: '2026-05-07T02:00:00.000Z',
+    raw: {
+      resultPresentation: {
+        conversationProjection: {
+          schemaVersion: 'sciforge.conversation-projection.v1',
+          conversationId: 'conversation-projected-repair',
+          visibleAnswer: { status: 'repair-needed', diagnostic: 'repair from projection', artifactRefs: [] },
+          artifacts: [],
+          executionProcess: [],
+          recoverActions: ['continue from projection refs'],
+          verificationState: { status: 'failed' },
+          auditRefs: ['audit:projection'],
+          diagnostics: [],
+        },
+      },
+    },
+  }]);
+
+  assert.equal(recoverableRunFocusForSession(projectedSatisfied), undefined);
+  assert.equal(recoverableRunFocusForSession(projectedRepair)?.activeRunId, 'run-projected-repair');
+  assert.equal(recoverableRunFocusForSession(projectedRepair)?.reason, 'repair-needed-run');
+});
+
 test('run timeline scopes artifact refs to the run that produced them', () => {
   const oldRun = {
     id: 'run-old',

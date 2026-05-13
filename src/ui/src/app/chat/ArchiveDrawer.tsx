@@ -4,6 +4,15 @@ import { validateTaskRunCard, type TaskRunCard, type TaskRunCardRef } from '@sci
 import { ActionButton, Badge } from '../uiPrimitives';
 import type { SciForgeRun, SciForgeSession } from '../../domain';
 import { runAuditBlockers, runAuditRefs, runRecoverActions } from '../results-renderer-execution-model';
+import {
+  conversationProjectionAuditRefs,
+  conversationProjectionForRun,
+  conversationProjectionPrimaryDiagnostic,
+  conversationProjectionRecoverActions,
+  conversationProjectionStatus,
+  conversationProjectionVisibleText,
+  type UiConversationProjection,
+} from '../conversation-projection-view-model';
 
 const archiveAuditRefTerms = [
   ['research', 'report'].join('-'),
@@ -121,6 +130,8 @@ function sessionHistoryRunSummary(session: SciForgeSession) {
   const lastRun = session.runs.at(-1);
   const taskRunCard = taskRunCardForRun(lastRun);
   if (taskRunCard) return sessionHistoryTaskRunCardSummary(taskRunCard, lastRun);
+  const projection = conversationProjectionForRun(lastRun);
+  if (projection) return sessionHistoryConversationProjectionSummary(projection, lastRun);
   if (!lastRun) {
     const userMessages = session.messages.filter((message) => message.role === 'user' && !message.id.startsWith('seed')).length;
     return {
@@ -148,6 +159,40 @@ function sessionHistoryRunSummary(session: SciForgeSession) {
     refs,
     recoverActions,
   };
+}
+
+function sessionHistoryConversationProjectionSummary(projection: UiConversationProjection, lastRun: SciForgeRun | undefined) {
+  const reason = conversationProjectionPrimaryDiagnostic(projection)
+    ?? conversationProjectionVisibleText(projection)
+    ?? projection.backgroundState?.revisionPlan
+    ?? 'projection state recorded';
+  const refs = conversationProjectionAuditRefs(projection)
+    .filter((ref) => archiveAuditRefPattern.test(ref))
+    .slice(0, 4);
+  return {
+    runId: shortRunId(lastRun?.id ?? projection.activeRun?.id ?? projection.conversationId),
+    main: `${conversationProjectionStatusLabel(conversationProjectionStatus(projection))}：${compactHistoryText(reason)}。`,
+    refs,
+    recoverActions: conversationProjectionRecoverActions(projection).map(compactHistoryText).slice(0, 2),
+  };
+}
+
+function conversationProjectionStatusLabel(status: ReturnType<typeof conversationProjectionStatus>) {
+  const labels: Record<ReturnType<typeof conversationProjectionStatus>, string> = {
+    idle: '未执行',
+    planned: '已计划',
+    dispatched: '已分发',
+    'partial-ready': '部分结果',
+    'output-materialized': '已保存输出',
+    validated: '已验证边界',
+    satisfied: '完成',
+    'degraded-result': '降级结果',
+    'external-blocked': '外部阻塞',
+    'repair-needed': '需恢复',
+    'needs-human': '需人工处理',
+    'background-running': '后台继续中',
+  };
+  return labels[status];
 }
 
 function sessionHistoryTaskRunCardSummary(card: TaskRunCard, lastRun: SciForgeRun | undefined) {

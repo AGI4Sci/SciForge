@@ -20,6 +20,10 @@ import {
 import { applyArtifactHandoffToWorkspace } from '../../workspace/artifactHandoff';
 import { handoffAutoRunPrompt } from '../results/autoRunPrompts';
 import { artifactsForRun, executionUnitsForRun } from '../results/executionUnitsForRun';
+import {
+  conversationProjectionForRun,
+  conversationProjectionIsRecoverable,
+} from '../conversation-projection-view-model';
 import type { HandoffAutoRunRequest } from '../results/viewPlanResolver';
 
 const TIMELINE_EVENT_LIMIT = 200;
@@ -128,14 +132,8 @@ export function mergeRunTimelineEvents(
 }
 
 function timelineEventFromStoredRun(session: SciForgeSession, run: SciForgeRun, eventId = `timeline-${run.id}`): TimelineEventRecord {
-  const runArtifactRefs = artifactsForRun(session, run)
-    .slice(0, 8)
-    .map((artifact) => artifact.id);
-  const runUnitRefs = [
-    ...executionUnitsForRun(session, run)
-      .slice(0, 8)
-      .map((unit) => unit.id),
-  ].filter((value): value is string => Boolean(value));
+  const runArtifactRefs = timelineArtifactRefsForRun(session, run).slice(0, 8);
+  const runUnitRefs = timelineExecutionUnitRefsForRun(session, run).slice(0, 8);
   const promptSummary = run.prompt ? ` · ${run.prompt.slice(0, 100)}` : '';
   const failureSummary = run.status === 'failed' && run.response ? ` · ${run.response.slice(0, 120)}` : '';
   return {
@@ -153,7 +151,87 @@ function timelineEventFromStoredRun(session: SciForgeSession, run: SciForgeRun, 
   };
 }
 
+function timelineArtifactRefsForRun(session: SciForgeSession, run: SciForgeRun) {
+  const scoped = artifactsForRun(session, run)
+    .map((artifact) => artifact.id)
+    .filter((value): value is string => Boolean(value));
+  if (scoped.length) return uniqueTimelineRefs(scoped);
+
+  const explicit = (run.objectReferences ?? [])
+    .filter((reference) => reference.kind === 'artifact')
+    .map((reference) => stripTimelineRefPrefix(reference.ref, 'artifact'));
+  if (explicit.length) return uniqueTimelineRefs(explicit);
+
+  if (session.runs.length === 1) {
+    return uniqueTimelineRefs(session.artifacts.map((artifact) => artifact.id));
+  }
+  return [];
+}
+
+function timelineExecutionUnitRefsForRun(session: SciForgeSession, run: SciForgeRun) {
+  const scoped = executionUnitsForRun(session, run)
+    .map((unit) => unit.id)
+    .filter((value): value is string => Boolean(value));
+  if (scoped.length) return uniqueTimelineRefs(scoped);
+
+  const embedded = executionUnitRefsFromRunPayload(run);
+  if (embedded.length) return uniqueTimelineRefs(embedded);
+
+  const packageId = run.scenarioPackageRef?.id;
+  if (packageId) {
+    const packageScoped = session.executionUnits
+      .filter((unit) => unit.scenarioPackageRef?.id === packageId)
+      .map((unit) => unit.id)
+      .filter((value): value is string => Boolean(value));
+    if (packageScoped.length) return uniqueTimelineRefs(packageScoped);
+  }
+
+  if (session.runs.length === 1) {
+    return uniqueTimelineRefs(session.executionUnits.map((unit) => unit.id));
+  }
+  return [];
+}
+
+function executionUnitRefsFromRunPayload(run: SciForgeRun) {
+  const raw = isRecord(run.raw) ? run.raw : undefined;
+  const payload = isRecord(raw?.payload) ? raw.payload : undefined;
+  const output = isRecord(raw?.output) ? raw.output : undefined;
+  const data = isRecord(raw?.data) ? raw.data : undefined;
+  const candidates = [
+    raw,
+    payload,
+    output,
+    data,
+    isRecord(output?.payload) ? output.payload : undefined,
+    isRecord(data?.payload) ? data.payload : undefined,
+  ];
+  return candidates.flatMap((candidate) => {
+    if (!isRecord(candidate) || !Array.isArray(candidate.executionUnits)) return [];
+    return candidate.executionUnits
+      .filter(isRecord)
+      .map((unit) => typeof unit.id === 'string' ? unit.id : undefined)
+      .filter((value): value is string => Boolean(value));
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function stripTimelineRefPrefix(value: string, prefix: 'artifact' | 'execution-unit') {
+  return value.replace(new RegExp(`^${prefix}::?`, 'i'), '');
+}
+
+function uniqueTimelineRefs(values: string[]) {
+  return Array.from(new Set(values.filter((value) => value.trim().length > 0)));
+}
+
 function recoverableReasonForRun(session: SciForgeSession, run: SciForgeRun): WorkspaceRecoveryFocus['reason'] | undefined {
+  const projection = conversationProjectionForRun(run);
+  if (projection) {
+    if (conversationProjectionIsRecoverable(projection)) return 'repair-needed-run';
+    return undefined;
+  }
   if (RECOVERABLE_RUN_STATUSES.has(run.status)) return 'failed-run';
   if (executionUnitsForRun(session, run).some(isRecoverableExecutionUnit)) return 'repair-needed-run';
   if (run.acceptance?.severity === 'failed' || run.acceptance?.severity === 'repairable') return 'repair-needed-run';

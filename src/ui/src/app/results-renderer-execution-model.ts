@@ -5,6 +5,17 @@ import type { RuntimeArtifact, SciForgeRun, SciForgeSession } from '../domain';
 import type { RuntimeResolvedViewPlan } from './results/viewPlanResolver';
 import { asString, asStringList, isRecord } from './results/resultArtifactHelpers';
 import { artifactsForRun, executionUnitsForRun, runUsesContextOnlyFastPath } from './results/executionUnitsForRun';
+import {
+  conversationProjectionArtifactRefs,
+  conversationProjectionAuditRefs,
+  conversationProjectionForRun,
+  conversationProjectionIsRecoverable,
+  conversationProjectionPrimaryDiagnostic,
+  conversationProjectionRecoverActions,
+  conversationProjectionStatus,
+  conversationProjectionVisibleText,
+  type UiConversationProjection,
+} from './conversation-projection-view-model';
 
 export type BackendRepairState = {
   id: string;
@@ -39,6 +50,12 @@ export type RunPresentationProgress = {
 
 export function shouldOpenRunAuditDetails(session: SciForgeSession, activeRun?: SciForgeRun) {
   const run = activeRun ?? session.runs.at(-1);
+  const projection = conversationProjectionForRun(run);
+  if (projection) {
+    return conversationProjectionStatus(projection) !== 'satisfied'
+      || projection.diagnostics.length > 0
+      || projection.executionProcess.length > 0;
+  }
   return Boolean(
     run?.status === 'failed'
     || failedExecutionUnits(session, run).length
@@ -49,13 +66,15 @@ export function shouldOpenRunAuditDetails(session: SciForgeSession, activeRun?: 
 
 export function runPresentationState(session: SciForgeSession, activeRun?: SciForgeRun, viewPlan?: RuntimeResolvedViewPlan): RunPresentationState {
   const run = activeRun ?? session.runs.at(-1);
+  const projection = conversationProjectionForRun(run);
+  const availableArtifacts = presentationArtifacts(session, run, viewPlan);
+  if (projection) return runPresentationStateFromProjection(projection, run, availableArtifacts);
   const blockers = runAuditBlockers(session, run);
   const recoverActions = runRecoverActions(session, run);
   const validationFailures = contractValidationFailures(session, run);
   const repairStates = backendRepairStates(session, run);
   const units = executionUnitsForRun(session, run);
   const presentation = resultPresentationForRun(run);
-  const availableArtifacts = presentationArtifacts(session, run, viewPlan);
   const progress = runPresentationProgress(run, units, availableArtifacts, presentation);
   const needsHuman = runNeedsHuman(run, presentation) || units.some((unit) => unit.status === 'needs-human' || unit.verificationVerdict === 'needs-human');
   const partial = structuredHasPartial(run, presentation)
@@ -165,6 +184,14 @@ function isBlockingExecutionUnitStatus(status: unknown) {
 
 export function runAuditBlockers(session: SciForgeSession, activeRun?: SciForgeRun) {
   const run = activeRun ?? session.runs.at(-1);
+  const projection = conversationProjectionForRun(run);
+  if (projection) {
+    if (conversationProjectionStatus(projection) === 'satisfied') return [];
+    return Array.from(new Set([
+      conversationProjectionPrimaryDiagnostic(projection),
+      ...projection.diagnostics.map((diagnostic) => diagnostic.message),
+    ].filter((line): line is string => Boolean(line))));
+  }
   const raw = isRecord(run?.raw) ? run?.raw : undefined;
   const currentFailureBoundary = runHasCurrentFailureBoundary(run);
   const lines = [
@@ -180,6 +207,8 @@ export function runAuditBlockers(session: SciForgeSession, activeRun?: SciForgeR
 
 export function runRecoverActions(session: SciForgeSession, activeRun?: SciForgeRun) {
   const run = activeRun ?? session.runs.at(-1);
+  const projection = conversationProjectionForRun(run);
+  if (projection) return conversationProjectionRecoverActions(projection);
   const raw = isRecord(run?.raw) ? run?.raw : undefined;
   const currentFailureBoundary = runHasCurrentFailureBoundary(run);
   return Array.from(new Set([
@@ -193,6 +222,8 @@ export function runRecoverActions(session: SciForgeSession, activeRun?: SciForge
 
 export function runAuditRefs(session: SciForgeSession, activeRun?: SciForgeRun) {
   const run = activeRun ?? session.runs.at(-1);
+  const projection = conversationProjectionForRun(run);
+  if (projection) return conversationProjectionAuditRefs(projection);
   const raw = isRecord(run?.raw) ? run?.raw : undefined;
   return Array.from(new Set([
     ...asStringList(raw?.refs),
@@ -447,6 +478,123 @@ function presentationArtifacts(session: SciForgeSession, run?: SciForgeRun, view
     type: artifact.type,
     title: artifactTitle(artifact),
   }));
+}
+
+function runPresentationStateFromProjection(
+  projection: UiConversationProjection,
+  run: SciForgeRun | undefined,
+  availableArtifacts: RunPresentationState['availableArtifacts'],
+): RunPresentationState {
+  const status = conversationProjectionStatus(projection);
+  const projectedArtifacts = projectionAvailableArtifacts(projection, availableArtifacts);
+  const nextSteps = conversationProjectionRecoverActions(projection).slice(0, 5);
+  const refs = conversationProjectionAuditRefs(projection).slice(0, 8);
+  const reason = projectionPresentationReason(projection, projectedArtifacts, run);
+  const progress = projectionPresentationProgress(projection, projectedArtifacts);
+  const kind = projectionPresentationKind(projection, projectedArtifacts);
+  return {
+    kind,
+    title: projectionPresentationTitle(kind, status, projectedArtifacts),
+    reason,
+    progress,
+    nextSteps,
+    availableArtifacts: projectedArtifacts,
+    refs,
+  };
+}
+
+function projectionAvailableArtifacts(
+  projection: UiConversationProjection,
+  availableArtifacts: RunPresentationState['availableArtifacts'],
+) {
+  const projectionRefs = conversationProjectionArtifactRefs(projection);
+  if (!projectionRefs.length) return availableArtifacts;
+  const ids = new Set(projectionRefs.map(artifactIdFromRef));
+  const matched = availableArtifacts.filter((artifact) => ids.has(artifact.id));
+  const missing = projectionRefs
+    .filter((ref) => !matched.some((artifact) => artifact.id === artifactIdFromRef(ref)))
+    .map((ref) => {
+      const projectionArtifact = projection.artifacts.find((artifact) => artifact.ref === ref);
+      return {
+        id: artifactIdFromRef(ref),
+        type: projectionArtifact?.mime ?? 'artifact',
+        title: projectionArtifact?.label ?? artifactIdFromRef(ref),
+      };
+    });
+  return [...matched, ...missing];
+}
+
+function artifactIdFromRef(ref: string) {
+  return ref.replace(/^artifact::?/, '');
+}
+
+function projectionPresentationKind(
+  projection: UiConversationProjection,
+  artifacts: RunPresentationState['availableArtifacts'],
+): RunPresentationStateKind {
+  const status = conversationProjectionStatus(projection);
+  if (status === 'satisfied') return artifacts.length || conversationProjectionVisibleText(projection) ? 'ready' : 'empty';
+  if (status === 'needs-human') return 'needs-human';
+  if (status === 'external-blocked' || status === 'repair-needed') return conversationProjectionIsRecoverable(projection) ? 'recoverable' : 'failed';
+  if (status === 'degraded-result' || status === 'partial-ready' || status === 'output-materialized' || status === 'background-running') return 'partial';
+  if (status === 'planned' || status === 'dispatched' || status === 'validated') return 'running';
+  return artifacts.length ? 'ready' : 'empty';
+}
+
+function projectionPresentationTitle(
+  kind: RunPresentationStateKind,
+  status: ReturnType<typeof conversationProjectionStatus>,
+  artifacts: RunPresentationState['availableArtifacts'],
+) {
+  if (kind === 'ready') return '结果可展示';
+  if (kind === 'partial') return status === 'background-running' ? '已有部分结果，后台仍在继续' : '只得到部分结果';
+  if (kind === 'needs-human') return '需要人工处理后继续';
+  if (kind === 'recoverable') return '运行需要恢复';
+  if (kind === 'failed') return '运行失败';
+  if (kind === 'running') return '运行仍在进行';
+  return artifacts.length ? '结果可展示' : '本轮没有生成可展示 artifact';
+}
+
+function projectionPresentationReason(
+  projection: UiConversationProjection,
+  artifacts: RunPresentationState['availableArtifacts'],
+  run: SciForgeRun | undefined,
+) {
+  const explicit = conversationProjectionPrimaryDiagnostic(projection) ?? conversationProjectionVisibleText(projection);
+  if (explicit) return compactHumanReason(explicit);
+  if (projection.backgroundState?.revisionPlan) return compactHumanReason(projection.backgroundState.revisionPlan);
+  if (!artifacts.length && run?.status === 'completed') return '运行已结束，但 projection 没有声明可供右侧结果区渲染的 artifact。';
+  if (conversationProjectionStatus(projection) === 'background-running') return '后台仍在生成结果，当前只显示 projection 已声明的产物。';
+  return artifacts.length ? `${artifacts.length} 个 projection 产物可用于右侧展示。` : '当前 projection 没有可展示产物。';
+}
+
+function projectionPresentationProgress(
+  projection: UiConversationProjection,
+  artifacts: RunPresentationState['availableArtifacts'],
+): RunPresentationProgress {
+  const completedParts = artifacts.slice(0, 8).map((artifact) => ({
+    id: artifact.id,
+    label: artifact.title ? `${artifact.type}: ${artifact.title}` : artifact.type,
+    ref: `artifact:${artifact.id}`,
+    status: 'available',
+  }));
+  const latestEvent = [...projection.executionProcess].reverse().find((event) => event.summary || event.type);
+  const nextSteps = conversationProjectionRecoverActions(projection);
+  return {
+    completedParts,
+    currentStage: latestEvent ? {
+      id: latestEvent.eventId,
+      label: latestEvent.summary || latestEvent.type,
+      status: latestEvent.type,
+    } : undefined,
+    backgroundStatus: projection.backgroundState?.status,
+    safeActions: nextSteps.map((step) => ({
+      kind: 'continue' as const,
+      label: step,
+      safe: true,
+      reason: '来自 ConversationProjection 的恢复动作，不从 raw execution 状态推断。',
+    })).slice(0, 6),
+  };
 }
 
 function runPresentationProgress(

@@ -54,6 +54,59 @@ test('results renderer execution model normalizes response JSON failures and ref
   ]);
 });
 
+test('results renderer execution model prefers conversation projection recover actions and audit refs', () => {
+  const session: SciForgeSession = {
+    schemaVersion: 2,
+    sessionId: 'session-projection-bridge',
+    scenarioId: 'literature-evidence-review',
+    title: 'projection bridge',
+    createdAt: '2026-05-13T00:00:00.000Z',
+    messages: [],
+    runs: [{
+      id: 'run-projection-bridge',
+      scenarioId: 'literature-evidence-review',
+      status: 'failed',
+      prompt: 'continue from projection',
+      response: 'external blocked',
+      createdAt: '2026-05-13T00:00:00.000Z',
+      raw: {
+        displayIntent: {
+          conversationProjection: {
+            schemaVersion: 'sciforge.conversation-projection.v1',
+            conversationId: 'task-outcome:projection-bridge',
+            visibleAnswer: {
+              status: 'external-blocked',
+              diagnostic: 'Provider closed the connection; preserved refs are available.',
+              artifactRefs: ['artifact:partial-output'],
+            },
+            recoverActions: ['retry provider from projection checkpoint'],
+            auditRefs: ['artifact:partial-output', 'file:.sciforge/logs/provider.stderr.log'],
+            artifacts: [],
+            executionProcess: [],
+            verificationState: { status: 'unverified' },
+            diagnostics: [],
+          },
+        },
+      },
+    }],
+    uiManifest: [],
+    claims: [],
+    executionUnits: [],
+    artifacts: [],
+    notebook: [],
+    versions: [],
+    updatedAt: '2026-05-13T00:00:01.000Z',
+  };
+
+  const state = runPresentationState(session, session.runs[0]);
+
+  assert.equal(state.kind, 'recoverable');
+  assert.match(state.reason, /Provider closed the connection/);
+  assert.ok(state.nextSteps.includes('retry provider from projection checkpoint'));
+  assert.deepEqual(runRecoverActions(session, session.runs[0]), ['retry provider from projection checkpoint']);
+  assert.ok(runAuditRefs(session, session.runs[0]).includes('file:.sciforge/logs/provider.stderr.log'));
+});
+
 test('results renderer execution model scopes failure units through active run artifact refs', () => {
   const session = executionFailureSession();
   session.runs.push({
@@ -117,6 +170,129 @@ test('results renderer execution model does not call completed empty runs ready'
   assert.equal(state.kind, 'empty');
   assert.equal(state.title, '本轮没有生成可展示 artifact');
   assert.match(state.reason, /没有写入可供右侧结果区渲染的 artifact/);
+});
+
+test('results renderer execution model lets conversation projection override raw failed state', () => {
+  const session: SciForgeSession = {
+    schemaVersion: 2,
+    sessionId: 'session-projection-satisfied',
+    scenarioId: 'literature-evidence-review',
+    title: 'projection satisfied',
+    createdAt: '2026-05-13T00:00:00.000Z',
+    messages: [],
+    runs: [{
+      id: 'run-projection-satisfied',
+      scenarioId: 'literature-evidence-review',
+      status: 'failed',
+      prompt: 'summarize refs',
+      response: 'legacy failed response',
+      createdAt: '2026-05-13T00:00:00.000Z',
+      raw: {
+        failureReason: 'LEGACY_RAW_FAILURE_SHOULD_NOT_DRIVE_MAIN_STATE',
+        resultPresentation: {
+          conversationProjection: {
+            schemaVersion: 'sciforge.conversation-projection.v1',
+            conversationId: 'conversation-projection-satisfied',
+            visibleAnswer: {
+              status: 'satisfied',
+              text: 'Projection-visible answer is ready.',
+              artifactRefs: [],
+            },
+            artifacts: [],
+            executionProcess: [],
+            recoverActions: [],
+            verificationState: { status: 'not-required' },
+            auditRefs: ['run:projection-satisfied'],
+            diagnostics: [],
+          },
+        },
+      },
+    }],
+    uiManifest: [],
+    claims: [],
+    executionUnits: [{
+      id: 'EU-legacy-failed',
+      tool: 'legacy.raw',
+      params: '{}',
+      status: 'repair-needed',
+      hash: 'legacy',
+      failureReason: 'LEGACY_EXECUTION_UNIT_SHOULD_NOT_DRIVE_MAIN_STATE',
+    }],
+    artifacts: [],
+    notebook: [],
+    versions: [],
+    updatedAt: '2026-05-13T00:00:10.000Z',
+  };
+
+  const state = runPresentationState(session, session.runs[0]);
+
+  assert.equal(state.kind, 'ready');
+  assert.equal(state.reason, 'Projection-visible answer is ready.');
+  assert.deepEqual(runAuditBlockers(session, session.runs[0]), []);
+  assert.deepEqual(runRecoverActions(session, session.runs[0]), []);
+  assert.equal(shouldOpenRunAuditDetails(session, session.runs[0]), false);
+});
+
+test('results renderer execution model uses projection recovery details before raw repair fallbacks', () => {
+  const session: SciForgeSession = {
+    schemaVersion: 2,
+    sessionId: 'session-projection-repair',
+    scenarioId: 'literature-evidence-review',
+    title: 'projection repair',
+    createdAt: '2026-05-13T00:00:00.000Z',
+    messages: [],
+    runs: [{
+      id: 'run-projection-repair',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'render report',
+      response: 'legacy ok',
+      createdAt: '2026-05-13T00:00:00.000Z',
+      raw: {
+        failureReason: 'LEGACY_RAW_FAILURE_SHOULD_NOT_RENDER',
+        recoverActions: ['legacy raw action'],
+        resultPresentation: {
+          conversationProjection: {
+            schemaVersion: 'sciforge.conversation-projection.v1',
+            conversationId: 'conversation-projection-repair',
+            visibleAnswer: {
+              status: 'repair-needed',
+              artifactRefs: ['artifact:partial-report'],
+              diagnostic: 'Projection contract says the report needs regeneration.',
+            },
+            artifacts: [{ ref: 'artifact:partial-report', label: 'Partial report', mime: 'research-report' }],
+            executionProcess: [{ eventId: 'event-repair', type: 'RepairNeeded', summary: 'validator failed', timestamp: '2026-05-13T00:00:05.000Z' }],
+            recoverActions: ['Regenerate from preserved projection refs'],
+            verificationState: { status: 'failed', verifierRef: 'verification:projection' },
+            auditRefs: ['audit:projection-repair'],
+            diagnostics: [{ severity: 'error', code: 'projection-repair', message: 'Projection validator failed.' }],
+          },
+        },
+      },
+    }],
+    uiManifest: [],
+    claims: [],
+    executionUnits: [],
+    artifacts: [{
+      id: 'partial-report',
+      type: 'research-report',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: '1',
+      metadata: { title: 'Partial report', runId: 'run-projection-repair' },
+    }],
+    notebook: [],
+    versions: [],
+    updatedAt: '2026-05-13T00:00:10.000Z',
+  };
+
+  const state = runPresentationState(session, session.runs[0]);
+
+  assert.equal(state.kind, 'recoverable');
+  assert.equal(state.reason, 'Projection contract says the report needs regeneration.');
+  assert.deepEqual(state.nextSteps, ['Regenerate from preserved projection refs']);
+  assert.deepEqual(runRecoverActions(session, session.runs[0]), ['Regenerate from preserved projection refs']);
+  assert.equal(runAuditBlockers(session, session.runs[0]).some((line) => line.includes('LEGACY_RAW_FAILURE')), false);
+  assert.ok(runAuditRefs(session, session.runs[0]).includes('artifact:partial-report'));
 });
 
 test('results renderer execution model treats cited historical execution units as context refs, not current blockers', () => {

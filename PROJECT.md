@@ -60,6 +60,41 @@
 - [x] `npm run smoke:long-file-budget`
 - [x] `npm run build`
 
+### 2026-05-13 Milestone：ConversationProjection 接管失败边界与 UI 主状态
+
+本轮继续推进 **Conversation Kernel v2 final shape**，把 failure-owner、task outcome、result presentation、task attempt history 和网页端主状态往同一个 `ConversationProjection` 薄投影收敛。并行工作由多个 sub agents 分别覆盖 runtime gateway、contract/history、UI bridge 和 final-shape smoke，最后在主线程集成验证。
+
+- [x] `TaskRunCard` / `ResultPresentationContract` 携带 `conversationProjectionRef` 与 compact `conversationProjectionSummary`，task attempt history 会从 output payload / display intent 中派生 kernel summary。
+- [x] Gateway task outcome 通过 kernel projection 映射 `failureOwner`、`recoverActions`、`verificationState` 与 `backgroundState`，避免 failed run 再由 UI/raw response 二次猜测状态。
+- [x] 外部 provider / rate limit / timeout / remote closed / 5xx 类失败前移到 kernel failure classifier，生成 `external-blocked`，保留 partial evidence refs，不再优先进入 generated task code repair loop。
+- [x] Result renderer、workspace recover focus 和 archive drawer 优先消费 `displayIntent` / result presentation 中的 `ConversationProjection`，projection 满足时覆盖 legacy raw run status。
+- [x] Workspace project-record timeline 在不放松主结果区 ownership 边界的前提下，恢复单 run、显式 object refs、package refs 和 failed payload 中的 artifact / execution unit 审计引用。
+- [x] 新增 `smoke-conversation-kernel-final-shape`，覆盖 external-provider 不触发 code repair、event-log replay projection 确定性、UI projection bridge 字段映射。
+- [x] 使用 Computer Use 在 Edge 打开网页端，确认工作台、失败 run、结果区、refs、可恢复动作和 execution unit 审计信息真实可见。
+
+本轮验证：
+
+- [x] `npm run typecheck`
+- [x] `node --import tsx --test src/runtime/task-attempt-history.test.ts src/ui/src/app/appShell/workspaceState.test.ts src/ui/src/app/chat/ArchiveDrawer.test.tsx`
+- [x] `node --import tsx --test src/ui/src/app/results-renderer-execution-model.test.ts src/runtime/gateway/result-presentation-contract.test.ts src/runtime/gateway/transient-external-failure.test.ts src/runtime/gateway/generated-task-runner-output-lifecycle.test.ts`
+- [x] `node --import tsx --test src/runtime/conversation-kernel.test.ts packages/contracts/runtime/task-run-card.test.ts packages/agent-harness/src/*.test.ts`
+- [x] `npx tsx tests/smoke/smoke-conversation-kernel-final-shape.ts`
+- [x] `npx tsx tests/smoke/smoke-conversation-kernel-thin-waist.ts`
+- [x] `npm run smoke:no-src-capability-semantics`
+- [x] `npm run smoke:result-presentation-contract`
+- [x] `npm run smoke:runtime-contracts`
+- [x] `npm run smoke:browser`
+- [x] `npm run smoke:long-file-budget`
+- [x] `npm run build`
+- [x] `git diff --check`
+
+下一步 final-shape 收敛任务：
+
+- [ ] 新会话写入完整 `ConversationEventLog`，让 UI/main history 从 projection restore，而不是从 run/task attempt 反推。
+- [ ] 将 raw run / executionUnits / task attempts 降为 audit/debug channel，主 workbench 只接收 `ConversationProjection` 与 ref preview API。
+- [ ] 接入 background continuation、history edit/revert、verification gate 和 export bundle 到同一 event-sourced kernel。
+- [ ] 拆分 watch list 长文件，尤其是 `src/runtime/generation-gateway.ts`、`src/runtime/gateway/context-envelope.ts`、`src/ui/src/app/ChatPanel.tsx`，避免 final-shape 迁移继续堆主入口。
+
 长文件治理：
 
 - [ ] `packages/skills/literature/index.ts` 当前超过 1500 行。后续应拆为 `literature-search-provider`、`literature-download-provider`、`literature-report-synthesis`、`literature-contract-normalizer` 等语义模块，主入口只保留 capability 编排和导出。

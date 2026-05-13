@@ -11,7 +11,11 @@ import { replayConversationState } from './state-machine';
 export function projectConversation(log: ConversationEventLog, state: ConversationState = replayConversationState(log)): ConversationProjection {
   const currentTurnEvent = [...log.events].reverse().find((event) => event.type === 'TurnReceived');
   const answerEvent = [...log.events].reverse().find((event) =>
-    event.type === 'Satisfied' || event.type === 'DegradedResult' || event.type === 'ExternalBlocked' || event.type === 'RepairNeeded'
+    event.type === 'Satisfied'
+    || event.type === 'DegradedResult'
+    || event.type === 'ExternalBlocked'
+    || event.type === 'RepairNeeded'
+    || event.type === 'NeedsHuman'
   );
   const artifacts = uniqueRefs(log.events.flatMap((event) => event.storage === 'ref' ? event.payload.refs : []));
   const auditRefs = uniqueStrings(log.events.flatMap(eventRefs));

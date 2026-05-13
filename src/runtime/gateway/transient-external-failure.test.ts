@@ -3,6 +3,7 @@ import test from 'node:test';
 import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceTaskRunResult } from '../runtime-types.js';
 import {
   downgradeTransientExternalFailures,
+  externalProviderFailureDecision,
   isTransientExternalFailure,
   payloadHasOnlyTransientExternalDependencyFailures,
   transientExternalDependencyPayload,
@@ -30,6 +31,18 @@ test('detects provider rate limits and network timeouts as transient external fa
   assert.equal(isTransientExternalFailure('transient-unavailable'), true);
   assert.equal(isTransientExternalFailure('HTTP Error 429: Unknown Error'), false);
   assert.equal(isTransientExternalFailure('schema validation failed'), false);
+});
+
+test('bridges provider text failures to conversation kernel retry-after-backoff owner', () => {
+  const decision = externalProviderFailureDecision({
+    reason: 'HTTP Error 429: Too Many Requests; retry-after 5s',
+    evidenceRefs: ['stderr:provider-fetch'],
+  });
+
+  assert.equal(decision?.ownerLayer, 'external-provider');
+  assert.equal(decision?.action, 'retry-after-backoff');
+  assert.equal(decision?.retryable, true);
+  assert.deepEqual(decision?.evidenceRefs, ['stderr:provider-fetch']);
 });
 
 test('downgrades transient external unit failures when readable artifacts exist', () => {
@@ -139,4 +152,17 @@ test('builds a diagnostic payload for pre-output transient external failures', (
   assert.ok(Array.isArray(artifactData.preservedRefs));
   assert.match(String(diagnostic.artifacts[0]?.content), /标准输出/);
   assert.equal(payloadHasOnlyTransientExternalDependencyFailures(diagnostic), true);
+});
+
+test('detects unstructured provider stderr as external blocked before code repair', () => {
+  const reason = transientExternalFailureReasonFromRun({
+    stdout: 'started metadata retrieval\n',
+    stderr: 'HTTP Error 429: Too Many Requests from provider; retry-after 3s\n',
+    runtimeFingerprint: { language: 'python' },
+  });
+
+  assert.match(reason ?? '', /429/);
+  const decision = externalProviderFailureDecision({ reason });
+  assert.equal(decision?.ownerLayer, 'external-provider');
+  assert.equal(decision?.action, 'retry-after-backoff');
 });
