@@ -278,8 +278,9 @@ export function agentServerGeneratedTaskPromptPolicyLines() {
     'Hard contract: entrypoint.path MUST reference one of the returned taskFiles or a file that was physically written in the workspace before returning.',
     'If you physically write task files into the workspace, prefer a compact path-only taskFiles object (path + language, content may be omitted/empty) and return JSON immediately. Do not cat/read full generated source back into the final response just to inline it.',
     'Entrypoint contract: entrypoint.path must be executable task code supported by the runner (.py/.r/.sh, or language=cli with an explicit command). Do not set a markdown/text/json/pdf/report artifact as entrypoint. For report-only answers, return a direct ToolPayload; for generated tasks, make the executable write report/data artifacts.',
-    'Generated task interface contract: executable task code must read the SciForge inputPath argument for prompt/current refs/artifacts and write a valid ToolPayload JSON to the outputPath argument. Do not generate static scripts that merely embed the current answer or a document-specific report in source code.',
+    'Generated task interface contract: executable task code must read the SciForge inputPath argument for prompt/current refs/artifacts and write a valid ToolPayload JSON file to the outputPath argument. outputPath is a JSON file path, not an output directory; write extra report/data files beside it under dirname(outputPath), then cite those files from artifacts[].path/dataRef/ref.',
     'Generated ToolPayload construction contract: initialize top-level claims, uiManifest, executionUnits, and artifacts as arrays. Append uiManifest slots as array entries such as {"componentId":"table-viewer","artifactRef":"artifact-id"}; never use an object descriptor such as {"preferredView":...,"views":[...]} for uiManifest.',
+    'Generated artifact contract: every artifact should include stable id and type, for example {"id":"research-report","type":"research-report","path":"research-report.md","mimeType":"text/markdown"}. uiManifest[].artifactRef must match the artifact id, not a filename unless that filename is the id.',
     'View/content separation contract: uiManifest only routes components to artifact ids. Put preferred views, tables, report markdown, rows, provider traces, and layout/content details in artifacts[].data, artifacts[].metadata, or artifacts[].dataRef.',
   ];
 }
@@ -570,9 +571,18 @@ function generatedTaskSourceReadsInputArg(source: string, language: string, ext:
 }
 
 function generatedTaskSourceWritesOutputArg(source: string, language: string, ext: string) {
-  if (language === 'python' || ext === '.py') return /\bsys\.argv\b|argparse|click\.|typer\.|output[_-]?path/i.test(source);
-  if (['javascript', 'typescript', 'node'].includes(language) || ['.js', '.mjs', '.ts'].includes(ext)) return /\bprocess\.argv\b|parseArgs|output[_-]?path/i.test(source);
-  if (['shell', 'bash', 'zsh', 'sh'].includes(language) || ['.sh', '.bash', '.zsh'].includes(ext)) return /(^|[^\\])\$\{?2\}?|\boutput[_-]?path\b/i.test(source);
-  if (language === 'r' || ['.r', '.R'].includes(ext)) return /commandArgs|output[_-]?path/i.test(source);
-  return /argv|args|output[_-]?path/i.test(source);
+  const outputName = String.raw`(?:output[_-]?path|outputPath|output_file|outputFile|out_path|outPath)`;
+  if (language === 'python' || ext === '.py') {
+    return new RegExp(String.raw`(?:open\s*\(\s*${outputName}[\s\S]{0,120}['"]w|Path\s*\(\s*${outputName}\s*\)\.write_text|${outputName}\.write_text|json\.dump\s*\([\s\S]{0,240}open\s*\(\s*${outputName})`, 'i').test(source);
+  }
+  if (['javascript', 'typescript', 'node'].includes(language) || ['.js', '.mjs', '.ts'].includes(ext)) {
+    return new RegExp(String.raw`(?:writeFile(?:Sync)?\s*\(\s*${outputName}|fs\.promises\.writeFile\s*\(\s*${outputName}|Bun\.write\s*\(\s*${outputName})`, 'i').test(source);
+  }
+  if (['shell', 'bash', 'zsh', 'sh'].includes(language) || ['.sh', '.bash', '.zsh'].includes(ext)) {
+    return /(?:>\s*"?\$\{?2\}?"?|tee\s+"?\$\{?2\}?"?|\bOUTPUT_PATH\b[\s\S]{0,160}>)/i.test(source);
+  }
+  if (language === 'r' || ['.r', '.R'].includes(ext)) {
+    return /(?:write(?:Lines|_json|\.csv)?\s*\([\s\S]{0,160}output[_-]?path|jsonlite::write_json\s*\([\s\S]{0,160}output[_-]?path)/i.test(source);
+  }
+  return new RegExp(String.raw`(?:writeFile|write_text|writeLines|json\.dump)[\s\S]{0,240}${outputName}`, 'i').test(source);
 }

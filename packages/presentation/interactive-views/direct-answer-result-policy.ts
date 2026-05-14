@@ -350,7 +350,8 @@ function normalizeUiManifestSlot(slot: unknown, artifacts: Array<Record<string, 
   const componentId = firstStringField(slot, ['componentId', 'component', 'moduleId', 'view', 'type', 'renderer', 'id']);
   if (componentId) {
     const props = isRecord(slot.props) ? slot.props : {};
-    const artifactRef = firstStringField(slot, ['artifactRef', 'artifactId', 'artifact', 'dataRef', 'ref'])
+    const explicitRef = firstStringField(slot, ['artifactRef', 'artifactId', 'artifact', 'dataRef', 'ref']);
+    const artifactRef = artifactRefForManifestRef(explicitRef, artifacts)
       ?? artifactRefForArtifactType(firstStringField(props, ['artifactType', 'type']), artifacts)
       ?? firstArtifactIdOrType(artifacts);
     const normalizedSlot: Record<string, unknown> = {
@@ -375,6 +376,28 @@ function normalizeUiManifestSlot(slot: unknown, artifacts: Array<Record<string, 
   return [];
 }
 
+function artifactRefForManifestRef(ref: string | undefined, artifacts: Array<Record<string, unknown>>) {
+  if (!ref) return undefined;
+  const normalizedRef = normalizeArtifactRefIdentity(ref);
+  const artifact = artifacts.find((candidate) => {
+    const metadata = isRecord(candidate.metadata) ? candidate.metadata : {};
+    const candidates = [
+      candidate.id,
+      candidate.type,
+      candidate.ref,
+      candidate.path,
+      candidate.dataRef,
+      metadata.sourceRef,
+      metadata.path,
+      metadata.filePath,
+      metadata.markdownRef,
+      metadata.reportRef,
+    ].map((value) => normalizeArtifactRefIdentity(typeof value === 'string' ? value : undefined));
+    return candidates.some((candidateRef) => candidateRef === normalizedRef);
+  });
+  return firstStringField(artifact ?? {}, ['id', 'type']);
+}
+
 function artifactRefForArtifactType(type: string | undefined, artifacts: Array<Record<string, unknown>>) {
   if (!type) return undefined;
   const artifact = artifacts.find((candidate) => candidate.type === type || candidate.id === type);
@@ -383,6 +406,20 @@ function artifactRefForArtifactType(type: string | undefined, artifacts: Array<R
 
 function firstArtifactIdOrType(artifacts: Array<Record<string, unknown>>) {
   return firstStringField(artifacts[0] ?? {}, ['id', 'type']);
+}
+
+function normalizeArtifactRefIdentity(value: string | undefined) {
+  const text = value
+    ?.trim()
+    .replace(/^artifact:/i, '')
+    .replace(/^file:/i, '')
+    .replace(/^path:/i, '')
+    .replace(/\\/g, '/')
+    .split(/[?#]/)[0]
+    ?.replace(/^\/+/, '');
+  if (!text) return undefined;
+  const basename = text.split('/').filter(Boolean).pop() ?? text;
+  return basename.replace(/\.[^.]+$/, '').toLowerCase();
 }
 
 function artifactDataFromLooseArtifact(artifact: Record<string, unknown>) {

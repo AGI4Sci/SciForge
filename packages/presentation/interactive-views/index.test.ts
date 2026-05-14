@@ -557,6 +557,12 @@ test('direct answer result policy owns loose artifact component binding and norm
     ['updated-research-report', 'updated-research-report'],
   );
 
+  const fileRefManifest = normalizeDirectAnswerUiManifest(
+    [{ componentId: 'report-viewer', artifactRef: 'research-report.md' }],
+    [{ id: 'research-report', type: 'research-report', path: '.sciforge/session/task-results/research-report.md' }],
+  );
+  assert.equal(fileRefManifest[0]?.artifactRef, 'research-report');
+
   const loosePayload = standaloneWorkspaceArtifactPayloadPolicy({
     id: 'kg-result',
     type: 'knowledge-graph',

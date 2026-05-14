@@ -2,7 +2,11 @@ import { compileSlotsForScenario } from '@sciforge/scenario-core/ui-plan-compile
 import { uiModuleRegistry, type RuntimeUIModule } from '../../uiModuleRegistry';
 import type { DisplayIntent, ObjectReference, PresentationInput, ResolvedViewPlan, RuntimeArtifact, ScenarioInstanceId, SciForgeRun, SciForgeSession, UIManifestSlot, ViewPlanSection } from '../../domain';
 import type { ScenarioId } from '../../data';
-import { artifactForObjectReference, syntheticArtifactForObjectReference } from '../../../../../packages/support/object-references';
+import {
+  artifactForObjectReference,
+  artifactHasUserFacingDelivery,
+  syntheticArtifactForObjectReference,
+} from '../../../../../packages/support/object-references';
 import {
   conversationProjectionArtifactRefs,
   conversationProjectionForRun,
@@ -516,8 +520,7 @@ function artifactsForProjectionlessMainPlan(session: SciForgeSession, activeRun?
 }
 
 function isUserVisibleDeliveryArtifact(artifact: RuntimeArtifact) {
-  const policy = artifact.delivery?.previewPolicy;
-  return policy !== 'audit-only';
+  return artifactHasUserFacingDelivery(artifact);
 }
 
 function projectionlessAuditDiagnostics(session: SciForgeSession, activeRun?: SciForgeRun) {

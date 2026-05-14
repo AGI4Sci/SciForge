@@ -274,16 +274,17 @@ export function normalizeWorkspaceTaskPayloadBoundary(value: unknown): unknown {
 }
 
 export function normalizeWorkspaceTaskArtifacts(value: unknown): Array<Record<string, unknown>> {
-  if (Array.isArray(value)) return value.map((artifact) => isRecord(artifact) ? artifact : undefined).filter(isRecord);
+  if (Array.isArray(value)) {
+    return value
+      .map((artifact, index) => isRecord(artifact) ? normalizeWorkspaceTaskArtifactRecord(artifact, String(index + 1)) : undefined)
+      .filter(isRecord);
+  }
   if (!isRecord(value)) return [];
   return Object.entries(value)
     .flatMap(([key, artifact]) => {
       if (!isRecord(artifact)) return [];
-      const id = stringField(artifact.id) ?? key;
       return [{
-        ...artifact,
-        id,
-        type: stringField(artifact.type) ?? stringField(artifact.artifactType) ?? id,
+        ...normalizeWorkspaceTaskArtifactRecord(artifact, key),
         metadata: {
           ...(isRecord(artifact.metadata) ? artifact.metadata : {}),
           originalArtifactKey: key,
@@ -291,6 +292,71 @@ export function normalizeWorkspaceTaskArtifacts(value: unknown): Array<Record<st
         },
       }];
     });
+}
+
+function normalizeWorkspaceTaskArtifactRecord(artifact: Record<string, unknown>, fallbackKey: string): Record<string, unknown> {
+  const ref = artifactRefCandidate(artifact);
+  const inferredId = stringField(artifact.id)
+    ?? artifactIdFromRef(ref)
+    ?? stringField(artifact.title)
+    ?? stringField(artifact.label)
+    ?? fallbackKey;
+  const id = safeArtifactToken(inferredId, fallbackKey);
+  const type = safeArtifactToken(
+    stringField(artifact.type)
+      ?? stringField(artifact.artifactType)
+      ?? artifactTypeFromRef(ref)
+      ?? (stringField(artifact.kind) && !/^file$/i.test(String(artifact.kind)) ? stringField(artifact.kind) : undefined)
+      ?? id,
+    id,
+  );
+  const path = stringField(artifact.path) ?? stringField(artifact.filePath) ?? stringField(artifact.ref);
+  const dataRef = stringField(artifact.dataRef) ?? stringField(artifact.data_ref) ?? path;
+  return {
+    ...artifact,
+    id,
+    type,
+    ...(path ? { path } : {}),
+    ...(dataRef ? { dataRef } : {}),
+    metadata: {
+      ...(isRecord(artifact.metadata) ? artifact.metadata : {}),
+      ...(ref && !stringField(isRecord(artifact.metadata) ? artifact.metadata.sourceRef : undefined) ? { sourceRef: ref } : {}),
+      normalizedArtifactIdentity: stringField(artifact.id) && stringField(artifact.type) ? undefined : true,
+    },
+  };
+}
+
+function artifactRefCandidate(artifact: Record<string, unknown>) {
+  const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+  return stringField(artifact.dataRef)
+    ?? stringField(artifact.path)
+    ?? stringField(artifact.ref)
+    ?? stringField(artifact.filePath)
+    ?? stringField(metadata.path)
+    ?? stringField(metadata.filePath)
+    ?? stringField(metadata.markdownRef)
+    ?? stringField(metadata.reportRef);
+}
+
+function artifactIdFromRef(ref: string | undefined) {
+  if (!ref) return undefined;
+  const last = ref.replace(/\\/g, '/').split('/').filter(Boolean).pop();
+  return last?.replace(/\.[^.]+$/, '');
+}
+
+function artifactTypeFromRef(ref: string | undefined) {
+  const id = artifactIdFromRef(ref)?.toLowerCase();
+  if (!id) return undefined;
+  if (/research-report|report|summary|review/.test(id)) return 'research-report';
+  if (/paper-list|papers|bibliography|references/.test(id)) return 'paper-list';
+  if (/evidence-matrix|evidence|matrix/.test(id)) return 'evidence-matrix';
+  if (/\.?csv$/.test(ref ?? '')) return 'data-table';
+  if (/\.?md$|\.?markdown$/.test(ref ?? '')) return 'markdown';
+  return id;
+}
+
+function safeArtifactToken(value: string | undefined, fallback: string) {
+  return (value ?? fallback).replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || fallback;
 }
 
 function coerceStandaloneArtifactPayload(value: Record<string, unknown>): ToolPayload | undefined {

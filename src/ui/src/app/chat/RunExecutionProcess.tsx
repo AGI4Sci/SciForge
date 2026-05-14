@@ -2,6 +2,7 @@ import type { ObjectReference, RuntimeExecutionUnit, SciForgeRun, SciForgeSessio
 import { Badge } from '../uiPrimitives';
 import { MessageContent, objectReferencesFromInlineTokens } from './MessageContent';
 import {
+  artifactHasUserFacingDelivery,
   isUserFacingObjectReference,
   mergeObjectReferences,
   objectReferenceForArtifactSummary,
@@ -171,7 +172,7 @@ function objectReferencesForAudit(run: SciForgeRun | undefined, session: SciForg
     .filter((reference) => reference.kind === 'artifact')
     .map((reference) => reference.ref.replace(/^artifact:/i, '')));
   const runArtifacts = session.artifacts
-    .filter((artifact) => runArtifactRefs.has(artifact.id) || artifact.metadata?.runId === runId)
+    .filter((artifact) => (runArtifactRefs.has(artifact.id) || artifact.metadata?.runId === runId) && artifactHasUserFacingDelivery(artifact))
     .map((artifact) => objectReferenceForArtifactSummary(artifact, runId));
   return mergeObjectReferences(run.objectReferences ?? [], runArtifacts, 40);
 }
@@ -179,7 +180,7 @@ function objectReferencesForAudit(run: SciForgeRun | undefined, session: SciForg
 function objectReferencesForProjection(projection: UiConversationProjection, session: SciForgeSession, runId: string) {
   const artifactIds = new Set(conversationProjectionArtifactRefs(projection).map((ref) => ref.replace(/^artifact::?/i, '')));
   const projectionArtifacts = session.artifacts
-    .filter((artifact) => artifactIds.has(artifact.id))
+    .filter((artifact) => artifactIds.has(artifact.id) && artifactHasUserFacingDelivery(artifact))
     .map((artifact) => objectReferenceForArtifactSummary(artifact, runId));
   const refObjects = conversationProjectionAuditRefs(projection)
     .slice(0, 24)
@@ -300,7 +301,7 @@ export function RunKeyInfo({
     artifactRefIds.add(ref.replace(/^artifact::?/i, ''));
   }
   const artifactReferences = session.artifacts
-    .filter((artifact) => artifactRefIds.has(artifact.id) || artifact.metadata?.runId === runId)
+    .filter((artifact) => (artifactRefIds.has(artifact.id) || artifact.metadata?.runId === runId) && artifactHasUserFacingDelivery(artifact))
     .map((artifact) => objectReferenceForArtifactSummary(artifact, runId))
     .filter(isUserFacingObjectReference)
     .slice(0, 4);

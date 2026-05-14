@@ -21,6 +21,25 @@ const baseSession = (overrides: Partial<SciForgeSession> = {}): SciForgeSession 
   ...overrides,
 });
 
+function deliveryArtifact(artifact: RuntimeArtifact, readableRef: string, role: NonNullable<RuntimeArtifact['delivery']>['role'] = 'primary-deliverable'): RuntimeArtifact {
+  const extension = readableRef.split(/[?#]/)[0]?.split('.').pop()?.toLowerCase() || 'md';
+  return {
+    ...artifact,
+    dataRef: readableRef,
+    delivery: {
+      contractId: 'sciforge.artifact-delivery.v1',
+      ref: `artifact:${artifact.id}`,
+      role,
+      declaredMediaType: extension === 'md' || extension === 'markdown' ? 'text/markdown' : extension === 'csv' ? 'text/csv' : extension === 'html' ? 'text/html' : 'application/octet-stream',
+      declaredExtension: extension,
+      contentShape: ['pdf', 'pdb', 'cif'].includes(extension) ? 'binary-ref' : 'raw-file',
+      readableRef,
+      rawRef: '.sciforge/sessions/session/task-results/output.json',
+      previewPolicy: ['pdf', 'pdb', 'cif'].includes(extension) ? 'open-system' : 'inline',
+    },
+  };
+}
+
 test('failed active run does not promote its artifacts as core results', () => {
   const staleReport: RuntimeArtifact = {
     id: 'research-report',
@@ -85,6 +104,62 @@ test('latest failed run suppresses core artifacts after active run focus is rest
   assert.equal([...visibleItems, ...deferredItems].some((item) => item.artifact?.id === 'research-report'), false);
 });
 
+test('completed run does not promote bare file object references as main artifacts', () => {
+  const completedRun: SciForgeRun = {
+    id: 'run-readable-files',
+    scenarioId: 'literature-evidence-review',
+    status: 'completed',
+    prompt: 'Write report',
+    response: 'Report complete',
+    createdAt: '2026-05-07T00:00:01.000Z',
+    objectReferences: [{
+      id: 'file-report',
+      title: 'generated-report.md',
+      kind: 'file',
+      ref: 'file:.sciforge/sessions/session/task-results/generated-report.md',
+      runId: 'run-readable-files',
+      status: 'available',
+      presentationRole: 'primary-deliverable',
+      provenance: { path: '.sciforge/sessions/session/task-results/generated-report.md' },
+    }],
+  };
+  const session = baseSession({ runs: [completedRun] });
+
+  const plan = resolveViewPlan({ scenarioId: 'literature-evidence-review', session, activeRun: completedRun, defaultSlots: [] });
+  const { visibleItems, deferredItems } = selectDefaultResultItems(itemsForFocusMode(plan, 'all'), 'all');
+  const items = [...visibleItems, ...deferredItems];
+
+  assert.equal(items.some((item) => item.input?.kind === 'markdown'), false);
+  assert.equal(items.some((item) => item.input?.ref === '.sciforge/sessions/session/task-results/generated-report.md'), false);
+});
+
+test('completed run promotes delivery-backed artifacts as main results', () => {
+  const completedRun: SciForgeRun = {
+    id: 'run-delivery-artifact',
+    scenarioId: 'literature-evidence-review',
+    status: 'completed',
+    prompt: 'Write report',
+    response: 'Report complete',
+    createdAt: '2026-05-07T00:00:01.000Z',
+    objectReferences: [{ id: 'artifact-report', title: 'Report', kind: 'artifact', ref: 'artifact:delivery-report', status: 'available' }],
+  } as never;
+  const session = baseSession({
+    runs: [completedRun],
+    artifacts: [deliveryArtifact({
+      id: 'delivery-report',
+      type: 'research-report',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: '1',
+    }, '.sciforge/sessions/session/task-results/generated-report.md')],
+  });
+
+  const plan = resolveViewPlan({ scenarioId: 'literature-evidence-review', session, activeRun: completedRun, defaultSlots: [] });
+  const items = itemsForFocusMode(plan, 'all');
+
+  assert.equal(items.some((item) => item.input?.kind === 'markdown'), true);
+  assert.equal(items.some((item) => item.input?.ref === '.sciforge/sessions/session/task-results/generated-report.md'), true);
+});
+
 test('failed active run without projection keeps runtime diagnostic artifacts out of the main plan', () => {
   const staleReport: RuntimeArtifact = {
     id: 'research-report',
@@ -137,20 +212,20 @@ test('failed active run without projection keeps runtime diagnostic artifacts ou
 });
 
 test('fallback display intent keeps artifact order instead of reading prompt semantics', () => {
-  const matrix: RuntimeArtifact = {
+  const matrix: RuntimeArtifact = deliveryArtifact({
     id: 'matrix-result',
     type: 'expression-matrix',
     producerScenario: 'literature-evidence-review',
     schemaVersion: '1',
     data: { rows: [] },
-  };
-  const report: RuntimeArtifact = {
+  }, '.sciforge/sessions/session/task-results/matrix.csv', 'supporting-evidence');
+  const report: RuntimeArtifact = deliveryArtifact({
     id: 'report-result',
     type: 'research-report',
     producerScenario: 'literature-evidence-review',
     schemaVersion: '1',
     data: { markdown: '# Report' },
-  };
+  }, '.sciforge/sessions/session/task-results/report.md');
   const activeRun: SciForgeRun = {
     id: 'run-semantic-prompt',
     scenarioId: 'literature-evidence-review',
@@ -172,20 +247,20 @@ test('fallback display intent keeps artifact order instead of reading prompt sem
 });
 
 test('active run presentation scopes artifacts to that run', () => {
-  const oldReport: RuntimeArtifact = {
+  const oldReport: RuntimeArtifact = deliveryArtifact({
     id: 'old-report',
     type: 'research-report',
     producerScenario: 'literature-evidence-review',
     schemaVersion: '1',
     data: { markdown: '# Old report' },
-  };
-  const newReport: RuntimeArtifact = {
+  }, '.sciforge/sessions/session/task-results/old-report.md');
+  const newReport: RuntimeArtifact = deliveryArtifact({
     id: 'new-report',
     type: 'research-report',
     producerScenario: 'literature-evidence-review',
     schemaVersion: '1',
     data: { markdown: '# New report' },
-  };
+  }, '.sciforge/sessions/session/task-results/new-report.md');
   const oldRun: SciForgeRun = {
     id: 'run-old',
     scenarioId: 'literature-evidence-review',
@@ -217,22 +292,22 @@ test('active run presentation scopes artifacts to that run', () => {
 });
 
 test('display intent and UI manifest selection outrank artifact type wording during presentation dedupe', () => {
-  const pdbArtifact: RuntimeArtifact = {
+  const pdbArtifact: RuntimeArtifact = deliveryArtifact({
     id: 'backend-selected-pdb',
     type: 'pdb-file',
     producerScenario: 'literature-evidence-review',
     schemaVersion: '1',
     dataRef: 'workspace://artifacts/backend-selected.pdb',
     metadata: { accession: 'same-structure' },
-  };
-  const htmlArtifact: RuntimeArtifact = {
+  }, '.sciforge/sessions/session/task-results/backend-selected.pdb');
+  const htmlArtifact: RuntimeArtifact = deliveryArtifact({
     id: 'semantic-looking-html',
     type: 'structure-3d-html',
     producerScenario: 'literature-evidence-review',
     schemaVersion: '1',
     dataRef: 'workspace://artifacts/semantic-looking.html',
     metadata: { accession: 'same-structure' },
-  };
+  }, '.sciforge/sessions/session/task-results/semantic-looking.html');
   const activeRun: SciForgeRun = {
     id: 'run-backend-selected-artifact',
     scenarioId: 'literature-evidence-review',
@@ -261,13 +336,13 @@ test('display intent and UI manifest selection outrank artifact type wording dur
 });
 
 test('raw result presentation artifact actions are audit-only without projection', () => {
-  const report: RuntimeArtifact = {
+  const report: RuntimeArtifact = deliveryArtifact({
     id: 'analysis-report',
     type: 'research-report',
     producerScenario: 'literature-evidence-review',
     schemaVersion: '1',
     data: { markdown: '# Analysis report' },
-  };
+  }, '.sciforge/sessions/session/task-results/analysis-report.md');
   const activeRun: SciForgeRun = {
     id: 'run-result-presentation',
     scenarioId: 'literature-evidence-review',
@@ -300,13 +375,13 @@ test('raw result presentation artifact actions are audit-only without projection
 });
 
 test('conversation projection drives result plan before raw display intent or response payloads', () => {
-  const projectedReport: RuntimeArtifact = {
+  const projectedReport: RuntimeArtifact = deliveryArtifact({
     id: 'projection-report',
     type: 'research-report',
     producerScenario: 'literature-evidence-review',
     schemaVersion: '1',
     data: { markdown: '# Projection report' },
-  };
+  }, '.sciforge/sessions/session/task-results/projection-report.md');
   const auditDiagnostic: RuntimeArtifact = {
     id: 'projection-diagnostic',
     type: 'runtime-diagnostic',
@@ -314,14 +389,14 @@ test('conversation projection drives result plan before raw display intent or re
     schemaVersion: '1',
     data: { status: 'validated', message: 'Projection audit diagnostic.' },
   };
-  const rawReport: RuntimeArtifact = {
+  const rawReport: RuntimeArtifact = deliveryArtifact({
     id: 'raw-report',
     type: 'research-report',
     producerScenario: 'literature-evidence-review',
     schemaVersion: '1',
     metadata: { runId: 'run-projection-first' },
     data: { markdown: '# Raw report that should not drive the result plan' },
-  };
+  }, '.sciforge/sessions/session/task-results/raw-report.md');
   const activeRun: SciForgeRun = {
     id: 'run-projection-first',
     scenarioId: 'literature-evidence-review',
@@ -393,7 +468,7 @@ test('conversation projection drives result plan before raw display intent or re
 });
 
 test('raw result presentation chart revisions do not create multiple main plan items without projection', () => {
-  const plot: RuntimeArtifact = {
+  const plot: RuntimeArtifact = deliveryArtifact({
     id: 'base-plot',
     type: 'plot-spec',
     producerScenario: 'data-analysis',
@@ -403,7 +478,7 @@ test('raw result presentation chart revisions do not create multiple main plan i
       data: [{ type: 'scatter', x: [0, 1], y: [1.2, 2.4] }],
       layout: { title: { text: 'IFNB response' } },
     },
-  };
+  }, '.sciforge/sessions/session/task-results/base-plot.json');
   const activeRun: SciForgeRun = {
     id: 'run-chart-revisions',
     scenarioId: 'omics-differential-exploration',
@@ -464,41 +539,41 @@ test('raw result presentation chart revisions do not create multiple main plan i
 });
 
 test('result presentation artifact actions keep active run scope across mixed artifacts', () => {
-  const oldReport: RuntimeArtifact = {
+  const oldReport: RuntimeArtifact = deliveryArtifact({
     id: 'old-report',
     type: 'research-report',
     producerScenario: 'literature-evidence-review',
     schemaVersion: '1',
     data: { markdown: '# Old scoped report' },
-  };
-  const oldPapers: RuntimeArtifact = {
+  }, '.sciforge/sessions/session/task-results/old-report.md');
+  const oldPapers: RuntimeArtifact = deliveryArtifact({
     id: 'old-papers',
     type: 'paper-list',
     producerScenario: 'literature-evidence-review',
     schemaVersion: '1',
     data: { papers: [{ title: 'Scoped paper' }] },
-  };
-  const oldDiagnostic: RuntimeArtifact = {
+  }, '.sciforge/sessions/session/task-results/old-papers.csv', 'supporting-evidence');
+  const oldDiagnostic: RuntimeArtifact = deliveryArtifact({
     id: 'old-diagnostic',
     type: 'runtime-diagnostic',
     producerScenario: 'literature-evidence-review',
     schemaVersion: '1',
     data: { status: 'partial', message: 'verification is partial' },
-  };
-  const oldVerification: RuntimeArtifact = {
+  }, '.sciforge/sessions/session/task-results/old-diagnostic.md', 'supporting-evidence');
+  const oldVerification: RuntimeArtifact = deliveryArtifact({
     id: 'old-verification',
     type: 'verification-result',
     producerScenario: 'literature-evidence-review',
     schemaVersion: '1',
     data: { verdict: 'uncertain' },
-  };
-  const newReport: RuntimeArtifact = {
+  }, '.sciforge/sessions/session/task-results/old-verification.md', 'supporting-evidence');
+  const newReport: RuntimeArtifact = deliveryArtifact({
     id: 'new-report',
     type: 'research-report',
     producerScenario: 'literature-evidence-review',
     schemaVersion: '1',
     data: { markdown: '# New report' },
-  };
+  }, '.sciforge/sessions/session/task-results/new-report.md');
   const oldRun: SciForgeRun = {
     id: 'run-old-mixed',
     scenarioId: 'literature-evidence-review',
@@ -558,14 +633,14 @@ test('result presentation artifact actions keep active run scope across mixed ar
 });
 
 test('raw required artifact type is ignored without projection', () => {
-  const pdbArtifact: RuntimeArtifact = {
+  const pdbArtifact: RuntimeArtifact = deliveryArtifact({
     id: 'pdb-result',
     type: 'pdb-file',
     producerScenario: 'literature-evidence-review',
     schemaVersion: '1',
     dataRef: 'workspace://artifacts/result.pdb',
     metadata: { accession: '1abc' },
-  };
+  }, '.sciforge/sessions/session/task-results/result.pdb');
   const activeRun: SciForgeRun = {
     id: 'run-exact-artifact-type',
     scenarioId: 'literature-evidence-review',

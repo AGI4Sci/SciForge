@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 
-import { materializeBackendPayloadOutput, persistArtifactRefsForPayload } from './artifact-materializer.js';
+import { materializeBackendPayloadOutput, normalizeArtifactsForPayload, persistArtifactRefsForPayload } from './artifact-materializer.js';
 import { backendPayloadRefs } from './generated-task-runner-generation-lifecycle.js';
 import type { GatewayRequest, ToolPayload } from '../runtime-types.js';
 
@@ -120,10 +120,32 @@ test('artifact delivery unwraps readable markdown and keeps raw payload as audit
     assert.equal((artifact.delivery as Record<string, unknown>).previewPolicy, 'inline');
     assert.equal((artifact.delivery as Record<string, unknown>).contentShape, 'raw-file');
     assert.equal((artifact.metadata as Record<string, unknown>).rawRef, refs.outputRel);
+    assert.equal(materialized.objectReferences?.some((reference) => reference.kind === 'file' && reference.ref === `file:${refs.outputRel}`), false);
+    assert.equal(materialized.objectReferences?.some((reference) => reference.kind === 'artifact' && reference.ref === 'artifact:research-report'), true);
     assert.equal(await readFile(join(workspace, markdownRef), 'utf8'), '# arXiv report\n\nReadable markdown body.');
     const rawPayload = await readFile(join(workspace, refs.outputRel), 'utf8');
     assert.match(rawPayload, /sciforge.artifact-delivery.v1/);
     assert.match(rawPayload, /rawRef/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('artifact file refs are scoped beside task result output', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-artifact-relative-ref-'));
+  try {
+    const refs = backendPayloadRefs('generated-run', 'agentserver://generated-task', '.sciforge/sessions/2026-05-12_literature_session-1');
+    const reportRel = '.sciforge/sessions/2026-05-12_literature_session-1/task-results/research-report.md';
+    await mkdir(dirname(join(workspace, reportRel)), { recursive: true });
+    await writeFile(join(workspace, reportRel), '# Report\n\nScoped markdown.', 'utf8');
+
+    const artifacts = await normalizeArtifactsForPayload([
+      { id: 'research-report', type: 'research-report', path: 'research-report.md' },
+    ], workspace, refs);
+
+    assert.equal(artifacts[0]?.path, reportRel);
+    assert.equal(artifacts[0]?.dataRef, reportRel);
+    assert.equal((artifacts[0]?.data as Record<string, unknown>).markdown, '# Report\n\nScoped markdown.');
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { classifyPlainAgentText, coerceWorkspaceTaskPayload, toolPayloadFromPlainAgentOutput } from './direct-answer-payload';
+import { classifyPlainAgentText, coerceWorkspaceTaskPayload, normalizeWorkspaceTaskArtifacts, toolPayloadFromPlainAgentOutput } from './direct-answer-payload';
 import { schemaErrors } from './tool-payload-contract';
 
 test('workspace task payload coercion accepts common generated JSON shape drift', () => {
@@ -67,6 +67,20 @@ test('workspace task payload coercion drops empty uiManifest artifact refs', () 
   assert.ok(payload);
   assert.equal('artifactRef' in (payload.uiManifest[0] ?? {}), false);
   assert.deepEqual(schemaErrors(payload), []);
+});
+
+test('workspace task artifact boundary derives identity from file refs', () => {
+  const artifacts = normalizeWorkspaceTaskArtifacts([
+    { ref: 'research-report.md', kind: 'file', mimeType: 'text/markdown', title: 'Report' },
+    { path: 'paper-list.md', kind: 'file', mimeType: 'text/markdown' },
+  ]);
+
+  assert.equal(artifacts[0]?.id, 'research-report');
+  assert.equal(artifacts[0]?.type, 'research-report');
+  assert.equal(artifacts[0]?.path, 'research-report.md');
+  assert.equal(artifacts[0]?.dataRef, 'research-report.md');
+  assert.equal(artifacts[1]?.id, 'paper-list');
+  assert.equal(artifacts[1]?.type, 'paper-list');
 });
 
 test('plain AgentServer text guard blocks raw task files and logs from final-answer wrapping', () => {

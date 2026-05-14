@@ -230,7 +230,7 @@ function generatedTaskPayloadLiteralCandidates(source: string, sourceRef: string
     candidates.push({
       objectText,
       variableName,
-      writtenToOutput: variableNameSuggestsPayload(variableName) || variableWrittenToOutput(source, variableName),
+      writtenToOutput: variableWrittenToOutput(source, variableName),
     });
   }
   const literalWritePattern = /\b(?:json\.dump|JSON\.stringify)\s*\(\s*{/g;
@@ -257,16 +257,28 @@ function generatedTaskArtifactArrayIssues(value: string, sourceRef: string): Gen
     }
     const fields = parseTopLevelObjectFields(item);
     const missing = ['id', 'type'].filter((key) => !fields.has(key) || fieldValueIsEmptyString(fields.get(key)));
+    const derivable = missing.length > 0 && artifactIdentityDerivableFromFields(fields);
     return missing.length ? [{
       id: `${sourceRef}:artifacts-${index}-missing-${missing.join('-')}`,
-      severity: 'repair-needed' as const,
+      severity: derivable ? 'guidance' as const : 'repair-needed' as const,
       path: missing.map((key) => `artifacts[${index}].${key}`).join(','),
       sourceRef,
       evidence: clipEvidence(item),
-      reason: `Generated task artifact ${index + 1} is missing non-empty ${missing.join(' and ')} field(s).`,
-      recoverActions: ['Regenerate artifacts with stable non-empty id and type fields before expensive execution proceeds.'],
+      reason: derivable
+        ? `Generated task artifact ${index + 1} is missing non-empty ${missing.join(' and ')} field(s), but identity can be derived mechanically from its file ref.`
+        : `Generated task artifact ${index + 1} is missing non-empty ${missing.join(' and ')} field(s).`,
+      recoverActions: [derivable
+        ? 'Prefer explicit stable artifact id/type fields; SciForge may derive them only from concrete artifact refs at the boundary.'
+        : 'Regenerate artifacts with stable non-empty id and type fields before expensive execution proceeds.'],
     }] : [];
   });
+}
+
+function artifactIdentityDerivableFromFields(fields: Map<string, string>) {
+  const values = ['ref', 'path', 'dataRef', 'fileRef', 'filename', 'title', 'kind', 'mimeType']
+    .map((key) => literalStringValue(fields.get(key)))
+    .filter((value): value is string => Boolean(value));
+  return values.some((value) => /[A-Za-z0-9]/.test(value) && !/^(?:file|artifact)$/i.test(value));
 }
 
 function parseTopLevelObjectFields(objectText: string): Map<string, string> {
@@ -424,10 +436,6 @@ function generatedTaskSourceMentionsOutputWrite(source: string) {
   return /output_?path/i.test(source) && /json\.dump|json\.dumps|JSON\.stringify|writeFile|open\s*\(/i.test(source);
 }
 
-function variableNameSuggestsPayload(value: string) {
-  return /payload|tool_?payload/i.test(value);
-}
-
 function variableWrittenToOutput(source: string, variableName: string | undefined) {
   if (!variableName) return false;
   const escaped = escapeRegExp(variableName);
@@ -449,6 +457,14 @@ function leadingLiteralKind(value: string | undefined) {
   if (/^-?\d/.test(trimmed)) return 'number';
   if (/^(?:None|null|undefined)\b/.test(trimmed)) return 'nullish';
   return 'expression';
+}
+
+function literalStringValue(value: string | undefined) {
+  const trimmed = (value ?? '').trim();
+  if (!/^["']/.test(trimmed)) return undefined;
+  const quote = trimmed[0];
+  if (trimmed[trimmed.length - 1] !== quote) return undefined;
+  return trimmed.slice(1, -1).trim();
 }
 
 function generatedTaskPreflightGuidance(issues: GeneratedTaskPayloadPreflightIssue[], expectedArtifacts: string[]) {

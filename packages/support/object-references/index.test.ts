@@ -6,6 +6,7 @@ import {
   artifactReferenceKind,
   artifactTypeForPath,
   linkifyObjectReferences,
+  mergeObjectReferences,
   normalizeResponseObjectReferences,
   normalizeWorkspacePath,
   objectReferenceChipModel,
@@ -92,6 +93,9 @@ const fileRef: ObjectReference = {
 assert.equal(pathForObjectReference(fileRef, session), 'reports/final.md');
 assert.equal(pathForObjectReference({ ...fileRef, ref: 'file::.sciforge/artifacts/pdfs/2604.28185v1.pdf' }, session), '.sciforge/artifacts/pdfs/2604.28185v1.pdf');
 assert.equal(syntheticArtifactForObjectReference(fileRef, 'literature-evidence-review')?.type, 'research-report');
+assert.equal(syntheticArtifactForObjectReference(fileRef, 'literature-evidence-review')?.delivery?.readableRef, 'reports/final.md');
+assert.equal(syntheticArtifactForObjectReference(fileRef, 'literature-evidence-review')?.delivery?.previewPolicy, 'inline');
+assert.equal(syntheticArtifactForObjectReference({ ...fileRef, ref: 'file::reports/final.md' }, 'literature-evidence-review')?.delivery?.readableRef, 'reports/final.md');
 assert.equal(artifactTypeForPath('assets/model.pdb', 'file'), 'structure-summary');
 
 const uploaded = {
@@ -201,6 +205,12 @@ assert.deepEqual(
   linked.filter((piece) => piece.reference).map((piece) => piece.text),
   ['Report', 'DE genes'],
 );
+const dedupedReferences = mergeObjectReferences(
+  [{ ...fileRef, id: 'file-report', title: 'report.md', ref: 'file:reports/final.md', provenance: { path: 'reports/final.md' } }],
+  [{ ...artifactRef, id: 'artifact-report', title: 'Report artifact', ref: 'artifact:report', provenance: { dataRef: 'reports/final.md' } }],
+);
+assert.equal(dedupedReferences.length, 1);
+assert.equal(dedupedReferences[0].kind, 'artifact');
 assert.equal(displayTitleForObjectReference({ ...artifactRef, title: 'artifact::.sciforge/task-results/generated.json' }), 'artifact-1');
 assert.equal(objectReferencePresentationRole({ ...artifactRef, ref: 'artifact:runtime-context-summary', title: 'runtime-context-summary.json' }), 'audit');
 assert.equal(artifactPresentationRole({

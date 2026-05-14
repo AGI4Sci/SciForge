@@ -19,7 +19,7 @@ import {
   titleForArtifact,
   visionTraceFinalScreenshotRef,
 } from './helpers';
-import { artifactPresentationRole } from './presentation-role';
+import { artifactPresentationRole, objectReferencePresentationRole } from './presentation-role';
 
 export { stableHash } from './helpers';
 export {
@@ -227,7 +227,10 @@ export function pathForObjectReference(reference: ObjectReference, session: Pick
 
 export function syntheticArtifactForObjectReference(reference: ObjectReference, scenarioId: ScenarioInstanceId): RuntimeArtifact | undefined {
   if (reference.kind !== 'file' && reference.kind !== 'folder' && reference.kind !== 'url') return undefined;
-  const path = reference.ref.replace(/^(file|folder|url):/i, '');
+  const path = reference.ref.replace(/^(file|folder|url)::?/i, '');
+  const delivery = reference.kind === 'file' || reference.kind === 'url'
+    ? artifactDeliveryForReferencePath(reference, path)
+    : undefined;
   return {
     id: reference.id,
     type: reference.kind === 'url' ? objectReferenceArtifactTypeIds.externalUrl : artifactTypeForPath(path, reference.kind),
@@ -242,6 +245,7 @@ export function syntheticArtifactForObjectReference(reference: ObjectReference, 
     },
     path: reference.kind === 'url' ? undefined : path,
     dataRef: reference.kind === 'url' || reference.kind === 'file' ? path : undefined,
+    delivery,
     data: {
       title: reference.title,
       ref: reference.ref,
@@ -250,6 +254,53 @@ export function syntheticArtifactForObjectReference(reference: ObjectReference, 
       url: reference.kind === 'url' ? path : undefined,
     },
   };
+}
+
+function artifactDeliveryForReferencePath(reference: ObjectReference, path: string): RuntimeArtifact['delivery'] {
+  const extension = pathExtension(path);
+  const mediaType = mediaTypeForExtension(extension, reference.kind === 'url' ? 'external' : undefined);
+  const previewPolicy = inlinePreviewExtension(extension)
+    ? 'inline'
+    : reference.kind === 'url' || openSystemExtension(extension)
+      ? 'open-system'
+      : 'unsupported';
+  return {
+    contractId: 'sciforge.artifact-delivery.v1',
+    ref: reference.ref,
+    role: objectReferencePresentationRole(reference),
+    declaredMediaType: mediaType,
+    declaredExtension: extension || 'bin',
+    contentShape: reference.kind === 'url' ? 'external-ref' : openSystemExtension(extension) ? 'binary-ref' : 'raw-file',
+    readableRef: path,
+    previewPolicy,
+  };
+}
+
+function pathExtension(path: string) {
+  const clean = path.replace(/[?#].*$/, '');
+  const match = clean.match(/\.([A-Za-z0-9]+)$/);
+  return match?.[1]?.toLowerCase() ?? '';
+}
+
+function inlinePreviewExtension(extension: string) {
+  return ['md', 'markdown', 'txt', 'log', 'csv', 'tsv', 'html', 'htm'].includes(extension);
+}
+
+function openSystemExtension(extension: string) {
+  return ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(extension);
+}
+
+function mediaTypeForExtension(extension: string, fallback?: 'external') {
+  if (extension === 'md' || extension === 'markdown') return 'text/markdown';
+  if (extension === 'txt' || extension === 'log') return 'text/plain';
+  if (extension === 'csv') return 'text/csv';
+  if (extension === 'tsv') return 'text/tab-separated-values';
+  if (extension === 'html' || extension === 'htm') return 'text/html';
+  if (extension === 'json') return 'application/json';
+  if (extension === 'pdf') return 'application/pdf';
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(extension)) return `image/${extension === 'jpg' ? 'jpeg' : extension}`;
+  if (fallback === 'external') return 'text/uri-list';
+  return 'application/octet-stream';
 }
 
 export function referenceToPreviewTarget(reference: ObjectReference, session: Pick<ObjectReferenceSessionLike, 'artifacts'>) {
@@ -267,10 +318,64 @@ export function referenceToPreviewTarget(reference: ObjectReference, session: Pi
 export function mergeObjectReferences(primary: ObjectReference[], secondary: ObjectReference[], limit = 24) {
   const byRef = new Map<string, ObjectReference>();
   for (const reference of [...primary, ...secondary]) {
-    const key = reference.ref || reference.id;
-    byRef.set(key, { ...byRef.get(key), ...reference });
+    const key = canonicalObjectReferenceKey(reference);
+    const existing = byRef.get(key);
+    byRef.set(key, existing ? mergePreferredObjectReference(existing, reference) : reference);
   }
   return Array.from(byRef.values()).slice(0, limit);
+}
+
+export function canonicalObjectReferenceKey(reference: ObjectReference) {
+  return normalizeObjectReferenceIdentity(
+    reference.provenance?.path
+      ?? reference.provenance?.dataRef
+      ?? reference.ref
+      ?? reference.id,
+  ) || reference.id;
+}
+
+function mergePreferredObjectReference(left: ObjectReference, right: ObjectReference) {
+  const preferred = objectReferencePriority(right) > objectReferencePriority(left) ? right : left;
+  const fallback = preferred === right ? left : right;
+  return {
+    ...fallback,
+    ...preferred,
+    actions: preferred.actions ?? fallback.actions,
+    provenance: {
+      ...fallback.provenance,
+      ...preferred.provenance,
+    },
+  };
+}
+
+function objectReferencePriority(reference: ObjectReference) {
+  let score = 0;
+  const role = objectReferencePresentationRole(reference);
+  if (role === 'primary-deliverable') score += 40;
+  if (role === 'supporting-evidence') score += 30;
+  if (reference.kind === 'artifact') score += 10;
+  if (reference.kind === 'file') score += 6;
+  if (reference.provenance?.path || reference.provenance?.dataRef) score += 4;
+  if (!/\.json(?:$|[?#])/i.test(reference.provenance?.path ?? reference.provenance?.dataRef ?? reference.ref)) score += 3;
+  return score;
+}
+
+function normalizeObjectReferenceIdentity(value: string | undefined) {
+  return value
+    ?.trim()
+    .replace(/^(file|folder|artifact)::?/i, '')
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '')
+    .replace(/\/+$/, '')
+    .toLowerCase();
+}
+
+export function artifactHasUserFacingDelivery(artifact: RuntimeArtifact | undefined) {
+  const delivery = artifact?.delivery;
+  if (!delivery) return false;
+  if (delivery.role !== 'primary-deliverable' && delivery.role !== 'supporting-evidence') return false;
+  if (delivery.previewPolicy === 'audit-only' || delivery.previewPolicy === 'unsupported') return false;
+  return Boolean(delivery.readableRef);
 }
 
 export function isTrustedObjectReference(reference: ObjectReference) {

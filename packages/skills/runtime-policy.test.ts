@@ -56,6 +56,8 @@ test('skills runtime policy owns AgentServer retrieval and task prompt snippets'
   assert.match(taskPolicy, /physically write task files/);
   assert.match(taskPolicy, /Entrypoint contract/);
   assert.match(taskPolicy, /inputPath argument/);
+  assert.match(taskPolicy, /outputPath is a JSON file path/);
+  assert.match(taskPolicy, /every artifact should include stable id and type/);
   assert.match(taskPolicy, /claims, uiManifest, executionUnits, and artifacts as arrays/);
   assert.match(taskPolicy, /never use an object descriptor/);
 
@@ -108,8 +110,14 @@ test('skills runtime policy owns generated task retry and interface contract sem
   assert.equal(agentServerGeneratedTaskInterfaceContractReason({
     entryRel: '.sciforge/tasks/adapter.py',
     language: 'python',
-    source: 'import sys\ninput_path = sys.argv[1]\noutput_path = sys.argv[2]\n',
+    source: 'import json, sys\nfrom pathlib import Path\ninput_path = sys.argv[1]\noutput_path = sys.argv[2]\nPath(output_path).write_text(json.dumps({"message":"ok","claims":[],"uiManifest":[],"executionUnits":[],"artifacts":[]}))\n',
   }), undefined);
+
+  assert.match(String(agentServerGeneratedTaskInterfaceContractReason({
+    entryRel: '.sciforge/tasks/stdout-only.py',
+    language: 'python',
+    source: 'import json, os, sys\ninput_path = sys.argv[1]\noutput_path = sys.argv[2]\nos.makedirs(output_path, exist_ok=True)\nprint(json.dumps({"message":"ok"}))\n',
+  })), /write the SciForge outputPath argument/);
 
   const pathOnly = agentServerPathOnlyTaskFilesReason(['.sciforge/tasks/a.py']);
   assert.match(pathOnly, /path-only taskFiles/);

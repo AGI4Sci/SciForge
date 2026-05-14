@@ -31,11 +31,9 @@ export async function materializeBackendPayloadOutput(
   const outputRel = stableTaskResultRef(refs.outputRel);
   if (!outputRel) return payload;
 
-  const markdownRefs: string[] = [];
   const artifacts = await Promise.all(payload.artifacts.map(async (artifact) => {
     const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
     const delivery = await materializeArtifactDelivery({ workspace, outputRel, artifact });
-    if (delivery.readableRel && delivery.targetFormat === 'markdown') markdownRefs.push(delivery.readableRel);
     if (delivery.errors.length) {
       metadata.deliveryValidationErrors = delivery.errors;
     }
@@ -65,7 +63,7 @@ export async function materializeBackendPayloadOutput(
     artifacts,
     objectReferences: mergeObjectReferences(
       Array.isArray(payload.objectReferences) ? payload.objectReferences : [],
-      backendOutputObjectReferences(outputRel, markdownRefs, artifacts),
+      backendOutputObjectReferences(outputRel, artifacts),
     ),
   };
   await mkdir(dirname(join(workspace, outputRel)), { recursive: true });
@@ -319,10 +317,6 @@ function stableWorkspaceRef(value: string | undefined) {
   return ref.startsWith('.sciforge/') ? ref : undefined;
 }
 
-function markdownTaskResultRel(outputRel: string, artifact: Record<string, unknown>) {
-  return readableTaskResultRel(outputRel, artifact, 'md');
-}
-
 function readableTaskResultRel(outputRel: string, artifact: Record<string, unknown>, extension: string) {
   const outputName = outputRel.split('/').pop() ?? 'result.json';
   const outputStem = outputName.replace(/\.[^.]+$/, '') || 'result';
@@ -332,7 +326,6 @@ function readableTaskResultRel(outputRel: string, artifact: Record<string, unkno
 
 function backendOutputObjectReferences(
   outputRel: string,
-  markdownRefs: string[],
   artifacts: Array<Record<string, unknown>>,
 ) {
   const runId = outputRel.split('/').pop()?.replace(/\.[^.]+$/, '') || outputRel;
@@ -344,14 +337,20 @@ function backendOutputObjectReferences(
       ref: `run:${runId}`,
       status: 'available',
       actions: ['inspect', 'resume'],
+      presentationRole: 'audit',
       provenance: { outputRef: outputRel },
     },
-    fileObjectReference(outputRel),
-    ...markdownRefs.map((ref) => fileObjectReference(ref)),
-    ...artifacts.map((artifact) => {
+    ...artifacts.flatMap((artifact) => {
       const id = String(artifact.id || artifact.type || 'artifact');
       const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
-      return {
+      const delivery = isRecord(artifact.delivery) ? artifact.delivery : {};
+      const role = stringField(delivery.role);
+      const readableRef = stringField(delivery.readableRef);
+      const previewPolicy = stringField(delivery.previewPolicy);
+      if (!readableRef || previewPolicy === 'audit-only' || previewPolicy === 'unsupported' || (role !== 'primary-deliverable' && role !== 'supporting-evidence')) {
+        return [];
+      }
+      return [{
         id: `artifact:${id}`,
         title: stringField(metadata.title) ?? id,
         kind: 'artifact',
@@ -359,27 +358,18 @@ function backendOutputObjectReferences(
         artifactType: String(artifact.type || id),
         runId,
         status: 'available',
-        actions: ['inspect', 'copy-path', 'pin'],
+        presentationRole: role,
+        actions: ['focus-right-pane', 'inspect', 'copy-path', 'pin'],
         provenance: {
-          dataRef: stringField(artifact.dataRef),
+          dataRef: readableRef,
+          path: readableRef,
           outputRef: outputRel,
+          rawRef: stringField(delivery.rawRef),
           artifactRef: stringField(metadata.artifactRef),
         },
-      };
+      }];
     }),
   ];
-}
-
-function fileObjectReference(ref: string) {
-  return {
-    id: `file:${ref}`,
-    title: ref.split('/').pop() || ref,
-    kind: 'file',
-    ref: `file:${ref}`,
-    status: 'available',
-    actions: ['inspect', 'reveal-in-folder', 'copy-path'],
-    provenance: { path: ref },
-  };
 }
 
 function mergeObjectReferences(
@@ -389,12 +379,32 @@ function mergeObjectReferences(
   const seen = new Set<string>();
   const out: Array<Record<string, unknown>> = [];
   for (const reference of [...base, ...additions]) {
-    const key = stringField(reference.ref) ?? stringField(reference.id);
+    const key = canonicalObjectReferenceKey(reference);
     if (key && seen.has(key)) continue;
     if (key) seen.add(key);
     out.push(reference);
   }
   return out;
+}
+
+function canonicalObjectReferenceKey(reference: Record<string, unknown>) {
+  const provenance = isRecord(reference.provenance) ? reference.provenance : {};
+  return normalizeObjectReferenceIdentity(
+    stringField(provenance.path)
+      ?? stringField(provenance.dataRef)
+      ?? stringField(reference.ref)
+      ?? stringField(reference.id),
+  );
+}
+
+function normalizeObjectReferenceIdentity(value: string | undefined) {
+  return value
+    ?.trim()
+    .replace(/^(file|folder|artifact)::?/i, '')
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '')
+    .replace(/\/+$/, '')
+    .toLowerCase();
 }
 
 export async function normalizeArtifactsForPayload(
@@ -403,7 +413,8 @@ export async function normalizeArtifactsForPayload(
   refs?: RuntimeRefBundle,
 ) {
   return await Promise.all(artifacts.map(async (artifact): Promise<Record<string, unknown>> => {
-    const enriched = await enrichArtifactDataFromFileRefs(artifact, workspace);
+    const scoped = refs ? scopeArtifactRefsToTaskResultDirectory(artifact, refs.outputRel) : artifact;
+    const enriched = await enrichArtifactDataFromFileRefs(scoped, workspace);
     const metadata = isRecord(enriched.metadata) ? enriched.metadata : {};
     return {
       ...enriched,
@@ -417,6 +428,32 @@ export async function normalizeArtifactsForPayload(
       } : metadata,
     };
   }));
+}
+
+function scopeArtifactRefsToTaskResultDirectory(artifact: Record<string, unknown>, outputRel: string) {
+  const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+  const scopedMetadata = {
+    ...metadata,
+    reportRef: scopedArtifactRef(stringField(metadata.reportRef), outputRel),
+    markdownRef: scopedArtifactRef(stringField(metadata.markdownRef), outputRel),
+    path: scopedArtifactRef(stringField(metadata.path), outputRel),
+    filePath: scopedArtifactRef(stringField(metadata.filePath), outputRel),
+  };
+  return {
+    ...artifact,
+    dataRef: scopedArtifactRef(stringField(artifact.dataRef), outputRel),
+    path: scopedArtifactRef(stringField(artifact.path), outputRel),
+    ref: scopedArtifactRef(stringField(artifact.ref), outputRel),
+    metadata: scopedMetadata,
+  };
+}
+
+function scopedArtifactRef(ref: string | undefined, outputRel: string) {
+  if (!ref || /^[a-z]+:\/\//i.test(ref) || ref.startsWith('/')) return ref;
+  if (/^[a-z][a-z0-9._-]*:/i.test(ref) && !/^file:|^path:/i.test(ref)) return ref;
+  const normalized = ref.replace(/^file:/, '').replace(/^path:/, '').replace(/\\/g, '/').replace(/^\.\/+/, '');
+  if (!normalized || normalized.startsWith('.sciforge/') || normalized.startsWith('../') || normalized.includes('/../')) return normalized || ref;
+  return `${dirname(outputRel)}/${normalized}`;
 }
 
 export async function enrichArtifactDataFromFileRefs(artifact: Record<string, unknown>, workspace: string) {

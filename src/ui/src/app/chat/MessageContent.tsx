@@ -1,6 +1,9 @@
 import type { ReactNode } from 'react';
 import type { ObjectReference, SciForgeMessage, SciForgeSession } from '../../domain';
 import {
+  artifactForObjectReference,
+  artifactHasUserFacingDelivery,
+  isUserFacingObjectReference,
   linkifyObjectReferences,
   mergeObjectReferences,
   objectReferenceForArtifactSummary,
@@ -268,10 +271,13 @@ export function inlineObjectReferencesForMessage(message: SciForgeMessage, sessi
     .filter((reference) => reference.kind === 'artifact')
     .map((reference) => reference.ref.replace(/^artifact:/, '')));
   const runArtifacts = session.artifacts
-    .filter((artifact) => runArtifactRefs.has(artifact.id) || artifact.metadata?.runId === runId)
+    .filter((artifact) => (runArtifactRefs.has(artifact.id) || artifact.metadata?.runId === runId) && artifactHasUserFacingDelivery(artifact))
     .map((artifact) => objectReferenceForArtifactSummary(artifact, runId));
-  const structuredReferences = mergeObjectReferences(message.objectReferences ?? [], mergeObjectReferences(run?.objectReferences ?? [], runArtifacts), 32);
-  return mergeObjectReferences(objectReferencesFromInlineTokens(message.content, runId), structuredReferences, 40);
+  const structuredReferences = mergeObjectReferences(message.objectReferences ?? [], mergeObjectReferences(run?.objectReferences ?? [], runArtifacts), 32)
+    .filter((reference) => isVisibleMessageObjectReference(reference, session));
+  const inlineReferences = objectReferencesFromInlineTokens(message.content, runId)
+    .filter((reference) => isVisibleMessageObjectReference(reference, session));
+  return mergeObjectReferences(inlineReferences, structuredReferences, 40);
 }
 
 export { objectReferencesFromInlineTokens };
@@ -280,4 +286,16 @@ export function unmentionedObjectReferencesForMessage(message: SciForgeMessage, 
   const mentioned = new Set(linkifyObjectReferences(message.content, inlineObjectReferencesForMessage(message, session, runId))
     .flatMap((piece) => piece.reference ? [piece.reference.ref] : []));
   return inlineObjectReferencesForMessage(message, session, runId).filter((reference) => !mentioned.has(reference.ref));
+}
+
+function isVisibleMessageObjectReference(reference: ObjectReference, session: SciForgeSession) {
+  if (!isUserFacingObjectReference(reference)) return false;
+  if (reference.kind === 'artifact') {
+    return artifactHasUserFacingDelivery(artifactForObjectReference(reference, session));
+  }
+  if (reference.kind === 'file') {
+    const path = reference.provenance?.path ?? reference.ref;
+    return !/\.json(?:$|[?#])/i.test(path);
+  }
+  return reference.kind === 'url' || reference.kind === 'folder';
 }
