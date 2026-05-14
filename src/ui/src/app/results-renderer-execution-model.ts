@@ -1,6 +1,7 @@
 import type { ContractValidationFailure, ContractValidationFailureKind } from '@sciforge-ui/runtime-contract';
 import { collectRuntimeRefsFromValue, runtimePayloadKeyLooksLikeBodyCarrier } from '@sciforge-ui/runtime-contract/references';
 import type { RuntimeArtifact, RuntimeExecutionUnit, SciForgeRun, SciForgeSession } from '../domain';
+import { artifactPresentationRole } from '../../../../packages/support/object-references';
 import type { RuntimeResolvedViewPlan } from './results/viewPlanResolver';
 import { asString, asStringList, isRecord } from './results/resultArtifactHelpers';
 import { artifactsForRun, auditExecutionUnitsForRun, runUsesContextOnlyFastPath } from './results/executionUnitsForRun';
@@ -384,6 +385,9 @@ function presentationArtifacts(session: SciForgeSession, run?: SciForgeRun, view
   const byId = new Map<string, RuntimeArtifact>();
   for (const artifact of artifacts) {
     if (!artifact?.id || byId.has(artifact.id)) continue;
+    if (artifact.delivery?.previewPolicy === 'audit-only') continue;
+    const role = artifactPresentationRole(artifact);
+    if (role === 'audit' || role === 'diagnostic' || role === 'internal') continue;
     byId.set(artifact.id, artifact);
   }
   return Array.from(byId.values()).map((artifact) => ({

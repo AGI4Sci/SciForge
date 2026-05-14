@@ -281,7 +281,7 @@ export function assessGeneratedTaskValidationLifecycle(
   const evidenceFailureReason = !payloadFailureStatus ? guardFinding?.finding.reason : undefined;
   const failureReason = payloadFailureReason ?? evidenceFailureReason;
   const shouldRepairExecutionFailure = schemaErrors.length === 0 && Boolean(failureReason)
-    && (run.exitCode !== 0 || Boolean(evidenceFailureReason) || normalizedRepairNeeded);
+    && (Boolean(evidenceFailureReason) || normalizedRepairNeeded || (run.exitCode !== 0 && !payloadFailureStatus));
   const attemptStatus = schemaErrors.length
     ? 'repair-needed'
     : shouldRepairExecutionFailure

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import {
   artifactForObjectReference,
+  artifactPresentationRole,
+  displayTitleForObjectReference,
   artifactReferenceKind,
   artifactTypeForPath,
   linkifyObjectReferences,
@@ -9,6 +11,7 @@ import {
   objectReferenceChipModel,
   objectReferenceForArtifactSummary,
   objectReferenceForUploadedArtifact,
+  objectReferencePresentationRole,
   objectReferencesFromInlineTokens,
   pathForObjectReference,
   referenceForArtifact,
@@ -116,6 +119,7 @@ const reportArtifact: RuntimeArtifact = {
 };
 const reportObject = objectReferenceForArtifactSummary(reportArtifact, 'run-2');
 assert.equal(reportObject.preferredView, 'report-viewer');
+assert.equal(reportObject.presentationRole, 'primary-deliverable');
 assert.equal(reportObject.provenance?.path, '.sciforge/artifacts/run/research-report.md');
 assert.equal(pathForObjectReference(reportObject, { artifacts: [reportArtifact] }), '.sciforge/artifacts/run/research-report.md');
 assert.equal(referenceForArtifact(reportArtifact, 'file').ref, 'file:.sciforge/artifacts/run/research-report.md');
@@ -135,7 +139,9 @@ const normalizedResponseRefs = normalizeResponseObjectReferences({
 assert.equal(normalizedResponseRefs.find((reference) => reference.ref === 'artifact:research-report')?.title, 'Backend report');
 assert.deepEqual(normalizedResponseRefs.find((reference) => reference.ref === 'artifact:research-report')?.actions, ['focus-right-pane', 'inspect', 'pin', 'compare']);
 assert.equal(normalizedResponseRefs.find((reference) => reference.ref === 'artifact:research-report')?.provenance?.dataRef, '.sciforge/task-results/run-output.json');
+assert.equal(normalizedResponseRefs.find((reference) => reference.ref === 'artifact:research-report')?.presentationRole, 'primary-deliverable');
 assert.equal(normalizedResponseRefs.find((reference) => reference.ref === 'execution-unit:EU-report')?.kind, 'execution-unit');
+assert.equal(normalizedResponseRefs.find((reference) => reference.ref === 'execution-unit:EU-report')?.presentationRole, 'audit');
 assert.equal(normalizedResponseRefs.find((reference) => reference.ref === 'artifact:missing-report')?.status, 'missing');
 
 const converted = referenceForObjectReference({ ...artifactRef, artifactType: 'volcano-plot' });
@@ -191,5 +197,18 @@ assert.deepEqual(
   linked.filter((piece) => piece.reference).map((piece) => piece.reference?.ref),
   ['file:reports/final.md', 'artifact:artifact-1'],
 );
+assert.deepEqual(
+  linked.filter((piece) => piece.reference).map((piece) => piece.text),
+  ['Report', 'DE genes'],
+);
+assert.equal(displayTitleForObjectReference({ ...artifactRef, title: 'artifact::.sciforge/task-results/generated.json' }), 'artifact-1');
+assert.equal(objectReferencePresentationRole({ ...artifactRef, ref: 'artifact:runtime-context-summary', title: 'runtime-context-summary.json' }), 'audit');
+assert.equal(artifactPresentationRole({
+  ...reportArtifact,
+  id: 'runtime-context-summary',
+  type: 'runtime-context-summary',
+  dataRef: '.sciforge/runtime-context-summary.json',
+  metadata: { title: 'runtime-context-summary.json' },
+}), 'audit');
 
 console.log('[ok] object reference package normalizes artifacts, files, selections, uploads, chips, and inline text refs');

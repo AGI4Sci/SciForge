@@ -146,3 +146,36 @@ test('workspace task runner treats bare input and output json argv names as runt
   });
   await assert.rejects(access(join(workspace, 'output.json')));
 });
+
+test('workspace task runner writes failed-with-reason payload when task exits before output', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-runner-fallback-payload-'));
+  const taskRel = '.sciforge/sessions/2026-05-14_demo_session-4/tasks/fail.py';
+  await mkdir(dirname(join(workspace, taskRel)), { recursive: true });
+  await writeFile(join(workspace, taskRel), [
+    'import sys',
+    'print("starting generated task")',
+    'print("boom before output", file=sys.stderr)',
+    'sys.exit(7)',
+  ].join('\n'), 'utf8');
+
+  const run = await runWorkspaceTask(workspace, {
+    id: 'runner-fallback-payload',
+    language: 'python',
+    entrypoint: 'main',
+    taskRel,
+    inputRel: '.sciforge/sessions/2026-05-14_demo_session-4/task-inputs/input.json',
+    input: {},
+    outputRel: '.sciforge/sessions/2026-05-14_demo_session-4/task-results/output.json',
+    stdoutRel: '.sciforge/sessions/2026-05-14_demo_session-4/logs/stdout.log',
+    stderrRel: '.sciforge/sessions/2026-05-14_demo_session-4/logs/stderr.log',
+  });
+
+  assert.equal(run.exitCode, 7);
+  const payload = JSON.parse(await readFile(join(workspace, run.outputRef), 'utf8'));
+  assert.equal(payload.status, 'failed-with-reason');
+  assert.equal(payload.executionUnits[0].status, 'failed-with-reason');
+  assert.equal(payload.executionUnits[0].exitCode, 7);
+  assert.match(payload.executionUnits[0].failureReason, /boom before output/);
+  assert.equal(payload.executionUnits[0].stdoutRef, run.stdoutRef);
+  assert.equal(payload.executionUnits[0].stderrRef, run.stderrRef);
+});

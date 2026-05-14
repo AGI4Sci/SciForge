@@ -113,6 +113,8 @@ Action 是会改变外部环境的能力。当前主要落地：
 
 Action 必须记录副作用边界、输入输出 refs、stdout/stderr、失败原因、可恢复动作和 verifier 需要的证据。
 
+生成型 workspace task 采用最小失败协议：runner 会先写 `running` checkpoint；任务异常、超时或未写 output 时，runner 负责写合法 `failed-with-reason` ToolPayload。能力作者不需要实现复杂恢复框架，但不能依赖“没有 output”表达失败；repair 如果没有实际修改任务代码，会被记录为 no-op 并停止重跑。
+
 ## Verifier Contract
 
 Verifier runtime ABI 真相源是 [`../src/runtime/runtime-types.ts`](../src/runtime/runtime-types.ts)，runtime gate 与 normalization 真相源分别是 [`../src/runtime/gateway/verification-policy.ts`](../src/runtime/gateway/verification-policy.ts) 和 [`../src/runtime/gateway/verification-results.ts`](../src/runtime/gateway/verification-results.ts)。handoff payload 里只保留轻量 policy snapshot，目标真相源是 `packages/contracts/runtime/handoff-payload.ts`。

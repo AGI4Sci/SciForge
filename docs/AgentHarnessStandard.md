@@ -493,6 +493,7 @@ high-recall-literature requests network
 
 - 没有 gateway/prompt/UI 分支为该 prompt 写特例。
 - 空检索结果必须返回 failed-with-reason 或 partial payload，不能伪成功。
+- 任务异常、超时或未写 output 时，workspace runner 必须写最小 failed-with-reason payload；该状态是合法终态，不应自动触发 repair rerun。
 
 ### Experiment 2: File-grounded Summary
 

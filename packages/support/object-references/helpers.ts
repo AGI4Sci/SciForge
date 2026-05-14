@@ -37,6 +37,7 @@ export function preferredArtifactPath(artifact: RuntimeArtifact | undefined) {
   if (!artifact) return undefined;
   const metadata = artifact.metadata ?? {};
   const markdownRef = firstMatchingPath([
+    artifact.delivery?.readableRef,
     metadata.markdownRef,
     metadata.reportRef,
     metadata.path,
@@ -47,6 +48,7 @@ export function preferredArtifactPath(artifact: RuntimeArtifact | undefined) {
   if (markdownRef) return markdownRef;
   const artifactDataRef = asString(artifact.dataRef);
   return artifact.path
+    || asString(artifact.delivery?.readableRef)
     || asString(metadata.path)
     || asString(metadata.filePath)
     || asString(metadata.localPath)

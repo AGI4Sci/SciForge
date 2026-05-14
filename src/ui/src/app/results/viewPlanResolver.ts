@@ -486,11 +486,11 @@ function artifactsForConversationProjection(session: SciForgeSession, projection
   for (const artifact of ordered) {
     if (!unique.has(artifact.id)) unique.set(artifact.id, artifact);
   }
-  return Array.from(unique.values());
+  return Array.from(unique.values()).filter(isUserVisibleDeliveryArtifact);
 }
 
 function artifactsForProjectionlessMainPlan(session: SciForgeSession, activeRun?: SciForgeRun) {
-  if (!activeRun) return session.runs.length ? [] : session.artifacts;
+  if (!activeRun) return session.runs.length ? [] : session.artifacts.filter(isUserVisibleDeliveryArtifact);
   if (projectionlessRunHasBlockingAudit(session, activeRun)) return [];
   const byId = new Map(session.artifacts.map((artifact) => [artifact.id, artifact]));
   const explicitArtifactIds = new Set([
@@ -505,8 +505,13 @@ function artifactsForProjectionlessMainPlan(session: SciForgeSession, activeRun?
     .map((id) => byId.get(id))
     .filter((artifact): artifact is RuntimeArtifact => Boolean(artifact));
   const ownedArtifacts = session.artifacts.filter((artifact) => artifactBelongsToRun(artifact, activeRun));
-  if (explicitArtifacts.length || ownedArtifacts.length) return uniqueArtifacts([...explicitArtifacts, ...ownedArtifacts]);
-  return session.runs.length <= 1 ? session.artifacts : [];
+  if (explicitArtifacts.length || ownedArtifacts.length) return uniqueArtifacts([...explicitArtifacts, ...ownedArtifacts]).filter(isUserVisibleDeliveryArtifact);
+  return session.runs.length <= 1 ? session.artifacts.filter(isUserVisibleDeliveryArtifact) : [];
+}
+
+function isUserVisibleDeliveryArtifact(artifact: RuntimeArtifact) {
+  const policy = artifact.delivery?.previewPolicy;
+  return policy !== 'audit-only';
 }
 
 function projectionlessAuditDiagnostics(session: SciForgeSession, activeRun?: SciForgeRun) {

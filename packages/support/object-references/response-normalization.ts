@@ -13,6 +13,11 @@ import {
   stableHash,
   uniqueStringList,
 } from './helpers';
+import {
+  artifactPresentationRole,
+  normalizeObjectReferencePresentationRole,
+  objectReferencePresentationRole,
+} from './presentation-role';
 
 export interface NormalizeResponseObjectReferencesInput {
   objectReferences: unknown;
@@ -53,7 +58,7 @@ function objectReferenceFromRelatedRef(ref: string, artifacts: RuntimeArtifact[]
   const kind = inferObjectKindFromRef(ref);
   if (!kind) return undefined;
   const matchedArtifact = kind === 'artifact' ? findArtifactForObjectRef(ref, artifacts) : undefined;
-  return {
+  const reference: ObjectReference = {
     id: objectReferenceIdFromRef(ref),
     title: matchedArtifact?.id || ref.replace(/^[a-z-]+:{1,2}/i, ''),
     kind,
@@ -65,6 +70,10 @@ function objectReferenceFromRelatedRef(ref: string, artifacts: RuntimeArtifact[]
     status: matchedArtifact || kind !== 'artifact' ? 'available' : 'missing',
     summary: 'contract validation related ref',
     provenance: normalizeResponseObjectProvenance(undefined, matchedArtifact),
+  };
+  return {
+    ...reference,
+    presentationRole: matchedArtifact ? artifactPresentationRole(matchedArtifact) : objectReferencePresentationRole(reference),
   };
 }
 
@@ -78,7 +87,7 @@ function normalizeResponseObjectReference(record: Record<string, unknown>, artif
     ?? asString(matchedArtifact?.metadata?.title)
     ?? matchedArtifact?.id
     ?? ref.replace(/^[a-z-]+:/i, '');
-  return {
+  const reference: ObjectReference = {
     id: asString(record.id) ?? objectReferenceIdFromRef(ref),
     title,
     kind,
@@ -92,6 +101,11 @@ function normalizeResponseObjectReference(record: Record<string, unknown>, artif
     summary: asString(record.summary),
     provenance: normalizeResponseObjectProvenance(record.provenance, matchedArtifact),
   };
+  return {
+    ...reference,
+    presentationRole: normalizeObjectReferencePresentationRole(record.presentationRole)
+      ?? (matchedArtifact ? artifactPresentationRole(matchedArtifact) : objectReferencePresentationRole(reference)),
+  };
 }
 
 function objectReferenceFromResponseArtifact(artifact: RuntimeArtifact, runId: string): ObjectReference {
@@ -103,6 +117,7 @@ function objectReferenceFromResponseArtifact(artifact: RuntimeArtifact, runId: s
     ref: `artifact:${artifact.id}`,
     artifactType: artifact.type,
     runId,
+    presentationRole: artifactPresentationRole(artifact),
     actions: responseObjectActionsForArtifact(artifact),
     status: 'available',
     summary: responseArtifactSummary(artifact),

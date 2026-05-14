@@ -616,6 +616,7 @@ function normalizeRuntimeArtifact(artifact: Record<string, unknown>, input: Pick
     data: artifact.data,
     dataRef: stringField(artifact.dataRef),
     path: stringField(artifact.path),
+    delivery: isRecord(artifact.delivery) ? artifact.delivery as unknown as RuntimeArtifact['delivery'] : undefined,
     previewDescriptor: isRecord(artifact.previewDescriptor) ? artifact.previewDescriptor as unknown as RuntimeArtifact['previewDescriptor'] : undefined,
     visibility: artifact.visibility as RuntimeArtifact['visibility'],
     audience: Array.isArray(artifact.audience) ? artifact.audience.filter((entry): entry is string => typeof entry === 'string') : undefined,

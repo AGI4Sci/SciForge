@@ -207,12 +207,19 @@ export type {
   ScenarioPackageRef,
 } from './app';
 export type {
+  ArtifactDelivery,
+  ArtifactDeliveryContentShape,
+  ArtifactDeliveryPreviewPolicy,
+  ArtifactDeliveryRole,
   RuntimeArtifact,
   RuntimeArtifactDerivation,
   RuntimeArtifactDerivationVerificationStatus,
   RuntimeArtifactExportPolicy,
   RuntimeArtifactMetadata,
   RuntimeArtifactVisibility,
+} from './artifacts';
+export {
+  validateArtifactDeliveryContract,
 } from './artifacts';
 export {
   SCIENTIFIC_REPRODUCTION_ARTIFACT_TYPES,
@@ -380,6 +387,7 @@ export type {
   ObjectAction,
   ObjectReference,
   ObjectReferenceKind,
+  ObjectReferencePresentationRole,
   ObjectReferenceStatus,
   ObjectResolution,
   SciForgeReference,

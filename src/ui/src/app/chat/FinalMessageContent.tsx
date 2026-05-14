@@ -1,4 +1,5 @@
 import type { ObjectReference } from '../../domain';
+import { normalizeObjectReferencePresentationRole } from '../../../../../packages/support/object-references';
 import { MessageContent } from './MessageContent';
 import { splitFinalMessagePresentation } from './finalMessagePresentation';
 
@@ -56,6 +57,7 @@ function resultPresentationReferences(resultPresentation: unknown): ObjectRefere
       kind: stringField(citation.kind),
       summary: stringField(citation.summary),
       status: stringField(citation.status),
+      presentationRole: stringField(citation.presentationRole),
     })),
     ...recordList(resultPresentation.artifactActions).map((action) => objectReferenceFromPresentationRef({
       id: stringField(action.id),
@@ -64,6 +66,7 @@ function resultPresentationReferences(resultPresentation: unknown): ObjectRefere
       kind: stringField(action.artifactType) ?? 'artifact',
       summary: stringField(action.artifactType),
       status: 'available',
+      presentationRole: stringField(action.presentationRole),
     })),
   ].filter((reference): reference is ObjectReference => Boolean(reference));
 }
@@ -75,6 +78,7 @@ function objectReferenceFromPresentationRef(input: {
   kind?: string;
   summary?: string;
   status?: string;
+  presentationRole?: string;
 }): ObjectReference | undefined {
   if (!input.ref) return undefined;
   const ref = displayObjectRef(input.ref, input.kind);
@@ -84,6 +88,7 @@ function objectReferenceFromPresentationRef(input: {
     title: input.label ?? ref,
     kind,
     ref,
+    presentationRole: normalizeObjectReferencePresentationRole(input.presentationRole),
     actions: kind === 'file' || kind === 'folder'
       ? ['focus-right-pane', 'reveal-in-folder', 'copy-path', 'pin']
       : ['focus-right-pane', 'inspect', 'copy-path', 'pin'],

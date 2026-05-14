@@ -593,3 +593,69 @@ test('raw required artifact type is ignored without projection', () => {
   assert.equal(displayIntentItems.some((item) => item.artifact?.id === 'pdb-result'), true);
   assert.ok(plan.diagnostics.some((line) => line.includes('没有 ConversationProjection')));
 });
+
+test('artifact delivery audit-only refs stay out of primary projection result plan', () => {
+  const report: RuntimeArtifact = {
+    id: 'readable-report',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    dataRef: '.sciforge/sessions/session/task-results/report.md',
+    delivery: {
+      contractId: 'sciforge.artifact-delivery.v1',
+      ref: 'artifact:readable-report',
+      role: 'primary-deliverable',
+      declaredMediaType: 'text/markdown',
+      declaredExtension: 'md',
+      contentShape: 'raw-file',
+      readableRef: '.sciforge/sessions/session/task-results/report.md',
+      rawRef: '.sciforge/sessions/session/task-results/output.json',
+      previewPolicy: 'inline',
+    },
+  };
+  const rawPayload: RuntimeArtifact = {
+    id: 'raw-payload',
+    type: 'runtime-payload',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    dataRef: '.sciforge/sessions/session/task-results/output.json',
+    delivery: {
+      contractId: 'sciforge.artifact-delivery.v1',
+      ref: 'artifact:raw-payload',
+      role: 'internal',
+      declaredMediaType: 'application/json',
+      declaredExtension: 'json',
+      contentShape: 'json-envelope',
+      rawRef: '.sciforge/sessions/session/task-results/output.json',
+      previewPolicy: 'audit-only',
+    },
+  };
+  const activeRun: SciForgeRun = {
+    id: 'run-delivery',
+    scenarioId: 'literature-evidence-review',
+    status: 'completed',
+    prompt: 'write report',
+    response: 'Done',
+    createdAt: '2026-05-07T00:00:01.000Z',
+    raw: {
+      restoredConversationProjection: {
+        schemaVersion: 'sciforge.conversation-projection.v1',
+        runId: 'run-delivery',
+        visibleAnswer: { status: 'satisfied', text: 'Report ready', artifactRefs: ['artifact:readable-report', 'artifact:raw-payload'] },
+        artifacts: [
+          { ref: 'artifact:readable-report', label: 'Report' },
+          { ref: 'artifact:raw-payload', label: 'Raw payload' },
+        ],
+        executionProcess: [],
+        diagnostics: [],
+        auditRefs: ['artifact:raw-payload'],
+      },
+    },
+  };
+  const session = baseSession({ runs: [activeRun], artifacts: [report, rawPayload] });
+
+  const plan = resolveViewPlan({ scenarioId: 'literature-evidence-review', session, activeRun, defaultSlots: [] });
+
+  assert.ok(plan.allItems.some((item) => item.artifact?.id === 'readable-report'));
+  assert.equal(plan.allItems.some((item) => item.artifact?.id === 'raw-payload'), false);
+});

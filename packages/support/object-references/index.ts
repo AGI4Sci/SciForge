@@ -19,6 +19,7 @@ import {
   titleForArtifact,
   visionTraceFinalScreenshotRef,
 } from './helpers';
+import { artifactPresentationRole } from './presentation-role';
 
 export { stableHash } from './helpers';
 export {
@@ -30,6 +31,13 @@ export {
   normalizeResponseObjectReferences,
 } from './response-normalization';
 export type { NormalizeResponseObjectReferencesInput } from './response-normalization';
+export {
+  artifactPresentationRole,
+  displayTitleForObjectReference,
+  isUserFacingObjectReference,
+  normalizeObjectReferencePresentationRole,
+  objectReferencePresentationRole,
+} from './presentation-role';
 export {
   artifactTypeForUploadedFileLike,
   previewKindForUploadedFileLike,
@@ -314,6 +322,7 @@ export function objectReferenceForUploadedArtifact(artifact: RuntimeArtifact): O
     ref: `artifact:${artifact.id}`,
     artifactType: artifact.type,
     preferredView: artifact.type === 'uploaded-image' || artifact.type === 'uploaded-pdf' ? 'preview' : 'generic-artifact-inspector',
+    presentationRole: 'supporting-evidence',
     actions: ['focus-right-pane', 'inspect', 'open-external', 'reveal-in-folder', 'copy-path', 'pin'],
     status: 'available',
     summary: '用户上传到证据矩阵的文件',
@@ -336,11 +345,12 @@ export function objectReferenceForArtifactSummary(artifact: RuntimeArtifact, run
     ref: `artifact:${artifact.id}`,
     artifactType: artifact.type,
     preferredView: artifact.type === 'research-report' ? 'report-viewer' : artifact.type === 'uploaded-image' || artifact.type === 'uploaded-pdf' ? 'preview' : 'generic-artifact-inspector',
+    presentationRole: artifactPresentationRole(artifact),
     runId,
     status: 'available',
     summary: artifact.type === 'vision-trace' && finalScreenshotRef ? `Vision trace; final screenshot: ${finalScreenshotRef}` : undefined,
     provenance: {
-      dataRef: artifact.dataRef,
+      dataRef: artifact.delivery?.readableRef ?? artifact.dataRef,
       path: preferredPath,
       producer: artifact.producerScenario,
       screenshotRef: finalScreenshotRef,

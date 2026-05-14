@@ -1,10 +1,13 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import {
+  validateArtifactDeliveryContract,
+  type ArtifactDelivery,
+} from '@sciforge-ui/runtime-contract';
+import {
   artifactDataForUnparsedPathText,
   artifactDataReadRequestsForPolicy,
   materializedMarkdownMetadataForArtifact,
-  materializedMarkdownTextForArtifact,
   normalizeArtifactDataWithPolicy,
 } from '@sciforge-ui/runtime-contract/artifact-policy';
 import type { GatewayRequest, ToolPayload } from '../runtime-types.js';
@@ -31,26 +34,26 @@ export async function materializeBackendPayloadOutput(
   const markdownRefs: string[] = [];
   const artifacts = await Promise.all(payload.artifacts.map(async (artifact) => {
     const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
-    const markdown = materializedMarkdownTextForArtifact(artifact);
-    const markdownRel = markdown
-      ? markdownTaskResultRel(outputRel, artifact)
-      : undefined;
-    if (markdown && markdownRel) {
-      await mkdir(dirname(join(workspace, markdownRel)), { recursive: true });
-      await writeFile(join(workspace, markdownRel), markdown);
-      markdownRefs.push(markdownRel);
+    const delivery = await materializeArtifactDelivery({ workspace, outputRel, artifact });
+    if (delivery.readableRel && delivery.targetFormat === 'markdown') markdownRefs.push(delivery.readableRel);
+    if (delivery.errors.length) {
+      metadata.deliveryValidationErrors = delivery.errors;
     }
     const existingDataRef = stringField(artifact.dataRef);
     return {
       ...artifact,
-      dataRef: stableWorkspaceRef(existingDataRef) ?? markdownRel ?? outputRel,
+      dataRef: delivery.readableRel ?? stableWorkspaceRef(existingDataRef) ?? outputRel,
+      delivery: delivery.contract,
       metadata: {
         ...metadata,
         outputRef: stableWorkspaceRef(stringField(metadata.outputRef)) ?? outputRel,
         taskCodeRef: stableWorkspaceRef(stringField(metadata.taskCodeRef)) ?? refs.taskRel,
         stdoutRef: stableWorkspaceRef(stringField(metadata.stdoutRef)) ?? refs.stdoutRel,
         stderrRef: stableWorkspaceRef(stringField(metadata.stderrRef)) ?? refs.stderrRel,
-        ...materializedMarkdownMetadataForArtifact(metadata, markdownRel),
+        ...materializedMarkdownMetadataForArtifact(metadata, delivery.targetFormat === 'markdown' ? delivery.readableRel : undefined),
+        readableRef: delivery.readableRel ?? stableWorkspaceRef(existingDataRef),
+        rawRef: outputRel,
+        previewPolicy: delivery.contract.previewPolicy,
         materializedOutputRef: outputRel,
         materializedAt: new Date().toISOString(),
       },
@@ -68,6 +71,185 @@ export async function materializeBackendPayloadOutput(
   await mkdir(dirname(join(workspace, outputRel)), { recursive: true });
   await writeFile(join(workspace, outputRel), JSON.stringify(materialized, null, 2));
   return materialized;
+}
+
+type ReadableTargetFormat = 'markdown' | 'html' | 'csv' | 'tsv' | 'text' | 'json' | 'binary' | 'unknown';
+
+async function materializeArtifactDelivery({
+  workspace,
+  outputRel,
+  artifact,
+}: {
+  workspace: string;
+  outputRel: string;
+  artifact: Record<string, unknown>;
+}): Promise<{
+  contract: ArtifactDelivery;
+  errors: string[];
+  readableRel?: string;
+  targetFormat: ReadableTargetFormat;
+}> {
+  const targetFormat = targetFormatForArtifact(artifact);
+  const readable = unwrapReadableContent(artifact, targetFormat);
+  const readableRel = readable && targetFormat !== 'json' && targetFormat !== 'binary' && targetFormat !== 'unknown'
+    ? readableTaskResultRel(outputRel, artifact, extensionForTargetFormat(targetFormat))
+    : undefined;
+  if (readable && readableRel) {
+    await mkdir(dirname(join(workspace, readableRel)), { recursive: true });
+    await writeFile(join(workspace, readableRel), readable);
+  }
+  const existingRef = stableWorkspaceRef(stringField(artifact.dataRef)) ?? stableWorkspaceRef(stringField(artifact.path));
+  const role = artifactDeliveryRole(artifact, Boolean(readableRel));
+  const contentShape = readableRel
+    ? 'raw-file'
+    : targetFormat === 'json'
+      ? 'json-envelope'
+      : targetFormat === 'binary'
+        ? 'binary-ref'
+        : existingRef && /^[a-z]+:\/\//i.test(existingRef)
+          ? 'external-ref'
+          : 'raw-file';
+  const previewPolicy = role === 'audit' || role === 'diagnostic' || role === 'internal'
+    ? 'audit-only'
+    : readableRel || (existingRef && ['markdown', 'html', 'csv', 'tsv', 'text', 'json'].includes(targetFormat))
+      ? 'inline'
+      : targetFormat === 'binary'
+        ? 'open-system'
+        : 'unsupported';
+  const contract: ArtifactDelivery = {
+    contractId: 'sciforge.artifact-delivery.v1',
+    ref: `artifact:${String(artifact.id || artifact.type || 'artifact')}`,
+    role,
+    declaredMediaType: mediaTypeForTargetFormat(targetFormat),
+    declaredExtension: extensionForTargetFormat(targetFormat),
+    contentShape,
+    readableRef: readableRel ?? existingRef,
+    rawRef: outputRel,
+    previewPolicy,
+  };
+  return {
+    contract,
+    errors: validateArtifactDeliveryContract({
+      id: String(artifact.id || artifact.type || 'artifact'),
+      dataRef: readableRel ?? existingRef,
+      path: stringField(artifact.path),
+      delivery: contract,
+    }),
+    readableRel,
+    targetFormat,
+  };
+}
+
+function unwrapReadableContent(artifact: Record<string, unknown>, targetFormat: ReadableTargetFormat): string | undefined {
+  if (!['markdown', 'html', 'csv', 'tsv', 'text'].includes(targetFormat)) return undefined;
+  const fields = readableFieldCandidates(targetFormat);
+  for (const source of [artifact.data, artifact]) {
+    const unwrapped = unwrapReadableContentFromValue(source, fields);
+    if (unwrapped) return unwrapped;
+  }
+  return undefined;
+}
+
+function unwrapReadableContentFromValue(value: unknown, fields: string[]): string | undefined {
+  if (typeof value === 'string') {
+    const parsed = parseJsonObjectPrefix(value);
+    if (parsed) return unwrapReadableContentFromValue(parsed, fields);
+    return looksReadableInlineText(value) ? value : undefined;
+  }
+  if (!isRecord(value)) return undefined;
+  for (const field of fields) {
+    const text = value[field];
+    if (typeof text === 'string' && looksReadableInlineText(text)) return text;
+  }
+  return undefined;
+}
+
+function parseJsonObjectPrefix(value: string) {
+  const text = value.trim();
+  if (!text.startsWith('{') || text.length > 64_000) return undefined;
+  try {
+    const parsed = JSON.parse(text);
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function looksReadableInlineText(value: string) {
+  const text = value.trim();
+  return text.length > 0 && !text.startsWith('{') && !text.startsWith('[');
+}
+
+function readableFieldCandidates(targetFormat: ReadableTargetFormat) {
+  if (targetFormat === 'markdown') return ['markdown', 'reportMarkdown', 'report', 'content', 'text'];
+  if (targetFormat === 'html') return ['html', 'content', 'text'];
+  if (targetFormat === 'csv') return ['csv', 'content', 'text'];
+  if (targetFormat === 'tsv') return ['tsv', 'content', 'text'];
+  return ['text', 'content'];
+}
+
+function targetFormatForArtifact(artifact: Record<string, unknown>): ReadableTargetFormat {
+  const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+  const declared = [
+    stringField(artifact.dataRef),
+    stringField(artifact.path),
+    stringField(metadata.markdownRef),
+    stringField(metadata.reportRef),
+    stringField(metadata.path),
+    stringField(metadata.filePath),
+  ].find(Boolean);
+  const type = String(artifact.type || artifact.id || '').toLowerCase();
+  const ref = (declared ?? '').toLowerCase();
+  if (/\.m(?:d|arkdown)(?:$|[?#])/.test(ref) || /report|markdown|summary|text/.test(type)) return 'markdown';
+  if (/\.html?(?:$|[?#])/.test(ref) || /html/.test(type)) return 'html';
+  if (/\.csv(?:$|[?#])/.test(ref) || /csv|table|matrix|dataset/.test(type)) return 'csv';
+  if (/\.tsv(?:$|[?#])/.test(ref)) return 'tsv';
+  if (/\.txt(?:$|[?#])/.test(ref)) return 'text';
+  if (/\.json(?:$|[?#])/.test(ref) || /json|payload|manifest|schema/.test(type)) return 'json';
+  if (/\.(?:pdf|png|jpe?g|gif|webp|svg|docx?|xlsx?|pptx?)(?:$|[?#])/.test(ref)) return 'binary';
+  return 'unknown';
+}
+
+function artifactDeliveryRole(artifact: Record<string, unknown>, hasReadableRef: boolean): ArtifactDelivery['role'] {
+  const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+  const explicit = stringField(artifact.presentationRole) ?? stringField(metadata.presentationRole);
+  if (isArtifactDeliveryRole(explicit)) return explicit;
+  const type = String(artifact.type || artifact.id || '').toLowerCase();
+  const ref = [artifact.dataRef, artifact.path, metadata.artifactRef, metadata.outputRef].map(stringField).filter(Boolean).join(' ').toLowerCase();
+  if (/stdout|stderr|log|diagnostic|failure|error/.test(`${type} ${ref}`)) return 'diagnostic';
+  if (/runtime|execution-unit|trace|audit|checkpoint|payload|raw|context-summary/.test(`${type} ${ref}`)) return 'audit';
+  if (hasReadableRef || /report|summary|markdown|document|html|table|matrix|dataset|paper-list|evidence/.test(type)) {
+    return /report|summary|markdown|document/.test(type) ? 'primary-deliverable' : 'supporting-evidence';
+  }
+  return 'internal';
+}
+
+function isArtifactDeliveryRole(value: string | undefined): value is ArtifactDelivery['role'] {
+  return value === 'primary-deliverable'
+    || value === 'supporting-evidence'
+    || value === 'audit'
+    || value === 'diagnostic'
+    || value === 'internal';
+}
+
+function extensionForTargetFormat(targetFormat: ReadableTargetFormat) {
+  if (targetFormat === 'markdown') return 'md';
+  if (targetFormat === 'html') return 'html';
+  if (targetFormat === 'csv') return 'csv';
+  if (targetFormat === 'tsv') return 'tsv';
+  if (targetFormat === 'text') return 'txt';
+  if (targetFormat === 'json') return 'json';
+  return 'bin';
+}
+
+function mediaTypeForTargetFormat(targetFormat: ReadableTargetFormat) {
+  if (targetFormat === 'markdown') return 'text/markdown';
+  if (targetFormat === 'html') return 'text/html';
+  if (targetFormat === 'csv') return 'text/csv';
+  if (targetFormat === 'tsv') return 'text/tab-separated-values';
+  if (targetFormat === 'text') return 'text/plain';
+  if (targetFormat === 'json') return 'application/json';
+  return 'application/octet-stream';
 }
 
 export async function persistArtifactRefsForPayload(
@@ -138,10 +320,14 @@ function stableWorkspaceRef(value: string | undefined) {
 }
 
 function markdownTaskResultRel(outputRel: string, artifact: Record<string, unknown>) {
+  return readableTaskResultRel(outputRel, artifact, 'md');
+}
+
+function readableTaskResultRel(outputRel: string, artifact: Record<string, unknown>, extension: string) {
   const outputName = outputRel.split('/').pop() ?? 'result.json';
   const outputStem = outputName.replace(/\.[^.]+$/, '') || 'result';
   const id = safeArtifactId(String(artifact.id || artifact.type || 'artifact'));
-  return `${dirname(outputRel)}/${safeArtifactId(outputStem)}-${id}.md`;
+  return `${dirname(outputRel)}/${safeArtifactId(outputStem)}-${id}.${extension}`;
 }
 
 function backendOutputObjectReferences(

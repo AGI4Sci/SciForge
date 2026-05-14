@@ -38,6 +38,35 @@
 
 ## 任务板
 
+### 2026-05-14 Milestone：Artifact Delivery Contract
+
+本轮将“用户交付物 vs raw payload”收敛为一致 contract：主结果必须有格式一致的 readable ref，JSON envelope 只能作为 raw/audit ref 保留，UI 不再把不支持或内部格式伪装成主结果。
+
+- [x] 新增 `ArtifactDelivery` contract 与 validator，表达 role、declaredMediaType、declaredExtension、contentShape、readableRef、rawRef 和 previewPolicy。
+- [x] materializer 增加轻量 `unwrapReadableContent`，从 JSON envelope 中抽取 markdown/html/csv/tsv/text 并写出真实 workspace 文件；原始 payload 保留为 rawRef。
+- [x] projection/view plan/result renderer 按 `previewPolicy` 分流：inline 进入内置预览，audit-only 不进主结果，open-system/unsupported 显示系统打开或不可内联预览说明。
+
+本轮验证：
+
+- [x] `node --import tsx --test packages/contracts/runtime/artifacts.test.ts src/runtime/gateway/artifact-materializer.test.ts src/ui/src/app/results/viewPlanResolver.test.ts src/ui/src/app/results-renderer-execution-model.test.ts`
+- [x] `npm run typecheck`
+- [x] `git diff --check`
+
+### 2026-05-14 Milestone：Generated Task 最小失败协议
+
+本轮按“尽可能简洁、够用”的原则收敛 generated workspace task 失败边界，不引入 provider adapter、全局熔断或复杂阶段框架。目标是让任何任务失败时都有结构化结果、日志 refs 和明确下一步。
+
+- [x] 更新 `docs/Architecture.md`、`docs/Extending.md`、`docs/AgentHarnessStandard.md`：明确 runner 先写 `running` checkpoint，失败/超时/缺 output 时写最小 `failed-with-reason` payload。
+- [x] `runWorkspaceTask` 执行前写最小 running output；异常时若任务没有自写最终 output，则覆盖为合法 `failed-with-reason` ToolPayload，并保留 code/input/output/stdout/stderr/exitCode/failureReason/recoverActions/nextStep。
+- [x] generated task validation 接受 `failed-with-reason` 作为合法终态，不再仅因非零 exit code 自动进入 repair。
+- [x] AgentServer repair 如果没有任务代码变更，立即记录为 repair no-op 风格失败并停止 rerun；repair rerun 返回 `failed-with-reason` payload 时也不继续递归修复。
+
+本轮验证：
+
+- [x] `node --import tsx --test src/runtime/workspace-task-runner.test.ts src/runtime/gateway/generated-task-runner-output-lifecycle.test.ts`
+- [x] `npm run typecheck`
+- [x] `git diff --check`
+
 ### 2026-05-14 Milestone：设计文档最终形态正文化
 
 本轮按最新实现状态更新 `docs/Architecture.md`，目标是让设计文档正文直接表达 Conversation Kernel v2 的最终形态，而不是把最终形态留在尾部建议或实现清单里。

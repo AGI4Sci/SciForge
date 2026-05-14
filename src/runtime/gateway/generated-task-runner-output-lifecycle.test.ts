@@ -335,3 +335,116 @@ test('unstructured provider 429 payload is external blocked instead of repair-re
   assert.equal((payload.executionUnits[0]?.failureOwner as Record<string, unknown> | undefined)?.action, 'retry-after-backoff');
   assert.match(JSON.stringify(payload), /External provider appears transiently unavailable/);
 });
+
+test('failed-with-reason payload is a valid terminal result even when process exits nonzero', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-generated-terminal-failure-'));
+  const sessionBundleRel = '.sciforge/sessions/2026-05-14_terminal-failure';
+  await mkdir(join(workspace, sessionBundleRel, 'task-results'), { recursive: true });
+  const outputRel = `${sessionBundleRel}/task-results/generated-terminal-failure.json`;
+  await writeFile(join(workspace, outputRel), `${JSON.stringify({
+    message: 'The task failed after recording enough diagnostic context.',
+    confidence: 0.2,
+    claimType: 'failed-with-reason',
+    evidenceLevel: 'runtime',
+    reasoningTrace: 'runner fallback payload',
+    claims: [],
+    uiManifest: [],
+    executionUnits: [{
+      id: 'terminal-failure',
+      status: 'failed-with-reason',
+      failureReason: 'provider returned no usable response after bounded retries',
+      outputRef: outputRel,
+      stdoutRef: `${sessionBundleRel}/logs/generated-terminal-failure.stdout.log`,
+      stderrRef: `${sessionBundleRel}/logs/generated-terminal-failure.stderr.log`,
+    }],
+    artifacts: [],
+  }, null, 2)}\n`);
+
+  let repairAttempted = false;
+  const request = {
+    workspacePath: workspace,
+    skillDomain: 'literature',
+    prompt: 'Retrieve papers and honestly fail if blocked.',
+    artifacts: [],
+    uiState: {
+      sessionId: 'session-terminal-failure',
+      sessionCreatedAt: '2026-05-14T03:00:00.000Z',
+    },
+  } as GatewayRequest;
+  const skill = {
+    id: 'literature-test',
+    kind: 'builtin',
+    available: true,
+    checkedAt: '2026-05-14T03:00:00.000Z',
+    reason: 'test',
+  } as unknown as SkillAvailability;
+  const run = {
+    spec: {
+      id: 'generated-terminal-failure',
+      language: 'python',
+      entrypoint: 'main',
+      taskRel: `${sessionBundleRel}/tasks/generated-terminal-failure/task.py`,
+    },
+    workspace,
+    command: 'python3',
+    args: [],
+    exitCode: 1,
+    stdout: '',
+    stderr: 'provider returned no usable response after bounded retries',
+    stdoutRef: `${sessionBundleRel}/logs/generated-terminal-failure.stdout.log`,
+    stderrRef: `${sessionBundleRel}/logs/generated-terminal-failure.stderr.log`,
+    outputRef: outputRel,
+    runtimeFingerprint: { language: 'python', command: 'python3' },
+  } as unknown as WorkspaceTaskRunResult;
+
+  const payload = await completeGeneratedTaskRunOutputLifecycle({
+    workspace,
+    request,
+    skill,
+    skills: [skill],
+    taskId: 'generated-terminal-failure',
+    generation: {
+      ok: true,
+      runId: 'run-terminal-failure',
+      response: {
+        taskFiles: [],
+        entrypoint: { language: 'python', path: 'tasks/generated-terminal-failure/task.py' },
+        environmentRequirements: {},
+        validationCommand: '',
+        expectedArtifacts: [],
+      },
+    },
+    run,
+    taskRel: run.spec.taskRel,
+    inputRel: `${sessionBundleRel}/task-inputs/generated-terminal-failure.json`,
+    outputRel,
+    stdoutRel: run.stdoutRef,
+    stderrRel: run.stderrRef,
+    supplementArtifactTypes: [],
+    runGeneratedTask: async () => undefined,
+    deps: {
+      attemptPlanRefs: () => ({}),
+      failedTaskPayload,
+      tryAgentServerRepairAndRerun: async () => {
+        repairAttempted = true;
+        return undefined;
+      },
+      validateAndNormalizePayload: async (value: ToolPayload) => value,
+      coerceWorkspaceTaskPayload: () => undefined,
+      schemaErrors: () => [],
+      firstPayloadFailureReason: (value: ToolPayload) => {
+        const unit = value.executionUnits.find((entry) => typeof entry === 'object' && entry !== null) as Record<string, unknown> | undefined;
+        return typeof unit?.failureReason === 'string' ? unit.failureReason : undefined;
+      },
+      payloadHasFailureStatus: (value: ToolPayload) => value.executionUnits.some((entry) => {
+        const status = typeof entry === 'object' && entry !== null ? (entry as Record<string, unknown>).status : undefined;
+        return /failed|error/i.test(String(status || ''));
+      }),
+      repairNeededPayload: failedTaskPayload as never,
+    } as never,
+  });
+
+  assert.equal(repairAttempted, false);
+  assert.equal(payload.executionUnits[0]?.status, 'failed-with-reason');
+  assert.match(JSON.stringify(payload), /provider returned no usable response/);
+});

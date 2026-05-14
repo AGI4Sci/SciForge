@@ -283,6 +283,7 @@ function normalizeArtifact(value: unknown, fallbackScenario: RuntimeArtifact['pr
     dataRef: asString(value.dataRef),
     data: value.data,
     metadata: isRecord(value.metadata) ? value.metadata : undefined,
+    delivery: isRecord(value.delivery) ? value.delivery as unknown as RuntimeArtifact['delivery'] : undefined,
   };
 }
 

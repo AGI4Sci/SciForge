@@ -347,6 +347,8 @@ SciForge 每轮只传必要上下文：最近消息、当前 selection、visible
 
 `agentserver://.../output` 等 backend 临时 URI 必须可被 resolver 读取，或在 run completed 前 materialize 成 `.sciforge/task-results/*.json|md` 稳定 workspace ref。UI 只应依赖稳定 refs 重建结果面板。
 
+每个可展示 artifact 必须带 `ArtifactDelivery` contract，声明 `role`、`declaredMediaType`、`declaredExtension`、`contentShape`、`readableRef`、`rawRef` 和 `previewPolicy`。materializer 可以用轻量规则把 JSON envelope 中的 `markdown/content/html/csv/text` 拆成真实可读文件，但原始 payload 必须保留为 `rawRef`。`primary-deliverable` 和 `supporting-evidence` 只能进入 `ConversationProjection` 的可见结果；`audit`、`diagnostic` 和 `internal` 只进入审计通道。UI renderer 只按 `previewPolicy` 分流：`inline` 走内置预览，`open-system` 走 workspace writer 的系统默认程序打开，`audit-only` 默认折叠，`unsupported` 显示不可内联预览而不把 JSON fallback 伪装成主结果。
+
 ### 已落地的收敛路径
 
 最终形态按以下路径落地，后续回归应优先对照这些边界定位：
@@ -452,7 +454,7 @@ AgentServer 可以返回两类成功结果：
 
 stream 过程会透传 AgentServer normalized events。SciForge 支持标准 `{ "event": ... }` envelope，也兼容 AgentServer/上游 backend 直接输出的顶层 `status`、`text-delta`/`text_delta`、`tool-call`、`tool-result`、`usage-update`、`contextWindowState` 等 NDJSON 事件。非最终 `result` 的进度事件会先经过 `normalizeAgentServerWorkspaceEvent`，再作为 workspace runtime event 进入 UI worklog；这样用户可以看到 backend 正在检索、写文件、调用工具、等待权限或仍在运行，而不是只看到 HTTP stream silent wait。
 
-生成的 workspace task 必须通过 `inputPath` 和 `outputPath` argv 读写，最终输出合法 `ToolPayload`。如果 entrypoint 不是可执行代码，runtime 会进行严格重试；如果任务失败或 schema 不合格，runtime 会尝试 repair rerun，最后返回 `repair-needed` 或 `failed-with-reason`。
+生成的 workspace task 必须通过 `inputPath` 和 `outputPath` argv 读写，最终输出合法 `ToolPayload`。runtime runner 在执行前写入最小 `running` checkpoint；如果任务异常、超时或没有写出最终 output，runner 必须覆盖为最小 `failed-with-reason` payload，保留 `codeRef`、`inputRef`、`outputRef`、`stdoutRef`、`stderrRef`、`exitCode`、`failureReason`、`recoverActions` 和 `nextStep`。`failed-with-reason` 是合法终态，不再因为非零 exit code 自动进入 repair；只有 schema 错误、证据 guard 或明确 `repair-needed` 才触发 repair。repair 后没有任务代码变更时直接记录为 repair no-op，并停止 rerun。
 
 ## Conversation Policy
 

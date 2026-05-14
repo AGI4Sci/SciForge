@@ -15,8 +15,10 @@ const unknownArtifactInspectorComponentId = ['unknown', 'artifact', 'inspector']
 const executionUnitTableComponentId = ['execution', 'unit', 'table'].join('-');
 const workspaceTaskRunnerToolId = ['workspace', 'task', 'runner'].join('-');
 const partialCheckpointArtifactId = ['partial', 'checkpoint'].join('-');
+const failureCheckpointArtifactId = ['runtime', 'failure'].join('-');
 const tableArtifactType = ['data', 'table'].join('-');
 const reportArtifactType = ['research', 'report'].join('-');
+const runnerCheckpointContract = 'sciforge.workspace-task-runner-checkpoint.v1';
 
 export async function runWorkspaceTask(workspacePath: string, spec: WorkspaceTaskSpec): Promise<WorkspaceTaskRunResult> {
   const workspace = resolve(workspacePath || process.cwd());
@@ -64,6 +66,18 @@ export async function runWorkspaceTask(workspacePath: string, spec: WorkspaceTas
   const entrypointArgs = explicitEntrypointArgs ?? await inferEntrypointArgsFromTask(taskPath, taskInputArg);
   const args = argsFor(spec.language, taskPath, taskInputArg, outputPath, spec.entrypoint, entrypointArgs);
   const runtimeFingerprint = await fingerprint(command, spec.language);
+  await writeWorkspaceTaskRunningPayload({
+    workspace,
+    spec: concreteSpec,
+    taskRel,
+    inputRel,
+    outputRel: spec.outputRel,
+    stdoutRel: spec.stdoutRel,
+    stderrRel: spec.stderrRel,
+    outputPath,
+    command,
+    args,
+  });
   const checkpointBaseline = await snapshotSessionBundleFiles(workspace, sessionBundleRel);
   try {
     const result = await execFileAsync(command, args, {
@@ -346,17 +360,20 @@ async function maybeWritePartialCheckpointPayload(input: {
   error: unknown;
   baseline: Map<string, number>;
 }) {
-  if (!input.sessionBundleRel || await fileExists(input.outputPath)) return;
-  const files = await discoverPartialCheckpointFiles(input);
-  if (!files.length) return;
+  const currentOutput = await readTextIfExistsLocal(input.outputPath);
+  if (currentOutput !== undefined && !isWorkspaceTaskRunnerCheckpoint(currentOutput)) return;
+  const files = input.sessionBundleRel ? await discoverPartialCheckpointFiles(input) : [];
 
   const partialRefs = files.map((file) => file.rel);
   const failureReason = taskFailureReason(input.error, input.exitCode, input.stderr);
   const payload = {
-    message: `Generated workspace task stopped before a final result, but SciForge preserved ${files.length} partial file${files.length === 1 ? '' : 's'} for repair or continuation.`,
-    confidence: 0.35,
-    claimType: 'partial-checkpoint',
-    evidenceLevel: 'partial-runtime',
+    status: files.length ? 'partial' : 'failed-with-reason',
+    message: files.length
+      ? `Generated workspace task stopped before a final result, but SciForge preserved ${files.length} partial file${files.length === 1 ? '' : 's'} for repair or continuation.`
+      : 'Generated workspace task failed before writing a final ToolPayload. SciForge wrote a minimal failure payload with runtime refs.',
+    confidence: files.length ? 0.35 : 0.2,
+    claimType: files.length ? 'partial-checkpoint' : 'failed-with-reason',
+    evidenceLevel: 'runtime',
     reasoningTrace: [
       'SciForge runtime wrote this checkpoint after the workspace task failed before producing a final ToolPayload.',
       `failureReason=${failureReason}`,
@@ -367,20 +384,20 @@ async function maybeWritePartialCheckpointPayload(input: {
       `stderrRef=${input.stderrRel}`,
       `partialRefs=${partialRefs.join(', ')}`,
     ].join('\n'),
-    claims: [{
+    claims: files.length ? [{
       text: `${files.length} partial file${files.length === 1 ? '' : 's'} are available for continuation.`,
       type: 'partial-checkpoint',
       confidence: 0.35,
       evidenceLevel: 'partial-runtime',
       supportingRefs: partialRefs,
-    }],
+    }] : [],
     uiManifest: [
-      { componentId: unknownArtifactInspectorComponentId, artifactRef: partialCheckpointArtifactId, priority: 1 },
-      { componentId: executionUnitTableComponentId, artifactRef: partialCheckpointArtifactId, priority: 2 },
+      { componentId: unknownArtifactInspectorComponentId, artifactRef: files.length ? partialCheckpointArtifactId : failureCheckpointArtifactId, priority: 1 },
+      { componentId: executionUnitTableComponentId, artifactRef: files.length ? partialCheckpointArtifactId : failureCheckpointArtifactId, priority: 2 },
     ],
     executionUnits: [{
-      id: `${safeId(input.spec.id)}-partial-checkpoint`,
-      status: 'repair-needed',
+      id: `${safeId(input.spec.id)}-${files.length ? 'partial-checkpoint' : 'runtime-failure'}`,
+      status: 'failed-with-reason',
       tool: workspaceTaskRunnerToolId,
       codeRef: input.taskRel,
       inputRef: input.inputRel,
@@ -390,11 +407,13 @@ async function maybeWritePartialCheckpointPayload(input: {
       exitCode: input.exitCode,
       failureReason,
       recoverActions: [
-        'reuse-partial-artifact-refs',
+        ...(files.length ? ['reuse-partial-artifact-refs'] : []),
         'inspect-stdout-stderr',
         'resume-or-repair-generated-task',
       ],
-      nextStep: 'Continue or repair the generated task using the preserved partial file refs instead of starting from an empty failed run.',
+      nextStep: files.length
+        ? 'Continue or repair the generated task using the preserved partial file refs instead of starting from an empty failed run.'
+        : 'Inspect stdout/stderr and repair or rerun the generated task; the runtime failure payload is already available as outputRef.',
       partialRefs,
     }],
     artifacts: [
@@ -424,15 +443,19 @@ async function maybeWritePartialCheckpointPayload(input: {
       status: 'partial',
       provider: 'workspace-task-runner',
       resultCount: files.length,
-      outputSummary: `Preserved ${files.length} partial file${files.length === 1 ? '' : 's'} after a failed generated workspace task.`,
+      outputSummary: files.length
+        ? `Preserved ${files.length} partial file${files.length === 1 ? '' : 's'} after a failed generated workspace task.`
+        : 'Generated workspace task failed before writing output; runner wrote this minimal failure payload.',
       evidenceRefs: partialRefs,
       failureReason,
       recoverActions: [
-        'reuse-partial-artifact-refs',
+        ...(files.length ? ['reuse-partial-artifact-refs'] : []),
         'inspect-stdout-stderr',
         'resume-or-repair-generated-task',
       ],
-      nextStep: 'Use the partial refs as continuation input before retrying expensive external fetch work.',
+      nextStep: files.length
+        ? 'Use the partial refs as continuation input before retrying expensive external fetch work.'
+        : 'Inspect stdout/stderr and repair or rerun the generated task.',
       rawRef: input.outputRel,
       diagnostics: [
         `exitCode=${input.exitCode}`,
@@ -449,6 +472,91 @@ async function maybeWritePartialCheckpointPayload(input: {
   }
 }
 
+async function writeWorkspaceTaskRunningPayload(input: {
+  workspace: string;
+  spec: WorkspaceTaskSpec;
+  taskRel: string;
+  inputRel: string;
+  outputRel: string;
+  stdoutRel: string;
+  stderrRel: string;
+  outputPath: string;
+  command: string;
+  args: string[];
+}) {
+  const payload = {
+    status: 'running',
+    message: 'Workspace task is running. SciForge wrote this checkpoint before executing the generated task.',
+    confidence: 0.1,
+    claimType: 'runtime-checkpoint',
+    evidenceLevel: 'runtime',
+    reasoningTrace: [
+      `contract=${runnerCheckpointContract}`,
+      `taskRef=${input.taskRel}`,
+      `inputRef=${input.inputRel}`,
+      `outputRef=${input.outputRel}`,
+      `stdoutRef=${input.stdoutRel}`,
+      `stderrRef=${input.stderrRel}`,
+    ].join('\n'),
+    claims: [],
+    uiManifest: [
+      { componentId: executionUnitTableComponentId, artifactRef: failureCheckpointArtifactId, priority: 1 },
+    ],
+    executionUnits: [{
+      id: `${safeId(input.spec.id)}-running`,
+      status: 'running',
+      tool: workspaceTaskRunnerToolId,
+      codeRef: input.taskRel,
+      inputRef: input.inputRel,
+      outputRef: input.outputRel,
+      stdoutRef: input.stdoutRel,
+      stderrRef: input.stderrRel,
+      command: input.command,
+      args: input.args,
+      time: new Date().toISOString(),
+    }],
+    artifacts: [{
+      id: failureCheckpointArtifactId,
+      type: 'runtime-diagnostic',
+      schemaVersion: runnerCheckpointContract,
+      data: {
+        status: 'running',
+        taskId: input.spec.id,
+        refs: {
+          taskRel: input.taskRel,
+          inputRel: input.inputRel,
+          outputRel: input.outputRel,
+          stdoutRel: input.stdoutRel,
+          stderrRel: input.stderrRel,
+        },
+      },
+      metadata: {
+        status: 'running',
+        source: 'workspace-task-runner',
+        checkpointContract: runnerCheckpointContract,
+        createdAt: new Date().toISOString(),
+      },
+    }],
+    logs: [
+      { kind: 'stdout', ref: input.stdoutRel },
+      { kind: 'stderr', ref: input.stderrRel },
+    ],
+  };
+  await writeFile(input.outputPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+}
+
+async function readTextIfExistsLocal(path: string) {
+  try {
+    return await readFile(path, 'utf8');
+  } catch {
+    return undefined;
+  }
+}
+
+function isWorkspaceTaskRunnerCheckpoint(value: string) {
+  return value.includes(runnerCheckpointContract);
+}
+
 function partialCheckpointDiagnosticArtifact(
   input: {
     spec: WorkspaceTaskSpec;
@@ -462,12 +570,13 @@ function partialCheckpointDiagnosticArtifact(
   files: PartialCheckpointFile[],
   failureReason: string,
 ) {
+  const status = files.length ? 'partial' : 'failed-with-reason';
   return {
-    id: 'partial-checkpoint',
+    id: files.length ? partialCheckpointArtifactId : failureCheckpointArtifactId,
     type: 'runtime-diagnostic',
     schemaVersion: 'sciforge.partial-checkpoint.v1',
     data: {
-      status: 'partial',
+      status,
       taskId: input.spec.id,
       failureReason,
       exitCode: input.exitCode,
@@ -491,7 +600,7 @@ function partialCheckpointDiagnosticArtifact(
       ],
     },
     metadata: {
-      status: 'partial',
+      status,
       source: 'workspace-task-runner',
       taskCodeRef: input.taskRel,
       inputRef: input.inputRel,

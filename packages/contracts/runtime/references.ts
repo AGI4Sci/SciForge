@@ -2,6 +2,7 @@ import type { RuntimeArtifact } from './artifacts';
 
 export type ObjectReferenceKind = 'artifact' | 'file' | 'folder' | 'run' | 'execution-unit' | 'url' | 'scenario-package';
 export type ObjectReferenceStatus = 'available' | 'missing' | 'expired' | 'blocked' | 'external';
+export type ObjectReferencePresentationRole = 'primary-deliverable' | 'supporting-evidence' | 'audit' | 'diagnostic' | 'internal';
 export type ObjectAction = 'focus-right-pane' | 'inspect' | 'open-external' | 'reveal-in-folder' | 'copy-path' | 'pin' | 'compare';
 
 export const objectReferenceKinds = [
@@ -63,6 +64,7 @@ export interface ObjectReference {
   runId?: string;
   executionUnitId?: string;
   preferredView?: string;
+  presentationRole?: ObjectReferencePresentationRole;
   actions?: ObjectAction[];
   status?: ObjectReferenceStatus;
   summary?: string;

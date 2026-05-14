@@ -10,6 +10,7 @@ import {
   previewDescriptorSources as contractPreviewDescriptorSources,
   previewInlinePolicies as contractPreviewInlinePolicies,
   previewLocatorHintKinds as contractPreviewLocatorHintKinds,
+  validateArtifactDeliveryContract,
 } from '@sciforge-ui/runtime-contract';
 
 export const objectReferenceKinds = contractObjectReferenceKinds satisfies readonly ObjectReferenceKind[];
@@ -115,6 +116,7 @@ export const runtimeContractSchemas = {
       runId: { type: 'string' },
       executionUnitId: { type: 'string' },
       preferredView: { type: 'string' },
+      presentationRole: { enum: ['primary-deliverable', 'supporting-evidence', 'audit', 'diagnostic', 'internal'] },
       actions: { type: 'array', items: { enum: objectActions } },
       status: { enum: ['available', 'missing', 'expired', 'blocked', 'external'] },
       summary: { type: 'string' },
@@ -155,6 +157,22 @@ export const runtimeContractSchemas = {
       actions: { type: 'array', items: { enum: artifactPreviewActions } },
       diagnostics: { type: 'array', items: { type: 'string' } },
       locatorHints: { type: 'array', items: { enum: previewLocatorHintKinds } },
+    },
+  },
+  artifactDelivery: {
+    $id: 'sciforge.artifact-delivery.schema.json',
+    type: 'object',
+    required: ['contractId', 'ref', 'role', 'declaredMediaType', 'declaredExtension', 'contentShape', 'previewPolicy'],
+    properties: {
+      contractId: { const: 'sciforge.artifact-delivery.v1' },
+      ref: { type: 'string' },
+      role: { enum: ['primary-deliverable', 'supporting-evidence', 'audit', 'diagnostic', 'internal'] },
+      declaredMediaType: { type: 'string' },
+      declaredExtension: { type: 'string' },
+      contentShape: { enum: ['raw-file', 'json-envelope', 'binary-ref', 'external-ref'] },
+      readableRef: { type: 'string' },
+      rawRef: { type: 'string' },
+      previewPolicy: { enum: ['inline', 'open-system', 'audit-only', 'unsupported'] },
     },
   },
   userGoalSnapshot: {
@@ -234,10 +252,20 @@ export function validateRuntimeContract(name: RuntimeContractName, value: unknow
   if (name === 'resolvedViewPlan') return validateResolvedViewPlan(value);
   if (name === 'objectReference') return validateObjectReference(value);
   if (name === 'previewDescriptor') return validatePreviewDescriptor(value);
+  if (name === 'artifactDelivery') return validateArtifactDelivery(value);
   if (name === 'userGoalSnapshot') return validateUserGoalSnapshot(value);
   if (name === 'turnAcceptance') return validateTurnAcceptance(value);
   if (name === 'backgroundCompletionEvent') return validateBackgroundCompletionEvent(value);
   return validateUIModulePackage(value);
+}
+
+function validateArtifactDelivery(value: unknown): string[] {
+  const errors = requireRecord(value, 'artifactDelivery');
+  if (errors.length) return errors;
+  return validateArtifactDeliveryContract({
+    id: 'contract-preview',
+    delivery: value as never,
+  });
 }
 
 export function schemaPreview(name: RuntimeContractName) {
@@ -280,6 +308,9 @@ function validateObjectReference(value: unknown): string[] {
   if (!nonEmptyString(record.title)) errors.push('objectReference.title is required');
   if (!objectReferenceKinds.includes(record.kind as ObjectReferenceKind)) errors.push('objectReference.kind is unsupported');
   if (!nonEmptyString(record.ref)) errors.push('objectReference.ref is required');
+  if (record.presentationRole !== undefined && !['primary-deliverable', 'supporting-evidence', 'audit', 'diagnostic', 'internal'].includes(String(record.presentationRole))) {
+    errors.push('objectReference.presentationRole is unsupported');
+  }
   if (record.actions !== undefined) {
     if (!Array.isArray(record.actions)) errors.push('objectReference.actions must be an array');
     for (const action of Array.isArray(record.actions) ? record.actions : []) {

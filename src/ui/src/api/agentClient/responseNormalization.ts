@@ -334,6 +334,7 @@ function normalizeRuntimeArtifacts(value: unknown, scenarioId: ScenarioInstanceI
       data: normalizeArtifactData(artifact),
       dataRef: asString(artifact.dataRef),
       path,
+      delivery: isRecord(artifact.delivery) ? artifact.delivery as unknown as RuntimeArtifact['delivery'] : undefined,
       visibility: asTimelineVisibility(artifact.visibility),
       audience: asStringArray(artifact.audience),
       sensitiveDataFlags: asStringArray(artifact.sensitiveDataFlags),

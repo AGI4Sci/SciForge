@@ -81,3 +81,50 @@ test('materialized markdown stays beside session-bundle task results', async () 
     await rm(workspace, { recursive: true, force: true });
   }
 });
+
+test('artifact delivery unwraps readable markdown and keeps raw payload as audit ref', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-artifact-delivery-'));
+  try {
+    const request: GatewayRequest = {
+      skillDomain: 'literature',
+      prompt: 'write a markdown report',
+      workspacePath: workspace,
+      artifacts: [],
+      uiState: { sessionId: 'session-1', sessionCreatedAt: '2026-05-12T00:00:00.000Z' },
+    };
+    const refs = backendPayloadRefs('direct-run', 'agentserver://direct-payload', '.sciforge/sessions/2026-05-12_literature_session-1');
+    const payload: ToolPayload = {
+      message: 'Report complete.',
+      confidence: 0.9,
+      claimType: 'result',
+      evidenceLevel: 'runtime',
+      reasoningTrace: 'delivery test',
+      claims: [],
+      uiManifest: [],
+      executionUnits: [{ id: 'direct', status: 'done', tool: 'agentserver.direct' }],
+      artifacts: [{
+        id: 'research-report',
+        type: 'research-report',
+        dataRef: refs.outputRel,
+        data: { content: '# arXiv report\n\nReadable markdown body.' },
+      }],
+    };
+
+    const materialized = await materializeBackendPayloadOutput(workspace, request, payload, refs);
+    const artifact = materialized.artifacts[0];
+    const markdownRef = '.sciforge/sessions/2026-05-12_literature_session-1/task-results/direct-run-research-report.md';
+
+    assert.equal(artifact.dataRef, markdownRef);
+    assert.equal((artifact.delivery as Record<string, unknown>).readableRef, markdownRef);
+    assert.equal((artifact.delivery as Record<string, unknown>).rawRef, refs.outputRel);
+    assert.equal((artifact.delivery as Record<string, unknown>).previewPolicy, 'inline');
+    assert.equal((artifact.delivery as Record<string, unknown>).contentShape, 'raw-file');
+    assert.equal((artifact.metadata as Record<string, unknown>).rawRef, refs.outputRel);
+    assert.equal(await readFile(join(workspace, markdownRef), 'utf8'), '# arXiv report\n\nReadable markdown body.');
+    const rawPayload = await readFile(join(workspace, refs.outputRel), 'utf8');
+    assert.match(rawPayload, /sciforge.artifact-delivery.v1/);
+    assert.match(rawPayload, /rawRef/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});

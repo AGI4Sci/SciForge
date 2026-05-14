@@ -585,11 +585,12 @@
 
 .message-object-link {
   display: inline;
-  padding: 0 3px;
+  padding: 0;
   color: var(--accent);
-  background: rgba(0, 229, 160, 0.1);
-  border: 1px solid rgba(0, 229, 160, 0.24);
-  border-radius: 4px;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px dotted rgba(0, 229, 160, 0.65);
+  border-radius: 0;
   cursor: pointer;
   font: inherit;
   line-height: 1.45;
@@ -597,8 +598,8 @@
 }
 
 .message-object-link:hover {
-  color: var(--bio-950);
-  background: var(--accent);
+  color: var(--bio-50);
+  border-bottom-style: solid;
 }
 
 .message-fold {

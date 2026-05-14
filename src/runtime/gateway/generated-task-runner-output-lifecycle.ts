@@ -133,6 +133,15 @@ export async function completeGeneratedTaskRunOutputLifecycle(
       firstPayloadFailureReason: deps.firstPayloadFailureReason,
       payloadHasFailureStatus: deps.payloadHasFailureStatus,
     });
+    if (lifecycle.payloadFailureStatus && lifecycle.failureReason) {
+      const externalBlocked = externalProviderFailureDecision({
+        reason: lifecycle.failureReason,
+        evidenceRefs: [refs.stdoutRel, refs.stderrRel, refs.outputRel],
+      });
+      if (externalBlocked) {
+        return await completeTransientExternalBlockedLifecycle(input, externalBlocked.reason, refs);
+      }
+    }
     if (lifecycle.repair) {
       const externalBlocked = externalProviderFailureDecision({
         reason: lifecycle.repair.failureReason,

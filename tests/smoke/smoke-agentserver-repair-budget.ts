@@ -29,7 +29,7 @@ assert.equal(
 );
 assert.equal(
   repairShouldStopForNoCodeChange('print(1)', 'print(1)', [], 'missing output'),
-  false,
+  true,
 );
 assert.equal(
   repairShouldStopForNoCodeChange(

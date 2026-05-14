@@ -612,7 +612,7 @@ async function tryAgentServerRepairAndRerun(params: {
 
   if (repairShouldStopForNoCodeChange(beforeCode, afterCode, priorAttempts, params.failureReason)) {
     const failureReason = [
-      'AgentServer repair produced no task code changes after a repeated failure; stopping repair reruns to avoid repeating the same failed workspace task.',
+      'Repair no-op: AgentServer repair produced no task code changes; stopping repair reruns to avoid repeating the same failed workspace task.',
       `Previous failure: ${params.failureReason}`,
     ].join(' ');
     await appendTaskAttempt(workspace, {
@@ -735,7 +735,7 @@ async function tryAgentServerRepairAndRerun(params: {
     const evidenceFailureReason = !payloadFailureStatus ? guidanceFinding?.reason ?? evidenceFinding?.reason : undefined;
     const failureReason = payloadFailureReason ?? evidenceFailureReason;
     const shouldRepairExecutionFailure = errors.length === 0 && Boolean(failureReason)
-      && (rerun.exitCode !== 0 || Boolean(evidenceFailureReason));
+      && (Boolean(evidenceFailureReason) || (rerun.exitCode !== 0 && !payloadFailureStatus));
     const attemptStatus = errors.length
       ? 'repair-needed'
       : shouldRepairExecutionFailure
@@ -766,7 +766,10 @@ async function tryAgentServerRepairAndRerun(params: {
       failureReason: errors.length ? `AgentServer repair rerun output failed schema validation: ${errors.join('; ')}` : failureReason,
       createdAt: new Date().toISOString(),
     });
-    if (errors.length || shouldRepairExecutionFailure || payloadFailureStatus || rerun.exitCode !== 0) {
+    if (payloadFailureStatus && !errors.length && !shouldRepairExecutionFailure) {
+      return normalized ?? payload;
+    }
+    if (errors.length || shouldRepairExecutionFailure || (rerun.exitCode !== 0 && !payloadFailureStatus)) {
       if (attempt < maxAttempts) {
         const nextFailureReason = errors.length
           ? `AgentServer repair rerun output failed schema validation: ${errors.join('; ')}`
@@ -913,16 +916,10 @@ export function repairShouldStopForNoCodeChange(
   failureReason: string,
 ) {
   if (beforeCode !== afterCode) return false;
+  void priorAttempts;
   const normalizedFailure = normalizeRepairFailureReason(failureReason);
   if (!normalizedFailure) return false;
-  return priorAttempts.some((attempt) => {
-    if (!isRecord(attempt)) return false;
-    return [
-      attempt.failureReason,
-      attempt.selfHealReason,
-      attempt.patchSummary,
-    ].some((value) => normalizeRepairFailureReason(value) === normalizedFailure);
-  });
+  return true;
 }
 
 function normalizeRepairFailureReason(value: unknown) {

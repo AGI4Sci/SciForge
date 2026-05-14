@@ -1,8 +1,8 @@
-import type { ObjectReference, RuntimeArtifact, RuntimeExecutionUnit, SciForgeRun, SciForgeSession } from '../../domain';
+import type { ObjectReference, RuntimeExecutionUnit, SciForgeRun, SciForgeSession } from '../../domain';
 import { Badge } from '../uiPrimitives';
 import { MessageContent, objectReferencesFromInlineTokens } from './MessageContent';
-import { ObjectReferenceChips } from './ReferenceChips';
 import {
+  isUserFacingObjectReference,
   mergeObjectReferences,
   objectReferenceForArtifactSummary,
 } from '../../../../../packages/support/object-references';
@@ -299,27 +299,29 @@ export function RunKeyInfo({
   for (const ref of projection ? conversationProjectionArtifactRefs(projection) : []) {
     artifactRefIds.add(ref.replace(/^artifact::?/i, ''));
   }
-  const artifacts = session.artifacts
+  const artifactReferences = session.artifacts
     .filter((artifact) => artifactRefIds.has(artifact.id) || artifact.metadata?.runId === runId)
+    .map((artifact) => objectReferenceForArtifactSummary(artifact, runId))
+    .filter(isUserFacingObjectReference)
     .slice(0, 4);
-  const artifactReferences = artifacts.map((artifact) => objectReferenceForArtifactSummary(artifact, runId));
+  const artifacts = session.artifacts.filter((artifact) => artifactReferences.some((reference) => reference.ref === `artifact:${artifact.id}`));
   const claims = claimsForRun(session, runId, artifacts.map((artifact) => artifact.id)).slice(0, 3);
-  if (!artifacts.length && !claims.length) return null;
-  const objectNames = artifacts.map(artifactTitle).join('、') || '暂无新对象';
+  if (!artifactReferences.length && !claims.length) return null;
+  const artifactLinks = artifactReferences.map((reference) => reference.ref).join('、');
+  const keyProse = [
+    artifactReferences.length ? `关键结果：${artifactLinks}。` : '本轮没有生成新的可预览对象。',
+    claims.length ? `已提取 ${claims.length} 条判断。` : '',
+    '过程记录已折叠在下方。',
+  ].filter(Boolean).join(' ');
   return (
     <div className="message-key-info" aria-label="本轮关键信息">
       <div className="message-key-info-head">
         <strong>本轮结果</strong>
-        <span>{artifacts.length} objects · {claims.length} claims</span>
+        <span>{artifactReferences.length} objects · {claims.length} claims</span>
       </div>
-      <p className="message-key-prose">
-        {artifacts.length ? `关键对象：${objectNames}。` : '本轮没有生成新的可预览对象。'}
-        {claims.length ? ` 已提取 ${claims.length} 条判断。` : ''}
-        <span> 过程记录已折叠在下方。</span>
-      </p>
-      {artifactReferences.length ? (
-        <ObjectReferenceChips references={artifactReferences} onFocus={onObjectFocus ?? (() => undefined)} />
-      ) : null}
+      <div className="message-key-prose">
+        <MessageContent content={keyProse} references={artifactReferences} onObjectFocus={onObjectFocus ?? (() => undefined)} />
+      </div>
       {claims.length ? (
         <div className="message-key-list">
           {claims.map((claim) => (
@@ -332,10 +334,6 @@ export function RunKeyInfo({
       ) : null}
     </div>
   );
-}
-
-function artifactTitle(artifact: RuntimeArtifact) {
-  return String(artifact.metadata?.title || artifact.metadata?.name || artifact.id);
 }
 
 function claimsForRun(session: SciForgeSession, runId: string, artifactIds: string[]) {

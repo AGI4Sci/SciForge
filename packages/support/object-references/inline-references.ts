@@ -3,6 +3,10 @@ import type {
   ObjectReference,
   ObjectReferenceKind,
 } from '@sciforge-ui/runtime-contract/references';
+import {
+  displayTitleForObjectReference,
+  objectReferencePresentationRole,
+} from './presentation-role';
 
 export interface ObjectReferenceTextPiece {
   text: string;
@@ -36,7 +40,7 @@ export function linkifyObjectReferences(content: string, references: ObjectRefer
       break;
     }
     if (match.index > cursor) pieces.push({ text: content.slice(cursor, match.index) });
-    pieces.push({ text: content.slice(match.index, match.index + match.key.length), reference: match.reference });
+    pieces.push({ text: displayTitleForObjectReference(match.reference), reference: match.reference });
     cursor = match.index + match.key.length;
   }
   return pieces.filter((piece) => piece.text.length > 0);
@@ -44,7 +48,7 @@ export function linkifyObjectReferences(content: string, references: ObjectRefer
 
 function objectReferenceFromInlineToken(raw: string, runId?: string): ObjectReference | undefined {
   if (/^https?:\/\//i.test(raw)) {
-    return {
+    const reference: ObjectReference = {
       id: inlineObjectReferenceId('url', raw),
       title: inlineReferenceTitle(raw),
       kind: 'url',
@@ -55,13 +59,17 @@ function objectReferenceFromInlineToken(raw: string, runId?: string): ObjectRefe
       summary: raw,
       provenance: { dataRef: raw },
     };
+    return {
+      ...reference,
+      presentationRole: objectReferencePresentationRole(reference),
+    };
   }
   const tokenMatch = raw.match(/^([a-z-]+)::?(.+)$/i);
   if (!tokenMatch) return undefined;
   const prefix = tokenMatch[1].toLowerCase() as ObjectReferenceKind;
   if (!['artifact', 'file', 'folder', 'run', 'execution-unit', 'scenario-package'].includes(prefix)) return undefined;
   const target = tokenMatch[2];
-  return {
+  const reference: ObjectReference = {
     id: inlineObjectReferenceId(prefix, raw),
     title: inlineReferenceTitle(target),
     kind: prefix,
@@ -71,6 +79,10 @@ function objectReferenceFromInlineToken(raw: string, runId?: string): ObjectRefe
     status: 'available',
     summary: target,
     provenance: prefix === 'file' || prefix === 'folder' ? { path: target } : { dataRef: target },
+  };
+  return {
+    ...reference,
+    presentationRole: objectReferencePresentationRole(reference),
   };
 }
 

@@ -137,7 +137,7 @@ function artifactActionsMarkdown(actions: unknown[] | undefined) {
     const label = stringField(action.label) ?? stringField(action.id);
     const ref = stringField(action.ref);
     if (!label && !ref) return '';
-    return `- ${label ?? ref}${ref ? `: ${displayObjectRef(ref, stringField(action.artifactType))}` : ''}`;
+    return `- ${ref ? displayObjectRef(ref, stringField(action.artifactType)) : label}`;
   }).filter(Boolean).join('\n');
 }
 

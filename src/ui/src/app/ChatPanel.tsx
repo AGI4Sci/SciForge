@@ -23,9 +23,9 @@ import { RunExecutionProcess, RunKeyInfo } from './chat/RunExecutionProcess';
 import { TargetInstanceSelector } from './chat/TargetInstanceSelector';
 import { FinalMessageContent } from './chat/FinalMessageContent';
 import { ContextWindowMeter } from './chat/ContextWindowMeter';
-import { ObjectReferenceChips, SciForgeReferenceChips } from './chat/ReferenceChips';
+import { SciForgeReferenceChips } from './chat/ReferenceChips';
 import { CURRENT_TARGET_INSTANCE_VALUE, enabledPeerInstances, selectedPeerInstance } from './chat/targetInstance';
-import { MessageContent, inlineObjectReferencesForMessage, unmentionedObjectReferencesForMessage } from './chat/MessageContent';
+import { MessageContent, inlineObjectReferencesForMessage } from './chat/MessageContent';
 import { addComposerReferenceWithMarker, addPendingComposerReference, promptForComposerSend, removeComposerReference } from './chat/composerReferences';
 import { runPromptOrchestrator } from './chat/runOrchestrator';
 import { appendRunningGuidanceRecord, appendUploadMessageToSession, applyHistoricalUserMessageEdit, attachGuidanceQueueToSessionRun, createGuidanceQueueRecord, mergeAgentResponseIntoSession, resolveGuidanceQueueAfterRun, updateGuidanceQueueRecords } from './chat/sessionTransforms';
@@ -781,9 +781,6 @@ export function ChatPanel({
         {visibleMessages.map((message, visibleIndex) => {
           const index = visibleMessageStart + visibleIndex;
           const messageRunId = runIdForMessage(message, index, messages, session.runs);
-          const messageObjectReferences = message.role === 'user'
-            ? []
-            : unmentionedObjectReferencesForMessage(message, session, messageRunId);
           return (
           <div
             key={message.id}
@@ -860,13 +857,6 @@ export function ChatPanel({
                       runId={messageRunId}
                       session={session}
                       onObjectFocus={onObjectFocus}
-                    />
-                  ) : null}
-                  {messageObjectReferences.length ? (
-                    <ObjectReferenceChips
-                      references={messageObjectReferences}
-                      activeRunId={activeRunId}
-                      onFocus={onObjectFocus}
                     />
                   ) : null}
                 </>

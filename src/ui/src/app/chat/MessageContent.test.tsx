@@ -45,6 +45,8 @@ test('message inline object links expose the picked ObjectReference as currentRe
   assert.equal(reference.ref, 'file:papers/methods.md');
   assert.equal(currentReference?.ref, 'file:papers/methods.md');
   assert.equal(currentReference?.provenance?.hash, 'sha256-picked-file');
+  assert.match(markup, /Picked methods file/);
+  assert.doesNotMatch(markup, /file:papers\/methods\.md继续/);
 });
 
 test('object reference chips expose each selected chip object instead of the recent artifact', () => {
