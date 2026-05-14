@@ -44,6 +44,12 @@ class GoalSnapshotTest(unittest.TestCase):
         self.assertEqual(repair["goalType"], "repair")
         self.assertEqual(repair["freshness"]["kind"], "prior-run")
 
+    def test_pure_multiturn_recall_is_continuation(self) -> None:
+        snapshot = build_goal_snapshot({"prompt": "你还记得我一开始问的问题吗？"})
+
+        self.assertEqual(snapshot["taskRelation"], "continue")
+        self.assertTrue(snapshot["referencePolicy"]["allowHistoryFallback"])
+
     def test_missing_contract_fields_are_treated_as_empty_compat_values(self) -> None:
         # T093 explicitly asked not to modify contracts.py. Until contract fields
         # are finalized, module inputs may omit turnId/references/session fields.

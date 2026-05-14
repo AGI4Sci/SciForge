@@ -25,13 +25,17 @@ import {
   type ScenarioBuilderElementSelectorOption,
   type ScenarioElementSelection,
 } from '@sciforge/scenario-core';
+import { CORE_CAPABILITY_MANIFESTS } from '@sciforge-ui/runtime-contract';
 import { saveWorkspaceScenario, publishWorkspaceScenario } from '../api/workspaceClient';
-import type { SciForgeConfig, ScenarioRuntimeOverride } from '../domain';
+import type { SciForgeConfig, ScenarioRuntimeOverride, ToolProviderRouteOverride, ToolProviderSource } from '../domain';
 import type { RuntimeHealthItem } from '../runtimeHealth';
 import { exportJsonFile } from './exportUtils';
 import { ActionButton, Badge, cx } from './uiPrimitives';
 
 type BuilderLegacyStepId = 'describe' | 'elements' | 'contract' | 'quality' | 'publish';
+
+const toolProviderSourceOptions: ToolProviderSource[] = ['local', 'agentserver', 'mcp', 'http', 'ssh', 'client-worker', 'backend-native', 'package', 'workspace', 'external'];
+const coreProviderCapabilityIds = ['web_search', 'web_fetch', 'pdf_extract'];
 
 export function ScenarioBuilderPanel({
   scenarioId,
@@ -196,6 +200,14 @@ export function ScenarioBuilderPanel({
     setSelection((current) => ({ ...current, [key]: next }));
     if (key === 'selectedSkillIds' || key === 'selectedToolIds') patchRuntimeSelection(key, next);
   }
+  function toolProviderRouteFor(routeKey: string, fallback: ToolProviderRouteOverride) {
+    return { ...fallback, ...(scenario.toolProviderRoutes?.[routeKey] ?? {}) };
+  }
+  function patchToolProviderRoute(routeKey: string, fallback: ToolProviderRouteOverride, routePatch: Partial<ToolProviderRouteOverride>) {
+    const nextRoute = { ...toolProviderRouteFor(routeKey, fallback), ...routePatch };
+    const routes = { ...(scenario.toolProviderRoutes ?? {}), [routeKey]: nextRoute };
+    patch({ toolProviderRoutes: routes });
+  }
   async function saveCompiled(status: 'draft' | 'published') {
     try {
       setPublishStatus(status === 'draft' ? '保存中...' : '发布中...');
@@ -316,20 +328,152 @@ export function ScenarioBuilderPanel({
   }
 
   function ToolsSelector() {
+    const selectedToolOptions = toolOptions.filter((tool) => (selection.selectedToolIds ?? []).includes(tool.id));
     return (
-      <ElementSelector
-        title="Tools"
-        options={toolOptions.map((tool) => ({
-          id: tool.id,
-          label: tool.label,
-          detail: tool.description,
-          meta: `${tool.toolType} · produces ${(tool.producesArtifactTypes ?? []).join(', ') || 'supporting runtime data'}`,
-        }))}
-        selected={selection.selectedToolIds ?? []}
-        onToggle={(id) => toggleSelectionList('selectedToolIds', id)}
-        onSelectMany={(ids) => setSelectionList('selectedToolIds', [...(selection.selectedToolIds ?? []), ...ids])}
-        onClearMany={(ids) => setSelectionList('selectedToolIds', (selection.selectedToolIds ?? []).filter((id) => !ids.includes(id)))}
-      />
+      <div className="tools-pane-layout">
+        <div className="tools-pane-list">
+          <ElementSelector
+            title="Tools"
+            options={toolOptions.map((tool) => {
+              const route = toolProviderRouteFor(tool.id, defaultToolProviderRouteForTool(tool));
+              return {
+                id: tool.id,
+                label: tool.label,
+                detail: tool.description,
+                meta: [
+                  `${tool.toolType} · produces ${(tool.producesArtifactTypes ?? []).join(', ') || 'supporting runtime data'}`,
+                  `provider ${route.source ?? 'package'}:${route.primaryProviderId ?? tool.id}`,
+                  route.requiredConfig?.length ? `requires ${route.requiredConfig.join(', ')}` : 'no provider config required',
+                ].join(' · '),
+              };
+            })}
+            selected={selection.selectedToolIds ?? []}
+            onToggle={(id) => toggleSelectionList('selectedToolIds', id)}
+            onSelectMany={(ids) => setSelectionList('selectedToolIds', [...(selection.selectedToolIds ?? []), ...ids])}
+            onClearMany={(ids) => setSelectionList('selectedToolIds', (selection.selectedToolIds ?? []).filter((id) => !ids.includes(id)))}
+          />
+        </div>
+        <div className="tools-provider-column">
+          <ToolProviderRouteEditor
+            title="Selected tool providers"
+            description="当前选中工具的本场景 provider route。"
+            emptyLabel="选中工具后可配置它的 provider route。"
+            routes={selectedToolOptions.map((tool) => ({
+              key: tool.id,
+              label: tool.label,
+              detail: tool.description,
+              fallback: defaultToolProviderRouteForTool(tool),
+            }))}
+          />
+          <ToolProviderRouteEditor
+            title="Core capability providers"
+            description="跨机器能力 route，例如 AgentServer 端 web_search/web_fetch。"
+            routes={coreProviderCapabilityIds.map((capabilityId) => {
+              const manifest = CORE_CAPABILITY_MANIFESTS.find((candidate) => candidate.id === capabilityId);
+              return {
+                key: capabilityId,
+                label: manifest?.name ?? capabilityId,
+                detail: manifest?.brief ?? capabilityId,
+                fallback: defaultToolProviderRouteForCapability(capabilityId),
+              };
+            })}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  function ToolProviderRouteEditor({
+    title,
+    description,
+    emptyLabel,
+    routes,
+  }: {
+    title: string;
+    description: string;
+    emptyLabel?: string;
+    routes: Array<{ key: string; label: string; detail: string; fallback: ToolProviderRouteOverride }>;
+  }) {
+    return (
+      <section className="tool-provider-route-editor" aria-label={title}>
+        <div className="tool-provider-route-heading">
+          <div>
+            <strong>{title}</strong>
+            <span>{description}</span>
+          </div>
+          <small>{routes.length} routes</small>
+        </div>
+        {routes.length ? (
+          <div className="tool-provider-route-list">
+            {routes.map((routeInfo) => {
+              const route = toolProviderRouteFor(routeInfo.key, routeInfo.fallback);
+              return (
+                <article key={routeInfo.key} className="tool-provider-route-card">
+                  <div className="tool-provider-route-title">
+                    <div>
+                      <strong>{routeInfo.key}</strong>
+                      <span>{routeInfo.label}</span>
+                    </div>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={route.enabled !== false}
+                        onChange={(event) => patchToolProviderRoute(routeInfo.key, routeInfo.fallback, { enabled: event.target.checked })}
+                      />
+                      enabled
+                    </label>
+                  </div>
+                  <p>{routeInfo.detail}</p>
+                  <div className="tool-provider-route-grid">
+                    <label>
+                      <span>source</span>
+                      <select
+                        value={route.source ?? 'package'}
+                        onChange={(event) => patchToolProviderRoute(routeInfo.key, routeInfo.fallback, { source: event.target.value as ToolProviderSource })}
+                      >
+                        {toolProviderSourceOptions.map((source) => <option key={source} value={source}>{source}</option>)}
+                      </select>
+                    </label>
+                    <label>
+                      <span>primary provider</span>
+                      <input
+                        value={route.primaryProviderId ?? ''}
+                        onChange={(event) => patchToolProviderRoute(routeInfo.key, routeInfo.fallback, { primaryProviderId: event.target.value.trim() })}
+                        placeholder="agentserver.backend-server.web_search"
+                      />
+                    </label>
+                    <label>
+                      <span>fallback providers</span>
+                      <input
+                        value={(route.fallbackProviderIds ?? []).join(', ')}
+                        onChange={(event) => patchToolProviderRoute(routeInfo.key, routeInfo.fallback, { fallbackProviderIds: csvList(event.target.value) })}
+                        placeholder="provider.a, provider.b"
+                      />
+                    </label>
+                    <label>
+                      <span>health</span>
+                      <select
+                        value={route.health ?? 'ready'}
+                        onChange={(event) => patchToolProviderRoute(routeInfo.key, routeInfo.fallback, { health: event.target.value as ToolProviderRouteOverride['health'] })}
+                      >
+                        <option value="ready">ready</option>
+                        <option value="unknown">unknown</option>
+                        <option value="unavailable">unavailable</option>
+                        <option value="unauthorized">unauthorized</option>
+                        <option value="rate-limited">rate-limited</option>
+                      </select>
+                    </label>
+                  </div>
+                  <small>
+                    {route.requiredConfig?.length ? `requires ${route.requiredConfig.join(', ')}` : 'no required config'}
+                    {route.permissions?.length ? ` · permissions ${route.permissions.join(', ')}` : ''}
+                  </small>
+                </article>
+              );
+            })}
+          </div>
+        ) : <div className="tool-provider-route-empty">{emptyLabel ?? 'No provider routes.'}</div>}
+      </section>
     );
   }
 
@@ -626,6 +770,57 @@ function toggleList(values: string[], value: string) {
 
 function unique(values: string[]) {
   return Array.from(new Set(values)).filter(Boolean);
+}
+
+function csvList(value: string) {
+  return value.split(',').map((item) => item.trim()).filter(Boolean);
+}
+
+export function defaultToolProviderRouteForTool(tool: {
+  id: string;
+  source?: string;
+  toolType?: string;
+  requiredConfig?: string[];
+}): ToolProviderRouteOverride {
+  const source = inferToolProviderSource(tool);
+  return {
+    enabled: true,
+    source,
+    primaryProviderId: tool.id,
+    fallbackProviderIds: [],
+    requiredConfig: tool.requiredConfig ?? [],
+    permissions: toolProviderPermissions(tool.toolType),
+    health: source === 'local' || source === 'package' ? 'ready' : 'unknown',
+  };
+}
+
+export function defaultToolProviderRouteForCapability(capabilityId: string): ToolProviderRouteOverride {
+  const manifest = CORE_CAPABILITY_MANIFESTS.find((candidate) => candidate.id === capabilityId);
+  const provider = manifest?.providers[0];
+  return {
+    enabled: true,
+    capabilityId,
+    source: provider?.source ?? 'agentserver',
+    primaryProviderId: provider?.id ?? `agentserver.backend-server.${capabilityId}`,
+    fallbackProviderIds: manifest?.providers.slice(1).map((candidate) => candidate.id) ?? [],
+    requiredConfig: provider?.requiredConfig ?? [],
+    permissions: provider?.permissions ?? [],
+    health: provider?.status === 'available' ? 'ready' : 'unknown',
+  };
+}
+
+function inferToolProviderSource(tool: { id: string; source?: string; toolType?: string }): ToolProviderSource {
+  if (/^local\./i.test(tool.id) || tool.source === 'local') return 'local';
+  if (/mcp/i.test(tool.id) || tool.toolType === 'connector') return 'mcp';
+  if (/agentserver/i.test(tool.id)) return 'agentserver';
+  return tool.source === 'package' ? 'package' : 'package';
+}
+
+function toolProviderPermissions(toolType?: string) {
+  if (toolType === 'connector') return ['network'];
+  if (toolType === 'runner') return ['filesystem', 'shell'];
+  if (toolType === 'sense-plugin') return ['desktop'];
+  return [];
 }
 
 function ElementPopover({ label, detail, meta }: { label: string; detail: string; meta: string }) {

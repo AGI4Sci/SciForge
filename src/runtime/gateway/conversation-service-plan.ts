@@ -36,7 +36,7 @@ export function buildConversationServiceErrorResponse(request: unknown): JsonMap
     status: 'failed',
     goalSnapshot: { text: '', mode: 'ambiguous', explicitRefs: [] },
     contextPolicy: { mode: 'ambiguous' },
-    memoryPlan: {},
+    handoffMemoryProjection: {},
     currentReferences: [],
     currentReferenceDigests: [],
     artifactIndex: {},
@@ -170,9 +170,9 @@ export function buildConversationTurnComposition(request: unknown): Conversation
   const policyInput = recordValue(data.policyInput);
   const session = recordValue(policyInput.session ?? data.session);
   const contextPolicy = recordValue(data.contextPolicy);
-  const memoryPlan = recordValue(data.memoryPlan);
+  const handoffMemoryProjection = recordValue(data.handoffMemoryProjection);
   const currentReferenceDigests = recordList(data.currentReferenceDigests);
-  const contextSession = contextSessionForPolicy(session, contextPolicy, memoryPlan);
+  const contextSession = contextSessionForPolicy(session, contextPolicy, handoffMemoryProjection);
   const currentReferences = currentReferencesForTurn(policyInput, currentReferenceDigests);
   const recentFailures = recentFailuresForTurn(policyInput);
   const priorAttempts = priorAttemptsForTurn(policyInput);
@@ -203,7 +203,7 @@ export function buildConversationTurnComposition(request: unknown): Conversation
       currentReferenceDigests,
       artifacts: recordList(contextSession.artifacts),
       contextPolicy,
-      memoryPlan,
+      handoffMemoryProjection,
       goalSnapshot: recordValue(data.goalSnapshot),
       capabilityBrief: recordValue(data.capabilityBrief),
       turnExecutionConstraints,
@@ -262,7 +262,7 @@ function userVisiblePlan(
   ];
 }
 
-function contextSessionForPolicy(session: JsonMap, contextPolicy: JsonMap, memoryPlan: JsonMap): JsonMap {
+function contextSessionForPolicy(session: JsonMap, contextPolicy: JsonMap, _handoffMemoryProjection: JsonMap): JsonMap {
   const mode = stringValue(contextPolicy.mode) ?? '';
   const historyReuse = recordValue(contextPolicy.historyReuse);
   const allowHistory = historyReuse.allowed === true || ['continue', 'repair'].includes(mode);
@@ -410,7 +410,7 @@ function auditTrace(data: JsonMap): JsonMap[] {
     ?? 'sciforge.conversation-policy.response.v1';
   const goalSnapshot = recordValue(data.goalSnapshot);
   const contextPolicy = recordValue(data.contextPolicy);
-  const memoryPlan = recordValue(data.memoryPlan);
+  const handoffMemoryProjection = recordValue(data.handoffMemoryProjection);
   const capabilityBrief = recordValue(data.capabilityBrief);
   const executionModePlan = recordValue(data.executionModePlan);
   const handoffPlan = recordValue(data.handoffPlan);
@@ -427,7 +427,7 @@ function auditTrace(data: JsonMap): JsonMap[] {
     },
     { event: 'module.goal_snapshot', schemaVersion: goalSnapshot.schemaVersion },
     { event: 'module.context_policy', schemaVersion: contextPolicy.schemaVersion },
-    { event: 'module.memory', schemaVersion: memoryPlan.schemaVersion },
+    { event: 'module.handoff_projection', schemaVersion: handoffMemoryProjection.schemaVersion },
     { event: 'module.current_refs', count: arrayValue(data.currentReferenceDigests).length },
     { event: 'module.capability_broker', selected: arrayValue(capabilityBrief.selected).length },
     { event: 'module.execution_classifier', mode: executionModePlan.executionMode },

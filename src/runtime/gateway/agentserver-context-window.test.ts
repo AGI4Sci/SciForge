@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { GatewayRequest } from '../runtime-types';
-import { agentServerContextPolicy, currentTurnReferences, requestNeedsAgentServerContinuity } from './agentserver-context-window';
+import { agentServerAgentId, agentServerContextPolicy, currentTurnReferences, requestNeedsAgentServerContinuity } from './agentserver-context-window';
 
 test('digest-only current turn is isolated from AgentServer continuity context', () => {
   const request = {
@@ -34,4 +34,37 @@ test('digest-only current turn is isolated from AgentServer continuity context',
     contextWindowLimit: undefined,
     modelContextWindow: undefined,
   });
+});
+
+test('pure multi-turn recall uses stable AgentServer session context', () => {
+  const request = {
+    skillDomain: 'literature',
+    prompt: '你还记得我一开始问的问题吗？',
+    artifacts: [],
+    uiState: {
+      sessionId: 'session-memory-1',
+      contextReusePolicy: {
+        mode: 'continue',
+        historyReuse: { allowed: true, scope: 'same-task-recent-turns' },
+      },
+    },
+  } as GatewayRequest;
+  const followup = {
+    ...request,
+    prompt: '我一开始问的是什么？',
+  } as GatewayRequest;
+
+  assert.equal(requestNeedsAgentServerContinuity(request), true);
+  assert.deepEqual(agentServerContextPolicy(request), {
+    includeCurrentWork: true,
+    includeRecentTurns: true,
+    includePersistent: false,
+    includeMemory: false,
+    persistRunSummary: true,
+    persistExtractedConstraints: false,
+    maxContextWindowTokens: undefined,
+    contextWindowLimit: undefined,
+    modelContextWindow: undefined,
+  });
+  assert.equal(agentServerAgentId(request, 'task-generation'), agentServerAgentId(followup, 'task-generation'));
 });

@@ -47,7 +47,7 @@ export function planConversationHandoff(request: ConversationHandoffPlanInput = 
     policy: compactValue(request.policy ?? {}, budget, decisions, ['policy']),
     currentReferenceDigests: compactRefs(arrayValue(request.currentReferenceDigests ?? request.digests), budget, decisions),
     artifacts: compactArtifacts(arrayValue(request.artifacts), budget, decisions),
-    memory: compactMemory(recordValue(request.memory) ?? {}, budget, decisions),
+    handoffMemoryProjection: compactHandoffProjection(recordValue(request.handoffMemoryProjection) ?? {}, budget, decisions),
     requiredArtifacts,
   });
   let normalizedBytes = estimateBytes(payload);
@@ -197,16 +197,16 @@ function compactArtifacts(artifacts: unknown[], budget: Record<string, number>, 
   return out;
 }
 
-function compactMemory(memory: JsonMap, budget: Record<string, number>, decisions: JsonMap[]): JsonMap {
+function compactHandoffProjection(projection: JsonMap, budget: Record<string, number>, decisions: JsonMap[]): JsonMap {
   const out: JsonMap = {};
   for (const key of ['recentConversation', 'ledger', 'priorAttempts']) {
-    const value = memory[key];
+    const value = projection[key];
     if (key === 'priorAttempts' && Array.isArray(value) && value.length > budget.maxPriorAttempts) {
-      out[key] = value.slice(-budget.maxPriorAttempts).map((item, index) => compactValue(item, budget, decisions, ['memory', key, String(index)]));
+      out[key] = value.slice(-budget.maxPriorAttempts).map((item, index) => compactValue(item, budget, decisions, ['handoffMemoryProjection', key, String(index)]));
       decisions.push({ kind: kind('prior', 'attempts'), reason: kind('array', 'budget'), originalCount: value.length, keptCount: budget.maxPriorAttempts });
       continue;
     }
-    const compact = compactValue(value, budget, decisions, ['memory', key]);
+    const compact = compactValue(value, budget, decisions, ['handoffMemoryProjection', key]);
     if (!isEmpty(compact)) out[key] = compact;
   }
   return out;

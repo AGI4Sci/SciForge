@@ -1,11 +1,11 @@
-export const CONVERSATION_MEMORY_PLAN_SCHEMA_VERSION = 'sciforge.conversation.memory-plan.v1' as const;
+export const CONVERSATION_HANDOFF_PROJECTION_SCHEMA_VERSION = 'sciforge.conversation.handoff-memory-projection.v1' as const;
 
 type JsonMap = Record<string, unknown>;
 
 const INLINE_IMAGE_PAYLOAD = /data:image|;base64,/gi;
 
-export interface ConversationMemoryPlan {
-  schemaVersion: typeof CONVERSATION_MEMORY_PLAN_SCHEMA_VERSION;
+export interface ConversationHandoffMemoryProjection {
+  schemaVersion: typeof CONVERSATION_HANDOFF_PROJECTION_SCHEMA_VERSION;
   mode: string;
   recentConversation: JsonMap[];
   recentRuns: JsonMap[];
@@ -14,7 +14,7 @@ export interface ConversationMemoryPlan {
   pollutionGuard: JsonMap;
 }
 
-export function buildConversationMemoryPlan(request: unknown): ConversationMemoryPlan {
+export function buildConversationHandoffMemoryProjection(request: unknown): ConversationHandoffMemoryProjection {
   const data = recordValue(request) ?? {};
   const session = firstRecord(data.session);
   const policy = firstRecord(data.contextPolicy, data.context_policy);
@@ -32,7 +32,7 @@ export function buildConversationMemoryPlan(request: unknown): ConversationMemor
   const excluded = excludedHistory(messages, runs, selectedMessages, selectedRuns, mode, explicitRefs);
 
   return {
-    schemaVersion: CONVERSATION_MEMORY_PLAN_SCHEMA_VERSION,
+    schemaVersion: CONVERSATION_HANDOFF_PROJECTION_SCHEMA_VERSION,
     mode,
     recentConversation: selectedMessages,
     recentRuns: selectedRuns,
@@ -46,7 +46,7 @@ export function buildConversationMemoryPlan(request: unknown): ConversationMemor
   };
 }
 
-export const buildMemoryPlan = buildConversationMemoryPlan;
+export const buildHandoffMemoryProjection = buildConversationHandoffMemoryProjection;
 
 export function buildConversationLedger(messages: unknown[], runs: unknown[] | null = null): JsonMap[] {
   const ledger: JsonMap[] = [];

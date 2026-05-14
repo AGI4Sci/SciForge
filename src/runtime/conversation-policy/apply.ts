@@ -105,7 +105,7 @@ export function requestWithPolicyResponse(
   response: ConversationPolicyResponse,
 ): GatewayRequest {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
-  const memoryPlan = isRecord(response.memoryPlan) ? response.memoryPlan : {};
+  const handoffMemoryProjection = isRecord(response.handoffMemoryProjection) ? response.handoffMemoryProjection : {};
   const handoffPlan = isRecord(response.handoffPlan) ? response.handoffPlan : {};
   const handoffPayload = isRecord(handoffPlan.payload) ? handoffPlan.payload : {};
   const contextPolicy = isRecord(response.contextPolicy) ? response.contextPolicy : undefined;
@@ -126,9 +126,6 @@ export function requestWithPolicyResponse(
   const currentReferenceDigests = response.currentReferenceDigests?.length
     ? response.currentReferenceDigests
     : toRecordList(uiState.currentReferenceDigests);
-  const recentConversation = toRecordList(memoryPlan.recentConversation);
-  const recentRuns = toRecordList(memoryPlan.recentRuns);
-  const conversationLedger = toRecordList(memoryPlan.conversationLedger);
 
   return {
     ...request,
@@ -154,12 +151,15 @@ export function requestWithPolicyResponse(
       goalSnapshot: response.goalSnapshot,
       contextReusePolicy: contextPolicy,
       contextIsolation: contextPolicy,
-      memoryPlan,
+      handoffMemoryProjection,
+      handoffRecentConversationProjection: toRecordList(handoffMemoryProjection.recentConversation),
+      handoffRecentRunsProjection: toRecordList(handoffMemoryProjection.recentRuns),
+      handoffConversationLedgerProjection: toRecordList(handoffMemoryProjection.conversationLedger),
       currentReferences,
       currentReferenceDigests,
-      conversationLedger: conversationLedger.length ? conversationLedger : uiState.conversationLedger,
-      recentConversation: recentConversation.length ? recentConversation : uiState.recentConversation,
-      recentRuns: recentRuns.length ? recentRuns : uiState.recentRuns,
+      conversationLedger: uiState.conversationLedger,
+      recentConversation: uiState.recentConversation,
+      recentRuns: uiState.recentRuns,
       artifactIndex: response.artifactIndex,
       capabilityBrief,
       executionModeDecision,

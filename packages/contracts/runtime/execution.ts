@@ -50,6 +50,16 @@ export interface RuntimeExecutionUnit {
     selectedSkill?: string;
     selectedRuntime?: string;
     fallbackReason?: string;
+    capabilityProviderRoutes?: Array<{
+      capabilityId: string;
+      primaryProviderId?: string;
+      fallbackProviderIds?: string[];
+      status?: string;
+      transport?: string;
+      workerId?: string;
+      healthStatus?: string;
+      routeTraceRef?: string;
+    }>;
     selectedAt: string;
   };
   requiredInputs?: string[];

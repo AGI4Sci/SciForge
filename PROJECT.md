@@ -23,7 +23,7 @@
 - 算法相关的代码优先用Python实现，方便人类用户优化、检查算法
 - 代码路径保持唯一真相源：发现冗余链路时删除、合并或降级旧链路，避免长期并行实现。
 - 多轮记忆只复用 AgentServer session/current-work/compaction 机制；SciForge 本地只保留 context policy、refs、digest、evidence boundary 和 handoff projection，不能再扩展成第二套长期记忆系统。
-- 不需要考虑旧兼容性，可以直接删除旧逻辑代码重写，保持代码链条绝对干净
+- 不需要考虑旧兼容性，可以直接删除旧逻辑，然后实现最终版本，保持代码链条绝对干净
 - 代码膨胀必须自动触发治理：源码文件超过 1000 行进入 watch list；超过 2000 行优先拆分；超过 3000 行视为维护风险。后续开发若让文件越过阈值，应优先抽模块、删除冗余逻辑或补拆分 TODO，而不是继续堆主文件。
 - 长文件拆分必须按职责命名，不能机械切成 part1/part2；如果暂时不能完全解耦，也要拆成有语义的文件，例如 *-event-normalizer、*-runner、*-diagnostics、*-state-machine，并保持主入口只做流程编排。
 - 推进项目的时候尽可能多开sub agents，并行加速推进
@@ -34,226 +34,51 @@
 
 ## 任务板
 
-### 2026-05-14 Task：多轮记忆管理收敛到 AgentServer
+### 2026-05-14 Task：LLM-gated fast path 与分布式工具接入层
 
-最终方案：AgentServer 是多轮对话记忆的唯一权威来源；SciForge 不再本地定制一套长期记忆，只负责把本轮意图、引用、证据边界和恢复策略投影给 AgentServer。`memoryPlan` 保留为兼容字段，但语义降级为 bounded handoff projection。
+最终方案：direct-context fast path 必须先经过 LLM/语义 classifier 做 intent/context match；只允许在 typed context 足够时低延迟回答。工具生态拆成 Skill、Capability、Provider、Runtime Resolver 四层。新增机器提供既有 capability 时应只改 AgentServer/worker/tool-routing 配置；新增工具类型必须通过 Tool Manifest 注册 capability/provider contract，而不是只写 `SKILL.md`。
 
 架构任务：
 
-- [ ] MEM-ARCH-01：将 `docs/Architecture.md` 固化为“AgentServer owns memory, SciForge owns projection”的边界，删除把 `memoryPlan`、conversation ledger 或 UI recent messages 描述为本地长期记忆的旧表述。
-- [ ] MEM-ARCH-02：梳理 `conversation-policy` 输出字段语义：`contextReusePolicy` 只表达 `continue/repair/isolate`，`memoryPlan` 只表达本轮可暴露摘要和 refs，不承担 recall。
-- [ ] MEM-ARCH-03：把 AgentServer `/context`、`/compact`、stable `agentId`、`contextPolicy.includeCurrentWork/includeRecentTurns/persistRunSummary` 写成唯一多轮记忆 contract。
+- [x] CAP-ARCH-01：将四层模型写入 `docs/Architecture.md`：Skill 描述方法，Capability 定义抽象能力和 schema，Provider 声明执行来源，Runtime Resolver 在 run 前绑定 provider 并记录 route。
+- [x] CAP-ARCH-02：将 direct-context fast path 边界写入 `docs/Architecture.md`：fast path 可以低延迟，但不能纯模板化；必须先判断 required typed context 和 sufficiency。
+- [x] CAP-ARCH-03：将分布式工具接入写入 `docs/Architecture.md`：标准 worker/capability 只改配置，全新工具类型必须通过 Tool Manifest 和 healthcheck 接入。
 
 实现 TODO：
 
-- [ ] MEM-P0-01：修正 continuation 判定链路，用户问“你还记得一开始的问题吗”这类纯多轮指代时必须稳定复用 AgentServer session/current-work，而不是 fresh agent scope。
-- [ ] MEM-P0-02：检查 `agentServerContextPolicy()` 与 `agentServerAgentId()`：fresh task 隔离旧记忆，continue/repair 使用稳定 scope，并打开 AgentServer recent turns/current work。
-- [ ] MEM-P0-03：`contextEnvelope` 只携带 current turn snapshot、refs、digest、artifact/run refs 和 policy summary；禁止把完整历史、raw logs 或大 artifact body 作为本地记忆塞回 handoff。
-- [ ] MEM-P0-04：AgentServer context/compact API 不可用时只降级为 refs-first handoff slimming，并在 UI/runtime event 中说明“记忆服务不可用”，不静默启用本地长期记忆 fallback。
-- [ ] MEM-P1-01：为多轮记忆增加 smoke/browser case：先问 A，再跑文献/计算任务，再问“我一开始问的是什么”，验证 AgentServer 记忆能回答且不会被当前 artifact refs 污染。
-- [ ] MEM-P1-02：增加 isolate case：新任务带显式 current refs 时不得复用旧 AgentServer recent turns，避免旧研究目标污染当前结论。
-- [ ] MEM-P1-03：增加 repair case：只复用目标 failed run、failure evidence refs 和 AgentServer current work，不读取无关历史 run。
-- [ ] MEM-P1-04：UI 显示 context/memory 状态时区分 AgentServer memory、SciForge projection、handoff slimming 和 audit refs，避免让用户误以为本地 UI ledger 就是完整记忆。
-- [ ] MEM-P2-01：把 `memoryPlan` 字段逐步重命名或包一层别名为 `handoffMemoryProjection`，保留 contract 兼容时也要在类型注释和文档中消除“本地记忆系统”误解。
+- [x] CAP-P0-01：把 `direct-context-fast-path` 改成 LLM-gated 或 semantic-classifier-gated 路径；输出必须记录 intent、required context、context ids、sufficiency 和 skipped-task reason。
+- [x] CAP-P0-02：新增 `skill/tool/capability/provider status` intent，禁止进入 artifact-summary direct-context；必须查询 Capability Registry / Tool Registry / AgentServer worker registry。
+- [x] CAP-P0-03：实现 capability preflight：scenario/skill requires 的 capability 缺失、provider offline、未授权或限流时，发送前阻断并给出用户可操作提示。
+- [x] CAP-P0-04：为 `web_search` / `web_fetch` 建立标准 capability/provider contract，禁止任务在无 provider 时生成临时网页 scraper 充当搜索工具。
+- [x] CAP-P0-05：配置页 Tools/Skills 展示 provider 来源、运行位置、健康状态、授权状态、权限、primary/fallback route 和依赖关系。
+- [x] CAP-P1-01：定义 Tool Manifest schema：capability id、transport、endpoint/command/mcp server、input/output schema、permissions、healthcheck、fallback eligibility、rate-limit metadata。
+- [x] CAP-P1-02：接入 AgentServer worker/tool-routing discovery，把 `backend-server`、`server`、`client-worker`、`ssh`、`remote-service` 映射为 SciForge provider registry。
+- [x] CAP-P1-03：Runtime Resolver 在每次 run 前把 required capabilities 解析为 provider route，并写入 handoff、ExecutionUnit、TaskRunCard 和 audit trace。
+- [x] CAP-P1-04：统一 zero-result、HTTP 429、provider offline、permission denied、missing capability 的 failure classification 和恢复建议。
+- [x] CAP-P2-01：支持 worker/tool server 暴露 manifests 后自动注册到 Capability Registry；新增标准工具机器只改配置，不改 SciForge 代码。
+- [ ] CAP-P2-02：增加真实网页 E2E：无 web search provider 时阻断；启用 AgentServer server-side search 后同一文献任务可检索、下载、总结并保留 provider route trace。
 
-### 2026-05-14 Observation：真实网页多轮复杂任务稳定性压测
+### 2026-05-14 Task：多轮记忆管理收敛到 AgentServer
 
-本轮目标：不改实现代码，只从真实网页状态观察用户体验与系统稳定性，并把后续任务/TODO 沉淀到本文件。已确认 `Workspace Writer` 在 `127.0.0.1:5174` 可用，前端可在 `127.0.0.1:5173` 打开；但 `AgentServer` 的 `127.0.0.1:18080/health` 持续 `connection refused`，导致新复杂任务无法真正进入生成阶段。
+最终方案：AgentServer 是多轮对话记忆的唯一权威来源；SciForge 不再本地定制一套长期记忆，只负责把本轮意图、引用、证据边界和恢复策略投影给 AgentServer。旧 `memoryPlan` 链路已删除，最终字段统一为 `handoffMemoryProjection`。
 
-已执行观察：
+架构任务：
 
-- [ ] WEB-OBS-20260514-01：刷新工作台并观察旧失败 run。现象：页面恢复到最近 failed run，但首屏仍混杂旧 preflight 错误、raw ref、audit 文案和恢复建议，用户很难判断“这是旧错误、服务不可达、还是刚才代码仍未修好”。
-- [ ] WEB-OBS-20260514-02：从网页发起真实本地文档任务：“阅读 PROJECT.md 和 docs/Architecture.md，生成 Markdown 风险报告和 P0/P1/P2 TODO”。结果：任务失败，根因是 `AgentServer generation request failed: fetch failed`，浏览器同时持续请求 `127.0.0.1:18080/health` 并失败。
-- [ ] WEB-OBS-20260514-03：在失败后继续发送 follow-up：“继续上一轮，只保留用户体验相关风险并重排 TODO”。结果：再次创建新的 failed run，仍然是同一个 AgentServer 不可达原因；系统没有在发送前阻止重复失败，也没有把 follow-up 合并为“等待服务恢复后重试”的排队状态。
-- [ ] WEB-OBS-20260514-04：刷新页面后检查状态恢复和结果过滤。结果：能恢复最新 failed run；“只看执行单元”过滤能收窄到运行事件，但默认“全部”视图仍重复显示 `Repair runtime execution inputs...`、`artifact:` chip、`runtime://...` contract refs 和 `CODE ARTIFACT`，用户态信息密度偏低。
-- [ ] WEB-OBS-20260514-05：观察 object/reference 展示。结果：本轮未复现旧的长路径 markdown ref，但失败场景中仍出现多组重复“失败的 execution unit / 产物 / runtime-diagnostic”链接；同一失败原因在左侧消息、右侧摘要、执行详情里多次重复。
+- [x] MEM-ARCH-01：将 `docs/Architecture.md` 固化为“AgentServer owns memory, SciForge owns projection”的边界，删除把 `memoryPlan`、conversation ledger 或 UI recent messages 描述为本地长期记忆的旧表述。
+- [x] MEM-ARCH-02：梳理 `conversation-policy` 输出字段语义：`contextReusePolicy` 只表达 `continue/repair/isolate`，`handoffMemoryProjection` 只表达本轮可暴露摘要和 refs，不承担 recall。
+- [x] MEM-ARCH-03：把 AgentServer `/context`、`/compact`、stable `agentId`、`contextPolicy.includeCurrentWork/includeRecentTurns/persistRunSummary` 写成唯一多轮记忆 contract。
 
-本轮归因：
+实现 TODO：
 
-- [ ] P0-STABILITY-AGENTSERVER-GATE：复杂任务入口缺少 capability readiness gate。当前 `Scenario Runtime · ready` 容易让用户以为系统可运行，但关键生成服务 `AgentServer` 不可达时仍允许发送任务。应在发送前统一检查 selected runtime 的 readiness，并把按钮/提示切到“服务未就绪，可启动/重试/离线降级”。
-- [ ] P0-STABILITY-RETRY-DEDUP：同一个 service-unavailable 失败不应在 follow-up 时继续新建等价 failed run。应基于 `FailureSignature` 和 active failed run，把后续用户输入归并为 queued guidance 或 retry intent，直到依赖服务恢复。
-- [ ] P0-UX-FAILURE-FIRST-SCREEN：失败首屏必须只回答三个问题：哪里不可用、用户还能用什么、下一步按钮是什么。raw `runtime://`、`artifact:`、`CODE ARTIFACT`、contract trace 和重复 repair 文案默认折叠到审计区。
-- [ ] P1-UX-RUN-DRIFT-BANNER：页面刷新后如果展示的是旧 failed run，需要明确标注“这是历史失败结果”，并区分“旧 schema/preflight 失败”和“当前服务不可达”。代码或服务重启后应提示可重跑，而不是把旧错误当作当前结论。
-- [ ] P1-UX-REFERENCE-DEDUP：message prose、结果摘要、object chips、ExecutionUnit 表需要共享同一套 ref dedupe/presentation contract。同一 ref 或同一失败 signature 在一个可见区域只出现一次，必要时显示“+N 审计引用”。
-- [ ] P1-UX-FILTER-PURITY：`全部`、`只看证据`、`只看执行单元` 应有严格信息层级。`只看执行单元` 保留 code/stdout/stderr/output refs；默认 `全部` 只展示用户可读 summary、可用 artifact、下一步 action。
-- [ ] P1-STABILITY-SERVICE-LIFECYCLE：本地 dev 启动应把 Web UI、Workspace Writer、AgentServer 作为一个可观测 service graph；任一关键节点掉线时 UI、runtime gateway、history restore 使用同一 health truth source。
-- [ ] P2-E2E-VISIBLE-BROWSER-MATRIX：增加可复现的真实网页压测矩阵：本地文档任务、低预算文献任务、长任务刷新、失败 run 诊断、follow-up 去重、artifact 点击预览、filter 切换。每轮保留 screenshot、console/request failed 摘要、session bundle 和 TaskRunCard。
-
-后续真实任务队列：
-
-- [ ] WEB-E2E-01 本地文档多轮：读 `PROJECT.md` + `docs/Architecture.md`，生成 markdown 风险报告；follow-up 改成只看 UX；验证不依赖外网也能完成或清晰说明缺失能力。
-- [ ] WEB-E2E-02 服务不可达恢复：关闭/开启 AgentServer 前后各发一次任务，验证发送前 gate、失败去重、服务恢复后的 retry action。
-- [ ] WEB-E2E-03 文献低预算任务：只用 metadata 快速调研，不下载 PDF；follow-up 再允许补全文，验证 budget escalation 和 artifact lineage。
-- [ ] WEB-E2E-04 旧失败 run 诊断：打开历史 schema/preflight failed run，要求只解释失败不重跑；验证旧错误不会污染新任务。
-- [ ] WEB-E2E-05 多 artifact 呈现：构造 report、paper-list、evidence-matrix、runtime-diagnostic 同时存在的 run，验证默认视图排序、Markdown/GFM 渲染和引用去重。
-- [ ] WEB-E2E-06 刷新与多标签：任务运行中刷新页面、另开标签追问，验证 active run、queued guidance、conflict guard 和后台状态。
-
-### 2026-05-12 Milestone：并行网页 E2E 与通用修复落地
-
-本轮使用多个 sub agents 并行从网页端检查 `http://127.0.0.1:5173/` 的首页、设置、聊天输入、失败 run、结果区和运行过程展示；主流程未白屏，Runtime Health 可达，输入栏禁用/启用正确。根据 E2E 暴露的问题，已完成以下通用修复：
-
-- [ ] 新增 runtime `TaskRunCard` / `FailureSignature` / `NoHardcodeReview` contract 与测试，支撑失败模式去重、protocol success 与 task success 分离、refs/下一步/归因层沉淀。
-- [ ] 为 AgentServer direct-text fallback 增加 guard：taskFiles、JSON、trace、日志、代码和过程输出不再被轻易包装成最终报告。
-- [ ] 修复 ExecutionUnit 失败态展示：`repair-needed`、`needs-human`、`failed-with-reason` 不再显示成 `Checked`，并优先展示 failureReason / recoverActions / nextStep。
-- [ ] 修复失败结果首屏可读性：复杂 ContractValidationFailure 首屏展示紧凑用户态原因，完整 raw trace 仍保留在 audit details。
-- [ ] 修复 report-viewer 对 AgentServer generation response / taskFiles 的处理：优先使用 `.md` report ref，不把后端 JSON、脚本或 stdout/stderr 当最终报告正文。
-- [ ] 扩展 deep manifest H022 evidence 字段：session bundle、runtime events、task inputs/outputs、stdout/stderr、verification results 和最终可见结果 ref。
-- [ ] 补齐网页端 favicon，避免本地 UI 启动后产生无意义资源 404。
-
-本轮仍保留为后续通用任务的问题：
-
-- [ ] 统一 ExecutionUnit chip/table/timeline 的状态枚举、计数和文案。
-- [ ] 让“只看执行单元”过滤模式更纯粹，避免仍显示 notebook timeline / Inspector 的混合上下文。
-- [ ] 改进历史 session 列表摘要，突出失败边界、可复用 refs 和下一步。
-- [ ] 补充 partial/background continuation 的真实网页 fixture，验证长任务中途刷新和后台完成合并。
-
-### 2026-05-12 Milestone：网页 E2E 二轮收敛
-
-本轮继续开启多个 sub agents 使用 Computer Use 从网页端并行检查执行单元状态、历史恢复、partial/background、Runtime Health 和结果过滤。根据报告完成第二轮通用修复：
-
-- [ ] 新增共享 `executionStatusPresentation`，统一 EU chip、工作过程、执行表的失败/修复/人工介入文案；`blocked` execution-unit 引用不再显示成生硬的 `BLOCKED`。
-- [ ] 修复 timeline run 计数：只把真实 ExecutionUnit refs 计入 `units=`，不再把 skill plan、UI plan 或 package ref 混入计数。
-- [ ] `只看执行单元` 模式现在只展示 ExecutionUnit 表、环境定义、stdout/stderr/code/output refs；普通 artifact preview、运行摘要、notebook timeline、raw audit 和 view state 被切到其他模式。
-- [ ] 历史会话列表新增 compact run summary：run id 短码、失败边界/完成产物、关键 refs、恢复动作和恢复影响说明。
-- [ ] Runtime Health 每个 item 增加可访问分组标签，避免读屏/AX tree 把 `Model Backend` 与下一项 `optional` 文案误连。
-- [ ] 研究时间线增加 partial first result / background continuation demo，网页端可直接验证长任务先给 partial、后台再合并 revision 的展示入口。
-
-本轮验证：
-
-- [ ] Computer Use：刷新首页、进入工作台、切换只看执行单元、进入研究时间线，确认 UI 行为符合预期。
-- [ ] `node --import tsx --test ...` 针对 ResultsRenderer、RunExecutionProcess、ArchiveDrawer、workspaceState、alignment display、scenario demo、runtime health。
-- [ ] `npm run typecheck`
-- [ ] `npm run smoke:runtime-contracts`
-- [ ] `npm run smoke:deep-report`
-- [ ] `npm run smoke:agentserver-direct-text`
-- [ ] `npm run build`
-
-### 2026-05-12 Milestone：Task outcome 投影与 Run-scoped E2E 收敛
-
-本轮继续以多个 sub agents 并行检查 TODO-GEN、网页 E2E、partial/background、active run 范围和本地服务验证；主线程使用 Computer Use 打开 `http://127.0.0.1:5173/`，确认首页、Runtime Health、Scenario Library、Workspace Writer、AgentServer 和 Model Backend 均可见且 online。根据并行报告完成以下通用修复：
-
-- [ ] task attempt ledger 自动生成 `TaskRunCard`，把 goal、round、refs、failure signatures、session bundle、protocol status、task outcome、next step 和 NoHardcodeReview 一起持久化到 attempt 记录。
-- [ ] gateway `resultPresentation` 同步挂载 `taskOutcomeProjection`：区分 protocol success 与 task success，生成 user satisfaction proxy 和 next-step attribution，不按 prompt、场景、文件名或 backend 写特例。
-- [ ] 扩展 provider-neutral transient failure 识别：`rate limited` 与已有 HTTP 429/5xx、quota、timeout、DNS/network 类失败统一归为 external transient。
-- [ ] partial/background completion 只要带 artifact、verification、workEvidence、refs 或失败/取消信息，就合成可审计 ExecutionUnit，并在执行面板展示 verificationRef / verificationVerdict。
-- [ ] 抽出 run-scoped ExecutionUnit 匹配，ResultsRenderer、RunExecutionProcess、失败审计、recover actions 和 raw audit 只展示 active run 相关执行单元，避免同 session 多 run 串上下文。
-- [ ] 修复 browser smoke 的本地服务隔离：离线 Runtime Health 不再被主实例 `5174/config` fallback 污染，结构场景 fixture 会写入临时 workspace state，覆盖真实刷新恢复路径。
-
-本轮验证：
-
-- [ ] Computer Use：打开本地主页，确认 Runtime Health 中 Web UI、Workspace Writer、AgentServer、Model Backend、Scenario Library 均 online，页面无白屏。
-- [ ] `node --import tsx --test src/runtime/task-attempt-history.test.ts packages/contracts/runtime/task-run-card.test.ts src/runtime/gateway/transient-external-failure.test.ts src/runtime/gateway/result-presentation-contract.test.ts`
-- [ ] `node --import tsx tests/smoke/smoke-result-presentation-contract.ts`
-- [ ] `node --import tsx --test src/ui/src/app/chat/sessionTransforms.test.ts src/ui/src/app/ResultsRenderer.test.ts src/ui/src/app/chat/RunExecutionProcess.test.ts src/ui/src/app/chat/ArchiveDrawer.test.tsx src/ui/src/app/results-renderer-execution-model.test.ts`
-- [ ] `npm run typecheck`
-- [ ] `npm run smoke:runtime-contracts`
-- [ ] `npm run smoke:browser`
-- [ ] `npm run build`
-
-后续保留：
-
-- [ ] 建立 FailureSignature run-level registry，跨 run 去重 schema drift、timeout、repair no-op 和 external transient。
-- [ ] 将 TaskRunCard 暴露到 task-attempt API / 历史摘要 UI，替换当前部分自建 compact summary。
-- [ ] 给 schema normalization 增加显式白名单与 audit note，区分结构漂移修复和语义/安全错误 fail-closed。
-
-### 2026-05-12 Milestone：Failure Registry、TaskRunCard API 与 Schema Normalization Fail-closed
-
-本轮继续开启多个 sub agents 并行推进三条后续保留工程线，并使用网页端 E2E 检查 `http://127.0.0.1:5173/`。首页无白屏，Runtime Health 可见 Web UI、Workspace Writer、AgentServer、Model Backend 和 Scenario Library 状态；执行单元过滤模式保持纯净，partial/background continuation demo 可见。根据并行报告完成以下通用修复：
-
-- [ ] 新增 workspace 级 `FailureSignatureRegistry`：只追踪 `schema-drift`、`timeout`、`repair-no-op`、`external-transient` 四类通用失败，按 run-level dedupe key 跨 run 合并，同一 run 重写保持幂等。
-- [ ] `appendTaskAttempt` 在生成 `TaskRunCard` 后同步记录 failure registry，registry 持久化到 `.sciforge/failure-signatures/registry.json`。
-- [ ] task-attempt API 的 `list` / `get` 显式返回 `taskRunCards`，历史摘要 UI 优先消费 `TaskRunCard` / `taskOutcomeProjection.taskRunCard`，旧 raw compact summary 仅作为 fallback。
-- [ ] payload validation 在宽松 normalization 前执行 schema error 识别，只允许显式白名单结构漂移修复；缺 required envelope、invalid UI ref、语义/安全敏感字段进入 `ContractValidationFailure` fail-closed。
-- [ ] `ContractValidationFailure` 增加 `auditNotes`，schema normalization 的 applied/blocked 决策投影到 validation-repair audit diagnostics；成功白名单 normalization 写入 `payload-normalization-audit` log。
-
-本轮验证：
-
-- [ ] 网页 E2E：确认首页、Runtime Health、历史/结果区、只看执行单元、partial/background continuation demo；页面无 console error/pageerror/failed request。
-- [ ] `node --import tsx --test packages/contracts/runtime/task-run-card.test.ts src/runtime/task-attempt-history.test.ts src/runtime/gateway/transient-external-failure.test.ts src/runtime/gateway/result-presentation-contract.test.ts`
-- [ ] `node --import tsx --test src/ui/src/app/chat/ArchiveDrawer.test.tsx`
-- [ ] `node --import tsx --test src/runtime/gateway/direct-answer-payload.test.ts src/runtime/gateway/result-presentation-contract.test.ts`
-- [ ] `node --import tsx tests/smoke/smoke-contract-validation-failure.ts`
-- [ ] `node --import tsx tests/smoke/smoke-validation-repair-audit-chain.ts`
-- [ ] `npm run typecheck`
-- [ ] `npm run smoke:runtime-contracts`
-- [ ] `npm run smoke:result-presentation-contract`
-- [ ] `npm run smoke:task-attempt-api`
-- [ ] `npm run smoke:browser`
-
-
-### 2026-05-12 Milestone：真实任务压测、Continuation 边界与失败投影收敛
-
-本轮按 H022 要求继续用真实任务压测，并让多个 sub agents 并行检查本地网页与 runtime 边界。浏览器侧只允许 Codex 内置/隔离 headless 路线，不使用 Edge。真实压测覆盖 R-LIT-01、R-LIT-02、R-LIT-08、R-CODE-02、R-RUN-01、R-RUN-02、R-RUN-07、R-UI-04、R-DATA-05。
-
-- [ ] R-LIT-02 低预算空结果恢复：窄 query 返回空结果后自动扩展 query，保留 empty boundary、生成中文 partial 报告、paper-list refs、verification ref 和 6 个 ExecutionUnit/log refs。
-- [ ] 修复 continuation token 膨胀：UI transport 对 ref-backed artifact data 改为 refs+shape summary；context envelope 增加 evidence expansion policy；AgentServer policy 明确 stdoutRef/stderrRef 默认只作审计引用，除非用户明确要求原始日志或失败诊断。
-- [ ] R-LIT-01 真实 arXiv/PDF 压测：AgentServer 生成真实任务并下载 4 个 PDF 后失败，保留 session bundle、task code、task input/output/log、verification 和 evidence bundle；失败不再被后续 direct-context 包装成满意答案。
-- [ ] direct-context fast path 遇到 expected artifacts 缺失时返回 `repair-needed` runtime diagnostic，要求先 resume/repair 生成缺失 artifact，不再把上下文摘要当作 task success。
-- [ ] R-CODE-02 / R-RUN-01 / R-RUN-02 / R-RUN-07 增加真实 failure-boundary smoke：schema drift 白名单、missing envelope fail-closed、repair no-op registry 聚合、failed run TaskRunCard/session bundle refs。
-- [ ] 修复 `TaskRunCard` 投影在 `SkillAvailability.manifest` 缺失时崩溃，避免 malformed payload 压测进入 outcome projection 时 TypeError。
-- [ ] 网页 E2E failed-run 投影收敛：failed run raw payload 中的真实 ExecutionUnit 会进入详情、timeline 和执行过程；timeline/artifact refs 按 active run scoped，不再串入上一轮结果。
-- [ ] stale artifact preview 收敛：workspace file / preview descriptor / derivative 读取增加 in-flight 去重与 400/404 stale 负缓存；缺 path/dataRef 或 stale ref 时显示 fallback，不再反复污染 console。
-
-Failure/Improvement Notes：
-
-- R-LIT-01：外部多 PDF 下载会耗尽 120s runner budget，失败前未写 partial ToolPayload；通用入口是 generated-task runner early checkpoint、partial lineage materialization、repair scope guard。
-- R-LIT-02 continuation：把上一轮完整 result/artifact/raw run 重新塞回 handoff 会触发 AgentServer 反复读 stdout/log 并命中 convergence guard；通用入口是 refs-first transport、context evidence expansion policy、log ref cite-only contract。
-- R-CODE-02：malformed payload 在 `manifest` 缺失时打崩 outcome projection；通用入口是 runtime projection 对 optional skill metadata fail-soft。
-- R-UI/R-DATA：缺失 artifact 文件应 stale-check 并降级展示，不应每次 render 都打 workspace/file 400。
-
-后续保留：
-
-- [ ] external multi-fetch generated task 必须早写 partial ToolPayload/checkpoint，并把已下载 PDF/metadata refs 投影到 failed run。
-- [ ] repair agent 只能修改 generated task 或允许的 adjacent files；越界源码编辑应 reject 并生成 repair-boundary diagnostic。
-- [ ] generated-task payload schema 可在昂贵执行前 preflight 常见 shape 错误，例如 object-shaped uiManifest、artifact 缺 id/type。
-- [ ] 历史恢复应直接回到最近 active failed run/workbench，而不是只在 timeline 中可见。
-
-本轮验证：
-
-- [ ] `node --import tsx --test src/ui/src/api/sciforgeToolsClient.policy.test.ts src/runtime/gateway/context-envelope.test.ts src/runtime/gateway/direct-context-fast-path.test.ts`
-- [ ] `node --import tsx tests/smoke/smoke-real-task-attempt-failure-boundaries.ts`
-- [ ] `node --import tsx --test src/ui/src/api/workspaceClient.preview-cache.test.ts src/ui/src/app/results/WorkspaceObjectPreview.test.ts src/ui/src/api/workspaceClient.feedback.test.ts src/ui/src/app/results/previewDescriptor.test.ts src/ui/src/app/ResultsRenderer.test.ts src/ui/src/app/appShell/workspaceState.test.ts src/ui/src/app/chat/RunExecutionProcess.test.ts src/ui/src/app/results-renderer-execution-model.test.ts src/ui/src/app/results/viewPlanResolver.test.ts`
-- [ ] `npm run typecheck`
-
-### 2026-05-12 Milestone：Partial Checkpoint、Repair Boundary 与失败恢复直达
-
-本轮继续开启多个 sub agents 并行推进 H022 暴露出的四条通用修复线，并用真实 smoke 压测 runtime、repair、payload preflight 和网页恢复路径。浏览器侧遵守“不占用 Edge”：`npm run smoke:browser` 使用隔离 Chrome for Testing；Codex in-app browser 本轮两次握手超时，已记录为工具链风险，未切到 Edge。
-
-- [ ] generated workspace task 在失败/超时且未写 final output 时，会在 session bundle 中扫描新增 partial 文件并写入标准 `partial-checkpoint` ToolPayload；failed run、TaskRunCard 和 attempt ledger 都能投影 partial artifact refs。
-- [ ] AgentServer repair 增加 repair-boundary 前后快照：repair 只能修改当前 generated task 与允许的 session bundle debug/handoff 文件；越界改 `PROJECT.md`、`src/`、`docs/`、`package*` 等源码/配置时拒绝 rerun，返回 `repair-boundary` diagnostic 并落盘审计。
-- [ ] generated-task payload 增加执行前 preflight：常见 envelope 缺失、object-shaped `uiManifest`、artifact 缺 id/type 等 shape 错误会在昂贵下载/分析前进入 repair-needed，而不是先浪费 runner budget。
-- [ ] pre-output / parse / external dependency failure payload 会携带 session-bundle partial evidence refs，`failedTaskPayload`、repair diagnostics 和 TaskRunCard 不再只剩 stdout/stderr。
-- [ ] 历史恢复会优先定位最近 recoverable failed/repair-needed run，刷新后直接回到 workbench 的 active run，而不是只在 timeline 中留下失败痕迹。
-- [ ] workspace state/session compaction 保留最近 repair-needed refs，避免 quota compact 后丢掉失败恢复入口。
-- [ ] browser workflow fixture 增加 failed-run restore 压测，并移除 Edge executable candidate，避免与用户浏览器冲突。
-- [ ] repair smoke 与 compact repair smoke 统一走 task-attempt API 读取 attempt history，覆盖 root `.sciforge/task-attempts` 与 session bundle `records/task-attempts` 两种存储路径。
-
-Failure/Improvement Notes：
-
-- Codex in-app browser 插件本轮连接 `http://127.0.0.1:23917/` 两次超时；网页端实际压测由隔离 Chrome for Testing 完成。后续需要把 in-app browser 连接稳定性纳入工具链 smoke，或给项目侧增加可观测的 browser-connection diagnostic。
-- partial checkpoint 当前只扫描 session bundle 内新增/更新文件；如果任务把 partial 写到任意 workspace 路径，仍需要显式 ref 或后续扩大受控扫描范围。
-- repair-boundary 采用 repair 前后快照比对；如果越界文件被改后又完全恢复，当前审计不会保留违规痕迹。
-- `direct-answer-payload.ts`、`generated-task-runner-validation-lifecycle.ts` 进入 1000 行 watch list；当前低于 1500 行阈值，但后续应继续把 payload preflight、diagnostic projection、repair audit sink 拆到语义模块。
-
-本轮验证：
-
-- [ ] `node --import tsx tests/smoke/smoke-workspace-server-agentserver-repair.ts`
-- [ ] `node --import tsx tests/smoke/smoke-agentserver-compact-repair.ts`
-- [ ] `node --import tsx tests/smoke/smoke-agentserver-repair.ts`
-- [ ] `node --import tsx tests/smoke/smoke-generated-task-failed-payload-repair.ts`
-- [ ] `node --import tsx tests/smoke/smoke-repair-boundary-guard.ts`
-- [ ] `node --import tsx tests/smoke/smoke-generated-task-payload-preflight.ts`
-- [ ] `node --import tsx tests/smoke/smoke-runtime-gateway-modules.ts`
-- [ ] `node --import tsx tests/smoke/smoke-contract-validation-failure.ts`
-- [ ] `node --import tsx tests/smoke/smoke-validation-repair-audit-chain.ts`
-- [ ] `node --import tsx --test src/runtime/gateway/generated-task-runner-execution-lifecycle.test.ts src/runtime/gateway/generated-task-runner-output-lifecycle.test.ts src/runtime/gateway/direct-answer-payload.test.ts src/ui/src/app/appShell/workspaceState.test.ts src/ui/src/app/chat/sessionTransforms.test.ts src/ui/src/sessionStore.test.ts`
-- [ ] `npm run smoke:task-attempt-api`
-- [ ] `npm run smoke:browser`
-- [ ] `npm run smoke:long-file-budget`
-- [ ] `npm run typecheck`
-- [ ] `npm run build`
-- [ ] `git diff --check`
-
+- [x] MEM-P0-01：修正 continuation 判定链路，用户问“你还记得一开始的问题吗”这类纯多轮指代时必须稳定复用 AgentServer session/current-work，而不是 fresh agent scope。
+- [x] MEM-P0-02：检查 `agentServerContextPolicy()` 与 `agentServerAgentId()`：fresh task 隔离旧记忆，continue/repair 使用稳定 scope，并打开 AgentServer recent turns/current work。
+- [x] MEM-P0-03：`contextEnvelope` 只携带 current turn snapshot、refs、digest、artifact/run refs 和 policy summary；禁止把完整历史、raw logs 或大 artifact body 作为本地记忆塞回 handoff。
+- [x] MEM-P0-04：AgentServer context/compact API 不可用时只降级为 refs-first handoff slimming，并在 UI/runtime event 中说明“记忆服务不可用”，不静默启用本地长期记忆 fallback。
+- [x] MEM-P1-01：为多轮记忆增加 smoke/browser case：先问 A，再跑文献/计算任务，再问“我一开始问的是什么”，验证 AgentServer 记忆能回答且不会被当前 artifact refs 污染。
+- [x] MEM-P1-02：增加 isolate case：新任务带显式 current refs 时不得复用旧 AgentServer recent turns，避免旧研究目标污染当前结论。
+- [x] MEM-P1-03：增加 repair case：只复用目标 failed run、failure evidence refs 和 AgentServer current work，不读取无关历史 run。
+- [x] MEM-P1-04：UI 显示 context/memory 状态时区分 AgentServer memory、SciForge projection、handoff slimming 和 audit refs，避免让用户误以为本地 UI ledger 就是完整记忆。
+- [x] MEM-P2-01：删除 `memoryPlan` 旧链路并统一为 `handoffMemoryProjection`，在类型、测试和文档中消除“本地记忆系统”误解。
 
 
 ### H022 Real-world Complex Task Backlog for SciForge Hardening

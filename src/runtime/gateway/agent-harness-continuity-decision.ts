@@ -12,7 +12,7 @@ export function agentHarnessContinuityDecision(request: GatewayRequest) {
       : undefined;
   const policyMode = typeof policy?.mode === 'string' ? policy.mode : '';
   const historyReuse = isRecord(policy?.historyReuse) ? policy.historyReuse : {};
-  const policyAllowsReuse = historyReuse.allowed === true || policyMode === 'continue' || policyMode === 'repair';
+  const policyAllowsReuse = (policyMode === 'continue' || policyMode === 'repair') && historyReuse.allowed !== false;
   const currentReferenceCount = toRecordList(uiState.currentReferences).length;
   const recentRefCount = toRecordList(uiState.recentExecutionRefs).length;
   const artifactCount = Array.isArray(request.artifacts) ? request.artifacts.length : 0;
@@ -22,7 +22,7 @@ export function agentHarnessContinuityDecision(request: GatewayRequest) {
   const trace = isRecord(agentHarness.trace) ? agentHarness.trace : undefined;
   const intentMode = stringField(contract?.intentMode) ?? stringField(summary?.intentMode);
   const intentUseContinuity = intentMode === 'continuation' || intentMode === 'repair' || intentMode === 'audit';
-  const useContinuity = intentUseContinuity;
+  const useContinuity = intentUseContinuity || policyAllowsReuse;
   const reasons = [
     policyAllowsReuse ? 'reuse-policy-advisory' : undefined,
     intentUseContinuity ? 'intent-continuity' : undefined,
@@ -40,7 +40,7 @@ export function agentHarnessContinuityDecision(request: GatewayRequest) {
     runtimeSignals: {
       policyMode: policyMode || undefined,
       policyAllowsReuse,
-      policyReuseIsAdvisory: policyAllowsReuse ? true : undefined,
+      policyDrivesContinuity: policyAllowsReuse ? true : undefined,
       currentReferenceCount,
       recentExecutionRefCount: recentRefCount,
       artifactCount,

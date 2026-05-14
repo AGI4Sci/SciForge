@@ -36,7 +36,7 @@ const policyResponse: ConversationPolicyResponse = {
     referencePriority: { explicitReferences: [], historyFallbackAllowed: true },
     pollutionGuard: { dropStaleHistory: false },
   },
-  memoryPlan: {
+  handoffMemoryProjection: {
     recentConversation: [{ id: 'm1', role: 'assistant', refs: ['artifact:research-report'] }],
     recentRuns: [{ id: 'run-1', status: 'completed', refs: ['file:.sciforge/task-results/round-one.json'] }],
     conversationLedger: [],

@@ -26,6 +26,7 @@ import {
   mergeCapabilityBrokerToolBudgets,
   mergeCapabilityBrokerVerificationPolicies,
 } from './capability-broker-harness-input.js';
+import { capabilityProviderRoutesForHandoff } from './capability-provider-preflight.js';
 export { workspaceTreeSummary } from './context-envelope-workspace-tree.js';
 
 export type AgentServerContextMode = 'full' | 'delta';
@@ -45,8 +46,6 @@ export function buildContextEnvelope(
 ) {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   const recentExecutionRefs = toRecordList(uiState.recentExecutionRefs);
-  const recentConversation = policyConversationEntries(uiState.recentConversation);
-  const conversationLedger = toRecordList(uiState.conversationLedger);
   const currentReferences = toRecordList(uiState.currentReferences);
   const currentReferenceDigests = toRecordList(uiState.currentReferenceDigests);
   const stateDigest = stateDigestForEnvelope(uiState);
@@ -76,6 +75,7 @@ export function buildContextEnvelope(
   const executionModeDecision = executionModeDecisionForEnvelope(uiState);
   const conversationPolicySummary = summarizeConversationPolicyForAgentServer(uiState.conversationPolicy ?? uiState);
   const capabilityBrokerBrief = buildCapabilityBrokerBriefForAgentServer(request);
+  const capabilityProviderRoutes = capabilityProviderRoutesForHandoff(request);
   const sessionBundleRef = sessionBundleRelForRequest(request);
   const capabilityBrief = capabilityBriefProjectionFromBrokerBrief(capabilityBrokerBrief, uiState.capabilityBrief);
   const verificationPolicy = request.verificationPolicy ?? brokerVerificationPolicyForRequest(request, brokerCapabilityPolicyForRequest(request));
@@ -86,10 +86,7 @@ export function buildContextEnvelope(
     recentExecutionRefs: summarizeExecutionRefs(recentExecutionRefs).flatMap(startupRefsFromRecord),
     previousEnvelope: startupContextEnvelopeFromUiState(uiState),
   });
-  const visibleRecentConversation = recentConversation
-    .slice(mode === 'full' ? -6 : -4)
-    .map((entry) => clipForAgentServerPrompt(entry, mode === 'full' ? 900 : 700))
-    .filter(Boolean);
+  const handoffMemoryProjection = handoffMemoryProjectionForEnvelope(uiState);
   return {
     version: 'sciforge.context-envelope.v1',
     mode,
@@ -168,8 +165,9 @@ export function buildContextEnvelope(
       selectedVerifierIds: request.selectedVerifierIds ?? toStringList(request.uiState?.selectedVerifierIds),
       artifactPolicy: request.artifactPolicy ?? (isRecord(uiState.artifactPolicy) ? uiState.artifactPolicy : undefined),
       referencePolicy: request.referencePolicy ?? (isRecord(uiState.referencePolicy) ? uiState.referencePolicy : undefined),
-      failureRecoveryPolicy,
+      failureRecoveryPolicy: summarizeFailureRecoveryPolicy(failureRecoveryPolicy),
       capabilityBrokerBrief,
+      capabilityProviderRoutes,
       capabilityBrief,
       verificationPolicy,
       evidenceExpansionPolicy: evidenceExpansionPolicySummaryForEnvelope(request),
@@ -193,8 +191,7 @@ export function buildContextEnvelope(
       stateDigest,
       conversationPolicySummary,
       ...executionModeDecision,
-      recentConversation: visibleRecentConversation,
-      conversationLedger: summarizeConversationLedger(conversationLedger, mode),
+      handoffMemoryProjection,
       boundedSessionRefs: boundedSessionRefsForEnvelope({
         artifacts: request.artifacts,
         recentExecutionRefs,
@@ -281,8 +278,7 @@ function continuityPolicySummaryForEnvelope(
     contextFields: mode === 'full'
       ? [
         'workspaceFacts',
-        'sessionFacts.conversationLedger',
-        'sessionFacts.recentConversation',
+        'sessionFacts.handoffMemoryProjection',
         'sessionFacts.currentReferences',
         'sessionFacts.currentReferenceDigests',
         'longTermRefs.priorAttempts',
@@ -301,6 +297,41 @@ function continuityPolicySummaryForEnvelope(
         facts.hasFailureEvidenceRefs ? 'longTermRefs.failureEvidenceRefs' : undefined,
       ].filter(Boolean)
       : undefined,
+  };
+}
+
+function handoffMemoryProjectionForEnvelope(uiState: Record<string, unknown>) {
+  const source = isRecord(uiState.handoffMemoryProjection)
+    ? uiState.handoffMemoryProjection
+    : undefined;
+  if (!source) return undefined;
+  const recentConversation = toRecordList(source.recentConversation)
+    .slice(-4)
+    .map((entry) => ({
+      id: stringField(entry.id),
+      role: stringField(entry.role),
+      summary: clipForAgentServerPrompt(entry.summary, 240),
+      refs: toStringList(entry.refs).slice(0, 8),
+    }))
+    .filter((entry) => entry.id || entry.role || entry.summary || entry.refs.length);
+  const recentRuns = toRecordList(source.recentRuns)
+    .slice(-4)
+    .map((entry) => ({
+      id: stringField(entry.id) ?? stringField(entry.runId),
+      status: stringField(entry.status),
+      summary: clipForAgentServerPrompt(entry.summary, 240),
+      refs: toStringList(entry.refs).slice(0, 8),
+    }))
+    .filter((entry) => entry.id || entry.status || entry.summary || entry.refs.length);
+  return {
+    schemaVersion: 'sciforge.handoff-memory-projection.v1',
+    source: 'conversation-policy.handoffMemoryProjection',
+    authority: 'SciForge projection only; AgentServer owns recall',
+    mode: stringField(source.mode),
+    recentConversation: recentConversation.length ? recentConversation : undefined,
+    recentRuns: recentRuns.length ? recentRuns : undefined,
+    currentReferenceFocus: toStringList(source.currentReferenceFocus).slice(0, 12),
+    pollutionGuard: isRecord(source.pollutionGuard) ? clipForAgentServerJson(source.pollutionGuard, 2) : undefined,
   };
 }
 

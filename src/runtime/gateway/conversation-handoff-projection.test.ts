@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildConversationMemoryPlan } from './conversation-memory-policy.js';
+import { buildConversationHandoffMemoryProjection } from './conversation-handoff-projection.js';
 
 test('explicit reference filters stale messages and runs', () => {
-  const plan = buildConversationMemoryPlan({
+  const plan = buildConversationHandoffMemoryProjection({
     goalSnapshot: { requiredReferences: ['current.csv'] },
     contextPolicy: { mode: 'isolate' },
     session: {
@@ -31,7 +31,7 @@ test('explicit reference filters stale messages and runs', () => {
 });
 
 test('continuation keeps recent conversation and repair keeps failed runs without inline image payloads', () => {
-  const continuePlan = buildConversationMemoryPlan({
+  const continuePlan = buildConversationHandoffMemoryProjection({
     contextPolicy: { mode: 'continue' },
     session: { messages: [{ id: 'm1', role: 'assistant', content: '上一轮计划' }] },
   });
@@ -39,7 +39,7 @@ test('continuation keeps recent conversation and repair keeps failed runs withou
   assert.equal(continuePlan.recentConversation[0].id, 'm1');
   assert.deepEqual(continuePlan.pollutionGuard.excludedHistory, []);
 
-  const repairPlan = buildConversationMemoryPlan({
+  const repairPlan = buildConversationHandoffMemoryProjection({
     contextPolicy: { mode: 'repair' },
     session: {
       runs: [

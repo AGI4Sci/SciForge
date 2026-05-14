@@ -22,14 +22,14 @@ def _load_module(name: str):
 
 build_context_policy = _load_module("context_policy").build_context_policy
 build_goal_snapshot = _load_module("goal_snapshot").build_goal_snapshot
-build_memory_plan = _load_module("memory").build_memory_plan
+build_handoff_memory_projection = _load_module("handoff_projection").build_handoff_memory_projection
 
 
-class MemoryPlanTest(unittest.TestCase):
+class HandoffMemoryProjectionTest(unittest.TestCase):
     def test_explicit_reference_filters_stale_history(self) -> None:
         snapshot = build_goal_snapshot({"prompt": "只根据 current.csv 总结。", "references": ["current.csv"]})
         policy = build_context_policy({"prompt": snapshot["rawPrompt"], "goalSnapshot": snapshot})
-        plan = build_memory_plan(
+        plan = build_handoff_memory_projection(
             {
                 "goalSnapshot": snapshot,
                 "contextPolicy": policy,
@@ -53,7 +53,7 @@ class MemoryPlanTest(unittest.TestCase):
     def test_continue_previous_round_keeps_recent_conversation(self) -> None:
         snapshot = build_goal_snapshot({"prompt": "继续上一轮，补充方法部分。"})
         policy = build_context_policy({"prompt": snapshot["rawPrompt"], "goalSnapshot": snapshot})
-        plan = build_memory_plan(
+        plan = build_handoff_memory_projection(
             {
                 "goalSnapshot": snapshot,
                 "contextPolicy": policy,
@@ -68,7 +68,7 @@ class MemoryPlanTest(unittest.TestCase):
     def test_repair_uses_failed_run_and_removes_inline_image_payloads(self) -> None:
         snapshot = build_goal_snapshot({"prompt": "修复上一轮失败。"})
         policy = build_context_policy({"prompt": snapshot["rawPrompt"], "goalSnapshot": snapshot})
-        plan = build_memory_plan(
+        plan = build_handoff_memory_projection(
             {
                 "goalSnapshot": snapshot,
                 "contextPolicy": policy,

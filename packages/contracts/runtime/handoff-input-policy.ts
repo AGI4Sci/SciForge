@@ -167,7 +167,7 @@ function currentTurnEnvelopeSummary(value: unknown) {
       currentPrompt: sessionFacts.currentPrompt,
       currentReferences: sessionFacts.currentReferences,
       currentReferenceDigests: sessionFacts.currentReferenceDigests,
-      recentConversation: sessionFacts.recentConversation,
+      handoffMemoryProjection: sessionFacts.handoffMemoryProjection,
     },
     longTermRefs: {
       artifacts: summarizeAnchorArray(longTermRefs.artifacts, 6),

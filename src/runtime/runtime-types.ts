@@ -212,6 +212,7 @@ export interface ToolPayload {
   verificationPolicy?: VerificationPolicy;
   workEvidence?: WorkEvidence[];
   budgetDebits?: CapabilityInvocationBudgetDebitRecord[];
+  failureSignatures?: FailureSignatureInput[];
 }
 
 export type ResultPresentationSectionId =

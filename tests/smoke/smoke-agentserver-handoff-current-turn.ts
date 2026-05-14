@@ -33,7 +33,7 @@ function policyResponse(executionModePlan?: Record<string, unknown>): Conversati
     schemaVersion: 'sciforge.conversation-policy.response.v1',
     goalSnapshot: {},
     contextPolicy: {},
-    memoryPlan: {},
+    handoffMemoryProjection: {},
     executionModePlan,
   };
 }

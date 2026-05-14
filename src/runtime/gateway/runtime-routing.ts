@@ -3,6 +3,7 @@ import { skillRuntimeRoutePolicy } from '../../../packages/skills/runtime-policy
 import { isRecord } from '../gateway-utils.js';
 import { sessionBundleRelForRequest } from '../session-bundle.js';
 import { agentServerBackend } from './agent-backend-config.js';
+import { capabilityProviderRoutesForHandoff } from './capability-provider-preflight.js';
 
 function stringField(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
@@ -21,6 +22,16 @@ export function attemptPlanRefs(request: GatewayRequest, skill?: SkillAvailabili
       selectedSkill: skill?.id,
       selectedRuntime: selectedRuntimeForSkill(skill),
       fallbackReason,
+      capabilityProviderRoutes: capabilityProviderRoutesForHandoff(request).routes.map((route) => ({
+        capabilityId: route.capabilityId,
+        primaryProviderId: route.primaryProviderId,
+        fallbackProviderIds: route.fallbackProviderIds,
+        status: route.status,
+        transport: route.providers.find((provider) => provider.providerId === route.primaryProviderId)?.transport,
+        workerId: route.providers.find((provider) => provider.providerId === route.primaryProviderId)?.workerId,
+        healthStatus: route.providers.find((provider) => provider.providerId === route.primaryProviderId)?.healthStatus,
+        routeTraceRef: `runtime://capability-provider-route/${route.capabilityId}`,
+      })),
       selectedAt: new Date().toISOString(),
     },
   };

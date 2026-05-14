@@ -38,6 +38,38 @@ test('context follow-up protocol enables direct context answer even when AgentSe
   assert.match(payload.message, /research-report|report/i);
 });
 
+test('direct context fast path yields skill tool capability provider status queries to registry routing', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: '现在你有哪些 skill 和 web search provider 是被激活了？',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [{
+      id: 'research-report',
+      type: 'research-report',
+      metadata: { reportRef: '.sciforge/task-results/report.md' },
+    }],
+    uiState: {
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        executionModePlan: {
+          executionMode: 'direct-context-answer',
+          signals: ['context-summary'],
+        },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+        latencyPolicy: { blockOnContextCompaction: false },
+      },
+      recentExecutionRefs: [{
+        id: 'unit-report',
+        tool: 'capability.report.generate',
+        outputRef: '.sciforge/task-results/report.json',
+      }],
+    },
+  };
+
+  assert.equal(directContextFastPathPayload(request), undefined);
+});
+
 test('context follow-up protocol yields when AgentServer generation is explicitly forced', () => {
   const request: GatewayRequest = {
     skillDomain: 'literature',
@@ -150,6 +182,8 @@ test('explicit no-execution context summary uses direct fast path from applied c
   assert.ok(payload);
   assert.equal(payload.executionUnits[0]?.tool, 'sciforge.direct-context-fast-path');
   assert.equal(payload.executionUnits[0]?.status, 'done');
+  assert.match(String(payload.executionUnits[0]?.params ?? ''), /directContextGate/);
+  assert.match(JSON.stringify(payload.artifacts[0]?.metadata ?? {}), /directContextGate/);
   assert.match(payload.message, /Digest: prior run preserved failed output refs/);
   assert.match(payload.message, /failed\.json|failed\.stderr\.log/);
 });

@@ -5,7 +5,7 @@ import { buildBuiltInScenarioPackage } from '@sciforge/scenario-core/scenario-pa
 import { scenarioBuilderComponentDisplay, scenarioBuilderRecommendationReasons } from '@sciforge/scenario-core/scenario-builder-display-policy';
 import { SCENARIO_SPECS } from '@sciforge/scenario-core/scenario-specs';
 import type { ScenarioRuntimeOverride } from '../domain';
-import { defaultElementSelectionForScenario, scenarioPackageToOverride } from './ScenarioBuilderPanel';
+import { defaultElementSelectionForScenario, defaultToolProviderRouteForCapability, defaultToolProviderRouteForTool, scenarioPackageToOverride } from './ScenarioBuilderPanel';
 
 describe('ScenarioBuilderPanel scenario package policy integration', () => {
   it('uses scenario package display policy for builder recommendation copy', () => {
@@ -38,5 +38,20 @@ describe('ScenarioBuilderPanel scenario package policy integration', () => {
 
     assert.equal(override.fallbackComponent, pkg.scenario.fallbackComponentId);
     assert.equal(display.label, 'Artifact inspector');
+  });
+
+  it('derives editable provider defaults for tools and core capabilities', () => {
+    const mcpRoute = defaultToolProviderRouteForTool({
+      id: 'clawhub.playwright-mcp',
+      toolType: 'connector',
+      requiredConfig: ['PLAYWRIGHT_TOKEN'],
+    });
+    const searchRoute = defaultToolProviderRouteForCapability('web_search');
+
+    assert.equal(mcpRoute.source, 'mcp');
+    assert.equal(mcpRoute.primaryProviderId, 'clawhub.playwright-mcp');
+    assert.deepEqual(mcpRoute.requiredConfig, ['PLAYWRIGHT_TOKEN']);
+    assert.equal(searchRoute.source, 'agentserver');
+    assert.equal(searchRoute.primaryProviderId, 'agentserver.backend-server.web_search');
   });
 });

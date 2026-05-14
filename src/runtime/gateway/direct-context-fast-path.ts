@@ -25,8 +25,10 @@ export function directContextFastPathPayload(request: GatewayRequest): ToolPaylo
   });
   if (!context.length) return undefined;
   if (!hasCurrentContextEvidence(context)) return undefined;
+  const gate = directContextGate(request, context);
+  if (!gate.allowed) return undefined;
   const missingExpectedArtifacts = missingExpectedArtifactTypes(request);
-  if (missingExpectedArtifacts.length) return missingExpectedArtifactsPayload(request, context, missingExpectedArtifacts);
+  if (missingExpectedArtifacts.length) return missingExpectedArtifactsPayload(request, context, missingExpectedArtifacts, gate);
   const message = directContextFastPathMessage(context);
   const instance = directContextInstance(request, context);
   const reportId = directContextArtifactId(instance.id);
@@ -58,6 +60,7 @@ export function directContextFastPathPayload(request: GatewayRequest): ToolPaylo
       params: JSON.stringify({
         policy: DIRECT_CONTEXT_FAST_PATH_POLICY.policyOwner,
         contextItemCount: context.length,
+        directContextGate: gate.audit,
       }),
       status: 'done',
       hash: sha1(message).slice(0, 16),
@@ -73,6 +76,7 @@ export function directContextFastPathPayload(request: GatewayRequest): ToolPaylo
         source: DIRECT_CONTEXT_FAST_PATH_POLICY.source,
         policyOwner: DIRECT_CONTEXT_FAST_PATH_POLICY.policyOwner,
         contextItemCount: context.length,
+        directContextGate: gate.audit,
         runId: instance.runId,
         sourceRunId: instance.runId,
         producerRunId: instance.runId,
@@ -102,6 +106,7 @@ function missingExpectedArtifactsPayload(
   request: GatewayRequest,
   context: ReturnType<typeof buildDirectContextFastPathItems>,
   missingExpectedArtifacts: string[],
+  gate: DirectContextGateDecision,
 ): ToolPayload {
   const instance = directContextInstance(request, context, missingExpectedArtifacts);
   const reportId = directContextArtifactId(instance.id);
@@ -146,6 +151,7 @@ function missingExpectedArtifactsPayload(
         policy: DIRECT_CONTEXT_FAST_PATH_POLICY.policyOwner,
         contextItemCount: context.length,
         missingExpectedArtifacts,
+        directContextGate: gate.audit,
       }),
       status: 'repair-needed',
       failureReason: `Direct context fast path cannot satisfy follow-up without expected artifacts: ${missing}`,
@@ -166,6 +172,7 @@ function missingExpectedArtifactsPayload(
         status: policy.status,
         missingExpectedArtifacts,
         contextItemCount: context.length,
+        directContextGate: gate.audit,
         runId: instance.runId,
         sourceRunId: instance.runId,
         producerRunId: instance.runId,
@@ -189,6 +196,90 @@ function missingExpectedArtifactsPayload(
         summary: item.summary,
       })),
   };
+}
+
+interface DirectContextGateDecision {
+  allowed: boolean;
+  audit: {
+    intent: 'context-summary' | 'run-diagnostic' | 'artifact-status' | 'capability-status' | 'fresh-execution' | 'unknown';
+    requiredContext: string[];
+    usedContextRefs: string[];
+    sufficiency: 'sufficient' | 'insufficient';
+    skippedTaskReason?: string;
+    blockReason?: string;
+  };
+}
+
+function directContextGate(
+  request: GatewayRequest,
+  context: ReturnType<typeof buildDirectContextFastPathItems>,
+): DirectContextGateDecision {
+  const intent = directContextIntent(request.prompt);
+  const usedContextRefs = directContextFastPathSupportingRefs(context).slice(0, 12);
+  const requiredContext = requiredContextForDirectIntent(intent);
+  if (intent === 'capability-status') {
+    return {
+      allowed: false,
+      audit: {
+        intent,
+        requiredContext: ['capability-registry', 'tool-registry', 'provider-registry', 'agentserver-worker-registry'],
+        usedContextRefs,
+        sufficiency: 'insufficient',
+        blockReason: 'Skill/tool/capability/provider status must be answered from registries, not artifact summaries.',
+      },
+    };
+  }
+  if (intent === 'fresh-execution') {
+    return {
+      allowed: false,
+      audit: {
+        intent,
+        requiredContext,
+        usedContextRefs,
+        sufficiency: 'insufficient',
+        blockReason: 'Fresh execution or external lookup request requires backend/tool routing.',
+      },
+    };
+  }
+  return {
+    allowed: true,
+    audit: {
+      intent,
+      requiredContext,
+      usedContextRefs,
+      sufficiency: usedContextRefs.length > 0 ? 'sufficient' : 'insufficient',
+      skippedTaskReason: 'Typed current-session context was sufficient for a bounded direct answer.',
+    },
+  };
+}
+
+function directContextIntent(prompt: string): DirectContextGateDecision['audit']['intent'] {
+  const normalized = prompt.toLowerCase();
+  if (
+    /(?:skill|tool|capabilit|provider|registry|web search|web_search|工具|能力|搜索工具|AgentServer worker)/i.test(prompt)
+    && /(?:activated|active|available|enabled|configured|status|source|registry|provider|有哪些|有没有|可用|激活|启用|配置|来源|状态)/i.test(prompt)
+  ) {
+    return 'capability-status';
+  }
+  if (/(?:do not|don't|no)\s+(?:rerun|run|execute|dispatch|call)|不要(?:重跑|执行|调用|启动)|只基于当前|current refs only/i.test(prompt)) {
+    return 'context-summary';
+  }
+  if (/(?:latest|today|news|search|download|fetch|rerun|run again|execute|查找|检索|搜索|最新|今天|下载|执行|重跑|继续跑|联网|arxiv)/i.test(prompt)) {
+    return 'fresh-execution';
+  }
+  if (/(?:fail|failed|failure|error|diagnos|stderr|stdout|为什么|失败|原因|报错|日志)/i.test(prompt)) return 'run-diagnostic';
+  if (/(?:artifact|ref|reference|产物|引用|证据|结果)/i.test(prompt)) return 'artifact-status';
+  if (normalized.trim()) return 'context-summary';
+  return 'unknown';
+}
+
+function requiredContextForDirectIntent(intent: DirectContextGateDecision['audit']['intent']) {
+  if (intent === 'run-diagnostic') return ['run-trace', 'execution-units', 'failure-evidence'];
+  if (intent === 'artifact-status') return ['artifact-index', 'object-references', 'current-refs'];
+  if (intent === 'context-summary') return ['current-session-context'];
+  if (intent === 'capability-status') return ['capability-registry', 'tool-registry', 'provider-registry'];
+  if (intent === 'fresh-execution') return ['backend-routing', 'capability-provider-routes'];
+  return ['typed-current-context'];
 }
 
 function directContextInstance(

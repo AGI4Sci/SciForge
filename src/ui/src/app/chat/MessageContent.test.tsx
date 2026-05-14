@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { ObjectReference } from '../../domain';
+import type { ObjectReference, SciForgeMessage, SciForgeSession } from '../../domain';
 import { parseSciForgeReferenceAttribute } from '../../../../../packages/support/object-references';
-import { MessageContent } from './MessageContent';
+import { MessageContent, inlineObjectReferencesForMessage } from './MessageContent';
+import { composerReferenceForObjectReference } from './composerReferences';
 import { ObjectReferenceChips } from './ReferenceChips';
 import { currentObjectReferenceFromComposerReference } from './composerReferences';
 
@@ -81,6 +82,52 @@ test('message markdown renderer only renders structured object refs, never text-
   assert.equal((markup.match(/data-sciforge-reference=/g) ?? []).length, 1);
 });
 
+test('user messages do not display object references produced by later agent work', () => {
+  const session = sessionWithObjects({
+    runs: [{
+      id: 'run-later',
+      prompt: '帮我调研一下',
+      response: 'done',
+      status: 'completed',
+      scenarioId: 'literature-evidence-review',
+      createdAt: '2026-05-14T00:00:01.000Z',
+      objectReferences: [recentArtifact],
+    }],
+    artifacts: [{
+      id: 'recent-report',
+      type: 'research-report',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: 'test.runtime-artifact.v1',
+      data: {},
+      metadata: {
+        runId: 'run-later',
+        readableRef: 'reports/recent-report.md',
+        rawRef: 'reports/recent-report.md',
+        previewPolicy: 'inline',
+      },
+    }],
+  });
+  const message = userMessage({
+    objectReferences: [recentArtifact],
+  });
+
+  const references = inlineObjectReferencesForMessage(message, session, 'run-later');
+
+  assert.deepEqual(references, []);
+});
+
+test('user messages keep explicitly selected composer references', () => {
+  const message = userMessage({
+    references: [composerReferenceForObjectReference(pickedFile)],
+    objectReferences: [recentArtifact],
+  });
+
+  const references = inlineObjectReferencesForMessage(message, sessionWithObjects());
+
+  assert.equal(references.length, 1);
+  assert.equal(references[0]?.ref, 'file:papers/methods.md');
+});
+
 test('object reference chips expose each selected chip object instead of the recent artifact', () => {
   const markup = renderToStaticMarkup(
     <ObjectReferenceChips
@@ -102,6 +149,35 @@ function firstRenderedReference(markup: string) {
   const reference = parseSciForgeReferenceAttribute(decodeHtmlAttribute(match[1]));
   assert.ok(reference, 'expected parseable SciForgeReference attribute');
   return reference;
+}
+
+function userMessage(overrides: Partial<SciForgeMessage> = {}): SciForgeMessage {
+  return {
+    id: 'msg-user',
+    role: 'user',
+    content: '帮我调研一下',
+    createdAt: '2026-05-14T00:00:00.000Z',
+    status: 'completed',
+    ...overrides,
+  };
+}
+
+function sessionWithObjects(overrides: Partial<SciForgeSession> = {}): SciForgeSession {
+  return {
+    id: 'session-test',
+    scenarioId: 'literature-evidence-review',
+    title: 'Test session',
+    createdAt: '2026-05-14T00:00:00.000Z',
+    updatedAt: '2026-05-14T00:00:00.000Z',
+    messages: [],
+    runs: [],
+    artifacts: [],
+    executionUnits: [],
+    claims: [],
+    notebook: [],
+    uiManifest: [],
+    ...overrides,
+  } as SciForgeSession;
 }
 
 function decodeHtmlAttribute(value: string) {

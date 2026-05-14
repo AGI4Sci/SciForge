@@ -162,6 +162,11 @@ import {
 } from '@sciforge-ui/runtime-contract/backend-handoff-drift';
 import { CONVERSATION_POLICY_TOOL_ID } from '@sciforge-ui/runtime-contract/conversation-policy';
 import { normalizeTurnExecutionConstraints, TURN_EXECUTION_CONSTRAINTS_TOOL_ID } from '@sciforge-ui/runtime-contract/turn-constraints';
+import {
+  capabilityProviderPreflight,
+  capabilityProviderPreflightPayload,
+  requestWithDiscoveredCapabilityProviders,
+} from './gateway/capability-provider-preflight.js';
 
 configureDirectAnswerArtifactContext(collectArtifactReferenceContext);
 configurePayloadValidationContext(attemptPlanRefs);
@@ -179,7 +184,9 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, 
     emitWorkspaceRuntimeEvent(telemetry.callbacks, conversationPolicyStartedEvent());
     const policyApplication = await applyConversationPolicy(normalizedRequest, telemetry.callbacks, { workspace: normalizedRequest.workspacePath });
     telemetry.markPolicyApplication(policyApplication);
-    const request = await requestWithAgentHarnessShadow(policyApplication.request, telemetry.callbacks, policyApplication);
+    const request = await requestWithDiscoveredCapabilityProviders(
+      await requestWithAgentHarnessShadow(policyApplication.request, telemetry.callbacks, policyApplication),
+    );
     const directContextPayload = directContextFastPathPayload(request);
     if (directContextPayload) {
       emitWorkspaceRuntimeEvent(telemetry.callbacks, directContextFastPathEvent({
@@ -190,6 +197,17 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, 
       telemetry.markVerificationStart();
       const verified = await recordValidationRepairTelemetryForPayload(
         await applyRuntimeVerificationPolicy(directContextPayload, request),
+        request,
+      );
+      telemetry.markVerificationEnd();
+      return finalizeGatewayPayload(telemetry.emitFinal(verified) ?? verified, request, runtimeReplayRecorder, telemetry.callbacks);
+    }
+    const providerPreflight = capabilityProviderPreflight(request);
+    const providerPreflightPayload = capabilityProviderPreflightPayload(request, providerPreflight);
+    if (providerPreflightPayload) {
+      telemetry.markVerificationStart();
+      const verified = await recordValidationRepairTelemetryForPayload(
+        await applyRuntimeVerificationPolicy(providerPreflightPayload, request),
         request,
       );
       telemetry.markVerificationEnd();
@@ -1099,7 +1117,7 @@ async function requestAgentServerGeneration(params: {
           ...harnessMetadata,
         },
       },
-      contextPolicy: agentServerContextPolicy(request),
+      contextPolicy: agentServerContextPolicy(promptRequest),
       runtime: {
         backend,
         cwd: params.workspace,

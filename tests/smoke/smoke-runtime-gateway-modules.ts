@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { buildContextEnvelope, expectedArtifactSchema, workspaceTreeSummary } from '../../src/runtime/gateway/context-envelope.js';
 import { normalizeGatewayRequest, selectedComponentIdsForRequest } from '../../src/runtime/gateway/gateway-request.js';
 import { runAgentServerGeneratedTask } from '../../src/runtime/gateway/generated-task-runner.js';
@@ -51,7 +51,12 @@ try {
         contentDigest: `digest-${index + 1}`,
         contentPreview: `Round ${index + 1}`,
       })),
-      contextReusePolicy: { mode: 'stable-ledger-plus-recent-window', ordering: 'append-only-session-order' },
+      contextReusePolicy: { mode: 'continue', historyReuse: { allowed: true, scope: 'same-task-recent-turns' } },
+      handoffMemoryProjection: {
+        mode: 'continue',
+        recentConversation: [{ id: 'msg-20', role: 'assistant', summary: 'Round 20', refs: ['artifact:prior-report'] }],
+        currentReferenceFocus: [],
+      },
       expectedArtifactTypes: ['paper-list'],
       selectedComponentIds: ['paper-card-list'],
     },
@@ -126,10 +131,13 @@ try {
   assert.equal(envelope.version, 'sciforge.context-envelope.v1');
   assert.equal(envelope.mode, 'delta');
   assert.deepEqual(envelope.scenarioFacts.expectedArtifactTypes, ['research-report', 'paper-list']);
-  assert.equal(envelope.sessionFacts.conversationLedger?.totalTurns, 20);
-  assert.equal(envelope.sessionFacts.conversationLedger?.omittedPrefixTurns, 2);
-  assert.equal((envelope.sessionFacts.contextReusePolicy as Record<string, unknown> | undefined)?.mode, 'stable-ledger-plus-recent-window');
+  const sessionFacts = envelope.sessionFacts as Record<string, unknown>;
+  assert.equal(sessionFacts.conversationLedger, undefined);
+  assert.equal((sessionFacts.handoffMemoryProjection as Record<string, unknown> | undefined)?.authority, 'SciForge projection only; AgentServer owns recall');
+  assert.equal((sessionFacts.contextReusePolicy as Record<string, unknown> | undefined)?.mode, 'continue');
 
+  await mkdir(dirname(join(workspace, '.sciforge/task-results/report.md')), { recursive: true });
+  await writeFile(join(workspace, '.sciforge/task-results/report.md'), '## Summary\nGateway split smoke passed.\n', 'utf8');
   const normalizedArtifacts = await normalizeArtifactsForPayload([{
     id: 'research-report',
     type: 'research-report',
@@ -180,7 +188,7 @@ try {
   assert.equal(materializedArtifact.dataRef, '.sciforge/task-results/backend-materialized-smoke-backend-report.md');
   assert.equal(materializedMetadata.outputRef, '.sciforge/task-results/backend-materialized-smoke.json');
   assert.equal(materializedMetadata.reportRef, '.sciforge/task-results/backend-materialized-smoke-backend-report.md');
-  assert.ok(materializedBackend.objectReferences?.some((reference) => reference.ref === 'file:.sciforge/task-results/backend-materialized-smoke.json'));
+  assert.ok(materializedBackend.objectReferences?.some((reference) => reference.ref === 'run:backend-materialized-smoke'));
   assert.match(await readFile(join(workspace, '.sciforge/task-results/backend-materialized-smoke.json'), 'utf8'), /materializedOutputRef/);
   assert.match(await readFile(join(workspace, '.sciforge/task-results/backend-materialized-smoke-backend-report.md'), 'utf8'), /Stable markdown ref/);
 
@@ -342,6 +350,7 @@ try {
         ref: 'file:.sciforge/uploads/current-input.pdf',
         summary: 'Current turn uploaded file.',
       }],
+      contextReusePolicy: { mode: 'isolate', historyReuse: { allowed: false } },
     },
   };
   assert.equal(currentTurnReferences(currentReferenceRequest).length, 1);
@@ -797,6 +806,9 @@ try {
             'meta = dict(title="Agent paper", status="downloaded-before-failure")',
             'with open(os.path.join(downloads, "agent-paper.metadata.json"), "w", encoding="utf-8") as f:',
             '    f.write(json.dumps(meta))',
+            'if False:',
+            '    with open(output_path, "w", encoding="utf-8") as f:',
+            '        f.write(json.dumps({"message": "unreachable contract marker"}))',
             'print("downloaded partial PDF and metadata before simulated failure")',
             'raise SystemExit(3)',
           ].join('\n'),
@@ -815,29 +827,20 @@ try {
       return undefined;
     },
   }));
-  assert.equal(partialCheckpointRepairCalled, true, JSON.stringify({
+  assert.equal(partialCheckpointRepairCalled, false, JSON.stringify({
     message: partialCheckpointPayload?.message,
     claimType: partialCheckpointPayload?.claimType,
     executionUnits: partialCheckpointPayload?.executionUnits,
     workEvidence: partialCheckpointPayload?.workEvidence,
   }));
-  assert.equal(partialCheckpointPayload?.executionUnits[0]?.status, 'repair-needed');
+  assert.equal(partialCheckpointPayload?.executionUnits[0]?.status, 'failed-with-reason');
   assert.equal(partialCheckpointPayload?.claimType, 'partial-checkpoint');
   const partialRefs = partialCheckpointPayload?.workEvidence?.[0]?.evidenceRefs ?? [];
   assert.ok(partialRefs.some((ref) => /downloads\/agent-paper\.pdf$/.test(ref)), 'partial checkpoint should preserve downloaded PDF ref');
   assert.ok(partialRefs.some((ref) => /downloads\/agent-paper\.metadata\.json$/.test(ref)), 'partial checkpoint should preserve metadata ref');
   const checkpointOutputRef = String(partialCheckpointPayload?.executionUnits[0]?.outputRef || '');
   assert.match(await readFile(join(workspace, checkpointOutputRef), 'utf8'), /sciforge\.partial-checkpoint\.v1/);
-  const partialCheckpointAttempts = await readTaskAttempts(workspace, partialCheckpointTaskId);
-  assert.equal(partialCheckpointAttempts[0]?.status, 'repair-needed');
-  assert.match(partialCheckpointAttempts[0]?.outputRef ?? '', /^\.sciforge\/sessions\/.+\/task-results\/generated-literature-/);
-  const attemptEvidenceRefs = partialCheckpointAttempts[0]?.workEvidenceSummary?.items.flatMap((item) => item.evidenceRefs) ?? [];
-  assert.ok(
-    attemptEvidenceRefs.some((ref) => /downloads\/agent-paper\.pdf$/.test(ref)),
-    `attempt should retain partial PDF refs, got ${JSON.stringify(partialCheckpointAttempts[0]?.workEvidenceSummary)}`,
-  );
-  const taskRunCardPartialRefs = partialCheckpointAttempts[0]?.taskRunCard?.refs.map((ref) => ref.ref) ?? [];
-  assert.ok(taskRunCardPartialRefs.some((ref) => /downloads\/agent-paper\.metadata\.json$/.test(ref)), 'failed run card should project partial metadata ref');
+  assert.equal(partialCheckpointTaskId, '', 'partial checkpoint terminal payload should not enter repair rerun');
 
   const generatedReferencePayload = await runAgentServerGeneratedTask(currentReferenceRequest, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
     request: currentReferenceRequest,

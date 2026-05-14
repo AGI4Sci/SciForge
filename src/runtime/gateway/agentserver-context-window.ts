@@ -555,7 +555,7 @@ export function agentServerAgentId(request: GatewayRequest, _purpose: string) {
   const packageId = request.scenarioPackageRef?.id || request.skillDomain;
   const referenceScope = currentReferenceScopeKey(request);
   const continuityScope = requestNeedsAgentServerContinuity(request)
-    ? referenceScope || sessionId || request.skillPlanRef || request.skillDomain
+    ? sessionId || referenceScope || request.skillPlanRef || request.skillDomain
     : `fresh:${sha1(`${request.prompt}:${Date.now()}:${Math.random()}`).slice(0, 12)}`;
   const stable = [packageId, continuityScope]
     .filter(Boolean)
@@ -565,7 +565,8 @@ export function agentServerAgentId(request: GatewayRequest, _purpose: string) {
 
 export function agentServerContextPolicy(request: GatewayRequest) {
   const hasSession = typeof request.uiState?.sessionId === 'string' && request.uiState.sessionId.trim().length > 0;
-  const isolatedReferenceTurn = currentTurnReferences(request).length > 0;
+  const policyMode = agentServerContextPolicyMode(request);
+  const isolatedReferenceTurn = currentTurnReferences(request).length > 0 && policyMode !== 'continue' && policyMode !== 'repair';
   const useContinuity = requestNeedsAgentServerContinuity(request);
   return {
     includeCurrentWork: hasSession && useContinuity && !isolatedReferenceTurn,
@@ -578,6 +579,16 @@ export function agentServerContextPolicy(request: GatewayRequest) {
     contextWindowLimit: request.maxContextWindowTokens,
     modelContextWindow: request.maxContextWindowTokens,
   };
+}
+
+function agentServerContextPolicyMode(request: GatewayRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const policy = isRecord(uiState.contextReusePolicy)
+    ? uiState.contextReusePolicy
+    : isRecord(uiState.contextIsolation)
+      ? uiState.contextIsolation
+      : {};
+  return stringField(policy.mode) ?? '';
 }
 
 export function requestNeedsAgentServerContinuity(request: GatewayRequest) {

@@ -4,7 +4,7 @@ import test from 'node:test';
 import type { GatewayRequest } from '../runtime-types';
 import { agentHarnessContinuityDecision } from './agent-harness-continuity-decision';
 
-test('reuse policy alone stays fresh for a new current-turn task', () => {
+test('continue reuse policy reuses AgentServer session context', () => {
   const decision = agentHarnessContinuityDecision({
     skillDomain: 'literature',
     prompt: 'Find new papers and write a report.',
@@ -18,9 +18,9 @@ test('reuse policy alone stays fresh for a new current-turn task', () => {
     },
   } as GatewayRequest);
 
-  assert.equal(decision.useContinuity, false);
-  assert.equal(decision.decision, 'fresh');
-  assert.equal(decision.runtimeSignals.policyReuseIsAdvisory, true);
+  assert.equal(decision.useContinuity, true);
+  assert.equal(decision.decision, 'continuity');
+  assert.equal(decision.runtimeSignals.policyDrivesContinuity, true);
   assert.ok(decision.reasons.includes('reuse-policy-advisory'));
 });
 

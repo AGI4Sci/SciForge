@@ -585,6 +585,7 @@ export interface ScenarioRuntimeOverride {
   selectedSenseIds?: string[];
   selectedActionIds?: string[];
   selectedVerifierIds?: string[];
+  toolProviderRoutes?: Record<string, ToolProviderRouteOverride>;
   turnExecutionConstraints?: Record<string, unknown>;
   artifactPolicy?: Record<string, unknown>;
   referencePolicy?: Record<string, unknown>;
@@ -595,6 +596,19 @@ export interface ScenarioRuntimeOverride {
   scenarioPackageRef?: ScenarioPackageRef;
   skillPlanRef?: string;
   uiPlanRef?: string;
+}
+
+export type ToolProviderSource = 'local' | 'agentserver' | 'mcp' | 'http' | 'ssh' | 'client-worker' | 'backend-native' | 'package' | 'workspace' | 'external';
+
+export interface ToolProviderRouteOverride {
+  enabled?: boolean;
+  capabilityId?: string;
+  source?: ToolProviderSource;
+  primaryProviderId?: string;
+  fallbackProviderIds?: string[];
+  permissions?: string[];
+  requiredConfig?: string[];
+  health?: 'ready' | 'unknown' | 'unavailable' | 'unauthorized' | 'rate-limited';
 }
 
 export interface NormalizedAgentResponse {

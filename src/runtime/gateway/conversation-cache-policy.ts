@@ -182,8 +182,8 @@ function hasRecentFailure(data: JsonMap): boolean {
 
 function hasExplicitRefs(data: JsonMap): boolean {
   if (arrayValue(data.currentReferences).length || arrayValue(data.references).length || arrayValue(data.refs).length) return true;
-  const memory = recordValue(data.memoryPlan) ?? {};
-  return Boolean(arrayValue(memory.currentReferenceFocus).length);
+  const projection = recordValue(data.handoffMemoryProjection) ?? {};
+  return Boolean(arrayValue(projection.currentReferenceFocus).length);
 }
 
 function reason(mode: string, contextMode: string, risk: string, recentFailure: boolean): string {

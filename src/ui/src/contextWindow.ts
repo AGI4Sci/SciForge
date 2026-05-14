@@ -43,6 +43,7 @@ export function buildContextWindowMeterModel(state: AgentContextWindowState, run
     `last compacted: ${state.lastCompactedAt || 'never'}`,
   ].join('\n');
 
+  const memoryBoundaryLine = 'AgentServer owns multi-turn memory; SciForge sends current-turn projection, refs, and digests.';
   return {
     ratio,
     ratioStyle: `${Math.min(100, Math.max(0, ratio * 100))}%`,
@@ -61,7 +62,8 @@ export function buildContextWindowMeterModel(state: AgentContextWindowState, run
     ratioDetail,
     thresholdDetail,
     detailRows,
-    title: `${title}\n发送前达到阈值时会请求 AgentServer/backend 原生压缩；运行中事件只读展示。`,
+    memoryBoundaryLine,
+    title: `${title}\n发送前达到阈值时会请求 AgentServer/backend 原生压缩；运行中事件只读展示。\n${memoryBoundaryLine}`,
   };
 }
 

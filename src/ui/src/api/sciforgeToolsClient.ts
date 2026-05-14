@@ -235,6 +235,7 @@ export async function sendSciForgeToolMessage(
           note: 'SciForge dispatch is constrained by versioned current-turn policy records before any AgentServer generation is allowed.',
         },
         scenarioOverride,
+        toolProviderRoutes: input.scenarioOverride?.toolProviderRoutes,
         scenarioPackageRef: input.scenarioPackageRef,
         skillPlanRef: input.skillPlanRef,
         uiPlanRef: input.uiPlanRef,
@@ -926,6 +927,7 @@ function buildTransportAgentContext(
     repairHandoffRunner,
     availableComponentIds,
     selectedToolIds: selectedRuntimeToolIds(input),
+    toolProviderRoutes: input.scenarioOverride?.toolProviderRoutes,
     selectedToolContracts,
     sessionStats: {
       messageCount: input.messages.length,

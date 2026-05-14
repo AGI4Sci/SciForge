@@ -59,7 +59,7 @@ RESPONSE_JSON_SCHEMA: JsonMap = {
         "status": {"enum": ["ok", "rejected", "failed"]},
         "goalSnapshot": {"type": "object"},
         "contextPolicy": {"type": "object"},
-        "memoryPlan": {"type": "object"},
+        "handoffMemoryProjection": {"type": "object"},
         "currentReferences": {"type": "array"},
         "currentReferenceDigests": {"type": "array"},
         "artifactIndex": {"type": "object"},
@@ -195,7 +195,7 @@ class ConversationPolicyResponse:
     schemaVersion: str = RESPONSE_SCHEMA_VERSION
     requestId: str | None = None
     status: PolicyStatus = "ok"
-    memoryPlan: JsonMap = field(default_factory=dict)
+    handoffMemoryProjection: JsonMap = field(default_factory=dict)
     currentReferences: list[JsonMap] = field(default_factory=list)
     currentReferenceDigests: list[JsonMap] = field(default_factory=list)
     artifactIndex: JsonMap = field(default_factory=dict)
@@ -267,7 +267,7 @@ def response_from_json(payload: JsonMap) -> ConversationPolicyResponse:
         status=payload.get("status", "ok"),
         goalSnapshot=_optional_mapping(payload.get("goalSnapshot"), "goalSnapshot"),
         contextPolicy=_optional_mapping(payload.get("contextPolicy"), "contextPolicy"),
-        memoryPlan=_optional_mapping(payload.get("memoryPlan"), "memoryPlan"),
+        handoffMemoryProjection=_optional_mapping(payload.get("handoffMemoryProjection"), "handoffMemoryProjection"),
         currentReferences=[
             item for item in _optional_list(payload.get("currentReferences"), "currentReferences")
             if isinstance(item, dict)

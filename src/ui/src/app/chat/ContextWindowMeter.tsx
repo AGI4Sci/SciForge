@@ -38,7 +38,7 @@ export function ContextWindowMeter({
             </div>
           ))}
         </dl>
-        <small>只读状态 · 压缩由 backend 能力和阈值触发</small>
+        <small>AgentServer 负责多轮记忆；SciForge 只发送本轮 projection、refs 和 digests。</small>
       </div>
     </div>
   );

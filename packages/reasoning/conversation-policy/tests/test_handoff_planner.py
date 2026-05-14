@@ -16,7 +16,7 @@ def test_handoff_budget_keeps_large_values_behind_refs():
                     "data": {"markdown": huge},
                 }
             ],
-            "memory": {"priorAttempts": [{"stderr": huge, "stderrRef": f".sciforge/logs/{i}.stderr"} for i in range(8)]},
+            "handoffMemoryProjection": {"priorAttempts": [{"stderr": huge, "stderrRef": f".sciforge/logs/{i}.stderr"} for i in range(8)]},
         }
     )
 

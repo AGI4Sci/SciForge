@@ -73,15 +73,15 @@ try {
     assert.match(String(ledger.at(-1)?.contentPreview), /Round 24/);
     assert.equal(recentConversation.length, 16, 'recent readable window should stay bounded after 20+ turns');
     assert.match(recentConversation[0], /Round 17|Browser reply 16/);
-    assert.equal(reusePolicy.mode, 'stable-ledger-plus-recent-window');
-    assert.deepEqual(agentContext.conversationLedger, ledger);
-    assert.deepEqual(agentContext.contextReusePolicy, reusePolicy);
+    assert.ok(['continue', 'repair', 'isolate', undefined].includes(reusePolicy.mode as string | undefined), 'context reuse policy should stay in AgentServer mode-signal vocabulary');
+    assert.equal(agentContext.conversationLedger, undefined, 'browser transport must not present UI ledger as AgentServer memory');
+    assert.equal(agentContext.contextReusePolicy, undefined, 'browser transport leaves context reuse decisions to Python policy and AgentServer');
     assert.ok(Math.max(...serializedRequestBytes) < 180_000, `handoff request body should stay bounded, got ${Math.max(...serializedRequestBytes)} bytes`);
     assert.ok(isNonDecreasing(serializedRequestBytes), 'request bytes should grow predictably with append-only context, not reset unpredictably');
 
     await page.screenshot({ path: join(artifactsDir, 'browser-smoke-multiturn-context.png'), fullPage: true });
     assert.deepEqual((page as Page & { __sciforgePageErrors?: string[] }).__sciforgePageErrors ?? [], [], '24-turn browser workflow should not emit page errors');
-    console.log(`[ok] browser 24-turn context smoke verified ledger reuse, bounded recent window, two visible compactions, compaction-aware meter, and request size ceiling; screenshot in ${artifactsDir}`);
+    console.log(`[ok] browser 24-turn context smoke verified bounded UI projection, two visible compactions, compaction-aware meter, and request size ceiling; screenshot in ${artifactsDir}`);
   } finally {
     await browser.close();
   }

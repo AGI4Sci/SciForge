@@ -8,6 +8,7 @@ import {
 } from '../../../../../packages/support/object-references';
 import { MarkdownRenderer } from '../markdown/MarkdownRenderer';
 import { InlineObjectReferences } from './InlineObjectReferences';
+import { currentObjectReferenceFromComposerReference, withInferredCurrentObjectReference } from './composerReferences';
 
 export function MessageContent({
   content,
@@ -27,6 +28,13 @@ export function MessageContent({
 }
 
 export function inlineObjectReferencesForMessage(message: SciForgeMessage, session: SciForgeSession, runId?: string) {
+  if (message.role === 'user') {
+    const userReferences = (message.references ?? [])
+      .map((reference) => currentObjectReferenceFromComposerReference(withInferredCurrentObjectReference(reference)))
+      .filter((reference): reference is ObjectReference => Boolean(reference))
+      .filter((reference) => isVisibleMessageObjectReference(reference, session));
+    return mergeObjectReferences(userReferences, [], 40);
+  }
   const run = runId ? session.runs.find((item) => item.id === runId) : undefined;
   const runArtifactRefs = new Set((run?.objectReferences ?? [])
     .filter((reference) => reference.kind === 'artifact')

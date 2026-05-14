@@ -63,6 +63,192 @@ Event -> State -> Contract -> Decision -> Projection
 - `ContractValidationFailure`、WorkEvidence、stable refs、failure owner、verification gate、background checkpoint 和 validation-to-repair loop 是失败恢复主路径。
 - Export bundle 打包 event log、restored projection、refs manifest 和 audit-only raw attachments；它不维护第二套 replay 逻辑。
 
+## LLM-gated Direct Context
+
+Direct-context fast path 不能是纯模板化回答。它可以保留为低延迟路径，但必须先经过 LLM 或同等语义 classifier 的 intent/context match：判断用户问题需要哪类 typed context，当前 projection 是否足够，是否必须查询 AgentServer、capability registry、tool registry 或启动 workspace task。
+
+推荐边界：
+
+```text
+User follow-up
+  -> intent/context classifier
+  -> required typed context
+  -> context sufficiency check
+  -> deterministic direct answer OR routed backend/tool query
+```
+
+允许 direct-context 回答的问题必须满足三个条件：
+
+- 意图是只读当前会话事实，例如失败原因、当前 artifact、上一次 run 状态、已有证据引用。
+- 所需 typed context 已存在于 `ConversationProjection`、run trace、artifact index、current refs 或 failure evidence 中。
+- 回答能附带 supporting refs，并且无需访问新工具、外部网络、skill/tool registry、AgentServer context 或 workspace 文件正文。
+
+禁止 direct-context 直接回答的问题：
+
+- skill/tool/capability/provider 状态查询，例如“现在有哪些 skill 被激活”“有没有 web search”。
+- 需要外部新信息的问题，例如“今天最新 arXiv/新闻/网页结果”。
+- 需要读取未展开 artifact 正文、大文件、workspace 目录或远程服务的问题。
+- 需要继续执行、修复、下载、验证、生成报告或改变 workspace 的问题。
+
+这类问题必须路由到对应事实源：
+
+- skill/capability/provider 状态：Capability Registry / Tool Registry / AgentServer worker registry。
+- 多轮自然语言记忆：AgentServer session/current-work/context。
+- 运行失败诊断：run trace、TaskRunCard、ExecutionUnit、stdout/stderr、failure registry。
+- 最新检索和网页内容：`web_search` / `web_fetch` provider。
+
+fast path 的输出也必须事件化：记录 classifier 判定、required context、已使用 context ids、未使用原因和是否跳过 workspace task。这样 direct-context 是可审计的低延迟 projection，而不是隐藏的第二个回答器。
+
+## Capability, Skill, Tool 与 Provider 四层模型
+
+SciForge 的工具生态必须拆成四个清晰层次，避免把 `SKILL.md`、runtime tool、远程机器和场景策略混成一团。
+
+```text
+Skill Layer
+  describes workflow, domain method, prompt strategy
+
+Capability Layer
+  defines abstract abilities and contracts
+
+Provider Layer
+  binds capabilities to local, AgentServer, MCP, HTTP, ssh, client-worker, or backend-native executors
+
+Runtime Resolver
+  selects a provider for each required capability per run and records the route
+```
+
+### Skill Layer
+
+Skill 描述“如何做任务”，不是“工具已经可执行”。`SKILL.md` 适合承载领域方法、触发条件、流程约束、提示词策略、质量标准和使用示例。它可以声明 required/optional capabilities，但不能单独代表网络、文件、浏览器、API 或远程机器能力已经接入。
+
+示例：
+
+```yaml
+id: literature-evidence-review
+requires:
+  - web_search
+  - web_fetch
+  - pdf_extract
+optional:
+  - arxiv_search
+  - semantic_scholar_search
+  - evidence_matrix_validate
+```
+
+### Capability Layer
+
+Capability 是抽象能力和协议真相源，回答“系统能做什么”。每个 capability 必须有稳定 id、输入输出 schema、side effects、权限、validator、repair hints、examples 和 provider constraints。场景、skill 和 backend 只依赖 capability id，不依赖某台机器或某个 provider 名字。
+
+典型 capability：
+
+- `web_search`
+- `web_fetch`
+- `pdf_extract`
+- `arxiv_search`
+- `semantic_scholar_search`
+- `read_file`
+- `write_file`
+- `run_command`
+- `artifact_render`
+- `evidence_matrix_validate`
+
+### Provider Layer
+
+Provider 是 capability 的具体执行来源，回答“在哪里执行、由谁执行”。同一个 capability 可以有多个 provider：
+
+- `local.pdf_extract`
+- `backend-server.web_search`
+- `mac-local.web_fetch`
+- `lab-search-box.web_search`
+- `mcp.semantic_scholar_search`
+- `ssh-gpu.run_command`
+- `backend-native.browser_open`
+
+Provider 必须声明来源、transport、权限、健康检查、可访问 workspace roots、认证方式、网络边界、latency/quality hints 和 fallback eligibility。UI 配置页必须显示 provider 的来源和状态，而不是只显示一个扁平 tool 名称。
+
+推荐 Tool Manifest：
+
+```yaml
+id: backend-web-search
+capability: web_search
+provider: backend-server
+transport: http
+endpoint: /tools/web_search
+inputSchema: sciforge.capability.web_search.input.v1
+outputSchema: sciforge.capability.web_search.output.v1
+permissions:
+  - network
+healthcheck: /health
+fallbackEligible: true
+```
+
+### Runtime Resolver
+
+Runtime Resolver 在每次 run 前把 skill/scenario 需要的 capability 解析为具体 provider，并把选择写入 run context、ExecutionUnit 和 audit trace。它必须在任务启动前做 capability preflight：
+
+```text
+Scenario requires: web_search, web_fetch, pdf_extract
+Available: pdf_extract(local)
+Missing: web_search, web_fetch
+Decision: block run before dispatch; ask user to enable a search provider
+```
+
+Resolver 的职责：
+
+- 合并 scenario allowlist、skill requirements、user-selected tools、workspace policy 和 AgentServer worker registry。
+- 对每个 required capability 选择 primary provider 和 fallback providers。
+- 检查 health、permissions、workspace access、auth、network availability 和 rate-limit state。
+- 将 provider route 写入 handoff，让 backend 知道应调用标准 capability，而不是临时生成站点 scraper。
+- 对 zero-result、rate-limit、provider offline 和 permission denied 做统一 failure classification。
+
+## Distributed Tool Integration
+
+AgentServer 是分布式工具执行的控制面。新增机器时，如果这台机器提供的是系统已认识的标准 primitive/capability，理想路径应当只改配置，不改 SciForge 代码。
+
+配置化接入示例：
+
+```json
+{
+  "id": "lab-search-box",
+  "kind": "client-worker",
+  "endpoint": "http://10.0.0.8:3457",
+  "authToken": "...",
+  "allowedRoots": ["/data/workspaces"],
+  "capabilities": ["network", "filesystem"]
+}
+```
+
+路由示例：
+
+```json
+{
+  "tools": ["web_search", "web_fetch"],
+  "primary": "lab-search-box",
+  "fallbacks": ["backend-server", "mac-local"]
+}
+```
+
+只改配置可行的前提：
+
+- worker 使用 AgentServer 支持的 transport，例如 `backend-server`、`server`、`client-worker`、`ssh`、`container`、`remote-service`。
+- 工具名对应已注册 capability 或标准 primitive。
+- 新机器暴露健康检查、权限、allowed roots 和认证信息。
+- capability schema、validator 和 failure semantics 已存在。
+
+如果新增的是全新工具类型，例如 `semantic_scholar_graph_search`，不能只靠 `SKILL.md`。它必须先通过 Tool Manifest 注册 capability/provider contract；之后场景和 skill 才能声明依赖它。长期目标是 worker/tool server 暴露 manifests，AgentServer discovery 后进入 Capability Registry，SciForge 配置页只负责选择、授权和展示状态。
+
+配置页必须展示：
+
+- capability id 和用户可读说明。
+- provider 来源：local、AgentServer、MCP、HTTP、ssh、client-worker、backend-native。
+- 运行位置和 workspace access。
+- 健康状态、授权状态、rate-limit/配额状态。
+- 权限：network、filesystem、shell、external account、browser/computer-use。
+- primary/fallback route。
+- 被哪些 skills/scenarios 依赖。
+
+这条边界可以防止 agent 在缺少 web search 时自行写临时 DuckDuckGo scraper，也能让用户清楚知道“任务失败是能力缺失、provider 限流、权限未开，还是运行逻辑错误”。
+
 ## Harness-governed Scientific Agent OS
 
 Backend-first 解决“谁理解用户意图”，capability-driven 解决“系统能做什么”，harness-governed 解决“agent 在每个阶段如何被约束”。SciForge 不把 agent harness 散落在 gateway、prompt builder、conversation policy、UI 和 repair loop 里，而是把 harness 作为独立、可版本化、可切换的 policy 层维护。
@@ -477,7 +663,7 @@ Policy response 会写回 `GatewayRequest.uiState`，但这些字段都是下一
 
 - `goalSnapshot`：当前 turn 的目标、引用和任务关系。
 - `contextReusePolicy` / `contextIsolation`：告诉 runtime/AgentServer 本轮是 `continue`、`repair` 还是 `isolate`。
-- `memoryPlan`：保留字段名用于兼容 contract，但语义是 bounded memory projection；只包含最近可暴露摘要、refs 和 pollution guard，不作为 SciForge 自有长期记忆。
+- `handoffMemoryProjection`：本轮可暴露的 bounded summaries、refs 和 pollution guard；不承担 recall。
 - `currentReferences` / `currentReferenceDigests` / `artifactIndex`：当前 refs 和可点击对象索引。
 - `capabilityBrief` / `handoffPlan`：能力和传输预算投影。
 - `acceptancePlan` / `recoveryPlan` / `userVisiblePlan`：协议验收、失败恢复和用户可见计划。
@@ -485,7 +671,8 @@ Policy response 会写回 `GatewayRequest.uiState`，但这些字段都是下一
 记忆归属边界：
 
 - AgentServer session/current-work 是多轮记忆的权威来源。
-- SciForge 的 `memoryPlan`、`conversationLedger`、`recentConversation`、`recentRuns` 只用于构建本轮 context envelope 和 prompt snapshot。
+- SciForge 的 `handoffMemoryProjection`、`conversationLedger`、`recentConversation`、`recentRuns` 只用于构建本轮 context envelope 和 prompt snapshot。
+- 早期问题 recall、跨轮自然语言记忆和 current-work continuity 只能来自 AgentServer `/context`、`/compact`、stable `agentId` 和 `contextPolicy.includeCurrentWork/includeRecentTurns/persistRunSummary`；UI ledger 或 recent messages 不能在 AgentServer 不可用时升级成本地记忆替代品。
 - fresh/new-task 默认使用 fresh agent scope 或 `includeRecentTurns: false`，避免旧记忆污染。
 - continuation/repair 必须显式打开 AgentServer `includeCurrentWork`、`includeRecentTurns`、`persistRunSummary` 等开关，并携带稳定 agent id。
 - 如果 AgentServer context/compact API 不可用，SciForge 可以做 handoff slimming 和 refs-first fallback，但不能悄悄升级成本地长期记忆系统。

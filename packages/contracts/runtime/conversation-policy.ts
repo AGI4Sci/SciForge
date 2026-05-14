@@ -48,8 +48,13 @@ export interface ConversationPolicyRequest {
 export interface ConversationPolicyResponse {
   schemaVersion: typeof CONVERSATION_POLICY_RESPONSE_VERSION;
   goalSnapshot?: Record<string, unknown>;
+  /**
+   * Low-cardinality signal for AgentServer session/current-work reuse.
+   * `mode` is limited to continue/repair/isolate semantics; it is not a
+   * SciForge recall ledger.
+   */
   contextPolicy?: Record<string, unknown>;
-  memoryPlan?: Record<string, unknown>;
+  handoffMemoryProjection?: Record<string, unknown>;
   currentReferences?: Array<Record<string, unknown>>;
   currentReferenceDigests?: Array<Record<string, unknown>>;
   artifactIndex?: Record<string, unknown>;
@@ -189,7 +194,7 @@ export function normalizeConversationPolicyResponse(value: unknown): Conversatio
     schemaVersion: CONVERSATION_POLICY_RESPONSE_VERSION,
     goalSnapshot: optionalRecord(record.goalSnapshot),
     contextPolicy: optionalRecord(record.contextPolicy),
-    memoryPlan: optionalRecord(record.memoryPlan),
+    handoffMemoryProjection: optionalRecord(record.handoffMemoryProjection),
     currentReferences: optionalRecordList(record.currentReferences),
     currentReferenceDigests: optionalRecordList(record.currentReferenceDigests),
     artifactIndex: optionalRecord(record.artifactIndex),

@@ -1,4 +1,8 @@
-"""Python compatibility bridge for runtime-owned conversation memory policy."""
+"""Python bridge for bounded handoff memory projection.
+
+AgentServer owns multi-turn recall. This module only builds current-turn
+summaries and refs for transport.
+"""
 
 from __future__ import annotations
 
@@ -16,7 +20,7 @@ JsonMap = dict[str, Any]
 def _repo_root() -> Path:
     for parent in Path(__file__).resolve().parents:
         if (parent / "package.json").exists() and (
-            parent / "src/runtime/gateway/conversation-memory-policy.ts"
+            parent / "src/runtime/gateway/conversation-handoff-projection.ts"
         ).exists():
             return parent
     return Path.cwd()
@@ -38,7 +42,7 @@ def _from_gateway(payload: Mapping[str, Any], export_name: str) -> Any:
     env["PATH"] = env.get("PATH") or "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
     script = f"""
 import {{ readFileSync }} from 'node:fs';
-import {{ {export_name} }} from './src/runtime/gateway/conversation-memory-policy.ts';
+import {{ {export_name} }} from './src/runtime/gateway/conversation-handoff-projection.ts';
 const input = JSON.parse(readFileSync(0, 'utf8'));
 const result = {export_name}(...(Array.isArray(input.__args) ? input.__args : [input]));
 process.stdout.write(JSON.stringify(result));
@@ -77,10 +81,10 @@ def _payload(value: Mapping[str, Any] | Any) -> JsonMap:
     return jsonable if isinstance(jsonable, dict) else {}
 
 
-def build_memory_plan(request: Mapping[str, Any] | Any) -> JsonMap:
-    result = _from_gateway(_payload(request), "buildConversationMemoryPlan")
+def build_handoff_memory_projection(request: Mapping[str, Any] | Any) -> JsonMap:
+    result = _from_gateway(_payload(request), "buildConversationHandoffMemoryProjection")
     if not isinstance(result, dict):
-        raise RuntimeError("conversation memory policy bridge returned a non-object payload")
+        raise RuntimeError("conversation handoff projection bridge returned a non-object payload")
     return result
 
 
@@ -91,4 +95,4 @@ def build_conversation_ledger(messages: list[Any], runs: list[Any] | None = None
     return [dict(item) for item in result if isinstance(item, Mapping)]
 
 
-__all__ = ["build_memory_plan", "build_conversation_ledger"]
+__all__ = ["build_handoff_memory_projection", "build_conversation_ledger"]

@@ -26,6 +26,27 @@ export interface CapabilityProviderManifest {
   contractRef?: string;
   requiredConfig: string[];
   priority?: number;
+  capabilityId?: string;
+  source?: 'local' | 'agentserver' | 'mcp' | 'http' | 'ssh' | 'client-worker' | 'backend-native' | 'package' | 'workspace' | 'external';
+  transport?: 'in-process' | 'agentserver-worker' | 'http' | 'mcp' | 'command' | 'ssh' | 'backend-native';
+  endpoint?: string;
+  command?: string;
+  mcpServer?: string;
+  workerId?: string;
+  runtimeLocation?: string;
+  permissions?: Array<'network' | 'filesystem' | 'shell' | 'workspace-read' | 'workspace-write' | 'desktop' | 'external-account'>;
+  healthcheck?: string;
+  auth?: {
+    required: boolean;
+    configKeys?: string[];
+  };
+  workspaceRoots?: string[];
+  fallbackEligible?: boolean;
+  rateLimit?: {
+    quotaKey?: string;
+    retryAfterMs?: number;
+  };
+  status?: 'available' | 'unavailable' | 'unauthorized' | 'rate-limited' | 'unknown';
 }
 
 export interface CapabilityValidatorManifest {
@@ -263,6 +284,40 @@ export function validateCapabilityManifestRegistry(manifests: CapabilityManifest
 }
 
 export const CORE_CAPABILITY_MANIFESTS: CapabilityManifest[] = [
+  toolPrimitiveCapabilityManifest({
+    id: 'web_search',
+    name: 'web search',
+    brief: 'Search public web or configured search indexes and return ranked result refs with provider diagnostics.',
+    sourceRef: 'AgentServer toolRouting:web_search',
+    providerId: 'agentserver.backend-server.web_search',
+    providerLabel: 'AgentServer backend-server web_search',
+    workerId: 'backend-server',
+    routingTags: ['web', 'search', 'latest', 'news', 'internet'],
+  }),
+  toolPrimitiveCapabilityManifest({
+    id: 'web_fetch',
+    name: 'web fetch',
+    brief: 'Fetch a public URL or search result URL through a configured network provider and return durable content refs.',
+    sourceRef: 'AgentServer toolRouting:web_fetch',
+    providerId: 'agentserver.backend-server.web_fetch',
+    providerLabel: 'AgentServer backend-server web_fetch',
+    workerId: 'backend-server',
+    routingTags: ['web', 'fetch', 'download', 'url', 'html'],
+  }),
+  toolPrimitiveCapabilityManifest({
+    id: 'pdf_extract',
+    name: 'PDF extract',
+    brief: 'Extract bounded text and page metadata from PDF refs for downstream LLM processing.',
+    sourceRef: 'packages/skills/installed/xejrax/pdf-extract/SKILL.md',
+    providerId: 'local.pdf_extract',
+    providerLabel: 'local PDF extract',
+    source: 'local',
+    transport: 'in-process',
+    permissions: ['filesystem', 'workspace-read'],
+    routingTags: ['pdf', 'extract', 'document', 'full-text'],
+    sideEffects: ['workspace-read'],
+    status: 'available',
+  }),
   literatureRetrievalCapabilityManifest(),
   coreCapabilityManifest('skill.agentserver-generation', 'Use AgentServer with scenario policy, refs, and artifact contracts to generate or repair workspace tasks.', 'skill', 'src/runtime/generation-gateway.ts', ['workspace-write']),
   coreCapabilityManifest('runtime.artifact-list', 'List session artifacts and project them into stable object references.', 'runtime-adapter', 'src/runtime/backend-artifact-tools.ts', ['workspace-read']),
@@ -281,6 +336,81 @@ export const CORE_CAPABILITY_MANIFESTS: CapabilityManifest[] = [
   coreCapabilityManifest('view.report', 'Render report artifacts from manifest-bound refs.', 'view', 'packages/presentation/components', ['none']),
   coreCapabilityManifest('verifier.schema', 'Validate payloads, artifacts, refs, and UI manifests before completion.', 'verifier', 'packages/verifiers/schema', ['none']),
 ];
+
+function toolPrimitiveCapabilityManifest(input: {
+  id: string;
+  name: string;
+  brief: string;
+  sourceRef: string;
+  providerId: string;
+  providerLabel: string;
+  workerId?: string;
+  source?: CapabilityProviderManifest['source'];
+  transport?: CapabilityProviderManifest['transport'];
+  permissions?: NonNullable<CapabilityProviderManifest['permissions']>;
+  routingTags: string[];
+  sideEffects?: CapabilityManifest['sideEffects'];
+  status?: CapabilityProviderManifest['status'];
+}): CapabilityManifest {
+  const sideEffects = input.sideEffects ?? ['network', 'external-api'];
+  const source = input.source ?? 'agentserver';
+  const transport = input.transport ?? 'agentserver-worker';
+  return {
+    contract: CAPABILITY_MANIFEST_CONTRACT_ID,
+    id: input.id,
+    name: input.name,
+    version: '0.1.0',
+    ownerPackage: input.sourceRef.startsWith('packages/') ? input.sourceRef.split('/').slice(0, 3).join('/') : 'AgentServer',
+    kind: 'action',
+    brief: input.brief,
+    routingTags: input.routingTags,
+    domains: ['workspace', 'knowledge', 'literature'],
+    inputSchema: { type: 'object' },
+    outputSchema: { type: 'object' },
+    sideEffects,
+    safety: {
+      risk: sideEffects.includes('network') || sideEffects.includes('external-api') ? 'medium' : 'low',
+      dataScopes: sideEffects.includes('network') || sideEffects.includes('external-api') ? ['public-web', 'workspace-refs'] : ['workspace'],
+    },
+    examples: [{
+      title: `${input.id} provider route`,
+      inputRef: `capability:${input.id}/input.example`,
+      outputRef: `capability:${input.id}/output.example`,
+    }],
+    validators: [{
+      id: `${input.id}.schema`,
+      kind: 'schema',
+      contractRef: `${input.id}#outputSchema`,
+    }],
+    repairHints: [{
+      failureCode: 'provider-unavailable',
+      summary: 'Do not synthesize an ad hoc replacement when the configured provider is missing or offline.',
+      recoverActions: ['record-provider-status', 'use-fallback-provider', 'ask-user-to-enable-provider'],
+    }],
+    providers: [{
+      id: input.providerId,
+      label: input.providerLabel,
+      kind: source === 'local' ? 'built-in' : 'external',
+      contractRef: input.sourceRef,
+      requiredConfig: source === 'agentserver' ? [`${input.id}.provider.enabled`] : [],
+      priority: 1,
+      capabilityId: input.id,
+      source,
+      transport,
+      workerId: input.workerId,
+      runtimeLocation: input.workerId ?? source,
+      permissions: input.permissions ?? ['network'],
+      healthcheck: source === 'agentserver' ? '/api/agent-server/health' : undefined,
+      auth: { required: false },
+      fallbackEligible: true,
+      status: input.status ?? 'unknown',
+    }],
+    lifecycle: {
+      status: input.status === 'available' ? 'validated' : 'draft',
+      sourceRef: input.sourceRef,
+    },
+  };
+}
 
 function literatureRetrievalCapabilityManifest(): CapabilityManifest {
   const providerIds = ['pubmed', 'crossref', 'semantic-scholar', 'openalex', 'arxiv', 'web-search', 'scp-biomedical-search'];

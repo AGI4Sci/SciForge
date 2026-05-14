@@ -53,7 +53,7 @@ test('turn composition scopes session facts for isolated turns', () => {
       references: [],
     },
     contextPolicy: { mode: 'isolate', historyReuse: { allowed: false } },
-    memoryPlan: { currentReferenceFocus: [] },
+    handoffMemoryProjection: { currentReferenceFocus: [] },
     currentReferenceDigests: [{ id: 'digest-1', path: 'file:reports/current.md' }],
   });
 
@@ -95,7 +95,7 @@ test('turn composition owns execution and recovery turn inputs', () => {
     },
     goalSnapshot: { requiredArtifacts: ['research-report'] },
     contextPolicy: { mode: 'repair', historyReuse: { allowed: true } },
-    memoryPlan: { currentReferenceFocus: [] },
+    handoffMemoryProjection: { currentReferenceFocus: [] },
     capabilityBrief: { selected: [{ id: 'literature.agent' }] },
     currentReferenceDigests: [{ id: 'digest-1', path: '.sciforge/artifacts/report.md' }],
   });
@@ -128,7 +128,7 @@ test('explicit refs do not reopen historical session facts for isolated turns', 
       },
     },
     contextPolicy: { mode: 'isolate', historyReuse: { allowed: false } },
-    memoryPlan: { currentReferenceFocus: ['inputs/current.csv'] },
+    handoffMemoryProjection: { currentReferenceFocus: ['inputs/current.csv'] },
     currentReferenceDigests: [],
   });
 
@@ -151,7 +151,7 @@ test('turn composition keeps session for continuation and preserves explicit ref
   const composition = buildConversationTurnComposition({
     policyInput: { session, references: [explicitRef] },
     contextPolicy: { mode: 'continue', historyReuse: { allowed: true } },
-    memoryPlan: { currentReferenceFocus: ['inputs/current.csv'] },
+    handoffMemoryProjection: { currentReferenceFocus: ['inputs/current.csv'] },
     currentReferenceDigests: [{ id: 'digest-ignored', path: 'file:reports/current.md' }],
   });
 

@@ -52,6 +52,14 @@ class ContextPolicyTest(unittest.TestCase):
         self.assertTrue(policy["historyReuse"]["allowed"])
         self.assertEqual(policy["historyReuse"]["scope"], "same-task-recent-turns")
 
+    def test_pure_multiturn_recall_reuses_agentserver_context(self) -> None:
+        snapshot = build_goal_snapshot({"prompt": "我一开始问的是什么？"})
+        policy = build_context_policy({"prompt": snapshot["rawPrompt"], "goalSnapshot": snapshot})
+
+        self.assertEqual(policy["mode"], "continue")
+        self.assertTrue(policy["historyReuse"]["allowed"])
+        self.assertTrue(policy["referencePriority"]["historyFallbackAllowed"])
+
     def test_repair_previous_round_uses_failure_scope(self) -> None:
         snapshot = build_goal_snapshot({"prompt": "修复上一轮失败，根据日志重跑。"})
         policy = build_context_policy({"prompt": snapshot["rawPrompt"], "goalSnapshot": snapshot})
