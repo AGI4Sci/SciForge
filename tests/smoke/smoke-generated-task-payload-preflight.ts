@@ -94,6 +94,104 @@ const paramsJsonDumps = evaluateGeneratedTaskPayloadPreflight({
 });
 assert.equal(paramsJsonDumps.status, 'ready');
 
+const artifactVariables = evaluateGeneratedTaskPayloadPreflight({
+  taskFiles: [{
+    path: '.sciforge/tasks/artifact-variables.py',
+    language: 'python',
+    content: [
+      'import json, sys',
+      '_, input_path, output_path = sys.argv',
+      'markdown = "# Report"',
+      'artifact_report = {"ref": "research-report.md", "type": "research-report", "content": markdown, "mimeType": "text/markdown"}',
+      'artifact_papers = {"ref": "paper-list.json", "type": "paper-list", "data": {"papers": []}}',
+      'payload = {',
+      '  "message": "ok",',
+      '  "confidence": 0.8,',
+      '  "claimType": "fact",',
+      '  "evidenceLevel": "runtime",',
+      '  "reasoningTrace": "smoke",',
+      '  "claims": [],',
+      '  "uiManifest": [{"componentId": "report-viewer", "artifactRef": "research-report.md"}],',
+      '  "executionUnits": [{"id": "run", "status": "done"}],',
+      '  "artifacts": [artifact_report, artifact_papers]',
+      '}',
+      'open(output_path, "w", encoding="utf-8").write(json.dumps(payload))',
+    ].join('\n'),
+  }],
+  entrypoint: { path: '.sciforge/tasks/artifact-variables.py' },
+});
+assert.equal(artifactVariables.status, 'guidance');
+assert.ok(artifactVariables.issues.every((issue) => issue.severity === 'guidance'));
+assert.ok(artifactVariables.issues.some((issue) => issue.path === 'artifacts[0].id'));
+assert.ok(artifactVariables.issues.some((issue) => issue.path === 'artifacts[1].id'));
+
+const artifactVariablesWithIds = evaluateGeneratedTaskPayloadPreflight({
+  taskFiles: [{
+    path: '.sciforge/tasks/artifact-variables-with-ids.py',
+    language: 'python',
+    content: [
+      'import json, sys',
+      '_, input_path, output_path = sys.argv',
+      'artifact_report = {"id": "research-report", "type": "research-report", "content": "# Report", "mimeType": "text/markdown"}',
+      'artifact_papers = {"id": "paper-list", "type": "paper-list", "data": {"papers": []}}',
+      'payload = {"message": "ok", "confidence": 0.8, "claimType": "fact", "evidenceLevel": "runtime", "reasoningTrace": "smoke", "claims": [], "uiManifest": [], "executionUnits": [], "artifacts": [artifact_report, artifact_papers]}',
+      'open(output_path, "w", encoding="utf-8").write(json.dumps(payload))',
+    ].join('\n'),
+  }],
+  entrypoint: { path: '.sciforge/tasks/artifact-variables-with-ids.py' },
+});
+assert.equal(artifactVariablesWithIds.status, 'ready');
+
+const artifactArrayVariable = evaluateGeneratedTaskPayloadPreflight({
+  taskFiles: [{
+    path: '.sciforge/tasks/artifact-array-variable.py',
+    language: 'python',
+    content: [
+      'import json, sys',
+      '_, input_path, output_path = sys.argv',
+      'artifact_report = {"id": "research-report", "type": "research-report", "content": "# Report"}',
+      'artifact_list = [artifact_report]',
+      'payload = {"message": "ok", "confidence": 0.8, "claimType": "fact", "evidenceLevel": "runtime", "reasoningTrace": "smoke", "claims": [], "uiManifest": [], "executionUnits": [], "artifacts": artifact_list}',
+      'open(output_path, "w", encoding="utf-8").write(json.dumps(payload))',
+    ].join('\n'),
+  }],
+  entrypoint: { path: '.sciforge/tasks/artifact-array-variable.py' },
+});
+assert.equal(artifactArrayVariable.status, 'ready');
+
+const badArtifactArrayVariable = evaluateGeneratedTaskPayloadPreflight({
+  taskFiles: [{
+    path: '.sciforge/tasks/bad-artifact-array-variable.py',
+    language: 'python',
+    content: [
+      'import json, sys',
+      '_, input_path, output_path = sys.argv',
+      'artifact_list = ["research-report.md"]',
+      'payload = {"message": "bad", "confidence": 0.2, "claimType": "fact", "evidenceLevel": "runtime", "reasoningTrace": "smoke", "claims": [], "uiManifest": [], "executionUnits": [], "artifacts": artifact_list}',
+      'open(output_path, "w", encoding="utf-8").write(json.dumps(payload))',
+    ].join('\n'),
+  }],
+  entrypoint: { path: '.sciforge/tasks/bad-artifact-array-variable.py' },
+});
+assert.equal(badArtifactArrayVariable.status, 'blocked');
+assert.ok(badArtifactArrayVariable.issues.some((issue) => issue.path === 'artifacts[0]'));
+
+const artifactStringList = evaluateGeneratedTaskPayloadPreflight({
+  taskFiles: [{
+    path: '.sciforge/tasks/artifact-string-list.py',
+    language: 'python',
+    content: [
+      'import json, sys',
+      '_, input_path, output_path = sys.argv',
+      'payload = {"message": "bad", "confidence": 0.2, "claimType": "fact", "evidenceLevel": "runtime", "reasoningTrace": "smoke", "claims": [], "uiManifest": [], "executionUnits": [], "artifacts": ["research-report.md"]}',
+      'open(output_path, "w", encoding="utf-8").write(json.dumps(payload))',
+    ].join('\n'),
+  }],
+  entrypoint: { path: '.sciforge/tasks/artifact-string-list.py' },
+});
+assert.equal(artifactStringList.status, 'blocked');
+assert.ok(artifactStringList.issues.some((issue) => issue.path === 'artifacts[0]'));
+
 const payload = await runAgentServerGeneratedTask(request, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
   request,
   requestAgentServerGeneration: async () => ({

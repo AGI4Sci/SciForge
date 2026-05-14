@@ -170,3 +170,77 @@ test('generated task output shape preflight blocks obvious malformed payload wri
   assert.match(result.payload.message, /object-shaped|uiManifest must be an array/i);
   await assert.rejects(access(join(workspace, markerRel)));
 });
+
+test('generated task output shape preflight resolves same-file artifact variables before execution', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-generated-preflight-artifact-vars-'));
+  const request: GatewayRequest = {
+    workspacePath: workspace,
+    skillDomain: 'literature',
+    prompt: 'write a report',
+    artifacts: [],
+    uiState: {
+      sessionId: 'session-literature-artifact-vars',
+      sessionCreatedAt: '2026-05-12T03:00:00.000Z',
+    },
+    scenarioPackageRef: { id: 'literature-evidence-review', version: '1.0.0', source: 'built-in' },
+  };
+  const skill = {
+    id: 'literature-test',
+    kind: 'builtin',
+    available: true,
+    reason: 'test',
+    checkedAt: '2026-05-12T03:00:00.000Z',
+    manifestPath: 'builtin',
+    manifest: {},
+  } as unknown as SkillAvailability;
+
+  const result = await runGeneratedTaskExecutionLifecycle({
+    workspace,
+    request,
+    skill,
+    generation: {
+      ok: true,
+      runId: 'run-artifact-vars',
+      response: {
+        taskFiles: [{
+          path: 'tasks/artifact-vars.py',
+          language: 'python',
+          content: [
+            'import json, sys',
+            '_, input_path, output_path = sys.argv',
+            'artifact_report = {"ref": "research-report.md", "type": "research-report", "content": "# Report", "mimeType": "text/markdown"}',
+            'artifact_papers = {"ref": "paper-list.json", "type": "paper-list", "data": {"papers": []}}',
+            'payload = {"message": "ok", "confidence": 0.8, "claimType": "fact", "evidenceLevel": "runtime", "reasoningTrace": "read input", "claims": [], "uiManifest": [], "executionUnits": [{"id": "unit", "status": "done"}], "artifacts": [artifact_report, artifact_papers], "inputPath": input_path}',
+            'open(output_path, "w", encoding="utf-8").write(json.dumps(payload))',
+          ].join('\n'),
+        }],
+        entrypoint: { language: 'python', path: 'tasks/artifact-vars.py' },
+        environmentRequirements: {},
+        validationCommand: '',
+        expectedArtifacts: ['research-report', 'paper-list'],
+      },
+    },
+    deps: {
+      repairNeededPayload: (_request, _skill, reason): ToolPayload => ({
+        message: reason,
+        confidence: 0,
+        claimType: 'fact',
+        evidenceLevel: 'runtime',
+        reasoningTrace: reason,
+        claims: [],
+        uiManifest: [],
+        executionUnits: [],
+        artifacts: [],
+      }),
+    },
+  });
+
+  assert.equal(result.kind, 'run');
+  if (result.kind !== 'run') return;
+  assert.equal(result.execution.run.exitCode, 0);
+  const taskInput = JSON.parse(await readFile(join(workspace, result.execution.inputRel ?? ''), 'utf8'));
+  assert.equal(taskInput.generatedTaskPayloadPreflight.status, 'guidance');
+  assert.ok(taskInput.generatedTaskPayloadPreflight.issues.every((issue: { severity: string }) => issue.severity === 'guidance'));
+  const output = JSON.parse(await readFile(join(workspace, result.execution.run.outputRef), 'utf8'));
+  assert.deepEqual(output.artifacts.map((artifact: { type: string }) => artifact.type), ['research-report', 'paper-list']);
+});

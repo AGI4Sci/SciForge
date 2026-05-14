@@ -385,6 +385,11 @@
   gap: 8px;
 }
 
+.markdown-block > :where(h1, h2, h3, h4, h5, h6, p, blockquote, ul, ol, pre, hr),
+.markdown-block .markdown-table-scroll {
+  margin: 0;
+}
+
 .markdown-object-ref {
   display: inline-flex;
   align-items: center;
@@ -410,18 +415,91 @@
 }
 
 .markdown-block h3,
-.markdown-block h4 {
+.markdown-block h4,
+.markdown-block h5,
+.markdown-block h6 {
   margin: 6px 0 0;
   color: var(--bio-50);
 }
 
-.markdown-block h4 {
+.markdown-block h1,
+.markdown-block h2 {
+  color: var(--bio-50);
+  font-size: 15px;
+}
+
+.markdown-block h4,
+.markdown-block h5,
+.markdown-block h6 {
   font-size: 13px;
 }
 
-.markdown-block ul {
+.markdown-block ul,
+.markdown-block ol {
   margin: 0;
   padding-left: 18px;
+}
+
+.markdown-block blockquote {
+  margin: 0;
+  padding: 7px 10px;
+  color: var(--bio-200);
+  background: rgba(148, 163, 184, 0.08);
+  border-left: 3px solid rgba(0, 229, 160, 0.42);
+  border-radius: 0 7px 7px 0;
+}
+
+.markdown-block pre {
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  color: var(--bio-100);
+  background: rgba(11, 18, 32, 0.68);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.markdown-block code {
+  padding: 1px 4px;
+  color: var(--teal);
+  background: rgba(0, 229, 160, 0.1);
+  border: 1px solid rgba(0, 229, 160, 0.18);
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 0.92em;
+}
+
+.markdown-block pre code {
+  display: block;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  white-space: pre;
+}
+
+.markdown-table-scroll {
+  overflow-x: auto;
+}
+
+.markdown-block table {
+  width: max-content;
+  min-width: min(100%, 420px);
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.markdown-block :where(th, td) {
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-block th {
+  color: var(--bio-50);
+  background: rgba(148, 163, 184, 0.1);
+  font-weight: 800;
 }
 
 .artifact-table {

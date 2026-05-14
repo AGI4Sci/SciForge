@@ -92,11 +92,15 @@ export type ResolvedViewPlanItem = {
   missingFields?: string[];
 };
 
-export function filterHiddenResultSlots(items: ResolvedViewPlanItem[], session: SciForgeSession): ResolvedViewPlanItem[] {
+export function scopedResultSlotId(runId: string | undefined, itemId: string) {
+  return runId ? `${runId}:${itemId}` : itemId;
+}
+
+export function filterHiddenResultSlots(items: ResolvedViewPlanItem[], session: SciForgeSession, activeRun?: SciForgeRun): ResolvedViewPlanItem[] {
   const hidden = session.hiddenResultSlotIds;
   if (!hidden?.length) return items;
   const drop = new Set(hidden);
-  return items.filter((item) => !drop.has(item.id));
+  return items.filter((item) => !drop.has(item.id) && !drop.has(scopedResultSlotId(activeRun?.id, item.id)));
 }
 
 export type RuntimeResolvedViewPlan = Omit<ResolvedViewPlan, 'sections'> & {
@@ -503,6 +507,11 @@ function artifactsForProjectionlessMainPlan(session: SciForgeSession, activeRun?
   if (!activeRun) return session.runs.length ? [] : session.artifacts.filter(isUserVisibleDeliveryArtifact);
   if (projectionlessRunHasBlockingAudit(session, activeRun)) return [];
   const byId = new Map(session.artifacts.map((artifact) => [artifact.id, artifact]));
+  const manifestArtifactIds = new Set(
+    session.uiManifest
+      .map((slot) => slot.artifactRef ? stripArtifactRef(slot.artifactRef) : undefined)
+      .filter((id): id is string => Boolean(id)),
+  );
   const explicitArtifactIds = new Set([
     ...(activeRun.objectReferences ?? [])
       .filter((reference) => reference.kind === 'artifact' && (!reference.runId || reference.runId === activeRun.id))
@@ -513,9 +522,19 @@ function artifactsForProjectionlessMainPlan(session: SciForgeSession, activeRun?
   ]);
   const explicitArtifacts = [...explicitArtifactIds]
     .map((id) => byId.get(id))
+    .filter((artifact): artifact is RuntimeArtifact => Boolean(artifact))
+    .filter((artifact) => isUserVisibleDeliveryArtifact(artifact) || artifactBelongsToRun(artifact, activeRun));
+  const ownedArtifacts = session.artifacts
+    .filter((artifact) => artifactBelongsToRun(artifact, activeRun))
+    .filter((artifact) => isUserVisibleDeliveryArtifact(artifact) || manifestArtifactIds.has(artifact.id) || explicitArtifactIds.has(artifact.id));
+  const manifestArtifacts = [...manifestArtifactIds]
+    .map((id) => byId.get(id))
     .filter((artifact): artifact is RuntimeArtifact => Boolean(artifact));
-  const ownedArtifacts = session.artifacts.filter((artifact) => artifactBelongsToRun(artifact, activeRun));
-  if (explicitArtifacts.length || ownedArtifacts.length) return uniqueArtifacts([...explicitArtifacts, ...ownedArtifacts]).filter(isUserVisibleDeliveryArtifact);
+  const ownedManifestArtifacts = manifestArtifacts
+    .filter((artifact) => artifactBelongsToRun(artifact, activeRun) || session.runs.length <= 1);
+  if (explicitArtifacts.length || ownedArtifacts.length || ownedManifestArtifacts.length) {
+    return uniqueArtifacts([...explicitArtifacts, ...ownedArtifacts, ...ownedManifestArtifacts]);
+  }
   return session.runs.length <= 1 ? session.artifacts.filter(isUserVisibleDeliveryArtifact) : [];
 }
 

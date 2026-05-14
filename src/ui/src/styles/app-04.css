@@ -465,8 +465,15 @@
   gap: 8px;
 }
 
+.message-markdown {
+  display: grid;
+  gap: 8px;
+}
+
 .message-content > :where(h1, h2, h3, h4, h5, h6, p, blockquote, ul, ol, pre, hr),
-.message-content .message-table-scroll {
+.message-content .message-table-scroll,
+.message-content .markdown-table-scroll,
+.message-markdown > :where(h1, h2, h3, h4, h5, h6, p, blockquote, ul, ol, pre, hr) {
   margin: 0;
 }
 
@@ -516,7 +523,8 @@
   font-size: 0.92em;
 }
 
-.message-code-block {
+.message-code-block,
+.message-content pre {
   position: relative;
   overflow: auto;
   padding: 12px;
@@ -526,7 +534,8 @@
   border-radius: 8px;
 }
 
-.message-code-block code {
+.message-code-block code,
+.message-content pre code {
   display: block;
   padding: 0;
   color: inherit;
@@ -559,7 +568,8 @@
   border-top: 1px solid var(--border);
 }
 
-.message-table-scroll {
+.message-table-scroll,
+.markdown-table-scroll {
   overflow-x: auto;
 }
 
@@ -600,6 +610,14 @@
 .message-object-link:hover {
   color: var(--bio-50);
   border-bottom-style: solid;
+}
+
+.inline-object-references {
+  display: inline;
+}
+
+.message-markdown + .inline-object-references {
+  margin-left: 0.35rem;
 }
 
 .message-fold {

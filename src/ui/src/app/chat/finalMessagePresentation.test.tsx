@@ -189,8 +189,8 @@ test('structured result presentation drives primary answer and folds diagnostics
 
   assert.match(presentation.primaryContent, /The analysis completed/);
   assert.match(presentation.primaryContent, /Treatment B/);
-  assert.match(presentation.primaryContent, /artifact::analysis-report/);
-  assert.match(presentation.primaryContent, /file::\.sciforge\/data\/table\.csv#row-b/);
+  assert.doesNotMatch(presentation.primaryContent, /artifact::analysis-report/);
+  assert.doesNotMatch(presentation.primaryContent, /file::\.sciforge\/data\/table\.csv#row-b/);
   assert.doesNotMatch(presentation.primaryContent, /executionUnits|ToolPayload|raw diagnostics/i);
   assert.equal(presentation.auditSections.length, 2);
   assert.deepEqual(presentation.auditSections.map((section) => section.evidenceType), ['execution-audit', 'raw-json']);
@@ -216,4 +216,81 @@ test('structured result presentation references remain clickable', () => {
   assert.match(markup, /data-sciforge-reference=/);
   assert.match(markup, /artifact::analysis-report/);
   assert.doesNotMatch(markup, /Received ToolPayload/);
+});
+
+test('structured result presentation references are deduped by canonical object identity', () => {
+  const references: ObjectReference[] = [{
+    id: 'existing-report',
+    title: 'Existing report',
+    kind: 'artifact',
+    ref: 'artifact:analysis-report',
+    actions: ['focus-right-pane', 'inspect', 'copy-path', 'pin'],
+    status: 'available',
+    provenance: { dataRef: 'analysis-report' },
+  }];
+  const markup = renderToStaticMarkup(
+    <FinalMessageContent
+      content="Open artifact::analysis-report."
+      references={references}
+      resultPresentation={{
+        inlineCitations: [
+          { id: 'citation-report', label: 'Report', kind: 'artifact', ref: 'artifact::analysis-report' },
+        ],
+        artifactActions: [
+          { id: 'artifact-action-report', label: 'Open report', ref: 'artifact:analysis-report' },
+        ],
+      }}
+      onObjectFocus={() => undefined}
+    />,
+  );
+
+  assert.equal((markup.match(/message-object-link/g) ?? []).length, 1);
+});
+
+test('structured citations stay out of markdown text and render as deduped inline object links', () => {
+  const presentation = splitFinalMessagePresentation('Received ToolPayload.', {
+    answerBlocks: [{
+      id: 'answer-1',
+      kind: 'paragraph',
+      text: '已生成报告。',
+      citationIds: ['citation-report', 'citation-report-copy'],
+    }],
+    keyFindings: [],
+    inlineCitations: [
+      { id: 'citation-report', label: 'Agentic RL 研究脉络：综述与前沿进展', kind: 'artifact', ref: 'artifact:research-report', status: 'available' },
+      { id: 'citation-report-copy', label: 'Agentic RL 研究脉络：综述与前沿进展', kind: 'artifact', ref: 'artifact:research-report', status: 'available' },
+    ],
+    artifactActions: [],
+    nextActions: [],
+    diagnosticsRefs: [],
+  });
+
+  assert.equal(presentation.primaryContent, '已生成报告。');
+  assert.doesNotMatch(presentation.primaryContent, /available/);
+  const markup = renderToStaticMarkup(
+    <FinalMessageContent
+      content="Received ToolPayload."
+      references={[]}
+      resultPresentation={{
+        answerBlocks: [{
+          id: 'answer-1',
+          kind: 'paragraph',
+          text: '已生成报告。',
+          citationIds: ['citation-report', 'citation-report-copy'],
+        }],
+        keyFindings: [],
+        inlineCitations: [
+          { id: 'citation-report', label: 'Agentic RL 研究脉络：综述与前沿进展', kind: 'artifact', ref: 'artifact:research-report', status: 'available' },
+          { id: 'citation-report-copy', label: 'Agentic RL 研究脉络：综述与前沿进展', kind: 'artifact', ref: 'artifact:research-report', status: 'available' },
+        ],
+        artifactActions: [],
+        nextActions: [],
+        diagnosticsRefs: [],
+      }}
+      onObjectFocus={() => undefined}
+    />,
+  );
+  assert.equal((markup.match(/message-object-link/g) ?? []).length, 1);
+  assert.match(markup, /Agentic RL 研究脉络：综述与前沿进展/);
+  assert.doesNotMatch(markup, />available</);
 });

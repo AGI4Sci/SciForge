@@ -212,6 +212,96 @@ test('ResultsRenderer keeps raw failure text out of the first-screen main summar
   assert.doesNotMatch(summaryHtml, /External retrieval returned zero results while the task marked itself completed/);
   assert.doesNotMatch(summaryHtml, /retry\/fallback attempts, rate-limit diagnostics, and durable refs/);
   assert.match(html, /retry\/fallback attempts, rate-limit diagnostics, and durable refs/);
+  assert.doesNotMatch(html, /<details class="result-details-panel audit-details-panel" open/);
+});
+
+test('hidden result slots are scoped to the active run when a run is selected', () => {
+  const runA = {
+    ...completedRun('run-a'),
+    raw: {
+      uiManifest: [{ componentId: 'report-viewer', artifactRef: 'report', title: 'Report' }],
+      artifacts: [{
+        id: 'report',
+        type: 'research-report',
+        producerScenario: 'literature-evidence-review',
+        schemaVersion: '1',
+        metadata: { runId: 'run-a' },
+        delivery: {
+          contractId: 'sciforge.artifact-delivery.v1',
+          ref: 'artifact:report',
+          role: 'primary-deliverable',
+          declaredMediaType: 'text/markdown',
+          declaredExtension: 'md',
+          contentShape: 'raw-file',
+          readableRef: '.sciforge/artifacts/run-a/report.md',
+          previewPolicy: 'inline',
+        },
+        data: { markdown: '# Report A' },
+      }],
+    },
+  };
+  const runB = {
+    ...completedRun('run-b'),
+    raw: {
+      uiManifest: [{ componentId: 'report-viewer', artifactRef: 'report', title: 'Report' }],
+      artifacts: [{
+        id: 'report',
+        type: 'research-report',
+        producerScenario: 'literature-evidence-review',
+        schemaVersion: '1',
+        metadata: { runId: 'run-b' },
+        delivery: {
+          contractId: 'sciforge.artifact-delivery.v1',
+          ref: 'artifact:report',
+          role: 'primary-deliverable',
+          declaredMediaType: 'text/markdown',
+          declaredExtension: 'md',
+          contentShape: 'raw-file',
+          readableRef: '.sciforge/artifacts/run-b/report.md',
+          previewPolicy: 'inline',
+        },
+        data: { markdown: '# Report B' },
+      }],
+    },
+  };
+  const session: SciForgeSession = {
+    ...emptySession(),
+    runs: [runA, runB],
+    artifacts: [
+      (runA.raw as { artifacts: RuntimeArtifact[] }).artifacts[0],
+      (runB.raw as { artifacts: RuntimeArtifact[] }).artifacts[0],
+    ],
+  };
+  const runAView = createResultsRendererViewModel({
+    scenarioId: 'literature-evidence-review',
+    session,
+    defaultSlots: [],
+    activeRun: runA,
+    focusMode: 'all',
+  });
+  assert.ok(runAView.visibleItems.length > 0);
+  const hiddenSession = {
+    ...session,
+    hiddenResultSlotIds: runAView.viewPlan.allItems.map((item) => `${runA.id}:${item.id}`),
+  };
+
+  const hiddenA = createResultsRendererViewModel({
+    scenarioId: 'literature-evidence-review',
+    session: hiddenSession,
+    defaultSlots: [],
+    activeRun: runA,
+    focusMode: 'all',
+  });
+  const visibleB = createResultsRendererViewModel({
+    scenarioId: 'literature-evidence-review',
+    session: hiddenSession,
+    defaultSlots: [],
+    activeRun: runB,
+    focusMode: 'all',
+  });
+
+  assert.equal(hiddenA.visibleItems.length, 0);
+  assert.ok(visibleB.visibleItems.length > 0);
 });
 
 test('ResultsRenderer empty completed run is presented as empty rather than ready', () => {

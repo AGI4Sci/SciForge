@@ -724,7 +724,7 @@ export function TopBar({
   healthItems: RuntimeHealthItem[];
 }) {
   const [query, setQuery] = useState('');
-  const healthProblems = healthItems.filter((item) => item.status === 'offline' || item.status === 'not-configured').length;
+  const healthProblems = healthItems.filter((item) => item.status === 'offline' || item.status === 'not-configured' || item.status === 'checking').length;
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
     onSearch(query);

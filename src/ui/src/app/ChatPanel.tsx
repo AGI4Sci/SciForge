@@ -31,8 +31,9 @@ import { runPromptOrchestrator } from './chat/runOrchestrator';
 import { appendRunningGuidanceRecord, appendUploadMessageToSession, applyHistoricalUserMessageEdit, attachGuidanceQueueToSessionRun, createGuidanceQueueRecord, mergeAgentResponseIntoSession, resolveGuidanceQueueAfterRun, updateGuidanceQueueRecords } from './chat/sessionTransforms';
 import { attachStreamProcessToFailedSession, attachStreamProcessToResponse, compactFailureNotice, guidanceBadgeVariant, guidanceStatusLabel, latestTokenUsage } from './chat/runPresentation';
 import { RunVerificationTag, runIdForMessage } from './chat/messageRunPresentation';
-import { runReadiness, runningMessageContentFromStream } from './chat/runStatusPresentation';
+import { runReadiness, runningMessageContentFromStream, runtimeReadinessIssue } from './chat/runStatusPresentation';
 import { fileToUploadedArtifact, objectReferenceForUploadedArtifact, referenceForUploadedArtifact } from './chat/uploadedArtifact';
+import type { RuntimeHealthItem } from './runtimeHealthPanel';
 import {
   sciForgeReferenceAttribute,
   objectReferenceKindLabel,
@@ -96,6 +97,7 @@ export function ChatPanel({
   externalReferenceRequest,
   onExternalReferenceConsumed,
   availableComponentIds = [],
+  runtimeHealth = [],
 }: {
   scenarioId: ScenarioInstanceId;
   role: string;
@@ -127,6 +129,7 @@ export function ChatPanel({
   externalReferenceRequest?: { id: string; reference: SciForgeReference };
   onExternalReferenceConsumed?: (requestId: string) => void;
   availableComponentIds?: string[];
+  runtimeHealth?: RuntimeHealthItem[];
 }) {
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState('');
@@ -367,6 +370,12 @@ export function ChatPanel({
     if (!prompt) return;
     if (isSending) {
       handleRunningGuidance(prompt);
+      return;
+    }
+    const runtimeIssue = runtimeReadinessIssue(runtimeHealth);
+    if (runtimeIssue) {
+      setErrorText(runtimeIssue.message);
+      setComposerExpanded(true);
       return;
     }
     await runPrompt(prompt, activeSessionRef.current, pendingReferences);
@@ -672,6 +681,7 @@ export function ChatPanel({
     input,
     isSending,
     config,
+    runtimeHealth,
     scenarioPackageRef,
     skillPlanRef,
     uiPlanRef,
@@ -831,7 +841,7 @@ export function ChatPanel({
                   {message.role === 'user' ? (
                     <MessageContent
                       content={message.content}
-                      references={inlineObjectReferencesForMessage(message, session, messageRunId)}
+                      references={inlineObjectReferencesForMessage(message, session)}
                       onObjectFocus={onObjectFocus}
                     />
                   ) : (

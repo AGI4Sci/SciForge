@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import { useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { AlertTriangle, ChevronDown, ChevronUp, Clock, Copy, FileCode, FileText, Lock, Save, Shield, Sparkles, Terminal, X } from 'lucide-react';
 import type { ScenarioId } from '../data';
 import { artifactPreviewActions, objectReferenceKinds, previewDescriptorKinds, runtimeContractSchemas, schemaPreview, validateRuntimeContract } from '../runtimeContracts';
@@ -20,7 +20,6 @@ import {
   type RuntimeResolvedViewPlan,
 } from './results-renderer-view-model';
 export { selectDefaultResultItems, type HandoffAutoRunRequest } from './results/viewPlanResolver';
-import { hydrateInlineObjectReferenceButtons } from './results/reportContent';
 export { coerceReportPayload } from './results/reportContent';
 import {
   compactParams,
@@ -29,7 +28,7 @@ import {
   isRecord,
   toRecordList,
 } from './results/resultArtifactHelpers';
-import { auditExecutionUnitsForRun } from './results/executionUnitsForRun';
+import { artifactsForRun, auditExecutionUnitsForRun } from './results/executionUnitsForRun';
 import {
   descriptorCanUseWorkspacePreview,
   descriptorDerivativeKind,
@@ -39,7 +38,7 @@ import {
   uploadedArtifactPreview,
 } from './results/previewDescriptor';
 import { UploadedDataUrlPreview, WorkspaceObjectPreview } from './results/WorkspaceObjectPreview';
-import type { SciForgeConfig, SciForgeRun, SciForgeSession, ObjectAction, ObjectReference, PreviewDescriptor, RuntimeArtifact, RuntimeCompatibilityDiagnostic, UIManifestSlot } from '../domain';
+import type { EvidenceClaim, SciForgeConfig, SciForgeRun, SciForgeSession, ObjectAction, ObjectReference, PreviewDescriptor, RuntimeArtifact, RuntimeCompatibilityDiagnostic, UIManifestSlot } from '../domain';
 import {
   conversationProjectionForRun,
   conversationProjectionStatus,
@@ -204,20 +203,6 @@ export function ResultsRenderer({
   const [objectActionNotice, setObjectActionNotice] = useState('');
   const executionFocus = focusMode === 'execution';
   const activeRun = activeRunId ? session.runs.find((run) => run.id === activeRunId) : undefined;
-  useEffect(() => {
-    const handleInlineReferenceFocus = (event: Event) => {
-      const reference = (event as CustomEvent<ObjectReference>).detail;
-      if (!reference || typeof reference !== 'object') return;
-      onFocusedObjectChange(reference);
-      setResultTab('primary');
-    };
-    window.addEventListener('sciforge-focus-object-reference', handleInlineReferenceFocus);
-    return () => window.removeEventListener('sciforge-focus-object-reference', handleInlineReferenceFocus);
-  }, [onFocusedObjectChange]);
-  useEffect(() => {
-    const cleanup = hydrateInlineObjectReferenceButtons();
-    return cleanup;
-  }, [resultTab, session.artifacts, session.runs, focusedObjectReference]);
   const rendererModel = useMemo(() => createResultsRendererViewModel({
     scenarioId,
     session,
@@ -316,7 +301,7 @@ export function ResultsRenderer({
                 onDismissResultSlotPresentation={onDismissResultSlotPresentation}
               />
             ) : resultTab === 'evidence' ? (
-              <EvidenceMatrix claims={session.claims} artifacts={session.artifacts} />
+              <EvidenceMatrix claims={evidenceClaimsForRun(session, activeRun)} artifacts={artifactsForRun(session, activeRun)} />
             ) : null}
     </ResultShell>
   );
@@ -399,7 +384,6 @@ function PrimaryResult({
           session={session}
           activeRun={activeRun}
           viewPlan={viewPlan}
-          defaultOpen
         />
       ) : null}
       {viewPlan.allItems.length ? (
@@ -452,7 +436,7 @@ function RunStatusSummary({ session, activeRun, viewPlan }: { session: SciForgeS
   const blockers = runAuditBlockers(session, activeRun);
   const validationFailures = projection ? [] : contractValidationFailures(session, activeRun);
   const repairStates = projection ? [] : backendRepairStates(session, activeRun);
-  const runtimeDriftDiagnostics = runtimeCompatibilityDiagnosticsForPresentation(session);
+  const runtimeDriftDiagnostics = runtimeCompatibilityDiagnosticsForPresentation(session, activeRun);
   const recoverActions = runRecoverActions(session, activeRun).slice(0, 4);
   const presentationState = runPresentationState(session, activeRun, viewPlan);
   const shouldShowPresentationState = presentationState.kind !== 'ready' || presentationState.nextSteps.length > 0;
@@ -706,18 +690,37 @@ function BackendRepairStateSummary({ state, compact = false }: { state: BackendR
   );
 }
 
-function runtimeCompatibilityDiagnosticsForPresentation(session: SciForgeSession): RuntimeCompatibilityDiagnostic[] {
+function runtimeCompatibilityDiagnosticsForPresentation(session: SciForgeSession, activeRun?: SciForgeRun): RuntimeCompatibilityDiagnostic[] {
   const diagnostics = session.runtimeCompatibilityDiagnostics;
   if (!Array.isArray(diagnostics)) return [];
   return diagnostics.filter((diagnostic): diagnostic is RuntimeCompatibilityDiagnostic => {
-    return Boolean(diagnostic)
-      && diagnostic.schemaVersion === 1
-      && typeof diagnostic.id === 'string'
-      && typeof diagnostic.reason === 'string'
-      && Array.isArray(diagnostic.recoverableActions)
-      && typeof diagnostic.current === 'object'
-      && diagnostic.current !== null;
+    if (!diagnostic
+      || diagnostic.schemaVersion !== 1
+      || typeof diagnostic.id !== 'string'
+      || typeof diagnostic.reason !== 'string'
+      || !Array.isArray(diagnostic.recoverableActions)
+      || typeof diagnostic.current !== 'object'
+      || diagnostic.current === null) return false;
+    if (!activeRun) return true;
+    const diagnosticTime = Date.parse(diagnostic.createdAt);
+    const runCreatedAt = Date.parse(activeRun.createdAt);
+    if (Number.isFinite(diagnosticTime) && Number.isFinite(runCreatedAt) && diagnosticTime < runCreatedAt) return false;
+    return true;
   }).slice(0, 4);
+}
+
+function evidenceClaimsForRun(session: SciForgeSession, activeRun?: SciForgeRun): EvidenceClaim[] {
+  if (!activeRun) return session.claims;
+  const artifactIds = new Set(artifactsForRun(session, activeRun).map((artifact) => artifact.id));
+  const executionUnitIds = new Set(auditExecutionUnitsForRun(session, activeRun).map((unit) => unit.id.replace(/^execution-unit::?/i, '')));
+  if (!artifactIds.size && !executionUnitIds.size) return [];
+  return session.claims.filter((claim) => {
+    const refs = [...claim.supportingRefs, ...claim.opposingRefs, ...(claim.dependencyRefs ?? [])];
+    return refs.some((ref) => {
+      const normalized = ref.replace(/^(artifact|file|execution-unit)::?/i, '');
+      return artifactIds.has(normalized) || executionUnitIds.has(normalized);
+    });
+  });
 }
 
 function compactVisibleFailureText(value: string) {

@@ -9,6 +9,7 @@ import { ChatPanel } from '../ChatPanel';
 import { ResultsRenderer } from '../ResultsRenderer';
 import { recoverableRunFocusForSession } from '../appShell/workspaceState';
 import type { HandoffAutoRunRequest } from '../results/viewPlanResolver';
+import { scopedResultSlotId } from '../results/viewPlanResolver';
 import { defaultElementSelectionForScenario, ScenarioBuilderPanel } from '../ScenarioBuilderPanel';
 import { useRuntimeHealth } from '../runtimeHealthPanel';
 import { cx } from '../uiPrimitives';
@@ -284,6 +285,7 @@ export function Workbench({
             externalReferenceRequest={externalReferenceRequest}
             onExternalReferenceConsumed={onExternalReferenceConsumed}
             availableComponentIds={availableComponentIds}
+            runtimeHealth={runtimeHealth}
           />
         </div>
         {!resultsCollapsed ? (
@@ -313,9 +315,10 @@ export function Workbench({
             workspaceFileEditor={workspaceFileEditor}
             onWorkspaceFileEditorChange={onWorkspaceFileEditorChange}
             onDismissResultSlotPresentation={(presentationId) => {
+              const scopedPresentationId = scopedResultSlotId(activeRunId, presentationId);
               onSessionChange({
                 ...session,
-                hiddenResultSlotIds: [...new Set([...(session.hiddenResultSlotIds ?? []), presentationId])],
+                hiddenResultSlotIds: [...new Set([...(session.hiddenResultSlotIds ?? []), scopedPresentationId])],
                 updatedAt: nowIso(),
               });
             }}

@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import type { ObjectReference, RuntimeArtifact, SciForgeConfig, SciForgeSession } from '../../domain';
 import { WorkspaceObjectPreview } from './WorkspaceObjectPreview';
+import { MarkdownBlock } from './reportContent';
 
 describe('WorkspaceObjectPreview presentation input', () => {
   it('uses markdown delivery refs instead of rendering artifact JSON fallback', () => {
@@ -46,6 +47,25 @@ describe('WorkspaceObjectPreview presentation input', () => {
     assert.match(html, /\.sciforge\/artifacts\/report-1\.md/);
     assert.doesNotMatch(html, /JSON envelope should stay hidden/);
     assert.doesNotMatch(html, /fallback/);
+  });
+
+  it('renders markdown reports with GFM tables and task lists', () => {
+    const html = renderToStaticMarkup(createElement(MarkdownBlock, {
+      markdown: [
+        '# Report',
+        '',
+        '| Paper | Status |',
+        '| --- | --- |',
+        '| A | **read** |',
+        '',
+        '- [x] summarized',
+      ].join('\n'),
+    }));
+
+    assert.match(html, /<table>/);
+    assert.match(html, /<th>Paper<\/th>/);
+    assert.match(html, /<strong>read<\/strong>/);
+    assert.match(html, /type="checkbox"/);
   });
 
   it('renders system-open notice for binary deliveries', () => {

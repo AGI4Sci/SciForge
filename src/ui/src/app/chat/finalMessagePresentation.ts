@@ -81,17 +81,16 @@ function structuredResultPresentation(value: unknown): ResultPresentationContrac
 }
 
 function presentationFromResultContract(contract: ResultPresentationContractLike, fallbackContent: string): FinalMessagePresentation {
-  const citations = citationMap(contract.inlineCitations);
   const primary: string[] = [];
-  const answerText = answerBlocksMarkdown(contract.answerBlocks, citations);
+  const answerText = answerBlocksMarkdown(contract.answerBlocks);
   if (answerText) primary.push(answerText);
-  const findings = keyFindingsMarkdown(contract.keyFindings, citations);
+  const findings = keyFindingsMarkdown(contract.keyFindings);
   if (findings) primary.push(['## Key findings', findings].join('\n\n'));
   const artifactActions = artifactActionsMarkdown(contract.artifactActions);
   if (artifactActions) primary.push(['## Artifacts', artifactActions].join('\n\n'));
   const nextActions = nextActionsMarkdown(contract.nextActions);
   if (nextActions) primary.push(['## Next actions', nextActions].join('\n\n'));
-  const confidence = confidenceMarkdown(contract.confidenceExplanation, citations);
+  const confidence = confidenceMarkdown(contract.confidenceExplanation);
   if (confidence) primary.push(['## Confidence', confidence].join('\n\n'));
 
   const auditSections = structuredAuditSections(contract, fallbackContent);
@@ -110,22 +109,21 @@ function presentationFromResultContract(contract: ResultPresentationContractLike
   };
 }
 
-function answerBlocksMarkdown(blocks: unknown[] | undefined, citations: Map<string, CitationLike>) {
+function answerBlocksMarkdown(blocks: unknown[] | undefined) {
   return recordList(blocks).map((block, index) => {
     const text = stringField(block.text) ?? stringList(block.items).join('\n');
     if (!text) return '';
     const title = stringField(block.title);
-    const suffix = citationSuffix([...stringList(block.citationIds), ...stringList(block.citations)], citations);
-    const body = `${text}${suffix}`;
+    const body = text;
     return title ? `### ${title}\n${body}` : index === 0 ? body : `### Answer ${index + 1}\n${body}`;
   }).filter(Boolean).join('\n\n');
 }
 
-function keyFindingsMarkdown(findings: unknown[] | undefined, citations: Map<string, CitationLike>) {
+function keyFindingsMarkdown(findings: unknown[] | undefined) {
   return recordList(findings).map((finding) => {
     const statement = stringField(finding.statement) ?? stringField(finding.text);
     if (!statement) return '';
-    const suffix = citationSuffix([...stringList(finding.citationIds), ...stringList(finding.citations)], citations);
+    const suffix = '';
     const uncertainty = isRecord(finding.uncertainty) ? stringField(finding.uncertainty.reason) : undefined;
     const state = stringField(finding.verificationState) ?? stringField(finding.status) ?? (uncertainty ? 'unverified' : undefined);
     return `- ${statement}${suffix}${state ? ` (${state})` : ''}${uncertainty ? `: ${uncertainty}` : ''}`;
@@ -135,9 +133,7 @@ function keyFindingsMarkdown(findings: unknown[] | undefined, citations: Map<str
 function artifactActionsMarkdown(actions: unknown[] | undefined) {
   return recordList(actions).map((action) => {
     const label = stringField(action.label) ?? stringField(action.id);
-    const ref = stringField(action.ref);
-    if (!label && !ref) return '';
-    return `- ${ref ? displayObjectRef(ref, stringField(action.artifactType)) : label}`;
+    return label ? `- ${label}` : '';
   }).filter(Boolean).join('\n');
 }
 
@@ -148,13 +144,13 @@ function nextActionsMarkdown(actions: unknown[] | undefined) {
   }).filter(Boolean).join('\n');
 }
 
-function confidenceMarkdown(value: unknown, citations: Map<string, CitationLike>) {
+function confidenceMarkdown(value: unknown) {
   if (typeof value === 'string') return value;
   if (!isRecord(value)) return undefined;
   const summary = stringField(value.summary) ?? stringField(value.explanation);
   if (!summary) return undefined;
   const level = stringField(value.level);
-  return `${level ? `${level}: ` : ''}${summary}${citationSuffix(stringList(value.citationIds), citations)}`;
+  return `${level ? `${level}: ` : ''}${summary}`;
 }
 
 function structuredAuditSections(contract: ResultPresentationContractLike, fallbackContent: string): FinalMessageAuditSection[] {
@@ -199,53 +195,6 @@ function structuredAuditSections(contract: ResultPresentationContractLike, fallb
     });
   }
   return sections;
-}
-
-type CitationLike = {
-  id: string;
-  label: string;
-  ref?: string;
-  kind?: string;
-  status?: string;
-};
-
-function citationMap(citations: unknown[] | undefined) {
-  const map = new Map<string, CitationLike>();
-  for (const citation of recordList(citations)) {
-    const id = stringField(citation.id);
-    if (!id) continue;
-    map.set(id, {
-      id,
-      label: stringField(citation.label) ?? id,
-      ref: stringField(citation.ref),
-      kind: stringField(citation.kind),
-      status: stringField(citation.status) ?? stringField(citation.verificationState),
-    });
-  }
-  return map;
-}
-
-function citationSuffix(ids: string[], citations: Map<string, CitationLike>) {
-  const labels = ids
-    .map((id) => citations.get(id))
-    .filter((citation): citation is CitationLike => Boolean(citation))
-    .slice(0, 4)
-    .map((citation) => {
-      const ref = citation.ref ? displayObjectRef(citation.ref, citation.kind) : undefined;
-      const status = citation.status ? `, ${citation.status}` : '';
-      return ref ? `${citation.label}: ${ref}${status}` : `${citation.label}${status}`;
-    });
-  return labels.length ? ` [${labels.join('; ')}]` : '';
-}
-
-function displayObjectRef(ref: string, kind?: string) {
-  if (/^artifact:/i.test(ref)) return ref.replace(/^artifact:/i, 'artifact::');
-  if (/^file:/i.test(ref)) return ref.replace(/^file:/i, 'file::');
-  if (/^folder:/i.test(ref)) return ref.replace(/^folder:/i, 'folder::');
-  if (/^https?:\/\//i.test(ref)) return ref;
-  if (kind === 'artifact') return `artifact::${ref}`;
-  if (kind === 'file' || /^\.[\w./-]+/.test(ref)) return `file::${ref}`;
-  return ref;
 }
 
 function diagnosticEvidenceType(kind: string | undefined): FinalMessageAuditSection['evidenceType'] {

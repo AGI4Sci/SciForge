@@ -99,7 +99,7 @@ function healthLabel(status: RuntimeHealthStatus) {
 }
 
 export function RuntimeHealthPanel({ items, compact = false }: { items: RuntimeHealthItem[]; compact?: boolean }) {
-  const blocking = items.filter((item) => item.status === 'offline' || item.status === 'not-configured');
+  const blocking = items.filter((item) => item.status === 'offline' || item.status === 'not-configured' || item.status === 'checking');
   const shouldShowStart = items.some((item) => item.id === 'workspace' || item.id === 'agentserver');
   const [startState, setStartState] = useState<'idle' | 'starting' | 'done' | 'error'>('idle');
   const [startDetail, setStartDetail] = useState('');

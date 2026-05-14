@@ -291,7 +291,7 @@ export function normalizeArtifactDataWithPolicy(
 export function agentServerToolPayloadProtocolContractLines() {
   const shape = toolPayloadShapeContractSummary();
   return [
-    `ToolPayload schema is strict (${shape.contractId}): ${shape.arrayFields.join(', ')} must be arrays; every uiManifest slot must be an object with componentId and a string artifactRef when present; every artifact must have non-empty id and type. Do not put result rows inside uiManifest; put data in artifacts[].data or artifacts[].dataRef.`,
+    `ToolPayload schema is strict (${shape.contractId}): ${shape.arrayFields.join(', ')} must be arrays; every uiManifest slot must be an object with componentId and a string artifactRef when present; every artifact entry must be an object with non-empty id and type. Do not put result rows inside uiManifest. Do not put artifact filenames, variable names, or result rows directly in artifacts/uiManifest; put content in artifacts[].data, artifacts[].dataRef, artifacts[].path, or a clearly declared artifact object.`,
     `Use uiManifest only as view routing metadata. ${shape.contentRule}. All user-visible result content, tables, lists, reports, raw provider traces, and files must be represented as artifacts with durable dataRef/path or inline data that SciForge can persist.`,
     'When repairing schema failures, preserve the task-specific componentId/artifactRef/artifact type from selectedComponentIds, expectedArtifactTypes, incoming uiManifest, or generated artifacts. If none is known, use a generic unknown-artifact-inspector slot bound to a runtime-result artifact; do not force literature/report-specific components into unrelated scenarios.',
   ];

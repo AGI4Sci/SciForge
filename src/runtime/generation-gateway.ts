@@ -116,7 +116,7 @@ import {
   validateAndNormalizePayload,
 } from './gateway/payload-validation.js';
 import { collectArtifactReferenceContext } from './gateway/artifact-reference-context.js';
-import { sanitizeAgentServerError } from './gateway/backend-failure-diagnostics.js';
+import { diagnosticForFailure, sanitizeAgentServerError } from './gateway/backend-failure-diagnostics.js';
 import {
   finalizeAgentServerGenerationSuccess,
   recoverOrReturnAgentServerGenerationFailure,
@@ -1434,8 +1434,30 @@ async function requestAgentServerGeneration(params: {
       diagnostics: contextRecovery,
     };
   } catch (error) {
-    await writeAgentServerDebugArtifact(params.workspace, 'generation', runPayload, 0, { error: errorMessage(error) }, sessionBundleRelForRequest(params.request));
-    return { ok: false, error: agentServerRequestFailureMessage('generation', error, timeoutMs) };
+    const requestFailure = agentServerRequestFailureMessage('generation', error, timeoutMs);
+    const diagnostic = diagnosticForFailure(requestFailure, {
+      backend: params.request.agentBackend,
+      provider: params.request.modelProvider,
+      model: params.request.modelName,
+    });
+    await writeAgentServerDebugArtifact(params.workspace, 'generation', runPayload, 0, {
+      error: errorMessage(error),
+      diagnostic,
+    }, sessionBundleRelForRequest(params.request));
+    return {
+      ok: false,
+      error: requestFailure,
+      diagnostics: {
+        kind: 'agentserver',
+        categories: diagnostic.categories,
+        retryAfterMs: diagnostic.retryAfterMs,
+        resetAt: diagnostic.resetAt,
+        backend: diagnostic.backend,
+        provider: diagnostic.provider,
+        model: diagnostic.model,
+        originalErrorSummary: diagnostic.userReason ?? requestFailure,
+      },
+    };
   } finally {
     clearTimeout(timeout);
     params.callbacks?.signal?.removeEventListener('abort', abortGeneration);

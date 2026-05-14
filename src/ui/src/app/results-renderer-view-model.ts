@@ -86,7 +86,7 @@ export function projectResultsRendererViewModel({
 }): ResultsRendererViewModel {
   const slotLimit = focusMode === 'visual' || focusMode === 'all' ? 8 : 4;
   const focusModeItems = itemsForFocusMode(viewPlan, focusMode);
-  const visibleAfterDismiss = filterHiddenResultSlots(focusModeItems, session);
+  const visibleAfterDismiss = filterHiddenResultSlots(focusModeItems, session, activeRun);
   const planItems = visibleAfterDismiss.slice(0, slotLimit);
   const dismissedAllInFilter = focusModeItems.length > 0 && visibleAfterDismiss.length === 0;
   const { visibleItems, deferredItems } = selectDefaultResultItems(planItems, focusMode);

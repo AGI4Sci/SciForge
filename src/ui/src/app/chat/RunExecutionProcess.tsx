@@ -1,6 +1,6 @@
 import type { ObjectReference, RuntimeExecutionUnit, SciForgeRun, SciForgeSession } from '../../domain';
 import { Badge } from '../uiPrimitives';
-import { MessageContent, objectReferencesFromInlineTokens } from './MessageContent';
+import { MessageContent } from './MessageContent';
 import {
   artifactHasUserFacingDelivery,
   isUserFacingObjectReference,
@@ -52,8 +52,8 @@ export function RunExecutionProcess({
     <div className="execution-process-thread" aria-label="按顺序记录的工作过程">
       {steps.map((step) => {
         const references = mergeObjectReferences(
-          objectReferencesFromInlineTokens(step.content, runId),
           step.references ?? auditObjectReferences,
+          [],
           40,
         );
         return (

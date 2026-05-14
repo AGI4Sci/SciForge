@@ -206,8 +206,10 @@ function generatedTaskPayloadPreflightIssuesForSource(source: string, sourceRef:
     }
 
     const artifactsValue = fields.get('artifacts');
-    if (artifactsValue && leadingLiteralKind(artifactsValue) === 'array') {
-      issues.push(...generatedTaskArtifactArrayIssues(artifactsValue, sourceRef));
+    const assignedArtifacts = assignedLiteralForExpression(source, artifactsValue);
+    const artifactsLiteral = assignedArtifacts?.kind === 'array' ? assignedArtifacts.literal : artifactsValue;
+    if (artifactsLiteral && leadingLiteralKind(artifactsLiteral) === 'array') {
+      issues.push(...generatedTaskArtifactArrayIssues(artifactsLiteral, sourceRef, source));
     }
   }
   return issues;
@@ -242,20 +244,22 @@ function generatedTaskPayloadLiteralCandidates(source: string, sourceRef: string
   return candidates;
 }
 
-function generatedTaskArtifactArrayIssues(value: string, sourceRef: string): GeneratedTaskPayloadPreflightIssue[] {
+function generatedTaskArtifactArrayIssues(value: string, sourceRef: string, source: string): GeneratedTaskPayloadPreflightIssue[] {
   return parseTopLevelArrayItems(value).flatMap((item, index) => {
-    if (leadingLiteralKind(item) !== 'object') {
+    const resolved = artifactArrayItemLiteral(source, item);
+    const artifactText = resolved?.literal ?? item;
+    if (leadingLiteralKind(artifactText) !== 'object') {
       return [{
         id: `${sourceRef}:artifacts-${index}-not-object`,
         severity: 'repair-needed' as const,
         path: `artifacts[${index}]`,
         sourceRef,
-        evidence: clipEvidence(item),
+        evidence: clipEvidence(artifactText),
         reason: `Generated task artifacts[${index}] is not an object; artifact entries must include id and type.`,
         recoverActions: ['Return each artifact as an object with non-empty id, type, and data/dataRef/path content.'],
       }];
     }
-    const fields = parseTopLevelObjectFields(item);
+    const fields = parseTopLevelObjectFields(artifactText);
     const missing = ['id', 'type'].filter((key) => !fields.has(key) || fieldValueIsEmptyString(fields.get(key)));
     const derivable = missing.length > 0 && artifactIdentityDerivableFromFields(fields);
     return missing.length ? [{
@@ -263,7 +267,7 @@ function generatedTaskArtifactArrayIssues(value: string, sourceRef: string): Gen
       severity: derivable ? 'guidance' as const : 'repair-needed' as const,
       path: missing.map((key) => `artifacts[${index}].${key}`).join(','),
       sourceRef,
-      evidence: clipEvidence(item),
+      evidence: clipEvidence(artifactText),
       reason: derivable
         ? `Generated task artifact ${index + 1} is missing non-empty ${missing.join(' and ')} field(s), but identity can be derived mechanically from its file ref.`
         : `Generated task artifact ${index + 1} is missing non-empty ${missing.join(' and ')} field(s).`,
@@ -274,8 +278,14 @@ function generatedTaskArtifactArrayIssues(value: string, sourceRef: string): Gen
   });
 }
 
+function artifactArrayItemLiteral(source: string, item: string) {
+  if (leadingLiteralKind(item) === 'object') return { literal: item, kind: 'object' as const };
+  const assigned = assignedLiteralForExpression(source, item);
+  return assigned?.kind === 'object' ? assigned : undefined;
+}
+
 function artifactIdentityDerivableFromFields(fields: Map<string, string>) {
-  const values = ['ref', 'path', 'dataRef', 'fileRef', 'filename', 'title', 'kind', 'mimeType']
+  const values = ['id', 'type', 'artifactType', 'ref', 'path', 'dataRef', 'fileRef', 'filename', 'title', 'label', 'kind', 'mimeType']
     .map((key) => literalStringValue(fields.get(key)))
     .filter((value): value is string => Boolean(value));
   return values.some((value) => /[A-Za-z0-9]/.test(value) && !/^(?:file|artifact)$/i.test(value));

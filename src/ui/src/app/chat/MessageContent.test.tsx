@@ -31,11 +31,11 @@ const recentArtifact: ObjectReference = {
   summary: 'implicit recent artifact',
 };
 
-test('message inline object links expose the picked ObjectReference as currentReference payload', () => {
+test('message structured object links expose the picked ObjectReference as currentReference payload', () => {
   const markup = renderToStaticMarkup(
     <MessageContent
       content="基于 file:papers/methods.md 继续。"
-      references={[recentArtifact, pickedFile]}
+      references={[pickedFile, recentArtifact]}
       onObjectFocus={() => undefined}
     />,
   );
@@ -46,7 +46,39 @@ test('message inline object links expose the picked ObjectReference as currentRe
   assert.equal(currentReference?.ref, 'file:papers/methods.md');
   assert.equal(currentReference?.provenance?.hash, 'sha256-picked-file');
   assert.match(markup, /Picked methods file/);
-  assert.doesNotMatch(markup, /file:papers\/methods\.md继续/);
+  assert.match(markup, /file:papers\/methods\.md/);
+});
+
+test('message markdown renderer supports GFM tables while structured object refs stay outside table cells', () => {
+  const markup = renderToStaticMarkup(
+    <MessageContent
+      content={[
+        '| 文件 | 状态 |',
+        '| --- | --- |',
+        '| file:papers/methods.md | ~~old~~ **ready** |',
+      ].join('\n')}
+      references={[pickedFile]}
+      onObjectFocus={() => undefined}
+    />,
+  );
+
+  assert.match(markup, /<table>/);
+  assert.match(markup, /<del>old<\/del>/);
+  assert.match(markup, /<strong>ready<\/strong>/);
+  assert.match(markup, /data-sciforge-reference=/);
+  assert.match(markup, /Picked methods file/);
+});
+
+test('message markdown renderer only renders structured object refs, never text-scanned refs', () => {
+  const markup = renderToStaticMarkup(
+    <MessageContent
+      content="Use `file:papers/methods.md` as literal text, then open file:papers/methods.md."
+      references={[pickedFile]}
+      onObjectFocus={() => undefined}
+    />,
+  );
+
+  assert.equal((markup.match(/data-sciforge-reference=/g) ?? []).length, 1);
 });
 
 test('object reference chips expose each selected chip object instead of the recent artifact', () => {

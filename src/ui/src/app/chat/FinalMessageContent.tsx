@@ -1,5 +1,5 @@
 import type { ObjectReference } from '../../domain';
-import { normalizeObjectReferencePresentationRole } from '../../../../../packages/support/object-references';
+import { mergeObjectReferences, normalizeObjectReferencePresentationRole } from '../../../../../packages/support/object-references';
 import { MessageContent } from './MessageContent';
 import { splitFinalMessagePresentation } from './finalMessagePresentation';
 
@@ -40,11 +40,7 @@ export function FinalMessageContent({
 }
 
 function mergeResultPresentationReferences(references: ObjectReference[], resultPresentation: unknown) {
-  const byRef = new Map(references.map((reference) => [reference.ref, reference]));
-  for (const reference of resultPresentationReferences(resultPresentation)) {
-    if (!byRef.has(reference.ref)) byRef.set(reference.ref, reference);
-  }
-  return [...byRef.values()];
+  return mergeObjectReferences(references, resultPresentationReferences(resultPresentation), 24);
 }
 
 function resultPresentationReferences(resultPresentation: unknown): ObjectReference[] {
@@ -63,7 +59,7 @@ function resultPresentationReferences(resultPresentation: unknown): ObjectRefere
       id: stringField(action.id),
       label: stringField(action.label),
       ref: stringField(action.ref),
-      kind: stringField(action.artifactType) ?? 'artifact',
+      kind: stringField(action.kind) ?? 'artifact',
       summary: stringField(action.artifactType),
       status: 'available',
       presentationRole: stringField(action.presentationRole),
@@ -101,9 +97,9 @@ function objectReferenceFromPresentationRef(input: {
 }
 
 function displayObjectRef(ref: string, kind?: string) {
-  if (/^artifact:/i.test(ref)) return ref.replace(/^artifact:/i, 'artifact::');
-  if (/^file:/i.test(ref)) return ref.replace(/^file:/i, 'file::');
-  if (/^folder:/i.test(ref)) return ref.replace(/^folder:/i, 'folder::');
+  if (/^artifact::?/i.test(ref)) return ref.replace(/^artifact::?/i, 'artifact::');
+  if (/^file::?/i.test(ref)) return ref.replace(/^file::?/i, 'file::');
+  if (/^folder::?/i.test(ref)) return ref.replace(/^folder::?/i, 'folder::');
   if (/^https?:\/\//i.test(ref)) return ref;
   if (kind === 'artifact') return `artifact::${ref}`;
   if (kind === 'file' || /^\.[\w./-]+/.test(ref)) return `file::${ref}`;

@@ -258,7 +258,7 @@ function ArtifactFallbackPreview({
         {artifact?.type ? <code>{artifact.type}</code> : null}
         {path ? <code>{path}</code> : null}
       </div>
-      <p>主预览只展示 ArtifactDelivery 指向的可读文件；artifact 记录本身作为审计材料保留，不在这里展开为 JSON。</p>
+      <p>这个对象的可读文件暂时打不开。引用和诊断仍保留在运行细节中，可稍后重试、重新生成，或用系统默认程序打开对应文件。</p>
       {diagnostic ? <pre className="workspace-object-code">{diagnostic}</pre> : null}
       {path ? (
         <UnsupportedPreviewPackageNotice
@@ -291,7 +291,7 @@ function PresentationInputNotice({
       {input.kind === 'unsupported' ? (
         <p>{input.reason}</p>
       ) : input.kind === 'binary' ? (
-        <p>这个交付物按 ArtifactDelivery contract 交给系统默认程序打开，浏览器内联视图不展开原始内容。</p>
+        <p>这个文件更适合用系统默认程序打开，浏览器内联视图不展开原始内容。</p>
       ) : (
         <p>这个交付物当前不走浏览器内联预览。</p>
       )}
@@ -305,8 +305,8 @@ function PresentationInputNotice({
 }
 
 function artifactFallbackReasonLabel(reason: 'missing-path' | 'read-failed' | 'inline-data') {
-  if (reason === 'missing-path') return '这个 artifact 缺少可读取的 workspace path/dataRef，无法生成内联主预览。';
-  if (reason === 'inline-data') return '这个 artifact 只有内联记录，没有可读交付文件。';
+  if (reason === 'missing-path') return '这个对象缺少可读取的 workspace 文件路径，无法生成内联预览。';
+  if (reason === 'inline-data') return '这个对象只有运行记录，没有可直接阅读的交付文件。';
   return 'workspace 文件暂时不可读，已保留引用和诊断信息。';
 }
 

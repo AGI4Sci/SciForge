@@ -1,16 +1,13 @@
-import type { ReactNode } from 'react';
 import type { ObjectReference, SciForgeMessage, SciForgeSession } from '../../domain';
 import {
   artifactForObjectReference,
   artifactHasUserFacingDelivery,
   isUserFacingObjectReference,
-  linkifyObjectReferences,
   mergeObjectReferences,
   objectReferenceForArtifactSummary,
-  objectReferencesFromInlineTokens,
-  sciForgeReferenceAttribute,
 } from '../../../../../packages/support/object-references';
-import { composerReferenceForObjectReference } from './composerReferences';
+import { MarkdownRenderer } from '../markdown/MarkdownRenderer';
+import { InlineObjectReferences } from './InlineObjectReferences';
 
 export function MessageContent({
   content,
@@ -23,246 +20,10 @@ export function MessageContent({
 }) {
   return (
     <div className="message-content">
-      {renderMarkdownBlocks(content, references, onObjectFocus)}
+      <MarkdownRenderer markdown={content} className="message-markdown" />
+      <InlineObjectReferences references={references} onObjectFocus={onObjectFocus} />
     </div>
   );
-}
-
-type MarkdownBlock =
-  | { type: 'paragraph'; text: string }
-  | { type: 'heading'; depth: number; text: string }
-  | { type: 'blockquote'; text: string }
-  | { type: 'code'; language?: string; text: string }
-  | { type: 'list'; ordered: boolean; items: string[] }
-  | { type: 'table'; rows: string[][] }
-  | { type: 'rule' };
-
-function renderMarkdownBlocks(
-  markdown: string,
-  references: ObjectReference[],
-  onObjectFocus: (reference: ObjectReference) => void,
-): ReactNode[] {
-  const blocks = parseMarkdownBlocks(markdown);
-  return blocks.map((block, index) => {
-    const key = `md-${index}`;
-    if (block.type === 'heading') {
-      const children = renderInlineContent(block.text, references, onObjectFocus, key);
-      if (block.depth === 1) return <h1 key={key}>{children}</h1>;
-      if (block.depth === 2) return <h2 key={key}>{children}</h2>;
-      if (block.depth === 3) return <h3 key={key}>{children}</h3>;
-      if (block.depth === 4) return <h4 key={key}>{children}</h4>;
-      if (block.depth === 5) return <h5 key={key}>{children}</h5>;
-      return <h6 key={key}>{children}</h6>;
-    }
-    if (block.type === 'blockquote') {
-      return <blockquote key={key}>{renderInlineContent(block.text, references, onObjectFocus, key)}</blockquote>;
-    }
-    if (block.type === 'code') {
-      return (
-        <pre key={key} className="message-code-block">
-          {block.language ? <span className="message-code-lang">{block.language}</span> : null}
-          <code>{block.text}</code>
-        </pre>
-      );
-    }
-    if (block.type === 'list') {
-      const items = block.items.map((item, itemIndex) => (
-        <li key={`${key}-li-${itemIndex}`}>{renderInlineContent(item, references, onObjectFocus, `${key}-${itemIndex}`)}</li>
-      ));
-      return block.ordered ? <ol key={key}>{items}</ol> : <ul key={key}>{items}</ul>;
-    }
-    if (block.type === 'table') {
-      const [head, ...body] = block.rows;
-      return (
-        <div key={key} className={`message-${'table'}-scroll`}>
-          <table>
-            {head ? (
-              <thead>
-                <tr>{head.map((cell, cellIndex) => <th key={`${key}-th-${cellIndex}`}>{renderInlineContent(cell, references, onObjectFocus, `${key}-h-${cellIndex}`)}</th>)}</tr>
-              </thead>
-            ) : null}
-            <tbody>
-              {body.map((row, rowIndex) => (
-                <tr key={`${key}-tr-${rowIndex}`}>
-                  {row.map((cell, cellIndex) => <td key={`${key}-td-${rowIndex}-${cellIndex}`}>{renderInlineContent(cell, references, onObjectFocus, `${key}-c-${rowIndex}-${cellIndex}`)}</td>)}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      );
-    }
-    if (block.type === 'rule') return <hr key={key} />;
-    return <p key={key}>{renderInlineContent(block.text, references, onObjectFocus, key)}</p>;
-  });
-}
-
-function parseMarkdownBlocks(content: string): MarkdownBlock[] {
-  const lines = content.replace(/\r\n?/g, '\n').split('\n');
-  const blocks: MarkdownBlock[] = [];
-  let index = 0;
-  while (index < lines.length) {
-    const line = lines[index];
-    if (!line.trim()) {
-      index += 1;
-      continue;
-    }
-    const fence = line.match(/^```([A-Za-z0-9_-]+)?\s*$/);
-    if (fence) {
-      const code: string[] = [];
-      index += 1;
-      while (index < lines.length && !/^```\s*$/.test(lines[index])) {
-        code.push(lines[index]);
-        index += 1;
-      }
-      if (index < lines.length) index += 1;
-      blocks.push({ type: 'code', language: fence[1], text: code.join('\n') });
-      continue;
-    }
-    const heading = line.match(/^(#{1,6})\s+(.+)$/);
-    if (heading) {
-      blocks.push({ type: 'heading', depth: heading[1].length, text: heading[2].trim() });
-      index += 1;
-      continue;
-    }
-    if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
-      blocks.push({ type: 'rule' });
-      index += 1;
-      continue;
-    }
-    if (isMarkdownTableAt(lines, index)) {
-      const rows: string[][] = [];
-      rows.push(splitMarkdownTableRow(lines[index]));
-      index += 2;
-      while (index < lines.length && /^\s*\|.+\|\s*$/.test(lines[index])) {
-        rows.push(splitMarkdownTableRow(lines[index]));
-        index += 1;
-      }
-      blocks.push({ type: 'table', rows });
-      continue;
-    }
-    const unordered = line.match(/^\s*[-*+]\s+(.+)$/);
-    const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
-    if (unordered || ordered) {
-      const items: string[] = [];
-      const orderedList = Boolean(ordered);
-      while (index < lines.length) {
-        const match = orderedList ? lines[index].match(/^\s*\d+[.)]\s+(.+)$/) : lines[index].match(/^\s*[-*+]\s+(.+)$/);
-        if (!match) break;
-        items.push(match[1].trim());
-        index += 1;
-      }
-      blocks.push({ type: 'list', ordered: orderedList, items });
-      continue;
-    }
-    if (/^\s*>\s?/.test(line)) {
-      const quote: string[] = [];
-      while (index < lines.length && /^\s*>\s?/.test(lines[index])) {
-        quote.push(lines[index].replace(/^\s*>\s?/, ''));
-        index += 1;
-      }
-      blocks.push({ type: 'blockquote', text: quote.join('\n') });
-      continue;
-    }
-    const paragraph: string[] = [];
-    while (index < lines.length && lines[index].trim() && !isMarkdownBlockStart(lines, index)) {
-      paragraph.push(lines[index]);
-      index += 1;
-    }
-    blocks.push({ type: 'paragraph', text: paragraph.join('\n') });
-  }
-  return blocks.length ? blocks : [{ type: 'paragraph', text: '' }];
-}
-
-function isMarkdownBlockStart(lines: string[], index: number) {
-  const line = lines[index];
-  return /^```/.test(line)
-    || /^(#{1,6})\s+/.test(line)
-    || /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)
-    || /^\s*[-*+]\s+/.test(line)
-    || /^\s*\d+[.)]\s+/.test(line)
-    || /^\s*>\s?/.test(line)
-    || isMarkdownTableAt(lines, index);
-}
-
-function isMarkdownTableAt(lines: string[], index: number) {
-  return index + 1 < lines.length
-    && /^\s*\|.+\|\s*$/.test(lines[index])
-    && /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[index + 1]);
-}
-
-function splitMarkdownTableRow(line: string) {
-  return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim());
-}
-
-function renderInlineContent(
-  text: string,
-  references: ObjectReference[],
-  onObjectFocus: (reference: ObjectReference) => void,
-  keyPrefix: string,
-): ReactNode[] {
-  const pieces = linkifyObjectReferences(text, references);
-  const nodes: ReactNode[] = [];
-  pieces.forEach((piece, index) => {
-    if (piece.reference) {
-      nodes.push(
-        <button
-          key={`${keyPrefix}-ref-${index}`}
-          type="button"
-          className="message-object-link"
-          onClick={() => onObjectFocus(piece.reference as ObjectReference)}
-          title={piece.reference.summary || piece.reference.ref}
-          data-sciforge-reference={sciForgeReferenceAttribute(composerReferenceForObjectReference(piece.reference))}
-        >
-          {piece.text}
-        </button>,
-      );
-    } else {
-      nodes.push(...renderInlineText(piece.text, `${keyPrefix}-txt-${index}`));
-    }
-  });
-  return nodes;
-}
-
-function renderInlineText(text: string, keyPrefix: string): ReactNode[] {
-  const nodes: ReactNode[] = [];
-  const pattern = /(`[^`\n]+`|\*\*[^*\n]+(?:\*[^*\n]+)*\*\*|\[[^\]\n]+\]\((https?:\/\/[^)\s]+|mailto:[^)\s]+)\)|\*[^*\n]+\*)/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(text))) {
-    appendPlainInlineText(nodes, text.slice(lastIndex, match.index), `${keyPrefix}-plain-${nodes.length}`);
-    const token = match[0];
-    if (token.startsWith('`')) {
-      nodes.push(<code key={`${keyPrefix}-code-${nodes.length}`}>{token.slice(1, -1)}</code>);
-    } else if (token.startsWith('**')) {
-      nodes.push(<strong key={`${keyPrefix}-strong-${nodes.length}`}>{renderInlineText(token.slice(2, -2), `${keyPrefix}-strong-${nodes.length}`)}</strong>);
-    } else if (token.startsWith('*')) {
-      nodes.push(<em key={`${keyPrefix}-em-${nodes.length}`}>{renderInlineText(token.slice(1, -1), `${keyPrefix}-em-${nodes.length}`)}</em>);
-    } else {
-      const link = token.match(/^\[([^\]]+)\]\((https?:\/\/[^)\s]+|mailto:[^)\s]+)\)$/);
-      if (link) {
-        nodes.push(
-          <a key={`${keyPrefix}-link-${nodes.length}`} href={link[2]} target="_blank" rel="noreferrer">
-            {renderInlineText(link[1], `${keyPrefix}-link-${nodes.length}`)}
-          </a>,
-        );
-      } else {
-        appendPlainInlineText(nodes, token, `${keyPrefix}-fallback-${nodes.length}`);
-      }
-    }
-    lastIndex = match.index + token.length;
-  }
-  appendPlainInlineText(nodes, text.slice(lastIndex), `${keyPrefix}-tail-${nodes.length}`);
-  return nodes;
-}
-
-function appendPlainInlineText(nodes: ReactNode[], text: string, keyPrefix: string) {
-  if (!text) return;
-  const lines = text.split('\n');
-  lines.forEach((line, index) => {
-    if (line) nodes.push(<span key={`${keyPrefix}-${index}`}>{line}</span>);
-    if (index < lines.length - 1) nodes.push(<br key={`${keyPrefix}-br-${index}`} />);
-  });
 }
 
 export function inlineObjectReferencesForMessage(message: SciForgeMessage, session: SciForgeSession, runId?: string) {
@@ -275,17 +36,12 @@ export function inlineObjectReferencesForMessage(message: SciForgeMessage, sessi
     .map((artifact) => objectReferenceForArtifactSummary(artifact, runId));
   const structuredReferences = mergeObjectReferences(message.objectReferences ?? [], mergeObjectReferences(run?.objectReferences ?? [], runArtifacts), 32)
     .filter((reference) => isVisibleMessageObjectReference(reference, session));
-  const inlineReferences = objectReferencesFromInlineTokens(message.content, runId)
-    .filter((reference) => isVisibleMessageObjectReference(reference, session));
-  return mergeObjectReferences(inlineReferences, structuredReferences, 40);
+  return mergeObjectReferences(structuredReferences, [], 40);
 }
 
-export { objectReferencesFromInlineTokens };
-
 export function unmentionedObjectReferencesForMessage(message: SciForgeMessage, session: SciForgeSession, runId?: string) {
-  const mentioned = new Set(linkifyObjectReferences(message.content, inlineObjectReferencesForMessage(message, session, runId))
-    .flatMap((piece) => piece.reference ? [piece.reference.ref] : []));
-  return inlineObjectReferencesForMessage(message, session, runId).filter((reference) => !mentioned.has(reference.ref));
+  void message;
+  return inlineObjectReferencesForMessage(message, session, runId);
 }
 
 function isVisibleMessageObjectReference(reference: ObjectReference, session: SciForgeSession) {
