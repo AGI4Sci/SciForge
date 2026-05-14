@@ -17,7 +17,7 @@ import {
   isUnknownArtifactInspectorComponent,
   type UIComponentRendererProps,
 } from '../../../../packages/presentation/interactive-views';
-import type { SciForgeConfig, SciForgeSession, ObjectReference, RuntimeArtifact, UIManifestSlot } from '../domain';
+import type { PresentationInput, SciForgeConfig, SciForgeSession, ObjectReference, RuntimeArtifact, UIManifestSlot } from '../domain';
 import { exportTextFile } from './exportUtils';
 import { ActionButton, Badge, Card, EmptyArtifactState, SectionHeader, cx } from './uiPrimitives';
 import { HandoffPreview, HandoffTargetButtons } from './results/HandoffControls';
@@ -50,6 +50,7 @@ export type RegistryRendererProps = {
   session: SciForgeSession;
   slot: UIManifestSlot;
   artifact?: RuntimeArtifact;
+  input?: PresentationInput;
   onObjectReferenceFocus?: (reference: ObjectReference) => void;
 };
 
@@ -178,6 +179,7 @@ function packageRendererProps(props: RegistryRendererProps): UIComponentRenderer
   return {
     slot: props.slot,
     artifact: props.artifact,
+    input: props.input,
     session: props.session,
     config: props.config,
     helpers: {
@@ -357,7 +359,7 @@ export function RegistrySlot({
           onConfirm={() => onArtifactHandoff(handoffPreviewTarget, artifact)}
         />
       ) : null}
-      {entry.render({ scenarioId, config, session, slot, artifact, onObjectReferenceFocus })}
+      {entry.render({ scenarioId, config, session, slot, artifact, input: item.input, onObjectReferenceFocus })}
     </Card>
   );
 }

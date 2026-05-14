@@ -10,7 +10,14 @@ export const manifest: UIComponentManifest = {
   lifecycle: 'validated',
   outputArtifactTypes: ['record-set', 'data-table'],
   acceptsArtifactTypes: ['record-set', 'data-table', 'table', 'dataframe', 'annotation-table', 'dataset-inventory', 'runtime-artifact', 'knowledge-graph', 'sequence-alignment'],
-  requiredAnyFields: [['rows', 'records', 'items', 'papers', 'nodes', 'sequences']],
+  consumes: [
+    {
+      kinds: ['table'],
+      mediaTypes: ['text/csv', 'text/tab-separated-values', 'application/json'],
+      extensions: ['csv', 'tsv', 'json'],
+      previewPolicies: ['inline'],
+    },
+  ],
   viewParams: ['filter', 'sort', 'limit', 'group', 'columnOrder'],
   interactionEvents: ['select-row'],
   roleDefaults: ['bioinformatician', 'pi'],

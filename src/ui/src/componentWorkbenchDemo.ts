@@ -35,8 +35,7 @@ export interface WorkbenchComponentRecommendation {
 export interface WorkbenchArtifactShapeExample {
   artifactType: string;
   schemaVersion: string;
-  requiredFields: string[];
-  requiredAnyFields: string[][];
+  consumes: string[];
   exampleData: unknown;
 }
 
@@ -70,20 +69,6 @@ function fieldsFromSchema(schema: unknown): string[] {
 
 function dataFieldsFromArtifactData(data: unknown): string[] {
   return isRecord(data) ? Object.keys(data) : [];
-}
-
-function fieldMatches(required: string, fields: string[]) {
-  return fields.includes(required);
-}
-
-function requiredAnyMatches(requiredAny: string[][] | undefined, fields: string[]) {
-  if (!requiredAny?.length) return false;
-  return requiredAny.some((group) => group.some((field) => fieldMatches(field, fields)));
-}
-
-function requiredAllMatch(required: string[] | undefined, fields: string[]) {
-  if (!required?.length) return false;
-  return required.every((field) => fieldMatches(field, fields));
 }
 
 function cloneArtifact(artifact: RuntimeArtifact): RuntimeArtifact {
@@ -233,8 +218,7 @@ export function buildWorkbenchArtifactShapeExample(module: RuntimeUIModule, vari
   return {
     artifactType: artifact?.type ?? module.acceptsArtifactTypes[0] ?? defaultWorkbenchDemoContext.fallbackArtifactType,
     schemaVersion: artifact?.schemaVersion ?? module.workbenchDemo?.schemaVersion ?? '1',
-    requiredFields: module.requiredFields ?? [],
-    requiredAnyFields: module.requiredAnyFields ?? [],
+    consumes: module.consumes?.map((contract) => contract.kinds.join('/')).filter(Boolean) ?? [],
     exampleData: artifact?.data ?? module.workbenchDemo?.artifactData ?? {},
   };
 }
@@ -258,14 +242,6 @@ export function recommendWorkbenchComponents(
       if (artifactType && module.outputArtifactTypes?.includes(artifactType)) {
         score += 2;
         reasons.push(`outputs ${artifactType}`);
-      }
-      if (fields.length && requiredAllMatch(module.requiredFields, fields)) {
-        score += 5;
-        reasons.push(`required fields matched: ${module.requiredFields?.join(', ')}`);
-      }
-      if (fields.length && requiredAnyMatches(module.requiredAnyFields, fields)) {
-        score += 4;
-        reasons.push('required-any fields matched');
       }
       const boost = workbenchComponentRecommendationBoost({ componentId: module.componentId, artifactType, fields });
       score += boost.score;

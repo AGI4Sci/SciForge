@@ -9,6 +9,10 @@ export const manifest: UIComponentManifest = {
   componentId: 'unknown-artifact-inspector',
   lifecycle: 'published',
   acceptsArtifactTypes: ['*'],
+  consumes: [
+    { kinds: ['unsupported'] },
+    { kinds: ['binary'] },
+  ],
   viewParams: ['filter', 'sort', 'limit', 'export', 'compare'],
   interactionEvents: ['open-ref', 'copy-ref', 'inspect-metadata', 'export-json', 'pin', 'compare', 'follow-up'],
   roleDefaults: ['bioinformatician', 'pi'],

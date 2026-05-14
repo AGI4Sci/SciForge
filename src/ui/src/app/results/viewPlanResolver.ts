@@ -1,6 +1,6 @@
 import { compileSlotsForScenario } from '@sciforge/scenario-core/ui-plan-compiler';
 import { uiModuleRegistry, type RuntimeUIModule } from '../../uiModuleRegistry';
-import type { DisplayIntent, ObjectReference, ResolvedViewPlan, RuntimeArtifact, ScenarioInstanceId, SciForgeRun, SciForgeSession, UIManifestSlot, ViewPlanSection } from '../../domain';
+import type { DisplayIntent, ObjectReference, PresentationInput, ResolvedViewPlan, RuntimeArtifact, ScenarioInstanceId, SciForgeRun, SciForgeSession, UIManifestSlot, ViewPlanSection } from '../../domain';
 import type { ScenarioId } from '../../data';
 import { artifactForObjectReference, syntheticArtifactForObjectReference } from '../../../../../packages/support/object-references';
 import {
@@ -14,6 +14,7 @@ import { auditExecutionUnitsForRun } from './executionUnitsForRun';
 import type { ResultFocusMode } from './ResultShell';
 import {
   blockedInteractiveViewDesignForIntent,
+  componentConsumesPresentationInput,
   componentMatchesInteractiveViewFocus,
   compactInteractiveViewPlanItems,
   compareInteractiveViewPlanOrder,
@@ -27,12 +28,12 @@ import {
   findRenderableInteractiveArtifact,
   inferDisplayIntentFromInteractiveArtifacts,
   interactiveViewFallbackModuleIds,
-  interactiveViewModuleAcceptsArtifact,
   interactiveViewPlanSourceIds,
   interactiveViewVisiblePresentationGroupKey,
   isAuditOnlyInteractiveViewPlanItem,
   isEvidenceInteractiveArtifactType,
   isEvidenceInteractiveViewComponent,
+  resolvePresentationInputForArtifact,
   resolveInteractiveViewPlanSection,
   validateInteractiveViewModuleBinding,
   type InteractiveViewBindingStatus,
@@ -79,6 +80,7 @@ export type ResolvedViewPlanItem = {
   slot: UIManifestSlot;
   module: RuntimeUIModule;
   artifact?: RuntimeArtifact;
+  input?: PresentationInput;
   section: ViewPlanSection;
   source: ViewPlanSource;
   status: ViewPlanBindingStatus;
@@ -175,7 +177,9 @@ export function resolveViewPlan({
       transform: overrides.transform,
       compare: overrides.compare,
     };
-    const validation = validateInteractiveViewModuleBinding(module, artifact);
+    const input = resolvePresentationInputForArtifact(artifact);
+    const validation = validateInteractiveViewModuleBinding(module, artifact, input);
+    if (!artifact && validation.status === 'missing-artifact') return;
     const section = resolveInteractiveViewPlanSection({ module, displayIntent, artifact, source });
     const id = `${section}-${module.moduleId}-${itemIdentity ?? artifact?.id ?? slot.artifactRef ?? slot.componentId}`;
     if (seen.has(id)) return;
@@ -185,6 +189,7 @@ export function resolveViewPlan({
       slot,
       module,
       artifact,
+      input,
       section,
       source,
       status: validation.status,
@@ -266,7 +271,8 @@ export function resolveViewPlan({
     const diagnosticModule = artifact && isPresentationDiagnosticArtifact(artifact.type)
       ? findInteractiveViewModuleById(uiModuleRegistry, interactiveViewFallbackModuleIds.genericInspector)
       : undefined;
-    const currentModule = diagnosticModule ? undefined : uiModuleRegistry.find((module) => module.componentId === slot.componentId && interactiveViewModuleAcceptsArtifact(module, artifact?.type ?? slot.artifactRef));
+    const input = resolvePresentationInputForArtifact(artifact);
+    const currentModule = diagnosticModule ? undefined : uiModuleRegistry.find((module) => module.componentId === slot.componentId && componentConsumesPresentationInput(module, input));
     const replacementModule = diagnosticModule ?? (artifact ? findBestInteractiveViewModuleForArtifact(uiModuleRegistry, artifact) : uiModuleRegistry.find((module) => module.componentId === slot.componentId));
     const module = currentModule ?? replacementModule ?? findInteractiveViewModuleById(uiModuleRegistry, interactiveViewFallbackModuleIds.genericInspector);
     if (!module) continue;
@@ -446,7 +452,7 @@ function moduleForPresentationAction(action: ResultPresentationArtifactAction, a
   if (explicitModule) {
     const module = findInteractiveViewModuleById(uiModuleRegistry, explicitModule)
       ?? uiModuleRegistry.find((candidate) => candidate.componentId === explicitModule);
-    if (module && (!artifact || interactiveViewModuleAcceptsArtifact(module, artifact.type))) return module;
+    if (module && (!artifact || componentConsumesPresentationInput(module, resolvePresentationInputForArtifact(artifact)))) return module;
   }
   if (artifact && isPresentationDiagnosticArtifact(artifact.type)) {
     return findInteractiveViewModuleById(uiModuleRegistry, interactiveViewFallbackModuleIds.genericInspector);
@@ -593,12 +599,14 @@ function diagnosticArtifactFallbackItems(
         artifactRef: artifact.id,
         priority: module.priority,
       };
-      const validation = validateInteractiveViewModuleBinding(module, artifact);
+      const input = resolvePresentationInputForArtifact(artifact);
+      const validation = validateInteractiveViewModuleBinding(module, artifact, input);
       return {
         id: `raw-${module.moduleId}-${artifact.id}`,
         slot,
         module,
         artifact,
+        input,
         section: resolveInteractiveViewPlanSection({ module, displayIntent, artifact, source: interactiveViewPlanSourceIds.artifactInferred }),
         source: interactiveViewPlanSourceIds.artifactInferred,
         status: validation.status,

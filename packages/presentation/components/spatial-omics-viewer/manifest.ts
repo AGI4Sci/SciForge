@@ -10,7 +10,6 @@ export const manifest: UIComponentManifest = {
   lifecycle: 'draft',
   outputArtifactTypes: ['spatial-map', 'point-set', 'visual-annotation'],
   acceptsArtifactTypes: ['spatial-map', 'spatial-omics', 'visium-spots', 'cell-coordinates', 'tissue-expression-map'],
-  requiredAnyFields: [['spots', 'cells', 'coordinates', 'imageRef', 'features', 'expression', 'dataRef']],
   viewParams: ['feature', 'clusterBy', 'colorBy', 'imageOpacity', 'spotRadius', 'selectedRegion'],
   interactionEvents: ['select-spot', 'select-cell', 'select-region', 'change-feature'],
   roleDefaults: ['bioinformatician', 'experimental-biologist'],

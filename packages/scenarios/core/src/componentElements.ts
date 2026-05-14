@@ -26,7 +26,7 @@ function uiComponentManifestToElement(manifest: UIComponentManifest): UIComponen
     source: 'package',
     componentId: manifest.componentId,
     acceptsArtifactTypes: acceptedArtifactTypes,
-    requiredFields: requiredFieldsForManifest(manifest),
+    consumes: consumesForManifest(manifest),
     emptyState: {
       title: `Awaiting ${primaryArtifactType}`,
       detail: `${manifest.title} requires a compatible ${acceptedArtifactTypes.join('/') || 'runtime artifact'} artifact.`,
@@ -39,9 +39,10 @@ function uiComponentManifestToElement(manifest: UIComponentManifest): UIComponen
   };
 }
 
-function requiredFieldsForManifest(manifest: UIComponentManifest) {
-  return Array.from(new Set([
-    ...(manifest.requiredFields ?? []),
-    ...(manifest.requiredAnyFields ?? []).flat(),
-  ]));
+function consumesForManifest(manifest: UIComponentManifest) {
+  return (manifest.consumes ?? []).map((contract) => [
+    contract.kinds.join('/'),
+    contract.mediaTypes?.join('|'),
+    contract.extensions?.map((extension) => `.${extension.replace(/^\./, '')}`).join('|'),
+  ].filter(Boolean).join(' '));
 }

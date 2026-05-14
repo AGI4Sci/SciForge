@@ -10,7 +10,6 @@ export const manifest: UIComponentManifest = {
   lifecycle: 'draft',
   outputArtifactTypes: ['plot-spec', 'figure-spec', 'plot-export-bundle'],
   acceptsArtifactTypes: ['plot-spec', 'point-set', 'matrix', 'record-set', 'time-series'],
-  requiredAnyFields: [['data', 'layout', 'config', 'frames', 'plotly', 'plotSpec', 'figure', 'figureSpec', 'selection', 'annotations', 'exportProfile', 'fallbackRenderers']],
   viewParams: ['colorBy', 'splitBy', 'facetBy', 'highlightSelection', 'exportProfile', 'renderer', 'publicationProfile'],
   interactionEvents: ['select-point', 'select-region', 'hover-point', 'relayout', 'edit-annotation', 'export-plot'],
   roleDefaults: ['bioinformatician', 'experimental-biologist', 'pi'],

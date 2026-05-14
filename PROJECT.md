@@ -38,6 +38,24 @@
 
 ## 任务板
 
+### 2026-05-14 Milestone：Presentation Component Contract v2
+
+本轮删除 presentation 组件的旧式字段猜测逻辑，最终路径固定为 `RuntimeArtifact.delivery -> PresentationInput -> manifest.consumes -> component renderer`。组件只渲染 resolver 分配的输入，不再自行解释 `artifact.data`、`dataRef`、`path` 或 JSON envelope。
+
+- [x] 新增 `PresentationInput` contract 与 `UIComponentManifest.consumes`，让组件声明可消费的 kind/mediaType/extension/previewPolicy。
+- [x] 新增轻量 `resolvePresentationInputForArtifact()`，集中把 `ArtifactDelivery` 转成 markdown/text/table/html/binary/unsupported 输入；audit/internal 不进入主视图。
+- [x] view-plan 按 `PresentationInput` 与 `manifest.consumes` 匹配组件，删除 `requiredFields/requiredAnyFields` 绑定判断。
+- [x] `report-viewer` 只消费 `input.kind=markdown` 并读取 `input.ref` 渲染 Markdown；不再从 `artifact.data` 猜正文。
+- [x] `WorkspaceObjectPreview` 复用同一 `PresentationInput`，`.md` 聚焦时渲染 Markdown，不展示 JSON fallback。
+- [x] `unknown-artifact-inspector` 降级为 raw/provenance/audit 视图，不再作为主结果 JSON 兜底。
+
+本轮验证：
+
+- [x] `node --import tsx --test packages/presentation/interactive-views/presentation-input-policy.test.ts packages/presentation/components/report-viewer/render.test.tsx src/ui/src/app/results/viewPlanResolver.test.ts src/ui/src/app/results/WorkspaceObjectPreview.test.ts`
+- [x] `node --import tsx --test packages/presentation/interactive-views/index.test.ts src/ui/src/componentWorkbenchDemo.test.ts src/ui/src/app/ResultsRenderer.test.ts`
+- [x] `npm run typecheck`
+- [x] `git diff --check`
+
 ### 2026-05-14 Milestone：Artifact Delivery Contract
 
 本轮将“用户交付物 vs raw payload”收敛为一致 contract：主结果必须有格式一致的 readable ref，JSON envelope 只能作为 raw/audit ref 保留，UI 不再把不支持或内部格式伪装成主结果。

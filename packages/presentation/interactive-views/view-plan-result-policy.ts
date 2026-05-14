@@ -1,5 +1,6 @@
 import type {
   DisplayIntent,
+  PresentationInput,
   RuntimeArtifact,
   UIManifestSlot,
   ViewPlanSection,
@@ -25,6 +26,11 @@ import {
   isTabularInteractiveViewComponent,
   isUnknownArtifactInspectorComponent,
 } from './runtime-ui-manifest-policy';
+import {
+  componentConsumesPresentationInput,
+  resolvePresentationInputForArtifact,
+  validatePresentationInputBinding,
+} from './presentation-input-policy';
 
 export type InteractiveViewPlanSource =
   | 'object-focus'
@@ -54,6 +60,7 @@ export type InteractiveViewPlanItem = {
   slot: UIManifestSlot;
   module: UIComponentManifest;
   artifact?: RuntimeArtifact;
+  input?: PresentationInput;
   section: ViewPlanSection;
   source: InteractiveViewPlanSource;
   status: InteractiveViewBindingStatus;
@@ -120,14 +127,21 @@ export function findInteractiveViewModuleForObjectReference({
 }) {
   if (reference.preferredView) {
     const preferred = modules.find((module) => module.moduleId === reference.preferredView || module.componentId === reference.preferredView);
-    if (preferred && (!artifact || interactiveViewModuleAcceptsArtifact(preferred, artifact.type))) return preferred;
+    const input = resolvePresentationInputForArtifact(artifact);
+    if (preferred && (!artifact || componentConsumesPresentationInput(preferred, input))) return preferred;
   }
   if (artifact) return findBestInteractiveViewModuleForArtifact(modules, artifact);
   return findInteractiveViewModuleById(modules, interactiveViewFallbackModuleIds.genericInspector);
 }
 
 export function findBestInteractiveViewModuleForArtifact(modules: UIComponentManifest[], artifact: RuntimeArtifact) {
-  return findBestInteractiveViewModuleForArtifactType(modules, artifact.type);
+  const input = resolvePresentationInputForArtifact(artifact);
+  if (!input) return undefined;
+  const match = modules
+    .filter((module) => !isUnknownArtifactInspectorComponent(module.componentId) && componentConsumesPresentationInput(module, input))
+    .sort((left, right) => compareInteractiveViewModulesForArtifact(left, right, artifact.type))
+    [0];
+  return match ?? (input.kind === 'unsupported' ? findInteractiveViewModuleById(modules, interactiveViewFallbackModuleIds.genericInspector) : undefined);
 }
 
 export function findBestInteractiveViewModuleForArtifactType(
@@ -146,7 +160,7 @@ export function findBestInteractiveViewModuleForArtifactType(
 }
 
 export function findBestInteractiveArtifactForModule(artifacts: RuntimeArtifact[], module: UIComponentManifest) {
-  return artifacts.find((artifact) => interactiveViewModuleAcceptsArtifact(module, artifact.type));
+  return artifacts.find((artifact) => componentConsumesPresentationInput(module, resolvePresentationInputForArtifact(artifact)));
 }
 
 export function findBestInteractiveArtifactForType(artifacts: RuntimeArtifact[], artifactType: string) {
@@ -175,7 +189,8 @@ export function blockedInteractiveViewDesignForIntent({
   const unsupportedType = requiredTypes.find((artifactType) => {
     const artifact = findBestInteractiveArtifactForType(artifacts, artifactType);
     if (!artifact) return false;
-    const specialized = modules.find((module) => !isUnknownArtifactInspectorComponent(module.componentId) && interactiveViewModuleAcceptsArtifact(module, artifact.type));
+    const input = resolvePresentationInputForArtifact(artifact);
+    const specialized = modules.find((module) => !isUnknownArtifactInspectorComponent(module.componentId) && componentConsumesPresentationInput(module, input));
     return !specialized;
   });
   const primaryBound = items.some((item) => item.section === 'primary' && item.status === 'bound');
@@ -191,37 +206,13 @@ export function blockedInteractiveViewDesignForIntent({
 export function validateInteractiveViewModuleBinding(
   module: UIComponentManifest,
   artifact?: RuntimeArtifact,
+  input: PresentationInput | undefined = resolvePresentationInputForArtifact(artifact),
 ): { status: InteractiveViewBindingStatus; reason?: string; missingFields?: string[] } {
   if (!artifact && interactiveViewComponentAllowsMissingArtifact(module.componentId)) {
     return { status: 'bound' };
   }
-  if (!artifact && !module.acceptsArtifactTypes.includes('*')) {
-    return { status: 'missing-artifact', reason: `等待 ${module.acceptsArtifactTypes.join('/')} artifact` };
-  }
-  if (artifact && !interactiveViewModuleAcceptsArtifact(module, artifact.type)) {
-    return { status: interactiveViewFallbackBindingStatus, reason: `${module.moduleId} 不声明消费 ${artifact.type}` };
-  }
-  const missingFields = (module.requiredFields ?? []).filter((field) => !interactiveViewArtifactHasField(artifact, field));
-  const missingAny = (module.requiredAnyFields ?? []).filter((group) => !group.some((field) => interactiveViewArtifactHasField(artifact, field)));
-  if (missingFields.length || missingAny.length) {
-    return {
-      status: 'missing-fields',
-      reason: 'artifact 缺少模块必需字段',
-      missingFields: [...missingFields, ...missingAny.map((group) => group.join('|'))],
-    };
-  }
-  return { status: 'bound' };
-}
-
-export function interactiveViewArtifactHasField(artifact: RuntimeArtifact | undefined, field: string) {
-  if (!artifact) return false;
-  if (field === 'dataRef' && artifact.dataRef) return true;
-  if (field in artifact) return true;
-  if (isRecord(artifact.metadata) && field in artifact.metadata) return true;
-  const data = artifact.data;
-  if (isRecord(data) && field in data) return true;
-  if (field === 'rows' && Array.isArray(data)) return true;
-  return false;
+  if (!artifact) return { status: 'missing-artifact', reason: '等待 ArtifactDelivery artifact' };
+  return validatePresentationInputBinding(module, input);
 }
 
 export function resolveInteractiveViewPlanSection({

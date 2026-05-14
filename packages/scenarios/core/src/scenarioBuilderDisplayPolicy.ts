@@ -579,9 +579,9 @@ function skillDisplayToken(skillId: string, registry: ElementRegistry): Scenario
 
 function componentManifestMeta(component: UIComponentElement) {
   const accepted = component.acceptsArtifactTypes.join(', ') || '*';
-  const requiredFields = component.requiredFields.join(', ') || 'none';
+  const consumes = component.consumes.join(', ') || 'none';
   const fallbackPolicy = component.fallback || 'component manifest default';
-  return `accepts ${accepted} · fields ${requiredFields} · fallback ${fallbackPolicy}`;
+  return `accepts ${accepted} · consumes ${consumes} · fallback ${fallbackPolicy}`;
 }
 
 function extractSensitiveWorkspaceRefs(json: string, workspacePath: string) {

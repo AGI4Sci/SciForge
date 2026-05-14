@@ -10,7 +10,6 @@ export const manifest: UIComponentManifest = {
   lifecycle: 'draft',
   outputArtifactTypes: ['sequence', 'sequence-alignment'],
   acceptsArtifactTypes: ['sequence', 'sequence-record', 'fasta', 'fasta-file', 'sequence-alignment'],
-  requiredAnyFields: [['sequence', 'sequences', 'fasta', 'dataRef', 'filePath', 'path']],
   viewParams: ['alphabet', 'wrap', 'showCoordinates', 'highlightRegions', 'translateFrame'],
   interactionEvents: ['select-region', 'highlight-feature', 'copy-sequence'],
   roleDefaults: ['bioinformatician', 'experimental-biologist'],

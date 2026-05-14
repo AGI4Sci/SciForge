@@ -10,7 +10,6 @@ export const manifest: UIComponentManifest = {
   lifecycle: 'draft',
   outputArtifactTypes: ['editable-design', 'document', 'workflow-provenance'],
   acceptsArtifactTypes: ['protocol', 'editable-design', 'experimental-protocol', 'method-document', 'workflow-protocol'],
-  requiredAnyFields: [['steps', 'materials', 'parameters', 'body', 'protocolId', 'designType']],
   viewParams: ['mode', 'selectedStepId', 'showMaterials', 'showParameters', 'showExecutionStatus', 'diffAgainstRevision'],
   interactionEvents: ['select-step', 'edit-step', 'edit-parameter', 'insert-step', 'export-protocol'],
   roleDefaults: ['experimental-biologist', 'pi'],

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import type { RuntimeArtifact } from '@sciforge-ui/runtime-contract';
 
 import {
   blockedInteractiveViewDesignForIntent,
@@ -275,7 +276,7 @@ test('interactive view policy owns result binding, section, and presentation ded
       schemaVersion: '1',
       data: {},
     }).status,
-    'missing-fields',
+    'fallback',
   );
   assert.equal(resolveInteractiveViewPlanSection({
     module: reportViewer,
@@ -285,7 +286,16 @@ test('interactive view policy owns result binding, section, and presentation ded
       type: 'research-report',
       producerScenario: 'literature-evidence-review',
       schemaVersion: '1',
-      data: { markdown: '# Ready' },
+      delivery: {
+        contractId: 'sciforge.artifact-delivery.v1',
+        ref: 'artifact:report-ready',
+        role: 'primary-deliverable',
+        declaredMediaType: 'text/markdown',
+        declaredExtension: 'md',
+        contentShape: 'raw-file',
+        readableRef: '/workspace/report.md',
+        previewPolicy: 'inline',
+      },
     },
   }), 'primary');
 
@@ -333,13 +343,22 @@ test('interactive view policy owns resolver artifact and module selection semant
   const reportViewer = interactiveViewManifests.find((module) => module.componentId === 'report-viewer');
   assert.ok(reportViewer);
 
-  const reportArtifact = {
+  const reportArtifact: RuntimeArtifact = {
     id: 'report-ready',
     type: 'research-report',
     producerScenario: 'literature-evidence-review',
     schemaVersion: '1',
     path: '/workspace/report.md',
-    data: { markdown: '# Ready' },
+    delivery: {
+      contractId: 'sciforge.artifact-delivery.v1',
+      ref: 'artifact:report-ready',
+      role: 'primary-deliverable',
+      declaredMediaType: 'text/markdown',
+      declaredExtension: 'md',
+      contentShape: 'raw-file',
+      readableRef: '/workspace/report.md',
+      previewPolicy: 'inline',
+    },
   };
   const opaqueArtifact = {
     id: 'opaque-result',

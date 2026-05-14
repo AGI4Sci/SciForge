@@ -10,7 +10,6 @@ export const manifest: UIComponentManifest = {
   lifecycle: 'validated',
   outputArtifactTypes: ['point-set', 'plot-spec'],
   acceptsArtifactTypes: ['point-set', 'plot-spec', 'omics-differential-expression', 'volcano-plot', 'umap-viewer', 'embedding-scatter'],
-  requiredAnyFields: [['points', 'umap', 'data', 'plotSpec']],
   viewParams: ['preset', 'x', 'y', 'label', 'colorBy', 'highlightSelection'],
   interactionEvents: ['select-point', 'select-region', 'hover-point'],
   roleDefaults: ['bioinformatician', 'experimental-biologist'],

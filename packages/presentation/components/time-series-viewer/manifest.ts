@@ -10,7 +10,6 @@ export const manifest: UIComponentManifest = {
   lifecycle: 'draft',
   outputArtifactTypes: ['time-series', 'plot-spec'],
   acceptsArtifactTypes: ['time-series', 'growth-curve', 'sensor-trace', 'longitudinal-measurement', 'plot-spec'],
-  requiredAnyFields: [['series', 'points', 'time', 'timestamps', 'rows', 'dataRef']],
   viewParams: ['xField', 'yField', 'timeUnit', 'normalize', 'showErrorBars', 'highlightWindow', 'syncViewport'],
   interactionEvents: ['select-time-window', 'hover-point', 'select-series', 'export-plot'],
   roleDefaults: ['bioinformatician', 'experimental-biologist', 'pi'],

@@ -10,7 +10,6 @@ export const manifest: UIComponentManifest = {
   lifecycle: 'draft',
   outputArtifactTypes: ['statistical-result', 'visual-annotation'],
   acceptsArtifactTypes: ['statistical-result', 'visual-annotation', 'plot-spec', 'figure-spec', 'comparison-summary'],
-  requiredAnyFields: [['annotations', 'tests', 'pValue', 'effectSize', 'confidenceInterval', 'target']],
   viewParams: ['targetPanelId', 'showPValues', 'showEffectSizes', 'multipleTesting', 'selectedAnnotationId', 'format'],
   interactionEvents: ['select-annotation', 'edit-label', 'toggle-annotation', 'open-stat-result-ref'],
   roleDefaults: ['bioinformatician', 'experimental-biologist', 'pi'],

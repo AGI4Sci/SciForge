@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import type { ArtifactDelivery } from './artifacts';
 
 export {
   RUNTIME_AGENTSERVER_MANAGED_COMPACTION_BACKENDS,
@@ -983,6 +984,68 @@ export {
 export type UIComponentLifecycle = 'draft' | 'validated' | 'published' | 'deprecated';
 export type UIComponentSection = 'primary' | 'supporting' | 'provenance' | 'raw';
 export type PresentationDedupeScope = 'entity' | 'document' | 'collection' | 'none';
+export type PresentationInputKind = 'markdown' | 'text' | 'table' | 'html' | 'binary' | 'unsupported';
+export type PresentationTableFormat = 'csv' | 'tsv' | 'json';
+export type PresentationOpenMode = 'inline' | 'system';
+
+export interface PresentationInputBase {
+  kind: PresentationInputKind;
+  ref?: string;
+  title?: string;
+  rawRef?: string;
+  artifactRef?: string;
+  mediaType?: string;
+  extension?: string;
+  previewPolicy?: ArtifactDelivery['previewPolicy'];
+  role?: ArtifactDelivery['role'];
+}
+
+export interface MarkdownPresentationInput extends PresentationInputBase {
+  kind: 'markdown';
+  ref: string;
+}
+
+export interface TextPresentationInput extends PresentationInputBase {
+  kind: 'text';
+  ref: string;
+}
+
+export interface TablePresentationInput extends PresentationInputBase {
+  kind: 'table';
+  ref: string;
+  format: PresentationTableFormat;
+}
+
+export interface HtmlPresentationInput extends PresentationInputBase {
+  kind: 'html';
+  ref: string;
+}
+
+export interface BinaryPresentationInput extends PresentationInputBase {
+  kind: 'binary';
+  ref: string;
+  openMode: 'system';
+}
+
+export interface UnsupportedPresentationInput extends PresentationInputBase {
+  kind: 'unsupported';
+  reason: string;
+}
+
+export type PresentationInput =
+  | MarkdownPresentationInput
+  | TextPresentationInput
+  | TablePresentationInput
+  | HtmlPresentationInput
+  | BinaryPresentationInput
+  | UnsupportedPresentationInput;
+
+export interface UIComponentConsumes {
+  kinds: PresentationInputKind[];
+  mediaTypes?: string[];
+  extensions?: string[];
+  previewPolicies?: ArtifactDelivery['previewPolicy'][];
+}
 
 /** Inline payload for the UI component workbench demo preview (`artifact.data` shape). */
 export interface UIComponentWorkbenchDemo {
@@ -1001,8 +1064,7 @@ export interface UIComponentManifest {
   lifecycle: UIComponentLifecycle;
   acceptsArtifactTypes: string[];
   outputArtifactTypes?: string[];
-  requiredFields?: string[];
-  requiredAnyFields?: string[][];
+  consumes?: UIComponentConsumes[];
   viewParams?: string[];
   interactionEvents?: string[];
   roleDefaults?: string[];
@@ -1056,6 +1118,7 @@ export interface UIComponentRuntimeArtifact {
   data?: unknown;
   dataRef?: string;
   path?: string;
+  delivery?: ArtifactDelivery;
 }
 
 export interface UIComponentRenderHelpers {
@@ -1069,6 +1132,7 @@ export interface UIComponentRenderHelpers {
 export interface UIComponentRendererProps {
   slot: UIComponentRenderSlot;
   artifact?: UIComponentRuntimeArtifact;
+  input?: PresentationInput;
   session?: unknown;
   config?: unknown;
   helpers?: UIComponentRenderHelpers;

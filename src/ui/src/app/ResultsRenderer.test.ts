@@ -745,7 +745,7 @@ test('registry slot uses unknown component artifact fallback without dropping ar
   assert.doesNotMatch(html, /no runtime artifact/);
 });
 
-test('ResultsRenderer explains missing artifact fields through the package empty-state fallback', () => {
+test('ResultsRenderer explains missing ArtifactDelivery through the package empty-state fallback', () => {
   const artifact: RuntimeArtifact = {
     id: 'broken-report',
     type: 'research-report',
@@ -765,8 +765,8 @@ test('ResultsRenderer explains missing artifact fields through the package empty
   assert.match(html, /Markdown report document/);
   assert.match(html, /research-report · broken-report/);
   assert.match(html, /Awaiting research-report/);
-  assert.match(html, /当前 research-report 缺少 markdown\/report\/sections 字段/);
-  assert.match(html, /artifact 缺少模块必需字段/);
+  assert.match(html, /当前 artifact 没有通过 ArtifactDelivery 解析出 markdown PresentationInput/);
+  assert.match(html, /不声明消费 unsupported/);
   assert.doesNotMatch(html, /contract drift: markdown was not produced/);
 });
 
@@ -777,7 +777,16 @@ test('ResultsRenderer falls back from mismatched manifest component to artifact-
     producerScenario: 'literature-evidence-review',
     schemaVersion: '1',
     metadata: { runId: 'run-mismatch' },
-    data: { markdown: '# Artifact-owned report\n\nThe report renderer should own this payload.' },
+    delivery: {
+      contractId: 'sciforge.artifact-delivery.v1',
+      ref: 'artifact:report-owned-artifact',
+      role: 'primary-deliverable',
+      declaredMediaType: 'text/markdown',
+      declaredExtension: 'md',
+      contentShape: 'raw-file',
+      readableRef: '.sciforge/artifacts/report-owned-artifact.md',
+      previewPolicy: 'inline',
+    },
   };
   const session: SciForgeSession = {
     ...emptySession(),
@@ -798,8 +807,8 @@ test('ResultsRenderer falls back from mismatched manifest component to artifact-
     focusMode: 'all',
   });
 
-  assert.match(html, /Artifact-owned report/);
-  assert.match(html, /The report renderer should own this payload/);
+  assert.match(html, /正在读取 Markdown 报告正文/);
+  assert.match(html, /\.sciforge\/artifacts\/report-owned-artifact\.md/);
   assert.doesNotMatch(html, /当前 paper-list artifact 缺少 papers\/rows 数组/);
   assert.ok(model.viewPlan.diagnostics.some((item) => item.includes('paper-card-list -> research-report 已改由 report-viewer 渲染')));
   assert.ok(model.viewPlan.allItems.some((item) => item.slot.componentId === 'report-viewer' && item.artifact?.id === 'report-owned-artifact'));
@@ -807,12 +816,19 @@ test('ResultsRenderer falls back from mismatched manifest component to artifact-
 
 test('results renderer view model projects hidden result empty state and manifest diagnostics', () => {
   const artifact: RuntimeArtifact = {
-    id: 'papers',
-    type: 'paper-list',
+    id: 'report',
+    type: 'research-report',
     producerScenario: 'literature-evidence-review',
     schemaVersion: '1',
-    data: {
-      papers: [{ title: 'View model paper', year: 2026 }],
+    delivery: {
+      contractId: 'sciforge.artifact-delivery.v1',
+      ref: 'artifact:report',
+      role: 'primary-deliverable',
+      declaredMediaType: 'text/markdown',
+      declaredExtension: 'md',
+      contentShape: 'raw-file',
+      readableRef: '.sciforge/artifacts/report.md',
+      previewPolicy: 'inline',
     },
   };
   const session: SciForgeSession = {
@@ -827,7 +843,7 @@ test('results renderer view model projects hidden result empty state and manifes
   });
   assert.ok(initial.visibleItems.length > 0);
   assert.equal(initial.emptyState, undefined);
-  assert.ok(initial.manifestDiagnostics.some((item) => item.artifactType === 'paper-list'));
+  assert.ok(initial.manifestDiagnostics.some((item) => item.artifactType === 'research-report'));
 
   const hiddenSession: SciForgeSession = {
     ...session,

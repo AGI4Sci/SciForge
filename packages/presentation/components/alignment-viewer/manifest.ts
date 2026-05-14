@@ -10,7 +10,6 @@ export const manifest: UIComponentManifest = {
   lifecycle: 'draft',
   outputArtifactTypes: ['sequence-alignment'],
   acceptsArtifactTypes: ['sequence-alignment', 'multiple-sequence-alignment', 'pairwise-alignment', 'msa', 'alignment-file'],
-  requiredAnyFields: [['sequences', 'rows', 'alignment', 'consensus', 'dataRef', 'filePath', 'path']],
   viewParams: ['alphabet', 'colorScheme', 'showConsensus', 'showGaps', 'highlightColumns', 'sortRows'],
   interactionEvents: ['select-column', 'select-region', 'select-sequence', 'highlight-residue'],
   roleDefaults: ['bioinformatician', 'experimental-biologist'],

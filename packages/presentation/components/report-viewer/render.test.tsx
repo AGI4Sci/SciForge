@@ -6,7 +6,7 @@ import { manifest } from './manifest';
 import { basicReportViewerFixture, emptyReportViewerFixture } from './fixtures/basic';
 import { coerceReportPayload, renderReportViewer } from './render';
 
-test('report-viewer package exposes manifest and renders markdown payloads', () => {
+test('report-viewer package exposes manifest and renders markdown presentation input', () => {
   assert.equal(manifest.componentId, 'report-viewer');
   const html = renderToStaticMarkup(React.createElement(renderReportViewer, {
     ...basicReportViewerFixture,
@@ -14,7 +14,8 @@ test('report-viewer package exposes manifest and renders markdown payloads', () 
       MarkdownBlock: ({ markdown }) => <article>{markdown}</article>,
     },
   }));
-  assert.match(html, /Literature Report/);
+  assert.match(html, /正在读取 Markdown 报告正文/);
+  assert.match(html, /\.sciforge\/workbench\/literature-report\.md/);
 });
 
 test('report-viewer package renders empty state through shell helper', () => {

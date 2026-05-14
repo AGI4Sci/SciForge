@@ -10,7 +10,6 @@ export const manifest: UIComponentManifest = {
   lifecycle: 'published',
   outputArtifactTypes: ['paper-list'],
   acceptsArtifactTypes: ['paper-list'],
-  requiredAnyFields: [['papers', 'rows']],
   viewParams: ['filter', 'sort', 'limit', 'colorBy'],
   interactionEvents: ['select-paper', 'select-target'],
   roleDefaults: ['experimental-biologist', 'pi'],

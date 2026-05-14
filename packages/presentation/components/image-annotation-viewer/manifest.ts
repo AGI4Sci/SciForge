@@ -10,7 +10,6 @@ export const manifest: UIComponentManifest = {
   lifecycle: 'draft',
   outputArtifactTypes: ['image-volume', 'visual-annotation'],
   acceptsArtifactTypes: ['image-volume', 'image-annotation', 'microscopy-image', 'pathology-image', 'gel-image', 'blot-image'],
-  requiredAnyFields: [['imageRef', 'image', 'path', 'filePath', 'annotations', 'regions', 'masks']],
   viewParams: ['channel', 'contrast', 'zoom', 'showMasks', 'showLabels', 'annotationMode', 'selectedAnnotationId'],
   interactionEvents: ['select-region', 'create-annotation', 'update-annotation', 'open-image-ref'],
   roleDefaults: ['experimental-biologist', 'bioinformatician', 'pi'],

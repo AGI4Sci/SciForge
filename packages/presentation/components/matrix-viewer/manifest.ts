@@ -10,7 +10,6 @@ export const manifest: UIComponentManifest = {
   lifecycle: 'validated',
   outputArtifactTypes: ['matrix', 'plot-spec'],
   acceptsArtifactTypes: ['matrix', 'heatmap-viewer', 'omics-differential-expression', 'confusion-matrix', 'attention-map', 'similarity-matrix'],
-  requiredAnyFields: [['matrix', 'values', 'heatmap', 'confusionMatrix']],
   viewParams: ['colorBy', 'splitBy', 'facetBy', 'scale', 'selectedCell'],
   interactionEvents: ['select-cell', 'select-row', 'select-column'],
   roleDefaults: ['bioinformatician'],

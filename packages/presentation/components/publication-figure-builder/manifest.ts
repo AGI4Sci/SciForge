@@ -10,7 +10,6 @@ export const manifest: UIComponentManifest = {
   lifecycle: 'draft',
   outputArtifactTypes: ['figure-spec', 'plot-spec', 'export-artifact'],
   acceptsArtifactTypes: ['figure-spec', 'plot-spec', 'publication-figure', 'plot-export-bundle', 'visual-annotation'],
-  requiredAnyFields: [['figure', 'panels', 'layout', 'exportProfile', 'plotSpec', 'dataRef']],
   viewParams: ['journalProfile', 'selectedPanelId', 'showPanelLabels', 'exportFormat', 'dpi', 'colorPalette'],
   interactionEvents: ['select-panel', 'edit-panel-label', 'update-export-profile', 'export-figure'],
   roleDefaults: ['bioinformatician', 'experimental-biologist', 'pi'],

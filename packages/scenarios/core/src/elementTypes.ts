@@ -58,7 +58,7 @@ export interface UIComponentElement extends ElementManifestBase {
   kind: 'ui-component';
   componentId: string;
   acceptsArtifactTypes: string[];
-  requiredFields: string[];
+  consumes: string[];
   emptyState: {
     title: string;
     detail: string;

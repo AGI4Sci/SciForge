@@ -10,7 +10,6 @@ export const manifest: UIComponentManifest = {
   lifecycle: 'validated',
   outputArtifactTypes: ['graph', 'knowledge-graph'],
   acceptsArtifactTypes: ['graph', 'knowledge-graph', 'network-graph', 'pathway-graph', 'ppi-graph', 'workflow-dag', 'paper-claim-graph', 'claim-graph', 'figure-to-claim-map'],
-  requiredFields: ['nodes', 'edges'],
   viewParams: ['colorBy', 'filter', 'highlightSelection', 'preset'],
   interactionEvents: ['select-node', 'select-edge'],
   roleDefaults: ['experimental-biologist', 'pi'],

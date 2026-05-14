@@ -87,6 +87,12 @@ export {
   type StructureSummaryMetricRow,
 } from './structure-summary-presentation-policy';
 export {
+  componentConsumesPresentationInput,
+  presentationInputLabel,
+  resolvePresentationInputForArtifact,
+  validatePresentationInputBinding,
+} from './presentation-input-policy';
+export {
   blockedInteractiveViewDesignForIntent,
   compactInteractiveViewPlanItems,
   compareInteractiveViewPlanOrder,
@@ -99,7 +105,6 @@ export {
   findInteractiveViewModuleForObjectReference,
   findRenderableInteractiveArtifact,
   inferDisplayIntentFromInteractiveArtifacts,
-  interactiveViewArtifactHasField,
   interactiveViewPlanSectionRank,
   interactiveViewPlanStatusRank,
   interactiveViewResultSummaryPresentation,

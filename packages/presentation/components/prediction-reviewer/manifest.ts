@@ -10,7 +10,6 @@ export const manifest: UIComponentManifest = {
   lifecycle: 'draft',
   outputArtifactTypes: ['prediction-review', 'record-set', 'claim-evidence'],
   acceptsArtifactTypes: ['prediction-set', 'prediction-review', 'model-artifact', 'ai-predictions', 'record-set'],
-  requiredAnyFields: [['predictions', 'rows', 'reviews', 'model', 'predictionRef', 'dataRef']],
   viewParams: ['statusFilter', 'confidenceThreshold', 'labelField', 'showEvidence', 'selectedPredictionId'],
   interactionEvents: ['accept-prediction', 'reject-prediction', 'request-review', 'edit-label', 'open-evidence-ref'],
   roleDefaults: ['experimental-biologist', 'bioinformatician', 'pi'],

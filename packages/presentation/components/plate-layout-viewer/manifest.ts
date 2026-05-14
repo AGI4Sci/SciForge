@@ -10,7 +10,6 @@ export const manifest: UIComponentManifest = {
   lifecycle: 'draft',
   outputArtifactTypes: ['editable-design', 'plate-layout', 'record-set'],
   acceptsArtifactTypes: ['plate-layout', 'editable-design', 'assay-layout', 'well-map', 'screen-design'],
-  requiredAnyFields: [['plate', 'wells', 'rows', 'columns', 'format', 'designType']],
   viewParams: ['colorBy', 'labelBy', 'selectedWell', 'showControls', 'showReplicates', 'editMode'],
   interactionEvents: ['select-well', 'edit-well', 'assign-condition', 'export-layout'],
   roleDefaults: ['experimental-biologist', 'bioinformatician'],

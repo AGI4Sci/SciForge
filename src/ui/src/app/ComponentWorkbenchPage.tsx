@@ -48,8 +48,7 @@ function componentContract(componentIds: string[]) {
       lifecycle: module.lifecycle,
       acceptsArtifactTypes: module.acceptsArtifactTypes,
       outputArtifactTypes: module.outputArtifactTypes ?? [],
-      requiredFields: module.requiredFields ?? [],
-      requiredAnyFields: module.requiredAnyFields ?? [],
+      consumes: module.consumes ?? [],
       viewParams: module.viewParams ?? [],
       interactionEvents: module.interactionEvents ?? [],
       fallbackModuleIds: module.fallbackModuleIds ?? [],
@@ -70,8 +69,12 @@ function formatList(values: string[] | undefined, emptyLabel: string = workbench
   return values.map((value) => <code key={value}>{value}</code>);
 }
 
-function requiredContract(module: RuntimeUIModule) {
-  return module.requiredFields?.length ? module.requiredFields : module.requiredAnyFields?.map((fields) => fields.join(' | '));
+function consumesContract(module: RuntimeUIModule) {
+  return module.consumes?.map((contract) => [
+    contract.kinds.join('/'),
+    contract.mediaTypes?.join('|'),
+    contract.extensions?.map((extension) => `.${extension.replace(/^\./, '')}`).join('|'),
+  ].filter(Boolean).join(' '));
 }
 
 function safetySummary(module: RuntimeUIModule) {
@@ -319,8 +322,7 @@ export function ComponentWorkbenchPage({
                         <pre>{formatArtifactJson({
                           type: shape.artifactType,
                           schemaVersion: shape.schemaVersion,
-                          requiredFields: shape.requiredFields,
-                          requiredAnyFields: shape.requiredAnyFields,
+                          consumes: shape.consumes,
                           data: shape.exampleData,
                         })}</pre>
                       </div>
@@ -354,8 +356,8 @@ export function ComponentWorkbenchPage({
                     <div>{formatList(module.acceptsArtifactTypes)}</div>
                   </div>
                   <div>
-                    <span>requires</span>
-                    <div>{formatList(requiredContract(module))}</div>
+                    <span>consumes</span>
+                    <div>{formatList(consumesContract(module))}</div>
                   </div>
                   <div>
                     <span>outputs</span>

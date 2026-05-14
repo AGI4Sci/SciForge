@@ -6,15 +6,26 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import type { ObjectReference, RuntimeArtifact, SciForgeConfig, SciForgeSession } from '../../domain';
 import { WorkspaceObjectPreview } from './WorkspaceObjectPreview';
 
-describe('WorkspaceObjectPreview stale artifact fallback', () => {
-  it('renders a readable fallback when an artifact has no workspace path or dataRef', () => {
+describe('WorkspaceObjectPreview presentation input', () => {
+  it('uses markdown delivery refs instead of rendering artifact JSON fallback', () => {
     const artifact: RuntimeArtifact = {
       id: 'report-1',
       type: 'research-report',
       producerScenario: 'literature-evidence-review',
       schemaVersion: '1',
       metadata: { title: 'Recovered report' },
-      data: { markdown: '# Inline fallback\n\nThe file ref is stale, but payload remains readable.' },
+      data: { content: '# JSON envelope should stay hidden' },
+      delivery: {
+        contractId: 'sciforge.artifact-delivery.v1',
+        ref: 'artifact:report-1',
+        role: 'primary-deliverable',
+        declaredMediaType: 'text/markdown',
+        declaredExtension: 'md',
+        contentShape: 'raw-file',
+        readableRef: '.sciforge/artifacts/report-1.md',
+        rawRef: '.sciforge/artifacts/output.json',
+        previewPolicy: 'inline',
+      },
     };
     const reference: ObjectReference = {
       id: 'obj-report-1',
@@ -31,28 +42,36 @@ describe('WorkspaceObjectPreview stale artifact fallback', () => {
       config: testConfig(),
     }));
 
-    assert.match(html, /fallback/);
-    assert.match(html, /可读 inline payload/);
-    assert.match(html, /Inline fallback/);
-    assert.match(html, /artifact:report-1/);
+    assert.match(html, /loading/);
+    assert.match(html, /\.sciforge\/artifacts\/report-1\.md/);
+    assert.doesNotMatch(html, /JSON envelope should stay hidden/);
+    assert.doesNotMatch(html, /fallback/);
   });
 
-  it('prefers inline artifact data over eager hydration of a potentially stale dataRef', () => {
+  it('renders system-open notice for binary deliveries', () => {
     const artifact: RuntimeArtifact = {
-      id: 'bad-report',
-      type: 'research-report',
+      id: 'paper-pdf',
+      type: 'research-paper',
       producerScenario: 'literature-evidence-review',
       schemaVersion: '1',
-      dataRef: '.sciforge/artifacts/no-such.md',
-      metadata: { title: 'Bad report' },
-      data: { markdown: '# Probe\n\nInline report body is still available.' },
+      metadata: { title: 'Paper PDF' },
+      delivery: {
+        contractId: 'sciforge.artifact-delivery.v1',
+        ref: 'artifact:paper-pdf',
+        role: 'primary-deliverable',
+        declaredMediaType: 'application/pdf',
+        declaredExtension: 'pdf',
+        contentShape: 'binary-ref',
+        readableRef: '.sciforge/artifacts/paper.pdf',
+        previewPolicy: 'open-system',
+      },
     };
     const reference: ObjectReference = {
-      id: 'obj-bad-report',
-      title: 'Bad report',
+      id: 'obj-paper-pdf',
+      title: 'Paper PDF',
       kind: 'artifact',
-      ref: 'artifact:bad-report',
-      artifactType: 'research-report',
+      ref: 'artifact:paper-pdf',
+      artifactType: 'research-paper',
       status: 'available',
     };
 
@@ -62,9 +81,9 @@ describe('WorkspaceObjectPreview stale artifact fallback', () => {
       config: testConfig(),
     }));
 
-    assert.match(html, /可读 inline payload/);
-    assert.match(html, /Inline report body is still available/);
-    assert.match(html, /\.sciforge\/artifacts\/no-such\.md/);
+    assert.match(html, /binary/);
+    assert.match(html, /系统默认程序打开/);
+    assert.match(html, /\.sciforge\/artifacts\/paper\.pdf/);
   });
 });
 

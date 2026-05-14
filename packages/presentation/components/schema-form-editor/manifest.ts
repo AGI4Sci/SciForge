@@ -10,7 +10,6 @@ export const manifest: UIComponentManifest = {
   lifecycle: 'draft',
   outputArtifactTypes: ['editable-design', 'schema-form', 'record-set'],
   acceptsArtifactTypes: ['editable-design', 'schema-form', 'json-schema', 'form-artifact', 'parameter-set'],
-  requiredAnyFields: [['schema', 'jsonSchema', 'uiSchema', 'formData', 'body', 'designType']],
   viewParams: ['mode', 'validateOnChange', 'showRawJson', 'section', 'readonly', 'diffAgainstRevision'],
   interactionEvents: ['change-field', 'validate-form', 'submit-form', 'open-schema-ref'],
   roleDefaults: ['experimental-biologist', 'bioinformatician', 'pi'],

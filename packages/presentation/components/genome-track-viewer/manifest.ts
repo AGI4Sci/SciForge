@@ -10,7 +10,6 @@ export const manifest: UIComponentManifest = {
   lifecycle: 'draft',
   outputArtifactTypes: ['genome-track', 'visual-annotation', 'record-set'],
   acceptsArtifactTypes: ['genome-track', 'genomic-range', 'bed-track', 'gff-track', 'vcf-variants', 'coverage-track'],
-  requiredAnyFields: [['genome', 'range', 'tracks', 'features', 'variants', 'coverage', 'dataRef']],
   viewParams: ['genome', 'range', 'trackOrder', 'showGenes', 'showVariants', 'coverageScale', 'highlightRange'],
   interactionEvents: ['select-genomic-range', 'select-feature', 'select-variant', 'open-track-ref'],
   roleDefaults: ['bioinformatician', 'experimental-biologist'],

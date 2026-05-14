@@ -98,8 +98,7 @@ test('workbench exposes package fixture variants and artifact shape for scientif
 
   assert.equal(props.artifact?.id, 'plot-basic-scatter-line');
   assert.equal(shape.artifactType, 'plot-spec');
-  assert.equal(shape.requiredAnyFields[0]?.includes('plotSpec'), true);
-  assert.equal(shape.requiredAnyFields[0]?.includes('exportProfile'), true);
+  assert.deepEqual(shape.consumes, []);
   assert.match(eventLog.join('\n'), /select-point/);
 });
 

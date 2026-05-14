@@ -10,7 +10,6 @@ export const manifest: UIComponentManifest = {
   lifecycle: 'draft',
   outputArtifactTypes: ['artifact-diff', 'comparison-summary'],
   acceptsArtifactTypes: ['artifact-diff', 'comparison-summary', 'record-set-diff', 'schema-diff', 'text-diff', 'model-comparison'],
-  requiredAnyFields: [['base', 'candidate', 'changes', 'diff', 'left', 'right', 'summary']],
   viewParams: ['mode', 'granularity', 'showUnchanged', 'highlightSeverity', 'leftLabel', 'rightLabel'],
   interactionEvents: ['select-change', 'open-left-ref', 'open-right-ref', 'accept-change'],
   roleDefaults: ['bioinformatician', 'experimental-biologist', 'pi'],

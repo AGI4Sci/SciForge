@@ -10,7 +10,6 @@ export const manifest: UIComponentManifest = {
   lifecycle: 'validated',
   outputArtifactTypes: ['structure-3d', 'structure-summary'],
   acceptsArtifactTypes: ['structure-3d', 'structure-summary', 'structure-3d-html', 'pdb-file', 'structure-list', 'pdb-structure', 'protein-structure', 'mmcif-file', 'cif-file'],
-  requiredAnyFields: [['pdbId', 'pdb_id', 'pdb', 'uniprotId', 'dataRef', 'structureUrl', 'html', 'htmlRef', 'structureHtml', 'path', 'filePath']],
   viewParams: ['colorBy', 'highlightSelection', 'highlightResidues', 'syncViewport'],
   interactionEvents: ['highlight-residue', 'select-chain'],
   roleDefaults: ['experimental-biologist', 'bioinformatician', 'pi'],

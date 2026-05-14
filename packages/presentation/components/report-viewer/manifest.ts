@@ -10,7 +10,14 @@ export const manifest: UIComponentManifest = {
   lifecycle: 'published',
   outputArtifactTypes: ['research-report'],
   acceptsArtifactTypes: ['research-report', 'markdown-report', 'analysis-plan', 'figure-reproduction-report', 'claim-verdict', 'negative-result-report', 'trajectory-training-record'],
-  requiredAnyFields: [['markdown', 'sections', 'report', 'summary', 'content', 'dataRef']],
+  consumes: [
+    {
+      kinds: ['markdown'],
+      mediaTypes: ['text/markdown'],
+      extensions: ['md', 'markdown'],
+      previewPolicies: ['inline'],
+    },
+  ],
   viewParams: ['layoutMode', 'sectionFilter'],
   interactionEvents: ['select-section', 'open-ref'],
   roleDefaults: ['experimental-biologist', 'pi', 'bioinformatician'],

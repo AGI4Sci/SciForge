@@ -376,7 +376,7 @@ function compileSlotsFromSelection(
   const usedComponentIds = new Set(artifactSlots.map((slot) => slot.componentId));
   const supportSlots = components
     .filter((component) => !usedComponentIds.has(component.componentId))
-    .filter((component) => component.requiredFields.length === 0 || component.acceptsArtifactTypes.includes('*'))
+    .filter((component) => component.consumes.length === 0 || component.acceptsArtifactTypes.includes('*'))
     .map((component, index) => ({
       componentId: component.componentId,
       title: component.label,

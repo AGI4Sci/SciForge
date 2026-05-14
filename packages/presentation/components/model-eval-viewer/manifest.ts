@@ -10,7 +10,6 @@ export const manifest: UIComponentManifest = {
   lifecycle: 'draft',
   outputArtifactTypes: ['model-artifact', 'statistical-result', 'plot-spec'],
   acceptsArtifactTypes: ['model-artifact', 'model-evaluation', 'classification-metrics', 'regression-metrics', 'model-report'],
-  requiredAnyFields: [['model', 'metrics', 'roc', 'pr', 'confusionMatrix', 'evaluation', 'predictionsRef']],
   viewParams: ['metricSet', 'threshold', 'curve', 'split', 'showConfidenceIntervals', 'compareToBaseline'],
   interactionEvents: ['select-threshold', 'select-class', 'hover-curve-point', 'open-model-ref'],
   roleDefaults: ['bioinformatician', 'pi'],
