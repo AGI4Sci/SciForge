@@ -389,6 +389,7 @@ function hasArtifactDataContract(artifact: Record<string, unknown>) {
     || stringField(artifact.path)
     || stringField(artifact.ref)
     || hasNonEmptyInlineData(artifact.data)
+    || hasNonEmptyInlineData(artifact.content)
     || artifact.schema !== undefined
     || artifact.schemaRef !== undefined
     || artifact.schema_ref !== undefined

@@ -158,7 +158,7 @@ export async function validateAndNormalizePayload(
       repairRefs,
     );
   }
-  const normalizedPayload: ToolPayload = withPayloadNormalizationAudit({
+  const normalizedPayload: ToolPayload = withPayloadNormalizationAudit(withFailureDiagnosticsPassthrough({
     message: referenceFailures.length
       ? `Current-turn reference contract failed: ${referenceFailures.join('; ')}`
       : String(payload.message || `${skill.id} completed.`),
@@ -171,10 +171,13 @@ export async function validateAndNormalizePayload(
       `Runtime gateway refs: taskCodeRef=${refs.taskRel}, outputRef=${refs.outputRel}, stdoutRef=${refs.stdoutRel}, stderrRef=${refs.stderrRel}`,
     ].filter(Boolean).join('\n'),
     claims: Array.isArray(contractPayload.claims) ? contractPayload.claims : [],
-    uiManifest: composeRuntimeUiManifest(
-      Array.isArray(contractPayload.uiManifest) ? contractPayload.uiManifest : [],
-      Array.isArray(contractPayload.artifacts) ? contractPayload.artifacts : [],
-      request,
+    uiManifest: removeExplicitEmptyUiArtifactRefs(
+      composeRuntimeUiManifest(
+        Array.isArray(contractPayload.uiManifest) ? contractPayload.uiManifest : [],
+        Array.isArray(contractPayload.artifacts) ? contractPayload.artifacts : [],
+        request,
+      ),
+      payload,
     ),
     executionUnits: [
       ...(Array.isArray(contractPayload.executionUnits) ? contractPayload.executionUnits : []).map((unit) => isRecord(unit) ? {
@@ -196,7 +199,7 @@ export async function validateAndNormalizePayload(
     verificationResults: contractPayload.verificationResults,
     verificationPolicy: contractPayload.verificationPolicy,
     workEvidence: contractPayload.workEvidence,
-  }, normalizationAudit);
+  }, contractPayload), normalizationAudit);
   const presentationPayload = attachResultPresentationContract(normalizedPayload, { request, skill, refs });
   return referenceValidationFailure
     ? attachPayloadValidationBudgetDebit(presentationPayload, skill, referenceValidationFailure, refs)
@@ -316,8 +319,56 @@ function payloadNormalizationDecision(error: string, sourcePayload: unknown, nor
   };
 }
 
-function allowedPayloadNormalizationRepair(_error: string, _sourcePayload: unknown, _normalizedPayload: unknown) {
+function allowedPayloadNormalizationRepair(error: string, sourcePayload: unknown, normalizedPayload: unknown) {
+  if (error === 'reasoningTrace must be a string'
+    && isRecord(sourcePayload)
+    && Array.isArray(sourcePayload.reasoningTrace)
+    && isRecord(normalizedPayload)
+    && typeof normalizedPayload.reasoningTrace === 'string') {
+    return 'joined reasoningTrace array into newline-delimited string';
+  }
+  const uiArtifactRefMatch = error.match(/^uiManifest\[(\d+)\]\.artifactRef must be a non-empty string when present$/);
+  if (uiArtifactRefMatch
+    && isRecord(sourcePayload)
+    && isRecord(normalizedPayload)
+    && Array.isArray(sourcePayload.uiManifest)
+    && Array.isArray(normalizedPayload.uiManifest)) {
+    const index = Number(uiArtifactRefMatch[1]);
+    const sourceSlot = sourcePayload.uiManifest[index];
+    const normalizedSlot = normalizedPayload.uiManifest[index];
+    if (isRecord(sourceSlot)
+      && (sourceSlot.artifactRef === null || sourceSlot.artifactRef === '')
+      && isRecord(normalizedSlot)
+      && !('artifactRef' in normalizedSlot)) {
+      return `removed empty uiManifest[${index}].artifactRef`;
+    }
+  }
   return undefined;
+}
+
+function withFailureDiagnosticsPassthrough(payload: ToolPayload, sourcePayload: unknown): ToolPayload {
+  if (!isRecord(sourcePayload)) return payload;
+  const failureReason = stringField(sourcePayload.failureReason);
+  const diagnostics = sourcePayload.diagnostics;
+  const passthrough: Record<string, unknown> = {};
+  if (failureReason) passthrough.failureReason = failureReason;
+  if (diagnostics !== undefined) passthrough.diagnostics = diagnostics;
+  return Object.keys(passthrough).length ? { ...payload, ...passthrough } : payload;
+}
+
+function removeExplicitEmptyUiArtifactRefs(
+  uiManifest: Array<Record<string, unknown>>,
+  sourcePayload: unknown,
+): Array<Record<string, unknown>> {
+  if (!isRecord(sourcePayload) || !Array.isArray(sourcePayload.uiManifest)) return uiManifest;
+  const sourceUiManifest = sourcePayload.uiManifest;
+  return uiManifest.map((slot, index) => {
+    const sourceSlot = sourceUiManifest[index];
+    if (!isRecord(sourceSlot) || (sourceSlot.artifactRef !== null && sourceSlot.artifactRef !== '')) return slot;
+    const next = { ...slot };
+    delete next.artifactRef;
+    return next;
+  });
 }
 
 function schemaErrorPath(error: string) {

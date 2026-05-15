@@ -165,3 +165,30 @@ test('does not invent UIManifest component choices or preferred views from artif
   assert.equal(response.message.objectReferences?.find((reference) => reference.ref === 'artifact:report-1')?.preferredView, undefined);
   assert.equal(response.message.objectReferences?.find((reference) => reference.ref === 'artifact:papers')?.preferredView, undefined);
 });
+
+test('binds backend execution units without runId to the normalized UI run', () => {
+  const response = normalizeAgentResponse('literature-evidence-review', '导出审计包', {
+    ok: true,
+    data: {
+      run: { id: 'run-ui-owned-audit', status: 'completed' },
+      output: {
+        message: JSON.stringify({
+          message: '审计包已准备好。',
+          artifacts: [{ id: 'audit-report', type: 'audit-summary', dataRef: '.sciforge/sessions/2026-05-15_lit_session/artifacts/audit.md' }],
+          executionUnits: [{
+            id: 'EU-audit-export',
+            tool: 'python',
+            status: 'done',
+            params: 'python export_audit.py',
+            stdoutRef: 'file:.sciforge/sessions/2026-05-15_lit_session/logs/stdout.log',
+            stderrRef: 'file:.sciforge/sessions/2026-05-15_lit_session/logs/stderr.log',
+            verificationRef: '.sciforge/sessions/2026-05-15_lit_session/verifications/verdict.json',
+          }],
+        }),
+      },
+    },
+  });
+
+  assert.equal(response.run.id, 'run-ui-owned-audit');
+  assert.equal(response.executionUnits[0]?.runId, 'run-ui-owned-audit');
+});

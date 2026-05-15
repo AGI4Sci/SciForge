@@ -25,7 +25,11 @@ import {
   type ScenarioBuilderElementSelectorOption,
   type ScenarioElementSelection,
 } from '@sciforge/scenario-core';
-import { CORE_CAPABILITY_MANIFESTS } from '@sciforge-ui/runtime-contract';
+import {
+  CORE_CAPABILITY_MANIFESTS,
+  type CapabilityManifest,
+} from '@sciforge-ui/runtime-contract';
+import { webObserveCapabilityManifest } from '@sciforge-observe/web/manifest';
 import { saveWorkspaceScenario, publishWorkspaceScenario } from '../api/workspaceClient';
 import type { SciForgeConfig, ScenarioRuntimeOverride, ToolProviderRouteOverride, ToolProviderSource } from '../domain';
 import type { RuntimeHealthItem } from '../runtimeHealth';
@@ -369,7 +373,7 @@ export function ScenarioBuilderPanel({
             title="Core capability providers"
             description="跨机器能力 route，例如 AgentServer 端 web_search/web_fetch。"
             routes={coreProviderCapabilityIds.map((capabilityId) => {
-              const manifest = CORE_CAPABILITY_MANIFESTS.find((candidate) => candidate.id === capabilityId);
+              const manifest = defaultRouteManifestForCapability(capabilityId);
               return {
                 key: capabilityId,
                 label: manifest?.name ?? capabilityId,
@@ -439,7 +443,7 @@ export function ScenarioBuilderPanel({
                       <input
                         value={route.primaryProviderId ?? ''}
                         onChange={(event) => patchToolProviderRoute(routeInfo.key, routeInfo.fallback, { primaryProviderId: event.target.value.trim() })}
-                        placeholder="agentserver.backend-server.web_search"
+                        placeholder="sciforge.web-worker.web_search"
                       />
                     </label>
                     <label>
@@ -795,18 +799,23 @@ export function defaultToolProviderRouteForTool(tool: {
 }
 
 export function defaultToolProviderRouteForCapability(capabilityId: string): ToolProviderRouteOverride {
-  const manifest = CORE_CAPABILITY_MANIFESTS.find((candidate) => candidate.id === capabilityId);
+  const manifest = defaultRouteManifestForCapability(capabilityId);
   const provider = manifest?.providers[0];
   return {
     enabled: true,
     capabilityId,
     source: provider?.source ?? 'agentserver',
-    primaryProviderId: provider?.id ?? `agentserver.backend-server.${capabilityId}`,
+    primaryProviderId: provider?.id ?? `sciforge.web-worker.${capabilityId}`,
     fallbackProviderIds: manifest?.providers.slice(1).map((candidate) => candidate.id) ?? [],
     requiredConfig: provider?.requiredConfig ?? [],
     permissions: provider?.permissions ?? [],
     health: provider?.status === 'available' ? 'ready' : 'unknown',
   };
+}
+
+function defaultRouteManifestForCapability(capabilityId: string): CapabilityManifest | undefined {
+  return (webObserveCapabilityManifest(capabilityId) as CapabilityManifest | undefined)
+    ?? CORE_CAPABILITY_MANIFESTS.find((candidate) => candidate.id === capabilityId);
 }
 
 function inferToolProviderSource(tool: { id: string; source?: string; toolType?: string }): ToolProviderSource {

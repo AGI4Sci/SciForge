@@ -136,7 +136,8 @@ export function loadCapabilityManifestRegistry(
   input: CapabilityManifestRegistryLoadInput = {},
 ): LoadedCapabilityManifestRegistry {
   const coreManifests = input.coreManifests ?? defaultCoreCapabilityManifests();
-  const packageSources = packageManifestSources(input.packageDiscovery);
+  const packageDiscovery = mergeDefaultPackageCapabilityManifestDiscovery(input.packageDiscovery);
+  const packageSources = packageManifestSources(packageDiscovery);
   const manifests = [
     ...coreManifests,
     ...packageSources.map((source) => source.manifest),
@@ -166,7 +167,7 @@ export function loadCapabilityManifestRegistry(
   const compactAudit = compactCapabilityManifestRegistryAudit(
     clonedManifests,
     sourceById,
-    input.packageDiscovery?.providerAvailability,
+    packageDiscovery?.providerAvailability,
     input.fileDiscoveryAudit,
   );
 
@@ -360,6 +361,35 @@ function defaultCoreCapabilityManifests(): CapabilityManifest[] {
     ...skillAndToolPackageCapabilityManifests(),
     ...offlinePackageProviderCapabilityManifests(),
   ];
+}
+
+function mergeDefaultPackageCapabilityManifestDiscovery(
+  discovery: PackageCapabilityManifestDiscoveryResult | undefined,
+): PackageCapabilityManifestDiscoveryResult | undefined {
+  const defaults = defaultPackageCapabilityManifestDiscovery();
+  if (!discovery) return defaults;
+  const explicitIds = new Set(discovery.packages.flatMap((entry) => entry.manifests.map((manifest) => manifest.id)));
+  return mergePackageCapabilityManifestDiscovery({
+    ...defaults,
+    packages: defaults.packages.map((entry) => ({
+      ...entry,
+      manifests: entry.manifests.filter((manifest) => !explicitIds.has(manifest.id)),
+    })).filter((entry) => entry.manifests.length > 0),
+  }, discovery);
+}
+
+function defaultPackageCapabilityManifestDiscovery(): PackageCapabilityManifestDiscoveryResult {
+  return {
+    packages: [{
+      packageName: '@sciforge-observe/web',
+      packageRoot: 'packages/observe/web',
+      discoverySource: 'package-discovery',
+      manifests: [
+        loadJsonFile<CapabilityManifest>('../../packages/observe/web/capabilities/web_search.manifest.json'),
+        loadJsonFile<CapabilityManifest>('../../packages/observe/web/capabilities/web_fetch.manifest.json'),
+      ],
+    }],
+  };
 }
 
 function offlinePackageProviderCapabilityManifests(): CapabilityManifest[] {

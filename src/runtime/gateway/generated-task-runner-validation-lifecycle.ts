@@ -25,6 +25,7 @@ import {
 } from './generated-task-validation-guard.js';
 import { selectedComponentIdsForRequest } from './gateway-request.js';
 import { recordCapabilityEvolutionRuntimeEvent } from './capability-evolution-events.js';
+import { capabilityProviderRoutesForHandoff } from './capability-provider-preflight.js';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
 import {
   evaluateGeneratedTaskPayloadPreflight,
@@ -162,6 +163,7 @@ export interface GeneratedTaskRunInputLifecycleInput {
   request: GatewayRequest;
   skill: SkillAvailability;
   generatedInputRels: string[];
+  taskHelperRel?: string;
   expectedArtifacts: string[];
   payloadPreflight?: GeneratedTaskPayloadPreflightReport;
 }
@@ -500,6 +502,7 @@ export async function buildGeneratedTaskRunInputLifecycle(
   input: GeneratedTaskRunInputLifecycleInput,
 ): Promise<GeneratedTaskRunInputLifecycle> {
   const currentRefs = currentTurnReferences(input.request);
+  const providerRoutes = capabilityProviderRoutesForHandoff(input.request);
   const priorAttempts = currentRefs.length
     ? []
     : summarizeTaskAttemptsForAgentServer(await readRecentTaskAttempts(input.workspacePath, input.request.skillDomain, 8, {
@@ -521,6 +524,27 @@ export async function buildGeneratedTaskRunInputLifecycle(
       priorAttempts,
       expectedArtifacts: input.expectedArtifacts,
       selectedComponentIds: selectedComponentIdsForRequest(input.request),
+      taskHelperSdk: {
+        schemaVersion: 'sciforge.generated-task-helper.v1',
+        moduleName: 'sciforge_task',
+        helperRef: input.taskHelperRel,
+        importHint: 'from sciforge_task import load_input, write_payload, provider_route, has_ready_provider, require_provider_first',
+      },
+      capabilityProviderRoutes: {
+        requiredCapabilityIds: providerRoutes.requiredCapabilityIds,
+        ok: providerRoutes.ok,
+        routes: providerRoutes.routes,
+      },
+      capabilityFirstPolicy: {
+        schemaVersion: 'sciforge.generated-task-capability-first.v1',
+        policy: 'provider-first',
+        rules: [
+          'Import sciforge_task from the generated task entrypoint directory for input loading, ToolPayload writing, and provider route inspection.',
+          'When capabilityProviderRoutes declares a ready web_search or web_fetch route, use the provider route contract instead of direct external network calls.',
+          'Do not call requests, urllib, fetch, httpx, aiohttp, or Node http/https for web work that has a ready SciForge provider route.',
+          'If a provider route is unavailable, empty, unauthorized, or rate limited, write an honest repair-needed or failed-with-reason ToolPayload with recoverActions.',
+        ],
+      },
       generatedTaskPayloadPreflight: input.payloadPreflight
         ? generatedTaskPayloadPreflightForTaskInput(input.payloadPreflight)
         : undefined,

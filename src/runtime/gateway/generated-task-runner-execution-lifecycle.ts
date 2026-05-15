@@ -113,6 +113,7 @@ export async function runGeneratedTaskExecutionLifecycle(
     request: input.request,
     skill: input.skill,
     generatedInputRels: materialized.generatedInputRels,
+    taskHelperRel: materialized.taskHelperRel,
     expectedArtifacts,
     payloadPreflight,
   });
@@ -149,12 +150,14 @@ async function materializeGeneratedTaskFiles(input: GeneratedTaskExecutionLifecy
     generatedPathMap: Map<string, string>;
     generatedInputRels: string[];
     materializedTaskFiles: AgentServerTaskFilesGeneration['response']['taskFiles'];
+    taskHelperRel: string;
   }
   | { kind: 'payload'; payload: ToolPayload }
 > {
   const generatedPathMap = new Map<string, string>();
   const generatedInputRels: string[] = [];
   const materializedTaskFiles: AgentServerTaskFilesGeneration['response']['taskFiles'] = [];
+  let taskHelperRel = '';
   try {
     for (const file of input.generation.response.taskFiles) {
       const declaredRel = safeWorkspaceRel(file.path);
@@ -186,6 +189,18 @@ async function materializeGeneratedTaskFiles(input: GeneratedTaskExecutionLifecy
         detail: rel === declaredRel ? declaredRel : `${declaredRel} -> ${rel}`,
       });
     }
+    const entrypointOriginalRel = safeWorkspaceRel(input.generation.response.entrypoint.path);
+    const entrypointRel = generatedPathMap.get(entrypointOriginalRel)
+      ?? generatedTaskArchiveRel(input.taskId, entrypointOriginalRel, input.sessionBundleRel);
+    taskHelperRel = `${dirname(entrypointRel).replace(/\\/g, '/')}/sciforge_task.py`;
+    await mkdir(dirname(join(input.workspace, taskHelperRel)), { recursive: true });
+    await writeFile(join(input.workspace, taskHelperRel), sciforgeTaskHelperSource(), 'utf8');
+    emitWorkspaceRuntimeEvent(input.callbacks, {
+      type: AGENTSERVER_GENERATED_TASK_MATERIALIZED_EVENT_TYPE,
+      source: 'workspace-runtime',
+      message: 'Materialized SciForge generated task helper SDK sciforge_task.py',
+      detail: taskHelperRel,
+    });
   } catch (error) {
     return {
       kind: 'payload',
@@ -196,7 +211,84 @@ async function materializeGeneratedTaskFiles(input: GeneratedTaskExecutionLifecy
       ),
     };
   }
-  return { kind: 'materialized', generatedPathMap, generatedInputRels, materializedTaskFiles };
+  return { kind: 'materialized', generatedPathMap, generatedInputRels, materializedTaskFiles, taskHelperRel };
+}
+
+function sciforgeTaskHelperSource() {
+  return [
+    '"""SciForge generated task helper SDK.',
+    '',
+    'Generated tasks may import this module from the entrypoint directory.',
+    'Use provider-first policy for external web work: when task input declares',
+    'a ready web_search or web_fetch provider route, do not call direct network',
+    'libraries such as requests, urllib, fetch, httpx, or aiohttp from task code.',
+    '"""',
+    '',
+    'from __future__ import annotations',
+    '',
+    'import json',
+    'from pathlib import Path',
+    'from typing import Any, Mapping',
+    '',
+    'SCHEMA_VERSION = "sciforge.generated-task-helper.v1"',
+    'MODULE_NAME = "sciforge_task"',
+    '',
+    '',
+    'def load_input(input_path: str | Path) -> dict[str, Any]:',
+    '    with open(input_path, "r", encoding="utf-8") as handle:',
+    '        payload = json.load(handle)',
+    '    if not isinstance(payload, dict):',
+    '        raise ValueError("SciForge task input must be a JSON object.")',
+    '    return payload',
+    '',
+    '',
+    'def write_payload(output_path: str | Path, payload: Mapping[str, Any]) -> None:',
+    '    required = ["message", "claims", "uiManifest", "executionUnits", "artifacts"]',
+    '    missing = [key for key in required if key not in payload]',
+    '    if missing:',
+    '        raise ValueError("ToolPayload is missing required keys: " + ", ".join(missing))',
+    '    with open(output_path, "w", encoding="utf-8") as handle:',
+    '        json.dump(dict(payload), handle, ensure_ascii=False, indent=2)',
+    '',
+    '',
+    'def provider_routes(task_input: Mapping[str, Any]) -> dict[str, Any]:',
+    '    routes = task_input.get("capabilityProviderRoutes")',
+    '    if isinstance(routes, dict):',
+    '        return routes',
+    '    return {}',
+    '',
+    '',
+    'def provider_route(task_input: Mapping[str, Any], capability_id: str) -> dict[str, Any] | None:',
+    '    routes = provider_routes(task_input).get("routes", [])',
+    '    if not isinstance(routes, list):',
+    '        return None',
+    '    for route in routes:',
+    '        if isinstance(route, dict) and route.get("capabilityId") == capability_id:',
+    '            return route',
+    '    return None',
+    '',
+    '',
+    'def has_ready_provider(task_input: Mapping[str, Any], capability_id: str) -> bool:',
+    '    route = provider_route(task_input, capability_id)',
+    '    return bool(route and route.get("status") == "ready")',
+    '',
+    '',
+    'def require_provider_first(task_input: Mapping[str, Any], capability_id: str) -> None:',
+    '    if has_ready_provider(task_input, capability_id):',
+    '        return',
+    '    raise RuntimeError(',
+    '        f"SciForge provider-first policy requires a ready provider route for {capability_id}. "',
+    '        "Write a repair-needed ToolPayload with recovery advice instead of using direct external network calls."',
+    '    )',
+    '',
+    '',
+    'def provider_first_guidance(task_input: Mapping[str, Any]) -> list[str]:',
+    '    policy = task_input.get("capabilityFirstPolicy")',
+    '    if isinstance(policy, dict) and isinstance(policy.get("rules"), list):',
+    '        return [str(item) for item in policy["rules"]]',
+    '    return []',
+    '',
+  ].join('\n');
 }
 
 function generatedTaskRuntimeRefs(

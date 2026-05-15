@@ -1,0 +1,85 @@
+{
+  "contract": "sciforge.capability-manifest.v1",
+  "id": "web_fetch",
+  "name": "web fetch",
+  "version": "0.1.0",
+  "ownerPackage": "packages/observe/web",
+  "kind": "observe",
+  "brief": "Fetch a public URL or search result URL through a configured network provider and return durable content refs.",
+  "routingTags": ["web", "fetch", "download", "url", "html"],
+  "domains": ["web", "knowledge", "literature"],
+  "inputSchema": {
+    "type": "object",
+    "required": ["url"],
+    "properties": {
+      "url": { "type": "string" },
+      "maxChars": { "type": "number", "minimum": 1 }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "required": ["url", "finalUrl", "status", "text"],
+    "properties": {
+      "url": { "type": "string" },
+      "finalUrl": { "type": "string" },
+      "status": { "type": "number" },
+      "title": { "type": "string" },
+      "text": { "type": "string" },
+      "providerDiagnostics": { "type": "object" }
+    }
+  },
+  "sideEffects": ["network", "external-api"],
+  "safety": {
+    "risk": "medium",
+    "dataScopes": ["public-web", "workspace-refs"]
+  },
+  "examples": [
+    {
+      "title": "fetch a search result URL",
+      "inputRef": "capability:web_fetch/input.example",
+      "outputRef": "capability:web_fetch/output.example"
+    }
+  ],
+  "validators": [
+    {
+      "id": "web_fetch.schema",
+      "kind": "schema",
+      "contractRef": "web_fetch#outputSchema"
+    }
+  ],
+  "repairHints": [
+    {
+      "failureCode": "provider-unavailable",
+      "summary": "Do not synthesize an ad hoc fetcher when the configured web_fetch provider is missing or offline.",
+      "recoverActions": ["record-provider-status", "use-fallback-provider", "ask-user-to-enable-provider"]
+    },
+    {
+      "failureCode": "fetch-failed",
+      "summary": "Return provider-neutral fetch diagnostics such as timeout, permission denied, rate limit, or unsupported content.",
+      "recoverActions": ["record-fetch-diagnostics", "try-fallback-provider", "continue-with-metadata"]
+    }
+  ],
+  "providers": [
+    {
+      "id": "sciforge.web-worker.web_fetch",
+      "label": "SciForge web worker web_fetch",
+      "kind": "external",
+      "contractRef": "packages/observe/web/capabilities/web_fetch.manifest.json",
+      "requiredConfig": [],
+      "priority": 1,
+      "capabilityId": "web_fetch",
+      "source": "package",
+      "transport": "http",
+      "workerId": "sciforge.web-worker",
+      "runtimeLocation": "packages/workers/web-worker",
+      "permissions": ["network"],
+      "auth": { "required": false },
+      "fallbackEligible": true,
+      "status": "unknown"
+    }
+  ],
+  "lifecycle": {
+    "status": "draft",
+    "sourceRef": "packages/observe/web/capabilities/web_fetch.manifest.json"
+  }
+}

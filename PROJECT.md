@@ -1,9 +1,9 @@
 # SciForge - PROJECT.md
 
-最后更新：2026-05-14
+最后更新：2026-05-15
 
 ## 当前目标
-测试、优化多轮对话机制，使得其稳定、流畅，同时优化用户在网页端的体验
+在网页端测试、优化多轮对话机制，使得其稳定、流畅，同时优化用户在网页端的体验, 所有修改必须通用、符合设计文档docs/Architecture.md要求
 
 
 ## 重要
@@ -32,13 +32,14 @@
 
 ### 2026-05-14 Task：LLM-gated fast path 与分布式工具接入层
 
-最终方案：direct-context fast path 必须先经过 LLM/语义 classifier 做 intent/context match；只允许在 typed context 足够时低延迟回答。工具生态拆成 Skill、Capability、Provider、Runtime Resolver 四层。新增机器提供既有 capability 时应只改 AgentServer/worker/tool-routing 配置；新增工具类型必须通过 Tool Manifest 注册 capability/provider contract，而不是只写 `SKILL.md`。
+最终方案：direct-context fast path 必须先经过 LLM/语义 classifier 做 intent/context match；只允许在 typed context 足够时低延迟回答。工具生态拆成 Skill、Capability、Provider、Runtime Resolver 四层。新增机器提供既有 capability 时应只改 AgentServer/worker/tool-routing 配置；新增工具类型必须通过 Tool Manifest 注册 capability/provider contract，而不是只写 `SKILL.md`。标准工具机器必须走 SciForge Tool Worker Protocol，并由 AgentServer worker registry/router 发现、健康检查、授权和路由；worker 可以独立发布，SciForge 只消费 registry snapshot、route decision 和 provider health/permission 状态。
 
 架构任务：
 
 - [x] CAP-ARCH-01：将四层模型写入 `docs/Architecture.md`：Skill 描述方法，Capability 定义抽象能力和 schema，Provider 声明执行来源，Runtime Resolver 在 run 前绑定 provider 并记录 route。
 - [x] CAP-ARCH-02：将 direct-context fast path 边界写入 `docs/Architecture.md`：fast path 可以低延迟，但不能纯模板化；必须先判断 required typed context 和 sufficiency。
 - [x] CAP-ARCH-03：将分布式工具接入写入 `docs/Architecture.md`：标准 worker/capability 只改配置，全新工具类型必须通过 Tool Manifest 和 healthcheck 接入。
+- [x] CAP-ARCH-04：将 SciForge Tool Worker Protocol、worker manifest、结构化 invoke/result envelope、独立发布 worker 和 AgentServer registry/router handoff 边界写入 `docs/Architecture.md`。
 
 实现 TODO：
 
@@ -52,7 +53,51 @@
 - [x] CAP-P1-03：Runtime Resolver 在每次 run 前把 required capabilities 解析为 provider route，并写入 handoff、ExecutionUnit、TaskRunCard 和 audit trace。
 - [x] CAP-P1-04：统一 zero-result、HTTP 429、provider offline、permission denied、missing capability 的 failure classification 和恢复建议。
 - [x] CAP-P2-01：支持 worker/tool server 暴露 manifests 后自动注册到 Capability Registry；新增标准工具机器只改配置，不改 SciForge 代码。
-- [ ] CAP-P2-02：增加真实网页 E2E：无 web search provider 时阻断；启用 AgentServer server-side search 后同一文献任务可检索、下载、总结并保留 provider route trace。
+- [ ] CAP-P2-02：补齐真实网页 E2E happy path：无 web search provider 时阻断；启用 AgentServer server-side search 后同一文献任务可检索、下载、总结并保留 provider route trace。当前已有 fail-closed 与 zero-result 可恢复 smoke，仍缺非空 provider/mock 或真实 provider 的下载/总结链路。
+- [ ] CAP-P2-03：对齐 AgentServer worker registry/router contract：SciForge provider registry 只消费 registry snapshot、route decision、health/permission/rate-limit 状态和 worker version，不直接依赖单个 worker endpoint shape。
+- [ ] CAP-P2-04：为独立发布 worker 增加 contract smoke：manifest discovery、schema version、health/readiness、invoke result envelope、event stream、cancel、permission denied、rate-limit、empty-result 和 fallback route trace。
+- [ ] CAP-P2-05：在 Tools/Skills 配置页展示 worker release 信息：worker id/version/protocol version/publisher/release channel、capability/provider version、breaking-change/migration warning 和 route primary/fallback 状态。
+
+### 2026-05-15 Task：Package Capability/Worker 边界收敛
+
+最终方案：保留 `observe`、`actions`、`verifiers`、`presentation`、`skills`、`contracts` 作为 agent-loop 行为边界；每个能力显式声明 capability contract，回答“能做什么”；每个可搬运执行包显式声明 worker/provider manifest，回答“在哪里执行、怎么执行”。1:1 capability/provider 默认合并在对应能力包中；1:N worker 或 N:1 provider matrix 才拆到 `packages/workers`。顶层 `packages/tools` 不再作为能力落点。
+
+架构任务：
+
+- [x] PKG-ARCH-01：更新 `packages/README.md`，固化行为边界与 capability/worker 双轴模型，明确 `packages/tools` 不再接收新增能力。
+- [x] PKG-ARCH-02：明确 `web_search` / `web_fetch` 属于 read-only web observe capability，默认 provider route 由独立 `web-worker` 执行包提供。
+- [x] PKG-ARCH-03：明确独立 worker 的最小发布面：worker manifest、health、invoke、permissions、smoke、README 和远程复制运行说明。
+
+实现 TODO：
+
+- [x] PKG-P0-01：把 Tool Worker Protocol SDK 从 `packages/tools/protocol-sdk` 迁到 `packages/contracts/tool-worker`，作为共享 worker contract 包。
+- [x] PKG-P0-02：新增 `packages/observe/web`，承载 `web_search` / `web_fetch` capability contract 文档和 manifest。
+- [x] PKG-P0-03：把默认 `web-worker` 执行包迁到 `packages/workers/web-worker`，保留 provider id `sciforge.web-worker.*` 和 CLI/HTTP entrypoints。
+- [x] PKG-P0-04：更新 workspace/package metadata checks，让 `packages/workers/*` 成为合法独立 worker 边界。
+- [x] PKG-P1-01：让 runtime 默认 capability registry 从 `packages/observe/web` manifest 发现 `web_search` / `web_fetch`，消除 `CORE_CAPABILITY_MANIFESTS` 中同 id 的临时投影。
+- [ ] PKG-P1-02：为 `packages/workers/web-worker` 增加完整 worker release smoke，覆盖 manifest discovery、health/readiness、invoke envelope、permission denied、empty-result 和 fallback route trace。
+- [ ] PKG-P1-03：把 package boundary inventory 和 legacy cutover inventory 补齐到新的 `contracts/tool-worker`、`observe/web`、`workers/web-worker` 路径。
+- [ ] PKG-P1-04：更新 Tools/Skills 配置页展示 worker package path、worker version、capability manifest path 和 provider route 的分离关系。
+
+### 2026-05-15 Task：Generated task provider-first 与 Task SDK
+
+最终方案：AgentServer 生成的 workspace task 必须优先使用 SciForge 已解析出的 capability provider route；只有没有对应能力或 route 不可用时，任务才可以进入受控自由实现。SciForge 在任务入口同目录注入轻量 Task SDK，任务输入显式携带 provider route、helper 引用和 provider-first policy。所有外部依赖失败都必须合法退出为 ToolPayload，带结构化失败原因、恢复建议、执行单元和证据 refs；429、timeout、DNS、quota、permission、empty-result 等都归入通用 external dependency failure，而不是为单一网站或单一错误码打补丁。
+
+架构任务：
+
+- [x] GT-ARCH-01：明确“优先使用已有能力；缺失能力再自由发挥”的 provider-first 生成任务原则。
+- [x] GT-ARCH-02：Task SDK 不是给模板绑定某个任务，而是给所有生成任务提供稳定的输入读取、payload 写入、provider route 检查和合法失败构造入口。
+- [x] GT-ARCH-03：失败分支可以合法退出；合法失败 payload 是后续恢复、repair、用户诊断和多轮继续的输入，而不是异常噪声。
+- [x] GT-ARCH-04：external dependency failure 按类别建模，避免只针对 HTTP 429/timeout 写特例。
+
+实现 TODO：
+
+- [x] GT-P0-01：生成任务 materialize 时在 entrypoint 同目录写入 `sciforge_task.py`，支持任务复制到任意机器后仍能按 SciForge task input contract 运行。
+- [x] GT-P0-02：task input 写入 `taskHelperSdk`、`capabilityProviderRoutes` 和 `capabilityFirstPolicy`，让生成任务可发现 provider route 与合法退出规则。
+- [x] GT-P0-03：preflight 在已有 ready `web_search` / `web_fetch` provider route 时阻断直接外部网络调用，要求改用 provider contract 或合法失败 payload。
+- [x] GT-P0-04：workspace task payload 边界归一化常见 schema drift，例如 `reasoningTrace` 数组、空 `uiManifest[].artifactRef` 和可机械推导的 artifact id/type。
+- [x] GT-P1-01：补齐网页端 E2E：在多轮真实对话中验证 provider-first route、Task SDK 注入、合法失败 payload、repair/continue 都能被 UI 正确呈现。已通过 `smoke:browser-provider-preflight`、`smoke:browser-multiturn` 和 `smoke:browser`；Task SDK 注入由 generated-task lifecycle 单测覆盖，网页 smoke 覆盖 provider fail-closed、server-side discovery、recoverable empty-result、repair continuation 和 audit follow-up 呈现。
+- [ ] GT-P1-02：为 external dependency failure 增加 provider-neutral 回归集，覆盖 HTTP/DNS/timeout/rate-limit/quota/permission/empty-result/fallback route trace。
 
 ### 2026-05-14 Task：多轮记忆管理收敛到 AgentServer
 
@@ -80,6 +125,20 @@
 ### H022 Real-world Complex Task Backlog for SciForge Hardening
 
 职责：沉淀更多真实、多轮、可复现的用户任务，用这些任务持续压测 SciForge 的通用能力边界。每个任务都必须像真实用户一样提出目标、补充约束、引用中间结果、追问失败原因、要求继续或导出，而不是只跑单轮 happy path。后续修复必须从任务暴露的问题中抽象出通用 runtime、harness、payload、artifact、verification、resume、presentation 或 backend handoff 改造，禁止为某个 prompt、某篇论文、某个文件名、某个 backend 写硬编码。
+
+2026-05-15 网页端多轮压测进展：
+
+- 已将 27 轮 browser 多轮上下文压测接入正式 `smoke:browser-multiturn` 脚本入口，并修复脚本对折叠 composer、当前 `sessionMessages` transport contract 和 context meter 压缩回落的旧假设；该网页压测覆盖长上下文、失败 run、复用 partial/日志继续、审计导出四段链路；截图证据：`docs/test-artifacts/browser-smoke-multiturn-context.png`。
+- 从 `smoke:complex-multiturn-chat` 暴露并修复通用 handoff 缺口：failed run 的真实失败诊断必须来自结构化 `ExecutionUnit.failureReason`、recover actions 和 stdout/stderr/output refs；`streamProcess` 运行转写继续只保留 digest/refs，避免把 raw 过程当本地长期记忆塞回 prompt。
+- 从同一压测暴露并修复 running guidance 继承缺口：运行中排队的用户约束在下一轮 transport `guidanceQueue` 中保留有界结构化正文，历史 message content 继续 digest 化，避免重复作为本地聊天记忆回灌。
+- 扩展 `smoke:browser` 网页 failed-run restore 压测为三轮恢复链路：先诊断不重跑，再基于 partial/stdout/stderr refs 继续，最后确认可重试失败 PDF 并导出 audit 摘要；由此补齐 projection-first continuation 对 `failureReason`、`recoverActions`、`nextStep` 的结构化保留，并对超长诊断正文做 digest 化。
+- 将网页 fixtures 对齐真实 delivery/ref contract：structure/reference/T097 场景都使用 run、ExecutionUnit、ArtifactDelivery 和 workspace-relative artifact refs；browser smoke 统一 mock AgentServer health/compact，避免本机 18080 状态影响 UI handoff 压测结论。
+- 已用并行 subagents 补充 H022 后续缺口清单：R-UI-03 需要显式覆盖“点旧对象后继续”而非只验证 ref kind；还应增加 missing provider、empty result、partial-first 外部失败、多标签/历史编辑和 evidence bundle 导出场景。当前仍未勾选任何 R-*。
+- 第二轮网页压测已把 R-UI-03 负例接入 `smoke:browser`：同一 restored session 同时存在旧报告和最新报告，用户显式点选旧 file 后追问时，top-level references、`uiState.currentReferences`、`uiState.agentContext.currentReferences` 都必须指向旧对象，且不得混入最新 artifact。
+- 第二轮网页压测补上 R-UI-08 的真实 UI 导出路径：failed-run 三轮恢复后显式切到“只看执行单元”，点击 `导出 JSON Bundle`，解析浏览器导出的 bundle，断言 active run scope、session bundle refs、runtime-events、stdout/stderr、verification verdict 和 Failure/Improvement Note refs；同时修复 projection execution focus 下缺少 ExecutionUnit 导出入口、backend ExecutionUnit 未带 runId 时无法归属当前 UI run 的通用问题。
+- CAP-P2-02 已新增独立网页 smoke `smoke:browser-provider-preflight`：启动真实 workspace/UI 与 mock AgentServer HTTP server，不拦截 SciForge `/tools/run/stream`；第一轮无 `web_search/web_fetch` provider 时断言 workspace runtime 在 AgentServer run dispatch 前 fail-closed，第二轮启用 server-side worker discovery 后同一文献任务进入 AgentServer dispatch，并把 zero-result 作为 `repair-needed`/可恢复状态展示，保留 provider route/provider id 断言。CAP-P2-02 的 happy-path“真实可检索、下载、总结”仍需后续用非空 mock/真实 provider 补齐后再勾选。
+- R-LIT-02/R-UI-06 补充了一条 UI view-model contract：带 empty/zero-result 诊断和 recoverActions、无 artifacts 的 ConversationProjection 必须映射为 `recoverable`/“运行需要恢复”，防止 protocol success 或 message-only 输出被误当成完成报告。
+- 本轮属于网页 smoke/contract hardening，尚未满足 H022 单个 R-* 真实任务的完整 evidence bundle 要求；后续应按 longform manifest 记录 session bundle、runtime events、stdout/stderr、verification verdict 和 Failure/Improvement Note 后再勾选具体 R-*。
 
 执行规则：
 

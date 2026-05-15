@@ -218,6 +218,9 @@ function compactExecutionUnitAuditForRequestPayload(unit: RuntimeExecutionUnit):
     diffRef: unit.diffRef,
     artifacts: unit.artifacts?.slice(-8),
     outputArtifacts: unit.outputArtifacts?.slice(-8),
+    failureReason: compactDiagnosticText(unit.failureReason, 1_200, 'execution-unit-failure-reason'),
+    recoverActions: unit.recoverActions?.slice(-6).map((action) => clipText(action, 500)),
+    nextStep: clipOptionalText(unit.nextStep, 600),
     verificationRef: unit.verificationRef,
     verificationVerdict: unit.verificationVerdict,
     scenarioPackageRef: unit.scenarioPackageRef,
@@ -274,6 +277,13 @@ function omittedTextDigestLabel(label: string, value: string) {
   return digest?.hash
     ? `[${label} omitted; digest=${digest.hash}; chars=${digest.chars ?? value.length}]`
     : `[${label} omitted]`;
+}
+
+function compactDiagnosticText(value: string | undefined, maxChars: number, label: string) {
+  if (!value) return undefined;
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxChars) return normalized;
+  return omittedTextDigestLabel(label, normalized);
 }
 
 function digestTextField(value: unknown) {

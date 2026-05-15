@@ -1,0 +1,26 @@
+{
+  "name": "@sciforge-observe/web",
+  "version": "0.1.0",
+  "type": "module",
+  "private": false,
+  "description": "SciForge read-only web observe capability contracts.",
+  "sciforge": {
+    "lifecycleLayer": "observe",
+    "skillFacing": false,
+    "sideEffects": "network",
+    "publicContract": true,
+    "runtimeAdapter": false
+  },
+  "exports": {
+    ".": "./manifest.ts",
+    "./manifest": "./manifest.ts",
+    "./web_search": "./capabilities/web_search.manifest.json",
+    "./web_fetch": "./capabilities/web_fetch.manifest.json"
+  },
+  "files": [
+    "capabilities",
+    "manifest.ts",
+    "README.md",
+    "package.json"
+  ]
+}

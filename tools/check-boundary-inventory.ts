@@ -94,8 +94,8 @@ const fixedPlatform: InventoryEntry[] = [
 const pluggableCapabilities: InventoryEntry[] = [
   {
     id: 'runtime-contracts',
-    owns: 'Stable shared runtime contracts for capabilities, handoff, artifacts, refs, observe, execution, stream, and validation failure shapes.',
-    paths: ['packages/contracts/runtime'],
+    owns: 'Stable shared runtime and worker contracts for capabilities, handoff, artifacts, refs, observe, execution, stream, validation failure shapes, and standalone worker protocol.',
+    paths: ['packages/contracts/runtime', 'packages/contracts/tool-worker'],
     checks: ['smoke:stable-runtime-contracts', 'smoke:runtime-contracts', 'packages:check'],
     notes: ['Contracts are shared API surface, not runtime lifecycle implementation.'],
   },
@@ -109,9 +109,16 @@ const pluggableCapabilities: InventoryEntry[] = [
   {
     id: 'observe-providers',
     owns: 'Read-only observe providers, modality adapters, trace contracts, and observe-specific tests.',
-    paths: ['packages/observe', 'packages/observe/vision'],
+    paths: ['packages/observe', 'packages/observe/vision', 'packages/observe/web'],
     checks: ['smoke:vision-sense-runtime', 'packages:check'],
     notes: ['Observe providers return bounded text/artifact refs and must not mutate the environment.'],
+  },
+  {
+    id: 'standalone-workers',
+    owns: 'Independently deployable worker/provider packages, worker manifests, health checks, invoke entrypoints, provider routes, release metadata, and worker-local smoke tests.',
+    paths: ['packages/workers', 'packages/workers/web-worker'],
+    checks: ['smoke:workspace-package-metadata', 'smoke:package-runtime-boundary', 'packages:check'],
+    notes: ['Workers answer where a capability runs; capability semantics stay in observe/actions/verifiers/presentation/skills packages.'],
   },
   {
     id: 'action-providers',

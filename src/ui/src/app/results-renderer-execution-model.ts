@@ -453,9 +453,17 @@ function projectionPresentationKind(
   if (status === 'satisfied') return artifacts.length || conversationProjectionVisibleText(projection) ? 'ready' : 'empty';
   if (status === 'needs-human') return 'needs-human';
   if (status === 'external-blocked' || status === 'repair-needed') return conversationProjectionIsRecoverable(projection) ? 'recoverable' : 'failed';
+  if (status === 'degraded-result' && !artifacts.length && projectionHasEmptyResultRecovery(projection)) return 'recoverable';
   if (status === 'degraded-result' || status === 'partial-ready' || status === 'output-materialized' || status === 'background-running') return 'partial';
   if (status === 'planned' || status === 'dispatched' || status === 'validated') return 'running';
   return artifacts.length ? 'ready' : 'empty';
+}
+
+function projectionHasEmptyResultRecovery(projection: UiConversationProjection) {
+  const hasEmptyDiagnostic = projection.diagnostics.some((diagnostic) =>
+    /empty|zero.?result|no.?result/i.test(`${diagnostic.code ?? ''} ${diagnostic.message}`)
+  );
+  return hasEmptyDiagnostic && conversationProjectionRecoverActions(projection).length > 0;
 }
 
 function projectionPresentationTitle(

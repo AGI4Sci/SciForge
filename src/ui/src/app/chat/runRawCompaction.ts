@@ -36,7 +36,7 @@ export function compactRunRawForRequestPayload(raw: unknown, limits: RunRawCompa
     },
     streamProcess: streamProcess
       ? {
-        eventCount: streamProcess.eventCount,
+          eventCount: streamProcess.eventCount,
           summaryDigest: compactDigestField(streamProcess.summaryDigest),
           eventTypes: Array.isArray(streamProcess.events)
             ? streamProcess.events.slice(-24).map((event) => compactRawEventSummary(event)).filter(Boolean)

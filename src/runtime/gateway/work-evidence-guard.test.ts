@@ -7,6 +7,7 @@ import { collectWorkEvidence, parseWorkEvidence } from './work-evidence-types';
 
 const request = {
   prompt: '调研最近一周公开文献并总结趋势',
+  expectedEvidenceKinds: ['retrieval'],
 } as GatewayRequest;
 
 function payload(overrides: Partial<ToolPayload> = {}): ToolPayload {
@@ -25,7 +26,17 @@ function payload(overrides: Partial<ToolPayload> = {}): ToolPayload {
 }
 
 test('flags external zero-result payloads that lack provider diagnostics', () => {
-  const finding = evaluateToolPayloadEvidence(payload(), request);
+  const finding = evaluateToolPayloadEvidence(payload({
+    workEvidence: [{
+      kind: 'retrieval',
+      status: 'success',
+      resultCount: 0,
+      outputSummary: 'Provider returned no records.',
+      evidenceRefs: ['trace:search-1'],
+      rawRef: 'trace:search-1',
+      recoverActions: [],
+    }],
+  } as Partial<ToolPayload>), request);
 
   assert.equal(finding?.kind, 'external-empty-result-without-diagnostics');
   assert.equal(finding?.severity, 'repair-needed');
@@ -324,7 +335,7 @@ test('flags swallowed fetch timeout or 429 in high-confidence success payloads',
     confidence: 0.96,
     evidenceLevel: 'high',
     reasoningTrace: 'Primary fetch hit HTTP 429 and timed out, final answer completed successfully.',
-    executionUnits: [{ id: 'fetch', status: 'done', tool: 'fetch' }],
+    executionUnits: [{ id: 'fetch', status: 'done', tool: 'fetch', externalDependencyStatus: 'transient-unavailable' }],
   }), {
     prompt: '抓取公开网页并总结',
   } as GatewayRequest);
@@ -376,6 +387,24 @@ test('allows uiManifest-referenced artifacts with dataRef or schema', () => {
     reasoningTrace: 'Artifact ready.',
     uiManifest: [{ component: 'table', artifactId: 'artifact-1' }],
     artifacts: [{ id: 'artifact-1', type: 'table', dataRef: 'file:.sciforge/artifacts/table.json', schema: { type: 'object' } }],
+  }), {
+    prompt: '生成一个结果表',
+  } as GatewayRequest);
+
+  assert.equal(finding, undefined);
+});
+
+test('allows uiManifest-referenced artifacts with inline content payloads', () => {
+  const finding = evaluateToolPayloadEvidence(payload({
+    message: 'Generated table artifact.',
+    reasoningTrace: 'Artifact ready.',
+    uiManifest: [{ component: 'table', artifactRef: 'artifact-1' }],
+    artifacts: [{
+      id: 'artifact-1',
+      type: 'runtime-context-summary',
+      content: JSON.stringify({ rows: [{ label: 'Example Domain' }] }),
+      mimeType: 'application/json',
+    }],
   }), {
     prompt: '生成一个结果表',
   } as GatewayRequest);

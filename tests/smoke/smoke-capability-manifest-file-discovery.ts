@@ -61,7 +61,7 @@ try {
 
   const registryAudit = registry.compactAudit;
   assert.equal(registryAudit.sourceCounts.fileDiscovery, 2);
-  assert.equal(registryAudit.sourceCounts.packageDiscovery, 0);
+  assert.equal(registryAudit.sourceCounts.packageDiscovery, 2);
   assert.equal(registryAudit.entries.find((entry) => entry.id === 'fixture.json-tool')?.packageName, '@sciforge-fixture/json-tool');
   assert.equal(registryAudit.entries.find((entry) => entry.id === 'fixture.ts-view')?.packageName, '@sciforge-fixture/ts-view');
   assert.equal(registryAudit.entries.find((entry) => entry.id === 'fixture.ts-view')?.source, 'file-discovery');

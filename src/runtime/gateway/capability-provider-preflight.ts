@@ -1,8 +1,8 @@
 import {
-  CORE_CAPABILITY_MANIFESTS,
   type CapabilityManifest,
   type CapabilityProviderManifest,
 } from '../../../packages/contracts/runtime/capability-manifest.js';
+import { loadCoreCapabilityManifestRegistry } from '../capability-manifest-registry.js';
 import type { GatewayRequest, ToolPayload } from '../runtime-types.js';
 import { isRecord } from '../gateway-utils.js';
 import { sha1 } from '../workspace-task-runner.js';
@@ -192,13 +192,19 @@ async function discoverAgentServerProviderAvailability(baseUrl: string): Promise
       const response = await fetch(`${baseUrl.replace(/\/+$/, '')}${endpoint}`, { signal: controller.signal });
       clearTimeout(timeout);
       if (!response.ok) return;
-      const payload = await response.json();
+      const payload = unwrapDiscoveryPayload(await response.json());
       rows.push(...providerAvailabilityRowsFromDiscoveryPayload(payload));
     } catch {
       // Discovery is opportunistic. Preflight still reports missing providers.
     }
   }));
   return dedupeProviderRows(rows);
+}
+
+function unwrapDiscoveryPayload(payload: unknown): unknown {
+  if (!isRecord(payload)) return payload;
+  if (payload.ok === true && 'data' in payload) return payload.data;
+  return payload;
 }
 
 function providerAvailabilityRowsFromDiscoveryPayload(payload: unknown): Array<Record<string, unknown>> {
@@ -213,16 +219,9 @@ function providerAvailabilityRowsFromDiscoveryPayload(payload: unknown): Array<R
           : [];
   return records.filter(isRecord).flatMap((record) => {
     const id = stringField(record.id) ?? stringField(record.providerId) ?? stringField(record.workerId);
-    const tools = toStringList(record.tools);
-    const capabilities = toStringList(record.capabilities);
     const available = record.available === true || record.status === 'available' || record.status === 'online' || record.health === 'online';
     const rows: Array<Record<string, unknown>> = [];
     if (id) rows.push({ ...record, id, available });
-    for (const tool of [...tools, ...capabilities]) {
-      const normalized = normalizeCapabilityId(tool);
-      if (normalized === 'web_search') rows.push({ id: 'agentserver.backend-server.web_search', available, workerId: id, status: record.status });
-      if (normalized === 'web_fetch') rows.push({ id: 'agentserver.backend-server.web_fetch', available, workerId: id, status: record.status });
-    }
     return rows;
   });
 }
@@ -249,7 +248,7 @@ function inferRequiredCapabilityIds(request: GatewayRequest): string[] {
 }
 
 function resolveCapabilityRoute(request: GatewayRequest, capabilityId: string): CapabilityProviderRoute {
-  const manifest = CORE_CAPABILITY_MANIFESTS.find((candidate) => candidate.id === capabilityId);
+  const manifest = defaultCapabilityManifestFor(capabilityId);
   const providers = providerCandidates(request, manifest, capabilityId);
   if (!providers.length) {
     return {
@@ -292,6 +291,10 @@ function resolveCapabilityRoute(request: GatewayRequest, capabilityId: string): 
   };
 }
 
+function defaultCapabilityManifestFor(capabilityId: string) {
+  return loadCoreCapabilityManifestRegistry().getManifest(capabilityId);
+}
+
 function providerCandidates(request: GatewayRequest, manifest: CapabilityManifest | undefined, capabilityId: string) {
   const availability = providerAvailabilityById(request);
   return (manifest?.providers ?? []).map((provider) => {
@@ -324,10 +327,10 @@ function providerStatusReason(provider: CapabilityProviderManifest, status: Capa
 
 function providerAvailabilityById(request: GatewayRequest) {
   const rows = [
-    ...toRecordList(request.uiState?.capabilityProviderAvailability),
     ...providerAvailabilityRowsFromToolProviderRoutes(request.uiState?.toolProviderRoutes),
-    ...toRecordList(request.uiState?.agentServerProviderAvailability),
     ...toRecordList(request.uiState?.agentServerWorkers),
+    ...toRecordList(request.uiState?.capabilityProviderAvailability),
+    ...toRecordList(request.uiState?.agentServerProviderAvailability),
   ];
   const map = new Map<string, ProviderAvailability>();
   for (const row of rows) {
@@ -376,11 +379,11 @@ function providerAvailabilityRowsFromToolProviderRoutes(value: unknown): Array<R
 }
 
 function promptRequiresWebSearch(prompt: string) {
-  return /\b(web search|search web|latest|today|news|arxiv|internet|online|search)\b|最新|今天|今日|检索|搜索|网页|联网|新闻|arxiv/i.test(prompt);
+  return /\b(web[-_\s]?search|search web|latest|today|news|arxiv|internet|online|search)\b|最新|今天|今日|检索|搜索|网页|联网|新闻|arxiv/i.test(prompt);
 }
 
 function promptRequiresWebFetch(prompt: string) {
-  return /\b(fetch|download|read full|full text|url|pdf)\b|下载|全文|链接|网页|读取/i.test(prompt);
+  return /\b(web[-_\s]?fetch|fetch|download|read full|full text|url|pdf)\b|下载|全文|链接|网页|读取/i.test(prompt);
 }
 
 function promptRequiresPdfExtract(prompt: string) {

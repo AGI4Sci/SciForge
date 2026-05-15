@@ -15,9 +15,9 @@ export function InlineObjectReferences({
   if (!visible.length) return null;
   return (
     <span className="inline-object-references" aria-label="引用对象">
-      {visible.map((reference) => (
+      {visible.map((reference, index) => (
         <button
-          key={`${reference.kind}:${reference.ref}`}
+          key={`${reference.id}:${reference.kind}:${reference.ref}:${index}`}
           type="button"
           className="markdown-object-ref message-object-link"
           onClick={() => onObjectFocus(reference)}

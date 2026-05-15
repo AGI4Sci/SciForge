@@ -195,6 +195,26 @@ test('package WorkEvidence policy validates uiManifest artifact refs against dat
 
   assert.equal(inline, undefined);
 
+  const inlineContent = evaluateWorkEvidencePolicy({
+    message: 'Render the report.',
+    confidence: 0.7,
+    claimType: 'status',
+    evidenceLevel: 'runtime',
+    claims: [],
+    uiManifest: [{ componentId: 'report-viewer', artifactRef: 'inline-content-report' }],
+    executionUnits: [{ id: 'render', status: 'done' }],
+    artifacts: [{
+      id: 'inline-content-report',
+      type: 'research-report',
+      content: '# Inline report',
+      mimeType: 'text/markdown',
+    }],
+  }, {
+    prompt: 'Show the report.',
+  });
+
+  assert.equal(inlineContent, undefined);
+
   const empty = evaluateWorkEvidencePolicy({
     message: 'Render the report.',
     confidence: 0.7,

@@ -273,7 +273,8 @@ test('next-turn payload prefers conversation projection and keeps raw execution 
   assert.ok(projectionUnit, 'projection continuation unit should be present');
   assert.equal(payload.executionUnits.some((unit) => unit.id === 'unit-raw-old'), false);
   assert.equal(auditUnit?.params.includes('RAW_EXECUTION_PARAMS'), false);
-  assert.equal(auditUnit?.recoverActions, undefined);
+  assert.match(auditUnit?.failureReason ?? '', /execution-unit-failure-reason omitted/);
+  assert.deepEqual(auditUnit?.recoverActions, ['legacy raw recover action should not drive continuation']);
   assert.match(projectionUnit?.params ?? '', /conversation-projection-continuation-set/);
   assert.match(projectionUnit?.params ?? '', /degraded-result/);
   assert.match(projectionUnit?.params ?? '', /message:prior/);
@@ -282,7 +283,6 @@ test('next-turn payload prefers conversation projection and keeps raw execution 
   assert.equal(rawRun?.streamProcess, undefined);
   assert.doesNotMatch(serialized, /RAW_SESSION_RUN_BODY provider payload/);
   assert.doesNotMatch(serialized, /RAW_EXECUTION_PARAMS large params/);
-  assert.doesNotMatch(serialized, /legacy raw recover action/);
 });
 
 test('rolls back an edited user message and prunes later run-owned state', () => {

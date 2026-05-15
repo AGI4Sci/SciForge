@@ -9,10 +9,12 @@ import {
   directContextFastPathMessage,
   directContextFastPathSupportingRefs,
 } from '@sciforge-ui/runtime-contract/artifact-policy';
+import { capabilityProviderPreflight } from './capability-provider-preflight.js';
 
 export function directContextFastPathPayload(request: GatewayRequest): ToolPayload | undefined {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   if (uiState.forceAgentServerGeneration === true) return undefined;
+  if (directContextIntent(request.prompt) === 'capability-status') return capabilityStatusFastPathPayload(request);
   if (!policyRequestsDirectContext(request)) return undefined;
   const context = buildDirectContextFastPathItems({
     artifacts: request.artifacts,
@@ -255,18 +257,16 @@ function directContextGate(
 
 function directContextIntent(prompt: string): DirectContextGateDecision['audit']['intent'] {
   const normalized = prompt.toLowerCase();
-  if (
-    /(?:skill|tool|capabilit|provider|registry|web search|web_search|工具|能力|搜索工具|AgentServer worker)/i.test(prompt)
-    && /(?:activated|active|available|enabled|configured|status|source|registry|provider|有哪些|有没有|可用|激活|启用|配置|来源|状态)/i.test(prompt)
-  ) {
-    return 'capability-status';
-  }
+  const hasCapabilityStatusIntent = /(?:skill|tool|capabilit|provider|registry|web[-_\s]?search|web[-_\s]?fetch|工具|能力|搜索工具|AgentServer worker)/i.test(prompt)
+    && /(?:activated|active|available|enabled|configured|status|source|registry|provider|有哪些|有没有|可用|激活|启用|配置|来源|状态)/i.test(prompt);
+  const hasFreshExecutionIntent = /(?:latest|today|news|search|download|fetch|rerun|run again|execute|查找|检索|搜索|最新|今天|下载|执行|重跑|继续跑|联网|arxiv)/i.test(prompt);
+  const hasExplicitFreshAction = /(?:download|fetch\s+https?:|rerun|run again|execute|查找|检索|搜索|下载|执行|重跑|继续跑|联网|arxiv)/i.test(prompt);
+  const conditionalNoFreshExecution = /(?:only if needed|if needed|无需|不需要|不要).*?(?:fetch|search|rerun|run|execute|检索|搜索|重跑|执行|调用)|(?:fetch|search|rerun|run|execute|检索|搜索|重跑|执行|调用).{0,120}(?:only if needed|if needed|无需|不需要)/i.test(prompt);
   if (/(?:do not|don't|no)\s+(?:rerun|run|execute|dispatch|call)|不要(?:重跑|执行|调用|启动)|只基于当前|current refs only/i.test(prompt)) {
     return 'context-summary';
   }
-  if (/(?:latest|today|news|search|download|fetch|rerun|run again|execute|查找|检索|搜索|最新|今天|下载|执行|重跑|继续跑|联网|arxiv)/i.test(prompt)) {
-    return 'fresh-execution';
-  }
+  if (hasCapabilityStatusIntent && !(hasExplicitFreshAction && !conditionalNoFreshExecution)) return 'capability-status';
+  if (hasFreshExecutionIntent) return 'fresh-execution';
   if (/(?:fail|failed|failure|error|diagnos|stderr|stdout|为什么|失败|原因|报错|日志)/i.test(prompt)) return 'run-diagnostic';
   if (/(?:artifact|ref|reference|产物|引用|证据|结果)/i.test(prompt)) return 'artifact-status';
   if (normalized.trim()) return 'context-summary';
@@ -346,6 +346,116 @@ function hasCurrentContextEvidence(context: ReturnType<typeof buildDirectContext
   return context.some((item) => item.kind !== 'execution-unit');
 }
 
+function capabilityStatusFastPathPayload(request: GatewayRequest): ToolPayload | undefined {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const context = buildDirectContextFastPathItems({
+    artifacts: request.artifacts,
+    uiArtifacts: uiState.artifacts,
+    references: request.references,
+    currentReferences: uiState.currentReferences,
+    currentReferenceDigests: uiState.currentReferenceDigests,
+    recentExecutionRefs: uiState.recentExecutionRefs,
+    executionUnits: uiState.executionUnits,
+  });
+  const preflight = capabilityProviderPreflight(request);
+  const selectedIds = uniqueStrings([
+    ...(request.selectedToolIds ?? []),
+    ...(request.selectedSenseIds ?? []),
+    ...(request.selectedVerifierIds ?? []),
+    ...toStringList(uiState.selectedToolIds),
+  ]);
+  if (!preflight.routes.length && !selectedIds.length && !context.length) return undefined;
+  const id = sha1(JSON.stringify({
+    prompt: request.prompt,
+    routes: preflight.routes,
+    selectedIds,
+    refs: directContextFastPathSupportingRefs(context),
+  })).slice(0, 12);
+  const routeLines = preflight.routes.length
+    ? preflight.routes.map((route) => {
+      const primary = route.primaryProviderId ?? route.providers[0]?.providerId ?? 'none';
+      const worker = route.providers.find((provider) => provider.providerId === primary)?.workerId;
+      return `- ${route.capabilityId}: ${route.status}; primary=${primary}${worker ? `; worker=${worker}` : ''}; ${route.reason}`;
+    })
+    : ['- No core web/pdf provider route was required by this status query.'];
+  const selectedLine = selectedIds.length ? `Selected runtime ids: ${selectedIds.join(', ')}` : 'Selected runtime ids: none reported.';
+  const contextMessage = context.length
+    ? `\n\nCurrent context summary:\n${directContextFastPathMessage(context)}`
+    : '';
+  const message = [
+    'Tool/provider status answered from SciForge runtime registries without dispatching AgentServer generation.',
+    selectedLine,
+    'Provider routes:',
+    ...routeLines,
+    contextMessage,
+  ].filter((line) => line !== '').join('\n');
+  const routeRef = `runtime://capability-provider-status/${id}`;
+  return {
+    message,
+    confidence: 0.86,
+    claimType: 'capability-provider-status',
+    evidenceLevel: 'runtime',
+    reasoningTrace: [
+      'Capability/provider status queries are answered from runtime registry and preflight route discovery.',
+      'This fast path avoids sending large prior conversation payloads to AgentServer for registry-only follow-up questions.',
+    ].join('\n'),
+    displayIntent: {
+      protocolStatus: 'protocol-success',
+      taskOutcome: 'satisfied',
+      status: 'completed',
+    },
+    claims: [{
+      id: `capability-provider-status-${id}`,
+      text: preflight.ok ? 'Required provider routes are available.' : 'Some requested provider routes are unavailable.',
+      type: 'observation',
+      confidence: 0.86,
+      evidenceLevel: 'runtime',
+      supportingRefs: [routeRef, ...directContextFastPathSupportingRefs(context).slice(0, 6)],
+      opposingRefs: [],
+    }],
+    uiManifest: directContextUiManifest(`capability-provider-status-${id}`, 'runtime-context-summary'),
+    executionUnits: [{
+      id: `EU-capability-provider-status-${id}`,
+      tool: DIRECT_CONTEXT_FAST_PATH_POLICY.executionToolId,
+      params: JSON.stringify({
+        policy: 'capability-status-fast-path',
+        requiredCapabilityIds: preflight.requiredCapabilityIds,
+        selectedIds,
+        routes: preflight.routes,
+      }),
+      status: 'done',
+      hash: id,
+      outputRef: routeRef,
+    }],
+    artifacts: [{
+      id: `capability-provider-status-${id}`,
+      type: 'runtime-context-summary',
+      producerScenario: request.skillDomain,
+      schemaVersion: '1',
+      metadata: {
+        source: 'capability-status-fast-path',
+        routeRef,
+        selectedIds,
+        requiredCapabilityIds: preflight.requiredCapabilityIds,
+      },
+      data: {
+        markdown: message,
+        routes: preflight.routes,
+        selectedIds,
+        context,
+      },
+    }],
+    objectReferences: [{
+      id: `obj-capability-provider-status-${id}`,
+      kind: 'runtime-diagnostic',
+      title: 'Capability provider status',
+      ref: routeRef,
+      status: preflight.ok ? 'available' : 'needs-attention',
+      summary: routeLines.join(' '),
+    }],
+  };
+}
+
 function policyRequestsDirectContext(request: GatewayRequest) {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   if (uiState.forceAgentServerGeneration === true) return false;
@@ -380,6 +490,10 @@ function toStringList(value: unknown) {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
     : [];
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.filter((value) => value.trim().length > 0))];
 }
 
 function recordRows(value: unknown): Array<Record<string, unknown>> {

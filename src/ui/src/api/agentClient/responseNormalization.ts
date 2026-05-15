@@ -101,7 +101,7 @@ function normalizeExecutionUnits(value: unknown, fallback: RuntimeExecutionUnit)
         ? record.status
         : 'failed-with-reason',
       hash: asString(record.hash) || fallback.hash,
-      runId: asString(record.runId),
+      runId: asString(record.runId) ?? fallback.runId,
       sourceRunId: asString(record.sourceRunId),
       producerRunId: asString(record.producerRunId),
       agentServerRunId: asString(record.agentServerRunId),

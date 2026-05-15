@@ -35,10 +35,12 @@ test('AgentServer discovery maps worker tool routes into provider availability',
     return {
       ok: true,
       json: async () => ({
-        workers: [{
-          id: 'backend-server',
-          status: 'online',
-          tools: ['web_search', 'web_fetch'],
+        providers: [{
+          id: 'sciforge.web-worker.web_search',
+          providerId: 'sciforge.web-worker.web_search',
+          capabilityId: 'web_search',
+          workerId: 'sciforge.web-worker',
+          status: 'available',
         }],
       }),
     } as Response;
@@ -54,7 +56,7 @@ test('AgentServer discovery maps worker tool routes into provider availability',
     assert.ok(calls > 0);
     const preflight = capabilityProviderPreflight(request);
     assert.equal(preflight.ok, true);
-    assert.equal(preflight.routes[0]?.primaryProviderId, 'agentserver.backend-server.web_search');
+    assert.equal(preflight.routes[0]?.primaryProviderId, 'sciforge.web-worker.web_search');
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -67,7 +69,7 @@ test('capability provider preflight accepts explicit AgentServer provider availa
     artifacts: [],
     uiState: {
       capabilityProviderAvailability: [{
-        id: 'agentserver.backend-server.web_search',
+        id: 'sciforge.web-worker.web_search',
         available: true,
         status: 'available',
       }],
@@ -77,7 +79,7 @@ test('capability provider preflight accepts explicit AgentServer provider availa
   const preflight = capabilityProviderPreflight(request);
 
   assert.equal(preflight.ok, true);
-  assert.equal(preflight.routes[0]?.primaryProviderId, 'agentserver.backend-server.web_search');
+  assert.equal(preflight.routes[0]?.primaryProviderId, 'sciforge.web-worker.web_search');
   assert.equal(capabilityProviderPreflightPayload(request, preflight), undefined);
 });
 
@@ -92,7 +94,7 @@ test('capability provider preflight accepts scenario tool provider routes', () =
           enabled: true,
           capabilityId: 'web_search',
           source: 'agentserver',
-          primaryProviderId: 'agentserver.backend-server.web_search',
+          primaryProviderId: 'sciforge.web-worker.web_search',
           health: 'ready',
         },
       },
@@ -102,5 +104,65 @@ test('capability provider preflight accepts scenario tool provider routes', () =
   const preflight = capabilityProviderPreflight(request);
 
   assert.equal(preflight.ok, true);
-  assert.equal(preflight.routes[0]?.primaryProviderId, 'agentserver.backend-server.web_search');
+  assert.equal(preflight.routes[0]?.primaryProviderId, 'sciforge.web-worker.web_search');
+});
+
+test('AgentServer discovery overrides stale scenario route health', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'Search today arxiv papers about agentic harness evolution.',
+    artifacts: [],
+    uiState: {
+      capabilityProviderAvailability: [{
+        id: 'sciforge.web-worker.web_search',
+        available: true,
+        status: 'available',
+      }],
+      toolProviderRoutes: {
+        web_search: {
+          enabled: true,
+          capabilityId: 'web_search',
+          source: 'package',
+          primaryProviderId: 'sciforge.web-worker.web_search',
+          health: 'unknown',
+        },
+      },
+    },
+  };
+
+  const preflight = capabilityProviderPreflight(request);
+
+  assert.equal(preflight.ok, true);
+  assert.equal(preflight.routes[0]?.primaryProviderId, 'sciforge.web-worker.web_search');
+});
+
+test('capability provider preflight detects underscored tool names in prompts', () => {
+  const result = capabilityProviderPreflight({
+    skillDomain: 'literature',
+    prompt: 'Say whether web_fetch and web_search tool providers are available.',
+    artifacts: [],
+    uiState: {
+      capabilityProviderAvailability: [
+        {
+          id: 'sciforge.web-worker.web_fetch',
+          providerId: 'sciforge.web-worker.web_fetch',
+          capabilityId: 'web_fetch',
+          workerId: 'sciforge.web-worker',
+          available: true,
+          status: 'available',
+        },
+        {
+          id: 'sciforge.web-worker.web_search',
+          providerId: 'sciforge.web-worker.web_search',
+          capabilityId: 'web_search',
+          workerId: 'sciforge.web-worker',
+          available: true,
+          status: 'available',
+        },
+      ],
+    },
+  } as GatewayRequest);
+
+  assert.deepEqual(result.requiredCapabilityIds, ['web_fetch', 'web_search']);
+  assert.equal(result.ok, true);
 });

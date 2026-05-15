@@ -1,0 +1,32 @@
+{
+  "name": "@sciforge/web-worker",
+  "version": "0.1.0",
+  "type": "module",
+  "private": false,
+  "description": "Standalone SciForge web search and fetch tool worker.",
+  "sciforge": {
+    "lifecycleLayer": "workers",
+    "skillFacing": false,
+    "sideEffects": "network",
+    "publicContract": true,
+    "runtimeAdapter": true
+  },
+  "bin": {
+    "sciforge-web-worker": "./src/cli.ts"
+  },
+  "dependencies": {
+    "@sciforge/tool-worker-contract": "^0.1.0"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./cli": "./src/cli.ts",
+    "./manifest": "./src/manifest.ts",
+    "./server": "./src/server.ts",
+    "./worker": "./src/worker.ts"
+  },
+  "files": [
+    "src",
+    "package.json",
+    "README.md"
+  ]
+}

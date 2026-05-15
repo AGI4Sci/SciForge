@@ -1,4 +1,5 @@
 import type { GatewayRequest } from '../runtime-types.js';
+import { capabilityProviderPreflight } from './capability-provider-preflight.js';
 
 export const GENERATED_TASK_PAYLOAD_PREFLIGHT_SCHEMA_VERSION = 'sciforge.generated-task-payload-preflight.v1' as const;
 const GENERATED_TASK_PAYLOAD_PREFLIGHT_POLICY_ID = 'sciforge.generated-task-payload-preflight.v1' as const;
@@ -29,7 +30,7 @@ export function evaluateGeneratedTaskPayloadPreflight(input: {
   taskFiles: Array<{ path: string; content?: string; language?: string }>;
   entrypoint?: { path?: string };
   expectedArtifacts?: string[];
-  request?: Pick<GatewayRequest, 'prompt' | 'skillDomain' | 'selectedComponentIds' | 'expectedArtifactTypes'>;
+  request?: GatewayRequest;
 }): GeneratedTaskPayloadPreflightReport {
   const expectedArtifacts = uniqueNonEmptyStrings([
     ...(input.expectedArtifacts ?? []),
@@ -54,7 +55,10 @@ export function evaluateGeneratedTaskPayloadPreflight(input: {
         ? shouldInspect ? undefined : 'no output contract tokens in non-entrypoint helper'
         : 'task file content unavailable to preflight',
     });
-    if (shouldInspect) issues.push(...generatedTaskPayloadPreflightIssuesForSource(content, file.path));
+    if (shouldInspect) {
+      issues.push(...generatedTaskPayloadPreflightIssuesForSource(content, file.path));
+      issues.push(...generatedTaskProviderFirstNetworkIssuesForSource(content, file.path, input.request));
+    }
   }
 
   if (!inspectedTaskFiles.some((file) => file.inspected)) {
@@ -213,6 +217,60 @@ function generatedTaskPayloadPreflightIssuesForSource(source: string, sourceRef:
     }
   }
   return issues;
+}
+
+function generatedTaskProviderFirstNetworkIssuesForSource(
+  source: string,
+  sourceRef: string,
+  request?: GatewayRequest,
+): GeneratedTaskPayloadPreflightIssue[] {
+  const routes = readyWebProviderRoutes(request);
+  if (!routes.length) return [];
+  const directNetworkUses = directExternalNetworkUses(source);
+  if (!directNetworkUses.length) return [];
+  return [{
+    id: `${sourceRef}:provider-first-direct-network:${routes.map((route) => route.capabilityId).join(',')}`,
+    severity: 'repair-needed',
+    path: 'capabilityFirstPolicy',
+    sourceRef,
+    evidence: clipEvidence(directNetworkUses.join(', ')),
+    reason: `Generated task uses direct external network APIs (${directNetworkUses.join(', ')}) even though SciForge has ready provider route(s) for ${routes.map((route) => route.capabilityId).join(', ')}.`,
+    recoverActions: [
+      'Regenerate the task to use the SciForge provider route contract for web_search/web_fetch work before any direct external network call.',
+      'Import sciforge_task from the entrypoint directory and inspect capabilityProviderRoutes/provider-first policy from task input.',
+      'If the provider returns empty results or is unavailable at runtime, write a repair-needed ToolPayload with recoverActions instead of falling back to direct network libraries.',
+    ],
+  }];
+}
+
+function readyWebProviderRoutes(request?: GatewayRequest) {
+  if (!request) return [];
+  const selectedToolIds = new Set([...(request.selectedToolIds ?? []), 'web_search', 'web_fetch']);
+  return capabilityProviderPreflight({ ...request, selectedToolIds: [...selectedToolIds] }).routes
+    .filter((route) => (route.capabilityId === 'web_search' || route.capabilityId === 'web_fetch') && route.status === 'ready');
+}
+
+function directExternalNetworkUses(source: string) {
+  const uses = new Set<string>();
+  const stripped = stripGeneratedTaskComments(source);
+  const patterns: Array<[string, RegExp]> = [
+    ['requests', /(?:^|\n)\s*(?:import\s+requests\b|from\s+requests\b)|\brequests\.(?:get|post|put|patch|delete|request|Session)\b/],
+    ['urllib', /(?:^|\n)\s*(?:import\s+urllib(?:\.request)?\b|from\s+urllib\b)|\burllib\.request\.(?:urlopen|Request)\b/],
+    ['httpx', /(?:^|\n)\s*(?:import\s+httpx\b|from\s+httpx\b)|\bhttpx\.(?:get|post|put|patch|delete|request|Client|AsyncClient)\b/],
+    ['aiohttp', /(?:^|\n)\s*(?:import\s+aiohttp\b|from\s+aiohttp\b)|\baiohttp\.ClientSession\b/],
+    ['fetch', /\bfetch\s*\(/],
+    ['node:http', /(?:^|\n)\s*(?:import\s+.*\bfrom\s+["']node:https?["']|import\s+.*\bfrom\s+["']https?["']|(?:require|import)\s*\(\s*["'](?:node:)?https?["']\s*\))/],
+  ];
+  for (const [label, pattern] of patterns) {
+    if (pattern.test(stripped)) uses.add(label);
+  }
+  return [...uses].sort();
+}
+
+function stripGeneratedTaskComments(source: string) {
+  return source
+    .replace(/^\s*#.*$/gm, '')
+    .replace(/^\s*\/\/.*$/gm, '');
 }
 
 type PayloadLiteralCandidate = {

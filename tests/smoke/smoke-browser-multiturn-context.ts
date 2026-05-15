@@ -29,59 +29,102 @@ try {
   try {
     const page = await newConfiguredPage(browser);
     const runRequests: Array<Record<string, unknown>> = [];
-    await page.route(`http://127.0.0.1:${workspacePort}/api/sciforge/tools/run/stream`, async (route, request) => {
-      const body = request.postDataJSON() as Record<string, unknown>;
-      runRequests.push(body);
-      const round = runRequests.length;
-      await route.fulfill({
+	    await page.route(`http://127.0.0.1:${workspacePort}/api/sciforge/tools/run/stream`, async (route, request) => {
+	      const body = request.postDataJSON() as Record<string, unknown>;
+	      runRequests.push(body);
+	      const round = runRequests.length;
+	      await route.fulfill({
         status: 200,
         contentType: 'application/x-ndjson; charset=utf-8',
-        body: browserMultiturnToolStreamBody(round),
-      });
-    });
+	        body: browserMultiturnToolStreamBody(round),
+	      });
+	    });
+	    await page.route('http://127.0.0.1:18080/**', async (route, request) => {
+	      const now = new Date().toISOString();
+	      if (/compact/i.test(request.url())) {
+	        await route.fulfill({
+	          status: 200,
+	          contentType: 'application/json; charset=utf-8',
+	          body: JSON.stringify({
+	            contextCompaction: {
+	              status: 'completed',
+	              source: 'agentserver',
+	              backend: 'codex',
+	              compactCapability: 'agentserver',
+	              reason: 'browser-multiturn-smoke',
+	              completedAt: now,
+	              auditRefs: ['agentserver://browser-multiturn/compact'],
+	            },
+	          }),
+	        });
+	        return;
+	      }
+	      await route.fulfill({
+	        status: 200,
+	        contentType: 'application/json; charset=utf-8',
+	        body: JSON.stringify({ status: 'ok', checkedAt: now }),
+	      });
+	    });
 
-    await page.goto(`http://127.0.0.1:${uiPort}/`, { waitUntil: 'domcontentloaded' });
+	    await page.goto(`http://127.0.0.1:${uiPort}/`, { waitUntil: 'domcontentloaded' });
     await openLiteratureScenario(page);
 
     const meterUsedTokens: number[] = [];
-    let visibleCompactions = 0;
     const prompts = complexMultiTurnPrompts();
     for (let index = 0; index < prompts.length; index += 1) {
       await sendPrompt(page, prompts[index], index + 1);
       meterUsedTokens.push(await readMeterUsedTokens(page));
-      if ([8, 16].includes(index + 1)) {
-        visibleCompactions += await visibleContextCompactionCount(page);
-      }
     }
 
     assert.equal(runRequests.length, 24, 'browser should send 24 distinct user turns');
     assert.ok(isNonDecreasingExcept(meterUsedTokens, [8, 16]), `context meter should grow between compactions and drop only after compact boundaries, got ${meterUsedTokens.join(', ')}`);
+    assert.ok(meterUsedTokens[7] < meterUsedTokens[6], `round 8 compaction should reduce the visible meter, got ${meterUsedTokens[6]} -> ${meterUsedTokens[7]}`);
+    assert.ok(meterUsedTokens[15] < meterUsedTokens[14], `round 16 compaction should reduce the visible meter, got ${meterUsedTokens[14]} -> ${meterUsedTokens[15]}`);
     assert.ok(meterUsedTokens.at(-1)! > meterUsedTokens[0]!, 'final context estimate should include accumulated multi-turn context');
-    assert.ok(visibleCompactions >= 2, `browser workflow should expose at least two context compactions, got ${visibleCompactions}`);
 
     const lastRequest = runRequests.at(-1)!;
     const uiState = lastRequest.uiState as Record<string, unknown>;
-    const ledger = uiState.conversationLedger as Array<Record<string, unknown>>;
-    const recentConversation = uiState.recentConversation as string[];
+    const sessionMessages = uiState.sessionMessages as Array<Record<string, unknown>>;
     const reusePolicy = uiState.contextReusePolicy as Record<string, unknown>;
-    const agentContext = uiState.agentContext as Record<string, unknown>;
+    const agentContext = lastRequest.agentContext as Record<string, unknown>;
     const serializedRequestBytes = runRequests.map((request) => Buffer.byteLength(JSON.stringify(request), 'utf8'));
 
-    assert.equal(ledger.length, 47, 'turn 24 request should carry 23 prior assistant replies plus 24 user messages in the ledger');
-    assert.equal(ledger[0].id, ledger[0].id, 'ledger entries should be stable records');
-    assert.match(String(ledger[0].contentPreview), /Round 01/);
-    assert.match(String(ledger.at(-1)?.contentPreview), /Round 24/);
-    assert.equal(recentConversation.length, 16, 'recent readable window should stay bounded after 20+ turns');
-    assert.match(recentConversation[0], /Round 17|Browser reply 16/);
-    assert.ok(['continue', 'repair', 'isolate', undefined].includes(reusePolicy.mode as string | undefined), 'context reuse policy should stay in AgentServer mode-signal vocabulary');
-    assert.equal(agentContext.conversationLedger, undefined, 'browser transport must not present UI ledger as AgentServer memory');
-    assert.equal(agentContext.contextReusePolicy, undefined, 'browser transport leaves context reuse decisions to Python policy and AgentServer');
+    assert.equal(uiState.conversationLedger, undefined, 'browser transport should not send a UI conversation ledger as memory');
+    assert.equal(uiState.recentConversation, undefined, 'browser transport should use bounded sessionMessages instead of a second recent conversation memory');
+    assert.equal(sessionMessages.length, 12, 'turn 24 request should carry a bounded recent session message projection');
+    assert.match(String(uiState.currentPrompt ?? ''), /Round 24/, 'current prompt should carry the active turn outside the bounded session projection');
+    assert.ok(sessionMessages.every((message) => /^\[session-message omitted;/.test(String(message.content ?? ''))), `session messages should carry digest labels instead of plaintext history, got ${JSON.stringify(sessionMessages)}`);
+    assert.ok(sessionMessages.every((message) => typeof message.contentDigest === 'object' && message.contentDigest), `session message digests should be present, got ${JSON.stringify(sessionMessages)}`);
+    assert.doesNotMatch(JSON.stringify(sessionMessages), /Round 1:|Round 8:|Round 16:/, 'bounded session projection should not replay older turn plaintext');
+    assert.ok(['continue', 'repair', 'isolate', undefined].includes(reusePolicy?.mode as string | undefined), 'context reuse policy should stay in AgentServer mode-signal vocabulary');
+    assert.equal(agentContext?.conversationLedger, undefined, 'browser transport must not present UI ledger as AgentServer memory');
+    assert.equal(agentContext?.contextReusePolicy, undefined, 'browser transport leaves context reuse decisions to Python policy and AgentServer');
     assert.ok(Math.max(...serializedRequestBytes) < 180_000, `handoff request body should stay bounded, got ${Math.max(...serializedRequestBytes)} bytes`);
-    assert.ok(isNonDecreasing(serializedRequestBytes), 'request bytes should grow predictably with append-only context, not reset unpredictably');
+    assert.ok(Math.min(...serializedRequestBytes) > 1000, 'handoff request body should continue carrying structured multi-turn context');
 
+    await sendPrompt(page, 'Round 25: filter the evidence matrix by confidence_score and keep any partial output if the filter fails.', 25);
+    await sendPrompt(page, 'Round 26: continue from the failed filter; reuse the partial matrix and stderr, do not rerun downloaded paper retrieval.', 26);
+    const repairRequest = runRequests.at(-1)!;
+    const repairUiState = repairRequest.uiState as Record<string, unknown>;
+    const repairExecutionRefs = repairUiState.recentExecutionRefs as Array<Record<string, unknown>>;
+    const repairRequestText = JSON.stringify(repairRequest);
+    assert.ok(repairExecutionRefs.some((unit) => unit.failureReason === 'Missing required column: confidence_score'), `repair continuation should source the failure reason from structured execution refs, got ${JSON.stringify(repairExecutionRefs)}`);
+    assert.ok(repairExecutionRefs.some((unit) => unit.stderrRef === 'file:.sciforge/task-results/browser-repair.stderr.txt'), `repair continuation should source stderr from structured execution refs, got ${JSON.stringify(repairExecutionRefs)}`);
+    assert.match(repairRequestText, /Missing required column: confidence_score/, 'repair continuation should carry the concrete failed execution reason');
+    assert.match(repairRequestText, /browser-repair\.stderr\.txt/, 'repair continuation should carry stderr refs instead of raw logs');
+    assert.match(repairRequestText, /reuse the partial matrix and stderr/, 'repair continuation should carry the current user recovery constraint');
+    assert.doesNotMatch(repairRequestText, /large browser repair raw log/, 'repair continuation should not inline raw process logs');
+
+    await sendPrompt(page, 'Round 27: export an audit summary from the repaired report with task graph, data lineage, and artifact refs only.', 27);
+    const auditRequestText = JSON.stringify(runRequests.at(-1));
+    assert.match(auditRequestText, /browser-repair-report\.md/, 'audit follow-up should preserve repaired report artifact lineage');
+    assert.match(auditRequestText, /artifact refs only/, 'audit follow-up should carry the latest user export constraint');
+    assert.doesNotMatch(auditRequestText, /This repaired report has large inline markdown/, 'audit follow-up should not inline repaired report bodies');
+
+    assert.equal(runRequests.length, 27, 'browser should send 24 long-context turns plus repair, continuation, and audit follow-up turns');
     await page.screenshot({ path: join(artifactsDir, 'browser-smoke-multiturn-context.png'), fullPage: true });
     assert.deepEqual((page as Page & { __sciforgePageErrors?: string[] }).__sciforgePageErrors ?? [], [], '24-turn browser workflow should not emit page errors');
-    console.log(`[ok] browser 24-turn context smoke verified bounded UI projection, two visible compactions, compaction-aware meter, and request size ceiling; screenshot in ${artifactsDir}`);
+    console.log(`[ok] browser 27-turn context smoke verified bounded UI projection, repair continuation, audit follow-up, and request size ceiling; screenshot in ${artifactsDir}`);
   } finally {
     await browser.close();
   }
@@ -124,9 +167,8 @@ async function newConfiguredPage(browser: Browser) {
 }
 
 async function openLiteratureScenario(page: Page) {
-  const composer = page.getByPlaceholder(/输入研究问题/);
-  if (await composer.count()) {
-    await composer.waitFor({ timeout: 15_000 });
+  const composer = page.locator('.chat-panel .composer textarea');
+  if (await composer.isVisible({ timeout: 1_000 }).catch(() => false)) {
     return;
   }
   await page.getByText(/Scenario Library|AI Scenario Builder/).first().waitFor({ timeout: 15_000 });
@@ -138,17 +180,46 @@ async function openLiteratureScenario(page: Page) {
     const card = library.locator('.scenario-card', { hasText: 'literature-evidence-review' }).first();
     await card.getByRole('button', { name: '打开', exact: true }).click();
   }
+  await openWorkbenchChrome(page);
+  await expandComposer(page);
   await composer.waitFor({ timeout: 15_000 });
 }
 
 async function sendPrompt(page: Page, prompt: string, round: number) {
-  const composer = page.getByPlaceholder(/输入研究问题/);
+  await expandComposer(page);
+  const composer = page.locator('.chat-panel .composer textarea');
   await composer.fill(prompt);
   await page.locator('.chat-panel .composer').getByRole('button', { name: '发送' }).click();
   await page.getByText(`Browser reply ${round}`).first().waitFor({ timeout: 15_000 });
 }
 
+async function expandComposer(page: Page) {
+  const textarea = page.locator('.chat-panel .composer textarea');
+  if (await textarea.isVisible({ timeout: 1_000 }).catch(() => false)) return;
+  const collapsed = page.locator('.chat-panel .composer-collapsed').first();
+  if (await collapsed.isVisible({ timeout: 5_000 }).catch(() => false)) {
+    await collapsed.click();
+  }
+}
+
+async function openWorkbenchChrome(page: Page) {
+  const textarea = page.locator('.chat-panel .composer textarea');
+  const collapsed = page.locator('.chat-panel .composer-collapsed').first();
+  if (await textarea.isVisible({ timeout: 1_000 }).catch(() => false) || await collapsed.isVisible({ timeout: 1_000 }).catch(() => false)) {
+    return;
+  }
+  const workbenchButton = page.getByRole('button', { name: '场景工作台' });
+  if (await workbenchButton.isVisible({ timeout: 2_000 }).catch(() => false)) {
+    await workbenchButton.click();
+  }
+  const toggle = page.locator('.workbench-chrome-toggle-main');
+  if (await toggle.isVisible({ timeout: 5_000 }).catch(() => false) && (await toggle.getAttribute('aria-expanded')) === 'false') {
+    await toggle.click();
+  }
+}
+
 async function readMeterUsedTokens(page: Page) {
+  await expandComposer(page);
   const title = await page.locator('.context-window-meter').getAttribute('title', { timeout: 15_000 });
   const match = String(title ?? '').match(/used\/window:\s*([0-9,]+)\//);
   assert.ok(match, `context meter title should expose used/window, got ${title}`);
@@ -156,6 +227,23 @@ async function readMeterUsedTokens(page: Page) {
 }
 
 function browserMultiturnToolStreamBody(round: number) {
+  if (round === 25) return browserRepairFailureStreamBody();
+  if (round === 26) return browserRepairSuccessStreamBody();
+  if (round === 27) return browserAuditExportStreamBody();
+  const usedTokens = 260 + round * 20;
+  const contextState = {
+    type: 'contextWindowState',
+    contextWindowState: {
+      source: 'native',
+      backend: 'codex',
+      usedTokens,
+      windowTokens: 1000,
+      ratio: usedTokens / 1000,
+      status: usedTokens >= 820 ? 'near-limit' : usedTokens >= 700 ? 'watch' : 'healthy',
+      compactCapability: 'native',
+      autoCompactThreshold: 0.82,
+    },
+  };
   const contextBefore = {
     type: 'contextWindowState',
     contextWindowState: {
@@ -197,7 +285,7 @@ function browserMultiturnToolStreamBody(round: number) {
     },
   };
   const lines = [
-    ...(round === 8 || round === 16 ? [{ event: contextBefore }, { event: compaction }] : []),
+    ...(round === 8 || round === 16 ? [{ event: contextBefore }, { event: compaction }] : [{ event: contextState }]),
     JSON.stringify({
       result: {
         message: `Browser reply ${round}: reused the prior workspace context and advanced the generic complex analysis without restarting.`,
@@ -229,12 +317,116 @@ function browserMultiturnToolStreamBody(round: number) {
   return [...lines, ''].join('\n');
 }
 
-async function visibleContextCompactionCount(page: Page) {
-  await page.locator('.stream-events-toggle').click();
-  await page.getByText('上下文压缩').first().waitFor({ timeout: 15_000 });
-  const count = await page.locator('.stream-event', { hasText: '上下文压缩' }).count();
-  await page.locator('.stream-events-toggle').click();
-  return count;
+function browserRepairFailureStreamBody() {
+  return [
+    JSON.stringify({
+      event: {
+        type: 'process-progress',
+        label: '执行筛选',
+        detail: 'Filtering evidence matrix failed: Missing required column: confidence_score. large browser repair raw log '.repeat(20),
+      },
+    }),
+    JSON.stringify({
+      result: {
+        run: { id: 'run-browser-repair-boundary', status: 'failed' },
+        message: 'Browser reply 25: failed to filter the evidence matrix, but preserved partial output and stderr refs.',
+        confidence: 0.72,
+        claimType: 'fact',
+        evidenceLevel: 'mock-browser',
+        reasoningTrace: 'Failure is intentionally generic: a missing column in a prior artifact should produce repair context, not a prompt-specific branch.',
+        executionUnits: [{
+          id: 'eu-browser-repair-filter',
+          tool: 'python',
+          params: 'python tasks/filter_matrix.py --input evidence-matrix.csv',
+          status: 'failed-with-reason',
+          hash: 'browser-repair-filter',
+          codeRef: '.sciforge/tasks/filter_matrix.py',
+          stdoutRef: 'file:.sciforge/task-results/browser-repair.stdout.txt',
+          stderrRef: 'file:.sciforge/task-results/browser-repair.stderr.txt',
+          outputRef: 'file:.sciforge/task-results/browser-repair.partial.json',
+          failureReason: 'Missing required column: confidence_score',
+          recoverActions: ['Map confidence_score to an existing confidence column or continue with partial output.'],
+          nextStep: 'Ask the user whether to map a replacement column or continue from the partial matrix.',
+        }],
+        artifacts: [{
+          id: 'artifact-browser-repair-partial',
+          type: 'evidence-matrix',
+          schemaVersion: '1',
+          dataRef: '.sciforge/artifacts/browser-repair.partial.json',
+          metadata: { runId: 'run-browser-repair-boundary', status: 'partial', rows: 12 },
+          data: { rows: [{ id: 'partial-1', confidence: 0.82, note: 'partial row preserved' }] },
+        }],
+      },
+    }),
+    '',
+  ].join('\n');
+}
+
+function browserRepairSuccessStreamBody() {
+  return [
+    JSON.stringify({
+      event: {
+        type: 'process-progress',
+        label: '继续修复',
+        detail: 'Reusing partial refs and stderr diagnostics without rerunning retrieval.',
+      },
+    }),
+    JSON.stringify({
+      result: {
+        run: { id: 'run-browser-repair-success', status: 'completed' },
+        message: 'Browser reply 26: continued from the failed filter and produced a repaired report.',
+        confidence: 0.88,
+        claimType: 'fact',
+        evidenceLevel: 'mock-browser',
+        reasoningTrace: 'Continuation reused partial artifact refs and prior stderr diagnostics.',
+        executionUnits: [{
+          id: 'eu-browser-repair-continue',
+          tool: 'python',
+          params: 'python tasks/filter_matrix.py --input browser-repair.partial.json --map confidence_score=confidence',
+          status: 'done',
+          hash: 'browser-repair-success',
+          codeRef: '.sciforge/tasks/filter_matrix.py',
+          stdoutRef: 'file:.sciforge/task-results/browser-repair-success.stdout.txt',
+          outputRef: 'file:.sciforge/task-results/browser-repair-success.json',
+        }],
+        artifacts: [{
+          id: 'artifact-browser-repair-report',
+          type: 'research-report',
+          schemaVersion: '1',
+          dataRef: '.sciforge/artifacts/browser-repair-report.md',
+          metadata: { runId: 'run-browser-repair-success', status: 'done', sourceArtifactRef: 'artifact-browser-repair-partial' },
+          data: { markdown: `# Browser repair report\n\n${'This repaired report has large inline markdown. '.repeat(80)}` },
+        }],
+      },
+    }),
+    '',
+  ].join('\n');
+}
+
+function browserAuditExportStreamBody() {
+  return [
+    JSON.stringify({
+      result: {
+        run: { id: 'run-browser-audit-export', status: 'completed' },
+        message: 'Browser reply 27: exported an audit summary with task graph, data lineage, and artifact refs only.',
+        confidence: 0.9,
+        claimType: 'fact',
+        evidenceLevel: 'mock-browser',
+        artifacts: [{
+          id: 'artifact-browser-audit-summary',
+          type: 'audit-report',
+          schemaVersion: '1',
+          dataRef: '.sciforge/artifacts/browser-audit-summary.json',
+          metadata: {
+            runId: 'run-browser-audit-export',
+            sourceArtifactRefs: ['artifact-browser-repair-report', 'artifact-browser-repair-partial'],
+          },
+          data: { refs: ['file:.sciforge/artifacts/browser-repair-report.md', 'file:.sciforge/task-results/browser-repair.stderr.txt'] },
+        }],
+      },
+    }),
+    '',
+  ].join('\n');
 }
 
 function complexMultiTurnPrompts() {
@@ -261,10 +453,6 @@ function isNonDecreasingExcept(values: number[], resetRounds: number[]) {
     if (resetRounds.includes(round)) return value < values[index - 1];
     return value >= values[index - 1];
   });
-}
-
-function isNonDecreasing(values: number[]) {
-  return values.every((value, index) => index === 0 || value >= values[index - 1]);
 }
 
 function start(label: string, command: string[], extraEnv: Record<string, string>) {

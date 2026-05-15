@@ -184,10 +184,22 @@ try {
     await assertNoRechartsSizeWarnings(page, 'desktop-builder');
     await captureSmokeScreenshot(page, join(artifactsDir, 'browser-smoke-desktop.png'));
 
-    const failedRestorePage = await newConfiguredPage(browser, { width: 1280, height: 900 }, 'failed-restore');
-    await failedRestorePage.goto(`http://127.0.0.1:${uiPort}/`, { waitUntil: 'domcontentloaded' });
-    logStep('workspace restore opens the latest recoverable failed run directly in the workbench');
-    await failedRestorePage.locator('.active-run-banner', { hasText: 'run-browser-failed-restore' }).waitFor({ timeout: 15_000 });
+	    const failedRestorePage = await newConfiguredPage(browser, { width: 1280, height: 900 }, 'failed-restore');
+	    const failedRestoreRequests: Array<Record<string, unknown>> = [];
+	    let failedRestoreTurn = 0;
+	    await failedRestorePage.route(`http://127.0.0.1:${workspacePort}/api/sciforge/tools/run/stream`, async (route, request) => {
+	      const body = request.postDataJSON() as Record<string, unknown>;
+	      failedRestoreRequests.push(body);
+	      failedRestoreTurn += 1;
+	      await route.fulfill({
+	        status: 200,
+	        contentType: 'application/x-ndjson; charset=utf-8',
+	        body: failedRestoreContinuationToolStreamBody(failedRestoreTurn),
+	      });
+	    });
+	    await failedRestorePage.goto(`http://127.0.0.1:${uiPort}/`, { waitUntil: 'domcontentloaded' });
+	    logStep('workspace restore opens the latest recoverable failed run directly in the workbench');
+	    await failedRestorePage.locator('.active-run-banner', { hasText: 'run-browser-failed-restore' }).waitFor({ timeout: 15_000 });
     await failedRestorePage.getByLabel('结果区 focus mode').getByRole('button', { name: '全部', exact: true }).evaluate((button) => {
       if (button instanceof HTMLElement) button.click();
     });
@@ -195,10 +207,65 @@ try {
     await failedRestoreSummary.waitFor({ timeout: 15_000 });
     await failedRestoreSummary.getByRole('heading', { name: /运行需要(恢复|处理)/ }).waitFor({ timeout: 15_000 });
     await failedRestoreSummary.getByText('PDF retrieval partially failed', { exact: false }).first().waitFor({ timeout: 15_000 });
-    await failedRestorePage.locator('.run-recover-actions', { hasText: 'inspect diagnostics without rerun' }).first().waitFor({ timeout: 15_000 });
-    await failedRestorePage.locator('.run-recover-actions', { hasText: 'rerun failed PDF downloads only after explicit confirmation' }).first().waitFor({ timeout: 15_000 });
-    await failedRestorePage.locator('code', { hasText: 'file:.sciforge/task-results/failed-restore.bundle.json' }).first().waitFor({ timeout: 15_000 });
-    await captureSmokeScreenshot(failedRestorePage, join(artifactsDir, 'browser-smoke-failed-run-restore.png'));
+	    await failedRestorePage.locator('.run-recover-actions', { hasText: 'inspect diagnostics without rerun' }).first().waitFor({ timeout: 15_000 });
+	    await failedRestorePage.locator('.run-recover-actions', { hasText: 'rerun failed PDF downloads only after explicit confirmation' }).first().waitFor({ timeout: 15_000 });
+	    await failedRestorePage.locator('code', { hasText: 'file:.sciforge/task-results/failed-restore.bundle.json' }).first().waitFor({ timeout: 15_000 });
+	    logStep('failed-run restore supports diagnose, partial reuse, and audit follow-up without raw-log replay');
+	    await sendFailedRestorePrompt(failedRestorePage, '先别重跑。解释这个失败为什么发生、哪些文件还能用、哪些步骤不能自动继续，并引用 failed-restore bundle、partial report 和 stderr。', 1);
+	    await sendFailedRestorePrompt(failedRestorePage, '继续生成 partial 报告，只复用已经下载的 full text 和 metadata refs；不要重新下载失败 PDF，把 timeout、403、文件过大列成 evidence gaps。', 2);
+	    await sendFailedRestorePrompt(failedRestorePage, '现在我确认可以只重试失败的 PDF 下载，但不要重跑已经成功的下载。完成后导出 audit summary：task graph、data lineage、artifact refs、stdout/stderr refs。', 3);
+	    assert.equal(failedRestoreRequests.length, 3, 'failed-restore browser flow should send three recovery follow-up turns');
+	    const diagnoseRequestText = JSON.stringify(failedRestoreRequests[0]);
+	    const reuseRequestText = JSON.stringify(failedRestoreRequests[1]);
+	    const auditRequestText = JSON.stringify(failedRestoreRequests[2]);
+	    assert.match(diagnoseRequestText, /先别重跑/);
+	    assert.match(diagnoseRequestText, /PDF retrieval partially failed/);
+	    assert.match(diagnoseRequestText, /failed-restore\.bundle\.json/);
+	    assert.match(reuseRequestText, /只复用已经下载/);
+	    assert.match(reuseRequestText, /failed-restore-partial-report|failed-restore\.partial/);
+	    assert.match(reuseRequestText, /stderr|failed-restore\.stderr/);
+	    assert.match(auditRequestText, /audit summary/);
+	    assert.match(auditRequestText, /failed-restore-continuation-report\.md|artifact refs/);
+	    assert.doesNotMatch(reuseRequestText, /RAW_FAILED_RESTORE_LOG_SHOULD_NOT_RETURN/);
+	    assert.doesNotMatch(auditRequestText, /FULL_REPAIRED_REPORT_BODY_SHOULD_NOT_RETURN/);
+    await failedRestorePage.getByLabel('结果区 focus mode').getByRole('button', { name: '只看执行单元' }).click();
+    await failedRestorePage.getByRole('heading', { name: '可复现执行单元' }).waitFor({ timeout: 15_000 });
+    await failedRestorePage.evaluate(() => {
+      const originalCreateObjectUrl = URL.createObjectURL.bind(URL);
+      const captured: Array<{ type: string; text: string }> = [];
+      Object.defineProperty(window, '__sciforgeCapturedExports', { value: captured, configurable: true });
+      URL.createObjectURL = (blob) => {
+        if (blob instanceof Blob) {
+          void blob.text().then((text) => captured.push({ type: blob.type, text }));
+        }
+        return originalCreateObjectUrl(blob);
+      };
+    });
+    await failedRestorePage.getByRole('button', { name: '导出 JSON Bundle' }).click();
+    await failedRestorePage.waitForFunction(() => {
+      const captured = (window as typeof window & { __sciforgeCapturedExports?: Array<{ text: string }> }).__sciforgeCapturedExports ?? [];
+      return captured.some((item) => item.text.includes('"schemaVersion"') && item.text.includes('"activeRunId"'));
+    }, null, { timeout: 15_000 });
+    const failedRestoreBundleJson = await failedRestorePage.evaluate(() => {
+      const captured = (window as typeof window & { __sciforgeCapturedExports?: Array<{ text: string }> }).__sciforgeCapturedExports ?? [];
+      return captured.find((item) => item.text.includes('"schemaVersion"') && item.text.includes('"activeRunId"'))?.text ?? '';
+    });
+    const failedRestoreBundle = JSON.parse(failedRestoreBundleJson) as Record<string, unknown>;
+    const failedRestoreBundleText = JSON.stringify(failedRestoreBundle);
+    const failedRestoreBundleRuns = failedRestoreBundle.runs as Array<Record<string, unknown>>;
+    assert.equal(failedRestoreBundleRuns.length, 1, `execution bundle should scope to the selected audit run, got ${JSON.stringify(failedRestoreBundleRuns)}`);
+    assert.equal(failedRestoreBundle.activeRunId, failedRestoreBundleRuns[0]?.id);
+    assert.match(String(failedRestoreBundleRuns[0]?.prompt ?? ''), /audit summary/);
+    assert.notEqual(failedRestoreBundle.activeRunId, 'run-browser-failed-restore');
+    assert.match(failedRestoreBundleText, /run-failed-restore-continuation-3/);
+    assert.match(failedRestoreBundleText, /\.sciforge\/sessions\/2026-05-15_literature_session-failed-restore-smoke\/records\/runtime-events\.ndjson/);
+    assert.match(failedRestoreBundleText, /\.sciforge\/sessions\/2026-05-15_literature_session-failed-restore-smoke\/records\/session-bundle-audit\.json/);
+    assert.match(failedRestoreBundleText, /failed-restore\.stdout\.log/);
+    assert.match(failedRestoreBundleText, /failed-restore\.stderr\.log/);
+    assert.match(failedRestoreBundleText, /failed-restore-verdict\.json/);
+    assert.match(failedRestoreBundleText, /failure-improvement-note\.md/);
+    assert.doesNotMatch(failedRestoreBundleText, /FULL_REPAIRED_REPORT_BODY_SHOULD_NOT_RETURN/);
+	    await captureSmokeScreenshot(failedRestorePage, join(artifactsDir, 'browser-smoke-failed-run-restore.png'));
     await assertNoRawJsonErrors(failedRestorePage, 'failed-run-restore');
     await assertNoUnexplainedDisabledPrimaryButtons(failedRestorePage, 'failed-run-restore');
     await assertNoRechartsSizeWarnings(failedRestorePage, 'failed-run-restore');
@@ -328,8 +395,11 @@ try {
     await expandWorkbenchChrome(referencePage);
     await referencePage.getByText('Scenario Builder').waitFor({ timeout: 15_000 });
     await referencePage.getByText('Browser smoke reference seed message').first().waitFor({ timeout: 15_000 });
-    await referencePage.locator('.object-reference-chip', { hasText: 'Browser smoke UMAP' }).waitFor({ timeout: 15_000 });
-    await referencePage.locator('.object-reference-chip', { hasText: 'Browser smoke DE table' }).waitFor({ timeout: 15_000 });
+    await referencePage.getByText('Latest omics summary').first().waitFor({ state: 'attached', timeout: 15_000 });
+    await objectReferenceControl(referencePage, 'Browser smoke UMAP').waitFor({ timeout: 15_000 });
+    await objectReferenceControl(referencePage, 'Browser smoke DE table').waitFor({ timeout: 15_000 });
+    await referencePage.waitForFunction(() => Array.from(document.querySelectorAll('.object-reference-chip, .markdown-object-ref, .message-object-link'))
+      .some((element) => (element.textContent ?? '').includes('Latest omics summary')), null, { timeout: 15_000 });
     logStep('right-click selected text captures a concise composer marker and clickable source highlight');
     const selectedPhrase = 'inspect the UMAP';
     const seedMessage = referencePage.locator('.message.scenario', { hasText: 'Browser smoke reference seed message' }).first();
@@ -361,19 +431,41 @@ try {
     await referencePage.getByRole('button', { name: '点选' }).click();
     await referencePage.locator('.message.scenario', { hasText: 'Browser smoke reference seed message' }).click();
     await referencePage.getByRole('button', { name: '点选' }).click();
-    await referencePage.locator('.object-reference-chip', { hasText: 'Browser smoke UMAP' }).click();
+    await clickObjectReferenceControl(referencePage, 'Browser smoke UMAP');
     await referencePage.getByRole('button', { name: '点选' }).click();
-    await referencePage.locator('.object-reference-chip', { hasText: 'Browser smoke DE table' }).click();
+    await clickObjectReferenceControl(referencePage, 'Browser smoke DE table');
     await referencePage.getByRole('button', { name: '点选' }).click();
-    await referencePage.locator('.object-reference-chip', { hasText: 'Reference follow-up report' }).click();
+    await clickObjectReferenceControl(referencePage, 'Reference follow-up report');
     await referencePage.waitForFunction(() => document.querySelectorAll('[aria-label="用户引用的上下文"] .sciforge-reference-chip').length >= 5, null, { timeout: 15_000 });
     await expandComposer(referencePage);
     const markerPrompt = await referencePage.getByPlaceholder(/输入研究问题/).inputValue();
-    await referencePage.getByPlaceholder(/输入研究问题/).fill(`${markerPrompt} 基于右键文本、点选的历史消息、图表、表格和文件继续追问，并打开报告预览`);
+    await referencePage.getByPlaceholder(/输入研究问题/).fill(`${markerPrompt} 基于右键文本、点选的历史消息、图表、表格和旧文件继续追问，不要使用最近的 Latest omics summary，并打开报告预览`);
     await referencePage.locator('.chat-panel .composer').getByRole('button', { name: '发送' }).click();
     await referencePage.getByText('Reference follow-up accepted').first().waitFor({ timeout: 15_000 });
     const sentReferences = ((referenceRequests.at(-1)?.references ?? []) as Array<Record<string, unknown>>);
+    const sentUiState = referenceRequests.at(-1)?.uiState as Record<string, unknown> | undefined;
+    const sentCurrentReferenceEnvelope = {
+      topLevel: sentReferences,
+      uiState: sentUiState?.currentReferences,
+      agentContext: (sentUiState?.agentContext as Record<string, unknown> | undefined)?.currentReferences,
+    };
+    const sentReferenceGroups = [
+      sentCurrentReferenceEnvelope.topLevel,
+      sentCurrentReferenceEnvelope.uiState,
+      sentCurrentReferenceEnvelope.agentContext,
+    ] as Array<Array<Record<string, unknown>> | undefined>;
+    const sentCurrentReferenceText = JSON.stringify(sentCurrentReferenceEnvelope);
     assert.deepEqual(['ui', 'message', 'chart', 'table', 'file'].every((kind) => sentReferences.some((reference) => reference.kind === kind)), true, `follow-up should send text/message/chart/table/file refs, got ${JSON.stringify(sentReferences)}`);
+    assert.match(sentCurrentReferenceText, /file:\.sciforge\/artifacts\/reference-followup-report\.md/, `explicit old report ref should be current, got ${sentCurrentReferenceText}`);
+    assert.doesNotMatch(sentCurrentReferenceText, /artifact:browser-smoke-latest-report/, `latest report must not override explicit old selection, got ${sentCurrentReferenceText}`);
+    for (const refs of sentReferenceGroups) {
+      assert.ok(refs?.some((reference) => reference.kind === 'file' && reference.ref === 'file:.sciforge/artifacts/reference-followup-report.md'), `explicit old file ref should be present in every current-reference channel, got ${JSON.stringify(refs)}`);
+      assert.equal(refs?.some((reference) => reference.ref === 'artifact:browser-smoke-latest-report'), false, `latest artifact must not enter current-reference channel, got ${JSON.stringify(refs)}`);
+    }
+    const oldFileReference = sentReferences.find((reference) => reference.ref === 'file:.sciforge/artifacts/reference-followup-report.md');
+    assert.equal(oldFileReference?.sourceId, 'object-reference-report-seed');
+    assert.equal(oldFileReference?.runId, 'run-reference-seed');
+    assert.ok(oldFileReference?.payloadDigest, `explicit object identity should be preserved as a bounded payload digest, got ${JSON.stringify(oldFileReference)}`);
     const sentTextReference = sentReferences.find((reference) => reference.kind === 'ui' && String(reference.ref).startsWith('ui-text:'));
     assert.ok(sentTextReference, `selected text reference should be sent, got ${JSON.stringify(sentReferences)}`);
     assert.equal((sentTextReference.payload as Record<string, unknown>).composerMarker, '※1');
@@ -381,11 +473,10 @@ try {
     assert.match(String(referenceRequests.at(-1)?.prompt ?? ''), /※1/);
     assert.doesNotMatch(String(referenceRequests.at(-1)?.prompt ?? ''), /inspect the UMAP/);
     logStep('final object chip focuses the right pane and previews the real workspace markdown file');
-    await referencePage.locator('.object-reference-chip', { hasText: 'Reference follow-up report' }).last().click();
-    await referencePage.locator('.object-focus-banner', { hasText: 'Reference follow-up report' }).waitFor({ timeout: 15_000 });
-    await referencePage.locator('.workspace-object-preview', { hasText: 'reference-followup-report.md' }).waitFor({ timeout: 15_000 });
-    await referencePage.locator('.workspace-object-preview', { hasText: 'real workspace markdown file verifies inline preview' }).waitFor({ timeout: 15_000 });
-    await captureSmokeScreenshot(referencePage, join(artifactsDir, 'browser-smoke-reference-followup-preview.png'));
+	    await clickObjectReferenceControl(referencePage, 'Reference follow-up report', 'last');
+	    await referencePage.locator('.object-focus-banner', { hasText: 'Reference follow-up report' }).waitFor({ timeout: 15_000 });
+	    await referencePage.locator('.workspace-object-preview', { hasText: 'reference-followup-report.md' }).waitFor({ timeout: 15_000 });
+	    await captureSmokeScreenshot(referencePage, join(artifactsDir, 'browser-smoke-reference-followup-preview.png'));
     await assertNoRawJsonErrors(referencePage, 'reference-followup');
     await assertNoUnexplainedDisabledPrimaryButtons(referencePage, 'reference-followup');
     await assertNoRechartsSizeWarnings(referencePage, 'reference-followup');
@@ -535,7 +626,7 @@ async function newConfiguredPage(
   stateMode: boolean | 'default' | 'structure' | 'references' | 'failed-restore' = false,
   configPatch: Partial<{ workspaceWriterBaseUrl: string; agentServerBaseUrl: string }> = {},
 ) {
-  const page = await browser.newPage({ viewport });
+  const page = await browser.newPage({ viewport, acceptDownloads: true });
   const withStructureState = stateMode === true || stateMode === 'structure';
   const withReferenceState = stateMode === 'references';
   const withFailedRestoreState = stateMode === 'failed-restore';
@@ -558,11 +649,37 @@ async function newConfiguredPage(
     if (message.type() === 'error') console.error(`[browser:${message.type()}] ${message.text()}`);
     if (message.type() === 'warning') consoleWarnings.push(message.text());
   });
-  const pageErrors: string[] = [];
-  page.on('pageerror', (error) => {
-    pageErrors.push(error.message);
-  });
-  const config = {
+	  const pageErrors: string[] = [];
+	  page.on('pageerror', (error) => {
+	    pageErrors.push(error.message);
+	  });
+	  await page.route('http://127.0.0.1:18080/**', async (route, request) => {
+	    const now = new Date().toISOString();
+	    if (/compact/i.test(request.url())) {
+	      await route.fulfill({
+	        status: 200,
+	        contentType: 'application/json; charset=utf-8',
+	        body: JSON.stringify({
+	          contextCompaction: {
+	            status: 'completed',
+	            source: 'agentserver',
+	            backend: 'codex',
+	            compactCapability: 'agentserver',
+	            reason: 'browser-smoke',
+	            completedAt: now,
+	            auditRefs: ['agentserver://browser-smoke/compact'],
+	          },
+	        }),
+	      });
+	      return;
+	    }
+	    await route.fulfill({
+	      status: 200,
+	      contentType: 'application/json; charset=utf-8',
+	      body: JSON.stringify({ status: 'ok', checkedAt: now }),
+	    });
+	  });
+	  const config = {
     schemaVersion: 1,
     agentServerBaseUrl: configPatch.agentServerBaseUrl ?? 'http://127.0.0.1:18080',
     workspaceWriterBaseUrl: configPatch.workspaceWriterBaseUrl ?? `http://127.0.0.1:${workspacePort}`,
@@ -907,10 +1024,158 @@ async function sendContextSmokePrompt(page: Page, prompt: string) {
   await page.getByText(new RegExp(`Context smoke response ${contextSmokeResponseIndexForPrompt(prompt)}`)).first().waitFor({ timeout: 15_000 });
 }
 
+async function sendFailedRestorePrompt(page: Page, prompt: string, round: number) {
+  await expandComposer(page);
+  await page.locator('.chat-panel .composer textarea').fill(prompt);
+  await page.locator('.chat-panel .composer').getByRole('button', { name: '发送' }).click();
+  await page.getByText(`Failed restore continuation ${round}`).first().waitFor({ timeout: 15_000 });
+}
+
+function objectReferenceControl(page: Page, title: string) {
+  return page.locator('.object-reference-chip, .markdown-object-ref, .message-object-link', { hasText: title });
+}
+
+async function clickObjectReferenceControl(page: Page, title: string, pick: 'first' | 'last' = 'first') {
+  const clicked = await objectReferenceControl(page, title).evaluateAll((nodes, pickMode) => {
+    const visible = nodes.filter((node) => {
+      const element = node instanceof HTMLElement ? node : undefined;
+      if (!element) return false;
+      const box = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      return box.width > 0 && box.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+    });
+    const target = pickMode === 'last' ? visible.at(-1) : visible[0];
+    if (target instanceof HTMLElement) {
+      target.click();
+      return true;
+    }
+    return false;
+  }, pick);
+  assert.equal(clicked, true, `visible object reference control should be clickable: ${title}`);
+}
+
 function contextSmokeResponseIndexForPrompt(prompt: string) {
   if (/round one/.test(prompt)) return 1;
   if (/round two/.test(prompt)) return 2;
   return 3;
+}
+
+function failedRestoreContinuationToolStreamBody(round: number) {
+  const status = round === 2 ? 'done' : round === 3 ? 'done' : 'needs-human';
+  const artifactId = round === 3 ? 'artifact-failed-restore-audit-summary' : 'artifact-failed-restore-continuation';
+  const bundleRoot = '.sciforge/sessions/2026-05-15_literature_session-failed-restore-smoke';
+  const artifactRef = round === 3
+    ? `${bundleRoot}/artifacts/failed-restore-audit-summary.md`
+    : '.sciforge/task-results/failed-restore-continuation-report.md';
+  const stdoutRef = round === 3 ? `file:${bundleRoot}/logs/failed-restore.stdout.log` : 'file:.sciforge/task-results/failed-restore.stdout.log';
+  const stderrRef = round === 3 ? `file:${bundleRoot}/logs/failed-restore.stderr.log` : 'file:.sciforge/logs/failed-restore.stderr.log';
+  const verificationRef = `${bundleRoot}/verifications/failed-restore-verdict.json`;
+  const failureImprovementNoteRef = `${bundleRoot}/notes/failure-improvement-note.md`;
+  const runtimeEventsRef = `${bundleRoot}/records/runtime-events.ndjson`;
+  const sessionBundleAuditRef = `${bundleRoot}/records/session-bundle-audit.json`;
+  return [
+    JSON.stringify({
+      event: {
+        type: 'process-progress',
+        label: '恢复边界',
+        detail: 'Recovered failed restore context from refs. RAW_FAILED_RESTORE_LOG_SHOULD_NOT_RETURN '.repeat(10),
+      },
+    }),
+    JSON.stringify({
+      result: {
+        run: {
+          id: `run-failed-restore-continuation-${round}`,
+          status: status === 'needs-human' ? 'failed' : 'completed',
+          auditRefs: round === 3 ? [
+            bundleRoot,
+            runtimeEventsRef,
+            sessionBundleAuditRef,
+            verificationRef,
+            failureImprovementNoteRef,
+          ] : undefined,
+          sessionBundleRef: round === 3 ? bundleRoot : undefined,
+        },
+        message: `Failed restore continuation ${round}: ${round === 1
+          ? 'diagnosed the preserved failed run without rerunning provider calls.'
+          : round === 2
+            ? 'continued from partial full-text and metadata refs with evidence gaps.'
+            : 'exported audit summary from task graph, lineage, artifact refs, stdout refs, and stderr refs.'}`,
+        confidence: 0.76,
+        claimType: 'fact',
+        evidenceLevel: 'browser-smoke',
+        reasoningTrace: 'Generic failed-run continuation: reuse structured refs and user confirmation boundaries instead of prompt-specific recovery.',
+        executionUnits: [{
+          id: `EU-failed-restore-continuation-${round}`,
+          tool: 'python',
+          params: round === 3
+            ? 'python tasks/export_audit.py --refs-only'
+            : 'python tasks/continue_partial_report.py --reuse-existing-refs',
+          status,
+          hash: `failed-restore-continuation-${round}`,
+          codeRef: round === 3 ? `${bundleRoot}/tasks/export_audit.py` : '.sciforge/tasks/failed-restore-continuation.py',
+          stdoutRef,
+          stderrRef,
+          outputRef: `file:${artifactRef}`,
+          verificationRef: round === 3 ? verificationRef : undefined,
+          verificationVerdict: round === 3 ? 'pass' : undefined,
+          inputData: round === 3 ? [runtimeEventsRef, sessionBundleAuditRef] : undefined,
+          failureReason: round === 1 ? 'PDF retrieval partially failed after preserving downloaded full text and metadata refs.' : undefined,
+          recoverActions: round === 1
+            ? ['reuse downloaded full text and metadata refs', 'rerun failed PDF downloads only after explicit confirmation']
+            : ['continue from preserved refs and record evidence gaps'],
+          nextStep: round === 1
+            ? 'Ask the user whether to continue from partial refs or explicitly retry failed PDF downloads.'
+            : 'Continue with artifact refs and audit export only.',
+        }],
+        artifacts: [{
+          id: artifactId,
+          type: round === 3 ? 'audit-summary' : 'research-report',
+          schemaVersion: '1',
+          dataRef: artifactRef,
+          metadata: {
+            runId: `run-failed-restore-continuation-${round}`,
+            parentRunId: 'run-browser-failed-restore',
+            lineage: ['artifact:failed-restore-partial-report', 'file:.sciforge/task-results/failed-restore.bundle.json', ...(round === 3 ? [runtimeEventsRef, verificationRef, failureImprovementNoteRef] : [])],
+            evidenceGaps: ['timeout', 'HTTP 403', 'file exceeded max download bytes'],
+            verificationRef: round === 3 ? verificationRef : undefined,
+            failureImprovementNoteRef: round === 3 ? failureImprovementNoteRef : undefined,
+          },
+          data: {
+            markdown: 'FULL_REPAIRED_REPORT_BODY_SHOULD_NOT_RETURN '.repeat(80),
+          },
+        }],
+        objectReferences: [{
+          id: `obj-failed-restore-continuation-${round}`,
+          kind: 'artifact',
+          ref: `artifact:${artifactId}`,
+          title: round === 3 ? 'Failed restore audit summary' : 'Failed restore continuation report',
+          runId: `run-failed-restore-continuation-${round}`,
+          path: artifactRef,
+        }],
+        references: [
+          { kind: 'artifact', ref: `artifact:${artifactId}`, title: round === 3 ? 'Failed restore audit summary' : 'Failed restore continuation report' },
+          { kind: 'file', ref: `file:${artifactRef}`, title: artifactRef.split('/').at(-1) },
+          { kind: 'file', ref: stderrRef, title: 'failed-restore.stderr.log' },
+          ...(round === 3 ? [
+            { kind: 'file', ref: `file:${runtimeEventsRef}`, title: 'runtime-events.ndjson' },
+            { kind: 'file', ref: `file:${sessionBundleAuditRef}`, title: 'session-bundle-audit.json' },
+            { kind: 'file', ref: `file:${verificationRef}`, title: 'failed-restore-verdict.json' },
+            { kind: 'file', ref: `file:${failureImprovementNoteRef}`, title: 'Failure/Improvement Note' },
+          ] : []),
+        ],
+        auditRefs: round === 3 ? [
+          bundleRoot,
+          runtimeEventsRef,
+          sessionBundleAuditRef,
+          stdoutRef,
+          stderrRef,
+          verificationRef,
+          failureImprovementNoteRef,
+        ] : undefined,
+      },
+    }),
+    '',
+  ].join('\n');
 }
 
 async function writeReferenceScenarioPackage() {

@@ -384,6 +384,7 @@ function PrimaryResult({
           session={session}
           activeRun={activeRun}
           viewPlan={viewPlan}
+          defaultOpen={model.auditOpen}
         />
       ) : null}
       {viewPlan.allItems.length ? (
@@ -402,8 +403,15 @@ function PrimaryResult({
 
 function ExecutionOnlyResult({ session, activeRun }: { session: SciForgeSession; activeRun?: SciForgeRun }) {
   const projection = conversationProjectionForRun(activeRun ?? session.runs.at(-1));
-  if (projection) return <ProjectionExecutionOnlyResult projection={projection} />;
   const units = auditExecutionUnitsForRun(session, activeRun);
+  if (projection) {
+    return (
+      <div className="stack">
+        <ProjectionExecutionOnlyResult projection={projection} />
+        <ExecutionPanel session={session} executionUnits={units} activeRun={activeRun} embedded />
+      </div>
+    );
+  }
   return (
     <div className="stack">
       <ExecutionPanel session={session} executionUnits={units} activeRun={activeRun} embedded />

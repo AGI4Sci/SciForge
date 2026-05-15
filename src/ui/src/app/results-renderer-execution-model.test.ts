@@ -289,6 +289,69 @@ test('results renderer execution model uses projection recovery details before r
   assert.ok(runAuditRefs(session, session.runs[0]).includes('artifact:partial-report'));
 });
 
+test('results renderer execution model treats zero-result projections with recovery as recoverable', () => {
+  const session: SciForgeSession = {
+    schemaVersion: 2,
+    sessionId: 'session-empty-provider-result',
+    scenarioId: 'literature-evidence-review',
+    title: 'empty provider result',
+    createdAt: '2026-05-15T00:00:00.000Z',
+    messages: [],
+    runs: [{
+      id: 'run-empty-provider-result',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'search latest papers',
+      response: 'provider returned zero records',
+      createdAt: '2026-05-15T00:00:00.000Z',
+      completedAt: '2026-05-15T00:01:00.000Z',
+      raw: {
+        displayIntent: {
+          conversationProjection: {
+            schemaVersion: 'sciforge.conversation-projection.v1',
+            conversationId: 'conversation-empty-provider-result',
+            visibleAnswer: {
+              status: 'degraded-result',
+              text: 'The provider route was ready, but the narrow query returned no results.',
+              artifactRefs: [],
+              diagnostic: 'empty-results from sciforge.web-worker.web_search',
+            },
+            artifacts: [],
+            executionProcess: [{
+              eventId: 'event-provider-route',
+              type: 'provider-route',
+              summary: 'web_search -> sciforge.web-worker.web_search',
+              timestamp: '2026-05-15T00:00:10.000Z',
+            }],
+            recoverActions: ['broaden the query', 'relax the date range'],
+            verificationState: { status: 'unverified' },
+            auditRefs: ['provider:sciforge.web-worker.web_search'],
+            diagnostics: [{
+              severity: 'warning',
+              code: 'empty-results',
+              message: 'web_search provider returned zero records for the narrow arXiv date query.',
+            }],
+          },
+        },
+      },
+    }],
+    uiManifest: [],
+    claims: [],
+    executionUnits: [],
+    artifacts: [],
+    notebook: [],
+    versions: [],
+    updatedAt: '2026-05-15T00:01:00.000Z',
+  };
+
+  const state = runPresentationState(session, session.runs[0]);
+
+  assert.equal(state.kind, 'recoverable');
+  assert.equal(state.title, '运行需要恢复');
+  assert.match(state.reason, /empty-results/);
+  assert.deepEqual(state.nextSteps, ['broaden the query', 'relax the date range']);
+});
+
 test('results renderer execution model treats cited historical execution units as context refs, not current blockers', () => {
   const session: SciForgeSession = {
     schemaVersion: 2,

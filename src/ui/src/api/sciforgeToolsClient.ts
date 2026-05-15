@@ -447,12 +447,32 @@ function stableSessionMessages(input: SendAgentMessageInput) {
       status: message.status,
       references: message.references?.slice(-8).map(compactSciForgeReference),
       objectReferences: message.objectReferences?.slice(-12),
-      guidanceQueue: message.guidanceQueue ? {
-        ...message.guidanceQueue,
-        prompt: omittedTransportTextDigestLabel('guidance-prompt', message.guidanceQueue.prompt),
-        reason: message.guidanceQueue.reason ? omittedTransportTextDigestLabel('guidance-reason', message.guidanceQueue.reason) : undefined,
-      } : undefined,
+      guidanceQueue: stableSessionMessageGuidance(message.guidanceQueue),
     }));
+}
+
+function stableSessionMessageGuidance(guidance: NonNullable<SendAgentMessageInput['messages']>[number]['guidanceQueue'] | undefined) {
+  if (!guidance) return undefined;
+  const base = {
+    id: guidance.id,
+    status: guidance.status,
+    activeRunId: guidance.activeRunId,
+    handlingRunId: guidance.handlingRunId,
+    receivedAt: guidance.receivedAt,
+    updatedAt: guidance.updatedAt,
+  };
+  if (guidance.status !== 'merged' || !guidance.handlingRunId) {
+    return {
+      ...base,
+      prompt: omittedTransportTextDigestLabel('guidance-prompt', guidance.prompt),
+      reason: guidance.reason ? omittedTransportTextDigestLabel('guidance-reason', guidance.reason) : undefined,
+    };
+  }
+  return {
+    ...base,
+    prompt: compactConversationContent(guidance.prompt, 800),
+    reason: guidance.reason ? compactConversationContent(guidance.reason, 500) : undefined,
+  };
 }
 
 function compactConversationContent(value: string, maxChars = 1200) {

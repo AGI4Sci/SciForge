@@ -1,19 +1,23 @@
 # SciForge Packages
 
-该目录包含 SciForge 的可复用能力和运行时支持包。
+该目录包含 SciForge 的可复用能力、共享契约、worker/provider 和运行时支持包。
 
-在新增或修改 package 之前，请先遵循集成标准：
-[`docs/Extending.md`](../docs/Extending.md)。
+新增或修改 package 前，先对照 [`../docs/Architecture.md`](../docs/Architecture.md) 的 Capability、Provider、Runtime Resolver 和 `src`/`packages` 边界。这里的核心原则是两条轴同时成立：
 
-这份标准定义了 `observe`、`actions`、`verifiers`、`ui-components`、`skills` 以及其它能力应该如何暴露给 agent，避免 agent 因可用能力过多而分散注意力，同时保留灵活选择能力的空间。
+- 行为边界回答“能力在 agent loop 中扮演什么角色”：`observe`、`actions`、`verifiers`、`presentation`、`skills`。
+- 执行边界回答“在哪里运行、怎么运行”：每个可搬运执行包必须声明 worker/provider manifest；worker 可以内嵌在 1:1 能力包中，也可以在 `packages/workers` 中独立发布。
 
-`packages/senses` 和顶层 `packages/tools` 是迁移前历史名称。它们只作为旧会话、旧 fixture 或短期 alias 的兼容面存在，新增能力不要再放进这两个目录：
+`packages/senses` 和顶层 `packages/tools` 是迁移前历史名称。新增能力不要再放进这些目录：
 
-- 新增观察能力进入 `packages/observe`。
-- 新增 `SKILL.md` 面向 agent 的能力进入 `packages/skills/{tool_skills,pipeline_skills,domain_skills,meta_skills}`。
-- 真正会改变环境的执行 provider 进入 `packages/actions`。
+- 新增只读观察能力进入 `packages/observe`。
+- 新增会改变环境的执行能力进入 `packages/actions`。
+- 新增验证能力进入 `packages/verifiers`。
+- 新增呈现能力进入 `packages/presentation`。
+- 新增 `SKILL.md` 面向 agent 的方法和工作流进入 `packages/skills/{tool_skills,pipeline_skills,domain_skills,meta_skills}`。
+- 跨多个 capability、需要独立部署生命周期的执行包进入 `packages/workers`。
+- 共享 capability/worker 协议进入 `packages/contracts`。
 
-如果迁移旧目录中的能力，先给目标 package 补 manifest/schema/validator/README，再把调用方切到稳定 package entrypoint。只有旧 facade 或 adapter 真的删除后，才降低 `smoke:no-legacy-paths` baseline，并在 [`../docs/legacy-cutover-inventory.md`](../docs/legacy-cutover-inventory.md) 记录证据。
+如果迁移旧目录中的能力，先给目标 package 补 capability manifest、schema、validator、README 和 worker/provider manifest，再把调用方切到稳定 package entrypoint。只有旧 facade 或 adapter 真的删除后，才降低 `smoke:no-legacy-paths` baseline，并在 [`../docs/legacy-cutover-inventory.md`](../docs/legacy-cutover-inventory.md) 记录证据。
 
 ## Package 边界
 
@@ -22,7 +26,8 @@
 当前 `src` 固定平台与 `packages` 插拔能力清单见 [`../docs/boundary-inventory.md`](../docs/boundary-inventory.md)，机器可读来源是 [`../tools/check-boundary-inventory.ts`](../tools/check-boundary-inventory.ts)。package 新增或迁移前先确认 inventory 中已有对应能力类别；如果没有，先补清单和对应 checks，再扩展实现。
 
 - 属于平台秩序的逻辑进入 `src/`：lifecycle、loading、routing shell、provider dispatch、validation/repair loop、workspace refs、artifact persistence、global safety 和 app/runtime orchestration。
-- 属于能力语义的逻辑进入 `packages/`：manifest、schema、validator、provider、examples、repair hints、scenario/view/skill policy 和 composed capability。
+- 属于能力语义的逻辑进入 `packages/`：capability manifest、schema、validator、examples、repair hints、scenario/view/skill policy 和 composed capability。
+- 属于执行位置的逻辑进入对应能力包或 `packages/workers/`：worker manifest、healthcheck、invoke server/CLI、provider route、权限、依赖、smoke test 和部署说明。
 - `src` 可以固定系统运行方式，但不能写死 package 的领域语义；`packages` 可以扩展能力，但不能绕过 runtime 的 refs、validation、persistence、permission 和 safety。
 
 - `skills`：agent 可见的能力入口。凡是主要通过 `SKILL.md` 被 agent 使用的能力，都应进入这里，并按 skill kind 归档。
@@ -34,7 +39,9 @@
 - `actions`：action 层。对环境产生影响的执行 provider，例如 Computer Use、浏览器沙箱、远程桌面、文件编辑、notebook/kernel 或未来实验设备动作。
 - `verifiers`：verify 层。输入是 result、trace、artifact、环境状态和验证 instruction，输出 verdict、reward、critique、evidence refs、repair hints 和 confidence；provider 可以是人类、其它 agent、规则测试、schema、环境观察或 simulator。
 - `presentation/components`：interactive views/renderers。面向用户和 agent 呈现 artifact 数据，并暴露鼠标、键盘、对象引用、事件和代码交互边界；它们不是 action provider。
-- `runtime-contract`：运行时共享契约。
+- `contracts/runtime`：运行时共享契约。
+- `contracts/tool-worker`：独立 worker 的 manifest、health、invoke 和 HTTP helper contract。
+- `workers`：独立可搬运 worker/provider 包。只在 worker 横跨多个 capability、多个行为类型，或需要独立部署生命周期时使用；1:1 capability/provider 默认合并在能力包内。
 - `scenarios/core`：scenario 编译与校验基础能力。
 - `presentation/design-system`：可复用 UI primitives 和 tokens。
 - `artifact-preview`：artifact 预览辅助能力。
@@ -44,11 +51,18 @@
 
 核心 package capability 应同时提供：
 
-- `manifest`：id、version、owner package、brief、routing tags、side effects、safety、lifecycle layer 和 provider variants。
+- `capability manifest`：id、version、owner package、brief、routing tags、side effects、safety、lifecycle layer 和 provider variants。
 - `schema`：输入、输出、artifact refs、evidence refs、失败形态和 fallback policy。
 - `validator`：校验 output、refs、artifact、evidence、side effects 和 provider diagnostics。
-- `provider`：真实实现、mock/test fixture 或 external adapter；会改变环境时必须通过 action contract 暴露。
 - `repair hints`：结构化失败原因、可恢复动作、相关 refs、stdout/stderr/log refs 和下一步建议。
+
+每个可独立搬运的执行包还必须提供：
+
+- `worker/provider manifest`：worker id/version/protocol、provider ids、capability ids、transport、endpoint/command、auth、permissions、workspace roots、fallback eligibility 和 release channel。
+- `health`：liveness/readiness、依赖、授权、quota/rate-limit 和最近失败。
+- `invoke`：结构化 request/result envelope，失败必须带 provider-neutral failure code、recover actions 和 diagnostics。
+- `smoke`：manifest discovery、health、invoke、permission denied、rate-limit、empty-result 和 fallback route trace。
+- `README`：本机运行、复制到远程机器、环境变量、端口、权限和版本兼容说明。
 
 package 只能声明能力和 provider 变体，不能声明自己拥有 runtime lifecycle。以下 ownership 留在 `src/`：
 
@@ -65,17 +79,21 @@ package 只能声明能力和 provider 变体，不能声明自己拥有 runtime
 - Interactive renderer registry 的当前真相源仍是 `packages/presentation/components`；`packages/presentation/interactive-views` 是语义化别名和未来迁移目标。`packages/presentation/design-system` 只提供低层 primitives/tokens，不承载 artifact renderer registry。
 - Runtime/UI/Package 共享协议的真相源是 `packages/contracts/runtime`。`packages/support/artifact-preview` 和 `packages/support/object-references` 只保留便捷 helper、normalizer 和转换函数；若发现纯 contract 类型，应上移到 `runtime-contract` 后再由 helper 消费。
 - `SKILL.md` 面向 agent 的能力入口统一进入 `packages/skills/*_skills`；真实副作用执行器必须落在 `packages/actions` 或 runtime adapter 中，并通过 action contract 暴露 approval、trace、sandbox、rollback 和 safety guard。
+- Web observe capability contract 的当前真相源是 `packages/observe/web`；默认独立执行包是 `packages/workers/web-worker`。二者通过 `web_search` / `web_fetch` capability id 和 `sciforge.web-worker.*` provider id 连接，不能再回到泛名 `packages/tools`。
 
 正式长期组织方式是 contract-reason-skill-observe-action-verify-present 闭环：
 
 ```text
-packages/contracts/runtime/  stable shared contracts
+packages/contracts/runtime/  stable shared runtime contracts
+packages/contracts/tool-worker/
+                            standalone worker protocol contracts
 packages/skills/            SKILL.md-facing abilities and catalogs
 packages/observe/           observe: instruction + modality -> text-response
 packages/actions/           environment-changing action providers
 packages/verifiers/         result/trace/artifact/state -> verdict/reward/critique
 packages/presentation/components/ or packages/presentation/interactive-views/
                             artifact presentation and interactive data surfaces
+packages/workers/           independently deployable provider/worker packages
 ```
 
 Verify 是闭环的必要阶段，但 verifier 的类型和强度可按风险选择。低风险草稿可以使用轻量规则或标记为 `unverified`；高风险动作、科研结论、外部副作用和发布类任务必须有明确 verifier 或 human approval。
@@ -90,6 +108,7 @@ Verify 是闭环的必要阶段，但 verifier 的类型和强度可按风险选
 - 单步工具型能力如果主要通过 `SKILL.md` 暴露，放在 `skills/tool_skills`。
 - 常用、稳定、可复用但不直接面向 `SKILL.md` 的只读能力，放在 `observe` 或相关 contract package。
 - 会产生副作用的执行资源放在 `actions`，并带 approval、trace、sandbox、rollback 和 safety guard。
+- 1:1 capability/provider 默认合并在对应能力包中；1:N worker 或 N:1 provider matrix 才拆到 `packages/workers`。
 - 关键 observe provider、安全敏感 action、长时间 workflow 或高成本能力使用 native runtime adapter。
 
 agent 应先接收紧凑的 capability brief，然后只懒加载被选中 package 的详细契约或 `SKILL.md`。

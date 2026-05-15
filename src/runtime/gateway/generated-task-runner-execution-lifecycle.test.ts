@@ -80,6 +80,9 @@ test('generated task files are materialized only inside the session bundle', asy
   assert.match(taskRel, /^\.sciforge\/sessions\/2026-05-12_literature-evidence-review_session-literature-1\/tasks\/generated-literature-/);
   assert.match(inputRel, /^\.sciforge\/sessions\/2026-05-12_literature-evidence-review_session-literature-1\/task-inputs\/generated-literature-/);
   const taskInput = JSON.parse(await readFile(join(workspace, inputRel), 'utf8'));
+  assert.equal(taskInput.taskHelperSdk.moduleName, 'sciforge_task');
+  assert.match(taskInput.taskHelperSdk.helperRef, /\/sciforge_task\.py$/);
+  assert.ok(taskInput.capabilityFirstPolicy.rules.some((line: string) => /provider route/.test(line)));
   assert.equal(taskInput.generatedTaskPayloadPreflight.status, 'ready');
   assert.deepEqual(taskInput.generatedTaskPayloadPreflight.requiredEnvelopeKeys, ['message', 'claims', 'uiManifest', 'executionUnits', 'artifacts']);
   assert.ok(taskInput.generatedTaskPayloadPreflight.guidance.some((line: string) => /ToolPayload envelope/.test(line)));
@@ -97,6 +100,7 @@ test('generated task files are materialized only inside the session bundle', asy
   });
   await assert.rejects(access(join(workspace, 'tasks/arxiv-agent-paper-review.py')));
   await access(join(workspace, taskRel));
+  await access(join(workspace, taskInput.taskHelperSdk.helperRef));
 });
 
 test('generated task output shape preflight blocks obvious malformed payload writers before execution', async () => {
@@ -243,4 +247,85 @@ test('generated task output shape preflight resolves same-file artifact variable
   assert.ok(taskInput.generatedTaskPayloadPreflight.issues.every((issue: { severity: string }) => issue.severity === 'guidance'));
   const output = JSON.parse(await readFile(join(workspace, result.execution.run.outputRef), 'utf8'));
   assert.deepEqual(output.artifacts.map((artifact: { type: string }) => artifact.type), ['research-report', 'paper-list']);
+});
+
+test('generated task preflight blocks direct network when web provider route is ready', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-generated-provider-first-preflight-'));
+  const request: GatewayRequest = {
+    workspacePath: workspace,
+    skillDomain: 'literature',
+    prompt: 'search latest arxiv papers',
+    selectedToolIds: ['web_search'],
+    artifacts: [],
+    uiState: {
+      sessionId: 'session-literature-provider-first',
+      sessionCreatedAt: '2026-05-12T04:00:00.000Z',
+      capabilityProviderAvailability: [{
+        id: 'sciforge.web-worker.web_search',
+        available: true,
+        status: 'available',
+      }],
+    },
+    scenarioPackageRef: { id: 'literature-evidence-review', version: '1.0.0', source: 'built-in' },
+  };
+  const skill = {
+    id: 'literature-test',
+    kind: 'builtin',
+    available: true,
+    reason: 'test',
+    checkedAt: '2026-05-12T04:00:00.000Z',
+    manifestPath: 'builtin',
+    manifest: {},
+  } as unknown as SkillAvailability;
+  const markerRel = '.sciforge/provider-first-should-not-run.txt';
+
+  const result = await runGeneratedTaskExecutionLifecycle({
+    workspace,
+    request,
+    skill,
+    generation: {
+      ok: true,
+      runId: 'run-provider-first-preflight',
+      response: {
+        taskFiles: [{
+          path: 'tasks/direct-network.py',
+          language: 'python',
+          content: [
+            'import json, sys',
+            'import requests',
+            'from pathlib import Path',
+            '_, input_path, output_path = sys.argv',
+            `Path("${markerRel}").write_text("ran")`,
+            'payload = {"message": "ok", "confidence": 0.8, "claimType": "fact", "evidenceLevel": "runtime", "reasoningTrace": "bad", "claims": [], "uiManifest": [], "executionUnits": [{"id": "unit", "status": "done"}], "artifacts": []}',
+            'Path(output_path).write_text(json.dumps(payload))',
+          ].join('\n'),
+        }],
+        entrypoint: { language: 'python', path: 'tasks/direct-network.py' },
+        environmentRequirements: {},
+        validationCommand: '',
+        expectedArtifacts: ['research-report'],
+      },
+    },
+    deps: {
+      repairNeededPayload: (_request, _skill, reason, context): ToolPayload => ({
+        message: reason,
+        confidence: 0,
+        claimType: 'fact',
+        evidenceLevel: 'runtime',
+        reasoningTrace: JSON.stringify(context ?? {}),
+        claims: [],
+        uiManifest: [],
+        executionUnits: [],
+        artifacts: [],
+      }),
+    },
+  });
+
+  assert.equal(result.kind, 'payload');
+  if (result.kind !== 'payload') return;
+  assert.match(result.payload.message, /provider route/i);
+  assert.match(result.payload.message, /direct external network APIs/i);
+  assert.match(result.payload.reasoningTrace, /sciforge_task/);
+  assert.match(result.payload.reasoningTrace, /repair-needed ToolPayload/);
+  await assert.rejects(access(join(workspace, markerRel)));
 });

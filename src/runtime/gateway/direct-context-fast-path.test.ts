@@ -38,7 +38,7 @@ test('context follow-up protocol enables direct context answer even when AgentSe
   assert.match(payload.message, /research-report|report/i);
 });
 
-test('direct context fast path yields skill tool capability provider status queries to registry routing', () => {
+test('direct context fast path answers skill tool capability provider status queries from runtime registry', () => {
   const request: GatewayRequest = {
     skillDomain: 'literature',
     prompt: '现在你有哪些 skill 和 web search provider 是被激活了？',
@@ -67,7 +67,13 @@ test('direct context fast path yields skill tool capability provider status quer
     },
   };
 
-  assert.equal(directContextFastPathPayload(request), undefined);
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.equal(payload.executionUnits[0]?.tool, 'sciforge.direct-context-fast-path');
+  assert.equal(payload.claimType, 'capability-provider-status');
+  assert.match(payload.message, /Tool\/provider status answered from SciForge runtime registries/);
+  assert.match(payload.message, /web_search|provider/i);
 });
 
 test('context follow-up protocol yields when AgentServer generation is explicitly forced', () => {
@@ -364,4 +370,69 @@ test('context follow-up protocol returns needs-work when expected artifacts are 
   assert.equal(payload.artifacts[0]?.type, 'runtime-diagnostic');
   assert.match(payload.message, /缺失产物：paper-list, research-report/);
   assert.match(String(payload.executionUnits[0]?.failureReason ?? ''), /cannot satisfy follow-up/);
+});
+
+test('provider status follow-up reuses current context without AgentServer generation', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'Round 2 continue from Round 1. Reuse the Example Domain result and fetch https://example.com again only if needed. Say whether tool providers are still available.',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    selectedToolIds: ['web_fetch'],
+    artifacts: [{
+      id: 'fetch-example-com',
+      type: 'runtime-context-summary',
+      data: { markdown: 'Round 1 fetched https://example.com. Title: Example Domain.' },
+    }],
+    uiState: {
+      currentReferences: [{
+        id: 'ref-fetch',
+        kind: 'artifact',
+        ref: 'artifact:fetch-example-com',
+        title: 'Example Domain fetch result',
+        summary: 'Title: Example Domain',
+      }],
+      capabilityProviderAvailability: [{
+        id: 'sciforge.web-worker.web_fetch',
+        providerId: 'sciforge.web-worker.web_fetch',
+        workerId: 'sciforge.web-worker',
+        capabilityId: 'web_fetch',
+        available: true,
+        status: 'available',
+        health: 'online',
+      }],
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.equal(payload.claimType, 'capability-provider-status');
+  assert.equal(payload.executionUnits[0]?.status, 'done');
+  assert.match(payload.message, /sciforge\.web-worker\.web_fetch/);
+  assert.match(payload.message, /Example Domain/);
+});
+
+test('provider wording does not steal fresh retrieval requests from AgentServer dispatch', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: '启用 AgentServer server-side web_search 后，用同一个窄日期 query 再检索；如果为空请说明 empty result 并给恢复建议。',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [{
+      id: 'runtime-diagnostic',
+      type: 'runtime-diagnostic',
+      data: { markdown: 'Prior provider route was missing.' },
+    }],
+    uiState: {
+      capabilityProviderAvailability: [{
+        id: 'sciforge.web-worker.web_search',
+        providerId: 'sciforge.web-worker.web_search',
+        capabilityId: 'web_search',
+        workerId: 'sciforge.web-worker',
+        available: true,
+        status: 'available',
+      }],
+    },
+  };
+
+  assert.equal(directContextFastPathPayload(request), undefined);
 });

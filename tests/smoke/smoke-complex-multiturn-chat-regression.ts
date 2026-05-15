@@ -77,9 +77,11 @@ try {
   }, nextUser, []);
 
   assert.equal(payload.artifacts[0]?.data, undefined);
-  assert.match(JSON.stringify(payload.runs[0]?.raw), /Missing required column/);
+  assert.match(JSON.stringify(payload.executionUnits), /Missing required column/);
+  assert.doesNotMatch(JSON.stringify(payload.runs[0]?.raw), /Missing required column/);
   assert.doesNotMatch(JSON.stringify(payload.runs[0]?.raw), /event-24/);
-  assert.match(payload.messages.map((item) => item.content).join('\n'), /不要覆盖原始 evidence matrix/);
+  assert.doesNotMatch(payload.messages.map((item) => item.content).join('\n'), /不要覆盖原始 evidence matrix/);
+  assert.match(JSON.stringify(payload.messages.map((item) => item.guidanceQueue).filter(Boolean)), /不要覆盖原始 evidence matrix/);
 
   let handoff: Record<string, unknown> | undefined;
   globalThis.fetch = (async (_input, init) => {

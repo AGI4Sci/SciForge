@@ -51,7 +51,7 @@ describe('ScenarioBuilderPanel scenario package policy integration', () => {
     assert.equal(mcpRoute.source, 'mcp');
     assert.equal(mcpRoute.primaryProviderId, 'clawhub.playwright-mcp');
     assert.deepEqual(mcpRoute.requiredConfig, ['PLAYWRIGHT_TOKEN']);
-    assert.equal(searchRoute.source, 'agentserver');
-    assert.equal(searchRoute.primaryProviderId, 'agentserver.backend-server.web_search');
+    assert.equal(searchRoute.source, 'package');
+    assert.equal(searchRoute.primaryProviderId, 'sciforge.web-worker.web_search');
   });
 });

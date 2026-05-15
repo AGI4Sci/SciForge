@@ -1,0 +1,83 @@
+{
+  "contract": "sciforge.capability-manifest.v1",
+  "id": "web_search",
+  "name": "web search",
+  "version": "0.1.0",
+  "ownerPackage": "packages/observe/web",
+  "kind": "observe",
+  "brief": "Search public web or configured search indexes and return ranked result refs with provider diagnostics.",
+  "routingTags": ["web", "search", "latest", "news", "internet"],
+  "domains": ["web", "knowledge", "literature"],
+  "inputSchema": {
+    "type": "object",
+    "required": ["query"],
+    "properties": {
+      "query": { "type": "string" },
+      "limit": { "type": "number", "minimum": 1, "maximum": 10 },
+      "region": { "type": "string" }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "required": ["query", "results"],
+    "properties": {
+      "query": { "type": "string" },
+      "results": { "type": "array" },
+      "providerDiagnostics": { "type": "object" }
+    }
+  },
+  "sideEffects": ["network", "external-api"],
+  "safety": {
+    "risk": "medium",
+    "dataScopes": ["public-web", "workspace-refs"]
+  },
+  "examples": [
+    {
+      "title": "search recent agent papers",
+      "inputRef": "capability:web_search/input.example",
+      "outputRef": "capability:web_search/output.example"
+    }
+  ],
+  "validators": [
+    {
+      "id": "web_search.schema",
+      "kind": "schema",
+      "contractRef": "web_search#outputSchema"
+    }
+  ],
+  "repairHints": [
+    {
+      "failureCode": "provider-unavailable",
+      "summary": "Do not synthesize an ad hoc web scraper when the configured web_search provider is missing or offline.",
+      "recoverActions": ["record-provider-status", "use-fallback-provider", "ask-user-to-enable-provider"]
+    },
+    {
+      "failureCode": "empty-result",
+      "summary": "Report the empty result with query/provider diagnostics before broadening search terms.",
+      "recoverActions": ["record-empty-result", "broaden-query", "ask-user-to-confirm-scope"]
+    }
+  ],
+  "providers": [
+    {
+      "id": "sciforge.web-worker.web_search",
+      "label": "SciForge web worker web_search",
+      "kind": "external",
+      "contractRef": "packages/observe/web/capabilities/web_search.manifest.json",
+      "requiredConfig": [],
+      "priority": 1,
+      "capabilityId": "web_search",
+      "source": "package",
+      "transport": "http",
+      "workerId": "sciforge.web-worker",
+      "runtimeLocation": "packages/workers/web-worker",
+      "permissions": ["network"],
+      "auth": { "required": false },
+      "fallbackEligible": true,
+      "status": "unknown"
+    }
+  ],
+  "lifecycle": {
+    "status": "draft",
+    "sourceRef": "packages/observe/web/capabilities/web_search.manifest.json"
+  }
+}

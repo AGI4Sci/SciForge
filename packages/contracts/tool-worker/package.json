@@ -1,0 +1,25 @@
+{
+  "name": "@sciforge/tool-worker-contract",
+  "version": "0.1.0",
+  "type": "module",
+  "private": false,
+  "description": "SciForge standalone worker protocol types, validators, and lightweight HTTP helpers.",
+  "sciforge": {
+    "lifecycleLayer": "contracts",
+    "skillFacing": false,
+    "sideEffects": "none",
+    "publicContract": true,
+    "runtimeAdapter": false
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./http": "./src/http.ts",
+    "./types": "./src/types.ts",
+    "./validation": "./src/validation.ts"
+  },
+  "files": [
+    "src",
+    "package.json",
+    "README.md"
+  ]
+}

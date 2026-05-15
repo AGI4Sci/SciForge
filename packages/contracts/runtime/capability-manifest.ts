@@ -285,26 +285,6 @@ export function validateCapabilityManifestRegistry(manifests: CapabilityManifest
 
 export const CORE_CAPABILITY_MANIFESTS: CapabilityManifest[] = [
   toolPrimitiveCapabilityManifest({
-    id: 'web_search',
-    name: 'web search',
-    brief: 'Search public web or configured search indexes and return ranked result refs with provider diagnostics.',
-    sourceRef: 'AgentServer toolRouting:web_search',
-    providerId: 'agentserver.backend-server.web_search',
-    providerLabel: 'AgentServer backend-server web_search',
-    workerId: 'backend-server',
-    routingTags: ['web', 'search', 'latest', 'news', 'internet'],
-  }),
-  toolPrimitiveCapabilityManifest({
-    id: 'web_fetch',
-    name: 'web fetch',
-    brief: 'Fetch a public URL or search result URL through a configured network provider and return durable content refs.',
-    sourceRef: 'AgentServer toolRouting:web_fetch',
-    providerId: 'agentserver.backend-server.web_fetch',
-    providerLabel: 'AgentServer backend-server web_fetch',
-    workerId: 'backend-server',
-    routingTags: ['web', 'fetch', 'download', 'url', 'html'],
-  }),
-  toolPrimitiveCapabilityManifest({
     id: 'pdf_extract',
     name: 'PDF extract',
     brief: 'Extract bounded text and page metadata from PDF refs for downstream LLM processing.',

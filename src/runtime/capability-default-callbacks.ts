@@ -1,10 +1,10 @@
 import {
   CAPABILITY_MANIFEST_CONTRACT_ID,
-  CORE_CAPABILITY_MANIFESTS,
   type CapabilityManifest,
   type CapabilityManifestRisk,
   type CapabilityManifestSideEffect,
 } from '../../packages/contracts/runtime/capability-manifest.js';
+import { loadCoreCapabilityManifestRegistry } from './capability-manifest-registry.js';
 import type { CapabilityBudget, HarnessCandidate } from '../../packages/agent-harness/src/contracts.js';
 import {
   scoreSkillByPackagePolicy,
@@ -218,7 +218,7 @@ export function buildObserveProviderSelectionCandidateCallback(
     capabilityClass: 'observe-provider-selection',
     project() {
       const manifests = input.selectedSenseIds.map((selectedId) => {
-        return findManifestByIdOrProvider(input.manifests ?? CORE_CAPABILITY_MANIFESTS, selectedId)
+        return findManifestByIdOrProvider(input.manifests ?? defaultCapabilityManifests(), selectedId)
           ?? synthesizeObserveManifest(selectedId);
       });
       const sourceReasons = Object.fromEntries(
@@ -545,7 +545,11 @@ function synthesizeComputerUseManifest(actionPlan: ComputerUseActionPlanCallback
 }
 
 function computerUseManifestFromCore() {
-  return CORE_CAPABILITY_MANIFESTS.find((manifest) => manifest.id === 'action.computer-use');
+  return defaultCapabilityManifests().find((manifest) => manifest.id === 'action.computer-use');
+}
+
+function defaultCapabilityManifests() {
+  return loadCoreCapabilityManifestRegistry().manifests;
 }
 
 function findManifestByIdOrProvider(manifests: CapabilityManifest[], id: string) {

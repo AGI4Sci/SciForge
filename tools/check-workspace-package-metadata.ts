@@ -42,8 +42,10 @@ const allowedLifecycleLayers = new Set([
   'presentation',
   'scenarios',
   'support',
+  'tools',
+  'workers',
 ]);
-const allowedSideEffects = new Set(['none', 'delegated-to-actions', 'runtime', 'build-time']);
+const allowedSideEffects = new Set(['none', 'delegated-to-actions', 'runtime', 'build-time', 'network']);
 const failures: string[] = [];
 
 const rootPackageJson = await readJson<RootPackageJson>('package.json');

@@ -14,6 +14,9 @@
     "packages/agent-harness",
     "packages/scenarios/core",
     "packages/presentation/interactive-views",
+    "packages/contracts/tool-worker",
+    "packages/observe/*",
+    "packages/workers/*",
     "packages/skills",
     "packages/skills/*"
   ],
@@ -154,6 +157,8 @@
     "smoke:task-attempt-api": "tsx tests/smoke/smoke-task-attempt-api.ts && tsx tests/smoke/smoke-real-task-attempt-failure-boundaries.ts",
     "smoke:workspace-retention": "tsx tests/smoke/smoke-workspace-task-input-retention.ts && tsx tests/smoke/smoke-workspace-task-input-compaction.ts && tsx tests/smoke/smoke-workspace-task-input-bounded-growth.ts && tsx tests/smoke/smoke-workspace-prune.ts",
     "smoke:browser": "tsx tests/smoke/smoke-browser-workflows.ts",
+    "smoke:browser-provider-preflight": "tsx tests/smoke/smoke-browser-provider-preflight.ts",
+    "smoke:browser-multiturn": "tsx tests/smoke/smoke-browser-multiturn-context.ts",
     "smoke:versioned-runs": "tsx tests/smoke/smoke-versioned-runs.ts",
     "smoke:skill-registry": "tsx tests/smoke/smoke-skill-registry.ts",
     "smoke:scp-skills": "tsx tests/smoke/smoke-scp-skills.ts",
