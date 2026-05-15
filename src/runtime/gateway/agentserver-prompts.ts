@@ -801,6 +801,7 @@ export function buildAgentServerGenerationPrompt(request: {
   strictTaskFilesReason?: string;
   retryAudit?: unknown;
   freshCurrentTurn?: boolean;
+  repairContinuation?: boolean;
 }) {
   const contextEnvelope = isRecord(request.contextEnvelope) ? request.contextEnvelope : {};
   const sessionFacts = isRecord(contextEnvelope.sessionFacts) ? contextEnvelope.sessionFacts : {};
@@ -841,6 +842,15 @@ export function buildAgentServerGenerationPrompt(request: {
     currentReferences: Array.isArray(sessionFacts.currentReferences) ? sessionFacts.currentReferences : undefined,
     currentReferenceDigests: Array.isArray(sessionFacts.currentReferenceDigests) ? sessionFacts.currentReferenceDigests : undefined,
     strictTaskFilesReason: request.strictTaskFilesReason,
+    repairContinuation: request.repairContinuation ? {
+      mode: 'minimal-single-stage-repair-continuation',
+      terminalPayloadContract: [
+        'Return only one terminal compact JSON object.',
+        'Allowed success shape: AgentServerGenerationResponse containing a minimal provider-route adapter task for the existing failed unit.',
+        'Allowed blocked shape: SciForge ToolPayload with executionUnits.status="failed-with-reason", failureReason, recoverActions, nextStep, and refs/digests-only follow-up.',
+        'No broad repair loop, full pipeline regeneration, or exploratory history scan.',
+      ],
+    } : undefined,
     outputContract: agentServerGenerationOutputContract(),
   };
   return [
@@ -870,6 +880,7 @@ export function buildAgentServerGenerationPrompt(request: {
     ...agentServerBibliographicPolicyLinesForRequest(request, scenarioFacts),
     ...agentServerArtifactSelectionPromptPolicyLines(),
     ...agentServerViewSelectionPromptPolicyLines(),
+    request.repairContinuation ? agentServerRepairContinuationHardStopPromptLines() : '',
     ...agentServerContinuationPromptPolicyLines(),
     ...agentServerRepairPromptPolicyLines(),
     ...agentServerGenerationOutputContractLines('missing-input'),
@@ -887,6 +898,20 @@ export function buildAgentServerGenerationPrompt(request: {
         ...agentServerToolPayloadShapeContract(),
       },
     }), null, 2),
+  ].join('\n');
+}
+
+function agentServerRepairContinuationHardStopPromptLines() {
+  return [
+    'Repair-continuation hard stop:',
+    '- This is not a fresh research, planning, or full pipeline generation turn.',
+    '- Perform one minimal stage only: continue or repair the existing failed task using the compact diagnostic refs already supplied.',
+    '- Do not explore broad history, enumerate prior task attempts, regenerate a complete pipeline, or deliberate through repeated tool loops.',
+    '- Read at most the specific code/stdout/stderr/output refs needed for the failed execution unit; prefer digests and refs over raw bodies.',
+    '- Terminal contract: return exactly one compact JSON object in one of two shapes only.',
+    '- Success shape: a runnable AgentServerGenerationResponse whose taskFiles implement a minimal provider-route adapter task for the existing failed execution unit; the adapter must use the supplied capability/provider route refs and must not rebuild the whole pipeline.',
+    '- Blocked shape: a valid SciForge ToolPayload with executionUnits.status="failed-with-reason", concise failureReason, recoverActions, nextStep, and evidence refs that request refs/digests-only follow-up.',
+    '- Stop after the terminal JSON. Do not start another repair pass, broad loop, or exploratory provider/status investigation.',
   ].join('\n');
 }
 
@@ -1022,6 +1047,11 @@ function compactContextEnvelopeForAgentServer(value: unknown) {
   const out: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
     if (key === 'continuityRules' || key === 'agentHarnessHandoff' || key === 'promptRenderPlan') continue;
+    if (key === 'agentServerCoreSnapshot') {
+      const snapshot = compactAgentServerCoreSnapshotForPrompt(entry);
+      if (snapshot) out.agentServerCoreSnapshot = snapshot;
+      continue;
+    }
     if (key === 'projectFacts') {
       const projectFacts = compactProjectFactsForAgentServer(entry);
       if (projectFacts) out.projectFacts = projectFacts;
@@ -1040,6 +1070,44 @@ function compactContextEnvelopeForAgentServer(value: unknown) {
     out[key] = sanitizePromptHandoffValue(entry, key);
   }
   return out;
+}
+
+function compactAgentServerCoreSnapshotForPrompt(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  const session = isRecord(value.session) ? value.session : {};
+  const currentWork = isRecord(value.currentWork) ? value.currentWork : {};
+  const recentTurns = toRecordList(value.recentTurns);
+  const compactionTags = toRecordList(currentWork.compactionTags);
+  return {
+    source: stringField(value.source) ?? 'AgentServer Core /context',
+    session: {
+      id: stringField(session.id),
+      status: stringField(session.status),
+      updatedAt: stringField(session.updatedAt),
+    },
+    recentTurnRefs: recentTurns.slice(-6).map((turn) => ({
+      turnNumber: typeof turn.turnNumber === 'number' ? turn.turnNumber : undefined,
+      role: stringField(turn.role),
+      runId: stringField(turn.runId),
+      contentRef: stringField(turn.contentRef),
+      contentOmitted: true,
+      contentDigest: typeof turn.content === 'string' ? hashJson(turn.content) : undefined,
+      contentChars: typeof turn.content === 'string' ? turn.content.length : undefined,
+      createdAt: stringField(turn.createdAt),
+    })),
+    currentWork: {
+      entryCount: typeof currentWork.entryCount === 'number' ? currentWork.entryCount : undefined,
+      rawTurnCount: typeof currentWork.rawTurnCount === 'number' ? currentWork.rawTurnCount : undefined,
+      compactionTags: compactionTags.slice(-8).map((entry) => ({
+        kind: stringField(entry.kind),
+        id: stringField(entry.id),
+        turns: stringField(entry.turns),
+        archived: entry.archived === true ? true : undefined,
+        summaryDigest: hashJson(entry.summary),
+        summaryItems: Array.isArray(entry.summary) ? entry.summary.length : undefined,
+      })),
+    },
+  };
 }
 
 function compactProjectFactsForAgentServer(value: unknown) {
@@ -1140,7 +1208,22 @@ function sanitizePromptHandoffValue(value: unknown, path = ''): unknown {
 }
 
 function isBodyCarrierKey(key: string) {
-  return runtimePayloadKeyLooksLikeBodyCarrier(key);
+  if (runtimePayloadKeyLooksLikeBodyCarrier(key)) return true;
+  const lower = key.toLowerCase();
+  if ([
+    'code',
+    'sourcecode',
+    'tasksource',
+    'generatedsource',
+    'generatedtasksource',
+    'filecontent',
+    'filecontents',
+    'taskfiles',
+    'output',
+    'result',
+    'finaltext',
+  ].includes(lower)) return true;
+  return /(?:generated|task|file|agentserver).*?(?:code|source|content|output|result|text)$/i.test(key);
 }
 
 function promptBodyCarrierSummary(key: string, value: unknown) {

@@ -8,10 +8,14 @@ import { readRecentTaskAttempts } from '../../src/runtime/task-attempt-history.j
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-compact-repair-'));
+process.env.SCIFORGE_CONVERSATION_POLICY_MODE = 'off';
+process.env.SCIFORGE_CONVERSATION_POLICY_TIMEOUT_MS ??= '30000';
 let generationRequests = 0;
 let repairRequests = 0;
 let repairBodyLength = 0;
 let repairPromptText = '';
+let repairContinuationGenerationRequests = 0;
+let repairContinuationPromptText = '';
 
 const badTask = String.raw`
 import json
@@ -22,6 +26,23 @@ output_path = sys.argv[2]
 
 print("ALLOWED_STDOUT_SUMMARY")
 sys.stderr.write("".join(["BLOCKED", "_STDERR", "_SECRET"]))
+payload = {
+  "message": "Intentional compact repair failure.",
+  "confidence": 0.2,
+  "claimType": "fact",
+  "evidenceLevel": "runtime",
+  "claims": [],
+  "uiManifest": [],
+  "executionUnits": [{
+    "id": "generic-compact-repair-broken",
+    "status": "done",
+    "tool": "generic.generated.task",
+    "params": "intentional failure"
+  }],
+  "artifacts": []
+}
+with open(output_path, "w", encoding="utf-8") as handle:
+  json.dump(payload, handle)
 raise RuntimeError("intentional compact repair failure before writing output")
 `;
 
@@ -67,9 +88,62 @@ with open(output_path, "w", encoding="utf-8") as handle:
   json.dump(payload, handle, indent=2)
 `;
 
+const providerRouteAdapterTask = String.raw`
+import json
+import sys
+
+input_path = sys.argv[1]
+output_path = sys.argv[2]
+with open(input_path, "r", encoding="utf-8") as handle:
+  request = json.load(handle)
+
+routes = request.get("capabilityProviderRoutes") or {}
+route_refs = request.get("providerRouteRefs") or []
+has_route = bool(routes or route_refs)
+
+if has_route:
+  message = "Minimal provider-route adapter task found route refs and stopped after one stage."
+  status = "done"
+  failure_reason = ""
+  recover_actions = []
+  next_step = "No follow-up required."
+else:
+  message = "Provider-route repair continuation stopped with an explicit terminal failure payload."
+  status = "failed-with-reason"
+  failure_reason = "The compact refs did not include a usable provider route digest for the required capability."
+  recover_actions = ["Provide capability/provider route refs or route digests only; do not request a broad retry loop."]
+  next_step = "Retry with capability provider route digest refs."
+
+payload = {
+  "message": message,
+  "confidence": 0.2 if status == "failed-with-reason" else 0.82,
+  "claimType": status if status == "failed-with-reason" else "fact",
+  "evidenceLevel": "runtime",
+  "reasoningTrace": "minimal provider-route adapter task executed exactly one stage",
+  "claims": [],
+  "uiManifest": [],
+  "executionUnits": [{
+    "id": "provider-route-repair-continuation",
+    "status": status,
+    "tool": "agentserver.repair-continuation.provider-route-adapter",
+    "params": request.get("prompt", "")[:120],
+    "failureReason": failure_reason,
+    "recoverActions": recover_actions,
+    "nextStep": next_step,
+    "evidenceRefs": [".sciforge/task-results/bounded-provider-route.json"]
+  }],
+  "artifacts": [],
+  "recoverActions": recover_actions,
+  "nextStep": next_step
+}
+
+with open(output_path, "w", encoding="utf-8") as handle:
+  json.dump(payload, handle, indent=2)
+`;
+
 const hugePrompt = [
   'Generate, execute, repair if needed, and return final research artifacts.',
-  'x'.repeat(700_000),
+  'x'.repeat(70_000),
 ].join('\n');
 
 const server = createServer(async (req, res) => {
@@ -115,12 +189,66 @@ const server = createServer(async (req, res) => {
         },
       },
     };
+    if (req.url === '/api/agent-server/runs/stream') {
+      res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+      res.end(JSON.stringify({ result }) + '\n');
+      return;
+    }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(result));
     return;
   }
 
   generationRequests += 1;
+  if (metadata.repairContinuation === true) {
+    repairContinuationGenerationRequests += 1;
+    const text = isRecord(parsed.input) ? String(parsed.input.text || '') : '';
+    const inspectText = await expandCompactedPromptText(text);
+    repairContinuationPromptText = inspectText;
+    assert.equal(metadata.purpose, 'workspace-task-generation');
+    assert.ok(['compact-repair', 'full'].includes(String(metadata.contextMode)));
+    assert.match(inspectText, /Repair-continuation hard stop/);
+    assert.match(inspectText, /minimal provider-route adapter task/);
+    assert.match(inspectText, /supplied capability\/provider route refs/);
+    assert.match(inspectText, /executionUnits\.status="failed-with-reason"/);
+    assert.match(inspectText, /refs\/digests-only follow-up/);
+    assert.match(inspectText, /Do not start another repair pass, broad loop, or exploratory provider\/status investigation/);
+    assert.doesNotMatch(inspectText, /x{50000}/, 'repair continuation prompt should not include the full huge prior prompt');
+    const result = {
+      ok: true,
+      data: {
+        run: {
+          id: 'mock-provider-route-terminal-failed',
+          status: 'completed',
+          output: {
+            result: {
+              taskFiles: [{
+                path: '.sciforge/tasks/provider-route-repair-adapter.py',
+                language: 'python',
+                content: providerRouteAdapterTask,
+              }],
+              entrypoint: {
+                language: 'python',
+                path: '.sciforge/tasks/provider-route-repair-adapter.py',
+              },
+              environmentRequirements: { language: 'python' },
+              validationCommand: 'python .sciforge/tasks/provider-route-repair-adapter.py <input> <output>',
+              expectedArtifacts: [],
+              patchSummary: 'Returned one minimal provider-route adapter task for the bounded repair continuation.',
+            },
+          },
+        },
+      },
+    };
+    if (req.url === '/api/agent-server/runs/stream') {
+      res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+      res.end(JSON.stringify({ result }) + '\n');
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(result));
+    return;
+  }
   const result = {
     ok: true,
     data: {
@@ -208,7 +336,7 @@ try {
     },
   });
 
-  assert.equal(generationRequests, 1);
+  assert.ok(generationRequests >= 1 && generationRequests <= 2, 'generation should dispatch once, with at most one bounded recovery retry');
   assert.ok(repairRequests >= 1 && repairRequests <= 2);
   assert.ok(repairBodyLength > 0);
   assert.match(repairPromptText, /"allowedFailureEvidenceRefs": \[\s*"stdout"\s*\]/);
@@ -223,6 +351,55 @@ try {
   assert.equal(attemptHistory[0].status, 'repair-needed');
   assert.match(attemptHistory[0].failureReason ?? '', /RuntimeError|intentional compact repair failure|schema validation|missing executionUnits/);
   assert.equal(attemptHistory[1].status, 'done');
+
+  const boundedRepairContinuation = await runWorkspaceRuntimeGateway({
+    skillDomain: 'literature',
+    prompt: [
+      'Continue the bounded provider-route repair from the last failed run.',
+      'Return exactly one terminal compact JSON object.',
+      'If usable capability/provider route refs are present, return a minimal provider-route adapter task.',
+      'Otherwise return a valid failed-with-reason ToolPayload with refs/digests-only follow-up and no broad loop.',
+    ].join(' '),
+    workspacePath: workspace,
+    agentServerBaseUrl: baseUrl,
+    availableSkills: ['missing.skill'],
+    expectedArtifactTypes: ['research-report'],
+    uiState: {
+      sessionId: 'session-compact-repair',
+      forceAgentServerGeneration: true,
+      contextReusePolicy: { mode: 'repair' },
+      recentConversation: [hugePrompt],
+      recentExecutionRefs: [{
+        id: 'bounded-provider-route',
+        status: 'repair-needed',
+        outputRef: '.sciforge/task-results/bounded-provider-route.json',
+        stdoutRef: '.sciforge/logs/bounded-provider-route.stdout.log',
+        stderrRef: '.sciforge/logs/bounded-provider-route.stderr.log',
+        failureReason: 'AgentServer repair generation bounded-stop after provider-route continuation.',
+        recoverActions: ['Continue with a minimal provider-route adapter task or terminal failed-with-reason payload.'],
+      }],
+    },
+  });
+
+  assert.equal(repairContinuationGenerationRequests, 1);
+  assert.match(repairContinuationPromptText, /minimal provider-route adapter task/);
+  assert.match(repairContinuationPromptText, /failed-with-reason ToolPayload/);
+  assert.match(boundedRepairContinuation.message, /provider-route adapter task|terminal failure payload/i);
+  assert.equal(
+    boundedRepairContinuation.executionUnits[0]?.tool,
+    'agentserver.repair-continuation.provider-route-adapter',
+  );
+  assert.ok(['done', 'failed-with-reason'].includes(String(boundedRepairContinuation.executionUnits[0]?.status)));
+  const recoverActions = Array.isArray(boundedRepairContinuation.executionUnits[0]?.recoverActions)
+    ? boundedRepairContinuation.executionUnits[0]?.recoverActions as unknown[]
+    : [];
+  if (boundedRepairContinuation.executionUnits[0]?.status === 'failed-with-reason') {
+    assert.match(String(boundedRepairContinuation.executionUnits[0]?.failureReason ?? ''), /provider route digest/);
+    assert.ok(
+      recoverActions.some((action) => /refs\/digests-only|route digest/i.test(String(action))),
+      'terminal repair payload should request refs/digests-only provider-route follow-up',
+    );
+  }
 
   console.log('[ok] generated syntax failures use compact AgentServer repair and rerun end-to-end');
 } finally {

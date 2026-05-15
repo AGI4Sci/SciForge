@@ -285,6 +285,113 @@ test('next-turn payload prefers conversation projection and keeps raw execution 
   assert.doesNotMatch(serialized, /RAW_EXECUTION_PARAMS large params/);
 });
 
+test('next-turn continuation payload omits prior message expandable and raw task payloads', () => {
+  const rawGeneratedTask = [
+    'PYTHON_RAW_LEAK',
+    'import requests',
+    'import urllib.request',
+    'requests.get("https://example.invalid/raw-generated-task")',
+    'urllib.request.urlopen("https://example.invalid/debug-trace")',
+  ].join('\n').repeat(200);
+  const priorScenario = {
+    ...message('msg-prior-scenario', 'scenario', 'Previous answer with refs only.', '2026-05-07T00:00:00.000Z'),
+    expandable: rawGeneratedTask,
+    references: [{
+      id: 'ref-prior-message',
+      kind: 'message' as const,
+      title: 'prior message',
+      ref: 'message:msg-prior-scenario',
+      summary: 'prior projected answer',
+      payload: {
+        taskFiles: rawGeneratedTask,
+        debugTrace: rawGeneratedTask,
+      },
+    }],
+    objectReferences: [{ id: 'obj-partial', kind: 'artifact' as const, ref: 'artifact:partial-report', title: 'Partial report' }],
+    goalSnapshot: {
+      ...goalSnapshot,
+      turnId: 'turn-prior',
+      rawPrompt: rawGeneratedTask,
+    },
+    acceptance: {
+      pass: false,
+      severity: 'repairable' as const,
+      checkedAt: '2026-05-07T00:05:00.000Z',
+      failures: [{
+        code: 'needs-repair',
+        detail: rawGeneratedTask,
+        repairAction: 'Continue from projection refs.',
+      }],
+      objectReferences: [{ id: 'obj-partial', kind: 'artifact' as const, ref: 'artifact:partial-report', title: 'Partial report' }],
+      repairPrompt: rawGeneratedTask,
+    },
+    taskFiles: {
+      'generated_task.py': rawGeneratedTask,
+    },
+    debugTrace: rawGeneratedTask,
+  } as SciForgeMessage & { taskFiles: unknown; debugTrace: string };
+  const nextUser = message('msg-next-user', 'user', 'please repair from the saved projection', '2026-05-07T01:00:00.000Z');
+  const projectedRun: SciForgeRun = {
+    id: 'run-continuation',
+    scenarioId: 'literature-evidence-review',
+    status: 'failed',
+    prompt: 'old prompt should be digest only',
+    response: rawGeneratedTask,
+    createdAt: '2026-05-07T00:10:00.000Z',
+    raw: {
+      resultPresentation: {
+        conversationProjection: {
+          schemaVersion: 'sciforge.conversation-projection.v1',
+          conversationId: 'session-1',
+          currentTurn: { id: 'turn-continuation', prompt: 'repair handoff' },
+          visibleAnswer: {
+            status: 'repair-needed',
+            text: 'Partial report is available via artifact refs.',
+            artifactRefs: ['artifact:partial-report'],
+            diagnostic: 'AgentServer generation stopped by convergence guard after token limit.',
+          },
+          activeRun: { id: 'run-continuation', status: 'repair-needed' },
+          artifacts: [{ ref: 'artifact:partial-report', digest: 'sha256-partial', label: 'Partial report' }],
+          executionProcess: [],
+          recoverActions: ['Resume from projection and artifact refs; do not inline generated task source.'],
+          verificationState: { status: 'failed', verifierRef: 'verification:repair-handoff', verdict: 'fail' },
+          auditRefs: ['artifact:partial-report', 'execution-unit:EU-repair-handoff', 'file:.sciforge/repair-summary.json'],
+        },
+      },
+      taskFiles: { 'generated_task.py': rawGeneratedTask },
+      requests: rawGeneratedTask,
+    },
+    objectReferences: [{ id: 'obj-run-partial', kind: 'artifact', ref: 'artifact:partial-report', title: 'Partial report' }],
+  };
+
+  const payload = requestPayloadForTurn(session({
+    messages: [priorScenario, nextUser],
+    runs: [projectedRun],
+  }), nextUser, []);
+  const serialized = JSON.stringify(payload);
+  const priorPayload = payload.messages.find((item) => item.id === priorScenario.id) as (SciForgeMessage & {
+    contentDigest?: { hash?: string };
+    taskFiles?: unknown;
+    debugTrace?: unknown;
+  }) | undefined;
+  const projectionUnit = payload.executionUnits.find((unit) => unit.tool === 'conversation.projection.continuation');
+  const rawRun = payload.runs[0]?.raw as { projectionAudit?: { auditRefs?: string[] } } | undefined;
+
+  assert.equal(priorPayload?.expandable, undefined);
+  assert.equal(priorPayload?.taskFiles, undefined);
+  assert.equal(priorPayload?.debugTrace, undefined);
+  assert.match(priorPayload?.content ?? '', /previous-message omitted/);
+  assert.ok(priorPayload?.contentDigest?.hash);
+  assert.match(projectionUnit?.params ?? '', /conversation-projection-continuation-set/);
+  assert.match(projectionUnit?.params ?? '', /convergence guard/);
+  assert.match(projectionUnit?.params ?? '', /artifact:partial-report/);
+  assert.match(rawRun?.projectionAudit?.auditRefs?.join('\n') ?? '', /repair-summary\.json|EU-repair-handoff/);
+  assert.doesNotMatch(serialized, /PYTHON_RAW_LEAK/);
+  assert.doesNotMatch(serialized, /requests\.get/);
+  assert.doesNotMatch(serialized, /urllib\.request/);
+  assert.doesNotMatch(serialized, /generated_task\.py/);
+});
+
 test('rolls back an edited user message and prunes later run-owned state', () => {
   const before: RuntimeExecutionUnit = {
     id: 'unit-before',

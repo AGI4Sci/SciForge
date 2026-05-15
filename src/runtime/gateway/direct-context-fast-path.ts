@@ -260,11 +260,14 @@ function directContextIntent(prompt: string): DirectContextGateDecision['audit']
   const hasCapabilityStatusIntent = /(?:skill|tool|capabilit|provider|registry|web[-_\s]?search|web[-_\s]?fetch|工具|能力|搜索工具|AgentServer worker)/i.test(prompt)
     && /(?:activated|active|available|enabled|configured|status|source|registry|provider|有哪些|有没有|可用|激活|启用|配置|来源|状态)/i.test(prompt);
   const hasFreshExecutionIntent = /(?:latest|today|news|search|download|fetch|rerun|run again|execute|查找|检索|搜索|最新|今天|下载|执行|重跑|继续跑|联网|arxiv)/i.test(prompt);
-  const hasExplicitFreshAction = /(?:download|fetch\s+https?:|rerun|run again|execute|查找|检索|搜索|下载|执行|重跑|继续跑|联网|arxiv)/i.test(prompt);
+  const hasExplicitFreshAction = /(?:download|fetch\s+https?:|\bsearch\b(?![-_\s]?(?:provider|route|tool|status))|rerun|run again|execute|查找|检索|搜索|下载|执行|重跑|继续跑|联网|arxiv)/i.test(prompt);
+  const hasBackendOrRepairExecutionIntent = /(?:create|generate|build|produce|make|write|run|execute)\b.{0,120}\b(?:task|adapter|result|payload|artifact|report|run|repair)|\b(?:task|adapter|result|payload|artifact|report|run|repair)\b.{0,120}\b(?:create|generate|build|produce|make|write|run|execute)|(?:return|emit|produce).{0,120}(?:failed[-\s]?with[-\s]?reason|repair-needed|failure reason|recover actions|next step).{0,120}(?:tool payload|payload)|(?:continue|repair).{0,80}(?:last bounded stop|failed run|failure|bounded-stop|adapter task|repair task)|(?:task|adapter|repair)\b.{0,80}\bcontinue|最小.{0,40}(?:任务|适配器|结果)|(?:创建|生成|构建|继续|执行).{0,80}(?:任务|适配器|结果|产物|修复)/i.test(prompt);
   const conditionalNoFreshExecution = /(?:only if needed|if needed|无需|不需要|不要).*?(?:fetch|search|rerun|run|execute|检索|搜索|重跑|执行|调用)|(?:fetch|search|rerun|run|execute|检索|搜索|重跑|执行|调用).{0,120}(?:only if needed|if needed|无需|不需要)/i.test(prompt);
-  if (/(?:do not|don't|no)\s+(?:rerun|run|execute|dispatch|call)|不要(?:重跑|执行|调用|启动)|只基于当前|current refs only/i.test(prompt)) {
+  const hasNoExecutionDirective = /(?:do not|don't|no)\s+(?:rerun|run|execute|dispatch|call)|不要(?:重跑|执行|调用|启动)|只基于当前|current refs only/i.test(prompt);
+  if (hasNoExecutionDirective && !hasBackendOrRepairExecutionIntent) {
     return 'context-summary';
   }
+  if (hasBackendOrRepairExecutionIntent) return 'fresh-execution';
   if (hasCapabilityStatusIntent && !(hasExplicitFreshAction && !conditionalNoFreshExecution)) return 'capability-status';
   if (hasFreshExecutionIntent) return 'fresh-execution';
   if (/(?:fail|failed|failure|error|diagnos|stderr|stdout|为什么|失败|原因|报错|日志)/i.test(prompt)) return 'run-diagnostic';

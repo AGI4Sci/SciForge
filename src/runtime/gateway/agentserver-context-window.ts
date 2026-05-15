@@ -566,11 +566,12 @@ export function agentServerAgentId(request: GatewayRequest, _purpose: string) {
 export function agentServerContextPolicy(request: GatewayRequest) {
   const hasSession = typeof request.uiState?.sessionId === 'string' && request.uiState.sessionId.trim().length > 0;
   const policyMode = agentServerContextPolicyMode(request);
+  const repairMode = policyMode === 'repair';
   const isolatedReferenceTurn = currentTurnReferences(request).length > 0 && policyMode !== 'continue' && policyMode !== 'repair';
   const useContinuity = requestNeedsAgentServerContinuity(request);
   return {
-    includeCurrentWork: hasSession && useContinuity && !isolatedReferenceTurn,
-    includeRecentTurns: hasSession && useContinuity && !isolatedReferenceTurn,
+    includeCurrentWork: hasSession && useContinuity && !isolatedReferenceTurn && !repairMode,
+    includeRecentTurns: hasSession && useContinuity && !isolatedReferenceTurn && !repairMode,
     includePersistent: false,
     includeMemory: false,
     persistRunSummary: hasSession && useContinuity && !isolatedReferenceTurn,

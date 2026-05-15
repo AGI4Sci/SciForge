@@ -4,10 +4,12 @@ import test from 'node:test';
 import { buildSilentStreamDecisionRecord } from '@sciforge-ui/runtime-contract';
 import type { GatewayRequest } from '../runtime-types.js';
 import {
+  AgentServerRepairContinuationBoundedStopError,
   agentServerGenerationTokenGuardLimit,
   agentServerSilentStreamGuardAudit,
   currentReferenceDigestSilentGuardMs,
   currentReferenceDigestSilentGuardPolicy,
+  isAgentServerRepairContinuationBoundedStopError,
   readAgentServerRunStream,
   type AgentServerSilentStreamGuardAudit,
 } from './agentserver-stream.js';
@@ -135,6 +137,66 @@ test('generation token guard applies to all AgentServer streams and tightens whe
     /convergence guard after 310001 total tokens/,
   );
   assert.match(guardMessage, /limit 300000/);
+});
+
+test('repair continuation generation guard fails before broad convergence loop budget', async () => {
+  const request = {
+    skillDomain: 'literature',
+    prompt: 'continue the failed run using compact repair refs',
+    artifacts: [],
+    maxContextWindowTokens: 200_000,
+    uiState: {
+      contextReusePolicy: { mode: 'repair' },
+      recentExecutionRefs: [{
+        id: 'EU-literature-failed',
+        status: 'failed-with-reason',
+        outputRef: '.sciforge/task-results/failed.json',
+        stderrRef: '.sciforge/task-results/failed.stderr.txt',
+        failureReason: 'prior AgentServer generation stopped by convergence guard',
+      }],
+    },
+  } satisfies GatewayRequest;
+  assert.equal(agentServerGenerationTokenGuardLimit(request, { repairContinuation: true }), 60_000);
+  assert.ok(agentServerGenerationTokenGuardLimit(request, { repairContinuation: true }) < agentServerGenerationTokenGuardLimit(request));
+
+  const encoder = new TextEncoder();
+  const response = new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(`${JSON.stringify({
+        event: {
+          type: 'usage-update',
+          usage: { input: 55_000, output: 5_001, total: 60_001, provider: 'codex' },
+        },
+      })}\n`));
+      controller.close();
+    },
+  }));
+  let guardMessage = '';
+  let thrown: unknown;
+  await assert.rejects(
+    async () => {
+      try {
+        await readAgentServerRunStream(response, () => {}, {
+          maxTotalUsage: agentServerGenerationTokenGuardLimit(request, { repairContinuation: true }),
+          convergenceGuardMode: 'repair-continuation',
+          onGuardTrip: (message) => {
+            guardMessage = message;
+          },
+        });
+      } catch (error) {
+        thrown = error;
+        throw error;
+      }
+    },
+    /repair generation bounded-stop after 60001 total tokens/,
+  );
+  assert.ok(thrown instanceof AgentServerRepairContinuationBoundedStopError);
+  assert.equal(isAgentServerRepairContinuationBoundedStopError(thrown), true);
+  assert.equal(thrown.totalUsage, 60_001);
+  assert.equal(thrown.limit, 60_000);
+  assert.match(guardMessage, /limit 60000/);
+  assert.match(guardMessage, /failed-with-reason ToolPayload/);
+  assert.match(guardMessage, /refs\/digests-only follow-up/);
 });
 
 test('request failure message preserves silent stream guard diagnostics', () => {

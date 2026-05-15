@@ -16,6 +16,7 @@ export async function readAgentServerRunStream(
   onEvent: (event: unknown) => void,
   options: {
     maxTotalUsage?: number;
+    convergenceGuardMode?: 'generation' | 'repair-continuation';
     onGuardTrip?: (message: string) => void;
     maxSilentMs?: number;
     silencePolicy?: AgentServerStreamSilencePolicy;
@@ -72,8 +73,11 @@ export async function readAgentServerRunStream(
       onEvent(event);
       const totalUsage = agentServerEventTotalUsage(event);
       if (options.maxTotalUsage && totalUsage && totalUsage > options.maxTotalUsage) {
-        const message = `AgentServer generation stopped by convergence guard after ${totalUsage} total tokens (limit ${options.maxTotalUsage}); use bounded session refs, current-reference digests, or a smaller task plan instead of an unbounded generation loop.`;
+        const message = convergenceGuardMessage(totalUsage, options.maxTotalUsage, options.convergenceGuardMode);
         options.onGuardTrip?.(message);
+        if (options.convergenceGuardMode === 'repair-continuation') {
+          throw new AgentServerRepairContinuationBoundedStopError(message, totalUsage, options.maxTotalUsage);
+        }
         throw new Error(message);
       }
     }
@@ -113,6 +117,33 @@ export async function readAgentServerRunStream(
     streamText: streamTextParts.join(''),
     workEvidence: dedupeWorkEvidence(workEvidence),
   };
+}
+
+export class AgentServerRepairContinuationBoundedStopError extends Error {
+  readonly code = 'AGENTSERVER_REPAIR_CONTINUATION_BOUNDED_STOP';
+  readonly totalUsage: number;
+  readonly limit: number;
+
+  constructor(message: string, totalUsage: number, limit: number) {
+    super(message);
+    this.name = 'AgentServerRepairContinuationBoundedStopError';
+    this.totalUsage = totalUsage;
+    this.limit = limit;
+  }
+}
+
+export function isAgentServerRepairContinuationBoundedStopError(error: unknown): error is AgentServerRepairContinuationBoundedStopError {
+  if (error instanceof AgentServerRepairContinuationBoundedStopError) return true;
+  if (!isRecord(error)) return false;
+  return error.code === 'AGENTSERVER_REPAIR_CONTINUATION_BOUNDED_STOP'
+    || String(error.message || '').includes('AgentServer repair generation bounded-stop');
+}
+
+function convergenceGuardMessage(totalUsage: number, limit: number, mode: 'generation' | 'repair-continuation' = 'generation') {
+  if (mode === 'repair-continuation') {
+    return `AgentServer repair generation bounded-stop after ${totalUsage} total tokens (limit ${limit}); return a minimal single-stage repair/continue response, or a failed-with-reason ToolPayload with recoverActions requesting refs/digests-only follow-up instead of an unbounded repair loop.`;
+  }
+  return `AgentServer generation stopped by convergence guard after ${totalUsage} total tokens (limit ${limit}); use bounded session refs, current-reference digests, or a smaller task plan instead of an unbounded generation loop.`;
 }
 
 async function readStreamChunkWithSilentTimeout(
@@ -250,11 +281,16 @@ export function currentReferenceDigestGuardLimit(request: GatewayRequest) {
   return Math.max(40_000, Math.min(80_000, Math.floor(configured * 0.4)));
 }
 
-export function agentServerGenerationTokenGuardLimit(request: GatewayRequest) {
+export function agentServerGenerationTokenGuardLimit(request: GatewayRequest, options: { repairContinuation?: boolean } = {}) {
   const configured = typeof request.maxContextWindowTokens === 'number' && Number.isFinite(request.maxContextWindowTokens)
     ? request.maxContextWindowTokens
     : 200_000;
   const generalLimit = Math.max(120_000, Math.floor(configured * 1.5));
+  if (options.repairContinuation) {
+    const repairLimit = Math.max(40_000, Math.min(90_000, Math.floor(configured * 0.3)));
+    const digestLimit = currentReferenceDigestGuardLimit(request);
+    return digestLimit ? Math.min(repairLimit, digestLimit) : repairLimit;
+  }
   const digestLimit = currentReferenceDigestGuardLimit(request);
   return digestLimit ? Math.min(generalLimit, digestLimit) : generalLimit;
 }

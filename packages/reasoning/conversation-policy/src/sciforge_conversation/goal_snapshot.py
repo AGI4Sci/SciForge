@@ -29,6 +29,17 @@ CONTEXT_ONLY_HINTS = re.compile(
     re.I,
 )
 AGENTSERVER_HINTS = re.compile(r"\bagent\s*server\b|\bagentserver\b|AgentServer", re.I)
+SCOPED_NO_RERUN_HINTS = re.compile(
+    r"\b(?:do\s+not|don't|without|no)\s+re-?run\s+(?:unrelated|irrelevant|unnecessary|unchanged|completed|same|duplicate)\b"
+    r"|不要重跑(?:无关|不相关|不必要|已完成|相同|重复)(?:的)?(?:步骤|任务|工作|部分|路径)?"
+    r"|不要(?:重复|重新)(?:执行|运行)(?:无关|不相关|不必要|已完成|相同|重复)(?:的)?(?:步骤|任务|工作|部分|路径)?",
+    re.I,
+)
+EXECUTION_CONTINUATION_HINTS = re.compile(
+    r"\b(?:continue|complete|finish|repair|fix|resume|use|invoke|call|run|execute)\b"
+    r"|继续|完成|修正|修复|恢复|使用|调用|执行|运行|检索|搜索|fetch|provider\s+route|provider",
+    re.I,
+)
 
 REF_PATTERN = re.compile(
     r"(?P<ref>"
@@ -175,7 +186,7 @@ def _infer_freshness(prompt: str, task_relation: str) -> dict[str, str] | None:
 
 
 def _turn_execution_constraints(prompt: str, explicit_refs: list[str], request: Mapping[str, Any] | Any) -> dict[str, Any] | None:
-    no_execution = bool(NO_EXECUTION_HINTS.search(prompt))
+    no_execution = _has_global_no_execution_directive(prompt)
     context_only = bool(CONTEXT_ONLY_HINTS.search(prompt))
     if not no_execution and not context_only:
         return None
@@ -213,6 +224,14 @@ def _turn_execution_constraints(prompt: str, explicit_refs: list[str], request: 
             "runCount": len(runs) if isinstance(runs, list) else 0,
         },
     }
+
+
+def _has_global_no_execution_directive(prompt: str) -> bool:
+    if not NO_EXECUTION_HINTS.search(prompt):
+        return False
+    if SCOPED_NO_RERUN_HINTS.search(prompt) and EXECUTION_CONTINUATION_HINTS.search(prompt):
+        return False
+    return True
 
 
 def _extract_refs(prompt: str) -> list[str]:

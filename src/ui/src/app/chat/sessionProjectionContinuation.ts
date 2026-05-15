@@ -179,8 +179,9 @@ function projectionContinuationParams(contexts: ProjectionContinuationContext[])
     sourceRunId: context.summary.sourceRunId,
     status: context.summary.status,
     currentTurnId: context.summary.currentTurnId,
+    diagnostic: clipOptionalText(context.summary.diagnostic, 120),
     artifactRefs: context.summary.artifactRefs.slice(0, 4),
-    recoverActions: [],
+    recoverActions: context.summary.recoverActions.map((action) => clipText(action, 120)).slice(0, 2),
     selectedRefs: context.summary.selectedRefs.map((ref) => ({
       id: ref.id,
       kind: ref.kind,

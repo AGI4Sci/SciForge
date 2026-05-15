@@ -217,7 +217,7 @@ test('context envelope and AgentServer prompt keep verification bodies as bounde
     },
   } as GatewayRequest;
 
-  const envelope = buildContextEnvelope(request, { workspace: '/tmp/sciforge-test' });
+  const envelope = buildContextEnvelope(request, { workspace: '/tmp/sciforge-test' }) as Record<string, unknown>;
   const envelopeJson = JSON.stringify(envelope);
   assert.doesNotMatch(envelopeJson, /RAW_VERIFICATION_SENTINEL/);
   assert.match(envelopeJson, /verification-payload-body/);
@@ -239,6 +239,119 @@ test('context envelope and AgentServer prompt keep verification bodies as bounde
   assert.doesNotMatch(prompt, /RAW_VERIFICATION_SENTINEL/);
   assert.match(prompt, /prompt-handoff/);
   assert.match(prompt, /verify-current\.json/);
+});
+
+test('repair AgentServer prompt omits raw core snapshot turn and generated task bodies', () => {
+  const rawGeneratedTask = [
+    'RAW_GENERATED_TASK_BODY_SHOULD_NOT_LEAK',
+    'OLD_TASK_SOURCE_SHOULD_NOT_LEAK',
+    'import requests',
+    'print("debug body")',
+  ].join('\n');
+  const rawAgentServerOutput = [
+    'RAW_AGENTSERVER_OUTPUT_SHOULD_NOT_LEAK',
+    'AgentServer returned a verbose failed generation payload.',
+    rawGeneratedTask.repeat(120),
+  ].join('\n');
+  const request = {
+    skillDomain: 'literature',
+    prompt: '请复用失败诊断继续，修正生成任务并完成中文证据摘要。',
+    artifacts: [],
+    uiState: {
+      sessionId: 'session-repair-slim',
+      contextReusePolicy: {
+        mode: 'repair',
+        historyReuse: { allowed: true },
+      },
+      recentExecutionRefs: [{
+        id: 'EU-failed',
+        status: 'repair-needed',
+        codeRef: '.sciforge/tasks/generated-literature.py',
+        stdoutRef: '.sciforge/logs/generated.stdout.log',
+        stderrRef: '.sciforge/logs/generated.stderr.log',
+        outputRef: '.sciforge/task-results/generated.json',
+        failureReason: 'Generated task used direct external network APIs instead of provider route.',
+      }],
+      recentRuns: [{
+        id: 'run-old-repair',
+        status: 'failed-with-reason',
+        codeRef: '.sciforge/tasks/generated-literature.py',
+        stdoutRef: '.sciforge/logs/generated.stdout.log',
+        stderrRef: '.sciforge/logs/generated.stderr.log',
+        outputRef: '.sciforge/task-results/generated.json',
+        failureReason: 'Browser repair failed after provider route returned empty result.',
+        recoverActions: ['Use provider-first browser route and rerun verifier.'],
+        providerPolicySummary: {
+          route: 'browser.provider-first',
+          summary: 'Provider-first repair remains required for browser continuation.',
+        },
+        taskFiles: [{
+          path: '.sciforge/tasks/generated-literature.py',
+          content: rawGeneratedTask,
+        }],
+        output: {
+          result: rawAgentServerOutput,
+          text: rawAgentServerOutput,
+        },
+      }],
+    },
+  } as GatewayRequest;
+  const envelope = buildContextEnvelope(request, { workspace: '/tmp/sciforge-test' }) as Record<string, unknown>;
+  envelope.agentServerCoreSnapshot = {
+    source: 'AgentServer Core /context',
+    session: { id: 'session-repair-slim', status: 'active' },
+    recentTurns: [{
+      turnNumber: 4,
+      role: 'assistant',
+      runId: 'run-old',
+      contentRef: '.sciforge/debug/agentserver/raw-generation.json',
+      content: rawGeneratedTask,
+    }],
+    currentWork: {
+      entryCount: 2,
+      rawTurnCount: 1,
+      compactionTags: [{
+        kind: 'compaction',
+        id: 'compact-old',
+        summary: [rawGeneratedTask],
+      }],
+    },
+  };
+
+  const prompt = buildAgentServerGenerationPrompt({
+    prompt: request.prompt,
+    skillDomain: request.skillDomain,
+    contextEnvelope: envelope,
+    workspaceTreeSummary: [],
+    availableSkills: [],
+    artifactSchema: {},
+    uiManifestContract: {},
+    uiStateSummary: request.uiState,
+    artifacts: request.artifacts,
+    recentExecutionRefs: records(request.uiState?.recentExecutionRefs),
+    priorAttempts: [],
+    repairContinuation: true,
+  });
+
+  assert.doesNotMatch(prompt, /RAW_GENERATED_TASK_BODY_SHOULD_NOT_LEAK|OLD_TASK_SOURCE_SHOULD_NOT_LEAK|RAW_AGENTSERVER_OUTPUT_SHOULD_NOT_LEAK|import requests|debug body/);
+  assert.match(prompt, /Repair-continuation hard stop/);
+  assert.match(prompt, /one minimal stage only/);
+  assert.match(prompt, /minimal provider-route adapter task/);
+  assert.match(prompt, /supplied capability\/provider route refs/);
+  assert.match(prompt, /failed-with-reason ToolPayload/);
+  assert.match(prompt, /executionUnits\.status="failed-with-reason"/);
+  assert.match(prompt, /refs\/digests-only follow-up/);
+  assert.match(prompt, /minimal-single-stage-repair-continuation/);
+  assert.match(prompt, /No broad repair loop, full pipeline regeneration, or exploratory history scan/);
+  assert.match(prompt, /Do not start another repair pass, broad loop, or exploratory provider\/status investigation/);
+  assert.match(prompt, /recentTurnRefs/);
+  assert.match(prompt, /contentDigest/);
+  assert.match(prompt, /generated-literature\.py/);
+  assert.match(prompt, /Browser repair failed after provider route returned empty result/);
+  assert.match(prompt, /Use provider-first browser route and rerun verifier/);
+  assert.match(prompt, /Provider-first repair remains required/);
+  assert.match(prompt, /prompt-handoff-(?:taskFiles|output)-body/);
+  assert.ok(Buffer.byteLength(prompt, 'utf8') < 80_000, 'repair generation prompt should stay bounded');
 });
 
 test('context envelope can audit harness contract refs and context budget slimming behind feature flag', () => {

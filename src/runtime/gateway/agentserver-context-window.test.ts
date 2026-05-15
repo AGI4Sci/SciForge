@@ -68,3 +68,39 @@ test('pure multi-turn recall uses stable AgentServer session context', () => {
   });
   assert.equal(agentServerAgentId(request, 'task-generation'), agentServerAgentId(followup, 'task-generation'));
 });
+
+test('repair continuation uses stable session id without implicit raw AgentServer current work', () => {
+  const request = {
+    skillDomain: 'literature',
+    prompt: '请复用失败诊断继续，修正生成任务并完成报告。',
+    artifacts: [],
+    uiState: {
+      sessionId: 'session-repair-1',
+      contextReusePolicy: {
+        mode: 'repair',
+        historyReuse: { allowed: true, scope: 'failed-run' },
+      },
+      recentExecutionRefs: [{
+        id: 'EU-failed',
+        status: 'repair-needed',
+        codeRef: '.sciforge/tasks/generated-literature.py',
+        stdoutRef: '.sciforge/logs/generated.stdout.log',
+        stderrRef: '.sciforge/logs/generated.stderr.log',
+        outputRef: '.sciforge/task-results/generated.json',
+      }],
+    },
+  } as GatewayRequest;
+
+  assert.equal(requestNeedsAgentServerContinuity(request), true);
+  assert.deepEqual(agentServerContextPolicy(request), {
+    includeCurrentWork: false,
+    includeRecentTurns: false,
+    includePersistent: false,
+    includeMemory: false,
+    persistRunSummary: true,
+    persistExtractedConstraints: false,
+    maxContextWindowTokens: undefined,
+    contextWindowLimit: undefined,
+    modelContextWindow: undefined,
+  });
+});

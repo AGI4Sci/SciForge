@@ -59,6 +59,35 @@ class GoalSnapshotTest(unittest.TestCase):
         self.assertEqual(snapshot["requiredReferences"], [])
         self.assertEqual(snapshot["taskRelation"], "new-task")
 
+    def test_scoped_no_rerun_repair_continuation_does_not_forbid_execution(self) -> None:
+        snapshot = build_goal_snapshot(
+            {
+                "prompt": (
+                    "请复用这次失败诊断继续，不要重跑无关步骤；修正生成任务，"
+                    "必须使用 SciForge 已解析的 web_search/web_fetch provider route，"
+                    "然后继续完成中文证据摘要。"
+                ),
+                "session": {
+                    "executionUnits": [{"id": "EU-prior", "status": "repair-needed"}],
+                    "runs": [{"id": "run-prior", "status": "repair-needed"}],
+                },
+            }
+        )
+
+        self.assertEqual(snapshot["taskRelation"], "repair")
+        self.assertNotIn("turnExecutionConstraints", snapshot)
+
+    def test_global_no_execution_still_emits_turn_constraints(self) -> None:
+        snapshot = build_goal_snapshot(
+            {
+                "prompt": "不要重跑、不要执行、不要调用 AgentServer，只基于当前 refs 回答。",
+                "references": [{"ref": "artifact:prior-diagnostic"}],
+            }
+        )
+
+        self.assertEqual(snapshot["turnExecutionConstraints"]["executionModeHint"], "direct-context-answer")
+        self.assertTrue(snapshot["turnExecutionConstraints"]["workspaceExecutionForbidden"])
+
 
 if __name__ == "__main__":
     unittest.main()

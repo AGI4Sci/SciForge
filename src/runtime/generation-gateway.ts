@@ -130,6 +130,7 @@ import {
   payloadHasFailureStatus,
 } from './gateway/runtime-routing.js';
 import {
+  isAgentServerRepairContinuationBoundedStopError,
   agentServerGenerationTokenGuardLimit,
   currentReferenceDigestSilentGuardPolicy,
   mergeBackendStreamWorkEvidence,
@@ -950,6 +951,34 @@ function normalizeRepairFailureReason(value: unknown) {
     .slice(0, 500);
 }
 
+export function requestUsesRepairContext(request: GatewayRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const contextReusePolicy = isRecord(uiState.contextReusePolicy)
+    ? uiState.contextReusePolicy
+    : isRecord(uiState.contextIsolation)
+      ? uiState.contextIsolation
+      : {};
+  if (contextReusePolicy.mode === 'repair') return true;
+  const harnessHandoff = isRecord(uiState.agentHarnessHandoff) ? uiState.agentHarnessHandoff : {};
+  const continuityDecision = isRecord(harnessHandoff.continuityDecision) ? harnessHandoff.continuityDecision : {};
+  const runtimeSignals = isRecord(continuityDecision.runtimeSignals) ? continuityDecision.runtimeSignals : {};
+  if (runtimeSignals.policyMode === 'repair') return true;
+  const trace = isRecord(continuityDecision.trace) ? continuityDecision.trace : {};
+  const tracePolicy = isRecord(trace.policy) ? trace.policy : {};
+  if (tracePolicy.mode === 'repair') return true;
+  const hasRepairExecutionRef = toRecordList(uiState.recentExecutionRefs).some((ref) => {
+    const status = typeof ref.status === 'string' ? ref.status : '';
+    return /failed|repair|needs-human/i.test(status) || typeof ref.failureReason === 'string';
+  });
+  const conversationPolicy = isRecord(uiState.conversationPolicy) ? uiState.conversationPolicy : {};
+  const goalSnapshot = isRecord(conversationPolicy.goalSnapshot) ? conversationPolicy.goalSnapshot : {};
+  if (goalSnapshot.taskRelation === 'repair') return true;
+  const executionModePlan = isRecord(conversationPolicy.executionModePlan) ? conversationPolicy.executionModePlan : {};
+  if (executionModePlan.executionMode === 'repair-or-continue-project') return true;
+  if (hasRepairExecutionRef && /\b(repair|continue|resume|retry|rerun)\b|修正|修复|继续|复用|恢复|重跑/i.test(request.prompt)) return true;
+  return false;
+}
+
 async function requestAgentServerGeneration(params: {
   baseUrl: string;
   request: GatewayRequest;
@@ -975,6 +1004,7 @@ async function requestAgentServerGeneration(params: {
     const backendSelectionDecision = agentServerBackendSelectionDecision(request, llmRuntime.llmEndpoint);
     const backend = backendSelectionDecision.backend;
     const needsContinuity = requestNeedsAgentServerContinuity(promptRequest);
+    const repairContinuation = requestUsesRepairContext(promptRequest);
     const generationPurpose = needsContinuity ? 'workspace-task-generation' : 'workspace-task-generation-inline';
     if (!llmRuntime.llmEndpoint && requiresUserLlmEndpoint(params.baseUrl)) {
       return { ok: false, error: missingUserLlmEndpointMessage() };
@@ -1051,6 +1081,7 @@ async function requestAgentServerGeneration(params: {
       strictTaskFilesReason,
       retryAudit: contextRecovery?.retryAudit,
       freshCurrentTurn: !needsContinuity,
+      repairContinuation,
     };
     const generationPrompt = buildAgentServerGenerationPrompt(generationRequest);
     const contextEnvelopeBytes = Buffer.byteLength(JSON.stringify(contextEnvelope), 'utf8');
@@ -1083,7 +1114,9 @@ async function requestAgentServerGeneration(params: {
         systemPrompt: [
           AGENT_BACKEND_ANSWER_PRINCIPLE,
           'You generate SciForge workspace-local task code.',
-          !needsContinuity
+          repairContinuation
+            ? 'Repair-continuation hard rule: complete exactly one minimal repair/continue step from supplied refs, then stop with final compact JSON. Do not inspect broad history, do not regenerate the full pipeline, and return a failed-with-reason ToolPayload when refs are insufficient.'
+            : !needsContinuity
             ? 'Fresh-generation hard rule: do not call shell/filesystem/browser tools to inspect the workspace, .sciforge, old task attempts, logs, artifacts, installed packages, or prior generated code before returning. If the user task needs network, downloads, PDF/full-text reading, computation, or file creation, generate a bounded runnable task that performs that work at execution time. Your first substantive assistant output must be the final compact JSON for a direct ToolPayload or a runnable AgentServerGenerationResponse.'
             : 'Continuity-generation mode: inspect only the specific prior refs needed for the user-requested continuation, repair, or rerun.',
           'Write task files that accept inputPath and outputPath argv values and write a SciForge ToolPayload JSON object.',
@@ -1102,6 +1135,7 @@ async function requestAgentServerGeneration(params: {
           expectedArtifactTypes: generationRequest.expectedArtifactTypes,
           selectedComponentIds: generationRequest.selectedComponentIds,
           priorAttemptCount: generationRequest.priorAttempts.length,
+          repairContinuation,
           contextEnvelopeVersion: 'sciforge.context-envelope.v1',
           contextMode: compactContext.mode,
           retryAudit: contextRecovery?.retryAudit,
@@ -1135,7 +1169,12 @@ async function requestAgentServerGeneration(params: {
           nativeToolFirst: needsContinuity,
           llmEndpointSource: llmRuntime.llmEndpoint ? llmEndpointSource : undefined,
           retryAudit: contextRecovery?.retryAudit,
-          toolPolicy: needsContinuity ? {
+          toolPolicy: repairContinuation ? {
+            mode: 'repair-continuation-minimal',
+            inspectOnlyReferencedWorkspaceRefs: true,
+            maxStages: 1,
+            failedWithReasonOnInsufficientRefs: true,
+          } : needsContinuity ? {
             mode: 'continuity-read-limited',
             inspectOnlyReferencedWorkspaceRefs: true,
           } : {
@@ -1164,7 +1203,13 @@ async function requestAgentServerGeneration(params: {
           maxRetries: 1,
         },
         retryAudit: contextRecovery?.retryAudit,
-        toolPolicy: needsContinuity ? {
+        repairContinuation,
+        toolPolicy: repairContinuation ? {
+          mode: 'repair-continuation-minimal',
+          inspectOnlyReferencedWorkspaceRefs: true,
+          maxStages: 1,
+          failedWithReasonOnInsufficientRefs: true,
+        } : needsContinuity ? {
           mode: 'continuity-read-limited',
           inspectOnlyReferencedWorkspaceRefs: true,
         } : {
@@ -1199,6 +1244,16 @@ async function requestAgentServerGeneration(params: {
         headChars: 2_000,
         tailChars: 2_000,
         maxPriorAttempts: 0,
+      } : repairContinuation ? {
+        maxPayloadBytes: 96_000,
+        maxInlineStringChars: 8_000,
+        maxInlineJsonBytes: 16_000,
+        maxArrayItems: 8,
+        maxObjectKeys: 48,
+        maxDepth: 5,
+        headChars: 1_200,
+        tailChars: 1_200,
+        maxPriorAttempts: 1,
       } : {
         maxInlineStringChars: 24_000,
         headChars: 4_000,
@@ -1262,7 +1317,8 @@ async function requestAgentServerGeneration(params: {
         request,
       ));
     }, {
-      maxTotalUsage: agentServerGenerationTokenGuardLimit(request),
+      maxTotalUsage: agentServerGenerationTokenGuardLimit(request, { repairContinuation }),
+      convergenceGuardMode: repairContinuation ? 'repair-continuation' : 'generation',
       maxSilentMs: silentGuardPolicy.timeoutMs,
       silencePolicy: silentGuardPolicy,
       silentRetryCount: Math.max(0, dispatchAttempt - 1),
@@ -1462,6 +1518,12 @@ async function requestAgentServerGeneration(params: {
       error: errorMessage(error),
       diagnostic,
     }, sessionBundleRelForRequest(params.request));
+    if (requestUsesRepairContext(params.request) && isAgentServerRepairContinuationBoundedStopError(error)) {
+      return {
+        ok: true,
+        directPayload: repairContinuationBoundedStopPayload(params.request, params.skill, requestFailure, error),
+      };
+    }
     return {
       ok: false,
       error: requestFailure,
@@ -1480,6 +1542,68 @@ async function requestAgentServerGeneration(params: {
     clearTimeout(timeout);
     params.callbacks?.signal?.removeEventListener('abort', abortGeneration);
   }
+}
+
+function repairContinuationBoundedStopPayload(
+  request: GatewayRequest,
+  skill: SkillAvailability,
+  failureReason: string,
+  error: unknown,
+): ToolPayload {
+  const totalUsage = isRecord(error) && typeof error.totalUsage === 'number' ? error.totalUsage : undefined;
+  const limit = isRecord(error) && typeof error.limit === 'number' ? error.limit : undefined;
+  const evidenceRefs = requestContextRefs(request, isRecord(request.uiState) ? request.uiState : {})
+    .flatMap((ref) => typeof ref.ref === 'string' ? [ref.ref] : [])
+    .slice(0, 12);
+  const recoverActions = [
+    'Continue from currentReferenceDigests, recentExecutionRefs, and stable artifact/log refs only; do not replay broad history or inline raw artifact/log bodies.',
+    'Ask AgentServer for exactly one minimal repair/continue adapter step, or return failed-with-reason when the supplied refs are insufficient.',
+    'If required evidence is missing, ask the user for the specific missing ref instead of restarting the full task pipeline.',
+  ];
+  const nextStep = 'Retry the continuation with a refs/digests-only handoff scoped to one minimal repair step, or ask for the missing execution/artifact ref.';
+  const diagnostic = diagnosticForFailure(failureReason, {
+    backend: request.agentBackend,
+    provider: request.modelProvider,
+    model: request.modelName,
+    evidenceRefs,
+  });
+  return repairNeededPayload(request, skill, failureReason, {
+    blocker: 'repair-continuation-bounded-stop',
+    evidenceRefs,
+    recoverActions,
+    backendFailure: {
+      contract: 'sciforge.backend-repair-failure.v1',
+      failureKind: 'backend-diagnostic',
+      capabilityId: skill.id,
+      failureReason,
+      diagnostic,
+      recoverActions,
+      nextStep,
+      relatedRefs: evidenceRefs,
+      createdAt: new Date().toISOString(),
+    },
+    agentServerRefs: {
+      boundedStop: {
+        mode: 'repair-continuation',
+        totalUsage,
+        limit,
+        guidance: 'refs/digests-only minimal continuation',
+      },
+      currentReferenceDigestRefs: toRecordList(request.uiState?.currentReferenceDigests).map((entry) => ({
+        ref: typeof entry.ref === 'string' ? entry.ref : undefined,
+        digestRef: typeof entry.digestRef === 'string' ? entry.digestRef : undefined,
+        title: typeof entry.title === 'string' ? entry.title : undefined,
+      })).slice(0, 12),
+      recentExecutionRefs: toRecordList(request.uiState?.recentExecutionRefs).map((entry) => ({
+        id: typeof entry.id === 'string' ? entry.id : undefined,
+        status: typeof entry.status === 'string' ? entry.status : undefined,
+        outputRef: typeof entry.outputRef === 'string' ? entry.outputRef : undefined,
+        stdoutRef: typeof entry.stdoutRef === 'string' ? entry.stdoutRef : undefined,
+        stderrRef: typeof entry.stderrRef === 'string' ? entry.stderrRef : undefined,
+        failureReason: typeof entry.failureReason === 'string' ? headForAgentServer(entry.failureReason, 500) : undefined,
+      })).slice(0, 12),
+    },
+  });
 }
 
 function withAgentServerDispatchMetadata<T>(

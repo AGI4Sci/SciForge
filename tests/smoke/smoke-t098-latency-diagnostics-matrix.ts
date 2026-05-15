@@ -38,8 +38,11 @@ const fixtures: Array<{
   {
     id: 'artifact-followup',
     payload: {
-      turn: { text: '解释这个已有结果表的置信区间是什么意思。' },
-      session: { artifacts: [{ id: 'metrics-table', artifactType: 'table', status: 'done', summary: 'model metrics' }] },
+      turn: {
+        text: '解释这个已有结果表的置信区间是什么意思。',
+        refs: [{ kind: 'artifact', ref: 'artifact:metrics-table', title: 'metrics table' }],
+      },
+      session: { artifacts: [{ id: 'metrics-table', artifactType: 'table', status: 'done', summary: 'model metrics', dataRef: '.sciforge/artifacts/metrics-table.json' }] },
     },
     expect: { executionMode: 'direct-context-answer', firstVisibleMaxMs: 1200, backgroundEnabled: false },
   },
@@ -57,7 +60,7 @@ const fixtures: Array<{
       turn: { text: '搜索几篇关于 graph retrieval 的近期论文，给我标题和链接。' },
       policyHints: { selectedCapabilities: [{ id: 'literature.search', summary: 'Search academic literature.' }] },
     },
-    expect: { executionMode: 'thin-reproducible-adapter', firstVisibleMaxMs: 3000 },
+    expect: { executionMode: 'single-stage-task', firstVisibleMaxMs: 3000 },
   },
   {
     id: 'long-report',
@@ -265,7 +268,43 @@ assert.equal(
   true,
 );
 
-console.log('[ok] T098 latency diagnostics matrix covers Python-owned policy fields, TS pass-through, cache hit/miss telemetry, waits, silent-stream timing, and background duration without external providers');
+const repairProviderWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-t098-repair-provider-route-'));
+const repairProviderEvents: WorkspaceRuntimeEvent[] = [];
+const repairProvider = await runWorkspaceRuntimeGateway({
+  skillDomain: 'literature',
+  prompt: [
+    'continue from the last bounded stop. do not start long generation.',
+    'produce one minimal single stage result only.',
+    'if web_search or web_fetch provider routes are usable then create a minimal adapter task that uses those provider routes.',
+    'if this cannot be determined in this turn then return a valid failed-with-reason ToolPayload with failure reason, recover actions, next step, and refs.',
+  ].join(' '),
+  workspacePath: repairProviderWorkspace,
+  artifacts: [{
+    id: 'bounded-stop-diagnostic',
+    type: 'runtime-diagnostic',
+    artifactType: 'runtime-diagnostic',
+    producerScenario: 'literature',
+    schemaVersion: '1',
+    data: { markdown: 'Prior run stopped at bounded repair guard with reusable refs.' },
+  }],
+  uiState: {
+    sessionId: 'session-t098-repair-provider-route',
+    recentExecutionRefs: [{
+      id: 'bounded-stop-unit',
+      status: 'repair-needed',
+      outputRef: '.sciforge/task-results/bounded-stop.json',
+      stderrRef: '.sciforge/logs/bounded-stop.stderr.log',
+      failureReason: 'AgentServer repair generation bounded-stop after token guard.',
+    }],
+  },
+}, { onEvent: (event) => repairProviderEvents.push(event) });
+assert.equal(repairProviderEvents.some((event) => event.type === 'direct-context-fast-path'), false);
+assert.equal(repairProvider.claimType, 'capability-provider-preflight');
+assert.equal(repairProvider.executionUnits.some((unit) => unit.tool === 'sciforge.capability-provider-preflight'), true);
+assert.match(repairProvider.message, /web_search|web_fetch/);
+assert.doesNotMatch(repairProvider.message, /Tool\/provider status answered/);
+
+console.log('[ok] T098 latency diagnostics matrix covers Python-owned policy fields, TS pass-through, cache hit/miss telemetry, waits, silent-stream timing, background duration, and repair provider-route fast-path regression without external providers');
 
 function callPythonPolicy(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
   return new Promise((resolvePromise, reject) => {

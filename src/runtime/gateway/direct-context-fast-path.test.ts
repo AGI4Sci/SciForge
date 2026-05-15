@@ -436,3 +436,103 @@ test('provider wording does not steal fresh retrieval requests from AgentServer 
 
   assert.equal(directContextFastPathPayload(request), undefined);
 });
+
+test('provider availability fallback wording does not steal English fresh search requests', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'search recent papers about agent workflow reliability and return a Chinese evidence summary. if web_search provider is unavailable, explain missing provider route and recoverable next step. do not fabricate results.',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [{
+      id: 'prior-note',
+      type: 'runtime-context-summary',
+      data: { markdown: 'Prior demo context exists but does not answer the fresh retrieval request.' },
+    }],
+    uiState: {
+      capabilityProviderAvailability: [{
+        id: 'sciforge.web-worker.web_search',
+        providerId: 'sciforge.web-worker.web_search',
+        capabilityId: 'web_search',
+        workerId: 'sciforge.web-worker',
+        available: true,
+        status: 'available',
+      }],
+    },
+  };
+
+  assert.equal(directContextFastPathPayload(request), undefined);
+});
+
+test('provider status fast path yields for bounded repair prompt that asks for adapter task or failed-with-reason payload', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'continue from the last bounded stop. do not start long generation. produce one minimal single stage result only. if web search or web fetch provider routes are usable then create a minimal adapter task that uses those provider routes. if this cannot be determined in this turn then return a valid failed with reason tool payload with failure reason recover actions next step and refs. do not ask agentserver for another long loop.',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [{
+      id: 'bounded-stop-diagnostic',
+      type: 'runtime-diagnostic',
+      data: { markdown: 'Prior run stopped at bounded repair guard with reusable refs.' },
+    }],
+    uiState: {
+      recentExecutionRefs: [{
+        id: 'bounded-stop-unit',
+        status: 'repair-needed',
+        outputRef: '.sciforge/task-results/bounded-stop.json',
+        stderrRef: '.sciforge/logs/bounded-stop.stderr.log',
+      }],
+      capabilityProviderAvailability: [{
+        id: 'sciforge.web-worker.web_search',
+        providerId: 'sciforge.web-worker.web_search',
+        capabilityId: 'web_search',
+        workerId: 'sciforge.web-worker',
+        available: true,
+        status: 'available',
+      }, {
+        id: 'sciforge.web-worker.web_fetch',
+        providerId: 'sciforge.web-worker.web_fetch',
+        capabilityId: 'web_fetch',
+        workerId: 'sciforge.web-worker',
+        available: true,
+        status: 'available',
+      }],
+    },
+  };
+
+  assert.equal(directContextFastPathPayload(request), undefined);
+});
+
+test('scoped no-rerun repair prompt still yields to backend when it asks to generate a minimal task', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: '请复用这次失败诊断继续，不要重跑无关步骤；修正生成任务，必须使用 SciForge 已解析的 web_search/web_fetch provider route 或输出合法失败 payload，然后继续完成中文证据摘要。',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [{
+      id: 'provider-first-diagnostic',
+      type: 'runtime-diagnostic',
+      data: { markdown: 'Generated task used direct external network APIs despite ready provider routes.' },
+    }],
+    uiState: {
+      recentExecutionRefs: [{
+        id: 'provider-first-unit',
+        status: 'repair-needed',
+        outputRef: '.sciforge/task-results/provider-first.json',
+      }],
+      capabilityProviderAvailability: [{
+        id: 'sciforge.web-worker.web_search',
+        providerId: 'sciforge.web-worker.web_search',
+        capabilityId: 'web_search',
+        workerId: 'sciforge.web-worker',
+        available: true,
+        status: 'available',
+      }, {
+        id: 'sciforge.web-worker.web_fetch',
+        providerId: 'sciforge.web-worker.web_fetch',
+        capabilityId: 'web_fetch',
+        workerId: 'sciforge.web-worker',
+        available: true,
+        status: 'available',
+      }],
+    },
+  };
+
+  assert.equal(directContextFastPathPayload(request), undefined);
+});

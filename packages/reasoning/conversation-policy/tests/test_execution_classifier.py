@@ -213,6 +213,39 @@ def test_historical_failures_alone_do_not_authorize_direct_context_answer():
     assert "has-refs" not in decision["signals"]
 
 
+def test_provider_route_repair_continuation_allows_bounded_execution():
+    decision = classify_execution_mode(
+        {
+            "goalSnapshot": {
+                "goalType": "repair",
+                "taskRelation": "repair",
+                "requiredArtifacts": ["research-report"],
+            },
+            "selectedCapabilities": [
+                {
+                    "id": "provider.search",
+                    "kind": "tool",
+                    "domain": ["research"],
+                    "sideEffects": ["search", "provider"],
+                },
+                {
+                    "id": "provider.fetch",
+                    "kind": "tool",
+                    "domain": ["research"],
+                    "sideEffects": ["fetch", "provider"],
+                },
+            ],
+            "recentFailures": [{"stageId": "provider-first-preflight", "status": "repair-needed"}],
+            "priorAttempts": [{"status": "repair-needed", "artifactRefs": ["artifact:failure-diagnostic"]}],
+        }
+    )
+
+    assert decision["executionMode"] == "repair-or-continue-project"
+    assert "repair" in decision["signals"]
+    assert "external-action" in decision["signals"]
+    assert "execution-forbidden" not in decision["riskFlags"]
+
+
 def test_prompt_keyword_text_alone_does_not_drive_execution_mode():
     decision = classify_execution_mode(
         {

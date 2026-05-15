@@ -3,10 +3,24 @@ import { formatUiDevServerHealth, readUiDevServerHealth, uiDevServerProbePaths }
 import { isOwnedSciForgeViteDevProcess, isSciForgeViteDevProcess, parseListeningPids } from '../../tools/dev-process';
 
 const probes = uiDevServerProbePaths('/tmp/sciforge repo');
-assert.deepEqual(probes.map((probe) => probe.label), ['sciforge-index', 'vite-client', 'runtime-contract-barrel']);
+assert.deepEqual(probes.map((probe) => probe.label), [
+  'sciforge-index',
+  'vite-client',
+  'ui-entry-module',
+  'scenario-builder-module',
+  'runtime-contract-barrel',
+]);
 assert.ok(
   probes.some((probe) => probe.path.includes('/packages/contracts/runtime/index.ts')),
   'UI dev health must probe the shared runtime contract barrel used by the app shell',
+);
+assert.ok(
+  probes.some((probe) => probe.path === '/src/main.tsx'),
+  'UI dev health must probe the transformed app entry module, not just the static index HTML',
+);
+assert.ok(
+  probes.some((probe) => probe.path === '/src/app/ScenarioBuilderPanel.tsx'),
+  'UI dev health must catch app module import-analysis overlays that block real browser use',
 );
 
 const healthy = await readUiDevServerHealth(5173, '/tmp/sciforge', {
@@ -47,6 +61,24 @@ assert.equal(failed.ok, false);
 assert.equal(failed.probes.find((probe) => probe.label === 'runtime-contract-barrel')?.status, 500);
 assert.match(formatUiDevServerHealth(failed), /runtime-contract-barrel/);
 assert.match(formatUiDevServerHealth(failed), /some-new-contract/);
+
+const failedAppModule = await readUiDevServerHealth(5173, '/tmp/sciforge', {
+  fetchImpl: async (input) => {
+    const url = String(input);
+    if (url.endsWith('/')) {
+      return new Response('<title>SciForge</title><script type="module" src="/src/main.tsx"></script>', { status: 200 });
+    }
+    if (url.endsWith('/src/app/ScenarioBuilderPanel.tsx')) {
+      return new Response('Failed to resolve import "@sciforge-observe/web/manifest"', { status: 500 });
+    }
+    return new Response('ok', { status: 200 });
+  },
+});
+
+assert.equal(failedAppModule.ok, false);
+assert.equal(failedAppModule.probes.find((probe) => probe.label === 'scenario-builder-module')?.status, 500);
+assert.match(formatUiDevServerHealth(failedAppModule), /scenario-builder-module/);
+assert.match(formatUiDevServerHealth(failedAppModule), /@sciforge-observe\/web\/manifest/);
 
 assert.deepEqual(parseListeningPids('123\nnot-a-pid 456'), [123, 456]);
 assert.equal(isSciForgeViteDevProcess({

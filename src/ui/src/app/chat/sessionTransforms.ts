@@ -805,18 +805,109 @@ function compactMessagesForRequestPayload(messages: SciForgeMessage[], currentMe
   return messages
     .filter((message) => !message.id.startsWith('seed'))
     .slice(-REQUEST_PAYLOAD_MESSAGE_LIMIT)
-    .map((message) => ({
-      ...message,
-      content: message.id === currentMessageId
-        ? clipText(message.content, REQUEST_PAYLOAD_MESSAGE_TEXT_LIMIT)
-        : omittedTextDigestLabel('previous-message', message.content),
-      expandable: message.id === currentMessageId
-        ? clipOptionalText(message.expandable, REQUEST_PAYLOAD_MESSAGE_TEXT_LIMIT)
-        : undefined,
-      contentDigest: message.id === currentMessageId ? undefined : digestTextField(message.content),
-      references: message.references?.slice(-8),
-      objectReferences: message.objectReferences?.slice(-12),
-    }));
+    .map((message) => {
+      const isCurrentMessage = message.id === currentMessageId;
+      return {
+        id: message.id,
+        role: message.role,
+        content: isCurrentMessage
+          ? clipText(message.content, REQUEST_PAYLOAD_MESSAGE_TEXT_LIMIT)
+          : omittedTextDigestLabel('previous-message', message.content),
+        confidence: message.confidence,
+        evidence: message.evidence,
+        claimType: message.claimType,
+        expandable: isCurrentMessage
+          ? clipOptionalText(message.expandable, REQUEST_PAYLOAD_MESSAGE_TEXT_LIMIT)
+          : undefined,
+        createdAt: message.createdAt,
+        updatedAt: message.updatedAt,
+        status: message.status,
+        tokenUsage: message.tokenUsage,
+        references: compactReferencesForRequestPayload(message.references),
+        objectReferences: compactObjectReferencesForRequestPayload(message.objectReferences),
+        goalSnapshot: compactGoalSnapshotForRequestPayload(message.goalSnapshot, isCurrentMessage),
+        acceptance: compactAcceptanceForRequestPayload(message.acceptance),
+        guidanceQueue: compactGuidanceQueueForRequestPayload(message.guidanceQueue),
+        contentDigest: isCurrentMessage ? undefined : digestTextField(message.content),
+      };
+    });
+}
+
+function compactReferencesForRequestPayload(references: SciForgeReference[] | undefined) {
+  return references?.slice(-8).map((reference) => ({
+    id: reference.id,
+    kind: reference.kind,
+    title: clipText(reference.title, 160),
+    ref: reference.ref,
+    summary: clipOptionalText(reference.summary, 360),
+    sourceId: reference.sourceId,
+    runId: reference.runId,
+    locator: reference.locator,
+  }));
+}
+
+function compactObjectReferencesForRequestPayload(objectReferences: ObjectReference[] | undefined) {
+  return objectReferences?.slice(-12).map((reference) => ({
+    ...reference,
+    title: clipText(reference.title, 160),
+    summary: clipOptionalText(reference.summary, 360),
+  }));
+}
+
+function compactGoalSnapshotForRequestPayload(goalSnapshot: UserGoalSnapshot | undefined, isCurrentMessage: boolean) {
+  if (!goalSnapshot) return undefined;
+  return {
+    ...goalSnapshot,
+    rawPrompt: isCurrentMessage
+      ? clipText(goalSnapshot.rawPrompt, REQUEST_PAYLOAD_MESSAGE_TEXT_LIMIT)
+      : omittedTextDigestLabel('previous-goal-prompt', goalSnapshot.rawPrompt),
+    requiredFormats: goalSnapshot.requiredFormats.slice(0, 12).map((item) => clipText(item, 160)),
+    requiredArtifacts: goalSnapshot.requiredArtifacts.slice(0, 12).map((item) => clipText(item, 160)),
+    requiredReferences: goalSnapshot.requiredReferences.slice(0, 12).map((item) => clipText(item, 160)),
+    uiExpectations: goalSnapshot.uiExpectations.slice(0, 12).map((item) => clipText(item, 160)),
+    acceptanceCriteria: goalSnapshot.acceptanceCriteria.slice(0, 12).map((item) => clipText(item, 240)),
+  };
+}
+
+function compactAcceptanceForRequestPayload(acceptance: SciForgeMessage['acceptance'] | undefined) {
+  if (!acceptance) return undefined;
+  return {
+    pass: acceptance.pass,
+    severity: acceptance.severity,
+    checkedAt: acceptance.checkedAt,
+    failures: acceptance.failures.slice(-8).map((failure) => ({
+      code: failure.code,
+      detail: compactDiagnosticText(failure.detail, 700, 'acceptance-failure-detail') ?? '',
+      repairAction: clipOptionalText(failure.repairAction, 500),
+    })),
+    objectReferences: compactObjectReferencesForRequestPayload(acceptance.objectReferences) ?? [],
+    repairPrompt: compactDiagnosticText(acceptance.repairPrompt, 800, 'acceptance-repair-prompt'),
+    repairAttempt: acceptance.repairAttempt,
+    semantic: acceptance.semantic ? {
+      pass: acceptance.semantic.pass,
+      confidence: acceptance.semantic.confidence,
+      unmetCriteria: acceptance.semantic.unmetCriteria.slice(0, 12).map((item) => clipText(item, 180)),
+      missingArtifacts: acceptance.semantic.missingArtifacts.slice(0, 12).map((item) => clipText(item, 180)),
+      referencedEvidence: acceptance.semantic.referencedEvidence.slice(0, 12).map((item) => clipText(item, 180)),
+      repairPrompt: compactDiagnosticText(acceptance.semantic.repairPrompt, 500, 'semantic-repair-prompt'),
+      backendRunRef: acceptance.semantic.backendRunRef,
+    } : undefined,
+    repairHistory: acceptance.repairHistory?.slice(-6).map((entry) => ({
+      ...entry,
+      action: clipText(entry.action, 500),
+      failureCodes: entry.failureCodes.slice(0, 12),
+      reason: clipOptionalText(entry.reason, 500),
+    })),
+  };
+}
+
+function compactGuidanceQueueForRequestPayload(guidanceQueue: GuidanceQueueRecord | undefined) {
+  if (!guidanceQueue) return undefined;
+  return {
+    ...guidanceQueue,
+    prompt: compactDiagnosticText(guidanceQueue.prompt, 800, 'guidance-queue-prompt') ?? '',
+    reason: clipOptionalText(guidanceQueue.reason, 500),
+  };
 }
 
 function compactArtifactForRequestPayload(artifact: RuntimeArtifact): RuntimeArtifact {
@@ -964,6 +1055,11 @@ function compactInlineValue(value: unknown, maxChars: number): { value: unknown;
 
 function clipOptionalText(value: string | undefined, maxChars: number) {
   return value === undefined ? undefined : clipText(value, maxChars);
+}
+
+function compactDiagnosticText(value: string | undefined, maxChars: number, label: string) {
+  if (value === undefined) return undefined;
+  return value.length > maxChars ? omittedTextDigestLabel(label, value) : value;
 }
 
 function clipText(value: string, maxChars: number) {

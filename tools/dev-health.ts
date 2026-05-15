@@ -31,6 +31,12 @@ export function uiDevServerProbePaths(repoRoot = process.cwd()): UiDevServerProb
     label: 'vite-client',
     path: '/@vite/client',
   }, {
+    label: 'ui-entry-module',
+    path: '/src/main.tsx',
+  }, {
+    label: 'scenario-builder-module',
+    path: '/src/app/ScenarioBuilderPanel.tsx',
+  }, {
     label: 'runtime-contract-barrel',
     path: viteFsPath(resolve(repoRoot, 'packages/contracts/runtime/index.ts')),
   }];

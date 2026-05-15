@@ -18,7 +18,7 @@
 - 有多种修改方案的时候，优先实现最简洁、通用的方案
 - 算法相关的代码优先用Python实现，方便人类用户优化、检查算法
 - 代码路径保持唯一真相源：发现冗余链路时删除、合并或降级旧链路，避免长期并行实现。
-- 多轮记忆只复用 AgentServer session/current-work/compaction 机制；SciForge 本地只保留 context policy、refs、digest、evidence boundary 和 handoff projection，不能再扩展成第二套长期记忆系统。
+- 多轮记忆采用 Project Session Memory 边界：workspace 本地 append-only ledger/ref store 是可恢复事实源；AgentServer 负责 context orchestration、retrieval、compaction 和 backend handoff；agent backend 只消费 cache-aware projection/task packet 并按需读取 refs，禁止把完整历史或大文件当 prompt 记忆回灌。
 - 不需要考虑旧兼容性，可以直接删除旧逻辑，然后实现最终版本，保持代码链条绝对干净
 - 代码膨胀必须自动触发治理：源码文件超过 1000 行进入 watch list；超过 2000 行优先拆分；超过 3000 行视为维护风险。后续开发若让文件越过阈值，应优先抽模块、删除冗余逻辑或补拆分 TODO，而不是继续堆主文件。
 - 长文件拆分必须按职责命名，不能机械切成 part1/part2；如果暂时不能完全解耦，也要拆成有语义的文件，例如 *-event-normalizer、*-runner、*-diagnostics、*-state-machine，并保持主入口只做流程编排。
@@ -26,6 +26,7 @@
 
 任何 agent 在执行本项目任务前，必须先读本文件和与任务相关的设计文档，避免凭局部代码印象破坏系统边界。
 - [`docs/Architecture.md`](docs/Architecture.md)：SciForge 总体架构、Backend-first / Contract-enforced / Capability-driven / Harness-governed 方向、`src` 与 `packages` 边界。
+- [`docs/ProjectSessionMemory.md`](docs/ProjectSessionMemory.md)：本地 append-only project memory、refs/blob store、context projection、AgentServer orchestration 和 KV cache-aware handoff 边界。
 - [`docs/AgentHarnessStandard.md`](docs/AgentHarnessStandard.md)：harness runtime、profile、stage hook、contract、trace、merge 规则和行为治理入口。
 
 ## 任务板
@@ -99,15 +100,38 @@
 - [x] GT-P1-01：补齐网页端 E2E：在多轮真实对话中验证 provider-first route、Task SDK 注入、合法失败 payload、repair/continue 都能被 UI 正确呈现。已通过 `smoke:browser-provider-preflight`、`smoke:browser-multiturn` 和 `smoke:browser`；Task SDK 注入由 generated-task lifecycle 单测覆盖，网页 smoke 覆盖 provider fail-closed、server-side discovery、recoverable empty-result、repair continuation 和 audit follow-up 呈现。
 - [ ] GT-P1-02：为 external dependency failure 增加 provider-neutral 回归集，覆盖 HTTP/DNS/timeout/rate-limit/quota/permission/empty-result/fallback route trace。
 
-### 2026-05-14 Task：多轮记忆管理收敛到 AgentServer
+### 2026-05-15 Task：Project Session Memory 与 Cache-aware Context Projection
 
-最终方案：AgentServer 是多轮对话记忆的唯一权威来源；SciForge 不再本地定制一套长期记忆，只负责把本轮意图、引用、证据边界和恢复策略投影给 AgentServer。旧 `memoryPlan` 链路已删除，最终字段统一为 `handoffMemoryProjection`。
+最终方案：workspace 本地维护 append-only Project Session Ledger 和 ref/blob store 作为可恢复事实源；AgentServer 作为 context orchestration 控制面，读取 ledger/projection refs，执行 retrieval、compaction、session current-work 和 backend handoff；agent backend 只消费 cache-aware projection compiler 生成的小任务包，并通过受控 `retrieve` / `read_ref` / `workspace_search` 按需读取信息。压缩只新增 projection/summary/constraint 事件，不修改 ledger；KV cache 优化以稳定 prefix 和最小 uncached tail 为目标。
 
 架构任务：
 
-- [x] MEM-ARCH-01：将 `docs/Architecture.md` 固化为“AgentServer owns memory, SciForge owns projection”的边界，删除把 `memoryPlan`、conversation ledger 或 UI recent messages 描述为本地长期记忆的旧表述。
+- [x] PSM-ARCH-01：新增 [`docs/ProjectSessionMemory.md`](docs/ProjectSessionMemory.md)，定义 append-only ledger、content-addressed refs/blob store、context projections、AgentServer orchestration、backend handoff packet 和 KV cache-aware projection compiler。
+- [x] PSM-ARCH-02：更新 [`docs/Architecture.md`](docs/Architecture.md)，将旧“AgentServer owns memory, SciForge owns projection”边界升级为“workspace owns canonical truth, AgentServer owns orchestration, backend consumes projection”。
+- [x] PSM-ARCH-03：更新 [`docs/README.md`](docs/README.md)，把 `ProjectSessionMemory.md` 加入项目级权威文档入口。
+
+实现 TODO：
+
+- [ ] PSM-P0-01：定义 `ProjectSessionEvent` / `ProjectMemoryRef` / `ContextProjectionBlock` runtime contract，明确 event id、source refs、digest、cache tier、supersedes 和 projection block metadata。
+- [ ] PSM-P0-02：把现有 `ConversationEventLog`、session records、task-results、logs、artifacts、verifications 映射为 append-only ledger + ref/blob store；保证 projection 可从 ledger 重建。
+- [ ] PSM-P0-03：实现 cache-aware context projection compiler：稳定 prefix/workspace identity/stable session state/index blocks 字节级复用，current task packet 和 retrieved evidence 后置。
+- [ ] PSM-P0-04：为 repair/bounded-stop continuation 增加 hard short-circuit：只渲染 RecoveryPacket 和 refs/digests，不再默认进入长 AgentServer generation。
+- [ ] PSM-P1-01：接入 AgentServer retrieval/read-ref/workspace-search contract，让 backend 通过受控 retrieval primitive 按需读取 ledger refs、artifact body、stdout/stderr 和 workspace 文件片段。
+- [ ] PSM-P1-02：为 compaction preview/apply 写入 append-only `compaction-recorded` 事件，记录 source event range、decision owner、trigger、output projection refs 和 cache delta。
+- [ ] PSM-P1-03：增加 migration/recovery smoke：删除 projection 后从 ledger/ref store 恢复 UI、active run、artifact index、failure index 和 next handoff packet。
+- [ ] PSM-P1-04：增加 KV cache regression：连续多轮只改变 tail task packet 时稳定 prefix block hash 不变；repair mode 不重写 stable session summary。
+
+### 2026-05-14 Task：多轮记忆管理收敛到 AgentServer
+
+历史完成项，已被 2026-05-15 `Project Session Memory 与 Cache-aware Context Projection` 边界升级。保留本节作为旧 `memoryPlan` 删除、stable AgentServer session/current-work 接入和多轮 smoke 的完成记录；新的当前原则是 workspace ledger 为可恢复事实源，AgentServer 为 context orchestration，backend 消费 projection。
+
+旧阶段曾采用的方案：把 AgentServer 视为多轮对话记忆的唯一权威来源，SciForge 只投影本轮意图、引用、证据边界和恢复策略。该边界已被上方 Project Session Memory 取代；保留本节只用于说明旧 `memoryPlan` 删除、`handoffMemoryProjection` 收敛和 smoke 验证的完成背景。
+
+架构任务：
+
+- [x] MEM-ARCH-01（历史）：当时将 `docs/Architecture.md` 固化为“AgentServer owns memory, SciForge owns projection”的边界，并删除把 `memoryPlan`、conversation ledger 或 UI recent messages 描述为本地长期记忆的旧表述；当前实现依据以上方 PSM 边界为准。
 - [x] MEM-ARCH-02：梳理 `conversation-policy` 输出字段语义：`contextReusePolicy` 只表达 `continue/repair/isolate`，`handoffMemoryProjection` 只表达本轮可暴露摘要和 refs，不承担 recall。
-- [x] MEM-ARCH-03：把 AgentServer `/context`、`/compact`、stable `agentId`、`contextPolicy.includeCurrentWork/includeRecentTurns/persistRunSummary` 写成唯一多轮记忆 contract。
+- [x] MEM-ARCH-03（历史）：把 AgentServer `/context`、`/compact`、stable `agentId`、`contextPolicy.includeCurrentWork/includeRecentTurns/persistRunSummary` 写成当时阶段的多轮记忆 contract；当前需升级为 workspace ledger + AgentServer orchestration + backend projection contract。
 
 实现 TODO：
 
@@ -235,3 +259,195 @@ UI 与 presentation 真实任务：
 - [ ] TODO-GEN-08 为 external transient 建立 provider-neutral policy：HTTP、DNS、timeout、rate limit、quota、service unavailable 统一分类。
 - [ ] TODO-GEN-09 为 session bundle 增加“一键打包/恢复/审计”检查清单，确保每个多轮任务可独立迁移。
 - [ ] TODO-GEN-10 为复杂任务新增“用户满意度 proxy”：是否回答了最新请求、是否展示可用结果、是否给出下一步、是否避免重复劳动。
+
+## Stability Orchestration
+
+状态：active
+总控：Codex Orchestrator
+当前轮次：1
+
+### 稳定化标准
+
+- `npm run typecheck` 通过。
+- 与本轮修复相关的单测或 smoke 通过。
+- 网页端核心启动/多轮/恢复路径没有新增 runtime、console 或 payload contract 错误。
+- Finder 连续 3 轮没有发现新的 P0/P1 稳定性问题后，可进入 `stable-candidate`。
+
+### Agent 协作规则
+
+- Finder Agent 负责使用、压测、复现和记录问题，不直接修代码。
+- Fixer Agent 负责认领一个最高优先级问题、做最小通用修复、补测试和验证。
+- 两个 agent 只能通过本节的 Issue Queue、Activity Log 和 Current Handoff 交接状态。
+- 每个问题必须有唯一 ID、严重级别、复现步骤、期望行为、实际行为、证据、建议归因层。
+- 修复必须说明为什么是通用修复，不能是 prompt、文件名、单一 backend 或单一 fixture 特例。
+- 如同一问题 3 次修复仍未通过验证，移入 Blocked，等待人工或总控重新拆解。
+
+### Issue Queue
+
+#### Open
+
+待 Finder 补充本轮发现。
+
+#### In Progress
+
+无。
+
+#### Fixed Pending Verification
+
+##### SF-STAB-006 - P1 - Minimal provider-route repair continuation still bounded-stops instead of returning a terminal payload
+
+- 发现者：Orchestrator Round 4
+- 修复者：Fixer Workers Round 4 + Orchestrator
+- 来源：真实 in-app browser 使用，不是 terminal-only check。
+- 前置状态：`SF-STAB-005` 修复后，provider-route minimal repair prompt 已不再被 `sciforge.direct-context-fast-path` 吃掉，而是进入 `agentserver.generate.literature`。
+- 复现步骤：
+  1. 重启 dev services，刷新真实 in-app browser `http://127.0.0.1:5173/`。
+  2. 在同一 `literature-evidence-review@1.0.0` 会话中保留上一轮 bounded-stop 失败。
+  3. 发送：`continue from the last bounded stop. do not start long generation. produce one minimal single stage result only. if web search or web fetch provider routes are usable then create a minimal adapter task that uses those provider routes. if this cannot be determined in this turn then return a valid failed with reason tool payload with failure reason recover actions next step and refs. do not ask agentserver for another long loop.`
+  4. 等待最新 run 结束。
+- 期望行为：AgentServer repair continuation 应返回一个最小 provider-route adapter task，或直接返回合法 `failed-with-reason`/`repair-needed` ToolPayload；不应再次消耗到 repair token guard。
+- 实际行为：最新 run `project-literature-evidence-review-mp6qhi1m-hrit5p · failed · recoverable` 进入 `agentserver.generate.literature`，但仍以 `AgentServer repair generation bounded-stop after 94073 total tokens (limit 60000)` 结束，没有生成最小 adapter task，也没有合法 terminal ToolPayload。
+- 证据：in-app browser 最新 run 的 ExecutionUnit `EU-literature-29e9e595` failureReason 为上述 bounded-stop；browser 本地 console error 为空。旧 `Tool/provider status answered...` 文本只来自历史 run，最新 run 不再由 direct-context fast path 完成。
+- 疑似归因层：AgentServer repair continuation prompt/protocol 或 SciForge gateway repair fallback；当用户明确要求不要长生成且允许 terminal failed payload 时，系统应有一个 deterministic fallback，不能无限把同一 prompt 交给 AgentServer 重试。
+- 为什么是通用问题：任何 backend 在 repair/minimal continuation 下不遵守 hard-stop 时，用户仍会卡在 recoverable bounded-stop；这会阻断所有 provider-first 修复闭环，不限于文献场景。
+- 修复说明：AgentServer repair continuation prompt 明确只允许两种 terminal compact JSON：最小 provider-route adapter `AgentServerGenerationResponse`，或 `executionUnits.status="failed-with-reason"` 的 SciForge ToolPayload。stream guard 对 repair bounded-stop 抛出 typed error；generation gateway 将该 typed bounded-stop 转成终端 `repair-needed` ToolPayload，带 `repair-continuation-bounded-stop` blocker、failureReason、recoverActions、nextStep 和 refs/digests-only guidance，而不是继续裸露 backend generation failure。
+- 追加修复：英文 fresh retrieval `search recent papers... if web_search provider is unavailable...` 不再被 provider-status fast path 截获；只有纯 provider/status 查询继续走 status fast path。
+- 文件变更：`src/runtime/gateway/agentserver-prompts.ts`、`src/runtime/gateway/agentserver-stream.ts`、`src/runtime/generation-gateway.ts`、`src/runtime/gateway/context-envelope.test.ts`、`src/runtime/gateway/agentserver-stream.test.ts`、`src/runtime/generation-gateway.policy.test.ts`、`tests/smoke/smoke-agentserver-compact-repair.ts`、`src/runtime/gateway/direct-context-fast-path.ts`、`src/runtime/gateway/direct-context-fast-path.test.ts`。
+- 验证命令：
+  - `node --import tsx --test src/runtime/gateway/agentserver-stream.test.ts src/runtime/generation-gateway.policy.test.ts src/runtime/gateway/context-envelope.test.ts` 通过，22 tests。
+  - `npm run smoke:agentserver-compact-repair` 通过。
+  - `node --import tsx --test src/runtime/gateway/direct-context-fast-path.test.ts` 通过，16 tests。
+  - `npx tsc --noEmit --pretty false` 通过。
+- 浏览器复验状态：Orchestrator 已在真实 in-app browser 恢复 Workspace Writer URL 到 `http://127.0.0.1:5174` 并重跑文献场景。后续 repair continuation 最新 run `project-literature-evidence-review-mp6rl5bt-m6nutb · failed · recoverable` 没有再次出现 bounded-stop，而是在 AgentServer 模型渠道 `503 Service Unavailable` 处可恢复失败；browser 本地 console error 为空。仍需在模型渠道恢复后 replay 同一 bounded-stop 场景，确认 gateway terminal fallback 在真实 browser 中呈现为 `repair-needed` ToolPayload。
+
+#### Verified
+
+##### SF-STAB-005 - P1 - Provider-status fast path swallows minimal repair continuation and leaves browser run empty
+
+- 发现者：Orchestrator Round 3
+- 修复者：Fixer Workers Round 3 + Orchestrator
+- 来源：真实 in-app browser 使用，不是 terminal-only check。
+- 前置状态：`SF-STAB-004` verified 后，最新 browser run `project-literature-evidence-review-mp6pkfla-qintck` 已以 bounded recoverable failure 停止，不再触发 300k convergence guard。
+- 复现步骤：
+  1. 在同一 `literature-evidence-review@1.0.0` in-app browser 会话中保留上一轮 bounded-stop 失败。
+  2. 继续发送等价最小修复指令：`continue from the last bounded stop. do not start long generation. produce one minimal single stage result only. if web search or web fetch provider routes are usable then create a minimal adapter task that uses those provider routes. if this cannot be determined in this turn then return a valid failed with reason tool payload with failure reason recover actions next step and refs. do not ask agentserver for another long loop.`
+  3. 等待最新 run 结束。
+- 期望行为：系统应把这类请求识别为 repair/continue execution intent：要么生成使用 provider route 的最小 adapter task，要么返回合法 `failed-with-reason`/`repair-needed` ToolPayload；不能只回答 provider status。
+- 实际行为：最新 run `project-literature-evidence-review-mp6q2j4t-de2bzt · empty` 走 `sciforge.direct-context-fast-path`，仅返回 `Tool/provider status answered from SciForge runtime registries...` 和 `web_search/web_fetch: ready`，没有 adapter task、没有 failed-with-reason payload，也没有可展示 artifact，右侧显示“当前 run 没有 ConversationProjection 或可展示产物”。
+- 证据：in-app browser DOM 显示该 run 的过程为 `Explored sciforge.direct-context-fast-path · runtime://capability-provider-status/... Done`，claims 包含 `Required provider routes are available.`；browser console error 为空。
+- 疑似归因层：`src/runtime/gateway/direct-context-fast-path.ts` 中 provider-status intent 过宽；包含 `create/generate/minimal adapter task/continue from failed run` 的 provider-route repair 请求不应被 capability status fast path 截获。
+- 为什么是通用问题：任何用户在失败后要求“如果 provider 可用就继续生成最小任务，否则合法失败”的恢复请求，都可能被 status-only fast path 吃掉，导致协议层 completed/empty 而真实目标未完成。
+- 修复说明：收紧 `direct-context-fast-path` intent 分类，让 capability/provider status fast path 只回答纯状态/可用性问题；当 prompt 同时要求 create/generate/build/produce/run/continue task/adapter/result/payload，或要求返回 `failed-with-reason`/repair payload 时，必须让出给 backend/repair execution。`不要重跑无关步骤` 这类 scoped anti-rerun 指令如果伴随修复/生成意图，也不再被当作 context-only direct answer。
+- 文件变更：`src/runtime/gateway/direct-context-fast-path.ts`、`src/runtime/gateway/direct-context-fast-path.test.ts`、`tests/smoke/smoke-t098-latency-diagnostics-matrix.ts`。
+- 验证命令：
+  - `node --import tsx --test src/runtime/gateway/direct-context-fast-path.test.ts` 通过，15 tests。
+  - `node --import tsx tests/smoke/smoke-t098-latency-diagnostics-matrix.ts` 通过。
+- 浏览器验证：重启 dev services 后，用真实 in-app browser 重发同一最小修复 continuation。最新 run `project-literature-evidence-review-mp6qhi1m-hrit5p` 不再走 `sciforge.direct-context-fast-path` status-only empty，而是进入 `agentserver.generate.literature`；browser 本地 console error 为空。
+- 剩余风险：进入 AgentServer 后仍 bounded-stop，已另拆为 `SF-STAB-006`。
+
+##### SF-STAB-004 - P1 - Browser bounded repair handoff still lets AgentServer generation self-loop to convergence guard
+
+- 发现者：Orchestrator Round 2
+- 修复者：Fixer Worker Round 2
+- 来源：真实 in-app browser 使用，不是 terminal-only check。
+- 前置状态：`SF-STAB-003` 修复后重启 dev services，并在同一 `literature-evidence-review@1.0.0` browser 会话中重发 repair continuation。
+- 复现步骤：
+  1. 在文献场景中保留 provider-first preflight failure 和历史 convergence guard failure。
+  2. 发送：`请复用这次失败诊断继续，不要重跑无关步骤；修正生成任务，必须使用 SciForge 已解析的 web_search/web_fetch provider route 或输出合法失败 payload，然后继续完成中文证据摘要。`
+  3. 等待最新 run 结束。
+- 期望行为：bounded repair prompt 应让 AgentServer 返回一个最小修复 task、直接合法 failed-with-reason ToolPayload，或在较小 generation budget 内可恢复失败；不应继续进行无界自循环。
+- 实际行为：新 handoff 已切到 repair 紧预算，slimming trace 显示 `maxPayloadBytes=96000`、`normalizedBytes=65871`、`maxPriorAttempts=1`，但真实 browser run 仍以 convergence guard 失败：`AgentServer generation stopped by convergence guard after 332847 total tokens (limit 300000)`。
+- 证据：in-app browser 显示最新 run `project-literature-evidence-review-mp6p8nf9-gylju7 · failed · recoverable`，ExecutionUnit `EU-literature-9714406b` failureReason 为上述 332847 convergence guard；browser console error 为空。对应 handoff trace：`.sciforge/sessions/2026-05-14_literature-evidence-review_session-literature-evidence-review-mp5qqlah-7ejx43/handoffs/2026-05-15T09-08-52-229Z-agentserver-generation-0d38d10f31-slimming-trace.json`。
+- 疑似归因层：AgentServer generation prompt/protocol still allows long deliberation/tool-loop under repair; repair prompt should force minimal provider-route patch or recoverable payload and perhaps use a lower repair-specific generation guard.
+- 为什么是通用问题：即使 handoff 已 refs/digests-only，任何 repair continuation 都可能因 backend generation 自循环拖到全局 300k guard，用户仍得不到可恢复下一步。
+- 修复说明：repair continuation prompt 增加 hard-stop，要求单阶段 minimal repair/continue，禁止 broad history/full pipeline/tool-loop；refs 不足时必须返回合法 `failed-with-reason` ToolPayload。generation gateway 将 `repairContinuation` 写入 prompt metadata/system prompt/tool policy/stream guard；AgentServer stream 对 repair continuation 使用更低 token guard，`maxContextWindowTokens=200000` 时从默认 300000 前移到 60000，并返回明确 bounded-stop recoverable failure。
+- 文件变更：`src/runtime/gateway/agentserver-prompts.ts`、`src/runtime/gateway/agentserver-stream.ts`、`src/runtime/generation-gateway.ts`、`src/runtime/gateway/agentserver-stream.test.ts`、`src/runtime/gateway/context-envelope.test.ts`。
+- 验证命令：
+  - `node --import tsx --test src/runtime/gateway/agentserver-stream.test.ts src/runtime/gateway/context-envelope.test.ts src/runtime/gateway/agentserver-context-window.test.ts src/ui/src/app/chat/sessionTransforms.test.ts` 通过，48 tests。
+  - `npx tsc --noEmit --pretty false` 通过。
+- 浏览器验证：Orchestrator 重启 dev services 后用真实 in-app browser 重发同一 continuation。新 handoff 包含 `Repair-continuation hard stop` 和 `repairContinuation` metadata，仍为 repair 紧预算；最新 run `project-literature-evidence-review-mp6pkfla-qintck` 以 recoverable 失败返回，不再拖到 300k 全局 guard，而是在 `AgentServer repair generation bounded-stop after 93840 total tokens (limit 60000)` 停止；browser console error 为空。
+- 剩余风险：当前模型仍没有产出最终中文证据摘要，而是按 bounded repair guard 返回可恢复失败。下一轮稳定性工作应聚焦 provider-route minimal repair task 的成功率，而不是上下文/loop 爆炸。
+
+##### SF-STAB-003 - P1 - Browser repair continuation sends unbounded AgentServer handoff and hits convergence guard
+
+- 发现者：Orchestrator Round 1
+- 修复者：Fixer Agent Round 1
+- 来源：真实 in-app browser 使用，不是 terminal-only check。
+- 前置状态：`SF-STAB-002` 修复后，在同一 `literature-evidence-review@1.0.0` browser 会话中重发 repair continuation。
+- 复现步骤：
+  1. 在文献场景中保留一个 provider-first preflight failure：`Generated task uses direct external network APIs (requests, urllib) even though SciForge has ready provider route(s) for web_fetch, web_search.`
+  2. 发送：`请复用这次失败诊断继续，不要重跑无关步骤；修正生成任务，必须使用 SciForge 已解析的 web_search/web_fetch provider route 或输出合法失败 payload，然后继续完成中文证据摘要。`
+  3. 等待最新 run 结束。
+- 期望行为：repair handoff 应只携带失败诊断、相关 ExecutionUnit refs、provider route policy 和必要 digest，进入 bounded repair task generation；即使失败，也应在可控 token budget 内给出合法 recoverable payload。
+- 实际行为：最新 run 进入 `context=repair; executionMode=repair-or-continue-project` 并连接 AgentServer，但最终失败：`AgentServer generation stopped by convergence guard after 307194 total tokens (limit 300000); use bounded session refs, current-reference digests, or a smaller task plan instead of an unbounded generation loop.`
+- 证据：in-app browser DOM snapshot 显示最新 run `project-literature-evidence-review-mp6nnvbm-tyg1ic · failed · literature-evidence-review@1.0.0`，结果区为 `运行需要恢复 · recoverable`，failure reason 为上述 convergence guard；browser console error 为空。
+- 疑似归因层：repair handoff/context envelope/session projection/AgentServer prompt compaction；可能把旧 run raw generation text、debug trace 或过多 session history带入 repair generation。
+- 为什么是通用问题：任何失败 run 的 repair continuation 都可能因为未按 refs/digests-only 边界裁剪上下文而进入超大 handoff，不限于文献任务或 web provider。
+- 修复说明：repair continuation 仍复用稳定 AgentServer session id，但不再隐式包含 AgentServer current-work/recent-turn raw bodies；AgentServer core snapshot 在 generation prompt 中只暴露 `recentTurnRefs`、digest、char count、session metadata 和 compaction tag digest。repair generation handoff 使用更紧的 backend payload budget；旧 generated task/code/output/result/text 等 body carrier 字段在 prompt handoff 中被摘要替换为 digest/ref，不内联原始内容。
+- 为什么是通用修复：边界基于 repair context/session policy 和通用 body-carrier key 分类，不依赖文献场景、provider 名称、单个 prompt 或具体文件名；任何 repair continuation 的旧 run raw code/output/debug 内容都会走同一 refs/digests-only compaction。
+- 文件变更：`src/runtime/gateway/agentserver-context-window.ts`、`src/runtime/gateway/agentserver-prompts.ts`、`src/runtime/generation-gateway.ts`、`src/runtime/gateway/agentserver-context-window.test.ts`、`src/runtime/gateway/context-envelope.test.ts`、`PROJECT.md`。
+- 验证命令：
+  - `node --import tsx --test src/runtime/gateway/agentserver-context-window.test.ts src/runtime/gateway/context-envelope.test.ts src/ui/src/app/chat/sessionTransforms.test.ts` 通过，43 tests。
+  - `npm run typecheck` 通过。
+  - `npm run smoke:agentserver-compact-repair` 通过。
+- 浏览器验证：Orchestrator 重启 dev services 后用真实 in-app browser 重发同一 continuation；新 handoff trace 显示 repair 紧预算生效：`maxPayloadBytes=96000`、`maxInlineStringChars=8000`、`maxArrayItems=8`、`maxPriorAttempts=1`、`normalizedBytes=65871`。旧 raw generated code/output/debug body 不再是 handoff 爆炸来源。
+- 剩余风险：bounded handoff 后 AgentServer generation 仍会自循环到 convergence guard，已另拆为 `SF-STAB-004`。
+
+##### SF-STAB-002 - P1 - Browser repair continuation is over-blocked as no-execution and completes empty
+
+- 发现者：Orchestrator Round 1
+- 修复者：Fixer Agent Round 1
+- 来源：真实 in-app browser 使用，不是 terminal-only check。
+- 前置状态：`SF-STAB-001` 修复后，Orchestrator 在 in-app browser 打开 `http://127.0.0.1:5173/`，进入“文献证据评估场景”，发送真实文献请求。
+- 复现步骤：
+  1. 打开 `literature-evidence-review@1.0.0` 场景。
+  2. 发送：`请检索最近关于 agent workflow reliability 的论文，返回中文证据摘要；如果 web_search provider 不可用，请说明缺失的 provider route 和可恢复下一步，不要伪造结果。`
+  3. 等待首轮失败进入 recoverable：页面显示 `Generated task uses direct external network APIs (requests, urllib) even though SciForge has ready provider route(s) for web_fetch, web_search.`
+  4. 继续发送：`请复用这次失败诊断继续，不要重跑无关步骤；修正生成任务，必须使用 SciForge 已解析的 web_search/web_fetch provider route 或输出合法失败 payload，然后继续完成中文证据摘要。`
+- 期望行为：第二轮应被识别为 repair/continue with bounded execution，允许 AgentServer/workspace 生成 provider-first 修复任务，或在确实不能执行时输出 recoverable/needs-human 且主状态不能误导为 completed empty。
+- 实际行为：第二轮显示 `completed`，但主结果为 `主结果等待 ConversationProjection · empty`；ExecutionUnit 为 `EU-runtime-execution-forbidden`，说明 `current-turn constraints forbid workspace/code/external execution`，并提示需要用户“明确允许执行后再继续”。这与用户“修正生成任务...然后继续完成”的明确继续意图冲突。
+- 证据：in-app browser DOM snapshot 显示第二轮 run `project-literature-evidence-review-mp6n4f8x-urz5i9 · completed`，同时显示 `Runtime execution was not started because current-turn constraints forbid workspace/code/external execution`、`Needs human`、`主结果等待 ConversationProjection · empty`；browser console error 为空。
+- 疑似归因层：conversation intent / current-turn execution constraints / repair continuation classification；可能把“不要重跑无关步骤”误解成 no-execution，而没有尊重“修正生成任务...继续完成”。
+- 为什么是通用问题：任何失败 run 的“复用诊断继续、只跑必要步骤”都可能被过度归类为 no-execution，导致 repair loop 无法闭环；这不是某篇论文、某个 provider 或某个 prompt 的特例。
+- 修复说明：在 Python conversation policy 中区分全局 no-execution 指令与 scoped anti-rerun guidance。`不要重跑无关/不相关/不必要/已完成/重复步骤` 这类约束如果同时出现 repair/continue/complete/use/invoke/provider-route 等继续执行意图，不再生成 `turnExecutionConstraints`，从而允许 bounded repair execution；纯 `不要执行/不要调用/只基于 refs` 仍保持 fail-closed。
+- 文件变更：`packages/reasoning/conversation-policy/src/sciforge_conversation/goal_snapshot.py`、`packages/reasoning/conversation-policy/tests/test_goal_snapshot.py`、`packages/reasoning/conversation-policy/tests/test_execution_classifier.py`、`PROJECT.md`。
+- 验证命令：
+  - `python -m unittest packages/reasoning/conversation-policy/tests/test_goal_snapshot.py packages/reasoning/conversation-policy/tests/test_contracts.py` 通过，14 tests。
+  - `PYTHONPATH=packages/reasoning/conversation-policy/src python -m pytest packages/reasoning/conversation-policy/tests/test_execution_classifier.py` 通过，17 tests。
+  - provider-neutral service probe 通过：同类 repair continuation 输出 `turnExecutionConstraints: {}`、`executionMode: repair-or-continue-project`，风险为 external/multi-provider/recent-failure 而非 execution-forbidden。
+  - `node --import tsx --test src/runtime/generation-gateway.policy.test.ts` 通过，2 tests。
+  - `npm run typecheck` 通过。
+- 浏览器验证：Orchestrator 在真实 in-app browser 中重发同一 continuation；最新 run 不再生成 `EU-runtime-execution-forbidden`，而是进入 `context=repair; executionMode=repair-or-continue-project` 并连接 AgentServer。该修复验证通过；后续暴露的 unbounded handoff/convergence guard 另拆为 `SF-STAB-003`。
+
+##### SF-STAB-001 - P0 - Browser UI blocked by unresolved observe/web package import
+
+- 验证者：Orchestrator Round 1
+- 验证方式：in-app browser reload `http://127.0.0.1:5173/` 后主界面可用，无 Vite overlay；随后成功打开 `literature-evidence-review@1.0.0` 场景并发送真实 UI 请求。
+- 验证命令：`npm run smoke:service-lifecycle` 通过；`npm run typecheck` 通过。
+- 结论：已验证启动阻断解除；后续真实任务发现的新问题拆为 `SF-STAB-002`。
+
+#### Blocked / Won't Fix
+
+无。
+
+### Activity Log
+
+- 2026-05-15 16:00 CST - Orchestrator - 建立 Stability Orchestration 协作区，准备启动 Finder/Fixer 双 agent 轮次。
+- 2026-05-15 16:12 CST - Finder Agent Round 1 - 读取 `PROJECT.md`、`docs/Architecture.md`、`docs/AgentHarnessStandard.md`；最初跑了 bounded terminal checks（`npm run typecheck`、web-worker node:test、provider/external failure node:test）且均通过，但根据总控新指令，这些只作为背景，不据此开问题。
+- 2026-05-15 16:16 CST - Finder Agent Round 1 - 清理被中断后残留的临时 browser smoke 进程，避免污染后续真实浏览器验证。
+- 2026-05-15 16:18 CST - Finder Agent Round 1 - 使用 Codex in-app browser 打开 `http://127.0.0.1:5173/`，首屏被 Vite import-analysis overlay 阻断，新增 `SF-STAB-001`。
+- 2026-05-15 16:24 CST - Fixer Agent Round 1 - 曾认领 `SF-STAB-001` 并做只读排查；收到总控更新后暂停代码修改，保留 issue 给 Orchestrator 的 dev-health 通用修复路径。
+- 2026-05-15 16:28 CST - Orchestrator - 受控重启 owned Vite dev server 后，用 in-app browser 复载确认 SciForge 主界面可用；补强 dev health app-module probes；`npm run smoke:service-lifecycle` 与 `npm run typecheck` 通过；将 `SF-STAB-001` 移到 Fixed Pending Verification。
+- 2026-05-15 16:36 CST - Orchestrator - 用 in-app browser 验证 `SF-STAB-001` 已解除，打开文献场景并发送真实 provider-first 请求；首轮 fail-closed 可读，但 continuation 被误判 no-execution，新增 `SF-STAB-002`。
+- 2026-05-15 16:49 CST - Fixer Agent Round 1 - 修复 `SF-STAB-002`：conversation policy 不再把 scoped “不要重跑无关步骤”误判为全局 no-execution；补 provider-neutral repair continuation regression；相关 Python/TS/typecheck 验证通过，等待真实 browser 复测。
+- 2026-05-15 17:05 CST - Orchestrator - 用 in-app browser 复测 `SF-STAB-002`，确认 continuation 进入 AgentServer repair 路径、不再被 turn constraints 阻断；最新 run 因 307194 token convergence guard 失败，新增 `SF-STAB-003`。
+- 2026-05-15 17:22 CST - Fixer Worker B - `SF-STAB-003` gateway patch ready：repair continuation disables implicit raw AgentServer current-work reuse and prompt handoff now summarizes AgentServer snapshots plus old task source/output bodies as refs/digests; targeted gateway tests pass.
+- 2026-05-15 16:46 CST - Fixer Agent Round 1 - 将 `SF-STAB-003` 移到 Fixed Pending Verification：补 repair handoff refs/digests-only regression，typecheck/build/targeted gateway tests/AgentServer generation smoke/browser provider preflight smoke 通过；当前无 active in-app browser pane，等待 Orchestrator/Finder 真实 browser replay。
+- 2026-05-15 17:55 CST - Orchestrator - 真实 browser 复测 `SF-STAB-003`，确认 repair handoff 已切到 96KB/refs-first 紧预算，但 AgentServer 仍在 bounded handoff 下自循环到 332847 tokens，新增 `SF-STAB-004`。
+- 2026-05-15 18:20 CST - Fixer Worker Round 2 + Orchestrator - 修复并用真实 browser 验证 `SF-STAB-004`：repair continuation prompt 增加 hard-stop，stream guard 对 repair 降到 60000；最新 run `project-literature-evidence-review-mp6pkfla-qintck` 以 bounded-stop recoverable 失败返回，console error 为空。
+- 2026-05-15 19:05 CST - Orchestrator + parallel fixer workers - 修复并用真实 browser 验证 `SF-STAB-005`：provider-status fast path 不再吞 provider-route minimal repair continuation，相关 direct-context 单测和 T098 smoke 通过；最新 run 进入 AgentServer repair 后仍 bounded-stop，新增 `SF-STAB-006`。
+- 2026-05-15 20:15 CST - Fixer Workers Round 4 + Orchestrator - `SF-STAB-006` 修复进入 Fixed Pending Verification：repair bounded-stop 有 typed gateway fallback，prompt contract 强化为 terminal JSON；targeted tests、compact-repair smoke、typecheck 通过。真实 browser replay 当前被模型渠道 `503 Service Unavailable` 阻断，未能再次触发 bounded-stop。
+
+### Current Handoff
+
+当前稳定性队列中 `SF-STAB-001` 到 `SF-STAB-005` 均已 Verified，`SF-STAB-006` 已 Fixed Pending Verification。下一轮 Finder 应在模型渠道恢复后用真实 in-app browser replay provider-route minimal repair continuation，确认 bounded-stop 被呈现为终端 `repair-needed`/`failed-with-reason` ToolPayload 或最小 provider-route adapter task；如仍失败，保留最新 run id 并更新 `SF-STAB-006`，不要 reopen 已验证的 fast-path/context-window 问题。

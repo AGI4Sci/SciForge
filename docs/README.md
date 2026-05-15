@@ -1,6 +1,6 @@
 # SciForge 文档
 
-最后更新：2026-05-10
+最后更新：2026-05-15
 
 `docs/` 只保留项目级真相源。模块内部的 API、renderer、skill 或 provider 细节继续放在对应 package 的 README 或源码旁边，避免同一个 contract 在多处漂移。
 
@@ -8,6 +8,7 @@
 
 - [`Usage.md`](Usage.md)：启动、配置、常用工作流、双实例互修、Computer Use 和验证命令。
 - [`Architecture.md`](Architecture.md)：真实运行链路、会话策略、AgentServer/backend gateway、workspace writer、时间线和互修边界。
+- [`ProjectSessionMemory.md`](ProjectSessionMemory.md)：workspace 本地 append-only project memory、refs/blob store、context projection、AgentServer orchestration 和 KV cache-aware handoff 设计。
 - [`AgentHarnessStandard.md`](AgentHarnessStandard.md)：Lightning-style agent harness 编程标准、分级 hooks、contract schema、merge 规则和最小实验案例。
 - [`HarnessResearchGuide.md`](HarnessResearchGuide.md)：harness prompt/policy 研究入口、module directive preview 和 AgentServer prompt 边界。
 - [`Extending.md`](Extending.md)：scenario package、capability brief、observe/action/verifier、UIManifest、interactive view 和 skill promotion 的扩展契约。
@@ -48,7 +49,7 @@ SciForge 是活跃研发原型，但架构主线已经完成 backend-first / con
 
 ## 维护规则
 
-- 不再新增项目级长文档。新内容优先合并到 `Usage.md`、`Architecture.md`、`AgentHarnessStandard.md` 或 `Extending.md`；多轮对话算法细节继续沉淀到 `SciForgeConversationSessionRecovery.md`。
+- 不再随意新增项目级长文档。新内容优先合并到 `Usage.md`、`Architecture.md`、`ProjectSessionMemory.md`、`AgentHarnessStandard.md` 或 `Extending.md`；多轮对话算法细节继续沉淀到 `SciForgeConversationSessionRecovery.md`。
 - 文档描述字段、命令或协议时，必须指向代码真相源。
 - 模块专有细节留在模块目录，例如 `packages/presentation/components/*/README.md` 或 observe provider 的 `vision_docs/`。
 - 删除或重命名文档时，同步更新 README、代码里的 `detailRef` 和 smoke 测试。
