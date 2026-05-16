@@ -260,6 +260,7 @@ export function compactRunRawAuditForProjectionPayload(
     cancelBoundary: record.cancelBoundary,
     historicalEditConflict: record.historicalEditConflict,
     guidanceQueue: record.guidanceQueue,
+    streamProcess: record.streamProcess,
     backgroundCompletion: backgroundCompletion ? {
       status: backgroundCompletion.status,
       stage: backgroundCompletion.stage,

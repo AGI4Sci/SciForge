@@ -778,6 +778,7 @@ function verificationRequiredButUnsatisfied(payload: ToolPayload, request: Gatew
 }
 
 function verificationRequiredByRequest(payload: ToolPayload, request: GatewayRequest | undefined) {
+  if (verificationBlockDisabledByPayload(payload) && !requestExplicitlyRequiresBlockingVerification(request)) return false;
   const policy = isRecord(request?.verificationPolicy) ? request?.verificationPolicy : undefined;
   if (policy?.required === true && !softHarnessVerificationCanUseNonBlockingLatency(request, policy)) return true;
   const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
@@ -799,6 +800,7 @@ function verificationRequiredByRequest(payload: ToolPayload, request: GatewayReq
 }
 
 function explicitVerificationRequiredByRequest(payload: ToolPayload, request: GatewayRequest | undefined) {
+  if (verificationBlockDisabledByPayload(payload)) return requestExplicitlyRequiresBlockingVerification(request);
   const policy = isRecord(request?.verificationPolicy) ? request?.verificationPolicy : undefined;
   if (policy?.required === true && !softHarnessVerificationCanUseNonBlockingLatency(request, policy)) return true;
   const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
@@ -867,6 +869,10 @@ function verificationBlockDisabledByPayload(payload: ToolPayload) {
       : {};
   const intentFirst = isRecord(record.intentFirstVerification) ? record.intentFirstVerification : {};
   const routing = isRecord(intentFirst.routing) ? intentFirst.routing : {};
+  if ((payload.verificationResults ?? []).some((result) => {
+    const diagnostics = isRecord(result.diagnostics) ? result.diagnostics : {};
+    return diagnostics.nonBlocking === true || diagnostics.required === false;
+  })) return true;
   if (verification.nonBlocking === true) return true;
   if (verificationStatus.blocking === false) return true;
   if (stringField(routing.blockingPolicy) === 'non-blocking') return true;

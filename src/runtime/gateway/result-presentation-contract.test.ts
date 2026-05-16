@@ -302,6 +302,12 @@ test('attachResultPresentationContract does not downgrade direct-context answers
     request: {
       skillDomain: 'literature',
       prompt: 'Using only the selected reproduction report, tell me whether this toy reproduction is credible. List the exact metrics that support the verdict.',
+      verificationPolicy: {
+        required: true,
+        mode: 'lightweight',
+        riskLevel: 'medium',
+        reason: 'contractRef=runtime://agent-harness/contracts/balanced-default/test; pre-normalized harness policy',
+      },
       expectedArtifactTypes: ['notebook-timeline'],
       artifacts: [],
       uiState: {
