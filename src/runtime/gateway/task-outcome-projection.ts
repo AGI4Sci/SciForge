@@ -169,7 +169,7 @@ export function materializeTaskOutcomeProjection(input: GatewayTaskOutcomeProjec
   const units = runtimeExecutionUnits(input.payload);
   const failures = failureSignaturesFromPayload(input.payload);
   const protocolStatus = protocolStatusFromPayload(input.payload, units);
-  const nextStepAttribution = nextStepAttributionFromPayload(input.payload, input.request, refs, failures);
+  const nextStepAttribution = nextStepAttributionFromPayload(input.payload, input.request, refs, failures, protocolStatus);
   const userSatisfactionProxy = userSatisfactionProxyFromPayload(input.payload, input.request, refs, protocolStatus, nextStepAttribution);
   const taskOutcome = taskOutcomeFromProjection(protocolStatus, input.payload, input.request, userSatisfactionProxy);
   const conversationProjectionRef = conversationProjectionRefFromContext(input.refs);
@@ -402,7 +402,7 @@ function terminalUserVisibleText(
   taskOutcome: TaskOutcomeStatus,
   nextStep: NextStepAttribution,
 ) {
-  if (verificationRequiredButUnsatisfied(payload, request)) {
+  if (protocolStatus === 'protocol-success' && verificationRequiredButUnsatisfied(payload, request)) {
     return [
       'Result artifacts are available, but required verification is still unverified; this cannot be counted as task success.',
       nextStep.nextStep,
@@ -766,16 +766,20 @@ function requiredVerificationIsUnverified(payload: ToolPayload) {
 
 function verificationRequiredButUnsatisfied(payload: ToolPayload, request: GatewayRequest | undefined) {
   const verificationResults = payload.verificationResults ?? [];
-  if (requiredVerificationIsUnverified(payload)) return true;
+  if (verificationBlockDisabledByPayload(payload) && !explicitVerificationRequiredByRequest(payload, request)) return false;
+  if (requiredVerificationIsUnverified(payload)) {
+    if (verificationBlockDisabledByLatency(request) || verificationBlockDisabledByPayload(payload)) {
+      return explicitVerificationRequiredByRequest(payload, request);
+    }
+    return true;
+  }
   if (!verificationRequiredByRequest(payload, request)) return false;
   return !verificationResults.some((result) => result.verdict === 'pass');
 }
 
 function verificationRequiredByRequest(payload: ToolPayload, request: GatewayRequest | undefined) {
   const policy = isRecord(request?.verificationPolicy) ? request?.verificationPolicy : undefined;
-  if (policy?.required === true) return true;
-  if ((request?.selectedVerifierIds ?? []).length > 0) return true;
-  if (request?.userExplicitVerification && !['none', 'unverified'].includes(request.userExplicitVerification)) return true;
+  if (policy?.required === true && !softHarnessVerificationCanUseNonBlockingLatency(request, policy)) return true;
   const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
   const displayVerification = isRecord(displayIntent.verificationStatus) ? displayIntent.verificationStatus : {};
   const displayVerificationText = [
@@ -785,16 +789,90 @@ function verificationRequiredByRequest(payload: ToolPayload, request: GatewayReq
     stringField(displayVerification.summary),
     stringField(displayVerification.label),
   ].filter(Boolean).join(' ');
-  const requestText = [
-    request?.prompt,
-    payload.message,
-  ].filter(Boolean).join('\n');
+  const requestText = [request?.prompt].filter(Boolean).join('\n');
+  const explicitVerificationRequest = explicitVerificationRequestPattern().test(requestText)
+    || (explicitVerificationRequestPattern().test(requestText) && /unverified|未验证|no verification/i.test(displayVerificationText));
+  if (request?.userExplicitVerification && !['none', 'unverified'].includes(request.userExplicitVerification)) return true;
+  if (explicitVerificationRequest) return true;
+  if (policy?.required === false || verificationBlockDisabledByLatency(request)) return false;
+  return false;
+}
+
+function explicitVerificationRequiredByRequest(payload: ToolPayload, request: GatewayRequest | undefined) {
+  const policy = isRecord(request?.verificationPolicy) ? request?.verificationPolicy : undefined;
+  if (policy?.required === true && !softHarnessVerificationCanUseNonBlockingLatency(request, policy)) return true;
+  const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
+  const displayVerification = isRecord(displayIntent.verificationStatus) ? displayIntent.verificationStatus : {};
+  const displayVerificationText = [
+    stringField(displayVerification.status),
+    stringField(displayVerification.verdict),
+    stringField(displayVerification.response),
+    stringField(displayVerification.summary),
+    stringField(displayVerification.label),
+  ].filter(Boolean).join(' ');
+  const requestText = [request?.prompt].filter(Boolean).join('\n');
+  if (request?.userExplicitVerification && !['none', 'unverified'].includes(request.userExplicitVerification)) return true;
   return explicitVerificationRequestPattern().test(requestText)
     || (explicitVerificationRequestPattern().test(requestText) && /unverified|未验证|no verification/i.test(displayVerificationText));
 }
 
 function explicitVerificationRequestPattern() {
   return /\b(required verification|required verifier|verification required|must verify|verify before|human approval|release gate)\b|必须.{0,16}验证|验证.{0,16}必须|不能.{0,16}声称.{0,16}(完成|success|satisfied)|标记.{0,8}blocker|blocker/i;
+}
+
+function softHarnessVerificationCanUseNonBlockingLatency(
+  request: GatewayRequest | undefined,
+  policy: Record<string, unknown>,
+) {
+  if (!verificationBlockDisabledByLatency(request)) return false;
+  if (requestExplicitlyRequiresBlockingVerification(request)) return false;
+  if (policy.riskLevel === 'high' || policy.humanApprovalPolicy === 'required') return false;
+  if (policy.mode !== 'lightweight') return false;
+  const reason = stringField(policy.reason) ?? '';
+  return /contractRef=runtime:\/\/agent-harness\/contracts\/|profileId=[^;]+|intensity=light|Harness policy consumed/i.test(reason);
+}
+
+function requestExplicitlyRequiresBlockingVerification(request: GatewayRequest | undefined) {
+  if (!request) return false;
+  if (request.userExplicitVerification && !['none', 'unverified'].includes(request.userExplicitVerification)) return true;
+  if (toStringList(request.selectedActionIds).length > 0) return true;
+  if (toStringList(request.actionSideEffects).length > 0) return true;
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  if (uiState.humanApprovalPolicy === 'required') return true;
+  return explicitVerificationRequestPattern().test(request.prompt ?? '');
+}
+
+function verificationBlockDisabledByLatency(request: GatewayRequest | undefined) {
+  const uiState = isRecord(request?.uiState) ? request.uiState : {};
+  const conversationPolicy = isRecord(uiState.conversationPolicy) ? uiState.conversationPolicy : {};
+  const conversationPolicySummary = isRecord(uiState.conversationPolicySummary) ? uiState.conversationPolicySummary : {};
+  const latencyPolicy = isRecord(uiState.latencyPolicy)
+    ? uiState.latencyPolicy
+    : isRecord(conversationPolicy.latencyPolicy)
+      ? conversationPolicy.latencyPolicy
+      : isRecord(conversationPolicySummary.latencyPolicy)
+        ? conversationPolicySummary.latencyPolicy
+        : {};
+  return latencyPolicy.blockOnVerification === false;
+}
+
+function verificationBlockDisabledByPayload(payload: ToolPayload) {
+  const record = payload as unknown as Record<string, unknown>;
+  const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
+  const verification = isRecord(displayIntent.verification) ? displayIntent.verification : {};
+  const verificationStatus = isRecord(displayIntent.verificationStatus)
+    ? displayIntent.verificationStatus
+    : isRecord(record.verificationStatus)
+      ? record.verificationStatus
+      : {};
+  const intentFirst = isRecord(record.intentFirstVerification) ? record.intentFirstVerification : {};
+  const routing = isRecord(intentFirst.routing) ? intentFirst.routing : {};
+  if (verification.nonBlocking === true) return true;
+  if (verificationStatus.blocking === false) return true;
+  if (stringField(routing.blockingPolicy) === 'non-blocking') return true;
+  return (payload.workEvidence ?? []).some((item) => {
+    return (item.diagnostics ?? []).some((diagnostic) => /blockingPolicy=non-blocking/i.test(diagnostic));
+  });
 }
 
 function userSatisfactionProxyFromPayload(
@@ -809,13 +887,15 @@ function userSatisfactionProxyFromPayload(
     ...(request?.expectedArtifactTypes ?? []),
     ...toStringList(isRecord(request?.uiState) ? request?.uiState.expectedArtifactTypes : undefined),
   ]);
-  const needsHuman = units.some((unit) => String(unit.status) === 'needs-human');
+  const ignoreExpectedArtifactTypes = directContextReadOnlyPayloadSatisfiesWithoutExpectedArtifacts(payload);
+  const openWorkStatus = openWorkStatusFromPayload(payload);
+  const needsHuman = units.some((unit) => String(unit.status) === 'needs-human') || openWorkStatus === 'needs-human';
   const explicitFailure = protocolStatus === 'protocol-failed';
   const explicitAnswerStatus = explicitAnswerStatusFromPayload(payload);
   const answeredLatestRequest = explicitAnswerStatus === 'satisfied' && !hasCurrentReferenceFailure(payload);
   const usableResultVisible = hasUsableVisibleResult(payload);
-  const expectedArtifactsPresent = expectedArtifactTypes.length === 0 || expectedArtifactTypes.some((type) => {
-    return payload.artifacts.some((artifact) => isRecord(artifact) && String(artifact.type || artifact.artifactType || '') === type);
+  const expectedArtifactsPresent = ignoreExpectedArtifactTypes || expectedArtifactTypes.length === 0 || expectedArtifactTypes.some((type) => {
+    return payload.artifacts.some((artifact) => isRecord(artifact) && artifactSemanticTypeCandidates(artifact).includes(type));
   });
   const structuredNextStep = Boolean(nextStep.nextStep);
   const preservesWorkRefs = refs.length > 0;
@@ -823,6 +903,7 @@ function userSatisfactionProxyFromPayload(
   const requiredUnverified = verificationRequiredButUnsatisfied(payload, request);
   const reasons = [
     answeredLatestRequest ? 'structured task outcome marks the latest request satisfied' : 'latest request is not marked satisfied by structured outcome metadata',
+    openWorkStatus ? `structured result still declares ${openWorkStatus}` : undefined,
     usableResultVisible ? 'usable answer/artifact evidence is visible' : 'no usable visible result or artifact was detected',
     expectedArtifactsPresent ? 'expected artifact coverage is present or not required' : 'one or more expected artifact types are missing',
     requiredUnverified ? 'required verification is explicitly unverified and cannot count as task success' : undefined,
@@ -862,11 +943,66 @@ function userSatisfactionProxyFromPayload(
   };
 }
 
+function directContextReadOnlyPayloadSatisfiesWithoutExpectedArtifacts(payload: ToolPayload) {
+  const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
+  if (stringField(displayIntent.taskOutcome) !== 'satisfied') return false;
+  const units = toRecordList(payload.executionUnits);
+  if (!units.some((unit) => stringField(unit.tool) === 'sciforge.direct-context-fast-path' && stringField(unit.status) === 'done')) return false;
+  if (units.some((unit) => ['failed', 'failed-with-reason', 'repair-needed', 'needs-human'].includes(stringField(unit.status) ?? ''))) return false;
+  const diagnosticText = [
+    payload.message,
+    ...payload.claims.map((claim) => isRecord(claim) ? stringField(claim.text) ?? '' : ''),
+  ].join('\n');
+  return !/Missing expected artifacts|缺失产物|cannot satisfy follow-up without expected artifacts/i.test(diagnosticText);
+}
+
+function artifactSemanticTypeCandidates(artifact: Record<string, unknown>) {
+  const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+  const data = isRecord(artifact.data) ? artifact.data : {};
+  const raw = [
+    String(artifact.type || ''),
+    String(artifact.artifactType || ''),
+    String(artifact.kind || ''),
+    String(artifact.id || ''),
+    String(metadata.type || ''),
+    String(metadata.artifactType || ''),
+    String(metadata.kind || ''),
+  ].filter(Boolean);
+  const text = [
+    artifact.id,
+    artifact.type,
+    artifact.artifactType,
+    artifact.kind,
+    artifact.title,
+    artifact.description,
+    artifact.path,
+    artifact.dataRef,
+    metadata.title,
+    metadata.description,
+    metadata.reportRef,
+    metadata.markdownRef,
+    metadata.readableRef,
+    data.title,
+    data.summary,
+    boundedSemanticText(data.markdown),
+    boundedSemanticText(data.content),
+  ].map(String).join(' ');
+  if (/project[-_\s]?brief|research[-_\s]?report|grant[-_\s]?proposal/i.test(text)) raw.push('research-report');
+  if (/risk[-_\s]?register|evidence[-_\s]?matrix/i.test(text)) raw.push('evidence-matrix');
+  if (/decision[-_\s]?log|notebook[-_\s]?timeline/i.test(text)) raw.push('notebook-timeline');
+  return uniqueStrings(raw);
+}
+
+function boundedSemanticText(value: unknown) {
+  return typeof value === 'string' ? value.slice(0, 4000) : '';
+}
+
 function nextStepAttributionFromPayload(
   payload: ToolPayload,
   request: GatewayRequest | undefined,
   refs: TaskRunCardRef[],
   failures: FailureSignatureInput[],
+  protocolStatus: TaskProtocolStatus,
 ): NextStepAttribution {
   const units = toRecordList(payload.executionUnits);
   const evidence = payload.workEvidence ?? [];
@@ -874,7 +1010,7 @@ function nextStepAttributionFromPayload(
   const unitWithNextStep = units.find((unit) => stringField(unit.nextStep) || toStringList(unit.recoverActions).length);
   const workEvidenceWithNextStep = evidence.find((item) => item.nextStep || item.recoverActions.length);
   const verificationWithNextStep = verification.find((item) => item.repairHints?.length);
-  const verificationGateUnsatisfied = verificationRequiredButUnsatisfied(payload, request);
+  const verificationGateUnsatisfied = protocolStatus === 'protocol-success' && verificationRequiredButUnsatisfied(payload, request);
   const nextStep = verificationGateUnsatisfied
     ? 'Run the required verifier or attach human approval before marking the task satisfied.'
     : stringField(unitWithNextStep?.nextStep)
@@ -1050,12 +1186,49 @@ function hasUsableVisibleResult(payload: ToolPayload) {
 function explicitAnswerStatusFromPayload(payload: ToolPayload) {
   const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
   const taskOutcome = stringField(displayIntent.taskOutcome);
-  if (taskOutcome === 'satisfied') return 'satisfied';
   if (['needs-work', 'needs-human', 'blocked', 'unknown'].includes(taskOutcome ?? '')) return taskOutcome;
+  const openWorkStatus = openWorkStatusFromPayload(payload);
+  if (openWorkStatus) return openWorkStatus;
+  if (taskOutcome === 'satisfied') return 'satisfied';
   const answerStatus = stringField(displayIntent.answerStatus) ?? stringField(displayIntent.userGoalStatus);
   if (answerStatus === 'satisfied' || answerStatus === 'answered') return 'satisfied';
   if (['needs-work', 'needs-human', 'blocked', 'unknown'].includes(answerStatus ?? '')) return answerStatus;
   if (completeResultPresentationAnswersRequest(displayIntent.resultPresentation, payload)) return 'satisfied';
+  return undefined;
+}
+
+function openWorkStatusFromPayload(payload: ToolPayload): TaskOutcomeStatus | undefined {
+  const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
+  const statuses = [
+    ...toRecordList(payload.claims).flatMap(openWorkStatusRecordFields),
+    ...resultPresentationOpenWorkStatuses(displayIntent.resultPresentation),
+  ].map(normalizeOpenWorkStatus);
+  if (statuses.includes('needs-human')) return 'needs-human';
+  if (statuses.includes('blocked')) return 'blocked';
+  if (statuses.includes('needs-work')) return 'needs-work';
+  return undefined;
+}
+
+function resultPresentationOpenWorkStatuses(resultPresentation: unknown) {
+  if (!isRecord(resultPresentation)) return [];
+  return toRecordList(resultPresentation.keyFindings).flatMap(openWorkStatusRecordFields);
+}
+
+function openWorkStatusRecordFields(record: Record<string, unknown>) {
+  return [
+    stringField(record.status),
+    stringField(record.verdict),
+    stringField(record.verificationState),
+    stringField(record.answerStatus),
+    stringField(record.taskOutcome),
+  ].filter((value): value is string => Boolean(value));
+}
+
+function normalizeOpenWorkStatus(value: unknown): TaskOutcomeStatus | undefined {
+  const text = typeof value === 'string' ? value.toLowerCase().trim().replaceAll(/[\s_]+/g, '-') : '';
+  if (['needs-human', 'human-required', 'needs-human-approval'].includes(text)) return 'needs-human';
+  if (['blocked', 'failed', 'failed-with-reason', 'repair-needed'].includes(text)) return 'blocked';
+  if (['needs-work', 'blocker', 'partial', 'incomplete'].includes(text)) return 'needs-work';
   return undefined;
 }
 

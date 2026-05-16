@@ -91,6 +91,47 @@ test('structured direct answers with nonblocking displayIntent merge satisfied d
   assert.deepEqual(schemaErrors(payload), []);
 });
 
+test('plain AgentServer ToolPayload JSON normalizes loose artifact refs instead of triggering direct-text guard', () => {
+  const text = JSON.stringify({
+    message: 'Generated a compact mini grant research package.',
+    confidence: 0.91,
+    claimType: 'research-package',
+    evidenceLevel: 'generated',
+    reasoningTrace: 'AgentServer returned structured ToolPayload JSON.',
+    claims: [
+      { id: 'claim-brief', text: 'Project brief, risk register, and timeline were produced.', evidenceLevel: 'generated' },
+    ],
+    displayIntent: 'research-package',
+    uiManifest: [
+      { componentId: 'report-viewer', artifactRef: 'project-brief.md', title: 'Project brief' },
+      { componentId: 'evidence-matrix', artifactRef: 'risk-register.md', title: 'Risks' },
+      { componentId: 'notebook-timeline', artifactRef: 'timeline-budget.md', title: 'Timeline' },
+    ],
+    executionUnits: [
+      { id: 'generate-package', status: 'completed', tool: 'agentserver' },
+    ],
+    artifacts: [
+      { ref: 'project-brief.md', kind: 'markdown', content: '# Brief\nGoals and scope.' },
+      { ref: 'risk-register.md', kind: 'markdown', content: '# Risks\n| Risk | Mitigation |' },
+      { ref: 'timeline-budget.md', kind: 'markdown', content: '# Timeline\nMonth 1.' },
+    ],
+  });
+
+  const payload = toolPayloadFromPlainAgentOutput(text, {
+    skillDomain: 'literature',
+    prompt: 'Generate a mini grant research package.',
+    artifacts: [],
+  });
+
+  assert.equal(payload.claimType, 'research-package');
+  assert.equal(payload.displayIntent?.status, 'completed');
+  assert.equal(payload.executionUnits[0]?.status, 'completed');
+  assert.notEqual(payload.artifacts[0]?.type, 'runtime-diagnostic');
+  assert.equal(payload.uiManifest[0]?.artifactRef, 'project-brief');
+  assert.equal(payload.uiManifest[1]?.artifactRef, 'risk-register');
+  assert.deepEqual(schemaErrors(payload), []);
+});
+
 test('structured blocking answers without displayIntent do not default to satisfied', () => {
   const payload = coerceWorkspaceTaskPayload({
     message: 'The provider route is blocked.',
@@ -170,6 +211,30 @@ test('plain AgentServer text wraps human-facing prose in an audited ToolPayload'
   assert.equal(payload.executionUnits[0]?.status, 'done');
   assert.equal(payload.artifacts[0]?.type, 'research-report');
   assert.match(payload.reasoningTrace, /wrapped it in a strict ToolPayload/i);
+  assert.deepEqual(schemaErrors(payload), []);
+});
+
+test('plain AgentServer text exposes mentioned workspace files as artifacts', () => {
+  const payload = toolPayloadFromPlainAgentOutput([
+    'The task is complete. All outputs have been generated:',
+    '- CSV: `output/experiment_data.csv`',
+    '- Charts: `output/chart_treatment_timepoint.png`, `output/chart_batch.png`',
+    '- Report: `output/report.md`',
+    '- Evidence matrix: `output/evidence_matrix.json`',
+    '- Timeline: `output/notebook_timeline.json`',
+    '- Rerun command: `python drugA_batch_analysis.py /dev/null output`',
+  ].join('\n'), {
+    skillDomain: 'literature',
+    prompt: 'Create a reproducible data-analysis mini project with a CSV and chart artifacts.',
+    artifacts: [],
+  });
+
+  assert.equal(payload.claimType, 'agentserver-direct-answer');
+  assert.ok(payload.artifacts.some((artifact) => artifact.id === 'experiment_data' && artifact.type === 'csv' && artifact.path === 'output/experiment_data.csv'));
+  assert.ok(payload.artifacts.some((artifact) => artifact.id === 'chart_treatment_timepoint' && artifact.type === 'image'));
+  assert.ok(payload.artifacts.some((artifact) => artifact.id === 'evidence_matrix' && artifact.type === 'evidence-matrix'));
+  assert.ok(payload.uiManifest.some((slot) => slot.artifactRef === 'experiment_data'));
+  assert.ok(payload.uiManifest.some((slot) => slot.artifactRef === 'chart_treatment_timepoint'));
   assert.deepEqual(schemaErrors(payload), []);
 });
 

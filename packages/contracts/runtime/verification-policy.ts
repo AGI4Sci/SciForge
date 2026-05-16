@@ -37,6 +37,7 @@ export interface RuntimeVerificationPolicyRequest {
   humanApproval?: unknown;
   actionSideEffects?: unknown;
   selectedActionIds?: unknown;
+  userExplicitVerification?: unknown;
 }
 
 export interface RuntimeVerificationPolicyPayload {
@@ -46,6 +47,8 @@ export interface RuntimeVerificationPolicyPayload {
   displayIntent?: unknown;
   logs?: unknown;
   message?: unknown;
+  claimType?: unknown;
+  evidenceLevel?: unknown;
   verificationResults?: unknown;
   workEvidence?: unknown;
 }
@@ -83,10 +86,16 @@ export function normalizeRuntimeVerificationPolicy(
     ...toStringList(request.uiState?.selectedVerifierIds),
   ]);
   const defaultReason = defaultVerificationReason(riskLevel);
+  const directContextNonBlocking = directContextReadOnlyAnswerCanUseNonBlockingVerification(
+    request,
+    payload,
+    riskLevel,
+    selectedVerifierIds,
+  );
 
   if (explicitRecord) {
     const mode = explicit?.mode ?? (riskLevel === 'high' ? 'hybrid' : 'lightweight');
-    return {
+    const normalized: RuntimeVerificationPolicy = {
       ...explicitRecord,
       required: riskLevel === 'high' ? true : explicit?.required ?? false,
       mode: riskLevel === 'high' && mode === 'none' ? 'hybrid' : mode,
@@ -98,13 +107,18 @@ export function normalizeRuntimeVerificationPolicy(
         : explicit?.humanApprovalPolicy,
       unverifiedReason: explicit?.unverifiedReason,
     };
+    if (directContextNonBlocking) return relaxDirectContextVerificationPolicy(normalized);
+    if (softHarnessVerificationCanUseNonBlockingLatency(request, normalized, payload)) {
+      return relaxSoftHarnessVerificationPolicy(normalized);
+    }
+    return normalized;
   }
 
   return {
-    required: riskLevel === 'high',
+    required: directContextNonBlocking ? false : riskLevel === 'high',
     mode: riskLevel === 'high' ? 'hybrid' : 'lightweight',
     riskLevel,
-    reason: defaultReason,
+    reason: directContextNonBlocking ? directContextVisibleVerificationReason(defaultReason) : defaultReason,
     selectedVerifierIds,
     humanApprovalPolicy: riskLevel === 'high' ? 'required' : 'optional',
   };
@@ -117,6 +131,8 @@ export function evaluateRuntimeVerificationGate(
   providedResults: RuntimeVerificationResult[] = [],
 ): RuntimeVerificationGate {
   const decisive = mostDecisiveVerificationResult(providedResults);
+  const nonBlocking = verificationIsNonBlocking(request, policy, payload);
+  const requiredForGate = policy.required && !nonBlocking;
   const approval = normalizeHumanApproval(request.humanApproval ?? request.uiState?.humanApproval);
   const highRiskAction = policy.riskLevel === 'high' || hasHighRiskActionSignal(request, payload);
   const releaseGate = releaseGateRequirement(payload, request);
@@ -208,7 +224,7 @@ export function evaluateRuntimeVerificationGate(
       },
     };
   }
-  if (decisive) return { blocked: policy.required, result: decisive };
+  if (decisive) return { blocked: requiredForGate, result: decisive };
   return {
     blocked: false,
     result: {
@@ -217,11 +233,12 @@ export function evaluateRuntimeVerificationGate(
       confidence: 0,
       critique: policy.reason,
       evidenceRefs: executionUnitRefs(payload),
-      repairHints: policy.required ? ['Run an appropriate verifier or request human approval.'] : [],
+      repairHints: requiredForGate ? ['Run an appropriate verifier or request human approval.'] : [],
       diagnostics: {
         riskLevel: policy.riskLevel,
         mode: policy.mode,
-        required: policy.required,
+        required: requiredForGate,
+        nonBlocking,
         visibleUnverified: true,
       },
     },
@@ -253,12 +270,20 @@ export function createRuntimeVerificationArtifact(
 export function verificationIsNonBlocking(
   request: RuntimeVerificationPolicyRequest,
   policy: RuntimeVerificationPolicy,
+  payload?: RuntimeVerificationPolicyPayload,
 ) {
-  const latency = isRecord(request.uiState?.latencyPolicy) ? request.uiState.latencyPolicy : {};
-  return latency.blockOnVerification === false
+  const latencyNonBlocking = verificationLatencyIsNonBlocking(request);
+  const directContextReadOnly = directContextReadOnlyAnswerCanUseNonBlockingVerification(
+    request,
+    payload,
+    policy.riskLevel,
+    policy.selectedVerifierIds ?? [],
+  );
+  const softHarnessRequired = softHarnessVerificationCanUseNonBlockingLatency(request, policy, payload);
+  return (latencyNonBlocking || directContextReadOnly)
     && policy.riskLevel !== 'high'
     && policy.humanApprovalPolicy !== 'required'
-    && !policy.required;
+    && (!policy.required || softHarnessRequired);
 }
 
 export function mostDecisiveVerificationResult(results: RuntimeVerificationResult[]) {
@@ -357,6 +382,136 @@ function hasStructuredHighRiskActionSignal(
 ) {
   if (structuredActionSignalsHaveHighRisk(request)) return true;
   return executionUnitRecords(payload).some((unit) => executionUnitHasHighRiskActionSignal(unit));
+}
+
+function directContextReadOnlyAnswerCanUseNonBlockingVerification(
+  request: RuntimeVerificationPolicyRequest,
+  payload: RuntimeVerificationPolicyPayload | undefined,
+  riskLevel: RuntimeVerificationRiskLevel,
+  selectedVerifierIds: string[],
+) {
+  if (!isDirectContextFastPathPayload(payload)) return false;
+  if (riskLevel === 'high') return false;
+  if (hasStructuredHighRiskActionSignal(request, payload)) return false;
+  if (directContextRequestRequiresVerification(request, selectedVerifierIds)) return false;
+  return true;
+}
+
+function relaxDirectContextVerificationPolicy(policy: RuntimeVerificationPolicy): RuntimeVerificationPolicy {
+  if (!policy.required && policy.humanApprovalPolicy !== 'required') {
+    return {
+      ...policy,
+      reason: directContextVisibleVerificationReason(policy.reason),
+    };
+  }
+  return {
+    ...policy,
+    required: false,
+    humanApprovalPolicy: policy.humanApprovalPolicy === 'required' ? 'optional' : policy.humanApprovalPolicy,
+    reason: directContextVisibleVerificationReason(policy.reason),
+  };
+}
+
+function relaxSoftHarnessVerificationPolicy(policy: RuntimeVerificationPolicy): RuntimeVerificationPolicy {
+  return {
+    ...policy,
+    required: false,
+    humanApprovalPolicy: policy.humanApprovalPolicy === 'required' ? 'optional' : policy.humanApprovalPolicy,
+    reason: /non-blocking background verification/i.test(policy.reason)
+      ? policy.reason
+      : `${policy.reason}; non-blocking background verification follows latency policy`,
+  };
+}
+
+function softHarnessVerificationCanUseNonBlockingLatency(
+  request: RuntimeVerificationPolicyRequest,
+  policy: RuntimeVerificationPolicy,
+  payload?: RuntimeVerificationPolicyPayload,
+) {
+  if (!verificationLatencyIsNonBlocking(request)) return false;
+  if (!isSoftAgentHarnessVerificationPolicy(policy)) return false;
+  if (policy.riskLevel === 'high' || policy.humanApprovalPolicy === 'required') return false;
+  if (hasStructuredHighRiskActionSignal(request, payload)) return false;
+  if (blockingVerificationExplicitlyRequested(request)) return false;
+  return true;
+}
+
+function isSoftAgentHarnessVerificationPolicy(policy: RuntimeVerificationPolicy) {
+  if (policy.mode !== 'lightweight') return false;
+  if (policy.riskLevel === 'high') return false;
+  return /contractRef=runtime:\/\/agent-harness\/contracts\/|profileId=[^;]+|intensity=light|Harness policy consumed/i.test(policy.reason);
+}
+
+function verificationLatencyIsNonBlocking(request: RuntimeVerificationPolicyRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const conversationPolicy = isRecord(uiState.conversationPolicy) ? uiState.conversationPolicy : {};
+  const conversationPolicySummary = isRecord(uiState.conversationPolicySummary) ? uiState.conversationPolicySummary : {};
+  const latencyPolicy = isRecord(uiState.latencyPolicy)
+    ? uiState.latencyPolicy
+    : isRecord(conversationPolicy.latencyPolicy)
+      ? conversationPolicy.latencyPolicy
+      : isRecord(conversationPolicySummary.latencyPolicy)
+        ? conversationPolicySummary.latencyPolicy
+        : {};
+  return latencyPolicy.blockOnVerification === false;
+}
+
+function directContextVisibleVerificationReason(reason: string) {
+  return /direct-context fast path records visible verification/i.test(reason)
+    ? reason
+    : `${reason}; direct-context fast path records visible verification without blocking read-only answers`;
+}
+
+function directContextRequestRequiresVerification(
+  request: RuntimeVerificationPolicyRequest,
+  selectedVerifierIds: string[],
+) {
+  if (selectedVerifierIds.length > 0) return true;
+  if (toStringList(request.selectedActionIds).length > 0) return true;
+  if (toStringList(request.actionSideEffects).length > 0) return true;
+  return blockingVerificationExplicitlyRequested(request);
+}
+
+function blockingVerificationExplicitlyRequested(request: RuntimeVerificationPolicyRequest) {
+  const explicitMode = stringField(request.userExplicitVerification);
+  if (explicitMode && !['none', 'unverified'].includes(explicitMode.toLowerCase())) return true;
+  if (humanApprovalIsRequired(request.humanApprovalPolicy) || humanApprovalIsRequired(request.uiState?.humanApprovalPolicy)) return true;
+  return explicitVerificationRequestPattern().test(String(request.prompt ?? ''));
+}
+
+function explicitVerificationRequestPattern() {
+  return /\b(required verification|required verifier|verification required|must verify|verify before|human approval|release gate)\b|必须.{0,16}验证|验证.{0,16}必须|不能.{0,16}声称.{0,16}(完成|success|satisfied)|标记.{0,8}blocker|blocker/i;
+}
+
+function humanApprovalIsRequired(value: unknown) {
+  if (value === 'required') return true;
+  if (!isRecord(value)) return false;
+  return value.required === true
+    || value.mode === 'required'
+    || value.policy === 'required'
+    || value.humanApprovalPolicy === 'required';
+}
+
+function isDirectContextFastPathPayload(payload: RuntimeVerificationPolicyPayload | undefined) {
+  if (!payload) return false;
+  if (executionUnitRecords(payload).some((unit) => directContextRecordSignal(unit))) return true;
+  if (toRecordList(payload.artifacts).some((artifact) => directContextRecordSignal(artifact))) return true;
+  const claimType = stringField(payload.claimType);
+  const evidenceLevel = stringField(payload.evidenceLevel);
+  return claimType === 'context-summary' && evidenceLevel === 'current-session-context';
+}
+
+function directContextRecordSignal(record: Record<string, unknown>) {
+  const metadata = isRecord(record.metadata) ? record.metadata : {};
+  return [
+    stringField(record.tool),
+    stringField(record.outputRef),
+    stringField(record.id),
+    stringField(record.type),
+    stringField(record.dataRef),
+    stringField(record.ref),
+    stringField(metadata.source),
+  ].some((value) => typeof value === 'string' && /direct-context-fast-path|sciforge\.direct-context-fast-path/.test(value));
 }
 
 function executionUnitHasHighRiskActionSignal(unit: Record<string, unknown>) {

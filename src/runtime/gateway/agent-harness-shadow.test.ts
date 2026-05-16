@@ -74,6 +74,25 @@ test('direct-context harness verification remains required for explicit verifica
   assert.equal(request.verificationPolicy?.required, true);
 });
 
+test('harness light verification follows nonblocking latency policy for generated work', async () => {
+  const request = await requestWithAgentHarnessShadow({
+    skillDomain: 'literature',
+    prompt: 'Generate a mini grant research package with brief, decision log, risk register, timeline, and budget.',
+    artifacts: [],
+    uiState: {
+      conversationPolicy: {
+        latencyPolicy: { blockOnVerification: false },
+      },
+    },
+  } as GatewayRequest, {}, { status: 'allowed' });
+
+  const audit = request.uiState?.agentHarnessVerificationPolicy as { required?: boolean } | undefined;
+  assert.equal(request.verificationPolicy?.mode, 'lightweight');
+  assert.equal(request.verificationPolicy?.required, false);
+  assert.match(request.verificationPolicy?.reason ?? '', /non-blocking background verification/);
+  assert.equal(audit?.required, false);
+});
+
 function directContextUiState(): GatewayRequest['uiState'] {
   return {
     conversationPolicy: {

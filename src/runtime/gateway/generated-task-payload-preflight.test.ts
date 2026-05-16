@@ -108,3 +108,77 @@ test('generated task preflight task input preserves stable issue identity and cl
   assert.equal(providerFirstIssue?.kind, 'capability-first-direct-network');
   assert.equal(providerFirstIssue?.evidence, 'requests');
 });
+
+test('generated task preflight ignores artifact JSON dumps that are not outputPath payloads', () => {
+  const report = evaluateGeneratedTaskPayloadPreflight({
+    entrypoint: { path: 'tasks/generate_report.py' },
+    taskFiles: [{
+      path: 'tasks/generate_report.py',
+      language: 'python',
+      content: [
+        'import json, sys',
+        '_, input_path, output_path = sys.argv',
+        'artifact_path = "work_packages.json"',
+        'with open(artifact_path, "w", encoding="utf-8") as f:',
+        '    json.dump({"work_packages": [], "monthly_timeline": [], "total_budget": 120000}, f)',
+        'payload = {"message": "ok", "confidence": 1, "claimType": "report", "evidenceLevel": "generated", "reasoningTrace": "wrote report", "claims": [], "uiManifest": [], "executionUnits": [], "artifacts": [{"id": "report", "type": "research-report", "path": artifact_path}]}',
+        'with open(output_path, "w", encoding="utf-8") as f:',
+        '    json.dump(payload, f)',
+      ].join('\n'),
+    }],
+  });
+
+  assert.equal(report.status, 'ready');
+  assert.equal(report.issues.some((issue) => /missing.*ToolPayload envelope/i.test(issue.reason)), false);
+});
+
+test('generated task preflight blocks treating outputPath as artifact directory', () => {
+  const report = evaluateGeneratedTaskPayloadPreflight({
+    entrypoint: { path: 'tasks/generate_report.py' },
+    taskFiles: [{
+      path: 'tasks/generate_report.py',
+      language: 'python',
+      content: [
+        'import json, os, sys',
+        '_, input_path, output_path = sys.argv',
+        'out_dir = os.path.join(output_path, "research-package")',
+        'os.makedirs(out_dir, exist_ok=True)',
+        'report_path = os.path.join(out_dir, "research_report.md")',
+        'payload = {"message": "ok", "confidence": 1, "claimType": "report", "evidenceLevel": "generated", "reasoningTrace": "wrote report", "claims": [], "uiManifest": [], "executionUnits": [], "artifacts": [{"id": "research-report", "type": "research-report", "path": report_path}]}',
+        'with open(output_path, "w", encoding="utf-8") as f:',
+        '    json.dump(payload, f)',
+      ].join('\n'),
+    }],
+  });
+
+  assert.equal(report.status, 'blocked');
+  const issue = report.issues.find((entry) => entry.id === 'tasks/generate_report.py:outputPath-used-as-directory');
+  assert.equal(issue?.severity, 'repair-needed');
+  assert.equal(issue?.path, 'outputPath');
+  assert.match(issue?.reason ?? '', /outputPath as a directory/);
+  assert.match(report.guidance.join('\n'), /Path\(output_path\)\.parent/);
+});
+
+test('generated task preflight allows artifacts beside outputPath parent', () => {
+  const report = evaluateGeneratedTaskPayloadPreflight({
+    entrypoint: { path: 'tasks/generate_report.py' },
+    taskFiles: [{
+      path: 'tasks/generate_report.py',
+      language: 'python',
+      content: [
+        'import json, sys',
+        'from pathlib import Path',
+        '_, input_path, output_path = sys.argv',
+        'artifact_dir = Path(output_path).parent / "research-package"',
+        'artifact_dir.mkdir(parents=True, exist_ok=True)',
+        'report_path = artifact_dir / "research_report.md"',
+        'payload = {"message": "ok", "confidence": 1, "claimType": "report", "evidenceLevel": "generated", "reasoningTrace": "wrote report", "claims": [], "uiManifest": [], "executionUnits": [], "artifacts": [{"id": "research-report", "type": "research-report", "path": str(report_path)}]}',
+        'with open(output_path, "w", encoding="utf-8") as f:',
+        '    json.dump(payload, f)',
+      ].join('\n'),
+    }],
+  });
+
+  assert.equal(report.status, 'ready');
+  assert.equal(report.issues.some((issue) => issue.id.includes('outputPath-used-as-directory')), false);
+});

@@ -205,3 +205,128 @@ test('package verification policy exposes artifact and non-blocking helpers', ()
   assert.equal(artifact.schemaVersion, 'sciforge.verification-result.v1');
   assert.deepEqual((artifact.metadata as Record<string, unknown>).unverifiedIsNotPass, true);
 });
+
+test('package verification policy treats harness light verification as non-blocking under latency policy', () => {
+  const request = {
+    prompt: 'Generate a mini grant research package.',
+    verificationPolicy: {
+      required: true,
+      mode: 'lightweight',
+      riskLevel: 'medium',
+      reason: 'contractRef=runtime://agent-harness/contracts/balanced-default/test; profileId=balanced-default; intensity=light',
+    },
+    uiState: {
+      conversationPolicy: {
+        latencyPolicy: { blockOnVerification: false },
+      },
+    },
+  };
+  const payload = {
+    message: 'Research package generated successfully.',
+    claimType: 'research-package',
+    evidenceLevel: 'generated',
+    executionUnits: [{
+      id: 'generate-package',
+      status: 'done',
+      tool: 'workspace-task',
+    }],
+  };
+  const policy = normalizeRuntimeVerificationPolicy(request, payload);
+  const gate = evaluateRuntimeVerificationGate(payload, request, policy);
+
+  assert.equal(policy.required, false);
+  assert.match(policy.reason, /non-blocking background verification/);
+  assert.equal(verificationIsNonBlocking(request, policy, payload), true);
+  assert.equal(gate.blocked, false);
+  assert.equal(gate.result.verdict, 'unverified');
+  assert.equal(gate.result.diagnostics?.required, false);
+  assert.equal(gate.result.diagnostics?.nonBlocking, true);
+});
+
+test('package verification policy keeps explicit harness verification blocking despite latency policy', () => {
+  const request = {
+    prompt: 'Generate a mini grant research package, but required verification must pass before completion.',
+    verificationPolicy: {
+      required: true,
+      mode: 'lightweight',
+      riskLevel: 'medium',
+      reason: 'contractRef=runtime://agent-harness/contracts/balanced-default/test; profileId=balanced-default; intensity=light',
+    },
+    uiState: {
+      latencyPolicy: { blockOnVerification: false },
+    },
+  };
+  const payload = {
+    message: 'Research package generated successfully.',
+    claimType: 'research-package',
+    evidenceLevel: 'generated',
+    executionUnits: [{ id: 'generate-package', status: 'done', tool: 'workspace-task' }],
+  };
+  const policy = normalizeRuntimeVerificationPolicy(request, payload);
+  const gate = evaluateRuntimeVerificationGate(payload, request, policy);
+
+  assert.equal(policy.required, true);
+  assert.equal(verificationIsNonBlocking(request, policy, payload), false);
+  assert.equal(gate.result.verdict, 'unverified');
+  assert.equal(gate.result.diagnostics?.required, true);
+});
+
+test('package verification policy relaxes read-only direct-context fast-path payloads without request hints', () => {
+  const request = {
+    prompt: '只基于当前选中的 reproduction-report，报告里的 Random seed 是几？Optimizer 是什么？',
+    verificationPolicy: {
+      required: true,
+      mode: 'lightweight',
+      riskLevel: 'medium',
+      reason: 'contractRef=runtime://agent-harness/contracts/balanced-default/test; intensity=light',
+    },
+  };
+  const payload = {
+    message: 'Random seed: 42\nOptimizer: differential_evolution',
+    claimType: 'context-summary',
+    evidenceLevel: 'current-session-context',
+    executionUnits: [{
+      id: 'EU-direct-context-report-followup',
+      status: 'done',
+      tool: 'sciforge.direct-context-fast-path',
+    }],
+  };
+  const policy = normalizeRuntimeVerificationPolicy(request, payload);
+  const gate = evaluateRuntimeVerificationGate(payload, request, policy);
+
+  assert.equal(policy.required, false);
+  assert.match(policy.reason, /direct-context fast path records visible verification/);
+  assert.equal(verificationIsNonBlocking(request, policy, payload), true);
+  assert.equal(gate.blocked, false);
+  assert.equal(gate.result.verdict, 'unverified');
+  assert.equal(gate.result.diagnostics?.required, false);
+});
+
+test('package verification policy keeps explicit direct-context verification requests required', () => {
+  const request = {
+    prompt: 'Create the answer, but required verification must pass before you can claim completion.',
+    verificationPolicy: {
+      required: true,
+      mode: 'lightweight',
+      riskLevel: 'medium',
+      reason: 'contractRef=runtime://agent-harness/contracts/balanced-default/test; intensity=light',
+    },
+  };
+  const payload = {
+    message: 'Answered from context.',
+    claimType: 'context-summary',
+    evidenceLevel: 'current-session-context',
+    executionUnits: [{
+      id: 'EU-direct-context-report-followup',
+      status: 'done',
+      tool: 'sciforge.direct-context-fast-path',
+    }],
+  };
+  const policy = normalizeRuntimeVerificationPolicy(request, payload);
+  const gate = evaluateRuntimeVerificationGate(payload, request, policy);
+
+  assert.equal(policy.required, true);
+  assert.equal(verificationIsNonBlocking(request, policy, payload), false);
+  assert.equal(gate.result.verdict, 'unverified');
+  assert.equal(gate.result.diagnostics?.required, true);
+});

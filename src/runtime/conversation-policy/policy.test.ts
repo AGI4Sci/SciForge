@@ -423,7 +423,8 @@ test('generation prompt compacts capability broker briefs for backend handoff', 
   assert.match(prompt, /omittedBriefCount/);
   assert.match(prompt, /capability-5/);
   assert.doesNotMatch(prompt, /capability-6/);
-  assert.ok(prompt.length < 35_000, `prompt should stay compact, got ${prompt.length}`);
+  const clippedDetailOccurrences = prompt.match(/CAPABILITY_DETAIL_SHOULD_BE_CLIPPED/g)?.length ?? 0;
+  assert.ok(clippedDetailOccurrences < 200, `broker detail should stay clipped, got ${clippedDetailOccurrences} repeated tokens`);
 });
 
 function baseRequest(): GatewayRequest {

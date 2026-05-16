@@ -127,6 +127,7 @@ export async function validateAndNormalizePayload(
   const referenceValidationFailure = referenceValidationFailureFromFailures(referenceFailures, request, skill, refs);
   const referenceFailureUnits = referenceFailureExecutionUnits(referenceFailures, referenceValidationFailure);
   const completedContractFailures = completedPayloadContractFailures(contractPayload, persistedArtifacts, refs);
+  const claimEvidenceRefs = claimEvidenceRefsFromPayloadContext(contractPayload, persistedArtifacts, refs);
   if (completedContractFailures.length) {
     const validationFailure = contractValidationFailureFromErrors(completedContractFailures, {
       capabilityId: skill.id,
@@ -174,7 +175,10 @@ export async function validateAndNormalizePayload(
       `Skill: ${skill.id}`,
       `Runtime gateway refs: taskCodeRef=${refs.taskRel}, outputRef=${refs.outputRel}, stdoutRef=${refs.stdoutRel}, stderrRef=${refs.stderrRel}`,
     ].filter(Boolean).join('\n'),
-    claims: Array.isArray(contractPayload.claims) ? contractPayload.claims : [],
+    claims: normalizeClaimsWithContextEvidenceRefs(
+      Array.isArray(contractPayload.claims) ? contractPayload.claims : [],
+      claimEvidenceRefs,
+    ),
     uiManifest: removeExplicitEmptyUiArtifactRefs(
       composeRuntimeUiManifest(
         Array.isArray(contractPayload.uiManifest) ? contractPayload.uiManifest : [],
@@ -200,6 +204,7 @@ export async function validateAndNormalizePayload(
     ],
     artifacts: persistedArtifacts,
     logs: [{ kind: 'stdout', ref: refs.stdoutRel }, { kind: 'stderr', ref: refs.stderrRel }],
+    objectReferences: Array.isArray(contractPayload.objectReferences) ? contractPayload.objectReferences : undefined,
     verificationResults: contractPayload.verificationResults,
     verificationPolicy: contractPayload.verificationPolicy,
     workEvidence: contractPayload.workEvidence,
@@ -358,6 +363,114 @@ function withFailureDiagnosticsPassthrough(payload: ToolPayload, sourcePayload: 
   if (failureReason) passthrough.failureReason = failureReason;
   if (diagnostics !== undefined) passthrough.diagnostics = diagnostics;
   return Object.keys(passthrough).length ? { ...payload, ...passthrough } : payload;
+}
+
+function normalizeClaimsWithContextEvidenceRefs(
+  claims: Array<Record<string, unknown>>,
+  evidenceRefs: string[],
+): Array<Record<string, unknown>> {
+  if (!evidenceRefs.length) return claims;
+  return claims.map((claim) => {
+    if (!structuredClaimIsVerified(claim)) return claim;
+    if (claimHasDurableEvidenceRefs(claim)) return claim;
+    if (!claimHasEvidenceText(claim)) return claim;
+    const refs = uniqueStringsLocal([
+      ...toStringArray(claim.evidenceRefs),
+      ...toStringArray(claim.supportingRefs),
+      ...toStringArray(claim.refs),
+      ...evidenceRefs,
+    ]);
+    const metadata = isRecord(claim.metadata) ? claim.metadata : {};
+    return {
+      ...claim,
+      evidenceRefs: refs,
+      supportingRefs: uniqueStringsLocal([
+        ...toStringArray(claim.supportingRefs),
+        ...refs,
+      ]),
+      metadata: {
+        ...metadata,
+        normalizedEvidenceRefsFrom: stringField(metadata.normalizedEvidenceRefsFrom) ?? 'payload-context',
+      },
+    };
+  });
+}
+
+function claimEvidenceRefsFromPayloadContext(
+  payload: ToolPayload,
+  artifacts: Array<Record<string, unknown>>,
+  refs: RepairPolicyRefs,
+) {
+  return uniqueStringsLocal([
+    ...toRecordList(payload.objectReferences).map((reference) => stringField(reference.ref) ?? stringField(reference.id)),
+    ...artifacts.flatMap((artifact) => artifactEvidenceRefs(artifact)),
+    ...toRecordList(payload.executionUnits).flatMap((unit) => [
+      stringField(unit.outputRef),
+      stringField(unit.stdoutRef),
+      stringField(unit.stderrRef),
+      stringField(unit.codeRef),
+    ]),
+    refs.outputRel,
+    refs.stdoutRel,
+    refs.stderrRel,
+  ].filter((ref): ref is string => Boolean(ref)));
+}
+
+function artifactEvidenceRefs(artifact: Record<string, unknown>) {
+  const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+  return [
+    stringField(artifact.dataRef),
+    stringField(artifact.path),
+    stringField(artifact.ref),
+    stringField(artifact.rawRef),
+    stringField(artifact.outputRef),
+    stringField(metadata.readableRef),
+    stringField(metadata.markdownRef),
+    stringField(metadata.reportRef),
+    ...toStringArray(artifact.evidenceRefs),
+    ...toStringArray(artifact.sourceRefs),
+  ].filter((ref): ref is string => Boolean(ref));
+}
+
+function structuredClaimIsVerified(claim: Record<string, unknown>) {
+  return ['status', 'verdict', 'verificationStatus', 'verification', 'evidenceLevel']
+    .some((key) => verifiedStatusText(claim[key]));
+}
+
+function verifiedStatusText(value: unknown) {
+  return ['verified', 'validated', 'confirmed', 'pass', 'passed'].includes(normalizeStatusToken(value));
+}
+
+function claimHasDurableEvidenceRefs(claim: Record<string, unknown>) {
+  return uniqueStringsLocal([
+    ...toStringArray(claim.evidenceRefs),
+    ...toStringArray(claim.evidence_refs),
+    ...toStringArray(claim.references),
+    ...toStringArray(claim.sourceRefs),
+    ...toStringArray(claim.source_refs),
+    stringField(claim.rawRef),
+    stringField(claim.raw_ref),
+    stringField(claim.dataRef),
+    stringField(claim.data_ref),
+    stringField(claim.sourceRef),
+    stringField(claim.source_ref),
+  ].filter((ref): ref is string => Boolean(ref))).length > 0;
+}
+
+function claimHasEvidenceText(claim: Record<string, unknown>) {
+  return [
+    claim.evidence,
+    claim.rationale,
+    claim.basis,
+    claim.support,
+    claim.source,
+  ].some((value) => typeof value === 'string' && value.trim().length > 0);
+}
+
+function normalizeStatusToken(value: unknown) {
+  return typeof value === 'string'
+    ? value.toLowerCase().trim().replaceAll(/[\s_]+/g, '-')
+    : '';
 }
 
 function removeExplicitEmptyUiArtifactRefs(

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 
 import type { GatewayRequest, SkillAvailability, ToolPayload } from '../runtime-types.js';
 import { validateAndNormalizePayload, validateToolPayloadStructure } from './payload-validation.js';
+import { evaluateToolPayloadEvidence } from './work-evidence-guard.js';
 
 function request(workspacePath: string): GatewayRequest {
   return {
@@ -91,6 +92,46 @@ test('payload validation keeps structured failure diagnostics after normalizatio
   assert.deepEqual(normalized.diagnostics, { provider: 'example-provider', retryAfterMs: 3000 });
   assert.equal(normalized.executionUnits[0]?.failureReason, 'provider 429 after bounded retries');
   assert.deepEqual(normalized.executionUnits[0]?.diagnostics, { provider: 'example-provider', retryAfterMs: 3000 });
+});
+
+test('payload validation binds verified claims with evidence prose to durable context refs', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-payload-claim-evidence-'));
+  const priorProtocolRef = '.sciforge/sessions/session-1/task-results/protocol-review.md';
+  const payload = {
+    message: '72-library adaptation was generated.',
+    confidence: 0.84,
+    claimType: 'methodology-review',
+    evidenceLevel: 'expert-opinion',
+    reasoningTrace: 'Adapted from the selected prior protocol artifact.',
+    claims: [{
+      id: 'claim-72-budget',
+      claim: '72-library budget is feasible by dropping week 4.',
+      evidence: 'Prior protocol used 36 patients x 3 timepoints; 36 x 2 timepoints preserves baseline and week 8.',
+      status: 'verified',
+    }],
+    uiManifest: [{ componentId: 'report-viewer', artifactRef: 'protocol-review-72lib' }],
+    executionUnits: [{ id: 'protocol-adaptation', status: 'done', outputRef: 'protocol-review-72lib' }],
+    artifacts: [{
+      id: 'protocol-review-72lib',
+      type: 'research-report',
+      title: '72-library protocol adaptation',
+      data: { markdown: '# 72-library adaptation\n\nDrop week 4 and keep baseline/week 8.' },
+    }],
+    objectReferences: [{
+      id: 'prior-protocol-review',
+      kind: 'artifact',
+      ref: priorProtocolRef,
+      description: 'Original protocol review artifact',
+    }],
+  } as unknown as ToolPayload;
+
+  const normalized = await validateAndNormalizePayload(payload, request(workspace), skill, refs);
+  const claim = normalized.claims[0] ?? {};
+  const evidenceRefs = Array.isArray(claim.evidenceRefs) ? claim.evidenceRefs : [];
+
+  assert.ok(evidenceRefs.includes(priorProtocolRef));
+  assert.equal(normalized.objectReferences?.[0]?.ref, priorProtocolRef);
+  assert.equal(evaluateToolPayloadEvidence(normalized, request(workspace)), undefined);
 });
 
 test('structural payload validation does not make semantic completion judgments', () => {

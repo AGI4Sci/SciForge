@@ -58,6 +58,7 @@ export function evaluateGeneratedTaskPayloadPreflight(input: {
         : 'task file content unavailable to preflight',
     });
     if (shouldInspect) {
+      issues.push(...generatedTaskOutputPathAsDirectoryIssuesForSource(content, file.path));
       issues.push(...generatedTaskPayloadPreflightIssuesForSource(content, file.path));
       issues.push(...generatedTaskProviderFirstNetworkIssuesForSource(content, file.path, input.request));
     }
@@ -128,6 +129,42 @@ export function generatedTaskPayloadPreflightForTaskInput(preflight: GeneratedTa
     })),
     guidance: preflight.guidance,
   };
+}
+
+function generatedTaskOutputPathAsDirectoryIssuesForSource(source: string, sourceRef: string): GeneratedTaskPayloadPreflightIssue[] {
+  const stripped = stripGeneratedTaskComments(source);
+  const evidence = outputPathAsDirectoryEvidence(stripped);
+  if (!evidence.length) return [];
+  return [{
+    id: `${sourceRef}:outputPath-used-as-directory`,
+    severity: 'repair-needed',
+    path: 'outputPath',
+    sourceRef,
+    evidence: clipEvidence(evidence.join('\n')),
+    reason: 'Generated task treats outputPath as a directory, but SciForge passes outputPath as the final ToolPayload JSON file path.',
+    recoverActions: [
+      'Regenerate the task so outputPath is written exactly once as the ToolPayload JSON file.',
+      'Write extra report/data artifacts beside outputPath under dirname(outputPath) or Path(output_path).parent, then cite those artifact paths from artifacts[].path/dataRef/ref.',
+    ],
+  }];
+}
+
+function outputPathAsDirectoryEvidence(source: string) {
+  const evidence = new Set<string>();
+  const patterns: RegExp[] = [
+    /\bos\.path\.join\s*\(\s*output_?path\s*,[^\n]*/gi,
+    /\bos\.makedirs\s*\(\s*output_?path\b[^\n]*/gi,
+    /\bPath\s*\(\s*output_?path\s*\)\s*\/[^\n]*/gi,
+    /\boutput_?path\s*\/\s*["'][^\n]*/gi,
+    /\bpath\.join\s*\(\s*outputPath\s*,[^\n]*/gi,
+    /\b(?:mkdir|mkdirSync)\s*\(\s*outputPath\b[^\n]*/gi,
+  ];
+  for (const pattern of patterns) {
+    for (const match of source.matchAll(pattern)) {
+      evidence.add(match[0]!.trim());
+    }
+  }
+  return [...evidence];
 }
 
 function generatedTaskPayloadPreflightIssuesForSource(source: string, sourceRef: string): GeneratedTaskPayloadPreflightIssue[] {
@@ -327,11 +364,19 @@ function generatedTaskPayloadLiteralCandidates(source: string, sourceRef: string
   }
   const literalWritePattern = /\b(?:json\.dump|JSON\.stringify)\s*\(\s*{/g;
   for (const match of source.matchAll(literalWritePattern)) {
+    if (!literalJsonWriteLikelyTargetsOutput(source, match.index ?? 0)) continue;
     const start = (match.index ?? 0) + match[0].lastIndexOf('{');
     const objectText = balancedEnclosedText(source, start, '{', '}');
     if (objectText) candidates.push({ objectText, writtenToOutput: true });
   }
   return candidates;
+}
+
+function literalJsonWriteLikelyTargetsOutput(source: string, index: number) {
+  const before = source.slice(Math.max(0, index - 180), index);
+  const currentLine = source.slice(index, Math.min(source.length, index + 220)).split(/\r?\n/, 1)[0] ?? '';
+  return /open\s*\(\s*output_?path\b|open\s*\(\s*outputPath\b/i.test(before)
+    || /\boutput_?path\b|\boutputPath\b/i.test(currentLine);
 }
 
 function generatedTaskArtifactArrayIssues(value: string, sourceRef: string, source: string): GeneratedTaskPayloadPreflightIssue[] {
@@ -578,6 +623,7 @@ function generatedTaskPreflightBaseGuidance(expectedArtifacts: string[]) {
   return [
     'Before expensive external fetch/download/analysis, initialize the exact ToolPayload envelope: message, confidence, claimType, evidenceLevel, reasoningTrace, claims, uiManifest, executionUnits, artifacts.',
     'claims, uiManifest, executionUnits, and artifacts must be arrays; every artifact object must have non-empty id and type.',
+    'outputPath is the final ToolPayload JSON file path, not a directory; write extra artifacts under dirname(outputPath) / Path(output_path).parent.',
     'If the task cannot satisfy the output contract, write a repair-needed or failed-with-reason ToolPayload immediately and preserve stdout/stderr/output refs.',
     expectedArtifacts.length
       ? `Expected artifact types for this run: ${expectedArtifacts.join(', ')}. Bind uiManifest[].artifactRef to produced artifact ids.`

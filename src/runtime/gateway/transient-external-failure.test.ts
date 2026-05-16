@@ -166,3 +166,22 @@ test('detects unstructured provider stderr as external blocked before code repai
   assert.equal(decision?.ownerLayer, 'external-provider');
   assert.equal(decision?.action, 'retry-after-backoff');
 });
+
+test('does not classify truncated traceback character counts as HTTP 5xx failures', () => {
+  const reason = [
+    'Workspace task exited 1: Traceback (most recent call last):',
+    '  File "/workspace/task.py", line 367, in <module>',
+    '    main()',
+    '  File "/workspace/task.py", line 11, in main',
+    '    os.makedirs(out_dir, exist_ok=True)',
+    'NotADirectoryError: [Errno 20] Not a directory: "/workspace/task-results/result.json/research-package"',
+    '...[truncated 565 chars]',
+  ].join('\n');
+
+  assert.equal(externalProviderFailureDecision({ reason }), undefined);
+  assert.equal(transientExternalFailureReasonFromRun({
+    stdout: '',
+    stderr: reason,
+    runtimeFingerprint: { language: 'python' },
+  }), undefined);
+});

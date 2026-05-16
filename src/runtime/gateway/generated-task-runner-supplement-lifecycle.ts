@@ -79,8 +79,7 @@ export async function tryAgentServerSupplementMissingArtifacts(
   }
   const supplementedTypes = new Set(supplement.artifacts
     .filter((artifact) => !artifactNeedsRepair(artifact))
-    .map((artifact) => String(artifact.type || artifact.id || ''))
-    .filter(Boolean));
+    .flatMap(artifactSemanticTypeCandidates));
   const filled = missingTypes.filter((type) => supplementedTypes.has(type));
   if (!filled.length) {
     await recordSupplementalFallbackLedger(params, {
@@ -245,10 +244,29 @@ async function recordSupplementalFallbackLedger(
 function missingExpectedArtifactTypes(request: GatewayRequest, artifacts: Array<Record<string, unknown>>, expectedArtifactTypes?: string[]) {
   const present = new Set(artifacts
     .filter((artifact) => !artifactNeedsRepair(artifact))
-    .map((artifact) => String(artifact.type || artifact.id || ''))
-    .filter(Boolean));
+    .flatMap(artifactSemanticTypeCandidates));
   const expected = expectedArtifactTypes?.length ? expectedArtifactTypes : expectedArtifactTypesForRequest(request);
   return uniqueStrings(expected).filter((type) => !present.has(type));
+}
+
+function artifactSemanticTypeCandidates(artifact: Record<string, unknown>) {
+  const raw = [
+    String(artifact.type || ''),
+    String(artifact.artifactType || ''),
+    String(artifact.id || ''),
+  ].filter(Boolean);
+  const text = [
+    artifact.id,
+    artifact.type,
+    artifact.artifactType,
+    artifact.title,
+    artifact.path,
+    artifact.dataRef,
+  ].map(String).join(' ');
+  if (/project[-_\s]?brief|research[-_\s]?report|grant[-_\s]?proposal/i.test(text)) raw.push('research-report');
+  if (/risk[-_\s]?register|evidence[-_\s]?matrix/i.test(text)) raw.push('evidence-matrix');
+  if (/decision[-_\s]?log|notebook[-_\s]?timeline/i.test(text)) raw.push('notebook-timeline');
+  return uniqueStrings(raw);
 }
 
 function executionUnitRefsFromPayload(payload: ToolPayload | undefined) {

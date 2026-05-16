@@ -193,6 +193,22 @@ test('interactive view policy owns prompt artifact intent and component binding'
     ['evidence-matrix'],
   );
   assert.deepEqual(
+    expectedArtifactTypesForIntent({
+      scenarioId: 'literature-evidence-review',
+      prompt: '生成一个 mini grant research package，包含 project brief、decision log、risk register、timeline 和 budget。',
+      selectedComponentIds: ['paper-card-list', 'report-viewer', 'evidence-matrix', 'notebook-timeline', 'execution-unit-table'],
+    }),
+    ['research-report', 'evidence-matrix', 'notebook-timeline'],
+  );
+  assert.deepEqual(
+    expectedArtifactTypesForIntent({
+      scenarioId: 'literature-evidence-review',
+      prompt: '检索最近 arXiv 论文并返回 paper-list、报告和证据矩阵。',
+      selectedComponentIds: ['paper-card-list', 'report-viewer', 'evidence-matrix'],
+    }),
+    ['research-report', 'paper-list', 'evidence-matrix'],
+  );
+  assert.deepEqual(
     selectedViewComponentsForIntent(
       '不要重跑、不要执行、不要调用 AgentServer。只基于当前会话 refs/digest 列出接受标准和证据缺口。',
       ['evidence-matrix'],

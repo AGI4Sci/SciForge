@@ -278,8 +278,11 @@ export function agentServerGeneratedTaskPromptPolicyLines() {
     'Hard contract: taskFiles MUST be an array of objects with path, language, and non-empty content unless the file was physically written in the workspace before returning. Never return taskFiles as string paths only.',
     'Hard contract: entrypoint.path MUST reference one of the returned taskFiles or a file that was physically written in the workspace before returning.',
     'If you physically write task files into the workspace, prefer a compact path-only taskFiles object (path + language, content may be omitted/empty) and return JSON immediately. Do not cat/read full generated source back into the final response just to inline it.',
+    'Transport budget contract: single long string around 8k characters may compact; long reports must be task-written file refs.',
     'Entrypoint contract: entrypoint.path must be executable task code supported by the runner (.py/.r/.sh, or language=cli with an explicit command). Do not set a markdown/text/json/pdf/report artifact as entrypoint. For report-only answers, return a direct ToolPayload; for generated tasks, make the executable write report/data artifacts.',
-    'Generated task interface contract: executable task code must read the SciForge inputPath argument for prompt/current refs/artifacts and write a valid ToolPayload JSON file to the outputPath argument. outputPath is a JSON file path, not an output directory; write extra report/data files beside it under dirname(outputPath), then cite those files from artifacts[].path/dataRef/ref.',
+    'Generated task interface contract: executable task code must read the SciForge inputPath argument for prompt/current refs/artifacts and write a valid ToolPayload JSON file to the outputPath argument. outputPath is a JSON file path, not an output directory; write extra report/data files beside it under dirname(outputPath) / Path(output_path).parent, then cite those files from artifacts[].path/dataRef/ref.',
+    'Generated task compactness contract: build long text at runtime; no huge markdown.',
+    'Generated Python dependency contract: avoid optional pandas/report helpers that require undeclared packages, for example DataFrame.to_markdown requires tabulate; either include the package in the task dependency bootstrap or use dependency-free formatting such as to_csv/string tables. Report formatting must not prevent the ToolPayload write.',
     'Generated ToolPayload construction contract: initialize top-level claims, uiManifest, executionUnits, and artifacts as arrays. Append uiManifest slots as array entries such as {"componentId":"table-viewer","artifactRef":"artifact-id"}; never use an object descriptor such as {"preferredView":...,"views":[...]} for uiManifest.',
     'Generated artifact contract: every artifact should include stable id and type, for example {"id":"research-report","type":"research-report","path":"research-report.md","mimeType":"text/markdown"}. uiManifest[].artifactRef must match the artifact id, not a filename unless that filename is the id.',
     'View/content separation contract: uiManifest only routes components to artifact ids. Put preferred views, tables, report markdown, rows, provider traces, and layout/content details in artifacts[].data, artifacts[].metadata, or artifacts[].dataRef.',
@@ -332,6 +335,7 @@ export function agentServerGenerationOutputContractLines(group: 'all' | 'json-en
     ],
     'tool-payload': [
       'Final output must be only compact JSON: either AgentServerGenerationResponse or SciForge ToolPayload.',
+      'Transport cap: small JSON; long artifacts use refs.',
       'ToolPayload array contract: claims, uiManifest, executionUnits, and artifacts must be arrays; uiManifest is an array of component slots, not an object-shaped view descriptor.',
       'When returning a SciForge ToolPayload, use displayIntent to describe the user-visible view need, and objectReferences to cite key artifacts/files/runs that the user can click on demand.',
       'objectReferences refs must use controlled prefixes: artifact:*, file:*, folder:*, run:*, execution-unit:*, scenario-package:*, or url:*.',
@@ -410,6 +414,7 @@ export function agentServerWorkspaceTaskRepairPromptPolicyLines(group: 'all' | '
     ],
     completion: [
       'Preserve failureReason in the next ToolPayload only if the real blocker remains after repair.',
+      'When failure is caused by a missing optional report-formatting dependency such as pandas to_markdown/tabulate, repair by removing the optional formatter or adding the dependency to the task bootstrap, then write the final ToolPayload.',
       'Do not fabricate success or replace the user goal with an unrelated demo task.',
     ],
   };

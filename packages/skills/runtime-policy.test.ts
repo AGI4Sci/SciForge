@@ -54,9 +54,15 @@ test('skills runtime policy owns AgentServer retrieval and task prompt snippets'
   assert.match(taskPolicy, /taskFiles MUST be an array/);
   assert.match(taskPolicy, /entrypoint\.path MUST reference/);
   assert.match(taskPolicy, /physically write task files/);
+  assert.match(taskPolicy, /Transport budget contract/);
+  assert.match(taskPolicy, /single long string around 8k characters/);
   assert.match(taskPolicy, /Entrypoint contract/);
   assert.match(taskPolicy, /inputPath argument/);
   assert.match(taskPolicy, /outputPath is a JSON file path/);
+  assert.match(taskPolicy, /Generated task compactness contract/);
+  assert.match(taskPolicy, /Generated Python dependency contract/);
+  assert.match(taskPolicy, /DataFrame\.to_markdown requires tabulate/);
+  assert.match(taskPolicy, /ToolPayload write/);
   assert.match(taskPolicy, /every artifact should include stable id and type/);
   assert.match(taskPolicy, /claims, uiManifest, executionUnits, and artifacts as arrays/);
   assert.match(taskPolicy, /never use an object descriptor/);
@@ -74,6 +80,7 @@ test('skills runtime policy owns AgentServer retrieval and task prompt snippets'
   assert.deepEqual(agentServerToolPayloadShapeContract().arrayFields, ['claims', 'uiManifest', 'executionUnits', 'artifacts']);
   assert.match(agentServerToolPayloadShapeContract().uiManifestShape.forbiddenShape, /preferredView/);
   assert.match(agentServerGenerationOutputContractLines().join('\n'), /Final output must be only compact JSON/);
+  assert.match(agentServerGenerationOutputContractLines().join('\n'), /Transport cap/);
   assert.match(agentServerGenerationOutputContractLines().join('\n'), /ToolPayload array contract/);
   assert.match(agentServerWorkspaceTaskRoutingPromptPolicyLines().join('\n'), /generated task paths under the current session bundle tasks directory/);
   assert.match(agentServerCapabilityRoutingPromptPolicyLines().join('\n'), /Runtime capability routing contract/);
@@ -84,7 +91,10 @@ test('skills runtime policy owns AgentServer retrieval and task prompt snippets'
   assert.match(agentServerViewSelectionPromptPolicyLines().join('\n'), /selectedComponentIds/);
   assert.match(agentServerContinuationPromptPolicyLines().join('\n'), /continuation requests/);
   assert.match(agentServerPriorAttemptsPromptPolicyLines().join('\n'), /RECENT PRIOR ATTEMPTS/);
-  assert.match(agentServerWorkspaceTaskRepairPromptPolicyLines().join('\n'), /workspace ready for SciForge to rerun/);
+  const workspaceRepair = agentServerWorkspaceTaskRepairPromptPolicyLines().join('\n');
+  assert.match(workspaceRepair, /workspace ready for SciForge to rerun/);
+  assert.match(workspaceRepair, /to_markdown\/tabulate/);
+  assert.match(workspaceRepair, /task bootstrap/);
 
   const freshRetrieval = agentServerFreshRetrievalPromptPolicyLines().join('\n');
   assert.match(freshRetrieval, /fresh retrieval\/analysis\/report requests/);

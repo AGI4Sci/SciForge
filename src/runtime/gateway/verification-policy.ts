@@ -30,7 +30,7 @@ export async function applyRuntimeVerificationPolicy(
   request: GatewayRequest,
 ): Promise<ToolPayload> {
   const policy = normalizeRuntimeVerificationPolicy(request, payload);
-  const nonBlocking = verificationIsNonBlocking(request, policy);
+  const nonBlocking = verificationIsNonBlocking(request, policy, payload);
   const initialProvided = normalizeRuntimeVerificationResults([
     ...(payload.verificationResults ?? []),
     (payload as unknown as Record<string, unknown>).verificationResult,
@@ -93,7 +93,8 @@ export function normalizeRuntimeVerificationPolicy(
   request: GatewayRequest,
   payload?: ToolPayload,
 ): VerificationPolicy {
-  return normalizeRuntimeVerificationPolicyFromContract(request, payload) as VerificationPolicy;
+  const policy = normalizeRuntimeVerificationPolicyFromContract(request, payload) as VerificationPolicy;
+  return relaxDirectContextRuntimeVerificationPolicy(request, payload, policy);
 }
 
 export function evaluateVerificationGate(
@@ -140,6 +141,45 @@ function attachVerificationRefs(
       },
     },
   };
+}
+
+function relaxDirectContextRuntimeVerificationPolicy(
+  request: GatewayRequest,
+  payload: ToolPayload | undefined,
+  policy: VerificationPolicy,
+): VerificationPolicy {
+  if (!payload || !isDirectContextFastPathPayload(payload)) return policy;
+  if (!policy.required || policy.riskLevel === 'high') return policy;
+  if (directContextRuntimeVerificationMustBlock(request)) return policy;
+  return {
+    ...policy,
+    required: false,
+    humanApprovalPolicy: policy.humanApprovalPolicy === 'required' ? 'optional' : policy.humanApprovalPolicy,
+    reason: `${policy.reason ?? 'runtime verification policy'}; direct-context fast path records visible verification without requiring a blocking verifier`,
+  };
+}
+
+function isDirectContextFastPathPayload(payload: ToolPayload) {
+  return payload.executionUnits.some((unit) => isRecord(unit) && stringField(unit.tool) === 'sciforge.direct-context-fast-path')
+    || payload.artifacts.some((artifact) => {
+      if (!isRecord(artifact)) return false;
+      const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+      return stringField(metadata.source) === 'direct-context-fast-path'
+        || /^runtime:\/\/direct-context-fast-path\//i.test(stringField(metadata.outputRef) ?? '');
+    });
+}
+
+function directContextRuntimeVerificationMustBlock(request: GatewayRequest) {
+  if (request.riskLevel === 'high') return true;
+  if (toStringList(request.selectedVerifierIds).length > 0) return true;
+  if (toStringList(request.selectedActionIds).length > 0) return true;
+  if (toStringList(request.actionSideEffects).length > 0) return true;
+  if (request.userExplicitVerification && !['none', 'unverified'].includes(request.userExplicitVerification)) return true;
+  return explicitBlockingVerificationPattern().test(request.prompt ?? '');
+}
+
+function explicitBlockingVerificationPattern() {
+  return /\b(required verification|required verifier|verification required|must verify|verify before|human approval|release gate)\b|必须.{0,16}验证|验证.{0,16}必须|不能.{0,16}声称.{0,16}(完成|success|satisfied)|标记.{0,8}blocker|blocker/i;
 }
 
 function attachRuntimeVerificationBudgetDebitRefs(
@@ -192,7 +232,7 @@ function attachRuntimeVerificationBudgetDebitRefs(
       policyMode: policy.mode,
       riskLevel: policy.riskLevel,
       verdict: result.verdict,
-      nonBlocking: verificationIsNonBlocking(request, policy),
+      nonBlocking: verificationIsNonBlocking(request, policy, payload),
     },
   });
   const budgetDebitRefs = [debit.debitId];

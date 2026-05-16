@@ -218,6 +218,46 @@ test('bounded previous evidence-matrix follow-up uses direct-context hypotheses 
   assert.match(payload.message, /41638478|10\.1016/);
 });
 
+test('bounded protocol budget follow-up answers from current artifact without AgentServer policy', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: '如果预算降到 72 libraries，应该如何修改这个 protocol？请基于当前 protocol artifact 回答，并继续标明是否 needs-work/blocker。',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [{
+      id: 'artifact-protocol-review',
+      type: 'research-report',
+      title: 'Longitudinal Microbiome RCT Protocol',
+      data: {
+        markdown: [
+          '# Longitudinal Microbiome RCT Protocol',
+          '36 IBS patients, probiotic vs placebo.',
+          'Stool metagenomics at baseline, week 4, and week 8; 108 sequencing libraries max.',
+          'Symptom score change can also be described as week 0 to week 8 in clinical notes.',
+          'Primary endpoint: IBS-SSS change from baseline to week 8.',
+          'Sample size and power: 36 patients only; power drops and this is needs-work.',
+          'Antibiotic exposure not fully excludable; blocker for causal inference.',
+        ].join('\n'),
+      },
+    }],
+    uiState: {},
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.equal(payload.executionUnits[0]?.tool, 'sciforge.direct-context-fast-path');
+  assert.match(payload.message, /不启动新的 workspace task/);
+  assert.match(payload.message, /36 名患者/);
+  assert.match(payload.message, /从 3 个时间点压缩为 2 个时间点/);
+  assert.match(payload.message, /baseline\/基线 \+ week 8|baseline \+ week 8/);
+  assert.match(payload.message, /删除\/取消的时间点：week 4/);
+  assert.match(payload.message, /72 libraries/);
+  assert.match(payload.message, /needs-work/);
+  assert.match(payload.message, /blocker/);
+  assert.doesNotMatch(payload.message, /week 0/);
+  assert.doesNotMatch(payload.message, /AgentServer generation|workspace task was started/i);
+});
+
 test('bounded previous evidence-matrix follow-up hydrates artifacts from session bundle', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-direct-context-session-'));
   const bundle = join(workspace, '.sciforge', 'sessions', '2026-05-16_literature-evidence-review_session-literature-evidence-review-test');
@@ -609,6 +649,79 @@ test('selected workspace file summary can come from current ui references withou
   assert.doesNotMatch(payload.message, /Generated workspace task failed/);
 });
 
+test('selected chart-only sufficiency follow-up stays direct-context and does not use sibling artifacts', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'Use only the selected chart artifact. Can this chart alone support the drugA@48h statistical significance and batch-confounding conclusion? If not, say exactly what is missing. Do not use the report, CSV, prior run text, or history.',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    expectedArtifactTypes: ['evidence-matrix', 'notebook-timeline'],
+    references: [{
+      kind: 'artifact',
+      ref: 'artifact:boxplot_response',
+      title: '.sciforge/sessions/session-a/task-results/boxplot_response.png',
+      payload: {
+        currentReference: {
+          id: 'chat-key-boxplot_response',
+          kind: 'artifact',
+          ref: 'artifact:boxplot_response',
+          artifactType: 'image-png',
+          title: '.sciforge/sessions/session-a/task-results/boxplot_response.png',
+          provenance: {
+            path: '.sciforge/sessions/session-a/task-results/boxplot_response.png',
+          },
+        },
+      },
+    }],
+    artifacts: [{
+      id: 'report',
+      type: 'research-report',
+      data: {
+        markdown: 'UNSELECTED report says p-value=0.00001 and batch B3 confounding was controlled.',
+      },
+    }, {
+      id: 'evidence_matrix',
+      type: 'evidence-matrix',
+      data: {
+        rows: [{ claim: 'UNSELECTED evidence matrix with adjusted model p-value.' }],
+      },
+    }],
+    uiState: {
+      currentReferences: [{
+        kind: 'artifact',
+        ref: 'artifact:boxplot_response',
+        title: '.sciforge/sessions/session-a/task-results/boxplot_response.png',
+        payload: {
+          objectReference: {
+            id: 'chat-key-boxplot_response',
+            kind: 'artifact',
+            ref: 'artifact:boxplot_response',
+            artifactType: 'image-png',
+            title: '.sciforge/sessions/session-a/task-results/boxplot_response.png',
+            provenance: {
+              path: '.sciforge/sessions/session-a/task-results/boxplot_response.png',
+            },
+          },
+        },
+      }],
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.equal(payload.executionUnits[0]?.tool, 'sciforge.direct-context-fast-path');
+  assert.match(payload.message, /Answered only from the selected chart reference/);
+  assert.match(payload.message, /cannot by itself establish statistical significance/);
+  assert.match(payload.message, /Missing for statistical significance/);
+  assert.match(payload.message, /Missing for batch confounding/);
+  assert.doesNotMatch(payload.message, /p-value=0\.00001|UNSELECTED|evidence matrix/i);
+  const refs = payload.objectReferences?.map((reference) => reference.ref);
+  assert.deepEqual(refs, ['artifact:boxplot_response']);
+  const audit = JSON.parse(String(payload.executionUnits[0]?.params ?? '{}'));
+  assert.ok(audit.directContextGate.usedContextRefs.includes('artifact:boxplot_response'));
+  assert.doesNotMatch(audit.directContextGate.usedContextRefs.join('\n'), /UNSELECTED|evidence_matrix|evidence-matrix|report|csv/i);
+});
+
 test('selected reproduction report credibility follow-up does not become a planning register', () => {
   const reportMarkdown = [
     '# Logistic Growth ODE Parameter Estimation Reproduction Report',
@@ -662,6 +775,192 @@ test('selected reproduction report credibility follow-up does not become a plann
   assert.match(payload.message, /multiple random seeds and noise levels/);
   assert.doesNotMatch(payload.message, /Planning register/);
   assert.doesNotMatch(payload.message, /## Budget/);
+});
+
+test('selected reproduction report pass/fail audit answers latest metric audit intent', () => {
+  const reportMarkdown = [
+    '# Logistic Growth ODE Parameter Estimation Reproduction Report',
+    '',
+    '| Parameter | True Value | Fitted Value | Error (%) |',
+    '|-----------|------------|--------------|-----------|',
+    '| r         | 0.5000    | 0.4767      | 4.67%    |',
+    '| K         | 200.0    | 201.5      | 0.77%    |',
+    '| RMSE      | —          | 4.3505      | —         |',
+    '',
+    '**Reproduction success: YES**',
+    '',
+    '- r error: 4.67% (threshold 15%) → PASS',
+    '- K error: 0.77% (threshold 15%) → PASS',
+    '- RMSE: 4.3505 (threshold 15) → PASS',
+  ].join('\n');
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: '只基于当前选中的 reproduction-report，逐项核对报告中的 PASS/FAIL：r、K、RMSE 的 true/fitted/error/threshold 是多少？有没有任何一个没达标？不要泛泛总结。',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [{
+      id: 'old-direct-context-summary',
+      type: 'runtime-context-summary',
+      data: {
+        markdown: 'UNSELECTED old answer says Credibility verdict: credible as a toy reproduction.',
+      },
+    }],
+    uiState: {
+      currentReferences: [{
+        kind: 'file',
+        ref: 'file:workspace/parallel/p3/generated-literature-8ef4985b7dc3-reproduction-report.md',
+        title: 'reproduction-report',
+        payload: { selectedText: reportMarkdown },
+      }],
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        ...canonicalDirectDecision('context-summary', {
+          usedRefs: ['file:workspace/parallel/p3/generated-literature-8ef4985b7dc3-reproduction-report.md'],
+        }),
+        executionModePlan: { executionMode: 'direct-context-answer' },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+        latencyPolicy: { blockOnContextCompaction: false },
+      },
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.equal(payload.displayIntent?.taskOutcome, 'satisfied');
+  assert.match(payload.message, /只基于当前选中的 reproduction-report/);
+  assert.match(payload.message, /r: true=0\.5000; fitted=0\.4767; error=4\.67%; threshold=15%; verdict=PASS/);
+  assert.match(payload.message, /K: true=200\.0; fitted=201\.5; error=0\.77%; threshold=15%; verdict=PASS/);
+  assert.match(payload.message, /RMSE: true=未给出\/不适用; fitted=4\.3505; error=未给出\/不适用; threshold=15; verdict=PASS/);
+  assert.match(payload.message, /未达标项：没有/);
+  assert.doesNotMatch(payload.message, /Credibility verdict|Biggest remaining risk|UNSELECTED/i);
+});
+
+test('selected reproduction report literal fact follow-up does not reuse credibility summary', () => {
+  const reportMarkdown = [
+    '# Logistic Growth ODE Parameter Estimation Reproduction Report',
+    '',
+    '## Notes',
+    '- Random seed: 42',
+    '- Optimizer: differential_evolution (polish=True) → fallback least_squares if needed',
+    '- Bounds: r in [0.01, 2.0], K in [50, 500]',
+  ].join(' ');
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: '只基于当前选中的 reproduction-report，报告里的 Random seed 是几？Optimizer 是什么？请只回答这两项，不要给可信度总结。',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [{
+      id: 'old-direct-context-summary',
+      type: 'runtime-context-summary',
+      data: {
+        markdown: 'UNSELECTED old answer says Credibility verdict: credible as a toy reproduction.',
+      },
+    }],
+    uiState: {
+      currentReferences: [{
+        kind: 'file',
+        ref: 'file:workspace/parallel/p3/generated-literature-8ef4985b7dc3-reproduction-report.md',
+        title: 'reproduction-report',
+        payload: { selectedText: reportMarkdown },
+      }],
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        ...canonicalDirectDecision('context-summary', {
+          usedRefs: ['file:workspace/parallel/p3/generated-literature-8ef4985b7dc3-reproduction-report.md'],
+        }),
+        executionModePlan: { executionMode: 'direct-context-answer' },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+      },
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.match(payload.message, /Random seed: 42/);
+  assert.match(payload.message, /Optimizer: differential_evolution/);
+  const answerLines = payload.message.split(/\r?\n/).map((line) => line.trim());
+  assert.ok(answerLines.includes('- Random seed: 42'));
+  assert.doesNotMatch(answerLines.find((line) => /Optimizer/i.test(line)) ?? '', /Bounds/i);
+  assert.doesNotMatch(payload.message, /Credibility verdict|Biggest remaining risk|UNSELECTED/i);
+});
+
+test('selected reproduction report counterfactual threshold audit stays direct-context and recomputes pass/fail', () => {
+  const reportMarkdown = [
+    '# Logistic Growth ODE Parameter Estimation Reproduction Report',
+    '',
+    '| Parameter | True Value | Fitted Value | Error (%) |',
+    '|-----------|------------|--------------|-----------|',
+    '| r         | 0.5000    | 0.4767      | 4.67%    |',
+    '| K         | 200.0    | 201.5      | 0.77%    |',
+    '| RMSE      | —          | 4.3505      | —         |',
+    '',
+    '**Reproduction success: YES**',
+    '',
+    '- r error: 4.67% (threshold 15%) → PASS',
+    '- K error: 0.77% (threshold 15%) → PASS',
+    '- RMSE: 4.3505 (threshold 15) → PASS',
+  ].join('\n');
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: '反事实验收：如果新门槛改成 r error <= 1%、K error <= 1%、RMSE <= 3，这个 toy reproduction 是否仍可判成功？请逐项给 pass/fail，不要因为原报告写了 success 就默认成功。',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    expectedArtifactTypes: ['notebook-timeline'],
+    artifacts: [],
+    uiState: {
+      currentReferences: [{
+        kind: 'file',
+        ref: 'file:workspace/parallel/p3/generated-literature-8ef4985b7dc3-reproduction-report.md',
+        title: 'reproduction-report',
+        payload: { selectedText: reportMarkdown },
+      }],
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.equal(payload.executionUnits[0]?.tool, 'sciforge.direct-context-fast-path');
+  assert.equal(payload.displayIntent?.taskOutcome, 'satisfied');
+  assert.match(payload.message, /是否仍可判成功：不能/);
+  assert.match(payload.message, /r: observed error=4\.67%; new threshold<=1%; verdict=FAIL/);
+  assert.match(payload.message, /K: observed error=0\.77%; new threshold<=1%; verdict=PASS/);
+  assert.match(payload.message, /RMSE: observed value=4\.3505; new threshold<=3; verdict=FAIL/);
+  assert.match(payload.message, /未达标项：r、RMSE/);
+  assert.doesNotMatch(payload.message, /Credibility verdict|Biggest remaining risk/i);
+});
+
+test('selected reproduction report rerun question does not invent missing command or full path', () => {
+  const reportMarkdown = [
+    '# Logistic Growth Parameter Estimation - Reproduction Report',
+    '',
+    'Reproduction success: YES',
+    '',
+    'Report generated by logistic_fit_demo.py',
+  ].join('\n');
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: '复跑性检查：这份 reproduction report 本身是否给出了完整 rerun command 和脚本路径？如果没有，不要补造；只列出报告中实际出现的路径、命令或缺口。',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [],
+    uiState: {
+      currentReferences: [{
+        kind: 'file',
+        ref: 'file:workspace/parallel/p3/generated-literature-8ef4985b7dc3-reproduction-report.md',
+        title: 'reproduction-report',
+        payload: { selectedText: reportMarkdown },
+      }],
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.match(payload.message, /完整 rerun command：未给出/);
+  assert.match(payload.message, /脚本路径：logistic_fit_demo\.py（报告只给出脚本名，不是完整路径）/);
+  assert.match(payload.message, /缺少可直接复制执行的完整命令/);
+  assert.doesNotMatch(payload.message, /python logistic_fit_demo\.py/);
 });
 
 test('selected metadata-only literature report answers full-text status from selected artifact only', () => {

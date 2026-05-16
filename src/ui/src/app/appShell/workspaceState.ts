@@ -21,6 +21,7 @@ import { handoffAutoRunPrompt } from '../results/autoRunPrompts';
 import { artifactsForRun, auditExecutionUnitsForRun } from '../results/executionUnitsForRun';
 import {
   conversationProjectionForSession,
+  conversationProjectionStatus,
   conversationProjectionRecoverFocusSignal,
 } from '../conversation-projection-view-model';
 import type { HandoffAutoRunRequest } from '../results/viewPlanResolver';
@@ -87,15 +88,19 @@ export function tryApplySessionUpdateToWorkspace(
 }
 
 export function recoverableRunFocusForSession(session: SciForgeSession): WorkspaceRecoveryFocus | undefined {
-  const candidate = [...session.runs].reverse().map((run) => {
+  let newerSatisfiedRunSeen = false;
+  let candidate: { run: SciForgeRun; reason: WorkspaceRecoveryFocus['reason'] } | undefined;
+  for (const run of [...session.runs].reverse()) {
     const focus = recoverableReasonForRun(session, run);
-    if (!focus) return undefined;
-    const activeRun = runForProjectedActiveRun(session, run, focus.activeRunId);
-    return {
-      run: activeRun,
-      reason: focus.reason,
-    };
-  }).find((focus): focus is { run: SciForgeRun; reason: WorkspaceRecoveryFocus['reason'] } => Boolean(focus));
+    if (focus && !newerSatisfiedRunSeen) {
+      candidate = {
+        run: runForProjectedActiveRun(session, run, focus.activeRunId),
+        reason: focus.reason,
+      };
+      break;
+    }
+    if (!focus && runSupersedesOlderRecoverableFocus(session, run)) newerSatisfiedRunSeen = true;
+  }
   if (!candidate) return undefined;
   return {
     scenarioId: session.scenarioId,
@@ -253,6 +258,13 @@ function recoverableReasonForRun(session: SciForgeSession, run: SciForgeRun): { 
   const focusSignal = conversationProjectionRecoverFocusSignal(projection);
   if (focusSignal) return { reason: 'repair-needed-run', activeRunId: focusSignal.activeRunId };
   return undefined;
+}
+
+function runSupersedesOlderRecoverableFocus(session: SciForgeSession, run: SciForgeRun) {
+  const projection = conversationProjectionForSession(session, run);
+  if (!projection || conversationProjectionRecoverFocusSignal(projection)) return false;
+  return conversationProjectionStatus(projection) === 'satisfied'
+    || conversationProjectionStatus(projection) === 'validated';
 }
 
 function runForProjectedActiveRun(session: SciForgeSession, carrierRun: SciForgeRun, projectedActiveRunId: string | undefined): SciForgeRun {

@@ -19,6 +19,7 @@ type ArtifactReferenceContextCollector = (request: GatewayRequest) => Promise<{ 
 let artifactReferenceContextCollector: ArtifactReferenceContextCollector | undefined;
 const reportViewerComponentId = ['report', 'viewer'].join('-');
 const executionUnitTableComponentId = ['execution', 'unit', 'table'].join('-');
+const unknownArtifactInspectorComponentId = ['unknown', 'artifact', 'inspector'].join('-');
 
 export {
   GENERATED_TASK_PAYLOAD_PREFLIGHT_SCHEMA_VERSION,
@@ -253,13 +254,21 @@ function toolPayloadFromPlainHumanAnswer(
       markdown: trimmed,
     },
   };
-  const artifacts = viewPolicy.artifacts.length ? viewPolicy.artifacts : [reportArtifact];
+  const fileArtifacts = directAnswerFileArtifactsFromText(trimmed);
+  const artifacts = dedupeDirectAnswerArtifacts([
+    ...(viewPolicy.artifacts.length ? viewPolicy.artifacts : [reportArtifact]),
+    ...fileArtifacts,
+  ]);
   const uiManifest = viewPolicy.artifacts.length
     ? viewPolicy.uiManifest
     : [
       { componentId: reportViewerComponentId, artifactRef: reportId, title: 'Answer', priority: 1 },
       { componentId: executionUnitTableComponentId, title: 'Execution', priority: 2 },
     ];
+  const uiManifestWithFileArtifacts = [
+    ...uiManifest,
+    ...directAnswerFileArtifactUiManifest(fileArtifacts, uiManifest.length + 1),
+  ];
   return {
     message: trimmed,
     confidence: 0.72,
@@ -280,7 +289,7 @@ function toolPayloadFromPlainHumanAnswer(
       supportingRefs: [],
       opposingRefs: [],
     }],
-    uiManifest,
+    uiManifest: uiManifestWithFileArtifacts,
     executionUnits: [{
       id: `agentserver-direct-answer-${id}`,
       status: 'done',
@@ -297,6 +306,82 @@ function toolPayloadFromPlainHumanAnswer(
       primaryView: 'answer',
     },
   };
+}
+
+function directAnswerFileArtifactsFromText(text: string): Array<Record<string, unknown>> {
+  const paths = directAnswerWorkspaceFileRefs(text)
+    .filter((ref) => /\.(?:csv|tsv|png|jpe?g|gif|webp|svg|md|markdown|json)(?:$|[?#])/i.test(ref));
+  const artifacts: Array<Record<string, unknown>> = [];
+  const seen = new Set<string>();
+  for (const path of paths) {
+    const id = safeArtifactToken(artifactIdFromPath(path), 'artifact');
+    const key = id.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const extension = fileExtension(path);
+    const type = directAnswerArtifactTypeFromPath(path, extension);
+    if (type === 'research-report' && seen.has('research-report')) continue;
+    artifacts.push({
+      id,
+      type,
+      path,
+      dataRef: path,
+      metadata: {
+        source: 'agentserver-direct-text-file-ref',
+        sourceRef: path,
+        title: titleFromArtifactId(id),
+        presentationRole: type === 'research-report' ? 'primary-deliverable' : 'supporting-evidence',
+      },
+    });
+  }
+  return artifacts;
+}
+
+function directAnswerWorkspaceFileRefs(text: string) {
+  const candidates = [
+    ...Array.from(text.matchAll(/(?:^|[`'"\s(:：])((?:\.{0,2}\/)?(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.@+-]+\.(?:csv|tsv|png|jpe?g|gif|webp|svg|md|markdown|json))(?:$|[`'"\s),，。:：])/gi), (match) => match[1]),
+  ];
+  return Array.from(new Set(candidates
+    .map((candidate) => candidate.replace(/^\.\/+/, '').replace(/\\/g, '/').trim())
+    .filter((candidate) => candidate && !candidate.startsWith('../') && !candidate.includes('/../') && !/^[a-z]+:\/\//i.test(candidate))));
+}
+
+function directAnswerArtifactTypeFromPath(path: string, extension: string) {
+  const normalized = path.toLowerCase();
+  if (extension === 'csv' || extension === 'tsv') return extension;
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(extension)) return 'image';
+  if (extension === 'md' || extension === 'markdown') return /report|summary|analysis/.test(normalized) ? 'research-report' : 'markdown';
+  if (/evidence[_-]?matrix|matrix/.test(normalized)) return 'evidence-matrix';
+  if (/notebook[_-]?timeline|timeline/.test(normalized)) return 'notebook-timeline';
+  return 'json';
+}
+
+function directAnswerFileArtifactUiManifest(artifacts: Array<Record<string, unknown>>, startPriority: number) {
+  return artifacts.map((artifact, index) => ({
+    componentId: componentForDirectAnswerFileArtifact(String(artifact.type || '')),
+    artifactRef: String(artifact.id || artifact.type || 'artifact'),
+    title: stringField(isRecord(artifact.metadata) ? artifact.metadata.title : undefined) ?? String(artifact.id || 'Artifact'),
+    priority: startPriority + index,
+  }));
+}
+
+function componentForDirectAnswerFileArtifact(type: string) {
+  if (type === 'research-report' || type === 'markdown') return reportViewerComponentId;
+  if (type === 'evidence-matrix') return 'evidence-matrix';
+  if (type === 'notebook-timeline') return 'notebook-timeline';
+  return unknownArtifactInspectorComponentId;
+}
+
+function dedupeDirectAnswerArtifacts(artifacts: Array<Record<string, unknown>>) {
+  const seen = new Set<string>();
+  const out: Array<Record<string, unknown>> = [];
+  for (const artifact of artifacts) {
+    const key = String(artifact.id || artifact.type || '').toLowerCase();
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    out.push(artifact);
+  }
+  return out;
 }
 
 function mergeExistingContextArtifactsForDirectAnswer(
@@ -477,6 +562,19 @@ function artifactTypeFromRef(ref: string | undefined) {
   return id;
 }
 
+function artifactIdFromPath(path: string) {
+  const basename = path.replace(/[?#].*$/, '').split('/').filter(Boolean).pop() ?? path;
+  return basename.replace(/\.[^.]+$/, '');
+}
+
+function fileExtension(path: string) {
+  return path.replace(/[?#].*$/, '').match(/\.([A-Za-z0-9]+)$/)?.[1]?.toLowerCase() ?? '';
+}
+
+function titleFromArtifactId(id: string) {
+  return id.replace(/[-_]+/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 function safeArtifactToken(value: string | undefined, fallback: string) {
   return (value ?? fallback).replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || fallback;
 }
@@ -576,8 +674,10 @@ function normalizeDirectAnswerDisplayIntent(
   message: string | undefined,
   executionUnits: Array<Record<string, unknown>>,
 ): ToolPayload['displayIntent'] | undefined {
-  if (typeof value === 'string' && value.trim()) return { primaryView: value.trim() };
   const defaults = defaultDirectAnswerDisplayIntent(message, executionUnits);
+  if (typeof value === 'string' && value.trim()) {
+    return defaults ? { ...defaults, primaryView: value.trim() } : { primaryView: value.trim() };
+  }
   if (!isRecord(value)) return defaults;
   if (directAnswerDisplayIntentIsBlocking(value)) return value;
   return defaults ? { ...defaults, ...value } : value;

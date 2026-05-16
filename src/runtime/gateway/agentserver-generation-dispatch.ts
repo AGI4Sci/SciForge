@@ -13,7 +13,7 @@ import { agentServerAgentId, agentServerContextPolicy, contextCompactionMetadata
 import { agentServerBackendSelectionDecision } from './agent-backend-config.js';
 import { classifyPlainAgentText, toolPayloadFromPlainAgentOutput } from './direct-answer-payload.js';
 import { agentServerLlmRuntime, AGENT_BACKEND_ANSWER_PRINCIPLE, buildAgentServerCompactContext, buildAgentServerGenerationPrompt, contextEnvelopeMode, missingUserLlmEndpointMessage, requiresUserLlmEndpoint, summarizeRuntimeCapabilitiesForAgentServer, summarizeToolsForAgentServer, writeAgentServerDebugArtifact } from './agentserver-prompts.js';
-import { agentServerRequestFailureMessage, agentServerRunFailure, extractAgentServerOutputText, looksLikeUnparsedGenerationResponseText, parseGenerationResponse, parseToolPayloadResponse } from './agentserver-run-output.js';
+import { agentServerRequestFailureMessage, agentServerRunFailure, extractAgentServerOutputText, looksLikeTruncatedAgentServerResponseText, looksLikeUnparsedGenerationResponseText, parseGenerationResponse, parseToolPayloadResponse } from './agentserver-run-output.js';
 import { diagnosticForFailure, sanitizeAgentServerError } from './backend-failure-diagnostics.js';
 import { finalizeAgentServerGenerationSuccess, recoverOrReturnAgentServerGenerationFailure, type AgentServerGenerationFailureDiagnostics, type AgentServerGenerationResult } from './agentserver-generation-recovery.js';
 import { isAgentServerRepairContinuationBoundedStopError, agentServerGenerationTokenGuardLimit, agentServerSilentStreamGuardAudit, currentReferenceDigestSilentGuardPolicy, mergeBackendStreamWorkEvidence, readAgentServerRunStream, silentStreamDecisionFromGatewayRequest } from './agentserver-stream.js';
@@ -378,6 +378,7 @@ async function dispatchAgentServerGeneration(params: AgentServerGenerationParams
             : !needsContinuity
             ? 'Fresh-generation hard rule: do not call shell/filesystem/browser tools to inspect the workspace, .sciforge, old task attempts, logs, artifacts, installed packages, or prior generated code before returning. If the user task needs network, downloads, PDF/full-text reading, computation, or file creation, generate a bounded runnable task that performs that work at execution time. Your first substantive assistant output must be the final compact JSON for a direct ToolPayload or a runnable AgentServerGenerationResponse.'
             : 'Continuity-generation mode: treat visible summaries and current refs as authoritative. Inspect only explicitly supplied refs needed for the user-requested continuation, never scan broad .sciforge/session history or workspace trees, and return a compact direct ToolPayload when the supplied summary is sufficient.',
+          'Transport budget hard rule: keep terminal JSON compact; for multi-artifact reports or long markdown/data, return executable taskFiles that write files beside outputPath and cite artifact refs instead of inlining large artifact bodies.',
           'Write task files that accept inputPath and outputPath argv values and write a SciForge ToolPayload JSON object.',
           'For current-reference document requests, use uiStateSummary.currentReferenceDigests/contextEnvelope.sessionFacts.currentReferenceDigests first; do not spend generation-stage tool calls dumping long files into model context.',
           'For fresh current-turn requests, do not browse old .sciforge task attempts, logs, artifacts, or generated tasks for diagnostics; generate the requested runnable task or direct ToolPayload from the current turn.',
@@ -718,7 +719,8 @@ async function dispatchAgentServerGeneration(params: AgentServerGenerationParams
         callbacks: params.callbacks,
       });
     }
-    const directText = extractAgentServerOutputText(run) || streamText || '';
+    const runOutputText = extractAgentServerOutputText(run);
+    const directText = preferUntruncatedAgentServerText(runOutputText, streamText);
     const parsedRaw = parseGenerationResponse(run.output) ?? parseGenerationResponse(run) ?? parseGenerationResponse(streamText) ?? parseGenerationResponse(directText);
     const parsed = parsedRaw && directText ? hydrateGeneratedTaskResponseFromText(parsedRaw, directText) : parsedRaw;
     if (!parsed) {
@@ -752,6 +754,21 @@ async function dispatchAgentServerGeneration(params: AgentServerGenerationParams
           source: 'agentserver-run-output',
           runId: typeof run.id === 'string' ? run.id : undefined,
         });
+        if (
+          directTextClassification.kind === 'tool-payload-json'
+          && looksLikeTruncatedAgentServerResponseText(directText)
+          && dispatchAttempt < 2
+        ) {
+          strictTaskFilesReason = 'AgentServer returned a ToolPayload-looking JSON string that was compacted/truncated by the HTTP response transport. Retry with terminal JSON under 6000 characters: prefer a compact executable AgentServerGenerationResponse whose task writes long report/data artifacts beside outputPath and returns only artifact refs; do not inline long markdown/data bodies in a direct ToolPayload.';
+          emitWorkspaceRuntimeEvent(params.callbacks, {
+            type: AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE,
+            source: 'workspace-runtime',
+            status: 'running',
+            message: 'AgentServer returned a truncated ToolPayload-looking response; retrying with compact task-file output contract.',
+            detail: strictTaskFilesReason,
+          });
+          continue;
+        }
         return await finalizeAgentServerGenerationSuccess({
           result: {
           ok: true,
@@ -827,6 +844,14 @@ async function dispatchAgentServerGeneration(params: AgentServerGenerationParams
     clearTimeout(timeout);
     params.callbacks?.signal?.removeEventListener('abort', abortGeneration);
   }
+}
+
+function preferUntruncatedAgentServerText(runOutputText: string | undefined, streamText: string | undefined) {
+  const runText = runOutputText || '';
+  const streamed = streamText || '';
+  if (runText && !looksLikeTruncatedAgentServerResponseText(runText)) return runText;
+  if (streamed && !looksLikeTruncatedAgentServerResponseText(streamed)) return streamed;
+  return runText || streamed;
 }
 
 function repairContinuationBoundedStopPayload(

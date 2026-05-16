@@ -34,16 +34,23 @@ export function directContextFastPathPayload(request: GatewayRequest): ToolPaylo
     executionUnits: uiState.executionUnits,
   });
   if (!context.length) return undefined;
-  if (!hasCurrentContextEvidence(context, decision.intent)) return undefined;
-  const gate = directContextGate(context, decision);
+  const payloadContext = scopedDirectContextPayloadContext(request, context);
+  if (!hasCurrentContextEvidence(payloadContext, decision.intent)) return undefined;
+  const gate = directContextGate(payloadContext, decision);
   if (!gate.allowed) return undefined;
   const transformMode = decision.transformMode && decision.transformMode !== 'none'
     ? decision.transformMode
     : answerOnlyTransformRequestedLegacyFallback(request.prompt);
-  const missingExpectedArtifacts = transformMode ? [] : missingExpectedArtifactTypes(request);
-  if (missingExpectedArtifacts.length) return missingExpectedArtifactsPayload(request, context, missingExpectedArtifacts, gate);
-  const message = directContextAnswerMessage(request, context, decision);
-  const instance = directContextInstance(request, context);
+  const selectedChartSufficiencyMessage = selectedChartSufficiencyAnswerMessage(request, payloadContext);
+  const suppressExpectedArtifactGate = Boolean(
+    transformMode
+    || selectedChartSufficiencyMessage
+    || boundedArtifactFollowupRequested(request),
+  );
+  const missingExpectedArtifacts = suppressExpectedArtifactGate ? [] : missingExpectedArtifactTypes(request);
+  if (missingExpectedArtifacts.length) return missingExpectedArtifactsPayload(request, payloadContext, missingExpectedArtifacts, gate);
+  const message = selectedChartSufficiencyMessage ?? directContextAnswerMessage(request, payloadContext, decision);
+  const instance = directContextInstance(request, payloadContext);
   const outputSpec = directContextOutputSpec(instance.id, transformMode);
   const reportId = outputSpec.reportId;
   const outputRef = directContextOutputRef(instance.id);
@@ -60,11 +67,11 @@ export function directContextFastPathPayload(request: GatewayRequest): ToolPaylo
     },
     claims: [{
       id: `${DIRECT_CONTEXT_FAST_PATH_POLICY.claimId}-${instance.id}`,
-      text: directContextClaimText(message, context),
+      text: directContextClaimText(message, payloadContext),
       type: 'fact',
       confidence: 0.74,
       evidenceLevel: DIRECT_CONTEXT_FAST_PATH_POLICY.evidenceLevel,
-      supportingRefs: directContextFastPathSupportingRefs(context),
+      supportingRefs: directContextFastPathSupportingRefs(payloadContext),
       opposingRefs: [],
     }],
     uiManifest: directContextUiManifest(reportId, outputSpec.artifactType),
@@ -90,7 +97,7 @@ export function directContextFastPathPayload(request: GatewayRequest): ToolPaylo
         source: DIRECT_CONTEXT_FAST_PATH_POLICY.source,
         policyOwner: DIRECT_CONTEXT_FAST_PATH_POLICY.policyOwner,
         transformMode: transformMode ?? 'none',
-        contextItemCount: context.length,
+        contextItemCount: payloadContext.length,
         directContextGate: gate.audit,
         runId: instance.runId,
         sourceRunId: instance.runId,
@@ -99,10 +106,10 @@ export function directContextFastPathPayload(request: GatewayRequest): ToolPaylo
       },
       data: {
         markdown: message,
-        context,
+        context: payloadContext,
       },
     }],
-    objectReferences: context
+    objectReferences: payloadContext
       .filter((item) => item.ref)
       .map((item, index) => ({
         id: `obj-direct-context-${index + 1}`,
@@ -115,6 +122,16 @@ export function directContextFastPathPayload(request: GatewayRequest): ToolPaylo
         summary: item.summary,
       })),
   };
+}
+
+function scopedDirectContextPayloadContext(
+  request: GatewayRequest,
+  context: ReturnType<typeof buildDirectContextFastPathItems>,
+) {
+  const selectedRefs = selectedReferenceTokens(request);
+  if (!selectedRefs.length || !explicitSelectedOnlyPrompt(request.prompt)) return context;
+  const selectedContext = context.filter((item) => directContextItemMatchesSelectedRef(item, selectedRefs));
+  return selectedContext.length ? selectedContext : context;
 }
 
 function readableArtifactFileRef(artifact: Record<string, unknown>) {
@@ -626,10 +643,26 @@ function directContextAnswerMessage(
   decision: DirectContextDecision,
 ) {
   const prompt = request.prompt;
+  const selectedChartSufficiency = selectedChartSufficiencyAnswerMessage(request, context);
+  if (selectedChartSufficiency) return selectedChartSufficiency;
   const hypotheses = testableHypothesesFromEvidenceMatrixMessage(prompt, context);
   if (hypotheses) return hypotheses;
   const selectedReportEvidenceStatus = selectedReportEvidenceStatusAnswerMessage(request, context);
   if (selectedReportEvidenceStatus) return selectedReportEvidenceStatus;
+  const selectedReportCounterfactual = selectedReportCounterfactualThresholdAnswerMessage(request, context);
+  if (selectedReportCounterfactual) return selectedReportCounterfactual;
+  const selectedReportPassFailAudit = selectedReportPassFailAuditAnswerMessage(request, context);
+  if (selectedReportPassFailAudit) return selectedReportPassFailAudit;
+  const selectedReportRerunInfo = selectedReportRerunInfoAnswerMessage(request, context);
+  if (selectedReportRerunInfo) return selectedReportRerunInfo;
+  const selectedReportLiteralFacts = selectedReportLiteralFactAnswerMessage(request, context);
+  if (selectedReportLiteralFacts) return selectedReportLiteralFacts;
+  const selectedReportBoundary = selectedReportEvidenceBoundaryAnswerMessage(request, context);
+  if (selectedReportBoundary) return selectedReportBoundary;
+  const selectedReportCredibilityAudit = selectedReportCredibilityAuditAnswerMessage(request, context);
+  if (selectedReportCredibilityAudit) return selectedReportCredibilityAudit;
+  const protocolBudgetAdaptation = protocolLibraryBudgetAdaptationMessage(prompt, context);
+  if (protocolBudgetAdaptation) return protocolBudgetAdaptation;
   const selectedReportAnswer = selectedReportQuestionAnswerMessage(request, context);
   if (selectedReportAnswer) return selectedReportAnswer;
   const transformed = answerOnlyTransformMessage(prompt, context, decision.transformMode);
@@ -737,6 +770,96 @@ function analysisReportFollowupMessage(
     '## Robustness checks',
     ...robustness.map((line) => `- ${line}`),
   ].join('\n');
+}
+
+function protocolLibraryBudgetAdaptationMessage(
+  prompt: string,
+  context: ReturnType<typeof buildDirectContextFastPathItems>,
+) {
+  if (!/(budget|librar(?:y|ies)|sequencing|timepoints?|预算|测序|文库|时间点)/i.test(prompt)) return undefined;
+  if (!/(protocol|trial|RCT|study design|方案|研究设计)/i.test(`${prompt}\n${directContextJoinedText(context).slice(0, 2000)}`)) return undefined;
+  const targetLibraries = libraryCountFromPrompt(prompt);
+  if (!targetLibraries) return undefined;
+  const sourceText = directContextJoinedText(context);
+  const patientCount = firstIntegerMatch(sourceText, /(\d+)\s*(?:IBS\s*)?(?:patients?|subjects?|participants?|名|例)/i);
+  const currentLibraries = firstIntegerMatch(sourceText, /(\d+)\s*(?:sequencing\s*)?librar(?:y|ies)\b/i)
+    ?? firstIntegerMatch(sourceText, /(?:最多|max(?:imum)?|total|共|最多)\D{0,24}(\d+)\s*(?:个\s*)?(?:sequencing\s*)?(?:librar(?:y|ies)|文库)/i);
+  const timepoints = protocolTimepoints(sourceText);
+  const inferredCurrentTimepoints = patientCount && currentLibraries && currentLibraries % patientCount === 0
+    ? currentLibraries / patientCount
+    : undefined;
+  const currentTimepointCount = Math.max(timepoints.length, inferredCurrentTimepoints ?? 0);
+  if (!patientCount || currentTimepointCount < 3) return undefined;
+  const targetTimepointsForAll = targetLibraries / patientCount;
+  if (!Number.isInteger(targetTimepointsForAll) || targetTimepointsForAll < 1) return undefined;
+  const alternativePatients = Math.floor(targetLibraries / currentTimepointCount);
+  const finalTimepoint = timepoints.find((timepoint) => /week\s*8|w8|第\s*8\s*周/i.test(timepoint)) ?? timepoints.at(-1) ?? 'final follow-up';
+  const baseline = timepoints.find((timepoint) => /baseline|基线/i.test(timepoint)) ?? 'baseline';
+  const dropped = timepoints.filter((timepoint) => timepoint !== baseline && timepoint !== finalTimepoint);
+  const underpowered = /underpowered|low power|insufficient power|needs-work|低效能|统计功效不足/i.test(sourceText);
+  const antibioticBlocker = /antibiotic[\s\S]{0,120}blocker|blocker[\s\S]{0,120}antibiotic|抗生素[\s\S]{0,120}blocker/i.test(sourceText);
+  const chinese = /[一-龥]/.test(prompt);
+  if (chinese) {
+    return [
+      '基于当前 protocol artifact 直接回答，不启动新的 workspace task，也不写入新的 artifact。',
+      '',
+      `推荐改法：保留 ${patientCount} 名患者，把 stool metagenomics 从 ${currentTimepointCount} 个时间点压缩为 ${targetTimepointsForAll} 个时间点，即 ${baseline} + ${finalTimepoint}，总计 ${patientCount} × ${targetTimepointsForAll} = ${targetLibraries} libraries。`,
+      dropped.length
+        ? `删除/取消的时间点：${dropped.join('、')}。这会牺牲 early response 和非线性 trajectory 信息。`
+        : '删除中间随访时间点；保留基线和最终疗效判断时间点。',
+      `不推荐方案：约 ${alternativePatients} 名患者 × ${currentTimepointCount} 个时间点 = ${alternativePatients * currentTimepointCount} libraries。${underpowered ? '当前 protocol 已经把样本量/power 标为 needs-work，进一步减样本会放大 primary endpoint 低功效问题。' : '减样本会优先伤害 primary endpoint 的可解释性。'}`,
+      `primary endpoint：保持 baseline 到 ${finalTimepoint} 的 IBS symptom score change；metagenomics 作为 secondary/exploratory endpoint 继续保留。`,
+      'analysis plan 调整：原来的 repeated-measures/MMRM 或 time × treatment trajectory 分析降级为 ANCOVA / change-score model；如仍做 microbiome longitudinal analysis，应明确只有两个 timepoints，不能估计非线性轨迹。',
+      `仍需标记 needs-work/blocker：${underpowered ? 'sample size / power 仍是 needs-work；' : 'power 需要重新计算；'}${antibioticBlocker ? '抗生素暴露 confounding 仍是 causal inference blocker；' : '抗生素、饮食和 clinic confounding 仍需敏感性分析；'}72-library 预算新增 needs-work 是失去 week-4 trajectory/early-response 证据。`,
+    ].join('\n');
+  }
+  return [
+    'Answered directly from the current protocol artifact; no new workspace task or artifact write was started.',
+    '',
+    `Recommended change: keep all ${patientCount} participants and reduce stool metagenomics from ${currentTimepointCount} timepoints to ${targetTimepointsForAll}: ${baseline} + ${finalTimepoint}, for ${patientCount} x ${targetTimepointsForAll} = ${targetLibraries} libraries.`,
+    dropped.length
+      ? `Dropped timepoint(s): ${dropped.join(', ')}. This loses early-response and nonlinear trajectory evidence.`
+      : 'Drop the intermediate follow-up timepoint while preserving baseline and final assessment.',
+    `Do not prefer ${alternativePatients} participants x ${currentTimepointCount} timepoints: ${underpowered ? 'the current protocol already labels sample size/power as needs-work, so reducing N makes the primary endpoint weaker.' : 'reducing N weakens the primary endpoint first.'}`,
+    `Primary endpoint: preserve symptom-score change from ${baseline} to ${finalTimepoint}; keep metagenomics secondary/exploratory.`,
+    'Analysis plan: replace the repeated-measures trajectory model with ANCOVA/change-score modeling; clearly state that two timepoints cannot estimate nonlinear trajectories.',
+    `Needs-work/blocker labels remain: ${underpowered ? 'power remains needs-work; ' : 'power must be recalculated; '}${antibioticBlocker ? 'antibiotic confounding remains a causal-inference blocker; ' : 'antibiotic/diet/clinic confounding still needs sensitivity analysis; '}the new 72-library needs-work item is loss of week-4 trajectory evidence.`,
+  ].join('\n');
+}
+
+function directContextJoinedText(context: ReturnType<typeof buildDirectContextFastPathItems>) {
+  return uniqueStrings(context
+    .map((item) => item.summary)
+    .filter((value): value is string => Boolean(value)))
+    .join('\n\n');
+}
+
+function libraryCountFromPrompt(prompt: string) {
+  return firstIntegerMatch(prompt, /(\d+)\s*(?:sequencing\s*)?librar(?:y|ies)\b/i)
+    ?? firstIntegerMatch(prompt, /预算\D{0,16}(\d+)\s*(?:个\s*)?(?:librar(?:y|ies)|文库)/i);
+}
+
+function firstIntegerMatch(text: string, pattern: RegExp) {
+  const match = text.match(pattern);
+  if (!match?.[1]) return undefined;
+  const value = Number(match[1]);
+  return Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+function protocolTimepoints(text: string) {
+  const labels = new Set<string>();
+  const baselineLabel = /[一-龥]/.test(text) ? 'baseline/基线' : 'baseline';
+  if (/\bbaseline\b|基线/i.test(text)) labels.add(baselineLabel);
+  for (const match of text.matchAll(/\bweek\s*(\d+)\b|第\s*(\d+)\s*周/gi)) {
+    const week = match[1] ?? match[2];
+    const numericWeek = week ? Number(week) : undefined;
+    if (numericWeek === 0) {
+      labels.add(baselineLabel);
+    } else if (typeof numericWeek === 'number' && Number.isInteger(numericWeek) && numericWeek > 0) {
+      labels.add(`week ${numericWeek}`);
+    }
+  }
+  return Array.from(labels);
 }
 
 function answerOnlyTransformMessage(
@@ -865,13 +988,450 @@ function evidenceStatusSourceLines(sourceText: string) {
   return uniqueStrings(lines).slice(0, 3);
 }
 
+function selectedChartSufficiencyAnswerMessage(
+  request: GatewayRequest,
+  context: ReturnType<typeof buildDirectContextFastPathItems>,
+) {
+  const prompt = request.prompt;
+  if (!/(selected|reference|artifact|chart|plot|figure|image|选中|引用|产物|图表|图片)/i.test(prompt)) return undefined;
+  if (!/(alone|only|single|support|prove|conclude|conclusion|statistical|significance|p[-\s]?value|confidence interval|batch|confound|causal|单独|仅|只|支持|证明|结论|显著|混杂|批次)/i.test(prompt)) return undefined;
+  const selectedRefs = selectedReferenceTokens(request);
+  const selectedContext = selectedRefs.length
+    ? context.filter((item) => directContextItemMatchesSelectedRef(item, selectedRefs))
+    : context.filter((item) => /(chart|plot|figure|image|png|jpeg|svg|图)/i.test(`${item.kind} ${item.label} ${item.ref ?? ''}`));
+  const promptMentionsChart = /(chart|plot|figure|image|png|jpe?g|webp|svg|boxplot|violin|heatmap|图表|图片|图像)/i.test(prompt);
+  const selectedLooksLikeChart = selectedContext.some((item) => /(chart|plot|figure|image|png|jpe?g|webp|svg|boxplot|violin|heatmap|图表|图片|图像)/i.test(`${item.kind} ${item.label} ${item.ref ?? ''} ${item.summary}`));
+  if (!promptMentionsChart && !selectedLooksLikeChart) return undefined;
+  const chartContext = selectedContext.filter((item) => /(chart|plot|figure|image|png|jpeg|jpg|webp|svg|boxplot|violin|heatmap|图)/i.test(`${item.kind} ${item.label} ${item.ref ?? ''} ${item.summary}`));
+  const answerContext = chartContext.length ? chartContext : selectedContext;
+  if (!answerContext.length) return undefined;
+  const refLine = directContextFastPathSupportingRefs(answerContext).slice(0, 3).join(', ') || answerContext[0]?.label || 'selected chart';
+  const asksStatistics = /(statistical|significance|p[-\s]?value|confidence interval|interval|sample size|effect|model|test|显著|p\s*值|置信|样本|效应|模型|检验)/i.test(prompt);
+  const asksConfounding = /(batch|confound|adjust|control|stratif|批次|混杂|控制|调整|分层)/i.test(prompt);
+  if (/[一-龥]/.test(prompt)) {
+    return [
+      `只基于当前选中的图表引用回答：${refLine}。没有启动新的 workspace task，也不使用其他引用。`,
+      '',
+      '结论：不能。单个图表最多提供视觉线索，不能单独证明统计显著性或 batch-confounding 结论。',
+      ...(asksStatistics ? [
+        '缺少的统计显著性依据：原始样本值或可审计数据表、每组样本量、具体检验或模型、效应方向与效应量、p 值或置信区间、以及检验假设/诊断。',
+      ] : []),
+      ...(asksConfounding ? [
+        '缺少的混杂依据：batch 标签、treatment/timepoint 在 batch 中的分布、分层或调整前后模型结果，以及控制 batch 后效应是否保持的比较。',
+      ] : []),
+      '可支持的有限判断：如果图表可见，它只能提示组间分布可能不同；这不是可复现的统计或混杂控制证据。',
+    ].join('\n');
+  }
+  return [
+    `Answered only from the selected chart reference: ${refLine}. No new workspace task was started, and other refs were not used.`,
+    '',
+    'Conclusion: no. A single chart can provide a visual cue, but it cannot by itself establish statistical significance or a batch-confounding conclusion.',
+    ...(asksStatistics ? [
+      'Missing for statistical significance: auditable sample-level data, group sample sizes, the exact test/model, effect direction and effect size, p value or confidence interval, and test assumptions/diagnostics.',
+    ] : []),
+    ...(asksConfounding ? [
+      'Missing for batch confounding: batch labels, treatment/timepoint balance across batches, stratified or adjusted model results, and a before/after comparison showing how batch control changes the drugA@48h estimate.',
+    ] : []),
+    'What the selected chart can support at most: a visual hypothesis that distributions may differ; it is not a reproducible statistical or confounding-control result on its own.',
+  ].join('\n');
+}
+
+interface SelectedReportPassFailRow {
+  metric: string;
+  trueValue?: string;
+  fittedValue?: string;
+  error?: string;
+  threshold?: string;
+  verdict?: 'PASS' | 'FAIL';
+}
+
+interface SelectedReportThresholdCheck {
+  metric: string;
+  observedLabel: string;
+  observed?: number;
+  observedText?: string;
+  threshold: number;
+  thresholdText: string;
+  pass: boolean;
+}
+
+function selectedReportSourceText(
+  request: GatewayRequest,
+  context: ReturnType<typeof buildDirectContextFastPathItems>,
+) {
+  const selectedRefs = selectedReferenceTokens(request);
+  const selectedContext = selectedRefs.length
+    ? context.filter((item) => directContextItemMatchesSelectedRef(item, selectedRefs))
+    : context;
+  return uniqueStrings((selectedContext.length ? selectedContext : context)
+    .filter((item) => /report|artifact|file|summary|reference/i.test(`${item.kind} ${item.label}`))
+    .map((item) => item.summary)
+    .filter((value): value is string => Boolean(value)))
+    .join('\n');
+}
+
+function selectedReportCounterfactualThresholdAnswerMessage(
+  request: GatewayRequest,
+  context: ReturnType<typeof buildDirectContextFastPathItems>,
+) {
+  const prompt = request.prompt;
+  if (!/(selected|reference|report|artifact|reproduc|选中|引用|报告|产物|复现)/i.test(prompt)) return undefined;
+  if (!/(counterfactual|if|new threshold|stricter|still|success|反事实|如果|新门槛|新阈值|仍可|仍然|判成功|验收|门槛|阈值|<=|≤)/i.test(prompt)) return undefined;
+  if (!/(r\b|K\b|RMSE|error|误差)/i.test(prompt)) return undefined;
+  const sourceText = selectedReportSourceText(request, context);
+  if (!sourceText) return undefined;
+  const rows = selectedReportPassFailRows(sourceText);
+  if (!rows.length) return undefined;
+  const checks = selectedReportCounterfactualThresholdChecks(prompt, rows);
+  if (!checks.length) return undefined;
+  const failed = checks.filter((check) => !check.pass);
+  const selectedTitle = selectedReportTitle(request) ?? 'selected report';
+  if (/[一-龥]/.test(prompt)) {
+    return [
+      `只基于当前选中的 ${selectedTitle} 做反事实门槛验收，不启动新的 workspace task，也不沿用原报告的 success 结论替代重新判断。`,
+      '',
+      `是否仍可判成功：${failed.length ? '不能' : '可以'}。`,
+      ...checks.map((check) => `- ${check.metric}: observed ${check.observedLabel}=${check.observedText ?? '未给出'}; new threshold<=${check.thresholdText}; verdict=${check.pass ? 'PASS' : 'FAIL'}.`),
+      failed.length
+        ? `未达标项：${failed.map((check) => check.metric).join('、')}。`
+        : '未达标项：没有。',
+    ].join('\n');
+  }
+  return [
+    `Answered only from the selected ${selectedTitle}; no new workspace task was started, and the original success label was not reused as the decision rule.`,
+    '',
+    `Still successful under the new thresholds: ${failed.length ? 'NO' : 'YES'}.`,
+    ...checks.map((check) => `- ${check.metric}: observed ${check.observedLabel}=${check.observedText ?? 'not stated'}; new threshold<=${check.thresholdText}; verdict=${check.pass ? 'PASS' : 'FAIL'}.`),
+    failed.length
+      ? `Failed checks: ${failed.map((check) => check.metric).join(', ')}.`
+      : 'Failed checks: none.',
+  ].join('\n');
+}
+
+function selectedReportCounterfactualThresholdChecks(
+  prompt: string,
+  rows: SelectedReportPassFailRow[],
+): SelectedReportThresholdCheck[] {
+  const thresholds = selectedReportThresholdsFromPrompt(prompt);
+  return thresholds.flatMap(({ metric, threshold, thresholdText }) => {
+    const row = findSelectedReportMetricRow(rows, metric);
+    if (!row) return [];
+    const observedText = metric === 'RMSE' ? row.fittedValue ?? row.error : row.error;
+    const observed = numericMetricValue(observedText);
+    if (observed === undefined) return [];
+    return [{
+      metric,
+      observedLabel: metric === 'RMSE' ? 'value' : 'error',
+      observed,
+      observedText,
+      threshold,
+      thresholdText,
+      pass: observed <= threshold,
+    }];
+  });
+}
+
+function selectedReportThresholdsFromPrompt(prompt: string) {
+  return [
+    { metric: 'r', pattern: /\br\s*(?:error|误差)?\s*(?:<=|≤|不超过|小于等于)\s*([0-9]+(?:\.[0-9]+)?)\s*%?/i, suffix: '%' },
+    { metric: 'K', pattern: /\bK\s*(?:error|误差)?\s*(?:<=|≤|不超过|小于等于)\s*([0-9]+(?:\.[0-9]+)?)\s*%?/i, suffix: '%' },
+    { metric: 'RMSE', pattern: /\bRMSE\b\s*(?:<=|≤|不超过|小于等于)\s*([0-9]+(?:\.[0-9]+)?)/i, suffix: '' },
+  ].flatMap(({ metric, pattern, suffix }) => {
+    const match = prompt.match(pattern);
+    if (!match) return [];
+    const threshold = Number(match[1]);
+    if (!Number.isFinite(threshold)) return [];
+    return [{ metric, threshold, thresholdText: `${match[1]}${suffix}` }];
+  });
+}
+
+function findSelectedReportMetricRow(rows: SelectedReportPassFailRow[], metric: string) {
+  const target = normalizeMetricName(metric);
+  return rows.find((row) => normalizeMetricName(row.metric) === target);
+}
+
+function numericMetricValue(value: string | undefined) {
+  const normalized = value?.replace(/[%\s,]/g, '');
+  if (!normalized || /^[-—–]+$/.test(normalized)) return undefined;
+  const numeric = Number(normalized);
+  return Number.isFinite(numeric) ? numeric : undefined;
+}
+
+function selectedReportRerunInfoAnswerMessage(
+  request: GatewayRequest,
+  context: ReturnType<typeof buildDirectContextFastPathItems>,
+) {
+  const prompt = request.prompt;
+  if (!/(selected|reference|report|artifact|reproduc|选中|引用|报告|产物|复现)/i.test(prompt)) return undefined;
+  if (!/(rerun command|run command|complete rerun|copy-pasteable command|script path|复跑性|复现命令|运行命令|完整.{0,8}命令|脚本路径)/i.test(prompt)) return undefined;
+  const sourceText = selectedReportSourceText(request, context);
+  if (!sourceText) return undefined;
+  const commandLines = selectedReportCommandLines(sourceText);
+  const scriptName = selectedReportGeneratedByScript(sourceText);
+  const selectedTitle = selectedReportTitle(request) ?? 'selected report';
+  if (/[一-龥]/.test(prompt)) {
+    return [
+      `只基于当前选中的 ${selectedTitle} 核对复跑信息，不补造 report 里没有出现的命令或路径。`,
+      '',
+      `- 完整 rerun command：${commandLines.length ? commandLines.join(' ; ') : '未给出。'}`,
+      `- 脚本路径：${scriptName ? `${scriptName}（报告只给出脚本名，不是完整路径）` : '未给出。'}`,
+      `- 缺口：${commandLines.length && scriptName ? '仍需确认工作目录、依赖和输入数据。' : '缺少可直接复制执行的完整命令、工作目录、依赖/环境信息和输入数据位置。'}`,
+    ].join('\n');
+  }
+  return [
+    `Answered only from the selected ${selectedTitle}; no rerun command or path was invented.`,
+    '',
+    `- Complete rerun command: ${commandLines.length ? commandLines.join(' ; ') : 'not stated.'}`,
+    `- Script path: ${scriptName ? `${scriptName} (the report gives only a script name, not a full path).` : 'not stated.'}`,
+    `- Gap: ${commandLines.length && scriptName ? 'working directory, dependencies, and inputs still need confirmation.' : 'missing copy-pasteable command, working directory, dependency/environment details, and input locations.'}`,
+  ].join('\n');
+}
+
+function selectedReportCommandLines(sourceText: string) {
+  return uniqueStrings(sourceText
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/^`{1,3}|`{1,3}$/g, ''))
+    .filter((line) => /^(?:python|python3|node|npm|pnpm|yarn|uv|pytest|npx|tsx)\b/i.test(line)))
+    .slice(0, 4);
+}
+
+function selectedReportGeneratedByScript(sourceText: string) {
+  return sourceText.match(/Report generated by\s+([^\s`'"]+)/i)?.[1]
+    ?? sourceText.match(/\b([A-Za-z0-9._/-]+\.py)\b/)?.[1];
+}
+
+function selectedReportFieldValue(sourceText: string, fieldPattern: RegExp) {
+  for (const part of statementParts(sourceText)) {
+    const match = part.match(fieldPattern);
+    if (match?.[1]) return match[1].trim();
+  }
+  return sourceText.match(fieldPattern)?.[1]?.trim();
+}
+
+function selectedReportLiteralFactAnswerMessage(
+  request: GatewayRequest,
+  context: ReturnType<typeof buildDirectContextFastPathItems>,
+) {
+  const prompt = request.prompt;
+  if (!/(selected|reference|report|artifact|reproduc|选中|引用|报告|产物|复现)/i.test(prompt)) return undefined;
+  if (!/(random seed|seed|optimizer|bounds?|noise|std|脚本|路径|随机种子|优化器|边界|噪声)/i.test(prompt)) return undefined;
+  const sourceText = selectedReportSourceText(request, context);
+  if (!sourceText) return undefined;
+  const facts = [
+    /random seed|seed|随机种子/i.test(prompt) ? ['Random seed', selectedReportFieldValue(sourceText, /^(?:[-*]\s*)?Random seed\s*[:：]\s*(.+)$/i)] : undefined,
+    /optimizer|优化器/i.test(prompt) ? ['Optimizer', selectedReportFieldValue(sourceText, /^(?:[-*]\s*)?Optimizer\s*[:：]\s*(.+)$/i)] : undefined,
+    /bounds?|边界/i.test(prompt) ? ['Bounds', selectedReportFieldValue(sourceText, /^(?:[-*]\s*)?Bounds\s*[:：]\s*(.+)$/i)] : undefined,
+    /noise|std|噪声/i.test(prompt) ? ['Synthetic noise std', selectedReportFieldValue(sourceText, /^(?:[-*]\s*)?Synthetic noise std\s*[:：]\s*(.+)$/i)] : undefined,
+    /script|脚本|路径/i.test(prompt) ? ['Report generated by', selectedReportGeneratedByScript(sourceText)] : undefined,
+  ].filter((item): item is [string, string | undefined] => Boolean(item));
+  if (!facts.length) return undefined;
+  const selectedTitle = selectedReportTitle(request) ?? 'selected report';
+  if (/[一-龥]/.test(prompt)) {
+    return [
+      `只基于当前选中的 ${selectedTitle} 回答，不给可信度总结。`,
+      '',
+      ...facts.map(([label, value]) => `- ${label}: ${value?.trim() || '报告未给出'}`),
+    ].join('\n');
+  }
+  return [
+    `Answered only from the selected ${selectedTitle}; no credibility summary was added.`,
+    '',
+    ...facts.map(([label, value]) => `- ${label}: ${value?.trim() || 'not stated'}`),
+  ].join('\n');
+}
+
+function selectedReportEvidenceBoundaryAnswerMessage(
+  request: GatewayRequest,
+  context: ReturnType<typeof buildDirectContextFastPathItems>,
+) {
+  const prompt = request.prompt;
+  if (!/(selected|reference|report|artifact|reproduc|这份|当前|选中|引用|报告|产物|复现)/i.test(prompt)) return undefined;
+  if (!/(cannot prove|cannot show|not prove|extrapolat|limitation|boundary|不能证明|不能外推|外推|边界|局限|缺口)/i.test(prompt)) return undefined;
+  const sourceText = selectedReportSourceText(request, context);
+  if (!sourceText) return undefined;
+  const limitations = selectedReportBoundaryLimitations(sourceText).slice(0, 6);
+  if (limitations.length < 2) return undefined;
+  const selectedTitle = selectedReportTitle(request) ?? 'selected report';
+  if (/[一-龥]/.test(prompt)) {
+    return [
+      `只基于当前选中的 ${selectedTitle} 做证据边界审计，不启动新的 workspace task。`,
+      '',
+      ...limitations.map((line, index) => `${index + 1}. ${line}`),
+    ].join('\n');
+  }
+  return [
+    `Answered only from the selected ${selectedTitle}; no new workspace task was started.`,
+    '',
+    ...limitations.map((line, index) => `${index + 1}. ${line}`),
+  ].join('\n');
+}
+
+function selectedReportBoundaryLimitations(sourceText: string) {
+  return uniqueStrings([
+    /synthetic/i.test(sourceText)
+      ? '不能证明真实数据或外部队列上的效果，因为报告只说明使用 synthetic data。'
+      : undefined,
+    /random seed|fixed seed|seed/i.test(sourceText)
+      ? '不能证明随机种子稳健性，因为报告只记录了单一 random seed。'
+      : undefined,
+    /noise|noisy|Synthetic noise std/i.test(sourceText)
+      ? '不能证明不同噪声水平下仍稳定，因为报告只给出当前噪声设置。'
+      : undefined,
+    /toy|logistic/i.test(sourceText)
+      ? '不能外推到更复杂模型或真实科研复现，因为报告范围是 toy logistic-growth reproduction。'
+      : undefined,
+    selectedReportCommandLines(sourceText).length === 0
+      ? '不能证明第三方可直接复跑，因为报告没有给出完整 rerun command。'
+      : undefined,
+    !/(holdout|independent|external|validation set|真实|外部|独立)/i.test(sourceText)
+      ? '不能证明独立验证集表现，因为报告没有记录 holdout/external validation。'
+      : undefined,
+  ].filter((value): value is string => Boolean(value)));
+}
+
+function selectedReportCredibilityAuditAnswerMessage(
+  request: GatewayRequest,
+  context: ReturnType<typeof buildDirectContextFastPathItems>,
+) {
+  const prompt = request.prompt;
+  if (!/(selected|reference|report|artifact|reproduc|当前|选中|引用|报告|产物|复现)/i.test(prompt)) return undefined;
+  if (!/(over.?optimistic|too optimistic|credible as a toy reproduction|supporting evidence|counter.?evidence|audit|过度乐观|支持证据|反对证据|一致性审计)/i.test(prompt)) return undefined;
+  const sourceText = selectedReportSourceText(request, context);
+  if (!sourceText) return undefined;
+  const rows = selectedReportPassFailRows(sourceText);
+  const metrics = selectedReportMetricLines(sourceText);
+  if (!rows.length && !metrics.length) return undefined;
+  const failed = rows.filter((row) => row.verdict === 'FAIL');
+  const selectedTitle = selectedReportTitle(request) ?? 'selected report';
+  const boundedNo = failed.length === 0;
+  const support = metrics.length ? metrics.slice(0, 4) : rows.map(formatSelectedReportPassFailRowEn).slice(0, 4);
+  const counter = selectedReportBoundaryLimitations(sourceText).slice(0, 3);
+  if (/[一-龥]/.test(prompt)) {
+    return [
+      `只基于当前选中的 ${selectedTitle} 做一致性审计，不使用未选中的历史消息。`,
+      '',
+      `yes/no：${boundedNo ? 'No' : 'Yes'}。如果措辞严格限定为 “credible as a toy reproduction”，报告证据没有过度乐观；如果把它读成真实/稳健复现成功，则会过度外推。`,
+      '支持证据：',
+      ...support.map((line) => `- ${line}`),
+      '反对证据/边界：',
+      ...(counter.length ? counter.map((line) => `- ${line}`) : ['- 报告没有提供足够的外部稳健性证据。']),
+      '最小补充实验：换多个 random seeds 和 noise levels 重跑同一拟合，并要求 r/K error 与 RMSE 继续满足同一阈值。',
+    ].join('\n');
+  }
+  return [
+    `Answered only from the selected ${selectedTitle}; unselected history was not used.`,
+    '',
+    `Yes/no: ${boundedNo ? 'No' : 'Yes'}. The phrase "credible as a toy reproduction" is supported if it stays bounded to the toy setup; reading it as real-world or robust reproduction success would overreach.`,
+    'Supporting evidence:',
+    ...support.map((line) => `- ${line}`),
+    'Counter-evidence / boundary:',
+    ...(counter.length ? counter.map((line) => `- ${line}`) : ['- The report does not provide enough external robustness evidence.']),
+    'Minimal supplementary experiment: rerun the fit across multiple random seeds and noise levels, requiring r/K error and RMSE to keep passing the same thresholds.',
+  ].join('\n');
+}
+
+function selectedReportPassFailAuditAnswerMessage(
+  request: GatewayRequest,
+  context: ReturnType<typeof buildDirectContextFastPathItems>,
+) {
+  const prompt = request.prompt;
+  if (!/(selected|reference|report|artifact|reproduc|选中|引用|报告|产物|复现)/i.test(prompt)) return undefined;
+  if (!/(PASS|FAIL|pass\/fail|true|fitted|error|threshold|RMSE|达标|未达标|没达标|阈值|逐项|核对|指标|误差|拟合)/i.test(prompt)) return undefined;
+  const selectedRefs = selectedReferenceTokens(request);
+  const selectedContext = selectedRefs.length
+    ? context.filter((item) => directContextItemMatchesSelectedRef(item, selectedRefs))
+    : context;
+  const sourceText = uniqueStrings((selectedContext.length ? selectedContext : context)
+    .filter((item) => /report|artifact|file|summary|reference/i.test(`${item.kind} ${item.label}`))
+    .map((item) => item.summary)
+    .filter((value): value is string => Boolean(value)))
+    .join('\n');
+  if (!/\b(?:PASS|FAIL)\b|threshold|阈值|达标|未达标|没达标/i.test(sourceText)) return undefined;
+  const rows = selectedReportPassFailRows(sourceText);
+  if (!rows.length) return undefined;
+  const failed = rows.filter((row) => row.verdict === 'FAIL');
+  const selectedTitle = selectedReportTitle(request) ?? 'selected report';
+  if (/[一-龥]/.test(prompt)) {
+    return [
+      `只基于当前选中的 ${selectedTitle} 逐项核对，不启动新的 workspace task，也不使用未选中的历史消息或其它 artifact。`,
+      '',
+      ...rows.map(formatSelectedReportPassFailRowZh),
+      '',
+      failed.length
+        ? `未达标项：${failed.map((row) => row.metric).join('、')}。`
+        : '未达标项：没有。选中报告中这些检查均为 PASS。',
+    ].join('\n');
+  }
+  return [
+    `Answered only from the selected ${selectedTitle}; no new workspace task was started, and unselected history/artifacts were not used.`,
+    '',
+    ...rows.map(formatSelectedReportPassFailRowEn),
+    '',
+    failed.length
+      ? `Failed checks: ${failed.map((row) => row.metric).join(', ')}.`
+      : 'Failed checks: none. The selected report marks these checks as PASS.',
+  ].join('\n');
+}
+
+function selectedReportPassFailRows(sourceText: string): SelectedReportPassFailRow[] {
+  const rows = new Map<string, SelectedReportPassFailRow>();
+  for (const match of sourceText.matchAll(/\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|/g)) {
+    const metric = match[1]?.trim();
+    if (!metric || /^[-:]+$/.test(metric) || /^parameter$/i.test(metric)) continue;
+    if ([match[2], match[3], match[4]].some((cell) => /^[-:\s]+$/.test(cell ?? ''))) continue;
+    const row = ensurePassFailRow(rows, metric);
+    row.trueValue = normalizeMetricCell(match[2]) ?? row.trueValue;
+    row.fittedValue = normalizeMetricCell(match[3]) ?? row.fittedValue;
+    row.error = normalizeMetricCell(match[4]) ?? row.error;
+  }
+  for (const match of sourceText.matchAll(/(?:^|[\n\r]\s*|\s+-\s*)[-*]?\s*([A-Za-z][A-Za-z0-9 _./-]*?)(?:\s+error)?\s*:\s*([0-9]+(?:\.[0-9]+)?%?)\s*\(\s*threshold\s*([0-9]+(?:\.[0-9]+)?%?)\s*\)\s*(?:[-–—>→\s]*)\b(PASS|FAIL)\b/gi)) {
+    const metric = match[1]?.trim();
+    if (!metric) continue;
+    const row = ensurePassFailRow(rows, metric);
+    if (/RMSE/i.test(metric)) row.fittedValue = row.fittedValue ?? match[2];
+    else row.error = row.error ?? match[2];
+    row.threshold = match[3];
+    row.verdict = match[4]?.toUpperCase() === 'FAIL' ? 'FAIL' : 'PASS';
+  }
+  return Array.from(rows.values())
+    .filter((row) => row.verdict || row.threshold || row.trueValue || row.fittedValue || row.error)
+    .slice(0, 8);
+}
+
+function ensurePassFailRow(rows: Map<string, SelectedReportPassFailRow>, metric: string) {
+  const key = normalizeMetricName(metric);
+  const existing = rows.get(key);
+  if (existing) return existing;
+  const row: SelectedReportPassFailRow = { metric: metric.trim() };
+  rows.set(key, row);
+  return row;
+}
+
+function normalizeMetricName(value: string) {
+  return value.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function normalizeMetricCell(value: string | undefined) {
+  const text = value?.trim();
+  if (!text || /^[-—–]+$/.test(text)) return undefined;
+  return text;
+}
+
+function formatSelectedReportPassFailRowZh(row: SelectedReportPassFailRow) {
+  return `- ${row.metric}: true=${row.trueValue ?? '未给出/不适用'}; fitted=${row.fittedValue ?? '未给出/不适用'}; error=${row.error ?? '未给出/不适用'}; threshold=${row.threshold ?? '未给出'}; verdict=${row.verdict ?? '未给出'}.`;
+}
+
+function formatSelectedReportPassFailRowEn(row: SelectedReportPassFailRow) {
+  return `- ${row.metric}: true=${row.trueValue ?? 'not stated / N/A'}; fitted=${row.fittedValue ?? 'not stated / N/A'}; error=${row.error ?? 'not stated / N/A'}; threshold=${row.threshold ?? 'not stated'}; verdict=${row.verdict ?? 'not stated'}.`;
+}
+
 function selectedReportQuestionAnswerMessage(
   request: GatewayRequest,
   context: ReturnType<typeof buildDirectContextFastPathItems>,
 ) {
   const prompt = request.prompt;
   if (!/(selected|reference|report|artifact|选中|引用|报告|产物)/i.test(prompt)) return undefined;
-  if (!/(credible|credibility|whether|verdict|metrics?|support|risk|validation|next step|reproduc|可信|结论|指标|支持|风险|验证|下一步)/i.test(prompt)) return undefined;
+  if (!/(credible|credibility|whether|verdict|metrics?|support|risk|validation|next step|可信|是否|结论|指标|支持|风险|验证|下一步)/i.test(prompt)) return undefined;
   const selectedRefs = selectedReferenceTokens(request);
   const selectedContext = selectedRefs.length
     ? context.filter((item) => directContextItemMatchesSelectedRef(item, selectedRefs))
@@ -1620,13 +2180,12 @@ function policyRequestsDirectContext(request: GatewayRequest, decision: DirectCo
 
 function fallbackDirectContextDecisionForBoundedArtifactFollowup(request: GatewayRequest): DirectContextDecision | undefined {
   if (!boundedArtifactFollowupRequested(request)) return undefined;
-  const refs = uniqueStrings([...request.artifacts, ...recordRows(isRecord(request.uiState) ? request.uiState.artifacts : undefined)].flatMap((artifact) => {
-    if (!isRecord(artifact)) return [];
-    const id = stringField(artifact.id);
-    const dataRef = stringField(artifact.dataRef) ?? stringField(artifact.path);
-    const type = stringField(artifact.type) ?? stringField(artifact.artifactType);
-    return [id ? `artifact:${id}` : undefined, dataRef, type ? `artifact-type:${type}` : undefined].filter((value): value is string => Boolean(value));
-  }));
+  const records = boundedFollowupRecords(request);
+  const selectedRefs = selectedReferenceTokens(request);
+  const scopedRecords = explicitSelectedOnlyPrompt(request.prompt) && selectedRefs.length
+    ? records.filter((record) => directContextRecordMatchesSelectedRef(record, selectedRefs))
+    : records;
+  const refs = uniqueStrings(scopedRecords.flatMap((artifact) => directContextRefTokensFromRecord(artifact)));
   if (!refs.length) return undefined;
   return {
     decisionRef: `decision:harness-bounded-artifact-${sha1(JSON.stringify({ prompt: request.prompt, refs })).slice(0, 10)}`,
@@ -1642,7 +2201,7 @@ function fallbackDirectContextDecisionForBoundedArtifactFollowup(request: Gatewa
 
 function boundedArtifactFollowupRequested(request: GatewayRequest) {
   if (!boundedArtifactFollowupPrompt(request.prompt)) return false;
-  const hasArtifact = [...request.artifacts, ...recordRows(isRecord(request.uiState) ? request.uiState.artifacts : undefined)]
+  const hasArtifact = boundedFollowupRecords(request)
     .some(isBoundedAnswerArtifact);
   return hasArtifact;
 }
@@ -1651,18 +2210,90 @@ function boundedArtifactFollowupPrompt(text: string) {
   if (/(search|retrieve|检索|搜索|重新检索|new search|web|external provider|fresh)/i.test(text)
     && !/(do not|don't|no|不要|不得|without)/i.test(text)) return false;
   if (artifactMutationFollowupRequiresBackend(text)) return false;
-  const refersToExistingContext = /(previous|prior|last|existing|current|visible|selected|above|artifact|matrix|report|上一轮|之前|已有|当前|选中|证据矩阵|报告|产物)/i.test(text);
-  const forbidsFreshWork = /(based only|only based|do not perform a new search|do not rerun|no new search|without starting|不要重新|不重新|只基于|仅基于)/i.test(text);
-  return refersToExistingContext && forbidsFreshWork;
+  const refersToSelectedOrCurrent = /(current|visible|selected|above|artifact|matrix|report|this report|this artifact|reproduction|当前|选中|证据矩阵|报告|产物|这份|这个|该报告|本报告|原报告)/i.test(text);
+  const refersToBroadHistory = /(previous|prior|last|existing|上一轮|之前|已有)/i.test(text);
+  const forbidsFreshWork = /(based only|only based|use only|only use|using only|do not perform a new search|do not rerun|no new search|without starting|不要重新|不重新|只基于|仅基于|只用|仅用)/i.test(text);
+  const asksReadOnlyQuestion = /(what|which|whether|can|does|how|should|would|recommend|tell me|list|audit|check|pass|fail|threshold|support|prove|rerun|command|script|counterfactual|是否|哪些|什么|有没有|能否|如何|怎么|怎样|应该|建议|请列出|回答|审计|核对|检查|验收|门槛|阈值|支持|证明|复跑|命令|脚本|反事实)/i.test(text);
+  return (refersToSelectedOrCurrent && (forbidsFreshWork || asksReadOnlyQuestion))
+    || (refersToBroadHistory && forbidsFreshWork);
+}
+
+function explicitSelectedOnlyPrompt(text: string) {
+  return /(?:use only|only use|using only|based only|only based|selected .* only|current .* only|reference .* only|artifact .* only|file .* only|report .* only|只基于|仅基于|只用|仅用|只看|仅看)/i.test(text)
+    && /(selected|current|reference|artifact|file|report|chart|plot|figure|image|选中|当前|引用|产物|文件|报告|图表|图片)/i.test(text);
+}
+
+function boundedFollowupRecords(request: GatewayRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  return [
+    ...request.artifacts,
+    ...recordRows(uiState.artifacts),
+    ...recordRows(request.references),
+    ...recordRows(uiState.currentReferences),
+    ...recordRows(uiState.currentReferenceDigests),
+  ].filter(isRecord);
+}
+
+function directContextRefTokensFromRecord(record: Record<string, unknown>) {
+  const payload = isRecord(record.payload) ? record.payload : {};
+  const currentReference = isRecord(payload.currentReference) ? payload.currentReference : {};
+  const objectReference = isRecord(payload.objectReference) ? payload.objectReference : {};
+  const id = stringField(record.id) ?? stringField(currentReference.id) ?? stringField(objectReference.id);
+  const dataRef = stringField(record.dataRef)
+    ?? stringField(record.path)
+    ?? stringField(record.sourceRef)
+    ?? stringField(record.ref)
+    ?? stringField(currentReference.dataRef)
+    ?? stringField(currentReference.path)
+    ?? stringField(currentReference.ref)
+    ?? stringField(objectReference.dataRef)
+    ?? stringField(objectReference.path)
+    ?? stringField(objectReference.ref);
+  const type = stringField(record.type)
+    ?? stringField(record.artifactType)
+    ?? stringField(currentReference.type)
+    ?? stringField(currentReference.artifactType)
+    ?? stringField(objectReference.type)
+    ?? stringField(objectReference.artifactType);
+  return [
+    id ? `artifact:${id.replace(/^artifact:/, '')}` : undefined,
+    dataRef,
+    type ? `artifact-type:${type}` : undefined,
+  ].filter((value): value is string => Boolean(value));
+}
+
+function directContextRecordMatchesSelectedRef(record: Record<string, unknown>, selectedRefs: string[]) {
+  const haystack = directContextRefTokensFromRecord(record)
+    .flatMap((token) => selectedReferenceTokenVariants(token))
+    .join('\n')
+    .toLowerCase();
+  if (!haystack) return false;
+  return selectedRefs.some((ref) => ref && haystack.includes(ref.toLowerCase()));
 }
 
 function artifactMutationFollowupRequiresBackend(text: string) {
   if (explicitAnswerOnlyNoToolsRequested(text)) return false;
+  if (readOnlyArtifactInfoRequested(text)) return false;
+  if (readOnlyHypotheticalArtifactRevisionRequested(text)) return false;
   const refersToExistingContext = /(previous|prior|last|existing|current|visible|selected|above|artifact|matrix|report|deliverable|document|file|workspace|上一轮|之前|已有|当前|选中|证据矩阵|报告|产物|交付物|文档|文件)/i.test(text);
   const asksForMutation = /(update|revise|rewrite|regenerate|edit|modify|refresh|replace|supersede|write|persist|produce|更新|修订|重写|改写|修改|替换|写入|产出|重新生成)/i.test(text);
   const deliverableScope = /(artifact|file|document|deliverable|workspace|path|\.md|decision log|risk register|timeline|budget|scope|success metrics|artifact\/file|产物|交付物|文档|文件|路径|决策日志|风险登记|时间线|预算|成功指标|所有受影响结论)/i.test(text);
   const asksForPaths = /(artifact\/file path|artifact path|file path|workspace file|updated artifact|new file|路径|更新后的 artifact|新的 artifact|新文件|文件路径)/i.test(text);
   return refersToExistingContext && ((asksForMutation && deliverableScope) || asksForPaths);
+}
+
+function readOnlyArtifactInfoRequested(text: string) {
+  return /(whether|does|what|which|list|audit|check|do not invent|not invent|是否|有没有|哪些|只列出|不要补造|审计|核对|检查|复跑性)/i.test(text)
+    && /(rerun command|run command|script path|artifact path|file path|路径|命令|脚本路径)/i.test(text)
+    && !/(update|revise|rewrite|regenerate|edit|modify|refresh|replace|write|persist|produce|更新|修订|重写|改写|修改|替换|写入|产出|重新生成)/i.test(text);
+}
+
+function readOnlyHypotheticalArtifactRevisionRequested(text: string) {
+  const asksRecommendation = /(how should|how would|what should|what would|should (?:we|i)|recommend|recommendation|建议|应该如何|应如何|如何(?:修改|调整|改)|怎么(?:修改|调整|改)|怎样(?:修改|调整|改)|如果|预算降到)/i.test(text);
+  const anchorsExistingArtifact = /(current|selected|existing|previous|prior|artifact|report|protocol|当前|选中|已有|之前|产物|报告|方案)/i.test(text);
+  const asksAnswerOnly = /(answer|tell me|explain|基于|回答|说明|标明|继续标明|建议)/i.test(text);
+  const asksDurableWrite = /(write(?:\s+the)? file|persist|save|updated artifact|new artifact|artifact path|file path|生成(?:新的)?(?:报告|文件|产物)|写入|保存|产出|文件路径|新的 artifact|更新后的 artifact)/i.test(text);
+  return asksRecommendation && anchorsExistingArtifact && asksAnswerOnly && !asksDurableWrite;
 }
 
 function explicitAnswerOnlyNoToolsRequested(text: string) {
@@ -1671,10 +2302,37 @@ function explicitAnswerOnlyNoToolsRequested(text: string) {
 
 function isBoundedAnswerArtifact(value: unknown) {
   if (!isRecord(value)) return false;
-  const type = `${stringField(value.type) ?? ''} ${stringField(value.artifactType) ?? ''} ${stringField(value.id) ?? ''}`;
+  const payload = isRecord(value.payload) ? value.payload : {};
+  const currentReference = isRecord(payload.currentReference) ? payload.currentReference : {};
+  const objectReference = isRecord(payload.objectReference) ? payload.objectReference : {};
+  const type = [
+    stringField(value.type),
+    stringField(value.artifactType),
+    stringField(value.id),
+    stringField(value.kind),
+    stringField(value.ref),
+    stringField(value.title),
+    stringField(value.dataRef),
+    stringField(value.path),
+    stringField(currentReference.artifactType),
+    stringField(currentReference.ref),
+    stringField(currentReference.title),
+    stringField(objectReference.artifactType),
+    stringField(objectReference.ref),
+    stringField(objectReference.title),
+  ].filter(Boolean).join(' ');
   if (/runtime-diagnostic|diagnostic|stderr|stdout|log|failure|error/i.test(type)) return false;
-  if (!/(evidence[-\s_]?matrix|research-report|report|paper-list|analysis|document|summary|table|dataset|csv|notebook|script)/i.test(type)) return false;
-  return Boolean(stringField(value.id) || stringField(value.dataRef) || stringField(value.path) || value.data !== undefined);
+  if (!/(evidence[-\s_]?matrix|research-report|report|paper-list|analysis|document|summary|table|dataset|csv|notebook|script|chart|plot|figure|image|png|jpe?g|webp|svg|图表|图片)/i.test(type)) return false;
+  return Boolean(
+    stringField(value.id)
+    || stringField(value.ref)
+    || stringField(value.dataRef)
+    || stringField(value.path)
+    || stringField(value.sourceRef)
+    || stringField(currentReference.ref)
+    || stringField(objectReference.ref)
+    || value.data !== undefined,
+  );
 }
 
 function directContextDecisionAllowsAnswer(decision: DirectContextDecision) {

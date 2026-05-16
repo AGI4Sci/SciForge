@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { looksLikeUnparsedGenerationResponseText, parseGenerationResponse } from './agentserver-run-output';
+import { looksLikeTruncatedAgentServerResponseText, looksLikeUnparsedGenerationResponseText, parseGenerationResponse } from './agentserver-run-output';
 
 test('parses fenced generation responses and infers a single executable entrypoint', () => {
   const parsed = parseGenerationResponse([
@@ -27,6 +27,15 @@ test('parses fenced generation responses and infers a single executable entrypoi
 test('detects generation-looking text that should not be treated as direct answer text', () => {
   assert.equal(looksLikeUnparsedGenerationResponseText('```json\n{"taskFiles":[{"path":"tasks/run.py"'), true);
   assert.equal(looksLikeUnparsedGenerationResponseText('Here is a normal report about papers.'), false);
+});
+
+test('detects AgentServer transport-compacted output strings', () => {
+  assert.equal(looksLikeTruncatedAgentServerResponseText('{"message":"ok"}'), false);
+  assert.equal(
+    looksLikeTruncatedAgentServerResponseText('{"message":"ok"}\n...[truncated 5799 chars for AgentServer HTTP response; full value remains in run store]'),
+    true,
+  );
+  assert.equal(looksLikeTruncatedAgentServerResponseText('summary [truncated]'), true);
 });
 
 test('parses generation output from authoritative result and finalText fields only', () => {

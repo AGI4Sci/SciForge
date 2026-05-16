@@ -195,9 +195,18 @@ export function repairDiagnosticViewSlotPolicy(request: RepairDiagnosticViewSlot
 export function expectedArtifactTypesForIntent(request: ArtifactIntentPolicyRequest) {
   const artifacts = new Set<string>();
   for (const componentId of selectedViewComponentsForIntent(request.prompt, request.selectedComponentIds)) {
-    for (const artifactType of primaryArtifactTypesForComponent(componentId)) artifacts.add(artifactType);
+    for (const artifactType of primaryArtifactTypesForComponent(componentId)) {
+      if (!artifactTypeMatchesCurrentTurnIntent(artifactType, request.prompt)) continue;
+      artifacts.add(artifactType);
+    }
   }
   return orderArtifactsByComponentOrder(Array.from(artifacts));
+}
+
+function artifactTypeMatchesCurrentTurnIntent(artifactType: string, prompt: string) {
+  if (artifactType === 'paper-list') return /\b(?:paper|papers|literature|pubmed|arxiv|citation|bibliography|doi|pmid)\b|文献|论文|引用|书目/i.test(prompt);
+  if (artifactType === 'runtime-context-summary') return /runtime[-\s_]?context|context summary|运行上下文|上下文摘要/i.test(prompt);
+  return true;
 }
 
 export function selectedViewComponentsForIntent(_prompt: string, configuredComponentIds: string[] = []) {

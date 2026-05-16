@@ -418,8 +418,11 @@ function agentHarnessVerificationPolicyProjection(
   if (disabled) return undefined;
   const verificationPolicy = isRecord(contract.verificationPolicy) ? contract.verificationPolicy : undefined;
   if (!verificationPolicy) return undefined;
-  const projected = relaxDirectContextHarnessVerificationPolicy(
-    runtimeVerificationPolicyFromHarness(verificationPolicy, input),
+  const projected = relaxBackgroundHarnessVerificationPolicy(
+    relaxDirectContextHarnessVerificationPolicy(
+      runtimeVerificationPolicyFromHarness(verificationPolicy, input),
+      input,
+    ),
     input,
   );
   const merged = mergeRuntimeVerificationPolicy(current, projected);
@@ -482,6 +485,30 @@ function relaxDirectContextHarnessVerificationPolicy(
   };
 }
 
+function relaxBackgroundHarnessVerificationPolicy(
+  policy: NonNullable<GatewayRequest['verificationPolicy']>,
+  input: {
+    uiState: Record<string, unknown>;
+    prompt?: string;
+    selectedActionIds?: string[];
+    actionSideEffects?: string[];
+    userExplicitVerification?: GatewayRequest['userExplicitVerification'];
+    riskLevel?: GatewayRequest['riskLevel'];
+  },
+): NonNullable<GatewayRequest['verificationPolicy']> {
+  if (!harnessLatencyIsNonBlocking(input.uiState)) return policy;
+  if (!policy.required || policy.mode !== 'lightweight' || policy.riskLevel === 'high') return policy;
+  if (backgroundHarnessRequestRequiresBlockingVerification(input)) return policy;
+  return {
+    ...policy,
+    required: false,
+    humanApprovalPolicy: policy.humanApprovalPolicy === 'required' ? 'optional' : policy.humanApprovalPolicy,
+    reason: /non-blocking background verification/i.test(policy.reason)
+      ? policy.reason
+      : `${policy.reason}; non-blocking background verification follows latency policy`,
+  };
+}
+
 function isDirectContextAnswerTurn(uiState: Record<string, unknown>) {
   const conversationPolicy = isRecord(uiState.conversationPolicy) ? uiState.conversationPolicy : {};
   const executionModePlan = isRecord(conversationPolicy.executionModePlan) ? conversationPolicy.executionModePlan : {};
@@ -523,6 +550,33 @@ function directContextRequestRequiresVerification(input: {
   if ((input.actionSideEffects ?? []).length > 0) return true;
   if (input.userExplicitVerification && !['none', 'unverified'].includes(input.userExplicitVerification)) return true;
   return explicitVerificationRequestPattern().test(input.prompt ?? '');
+}
+
+function backgroundHarnessRequestRequiresBlockingVerification(input: {
+  prompt?: string;
+  selectedActionIds?: string[];
+  actionSideEffects?: string[];
+  userExplicitVerification?: GatewayRequest['userExplicitVerification'];
+  riskLevel?: GatewayRequest['riskLevel'];
+}) {
+  if (input.riskLevel === 'high') return true;
+  if ((input.selectedActionIds ?? []).length > 0) return true;
+  if ((input.actionSideEffects ?? []).length > 0) return true;
+  if (input.userExplicitVerification && !['none', 'unverified'].includes(input.userExplicitVerification)) return true;
+  return explicitVerificationRequestPattern().test(input.prompt ?? '');
+}
+
+function harnessLatencyIsNonBlocking(uiState: Record<string, unknown>) {
+  const conversationPolicy = isRecord(uiState.conversationPolicy) ? uiState.conversationPolicy : {};
+  const conversationPolicySummary = isRecord(uiState.conversationPolicySummary) ? uiState.conversationPolicySummary : {};
+  const latencyPolicy = isRecord(uiState.latencyPolicy)
+    ? uiState.latencyPolicy
+    : isRecord(conversationPolicy.latencyPolicy)
+      ? conversationPolicy.latencyPolicy
+      : isRecord(conversationPolicySummary.latencyPolicy)
+        ? conversationPolicySummary.latencyPolicy
+        : {};
+  return latencyPolicy.blockOnVerification === false;
 }
 
 function explicitVerificationRequestPattern() {

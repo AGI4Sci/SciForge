@@ -428,6 +428,60 @@ test('recoverable focus follows conversation projection before raw run status', 
   assert.equal(recoverableRunFocusForSession(projectedRepair)?.reason, 'repair-needed-run');
 });
 
+test('recoverable focus does not restore stale partial run after newer satisfied run in same session', () => {
+  const stalePartialRun = {
+    id: 'run-stale-partial',
+    scenarioId: 'scenario-any',
+    status: 'completed' as const,
+    prompt: 'old selected report follow-up',
+    response: 'partial',
+    createdAt: '2026-05-07T02:00:00.000Z',
+    raw: {
+      resultPresentation: {
+        conversationProjection: {
+          schemaVersion: 'sciforge.conversation-projection.v1',
+          conversationId: 'conversation-stale-partial',
+          visibleAnswer: { status: 'degraded-result', diagnostic: 'old partial result', artifactRefs: [] },
+          activeRun: { id: 'run-stale-partial', status: 'degraded-result' },
+          artifacts: [],
+          executionProcess: [],
+          recoverActions: ['rerun required verifier'],
+          verificationState: { status: 'required' },
+          auditRefs: [],
+          diagnostics: [],
+        },
+      },
+    },
+  };
+  const newerSatisfiedRun = {
+    id: 'run-newer-satisfied',
+    scenarioId: 'scenario-any',
+    status: 'completed' as const,
+    prompt: 'new selected report follow-up',
+    response: 'answered',
+    createdAt: '2026-05-07T02:05:00.000Z',
+    raw: {
+      resultPresentation: {
+        conversationProjection: {
+          schemaVersion: 'sciforge.conversation-projection.v1',
+          conversationId: 'conversation-newer-satisfied',
+          visibleAnswer: { status: 'satisfied', text: 'Answered latest user intent.', artifactRefs: [] },
+          activeRun: { id: 'run-newer-satisfied', status: 'satisfied' },
+          artifacts: [],
+          executionProcess: [],
+          recoverActions: [],
+          verificationState: { status: 'not-required' },
+          auditRefs: [],
+          diagnostics: [],
+        },
+      },
+    },
+  };
+  const projectedSession = session([stalePartialRun, newerSatisfiedRun] as never);
+
+  assert.equal(recoverableRunFocusForSession(projectedSession), undefined);
+});
+
 test('recoverable focus can be driven by projection verification and background state', () => {
   const projectedVerification = {
     ...session([{

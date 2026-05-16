@@ -5,7 +5,9 @@ const externalTransientPatterns = [
   /timeout|timed out/i,
   /remote end closed|connection closed|socket hang up|network/i,
   /dns|enotfound|econnreset|econnrefused/i,
-  /\b5\d\d\b|service unavailable|bad gateway/i,
+  /\b(?:http|status|status code|response|server returned|provider returned)\s*(?:error\s*)?5\d\d\b/i,
+  /\b5\d\d\s+(?:server error|service unavailable|bad gateway|gateway timeout|internal server error)\b/i,
+  /service unavailable|bad gateway|gateway timeout|internal server error/i,
 ];
 
 const payloadContractPatterns = [

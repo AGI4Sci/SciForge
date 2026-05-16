@@ -176,6 +176,78 @@ test('attachResultPresentationContract treats complete evidenced presentation as
   assert.equal(visibleAnswer?.status, 'satisfied');
 });
 
+test('attachResultPresentationContract keeps explicit blocker findings as needs-work', () => {
+  const attached = attachResultPresentationContract(payload({
+    message: '72-library adaptation artifact is available.',
+    claims: [
+      {
+        id: 'claim-budget-feasible',
+        text: '72-library budget is feasible by dropping week 4.',
+        status: 'verified',
+        evidenceRefs: ['artifact:protocol-review-72lib'],
+      },
+      {
+        id: 'claim-underpowered',
+        text: 'The sample size blocker remains unchanged.',
+        status: 'blocker',
+        evidenceRefs: ['artifact:protocol-review-72lib'],
+      },
+      {
+        id: 'claim-trajectory-loss',
+        text: 'The week-4 trajectory loss remains needs-work.',
+        status: 'needs-work',
+        evidenceRefs: ['artifact:protocol-review-72lib'],
+      },
+    ],
+    artifacts: [{
+      id: 'protocol-review-72lib',
+      type: 'research-report',
+      title: '72-library protocol adaptation',
+      dataRef: '.sciforge/task-results/protocol-review-72lib.md',
+    }],
+    executionUnits: [{
+      id: 'protocol-adaptation',
+      status: 'done',
+      tool: 'workspace-task',
+      outputRef: '.sciforge/task-results/protocol-review-72lib.md',
+    }],
+    displayIntent: {
+      taskOutcome: 'satisfied',
+      status: 'completed',
+      resultPresentation: createResultPresentationContract({
+        id: 'protocol-review-72lib-presentation',
+        status: 'complete',
+        answerBlocks: [{ id: 'answer', kind: 'paragraph', text: '72-library adaptation artifact is available.', citationIds: ['artifact-protocol-review-72lib'] }],
+        keyFindings: [{
+          id: 'underpowered',
+          text: 'The sample size blocker remains unchanged.',
+          verificationState: 'blocker',
+          citationIds: ['artifact-protocol-review-72lib'],
+        }],
+        inlineCitations: [{ id: 'artifact-protocol-review-72lib', label: '72-library protocol adaptation', ref: '.sciforge/task-results/protocol-review-72lib.md', kind: 'artifact' }],
+        artifactActions: [{ id: 'protocol-review-72lib', label: '72-library protocol adaptation', ref: '.sciforge/task-results/protocol-review-72lib.md', action: 'inspect', kind: 'inspect' }],
+      }),
+    },
+  }), {
+    request: {
+      skillDomain: 'literature',
+      prompt: 'Adapt the protocol for a 72-library budget and keep needs-work/blocker labels visible.',
+      artifacts: [],
+    },
+  });
+
+  const projection = attached.displayIntent?.taskOutcomeProjection as Record<string, unknown> | undefined;
+  const proxy = projection?.userSatisfactionProxy as Record<string, unknown> | undefined;
+  const card = attached.displayIntent?.taskRunCard as Record<string, unknown> | undefined;
+  const visibleAnswer = (projection?.conversationProjection as Record<string, unknown> | undefined)?.visibleAnswer as Record<string, unknown> | undefined;
+
+  assert.equal(projection?.protocolSuccess, true);
+  assert.equal(projection?.taskSuccess, false);
+  assert.equal(card?.taskOutcome, 'needs-work');
+  assert.equal(proxy?.answeredLatestRequest, false);
+  assert.equal(visibleAnswer?.status, 'degraded-result');
+});
+
 test('attachResultPresentationContract does not downgrade direct-context answers for visible non-required unverified markers', () => {
   const answer = [
     'Answered directly from the selected report; no new workspace task was started.',
@@ -199,7 +271,10 @@ test('attachResultPresentationContract does not downgrade direct-context answers
       id: 'direct-context-summary',
       type: 'runtime-context-summary',
       title: 'Direct context answer',
-      data: { markdown: answer },
+      data: {
+        markdown: answer,
+        context: [{ summary: 'Old selected context said Missing expected artifacts: notebook-timeline.' }],
+      },
     }],
     executionUnits: [{
       id: 'EU-direct-context-report-followup',
@@ -227,6 +302,7 @@ test('attachResultPresentationContract does not downgrade direct-context answers
     request: {
       skillDomain: 'literature',
       prompt: 'Using only the selected reproduction report, tell me whether this toy reproduction is credible. List the exact metrics that support the verdict.',
+      expectedArtifactTypes: ['notebook-timeline'],
       artifacts: [],
       uiState: {
         conversationPolicy: {
@@ -330,6 +406,201 @@ test('attachResultPresentationContract rebuilds stale partial presentation when 
   assert.match(String(answerBlocks?.[0]?.text), /Answered directly from the selected report/);
 });
 
+test('attachResultPresentationContract does not block generated deliverables on nonblocking background verification', () => {
+  const attached = attachResultPresentationContract(payload({
+    message: 'Research package generated successfully. See artifact for full details.',
+    confidence: 1,
+    claimType: 'research-package',
+    evidenceLevel: 'generated',
+    claims: [{
+      id: 'claim-package',
+      text: 'The generated package includes brief, decision log, risk register, timeline, and budget.',
+      supportingRefs: ['artifact:mini-grant-package'],
+    }],
+    artifacts: [{
+      id: 'mini-grant-package',
+      type: 'markdown',
+      kind: 'research-report',
+      title: 'Mini Grant Research Package',
+      description: 'Full mini grant research package in Markdown format.',
+      dataRef: '.sciforge/task-results/mini-grant-package.md',
+      data: {
+        markdown: [
+          '# Mini Grant Research Package',
+          '## Project Brief',
+          '## Decision Log',
+          '## Risk Register',
+          '## Timeline & Budget',
+        ].join('\n'),
+      },
+    }],
+    executionUnits: [{
+      id: 'generate-mini-grant',
+      status: 'done',
+      tool: 'workspace-task',
+      outputRef: '.sciforge/task-results/mini-grant-package.md',
+    }],
+    verificationResults: [{
+      id: 'background-work-verify',
+      verdict: 'unverified',
+      confidence: 0,
+      evidenceRefs: ['execution-unit:generate-mini-grant'],
+      repairHints: ['Background verifier can be run after the deliverable is shown.'],
+      diagnostics: {
+        required: true,
+        visibleUnverified: true,
+      },
+    }],
+  }), {
+    request: {
+      skillDomain: 'literature',
+      prompt: 'Generate a mini grant research package with brief, decision log, risk register, timeline, and budget.',
+      expectedArtifactTypes: ['research-report', 'evidence-matrix', 'notebook-timeline'],
+      selectedVerifierIds: ['background-work-verify'],
+      artifacts: [],
+      uiState: {
+        latencyPolicy: { blockOnVerification: false },
+      },
+    },
+  });
+
+  const projection = attached.displayIntent?.taskOutcomeProjection as Record<string, any> | undefined;
+  const card = attached.displayIntent?.taskRunCard as Record<string, any> | undefined;
+  const visibleAnswer = (projection?.conversationProjection as Record<string, any> | undefined)?.visibleAnswer as Record<string, any> | undefined;
+  const resultPresentation = attached.displayIntent?.resultPresentation as Record<string, any> | undefined;
+
+  assert.equal(projection?.protocolSuccess, true);
+  assert.equal(projection?.taskSuccess, true);
+  assert.equal(card?.taskOutcome, 'satisfied');
+  assert.equal(visibleAnswer?.status, 'satisfied');
+  assert.equal(resultPresentation?.status, 'complete');
+  assert.doesNotMatch(String(visibleAnswer?.text), /required verification|human approval|Partial result artifacts/i);
+});
+
+test('attachResultPresentationContract honors nonblocking latency for harness light required markers', () => {
+  const attached = attachResultPresentationContract(payload({
+    message: 'Research package generated successfully. See artifact for full details.',
+    confidence: 1,
+    claimType: 'research-package',
+    evidenceLevel: 'generated',
+    claims: [{
+      id: 'claim-package',
+      text: 'The generated package includes brief, decision log, risk register, timeline, and budget.',
+      supportingRefs: ['artifact:mini-grant-package'],
+    }],
+    artifacts: [{
+      id: 'mini-grant-package',
+      type: 'markdown',
+      kind: 'research-report',
+      title: 'Mini Grant Research Package',
+      description: 'Includes Project Brief, Decision Log, Risk Register, Timeline & Budget.',
+      dataRef: '.sciforge/task-results/mini-grant-package.md',
+      data: {
+        markdown: '# Mini Grant Research Package\n## Project Brief\n## Decision Log\n## Risk Register\n## Timeline & Budget',
+      },
+    }],
+    executionUnits: [{
+      id: 'generate-mini-grant',
+      status: 'done',
+      tool: 'workspace-task',
+      outputRef: '.sciforge/task-results/mini-grant-package.md',
+    }],
+    verificationResults: [{
+      id: 'harness-light-verify',
+      verdict: 'unverified',
+      confidence: 0,
+      evidenceRefs: ['execution-unit:generate-mini-grant'],
+      repairHints: ['Run an appropriate verifier or request human approval.'],
+      diagnostics: {
+        required: true,
+        visibleUnverified: true,
+      },
+    }],
+    displayIntent: {
+      verification: {
+        verdict: 'unverified',
+        visible: true,
+        nonBlocking: true,
+      },
+    },
+  }), {
+    request: {
+      skillDomain: 'literature',
+      prompt: 'Generate a mini grant research package with brief, decision log, risk register, timeline, and budget.',
+      expectedArtifactTypes: ['research-report', 'evidence-matrix', 'notebook-timeline'],
+      artifacts: [],
+      verificationPolicy: {
+        required: true,
+        mode: 'lightweight',
+        riskLevel: 'medium',
+        reason: 'contractRef=runtime://agent-harness/contracts/balanced-default/test; profileId=balanced-default; intensity=light',
+      },
+      uiState: {
+        conversationPolicy: {
+          latencyPolicy: { blockOnVerification: false },
+        },
+      },
+    },
+  });
+
+  const projection = attached.displayIntent?.taskOutcomeProjection as Record<string, any> | undefined;
+  const card = attached.displayIntent?.taskRunCard as Record<string, any> | undefined;
+  const visibleAnswer = (projection?.conversationProjection as Record<string, any> | undefined)?.visibleAnswer as Record<string, any> | undefined;
+  const resultPresentation = attached.displayIntent?.resultPresentation as Record<string, any> | undefined;
+
+  assert.equal(projection?.protocolSuccess, true);
+  assert.equal(projection?.taskSuccess, true);
+  assert.equal(card?.taskOutcome, 'satisfied');
+  assert.equal(visibleAnswer?.status, 'satisfied');
+  assert.equal(resultPresentation?.status, 'complete');
+  assert.doesNotMatch(String(visibleAnswer?.text), /required verification|human approval|Partial result artifacts/i);
+});
+
+test('attachResultPresentationContract treats selected verifier ids as background unless explicitly required', () => {
+  const attached = attachResultPresentationContract(payload({
+    message: 'Research package generated successfully. See artifact for full details.',
+    confidence: 1,
+    claimType: 'research-package',
+    evidenceLevel: 'generated',
+    claims: [{
+      id: 'claim-package',
+      text: 'The generated package includes brief, decision log, risk register, timeline, and budget.',
+      supportingRefs: ['artifact:mini-grant-package'],
+    }],
+    artifacts: [{
+      id: 'mini-grant-package',
+      type: 'markdown',
+      kind: 'research-report',
+      title: 'Mini Grant Research Package',
+      description: 'Includes Project Brief, Decision Log, Risk Register, Timeline & Budget.',
+      dataRef: '.sciforge/task-results/mini-grant-package.md',
+      data: {
+        markdown: '# Mini Grant Research Package\n## Project Brief\n## Decision Log\n## Risk Register\n## Timeline & Budget',
+      },
+    }],
+    executionUnits: [{
+      id: 'generate-mini-grant',
+      status: 'done',
+      tool: 'workspace-task',
+      outputRef: '.sciforge/task-results/mini-grant-package.md',
+    }],
+  }), {
+    request: {
+      skillDomain: 'literature',
+      prompt: 'Generate a mini grant research package with brief, decision log, risk register, timeline, and budget.',
+      selectedVerifierIds: ['background-work-verify'],
+      artifacts: [],
+    },
+  });
+
+  const projection = attached.displayIntent?.taskOutcomeProjection as Record<string, any> | undefined;
+  const visibleAnswer = (projection?.conversationProjection as Record<string, any> | undefined)?.visibleAnswer as Record<string, any> | undefined;
+
+  assert.equal(projection?.taskSuccess, true);
+  assert.equal(visibleAnswer?.status, 'satisfied');
+  assert.doesNotMatch(String(visibleAnswer?.text), /required verification|human approval|Partial result artifacts/i);
+});
+
 test('attachResultPresentationContract blocks satisfied outcome when required verification remains unverified', () => {
   const attached = attachResultPresentationContract(payload({
     message: 'Protocol artifact is ready.',
@@ -406,6 +677,58 @@ test('attachResultPresentationContract blocks satisfied outcome when required ve
   assert.match(String(answerBlocks?.[0]?.text), /Partial result artifacts are available/i);
   assert.doesNotMatch(String(answerBlocks?.[0]?.text), /ready|completed|已完成|完成/i);
   assert.match(String(card?.nextStep), /verifier|human approval/i);
+});
+
+test('attachResultPresentationContract keeps protocol failure visible over background verification', () => {
+  const attached = attachResultPresentationContract(payload({
+    message: 'Generated task payload preflight blocked expensive execution before runner start: missing ToolPayload envelope.',
+    confidence: 0.2,
+    claimType: 'runtime-diagnostic',
+    evidenceLevel: 'runtime',
+    claims: [{
+      id: 'claim-preflight',
+      text: 'Generated task failed the ToolPayload envelope preflight.',
+      supportingRefs: ['execution-unit:preflight'],
+    }],
+    artifacts: [{
+      id: 'runtime-diagnostic',
+      type: 'runtime-diagnostic',
+      data: { reason: 'missing ToolPayload envelope' },
+    }],
+    executionUnits: [{
+      id: 'preflight',
+      status: 'failed-with-reason',
+      tool: 'generated-task-preflight',
+      failureReason: 'missing ToolPayload envelope',
+      nextStep: 'Repair generated task output contract.',
+    }],
+    verificationResults: [{
+      id: 'background-verify',
+      verdict: 'unverified',
+      confidence: 0,
+      evidenceRefs: ['execution-unit:preflight'],
+      repairHints: ['Run verifier after the contract failure is repaired.'],
+      diagnostics: {
+        required: true,
+        visibleUnverified: true,
+      },
+    }],
+  }), {
+    request: {
+      skillDomain: 'literature',
+      prompt: 'Generate a mini grant research package.',
+      artifacts: [],
+    },
+  });
+
+  const projection = attached.displayIntent?.taskOutcomeProjection as Record<string, any> | undefined;
+  const visibleAnswer = (projection?.conversationProjection as Record<string, any> | undefined)?.visibleAnswer as Record<string, any> | undefined;
+  const card = attached.displayIntent?.taskRunCard as Record<string, any> | undefined;
+
+  assert.equal(card?.protocolStatus, 'protocol-failed');
+  assert.notEqual(card?.genericAttributionLayer, 'verification');
+  assert.doesNotMatch(String(visibleAnswer?.text), /required verification is still unverified|human approval/i);
+  assert.match(String(visibleAnswer?.text), /ToolPayload envelope|preflight/i);
 });
 
 test('attachResultPresentationContract blocks satisfied outcome when request requires verification but no verdict exists', () => {

@@ -58,6 +58,13 @@ export function looksLikeUnparsedGenerationResponseText(value: unknown) {
   return /sciforge\.agentserver-generation-response\.v1|["']taskFiles["']\s*:|```json[\s\S]{0,2000}["']taskFiles["']\s*:/i.test(text);
 }
 
+export function looksLikeTruncatedAgentServerResponseText(value: unknown) {
+  const text = typeof value === 'string' ? value : '';
+  return /\.\.\.\[truncated\s+\d+\s+chars\s+for\s+AgentServer HTTP response; full value remains in run store\]/i.test(text)
+    || /\u2026\s*\d+\s+tokens\s+truncated/i.test(text)
+    || /\[truncated\]$/i.test(text.trim());
+}
+
 function structuredTextCandidates(value: unknown): string[] {
   const out: string[] = [];
   const seen = new Set<unknown>();
