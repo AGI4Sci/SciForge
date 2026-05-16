@@ -444,7 +444,7 @@ test('repair AgentServer prompt omits raw core snapshot turn and generated task 
   assert.match(prompt, /No broad repair loop, full pipeline regeneration, or exploratory history scan/);
   assert.match(prompt, /Do not start another repair pass, broad loop, or exploratory provider\/status investigation/);
   assert.match(prompt, /recentTurnRefs/);
-  assert.match(prompt, /contentDigest/);
+  assert.match(prompt, /rawTurnCount/);
   assert.match(prompt, /generated-literature\.py/);
   assert.match(prompt, /Browser repair failed after provider route returned empty result/);
   assert.match(prompt, /Use provider-first browser route and rerun verifier/);

@@ -17,7 +17,7 @@
 
 
 ## 重要
-进入实现轮后，同时开启多个 sub agents，并行使用 browser/computer use 能力从网页端调试、修复，实现所有当前 SA-* 任务，并行度越高越好。完成 milestone 后更新 PROJECT.md、同步到 github，直到完成为止。一个阶段完成后，可以删掉没用的 sub agents，重启新的 sub agents，持续不间断地并行实现目标。
+进入实现轮后，同时开启多个 sub agents，并行使用 browser/computer use 能力从网页端调试、修复，并行度越高越好。完成 milestone 后更新 PROJECT.md、同步到 github，直到完成为止。一个阶段完成后，可以删掉没用的 sub agents，重启新的 sub agents，持续不间断地并行实现目标。
 
 并行不能绕过阶段门：未完成 Inventory/Conformance guard 前，不得把旧链路伪装成最终实现。用户明确限定“只改计划/文档”时，只更新计划/文档，不启动代码实现。
 
@@ -282,16 +282,16 @@ Web E2E 任务：
 
 #### 已关闭旧链路候选
 
-旧链路候选已迁移到上方 SA-* 并关闭为最终 gate：Workspace Kernel / context projection 命名成为主路径，AgentServer context request 使用 `contextRefs` / `capabilityBriefRef` / `cachePlan`，Runtime Bridge 通过 declarative TurnPipeline + AgentServerAdapter 主路径运行，UI 主展示只来自 Projection/ArtifactDelivery。`smoke:no-legacy-paths` 当前仍输出 tracked warning baseline（provider/scenario/prompt special-case 36、degraded raw-context shape 2、UI semantic fallback 2），这些只能作为 tracked warning、migration/audit alias、negative guard 或 compatibility fixture 存在；新增或计数增加会失败。
+旧链路候选已迁移到上方 SA-* 并关闭为最终 gate：Workspace Kernel / context projection 命名成为主路径，AgentServer context request 使用 `contextRefs` / `capabilityBriefRef` / `cachePlan`，Runtime Bridge 通过 declarative TurnPipeline + AgentServerAdapter 主路径运行，UI 主展示只来自 Projection/ArtifactDelivery。`smoke:no-legacy-paths` 当前仍输出 tracked warning baseline（provider/scenario/prompt special-case 36、degraded raw-context shape 1、UI semantic fallback 2），这些只能作为 tracked warning、migration/audit alias、negative guard 或 compatibility fixture 存在；新增或计数增加会失败。
 
 #### Long-file Governance Split List
 
 这些拆分任务不重新打开 single-agent final contract；它们满足“1500+ 行非生成文件必须进入治理清单”的 PROJECT 原则，并由 `smoke:long-file-budget` 防止继续无记录膨胀。1000+ 行 watch list 由 `smoke:long-file-budget` 输出维护。
 
-- [ ] LF-001：拆分 `src/runtime/generation-gateway.ts`。建议按职责抽出 AgentServer generation dispatch、repair continuation fallback、TurnPipeline adapter、handoff slimming telemetry；主文件保留 runtime gateway orchestration facade。
-- [ ] LF-002：拆分 `src/runtime/gateway/agentserver-prompts.ts`。建议按职责抽出 generation prompt policy、repair prompt policy、context snapshot compaction、capability brief prompt compaction；主文件保留 prompt builder facade。
-- [ ] LF-003：拆分 `packages/skills/literature/index.ts`。建议按能力拆为 literature search/fetch provider contract、citation/evidence normalization、report artifact assembly、skill manifest/fixtures；入口只做 capability registration。
-- [ ] LF-004：拆分 `src/runtime/gateway/context-envelope.ts`。建议按职责抽出 context projection envelope、AgentServer core snapshot compaction、workspace kernel projection summary 和 ref/cache-plan serialization；主文件保留 orchestration facade 与 public builder。
+- [x] LF-001：拆分 `src/runtime/generation-gateway.ts`。Evidence：新增 `src/runtime/gateway/agentserver-generation-dispatch.ts` 和 `src/runtime/gateway/request-context-refs.ts`，抽出 AgentServer generation dispatch、TurnPipeline adapter、handoff slimming telemetry、backend stream parsing/retry/recovery 与 repair-continuation bounded-stop fallback；`generation-gateway.ts` 保留 public gateway orchestration 与 generated-task repair rerun lifecycle，降至 1500 行以下；`node --import tsx --test src/runtime/generation-gateway.policy.test.ts` 与 `npx tsc --noEmit --pretty false` 通过。
+- [x] LF-002：拆分 `src/runtime/gateway/agentserver-prompts.ts`。Evidence：新增 `src/runtime/gateway/agentserver-generation-prompts.ts`、`src/runtime/gateway/agentserver-repair-prompts.ts` 和 `src/runtime/gateway/agentserver-context-summary.ts`，抽出 generation prompt policy、repair prompt policy 与 UI/context summary；`agentserver-prompts.ts` 保留 facade、runtime config、context envelope compact summary 和 public exports，降至 1500 行以下；`node --import tsx --test src/runtime/gateway/agentserver-prompts.test.ts src/runtime/gateway/context-envelope.test.ts` 与 `npx tsc --noEmit --pretty false` 通过。
+- [x] LF-003：拆分 `packages/skills/literature/index.ts`。Evidence：新增 `packages/skills/literature/retrieval-normalization.ts`，抽出 provider retrieval normalization、citation verification、budget debit assembly 和 shared normalization helpers；`index.ts` 保留 public API 和 capability registration，降至 1500 行以下；`node --import tsx --test packages/skills/**/*.test.ts packages/**/*.test.ts tests/smoke/smoke-literature-retrieval-capability.ts tests/smoke/smoke-literature-reproduction-feasibility.ts` 通过。
+- [x] LF-004：拆分 `src/runtime/gateway/context-envelope.ts`。Evidence：新增 `src/runtime/gateway/context-envelope-projection.ts` 承接 context projection envelope、workspace kernel projection、contextRefs/cachePlan/capabilityBriefRef serialization；`context-envelope.ts` 保留 public builder 和 context orchestration facade，降至 1500 行以下；`node --import tsx --test src/runtime/gateway/context-envelope.test.ts` 与 `npx tsc --noEmit --pretty false` 通过。
 
 旧链路候选处理规则：本节以下只允许保留 archive/historical 摘要和 Stability Orchestration。旧 2026-05-14/15 任务的未完成 TODO 必须迁移到 SA-* 或关闭；不允许为了完成旧 TODO 新增兼容层。
 
