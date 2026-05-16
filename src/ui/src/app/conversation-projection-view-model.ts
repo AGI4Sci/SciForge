@@ -117,6 +117,7 @@ const recoverFocusBackgroundStatuses = new Set([
 
 export function conversationProjectionForSession(session: SciForgeSession, run?: SciForgeRun): UiConversationProjection | undefined {
   const source = session as SessionWithConversationProjection;
+  const fallbackTimestamp = projectionFallbackTimestamp(run);
   const candidates = [
     projectionFromSessionProjectionMap(source.materializedConversationProjections, run),
     projectionFromSessionProjectionMap(source.conversationProjections, run),
@@ -124,7 +125,7 @@ export function conversationProjectionForSession(session: SciForgeSession, run?:
     source.currentConversationProjection,
     source.conversationProjection,
   ];
-  return candidates.map(normalizeConversationProjection).find(Boolean) ?? conversationProjectionFromRun(run);
+  return candidates.map((candidate) => normalizeConversationProjection(candidate, fallbackTimestamp)).find(Boolean) ?? conversationProjectionFromRun(run);
 }
 
 export function conversationProjectionMigrationAuditFixtureForRun(run?: SciForgeRun): UiConversationProjection | undefined {
@@ -132,6 +133,7 @@ export function conversationProjectionMigrationAuditFixtureForRun(run?: SciForge
 }
 
 function conversationProjectionFromRun(run?: SciForgeRun): UiConversationProjection | undefined {
+  const fallbackTimestamp = projectionFallbackTimestamp(run);
   const raw = isRecord(run?.raw) ? run.raw : undefined;
   const displayIntent = isRecord(raw?.displayIntent) ? raw.displayIntent : undefined;
   const resultPresentation = isRecord(raw?.resultPresentation) ? raw.resultPresentation : undefined;
@@ -145,7 +147,7 @@ function conversationProjectionFromRun(run?: SciForgeRun): UiConversationProject
     resultPresentation?.conversationEventLog,
     displayResultPresentation?.conversationEventLog,
     responseResultPresentation?.conversationEventLog,
-  ].map(projectConversationEventLogForUi).find(Boolean);
+  ].map((candidate) => projectConversationEventLogForUi(candidate, fallbackTimestamp)).find(Boolean);
   if (fromEventLog) return fromEventLog;
   return [
     resultPresentation?.conversationProjection,
@@ -153,7 +155,7 @@ function conversationProjectionFromRun(run?: SciForgeRun): UiConversationProject
     displayResultPresentation?.conversationProjection,
     taskOutcomeProjection?.conversationProjection,
     responseResultPresentation?.conversationProjection,
-  ].map(normalizeConversationProjection).find(Boolean);
+  ].map((candidate) => normalizeConversationProjection(candidate, fallbackTimestamp)).find(Boolean);
 }
 
 function projectionFromSessionProjectionMap(value: unknown, run?: SciForgeRun): unknown {
@@ -168,9 +170,9 @@ function projectionFromSessionProjectionMap(value: unknown, run?: SciForgeRun): 
   return undefined;
 }
 
-function projectConversationEventLogForUi(value: unknown): UiConversationProjection | undefined {
+function projectConversationEventLogForUi(value: unknown, fallbackTimestamp?: string): UiConversationProjection | undefined {
   if (!isConversationEventLog(value)) return undefined;
-  return normalizeConversationProjection(projectConversation(value));
+  return normalizeConversationProjection(projectConversation(value), fallbackTimestamp);
 }
 
 export function conversationProjectionStatus(projection?: UiConversationProjection): UiConversationProjectionStatus {
@@ -242,7 +244,7 @@ export function conversationProjectionVisibleText(projection?: UiConversationPro
   return projection?.visibleAnswer?.text;
 }
 
-function normalizeConversationProjection(value: unknown): UiConversationProjection | undefined {
+function normalizeConversationProjection(value: unknown, fallbackTimestamp?: string): UiConversationProjection | undefined {
   if (!isRecord(value)) return undefined;
   if (value.schemaVersion !== 'sciforge.conversation-projection.v1') return undefined;
   const status = normalizeStatus(isRecord(value.visibleAnswer) ? value.visibleAnswer.status : undefined)
@@ -273,7 +275,10 @@ function normalizeConversationProjection(value: unknown): UiConversationProjecti
       eventId: asString(event.eventId) ?? asString(event.id) ?? 'event',
       type: asString(event.type) ?? 'event',
       summary: asString(event.summary) ?? '',
-      timestamp: asString(event.timestamp) ?? '',
+      timestamp: normalizeProjectionTimestamp(
+        asString(event.timestamp) ?? asString(event.createdAt) ?? asString(event.completedAt) ?? asString(event.updatedAt),
+        fallbackTimestamp,
+      ),
     })),
     recoverActions: asStringList(value.recoverActions),
     verificationState: isRecord(value.verificationState) ? {
@@ -294,6 +299,22 @@ function normalizeConversationProjection(value: unknown): UiConversationProjecti
       refs: recordList(diagnostic.refs).map((ref) => ({ ref: asString(ref.ref) })),
     })),
   };
+}
+
+function projectionFallbackTimestamp(run?: SciForgeRun) {
+  return normalizeProjectionTimestamp(run?.completedAt ?? run?.createdAt);
+}
+
+function normalizeProjectionTimestamp(value: unknown, fallback?: string) {
+  const candidate = asString(value);
+  if (candidate && !isPlaceholderTimestamp(candidate)) return candidate;
+  const fallbackCandidate = asString(fallback);
+  return fallbackCandidate && !isPlaceholderTimestamp(fallbackCandidate) ? fallbackCandidate : '';
+}
+
+function isPlaceholderTimestamp(value: string) {
+  const time = Date.parse(value);
+  return !Number.isFinite(time) || time <= Date.parse('2000-01-01T00:00:00.000Z');
 }
 
 function normalizeCurrentTurn(value: unknown): UiConversationProjection['currentTurn'] {

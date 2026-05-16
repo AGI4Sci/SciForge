@@ -2,7 +2,7 @@ import type { ViewCompare, ViewEncoding, ViewLayout, ViewSelection, ViewSync, Vi
 import type { TaskRunCardConversationProjectionSummary } from './task-run-card';
 
 export const RESULT_PRESENTATION_SCHEMA_VERSION = 'sciforge.result-presentation-contract.v1' as const;
-import type { RuntimeArtifactDerivation } from './artifacts';
+import { artifactHasUserFacingDelivery, type RuntimeArtifactDerivation } from './artifacts';
 
 export const RESULT_PRESENTATION_CONTRACT_ID = 'sciforge.result-presentation.v1' as const;
 
@@ -467,7 +467,7 @@ function citationsFromPayload(payload: Record<string, unknown>, objectReferences
       status: stringField(reference.status),
     }];
   });
-  const fromArtifacts = recordList(payload.artifacts).flatMap((artifact, index): ResultPresentationInlineCitation[] => {
+  const fromArtifacts = recordList(payload.artifacts).filter(artifactIsUserFacingPresentationArtifact).flatMap((artifact, index): ResultPresentationInlineCitation[] => {
     const ref = artifactRef(artifact);
     if (!ref) return [];
     const type = stringField(artifact.type) ?? stringField(artifact.artifactType) ?? 'artifact';
@@ -497,7 +497,7 @@ function citationsFromPayload(payload: Record<string, unknown>, objectReferences
 }
 
 function artifactActionsFromPayload(payload: Record<string, unknown>, citations: ResultPresentationInlineCitation[]): ResultPresentationArtifactAction[] {
-  return recordList(payload.artifacts).slice(0, 12).map((artifact, index) => {
+  return recordList(payload.artifacts).filter(artifactIsUserFacingPresentationArtifact).slice(0, 12).map((artifact, index) => {
     const id = stringField(artifact.id) ?? `artifact-${index + 1}`;
     const ref = artifactRef(artifact) ?? `artifact:${id}`;
     const citation = citations.find((item) => item.ref === ref);
@@ -525,6 +525,11 @@ function artifactActionsFromPayload(payload: Record<string, unknown>, citations:
       derivation,
     };
   });
+}
+
+function artifactIsUserFacingPresentationArtifact(artifact: Record<string, unknown>): boolean {
+  if (!isRecord(artifact.delivery)) return true;
+  return artifactHasUserFacingDelivery(artifact);
 }
 
 function diagnosticsRefsFromPayload(payload: Record<string, unknown>): ResultPresentationDiagnosticsRef[] {

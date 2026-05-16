@@ -1,12 +1,19 @@
 import type { PeerInstance, PeerInstanceRole, PeerInstanceTrustLevel, SciForgeConfig } from './domain';
 
-const CONFIG_STORAGE_KEY = 'sciforge.config.v1';
+const buildDefaults = (import.meta as ImportMeta & {
+  env?: Record<string, string | undefined>;
+}).env ?? {};
+const SCIFORGE_INSTANCE_ID = cleanStorageKeySegment(buildDefaults.VITE_SCIFORGE_INSTANCE_ID);
+const CONFIG_STORAGE_KEY = scopedSciForgeStorageKey('sciforge.config.v1');
+const LEGACY_DEFAULT_AGENT_SERVER_URL = 'http://127.0.0.1:18080';
+const LEGACY_DEFAULT_WORKSPACE_WRITER_URL = 'http://127.0.0.1:5174';
+const LEGACY_DEFAULT_WORKSPACE_PATH = '/Applications/workspace/ailab/research/app/SciForge/workspace';
 
 export const defaultSciForgeConfig: SciForgeConfig = {
   schemaVersion: 1,
-  agentServerBaseUrl: 'http://127.0.0.1:18080',
-  workspaceWriterBaseUrl: 'http://127.0.0.1:5174',
-  workspacePath: '/Applications/workspace/ailab/research/app/SciForge/workspace',
+  agentServerBaseUrl: buildDefaults.VITE_SCIFORGE_DEFAULT_AGENT_SERVER_URL || 'http://127.0.0.1:18080',
+  workspaceWriterBaseUrl: buildDefaults.VITE_SCIFORGE_DEFAULT_WORKSPACE_WRITER_URL || 'http://127.0.0.1:5174',
+  workspacePath: buildDefaults.VITE_SCIFORGE_DEFAULT_WORKSPACE_PATH || '/Applications/workspace/ailab/research/app/SciForge/workspace',
   peerInstances: [],
   /** Default feedback inbox target; override in settings if you fork or use another repo. */
   feedbackGithubRepo: 'AGI4Sci/SciForge',
@@ -26,15 +33,39 @@ export function loadSciForgeConfig(): SciForgeConfig {
   if (typeof window === 'undefined') return defaultSciForgeConfig;
   try {
     const raw = window.localStorage.getItem(CONFIG_STORAGE_KEY);
-    return raw ? normalizeConfig(JSON.parse(raw)) : defaultSciForgeConfig;
+    if (raw) return applyBuildRuntimeDefaults(normalizeConfig(JSON.parse(raw)));
+    return defaultSciForgeConfig;
   } catch {
     return defaultSciForgeConfig;
   }
 }
 
+function applyBuildRuntimeDefaults(config: SciForgeConfig): SciForgeConfig {
+  return {
+    ...config,
+    agentServerBaseUrl: config.agentServerBaseUrl === LEGACY_DEFAULT_AGENT_SERVER_URL
+      ? defaultSciForgeConfig.agentServerBaseUrl
+      : config.agentServerBaseUrl,
+    workspaceWriterBaseUrl: config.workspaceWriterBaseUrl === LEGACY_DEFAULT_WORKSPACE_WRITER_URL
+      ? defaultSciForgeConfig.workspaceWriterBaseUrl
+      : config.workspaceWriterBaseUrl,
+    workspacePath: config.workspacePath === LEGACY_DEFAULT_WORKSPACE_PATH
+      ? defaultSciForgeConfig.workspacePath
+      : config.workspacePath,
+  };
+}
+
 export function saveSciForgeConfig(config: SciForgeConfig) {
   if (typeof window === 'undefined') return;
   window.localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(config));
+}
+
+function cleanStorageKeySegment(value: unknown) {
+  return typeof value === 'string' ? value.trim().replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') : '';
+}
+
+export function scopedSciForgeStorageKey(baseKey: string) {
+  return SCIFORGE_INSTANCE_ID ? `${baseKey}.${SCIFORGE_INSTANCE_ID}` : baseKey;
 }
 
 export function normalizeFeedbackGithubRepo(value: unknown): string | undefined {

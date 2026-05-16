@@ -3,6 +3,7 @@ import type {
   BackgroundCompletionRuntimeEvent,
   GuidanceQueueRecord,
   GuidanceQueueStatus,
+  EvidenceClaim,
   ObjectReference,
   NormalizedAgentResponse,
   RuntimeArtifact,
@@ -341,7 +342,7 @@ export function mergeAgentResponseIntoSession({
     messages: [...baseSession.messages, response.message],
     runs: [...baseSession.runs, versionedRun],
     uiManifest: response.uiManifest.length ? response.uiManifest : baseSession.uiManifest,
-    claims: [...response.claims, ...baseSession.claims].slice(0, 24),
+    claims: mergeClaims(response.claims, baseSession.claims),
     executionUnits: mergeExecutionUnits(response.executionUnits, baseSession.executionUnits),
     artifacts: mergeRuntimeArtifacts(response.artifacts, baseSession.artifacts),
     notebook: [...response.notebook, ...baseSession.notebook].slice(0, 24),
@@ -775,6 +776,7 @@ function stableTextHash(value: string) {
 
 export function requestPayloadForTurn(session: SciForgeSession, userMessage: SciForgeMessage, references: SciForgeReference[]) {
   const hasExplicitReferences = references.length > 0;
+  const selectedRefSet = new Set(references.map((reference) => reference.ref).filter(Boolean));
   const priorMessages = session.messages.filter((message) => message.id !== userMessage.id);
   const hasRealPriorMessages = priorMessages.some((message) => !message.id.startsWith('seed'));
   const hasPriorWork = hasRealPriorMessages
@@ -782,28 +784,68 @@ export function requestPayloadForTurn(session: SciForgeSession, userMessage: Sci
     || session.artifacts.length > 0
     || session.executionUnits.length > 0;
   if (hasPriorWork || hasExplicitReferences) {
-    const messages = compactMessagesForRequestPayload(session.messages, userMessage.id);
+    const messages = compactMessagesForRequestPayload(session.messages, userMessage.id, selectedRefSet);
     const projectionContexts = projectionContinuationContexts(session, references);
     return {
       messages,
-      artifacts: session.artifacts.slice(-REQUEST_PAYLOAD_ARTIFACT_LIMIT).map(compactArtifactForRequestPayload),
+      artifacts: artifactsForRequestPayload(session.artifacts, selectedRefSet).map(compactArtifactForRequestPayload),
+      claims: claimsForRequestPayload(session.claims),
       executionUnits: projectionContexts.length
         ? compactProjectionExecutionUnitsForRequestPayload(session.executionUnits, projectionContexts)
-        : session.executionUnits.slice(-REQUEST_PAYLOAD_EXECUTION_UNIT_LIMIT).map(compactExecutionUnitForRequestPayload),
-      runs: session.runs.slice(-REQUEST_PAYLOAD_RUN_LIMIT).map((run) => compactRunForRequestPayload(run, projectionContexts)),
+        : executionUnitsForRequestPayload(session.executionUnits, selectedRefSet).map(compactExecutionUnitForRequestPayload),
+      runs: runsForRequestPayload(session.runs, selectedRefSet, projectionContexts)
+        .map((run) => compactRunForRequestPayload(run, projectionContexts, selectedRefSet)),
     };
   }
   return {
     messages: [userMessage],
     artifacts: [],
+    claims: [],
     executionUnits: [],
     runs: [],
   };
 }
 
-function compactMessagesForRequestPayload(messages: SciForgeMessage[], currentMessageId: string) {
+function claimsForRequestPayload(claims: EvidenceClaim[]) {
+  return claims.slice(0, 24).map((claim) => ({
+    id: claim.id,
+    text: clipText(claim.text, 600),
+    type: claim.type,
+    confidence: claim.confidence,
+    evidenceLevel: claim.evidenceLevel,
+    supportingRefs: claim.supportingRefs?.slice(0, 6),
+  }));
+}
+
+function artifactsForRequestPayload(artifacts: RuntimeArtifact[], selectedRefs: Set<string>) {
+  const scoped = selectedRefs.size > 0
+    ? artifacts.filter((artifact) => selectedRefs.has(`artifact:${artifact.id}`) || selectedRefs.has(artifact.delivery?.ref ?? ''))
+    : artifacts;
+  return scoped.slice(-REQUEST_PAYLOAD_ARTIFACT_LIMIT);
+}
+
+function executionUnitsForRequestPayload(units: RuntimeExecutionUnit[], selectedRefs: Set<string>) {
+  const scoped = selectedRefs.size > 0
+    ? units.filter((unit) => executionUnitRefs(unit).some((ref) => selectedRefs.has(ref)))
+    : units;
+  return scoped.slice(-REQUEST_PAYLOAD_EXECUTION_UNIT_LIMIT);
+}
+
+function runsForRequestPayload(
+  runs: SciForgeRun[],
+  selectedRefs: Set<string>,
+  projectionContexts: ProjectionContinuationContext[],
+) {
+  if (selectedRefs.size === 0) return runs.slice(-REQUEST_PAYLOAD_RUN_LIMIT);
+  const projectionRunIds = new Set(projectionContexts.map((context) => context.sourceRunId));
+  const scoped = runs.filter((run) => projectionRunIds.has(run.id) || runRefs(run).some((ref) => selectedRefs.has(ref)));
+  return scoped.slice(-REQUEST_PAYLOAD_RUN_LIMIT);
+}
+
+function compactMessagesForRequestPayload(messages: SciForgeMessage[], currentMessageId: string, selectedRefs = new Set<string>()) {
   return messages
     .filter((message) => !message.id.startsWith('seed'))
+    .filter((message) => selectedRefs.size === 0 || message.id === currentMessageId || messageRefs(message).some((ref) => selectedRefs.has(ref)))
     .slice(-REQUEST_PAYLOAD_MESSAGE_LIMIT)
     .map((message) => {
       const isCurrentMessage = message.id === currentMessageId;
@@ -823,14 +865,24 @@ function compactMessagesForRequestPayload(messages: SciForgeMessage[], currentMe
         updatedAt: message.updatedAt,
         status: message.status,
         tokenUsage: message.tokenUsage,
-        references: compactReferencesForRequestPayload(message.references),
-        objectReferences: compactObjectReferencesForRequestPayload(message.objectReferences),
+        references: compactReferencesForRequestPayload(filterReferencesForRequestPayload(message.references, selectedRefs)),
+        objectReferences: compactObjectReferencesForRequestPayload(filterObjectReferencesForRequestPayload(message.objectReferences, selectedRefs)),
         goalSnapshot: compactGoalSnapshotForRequestPayload(message.goalSnapshot, isCurrentMessage),
         acceptance: compactAcceptanceForRequestPayload(message.acceptance),
         guidanceQueue: compactGuidanceQueueForRequestPayload(message.guidanceQueue),
         contentDigest: isCurrentMessage ? undefined : digestTextField(message.content),
       };
     });
+}
+
+function filterReferencesForRequestPayload(references: SciForgeReference[] | undefined, selectedRefs: Set<string>) {
+  if (!references || selectedRefs.size === 0) return references;
+  return references.filter((reference) => selectedRefs.has(reference.ref));
+}
+
+function filterObjectReferencesForRequestPayload(objectReferences: ObjectReference[] | undefined, selectedRefs: Set<string>) {
+  if (!objectReferences || selectedRefs.size === 0) return objectReferences;
+  return objectReferences.filter((reference) => selectedRefs.has(reference.ref));
 }
 
 function compactReferencesForRequestPayload(references: SciForgeReference[] | undefined) {
@@ -951,7 +1003,7 @@ function compactExecutionUnitForRequestPayload(unit: RuntimeExecutionUnit): Runt
   };
 }
 
-function compactRunForRequestPayload(run: SciForgeRun, projectionContexts: ProjectionContinuationContext[] = []): SciForgeRun {
+function compactRunForRequestPayload(run: SciForgeRun, projectionContexts: ProjectionContinuationContext[] = [], selectedRefs = new Set<string>()): SciForgeRun {
   const raw = compactRunRawForRequestPayload(run.raw, {
     rawTextLimit: REQUEST_PAYLOAD_RAW_TEXT_LIMIT,
     runTextLimit: REQUEST_PAYLOAD_RUN_TEXT_LIMIT,
@@ -966,9 +1018,39 @@ function compactRunForRequestPayload(run: SciForgeRun, projectionContexts: Proje
     prompt: omittedTextDigestLabel('previous-run-prompt', run.prompt),
     response: omittedTextDigestLabel('previous-run-response', run.response),
     raw: cancelBoundary ? { ...(isCompactRecord(compactRaw) ? compactRaw : {}), cancelBoundary } : compactRaw,
-    references: run.references?.slice(-8),
-    objectReferences: run.objectReferences?.slice(-12),
+    references: filterReferencesForRequestPayload(run.references, selectedRefs)?.slice(-8),
+    objectReferences: filterObjectReferencesForRequestPayload(run.objectReferences, selectedRefs)?.slice(-12),
   };
+}
+
+function messageRefs(message: SciForgeMessage) {
+  return uniqueStringRefs([
+    `message:${message.id}`,
+    ...(message.references ?? []).map((reference) => reference.ref),
+    ...(message.objectReferences ?? []).map((reference) => reference.ref),
+    ...(message.acceptance?.objectReferences ?? []).map((reference) => reference.ref),
+  ]);
+}
+
+function runRefs(run: SciForgeRun) {
+  return uniqueStringRefs([
+    `run:${run.id}`,
+    ...(run.references ?? []).map((reference) => reference.ref),
+    ...(run.objectReferences ?? []).map((reference) => reference.ref),
+  ]);
+}
+
+function executionUnitRefs(unit: RuntimeExecutionUnit) {
+  return uniqueStringRefs([
+    `execution-unit:${unit.id}`,
+    unit.outputRef,
+    unit.stdoutRef,
+    unit.stderrRef,
+    unit.diffRef,
+    unit.verificationRef,
+    ...(unit.artifacts ?? []).map((ref) => ref.startsWith('artifact:') ? ref : `artifact:${ref}`),
+    ...(unit.outputArtifacts ?? []).map((ref) => ref.startsWith('artifact:') ? ref : `artifact:${ref}`),
+  ]);
 }
 
 function omittedTextDigestLabel(label: string, value: string) {
@@ -1097,6 +1179,17 @@ export function mergeRuntimeArtifacts(primary: NormalizedAgentResponse['artifact
     byKey.set(key, { ...previous, ...artifact });
   }
   return Array.from(byKey.values()).slice(-32);
+}
+
+export function mergeClaims(primary: NormalizedAgentResponse['claims'], secondary: NormalizedAgentResponse['claims']) {
+  const byId = new Map<string, NormalizedAgentResponse['claims'][number]>();
+  for (const claim of [...secondary, ...primary]) {
+    const key = claim.id || `${claim.text}-${byId.size}`;
+    const previous = byId.get(key);
+    if (byId.has(key)) byId.delete(key);
+    byId.set(key, { ...previous, ...claim });
+  }
+  return Array.from(byId.values()).slice(-24);
 }
 
 export function mergeExecutionUnits(primary: NormalizedAgentResponse['executionUnits'], secondary: NormalizedAgentResponse['executionUnits']) {

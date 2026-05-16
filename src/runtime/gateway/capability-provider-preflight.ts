@@ -241,6 +241,7 @@ function inferRequiredCapabilityIds(request: GatewayRequest): string[] {
   for (const toolId of [...(request.selectedToolIds ?? []), ...toStringList(request.uiState?.selectedToolIds)]) {
     for (const capabilityId of requiredCapabilityIdsForSelectedTool(toolId)) ids.add(capabilityId);
   }
+  for (const capabilityId of explicitCapabilityIdsFromPrompt(request.prompt)) ids.add(capabilityId);
   for (const capabilityId of structuredRequiredCapabilityIds(request)) ids.add(capabilityId);
   if (request.externalIoRequired === true) ids.add('web_search');
   return [...ids].sort();
@@ -251,6 +252,28 @@ function requiredCapabilityIdsForSelectedTool(toolId: string) {
   const mapped = REQUIRED_BY_TOOL_ID[normalized];
   if (mapped) return mapped;
   return defaultCapabilityManifestFor(normalized) ? [normalized] : [];
+}
+
+function explicitCapabilityIdsFromPrompt(prompt: string) {
+  const text = prompt.toLowerCase();
+  const registry = loadCoreCapabilityManifestRegistry();
+  const capabilityIds = new Set([
+    ...Object.values(REQUIRED_BY_TOOL_ID).flat(),
+    ...registry.manifestIds,
+  ]);
+  return [...capabilityIds].filter((capabilityId) => explicitCapabilityMentioned(text, capabilityId));
+}
+
+function explicitCapabilityMentioned(text: string, capabilityId: string) {
+  const variants = new Set([
+    capabilityId,
+    capabilityId.replace(/_/g, '-'),
+    capabilityId.replace(/_/g, ' '),
+  ]);
+  return [...variants].some((variant) => {
+    const escaped = variant.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\\ /g, '\\s+');
+    return new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, 'i').test(text);
+  });
 }
 
 function structuredRequiredCapabilityIds(request: GatewayRequest) {

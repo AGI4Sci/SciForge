@@ -75,6 +75,25 @@ describe('SciForge config persistence', () => {
     assert.equal(loaded.maxContextWindowTokens, 128000);
   });
 
+  it('keeps saved legacy default endpoints aligned to instance build defaults', () => {
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { localStorage: new MemoryStorage() },
+    });
+
+    saveSciForgeConfig(updateConfig(defaultSciForgeConfig, {
+      agentServerBaseUrl: 'http://127.0.0.1:18080',
+      workspaceWriterBaseUrl: 'http://127.0.0.1:5174',
+      workspacePath: '/Applications/workspace/ailab/research/app/SciForge/workspace',
+    }));
+
+    const loaded = loadSciForgeConfig();
+
+    assert.equal(loaded.agentServerBaseUrl, defaultSciForgeConfig.agentServerBaseUrl);
+    assert.equal(loaded.workspaceWriterBaseUrl, defaultSciForgeConfig.workspaceWriterBaseUrl);
+    assert.equal(loaded.workspacePath, defaultSciForgeConfig.workspacePath);
+  });
+
   it('normalizes peer instances for config reads', () => {
     const config = normalizeConfig({
       peerInstances: [

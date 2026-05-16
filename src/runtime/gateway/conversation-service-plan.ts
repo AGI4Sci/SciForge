@@ -168,12 +168,13 @@ export const buildConversationServicePlanFromRequest = buildConversationServiceP
 export function buildConversationTurnComposition(request: unknown): ConversationTurnComposition {
   const data = recordValue(request);
   const policyInput = recordValue(data.policyInput);
+  const goalSnapshot = recordValue(data.goalSnapshot);
   const session = recordValue(policyInput.session ?? data.session);
   const contextPolicy = recordValue(data.contextPolicy);
   const contextProjection = contextProjectionInput(data);
   const currentReferenceDigests = recordList(data.currentReferenceDigests);
   const contextSession = contextSessionForPolicy(session, contextPolicy, contextProjection);
-  const currentReferences = currentReferencesForTurn(policyInput, currentReferenceDigests);
+  const currentReferences = currentReferencesForTurn(policyInput, currentReferenceDigests, goalSnapshot);
   const recentFailures = recentFailuresForTurn(policyInput, contextSession);
   const priorAttempts = priorAttemptsForTurn(policyInput, contextSession);
   const userGuidanceQueue = userGuidanceQueueForTurn(policyInput);
@@ -284,12 +285,12 @@ function sessionForPolicy(value: unknown, history: JsonMap[]): JsonMap {
   return session;
 }
 
-function currentReferencesForTurn(policyInput: JsonMap, currentReferenceDigests: JsonMap[]): JsonMap[] {
+function currentReferencesForTurn(policyInput: JsonMap, currentReferenceDigests: JsonMap[], goalSnapshot: JsonMap = {}): JsonMap[] {
   const explicit = recordList(policyInput.references).length > 0
     ? recordList(policyInput.references)
     : recordList(policyInput.refs);
   if (explicit.length > 0) return explicit;
-  return currentReferenceDigests.flatMap((digest) => {
+  const digestRefs = currentReferenceDigests.flatMap((digest) => {
     const sourceRef = stringValue(digest.path)
       ?? stringValue(digest.sourceRef)
       ?? stringValue(digest.clickableRef);
@@ -303,6 +304,50 @@ function currentReferencesForTurn(policyInput: JsonMap, currentReferenceDigests:
       digestId: digest.id,
     }];
   });
+  if (digestRefs.length > 0) return digestRefs;
+  if (policyInputRequestsContextOnly(policyInput, goalSnapshot)) {
+    return recordList(recordValue(policyInput.session).artifacts)
+      .flatMap((artifact) => {
+        const ref = artifactRefForCurrentReference(artifact);
+        if (!ref) return [];
+        return [{
+          kind: 'artifact',
+          ref,
+          title: stringValue(artifact.title) ?? stringValue(artifact.id) ?? ref,
+          source: 'session-artifact-context',
+          artifactType: stringValue(artifact.type) ?? stringValue(artifact.artifactType),
+        }];
+      })
+      .slice(-8);
+  }
+  return [];
+}
+
+function policyInputRequestsContextOnly(policyInput: JsonMap, goalSnapshot: JsonMap) {
+  const constraints = firstNonEmptyRecord(
+    policyInput.turnExecutionConstraints,
+    goalSnapshot.turnExecutionConstraints,
+    recordValue(policyInput.tsDecisions).turnExecutionConstraints,
+  );
+  return constraints.contextOnly === true
+    || stringValue(constraints.executionModeHint) === 'direct-context-answer';
+}
+
+function firstNonEmptyRecord(...values: unknown[]) {
+  for (const value of values) {
+    const record = recordValue(value);
+    if (Object.keys(record).length > 0) return record;
+  }
+  return {};
+}
+
+function artifactRefForCurrentReference(artifact: JsonMap) {
+  const delivery = recordValue(artifact.delivery);
+  return stringValue(delivery.ref)
+    ?? stringValue(artifact.ref)
+    ?? stringValue(artifact.dataRef)
+    ?? stringValue(artifact.path)
+    ?? (stringValue(artifact.id) ? `artifact:${stringValue(artifact.id)}` : undefined);
 }
 
 function classifierRefsForTurn(policyInput: JsonMap, currentReferences: JsonMap[]): JsonMap[] {

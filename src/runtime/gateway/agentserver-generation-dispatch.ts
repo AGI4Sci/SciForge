@@ -16,7 +16,7 @@ import { agentServerLlmRuntime, AGENT_BACKEND_ANSWER_PRINCIPLE, buildAgentServer
 import { agentServerRequestFailureMessage, agentServerRunFailure, extractAgentServerOutputText, looksLikeUnparsedGenerationResponseText, parseGenerationResponse, parseToolPayloadResponse } from './agentserver-run-output.js';
 import { diagnosticForFailure, sanitizeAgentServerError } from './backend-failure-diagnostics.js';
 import { finalizeAgentServerGenerationSuccess, recoverOrReturnAgentServerGenerationFailure, type AgentServerGenerationFailureDiagnostics, type AgentServerGenerationResult } from './agentserver-generation-recovery.js';
-import { isAgentServerRepairContinuationBoundedStopError, agentServerGenerationTokenGuardLimit, currentReferenceDigestSilentGuardPolicy, mergeBackendStreamWorkEvidence, readAgentServerRunStream, silentStreamDecisionFromGatewayRequest } from './agentserver-stream.js';
+import { isAgentServerRepairContinuationBoundedStopError, agentServerGenerationTokenGuardLimit, agentServerSilentStreamGuardAudit, currentReferenceDigestSilentGuardPolicy, mergeBackendStreamWorkEvidence, readAgentServerRunStream, silentStreamDecisionFromGatewayRequest } from './agentserver-stream.js';
 import { hydrateGeneratedTaskResponseFromText } from './generated-task-response-text.js';
 import { hasRecoverableRecentAttempt } from './recoverable-attempts.js';
 import { repairNeededPayload } from './payload-validation.js';
@@ -551,12 +551,6 @@ async function dispatchAgentServerGeneration(params: AgentServerGenerationParams
       maxPayloadBytes: normalizedHandoff.budget.maxPayloadBytes,
       rawRef: normalizedHandoff.rawRef,
     }));
-    const response = await fetch(`${params.baseUrl}/api/agent-server/runs/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: controller.signal,
-      body: JSON.stringify(runPayload),
-    });
     const silentGuardPolicy = currentReferenceDigestSilentGuardPolicy(request);
     const silentRunId = typeof request.uiState?.silentStreamRunId === 'string'
       ? request.uiState.silentStreamRunId
@@ -564,6 +558,32 @@ async function dispatchAgentServerGeneration(params: AgentServerGenerationParams
         ? request.uiState.sessionId
         : undefined;
     const silentStreamDecision = silentStreamDecisionFromGatewayRequest(request);
+    const preResponseSilentStartedAt = Date.now();
+    const preResponseSilentTimeout = setTimeout(() => {
+      const audit = agentServerSilentStreamGuardAudit(silentGuardPolicy, {
+        elapsedMs: Date.now() - preResponseSilentStartedAt,
+        retryCount: Math.max(0, dispatchAttempt - 1),
+        runId: silentRunId,
+        existingDecision: silentStreamDecision,
+      });
+      controller.abort();
+      emitWorkspaceRuntimeEvent(params.callbacks, {
+        ...agentServerSilentStreamGuardEvent(audit.message),
+        detail: audit.detail,
+        raw: audit,
+      });
+    }, silentGuardPolicy.timeoutMs);
+    let response: Response;
+    try {
+      response = await fetch(`${params.baseUrl}/api/agent-server/runs/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify(runPayload),
+      });
+    } finally {
+      clearTimeout(preResponseSilentTimeout);
+    }
     const { json, run, error, streamText, workEvidence } = await readAgentServerRunStream(response, (event) => {
       emitWorkspaceRuntimeEvent(params.callbacks, withRequestContextWindowLimit(
         normalizeAgentServerWorkspaceEvent(event),

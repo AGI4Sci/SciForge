@@ -12,7 +12,7 @@ import {
   shouldOpenRunAuditDetails,
 } from './results-renderer-execution-model';
 import type { SciForgeSession } from '../domain';
-import { conversationProjectionMigrationAuditFixtureForRun } from './conversation-projection-view-model';
+import { conversationProjectionForSession, conversationProjectionMigrationAuditFixtureForRun } from './conversation-projection-view-model';
 
 function withMaterializedProjectionFixture(session: SciForgeSession): SciForgeSession {
   const projections = Object.fromEntries(session.runs.flatMap((run) => {
@@ -109,6 +109,60 @@ test('results renderer execution model prefers conversation projection recover a
   assert.ok(state.nextSteps.includes('retry provider from projection checkpoint'));
   assert.deepEqual(runRecoverActions(session, session.runs[0]), ['retry provider from projection checkpoint']);
   assert.ok(runAuditRefs(session, session.runs[0]).includes('file:.sciforge/logs/provider.stderr.log'));
+});
+
+test('conversation projection execution events replace epoch placeholder timestamps with run time', () => {
+  const session = withMaterializedProjectionFixture({
+    schemaVersion: 2,
+    sessionId: 'session-projection-epoch-timestamp',
+    scenarioId: 'literature-evidence-review',
+    title: 'projection epoch timestamp',
+    createdAt: '2026-05-16T00:00:00.000Z',
+    messages: [],
+    runs: [{
+      id: 'run-projection-epoch-timestamp',
+      scenarioId: 'literature-evidence-review',
+      status: 'failed',
+      prompt: 'repair current projection',
+      response: 'repair-needed',
+      createdAt: '2026-05-16T08:30:00.000Z',
+      completedAt: '2026-05-16T08:31:00.000Z',
+      raw: {
+        displayIntent: {
+          conversationProjection: {
+            schemaVersion: 'sciforge.conversation-projection.v1',
+            conversationId: 'conversation-projection-epoch-timestamp',
+            visibleAnswer: {
+              status: 'repair-needed',
+              diagnostic: 'Repair event timestamp was missing upstream.',
+              artifactRefs: [],
+            },
+            activeRun: { id: 'run-projection-epoch-timestamp', status: 'repair-needed' },
+            artifacts: [],
+            executionProcess: [{
+              eventId: 'event-epoch-placeholder',
+              type: 'RepairNeeded',
+              summary: 'validator failed',
+              timestamp: '1970-01-01T00:00:00.000Z',
+            }],
+            recoverActions: ['Continue from current Projection refs only.'],
+            auditRefs: ['projection:run-projection-epoch-timestamp'],
+            diagnostics: [],
+          },
+        },
+      },
+    }],
+    uiManifest: [],
+    claims: [],
+    executionUnits: [],
+    artifacts: [],
+    notebook: [],
+    versions: [],
+    updatedAt: '2026-05-16T08:31:00.000Z',
+  } as SciForgeSession);
+
+  const projection = conversationProjectionForSession(session, session.runs[0]);
+  assert.equal(projection?.executionProcess[0]?.timestamp, '2026-05-16T08:31:00.000Z');
 });
 
 test('results renderer execution model surfaces run display intent projection without session materialization', () => {

@@ -186,6 +186,8 @@ test('AgentServer generation prompt requires provider-first code when ready web 
   assert.match(prompt, /invoke_provider/);
   assert.match(prompt, /canonicalPythonAdapter/);
   assert.match(prompt, /invoke_capability\(task_input, \\?"web_search\\?"/);
+  assert.match(prompt, /def failed_with_reason_payload/);
+  assert.match(prompt, /def success_payload/);
   assert.match(prompt, /Provider-first authoring template/);
   assert.match(prompt, /requests, urllib, httpx/);
   assert.match(prompt, /Do not generate task code that uses direct network packages/);

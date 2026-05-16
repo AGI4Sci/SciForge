@@ -186,20 +186,21 @@ export function SciForgeApp() {
   }
 
   useEffect(() => {
+    if (!configFileHydrated) return;
     let cancelled = false;
     const workspacePath = normalizeWorkspaceRootPath(config.workspacePath);
     const loadStartedAt = Date.now();
-	    loadPersistedWorkspaceState(workspacePath, config)
-	      .then((persisted) => {
-	        if (cancelled) return;
-	        if (persisted) {
-	          const restoredPath = normalizeWorkspaceRootPath(persisted.workspacePath || workspacePath);
-	          setWorkspaceState((current) => {
-	            const currentUpdatedAt = Date.parse(current.updatedAt || '');
-	            if (Number.isFinite(currentUpdatedAt) && currentUpdatedAt > loadStartedAt) return current;
-	            const incoming = { ...persisted, workspacePath: restoredPath };
-	            return shouldUsePersistedWorkspaceState(current, incoming, { explicitWorkspacePath: Boolean(workspacePath) }) ? incoming : current;
-	          });
+    loadPersistedWorkspaceState(workspacePath, config)
+      .then((persisted) => {
+        if (cancelled) return;
+        if (persisted) {
+          const restoredPath = normalizeWorkspaceRootPath(persisted.workspacePath || workspacePath);
+          setWorkspaceState((current) => {
+            const currentUpdatedAt = Date.parse(current.updatedAt || '');
+            if (Number.isFinite(currentUpdatedAt) && currentUpdatedAt > loadStartedAt) return current;
+            const incoming = { ...persisted, workspacePath: restoredPath };
+            return shouldUsePersistedWorkspaceState(current, incoming, { explicitWorkspacePath: Boolean(workspacePath) }) ? incoming : current;
+          });
           setConfig((current) => {
             if (current.workspacePath === restoredPath) return current;
             const next = updateConfig(current, { workspacePath: restoredPath });
@@ -225,7 +226,7 @@ export function SciForgeApp() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [configFileHydrated, config.workspacePath, config.workspaceWriterBaseUrl]);
 
   useEffect(() => {
     if (!workspaceHydrated) return;

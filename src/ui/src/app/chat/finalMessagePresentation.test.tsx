@@ -294,3 +294,18 @@ test('structured citations stay out of markdown text and render as deduped inlin
   assert.match(markup, /Agentic RL 研究脉络：综述与前沿进展/);
   assert.doesNotMatch(markup, />available</);
 });
+
+test('raw HTTP diagnostic payload-only messages stay folded behind a concise summary', () => {
+  const content = JSON.stringify({
+    status: 'failed',
+    finalText: 'HTTP 401 Unauthorized: Invalid token for https://api.example.invalid/v1/chat stdoutRef=.sciforge/logs/stdout.log stderrRef=.sciforge/logs/stderr.log',
+    runtimeEventsRef: '.sciforge/sessions/session-a/runtime-events.json',
+  }, null, 2);
+
+  const presentation = splitFinalMessagePresentation(content);
+
+  assert.match(presentation.primaryContent, /任务未完成|任务已返回/);
+  assert.doesNotMatch(presentation.primaryContent, /Invalid token|https?:\/\/|stdoutRef|stderrRef|runtimeEventsRef/);
+  assert.equal(presentation.auditSections.length, 1);
+  assert.ok(['raw-json', 'execution-audit'].includes(presentation.auditSections[0]?.evidenceType ?? ''));
+});

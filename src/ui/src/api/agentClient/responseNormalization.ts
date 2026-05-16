@@ -60,6 +60,8 @@ function extractJsonObject(text: string): Record<string, unknown> | undefined {
 function readableMessageFromStructured(structured: Record<string, unknown>, fallback: string) {
   const direct = asString(structured.message);
   if (direct && !looksLikeRawJson(direct)) return stripVerificationFooter(direct);
+  const failure = userVisibleFailureSummary(structured, fallback);
+  if (failure) return failure;
   return stripVerificationFooter(direct || fallback);
 }
 
@@ -72,6 +74,36 @@ function stripVerificationFooter(value: string) {
 function looksLikeRawJson(value: string) {
   const trimmed = value.trim();
   return trimmed.startsWith('{') && trimmed.endsWith('}');
+}
+
+function userVisibleFailureSummary(structured: Record<string, unknown>, fallback: string) {
+  const status = asString(structured.status) ?? asString(structured.errorStatus) ?? asString(structured.state);
+  const finalText = asString(structured.finalText) ?? asString(structured.error) ?? asString(structured.detail);
+  const isRawFailureText = looksLikeRawFailureText(fallback);
+  const source = finalText || ((looksLikeRawJson(fallback) || isRawFailureText) ? fallback : '');
+  if (!source) return undefined;
+  const compact = source.replace(/\s+/g, ' ').trim();
+  // When source is raw JSON (not an explicit error field or raw failure text literal), restrict failure
+  // detection to the status field only. This avoids false positives from success messages that mention
+  // previously-failed operations (e.g. "Backend repaired the failed run.").
+  const textToCheck = (finalText || isRawFailureText) ? `${status ?? ''} ${compact}` : `${status ?? ''}`;
+  const failed = /failed|error|unauthorized|forbidden|timeout|timed out|401|403|429|5\d\d/i.test(textToCheck);
+  if (!failed) return undefined;
+  const httpStatus = compact.match(/\bHTTP\s+(\d{3})(?:\s+([A-Za-z][A-Za-z -]{2,40}))?/i);
+  const timeout = /\b(?:timeout|timed out)\b/i.test(compact);
+  const reason = httpStatus
+    ? `HTTP ${httpStatus[1]}${httpStatus[2] ? ` ${httpStatus[2].trim()}` : ''}`
+    : timeout
+      ? 'backend timeout'
+      : 'backend failure';
+  return `后端运行未完成：${reason}。详细诊断已保留在运行审计中，主结果不展示原始响应正文、endpoint 或日志内容。`;
+}
+
+function looksLikeRawFailureText(value: string) {
+  return /\bHTTP\s+(?:401|403|429|5\d\d)\b/i.test(value)
+    || /\b(?:Invalid token|Unauthorized|Forbidden)\b/i.test(value)
+    || /\bhttps?:\/\/[^\s"'<>]+/i.test(value)
+    || /\b(?:stdoutRef|stderrRef|rawRef|runtimeEventsRef)\b/i.test(value);
 }
 
 function extractOutputText(data: unknown): string {
@@ -176,16 +208,23 @@ export function normalizeAgentResponse(
   const data = isRecord(raw) && raw.ok === true && 'data' in raw ? raw.data : raw;
   const root = isRecord(data) ? data : {};
   const runRecord = isRecord(root.run) ? root.run : {};
-  const outputText = extractOutputText(root);
+  const transportProjectionAnswer = projectionVisibleAnswer(raw) ?? projectionVisibleAnswer(root);
+  const outputText = transportProjectionAnswer?.text ?? extractOutputText(root);
   const structured = extractJsonObject(outputText) ?? payloadLikeRecord(root) ?? {};
+  const projectionAnswer = transportProjectionAnswer ?? projectionVisibleAnswer(structured);
   const contractValidationFailure = findContractValidationFailure(structured, root, runRecord);
   const now = nowIso();
   const runId = asString(runRecord.id) || makeId('run');
   const runStatus = runRecord.status === 'failed' || contractValidationFailure ? 'failed' : 'completed';
   const cleanOutputText = outputText.replace(/```(?:json)?[\s\S]*?```/gi, '').trim() || outputText;
   const hasStructuredOutput = Object.keys(structured).length > 0;
+  const failureSummary = userVisibleFailureSummary(structured, cleanOutputText);
   const messageText = contractValidationFailure
     ? messageFromContractValidationFailure(contractValidationFailure)
+    : projectionAnswer?.text
+    ? projectionAnswer.text
+    : failureSummary
+    ? failureSummary
     : runStatus === 'failed' && !hasStructuredOutput
     ? `AgentServer 后端运行失败：${cleanOutputText}`
     : readableMessageFromStructured(structured, cleanOutputText);
@@ -291,6 +330,26 @@ export function normalizeAgentResponse(
       now,
     }),
   };
+}
+
+function projectionVisibleAnswer(value: unknown): { status?: string; text: string } | undefined {
+  const record = isRecord(value) ? value : {};
+  const displayIntent = isRecord(record.displayIntent) ? record.displayIntent : {};
+  const projection = isRecord(displayIntent.conversationProjection)
+    ? displayIntent.conversationProjection
+    : isRecord(displayIntent.taskOutcomeProjection) && isRecord(displayIntent.taskOutcomeProjection.conversationProjection)
+      ? displayIntent.taskOutcomeProjection.conversationProjection
+      : isRecord(displayIntent.resultPresentation) && isRecord(displayIntent.resultPresentation.conversationProjection)
+        ? displayIntent.resultPresentation.conversationProjection
+        : undefined;
+  const visibleAnswer = isRecord(projection?.visibleAnswer) ? projection.visibleAnswer : undefined;
+  const text = asString(visibleAnswer?.text) ?? asString(visibleAnswer?.diagnostic);
+  if (!text || looksLikeRawJson(text) || looksLikeRawFailureText(text)) return undefined;
+  const status = asString(visibleAnswer?.status);
+  if (!status || ['satisfied', 'degraded-result', 'repair-needed', 'needs-human', 'external-blocked'].includes(status)) {
+    return { status, text: stripVerificationFooter(text) };
+  }
+  return undefined;
 }
 
 function payloadLikeRecord(value: Record<string, unknown>) {

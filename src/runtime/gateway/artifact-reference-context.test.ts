@@ -80,6 +80,50 @@ test('current reference turns do not merge stale artifact files by default', asy
   }
 });
 
+test('selected explicit artifact refs do not merge latest artifacts or files', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-artifact-context-'));
+  try {
+    await mkdir(join(workspace, '.sciforge', 'artifacts'), { recursive: true });
+    await writeFile(join(workspace, '.sciforge', 'artifacts', 'latest-report.json'), JSON.stringify({
+      id: 'latest-report',
+      type: 'research-report',
+      producerScenario: 'literature',
+      data: { markdown: 'LATEST_REPORT_BODY_SHOULD_NOT_BE_READ' },
+    }));
+
+    const context = await collectArtifactReferenceContext(baseRequest(workspace, {
+      artifacts: [{
+        id: 'old-report',
+        type: 'research-report',
+        metadata: { source: 'selected-artifact' },
+      }, {
+        id: 'latest-report',
+        type: 'research-report',
+        metadata: { source: 'latest-artifact' },
+      }],
+      uiState: {
+        currentReferences: [{
+          id: 'ref-old-report',
+          kind: 'artifact',
+          ref: 'artifact:old-report',
+          title: 'Old report',
+        }],
+        contextReusePolicy: {
+          schemaVersion: 'sciforge.context-reuse-policy.v1',
+          mode: 'continue',
+          selectedRefsOnly: true,
+          historyReuse: { allowed: true },
+        },
+      },
+    }));
+
+    assert.deepEqual(context?.combinedArtifacts.map((artifact) => artifact.id), ['old-report']);
+    assert.doesNotMatch(JSON.stringify(context), /latest-report|LATEST_REPORT_BODY_SHOULD_NOT_BE_READ/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 function baseRequest(workspacePath: string, overrides: Partial<GatewayRequest> = {}): GatewayRequest {
   return {
     skillDomain: 'literature',

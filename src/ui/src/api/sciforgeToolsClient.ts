@@ -66,6 +66,7 @@ export async function sendSciForgeToolMessage(
   const builtInScenarioId = builtInScenarioIdForRuntimeInput(input);
   const referenceSummary = (input.references ?? []).map(compactSciForgeReference);
   const artifactSummary = (input.artifacts ?? []).slice(-TRANSPORT_ARTIFACT_LIMIT).map(sanitizeTransportArtifact);
+  const claimSummary = (input.claims ?? []).slice(-24).map(compactTransportClaim);
   const recentExecutionRefs = compactTransportExecutionUnits(input.executionUnits ?? []);
   const skillDomain = skillDomainForRuntimeInput(input);
   const configuredComponentIds = input.availableComponentIds?.length
@@ -96,6 +97,7 @@ export async function sendSciForgeToolMessage(
   let timeout: ReturnType<typeof globalThis.setTimeout> | undefined;
   const requestStartedAt = Date.now();
   let timeoutExtensionCount = 0;
+  let boundedStallRecovery: NormalizedAgentResponse | undefined;
   const armRequestTimeout = (delayMs: number, thresholds: RuntimeLatencyThresholds) => {
     if (timeout) globalThis.clearTimeout(timeout);
     timeout = globalThis.setTimeout(() => {
@@ -161,6 +163,29 @@ export async function sendSciForgeToolMessage(
       silentStreamRunId,
       silentStreamDecision: waitingDecision,
     }));
+    const stalledMs = Date.now() - lastRealEventAt;
+    if (sawBackendEvent && stalledMs >= latencyThresholds.stallBoundMs && !timedOut && !signal?.aborted && activeRequestController) {
+      const recoveryDetail = `后端已有运行事件后 ${Math.round(stalledMs / 1000)}s 未再返回事件；已按 bounded-stop 结束前台等待，并保留当前 Projection refs/digests 供下一轮恢复。`;
+      const abortDecision = noteSilentDecision({
+        decision: 'abort',
+        detail: recoveryDetail,
+        elapsedMs: stalledMs,
+        status: 'bounded-stop-after-backend-stall',
+      });
+      boundedStallRecovery = boundedStallRecoveryResponse(input, {
+        detail: recoveryDetail,
+        silentStreamRunId,
+        silentStreamDecision: abortDecision,
+        stalledMs,
+      });
+      callbacks.onEvent?.(toolEvent('backend-stall-bounded-stop', recoveryDetail, {
+        silentStreamRunId,
+        silentStreamDecision: abortDecision,
+        stalledMs,
+      }));
+      activeRequestController.abort();
+      return;
+    }
     if (!sawBackendEvent && seconds * 1000 >= latencyThresholds.silentRetryMs && !timedOut && !signal?.aborted && activeRequestController) {
       retryForSilentFirstEvent = true;
       const retryDetail = `首个后端事件 ${seconds}s 未返回；自动中断当前 HTTP stream 并重连一次，避免旧连接/死流让多轮任务挂起。`;
@@ -241,8 +266,10 @@ export async function sendSciForgeToolMessage(
         skillPlanRef: input.skillPlanRef,
         uiPlanRef: input.uiPlanRef,
         currentPrompt: input.prompt,
+        currentTurnId: input.currentTurnId,
         maxContextWindowTokens: input.config.maxContextWindowTokens,
         sessionMessages: stableSessionMessages(input),
+        claims: claimSummary,
         currentReferences: referenceSummary,
         targetInstance: targetInstanceContext,
         targetInstanceContext,
@@ -288,12 +315,14 @@ export async function sendSciForgeToolMessage(
           signal: activeRequestController.signal,
         });
         const stream = await readWorkspaceToolStream(response, (event) => {
-          sawBackendEvent = true;
-          lastRealEventAt = Date.now();
           const normalized = withConfiguredContextWindowLimit(
             normalizeWorkspaceRuntimeEvent(event),
             input.config.maxContextWindowTokens,
           );
+          if (isBackendProgressEvent(normalized)) {
+            sawBackendEvent = true;
+            lastRealEventAt = Date.now();
+          }
           const latencyPolicy = extractLatencyPolicy(normalized.raw);
           if (latencyPolicy) {
             latencyThresholds = latencyThresholdsFromPolicy(latencyPolicy, latencyThresholds);
@@ -349,6 +378,7 @@ export async function sendSciForgeToolMessage(
     },
   });
   } catch (error) {
+    if (boundedStallRecovery) return boundedStallRecovery;
     if (error instanceof DOMException && error.name === 'AbortError') {
       throw new Error(timedOut
         ? `SciForge project tool 超时：${input.config.requestTimeoutMs || DEFAULT_AGENT_REQUEST_TIMEOUT_MS}ms 内没有完成。流式面板已显示最后一个真实事件。`
@@ -360,6 +390,21 @@ export async function sendSciForgeToolMessage(
     globalThis.clearInterval(silenceWatchdog);
     signal?.removeEventListener('abort', linkedAbort);
   }
+}
+
+function isBackendProgressEvent(event: AgentStreamEvent) {
+  const type = String(event.type || '').toLowerCase();
+  const label = String(event.label || '').toLowerCase();
+  const raw = isRecord(event.raw) ? event.raw : {};
+  const rawType = String(raw.type || '').toLowerCase();
+  const progress = isRecord(raw.progress) ? raw.progress : undefined;
+  if (type.includes('silent') || rawType.includes('silent')) return false;
+  if (type.includes('timeout-extended') || rawType.includes('timeout-extended')) return false;
+  if (type === 'backend-silent' || rawType === 'backend-silent') return false;
+  if (raw.silentStreamWaiting === true) return false;
+  if (String(progress?.reason || '').toLowerCase() === 'backend-waiting') return false;
+  if (label === 'wait' || label === 'waiting' || label === '等待') return false;
+  return true;
 }
 
 function buildTransportContextReusePolicy(input: SendAgentMessageInput) {
@@ -381,7 +426,7 @@ function buildTransportContextReusePolicy(input: SendAgentMessageInput) {
       allowed: hasPriorWork,
       source: 'ui-transport-prior-work',
     },
-    selectedRefsOnly: !hasPriorWork && (input.references?.length ?? 0) > 0,
+    selectedRefsOnly: (input.references?.length ?? 0) > 0,
     priorWorkSignals: {
       nonSeedMessageCount,
       runCount: input.runs?.length ?? 0,
@@ -393,6 +438,113 @@ function buildTransportContextReusePolicy(input: SendAgentMessageInput) {
       ? 'Current turn belongs to an existing session with projection/audit refs available; reuse must stay bounded by Projection and refs.'
       : 'Fresh session turn; no prior session work is eligible for history reuse.',
   };
+}
+
+function boundedStallRecoveryResponse(
+  input: SendAgentMessageInput,
+  recovery: {
+    detail: string;
+    silentStreamRunId: string;
+    silentStreamDecision: SilentStreamDecisionRecord;
+    stalledMs: number;
+  },
+): NormalizedAgentResponse {
+  const builtInScenarioId = builtInScenarioIdForRuntimeInput(input);
+  const runId = makeId(`bounded-stop-${builtInScenarioId}`);
+  const createdAt = nowIso();
+  const evidenceRefs = uniqueStringList([
+    recovery.silentStreamRunId,
+    ...compactTransportExecutionUnits(input.executionUnits ?? []).flatMap((unit) => [
+      unit.outputRef,
+      unit.stdoutRef,
+      unit.stderrRef,
+      unit.codeRef,
+    ]),
+    ...(input.runs ?? []).slice(-3).flatMap((run) => [
+      run.id ? `run:${run.id}` : undefined,
+      asString(isRecord(run.raw) ? run.raw.conversationProjectionRef : undefined),
+    ]),
+  ]).slice(0, 12);
+  const recoverActions = [
+    'Continue from current Projection refs/digests and recent execution refs only; do not replay raw run, stdout, stderr, or artifact bodies.',
+    'Ask the backend for one minimal repair/continue step, or return failed-with-reason if the preserved refs are insufficient.',
+  ];
+  const projection = {
+    schemaVersion: 'sciforge.conversation-projection.v1',
+    conversationId: input.sessionId,
+    currentTurn: { id: runId, prompt: input.prompt },
+    visibleAnswer: {
+      status: 'repair-needed',
+      diagnostic: recovery.detail,
+      artifactRefs: [],
+    },
+    activeRun: { id: runId, status: 'repair-needed' },
+    artifacts: [],
+    executionProcess: [{
+      eventId: `${runId}:bounded-stop`,
+      type: 'RepairNeeded',
+      summary: recovery.detail,
+      timestamp: createdAt,
+    }],
+    recoverActions,
+    auditRefs: evidenceRefs,
+    diagnostics: [{
+      severity: 'warning',
+      code: 'bounded-backend-stall',
+      message: recovery.detail,
+      refs: evidenceRefs.map((ref) => ({ ref })),
+    }],
+  };
+  return normalizeAgentResponse(builtInScenarioId, input.prompt, {
+    ok: true,
+    data: {
+      run: { id: runId, status: 'completed', createdAt, completedAt: createdAt },
+      output: {
+        message: JSON.stringify({
+          message: recovery.detail,
+          confidence: 0.2,
+          claimType: 'inference',
+          evidenceLevel: 'runtime',
+          executionUnits: [{
+            id: `EU-${runId.slice(-8)}`,
+            tool: 'sciforge.runtime.bounded-stop',
+            status: 'repair-needed',
+            params: JSON.stringify({
+              silentStreamRunId: recovery.silentStreamRunId,
+              stalledMs: recovery.stalledMs,
+              evidenceRefs,
+            }),
+            failureReason: recovery.detail,
+            recoverActions,
+            nextStep: recoverActions[0],
+            outputArtifacts: [],
+            artifacts: [],
+          }],
+          claims: [{
+            text: recovery.detail,
+            type: 'inference',
+            confidence: 0.2,
+            evidenceLevel: 'runtime',
+            supportingRefs: evidenceRefs,
+            opposingRefs: [],
+          }],
+          artifacts: [],
+          objectReferences: evidenceRefs.map((ref, index) => ({
+            id: `bounded-stop-ref-${index + 1}`,
+            ref,
+            label: ref,
+            kind: 'runtime-ref',
+            role: 'audit',
+          })),
+          displayIntent: {
+            resultPresentation: { conversationProjection: projection },
+            conversationProjection: projection,
+          },
+          silentStreamDecision: recovery.silentStreamDecision,
+        }),
+      },
+    },
+  });
 }
 
 function compactTargetInstanceContext(input: SendAgentMessageInput) {
@@ -553,6 +705,17 @@ function compactTransportExecutionUnits(units: NonNullable<SendAgentMessageInput
     skillPlanRef: unit.skillPlanRef,
     uiPlanRef: unit.uiPlanRef,
   }));
+}
+
+function compactTransportClaim(claim: NonNullable<SendAgentMessageInput['claims']>[number]) {
+  return {
+    id: claim.id,
+    text: clippedString(claim.text, 600),
+    type: claim.type,
+    confidence: claim.confidence,
+    evidenceLevel: claim.evidenceLevel,
+    supportingRefs: claim.supportingRefs?.slice(0, 6),
+  };
 }
 
 function compactTransportRuns(runs: NonNullable<SendAgentMessageInput['runs']>) {
@@ -872,9 +1035,53 @@ function sanitizeTransportArtifact(value: unknown): Record<string, unknown> {
       estimatedBytes: dataBytes,
       ...transportRefsFromRecord(value),
       shape: transportDataShape(value.data),
+      digestText: transportArtifactDataDigestText(value.data),
     };
   }
   return artifact;
+}
+
+function transportArtifactDataDigestText(value: unknown) {
+  const preview = transportArtifactTextPreview(value);
+  if (!preview) return undefined;
+  return {
+    hash: stableTextHash(preview),
+    preview,
+  };
+}
+
+function transportArtifactTextPreview(value: unknown) {
+  const text = typeof value === 'string'
+    ? value
+    : isRecord(value)
+      ? asString(value.markdown) ?? asString(value.report) ?? asString(value.content) ?? asString(value.text)
+      : undefined;
+  if (!text) return undefined;
+  const compact = text.replace(/\s+/g, ' ').trim();
+  if (!compact) return undefined;
+  const fragments = compact
+    .split(/(?<=[。.!?；;])\s+|[\n\r]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const selected = Array.from(new Set((fragments.length ? fragments : compact.split(/\s{2,}/)).filter(Boolean))).slice(0, 3).join(' ');
+  return clippedString(collapseAdjacentRepeatedWords(selected || compact), 360);
+}
+
+function collapseAdjacentRepeatedWords(value: string) {
+  const words = value.split(/\s+/).filter(Boolean);
+  if (words.length < 12) return value;
+  const out: string[] = [];
+  for (let index = 0; index < words.length;) {
+    const phrase = words.slice(index, index + 6).join(' ');
+    const previous = out.slice(-6).join(' ');
+    if (phrase && phrase === previous) {
+      index += 6;
+      continue;
+    }
+    out.push(words[index]);
+    index += 1;
+  }
+  return out.join(' ');
 }
 
 function estimateTransportBytes(value: unknown) {

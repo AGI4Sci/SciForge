@@ -81,6 +81,46 @@ test('preserves generic derivation lineage on artifact actions', () => {
   assert.deepEqual(action.sourceRefs, ['artifact:research-report', 'provider:openalex:openalex-w1']);
 });
 
+test('does not project diagnostic artifact delivery as a human-facing artifact action', () => {
+  const presentation = adaptToolPayloadToResultPresentation(payload({
+    artifacts: [{
+      id: 'report',
+      type: 'report',
+      title: 'Readable report',
+      dataRef: 'artifact:report',
+      delivery: {
+        contractId: 'sciforge.artifact-delivery.v1',
+        ref: 'artifact:report',
+        role: 'primary-deliverable',
+        declaredMediaType: 'text/markdown',
+        declaredExtension: '.md',
+        contentShape: 'raw-file',
+        readableRef: 'artifact:report',
+        previewPolicy: 'inline',
+      },
+    }, {
+      id: 'debug-envelope',
+      type: 'debug-json',
+      title: 'Debug envelope',
+      dataRef: 'artifact:debug-envelope',
+      delivery: {
+        contractId: 'sciforge.artifact-delivery.v1',
+        ref: 'artifact:debug-envelope',
+        role: 'diagnostic',
+        declaredMediaType: 'application/json',
+        declaredExtension: '.json',
+        contentShape: 'json-envelope',
+        readableRef: 'artifact:debug-envelope',
+        previewPolicy: 'audit-only',
+      },
+    }],
+  }));
+
+  assert.deepEqual(presentation.artifactActions.map((action) => action.ref), ['artifact:report']);
+  assert.ok(presentation.inlineCitations.some((citation) => citation.ref === 'artifact:report'));
+  assert.ok(!presentation.inlineCitations.some((citation) => citation.ref === 'artifact:debug-envelope'));
+});
+
 test('folds process and raw diagnostics away from primary answer sections', () => {
   const presentation = adaptToolPayloadToResultPresentation(payload({
     logs: [{ id: 'log-1', level: 'debug', ref: 'file:.sciforge/logs/debug.log', message: 'debug details' }],

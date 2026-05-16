@@ -38,24 +38,38 @@ export function attachResultPresentationContract(
 ): ToolPayload {
   const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
   const existing = displayIntent.resultPresentation;
+  const projectionContext = {
+    ...context,
+    forceRecomputeProjection: context.forceRecomputeProjection ?? Boolean(context.request),
+  };
   if (validateResultPresentationContract(existing).ok) {
     return attachTaskOutcomeProjection({
       ...payload,
       displayIntent,
-    }, context);
+    }, projectionContext);
   }
 
-  const payloadWithOutcome = attachTaskOutcomeProjection({
+  const payloadWithPresentation = {
     ...payload,
     displayIntent: {
       ...displayIntent,
+      resultPresentation: materializeResultPresentationContract({ payload }),
     },
-  }, context);
+  };
+  const payloadWithOutcome = attachTaskOutcomeProjection(payloadWithPresentation, projectionContext);
+  const outcomeDisplayIntent = isRecord(payloadWithOutcome.displayIntent) ? payloadWithOutcome.displayIntent : {};
+  const resultPresentation = isRecord(outcomeDisplayIntent.resultPresentation) ? outcomeDisplayIntent.resultPresentation : undefined;
+  const taskRunCard = isRecord(outcomeDisplayIntent.taskRunCard) ? outcomeDisplayIntent.taskRunCard : undefined;
   return {
     ...payloadWithOutcome,
     displayIntent: {
-      ...(isRecord(payloadWithOutcome.displayIntent) ? payloadWithOutcome.displayIntent : {}),
-      resultPresentation: materializeResultPresentationContract({ payload: payloadWithOutcome }),
+      ...outcomeDisplayIntent,
+      resultPresentation: resultPresentation
+        ? {
+          ...resultPresentation,
+          conversationProjectionSummary: taskRunCard?.conversationProjectionSummary ?? resultPresentation.conversationProjectionSummary,
+        }
+        : outcomeDisplayIntent.resultPresentation,
     },
   };
 }

@@ -135,17 +135,29 @@ test('runtime artifact policy owns direct context fast path semantics', () => {
       id: 'report-1',
       type: 'research-report',
       data: { markdown: '## Summary\n\nA compact report.' },
+    }, {
+      id: 'report-2',
+      type: 'research-report',
+      dataSummary: {
+        omitted: 'ref-backed-artifact-data',
+        digestText: {
+          hash: 'fnv1a-test',
+          preview: '风险 1：上下文窗口膨胀可能导致投影漂移。',
+        },
+      },
     }],
     currentReferences: [{ ref: 'file:paper.md', title: 'Paper', summary: 'current file' }],
     executionUnits: [{ id: 'run-1', outputRef: 'runtime://out', stderrRef: 'runtime://err' }],
   });
 
-  assert.deepEqual(items.map((item) => item.kind), ['current-reference-digest', 'artifact', 'file', 'execution-unit']);
+  assert.deepEqual(items.map((item) => item.kind), ['current-reference-digest', 'artifact', 'artifact', 'file', 'execution-unit']);
   assert.equal(items[0]?.summary, 'Digest says the current paper covers bounded context.');
   assert.equal(items[1]?.summary, '## Summary A compact report.');
+  assert.match(items[2]?.summary ?? '', /上下文窗口膨胀/);
   assert.deepEqual(directContextFastPathSupportingRefs(items), [
     '.sciforge/digests/paper.md',
     'artifact:report-1',
+    'artifact:report-2',
     'file:paper.md',
     'runtime://out',
   ]);

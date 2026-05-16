@@ -42,6 +42,7 @@ type GatewayBackgroundProjectionState = NonNullable<TaskRunCardConversationProje
 export interface GatewayTaskOutcomeProjectionContext {
   request?: GatewayRequest;
   skill?: SkillAvailability;
+  forceRecomputeProjection?: boolean;
   refs?: {
     taskRel?: string;
     outputRel?: string;
@@ -98,7 +99,7 @@ export function attachTaskOutcomeProjection(
   context: GatewayTaskOutcomeProjectionContext = {},
 ): ToolPayload {
   const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
-  const existingProjection = isGatewayTaskOutcomeProjection(displayIntent.taskOutcomeProjection)
+  const existingProjection = !context.forceRecomputeProjection && isGatewayTaskOutcomeProjection(displayIntent.taskOutcomeProjection)
     ? restoreTaskOutcomeProjectionFromEventLog(displayIntent.taskOutcomeProjection, displayIntent)
     : undefined;
   const projection = existingProjection ?? materializeTaskOutcomeProjection({ payload, ...context });
@@ -976,11 +977,27 @@ function explicitAnswerStatusFromPayload(payload: ToolPayload) {
   const answerStatus = stringField(displayIntent.answerStatus) ?? stringField(displayIntent.userGoalStatus);
   if (answerStatus === 'satisfied' || answerStatus === 'answered') return 'satisfied';
   if (['needs-work', 'needs-human', 'blocked', 'unknown'].includes(answerStatus ?? '')) return answerStatus;
+  if (completeResultPresentationAnswersRequest(displayIntent.resultPresentation, payload)) return 'satisfied';
   return undefined;
 }
 
 function hasCurrentReferenceFailure(payload: ToolPayload) {
   return toRecordList(payload.executionUnits).some((unit) => String(unit.id || '').startsWith('current-reference-usage-'));
+}
+
+function completeResultPresentationAnswersRequest(resultPresentation: unknown, payload: ToolPayload) {
+  if (!isRecord(resultPresentation)) return false;
+  if (stringField(resultPresentation.status) !== 'complete') return false;
+  if (!toRecordList(resultPresentation.answerBlocks).length) return false;
+  const artifactActions = toRecordList(resultPresentation.artifactActions);
+  const keyFindings = toRecordList(resultPresentation.keyFindings);
+  const citedFindings = keyFindings.filter((finding) => [
+    ...toStringList(finding.citationIds),
+    ...toStringList(finding.citations),
+  ].length > 0);
+  const payloadHasStructuredEvidence = payload.claims.length > 0
+    || payload.artifacts.some((artifact) => isRecord(artifact) && stringField(artifact.type) !== 'runtime-diagnostic');
+  return payloadHasStructuredEvidence && (artifactActions.length > 0 || citedFindings.length > 0);
 }
 
 function artifactRef(artifact: Record<string, unknown>) {

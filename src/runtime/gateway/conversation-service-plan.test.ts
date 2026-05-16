@@ -81,6 +81,42 @@ test('turn composition scopes session facts for isolated turns', () => {
   }]);
 });
 
+test('context-only continuation promotes session artifact refs as current references', () => {
+  const composition = buildConversationTurnComposition({
+    policyInput: {
+      prompt: 'Summarize the current memo artifact only.',
+      references: [],
+      refs: [],
+      session: {
+        artifacts: [{
+          id: 'memo-1',
+          type: 'research-report',
+          delivery: { ref: 'artifact:memo-1' },
+          dataRef: '.sciforge/sessions/session-1/task-results/memo.md',
+        }],
+      },
+    },
+    goalSnapshot: {
+      taskRelation: 'continue',
+      turnExecutionConstraints: {
+        contextOnly: true,
+        executionModeHint: 'direct-context-answer',
+      },
+    },
+    contextPolicy: { mode: 'continue', historyReuse: { allowed: true } },
+    currentReferenceDigests: [],
+  });
+
+  assert.deepEqual(composition.currentReferences, [{
+    kind: 'artifact',
+    ref: 'artifact:memo-1',
+    title: 'memo-1',
+    source: 'session-artifact-context',
+    artifactType: 'research-report',
+  }]);
+  assert.deepEqual(composition.executionClassifierInput?.refs, composition.currentReferences);
+});
+
 test('turn composition owns execution and recovery turn inputs', () => {
   const composition = buildConversationTurnComposition({
     policyInput: {

@@ -119,6 +119,110 @@ test('attachResultPresentationContract does not treat message text alone as sati
   assert.equal(proxy?.answeredLatestRequest, false);
 });
 
+test('attachResultPresentationContract treats complete evidenced presentation as satisfied', () => {
+  const attached = attachResultPresentationContract(payload({
+    message: 'Provider route returned two public records and produced the requested answer.',
+    claims: [{
+      id: 'claim-provider-records',
+      text: 'Ready provider route returned public records.',
+      supportingRefs: ['provider:sciforge.web-worker.web_search'],
+    }],
+    artifacts: [{
+      id: 'research-report',
+      type: 'research-report',
+      title: 'Research report',
+      dataRef: '.sciforge/task-results/research-report.md',
+      delivery: {
+        contractId: 'sciforge.artifact-delivery.v1',
+        ref: 'artifact:research-report',
+        role: 'primary-deliverable',
+        declaredMediaType: 'text/markdown',
+        declaredExtension: 'md',
+        contentShape: 'raw-file',
+        readableRef: '.sciforge/task-results/research-report.md',
+        previewPolicy: 'inline',
+      },
+    }],
+    executionUnits: [{
+      id: 'provider-search',
+      status: 'done',
+      tool: 'sciforge.web-worker.web_search',
+      outputRef: 'provider-result:ready',
+    }],
+  }), {
+    request: {
+      skillDomain: 'literature',
+      prompt: 'Use the ready provider route and answer with two public records.',
+      artifacts: [],
+    },
+  });
+
+  const projection = attached.displayIntent?.taskOutcomeProjection as Record<string, unknown> | undefined;
+  const proxy = projection?.userSatisfactionProxy as Record<string, unknown> | undefined;
+  const card = attached.displayIntent?.taskRunCard as Record<string, unknown> | undefined;
+  const conversationProjection = projection?.conversationProjection as Record<string, unknown> | undefined;
+  const visibleAnswer = conversationProjection?.visibleAnswer as Record<string, unknown> | undefined;
+
+  assert.equal(projection?.taskSuccess, true);
+  assert.equal(card?.taskOutcome, 'satisfied');
+  assert.equal(proxy?.answeredLatestRequest, true);
+  assert.equal(visibleAnswer?.status, 'satisfied');
+});
+
+test('attachResultPresentationContract recomputes stale needs-work projection when current presentation completes the request', () => {
+  const request = {
+    skillDomain: 'literature' as const,
+    prompt: 'Create a concise memo artifact.',
+    artifacts: [],
+  };
+  const stale = attachResultPresentationContract(payload({
+    message: 'Memo is ready.',
+    artifacts: [],
+    executionUnits: [{ id: 'generate-memo', status: 'done', tool: 'workspace-task' }],
+  }), { request });
+  const staleProjection = stale.displayIntent?.taskOutcomeProjection as Record<string, unknown> | undefined;
+  assert.equal(staleProjection?.taskSuccess, false);
+  const completePresentation = createResultPresentationContract({
+    id: 'memo-complete-presentation',
+    status: 'complete',
+    answerBlocks: [{ id: 'answer', kind: 'paragraph', text: 'Memo is ready.', citationIds: ['artifact-memo'] }],
+    keyFindings: [{
+      id: 'memo-ready',
+      text: 'Memo is ready.',
+      verificationState: 'supported',
+      citationIds: ['artifact-memo'],
+    }],
+    inlineCitations: [{ id: 'artifact-memo', label: 'Memo', ref: '.sciforge/task-results/memo.md', kind: 'artifact', source: 'artifact' }],
+    artifactActions: [{ id: 'memo', label: 'Memo', ref: '.sciforge/task-results/memo.md', kind: 'inspect', action: 'inspect' }],
+    nextActions: [{ id: 'inspect', label: 'Inspect generated artifacts and evidence.', kind: 'inspect' }],
+    defaultExpandedSections: ['answer', 'evidence', 'artifacts'],
+  });
+
+  const attached = attachResultPresentationContract(payload({
+    message: 'Memo is ready.',
+    artifacts: [{
+      id: 'memo',
+      type: 'research-report',
+      title: 'Memo',
+      dataRef: '.sciforge/task-results/memo.md',
+    }],
+    executionUnits: [{ id: 'generate-memo', status: 'done', tool: 'workspace-task', outputRef: '.sciforge/task-results/memo.md' }],
+    displayIntent: {
+      ...stale.displayIntent,
+      resultPresentation: completePresentation,
+    },
+  }), { request });
+
+  const projection = attached.displayIntent?.taskOutcomeProjection as Record<string, unknown> | undefined;
+  const card = attached.displayIntent?.taskRunCard as Record<string, unknown> | undefined;
+  const conversationProjection = projection?.conversationProjection as Record<string, unknown> | undefined;
+  const visibleAnswer = conversationProjection?.visibleAnswer as Record<string, unknown> | undefined;
+
+  assert.equal(projection?.taskSuccess, true);
+  assert.equal(card?.taskOutcome, 'satisfied');
+  assert.equal(visibleAnswer?.status, 'satisfied');
+});
+
 test('attachResultPresentationContract attributes transient failure next step to external provider', () => {
   const attached = attachResultPresentationContract(payload({
     message: 'External provider returned 429 Too Many Requests; partial metadata is preserved.',

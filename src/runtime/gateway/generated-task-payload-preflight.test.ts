@@ -24,6 +24,9 @@ test('generated task preflight blocks direct network clients when ready web prov
     ['requests', 'import requests\nrequests.get("https://example.com", timeout=10)'],
     ['urllib', 'import urllib.request\nurllib.request.urlopen("https://example.com", timeout=10)'],
     ['httpx', 'import httpx\nhttpx.get("https://example.com", timeout=10)'],
+    ['socket', 'import socket\nsocket.create_connection(("example.com", 443), timeout=10)'],
+    ['http.client', 'import http.client\nhttp.client.HTTPSConnection("example.com", timeout=10)'],
+    ['curl/wget', 'import subprocess\nsubprocess.run(["curl", "https://example.com"], check=False)'],
   ] as const) {
     const report = evaluateGeneratedTaskPayloadPreflight({
       request: readyWebProviderRequest,
@@ -51,4 +54,3 @@ test('generated task preflight blocks direct network clients when ready web prov
     assert.ok(report.guidance.some((line) => /provider route contract/.test(line)), label);
   }
 });
-

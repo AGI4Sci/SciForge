@@ -29,7 +29,9 @@ NO_EXECUTION_HINTS = re.compile(
 )
 CONTEXT_ONLY_HINTS = re.compile(
     r"\b(?:current|existing|provided)\s+(?:context|refs?|references?|digests?|artifacts?)\s+only\b"
+    r"|\b(?:current|existing|provided)\s+[\w -]{0,80}?\s(?:context|refs?|references?|digests?|artifacts?)\s+only\b"
     r"|\b(?:from|using|based on)\s+(?:current|existing|provided)\s+(?:context|refs?|references?|digests?|artifacts?)\b"
+    r"|\b(?:from|using|based on)\s+(?:current|existing|provided)\s+[\w -]{0,80}?\s(?:context|refs?|references?|digests?|artifacts?)\b"
     r"|只(?:基于|使用|用)(?:当前|已有|提供的)?(?:上下文|引用|refs?|digest|摘要|产物)",
     re.I,
 )
@@ -122,9 +124,15 @@ def _infer_task_relation(prompt: str, has_explicit_refs: bool, has_prior_context
         return "continue"
     if has_prior_context and LOCATION_HINTS.search(prompt):
         return "continue"
+    # When there are explicit refs and prior context, the user is scoping to specific
+    # artifacts from the current session — treat as continuation with explicit scope.
     if has_explicit_refs:
-        return "new-task"
-    return "new-task"
+        return "continue" if has_prior_context else "new-task"
+    # Default: when prior session context exists and there is no explicit new-task
+    # signal, treat as continuation. This is the primary fix for MultiturnContinuity=false:
+    # previously both branches returned "new-task", causing the TypeScript context policy
+    # to return mode='isolate' even on natural second-turn follow-ups.
+    return "continue" if has_prior_context else "new-task"
 
 
 def _has_repair_intent(prompt: str, has_explicit_refs: bool, has_prior_context: bool) -> bool:

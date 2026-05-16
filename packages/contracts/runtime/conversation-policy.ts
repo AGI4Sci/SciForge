@@ -59,6 +59,7 @@ export interface ConversationPolicyResponse {
   currentReferenceDigests?: Array<Record<string, unknown>>;
   artifactIndex?: Record<string, unknown>;
   capabilityBrief?: Record<string, unknown>;
+  directContextDecision?: Record<string, unknown>;
   executionModePlan?: Record<string, unknown>;
   turnExecutionConstraints?: Record<string, unknown>;
   handoffPlan?: Record<string, unknown>;
@@ -199,6 +200,7 @@ export function normalizeConversationPolicyResponse(value: unknown): Conversatio
     currentReferenceDigests: optionalRecordList(record.currentReferenceDigests),
     artifactIndex: optionalRecord(record.artifactIndex),
     capabilityBrief: optionalRecord(record.capabilityBrief),
+    directContextDecision: optionalRecord(record.directContextDecision),
     executionModePlan: optionalRecord(record.executionModePlan),
     turnExecutionConstraints: optionalRecord(record.turnExecutionConstraints),
     handoffPlan: optionalRecord(record.handoffPlan),

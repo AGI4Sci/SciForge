@@ -367,7 +367,7 @@ export function rawAuditItems(session: SciForgeSession, activeRun: SciForgeRun |
   return [
     run ? { id: `run-${run.id}`, label: `run ${run.id}`, value: JSON.stringify(sanitizeAuditValue(run.raw ?? run), null, 2) } : undefined,
     scopedArtifacts.length ? { id: 'artifacts', label: `artifacts (${scopedArtifacts.length})`, value: JSON.stringify(sanitizeAuditValue(scopedArtifacts), null, 2) } : undefined,
-    scopedExecutionUnits.length ? { id: 'execution-units', label: `ExecutionUnit JSON (${scopedExecutionUnits.length})`, value: JSON.stringify(sanitizeAuditValue(scopedExecutionUnits), null, 2) } : undefined,
+    scopedExecutionUnits.length ? { id: 'execution-units', label: `execution audit (${scopedExecutionUnits.length})`, value: JSON.stringify(sanitizeAuditValue(scopedExecutionUnits), null, 2) } : undefined,
     session.notebook.length ? { id: 'notebook', label: `timeline JSON (${session.notebook.length})`, value: JSON.stringify(session.notebook, null, 2) } : undefined,
     viewPlan.allItems.length ? { id: 'view-plan', label: `resolved view plan (${viewPlan.allItems.length})`, value: JSON.stringify(viewPlan.allItems, null, 2) } : undefined,
   ].filter((item): item is { id: string; label: string; value: string } => Boolean(item));

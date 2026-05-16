@@ -26,16 +26,17 @@ export function directContextFastPathPayload(request: GatewayRequest): ToolPaylo
     references: request.references,
     currentReferences: uiState.currentReferences,
     currentReferenceDigests: uiState.currentReferenceDigests,
+    claims: uiState.claims,
     recentExecutionRefs: uiState.recentExecutionRefs,
     executionUnits: uiState.executionUnits,
   });
   if (!context.length) return undefined;
-  if (!hasCurrentContextEvidence(context)) return undefined;
+  if (!hasCurrentContextEvidence(context, decision.intent)) return undefined;
   const gate = directContextGate(context, decision);
   if (!gate.allowed) return undefined;
   const missingExpectedArtifacts = missingExpectedArtifactTypes(request);
   if (missingExpectedArtifacts.length) return missingExpectedArtifactsPayload(request, context, missingExpectedArtifacts, gate);
-  const message = directContextFastPathMessage(context);
+  const message = directContextAnswerMessage(request.prompt, context);
   const instance = directContextInstance(request, context);
   const reportId = directContextArtifactId(instance.id);
   const outputRef = directContextOutputRef(instance.id);
@@ -207,6 +208,7 @@ function missingExpectedArtifactsPayload(
 interface DirectContextGateDecision {
   allowed: boolean;
   audit: {
+    decisionRef?: string;
     intent: 'context-summary' | 'run-diagnostic' | 'artifact-status' | 'capability-status' | 'fresh-execution' | 'unknown';
     requiredContext: string[];
     usedContextRefs: string[];
@@ -241,6 +243,7 @@ function directContextGate(
     return {
       allowed: false,
       audit: {
+        decisionRef: decision.decisionRef,
         intent,
         requiredContext: ['capability-registry', 'tool-registry', 'provider-registry', 'agentserver-worker-registry'],
         usedContextRefs,
@@ -253,6 +256,7 @@ function directContextGate(
     return {
       allowed: false,
       audit: {
+        decisionRef: decision.decisionRef,
         intent,
         requiredContext,
         usedContextRefs,
@@ -265,6 +269,7 @@ function directContextGate(
     return {
       allowed: false,
       audit: {
+        decisionRef: decision.decisionRef,
         intent,
         requiredContext,
         usedContextRefs,
@@ -276,6 +281,7 @@ function directContextGate(
   return {
     allowed: true,
     audit: {
+      decisionRef: decision.decisionRef,
       intent,
       requiredContext,
       usedContextRefs,
@@ -409,6 +415,40 @@ function directContextUiManifest(primaryArtifactRef: string, primaryArtifactType
   });
 }
 
+function directContextAnswerMessage(
+  prompt: string,
+  context: ReturnType<typeof buildDirectContextFastPathItems>,
+) {
+  const riskSummary = riskSummaryAnswer(prompt, context);
+  if (riskSummary) return riskSummary;
+  return directContextFastPathMessage(context);
+}
+
+function riskSummaryAnswer(
+  prompt: string,
+  context: ReturnType<typeof buildDirectContextFastPathItems>,
+) {
+  if (!/(risk|risks|风险|隐患|问题)/i.test(prompt)) return undefined;
+  if (!/(summari[sz]e|summary|概括|总结|归纳|一句|一段|paragraph|简短|short)/i.test(prompt)) return undefined;
+  const riskSentences = uniqueStrings(context.flatMap((item) => riskSentencesFromText(item.summary)));
+  if (!riskSentences.length) return undefined;
+  const selected = riskSentences.slice(0, /two|2|两|二/.test(prompt) ? 2 : 3);
+  if (/[一-龥]/.test(prompt)) {
+    return `基于当前会话已有上下文直接回答，不启动新的 workspace task。${selected.join('；')}。`;
+  }
+  return `Answered directly from current-session context without starting a new workspace task. ${selected.join('; ')}.`;
+}
+
+function riskSentencesFromText(value: string | undefined) {
+  if (!value) return [];
+  return value
+    .replace(/\s+/g, ' ')
+    .split(/(?<=[。.!?；;])\s+|[\n\r]+/)
+    .map((part) => part.trim().replace(/^[#*\-\d.\s:：]+/, '').replace(/[。.!?；;]+$/, ''))
+    .filter((part) => /(risk|风险|隐患|问题|漂移|溢出|不一致|失败|超时|缺失|阻塞)/i.test(part))
+    .slice(0, 6);
+}
+
 function hasUsableArtifactRefOrData(artifact: Record<string, unknown>) {
   if (stringField(artifact.dataRef) || stringField(artifact.path) || stringField(artifact.ref)) return true;
   const metadata = artifact.metadata;
@@ -420,7 +460,11 @@ function hasUsableArtifactRefOrData(artifact: Record<string, unknown>) {
   return artifact.data !== undefined;
 }
 
-function hasCurrentContextEvidence(context: ReturnType<typeof buildDirectContextFastPathItems>) {
+function hasCurrentContextEvidence(
+  context: ReturnType<typeof buildDirectContextFastPathItems>,
+  intent: DirectContextIntent,
+) {
+  if (intent === 'run-diagnostic') return context.some((item) => item.ref);
   return context.some((item) => item.kind !== 'execution-unit');
 }
 

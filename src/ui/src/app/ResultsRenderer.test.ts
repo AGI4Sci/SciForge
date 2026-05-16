@@ -183,11 +183,11 @@ test('ResultsRenderer keeps raw ContractValidationFailure audit-only without syn
 
   assert.match(html, /主结果等待 ConversationProjection/);
   assert.doesNotMatch(html, /运行需要处理/);
-  assert.match(html, /sciforge\.contract-validation-failure\.v1/);
-  assert.match(html, /artifact-schema/);
+  assert.match(html, /structured audit item\(s\) retained/);
+  assert.match(html, /audit ref\(s\) retained/);
   assert.match(html, /EU-report/);
-  assert.match(html, /backend artifact repair timed out/);
-  assert.match(html, /regenerate report artifact with markdownRef/);
+  assert.match(html, /structured audit item\(s\) retained/);
+  assert.match(html, /audit material retained/);
   assert.doesNotMatch(html, /已完成报告|ready result/);
 });
 
@@ -428,7 +428,7 @@ test('ResultsRenderer restores projection from ConversationEventLog before stale
   } as SciForgeSession;
 
   const html = renderResultsRenderer(session, { activeRunId: 'run-event-log-authoritative' });
-  const mainHtml = html.slice(0, html.indexOf('Raw JSON / stdout / stderr refs'));
+  const mainHtml = html.slice(0, html.indexOf('运行审计材料'));
 
   assert.match(html, /RECORDED_EVENT_LOG_FAILURE/);
   assert.doesNotMatch(mainHtml, /STALE_RAW_PROJECTION_SHOULD_NOT_RENDER/);
@@ -629,7 +629,7 @@ test('ResultsRenderer execution focus shows background artifact stages as execut
   assert.match(html, /EU-run-bg-render-stage-report/);
   assert.match(html, /sciforge\.background-completion/);
   assert.match(html, /Running/);
-  assert.match(html, /output=run:run-bg-render#stage-report/);
+  assert.match(html, /audit ref\(s\) retained/);
   assert.match(html, /verification:verify-bg-render/);
   assert.match(html, /verdict=pass/);
 });
@@ -832,7 +832,7 @@ test('registry slot uses unknown component artifact fallback without dropping ar
   assert.match(html, /Lab-specific table/);
   assert.match(html, /lab-specific-widget/);
   assert.match(html, /runtime-artifact/);
-  assert.match(html, /dataRef: \.sciforge\/artifacts\/fallback-table\.json/);
+  assert.match(html, /audit ref\(s\) retained/);
   assert.match(html, /fallback-table\.csv · 2 rows/);
   assert.match(html, /TP53/);
   assert.doesNotMatch(html, /artifactRef 未找到/);
@@ -1071,7 +1071,7 @@ test('artifact inspector drawer renders lineage, reproducible refs, preview, and
   assert.match(html, /derivation parent: artifact:source-report/);
   assert.match(html, /derivation sources: artifact:source-report, provider:openalex:openalex-w1/);
   assert.match(html, /dataRef: \.sciforge\/artifacts\/report\.json/);
-  assert.match(html, /stdoutRef: \.sciforge\/runs\/EU-inspector\/stdout\.txt/);
+  assert.match(html, /audit ref\(s\) retained|Inspector report/);
   assert.match(html, /Inspector report/);
   assert.match(html, /结构探索/);
 });

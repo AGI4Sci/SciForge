@@ -78,6 +78,127 @@ test('normalizes ContractValidationFailure as failed diagnostic output with reco
   assert.equal((raw.contractValidationFailure as Record<string, unknown>)?.failureReason, 'research-report artifact is missing markdown content.');
 });
 
+test('summarizes raw backend failure payloads without leaking response body or refs into chat text', () => {
+  const response = normalizeAgentResponse('literature-evidence-review', '生成报告', {
+    ok: true,
+    data: {
+      run: {
+        id: 'run-raw-backend-failure',
+        status: 'failed',
+        output: {
+          result: JSON.stringify({
+            status: 'failed',
+            finalText: 'HTTP 401 Unauthorized: Invalid token for https://api.example.invalid/v1/chat stdoutRef=.sciforge/logs/stdout.log stderrRef=.sciforge/logs/stderr.log',
+            runtimeEventsRef: '.sciforge/sessions/session-a/runtime-events.json',
+          }),
+        },
+      },
+    },
+  });
+
+  assert.match(response.message.content, /后端运行未完成：HTTP 401 Unauthorized/);
+  assert.doesNotMatch(response.message.content, /Invalid token|https?:\/\/|stdoutRef|stderrRef|runtimeEventsRef|^\{/);
+  assert.equal(response.run.response, response.message.content);
+});
+
+test('prefers Projection visible answer over stale backend wrapper failure text', () => {
+  const response = normalizeAgentResponse('literature-evidence-review', '继续上一轮', {
+    ok: true,
+    displayIntent: {
+      conversationProjection: {
+        visibleAnswer: {
+          status: 'satisfied',
+          text: '已基于当前 artifact 总结两个风险。',
+          artifactRefs: ['artifact:risk-summary'],
+        },
+      },
+    },
+    data: {
+      run: {
+        id: 'run-projection-satisfied-wrapper-failed',
+        status: 'failed',
+        output: {
+          error: 'HTTP 500 backend failure from https://api.example.invalid/private stdoutRef=.sciforge/logs/stdout.log',
+        },
+      },
+    },
+  });
+
+  assert.equal(response.message.content, '已基于当前 artifact 总结两个风险。');
+  assert.equal(response.run.response, '已基于当前 artifact 总结两个风险。');
+  assert.doesNotMatch(response.message.content, /HTTP|api\.example|stdoutRef|backend failure/);
+});
+
+test('prefers Projection visible answer from parsed ToolPayload JSON output', () => {
+  const response = normalizeAgentResponse('literature-evidence-review', '生成备忘录', {
+    ok: true,
+    data: {
+      run: {
+        id: 'run-json-toolpayload-projection',
+        status: 'completed',
+        output: {
+          result: JSON.stringify({
+            message: '已生成备忘录。',
+            reasoningTrace: 'stdoutRef=.sciforge/logs/stdout.log stderrRef=.sciforge/logs/stderr.log',
+            displayIntent: {
+              conversationProjection: {
+                visibleAnswer: {
+                  status: 'satisfied',
+                  text: '已生成备忘录。',
+                  artifactRefs: ['artifact:memo'],
+                },
+              },
+            },
+            claims: [],
+            uiManifest: [],
+            executionUnits: [],
+            artifacts: [{ id: 'memo', type: 'research-report', title: 'Memo', dataRef: '.sciforge/task-results/memo.md' }],
+          }),
+        },
+      },
+    },
+  });
+
+  assert.equal(response.message.content, '已生成备忘录。');
+  assert.equal(response.run.response, '已生成备忘录。');
+  assert.doesNotMatch(response.message.content, /stdoutRef|stderrRef|^\{/);
+});
+
+test('summarizes output.error backend failures without leaking endpoint text', () => {
+  const response = normalizeAgentResponse('literature-evidence-review', '生成报告', {
+    ok: true,
+    data: {
+      run: {
+        id: 'run-output-error',
+        status: 'failed',
+        output: {
+          error: 'HTTP 403 Forbidden from https://api.example.invalid/private?token=secret-token',
+        },
+      },
+    },
+  });
+
+  assert.match(response.message.content, /后端运行未完成：HTTP 403 Forbidden/);
+  assert.doesNotMatch(response.message.content, /api\.example|secret-token|https?:\/\//);
+});
+
+test('natural failed answers remain visible when they are not raw transport diagnostics', () => {
+  const response = normalizeAgentResponse('literature-evidence-review', '生成报告', {
+    ok: true,
+    data: {
+      run: {
+        id: 'run-natural-failure',
+        status: 'failed',
+        output: {
+          message: '没有找到满足条件的文献，因此无法生成报告。请放宽年份条件后重试。',
+        },
+      },
+    },
+  });
+
+  assert.match(response.message.content, /没有找到满足条件的文献/);
+});
+
 test('does not synthesize notebook records when backend omits notebook timeline', () => {
   const response = normalizeAgentResponse('literature-evidence-review', '生成 notebook 摘要', {
     ok: true,

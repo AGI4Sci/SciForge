@@ -1,5 +1,6 @@
-import type {
-  RuntimeArtifactDerivation,
+import {
+  artifactHasUserFacingDelivery,
+  type RuntimeArtifactDerivation,
 } from '@sciforge-ui/runtime-contract';
 import type {
   ResultPresentationArtifactAction,
@@ -91,7 +92,7 @@ function keyFindingsFromClaims(payload: ToolPayload, citations: CitationIndex): 
 }
 
 function artifactActionsFromPayload(payload: ToolPayload, citations: CitationIndex): ResultPresentationArtifactAction[] {
-  return toRecordList(payload.artifacts).map((artifact, index) => {
+  return toRecordList(payload.artifacts).filter(artifactIsUserFacingPresentationArtifact).map((artifact, index) => {
     const id = stringField(artifact.id) || `artifact-${index + 1}`;
     const artifactType = stringField(artifact.type);
     const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
@@ -126,6 +127,11 @@ function artifactActionsFromPayload(payload: ToolPayload, citations: CitationInd
       derivation,
     };
   });
+}
+
+function artifactIsUserFacingPresentationArtifact(artifact: Record<string, unknown>): boolean {
+  if (!isRecord(artifact.delivery)) return true;
+  return artifactHasUserFacingDelivery(artifact);
 }
 
 function processSummaryFromExecutionUnits(payload: ToolPayload): ResultPresentationProcessItem[] {

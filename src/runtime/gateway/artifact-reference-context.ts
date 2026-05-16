@@ -23,8 +23,9 @@ export async function collectArtifactReferenceContext(request: GatewayRequest) {
     const combinedArtifacts = request.artifacts.filter(isRecord);
     return combinedArtifacts.length ? { combinedArtifacts } : undefined;
   }
-  if (currentTurnReferencesAreIsolated(request)) {
-    const combinedArtifacts = request.artifacts.filter(isRecord);
+  const selectedRefs = selectedReferenceScope(request);
+  if (selectedRefs.size > 0 || currentTurnReferencesAreIsolated(request)) {
+    const combinedArtifacts = request.artifacts.filter(isRecord).filter((artifact) => selectedRefs.size === 0 || artifactMatchesSelectedRef(artifact, selectedRefs));
     return combinedArtifacts.length ? { combinedArtifacts } : undefined;
   }
   const workspace = resolve(request.workspacePath || process.cwd());
@@ -83,6 +84,20 @@ function currentTurnReferencesAreIsolated(request: GatewayRequest) {
   const mode = stringField(policy.mode) ?? '';
   const historyReuse = isRecord(policy.historyReuse) ? policy.historyReuse : {};
   return historyReuse.allowed !== true && mode !== 'continue' && mode !== 'repair';
+}
+
+function selectedReferenceScope(request: GatewayRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const policy = isRecord(uiState.contextReusePolicy)
+    ? uiState.contextReusePolicy
+    : isRecord(uiState.contextIsolation)
+      ? uiState.contextIsolation
+      : {};
+  if (policy.selectedRefsOnly !== true) return new Set<string>();
+  return new Set([
+    ...toRecordList(uiState.currentReferences).map((reference) => stringField(reference.ref)),
+    ...toRecordList(uiState.currentReferenceDigests).map((digest) => stringField(digest.sourceRef)),
+  ].filter((ref): ref is string => Boolean(ref)));
 }
 
 function bodyExpansionForbiddenByTurnConstraints(request: GatewayRequest) {
@@ -213,4 +228,20 @@ function artifactMatchesExecutionRef(artifact: Record<string, unknown>, outputRe
   return stringField(artifact.outputRef) === outputRef
     || stringField(artifact.dataRef) === outputRef
     || stringField(metadata.outputRef) === outputRef;
+}
+
+function artifactMatchesSelectedRef(artifact: Record<string, unknown>, selectedRefs: Set<string>) {
+  const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+  const delivery = isRecord(artifact.delivery) ? artifact.delivery : {};
+  const candidates = [
+    stringField(artifact.id) ? `artifact:${stringField(artifact.id)}` : undefined,
+    stringField(artifact.ref),
+    stringField(artifact.dataRef),
+    stringField(artifact.path),
+    stringField(delivery.ref),
+    stringField(metadata.ref),
+    stringField(metadata.dataRef),
+    stringField(metadata.path),
+  ].filter((ref): ref is string => Boolean(ref));
+  return candidates.some((ref) => selectedRefs.has(ref));
 }

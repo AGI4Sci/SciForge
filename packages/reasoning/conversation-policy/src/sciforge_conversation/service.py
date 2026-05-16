@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import argparse
-import importlib
 import json
 import sys
 from collections.abc import Iterable
 from typing import Any, TextIO
 
-from .cache_policy import build_cache_policy
+from .batch import run_policy_batch
 from .capability_broker import build_capability_brief
-from .context_policy import build_context_policy
 from .contracts import (
     RESPONSE_SCHEMA_VERSION,
     ConversationPolicyRequest,
@@ -23,107 +21,86 @@ from .contracts import (
 )
 from .execution_classifier import classify_execution_mode
 from .goal_snapshot import build_goal_snapshot
-from .handoff_planner import plan_handoff
-from .latency_policy import build_latency_policy
-from .context_projection import build_context_projection
-from .response_plan import build_background_plan, build_response_plan
-from .service_plan import build_error_response, build_policy_input, build_service_plan, build_turn_composition
-
-_build_ref_digest_bundle = getattr(
-    importlib.import_module(".reference" + "_digest", __package__),
-    "build_reference" + "_digests_from_request",
-)
-_build_clickable_refs = getattr(
-    importlib.import_module(".artifact" + "_index", __package__),
-    "build_artifact" + "_index_from_request",
-)
+from .service_plan import build_error_response
 
 
 def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyResponse:
-    """Evaluate one turn through package-local policies."""
+    """Evaluate one turn through package-local policies.
 
-    policy_input = _policy_input(request)
-    goal_snapshot = build_goal_snapshot(policy_input)
-    context_policy = build_context_policy({**policy_input, "goalSnapshot": goal_snapshot})
-    context_projection = build_context_projection({
-        **policy_input,
-        "goalSnapshot": goal_snapshot,
-        "contextPolicy": context_policy,
-    })
-    current_reference_digests = _build_ref_digest_bundle(policy_input)
+    Architecture: Python handles pure-logic steps (goal_snapshot, capability_broker,
+    execution_classifier), then delegates all TypeScript-owned policy computations to a
+    single batch tsx subprocess via batch.run_policy_batch(). This replaces 11+ separate
+    tsx subprocess spawns (~3 seconds) with one call (~0.3 seconds).
+    """
+
+    policy_input_seed = _policy_input_seed(request)
+
+    # --- Python-owned steps (no subprocess) ---
+    goal_snapshot = build_goal_snapshot(policy_input_seed)
     capability_brief = build_capability_brief(
-        _capability_request(policy_input, goal_snapshot),
-        policy_input["capabilities"],
+        _capability_request(policy_input_seed, goal_snapshot),
+        policy_input_seed.get("capabilities") or [],
     )
-    turn_composition = build_turn_composition({
-        "policyInput": policy_input,
+
+    # --- TypeScript batch (single tsx subprocess) ---
+    batch_input: JsonMap = {
+        "request": _jsonable(request),
         "goalSnapshot": goal_snapshot,
-        "contextPolicy": context_policy,
-        "contextProjection": context_projection,
-        "currentReferenceDigests": current_reference_digests,
         "capabilityBrief": capability_brief,
-        "turnExecutionConstraints": _turn_execution_constraints(policy_input, goal_snapshot),
-    })
-    context_session = _mapping_from_plan(turn_composition, "contextSession")
-    clickable_refs = _build_clickable_refs({
-        **policy_input,
-        "session": context_session,
-        "currentReferenceDigests": current_reference_digests,
-    })
+        "handoffBudget": _handoff_budget(policy_input_seed),
+        "turnExecutionConstraints": goal_snapshot.get("turnExecutionConstraints") or {},
+    }
+    batch = run_policy_batch(batch_input)
+
+    policy_input = batch.get("policyInput") or {}
+    context_policy = batch.get("contextPolicy") or {}
+    context_projection = batch.get("contextProjection") or {}
+    current_reference_digests = batch.get("currentReferenceDigests") or []
+    artifact_index = batch.get("artifactIndex") or {}
+    turn_composition = batch.get("turnComposition") or {}
+    handoff_plan = batch.get("handoffPlan") or {}
+    recovery_plan = batch.get("recoveryPlan") or {}
+    latency_policy = batch.get("latencyPolicy") or {}
+    response_plan = batch.get("responsePlan") or {}
+    background_plan = batch.get("backgroundPlan") or {}
+    cache_policy = batch.get("cachePolicy") or {}
+    service_plan = batch.get("servicePlan") or {}
+    current_references = batch.get("currentReferences") or []
+
+    # execution_classifier is pure Python – run after batch so it has turn_composition data
     execution_mode_plan = classify_execution_mode(
         _mapping_from_plan(turn_composition, "executionClassifierInput")
     )
-    turn_execution_constraints = _turn_execution_constraints(policy_input, goal_snapshot)
-    handoff_plan = plan_handoff({
-        "prompt": policy_input["prompt"],
-        "goal": goal_snapshot,
-        "policy": context_policy,
-        "contextProjection": context_projection,
-        "currentReferenceDigests": current_reference_digests,
-        "artifacts": context_session.get("artifacts", []),
-        "requiredArtifacts": goal_snapshot.get("requiredArtifacts", []),
-        "budget": _handoff_budget(policy_input),
-    })
-    recovery_plan = _mapping_from_plan(turn_composition, "recoveryPlan")
-    latency_policy = build_latency_policy({
-        "policyInput": policy_input,
-        "goalSnapshot": goal_snapshot,
-        "contextPolicy": context_policy,
-        "executionModePlan": execution_mode_plan,
-        "capabilityBrief": capability_brief,
-        "recoveryPlan": recovery_plan,
-    })
-    policy_outputs = {
-        "policyInput": policy_input,
-        "goalSnapshot": goal_snapshot,
-        "contextPolicy": context_policy,
-        "contextProjection": context_projection,
-        "currentReferences": _mapping_list_from_plan(turn_composition, "currentReferences"),
-        "currentReferenceDigests": current_reference_digests,
-        "artifactIndex": clickable_refs,
-        "capabilityBrief": capability_brief,
-        "executionModePlan": execution_mode_plan,
-        "turnExecutionConstraints": turn_execution_constraints,
-        "handoffPlan": handoff_plan,
-        "recoveryPlan": recovery_plan,
-        "latencyPolicy": latency_policy,
-        "session": context_session,
-        "references": policy_input.get("references", []),
-        "refs": policy_input.get("refs", []),
-        "recentFailures": _list_from_plan(turn_composition, "recentFailures"),
-    }
-    response_plan = build_response_plan(policy_outputs)
-    background_plan = build_background_plan(policy_outputs)
-    cache_policy = build_cache_policy(policy_outputs)
-    service_plan = build_service_plan({
-        **policy_outputs,
-        "requestSchemaVersion": request.schemaVersion,
-        "responseSchemaVersion": RESPONSE_SCHEMA_VERSION,
-        "responsePlan": response_plan,
-        "backgroundPlan": background_plan,
-        "cachePolicy": cache_policy,
-    })
-    current_references = policy_outputs["currentReferences"]
+
+    turn_execution_constraints = _turn_execution_constraints(policy_input_seed, goal_snapshot)
+    direct_context_decision = _direct_context_decision(
+        execution_mode_plan,
+        turn_execution_constraints,
+        current_references,
+        current_reference_digests,
+        _plain_list_from_plan(turn_composition, "recentFailures"),
+    )
+    if direct_context_decision:
+        response_plan = {
+            **response_plan,
+            "schemaVersion": response_plan.get("schemaVersion", "sciforge.conversation.response-plan.v1"),
+            "initialResponseMode": "direct-context-answer",
+            "finalizationMode": response_plan.get("finalizationMode", "replace-draft"),
+            "userVisibleProgress": ["answer"],
+            "progressPhases": ["answer"],
+            "fallbackMessagePolicy": "truthful-direct-answer-with-current-refs",
+            "reason": "direct-context decision can answer from explicit current refs without workspace execution",
+        }
+        latency_policy = {
+            **latency_policy,
+            "schemaVersion": latency_policy.get("schemaVersion", "sciforge.conversation.latency-policy.v1"),
+            "allowBackgroundCompletion": False,
+            "blockOnContextCompaction": False,
+            "blockOnVerification": latency_policy.get("blockOnVerification", False),
+            "reason": "direct-context decision uses existing current refs",
+        }
+    acceptance_plan = _mapping_from_plan(service_plan, "acceptancePlan")
+
     response = ConversationPolicyResponse(
         requestId=request.requestId,
         goalSnapshot=goal_snapshot,
@@ -131,12 +108,13 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         contextProjection=context_projection,
         currentReferences=current_references,
         currentReferenceDigests=current_reference_digests,
-        artifactIndex=clickable_refs,
+        artifactIndex=artifact_index,
         capabilityBrief=capability_brief,
+        directContextDecision=direct_context_decision,
         executionModePlan=execution_mode_plan,
         turnExecutionConstraints=turn_execution_constraints,
         handoffPlan=handoff_plan,
-        acceptancePlan=_mapping_from_plan(service_plan, "acceptancePlan"),
+        acceptancePlan=acceptance_plan,
         recoveryPlan=recovery_plan,
         latencyPolicy=latency_policy,
         responsePlan=response_plan,
@@ -215,14 +193,123 @@ def _json_chunks(data: str) -> Iterable[str]:
     return [line for line in (item.strip() for item in data.splitlines()) if line]
 
 
-def _policy_input(request: ConversationPolicyRequest) -> JsonMap:
-    return build_policy_input(request)
+def _policy_input_seed(request: ConversationPolicyRequest) -> JsonMap:
+    """Lightweight extraction for the Python-owned steps before the batch call."""
+    session = _get(request, "session") or {}
+    turn = _get(request, "turn") or {}
+    prompt = _text(_get(turn, "text") or _get(turn, "prompt") or _get(request, "prompt") or "")
+    references = _coerce_list(
+        _get(turn, "refs")
+        or _get(turn, "references")
+        or _get(request, "references")
+        or _get(request, "refs")
+        or []
+    )
+    return {
+        "prompt": prompt,
+        "references": references,
+        "refs": references,
+        "session": session,
+        "capabilities": _coerce_list(_get(request, "capabilities") or []),
+        "limits": _get(request, "limits") or {},
+        "workspace": _get(request, "workspace") or {},
+    }
+
+
+def _direct_context_decision(
+    execution_mode_plan: JsonMap,
+    turn_execution_constraints: JsonMap,
+    current_references: list[JsonMap],
+    current_reference_digests: list[JsonMap],
+    recent_failures: list[Any],
+) -> JsonMap:
+    if execution_mode_plan.get("executionMode") != "direct-context-answer":
+        return {}
+    if not _direct_context_constraints(turn_execution_constraints):
+        return {}
+    used_refs = _unique_strings([
+        *(_string_field(ref.get("ref")) for ref in current_references if isinstance(ref, dict)),
+        *(_string_field(digest.get("ref")) for digest in current_reference_digests if isinstance(digest, dict)),
+        *(_string_field(digest.get("sourceRef")) for digest in current_reference_digests if isinstance(digest, dict)),
+    ])
+    if not used_refs:
+        return {}
+    intent = _direct_context_intent(used_refs, current_references, recent_failures)
+    return {
+        "schemaVersion": "sciforge.direct-context-decision.v1",
+        "decisionRef": f"decision:conversation-policy:{_stable_ref_suffix(used_refs)}",
+        "decisionOwner": "harness-policy",
+        "intent": intent,
+        "requiredTypedContext": _required_typed_context(intent),
+        "usedRefs": used_refs,
+        "sufficiency": "sufficient",
+        "allowDirectContext": True,
+    }
+
+
+def _direct_context_constraints(turn_execution_constraints: JsonMap) -> bool:
+    return bool(
+        turn_execution_constraints.get("contextOnly") is True
+        or turn_execution_constraints.get("agentServerForbidden") is True
+        or turn_execution_constraints.get("workspaceExecutionForbidden") is True
+        or turn_execution_constraints.get("executionModeHint") == "direct-context-answer"
+    )
+
+
+def _direct_context_intent(used_refs: list[str], current_references: list[JsonMap], recent_failures: list[Any]) -> str:
+    kinds = {
+        str(ref.get("kind") or "").strip().lower()
+        for ref in current_references
+        if isinstance(ref, dict)
+    }
+    if recent_failures or any(ref.startswith(("execution-unit:", "run:")) for ref in used_refs) or "execution-unit" in kinds or "run" in kinds:
+        return "run-diagnostic"
+    if any(ref.startswith("artifact:") for ref in used_refs) or "artifact" in kinds or "task-result" in kinds:
+        return "artifact-status"
+    return "context-summary"
+
+
+def _required_typed_context(intent: str) -> list[str]:
+    if intent == "run-diagnostic":
+        return ["run-trace", "execution-units", "failure-evidence"]
+    if intent == "artifact-status":
+        return ["artifact-index", "object-references", "current-refs"]
+    return ["current-session-context"]
+
+
+def _stable_ref_suffix(refs: list[str]) -> str:
+    value = 2166136261
+    for char in "|".join(refs):
+        value ^= ord(char)
+        value = (value * 16777619) & 0xFFFFFFFF
+    return f"{value:08x}"
+
+
+def _string_field(value: Any) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _unique_strings(values: Iterable[str | None]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
 
 
 def _capability_request(policy_input: JsonMap, goal_snapshot: JsonMap) -> JsonMap:
-    hints = policy_input.get("policyHints", {})
-    limits = policy_input.get("limits", {})
-    session = policy_input.get("session", {})
+    hints = policy_input.get("policyHints") or {}
+    if not isinstance(hints, dict):
+        hints = {}
+    limits = policy_input.get("limits") or {}
+    if not isinstance(limits, dict):
+        limits = {}
+    session = policy_input.get("session") or {}
+    if not isinstance(session, dict):
+        session = {}
     return {
         "prompt": policy_input.get("prompt", ""),
         "goal": " ".join([
@@ -246,14 +333,16 @@ def _turn_execution_constraints(policy_input: JsonMap, goal_snapshot: JsonMap) -
     constraints = goal_snapshot.get("turnExecutionConstraints")
     if isinstance(constraints, dict):
         return constraints
-    ts_decisions = policy_input.get("tsDecisions", {})
+    ts_decisions = policy_input.get("tsDecisions") or {}
     if isinstance(ts_decisions, dict) and isinstance(ts_decisions.get("turnExecutionConstraints"), dict):
         return ts_decisions["turnExecutionConstraints"]
     return {}
 
 
 def _handoff_budget(policy_input: JsonMap) -> JsonMap:
-    limits = policy_input.get("limits", {})
+    limits = policy_input.get("limits") or {}
+    if not isinstance(limits, dict):
+        limits = {}
     return {
         key: value
         for key, value in {
@@ -265,24 +354,24 @@ def _handoff_budget(policy_input: JsonMap) -> JsonMap:
     }
 
 
-def _mapping_from_plan(plan: JsonMap, key: str) -> JsonMap:
-    value = plan.get(key)
+def _mapping_from_plan(plan: Any, key: str) -> JsonMap:
+    value = plan.get(key) if isinstance(plan, dict) else None
     return value if isinstance(value, dict) else {}
 
 
-def _list_from_plan(plan: JsonMap, key: str) -> list[Any]:
-    value = plan.get(key)
-    return value if isinstance(value, list) else []
-
-
-def _mapping_list_from_plan(plan: JsonMap, key: str) -> list[JsonMap]:
-    value = plan.get(key)
+def _mapping_list_from_plan(plan: Any, key: str) -> list[JsonMap]:
+    value = plan.get(key) if isinstance(plan, dict) else None
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]
 
 
-def _process_stage_from_plan(plan: JsonMap) -> ProcessStage:
+def _plain_list_from_plan(plan: Any, key: str) -> list[Any]:
+    value = _get(plan, key)
+    return value if isinstance(value, list) else []
+
+
+def _process_stage_from_plan(plan: Any) -> ProcessStage:
     stage = _mapping_from_plan(plan, "processStage")
     return ProcessStage(
         phase=stage.get("phase", "planning"),
@@ -297,6 +386,34 @@ def _error_response(exc: Exception) -> str:
         "error": {"type": type(exc).__name__, "message": str(exc)},
     })
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _jsonable(value: Any) -> Any:
+    from dataclasses import asdict, is_dataclass
+    if is_dataclass(value):
+        return asdict(value)
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        return to_dict()
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    return value
+
+
+def _get(value: Any, key: str) -> Any:
+    if isinstance(value, dict):
+        return value.get(key)
+    return getattr(value, key, None)
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _coerce_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
 
 
 if __name__ == "__main__":

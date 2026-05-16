@@ -64,10 +64,13 @@ export function projectionContinuationContexts(
   references: SciForgeReference[],
 ): ProjectionContinuationContext[] {
   const selectedRefs = compactSelectedRefsForProjectionContinuation(references);
+  const selectedRefSet = new Set(selectedRefs.map((reference) => reference.ref).filter(Boolean));
+  const selectedRefsScopeProjections = Array.from(selectedRefSet).some((ref) => /^(artifact|run|execution-unit|file):/.test(ref));
   return session.runs
     .map((run) => {
       const projection = conversationProjectionForSession(session, run);
       if (!projection) return undefined;
+      if (selectedRefsScopeProjections && !projectionMatchesSelectedRefs(run, projection, selectedRefSet)) return undefined;
       const auditRefs = uniqueStringRefs([
         ...conversationProjectionAuditRefs(projection),
         ...collectRuntimeRefsFromValue(run.raw, { maxDepth: 5, maxRefs: REQUEST_PAYLOAD_AUDIT_REF_LIMIT, includeIds: false }),
@@ -81,6 +84,21 @@ export function projectionContinuationContexts(
     })
     .filter((context): context is ProjectionContinuationContext => Boolean(context))
     .slice(-REQUEST_PAYLOAD_PROJECTION_LIMIT);
+}
+
+function projectionMatchesSelectedRefs(
+  run: SciForgeRun,
+  projection: UiConversationProjection,
+  selectedRefs: Set<string>,
+) {
+  if (selectedRefs.has(`run:${run.id}`)) return true;
+  const projectionRefs = [
+    ...conversationProjectionArtifactRefs(projection),
+    ...conversationProjectionAuditRefs(projection),
+    ...(run.references ?? []).map((reference) => reference.ref),
+    ...(run.objectReferences ?? []).map((reference) => reference.ref),
+  ];
+  return projectionRefs.some((ref) => selectedRefs.has(ref));
 }
 
 function compactConversationProjectionForRequestPayload(

@@ -62,6 +62,7 @@ export async function appendTaskAttempt(workspacePath: string, record: TaskAttem
     updatedAt: new Date().toISOString(),
     attempts,
   }, null, 2));
+  await materializeTerminalProjectionForSessionRun(workspace, normalizedRecordWithCard);
   await recordTaskAttemptFailureSignatures(workspace, normalizedRecordWithCard);
   return path;
 }
@@ -481,6 +482,142 @@ function conversationProjectionMetadataFromPayload(payload: unknown, fallbackRef
     ref: explicitRef ?? (projection ? fallbackRef : undefined),
     summary: embeddedSummary ?? conversationProjectionSummaryFromProjection(projection),
   };
+}
+
+async function materializeTerminalProjectionForSessionRun(workspace: string, record: TaskAttemptRecord) {
+  if (!record.sessionBundleRef || !record.taskRunCard?.conversationProjectionSummary) return;
+  const projection = record.outputRef
+    ? await conversationProjectionFromOutput(workspace, record.outputRef)
+    : undefined;
+  if (!projection) return;
+  const bundleRoot = workspaceSafePath(workspace, record.sessionBundleRef);
+  if (!bundleRoot) return;
+  const sessionPath = join(bundleRoot, 'records', 'session.json');
+  const runsPath = join(bundleRoot, 'records', 'runs.json');
+  const session = await readJsonRecord(sessionPath);
+  if (!session) return;
+
+  const createdAt = stringField(record.createdAt) ?? new Date().toISOString();
+  const completedAt = new Date().toISOString();
+  const runId = record.taskRunCard.conversationProjectionSummary.activeRunId
+    ?? stringField(record.taskRunCard.id)
+    ?? `task-attempt:${record.id}:${record.attempt}`;
+  const visibleAnswer = isRecord(projection.visibleAnswer) ? projection.visibleAnswer : {};
+  const responseText = stringField(visibleAnswer.text)
+    ?? stringField(visibleAnswer.diagnostic)
+    ?? record.taskRunCard.nextStep
+    ?? record.taskRunCard.goal
+    ?? '';
+  const runStatus = runStatusFromProjectionStatus(record.taskRunCard.conversationProjectionSummary.status);
+  const current = record as TaskAttemptRecord & { conversationProjectionRef?: unknown };
+  const projectionRef = stringField(record.taskRunCard.conversationProjectionRef)
+    ?? stringField(current.conversationProjectionRef);
+  const minimalRun = {
+    id: runId,
+    scenarioId: stringField(record.scenarioPackageRef?.id) ?? stringField(session.scenarioId) ?? record.skillDomain,
+    scenarioPackageRef: record.scenarioPackageRef,
+    skillPlanRef: record.skillPlanRef,
+    uiPlanRef: record.uiPlanRef,
+    status: runStatus,
+    prompt: record.prompt,
+    response: responseText,
+    createdAt,
+    completedAt: runStatus === 'running' ? undefined : completedAt,
+    raw: {
+      displayIntent: {
+        conversationProjection: projection,
+        conversationProjectionRef: projectionRef,
+        taskRunCard: record.taskRunCard,
+      },
+      conversationProjectionRef: projectionRef,
+      taskAttemptRef: `${record.sessionBundleRef.replace(/\/+$/, '')}/records/task-attempts/${safeName(record.id)}.json`,
+    },
+  };
+  const existingRuns = Array.isArray(session.runs) ? session.runs.filter(isRecord) : await readJsonArray(runsPath);
+  const runs = mergeRunRecords(existingRuns, minimalRun);
+  const projectionMap = projectionMapWithRun(
+    isRecord(session.materializedConversationProjections) ? session.materializedConversationProjections : undefined,
+    runId,
+    projection,
+  );
+  const nextSession = {
+    ...session,
+    runs,
+    materializedConversationProjection: projection,
+    materializedConversationProjections: projectionMap,
+    updatedAt: completedAt,
+  };
+  await writeFile(sessionPath, JSON.stringify(nextSession, null, 2));
+  await writeFile(runsPath, JSON.stringify(runs, null, 2));
+}
+
+async function conversationProjectionFromOutput(workspace: string, outputRef: string): Promise<Record<string, unknown> | undefined> {
+  const outputPath = workspaceSafePath(workspace, outputRef);
+  if (!outputPath || !await fileExists(outputPath)) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(outputPath, 'utf8'));
+  } catch {
+    return undefined;
+  }
+  const root = isRecord(parsed) ? parsed : {};
+  const displayIntent = isRecord(root.displayIntent) ? root.displayIntent : root;
+  const projection = isRecord(displayIntent.conversationProjection)
+    ? displayIntent.conversationProjection
+    : isRecord(displayIntent.taskOutcomeProjection) && isRecord(displayIntent.taskOutcomeProjection.conversationProjection)
+      ? displayIntent.taskOutcomeProjection.conversationProjection
+      : undefined;
+  return isRecord(projection) && projection.schemaVersion === 'sciforge.conversation-projection.v1'
+    ? projection
+    : undefined;
+}
+
+async function readJsonRecord(path: string): Promise<Record<string, unknown> | undefined> {
+  try {
+    const parsed = JSON.parse(await readFile(path, 'utf8'));
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function readJsonArray(path: string): Promise<Record<string, unknown>[]> {
+  try {
+    const parsed = JSON.parse(await readFile(path, 'utf8'));
+    return Array.isArray(parsed) ? parsed.filter(isRecord) : [];
+  } catch {
+    return [];
+  }
+}
+
+function mergeRunRecords(runs: Record<string, unknown>[], nextRun: Record<string, unknown>) {
+  const nextId = stringField(nextRun.id);
+  if (!nextId) return runs;
+  const found = runs.some((run) => stringField(run.id) === nextId);
+  if (!found) return [...runs, nextRun];
+  return runs.map((run) => stringField(run.id) === nextId ? { ...run, ...nextRun } : run);
+}
+
+function projectionMapWithRun(current: Record<string, unknown> | undefined, runId: string, projection: Record<string, unknown>) {
+  const currentProjections = isRecord(current?.projections) ? current.projections : {};
+  return {
+    ...(current ?? {}),
+    currentRunId: runId,
+    activeRunId: runId,
+    current: projection,
+    latest: projection,
+    projections: {
+      ...currentProjections,
+      [runId]: projection,
+    },
+  };
+}
+
+function runStatusFromProjectionStatus(status: string) {
+  if (status === 'running' || status === 'idle') return status;
+  if (status === 'cancelled') return 'cancelled';
+  if (status === 'failed' || status === 'failed-with-reason') return 'failed';
+  return 'completed';
 }
 
 function conversationProjectionSummaryFromProjection(projection: unknown): TaskRunCardConversationProjectionSummary | undefined {

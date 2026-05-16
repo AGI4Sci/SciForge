@@ -72,8 +72,25 @@ export function compactFailureNotice(value: string) {
     .replace(/\s+/g, ' ')
     .trim();
   if (!primary) return '任务未完成，执行过程已保存到运行详情。';
+  if (looksLikeRawFailureNotice(primary)) {
+    const httpStatus = primary.match(/\bHTTP\s+(\d{3})(?:\s+([A-Za-z][A-Za-z -]{2,40}))?/i);
+    const reason = httpStatus
+      ? `HTTP ${httpStatus[1]}${httpStatus[2] ? ` ${httpStatus[2].trim()}` : ''}`
+      : /timeout|timed out|超时/i.test(primary)
+        ? 'backend timeout'
+        : 'backend failure';
+    return `任务未完成：${reason}。详细诊断已保留在运行审计中，主结果不展示原始响应正文、endpoint 或日志内容。`;
+  }
   if (primary.length <= 180) return primary;
   return `${primary.slice(0, 160).replace(/\s+\S*$/, '')}...`;
+}
+
+function looksLikeRawFailureNotice(value: string) {
+  return /^[{[]/.test(value)
+    || /\b(?:stdoutRef|stderrRef|rawRef|runtimeEventsRef)\b/i.test(value)
+    || /\bhttps?:\/\/[^\s"'<>]+/i.test(value)
+    || /\bHTTP\s+(?:401|403|429|5\d\d)\b/i.test(value)
+    || /\b(?:Invalid token|Unauthorized|Forbidden)\b/i.test(value);
 }
 
 export function latestTokenUsage(events: AgentStreamEvent[]) {

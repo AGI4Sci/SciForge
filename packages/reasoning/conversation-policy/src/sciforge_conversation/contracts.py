@@ -64,6 +64,7 @@ RESPONSE_JSON_SCHEMA: JsonMap = {
         "currentReferenceDigests": {"type": "array"},
         "artifactIndex": {"type": "object"},
         "capabilityBrief": {"type": "object"},
+        "directContextDecision": {"type": "object"},
         "executionModePlan": {"type": "object"},
         "turnExecutionConstraints": {"type": "object"},
         "handoffPlan": {"type": "object"},
@@ -200,6 +201,7 @@ class ConversationPolicyResponse:
     currentReferenceDigests: list[JsonMap] = field(default_factory=list)
     artifactIndex: JsonMap = field(default_factory=dict)
     capabilityBrief: JsonMap = field(default_factory=dict)
+    directContextDecision: JsonMap = field(default_factory=dict)
     executionModePlan: JsonMap = field(default_factory=dict)
     turnExecutionConstraints: JsonMap = field(default_factory=dict)
     handoffPlan: JsonMap = field(default_factory=dict)
@@ -278,6 +280,7 @@ def response_from_json(payload: JsonMap) -> ConversationPolicyResponse:
         ],
         artifactIndex=_optional_mapping(payload.get("artifactIndex"), "artifactIndex"),
         capabilityBrief=_optional_mapping(payload.get("capabilityBrief"), "capabilityBrief"),
+        directContextDecision=_optional_mapping(payload.get("directContextDecision"), "directContextDecision"),
         executionModePlan=_optional_mapping(payload.get("executionModePlan"), "executionModePlan"),
         turnExecutionConstraints=_optional_mapping(payload.get("turnExecutionConstraints"), "turnExecutionConstraints"),
         handoffPlan=_optional_mapping(payload.get("handoffPlan"), "handoffPlan"),

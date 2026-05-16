@@ -163,6 +163,8 @@ import {
 import { CONVERSATION_POLICY_TOOL_ID } from '@sciforge-ui/runtime-contract/conversation-policy';
 import { normalizeTurnExecutionConstraints, TURN_EXECUTION_CONSTRAINTS_TOOL_ID } from '@sciforge-ui/runtime-contract/turn-constraints';
 import {
+  capabilityProviderRoutesForGatewayInvocation,
+  publicCapabilityProviderPreflightResult,
   requestWithDiscoveredCapabilityProviders,
 } from './gateway/capability-provider-preflight.js';
 import { directContextFastPathPayload } from './gateway/direct-context-fast-path.js';
@@ -184,6 +186,16 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, 
     const request = await requestWithDiscoveredCapabilityProviders(
       await requestWithAgentHarnessShadow(policyApplication.request, telemetry.callbacks, policyApplication),
     );
+    const providerUnavailablePayload = capabilityProviderUnavailablePayload(request);
+    if (providerUnavailablePayload) {
+      telemetry.markVerificationStart();
+      const verified = await recordValidationRepairTelemetryForPayload(
+        await applyRuntimeVerificationPolicy(providerUnavailablePayload, request),
+        request,
+      );
+      telemetry.markVerificationEnd();
+      return finalizeGatewayPayload(telemetry.emitFinal(verified) ?? verified, request, runtimeReplayRecorder, telemetry.callbacks);
+    }
     const directContextPayload = directContextFastPathPayload(request);
     if (directContextPayload) {
       emitWorkspaceRuntimeEvent(telemetry.callbacks, directContextFastPathEvent({
@@ -258,17 +270,15 @@ function runtimeExecutionForbiddenPayload(request: GatewayRequest): ToolPayload 
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   const constraints = normalizeTurnExecutionConstraints(uiState.turnExecutionConstraints);
   const policyFailure = conversationPolicyFailure(uiState);
-  const runtimeForbidden = Boolean(constraints && (
-    constraints.workspaceExecutionForbidden
-    || constraints.codeExecutionForbidden
-    || constraints.externalIoForbidden
-  ));
+  const runtimeForbidden = constraintsForbidCurrentRuntimeWork(request, uiState, constraints);
   if (!policyFailure && !runtimeForbidden) return undefined;
   const refs = requestContextRefs(request, uiState);
   const reasons = [
     ...(constraints?.reasons ?? []),
     policyFailure ? `conversation policy failed: ${policyFailure.error}` : undefined,
   ].filter((reason): reason is string => Boolean(reason));
+  if (policyFailure && policyFailureAllowsStatelessFreshGeneration(request, uiState, constraints)) return undefined;
+  if (policyFailure && policyFailureAllowsTransportContinuation(request, uiState, constraints)) return undefined;
   return runtimeConstraintDiagnosticPayload(request, {
     artifactId: 'runtime-execution-forbidden',
     executionUnitId: 'EU-runtime-execution-forbidden',
@@ -290,6 +300,88 @@ function runtimeExecutionForbiddenPayload(request: GatewayRequest): ToolPayload 
   });
 }
 
+function constraintsForbidCurrentRuntimeWork(
+  request: GatewayRequest,
+  uiState: Record<string, unknown>,
+  constraints: ReturnType<typeof normalizeTurnExecutionConstraints>,
+) {
+  if (!constraints) return false;
+  if (constraints.workspaceExecutionForbidden !== true
+    && constraints.codeExecutionForbidden !== true
+    && constraints.externalIoForbidden !== true) return false;
+  return Boolean(
+    (request.externalIoRequired === true && constraints.externalIoForbidden === true)
+      || (request.actionSideEffects ?? []).length
+      || toStringList(uiState.actionSideEffects).length
+  );
+}
+
+function policyFailureAllowsStatelessFreshGeneration(
+  request: GatewayRequest,
+  uiState: Record<string, unknown>,
+  constraints: ReturnType<typeof normalizeTurnExecutionConstraints>,
+) {
+  if (constraints) return false;
+  if ((request.references ?? []).length || request.artifacts.length) return false;
+  if ((request.externalIoRequired === true)
+    || (request.actionSideEffects ?? []).length
+    || toStringList(uiState.actionSideEffects).length) return false;
+  if (toRecordList(uiState.currentReferences).length
+    || toRecordList(uiState.currentReferenceDigests).length
+    || toRecordList(uiState.recentRuns).length
+    || toRecordList(uiState.recentConversation).length
+    || toRecordList(uiState.recentExecutionRefs).length
+    || toRecordList(uiState.recentExecutionUnits).length
+    || toRecordList(uiState.executionUnits).length
+    || toRecordList(uiState.artifactIndex).length
+    || isRecord(uiState.conversationLedger)
+    || isRecord(uiState.contextProjection)
+    || isRecord(uiState.workspaceKernelProjection)
+    || isRecord(uiState.projectSessionMemoryProjection)) return false;
+  const contextReusePolicy = isRecord(uiState.contextReusePolicy) ? uiState.contextReusePolicy : {};
+  const contextIsolation = isRecord(uiState.contextIsolation) ? uiState.contextIsolation : {};
+  const mode = typeof contextReusePolicy.mode === 'string'
+    ? contextReusePolicy.mode
+    : typeof contextIsolation.mode === 'string'
+      ? contextIsolation.mode
+      : 'fresh';
+  if (mode !== 'fresh' && mode !== 'isolate') return false;
+  const sessionMessages = toRecordList(uiState.sessionMessages);
+  const nonSeedMessages = sessionMessages.filter((message) => {
+    const id = typeof message.id === 'string' ? message.id : '';
+    const role = typeof message.role === 'string' ? message.role : '';
+    return !id.startsWith('seed') && role !== 'scenario';
+  });
+  return nonSeedMessages.length <= 1;
+}
+
+/**
+ * When the Python conversation policy times out or fails, allow the request to proceed
+ * (degraded, without policy enrichment) if the UI transport has already classified this
+ * as a continuation or repair turn. This prevents fail-closed on policy timeout for
+ * continue turns where the transport's contextReusePolicy is a reliable signal.
+ *
+ * Only fires when: no explicit turn constraints, AND transport mode is 'continue'/'repair',
+ * AND historyReuse.allowed is not explicitly false.
+ */
+function policyFailureAllowsTransportContinuation(
+  request: GatewayRequest,
+  uiState: Record<string, unknown>,
+  constraints: ReturnType<typeof normalizeTurnExecutionConstraints>,
+) {
+  if (constraints) return false;
+  const contextReusePolicy = isRecord(uiState.contextReusePolicy) ? uiState.contextReusePolicy : {};
+  const contextIsolation = isRecord(uiState.contextIsolation) ? uiState.contextIsolation : {};
+  const mode = typeof contextReusePolicy.mode === 'string'
+    ? contextReusePolicy.mode
+    : typeof contextIsolation.mode === 'string'
+      ? contextIsolation.mode
+      : '';
+  if (mode !== 'continue' && mode !== 'repair') return false;
+  const historyReuse = isRecord(contextReusePolicy.historyReuse) ? contextReusePolicy.historyReuse : {};
+  return historyReuse.allowed !== false;
+}
+
 function agentServerDispatchForbiddenPayload(request: GatewayRequest): ToolPayload | undefined {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   const constraints = normalizeTurnExecutionConstraints(uiState.turnExecutionConstraints);
@@ -306,6 +398,34 @@ function agentServerDispatchForbiddenPayload(request: GatewayRequest): ToolPaylo
     constraints,
     refs,
     reasons: constraints.reasons,
+  });
+}
+
+function capabilityProviderUnavailablePayload(request: GatewayRequest): ToolPayload | undefined {
+  const preflight = capabilityProviderRoutesForGatewayInvocation(request);
+  if (preflight.ok || preflight.requiredCapabilityIds.length === 0) return undefined;
+  const publicPreflight = publicCapabilityProviderPreflightResult(preflight);
+  const skill = agentServerGenerationSkill(request.skillDomain);
+  const blockerSummaries = publicPreflight.blockingRoutes.map((route) => {
+    const provider = route.primaryProviderId ? ` via ${route.primaryProviderId}` : '';
+    return `${route.capabilityId}${provider}: ${route.status} (${route.reason})`;
+  });
+  const reason = [
+    'Capability provider route preflight blocked AgentServer dispatch because a required provider/tool route is not ready.',
+    ...blockerSummaries,
+  ].join(' ');
+  return repairNeededPayload(request, skill, reason, {
+    blocker: 'capability-provider-preflight',
+    executionUnitStatus: 'failed-with-reason',
+    evidenceRefs: publicPreflight.blockingRoutes.map((route) => route.routeTraceRef),
+    agentServerRefs: {
+      capabilityProviderPreflight: publicPreflight,
+    },
+    recoverActions: [
+      'Enable or authorize a provider for every required capability, then retry.',
+      'Select a different ready provider route for the blocked capability.',
+      'Remove the external provider/tool requirement when the task can be answered from existing refs.',
+    ],
   });
 }
 

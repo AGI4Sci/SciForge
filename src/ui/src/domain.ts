@@ -551,6 +551,7 @@ export interface SendAgentMessageInput {
   sessionId?: string;
   sessionCreatedAt?: string;
   sessionUpdatedAt?: string;
+  currentTurnId?: string;
   scenarioId: ScenarioInstanceId;
   agentName: string;
   agentDomain: string;
@@ -559,6 +560,7 @@ export interface SendAgentMessageInput {
   roleView: string;
   messages: SciForgeMessage[];
   artifacts?: RuntimeArtifact[];
+  claims?: Array<Pick<EvidenceClaim, 'id' | 'text' | 'type' | 'confidence' | 'evidenceLevel'> & Partial<Pick<EvidenceClaim, 'supportingRefs' | 'opposingRefs' | 'updatedAt'>>>;
   executionUnits?: RuntimeExecutionUnit[];
   runs?: SciForgeRun[];
   config: SciForgeConfig;

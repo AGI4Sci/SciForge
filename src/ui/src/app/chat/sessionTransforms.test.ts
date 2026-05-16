@@ -13,6 +13,7 @@ import {
   createGuidanceQueueRecord,
   createOptimisticUserTurnSession,
   mergeAgentResponseIntoSession,
+  mergeClaims,
   mergeExecutionUnits,
   mergeRuntimeArtifacts,
   requestPayloadForTurn,
@@ -398,6 +399,54 @@ test('next-turn continuation payload omits prior message expandable and raw task
   assert.doesNotMatch(serialized, /generated_task\.py/);
 });
 
+test('explicit old artifact follow-up only carries selected refs in request payload', () => {
+  const priorMessage = {
+    ...message('msg-prior', 'scenario', 'prior answer', '2026-05-07T00:00:00.000Z'),
+    objectReferences: [
+      { id: 'obj-old', kind: 'artifact' as const, ref: 'artifact:old-report', title: 'Old report' },
+      { id: 'obj-latest', kind: 'artifact' as const, ref: 'artifact:latest-report', title: 'Latest report' },
+    ],
+  };
+  const userMessage = message('msg-user', 'user', 'use the selected old report only', '2026-05-07T01:00:00.000Z');
+  const payload = requestPayloadForTurn(session({
+    messages: [priorMessage, userMessage],
+    artifacts: [{
+      id: 'old-report',
+      type: 'research-report',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: '1',
+      dataRef: 'file:.sciforge/artifacts/old-report.md',
+    }, {
+      id: 'latest-report',
+      type: 'research-report',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: '1',
+      dataRef: 'file:.sciforge/artifacts/latest-report.md',
+      data: { markdown: 'LATEST_REPORT_BODY_SHOULD_NOT_APPEAR' },
+    }],
+    runs: [{
+      id: 'run-latest',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'latest',
+      response: 'latest',
+      createdAt: '2026-05-07T00:30:00.000Z',
+      objectReferences: [{ id: 'obj-run-latest', kind: 'artifact', ref: 'artifact:latest-report', title: 'Latest report' }],
+    }],
+  }), userMessage, [{
+    id: 'ref-old',
+    kind: 'task-result',
+    title: 'Old report',
+    ref: 'artifact:old-report',
+  }]);
+  const serialized = JSON.stringify(payload);
+
+  assert.deepEqual(payload.artifacts.map((artifact) => artifact.id), ['old-report']);
+  assert.deepEqual(payload.runs, []);
+  assert.match(serialized, /artifact:old-report/);
+  assert.doesNotMatch(serialized, /latest-report|LATEST_REPORT_BODY_SHOULD_NOT_APPEAR/);
+});
+
 test('rolls back an edited user message and prunes later run-owned state', () => {
   const before: RuntimeExecutionUnit = {
     id: 'unit-before',
@@ -659,6 +708,11 @@ test('merges response records and failed runs without dropping existing session 
   });
 
   assert.deepEqual(mergeRuntimeArtifacts([nextArtifact], [baseArtifact]).map((item) => item.metadata?.title), ['new']);
+  assert.deepEqual(mergeClaims([
+    { id: 'claim-1', text: 'new', type: 'fact', confidence: 0.8, evidenceLevel: 'meta', supportingRefs: [], opposingRefs: [], updatedAt: '2026-05-07T01:00:01.000Z' },
+  ], [
+    { id: 'claim-1', text: 'old', type: 'fact', confidence: 0.4, evidenceLevel: 'meta', supportingRefs: [], opposingRefs: [], updatedAt: '2026-05-07T01:00:00.000Z' },
+  ]).map((item) => item.text), ['new']);
   assert.deepEqual(mergeExecutionUnits([{ id: 'u', tool: 'a', params: '', status: 'done', hash: '1' }], [{ id: 'u', tool: 'b', params: '', status: 'planned', hash: '0' }]).map((item) => item.tool), ['a']);
   assert.equal(merged.runs[0].scenarioPackageRef?.id, 'pkg');
   assert.equal(merged.artifacts[0].metadata?.title, 'new');

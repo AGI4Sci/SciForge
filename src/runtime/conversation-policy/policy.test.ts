@@ -97,6 +97,34 @@ test('applied Python conversation policy publishes structured turn constraints',
   assert.deepEqual(request.uiState?.turnExecutionConstraints, turnExecutionConstraints);
 });
 
+test('applied Python conversation policy preserves direct-context decision for gateway fast path', () => {
+  const directContextDecision = {
+    schemaVersion: 'sciforge.direct-context-decision.v1',
+    decisionRef: 'decision:conversation-policy:old-ref',
+    decisionOwner: 'harness-policy',
+    intent: 'run-diagnostic',
+    requiredTypedContext: ['run-trace', 'execution-units', 'failure-evidence'],
+    usedRefs: ['execution-unit:EU-old'],
+    sufficiency: 'sufficient',
+    allowDirectContext: true,
+  };
+  const response = normalizeConversationPolicyResponse({
+    schemaVersion: CONVERSATION_POLICY_RESPONSE_VERSION,
+    directContextDecision,
+    executionModePlan: { executionMode: 'direct-context-answer' },
+    turnExecutionConstraints: directContextTurnExecutionConstraints(),
+    latencyPolicy: { blockOnContextCompaction: false },
+    responsePlan: { initialResponseMode: 'direct-context-answer' },
+    backgroundPlan: {},
+    cachePolicy: {},
+  });
+
+  assert.ok(response);
+  const request = requestWithPolicyResponse(baseRequest(), response);
+  const conversationPolicy = request.uiState?.conversationPolicy as ConversationPolicyResponse | undefined;
+  assert.deepEqual(conversationPolicy?.directContextDecision, directContextDecision);
+});
+
 test('failed Python conversation policy preserves turn execution constraints fail-closed', async () => {
   const turnExecutionConstraints = directContextTurnExecutionConstraints();
   const events: WorkspaceRuntimeEvent[] = [];
@@ -186,6 +214,85 @@ test('conversation policy keeps recent execution refs out of current-turn refere
   assert.equal(result.status, 'applied');
   assert.deepEqual(currentRefs, ['file:current-input.md', 'artifact:current-report']);
   assert.equal(currentRefs.includes('execution-unit:old-run'), false);
+});
+
+test('conversation policy excludes optimistic current user message from prior session context', async () => {
+  const result = await applyConversationPolicy({
+    ...baseRequest(),
+    prompt: 'Create a fresh memo.',
+    uiState: {
+      ...baseRequest().uiState,
+      sessionMessages: [{
+        id: 'msg-current',
+        role: 'user',
+        content: 'Create a fresh memo.',
+        status: 'completed',
+      }],
+    },
+  }, {}, {
+    config: {
+      mode: 'active',
+      command: process.execPath,
+      args: ['-e', `
+        const fs = require('node:fs');
+        const request = JSON.parse(fs.readFileSync(0, 'utf8'));
+        if ((request.session.messages || []).length !== 0) process.exit(9);
+        process.stdout.write(JSON.stringify({
+          schemaVersion: 'sciforge.conversation-policy.response.v1',
+          goalSnapshot: { taskRelation: 'new-task' },
+          contextPolicy: { mode: 'isolate', historyReuse: { allowed: false } },
+          latencyPolicy: {},
+          responsePlan: {},
+          backgroundPlan: {},
+          cachePolicy: {}
+        }));
+      `],
+      timeoutMs: 500,
+    },
+  });
+
+  assert.equal(result.status, 'applied');
+  assert.equal((result.request.uiState?.contextReusePolicy as Record<string, unknown> | undefined)?.mode, 'isolate');
+});
+
+test('conversation policy keeps real prior messages while dropping only current user turn', async () => {
+  const result = await applyConversationPolicy({
+    ...baseRequest(),
+    prompt: 'Continue the memo.',
+    uiState: {
+      ...baseRequest().uiState,
+      sessionMessages: [
+        { id: 'msg-prior-user', role: 'user', content: 'Create a memo.', status: 'completed' },
+        { id: 'msg-prior-agent', role: 'scenario', content: 'Memo created.', status: 'completed' },
+        { id: 'msg-current', role: 'user', content: 'Continue the memo.', status: 'completed' },
+      ],
+    },
+  }, {}, {
+    config: {
+      mode: 'active',
+      command: process.execPath,
+      args: ['-e', `
+        const fs = require('node:fs');
+        const request = JSON.parse(fs.readFileSync(0, 'utf8'));
+        const ids = (request.session.messages || []).map((message) => message.id);
+        if (ids.includes('msg-current')) process.exit(10);
+        if (ids.length !== 2 || !ids.includes('msg-prior-user') || !ids.includes('msg-prior-agent')) process.exit(11);
+        process.stdout.write(JSON.stringify({
+          schemaVersion: 'sciforge.conversation-policy.response.v1',
+          goalSnapshot: { taskRelation: 'continue' },
+          contextPolicy: { mode: 'continue', historyReuse: { allowed: true } },
+          latencyPolicy: {},
+          responsePlan: {},
+          backgroundPlan: {},
+          cachePolicy: {}
+        }));
+      `],
+      timeoutMs: 500,
+    },
+  });
+
+  assert.equal(result.status, 'applied');
+  assert.equal((result.request.uiState?.contextReusePolicy as Record<string, unknown> | undefined)?.mode, 'continue');
 });
 
 test('context envelope and AgentServer prompt carry only clipped policy summaries', () => {

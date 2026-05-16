@@ -33,7 +33,7 @@ import { ContextWindowMeter } from './chat/ContextWindowMeter';
 import { SciForgeReferenceChips } from './chat/ReferenceChips';
 import { CURRENT_TARGET_INSTANCE_VALUE, enabledPeerInstances, selectedPeerInstance } from './chat/targetInstance';
 import { MessageContent, inlineObjectReferencesForMessage } from './chat/MessageContent';
-import { addComposerReferenceWithMarker, addPendingComposerReference, promptForComposerSend, removeComposerReference } from './chat/composerReferences';
+import { addComposerReferenceWithMarker, addPendingComposerReference, composerReferenceForObjectReference, promptForComposerSend, removeComposerReference } from './chat/composerReferences';
 import { runPromptOrchestrator } from './chat/runOrchestrator';
 import { appendRunningGuidanceRecord, appendUploadMessageToSession, applyHistoricalUserMessageEdit, attachGuidanceQueueToSessionRun, createGuidanceQueueRecord, mergeAgentResponseIntoSession, resolveGuidanceQueueAfterRun, updateGuidanceQueueRecords } from './chat/sessionTransforms';
 import { attachStreamProcessToFailedSession, attachStreamProcessToResponse, compactFailureNotice, guidanceBadgeVariant, guidanceStatusLabel, latestTokenUsage } from './chat/runPresentation';
@@ -155,6 +155,7 @@ export function ChatPanel({
   const [referenceContextMenu, setReferenceContextMenu] = useState<ReferenceContextMenuState | null>(null);
   const activeSessionRef = useRef(session);
   const inputRef = useRef(input);
+  const pendingReferencesRef = useRef<SciForgeReference[]>([]);
   const guidanceQueueRef = useRef<GuidanceQueueRecord[]>([]);
   const uiActionAuditLogRef = useRef<UIAction[]>([]);
   const streamEventsRef = useRef<AgentStreamEvent[]>([]);
@@ -193,6 +194,10 @@ export function ChatPanel({
   useEffect(() => {
     inputRef.current = input;
   }, [input]);
+
+  useEffect(() => {
+    pendingReferencesRef.current = pendingReferences;
+  }, [pendingReferences]);
 
   useEffect(() => {
     savedScrollTopRef.current = savedScrollTop;
@@ -381,7 +386,8 @@ export function ChatPanel({
   }, [scenarioId, session.sessionId]);
 
   async function handleSend() {
-    const prompt = promptForComposerSend(input, pendingReferences);
+    const currentPendingReferences = pendingReferencesRef.current;
+    const prompt = promptForComposerSend(inputRef.current, currentPendingReferences);
     if (!prompt) return;
     if (isSending) {
       handleRunningGuidance(prompt);
@@ -393,7 +399,7 @@ export function ChatPanel({
       setComposerExpanded(true);
       return;
     }
-    await submitTurn(prompt, pendingReferences);
+    await submitTurn(prompt, currentPendingReferences);
   }
 
   async function handleFileUpload(files: FileList | null) {
@@ -420,7 +426,16 @@ export function ChatPanel({
   }
 
   function addPendingReference(reference: SciForgeReference) {
-    setPendingReferences((current) => addPendingComposerReference(current, reference));
+    setPendingReferences((current) => {
+      const next = addPendingComposerReference(current, reference);
+      pendingReferencesRef.current = next;
+      return next;
+    });
+  }
+
+  function handleObjectReferenceClick(reference: ObjectReference) {
+    onObjectFocus(reference);
+    addPendingReferenceToComposer(composerReferenceForObjectReference(reference));
   }
 
   function addPendingReferenceToComposer(reference: SciForgeReference) {
@@ -430,6 +445,7 @@ export function ChatPanel({
       reference,
     });
     setPendingReferences(next.pendingReferences);
+    pendingReferencesRef.current = next.pendingReferences;
     inputRef.current = next.input;
     onInputChange(next.input);
   }
@@ -441,6 +457,7 @@ export function ChatPanel({
       referenceId,
     });
     setPendingReferences(next.pendingReferences);
+    pendingReferencesRef.current = next.pendingReferences;
     inputRef.current = next.input;
     onInputChange(next.input);
   }
@@ -925,7 +942,7 @@ export function ChatPanel({
                     <MessageContent
                       content={message.content}
                       references={inlineObjectReferencesForMessage(message, session)}
-                      onObjectFocus={onObjectFocus}
+                      onObjectFocus={handleObjectReferenceClick}
                     />
                   ) : (
                     <>
@@ -934,13 +951,14 @@ export function ChatPanel({
                           runId={messageRunId}
                           session={session}
                           trace={message.expandable}
-                          onObjectFocus={onObjectFocus}
+                          onObjectFocus={handleObjectReferenceClick}
                         />
                       ) : null}
                       <FinalMessageContent
                         content={message.content}
                         references={inlineObjectReferencesForMessage(message, session, messageRunId)}
-                        onObjectFocus={onObjectFocus}
+                        resultPresentation={resultPresentationForRun(session, messageRunId)}
+                        onObjectFocus={handleObjectReferenceClick}
                       />
                     </>
                   )}
@@ -948,7 +966,7 @@ export function ChatPanel({
                     <RunKeyInfo
                       runId={messageRunId}
                       session={session}
-                      onObjectFocus={onObjectFocus}
+                      onObjectFocus={handleObjectReferenceClick}
                     />
                   ) : null}
                 </>
@@ -1124,6 +1142,17 @@ function referenceTargetFromEvent(event: MouseEvent): { element: HTMLElement; re
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function resultPresentationForRun(session: SciForgeSession, runId: string | undefined) {
+  if (!runId) return undefined;
+  const run = session.runs.find((item) => item.id === runId);
+  const raw = isRecord(run?.raw) ? run.raw : undefined;
+  if (!raw) return undefined;
+  const direct = raw.resultPresentation;
+  // Only use the top-level resultPresentation. raw.displayIntent is runtime audit/diagnostic
+  // data used by the results panel; it must NOT drive the chat message body.
+  return isRecord(direct) ? direct : undefined;
 }
 
 async function copyTextToClipboard(text: string) {

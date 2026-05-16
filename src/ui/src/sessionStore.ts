@@ -34,7 +34,13 @@ import {
   userGoalTypes,
 } from './runtimeContracts';
 
-const STORAGE_KEY = 'sciforge.workspace.v2';
+const buildDefaults = (import.meta as ImportMeta & {
+  env?: Record<string, string | undefined>;
+}).env ?? {};
+const SCIFORGE_INSTANCE_ID = cleanStorageKeySegment(buildDefaults.VITE_SCIFORGE_INSTANCE_ID);
+const STORAGE_KEY = SCIFORGE_INSTANCE_ID
+  ? `sciforge.workspace.v2.${SCIFORGE_INSTANCE_ID}`
+  : 'sciforge.workspace.v2';
 const scenarioIds: ScenarioId[] = scenarios.map((scenario) => scenario.id);
 const SESSION_REVISION_KEY = '__sciforgeSessionRevision';
 const SESSION_BASE_REVISION_KEY = '__sciforgeSessionBaseRevision';
@@ -44,6 +50,10 @@ const WORKSPACE_BASE_REVISION_KEY = '__sciforgeWorkspaceBaseRevision';
 const SESSION_WRITE_CONFLICT_LIMIT = 20;
 const RUNTIME_COMPATIBILITY_VERSION = 'sciforge-runtime-compatibility-2026-05-13';
 const RUNTIME_COMPATIBILITY_DIAGNOSTIC_LIMIT = 8;
+
+function cleanStorageKeySegment(value: unknown) {
+  return typeof value === 'string' ? value.trim().replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') : '';
+}
 
 export type SessionCollectionKey = 'title' | 'messages' | 'runs' | 'uiManifest' | 'claims' | 'executionUnits' | 'artifacts' | 'notebook' | 'hiddenResultSlotIds';
 type SessionCollectionRevisions = Record<SessionCollectionKey, string>;
@@ -436,7 +446,7 @@ function compactArtifactData(data: unknown) {
   if (Array.isArray(data)) return data.slice(0, 20);
   if (typeof data !== 'object' || data === null) return data;
   const compact: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(data).slice(0, 24)) {
+  for (const [key, value] of prioritizedCompactEntries(data)) {
     if (typeof value === 'string') {
       compact[key] = isLargeBinaryField(key, value)
         ? compactBinaryMarker(value)
@@ -446,6 +456,28 @@ function compactArtifactData(data: unknown) {
     else compact[key] = value;
   }
   return compact;
+}
+
+const COMPACT_CONTRACT_KEYS = [
+  'displayIntent',
+  'resultPresentation',
+  'conversationEventLog',
+  'taskOutcomeProjection',
+  'conversationProjection',
+  'taskRunCard',
+];
+
+function prioritizedCompactEntries(data: object) {
+  const entries = Object.entries(data);
+  const selected = new Map<string, unknown>();
+  for (const key of COMPACT_CONTRACT_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(data, key)) selected.set(key, (data as Record<string, unknown>)[key]);
+  }
+  for (const [key, value] of entries) {
+    if (selected.size >= 24) break;
+    if (!selected.has(key)) selected.set(key, value);
+  }
+  return Array.from(selected.entries());
 }
 
 function compactSessionSnapshotForStorage(

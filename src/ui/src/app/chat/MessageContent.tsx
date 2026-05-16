@@ -4,6 +4,7 @@ import {
   artifactHasUserFacingDelivery,
   hasExplicitUserFacingObjectReferenceRole,
   mergeObjectReferences,
+  objectReferencePresentationRole,
   objectReferenceForArtifactSummary,
 } from '../../../../../packages/support/object-references';
 import { MarkdownRenderer } from '../markdown/MarkdownRenderer';
@@ -54,13 +55,35 @@ export function unmentionedObjectReferencesForMessage(message: SciForgeMessage, 
 
 function isVisibleMessageObjectReference(reference: ObjectReference, session: SciForgeSession, options: { userSelected?: boolean } = {}) {
   const hasExplicitUserFacingRole = hasExplicitUserFacingObjectReferenceRole(reference);
+  const role = objectReferencePresentationRole(reference);
   if (reference.kind === 'artifact') {
-    return artifactHasUserFacingDelivery(artifactForObjectReference(reference, session));
+    const artifact = artifactForObjectReference(reference, session);
+    return artifactHasUserFacingDelivery(artifact)
+      && role !== 'audit'
+      && role !== 'diagnostic'
+      && role !== 'internal';
   }
   if (!options.userSelected && !hasExplicitUserFacingRole) return false;
+  if (!options.userSelected && isPrivateReference(reference)) return false;
   if (reference.kind === 'file') {
     const path = reference.provenance?.path ?? reference.ref;
-    return !/\.json(?:$|[?#])/i.test(path);
+    return !/\.json(?:$|[?#])/i.test(path) && !isPrivateRefText(path);
   }
   return reference.kind === 'url' || reference.kind === 'folder';
+}
+
+function isPrivateReference(reference: ObjectReference) {
+  return isPrivateRefText(reference.ref)
+    || isPrivateRefText(reference.title)
+    || isPrivateRefText(reference.summary)
+    || isPrivateRefText(reference.provenance?.path)
+    || isPrivateRefText(reference.provenance?.dataRef);
+}
+
+function isPrivateRefText(value: string | undefined) {
+  return typeof value === 'string' && (
+    /\.sciforge\/sessions\//i.test(value)
+    || /^agentserver:\/\//i.test(value)
+    || /\b(?:stdoutRef|stderrRef|rawRef)\b/i.test(value)
+  );
 }

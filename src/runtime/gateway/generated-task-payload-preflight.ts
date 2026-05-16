@@ -265,8 +265,11 @@ function directExternalNetworkUses(source: string) {
     ['urllib', /(?:^|\n)\s*(?:import\s+urllib(?:\.request)?\b|from\s+urllib\b)|\burllib\.request\.(?:urlopen|Request)\b/],
     ['httpx', /(?:^|\n)\s*(?:import\s+httpx\b|from\s+httpx\b)|\bhttpx\.(?:get|post|put|patch|delete|request|Client|AsyncClient)\b/],
     ['aiohttp', /(?:^|\n)\s*(?:import\s+aiohttp\b|from\s+aiohttp\b)|\baiohttp\.ClientSession\b/],
+    ['socket', /(?:^|\n)\s*(?:import\s+socket\b|from\s+socket\b)|\bsocket\.(?:socket|create_connection|create_server)\s*\(/],
+    ['http.client', /(?:^|\n)\s*(?:import\s+http\.client\b|from\s+http\.client\b)|\bhttp\.client\.(?:HTTPConnection|HTTPSConnection)\s*\(/],
     ['fetch', /\bfetch\s*\(/],
     ['node:http', /(?:^|\n)\s*(?:import\s+.*\bfrom\s+["']node:https?["']|import\s+.*\bfrom\s+["']https?["']|(?:require|import)\s*\(\s*["'](?:node:)?https?["']\s*\))/],
+    ['curl/wget', /\b(?:subprocess\.(?:run|Popen|call|check_call|check_output)|os\.system)\s*\([^)\n]*(?:curl|wget)\b/],
   ];
   for (const [label, pattern] of patterns) {
     if (pattern.test(stripped)) uses.add(label);

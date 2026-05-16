@@ -82,6 +82,24 @@ class ConversationPolicyContractTest(unittest.TestCase):
         self.assertTrue(response.turnExecutionConstraints["agentServerForbidden"])
         self.assertEqual(to_json_dict(response)["schemaVersion"], RESPONSE_SCHEMA_VERSION)
 
+    def test_response_preserves_direct_context_decision(self):
+        payload = _read_fixture("response_basic.json")
+        payload["directContextDecision"] = {
+            "schemaVersion": "sciforge.direct-context-decision.v1",
+            "decisionRef": "decision:conversation-policy:refs",
+            "decisionOwner": "harness-policy",
+            "intent": "run-diagnostic",
+            "requiredTypedContext": ["run-trace", "execution-units", "failure-evidence"],
+            "usedRefs": ["execution-unit:EU-old"],
+            "sufficiency": "sufficient",
+            "allowDirectContext": True,
+        }
+
+        response = response_from_json(payload)
+        result = to_json_dict(response)
+
+        self.assertEqual(result["directContextDecision"]["decisionRef"], "decision:conversation-policy:refs")
+
     def test_response_legacy_projection_field_is_migration_alias_only(self):
         payload = _read_fixture("response_basic.json")
         legacy_projection = {"schemaVersion": "sciforge.conversation.handoff-memory-projection.v1"}
@@ -169,6 +187,53 @@ class ConversationPolicyContractTest(unittest.TestCase):
         self.assertEqual(result["turnExecutionConstraints"]["executionModeHint"], "direct-context-answer")
         self.assertTrue(result["turnExecutionConstraints"]["agentServerForbidden"])
         self.assertEqual(result["executionModePlan"]["executionMode"], "direct-context-answer")
+        self.assertEqual(result["directContextDecision"]["decisionOwner"], "harness-policy")
+        self.assertEqual(result["directContextDecision"]["intent"], "context-summary")
+        self.assertEqual(result["directContextDecision"]["usedRefs"], ["reports/current.md"])
+
+    def test_service_emits_run_diagnostic_direct_context_decision_for_selected_execution_unit(self):
+        request = {
+            "schemaVersion": REQUEST_SCHEMA_VERSION,
+            "requestId": "selected-execution-unit-no-exec",
+            "turn": {
+                "text": "Use selected current refs only.",
+                "refs": [{"kind": "execution-unit", "ref": "execution-unit:EU-failed"}],
+            },
+            "session": {
+                "executionUnits": [{
+                    "id": "EU-failed",
+                    "ref": "execution-unit:EU-failed",
+                    "status": "repair-needed",
+                    "failureReason": "bounded failure",
+                    "outputRef": ".sciforge/task-results/failed.json",
+                }],
+            },
+            "tsDecisions": {
+                "turnExecutionConstraints": {
+                    "schemaVersion": "sciforge.turn-execution-constraints.v1",
+                    "policyId": "sciforge.current-turn-execution-constraints.v1",
+                    "source": "runtime-contract.turn-constraints",
+                    "contextOnly": True,
+                    "agentServerForbidden": True,
+                    "workspaceExecutionForbidden": True,
+                    "externalIoForbidden": True,
+                    "codeExecutionForbidden": True,
+                    "preferredCapabilityIds": ["runtime.direct-context-answer"],
+                    "executionModeHint": "direct-context-answer",
+                    "initialResponseModeHint": "direct-context-answer",
+                }
+            },
+        }
+
+        result = handle_payload(request)
+
+        self.assertEqual(result["executionModePlan"]["executionMode"], "direct-context-answer")
+        self.assertEqual(result["directContextDecision"]["intent"], "run-diagnostic")
+        self.assertEqual(result["directContextDecision"]["usedRefs"], ["execution-unit:EU-failed"])
+        self.assertEqual(
+            result["directContextDecision"]["requiredTypedContext"],
+            ["run-trace", "execution-units", "failure-evidence"],
+        )
 
     def test_service_returns_structured_stdio_json(self):
         request_text = json.dumps(_read_fixture("request_basic.json"))

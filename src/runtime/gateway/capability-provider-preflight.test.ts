@@ -243,6 +243,38 @@ test('capability provider preflight detects underscored selected tool names', ()
   assert.equal(result.ok, true);
 });
 
+test('capability provider preflight treats explicit capability ids in prompts as required routes', () => {
+  const result = capabilityProviderPreflight({
+    skillDomain: 'literature',
+    prompt: 'Require web_search and web_fetch provider routes for this retrieval task.',
+    artifacts: [],
+    uiState: {
+      capabilityProviderAvailability: [
+        {
+          id: 'sciforge.web-worker.web_search',
+          providerId: 'sciforge.web-worker.web_search',
+          capabilityId: 'web_search',
+          available: false,
+          status: 'provider-unavailable',
+          reason: 'provider health check failed',
+        },
+        {
+          id: 'sciforge.web-worker.web_fetch',
+          providerId: 'sciforge.web-worker.web_fetch',
+          capabilityId: 'web_fetch',
+          available: false,
+          status: 'provider-unavailable',
+          reason: 'provider health check failed',
+        },
+      ],
+    },
+  } as GatewayRequest);
+
+  assert.deepEqual(result.requiredCapabilityIds, ['web_fetch', 'web_search']);
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.blockingRoutes.map((route) => route.capabilityId), ['web_fetch', 'web_search']);
+});
+
 function assertNoProviderRouteLeaks(value: unknown) {
   const serialized = JSON.stringify(value);
   assert.doesNotMatch(serialized, /(?:\\")?(endpoint|baseUrl|invokeUrl|invokePath|workerId|runtimeLocation|auth|workspaceRoots)(?:\\")?\s*:/);

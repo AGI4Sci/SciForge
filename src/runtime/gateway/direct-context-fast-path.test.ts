@@ -66,6 +66,40 @@ test('context follow-up protocol enables direct context answer even when AgentSe
   assert.match(payload.message, /research-report|report/i);
 });
 
+test('context follow-up summarizes risk claims from current context instead of dumping refs', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'Continue from the current memo artifact only. Summarize the two risks in one short Chinese paragraph. No web or external provider.',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [{
+      id: 'current-memo',
+      type: 'research-report',
+      data: {
+        markdown: '风险 1：上下文窗口膨胀可能导致投影漂移。风险 2：多阶段状态恢复不一致可能导致重复 repair。',
+      },
+      metadata: { reportRef: '.sciforge/task-results/current-memo.md' },
+    }],
+    uiState: {
+      directContextDecision: directDecision(),
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        directContextDecision: directDecision(),
+        executionModePlan: { executionMode: 'direct-context-answer' },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+      },
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.match(payload.message, /上下文窗口膨胀/);
+  assert.match(payload.message, /状态恢复不一致/);
+  assert.doesNotMatch(payload.message, /^1\./m);
+  assert.equal(payload.executionUnits[0]?.tool, 'sciforge.direct-context-fast-path');
+});
+
 test('direct context fast path answers skill tool capability provider status queries from runtime registry', () => {
   const request: GatewayRequest = {
     skillDomain: 'literature',
@@ -264,6 +298,102 @@ test('explicit no-execution context summary uses direct fast path from applied c
   assert.match(JSON.stringify(payload.artifacts[0]?.metadata ?? {}), /directContextGate/);
   assert.match(payload.message, /Digest: prior run preserved failed output refs/);
   assert.match(payload.message, /failed\.json|failed\.stderr\.log/);
+});
+
+test('run-diagnostic direct context can answer from selected execution-unit refs only', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'No rerun, no tools. Use the selected ref only to summarize blocker and recover actions.',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [],
+    references: [{ ref: 'execution-unit:EU-literature-failed', title: 'Failed execution unit' }],
+    uiState: {
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        directContextDecision: directDecision('run-diagnostic', {
+          requiredTypedContext: ['execution-units', 'failure-evidence'],
+          usedRefs: ['execution-unit:EU-literature-failed'],
+        }),
+        executionModePlan: {
+          executionMode: 'direct-context-answer',
+          signals: ['run-diagnostic', 'no-execution-directive'],
+        },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+        latencyPolicy: { blockOnContextCompaction: false },
+      },
+      currentReferences: [{ ref: 'execution-unit:EU-literature-failed', title: 'Failed execution unit', kind: 'execution-unit' }],
+      recentExecutionRefs: [{
+        id: 'EU-literature-failed',
+        status: 'repair-needed',
+        outputRef: '.sciforge/task-results/failed.json',
+        stderrRef: '.sciforge/logs/failed.stderr.log',
+        failureReason: 'AgentServer generation stopped by convergence guard.',
+        recoverActions: ['Retry with selected refs only.'],
+        nextStep: 'Use currentReferenceDigests instead of broad history.',
+      }],
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.equal(payload.executionUnits[0]?.tool, 'sciforge.direct-context-fast-path');
+  assert.equal(payload.executionUnits[0]?.status, 'done');
+  assert.match(payload.message, /EU-literature-failed|failed\.json|failed\.stderr\.log/);
+  assert.doesNotMatch(payload.message, /AgentServer generation request registered/);
+});
+
+test('applied context-only constraints do not synthesize direct context without DirectContextDecision', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'No rerun, no tools. Summarize blocker and recover actions from current refs.',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [],
+    uiState: {
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        executionModePlan: {
+          executionMode: 'direct-context-answer',
+          signals: ['run-diagnostic', 'no-execution-directive'],
+        },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+        latencyPolicy: { blockOnContextCompaction: false },
+      },
+      turnExecutionConstraints: {
+        schemaVersion: 'sciforge.turn-execution-constraints.v1',
+        policyId: 'sciforge.current-turn-execution-constraints.v1',
+        source: 'runtime-contract.turn-constraints',
+        contextOnly: true,
+        workspaceExecutionForbidden: true,
+        externalIoForbidden: true,
+        codeExecutionForbidden: true,
+        preferredCapabilityIds: ['runtime.direct-context-answer'],
+        executionModeHint: 'direct-context-answer',
+        initialResponseModeHint: 'direct-context-answer',
+        reasons: ['current turn requested context-only or no-execution handling'],
+        evidence: {
+          hasPriorContext: true,
+          referenceCount: 0,
+          artifactCount: 1,
+          executionRefCount: 1,
+          runCount: 0,
+        },
+      },
+      recentExecutionRefs: [{
+        id: 'EU-literature-failed',
+        status: 'repair-needed',
+        outputRef: '.sciforge/task-results/failed.json',
+        failureReason: 'Prior run exceeded a bounded generation guard.',
+        recoverActions: ['Continue with selected refs only.'],
+      }],
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.equal(payload, undefined);
 });
 
 test('applied direct context policy does not answer from historical execution refs alone', () => {

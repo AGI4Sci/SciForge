@@ -147,14 +147,15 @@ export function normalizeWorkspaceRuntimeEvent(raw: unknown): AgentStreamEvent {
   const contextWindowState = normalizeContextWindowState(contextWindowCandidate(record), type, record);
   const contextCompaction = normalizeContextCompaction(record.contextCompaction ?? record.compaction ?? record.context_compaction, type, record);
   const workEvidence = normalizeWorkEvidenceRecords(record.workEvidence ?? record.work_evidence);
+  const rawFallbackDetail = rawEventDetailFallback(record);
   const baseDetail = interactionProgress?.detail
-    || asString(record.detail)
-    || asString(record.message)
-    || asString(record.text)
-    || asString(record.output)
-    || asString(record.status)
-    || asString(record.error)
-    || (Object.keys(record).length ? JSON.stringify(record) : undefined);
+    || safeVisibleDetail(record.detail, rawFallbackDetail)
+    || safeVisibleDetail(record.message, rawFallbackDetail)
+    || safeVisibleDetail(record.text, rawFallbackDetail)
+    || safeVisibleDetail(record.output, rawFallbackDetail)
+    || safeVisibleDetail(record.status, rawFallbackDetail)
+    || safeVisibleDetail(record.error, rawFallbackDetail)
+    || rawFallbackDetail;
   const usageDetail = formatTokenUsage(usage);
   const detail = [baseDetail, usageDetail].filter(Boolean).join(' | ') || undefined;
   return {
@@ -169,6 +170,31 @@ export function normalizeWorkspaceRuntimeEvent(raw: unknown): AgentStreamEvent {
     createdAt: nowIso(),
     raw,
   };
+}
+
+function rawEventDetailFallback(record: Record<string, unknown>) {
+  if (!Object.keys(record).length) return undefined;
+  const rawShaped = ['payload', 'raw', 'stdoutRef', 'stderrRef', 'rawRef', 'runtimeEventsRef'].some((key) => key in record);
+  if (!rawShaped) return undefined;
+  return 'Runtime event recorded; structured details are available in the run audit.';
+}
+
+function safeVisibleDetail(value: unknown, rawFallback: string | undefined) {
+  const text = asString(value);
+  if (!text) return undefined;
+  if (rawFallback && (isLowInformationStatus(text) || looksPrivateRuntimeText(text))) return rawFallback;
+  return text;
+}
+
+function isLowInformationStatus(value: string) {
+  return /^(?:failed|error|ok|true|false|null|undefined)$/i.test(value.trim());
+}
+
+function looksPrivateRuntimeText(value: string) {
+  return /^[{[]/.test(value.trim())
+    || /\b(?:stdoutRef|stderrRef|rawRef|runtimeEventsRef)\b/i.test(value)
+    || /\bhttps?:\/\/[^\s"'<>]+/i.test(value)
+    || /\b(?:Invalid token|Unauthorized|Forbidden)\b/i.test(value);
 }
 
 function normalizeWorkEvidenceRecords(value: unknown): AgentStreamEvent['workEvidence'] | undefined {

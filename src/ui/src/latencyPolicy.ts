@@ -4,6 +4,7 @@ export interface RuntimeLatencyPolicy {
   firstVisibleResponseMs?: number;
   firstEventWarningMs?: number;
   silentRetryMs?: number;
+  stallBoundMs?: number;
   requestTimeoutMs?: number;
   blockOnContextCompaction?: boolean;
   blockOnVerification?: boolean;
@@ -20,11 +21,13 @@ export interface RuntimeLatencyThresholds {
   firstEventWarningMs: number;
   silentRetryMs: number;
   requestTimeoutMs: number;
+  stallBoundMs: number;
 }
 
 export const SAFE_LATENCY_THRESHOLDS = {
   firstEventWarningMs: 20_000,
   silentRetryMs: 45_000,
+  stallBoundMs: 120_000,
 } as const;
 
 export function latencyThresholdsFromPolicy(
@@ -32,9 +35,11 @@ export function latencyThresholdsFromPolicy(
   config: Pick<SciForgeConfig, 'requestTimeoutMs'>,
 ): RuntimeLatencyThresholds {
   const record = isRecord(policy) ? policy : {};
+  const requestedStallBoundMs = positiveMs(record.stallBoundMs) ?? SAFE_LATENCY_THRESHOLDS.stallBoundMs;
   return {
     firstEventWarningMs: positiveMs(record.firstEventWarningMs) ?? SAFE_LATENCY_THRESHOLDS.firstEventWarningMs,
     silentRetryMs: positiveMs(record.silentRetryMs) ?? SAFE_LATENCY_THRESHOLDS.silentRetryMs,
+    stallBoundMs: Math.min(requestedStallBoundMs, SAFE_LATENCY_THRESHOLDS.stallBoundMs),
     requestTimeoutMs: positiveMs(record.requestTimeoutMs)
       ?? positiveMs(record.totalTimeoutMs)
       ?? positiveMs(record.timeoutMs)
@@ -49,6 +54,7 @@ export function extractLatencyPolicy(value: unknown): RuntimeLatencyPolicy | und
     firstVisibleResponseMs: positiveMs(policy.firstVisibleResponseMs),
     firstEventWarningMs: positiveMs(policy.firstEventWarningMs),
     silentRetryMs: positiveMs(policy.silentRetryMs),
+    stallBoundMs: positiveMs(policy.stallBoundMs),
     requestTimeoutMs: positiveMs(policy.requestTimeoutMs) ?? positiveMs(policy.totalTimeoutMs) ?? positiveMs(policy.timeoutMs),
     blockOnContextCompaction: booleanField(policy.blockOnContextCompaction),
     blockOnVerification: booleanField(policy.blockOnVerification),

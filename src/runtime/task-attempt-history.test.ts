@@ -272,3 +272,76 @@ test('task attempt history hydrates ConversationProjection summary from task out
     await rm(workspace, { recursive: true, force: true });
   }
 });
+
+test('task attempts materialize terminal ConversationProjection into session runs without raw output bodies', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-task-terminal-projection-'));
+  const sessionBundleRef = '.sciforge/sessions/2026-05-12_literature_session-terminal';
+  const outputRef = `${sessionBundleRef}/task-results/generated-literature-terminal.json`;
+  try {
+    await mkdir(join(workspace, sessionBundleRef, 'records'), { recursive: true });
+    await mkdir(join(workspace, sessionBundleRef, 'task-results'), { recursive: true });
+    await writeFile(join(workspace, sessionBundleRef, 'records/session.json'), JSON.stringify({
+      schemaVersion: 2,
+      sessionId: 'session-terminal',
+      scenarioId: 'literature-evidence-review',
+      title: 'terminal projection',
+      messages: [],
+      runs: [],
+      executionUnits: [],
+      artifacts: [],
+      createdAt: '2026-05-12T00:00:00.000Z',
+      updatedAt: '2026-05-12T00:00:00.000Z',
+    }), 'utf8');
+    await writeFile(join(workspace, sessionBundleRef, 'records/runs.json'), '[]', 'utf8');
+    await writeFile(join(workspace, outputRef), JSON.stringify({
+      displayIntent: {
+        conversationProjection: {
+          schemaVersion: 'sciforge.conversation-projection.v1',
+          conversationId: 'conversation:terminal',
+          visibleAnswer: {
+            status: 'satisfied',
+            text: 'Readable answer from Projection.',
+            artifactRefs: ['artifact:terminal-memo'],
+          },
+          activeRun: { id: 'run:terminal-projection', status: 'satisfied' },
+          recoverActions: [],
+          artifacts: [{ id: 'artifact:terminal-memo' }],
+          executionProcess: [],
+          auditRefs: [`${sessionBundleRef}/task-results/generated-literature-terminal.json`],
+        },
+      },
+      message: 'RAW BODY THAT MUST NOT BE COPIED INTO THE SESSION RUN',
+      reasoningTrace: 'RAW TRACE THAT MUST NOT BE COPIED INTO THE SESSION RUN',
+    }), 'utf8');
+
+    await appendTaskAttempt(workspace, {
+      id: 'generated-literature-terminal',
+      prompt: 'create a readable artifact',
+      skillDomain: 'literature',
+      skillId: 'agentserver.generate.literature',
+      scenarioPackageRef: { id: 'literature-evidence-review', version: '1.0.0', source: 'built-in' },
+      attempt: 1,
+      status: 'done',
+      outputRef,
+      stdoutRef: `${sessionBundleRef}/logs/generated.stdout.log`,
+      stderrRef: `${sessionBundleRef}/logs/generated.stderr.log`,
+      sessionId: 'session-terminal',
+      sessionBundleRef,
+      createdAt: '2026-05-12T00:01:00.000Z',
+    } as TaskAttemptRecord);
+
+    const session = JSON.parse(await readFile(join(workspace, sessionBundleRef, 'records/session.json'), 'utf8'));
+    const runs = JSON.parse(await readFile(join(workspace, sessionBundleRef, 'records/runs.json'), 'utf8'));
+    assert.equal(runs.length, 1);
+    assert.equal(runs[0].id, 'run:terminal-projection');
+    assert.equal(runs[0].status, 'completed');
+    assert.equal(runs[0].response, 'Readable answer from Projection.');
+    assert.equal(runs[0].raw.displayIntent.conversationProjection.visibleAnswer.text, 'Readable answer from Projection.');
+    assert.equal(session.materializedConversationProjection.visibleAnswer.text, 'Readable answer from Projection.');
+    assert.equal(session.materializedConversationProjections.currentRunId, 'run:terminal-projection');
+    assert.equal(JSON.stringify(runs).includes('RAW BODY THAT MUST NOT BE COPIED'), false);
+    assert.equal(JSON.stringify(runs).includes('RAW TRACE THAT MUST NOT BE COPIED'), false);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});

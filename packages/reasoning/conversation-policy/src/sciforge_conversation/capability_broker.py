@@ -7,7 +7,7 @@ module remains for Python callers that still import the historical
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 import json
 from pathlib import Path
 from typing import Any, Iterable, Literal, Mapping, Sequence
@@ -257,7 +257,7 @@ def _coerce_request(request: CapabilityRequest | Mapping[str, Any]) -> Capabilit
 
 
 def _normalize_manifest(manifest: Mapping[str, Any], index: int) -> tuple[dict[str, Any], str | None]:
-    normalized = dict(manifest)
+    normalized = _manifest_mapping(manifest)
     capability_id = _text(normalized.get("id"))
     kind = _normalize_kind(normalized.get("kind"))
     if not capability_id:
@@ -266,6 +266,18 @@ def _normalize_manifest(manifest: Mapping[str, Any], index: int) -> tuple[dict[s
         return normalized, f"{capability_id} has unsupported or missing kind"
     normalized["kind"] = kind
     return normalized, None
+
+
+def _manifest_mapping(manifest: Any) -> dict[str, Any]:
+    if is_dataclass(manifest):
+        return asdict(manifest)
+    if isinstance(manifest, Mapping):
+        return dict(manifest)
+    to_dict = getattr(manifest, "to_dict", None)
+    if callable(to_dict):
+        value = to_dict()
+        return dict(value) if isinstance(value, Mapping) else {}
+    return {}
 
 
 def _compact_summary(manifest: Mapping[str, Any], why: str) -> dict[str, Any]:

@@ -297,7 +297,7 @@ function PresentationInputNotice({
       )}
       <div className="source-list">
         {path ? <code>{path}</code> : null}
-        {input.rawRef ? <code>rawRef: {input.rawRef}</code> : null}
+        {input.rawRef ? <span className="muted-inline">原始材料已保留用于审计</span> : null}
       </div>
       {path ? <UnsupportedPreviewPackageNotice reference={reference} path={path} onRequest={onRequest} /> : null}
     </div>

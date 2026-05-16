@@ -19,6 +19,20 @@ const STARTUP_TIMEOUT_MS = Number(process.env.SCIFORGE_RUNTIME_START_TIMEOUT_MS 
 export default defineConfig({
   plugins: [react(), sciForgeRuntimeLauncher()],
   root: 'src/ui',
+  define: {
+    'import.meta.env.VITE_SCIFORGE_INSTANCE_ID': JSON.stringify(
+      process.env.SCIFORGE_INSTANCE_ID || process.env.SCIFORGE_INSTANCE || '',
+    ),
+    'import.meta.env.VITE_SCIFORGE_DEFAULT_AGENT_SERVER_URL': JSON.stringify(
+      process.env.SCIFORGE_AGENT_SERVER_URL || `http://127.0.0.1:${AGENT_SERVER_PORT}`,
+    ),
+    'import.meta.env.VITE_SCIFORGE_DEFAULT_WORKSPACE_WRITER_URL': JSON.stringify(
+      process.env.SCIFORGE_WORKSPACE_WRITER_URL || `http://127.0.0.1:${WORKSPACE_PORT}`,
+    ),
+    'import.meta.env.VITE_SCIFORGE_DEFAULT_WORKSPACE_PATH': JSON.stringify(
+      process.env.SCIFORGE_WORKSPACE_PATH || '/Applications/workspace/ailab/research/app/SciForge/workspace',
+    ),
+  },
   build: {
     outDir: '../../dist-ui',
     emptyOutDir: true,

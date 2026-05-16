@@ -310,6 +310,49 @@ test('compactWorkspaceStateForStorage strips binary dataUrls from artifacts and 
   assert.ok(serialized.includes('binary-or-data-url'));
 });
 
+test('compactWorkspaceStateForStorage preserves projection contract keys before raw truncation', () => {
+  const raw = Object.fromEntries(Array.from({ length: 32 }, (_, index) => [`debugKey${index}`, `debug-${index}`])) as Record<string, unknown>;
+  raw.displayIntent = {
+    conversationProjection: {
+      schemaVersion: 'sciforge.conversation-projection.v1',
+      conversationId: 'session-projection',
+      visibleAnswer: { status: 'satisfied', text: 'Persisted answer' },
+      activeRun: { id: 'run-projection', status: 'satisfied' },
+      artifacts: [],
+      executionProcess: [],
+      recoverActions: ['Retry from persisted projection'],
+    },
+  };
+  raw.resultPresentation = { schemaVersion: 'sciforge.result-presentation.v1' };
+  const state = parseWorkspaceState({
+    schemaVersion: 2,
+    workspacePath: '/tmp/sciforge-workspace',
+    sessionsByScenario: {
+      'literature-evidence-review': {
+        ...sessionFixture('projection-session', ['make answer']),
+        runs: [{
+          id: 'run-projection',
+          scenarioId: 'literature-evidence-review',
+          status: 'completed',
+          prompt: 'make answer',
+          response: 'done',
+          createdAt: '2026-04-25T00:00:00.000Z',
+          raw,
+        }],
+      },
+    },
+    archivedSessions: [],
+    updatedAt: '2026-04-25T00:00:00.000Z',
+  });
+
+  const compact = compactWorkspaceStateForStorage(state, 'minimal');
+  const compactRaw = compact.sessionsByScenario['literature-evidence-review'].runs[0]?.raw as Record<string, unknown> | undefined;
+
+  assert.ok(compactRaw?.displayIntent);
+  assert.ok(compactRaw?.resultPresentation);
+  assert.equal(Object.keys(compactRaw ?? {}).length, 24);
+});
+
 test('parseWorkspaceState records runtime drift for old sessions but not empty seed sessions', () => {
   const current = currentRuntimeCompatibilityFingerprint();
   const state = parseWorkspaceState({

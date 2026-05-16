@@ -110,6 +110,18 @@ class GoalSnapshotTest(unittest.TestCase):
         self.assertEqual(snapshot["turnExecutionConstraints"]["executionModeHint"], "direct-context-answer")
         self.assertTrue(snapshot["turnExecutionConstraints"]["workspaceExecutionForbidden"])
 
+    def test_current_named_artifact_only_emits_context_only_constraints(self) -> None:
+        snapshot = build_goal_snapshot(
+            {
+                "prompt": "Continue from the current memo artifact only. Summarize the risks.",
+                "session": {"artifacts": [{"id": "memo-1"}]},
+            }
+        )
+
+        self.assertEqual(snapshot["taskRelation"], "continue")
+        self.assertEqual(snapshot["turnExecutionConstraints"]["executionModeHint"], "direct-context-answer")
+        self.assertTrue(snapshot["turnExecutionConstraints"]["agentServerForbidden"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -73,6 +73,7 @@ export interface DirectContextFastPathInputs {
   references?: unknown;
   currentReferences?: unknown;
   currentReferenceDigests?: unknown;
+  claims?: unknown;
   recentExecutionRefs?: unknown;
   executionUnits?: unknown;
 }
@@ -198,6 +199,17 @@ export function buildDirectContextFastPathItems(inputs: DirectContextFastPathInp
       label: stringField(reference.title) ?? ref ?? 'reference',
       ref,
       summary: stringField(reference.summary) ?? ref ?? 'current reference',
+    });
+  }
+  for (const claim of recordRows(inputs.claims).slice(-DIRECT_CONTEXT_FAST_PATH_POLICY.contextLimits.references)) {
+    const id = stringField(claim.id) ?? stringField(claim.ref) ?? 'claim';
+    const text = stringField(claim.text) ?? stringField(claim.summary) ?? stringField(claim.message);
+    if (!text) continue;
+    items.push({
+      kind: stringField(claim.type) ?? stringField(claim.claimType) ?? 'claim',
+      label: `claim ${id}`,
+      ref: stringField(claim.ref) ?? stringField(claim.sourceRef) ?? `claim:${id}`,
+      summary: text,
     });
   }
   for (const unit of [...recordRows(inputs.recentExecutionRefs), ...recordRows(inputs.executionUnits)].slice(-DIRECT_CONTEXT_FAST_PATH_POLICY.contextLimits.executionUnits)) {
@@ -717,11 +729,15 @@ function normalizeOmicsDifferentialExpressionArtifactData(
 
 function directContextArtifactSummary(artifact: ArtifactPolicyRecord): string {
   const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+  const dataSummary = isRecord(artifact.dataSummary) ? artifact.dataSummary : {};
+  const digestText = isRecord(dataSummary.digestText) ? dataSummary.digestText : {};
   const candidates = [
     artifact.summary,
     metadata.summary,
     metadata.title,
     directContextDataPreview(artifact.data),
+    digestText.preview,
+    dataSummary.preview,
     artifact.dataRef,
     artifact.path,
   ];

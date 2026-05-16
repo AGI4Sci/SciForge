@@ -38,7 +38,7 @@ import {
   uploadedArtifactPreview,
 } from './results/previewDescriptor';
 import { UploadedDataUrlPreview, WorkspaceObjectPreview } from './results/WorkspaceObjectPreview';
-import { makeId, nowIso, type EvidenceClaim, type SciForgeConfig, type SciForgeRun, type SciForgeSession, type ObjectAction, type ObjectReference, type PreviewDescriptor, type RuntimeArtifact, type RuntimeCompatibilityDiagnostic, type UIManifestSlot } from '../domain';
+import { makeId, nowIso, type EvidenceClaim, type SciForgeConfig, type SciForgeRun, type SciForgeSession, type ObjectAction, type ObjectReference, type PreviewDescriptor, type RuntimeArtifact, type RuntimeCompatibilityDiagnostic, type RuntimeExecutionUnit, type UIManifestSlot } from '../domain';
 import {
   conversationProjectionForSession,
   conversationProjectionStatus,
@@ -504,9 +504,7 @@ function RunStatusSummary({
         <div className="run-failure-card" key={unit.id}>
           <strong>{unit.id}</strong>
           <p>{compactVisibleFailureText(unit.failureReason || unit.selfHealReason || unit.nextStep || '执行失败，详情已保留在运行审计中。')}</p>
-          <div className="inspector-ref-list">
-            {[unit.codeRef, unit.stdoutRef, unit.stderrRef, unit.outputRef, unit.diffRef].filter(Boolean).map((ref) => <code key={ref}>{ref}</code>)}
-          </div>
+          <p className="empty-state">{executionUnitRefCount(unit)} audit ref(s) retained for debug details.</p>
         </div>
       ))}
       {validationFailures.map((failure) => <ContractValidationFailureSummary key={contractValidationFailureKey(failure)} failure={failure} compact />)}
@@ -638,15 +636,8 @@ function RunAuditDetails({
       <ExecutionPanel session={session} executionUnits={units} embedded />
       <NotebookTimeline scenarioId={scenarioId} notebook={session.notebook} embedded />
       <Card className="code-card">
-        <SectionHeader icon={Terminal} title="Raw JSON / stdout / stderr refs" />
-        <div className="audit-raw-grid">
-          {rawItems.map((item) => (
-            <details key={item.id} className="audit-raw-item">
-              <summary>{item.label}</summary>
-              <pre className="inspector-json">{item.value}</pre>
-            </details>
-          ))}
-        </div>
+        <SectionHeader icon={Terminal} title="运行审计材料" />
+        <p className="empty-state">{rawItems.length} structured audit item(s) retained for debug/export details.</p>
       </Card>
     </details>
   );
@@ -697,13 +688,13 @@ function RunAuditOverview({
           {repairStates.map((state) => <BackendRepairStateSummary key={state.id} state={state} />)}
         </div>
       ) : null}
-      {refs.length ? (
-        <div className="slot-meta">
-          {refs.map((ref) => <code key={ref}>{ref}</code>)}
-        </div>
-      ) : null}
+      {refs.length ? <p className="empty-state">{refs.length} audit ref(s) retained for debug details.</p> : null}
     </Card>
   );
+}
+
+function executionUnitRefCount(unit: RuntimeExecutionUnit) {
+  return [unit.codeRef, unit.stdoutRef, unit.stderrRef, unit.outputRef, unit.diffRef].filter(Boolean).length;
 }
 
 function ContractValidationFailureSummary({ failure, compact = false }: { failure: ContractValidationFailure; compact?: boolean }) {

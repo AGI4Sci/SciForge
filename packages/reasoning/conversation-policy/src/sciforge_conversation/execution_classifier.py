@@ -190,7 +190,7 @@ def _is_direct_context_summary_answer(req: JsonMap, signals: list[str]) -> bool:
         return False
     if not _has_current_context(req):
         return False
-    if _selected_external_action_count(req) > 0 or _selected_action_count(req) > 0:
+    if not _constraints_forbid_execution(constraints) and (_selected_external_action_count(req) > 0 or _selected_action_count(req) > 0):
         return False
     return "no-execution-directive" in signals or _text(constraints.get("executionModeHint")) == "direct-context-answer"
 

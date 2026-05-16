@@ -32,6 +32,16 @@ test('conversation policy response normalizer fails closed for missing strategy 
     data: {
       schemaVersion: CONVERSATION_POLICY_RESPONSE_VERSION,
       currentReferences: [{ ref: 'artifact:paper-list' }, 'not-a-record'],
+      directContextDecision: {
+        schemaVersion: 'sciforge.direct-context-decision.v1',
+        decisionRef: 'decision:policy:refs',
+        decisionOwner: 'harness-policy',
+        intent: 'artifact-status',
+        requiredTypedContext: ['current-refs'],
+        usedRefs: ['artifact:paper-list'],
+        sufficiency: 'sufficient',
+        allowDirectContext: true,
+      },
       turnExecutionConstraints: {
         schemaVersion: 'sciforge.turn-execution-constraints.v1',
         contextOnly: true,
@@ -44,6 +54,7 @@ test('conversation policy response normalizer fails closed for missing strategy 
 
   assert.ok(response);
   assert.deepEqual(response.currentReferences, [{ ref: 'artifact:paper-list' }]);
+  assert.equal(response.directContextDecision?.decisionRef, 'decision:policy:refs');
   assert.equal(response.turnExecutionConstraints?.agentServerForbidden, true);
   assert.deepEqual(response.backgroundPlan, SAFE_DEFAULT_BACKGROUND_PLAN);
   assert.deepEqual(response.cachePolicy, SAFE_DEFAULT_CACHE_POLICY);

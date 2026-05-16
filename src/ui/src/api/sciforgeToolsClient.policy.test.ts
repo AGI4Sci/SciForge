@@ -13,9 +13,13 @@ import {
 } from '@sciforge-ui/runtime-contract';
 
 const originalFetch = globalThis.fetch;
+const originalSetInterval = globalThis.setInterval;
+const originalClearInterval = globalThis.clearInterval;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  globalThis.setInterval = originalSetInterval;
+  globalThis.clearInterval = originalClearInterval;
 });
 
 test('silent wait and retry thresholds come from latencyPolicy with safe fallback', () => {
@@ -32,7 +36,13 @@ test('silent wait and retry thresholds come from latencyPolicy with safe fallbac
   const fallback = latencyThresholdsFromPolicy({}, { requestTimeoutMs: 60_000 } as SciForgeConfig);
   assert.equal(fallback.firstEventWarningMs, 20_000);
   assert.equal(fallback.silentRetryMs, 45_000);
+  assert.equal(fallback.stallBoundMs, 120_000);
   assert.equal(fallback.requestTimeoutMs, 60_000);
+
+  const capped = latencyThresholdsFromPolicy({
+    stallBoundMs: 900_000,
+  }, { requestTimeoutMs: 60_000 } as SciForgeConfig);
+  assert.equal(capped.stallBoundMs, 120_000);
 });
 
 test('conversation policy stream event makes quick status visible before workspace result', async () => {
@@ -222,6 +232,7 @@ test('UI handoff does not synthesize verification policy defaults or pass throug
   assert.equal(bodies[0]?.humanApprovalPolicy, undefined);
   assert.equal(bodies[0]?.unverifiedReason, undefined);
   assert.match(String((bodies[0]?.uiState as { silentStreamRunId?: string } | undefined)?.silentStreamRunId), /^session-test:turn-/);
+  assert.equal((bodies[0]?.uiState as { currentTurnId?: string } | undefined)?.currentTurnId, undefined);
   assert.equal((bodies[0]?.uiState as { contextReusePolicy?: { mode?: string; historyReuse?: { allowed?: boolean } } } | undefined)?.contextReusePolicy?.mode, 'fresh');
   assert.equal((bodies[0]?.uiState as { contextReusePolicy?: { mode?: string; historyReuse?: { allowed?: boolean } } } | undefined)?.contextReusePolicy?.historyReuse?.allowed, false);
 
@@ -238,6 +249,37 @@ test('UI handoff does not synthesize verification policy defaults or pass throug
   assert.equal(legacyUiState?.scenarioOverride?.verificationPolicy, undefined);
   assert.deepEqual(bodies[1]?.humanApprovalPolicy, { required: true, mode: 'required-before-action' });
   assert.equal(bodies[1]?.unverifiedReason, 'explicitly allowed for draft handoff');
+});
+
+test('UI handoff forwards current turn id so policy can exclude optimistic user message', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_input, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return streamResponse([
+      {
+        result: {
+          message: 'Workspace result ready.',
+          executionUnits: [{ id: 'unit-1', status: 'done' }],
+          artifacts: [],
+        },
+      },
+    ]);
+  }) as typeof fetch;
+
+  await sendSciForgeToolMessage(messageInput(undefined, {
+    currentTurnId: 'msg-current',
+    messages: [{
+      id: 'msg-current',
+      role: 'user',
+      content: 'Fresh current turn',
+      createdAt: '2026-05-07T00:00:00.000Z',
+      status: 'completed',
+    }],
+  }), {});
+
+  const uiState = bodies[0]?.uiState as { currentTurnId?: string; sessionMessages?: Array<{ id?: string }> } | undefined;
+  assert.equal(uiState?.currentTurnId, 'msg-current');
+  assert.equal(uiState?.sessionMessages?.[0]?.id, 'msg-current');
 });
 
 test('UI handoff filters agentserver selected skill overrides when current turn forbids AgentServer', async () => {
@@ -435,6 +477,7 @@ test('UI handoff keeps ref-backed artifact bodies and log refs bounded on contin
   const artifact = (bodies[0]?.artifacts as Array<Record<string, unknown>> | undefined)?.[0];
   assert.equal(artifact?.data, undefined);
   assert.equal((artifact?.dataSummary as Record<string, unknown> | undefined)?.omitted, 'ref-backed-artifact-data');
+  assert.match(String(((artifact?.dataSummary as Record<string, unknown> | undefined)?.digestText as Record<string, unknown> | undefined)?.preview), /inline evidence should not travel again/);
   assert.doesNotMatch(JSON.stringify(bodies[0]), /inline evidence should not travel again inline evidence should not travel again/);
   const uiState = bodies[0]?.uiState as { recentExecutionRefs?: Array<Record<string, unknown>> } | undefined;
   assert.equal(uiState?.recentExecutionRefs?.[0]?.stdoutRef, '.sciforge/sessions/run/logs/report.stdout.log');
@@ -505,6 +548,95 @@ test('request timeout becomes a soft wait after backend progress events', async 
   assert.equal(requestSignal?.aborted, false);
   assert.ok(events.some((event) => event.type === 'backend-timeout-extended'));
 });
+
+test('synthetic backend-silent wait events do not postpone bounded-stall recovery after real backend progress', async () => {
+  let requestSignal: AbortSignal | undefined;
+  globalThis.setInterval = ((handler: (...args: unknown[]) => void, timeout?: number, ...args: unknown[]) => {
+    return originalSetInterval(handler, timeout === 10_000 ? 10 : timeout, ...args);
+  }) as typeof globalThis.setInterval;
+  globalThis.fetch = (async (_input, init) => {
+    requestSignal = init?.signal as AbortSignal | undefined;
+    return syntheticWaitStallStreamResponse(requestSignal);
+  }) as typeof fetch;
+
+  const events: AgentStreamEvent[] = [];
+  const response = await sendSciForgeToolMessage(messageInput(undefined, {
+    runs: [{
+      id: 'prior-run-1',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'prior prompt',
+      response: 'prior response',
+      createdAt: '2026-05-07T01:00:00.000Z',
+      raw: { conversationProjectionRef: 'projection:prior-run-1' },
+    }],
+    executionUnits: [{
+      id: 'EU-prior',
+      tool: 'prior.tool',
+      params: '{}',
+      status: 'done',
+      hash: 'hash-prior',
+      outputRef: '.sciforge/sessions/prior/task-results/result.json',
+      stdoutRef: '.sciforge/sessions/prior/logs/stdout.log',
+    }],
+  }), {
+    onEvent: (event) => events.push(event),
+  });
+
+  assert.equal(requestSignal?.aborted, true);
+  assert.ok(events.some((event) => event.type === 'backend-stall-bounded-stop'));
+  assert.ok(events.filter((event) => event.type === 'backend-silent' || event.label === 'wait').length >= 2);
+  assert.equal(response.executionUnits[0]?.status, 'repair-needed');
+  assert.equal(response.executionUnits[0]?.tool, 'sciforge.runtime.bounded-stop');
+
+  const raw = response.run.raw as {
+    displayIntent?: {
+      conversationProjection?: { visibleAnswer?: { status?: string }; activeRun?: { status?: string } };
+      resultPresentation?: { conversationProjection?: { visibleAnswer?: { status?: string } } };
+    };
+  };
+  assert.equal(raw.displayIntent?.conversationProjection?.visibleAnswer?.status, 'repair-needed');
+  assert.equal(raw.displayIntent?.conversationProjection?.activeRun?.status, 'repair-needed');
+  assert.equal(raw.displayIntent?.resultPresentation?.conversationProjection?.visibleAnswer?.status, 'repair-needed');
+});
+
+function syntheticWaitStallStreamResponse(signal: AbortSignal | undefined) {
+  const encoder = new TextEncoder();
+  return new Response(new ReadableStream({
+    async start(controller) {
+      const abort = () => controller.error(new DOMException('The operation was aborted.', 'AbortError'));
+      signal?.addEventListener('abort', abort, { once: true });
+      try {
+        controller.enqueue(encoder.encode(`${JSON.stringify({
+          event: {
+            type: 'conversation-policy',
+            message: 'Runtime accepted the request.',
+            latencyPolicy: {
+              firstEventWarningMs: 100,
+              silentRetryMs: 5_000,
+              stallBoundMs: 350,
+              requestTimeoutMs: 10_000,
+            },
+          },
+        })}\n`));
+        for (let index = 0; index < 25 && !signal?.aborted; index += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 40));
+          if (signal?.aborted) break;
+          controller.enqueue(encoder.encode(`${JSON.stringify({
+            event: {
+              type: 'backend-silent',
+              label: 'wait',
+              detail: 'Synthetic transport wait event.',
+            },
+          })}\n`));
+        }
+        if (!signal?.aborted) controller.close();
+      } finally {
+        signal?.removeEventListener('abort', abort);
+      }
+    },
+  }), { status: 200, headers: { 'Content-Type': 'application/x-ndjson' } });
+}
 
 function delayedStreamResponse(items: unknown[], signal: AbortSignal | undefined, delayMs: number) {
   const encoder = new TextEncoder();

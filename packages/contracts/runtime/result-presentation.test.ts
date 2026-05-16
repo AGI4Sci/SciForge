@@ -204,3 +204,46 @@ test('artifact actions preserve generic derivation lineage from artifact metadat
   assert.equal(action.derivation?.targetLanguage, 'en');
   assert.deepEqual(action.sourceRefs, ['artifact:research-report', 'provider:openalex:openalex-w1']);
 });
+
+test('explicit diagnostic artifact delivery stays out of human-facing citations and actions', () => {
+  const presentation = resultPresentationFromPayload({
+    payload: {
+      message: 'Readable report is ready; diagnostics are audit-only.',
+      artifacts: [{
+        id: 'report',
+        type: 'report',
+        title: 'Readable report',
+        dataRef: 'artifact:report',
+        delivery: {
+          contractId: 'sciforge.artifact-delivery.v1',
+          ref: 'artifact:report',
+          role: 'primary-deliverable',
+          declaredMediaType: 'text/markdown',
+          declaredExtension: '.md',
+          contentShape: 'raw-file',
+          readableRef: 'artifact:report',
+          previewPolicy: 'inline',
+        },
+      }, {
+        id: 'debug-envelope',
+        type: 'debug-json',
+        title: 'Debug envelope',
+        dataRef: 'artifact:debug-envelope',
+        delivery: {
+          contractId: 'sciforge.artifact-delivery.v1',
+          ref: 'artifact:debug-envelope',
+          role: 'diagnostic',
+          declaredMediaType: 'application/json',
+          declaredExtension: '.json',
+          contentShape: 'json-envelope',
+          readableRef: 'artifact:debug-envelope',
+          previewPolicy: 'audit-only',
+        },
+      }],
+    },
+  });
+
+  assert.deepEqual(presentation.artifactActions.map((action) => action.ref), ['artifact:report']);
+  assert.ok(presentation.inlineCitations.some((citation) => citation.ref === 'artifact:report'));
+  assert.ok(!presentation.inlineCitations.some((citation) => citation.ref === 'artifact:debug-envelope'));
+});

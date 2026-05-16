@@ -81,9 +81,7 @@ function UnknownArtifactInspector({ slot, artifact, session }: RegistryRendererP
       </div>
       {refs.length ? (
         <div className="slot-meta">
-          {refs.map((ref) => (
-            <code key={`${ref.label}-${ref.value}`}>{ref.label}: {ref.value}</code>
-          ))}
+          <span className="muted-inline">{refs.length} audit ref(s) retained for debug details.</span>
         </div>
       ) : null}
       {table.rows.length ? (
@@ -299,7 +297,7 @@ export function RegistrySlot({
                 系统打开
               </button>
             ) : null}
-            {artifact.delivery?.rawRef ? <code>rawRef: {artifact.delivery.rawRef}</code> : null}
+            {artifact.delivery?.rawRef ? <span className="muted-inline">原始材料已保留用于审计</span> : null}
           </div>
           {deliveryOpenError ? <p className="object-action-error">{deliveryOpenError}</p> : null}
         </div>
@@ -373,7 +371,7 @@ function artifactDeliveryFallback(artifact?: RuntimeArtifact): { subtitle: strin
     subtitle: delivery.previewPolicy === 'open-system' ? '当前格式交给系统默认程序打开' : '当前 UI 暂不支持内联预览',
     detail: delivery.previewPolicy === 'open-system'
       ? '这个 artifact 已通过 ArtifactDelivery contract 标记为本地文件交付物；SciForge 保留引用和审计信息，完整内容可用系统默认程序打开。'
-      : '这个 artifact 的格式与当前已发布 UI component 不匹配；主内容不会被当作 JSON fallback 展示，可在审计区查看 rawRef。',
+      : '这个 artifact 的格式与当前已发布 UI component 不匹配；主内容不会被当作 JSON fallback 展示，原始材料已保留用于审计。',
     openRef,
   };
 }

@@ -541,6 +541,22 @@ test('workspace runtime top-level WorkEvidence drives UI before text fallback', 
   assert.match(entry.rawOutput, /RAW_RUNTIME_OUTPUT_SHOULD_STAY_RAW/);
 });
 
+test('workspace runtime raw-shaped event fallback does not expose JSON or private refs as visible detail', () => {
+  const normalized = normalizeWorkspaceRuntimeEvent({
+    status: 'failed',
+    stdoutRef: '.sciforge/logs/stdout.log',
+    stderrRef: '.sciforge/logs/stderr.log',
+    rawRef: '.sciforge/sessions/session-a/raw.json',
+    payload: { finalText: 'HTTP 401 Unauthorized: Invalid token' },
+  });
+
+  const presentation = presentStreamEvent(normalized);
+
+  assert.match(presentation.detail, /Runtime event recorded/);
+  assert.doesNotMatch(presentation.detail, /stdoutRef|stderrRef|rawRef|Invalid token|^\{/);
+  assert.doesNotMatch(presentStreamWorklog([normalized]).entries.map((entry) => entry.operationLine).join('\n'), /stdoutRef|stderrRef|rawRef|Invalid token/);
+});
+
 test('raw provider scenario and prompt fields do not become structured WorkEvent facts', () => {
   const genericStatus = event({
     id: 'generic-status',

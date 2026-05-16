@@ -162,7 +162,7 @@ export function ExecutionPanel({
       <SectionHeader
         icon={Lock}
         title="可复现执行单元"
-        subtitle={embedded ? '完整 ExecutionUnit、stdout/stderr refs 和数据指纹' : '代码 + 参数 + 环境 + 数据指纹'}
+        subtitle={embedded ? '执行摘要、审计状态和数据指纹' : '代码 + 参数 + 环境 + 数据指纹'}
         action={<ActionButton icon={Download} variant="secondary" onClick={() => exportExecutionBundle(session, activeRun, rows)}>导出 JSON Bundle</ActionButton>}
       />
       {rows.length ? (
@@ -180,8 +180,8 @@ export function ExecutionPanel({
               <code>{unit.id}</code>
               <span>{unit.tool}</span>
               <code title={unit.params}>{compactParams(unit.params)}</code>
-              <code title={[unit.codeRef, unit.stdoutRef, unit.stderrRef].filter(Boolean).join('\n') || unit.code || ''}>
-                {unit.codeRef || unit.language || unit.code || 'n/a'}
+              <code title={unit.code || unit.language || ''}>
+                {unit.code || unit.language || auditMaterialLabel(unit)}
               </code>
               <span className="eu-status-stack">
                 <Badge variant={executionStatusVariant(unit.status)}>{executionStatusLabel(unit.status)}</Badge>
@@ -231,11 +231,7 @@ function executionStatusDetail(unit: RuntimeExecutionUnit) {
     unit.recoverActions?.length ? `recover=${unit.recoverActions.join(' | ')}` : undefined,
     unit.nextStep ? `nextStep=${unit.nextStep}` : undefined,
     unit.patchSummary ? `patchSummary=${unit.patchSummary}` : undefined,
-    unit.diffRef ? `diffRef=${unit.diffRef}` : undefined,
-    unit.stdoutRef ? `stdout=${unit.stdoutRef}` : undefined,
-    unit.stderrRef ? `stderr=${unit.stderrRef}` : undefined,
-    unit.outputRef ? `output=${unit.outputRef}` : undefined,
-    unit.verificationRef ? `verification=${unit.verificationRef}` : undefined,
+    auditRefCount(unit) ? `${auditRefCount(unit)} audit ref(s) retained` : undefined,
     unit.verificationVerdict ? `verdict=${unit.verificationVerdict}` : undefined,
     `verificationStatus=${verification.detail}`,
   ].filter(Boolean);
@@ -248,13 +244,9 @@ function executionEnvironmentText(rows: RuntimeExecutionUnit[]) {
     `id: ${unit.id}`,
     `tool: ${unit.tool}`,
     `language: ${unit.language || 'unspecified'}`,
-    `codeRef: ${unit.codeRef || unit.code || 'n/a'}`,
     `entrypoint: ${unit.entrypoint || 'n/a'}`,
     `environment: ${unit.environment || 'n/a'}`,
-    `stdoutRef: ${unit.stdoutRef || 'n/a'}`,
-    `stderrRef: ${unit.stderrRef || 'n/a'}`,
-    `outputRef: ${unit.outputRef || 'n/a'}`,
-    `verificationRef: ${unit.verificationRef || 'n/a'}`,
+    `auditRefs: ${auditRefCount(unit)} retained`,
     `verificationVerdict: ${unit.verificationVerdict || 'n/a'}`,
     `runtimeProfileId: ${unit.runtimeProfileId || 'n/a'}`,
     `selectedSkill: ${unit.routeDecision?.selectedSkill || 'n/a'}`,
@@ -268,12 +260,19 @@ function executionEnvironmentText(rows: RuntimeExecutionUnit[]) {
     `selfHealReason: ${unit.selfHealReason || 'n/a'}`,
     `failureReason: ${unit.failureReason || 'n/a'}`,
     `patchSummary: ${unit.patchSummary || 'n/a'}`,
-    `diffRef: ${unit.diffRef || 'n/a'}`,
     `requiredInputs: ${(unit.requiredInputs ?? []).join(', ') || 'n/a'}`,
     `recoverActions: ${(unit.recoverActions ?? []).join(' | ') || 'n/a'}`,
     `nextStep: ${unit.nextStep || 'n/a'}`,
     `databases: ${(unit.databaseVersions ?? []).join(', ') || 'n/a'}`,
   ].join('\n')).join('\n\n');
+}
+
+function auditMaterialLabel(unit: RuntimeExecutionUnit) {
+  return auditRefCount(unit) ? 'audit material retained' : 'n/a';
+}
+
+function auditRefCount(unit: RuntimeExecutionUnit) {
+  return [unit.codeRef, unit.stdoutRef, unit.stderrRef, unit.outputRef, unit.diffRef, unit.verificationRef].filter(Boolean).length;
 }
 
 export function NotebookTimeline({ scenarioId, notebook = [], embedded = false }: { scenarioId: ScenarioId; notebook?: NotebookRecord[]; embedded?: boolean }) {

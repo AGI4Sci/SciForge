@@ -197,7 +197,11 @@ function buildConversationPolicyRequest(
     ...toRecordList(request.references),
     ...toRecordList(uiState.currentReferences),
   ]);
-  const sessionMessages = policySessionMessages(uiState);
+  const hasStructuredSessionMessages = toRecordList(uiState.sessionMessages).length > 0 || toRecordList(uiState.messages).length > 0;
+  const sessionMessages = policySessionMessages(uiState, {
+    currentPrompt: request.prompt,
+    currentTurnId: stringField(uiState.currentTurnId) ?? stringField(uiState.turnId),
+  });
   return {
     schemaVersion: CONVERSATION_POLICY_REQUEST_VERSION,
     turn: {
@@ -208,7 +212,7 @@ function buildConversationPolicyRequest(
     session: {
       sessionId: stringField(uiState.sessionId),
       scenarioId: request.scenarioPackageRef?.id ?? request.skillDomain,
-      messages: sessionMessages.length
+      messages: sessionMessages.length || hasStructuredSessionMessages
         ? sessionMessages.slice(-24)
         : toStringList(uiState.recentConversation).slice(-12),
       runs: toRecordList(uiState.recentRuns).slice(-12),
@@ -253,11 +257,43 @@ function contextRefsFromPolicyProjection(value: unknown) {
   });
 }
 
-function policySessionMessages(uiState: Record<string, unknown>) {
+function priorRawPolicySessionMessages(
+  messages: Array<Record<string, unknown>>,
+  currentTurn: { currentPrompt: string; currentTurnId?: string },
+) {
+  const currentPrompt = currentTurn.currentPrompt.trim();
+  let removedCurrent = false;
+  return [...messages].reverse().flatMap((message) => {
+    if (!removedCurrent && isCurrentTurnRawPolicyMessage(message, currentTurn.currentTurnId, currentPrompt)) {
+      removedCurrent = true;
+      return [];
+    }
+    return [message];
+  }).reverse();
+}
+
+function isCurrentTurnRawPolicyMessage(
+  message: Record<string, unknown>,
+  currentTurnId: string | undefined,
+  currentPrompt: string,
+) {
+  const id = stringField(message.id);
+  if (currentTurnId && id === currentTurnId) return true;
+  if (stringField(message.role) !== 'user') return false;
+  const content = stringField(message.content) ?? stringField(message.text) ?? stringField(message.prompt);
+  if (!content || !currentPrompt) return false;
+  return content.trim() === currentPrompt;
+}
+
+function policySessionMessages(
+  uiState: Record<string, unknown>,
+  currentTurn?: { currentPrompt: string; currentTurnId?: string },
+) {
   const source = toRecordList(uiState.sessionMessages).length
     ? toRecordList(uiState.sessionMessages)
     : toRecordList(uiState.messages);
-  return source.map((message, index) => {
+  const priorSource = currentTurn ? priorRawPolicySessionMessages(source, currentTurn) : source;
+  return priorSource.map((message, index) => {
     const existingDigest = isRecord(message.contentDigest) ? message.contentDigest : undefined;
     const bodyStatus = stringField(message.bodyStatus) ?? (message.contentOmitted === true || existingDigest ? 'omitted' : undefined);
     const content = bodyStatus === 'omitted' ? undefined : typeof message.content === 'string' ? message.content : undefined;
