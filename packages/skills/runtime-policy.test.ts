@@ -103,6 +103,7 @@ test('skills runtime policy owns AgentServer retrieval and task prompt snippets'
 test('skills runtime policy owns generated task retry and interface contract semantics', () => {
   assert.match(agentServerGeneratedTaskRetryDetail('entrypoint'), /Retrying AgentServer generation once/);
   assert.match(agentServerGeneratedTaskRetryDetail('task-interface'), /generated tasks must consume/);
+  assert.match(agentServerGeneratedTaskRetryDetail('provider-first-recovery-adapter'), /deterministic provider-first recovery adapter/);
 
   const entrypointReason = agentServerGeneratedEntrypointContractReason({
     entrypoint: { path: '.sciforge/tasks/report.md', language: 'markdown' },

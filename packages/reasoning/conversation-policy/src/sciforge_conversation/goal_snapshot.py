@@ -13,9 +13,9 @@ DEFAULT_INTENT_KEYWORD_MAP: dict[str, list[dict[str, Any]]] = {
     "new-task": [{"pattern": r"\b(new task|start over|ignore previous|unrelated)\b|另一个任务|新任务|重新开始|不要沿用|别用上一轮", "weight": 1}],
     "latest": [{"pattern": r"\b(latest|current|today|up to date)\b|最新|当前|今天|现在", "weight": 1}],
     "location": [{"pattern": r"\b(where is|where are|location|path|file refs?|artifact refs?)\b|文件在哪|文件在哪里|位置|路径", "weight": 1}],
-    "no-execution": [{"pattern": r"\b(?:do\s+not|don't|without|no)\s+(?:re-?run|run|execute|dispatch|call|invoke|browse|search|retrieve|fetch|read)\b|不要(?:重跑|运行|执行|调用|派发|检索|搜索|浏览|读取|访问)|不(?:重跑|运行|执行|调用|派发|检索|搜索|浏览)", "weight": 1}],
-    "context-only": [{"pattern": r"\b(?:current|existing|provided)\s+(?:context|refs?|references?|digests?|artifacts?)\s+only\b|\b(?:current|existing|provided)\s+[\w -]{0,80}?\s(?:context|refs?|references?|digests?|artifacts?)\s+only\b|\b(?:from|using|based on)\s+(?:current|existing|provided)\s+(?:context|refs?|references?|digests?|artifacts?)\b|\b(?:from|using|based on)\s+(?:current|existing|provided)\s+[\w -]{0,80}?\s(?:context|refs?|references?|digests?|artifacts?)\b|只(?:基于|使用|用)(?:当前|已有|提供的)?(?:上下文|引用|refs?|digest|摘要|产物)", "weight": 1}],
-    "answer-only-transform": [{"pattern": r"\b(?:compress|condense|shorten|summari[sz]e|rewrite|rephrase|convert|turn)\b.{0,80}\b(?:previous|prior|last|existing|above|answer|conclusion|points?|checklist|bullets?)\b|\b(?:previous|prior|last|existing|above)\b.{0,80}\b(?:answer|conclusion|points?)\b.{0,80}\b(?:checklist|bullets?|summary)\b|(?:压缩|浓缩|改写|重写|总结|归纳|整理).{0,40}(?:上一轮|之前|刚才|已有|答案|结论|要点|清单)", "weight": 1}],
+    "no-execution": [{"pattern": r"\b(?:do\s+not|don't|without|no)\s+(?:re-?run|run|execute|dispatch|call|invoke|browse|search|retrieve|fetch|read|workspace\s+tools?|tools?)\b|不要(?:重跑|运行|执行|调用|派发|检索|搜索|浏览|读取|访问|使用工具)|不(?:重跑|运行|执行|调用|派发|检索|搜索|浏览|使用工具)", "weight": 1}],
+    "context-only": [{"pattern": r"\b(?:current|existing|provided|selected)\s+(?:context|refs?|references?|digests?|artifacts?)\s+only\b|\b(?:current|existing|provided|selected)\s+[\w -]{0,80}?\s(?:context|refs?|references?|digests?|artifacts?)\s+only\b|\b(?:from|using|based on)\s+only\s+(?:the\s+)?(?:current|existing|provided|selected|visible|above|previous|prior|last(?:\s+round)?)\s+[\w -]{0,80}?\s(?:context|refs?|references?|digests?|artifacts?|reports?|tables?|figures?|plots?)\b|\b(?:from|using|based on)\s+(?:the\s+)?(?:current|existing|provided|selected|visible|above|previous|prior|last(?:\s+round)?)\s+(?:context|refs?|references?|digests?|artifacts?|reports?|tables?|figures?|plots?)\b|\b(?:from|using|based on)\s+(?:the\s+)?(?:current|existing|provided|selected|visible|above|previous|prior|last(?:\s+round)?)\s+[\w -]{0,80}?\s(?:context|refs?|references?|digests?|artifacts?|reports?|tables?|figures?|plots?)\b|只(?:基于|使用|用)(?:当前|已有|提供的|选中|已选|可见的|上一轮)?(?:上下文|引用|refs?|digest|摘要|产物|报告|表格|图)", "weight": 1}],
+    "answer-only-transform": [{"pattern": r"\banswer[- ]?only\b|\b(?:compress|condense|shorten|summari[sz]e|rewrite|rephrase|convert|turn)\b.{0,80}\b(?:previous|prior|last|existing|above|answer|conclusion|points?|checklist|bullets?|risk\s+register|unresolved\s+risks?)\b|\b(?:previous|prior|last|existing|above|selected|current|reload|reopen|final)\b.{0,100}\b(?:answer|conclusion|points?|checklist|bullets?|summary|risk\s+register|unresolved\s+risks?)\b|(?:压缩|浓缩|改写|重写|总结|归纳|整理).{0,40}(?:上一轮|之前|刚才|已有|答案|结论|要点|清单|风险)", "weight": 1}],
     "no-new-external-io": [{"pattern": r"\b(?:no|without|do\s+not|don't)\s+(?:new\s+)?(?:search|browse|fetch|retrieve|web|external)\b|不要(?:新|重新)?(?:搜索|检索|浏览|访问|抓取|外部)|不(?:新|重新)?(?:搜索|检索|浏览|访问|抓取|外部)", "weight": 1}],
     "no-code": [{"pattern": r"\b(?:no|without|do\s+not|don't)\s+(?:new\s+)?(?:code|coding|script|execution|execute|run)\b|不要(?:新|重新)?(?:代码|编码|脚本|执行|运行)|不(?:新|重新)?(?:代码|编码|脚本|执行|运行)", "weight": 1}],
     "agentserver": [{"pattern": r"\bagent\s*server\b|\bagentserver\b|AgentServer", "weight": 1}],
@@ -49,8 +49,9 @@ def build_goal_snapshot(request: Mapping[str, Any] | Any) -> dict[str, Any]:
     has_prior_context = _has_prior_context(request)
     goal_type = _infer_goal_type(prompt, explicit_refs, has_prior_context, keywords)
     required_formats = _infer_formats(prompt, goal_type)
-    required_artifacts = _infer_artifacts(prompt, goal_type)
     task_relation = _infer_task_relation(prompt, bool(explicit_refs), has_prior_context, keywords)
+    turn_execution_constraints = _turn_execution_constraints(prompt, explicit_refs, request, keywords)
+    required_artifacts = [] if _constraints_context_only(turn_execution_constraints) else _infer_artifacts(prompt, goal_type)
 
     snapshot: dict[str, Any] = {
         "schemaVersion": "sciforge.conversation.goal-snapshot.v1",
@@ -70,7 +71,6 @@ def build_goal_snapshot(request: Mapping[str, Any] | Any) -> dict[str, Any]:
         "uiExpectations": _infer_ui_expectations(prompt, keywords),
         "acceptanceCriteria": _acceptance_criteria(prompt, explicit_refs, task_relation),
     }
-    turn_execution_constraints = _turn_execution_constraints(prompt, explicit_refs, request, keywords)
     if turn_execution_constraints:
         snapshot["turnExecutionConstraints"] = turn_execution_constraints
     freshness = _infer_freshness(prompt, task_relation, keywords)
@@ -230,6 +230,17 @@ def _turn_execution_constraints(prompt: str, explicit_refs: list[str], request: 
             "runCount": len(runs) if isinstance(runs, list) else 0,
         },
     }
+
+
+def _constraints_context_only(constraints: dict[str, Any] | None) -> bool:
+    if not constraints:
+        return False
+    return bool(
+        constraints.get("contextOnly") is True
+        or constraints.get("agentServerForbidden") is True
+        or constraints.get("workspaceExecutionForbidden") is True
+        or constraints.get("executionModeHint") == "direct-context-answer"
+    )
 
 
 def _has_global_no_execution_directive(prompt: str, keywords: Mapping[str, re.Pattern[str]]) -> bool:

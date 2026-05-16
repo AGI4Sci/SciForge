@@ -377,7 +377,7 @@ async function dispatchAgentServerGeneration(params: AgentServerGenerationParams
             ? 'Repair-continuation hard rule: complete exactly one minimal repair/continue step from supplied refs, then stop with final compact JSON. Do not inspect broad history, do not regenerate the full pipeline, and return a failed-with-reason ToolPayload when refs are insufficient.'
             : !needsContinuity
             ? 'Fresh-generation hard rule: do not call shell/filesystem/browser tools to inspect the workspace, .sciforge, old task attempts, logs, artifacts, installed packages, or prior generated code before returning. If the user task needs network, downloads, PDF/full-text reading, computation, or file creation, generate a bounded runnable task that performs that work at execution time. Your first substantive assistant output must be the final compact JSON for a direct ToolPayload or a runnable AgentServerGenerationResponse.'
-            : 'Continuity-generation mode: inspect only the specific prior refs needed for the user-requested continuation, repair, or rerun.',
+            : 'Continuity-generation mode: treat visible summaries and current refs as authoritative. Inspect only explicitly supplied refs needed for the user-requested continuation, never scan broad .sciforge/session history or workspace trees, and return a compact direct ToolPayload when the supplied summary is sufficient.',
           'Write task files that accept inputPath and outputPath argv values and write a SciForge ToolPayload JSON object.',
           'For current-reference document requests, use uiStateSummary.currentReferenceDigests/contextEnvelope.sessionFacts.currentReferenceDigests first; do not spend generation-stage tool calls dumping long files into model context.',
           'For fresh current-turn requests, do not browse old .sciforge task attempts, logs, artifacts, or generated tasks for diagnostics; generate the requested runnable task or direct ToolPayload from the current turn.',
@@ -514,9 +514,15 @@ async function dispatchAgentServerGeneration(params: AgentServerGenerationParams
         tailChars: 0,
         maxPriorAttempts: 1,
       } : {
-        maxInlineStringChars: 24_000,
-        headChars: 4_000,
-        tailChars: 4_000,
+        maxPayloadBytes: 96_000,
+        maxInlineStringChars: 6_000,
+        maxInlineJsonBytes: 18_000,
+        maxArrayItems: 10,
+        maxObjectKeys: 48,
+        maxDepth: 5,
+        headChars: 1_200,
+        tailChars: 1_200,
+        maxPriorAttempts: 1,
       },
     });
     runPayload = withAgentServerDispatchMetadata(normalizedHandoff.payload, {

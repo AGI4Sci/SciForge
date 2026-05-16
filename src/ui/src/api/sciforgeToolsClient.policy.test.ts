@@ -367,6 +367,55 @@ test('UI handoff preserves bounded text-selection payload for explicit composer 
   assert.ok(reference.payloadDigest, 'large raw payload should still be summarized by digest');
 });
 
+test('UI handoff preserves readable file refs from selected object reference payloads', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_input, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return streamResponse([
+      {
+        result: {
+          message: 'Workspace result ready.',
+          executionUnits: [{ id: 'unit-1', status: 'done' }],
+          artifacts: [],
+        },
+      },
+    ]);
+  }) as typeof fetch;
+
+  await sendSciForgeToolMessage(messageInput(undefined, {
+    prompt: 'Continue from ※1',
+    references: [{
+      id: 'ref-picked-report',
+      kind: 'task-result',
+      title: 'Picked report',
+      ref: 'artifact:picked-report',
+      summary: 'Selected report',
+      payload: {
+        composerMarker: '※1',
+        currentReference: {
+          id: 'object-picked-report',
+          kind: 'artifact',
+          title: 'Picked report',
+          ref: 'artifact:picked-report',
+          summary: 'Selected report',
+          provenance: {
+            path: 'workspace/parallel/p4/rcg-004-preflight-patch-report.md',
+            dataRef: '.sciforge/sessions/session-test/artifacts/picked-report.json',
+          },
+        },
+      },
+    }],
+  }), {});
+
+  const reference = (bodies[0]?.references as Array<Record<string, unknown>>)[0];
+  const currentReference = ((bodies[0]?.uiState as { currentReferences?: Array<Record<string, unknown>> } | undefined)
+    ?.currentReferences ?? [])[0];
+  assert.equal(reference.path, 'workspace/parallel/p4/rcg-004-preflight-patch-report.md');
+  assert.equal(reference.dataRef, '.sciforge/sessions/session-test/artifacts/picked-report.json');
+  assert.equal(currentReference.path, 'workspace/parallel/p4/rcg-004-preflight-patch-report.md');
+  assert.equal(currentReference.dataRef, '.sciforge/sessions/session-test/artifacts/picked-report.json');
+});
+
 test('UI handoff compacts large multi-turn session context before transport', async () => {
   const bodies: Array<Record<string, unknown>> = [];
   globalThis.fetch = (async (_input, init) => {
@@ -768,7 +817,10 @@ test('bounded-stall without a readable foreground result is not reported as back
   }) as typeof globalThis.setInterval;
   globalThis.fetch = (async (_input, init) => {
     requestSignal = init?.signal as AbortSignal | undefined;
-    return syntheticWaitStallStreamResponse(requestSignal, { foregroundReadableResult: false });
+    return syntheticWaitStallStreamResponse(requestSignal, {
+      foregroundReadableResult: false,
+      waitEventKind: 'interaction-progress',
+    });
   }) as typeof fetch;
 
   const events: AgentStreamEvent[] = [];
@@ -793,7 +845,7 @@ test('bounded-stall without a readable foreground result is not reported as back
 
 function syntheticWaitStallStreamResponse(
   signal: AbortSignal | undefined,
-  options: { foregroundReadableResult: boolean },
+  options: { foregroundReadableResult: boolean; waitEventKind?: 'backend-silent' | 'interaction-progress' },
 ) {
   const encoder = new TextEncoder();
   return new Response(new ReadableStream({
@@ -827,6 +879,19 @@ function syntheticWaitStallStreamResponse(
         for (let index = 0; index < 25 && !signal?.aborted; index += 1) {
           await new Promise((resolve) => setTimeout(resolve, 40));
           if (signal?.aborted) break;
+          if (options.waitEventKind === 'interaction-progress') {
+            controller.enqueue(encoder.encode(`${JSON.stringify({
+              event: {
+                schemaVersion: 'sciforge.interaction-progress-event.v1',
+                type: 'process-progress',
+                phase: 'wait',
+                status: 'running',
+                reason: 'backend-waiting',
+                detail: 'Phase: wait\nStatus: running\nReason: backend-waiting',
+              },
+            })}\n`));
+            continue;
+          }
           controller.enqueue(encoder.encode(`${JSON.stringify({
             event: {
               type: 'backend-silent',

@@ -404,7 +404,9 @@ function isBackendProgressEvent(event: AgentStreamEvent) {
   if (type.includes('timeout-extended') || rawType.includes('timeout-extended')) return false;
   if (type === 'backend-silent' || rawType === 'backend-silent') return false;
   if (raw.silentStreamWaiting === true) return false;
+  if (String(raw.reason || '').toLowerCase() === 'backend-waiting') return false;
   if (String(progress?.reason || '').toLowerCase() === 'backend-waiting') return false;
+  if (String(event.detail || '').toLowerCase().includes('reason: backend-waiting')) return false;
   if (label === 'wait' || label === 'waiting' || label === '等待') return false;
   return true;
 }
@@ -956,17 +958,46 @@ function scenarioOverrideForTransport(input: SendAgentMessageInput['scenarioOver
 
 function compactSciForgeReference(reference: NonNullable<SendAgentMessageInput['references']>[number]) {
   const payload = compactReferenceInlinePayload(reference);
+  const refs = compactReferenceReadableRefs(reference);
   return {
     id: reference.id,
     kind: reference.kind,
     title: reference.title,
     ref: reference.ref,
+    path: refs.path,
+    dataRef: refs.dataRef,
     sourceId: reference.sourceId,
     runId: reference.runId,
     locator: reference.locator,
     summary: reference.summary,
     payload,
     payloadDigest: compactReferencePayload(reference.payload),
+  };
+}
+
+function compactReferenceReadableRefs(reference: NonNullable<SendAgentMessageInput['references']>[number]) {
+  const referenceRecord = reference as unknown as Record<string, unknown>;
+  const payload = (isRecord(reference.payload) ? reference.payload : {}) as Record<string, unknown>;
+  const currentReference = (isRecord(payload.currentReference) ? payload.currentReference : {}) as Record<string, unknown>;
+  const objectReference = (isRecord(payload.objectReference) ? payload.objectReference : {}) as Record<string, unknown>;
+  const payloadProvenance = (isRecord(payload.provenance) ? payload.provenance : {}) as Record<string, unknown>;
+  const currentProvenance = (isRecord(currentReference.provenance) ? currentReference.provenance : {}) as Record<string, unknown>;
+  const objectProvenance = (isRecord(objectReference.provenance) ? objectReference.provenance : {}) as Record<string, unknown>;
+  return {
+    path: clippedString(referenceRecord.path, 1000)
+      ?? clippedString(payload.path, 1000)
+      ?? clippedString(payloadProvenance.path, 1000)
+      ?? clippedString(currentReference.path, 1000)
+      ?? clippedString(currentProvenance.path, 1000)
+      ?? clippedString(objectReference.path, 1000)
+      ?? clippedString(objectProvenance.path, 1000),
+    dataRef: clippedString(referenceRecord.dataRef, 1000)
+      ?? clippedString(payload.dataRef, 1000)
+      ?? clippedString(payloadProvenance.dataRef, 1000)
+      ?? clippedString(currentReference.dataRef, 1000)
+      ?? clippedString(currentProvenance.dataRef, 1000)
+      ?? clippedString(objectReference.dataRef, 1000)
+      ?? clippedString(objectProvenance.dataRef, 1000),
   };
 }
 

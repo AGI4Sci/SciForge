@@ -121,7 +121,61 @@ try {
   response = await fetch(`${baseUrl}/api/sciforge/workspace/file?path=${encodeURIComponent(renamedPath)}`);
   assert.equal(response.status, 400);
 
-  console.log('[ok] workspace file APIs and preview contract cover list/read/write/raw-range/descriptor/derivative/delete');
+  const sessionBundleRoot = join(workspace, '.sciforge', 'sessions', '2026-05-16_omics_session-omics-complete');
+  await mkdir(join(sessionBundleRoot, 'records'), { recursive: true });
+  await mkdir(join(sessionBundleRoot, 'artifacts'), { recursive: true });
+  const staleWorkspaceSession = {
+    schemaVersion: 2,
+    sessionId: 'session-omics-complete',
+    scenarioId: 'omics-differential-exploration',
+    title: 'omics',
+    createdAt: '2026-05-16T01:00:00.000Z',
+    updatedAt: '2026-05-16T01:00:00.000Z',
+    messages: [],
+    runs: [],
+    artifacts: [],
+    executionUnits: [],
+  };
+  const completeBundleSession = {
+    ...staleWorkspaceSession,
+    updatedAt: '2026-05-16T01:05:00.000Z',
+    messages: [{ id: 'msg-1', role: 'user', content: 'analyze data', createdAt: '2026-05-16T01:01:00.000Z', status: 'completed' }],
+    runs: [{ id: 'run-1', scenarioId: 'omics-differential-exploration', status: 'completed', prompt: 'analyze data', response: 'done', createdAt: '2026-05-16T01:01:00.000Z' }],
+    artifacts: [],
+    executionUnits: [{ id: 'eu-1', tool: 'analysis', status: 'done', createdAt: '2026-05-16T01:01:00.000Z' }],
+  };
+  await mkdir(join(workspace, '.sciforge'), { recursive: true });
+  await writeFile(join(workspace, '.sciforge', 'workspace-state.json'), JSON.stringify({
+    schemaVersion: 2,
+    workspacePath: workspace,
+    sessionsByScenario: {
+      'omics-differential-exploration': staleWorkspaceSession,
+    },
+    archivedSessions: [],
+    timelineEvents: [],
+    updatedAt: '2026-05-16T01:00:00.000Z',
+  }, null, 2));
+  await writeFile(join(sessionBundleRoot, 'records', 'session.json'), JSON.stringify(completeBundleSession, null, 2));
+  await writeFile(join(sessionBundleRoot, 'artifacts', 'research-report-analysis-report.json'), JSON.stringify({
+    id: 'analysis-report',
+    type: 'research-report',
+    title: 'Analysis Report',
+    path: join(sessionBundleRoot, 'task-results', 'analysis_report.md'),
+    dataRef: join(sessionBundleRoot, 'task-results', 'analysis_report.md'),
+    producerScenario: 'omics-differential-exploration',
+    schemaVersion: '1',
+  }, null, 2));
+  response = await fetch(`${baseUrl}/api/sciforge/workspace/snapshot?path=${encodeURIComponent(workspace)}`);
+  await assertOk(response);
+  const restoredSnapshot = await response.json() as { state: { sessionsByScenario: Record<string, { runs: unknown[]; artifacts: Array<{ delivery?: { role?: string; previewPolicy?: string } }>; executionUnits: unknown[] }> } };
+  const restoredSession = restoredSnapshot.state.sessionsByScenario['omics-differential-exploration'];
+  assert.equal(restoredSession.runs.length, 1);
+  assert.equal(restoredSession.artifacts.length, 1);
+  assert.equal(restoredSession.artifacts[0]?.delivery?.role, 'primary-deliverable');
+  assert.equal(restoredSession.artifacts[0]?.delivery?.previewPolicy, 'inline');
+  assert.equal(restoredSession.executionUnits.length, 1);
+
+  console.log('[ok] workspace file APIs and preview contract cover list/read/write/raw-range/descriptor/derivative/delete/snapshot-bundle-reconcile');
 } finally {
   child.kill('SIGTERM');
   await rm(workspace, { recursive: true, force: true });

@@ -51,6 +51,7 @@ export type ValidationFindingKind =
   | 'observe-trace'
   | 'action-trace'
   | 'guidance-adoption'
+  | 'result-metric-consistency'
   | 'unknown';
 
 export type ValidationFindingSource =

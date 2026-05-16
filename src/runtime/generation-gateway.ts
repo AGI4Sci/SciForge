@@ -141,6 +141,8 @@ import {
 } from './gateway/generated-task-response-text.js';
 import { hasRecoverableRecentAttempt } from './gateway/recoverable-attempts.js';
 import { tryRunVisionSenseRuntime } from './vision-sense-runtime.js';
+import { tryRunLocalDataSensitivityRuntime } from './local-data-sensitivity-runtime.js';
+import { tryRunLocalReproducibleMethodRuntime } from './local-reproducible-method-runtime.js';
 import { applyConversationPolicy } from './conversation-policy/apply.js';
 import { toolPackageManifests } from '../../packages/skills/tool_skills';
 import { AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE } from '../../packages/skills/runtime-policy';
@@ -167,7 +169,7 @@ import {
   publicCapabilityProviderPreflightResult,
   requestWithDiscoveredCapabilityProviders,
 } from './gateway/capability-provider-preflight.js';
-import { directContextFastPathPayload } from './gateway/direct-context-fast-path.js';
+import { directContextFastPathPayload, requestWithDirectContextReadableArtifactData } from './gateway/direct-context-fast-path.js';
 import { requestAgentServerGeneration } from './gateway/agentserver-generation-dispatch.js';
 import { requestContextRefs } from './gateway/request-context-refs.js';
 
@@ -180,6 +182,8 @@ export const STAGE_CAPABILITY_PROVIDER_PREFLIGHT = 'capability-provider-prefligh
 export const STAGE_DIRECT_CONTEXT_FAST_PATH = 'direct-context-fast-path';
 export const STAGE_RUNTIME_EXECUTION_CONSTRAINTS = 'runtime-execution-constraints';
 export const STAGE_VISION_SENSE_RUNTIME = 'vision-sense-runtime';
+export const STAGE_LOCAL_DATA_SENSITIVITY_RUNTIME = 'local-data-sensitivity-runtime';
+export const STAGE_LOCAL_REPRODUCIBLE_METHOD_RUNTIME = 'local-reproducible-method-runtime';
 export const STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS = 'agentserver-dispatch-constraints';
 export const STAGE_AGENTSERVER_GENERATION = 'agentserver-generation';
 
@@ -190,6 +194,8 @@ export type GatewayPipelineStageName =
   | typeof STAGE_DIRECT_CONTEXT_FAST_PATH
   | typeof STAGE_RUNTIME_EXECUTION_CONSTRAINTS
   | typeof STAGE_VISION_SENSE_RUNTIME
+  | typeof STAGE_LOCAL_DATA_SENSITIVITY_RUNTIME
+  | typeof STAGE_LOCAL_REPRODUCIBLE_METHOD_RUNTIME
   | typeof STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS
   | typeof STAGE_AGENTSERVER_GENERATION;
 
@@ -217,6 +223,8 @@ export const GATEWAY_PIPELINE_STAGE_ORDER: GatewayPipelineStageName[] = [
   STAGE_DIRECT_CONTEXT_FAST_PATH,
   STAGE_RUNTIME_EXECUTION_CONSTRAINTS,
   STAGE_VISION_SENSE_RUNTIME,
+  STAGE_LOCAL_DATA_SENSITIVITY_RUNTIME,
+  STAGE_LOCAL_REPRODUCIBLE_METHOD_RUNTIME,
   STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS,
   STAGE_AGENTSERVER_GENERATION,
 ];
@@ -260,14 +268,15 @@ export const GATEWAY_PIPELINE_STAGES: GatewayPipelineStage[] = [
   {
     name: STAGE_DIRECT_CONTEXT_FAST_PATH,
     async execute(context) {
-      const payload = directContextFastPathPayload(context.request);
+      const request = await requestWithDirectContextReadableArtifactData(context.request);
+      const payload = directContextFastPathPayload(request);
       if (!payload) return { kind: 'continue' };
       emitWorkspaceRuntimeEvent(context.telemetry.callbacks, directContextFastPathEvent({
         claimType: payload.claimType,
         executionUnitCount: payload.executionUnits.length,
         artifactCount: payload.artifacts.length,
       }));
-      return { kind: 'short-circuit', payload };
+      return { kind: 'short-circuit', payload, request };
     },
   },
   {
@@ -281,6 +290,20 @@ export const GATEWAY_PIPELINE_STAGES: GatewayPipelineStage[] = [
     name: STAGE_VISION_SENSE_RUNTIME,
     async execute(context) {
       const payload = await tryRunVisionSenseRuntime(context.request, context.telemetry.callbacks);
+      return payload ? { kind: 'short-circuit', payload } : { kind: 'continue' };
+    },
+  },
+  {
+    name: STAGE_LOCAL_DATA_SENSITIVITY_RUNTIME,
+    async execute(context) {
+      const payload = await tryRunLocalDataSensitivityRuntime(context.request, context.telemetry.callbacks);
+      return payload ? { kind: 'short-circuit', payload } : { kind: 'continue' };
+    },
+  },
+  {
+    name: STAGE_LOCAL_REPRODUCIBLE_METHOD_RUNTIME,
+    async execute(context) {
+      const payload = await tryRunLocalReproducibleMethodRuntime(context.request, context.telemetry.callbacks);
       return payload ? { kind: 'short-circuit', payload } : { kind: 'continue' };
     },
   },
@@ -519,6 +542,7 @@ function agentServerDispatchForbiddenPayload(request: GatewayRequest): ToolPaylo
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   const constraints = normalizeTurnExecutionConstraints(uiState.turnExecutionConstraints);
   if (!constraints?.agentServerForbidden) return undefined;
+  if (allowsForcedAgentServerContextFallback(request, uiState, constraints)) return undefined;
   const refs = requestContextRefs(request, uiState);
   return runtimeConstraintDiagnosticPayload(request, {
     artifactId: 'agentserver-dispatch-forbidden',
@@ -532,6 +556,27 @@ function agentServerDispatchForbiddenPayload(request: GatewayRequest): ToolPaylo
     refs,
     reasons: constraints.reasons,
   });
+}
+
+function allowsForcedAgentServerContextFallback(
+  request: GatewayRequest,
+  uiState: Record<string, unknown>,
+  constraints: ReturnType<typeof normalizeTurnExecutionConstraints>,
+) {
+  if (uiState.forceAgentServerGeneration !== true) return false;
+  if (!constraints?.contextOnly || !constraints.agentServerForbidden) return false;
+  const hasPriorContext = request.artifacts.length > 0
+    || toRecordList(uiState.recentExecutionRefs).length > 0
+    || toRecordList(uiState.recentRuns).length > 0
+    || constraints.evidence.artifactCount > 0
+    || constraints.evidence.executionRefCount > 0
+    || constraints.evidence.runCount > 0;
+  if (!hasPriorContext) return false;
+  const text = [
+    request.prompt,
+    typeof uiState.currentPrompt === 'string' ? uiState.currentPrompt : '',
+  ].join('\n');
+  return /AgentServer\s+Core\s+context\s+is\s+temporarily\s+unavailable|AgentServer\s+Core\s+context.*unavailable|Continue\s+from\s+prior\s+refs/i.test(text);
 }
 
 function capabilityProviderUnavailablePayload(request: GatewayRequest): ToolPayload | undefined {

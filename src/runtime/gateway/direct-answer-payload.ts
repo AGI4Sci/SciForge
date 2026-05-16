@@ -68,6 +68,9 @@ export interface PlainAgentTextClassification {
 export function classifyPlainAgentText(text: string): PlainAgentTextClassification {
   const trimmed = text.trim();
   if (!trimmed) return { kind: 'runtime-log', reason: 'empty direct text cannot satisfy the user-visible result contract' };
+  if (looksLikeUserFacingStageResult(trimmed)) {
+    return { kind: 'human-answer', reason: 'markdown stage result appears to be a user-facing answer with result/verdict sections' };
+  }
   if (/"(?:message|claims|uiManifest|executionUnits|artifacts)"\s*:/.test(trimmed) || /\bToolPayload\b|raw[_\s-]*tool[_\s-]*payload/i.test(trimmed)) {
     return { kind: 'tool-payload-json', reason: 'direct text looks like an unparsed ToolPayload or payload fragment' };
   }
@@ -90,6 +93,22 @@ export function classifyPlainAgentText(text: string): PlainAgentTextClassificati
     return { kind: 'process-narration', reason: 'direct text looks like intermediate process narration rather than a final answer' };
   }
   return { kind: 'human-answer', reason: 'direct text appears to be a user-facing answer' };
+}
+
+function looksLikeUserFacingStageResult(text: string) {
+  const head = text.slice(0, 2400);
+  if (!/^#{1,3}\s+Stage Result:/i.test(head)) return false;
+  if (looksLikeRawJsonEnvelope(text)) return false;
+  const hasResultSection = /#{2,4}\s+(Results?|Execution\s*&\s*Validation|Repair Verdict|Verdict|Summary|Diagnosis)\b/i.test(text);
+  const hasUserFacingEvidence = /\b(RMSE|error|succeeded|failed|verdict|exit code|script path|run command|output artifacts)\b/i.test(text);
+  return hasResultSection && hasUserFacingEvidence;
+}
+
+function looksLikeRawJsonEnvelope(text: string) {
+  const trimmed = text.trim();
+  if (/^```(?:json)?\s*\{[\s\S]*\}\s*```$/i.test(trimmed)) return true;
+  if (/^\{[\s\S]*"(?:message|claims|uiManifest|executionUnits|artifacts)"\s*:/.test(trimmed)) return true;
+  return false;
 }
 
 function guardedDirectTextDiagnosticPayload(

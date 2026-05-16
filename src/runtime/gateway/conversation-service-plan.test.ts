@@ -81,6 +81,28 @@ test('turn composition scopes session facts for isolated turns', () => {
   }]);
 });
 
+test('turn composition does not promote prompt-discovered filenames into required current references', () => {
+  const composition = buildConversationTurnComposition({
+    policyInput: {
+      prompt: 'Analyze a module, but do not edit PROJECT.md.',
+      references: [],
+      refs: [],
+      session: {},
+    },
+    contextPolicy: { mode: 'isolate', historyReuse: { allowed: false } },
+    contextProjection: { currentReferenceFocus: [] },
+    currentReferenceDigests: [{
+      id: 'digest-project',
+      path: 'PROJECT.md',
+      sourceRef: 'PROJECT.md',
+      audit: { refDiscoverySource: 'prompt-discovered-reference' },
+    }],
+  });
+
+  assert.deepEqual(composition.currentReferences, []);
+  assert.deepEqual(composition.executionClassifierInput?.refs, []);
+});
+
 test('context-only continuation promotes session artifact refs as current references', () => {
   const composition = buildConversationTurnComposition({
     policyInput: {

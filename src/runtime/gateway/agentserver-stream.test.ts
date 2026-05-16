@@ -4,6 +4,7 @@ import test from 'node:test';
 import { buildSilentStreamDecisionRecord } from '@sciforge-ui/runtime-contract';
 import type { GatewayRequest } from '../runtime-types.js';
 import {
+  AgentServerGenerationConvergenceGuardError,
   AgentServerRepairContinuationBoundedStopError,
   agentServerGenerationTokenGuardLimit,
   agentServerSilentStreamGuardAudit,
@@ -100,7 +101,7 @@ test('silent stream guard consumes harness progressPlan silencePolicy for timeou
   assert.ok(capturedAudit.detail.includes('status=Retrying compact AgentServer stream'));
 });
 
-test('generation token budget is advisory for normal AgentServer streams and tightens when digest refs exist', async () => {
+test('generation token budget stops runaway normal AgentServer streams and tightens when digest refs exist', async () => {
   const request = {
     skillDomain: 'literature',
     prompt: 'guard runaway generation',
@@ -137,15 +138,28 @@ test('generation token budget is advisory for normal AgentServer streams and tig
     },
   }));
   let guardMessage = '';
-  const result = await readAgentServerRunStream(response, () => {}, {
-    maxTotalUsage: agentServerGenerationTokenGuardLimit(request),
-    onGuardTrip: (message) => {
-      guardMessage = message;
+  let thrown: unknown;
+  await assert.rejects(
+    async () => {
+      try {
+        await readAgentServerRunStream(response, () => {}, {
+          maxTotalUsage: agentServerGenerationTokenGuardLimit(request),
+          convergenceGuardMode: 'generation',
+          onGuardTrip: (message) => {
+            guardMessage = message;
+          },
+        });
+      } catch (error) {
+        thrown = error;
+        throw error;
+      }
     },
-  });
-  assert.equal(result.run.id, 'run-large-total-usage');
-  assert.equal(result.run.status, 'completed');
-  assert.equal(guardMessage, '');
+    /generation stopped by convergence guard after 310001 total tokens/,
+  );
+  assert.ok(thrown instanceof AgentServerGenerationConvergenceGuardError);
+  assert.equal(thrown.totalUsage, 310_001);
+  assert.equal(thrown.limit, 300_000);
+  assert.match(guardMessage, /limit 300000/);
 });
 
 test('repair continuation generation guard fails before broad convergence loop budget', async () => {

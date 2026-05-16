@@ -117,10 +117,13 @@ export function generatedTaskPayloadPreflightForTaskInput(preflight: GeneratedTa
     requiredEnvelopeKeys: preflight.requiredEnvelopeKeys,
     expectedArtifacts: preflight.expectedArtifacts,
     issues: preflight.issues.map((issue) => ({
+      id: issue.id,
+      kind: issue.kind,
       severity: issue.severity,
       path: issue.path,
       reason: issue.reason,
       sourceRef: issue.sourceRef,
+      evidence: issue.evidence,
       recoverActions: issue.recoverActions,
     })),
     guidance: preflight.guidance,
@@ -233,17 +236,22 @@ function generatedTaskProviderFirstNetworkIssuesForSource(
   const routes = readyWebProviderRoutes(request);
   if (!routes.length) return [];
   const directNetworkUses = directExternalNetworkUses(source);
-  if (!directNetworkUses.length) return [];
+  const unavailableProviderSdkUses = unavailableProviderSdkUsesForReadyRoutes(source);
+  if (!directNetworkUses.length && !unavailableProviderSdkUses.length) return [];
+  const evidence = [...directNetworkUses, ...unavailableProviderSdkUses];
+  const reason = directNetworkUses.length
+    ? `Generated task uses direct external network APIs (${directNetworkUses.join(', ')}) even though SciForge has ready provider route(s) for ${routes.map((route) => route.capabilityId).join(', ')}.`
+    : `Generated task imports unavailable provider SDKs (${unavailableProviderSdkUses.join(', ')}) even though SciForge generated tasks must use the local sciforge_task helper for ready provider route(s) ${routes.map((route) => route.capabilityId).join(', ')}.`;
   return [{
     id: `${sourceRef}:provider-first-direct-network:${routes.map((route) => route.capabilityId).join(',')}`,
     kind: GENERATED_TASK_CAPABILITY_FIRST_PREFLIGHT_ISSUE_KIND,
     severity: 'repair-needed',
     path: 'capabilityFirstPolicy',
     sourceRef,
-    evidence: clipEvidence(directNetworkUses.join(', ')),
-    reason: `Generated task uses direct external network APIs (${directNetworkUses.join(', ')}) even though SciForge has ready provider route(s) for ${routes.map((route) => route.capabilityId).join(', ')}.`,
+    evidence: clipEvidence(evidence.join(', ')),
+    reason,
     recoverActions: [
-      'Regenerate the task to use the SciForge provider route contract for web_search/web_fetch work before any direct external network call.',
+      'Regenerate the task to use the SciForge provider route contract for web_search/web_fetch work before any direct external network call or unavailable provider SDK import.',
       'Import sciforge_task from the entrypoint directory and inspect capabilityProviderRoutes/provider-first policy from task input.',
       'If the provider returns empty results or is unavailable at runtime, write a repair-needed ToolPayload with recoverActions instead of falling back to direct network libraries.',
     ],
@@ -270,6 +278,18 @@ function directExternalNetworkUses(source: string) {
     ['fetch', /\bfetch\s*\(/],
     ['node:http', /(?:^|\n)\s*(?:import\s+.*\bfrom\s+["']node:https?["']|import\s+.*\bfrom\s+["']https?["']|(?:require|import)\s*\(\s*["'](?:node:)?https?["']\s*\))/],
     ['curl/wget', /\b(?:subprocess\.(?:run|Popen|call|check_call|check_output)|os\.system)\s*\([^)\n]*(?:curl|wget)\b/],
+  ];
+  for (const [label, pattern] of patterns) {
+    if (pattern.test(stripped)) uses.add(label);
+  }
+  return [...uses].sort();
+}
+
+function unavailableProviderSdkUsesForReadyRoutes(source: string) {
+  const stripped = stripGeneratedTaskComments(source);
+  const uses = new Set<string>();
+  const patterns: Array<[string, RegExp]> = [
+    ['sciforge.tools', /(?:^|\n)\s*(?:from\s+sciforge\.tools\b|import\s+sciforge\.tools\b)|\bsciforge\.tools\./],
   ];
   for (const [label, pattern] of patterns) {
     if (pattern.test(stripped)) uses.add(label);

@@ -122,6 +122,43 @@ class GoalSnapshotTest(unittest.TestCase):
         self.assertEqual(snapshot["turnExecutionConstraints"]["executionModeHint"], "direct-context-answer")
         self.assertTrue(snapshot["turnExecutionConstraints"]["agentServerForbidden"])
 
+    def test_selected_output_artifact_only_emits_context_only_constraints(self) -> None:
+        snapshot = build_goal_snapshot(
+            {
+                "prompt": (
+                    "Using only the selected output artifact, give the reproducible experiment steps, "
+                    "say whether the reproduction succeeded, identify the biggest remaining risks, "
+                    "and list the next validation step."
+                ),
+                "session": {"artifacts": [{"id": "generated-knowledge-output", "type": "text"}]},
+            }
+        )
+
+        self.assertEqual(snapshot["taskRelation"], "continue")
+        self.assertEqual(snapshot["requiredArtifacts"], [])
+        self.assertEqual(snapshot["turnExecutionConstraints"]["executionModeHint"], "direct-context-answer")
+        self.assertTrue(snapshot["turnExecutionConstraints"]["agentServerForbidden"])
+
+    def test_visible_report_interpretation_is_context_only_without_new_artifact_requirement(self) -> None:
+        snapshot = build_goal_snapshot(
+            {
+                "prompt": (
+                    "Based on the visible analysis report from Round 1, explain the main conclusion "
+                    "and identify confounders and robustness checks."
+                ),
+                "session": {
+                    "messages": [{"id": "msg-prior", "role": "scenario"}],
+                    "artifacts": [{"id": "analysis-report", "type": "research-report"}],
+                    "runs": [{"id": "run-prior", "status": "completed"}],
+                },
+            }
+        )
+
+        self.assertEqual(snapshot["taskRelation"], "continue")
+        self.assertEqual(snapshot["requiredArtifacts"], [])
+        self.assertEqual(snapshot["turnExecutionConstraints"]["executionModeHint"], "direct-context-answer")
+        self.assertTrue(snapshot["turnExecutionConstraints"]["agentServerForbidden"])
+
     def test_answer_only_continuation_transform_emits_direct_context_constraints(self) -> None:
         snapshot = build_goal_snapshot(
             {
@@ -144,6 +181,27 @@ class GoalSnapshotTest(unittest.TestCase):
             "answer-only continuation transform can be satisfied from prior Projection/refs",
             snapshot["turnExecutionConstraints"]["reasons"],
         )
+
+    def test_reload_answer_only_risk_register_forbids_agentserver(self) -> None:
+        snapshot = build_goal_snapshot(
+            {
+                "prompt": (
+                    "answer only existing selected reload final unresolved risks risk register "
+                    "9 months 180k no xenium no tools"
+                ),
+                "session": {
+                    "messages": [{"id": "msg-prior", "role": "scenario"}],
+                    "runs": [{"id": "run-prior", "status": "completed"}],
+                    "artifacts": [{"id": "project-brief", "type": "research-report"}],
+                },
+            }
+        )
+
+        self.assertEqual(snapshot["taskRelation"], "continue")
+        self.assertEqual(snapshot["requiredArtifacts"], [])
+        self.assertEqual(snapshot["turnExecutionConstraints"]["executionModeHint"], "direct-context-answer")
+        self.assertTrue(snapshot["turnExecutionConstraints"]["agentServerForbidden"])
+        self.assertTrue(snapshot["turnExecutionConstraints"]["workspaceExecutionForbidden"])
 
     def test_profile_intent_keyword_map_controls_intent_classification(self) -> None:
         request = {

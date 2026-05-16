@@ -162,6 +162,37 @@ test('answer paragraphs with inline refs are preserved even when they mention ve
   assert.equal(presentation.auditSections.length, 0);
 });
 
+test('user-facing planning risk registers remain in primary answer', () => {
+  const content = [
+    'Planning register from the selected reference; no new workspace task was started.',
+    '',
+    '## Budget',
+    '- Personnel and analysis support: $52,000-$70,000',
+    '- Discovery assay/platform fees: $43,000-$57,000',
+    '',
+    '## Timeline',
+    '- Month 9: Package final report, repository, release notes, and unresolved-risk register.',
+    '',
+    '## Risk Register',
+    '- R1: Compressed 9-month timeline leaves less recovery time. Mitigation: define an early go/no-go check and fallback scope. Owner: PI/project lead.',
+    '- R2: Reduced $180,000 budget may force scope cuts. Mitigation: define an early go/no-go check and fallback scope. Owner: technical lead.',
+    '- R3: Xenium access removed; platform-dependent aims must be redesigned. Mitigation: replace platform-dependent assays. Owner: validation owner.',
+    '- R4: Input quality or access fails. Mitigation: add a fallback cohort and QC gate. Owner: PI/project lead.',
+    '',
+    '## Constraint Dependencies',
+    '- Updated hard timeline: 9 months.',
+    '- Updated hard budget cap: $180,000.',
+    '- Updated platform constraint: no Xenium access; dependent aims and assays require replacement.',
+  ].join('\n');
+
+  const presentation = splitFinalMessagePresentation(content);
+
+  assert.match(presentation.primaryContent, /## Risk Register/);
+  assert.match(presentation.primaryContent, /R1: Compressed 9-month timeline/);
+  assert.match(presentation.primaryContent, /R4: Input quality or access fails/);
+  assert.equal(presentation.auditSections.length, 0);
+});
+
 test('structured result presentation drives primary answer and folds diagnostics', () => {
   const presentation = splitFinalMessagePresentation('Received ToolPayload with executionUnits and raw diagnostics.', {
     answerBlocks: [{

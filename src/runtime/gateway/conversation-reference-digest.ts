@@ -56,10 +56,10 @@ interface DigestBuildInput {
 export function buildConversationReferenceDigests(input: DigestBuildInput): ConversationReferenceDigest[] {
   const options = normalizeReferenceDigestOptions(input.workspaceRoot, input.options);
   const root = realWorkspaceRoot(options.workspaceRoot);
-  const candidates = expandPromptRefs(
-    uniqueRefs([...refsFromValues(input.references ?? []), ...refsFromPrompt(input.prompt ?? '')]),
-    root,
-  );
+  const explicitRefs = uniqueRefs(refsFromValues(input.references ?? []));
+  const promptRefs = refsFromPrompt(input.prompt ?? '');
+  const explicitCandidates = new Set(expandPromptRefs(explicitRefs, root));
+  const candidates = expandPromptRefs(uniqueRefs([...explicitRefs, ...promptRefs]), root);
   const digests: ConversationReferenceDigest[] = [];
   let omitted = 0;
   for (const sourceRef of candidates) {
@@ -67,7 +67,12 @@ export function buildConversationReferenceDigests(input: DigestBuildInput): Conv
       omitted += 1;
       continue;
     }
-    digests.push(digestConversationReference(sourceRef, options, root));
+    const digest = digestConversationReference(sourceRef, options, root);
+    digest.audit = {
+      ...digest.audit,
+      refDiscoverySource: explicitCandidates.has(sourceRef) ? 'explicit-reference' : 'prompt-discovered-reference',
+    };
+    digests.push(digest);
   }
   if (omitted && digests.length) {
     digests[digests.length - 1].omitted.referencesAfterLimit = omitted;
@@ -534,8 +539,8 @@ function summarizeMarkdown(text: string): JsonMap {
   const bullets = lines.filter((line) => /^\s*[-*]\s+/.test(line)).map((line) => line.replace(/^\s*[-*]\s+/, '').trim());
   const tables = lines.filter((line) => line.includes('|') && line.trim().length > 3);
   const digestLines = [`Markdown digest: headings=${headings.length}, bullets=${bullets.length}, tableLines=${tables.length}.`];
-  if (headings.length) digestLines.push(`Headings: ${headings.slice(0, 8).map(scrubInline).join('; ')}`);
   if (bullets.length) digestLines.push(`Representative bullets: ${bullets.slice(0, 5).map(scrubInline).join('; ')}`);
+  if (headings.length) digestLines.push(`Headings: ${headings.slice(0, 8).map(scrubInline).join('; ')}`);
   return {
     digestText: digestLines.join('\n'),
     excerpts: lineExcerpts(lines, (line) => Boolean(line.trim()) && !/^\s*[-#|]/.test(line), 4),

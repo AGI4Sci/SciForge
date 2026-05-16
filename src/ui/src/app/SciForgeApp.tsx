@@ -89,8 +89,9 @@ import { FeedbackInboxPage } from './sciforgeApp/FeedbackInboxPage';
 import { Workbench } from './sciforgeApp/SciForgeWorkbench';
 
 export function SciForgeApp() {
-  const [page, setPage] = useState<PageId>('dashboard');
-  const [scenarioId, setScenarioId] = useState<ScenarioInstanceId>(defaultBuiltInScenarioId);
+  const initialNavigation = useMemo(() => loadStoredAppNavigation(), []);
+  const [page, setPage] = useState<PageId>(initialNavigation.page);
+  const [scenarioId, setScenarioId] = useState<ScenarioInstanceId>(initialNavigation.scenarioId);
   const [config, setConfig] = useState<SciForgeConfig>(() => loadSciForgeConfig());
   const [configFileHydrated, setConfigFileHydrated] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -121,6 +122,10 @@ export function SciForgeApp() {
     () => buildArchivedSessionCountsByScenario(archivedSessionsByAgent),
     [archivedSessionsByAgent],
   );
+
+  useEffect(() => {
+    saveStoredAppNavigation({ page, scenarioId });
+  }, [page, scenarioId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -591,4 +596,40 @@ export function SciForgeApp() {
       ) : null}
     </div>
   );
+}
+
+const APP_NAVIGATION_STORAGE_KEY = 'sciforge.app-navigation.v1';
+const validPages = new Set<PageId>(['dashboard', 'workbench', 'components', 'timeline', 'feedback']);
+
+function appNavigationStorageKey() {
+  if (typeof window === 'undefined') return APP_NAVIGATION_STORAGE_KEY;
+  const host = window.location.host.trim();
+  return host ? `${APP_NAVIGATION_STORAGE_KEY}.${host}` : APP_NAVIGATION_STORAGE_KEY;
+}
+
+function loadStoredAppNavigation(): { page: PageId; scenarioId: ScenarioInstanceId } {
+  if (typeof window === 'undefined') return { page: 'dashboard', scenarioId: defaultBuiltInScenarioId };
+  try {
+    const raw = window.localStorage.getItem(appNavigationStorageKey());
+    if (!raw) return { page: 'dashboard', scenarioId: defaultBuiltInScenarioId };
+    const parsed = JSON.parse(raw) as { page?: unknown; scenarioId?: unknown };
+    const page = typeof parsed.page === 'string' && validPages.has(parsed.page as PageId)
+      ? parsed.page as PageId
+      : 'dashboard';
+    const scenarioId = typeof parsed.scenarioId === 'string' && parsed.scenarioId.trim()
+      ? parsed.scenarioId.trim()
+      : defaultBuiltInScenarioId;
+    return { page, scenarioId };
+  } catch {
+    return { page: 'dashboard', scenarioId: defaultBuiltInScenarioId };
+  }
+}
+
+function saveStoredAppNavigation(navigation: { page: PageId; scenarioId: ScenarioInstanceId }) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(appNavigationStorageKey(), JSON.stringify(navigation));
+  } catch {
+    // Navigation restore is convenience state; workspace-state remains the durable source of truth.
+  }
 }

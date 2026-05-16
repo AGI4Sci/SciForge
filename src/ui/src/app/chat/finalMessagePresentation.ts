@@ -265,6 +265,7 @@ function classifyFinalMessageBlock(block: ContentBlock, pendingAuditHeading: str
   const systemEnvelope = looksLikeSystemEnvelope(text);
   const runtimeMetadata = looksLikeRuntimeMetadataBlock(text);
   const processTranscript = looksLikeProcessTranscript(text);
+  const userFacingPlanningList = looksLikeUserFacingPlanningList(block.kind, text);
   const structuralEvidenceType = rawJson ? 'raw-json' : logOutput ? 'log-output' : undefined;
   const evidenceType = block.kind === 'code'
     ? structuralEvidenceType ?? auditEvidenceType(haystack) ?? codeEvidenceType(block.language, text)
@@ -274,15 +275,15 @@ function classifyFinalMessageBlock(block: ContentBlock, pendingAuditHeading: str
       ?? auditHeadingEvidenceType(text)
       ?? structuralEvidenceType
       ?? codeEvidenceType(block.language, text);
-  const fold = Boolean(
-    pendingAuditHeading
-    || systemEnvelope
-    || runtimeMetadata
-    || processTranscript
-    || (block.kind === 'code' && (evidenceType || rawJson || logOutput))
-    || (block.kind !== 'heading' && failureDiagnostic)
-    || (block.kind !== 'heading' && evidenceType && text.length > 240)
-  );
+  const fold = !userFacingPlanningList && Boolean(
+      pendingAuditHeading
+      || systemEnvelope
+      || runtimeMetadata
+      || processTranscript
+      || (block.kind === 'code' && (evidenceType || rawJson || logOutput))
+      || (block.kind !== 'heading' && failureDiagnostic)
+      || (block.kind !== 'heading' && evidenceType && text.length > 240)
+    );
   return {
     fold,
     auditHeading: headingAudit,
@@ -290,6 +291,16 @@ function classifyFinalMessageBlock(block: ContentBlock, pendingAuditHeading: str
     evidenceType: evidenceType ?? (rawJson ? 'raw-json' : logOutput ? 'log-output' : 'tool-output'),
     importance: evidenceType === 'execution-audit' ? 'diagnostic' : rawJson || logOutput ? 'raw' : 'supporting',
   };
+}
+
+function looksLikeUserFacingPlanningList(kind: ContentBlock['kind'], text: string) {
+  if (kind !== 'list') return false;
+  const lines = text.split('\n').map((line) => line.trim()).filter(Boolean);
+  if (!lines.length) return false;
+  const planningLines = lines.filter((line) => /^[-*+]\s+(?:R\d+|Risk \d+|[A-Z][A-Za-z /&-]+|Months? \d+|Month \d+|Updated hard|Original \d+|Any plan step)\b/i.test(line));
+  const hasPlanningVocabulary = /\b(?:risk register|mitigation|owner|budget|timeline|month|constraint|invalidated|assumption|contingency|validation|cohort|platform|access)\b/i.test(text);
+  const hasRawDiagnostics = /\b(?:stdoutRef|stderrRef|traceRef|toolPayload|executionUnits|raw payload|raw response)\b/i.test(text);
+  return !hasRawDiagnostics && hasPlanningVocabulary && planningLines.length >= Math.max(1, Math.ceil(lines.length * 0.5));
 }
 
 function auditEvidenceType(text: string): FinalMessageAuditSection['evidenceType'] | undefined {

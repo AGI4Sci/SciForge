@@ -128,6 +128,63 @@ test('generated task files are materialized only inside the session bundle', asy
   assert.match(helperSource, /failed-with-reason/);
 });
 
+test('generated task input carries ready web routes for evidence-matrix artifacts even when model omitted selected tools', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-generated-evidence-matrix-routes-'));
+  const request: GatewayRequest = {
+    workspacePath: workspace,
+    skillDomain: 'literature',
+    prompt: 'build an evidence matrix from current literature',
+    artifacts: [],
+    expectedArtifactTypes: ['evidence-matrix', 'paper-list'],
+    uiState: {
+      sessionId: 'session-literature-evidence-routes',
+      sessionCreatedAt: '2026-05-12T01:00:00.000Z',
+      capabilityProviderAvailability: [
+        { id: 'sciforge.web-worker.web_search', available: true, status: 'available' },
+        { id: 'sciforge.web-worker.web_fetch', available: true, status: 'available' },
+      ],
+    },
+    scenarioPackageRef: { id: 'literature-evidence-review', version: '1.0.0', source: 'built-in' },
+  };
+  const result = await runGeneratedTaskExecutionLifecycle({
+    workspace,
+    request,
+    skill: providerTestSkill('2026-05-12T01:00:00.000Z'),
+    generation: {
+      ok: true,
+      runId: 'run-evidence-routes',
+      response: {
+        taskFiles: [{
+          path: 'tasks/inspect-provider-routes.py',
+          language: 'python',
+          content: [
+            'import json, sys',
+            '_, input_path, output_path = sys.argv',
+            'task_input = json.load(open(input_path, "r", encoding="utf-8"))',
+            'routes = task_input.get("capabilityProviderRoutes", {}).get("routes", [])',
+            'payload = {"message": "ok", "confidence": 0.8, "claimType": "fact", "evidenceLevel": "runtime", "reasoningTrace": "routes", "claims": [], "uiManifest": [], "executionUnits": [{"id": "unit", "status": "done"}], "artifacts": [{"id": "routes", "type": "runtime-context-summary", "data": routes}]}',
+            'open(output_path, "w", encoding="utf-8").write(json.dumps(payload))',
+          ].join('\n'),
+        }],
+        entrypoint: { language: 'python', path: 'tasks/inspect-provider-routes.py' },
+        environmentRequirements: {},
+        validationCommand: '',
+        expectedArtifacts: ['evidence-matrix', 'paper-list'],
+      },
+    },
+    deps: {
+      repairNeededPayload,
+    },
+  });
+
+  assert.equal(result.kind, 'run');
+  if (result.kind !== 'run') return;
+  const taskInput = JSON.parse(await readFile(join(workspace, result.execution.inputRel ?? ''), 'utf8'));
+  assert.deepEqual(taskInput.capabilityProviderRoutes.requiredCapabilityIds, ['web_fetch', 'web_search']);
+  assert.deepEqual(taskInput.capabilityProviderRoutes.routes.map((route: Record<string, unknown>) => route.capabilityId).sort(), ['web_fetch', 'web_search']);
+  assert.deepEqual(taskInput.providerInvocation.adapters.map((adapter: Record<string, unknown>) => adapter.capabilityId).sort(), ['web_fetch', 'web_search']);
+});
+
 test('generated task output shape preflight blocks obvious malformed payload writers before execution', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-generated-preflight-'));
   const request: GatewayRequest = {

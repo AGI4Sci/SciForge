@@ -72,8 +72,10 @@ import {
 } from '../../../../packages/support/object-references';
 import {
   objectReferenceKindLabel,
+  referenceKindForWorkspaceFileLike,
   referenceForObjectReference,
   referenceForWorkspaceFileLike,
+  sciForgeReferenceAttribute,
   withRegionLocator,
 } from '../../../../packages/support/object-references';
 import {
@@ -109,6 +111,7 @@ function ResultPaneWorkspaceFileEditor({
 }) {
   const dirty = state.draft !== state.file.content;
   const [saveError, setSaveError] = useState('');
+  const fileReference = referenceForWorkspaceFileLike(state.file, referenceKindForWorkspaceFileLike(state.file));
   async function save() {
     try {
       setSaveError('');
@@ -119,7 +122,11 @@ function ResultPaneWorkspaceFileEditor({
     }
   }
   return (
-    <div className="workspace-preview result-workspace-file-editor" aria-label="工作区文件">
+    <div
+      className="workspace-preview result-workspace-file-editor"
+      aria-label="工作区文件"
+      data-sciforge-reference={sciForgeReferenceAttribute(fileReference)}
+    >
       <div className="workspace-preview-head">
         <span>
           <FileText size={13} />

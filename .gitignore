@@ -10,6 +10,7 @@ __pycache__/
 config.local.json
 config.*.local.json
 docs/test-artifacts/
+docs/evidence/
 workspace/*
 !workspace/.gitkeep
 !workspace/README.md

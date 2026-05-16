@@ -73,14 +73,17 @@ export async function readAgentServerRunStream(
       onEvent(event);
       const totalUsage = agentServerEventTotalUsage(event);
       if (
-        options.convergenceGuardMode === 'repair-continuation'
+        options.convergenceGuardMode
         && options.maxTotalUsage
         && totalUsage
         && totalUsage > options.maxTotalUsage
       ) {
         const message = convergenceGuardMessage(totalUsage, options.maxTotalUsage, options.convergenceGuardMode);
         options.onGuardTrip?.(message);
-        throw new AgentServerRepairContinuationBoundedStopError(message, totalUsage, options.maxTotalUsage);
+        if (options.convergenceGuardMode === 'repair-continuation') {
+          throw new AgentServerRepairContinuationBoundedStopError(message, totalUsage, options.maxTotalUsage);
+        }
+        throw new AgentServerGenerationConvergenceGuardError(message, totalUsage, options.maxTotalUsage);
       }
     }
     if ('result' in envelope) finalResult = envelope.result;
@@ -129,6 +132,19 @@ export class AgentServerRepairContinuationBoundedStopError extends Error {
   constructor(message: string, totalUsage: number, limit: number) {
     super(message);
     this.name = 'AgentServerRepairContinuationBoundedStopError';
+    this.totalUsage = totalUsage;
+    this.limit = limit;
+  }
+}
+
+export class AgentServerGenerationConvergenceGuardError extends Error {
+  readonly code = 'AGENTSERVER_GENERATION_CONVERGENCE_GUARD';
+  readonly totalUsage: number;
+  readonly limit: number;
+
+  constructor(message: string, totalUsage: number, limit: number) {
+    super(message);
+    this.name = 'AgentServerGenerationConvergenceGuardError';
     this.totalUsage = totalUsage;
     this.limit = limit;
   }

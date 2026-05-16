@@ -417,7 +417,7 @@ export function agentServerWorkspaceTaskRepairPromptPolicyLines(group: 'all' | '
   return [...groups.intro, ...groups.completion];
 }
 
-export function agentServerGeneratedTaskRetryDetail(kind: 'entrypoint' | 'path-only-task-files' | 'task-interface' | 'provider-first-payload-preflight') {
+export function agentServerGeneratedTaskRetryDetail(kind: 'entrypoint' | 'path-only-task-files' | 'task-interface' | 'provider-first-payload-preflight' | 'provider-first-recovery-adapter') {
   if (kind === 'entrypoint') {
     return 'Retrying AgentServer generation once; entrypoint must be executable code, while reports/data must be emitted as artifacts or direct ToolPayload content.';
   }
@@ -426,6 +426,9 @@ export function agentServerGeneratedTaskRetryDetail(kind: 'entrypoint' | 'path-o
   }
   if (kind === 'provider-first-payload-preflight') {
     return 'Retrying AgentServer generation once; generated tasks must use ready SciForge provider routes for web work instead of direct external network libraries.';
+  }
+  if (kind === 'provider-first-recovery-adapter') {
+    return 'Using deterministic provider-first recovery adapter after strict retry still bypassed ready SciForge provider routes.';
   }
   return 'Retrying AgentServer generation once; generated tasks must consume the SciForge task input and write the declared output payload, not bake the current answer into static code.';
 }

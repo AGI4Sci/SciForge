@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import type { GatewayRequest } from '../runtime-types.js';
-import { directContextFastPathPayload } from './direct-context-fast-path.js';
+import { directContextFastPathPayload, requestWithDirectContextReadableArtifactData } from './direct-context-fast-path.js';
 
 function directDecision(
   intent: 'context-summary' | 'context-summary:risk' | 'context-summary:method' | 'context-summary:timeline' | 'run-diagnostic' | 'artifact-status' | 'capability-status' | 'fresh-execution' | 'unknown' = 'context-summary',
@@ -167,6 +170,95 @@ test('answer-only continuation transform returns checklist from prior visible an
   assert.doesNotMatch(payload.message, /sciforge\.agentserver|generated workspace task/i);
 });
 
+test('bounded previous evidence-matrix follow-up uses direct-context hypotheses without AgentServer policy', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'Based only on the previous evidence matrix, compress it into 3 testable hypotheses with supporting rows, minimal validation experiment, and failure mode. Do not perform a new search.',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [{
+      id: 'evidence-matrix-provider-recovery',
+      type: 'evidence-matrix',
+      data: {
+        rows: [
+          {
+            claim: 'Spatial Analysis of Intraductal Papillary Mucinous Neoplasms defines a Keratin 17-positive epithelial population.',
+            method: 'spatial analysis in pancreatic precursor lesions',
+            'main result': 'PMID:41638478',
+            limitations: 'metadata-only provider result',
+            'citation/ref': 'doi:10.1016/j.jcmgh.2026.101749',
+          },
+          {
+            claim: 'Integrative multimodal transcriptomics identifies a cancer-associated fibroblast membrane signature.',
+            method: 'multimodal transcriptomics / CAF analysis',
+            'main result': 'PMID:41942785',
+            limitations: 'requires full-text verification',
+            'citation/ref': 'doi:10.1007/s00109-026-02669-7',
+          },
+          {
+            claim: 'Spatially-resolved subtype progression reveals metabolic vulnerabilities in pancreatic ductal adenocarcinoma.',
+            method: 'spatial subtype and metabolic-state analysis',
+            'main result': 'PMID:41896850',
+            limitations: 'platform transfer risk',
+            'citation/ref': 'doi:10.1186/s12943-026-02628-3',
+          },
+        ],
+      },
+    }],
+    uiState: {},
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.equal(payload.executionUnits[0]?.tool, 'sciforge.direct-context-fast-path');
+  assert.match(payload.message, /Answered directly from the existing evidence matrix/);
+  assert.match(payload.message, /Hypothesis 1/);
+  assert.match(payload.message, /Minimal validation experiment/i);
+  assert.match(payload.message, /Main failure mode/i);
+  assert.match(payload.message, /41638478|10\.1016/);
+});
+
+test('bounded previous evidence-matrix follow-up hydrates artifacts from session bundle', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-direct-context-session-'));
+  const bundle = join(workspace, '.sciforge', 'sessions', '2026-05-16_literature-evidence-review_session-literature-evidence-review-test');
+  await mkdir(join(bundle, 'records'), { recursive: true });
+  await mkdir(join(bundle, 'artifacts'), { recursive: true });
+  await writeFile(join(bundle, 'records', 'session.json'), JSON.stringify({
+    sessionId: 'session-literature-evidence-review-test',
+    scenarioId: 'literature-evidence-review',
+    artifacts: [],
+  }, null, 2));
+  await writeFile(join(bundle, 'artifacts', 'evidence-matrix-provider-recovery.json'), JSON.stringify({
+    id: 'evidence-matrix-provider-recovery',
+    type: 'evidence-matrix',
+    data: {
+      rows: [{
+        claim: 'Spatial Analysis of Intraductal Papillary Mucinous Neoplasms defines a Keratin 17-positive epithelial population.',
+        method: 'spatial analysis in pancreatic precursor lesions',
+        'main result': 'PMID:41638478',
+        limitations: 'metadata-only provider result',
+        'citation/ref': 'doi:10.1016/j.jcmgh.2026.101749',
+      }],
+    },
+  }, null, 2));
+
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    workspacePath: workspace,
+    prompt: 'Based only on the previous evidence matrix artifact, compress it into 3 testable hypotheses with supporting rows, minimal validation experiment, and failure mode. Do not perform a new search.',
+    artifacts: [],
+    uiState: { sessionId: 'session-literature-evidence-review-test' },
+  };
+
+  const enriched = await requestWithDirectContextReadableArtifactData(request);
+  const payload = directContextFastPathPayload(enriched);
+
+  assert.equal(enriched.artifacts[0]?.id, 'evidence-matrix-provider-recovery');
+  assert.ok(payload);
+  assert.match(payload.message, /Hypothesis 1/);
+  assert.match(payload.message, /41638478|10\.1016/);
+});
+
 test('harness transformMode drives answer-only compression without prompt regex', () => {
   const request: GatewayRequest = {
     skillDomain: 'literature',
@@ -231,6 +323,56 @@ test('structured method summary intent selects method snippets without prompt do
   assert.ok(payload);
   assert.match(payload.message, /retrieve seed papers/);
   assert.doesNotMatch(payload.message, /source coverage can drift/);
+});
+
+test('visible analysis report follow-up reads bounded report body and answers the scientific question', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-direct-context-'));
+  const reportRel = 'analysis_report.md';
+  await writeFile(join(workspace, reportRel), [
+    '# Simulated Experiment Analysis Report',
+    '## Treatment Effect',
+    '- control mean = 109.66; drugA mean = 122.06.',
+    '- Cohen’s d = 1.029, indicating a large positive drugA effect.',
+    '- Two-way ANOVA treatment p = 1.1474e-04; reject H0.',
+    '## Batch and Timepoint',
+    '- Batch was modeled as a fixed effect with means B1 = 115.7, B2 = 114.4, B3 = 117.46.',
+    '- Timepoint means were 0h = 106.95, 24h = 112.84, 48h = 127.78.',
+    '## Limitations',
+    '- No interaction terms (treatment×batch, treatment×timepoint) included.',
+    '- Mixed models may be more appropriate for batch as random.',
+    '- Normality and homogeneity of variances are assumed.',
+  ].join('\n'));
+  const request: GatewayRequest = {
+    skillDomain: 'omics',
+    workspacePath: workspace,
+    prompt: 'Based on the visible analysis report from Round 1, explain the main conclusion of the treatment effect. Identify batch/timepoint confounders and propose three robustness checks.',
+    artifacts: [{
+      id: 'analysis-report',
+      type: 'research-report',
+      metadata: { reportRef: reportRel },
+    }],
+    uiState: {
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        ...canonicalDirectDecision('context-summary', { usedRefs: ['artifact:analysis-report'] }),
+        executionModePlan: { executionMode: 'direct-context-answer' },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+        latencyPolicy: { blockOnContextCompaction: false },
+      },
+    },
+  };
+
+  const enriched = await requestWithDirectContextReadableArtifactData(request);
+  const payload = directContextFastPathPayload(enriched);
+
+  assert.ok(payload);
+  assert.equal(payload.executionUnits[0]?.tool, 'sciforge.direct-context-fast-path');
+  assert.match(payload.message, /Cohen/);
+  assert.match(payload.message, /1\.1474e-04/);
+  assert.match(payload.message, /Batch/);
+  assert.match(payload.message, /interaction/i);
+  assert.doesNotMatch(payload.message, /^Summary from the selected reference/m);
 });
 
 test('answer-only continuation transform ignores unreadable digest and path-only refs', () => {
@@ -418,6 +560,53 @@ test('selected artifact summary ignores unrelated current-run diagnostic claims'
   assert.match(payload.message, /MRTX1133/);
   assert.doesNotMatch(payload.message, /Reference path was not readable/);
   assert.doesNotMatch(payload.message, /content was not available/);
+});
+
+test('selected workspace file summary can come from current ui references without top-level references', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'Use the selected patch report only. No rerun, no tools. Write a PR summary and risk checklist.',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    references: [],
+    artifacts: [{
+      id: 'runtime-diagnostic',
+      type: 'runtime-diagnostic',
+      data: {
+        markdown: 'Generated workspace task failed before producing the requested report.',
+      },
+    }],
+    uiState: {
+      currentReferences: [{
+        kind: 'file',
+        ref: 'file:workspace/parallel/p4/rcg-004-preflight-patch-report.md',
+        title: 'rcg-004-preflight-patch-report.md',
+        payload: {
+          selectedText: [
+            'Patch Summary: generatedTaskPayloadPreflightForTaskInput now preserves stable issue id, kind, and clipped evidence.',
+            'Risk checklist: verify current-reference gate false positives and selected-file direct-context follow-up in browser.',
+          ].join(' '),
+        },
+      }],
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        ...canonicalDirectDecision('context-summary', {
+          usedRefs: ['file:workspace/parallel/p4/rcg-004-preflight-patch-report.md'],
+        }),
+        executionModePlan: { executionMode: 'direct-context-answer' },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+        latencyPolicy: { blockOnContextCompaction: false },
+      },
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.match(payload.message, /Summary from the selected reference/);
+  assert.match(payload.message, /preserves stable issue id, kind, and clipped evidence/);
+  assert.match(payload.message, /selected-file direct-context follow-up/);
+  assert.doesNotMatch(payload.message, /Generated workspace task failed/);
 });
 
 test('direct context fast path answers skill tool capability provider status queries from runtime registry', () => {
@@ -726,6 +915,212 @@ test('run-diagnostic direct context can answer from selected execution-unit refs
   assert.equal(payload.executionUnits[0]?.tool, 'sciforge.direct-context-fast-path');
   assert.equal(payload.executionUnits[0]?.status, 'done');
   assert.match(payload.message, /EU-literature-failed|failed\.json|failed\.stderr\.log/);
+  assert.doesNotMatch(payload.message, /AgentServer generation request registered/);
+});
+
+test('selected-reference direct context can produce a bounded planning register without AgentServer', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'Answer-only from the selected ref: budget, timeline, and risk register. Do not run tools.',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [],
+    references: [{ ref: 'artifact:project-brief', title: 'Project brief' }],
+    uiState: {
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        ...canonicalDirectDecision('context-summary', {
+          usedRefs: ['artifact:project-brief'],
+          transformMode: 'answer-only-planning-register',
+        }),
+        executionModePlan: { executionMode: 'direct-context-answer' },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+        latencyPolicy: { blockOnContextCompaction: false },
+      },
+      currentReferenceDigests: [{
+        sourceRef: 'artifact:project-brief',
+        digestRef: '.sciforge/digests/project-brief.md',
+        digestText: [
+          '# Project Brief',
+          '**Duration:** 12 months',
+          '**Funding Request:** $250,000 direct costs',
+          '## Deliverables',
+          'D1 Curated dataset by month 6.',
+          'D2 Adaptive marker ranking algorithm by month 8.',
+          'D3 Validated marker panel by month 11.',
+          'D4 Final report and repository by month 12.',
+          '## Hard Constraints',
+          'Budget cap: $250,000 total direct costs.',
+          'Platform lock-in: Visium HD and Xenium for discovery; GeoMx DSP for validation.',
+          'Timeline: 12 months fixed.',
+          'Data sharing: raw sequencing data must be deposited in GEO.',
+          '## Evidence Gaps',
+          'RNA quality may fail in archival FFPE blocks.',
+          'Validation cohort effect size may miss AUC acceptance criteria.',
+        ].join('\n'),
+      }],
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.equal(payload.executionUnits[0]?.tool, 'sciforge.direct-context-fast-path');
+  assert.equal(payload.executionUnits[0]?.status, 'done');
+  assert.match(payload.message, /## Budget/);
+  assert.match(payload.message, /\$72,000-\$98,000/);
+  assert.match(payload.message, /## Timeline/);
+  assert.match(payload.message, /Month 12/);
+  assert.match(payload.message, /## Risk Register/);
+  assert.match(payload.message, /Platform lock-in/);
+});
+
+test('selected-reference planning register applies current-turn constraint overrides', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'Answer-only from the existing selected ref: change the hard constraint from 12 months / $250k to 9 months / $180k and assume no Xenium access. Update budget, timeline, risk register, and invalidated assumptions. Do not run tools.',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [],
+    references: [{ ref: 'artifact:project-brief', title: 'Project brief' }],
+    uiState: {
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        ...canonicalDirectDecision('context-summary', {
+          usedRefs: ['artifact:project-brief'],
+          transformMode: 'answer-only-planning-register',
+        }),
+        executionModePlan: { executionMode: 'direct-context-answer' },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+      },
+      currentReferenceDigests: [{
+        sourceRef: 'artifact:project-brief',
+        digestText: [
+          '**Duration:** 12 months',
+          '**Funding Request:** $250,000 direct costs',
+          '## Deliverables',
+          'D1 Visium HD and Xenium discovery dataset by month 6.',
+          'D2 Adaptive marker ranking algorithm by month 8.',
+          'D3 Validated marker panel by month 11.',
+          '## Hard Constraints',
+          'Budget cap: $250,000 total direct costs.',
+          'Platform lock-in: Visium HD and Xenium for discovery; GeoMx DSP for validation.',
+          'Timeline: 12 months fixed.',
+        ].join('\n'),
+      }],
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.equal(payload.executionUnits[0]?.tool, 'sciforge.direct-context-fast-path');
+  assert.match(payload.message, /Updated hard timeline: 9 months/);
+  assert.match(payload.message, /Updated hard budget cap: \$180,000/);
+  assert.match(payload.message, /no Xenium access/i);
+  assert.match(payload.message, /Month 9/);
+  assert.match(payload.message, /Original 12-month schedule is invalidated/);
+  assert.match(payload.message, /Original \$250,000 funding assumption is invalidated/);
+});
+
+test('reload selected-reference risk follow-up keeps unresolved risks without explicit transform mode', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'After reload, give the final version with unresolved risks from the selected ref. Do not run tools.',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [],
+    references: [{ ref: 'artifact:project-brief', title: 'Project brief' }],
+    uiState: {
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        ...canonicalDirectDecision('context-summary', {
+          usedRefs: ['artifact:project-brief'],
+        }),
+        executionModePlan: { executionMode: 'direct-context-answer' },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+      },
+      currentReferenceDigests: [{
+        sourceRef: 'artifact:project-brief',
+        digestText: [
+          '# Project Brief',
+          '**Duration:** 9 months',
+          '**Funding Request:** $180,000 direct costs',
+          '## Deliverables',
+          'D1 Visium HD discovery dataset by month 3.',
+          'D2 Adaptive marker ranking algorithm by month 6.',
+          'D3 Validated marker panel and final report by month 9.',
+          '## Hard Constraints',
+          'Budget cap: $180,000 total direct costs.',
+          'Platform lock-in: Visium HD for discovery; no Xenium access; GeoMx DSP for validation.',
+          'Timeline: 9 months fixed.',
+          '## Evidence Gaps',
+          'RNA quality may fail in archival FFPE blocks.',
+          'Validation cohort effect size may miss AUC acceptance criteria.',
+          'Xenium access removed; platform-dependent aims must be redesigned.',
+        ].join('\n'),
+      }],
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.equal(payload.executionUnits[0]?.tool, 'sciforge.direct-context-fast-path');
+  assert.equal(payload.executionUnits[0]?.status, 'done');
+  assert.match(payload.message, /## Risk Register/);
+  assert.match(payload.message, /R1:/);
+  assert.match(payload.message, /R2:/);
+  assert.match(payload.message, /R3:/);
+  assert.match(payload.message, /RNA quality|Validation cohort|Xenium/i);
+});
+
+test('selected-reference direct context can draft a main document artifact without AgentServer', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'Answer-only from the existing selected project brief: create the main grant proposal document artifact. Do not run tools.',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [],
+    references: [{ ref: 'artifact:project-brief', title: 'Project brief' }],
+    uiState: {
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        ...canonicalDirectDecision('context-summary', {
+          usedRefs: ['artifact:project-brief'],
+          transformMode: 'answer-only-document',
+        }),
+        executionModePlan: { executionMode: 'direct-context-answer' },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+      },
+      currentReferenceDigests: [{
+        sourceRef: 'artifact:project-brief',
+        digestText: [
+          '# Project Brief: Adaptive Spatial Transcriptomics Markers for Early Pancreatic Cancer Detection',
+          '**Duration:** 12 months',
+          '**Funding Request:** $250,000 direct costs',
+          'Specific Aim 1: identify spatially resolved transcriptomic signatures in PanIN lesions.',
+          'Specific Aim 2: develop an adaptive marker selection algorithm.',
+          'D1 Curated dataset by month 6.',
+          'D2 Adaptive marker ranking algorithm by month 8.',
+          'Budget cap: $250,000 total direct costs.',
+          'Timeline: 12 months fixed.',
+          'Evidence gap: RNA quality may fail in archival FFPE blocks.',
+          'Acceptance criteria: final report and repository by month 12.',
+        ].join('\n'),
+      }],
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.equal(payload.executionUnits[0]?.tool, 'sciforge.direct-context-fast-path');
+  assert.equal(payload.executionUnits[0]?.status, 'done');
+  assert.equal(payload.artifacts[0]?.type, 'research-report');
+  assert.match(payload.message, /# Proposal: Adaptive Spatial Transcriptomics/);
+  assert.match(payload.message, /## Specific Aims/);
+  assert.match(payload.message, /## Evidence Gaps and Risks/);
   assert.doesNotMatch(payload.message, /AgentServer generation request registered/);
 });
 

@@ -107,12 +107,33 @@ export async function tryAgentServerSupplementMissingArtifacts(
 
 export function expectedArtifactTypesForGeneratedRun(request: GatewayRequest, generatedExpectedArtifacts?: string[]) {
   const generated = uniqueStrings((generatedExpectedArtifacts ?? []).map((type) => type.trim()).filter(Boolean));
-  return uniqueStrings([...expectedArtifactTypesForRequest(request), ...generated]);
+  return uniqueStrings([...expectedArtifactTypesForRequest(request), ...generatedArtifactTypesForRequest(request, generated)]);
 }
 
 export function supplementScopeForGeneratedRun(request: GatewayRequest, generatedExpectedArtifacts?: string[]) {
   const generated = uniqueStrings((generatedExpectedArtifacts ?? []).map((type) => type.trim()).filter(Boolean));
-  return generated.length ? generated : expectedArtifactTypesForRequest(request);
+  const scopedGenerated = generatedArtifactTypesForRequest(request, generated);
+  return scopedGenerated.length ? scopedGenerated : expectedArtifactTypesForRequest(request);
+}
+
+function generatedArtifactTypesForRequest(request: GatewayRequest, generated: string[]) {
+  if (!generated.length) return [];
+  if (expectedArtifactTypesForRequest(request).length) return generated;
+  if (!workspaceCodeTaskPrompt(request.prompt)) return generated;
+  return generated.filter((artifactType) => !scenarioDefaultResearchArtifactType(artifactType));
+}
+
+function workspaceCodeTaskPrompt(prompt: string) {
+  const text = prompt.toLowerCase();
+  const hasCodeIntent = /\b(code|coding|repository|repo|module|source file|typescript|javascript|python|test helper|unit test|typecheck|patch|refactor|bug|runtime|gateway|manifest|validation|preflight|self-improvement)\b/.test(text)
+    || /(?:代码|仓库|模块|源码|测试|补丁|修复|重构|类型检查|运行时|网关|清单|校验)/.test(prompt);
+  const hasResearchRetrievalIntent = /\b(literature|papers?|pmid|doi|citation|bibliography|clinical trial|pubmed|openalex|evidence matrix|systematic review)\b/.test(text)
+    || /(?:文献|论文|引用|证据矩阵|综述|临床试验)/.test(prompt);
+  return hasCodeIntent && !hasResearchRetrievalIntent;
+}
+
+function scenarioDefaultResearchArtifactType(artifactType: string) {
+  return /^(?:paper-list|evidence-matrix|notebook-timeline|bibliography|citation-record|bibliographic-record)$/.test(artifactType);
 }
 
 async function recordSupplementalFallbackLedger(

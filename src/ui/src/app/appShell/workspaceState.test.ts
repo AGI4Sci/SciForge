@@ -310,6 +310,45 @@ test('recoverable focus selects projection-level repair-needed run and ignores t
   }), undefined);
 });
 
+test('recoverable focus does not steal focus from newer healthy workspace activity', () => {
+  const repairSession = {
+    ...session([{
+      id: 'run-repair-needed',
+      scenarioId: 'scenario-repair',
+      status: 'failed' as const,
+      prompt: 'old failed run',
+      response: 'repair needed',
+      createdAt: '2026-05-07T02:00:00.000Z',
+      completedAt: '2026-05-07T02:02:00.000Z',
+    }]),
+    sessionId: 'session-repair',
+    scenarioId: 'scenario-repair',
+    updatedAt: '2026-05-07T02:02:00.000Z',
+  };
+  const healthySession = {
+    ...session([{
+      id: 'run-completed',
+      scenarioId: 'scenario-healthy',
+      status: 'completed' as const,
+      prompt: 'new data analysis',
+      response: 'done',
+      createdAt: '2026-05-07T02:03:00.000Z',
+      completedAt: '2026-05-07T02:04:00.000Z',
+    }]),
+    sessionId: 'session-healthy',
+    scenarioId: 'scenario-healthy',
+    updatedAt: '2026-05-07T02:04:00.000Z',
+  };
+
+  assert.equal(workspaceRecoveryFocusForState({
+    ...workspace(repairSession),
+    sessionsByScenario: {
+      [repairSession.scenarioId]: repairSession,
+      [healthySession.scenarioId]: healthySession,
+    } as SciForgeWorkspaceState['sessionsByScenario'],
+  }), undefined);
+});
+
 test('recoverable focus follows conversation projection before raw run status', () => {
   const projectedSatisfied = {
     ...session([{

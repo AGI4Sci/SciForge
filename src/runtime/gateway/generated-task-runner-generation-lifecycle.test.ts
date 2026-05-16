@@ -7,7 +7,6 @@ import test from 'node:test';
 import type { AgentServerGenerationResponse, GatewayRequest, SkillAvailability, ToolPayload, WorkspaceRuntimeEvent } from '../runtime-types.js';
 import {
   resolveGeneratedTaskGenerationRetryLifecycle,
-  type AgentServerGenerationResult,
   type GeneratedTaskGenerationLifecycleDeps,
 } from './generated-task-runner-generation-lifecycle.js';
 
@@ -42,15 +41,9 @@ const skill = {
   },
 } as unknown as SkillAvailability;
 
-test('generation lifecycle strict-retries provider-first payload preflight violations', async () => {
-  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-provider-first-preflight-retry-'));
+test('generation lifecycle routes provider-first payload preflight violations to recovery adapter', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-provider-first-preflight-recovery-'));
   const events: WorkspaceRuntimeEvent[] = [];
-  let strictTaskFilesReason = '';
-  const retryGeneration: AgentServerGenerationResult = {
-    ok: true,
-    runId: 'retry-provider-first',
-    response: validProviderFirstGeneration('.sciforge/tasks/provider-first.py'),
-  };
 
   const result = await resolveGeneratedTaskGenerationRetryLifecycle({
     baseUrl: 'http://127.0.0.1:18080',
@@ -66,21 +59,24 @@ test('generation lifecycle strict-retries provider-first payload preflight viola
     callbacks: {
       onEvent: (event) => events.push(event),
     },
-    deps: depsWithRetry(async (params) => {
-      strictTaskFilesReason = params.strictTaskFilesReason ?? '';
-      return retryGeneration;
+    deps: depsWithRetry(async () => {
+      throw new Error('provider-first recovery should not require an AgentServer strict retry');
     }),
   });
 
   assert.equal(result.kind, 'task-files');
-  assert.equal(result.generation.runId, 'retry-provider-first');
-  assert.match(strictTaskFilesReason, /capabilityFirstPolicy/);
-  assert.match(strictTaskFilesReason, /direct external network APIs/);
-  assert.match(events.at(-1)?.detail ?? '', /ready SciForge provider routes/);
+  assert.equal(result.generation.runId, 'initial-direct-network');
+  assert.match(result.generation.response.patchSummary ?? '', /provider-first contract violation/i);
+  const source = result.generation.response.taskFiles[0]?.content ?? '';
+  assert.match(source, /invoke_capability/);
+  assert.match(source, /_search_query/);
+  assert.doesNotMatch(source, /import\s+requests|import\s+urllib|requests\.|urllib\.request/);
+  assert.equal(events.some((event) => /direct provider bypass/.test(event.message ?? '')), true);
 });
 
-test('generation lifecycle returns repair payload when provider-first strict retry still bypasses providers', async () => {
+test('generation lifecycle provider-first adapter is deterministic for repeated bypasses', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-provider-first-preflight-still-blocked-'));
+  const events: WorkspaceRuntimeEvent[] = [];
   const result = await resolveGeneratedTaskGenerationRetryLifecycle({
     baseUrl: 'http://127.0.0.1:18080',
     request: readyWebProviderRequest,
@@ -97,11 +93,19 @@ test('generation lifecycle returns repair payload when provider-first strict ret
       runId: 'retry-still-direct-network',
       response: directNetworkGeneration('.sciforge/tasks/direct-network-retry.py'),
     })),
+    callbacks: {
+      onEvent: (event) => events.push(event),
+    },
   });
 
-  assert.equal(result.kind, 'payload');
-  assert.match(result.payload.message, /Strict retry still bypassed ready provider routes/);
-  assert.equal(result.payload.executionUnits?.[0]?.status, 'repair-needed');
+  assert.equal(result.kind, 'task-files');
+  assert.equal(result.generation.runId, 'initial-direct-network');
+  assert.match(result.generation.response.patchSummary ?? '', /provider-first contract violation/i);
+  const source = result.generation.response.taskFiles[0]?.content ?? '';
+  assert.match(source, /invoke_capability/);
+  assert.match(source, /provider_result_is_empty/);
+  assert.doesNotMatch(source, /import\s+requests|import\s+urllib|requests\.|urllib\.request/);
+  assert.equal(events.some((event) => /deterministic provider-first recovery adapter/.test(event.message ?? '')), true);
 });
 
 function depsWithRetry(
@@ -145,19 +149,6 @@ function directNetworkGeneration(path: string): AgentServerGenerationResponse {
     'output_path = sys.argv[2]',
     'urllib.request.urlopen("https://example.com", timeout=5)',
     'payload = {"message": "ok", "confidence": 0.5, "claimType": "fact", "evidenceLevel": "runtime", "reasoningTrace": input_path, "claims": [], "uiManifest": [], "executionUnits": [], "artifacts": []}',
-    'open(output_path, "w", encoding="utf-8").write(json.dumps(payload))',
-  ].join('\n'));
-}
-
-function validProviderFirstGeneration(path: string): AgentServerGenerationResponse {
-  return generation(path, [
-    'import json, sys',
-    'from sciforge_task import invoke_provider',
-    'input_path = sys.argv[1]',
-    'output_path = sys.argv[2]',
-    'task_input = json.load(open(input_path, "r", encoding="utf-8"))',
-    'provider_result = invoke_provider(task_input, "web_search", {"query": "CRISPR prime editing review"})',
-    'payload = {"message": "ok", "confidence": 0.5, "claimType": "fact", "evidenceLevel": "runtime", "reasoningTrace": str(provider_result), "claims": [], "uiManifest": [], "executionUnits": [], "artifacts": []}',
     'open(output_path, "w", encoding="utf-8").write(json.dumps(payload))',
   ].join('\n'));
 }

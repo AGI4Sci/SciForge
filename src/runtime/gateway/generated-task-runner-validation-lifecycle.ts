@@ -504,8 +504,9 @@ export async function buildGeneratedTaskRunInputLifecycle(
   input: GeneratedTaskRunInputLifecycleInput,
 ): Promise<GeneratedTaskRunInputLifecycle> {
   const currentRefs = currentTurnReferences(input.request);
-  const internalProviderRoutes = capabilityProviderRoutesForGatewayInvocation(input.request);
-  const providerRoutes = capabilityProviderRoutesForHandoff(input.request);
+  const providerRouteRequest = providerRouteRequestForGeneratedTask(input.request, input.expectedArtifacts);
+  const internalProviderRoutes = capabilityProviderRoutesForGatewayInvocation(providerRouteRequest);
+  const providerRoutes = capabilityProviderRoutesForHandoff(providerRouteRequest);
   const priorAttempts = currentRefs.length
     ? []
     : summarizeTaskAttemptsForAgentServer(await readRecentTaskAttempts(input.workspacePath, input.request.skillDomain, 8, {
@@ -555,6 +556,22 @@ export async function buildGeneratedTaskRunInputLifecycle(
         : undefined,
     },
     retentionProtectedInputRels: input.generatedInputRels,
+  };
+}
+
+function providerRouteRequestForGeneratedTask(request: GatewayRequest, expectedArtifacts: string[]): GatewayRequest {
+  const selectedToolIds = new Set(toStringList(request.selectedToolIds));
+  const expectsLiteratureRetrievalArtifact = expectedArtifacts.some((artifactType) => (
+    artifactType === 'paper-list' || artifactType === 'evidence-matrix'
+  ));
+  if (request.externalIoRequired || expectsLiteratureRetrievalArtifact) {
+    selectedToolIds.add('web_search');
+    selectedToolIds.add('web_fetch');
+  }
+  if (!selectedToolIds.size) return request;
+  return {
+    ...request,
+    selectedToolIds: [...selectedToolIds],
   };
 }
 

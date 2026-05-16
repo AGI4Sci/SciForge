@@ -350,13 +350,14 @@ export function normalizeCanonicalHandoffValue(
   if (Array.isArray(value)) {
     const out: unknown[] = [];
     const hashes = new Set<string>();
+    const preserveArrayLength = path.at(-1) === 'priorAttempts';
     for (const [index, item] of value.entries()) {
       const normalized = normalizeCanonicalHandoffValue(item, options, [...path, String(index)], seen);
       const hash = sha1Json(normalized);
       if (hashes.has(hash)) continue;
       hashes.add(hash);
       out.push(normalized);
-      if (out.length >= maxArrayItems) break;
+      if (!preserveArrayLength && out.length >= maxArrayItems) break;
     }
     seen.delete(value);
     return out;

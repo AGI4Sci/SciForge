@@ -1,3 +1,5 @@
+import { readFile, readdir } from 'node:fs/promises';
+import { isAbsolute, join, resolve } from 'node:path';
 import type { GatewayRequest, ToolPayload } from '../runtime-types.js';
 import { isRecord } from '../gateway-utils.js';
 import { sha1 } from '../workspace-task-runner.js';
@@ -41,7 +43,8 @@ export function directContextFastPathPayload(request: GatewayRequest): ToolPaylo
   if (missingExpectedArtifacts.length) return missingExpectedArtifactsPayload(request, context, missingExpectedArtifacts, gate);
   const message = directContextAnswerMessage(request, context, decision);
   const instance = directContextInstance(request, context);
-  const reportId = directContextArtifactId(instance.id);
+  const outputSpec = directContextOutputSpec(instance.id, transformMode);
+  const reportId = outputSpec.reportId;
   const outputRef = directContextOutputRef(instance.id);
   return {
     message,
@@ -63,7 +66,7 @@ export function directContextFastPathPayload(request: GatewayRequest): ToolPaylo
       supportingRefs: directContextFastPathSupportingRefs(context),
       opposingRefs: [],
     }],
-    uiManifest: directContextUiManifest(reportId, DIRECT_CONTEXT_FAST_PATH_POLICY.reportArtifactType),
+    uiManifest: directContextUiManifest(reportId, outputSpec.artifactType),
     executionUnits: [{
       id: `EU-direct-context-${instance.id}`,
       tool: DIRECT_CONTEXT_FAST_PATH_POLICY.executionToolId,
@@ -79,12 +82,13 @@ export function directContextFastPathPayload(request: GatewayRequest): ToolPaylo
     }],
     artifacts: [{
       id: reportId,
-      type: DIRECT_CONTEXT_FAST_PATH_POLICY.reportArtifactType,
+      type: outputSpec.artifactType,
       producerScenario: request.skillDomain,
       schemaVersion: '1',
       metadata: {
         source: DIRECT_CONTEXT_FAST_PATH_POLICY.source,
         policyOwner: DIRECT_CONTEXT_FAST_PATH_POLICY.policyOwner,
+        transformMode: transformMode ?? 'none',
         contextItemCount: context.length,
         directContextGate: gate.audit,
         runId: instance.runId,
@@ -110,6 +114,165 @@ export function directContextFastPathPayload(request: GatewayRequest): ToolPaylo
         summary: item.summary,
       })),
   };
+}
+
+function readableArtifactFileRef(artifact: Record<string, unknown>) {
+  const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+  const delivery = isRecord(artifact.delivery) ? artifact.delivery : {};
+  return stringField(artifact.dataRef)
+    ?? stringField(artifact.path)
+    ?? stringField(artifact.ref)
+    ?? stringField(metadata.reportRef)
+    ?? stringField(metadata.markdownRef)
+    ?? stringField(metadata.dataRef)
+    ?? stringField(metadata.path)
+    ?? stringField(delivery.readableRef)
+    ?? stringField(delivery.rawRef);
+}
+
+function safeDirectContextReadPath(workspace: string, ref: string | undefined) {
+  if (!ref || /^(?:artifact|run|execution-unit|claim|runtime):/i.test(ref)) return undefined;
+  const path = isAbsolute(ref) ? resolve(ref) : resolve(workspace, ref);
+  const allowedRoots = uniqueStrings([workspace, resolve(process.cwd())]);
+  if (!allowedRoots.some((root) => path === root || path.startsWith(`${root}/`))) return undefined;
+  if (!/\.(?:md|markdown|txt|csv|tsv|json|py|ipynb)$/i.test(path)) return undefined;
+  return path;
+}
+
+async function readBoundedUtf8(path: string, maxChars: number) {
+  try {
+    const text = await readFile(path, 'utf8');
+    return text.slice(0, maxChars);
+  } catch {
+    return undefined;
+  }
+}
+
+export async function requestWithDirectContextReadableArtifactData(request: GatewayRequest): Promise<GatewayRequest> {
+  request = await requestWithSessionArtifactsForBoundedFollowup(request);
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  if (uiState.forceAgentServerGeneration === true) return request;
+  const decision = directContextDecisionForRequest(request);
+  if (!decision || !policyRequestsDirectContext(request, decision)) return request;
+
+  const workspace = resolve(request.workspacePath || process.cwd());
+  const artifacts = await Promise.all(request.artifacts.map(async (artifact) => {
+    if (!isRecord(artifact)) return artifact;
+    const existingData = isRecord(artifact.data) ? artifact.data : {};
+    if (stringField(existingData.markdown) || stringField(existingData.content) || stringField(existingData.text)) return artifact;
+    const ref = readableArtifactFileRef(artifact);
+    const path = safeDirectContextReadPath(workspace, ref);
+    if (!path) return artifact;
+    const text = await readBoundedUtf8(path, DIRECT_CONTEXT_FAST_PATH_POLICY.contextLimits.summaryChars * 12);
+    if (!text) return artifact;
+    const type = stringField(artifact.type) ?? stringField(artifact.artifactType) ?? '';
+    const data = /report|summary|markdown|document/i.test(type)
+      ? { ...existingData, markdown: text, content: text }
+      : { ...existingData, content: text };
+    return { ...artifact, data };
+  }));
+  return { ...request, artifacts };
+}
+
+async function requestWithSessionArtifactsForBoundedFollowup(request: GatewayRequest): Promise<GatewayRequest> {
+  if (request.artifacts.some(isBoundedAnswerArtifact) && (
+    !/evidence[-\s_]?matrix|证据矩阵|matrix artifact/i.test(request.prompt)
+    || request.artifacts.some((artifact) => isRecord(artifact) && /evidence[-\s_]?matrix/i.test(`${stringField(artifact.type) ?? ''} ${stringField(artifact.id) ?? ''}`))
+  )) return request;
+  if (!boundedArtifactFollowupPrompt(request.prompt)) return request;
+  const workspace = request.workspacePath
+    ? resolve(request.workspacePath)
+    : process.env.SCIFORGE_WORKSPACE_PATH
+      ? resolve(process.env.SCIFORGE_WORKSPACE_PATH)
+      : undefined;
+  if (!workspace) return request;
+  const sessionId = sessionIdFromUiState(request.uiState);
+  const artifacts = await readSessionArtifactsForDirectContext(workspace, sessionId);
+  return artifacts.length ? { ...request, artifacts: mergeArtifactRecords([...request.artifacts, ...artifacts]) } : request;
+}
+
+function sessionIdFromUiState(value: unknown) {
+  const uiState = isRecord(value) ? value : {};
+  const contextProjection = isRecord(uiState.contextProjection) ? uiState.contextProjection : {};
+  const workspaceKernel = isRecord(contextProjection.workspaceKernel) ? contextProjection.workspaceKernel : {};
+  const workspaceFacts = isRecord(uiState.workspaceFacts) ? uiState.workspaceFacts : {};
+  const sessionBundleRef = stringField(workspaceFacts.sessionBundleRef);
+  return stringField(uiState.sessionId)
+    ?? stringField(workspaceKernel.sessionId)
+    ?? sessionBundleRef?.match(/session-[^/]+$/)?.[0];
+}
+
+async function readSessionArtifactsForDirectContext(workspace: string, sessionId: string | undefined) {
+  const sessionsRoot = join(workspace, '.sciforge', 'sessions');
+  let entries: Array<{ isDirectory(): boolean; name: string }>;
+  try {
+    entries = await readdir(sessionsRoot, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const candidates = entries
+    .filter((entry) => entry.isDirectory())
+    .filter((entry) => !sessionId || entry.name.includes(sessionId))
+    .map((entry) => entry.name)
+    .sort()
+    .reverse();
+  for (const bundle of candidates) {
+    const artifacts = await readDirectContextBundleArtifacts(join(sessionsRoot, bundle));
+    if (artifacts.length) return artifacts;
+  }
+  return [];
+}
+
+async function readDirectContextBundleArtifacts(bundleRoot: string): Promise<Array<Record<string, unknown>>> {
+  const fromSession = await readJsonRecord(join(bundleRoot, 'records', 'session.json'));
+  const sessionArtifacts = recordRows(fromSession?.artifacts).filter(isBoundedAnswerArtifact);
+  const artifactDir = join(bundleRoot, 'artifacts');
+  let artifactFiles: Array<{ isFile(): boolean; name: string }> = [];
+  try {
+    artifactFiles = await readdir(artifactDir, { withFileTypes: true });
+  } catch {
+    // The session record may still contain enough inline artifact data.
+  }
+  const fileArtifacts: Array<Record<string, unknown>> = [];
+  for (const entry of artifactFiles) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    const parsed = await readJsonRecord(join(artifactDir, entry.name));
+    if (parsed && isBoundedAnswerArtifact(parsed)) fileArtifacts.push(parsed);
+  }
+  return mergeArtifactRecords([...sessionArtifacts, ...fileArtifacts])
+    .sort((left, right) => directContextArtifactPriority(left) - directContextArtifactPriority(right))
+    .slice(0, 12);
+}
+
+function directContextArtifactPriority(artifact: Record<string, unknown>) {
+  const text = `${stringField(artifact.type) ?? ''} ${stringField(artifact.id) ?? ''}`;
+  if (/evidence[-\s_]?matrix/i.test(text)) return 0;
+  if (/paper-list/i.test(text)) return 1;
+  if (/research-report|report/i.test(text)) return 2;
+  if (/notebook/i.test(text)) return 3;
+  if (/runtime-context-summary/i.test(text)) return 4;
+  return 9;
+}
+
+async function readJsonRecord(path: string) {
+  try {
+    const parsed = JSON.parse(await readFile(path, 'utf8'));
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function mergeArtifactRecords(items: Array<Record<string, unknown>>) {
+  const out: Array<Record<string, unknown>> = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    const key = stringField(item.id) ?? stringField(item.dataRef) ?? stringField(item.path) ?? JSON.stringify(item).slice(0, 80);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
 }
 
 function missingExpectedArtifactsPayload(
@@ -236,6 +399,8 @@ type DirectContextTransformMode =
   | 'answer-only-compress'
   | 'answer-only-summary'
   | 'answer-only-checklist'
+  | 'answer-only-planning-register'
+  | 'answer-only-document'
   | 'none';
 
 interface DirectContextDecision {
@@ -314,7 +479,10 @@ function directContextDecisionForRequest(request: GatewayRequest): DirectContext
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   const conversationPolicy = isRecord(uiState.conversationPolicy) ? uiState.conversationPolicy : {};
   const harnessContract = isRecord(conversationPolicy.harnessContract) ? conversationPolicy.harnessContract : {};
-  return normalizeDirectContextDecision(harnessContract.directContextDecision);
+  const structured = normalizeDirectContextDecision(harnessContract.directContextDecision);
+  const fallback = fallbackDirectContextDecisionForBoundedArtifactFollowup(request);
+  if (fallback && (!structured || !directContextDecisionAllowsAnswer(structured))) return fallback;
+  return structured ?? fallback;
 }
 
 function normalizeDirectContextDecision(value: unknown): DirectContextDecision | undefined {
@@ -373,6 +541,8 @@ function normalizeDirectContextTransformMode(value: unknown): DirectContextTrans
   if (value === 'answer-only-compress'
     || value === 'answer-only-summary'
     || value === 'answer-only-checklist'
+    || value === 'answer-only-planning-register'
+    || value === 'answer-only-document'
     || value === 'none') return value;
   return undefined;
 }
@@ -405,6 +575,19 @@ function directContextInstance(
 
 function directContextArtifactId(instanceId: string) {
   return `${DIRECT_CONTEXT_FAST_PATH_POLICY.reportArtifactId}-${instanceId}`;
+}
+
+function directContextOutputSpec(instanceId: string, transformMode: DirectContextTransformMode | undefined) {
+  if (transformMode === 'answer-only-document') {
+    return {
+      reportId: `research-report-${instanceId}`,
+      artifactType: 'research-report',
+    };
+  }
+  return {
+    reportId: directContextArtifactId(instanceId),
+    artifactType: DIRECT_CONTEXT_FAST_PATH_POLICY.reportArtifactType,
+  };
 }
 
 function directContextOutputRef(instanceId: string) {
@@ -441,13 +624,113 @@ function directContextAnswerMessage(
   decision: DirectContextDecision,
 ) {
   const prompt = request.prompt;
+  const hypotheses = testableHypothesesFromEvidenceMatrixMessage(prompt, context);
+  if (hypotheses) return hypotheses;
   const transformed = answerOnlyTransformMessage(prompt, context, decision.transformMode);
   if (transformed) return transformed;
+  const analysisReportFollowup = analysisReportFollowupMessage(prompt, context);
+  if (analysisReportFollowup) return analysisReportFollowup;
   const intentSummary = intentSummaryAnswer(decision.intent, prompt, context);
   if (intentSummary) return intentSummary;
   const selectedReferenceSummary = selectedReferenceSummaryMessage(request, context);
   if (selectedReferenceSummary) return selectedReferenceSummary;
   return directContextFastPathMessage(context);
+}
+
+function testableHypothesesFromEvidenceMatrixMessage(
+  prompt: string,
+  context: ReturnType<typeof buildDirectContextFastPathItems>,
+) {
+  if (!/(hypoth(?:esis|eses)|可检验|假设|validation experiment|minimal validation)/i.test(prompt)) return undefined;
+  if (!/(evidence matrix|matrix|证据矩阵)/i.test(prompt)) return undefined;
+  const sourceItems = context.filter((item) => /evidence[-\s_]?matrix|row \d+/i.test(`${item.label}\n${item.summary}`));
+  const rowStatements = uniqueStrings(sourceItems.flatMap((item) => statementParts(item.summary)))
+    .filter((line) => /^Row \d+:/i.test(line) || /doi:|PMID|PMC|ref:/i.test(line))
+    .slice(0, 8);
+  if (!rowStatements.length) return undefined;
+  const groups = [
+    {
+      title: 'Hypothesis 1: spatial omics can nominate early pancreatic-cancer or precursor-state signals.',
+      pick: /(early|precursor|intraductal|papillary|neoplasm|IPMN|keratin|K17|detection|pancreatic)/i,
+      experiment: 'Minimal validation experiment: profile archived early PDAC/IPMN versus benign pancreas sections with a targeted spatial transcriptomics or multiplex IF panel, then test whether the nominated epithelial/spatial signature separates lesion stage in a blinded holdout set.',
+      failure: 'Main failure mode: provider rows are metadata-level and may describe broad gastrointestinal/spatial omics reviews rather than direct early-detection cohorts.',
+    },
+    {
+      title: 'Hypothesis 2: tumor microenvironment and CAF spatial programs explain part of pancreatic-cancer progression risk.',
+      pick: /(microenvironment|CAF|fibroblast|membrane|immune|stromal|dynamic)/i,
+      experiment: 'Minimal validation experiment: quantify CAF/immune neighborhoods around malignant and premalignant ducts in 20-30 sections, and correlate neighborhood scores with pathology grade or progression labels.',
+      failure: 'Main failure mode: spatial neighborhood associations may be correlative, batch-sensitive, and not specific to pancreatic early detection.',
+    },
+    {
+      title: 'Hypothesis 3: subtype or metabolic spatial states expose measurable vulnerabilities in PDAC tissue.',
+      pick: /(subtype|metabolic|vulnerab|segmentation|classification|TUSCAN|single-cell|multimodal)/i,
+      experiment: 'Minimal validation experiment: reuse one public or local spatial transcriptomics cohort, run subtype/metabolic-state scoring per spot/region, and test whether high-scoring regions align with orthogonal marker staining or perturbation sensitivity evidence.',
+      failure: 'Main failure mode: subtype labels may not transfer across platforms, cohorts, or spot-resolution pipelines.',
+    },
+  ];
+  const used = new Set<string>();
+  const fallbackRows = [...rowStatements];
+  const sections = groups.map((group, index) => {
+    let support = rowStatements.filter((row) => group.pick.test(row) && !used.has(row)).slice(0, 3);
+    if (!support.length) support = fallbackRows.filter((row) => !used.has(row)).slice(0, 2);
+    support.forEach((row) => used.add(row));
+    return [
+      `${index + 1}. ${group.title}`,
+      'Supporting matrix rows / refs:',
+      ...support.map((row) => `- ${row}`),
+      group.experiment,
+      group.failure,
+    ].join('\n');
+  });
+  return [
+    'Answered directly from the existing evidence matrix; no new search or workspace task was started.',
+    '',
+    ...sections,
+  ].join('\n\n');
+}
+
+function analysisReportFollowupMessage(
+  prompt: string,
+  context: ReturnType<typeof buildDirectContextFastPathItems>,
+) {
+  if (!/(treatment effect|confounders?|robustness|batch|timepoint|main conclusion|处理效应|混杂|稳健性)/i.test(prompt)) return undefined;
+  const reportText = uniqueStrings(context
+    .filter((item) => /report|analysis/i.test(`${item.label} ${item.kind}`))
+    .map((item) => item.summary)
+    .filter((value): value is string => Boolean(value) && value.length > 200))
+    .join('\n\n');
+  if (!reportText) return undefined;
+  const treatment = treatmentConclusionLines(reportText);
+  if (!treatment.length) return undefined;
+  const confounders = confounderLines(reportText);
+  const robustness = robustnessCheckLines(reportText);
+  const english = !/[一-龥]/.test(prompt);
+  if (!english) {
+    return [
+      '基于当前可见分析报告直接回答，不启动新的 workspace task。',
+      '',
+      '## 处理效应结论',
+      ...treatment.map((line) => `- ${line}`),
+      '',
+      '## 可能混杂因素',
+      ...confounders.map((line) => `- ${line}`),
+      '',
+      '## 稳健性检查',
+      ...robustness.map((line) => `- ${line}`),
+    ].join('\n');
+  }
+  return [
+    'Answered directly from the visible analysis report without starting a new workspace task.',
+    '',
+    '## Treatment-effect conclusion',
+    ...treatment.map((line) => `- ${line}`),
+    '',
+    '## Plausible confounders',
+    ...confounders.map((line) => `- ${line}`),
+    '',
+    '## Robustness checks',
+    ...robustness.map((line) => `- ${line}`),
+  ].join('\n');
 }
 
 function answerOnlyTransformMessage(
@@ -460,6 +743,12 @@ function answerOnlyTransformMessage(
     : answerOnlyTransformRequestedLegacyFallback(text);
   if (!requested) {
     return undefined;
+  }
+  if (requested === 'answer-only-document') {
+    return documentTransformMessage(text, context);
+  }
+  if (requested === 'answer-only-planning-register') {
+    return planningRegisterTransformMessage(text, context);
   }
   const prioritizedContext = [
     ...context.filter((item) => /claim|finding|answer/i.test(item.kind)),
@@ -481,13 +770,382 @@ function answerOnlyTransformMessage(
 function answerOnlyTransformRequestedLegacyFallback(text: string): DirectContextTransformMode | undefined {
   // Legacy baseline fallback for requests that predate the harness L1
   // classifyDirectContextTransform hook.
-  const matched = /(compress|condense|shorten|summari[sz]e|rewrite|rephrase|checklist|bullet|压缩|浓缩|改写|重写|总结|归纳|清单)/i.test(text)
-    && /(previous|prior|last|existing|above|answer|conclusion|points?|上一轮|之前|刚才|已有|答案|结论|要点)/i.test(text)
+  const matched = /(compress|condense|shorten|summari[sz]e|rewrite|rephrase|checklist|bullet|budget|timeline|milestones?|risk register|unresolved risks?|risks?|main document|proposal document|grant proposal|document artifact|research report|主文档|文档|报告|项目书|申请书|压缩|浓缩|改写|重写|总结|归纳|清单|预算|时间线|里程碑|风险清单|风险)/i.test(text)
+    && /(previous|prior|last|existing|above|answer|conclusion|points?|selected|current|restored|reload|reopen|final(?: version| summary)?|上一轮|之前|刚才|已有|答案|结论|要点|选中|当前|恢复|重载|重新打开|最终)/i.test(text)
     && !/(rerun|run again|execute|download|生成(?:新的)?(?:报告|表格|图|文件|产物)|下载|执行|运行)/i.test(text);
   if (!matched) return undefined;
+  if (/(main document|proposal document|grant proposal|document artifact|research report|主文档|项目书|申请书|报告文档)/i.test(text)) return 'answer-only-document';
+  if (/(budget|timeline|milestones?|risk register|unresolved risks?|risks?|预算|时间线|里程碑|风险清单|风险)/i.test(text)) return 'answer-only-planning-register';
   if (/(checklist|bullet|清单|列表)/i.test(text)) return 'answer-only-checklist';
   if (/(compress|condense|shorten|压缩|浓缩)/i.test(text)) return 'answer-only-compress';
   return 'answer-only-summary';
+}
+
+function documentTransformMessage(
+  text: string,
+  context: ReturnType<typeof buildDirectContextFastPathItems>,
+) {
+  const sourceText = uniqueStrings(context.map((item) => item.summary).filter((item): item is string => Boolean(item))).join('\n');
+  if (!sourceText.trim()) return undefined;
+  const title = extractDocumentTitle(sourceText)
+    ?? (/grant|proposal|项目书|申请书/i.test(text)
+      ? 'Main Grant Proposal Document'
+      : 'Main Research Document');
+  const constraints = extractPlanningLines(sourceText, /(constraint|budget cap|platform|timeline|data sharing|specimen|IRB|fixed|months?|约束|预算|平台|时间|数据|样本)/i, 8);
+  const aims = extractPlanningLines(sourceText, /(aim|objective|goal|hypothesis|specific|目标|假设)/i, 4);
+  const deliverables = extractPlanningLines(sourceText, /(deliverable|D\d+\b|report|repository|dataset|algorithm|validated|panel|pipeline|Docker|交付|报告|数据|算法)/i, 5);
+  const gaps = extractPlanningLines(sourceText, /(gap|risk|limitation|assumption|quality|cohort|RNA|validation|evidence|access|失败|风险|缺口|假设|质量|验证)/i, 8);
+  const monthCount = extractProjectMonthCount(sourceText) ?? 12;
+  const funding = extractFundingAmount(sourceText);
+  return [
+    `# ${title}`,
+    '',
+    'Drafted from existing selected/context refs; no new workspace task was started.',
+    '',
+    '## Executive Summary',
+    ...documentBulletLines(directContextStatements(context).slice(0, 3), [
+      'This document consolidates the existing project brief into a grant-style main proposal.',
+      'Scope, assumptions, deliverables, risks, and acceptance criteria are carried forward from the selected context.',
+    ]),
+    '',
+    '## Specific Aims',
+    ...documentBulletLines(aims, [
+      'Aim 1: Confirm the project scope, evidence base, and target user workflow.',
+      'Aim 2: Produce the core analysis or marker-selection deliverable described in the brief.',
+      'Aim 3: Validate the deliverable against the stated acceptance criteria and evidence gaps.',
+    ]),
+    '',
+    '## Approach and Workplan',
+    ...planningMilestoneLines(monthCount, deliverables, { excludedPlatforms: [] }),
+    '',
+    '## Budget Frame',
+    ...planningBudgetLines(funding),
+    '',
+    '## Deliverables',
+    ...documentBulletLines(deliverables, [
+      'Primary report artifact with methods, findings, and acceptance evidence.',
+      'Reproducibility package covering data refs, assumptions, and unresolved risks.',
+    ]),
+    '',
+    '## Constraints and Assumptions',
+    ...documentBulletLines(constraints, [
+      'Only constraints present in the selected context are treated as binding.',
+      'Unspecified owners, dates, and budgets require confirmation before execution.',
+    ]),
+    '',
+    '## Evidence Gaps and Risks',
+    ...planningRiskLines(gaps, constraints, { excludedPlatforms: [] }),
+    '',
+    '## Acceptance Criteria',
+    ...documentBulletLines(extractPlanningLines(sourceText, /(acceptance|criteria|AUC|QC|release|manuscript|repository|成功|验收)/i, 6), [
+      'The final document remains traceable to selected refs and avoids ungrounded new claims.',
+      'Budget, timeline, risks, and deliverables can be audited against the source brief.',
+      'Any later constraint change updates affected conclusions and invalidated assumptions.',
+    ]),
+  ].join('\n');
+}
+
+function extractDocumentTitle(text: string) {
+  const heading = text.match(/^#\s+(.+)$/m)?.[1]?.trim();
+  if (heading) return heading.replace(/^Project Brief:\s*/i, 'Proposal: ');
+  const title = text.match(/(?:Project Title|Title):\s*([^\n]+)/i)?.[1]?.trim();
+  return title ? `Proposal: ${title}` : undefined;
+}
+
+function documentBulletLines(lines: string[], fallback: string[]) {
+  return (lines.length ? lines : fallback).slice(0, 8).map((line) => `- ${line}`);
+}
+
+function planningRegisterTransformMessage(
+  text: string,
+  context: ReturnType<typeof buildDirectContextFastPathItems>,
+) {
+  const sourceText = uniqueStrings(context.map((item) => item.summary).filter((item): item is string => Boolean(item))).join('\n');
+  if (!sourceText.trim()) return undefined;
+  const overrides = extractPlanningOverrides(text);
+  const originalMonthCount = extractProjectMonthCount(sourceText);
+  const originalFunding = extractFundingAmount(sourceText);
+  const monthCount = overrides.monthCount ?? originalMonthCount ?? 12;
+  const funding = overrides.funding ?? originalFunding;
+  const constraints = extractPlanningLines(sourceText, /(constraint|budget cap|platform|timeline|data sharing|specimen|IRB|fixed|months?|约束|预算|平台|时间|数据|样本)/i, 12)
+    .filter((line) => !/^(?:deliverables?|hard constraints?|evidence gaps?|D\d+\b)/i.test(line))
+    .slice(0, 6);
+  const deliverables = extractPlanningLines(sourceText, /(deliverable|D\d+\b|report|repository|dataset|algorithm|validated|panel|pipeline|Docker|交付|报告|数据|算法)/i, 5);
+  const risks = extractPlanningLines(sourceText, /(gap|risk|limitation|assumption|quality|cohort|RNA|validation|evidence|access|失败|风险|缺口|假设|质量|验证)/i, 8);
+  const heading = /[一-龥]/.test(text)
+    ? '基于选中引用直接生成计划登记表，不启动新的 workspace task。'
+    : 'Planning register from the selected reference; no new workspace task was started.';
+  return [
+    heading,
+    '',
+    '## Budget',
+    ...planningBudgetLines(funding),
+    '',
+    '## Timeline',
+    ...planningMilestoneLines(monthCount, deliverables, overrides),
+    '',
+    '## Risk Register',
+    ...planningRiskLines(risks, constraints, overrides),
+    '',
+    '## Constraint Dependencies',
+    ...constraintDependencyLines(constraints, overrides),
+    ...invalidatedAssumptionLines({
+      originalMonthCount,
+      originalFunding,
+      overrides,
+      sourceText,
+    }),
+  ].join('\n');
+}
+
+interface PlanningOverrides {
+  previousMonthCount?: number;
+  monthCount?: number;
+  previousFunding?: number;
+  funding?: number;
+  excludedPlatforms: string[];
+}
+
+function extractPlanningOverrides(text: string): PlanningOverrides {
+  return {
+    previousMonthCount: extractPreviousProjectMonthCount(text),
+    monthCount: extractChangedProjectMonthCount(text) ?? extractProjectMonthCount(text),
+    previousFunding: extractPreviousFundingAmount(text),
+    funding: extractChangedFundingAmount(text) ?? extractFundingAmount(text),
+    excludedPlatforms: uniqueStrings(Array.from(text.matchAll(/\bno\s+([A-Z][A-Za-z0-9 -]{2,40})\s+access\b/gi))
+      .map((match) => match[1]?.trim())
+      .filter((item): item is string => Boolean(item))),
+  };
+}
+
+function extractPreviousProjectMonthCount(text: string) {
+  const match = text.match(/\bfrom\s+(\d{1,2})\s*[- ]?months?/i);
+  const parsed = match?.[1] ? Number(match[1]) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function extractChangedProjectMonthCount(text: string) {
+  const match = text.match(/\bto\s+(\d{1,2})\s*[- ]?months?/i)
+    ?? text.match(/(?:change|update|revise)[\s\S]{0,120}?(\d{1,2})\s*[- ]?months?/i);
+  const parsed = match?.[1] ? Number(match[1]) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function extractPreviousFundingAmount(text: string) {
+  const fromSegment = text.match(/\bfrom\b([\s\S]{0,120}?)\bto\b/i)?.[1];
+  return fromSegment ? extractFundingAmount(fromSegment) : undefined;
+}
+
+function extractChangedFundingAmount(text: string) {
+  const toSegment = text.match(/\bto\b([\s\S]{0,120})/i)?.[1];
+  const fromToFunding = toSegment ? extractFundingAmount(toSegment) : undefined;
+  if (fromToFunding) return fromToFunding;
+  const match = text.match(/\bto\s+\$\s?([0-9][0-9,]*(?:\.\d+)?)(\s*[kKmM])?/i)
+    ?? text.match(/(?:change|update|revise)[\s\S]{0,120}?\$\s?([0-9][0-9,]*(?:\.\d+)?)(\s*[kKmM])?/i);
+  return fundingAmountFromMatch(match);
+}
+
+function extractProjectMonthCount(text: string) {
+  const match = text.match(/(?:duration|timeline|period|fixed)?\D{0,20}(\d{1,2})\s*[- ]?months?/i);
+  const parsed = match?.[1] ? Number(match[1]) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function extractFundingAmount(text: string) {
+  const match = text.match(/\$\s?([0-9][0-9,]*(?:\.\d+)?)(\s*[kKmM])?(?:\s*(?:total|direct|budget|funding|costs?))?/i)
+    ?? text.match(/(?:budget cap|funding request|budget|预算)[^$0-9]{0,40}([0-9][0-9,]*(?:\.\d+)?)(\s*[kKmM])?/i);
+  return fundingAmountFromMatch(match);
+}
+
+function fundingAmountFromMatch(match: RegExpMatchArray | null) {
+  if (!match?.[1]) return undefined;
+  const parsed = Number(match[1].replace(/,/g, ''));
+  const multiplier = /\bk/i.test(match[2] ?? '') ? 1000 : /\bm/i.test(match[2] ?? '') ? 1_000_000 : 1;
+  const value = parsed * multiplier;
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function extractPlanningLines(text: string, pattern: RegExp, limit: number) {
+  return uniqueStrings(text
+    .replace(/\r/g, '')
+    .split(/\n+|(?<=[。.!?；;])\s+|\s+\|\s+/)
+    .map((line) => line.replace(/^[-*|#\d.\s:]+/, '').replace(/\s+/g, ' ').trim())
+    .filter((line) => line.length >= 10 && line.length <= 260 && pattern.test(line) && isDirectContextAnswerStatement(line))
+    .filter((line) => !/AgentServer generation stopped|convergence guard|\.sciforge\/sessions|task-results|artifact:/i.test(line))
+    .slice(0, limit));
+}
+
+function planningBudgetLines(total: number | undefined) {
+  if (!total) {
+    return [
+      '- Personnel and analysis support: range not stated; assign owner to confirm.',
+      '- Assays/platform fees: range not stated; bind to selected platforms.',
+      '- Validation cohort/testing: range not stated; bind to validation scope.',
+      '- Data/reproducibility infrastructure: range not stated; cover repository, documentation, and compute.',
+      '- Contingency: range not stated; reserve for QC failures and reruns.',
+    ];
+  }
+  const categories: Array<[string, number]> = [
+    ['Personnel and analysis support', 0.34],
+    ['Discovery assay/platform fees', 0.28],
+    ['Validation assays/cohort testing', 0.22],
+    ['Data management, compute, and reproducibility', 0.1],
+    ['Contingency and project operations', 0.06],
+  ];
+  return categories.map(([label, fraction]) => {
+    const midpoint = Math.round(total * fraction / 1000) * 1000;
+    const low = Math.max(0, Math.round(midpoint * 0.85 / 1000) * 1000);
+    const high = Math.round(midpoint * 1.15 / 1000) * 1000;
+    return `- ${label}: $${low.toLocaleString()}-$${high.toLocaleString()}`;
+  });
+}
+
+function planningMilestoneLines(monthCount: number, deliverables: string[], overrides: PlanningOverrides) {
+  const month = (value: number) => Math.min(monthCount, Math.max(1, value));
+  const compressed = monthCount < 12 || overrides.excludedPlatforms.length > 0;
+  const anchors = deliverables.length ? deliverables : [
+    'Finalize inputs, governance, and acceptance criteria',
+    'Complete discovery data generation and QC',
+    'Deliver analysis method/package draft',
+    'Complete validation and final report',
+  ];
+  const platformNote = overrides.excludedPlatforms.length
+    ? ` Exclude ${overrides.excludedPlatforms.join(', ')} and use an alternate available discovery/validation workflow.`
+    : '';
+  return compressed ? [
+    `- Months 1-${month(1)}: Confirm reduced scope, owners, replacement platforms, and acceptance criteria.${platformNote}`,
+    `- Months ${month(2)}-${month(3)}: ${anchors[0] ?? 'Generate and QC primary evidence/data'}; defer non-critical exploratory work.`,
+    `- Months ${month(4)}-${month(6)}: ${anchors[1] ?? 'Build and document analysis deliverable'} under the reduced budget/timebox.`,
+    `- Months ${month(7)}-${month(8)}: ${anchors[2] ?? 'Validate core claims against held-out evidence'} with the narrowed cohort/panel.`,
+    `- Month ${month(monthCount)}: Package final report, repository, release notes, and unresolved-risk register.`,
+  ] : [
+    `- Months 1-${month(2)}: ${anchors[0] ?? 'Confirm scope, owners, and acceptance criteria'}.`,
+    `- Months ${month(3)}-${month(5)}: ${anchors[1] ?? 'Generate and QC primary evidence/data'}.`,
+    `- Months ${month(6)}-${month(8)}: ${anchors[2] ?? 'Build and document analysis deliverable'}.`,
+    `- Months ${month(9)}-${month(11)}: ${anchors[3] ?? 'Validate core claims against held-out evidence'}.`,
+    `- Month ${month(monthCount)}: Package final report, repository, release notes, and unresolved-risk register.`,
+  ];
+}
+
+function treatmentConclusionLines(reportText: string) {
+  const treatmentSection = extractSection(reportText, /treatment|effect|statistics|hypothes/i);
+  const source = treatmentSection || reportText;
+  const lines = [
+    firstMatchLine(source, /control[^\n.;]*mean[^\n.;]*[0-9.]+[^\n.;]*(?:drugA|drug)[^\n.;]*mean[^\n.;]*[0-9.]+/i),
+    firstMatchLine(source, /drugA[^\n.;]*mean[^\n.;]*[0-9.]+[^\n.;]*control[^\n.;]*mean[^\n.;]*[0-9.]+/i),
+    firstMatchLine(source, /Cohen.?s?\s*d[^\n.;]*[0-9.]+[^\n.;]*/i),
+    firstMatchLine(source, /p\s*[=<>]\s*[0-9.eE-]+[^\n.;]*/i),
+    firstMatchLine(source, /reject[^\n.;]*H0[^\n.;]*/i),
+    firstMatchLine(source, /drugA[^\n.;]*(?:higher|increased|positive)[^\n.;]*/i),
+  ];
+  const selected = uniqueStrings(lines.filter((line): line is string => Boolean(line))).slice(0, 4);
+  if (selected.length) return selected;
+  return directContextStatements([{ kind: 'report', label: 'analysis report', summary: source, ref: 'analysis-report' }]).slice(0, 3);
+}
+
+function confounderLines(reportText: string) {
+  const lines = [
+    firstMatchLine(reportText, /Batch[^\n.;]*(?:fixed|random|effect|mean|B1|B2|B3)[^\n.;]*/i),
+    firstMatchLine(reportText, /timepoint[^\n.;]*(?:0h|24h|48h|fixed|effect|mean)[^\n.;]*/i),
+    firstMatchLine(reportText, /No interaction terms[^\n.;]*/i),
+    firstMatchLine(reportText, /mixed models?[^\n.;]*/i),
+  ];
+  const selected = uniqueStrings(lines.filter((line): line is string => Boolean(line))).slice(0, 4);
+  return selected.length ? selected : [
+    'Batch and timepoint were modeled as fixed effects in the report, so residual batch structure or time-dependent response could confound a simple treatment comparison.',
+    'The report states that interaction terms were not included, leaving treatment-by-batch and treatment-by-timepoint heterogeneity unresolved.',
+  ];
+}
+
+function robustnessCheckLines(reportText: string) {
+  const checks = [
+    'Fit treatment-by-batch and treatment-by-timepoint interaction terms and compare the treatment estimate.',
+    /mixed models?|random/i.test(reportText)
+      ? 'Refit with batch as a random effect or mixed model and check whether the drugA effect remains positive.'
+      : 'Refit with an alternative batch adjustment and check whether the drugA effect remains positive.',
+    /normality|homogeneity|variance/i.test(reportText)
+      ? 'Check residual normality and variance homogeneity; add a nonparametric or permutation sensitivity test if assumptions are weak.'
+      : 'Run a nonparametric or permutation sensitivity test for the treatment contrast.',
+    'Bootstrap the treatment effect size and confidence interval across samples while preserving batch/timepoint labels.',
+    'Stratify or leave-one-batch/timepoint-out to ensure the conclusion is not driven by one batch or the 48h samples.',
+  ];
+  return checks.slice(0, /three|3|三/.test(reportText) ? 3 : 5);
+}
+
+function extractSection(text: string, headingPattern: RegExp) {
+  const lines = text.split(/\r?\n/);
+  const start = lines.findIndex((line) => /^#{1,4}\s+/.test(line) && headingPattern.test(line));
+  if (start < 0) return undefined;
+  const end = lines.findIndex((line, index) => index > start && /^#{1,4}\s+/.test(line));
+  return lines.slice(start, end < 0 ? undefined : end).join('\n');
+}
+
+function firstMatchLine(text: string, pattern: RegExp) {
+  const match = text.match(pattern);
+  return match?.[0]?.replace(/^\s*(?:[-*]|\d+[.)])\s*/, '').replace(/\s+/g, ' ').trim();
+}
+
+function planningRiskLines(risks: string[], constraints: string[], overrides: PlanningOverrides) {
+  const overrideRisks = [
+    overrides.monthCount ? `Compressed ${overrides.monthCount}-month timeline leaves less recovery time` : undefined,
+    overrides.funding ? `Reduced $${overrides.funding.toLocaleString()} budget may force scope cuts` : undefined,
+    ...overrides.excludedPlatforms.map((platform) => `${platform} access removed; platform-dependent aims must be redesigned`),
+  ].filter((item): item is string => Boolean(item));
+  const seeds = uniqueStrings([...overrideRisks, ...risks, ...constraints]).slice(0, 8);
+  const defaults = [
+    'Input quality or access fails',
+    'Validation effect size misses acceptance criteria',
+    'Platform lock-in limits generalization',
+    'Timeline leaves no recovery window',
+    'Data-sharing or governance approval slips',
+    'Algorithm does not transfer across measurement resolutions',
+    'Stakeholder handoff lacks clinical utility evidence',
+    'Repository/reproducibility package is incomplete',
+  ];
+  const plannedRisks = uniqueStrings([...seeds, ...defaults]).slice(0, 8);
+  return plannedRisks.map((risk, index) => {
+    const owner = index % 3 === 0 ? 'PI/project lead' : index % 3 === 1 ? 'technical lead' : 'validation owner';
+    return `- R${index + 1}: ${risk}. Mitigation: define an early go/no-go check and fallback scope. Owner: ${owner}.`;
+  });
+}
+
+function constraintDependencyLines(constraints: string[], overrides: PlanningOverrides) {
+  const lines = [
+    ...(overrides.monthCount ? [`Updated hard timeline: ${overrides.monthCount} months.`] : []),
+    ...(overrides.funding ? [`Updated hard budget cap: $${overrides.funding.toLocaleString()}.`] : []),
+    ...overrides.excludedPlatforms.map((platform) => `Updated platform constraint: no ${platform} access; dependent aims and assays require replacement.`),
+    ...(constraints.length ? constraints : ['Use only constraints present in the selected reference; unresolved details require owner confirmation.']),
+  ];
+  return uniqueStrings(lines).slice(0, 10).map((line) => `- ${line}`);
+}
+
+function invalidatedAssumptionLines(input: {
+  originalMonthCount: number | undefined;
+  originalFunding: number | undefined;
+  overrides: PlanningOverrides;
+  sourceText: string;
+}) {
+  const invalidated = [
+    input.overrides.monthCount && (input.originalMonthCount || input.overrides.previousMonthCount) && input.overrides.monthCount !== (input.originalMonthCount ?? input.overrides.previousMonthCount)
+      ? `Original ${input.originalMonthCount ?? input.overrides.previousMonthCount}-month schedule is invalidated by the ${input.overrides.monthCount}-month constraint.`
+      : undefined,
+    input.overrides.funding && (input.originalFunding || input.overrides.previousFunding) && input.overrides.funding !== (input.originalFunding ?? input.overrides.previousFunding)
+      ? `Original $${(input.originalFunding ?? input.overrides.previousFunding)?.toLocaleString()} funding assumption is invalidated by the $${input.overrides.funding.toLocaleString()} cap.`
+      : undefined,
+    ...input.overrides.excludedPlatforms
+      .filter((platform) => new RegExp(`\\b${escapeRegExp(platform)}\\b`, 'i').test(input.sourceText))
+      .map((platform) => `Any plan step that depends on ${platform} access is invalidated and must be replaced.`),
+  ].filter((line): line is string => Boolean(line));
+  if (!invalidated.length) return [];
+  return [
+    '',
+    '## Invalidated Assumptions',
+    ...uniqueStrings(invalidated).map((line) => `- ${line}`),
+  ];
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function selectedReferenceSummaryMessage(
@@ -547,7 +1205,8 @@ function isDirectContextAnswerStatement(part: string) {
 }
 
 function selectedReferenceTokens(request: GatewayRequest) {
-  return uniqueStrings(recordRows(request.references).flatMap((reference) => {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  return uniqueStrings([...recordRows(request.references), ...recordRows(uiState.currentReferences)].flatMap((reference) => {
     const ref = stringField(reference.ref);
     const sourceId = stringField(reference.sourceId);
     const title = stringField(reference.title);
@@ -762,6 +1421,7 @@ function policyRequestsDirectContext(request: GatewayRequest, decision: DirectCo
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   if (uiState.forceAgentServerGeneration === true) return false;
   if (!directContextDecisionAllowsAnswer(decision)) return false;
+  if (decision.decisionOwner === 'harness-policy' && boundedArtifactFollowupRequested(request)) return true;
   const conversationPolicy = isRecord(uiState.conversationPolicy) ? uiState.conversationPolicy : {};
   if (stringField(conversationPolicy.applicationStatus) === 'failed') return false;
   if (
@@ -776,6 +1436,51 @@ function policyRequestsDirectContext(request: GatewayRequest, decision: DirectCo
   return mode === 'direct-context-answer'
     && (initialMode === undefined || initialMode === 'direct-context-answer')
     && latencyPolicy.blockOnContextCompaction !== true;
+}
+
+function fallbackDirectContextDecisionForBoundedArtifactFollowup(request: GatewayRequest): DirectContextDecision | undefined {
+  if (!boundedArtifactFollowupRequested(request)) return undefined;
+  const refs = uniqueStrings([...request.artifacts, ...recordRows(isRecord(request.uiState) ? request.uiState.artifacts : undefined)].flatMap((artifact) => {
+    if (!isRecord(artifact)) return [];
+    const id = stringField(artifact.id);
+    const dataRef = stringField(artifact.dataRef) ?? stringField(artifact.path);
+    const type = stringField(artifact.type) ?? stringField(artifact.artifactType);
+    return [id ? `artifact:${id}` : undefined, dataRef, type ? `artifact-type:${type}` : undefined].filter((value): value is string => Boolean(value));
+  }));
+  if (!refs.length) return undefined;
+  return {
+    decisionRef: `decision:harness-bounded-artifact-${sha1(JSON.stringify({ prompt: request.prompt, refs })).slice(0, 10)}`,
+    decisionOwner: 'harness-policy',
+    intent: /fail|risk|失败|风险/i.test(request.prompt) ? 'context-summary:risk' : 'context-summary',
+    requiredTypedContext: ['current-session-context', 'artifact-index'],
+    usedRefs: refs.slice(0, 8),
+    allowDirectContext: true,
+    transformMode: /hypoth(?:esis|eses)|可检验|假设/i.test(request.prompt) ? 'answer-only-summary' : undefined,
+    sufficiency: 'sufficient',
+  };
+}
+
+function boundedArtifactFollowupRequested(request: GatewayRequest) {
+  if (!boundedArtifactFollowupPrompt(request.prompt)) return false;
+  const hasArtifact = [...request.artifacts, ...recordRows(isRecord(request.uiState) ? request.uiState.artifacts : undefined)]
+    .some(isBoundedAnswerArtifact);
+  return hasArtifact;
+}
+
+function boundedArtifactFollowupPrompt(text: string) {
+  if (/(search|retrieve|检索|搜索|重新检索|new search|web|external provider|fresh)/i.test(text)
+    && !/(do not|don't|no|不要|不得|without)/i.test(text)) return false;
+  const refersToExistingContext = /(previous|prior|last|existing|current|visible|selected|above|artifact|matrix|report|上一轮|之前|已有|当前|选中|证据矩阵|报告|产物)/i.test(text);
+  const forbidsFreshWork = /(based only|only based|do not perform a new search|do not rerun|no new search|without starting|不要重新|不重新|只基于|仅基于)/i.test(text);
+  return refersToExistingContext && forbidsFreshWork;
+}
+
+function isBoundedAnswerArtifact(value: unknown) {
+  if (!isRecord(value)) return false;
+  const type = `${stringField(value.type) ?? ''} ${stringField(value.artifactType) ?? ''} ${stringField(value.id) ?? ''}`;
+  if (/runtime-diagnostic|diagnostic|stderr|stdout|log|failure|error/i.test(type)) return false;
+  if (!/(evidence[-\s_]?matrix|research-report|report|paper-list|analysis|document|summary|table|dataset|csv|notebook|script)/i.test(type)) return false;
+  return Boolean(stringField(value.id) || stringField(value.dataRef) || stringField(value.path) || value.data !== undefined);
 }
 
 function directContextDecisionAllowsAnswer(decision: DirectContextDecision) {

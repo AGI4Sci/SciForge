@@ -291,6 +291,8 @@ function currentReferencesForTurn(policyInput: JsonMap, currentReferenceDigests:
     : recordList(policyInput.refs);
   if (explicit.length > 0) return explicit;
   const digestRefs = currentReferenceDigests.flatMap((digest) => {
+    const audit = recordValue(digest.audit) ?? {};
+    if (stringValue(audit.refDiscoverySource) === 'prompt-discovered-reference') return [];
     const sourceRef = stringValue(digest.path)
       ?? stringValue(digest.sourceRef)
       ?? stringValue(digest.clickableRef);

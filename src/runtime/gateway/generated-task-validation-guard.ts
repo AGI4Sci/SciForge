@@ -20,14 +20,24 @@ import {
   type WorkEvidenceGuardFinding,
   validationFindingProjectionFromWorkEvidenceGuardFinding,
 } from './work-evidence-guard.js';
+import {
+  evaluateResultMetricConsistency,
+  RESULT_METRIC_CONSISTENCY_GUARD_CONTRACT_ID,
+  RESULT_METRIC_CONSISTENCY_GUARD_SCHEMA_PATH,
+  type ResultMetricConsistencyFinding,
+  validationFindingProjectionFromResultMetricConsistencyFinding,
+} from './result-metric-consistency-guard.js';
 
 export type GeneratedTaskGuardFinding =
   | { source: 'work-evidence'; finding: WorkEvidenceGuardFinding }
-  | { source: 'guidance-adoption'; finding: GuidanceAdoptionFinding };
+  | { source: 'guidance-adoption'; finding: GuidanceAdoptionFinding }
+  | { source: 'result-metric-consistency'; finding: ResultMetricConsistencyFinding };
 
 export function evaluateGeneratedTaskGuardFinding(payload: ToolPayload, request: GatewayRequest): GeneratedTaskGuardFinding | undefined {
   const guidanceFinding = evaluateGuidanceAdoption(payload, request);
   if (guidanceFinding) return { source: 'guidance-adoption', finding: guidanceFinding };
+  const metricFinding = evaluateResultMetricConsistency(payload, request);
+  if (metricFinding) return { source: 'result-metric-consistency', finding: metricFinding };
   const evidenceFinding = evaluateToolPayloadEvidence(payload, request);
   return evidenceFinding ? { source: 'work-evidence', finding: evidenceFinding } : undefined;
 }
@@ -44,6 +54,13 @@ export function generatedTaskGuardFindingProjection(
       relatedRefs,
     });
   }
+  if (guardFinding.source === 'result-metric-consistency') {
+    return validationFindingProjectionFromResultMetricConsistencyFinding(guardFinding.finding, {
+      id: `${chainId}:result-metric-consistency`,
+      capabilityId: 'sciforge.validation-guard',
+      relatedRefs,
+    });
+  }
   return validationFindingProjectionFromWorkEvidenceGuardFinding(guardFinding.finding, {
     id: `${chainId}:work-evidence:${guardFinding.finding.kind}`,
     capabilityId: 'sciforge.validation-guard',
@@ -56,9 +73,7 @@ export function generatedTaskGuardChainId(
   refs: RuntimeRefBundle & { inputRel?: string },
   guardFinding: GeneratedTaskGuardFinding,
 ) {
-  const guardKind = guardFinding.source === 'work-evidence'
-    ? guardFinding.finding.kind
-    : `${guardFinding.finding.missingIds.join(',')}:${guardFinding.finding.invalidIds.join(',')}`;
+  const guardKind = generatedTaskGuardKind(guardFinding);
   return `validation-guard:${sha1([
     skill.id,
     guardFinding.source,
@@ -162,13 +177,9 @@ export function attachGeneratedTaskGuardBudgetDebit(
     metadata: {
       guardedCapabilityId: input.skill.id,
       guardSource: guardFinding.source,
-      guardKind: guardFinding.source === 'work-evidence' ? guardFinding.finding.kind : 'guidance-adoption',
-      contractId: guardFinding.source === 'work-evidence'
-        ? 'sciforge.work-evidence.v1'
-        : GUIDANCE_ADOPTION_GUARD_CONTRACT_ID,
-      schemaPath: guardFinding.source === 'work-evidence'
-        ? undefined
-        : GUIDANCE_ADOPTION_GUARD_SCHEMA_PATH,
+      guardKind: generatedTaskGuardKind(guardFinding),
+      contractId: generatedTaskGuardContractId(guardFinding),
+      schemaPath: generatedTaskGuardSchemaPath(guardFinding),
     },
   });
   const budgetDebitRefs = [debit.debitId];
@@ -200,7 +211,7 @@ export function attachGeneratedTaskGuardBudgetDebit(
         ref: logRef,
         capabilityId: 'sciforge.validation-guard',
         guardSource: guardFinding.source,
-        validationFailureKind: guardFinding.source === 'work-evidence' ? 'work-evidence' : 'guidance-adoption',
+        validationFailureKind: generatedTaskGuardKind(guardFinding),
         budgetDebitRefs,
       },
     ],
@@ -225,25 +236,41 @@ export function payloadHasValidationRepairAudit(payload: ToolPayload, auditId: s
 function generatedTaskGuardBudgetDebitLines(guardFinding: GeneratedTaskGuardFinding): CapabilityBudgetDebitLine[] {
   const resultItems = guardFinding.source === 'guidance-adoption'
     ? Math.max(1, guardFinding.finding.missingIds.length + guardFinding.finding.invalidIds.length)
+    : guardFinding.source === 'result-metric-consistency'
+      ? Math.max(1, guardFinding.finding.failedMetrics.length)
     : 1;
   return [
     {
       dimension: 'costUnits',
       amount: 1,
       reason: `${guardFinding.source} validation guard`,
-      sourceRef: guardFinding.source === 'guidance-adoption'
-        ? GUIDANCE_ADOPTION_GUARD_CONTRACT_ID
-        : 'sciforge.work-evidence.v1',
+      sourceRef: generatedTaskGuardContractId(guardFinding),
     },
     {
       dimension: 'resultItems',
       amount: resultItems,
       reason: 'guard findings',
-      sourceRef: guardFinding.source === 'guidance-adoption'
-        ? GUIDANCE_ADOPTION_GUARD_SCHEMA_PATH
-        : 'packages/contracts/runtime/work-evidence-policy.ts#evaluateWorkEvidencePolicy',
+      sourceRef: generatedTaskGuardSchemaPath(guardFinding) ?? 'packages/contracts/runtime/work-evidence-policy.ts#evaluateWorkEvidencePolicy',
     },
   ];
+}
+
+function generatedTaskGuardKind(guardFinding: GeneratedTaskGuardFinding) {
+  if (guardFinding.source === 'work-evidence') return guardFinding.finding.kind;
+  if (guardFinding.source === 'result-metric-consistency') return 'result-metric-consistency';
+  return `${guardFinding.finding.missingIds.join(',')}:${guardFinding.finding.invalidIds.join(',')}` || 'guidance-adoption';
+}
+
+function generatedTaskGuardContractId(guardFinding: GeneratedTaskGuardFinding) {
+  if (guardFinding.source === 'work-evidence') return 'sciforge.work-evidence.v1';
+  if (guardFinding.source === 'result-metric-consistency') return RESULT_METRIC_CONSISTENCY_GUARD_CONTRACT_ID;
+  return GUIDANCE_ADOPTION_GUARD_CONTRACT_ID;
+}
+
+function generatedTaskGuardSchemaPath(guardFinding: GeneratedTaskGuardFinding) {
+  if (guardFinding.source === 'work-evidence') return undefined;
+  if (guardFinding.source === 'result-metric-consistency') return RESULT_METRIC_CONSISTENCY_GUARD_SCHEMA_PATH;
+  return GUIDANCE_ADOPTION_GUARD_SCHEMA_PATH;
 }
 
 function firstPayloadExecutionUnitId(payload: ToolPayload) {

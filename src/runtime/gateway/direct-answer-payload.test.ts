@@ -173,6 +173,45 @@ test('plain AgentServer text wraps human-facing prose in an audited ToolPayload'
   assert.deepEqual(schemaErrors(payload), []);
 });
 
+test('plain AgentServer text wraps markdown stage results even when they mention ToolPayload output refs', () => {
+  const text = [
+    '## Stage Result: implement — RCG-003 ODE Parameter-Fitting Repair',
+    '',
+    '### Diagnosis',
+    'The prior optimizer diverged: fitted r=64.93 vs true r=0.8 (8016% error), RMSE=28.65.',
+    '',
+    '### Execution & Validation',
+    '- Script path: `.sciforge/sessions/.../tasks/generated-knowledge-c63d1a35f6e9/ode_fit_demo_repaired.py`',
+    '- Run command: `python3 ode_fit_demo_repaired.py /dev/null /tmp/ode_fit_repaired_output.json`',
+    '- Exit code: 0',
+    '',
+    '### Results',
+    '| Metric | Prior (failed) | Repaired |',
+    '|---|---|---|',
+    '| Fitted r | 64.9299 | **0.8000** |',
+    '| Fitted K | 73.6002 | **100.0000** |',
+    '| RMSE | 28.6483 | **1.2865** |',
+    '',
+    '### Repair Verdict',
+    '**Repair SUCCEEDED.** The ToolPayload JSON at `/tmp/ode_fit_repaired_output.json` contains code, output, and report artifacts.',
+  ].join('\n');
+
+  const classification = classifyPlainAgentText(text);
+  assert.equal(classification.kind, 'human-answer');
+
+  const payload = toolPayloadFromPlainAgentOutput(text, {
+    skillDomain: 'knowledge',
+    prompt: 'Repair the ODE demo and explicitly say whether the repair succeeded.',
+    artifacts: [],
+  });
+
+  assert.equal(payload.claimType, 'agentserver-direct-answer');
+  assert.equal(payload.displayIntent?.status, 'completed');
+  assert.equal(payload.executionUnits[0]?.status, 'done');
+  assert.match(payload.message, /Repair SUCCEEDED/);
+  assert.deepEqual(schemaErrors(payload), []);
+});
+
 test('plain AgentServer text guard allows prose that references taskFiles without raw metadata', () => {
   const text = 'The generated files are available in the audit refs. I mention taskFiles only to explain where the code was archived.';
   const classification = classifyPlainAgentText(text);

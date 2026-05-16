@@ -121,7 +121,8 @@ export async function handleWorkspaceFileApiRoutes(
       const requestedPath = url.searchParams.get('path')?.trim() || '';
       const root = requestedPath ? resolve(requestedPath) : await readLastWorkspacePath(options.stateDir);
       const state = JSON.parse(await readFile(join(root, '.sciforge', 'workspace-state.json'), 'utf8'));
-      writeJson(res, 200, { ok: true, workspacePath: root, state });
+      const reconciledState = await reconcileWorkspaceStateWithSessionBundles(root, state);
+      writeJson(res, 200, { ok: true, workspacePath: root, state: reconciledState });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const status = message.includes('ENOENT') ? 404 : 400;
@@ -313,6 +314,202 @@ function workspaceActivityScore(state: Record<string, unknown>): number {
     const notebook = Array.isArray(session.notebook) ? session.notebook.length : 0;
     return total + realMessages + artifacts + units + notebook;
   }, archived + contracts);
+}
+
+async function reconcileWorkspaceStateWithSessionBundles(root: string, state: unknown) {
+  if (!isRecord(state) || !isRecord(state.sessionsByScenario)) return state;
+  const bundleSessions = await readSessionBundleRecords(root);
+  if (!bundleSessions.length) return state;
+  let changed = false;
+  const sessionsByScenario = { ...state.sessionsByScenario };
+  for (const session of bundleSessions) {
+    const scenarioId = typeof session.scenarioId === 'string' ? session.scenarioId : '';
+    if (!scenarioId) continue;
+    const current = isRecord(sessionsByScenario[scenarioId]) ? sessionsByScenario[scenarioId] : undefined;
+    if (!current || shouldPreferBundleSession(current, session)) {
+      sessionsByScenario[scenarioId] = session;
+      changed = true;
+    }
+  }
+  return changed ? { ...state, sessionsByScenario } : state;
+}
+
+async function readSessionBundleRecords(root: string): Promise<Array<Record<string, unknown>>> {
+  const sessionsRoot = join(root, '.sciforge', 'sessions');
+  let entries: Array<{ isDirectory(): boolean; name: string }>;
+  try {
+    entries = await readdir(sessionsRoot, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const sessions: Array<Record<string, unknown>> = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    try {
+      const parsed = JSON.parse(await readFile(join(sessionsRoot, entry.name, 'records', 'session.json'), 'utf8'));
+      if (isRecord(parsed)) sessions.push(await hydrateSessionFromBundleRecords(sessionsRoot, entry.name, parsed));
+    } catch {
+      // A partially written or old-style bundle should not block snapshot restore.
+    }
+  }
+  return sessions.sort((left, right) => sessionUpdatedAtMillis(left) - sessionUpdatedAtMillis(right));
+}
+
+async function hydrateSessionFromBundleRecords(sessionsRoot: string, bundleName: string, session: Record<string, unknown>) {
+  const artifacts = await readBundleArtifacts(join(sessionsRoot, bundleName, 'artifacts'));
+  if (!artifacts.length) return session;
+  const existingArtifacts = Array.isArray(session.artifacts) ? session.artifacts.filter(isRecord) : [];
+  const mergedArtifacts = mergeRecordsById(existingArtifacts, artifacts);
+  return mergedArtifacts.length === existingArtifacts.length ? session : { ...session, artifacts: mergedArtifacts };
+}
+
+async function readBundleArtifacts(artifactsRoot: string): Promise<Array<Record<string, unknown>>> {
+  let entries: Array<{ isFile(): boolean; name: string }>;
+  try {
+    entries = await readdir(artifactsRoot, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const artifacts: Array<Record<string, unknown>> = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    try {
+      const parsed = JSON.parse(await readFile(join(artifactsRoot, entry.name), 'utf8'));
+      if (isRecord(parsed)) artifacts.push(ensureRestoredArtifactDelivery(parsed));
+    } catch {
+      // Ignore malformed artifact records; the raw bundle remains available for audit.
+    }
+  }
+  return artifacts;
+}
+
+function mergeRecordsById(left: Array<Record<string, unknown>>, right: Array<Record<string, unknown>>) {
+  const out = [...left];
+  const seen = new Set(left.map((item) => String(item.id || item.ref || item.type || '')));
+  for (const item of right) {
+    const key = String(item.id || item.ref || item.type || '');
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    out.push(item);
+  }
+  return out;
+}
+
+function ensureRestoredArtifactDelivery(artifact: Record<string, unknown>) {
+  if (isRecord(artifact.delivery)) return artifact;
+  const id = String(artifact.id || artifact.type || 'artifact');
+  const type = String(artifact.type || artifact.id || '').toLowerCase();
+  const readableRef = stringField(artifact.dataRef) ?? stringField(artifact.path);
+  const role = /stdout|stderr|log|diagnostic|failure|error/.test(`${type} ${readableRef ?? ''}`)
+    ? 'diagnostic'
+    : /runtime|execution-unit|trace|audit|checkpoint|payload|raw|context-summary/.test(`${type} ${readableRef ?? ''}`)
+      ? 'audit'
+      : /report|summary|markdown|document/.test(type)
+        ? 'primary-deliverable'
+        : /table|matrix|dataset|csv|paper-list|evidence|notebook|script|code/.test(type)
+          ? 'supporting-evidence'
+          : 'internal';
+  const format = restoredArtifactFormat(artifact);
+  return {
+    ...artifact,
+    delivery: {
+      contractId: 'sciforge.artifact-delivery.v1',
+      ref: `artifact:${id}`,
+      role,
+      declaredMediaType: restoredArtifactMediaType(format),
+      declaredExtension: format,
+      contentShape: role === 'audit' || role === 'diagnostic' ? 'json-envelope' : 'raw-file',
+      readableRef,
+      rawRef: readableRef,
+      previewPolicy: role === 'audit' || role === 'diagnostic' || role === 'internal'
+        ? 'audit-only'
+        : ['md', 'html', 'csv', 'tsv', 'txt', 'json', 'py'].includes(format)
+          ? 'inline'
+          : 'open-system',
+    },
+  };
+}
+
+function restoredArtifactFormat(artifact: Record<string, unknown>) {
+  const ref = `${stringField(artifact.dataRef) ?? ''} ${stringField(artifact.path) ?? ''}`.toLowerCase();
+  const type = String(artifact.type || artifact.id || '').toLowerCase();
+  if (/\.m(?:d|arkdown)(?:$|[?#])/.test(ref) || /report|markdown/.test(type)) return 'md';
+  if (/\.html?(?:$|[?#])/.test(ref) || /html/.test(type)) return 'html';
+  if (/\.csv(?:$|[?#])/.test(ref) || /csv|table|matrix|dataset/.test(type)) return 'csv';
+  if (/\.tsv(?:$|[?#])/.test(ref)) return 'tsv';
+  if (/\.py(?:$|[?#])/.test(ref) || /script|code|notebook/.test(type)) return 'py';
+  if (/\.txt(?:$|[?#])/.test(ref)) return 'txt';
+  if (/\.json(?:$|[?#])/.test(ref) || /json|payload|manifest|schema/.test(type)) return 'json';
+  return 'bin';
+}
+
+function restoredArtifactMediaType(format: string) {
+  if (format === 'md') return 'text/markdown';
+  if (format === 'html') return 'text/html';
+  if (format === 'csv') return 'text/csv';
+  if (format === 'tsv') return 'text/tab-separated-values';
+  if (format === 'py' || format === 'txt') return 'text/plain';
+  if (format === 'json') return 'application/json';
+  return 'application/octet-stream';
+}
+
+function stringField(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function shouldPreferBundleSession(current: Record<string, unknown>, candidate: Record<string, unknown>) {
+  const currentActivity = sessionContentActivityMillis(current);
+  const candidateActivity = sessionContentActivityMillis(candidate);
+  if (candidateActivity > currentActivity) return true;
+  if (candidateActivity < currentActivity) return false;
+
+  const currentScore = sessionRestoreScore(current);
+  const candidateScore = sessionRestoreScore(candidate);
+  if (candidateScore > currentScore) return true;
+  if (candidateScore < currentScore) return false;
+  return sessionUpdatedAtMillis(candidate) > sessionUpdatedAtMillis(current);
+}
+
+function sessionRestoreScore(session: Record<string, unknown>) {
+  return [
+    session.messages,
+    session.runs,
+    session.artifacts,
+    session.executionUnits,
+    session.claims,
+    session.uiManifest,
+    session.notebook,
+  ].reduce<number>((total, value) => total + (Array.isArray(value) ? value.length : 0), 0);
+}
+
+function sessionUpdatedAtMillis(session: Record<string, unknown>) {
+  const updatedAt = typeof session.updatedAt === 'string' ? Date.parse(session.updatedAt) : NaN;
+  if (Number.isFinite(updatedAt)) return updatedAt;
+  const createdAt = typeof session.createdAt === 'string' ? Date.parse(session.createdAt) : NaN;
+  return Number.isFinite(createdAt) ? createdAt : 0;
+}
+
+function sessionContentActivityMillis(session: Record<string, unknown>) {
+  const values: number[] = [];
+  collectTimestamp(values, session.createdAt);
+  for (const key of ['messages', 'runs', 'artifacts', 'executionUnits', 'claims', 'uiManifest', 'notebook']) {
+    const items = session[key];
+    if (!Array.isArray(items)) continue;
+    for (const item of items) {
+      if (!isRecord(item)) continue;
+      collectTimestamp(values, item.createdAt);
+      collectTimestamp(values, item.completedAt);
+      collectTimestamp(values, item.updatedAt);
+      collectTimestamp(values, item.timestamp);
+    }
+  }
+  return values.length ? Math.max(...values) : sessionUpdatedAtMillis(session);
+}
+
+function collectTimestamp(values: number[], value: unknown) {
+  if (typeof value !== 'string') return;
+  const millis = Date.parse(value);
+  if (Number.isFinite(millis)) values.push(millis);
 }
 
 async function writeSessionBundleSnapshot(root: string, session: Record<string, unknown>) {

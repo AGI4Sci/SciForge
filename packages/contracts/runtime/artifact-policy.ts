@@ -100,7 +100,7 @@ export const DIRECT_CONTEXT_FAST_PATH_POLICY = {
     references: 12,
     executionUnits: 8,
     messageItems: 8,
-    summaryChars: 240,
+    summaryChars: 3600,
   },
   fallbackRefs: {
     artifact: 'artifact:',
@@ -198,7 +198,7 @@ export function buildDirectContextFastPathItems(inputs: DirectContextFastPathInp
       kind: stringField(reference.kind) ?? 'file',
       label: stringField(reference.title) ?? ref ?? 'reference',
       ref,
-      summary: stringField(reference.summary) ?? ref ?? 'current reference',
+      summary: directContextReferenceSummary(reference) ?? ref ?? 'current reference',
     });
   }
   for (const claim of recordRows(inputs.claims).slice(-DIRECT_CONTEXT_FAST_PATH_POLICY.contextLimits.references)) {
@@ -745,6 +745,48 @@ function directContextArtifactSummary(artifact: ArtifactPolicyRecord): string {
     ?? JSON.stringify(clipJsonForDirectContext(artifact, 2)).slice(0, DIRECT_CONTEXT_FAST_PATH_POLICY.contextLimits.summaryChars);
 }
 
+function directContextReferenceSummary(reference: ArtifactPolicyRecord): string | undefined {
+  const payload = isRecord(reference.payload) ? reference.payload : {};
+  const currentReference = isRecord(payload.currentReference) ? payload.currentReference : {};
+  const objectReference = isRecord(payload.objectReference) ? payload.objectReference : {};
+  const candidates = [
+    reference.summary,
+    reference.selectedText,
+    reference.preview,
+    reference.content,
+    reference.text,
+    reference.markdown,
+    directContextDataPreview(reference.data),
+    payload.summary,
+    payload.selectedText,
+    payload.sourceSummary,
+    payload.preview,
+    payload.content,
+    payload.text,
+    payload.markdown,
+    directContextDataPreview(payload.data),
+    currentReference.summary,
+    currentReference.selectedText,
+    currentReference.preview,
+    currentReference.content,
+    currentReference.text,
+    currentReference.markdown,
+    directContextDataPreview(currentReference.data),
+    objectReference.summary,
+    objectReference.selectedText,
+    objectReference.preview,
+    objectReference.content,
+    objectReference.text,
+    objectReference.markdown,
+    directContextDataPreview(objectReference.data),
+  ];
+  return candidates
+    .map(stringField)
+    .find(Boolean)
+    ?.replace(/\s+/g, ' ')
+    .slice(0, DIRECT_CONTEXT_FAST_PATH_POLICY.contextLimits.summaryChars);
+}
+
 function directContextDigestSummary(digest: ArtifactPolicyRecord): string | undefined {
   const status = String(digest.status || '').toLowerCase();
   const candidates = [
@@ -790,6 +832,7 @@ function directContextDataPreview(value: unknown): string | undefined {
 function directContextStructuredSummary(value: Record<string, unknown>) {
   return uniqueStrings([
     stringField(value.summary),
+    ...structuredRowSummaryLines(value.rows),
     ...recordRows(value.keyFindings).map((item) => stringField(item.text) ?? stringField(item.summary)).filter((item): item is string => Boolean(item)),
     ...(Array.isArray(value.keyFindings) ? value.keyFindings.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : []),
     stringField(value.conclusion),
@@ -797,10 +840,27 @@ function directContextStructuredSummary(value: Record<string, unknown>) {
   ]).join('\n');
 }
 
+function structuredRowSummaryLines(value: unknown) {
+  return recordRows(value).slice(0, 8).map((row, index) => {
+    const claim = stringField(row.claim) ?? stringField(row.title) ?? stringField(row.finding) ?? `row ${index + 1}`;
+    const method = stringField(row.method) ?? stringField(row['model/system']) ?? stringField(row.model) ?? stringField(row.system);
+    const result = stringField(row['main result']) ?? stringField(row.result) ?? stringField(row.summary);
+    const limitations = stringField(row.limitations) ?? stringField(row.limitation);
+    const citation = stringField(row['citation/ref']) ?? stringField(row.citation) ?? stringField(row.ref) ?? stringField(row.doi) ?? stringField(row.pmid);
+    return [
+      `Row ${index + 1}: ${claim}`,
+      method ? `method/system: ${method}` : undefined,
+      result ? `result: ${result}` : undefined,
+      limitations ? `limitations: ${limitations}` : undefined,
+      citation ? `ref: ${citation}` : undefined,
+    ].filter((part): part is string => Boolean(part)).join('; ');
+  });
+}
+
 function dedupeDirectContextFastPathItems(items: DirectContextFastPathItem[]): DirectContextFastPathItem[] {
   const seen = new Set<string>();
   return items.filter((item) => {
-    const key = item.ref ?? `${item.kind}:${item.label}:${item.summary}`;
+    const key = item.ref ? `${item.kind}:${item.label}:${item.ref}` : `${item.kind}:${item.label}:${item.summary}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

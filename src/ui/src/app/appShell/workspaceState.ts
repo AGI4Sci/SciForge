@@ -107,11 +107,31 @@ export function recoverableRunFocusForSession(session: SciForgeSession): Workspa
 }
 
 export function workspaceRecoveryFocusForState(state: SciForgeWorkspaceState): WorkspaceRecoveryFocus | undefined {
-  return Object.values(state.sessionsByScenario)
+  const candidate = Object.values(state.sessionsByScenario)
     .map(recoverableRunFocusForSession)
     .filter((focus): focus is WorkspaceRecoveryFocus => Boolean(focus))
     .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
     .at(0);
+  if (!candidate) return undefined;
+  const newestHealthyActivity = Object.values(state.sessionsByScenario)
+    .filter((session) => session.scenarioId !== candidate.scenarioId || session.sessionId !== candidate.sessionId)
+    .filter((session) => sessionActivityScoreForRecoveryFocus(session) > 0 && !recoverableRunFocusForSession(session))
+    .map((session) => Date.parse(session.updatedAt || session.createdAt || ''))
+    .filter(Number.isFinite)
+    .sort((left, right) => right - left)
+    .at(0);
+  if (newestHealthyActivity !== undefined && newestHealthyActivity > Date.parse(candidate.updatedAt)) return undefined;
+  return candidate;
+}
+
+function sessionActivityScoreForRecoveryFocus(session: SciForgeSession) {
+  return session.messages.length
+    + session.runs.length
+    + session.artifacts.length
+    + session.executionUnits.length
+    + session.claims.length
+    + session.uiManifest.length
+    + session.notebook.length;
 }
 
 export function mergeRunTimelineEvents(
