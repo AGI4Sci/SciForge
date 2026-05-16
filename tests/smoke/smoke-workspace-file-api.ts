@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-workspace-file-api-'));
+const outsideDir = await mkdtemp(join(tmpdir(), 'sciforge-workspace-file-api-outside-'));
 const port = 23080 + Math.floor(Math.random() * 1000);
 const child = spawn(process.execPath, ['--import', 'tsx', 'src/runtime/workspace-server.ts'], {
   cwd: process.cwd(),
@@ -98,24 +99,64 @@ try {
   response = await fetch(`${baseUrl}/api/sciforge/workspace/file`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: filePath, content: '# Draft\n\nhello world' }),
+    body: JSON.stringify({ workspacePath: workspace, path: filePath, content: '# Draft\n\nhello world' }),
   });
   await assertOk(response);
   assert.equal(await readFile(filePath, 'utf8'), '# Draft\n\nhello world');
+
+  const outsideAbsoluteWritePath = join(outsideDir, 'absolute-escape.md');
+  response = await fetch(`${baseUrl}/api/sciforge/workspace/file`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspacePath: workspace, path: outsideAbsoluteWritePath, content: 'outside' }),
+  });
+  assert.equal(response.status, 400);
+  assert.equal(await readOptionalText(outsideAbsoluteWritePath), undefined);
+
+  const outsideRelativeWritePath = join(outsideDir, 'relative-escape.md');
+  response = await fetch(`${baseUrl}/api/sciforge/workspace/file`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspacePath: workspace, path: `../${basename(outsideDir)}/relative-escape.md`, content: 'outside' }),
+  });
+  assert.equal(response.status, 400);
+  assert.equal(await readOptionalText(outsideRelativeWritePath), undefined);
 
   const renamedPath = join(workspace, 'notes', 'renamed.md');
   response = await fetch(`${baseUrl}/api/sciforge/workspace/file-action`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action: 'rename', path: filePath, targetPath: renamedPath }),
+    body: JSON.stringify({ workspacePath: workspace, action: 'rename', path: filePath, targetPath: renamedPath }),
   });
   await assertOk(response);
   assert.equal(await readFile(renamedPath, 'utf8'), '# Draft\n\nhello world');
 
+  const safeRenameSourcePath = join(workspace, 'notes', 'safe-rename.md');
+  const outsideRenamePath = join(outsideDir, 'renamed-outside.md');
+  await writeFile(safeRenameSourcePath, 'stay inside', 'utf8');
   response = await fetch(`${baseUrl}/api/sciforge/workspace/file-action`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action: 'delete', path: renamedPath }),
+    body: JSON.stringify({ workspacePath: workspace, action: 'rename', path: safeRenameSourcePath, targetPath: outsideRenamePath }),
+  });
+  assert.equal(response.status, 400);
+  assert.equal(await readFile(safeRenameSourcePath, 'utf8'), 'stay inside');
+  assert.equal(await readOptionalText(outsideRenamePath), undefined);
+
+  const protectedOutsidePath = join(outsideDir, 'protected.md');
+  await writeFile(protectedOutsidePath, 'protected', 'utf8');
+  response = await fetch(`${baseUrl}/api/sciforge/workspace/file-action`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspacePath: workspace, action: 'delete', path: protectedOutsidePath }),
+  });
+  assert.equal(response.status, 400);
+  assert.equal(await readFile(protectedOutsidePath, 'utf8'), 'protected');
+
+  response = await fetch(`${baseUrl}/api/sciforge/workspace/file-action`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspacePath: workspace, action: 'delete', path: renamedPath }),
   });
   await assertOk(response);
   response = await fetch(`${baseUrl}/api/sciforge/workspace/file?path=${encodeURIComponent(renamedPath)}`);
@@ -179,6 +220,7 @@ try {
 } finally {
   child.kill('SIGTERM');
   await rm(workspace, { recursive: true, force: true });
+  await rm(outsideDir, { recursive: true, force: true });
 }
 
 async function waitForHealth(portNumber: number) {
@@ -200,6 +242,10 @@ async function assertOk(response: Response) {
   if (response.status !== 200) {
     assert.equal(response.status, 200, await response.text());
   }
+}
+
+async function readOptionalText(path: string) {
+  return await readFile(path, 'utf8').catch(() => undefined);
 }
 
 async function readStream(stream: NodeJS.ReadableStream | null) {

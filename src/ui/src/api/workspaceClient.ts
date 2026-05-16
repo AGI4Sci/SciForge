@@ -321,7 +321,7 @@ export async function writeWorkspaceFile(
   const response = await fetchWorkspace(config, `write workspace file ${path}`, `${config.workspaceWriterBaseUrl}/api/sciforge/workspace/file`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path, content, encoding: options?.encoding, mimeType: options?.mimeType }),
+    body: JSON.stringify({ workspacePath: config.workspacePath, path, content, encoding: options?.encoding, mimeType: options?.mimeType }),
   });
   if (!response.ok) throw new Error(await workspaceResponseError(response, `Write file failed: HTTP ${response.status}`));
   const json = await response.json() as { file?: WorkspaceFileContent };
@@ -339,7 +339,7 @@ export async function mutateWorkspaceFile(
   const response = await fetchWorkspace(config, operation, `${config.workspaceWriterBaseUrl}/api/sciforge/workspace/file-action`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action, ...payload }),
+    body: JSON.stringify({ workspacePath: config.workspacePath, action, ...payload }),
   });
   if (!response.ok) throw new Error(await workspaceResponseError(response, `File action failed: HTTP ${response.status}`));
   clearWorkspacePreviewReadCache();

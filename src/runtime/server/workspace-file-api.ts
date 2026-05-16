@@ -5,7 +5,11 @@ import {
   ALIGNMENT_CONTRACT_ARTIFACT_TYPE,
   ALIGNMENT_CONTRACT_VERSION_ARTIFACT_TYPE,
 } from '@sciforge-ui/runtime-contract';
-import { normalizeWorkspaceRootPath, resolveWorkspaceFilePreviewPath } from '../workspace-paths.js';
+import {
+  normalizeWorkspaceRootPath,
+  resolveWorkspaceFilePreviewPath,
+  resolveWorkspaceFileRefPath,
+} from '../workspace-paths.js';
 import { ensureSessionBundle, sessionBundleRel, writeSessionBundleAudit } from '../session-bundle.js';
 import { isBinaryPreviewFile, languageForPath, mimeTypeForPath } from './file-preview.js';
 import { isRecord, readJson, safeName, writeJson } from './http.js';
@@ -87,10 +91,10 @@ export async function handleWorkspaceFileApiRoutes(
   if (url.pathname === '/api/sciforge/workspace/file' && req.method === 'POST') {
     try {
       const body = await readJson(req);
-      const filePath = typeof body.path === 'string' ? resolve(body.path) : '';
+      const workspaceRoot = await workspaceMutationRoot(body, options);
+      const filePath = resolveWorkspaceMutationPath(body, 'path', workspaceRoot);
       const content = typeof body.content === 'string' ? body.content : '';
       const encoding = body.encoding === 'base64' ? 'base64' : 'utf8';
-      if (!filePath) throw new Error('path is required');
       await mkdir(dirname(filePath), { recursive: true });
       if (encoding === 'base64') {
         await writeFile(filePath, Buffer.from(content, 'base64'));
@@ -134,16 +138,15 @@ export async function handleWorkspaceFileApiRoutes(
     try {
       const body = await readJson(req);
       const action = typeof body.action === 'string' ? body.action : '';
-      const targetPath = typeof body.path === 'string' ? resolve(body.path) : '';
-      if (!targetPath) throw new Error('path is required');
+      const workspaceRoot = await workspaceMutationRoot(body, options);
+      const targetPath = resolveWorkspaceMutationPath(body, 'path', workspaceRoot);
       if (action === 'create-file') {
         await mkdir(dirname(targetPath), { recursive: true });
         await writeFile(targetPath, '', { flag: 'wx' });
       } else if (action === 'create-folder') {
         await mkdir(targetPath, { recursive: true });
       } else if (action === 'rename') {
-        const nextPath = typeof body.targetPath === 'string' ? resolve(body.targetPath) : '';
-        if (!nextPath) throw new Error('targetPath is required');
+        const nextPath = resolveWorkspaceMutationPath(body, 'targetPath', workspaceRoot);
         await rename(targetPath, nextPath);
       } else if (action === 'delete') {
         await rm(targetPath, { recursive: true, force: true });
@@ -228,6 +231,17 @@ export async function handleWorkspaceFileApiRoutes(
     return true;
   }
   return false;
+}
+
+async function workspaceMutationRoot(body: Record<string, unknown>, options: WorkspaceFileApiOptions) {
+  const workspacePath = typeof body.workspacePath === 'string' ? body.workspacePath.trim() : '';
+  const root = workspacePath || await readLastWorkspacePath(options.stateDir);
+  return normalizeWorkspaceRootPath(resolve(root));
+}
+
+function resolveWorkspaceMutationPath(body: Record<string, unknown>, field: 'path' | 'targetPath', workspaceRoot: string) {
+  const rawPath = typeof body[field] === 'string' ? body[field] : '';
+  return resolveWorkspaceFileRefPath(rawPath, workspaceRoot);
 }
 
 export async function readLastWorkspacePath(stateDir: string) {
