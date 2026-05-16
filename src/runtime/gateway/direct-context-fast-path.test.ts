@@ -5,7 +5,7 @@ import type { GatewayRequest } from '../runtime-types.js';
 import { directContextFastPathPayload } from './direct-context-fast-path.js';
 
 function directDecision(
-  intent: 'context-summary' | 'run-diagnostic' | 'artifact-status' | 'capability-status' | 'fresh-execution' | 'unknown' = 'context-summary',
+  intent: 'context-summary' | 'context-summary:risk' | 'context-summary:method' | 'context-summary:timeline' | 'run-diagnostic' | 'artifact-status' | 'capability-status' | 'fresh-execution' | 'unknown' = 'context-summary',
   overrides: Record<string, unknown> = {},
 ) {
   return {
@@ -20,6 +20,30 @@ function directDecision(
     sufficiency: 'sufficient',
     allowDirectContext: true,
     ...overrides,
+  };
+}
+
+function appliedDirectContextPolicy(decision = directDecision()) {
+  return {
+    applicationStatus: 'applied',
+    policySource: 'python-conversation-policy',
+    directContextDecision: decision,
+    harnessContract: { directContextDecision: decision },
+    executionModePlan: { executionMode: 'direct-context-answer' },
+    responsePlan: { initialResponseMode: 'direct-context-answer' },
+    latencyPolicy: { blockOnContextCompaction: false },
+  };
+}
+
+function canonicalDirectDecision(
+  intent: 'context-summary' | 'context-summary:risk' | 'context-summary:method' | 'context-summary:timeline' | 'run-diagnostic' | 'artifact-status' | 'capability-status' | 'fresh-execution' | 'unknown' = 'context-summary',
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    harnessContract: {
+      directContextDecision: directDecision(intent, overrides),
+    },
+    directContextDecision: directDecision(intent, overrides),
   };
 }
 
@@ -38,7 +62,7 @@ test('context follow-up protocol enables direct context answer even when AgentSe
       conversationPolicy: {
         applicationStatus: 'applied',
         policySource: 'python-conversation-policy',
-        directContextDecision: directDecision(),
+        ...canonicalDirectDecision('context-summary:risk'),
         executionModePlan: { executionMode: 'direct-context-answer' },
         responsePlan: { initialResponseMode: 'direct-context-answer' },
         latencyPolicy: { blockOnContextCompaction: false },
@@ -84,7 +108,7 @@ test('context follow-up summarizes risk claims from current context instead of d
       conversationPolicy: {
         applicationStatus: 'applied',
         policySource: 'python-conversation-policy',
-        directContextDecision: directDecision(),
+        ...canonicalDirectDecision('context-summary:risk'),
         executionModePlan: { executionMode: 'direct-context-answer' },
         responsePlan: { initialResponseMode: 'direct-context-answer' },
       },
@@ -118,8 +142,9 @@ test('answer-only continuation transform returns checklist from prior visible an
       conversationPolicy: {
         applicationStatus: 'applied',
         policySource: 'python-conversation-policy',
-        directContextDecision: directDecision('context-summary', {
+        ...canonicalDirectDecision('context-summary', {
           usedRefs: ['artifact:research-report'],
+          transformMode: 'answer-only-checklist',
         }),
         executionModePlan: { executionMode: 'direct-context-answer' },
         responsePlan: { initialResponseMode: 'direct-context-answer' },
@@ -142,6 +167,259 @@ test('answer-only continuation transform returns checklist from prior visible an
   assert.doesNotMatch(payload.message, /sciforge\.agentserver|generated workspace task/i);
 });
 
+test('harness transformMode drives answer-only compression without prompt regex', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'Please make this terse from the already visible material.',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    expectedArtifactTypes: ['paper-list'],
+    artifacts: [{
+      id: 'research-report',
+      type: 'research-report',
+      data: {
+        markdown: 'The prior conclusion says assay specificity is the main constraint. Primer-dimer risk is secondary. Reuse the validated target region.',
+      },
+    }],
+    uiState: {
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        ...canonicalDirectDecision('context-summary', {
+          usedRefs: ['artifact:research-report'],
+          transformMode: 'answer-only-compress',
+        }),
+        executionModePlan: { executionMode: 'direct-context-answer' },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+        latencyPolicy: { blockOnContextCompaction: false },
+      },
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.match(payload.message, /Direct answer from the previous visible answer/);
+  assert.match(payload.message, /assay specificity/);
+  assert.equal(payload.executionUnits[0]?.status, 'done');
+});
+
+test('structured method summary intent selects method snippets without prompt domain regex', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'Give me a short recap.',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [{
+      id: 'method-note',
+      type: 'research-report',
+      data: {
+        markdown: 'Method: retrieve seed papers, screen abstracts, then extract evidence tables. Risk: source coverage can drift if provider routes change.',
+      },
+    }],
+    uiState: {
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        ...canonicalDirectDecision('context-summary:method', { usedRefs: ['artifact:method-note'] }),
+        executionModePlan: { executionMode: 'direct-context-answer' },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+      },
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.match(payload.message, /retrieve seed papers/);
+  assert.doesNotMatch(payload.message, /source coverage can drift/);
+});
+
+test('answer-only continuation transform ignores unreadable digest and path-only refs', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'Compress the previous answer into a three-item checklist. Use only the previous answer; no search, no code.',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [{
+      id: 'research-report',
+      type: 'research-report',
+      metadata: { reportRef: '.sciforge/task-results/research-report.md' },
+    }],
+    references: [{
+      kind: 'artifact',
+      ref: 'artifact:research-report',
+      title: 'research report',
+      summary: 'artifact:research-report',
+    }],
+    uiState: {
+      currentReferenceDigests: [{
+        sourceRef: 'artifact:research-report',
+        digestText: 'Reference path was not readable inside the workspace.',
+      }],
+      claims: [{
+        id: 'claim-visible-answer',
+        type: 'answer',
+        text: 'ConversationProjection is authoritative. It keeps visible results auditable. It prevents stale raw backend output from competing with the final answer.',
+      }],
+      recentExecutionRefs: [{
+        id: 'agentserver-direct',
+        outputRef: '.sciforge/task-results/agentserver-direct.json',
+        stdoutRef: '.sciforge/logs/agentserver.stdout.log',
+      }],
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        ...canonicalDirectDecision('context-summary', {
+          usedRefs: ['artifact:research-report', 'claim:claim-visible-answer'],
+        }),
+        executionModePlan: { executionMode: 'direct-context-answer' },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+        latencyPolicy: { blockOnContextCompaction: false },
+      },
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.match(payload.message, /ConversationProjection is authoritative/);
+  assert.match(payload.message, /visible results auditable/);
+  assert.match(payload.message, /prevents stale raw backend output/);
+  assert.doesNotMatch(payload.message, /Reference path was not readable/);
+  assert.doesNotMatch(payload.message, /\.sciforge/);
+});
+
+test('selected artifact summary uses structured artifact data instead of unreadable artifact ref digest', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'use selected artifact only no rerun no tools summarize what it says in five bullets',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    references: [{
+      kind: 'artifact',
+      ref: 'artifact:research-report-kras-g12d',
+      title: 'research-report-kras-g12d',
+      summary: 'artifact:research-report-kras-g12d',
+    }],
+    artifacts: [{
+      id: 'research-report-kras-g12d',
+      type: 'research-report',
+      dataRef: '.sciforge/sessions/session-a/artifacts/research-report-kras-g12d.json',
+      data: {
+        summary: 'KRAS G12D evidence centers on allele-specific biology and downstream MAPK signaling.',
+        keyFindings: [
+          'Covalent and non-covalent inhibitor programs should be separated when comparing evidence.',
+          'Preclinical context should not be presented as clinical efficacy.',
+          'The selected report calls for paper-level retrieval before comprehensive claims.',
+        ],
+        conclusion: 'The selected artifact is a bounded evidence framing report, not a full systematic review.',
+      },
+    }],
+    uiState: {
+      currentReferences: [{
+        kind: 'artifact',
+        ref: 'artifact:research-report-kras-g12d',
+        title: 'research-report-kras-g12d',
+      }],
+      currentReferenceDigests: [{
+        sourceRef: 'artifact:research-report-kras-g12d',
+        status: 'unresolved',
+        digestText: 'Reference path was not readable inside the workspace.',
+      }],
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        ...canonicalDirectDecision('context-summary', {
+          usedRefs: ['artifact:research-report-kras-g12d'],
+        }),
+        executionModePlan: { executionMode: 'direct-context-answer' },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+        latencyPolicy: { blockOnContextCompaction: false },
+      },
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.match(payload.message, /Summary from the selected reference/);
+  assert.match(payload.message, /KRAS G12D evidence centers/);
+  assert.match(payload.message, /Preclinical context should not be presented as clinical efficacy/);
+  assert.doesNotMatch(payload.message, /Reference path was not readable/);
+});
+
+test('selected artifact summary ignores unrelated current-run diagnostic claims', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'use selected artifact only no rerun no tools summarize what it says in five bullets',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    references: [{
+      kind: 'artifact',
+      ref: 'artifact:research-report-kras-g12d',
+      title: 'research-report-kras-g12d',
+      summary: 'paper-list',
+      payload: {
+        currentReference: {
+          id: 'artifact:research-report-kras-g12d',
+          ref: 'artifact:research-report-kras-g12d',
+          title: 'research-report-kras-g12d',
+        },
+      },
+    }],
+    artifacts: [{
+      id: 'research-report-kras-g12d',
+      type: 'research-report',
+      data: {
+        summary: 'KRAS G12D report compares mutation prevalence, inhibitor evidence, and evidence limitations.',
+        keyFindings: [
+          'KRAS G12D is discussed across pancreatic, colorectal, and lung cancer contexts.',
+          'MRTX1133 and related inhibitor programs are framed as emerging preclinical evidence.',
+          'Combination therapy hypotheses need paper-level verification before strong clinical claims.',
+        ],
+        conclusion: 'The selected artifact is an evidence framing report with explicit limitations.',
+      },
+    }, {
+      id: 'artifact-summary-bullets',
+      type: 'runtime-context-summary',
+      data: {
+        markdown: 'Selected Artifact Summary\nThe selected artifact content was not available in the workspace.',
+      },
+    }],
+    uiState: {
+      claims: [{
+        id: 'claim-unreadable',
+        type: 'prediction',
+        text: 'Reference path was not readable inside the workspace.',
+      }, {
+        id: 'claim-prior-summary',
+        type: 'prediction',
+        text: 'Selected Artifact Summary\nThe selected artifact content was not available in the workspace.',
+      }],
+      currentReferenceDigests: [{
+        sourceRef: 'artifact:research-report-kras-g12d',
+        status: 'unresolved',
+        digestText: 'Reference path was not readable inside the workspace.',
+      }],
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        ...canonicalDirectDecision('context-summary', {
+          usedRefs: ['artifact:research-report-kras-g12d'],
+        }),
+        executionModePlan: { executionMode: 'direct-context-answer' },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+        latencyPolicy: { blockOnContextCompaction: false },
+      },
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.match(payload.message, /Summary from the selected reference/);
+  assert.match(payload.message, /mutation prevalence/);
+  assert.match(payload.message, /MRTX1133/);
+  assert.doesNotMatch(payload.message, /Reference path was not readable/);
+  assert.doesNotMatch(payload.message, /content was not available/);
+});
+
 test('direct context fast path answers skill tool capability provider status queries from runtime registry', () => {
   const request: GatewayRequest = {
     skillDomain: 'literature',
@@ -158,7 +436,7 @@ test('direct context fast path answers skill tool capability provider status que
       conversationPolicy: {
         applicationStatus: 'applied',
         policySource: 'python-conversation-policy',
-        directContextDecision: directDecision(),
+        ...canonicalDirectDecision('capability-status'),
         executionModePlan: {
           executionMode: 'direct-context-answer',
           signals: ['context-summary'],
@@ -253,6 +531,71 @@ test('agent harness audit hints do not generate direct context strategy without 
   assert.equal(directContextFastPathPayload(request), undefined);
 });
 
+test('direct context fast path reads only canonical harness contract decision', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'Use current refs only and summarize.',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [{
+      id: 'research-report',
+      type: 'research-report',
+      data: { markdown: 'Canonical current artifact has enough evidence.' },
+    }],
+    uiState: {
+      directContextDecision: directDecision('context-summary', { decisionRef: 'decision:legacy-ui' }),
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        directContextDecision: directDecision('context-summary', { decisionRef: 'decision:legacy-policy' }),
+        executionModePlan: {
+          executionMode: 'direct-context-answer',
+          directContextDecision: directDecision('context-summary', { decisionRef: 'decision:legacy-execution' }),
+        },
+        harnessContract: {
+          directContextDecision: directDecision('context-summary', { decisionRef: 'decision:canonical' }),
+        },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+        latencyPolicy: { blockOnContextCompaction: false },
+      },
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.match(String(payload.executionUnits[0]?.params ?? ''), /decision:canonical/);
+  assert.doesNotMatch(String(payload.executionUnits[0]?.params ?? ''), /legacy-ui|legacy-policy|legacy-execution/);
+});
+
+test('legacy direct context decision paths do not authorize fast path without canonical harness contract', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'Use current refs only and summarize.',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [{
+      id: 'research-report',
+      type: 'research-report',
+      data: { markdown: 'Legacy artifact should not authorize this path.' },
+    }],
+    uiState: {
+      directContextDecision: directDecision('context-summary', { decisionRef: 'decision:legacy-ui' }),
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        directContextDecision: directDecision('context-summary', { decisionRef: 'decision:legacy-policy' }),
+        executionModePlan: {
+          executionMode: 'direct-context-answer',
+          directContextDecision: directDecision('context-summary', { decisionRef: 'decision:legacy-execution' }),
+        },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+        latencyPolicy: { blockOnContextCompaction: false },
+      },
+    },
+  };
+
+  assert.equal(directContextFastPathPayload(request), undefined);
+});
+
 test('context follow-up protocol does not direct-answer fresh work requests', () => {
   const request: GatewayRequest = {
     skillDomain: 'literature',
@@ -288,7 +631,7 @@ test('explicit no-execution context summary uses direct fast path from applied c
       conversationPolicy: {
         applicationStatus: 'applied',
         policySource: 'python-conversation-policy',
-        directContextDecision: directDecision(),
+        ...canonicalDirectDecision(),
         executionModePlan: {
           executionMode: 'direct-context-answer',
           signals: ['context-summary', 'no-execution-directive'],
@@ -353,7 +696,7 @@ test('run-diagnostic direct context can answer from selected execution-unit refs
       conversationPolicy: {
         applicationStatus: 'applied',
         policySource: 'python-conversation-policy',
-        directContextDecision: directDecision('run-diagnostic', {
+        ...canonicalDirectDecision('run-diagnostic', {
           requiredTypedContext: ['execution-units', 'failure-evidence'],
           usedRefs: ['execution-unit:EU-literature-failed'],
         }),
@@ -595,7 +938,7 @@ test('context follow-up protocol returns needs-work when expected artifacts are 
       conversationPolicy: {
         applicationStatus: 'applied',
         policySource: 'python-conversation-policy',
-        directContextDecision: directDecision(),
+        ...canonicalDirectDecision(),
         executionModePlan: { executionMode: 'direct-context-answer' },
         responsePlan: { initialResponseMode: 'direct-context-answer' },
         latencyPolicy: { blockOnContextCompaction: false },
@@ -654,6 +997,14 @@ test('provider status follow-up reuses current context without AgentServer gener
         status: 'available',
         health: 'online',
       }],
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        ...canonicalDirectDecision('capability-status', { usedRefs: ['artifact:fetch-example-com'] }),
+        executionModePlan: { executionMode: 'direct-context-answer' },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+        latencyPolicy: { blockOnContextCompaction: false },
+      },
     },
   };
 

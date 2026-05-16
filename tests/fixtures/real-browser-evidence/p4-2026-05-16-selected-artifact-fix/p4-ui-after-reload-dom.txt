@@ -1,0 +1,185 @@
+<button node_id=7842 aria-label="导航" title="导航" />
+<button node_id=7851 aria-label="收起侧栏" title="收起侧栏" />
+<button node_id=7816>研究概览</button>
+<button node_id=7817>场景工作台</button>
+<button node_id=7871>组件工作台</button>
+<button node_id=7877>研究时间线</button>
+<button node_id=7884>反馈收件箱</button>
+<button node_id=7892 aria-label="新建文件" title="新建文件" type="button" />
+<button node_id=7898 aria-label="新建文件夹" title="新建文件夹" type="button" />
+<button node_id=7903 aria-label="刷新" title="刷新" type="button" />
+<button node_id=7909 aria-label="全部折叠" title="全部折叠" type="button" />
+<div node_id=7913 aria-label="工作区文件树" role="tree">已加载 2 项 p4 .sciforge output.json 打开其他文件夹… /Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p4 用作工作区根目录 详情 :host summary { display: list-it</div>
+<p node_id=7914 role="status">已加载 2 项</p>
+<div node_id=7916 role="treeitem">p4</div>
+<button node_id=7917 aria-label="折叠" type="button" />
+<div node_id=7922 role="group">.sciforge output.json</div>
+<div node_id=7924 role="treeitem">.sciforge</div>
+<button node_id=7925 aria-label="展开" type="button" />
+<div node_id=7933 role="treeitem">output.json</div>
+<details node_id=7942>打开其他文件夹… /Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p4 用作工作区根目录 详情 :host summary { display: list-item; counter-increment: list-item </details>
+<summary node_id=7945>打开其他文件夹…</summary>
+<input node_id=7953 aria-label="Workspace 根路径" title="已同步到 /Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p4/.sciforge" value="/Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p4">/Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p4</input>
+<div node_id=7962 aria-label="拖拽调整左侧栏宽度" role="separator" />
+<input node_id=7969 placeholder="搜索基因、通路、文献、Execution Unit...">搜索基因、通路、文献、Execution Unit...</input>
+<button node_id=7977 aria-label="切换白天模式" title="切换白天模式" />
+<button node_id=7989 aria-label="设置" title="设置" />
+<button node_id=7998 type="button">文献证据评估场景</button>
+<button node_id=8008 title="取消 vision-sense 感官" type="button">vision-sense on</button>
+<select node_id=8041>Codex Codex OpenTeam OpenTeam Claude Code Claude Code Hermes Hermes OpenClaw OpenClaw Gemini Gemini Codex</select>
+<button node_id=8087 aria-label="开启新聊天" title="开启新聊天" />
+<button node_id=8092 aria-label="历史会话" title="历史会话" />
+<button node_id=8097 aria-label="导出当前 Scenario 会话" title="导出当前 Scenario 会话" />
+<button node_id=8103 aria-label="删除当前聊天" title="删除当前聊天" />
+<button node_id=10365 title="summarize_selected_artifact.py" type="button">summarize_selected_artifact.py</button>
+<button node_id=10367 title="generate_missing_artifacts.py" type="button">generate_missing_artifacts.py</button>
+<details node_id=10369>Dispatched protocol=protocol-success; task=satisfied satisfied · 2026-05-16T10:38:21.355Z Projection 事件：protocol=protocol-success; task=satisfied。 状态：satisfied。</details>
+<button node_id=10401 title="summarize_selected_artifact.py" type="button">summarize_selected_artifact.py</button>
+<button node_id=10403 title="summarize_selected_artifact.py" type="button">summarize_selected_artifact.py</button>
+<button node_id=10405 title="generate_missing_artifacts.py" type="button">generate_missing_artifacts.py</button>
+<details node_id=10407>OutputMaterialized Materialized refs from runtime payload. satisfied · 2026-05-16T10:38:21.355Z Projection 事件：Materialized refs from runtime payload.。 状态：satisf</details>
+<summary node_id=10410>OutputMaterialized Materialized refs from runtime payload. satisfied · 2026-05-16T10:38:21.355Z</summary>
+<button node_id=10429 title="bd47102759e4" type="button">bd47102759e4</button>
+<button node_id=10431 title="trace" type="button">trace</button>
+<button node_id=10433 title="verification-cab3d6f9928c.json" type="button">verification-cab3d6f9928c.json</button>
+<button node_id=10435 title="research-report-kras-g12d" type="button">research-report-kras-g12d</button>
+<button node_id=10437 title="session-workspace-biomedical-knowledge-graph--kras-g12d----mp83bd44-mp84kgal-tqs" type="button">session-workspace-biomedical-knowledge-graph--kras-g12d----mp83bd44-mp84kgal-tqs</button>
+<button node_id=10439 title="summarize_selected_artifact.py" type="button">summarize_selected_artifact.py</button>
+<button node_id=10441 title="summarize_selected_artifact.py" type="button">summarize_selected_artifact.py</button>
+<button node_id=10443 title="generate_missing_artifacts.py" type="button">generate_missing_artifacts.py</button>
+<details node_id=10445>Satisfied 基于当前会话已有上下文直接回答，不启动新的 workspace task。 1. artifact:research-report-kras-g12d: Reference path was... satisfied · 2026-05-16T10:38:21.355Z Projection 事件：</details>
+<summary node_id=10448>Satisfied 基于当前会话已有上下文直接回答，不启动新的 workspace task。 1. artifact:research-report-kras-g12d: Reference path was... satisfied · 2026-05-16T10:38:21.355Z</summary>
+<details node_id=10554>VerificationRecorded Verification evidence attached to task outcome projection. satisfied · 2026-05-16T10:38:21.355Z Projection 事件：Verification evidence attache</details>
+<summary node_id=10557>VerificationRecorded Verification evidence attached to task outcome projection. satisfied · 2026-05-16T10:38:21.355Z</summary>
+<button node_id=10576 title="bd47102759e4" type="button">bd47102759e4</button>
+<button node_id=10578 title="trace" type="button">trace</button>
+<button node_id=10580 title="verification-cab3d6f9928c.json" type="button">verification-cab3d6f9928c.json</button>
+<button node_id=10582 title="research-report-kras-g12d" type="button">research-report-kras-g12d</button>
+<button node_id=10584 title="session-workspace-biomedical-knowledge-graph--kras-g12d----mp83bd44-mp84kgal-tqs" type="button">session-workspace-biomedical-knowledge-graph--kras-g12d----mp83bd44-mp84kgal-tqs</button>
+<button node_id=10586 title="summarize_selected_artifact.py" type="button">summarize_selected_artifact.py</button>
+<button node_id=10588 title="summarize_selected_artifact.py" type="button">summarize_selected_artifact.py</button>
+<button node_id=10590 title="generate_missing_artifacts.py" type="button">generate_missing_artifacts.py</button>
+<details node_id=10592>Created 产生/引用对象：file:.sciforge/sessions/2026-05-16_literature-evidence-review_session-workspace-biomedi... 产生/引用对象：file:.sciforge/sessions/2026-05-16_literature</details>
+<summary node_id=10595>Created 产生/引用对象：file:.sciforge/sessions/2026-05-16_literature-evidence-review_session-workspace-biomedi...</summary>
+<button node_id=10621 title="bd47102759e4" type="button">bd47102759e4</button>
+<button node_id=10623 title="trace" type="button">trace</button>
+<button node_id=10625 title="verification-cab3d6f9928c.json" type="button">verification-cab3d6f9928c.json</button>
+<button node_id=10627 title="research-report-kras-g12d" type="button">research-report-kras-g12d</button>
+<button node_id=10629 title="session-workspace-biomedical-knowledge-graph--kras-g12d----mp83bd44-mp84kgal-tqs" type="button">session-workspace-biomedical-knowledge-graph--kras-g12d----mp83bd44-mp84kgal-tqs</button>
+<button node_id=10631 title="summarize_selected_artifact.py" type="button">summarize_selected_artifact.py</button>
+<button node_id=10633 title="summarize_selected_artifact.py" type="button">summarize_selected_artifact.py</button>
+<button node_id=10635 title="generate_missing_artifacts.py" type="button">generate_missing_artifacts.py</button>
+<details node_id=10637>Created 产生/引用对象：artifact:research-report-kras-g12d（artifact:research-report-kras-g12d） 产生/引用对象：artifact:research-report-kras-g12d（artifact:research-report-kras-</details>
+<summary node_id=10640>Created 产生/引用对象：artifact:research-report-kras-g12d（artifact:research-report-kras-g12d）</summary>
+<button node_id=10657 title="bd47102759e4" type="button">bd47102759e4</button>
+<button node_id=10659 title="trace" type="button">trace</button>
+<button node_id=10661 title="verification-cab3d6f9928c.json" type="button">verification-cab3d6f9928c.json</button>
+<button node_id=10663 title="research-report-kras-g12d" type="button">research-report-kras-g12d</button>
+<button node_id=10665 title="session-workspace-biomedical-knowledge-graph--kras-g12d----mp83bd44-mp84kgal-tqs" type="button">session-workspace-biomedical-knowledge-graph--kras-g12d----mp83bd44-mp84kgal-tqs</button>
+<button node_id=10667 title="summarize_selected_artifact.py" type="button">summarize_selected_artifact.py</button>
+<button node_id=10669 title="summarize_selected_artifact.py" type="button">summarize_selected_artifact.py</button>
+<button node_id=10671 title="generate_missing_artifacts.py" type="button">generate_missing_artifacts.py</button>
+<details node_id=10677>过程与诊断 · 1 工具输出 Tool output tool-output · supporting artifact:research-report-kras-g12d: Reference path was not readable inside the workspace. (artifact:research</details>
+<summary node_id=10680>过程与诊断 · 1 工具输出</summary>
+<button node_id=10787 title="复制原始 Markdown" type="button">复制</button>
+<button node_id=10789>编辑</button>
+<textarea node_id=11715>use selected artifact only no rerun no tools summarize what it says in five bullets use selected artifact only no rerun no tools summarize what it says in five </textarea>
+<button node_id=11720>保存</button>
+<button node_id=11722>取消</button>
+<span node_id=10796 role="button" title="paper-list">※1 research-report-kras-g12d</span>
+<button node_id=10806 type="button">run project-</button>
+<button node_id=10823 title="复制原始 Markdown" type="button">复制</button>
+<button node_id=10825>编辑</button>
+<details node_id=10828>Received use selected artifact only no rerun no tools summarize what it says in five bullets 接收任务：use selected artifact only no rerun no tools summarize what it</details>
+<summary node_id=10831>Received use selected artifact only no rerun no tools summarize what it says in five bullets</summary>
+<button node_id=10848 title="1b0b5193092d" type="button">1b0b5193092d</button>
+<button node_id=10850 title="trace" type="button">trace</button>
+<button node_id=10852 title="verification-da30fd54618a.json" type="button">verification-da30fd54618a.json</button>
+<button node_id=10854 title="research-report-kras-g12d" type="button">research-report-kras-g12d</button>
+<button node_id=10856 title="session-workspace-biomedical-knowledge-graph--kras-g12d----mp83bd44-mp84kgal-tqs" type="button">session-workspace-biomedical-knowledge-graph--kras-g12d----mp83bd44-mp84kgal-tqs</button>
+<button node_id=10858 title="summarize_selected_artifact.py" type="button">summarize_selected_artifact.py</button>
+<button node_id=10860 title="summarize_selected_artifact.py" type="button">summarize_selected_artifact.py</button>
+<button node_id=10862 title="generate_missing_artifacts.py" type="button">generate_missing_artifacts.py</button>
+<details node_id=10864>TurnReceived use selected artifact only no rerun no tools summarize what it says in five bullets satisfied · 2026-05-16T15:14:00.776Z Projection 事件：use selected</details>
+<summary node_id=10867>TurnReceived use selected artifact only no rerun no tools summarize what it says in five bullets satisfied · 2026-05-16T15:14:00.776Z</summary>
+<button node_id=10886 title="1b0b5193092d" type="button">1b0b5193092d</button>
+<button node_id=10888 title="trace" type="button">trace</button>
+<button node_id=10890 title="verification-da30fd54618a.json" type="button">verification-da30fd54618a.json</button>
+<button node_id=10892 title="research-report-kras-g12d" type="button">research-report-kras-g12d</button>
+<button node_id=10894 title="session-workspace-biomedical-knowledge-graph--kras-g12d----mp83bd44-mp84kgal-tqs" type="button">session-workspace-biomedical-knowledge-graph--kras-g12d----mp83bd44-mp84kgal-tqs</button>
+<button node_id=10896 title="summarize_selected_artifact.py" type="button">summarize_selected_artifact.py</button>
+<button node_id=10898 title="summarize_selected_artifact.py" type="button">summarize_selected_artifact.py</button>
+<button node_id=10900 title="generate_missing_artifacts.py" type="button">generate_missing_artifacts.py</button>
+<details node_id=10902>HarnessDecisionRecorded profile=balanced-default; intent=repair; exploration=minimal satisfied · 2026-05-16T15:14:00.776Z Projection 事件：profile=balanced-default</details>
+<summary node_id=10905>HarnessDecisionRecorded profile=balanced-default; intent=repair; exploration=minimal satisfied · 2026-05-16T15:14:00.776Z</summary>
+<button node_id=10924 title="1b0b5193092d" type="button">1b0b5193092d</button>
+<button node_id=10926 title="trace" type="button">trace</button>
+<button node_id=10928 title="verification-da30fd54618a.json" type="button">verification-da30fd54618a.json</button>
+<button node_id=10930 title="research-report-kras-g12d" type="button">research-report-kras-g12d</button>
+<button node_id=10932 title="session-workspace-biomedical-knowledge-graph--kras-g12d----mp83bd44-mp84kgal-tqs" type="button">session-workspace-biomedical-knowledge-graph--kras-g12d----mp83bd44-mp84kgal-tqs</button>
+<button node_id=10934 title="summarize_selected_artifact.py" type="button">summarize_selected_artifact.py</button>
+<button node_id=10936 title="summarize_selected_artifact.py" type="button">summarize_selected_artifact.py</button>
+<button node_id=10938 title="generate_missing_artifacts.py" type="button">generate_missing_artifacts.py</button>
+<details node_id=10940>Dispatched protocol=protocol-success; task=satisfied satisfied · 2026-05-16T15:14:00.776Z Projection 事件：protocol=protocol-success; task=satisfied。 状态：satisfied。</details>
+<summary node_id=10943>Dispatched protocol=protocol-success; task=satisfied satisfied · 2026-05-16T15:14:00.776Z</summary>
+<button node_id=10962 title="1b0b5193092d" type="button">1b0b5193092d</button>
+<button node_id=10964 title="trace" type="button">trace</button>
+<button node_id=10966 title="verification-da30fd54618a.json" type="button">verification-da30fd54618a.json</button>
+<button node_id=10968 title="research-report-kras-g12d" type="button">research-report-kras-g12d</button>
+<button node_id=10970 title="session-workspace-biomedical-knowledge-graph--kras-g12d----mp83bd44-mp84kgal-tqs" type="button">session-workspace-biomedical-knowledge-graph--kras-g12d----mp83bd44-mp84kgal-tqs</button>
+<button node_id=10972 title="summarize_selected_artifact.py" type="button">summarize_selected_artifact.py</button>
+<button node_id=10974 title="summarize_selected_artifact.py" type="button">summarize_selected_artifact.py</button>
+<button node_id=10976 title="generate_missing_artifacts.py" type="button">generate_missing_artifacts.py</button>
+<details node_id=10978>OutputMaterialized Materialized refs from runtime payload. satisfied · 2026-05-16T15:14:00.776Z Projection 事件：Materialized refs from runtime payload.。 状态：satisf</details>
+<summary node_id=10981>OutputMaterialized Materialized refs from runtime payload. satisfied · 2026-05-16T15:14:00.776Z</summary>
+<button node_id=11000 title="1b0b5193092d" type="button">1b0b5193092d</button>
+<button node_id=11002 title="trace" type="button">trace</button>
+<button node_id=11004 title="verification-da30fd54618a.json" type="button">verification-da30fd54618a.json</button>
+<button node_id=11006 title="research-report-kras-g12d" type="button">research-report-kras-g12d</button>
+<button node_id=11008 title="session-workspace-biomedical-knowledge-graph--kras-g12d----mp83bd44-mp84kgal-tqs" type="button">session-workspace-biomedical-knowledge-graph--kras-g12d----mp83bd44-mp84kgal-tqs</button>
+<button node_id=11010 title="summarize_selected_artifact.py" type="button">summarize_selected_artifact.py</button>
+<button node_id=11012 title="summarize_selected_artifact.py" type="button">summarize_selected_artifact.py</button>
+<details node_id=11016>Satisfied 基于当前会话已有上下文直接回答，不启动新的 workspace task。 1. artifact:research-report-kras-g12d: Reference path was... satisfied · 2026-05-16T15:14:00.776Z Projection 事件：</details>
+<summary node_id=11019>Satisfied 基于当前会话已有上下文直接回答，不启动新的 workspace task。 1. artifact:research-report-kras-g12d: Reference path was... satisfied · 2026-05-16T15:14:00.776Z</summary>
+<details node_id=11071>VerificationRecorded Verification evidence attached to task outcome projection. satisfied · 2026-05-16T15:14:00.776Z Projection 事件：Verification evidence attache</details>
+<summary node_id=11074>VerificationRecorded Verification evidence attached to task outcome projection. satisfied · 2026-05-16T15:14:00.776Z</summary>
+<button node_id=11093 title="1b0b5193092d" type="button">1b0b5193092d</button>
+<button node_id=11095 title="trace" type="button">trace</button>
+<button node_id=11097 title="verification-da30fd54618a.json" type="button">verification-da30fd54618a.json</button>
+<button node_id=11099 title="research-report-kras-g12d" type="button">research-report-kras-g12d</button>
+<details node_id=11109>Created 产生/引用对象：file:.sciforge/sessions/2026-05-16_literature-evidence-review_session-workspace-biomedi... 产生/引用对象：file:.sciforge/sessions/2026-05-16_literature</details>
+<summary node_id=11112>Created 产生/引用对象：file:.sciforge/sessions/2026-05-16_literature-evidence-review_session-workspace-biomedi...</summary>
+<details node_id=11154>Created 产生/引用对象：artifact:research-report-kras-g12d（artifact:research-report-kras-g12d） 产生/引用对象：artifact:research-report-kras-g12d（artifact:research-report-kras-</details>
+<summary node_id=11157>Created 产生/引用对象：artifact:research-report-kras-g12d（artifact:research-report-kras-g12d）</summary>
+<button node_id=11559 aria-label="收起输入栏" title="收起输入栏" type="button" />
+<select node_id=11581>当前实例 当前实例 当前实例</select>
+<button node_id=11597 title="点选模式引用整块 UI；选中文字可右键引用" type="button">点选</button>
+<button node_id=11602 title="上传 PDF、图片、表格或任意文件到证据矩阵" type="button">上传</button>
+<input node_id=11609 type="file" multiple="true">选择文件 未选择任何文件</input>
+<textarea node_id=11618 placeholder="输入研究问题，或点选对象后继续追问...">输入研究问题，或点选对象后继续追问...</textarea>
+<div node_id=11623 aria-label="上下文窗口 8%，ok" role="status" title="used/window: 16,720/200,000 tokens
+remaining: 183,280 tokens
+ratio: 8.4%
+status: ok
+source: 估算
+backend: codex
+compact: native
+compact threshold: 82%
+last compacted: never
+发送前达到阈值时会请求 AgentServer/backend 原生压缩；运行中事件只读展示。
+AgentServer owns multi-turn memory; SciForge sends current-turn projection, refs, and digests.">8% Context window ok used/window 16,720 / 200,000 tokens remaining 183,280 tokens ratio 8.4% status ok source 估算 backend codex model unknown compact native thre</div>
+<div node_id=11626 role="tooltip">Context window ok used/window 16,720 / 200,000 tokens remaining 183,280 tokens ratio 8.4% status ok source 估算 backend codex model unknown compact native thresho</div>
+<button node_id=11558 disabled="true">发送</button>
+<div node_id=11271 aria-label="调整聊天区和结果区宽度" role="separator" title="拖拽调整聊天区和结果区宽度" />
+<button node_id=11275 title="向右收缩结果面板" type="button" />
+<div node_id=11279 role="tablist">结果视图 证据矩阵</div>
+<button node_id=11280 role="tab" title="结果视图">结果视图</button>
+<button node_id=11284 role="tab" title="证据矩阵">证据矩阵</button>
+<button node_id=11289 type="button">全部</button>
+<button node_id=11291 type="button">只看图</button>
+<button node_id=11293 type="button">只看证据</button>
+<button node_id=11295 type="button">只看执行单元</button>
+<button node_id=11308 type="button">取消高亮</button>
+<button node_id=11362 type="button">Repair or normalize the materialized payload under the contract gate.</button>
+<details node_id=11364>查看运行细节 1 EU 审计摘要 失败原因、恢复动作和可复现引用 响应结构不符合契约：Generated task payload preflight blocked expensive execution before runner start: claims,executionUnits: Generated ta</details>
+<summary node_id=11367>查看运行细节 1 EU</summary>

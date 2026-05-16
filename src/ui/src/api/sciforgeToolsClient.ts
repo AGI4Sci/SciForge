@@ -90,6 +90,7 @@ export async function sendSciForgeToolMessage(
   let timedOut = false;
   let retryForSilentFirstEvent = false;
   let sawBackendEvent = false;
+  let foregroundReadableResultSeen = false;
   let lastSilentNoticeAt = 0;
   let latencyThresholds = latencyThresholdsFromPolicy(undefined, {
     requestTimeoutMs: input.config.requestTimeoutMs || DEFAULT_AGENT_REQUEST_TIMEOUT_MS,
@@ -177,6 +178,7 @@ export async function sendSciForgeToolMessage(
         silentStreamRunId,
         silentStreamDecision: abortDecision,
         stalledMs,
+        foregroundReadableResultSeen,
       });
       callbacks.onEvent?.(toolEvent('backend-stall-bounded-stop', recoveryDetail, {
         silentStreamRunId,
@@ -278,7 +280,6 @@ export async function sendSciForgeToolMessage(
         recentExecutionRefs,
         recentRuns: compactTransportRuns(input.runs ?? []),
         contextReusePolicy,
-        contextIsolation: contextReusePolicy,
         failureRecoveryPolicy,
         workspacePersistence: workspacePersistenceSummary(input),
         artifactExpectationMode: expectedArtifactTypes.length ? 'explicit-current-turn' : 'backend-decides',
@@ -323,6 +324,7 @@ export async function sendSciForgeToolMessage(
             sawBackendEvent = true;
             lastRealEventAt = Date.now();
           }
+          if (isForegroundReadableResultEvent(normalized)) foregroundReadableResultSeen = true;
           const latencyPolicy = extractLatencyPolicy(normalized.raw);
           if (latencyPolicy) {
             latencyThresholds = latencyThresholdsFromPolicy(latencyPolicy, latencyThresholds);
@@ -407,6 +409,19 @@ function isBackendProgressEvent(event: AgentStreamEvent) {
   return true;
 }
 
+function isForegroundReadableResultEvent(event: AgentStreamEvent) {
+  const raw = isRecord(event.raw) ? event.raw : {};
+  const type = String(event.type || raw.type || raw.kind || '').trim().toLowerCase();
+  const status = String(raw['status'] || '').trim().toLowerCase();
+  const readableRef = asString(raw.readableRef) || asString(raw.foregroundPartialRef);
+  const refs = asStringArray(raw.refs) ?? asStringArray(raw.evidenceRefs) ?? asStringArray(raw.artifactRefs);
+  const qualitySignals = isRecord(raw.qualitySignals) ? raw.qualitySignals : undefined;
+  if (type === 'first-readable-result') return true;
+  if (qualitySignals?.userVisible === true && (qualitySignals.partialResult === true || readableRef || refs?.length)) return true;
+  if (readableRef && /partial|readable|foreground|background-running/.test(type || status)) return true;
+  return false;
+}
+
 function buildTransportContextReusePolicy(input: SendAgentMessageInput) {
   const nonSeedMessageCount = (input.messages ?? []).filter((message) => !message.id.startsWith('seed')).length;
   const hasPriorWork = nonSeedMessageCount > 1
@@ -415,11 +430,10 @@ function buildTransportContextReusePolicy(input: SendAgentMessageInput) {
     || (input.executionUnits?.length ?? 0) > 0;
   const failedExecutionRefCount = (input.executionUnits ?? [])
     .filter((unit) => /failed|repair-needed|needs-human/i.test(String(unit.status || ''))).length;
-  const repairRequested = hasPriorWork && currentProjectionRepairTargetAvailable(input);
-  const mode = repairRequested ? 'repair' : hasPriorWork ? 'continue' : 'fresh';
+  const repairTargetAvailable = currentProjectionRepairTargetAvailable(input);
   return {
     schemaVersion: 'sciforge.context-reuse-policy.v1',
-    mode,
+    decisionOwner: 'python-conversation-policy',
     historyReuse: {
       allowed: hasPriorWork,
       source: 'ui-transport-prior-work',
@@ -431,7 +445,7 @@ function buildTransportContextReusePolicy(input: SendAgentMessageInput) {
       artifactCount: input.artifacts?.length ?? 0,
       executionUnitCount: input.executionUnits?.length ?? 0,
       failedExecutionRefCount,
-      repairTargetAvailable: repairRequested,
+      repairTargetAvailable,
     },
     reason: hasPriorWork
       ? 'Current turn belongs to an existing session with projection/audit refs available; reuse must stay bounded by Projection and refs.'
@@ -442,15 +456,7 @@ function buildTransportContextReusePolicy(input: SendAgentMessageInput) {
 function currentProjectionRepairTargetAvailable(input: SendAgentMessageInput) {
   return recentRecordHasRepairTarget(input.executionUnits)
     || recentRecordHasRepairTarget(input.runs)
-    || (input.references ?? []).some((reference) => {
-      const summary = [
-        reference.ref,
-        reference.kind,
-        reference.title,
-        isRecord(reference) ? reference.summary : undefined,
-      ].filter(Boolean).join(' ');
-      return /\b(failure|failed|repair-needed|needs-human|recover-action|diagnostic)\b/i.test(summary);
-    });
+    || currentRecoverActionReferenceAvailable(input.references);
 }
 
 function recentRecordHasRepairTarget(records: unknown[] | undefined) {
@@ -480,6 +486,19 @@ function recentRecordHasRepairTarget(records: unknown[] | undefined) {
   });
 }
 
+function currentRecoverActionReferenceAvailable(references: unknown[] | undefined) {
+  return (references ?? []).some((reference) => {
+    if (!isRecord(reference)) return false;
+    const source = String(reference.source || reference.sourceId || reference.kind || '').trim().toLowerCase();
+    const status = String(reference.status || '').trim().toLowerCase();
+    return source === 'recover-action'
+      || source === 'failure-evidence'
+      || status === 'repair-needed'
+      || status === 'failed-with-reason'
+      || status === 'needs-human';
+  });
+}
+
 function boundedStallRecoveryResponse(
   input: SendAgentMessageInput,
   recovery: {
@@ -487,6 +506,7 @@ function boundedStallRecoveryResponse(
     silentStreamRunId: string;
     silentStreamDecision: SilentStreamDecisionRecord;
     stalledMs: number;
+    foregroundReadableResultSeen: boolean;
   },
 ): NormalizedAgentResponse {
   const builtInScenarioId = builtInScenarioIdForRuntimeInput(input);
@@ -505,63 +525,62 @@ function boundedStallRecoveryResponse(
       asString(isRecord(run.raw) ? run.raw.conversationProjectionRef : undefined),
     ]),
   ]).slice(0, 12);
+  const foregroundReadableResultSeen = recovery.foregroundReadableResultSeen;
+  const runStatus = foregroundReadableResultSeen ? 'background-running' : 'failed';
+  const projectionStatus = foregroundReadableResultSeen ? 'background-running' : 'failed-with-reason';
+  const executionStatus = foregroundReadableResultSeen ? 'running' : 'failed-with-reason';
+  const statusDetail = foregroundReadableResultSeen
+    ? recovery.detail
+    : `${recovery.detail} 当前 stream 没有 first-readable-result/foreground partial ref，不能声明 background-running。`;
   const recoverActions = [
     'Continue from current Projection refs/digests and recent execution refs only; do not replay raw run, stdout, stderr, or artifact bodies.',
     'Ask the backend for one minimal repair/continue step, or return failed-with-reason if the preserved refs are insufficient.',
   ];
-  const projection = {
-    schemaVersion: 'sciforge.conversation-projection.v1',
-    conversationId: input.sessionId,
-    currentTurn: { id: runId, prompt: input.prompt },
-    visibleAnswer: {
-      status: 'repair-needed',
-      diagnostic: recovery.detail,
-      artifactRefs: [],
-    },
-    activeRun: { id: runId, status: 'repair-needed' },
-    artifacts: [],
-    executionProcess: [{
-      eventId: `${runId}:bounded-stop`,
-      type: 'RepairNeeded',
-      summary: recovery.detail,
-      timestamp: createdAt,
-    }],
-    recoverActions,
-    auditRefs: evidenceRefs,
-    diagnostics: [{
-      severity: 'warning',
-      code: 'bounded-backend-stall',
-      message: recovery.detail,
-      refs: evidenceRefs.map((ref) => ({ ref })),
-    }],
+  const markerEvent = {
+    schemaVersion: 'sciforge.bounded-stall-marker-event.v1',
+    eventId: `${runId}:bounded-stall`,
+    type: 'bounded-stall-marker',
+    status: projectionStatus,
+    detail: statusDetail,
+    silentStreamRunId: recovery.silentStreamRunId,
+    stalledMs: recovery.stalledMs,
+    createdAt,
+    evidenceRefs,
   };
   return normalizeAgentResponse(builtInScenarioId, input.prompt, {
     ok: true,
     data: {
-      run: { id: runId, status: 'completed', createdAt, completedAt: createdAt },
+      run: {
+        id: runId,
+        status: runStatus,
+        createdAt,
+        completedAt: createdAt,
+        raw: { boundedStallMarkerEvent: markerEvent },
+      },
       output: {
         message: JSON.stringify({
-          message: recovery.detail,
+          message: statusDetail,
           confidence: 0.2,
           claimType: 'inference',
           evidenceLevel: 'runtime',
           executionUnits: [{
             id: `EU-${runId.slice(-8)}`,
             tool: 'sciforge.runtime.bounded-stop',
-            status: 'repair-needed',
+            status: executionStatus,
             params: JSON.stringify({
               silentStreamRunId: recovery.silentStreamRunId,
               stalledMs: recovery.stalledMs,
               evidenceRefs,
+              markerEvent,
             }),
-            failureReason: recovery.detail,
+            failureReason: statusDetail,
             recoverActions,
             nextStep: recoverActions[0],
             outputArtifacts: [],
             artifacts: [],
           }],
           claims: [{
-            text: recovery.detail,
+            text: statusDetail,
             type: 'inference',
             confidence: 0.2,
             evidenceLevel: 'runtime',
@@ -576,10 +595,8 @@ function boundedStallRecoveryResponse(
             kind: 'runtime-ref',
             role: 'audit',
           })),
-          displayIntent: {
-            resultPresentation: { conversationProjection: projection },
-            conversationProjection: projection,
-          },
+          displayIntent: { status: projectionStatus, boundedStallMarkerEvent: markerEvent },
+          boundedStallMarkerEvent: markerEvent,
           silentStreamDecision: recovery.silentStreamDecision,
         }),
       },

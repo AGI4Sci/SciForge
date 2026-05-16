@@ -145,6 +145,27 @@ class GoalSnapshotTest(unittest.TestCase):
             snapshot["turnExecutionConstraints"]["reasons"],
         )
 
+    def test_profile_intent_keyword_map_controls_intent_classification(self) -> None:
+        request = {
+            "prompt": "Please craft a dossier from the current notes.",
+            "profile": {
+                "intentKeywordMap": {
+                    "report": [{"keywords": ["dossier"]}],
+                    "continue": [{"keywords": ["current notes"]}],
+                }
+            },
+            "session": {"messages": [{"id": "msg-prior", "role": "assistant"}]},
+        }
+        without_profile = build_goal_snapshot({
+            "prompt": request["prompt"],
+            "session": request["session"],
+        })
+        with_profile = build_goal_snapshot(request)
+
+        self.assertEqual(without_profile["goalType"], "analysis")
+        self.assertEqual(with_profile["goalType"], "report")
+        self.assertEqual(with_profile["taskRelation"], "continue")
+
 
 if __name__ == "__main__":
     unittest.main()

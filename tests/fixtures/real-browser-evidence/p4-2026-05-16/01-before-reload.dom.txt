@@ -1,0 +1,549 @@
+- complementary:
+  - generic: BA
+  - button "导航":
+  - generic: 导航
+  - button "收起侧栏":
+  - navigation:
+    - button "研究概览":
+      - generic: 研究概览
+    - button "场景工作台":
+      - generic: 场景工作台
+    - button "组件工作台":
+      - generic: 组件工作台
+    - button "研究时间线":
+      - generic: 研究时间线
+    - button "反馈收件箱":
+      - generic: 反馈收件箱
+  - button "新建文件":
+  - button "新建文件夹":
+  - button "刷新":
+  - button "全部折叠":
+  - tree "工作区文件树":
+    - status: 已加载 2 项
+    - treeitem "折叠 p4" [expanded]:
+      - button "折叠":
+      - generic: p4
+    - treeitem "展开 .sciforge":
+      - button "展开":
+      - generic: .sciforge
+    - treeitem "output.json":
+      - generic: output.json
+    - generic "打开其他文件夹…"
+  - separator "拖拽调整左侧栏宽度"
+- banner:
+  - textbox "搜索基因、通路、文献、Execution Unit..."
+  - generic: Scenario Runtime · ready
+  - button "切换白天模式":
+    - text: 切换白天模式
+  - button "设置":
+    - text: 设置
+- main:
+  - button "文献证据评估场景":
+    - generic: 文献证据评估场景
+  - generic "感官插件":
+    - button "vision-sense on" [pressed]:
+      - generic: vision-sense
+      - generic: "on"
+  - strong: 文献证据评估
+  - generic: 在线
+  - generic: 1 archived
+  - generic "选择本场景下一次 AgentServer 运行使用的 agent backend":
+    - generic: backend
+    - combobox "backend":
+      - option "Codex" [selected]
+      - option "OpenTeam"
+      - option "Claude Code"
+      - option "Hermes"
+      - option "OpenClaw"
+      - option "Gemini"
+  - button "开启新聊天":
+    - text: 开启新聊天
+  - button "历史会话":
+    - text: 历史会话
+  - button "导出当前 Scenario 会话":
+    - text: 导出当前 Scenario 会话
+  - button "删除当前聊天":
+    - text: 删除当前聊天
+  - generic "verification:verification-5684705bcdb0":
+    - generic: "Verification: 未验证"
+  - button "复制"
+  - button "编辑"
+  - paragraph: no rerun no tools use current refs only summarize blocker recover actions and refs
+  - strong: 文献证据评估
+  - button "run project-"
+  - generic: 68%
+  - generic: 计算预测
+  - generic: 推断
+  - generic "verification:verification-5684705bcdb0":
+    - generic: "Verification: 未验证"
+  - button "复制"
+  - button "编辑"
+  - generic "按顺序记录的工作过程":
+    - generic "Received no rerun no tools use current refs only summarize blocker recover actions and refs":
+      - generic: Received
+      - generic: no rerun no tools use current refs only summarize blocker recover actions and refs
+    - generic "TurnReceived no rerun no tools use current refs only summarize blocker recover actions and refs degraded-result · 2026-05-16T09:38:11.737Z":
+      - generic: TurnReceived
+      - generic: no rerun no tools use current refs only summarize blocker recover actions and refs
+      - generic: degraded-result · 2026-05-16T09:38:11.737Z
+    - generic "HarnessDecisionRecorded profile=balanced-default; intent=repair; exploration=minimal degraded-result · 2026-05-16T09:38:11.737Z":
+      - generic: HarnessDecisionRecorded
+      - generic: profile=balanced-default; intent=repair; exploration=minimal
+      - generic: degraded-result · 2026-05-16T09:38:11.737Z
+    - generic "Dispatched protocol=protocol-success; task=needs-work degraded-result · 2026-05-16T09:38:11.737Z":
+      - generic: Dispatched
+      - generic: protocol=protocol-success; task=needs-work
+      - generic: degraded-result · 2026-05-16T09:38:11.737Z
+    - generic "OutputMaterialized Materialized refs from runtime payload. degraded-result · 2026-05-16T09:38:11.737Z":
+      - generic: OutputMaterialized
+      - generic: Materialized refs from runtime payload.
+      - generic: degraded-result · 2026-05-16T09:38:11.737Z
+    - generic "DegradedResult 当前回合的结构化 turn constraints 禁止新的 runtime 与 workspace 执行；SciForge 已 fail-closed，没有启动新的执行路径。请提供可用引用... degraded-result · 2026-05-16T09:38:11.737Z":
+      - generic: DegradedResult
+      - generic: 当前回合的结构化 turn constraints 禁止新的 runtime 与 workspace 执行；SciForge 已 fail-closed，没有启动新的执行路径。请提供可用引用...
+      - generic: degraded-result · 2026-05-16T09:38:11.737Z
+    - generic "VerificationRecorded Verification evidence attached to task outcome projection. degraded-result · 2026-05-16T09:38:11.737Z":
+      - generic: VerificationRecorded
+      - generic: Verification evidence attached to task outcome projection.
+      - generic: degraded-result · 2026-05-16T09:38:11.737Z
+    - generic "Created 产生/引用对象：file:.sciforge/sessions/2026-05-16_literature-evidence-review_session-workspace-biomedi...":
+      - generic: Created
+      - generic: 产生/引用对象：file:.sciforge/sessions/2026-05-16_literature-evidence-review_session-workspace-biomedi...
+  - paragraph: 后端运行未完成：backend failure。详细诊断已保留在运行审计中，主结果不展示原始响应正文、endpoint 或日志内容。
+  - generic "verification:verification-bb7c37c5a0ae":
+    - generic: "Verification: 未验证"
+  - button "复制"
+  - button "编辑"
+  - paragraph: no rerun no tools use current refs only summarize blocker recover actions and refs
+  - strong: 文献证据评估
+  - button "run project-"
+  - generic: 68%
+  - generic: 计算预测
+  - generic: 推断
+  - generic "verification:verification-bb7c37c5a0ae":
+    - generic: "Verification: 未验证"
+  - button "复制"
+  - button "编辑"
+  - generic "按顺序记录的工作过程":
+    - generic "Received no rerun no tools use current refs only summarize blocker recover actions and refs":
+      - generic: Received
+      - generic: no rerun no tools use current refs only summarize blocker recover actions and refs
+    - generic "TurnReceived no rerun no tools use current refs only summarize blocker recover actions and refs degraded-result · 2026-05-16T09:44:31.355Z":
+      - generic: TurnReceived
+      - generic: no rerun no tools use current refs only summarize blocker recover actions and refs
+      - generic: degraded-result · 2026-05-16T09:44:31.355Z
+    - generic "HarnessDecisionRecorded profile=balanced-default; intent=repair; exploration=minimal degraded-result · 2026-05-16T09:44:31.355Z":
+      - generic: HarnessDecisionRecorded
+      - generic: profile=balanced-default; intent=repair; exploration=minimal
+      - generic: degraded-result · 2026-05-16T09:44:31.355Z
+    - generic "Dispatched protocol=protocol-success; task=needs-work degraded-result · 2026-05-16T09:44:31.355Z":
+      - generic: Dispatched
+      - generic: protocol=protocol-success; task=needs-work
+      - generic: degraded-result · 2026-05-16T09:44:31.355Z
+    - generic "OutputMaterialized Materialized refs from runtime payload. degraded-result · 2026-05-16T09:44:31.355Z":
+      - generic: OutputMaterialized
+      - generic: Materialized refs from runtime payload.
+      - generic: degraded-result · 2026-05-16T09:44:31.355Z
+    - generic "DegradedResult 当前回合的结构化 turn constraints 禁止新的 runtime 与 workspace 执行；SciForge 已 fail-closed，没有启动新的执行路径。请提供可用引用... degraded-result · 2026-05-16T09:44:31.355Z":
+      - generic: DegradedResult
+      - generic: 当前回合的结构化 turn constraints 禁止新的 runtime 与 workspace 执行；SciForge 已 fail-closed，没有启动新的执行路径。请提供可用引用...
+      - generic: degraded-result · 2026-05-16T09:44:31.355Z
+    - generic "VerificationRecorded Verification evidence attached to task outcome projection. degraded-result · 2026-05-16T09:44:31.355Z":
+      - generic: VerificationRecorded
+      - generic: Verification evidence attached to task outcome projection.
+      - generic: degraded-result · 2026-05-16T09:44:31.355Z
+    - generic "Created 产生/引用对象：file:.sciforge/sessions/2026-05-16_literature-evidence-review_session-workspace-biomedi...":
+      - generic: Created
+      - generic: 产生/引用对象：file:.sciforge/sessions/2026-05-16_literature-evidence-review_session-workspace-biomedi...
+  - paragraph: 后端运行未完成：backend failure。详细诊断已保留在运行审计中，主结果不展示原始响应正文、endpoint 或日志内容。
+  - generic "verification:verification-0410909bf4b9":
+    - generic: "Verification: 未验证"
+  - button "复制"
+  - button "编辑"
+  - paragraph: no rerun no tools use current refs only summarize blocker recover actions and refs
+  - strong: 文献证据评估
+  - button "run project-"
+  - generic: 68%
+  - generic: 计算预测
+  - generic: 推断
+  - generic "verification:verification-0410909bf4b9":
+    - generic: "Verification: 未验证"
+  - button "复制"
+  - button "编辑"
+  - generic "按顺序记录的工作过程":
+    - generic "Received no rerun no tools use current refs only summarize blocker recover actions and refs":
+      - generic: Received
+      - generic: no rerun no tools use current refs only summarize blocker recover actions and refs
+    - generic "TurnReceived no rerun no tools use current refs only summarize blocker recover actions and refs degraded-result · 2026-05-16T09:48:00.675Z":
+      - generic: TurnReceived
+      - generic: no rerun no tools use current refs only summarize blocker recover actions and refs
+      - generic: degraded-result · 2026-05-16T09:48:00.675Z
+    - generic "HarnessDecisionRecorded profile=balanced-default; intent=repair; exploration=minimal degraded-result · 2026-05-16T09:48:00.675Z":
+      - generic: HarnessDecisionRecorded
+      - generic: profile=balanced-default; intent=repair; exploration=minimal
+      - generic: degraded-result · 2026-05-16T09:48:00.675Z
+    - generic "Dispatched protocol=protocol-success; task=needs-work degraded-result · 2026-05-16T09:48:00.675Z":
+      - generic: Dispatched
+      - generic: protocol=protocol-success; task=needs-work
+      - generic: degraded-result · 2026-05-16T09:48:00.675Z
+    - generic "OutputMaterialized Materialized refs from runtime payload. degraded-result · 2026-05-16T09:48:00.675Z":
+      - generic: OutputMaterialized
+      - generic: Materialized refs from runtime payload.
+      - generic: degraded-result · 2026-05-16T09:48:00.675Z
+    - generic "DegradedResult 当前回合的结构化 turn constraints 禁止新的 runtime 与 workspace 执行；SciForge 已 fail-closed，没有启动新的执行路径。请提供可用引用... degraded-result · 2026-05-16T09:48:00.675Z":
+      - generic: DegradedResult
+      - generic: 当前回合的结构化 turn constraints 禁止新的 runtime 与 workspace 执行；SciForge 已 fail-closed，没有启动新的执行路径。请提供可用引用...
+      - generic: degraded-result · 2026-05-16T09:48:00.675Z
+    - generic "VerificationRecorded Verification evidence attached to task outcome projection. degraded-result · 2026-05-16T09:48:00.675Z":
+      - generic: VerificationRecorded
+      - generic: Verification evidence attached to task outcome projection.
+      - generic: degraded-result · 2026-05-16T09:48:00.675Z
+    - generic "Created 产生/引用对象：file:.sciforge/sessions/2026-05-16_literature-evidence-review_session-workspace-biomedi...":
+      - generic: Created
+      - generic: 产生/引用对象：file:.sciforge/sessions/2026-05-16_literature-evidence-review_session-workspace-biomedi...
+  - paragraph: 后端运行未完成：backend failure。详细诊断已保留在运行审计中，主结果不展示原始响应正文、endpoint 或日志内容。
+  - generic "Projection verification unverified":
+    - generic: "Verification: 未验证"
+  - button "复制"
+  - button "编辑"
+  - paragraph: no rerun no tools use selected ref only summarize blocker recover actions and refs
+  - strong: 文献证据评估
+  - button "run project-"
+  - generic: 60%
+  - generic: 计算预测
+  - generic: 推断
+  - generic "Projection verification unverified":
+    - generic: "Verification: 未验证"
+  - button "复制"
+  - button "编辑"
+  - generic "按顺序记录的工作过程":
+    - generic "Received no rerun no tools use selected ref only summarize blocker recover actions and refs":
+      - generic: Received
+      - generic: no rerun no tools use selected ref only summarize blocker recover actions and refs
+    - generic "TurnReceived no rerun no tools use selected ref only summarize blocker recover actions and refs satisfied · 2026-05-16T10:17:08.923Z":
+      - generic: TurnReceived
+      - generic: no rerun no tools use selected ref only summarize blocker recover actions and refs
+      - generic: satisfied · 2026-05-16T10:17:08.923Z
+    - generic "HarnessDecisionRecorded profile=balanced-default; intent=fresh; exploration=minimal satisfied · 2026-05-16T10:17:08.923Z":
+      - generic: HarnessDecisionRecorded
+      - generic: profile=balanced-default; intent=fresh; exploration=minimal
+      - generic: satisfied · 2026-05-16T10:17:08.923Z
+    - generic "Dispatched protocol=protocol-success; task=satisfied satisfied · 2026-05-16T10:17:08.923Z":
+      - generic: Dispatched
+      - generic: protocol=protocol-success; task=satisfied
+      - generic: satisfied · 2026-05-16T10:17:08.923Z
+    - generic "OutputMaterialized Materialized refs from runtime payload. satisfied · 2026-05-16T10:17:08.923Z":
+      - generic: OutputMaterialized
+      - generic: Materialized refs from runtime payload.
+      - generic: satisfied · 2026-05-16T10:17:08.923Z
+    - generic "Satisfied No explicit blockers found in selected refs. No explicit recover actions found. No refs found. satisfied · 2026-05-16T10:17:08.923Z":
+      - generic: Satisfied
+      - generic: No explicit blockers found in selected refs. No explicit recover actions found. No refs found.
+      - generic: satisfied · 2026-05-16T10:17:08.923Z
+  - paragraph: 后端运行未完成：backend failure。详细诊断已保留在运行审计中，主结果不展示原始响应正文、endpoint 或日志内容。
+  - generic "Projection verification unverified":
+    - generic: "Verification: 未验证"
+  - button "复制"
+  - button "编辑"
+  - paragraph: use selected artifact only no rerun no tools summarize what it says in five bullets
+  - strong: 文献证据评估
+  - button "run project-"
+  - generic: 20%
+  - generic: 计算预测
+  - generic: 事实
+  - generic "Projection verification unverified":
+    - generic: "Verification: 未验证"
+  - generic: failed
+  - button "复制"
+  - button "编辑"
+  - generic "按顺序记录的工作过程":
+    - generic "Received use selected artifact only no rerun no tools summarize what it says in five bullets":
+      - generic: Received
+      - generic: use selected artifact only no rerun no tools summarize what it says in five bullets
+    - generic "TurnReceived use selected artifact only no rerun no tools summarize what it says in five bullets repair-needed · 2026-05-16T10:22:41.648Z":
+      - generic: TurnReceived
+      - generic: use selected artifact only no rerun no tools summarize what it says in five bullets
+      - generic: repair-needed · 2026-05-16T10:22:41.648Z
+    - generic "HarnessDecisionRecorded profile=balanced-default; intent=fresh; exploration=minimal repair-needed · 2026-05-16T10:22:41.648Z":
+      - generic: HarnessDecisionRecorded
+      - generic: profile=balanced-default; intent=fresh; exploration=minimal
+      - generic: repair-needed · 2026-05-16T10:22:41.648Z
+    - generic "Dispatched protocol=protocol-failed; task=needs-work repair-needed · 2026-05-16T10:22:41.648Z":
+      - generic: Dispatched
+      - generic: protocol=protocol-failed; task=needs-work
+      - generic: repair-needed · 2026-05-16T10:22:41.648Z
+    - generic "OutputMaterialized Materialized refs from runtime payload. repair-needed · 2026-05-16T10:22:41.648Z":
+      - generic: OutputMaterialized
+      - generic: Materialized refs from runtime payload.
+      - generic: repair-needed · 2026-05-16T10:22:41.648Z
+    - 'generic "RepairNeeded SciForge runtime gateway needs repair or AgentServer task generation: 响应结构不符合契约：Generated task ... repair-needed · 2026-05-16T10:22:41.648Z"':
+      - generic: RepairNeeded
+      - generic: "SciForge runtime gateway needs repair or AgentServer task generation: 响应结构不符合契约：Generated task ..."
+      - generic: repair-needed · 2026-05-16T10:22:41.648Z
+    - generic "Created 产生/引用对象：file:.sciforge/sessions/2026-05-16_literature-evidence-review_session-workspace-biomedi...":
+      - generic: Created
+      - generic: 产生/引用对象：file:.sciforge/sessions/2026-05-16_literature-evidence-review_session-workspace-biomedi...
+    - generic "Created 产生/引用对象：file:.sciforge/sessions/2026-05-16_literature-evidence-review_session-workspace-biomedi...":
+      - generic: Created
+      - generic: 产生/引用对象：file:.sciforge/sessions/2026-05-16_literature-evidence-review_session-workspace-biomedi...
+    - generic "Created 产生/引用对象：file:.sciforge/sessions/2026-05-16_literature-evidence-review_session-workspace-biomedi...":
+      - generic: Created
+      - generic: 产生/引用对象：file:.sciforge/sessions/2026-05-16_literature-evidence-review_session-workspace-biomedi...
+    - generic "Created 产生/引用对象：file:.sciforge/sessions/2026-05-16_literature-evidence-review_session-workspace-biomedi...":
+      - generic: Created
+      - generic: 产生/引用对象：file:.sciforge/sessions/2026-05-16_literature-evidence-review_session-workspace-biomedi...
+  - paragraph: 后端运行未完成：backend failure。详细诊断已保留在运行审计中，主结果不展示原始响应正文、endpoint 或日志内容。
+  - generic "Projection verification unverified":
+    - generic: "Verification: 未验证"
+  - button "复制"
+  - button "编辑"
+  - paragraph: use selected artifact only no rerun no tools summarize what it says in five bullets
+  - strong: 文献证据评估
+  - button "run project-"
+  - generic: 80%
+  - generic: 计算预测
+  - generic: 推断
+  - generic "Projection verification unverified":
+    - generic: "Verification: 未验证"
+  - button "复制"
+  - button "编辑"
+  - generic "按顺序记录的工作过程":
+    - generic "Received use selected artifact only no rerun no tools summarize what it says in five bullets":
+      - generic: Received
+      - generic: use selected artifact only no rerun no tools summarize what it says in five bullets
+    - generic "TurnReceived use selected artifact only no rerun no tools summarize what it says in five bullets satisfied · 2026-05-16T10:27:42.701Z":
+      - generic: TurnReceived
+      - generic: use selected artifact only no rerun no tools summarize what it says in five bullets
+      - generic: satisfied · 2026-05-16T10:27:42.701Z
+    - generic "HarnessDecisionRecorded profile=balanced-default; intent=fresh; exploration=minimal satisfied · 2026-05-16T10:27:42.701Z":
+      - generic: HarnessDecisionRecorded
+      - generic: profile=balanced-default; intent=fresh; exploration=minimal
+      - generic: satisfied · 2026-05-16T10:27:42.701Z
+    - generic "Dispatched protocol=protocol-success; task=satisfied satisfied · 2026-05-16T10:27:42.701Z":
+      - generic: Dispatched
+      - generic: protocol=protocol-success; task=satisfied
+      - generic: satisfied · 2026-05-16T10:27:42.701Z
+    - generic "OutputMaterialized Materialized refs from runtime payload. satisfied · 2026-05-16T10:27:42.701Z":
+      - generic: OutputMaterialized
+      - generic: Materialized refs from runtime payload.
+      - generic: satisfied · 2026-05-16T10:27:42.701Z
+    - 'generic "Satisfied Here is a five-bullet summary of the selected artifact: satisfied · 2026-05-16T10:27:42.701Z"':
+      - generic: Satisfied
+      - generic: "Here is a five-bullet summary of the selected artifact:"
+      - generic: satisfied · 2026-05-16T10:27:42.701Z
+  - paragraph: "Here is a five-bullet summary of the selected artifact:"
+  - paragraph: "Supplemented missing artifacts: research-report, paper-list, evidence-matrix, notebook-timeline."
+  - generic "引用对象":
+    - button "research-report-kras-g12d"
+    - button "generated-literature-1ac85cb920dc-artifact-summary-bullets.md"
+  - generic "本轮关键信息":
+    - strong: 本轮结果
+    - generic: 1 objects · 1 claims
+    - paragraph: 关键结果：artifact:artifact-summary-bullets。 已提取 1 条判断。 过程记录已折叠在下方。
+    - generic "引用对象":
+      - button "generated-literature-1ac85cb920dc-artifact-summary-bullets.md"
+    - paragraph:
+      - generic: 判断：Reference path was not readable inside the workspace.
+      - generic: prediction · confidence 74%
+  - generic "Projection verification unverified":
+    - generic: "Verification: 未验证"
+  - button "复制"
+  - button "编辑"
+  - paragraph: use selected artifact only no rerun no tools summarize what it says in five bullets
+  - generic "引用对象":
+    - button "research-report-kras-g12d"
+  - generic "用户引用的上下文":
+    - button "※1 research-report-kras-g12d":
+      - generic: ※1
+      - strong: research-report-kras-g12d
+  - strong: 文献证据评估
+  - button "run project-"
+  - generic: 85%
+  - generic: 计算预测
+  - generic: 推断
+  - generic "Projection verification unverified":
+    - generic: "Verification: 未验证"
+  - button "复制"
+  - button "编辑"
+  - generic "按顺序记录的工作过程":
+    - generic "Received use selected artifact only no rerun no tools summarize what it says in five bullets":
+      - generic: Received
+      - generic: use selected artifact only no rerun no tools summarize what it says in five bullets
+    - generic "TurnReceived use selected artifact only no rerun no tools summarize what it says in five bullets satisfied · 2026-05-16T10:31:11.252Z":
+      - generic: TurnReceived
+      - generic: use selected artifact only no rerun no tools summarize what it says in five bullets
+      - generic: satisfied · 2026-05-16T10:31:11.252Z
+    - generic "HarnessDecisionRecorded profile=balanced-default; intent=fresh; exploration=minimal satisfied · 2026-05-16T10:31:11.252Z":
+      - generic: HarnessDecisionRecorded
+      - generic: profile=balanced-default; intent=fresh; exploration=minimal
+      - generic: satisfied · 2026-05-16T10:31:11.252Z
+    - generic "Dispatched protocol=protocol-success; task=satisfied satisfied · 2026-05-16T10:31:11.252Z":
+      - generic: Dispatched
+      - generic: protocol=protocol-success; task=satisfied
+      - generic: satisfied · 2026-05-16T10:31:11.252Z
+    - generic "OutputMaterialized Materialized refs from runtime payload. satisfied · 2026-05-16T10:31:11.252Z":
+      - generic: OutputMaterialized
+      - generic: Materialized refs from runtime payload.
+      - generic: satisfied · 2026-05-16T10:31:11.252Z
+    - 'generic "Satisfied Here is a 5-bullet summary of the selected artifact: satisfied · 2026-05-16T10:31:11.252Z"':
+      - generic: Satisfied
+      - generic: "Here is a 5-bullet summary of the selected artifact:"
+      - generic: satisfied · 2026-05-16T10:31:11.252Z
+    - generic "Created 产生/引用对象：.sciforge/sessions/2026-05-16_literature-evidence-review_session-workspace-biomedical-k...":
+      - generic: Created
+      - generic: 产生/引用对象：.sciforge/sessions/2026-05-16_literature-evidence-review_session-workspace-biomedical-k...
+  - paragraph: "Here is a 5-bullet summary of the selected artifact:"
+  - paragraph: "Supplemented missing artifacts: paper-list, evidence-matrix, notebook-timeline, runtime-context-summary."
+  - generic "引用对象":
+    - button "artifact-summary-bullets"
+  - generic "本轮关键信息":
+    - strong: 本轮结果
+    - generic: 2 objects · 3 claims
+    - paragraph: 关键结果：artifact:artifact-summary-bullets、artifact:Evidence-Matrix-for-KRAS-G12D-Claims。 已提取 3 条判断。 过程记录已折叠在下方。
+    - generic "引用对象":
+      - button "generated-literature-1ac85cb920dc-artifact-summary-bullets.md"
+      - button "generated-literature-9c67d32614aa.json"
+    - paragraph:
+      - generic: 判断：The selected artifact content was not available in the workspace.
+      - generic: prediction · confidence 85%
+    - paragraph:
+      - generic: "判断：Here is a 5-bullet summary of the selected artifact: Supplemented missing artifacts: paper-list, evidence-matrix, notebook-timeline, runtime-context-summary."
+      - generic: prediction · confidence 85%
+    - paragraph:
+      - generic: "判断：Here is a 5-bullet summary of the selected artifact: Supplemented missing artifacts: paper-list, evidence-matrix, notebook-timeline, runtime-context-summary."
+      - generic: prediction · confidence 85%
+  - generic "verification:verification-cab3d6f9928c":
+    - generic: "Verification: 未验证"
+  - button "复制"
+  - button "编辑"
+  - paragraph: use selected artifact only no rerun no tools summarize what it says in five bullets
+  - generic "引用对象":
+    - button "research-report-kras-g12d"
+  - generic "用户引用的上下文":
+    - button "※1 research-report-kras-g12d":
+      - generic: ※1
+      - strong: research-report-kras-g12d
+  - strong: 文献证据评估
+  - button "run project-"
+  - generic: 74%
+  - generic: 计算预测
+  - generic: 推断
+  - generic "verification:verification-cab3d6f9928c":
+    - generic: "Verification: 未验证"
+  - button "复制"
+  - button "编辑"
+  - generic "按顺序记录的工作过程":
+    - generic "Received use selected artifact only no rerun no tools summarize what it says in five bullets":
+      - generic: Received
+      - generic: use selected artifact only no rerun no tools summarize what it says in five bullets
+    - generic "TurnReceived use selected artifact only no rerun no tools summarize what it says in five bullets satisfied · 2026-05-16T10:38:21.355Z":
+      - generic: TurnReceived
+      - generic: use selected artifact only no rerun no tools summarize what it says in five bullets
+      - generic: satisfied · 2026-05-16T10:38:21.355Z
+    - generic "HarnessDecisionRecorded profile=balanced-default; intent=repair; exploration=minimal satisfied · 2026-05-16T10:38:21.355Z":
+      - generic: HarnessDecisionRecorded
+      - generic: profile=balanced-default; intent=repair; exploration=minimal
+      - generic: satisfied · 2026-05-16T10:38:21.355Z
+    - generic "Dispatched protocol=protocol-success; task=satisfied satisfied · 2026-05-16T10:38:21.355Z":
+      - generic: Dispatched
+      - generic: protocol=protocol-success; task=satisfied
+      - generic: satisfied · 2026-05-16T10:38:21.355Z
+    - generic "OutputMaterialized Materialized refs from runtime payload. satisfied · 2026-05-16T10:38:21.355Z":
+      - generic: OutputMaterialized
+      - generic: Materialized refs from runtime payload.
+      - generic: satisfied · 2026-05-16T10:38:21.355Z
+    - 'generic "Satisfied 基于当前会话已有上下文直接回答，不启动新的 workspace task。 1. artifact:research-report-kras-g12d: Reference path was... satisfied · 2026-05-16T10:38:21.355Z"':
+      - generic: Satisfied
+      - generic: "基于当前会话已有上下文直接回答，不启动新的 workspace task。 1. artifact:research-report-kras-g12d: Reference path was..."
+      - generic: satisfied · 2026-05-16T10:38:21.355Z
+    - generic "VerificationRecorded Verification evidence attached to task outcome projection. satisfied · 2026-05-16T10:38:21.355Z":
+      - generic: VerificationRecorded
+      - generic: Verification evidence attached to task outcome projection.
+      - generic: satisfied · 2026-05-16T10:38:21.355Z
+    - generic "Created 产生/引用对象：file:.sciforge/sessions/2026-05-16_literature-evidence-review_session-workspace-biomedi...":
+      - generic: Created
+      - generic: 产生/引用对象：file:.sciforge/sessions/2026-05-16_literature-evidence-review_session-workspace-biomedi...
+    - generic "Created 产生/引用对象：artifact:research-report-kras-g12d（artifact:research-report-kras-g12d）":
+      - generic: Created
+      - generic: 产生/引用对象：artifact:research-report-kras-g12d（artifact:research-report-kras-g12d）
+  - paragraph: 基于当前会话已有上下文直接回答，不启动新的 workspace task。
+  - generic "过程与诊断 · 1 工具输出"
+  - generic "本轮关键信息":
+    - strong: 本轮结果
+    - generic: 0 objects · 1 claims
+    - paragraph: 本轮没有生成新的可预览对象。 已提取 1 条判断。 过程记录已折叠在下方。
+    - paragraph:
+      - generic: 判断：Reference path was not readable inside the workspace.
+      - generic: prediction · confidence 74%
+  - generic: action
+  - generic: 输入研究问题后即可运行；Shift+Enter 换行，Enter 发送。
+  - code: literature-evidence-review@1.0.0
+  - button "输入研究问题，或点选对象后继续追问...":
+    - generic: 输入研究问题，或点选对象后继续追问...
+  - separator "调整聊天区和结果区宽度"
+  - button "向右收缩结果面板":
+  - tablist:
+    - tab "结果视图 结果视图" [selected]:
+      - generic: 结果视图
+      - text: 结果视图
+    - tab "证据矩阵 证据矩阵":
+      - generic: 证据矩阵
+      - text: 证据矩阵
+  - generic "结果区 focus mode":
+    - button "全部"
+    - button "只看图"
+    - button "只看证据"
+    - button "只看执行单元"
+  - strong: 当前聚焦 run
+  - generic: project-literature-evidence-review-mp876kfk-8dmiao · failed · literature-evidence-review@1.0.0
+  - button "取消高亮"
+  - heading "结果视图" [level=2]
+  - paragraph: 优先展示用户本轮要看的结果；更多内容默认收起
+  - heading "运行需要恢复" [level=2]
+  - paragraph: project-literature-evidence-review-mp876kfk-8dmiao · recoverable
+  - generic: "响应结构不符合契约：Generated task payload preflight blocked expensive execution before runner start: claims,executionUnits: Generated task appears to write JSON without the required ToolPayload envelope fields: claims, executionUnits.; executionUnits: Generated task appears to write JSON without the required ToolPayload enve..."
+  - generic: "当前阶段：SciForge runtime gateway needs repair or AgentServer task generation: 响应结构不符合契约：Generated task payload preflight blocked expensive execution before runner start: claims,executionUnits: Generated task appears to write JSON without the required ToolPayload envelope fields: claims, executionUnits.; executionUnits: Generated task appears to write JSON without the required ToolPayload envelope fields: · RepairNeeded"
+  - code: safe · Repair or normalize the materialized payload under the contract gate.
+  - code: Repair or normalize the materialized payload under the contract gate.
+  - generic: "响应结构不符合契约：Generated task payload preflight blocked expensive execution before runner start: claims,executionUnits: Generated task appears to write JSON without the required ToolPayload envelope fields: claims, executionUnits.; executionUnits: Generated task..."
+  - button "Repair or normalize the materialized payload under the contract gate."
+  - generic "查看运行细节 1 EU":
+    - generic: 查看运行细节
+    - generic: 1 EU
+  - heading "审计摘要" [level=2]
+  - paragraph: 失败原因、恢复动作和可复现引用
+  - generic: "响应结构不符合契约：Generated task payload preflight blocked expensive execution before runner start: claims,executionUnits: Generated task appears to write JSON without the required ToolPayload envelope fields: claims, executionUnits.; executionUnits: Generated task appears to write JSON without the required ToolPayload envelope fields:"
+  - button "Repair or normalize the materialized payload under the contract gate."
+  - paragraph: 14 audit ref(s) retained for debug details.
+  - heading "可复现执行单元" [level=2]
+  - paragraph: 执行摘要、审计状态和数据指纹
+  - button "导出 JSON Bundle":
+    - text: 导出 JSON Bundle
+  - generic: EU ID
+  - generic: Tool
+  - generic: Params
+  - generic: Code Artifact
+  - generic: Status
+  - generic: Hash
+  - code: EU-literature-29be8507
+  - generic: sciforge.workspace-runtime-gateway
+  - code: "{\"prompt\":\"use selected artifact only no rerun no tools summarize what it says in five bullets\",\"skillDomain\":\"literature\",\"s..."
+  - code: audit material retained
+  - generic: Repair needed
+  - generic: No verification requested
+  - code: 2dce39ce378a
+  - generic: "attempt=1 · runtimeProfile=agentserver-codex · selectedSkill=agentserver.generate.literature · selectedRuntime=agentserver-generation · fallback=Generated task payload preflight blocked expensive execution before runner start: claims,executionUnits: Generated task appears to write JSON without the required ToolPayload envelope fields: claims, executionUnits.; executionUnits: Generated task appears to write JSON without the required ToolPayload envelope fields: executionUnits. · package=literature-evidence-review@1.0.0 · skillPlan=skill-plan.literature-evidence-review.default · uiPlan=ui-plan.literature-evidence-review.default · failureReason=响应结构不符合契约：Generated task payload preflight blocked expensive execution before runner start: claims,executionUnits: Generated task appears to write JSON without the required ToolPayload envelope fields: claims, executionUnits.; executionUnits: Generated task appears to write JSON without the required ToolPayload envelope fields: · requiredInputs=workspacePath, prompt, skillDomain, scenarioPackage:literature-evidence-review@1.0.0 · recover=Before expensive external fetch/download/analysis, initialize the exact ToolPayload envelope: message, confidence, claimType, evidenceLevel, reasoningTrace, claims, uiManifest, executionUnits, artifacts. | claims, uiManifest, executionUnits, and artifacts must be arrays; every artifact object must have non-empty id and type. | If the task cannot satisfy the output contract, write a repair-needed or failed-with-reason ToolPayload immediately and preserve stdout/stderr/output refs. | Expected artifact types for this run: research-report, paper-list, evidence-matrix, notebook-timeline, runtime-context-summary. Bind uiManifest[].artifactRef to produced artifact ids. | Regenerate the task so the object written to outputPath includes message, claims, uiManifest, executionUnits, and artifacts. | Use an honest repair-needed/failed-with-reason ToolPayload when the task cannot produce final artifacts. | Prefer explicit stable artifact id/type fields; SciForge may derive them only from concrete artifact refs at the boundary. | Regenerate the task code so the object written to outputPath matches the SciForge ToolPayload schema before any expensive work runs. | Preserve generated task refs and use this preflight report as repair context. · nextStep=要求后端按 ToolPayload/contract 重新返回结构化结果。 · 4 audit ref(s) retained · verificationStatus=ordinary result; no runtime verification verdict was recorded"
+  - heading "环境定义" [level=2]
+  - generic: "id: EU-literature-29be8507 tool: sciforge.workspace-runtime-gateway language: unspecified entrypoint: n/a environment: SciForge workspace runtime gateway auditRefs: 4 retained verificationVerdict: n/a runtimeProfileId: agentserver-codex selectedSkill: agentserver.generate.literature selectedRuntime: agentserver-generation fallbackReason: Generated task payload preflight blocked expensive execution before runner start: claims,executionUnits: Generated task appears to write JSON without the required ToolPayload envelope fields: claims, executionUnits.; executionUnits: Generated task appears to write JSON without the required ToolPayload envelope fields: executionUnits. scenarioPackageRef: literature-evidence-review@1.0.0:built-in skillPlanRef: skill-plan.literature-evidence-review.default uiPlanRef: ui-plan.literature-evidence-review.default attempt: 1 parentAttempt: n/a selfHealReason: n/a failureReason: 响应结构不符合契约：Generated task payload preflight blocked expensive execution before runner start: claims,executionUnits: Generated task appears to write JSON without the required ToolPayload envelope fields: claims, executionUnits.; executionUnits: Generated task appears to write JSON without the required ToolPayload envelope fields: patchSummary: n/a requiredInputs: workspacePath, prompt, skillDomain, scenarioPackage:literature-evidence-review@1.0.0 recoverActions: Before expensive external fetch/download/analysis, initialize the exact ToolPayload envelope: message, confidence, claimType, evidenceLevel, reasoningTrace, claims, uiManifest, executionUnits, artifacts. | claims, uiManifest, executionUnits, and artifacts must be arrays; every artifact object must have non-empty id and type. | If the task cannot satisfy the output contract, write a repair-needed or failed-with-reason ToolPayload immediately and preserve stdout/stderr/output refs. | Expected artifact types for this run: research-report, paper-list, evidence-matrix, notebook-timeline, runtime-context-summary. Bind uiManifest[].artifactRef to produced artifact ids. | Regenerate the task so the object written to outputPath includes message, claims, uiManifest, executionUnits, and artifacts. | Use an honest repair-needed/failed-with-reason ToolPayload when the task cannot produce final artifacts. | Prefer explicit stable artifact id/type fields; SciForge may derive them only from concrete artifact refs at the boundary. | Regenerate the task code so the object written to outputPath matches the SciForge ToolPayload schema before any expensive work runs. | Preserve generated task refs and use this preflight report as repair context. nextStep: 要求后端按 ToolPayload/contract 重新返回结构化结果。 databases: n/a"
+  - heading "研究记录" [level=2]
+  - paragraph: 完整 notebook timeline 审计记录
+  - generic: empty
+  - strong: 等待真实 notebook 记录
+  - paragraph: Notebook 只展示当前会话运行产生的记录；全局 demo timeline 仅保留在研究时间线页面。
+  - generic "可尝试的恢复动作"
+  - heading "运行审计材料" [level=2]
+  - paragraph: 3 structured audit item(s) retained for debug/export details.
+  - generic "视图状态 1 modules":
+    - generic: 视图状态
+    - generic: 1 modules
+- generic: "0"

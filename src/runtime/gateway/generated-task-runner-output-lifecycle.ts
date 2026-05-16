@@ -97,14 +97,9 @@ export async function completeGeneratedTaskRunOutputLifecycle(
     const boundaryPayload = normalizeWorkspaceTaskPayloadBoundary(rawPayload) as ToolPayload;
     const payload = deps.coerceWorkspaceTaskPayload(boundaryPayload) ?? boundaryPayload;
     const rawErrors = deps.schemaErrors(rawPayload);
-    const payloadErrors = deps.schemaErrors(payload);
-    // Try normalization even when schema errors exist — normalizeToolPayloadShape
-    // coerces common AgentServer type mismatches (string confidence → number,
-    // array reasoningTrace → string). Only skip when normalization itself refuses.
-    const coercedPayload = payloadErrors.length ? deps.normalizeToolPayloadShape(payload) : payload;
-    const coercedErrors = payloadErrors.length ? deps.schemaErrors(coercedPayload) : [];
-    const errors = coercedErrors.length ? coercedErrors : [];
-    let normalized = errors.length ? undefined : await deps.validateAndNormalizePayload(coercedPayload, request, skill, {
+    const shapedPayload = deps.normalizeToolPayloadShape(payload);
+    const errors = deps.schemaErrors(shapedPayload);
+    let normalized = errors.length ? undefined : await deps.validateAndNormalizePayload(shapedPayload, request, skill, {
       ...refs,
       runtimeFingerprint: run.runtimeFingerprint,
     });
@@ -112,6 +107,8 @@ export async function completeGeneratedTaskRunOutputLifecycle(
       normalized = await materializeBackendPayloadOutput(workspace, request, normalized, refs);
       normalized = downgradeTransientExternalFailures(normalized);
       if (payloadHasOnlyTransientExternalDependencyFailures(normalized)) {
+        const transientFailureReason = firstTransientExternalFailureReason(normalized);
+        normalized = annotateExternalBlockedExecutionUnits(normalized, transientFailureReason, refs);
         await appendGeneratedTaskAttemptLifecycle({
           workspacePath: workspace,
           request,
@@ -123,14 +120,14 @@ export async function completeGeneratedTaskRunOutputLifecycle(
           ...refs,
           schemaErrors: errors,
           workEvidenceSummary: summarizeWorkEvidenceForHandoff(normalized),
-          failureReason: firstTransientExternalFailureReason(normalized),
+          failureReason: transientFailureReason,
         });
         return normalized;
       }
     }
 
     const lifecycle = assessGeneratedTaskValidationLifecycle({
-      payload,
+      payload: shapedPayload,
       normalized,
       schemaErrors: errors,
       run,
@@ -162,7 +159,7 @@ export async function completeGeneratedTaskRunOutputLifecycle(
         taskId,
         runId: generation.runId,
         run,
-        payload: normalized ?? payload,
+        payload: normalized ?? shapedPayload,
         ...refs,
         attemptPlanRefs: deps.attemptPlanRefs,
         attemptStatus: lifecycle.attemptStatus,
@@ -179,7 +176,7 @@ export async function completeGeneratedTaskRunOutputLifecycle(
       if (lifecycle.normalizedRepairNeeded && normalized) return normalized;
       if (errors.length) {
         return schemaValidationRepairPayload({
-          payload,
+          payload: shapedPayload,
           sourcePayload: rawPayload,
           errors,
           request,
@@ -444,6 +441,29 @@ function runtimeRefs(input: GeneratedTaskRuntimeRefs): GeneratedTaskRuntimeRefs 
     outputRel: input.outputRel,
     stdoutRel: input.stdoutRel,
     stderrRel: input.stderrRel,
+  };
+}
+
+function annotateExternalBlockedExecutionUnits(
+  payload: ToolPayload,
+  failureReason: string | undefined,
+  refs: GeneratedTaskRuntimeRefs,
+): ToolPayload {
+  const failureOwner = failureReason
+    ? externalProviderFailureDecision({
+      reason: failureReason,
+      evidenceRefs: [refs.stdoutRel, refs.stderrRel, refs.outputRel],
+    })
+    : undefined;
+  return {
+    ...payload,
+    executionUnits: payload.executionUnits.map((unit) => isRecord(unit) && unit.externalDependencyStatus === 'transient-unavailable'
+      ? {
+        conversationKernelStatus: 'external-blocked',
+        failureOwner,
+        ...unit,
+      }
+      : unit),
   };
 }
 

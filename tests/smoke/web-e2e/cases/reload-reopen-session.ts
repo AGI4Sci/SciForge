@@ -29,6 +29,7 @@ export interface ReloadReopenSessionRestoreEvidence extends ProjectionOnlyRestor
   };
   recoverActions?: readonly string[];
   persistedProjection?: WebE2eExpectedProjection['conversationProjection'];
+  rawWrapperFailureVisible?: boolean;
 }
 
 export interface RunReloadReopenSessionCaseOptions<TPage extends RefreshReopenPage> {
@@ -118,6 +119,11 @@ export function assertReloadReopenProjectionRestore(
     evidence.visibleAnswer,
     persistedProjection.visibleAnswer,
     `${label}: visible answer must come from persisted Projection`,
+  );
+  assert.notEqual(
+    evidence.rawWrapperFailureVisible,
+    true,
+    `${label}: stale raw/backend wrapper failure must not be visible after Projection restore`,
   );
 
   assert.equal(

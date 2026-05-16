@@ -584,11 +584,7 @@ export function agentServerContextPolicy(request: GatewayRequest) {
 
 function agentServerContextPolicyMode(request: GatewayRequest) {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
-  const policy = isRecord(uiState.contextReusePolicy)
-    ? uiState.contextReusePolicy
-    : isRecord(uiState.contextIsolation)
-      ? uiState.contextIsolation
-      : {};
+  const policy = isRecord(uiState.contextReusePolicy) ? uiState.contextReusePolicy : {};
   return stringField(policy.mode) ?? '';
 }
 

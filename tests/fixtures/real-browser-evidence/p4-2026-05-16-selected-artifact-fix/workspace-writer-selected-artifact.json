@@ -1,0 +1,1912 @@
+{
+  "url": "http://127.0.0.1:5473/",
+  "writerUrl": "http://127.0.0.1:5474/api/sciforge/tools/run",
+  "startedAt": "2026-05-16T15:30:25.599Z",
+  "completedAt": "2026-05-16T15:30:26.113Z",
+  "elapsedMs": 513,
+  "prompt": "use selected artifact only no rerun no tools summarize what it says in five bullets",
+  "selectedRefs": [
+    "artifact:research-report-kras-g12d"
+  ],
+  "responseStatus": 200,
+  "result": {
+    "message": "Summary from the selected reference:\n- KRAS G12D report compares mutation prevalence, inhibitor evidence, and evidence limitations\n- KRAS G12D is discussed across pancreatic, colorectal, and lung cancer contexts\n- MRTX1133 and related inhibitor programs are framed as emerging prec",
+    "confidence": 0.74,
+    "claimType": "context-summary",
+    "evidenceLevel": "current-session-context",
+    "reasoningTrace": "Python conversation-policy selected direct-context-answer.\nSciForge executed the direct-context fast path from current reference digests, artifacts, references, and execution refs only.\nVerification result: unverified; ref=.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json; policy=lightweight/medium.",
+    "displayIntent": {
+      "protocolStatus": "protocol-success",
+      "taskOutcome": "satisfied",
+      "status": "completed",
+      "verification": {
+        "verdict": "unverified",
+        "ref": ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+        "visible": true,
+        "nonBlocking": false
+      },
+      "intentFirstVerification": {
+        "schemaVersion": "sciforge.intent-first-verification.v1",
+        "intentCheck": {
+          "schemaVersion": "sciforge.intent-first-verification.v1",
+          "id": "intent-7d31baed",
+          "verdict": "pass",
+          "latestUserIntent": "use selected artifact only no rerun no tools summarize what it says in five bullets",
+          "requestedActionType": "answer",
+          "explicitConstraints": [],
+          "answerCoverage": "covered",
+          "overActionGuard": "ok",
+          "diagnostics": []
+        },
+        "routing": {
+          "schemaVersion": "sciforge.intent-first-verification.v1",
+          "mode": "background",
+          "level": "work-background",
+          "blockingPolicy": "non-blocking",
+          "reason": "Default route keeps work verification in the background and preserves answer-first latency."
+        },
+        "jobs": [
+          {
+            "schemaVersion": "sciforge.intent-first-verification.v1",
+            "id": "verify-work-81918758",
+            "scope": "work",
+            "level": "work-background",
+            "status": "passed",
+            "blockingPolicy": "non-blocking",
+            "targetRefs": [
+              ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+              "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+              "artifact:research-report-kras-g12d",
+              "artifact:artifact-summary-bullets",
+              "claim:claim-unreadable",
+              "file:.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json"
+            ],
+            "evidenceRefs": [
+              ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+              "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+              "artifact:research-report-kras-g12d",
+              "artifact:artifact-summary-bullets",
+              "claim:claim-unreadable",
+              "file:.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json"
+            ],
+            "recommendedFix": "Continue with the user-visible result while background work verification runs."
+          }
+        ],
+        "verdicts": [
+          {
+            "schemaVersion": "sciforge.intent-first-verification.v1",
+            "jobId": "verify-work-81918758",
+            "verdict": "passed",
+            "evidenceRefs": [
+              ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+              "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+              "artifact:research-report-kras-g12d",
+              "artifact:artifact-summary-bullets",
+              "claim:claim-unreadable",
+              "file:.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json"
+            ],
+            "recommendedFix": "Continue with the user-visible result while background work verification runs."
+          }
+        ],
+        "lineage": [
+          {
+            "schemaVersion": "sciforge.intent-first-verification.v1",
+            "jobId": "verify-work-81918758",
+            "targetRefs": [
+              ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+              "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+              "artifact:research-report-kras-g12d",
+              "artifact:artifact-summary-bullets",
+              "claim:claim-unreadable",
+              "file:.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json"
+            ],
+            "evidenceRefs": [
+              ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+              "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+              "artifact:research-report-kras-g12d",
+              "artifact:artifact-summary-bullets",
+              "claim:claim-unreadable",
+              "file:.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json"
+            ],
+            "verdictRef": "verification:verify-work-81918758",
+            "eventRef": "run:verify-run-7d31baed#verify-work-81918758",
+            "followUpRequired": false
+          }
+        ]
+      },
+      "verificationStatus": {
+        "schemaVersion": "sciforge.intent-first-verification.v1",
+        "response": "intent checked",
+        "work": "verify passed",
+        "blocking": false
+      },
+      "resultPresentation": {
+        "schemaVersion": "sciforge.result-presentation-contract.v1",
+        "contractId": "sciforge.result-presentation.v1",
+        "id": "result-presentation-a305bg",
+        "status": "complete",
+        "answerBlocks": [
+          {
+            "id": "answer-summary",
+            "kind": "paragraph",
+            "text": "Summary from the selected reference:\n- KRAS G12D report compares mutation prevalence, inhibitor evidence, and evidence limitations\n- KRAS G12D is discussed across pancreatic, colorectal, and lung cancer contexts\n- MRTX1133 and related inhibitor programs are framed as emerging prec",
+            "citationIds": [
+              "citation-artifact-research-report-kras-g12d",
+              "citation-artifact-artifact-summary-bullets",
+              "citation-claim-claim-unreadable",
+              "verification-911b9ce11b67"
+            ]
+          }
+        ],
+        "keyFindings": [
+          {
+            "id": "direct-context-claim-project-literature-evidence-review-p4-direct-context",
+            "kind": "finding",
+            "statement": "Summary from the selected reference:",
+            "text": "Summary from the selected reference:",
+            "citationIds": [
+              "citation-artifact-research-report-kras-g12d",
+              "citation-artifact-artifact-summary-bullets",
+              "citation-claim-claim-unreadable"
+            ],
+            "verificationState": "supported",
+            "confidence": 0.74
+          }
+        ],
+        "inlineCitations": [
+          {
+            "id": "citation-artifact-research-report-kras-g12d",
+            "label": "artifact:research-report-kras-g12d",
+            "ref": "artifact:research-report-kras-g12d",
+            "kind": "artifact",
+            "source": "claim"
+          },
+          {
+            "id": "citation-artifact-artifact-summary-bullets",
+            "label": "artifact:artifact-summary-bullets",
+            "ref": "artifact:artifact-summary-bullets",
+            "kind": "artifact",
+            "source": "claim"
+          },
+          {
+            "id": "citation-claim-claim-unreadable",
+            "label": "claim:claim-unreadable",
+            "ref": "claim:claim-unreadable",
+            "kind": "object-reference",
+            "source": "claim"
+          },
+          {
+            "id": "verification-911b9ce11b67",
+            "label": "file:.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+            "ref": "file:.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+            "kind": "file",
+            "source": "object-reference"
+          },
+          {
+            "id": "artifact-direct-context-summary-project-literature-evidence-review-p4-direct-context",
+            "label": "direct-context-summary-project-literature-evidence-review-p4-direct-context",
+            "ref": "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+            "kind": "artifact",
+            "source": "artifact",
+            "summary": "runtime-context-summary",
+            "status": "available"
+          },
+          {
+            "id": "artifact-verification-911b9ce11b67",
+            "label": "verification-911b9ce11b67",
+            "ref": ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+            "kind": "artifact",
+            "source": "artifact",
+            "summary": "verification-result",
+            "status": "available"
+          }
+        ],
+        "artifactActions": [
+          {
+            "id": "direct-context-summary-project-literature-evidence-review-p4-direct-context",
+            "label": "runtime-context-summary",
+            "ref": "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+            "action": "inspect",
+            "kind": "inspect",
+            "actions": [
+              "inspect",
+              "focus-right-pane"
+            ],
+            "artifactType": "runtime-context-summary",
+            "citationId": "artifact-direct-context-summary-project-literature-evidence-review-p4-direct-context",
+            "primary": true
+          },
+          {
+            "id": "verification-911b9ce11b67",
+            "label": "verification-result",
+            "ref": ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+            "action": "inspect",
+            "kind": "inspect",
+            "actions": [
+              "inspect",
+              "focus-right-pane"
+            ],
+            "artifactType": "verification-result",
+            "citationId": "artifact-verification-911b9ce11b67",
+            "primary": false
+          }
+        ],
+        "confidenceExplanation": {
+          "level": "medium",
+          "summary": "Evidence level: current-session-context; confidence 0.74.",
+          "explanation": "Evidence level: current-session-context; confidence 0.74.",
+          "citationIds": [
+            "citation-artifact-research-report-kras-g12d",
+            "citation-artifact-artifact-summary-bullets",
+            "citation-claim-claim-unreadable"
+          ]
+        },
+        "nextActions": [
+          {
+            "id": "next-1",
+            "label": "Run an appropriate verifier or request human approval.",
+            "kind": "inspect"
+          }
+        ],
+        "processSummary": {
+          "status": "completed",
+          "summary": "Execution trace and runtime evidence are available for audit.",
+          "foldedByDefault": true,
+          "refs": [
+            "audit:runtime-verification-gate:97641d9c49f6",
+            "runtime://latency-diagnostics",
+            "intent-match:intent-7d31baed",
+            "verify-job:verify-work-81918758"
+          ]
+        },
+        "diagnosticsRefs": [
+          {
+            "id": "reasoning-trace",
+            "label": "Reasoning trace",
+            "kind": "reasoning-trace",
+            "summary": "Python conversation-policy selected direct-context-answer.\nSciForge executed the direct-context fast path from current reference digests, artifacts, references, and execution refs only.\nVerification result: unverified; ref=.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json; policy=lightweight/medium.",
+            "foldedByDefault": true,
+            "defaultVisible": false,
+            "primary": false
+          },
+          {
+            "id": "log-1",
+            "label": "Log",
+            "kind": "log",
+            "ref": "audit:runtime-verification-gate:97641d9c49f6",
+            "foldedByDefault": true
+          },
+          {
+            "id": "log-2",
+            "label": "latency-diagnostics",
+            "kind": "log",
+            "ref": "runtime://latency-diagnostics",
+            "foldedByDefault": true
+          },
+          {
+            "id": "log-3",
+            "label": "intent-match-check",
+            "kind": "log",
+            "ref": "intent-match:intent-7d31baed",
+            "foldedByDefault": true
+          },
+          {
+            "id": "log-4",
+            "label": "background-work-verify",
+            "kind": "log",
+            "ref": "verify-job:verify-work-81918758",
+            "foldedByDefault": true
+          }
+        ],
+        "defaultExpandedSections": [
+          "answer",
+          "evidence",
+          "artifacts",
+          "actions",
+          "next-actions"
+        ],
+        "conversationProjectionSummary": {
+          "schemaVersion": "sciforge.task-run-card.conversation-projection-summary.v1",
+          "conversationId": "task-outcome:task-card:4oaumt",
+          "status": "satisfied",
+          "activeRunId": "run:task-card:4oaumt",
+          "recoverActions": [],
+          "verificationState": {
+            "status": "verified",
+            "verifierRef": "verification:verification-911b9ce11b67",
+            "verdict": "unverified"
+          }
+        },
+        "fieldOrigins": {
+          "defaultExpandedSections": "harness-presentation-policy"
+        },
+        "generatedBy": "runtime-adapter"
+      },
+      "taskRunCard": {
+        "schemaVersion": "sciforge.task-run-card.v1",
+        "id": "task-card:4oaumt",
+        "title": "literature",
+        "goal": "use selected artifact only no rerun no tools summarize what it says in five bullets",
+        "status": "complete",
+        "protocolStatus": "protocol-success",
+        "taskOutcome": "satisfied",
+        "rounds": [],
+        "refs": [
+          {
+            "kind": "artifact",
+            "ref": ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+            "label": "verification-911b9ce11b67"
+          },
+          {
+            "kind": "artifact",
+            "ref": "artifact:artifact-summary-bullets",
+            "label": "runtime-context-summary artifact-summary-bullets",
+            "status": "available"
+          },
+          {
+            "kind": "artifact",
+            "ref": "artifact:research-report-kras-g12d",
+            "label": "research-report research-report-kras-g12d",
+            "status": "available"
+          },
+          {
+            "kind": "artifact",
+            "ref": "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+            "label": "direct-context-summary-project-literature-evidence-review-p4-direct-context"
+          },
+          {
+            "kind": "execution-unit",
+            "ref": "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context"
+          },
+          {
+            "kind": "file",
+            "ref": ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+            "label": "EU-direct-context-project-literature-evidence-review-p4-direct-context"
+          },
+          {
+            "kind": "file",
+            "ref": "file:.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json"
+          },
+          {
+            "kind": "log",
+            "ref": "audit:runtime-verification-gate:97641d9c49f6"
+          },
+          {
+            "kind": "log",
+            "ref": "intent-match:intent-7d31baed",
+            "label": "intent-match-check"
+          },
+          {
+            "kind": "log",
+            "ref": "runtime://latency-diagnostics",
+            "label": "latency-diagnostics"
+          },
+          {
+            "kind": "log",
+            "ref": "verify-job:verify-work-81918758",
+            "label": "background-work-verify"
+          },
+          {
+            "kind": "other",
+            "ref": "claim:claim-unreadable",
+            "label": "claim claim-unreadable",
+            "status": "available"
+          },
+          {
+            "kind": "other",
+            "ref": "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+            "label": "EU-direct-context-project-literature-evidence-review-p4-direct-context"
+          },
+          {
+            "kind": "verification",
+            "ref": "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context"
+          },
+          {
+            "kind": "verification",
+            "ref": "verification:verification-911b9ce11b67"
+          }
+        ],
+        "executionUnitRefs": [
+          "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context"
+        ],
+        "verificationRefs": [
+          "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context",
+          "verification:verification-911b9ce11b67"
+        ],
+        "failureSignatures": [],
+        "genericAttributionLayer": "runtime-server",
+        "ownershipLayerSuggestions": [
+          {
+            "layer": "runtime-server",
+            "confidence": "medium",
+            "reason": "The next improvement belongs to the runtime server because execution state, refs, logs, or recovery orchestration are the owning layer.",
+            "signals": [
+              "execution-unit-runtime-refs",
+              "generic-attribution-layer",
+              "runtime-diagnostic-refs"
+            ],
+            "nextStep": "Inspect runtime refs, logs, task status, and recovery orchestration before rerun."
+          },
+          {
+            "layer": "presentation",
+            "confidence": "low",
+            "reason": "The next improvement belongs to presentation because result visibility, artifact ordering, or user-facing projection is the owning layer.",
+            "signals": [
+              "artifact-result-refs",
+              "completed-result-needs-visible-presentation"
+            ],
+            "nextStep": "Materialize the result presentation contract from preserved refs before changing task logic."
+          },
+          {
+            "layer": "verification",
+            "confidence": "low",
+            "reason": "The next improvement belongs to verification because evidence checks or verifier verdicts are the owning layer.",
+            "signals": [
+              "verification-refs"
+            ],
+            "nextStep": "Run or repair verifier evidence before marking the task satisfied."
+          }
+        ],
+        "nextStep": "Continue with the user-visible result while background work verification runs.",
+        "conversationProjectionSummary": {
+          "schemaVersion": "sciforge.task-run-card.conversation-projection-summary.v1",
+          "conversationId": "task-outcome:task-card:4oaumt",
+          "status": "satisfied",
+          "activeRunId": "run:task-card:4oaumt",
+          "recoverActions": [],
+          "verificationState": {
+            "status": "verified",
+            "verifierRef": "verification:verification-911b9ce11b67",
+            "verdict": "unverified"
+          }
+        },
+        "noHardcodeReview": {
+          "schemaVersion": "sciforge.no-hardcode-review.v1",
+          "appliesGenerally": true,
+          "generalityStatement": "Gateway task outcome projection is derived from runtime payload status, evidence refs, expected artifacts, and execution unit semantics, not from prompt, scenario, paper, file, or backend names.",
+          "counterExamples": [
+            "A failed run with preserved partial refs should remain resumable instead of becoming complete.",
+            "A syntactically valid payload that only promises future work should remain needs-work.",
+            "A transient provider failure should attribute recovery to the external-provider layer."
+          ],
+          "forbiddenSpecialCases": [
+            "artifact-name-specific branch",
+            "backend-specific success path",
+            "paper-title-specific branch",
+            "prompt-specific branch"
+          ],
+          "ownerLayer": "runtime-server",
+          "status": "pass"
+        },
+        "updatedAt": "1970-01-01T00:00:00.000Z"
+      },
+      "taskOutcomeProjection": {
+        "schemaVersion": "sciforge.gateway-task-outcome-projection.v1",
+        "taskRunCard": {
+          "schemaVersion": "sciforge.task-run-card.v1",
+          "id": "task-card:4oaumt",
+          "title": "literature",
+          "goal": "use selected artifact only no rerun no tools summarize what it says in five bullets",
+          "status": "complete",
+          "protocolStatus": "protocol-success",
+          "taskOutcome": "satisfied",
+          "rounds": [],
+          "refs": [
+            {
+              "kind": "artifact",
+              "ref": ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+              "label": "verification-911b9ce11b67"
+            },
+            {
+              "kind": "artifact",
+              "ref": "artifact:artifact-summary-bullets",
+              "label": "runtime-context-summary artifact-summary-bullets",
+              "status": "available"
+            },
+            {
+              "kind": "artifact",
+              "ref": "artifact:research-report-kras-g12d",
+              "label": "research-report research-report-kras-g12d",
+              "status": "available"
+            },
+            {
+              "kind": "artifact",
+              "ref": "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+              "label": "direct-context-summary-project-literature-evidence-review-p4-direct-context"
+            },
+            {
+              "kind": "execution-unit",
+              "ref": "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context"
+            },
+            {
+              "kind": "file",
+              "ref": ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+              "label": "EU-direct-context-project-literature-evidence-review-p4-direct-context"
+            },
+            {
+              "kind": "file",
+              "ref": "file:.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json"
+            },
+            {
+              "kind": "log",
+              "ref": "audit:runtime-verification-gate:97641d9c49f6"
+            },
+            {
+              "kind": "log",
+              "ref": "intent-match:intent-7d31baed",
+              "label": "intent-match-check"
+            },
+            {
+              "kind": "log",
+              "ref": "runtime://latency-diagnostics",
+              "label": "latency-diagnostics"
+            },
+            {
+              "kind": "log",
+              "ref": "verify-job:verify-work-81918758",
+              "label": "background-work-verify"
+            },
+            {
+              "kind": "other",
+              "ref": "claim:claim-unreadable",
+              "label": "claim claim-unreadable",
+              "status": "available"
+            },
+            {
+              "kind": "other",
+              "ref": "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+              "label": "EU-direct-context-project-literature-evidence-review-p4-direct-context"
+            },
+            {
+              "kind": "verification",
+              "ref": "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context"
+            },
+            {
+              "kind": "verification",
+              "ref": "verification:verification-911b9ce11b67"
+            }
+          ],
+          "executionUnitRefs": [
+            "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context"
+          ],
+          "verificationRefs": [
+            "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context",
+            "verification:verification-911b9ce11b67"
+          ],
+          "failureSignatures": [],
+          "genericAttributionLayer": "runtime-server",
+          "ownershipLayerSuggestions": [
+            {
+              "layer": "runtime-server",
+              "confidence": "medium",
+              "reason": "The next improvement belongs to the runtime server because execution state, refs, logs, or recovery orchestration are the owning layer.",
+              "signals": [
+                "execution-unit-runtime-refs",
+                "generic-attribution-layer",
+                "runtime-diagnostic-refs"
+              ],
+              "nextStep": "Inspect runtime refs, logs, task status, and recovery orchestration before rerun."
+            },
+            {
+              "layer": "presentation",
+              "confidence": "low",
+              "reason": "The next improvement belongs to presentation because result visibility, artifact ordering, or user-facing projection is the owning layer.",
+              "signals": [
+                "artifact-result-refs",
+                "completed-result-needs-visible-presentation"
+              ],
+              "nextStep": "Materialize the result presentation contract from preserved refs before changing task logic."
+            },
+            {
+              "layer": "verification",
+              "confidence": "low",
+              "reason": "The next improvement belongs to verification because evidence checks or verifier verdicts are the owning layer.",
+              "signals": [
+                "verification-refs"
+              ],
+              "nextStep": "Run or repair verifier evidence before marking the task satisfied."
+            }
+          ],
+          "nextStep": "Continue with the user-visible result while background work verification runs.",
+          "conversationProjectionSummary": {
+            "schemaVersion": "sciforge.task-run-card.conversation-projection-summary.v1",
+            "conversationId": "task-outcome:task-card:4oaumt",
+            "status": "satisfied",
+            "activeRunId": "run:task-card:4oaumt",
+            "recoverActions": [],
+            "verificationState": {
+              "status": "verified",
+              "verifierRef": "verification:verification-911b9ce11b67",
+              "verdict": "unverified"
+            }
+          },
+          "noHardcodeReview": {
+            "schemaVersion": "sciforge.no-hardcode-review.v1",
+            "appliesGenerally": true,
+            "generalityStatement": "Gateway task outcome projection is derived from runtime payload status, evidence refs, expected artifacts, and execution unit semantics, not from prompt, scenario, paper, file, or backend names.",
+            "counterExamples": [
+              "A failed run with preserved partial refs should remain resumable instead of becoming complete.",
+              "A syntactically valid payload that only promises future work should remain needs-work.",
+              "A transient provider failure should attribute recovery to the external-provider layer."
+            ],
+            "forbiddenSpecialCases": [
+              "artifact-name-specific branch",
+              "backend-specific success path",
+              "paper-title-specific branch",
+              "prompt-specific branch"
+            ],
+            "ownerLayer": "runtime-server",
+            "status": "pass"
+          },
+          "updatedAt": "1970-01-01T00:00:00.000Z"
+        },
+        "protocolSuccess": true,
+        "taskSuccess": true,
+        "userSatisfactionProxy": {
+          "schemaVersion": "sciforge.user-satisfaction-proxy.v1",
+          "answeredLatestRequest": true,
+          "usableResultVisible": true,
+          "structuredNextStep": true,
+          "preservesWorkRefs": true,
+          "avoidsDuplicateWork": true,
+          "score": 1,
+          "status": "likely-satisfied",
+          "reasons": [
+            "structured task outcome marks the latest request satisfied",
+            "usable answer/artifact evidence is visible",
+            "expected artifact coverage is present or not required",
+            "structured next step is available",
+            "work refs are preserved for resume/audit",
+            "projection can continue from existing refs"
+          ]
+        },
+        "nextStepAttribution": {
+          "schemaVersion": "sciforge.next-step-attribution.v1",
+          "ownerLayer": "runtime-server",
+          "nextStep": "Continue with the user-visible result while background work verification runs.",
+          "reason": "The next step belongs to the runtime gateway because it owns task execution state, refs, and recovery.",
+          "sourceRefs": [
+            ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+            "artifact:artifact-summary-bullets",
+            "artifact:research-report-kras-g12d",
+            "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+            "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context",
+            ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+            "file:.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+            "audit:runtime-verification-gate:97641d9c49f6",
+            "intent-match:intent-7d31baed",
+            "runtime://latency-diagnostics",
+            "verify-job:verify-work-81918758",
+            "claim:claim-unreadable"
+          ],
+          "sourceSignals": [
+            "done"
+          ]
+        },
+        "conversationEventLog": {
+          "schemaVersion": "sciforge.conversation-event-log.v1",
+          "conversationId": "task-outcome:task-card:4oaumt",
+          "events": [
+            {
+              "id": "task-outcome:task-card:4oaumt:turn",
+              "type": "TurnReceived",
+              "actor": "user",
+              "storage": "inline",
+              "timestamp": "1970-01-01T00:00:00.000Z",
+              "turnId": "turn:task-card:4oaumt",
+              "payload": {
+                "prompt": "use selected artifact only no rerun no tools summarize what it says in five bullets",
+                "summary": "use selected artifact only no rerun no tools summarize what it says in five bullets"
+              }
+            },
+            {
+              "id": "task-outcome:task-card:4oaumt:harness-decision",
+              "type": "HarnessDecisionRecorded",
+              "actor": "kernel",
+              "storage": "ref",
+              "timestamp": "1970-01-01T00:00:00.000Z",
+              "turnId": "turn:task-card:4oaumt",
+              "runId": "run:task-card:4oaumt",
+              "payload": {
+                "schemaVersion": "sciforge.harness-decision-record.v1",
+                "decisionId": "turn:task-card:4oaumt:harness-decision",
+                "profileId": "balanced-default",
+                "digest": "sha256:1b56e92f1ae6468045326f2ef2f9fa199080070d017db60cd55e06184d48982e",
+                "summary": "profile=balanced-default; intent=repair; exploration=minimal",
+                "source": "request.uiState.agentHarness",
+                "contractRef": "runtime://agent-harness/contracts/balanced-default/21e57a3fbe38",
+                "traceRef": "runtime://agent-harness/contracts/balanced-default/21e57a3fbe38/trace",
+                "refs": [
+                  {
+                    "ref": "runtime://agent-harness/contracts/balanced-default/21e57a3fbe38",
+                    "label": "harness contract"
+                  },
+                  {
+                    "ref": "runtime://agent-harness/contracts/balanced-default/21e57a3fbe38/trace",
+                    "label": "harness trace"
+                  }
+                ]
+              }
+            },
+            {
+              "id": "task-outcome:task-card:4oaumt:dispatch",
+              "type": "Dispatched",
+              "actor": "kernel",
+              "storage": "inline",
+              "timestamp": "1970-01-01T00:00:00.000Z",
+              "turnId": "turn:task-card:4oaumt",
+              "runId": "run:task-card:4oaumt",
+              "payload": {
+                "summary": "protocol=protocol-success; task=satisfied"
+              }
+            },
+            {
+              "id": "task-outcome:task-card:4oaumt:materialized",
+              "type": "OutputMaterialized",
+              "actor": "runtime",
+              "storage": "ref",
+              "timestamp": "1970-01-01T00:00:00.000Z",
+              "turnId": "turn:task-card:4oaumt",
+              "runId": "run:task-card:4oaumt",
+              "payload": {
+                "summary": "Materialized refs from runtime payload.",
+                "refs": [
+                  {
+                    "ref": ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+                    "label": "verification-911b9ce11b67"
+                  },
+                  {
+                    "ref": "artifact:artifact-summary-bullets",
+                    "label": "runtime-context-summary artifact-summary-bullets"
+                  },
+                  {
+                    "ref": "artifact:research-report-kras-g12d",
+                    "label": "research-report research-report-kras-g12d"
+                  },
+                  {
+                    "ref": "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+                    "label": "direct-context-summary-project-literature-evidence-review-p4-direct-context"
+                  },
+                  {
+                    "ref": "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context"
+                  },
+                  {
+                    "ref": ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+                    "label": "EU-direct-context-project-literature-evidence-review-p4-direct-context"
+                  },
+                  {
+                    "ref": "file:.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json"
+                  },
+                  {
+                    "ref": "audit:runtime-verification-gate:97641d9c49f6"
+                  },
+                  {
+                    "ref": "intent-match:intent-7d31baed",
+                    "label": "intent-match-check"
+                  },
+                  {
+                    "ref": "runtime://latency-diagnostics",
+                    "label": "latency-diagnostics"
+                  },
+                  {
+                    "ref": "verify-job:verify-work-81918758",
+                    "label": "background-work-verify"
+                  },
+                  {
+                    "ref": "claim:claim-unreadable",
+                    "label": "claim claim-unreadable"
+                  },
+                  {
+                    "ref": "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+                    "label": "EU-direct-context-project-literature-evidence-review-p4-direct-context"
+                  },
+                  {
+                    "ref": "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context"
+                  },
+                  {
+                    "ref": "verification:verification-911b9ce11b67"
+                  }
+                ]
+              }
+            },
+            {
+              "id": "task-outcome:task-card:4oaumt:terminal",
+              "type": "Satisfied",
+              "actor": "runtime",
+              "storage": "ref",
+              "timestamp": "1970-01-01T00:00:00.000Z",
+              "turnId": "turn:task-card:4oaumt",
+              "runId": "run:task-card:4oaumt",
+              "payload": {
+                "text": "Summary from the selected reference:\n- KRAS G12D report compares mutation prevalence, inhibitor evidence, and evidence limitations\n- KRAS G12D is discussed across pancreatic, colorectal, and lung cancer contexts\n- MRTX1133 and related inhibitor programs are framed as emerging prec",
+                "summary": "Summary from the selected reference:\n- KRAS G12D report compares mutation prevalence, inhibitor evidence, and evidence limitations\n- KRAS G12D is discussed across pancreatic, colorectal, and lung cancer contexts\n- MRTX1133 and related inhibitor programs are framed as emerging prec",
+                "reason": "timeToFirstVisibleResponseMs=0",
+                "failureReason": "timeToFirstVisibleResponseMs=0",
+                "refs": [
+                  {
+                    "ref": ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+                    "label": "verification-911b9ce11b67"
+                  },
+                  {
+                    "ref": "artifact:artifact-summary-bullets",
+                    "label": "runtime-context-summary artifact-summary-bullets"
+                  },
+                  {
+                    "ref": "artifact:research-report-kras-g12d",
+                    "label": "research-report research-report-kras-g12d"
+                  },
+                  {
+                    "ref": "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+                    "label": "direct-context-summary-project-literature-evidence-review-p4-direct-context"
+                  },
+                  {
+                    "ref": "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context"
+                  },
+                  {
+                    "ref": ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+                    "label": "EU-direct-context-project-literature-evidence-review-p4-direct-context"
+                  },
+                  {
+                    "ref": "file:.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json"
+                  },
+                  {
+                    "ref": "audit:runtime-verification-gate:97641d9c49f6"
+                  },
+                  {
+                    "ref": "intent-match:intent-7d31baed",
+                    "label": "intent-match-check"
+                  },
+                  {
+                    "ref": "runtime://latency-diagnostics",
+                    "label": "latency-diagnostics"
+                  },
+                  {
+                    "ref": "verify-job:verify-work-81918758",
+                    "label": "background-work-verify"
+                  },
+                  {
+                    "ref": "claim:claim-unreadable",
+                    "label": "claim claim-unreadable"
+                  },
+                  {
+                    "ref": "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+                    "label": "EU-direct-context-project-literature-evidence-review-p4-direct-context"
+                  },
+                  {
+                    "ref": "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context"
+                  },
+                  {
+                    "ref": "verification:verification-911b9ce11b67"
+                  }
+                ]
+              }
+            },
+            {
+              "id": "task-outcome:task-card:4oaumt:verification",
+              "type": "VerificationRecorded",
+              "actor": "verifier",
+              "storage": "ref",
+              "timestamp": "1970-01-01T00:00:00.000Z",
+              "turnId": "turn:task-card:4oaumt",
+              "runId": "run:task-card:4oaumt",
+              "payload": {
+                "summary": "Verification evidence attached to task outcome projection.",
+                "verdict": "unverified",
+                "refs": [
+                  {
+                    "ref": "verification:verification-911b9ce11b67",
+                    "label": "verification"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "conversationEventLogDigest": "sha256:edfa3e7f6a596d707b0f160b6d79110291eff88b389e9607baa716f8fe2a97ac",
+        "projectionRestore": {
+          "schemaVersion": "sciforge.gateway-projection-restore.v1",
+          "source": "conversation-event-log",
+          "eventCount": 6,
+          "digest": "sha256:edfa3e7f6a596d707b0f160b6d79110291eff88b389e9607baa716f8fe2a97ac"
+        },
+        "conversationProjection": {
+          "schemaVersion": "sciforge.conversation-projection.v1",
+          "conversationId": "task-outcome:task-card:4oaumt",
+          "currentTurn": {
+            "id": "turn:task-card:4oaumt",
+            "prompt": "use selected artifact only no rerun no tools summarize what it says in five bullets"
+          },
+          "visibleAnswer": {
+            "status": "satisfied",
+            "text": "Summary from the selected reference:\n- KRAS G12D report compares mutation prevalence, inhibitor evidence, and evidence limitations\n- KRAS G12D is discussed across pancreatic, colorectal, and lung cancer contexts\n- MRTX1133 and related inhibitor programs are framed as emerging prec",
+            "artifactRefs": [
+              ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+              "artifact:artifact-summary-bullets",
+              "artifact:research-report-kras-g12d",
+              "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+              "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context",
+              ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+              "file:.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+              "audit:runtime-verification-gate:97641d9c49f6",
+              "intent-match:intent-7d31baed",
+              "runtime://latency-diagnostics",
+              "verify-job:verify-work-81918758",
+              "claim:claim-unreadable",
+              "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+              "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context",
+              "verification:verification-911b9ce11b67"
+            ]
+          },
+          "activeRun": {
+            "id": "run:task-card:4oaumt",
+            "status": "satisfied"
+          },
+          "artifacts": [
+            {
+              "ref": "runtime://agent-harness/contracts/balanced-default/21e57a3fbe38",
+              "label": "harness contract"
+            },
+            {
+              "ref": "runtime://agent-harness/contracts/balanced-default/21e57a3fbe38/trace",
+              "label": "harness trace"
+            },
+            {
+              "ref": ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+              "label": "verification-911b9ce11b67"
+            },
+            {
+              "ref": "artifact:artifact-summary-bullets",
+              "label": "runtime-context-summary artifact-summary-bullets"
+            },
+            {
+              "ref": "artifact:research-report-kras-g12d",
+              "label": "research-report research-report-kras-g12d"
+            },
+            {
+              "ref": "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+              "label": "direct-context-summary-project-literature-evidence-review-p4-direct-context"
+            },
+            {
+              "ref": "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context"
+            },
+            {
+              "ref": "file:.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json"
+            },
+            {
+              "ref": "audit:runtime-verification-gate:97641d9c49f6"
+            },
+            {
+              "ref": "intent-match:intent-7d31baed",
+              "label": "intent-match-check"
+            },
+            {
+              "ref": "runtime://latency-diagnostics",
+              "label": "latency-diagnostics"
+            },
+            {
+              "ref": "verify-job:verify-work-81918758",
+              "label": "background-work-verify"
+            },
+            {
+              "ref": "claim:claim-unreadable",
+              "label": "claim claim-unreadable"
+            },
+            {
+              "ref": "verification:verification-911b9ce11b67"
+            }
+          ],
+          "executionProcess": [
+            {
+              "eventId": "task-outcome:task-card:4oaumt:turn",
+              "type": "TurnReceived",
+              "summary": "use selected artifact only no rerun no tools summarize what it says in five bullets",
+              "timestamp": "1970-01-01T00:00:00.000Z"
+            },
+            {
+              "eventId": "task-outcome:task-card:4oaumt:harness-decision",
+              "type": "HarnessDecisionRecorded",
+              "summary": "profile=balanced-default; intent=repair; exploration=minimal",
+              "timestamp": "1970-01-01T00:00:00.000Z"
+            },
+            {
+              "eventId": "task-outcome:task-card:4oaumt:dispatch",
+              "type": "Dispatched",
+              "summary": "protocol=protocol-success; task=satisfied",
+              "timestamp": "1970-01-01T00:00:00.000Z"
+            },
+            {
+              "eventId": "task-outcome:task-card:4oaumt:materialized",
+              "type": "OutputMaterialized",
+              "summary": "Materialized refs from runtime payload.",
+              "timestamp": "1970-01-01T00:00:00.000Z"
+            },
+            {
+              "eventId": "task-outcome:task-card:4oaumt:terminal",
+              "type": "Satisfied",
+              "summary": "Summary from the selected reference:\n- KRAS G12D report compares mutation prevalence, inhibitor evidence, and evidence limitations\n- KRAS G12D is discussed across pancreatic, colorectal, and lung cancer contexts\n- MRTX1133 and related inhibitor programs are framed as emerging prec",
+              "timestamp": "1970-01-01T00:00:00.000Z"
+            },
+            {
+              "eventId": "task-outcome:task-card:4oaumt:verification",
+              "type": "VerificationRecorded",
+              "summary": "Verification evidence attached to task outcome projection.",
+              "timestamp": "1970-01-01T00:00:00.000Z"
+            }
+          ],
+          "recoverActions": [],
+          "verificationState": {
+            "status": "verified",
+            "verifierRef": "verification:verification-911b9ce11b67",
+            "verdict": "unverified"
+          },
+          "harnessDecision": {
+            "schemaVersion": "sciforge.harness-decision-record.v1",
+            "decisionId": "turn:task-card:4oaumt:harness-decision",
+            "profileId": "balanced-default",
+            "digest": "sha256:1b56e92f1ae6468045326f2ef2f9fa199080070d017db60cd55e06184d48982e",
+            "summary": "profile=balanced-default; intent=repair; exploration=minimal",
+            "refs": [
+              "runtime://agent-harness/contracts/balanced-default/21e57a3fbe38",
+              "runtime://agent-harness/contracts/balanced-default/21e57a3fbe38/trace"
+            ],
+            "contractRef": "runtime://agent-harness/contracts/balanced-default/21e57a3fbe38",
+            "traceRef": "runtime://agent-harness/contracts/balanced-default/21e57a3fbe38/trace",
+            "source": "request.uiState.agentHarness"
+          },
+          "auditRefs": [
+            "runtime://agent-harness/contracts/balanced-default/21e57a3fbe38",
+            "runtime://agent-harness/contracts/balanced-default/21e57a3fbe38/trace",
+            ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+            "artifact:artifact-summary-bullets",
+            "artifact:research-report-kras-g12d",
+            "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+            "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context",
+            "file:.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+            "audit:runtime-verification-gate:97641d9c49f6",
+            "intent-match:intent-7d31baed",
+            "runtime://latency-diagnostics",
+            "verify-job:verify-work-81918758",
+            "claim:claim-unreadable",
+            "verification:verification-911b9ce11b67"
+          ],
+          "diagnostics": []
+        },
+        "ownershipLayerSuggestions": [
+          {
+            "layer": "runtime-server",
+            "confidence": "medium",
+            "reason": "The next improvement belongs to the runtime server because execution state, refs, logs, or recovery orchestration are the owning layer.",
+            "signals": [
+              "execution-unit-runtime-refs",
+              "generic-attribution-layer",
+              "runtime-diagnostic-refs"
+            ],
+            "nextStep": "Inspect runtime refs, logs, task status, and recovery orchestration before rerun."
+          },
+          {
+            "layer": "presentation",
+            "confidence": "low",
+            "reason": "The next improvement belongs to presentation because result visibility, artifact ordering, or user-facing projection is the owning layer.",
+            "signals": [
+              "artifact-result-refs",
+              "completed-result-needs-visible-presentation"
+            ],
+            "nextStep": "Materialize the result presentation contract from preserved refs before changing task logic."
+          },
+          {
+            "layer": "verification",
+            "confidence": "low",
+            "reason": "The next improvement belongs to verification because evidence checks or verifier verdicts are the owning layer.",
+            "signals": [
+              "verification-refs"
+            ],
+            "nextStep": "Run or repair verifier evidence before marking the task satisfied."
+          }
+        ],
+        "projectionRules": [
+          "Protocol success means the backend returned a parseable contract; task success means the current user goal appears satisfied.",
+          "User satisfaction proxy is inferred from visible answer quality, usable artifacts/refs, next-step detail, and repeat-work avoidance.",
+          "Next-step attribution names the generic failing or owning runtime layer without prompt/scenario hardcoding.",
+          "ConversationEventLog is the replayable truth source persisted with the outcome; ConversationProjection is restored by replaying that log."
+        ]
+      },
+      "conversationEventLog": {
+        "schemaVersion": "sciforge.conversation-event-log.v1",
+        "conversationId": "task-outcome:task-card:4oaumt",
+        "events": [
+          {
+            "id": "task-outcome:task-card:4oaumt:turn",
+            "type": "TurnReceived",
+            "actor": "user",
+            "storage": "inline",
+            "timestamp": "1970-01-01T00:00:00.000Z",
+            "turnId": "turn:task-card:4oaumt",
+            "payload": {
+              "prompt": "use selected artifact only no rerun no tools summarize what it says in five bullets",
+              "summary": "use selected artifact only no rerun no tools summarize what it says in five bullets"
+            }
+          },
+          {
+            "id": "task-outcome:task-card:4oaumt:harness-decision",
+            "type": "HarnessDecisionRecorded",
+            "actor": "kernel",
+            "storage": "ref",
+            "timestamp": "1970-01-01T00:00:00.000Z",
+            "turnId": "turn:task-card:4oaumt",
+            "runId": "run:task-card:4oaumt",
+            "payload": {
+              "schemaVersion": "sciforge.harness-decision-record.v1",
+              "decisionId": "turn:task-card:4oaumt:harness-decision",
+              "profileId": "balanced-default",
+              "digest": "sha256:1b56e92f1ae6468045326f2ef2f9fa199080070d017db60cd55e06184d48982e",
+              "summary": "profile=balanced-default; intent=repair; exploration=minimal",
+              "source": "request.uiState.agentHarness",
+              "contractRef": "runtime://agent-harness/contracts/balanced-default/21e57a3fbe38",
+              "traceRef": "runtime://agent-harness/contracts/balanced-default/21e57a3fbe38/trace",
+              "refs": [
+                {
+                  "ref": "runtime://agent-harness/contracts/balanced-default/21e57a3fbe38",
+                  "label": "harness contract"
+                },
+                {
+                  "ref": "runtime://agent-harness/contracts/balanced-default/21e57a3fbe38/trace",
+                  "label": "harness trace"
+                }
+              ]
+            }
+          },
+          {
+            "id": "task-outcome:task-card:4oaumt:dispatch",
+            "type": "Dispatched",
+            "actor": "kernel",
+            "storage": "inline",
+            "timestamp": "1970-01-01T00:00:00.000Z",
+            "turnId": "turn:task-card:4oaumt",
+            "runId": "run:task-card:4oaumt",
+            "payload": {
+              "summary": "protocol=protocol-success; task=satisfied"
+            }
+          },
+          {
+            "id": "task-outcome:task-card:4oaumt:materialized",
+            "type": "OutputMaterialized",
+            "actor": "runtime",
+            "storage": "ref",
+            "timestamp": "1970-01-01T00:00:00.000Z",
+            "turnId": "turn:task-card:4oaumt",
+            "runId": "run:task-card:4oaumt",
+            "payload": {
+              "summary": "Materialized refs from runtime payload.",
+              "refs": [
+                {
+                  "ref": ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+                  "label": "verification-911b9ce11b67"
+                },
+                {
+                  "ref": "artifact:artifact-summary-bullets",
+                  "label": "runtime-context-summary artifact-summary-bullets"
+                },
+                {
+                  "ref": "artifact:research-report-kras-g12d",
+                  "label": "research-report research-report-kras-g12d"
+                },
+                {
+                  "ref": "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+                  "label": "direct-context-summary-project-literature-evidence-review-p4-direct-context"
+                },
+                {
+                  "ref": "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context"
+                },
+                {
+                  "ref": ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+                  "label": "EU-direct-context-project-literature-evidence-review-p4-direct-context"
+                },
+                {
+                  "ref": "file:.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json"
+                },
+                {
+                  "ref": "audit:runtime-verification-gate:97641d9c49f6"
+                },
+                {
+                  "ref": "intent-match:intent-7d31baed",
+                  "label": "intent-match-check"
+                },
+                {
+                  "ref": "runtime://latency-diagnostics",
+                  "label": "latency-diagnostics"
+                },
+                {
+                  "ref": "verify-job:verify-work-81918758",
+                  "label": "background-work-verify"
+                },
+                {
+                  "ref": "claim:claim-unreadable",
+                  "label": "claim claim-unreadable"
+                },
+                {
+                  "ref": "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+                  "label": "EU-direct-context-project-literature-evidence-review-p4-direct-context"
+                },
+                {
+                  "ref": "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context"
+                },
+                {
+                  "ref": "verification:verification-911b9ce11b67"
+                }
+              ]
+            }
+          },
+          {
+            "id": "task-outcome:task-card:4oaumt:terminal",
+            "type": "Satisfied",
+            "actor": "runtime",
+            "storage": "ref",
+            "timestamp": "1970-01-01T00:00:00.000Z",
+            "turnId": "turn:task-card:4oaumt",
+            "runId": "run:task-card:4oaumt",
+            "payload": {
+              "text": "Summary from the selected reference:\n- KRAS G12D report compares mutation prevalence, inhibitor evidence, and evidence limitations\n- KRAS G12D is discussed across pancreatic, colorectal, and lung cancer contexts\n- MRTX1133 and related inhibitor programs are framed as emerging prec",
+              "summary": "Summary from the selected reference:\n- KRAS G12D report compares mutation prevalence, inhibitor evidence, and evidence limitations\n- KRAS G12D is discussed across pancreatic, colorectal, and lung cancer contexts\n- MRTX1133 and related inhibitor programs are framed as emerging prec",
+              "reason": "timeToFirstVisibleResponseMs=0",
+              "failureReason": "timeToFirstVisibleResponseMs=0",
+              "refs": [
+                {
+                  "ref": ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+                  "label": "verification-911b9ce11b67"
+                },
+                {
+                  "ref": "artifact:artifact-summary-bullets",
+                  "label": "runtime-context-summary artifact-summary-bullets"
+                },
+                {
+                  "ref": "artifact:research-report-kras-g12d",
+                  "label": "research-report research-report-kras-g12d"
+                },
+                {
+                  "ref": "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+                  "label": "direct-context-summary-project-literature-evidence-review-p4-direct-context"
+                },
+                {
+                  "ref": "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context"
+                },
+                {
+                  "ref": ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+                  "label": "EU-direct-context-project-literature-evidence-review-p4-direct-context"
+                },
+                {
+                  "ref": "file:.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json"
+                },
+                {
+                  "ref": "audit:runtime-verification-gate:97641d9c49f6"
+                },
+                {
+                  "ref": "intent-match:intent-7d31baed",
+                  "label": "intent-match-check"
+                },
+                {
+                  "ref": "runtime://latency-diagnostics",
+                  "label": "latency-diagnostics"
+                },
+                {
+                  "ref": "verify-job:verify-work-81918758",
+                  "label": "background-work-verify"
+                },
+                {
+                  "ref": "claim:claim-unreadable",
+                  "label": "claim claim-unreadable"
+                },
+                {
+                  "ref": "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+                  "label": "EU-direct-context-project-literature-evidence-review-p4-direct-context"
+                },
+                {
+                  "ref": "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context"
+                },
+                {
+                  "ref": "verification:verification-911b9ce11b67"
+                }
+              ]
+            }
+          },
+          {
+            "id": "task-outcome:task-card:4oaumt:verification",
+            "type": "VerificationRecorded",
+            "actor": "verifier",
+            "storage": "ref",
+            "timestamp": "1970-01-01T00:00:00.000Z",
+            "turnId": "turn:task-card:4oaumt",
+            "runId": "run:task-card:4oaumt",
+            "payload": {
+              "summary": "Verification evidence attached to task outcome projection.",
+              "verdict": "unverified",
+              "refs": [
+                {
+                  "ref": "verification:verification-911b9ce11b67",
+                  "label": "verification"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "conversationEventLogDigest": "sha256:edfa3e7f6a596d707b0f160b6d79110291eff88b389e9607baa716f8fe2a97ac",
+      "conversationProjection": {
+        "schemaVersion": "sciforge.conversation-projection.v1",
+        "conversationId": "task-outcome:task-card:4oaumt",
+        "currentTurn": {
+          "id": "turn:task-card:4oaumt",
+          "prompt": "use selected artifact only no rerun no tools summarize what it says in five bullets"
+        },
+        "visibleAnswer": {
+          "status": "satisfied",
+          "text": "Summary from the selected reference:\n- KRAS G12D report compares mutation prevalence, inhibitor evidence, and evidence limitations\n- KRAS G12D is discussed across pancreatic, colorectal, and lung cancer contexts\n- MRTX1133 and related inhibitor programs are framed as emerging prec",
+          "artifactRefs": [
+            ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+            "artifact:artifact-summary-bullets",
+            "artifact:research-report-kras-g12d",
+            "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+            "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context",
+            ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+            "file:.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+            "audit:runtime-verification-gate:97641d9c49f6",
+            "intent-match:intent-7d31baed",
+            "runtime://latency-diagnostics",
+            "verify-job:verify-work-81918758",
+            "claim:claim-unreadable",
+            "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+            "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context",
+            "verification:verification-911b9ce11b67"
+          ]
+        },
+        "activeRun": {
+          "id": "run:task-card:4oaumt",
+          "status": "satisfied"
+        },
+        "artifacts": [
+          {
+            "ref": "runtime://agent-harness/contracts/balanced-default/21e57a3fbe38",
+            "label": "harness contract"
+          },
+          {
+            "ref": "runtime://agent-harness/contracts/balanced-default/21e57a3fbe38/trace",
+            "label": "harness trace"
+          },
+          {
+            "ref": ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+            "label": "verification-911b9ce11b67"
+          },
+          {
+            "ref": "artifact:artifact-summary-bullets",
+            "label": "runtime-context-summary artifact-summary-bullets"
+          },
+          {
+            "ref": "artifact:research-report-kras-g12d",
+            "label": "research-report research-report-kras-g12d"
+          },
+          {
+            "ref": "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+            "label": "direct-context-summary-project-literature-evidence-review-p4-direct-context"
+          },
+          {
+            "ref": "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context"
+          },
+          {
+            "ref": "file:.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json"
+          },
+          {
+            "ref": "audit:runtime-verification-gate:97641d9c49f6"
+          },
+          {
+            "ref": "intent-match:intent-7d31baed",
+            "label": "intent-match-check"
+          },
+          {
+            "ref": "runtime://latency-diagnostics",
+            "label": "latency-diagnostics"
+          },
+          {
+            "ref": "verify-job:verify-work-81918758",
+            "label": "background-work-verify"
+          },
+          {
+            "ref": "claim:claim-unreadable",
+            "label": "claim claim-unreadable"
+          },
+          {
+            "ref": "verification:verification-911b9ce11b67"
+          }
+        ],
+        "executionProcess": [
+          {
+            "eventId": "task-outcome:task-card:4oaumt:turn",
+            "type": "TurnReceived",
+            "summary": "use selected artifact only no rerun no tools summarize what it says in five bullets",
+            "timestamp": "1970-01-01T00:00:00.000Z"
+          },
+          {
+            "eventId": "task-outcome:task-card:4oaumt:harness-decision",
+            "type": "HarnessDecisionRecorded",
+            "summary": "profile=balanced-default; intent=repair; exploration=minimal",
+            "timestamp": "1970-01-01T00:00:00.000Z"
+          },
+          {
+            "eventId": "task-outcome:task-card:4oaumt:dispatch",
+            "type": "Dispatched",
+            "summary": "protocol=protocol-success; task=satisfied",
+            "timestamp": "1970-01-01T00:00:00.000Z"
+          },
+          {
+            "eventId": "task-outcome:task-card:4oaumt:materialized",
+            "type": "OutputMaterialized",
+            "summary": "Materialized refs from runtime payload.",
+            "timestamp": "1970-01-01T00:00:00.000Z"
+          },
+          {
+            "eventId": "task-outcome:task-card:4oaumt:terminal",
+            "type": "Satisfied",
+            "summary": "Summary from the selected reference:\n- KRAS G12D report compares mutation prevalence, inhibitor evidence, and evidence limitations\n- KRAS G12D is discussed across pancreatic, colorectal, and lung cancer contexts\n- MRTX1133 and related inhibitor programs are framed as emerging prec",
+            "timestamp": "1970-01-01T00:00:00.000Z"
+          },
+          {
+            "eventId": "task-outcome:task-card:4oaumt:verification",
+            "type": "VerificationRecorded",
+            "summary": "Verification evidence attached to task outcome projection.",
+            "timestamp": "1970-01-01T00:00:00.000Z"
+          }
+        ],
+        "recoverActions": [],
+        "verificationState": {
+          "status": "verified",
+          "verifierRef": "verification:verification-911b9ce11b67",
+          "verdict": "unverified"
+        },
+        "harnessDecision": {
+          "schemaVersion": "sciforge.harness-decision-record.v1",
+          "decisionId": "turn:task-card:4oaumt:harness-decision",
+          "profileId": "balanced-default",
+          "digest": "sha256:1b56e92f1ae6468045326f2ef2f9fa199080070d017db60cd55e06184d48982e",
+          "summary": "profile=balanced-default; intent=repair; exploration=minimal",
+          "refs": [
+            "runtime://agent-harness/contracts/balanced-default/21e57a3fbe38",
+            "runtime://agent-harness/contracts/balanced-default/21e57a3fbe38/trace"
+          ],
+          "contractRef": "runtime://agent-harness/contracts/balanced-default/21e57a3fbe38",
+          "traceRef": "runtime://agent-harness/contracts/balanced-default/21e57a3fbe38/trace",
+          "source": "request.uiState.agentHarness"
+        },
+        "auditRefs": [
+          "runtime://agent-harness/contracts/balanced-default/21e57a3fbe38",
+          "runtime://agent-harness/contracts/balanced-default/21e57a3fbe38/trace",
+          ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+          "artifact:artifact-summary-bullets",
+          "artifact:research-report-kras-g12d",
+          "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+          "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context",
+          "file:.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+          "audit:runtime-verification-gate:97641d9c49f6",
+          "intent-match:intent-7d31baed",
+          "runtime://latency-diagnostics",
+          "verify-job:verify-work-81918758",
+          "claim:claim-unreadable",
+          "verification:verification-911b9ce11b67"
+        ],
+        "diagnostics": []
+      }
+    },
+    "claims": [
+      {
+        "id": "direct-context-claim-project-literature-evidence-review-p4-direct-context",
+        "text": "Summary from the selected reference:",
+        "type": "fact",
+        "confidence": 0.74,
+        "evidenceLevel": "current-session-context",
+        "supportingRefs": [
+          "artifact:research-report-kras-g12d",
+          "artifact:artifact-summary-bullets",
+          "claim:claim-unreadable"
+        ],
+        "opposingRefs": []
+      }
+    ],
+    "uiManifest": [
+      {
+        "componentId": "report-viewer",
+        "artifactRef": "direct-context-summary-project-literature-evidence-review-p4-direct-context",
+        "priority": 1
+      },
+      {
+        "componentId": "execution-unit-table",
+        "artifactRef": "direct-context-fast-path",
+        "priority": 2
+      }
+    ],
+    "executionUnits": [
+      {
+        "id": "EU-direct-context-project-literature-evidence-review-p4-direct-context",
+        "tool": "sciforge.direct-context-fast-path",
+        "params": "{\"policy\":\"python-conversation-policy\",\"contextItemCount\":3,\"directContextGate\":{\"decisionRef\":\"decision:conversation-policy:2cd9b2d3\",\"intent\":\"artifact-status\",\"requiredContext\":[\"artifact-index\",\"object-references\",\"current-refs\"],\"usedContextRefs\":[\"artifact:research-report-kras-g12d\",\"artifact:artifact-summary-bullets\",\"claim:claim-unreadable\"],\"sufficiency\":\"sufficient\",\"skippedTaskReason\":\"Typed current-session context was sufficient for a bounded direct answer.\"}}",
+        "status": "done",
+        "hash": "2cd1e2a15daa8f9c",
+        "runId": "project-literature-evidence-review-p4-direct-context",
+        "outputRef": "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+        "verificationRef": ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+        "verificationVerdict": "unverified",
+        "refs": {
+          "verificationResult": ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+          "budgetDebits": [
+            "budgetDebit:runtime-verification-gate:97641d9c49f6"
+          ]
+        },
+        "budgetDebitRefs": [
+          "budgetDebit:runtime-verification-gate:97641d9c49f6"
+        ]
+      }
+    ],
+    "artifacts": [
+      {
+        "id": "direct-context-summary-project-literature-evidence-review-p4-direct-context",
+        "type": "runtime-context-summary",
+        "producerScenario": "literature",
+        "schemaVersion": "1",
+        "metadata": {
+          "source": "direct-context-fast-path",
+          "policyOwner": "python-conversation-policy",
+          "contextItemCount": 3,
+          "directContextGate": {
+            "decisionRef": "decision:conversation-policy:2cd9b2d3",
+            "intent": "artifact-status",
+            "requiredContext": [
+              "artifact-index",
+              "object-references",
+              "current-refs"
+            ],
+            "usedContextRefs": [
+              "artifact:research-report-kras-g12d",
+              "artifact:artifact-summary-bullets",
+              "claim:claim-unreadable"
+            ],
+            "sufficiency": "sufficient",
+            "skippedTaskReason": "Typed current-session context was sufficient for a bounded direct answer."
+          },
+          "runId": "project-literature-evidence-review-p4-direct-context",
+          "sourceRunId": "project-literature-evidence-review-p4-direct-context",
+          "producerRunId": "project-literature-evidence-review-p4-direct-context",
+          "outputRef": "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context"
+        },
+        "data": {
+          "markdown": "Summary from the selected reference:\n- KRAS G12D report compares mutation prevalence, inhibitor evidence, and evidence limitations\n- KRAS G12D is discussed across pancreatic, colorectal, and lung cancer contexts\n- MRTX1133 and related inhibitor programs are framed as emerging prec",
+          "context": [
+            {
+              "kind": "artifact",
+              "label": "research-report research-report-kras-g12d",
+              "ref": "artifact:research-report-kras-g12d",
+              "summary": "KRAS G12D report compares mutation prevalence, inhibitor evidence, and evidence limitations. KRAS G12D is discussed across pancreatic, colorectal, and lung cancer contexts. MRTX1133 and related inhibitor programs are framed as emerging prec"
+            },
+            {
+              "kind": "artifact",
+              "label": "runtime-context-summary artifact-summary-bullets",
+              "ref": "artifact:artifact-summary-bullets",
+              "summary": "Selected Artifact Summary The selected artifact content was not available in the workspace."
+            },
+            {
+              "kind": "prediction",
+              "label": "claim claim-unreadable",
+              "ref": "claim:claim-unreadable",
+              "summary": "Reference path was not readable inside the workspace."
+            }
+          ]
+        },
+        "verificationRef": ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+        "refs": {
+          "verificationResult": ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json"
+        }
+      },
+      {
+        "id": "verification-911b9ce11b67",
+        "type": "verification-result",
+        "dataRef": ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+        "schemaVersion": "sciforge.verification-result.v1",
+        "metadata": {
+          "verdict": "unverified",
+          "policy": "lightweight/medium",
+          "visible": true,
+          "nonBlocking": false,
+          "unverifiedIsNotPass": true
+        },
+        "data": {
+          "result": {
+            "verdict": "unverified",
+            "reward": 0,
+            "confidence": 0,
+            "critique": "contractRef=runtime://agent-harness/contracts/balanced-default/21e57a3fbe38; profileId=balanced-default; intensity=light",
+            "evidenceRefs": [
+              "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context"
+            ],
+            "repairHints": [
+              "Run an appropriate verifier or request human approval."
+            ],
+            "diagnostics": {
+              "riskLevel": "medium",
+              "mode": "lightweight",
+              "required": true,
+              "visibleUnverified": true
+            },
+            "id": "verification-911b9ce11b67"
+          },
+          "policy": {
+            "required": true,
+            "mode": "lightweight",
+            "riskLevel": "medium",
+            "reason": "contractRef=runtime://agent-harness/contracts/balanced-default/21e57a3fbe38; profileId=balanced-default; intensity=light",
+            "selectedVerifierIds": []
+          }
+        },
+        "budgetDebitRefs": [
+          "budgetDebit:runtime-verification-gate:97641d9c49f6"
+        ],
+        "refs": {
+          "budgetDebits": [
+            "budgetDebit:runtime-verification-gate:97641d9c49f6"
+          ]
+        }
+      }
+    ],
+    "objectReferences": [
+      {
+        "id": "obj-direct-context-1",
+        "kind": "artifact",
+        "title": "research-report research-report-kras-g12d",
+        "ref": "artifact:research-report-kras-g12d",
+        "runId": "project-literature-evidence-review-p4-direct-context",
+        "producerRunId": "project-literature-evidence-review-p4-direct-context",
+        "status": "available",
+        "summary": "KRAS G12D report compares mutation prevalence, inhibitor evidence, and evidence limitations. KRAS G12D is discussed across pancreatic, colorectal, and lung cancer contexts. MRTX1133 and related inhibitor programs are framed as emerging prec"
+      },
+      {
+        "id": "obj-direct-context-2",
+        "kind": "artifact",
+        "title": "runtime-context-summary artifact-summary-bullets",
+        "ref": "artifact:artifact-summary-bullets",
+        "runId": "project-literature-evidence-review-p4-direct-context",
+        "producerRunId": "project-literature-evidence-review-p4-direct-context",
+        "status": "available",
+        "summary": "Selected Artifact Summary The selected artifact content was not available in the workspace."
+      },
+      {
+        "id": "obj-direct-context-3",
+        "kind": "prediction",
+        "title": "claim claim-unreadable",
+        "ref": "claim:claim-unreadable",
+        "runId": "project-literature-evidence-review-p4-direct-context",
+        "producerRunId": "project-literature-evidence-review-p4-direct-context",
+        "status": "available",
+        "summary": "Reference path was not readable inside the workspace."
+      },
+      {
+        "id": "verification-911b9ce11b67",
+        "kind": "verification-result",
+        "ref": "file:.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+        "label": "Verification unverified"
+      }
+    ],
+    "verificationPolicy": {
+      "required": true,
+      "mode": "lightweight",
+      "riskLevel": "medium",
+      "reason": "contractRef=runtime://agent-harness/contracts/balanced-default/21e57a3fbe38; profileId=balanced-default; intensity=light",
+      "selectedVerifierIds": []
+    },
+    "verificationResults": [
+      {
+        "verdict": "unverified",
+        "reward": 0,
+        "confidence": 0,
+        "critique": "contractRef=runtime://agent-harness/contracts/balanced-default/21e57a3fbe38; profileId=balanced-default; intensity=light",
+        "evidenceRefs": [
+          "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context"
+        ],
+        "repairHints": [
+          "Run an appropriate verifier or request human approval."
+        ],
+        "diagnostics": {
+          "riskLevel": "medium",
+          "mode": "lightweight",
+          "required": true,
+          "visibleUnverified": true
+        },
+        "id": "verification-911b9ce11b67"
+      }
+    ],
+    "budgetDebits": [
+      {
+        "contract": "sciforge.capability-budget-debit.v1",
+        "schemaVersion": 1,
+        "debitId": "budgetDebit:runtime-verification-gate:97641d9c49f6",
+        "invocationId": "capabilityInvocation:runtime-verification-gate:97641d9c49f6",
+        "capabilityId": "sciforge.runtime-verification-gate",
+        "candidateId": "verifier.runtime-verification-gate",
+        "manifestRef": "capability:sciforge.runtime-verification-gate",
+        "subjectRefs": [
+          ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+          "verification-911b9ce11b67",
+          "execution-unit:EU-direct-context-project-literature-evidence-review-p4-direct-context",
+          "artifact:research-report-kras-g12d",
+          "EU-direct-context-project-literature-evidence-review-p4-direct-context",
+          "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context"
+        ],
+        "debitLines": [
+          {
+            "dimension": "costUnits",
+            "amount": 1,
+            "reason": "runtime verification gate unverified",
+            "sourceRef": "runtime-verification:lightweight:medium"
+          }
+        ],
+        "exceeded": false,
+        "exhaustedDimensions": [],
+        "sinkRefs": {
+          "executionUnitRef": "EU-direct-context-project-literature-evidence-review-p4-direct-context",
+          "workEvidenceRefs": [],
+          "auditRefs": [
+            "verification-artifact:.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+            "audit:runtime-verification-gate:97641d9c49f6"
+          ]
+        },
+        "createdAt": "2026-05-16T15:30:26.099Z",
+        "metadata": {
+          "policyMode": "lightweight",
+          "riskLevel": "medium",
+          "verdict": "unverified",
+          "nonBlocking": false
+        }
+      }
+    ],
+    "logs": [
+      {
+        "type": "capability-budget-debit",
+        "ref": "audit:runtime-verification-gate:97641d9c49f6",
+        "capabilityId": "sciforge.runtime-verification-gate",
+        "verificationRef": ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+        "verificationVerdict": "unverified",
+        "budgetDebitRefs": [
+          "budgetDebit:runtime-verification-gate:97641d9c49f6"
+        ]
+      },
+      {
+        "kind": "latency-diagnostics",
+        "ref": "runtime://latency-diagnostics",
+        "data": {
+          "schemaVersion": "sciforge.latency-diagnostics.v1",
+          "timeToFirstVisibleResponseMs": 0,
+          "timeToFirstBackendEventMs": 0,
+          "compactionWaitMs": 0,
+          "verificationWaitMs": 4,
+          "cache": {
+            "hits": [
+              "reuseScenarioPlan",
+              "reuseSkillPlan",
+              "reuseUiPlan",
+              "reuseArtifactIndex",
+              "reuseBackendSession"
+            ],
+            "misses": [
+              "reuseReferenceDigests",
+              "reuseLastSuccessfulStage"
+            ]
+          },
+          "policySource": "python"
+        }
+      },
+      {
+        "kind": "intent-match-check",
+        "ref": "intent-match:intent-7d31baed",
+        "data": {
+          "schemaVersion": "sciforge.intent-first-verification.v1",
+          "id": "intent-7d31baed",
+          "verdict": "pass",
+          "latestUserIntent": "use selected artifact only no rerun no tools summarize what it says in five bullets",
+          "requestedActionType": "answer",
+          "explicitConstraints": [],
+          "answerCoverage": "covered",
+          "overActionGuard": "ok",
+          "diagnostics": []
+        }
+      },
+      {
+        "kind": "background-work-verify",
+        "ref": "verify-job:verify-work-81918758",
+        "data": {
+          "schemaVersion": "sciforge.intent-first-verification.v1",
+          "id": "verify-work-81918758",
+          "scope": "work",
+          "level": "work-background",
+          "status": "passed",
+          "blockingPolicy": "non-blocking",
+          "targetRefs": [
+            ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+            "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+            "artifact:research-report-kras-g12d",
+            "artifact:artifact-summary-bullets",
+            "claim:claim-unreadable",
+            "file:.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json"
+          ],
+          "evidenceRefs": [
+            ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+            "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+            "artifact:research-report-kras-g12d",
+            "artifact:artifact-summary-bullets",
+            "claim:claim-unreadable",
+            "file:.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json"
+          ],
+          "recommendedFix": "Continue with the user-visible result while background work verification runs."
+        }
+      }
+    ],
+    "workEvidence": [
+      {
+        "kind": "other",
+        "status": "success",
+        "provider": "sciforge-runtime",
+        "input": {
+          "policySource": "python"
+        },
+        "resultCount": 1,
+        "outputSummary": "firstVisible=0ms; firstBackend=0ms; compaction=0ms; verification=4ms; cache=5 hit/2 miss; policy=python",
+        "evidenceRefs": [
+          "runtime://latency-diagnostics"
+        ],
+        "recoverActions": [],
+        "diagnostics": [
+          "timeToFirstVisibleResponseMs=0",
+          "timeToFirstBackendEventMs=0",
+          "compactionWaitMs=0",
+          "verificationWaitMs=4",
+          "cacheHit=reuseScenarioPlan,reuseSkillPlan,reuseUiPlan,reuseArtifactIndex,reuseBackendSession",
+          "cacheMiss=reuseReferenceDigests,reuseLastSuccessfulStage",
+          "fallbackReason=none"
+        ],
+        "rawRef": "runtime://latency-diagnostics"
+      },
+      {
+        "kind": "other",
+        "status": "success",
+        "provider": "sciforge-intent-first-verify",
+        "input": {
+          "requestedActionType": "answer",
+          "route": "background",
+          "level": "work-background"
+        },
+        "resultCount": 1,
+        "outputSummary": "Intent match check passed; lightweight work verification did not find a blocking failure.",
+        "evidenceRefs": [
+          ".sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+          "runtime://direct-context-fast-path/project-literature-evidence-review-p4-direct-context",
+          "artifact:research-report-kras-g12d",
+          "artifact:artifact-summary-bullets",
+          "claim:claim-unreadable",
+          "file:.sciforge/sessions/2026-05-16_literature_sessionless/verifications/verification-911b9ce11b67.json",
+          "verification:verify-work-81918758",
+          "run:verify-run-7d31baed#verify-work-81918758"
+        ],
+        "recoverActions": [
+          "Continue with the user-visible result while background work verification runs."
+        ],
+        "diagnostics": [
+          "answerCoverage=covered",
+          "overActionGuard=ok",
+          "verifyRoute=background",
+          "blockingPolicy=non-blocking",
+          "workVerify=verify passed"
+        ],
+        "rawRef": "intent-match:intent-7d31baed"
+      }
+    ]
+  },
+  "checks": {
+    "hasSummaryHeader": true,
+    "hasUnreadable": false,
+    "hasUnavailable": false,
+    "hasSelectedContent": true,
+    "taskSuccess": true
+  }
+}

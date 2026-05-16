@@ -10,6 +10,18 @@ import type { GatewayRequest, SkillAvailability, ToolPayload } from '../runtime-
 import { runGeneratedTaskExecutionLifecycle } from './generated-task-runner-execution-lifecycle.js';
 import { repairNeededPayload } from './payload-validation.js';
 
+function providerTestSkill(checkedAt: string): SkillAvailability {
+  return {
+    id: 'literature-test',
+    kind: 'builtin',
+    available: true,
+    reason: 'test',
+    checkedAt,
+    manifestPath: 'builtin',
+    manifest: {},
+  } as unknown as SkillAvailability;
+}
+
 test('generated task files are materialized only inside the session bundle', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-generated-session-bundle-'));
   const request: GatewayRequest = {
@@ -361,6 +373,173 @@ test('generated Python task can invoke ready provider through helper adapter', a
     const output = JSON.parse(await readFile(join(workspace, result.execution.run.outputRef), 'utf8'));
     assert.equal(output.message, 'provider bridge ok');
     assert.equal(output.artifacts[0].data.echoedToolId, 'web_fetch');
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  }
+});
+
+test('generated Python task turns empty provider output into terminal empty-result payload', async () => {
+  const server = createServer(async (_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({
+      ok: true,
+      output: { results: [], totalResults: 0 },
+    }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const endpoint = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    const workspace = await mkdtemp(join(tmpdir(), 'sciforge-generated-provider-empty-'));
+    const request: GatewayRequest = {
+      workspacePath: workspace,
+      skillDomain: 'literature',
+      prompt: 'search through ready provider and report empty honestly',
+      selectedToolIds: ['web_search'],
+      artifacts: [],
+      uiState: {
+        sessionId: 'session-literature-provider-empty',
+        sessionCreatedAt: '2026-05-12T05:10:00.000Z',
+        capabilityProviderAvailability: [{
+          id: 'sciforge.web-worker.web_search',
+          available: true,
+          status: 'available',
+          endpoint,
+        }],
+      },
+      scenarioPackageRef: { id: 'literature-evidence-review', version: '1.0.0', source: 'built-in' },
+    };
+    const skill = providerTestSkill('2026-05-12T05:10:00.000Z');
+
+    const result = await runGeneratedTaskExecutionLifecycle({
+      workspace,
+      request,
+      skill,
+      generation: {
+        ok: true,
+        runId: 'run-provider-empty',
+        response: {
+          taskFiles: [{
+            path: 'tasks/provider-empty.py',
+            language: 'python',
+            content: [
+              'import sys',
+              'from sciforge_task import load_input, write_payload, invoke_capability, provider_result_is_empty, empty_result_payload',
+              '_, input_path, output_path = sys.argv',
+              'task_input = load_input(input_path)',
+              'result = invoke_capability(task_input, "web_search", {"query": "intentionally narrow query"})',
+              'if provider_result_is_empty(result):',
+              '    write_payload(output_path, empty_result_payload("web_search", "Provider route completed with zero results.", refs=["runtime://capability-provider-route/web_search"]))',
+              'else:',
+              '    write_payload(output_path, {"message": "unexpected non-empty", "confidence": 0.9, "claimType": "observation", "evidenceLevel": "provider", "reasoningTrace": "non-empty", "claims": [], "uiManifest": [], "executionUnits": [], "artifacts": []})',
+            ].join('\n'),
+          }],
+          entrypoint: { language: 'python', path: 'tasks/provider-empty.py' },
+          environmentRequirements: {},
+          validationCommand: '',
+          expectedArtifacts: ['runtime-diagnostic'],
+        },
+      },
+      deps: { repairNeededPayload },
+    });
+
+    assert.equal(result.kind, 'run');
+    if (result.kind !== 'run') return;
+    assert.equal(result.execution.run.exitCode, 0);
+    const output = JSON.parse(await readFile(join(workspace, result.execution.run.outputRef), 'utf8'));
+    assert.match(output.message, /zero results/);
+    assert.equal(output.evidenceLevel, 'provider');
+    assert.equal(output.executionUnits[0]?.status, 'failed-with-reason');
+    assert.equal(output.executionUnits[0]?.failureReason, 'empty-results');
+    assert.ok(output.executionUnits[0]?.recoverActions.some((action: string) => /Refine|broaden/.test(action)));
+    assert.deepEqual(output.claims[0]?.supportingRefs, ['runtime://capability-provider-route/web_search']);
+    assert.equal(output.artifacts[0]?.type, 'runtime-diagnostic');
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  }
+});
+
+test('generated Python task writes failed-with-reason when provider invocation is unavailable', async () => {
+  const server = createServer(async (_request, response) => {
+    response.writeHead(503, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ ok: false, error: { message: 'provider temporarily unavailable' } }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const endpoint = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    const workspace = await mkdtemp(join(tmpdir(), 'sciforge-generated-provider-unavailable-'));
+    const request: GatewayRequest = {
+      workspacePath: workspace,
+      skillDomain: 'literature',
+      prompt: 'search through ready provider and fail closed if unavailable',
+      selectedToolIds: ['web_search'],
+      artifacts: [],
+      uiState: {
+        sessionId: 'session-literature-provider-unavailable',
+        sessionCreatedAt: '2026-05-12T05:20:00.000Z',
+        capabilityProviderAvailability: [{
+          id: 'sciforge.web-worker.web_search',
+          available: true,
+          status: 'available',
+          endpoint,
+        }],
+      },
+      scenarioPackageRef: { id: 'literature-evidence-review', version: '1.0.0', source: 'built-in' },
+    };
+    const skill = providerTestSkill('2026-05-12T05:20:00.000Z');
+
+    const result = await runGeneratedTaskExecutionLifecycle({
+      workspace,
+      request,
+      skill,
+      generation: {
+        ok: true,
+        runId: 'run-provider-unavailable',
+        response: {
+          taskFiles: [{
+            path: 'tasks/provider-unavailable.py',
+            language: 'python',
+            content: [
+              'import sys',
+              'from sciforge_task import load_input, write_payload, invoke_capability, ProviderInvocationError',
+              '_, input_path, output_path = sys.argv',
+              'task_input = load_input(input_path)',
+              'try:',
+              '    invoke_capability(task_input, "web_search", {"query": "provider unavailable"})',
+              'except ProviderInvocationError as error:',
+              '    write_payload(output_path, {',
+              '        "message": str(error),',
+              '        "confidence": 0,',
+              '        "claimType": "runtime-diagnostic",',
+              '        "evidenceLevel": "provider",',
+              '        "reasoningTrace": "ProviderInvocationError via invoke_capability; no direct network fallback.",',
+              '        "claims": [],',
+              '        "uiManifest": [],',
+              '        "executionUnits": [{"id": "provider-call", "tool": "invoke_capability", "status": "failed-with-reason", "failureReason": str(error), "recoverActions": ["Retry the same provider route after health recovers."]}],',
+              '        "artifacts": [{"id": "provider-unavailable", "type": "runtime-diagnostic", "data": {"refs": ["runtime://capability-provider-route/web_search"]}}],',
+              '    })',
+              'else:',
+              '    write_payload(output_path, {"message": "unexpected success", "confidence": 0.9, "claimType": "observation", "evidenceLevel": "provider", "reasoningTrace": "unexpected", "claims": [], "uiManifest": [], "executionUnits": [], "artifacts": []})',
+            ].join('\n'),
+          }],
+          entrypoint: { language: 'python', path: 'tasks/provider-unavailable.py' },
+          environmentRequirements: {},
+          validationCommand: '',
+          expectedArtifacts: ['runtime-diagnostic'],
+        },
+      },
+      deps: { repairNeededPayload },
+    });
+
+    assert.equal(result.kind, 'run');
+    if (result.kind !== 'run') return;
+    assert.equal(result.execution.run.exitCode, 0);
+    const output = JSON.parse(await readFile(join(workspace, result.execution.run.outputRef), 'utf8'));
+    assert.match(output.message, /HTTP 503|provider temporarily unavailable/);
+    assert.equal(output.executionUnits[0]?.tool, 'invoke_capability');
+    assert.equal(output.executionUnits[0]?.status, 'failed-with-reason');
+    assert.match(output.reasoningTrace, /no direct network fallback/);
+    assert.doesNotMatch(JSON.stringify(output), /requests\.get|urllib\.request|socket\.create_connection/);
+    assert.deepEqual(output.artifacts[0]?.data?.refs, ['runtime://capability-provider-route/web_search']);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
   }

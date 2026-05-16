@@ -83,7 +83,7 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         _coerce_list((policy_input_seed.get("session") or {}).get("messages") if isinstance(policy_input_seed.get("session"), dict) else []),
         _plain_list_from_plan(turn_composition, "recentFailures"),
     )
-    if direct_context_decision:
+    if direct_context_decision.get("allowDirectContext") is True:
         response_plan = {
             **response_plan,
             "schemaVersion": response_plan.get("schemaVersion", "sciforge.conversation.response-plan.v1"),
@@ -103,6 +103,14 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
             "reason": "direct-context decision uses existing current refs",
         }
     acceptance_plan = _mapping_from_plan(service_plan, "acceptancePlan")
+    harness_contract = {
+        "executionModePlan": execution_mode_plan,
+        "contextPolicy": context_policy,
+        "capabilityBrief": capability_brief,
+        "handoffPlan": handoff_plan,
+        "latencyPolicy": latency_policy,
+        "directContextDecision": direct_context_decision,
+    }
 
     response = ConversationPolicyResponse(
         requestId=request.requestId,
@@ -114,6 +122,7 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         artifactIndex=artifact_index,
         capabilityBrief=capability_brief,
         directContextDecision=direct_context_decision,
+        harnessContract=harness_contract,
         executionModePlan=execution_mode_plan,
         turnExecutionConstraints=turn_execution_constraints,
         handoffPlan=handoff_plan,
@@ -216,6 +225,8 @@ def _policy_input_seed(request: ConversationPolicyRequest) -> JsonMap:
         "capabilities": _coerce_list(_get(request, "capabilities") or []),
         "limits": _get(request, "limits") or {},
         "workspace": _get(request, "workspace") or {},
+        "policyHints": _get(request, "policyHints") or {},
+        "metadata": _get(request, "metadata") or {},
     }
 
 
@@ -229,10 +240,9 @@ def _direct_context_decision(
     session_messages: list[Any],
     recent_failures: list[Any],
 ) -> JsonMap:
-    if execution_mode_plan.get("executionMode") != "direct-context-answer":
-        return {}
-    if not _direct_context_constraints(turn_execution_constraints):
-        return {}
+    reasons: list[str] = []
+    if execution_mode_plan.get("executionMode") != "direct-context-answer" or not _direct_context_constraints(turn_execution_constraints):
+        reasons.append("execution-not-forbidden")
     used_refs = _unique_strings([
         *(_string_field(ref.get("ref")) for ref in current_references if isinstance(ref, dict)),
         *(_string_field(digest.get("ref")) for digest in current_reference_digests if isinstance(digest, dict)),
@@ -242,8 +252,11 @@ def _direct_context_decision(
         *(_session_message_ref(message) for message in session_messages),
     ])
     if not used_refs:
-        return {}
+        reasons.append("no-prior-context")
+        reasons.append("evidence-missing")
     intent = _direct_context_intent(used_refs, current_references, recent_failures)
+    if reasons:
+        return _negative_direct_context_decision(used_refs, intent, reasons)
     return {
         "schemaVersion": "sciforge.direct-context-decision.v1",
         "decisionRef": f"decision:conversation-policy:{_stable_ref_suffix(used_refs)}",
@@ -253,6 +266,22 @@ def _direct_context_decision(
         "usedRefs": used_refs,
         "sufficiency": "sufficient",
         "allowDirectContext": True,
+    }
+
+
+def _negative_direct_context_decision(used_refs: list[str], intent: str, reasons: list[str]) -> JsonMap:
+    unique_reasons = _unique_strings(reasons)
+    return {
+        "schemaVersion": "sciforge.direct-context-decision.v1",
+        "decisionRef": f"decision:conversation-policy:{_stable_ref_suffix(used_refs or unique_reasons or ['negative'])}",
+        "decisionOwner": "harness-policy",
+        "intent": intent,
+        "requiredTypedContext": _required_typed_context(intent),
+        "usedRefs": used_refs,
+        "sufficiency": "insufficient",
+        "allowDirectContext": False,
+        "reasons": unique_reasons,
+        "blockReason": "; ".join(unique_reasons),
     }
 
 

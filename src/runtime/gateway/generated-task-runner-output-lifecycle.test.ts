@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceTaskRunResult } from '../runtime-types.js';
 import { failedTaskPayload } from './payload-validation.js';
 import { completeGeneratedTaskRunOutputLifecycle } from './generated-task-runner-output-lifecycle.js';
+import { normalizeToolPayloadShape } from './direct-answer-payload.js';
 
 test('pre-output generated task failure preserves session-bundle partial artifact refs', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-generated-partial-'));
@@ -93,6 +94,7 @@ test('pre-output generated task failure preserves session-bundle partial artifac
       failedTaskPayload,
       tryAgentServerRepairAndRerun: async () => undefined,
       validateAndNormalizePayload: async (value: ToolPayload) => value,
+      normalizeToolPayloadShape,
       coerceWorkspaceTaskPayload: () => undefined,
       schemaErrors: () => [],
       firstPayloadFailureReason: () => undefined,
@@ -200,6 +202,7 @@ test('partial PDF retrieval failures keep downloaded full text and metadata inst
         return undefined;
       },
       validateAndNormalizePayload: async (value: ToolPayload) => value,
+      normalizeToolPayloadShape,
       coerceWorkspaceTaskPayload: () => undefined,
       schemaErrors: () => [],
       firstPayloadFailureReason: () => undefined,
@@ -314,6 +317,7 @@ test('unstructured provider 429 payload is external blocked instead of repair-re
         return undefined;
       },
       validateAndNormalizePayload: async (value: ToolPayload) => value,
+      normalizeToolPayloadShape,
       coerceWorkspaceTaskPayload: () => undefined,
       schemaErrors: () => [],
       firstPayloadFailureReason: (value: ToolPayload) => {
@@ -430,6 +434,7 @@ test('failed-with-reason payload is a valid terminal result even when process ex
         return undefined;
       },
       validateAndNormalizePayload: async (value: ToolPayload) => value,
+      normalizeToolPayloadShape,
       coerceWorkspaceTaskPayload: () => undefined,
       schemaErrors: () => [],
       firstPayloadFailureReason: (value: ToolPayload) => {
@@ -447,4 +452,109 @@ test('failed-with-reason payload is a valid terminal result even when process ex
   assert.equal(repairAttempted, false);
   assert.equal(payload.executionUnits[0]?.status, 'failed-with-reason');
   assert.match(JSON.stringify(payload), /provider returned no usable response/);
+});
+
+test('normalizes generated task payload shape before validation even when schema errors are empty', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-generated-shape-normalize-'));
+  const sessionBundleRel = '.sciforge/sessions/2026-05-16_shape-normalize';
+  await mkdir(join(workspace, sessionBundleRel, 'task-results'), { recursive: true });
+  const outputRel = `${sessionBundleRel}/task-results/generated-shape-normalize.json`;
+  await writeFile(join(workspace, outputRel), `${JSON.stringify({
+    message: 'Shape-normalized output.',
+    confidence: 0.81,
+    claimType: 'fact',
+    evidenceLevel: 'runtime',
+    reasoningTrace: [],
+    claims: [],
+    uiManifest: [],
+    executionUnits: [{ id: 'shape-normalize', status: 'done' }],
+    artifacts: [],
+  }, null, 2)}\n`);
+
+  const request = {
+    workspacePath: workspace,
+    skillDomain: 'literature',
+    prompt: 'Return a schema-valid generated payload that still needs shape normalization.',
+    artifacts: [],
+    uiState: {
+      sessionId: 'session-shape-normalize',
+      sessionCreatedAt: '2026-05-16T03:00:00.000Z',
+    },
+  } as GatewayRequest;
+  const skill = {
+    id: 'literature-test',
+    kind: 'builtin',
+    available: true,
+    checkedAt: '2026-05-16T03:00:00.000Z',
+    reason: 'test',
+  } as unknown as SkillAvailability;
+  const run = {
+    spec: {
+      id: 'generated-shape-normalize',
+      language: 'python',
+      entrypoint: 'main',
+      taskRel: `${sessionBundleRel}/tasks/generated-shape-normalize/task.py`,
+    },
+    workspace,
+    command: 'python3',
+    args: [],
+    exitCode: 0,
+    stdout: '',
+    stderr: '',
+    stdoutRef: `${sessionBundleRel}/logs/generated-shape-normalize.stdout.log`,
+    stderrRef: `${sessionBundleRel}/logs/generated-shape-normalize.stderr.log`,
+    outputRef: outputRel,
+    runtimeFingerprint: { language: 'python', command: 'python3' },
+  } as unknown as WorkspaceTaskRunResult;
+
+  let validateSawReasoningTrace: unknown;
+  let normalizeCalls = 0;
+  const payload = await completeGeneratedTaskRunOutputLifecycle({
+    workspace,
+    request,
+    skill,
+    skills: [skill],
+    taskId: 'generated-shape-normalize',
+    generation: {
+      ok: true,
+      runId: 'run-shape-normalize',
+      response: {
+        taskFiles: [],
+        entrypoint: { language: 'python', path: 'tasks/generated-shape-normalize/task.py' },
+        environmentRequirements: {},
+        validationCommand: '',
+        expectedArtifacts: [],
+      },
+    },
+    run,
+    taskRel: run.spec.taskRel,
+    inputRel: `${sessionBundleRel}/task-inputs/generated-shape-normalize.json`,
+    outputRel,
+    stdoutRel: run.stdoutRef,
+    stderrRel: run.stderrRef,
+    supplementArtifactTypes: [],
+    runGeneratedTask: async () => undefined,
+    deps: {
+      attemptPlanRefs: () => ({}),
+      failedTaskPayload,
+      tryAgentServerRepairAndRerun: async () => undefined,
+      validateAndNormalizePayload: async (value: ToolPayload) => {
+        validateSawReasoningTrace = value.reasoningTrace;
+        return value;
+      },
+      normalizeToolPayloadShape: (value: ToolPayload) => {
+        normalizeCalls += 1;
+        return normalizeToolPayloadShape(value);
+      },
+      coerceWorkspaceTaskPayload: (value: unknown) => value as ToolPayload,
+      schemaErrors: () => [],
+      firstPayloadFailureReason: () => undefined,
+      payloadHasFailureStatus: () => false,
+      repairNeededPayload: failedTaskPayload as never,
+    } as never,
+  });
+
+  assert.equal(normalizeCalls, 1);
+  assert.equal(validateSawReasoningTrace, '');
+  assert.equal(typeof payload.reasoningTrace, 'string');
 });

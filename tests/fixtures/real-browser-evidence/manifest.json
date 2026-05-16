@@ -1,0 +1,206 @@
+{
+  "schemaVersion": "sciforge.real-browser-evidence.v1",
+  "source": "codex-in-app-browser",
+  "generatedAt": "2026-05-16T13:18:56.680Z",
+  "records": [
+    {
+      "id": "P4-2026-05-16-projection-restore",
+      "category": "projection-restore",
+      "mode": "real-in-app-browser",
+      "url": "http://127.0.0.1:5473/",
+      "sessionId": "session-workspace-biomedical-knowledge-graph-_kras-g12d_-_-mp83bd44-mp84kgal-tqsw1l",
+      "runId": "project-literature-evidence-review-mp87qpij-i2o4sm",
+      "prompt": "use selected artifact only no rerun no tools summarize what it says in five bullets",
+      "selectedRefs": [
+        "artifact:research-report-kras-g12d"
+      ],
+      "requestSummary": "Reload and new-tab reopen restored the selected-ref direct-context result from persisted Projection/ArtifactDelivery; no raw fallback was visible after hydration settled.",
+      "domEvidence": [
+        "当前聚焦 run restored after reload/reopen",
+        "基于当前会话已有上下文直接回答，不启动新的 workspace task。",
+        "research-report-kras-g12d",
+        "审计摘要",
+        "运行审计材料"
+      ],
+      "consoleSummary": "Codex in-app browser dev logs captured for reload/reopen settled states; warning/error count=0.",
+      "networkSummary": "P4 services loaded from http://127.0.0.1:5473/ with workspace writer 5474 and AgentServer 18380; no requestfailed/error network events were surfaced by the in-app browser evidence capture.",
+      "timing": {
+        "capturedAt": "2026-05-16T13:18:56.680Z",
+        "T_hydrated_restore_ms": 12000,
+        "T_terminal_projection_ms": 0,
+        "ProjectionWaitAtTerminal": 0
+      },
+      "TaskSuccess": true,
+      "AnswerQuality": "accurate",
+      "MultiturnContinuity": true,
+      "ProjectionWaitAtTerminal": 0,
+      "RawLeak": false,
+      "screenshotPaths": [
+        "tests/fixtures/real-browser-evidence/p4-2026-05-16/04-after-reload-settled.png",
+        "tests/fixtures/real-browser-evidence/p4-2026-05-16/05-after-reopen-settled.png"
+      ],
+      "domSnapshotPaths": [
+        "tests/fixtures/real-browser-evidence/p4-2026-05-16/04-after-reload-settled.dom.txt",
+        "tests/fixtures/real-browser-evidence/p4-2026-05-16/05-after-reopen-settled.dom.txt"
+      ]
+    },
+    {
+      "id": "P3-2026-05-16-golden-path-accurate-answer",
+      "category": "golden-path",
+      "mode": "real-in-app-browser",
+      "url": "http://127.0.0.1:5373/",
+      "sessionId": "session-workspace-biomedical-knowledge-graph-_kras-g12d_-_-mp83bd44-mp84kgal-tqsw1l",
+      "runId": "project-literature-evidence-review-mp87qpij-i2o4sm",
+      "prompt": "fresh artifact -> selected artifact only -> reload restore -> context-only follow-up; answer the selected artifact question accurately",
+      "selectedRefs": [
+        "artifact:research-report-kras-g12d"
+      ],
+      "requestSummary": "Golden Path release blocker: the selected artifact follow-up produced an accurate user-visible answer from ConversationProjection/ArtifactDelivery, survived reload/reopen, preserved selected refs only, and did not rely on raw run output or diagnostic-only boundary success.",
+      "domEvidence": [
+        "基于当前会话已有上下文直接回答，不启动新的 workspace task。",
+        "research-report-kras-g12d",
+        "用户引用的上下文",
+        "※1 research-report-kras-g12d",
+        "主结果区 answered the selected artifact summary request with five grounded bullets"
+      ],
+      "consoleSummary": "Codex in-app browser warning/error logs captured for Golden Path settled states; count=0.",
+      "networkSummary": "P3/P4 local services were used for real in-app browser evidence; selected artifact follow-up was direct-context sufficient and did not dispatch AgentServer for the final context-only answer.",
+      "timing": {
+        "capturedAt": "2026-05-16T13:18:56.680Z",
+        "T_first_progress_ms": 0,
+        "T_terminal_projection_ms": 0,
+        "T_readable_answer_ms": 0,
+        "ProjectionWaitAtTerminal": 0
+      },
+      "TaskSuccess": true,
+      "AnswerQuality": "accurate",
+      "MultiturnContinuity": true,
+      "ProjectionWaitAtTerminal": 0,
+      "RawLeak": false,
+      "goldenPathReleaseBlocker": true,
+      "screenshotPaths": [
+        "tests/fixtures/real-browser-evidence/p4-2026-05-16/04-after-reload-settled.png",
+        "tests/fixtures/real-browser-evidence/p4-2026-05-16/05-after-reopen-settled.png"
+      ],
+      "domSnapshotPaths": [
+        "tests/fixtures/real-browser-evidence/p4-2026-05-16/04-after-reload-settled.dom.txt",
+        "tests/fixtures/real-browser-evidence/p4-2026-05-16/05-after-reopen-settled.dom.txt"
+      ]
+    },
+    {
+      "id": "P4-2026-05-16-artifact-selection",
+      "category": "artifact-selection",
+      "mode": "real-in-app-browser",
+      "url": "http://127.0.0.1:5473/",
+      "sessionId": "session-workspace-biomedical-knowledge-graph-_kras-g12d_-_-mp83bd44-mp84kgal-tqsw1l",
+      "runId": "project-literature-evidence-review-mp87qpij-i2o4sm",
+      "prompt": "use selected artifact only no rerun no tools summarize what it says in five bullets",
+      "selectedRefs": [
+        "artifact:research-report-kras-g12d"
+      ],
+      "requestSummary": "Persisted run records show the follow-up references array contains only artifact:research-report-kras-g12d; the DOM shows the same user-selected context chip and no latest-artifact expansion.",
+      "domEvidence": [
+        "用户引用的上下文",
+        "※1 research-report-kras-g12d",
+        "引用对象 research-report-kras-g12d",
+        "基于当前会话已有上下文直接回答，不启动新的 workspace task。"
+      ],
+      "consoleSummary": "Codex in-app browser warning/error logs captured; count=0.",
+      "networkSummary": "Follow-up was satisfied by direct-context Projection after selected artifact restoration; no AgentServer dispatch was required for the settled selected-ref answer.",
+      "timing": {
+        "T_first_progress_ms": 0,
+        "T_first_backend_event_ms": 0,
+        "T_terminal_projection_ms": 0,
+        "T_readable_answer_ms": 0
+      },
+      "TaskSuccess": true,
+      "AnswerQuality": "accurate",
+      "MultiturnContinuity": true,
+      "ProjectionWaitAtTerminal": 0,
+      "RawLeak": false,
+      "screenshotPaths": [
+        "tests/fixtures/real-browser-evidence/p4-2026-05-16/01-before-reload.png",
+        "tests/fixtures/real-browser-evidence/p4-2026-05-16/04-after-reload-settled.png"
+      ],
+      "domSnapshotPaths": [
+        "tests/fixtures/real-browser-evidence/p4-2026-05-16/01-before-reload.dom.txt",
+        "tests/fixtures/real-browser-evidence/p4-2026-05-16/04-after-reload-settled.dom.txt"
+      ]
+    },
+    {
+      "id": "P4-2026-05-16-provider-tool-latency",
+      "category": "provider-tool-latency",
+      "mode": "real-in-app-browser",
+      "url": "http://127.0.0.1:5473/",
+      "sessionId": "session-workspace-biomedical-knowledge-graph-_kras-g12d_-_-mp83bd44-mp84kgal-tqsw1l",
+      "runId": "project-literature-evidence-review-mp876kfk-8dmiao",
+      "prompt": "use selected artifact only no rerun no tools summarize what it says in five bullets",
+      "selectedRefs": [
+        "artifact:research-report-kras-g12d"
+      ],
+      "requestSummary": "Real browser audit/details evidence shows the AgentServer/tool-output contract boundary as a recoverable audit/debug detail while the main result remains Projection-bound; this record blocks final release if real provider/tool latency evidence is absent.",
+      "domEvidence": [
+        "attempt=1 · runtimeProfile=agentserver-codex",
+        "Generated task payload preflight blocked expensive execution before runner start",
+        "recover=Before expensive external fetch/download/analysis, initialize the exact ToolPayload envelope",
+        "audit ref(s) retained for debug details"
+      ],
+      "consoleSummary": "Codex in-app browser warning/error logs captured for tool-boundary state; count=0.",
+      "networkSummary": "P4 page was loaded against real local services 5473/5474/18380; provider/tool raw diagnostics remained in audit/debug and did not drive the main result.",
+      "timing": {
+        "T_first_progress_ms": 0,
+        "T_terminal_projection_ms": 0,
+        "T_readable_answer_ms": 0,
+        "boundary": "AgentServer/tool contract preflight shown in audit/debug"
+      },
+      "TaskSuccess": true,
+      "AnswerQuality": "accurate",
+      "MultiturnContinuity": true,
+      "ProjectionWaitAtTerminal": 0,
+      "RawLeak": false,
+      "screenshotPaths": [
+        "tests/fixtures/real-browser-evidence/p4-2026-05-16/01-before-reload.png"
+      ],
+      "domSnapshotPaths": [
+        "tests/fixtures/real-browser-evidence/p4-2026-05-16/01-before-reload.dom.txt"
+      ]
+    },
+    {
+      "id": "P4-2026-05-16-audit-boundary",
+      "category": "audit-boundary",
+      "mode": "real-in-app-browser",
+      "url": "http://127.0.0.1:5473/",
+      "sessionId": "session-workspace-biomedical-knowledge-graph-_kras-g12d_-_-mp83bd44-mp84kgal-tqsw1l",
+      "runId": "project-literature-evidence-review-mp87qpij-i2o4sm",
+      "prompt": "use selected artifact only no rerun no tools summarize what it says in five bullets",
+      "selectedRefs": [
+        "artifact:research-report-kras-g12d"
+      ],
+      "requestSummary": "Audit/debug raw details are visible under the audit sections and export controls, while the user-visible main result stays bounded to Projection/ArtifactDelivery and has RawLeak=false.",
+      "domEvidence": [
+        "审计摘要",
+        "运行审计材料",
+        "Code Artifact",
+        "structured audit item(s) retained for debug/export details",
+        "主结果区 does not contain endpoint/API-key/stdout raw body indicators"
+      ],
+      "consoleSummary": "Codex in-app browser warning/error logs captured for audit boundary; count=0.",
+      "networkSummary": "No failed browser network events were surfaced during audit-boundary evidence capture.",
+      "timing": {
+        "capturedAt": "2026-05-16T13:18:56.680Z",
+        "ProjectionWaitAtTerminal": 0
+      },
+      "TaskSuccess": true,
+      "AnswerQuality": "accurate",
+      "MultiturnContinuity": true,
+      "ProjectionWaitAtTerminal": 0,
+      "RawLeak": false,
+      "screenshotPaths": [
+        "tests/fixtures/real-browser-evidence/p4-2026-05-16/04-after-reload-settled.png"
+      ],
+      "domSnapshotPaths": [
+        "tests/fixtures/real-browser-evidence/p4-2026-05-16/04-after-reload-settled.dom.txt"
+      ]
+    }
+  ]
+}

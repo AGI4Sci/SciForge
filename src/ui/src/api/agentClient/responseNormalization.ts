@@ -349,12 +349,9 @@ function projectionVisibleAnswer(value: unknown): { status?: string; text: strin
         : undefined;
   const visibleAnswer = isRecord(projection?.visibleAnswer) ? projection.visibleAnswer : undefined;
   const text = asString(visibleAnswer?.text) ?? asString(visibleAnswer?.diagnostic);
-  if (!text || looksLikeRawJson(text) || looksLikeRawFailureText(text)) return undefined;
+  if (!text || looksLikeRawJson(text)) return undefined;
   const status = asString(visibleAnswer?.status);
-  if (!status || ['satisfied', 'degraded-result', 'repair-needed', 'needs-human', 'external-blocked'].includes(status)) {
-    return { status, text: stripVerificationFooter(text) };
-  }
-  return undefined;
+  return { status, text: stripVerificationFooter(text) };
 }
 
 function payloadLikeRecord(value: Record<string, unknown>) {

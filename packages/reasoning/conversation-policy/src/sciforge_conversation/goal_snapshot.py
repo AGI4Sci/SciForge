@@ -3,69 +3,25 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping
 
-
-REPORT_HINTS = re.compile(r"\b(report|memo|summary|summari[sz]e|markdown|md)\b|综述|报告|总结|备忘录", re.I)
-VISUAL_HINTS = re.compile(r"\b(plot|chart|figure|visuali[sz]e|image|diagram)\b|图|可视化|绘图", re.I)
-WORKFLOW_HINTS = re.compile(r"\b(run|execute|workflow|pipeline|notebook|script)\b|复现|运行|执行|流程|分析", re.I)
-REPAIR_ACTION_HINTS = re.compile(r"\b(repair|fix|debug|log|rerun)\b|修复|修正|报错|日志|重跑|排查", re.I)
-FAILURE_REPORT_HINTS = re.compile(r"\b(failed|failure|error)\b|失败", re.I)
-REPAIR_HINTS = re.compile(
-    rf"(?:{REPAIR_ACTION_HINTS.pattern})|(?:{FAILURE_REPORT_HINTS.pattern})",
-    re.I,
-)
-CONTINUE_HINTS = re.compile(
-    r"\b(continue|follow[- ]?up|previous|prior|last round|remember|recall|what did i ask|what was my first)\b"
-    r"|接着|继续|上一轮|刚才|前面|还记得|记得.*(?:一开始|最开始|开始|之前)|一开始.*(?:问题|问|说)|最开始.*(?:问题|问|说)",
-    re.I,
-)
-NEW_TASK_HINTS = re.compile(r"\b(new task|start over|ignore previous|unrelated)\b|另一个任务|新任务|重新开始|不要沿用|别用上一轮", re.I)
-LATEST_HINTS = re.compile(r"\b(latest|current|today|up to date)\b|最新|当前|今天|现在", re.I)
-LOCATION_HINTS = re.compile(r"\b(where is|where are|location|path|file refs?|artifact refs?)\b|文件在哪|文件在哪里|位置|路径", re.I)
-NO_EXECUTION_HINTS = re.compile(
-    r"\b(?:do\s+not|don't|without|no)\s+(?:re-?run|run|execute|dispatch|call|invoke|browse|search|retrieve|fetch|read)\b"
-    r"|不要(?:重跑|运行|执行|调用|派发|检索|搜索|浏览|读取|访问)"
-    r"|不(?:重跑|运行|执行|调用|派发|检索|搜索|浏览)",
-    re.I,
-)
-CONTEXT_ONLY_HINTS = re.compile(
-    r"\b(?:current|existing|provided)\s+(?:context|refs?|references?|digests?|artifacts?)\s+only\b"
-    r"|\b(?:current|existing|provided)\s+[\w -]{0,80}?\s(?:context|refs?|references?|digests?|artifacts?)\s+only\b"
-    r"|\b(?:from|using|based on)\s+(?:current|existing|provided)\s+(?:context|refs?|references?|digests?|artifacts?)\b"
-    r"|\b(?:from|using|based on)\s+(?:current|existing|provided)\s+[\w -]{0,80}?\s(?:context|refs?|references?|digests?|artifacts?)\b"
-    r"|只(?:基于|使用|用)(?:当前|已有|提供的)?(?:上下文|引用|refs?|digest|摘要|产物)",
-    re.I,
-)
-ANSWER_ONLY_TRANSFORM_HINTS = re.compile(
-    r"\b(?:compress|condense|shorten|summari[sz]e|rewrite|rephrase|convert|turn)\b"
-    r".{0,80}\b(?:previous|prior|last|existing|above|answer|conclusion|points?|checklist|bullets?)\b"
-    r"|\b(?:previous|prior|last|existing|above)\b.{0,80}\b(?:answer|conclusion|points?)\b.{0,80}\b(?:checklist|bullets?|summary)\b"
-    r"|(?:压缩|浓缩|改写|重写|总结|归纳|整理).{0,40}(?:上一轮|之前|刚才|已有|答案|结论|要点|清单)",
-    re.I,
-)
-NO_NEW_EXTERNAL_IO_HINTS = re.compile(
-    r"\b(?:no|without|do\s+not|don't)\s+(?:new\s+)?(?:search|browse|fetch|retrieve|web|external)\b"
-    r"|不要(?:新|重新)?(?:搜索|检索|浏览|访问|抓取|外部)"
-    r"|不(?:新|重新)?(?:搜索|检索|浏览|访问|抓取|外部)",
-    re.I,
-)
-NO_CODE_HINTS = re.compile(
-    r"\b(?:no|without|do\s+not|don't)\s+(?:new\s+)?(?:code|coding|script|execution|execute|run)\b"
-    r"|不要(?:新|重新)?(?:代码|编码|脚本|执行|运行)"
-    r"|不(?:新|重新)?(?:代码|编码|脚本|执行|运行)",
-    re.I,
-)
-AGENTSERVER_HINTS = re.compile(r"\bagent\s*server\b|\bagentserver\b|AgentServer", re.I)
-SCOPED_NO_RERUN_HINTS = re.compile(
-    r"\b(?:do\s+not|don't|without|no)\s+re-?run\s+(?:unrelated|irrelevant|unnecessary|unchanged|completed|same|duplicate)\b"
-    r"|不要重跑(?:无关|不相关|不必要|已完成|相同|重复)(?:的)?(?:步骤|任务|工作|部分|路径)?"
-    r"|不要(?:重复|重新)(?:执行|运行)(?:无关|不相关|不必要|已完成|相同|重复)(?:的)?(?:步骤|任务|工作|部分|路径)?",
-    re.I,
-)
-EXECUTION_CONTINUATION_HINTS = re.compile(
-    r"\b(?:continue|complete|finish|repair|fix|resume|use|invoke|call|run|execute)\b"
-    r"|继续|完成|修正|修复|恢复|使用|调用|执行|运行|检索|搜索|fetch|provider\s+route|provider",
-    re.I,
-)
+DEFAULT_INTENT_KEYWORD_MAP: dict[str, list[dict[str, Any]]] = {
+    "report": [{"pattern": r"\b(report|memo|summary|summari[sz]e|markdown|md)\b|综述|报告|总结|备忘录", "weight": 1}],
+    "visual": [{"pattern": r"\b(plot|chart|figure|visuali[sz]e|image|diagram)\b|图|可视化|绘图", "weight": 1}],
+    "workflow": [{"pattern": r"\b(run|execute|workflow|pipeline|notebook|script)\b|复现|运行|执行|流程|分析", "weight": 1}],
+    "repair-action": [{"pattern": r"\b(repair|fix|debug|log|rerun)\b|修复|修正|报错|日志|重跑|排查", "weight": 1}],
+    "failure-report": [{"pattern": r"\b(failed|failure|error)\b|失败", "weight": 1}],
+    "continue": [{"pattern": r"\b(continue|follow[- ]?up|previous|prior|last round|remember|recall|what did i ask|what was my first)\b|接着|继续|上一轮|刚才|前面|还记得|记得.*(?:一开始|最开始|开始|之前)|一开始.*(?:问题|问|说)|最开始.*(?:问题|问|说)", "weight": 1}],
+    "new-task": [{"pattern": r"\b(new task|start over|ignore previous|unrelated)\b|另一个任务|新任务|重新开始|不要沿用|别用上一轮", "weight": 1}],
+    "latest": [{"pattern": r"\b(latest|current|today|up to date)\b|最新|当前|今天|现在", "weight": 1}],
+    "location": [{"pattern": r"\b(where is|where are|location|path|file refs?|artifact refs?)\b|文件在哪|文件在哪里|位置|路径", "weight": 1}],
+    "no-execution": [{"pattern": r"\b(?:do\s+not|don't|without|no)\s+(?:re-?run|run|execute|dispatch|call|invoke|browse|search|retrieve|fetch|read)\b|不要(?:重跑|运行|执行|调用|派发|检索|搜索|浏览|读取|访问)|不(?:重跑|运行|执行|调用|派发|检索|搜索|浏览)", "weight": 1}],
+    "context-only": [{"pattern": r"\b(?:current|existing|provided)\s+(?:context|refs?|references?|digests?|artifacts?)\s+only\b|\b(?:current|existing|provided)\s+[\w -]{0,80}?\s(?:context|refs?|references?|digests?|artifacts?)\s+only\b|\b(?:from|using|based on)\s+(?:current|existing|provided)\s+(?:context|refs?|references?|digests?|artifacts?)\b|\b(?:from|using|based on)\s+(?:current|existing|provided)\s+[\w -]{0,80}?\s(?:context|refs?|references?|digests?|artifacts?)\b|只(?:基于|使用|用)(?:当前|已有|提供的)?(?:上下文|引用|refs?|digest|摘要|产物)", "weight": 1}],
+    "answer-only-transform": [{"pattern": r"\b(?:compress|condense|shorten|summari[sz]e|rewrite|rephrase|convert|turn)\b.{0,80}\b(?:previous|prior|last|existing|above|answer|conclusion|points?|checklist|bullets?)\b|\b(?:previous|prior|last|existing|above)\b.{0,80}\b(?:answer|conclusion|points?)\b.{0,80}\b(?:checklist|bullets?|summary)\b|(?:压缩|浓缩|改写|重写|总结|归纳|整理).{0,40}(?:上一轮|之前|刚才|已有|答案|结论|要点|清单)", "weight": 1}],
+    "no-new-external-io": [{"pattern": r"\b(?:no|without|do\s+not|don't)\s+(?:new\s+)?(?:search|browse|fetch|retrieve|web|external)\b|不要(?:新|重新)?(?:搜索|检索|浏览|访问|抓取|外部)|不(?:新|重新)?(?:搜索|检索|浏览|访问|抓取|外部)", "weight": 1}],
+    "no-code": [{"pattern": r"\b(?:no|without|do\s+not|don't)\s+(?:new\s+)?(?:code|coding|script|execution|execute|run)\b|不要(?:新|重新)?(?:代码|编码|脚本|执行|运行)|不(?:新|重新)?(?:代码|编码|脚本|执行|运行)", "weight": 1}],
+    "agentserver": [{"pattern": r"\bagent\s*server\b|\bagentserver\b|AgentServer", "weight": 1}],
+    "scoped-no-rerun": [{"pattern": r"\b(?:do\s+not|don't|without|no)\s+re-?run\s+(?:unrelated|irrelevant|unnecessary|unchanged|completed|same|duplicate)\b|不要重跑(?:无关|不相关|不必要|已完成|相同|重复)(?:的)?(?:步骤|任务|工作|部分|路径)?|不要(?:重复|重新)(?:执行|运行)(?:无关|不相关|不必要|已完成|相同|重复)(?:的)?(?:步骤|任务|工作|部分|路径)?", "weight": 1}],
+    "execution-continuation": [{"pattern": r"\b(?:continue|complete|finish|repair|fix|resume|use|invoke|call|run|execute)\b|继续|完成|修正|修复|恢复|使用|调用|执行|运行|检索|搜索|fetch|provider\s+route|provider", "weight": 1}],
+}
 
 REF_PATTERN = re.compile(
     r"(?P<ref>"
@@ -85,15 +41,16 @@ def build_goal_snapshot(request: Mapping[str, Any] | Any) -> dict[str, Any]:
     """
 
     prompt = _text(_get(request, "prompt") or _get(request, "rawPrompt") or _get(request, "message"))
+    keywords = _compile_intent_keywords(request)
     turn_id = _text(_get(request, "turnId") or _get(request, "turn_id") or "current-turn")
     provided_refs = _string_list(_get(request, "references") or _get(request, "refs") or [])
     explicit_refs = _dedupe([*provided_refs, *_extract_refs(prompt)])
 
     has_prior_context = _has_prior_context(request)
-    goal_type = _infer_goal_type(prompt, explicit_refs, has_prior_context)
+    goal_type = _infer_goal_type(prompt, explicit_refs, has_prior_context, keywords)
     required_formats = _infer_formats(prompt, goal_type)
     required_artifacts = _infer_artifacts(prompt, goal_type)
-    task_relation = _infer_task_relation(prompt, bool(explicit_refs), has_prior_context)
+    task_relation = _infer_task_relation(prompt, bool(explicit_refs), has_prior_context, keywords)
 
     snapshot: dict[str, Any] = {
         "schemaVersion": "sciforge.conversation.goal-snapshot.v1",
@@ -110,38 +67,38 @@ def build_goal_snapshot(request: Mapping[str, Any] | Any) -> dict[str, Any]:
             "allowHistoryFallback": task_relation in {"continue", "repair"} and not explicit_refs,
             "pollutionGuard": "do-not-answer-from-stale-history-when-current-refs-exist",
         },
-        "uiExpectations": _infer_ui_expectations(prompt),
+        "uiExpectations": _infer_ui_expectations(prompt, keywords),
         "acceptanceCriteria": _acceptance_criteria(prompt, explicit_refs, task_relation),
     }
-    turn_execution_constraints = _turn_execution_constraints(prompt, explicit_refs, request)
+    turn_execution_constraints = _turn_execution_constraints(prompt, explicit_refs, request, keywords)
     if turn_execution_constraints:
         snapshot["turnExecutionConstraints"] = turn_execution_constraints
-    freshness = _infer_freshness(prompt, task_relation)
+    freshness = _infer_freshness(prompt, task_relation, keywords)
     if freshness:
         snapshot["freshness"] = freshness
     return snapshot
 
 
-def _infer_goal_type(prompt: str, refs: list[str], has_prior_context: bool) -> str:
-    if _has_repair_intent(prompt, bool(refs), has_prior_context):
+def _infer_goal_type(prompt: str, refs: list[str], has_prior_context: bool, keywords: Mapping[str, re.Pattern[str]]) -> str:
+    if _has_repair_intent(prompt, bool(refs), has_prior_context, keywords):
         return "repair"
-    if VISUAL_HINTS.search(prompt):
+    if _matches(keywords, "visual", prompt):
         return "visualization"
-    if REPORT_HINTS.search(prompt):
+    if _matches(keywords, "report", prompt):
         return "report"
-    if WORKFLOW_HINTS.search(prompt) or any(ref.lower().endswith((".py", ".ipynb", ".ts", ".tsx", ".js")) for ref in refs):
+    if _matches(keywords, "workflow", prompt) or any(ref.lower().endswith((".py", ".ipynb", ".ts", ".tsx", ".js")) for ref in refs):
         return "workflow"
     return "analysis"
 
 
-def _infer_task_relation(prompt: str, has_explicit_refs: bool, has_prior_context: bool) -> str:
-    if NEW_TASK_HINTS.search(prompt):
+def _infer_task_relation(prompt: str, has_explicit_refs: bool, has_prior_context: bool, keywords: Mapping[str, re.Pattern[str]]) -> str:
+    if _matches(keywords, "new-task", prompt):
         return "new-task"
-    if _has_repair_intent(prompt, has_explicit_refs, has_prior_context):
+    if _has_repair_intent(prompt, has_explicit_refs, has_prior_context, keywords):
         return "repair"
-    if CONTINUE_HINTS.search(prompt):
+    if _matches(keywords, "continue", prompt):
         return "continue"
-    if has_prior_context and LOCATION_HINTS.search(prompt):
+    if has_prior_context and _matches(keywords, "location", prompt):
         return "continue"
     # When there are explicit refs and prior context, the user is scoping to specific
     # artifacts from the current session — treat as continuation with explicit scope.
@@ -154,10 +111,10 @@ def _infer_task_relation(prompt: str, has_explicit_refs: bool, has_prior_context
     return "continue" if has_prior_context else "new-task"
 
 
-def _has_repair_intent(prompt: str, has_explicit_refs: bool, has_prior_context: bool) -> bool:
-    if not REPAIR_ACTION_HINTS.search(prompt):
+def _has_repair_intent(prompt: str, has_explicit_refs: bool, has_prior_context: bool, keywords: Mapping[str, re.Pattern[str]]) -> bool:
+    if not _matches(keywords, "repair-action", prompt):
         return False
-    if has_prior_context or has_explicit_refs or CONTINUE_HINTS.search(prompt):
+    if has_prior_context or has_explicit_refs or _matches(keywords, "continue", prompt):
         return True
     return False
 
@@ -190,9 +147,9 @@ def _infer_artifacts(prompt: str, goal_type: str) -> list[str]:
     return _dedupe(artifacts)
 
 
-def _infer_ui_expectations(prompt: str) -> list[str]:
+def _infer_ui_expectations(prompt: str, keywords: Mapping[str, re.Pattern[str]]) -> list[str]:
     expectations: list[str] = []
-    if VISUAL_HINTS.search(prompt):
+    if _matches(keywords, "visual", prompt):
         expectations.append("render-figure-or-preview")
     if re.search(r"\btable|matrix|csv|tsv\b|表格|矩阵", prompt, re.I):
         expectations.append("render-table")
@@ -214,8 +171,8 @@ def _acceptance_criteria(prompt: str, refs: list[str], task_relation: str) -> li
     return criteria
 
 
-def _infer_freshness(prompt: str, task_relation: str) -> dict[str, str] | None:
-    if LATEST_HINTS.search(prompt):
+def _infer_freshness(prompt: str, task_relation: str, keywords: Mapping[str, re.Pattern[str]]) -> dict[str, str] | None:
+    if _matches(keywords, "latest", prompt):
         return {"kind": "latest"}
     if task_relation == "continue":
         return {"kind": "current-session"}
@@ -224,15 +181,15 @@ def _infer_freshness(prompt: str, task_relation: str) -> dict[str, str] | None:
     return None
 
 
-def _turn_execution_constraints(prompt: str, explicit_refs: list[str], request: Mapping[str, Any] | Any) -> dict[str, Any] | None:
-    no_execution = _has_global_no_execution_directive(prompt)
-    context_only = bool(CONTEXT_ONLY_HINTS.search(prompt))
-    answer_only_transform = _is_answer_only_transform(prompt, request)
+def _turn_execution_constraints(prompt: str, explicit_refs: list[str], request: Mapping[str, Any] | Any, keywords: Mapping[str, re.Pattern[str]]) -> dict[str, Any] | None:
+    no_execution = _has_global_no_execution_directive(prompt, keywords)
+    context_only = _matches(keywords, "context-only", prompt)
+    answer_only_transform = _is_answer_only_transform(prompt, request, keywords)
     if not no_execution and not context_only and not answer_only_transform:
         return None
     forbidden = no_execution or context_only or answer_only_transform
     agentserver_forbidden = forbidden and (
-        AGENTSERVER_HINTS.search(prompt) is not None
+        _matches(keywords, "agentserver", prompt)
         or context_only
         or answer_only_transform
     )
@@ -275,26 +232,26 @@ def _turn_execution_constraints(prompt: str, explicit_refs: list[str], request: 
     }
 
 
-def _has_global_no_execution_directive(prompt: str) -> bool:
-    if not NO_EXECUTION_HINTS.search(prompt):
+def _has_global_no_execution_directive(prompt: str, keywords: Mapping[str, re.Pattern[str]]) -> bool:
+    if not _matches(keywords, "no-execution", prompt):
         return False
-    if SCOPED_NO_RERUN_HINTS.search(prompt) and EXECUTION_CONTINUATION_HINTS.search(prompt):
+    if _matches(keywords, "scoped-no-rerun", prompt) and _matches(keywords, "execution-continuation", prompt):
         return False
     return True
 
 
-def _is_answer_only_transform(prompt: str, request: Mapping[str, Any] | Any) -> bool:
+def _is_answer_only_transform(prompt: str, request: Mapping[str, Any] | Any, keywords: Mapping[str, re.Pattern[str]]) -> bool:
     if not _has_prior_context(request):
         return False
-    if not ANSWER_ONLY_TRANSFORM_HINTS.search(prompt):
+    if not _matches(keywords, "answer-only-transform", prompt):
         return False
     # Transforming the prior answer is direct-context only when the user excludes
     # new IO/code side effects. This keeps fresh/provider/tool work on the normal route.
     return bool(
-        NO_NEW_EXTERNAL_IO_HINTS.search(prompt)
-        or NO_CODE_HINTS.search(prompt)
-        or CONTEXT_ONLY_HINTS.search(prompt)
-        or NO_EXECUTION_HINTS.search(prompt)
+        _matches(keywords, "no-new-external-io", prompt)
+        or _matches(keywords, "no-code", prompt)
+        or _matches(keywords, "context-only", prompt)
+        or _matches(keywords, "no-execution", prompt)
     )
 
 
@@ -305,6 +262,59 @@ def _extract_refs(prompt: str) -> list[str]:
         if ref:
             refs.append(ref)
     return _dedupe(refs)
+
+
+def _compile_intent_keywords(request: Mapping[str, Any] | Any) -> dict[str, re.Pattern[str]]:
+    configured = _intent_keyword_map_from_request(request)
+    source = configured if configured is not None else DEFAULT_INTENT_KEYWORD_MAP
+    compiled: dict[str, re.Pattern[str]] = {}
+    for intent, entries in source.items():
+        patterns = _keyword_patterns(entries)
+        if patterns:
+            compiled[intent] = re.compile("|".join(f"(?:{pattern})" for pattern in patterns), re.I)
+    return compiled
+
+
+def _intent_keyword_map_from_request(request: Mapping[str, Any] | Any) -> Mapping[str, Any] | None:
+    direct = _get(request, "intentKeywordMap")
+    if isinstance(direct, Mapping):
+        return direct
+    profile = _get(request, "profile")
+    if isinstance(profile, Mapping) and isinstance(profile.get("intentKeywordMap"), Mapping):
+        return profile["intentKeywordMap"]
+    policy_hints = _get(request, "policyHints")
+    if isinstance(policy_hints, Mapping) and isinstance(policy_hints.get("intentKeywordMap"), Mapping):
+        return policy_hints["intentKeywordMap"]
+    metadata = _get(request, "metadata")
+    if isinstance(metadata, Mapping) and isinstance(metadata.get("intentKeywordMap"), Mapping):
+        return metadata["intentKeywordMap"]
+    return None
+
+
+def _keyword_patterns(entries: Any) -> list[str]:
+    if isinstance(entries, str):
+        return [entries]
+    if not isinstance(entries, list):
+        return []
+    patterns: list[str] = []
+    for entry in entries:
+        if isinstance(entry, str):
+            patterns.append(entry)
+        elif isinstance(entry, Mapping):
+            pattern = entry.get("pattern")
+            keywords = entry.get("keywords")
+            if isinstance(pattern, str):
+                patterns.append(pattern)
+            elif isinstance(keywords, list):
+                words = [re.escape(str(item)) for item in keywords if str(item).strip()]
+                if words:
+                    patterns.append("|".join(words))
+    return patterns
+
+
+def _matches(keywords: Mapping[str, re.Pattern[str]], intent: str, prompt: str) -> bool:
+    pattern = keywords.get(intent)
+    return bool(pattern and pattern.search(prompt))
 
 
 def _get(value: Mapping[str, Any] | Any, key: str) -> Any:

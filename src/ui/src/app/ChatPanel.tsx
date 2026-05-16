@@ -390,7 +390,7 @@ export function ChatPanel({
     const prompt = promptForComposerSend(inputRef.current, currentPendingReferences);
     if (!prompt) return;
     if (isSending) {
-      handleRunningGuidance(prompt);
+      handleRunningGuidance(prompt, currentPendingReferences);
       return;
     }
     const runtimeIssue = runtimeReadinessIssue(runtimeHealth);
@@ -441,7 +441,7 @@ export function ChatPanel({
   function addPendingReferenceToComposer(reference: SciForgeReference) {
     const next = addComposerReferenceWithMarker({
       input: inputRef.current,
-      pendingReferences,
+      pendingReferences: pendingReferencesRef.current,
       reference,
     });
     setPendingReferences(next.pendingReferences);
@@ -453,7 +453,7 @@ export function ChatPanel({
   function removePendingReference(referenceId: string) {
     const next = removeComposerReference({
       input: inputRef.current,
-      pendingReferences,
+      pendingReferences: pendingReferencesRef.current,
       referenceId,
     });
     setPendingReferences(next.pendingReferences);
@@ -623,7 +623,7 @@ export function ChatPanel({
       const nextGuidance = guidanceResolution.nextGuidance;
       if (nextGuidance) {
         window.setTimeout(() => {
-          void runPrompt(nextGuidance.prompt, activeSessionRef.current, [], nextGuidance);
+          void runPrompt(nextGuidance.prompt, activeSessionRef.current, nextGuidance.references ?? [], nextGuidance);
         }, 80);
       }
     }
@@ -689,7 +689,7 @@ export function ChatPanel({
     });
   }
 
-  function handleRunningGuidance(prompt: string) {
+  function handleRunningGuidance(prompt: string, references: SciForgeReference[] = pendingReferencesRef.current) {
     const now = nowIso();
     recordUIAction(createConcurrencyDecisionUIAction({
       id: makeId('ui-action'),
@@ -700,6 +700,7 @@ export function ChatPanel({
       prompt,
     }));
     const guidance = createGuidanceQueueRecord(prompt, {
+      references,
       receivedAt: now,
       activeRunId,
       reason: '当前 backend run 正在执行，已排队等待 run orchestration 下一轮处理。',
@@ -709,6 +710,8 @@ export function ChatPanel({
     onSessionChange(nextSession);
     onInputChange('');
     inputRef.current = '';
+    setPendingReferences([]);
+    pendingReferencesRef.current = [];
     setComposerExpanded(false);
     const nextQueue = [...guidanceQueueRef.current, guidance];
     guidanceQueueRef.current = nextQueue;

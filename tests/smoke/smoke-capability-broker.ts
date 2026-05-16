@@ -314,6 +314,7 @@ function manifest(options: {
     brief: options.brief,
     routingTags: options.routingTags,
     domains: options.domains,
+    requiredCapabilities: [],
     inputSchema: {
       type: 'object',
       properties: {

@@ -105,6 +105,7 @@ test('SA-WEB-11 restores visible answer, runs, artifact refs, and recover action
   const expectedProjection = fixture.expectedProjection.conversationProjection;
   assert.deepEqual(result.terminalRestore.persistedProjection, expectedProjection);
   assert.deepEqual(result.terminalRestore.visibleAnswer, expectedProjection.visibleAnswer);
+  assert.equal(result.terminalRestore.rawWrapperFailureVisible, false);
   assert.deepEqual(result.terminalRestore.activeRun, expectedProjection.activeRun);
   assert.deepEqual(result.terminalRestore.recoverActions, expectedProjection.recoverActions);
   assert.deepEqual(
@@ -154,6 +155,13 @@ test('SA-WEB-11 rejects reload/reopen evidence that falls back to raw run state 
     }, fixture.expectedProjection, 'recover actions guard'),
     /recover actions/,
   );
+  assert.throws(
+    () => assertReloadReopenProjectionRestore({
+      ...evidence,
+      rawWrapperFailureVisible: true,
+    }, fixture.expectedProjection, 'stale wrapper guard'),
+    /stale raw\/backend wrapper failure/,
+  );
 });
 
 console.log('[ok] SA-WEB-11 reload/reopen session restores terminal UI state only from persisted Projection');
@@ -174,12 +182,22 @@ function withReloadReopenProjection(fixture: WebE2eFixtureWorkspace): WebE2eFixt
       taskOutcomeProjection?: { conversationProjection?: unknown };
     };
     resultPresentation?: { conversationProjection?: unknown };
+    backendWrapper?: unknown;
+    contractValidationFailure?: unknown;
   };
   if (raw.displayIntent) {
     raw.displayIntent.conversationProjection = projection;
     if (raw.displayIntent.taskOutcomeProjection) raw.displayIntent.taskOutcomeProjection.conversationProjection = projection;
   }
   if (raw.resultPresentation) raw.resultPresentation.conversationProjection = projection;
+  raw.backendWrapper = {
+    ok: false,
+    error: 'Stale backend wrapper failure after Projection was already satisfied.',
+  };
+  raw.contractValidationFailure = {
+    failureReason: 'Stale contract validation failure after Projection was already satisfied.',
+    recoverActions: ['Legacy raw repair action leaked after reopen.'],
+  };
   return next;
 }
 
@@ -211,5 +229,6 @@ function projectionRestoreEvidence(
     },
     recoverActions: projection.recoverActions,
     persistedProjection: projection,
+    rawWrapperFailureVisible: false,
   };
 }

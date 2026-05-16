@@ -61,6 +61,8 @@ test('normalizes T098 strategy fields and request enrichment exposes stable uiSt
 test('missing T098 strategy fields fail closed without declaring background completion or cache reuse', () => {
   const response = normalizeConversationPolicyResponse({
     schemaVersion: CONVERSATION_POLICY_RESPONSE_VERSION,
+    goalSnapshot: { mode: 'continue' },
+    contextPolicy: { mode: 'continue' },
     executionModePlan: { executionMode: 'direct-context-answer' },
   });
 
@@ -82,6 +84,8 @@ test('applied Python conversation policy publishes structured turn constraints',
   const turnExecutionConstraints = directContextTurnExecutionConstraints();
   const response = normalizeConversationPolicyResponse({
     schemaVersion: CONVERSATION_POLICY_RESPONSE_VERSION,
+    goalSnapshot: { mode: 'continue' },
+    contextPolicy: { mode: 'continue' },
     executionModePlan: { executionMode: 'direct-context-answer' },
     turnExecutionConstraints,
     latencyPolicy: { blockOnContextCompaction: false },
@@ -110,7 +114,17 @@ test('applied Python conversation policy preserves direct-context decision for g
   };
   const response = normalizeConversationPolicyResponse({
     schemaVersion: CONVERSATION_POLICY_RESPONSE_VERSION,
+    goalSnapshot: { mode: 'continue' },
+    contextPolicy: { mode: 'continue' },
     directContextDecision,
+    harnessContract: {
+      executionModePlan: { executionMode: 'direct-context-answer' },
+      contextPolicy: { mode: 'continue' },
+      capabilityBrief: { selected: [] },
+      handoffPlan: { status: 'ready' },
+      latencyPolicy: { blockOnContextCompaction: false },
+      directContextDecision,
+    },
     executionModePlan: { executionMode: 'direct-context-answer' },
     turnExecutionConstraints: directContextTurnExecutionConstraints(),
     latencyPolicy: { blockOnContextCompaction: false },
@@ -123,6 +137,7 @@ test('applied Python conversation policy preserves direct-context decision for g
   const request = requestWithPolicyResponse(baseRequest(), response);
   const conversationPolicy = request.uiState?.conversationPolicy as ConversationPolicyResponse | undefined;
   assert.deepEqual(conversationPolicy?.directContextDecision, directContextDecision);
+  assert.deepEqual(conversationPolicy?.harnessContract?.directContextDecision, directContextDecision);
 });
 
 test('failed Python conversation policy preserves turn execution constraints fail-closed', async () => {
@@ -198,6 +213,9 @@ test('conversation policy keeps recent execution refs out of current-turn refere
         if (JSON.stringify(request.turn.references).includes('execution-unit:old-run')) process.exit(7);
         process.stdout.write(JSON.stringify({
           schemaVersion: 'sciforge.conversation-policy.response.v1',
+          goalSnapshot: { taskRelation: 'continue' },
+          contextPolicy: { mode: 'continue', historyReuse: { allowed: true } },
+          executionModePlan: { executionMode: 'thin-reproducible-adapter' },
           currentReferences: request.turn.references,
           latencyPolicy: {},
           responsePlan: {},
@@ -241,6 +259,7 @@ test('conversation policy excludes optimistic current user message from prior se
           schemaVersion: 'sciforge.conversation-policy.response.v1',
           goalSnapshot: { taskRelation: 'new-task' },
           contextPolicy: { mode: 'isolate', historyReuse: { allowed: false } },
+          executionModePlan: { executionMode: 'thin-reproducible-adapter' },
           latencyPolicy: {},
           responsePlan: {},
           backgroundPlan: {},
@@ -281,6 +300,7 @@ test('conversation policy keeps real prior messages while dropping only current 
           schemaVersion: 'sciforge.conversation-policy.response.v1',
           goalSnapshot: { taskRelation: 'continue' },
           contextPolicy: { mode: 'continue', historyReuse: { allowed: true } },
+          executionModePlan: { executionMode: 'thin-reproducible-adapter' },
           latencyPolicy: {},
           responsePlan: {},
           backgroundPlan: {},
@@ -299,6 +319,9 @@ test('context envelope and AgentServer prompt carry only clipped policy summarie
   const longRaw = 'RAW_POLICY_SHOULD_NOT_BE_COPIED '.repeat(40);
   const response = normalizeConversationPolicyResponse({
     schemaVersion: CONVERSATION_POLICY_RESPONSE_VERSION,
+    goalSnapshot: { mode: 'continue' },
+    contextPolicy: { mode: 'continue' },
+    executionModePlan: { executionMode: 'thin-reproducible-adapter' },
     latencyPolicy: {
       firstVisibleResponseMs: 3000,
       firstEventWarningMs: 12000,

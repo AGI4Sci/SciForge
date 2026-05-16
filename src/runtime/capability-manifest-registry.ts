@@ -547,6 +547,7 @@ function projectActionProviderManifestToCapabilityManifest(
       ...provider.verifierContract.defaultVerifierTypes.map((type) => `${type}-verification`),
     ]),
     domains: uniqueSortedStrings(provider.domains),
+    requiredCapabilities: [],
     inputSchema: provider.actionSchema.inputShape,
     outputSchema: provider.actionSchema.outputShape,
     sideEffects: actionSideEffects(provider),
@@ -631,6 +632,7 @@ function projectVerifierProviderManifestToCapabilityManifest(
       ...provider.requestContract.requiredFields,
     ]),
     domains: uniqueSortedStrings(provider.domains),
+    requiredCapabilities: [],
     inputSchema: provider.requestContract.shape,
     outputSchema: provider.resultContract.shape,
     sideEffects: ['none'],
@@ -721,6 +723,7 @@ function projectUIComponentManifestToCapabilityManifest(
       ...component.acceptsArtifactTypes,
       ...(component.outputArtifactTypes ?? []),
     ]),
+    requiredCapabilities: [],
     inputSchema: {
       type: 'object',
       required: ['artifactRef'],

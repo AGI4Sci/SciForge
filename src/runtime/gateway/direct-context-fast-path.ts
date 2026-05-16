@@ -34,9 +34,12 @@ export function directContextFastPathPayload(request: GatewayRequest): ToolPaylo
   if (!hasCurrentContextEvidence(context, decision.intent)) return undefined;
   const gate = directContextGate(context, decision);
   if (!gate.allowed) return undefined;
-  const missingExpectedArtifacts = answerOnlyTransformRequested(request.prompt) ? [] : missingExpectedArtifactTypes(request);
+  const transformMode = decision.transformMode && decision.transformMode !== 'none'
+    ? decision.transformMode
+    : answerOnlyTransformRequestedLegacyFallback(request.prompt);
+  const missingExpectedArtifacts = transformMode ? [] : missingExpectedArtifactTypes(request);
   if (missingExpectedArtifacts.length) return missingExpectedArtifactsPayload(request, context, missingExpectedArtifacts, gate);
-  const message = directContextAnswerMessage(request.prompt, context);
+  const message = directContextAnswerMessage(request, context, decision);
   const instance = directContextInstance(request, context);
   const reportId = directContextArtifactId(instance.id);
   const outputRef = directContextOutputRef(instance.id);
@@ -53,7 +56,7 @@ export function directContextFastPathPayload(request: GatewayRequest): ToolPaylo
     },
     claims: [{
       id: `${DIRECT_CONTEXT_FAST_PATH_POLICY.claimId}-${instance.id}`,
-      text: context[0]?.summary ?? DIRECT_CONTEXT_FAST_PATH_POLICY.defaultClaimText,
+      text: directContextClaimText(message, context),
       type: 'fact',
       confidence: 0.74,
       evidenceLevel: DIRECT_CONTEXT_FAST_PATH_POLICY.evidenceLevel,
@@ -209,7 +212,7 @@ interface DirectContextGateDecision {
   allowed: boolean;
   audit: {
     decisionRef?: string;
-    intent: 'context-summary' | 'run-diagnostic' | 'artifact-status' | 'capability-status' | 'fresh-execution' | 'unknown';
+    intent: DirectContextIntent;
     requiredContext: string[];
     usedContextRefs: string[];
     sufficiency: 'sufficient' | 'insufficient';
@@ -218,7 +221,22 @@ interface DirectContextGateDecision {
   };
 }
 
-type DirectContextIntent = DirectContextGateDecision['audit']['intent'];
+type DirectContextIntent =
+  | 'context-summary'
+  | 'context-summary:risk'
+  | 'context-summary:method'
+  | 'context-summary:timeline'
+  | 'run-diagnostic'
+  | 'artifact-status'
+  | 'capability-status'
+  | 'fresh-execution'
+  | 'unknown';
+
+type DirectContextTransformMode =
+  | 'answer-only-compress'
+  | 'answer-only-summary'
+  | 'answer-only-checklist'
+  | 'none';
 
 interface DirectContextDecision {
   decisionRef: string;
@@ -227,6 +245,7 @@ interface DirectContextDecision {
   requiredTypedContext: string[];
   usedRefs: string[];
   allowDirectContext?: boolean;
+  transformMode?: DirectContextTransformMode;
   sufficiency: 'sufficient' | 'insufficient';
   blockReason?: string;
 }
@@ -294,20 +313,8 @@ function directContextGate(
 function directContextDecisionForRequest(request: GatewayRequest): DirectContextDecision | undefined {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   const conversationPolicy = isRecord(uiState.conversationPolicy) ? uiState.conversationPolicy : {};
-  const execution = isRecord(conversationPolicy.executionModePlan) ? conversationPolicy.executionModePlan : {};
-  return firstDirectContextDecision(
-    uiState.directContextDecision,
-    conversationPolicy.directContextDecision,
-    execution.directContextDecision,
-  );
-}
-
-function firstDirectContextDecision(...values: unknown[]): DirectContextDecision | undefined {
-  for (const value of values) {
-    const decision = normalizeDirectContextDecision(value);
-    if (decision) return decision;
-  }
-  return undefined;
+  const harnessContract = isRecord(conversationPolicy.harnessContract) ? conversationPolicy.harnessContract : {};
+  return normalizeDirectContextDecision(harnessContract.directContextDecision);
 }
 
 function normalizeDirectContextDecision(value: unknown): DirectContextDecision | undefined {
@@ -317,6 +324,7 @@ function normalizeDirectContextDecision(value: unknown): DirectContextDecision |
   const intent = normalizeDirectContextIntent(value.intent);
   const requiredTypedContext = toStringList(value.requiredTypedContext);
   const usedRefs = normalizeDirectContextUsedRefs(value.usedRefs);
+  const transformMode = normalizeDirectContextTransformMode(value.transformMode);
   const sufficiency = value.sufficiency === 'sufficient' || value.sufficiency === 'insufficient' ? value.sufficiency : undefined;
   if (!decisionRef || !decisionOwner || !intent || !requiredTypedContext.length || !usedRefs.length || !sufficiency) return undefined;
   return {
@@ -326,6 +334,7 @@ function normalizeDirectContextDecision(value: unknown): DirectContextDecision |
     requiredTypedContext,
     usedRefs,
     allowDirectContext: value.allowDirectContext === false ? false : value.allowDirectContext === true ? true : undefined,
+    transformMode,
     sufficiency,
     blockReason: stringField(value.blockReason),
   };
@@ -349,6 +358,9 @@ function normalizeDirectContextUsedRefs(value: unknown) {
 
 function normalizeDirectContextIntent(value: unknown): DirectContextIntent | undefined {
   if (value === 'context-summary'
+    || value === 'context-summary:risk'
+    || value === 'context-summary:method'
+    || value === 'context-summary:timeline'
     || value === 'run-diagnostic'
     || value === 'artifact-status'
     || value === 'capability-status'
@@ -357,10 +369,18 @@ function normalizeDirectContextIntent(value: unknown): DirectContextIntent | und
   return undefined;
 }
 
+function normalizeDirectContextTransformMode(value: unknown): DirectContextTransformMode | undefined {
+  if (value === 'answer-only-compress'
+    || value === 'answer-only-summary'
+    || value === 'answer-only-checklist'
+    || value === 'none') return value;
+  return undefined;
+}
+
 function requiredContextForDirectIntent(intent: DirectContextIntent) {
   if (intent === 'run-diagnostic') return ['run-trace', 'execution-units', 'failure-evidence'];
   if (intent === 'artifact-status') return ['artifact-index', 'object-references', 'current-refs'];
-  if (intent === 'context-summary') return ['current-session-context'];
+  if (intent.startsWith('context-summary')) return ['current-session-context'];
   if (intent === 'capability-status') return ['capability-registry', 'tool-registry', 'provider-registry'];
   if (intent === 'fresh-execution') return ['backend-routing', 'capability-provider-routes'];
   return ['typed-current-context'];
@@ -416,47 +436,89 @@ function directContextUiManifest(primaryArtifactRef: string, primaryArtifactType
 }
 
 function directContextAnswerMessage(
-  prompt: string,
+  request: GatewayRequest,
   context: ReturnType<typeof buildDirectContextFastPathItems>,
+  decision: DirectContextDecision,
 ) {
-  const transformed = answerOnlyTransformMessage(prompt, context);
+  const prompt = request.prompt;
+  const transformed = answerOnlyTransformMessage(prompt, context, decision.transformMode);
   if (transformed) return transformed;
-  const riskSummary = riskSummaryAnswer(prompt, context);
-  if (riskSummary) return riskSummary;
+  const intentSummary = intentSummaryAnswer(decision.intent, prompt, context);
+  if (intentSummary) return intentSummary;
+  const selectedReferenceSummary = selectedReferenceSummaryMessage(request, context);
+  if (selectedReferenceSummary) return selectedReferenceSummary;
   return directContextFastPathMessage(context);
 }
 
 function answerOnlyTransformMessage(
-  prompt: string,
+  text: string,
   context: ReturnType<typeof buildDirectContextFastPathItems>,
+  transformMode: DirectContextTransformMode | undefined,
 ) {
-  if (!answerOnlyTransformRequested(prompt)) {
+  const requested = transformMode && transformMode !== 'none'
+    ? transformMode
+    : answerOnlyTransformRequestedLegacyFallback(text);
+  if (!requested) {
     return undefined;
   }
-  const snippets = directContextStatements(context).slice(0, /three|3|三/.test(prompt) ? 3 : /two|2|两|二/.test(prompt) ? 2 : 5);
+  const prioritizedContext = [
+    ...context.filter((item) => /claim|finding|answer/i.test(item.kind)),
+    ...context.filter((item) => !/claim|finding|answer/i.test(item.kind)),
+  ];
+  const snippets = directContextStatements(prioritizedContext, { answerOnlyTransform: true })
+    .slice(0, requested === 'answer-only-checklist' || /three|3|三/.test(text) ? 3 : /two|2|两|二/.test(text) ? 2 : 5);
   if (!snippets.length) return undefined;
-  if (/(checklist|bullet|清单|列表)/i.test(prompt)) {
-    const header = /[一-龥]/.test(prompt) ? '基于上一轮可见答案整理为清单：' : 'Checklist from the previous visible answer:';
+  if (requested === 'answer-only-checklist' || /(checklist|bullet|清单|列表)/i.test(text)) {
+    const header = /[一-龥]/.test(text) ? '基于上一轮可见答案整理为清单：' : 'Checklist from the previous visible answer:';
     return [header, ...snippets.map((item) => `- ${item}`)].join('\n');
   }
-  if (/[一-龥]/.test(prompt)) {
+  if (/[一-龥]/.test(text)) {
     return `基于上一轮可见答案直接回答：${snippets.join('；')}。`;
   }
   return `Direct answer from the previous visible answer: ${snippets.join('; ')}.`;
 }
 
-function answerOnlyTransformRequested(prompt: string) {
-  return /(compress|condense|shorten|summari[sz]e|rewrite|rephrase|checklist|bullet|压缩|浓缩|改写|重写|总结|归纳|清单)/i.test(prompt)
-    && /(previous|prior|last|existing|above|answer|conclusion|points?|上一轮|之前|刚才|已有|答案|结论|要点)/i.test(prompt)
-    && !/(rerun|run again|execute|download|生成(?:新的)?(?:报告|表格|图|文件|产物)|下载|执行|运行)/i.test(prompt);
+function answerOnlyTransformRequestedLegacyFallback(text: string): DirectContextTransformMode | undefined {
+  // Legacy baseline fallback for requests that predate the harness L1
+  // classifyDirectContextTransform hook.
+  const matched = /(compress|condense|shorten|summari[sz]e|rewrite|rephrase|checklist|bullet|压缩|浓缩|改写|重写|总结|归纳|清单)/i.test(text)
+    && /(previous|prior|last|existing|above|answer|conclusion|points?|上一轮|之前|刚才|已有|答案|结论|要点)/i.test(text)
+    && !/(rerun|run again|execute|download|生成(?:新的)?(?:报告|表格|图|文件|产物)|下载|执行|运行)/i.test(text);
+  if (!matched) return undefined;
+  if (/(checklist|bullet|清单|列表)/i.test(text)) return 'answer-only-checklist';
+  if (/(compress|condense|shorten|压缩|浓缩)/i.test(text)) return 'answer-only-compress';
+  return 'answer-only-summary';
+}
+
+function selectedReferenceSummaryMessage(
+  request: GatewayRequest,
+  context: ReturnType<typeof buildDirectContextFastPathItems>,
+) {
+  const text = request.prompt;
+  const selectedRefs = selectedReferenceTokens(request);
+  if (!selectedRefs.length) return undefined;
+  const selectedContext = selectedRefs.length
+    ? context.filter((item) => directContextItemMatchesSelectedRef(item, selectedRefs))
+    : context;
+  const answerContext = selectedContext.filter((item) => !/claim|execution-unit|audit|diagnostic/i.test(item.kind));
+  const snippets = directContextStatements(answerContext.length ? answerContext : selectedContext)
+    .slice(0, /three|3|三/.test(text) ? 3 : /two|2|两|二/.test(text) ? 2 : 5);
+  if (!snippets.length) return undefined;
+  const header = /[一-龥]/.test(text)
+    ? '基于当前选中引用整理为要点：'
+    : 'Summary from the selected reference:';
+  return [header, ...snippets.map((item) => `- ${item}`)].join('\n');
 }
 
 function directContextStatements(
   context: ReturnType<typeof buildDirectContextFastPathItems>,
+  options: { answerOnlyTransform?: boolean } = {},
 ) {
   return uniqueStrings(context.flatMap((item) => statementParts(item.summary)))
     .map((part) => part.replace(/^\s*(?:[-*]|\d+[.)])\s*/, '').trim())
-    .filter((part) => part.length > 0 && !/^(fields|refs?|artifact|run|message):/i.test(part));
+    .filter((part) => options.answerOnlyTransform
+      ? isDirectContextAnswerStatement(part)
+      : part.length > 0 && !/^(fields|refs?|artifact|run|message):/i.test(part));
 }
 
 function statementParts(value: string | undefined) {
@@ -472,28 +534,97 @@ function statementParts(value: string | undefined) {
     .slice(0, 8);
 }
 
-function riskSummaryAnswer(
+function isDirectContextAnswerStatement(part: string) {
+  if (!part) return false;
+  if (/^(fields|refs?|artifact|run|message):/i.test(part)) return false;
+  if (/Reference path was not readable inside the workspace|Reference exists but is not a regular file/i.test(part)) return false;
+  if (/selected artifact content was not available|no refs found|no explicit blockers found|no explicit recover actions found/i.test(part)) return false;
+  if (/^record-only$/i.test(part)) return false;
+  if (/^(?:artifact|file|run|execution-unit|agentserver|runtime):/i.test(part)) return false;
+  if (/^(?:\.sciforge|workspace\/|\/Applications\/|[A-Za-z]:[\\/]|~\/)/.test(part)) return false;
+  if (/\.(?:json|md|txt|csv|tsv|log|py|ts|tsx|js|ipynb)(?:\b|$)/i.test(part) && !/\s/.test(part.replace(/[()[\],;:]/g, ''))) return false;
+  return true;
+}
+
+function selectedReferenceTokens(request: GatewayRequest) {
+  return uniqueStrings(recordRows(request.references).flatMap((reference) => {
+    const ref = stringField(reference.ref);
+    const sourceId = stringField(reference.sourceId);
+    const title = stringField(reference.title);
+    const payload = isRecord(reference.payload) ? reference.payload : {};
+    const currentReference = isRecord(payload.currentReference) ? payload.currentReference : {};
+    const objectReference = isRecord(payload.objectReference) ? payload.objectReference : {};
+    return [
+      ref,
+      sourceId,
+      title,
+      stringField(currentReference.ref),
+      stringField(currentReference.id),
+      stringField(currentReference.title),
+      stringField(objectReference.ref),
+      stringField(objectReference.id),
+      stringField(objectReference.title),
+    ].flatMap((value) => value ? selectedReferenceTokenVariants(value) : []);
+  }));
+}
+
+function selectedReferenceTokenVariants(value: string) {
+  const text = value.trim();
+  if (!text) return [];
+  const withoutScheme = text.replace(/^(?:artifact|file|message|claim|execution-unit):/, '');
+  const basename = withoutScheme.split(/[\\/]/).pop() ?? withoutScheme;
+  return uniqueStrings([text, withoutScheme, basename.replace(/\.[a-z0-9]+$/i, '')]);
+}
+
+function directContextItemMatchesSelectedRef(
+  item: ReturnType<typeof buildDirectContextFastPathItems>[number],
+  selectedRefs: string[],
+) {
+  const haystack = [
+    item.ref,
+    item.label,
+  ].filter((value): value is string => Boolean(value)).join('\n').toLowerCase();
+  if (!haystack) return false;
+  return selectedRefs.some((ref) => ref && haystack.includes(ref.toLowerCase()));
+}
+
+function directContextClaimText(
+  message: string,
+  context: ReturnType<typeof buildDirectContextFastPathItems>,
+) {
+  const statement = statementParts(message)
+    .map((part) => part.replace(/^\s*(?:[-*]|\d+[.)])\s*/, '').trim())
+    .find(isDirectContextAnswerStatement);
+  return statement ?? context.find((item) => isDirectContextAnswerStatement(item.summary ?? ''))?.summary ?? DIRECT_CONTEXT_FAST_PATH_POLICY.defaultClaimText;
+}
+
+function intentSummaryAnswer(
+  intent: DirectContextIntent,
   prompt: string,
   context: ReturnType<typeof buildDirectContextFastPathItems>,
 ) {
-  if (!/(risk|risks|风险|隐患|问题)/i.test(prompt)) return undefined;
-  if (!/(summari[sz]e|summary|概括|总结|归纳|一句|一段|paragraph|简短|short)/i.test(prompt)) return undefined;
-  const riskSentences = uniqueStrings(context.flatMap((item) => riskSentencesFromText(item.summary)));
-  if (!riskSentences.length) return undefined;
-  const selected = riskSentences.slice(0, /two|2|两|二/.test(prompt) ? 2 : 3);
+  if (intent !== 'context-summary:risk' && intent !== 'context-summary:method' && intent !== 'context-summary:timeline') return undefined;
+  const sentences = uniqueStrings(context.flatMap((item) => contextSummarySentencesFromText(item.summary, intent)));
+  if (!sentences.length) return undefined;
+  const selected = sentences.slice(0, /two|2|两|二/.test(prompt) ? 2 : 3);
   if (/[一-龥]/.test(prompt)) {
     return `基于当前会话已有上下文直接回答，不启动新的 workspace task。${selected.join('；')}。`;
   }
   return `Answered directly from current-session context without starting a new workspace task. ${selected.join('; ')}.`;
 }
 
-function riskSentencesFromText(value: string | undefined) {
+function contextSummarySentencesFromText(value: string | undefined, intent: DirectContextIntent) {
   if (!value) return [];
+  const pattern = intent === 'context-summary:risk'
+    ? /(risk|风险|隐患|问题|漂移|溢出|不一致|失败|超时|缺失|阻塞)/i
+    : intent === 'context-summary:method'
+      ? /(method|methods|workflow|protocol|approach|procedure|步骤|方法|流程|方案|实验|检索|分析)/i
+      : /(timeline|sequence|history|progress|phase|event|when|时间线|顺序|阶段|进展|事件)/i;
   return value
     .replace(/\s+/g, ' ')
     .split(/(?<=[。.!?；;])\s+|[\n\r]+/)
     .map((part) => part.trim().replace(/^[#*\-\d.\s:：]+/, '').replace(/[。.!?；;]+$/, ''))
-    .filter((part) => /(risk|风险|隐患|问题|漂移|溢出|不一致|失败|超时|缺失|阻塞)/i.test(part))
+    .filter((part) => pattern.test(part))
     .slice(0, 6);
 }
 

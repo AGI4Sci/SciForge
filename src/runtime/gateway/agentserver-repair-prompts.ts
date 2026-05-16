@@ -1,14 +1,11 @@
-import { join } from 'node:path';
 import type { GatewayRequest, SkillAvailability, WorkspaceTaskRunResult } from '../runtime-types.js';
 import { extractAgentServerCurrentUserRequest } from '@sciforge-ui/runtime-contract/agentserver-prompt-policy';
 import { agentServerToolPayloadProtocolContractLines } from '@sciforge-ui/runtime-contract/artifact-policy';
-import { normalizeTurnExecutionConstraints } from '@sciforge-ui/runtime-contract/turn-constraints';
 import { agentServerExternalIoReliabilityContractLines, agentServerRepairPromptPolicyLines, agentServerToolPayloadShapeContract, agentServerWorkspaceTaskRepairPromptPolicyLines } from '../../../packages/skills/runtime-policy';
 import { minimalValidInteractiveToolPayloadExample } from '../../../packages/presentation/interactive-views/runtime-ui-manifest-policy';
 import { expectedArtifactTypesForRequest, selectedComponentIdsForRequest } from './gateway-request.js';
 import { summarizeArtifactRefs, summarizeExecutionRefs, summarizeTaskAttemptsForAgentServer } from './context-envelope.js';
-import { clipForAgentServerPrompt, extractLikelyErrorLine, isRecord, readTextIfExists, toRecordList, toStringList, uniqueStrings } from '../gateway-utils.js';
-import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
+import { clipForAgentServerPrompt, extractLikelyErrorLine, isRecord, toRecordList, toStringList, uniqueStrings } from '../gateway-utils.js';
 import { ignoredLegacyRepairContextPolicyAuditForAgentServer, repairContextPolicySummaryForAgentServer } from './agentserver-repair-context-policy.js';
 import { sanitizePromptHandoffValue } from './agentserver-generation-prompts.js';
 import { summarizeUiStateForAgentServer } from './agentserver-context-summary.js';
@@ -27,12 +24,7 @@ export async function buildCompactRepairContext(params: {
   priorAttempts: unknown[];
 }) {
   const inputRel = `.sciforge/task-inputs/${params.run.spec.id}.json`;
-  const canExpandRepairOutput = bodyExpansionAllowedForRepairContext(params.request);
-  const output = canExpandRepairOutput ? await readTextIfExists(join(params.workspace, params.run.outputRef)) : '';
-  const outputWorkEvidenceSummary = canExpandRepairOutput
-    ? summarizeWorkEvidenceForHandoff(parseJsonIfPossible(output))
-    : undefined;
-  const diagnosticText = repairDiagnosticTextForLikelyError(params.failureReason, params.schemaErrors, outputWorkEvidenceSummary);
+  const diagnosticText = repairDiagnosticTextForLikelyError(params.failureReason, params.schemaErrors, undefined);
   const rawContext = {
     version: 'sciforge.repair-context.v1',
     schemaVersion: 'sciforge.agentserver.repair-context.ref-first.v1',
@@ -68,7 +60,7 @@ export async function buildCompactRepairContext(params: {
       failureReason: clipForAgentServerPrompt(params.failureReason, 4000),
       schemaErrors: params.schemaErrors.slice(0, 16).map((entry) => clipForAgentServerPrompt(entry, 600)).filter(Boolean),
       likelyErrorLine: extractLikelyErrorLine(diagnosticText),
-      workEvidenceSummary: outputWorkEvidenceSummary,
+      workEvidenceSummary: undefined,
     },
     repairMaterials: repairMaterialRefs(params.run, inputRel),
     sessionSummary: summarizeUiStateForAgentServer(params.request.uiState, 'delta'),
@@ -83,18 +75,6 @@ export async function buildCompactRepairContext(params: {
     refFirstRepairContext,
     ignoredLegacyRepairContextPolicyAuditForAgentServer(params.request, rawContext),
   ) ?? refFirstRepairContext;
-}
-
-function bodyExpansionAllowedForRepairContext(request: GatewayRequest) {
-  const uiState = isRecord(request.uiState) ? request.uiState : {};
-  const constraints = normalizeTurnExecutionConstraints(uiState.turnExecutionConstraints);
-  if (!constraints) return true;
-  return !(
-    constraints.agentServerForbidden
-    || constraints.workspaceExecutionForbidden
-    || constraints.codeExecutionForbidden
-    || constraints.externalIoForbidden
-  );
 }
 
 function repairDiagnosticTextForLikelyError(
@@ -355,15 +335,6 @@ function removeUndefinedFields<T extends Record<string, unknown>>(value: T): T {
     if (entry !== undefined) out[key] = entry;
   }
   return out as T;
-}
-
-function parseJsonIfPossible(value: string) {
-  if (!value.trim()) return undefined;
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return undefined;
-  }
 }
 
 export function buildAgentServerRepairPrompt(params: {

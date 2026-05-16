@@ -6,6 +6,7 @@ import { isToolPayload } from './tool-payload-contract.js';
 import { normalizeRuntimeVerificationResultsOrUndefined } from './verification-results.js';
 import {
   directAnswerArtifactNeedsRepair,
+  directAnswerPlainTextResultPolicy,
   directAnswerResultPolicyIds,
   ensureDirectAnswerReportArtifactPolicy,
   normalizeDirectAnswerArtifacts,
@@ -44,6 +45,9 @@ export function toolPayloadFromPlainAgentOutput(text: string, request: GatewayRe
   const nested = extractNestedAgentServerPayloadFromText(text);
   if (nested) return ensureDirectAnswerReportArtifact(nested, request, directAnswerResultPolicyIds.structuredAnswerSource);
   const directTextGuard = classifyPlainAgentText(text);
+  if (directTextGuard.kind === 'human-answer') {
+    return toolPayloadFromPlainHumanAnswer(text, request, directTextGuard);
+  }
   return guardedDirectTextDiagnosticPayload(text, request, directTextGuard);
 }
 
@@ -173,6 +177,80 @@ function guardedDirectTextDiagnosticPayload(
   };
 }
 
+function toolPayloadFromPlainHumanAnswer(
+  text: string,
+  request: GatewayRequest,
+  classification: PlainAgentTextClassification,
+): ToolPayload {
+  const id = sha1(`${classification.kind}:${text}`).slice(0, 10);
+  const trimmed = text.trim();
+  const viewPolicy = directAnswerPlainTextResultPolicy(trimmed, {
+    prompt: request.prompt,
+    skillDomain: request.skillDomain,
+    expectedArtifactTypes: expectedArtifactTypesForRequest(request),
+  });
+  const reportId = `agentserver-direct-answer-${id}`;
+  const reportArtifact = {
+    id: reportId,
+    type: 'research-report',
+    format: 'markdown',
+    title: 'AgentServer direct answer',
+    schemaVersion: '1',
+    metadata: {
+      source: directAnswerResultPolicyIds.directTextTool,
+      classification: classification.kind,
+      reason: classification.reason,
+    },
+    data: {
+      markdown: trimmed,
+    },
+  };
+  const artifacts = viewPolicy.artifacts.length ? viewPolicy.artifacts : [reportArtifact];
+  const uiManifest = viewPolicy.artifacts.length
+    ? viewPolicy.uiManifest
+    : [
+      { componentId: reportViewerComponentId, artifactRef: reportId, title: 'Answer', priority: 1 },
+      { componentId: executionUnitTableComponentId, title: 'Execution', priority: 2 },
+    ];
+  return {
+    message: trimmed,
+    confidence: 0.72,
+    claimType: 'agentserver-direct-answer',
+    evidenceLevel: 'agentserver',
+    reasoningTrace: [
+      'Plain AgentServer text was classified as a user-facing answer.',
+      'SciForge wrapped it in a strict ToolPayload so ConversationProjection remains the user-visible source of truth.',
+      `classification=${classification.kind}`,
+      `reason=${classification.reason}`,
+    ].join('\n'),
+    claims: [{
+      id: `claim-direct-answer-${id}`,
+      text: trimmed.split('\n').map((line) => line.trim()).find(Boolean)?.slice(0, 240) || 'AgentServer completed the request.',
+      type: 'inference',
+      confidence: 0.72,
+      evidenceLevel: 'agentserver',
+      supportingRefs: [],
+      opposingRefs: [],
+    }],
+    uiManifest,
+    executionUnits: [{
+      id: `agentserver-direct-answer-${id}`,
+      status: 'done',
+      tool: directAnswerResultPolicyIds.directTextTool,
+      params: JSON.stringify({ classification: classification.kind, prompt: request.prompt.slice(0, 200) }),
+      hash: sha1(trimmed).slice(0, 16),
+      outputRef: `artifact:${artifacts[0]?.id ?? reportId}`,
+    }],
+    artifacts,
+    displayIntent: {
+      protocolStatus: 'protocol-success',
+      taskOutcome: 'satisfied',
+      status: 'completed',
+      primaryView: 'answer',
+    },
+  };
+}
+
 function mergeExistingContextArtifactsForDirectAnswer(
   payload: ToolPayload,
   request: GatewayRequest,
@@ -217,11 +295,7 @@ function directPayloadReferencesExistingContext(payload: ToolPayload, request: G
     || toRecordList(request.uiState?.recentExecutionRefs).length > 0
     || (Array.isArray(request.uiState?.recentConversation) && request.uiState.recentConversation.length > 1);
   if (!hasRecoverableContext) return false;
-  const policy = isRecord(request.uiState?.contextReusePolicy)
-    ? request.uiState.contextReusePolicy
-    : isRecord(request.uiState?.contextIsolation)
-      ? request.uiState.contextIsolation
-      : undefined;
+  const policy = isRecord(request.uiState?.contextReusePolicy) ? request.uiState.contextReusePolicy : undefined;
   if (policy) {
     const mode = typeof policy.mode === 'string' ? policy.mode : '';
     const historyReuse = isRecord(policy.historyReuse) ? policy.historyReuse : {};
@@ -250,7 +324,7 @@ export function ensureDirectAnswerReportArtifact(payload: ToolPayload, request: 
 
 export function coerceAgentServerToolPayload(value: unknown): ToolPayload | undefined {
   const normalized = normalizeAgentServerToolPayloadCandidate(value);
-  return isToolPayload(normalized) ? normalized : undefined;
+  return isToolPayload(normalized) ? normalizeToolPayloadShape(normalized) : undefined;
 }
 
 export function coerceWorkspaceTaskPayload(value: unknown): ToolPayload | undefined {
@@ -367,6 +441,7 @@ export function normalizeToolPayloadShape(payload: ToolPayload): ToolPayload {
   const artifacts = normalizeWorkspaceTaskArtifacts(payload.artifacts);
   const rawDisplayIntent: unknown = payload.displayIntent;
   const message = String(payload.message || '');
+  const executionUnits = normalizeAgentServerExecutionUnits(payload.executionUnits);
   return {
     ...payload,
     confidence: typeof payload.confidence === 'number' && Number.isFinite(payload.confidence)
@@ -382,13 +457,9 @@ export function normalizeToolPayloadShape(payload: ToolPayload): ToolPayload {
         ? payload.reasoningTrace
         : String(payload.reasoningTrace || ''),
     claims: normalizeAgentServerClaims(payload.claims, message),
-    displayIntent: isRecord(rawDisplayIntent)
-      ? payload.displayIntent
-      : typeof rawDisplayIntent === 'string' && rawDisplayIntent.trim()
-        ? { primaryView: rawDisplayIntent.trim() }
-        : undefined,
+    displayIntent: normalizeDirectAnswerDisplayIntent(rawDisplayIntent, message, executionUnits),
     uiManifest: normalizeDirectAnswerUiManifest(payload.uiManifest, artifacts),
-    executionUnits: normalizeAgentServerExecutionUnits(payload.executionUnits),
+    executionUnits,
     artifacts: normalizeDirectAnswerArtifacts(artifacts, payload.message),
     objectReferences: Array.isArray(payload.objectReferences) ? payload.objectReferences.filter(isRecord) : undefined,
   };
@@ -417,7 +488,7 @@ function normalizeAgentServerToolPayloadCandidate(value: unknown, depth = 0): un
   const uiManifest = normalizeDirectAnswerUiManifest(value.uiManifest, artifacts);
   const executionUnits = normalizeAgentServerExecutionUnits(value.executionUnits);
   const objectReferences = Array.isArray(value.objectReferences) ? value.objectReferences.filter(isRecord) : undefined;
-  const displayIntent = isRecord(value.displayIntent) ? value.displayIntent : undefined;
+  const displayIntent = normalizeDirectAnswerDisplayIntent(value.displayIntent, message, executionUnits);
 
   if (!message || !claims.length || !uiManifest.length) return undefined;
   return {
@@ -435,6 +506,43 @@ function normalizeAgentServerToolPayloadCandidate(value: unknown, depth = 0): un
     verificationResults: normalizeRuntimeVerificationResultsOrUndefined(value.verificationResults ?? value.verificationResult),
     verificationPolicy: isRecord(value.verificationPolicy) ? value.verificationPolicy as unknown as ToolPayload['verificationPolicy'] : undefined,
   };
+}
+
+function defaultDirectAnswerDisplayIntent(
+  message: string | undefined,
+  executionUnits: Array<Record<string, unknown>>,
+): ToolPayload['displayIntent'] | undefined {
+  if (!message?.trim()) return undefined;
+  const hasBlockingUnit = executionUnits.some((unit) => /failed|error|repair|needs-human/i.test(String(unit.status || '')));
+  if (hasBlockingUnit) return undefined;
+  return {
+    protocolStatus: 'protocol-success',
+    taskOutcome: 'satisfied',
+    status: 'completed',
+    primaryView: 'answer',
+  };
+}
+
+function normalizeDirectAnswerDisplayIntent(
+  value: unknown,
+  message: string | undefined,
+  executionUnits: Array<Record<string, unknown>>,
+): ToolPayload['displayIntent'] | undefined {
+  if (typeof value === 'string' && value.trim()) return { primaryView: value.trim() };
+  const defaults = defaultDirectAnswerDisplayIntent(message, executionUnits);
+  if (!isRecord(value)) return defaults;
+  if (directAnswerDisplayIntentIsBlocking(value)) return value;
+  return defaults ? { ...defaults, ...value } : value;
+}
+
+function directAnswerDisplayIntentIsBlocking(value: Record<string, unknown>) {
+  return /needs-work|needs-human|blocked|partial|unverified|failed|error/i.test([
+    value.taskOutcome,
+    value.status,
+    value.answerStatus,
+    value.userGoalStatus,
+    value.protocolStatus,
+  ].map((entry) => String(entry ?? '')).join(' '));
 }
 
 function strictToolPayloadCandidate(value: unknown, depth = 0): ToolPayload | undefined {

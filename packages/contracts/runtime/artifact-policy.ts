@@ -746,6 +746,7 @@ function directContextArtifactSummary(artifact: ArtifactPolicyRecord): string {
 }
 
 function directContextDigestSummary(digest: ArtifactPolicyRecord): string | undefined {
+  const status = String(digest.status || '').toLowerCase();
   const candidates = [
     digest.digestText,
     digest.summary,
@@ -754,7 +755,15 @@ function directContextDigestSummary(digest: ArtifactPolicyRecord): string | unde
     digest.content,
     directContextDigestExcerpts(digest.excerpts),
   ];
-  return candidates.map(stringField).find(Boolean);
+  const summary = candidates.map(stringField).find(Boolean);
+  if (!summary) return undefined;
+  if (
+    ['unresolved', 'unreadable', 'failed'].includes(status)
+    && /Reference path was not readable inside the workspace|Reference exists but is not a regular file/i.test(summary)
+  ) {
+    return undefined;
+  }
+  return summary;
 }
 
 function directContextDigestExcerpts(value: unknown): string | undefined {
@@ -769,10 +778,23 @@ function directContextDigestExcerpts(value: unknown): string | undefined {
 function directContextDataPreview(value: unknown): string | undefined {
   if (typeof value === 'string') return value.slice(0, DIRECT_CONTEXT_FAST_PATH_POLICY.contextLimits.summaryChars);
   if (!isRecord(value)) return undefined;
-  const markdown = stringField(value.markdown) ?? stringField(value.report) ?? stringField(value.text);
+  const markdown = stringField(value.markdown)
+    ?? stringField(value.report)
+    ?? stringField(value.text)
+    ?? directContextStructuredSummary(value);
   if (markdown) return markdown.replace(/\s+/g, ' ').slice(0, DIRECT_CONTEXT_FAST_PATH_POLICY.contextLimits.summaryChars);
   const keys = Object.keys(value).slice(0, 8);
   return keys.length ? `fields: ${keys.join(', ')}` : undefined;
+}
+
+function directContextStructuredSummary(value: Record<string, unknown>) {
+  return uniqueStrings([
+    stringField(value.summary),
+    ...recordRows(value.keyFindings).map((item) => stringField(item.text) ?? stringField(item.summary)).filter((item): item is string => Boolean(item)),
+    ...(Array.isArray(value.keyFindings) ? value.keyFindings.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : []),
+    stringField(value.conclusion),
+    stringField(value.limitations),
+  ]).join('\n');
 }
 
 function dedupeDirectContextFastPathItems(items: DirectContextFastPathItem[]): DirectContextFastPathItem[] {

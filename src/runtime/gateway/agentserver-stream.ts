@@ -72,13 +72,15 @@ export async function readAgentServerRunStream(
       }
       onEvent(event);
       const totalUsage = agentServerEventTotalUsage(event);
-      if (options.maxTotalUsage && totalUsage && totalUsage > options.maxTotalUsage) {
+      if (
+        options.convergenceGuardMode === 'repair-continuation'
+        && options.maxTotalUsage
+        && totalUsage
+        && totalUsage > options.maxTotalUsage
+      ) {
         const message = convergenceGuardMessage(totalUsage, options.maxTotalUsage, options.convergenceGuardMode);
         options.onGuardTrip?.(message);
-        if (options.convergenceGuardMode === 'repair-continuation') {
-          throw new AgentServerRepairContinuationBoundedStopError(message, totalUsage, options.maxTotalUsage);
-        }
-        throw new Error(message);
+        throw new AgentServerRepairContinuationBoundedStopError(message, totalUsage, options.maxTotalUsage);
       }
     }
     if ('result' in envelope) finalResult = envelope.result;

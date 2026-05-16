@@ -201,6 +201,7 @@ export interface HarnessProfile {
   id: HarnessProfileId;
   version: string;
   moduleStack?: string[];
+  intentKeywordMap?: IntentKeywordMap;
   callbacks: HarnessCallback[];
   defaults: HarnessDefaults;
   mergePolicy: HarnessMergePolicy;
@@ -247,9 +248,31 @@ export interface HarnessDecision {
   progress?: Partial<ProgressDecision>;
   presentation?: Partial<PresentationPlan>;
   promptDirectives?: PromptDirective[];
+  directContextDecision?: Partial<DirectContextDecision>;
   blockedRefs?: string[];
   blockedCapabilities?: string[];
   auditNotes?: HarnessAuditNote[];
+}
+
+export interface IntentKeywordMapEntry {
+  keywords?: string[];
+  pattern?: string;
+  language?: string;
+  weight?: number;
+}
+
+export type IntentKeywordMap = Record<string, IntentKeywordMapEntry[]>;
+
+export interface DirectContextDecision {
+  intent?: 'context-summary' | 'context-summary:risk' | 'context-summary:method' | 'context-summary:timeline' | 'run-diagnostic' | 'artifact-status' | 'capability-status' | 'fresh-execution' | 'unknown';
+  transformMode?: 'answer-only-compress' | 'answer-only-summary' | 'answer-only-checklist' | 'none';
+  decisionRef?: string;
+  decisionOwner?: 'agentserver' | 'backend' | 'harness-policy';
+  requiredTypedContext?: string[];
+  usedRefs?: string[];
+  sufficiency?: 'sufficient' | 'insufficient';
+  allowDirectContext?: boolean;
+  blockReason?: string;
 }
 
 export interface HarnessDefaults {
@@ -974,6 +997,7 @@ export interface HarnessContract {
   progressPlan: ProgressPlan;
   presentationPlan: PresentationPlan;
   promptDirectives: PromptDirective[];
+  directContextDecision?: DirectContextDecision;
   traceRef?: string;
 }
 

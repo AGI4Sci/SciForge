@@ -103,7 +103,7 @@ assert.equal(manifest.realBrowserEvidence?.source, 'codex-in-app-browser', 'fina
 assert.equal(manifest.realBrowserEvidence?.releaseBlocker, true, 'real browser evidence must be a release blocker');
 assert.deepEqual(
   manifest.realBrowserEvidence?.requiredCategories,
-  ['projection-restore', 'artifact-selection', 'provider-tool-latency'],
+  ['projection-restore', 'artifact-selection', 'provider-tool-latency', 'golden-path'],
   'final manifest real browser required categories',
 );
 const realBrowserManifestPath = manifest.realBrowserEvidence.manifestPath ?? defaultRealBrowserEvidenceManifestPath;

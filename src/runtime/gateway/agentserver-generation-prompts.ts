@@ -381,21 +381,23 @@ function capabilityFirstPolicyForAgentServer(routeSummary: Record<string, unknow
       '    }',
       '',
       'try:',
-      '    results = invoke_capability(task_input, "web_search", {"query": task_input.get("prompt", ""), "maxResults": 3})',
+      '    capability_id = task_input.get("capabilityFirstPolicy", {}).get("readyCapabilityIds", ["web_search"])[0]',
+      '    provider_input = {"query": task_input.get("prompt", ""), "maxResults": 3}',
+      '    results = invoke_capability(task_input, capability_id, provider_input)',
       '    # For URL reads use invoke_capability(task_input, "web_fetch", {"url": url, "maxChars": 12000}).',
       'except ProviderInvocationError as error:',
       '    write_payload(output_path, failed_with_reason_payload(str(error), task_input))',
       '    raise SystemExit(0)',
       '',
       'if provider_result_is_empty(results):',
-      '    write_payload(output_path, empty_result_payload("web_search", "Provider route completed with zero results; refine or broaden the query and retry."))',
+      '    write_payload(output_path, empty_result_payload(capability_id, "Provider route completed with zero results; refine or broaden the query and retry."))',
       '    raise SystemExit(0)',
       '',
       'write_payload(output_path, success_payload(results, task_input))',
     ].join('\n'),
     taskCodeRules: [
-      'Generated task code must follow canonicalPythonAdapter shape: load task_input, call invoke_capability(task_input, "web_search"|"web_fetch", providerInput), and write_payload.',
-      'Do not generate task code that uses direct network packages or APIs such as requests, urllib, httpx, aiohttp, fetch, or Node http/https for external web retrieval while a matching provider route is ready.',
+      'Generated task code must follow canonicalPythonAdapter shape: load task_input, pick a capability id from capabilityFirstPolicy.readyCapabilityIds, call invoke_capability(task_input, capabilityId, providerInput), and write_payload.',
+      'Do not generate task code that bypasses ready provider routes with bespoke clients; for external web retrieval this specifically forbids direct network packages or APIs such as requests, urllib, httpx, aiohttp, fetch, or Node http/https while a matching provider route is ready.',
       'Generated task code must check provider_result_is_empty(result) and write empty_result_payload(...) as a terminal ToolPayload with recover/refine actions.',
       'If the ready provider returns empty, unauthorized, rate-limited, or unavailable results, write failed-with-reason or repair-needed ToolPayload evidence; do not fall back to direct external network APIs.',
     ],
@@ -406,7 +408,7 @@ function readyProviderFirstCapabilityIds(routes: Array<Record<string, unknown>>)
   return uniqueStrings(routes
     .filter((route) => route.status === 'ready')
     .map((route) => stringField(route.capabilityId))
-    .filter((capabilityId): capabilityId is string => capabilityId === 'web_search' || capabilityId === 'web_fetch'));
+    .filter((capabilityId): capabilityId is string => Boolean(capabilityId)));
 }
 
 function compactHarnessInputAuditForPrompt(value: unknown) {

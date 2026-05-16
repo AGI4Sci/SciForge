@@ -76,11 +76,7 @@ function currentTurnReferencesAreIsolated(request: GatewayRequest) {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   const currentRefs = toRecordList(uiState.currentReferences).length + toRecordList(uiState.currentReferenceDigests).length;
   if (!currentRefs) return false;
-  const policy = isRecord(uiState.contextReusePolicy)
-    ? uiState.contextReusePolicy
-    : isRecord(uiState.contextIsolation)
-      ? uiState.contextIsolation
-      : {};
+  const policy = isRecord(uiState.contextReusePolicy) ? uiState.contextReusePolicy : {};
   const mode = stringField(policy.mode) ?? '';
   const historyReuse = isRecord(policy.historyReuse) ? policy.historyReuse : {};
   return historyReuse.allowed !== true && mode !== 'continue' && mode !== 'repair';
@@ -88,11 +84,7 @@ function currentTurnReferencesAreIsolated(request: GatewayRequest) {
 
 function selectedReferenceScope(request: GatewayRequest) {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
-  const policy = isRecord(uiState.contextReusePolicy)
-    ? uiState.contextReusePolicy
-    : isRecord(uiState.contextIsolation)
-      ? uiState.contextIsolation
-      : {};
+  const policy = isRecord(uiState.contextReusePolicy) ? uiState.contextReusePolicy : {};
   if (policy.selectedRefsOnly !== true) return new Set<string>();
   return new Set([
     ...toRecordList(uiState.currentReferences).map((reference) => stringField(reference.ref)),

@@ -140,6 +140,7 @@ export function createGuidanceQueueRecord(
     prompt,
     status: overrides.status ?? 'queued',
     receivedAt: overrides.receivedAt ?? now,
+    references: overrides.references,
     updatedAt: overrides.updatedAt,
     activeRunId: overrides.activeRunId,
     handlingRunId: overrides.handlingRunId,
@@ -154,6 +155,7 @@ export function appendRunningGuidanceRecord(session: SciForgeSession, guidance: 
     content: `运行中引导：${guidance.prompt}`,
     createdAt: guidance.receivedAt,
     status: 'running',
+    references: guidance.references,
     guidanceQueue: guidance,
   };
   return {
@@ -958,6 +960,7 @@ function compactGuidanceQueueForRequestPayload(guidanceQueue: GuidanceQueueRecor
   return {
     ...guidanceQueue,
     prompt: compactDiagnosticText(guidanceQueue.prompt, 800, 'guidance-queue-prompt') ?? '',
+    references: compactReferencesForRequestPayload(guidanceQueue.references),
     reason: clipOptionalText(guidanceQueue.reason, 500),
   };
 }

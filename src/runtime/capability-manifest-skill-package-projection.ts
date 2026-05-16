@@ -42,6 +42,7 @@ function projectSkillPackageManifestToCapabilityManifest(skill: SkillPackageMani
       ...compactSkillCapabilityRoutingTags(skill.tags),
     ]),
     domains: uniqueSortedStrings([...skill.skillDomains]),
+    requiredCapabilities: uniqueSortedStrings(skill.requiredCapabilities.map((capability) => capability.capability)),
     inputSchema: {
       type: 'object',
       required: ['promptRef'],
@@ -134,6 +135,7 @@ function projectToolPackageManifestToCapabilityManifest(tool: ToolPackageManifes
       ...(tool.sensePlugin?.inputContract.acceptedModalities ?? []),
     ]),
     domains: uniqueSortedStrings([...tool.skillDomains, tool.toolType]),
+    requiredCapabilities: [],
     inputSchema: {
       type: 'object',
       required: ['inputRef'],

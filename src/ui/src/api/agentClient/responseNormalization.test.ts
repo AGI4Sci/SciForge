@@ -133,6 +133,66 @@ test('prefers Projection visible answer over stale backend wrapper failure text'
   assert.equal((projection.visibleAnswer as Record<string, unknown>).text, '已基于当前 artifact 总结两个风险。');
 });
 
+test('keeps satisfied Projection answers that contain DOI URLs or scientific error terms', () => {
+  const response = normalizeAgentResponse('literature-evidence-review', '总结证据', {
+    ok: true,
+    displayIntent: {
+      conversationProjection: {
+        visibleAnswer: {
+          status: 'satisfied',
+          text: 'The selected artifact reports a standard error of 0.12 and cites https://doi.org/10.1000/example as supporting evidence.',
+          artifactRefs: ['artifact:doi-report'],
+        },
+      },
+    },
+    data: {
+      run: {
+        id: 'run-projection-doi-url',
+        status: 'completed',
+        output: {
+          error: 'HTTP 500 stale backend wrapper diagnostic from https://api.example.invalid/private',
+        },
+      },
+    },
+  });
+
+  assert.equal(
+    response.message.content,
+    'The selected artifact reports a standard error of 0.12 and cites https://doi.org/10.1000/example as supporting evidence.',
+  );
+  assert.doesNotMatch(response.message.content, /stale backend wrapper|api\.example/);
+});
+
+test('trusts non-null Projection status values outside the known terminal set', () => {
+  const response = normalizeAgentResponse('literature-evidence-review', '展示状态投影', {
+    ok: true,
+    displayIntent: {
+      conversationProjection: {
+        visibleAnswer: {
+          status: 'satisfied-with-warnings',
+          text: 'Projection status is authoritative even when the UI has not learned this status name yet.',
+        },
+      },
+    },
+    data: {
+      run: {
+        id: 'run-projection-open-status',
+        status: 'failed',
+        output: {
+          error: 'HTTP 500 stale backend diagnostic from https://api.example.invalid/private stdoutRef=.sciforge/logs/stdout.log',
+        },
+      },
+    },
+  });
+
+  assert.equal(
+    response.message.content,
+    'Projection status is authoritative even when the UI has not learned this status name yet.',
+  );
+  assert.equal(response.run.response, response.message.content);
+  assert.doesNotMatch(response.message.content, /HTTP 500|api\.example|stdoutRef/);
+});
+
 test('prefers satisfied Projection over stale ContractValidationFailure diagnostics', () => {
   const response = normalizeAgentResponse('literature-evidence-review', '继续上一轮', {
     ok: true,
@@ -231,6 +291,24 @@ test('summarizes output.error backend failures without leaking endpoint text', (
 
   assert.match(response.message.content, /后端运行未完成：HTTP 403 Forbidden/);
   assert.doesNotMatch(response.message.content, /api\.example|secret-token|https?:\/\//);
+});
+
+test('uses raw failure-text guard only for backend responses without Projection', () => {
+  const response = normalizeAgentResponse('literature-evidence-review', '生成报告', {
+    ok: true,
+    data: {
+      run: {
+        id: 'run-no-projection-raw-failure',
+        status: 'failed',
+        output: {
+          message: 'HTTP 500 Internal Server Error from https://api.example.invalid/private stdoutRef=.sciforge/logs/stdout.log',
+        },
+      },
+    },
+  });
+
+  assert.match(response.message.content, /后端运行未完成：HTTP 500 Internal Server Error/);
+  assert.doesNotMatch(response.message.content, /api\.example|stdoutRef|https?:\/\//);
 });
 
 test('natural failed answers remain visible when they are not raw transport diagnostics', () => {

@@ -174,89 +174,163 @@ import { requestContextRefs } from './gateway/request-context-refs.js';
 configureDirectAnswerArtifactContext(collectArtifactReferenceContext);
 configurePayloadValidationContext(attemptPlanRefs);
 
+export const STAGE_CONVERSATION_POLICY = 'conversation-policy';
+export const STAGE_REQUEST_ENRICHMENT = 'request-enrichment';
+export const STAGE_CAPABILITY_PROVIDER_PREFLIGHT = 'capability-provider-preflight';
+export const STAGE_DIRECT_CONTEXT_FAST_PATH = 'direct-context-fast-path';
+export const STAGE_RUNTIME_EXECUTION_CONSTRAINTS = 'runtime-execution-constraints';
+export const STAGE_VISION_SENSE_RUNTIME = 'vision-sense-runtime';
+export const STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS = 'agentserver-dispatch-constraints';
+export const STAGE_AGENTSERVER_GENERATION = 'agentserver-generation';
+
+export type GatewayPipelineStageName =
+  | typeof STAGE_CONVERSATION_POLICY
+  | typeof STAGE_REQUEST_ENRICHMENT
+  | typeof STAGE_CAPABILITY_PROVIDER_PREFLIGHT
+  | typeof STAGE_DIRECT_CONTEXT_FAST_PATH
+  | typeof STAGE_RUNTIME_EXECUTION_CONSTRAINTS
+  | typeof STAGE_VISION_SENSE_RUNTIME
+  | typeof STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS
+  | typeof STAGE_AGENTSERVER_GENERATION;
+
+type GatewayPipelineStageResult =
+  | { kind: 'continue'; request?: GatewayRequest }
+  | { kind: 'short-circuit'; payload: ToolPayload; request?: GatewayRequest };
+
+interface GatewayPipelineContext {
+  request: GatewayRequest;
+  normalizedRequest: GatewayRequest;
+  policyApplication?: Awaited<ReturnType<typeof applyConversationPolicy>>;
+  telemetry: ReturnType<typeof createLatencyTelemetry>;
+  runtimeReplayRecorder: ReturnType<typeof applyRuntimeReplayRecorder>;
+}
+
+export interface GatewayPipelineStage {
+  name: GatewayPipelineStageName;
+  execute(context: GatewayPipelineContext): Promise<GatewayPipelineStageResult>;
+}
+
+export const GATEWAY_PIPELINE_STAGE_ORDER: GatewayPipelineStageName[] = [
+  STAGE_CONVERSATION_POLICY,
+  STAGE_REQUEST_ENRICHMENT,
+  STAGE_CAPABILITY_PROVIDER_PREFLIGHT,
+  STAGE_DIRECT_CONTEXT_FAST_PATH,
+  STAGE_RUNTIME_EXECUTION_CONSTRAINTS,
+  STAGE_VISION_SENSE_RUNTIME,
+  STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS,
+  STAGE_AGENTSERVER_GENERATION,
+];
+
+export const GATEWAY_PIPELINE_STAGES: GatewayPipelineStage[] = [
+  {
+    name: STAGE_CONVERSATION_POLICY,
+    async execute(context) {
+      emitWorkspaceRuntimeEvent(context.telemetry.callbacks, conversationPolicyStartedEvent());
+      const policyApplication = await applyConversationPolicy(
+        context.request,
+        context.telemetry.callbacks,
+        { workspace: context.request.workspacePath },
+      );
+      context.policyApplication = policyApplication;
+      context.telemetry.markPolicyApplication(policyApplication);
+      return { kind: 'continue', request: policyApplication.request };
+    },
+  },
+  {
+    name: STAGE_REQUEST_ENRICHMENT,
+    async execute(context) {
+      if (!context.policyApplication) {
+        throw new Error('Gateway pipeline request enrichment requires conversation policy stage output.');
+      }
+      return {
+        kind: 'continue',
+        request: await requestWithDiscoveredCapabilityProviders(
+          await requestWithAgentHarnessShadow(context.request, context.telemetry.callbacks, context.policyApplication),
+        ),
+      };
+    },
+  },
+  {
+    name: STAGE_CAPABILITY_PROVIDER_PREFLIGHT,
+    async execute(context) {
+      const payload = capabilityProviderUnavailablePayload(context.request);
+      return payload ? { kind: 'short-circuit', payload } : { kind: 'continue' };
+    },
+  },
+  {
+    name: STAGE_DIRECT_CONTEXT_FAST_PATH,
+    async execute(context) {
+      const payload = directContextFastPathPayload(context.request);
+      if (!payload) return { kind: 'continue' };
+      emitWorkspaceRuntimeEvent(context.telemetry.callbacks, directContextFastPathEvent({
+        claimType: payload.claimType,
+        executionUnitCount: payload.executionUnits.length,
+        artifactCount: payload.artifacts.length,
+      }));
+      return { kind: 'short-circuit', payload };
+    },
+  },
+  {
+    name: STAGE_RUNTIME_EXECUTION_CONSTRAINTS,
+    async execute(context) {
+      const payload = runtimeExecutionForbiddenPayload(context.request);
+      return payload ? { kind: 'short-circuit', payload } : { kind: 'continue' };
+    },
+  },
+  {
+    name: STAGE_VISION_SENSE_RUNTIME,
+    async execute(context) {
+      const payload = await tryRunVisionSenseRuntime(context.request, context.telemetry.callbacks);
+      return payload ? { kind: 'short-circuit', payload } : { kind: 'continue' };
+    },
+  },
+  {
+    name: STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS,
+    async execute(context) {
+      const payload = agentServerDispatchForbiddenPayload(context.request);
+      return payload ? { kind: 'short-circuit', payload } : { kind: 'continue' };
+    },
+  },
+  {
+    name: STAGE_AGENTSERVER_GENERATION,
+    async execute(context) {
+      const skills = await loadSkillRegistry(context.request);
+      const skill = agentServerGenerationSkill(context.request.skillDomain);
+      emitWorkspaceRuntimeEvent(context.telemetry.callbacks, workspaceSkillSelectedEvent({
+        skillId: skill.id,
+        skillDomain: context.request.skillDomain,
+        entrypointType: skill.manifest.entrypoint.type,
+      }));
+      const payload = await runAgentServerGeneratedTask(context.request, skill, skills, context.telemetry.callbacks)
+        ?? repairNeededPayload(context.request, skill, 'AgentServer task generation did not produce a runnable task.');
+      return { kind: 'short-circuit', payload };
+    },
+  },
+];
+
 export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, callbacks: WorkspaceRuntimeCallbacks = {}): Promise<ToolPayload> {
   const normalizedRequest = normalizeGatewayRequestFromModule(body);
   const runtimeReplayRecorder = applyRuntimeReplayRecorder(callbacks, normalizedRequest);
   const telemetry = createLatencyTelemetry(normalizedRequest, runtimeReplayRecorder.callbacks);
   try {
     emitWorkspaceRuntimeEvent(telemetry.callbacks, gatewayRequestReceivedEvent(normalizedRequest.skillDomain));
-    emitWorkspaceRuntimeEvent(telemetry.callbacks, conversationPolicyStartedEvent());
-    const policyApplication = await applyConversationPolicy(normalizedRequest, telemetry.callbacks, { workspace: normalizedRequest.workspacePath });
-    telemetry.markPolicyApplication(policyApplication);
-    const request = await requestWithDiscoveredCapabilityProviders(
-      await requestWithAgentHarnessShadow(policyApplication.request, telemetry.callbacks, policyApplication),
-    );
-    const providerUnavailablePayload = capabilityProviderUnavailablePayload(request);
-    if (providerUnavailablePayload) {
-      telemetry.markVerificationStart();
-      const verified = await recordValidationRepairTelemetryForPayload(
-        await applyRuntimeVerificationPolicy(providerUnavailablePayload, request),
-        request,
-      );
-      telemetry.markVerificationEnd();
-      return finalizeGatewayPayload(telemetry.emitFinal(verified) ?? verified, request, runtimeReplayRecorder, telemetry.callbacks);
+    emitGatewayPipelineRegistryAudit(telemetry.callbacks);
+    const context: GatewayPipelineContext = {
+      request: normalizedRequest,
+      normalizedRequest,
+      telemetry,
+      runtimeReplayRecorder,
+    };
+    for (let index = 0; index < GATEWAY_PIPELINE_STAGES.length; index += 1) {
+      const stage = GATEWAY_PIPELINE_STAGES[index]!;
+      const result = await stage.execute(context);
+      if (result.request) context.request = result.request;
+      emitGatewayPipelineStageAudit(telemetry.callbacks, stage.name, index, result);
+      if (result.kind === 'short-circuit') {
+        return await verifyAndFinalizeGatewayPayload(result.payload, context.request, runtimeReplayRecorder, telemetry);
+      }
     }
-    const directContextPayload = directContextFastPathPayload(request);
-    if (directContextPayload) {
-      emitWorkspaceRuntimeEvent(telemetry.callbacks, directContextFastPathEvent({
-        claimType: directContextPayload.claimType,
-        executionUnitCount: directContextPayload.executionUnits.length,
-        artifactCount: directContextPayload.artifacts.length,
-      }));
-      telemetry.markVerificationStart();
-      const verified = await recordValidationRepairTelemetryForPayload(
-        await applyRuntimeVerificationPolicy(directContextPayload, request),
-        request,
-      );
-      telemetry.markVerificationEnd();
-      return finalizeGatewayPayload(telemetry.emitFinal(verified) ?? verified, request, runtimeReplayRecorder, telemetry.callbacks);
-    }
-    const runtimeForbiddenPayload = runtimeExecutionForbiddenPayload(request);
-    if (runtimeForbiddenPayload) {
-      telemetry.markVerificationStart();
-      const verified = await recordValidationRepairTelemetryForPayload(
-        await applyRuntimeVerificationPolicy(runtimeForbiddenPayload, request),
-        request,
-      );
-      telemetry.markVerificationEnd();
-      return finalizeGatewayPayload(telemetry.emitFinal(verified) ?? verified, request, runtimeReplayRecorder, telemetry.callbacks);
-    }
-    const visionSensePayload = await tryRunVisionSenseRuntime(request, telemetry.callbacks);
-    if (visionSensePayload) {
-      telemetry.markVerificationStart();
-      const verified = await recordValidationRepairTelemetryForPayload(
-        await applyRuntimeVerificationPolicy(visionSensePayload, request),
-        request,
-      );
-      telemetry.markVerificationEnd();
-      return finalizeGatewayPayload(telemetry.emitFinal(verified) ?? verified, request, runtimeReplayRecorder, telemetry.callbacks);
-    }
-    const forbiddenPayload = agentServerDispatchForbiddenPayload(request);
-    if (forbiddenPayload) {
-      telemetry.markVerificationStart();
-      const verified = await recordValidationRepairTelemetryForPayload(
-        await applyRuntimeVerificationPolicy(forbiddenPayload, request),
-        request,
-      );
-      telemetry.markVerificationEnd();
-      return finalizeGatewayPayload(telemetry.emitFinal(verified) ?? verified, request, runtimeReplayRecorder, telemetry.callbacks);
-    }
-    const skills = await loadSkillRegistry(request);
-    const skill = agentServerGenerationSkill(request.skillDomain);
-    emitWorkspaceRuntimeEvent(telemetry.callbacks, workspaceSkillSelectedEvent({
-      skillId: skill.id,
-      skillDomain: request.skillDomain,
-      entrypointType: skill.manifest.entrypoint.type,
-    }));
-    const payload = await runAgentServerGeneratedTask(request, skill, skills, telemetry.callbacks)
-      ?? repairNeededPayload(request, skill, 'AgentServer task generation did not produce a runnable task.');
-    telemetry.markVerificationStart();
-    const verified = await recordValidationRepairTelemetryForPayload(
-      await applyRuntimeVerificationPolicy(payload, request),
-      request,
-    );
-    telemetry.markVerificationEnd();
-    return finalizeGatewayPayload(telemetry.emitFinal(verified) ?? verified, request, runtimeReplayRecorder, telemetry.callbacks);
+    throw new Error('Gateway pipeline completed without producing a payload.');
   } catch (error) {
     telemetry.markFallback(errorMessage(error));
     telemetry.emitFinal();
@@ -264,6 +338,68 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, 
   } finally {
     await runtimeReplayRecorder.flush?.();
   }
+}
+
+async function verifyAndFinalizeGatewayPayload(
+  payload: ToolPayload,
+  request: GatewayRequest,
+  runtimeReplayRecorder: ReturnType<typeof applyRuntimeReplayRecorder>,
+  telemetry: ReturnType<typeof createLatencyTelemetry>,
+) {
+  telemetry.markVerificationStart();
+  const verified = await recordValidationRepairTelemetryForPayload(
+    await applyRuntimeVerificationPolicy(payload, request),
+    request,
+  );
+  telemetry.markVerificationEnd();
+  return finalizeGatewayPayload(telemetry.emitFinal(verified) ?? verified, request, runtimeReplayRecorder, telemetry.callbacks);
+}
+
+function emitGatewayPipelineRegistryAudit(callbacks: WorkspaceRuntimeCallbacks) {
+  emitWorkspaceRuntimeEvent(callbacks, {
+    type: 'gateway-pipeline-registry-audit',
+    status: 'registered',
+    source: 'workspace-runtime-gateway',
+    raw: {
+      schemaVersion: 'sciforge.gateway-pipeline-registry-audit.v1',
+      stageOrder: [...GATEWAY_PIPELINE_STAGE_ORDER],
+      stages: GATEWAY_PIPELINE_STAGES.map((stage, index) => ({ index, name: stage.name })),
+    },
+  });
+}
+
+function emitGatewayPipelineStageAudit(
+  callbacks: WorkspaceRuntimeCallbacks,
+  stageName: GatewayPipelineStageName,
+  index: number,
+  result: GatewayPipelineStageResult,
+) {
+  emitWorkspaceRuntimeEvent(callbacks, {
+    type: 'gateway-pipeline-stage-audit',
+    status: result.kind === 'short-circuit' ? 'short-circuit' : 'continue',
+    source: 'workspace-runtime-gateway',
+    raw: {
+      schemaVersion: 'sciforge.gateway-pipeline-stage-audit.v1',
+      index,
+      stage: stageName,
+      shortCircuit: result.kind === 'short-circuit',
+      payloadSummary: result.kind === 'short-circuit' ? summarizeGatewayPayloadForAudit(result.payload) : undefined,
+    },
+  });
+}
+
+function summarizeGatewayPayloadForAudit(payload: ToolPayload) {
+  return {
+    message: headForAgentServer(payload.message, 160),
+    claimType: payload.claimType,
+    evidenceLevel: payload.evidenceLevel,
+    artifactCount: payload.artifacts.length,
+    executionUnitCount: payload.executionUnits.length,
+    claimCount: payload.claims.length,
+    uiManifestCount: payload.uiManifest.length,
+    artifactIds: payload.artifacts.map((artifact) => typeof artifact.id === 'string' ? artifact.id : undefined).filter(Boolean).slice(0, 6),
+    executionUnitIds: payload.executionUnits.map((unit) => typeof unit.id === 'string' ? unit.id : undefined).filter(Boolean).slice(0, 6),
+  };
 }
 
 function runtimeExecutionForbiddenPayload(request: GatewayRequest): ToolPayload | undefined {
@@ -339,12 +475,7 @@ function policyFailureAllowsStatelessFreshGeneration(
     || isRecord(uiState.workspaceKernelProjection)
     || isRecord(uiState.projectSessionMemoryProjection)) return false;
   const contextReusePolicy = isRecord(uiState.contextReusePolicy) ? uiState.contextReusePolicy : {};
-  const contextIsolation = isRecord(uiState.contextIsolation) ? uiState.contextIsolation : {};
-  const mode = typeof contextReusePolicy.mode === 'string'
-    ? contextReusePolicy.mode
-    : typeof contextIsolation.mode === 'string'
-      ? contextIsolation.mode
-      : 'fresh';
+  const mode = typeof contextReusePolicy.mode === 'string' ? contextReusePolicy.mode : 'fresh';
   if (mode !== 'fresh' && mode !== 'isolate') return false;
   const sessionMessages = toRecordList(uiState.sessionMessages);
   const nonSeedMessages = sessionMessages.filter((message) => {
@@ -359,9 +490,9 @@ function policyFailureAllowsStatelessFreshGeneration(
  * When the Python conversation policy times out or fails, allow the request to proceed
  * (degraded, without policy enrichment) if the UI transport has already classified this
  * as a continuation or repair turn. This prevents fail-closed on policy timeout for
- * continue turns where the transport's contextReusePolicy is a reliable signal.
+ * continue turns where the transport's raw session-state signals show prior work.
  *
- * Only fires when: no explicit turn constraints, AND transport mode is 'continue'/'repair',
+ * Only fires when: no explicit turn constraints, AND transport reports prior work,
  * AND historyReuse.allowed is not explicitly false.
  */
 function policyFailureAllowsTransportContinuation(
@@ -371,15 +502,17 @@ function policyFailureAllowsTransportContinuation(
 ) {
   if (constraints) return false;
   const contextReusePolicy = isRecord(uiState.contextReusePolicy) ? uiState.contextReusePolicy : {};
-  const contextIsolation = isRecord(uiState.contextIsolation) ? uiState.contextIsolation : {};
-  const mode = typeof contextReusePolicy.mode === 'string'
-    ? contextReusePolicy.mode
-    : typeof contextIsolation.mode === 'string'
-      ? contextIsolation.mode
-      : '';
-  if (mode !== 'continue' && mode !== 'repair') return false;
   const historyReuse = isRecord(contextReusePolicy.historyReuse) ? contextReusePolicy.historyReuse : {};
-  return historyReuse.allowed !== false;
+  const priorWorkSignals = isRecord(contextReusePolicy.priorWorkSignals) ? contextReusePolicy.priorWorkSignals : {};
+  const priorCount = numericSignal(priorWorkSignals.nonSeedMessageCount)
+    + numericSignal(priorWorkSignals.runCount)
+    + numericSignal(priorWorkSignals.artifactCount)
+    + numericSignal(priorWorkSignals.executionUnitCount);
+  return historyReuse.allowed !== false && priorCount > 0;
+}
+
+function numericSignal(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
 function agentServerDispatchForbiddenPayload(request: GatewayRequest): ToolPayload | undefined {

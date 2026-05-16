@@ -46,14 +46,45 @@ test('repair context requires a concrete failed run or execution ref', () => {
   assert.equal(requestUsesRepairContext(request), false);
 });
 
-test('failed current execution refs still authorize repair continuation', () => {
+test('stale failed execution refs do not authorize repair from policy keywords alone', () => {
+  const request = {
+    skillDomain: 'literature',
+    prompt: '请复用失败诊断继续，修正生成任务并完成中文证据摘要。',
+    artifacts: [],
+    uiState: {
+      sessionId: 'repair-keywords-with-stale-target',
+      recentExecutionRefs: [{
+        id: 'EU-stale-failed',
+        status: 'failed-with-reason',
+        stderrRef: '.sciforge/task-results/stale.stderr.txt',
+        outputRef: '.sciforge/task-results/stale.json',
+        failureReason: 'stale failure from an older projection',
+      }],
+      conversationPolicy: {
+        goalSnapshot: { taskRelation: 'repair' },
+        executionModePlan: {
+          executionMode: 'repair-or-continue-project',
+          signals: ['repair'],
+        },
+      },
+    },
+  } as GatewayRequest;
+
+  assert.equal(requestUsesRepairContext(request), false);
+});
+
+test('failed current projection refs still authorize repair continuation', () => {
   const request = {
     skillDomain: 'literature',
     prompt: '请复用失败诊断继续，修正生成任务并完成中文证据摘要。',
     artifacts: [],
     uiState: {
       sessionId: 'repair-with-target',
-      contextReusePolicy: { mode: 'repair', historyReuse: { allowed: true } },
+      contextReusePolicy: {
+        mode: 'repair',
+        historyReuse: { allowed: true },
+        priorWorkSignals: { repairTargetAvailable: true },
+      },
       recentExecutionRefs: [{
         id: 'EU-failed',
         status: 'failed-with-reason',
@@ -67,6 +98,33 @@ test('failed current execution refs still authorize repair continuation', () => 
           executionMode: 'repair-or-continue-project',
           signals: ['repair'],
         },
+      },
+    },
+  } as GatewayRequest;
+
+  assert.equal(requestUsesRepairContext(request), true);
+});
+
+test('structured recover action reference authorizes repair continuation without policy text signals', () => {
+  const request = {
+    skillDomain: 'literature',
+    prompt: 'continue from the available action',
+    artifacts: [],
+    references: [{
+      ref: 'recover-action:retry-provider',
+      kind: 'recover-action',
+      source: 'recover-action',
+    }],
+    uiState: {
+      sessionId: 'repair-with-recover-action',
+      recentExecutionRefs: [{
+        id: 'EU-failed',
+        status: 'repair-needed',
+        outputRef: '.sciforge/task-results/failed.json',
+        failureReason: 'schema validation failed',
+      }],
+      conversationPolicy: {
+        goalSnapshot: { taskRelation: 'continue' },
       },
     },
   } as GatewayRequest;

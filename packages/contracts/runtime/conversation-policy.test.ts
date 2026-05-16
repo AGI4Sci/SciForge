@@ -6,6 +6,7 @@ import {
   CONVERSATION_POLICY_RESPONSE_VERSION,
   SAFE_DEFAULT_BACKGROUND_PLAN,
   SAFE_DEFAULT_CACHE_POLICY,
+  SAFE_DEFAULT_LATENCY_POLICY,
   currentUserRequestFromPrompt,
   normalizeConversationPolicyResponse,
   selectedConversationPolicyCapabilityManifests,
@@ -31,6 +32,9 @@ test('conversation policy response normalizer fails closed for missing strategy 
   const response = normalizeConversationPolicyResponse({
     data: {
       schemaVersion: CONVERSATION_POLICY_RESPONSE_VERSION,
+      goalSnapshot: { mode: 'continue' },
+      contextPolicy: { mode: 'continue' },
+      executionModePlan: { executionMode: 'direct-context-answer' },
       currentReferences: [{ ref: 'artifact:paper-list' }, 'not-a-record'],
       directContextDecision: {
         schemaVersion: 'sciforge.direct-context-decision.v1',
@@ -55,14 +59,58 @@ test('conversation policy response normalizer fails closed for missing strategy 
   assert.ok(response);
   assert.deepEqual(response.currentReferences, [{ ref: 'artifact:paper-list' }]);
   assert.equal(response.directContextDecision?.decisionRef, 'decision:policy:refs');
+  assert.equal(response.harnessContract?.directContextDecision?.decisionRef, 'decision:policy:refs');
+  assert.deepEqual(response.harnessContract?.latencyPolicy, SAFE_DEFAULT_LATENCY_POLICY);
   assert.equal(response.turnExecutionConstraints?.agentServerForbidden, true);
   assert.deepEqual(response.backgroundPlan, SAFE_DEFAULT_BACKGROUND_PLAN);
   assert.deepEqual(response.cachePolicy, SAFE_DEFAULT_CACHE_POLICY);
 });
 
+test('conversation policy response normalizer preserves canonical harness contract', () => {
+  const response = normalizeConversationPolicyResponse({
+    schemaVersion: CONVERSATION_POLICY_RESPONSE_VERSION,
+    goalSnapshot: { mode: 'continue' },
+    directContextDecision: { decisionRef: 'decision:transition' },
+    executionModePlan: { executionMode: 'repair-or-continue-project' },
+    contextPolicy: { mode: 'continue' },
+    capabilityBrief: { selected: [] },
+    handoffPlan: { status: 'ready' },
+    latencyPolicy: { blockOnContextCompaction: false },
+    harnessContract: {
+      executionModePlan: { executionMode: 'direct-context-answer' },
+      contextPolicy: { mode: 'continue' },
+      capabilityBrief: { selected: ['runtime.direct-context-answer'] },
+      handoffPlan: { status: 'ready' },
+      latencyPolicy: { blockOnContextCompaction: false },
+      directContextDecision: {
+        decisionRef: 'decision:canonical',
+        decisionOwner: 'harness-policy',
+        intent: 'context-summary',
+        requiredTypedContext: ['current-session-context'],
+        usedRefs: ['artifact:current'],
+        sufficiency: 'sufficient',
+        allowDirectContext: true,
+      },
+    },
+  });
+
+  assert.ok(response);
+  assert.equal(response.directContextDecision?.decisionRef, 'decision:transition');
+  assert.equal(response.harnessContract?.directContextDecision?.decisionRef, 'decision:canonical');
+  assert.equal(response.harnessContract?.executionModePlan?.executionMode, 'direct-context-answer');
+});
+
 test('conversation policy response normalizer rejects unsupported schemas', () => {
   assert.equal(normalizeConversationPolicyResponse({ schemaVersion: 'sciforge.conversation-policy.response.v0' }), undefined);
   assert.equal(normalizeConversationPolicyResponse({}), undefined);
+});
+
+test('conversation policy response normalizer rejects missing typed boundary fields', () => {
+  assert.equal(normalizeConversationPolicyResponse({
+    schemaVersion: CONVERSATION_POLICY_RESPONSE_VERSION,
+    goalSnapshot: { mode: 'continue' },
+    contextPolicy: { mode: 'continue' },
+  }), undefined);
 });
 
 test('conversation policy extracts the current user request from labeled prompt transcripts', () => {

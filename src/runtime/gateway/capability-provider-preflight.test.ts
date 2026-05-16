@@ -23,6 +23,18 @@ test('capability provider preflight blocks web search when provider is not confi
   assert.match(preflight.blockingRoutes[0]?.reason ?? '', /requires config|unknown health|No provider/);
 });
 
+test('capability provider preflight recognizes manifest-declared web search requirements', () => {
+  const preflight = capabilityProviderPreflight({
+    skillDomain: 'literature',
+    prompt: 'Run the selected provider-backed route.',
+    selectedToolIds: ['web_search'],
+    artifacts: [],
+  });
+
+  assert.deepEqual(preflight.requiredCapabilityIds, ['web_search']);
+  assert.equal(preflight.ok, false);
+});
+
 test('AgentServer discovery maps worker tool routes into provider availability', async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;
@@ -243,12 +255,62 @@ test('capability provider preflight detects underscored selected tool names', ()
   assert.equal(result.ok, true);
 });
 
-test('capability provider preflight treats explicit capability ids in prompts as required routes', () => {
+test('capability provider preflight ignores capability ids mentioned only as prose', () => {
   const result = capabilityProviderPreflight({
     skillDomain: 'literature',
-    prompt: 'Require web_search and web_fetch provider routes for this retrieval task.',
+    prompt: 'Say whether web_search and web_fetch provider routes are available; do not run retrieval.',
     artifacts: [],
     uiState: {
+      capabilityProviderAvailability: [
+        {
+          id: 'sciforge.web-worker.web_search',
+          providerId: 'sciforge.web-worker.web_search',
+          capabilityId: 'web_search',
+          available: false,
+          status: 'provider-unavailable',
+          reason: 'provider health check failed',
+        },
+        {
+          id: 'sciforge.web-worker.web_fetch',
+          providerId: 'sciforge.web-worker.web_fetch',
+          capabilityId: 'web_fetch',
+          available: false,
+          status: 'provider-unavailable',
+          reason: 'provider health check failed',
+        },
+      ],
+    },
+  } as GatewayRequest);
+
+  assert.deepEqual(result.requiredCapabilityIds, []);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.blockingRoutes, []);
+});
+
+test('capability provider preflight ignores web_search when it appears only in the user prompt', () => {
+  const result = capabilityProviderPreflight({
+    skillDomain: 'literature',
+    prompt: 'web_search',
+    artifacts: [],
+  } as GatewayRequest);
+
+  assert.deepEqual(result.requiredCapabilityIds, []);
+  assert.equal(result.ok, true);
+});
+
+test('capability provider preflight requires structured capability policy routes', () => {
+  const result = capabilityProviderPreflight({
+    skillDomain: 'literature',
+    prompt: 'Run the selected provider-backed retrieval route.',
+    artifacts: [],
+    uiState: {
+      agentHarness: {
+        contract: {
+          capabilityPolicy: {
+            requiredCapabilityIds: ['web_search', 'web_fetch'],
+          },
+        },
+      },
       capabilityProviderAvailability: [
         {
           id: 'sciforge.web-worker.web_search',

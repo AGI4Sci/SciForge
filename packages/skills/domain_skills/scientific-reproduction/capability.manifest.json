@@ -29,6 +29,7 @@
       "omics",
       "knowledge"
     ],
+    "requiredCapabilities": [],
     "inputSchema": {
       "type": "object",
       "required": [

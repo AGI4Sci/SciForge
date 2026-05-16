@@ -158,6 +158,7 @@ function discoveredPackageManifest(): CapabilityManifest {
     brief: 'Enrich literature metadata with package-provided provider diagnostics.',
     routingTags: ['literature', 'metadata', 'enrich'],
     domains: ['literature', 'research'],
+    requiredCapabilities: ['web_search'],
     inputSchema: { type: 'object', required: ['paperRefs'] },
     outputSchema: { type: 'object', required: ['enrichedPaperRefs'] },
     sideEffects: ['network', 'external-api'],

@@ -233,7 +233,7 @@ test('UI handoff does not synthesize verification policy defaults or pass throug
   assert.equal(bodies[0]?.unverifiedReason, undefined);
   assert.match(String((bodies[0]?.uiState as { silentStreamRunId?: string } | undefined)?.silentStreamRunId), /^session-test:turn-/);
   assert.equal((bodies[0]?.uiState as { currentTurnId?: string } | undefined)?.currentTurnId, undefined);
-  assert.equal((bodies[0]?.uiState as { contextReusePolicy?: { mode?: string; historyReuse?: { allowed?: boolean } } } | undefined)?.contextReusePolicy?.mode, 'fresh');
+  assert.equal((bodies[0]?.uiState as { contextReusePolicy?: { mode?: string; historyReuse?: { allowed?: boolean } } } | undefined)?.contextReusePolicy?.mode, undefined);
   assert.equal((bodies[0]?.uiState as { contextReusePolicy?: { mode?: string; historyReuse?: { allowed?: boolean } } } | undefined)?.contextReusePolicy?.historyReuse?.allowed, false);
 
   await sendSciForgeToolMessage(messageInput({
@@ -481,13 +481,13 @@ test('UI handoff keeps ref-backed artifact bodies and log refs bounded on contin
   assert.doesNotMatch(JSON.stringify(bodies[0]), /inline evidence should not travel again inline evidence should not travel again/);
   const uiState = bodies[0]?.uiState as { recentExecutionRefs?: Array<Record<string, unknown>> } | undefined;
   assert.equal(uiState?.recentExecutionRefs?.[0]?.stdoutRef, '.sciforge/sessions/run/logs/report.stdout.log');
-  assert.equal((uiState as { contextReusePolicy?: { mode?: string; historyReuse?: { allowed?: boolean } } } | undefined)?.contextReusePolicy?.mode, 'continue');
+  assert.equal((uiState as { contextReusePolicy?: { mode?: string; historyReuse?: { allowed?: boolean } } } | undefined)?.contextReusePolicy?.mode, undefined);
   assert.equal((uiState as { contextReusePolicy?: { mode?: string; historyReuse?: { allowed?: boolean } } } | undefined)?.contextReusePolicy?.historyReuse?.allowed, true);
   const referencePolicy = bodies[0]?.referencePolicy as { defaultAction?: string } | undefined;
   assert.match(referencePolicy?.defaultAction ?? '', /stdoutRef\/stderrRef as audit refs/);
 });
 
-test('UI transport does not enter repair mode from prompt keywords alone', async () => {
+test('UI transport does not publish mode from prompt keywords alone', async () => {
   const bodies: Array<Record<string, unknown>> = [];
   globalThis.fetch = (async (_input, init) => {
     bodies.push(JSON.parse(String(init?.body)));
@@ -510,11 +510,111 @@ test('UI transport does not enter repair mode from prompt keywords alone', async
   }), {});
 
   const uiState = bodies[0]?.uiState as { contextReusePolicy?: { mode?: string; priorWorkSignals?: Record<string, unknown> } } | undefined;
-  assert.equal(uiState?.contextReusePolicy?.mode, 'continue');
+  assert.equal(uiState?.contextReusePolicy?.mode, undefined);
   assert.equal(uiState?.contextReusePolicy?.priorWorkSignals?.repairTargetAvailable, false);
 });
 
-test('UI transport enters repair mode from current failure refs without repair keywords', async () => {
+test('UI transport does not publish mode from reference diagnostic wording alone', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_input, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return streamResponse([
+      {
+        result: {
+          message: 'Workspace result ready.',
+          executionUnits: [{ id: 'unit-1', status: 'done' }],
+          artifacts: [],
+        },
+      },
+    ]);
+  }) as typeof fetch;
+
+  await sendSciForgeToolMessage(messageInput(undefined, {
+    prompt: 'summarize the selected diagnostic accuracy artifact',
+    references: [{
+      id: 'ref-diagnostic-title',
+      kind: 'task-result',
+      title: 'Diagnostic accuracy of MRI for progression-free survival',
+      ref: 'artifact:diagnostic-accuracy-report',
+      summary: 'Contains prior failed trial endpoints as scientific content, not a runtime failure.',
+    }],
+    messages: [{ id: 'msg-prior', role: 'scenario', content: 'Prior answer', createdAt: '2026-05-16T00:00:00.000Z' }],
+    runs: [{ id: 'run-prior', scenarioId: 'literature-evidence-review', status: 'completed', prompt: 'prior', response: 'Prior answer', createdAt: '2026-05-16T00:00:00.000Z', completedAt: '2026-05-16T00:00:01.000Z' }],
+  }), {});
+
+  const uiState = bodies[0]?.uiState as { contextReusePolicy?: { mode?: string; priorWorkSignals?: Record<string, unknown>; selectedRefsOnly?: boolean } } | undefined;
+  assert.equal(uiState?.contextReusePolicy?.mode, undefined);
+  assert.equal(uiState?.contextReusePolicy?.priorWorkSignals?.repairTargetAvailable, false);
+  assert.equal(uiState?.contextReusePolicy?.selectedRefsOnly, true);
+});
+
+test('UI transport does not publish mode from reference title or summary keywords alone', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_input, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return streamResponse([
+      {
+        result: {
+          message: 'Workspace result ready.',
+          executionUnits: [{ id: 'unit-1', status: 'done' }],
+          artifacts: [],
+        },
+      },
+    ]);
+  }) as typeof fetch;
+
+  await sendSciForgeToolMessage(messageInput(undefined, {
+    prompt: 'summarize this selected reference without rerunning',
+    messages: [{ id: 'msg-prior', role: 'scenario', content: 'Prior answer', createdAt: '2026-05-16T00:00:00.000Z' }],
+    runs: [{ id: 'run-prior', scenarioId: 'literature-evidence-review', status: 'completed', prompt: 'prior', response: 'Prior answer', createdAt: '2026-05-16T00:00:00.000Z', completedAt: '2026-05-16T00:00:01.000Z' }],
+    references: [{
+      id: 'ref-diagnostic-keyword-only',
+      ref: 'artifact:diagnostic-accuracy-paper',
+      kind: 'task-result',
+      title: 'Diagnostic accuracy of MRI after failed screening',
+      summary: 'Prior satisfied result mentions repair-needed only as quoted literature terminology.',
+    }],
+  }), {});
+
+  const uiState = bodies[0]?.uiState as { contextReusePolicy?: { mode?: string; priorWorkSignals?: Record<string, unknown> } } | undefined;
+  assert.equal(uiState?.contextReusePolicy?.mode, undefined);
+  assert.equal(uiState?.contextReusePolicy?.priorWorkSignals?.repairTargetAvailable, false);
+});
+
+test('UI transport exposes structured recover action signal without publishing mode', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_input, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return streamResponse([
+      {
+        result: {
+          message: 'Workspace result ready.',
+          executionUnits: [{ id: 'unit-1', status: 'done' }],
+          artifacts: [],
+        },
+      },
+    ]);
+  }) as typeof fetch;
+
+  await sendSciForgeToolMessage(messageInput(undefined, {
+    prompt: 'continue using the available action',
+    messages: [{ id: 'msg-prior', role: 'scenario', content: 'Prior answer', createdAt: '2026-05-16T00:00:00.000Z' }],
+    runs: [{ id: 'run-prior', scenarioId: 'literature-evidence-review', status: 'completed', prompt: 'prior', response: 'Prior answer', createdAt: '2026-05-16T00:00:00.000Z', completedAt: '2026-05-16T00:00:01.000Z' }],
+    references: [{
+      id: 'ref-recover-action',
+      ref: 'recover-action:retry-provider',
+      kind: 'task-result',
+      sourceId: 'recover-action',
+      title: 'Retry provider with bounded refs',
+    }],
+  }), {});
+
+  const uiState = bodies[0]?.uiState as { contextReusePolicy?: { mode?: string; priorWorkSignals?: Record<string, unknown> } } | undefined;
+  assert.equal(uiState?.contextReusePolicy?.mode, undefined);
+  assert.equal(uiState?.contextReusePolicy?.priorWorkSignals?.repairTargetAvailable, true);
+});
+
+test('UI transport exposes current failure refs without publishing mode', async () => {
   const bodies: Array<Record<string, unknown>> = [];
   globalThis.fetch = (async (_input, init) => {
     bodies.push(JSON.parse(String(init?.body)));
@@ -546,7 +646,7 @@ test('UI transport enters repair mode from current failure refs without repair k
   }), {});
 
   const uiState = bodies[0]?.uiState as { contextReusePolicy?: { mode?: string; priorWorkSignals?: Record<string, unknown> } } | undefined;
-  assert.equal(uiState?.contextReusePolicy?.mode, 'repair');
+  assert.equal(uiState?.contextReusePolicy?.mode, undefined);
   assert.equal(uiState?.contextReusePolicy?.priorWorkSignals?.repairTargetAvailable, true);
 });
 
@@ -612,14 +712,14 @@ test('request timeout becomes a soft wait after backend progress events', async 
   assert.ok(events.some((event) => event.type === 'backend-timeout-extended'));
 });
 
-test('synthetic backend-silent wait events do not postpone bounded-stall recovery after real backend progress', async () => {
+test('synthetic backend-silent wait events release foreground as background-running after a readable foreground result', async () => {
   let requestSignal: AbortSignal | undefined;
   globalThis.setInterval = ((handler: (...args: unknown[]) => void, timeout?: number, ...args: unknown[]) => {
     return originalSetInterval(handler, timeout === 10_000 ? 10 : timeout, ...args);
   }) as typeof globalThis.setInterval;
   globalThis.fetch = (async (_input, init) => {
     requestSignal = init?.signal as AbortSignal | undefined;
-    return syntheticWaitStallStreamResponse(requestSignal);
+    return syntheticWaitStallStreamResponse(requestSignal, { foregroundReadableResult: true });
   }) as typeof fetch;
 
   const events: AgentStreamEvent[] = [];
@@ -649,21 +749,52 @@ test('synthetic backend-silent wait events do not postpone bounded-stall recover
   assert.equal(requestSignal?.aborted, true);
   assert.ok(events.some((event) => event.type === 'backend-stall-bounded-stop'));
   assert.ok(events.filter((event) => event.type === 'backend-silent' || event.label === 'wait').length >= 2);
-  assert.equal(response.executionUnits[0]?.status, 'repair-needed');
+  assert.equal(response.executionUnits[0]?.status, 'running');
   assert.equal(response.executionUnits[0]?.tool, 'sciforge.runtime.bounded-stop');
 
   const raw = response.run.raw as {
-    displayIntent?: {
-      conversationProjection?: { visibleAnswer?: { status?: string }; activeRun?: { status?: string } };
-      resultPresentation?: { conversationProjection?: { visibleAnswer?: { status?: string } } };
-    };
+    data?: { run?: { raw?: { boundedStallMarkerEvent?: { status?: string } } } };
+    displayIntent?: { status?: string; boundedStallMarkerEvent?: { status?: string } };
   };
-  assert.equal(raw.displayIntent?.conversationProjection?.visibleAnswer?.status, 'repair-needed');
-  assert.equal(raw.displayIntent?.conversationProjection?.activeRun?.status, 'repair-needed');
-  assert.equal(raw.displayIntent?.resultPresentation?.conversationProjection?.visibleAnswer?.status, 'repair-needed');
+  assert.equal(raw.data?.run?.raw?.boundedStallMarkerEvent?.status, 'background-running');
+  assert.equal(raw.displayIntent?.status, 'background-running');
+  assert.equal(raw.displayIntent?.boundedStallMarkerEvent?.status, 'background-running');
 });
 
-function syntheticWaitStallStreamResponse(signal: AbortSignal | undefined) {
+test('bounded-stall without a readable foreground result is not reported as background-running', async () => {
+  let requestSignal: AbortSignal | undefined;
+  globalThis.setInterval = ((handler: (...args: unknown[]) => void, timeout?: number, ...args: unknown[]) => {
+    return originalSetInterval(handler, timeout === 10_000 ? 10 : timeout, ...args);
+  }) as typeof globalThis.setInterval;
+  globalThis.fetch = (async (_input, init) => {
+    requestSignal = init?.signal as AbortSignal | undefined;
+    return syntheticWaitStallStreamResponse(requestSignal, { foregroundReadableResult: false });
+  }) as typeof fetch;
+
+  const events: AgentStreamEvent[] = [];
+  const response = await sendSciForgeToolMessage(messageInput(), {
+    onEvent: (event) => events.push(event),
+  });
+
+  assert.equal(requestSignal?.aborted, true);
+  assert.ok(events.some((event) => event.type === 'backend-stall-bounded-stop'));
+  assert.equal(response.executionUnits[0]?.status, 'failed-with-reason');
+  assert.equal(response.executionUnits[0]?.tool, 'sciforge.runtime.bounded-stop');
+  assert.match(response.message.content, /没有 first-readable-result\/foreground partial ref/);
+
+  const raw = response.run.raw as {
+    data?: { run?: { raw?: { boundedStallMarkerEvent?: { status?: string } } } };
+    displayIntent?: { status?: string; boundedStallMarkerEvent?: { status?: string } };
+  };
+  assert.equal(raw.data?.run?.raw?.boundedStallMarkerEvent?.status, 'failed-with-reason');
+  assert.equal(raw.displayIntent?.status, 'failed-with-reason');
+  assert.equal(raw.displayIntent?.boundedStallMarkerEvent?.status, 'failed-with-reason');
+});
+
+function syntheticWaitStallStreamResponse(
+  signal: AbortSignal | undefined,
+  options: { foregroundReadableResult: boolean },
+) {
   const encoder = new TextEncoder();
   return new Response(new ReadableStream({
     async start(controller) {
@@ -682,6 +813,17 @@ function syntheticWaitStallStreamResponse(signal: AbortSignal | undefined) {
             },
           },
         })}\n`));
+        if (options.foregroundReadableResult) {
+          controller.enqueue(encoder.encode(`${JSON.stringify({
+            event: {
+              type: 'first-readable-result',
+              detail: 'Partial answer is visible while backend continues.',
+              readableRef: 'artifact:partial-answer',
+              refs: ['artifact:partial-answer'],
+              qualitySignals: { userVisible: true, partialResult: true },
+            },
+          })}\n`));
+        }
         for (let index = 0; index < 25 && !signal?.aborted; index += 1) {
           await new Promise((resolve) => setTimeout(resolve, 40));
           if (signal?.aborted) break;

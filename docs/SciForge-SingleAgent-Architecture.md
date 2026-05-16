@@ -38,7 +38,7 @@ Capability 不能只作为后置校验或诊断摘要出现。凡是 Capability 
 
 以后加入任意新 tool、observe、action、verifier 或 runtime adapter，至少必须补齐同一个薄腰，而不是改散落 prompt：
 
-1. **CapabilityManifest**：稳定 `capabilityId`、版本、kind、输入/输出 schema、权限、side effects、失败码、预算维度、artifact/output contract、示例和验证器。
+1. **CapabilityManifest**：稳定 `capabilityId`、版本、kind、`requiredCapabilities`、输入/输出 schema、权限、side effects、失败码、预算维度、artifact/output contract、示例和验证器。
 2. **ProviderManifest / RouteResolver**：声明 provider id、transport、health、auth、permission summary、route digest、fallback 和内部 endpoint；对 Backend/Context 只暴露 public route shape，endpoint/auth/workspace root 留在 Gateway 内部。
 3. **HarnessContract 注入**：harness 只选择候选 capability、预算、可见性和约束，输出结构化 decision/trace；它不写 tool 专用 prompt、不调用工具、不绕过 manifest。
 4. **Context Envelope 注入**：AgentServer 只收到 compact capability broker brief、selected capability ids、public provider routes、permission/failure summary 和 refs；不注入完整 registry、secret、endpoint 或大 schema。
@@ -295,6 +295,8 @@ Kernel.appendEvent(event)
 ```
 
 UI push/poll 看到的 Projection 可能短暂落后于 stream delta，但不会与已完成的 `appendEvent` 结果冲突。`answer-delta` 只能作为 transient display；如果 transient display 与更新后的 Projection 冲突，Projection 胜出。terminal state、recover actions、primary artifacts 和 visible answer 都只以 Projection 为准。
+
+UI 归一化必须采用 Projection status-first 信任模型：只要 `visibleAnswer.status` 是非空合法状态字符串，`visibleAnswer.text` 就是用户可见主结果，即使文本包含 DOI URL、科学统计术语或 backend diagnostic 关键词。raw failure text 识别只适用于没有 Projection 的 backend fallback 路径。
 
 不同状态下的 Projection 规则：
 
@@ -859,6 +861,7 @@ type DirectContextDecision = {
   decisionRef: ProjectMemoryRef
   mode: 'answer-from-projection' | 'route-to-agentserver'
   requiredTypedContext: Array<'visible-answer' | 'artifact-index' | 'failure-evidence' | 'run-status' | 'capability-status'>
+  requiredCapabilities: string[]
   usedRefs: ProjectMemoryRef[]
   sufficiency: 'sufficient' | 'insufficient'
   decisionOwner: 'agentserver' | 'backend' | 'harness-policy'
@@ -1357,7 +1360,7 @@ Backend tool_call event
   -> Backend continues
 ```
 
-执行路径必须有 `callId + inputDigest + routeDigest`。Runtime Bridge 不直接执行工具，只调用 Gateway。Gateway failure 必须带 stage 和 evidence refs，随后进入 Failure Normalizer。
+执行路径必须有 `callId + inputDigest + routeDigest`。Runtime Bridge 不直接执行工具，只调用 Gateway。Gateway failure 必须带 stage 和 evidence refs，随后进入 Failure Normalizer。Workspace Runtime Gateway 的内部 gate 由声明式 `GatewayPipelineStage` registry 顺序执行；每个 early-return gate 都要写 stage audit，包含 stage name、short-circuit result 和 bounded payload summary，以便 replay/debug 复现实际顺序。
 
 ---
 

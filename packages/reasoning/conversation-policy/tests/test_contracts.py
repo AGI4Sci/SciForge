@@ -21,7 +21,9 @@ from sciforge_conversation import (
     ConversationPolicyRequest,
     ConversationPolicyResponse,
     ConversationTurn,
+    DirectContextDecision,
     GoalSnapshot,
+    HarnessContract,
     HandoffPlan,
     ProcessStage,
     Reference,
@@ -39,7 +41,9 @@ class ConversationPolicyContractTest(unittest.TestCase):
             ConversationTurn,
             CapabilityManifest,
             ConversationPolicyRequest,
+            DirectContextDecision,
             GoalSnapshot,
+            HarnessContract,
             ContextPolicy,
             CapabilityBrief,
             HandoffPlan,
@@ -100,6 +104,34 @@ class ConversationPolicyContractTest(unittest.TestCase):
 
         self.assertEqual(result["directContextDecision"]["decisionRef"], "decision:conversation-policy:refs")
 
+    def test_response_preserves_harness_contract_direct_context_decision(self):
+        payload = _read_fixture("response_basic.json")
+        payload["harnessContract"] = {
+            "executionModePlan": {"executionMode": "direct-context-answer"},
+            "contextPolicy": {"mode": "continue"},
+            "capabilityBrief": {"selected": []},
+            "handoffPlan": {"status": "ready"},
+            "latencyPolicy": {"blockOnContextCompaction": False},
+            "directContextDecision": {
+                "schemaVersion": "sciforge.direct-context-decision.v1",
+                "decisionRef": "decision:conversation-policy:canonical",
+                "decisionOwner": "harness-policy",
+                "intent": "context-summary",
+                "requiredTypedContext": ["current-session-context"],
+                "usedRefs": ["artifact:current"],
+                "sufficiency": "sufficient",
+                "allowDirectContext": True,
+            },
+        }
+
+        response = response_from_json(payload)
+        result = to_json_dict(response)
+
+        self.assertEqual(
+            result["harnessContract"]["directContextDecision"]["decisionRef"],
+            "decision:conversation-policy:canonical",
+        )
+
     def test_response_legacy_projection_field_is_migration_alias_only(self):
         payload = _read_fixture("response_basic.json")
         legacy_projection = {"schemaVersion": "sciforge.conversation.handoff-memory-projection.v1"}
@@ -137,6 +169,12 @@ class ConversationPolicyContractTest(unittest.TestCase):
         self.assertIn("reuseReferenceDigests", result["cachePolicy"])
         self.assertIn("capabilityBrief", result)
         self.assertNotIn("capabilityBriefs", result)
+        self.assertEqual(result["harnessContract"]["executionModePlan"], result["executionModePlan"])
+        self.assertEqual(result["harnessContract"]["contextPolicy"], result["contextPolicy"])
+        self.assertEqual(result["harnessContract"]["capabilityBrief"], result["capabilityBrief"])
+        self.assertEqual(result["harnessContract"]["handoffPlan"], result["handoffPlan"])
+        self.assertEqual(result["harnessContract"]["latencyPolicy"], result["latencyPolicy"])
+        self.assertEqual(result["harnessContract"]["directContextDecision"], result["directContextDecision"])
         self.assertTrue(result["userVisiblePlan"])
 
     def test_service_keeps_fresh_failure_reporting_request_out_of_repair_mode(self):
@@ -190,6 +228,32 @@ class ConversationPolicyContractTest(unittest.TestCase):
         self.assertEqual(result["directContextDecision"]["decisionOwner"], "harness-policy")
         self.assertEqual(result["directContextDecision"]["intent"], "context-summary")
         self.assertEqual(result["directContextDecision"]["usedRefs"], ["reports/current.md"])
+        self.assertEqual(
+            result["harnessContract"]["directContextDecision"],
+            result["directContextDecision"],
+        )
+
+    def test_service_emits_structured_negative_direct_context_decision(self):
+        request = {
+            "schemaVersion": REQUEST_SCHEMA_VERSION,
+            "requestId": "fresh-work-no-direct-context",
+            "turn": {
+                "text": "Search for three recent papers and write a new report.",
+                "refs": [],
+            },
+        }
+        result = handle_payload(request)
+
+        self.assertFalse(result["directContextDecision"]["allowDirectContext"])
+        self.assertEqual(result["directContextDecision"]["sufficiency"], "insufficient")
+        self.assertIn("execution-not-forbidden", result["directContextDecision"]["reasons"])
+        self.assertIn("no-prior-context", result["directContextDecision"]["reasons"])
+        self.assertIn("evidence-missing", result["directContextDecision"]["reasons"])
+        self.assertEqual(
+            result["harnessContract"]["directContextDecision"],
+            result["directContextDecision"],
+        )
+        self.assertNotEqual(result["responsePlan"]["initialResponseMode"], "direct-context-answer")
 
     def test_service_emits_run_diagnostic_direct_context_decision_for_selected_execution_unit(self):
         request = {

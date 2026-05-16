@@ -74,6 +74,7 @@ export interface CapabilityManifest {
   brief: string;
   routingTags: string[];
   domains: string[];
+  requiredCapabilities: string[];
   inputSchema: Record<string, unknown>;
   outputSchema: Record<string, unknown>;
   sideEffects: CapabilityManifestSideEffect[];
@@ -136,6 +137,7 @@ export const capabilityManifestSchema = {
     'brief',
     'routingTags',
     'domains',
+    'requiredCapabilities',
     'inputSchema',
     'outputSchema',
     'sideEffects',
@@ -156,6 +158,7 @@ export const capabilityManifestSchema = {
     brief: { type: 'string' },
     routingTags: { type: 'array', items: { type: 'string' } },
     domains: { type: 'array', items: { type: 'string' } },
+    requiredCapabilities: { type: 'array', items: { type: 'string' } },
     inputSchema: { type: 'object' },
     outputSchema: { type: 'object' },
     sideEffects: { type: 'array', items: { enum: ['none', 'workspace-read', 'workspace-write', 'network', 'desktop', 'external-api'] } },
@@ -259,6 +262,7 @@ export function validateCapabilityManifestShape(manifest: CapabilityManifest): s
     if (!manifest[field]?.trim()) failures.push(`${field} must be non-empty`);
   }
   if (!manifest.routingTags.length) failures.push('routingTags must include at least one tag');
+  if (!Array.isArray(manifest.requiredCapabilities)) failures.push('requiredCapabilities must be an array');
   if (!manifest.providers.length) failures.push('providers must include at least one provider');
   if (!manifest.validators.length) failures.push('validators must include at least one validator');
   if (!manifest.lifecycle.sourceRef.trim()) failures.push('lifecycle.sourceRef must be non-empty');
@@ -345,6 +349,7 @@ function toolPrimitiveCapabilityManifest(input: {
     brief: input.brief,
     routingTags: input.routingTags,
     domains: ['workspace', 'knowledge', 'literature'],
+    requiredCapabilities: [input.id],
     inputSchema: { type: 'object' },
     outputSchema: { type: 'object' },
     sideEffects,
@@ -404,6 +409,7 @@ function literatureRetrievalCapabilityManifest(): CapabilityManifest {
     brief: 'Retrieve and normalize scholarly literature into auditable paper-list, evidence-matrix, research-report, and citation verification refs.',
     routingTags: ['literature', 'retrieval', 'paper-list', 'evidence', 'citation', 'full-text'],
     domains: ['literature', 'research'],
+    requiredCapabilities: ['web_search'],
     inputSchema: {
       type: 'object',
       required: ['query'],
@@ -538,6 +544,7 @@ function coreCapabilityManifest(
     brief,
     routingTags: id.split(/[.-]/).filter(Boolean),
     domains: ['workspace'],
+    requiredCapabilities: [],
     inputSchema: { type: 'object' },
     outputSchema: { type: 'object' },
     sideEffects,
@@ -585,6 +592,7 @@ function payloadValidationCapabilityManifest(): CapabilityManifest {
     brief: 'Validate ToolPayload schema, completed deliverables, current refs, and attach repair/audit budget debit refs.',
     routingTags: ['payload', 'validation', 'toolpayload', 'schema', 'repair', 'audit', 'current-reference', 'work-evidence'],
     domains: ['workspace', 'runtime', 'validation'],
+    requiredCapabilities: [],
     inputSchema: {
       type: 'object',
       required: ['payload', 'request', 'skill', 'refs'],
@@ -682,6 +690,7 @@ function runtimeVerificationGateCapabilityManifest(): CapabilityManifest {
     brief: 'Apply runtime verification policy, persist verification artifacts, and fail closed with repair/audit refs when required.',
     routingTags: ['runtime', 'verification', 'gate', 'verifier', 'human-approval', 'audit', 'repair'],
     domains: ['workspace', 'runtime', 'verification'],
+    requiredCapabilities: [],
     inputSchema: {
       type: 'object',
       required: ['payload', 'request'],

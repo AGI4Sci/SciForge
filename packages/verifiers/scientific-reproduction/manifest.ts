@@ -30,6 +30,7 @@ export const capabilityManifest: CapabilityManifest = {
     'approved-scope-binding',
   ],
   domains: ['research', 'literature', 'omics', 'scientific-reproduction'],
+  requiredCapabilities: [],
   inputSchema: {
     type: 'object',
     required: ['artifacts'],

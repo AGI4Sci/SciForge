@@ -803,7 +803,7 @@ test('context envelope governance audits contract repair context policy without 
   assert.deepEqual(records(audit.ignoredLegacySources).map((entry) => entry.source), ['request.uiState']);
 });
 
-test('repair context extracts WorkEvidence summary from failed output ref', async () => {
+test('repair context keeps failed output refs without inlining failed output bodies', async () => {
   const root = await mkdtemp(join(tmpdir(), 'sciforge-repair-context-'));
   try {
     await writeFileSafe(join(root, '.sciforge/tasks/run.py'), 'print("x")\n');
@@ -853,11 +853,12 @@ test('repair context extracts WorkEvidence summary from failed output ref', asyn
       priorAttempts: [],
     });
 
-    const diagnostics = context.diagnostics as { workEvidenceSummary?: { items?: Array<{ resultCount?: number; nextStep?: string }> } };
-    assert.equal(diagnostics.workEvidenceSummary?.items?.[0]?.resultCount, 0);
-    assert.equal(diagnostics.workEvidenceSummary?.items?.[0]?.nextStep, 'Ask whether to broaden scope.');
+    const diagnostics = context.diagnostics as { workEvidenceSummary?: unknown };
+    assert.equal(diagnostics.workEvidenceSummary, undefined);
     assert.match(JSON.stringify(context), /diagnostic-first\/ref-first/);
+    assert.match(JSON.stringify(context), /.sciforge\/task-results\/run.json/);
     assert.doesNotMatch(JSON.stringify(context), /RAW_PAYLOAD_SHOULD_NOT_APPEAR/);
+    assert.doesNotMatch(JSON.stringify(context), /Provider returned no records after fallback|Ask whether to broaden scope|primary status 200/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

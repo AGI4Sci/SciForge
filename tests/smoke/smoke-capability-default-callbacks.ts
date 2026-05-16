@@ -323,6 +323,7 @@ function packageToolManifest(
     brief: `${id} package tool manifest`,
     routingTags: id.split(/[.-]/),
     domains: ['knowledge'],
+    requiredCapabilities: [],
     inputSchema: { type: 'object', required: ['inputRef'] },
     outputSchema: { type: 'object', required: ['outputRef'] },
     sideEffects: options.sideEffects,

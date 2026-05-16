@@ -100,7 +100,7 @@ test('silent stream guard consumes harness progressPlan silencePolicy for timeou
   assert.ok(capturedAudit.detail.includes('status=Retrying compact AgentServer stream'));
 });
 
-test('generation token guard applies to all AgentServer streams and tightens when digest refs exist', async () => {
+test('generation token budget is advisory for normal AgentServer streams and tightens when digest refs exist', async () => {
   const request = {
     skillDomain: 'literature',
     prompt: 'guard runaway generation',
@@ -123,20 +123,29 @@ test('generation token guard applies to all AgentServer streams and tightens whe
           usage: { input: 260_000, output: 50_001, total: 310_001, provider: 'codex' },
         },
       })}\n`));
+      controller.enqueue(encoder.encode(`${JSON.stringify({
+        result: {
+          data: {
+            run: {
+              id: 'run-large-total-usage',
+              status: 'completed',
+            },
+          },
+        },
+      })}\n`));
       controller.close();
     },
   }));
   let guardMessage = '';
-  await assert.rejects(
-    readAgentServerRunStream(response, () => {}, {
-      maxTotalUsage: agentServerGenerationTokenGuardLimit(request),
-      onGuardTrip: (message) => {
-        guardMessage = message;
-      },
-    }),
-    /convergence guard after 310001 total tokens/,
-  );
-  assert.match(guardMessage, /limit 300000/);
+  const result = await readAgentServerRunStream(response, () => {}, {
+    maxTotalUsage: agentServerGenerationTokenGuardLimit(request),
+    onGuardTrip: (message) => {
+      guardMessage = message;
+    },
+  });
+  assert.equal(result.run.id, 'run-large-total-usage');
+  assert.equal(result.run.status, 'completed');
+  assert.equal(guardMessage, '');
 });
 
 test('repair continuation generation guard fails before broad convergence loop budget', async () => {

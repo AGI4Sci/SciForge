@@ -133,6 +133,8 @@ Hooks 按层级组织。低层 hook 越靠近 runtime enforcement，高层 hook 
 | `onRunFailed` | 记录失败态 | failure audit summary |
 | `onRunCancelled` | 区分用户取消、系统中断、timeout | cancel outcome |
 
+Workspace runtime gateway 的早退点必须通过声明式 stage registry 暴露顺序。每个 stage audit entry 至少记录 stage name、是否 short-circuit、以及 bounded payload summary；replay/debug 只能依赖 registry order 和 audit entry，而不是从 waterfall 分支反推。
+
 ### Level 1: Planning
 
 | Hook | 作用 | 典型输出 |

@@ -518,11 +518,7 @@ function agentHarnessInputFromRequest(request: GatewayRequest): Record<string, u
 }
 
 function intentModeFromContextReusePolicy(uiState: Record<string, unknown>) {
-  const policy = isRecord(uiState.contextReusePolicy)
-    ? uiState.contextReusePolicy
-    : isRecord(uiState.contextIsolation)
-      ? uiState.contextIsolation
-      : undefined;
+  const policy = isRecord(uiState.contextReusePolicy) ? uiState.contextReusePolicy : undefined;
   const mode = stringField(policy?.mode);
   if (mode === 'continue') return 'continuation';
   if (mode === 'repair') return 'repair';

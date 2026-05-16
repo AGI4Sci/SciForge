@@ -34,26 +34,12 @@ function requestHandoffSource(request: GatewayRequest) {
 
 export function requestUsesRepairContext(request: GatewayRequest) {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
-  const contextReusePolicy = isRecord(uiState.contextReusePolicy)
-    ? uiState.contextReusePolicy
-    : isRecord(uiState.contextIsolation)
-      ? uiState.contextIsolation
-      : {};
-  const harnessHandoff = isRecord(uiState.agentHarnessHandoff) ? uiState.agentHarnessHandoff : {};
-  const continuityDecision = isRecord(harnessHandoff.continuityDecision) ? harnessHandoff.continuityDecision : {};
-  const runtimeSignals = isRecord(continuityDecision.runtimeSignals) ? continuityDecision.runtimeSignals : {};
-  const trace = isRecord(continuityDecision.trace) ? continuityDecision.trace : {};
-  const tracePolicy = isRecord(trace.policy) ? trace.policy : {};
-  const conversationPolicy = isRecord(uiState.conversationPolicy) ? uiState.conversationPolicy : {};
-  const goalSnapshot = isRecord(conversationPolicy.goalSnapshot) ? conversationPolicy.goalSnapshot : {};
-  const hasExplicitRepairPolicy = contextReusePolicy.mode === 'repair'
-    || runtimeSignals.policyMode === 'repair'
-    || tracePolicy.mode === 'repair'
-    || goalSnapshot.taskRelation === 'repair';
-  if (hasExplicitRepairPolicy) return requestHasRepairContinuationTarget(request);
-  const executionModePlan = isRecord(conversationPolicy.executionModePlan) ? conversationPolicy.executionModePlan : {};
-  const signals = toStringList(executionModePlan.signals);
-  if (executionModePlan.executionMode === 'repair-or-continue-project' && signals.includes('repair')) {
+  const contextReusePolicy = isRecord(uiState.contextReusePolicy) ? uiState.contextReusePolicy : {};
+  const priorWorkSignals = isRecord(contextReusePolicy.priorWorkSignals) ? contextReusePolicy.priorWorkSignals : {};
+  const structuredRecoverActionAvailable = currentRecoverActionReferenceAvailable(request, uiState);
+  const currentProjectionRepairAvailable = contextReusePolicy.mode === 'repair'
+    && (priorWorkSignals.repairTargetAvailable === true || structuredRecoverActionAvailable);
+  if (currentProjectionRepairAvailable || structuredRecoverActionAvailable) {
     return requestHasRepairContinuationTarget(request);
   }
   return false;
@@ -74,6 +60,26 @@ function requestHasRepairContinuationTarget(request: GatewayRequest) {
     isRecord(uiState.currentRun) ? uiState.currentRun : undefined,
   ].filter((record): record is Record<string, unknown> => Boolean(record));
   return records.some(isRepairTargetRecord);
+}
+
+function currentRecoverActionReferenceAvailable(request: GatewayRequest, uiState: Record<string, unknown>) {
+  return [
+    ...toRecordList(request.references),
+    ...toRecordList(uiState.currentReferences),
+    ...toRecordList(uiState.currentReferenceDigests),
+  ].some((record) => {
+    const source = typeof record.source === 'string'
+      ? record.source.trim().toLowerCase()
+      : typeof record.sourceId === 'string'
+        ? record.sourceId.trim().toLowerCase()
+        : '';
+    const kind = typeof record.kind === 'string' ? record.kind.trim().toLowerCase() : '';
+    const status = typeof record.status === 'string' ? record.status.trim().toLowerCase() : '';
+    return source === 'recover-action'
+      || source === 'failure-evidence'
+      || kind === 'recover-action'
+      || REPAIR_TARGET_STATUSES.has(status);
+  });
 }
 
 function isRepairTargetRecord(record: Record<string, unknown>) {
@@ -499,13 +505,13 @@ async function dispatchAgentServerGeneration(params: AgentServerGenerationParams
         maxPriorAttempts: 0,
       } : repairContinuation ? {
         maxPayloadBytes: 96_000,
-        maxInlineStringChars: 8_000,
-        maxInlineJsonBytes: 16_000,
+        maxInlineStringChars: 0,
+        maxInlineJsonBytes: 0,
         maxArrayItems: 8,
         maxObjectKeys: 48,
         maxDepth: 5,
-        headChars: 1_200,
-        tailChars: 1_200,
+        headChars: 0,
+        tailChars: 0,
         maxPriorAttempts: 1,
       } : {
         maxInlineStringChars: 24_000,

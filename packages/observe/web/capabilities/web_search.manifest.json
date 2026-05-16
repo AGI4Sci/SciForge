@@ -8,6 +8,7 @@
   "brief": "Search public web or configured search indexes and return ranked result refs with provider diagnostics.",
   "routingTags": ["web", "search", "latest", "news", "internet"],
   "domains": ["web", "knowledge", "literature"],
+  "requiredCapabilities": ["web_search"],
   "inputSchema": {
     "type": "object",
     "required": ["query"],

@@ -79,6 +79,7 @@ export interface GuidanceQueueRecord {
   prompt: string;
   status: GuidanceQueueStatus;
   receivedAt: string;
+  references?: SciForgeReference[];
   updatedAt?: string;
   activeRunId?: string;
   handlingRunId?: string;

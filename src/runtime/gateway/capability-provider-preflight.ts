@@ -80,16 +80,6 @@ type DiscoveredProviderManifestProjection = Pick<ProviderAvailability, 'id' | 'a
   transport?: CapabilityProviderManifest['transport'];
 };
 
-const REQUIRED_BY_TOOL_ID: Record<string, string[]> = {
-  'web-search': ['web_search'],
-  web_search: ['web_search'],
-  webfetch: ['web_fetch'],
-  'web-fetch': ['web_fetch'],
-  web_fetch: ['web_fetch'],
-  'pdf-extract': ['pdf_extract'],
-  pdf_extract: ['pdf_extract'],
-};
-
 export const CAPABILITY_PROVIDER_ROUTE_REF_PREFIX = 'runtime://capability-provider-route/';
 const DISCOVERED_MANIFEST_SOURCES = new Set<string>(['local', 'agentserver', 'mcp', 'http', 'ssh', 'client-worker', 'backend-native', 'package', 'workspace', 'external']);
 const DISCOVERED_MANIFEST_TRANSPORTS = new Set<string>(['in-process', 'agentserver-worker', 'http', 'mcp', 'command', 'ssh', 'backend-native']);
@@ -242,48 +232,32 @@ function inferRequiredCapabilityIds(request: GatewayRequest): string[] {
   for (const toolId of [...(request.selectedToolIds ?? []), ...toStringList(request.uiState?.selectedToolIds)]) {
     for (const capabilityId of requiredCapabilityIdsForSelectedTool(toolId)) ids.add(capabilityId);
   }
-  for (const capabilityId of explicitCapabilityIdsFromPrompt(request.prompt)) ids.add(capabilityId);
   for (const capabilityId of structuredRequiredCapabilityIds(request)) ids.add(capabilityId);
   if (request.externalIoRequired === true) ids.add('web_search');
   return [...ids].sort();
 }
 
 function requiredCapabilityIdsForSelectedTool(toolId: string) {
-  const normalized = normalizeCapabilityId(toolId);
-  const mapped = REQUIRED_BY_TOOL_ID[normalized];
-  if (mapped) return mapped;
-  return defaultCapabilityManifestFor(normalized) ? [normalized] : [];
-}
-
-function explicitCapabilityIdsFromPrompt(prompt: string) {
-  const text = prompt.toLowerCase();
-  const registry = loadCoreCapabilityManifestRegistry();
-  const capabilityIds = new Set([
-    ...Object.values(REQUIRED_BY_TOOL_ID).flat(),
-    ...registry.manifestIds,
-  ]);
-  return [...capabilityIds].filter((capabilityId) => explicitCapabilityMentioned(text, capabilityId));
-}
-
-function explicitCapabilityMentioned(text: string, capabilityId: string) {
-  const variants = new Set([
-    capabilityId,
-    capabilityId.replace(/_/g, '-'),
-    capabilityId.replace(/_/g, ' '),
-  ]);
-  return [...variants].some((variant) => {
-    const escaped = variant.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\\ /g, '\\s+');
-    return new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, 'i').test(text);
-  });
+  const manifest = capabilityManifestForSelectedTool(toolId);
+  if (!manifest) return [];
+  return manifest.requiredCapabilities
+    .map(normalizeRequiredCapabilityId)
+    .filter((capabilityId) => Boolean(defaultCapabilityManifestFor(capabilityId)));
 }
 
 function structuredRequiredCapabilityIds(request: GatewayRequest) {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const conversationPolicy = isRecord(uiState.conversationPolicy) ? uiState.conversationPolicy : {};
+  const executionModePlan = isRecord(conversationPolicy.executionModePlan) ? conversationPolicy.executionModePlan : {};
   return uniqueStrings([
     ...capabilityIdsFromProviderRoutes(uiState.toolProviderRoutes),
     ...capabilityIdsFromProviderRoutes(uiState.capabilityProviderRoutes),
+    ...capabilityIdsFromStructuredPolicy(uiState.directContextDecision),
     ...capabilityIdsFromStructuredPolicy(uiState.agentHarness),
     ...capabilityIdsFromStructuredPolicy(uiState.conversationPolicy),
+    ...capabilityIdsFromStructuredPolicy(conversationPolicy.directContextDecision),
+    ...capabilityIdsFromStructuredPolicy(executionModePlan),
+    ...capabilityIdsFromStructuredPolicy(executionModePlan.directContextDecision),
   ]).filter((capabilityId) => Boolean(defaultCapabilityManifestFor(capabilityId)));
 }
 
@@ -339,6 +313,16 @@ function resolveCapabilityRoute(request: GatewayRequest, capabilityId: string): 
 
 function defaultCapabilityManifestFor(capabilityId: string) {
   return loadCoreCapabilityManifestRegistry().getManifest(capabilityId);
+}
+
+function capabilityManifestForSelectedTool(toolId: string): CapabilityManifest | undefined {
+  const registry = loadCoreCapabilityManifestRegistry();
+  const trimmed = toolId.trim();
+  const normalized = normalizeCapabilityId(toolId);
+  return registry.getManifest(trimmed)
+    ?? registry.getManifest(normalized)
+    ?? registry.getManifestByProviderId(trimmed)
+    ?? registry.getManifestByProviderId(normalized);
 }
 
 function providerCandidates(request: GatewayRequest, manifest: CapabilityManifest | undefined, capabilityId: string) {
@@ -516,9 +500,16 @@ function capabilityIdsFromStructuredPolicy(value: unknown): string[] {
 
 function capabilityIdsFromStructuredPolicyRecord(value: Record<string, unknown>): string[] {
   return [
+    ...toStringList(value.requiredCapabilities),
     ...toStringList(value.requiredCapabilityIds),
     ...toStringList(value.selectedCapabilityIds),
-  ].map(normalizeCapabilityId);
+  ].map(normalizeRequiredCapabilityId);
+}
+
+function normalizeRequiredCapabilityId(value: string) {
+  const trimmed = value.trim();
+  if (defaultCapabilityManifestFor(trimmed)) return trimmed;
+  return normalizeCapabilityId(trimmed);
 }
 
 function normalizeCapabilityId(value: string) {

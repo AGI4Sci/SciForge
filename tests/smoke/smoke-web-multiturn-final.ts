@@ -52,7 +52,7 @@ type SingleAgentFinalManifest = {
   realBrowserEvidence: {
     manifestPath: string;
     source: 'codex-in-app-browser';
-    requiredCategories: ['projection-restore', 'artifact-selection', 'provider-tool-latency'];
+    requiredCategories: ['projection-restore', 'artifact-selection', 'provider-tool-latency', 'golden-path'];
     releaseBlocker: true;
   };
   devServices: WebE2eFinalDevService[];
@@ -402,7 +402,7 @@ async function writeSingleAgentFinalManifest(input: {
     realBrowserEvidence: {
       manifestPath: defaultRealBrowserEvidenceManifestPath,
       source: 'codex-in-app-browser',
-      requiredCategories: ['projection-restore', 'artifact-selection', 'provider-tool-latency'],
+      requiredCategories: ['projection-restore', 'artifact-selection', 'provider-tool-latency', 'golden-path'],
       releaseBlocker: true,
     },
     devServices: input.devServices,

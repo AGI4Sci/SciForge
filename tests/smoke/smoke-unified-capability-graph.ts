@@ -277,6 +277,7 @@ function manifest(
     brief: `${id} test manifest`,
     routingTags,
     domains: ['test'],
+    requiredCapabilities: [],
     inputSchema: { type: 'object' },
     outputSchema: { type: 'object' },
     sideEffects: kind === 'action' ? ['workspace-write'] : ['none'],

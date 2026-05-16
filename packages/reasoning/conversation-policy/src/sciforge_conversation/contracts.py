@@ -17,14 +17,10 @@ RESPONSE_SCHEMA_VERSION = "sciforge.conversation-policy.response.v1"
 
 PolicyStatus = Literal["ok", "rejected", "failed"]
 ConversationMode = Literal[
-    "new_task",
-    "continue_previous",
-    "repair_previous",
-    "ambiguous",
-    "isolate",
+    "fresh",
     "continue",
     "repair",
-    "new-task",
+    "isolate",
 ]
 CapabilityRisk = Literal["low", "medium", "high"]
 
@@ -65,6 +61,7 @@ RESPONSE_JSON_SCHEMA: JsonMap = {
         "artifactIndex": {"type": "object"},
         "capabilityBrief": {"type": "object"},
         "directContextDecision": {"type": "object"},
+        "harnessContract": {"type": "object"},
         "executionModePlan": {"type": "object"},
         "turnExecutionConstraints": {"type": "object"},
         "handoffPlan": {"type": "object"},
@@ -144,20 +141,43 @@ class ConversationPolicyRequest:
 
 @dataclass(slots=True)
 class GoalSnapshot:
-    text: str
-    mode: ConversationMode = "new_task"
+    text: str = ""
+    mode: ConversationMode = "fresh"
+    schemaVersion: str | None = None
+    turnId: str | None = None
+    rawPrompt: str = ""
+    normalizedPrompt: str = ""
+    goalType: str = "analysis"
+    taskRelation: str = "new-task"
     explicitRefs: list[Reference] = field(default_factory=list)
     acceptanceHints: list[str] = field(default_factory=list)
+    requiredFormats: list[str] = field(default_factory=list)
+    requiredArtifacts: list[str] = field(default_factory=list)
+    requiredReferences: list[str] = field(default_factory=list)
+    referencePolicy: JsonMap = field(default_factory=dict)
+    uiExpectations: list[str] = field(default_factory=list)
+    acceptanceCriteria: list[str] = field(default_factory=list)
+    turnExecutionConstraints: JsonMap = field(default_factory=dict)
+    freshness: JsonMap = field(default_factory=dict)
     metadata: JsonMap = field(default_factory=dict)
 
 
 @dataclass(slots=True)
 class ContextPolicy:
     mode: ConversationMode
+    schemaVersion: str | None = None
+    policyId: str | None = None
+    reason: str | None = None
+    allowRecentSessionContext: bool | None = None
+    allowProjectMemory: bool | None = None
+    allowReferenceDigests: bool | None = None
     includeHistoryTurns: list[str] = field(default_factory=list)
     excludedHistoryReasons: list[JsonMap] = field(default_factory=list)
     maxPromptTokens: int | None = None
     referencePolicy: JsonMap = field(default_factory=dict)
+    referencePriority: JsonMap = field(default_factory=dict)
+    contextSources: list[str] = field(default_factory=list)
+    pollutionGuards: list[str] = field(default_factory=list)
     metadata: JsonMap = field(default_factory=dict)
 
 
@@ -182,6 +202,37 @@ class HandoffPlan:
 
 
 @dataclass(slots=True)
+class DirectContextDecision:
+    decisionRef: str
+    decisionOwner: Literal["agentserver", "backend", "harness-policy"] = "harness-policy"
+    intent: Literal[
+        "context-summary",
+        "run-diagnostic",
+        "artifact-status",
+        "capability-status",
+        "fresh-execution",
+        "unknown",
+    ] = "unknown"
+    requiredTypedContext: list[str] = field(default_factory=list)
+    usedRefs: list[str] = field(default_factory=list)
+    sufficiency: Literal["sufficient", "insufficient"] = "insufficient"
+    allowDirectContext: bool = False
+    reasons: list[str] = field(default_factory=list)
+    blockReason: str | None = None
+    schemaVersion: str = "sciforge.direct-context-decision.v1"
+
+
+@dataclass(slots=True)
+class HarnessContract:
+    executionModePlan: JsonMap = field(default_factory=dict)
+    contextPolicy: JsonMap = field(default_factory=dict)
+    capabilityBrief: JsonMap = field(default_factory=dict)
+    handoffPlan: JsonMap = field(default_factory=dict)
+    latencyPolicy: JsonMap = field(default_factory=dict)
+    directContextDecision: JsonMap = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class ProcessStage:
     phase: Literal["received", "planning", "running", "waiting", "done", "failed"] = "planning"
     summary: str = "Conversation policy request accepted."
@@ -202,6 +253,7 @@ class ConversationPolicyResponse:
     artifactIndex: JsonMap = field(default_factory=dict)
     capabilityBrief: JsonMap = field(default_factory=dict)
     directContextDecision: JsonMap = field(default_factory=dict)
+    harnessContract: JsonMap = field(default_factory=dict)
     executionModePlan: JsonMap = field(default_factory=dict)
     turnExecutionConstraints: JsonMap = field(default_factory=dict)
     handoffPlan: JsonMap = field(default_factory=dict)
@@ -281,6 +333,7 @@ def response_from_json(payload: JsonMap) -> ConversationPolicyResponse:
         artifactIndex=_optional_mapping(payload.get("artifactIndex"), "artifactIndex"),
         capabilityBrief=_optional_mapping(payload.get("capabilityBrief"), "capabilityBrief"),
         directContextDecision=_optional_mapping(payload.get("directContextDecision"), "directContextDecision"),
+        harnessContract=_optional_mapping(payload.get("harnessContract"), "harnessContract"),
         executionModePlan=_optional_mapping(payload.get("executionModePlan"), "executionModePlan"),
         turnExecutionConstraints=_optional_mapping(payload.get("turnExecutionConstraints"), "turnExecutionConstraints"),
         handoffPlan=_optional_mapping(payload.get("handoffPlan"), "handoffPlan"),
@@ -381,8 +434,14 @@ def _capability_from_json(payload: JsonMap) -> CapabilityManifest:
 
 def _goal_from_json(payload: JsonMap) -> GoalSnapshot:
     return GoalSnapshot(
-        text=payload.get("text", ""),
-        mode=payload.get("mode", "new_task"),
+        text=payload.get("text", payload.get("rawPrompt", "")),
+        mode=_conversation_mode(payload.get("mode"), "fresh"),
+        schemaVersion=_optional_str(payload.get("schemaVersion"), "schemaVersion"),
+        turnId=_optional_str(payload.get("turnId"), "turnId"),
+        rawPrompt=payload.get("rawPrompt", payload.get("text", "")),
+        normalizedPrompt=payload.get("normalizedPrompt", ""),
+        goalType=payload.get("goalType", "analysis"),
+        taskRelation=payload.get("taskRelation", "new-task"),
         explicitRefs=[
             _reference_from_json(item)
             for item in _optional_list(payload.get("explicitRefs"), "explicitRefs")
@@ -390,13 +449,37 @@ def _goal_from_json(payload: JsonMap) -> GoalSnapshot:
         acceptanceHints=[
             str(item) for item in _optional_list(payload.get("acceptanceHints"), "acceptanceHints")
         ],
+        requiredFormats=[
+            str(item) for item in _optional_list(payload.get("requiredFormats"), "requiredFormats")
+        ],
+        requiredArtifacts=[
+            str(item) for item in _optional_list(payload.get("requiredArtifacts"), "requiredArtifacts")
+        ],
+        requiredReferences=[
+            str(item) for item in _optional_list(payload.get("requiredReferences"), "requiredReferences")
+        ],
+        referencePolicy=_optional_mapping(payload.get("referencePolicy"), "referencePolicy"),
+        uiExpectations=[
+            str(item) for item in _optional_list(payload.get("uiExpectations"), "uiExpectations")
+        ],
+        acceptanceCriteria=[
+            str(item) for item in _optional_list(payload.get("acceptanceCriteria"), "acceptanceCriteria")
+        ],
+        turnExecutionConstraints=_optional_mapping(payload.get("turnExecutionConstraints"), "turnExecutionConstraints"),
+        freshness=_optional_mapping(payload.get("freshness"), "freshness"),
         metadata=_optional_mapping(payload.get("metadata"), "metadata"),
     )
 
 
 def _context_from_json(payload: JsonMap) -> ContextPolicy:
     return ContextPolicy(
-        mode=payload.get("mode", "new_task"),
+        mode=_conversation_mode(payload.get("mode"), "fresh"),
+        schemaVersion=_optional_str(payload.get("schemaVersion"), "schemaVersion"),
+        policyId=_optional_str(payload.get("policyId"), "policyId"),
+        reason=_optional_str(payload.get("reason"), "reason"),
+        allowRecentSessionContext=_optional_bool(payload.get("allowRecentSessionContext"), "allowRecentSessionContext"),
+        allowProjectMemory=_optional_bool(payload.get("allowProjectMemory"), "allowProjectMemory"),
+        allowReferenceDigests=_optional_bool(payload.get("allowReferenceDigests"), "allowReferenceDigests"),
         includeHistoryTurns=[
             str(item)
             for item in _optional_list(payload.get("includeHistoryTurns"), "includeHistoryTurns")
@@ -406,6 +489,13 @@ def _context_from_json(payload: JsonMap) -> ContextPolicy:
         ),
         maxPromptTokens=payload.get("maxPromptTokens"),
         referencePolicy=_optional_mapping(payload.get("referencePolicy"), "referencePolicy"),
+        referencePriority=_optional_mapping(payload.get("referencePriority"), "referencePriority"),
+        contextSources=[
+            str(item) for item in _optional_list(payload.get("contextSources"), "contextSources")
+        ],
+        pollutionGuards=[
+            str(item) for item in _optional_list(payload.get("pollutionGuards"), "pollutionGuards")
+        ],
         metadata=_optional_mapping(payload.get("metadata"), "metadata"),
     )
 
@@ -473,6 +563,20 @@ def _optional_str(value: Any, key: str) -> str | None:
     if not isinstance(value, str):
         raise ValueError(f"{key} must be a string or null")
     return value
+
+
+def _optional_bool(value: Any, key: str) -> bool | None:
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise ValueError(f"{key} must be a boolean or null")
+    return value
+
+
+def _conversation_mode(value: Any, fallback: ConversationMode) -> ConversationMode:
+    if value in {"fresh", "continue", "repair", "isolate"}:
+        return value
+    return fallback
 
 
 def _history_from_session_messages(value: Any) -> list[Any]:

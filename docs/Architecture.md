@@ -63,7 +63,7 @@ Event -> State -> Contract -> Decision -> Projection
 
 当前架构边界：
 
-- `CapabilityManifest` 是核心能力真相源，`CORE_CAPABILITY_MANIFESTS` 覆盖 AgentServer generation、artifact resolver/read/render、workspace read/write、command/python task、vision observe、computer-use action、report/evidence views 和 schema verifier。
+- `CapabilityManifest` 是核心能力真相源，`requiredCapabilities` 声明该 manifest/tool 需要的 provider-backed 能力；`CORE_CAPABILITY_MANIFESTS` 覆盖 AgentServer generation、artifact resolver/read/render、workspace read/write、command/python task、vision observe、computer-use action、report/evidence views 和 schema verifier。
 - Capability broker 默认只给 backend compact brief；schema、examples、repair hints、providers、failure history 和 ledger refs 只在选中能力或 repair 时按需展开。
 - Workspace ledger 负责可恢复事实；AgentServer 负责 session memory/current work/recent turns/context compaction 的运行态编排；SciForge 生成 `contextPolicy`、`contextEnvelope`、current refs、digest、audit refs 和 cache-aware projection blocks。
 - Scenario package 已收敛为 policy-only：允许 artifact schema、默认 view、capability policy、domain vocabulary、verifier policy、privacy/safety boundaries；拒绝 execution code、prompt regex、provider branch、多轮 semantic judge、prompt special case 和 preset-answer/system-prompt 字段。
@@ -689,7 +689,7 @@ flowchart LR
 职责边界：
 
 - Python 负责算法策略：任务分类、复杂度评分、不确定性判断、可复现等级、stage planning hints、repair/continuation 策略和可调 fixture 规则。实现入口是 `packages/reasoning/conversation-policy/src/sciforge_conversation/execution_classifier.py`，测试入口是 `packages/reasoning/conversation-policy/tests/test_execution_classifier.py`。
-- TypeScript 负责 runtime execution shell：HTTP/stream transport、workspace project/stage 目录、生成代码落盘、命令执行、stdout/stderr/ref 持久化、backend tool stream 到 WorkEvidence 的通用字段适配、WorkEvidence/guidance guard 调用、UI 状态和 AgentServer 往返。TS 侧只读取 `executionModePlan` / `executionModeDecision` 的稳定字段，缺失时回退为 `unknown` / `backend-decides`，不得用 prompt regex 重新判定 execution mode。
+- TypeScript 负责 runtime execution shell：HTTP/stream transport、workspace project/stage 目录、生成代码落盘、命令执行、stdout/stderr/ref 持久化、backend tool stream 到 WorkEvidence 的通用字段适配、WorkEvidence/guidance guard 调用、UI 状态和 AgentServer 往返。TS 侧只读取 `executionModePlan` / `executionModeDecision` 的稳定字段，缺失时回退为 `unknown` / `backend-decides`，不得用 prompt regex 重新判定 execution mode 或 capability requirements。
 - AgentServer 负责理解任务、选择通用能力、生成当前 stage/task 代码或 patch/spec；多阶段模式下只生成下一阶段，不一次性展开整条 pipeline。
 - WorkEvidence 是执行事实的审计/恢复真相源；UI WorkEvent 可以从它投影摘要，但不替代它。最终展示仍以 `ConversationProjection` 为准。
 
@@ -753,7 +753,7 @@ stream 过程会透传 AgentServer normalized events。SciForge 支持标准 `{ 
 Policy response 会写回 `GatewayRequest.uiState`，但这些字段都是下一轮 handoff 投影：
 
 - `goalSnapshot`：当前 turn 的目标、引用和任务关系。
-- `contextReusePolicy` / `contextIsolation`：告诉 runtime/AgentServer 本轮是 `continue`、`repair` 还是 `isolate`。
+- `contextReusePolicy`：由 Python conversation policy 写入的 canonical context/mode projection，告诉 runtime/AgentServer 本轮是 `fresh`、`continue`、`repair` 还是 `isolate`。UI transport 只发送原始 session/runs/projections/refs 状态，不写入 mode；旧 `contextIsolation` alias 不再作为 runtime 读取路径。
 - `contextProjection`：本轮可暴露的 bounded summaries、refs、projection blocks 和 pollution guard；它是 projection hint，不承担 canonical recall。旧 `handoffMemoryProjection` 只能作为历史 fixture / migration audit alias 读取，不能作为 public runtime contract 主路径。
 - `currentReferences` / `currentReferenceDigests` / `artifactIndex`：当前 refs 和可点击对象索引。
 - `capabilityBrief` / `handoffPlan`：能力和传输预算投影。
@@ -771,7 +771,7 @@ Policy response 会写回 `GatewayRequest.uiState`，但这些字段都是下一
 
 `executionModePlan` 字段边界：
 
-- Python 输出：`executionMode`、`complexityScore`、`uncertaintyScore`、`reproducibilityLevel`、`stagePlanHint`、`reason`、`riskFlags`、`signals`。
+- Python 输出：`executionMode`、`complexityScore`、`uncertaintyScore`、`reproducibilityLevel`、`stagePlanHint`、`reason`、`riskFlags`、`signals`、`requiredCapabilities`。
 - TS enrichment：`src/runtime/conversation-policy/apply.ts` 把 Python 字段映射为 `executionModeRecommendation`、`complexityScore`、`uncertaintyScore`、`reproducibilityLevel`、`stagePlanHint`、`executionModeReason`。
 - Context envelope：`src/runtime/gateway/context-envelope.ts` 把这些字段放入 `sessionFacts` 和 `scenarioFacts`，只做裁剪、hash 和 fallback。
 - AgentServer prompt：`src/runtime/gateway/agentserver-prompts.ts` 把字段放入 `CURRENT TURN SNAPSHOT`，并说明每种 mode 的执行边界。prompt 文案是 contract，不是 TS 策略算法。

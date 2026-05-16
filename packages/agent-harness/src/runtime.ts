@@ -377,6 +377,13 @@ function mergeDecision(contract: HarnessContract, decision: HarnessDecision, con
   if (decision.promptDirectives) {
     next.promptDirectives = sortPromptDirectives([...next.promptDirectives, ...decision.promptDirectives]);
   }
+  if (decision.directContextDecision) {
+    next.directContextDecision = {
+      ...(next.directContextDecision ?? {}),
+      ...decision.directContextDecision,
+      decisionOwner: decision.directContextDecision.decisionOwner ?? next.directContextDecision?.decisionOwner ?? 'harness-policy',
+    };
+  }
 
   next = normalizeContract(next);
   return { contract: next, conflicts };

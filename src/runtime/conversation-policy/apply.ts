@@ -150,7 +150,6 @@ export function requestWithPolicyResponse(
       cachePolicy,
       goalSnapshot: response.goalSnapshot,
       contextReusePolicy: contextPolicy,
-      contextIsolation: contextPolicy,
       contextProjection,
       workspaceKernelProjection: isRecord(contextProjection.workspaceKernel)
         ? contextProjection.workspaceKernel

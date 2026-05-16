@@ -185,12 +185,54 @@ test('AgentServer generation prompt requires provider-first code when ready web 
   assert.match(prompt, /invoke_capability/);
   assert.match(prompt, /invoke_provider/);
   assert.match(prompt, /canonicalPythonAdapter/);
-  assert.match(prompt, /invoke_capability\(task_input, \\?"web_search\\?"/);
+  assert.match(prompt, /invoke_capability\(task_input, capability_id, provider_input\)/);
+  assert.match(prompt, /readyCapabilityIds/);
+  assert.match(prompt, /capability_id = task_input\.get/);
   assert.match(prompt, /def failed_with_reason_payload/);
   assert.match(prompt, /def success_payload/);
   assert.match(prompt, /Provider-first authoring template/);
   assert.match(prompt, /requests, urllib, httpx/);
-  assert.match(prompt, /Do not generate task code that uses direct network packages/);
+  assert.match(prompt, /Do not generate task code that bypasses ready provider routes/);
+});
+
+test('AgentServer generation prompt applies provider-first helper contract to any ready capability route', () => {
+  const prompt = buildAgentServerGenerationPrompt({
+    prompt: 'fresh package run: enrich metadata through a ready provider route.',
+    skillDomain: 'knowledge',
+    freshCurrentTurn: true,
+    contextEnvelope: {
+      scenarioFacts: {
+        capabilityProviderRoutes: {
+          requiredCapabilityIds: ['pkg_metadata'],
+          ok: true,
+          routes: [{
+            capabilityId: 'pkg_metadata',
+            primaryProviderId: 'pkg.metadata.remote',
+            fallbackProviderIds: [],
+            status: 'ready',
+            reason: 'pkg.metadata.remote is ready.',
+            routeTraceRef: 'runtime://capability-provider-route/pkg_metadata',
+            providers: [{
+              providerId: 'pkg.metadata.remote',
+              source: 'package',
+              transport: 'mcp',
+              healthStatus: 'ready',
+            }],
+          }],
+        },
+      },
+    },
+    workspaceTreeSummary: [],
+    availableSkills: [],
+    artifactSchema: {},
+    uiManifestContract: {},
+    priorAttempts: [],
+  });
+
+  assert.match(prompt, /"policy": "provider-first"/);
+  assert.match(prompt, /"readyCapabilityIds": \[\s+"pkg_metadata"/);
+  assert.match(prompt, /invoke_capability/);
+  assert.match(prompt, /pick a capability id from capabilityFirstPolicy\.readyCapabilityIds/);
 });
 
 function ref(id: string, kind: ProjectMemoryRef['kind']): ProjectMemoryRef {

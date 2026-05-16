@@ -51,6 +51,63 @@ test('workspace task payload coercion derives required envelope fields from usef
   assert.deepEqual(schemaErrors(payload), []);
 });
 
+test('structured direct answers without displayIntent default to satisfied Projection outcome', () => {
+  const payload = coerceWorkspaceTaskPayload({
+    message: 'ConversationProjection is the single source of truth for user-visible output.',
+    confidence: 0.77,
+    claimType: 'direct-answer',
+    evidenceLevel: 'agentserver',
+    reasoningTrace: 'Answered without execution.',
+    claims: ['ConversationProjection is authoritative.'],
+    uiManifest: [{ componentId: 'report-viewer' }],
+    executionUnits: [{ id: 'direct-answer', status: 'done', tool: 'agentserver.direct-text' }],
+    artifacts: [],
+  });
+
+  assert.ok(payload);
+  assert.equal(payload.displayIntent?.taskOutcome, 'satisfied');
+  assert.equal(payload.displayIntent?.status, 'completed');
+  assert.deepEqual(schemaErrors(payload), []);
+});
+
+test('structured direct answers with nonblocking displayIntent merge satisfied defaults', () => {
+  const payload = coerceWorkspaceTaskPayload({
+    message: 'ConversationProjection is the single source of truth for user-visible output.',
+    confidence: 0.77,
+    claimType: 'direct-answer',
+    evidenceLevel: 'agentserver',
+    reasoningTrace: 'Answered without execution.',
+    claims: ['ConversationProjection is authoritative.'],
+    displayIntent: { primaryView: 'answer' },
+    uiManifest: [{ componentId: 'report-viewer' }],
+    executionUnits: [{ id: 'direct-answer', status: 'done', tool: 'agentserver.direct-text' }],
+    artifacts: [],
+  });
+
+  assert.ok(payload);
+  assert.equal(payload.displayIntent?.taskOutcome, 'satisfied');
+  assert.equal(payload.displayIntent?.status, 'completed');
+  assert.equal(payload.displayIntent?.primaryView, 'answer');
+  assert.deepEqual(schemaErrors(payload), []);
+});
+
+test('structured blocking answers without displayIntent do not default to satisfied', () => {
+  const payload = coerceWorkspaceTaskPayload({
+    message: 'The provider route is blocked.',
+    confidence: 0.77,
+    claimType: 'runtime-diagnostic',
+    evidenceLevel: 'agentserver',
+    reasoningTrace: 'Provider unavailable.',
+    claims: ['Provider unavailable.'],
+    uiManifest: [{ componentId: 'report-viewer' }],
+    executionUnits: [{ id: 'blocked', status: 'needs-human', tool: 'agentserver.direct-text' }],
+    artifacts: [],
+  });
+
+  assert.ok(payload);
+  assert.equal(payload.displayIntent, undefined);
+});
+
 test('workspace task payload coercion drops empty uiManifest artifact refs', () => {
   const payload = coerceWorkspaceTaskPayload({
     message: 'Generated a report.',
@@ -101,16 +158,19 @@ test('plain AgentServer text guard blocks raw task files and logs from final-ans
   assert.match(payload.reasoningTrace, /strict ToolPayload boundary/i);
 });
 
-test('plain AgentServer text guard blocks human-facing prose without structured ToolPayload', () => {
+test('plain AgentServer text wraps human-facing prose in an audited ToolPayload', () => {
   const payload = toolPayloadFromPlainAgentOutput('The report is ready. I found two evidence gaps and listed the next steps.', {
     skillDomain: 'knowledge',
     prompt: 'Summarize the result.',
     artifacts: [],
   });
 
-  assert.equal(payload.claimType, 'runtime-diagnostic');
-  assert.equal(payload.executionUnits[0]?.status, 'needs-human');
-  assert.match(payload.reasoningTrace, /strict ToolPayload boundary/i);
+  assert.equal(payload.claimType, 'agentserver-direct-answer');
+  assert.equal(payload.displayIntent?.status, 'completed');
+  assert.equal(payload.executionUnits[0]?.status, 'done');
+  assert.equal(payload.artifacts[0]?.type, 'research-report');
+  assert.match(payload.reasoningTrace, /wrapped it in a strict ToolPayload/i);
+  assert.deepEqual(schemaErrors(payload), []);
 });
 
 test('plain AgentServer text guard allows prose that references taskFiles without raw metadata', () => {
@@ -124,6 +184,7 @@ test('plain AgentServer text guard allows prose that references taskFiles withou
     artifacts: [],
   });
 
-  assert.equal(payload.claimType, 'runtime-diagnostic');
-  assert.equal(payload.executionUnits[0]?.status, 'needs-human');
+  assert.equal(payload.claimType, 'agentserver-direct-answer');
+  assert.equal(payload.executionUnits[0]?.status, 'done');
+  assert.deepEqual(schemaErrors(payload), []);
 });

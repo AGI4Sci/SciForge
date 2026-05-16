@@ -60,6 +60,14 @@ export interface ConversationPolicyResponse {
   artifactIndex?: Record<string, unknown>;
   capabilityBrief?: Record<string, unknown>;
   directContextDecision?: Record<string, unknown>;
+  harnessContract?: {
+    executionModePlan?: Record<string, unknown>;
+    contextPolicy?: Record<string, unknown>;
+    capabilityBrief?: Record<string, unknown>;
+    handoffPlan?: Record<string, unknown>;
+    latencyPolicy?: Record<string, unknown>;
+    directContextDecision?: Record<string, unknown>;
+  };
   executionModePlan?: Record<string, unknown>;
   turnExecutionConstraints?: Record<string, unknown>;
   handoffPlan?: Record<string, unknown>;
@@ -191,6 +199,7 @@ export function normalizeConversationPolicyResponse(value: unknown): Conversatio
   const record = isRecord(value) && isRecord(value.data) ? value.data : value;
   if (!isRecord(record)) return undefined;
   if (record.schemaVersion !== CONVERSATION_POLICY_RESPONSE_VERSION) return undefined;
+  if (!hasRequiredConversationPolicyBoundary(record)) return undefined;
   return {
     schemaVersion: CONVERSATION_POLICY_RESPONSE_VERSION,
     goalSnapshot: optionalRecord(record.goalSnapshot),
@@ -201,6 +210,7 @@ export function normalizeConversationPolicyResponse(value: unknown): Conversatio
     artifactIndex: optionalRecord(record.artifactIndex),
     capabilityBrief: optionalRecord(record.capabilityBrief),
     directContextDecision: optionalRecord(record.directContextDecision),
+    harnessContract: harnessContractRecord(record),
     executionModePlan: optionalRecord(record.executionModePlan),
     turnExecutionConstraints: optionalRecord(record.turnExecutionConstraints),
     handoffPlan: optionalRecord(record.handoffPlan),
@@ -213,6 +223,12 @@ export function normalizeConversationPolicyResponse(value: unknown): Conversatio
     userVisiblePlan: optionalRecordList(record.userVisiblePlan),
     diagnostics: optionalRecord(record.diagnostics),
   };
+}
+
+function hasRequiredConversationPolicyBoundary(record: Record<string, unknown>) {
+  return isRecord(record.goalSnapshot)
+    && isRecord(record.contextPolicy)
+    && isRecord(record.executionModePlan);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -235,6 +251,28 @@ function contextProjectionRecord(record: Record<string, unknown>) {
       to: 'contextProjection',
       scope: 'historical-response-read',
     },
+  };
+}
+
+function harnessContractRecord(record: Record<string, unknown>) {
+  const harnessContract = optionalRecord(record.harnessContract);
+  if (harnessContract) {
+    return {
+      executionModePlan: optionalRecord(harnessContract.executionModePlan),
+      contextPolicy: optionalRecord(harnessContract.contextPolicy),
+      capabilityBrief: optionalRecord(harnessContract.capabilityBrief),
+      handoffPlan: optionalRecord(harnessContract.handoffPlan),
+      latencyPolicy: optionalRecord(harnessContract.latencyPolicy),
+      directContextDecision: optionalRecord(harnessContract.directContextDecision),
+    };
+  }
+  return {
+    executionModePlan: optionalRecord(record.executionModePlan),
+    contextPolicy: optionalRecord(record.contextPolicy),
+    capabilityBrief: optionalRecord(record.capabilityBrief),
+    handoffPlan: optionalRecord(record.handoffPlan),
+    latencyPolicy: policyRecord(record.latencyPolicy, SAFE_DEFAULT_LATENCY_POLICY),
+    directContextDecision: optionalRecord(record.directContextDecision),
   };
 }
 

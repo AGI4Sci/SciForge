@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { guidanceQueuedEvent } from '@sciforge-ui/runtime-contract';
-import type { BackgroundCompletionRuntimeEvent, NormalizedAgentResponse, RuntimeArtifact, RuntimeExecutionUnit, SciForgeMessage, SciForgeRun, SciForgeSession, UserGoalSnapshot } from '../../domain';
+import type { BackgroundCompletionRuntimeEvent, NormalizedAgentResponse, RuntimeArtifact, RuntimeExecutionUnit, SciForgeMessage, SciForgeReference, SciForgeRun, SciForgeSession, UserGoalSnapshot } from '../../domain';
 import {
   applyHistoricalUserMessageEdit,
   applyBackgroundCompletionEventToSession,
@@ -901,6 +901,32 @@ test('successful run only selects queued guidance and leaves deferred guidance p
   assert.equal(newMessage?.guidanceQueue?.status, 'merged');
   assert.equal(newMessage?.guidanceQueue?.handlingRunId, 'pending-next-run');
   assert.equal(oldMessage?.guidanceQueue?.status, 'deferred');
+});
+
+test('queued running guidance preserves explicit selected artifact refs for next turn', () => {
+  const selectedRef: SciForgeReference = {
+    id: 'ref-old-report',
+    kind: 'task-result',
+    title: 'Old report',
+    ref: 'artifact:old-report',
+  };
+  const queuedGuidance = createGuidanceQueueRecord('summarize only ※1', {
+    id: 'guidance-selected-ref',
+    receivedAt: '2026-05-08T00:02:00.000Z',
+    references: [selectedRef],
+  });
+  const queued = appendRunningGuidanceRecord(session(), queuedGuidance).session;
+  const resolved = resolveGuidanceQueueAfterRun(queued, [queuedGuidance]);
+
+  assert.equal(resolved.nextGuidance?.references?.[0]?.ref, 'artifact:old-report');
+  assert.equal(
+    resolved.session.messages.find((item) => item.guidanceQueue?.id === queuedGuidance.id)?.references?.[0]?.ref,
+    'artifact:old-report',
+  );
+  assert.equal(
+    resolved.session.messages.find((item) => item.guidanceQueue?.id === queuedGuidance.id)?.guidanceQueue?.references?.[0]?.ref,
+    'artifact:old-report',
+  );
 });
 
 test('failed runs preserve silent waiting recovery clues for the next turn payload', () => {

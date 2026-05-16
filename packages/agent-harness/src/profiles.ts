@@ -136,6 +136,15 @@ const basePresentation: PresentationPlan = {
   roleMode: 'standard',
 };
 
+const balancedIntentKeywordMap = {
+  'answer-only-checklist': [{ keywords: ['checklist', 'bullet', '清单', '列表'], weight: 1 }],
+  'answer-only-compress': [{ keywords: ['compress', 'condense', 'shorten', '压缩', '浓缩'], weight: 1 }],
+  'answer-only-summary': [{ keywords: ['summarize', 'summary', 'rewrite', 'rephrase', '总结', '归纳', '改写'], weight: 1 }],
+  risk: [{ keywords: ['risk', 'risks', '风险', '隐患', '问题'], weight: 1 }],
+  method: [{ keywords: ['method', 'workflow', 'protocol', 'approach', '方法', '流程', '步骤'], weight: 1 }],
+  timeline: [{ keywords: ['timeline', 'sequence', 'history', 'phase', '时间线', '顺序', '阶段'], weight: 1 }],
+};
+
 function cheapFirstCapabilityPolicy(overrides: Partial<LatencyTierPolicy['capabilityPolicy']> = {}): LatencyTierPolicy['capabilityPolicy'] {
   const preferredCapabilityIds = overrides.preferredCapabilityIds ?? [];
   return {
@@ -580,6 +589,41 @@ const profileCallbacks: Record<string, HarnessCallback[]> = {
         }],
       };
     }, ['classifyIntent', 'selectCapabilities', 'onToolPolicy', 'onBudgetAllocate', 'beforePromptRender', 'beforeUserProgressEvent']),
+    callback('balanced-default.classifyDirectContextTransform', (context) => {
+      const decision = structuredPolicyDecision(context.input);
+      if (decision.directContextDecision?.allowDirectContext !== true) return {};
+      if (!turnIsDirectContextOnly(context.input)) return {};
+      const transformMode = classifyDirectContextTransform(context.input, context.profile.intentKeywordMap ?? balancedIntentKeywordMap);
+      if (!transformMode) return {};
+      return {
+        directContextDecision: {
+          transformMode,
+          decisionOwner: 'harness-policy',
+        },
+        auditNotes: [{
+          sourceCallbackId: 'balanced-default.classifyDirectContextTransform',
+          severity: 'info',
+          message: `classifyDirectContextTransform selected ${transformMode}.`,
+        }],
+      };
+    }, ['classifyIntent']),
+    callback('balanced-default.classifyDirectContextIntent', (context) => {
+      const decision = structuredPolicyDecision(context.input);
+      if (!String(decision.directContextDecision?.intent ?? '').startsWith('context-summary')) return {};
+      const intent = classifyDirectContextIntent(context.input, context.profile.intentKeywordMap ?? balancedIntentKeywordMap);
+      if (!intent) return {};
+      return {
+        directContextDecision: {
+          intent,
+          decisionOwner: 'harness-policy',
+        },
+        auditNotes: [{
+          sourceCallbackId: 'balanced-default.classifyDirectContextIntent',
+          severity: 'info',
+          message: `classifyDirectContextIntent selected ${intent}.`,
+        }],
+      };
+    }, ['classifyIntent']),
     callback('balanced-default.context', (context) => ({
       auditNotes: [{
         sourceCallbackId: 'balanced-default.context',
@@ -858,6 +902,54 @@ function structuredPolicyDecision(input: HarnessInput) {
   };
 }
 
+function turnIsDirectContextOnly(input: HarnessInput) {
+  const decision = structuredPolicyDecision(input);
+  const turnExecutionConstraints = directContextTurnConstraints(input);
+  return decision.directContextDecision?.allowDirectContext === true
+    && (
+      turnExecutionConstraints.contextOnly === true
+      || turnExecutionConstraints.agentServerForbidden === true
+      || turnExecutionConstraints.workspaceExecutionForbidden === true
+      || stringField(turnExecutionConstraints.executionModeHint) === 'direct-context-answer'
+    );
+}
+
+function directContextTurnConstraints(input: HarnessInput) {
+  const conversationSignals = isPlainRecord(input.conversationSignals) ? input.conversationSignals : {};
+  const runtimeConfig = isPlainRecord(input.runtimeConfig) ? input.runtimeConfig : {};
+  const request = isPlainRecord(input.request) ? input.request : {};
+  const uiState = isPlainRecord(request.uiState) ? request.uiState : {};
+  return firstRecord(
+    conversationSignals.turnExecutionConstraints,
+    runtimeConfig.turnExecutionConstraints,
+    uiState.turnExecutionConstraints,
+  ) ?? {};
+}
+
+function classifyDirectContextTransform(input: HarnessInput, keywordMap: Record<string, Array<{ keywords?: string[]; pattern?: string }>>) {
+  const prompt = input.prompt ?? stringField(isPlainRecord(input.request) ? input.request.prompt : undefined) ?? '';
+  if (matchesIntentKeywords(prompt, keywordMap['answer-only-checklist'])) return 'answer-only-checklist' as const;
+  if (matchesIntentKeywords(prompt, keywordMap['answer-only-compress'])) return 'answer-only-compress' as const;
+  if (matchesIntentKeywords(prompt, keywordMap['answer-only-summary'])) return 'answer-only-summary' as const;
+  return undefined;
+}
+
+function classifyDirectContextIntent(input: HarnessInput, keywordMap: Record<string, Array<{ keywords?: string[]; pattern?: string }>>) {
+  const prompt = input.prompt ?? stringField(isPlainRecord(input.request) ? input.request.prompt : undefined) ?? '';
+  if (matchesIntentKeywords(prompt, keywordMap.risk)) return 'context-summary:risk' as const;
+  if (matchesIntentKeywords(prompt, keywordMap.method)) return 'context-summary:method' as const;
+  if (matchesIntentKeywords(prompt, keywordMap.timeline)) return 'context-summary:timeline' as const;
+  return undefined;
+}
+
+function matchesIntentKeywords(prompt: string, entries: Array<{ keywords?: string[]; pattern?: string }> | undefined) {
+  if (!entries?.length || !prompt) return false;
+  return entries.some((entry) => {
+    if (entry.pattern && new RegExp(entry.pattern, 'i').test(prompt)) return true;
+    return entry.keywords?.some((keyword) => prompt.toLowerCase().includes(keyword.toLowerCase())) === true;
+  });
+}
+
 function normalizeIntentMode(value: unknown) {
   return value === 'fresh'
     || value === 'continuation'
@@ -914,6 +1006,7 @@ export const harnessProfiles: Record<string, HarnessProfile> = {
     id: 'balanced-default',
     version: '0.1.0',
     moduleStack: ['intent', 'latency', 'context', 'capability', 'budget', 'verification', 'repair', 'progress', 'presentation', 'audit'],
+    intentKeywordMap: balancedIntentKeywordMap,
     callbacks: profileCallbacks.balancedDefault,
     defaults: defaults({}),
     mergePolicy: {},

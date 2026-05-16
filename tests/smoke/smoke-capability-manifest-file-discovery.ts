@@ -180,6 +180,7 @@ function manifest(
     brief: `${id} fixture capability manifest`,
     routingTags: ['fixture', kind],
     domains: ['fixture'],
+    requiredCapabilities: [],
     inputSchema: { type: 'object' },
     outputSchema: { type: 'object' },
     sideEffects,

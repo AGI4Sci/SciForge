@@ -5,11 +5,7 @@ const AGENT_HARNESS_CONTINUITY_DECISION_SCHEMA_VERSION = 'sciforge.agent-harness
 
 export function agentHarnessContinuityDecision(request: GatewayRequest) {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
-  const policy = isRecord(uiState.contextReusePolicy)
-    ? uiState.contextReusePolicy
-    : isRecord(uiState.contextIsolation)
-      ? uiState.contextIsolation
-      : undefined;
+  const policy = isRecord(uiState.contextReusePolicy) ? uiState.contextReusePolicy : undefined;
   const policyMode = typeof policy?.mode === 'string' ? policy.mode : '';
   const historyReuse = isRecord(policy?.historyReuse) ? policy.historyReuse : {};
   const policyAllowsReuse = (policyMode === 'continue' || policyMode === 'repair') && historyReuse.allowed !== false;
@@ -55,7 +51,7 @@ export function agentHarnessContinuityDecision(request: GatewayRequest) {
     },
     trace: {
       policy: policy ? {
-        source: isRecord(uiState.contextReusePolicy) ? 'request.uiState.contextReusePolicy' : 'request.uiState.contextIsolation',
+        source: 'request.uiState.contextReusePolicy',
         mode: policyMode || undefined,
         historyReuseAllowed: historyReuse.allowed === true,
       } : undefined,

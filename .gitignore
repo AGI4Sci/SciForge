@@ -8,8 +8,10 @@ __pycache__/
 .sciforge/
 .bioagent/
 config.local.json
+config.*.local.json
 docs/test-artifacts/
 workspace/*
 !workspace/.gitkeep
 !workspace/README.md
 skills/installed/
+.sciforge-*/

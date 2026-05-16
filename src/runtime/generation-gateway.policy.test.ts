@@ -7,7 +7,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { runWorkspaceRuntimeGateway } from './generation-gateway.js';
+import {
+  GATEWAY_PIPELINE_STAGE_ORDER,
+  GATEWAY_PIPELINE_STAGES,
+  STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS,
+  STAGE_CAPABILITY_PROVIDER_PREFLIGHT,
+  STAGE_CONVERSATION_POLICY,
+  STAGE_DIRECT_CONTEXT_FAST_PATH,
+  STAGE_REQUEST_ENRICHMENT,
+  STAGE_RUNTIME_EXECUTION_CONSTRAINTS,
+  STAGE_VISION_SENSE_RUNTIME,
+  runWorkspaceRuntimeGateway,
+} from './generation-gateway.js';
 
 test('runtime gateway fails closed before AgentServer when conversation policy fails without turn constraints', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-policy-fail-closed-'));
@@ -185,6 +196,80 @@ test('provider preflight blocks before sense or backend dispatch for explicit pr
     assert.doesNotMatch(JSON.stringify(payload), /vision-sense-observation|agentserver-response/);
     const displayIntent = payload.displayIntent as Record<string, any>;
     assert.equal(displayIntent.conversationProjection?.schemaVersion, 'sciforge.conversation-projection.v1');
+  } finally {
+    restoreEnv('SCIFORGE_CONVERSATION_POLICY_MODE', original);
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('gateway pipeline audit records stage sequence and replayable registry order', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-gateway-pipeline-audit-'));
+  const original = process.env.SCIFORGE_CONVERSATION_POLICY_MODE;
+  process.env.SCIFORGE_CONVERSATION_POLICY_MODE = 'off';
+  const events: any[] = [];
+  try {
+    const payload = await runWorkspaceRuntimeGateway({
+      skillDomain: 'literature',
+      prompt: 'Use existing current refs only.',
+      workspacePath: workspace,
+      artifacts: [],
+      references: [{ ref: 'artifact:prior-report', title: 'Prior report' }],
+      uiState: {
+        forceAgentServerGeneration: true,
+        turnExecutionConstraints: {
+          schemaVersion: 'sciforge.turn-execution-constraints.v1',
+          policyId: 'sciforge.current-turn-execution-constraints.v1',
+          source: 'runtime-contract.turn-constraints',
+          contextOnly: true,
+          agentServerForbidden: true,
+          workspaceExecutionForbidden: false,
+          externalIoForbidden: false,
+          codeExecutionForbidden: false,
+          reasons: ['AgentServer dispatch is forbidden by structured current-turn constraints.'],
+          evidence: { hasPriorContext: true, referenceCount: 1 },
+        },
+      },
+    }, {
+      onEvent(event) {
+        events.push(event);
+      },
+    });
+
+    assert.match(payload.message, /没有启动 AgentServer/);
+    assert.deepEqual(
+      GATEWAY_PIPELINE_STAGES.map((stage) => stage.name),
+      GATEWAY_PIPELINE_STAGE_ORDER,
+    );
+    const registryAudit = events.find((event) => event.type === 'gateway-pipeline-registry-audit');
+    assert.ok(registryAudit);
+    assert.deepEqual(registryAudit.raw.stageOrder, GATEWAY_PIPELINE_STAGE_ORDER);
+    assert.deepEqual(
+      registryAudit.raw.stages.map((stage: Record<string, unknown>) => stage.name),
+      GATEWAY_PIPELINE_STAGE_ORDER,
+    );
+    const stageAudits = events.filter((event) => event.type === 'gateway-pipeline-stage-audit');
+    assert.deepEqual(
+      stageAudits.map((event) => event.raw.stage),
+      [
+        STAGE_CONVERSATION_POLICY,
+        STAGE_REQUEST_ENRICHMENT,
+        STAGE_CAPABILITY_PROVIDER_PREFLIGHT,
+        STAGE_DIRECT_CONTEXT_FAST_PATH,
+        STAGE_RUNTIME_EXECUTION_CONSTRAINTS,
+        STAGE_VISION_SENSE_RUNTIME,
+        STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS,
+      ],
+    );
+    assert.deepEqual(
+      stageAudits.map((event) => event.raw.shortCircuit),
+      [false, false, false, false, false, false, true],
+    );
+    const dispatchAudit = stageAudits.at(-1);
+    assert.equal(dispatchAudit.raw.stage, STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS);
+    assert.equal(dispatchAudit.raw.payloadSummary.claimType, 'runtime-diagnostic');
+    assert.equal(dispatchAudit.raw.payloadSummary.executionUnitCount, 1);
+    assert.deepEqual(dispatchAudit.raw.payloadSummary.artifactIds, ['agentserver-dispatch-forbidden']);
+    assert.match(dispatchAudit.raw.payloadSummary.message, /没有启动 AgentServer/);
   } finally {
     restoreEnv('SCIFORGE_CONVERSATION_POLICY_MODE', original);
     await rm(workspace, { recursive: true, force: true });
