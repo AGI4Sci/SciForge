@@ -128,6 +128,54 @@ test('user messages keep explicitly selected composer references', () => {
   assert.equal(references[0]?.ref, 'file:papers/methods.md');
 });
 
+test('scenario message refs do not become visible from presentation-role filename heuristics', () => {
+  const heuristicReportFile: ObjectReference = {
+    id: 'obj-heuristic-report',
+    kind: 'file',
+    title: 'Generated report',
+    ref: 'file:reports/generated-report.md',
+    status: 'available',
+    provenance: { path: 'reports/generated-report.md' },
+  };
+  const message: SciForgeMessage = {
+    id: 'msg-scenario',
+    role: 'scenario',
+    content: 'Report complete',
+    createdAt: '2026-05-14T00:00:01.000Z',
+    status: 'completed',
+    objectReferences: [heuristicReportFile],
+  };
+
+  const references = inlineObjectReferencesForMessage(message, sessionWithObjects());
+
+  assert.deepEqual(references, []);
+});
+
+test('scenario message refs can show explicit user-facing file references', () => {
+  const explicitEvidenceFile: ObjectReference = {
+    id: 'obj-explicit-evidence',
+    kind: 'file',
+    title: 'Evidence table',
+    ref: 'file:reports/evidence.csv',
+    status: 'available',
+    presentationRole: 'supporting-evidence',
+    provenance: { path: 'reports/evidence.csv' },
+  };
+  const message: SciForgeMessage = {
+    id: 'msg-scenario-explicit',
+    role: 'scenario',
+    content: 'Evidence ready',
+    createdAt: '2026-05-14T00:00:01.000Z',
+    status: 'completed',
+    objectReferences: [explicitEvidenceFile],
+  };
+
+  const references = inlineObjectReferencesForMessage(message, sessionWithObjects());
+
+  assert.equal(references.length, 1);
+  assert.equal(references[0]?.ref, 'file:reports/evidence.csv');
+});
+
 test('object reference chips expose each selected chip object instead of the recent artifact', () => {
   const markup = renderToStaticMarkup(
     <ObjectReferenceChips

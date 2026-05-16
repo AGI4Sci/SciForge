@@ -43,12 +43,18 @@ test('direct context fast path answers skill tool capability provider status que
     skillDomain: 'literature',
     prompt: '现在你有哪些 skill 和 web search provider 是被激活了？',
     agentServerBaseUrl: 'http://agentserver.example.test',
+    selectedToolIds: ['web_search'],
     artifacts: [{
       id: 'research-report',
       type: 'research-report',
       metadata: { reportRef: '.sciforge/task-results/report.md' },
     }],
     uiState: {
+      directContextDecision: {
+        schemaVersion: 'sciforge.direct-context-decision.v1',
+        intent: 'capability-status',
+        requiredContext: ['capability-registry', 'provider-registry'],
+      },
       conversationPolicy: {
         applicationStatus: 'applied',
         policySource: 'python-conversation-policy',
@@ -384,6 +390,11 @@ test('provider status follow-up reuses current context without AgentServer gener
       data: { markdown: 'Round 1 fetched https://example.com. Title: Example Domain.' },
     }],
     uiState: {
+      directContextDecision: {
+        schemaVersion: 'sciforge.direct-context-decision.v1',
+        intent: 'capability-status',
+        requiredContext: ['capability-registry', 'provider-registry'],
+      },
       currentReferences: [{
         id: 'ref-fetch',
         kind: 'artifact',

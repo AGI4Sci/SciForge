@@ -13,6 +13,7 @@ test('capability provider preflight blocks web search when provider is not confi
   const request: GatewayRequest = {
     skillDomain: 'literature',
     prompt: '检索今天 arxiv 上 agentic harness evolution 的最新文章',
+    selectedToolIds: ['web_search'],
     artifacts: [],
   };
 
@@ -50,6 +51,7 @@ test('AgentServer discovery maps worker tool routes into provider availability',
     const request = await requestWithDiscoveredCapabilityProviders({
       skillDomain: 'literature',
       prompt: 'search latest papers',
+      selectedToolIds: ['web_search'],
       agentServerBaseUrl: 'http://agentserver.example.test',
       artifacts: [],
     });
@@ -67,6 +69,7 @@ test('capability provider preflight accepts explicit AgentServer provider availa
   const request: GatewayRequest = {
     skillDomain: 'literature',
     prompt: 'search latest papers',
+    selectedToolIds: ['web_search'],
     artifacts: [],
     uiState: {
       capabilityProviderAvailability: [{
@@ -210,10 +213,11 @@ test('AgentServer discovery overrides stale scenario route health', () => {
   assert.equal(preflight.routes[0]?.primaryProviderId, 'sciforge.web-worker.web_search');
 });
 
-test('capability provider preflight detects underscored tool names in prompts', () => {
+test('capability provider preflight detects underscored selected tool names', () => {
   const result = capabilityProviderPreflight({
     skillDomain: 'literature',
     prompt: 'Say whether web_fetch and web_search tool providers are available.',
+    selectedToolIds: ['web_fetch', 'web_search'],
     artifacts: [],
     uiState: {
       capabilityProviderAvailability: [

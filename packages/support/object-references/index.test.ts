@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   artifactForObjectReference,
+  artifactHasUserFacingDelivery,
   artifactPresentationRole,
   displayTitleForObjectReference,
   artifactReferenceKind,
@@ -95,6 +96,12 @@ assert.equal(pathForObjectReference({ ...fileRef, ref: 'file::.sciforge/artifact
 assert.equal(syntheticArtifactForObjectReference(fileRef, 'literature-evidence-review')?.type, 'research-report');
 assert.equal(syntheticArtifactForObjectReference(fileRef, 'literature-evidence-review')?.delivery?.readableRef, 'reports/final.md');
 assert.equal(syntheticArtifactForObjectReference(fileRef, 'literature-evidence-review')?.delivery?.previewPolicy, 'inline');
+assert.equal(syntheticArtifactForObjectReference(fileRef, 'literature-evidence-review')?.delivery?.role, 'audit');
+assert.equal(artifactHasUserFacingDelivery(syntheticArtifactForObjectReference(fileRef, 'literature-evidence-review')), false);
+assert.equal(
+  artifactHasUserFacingDelivery(syntheticArtifactForObjectReference({ ...fileRef, presentationRole: 'supporting-evidence' }, 'literature-evidence-review')),
+  true,
+);
 assert.equal(syntheticArtifactForObjectReference({ ...fileRef, ref: 'file::reports/final.md' }, 'literature-evidence-review')?.delivery?.readableRef, 'reports/final.md');
 assert.equal(artifactTypeForPath('assets/model.pdb', 'file'), 'structure-summary');
 

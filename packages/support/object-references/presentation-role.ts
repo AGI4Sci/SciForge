@@ -102,6 +102,11 @@ export function isUserFacingObjectReference(reference: ObjectReference) {
   return role === 'primary-deliverable' || role === 'supporting-evidence';
 }
 
+export function hasExplicitUserFacingObjectReferenceRole(reference: ObjectReference) {
+  const role = normalizeObjectReferencePresentationRole(reference.presentationRole);
+  return role === 'primary-deliverable' || role === 'supporting-evidence';
+}
+
 export function displayTitleForObjectReference(reference: ObjectReference) {
   const title = cleanReferenceTitle(reference.title, reference.ref);
   if (title) return title;

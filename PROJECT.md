@@ -150,7 +150,7 @@
 - [ ] SA-KERNEL-06：补 conformance：C01、C02、C15、Workspace Kernel 最小验收用例。
 - [ ] SA-KERNEL-07：合并 `src/runtime/project-session-memory.ts` 与 `src/runtime/conversation-kernel/*` 两套 ledger/projection 形态；只保留一个 `WorkspaceKernel.appendEvent(event): AppendResult` 主路径，另一套只能作为 migration adapter 或删除。
 - [x] SA-KERNEL-08：为 `ProjectMemoryRef` 对齐最终 contract：补齐 `handoff-packet`、`context-snapshot`、`retrieval-audit`、`run-audit` 等 kind，新增 `RefKindGroup`，并禁止输入直接携带 retention。Evidence：`PROJECT_MEMORY_REF_KINDS` / `RefKindGroup` / kind-derived retention 已落地，handoff/context/retrieval/run-audit aliases 会归一化，输入 retention 被忽略；`project-session-memory.test.ts` 与 `smoke:project-session-memory` 通过。
-- [ ] SA-KERNEL-09：补 `registerRef/readRef/listRefs(page/filter)` contract，`listRefs` 默认只返回 `RefDescriptor` 且分页；大正文必须通过 readRef 按需读取。
+- [x] SA-KERNEL-09：补 `registerRef/readRef/listRefs(page/filter)` contract，`listRefs` 默认只返回 `RefDescriptor` 且分页；大正文必须通过 readRef 按需读取。Evidence：`src/runtime/conversation-kernel/ref-store.ts` 新增 RefStore contract，`listRefs` 默认只返回 descriptors 并支持分页/filter，正文只能经 `readRef` 读取；`ref-store.test.ts`、`conversation-kernel.test.ts`、`smoke:conversation-kernel-final-shape` 与 `verify:single-agent-final` 通过。
 
 #### P2：AgentServer Context Core 与 buildContextRequest
 
@@ -189,7 +189,7 @@
 - [ ] SA-RUNTIME-07：Harness policy 只输出 decision/contract/trace refs；Runtime Bridge 只把它们作为 context refs，不解释领域语义。
 - [ ] SA-RUNTIME-08：补 conformance：C06、C09、C10、C11、C16、Runtime Bridge 最小验收用例。
 - [ ] SA-RUNTIME-09：`DirectContextDecision` 必须包含 `decisionRef`、`decisionOwner`、`requiredTypedContext`、`usedRefs`、`sufficiency`；无 decision 或 insufficient 时必须 route-to-agentserver。
-- [ ] SA-RUNTIME-10：禁止 `directContextIntent(prompt)`、`promptRequires*`、`if prompt.includes` 类文本判断进入 Runtime Bridge / generation gateway 主流程。First cut：`directContextFastPathPayload` 已在 provider discovery 后、runtime forbidden 前接入 generation gateway 并复用 verification/finalize；剩余工作是删除 `directContextIntent(prompt)` / `promptRequires*` 文本判断源。
+- [x] SA-RUNTIME-10：禁止 `directContextIntent(prompt)`、`promptRequires*`、`if prompt.includes` 类文本判断进入 Runtime Bridge / generation gateway 主流程。Evidence：`directContextIntent(prompt)` / `promptRequires*` 文本判断源已从 Runtime Gateway 主流程删除，direct-context 只消费结构化 `DirectContextDecision` / selected tool ids / provider route manifest；`smoke:single-agent-runtime-contract` 与 `smoke:no-legacy-paths` guard 覆盖 directContextIntent/promptRequires 零基线，`verify:single-agent-final` 通过。
 
 #### P5：UIAction、Projection-only UI 与审计
 
@@ -205,7 +205,7 @@
 - [x] SA-UI-10：删除 `src/ui/src/app/appShell/workspaceState.ts` 的 `recoverableRunAuditFallbackForSession` / `legacyRawRecoverableReasonForRun` 主路径；recover focus、verification badge、next actions 全部来自 Projection。Evidence：`workspaceState.ts` 已删除 raw recover fallback，`workspaceState.test.ts` 断言 failed/raw repair history 被忽略；`sa-ui-legacy-raw-terminal-fallback` baseline 收紧到 0；`npm run verify:single-agent-final` 通过。
 - [x] SA-UI-11：删除 `src/ui/src/app/chat/messageRunPresentation.tsx` 和 `src/ui/src/app/ChatPanel.tsx` 中 raw `verificationResult` / `displayIntent.resultPresentation` 驱动主展示的 fallback；保留时只能进入 audit/debug。Evidence：`RunVerificationTag` 只消费 ConversationProjection verification，`ChatPanel` 不再把 `displayIntent.resultPresentation` 注入最终消息主展示；`ChatPanel.test.ts` 覆盖 raw verification 与 displayIntent resultPresentation 不驱动可见 badge/正文；`npm run verify:single-agent-final` 通过。
 - [x] SA-UI-12：统一 ArtifactDelivery 可见性 helper：presentation/input/view-plan/results/message references 全部只认 `artifactHasUserFacingDelivery`；`diagnostic` 必须 audit-only，不得进入主 presentation input。Evidence：presentation input、view-plan projection/focus、results availableArtifacts 和 message references 均复用 helper；diagnostic/readable projection 与 object-focus 测试均不进入主 plan/input。
-- [ ] SA-UI-13：`packages/support/object-references/presentation-role.ts` 中基于 artifact type/path/metadata 的 role heuristic 只能用于排序或审计，不得决定主结果可见性。
+- [x] SA-UI-13：`packages/support/object-references/presentation-role.ts` 中基于 artifact type/path/metadata 的 role heuristic 只能用于排序或审计，不得决定主结果可见性。Evidence：object reference 可见性改为显式结构化 user-facing contract；presentation-role heuristic 仅保留排序/审计用途，synthetic file/url focus 与 scenario message refs 不再靠文件名/metadata 进入主结果；`object-references`、`MessageContent`、`viewPlanResolver` targeted tests 和 `smoke:object-references` / `verify:single-agent-final` 通过。
 
 #### P6：Conformance、验证与并行执行节奏
 
@@ -263,9 +263,9 @@ Web E2E 任务：
 - [ ] SA-WEB-16：真实数据分析多轮 happy path：上传/引用 CSV，摘要统计、改分组、解释异常值、导出 markdown + code refs；验证大文件按 ref/read_ref 读取，不进 raw prompt。
 - [ ] SA-WEB-17：Web E2E evidence bundle 规范：每个 SA-WEB 用例自动生成 `docs/test-artifacts/web-e2e/<case>/manifest.json`，包含 run ids、event ids、projectionVersion、screenshots、console logs、network summaries 和 failure/improvement note。
 - [ ] SA-WEB-18：将旧 `smoke:browser`、`smoke:browser-multiturn`、`smoke:browser-provider-preflight` 中仍有价值的步骤迁入 `smoke:web-multiturn-final`；旧 smoke 只保留为子命令或删除，不能继续保护旧链路。
-- [ ] SA-WEB-19：实现 scriptable AgentServer mock，支持按 case 脚本发出 `BackendHandoffPacket`、stream delta、tool-call、tool-result、failure、degraded 和 background checkpoint；每个事件都带 deterministic id/digest。
-- [ ] SA-WEB-20：实现 fixture workspace builder，按 case 生成 isolated workspace、session id、初始 refs、旧 artifacts、新 artifacts、CSV/PDF/text fixture、provider manifest 和 expected Projection。
-- [ ] SA-WEB-21：实现 browser instrumentation：捕获 console error/warn、network failures、uncaught exceptions、page screenshots、DOM snapshots、debug panel export 和 downloaded audit bundle。
+- [x] SA-WEB-19：实现 scriptable AgentServer mock，支持按 case 脚本发出 `BackendHandoffPacket`、stream delta、tool-call、tool-result、failure、degraded 和 background checkpoint；每个事件都带 deterministic id/digest。Evidence：`tests/smoke/web-e2e/scriptable-agentserver-mock.ts` 支持 health/discovery/context/compact/run-stream 脚本事件，事件 id/digest 确定；`scriptable-agentserver-mock.test.ts`、`typecheck` 与 `verify:single-agent-final` 通过。
+- [x] SA-WEB-20：实现 fixture workspace builder，按 case 生成 isolated workspace、session id、初始 refs、旧 artifacts、新 artifacts、CSV/PDF/text fixture、provider manifest 和 expected Projection。Evidence：`tests/smoke/web-e2e/fixture-workspace-builder.ts` 生成隔离 workspace、`.sciforge` state/config、旧/新 report、CSV/PDF/text/audit/log/provider manifest 和 expected Projection；`fixture-workspace-builder.test.ts`、`typecheck` 与 `verify:single-agent-final` 通过。
+- [x] SA-WEB-21：实现 browser instrumentation：捕获 console error/warn、network failures、uncaught exceptions、page screenshots、DOM snapshots、debug panel export 和 downloaded audit bundle。Evidence：`tests/smoke/web-e2e/browser-instrumentation.ts` 提供 console/pageerror/request/http/download 捕获、截图、DOM snapshot、debug export snapshot/dispose；`typecheck` 与 `verify:single-agent-final` 通过。
 - [ ] SA-WEB-22：实现 after-each contract verifier：对比 browser visible state、Kernel Projection、session bundle、RunAudit、ArtifactDelivery manifest 和 expected case contract；任何一处不一致都失败。
 - [ ] SA-WEB-23：实现 refresh/reopen helper：每个核心 case 在第 2 轮后刷新页面，在 terminal 后重开 session，验证 Projection-only restore。
 - [ ] SA-WEB-24：实现 multi-tab helper：同一 session 打开两个 page，上报并发 decision，断言 `activeRun/backgroundRuns` 和 UIAction concurrency-decision 一致。

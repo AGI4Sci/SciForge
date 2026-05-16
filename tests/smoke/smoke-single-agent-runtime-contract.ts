@@ -267,8 +267,8 @@ async function coverStaticContracts() {
   const findings = await collectStaticFindings();
   const counts = countByRuleFile(findings);
   const baseline: Record<string, number> = {
-    'C06-runtime-local-direct-context-strategy#src/runtime/gateway/direct-context-fast-path.ts': 3,
-    'C06-runtime-prompt-requires-strategy#src/runtime/gateway/capability-provider-preflight.ts': 6,
+    'C06-runtime-local-direct-context-strategy#src/runtime/gateway/direct-context-fast-path.ts': 0,
+    'C06-runtime-prompt-requires-strategy#src/runtime/gateway/capability-provider-preflight.ts': 0,
     'C07-runtime-visible-preflight#src/runtime/gateway/direct-context-fast-path.ts': 1,
     'C07-runtime-visible-preflight#src/runtime/gateway/capability-provider-preflight.ts': 1,
     'C07-runtime-visible-preflight#src/runtime/gateway/generated-task-payload-preflight.ts': 1,

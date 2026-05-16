@@ -16,7 +16,6 @@ import {
 import {
   artifactPresentationRole,
   normalizeObjectReferencePresentationRole,
-  objectReferencePresentationRole,
 } from './presentation-role';
 
 export interface NormalizeResponseObjectReferencesInput {
@@ -73,7 +72,7 @@ function objectReferenceFromRelatedRef(ref: string, artifacts: RuntimeArtifact[]
   };
   return {
     ...reference,
-    presentationRole: matchedArtifact ? artifactPresentationRole(matchedArtifact) : objectReferencePresentationRole(reference),
+    presentationRole: responseObjectReferencePresentationRole(undefined, kind, matchedArtifact),
   };
 }
 
@@ -103,9 +102,16 @@ function normalizeResponseObjectReference(record: Record<string, unknown>, artif
   };
   return {
     ...reference,
-    presentationRole: normalizeObjectReferencePresentationRole(record.presentationRole)
-      ?? (matchedArtifact ? artifactPresentationRole(matchedArtifact) : objectReferencePresentationRole(reference)),
+    presentationRole: responseObjectReferencePresentationRole(record.presentationRole, kind, matchedArtifact),
   };
+}
+
+function responseObjectReferencePresentationRole(value: unknown, kind: ObjectReferenceKind, matchedArtifact?: RuntimeArtifact) {
+  const explicit = normalizeObjectReferencePresentationRole(value);
+  if (explicit) return explicit;
+  if (matchedArtifact) return artifactPresentationRole(matchedArtifact);
+  if (kind === 'run' || kind === 'execution-unit' || kind === 'scenario-package') return 'audit';
+  return undefined;
 }
 
 function objectReferenceFromResponseArtifact(artifact: RuntimeArtifact, runId: string): ObjectReference {

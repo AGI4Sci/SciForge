@@ -2,7 +2,7 @@ import type { ObjectReference, SciForgeMessage, SciForgeSession } from '../../do
 import {
   artifactForObjectReference,
   artifactHasUserFacingDelivery,
-  isUserFacingObjectReference,
+  hasExplicitUserFacingObjectReferenceRole,
   mergeObjectReferences,
   objectReferenceForArtifactSummary,
 } from '../../../../../packages/support/object-references';
@@ -32,7 +32,7 @@ export function inlineObjectReferencesForMessage(message: SciForgeMessage, sessi
     const userReferences = (message.references ?? [])
       .map((reference) => currentObjectReferenceFromComposerReference(withInferredCurrentObjectReference(reference)))
       .filter((reference): reference is ObjectReference => Boolean(reference))
-      .filter((reference) => isVisibleMessageObjectReference(reference, session));
+      .filter((reference) => isVisibleMessageObjectReference(reference, session, { userSelected: true }));
     return mergeObjectReferences(userReferences, [], 40);
   }
   const run = runId ? session.runs.find((item) => item.id === runId) : undefined;
@@ -52,11 +52,12 @@ export function unmentionedObjectReferencesForMessage(message: SciForgeMessage, 
   return inlineObjectReferencesForMessage(message, session, runId);
 }
 
-function isVisibleMessageObjectReference(reference: ObjectReference, session: SciForgeSession) {
-  if (!isUserFacingObjectReference(reference)) return false;
+function isVisibleMessageObjectReference(reference: ObjectReference, session: SciForgeSession, options: { userSelected?: boolean } = {}) {
+  const hasExplicitUserFacingRole = hasExplicitUserFacingObjectReferenceRole(reference);
   if (reference.kind === 'artifact') {
     return artifactHasUserFacingDelivery(artifactForObjectReference(reference, session));
   }
+  if (!options.userSelected && !hasExplicitUserFacingRole) return false;
   if (reference.kind === 'file') {
     const path = reference.provenance?.path ?? reference.ref;
     return !/\.json(?:$|[?#])/i.test(path);

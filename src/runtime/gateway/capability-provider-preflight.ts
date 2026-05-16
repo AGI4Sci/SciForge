@@ -315,13 +315,28 @@ function dedupeProviderRows(rows: Array<Record<string, unknown>>) {
 function inferRequiredCapabilityIds(request: GatewayRequest): string[] {
   const ids = new Set<string>();
   for (const toolId of [...(request.selectedToolIds ?? []), ...toStringList(request.uiState?.selectedToolIds)]) {
-    const normalized = normalizeCapabilityId(toolId);
-    for (const capabilityId of REQUIRED_BY_TOOL_ID[normalized] ?? []) ids.add(capabilityId);
+    for (const capabilityId of requiredCapabilityIdsForSelectedTool(toolId)) ids.add(capabilityId);
   }
-  if (request.externalIoRequired === true || promptRequiresWebSearch(request.prompt)) ids.add('web_search');
-  if (promptRequiresWebFetch(request.prompt)) ids.add('web_fetch');
-  if (promptRequiresPdfExtract(request.prompt)) ids.add('pdf_extract');
+  for (const capabilityId of structuredRequiredCapabilityIds(request)) ids.add(capabilityId);
+  if (request.externalIoRequired === true) ids.add('web_search');
   return [...ids].sort();
+}
+
+function requiredCapabilityIdsForSelectedTool(toolId: string) {
+  const normalized = normalizeCapabilityId(toolId);
+  const mapped = REQUIRED_BY_TOOL_ID[normalized];
+  if (mapped) return mapped;
+  return defaultCapabilityManifestFor(normalized) ? [normalized] : [];
+}
+
+function structuredRequiredCapabilityIds(request: GatewayRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  return uniqueStrings([
+    ...capabilityIdsFromProviderRoutes(uiState.toolProviderRoutes),
+    ...capabilityIdsFromProviderRoutes(uiState.capabilityProviderRoutes),
+    ...capabilityIdsFromStructuredPolicy(uiState.agentHarness),
+    ...capabilityIdsFromStructuredPolicy(uiState.conversationPolicy),
+  ]).filter((capabilityId) => Boolean(defaultCapabilityManifestFor(capabilityId)));
 }
 
 function resolveCapabilityRoute(request: GatewayRequest, capabilityId: string): CapabilityProviderRoute {
@@ -485,16 +500,30 @@ function providerAvailabilityRowsFromToolProviderRoutes(value: unknown): Array<R
   });
 }
 
-function promptRequiresWebSearch(prompt: string) {
-  return /\b(web[-_\s]?search|search web|latest|today|news|arxiv|internet|online|search)\b|最新|今天|今日|检索|搜索|网页|联网|新闻|arxiv/i.test(prompt);
+function capabilityIdsFromProviderRoutes(value: unknown): string[] {
+  if (!isRecord(value)) return [];
+  return Object.entries(value).flatMap(([routeKey, route]) => {
+    if (!isRecord(route) || route.enabled === false) return [];
+    const capabilityId = normalizeCapabilityId(stringField(route.capabilityId) ?? routeKey);
+    return capabilityId ? [capabilityId] : [];
+  });
 }
 
-function promptRequiresWebFetch(prompt: string) {
-  return /\b(web[-_\s]?fetch|fetch|download|read full|full text|url|pdf)\b|下载|全文|链接|网页|读取/i.test(prompt);
+function capabilityIdsFromStructuredPolicy(value: unknown): string[] {
+  if (!isRecord(value)) return [];
+  const contract = isRecord(value.contract) ? value.contract : value;
+  const policy = isRecord(contract.capabilityPolicy) ? contract.capabilityPolicy : {};
+  return [
+    ...capabilityIdsFromStructuredPolicyRecord(contract),
+    ...capabilityIdsFromStructuredPolicyRecord(policy),
+  ];
 }
 
-function promptRequiresPdfExtract(prompt: string) {
-  return /\b(pdf|full text)\b|PDF|全文|论文全文/i.test(prompt);
+function capabilityIdsFromStructuredPolicyRecord(value: Record<string, unknown>): string[] {
+  return [
+    ...toStringList(value.requiredCapabilityIds),
+    ...toStringList(value.selectedCapabilityIds),
+  ].map(normalizeCapabilityId);
 }
 
 function normalizeCapabilityId(value: string) {
@@ -522,6 +551,10 @@ function toStringList(value: unknown) {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
     : [];
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.filter((value) => value.trim().length > 0))];
 }
 
 function toRecordList(value: unknown) {

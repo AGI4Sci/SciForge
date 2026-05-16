@@ -161,6 +161,66 @@ test('completed run without projection does not promote delivery-backed artifact
   assert.equal(plan.allItems.length, 0);
 });
 
+test('synthetic file focus does not enter the main plan from presentation-role heuristics', () => {
+  const activeRun: SciForgeRun = {
+    id: 'run-synthetic-file-focus',
+    scenarioId: 'literature-evidence-review',
+    status: 'completed',
+    prompt: 'Inspect generated report',
+    response: 'Done',
+    createdAt: '2026-05-07T00:00:01.000Z',
+  };
+  const session = baseSession({ runs: [activeRun] });
+
+  const plan = resolveViewPlan({
+    scenarioId: 'literature-evidence-review',
+    session,
+    activeRun,
+    defaultSlots: [],
+    focusedObjectReference: {
+      id: 'focus-generated-report',
+      kind: 'file',
+      title: 'generated-report.md',
+      ref: 'file:.sciforge/sessions/session/task-results/generated-report.md',
+      status: 'available',
+      provenance: { path: '.sciforge/sessions/session/task-results/generated-report.md' },
+    },
+  });
+
+  assert.equal(plan.allItems.length, 0);
+  assert.equal(plan.sections.primary.length, 0);
+});
+
+test('synthetic url focus does not enter the main plan from presentation-role heuristics', () => {
+  const activeRun: SciForgeRun = {
+    id: 'run-synthetic-url-focus',
+    scenarioId: 'literature-evidence-review',
+    status: 'completed',
+    prompt: 'Inspect source URL',
+    response: 'Done',
+    createdAt: '2026-05-07T00:00:01.000Z',
+  };
+  const session = baseSession({ runs: [activeRun] });
+
+  const plan = resolveViewPlan({
+    scenarioId: 'literature-evidence-review',
+    session,
+    activeRun,
+    defaultSlots: [],
+    focusedObjectReference: {
+      id: 'focus-paper-url',
+      kind: 'url',
+      title: 'Paper URL',
+      ref: 'url:https://example.org/paper',
+      status: 'external',
+      provenance: { dataRef: 'https://example.org/paper' },
+    },
+  });
+
+  assert.equal(plan.allItems.length, 0);
+  assert.equal(plan.sections.primary.length, 0);
+});
+
 test('failed active run without projection keeps runtime diagnostic artifacts out of the main plan', () => {
   const staleReport: RuntimeArtifact = {
     id: 'research-report',

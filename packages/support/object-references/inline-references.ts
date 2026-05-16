@@ -5,7 +5,6 @@ import type {
 } from '@sciforge-ui/runtime-contract/references';
 import {
   displayTitleForObjectReference,
-  objectReferencePresentationRole,
 } from './presentation-role';
 
 export interface ObjectReferenceTextPiece {
@@ -59,10 +58,7 @@ function objectReferenceFromInlineToken(raw: string, runId?: string): ObjectRefe
       summary: raw,
       provenance: { dataRef: raw },
     };
-    return {
-      ...reference,
-      presentationRole: objectReferencePresentationRole(reference),
-    };
+    return reference;
   }
   const tokenMatch = raw.match(/^([a-z-]+)::?(.+)$/i);
   if (!tokenMatch) return undefined;
@@ -80,10 +76,7 @@ function objectReferenceFromInlineToken(raw: string, runId?: string): ObjectRefe
     summary: target,
     provenance: prefix === 'file' || prefix === 'folder' ? { path: target } : { dataRef: target },
   };
-  return {
-    ...reference,
-    presentationRole: objectReferencePresentationRole(reference),
-  };
+  return reference;
 }
 
 function inlineObjectReferenceActions(kind: ObjectReferenceKind): ObjectAction[] {

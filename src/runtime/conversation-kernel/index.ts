@@ -5,6 +5,7 @@ export * from './failure-classifier';
 export * from './harness-decision';
 export * from './history-edit';
 export * from './projection';
+export * from './ref-store';
 export * from './state-machine';
 export * from './types';
 export * from './verification-gate';

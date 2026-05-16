@@ -14,7 +14,8 @@ import { capabilityProviderPreflight } from './capability-provider-preflight.js'
 export function directContextFastPathPayload(request: GatewayRequest): ToolPayload | undefined {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   if (uiState.forceAgentServerGeneration === true) return undefined;
-  if (directContextIntent(request.prompt) === 'capability-status') return capabilityStatusFastPathPayload(request);
+  const decision = directContextDecisionForRequest(request);
+  if (decision.intent === 'capability-status') return capabilityStatusFastPathPayload(request);
   if (!policyRequestsDirectContext(request)) return undefined;
   const context = buildDirectContextFastPathItems({
     artifacts: request.artifacts,
@@ -212,13 +213,23 @@ interface DirectContextGateDecision {
   };
 }
 
+type DirectContextIntent = DirectContextGateDecision['audit']['intent'];
+
+interface DirectContextDecision {
+  intent: DirectContextIntent;
+  requiredContext?: string[];
+  allowDirectContext?: boolean;
+  blockReason?: string;
+}
+
 function directContextGate(
   request: GatewayRequest,
   context: ReturnType<typeof buildDirectContextFastPathItems>,
 ): DirectContextGateDecision {
-  const intent = directContextIntent(request.prompt);
+  const decision = directContextDecisionForRequest(request);
+  const intent = decision.intent;
   const usedContextRefs = directContextFastPathSupportingRefs(context).slice(0, 12);
-  const requiredContext = requiredContextForDirectIntent(intent);
+  const requiredContext = decision.requiredContext?.length ? decision.requiredContext : requiredContextForDirectIntent(intent);
   if (intent === 'capability-status') {
     return {
       allowed: false,
@@ -227,7 +238,7 @@ function directContextGate(
         requiredContext: ['capability-registry', 'tool-registry', 'provider-registry', 'agentserver-worker-registry'],
         usedContextRefs,
         sufficiency: 'insufficient',
-        blockReason: 'Skill/tool/capability/provider status must be answered from registries, not artifact summaries.',
+        blockReason: decision.blockReason ?? 'Skill/tool/capability/provider status must be answered from registries, not artifact summaries.',
       },
     };
   }
@@ -239,7 +250,19 @@ function directContextGate(
         requiredContext,
         usedContextRefs,
         sufficiency: 'insufficient',
-        blockReason: 'Fresh execution or external lookup request requires backend/tool routing.',
+        blockReason: decision.blockReason ?? 'Fresh execution or external lookup request requires backend/tool routing.',
+      },
+    };
+  }
+  if (decision.allowDirectContext === false) {
+    return {
+      allowed: false,
+      audit: {
+        intent,
+        requiredContext,
+        usedContextRefs,
+        sufficiency: 'insufficient',
+        blockReason: decision.blockReason ?? 'Structured direct-context decision did not authorize a direct answer.',
       },
     };
   }
@@ -255,28 +278,69 @@ function directContextGate(
   };
 }
 
-function directContextIntent(prompt: string): DirectContextGateDecision['audit']['intent'] {
-  const normalized = prompt.toLowerCase();
-  const hasCapabilityStatusIntent = /(?:skill|tool|capabilit|provider|registry|web[-_\s]?search|web[-_\s]?fetch|工具|能力|搜索工具|AgentServer worker)/i.test(prompt)
-    && /(?:activated|active|available|enabled|configured|status|source|registry|provider|有哪些|有没有|可用|激活|启用|配置|来源|状态)/i.test(prompt);
-  const hasFreshExecutionIntent = /(?:latest|today|news|search|download|fetch|rerun|run again|execute|查找|检索|搜索|最新|今天|下载|执行|重跑|继续跑|联网|arxiv)/i.test(prompt);
-  const hasExplicitFreshAction = /(?:download|fetch\s+https?:|\bsearch\b(?![-_\s]?(?:provider|route|tool|status))|rerun|run again|execute|查找|检索|搜索|下载|执行|重跑|继续跑|联网|arxiv)/i.test(prompt);
-  const hasBackendOrRepairExecutionIntent = /(?:create|generate|build|produce|make|write|run|execute)\b.{0,120}\b(?:task|adapter|result|payload|artifact|report|run|repair)|\b(?:task|adapter|result|payload|artifact|report|run|repair)\b.{0,120}\b(?:create|generate|build|produce|make|write|run|execute)|(?:return|emit|produce).{0,120}(?:failed[-\s]?with[-\s]?reason|repair-needed|failure reason|recover actions|next step).{0,120}(?:tool payload|payload)|(?:continue|repair).{0,80}(?:last bounded stop|failed run|failure|bounded-stop|adapter task|repair task)|(?:task|adapter|repair)\b.{0,80}\bcontinue|最小.{0,40}(?:任务|适配器|结果)|(?:创建|生成|构建|继续|执行).{0,80}(?:任务|适配器|结果|产物|修复)/i.test(prompt);
-  const conditionalNoFreshExecution = /(?:only if needed|if needed|无需|不需要|不要).*?(?:fetch|search|rerun|run|execute|检索|搜索|重跑|执行|调用)|(?:fetch|search|rerun|run|execute|检索|搜索|重跑|执行|调用).{0,120}(?:only if needed|if needed|无需|不需要)/i.test(prompt);
-  const hasNoExecutionDirective = /(?:do not|don't|no)\s+(?:rerun|run|execute|dispatch|call)|不要(?:重跑|执行|调用|启动)|只基于当前|current refs only/i.test(prompt);
-  if (hasNoExecutionDirective && !hasBackendOrRepairExecutionIntent) {
-    return 'context-summary';
+function directContextDecisionForRequest(request: GatewayRequest): DirectContextDecision {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const conversationPolicy = isRecord(uiState.conversationPolicy) ? uiState.conversationPolicy : {};
+  const execution = isRecord(conversationPolicy.executionModePlan) ? conversationPolicy.executionModePlan : {};
+  const explicit = firstDirectContextDecision(
+    uiState.directContextDecision,
+    conversationPolicy.directContextDecision,
+    execution.directContextDecision,
+  );
+  if (explicit) return explicit;
+  const constraints = isRecord(uiState.turnExecutionConstraints) ? uiState.turnExecutionConstraints : {};
+  if (
+    constraints.contextOnly === true
+    && toStringList(constraints.preferredCapabilityIds).includes('runtime.direct-context-answer')
+  ) {
+    return { intent: 'context-summary', requiredContext: ['current-session-context'], allowDirectContext: true };
   }
-  if (hasBackendOrRepairExecutionIntent) return 'fresh-execution';
-  if (hasCapabilityStatusIntent && !(hasExplicitFreshAction && !conditionalNoFreshExecution)) return 'capability-status';
-  if (hasFreshExecutionIntent) return 'fresh-execution';
-  if (/(?:fail|failed|failure|error|diagnos|stderr|stdout|为什么|失败|原因|报错|日志)/i.test(prompt)) return 'run-diagnostic';
-  if (/(?:artifact|ref|reference|产物|引用|证据|结果)/i.test(prompt)) return 'artifact-status';
-  if (normalized.trim()) return 'context-summary';
-  return 'unknown';
+  const agentHarness = isRecord(uiState.agentHarness) ? uiState.agentHarness : {};
+  const contract = isRecord(agentHarness.contract) ? agentHarness.contract : {};
+  const capabilityPolicy = isRecord(contract.capabilityPolicy) ? contract.capabilityPolicy : {};
+  if (
+    stringField(contract.intentMode) === 'audit'
+    && toStringList(capabilityPolicy.preferredCapabilityIds).includes('runtime.direct-context-answer')
+  ) {
+    return { intent: 'context-summary', requiredContext: ['current-session-context'], allowDirectContext: true };
+  }
+  if (stringField(execution.executionMode) === 'direct-context-answer') {
+    return { intent: 'context-summary', requiredContext: ['current-session-context'], allowDirectContext: true };
+  }
+  return { intent: 'unknown', requiredContext: ['typed-current-context'] };
 }
 
-function requiredContextForDirectIntent(intent: DirectContextGateDecision['audit']['intent']) {
+function firstDirectContextDecision(...values: unknown[]): DirectContextDecision | undefined {
+  for (const value of values) {
+    const decision = normalizeDirectContextDecision(value);
+    if (decision) return decision;
+  }
+  return undefined;
+}
+
+function normalizeDirectContextDecision(value: unknown): DirectContextDecision | undefined {
+  if (!isRecord(value)) return undefined;
+  const intent = normalizeDirectContextIntent(value.intent);
+  if (!intent) return undefined;
+  return {
+    intent,
+    requiredContext: toStringList(value.requiredContext),
+    allowDirectContext: value.allowDirectContext === false ? false : value.allowDirectContext === true ? true : undefined,
+    blockReason: stringField(value.blockReason),
+  };
+}
+
+function normalizeDirectContextIntent(value: unknown): DirectContextIntent | undefined {
+  if (value === 'context-summary'
+    || value === 'run-diagnostic'
+    || value === 'artifact-status'
+    || value === 'capability-status'
+    || value === 'fresh-execution'
+    || value === 'unknown') return value;
+  return undefined;
+}
+
+function requiredContextForDirectIntent(intent: DirectContextIntent) {
   if (intent === 'run-diagnostic') return ['run-trace', 'execution-units', 'failure-evidence'];
   if (intent === 'artifact-status') return ['artifact-index', 'object-references', 'current-refs'];
   if (intent === 'context-summary') return ['current-session-context'];

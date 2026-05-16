@@ -22,7 +22,7 @@ import {
   titleForArtifact,
   visionTraceFinalScreenshotRef,
 } from './helpers';
-import { artifactPresentationRole, objectReferencePresentationRole } from './presentation-role';
+import { artifactPresentationRole, normalizeObjectReferencePresentationRole, objectReferencePresentationRole } from './presentation-role';
 
 export { stableHash } from './helpers';
 export {
@@ -37,6 +37,7 @@ export type { NormalizeResponseObjectReferencesInput } from './response-normaliz
 export {
   artifactPresentationRole,
   displayTitleForObjectReference,
+  hasExplicitUserFacingObjectReferenceRole,
   isUserFacingObjectReference,
   normalizeObjectReferencePresentationRole,
   objectReferencePresentationRole,
@@ -270,7 +271,7 @@ function artifactDeliveryForReferencePath(reference: ObjectReference, path: stri
   return {
     contractId: 'sciforge.artifact-delivery.v1',
     ref: reference.ref,
-    role: objectReferencePresentationRole(reference),
+    role: normalizeObjectReferencePresentationRole(reference.presentationRole) ?? 'audit',
     declaredMediaType: mediaType,
     declaredExtension: extension || 'bin',
     contentShape: reference.kind === 'url' ? 'external-ref' : openSystemExtension(extension) ? 'binary-ref' : 'raw-file',
