@@ -895,6 +895,8 @@ export function ChatPanel({
           <div
             key={message.id}
             className={cx('message', message.role, activeRunId && messageRunId === activeRunId && 'active-run')}
+            data-testid="chat-message"
+            data-session-id={session.sessionId}
             data-run-id={messageRunId}
             data-sciforge-reference={sciForgeReferenceAttribute(referenceForMessage(message, messageRunId))}
           >

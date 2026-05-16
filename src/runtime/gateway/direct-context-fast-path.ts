@@ -34,7 +34,7 @@ export function directContextFastPathPayload(request: GatewayRequest): ToolPaylo
   if (!hasCurrentContextEvidence(context, decision.intent)) return undefined;
   const gate = directContextGate(context, decision);
   if (!gate.allowed) return undefined;
-  const missingExpectedArtifacts = missingExpectedArtifactTypes(request);
+  const missingExpectedArtifacts = answerOnlyTransformRequested(request.prompt) ? [] : missingExpectedArtifactTypes(request);
   if (missingExpectedArtifacts.length) return missingExpectedArtifactsPayload(request, context, missingExpectedArtifacts, gate);
   const message = directContextAnswerMessage(request.prompt, context);
   const instance = directContextInstance(request, context);
@@ -419,9 +419,57 @@ function directContextAnswerMessage(
   prompt: string,
   context: ReturnType<typeof buildDirectContextFastPathItems>,
 ) {
+  const transformed = answerOnlyTransformMessage(prompt, context);
+  if (transformed) return transformed;
   const riskSummary = riskSummaryAnswer(prompt, context);
   if (riskSummary) return riskSummary;
   return directContextFastPathMessage(context);
+}
+
+function answerOnlyTransformMessage(
+  prompt: string,
+  context: ReturnType<typeof buildDirectContextFastPathItems>,
+) {
+  if (!answerOnlyTransformRequested(prompt)) {
+    return undefined;
+  }
+  const snippets = directContextStatements(context).slice(0, /three|3|三/.test(prompt) ? 3 : /two|2|两|二/.test(prompt) ? 2 : 5);
+  if (!snippets.length) return undefined;
+  if (/(checklist|bullet|清单|列表)/i.test(prompt)) {
+    const header = /[一-龥]/.test(prompt) ? '基于上一轮可见答案整理为清单：' : 'Checklist from the previous visible answer:';
+    return [header, ...snippets.map((item) => `- ${item}`)].join('\n');
+  }
+  if (/[一-龥]/.test(prompt)) {
+    return `基于上一轮可见答案直接回答：${snippets.join('；')}。`;
+  }
+  return `Direct answer from the previous visible answer: ${snippets.join('; ')}.`;
+}
+
+function answerOnlyTransformRequested(prompt: string) {
+  return /(compress|condense|shorten|summari[sz]e|rewrite|rephrase|checklist|bullet|压缩|浓缩|改写|重写|总结|归纳|清单)/i.test(prompt)
+    && /(previous|prior|last|existing|above|answer|conclusion|points?|上一轮|之前|刚才|已有|答案|结论|要点)/i.test(prompt)
+    && !/(rerun|run again|execute|download|生成(?:新的)?(?:报告|表格|图|文件|产物)|下载|执行|运行)/i.test(prompt);
+}
+
+function directContextStatements(
+  context: ReturnType<typeof buildDirectContextFastPathItems>,
+) {
+  return uniqueStrings(context.flatMap((item) => statementParts(item.summary)))
+    .map((part) => part.replace(/^\s*(?:[-*]|\d+[.)])\s*/, '').trim())
+    .filter((part) => part.length > 0 && !/^(fields|refs?|artifact|run|message):/i.test(part));
+}
+
+function statementParts(value: string | undefined) {
+  if (!value) return [];
+  const normalized = value
+    .replace(/\s+/g, ' ')
+    .replace(/\b(?:Answered directly from current-session context without starting a new workspace task\.|基于当前会话已有上下文直接回答，不启动新的 workspace task。)/gi, '')
+    .trim();
+  return normalized
+    .split(/(?<=[。.!?；;])\s+|[\n\r]+|(?:\s+-\s+)/)
+    .map((part) => part.trim().replace(/[。.!?；;]+$/, ''))
+    .filter((part) => part.length > 0 && part.length <= 260)
+    .slice(0, 8);
 }
 
 function riskSummaryAnswer(

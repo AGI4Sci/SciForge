@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   backendRepairStates,
+  browserVisibleRuntimeState,
   contractValidationFailures,
   failedExecutionUnits,
   rawAuditItems,
@@ -1038,7 +1039,128 @@ test('raw audit items are scoped and body-sanitized', () => {
   assert.doesNotMatch(artifactItem?.value ?? '', /other-report/);
   assert.doesNotMatch(artifactItem?.value ?? '', /current report body/);
   assert.doesNotMatch(runItem?.value ?? '', /SECRET RAW BODY/);
-  assert.match(runItem?.value ?? '', /body-carrier/);
+  assert.match(runItem?.value ?? '', /runtime-debug-sensitive/);
+});
+
+test('raw audit items scrub endpoint tokens and stdout bodies from debug JSON', () => {
+  const session = emptySession();
+  session.runs = [{
+    id: 'run-sensitive-audit',
+    scenarioId: 'literature-evidence-review',
+    status: 'failed',
+    prompt: 'provider task',
+    response: 'failed',
+    createdAt: '2026-05-16T00:00:00.000Z',
+    raw: {
+      endpoint: 'https://private-provider.example.test/invoke',
+      headers: { authorization: 'Bearer PRIVATE_TOKEN_SHOULD_NOT_LEAK' },
+      stdout: 'RAW_STDOUT_BODY_SHOULD_NOT_LEAK',
+      nested: { invokeUrl: 'https://private-provider.example.test/run' },
+    },
+  }];
+
+  const serialized = rawAuditItems(session, session.runs[0], { allItems: [] } as never).map((item) => item.value).join('\n');
+
+  assert.doesNotMatch(serialized, /private-provider|PRIVATE_TOKEN|RAW_STDOUT_BODY/);
+  assert.match(serialized, /runtime-debug-sensitive/);
+});
+
+test('browser visible runtime state exposes projection status without raw fallback', () => {
+  const session = withMaterializedProjectionFixture({
+    ...emptySession(),
+    sessionId: 'session-browser-state',
+    runs: [{
+      id: 'run-browser-state',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'ready provider',
+      response: 'Projection result ready.',
+      createdAt: '2026-05-16T00:00:00.000Z',
+      completedAt: '2026-05-16T00:00:05.000Z',
+      raw: {
+        resultPresentation: projectionResultPresentation('run-browser-state', ['artifact:research-report']),
+      },
+    }],
+    executionUnits: [{
+      id: 'eu-browser-state',
+      tool: 'web_search',
+      params: '{}',
+      status: 'done',
+      hash: 'hash-browser-state',
+      runId: 'run-browser-state',
+      time: '2026-05-16T00:00:02.000Z',
+    }],
+    artifacts: [{
+      id: 'research-report',
+      type: 'research-report',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: '1',
+      data: { markdown: 'ready provider report' },
+      metadata: { runId: 'run-browser-state' },
+    }],
+  });
+
+  const state = browserVisibleRuntimeState(session, session.runs[0], { allItems: [] } as never);
+
+  assert.equal(state.sessionId, 'session-browser-state');
+  assert.equal(state.runId, 'run-browser-state');
+  assert.equal(state.projectionStatus, 'satisfied');
+  assert.equal(state.presentationKind, 'ready');
+  assert.equal(state.runCreatedAt, '2026-05-16T00:00:00.000Z');
+  assert.equal(state.runCompletedAt, '2026-05-16T00:00:05.000Z');
+  assert.equal(state.tFirstProgressMs, 2000);
+  assert.equal(state.tFirstBackendEventMs, 2000);
+  assert.equal(state.tTerminalProjectionMs, 5000);
+  assert.equal(state.projectionWaitAtTerminal, false);
+  assert.equal(state.rawFallbackUsed, false);
+  assert.deepEqual(state.visibleArtifactRefs, ['artifact:research-report']);
+});
+
+test('browser visible runtime state omits audit log refs from DOM hook fields', () => {
+  const session = withMaterializedProjectionFixture({
+    ...emptySession(),
+    sessionId: 'session-browser-state-redaction',
+    runs: [{
+      id: 'run-browser-state-redaction',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'provider diagnostic',
+      response: 'diagnostic',
+      createdAt: '2026-05-16T00:00:00.000Z',
+      raw: {
+        resultPresentation: {
+          conversationProjection: {
+            schemaVersion: 'sciforge.conversation-projection.v1',
+            conversationId: 'session-browser-state-redaction',
+            visibleAnswer: {
+              status: 'degraded-result',
+              text: 'Provider diagnostic.',
+              artifactRefs: [
+                'artifact:research-report',
+                '.sciforge/sessions/session/logs/run.stderr.log',
+                'agentserver://direct-payload',
+                'runtime://capability-provider-route/web_search',
+              ],
+            },
+            activeRun: { id: 'run-browser-state-redaction', status: 'degraded-result' },
+            artifacts: [],
+            executionProcess: [],
+            recoverActions: [],
+            diagnostics: [],
+            auditRefs: ['.sciforge/sessions/session/logs/run.stdout.log'],
+          },
+        },
+      },
+    }],
+  });
+
+  const state = browserVisibleRuntimeState(session, session.runs[0], { allItems: [] } as never);
+
+  assert.deepEqual(state.visibleArtifactRefs, [
+    'artifact:research-report',
+    'runtime://capability-provider-route/web_search',
+  ]);
+  assert.equal(state.rawLeak, false);
 });
 
 test('presentation state ignores natural-language partial and needs-human words without structured status', () => {
@@ -1101,6 +1223,41 @@ function deliveryArtifact(
       readableRef: `.sciforge/sessions/session/task-results/${id}.md`,
       rawRef: '.sciforge/sessions/session/task-results/output.json',
       previewPolicy: 'inline',
+    },
+  };
+}
+
+function emptySession(): SciForgeSession {
+  return {
+    schemaVersion: 2,
+    sessionId: 'session-empty',
+    scenarioId: 'literature-evidence-review',
+    title: 'empty',
+    createdAt: '2026-05-09T00:00:00.000Z',
+    messages: [],
+    runs: [],
+    uiManifest: [],
+    claims: [],
+    executionUnits: [],
+    artifacts: [],
+    notebook: [],
+    versions: [],
+    updatedAt: '2026-05-09T00:00:00.000Z',
+  };
+}
+
+function projectionResultPresentation(runId: string, artifactRefs: string[]) {
+  return {
+    conversationProjection: {
+      schemaVersion: 'sciforge.conversation-projection.v1',
+      conversationId: 'session-browser-state',
+      visibleAnswer: { status: 'satisfied', text: 'Projection result ready.', artifactRefs },
+      activeRun: { id: runId, status: 'satisfied' },
+      artifacts: artifactRefs.map((ref) => ({ ref, label: ref.replace(/^artifact::?/, '') })),
+      executionProcess: [],
+      recoverActions: [],
+      diagnostics: [],
+      auditRefs: [],
     },
   };
 }

@@ -538,7 +538,8 @@ test('workspace runtime top-level WorkEvidence drives UI before text fallback', 
   assert.equal(entry.operationKind, 'search');
   assert.match(entry.presentation.detail, /Top-level runtime WorkEvidence summary/);
   assert.doesNotMatch(entry.presentation.detail, /TEXT_FALLBACK_SHOULD_NOT_WIN/);
-  assert.match(entry.rawOutput, /RAW_RUNTIME_OUTPUT_SHOULD_STAY_RAW/);
+  assert.doesNotMatch(entry.rawOutput, /RAW_RUNTIME_OUTPUT_SHOULD_STAY_RAW/);
+  assert.match(entry.rawOutput, /runtime-debug-sensitive/);
 });
 
 test('workspace runtime raw-shaped event fallback does not expose JSON or private refs as visible detail', () => {
@@ -679,7 +680,8 @@ test('TaskStage WorkEvidence prefers structured fields over fallback detail', ()
   assert.match(entry.presentation.detail, /Diagnostic: provider status 429/);
   assert.match(entry.presentation.detail, /Next: Use fallback provider/);
   assert.doesNotMatch(entry.presentation.detail, /TEXT_FALLBACK_SHOULD_NOT_APPEAR/);
-  assert.match(entry.rawOutput, /RAW_STAGE_OUTPUT_SHOULD_STAY_RAW/);
+  assert.doesNotMatch(entry.rawOutput, /RAW_STAGE_OUTPUT_SHOULD_STAY_RAW/);
+  assert.match(entry.rawOutput, /runtime-debug-sensitive/);
 });
 
 test('multi-stage project summary shows project and stage progress', () => {
@@ -808,6 +810,6 @@ test('running work process keeps raw output inside collapsed raw fold', () => {
   assert.match(markup, /raw output/);
   assert.match(markup, /stream-event-raw-fold/);
   assert.doesNotMatch(markup, /stream-event-raw-fold" open=/);
-  assert.match(markup, /RAW_PAYLOAD_SHOULD_STAY_IN_FOLD/);
-  assert.doesNotMatch(markup.replace(/<pre>[\s\S]*?<\/pre>/g, ''), /RAW_PAYLOAD_SHOULD_STAY_IN_FOLD/);
+  assert.doesNotMatch(markup, /RAW_PAYLOAD_SHOULD_STAY_IN_FOLD/);
+  assert.match(markup, /runtime-debug-sensitive/);
 });

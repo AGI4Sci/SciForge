@@ -557,6 +557,7 @@ async function runAgentServerGeneratedTask(
     agentServerGenerationFailureReason,
     attemptPlanRefs,
     coerceWorkspaceTaskPayload,
+    normalizeToolPayloadShape,
     failedTaskPayload,
     firstPayloadFailureReason,
     mergeReusableContextArtifactsForDirectPayload,

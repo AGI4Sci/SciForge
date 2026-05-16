@@ -1,5 +1,5 @@
 import type { GeneratedTaskRunnerDeps } from '../../src/runtime/gateway/generated-task-runner.js';
-import { coerceAgentServerToolPayload, coerceWorkspaceTaskPayload, ensureDirectAnswerReportArtifact } from '../../src/runtime/gateway/direct-answer-payload.js';
+import { coerceAgentServerToolPayload, coerceWorkspaceTaskPayload, ensureDirectAnswerReportArtifact, normalizeToolPayloadShape } from '../../src/runtime/gateway/direct-answer-payload.js';
 import { repairNeededPayload, validateAndNormalizePayload } from '../../src/runtime/gateway/payload-validation.js';
 import { schemaErrors as toolPayloadSchemaErrors } from '../../src/runtime/gateway/tool-payload-contract.js';
 import type { GatewayRequest, SkillAvailability, ToolPayload } from '../../src/runtime/runtime-types.js';
@@ -80,6 +80,9 @@ export function makeGeneratedTaskRunnerDeps({
       ? coerceWorkspaceTaskPayload
       : (value) => coerceAgentServerToolPayload(value),
     schemaErrors: useProductionPayloadValidation ? toolPayloadSchemaErrors : smokeSchemaErrors,
+    normalizeToolPayloadShape: useProductionPayloadValidation
+      ? normalizeToolPayloadShape
+      : (payload) => payload,
     firstPayloadFailureReason: () => undefined,
     payloadHasFailureStatus: () => false,
   };

@@ -100,6 +100,48 @@ test('context follow-up summarizes risk claims from current context instead of d
   assert.equal(payload.executionUnits[0]?.tool, 'sciforge.direct-context-fast-path');
 });
 
+test('answer-only continuation transform returns checklist from prior visible answer context', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'Continue previous answer: compress the three points into one checklist and explicitly reuse previous conclusion. No new search, no code.',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    expectedArtifactTypes: ['paper-list', 'evidence-matrix', 'notebook-timeline'],
+    artifacts: [{
+      id: 'research-report',
+      type: 'research-report',
+      data: {
+        markdown: 'Primer design checks GC content and Tm so primers bind stably. It screens hairpins and primer-dimers to avoid self-amplification. It checks specificity, often with BLAST, so the assay amplifies only the intended target.',
+      },
+      metadata: { reportRef: '.sciforge/task-results/research-report.md' },
+    }],
+    uiState: {
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        directContextDecision: directDecision('context-summary', {
+          usedRefs: ['artifact:research-report'],
+        }),
+        executionModePlan: { executionMode: 'direct-context-answer' },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+        latencyPolicy: { blockOnContextCompaction: false },
+      },
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.equal(payload.executionUnits[0]?.tool, 'sciforge.direct-context-fast-path');
+  assert.match(payload.message, /Checklist from the previous visible answer/);
+  assert.match(payload.message, /GC content and Tm/);
+  assert.match(payload.message, /hairpins and primer-dimers/);
+  assert.match(payload.message, /specificity/);
+  const displayIntent = payload.displayIntent;
+  assert.ok(displayIntent);
+  assert.equal(displayIntent.taskOutcome, 'satisfied');
+  assert.doesNotMatch(payload.message, /sciforge\.agentserver|generated workspace task/i);
+});
+
 test('direct context fast path answers skill tool capability provider status queries from runtime registry', () => {
   const request: GatewayRequest = {
     skillDomain: 'literature',

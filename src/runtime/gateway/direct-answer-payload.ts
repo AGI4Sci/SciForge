@@ -369,9 +369,18 @@ export function normalizeToolPayloadShape(payload: ToolPayload): ToolPayload {
   const message = String(payload.message || '');
   return {
     ...payload,
+    confidence: typeof payload.confidence === 'number' && Number.isFinite(payload.confidence)
+      ? payload.confidence
+      : typeof payload.confidence === 'string'
+        ? parseFloat(payload.confidence) || 0.72
+        : 0.72,
+    claimType: String(payload.claimType || 'agentserver-answer'),
+    evidenceLevel: String(payload.evidenceLevel || 'agentserver'),
     reasoningTrace: Array.isArray(payload.reasoningTrace)
       ? payload.reasoningTrace.map(String).filter(Boolean).join('\n')
-      : String(payload.reasoningTrace || ''),
+      : typeof payload.reasoningTrace === 'string'
+        ? payload.reasoningTrace
+        : String(payload.reasoningTrace || ''),
     claims: normalizeAgentServerClaims(payload.claims, message),
     displayIntent: isRecord(rawDisplayIntent)
       ? payload.displayIntent

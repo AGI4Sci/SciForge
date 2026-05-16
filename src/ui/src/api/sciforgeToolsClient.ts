@@ -415,9 +415,7 @@ function buildTransportContextReusePolicy(input: SendAgentMessageInput) {
     || (input.executionUnits?.length ?? 0) > 0;
   const failedExecutionRefCount = (input.executionUnits ?? [])
     .filter((unit) => /failed|repair-needed|needs-human/i.test(String(unit.status || ''))).length;
-  const repairRequested = hasPriorWork
-    && failedExecutionRefCount > 0
-    && /\b(repair|fix|recover|retry|rerun|resume)\b|修复|恢复|重试|失败/i.test(input.prompt);
+  const repairRequested = hasPriorWork && currentProjectionRepairTargetAvailable(input);
   const mode = repairRequested ? 'repair' : hasPriorWork ? 'continue' : 'fresh';
   return {
     schemaVersion: 'sciforge.context-reuse-policy.v1',
@@ -433,11 +431,53 @@ function buildTransportContextReusePolicy(input: SendAgentMessageInput) {
       artifactCount: input.artifacts?.length ?? 0,
       executionUnitCount: input.executionUnits?.length ?? 0,
       failedExecutionRefCount,
+      repairTargetAvailable: repairRequested,
     },
     reason: hasPriorWork
       ? 'Current turn belongs to an existing session with projection/audit refs available; reuse must stay bounded by Projection and refs.'
       : 'Fresh session turn; no prior session work is eligible for history reuse.',
   };
+}
+
+function currentProjectionRepairTargetAvailable(input: SendAgentMessageInput) {
+  return recentRecordHasRepairTarget(input.executionUnits)
+    || recentRecordHasRepairTarget(input.runs)
+    || (input.references ?? []).some((reference) => {
+      const summary = [
+        reference.ref,
+        reference.kind,
+        reference.title,
+        isRecord(reference) ? reference.summary : undefined,
+      ].filter(Boolean).join(' ');
+      return /\b(failure|failed|repair-needed|needs-human|recover-action|diagnostic)\b/i.test(summary);
+    });
+}
+
+function recentRecordHasRepairTarget(records: unknown[] | undefined) {
+  return (records ?? []).slice(-4).some((item) => {
+    if (!isRecord(item)) return false;
+    const status = String(item.status || '').trim().toLowerCase();
+    const hasFailureStatus = /^(failed|error|repair-needed|failed-with-reason|needs-human)$/.test(status);
+    if (!hasFailureStatus) return false;
+    const recoverActions = asStringArray(item.recoverActions);
+    const refs = uniqueStringList([
+      item.ref,
+      item.outputRef,
+      item.stdoutRef,
+      item.stderrRef,
+      item.errorRef,
+      item.failureRef,
+      item.diagnosticRef,
+      ...(asStringArray(item.artifacts) ?? []),
+      ...(asStringArray(item.outputArtifacts) ?? []),
+    ]);
+    return Boolean(
+      recoverActions?.length
+      || refs.length
+      || asString(item.failureReason)
+      || asString(item.nextStep),
+    );
+  });
 }
 
 function boundedStallRecoveryResponse(

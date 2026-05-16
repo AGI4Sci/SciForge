@@ -61,6 +61,7 @@ export interface PublicCapabilityProviderPreflightResult {
 
 type ProviderAvailability = {
   id: string;
+  capabilityId?: string;
   available: boolean;
   status?: CapabilityProviderRoute['status'];
   reason?: string;
@@ -342,7 +343,11 @@ function defaultCapabilityManifestFor(capabilityId: string) {
 
 function providerCandidates(request: GatewayRequest, manifest: CapabilityManifest | undefined, capabilityId: string) {
   const availability = providerAvailabilityById(request);
-  return (manifest?.providers ?? []).map((provider) => {
+  const manifestProviders = manifest?.providers ?? [];
+  const configuredFallbackProviders = configuredProviderIdsForCapability(request, capabilityId)
+    .filter((providerId) => !manifestProviders.some((provider) => provider.id === providerId))
+    .map((providerId) => providerManifestFromAvailability(providerId, availability.get(providerId), capabilityId));
+  return [...manifestProviders, ...configuredFallbackProviders].map((provider) => {
     const override = availability.get(provider.id) ?? availability.get(provider.workerId ?? '');
     const status = providerStatus(provider, override);
     return {
@@ -399,9 +404,52 @@ function providerAvailabilityById(request: GatewayRequest) {
       invokeUrl: stringField(row.invokeUrl),
       invokePath: stringField(row.invokePath),
       timeoutMs: numberField(row.timeoutMs),
+      capabilityId: stringField(row.capabilityId),
     });
   }
   return map;
+}
+
+function configuredProviderIdsForCapability(request: GatewayRequest, capabilityId: string) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  return uniqueStrings([
+    ...providerIdsFromProviderRoutes(uiState.toolProviderRoutes, capabilityId),
+    ...providerIdsFromProviderRoutes(uiState.capabilityProviderRoutes, capabilityId),
+  ]);
+}
+
+function providerIdsFromProviderRoutes(value: unknown, capabilityId: string) {
+  if (!isRecord(value)) return [];
+  return Object.entries(value).flatMap(([routeKey, route]) => {
+    if (!isRecord(route) || route.enabled === false) return [];
+    const routeCapabilityId = normalizeCapabilityId(stringField(route.capabilityId) ?? routeKey);
+    if (routeCapabilityId !== capabilityId) return [];
+    return uniqueStrings([
+      stringField(route.primaryProviderId) ?? stringField(route.providerId),
+      ...toStringList(route.fallbackProviderIds),
+    ].filter((providerId): providerId is string => Boolean(providerId)));
+  });
+}
+
+function providerManifestFromAvailability(
+  providerId: string,
+  availability: ProviderAvailability | undefined,
+  capabilityId: string,
+): CapabilityProviderManifest {
+  return {
+    id: providerId,
+    label: providerId,
+    kind: 'external',
+    contractRef: `capability:${capabilityId}`,
+    requiredConfig: [],
+    priority: 100,
+    capabilityId,
+    source: 'workspace',
+    transport: availability?.endpoint || availability?.baseUrl || availability?.invokeUrl ? 'http' : 'backend-native',
+    permissions: [],
+    fallbackEligible: true,
+    status: availability?.status === 'ready' || availability?.available === true ? 'available' : 'unknown',
+  };
 }
 
 function providerAvailabilityRowsFromToolProviderRoutes(value: unknown): Array<Record<string, unknown>> {

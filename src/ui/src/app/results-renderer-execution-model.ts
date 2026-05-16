@@ -1,10 +1,9 @@
 import type { ContractValidationFailure, ContractValidationFailureKind } from '@sciforge-ui/runtime-contract';
-import { collectRuntimeRefsFromValue, runtimePayloadKeyLooksLikeBodyCarrier } from '@sciforge-ui/runtime-contract/references';
 import type { RuntimeArtifact, RuntimeExecutionUnit, SciForgeRun, SciForgeSession } from '../domain';
 import { artifactHasUserFacingDelivery } from '../../../../packages/support/object-references';
 import type { RuntimeResolvedViewPlan } from './results/viewPlanResolver';
 import { asString, asStringList, isRecord } from './results/resultArtifactHelpers';
-import { artifactsForRun, auditExecutionUnitsForRun, runUsesContextOnlyFastPath } from './results/executionUnitsForRun';
+import { artifactsForRun, auditExecutionUnitsForRun, executionUnitBelongsToRun, runUsesContextOnlyFastPath } from './results/executionUnitsForRun';
 import {
   conversationProjectionArtifactRefs,
   conversationProjectionAuditRefs,
@@ -16,6 +15,7 @@ import {
   conversationProjectionVisibleText,
   type UiConversationProjection,
 } from './conversation-projection-view-model';
+import { runtimeDebugValueHasRawLeak, sanitizeRuntimeDebugValue } from '../runtimeDebugScrubber';
 
 export type BackendRepairState = {
   id: string;
@@ -46,6 +46,27 @@ export type RunPresentationProgress = {
   currentStage?: { id: string; label: string; status: string; ref?: string };
   backgroundStatus?: string;
   safeActions: Array<{ kind: 'inspect' | 'continue' | 'cancel' | 'resume' | 'rerun' | 'confirm'; label: string; ref?: string; safe: boolean; reason?: string }>;
+};
+
+export type BrowserVisibleRuntimeState = {
+  sessionId: string;
+  runId?: string;
+  runStatus?: string;
+  runCreatedAt?: string;
+  runCompletedAt?: string;
+  projectionStatus: string;
+  presentationKind: RunPresentationStateKind;
+  currentStageId?: string;
+  currentStageStatus?: string;
+  backgroundStatus?: string;
+  tFirstProgressMs?: number;
+  tFirstBackendEventMs?: number;
+  tTerminalProjectionMs?: number;
+  visibleArtifactRefs: string[];
+  recoverActionCount: number;
+  projectionWaitAtTerminal: boolean;
+  rawFallbackUsed: boolean;
+  rawLeak: boolean;
 };
 
 export function shouldOpenRunAuditDetails(session: SciForgeSession, activeRun?: SciForgeRun) {
@@ -79,6 +100,95 @@ export function runPresentationState(session: SciForgeSession, activeRun?: SciFo
   const availableArtifacts = presentationArtifacts(session, run, viewPlan);
   if (projection) return runPresentationStateFromProjection(projection, run, availableArtifacts);
   return projectionlessRunPresentationState(session, run);
+}
+
+export function browserVisibleRuntimeState(
+  session: SciForgeSession,
+  activeRun?: SciForgeRun,
+  viewPlan?: RuntimeResolvedViewPlan,
+): BrowserVisibleRuntimeState {
+  const run = activeRun ?? session.runs.at(-1);
+  const projection = conversationProjectionForSession(session, run);
+  const presentationState = runPresentationState(session, activeRun, viewPlan);
+  const terminalRun = run?.status === 'completed' || run?.status === 'failed' || run?.status === 'cancelled';
+  const rawFallbackUsed = !projection && Boolean(run);
+  const timing = browserRuntimeTiming(session, run, presentationState);
+  const visibleArtifactRefs = projection
+    ? conversationProjectionArtifactRefs(projection).filter(isPublicBrowserStateRef)
+    : presentationState.availableArtifacts.map((artifact) => `artifact:${artifact.id}`);
+  const rawLeak = runtimeDebugValueHasRawLeak({
+    reason: presentationState.reason,
+    nextSteps: presentationState.nextSteps,
+    visibleArtifactRefs,
+  });
+  return {
+    sessionId: session.sessionId,
+    runId: run?.id,
+    runStatus: run?.status,
+    runCreatedAt: run?.createdAt,
+    runCompletedAt: run?.completedAt,
+    projectionStatus: projection ? conversationProjectionStatus(projection) : 'missing',
+    presentationKind: presentationState.kind,
+    currentStageId: presentationState.progress?.currentStage?.id,
+    currentStageStatus: presentationState.progress?.currentStage?.status,
+    backgroundStatus: presentationState.progress?.backgroundStatus,
+    tFirstProgressMs: timing.tFirstProgressMs,
+    tFirstBackendEventMs: timing.tFirstBackendEventMs,
+    tTerminalProjectionMs: timing.tTerminalProjectionMs,
+    visibleArtifactRefs,
+    recoverActionCount: runRecoverActions(session, activeRun).length,
+    projectionWaitAtTerminal: Boolean(terminalRun && !projection),
+    rawFallbackUsed,
+    rawLeak,
+  };
+}
+
+function browserRuntimeTiming(
+  session: SciForgeSession,
+  run: SciForgeRun | undefined,
+  presentationState: RunPresentationState,
+) {
+  const startedAt = parseTimestampMs(run?.createdAt);
+  if (startedAt === undefined) return {};
+  const currentRun = run;
+  const runUnits = currentRun
+    ? session.executionUnits.filter((unit) => executionUnitBelongsToRun(unit, currentRun))
+    : [];
+  const firstUnitMs = minDefined(runUnits.map((unit) => parseTimestampMs(unit.time)));
+  const completedAtMs = parseTimestampMs(run?.completedAt);
+  const currentStageMs = presentationState.progress?.currentStage
+    ? firstUnitMs ?? completedAtMs
+    : undefined;
+  return {
+    tFirstProgressMs: elapsedMs(startedAt, currentStageMs ?? firstUnitMs ?? completedAtMs),
+    tFirstBackendEventMs: elapsedMs(startedAt, firstUnitMs),
+    tTerminalProjectionMs: elapsedMs(startedAt, completedAtMs),
+  };
+}
+
+function parseTimestampMs(value: unknown) {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+function elapsedMs(startedAt: number, endedAt: number | undefined) {
+  if (endedAt === undefined || endedAt < startedAt) return undefined;
+  return Math.round(endedAt - startedAt);
+}
+
+function minDefined(values: Array<number | undefined>) {
+  let min: number | undefined;
+  for (const value of values) {
+    if (value === undefined) continue;
+    min = min === undefined ? value : Math.min(min, value);
+  }
+  return min;
+}
+
+function isPublicBrowserStateRef(ref: string) {
+  return /^artifact::?[^/\s]+$/i.test(ref)
+    || /^runtime:\/\/capability-provider-route\/[a-z0-9_.-]+$/i.test(ref);
 }
 
 function projectionlessRunPresentationState(
@@ -527,36 +637,5 @@ function runHasCurrentFailureBoundary(run?: SciForgeRun) {
 }
 
 function sanitizeAuditValue(value: unknown, key = '', depth = 0): unknown {
-  if (value === undefined || value === null) return value;
-  if (typeof value === 'string') {
-    if (runtimePayloadKeyLooksLikeBodyCarrier(key)) return summarizeAuditBody(value);
-    return value.length > 1000 ? summarizeAuditBody(value) : value;
-  }
-  if (typeof value !== 'object') return value;
-  if (Array.isArray(value)) {
-    if (depth > 5) return { omitted: 'max-depth', length: value.length };
-    return value.slice(0, 80).map((item) => sanitizeAuditValue(item, key, depth + 1));
-  }
-  if (depth > 5) return { omitted: 'max-depth', keys: Object.keys(value as Record<string, unknown>).slice(0, 16) };
-  const record = value as Record<string, unknown>;
-  if (runtimePayloadKeyLooksLikeBodyCarrier(key)) {
-    return {
-      omitted: 'body-carrier',
-      keys: Object.keys(record).slice(0, 16),
-      refs: collectRuntimeRefsFromValue(record, { maxDepth: 4, maxRefs: 16, includeIds: true }),
-    };
-  }
-  const out: Record<string, unknown> = {};
-  for (const [childKey, child] of Object.entries(record)) {
-    out[childKey] = sanitizeAuditValue(child, childKey, depth + 1);
-  }
-  return out;
-}
-
-function summarizeAuditBody(value: string) {
-  return {
-    omitted: 'body-carrier',
-    chars: value.length,
-    refs: collectRuntimeRefsFromValue(value, { maxRefs: 12 }),
-  };
+  return sanitizeRuntimeDebugValue(value, key, depth);
 }

@@ -46,6 +46,7 @@ import {
 } from './conversation-projection-view-model';
 import {
   backendRepairStates,
+  browserVisibleRuntimeState,
   contractValidationFailureKey,
   contractValidationFailures,
   failedExecutionUnits,
@@ -348,11 +349,35 @@ function PrimaryResult({
   onOpenDebugAuditAction?: (action: OpenDebugAuditUIAction) => void;
 }) {
   const { viewPlan } = model;
+  const runtimeState = browserVisibleRuntimeState(session, activeRun, viewPlan);
   if (focusMode === 'execution') {
     return <ExecutionOnlyResult session={session} activeRun={activeRun} />;
   }
   return (
     <div className="stack">
+      <div
+        className="runtime-visible-state-hook"
+        data-testid="runtime-visible-state"
+        data-session-id={runtimeState.sessionId}
+        data-run-id={runtimeState.runId ?? ''}
+        data-run-status={runtimeState.runStatus ?? ''}
+        data-run-created-at={runtimeState.runCreatedAt ?? ''}
+        data-run-completed-at={runtimeState.runCompletedAt ?? ''}
+        data-projection-status={runtimeState.projectionStatus}
+        data-presentation-kind={runtimeState.presentationKind}
+        data-current-stage-id={runtimeState.currentStageId ?? ''}
+        data-current-stage-status={runtimeState.currentStageStatus ?? ''}
+        data-background-status={runtimeState.backgroundStatus ?? ''}
+        data-t-first-progress-ms={runtimeState.tFirstProgressMs ?? ''}
+        data-t-first-backend-event-ms={runtimeState.tFirstBackendEventMs ?? ''}
+        data-t-terminal-projection-ms={runtimeState.tTerminalProjectionMs ?? ''}
+        data-visible-artifact-refs={runtimeState.visibleArtifactRefs.join(',')}
+        data-recover-action-count={runtimeState.recoverActionCount}
+        data-projection-wait-at-terminal={runtimeState.projectionWaitAtTerminal ? 'true' : 'false'}
+        data-raw-fallback-used={runtimeState.rawFallbackUsed ? 'true' : 'false'}
+        data-raw-leak={runtimeState.rawLeak ? 'true' : 'false'}
+        aria-hidden="true"
+      />
       <SectionHeader icon={FileText} title="结果视图" subtitle="优先展示用户本轮要看的结果；更多内容默认收起" />
       {viewPlan.blockedDesign ? <UIDesignBlockerCard blocker={viewPlan.blockedDesign} /> : null}
       <RunStatusSummary
@@ -572,7 +597,13 @@ function RunProgressSummary({ progress }: { progress: NonNullable<RunPresentatio
   const hasProgress = progress.completedParts.length || progress.currentStage || progress.backgroundStatus || progress.safeActions.length;
   if (!hasProgress) return null;
   return (
-    <div className="run-progress-summary">
+    <div
+      className="run-progress-summary"
+      data-testid="runtime-timing-progress"
+      data-current-stage-id={progress.currentStage?.id ?? ''}
+      data-current-stage-status={progress.currentStage?.status ?? ''}
+      data-background-status={progress.backgroundStatus ?? ''}
+    >
       {progress.completedParts.length ? (
         <div className="slot-meta">
           <strong>已完成部分</strong>

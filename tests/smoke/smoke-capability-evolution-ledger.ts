@@ -15,6 +15,7 @@ import {
   readCapabilityEvolutionRecords,
   sanitizeCapabilityEvolutionCompactSummaryForBroker,
 } from '../../src/runtime/capability-evolution-ledger.js';
+import { normalizeToolPayloadShape } from '../../src/runtime/gateway/direct-answer-payload.js';
 import { recordCapabilityEvolutionRuntimeEvent } from '../../src/runtime/gateway/capability-evolution-events.js';
 import { runAgentServerGeneratedTask } from '../../src/runtime/gateway/generated-task-runner.js';
 import { repairNeededPayload } from '../../src/runtime/gateway/repair-policy.js';
@@ -317,6 +318,7 @@ try {
       const record = payload as Record<string, unknown>;
       return ['claims', 'uiManifest', 'executionUnits', 'artifacts'].filter((key) => !(key in record)).map((key) => `missing ${key}`);
     },
+    normalizeToolPayloadShape,
     firstPayloadFailureReason: () => undefined,
     payloadHasFailureStatus: () => false,
   }, { allowSupplement: false });
@@ -442,6 +444,7 @@ try {
       const record = payload as Record<string, unknown>;
       return ['message', 'claims', 'uiManifest', 'executionUnits', 'artifacts'].filter((key) => !(key in record)).map((key) => `missing ${key}`);
     },
+    normalizeToolPayloadShape,
     firstPayloadFailureReason: () => undefined,
     payloadHasFailureStatus: () => false,
   });

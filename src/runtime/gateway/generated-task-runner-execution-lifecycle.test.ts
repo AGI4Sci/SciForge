@@ -87,7 +87,10 @@ test('generated task files are materialized only inside the session bundle', asy
   assert.match(taskInput.taskHelperSdk.helperRef, /\/sciforge_task\.py$/);
   assert.match(taskInput.taskHelperSdk.importHint, /invoke_capability/);
   assert.match(taskInput.taskHelperSdk.importHint, /invoke_provider/);
+  assert.match(taskInput.taskHelperSdk.importHint, /provider_result_is_empty/);
+  assert.match(taskInput.taskHelperSdk.importHint, /empty_result_payload/);
   assert.ok(taskInput.capabilityFirstPolicy.rules.some((line: string) => /provider route/.test(line)));
+  assert.ok(taskInput.capabilityFirstPolicy.rules.some((line: string) => /provider_result_is_empty/.test(line)));
   assert.equal(taskInput.providerInvocation.schemaVersion, 'sciforge.generated-task-provider-invocation.v1');
   assert.equal(taskInput.generatedTaskPayloadPreflight.status, 'ready');
   assert.deepEqual(taskInput.generatedTaskPayloadPreflight.requiredEnvelopeKeys, ['message', 'claims', 'uiManifest', 'executionUnits', 'artifacts']);
@@ -107,6 +110,10 @@ test('generated task files are materialized only inside the session bundle', asy
   await assert.rejects(access(join(workspace, 'tasks/arxiv-agent-paper-review.py')));
   await access(join(workspace, taskRel));
   await access(join(workspace, taskInput.taskHelperSdk.helperRef));
+  const helperSource = await readFile(join(workspace, taskInput.taskHelperSdk.helperRef), 'utf8');
+  assert.match(helperSource, /def provider_result_is_empty/);
+  assert.match(helperSource, /def empty_result_payload/);
+  assert.match(helperSource, /failed-with-reason/);
 });
 
 test('generated task output shape preflight blocks obvious malformed payload writers before execution', async () => {

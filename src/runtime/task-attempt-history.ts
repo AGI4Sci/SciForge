@@ -470,11 +470,15 @@ function conversationProjectionMetadataFromPayload(payload: unknown, fallbackRef
     ? displayIntent.conversationProjection
     : isRecord(displayIntent.taskOutcomeProjection) && isRecord(displayIntent.taskOutcomeProjection.conversationProjection)
       ? displayIntent.taskOutcomeProjection.conversationProjection
+      : isRecord(displayIntent.resultPresentation) && isRecord(displayIntent.resultPresentation.conversationProjection)
+        ? displayIntent.resultPresentation.conversationProjection
       : undefined;
   const embeddedCard = isRecord(displayIntent.taskRunCard)
     ? displayIntent.taskRunCard
     : isRecord(displayIntent.taskOutcomeProjection) && isRecord(displayIntent.taskOutcomeProjection.taskRunCard)
       ? displayIntent.taskOutcomeProjection.taskRunCard
+      : isRecord(displayIntent.resultPresentation) && isRecord(displayIntent.resultPresentation.taskRunCard)
+        ? displayIntent.resultPresentation.taskRunCard
       : undefined;
   const embeddedSummary = normalizeConversationProjectionSummary(embeddedCard?.conversationProjectionSummary);
   const explicitRef = stringField(displayIntent.conversationProjectionRef) ?? stringField(embeddedCard?.conversationProjectionRef);
@@ -566,6 +570,8 @@ async function conversationProjectionFromOutput(workspace: string, outputRef: st
     ? displayIntent.conversationProjection
     : isRecord(displayIntent.taskOutcomeProjection) && isRecord(displayIntent.taskOutcomeProjection.conversationProjection)
       ? displayIntent.taskOutcomeProjection.conversationProjection
+      : isRecord(displayIntent.resultPresentation) && isRecord(displayIntent.resultPresentation.conversationProjection)
+        ? displayIntent.resultPresentation.conversationProjection
       : undefined;
   return isRecord(projection) && projection.schemaVersion === 'sciforge.conversation-projection.v1'
     ? projection

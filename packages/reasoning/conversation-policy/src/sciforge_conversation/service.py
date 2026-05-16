@@ -78,6 +78,9 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         turn_execution_constraints,
         current_references,
         current_reference_digests,
+        _coerce_list((policy_input_seed.get("session") or {}).get("artifacts") if isinstance(policy_input_seed.get("session"), dict) else []),
+        _coerce_list((policy_input_seed.get("session") or {}).get("runs") if isinstance(policy_input_seed.get("session"), dict) else []),
+        _coerce_list((policy_input_seed.get("session") or {}).get("messages") if isinstance(policy_input_seed.get("session"), dict) else []),
         _plain_list_from_plan(turn_composition, "recentFailures"),
     )
     if direct_context_decision:
@@ -221,6 +224,9 @@ def _direct_context_decision(
     turn_execution_constraints: JsonMap,
     current_references: list[JsonMap],
     current_reference_digests: list[JsonMap],
+    session_artifacts: list[Any],
+    session_runs: list[Any],
+    session_messages: list[Any],
     recent_failures: list[Any],
 ) -> JsonMap:
     if execution_mode_plan.get("executionMode") != "direct-context-answer":
@@ -231,6 +237,9 @@ def _direct_context_decision(
         *(_string_field(ref.get("ref")) for ref in current_references if isinstance(ref, dict)),
         *(_string_field(digest.get("ref")) for digest in current_reference_digests if isinstance(digest, dict)),
         *(_string_field(digest.get("sourceRef")) for digest in current_reference_digests if isinstance(digest, dict)),
+        *(_session_artifact_ref(artifact) for artifact in session_artifacts),
+        *(_session_run_ref(run) for run in session_runs),
+        *(_session_message_ref(message) for message in session_messages),
     ])
     if not used_refs:
         return {}
@@ -283,6 +292,30 @@ def _stable_ref_suffix(refs: list[str]) -> str:
         value ^= ord(char)
         value = (value * 16777619) & 0xFFFFFFFF
     return f"{value:08x}"
+
+
+def _session_artifact_ref(value: Any) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    explicit = _string_field(value.get("ref")) or _string_field(value.get("dataRef")) or _string_field(value.get("path"))
+    if explicit:
+        return explicit
+    artifact_id = _string_field(value.get("id"))
+    return f"artifact:{artifact_id}" if artifact_id else None
+
+
+def _session_run_ref(value: Any) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    run_id = _string_field(value.get("id")) or _string_field(value.get("runId"))
+    return f"run:{run_id}" if run_id else None
+
+
+def _session_message_ref(value: Any) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    message_id = _string_field(value.get("id")) or _string_field(value.get("messageId"))
+    return f"message:{message_id}" if message_id else None
 
 
 def _string_field(value: Any) -> str | None:

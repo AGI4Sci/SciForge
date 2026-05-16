@@ -8,6 +8,7 @@ import {
 } from '@sciforge-ui/runtime-contract';
 
 import type { AgentStreamEvent } from './domain';
+import { formatSanitizedRuntimeDebugValue } from './runtimeDebugScrubber';
 
 export type WorkEventKind = RuntimeWorkEventKind;
 
@@ -148,11 +149,7 @@ export function summarizeWorklog(
 
 export function formatRawWorkEventOutput(event: AgentStreamEvent) {
   const raw = event.raw ?? { type: event.type, label: event.label, detail: event.detail };
-  try {
-    return JSON.stringify(raw, null, 2);
-  } catch {
-    return String(raw);
-  }
+  return formatSanitizedRuntimeDebugValue(raw);
 }
 
 export function structuredWorkEventSummary(event: AgentStreamEvent): StructuredWorkEventSummary | undefined {

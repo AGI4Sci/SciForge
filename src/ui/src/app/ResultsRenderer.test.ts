@@ -55,6 +55,39 @@ test('coerceReportPayload keeps normal markdown report bodies unchanged', () => 
   assert.equal(report.reportRef, undefined);
 });
 
+test('ResultsRenderer exposes stable browser runtime state hook from Projection', () => {
+  const session: SciForgeSession = {
+    ...emptySession(),
+    sessionId: 'session-runtime-hook',
+    runs: [{
+      ...completedRun('run-runtime-hook'),
+      raw: {
+        resultPresentation: projectionResultPresentation('run-runtime-hook', ['artifact:research-report']),
+      },
+    }],
+    artifacts: [{
+      id: 'research-report',
+      type: 'research-report',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: '1',
+      metadata: { runId: 'run-runtime-hook' },
+      data: { markdown: 'Ready provider report' },
+    }],
+  };
+
+  const html = renderResultsRenderer(session, { activeRunId: 'run-runtime-hook' });
+
+  assert.match(html, /data-testid="runtime-visible-state"/);
+  assert.match(html, /data-session-id="session-runtime-hook"/);
+  assert.match(html, /data-run-id="run-runtime-hook"/);
+  assert.match(html, /data-projection-status="satisfied"/);
+  assert.match(html, /data-presentation-kind="ready"/);
+  assert.match(html, /data-t-terminal-projection-ms="60000"/);
+  assert.match(html, /data-projection-wait-at-terminal="false"/);
+  assert.match(html, /data-raw-fallback-used="false"/);
+  assert.match(html, /data-raw-leak="false"/);
+});
+
 test('coerceReportPayload prefers markdown refs over JSON data refs', () => {
   const artifact: RuntimeArtifact = {
     id: 'research-report',

@@ -213,16 +213,21 @@ export function normalizeAgentResponse(
   const structured = extractJsonObject(outputText) ?? payloadLikeRecord(root) ?? {};
   const projectionAnswer = transportProjectionAnswer ?? projectionVisibleAnswer(structured);
   const contractValidationFailure = findContractValidationFailure(structured, root, runRecord);
+  const projectionIsSatisfied = projectionAnswer?.status === 'satisfied';
   const now = nowIso();
   const runId = asString(runRecord.id) || makeId('run');
-  const runStatus = runRecord.status === 'failed' || contractValidationFailure ? 'failed' : 'completed';
+  const runStatus = projectionIsSatisfied
+    ? 'completed'
+    : runRecord.status === 'failed' || contractValidationFailure
+      ? 'failed'
+      : 'completed';
   const cleanOutputText = outputText.replace(/```(?:json)?[\s\S]*?```/gi, '').trim() || outputText;
   const hasStructuredOutput = Object.keys(structured).length > 0;
   const failureSummary = userVisibleFailureSummary(structured, cleanOutputText);
-  const messageText = contractValidationFailure
-    ? messageFromContractValidationFailure(contractValidationFailure)
-    : projectionAnswer?.text
+  const messageText = projectionAnswer?.text
     ? projectionAnswer.text
+    : contractValidationFailure
+    ? messageFromContractValidationFailure(contractValidationFailure)
     : failureSummary
     ? failureSummary
     : runStatus === 'failed' && !hasStructuredOutput
@@ -407,8 +412,9 @@ function uniqueStringList(values: string[]) {
 }
 
 function withRuntimePresentationMetadata(raw: unknown, structured: Record<string, unknown>, objectReferences: ObjectReference[], contractValidationFailure?: ContractValidationFailure) {
+  const rawDisplayIntent = isRecord(raw) && isRecord(raw.displayIntent) ? raw.displayIntent : undefined;
   const metadata = {
-    displayIntent: isRecord(structured.displayIntent) ? structured.displayIntent : undefined,
+    displayIntent: isRecord(structured.displayIntent) ? structured.displayIntent : rawDisplayIntent,
     verificationResults: Array.isArray(structured.verificationResults)
       ? structured.verificationResults
       : isRecord(structured.verificationResult)

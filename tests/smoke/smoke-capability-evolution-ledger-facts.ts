@@ -8,6 +8,7 @@ import {
   type CapabilityEvolutionRecord,
   type CapabilityEvolutionRecordStatus,
 } from '../../packages/contracts/runtime/capability-evolution.js';
+import { normalizeToolPayloadShape } from '../../src/runtime/gateway/direct-answer-payload.js';
 import {
   appendCapabilityEvolutionRecord,
   readCapabilityEvolutionLedgerFacts,
@@ -130,7 +131,7 @@ const supplemented = await tryAgentServerSupplementMissingArtifacts({
     stderrRel: '.sciforge/logs/generated-fallback-facts.stderr.log',
   },
   expectedArtifactTypes: ['research-report', 'evidence-matrix'],
-  deps: {} as GeneratedTaskRunnerDeps,
+  deps: { normalizeToolPayloadShape } as GeneratedTaskRunnerDeps,
   runGeneratedTask: async () => payload('supplement-matrix', 'evidence-matrix', 'supplement-unit'),
 });
 assert.ok(supplemented?.artifacts.some((artifact) => artifact.id === 'supplement-matrix'));

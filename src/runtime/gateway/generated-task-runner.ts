@@ -50,6 +50,7 @@ export interface GeneratedTaskRunnerDeps {
     refs?: Record<string, unknown>,
   ): ToolPayload;
   coerceWorkspaceTaskPayload(value: unknown): ToolPayload | undefined;
+  normalizeToolPayloadShape(payload: ToolPayload): ToolPayload;
   schemaErrors(payload: unknown): string[];
   firstPayloadFailureReason(payload: ToolPayload, run?: WorkspaceTaskRunResult): string | undefined;
   payloadHasFailureStatus(payload: ToolPayload): boolean;

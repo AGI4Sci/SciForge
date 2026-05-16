@@ -127,6 +127,57 @@ test('prefers Projection visible answer over stale backend wrapper failure text'
   assert.equal(response.message.content, '已基于当前 artifact 总结两个风险。');
   assert.equal(response.run.response, '已基于当前 artifact 总结两个风险。');
   assert.doesNotMatch(response.message.content, /HTTP|api\.example|stdoutRef|backend failure/);
+  const raw = response.run.raw as Record<string, unknown>;
+  const displayIntent = raw.displayIntent as Record<string, unknown>;
+  const projection = displayIntent.conversationProjection as Record<string, unknown>;
+  assert.equal((projection.visibleAnswer as Record<string, unknown>).text, '已基于当前 artifact 总结两个风险。');
+});
+
+test('prefers satisfied Projection over stale ContractValidationFailure diagnostics', () => {
+  const response = normalizeAgentResponse('literature-evidence-review', '继续上一轮', {
+    ok: true,
+    data: {
+      run: {
+        id: 'run-projection-satisfied-stale-contract-failure',
+        status: 'failed',
+        output: {
+          result: JSON.stringify({
+            contractValidationFailure: {
+              contract: 'sciforge.contract-validation-failure.v1',
+              schemaPath: '/artifacts/0/data',
+              contractId: 'research-report.v1',
+              capabilityId: 'report-viewer',
+              failureKind: 'artifact-schema',
+              failureReason: 'stale wrapper failure after Projection was already satisfied.',
+              recoverActions: ['rerun stale wrapper'],
+              nextStep: 'Ignore stale diagnostic for the main result.',
+              relatedRefs: ['artifact:stale-wrapper'],
+              issues: [{ path: '/data/markdown', message: 'stale required field missing' }],
+            },
+            displayIntent: {
+              conversationProjection: {
+                visibleAnswer: {
+                  status: 'satisfied',
+                  text: 'Projection answer wins and remains the user-visible terminal result.',
+                  artifactRefs: ['artifact:current-report'],
+                },
+              },
+            },
+            executionUnits: [],
+            artifacts: [],
+          }),
+        },
+      },
+    },
+  });
+
+  assert.equal(response.run.status, 'completed');
+  assert.equal(response.message.status, 'completed');
+  assert.equal(response.message.content, 'Projection answer wins and remains the user-visible terminal result.');
+  assert.equal(response.run.response, 'Projection answer wins and remains the user-visible terminal result.');
+  assert.doesNotMatch(response.message.content, /ContractValidationFailure|stale wrapper|rerun stale/);
+  const raw = response.run.raw as Record<string, unknown>;
+  assert.equal((raw.contractValidationFailure as Record<string, unknown>)?.failureReason, 'stale wrapper failure after Projection was already satisfied.');
 });
 
 test('prefers Projection visible answer from parsed ToolPayload JSON output', () => {

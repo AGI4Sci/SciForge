@@ -10,7 +10,7 @@ import {
   resolveObjectReference,
   resumeRun,
 } from '../../src/runtime/backend-artifact-tools.js';
-import { coerceAgentServerToolPayload } from '../../src/runtime/gateway/direct-answer-payload.js';
+import { coerceAgentServerToolPayload, normalizeToolPayloadShape } from '../../src/runtime/gateway/direct-answer-payload.js';
 import { runAgentServerGeneratedTask, type GeneratedTaskRunnerDeps } from '../../src/runtime/gateway/generated-task-runner.js';
 import { repairNeededPayload } from '../../src/runtime/gateway/repair-policy.js';
 import { firstPayloadFailureReason, payloadHasFailureStatus } from '../../src/runtime/gateway/runtime-routing.js';
@@ -269,6 +269,7 @@ function depsFor(response: AgentServerGenerationResponse): GeneratedTaskRunnerDe
       if ('artifacts' in record && !Array.isArray(record.artifacts)) missing.push('artifacts must be an array');
       return missing;
     },
+    normalizeToolPayloadShape,
     firstPayloadFailureReason,
     payloadHasFailureStatus,
   };

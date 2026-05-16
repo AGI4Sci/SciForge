@@ -122,6 +122,29 @@ class GoalSnapshotTest(unittest.TestCase):
         self.assertEqual(snapshot["turnExecutionConstraints"]["executionModeHint"], "direct-context-answer")
         self.assertTrue(snapshot["turnExecutionConstraints"]["agentServerForbidden"])
 
+    def test_answer_only_continuation_transform_emits_direct_context_constraints(self) -> None:
+        snapshot = build_goal_snapshot(
+            {
+                "prompt": (
+                    "Continue previous answer: compress the three points into one checklist "
+                    "and explicitly reuse the previous conclusion. No new search, no code."
+                ),
+                "session": {
+                    "messages": [{"id": "msg-prior", "role": "scenario"}],
+                    "runs": [{"id": "run-prior", "status": "completed"}],
+                    "artifacts": [{"id": "research-report"}],
+                },
+            }
+        )
+
+        self.assertEqual(snapshot["taskRelation"], "continue")
+        self.assertEqual(snapshot["turnExecutionConstraints"]["executionModeHint"], "direct-context-answer")
+        self.assertTrue(snapshot["turnExecutionConstraints"]["agentServerForbidden"])
+        self.assertIn(
+            "answer-only continuation transform can be satisfied from prior Projection/refs",
+            snapshot["turnExecutionConstraints"]["reasons"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

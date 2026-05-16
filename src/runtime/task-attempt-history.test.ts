@@ -345,3 +345,68 @@ test('task attempts materialize terminal ConversationProjection into session run
     await rm(workspace, { recursive: true, force: true });
   }
 });
+
+test('task attempts materialize Projection from resultPresentation before backend wrapper text', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-task-result-presentation-projection-'));
+  const sessionBundleRef = '.sciforge/sessions/2026-05-12_literature_session-result-presentation';
+  const outputRef = `${sessionBundleRef}/task-results/generated-literature-result-presentation.json`;
+  try {
+    await mkdir(join(workspace, sessionBundleRef, 'records'), { recursive: true });
+    await mkdir(join(workspace, sessionBundleRef, 'task-results'), { recursive: true });
+    await writeFile(join(workspace, sessionBundleRef, 'records/session.json'), JSON.stringify({
+      schemaVersion: 2,
+      sessionId: 'session-result-presentation',
+      scenarioId: 'literature-evidence-review',
+      title: 'result presentation projection',
+      messages: [],
+      runs: [],
+      executionUnits: [],
+      artifacts: [],
+      createdAt: '2026-05-12T00:00:00.000Z',
+      updatedAt: '2026-05-12T00:00:00.000Z',
+    }), 'utf8');
+    await writeFile(join(workspace, sessionBundleRef, 'records/runs.json'), '[]', 'utf8');
+    await writeFile(join(workspace, outputRef), JSON.stringify({
+      displayIntent: {
+        resultPresentation: {
+          conversationProjection: {
+            schemaVersion: 'sciforge.conversation-projection.v1',
+            conversationId: 'conversation:result-presentation',
+            visibleAnswer: {
+              status: 'satisfied',
+              text: 'Projection answer from resultPresentation.',
+              artifactRefs: ['artifact:result-presentation-memo'],
+            },
+            activeRun: { id: 'run:result-presentation-projection', status: 'satisfied' },
+            recoverActions: [],
+            artifacts: [{ id: 'artifact:result-presentation-memo' }],
+            executionProcess: [],
+            auditRefs: [`${sessionBundleRef}/task-results/generated-literature-result-presentation.json`],
+          },
+        },
+      },
+      message: '后端运行未完成：backend failure',
+    }), 'utf8');
+
+    await appendTaskAttempt(workspace, {
+      id: 'generated-literature-result-presentation',
+      prompt: 'create a readable artifact',
+      skillDomain: 'literature',
+      skillId: 'agentserver.generate.literature',
+      scenarioPackageRef: { id: 'literature-evidence-review', version: '1.0.0', source: 'built-in' },
+      attempt: 1,
+      status: 'done',
+      outputRef,
+      sessionId: 'session-result-presentation',
+      sessionBundleRef,
+      createdAt: '2026-05-12T00:01:00.000Z',
+    } as TaskAttemptRecord);
+
+    const runs = JSON.parse(await readFile(join(workspace, sessionBundleRef, 'records/runs.json'), 'utf8'));
+    assert.equal(runs[0].id, 'run:result-presentation-projection');
+    assert.equal(runs[0].response, 'Projection answer from resultPresentation.');
+    assert.doesNotMatch(runs[0].response, /backend failure/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});

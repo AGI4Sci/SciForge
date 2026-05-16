@@ -531,7 +531,7 @@ export async function buildGeneratedTaskRunInputLifecycle(
         schemaVersion: 'sciforge.generated-task-helper.v1',
         moduleName: 'sciforge_task',
         helperRef: input.taskHelperRel,
-        importHint: 'from sciforge_task import load_input, write_payload, provider_route, has_ready_provider, require_provider_first, invoke_capability, invoke_provider',
+        importHint: 'from sciforge_task import load_input, write_payload, provider_route, has_ready_provider, require_provider_first, invoke_capability, invoke_provider, provider_result_is_empty, empty_result_payload',
       },
       capabilityProviderRoutes: {
         requiredCapabilityIds: providerRoutes.requiredCapabilityIds,
@@ -546,6 +546,7 @@ export async function buildGeneratedTaskRunInputLifecycle(
           'Import sciforge_task from the generated task entrypoint directory for input loading, ToolPayload writing, and provider route inspection.',
           'When capabilityProviderRoutes declares a ready capability route, call invoke_capability(task_input, capabilityId, input). invoke_provider is the web provider alias for web_search/web_fetch.',
           'Do not call requests, urllib, fetch, httpx, aiohttp, or Node http/https for web work that has a ready SciForge provider route.',
+          'After invoke_capability, check provider_result_is_empty(result); if empty, write_payload(output_path, empty_result_payload(...)) with refine/recover actions instead of waiting or repairing indefinitely.',
           'If a provider route is unavailable, empty, unauthorized, or rate limited, write an honest repair-needed or failed-with-reason ToolPayload with recoverActions.',
         ],
       },

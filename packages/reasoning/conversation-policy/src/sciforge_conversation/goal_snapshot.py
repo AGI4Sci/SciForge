@@ -35,6 +35,25 @@ CONTEXT_ONLY_HINTS = re.compile(
     r"|只(?:基于|使用|用)(?:当前|已有|提供的)?(?:上下文|引用|refs?|digest|摘要|产物)",
     re.I,
 )
+ANSWER_ONLY_TRANSFORM_HINTS = re.compile(
+    r"\b(?:compress|condense|shorten|summari[sz]e|rewrite|rephrase|convert|turn)\b"
+    r".{0,80}\b(?:previous|prior|last|existing|above|answer|conclusion|points?|checklist|bullets?)\b"
+    r"|\b(?:previous|prior|last|existing|above)\b.{0,80}\b(?:answer|conclusion|points?)\b.{0,80}\b(?:checklist|bullets?|summary)\b"
+    r"|(?:压缩|浓缩|改写|重写|总结|归纳|整理).{0,40}(?:上一轮|之前|刚才|已有|答案|结论|要点|清单)",
+    re.I,
+)
+NO_NEW_EXTERNAL_IO_HINTS = re.compile(
+    r"\b(?:no|without|do\s+not|don't)\s+(?:new\s+)?(?:search|browse|fetch|retrieve|web|external)\b"
+    r"|不要(?:新|重新)?(?:搜索|检索|浏览|访问|抓取|外部)"
+    r"|不(?:新|重新)?(?:搜索|检索|浏览|访问|抓取|外部)",
+    re.I,
+)
+NO_CODE_HINTS = re.compile(
+    r"\b(?:no|without|do\s+not|don't)\s+(?:new\s+)?(?:code|coding|script|execution|execute|run)\b"
+    r"|不要(?:新|重新)?(?:代码|编码|脚本|执行|运行)"
+    r"|不(?:新|重新)?(?:代码|编码|脚本|执行|运行)",
+    re.I,
+)
 AGENTSERVER_HINTS = re.compile(r"\bagent\s*server\b|\bagentserver\b|AgentServer", re.I)
 SCOPED_NO_RERUN_HINTS = re.compile(
     r"\b(?:do\s+not|don't|without|no)\s+re-?run\s+(?:unrelated|irrelevant|unnecessary|unchanged|completed|same|duplicate)\b"
@@ -208,10 +227,15 @@ def _infer_freshness(prompt: str, task_relation: str) -> dict[str, str] | None:
 def _turn_execution_constraints(prompt: str, explicit_refs: list[str], request: Mapping[str, Any] | Any) -> dict[str, Any] | None:
     no_execution = _has_global_no_execution_directive(prompt)
     context_only = bool(CONTEXT_ONLY_HINTS.search(prompt))
-    if not no_execution and not context_only:
+    answer_only_transform = _is_answer_only_transform(prompt, request)
+    if not no_execution and not context_only and not answer_only_transform:
         return None
-    forbidden = no_execution or context_only
-    agentserver_forbidden = forbidden and (AGENTSERVER_HINTS.search(prompt) is not None or context_only)
+    forbidden = no_execution or context_only or answer_only_transform
+    agentserver_forbidden = forbidden and (
+        AGENTSERVER_HINTS.search(prompt) is not None
+        or context_only
+        or answer_only_transform
+    )
     session = _get(request, "session")
     artifacts = _get(session, "artifacts") if isinstance(session, Mapping) else []
     execution_units = _get(session, "executionUnits") if isinstance(session, Mapping) else []
@@ -230,6 +254,11 @@ def _turn_execution_constraints(prompt: str, explicit_refs: list[str], request: 
         "initialResponseModeHint": "direct-context-answer",
         "reasons": [
             "current turn requested context-only or no-execution handling",
+            *(
+                ["answer-only continuation transform can be satisfied from prior Projection/refs"]
+                if answer_only_transform
+                else []
+            ),
             *(
                 ["AgentServer dispatch forbidden by current turn"]
                 if agentserver_forbidden
@@ -252,6 +281,21 @@ def _has_global_no_execution_directive(prompt: str) -> bool:
     if SCOPED_NO_RERUN_HINTS.search(prompt) and EXECUTION_CONTINUATION_HINTS.search(prompt):
         return False
     return True
+
+
+def _is_answer_only_transform(prompt: str, request: Mapping[str, Any] | Any) -> bool:
+    if not _has_prior_context(request):
+        return False
+    if not ANSWER_ONLY_TRANSFORM_HINTS.search(prompt):
+        return False
+    # Transforming the prior answer is direct-context only when the user excludes
+    # new IO/code side effects. This keeps fresh/provider/tool work on the normal route.
+    return bool(
+        NO_NEW_EXTERNAL_IO_HINTS.search(prompt)
+        or NO_CODE_HINTS.search(prompt)
+        or CONTEXT_ONLY_HINTS.search(prompt)
+        or NO_EXECUTION_HINTS.search(prompt)
+    )
 
 
 def _extract_refs(prompt: str) -> list[str]:

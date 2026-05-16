@@ -49,7 +49,14 @@ export function RunExecutionProcess({
     : executionProcessSteps(run, units, auditObjectReferences, trace);
   if (!steps.length) return null;
   return (
-    <div className="execution-process-thread" aria-label="按顺序记录的工作过程">
+    <div
+      className="execution-process-thread"
+      aria-label="按顺序记录的工作过程"
+      data-testid="runtime-execution-process"
+      data-source={projection ? 'projection' : 'audit'}
+      data-session-id={session.sessionId}
+      data-run-id={runId}
+    >
       {steps.map((step) => {
         const references = mergeObjectReferences(
           step.references ?? auditObjectReferences,
@@ -325,8 +332,8 @@ export function RunKeyInfo({
       </div>
       {claims.length ? (
         <div className="message-key-list">
-          {claims.map((claim) => (
-            <p key={claim.id} className="message-key-row">
+          {claims.map((claim, index) => (
+            <p key={`${claim.id || 'claim'}-${index}`} className="message-key-row">
               <span>判断：{claim.text}</span>
               <small>{claim.evidenceLevel} · confidence {Math.round(claim.confidence * 100)}%</small>
             </p>

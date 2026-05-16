@@ -4,6 +4,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { normalizeToolPayloadShape } from '../../src/runtime/gateway/direct-answer-payload.js';
 import { buildCompactRepairContext } from '../../src/runtime/gateway/agentserver-prompts.js';
 import { buildContextEnvelope } from '../../src/runtime/gateway/context-envelope.js';
 import { repairNeededPayload } from '../../src/runtime/gateway/repair-policy.js';
@@ -533,6 +534,7 @@ function depsForFixture(fixture: ProviderFixture) {
       const record = isRecord(payload) ? payload : {};
       return ['message', 'claims', 'uiManifest', 'executionUnits', 'artifacts'].filter((key) => !(key in record)).map((key) => `missing ${key}`);
     },
+    normalizeToolPayloadShape,
     firstPayloadFailureReason: (payload: ToolPayload) => {
       const failedUnit = payload.executionUnits.find((unit) => /failed|error|repair-needed/i.test(String(unit.status || '')));
       return failedUnit ? payload.message : undefined;

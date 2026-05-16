@@ -2,6 +2,12 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 
+import {
+  assertRealBrowserEvidenceManifest,
+  defaultRealBrowserEvidenceManifestPath,
+  readRealBrowserEvidenceManifest,
+} from './web-e2e/real-browser-evidence.js';
+
 type FinalManifest = {
   schemaVersion?: string;
   completionGate?: string;
@@ -17,6 +23,12 @@ type FinalManifest = {
   };
   selectedCases?: string[];
   webEvidenceRoot?: string;
+  realBrowserEvidence?: {
+    manifestPath?: string;
+    source?: string;
+    requiredCategories?: string[];
+    releaseBlocker?: boolean;
+  };
   caseManifests?: Array<{
     caseId?: string;
     manifestPath?: string;
@@ -36,6 +48,7 @@ type FinalManifest = {
     requiresNetworkSummaries?: boolean;
     requiresScreenshots?: boolean;
     requiresFailureOrImprovementNotes?: boolean;
+    requiresRealInAppBrowserEvidence?: boolean;
   };
 };
 
@@ -83,6 +96,19 @@ assert.equal(manifest.evidenceRequirements?.requiresConsoleLogs, true, 'console 
 assert.equal(manifest.evidenceRequirements?.requiresNetworkSummaries, true, 'network summary requirement');
 assert.equal(manifest.evidenceRequirements?.requiresScreenshots, true, 'screenshot requirement');
 assert.equal(manifest.evidenceRequirements?.requiresFailureOrImprovementNotes, true, 'failure/improvement note requirement');
+assert.equal(manifest.evidenceRequirements?.requiresRealInAppBrowserEvidence, true, 'real in-app browser evidence requirement');
+
+assert.ok(manifest.realBrowserEvidence?.manifestPath, 'final manifest must reference real in-app browser evidence');
+assert.equal(manifest.realBrowserEvidence?.source, 'codex-in-app-browser', 'final manifest real browser source');
+assert.equal(manifest.realBrowserEvidence?.releaseBlocker, true, 'real browser evidence must be a release blocker');
+assert.deepEqual(
+  manifest.realBrowserEvidence?.requiredCategories,
+  ['projection-restore', 'artifact-selection', 'provider-tool-latency'],
+  'final manifest real browser required categories',
+);
+const realBrowserManifestPath = manifest.realBrowserEvidence.manifestPath ?? defaultRealBrowserEvidenceManifestPath;
+const realBrowserManifest = await readRealBrowserEvidenceManifest(realBrowserManifestPath);
+await assertRealBrowserEvidenceManifest(realBrowserManifest, { manifestPath: realBrowserManifestPath, requireFiles: true });
 
 const selectedCases = new Set(assertStringArray(manifest.selectedCases, 'selectedCases'));
 const caseManifests = manifest.caseManifests ?? [];
@@ -122,7 +148,7 @@ for (const legacyScript of requiredLegacyScripts) {
   assert.ok((migration.migratedSteps ?? []).length > 0, `${legacyScript}: migrated steps are required`);
 }
 
-console.log(`[ok] single-agent final evidence manifest references C01-C18, no-legacy guard, and ${caseManifests.length} Web E2E case manifest(s)`);
+console.log(`[ok] single-agent final evidence manifest references C01-C18, no-legacy guard, ${caseManifests.length} Web E2E case manifest(s), and real in-app browser evidence`);
 
 async function readCaseManifest(path: string): Promise<CaseManifest> {
   const resolved = isAbsolute(path) ? path : join(root, path);

@@ -141,8 +141,9 @@ const rules: Rule[] = [
 // of these paths, lower the matching count in this table in the same change.
 const trackedBaselineCounts: Record<string, number> = {
   'src/runtime/gateway/agent-backend-config.ts#provider-scenario-prompt-special-case': 0,
-  'src/runtime/gateway/capability-provider-preflight.ts#provider-scenario-prompt-special-case': 26,
-  'src/runtime/gateway/direct-context-fast-path.ts#provider-scenario-prompt-special-case': 5,
+  'src/runtime/gateway/capability-provider-preflight.ts#provider-scenario-prompt-special-case': 31,
+  'src/runtime/gateway/direct-context-fast-path.ts#provider-scenario-prompt-special-case': 16,
+  'src/runtime/gateway/generated-task-runner-execution-lifecycle.ts#provider-scenario-prompt-special-case': 1,
   'src/runtime/gateway/generated-task-runner-validation-lifecycle.ts#provider-scenario-prompt-special-case': 1,
   'src/runtime/gateway/runtime-routing.ts#provider-scenario-prompt-special-case': 3,
   'src/runtime/gateway/transient-external-failure.ts#provider-scenario-prompt-special-case': 1,
@@ -164,7 +165,7 @@ const trackedBaselineCounts: Record<string, number> = {
   'src/runtime/gateway/capability-provider-preflight.ts#sa-provider-discovery-endpoint-leak': 0,
   'src/runtime/gateway/agentserver-context-contract.ts#sa-degraded-raw-context-shape': 0,
   'src/runtime/gateway/agentserver-context-window.ts#sa-degraded-raw-context-shape': 1,
-  'src/runtime/gateway/agentserver-prompts.ts#sa-degraded-raw-context-shape': 1,
+  'src/runtime/gateway/agentserver-prompts.ts#sa-degraded-raw-context-shape': 0,
   'src/ui/src/app/appShell/workspaceState.ts#sa-ui-legacy-raw-terminal-fallback': 0,
   'src/ui/src/app/ComponentWorkbenchPage.tsx#ui-semantic-fallback': 0,
   'src/ui/src/app/ScenarioBuilderPanel.tsx#ui-semantic-fallback': 1,

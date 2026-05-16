@@ -487,6 +487,69 @@ test('UI handoff keeps ref-backed artifact bodies and log refs bounded on contin
   assert.match(referencePolicy?.defaultAction ?? '', /stdoutRef\/stderrRef as audit refs/);
 });
 
+test('UI transport does not enter repair mode from prompt keywords alone', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_input, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return streamResponse([
+      {
+        result: {
+          message: 'Workspace result ready.',
+          executionUnits: [{ id: 'unit-1', status: 'done' }],
+          artifacts: [],
+        },
+      },
+    ]);
+  }) as typeof fetch;
+
+  await sendSciForgeToolMessage(messageInput(undefined, {
+    prompt: 'please repair retry and recover the previous answer wording only',
+    messages: [{ id: 'msg-prior', role: 'scenario', content: 'Prior answer', createdAt: '2026-05-16T00:00:00.000Z' }],
+    runs: [{ id: 'run-prior', scenarioId: 'literature-evidence-review', status: 'completed', prompt: 'prior', response: 'Prior answer', createdAt: '2026-05-16T00:00:00.000Z', completedAt: '2026-05-16T00:00:01.000Z' }],
+    executionUnits: [{ id: 'EU-done', tool: 'prior.task', status: 'done', hash: 'hash-done', params: '{}' }],
+  }), {});
+
+  const uiState = bodies[0]?.uiState as { contextReusePolicy?: { mode?: string; priorWorkSignals?: Record<string, unknown> } } | undefined;
+  assert.equal(uiState?.contextReusePolicy?.mode, 'continue');
+  assert.equal(uiState?.contextReusePolicy?.priorWorkSignals?.repairTargetAvailable, false);
+});
+
+test('UI transport enters repair mode from current failure refs without repair keywords', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_input, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return streamResponse([
+      {
+        result: {
+          message: 'Workspace result ready.',
+          executionUnits: [{ id: 'unit-1', status: 'done' }],
+          artifacts: [],
+        },
+      },
+    ]);
+  }) as typeof fetch;
+
+  await sendSciForgeToolMessage(messageInput(undefined, {
+    prompt: 'continue from the current failed projection using available refs',
+    messages: [{ id: 'msg-prior', role: 'scenario', content: 'Prior failed result', createdAt: '2026-05-16T00:00:00.000Z' }],
+    runs: [{ id: 'run-failed', scenarioId: 'literature-evidence-review', status: 'failed', prompt: 'prior', response: 'failed', createdAt: '2026-05-16T00:00:00.000Z', completedAt: '2026-05-16T00:00:01.000Z' }],
+    executionUnits: [{
+      id: 'EU-failed',
+      tool: 'prior.task',
+      status: 'repair-needed',
+      hash: 'hash-failed',
+      params: '{}',
+      outputRef: '.sciforge/task-results/failed.json',
+      failureReason: 'schema validation failed',
+      recoverActions: ['Regenerate from current failure refs only'],
+    }],
+  }), {});
+
+  const uiState = bodies[0]?.uiState as { contextReusePolicy?: { mode?: string; priorWorkSignals?: Record<string, unknown> } } | undefined;
+  assert.equal(uiState?.contextReusePolicy?.mode, 'repair');
+  assert.equal(uiState?.contextReusePolicy?.priorWorkSignals?.repairTargetAvailable, true);
+});
+
 test('pre-aborted signal cancels the workspace stream request controller', async () => {
   let requestSignal: AbortSignal | undefined;
   globalThis.fetch = (async (_input, init) => {

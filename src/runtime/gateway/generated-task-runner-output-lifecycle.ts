@@ -98,8 +98,13 @@ export async function completeGeneratedTaskRunOutputLifecycle(
     const payload = deps.coerceWorkspaceTaskPayload(boundaryPayload) ?? boundaryPayload;
     const rawErrors = deps.schemaErrors(rawPayload);
     const payloadErrors = deps.schemaErrors(payload);
-    const errors = payloadErrors.length ? payloadErrors : [];
-    let normalized = errors.length ? undefined : await deps.validateAndNormalizePayload(payload, request, skill, {
+    // Try normalization even when schema errors exist — normalizeToolPayloadShape
+    // coerces common AgentServer type mismatches (string confidence → number,
+    // array reasoningTrace → string). Only skip when normalization itself refuses.
+    const coercedPayload = payloadErrors.length ? deps.normalizeToolPayloadShape(payload) : payload;
+    const coercedErrors = payloadErrors.length ? deps.schemaErrors(coercedPayload) : [];
+    const errors = coercedErrors.length ? coercedErrors : [];
+    let normalized = errors.length ? undefined : await deps.validateAndNormalizePayload(coercedPayload, request, skill, {
       ...refs,
       runtimeFingerprint: run.runtimeFingerprint,
     });

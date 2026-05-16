@@ -49,6 +49,12 @@ type SingleAgentFinalManifest = {
   selectedTags: string[];
   isolatedRunRoot: string;
   webEvidenceRoot: string;
+  realBrowserEvidence: {
+    manifestPath: string;
+    source: 'codex-in-app-browser';
+    requiredCategories: ['projection-restore', 'artifact-selection', 'provider-tool-latency'];
+    releaseBlocker: true;
+  };
   devServices: WebE2eFinalDevService[];
   agentServer: {
     mode: WebE2eAgentServerMode;
@@ -68,6 +74,7 @@ type SingleAgentFinalManifest = {
     requiresNetworkSummaries: true;
     requiresScreenshots: true;
     requiresFailureOrImprovementNotes: true;
+    requiresRealInAppBrowserEvidence: true;
   };
 };
 
@@ -89,6 +96,7 @@ const migrationTag = 'sa-conf-11:migrated-browser-smoke';
 const singleAgentContractIds = Array.from({ length: 18 }, (_, index) => `C${String(index + 1).padStart(2, '0')}`);
 const defaultWebEvidenceRoot = resolve(root, 'docs', 'test-artifacts', 'web-e2e');
 const defaultSingleAgentFinalRoot = resolve(root, 'docs', 'test-artifacts', 'single-agent-final');
+const defaultRealBrowserEvidenceManifestPath = resolve(root, 'tests', 'fixtures', 'real-browser-evidence', 'manifest.json');
 
 const scenarios: BrowserSmokeMigrationScenario[] = [
   {
@@ -391,6 +399,12 @@ async function writeSingleAgentFinalManifest(input: {
     selectedTags: input.selectedTags,
     isolatedRunRoot: input.runRoot,
     webEvidenceRoot: input.webEvidenceRoot,
+    realBrowserEvidence: {
+      manifestPath: defaultRealBrowserEvidenceManifestPath,
+      source: 'codex-in-app-browser',
+      requiredCategories: ['projection-restore', 'artifact-selection', 'provider-tool-latency'],
+      releaseBlocker: true,
+    },
     devServices: input.devServices,
     agentServer: {
       mode: input.agentServerMode,
@@ -414,6 +428,7 @@ async function writeSingleAgentFinalManifest(input: {
       requiresNetworkSummaries: true,
       requiresScreenshots: true,
       requiresFailureOrImprovementNotes: true,
+      requiresRealInAppBrowserEvidence: true,
     },
   };
   if (input.requiredLegacyScripts.length > 0) {

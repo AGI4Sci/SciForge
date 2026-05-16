@@ -235,6 +235,32 @@ class ConversationPolicyContractTest(unittest.TestCase):
             ["run-trace", "execution-units", "failure-evidence"],
         )
 
+    def test_service_routes_answer_only_continuation_to_direct_context(self):
+        result = handle_payload({
+            "schemaVersion": REQUEST_SCHEMA_VERSION,
+            "requestId": "answer-only-continuation",
+            "turn": {
+                "text": (
+                    "Continue previous answer: compress the three points into one checklist "
+                    "and explicitly reuse the previous conclusion. No new search, no code."
+                ),
+                "refs": [],
+            },
+            "session": {
+                "messages": [{"id": "msg-prior", "role": "scenario"}],
+                "runs": [{"id": "run-prior", "status": "completed"}],
+                "artifacts": [{"id": "research-report", "type": "research-report"}],
+                "executionUnits": [],
+            },
+        })
+
+        self.assertEqual(result["goalSnapshot"]["taskRelation"], "continue")
+        self.assertEqual(result["executionModePlan"]["executionMode"], "direct-context-answer")
+        self.assertTrue(result["turnExecutionConstraints"]["agentServerForbidden"])
+        self.assertEqual(result["directContextDecision"]["decisionOwner"], "harness-policy")
+        self.assertIn("artifact:research-report", result["directContextDecision"]["usedRefs"])
+        self.assertEqual(result["responsePlan"]["initialResponseMode"], "direct-context-answer")
+
     def test_service_returns_structured_stdio_json(self):
         request_text = json.dumps(_read_fixture("request_basic.json"))
         completed = subprocess.run(

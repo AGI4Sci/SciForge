@@ -275,6 +275,121 @@ test('capability provider preflight treats explicit capability ids in prompts as
   assert.deepEqual(result.blockingRoutes.map((route) => route.capabilityId), ['web_fetch', 'web_search']);
 });
 
+test('capability provider preflight blocks unauthorized and rate-limited routes with public refs', () => {
+  const result = capabilityProviderPreflight({
+    skillDomain: 'literature',
+    prompt: 'Use web_search and web_fetch providers.',
+    selectedToolIds: ['web_search', 'web_fetch'],
+    artifacts: [],
+    uiState: {
+      capabilityProviderAvailability: [
+        {
+          id: 'sciforge.web-worker.web_search',
+          providerId: 'sciforge.web-worker.web_search',
+          capabilityId: 'web_search',
+          available: false,
+          status: 'unauthorized',
+          endpoint: 'https://private-provider.example.test/search',
+        },
+        {
+          id: 'sciforge.web-worker.web_fetch',
+          providerId: 'sciforge.web-worker.web_fetch',
+          capabilityId: 'web_fetch',
+          available: false,
+          status: 'rate-limited',
+          invokeUrl: 'https://private-provider.example.test/fetch',
+        },
+      ],
+    },
+  } as GatewayRequest);
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.blockingRoutes.map((route) => [route.capabilityId, route.status]), [
+    ['web_fetch', 'rate-limited'],
+    ['web_search', 'unauthorized'],
+  ]);
+
+  const handoff = capabilityProviderRoutesForHandoff({
+    skillDomain: 'literature',
+    prompt: 'Use web_search and web_fetch providers.',
+    selectedToolIds: ['web_search', 'web_fetch'],
+    artifacts: [],
+    uiState: {
+      capabilityProviderAvailability: [
+        { id: 'sciforge.web-worker.web_search', available: false, status: 'unauthorized', endpoint: 'https://private-provider.example.test/search' },
+        { id: 'sciforge.web-worker.web_fetch', available: false, status: 'rate-limited', invokeUrl: 'https://private-provider.example.test/fetch' },
+      ],
+    },
+  } as GatewayRequest);
+  assert.deepEqual(handoff.blockingRoutes.map((route) => route.routeTraceRef), [
+    'runtime://capability-provider-route/web_fetch',
+    'runtime://capability-provider-route/web_search',
+  ]);
+  assertNoProviderRouteLeaks(handoff);
+});
+
+test('capabilityProviderRoutes structured policy can require a provider route', () => {
+  const result = capabilityProviderPreflight({
+    skillDomain: 'literature',
+    prompt: 'Run the selected capability route.',
+    artifacts: [],
+    uiState: {
+      capabilityProviderRoutes: {
+        web_search: {
+          enabled: true,
+          capabilityId: 'web_search',
+          primaryProviderId: 'sciforge.web-worker.web_search',
+          health: 'offline',
+        },
+      },
+    },
+  } as GatewayRequest);
+
+  assert.deepEqual(result.requiredCapabilityIds, ['web_search']);
+  assert.equal(result.ok, false);
+  assert.equal(result.blockingRoutes[0]?.status, 'provider-unavailable');
+});
+
+test('capability provider route chooses a ready fallback provider as primary', () => {
+  const result = capabilityProviderPreflight({
+    skillDomain: 'literature',
+    prompt: 'Use web_search provider.',
+    selectedToolIds: ['web_search'],
+    artifacts: [],
+    uiState: {
+      capabilityProviderAvailability: [
+        {
+          id: 'sciforge.web-worker.web_search',
+          providerId: 'sciforge.web-worker.web_search',
+          capabilityId: 'web_search',
+          available: false,
+          status: 'provider-unavailable',
+        },
+        {
+          id: 'sciforge.web-worker.web_search.fallback',
+          providerId: 'sciforge.web-worker.web_search.fallback',
+          capabilityId: 'web_search',
+          available: true,
+          status: 'available',
+        },
+      ],
+      toolProviderRoutes: {
+        web_search: {
+          enabled: true,
+          capabilityId: 'web_search',
+          primaryProviderId: 'sciforge.web-worker.web_search',
+          fallbackProviderIds: ['sciforge.web-worker.web_search.fallback'],
+          health: 'ready',
+        },
+      },
+    },
+  } as GatewayRequest);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.routes[0]?.primaryProviderId, 'sciforge.web-worker.web_search.fallback');
+  assert.ok(result.routes[0]?.fallbackProviderIds.includes('sciforge.web-worker.web_search'));
+});
+
 function assertNoProviderRouteLeaks(value: unknown) {
   const serialized = JSON.stringify(value);
   assert.doesNotMatch(serialized, /(?:\\")?(endpoint|baseUrl|invokeUrl|invokePath|workerId|runtimeLocation|auth|workspaceRoots)(?:\\")?\s*:/);
