@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { GatewayRequest } from '../runtime-types';
-import { agentServerAgentId, agentServerContextPolicy, currentTurnReferences, requestNeedsAgentServerContinuity } from './agentserver-context-window';
+import { agentServerAgentId, agentServerContextPolicy, compactAgentServerCoreSnapshot, currentTurnReferences, requestNeedsAgentServerContinuity } from './agentserver-context-window';
 
 test('digest-only current turn is isolated from AgentServer continuity context', () => {
   const request = {
@@ -103,4 +103,27 @@ test('repair continuation uses stable session id without implicit raw AgentServe
     contextWindowLimit: undefined,
     modelContextWindow: undefined,
   });
+});
+
+test('AgentServer core snapshot recent turns are refs and digests only', () => {
+  const snapshot = compactAgentServerCoreSnapshot({
+    session: { id: 'agent-session-1', status: 'active' },
+    recentTurns: [{
+      turnNumber: 7,
+      role: 'assistant',
+      runId: 'run-7',
+      contentRef: '.sciforge/refs/turn-7.md',
+      content: 'RAW_AGENTSERVER_TURN_BODY_SHOULD_NOT_LEAK',
+      createdAt: '2026-05-16T00:00:00.000Z',
+    }],
+  }) as Record<string, unknown>;
+
+  const recentTurns = snapshot.recentTurns as Array<Record<string, unknown>>;
+  assert.equal(recentTurns.length, 1);
+  assert.equal(recentTurns[0]?.contentRef, '.sciforge/refs/turn-7.md');
+  assert.equal(recentTurns[0]?.contentChars, 'RAW_AGENTSERVER_TURN_BODY_SHOULD_NOT_LEAK'.length);
+  assert.equal(typeof recentTurns[0]?.contentDigest, 'string');
+  assert.equal(recentTurns[0]?.contentOmitted, true);
+  assert.equal('content' in (recentTurns[0] ?? {}), false);
+  assert.doesNotMatch(JSON.stringify(snapshot), /RAW_AGENTSERVER_TURN_BODY_SHOULD_NOT_LEAK/);
 });

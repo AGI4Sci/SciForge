@@ -20,6 +20,7 @@ test('evaluateHarness produces stable contract and trace for the same input', as
     requestId: 'req-stable',
     prompt: 'summarize current paper refs',
     contextRefs: ['ref:b', 'ref:a'],
+    conversationSignals: { latencyTier: 'instant' },
   };
 
   const first = await evaluateHarness(input);
@@ -180,6 +181,13 @@ test('balanced profile owns context audit follow-up intent', async () => {
   const result = await evaluateHarness({
     requestId: 'req-context-audit',
     prompt: 'What tools and refs were used for the previous result?',
+    conversationSignals: {
+      intentMode: 'audit',
+      directContextDecision: {
+        intent: 'run-diagnostic',
+        allowDirectContext: true,
+      },
+    },
     request: {
       artifacts: [{ id: 'research-report', type: 'research-report' }],
       uiState: {
@@ -197,10 +205,25 @@ test('balanced profile owns context audit follow-up intent', async () => {
   assert.ok(result.trace.stages.some((stage) => stage.callbackId === 'balanced-default.context-audit-intent'));
 });
 
-test('context audit callback does not capture fresh work', async () => {
+test('context audit callback requires structured audit policy and does not classify prompt text', async () => {
+  const promptOnly = await evaluateHarness({
+    requestId: 'req-prompt-only-audit',
+    prompt: 'What tools and refs were used for the previous result?',
+    request: {
+      artifacts: [{ id: 'research-report', type: 'research-report' }],
+    },
+  });
+
+  assert.equal(promptOnly.contract.intentMode, 'fresh');
+  assert.equal(promptOnly.contract.capabilityPolicy.preferredCapabilityIds.includes('runtime.direct-context-answer'), false);
+
   const result = await evaluateHarness({
     requestId: 'req-fresh-work',
     prompt: 'Please rerun the search and download the latest papers',
+    conversationSignals: {
+      intentMode: 'fresh',
+      requiresExecution: true,
+    },
     request: {
       artifacts: [{ id: 'research-report', type: 'research-report' }],
     },
@@ -208,6 +231,25 @@ test('context audit callback does not capture fresh work', async () => {
 
   assert.equal(result.contract.intentMode, 'fresh');
   assert.equal(result.contract.capabilityPolicy.preferredCapabilityIds.includes('runtime.direct-context-answer'), false);
+});
+
+test('latency classifier consumes structured policy instead of prompt keywords', async () => {
+  const promptOnly = await evaluateHarness({
+    requestId: 'req-prompt-keyword-latency',
+    prompt: 'Run a deep background reproduction later and notify me',
+  });
+  const structured = await evaluateHarness({
+    requestId: 'req-structured-latency',
+    prompt: 'Summarize this.',
+    conversationSignals: {
+      latencyTier: 'background',
+      backgroundContinuation: true,
+    },
+  });
+
+  assert.equal(promptOnly.contract.latencyTier, 'quick');
+  assert.equal(structured.contract.latencyTier, 'background');
+  assert.equal(structured.contract.progressPlan.backgroundContinuation, true);
 });
 
 test('same request can select different latency tiers with different budgets and stage plans', async () => {

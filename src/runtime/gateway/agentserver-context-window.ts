@@ -750,15 +750,7 @@ export function compactAgentServerCoreSnapshot(snapshot: Record<string, unknown>
     workBudget: clipForAgentServerJson(snapshot.workBudget, 2),
     persistentBudget: clipForAgentServerJson(snapshot.persistentBudget, 2),
     memoryBudget: clipForAgentServerJson(snapshot.memoryBudget, 2),
-    recentTurns: recentTurns.slice(-6).map((turn) => ({
-      turnNumber: typeof turn.turnNumber === 'number' ? turn.turnNumber : undefined,
-      role: stringField(turn.role),
-      runId: stringField(turn.runId),
-      contentRef: stringField(turn.contentRef),
-      contentOmitted: turn.contentOmitted === true,
-      content: clipForAgentServerPrompt(turn.content, 800),
-      createdAt: stringField(turn.createdAt),
-    })),
+    recentTurns: recentTurns.slice(-6).map(compactAgentServerCoreRecentTurn),
     currentWork: {
       entryCount: currentWorkEntries.length,
       rawTurnCount: currentWorkEntries.filter((entry) => entry.kind === 'turn' || entry.role).length,
@@ -773,5 +765,19 @@ export function compactAgentServerCoreSnapshot(snapshot: Record<string, unknown>
           summary: Array.isArray(entry.summary) ? entry.summary.slice(0, 4).map((item) => clipForAgentServerPrompt(item, 400)) : undefined,
         })),
     },
+  };
+}
+
+function compactAgentServerCoreRecentTurn(turn: Record<string, unknown>) {
+  const rawContent = stringField(turn.content);
+  return {
+    turnNumber: typeof turn.turnNumber === 'number' ? turn.turnNumber : undefined,
+    role: stringField(turn.role),
+    runId: stringField(turn.runId),
+    contentRef: stringField(turn.contentRef),
+    contentDigest: stringField(turn.contentDigest) ?? (rawContent ? sha1(rawContent) : undefined),
+    contentChars: firstFiniteNumber(turn.contentChars, rawContent?.length),
+    contentOmitted: turn.contentOmitted === true || Boolean(rawContent),
+    createdAt: stringField(turn.createdAt),
   };
 }

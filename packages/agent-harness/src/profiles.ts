@@ -3,6 +3,7 @@ import type {
   ContextBudget,
   HarnessCallback,
   HarnessDefaults,
+  HarnessInput,
   HarnessProfile,
   HarnessProfileId,
   LatencyTier,
@@ -413,12 +414,6 @@ const latencyTierPolicies: Record<LatencyTier, LatencyTierPolicy> = {
   },
 };
 
-const CONTEXT_AUDIT_HINT = /(?:什么|哪些|哪个|怎么|怎样|为什么|为何|原因|工具|日志|记录|引用|证据|验证|中断|失败|抽取|提取|how|why|what|which|tool|log|ref|reference|evidence|verify|extract|failed|stopped|interrupted)/i;
-const FRESH_WORK_HINT = /(?:重新|重跑|再跑|再检索|检索一下|搜索|查找|下载并|阅读全文|最新|今天|过去一周|生成新的|继续执行|修复|rerun|run again|search|retrieve|fetch|download|latest|today|generate new|repair)/i;
-const BACKGROUND_TIER_HINT = /(?:后台|不用等|稍后通知|继续跑|background|later|notify me|keep working)/i;
-const DEEP_TIER_HINT = /(?:深入|全面|严格|审计|复现|长报告|系统性|deep|thorough|comprehensive|strict|audit|reproduce|reproduction|long report|research grade)/i;
-const BOUNDED_TIER_HINT = /(?:运行|执行|生成|修复|下载|检索|搜索|读取文件|workspace|run|execute|generate|repair|download|retrieve|search|file|code)/i;
-
 function defaults(overrides: Partial<HarnessDefaults>): HarnessDefaults {
   const latencyTier = overrides.latencyTier ?? 'quick';
   const tierPolicy = getLatencyTierPolicy(latencyTier);
@@ -809,19 +804,91 @@ const profileCallbacks: Record<string, HarnessCallback[]> = {
   ],
 };
 
-function isContextAuditFollowup(input: { prompt?: string; request?: unknown }) {
-  const prompt = input.prompt?.trim() ?? '';
-  if (!prompt || FRESH_WORK_HINT.test(prompt) || !CONTEXT_AUDIT_HINT.test(prompt)) return false;
+function isContextAuditFollowup(input: HarnessInput) {
+  const decision = structuredPolicyDecision(input);
+  const directContextIntent = stringField(decision.directContextDecision?.intent);
+  const structuredAuditIntent = decision.intentMode === 'audit'
+    || decision.auditFollowup === true
+    || directContextIntent === 'context-summary'
+    || directContextIntent === 'run-diagnostic'
+    || directContextIntent === 'artifact-status';
+  if (!structuredAuditIntent || decision.intentMode === 'fresh' || decision.intentMode === 'repair') return false;
   return hasPriorContext(input.request);
 }
 
-function classifyLatencyTier(input: { prompt?: string; request?: unknown; candidateCapabilities?: unknown[] }) {
-  const prompt = input.prompt?.trim() ?? '';
-  if (BACKGROUND_TIER_HINT.test(prompt)) return 'background' satisfies LatencyTier;
-  if (DEEP_TIER_HINT.test(prompt)) return 'deep' satisfies LatencyTier;
-  if (BOUNDED_TIER_HINT.test(prompt) || nonEmptyArray(input.candidateCapabilities)) return 'bounded' satisfies LatencyTier;
-  if (prompt.length > 0 && prompt.length <= 180 && !hasPriorContext(input.request)) return 'instant' satisfies LatencyTier;
+function classifyLatencyTier(input: HarnessInput) {
+  const decision = structuredPolicyDecision(input);
+  if (decision.latencyTier) return decision.latencyTier;
+  if (decision.backgroundContinuation === true) return 'background' satisfies LatencyTier;
+  if (decision.depth === 'deep' || decision.verificationIntensity === 'strict' || decision.verificationIntensity === 'audit') return 'deep' satisfies LatencyTier;
+  if (decision.requiresExecution === true || nonEmptyArray(input.candidateCapabilities)) return 'bounded' satisfies LatencyTier;
+  if (decision.directContextDecision?.allowDirectContext === true && !hasPriorContext(input.request)) return 'instant' satisfies LatencyTier;
   return 'quick' satisfies LatencyTier;
+}
+
+function structuredPolicyDecision(input: HarnessInput) {
+  const conversationSignals = isPlainRecord(input.conversationSignals) ? input.conversationSignals : {};
+  const runtimeConfig = isPlainRecord(input.runtimeConfig) ? input.runtimeConfig : {};
+  const request = isPlainRecord(input.request) ? input.request : {};
+  const uiState = isPlainRecord(request.uiState) ? request.uiState : {};
+  const agentHarness = isPlainRecord(uiState.agentHarness) ? uiState.agentHarness : {};
+  const contract = isPlainRecord(agentHarness.contract) ? agentHarness.contract : {};
+  return {
+    intentMode: normalizeIntentMode(
+      input.intentMode
+        ?? stringField(conversationSignals.intentMode)
+        ?? stringField(runtimeConfig.intentMode)
+        ?? stringField(contract.intentMode),
+    ),
+    latencyTier: normalizeLatencyTier(
+      input.latencyTier
+        ?? stringField(conversationSignals.latencyTier)
+        ?? stringField(runtimeConfig.latencyTier),
+    ),
+    auditFollowup: conversationSignals.auditFollowup === true || runtimeConfig.auditFollowup === true,
+    backgroundContinuation: conversationSignals.backgroundContinuation === true || runtimeConfig.backgroundContinuation === true,
+    requiresExecution: conversationSignals.requiresExecution === true || runtimeConfig.requiresExecution === true,
+    depth: stringField(conversationSignals.depth) ?? stringField(runtimeConfig.depth),
+    verificationIntensity: stringField(conversationSignals.verificationIntensity) ?? stringField(runtimeConfig.verificationIntensity),
+    directContextDecision: firstRecord(
+      conversationSignals.directContextDecision,
+      runtimeConfig.directContextDecision,
+      uiState.directContextDecision,
+    ),
+  };
+}
+
+function normalizeIntentMode(value: unknown) {
+  return value === 'fresh'
+    || value === 'continuation'
+    || value === 'repair'
+    || value === 'audit'
+    || value === 'file-grounded'
+    || value === 'interactive'
+    ? value
+    : undefined;
+}
+
+function normalizeLatencyTier(value: unknown): LatencyTier | undefined {
+  return value === 'instant'
+    || value === 'quick'
+    || value === 'bounded'
+    || value === 'deep'
+    || value === 'background'
+    ? value
+    : undefined;
+}
+
+function firstRecord(...values: unknown[]) {
+  return values.find(isPlainRecord);
+}
+
+function stringField(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function hasPriorContext(request: unknown) {
