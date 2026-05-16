@@ -3,7 +3,9 @@ import { test } from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { PROCESS_PROGRESS_EVENT_TYPE, PROCESS_PROGRESS_PHASE, PROCESS_PROGRESS_STATUS } from '@sciforge-ui/runtime-contract';
-import { runIdForMessage } from './chat/messageRunPresentation';
+import { defaultSciForgeConfig } from '../config';
+import { ChatPanel } from './ChatPanel';
+import { RunVerificationTag, runIdForMessage } from './chat/messageRunPresentation';
 import { RunExecutionProcess, RunKeyInfo } from './chat/RunExecutionProcess';
 import { runningMessageContentFromStream } from './chat/runStatusPresentation';
 import type { AgentStreamEvent, SciForgeMessage, SciForgeRun, SciForgeSession } from '../domain';
@@ -182,4 +184,120 @@ test('chat run process and key info prefer projection over raw failed execution 
   assert.doesNotMatch(processHtml, /legacy\.raw/);
   assert.match(keyInfoHtml, /本轮结果/);
   assert.match(keyInfoHtml, /Projection Report/);
+});
+
+test('chat verification badge is projection-only and ignores raw verification fallback', () => {
+  const rawOnly = renderToStaticMarkup(createElement(RunVerificationTag, {
+    runId: 'run-raw-verification',
+    runs: [{
+      id: 'run-raw-verification',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'raw verification',
+      response: 'done',
+      createdAt: '2026-05-13T00:00:00.000Z',
+      raw: {
+        verificationResult: { verdict: 'pass', critique: 'RAW_VERIFICATION_SHOULD_NOT_RENDER' },
+        displayIntent: { verification: { verdict: 'fail' } },
+      },
+    }],
+  }));
+  const projected = renderToStaticMarkup(createElement(RunVerificationTag, {
+    runId: 'run-projected-verification',
+    runs: [{
+      id: 'run-projected-verification',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'projected verification',
+      response: 'done',
+      createdAt: '2026-05-13T00:00:00.000Z',
+      raw: {
+        resultPresentation: {
+          conversationProjection: {
+            schemaVersion: 'sciforge.conversation-projection.v1',
+            conversationId: 'conversation-projected-verification',
+            visibleAnswer: { status: 'satisfied', text: 'Projection answer.', artifactRefs: [] },
+            artifacts: [],
+            executionProcess: [],
+            recoverActions: [],
+            verificationState: { status: 'pass', verifierRef: 'verification:projection' },
+            auditRefs: [],
+            diagnostics: [],
+          },
+        },
+      },
+    }],
+  }));
+
+  assert.equal(rawOnly, '');
+  assert.match(projected, /Verification: 已验证/);
+  assert.match(projected, /verification:projection/);
+});
+
+test('chat final message body ignores raw displayIntent resultPresentation', () => {
+  const session: SciForgeSession = {
+    schemaVersion: 2,
+    sessionId: 'session-chat-display-intent',
+    scenarioId: 'literature-evidence-review',
+    title: 'chat display intent',
+    createdAt: '2026-05-13T00:00:00.000Z',
+    updatedAt: '2026-05-13T00:00:10.000Z',
+    messages: [
+      { id: 'msg-user-display-intent', role: 'user', content: 'show chat answer', createdAt: '2026-05-13T00:00:00.000Z' },
+      { id: 'msg-scenario-display-intent', role: 'scenario', content: 'ORIGINAL_CHAT_BODY', createdAt: '2026-05-13T00:00:05.000Z' },
+    ],
+    runs: [{
+      id: 'run-display-intent',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'show chat answer',
+      response: 'ORIGINAL_CHAT_BODY',
+      createdAt: '2026-05-13T00:00:05.000Z',
+      raw: {
+        displayIntent: {
+          resultPresentation: {
+            answerBlocks: [{ id: 'answer-raw', text: 'DISPLAY_INTENT_SHOULD_NOT_RENDER' }],
+            keyFindings: [],
+          },
+        },
+      },
+    }],
+    uiManifest: [],
+    claims: [],
+    executionUnits: [],
+    artifacts: [],
+    notebook: [],
+    versions: [],
+    hiddenResultSlotIds: [],
+  };
+  const html = renderToStaticMarkup(createElement(ChatPanel, {
+    scenarioId: 'literature-evidence-review',
+    role: 'Researcher',
+    config: defaultSciForgeConfig,
+    session,
+    input: '',
+    savedScrollTop: 0,
+    onInputChange: () => undefined,
+    onScrollTopChange: () => undefined,
+    onSessionChange: () => undefined,
+    onNewChat: () => undefined,
+    onDeleteChat: () => undefined,
+    archivedSessions: [],
+    onRestoreArchivedSession: () => undefined,
+    onDeleteArchivedSessions: () => undefined,
+    onClearArchivedSessions: () => undefined,
+    onEditMessage: () => undefined,
+    onDeleteMessage: () => undefined,
+    archivedCount: 0,
+    onAutoRunConsumed: () => undefined,
+    onConfigChange: () => undefined,
+    onTimelineEvent: () => undefined,
+    onActiveRunChange: () => undefined,
+    onMarkReusableRun: () => undefined,
+    onObjectFocus: () => undefined,
+    runtimeHealth: [],
+  }));
+
+  assert.match(html, /ORIGINAL_CHAT_BODY/);
+  assert.doesNotMatch(html, /DISPLAY_INTENT_SHOULD_NOT_RENDER/);
 });

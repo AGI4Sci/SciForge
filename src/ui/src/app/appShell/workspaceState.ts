@@ -3,7 +3,6 @@ import {
   makeId,
   nowIso,
   type RuntimeArtifact,
-  type RuntimeExecutionUnit,
   type SciForgeRun,
   type SciForgeSession,
   type SciForgeWorkspaceState,
@@ -27,9 +26,6 @@ import {
 import type { HandoffAutoRunRequest } from '../results/viewPlanResolver';
 
 const TIMELINE_EVENT_LIMIT = 200;
-const RECOVERABLE_RUN_STATUSES = new Set(['failed']);
-const RECOVERABLE_EXECUTION_UNIT_STATUSES = new Set(['failed', 'failed-with-reason', 'repair-needed', 'needs-human']);
-const RECOVERABLE_TASK_CARD_STATUSES = new Set(['partial', 'needs-work', 'needs-human', 'failed', 'cancelled']);
 
 export interface ArtifactHandoffTransition {
   targetScenario: ScenarioId;
@@ -107,20 +103,6 @@ export function recoverableRunFocusForSession(session: SciForgeSession): Workspa
     activeRunId: candidate.run.id,
     reason: candidate.reason,
     updatedAt: runActivityTime(candidate.run, session),
-  };
-}
-
-export function recoverableRunAuditFallbackForSession(session: SciForgeSession): WorkspaceRecoveryFocus | undefined {
-  const candidate = [...session.runs]
-    .reverse()
-    .find((run) => legacyRawRecoverableReasonForRun(session, run));
-  if (!candidate) return undefined;
-  return {
-    scenarioId: session.scenarioId,
-    sessionId: session.sessionId,
-    activeRunId: candidate.id,
-    reason: legacyRawRecoverableReasonForRun(session, candidate) ?? 'failed-run',
-    updatedAt: runActivityTime(candidate, session),
   };
 }
 
@@ -253,15 +235,6 @@ function recoverableReasonForRun(session: SciForgeSession, run: SciForgeRun): { 
   return undefined;
 }
 
-function legacyRawRecoverableReasonForRun(session: SciForgeSession, run: SciForgeRun): WorkspaceRecoveryFocus['reason'] | undefined {
-  if (conversationProjectionForRun(run)) return undefined;
-  if (RECOVERABLE_RUN_STATUSES.has(run.status)) return 'failed-run';
-  if (auditExecutionUnitsForRun(session, run).some(isRecoverableExecutionUnit)) return 'repair-needed-run';
-  if (run.acceptance?.severity === 'failed' || run.acceptance?.severity === 'repairable') return 'repair-needed-run';
-  if (rawHasRecoverableTaskState(run.raw) || rawHasRecoverableTaskState(parseJsonObject(run.response))) return 'repair-needed-run';
-  return undefined;
-}
-
 function runForProjectedActiveRun(session: SciForgeSession, carrierRun: SciForgeRun, projectedActiveRunId: string | undefined): SciForgeRun {
   const normalizedId = projectedActiveRunId ? stripRunRefPrefix(projectedActiveRunId) : undefined;
   if (!normalizedId) return carrierRun;
@@ -270,53 +243,6 @@ function runForProjectedActiveRun(session: SciForgeSession, carrierRun: SciForge
 
 function stripRunRefPrefix(value: string) {
   return value.replace(/^run::?/i, '');
-}
-
-function isRecoverableExecutionUnit(unit: RuntimeExecutionUnit) {
-  return RECOVERABLE_EXECUTION_UNIT_STATUSES.has(unit.status);
-}
-
-function rawHasRecoverableTaskState(value: unknown): boolean {
-  const record = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
-  if (!record) return false;
-  const status = typeof record.status === 'string' ? record.status : undefined;
-  if (status && RECOVERABLE_EXECUTION_UNIT_STATUSES.has(status)) return true;
-  if (status && isTaskRunCardLike(record) && RECOVERABLE_TASK_CARD_STATUSES.has(status)) return true;
-  const taskRunCard = record.taskRunCard && typeof record.taskRunCard === 'object' && !Array.isArray(record.taskRunCard)
-    ? record.taskRunCard as Record<string, unknown>
-    : undefined;
-  if (typeof taskRunCard?.status === 'string' && RECOVERABLE_TASK_CARD_STATUSES.has(taskRunCard.status)) return true;
-  const resultPresentation = record.resultPresentation && typeof record.resultPresentation === 'object' && !Array.isArray(record.resultPresentation)
-    ? record.resultPresentation as Record<string, unknown>
-    : undefined;
-  const displayIntent = record.displayIntent && typeof record.displayIntent === 'object' && !Array.isArray(record.displayIntent)
-    ? record.displayIntent as Record<string, unknown>
-    : undefined;
-  return rawHasRecoverableTaskState(record.repairState)
-    || rawHasRecoverableTaskState(record.backendRepair)
-    || rawHasRecoverableTaskState(record.acceptanceRepair)
-    || rawHasRecoverableTaskState(record.backgroundCompletion)
-    || rawHasRecoverableTaskState(resultPresentation?.taskRunCard)
-    || rawHasRecoverableTaskState(displayIntent?.taskRunCard);
-}
-
-function isTaskRunCardLike(record: Record<string, unknown>) {
-  return record.schemaVersion === 'sciforge.task-run-card.v1'
-    || Array.isArray(record.executionUnitRefs)
-    || typeof record.protocolStatus === 'string'
-    || typeof record.taskOutcome === 'string';
-}
-
-function parseJsonObject(value: unknown): Record<string, unknown> | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return undefined;
-  try {
-    const parsed = JSON.parse(trimmed);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function runActivityTime(run: SciForgeRun, session: SciForgeSession) {

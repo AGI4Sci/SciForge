@@ -65,29 +65,7 @@ function verificationTagForRun(runs: SciForgeRun[], runId: string): Verification
       variant: verificationVerdictVariant(projectionVerdict),
     };
   }
-  const raw = isRecord(run?.raw) ? run.raw : undefined;
-  const result = firstVerificationResult(raw);
-  const displayIntent = isRecord(raw?.displayIntent) ? raw.displayIntent : undefined;
-  const displayVerification = isRecord(displayIntent?.verification) ? displayIntent.verification : undefined;
-  const verdict = stringField(result?.verdict) ?? stringField(displayVerification?.verdict);
-  if (!verdict) return undefined;
-  const critique = stringField(result?.critique) ?? stringField(result?.reason);
-  return {
-    label: `Verification: ${verificationVerdictLabel(verdict)}`,
-    title: critique || `Verification ${verdict}`,
-    variant: verificationVerdictVariant(verdict),
-  };
-}
-
-function firstVerificationResult(raw: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
-  const direct = raw?.verificationResult;
-  if (isRecord(direct)) return direct;
-  const list = Array.isArray(raw?.verificationResults) ? raw.verificationResults : [];
-  return list.find(isRecord);
-}
-
-function stringField(value: unknown) {
-  return typeof value === 'string' && value.trim() ? value : undefined;
+  return undefined;
 }
 
 function verificationVerdictLabel(verdict: string) {
@@ -106,8 +84,4 @@ function verificationVerdictVariant(verdict: string): BadgeVariant {
   if (verdict === 'fail') return 'danger';
   if (verdict === 'needs-human' || verdict === 'uncertain') return 'warning';
   return 'muted';
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }

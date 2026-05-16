@@ -126,7 +126,7 @@ const trackedBaselineCounts: Record<string, number> = {
   'src/runtime/gateway/agentserver-context-contract.ts#sa-degraded-raw-context-shape': 6,
   'src/runtime/gateway/agentserver-context-window.ts#sa-degraded-raw-context-shape': 2,
   'src/runtime/gateway/agentserver-prompts.ts#sa-degraded-raw-context-shape': 2,
-  'src/ui/src/app/appShell/workspaceState.ts#sa-ui-legacy-raw-terminal-fallback': 3,
+  'src/ui/src/app/appShell/workspaceState.ts#sa-ui-legacy-raw-terminal-fallback': 0,
   'src/ui/src/app/ComponentWorkbenchPage.tsx#ui-semantic-fallback': 0,
   'src/ui/src/app/ScenarioBuilderPanel.tsx#ui-semantic-fallback': 1,
   'src/ui/src/app/results-renderer-registry-slot.tsx#ui-semantic-fallback': 1,

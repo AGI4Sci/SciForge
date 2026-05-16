@@ -857,7 +857,6 @@ export function ChatPanel({
                       <FinalMessageContent
                         content={message.content}
                         references={inlineObjectReferencesForMessage(message, session, messageRunId)}
-                        resultPresentation={resultPresentationForRun(session.runs, messageRunId)}
                         onObjectFocus={onObjectFocus}
                       />
                     </>
@@ -1042,14 +1041,6 @@ function referenceTargetFromEvent(event: MouseEvent): { element: HTMLElement; re
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function resultPresentationForRun(runs: SciForgeRun[], runId?: string) {
-  if (!runId) return undefined;
-  const run = runs.find((item) => item.id === runId);
-  const raw = isRecord(run?.raw) ? run.raw : undefined;
-  const displayIntent = isRecord(raw?.displayIntent) ? raw.displayIntent : undefined;
-  return displayIntent?.resultPresentation;
 }
 
 async function copyTextToClipboard(text: string) {

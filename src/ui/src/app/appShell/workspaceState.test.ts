@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { SciForgeSession, SciForgeWorkspaceState, TimelineEventRecord } from '../../domain';
 import { sessionWriteConflictsForState, withSessionWriteGuard } from '../../sessionStore';
-import { appendTimelineEventToWorkspace, applySessionUpdateToWorkspace, recoverableRunAuditFallbackForSession, recoverableRunFocusForSession, touchWorkspaceUpdatedAt, tryApplySessionUpdateToWorkspace, workspaceRecoveryFocusForState } from './workspaceState';
+import { appendTimelineEventToWorkspace, applySessionUpdateToWorkspace, recoverableRunFocusForSession, touchWorkspaceUpdatedAt, tryApplySessionUpdateToWorkspace, workspaceRecoveryFocusForState } from './workspaceState';
 
 function session(runs: SciForgeSession['runs'] = []): SciForgeSession {
   return {
@@ -192,7 +192,7 @@ test('run timeline includes failed execution units from the failed run payload',
   assert.deepEqual(next.timelineEvents?.[0].executionUnitRefs, ['EU-failed-payload']);
 });
 
-test('recoverable focus selects projection-level repair-needed run instead of timeline-only or raw history', () => {
+test('recoverable focus selects projection-level repair-needed run and ignores timeline-only or raw history', () => {
   const oldFailedSession = session([{
     id: 'run-old-failed',
     scenarioId: 'scenario-any',
@@ -277,8 +277,6 @@ test('recoverable focus selects projection-level repair-needed run instead of ti
 
   assert.equal(recoverableRunFocusForSession(oldFailedSession), undefined);
   assert.equal(recoverableRunFocusForSession(rawRepairSession), undefined);
-  assert.equal(recoverableRunAuditFallbackForSession(oldFailedSession)?.activeRunId, 'run-old-failed');
-  assert.equal(recoverableRunAuditFallbackForSession(rawRepairSession)?.activeRunId, 'run-raw-repair-needed');
   assert.equal(recoverableRunFocusForSession(recentRepairSession)?.activeRunId, 'run-repair-needed');
   assert.deepEqual(workspaceRecoveryFocusForState(state), {
     scenarioId: 'scenario-repair',
