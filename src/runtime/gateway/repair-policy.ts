@@ -658,8 +658,12 @@ function repairBoundaryAllowedPrefixes(scope: RepairBoundaryScope) {
   const generatedTaskDir = taskDir && /^(?:tasks|generated-tasks|\.sciforge\/tasks|\.sciforge\/sessions\/[^/]+\/tasks)\//.test(`${taskDir}/`)
     ? `${taskDir.replace(/\/+$/, '')}/`
     : undefined;
+  const sessionRoot = taskRel?.match(/^(\.sciforge\/sessions\/[^/]+)\//)?.[1];
+  const outputNamespaces = ['artifacts', 'task-results', 'logs', 'data', 'exports'];
   return uniqueStrings([
     ...explicit,
+    ...outputNamespaces.map((name) => `.sciforge/${name}/`),
+    ...(sessionRoot ? outputNamespaces.map((name) => `${sessionRoot}/${name}/`) : []),
     generatedTaskDir,
   ].filter((value): value is string => Boolean(value)));
 }

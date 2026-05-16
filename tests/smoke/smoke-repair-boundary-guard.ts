@@ -18,8 +18,8 @@ const brokenTask = [
   'input_path = sys.argv[1]',
   'output_path = sys.argv[2]',
   'open(input_path, "r", encoding="utf-8").read(1)',
-  'sys.stderr.write("generated task failed before output\\n")',
-  'raise SystemExit(2)',
+  'open(output_path, "w", encoding="utf-8").write("{not valid json")',
+  'sys.stderr.write("generated task wrote invalid output\\n")',
 ].join('\n');
 
 const fixedTask = [
