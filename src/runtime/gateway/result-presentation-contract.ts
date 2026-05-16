@@ -43,10 +43,10 @@ export function attachResultPresentationContract(
     forceRecomputeProjection: context.forceRecomputeProjection ?? Boolean(context.request),
   };
   if (validateResultPresentationContract(existing).ok) {
-    return withProjectionAwareResultPresentation(attachTaskOutcomeProjection({
+    return withProjectionAwareResultPresentation(reconcileStaleResultPresentation(attachTaskOutcomeProjection({
       ...payload,
       displayIntent,
-    }, projectionContext));
+    }, projectionContext)));
   }
 
   const payloadWithPresentation = {
@@ -120,4 +120,44 @@ function withProjectionAwareResultPresentation(payload: ToolPayload): ToolPayloa
       },
     },
   };
+}
+
+function reconcileStaleResultPresentation(payload: ToolPayload): ToolPayload {
+  const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
+  const resultPresentation = isRecord(displayIntent.resultPresentation) ? displayIntent.resultPresentation : undefined;
+  const taskRunCard = isRecord(displayIntent.taskRunCard) ? displayIntent.taskRunCard : undefined;
+  if (!resultPresentation || !taskRunCard || taskRunCard.taskOutcome !== 'satisfied') return payload;
+  if (resultPresentation.status === 'complete') return payload;
+  if (!looksLikeProjectionNeedsWorkPresentation(resultPresentation)) return payload;
+  const rebuilt = materializeResultPresentationContract({
+    payload: {
+      ...payload,
+      displayIntent: {
+        ...displayIntent,
+        resultPresentation: undefined,
+      },
+    },
+  });
+  return {
+    ...payload,
+    displayIntent: {
+      ...displayIntent,
+      resultPresentation: {
+        ...rebuilt,
+        conversationProjectionSummary: taskRunCard.conversationProjectionSummary ?? rebuilt.conversationProjectionSummary,
+      },
+    },
+  };
+}
+
+function looksLikeProjectionNeedsWorkPresentation(resultPresentation: Record<string, unknown>) {
+  const answerBlocks = Array.isArray(resultPresentation.answerBlocks)
+    ? resultPresentation.answerBlocks.filter(isRecord)
+    : [];
+  if (answerBlocks.some((block) => stringField(block.id) === 'answer-needs-work')) return true;
+  const text = answerBlocks
+    .map((block) => stringField(block.text))
+    .filter((value): value is string => Boolean(value))
+    .join('\n');
+  return /Partial result artifacts are available|Run the required verifier|attach human approval|user goal is not fully satisfied/i.test(text);
 }

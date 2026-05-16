@@ -760,7 +760,7 @@ function requiredVerificationIsUnverified(payload: ToolPayload) {
   return (payload.verificationResults ?? []).some((result) => {
     if (result.verdict !== 'unverified') return false;
     const diagnostics = isRecord(result.diagnostics) ? result.diagnostics : {};
-    return diagnostics.required === true || diagnostics.visibleUnverified === true;
+    return diagnostics.required === true;
   });
 }
 

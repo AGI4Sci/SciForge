@@ -176,6 +176,160 @@ test('attachResultPresentationContract treats complete evidenced presentation as
   assert.equal(visibleAnswer?.status, 'satisfied');
 });
 
+test('attachResultPresentationContract does not downgrade direct-context answers for visible non-required unverified markers', () => {
+  const answer = [
+    'Answered directly from the selected report; no new workspace task was started.',
+    '',
+    '- Credibility verdict: credible as a toy reproduction because the selected report says "Reproduction success: YES".',
+    '- Supporting metric: r true 0.5000, fitted 0.4767, error 4.67%',
+    '- Supporting metric: K true 200.0, fitted 201.5, error 0.77%',
+    '- Supporting metric: RMSE 4.3505',
+  ].join('\n');
+  const attached = attachResultPresentationContract(payload({
+    message: answer,
+    confidence: 0.74,
+    claimType: 'context-summary',
+    evidenceLevel: 'current-session-context',
+    claims: [{
+      id: 'direct-context-claim',
+      text: 'Answered directly from the selected report.',
+      supportingRefs: ['artifact:reproduction-report'],
+    }],
+    artifacts: [{
+      id: 'direct-context-summary',
+      type: 'runtime-context-summary',
+      title: 'Direct context answer',
+      data: { markdown: answer },
+    }],
+    executionUnits: [{
+      id: 'EU-direct-context-report-followup',
+      status: 'done',
+      tool: 'sciforge.direct-context-fast-path',
+      outputRef: 'runtime://direct-context-fast-path/report-followup',
+    }],
+    verificationResults: [{
+      id: 'verification-visible-unverified',
+      verdict: 'unverified',
+      confidence: 0,
+      evidenceRefs: ['execution-unit:EU-direct-context-report-followup'],
+      repairHints: [],
+      diagnostics: {
+        required: false,
+        visibleUnverified: true,
+      },
+    }],
+    displayIntent: {
+      protocolStatus: 'protocol-success',
+      taskOutcome: 'satisfied',
+      status: 'completed',
+    },
+  }), {
+    request: {
+      skillDomain: 'literature',
+      prompt: 'Using only the selected reproduction report, tell me whether this toy reproduction is credible. List the exact metrics that support the verdict.',
+      artifacts: [],
+      uiState: {
+        conversationPolicy: {
+          executionModePlan: { executionMode: 'direct-context-answer' },
+          responsePlan: { initialResponseMode: 'direct-context-answer' },
+        },
+      },
+    },
+  });
+
+  const projection = attached.displayIntent?.taskOutcomeProjection as Record<string, any> | undefined;
+  const card = attached.displayIntent?.taskRunCard as Record<string, any> | undefined;
+  const conversationProjection = projection?.conversationProjection as Record<string, any> | undefined;
+  const visibleAnswer = conversationProjection?.visibleAnswer as Record<string, any> | undefined;
+  const resultPresentation = attached.displayIntent?.resultPresentation as Record<string, any> | undefined;
+
+  assert.equal(projection?.protocolSuccess, true);
+  assert.equal(projection?.taskSuccess, true);
+  assert.equal(card?.taskOutcome, 'satisfied');
+  assert.equal(visibleAnswer?.status, 'satisfied');
+  assert.match(String(visibleAnswer?.text), /Answered directly from the selected report/);
+  assert.doesNotMatch(String(visibleAnswer?.text), /required verification is still unverified|Partial result artifacts/i);
+  assert.equal(resultPresentation?.status, 'complete');
+});
+
+test('attachResultPresentationContract rebuilds stale partial presentation when recomputed direct-context projection is satisfied', () => {
+  const request = {
+    skillDomain: 'literature' as const,
+    prompt: 'Using only the selected reproduction report, tell me whether this toy reproduction is credible and list exact metrics plus one next validation step.',
+    artifacts: [],
+    uiState: {
+      conversationPolicy: {
+        executionModePlan: { executionMode: 'direct-context-answer' },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+      },
+    },
+  };
+  const answer = [
+    'Answered directly from the selected report; no new workspace task was started.',
+    '',
+    '- Credibility verdict: credible as a toy reproduction because the selected report says "Reproduction success: YES".',
+    '- Supporting metric: r true 0.5000, fitted 0.4767, error 4.67%',
+    '- Next validation step: repeat across multiple random seeds.',
+  ].join('\n');
+  const staleNeedsWork = attachResultPresentationContract(payload({
+    message: answer,
+    confidence: 0.74,
+    claimType: 'context-summary',
+    evidenceLevel: 'current-session-context',
+    claims: [{ id: 'direct-context-claim', text: 'Answered directly from the selected report.', supportingRefs: ['artifact:reproduction-report'] }],
+    artifacts: [{ id: 'direct-context-summary', type: 'runtime-context-summary', title: 'Direct context answer', data: { markdown: answer } }],
+    executionUnits: [{ id: 'EU-direct-context-report-followup', status: 'done', tool: 'sciforge.direct-context-fast-path' }],
+    verificationResults: [{
+      id: 'verification-required-unverified',
+      verdict: 'unverified',
+      confidence: 0,
+      evidenceRefs: ['execution-unit:EU-direct-context-report-followup'],
+      repairHints: [],
+      diagnostics: { required: true },
+    }],
+    displayIntent: {
+      protocolStatus: 'protocol-success',
+      taskOutcome: 'satisfied',
+      status: 'completed',
+    },
+  }), { request });
+
+  const attached = attachResultPresentationContract(payload({
+    message: answer,
+    confidence: 0.74,
+    claimType: 'context-summary',
+    evidenceLevel: 'current-session-context',
+    claims: [{ id: 'direct-context-claim', text: 'Answered directly from the selected report.', supportingRefs: ['artifact:reproduction-report'] }],
+    artifacts: [{ id: 'direct-context-summary', type: 'runtime-context-summary', title: 'Direct context answer', data: { markdown: answer } }],
+    executionUnits: [{ id: 'EU-direct-context-report-followup', status: 'done', tool: 'sciforge.direct-context-fast-path' }],
+    verificationResults: [{
+      id: 'verification-visible-unverified',
+      verdict: 'unverified',
+      confidence: 0,
+      evidenceRefs: ['execution-unit:EU-direct-context-report-followup'],
+      repairHints: [],
+      diagnostics: { required: false, visibleUnverified: true },
+    }],
+    displayIntent: {
+      ...staleNeedsWork.displayIntent,
+      protocolStatus: 'protocol-success',
+      taskOutcome: 'satisfied',
+      status: 'completed',
+    },
+  }), { request });
+
+  const projection = attached.displayIntent?.taskOutcomeProjection as Record<string, any> | undefined;
+  const resultPresentation = attached.displayIntent?.resultPresentation as Record<string, any> | undefined;
+  const answerBlocks = resultPresentation?.answerBlocks as Array<Record<string, unknown>> | undefined;
+  const visibleAnswer = (projection?.conversationProjection as Record<string, any> | undefined)?.visibleAnswer as Record<string, any> | undefined;
+
+  assert.equal(projection?.taskSuccess, true);
+  assert.equal(visibleAnswer?.status, 'satisfied');
+  assert.equal(resultPresentation?.status, 'complete');
+  assert.doesNotMatch(String(answerBlocks?.[0]?.text), /Partial result artifacts|required verification|human approval/i);
+  assert.match(String(answerBlocks?.[0]?.text), /Answered directly from the selected report/);
+});
+
 test('attachResultPresentationContract blocks satisfied outcome when required verification remains unverified', () => {
   const attached = attachResultPresentationContract(payload({
     message: 'Protocol artifact is ready.',

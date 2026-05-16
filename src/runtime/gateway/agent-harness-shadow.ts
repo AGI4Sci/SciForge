@@ -94,7 +94,17 @@ export async function requestWithAgentHarnessShadow(
   const verificationProjection = agentHarnessVerificationPolicyProjection(
     evaluation.evaluation.contract,
     request.verificationPolicy,
-    { uiState, contractRef, profileId },
+    {
+      uiState,
+      contractRef,
+      profileId,
+      prompt: request.prompt,
+      selectedVerifierIds: request.selectedVerifierIds,
+      selectedActionIds: request.selectedActionIds,
+      actionSideEffects: request.actionSideEffects,
+      userExplicitVerification: request.userExplicitVerification,
+      riskLevel: request.riskLevel,
+    },
   );
   const progressProjection = agentHarnessProgressPlanProjection(
     evaluation.evaluation.contract,
@@ -388,6 +398,12 @@ function agentHarnessVerificationPolicyProjection(
     uiState: Record<string, unknown>;
     contractRef: string;
     profileId: string;
+    prompt?: string;
+    selectedVerifierIds?: string[];
+    selectedActionIds?: string[];
+    actionSideEffects?: string[];
+    userExplicitVerification?: GatewayRequest['userExplicitVerification'];
+    riskLevel?: GatewayRequest['riskLevel'];
   },
 ): { policy: NonNullable<GatewayRequest['verificationPolicy']>; audit: Record<string, unknown> } | undefined {
   const agentHarness = isRecord(input.uiState.agentHarness) ? input.uiState.agentHarness : {};
@@ -402,7 +418,10 @@ function agentHarnessVerificationPolicyProjection(
   if (disabled) return undefined;
   const verificationPolicy = isRecord(contract.verificationPolicy) ? contract.verificationPolicy : undefined;
   if (!verificationPolicy) return undefined;
-  const projected = runtimeVerificationPolicyFromHarness(verificationPolicy, input);
+  const projected = relaxDirectContextHarnessVerificationPolicy(
+    runtimeVerificationPolicyFromHarness(verificationPolicy, input),
+    input,
+  );
   const merged = mergeRuntimeVerificationPolicy(current, projected);
   return {
     policy: merged,
@@ -438,6 +457,76 @@ function runtimeVerificationPolicyFromHarness(
     riskLevel: mapped.riskLevel,
     reason: `contractRef=${input.contractRef}; profileId=${input.profileId}; intensity=${intensity ?? 'standard'}`,
   };
+}
+
+function relaxDirectContextHarnessVerificationPolicy(
+  policy: NonNullable<GatewayRequest['verificationPolicy']>,
+  input: {
+    uiState: Record<string, unknown>;
+    prompt?: string;
+    selectedVerifierIds?: string[];
+    selectedActionIds?: string[];
+    actionSideEffects?: string[];
+    userExplicitVerification?: GatewayRequest['userExplicitVerification'];
+    riskLevel?: GatewayRequest['riskLevel'];
+  },
+): NonNullable<GatewayRequest['verificationPolicy']> {
+  if (!isDirectContextAnswerTurn(input.uiState)) return policy;
+  if (!policy.required || policy.riskLevel === 'high') return policy;
+  if (directContextRequestRequiresVerification(input)) return policy;
+  return {
+    ...policy,
+    required: false,
+    humanApprovalPolicy: policy.humanApprovalPolicy === 'required' ? 'optional' : policy.humanApprovalPolicy,
+    reason: `${policy.reason}; direct-context answer records visible verification without requiring a blocking verifier`,
+  };
+}
+
+function isDirectContextAnswerTurn(uiState: Record<string, unknown>) {
+  const conversationPolicy = isRecord(uiState.conversationPolicy) ? uiState.conversationPolicy : {};
+  const executionModePlan = isRecord(conversationPolicy.executionModePlan) ? conversationPolicy.executionModePlan : {};
+  const responsePlan = isRecord(conversationPolicy.responsePlan) ? conversationPolicy.responsePlan : {};
+  const capabilityPolicy = isRecord(conversationPolicy.capabilityPolicy) ? conversationPolicy.capabilityPolicy : {};
+  const executionModeDecision = isRecord(uiState.executionModeDecision) ? uiState.executionModeDecision : {};
+  const uiExecutionModePlan = isRecord(uiState.executionModePlan) ? uiState.executionModePlan : {};
+  const turnExecutionConstraints = isRecord(uiState.turnExecutionConstraints) ? uiState.turnExecutionConstraints : {};
+  const modes = [
+    stringField(executionModePlan.executionMode),
+    stringField(responsePlan.initialResponseMode),
+    stringField(conversationPolicy.executionMode),
+    stringField(conversationPolicy.initialResponseMode),
+    stringField(executionModeDecision.executionMode),
+    stringField(uiExecutionModePlan.executionMode),
+    stringField(turnExecutionConstraints.executionModeHint),
+    stringField(turnExecutionConstraints.initialResponseModeHint),
+  ];
+  if (modes.includes('direct-context-answer')) return true;
+  const preferredCapabilityIds = [
+    ...stringListField(capabilityPolicy.preferredCapabilityIds),
+    ...stringListField(turnExecutionConstraints.preferredCapabilityIds),
+    ...stringListField(uiState.preferredCapabilityIds),
+  ];
+  return preferredCapabilityIds.includes('runtime.direct-context-answer');
+}
+
+function directContextRequestRequiresVerification(input: {
+  prompt?: string;
+  selectedVerifierIds?: string[];
+  selectedActionIds?: string[];
+  actionSideEffects?: string[];
+  userExplicitVerification?: GatewayRequest['userExplicitVerification'];
+  riskLevel?: GatewayRequest['riskLevel'];
+}) {
+  if (input.riskLevel === 'high') return true;
+  if ((input.selectedVerifierIds ?? []).length > 0) return true;
+  if ((input.selectedActionIds ?? []).length > 0) return true;
+  if ((input.actionSideEffects ?? []).length > 0) return true;
+  if (input.userExplicitVerification && !['none', 'unverified'].includes(input.userExplicitVerification)) return true;
+  return explicitVerificationRequestPattern().test(input.prompt ?? '');
+}
+
+function explicitVerificationRequestPattern() {
+  return /\b(required verification|required verifier|verification required|must verify|verify before|human approval|release gate)\b|必须.{0,16}验证|验证.{0,16}必须|不能.{0,16}声称.{0,16}(完成|success|satisfied)|标记.{0,8}blocker|blocker/i;
 }
 
 function mergeRuntimeVerificationPolicy(
