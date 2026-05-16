@@ -89,6 +89,44 @@ test('context envelope keeps ref-backed artifact bodies and log refs bounded for
   assert.equal(envelope.scenarioFacts.evidenceExpansionPolicy?.structuredRefTransport, 'refs-and-digests-first');
 });
 
+test('context envelope handoff carries public provider route shape only', () => {
+  const envelope = buildContextEnvelope({
+    skillDomain: 'literature',
+    prompt: 'fetch url with web_fetch provider',
+    selectedToolIds: ['web_fetch'],
+    artifacts: [],
+    uiState: {
+      capabilityProviderAvailability: [{
+        id: 'sciforge.web-worker.web_fetch',
+        providerId: 'sciforge.web-worker.web_fetch',
+        capabilityId: 'web_fetch',
+        workerId: 'PRIVATE_WORKER_ID_SHOULD_NOT_LEAK',
+        runtimeLocation: 'PRIVATE_RUNTIME_LOCATION_SHOULD_NOT_LEAK',
+        available: true,
+        status: 'available',
+        endpoint: 'https://private-provider.example.test/internal',
+        baseUrl: 'https://private-base.example.test',
+        url: 'https://private-url.example.test',
+        invokeUrl: 'https://private-invoke.example.test/run',
+        invokePath: '/private/invoke',
+        auth: { token: 'PRIVATE_AUTH_SHOULD_NOT_LEAK' },
+        workspaceRoots: ['/private/workspace/root'],
+      }],
+    },
+  } as GatewayRequest, { workspace: '/tmp/sciforge-test' });
+
+  const providerRoutes = envelope.scenarioFacts.capabilityProviderRoutes;
+  assert.equal(providerRoutes.ok, true);
+  assert.equal(providerRoutes.routes[0]?.primaryProviderId, 'sciforge.web-worker.web_fetch');
+  assert.deepEqual(Object.keys(providerRoutes.routes[0]?.providers[0] ?? {}).sort(), [
+    'healthStatus',
+    'providerId',
+    'source',
+    'transport',
+  ]);
+  assertNoProviderRouteLeaks(providerRoutes);
+});
+
 test('context envelope carries compact state digest refs after history compaction', () => {
   const envelope = buildContextEnvelope({
     skillDomain: 'knowledge',
@@ -799,4 +837,10 @@ function record(value: unknown): Record<string, unknown> {
 
 function records(value: unknown): Array<Record<string, unknown>> {
   return Array.isArray(value) ? value.filter((entry): entry is Record<string, unknown> => typeof entry === 'object' && entry !== null && !Array.isArray(entry)) : [];
+}
+
+function assertNoProviderRouteLeaks(value: unknown) {
+  const serialized = JSON.stringify(value);
+  assert.doesNotMatch(serialized, /(?:\\")?(endpoint|baseUrl|invokeUrl|invokePath|workerId|runtimeLocation|auth|workspaceRoots)(?:\\")?\s*:/);
+  assert.doesNotMatch(serialized, /private-provider|private-base|private-url|private-invoke|PRIVATE_|\/private\/workspace/);
 }

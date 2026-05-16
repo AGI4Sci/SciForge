@@ -4,7 +4,10 @@ import type {
   SciForgeReference,
   SciForgeReferenceKind,
 } from '@sciforge-ui/runtime-contract/references';
-import type { RuntimeArtifact } from '@sciforge-ui/runtime-contract/artifacts';
+import {
+  artifactHasUserFacingDelivery as runtimeArtifactHasUserFacingDelivery,
+  type RuntimeArtifact,
+} from '@sciforge-ui/runtime-contract/artifacts';
 import type { ScenarioInstanceId } from '@sciforge-ui/runtime-contract/app';
 import {
   asNumber,
@@ -371,11 +374,7 @@ function normalizeObjectReferenceIdentity(value: string | undefined) {
 }
 
 export function artifactHasUserFacingDelivery(artifact: RuntimeArtifact | undefined) {
-  const delivery = artifact?.delivery;
-  if (!delivery) return false;
-  if (delivery.role !== 'primary-deliverable' && delivery.role !== 'supporting-evidence') return false;
-  if (delivery.previewPolicy === 'audit-only' || delivery.previewPolicy === 'unsupported') return false;
-  return Boolean(delivery.readableRef);
+  return runtimeArtifactHasUserFacingDelivery(artifact);
 }
 
 export function isTrustedObjectReference(reference: ObjectReference) {

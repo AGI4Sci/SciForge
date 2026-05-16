@@ -31,11 +31,33 @@ export interface CapabilityProviderRoute {
   }>;
 }
 
+export interface PublicCapabilityProviderRoute {
+  capabilityId: string;
+  primaryProviderId?: string;
+  fallbackProviderIds: string[];
+  status: CapabilityProviderRoute['status'];
+  reason: string;
+  routeTraceRef: string;
+  providers: Array<{
+    providerId: string;
+    source?: CapabilityProviderManifest['source'];
+    transport?: CapabilityProviderManifest['transport'];
+    healthStatus: CapabilityProviderRoute['status'] | 'unknown';
+  }>;
+}
+
 export interface CapabilityProviderPreflightResult {
   requiredCapabilityIds: string[];
   routes: CapabilityProviderRoute[];
   ok: boolean;
   blockingRoutes: CapabilityProviderRoute[];
+}
+
+export interface PublicCapabilityProviderPreflightResult {
+  requiredCapabilityIds: string[];
+  routes: PublicCapabilityProviderRoute[];
+  ok: boolean;
+  blockingRoutes: PublicCapabilityProviderRoute[];
 }
 
 type ProviderAvailability = {
@@ -61,6 +83,8 @@ const REQUIRED_BY_TOOL_ID: Record<string, string[]> = {
   pdf_extract: ['pdf_extract'],
 };
 
+export const CAPABILITY_PROVIDER_ROUTE_REF_PREFIX = 'runtime://capability-provider-route/';
+
 export function capabilityProviderPreflight(request: GatewayRequest): CapabilityProviderPreflightResult {
   const requiredCapabilityIds = inferRequiredCapabilityIds(request);
   const routes = requiredCapabilityIds.map((capabilityId) => resolveCapabilityRoute(request, capabilityId));
@@ -78,7 +102,8 @@ export function capabilityProviderPreflightPayload(
   preflight: CapabilityProviderPreflightResult,
 ): ToolPayload | undefined {
   if (preflight.ok || preflight.requiredCapabilityIds.length === 0) return undefined;
-  const id = sha1(JSON.stringify({ prompt: request.prompt, routes: preflight.routes })).slice(0, 12);
+  const publicPreflight = publicCapabilityProviderPreflightResult(preflight);
+  const id = sha1(JSON.stringify({ prompt: request.prompt, routes: publicPreflight.routes })).slice(0, 12);
   const missing = preflight.blockingRoutes.map((route) => `${route.capabilityId}: ${route.reason}`).join('; ');
   const routeRef = `runtime://capability-provider-preflight/${id}`;
   const message = [
@@ -120,8 +145,8 @@ export function capabilityProviderPreflightPayload(
       tool: 'sciforge.capability-provider-preflight',
       status: 'needs-human',
       params: JSON.stringify({
-        requiredCapabilityIds: preflight.requiredCapabilityIds,
-        routes: preflight.routes,
+        requiredCapabilityIds: publicPreflight.requiredCapabilityIds,
+        routes: publicPreflight.routes,
       }),
       hash: id,
       failureReason: missing,
@@ -140,11 +165,11 @@ export function capabilityProviderPreflightPayload(
       metadata: {
         source: 'capability-provider-preflight',
         routeRef,
-        requiredCapabilityIds: preflight.requiredCapabilityIds,
+        requiredCapabilityIds: publicPreflight.requiredCapabilityIds,
         status: 'needs-human',
       },
       data: {
-        routes: preflight.routes,
+        routes: publicPreflight.routes,
       },
     }],
     objectReferences: [{
@@ -167,8 +192,48 @@ export function capabilityProviderPreflightPayload(
   };
 }
 
-export function capabilityProviderRoutesForHandoff(request: GatewayRequest): CapabilityProviderPreflightResult {
-  return capabilityProviderPreflight(request);
+export function capabilityProviderRoutesForHandoff(request: GatewayRequest): PublicCapabilityProviderPreflightResult {
+  return publicCapabilityProviderPreflightResult(capabilityProviderPreflight(request));
+}
+
+export function capabilityProviderRoutesForGatewayInvocation(request: GatewayRequest): CapabilityProviderPreflightResult { return capabilityProviderPreflight(request); }
+
+export function publicCapabilityProviderPreflightResult(
+  preflight: CapabilityProviderPreflightResult,
+): PublicCapabilityProviderPreflightResult {
+  const routes = preflight.routes.map(publicCapabilityProviderRoute);
+  const blockingRouteIds = new Set(preflight.blockingRoutes.map((route) => route.capabilityId));
+  return {
+    requiredCapabilityIds: [...preflight.requiredCapabilityIds],
+    routes,
+    ok: preflight.ok,
+    blockingRoutes: routes.filter((route) => blockingRouteIds.has(route.capabilityId)),
+  };
+}
+
+function publicCapabilityProviderRoute(route: CapabilityProviderRoute): PublicCapabilityProviderRoute {
+  return {
+    capabilityId: route.capabilityId,
+    primaryProviderId: route.primaryProviderId,
+    fallbackProviderIds: [...route.fallbackProviderIds],
+    status: route.status,
+    reason: route.reason,
+    routeTraceRef: capabilityRouteTraceRef(route.capabilityId),
+    providers: route.providers.map((provider) => publicCapabilityProvider(provider)),
+  };
+}
+
+function capabilityRouteTraceRef(capabilityId: string) {
+  return `${CAPABILITY_PROVIDER_ROUTE_REF_PREFIX}${capabilityId}`;
+}
+
+function publicCapabilityProvider(provider: CapabilityProviderRoute['providers'][number]) {
+  return {
+    providerId: provider.providerId,
+    source: provider.source,
+    transport: provider.transport,
+    healthStatus: provider.healthStatus,
+  };
 }
 
 export async function requestWithDiscoveredCapabilityProviders(request: GatewayRequest): Promise<GatewayRequest> {

@@ -8,7 +8,7 @@
 
 本文是当前实现背景和产品架构地图，解释已经落地或正在落地的 backend-first、capability-driven、harness-governed 工作台边界。2026-05-16 起，Single-Agent 多轮运行时的最终 contract 以 [`SciForge-SingleAgent-Architecture.md`](SciForge-SingleAgent-Architecture.md) 为准；本文不再重复定义 Workspace Kernel、AgentServer Context Core、Runtime Bridge、Gateway 和 conformance 的完整接口。
 
-旧的 `ProjectSessionMemory.md` 专项稿已并入 [`SciForge-SingleAgent-Architecture.md`](SciForge-SingleAgent-Architecture.md) 并删除。相关概念现在分别落在 Workspace Kernel、AgentServer Context Core、Context Bridge、KV cache、防漂移和 retention/conformance 章节。
+Archive/historical note: 旧的 `ProjectSessionMemory.md` 专项稿已并入 [`SciForge-SingleAgent-Architecture.md`](SciForge-SingleAgent-Architecture.md) 并删除。相关概念现在分别落在 Workspace Kernel、AgentServer Context Core、Context Bridge、KV cache、防漂移和 retention/conformance 章节。
 
 ## 当前边界
 

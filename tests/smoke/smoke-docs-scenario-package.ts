@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { buildBuiltInScenarioPackage } from '../../packages/scenarios/core/src/scenarioPackage.js';
 
 const requiredDocs = [
@@ -19,6 +19,21 @@ for (const path of requiredDocs) {
   const text = await readFile(path, 'utf8');
   assert.ok(text.length > 200, `${path} should not be empty`);
 }
+
+const legacyHistoricalDocs = [
+  { filename: 'ProjectSessionMemory.md', status: 'archive/historical' },
+  { filename: 'Extending.md', status: 'archive/historical' },
+  { filename: 'SciForgeConversationSessionRecovery.md', status: 'archive/historical' },
+] as const;
+
+for (const doc of legacyHistoricalDocs) {
+  await assertMissing(`docs/${doc.filename}`);
+}
+await assertLegacyDocReferencesAreHistorical(
+  [...(await collectMarkdownFiles('docs')), 'tests/smoke/smoke-docs-scenario-package.ts'],
+  legacyHistoricalDocs,
+);
+await assertMarkdownLinksResolve(await collectMarkdownFiles('docs'));
 
 const docsIndex = await readFile('docs/README.md', 'utf8');
 assert.match(docsIndex, /\[`Usage\.md`\]\(Usage\.md\)/);
@@ -76,4 +91,90 @@ async function waitForHealth(portNumber: number) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`workspace server did not start on ${portNumber}`);
+}
+
+async function assertMissing(path: string) {
+  try {
+    await access(path);
+  } catch {
+    return;
+  }
+  assert.fail(`${path} should remain removed; reference it only as archive/historical status`);
+}
+
+async function collectMarkdownFiles(root: string): Promise<string[]> {
+  const entries = await readdir(root, { withFileTypes: true });
+  const files = await Promise.all(
+    entries.map(async (entry) => {
+      const path = join(root, entry.name);
+      if (entry.isDirectory()) return collectMarkdownFiles(path);
+      return entry.isFile() && entry.name.endsWith('.md') ? [path] : [];
+    }),
+  );
+  return files.flat().sort();
+}
+
+async function assertLegacyDocReferencesAreHistorical(
+  paths: string[],
+  legacyDocs: readonly { filename: string; status: 'archive/historical' }[],
+) {
+  const invalidReferences: string[] = [];
+  for (const path of paths) {
+    const text = await readFile(path, 'utf8');
+    text.split(/\r?\n/).forEach((line, index) => {
+      for (const doc of legacyDocs) {
+        if (!line.includes(doc.filename)) continue;
+        if (line.toLowerCase().includes(doc.status)) continue;
+        invalidReferences.push(`${path}:${index + 1}: ${doc.filename}`);
+      }
+    });
+  }
+  assert.deepEqual(
+    invalidReferences,
+    [],
+    `legacy doc references must be archive/historical, not authoritative entries: ${invalidReferences.join(', ')}`,
+  );
+}
+
+async function assertMarkdownLinksResolve(paths: string[]) {
+  const brokenLinks: string[] = [];
+  for (const path of paths) {
+    const text = await readFile(path, 'utf8');
+    for (const { target, lineNumber } of markdownLinks(text)) {
+      if (shouldSkipMarkdownTarget(target)) continue;
+      const targetWithoutAnchor = target.split('#')[0];
+      if (!targetWithoutAnchor) continue;
+      const resolvedPath = join(dirname(path), decodeMarkdownTarget(targetWithoutAnchor));
+      try {
+        await access(resolvedPath);
+      } catch {
+        brokenLinks.push(`${path}:${lineNumber}: ${target}`);
+      }
+    }
+  }
+  assert.deepEqual(brokenLinks, [], `docs markdown links should resolve: ${brokenLinks.join(', ')}`);
+}
+
+function markdownLinks(text: string) {
+  const links: { target: string; lineNumber: number }[] = [];
+  const linkPattern = /!?\[[^\]]*]\(([^)]+)\)/g;
+  for (const [index, line] of text.split(/\r?\n/).entries()) {
+    for (const match of line.matchAll(linkPattern)) {
+      links.push({ target: match[1].trim(), lineNumber: index + 1 });
+    }
+  }
+  return links;
+}
+
+function shouldSkipMarkdownTarget(target: string) {
+  return /^(?:[a-z]+:|#)/i.test(target);
+}
+
+function decodeMarkdownTarget(target: string) {
+  const unwrapped = target.replace(/^<|>$/g, '');
+  try {
+    return decodeURI(unwrapped);
+  } catch {
+    return unwrapped;
+  }
 }

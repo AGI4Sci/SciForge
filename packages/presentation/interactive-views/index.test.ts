@@ -276,7 +276,7 @@ test('interactive view policy owns result binding, section, and presentation ded
       schemaVersion: '1',
       data: {},
     }).status,
-    'fallback',
+    'missing-artifact',
   );
   assert.equal(resolveInteractiveViewPlanSection({
     module: reportViewer,

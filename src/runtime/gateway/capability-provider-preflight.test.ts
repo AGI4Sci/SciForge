@@ -5,6 +5,7 @@ import type { GatewayRequest } from '../runtime-types.js';
 import {
   capabilityProviderPreflight,
   capabilityProviderPreflightPayload,
+  capabilityProviderRoutesForHandoff,
   requestWithDiscoveredCapabilityProviders,
 } from './capability-provider-preflight.js';
 
@@ -81,6 +82,79 @@ test('capability provider preflight accepts explicit AgentServer provider availa
   assert.equal(preflight.ok, true);
   assert.equal(preflight.routes[0]?.primaryProviderId, 'sciforge.web-worker.web_search');
   assert.equal(capabilityProviderPreflightPayload(request, preflight), undefined);
+});
+
+test('capability provider handoff exposes only public route shape', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'fetch url with web_fetch provider',
+    selectedToolIds: ['web_fetch'],
+    artifacts: [],
+    uiState: {
+      capabilityProviderAvailability: [{
+        id: 'sciforge.web-worker.web_fetch',
+        providerId: 'sciforge.web-worker.web_fetch',
+        capabilityId: 'web_fetch',
+        workerId: 'PRIVATE_WORKER_ID_SHOULD_NOT_LEAK',
+        runtimeLocation: 'PRIVATE_RUNTIME_LOCATION_SHOULD_NOT_LEAK',
+        available: true,
+        status: 'available',
+        endpoint: 'https://private-provider.example.test/internal',
+        baseUrl: 'https://private-base.example.test',
+        url: 'https://private-url.example.test',
+        invokeUrl: 'https://private-invoke.example.test/run',
+        invokePath: '/private/invoke',
+        timeoutMs: 1234,
+        auth: { token: 'PRIVATE_AUTH_SHOULD_NOT_LEAK' },
+        workspaceRoots: ['/private/workspace/root'],
+      }],
+    },
+  };
+
+  const internal = capabilityProviderPreflight(request);
+  assert.equal(internal.ok, true);
+  assert.equal(internal.routes[0]?.providers[0]?.endpoint, 'https://private-provider.example.test/internal');
+
+  const handoff = capabilityProviderRoutesForHandoff(request);
+  assert.equal(handoff.ok, true);
+  assert.equal(handoff.routes[0]?.primaryProviderId, 'sciforge.web-worker.web_fetch');
+  assert.deepEqual(Object.keys(handoff.routes[0]?.providers[0] ?? {}).sort(), [
+    'healthStatus',
+    'providerId',
+    'source',
+    'transport',
+  ]);
+  assertNoProviderRouteLeaks(handoff);
+});
+
+test('capability provider preflight payload redacts route internals', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'search latest papers',
+    selectedToolIds: ['web_search'],
+    artifacts: [],
+    uiState: {
+      capabilityProviderAvailability: [{
+        id: 'sciforge.web-worker.web_search',
+        providerId: 'sciforge.web-worker.web_search',
+        capabilityId: 'web_search',
+        available: false,
+        status: 'offline',
+        endpoint: 'https://private-provider.example.test/internal',
+        baseUrl: 'https://private-base.example.test',
+        invokeUrl: 'https://private-invoke.example.test/run',
+        invokePath: '/private/invoke',
+        auth: { token: 'PRIVATE_AUTH_SHOULD_NOT_LEAK' },
+        workspaceRoots: ['/private/workspace/root'],
+      }],
+    },
+  };
+
+  const preflight = capabilityProviderPreflight(request);
+  const payload = capabilityProviderPreflightPayload(request, preflight);
+
+  assert.ok(payload);
+  assertNoProviderRouteLeaks(payload);
 });
 
 test('capability provider preflight accepts scenario tool provider routes', () => {
@@ -166,3 +240,9 @@ test('capability provider preflight detects underscored tool names in prompts', 
   assert.deepEqual(result.requiredCapabilityIds, ['web_fetch', 'web_search']);
   assert.equal(result.ok, true);
 });
+
+function assertNoProviderRouteLeaks(value: unknown) {
+  const serialized = JSON.stringify(value);
+  assert.doesNotMatch(serialized, /(?:\\")?(endpoint|baseUrl|invokeUrl|invokePath|workerId|runtimeLocation|auth|workspaceRoots)(?:\\")?\s*:/);
+  assert.doesNotMatch(serialized, /private-provider|private-base|private-url|private-invoke|PRIVATE_|\/private\/workspace/);
+}

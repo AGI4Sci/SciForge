@@ -289,6 +289,62 @@ test('results renderer execution model uses projection recovery details before r
   assert.ok(runAuditRefs(session, session.runs[0]).includes('artifact:partial-report'));
 });
 
+test('results renderer execution model lists only user-facing ArtifactDelivery artifacts', () => {
+  const session: SciForgeSession = {
+    schemaVersion: 2,
+    sessionId: 'session-delivery-visible-artifacts',
+    scenarioId: 'literature-evidence-review',
+    title: 'delivery visible artifacts',
+    createdAt: '2026-05-13T00:00:00.000Z',
+    messages: [],
+    runs: [{
+      id: 'run-delivery-visible-artifacts',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'render report',
+      response: 'Done',
+      createdAt: '2026-05-13T00:00:00.000Z',
+      raw: {
+        resultPresentation: {
+          conversationProjection: {
+            schemaVersion: 'sciforge.conversation-projection.v1',
+            conversationId: 'conversation-delivery-visible-artifacts',
+            visibleAnswer: {
+              status: 'satisfied',
+              text: 'Report ready.',
+              artifactRefs: ['artifact:visible-report', 'artifact:readable-diagnostic'],
+            },
+            artifacts: [
+              { ref: 'artifact:visible-report', label: 'Visible report' },
+              { ref: 'artifact:readable-diagnostic', label: 'Readable diagnostic' },
+            ],
+            executionProcess: [],
+            recoverActions: [],
+            verificationState: { status: 'verified' },
+            auditRefs: ['artifact:readable-diagnostic'],
+            diagnostics: [],
+          },
+        },
+      },
+    }],
+    uiManifest: [],
+    claims: [],
+    executionUnits: [],
+    artifacts: [
+      { ...deliveryArtifact('visible-report', 'research-report', 'primary-deliverable'), metadata: { runId: 'run-delivery-visible-artifacts' } },
+      { ...deliveryArtifact('readable-diagnostic', 'runtime-diagnostic', 'diagnostic'), metadata: { runId: 'run-delivery-visible-artifacts' } },
+    ],
+    notebook: [],
+    versions: [],
+    updatedAt: '2026-05-13T00:00:10.000Z',
+  };
+
+  const state = runPresentationState(session, session.runs[0]);
+
+  assert.deepEqual(state.availableArtifacts.map((artifact) => artifact.id), ['visible-report']);
+  assert.equal(state.availableArtifacts.some((artifact) => artifact.id === 'readable-diagnostic'), false);
+});
+
 test('results renderer execution model treats zero-result projections with recovery as recoverable', () => {
   const session: SciForgeSession = {
     schemaVersion: 2,
@@ -892,6 +948,31 @@ test('presentation state ignores natural-language partial and needs-human words 
   assert.equal(state.kind, 'empty');
   assert.equal(state.title, '主结果等待 ConversationProjection');
 });
+
+function deliveryArtifact(
+  id: string,
+  type: string,
+  role: NonNullable<SciForgeSession['artifacts'][number]['delivery']>['role'],
+): SciForgeSession['artifacts'][number] {
+  return {
+    id,
+    type,
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    dataRef: `.sciforge/sessions/session/task-results/${id}.md`,
+    delivery: {
+      contractId: 'sciforge.artifact-delivery.v1',
+      ref: `artifact:${id}`,
+      role,
+      declaredMediaType: 'text/markdown',
+      declaredExtension: 'md',
+      contentShape: 'raw-file',
+      readableRef: `.sciforge/sessions/session/task-results/${id}.md`,
+      rawRef: '.sciforge/sessions/session/task-results/output.json',
+      previewPolicy: 'inline',
+    },
+  };
+}
 
 function executionFailureSession(): SciForgeSession {
   return {

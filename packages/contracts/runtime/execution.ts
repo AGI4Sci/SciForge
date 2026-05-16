@@ -11,6 +11,16 @@ export type ExecutionUnitStatus =
   | 'failed-with-reason'
   | 'needs-human';
 
+export interface RuntimeCapabilityProviderRoute {
+  capabilityId: string;
+  primaryProviderId?: string;
+  fallbackProviderIds?: string[];
+  status?: string;
+  transport?: string;
+  healthStatus?: string;
+  routeTraceRef?: string;
+}
+
 export interface RuntimeExecutionUnit {
   id: string;
   tool: string;
@@ -50,16 +60,7 @@ export interface RuntimeExecutionUnit {
     selectedSkill?: string;
     selectedRuntime?: string;
     fallbackReason?: string;
-    capabilityProviderRoutes?: Array<{
-      capabilityId: string;
-      primaryProviderId?: string;
-      fallbackProviderIds?: string[];
-      status?: string;
-      transport?: string;
-      workerId?: string;
-      healthStatus?: string;
-      routeTraceRef?: string;
-    }>;
+    capabilityProviderRoutes?: RuntimeCapabilityProviderRoute[];
     selectedAt: string;
   };
   requiredInputs?: string[];

@@ -132,7 +132,7 @@
 - [ ] SA-DEL-02：删除或迁移 `handoffMemoryProjection`、`memoryPlan`、`availableSkills` 这类旧兼容字段；如果 backend/harness 仍需读取，改成 explicit `AgentServerContextRequest.contextRefs` / `capabilityBriefRef` / `cachePlan`。
 - [ ] SA-DEL-03：删除 UI 中 `legacyRawRecoverableReasonForRun`、`legacy raw recover action`、raw compact summary 等主路径 fallback；历史 session 只允许 audit-only 展示。
 - [ ] SA-DEL-04：删除 Runtime/Gateway 中把 malformed backend text、raw JSON、legacy task output 伪装成成功结果的 fallback；必须归类 `contract-incompatible`、`validation` 或 `failed-with-reason`。
-- [ ] SA-DEL-05：清理 docs/tests 中旧 `ProjectSessionMemory.md`、`Extending.md`、`SciForgeConversationSessionRecovery.md` 权威入口引用；当前 `smoke:docs-scenario-package` 已改为检查最终文档，后续继续扩展为断链 guard。
+- [x] SA-DEL-05：清理 docs/tests 中旧 `ProjectSessionMemory.md`、`Extending.md`、`SciForgeConversationSessionRecovery.md` 权威入口引用；当前 `smoke:docs-scenario-package` 已改为检查最终文档，后续继续扩展为断链 guard。Evidence：`docs/README.md` / `docs/Architecture.md` 标记旧文档为 archive/historical；`smoke:docs-scenario-package` 校验旧 docs 不存在、旧名只出现在 archive/historical 语境且 docs markdown 链接可解析。
 - [ ] SA-DEL-06：清点所有 `legacy` / `compatibility` / `fallback` 命名；凡是仍参与主流程的条目必须迁移到最终 contract 或删除，不能只改文案。
 - [ ] SA-DEL-07：删除 `src/runtime/gateway/direct-context-fast-path.ts` 中的 Runtime 本地 prompt regex/关键词判断和本地回答模板；保留时只能作为 `DirectContextDecision` consumer，不允许生成 strategy。
 - [ ] SA-DEL-08：删除 `src/runtime/gateway/capability-provider-preflight.ts` 作为 Runtime 可调用路径；provider preflight/route 只能作为 Gateway 内部阶段，不暴露 `endpoint/baseUrl/invokeUrl/workerId/runtimeLocation` 给 Runtime Bridge 或 Backend。
@@ -149,7 +149,7 @@
 - [ ] SA-KERNEL-05：实现 `CrossSessionRef` / explicit import 记录，禁止复制裸路径跨 session 充当记忆。
 - [ ] SA-KERNEL-06：补 conformance：C01、C02、C15、Workspace Kernel 最小验收用例。
 - [ ] SA-KERNEL-07：合并 `src/runtime/project-session-memory.ts` 与 `src/runtime/conversation-kernel/*` 两套 ledger/projection 形态；只保留一个 `WorkspaceKernel.appendEvent(event): AppendResult` 主路径，另一套只能作为 migration adapter 或删除。
-- [ ] SA-KERNEL-08：为 `ProjectMemoryRef` 对齐最终 contract：补齐 `handoff-packet`、`context-snapshot`、`retrieval-audit`、`run-audit` 等 kind，新增 `RefKindGroup`，并禁止输入直接携带 retention。
+- [x] SA-KERNEL-08：为 `ProjectMemoryRef` 对齐最终 contract：补齐 `handoff-packet`、`context-snapshot`、`retrieval-audit`、`run-audit` 等 kind，新增 `RefKindGroup`，并禁止输入直接携带 retention。Evidence：`PROJECT_MEMORY_REF_KINDS` / `RefKindGroup` / kind-derived retention 已落地，handoff/context/retrieval/run-audit aliases 会归一化，输入 retention 被忽略；`project-session-memory.test.ts` 与 `smoke:project-session-memory` 通过。
 - [ ] SA-KERNEL-09：补 `registerRef/readRef/listRefs(page/filter)` contract，`listRefs` 默认只返回 `RefDescriptor` 且分页；大正文必须通过 readRef 按需读取。
 
 #### P2：AgentServer Context Core 与 buildContextRequest
@@ -171,12 +171,12 @@
 
 - [ ] SA-GATEWAY-01：Runtime Bridge 只能调用 `Gateway.execute`；`resolveRoute` / `preflight` / `invoke` / `materialize` / `validate` 改为内部 API，并加 lint/contract test 防外部调用。
 - [ ] SA-GATEWAY-02：`Gateway.validate` 只做结构校验；科学/语义判断必须来自 Backend 或 verifier capability 的 `verification-record`。
-- [ ] SA-GATEWAY-03：实现 `ArtifactDelivery` contract：`primary-deliverable` / `supporting-evidence` 才进入 Projection 可见结果，`audit` / `diagnostic` / `internal` 只能进 debug/audit。
+- [x] SA-GATEWAY-03：实现 `ArtifactDelivery` contract：`primary-deliverable` / `supporting-evidence` 才进入 Projection 可见结果，`audit` / `diagnostic` / `internal` 只能进 debug/audit。Evidence：`artifactHasUserFacingDelivery` 已下沉到 runtime contract，覆盖 readable target、audit/diagnostic/internal、audit-only/unsupported、json-envelope；C17 smoke 使用同一规则。
 - [ ] SA-GATEWAY-04：Worker discovery 统一归一成 `ProviderManifest`，不得把单个 endpoint shape 泄漏给 Backend 或 Runtime Bridge。
 - [ ] SA-GATEWAY-05：scenario package contract 改为 policy-only guard：禁止 execution code、prompt regex、provider branch、多轮 semantic judge、preset answer/system prompt。
 - [ ] SA-GATEWAY-06：补 conformance：C07、C08、C17、C18、Capability Gateway 最小验收用例。
 - [ ] SA-GATEWAY-07：provider status / capability status 查询只能读取 Capability Registry / ProviderManifest / AgentServer worker registry projection，不能触发 Gateway preflight 作为用户回答路径。
-- [ ] SA-GATEWAY-08：`CapabilityProviderRoute` 对 Backend/Runtime 只暴露 capability/provider id、routeDigest、health summary、permission summary 和 evidence refs；endpoint/invoke path/auth/workspace roots 只留 Gateway 内部。
+- [x] SA-GATEWAY-08：`CapabilityProviderRoute` 对 Backend/Runtime 只暴露 capability/provider id、routeDigest、health summary、permission summary 和 evidence refs；endpoint/invoke path/auth/workspace roots 只留 Gateway 内部。Evidence：provider route 已拆成 Gateway 内部 preflight shape 与 public handoff shape；context/payload/routeDecision 不再序列化 endpoint/baseUrl/url/invokeUrl/invokePath/workerId/runtimeLocation/auth/workspace roots，generated-task providerInvocation 仍使用内部 route。
 
 #### P4：Runtime Bridge、Run lifecycle 与 failure
 
@@ -189,7 +189,7 @@
 - [ ] SA-RUNTIME-07：Harness policy 只输出 decision/contract/trace refs；Runtime Bridge 只把它们作为 context refs，不解释领域语义。
 - [ ] SA-RUNTIME-08：补 conformance：C06、C09、C10、C11、C16、Runtime Bridge 最小验收用例。
 - [ ] SA-RUNTIME-09：`DirectContextDecision` 必须包含 `decisionRef`、`decisionOwner`、`requiredTypedContext`、`usedRefs`、`sufficiency`；无 decision 或 insufficient 时必须 route-to-agentserver。
-- [ ] SA-RUNTIME-10：禁止 `directContextIntent(prompt)`、`promptRequires*`、`if prompt.includes` 类文本判断进入 Runtime Bridge / generation gateway 主流程。
+- [ ] SA-RUNTIME-10：禁止 `directContextIntent(prompt)`、`promptRequires*`、`if prompt.includes` 类文本判断进入 Runtime Bridge / generation gateway 主流程。First cut：`directContextFastPathPayload` 已在 provider discovery 后、runtime forbidden 前接入 generation gateway 并复用 verification/finalize；剩余工作是删除 `directContextIntent(prompt)` / `promptRequires*` 文本判断源。
 
 #### P5：UIAction、Projection-only UI 与审计
 
@@ -204,14 +204,14 @@
 - [x] SA-UI-09：删除 `src/ui/src/app/results/viewPlanResolver.ts` 的 `artifactsForProjectionlessMainPlan` 主 plan fallback；主 view plan 必须来自 Projection + ArtifactDelivery。Evidence：projectionless view plan 返回空主 items，Projection + ArtifactDelivery 用例保持可见。
 - [x] SA-UI-10：删除 `src/ui/src/app/appShell/workspaceState.ts` 的 `recoverableRunAuditFallbackForSession` / `legacyRawRecoverableReasonForRun` 主路径；recover focus、verification badge、next actions 全部来自 Projection。Evidence：`workspaceState.ts` 已删除 raw recover fallback，`workspaceState.test.ts` 断言 failed/raw repair history 被忽略；`sa-ui-legacy-raw-terminal-fallback` baseline 收紧到 0；`npm run verify:single-agent-final` 通过。
 - [x] SA-UI-11：删除 `src/ui/src/app/chat/messageRunPresentation.tsx` 和 `src/ui/src/app/ChatPanel.tsx` 中 raw `verificationResult` / `displayIntent.resultPresentation` 驱动主展示的 fallback；保留时只能进入 audit/debug。Evidence：`RunVerificationTag` 只消费 ConversationProjection verification，`ChatPanel` 不再把 `displayIntent.resultPresentation` 注入最终消息主展示；`ChatPanel.test.ts` 覆盖 raw verification 与 displayIntent resultPresentation 不驱动可见 badge/正文；`npm run verify:single-agent-final` 通过。
-- [ ] SA-UI-12：统一 ArtifactDelivery 可见性 helper：presentation/input/view-plan/results/message references 全部只认 `artifactHasUserFacingDelivery`；`diagnostic` 必须 audit-only，不得进入主 presentation input。
+- [x] SA-UI-12：统一 ArtifactDelivery 可见性 helper：presentation/input/view-plan/results/message references 全部只认 `artifactHasUserFacingDelivery`；`diagnostic` 必须 audit-only，不得进入主 presentation input。Evidence：presentation input、view-plan projection/focus、results availableArtifacts 和 message references 均复用 helper；diagnostic/readable projection 与 object-focus 测试均不进入主 plan/input。
 - [ ] SA-UI-13：`packages/support/object-references/presentation-role.ts` 中基于 artifact type/path/metadata 的 role heuristic 只能用于排序或审计，不得决定主结果可见性。
 
 #### P6：Conformance、验证与并行执行节奏
 
 - [x] SA-CONF-01：新增 `smoke:single-agent-runtime-contract`，覆盖 C01-C18；失败时不允许合并任何 runtime/gateway/UI 变更。Evidence：`tests/smoke/smoke-single-agent-runtime-contract.ts`。
 - [x] SA-CONF-02：扩展 `smoke:no-legacy-paths`：禁止主路径出现 `legacyRaw*`、`memoryPlan`、旧 `ProjectSessionMemory` public contract、Gateway 内部阶段外部调用、raw-history degraded packet。Evidence：`tools/check-no-legacy-paths.ts` 新增 SA guard；当前 legacy baseline 冻结，新增/增加会失败。
-- [ ] SA-CONF-03：新增 buildContextRequest golden fixtures：fresh、continue、repair、explicitRefs、no explicitRefs、degraded、retrieval unavailable、token budget overrun。
+- [x] SA-CONF-03：新增 buildContextRequest golden fixtures：fresh、continue、repair、explicitRefs、no explicitRefs、degraded、retrieval unavailable、token budget overrun。Evidence：`agentserver-context-contract.test.ts` 覆盖 request/degraded packet、canonical serialization + SHA-256 golden hash，以及 raw history / untagged refs / recent turns / nested compaction fail-closed。
 - [ ] SA-CONF-04：新增 browser smoke：Projection terminal 胜过 stream delta、ArtifactDelivery audit-only 不可见、direct-context insufficient 必须 route-to-agentserver。
 - [x] SA-CONF-05：每个并行 workstream 完成后更新本节任务状态和证据命令；未通过 conformance 的代码不得进入下一阶段。Evidence：本轮 SA-CONTEXT、SA-RUNTIME、SA-UI、SA-CONF 状态已按完成事实更新；`npm run verify:single-agent-final` 通过后才进入同步。
 - [x] SA-CONF-06：新增 C06/C07 lint：覆盖 `src/runtime/generation-gateway.ts`、`src/runtime/gateway/**`，禁止 Runtime 主流程调用 `directContextIntent(prompt)`、`promptRequires*`、`capabilityProviderPreflight()` 和 Gateway 内部阶段。Evidence：`smoke:single-agent-runtime-contract` 与 `smoke:no-legacy-paths` 静态 guard。
@@ -219,7 +219,7 @@
 - [x] SA-CONF-08：新增 context request C02-C05/C13 fixtures：不含 raw history/body/full ref list；fresh turn 必有 current turn anchor；stable prefix 不含 turn/run/timestamp；degraded packet 禁止 forbidden fields；synthetic audit 必须显式标记。Evidence：`agentserver-context-contract.test.ts` + C02-C05/C13 smoke fixtures。
 - [x] SA-CONF-09：新增 ArtifactDelivery C17 fixtures：`diagnostic`、`audit`、`internal`、`audit-only`、`unsupported` 均不得进入 primary view plan 或 presentation input。Evidence：`smoke-single-agent-runtime-contract.ts` C17 fixture and UI projection-only tests.
 - [ ] SA-CONF-10：新增最终完成 gate 命令 `npm run verify:single-agent-final`，串联 typecheck、核心单测、C01-C18、browser web-multiturn-final；任何一步失败都不能标记最终版本完成。First cut：命令已新增并通过 typecheck、核心单测、C01-C18、no-legacy guard；browser web-multiturn-final 尚未接入，留给 SA-WEB-E2E 阶段。
-- [ ] SA-CONF-11：为 `package.json` 中 `smoke:browser`、`smoke:browser-multiturn`、`smoke:browser-provider-preflight` 建迁移 guard；它们可以成为 `smoke:web-multiturn-final` 的子场景，但不能继续作为保护旧 preflight/direct-context 的独立完成门。
+- [x] SA-CONF-11：为 `package.json` 中 `smoke:browser`、`smoke:browser-multiturn`、`smoke:browser-provider-preflight` 建迁移 guard；它们可以成为 `smoke:web-multiturn-final` 的子场景，但不能继续作为保护旧 preflight/direct-context 的独立完成门。Evidence：旧 browser smoke scripts 现在委托 `smoke:web-multiturn-final -- --tag ...`，guard 断言 legacy browser smoke 不再作为独立完成门。
 - [ ] SA-CONF-12：新增 final evidence validator，校验 `docs/test-artifacts/single-agent-final/manifest.json` 是否引用 C01-C18 结果、Web E2E case manifests、console/network logs、screenshots 和 no-legacy guard 输出。
 
 #### P7：Web 端到端多轮对话测试矩阵

@@ -55,6 +55,28 @@ test('presentation input keeps audit deliveries out of primary rendering', () =>
   assert.equal(resolvePresentationInputForArtifact(artifact), undefined);
 });
 
+test('presentation input keeps diagnostic deliveries audit-only even when readable', () => {
+  const artifact: RuntimeArtifact = {
+    id: 'diagnostic',
+    type: 'runtime-diagnostic',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    delivery: {
+      contractId: 'sciforge.artifact-delivery.v1',
+      ref: 'artifact:diagnostic',
+      role: 'diagnostic',
+      declaredMediaType: 'text/markdown',
+      declaredExtension: 'md',
+      contentShape: 'raw-file',
+      readableRef: '.sciforge/session/diagnostic.md',
+      previewPolicy: 'inline',
+    },
+  };
+
+  assert.equal(resolvePresentationInputForArtifact(artifact), undefined);
+});
+
+
 test('component consumes contract matches kind/media/extension policy', () => {
   const module = {
     componentId: 'report-viewer',

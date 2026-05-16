@@ -150,6 +150,7 @@ import {
   agentServerDispatchEvent,
   agentServerSilentStreamGuardEvent,
   conversationPolicyStartedEvent,
+  directContextFastPathEvent,
   gatewayRequestReceivedEvent,
   repairAttemptResultEvent,
   repairAttemptStartEvent,
@@ -164,6 +165,7 @@ import { normalizeTurnExecutionConstraints, TURN_EXECUTION_CONSTRAINTS_TOOL_ID }
 import {
   requestWithDiscoveredCapabilityProviders,
 } from './gateway/capability-provider-preflight.js';
+import { directContextFastPathPayload } from './gateway/direct-context-fast-path.js';
 
 configureDirectAnswerArtifactContext(collectArtifactReferenceContext);
 configurePayloadValidationContext(attemptPlanRefs);
@@ -184,6 +186,21 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, 
     const request = await requestWithDiscoveredCapabilityProviders(
       await requestWithAgentHarnessShadow(policyApplication.request, telemetry.callbacks, policyApplication),
     );
+    const directContextPayload = directContextFastPathPayload(request);
+    if (directContextPayload) {
+      emitWorkspaceRuntimeEvent(telemetry.callbacks, directContextFastPathEvent({
+        claimType: directContextPayload.claimType,
+        executionUnitCount: directContextPayload.executionUnits.length,
+        artifactCount: directContextPayload.artifacts.length,
+      }));
+      telemetry.markVerificationStart();
+      const verified = await recordValidationRepairTelemetryForPayload(
+        await applyRuntimeVerificationPolicy(directContextPayload, request),
+        request,
+      );
+      telemetry.markVerificationEnd();
+      return finalizeGatewayPayload(telemetry.emitFinal(verified) ?? verified, request, runtimeReplayRecorder, telemetry.callbacks);
+    }
     const runtimeForbiddenPayload = runtimeExecutionForbiddenPayload(request);
     if (runtimeForbiddenPayload) {
       telemetry.markVerificationStart();

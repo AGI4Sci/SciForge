@@ -199,7 +199,10 @@ export function resolveViewPlan({
   };
 
   for (const reference of [focusedObjectReference, ...pinnedObjectReferences].filter((item): item is ObjectReference => Boolean(item))) {
-    const artifact = artifactForObjectReference(reference, session) ?? syntheticArtifactForObjectReference(reference, scenarioId);
+    const resolvedArtifact = artifactForObjectReference(reference, session);
+    if (resolvedArtifact && !artifactHasUserFacingDelivery(resolvedArtifact)) continue;
+    const artifact = resolvedArtifact ?? syntheticArtifactForObjectReference(reference, scenarioId);
+    if (artifact?.delivery && !artifactHasUserFacingDelivery(artifact)) continue;
     const module = findInteractiveViewModuleForObjectReference({ reference, artifact, modules: uiModuleRegistry })
       ?? (artifact ? findBestInteractiveViewModuleForArtifact(uiModuleRegistry, artifact) : findInteractiveViewModuleById(uiModuleRegistry, interactiveViewFallbackModuleIds.genericInspector));
     if (module) {
@@ -244,9 +247,7 @@ export function resolveViewPlan({
   for (const artifactType of displayIntent.requiredArtifactTypes ?? []) {
     if (presentationArtifactActions.some((action) => action.artifactType === artifactType && (action.ref || findBestInteractiveArtifactForType(resultArtifacts, artifactType)))) continue;
     const artifact = findBestInteractiveArtifactForType(resultArtifacts, artifactType);
-    const module = artifact && isPresentationDiagnosticArtifact(artifact.type)
-      ? findInteractiveViewModuleById(uiModuleRegistry, interactiveViewFallbackModuleIds.genericInspector)
-      : findBestInteractiveViewModuleForArtifactType(uiModuleRegistry, artifact?.type ?? artifactType, displayIntent.preferredModules);
+    const module = findBestInteractiveViewModuleForArtifactType(uiModuleRegistry, artifact?.type ?? artifactType, displayIntent.preferredModules);
     if (module) {
       addItem(module, artifact, interactiveViewPlanSourceIds.displayIntent, {}, artifact ? undefined : `等待 artifact type=${artifactType}`);
     } else {
@@ -256,24 +257,19 @@ export function resolveViewPlan({
 
   for (const artifact of resultArtifacts.slice(0, 12)) {
     if (presentationActionArtifactIds.has(artifact.id)) continue;
-    const module = isPresentationDiagnosticArtifact(artifact.type)
-      ? findInteractiveViewModuleById(uiModuleRegistry, interactiveViewFallbackModuleIds.genericInspector)
-      : findBestInteractiveViewModuleForArtifact(uiModuleRegistry, artifact);
+    const module = findBestInteractiveViewModuleForArtifact(uiModuleRegistry, artifact);
     if (module) addItem(
       module,
       artifact,
-      isPresentationDiagnosticArtifact(artifact.type) ? interactiveViewPlanSourceIds.displayIntent : interactiveViewPlanSourceIds.artifactInferred,
+      interactiveViewPlanSourceIds.artifactInferred,
     );
   }
 
   for (const slot of seedSlots) {
     const artifact = findRenderableInteractiveArtifact(resultArtifacts, slot.artifactRef);
-    const diagnosticModule = artifact && isPresentationDiagnosticArtifact(artifact.type)
-      ? findInteractiveViewModuleById(uiModuleRegistry, interactiveViewFallbackModuleIds.genericInspector)
-      : undefined;
     const input = resolvePresentationInputForArtifact(artifact);
-    const currentModule = diagnosticModule ? undefined : uiModuleRegistry.find((module) => module.componentId === slot.componentId && componentConsumesPresentationInput(module, input));
-    const replacementModule = diagnosticModule ?? (artifact ? findBestInteractiveViewModuleForArtifact(uiModuleRegistry, artifact) : uiModuleRegistry.find((module) => module.componentId === slot.componentId));
+    const currentModule = uiModuleRegistry.find((module) => module.componentId === slot.componentId && componentConsumesPresentationInput(module, input));
+    const replacementModule = artifact ? findBestInteractiveViewModuleForArtifact(uiModuleRegistry, artifact) : uiModuleRegistry.find((module) => module.componentId === slot.componentId);
     const module = currentModule ?? replacementModule ?? findInteractiveViewModuleById(uiModuleRegistry, interactiveViewFallbackModuleIds.genericInspector);
     if (!module) continue;
     if (artifact && slot.componentId !== module.componentId) {
@@ -302,8 +298,7 @@ export function resolveViewPlan({
     notebookEntryCount: session.notebook.length,
   }).sort(compareInteractiveViewPlanOrder);
   if (!ordered.length) {
-    ordered = diagnosticArtifactFallbackItems(resultArtifacts, displayIntent)
-      .sort(compareInteractiveViewPlanOrder);
+    ordered = [];
   }
   const sections: RuntimeResolvedViewPlan['sections'] = {
     primary: [],
@@ -465,23 +460,13 @@ function moduleForPresentationAction(action: ResultPresentationArtifactAction, a
       ?? uiModuleRegistry.find((candidate) => candidate.componentId === explicitModule);
     if (module && (!artifact || componentConsumesPresentationInput(module, resolvePresentationInputForArtifact(artifact)))) return module;
   }
-  if (artifact && isPresentationDiagnosticArtifact(artifact.type)) {
-    return findInteractiveViewModuleById(uiModuleRegistry, interactiveViewFallbackModuleIds.genericInspector);
-  }
   if (artifact) return findBestInteractiveViewModuleForArtifact(uiModuleRegistry, artifact);
-  if (action.artifactType && isPresentationDiagnosticArtifact(action.artifactType)) {
-    return findInteractiveViewModuleById(uiModuleRegistry, interactiveViewFallbackModuleIds.genericInspector);
-  }
   if (action.artifactType) return findBestInteractiveViewModuleForArtifactType(uiModuleRegistry, action.artifactType, preferredModules);
   return undefined;
 }
 
 function stripArtifactRef(value: string) {
   return value.replace(/^artifact::?/i, '');
-}
-
-function isPresentationDiagnosticArtifact(artifactType: string) {
-  return /diagnostic|verification|validation|failure|repair/i.test(artifactType);
 }
 
 function artifactsForConversationProjection(session: SciForgeSession, projection: UiConversationProjection) {
@@ -556,39 +541,6 @@ function isBlockingExecutionUnitStatus(status: unknown) {
     || status === 'failed-with-reason'
     || status === 'repair-needed'
     || status === 'needs-human';
-}
-
-function diagnosticArtifactFallbackItems(
-  artifacts: RuntimeArtifact[],
-  displayIntent: DisplayIntent,
-): ResolvedViewPlanItem[] {
-  const module = findInteractiveViewModuleById(uiModuleRegistry, interactiveViewFallbackModuleIds.genericInspector);
-  if (!module) return [];
-  return artifacts
-    .filter((artifact) => isPresentationDiagnosticArtifact(artifact.type))
-    .slice(0, 4)
-    .map((artifact) => {
-      const slot: UIManifestSlot = {
-        componentId: module.componentId,
-        title: artifactTitle(artifact) ?? module.title,
-        artifactRef: artifact.id,
-        priority: module.priority,
-      };
-      const input = resolvePresentationInputForArtifact(artifact);
-      const validation = validateInteractiveViewModuleBinding(module, artifact, input);
-      return {
-        id: `raw-${module.moduleId}-${artifact.id}`,
-        slot,
-        module,
-        artifact,
-        input,
-        section: resolveInteractiveViewPlanSection({ module, displayIntent, artifact, source: interactiveViewPlanSourceIds.artifactInferred }),
-        source: interactiveViewPlanSourceIds.artifactInferred,
-        status: validation.status,
-        reason: validation.reason,
-        missingFields: validation.missingFields,
-      };
-    });
 }
 
 function artifactTitle(artifact?: RuntimeArtifact) {

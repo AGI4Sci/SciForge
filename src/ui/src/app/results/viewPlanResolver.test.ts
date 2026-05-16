@@ -737,3 +737,85 @@ test('artifact delivery audit-only refs stay out of primary projection result pl
   assert.ok(plan.allItems.some((item) => item.artifact?.id === 'readable-report'));
   assert.equal(plan.allItems.some((item) => item.artifact?.id === 'raw-payload'), false);
 });
+
+test('artifact delivery diagnostic role stays audit-only even when projection references it', () => {
+  const report = deliveryArtifact({
+    id: 'visible-report',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+  }, '.sciforge/sessions/session/task-results/report.md');
+  const diagnostic = deliveryArtifact({
+    id: 'readable-diagnostic',
+    type: 'runtime-diagnostic',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+  }, '.sciforge/sessions/session/task-results/diagnostic.md', 'diagnostic');
+  const activeRun: SciForgeRun = {
+    id: 'run-diagnostic-delivery',
+    scenarioId: 'literature-evidence-review',
+    status: 'completed',
+    prompt: 'write report',
+    response: 'Done',
+    createdAt: '2026-05-07T00:00:01.000Z',
+    raw: {
+      resultPresentation: {
+        conversationProjection: {
+          schemaVersion: 'sciforge.conversation-projection.v1',
+          runId: 'run-diagnostic-delivery',
+          visibleAnswer: { status: 'satisfied', text: 'Report ready', artifactRefs: ['artifact:visible-report', 'artifact:readable-diagnostic'] },
+          artifacts: [
+            { ref: 'artifact:visible-report', label: 'Report' },
+            { ref: 'artifact:readable-diagnostic', label: 'Readable diagnostic' },
+          ],
+          executionProcess: [],
+          diagnostics: [],
+          auditRefs: ['artifact:readable-diagnostic'],
+        },
+      },
+    },
+  };
+  const session = baseSession({ runs: [activeRun], artifacts: [report, diagnostic] });
+
+  const plan = resolveViewPlan({ scenarioId: 'literature-evidence-review', session, activeRun, defaultSlots: [] });
+
+  assert.ok(plan.allItems.some((item) => item.artifact?.id === 'visible-report'));
+  assert.equal(plan.allItems.some((item) => item.artifact?.id === 'readable-diagnostic'), false);
+  assert.equal(plan.allItems.some((item) => item.input?.role === 'diagnostic'), false);
+});
+
+test('object focus cannot promote diagnostic artifact delivery into the primary plan', () => {
+  const diagnostic = deliveryArtifact({
+    id: 'focus-diagnostic',
+    type: 'runtime-diagnostic',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+  }, '.sciforge/sessions/session/task-results/focus-diagnostic.md', 'diagnostic');
+  const activeRun: SciForgeRun = {
+    id: 'run-focus-diagnostic',
+    scenarioId: 'literature-evidence-review',
+    status: 'completed',
+    prompt: 'inspect diagnostic',
+    response: 'Done',
+    createdAt: '2026-05-07T00:00:01.000Z',
+  };
+  const session = baseSession({ runs: [activeRun], artifacts: [diagnostic] });
+
+  const plan = resolveViewPlan({
+    scenarioId: 'literature-evidence-review',
+    session,
+    activeRun,
+    defaultSlots: [],
+    focusedObjectReference: {
+      id: 'focus-diagnostic-ref',
+      kind: 'artifact',
+      title: 'Diagnostic',
+      ref: 'artifact:focus-diagnostic',
+      status: 'available',
+      actions: ['focus-right-pane', 'inspect'],
+    },
+  });
+
+  assert.equal(plan.allItems.some((item) => item.artifact?.id === 'focus-diagnostic'), false);
+  assert.equal(plan.sections.primary.length, 0);
+});

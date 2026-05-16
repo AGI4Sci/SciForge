@@ -220,6 +220,7 @@ export type {
   RuntimeArtifactVisibility,
 } from './artifacts';
 export {
+  artifactHasUserFacingDelivery,
   validateArtifactDeliveryContract,
 } from './artifacts';
 export {

@@ -254,11 +254,11 @@ const direct = await runWorkspaceRuntimeGateway({
     }],
   },
 }, { onEvent: (event) => directEvents.push(event) });
-assert.equal(directEvents.some((event) => event.type === 'direct-context-fast-path'), false);
-assert.match(direct.message, /AgentServer task generation|AgentServer/);
-assert.equal(direct.executionUnits.some((unit) => unit.tool === 'sciforge.direct-context-fast-path'), false);
-assert.equal(direct.executionUnits.some((unit) => unit.tool === 'sciforge.workspace-runtime-gateway'), true);
-assert.equal(direct.executionUnits[0]?.status, 'repair-needed');
+assert.equal(directEvents.some((event) => event.type === 'direct-context-fast-path'), true);
+assert.match(direct.message, /Prior table: confidence interval summarizes uncertainty/);
+assert.equal(direct.executionUnits.some((unit) => unit.tool === 'sciforge.direct-context-fast-path'), true);
+assert.equal(direct.executionUnits.some((unit) => unit.tool === 'sciforge.workspace-runtime-gateway'), false);
+assert.equal(direct.executionUnits[0]?.status, 'done');
 assert.equal(direct.verificationResults?.[0]?.verdict, 'unverified');
 assert.equal((direct.displayIntent?.verification as { nonBlocking?: boolean } | undefined)?.nonBlocking, false);
 assert.equal(
@@ -314,7 +314,7 @@ assert.equal(repairProviderRoutes.some((route) => route.capabilityId === 'web_fe
 assert.match(repairProvider.message, /AgentServer task generation|AgentServer/);
 assert.doesNotMatch(repairProvider.message, /Tool\/provider status answered/);
 
-console.log('[ok] T098 latency diagnostics matrix covers Python-owned policy fields, TS pass-through, cache hit/miss telemetry, waits, silent-stream timing, background duration, and final-runtime AgentServer routing without direct-context/preflight result shortcuts');
+console.log('[ok] T098 latency diagnostics matrix covers Python-owned policy fields, TS pass-through, cache hit/miss telemetry, waits, silent-stream timing, background duration, direct-context finalization, and AgentServer repair routing without preflight result shortcuts');
 
 function callPythonPolicy(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
   return new Promise((resolvePromise, reject) => {

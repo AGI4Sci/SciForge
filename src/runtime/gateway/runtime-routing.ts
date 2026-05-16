@@ -28,7 +28,6 @@ export function attemptPlanRefs(request: GatewayRequest, skill?: SkillAvailabili
         fallbackProviderIds: route.fallbackProviderIds,
         status: route.status,
         transport: route.providers.find((provider) => provider.providerId === route.primaryProviderId)?.transport,
-        workerId: route.providers.find((provider) => provider.providerId === route.primaryProviderId)?.workerId,
         healthStatus: route.providers.find((provider) => provider.providerId === route.primaryProviderId)?.healthStatus,
         routeTraceRef: `runtime://capability-provider-route/${route.capabilityId}`,
       })),

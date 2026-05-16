@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import { extname, join, relative } from 'node:path';
+import { artifactHasUserFacingDelivery, type RuntimeArtifact } from '@sciforge-ui/runtime-contract/artifacts';
 
 type Ref = {
   id: string;
@@ -233,12 +234,15 @@ cover('C16', () => {
 });
 
 cover('C17', () => {
-  const artifacts = [
-    { id: 'report', delivery: 'primary-deliverable' },
-    { id: 'table', delivery: 'supporting-evidence' },
-    { id: 'trace', delivery: 'audit' },
-    { id: 'internal-json', delivery: 'internal' },
-    { id: 'diag', delivery: 'diagnostic' },
+  const artifacts: RuntimeArtifact[] = [
+    artifactDeliveryFixture('report', 'primary-deliverable', 'inline', { readableRef: 'report.md' }),
+    artifactDeliveryFixture('table', 'supporting-evidence', 'open-system', { path: 'table.xlsx' }),
+    artifactDeliveryFixture('trace', 'audit', 'inline', { readableRef: 'trace.md' }),
+    artifactDeliveryFixture('internal-json', 'internal', 'inline', { readableRef: 'internal.md' }),
+    artifactDeliveryFixture('diag', 'diagnostic', 'inline', { readableRef: 'diagnostic.md' }),
+    artifactDeliveryFixture('audit-only-primary', 'primary-deliverable', 'audit-only', { readableRef: 'audit-only.md' }),
+    artifactDeliveryFixture('unsupported-supporting', 'supporting-evidence', 'unsupported', { readableRef: 'unsupported.md' }),
+    artifactDeliveryFixture('missing-readable', 'primary-deliverable', 'inline'),
   ];
   assert.deepEqual(visibleArtifactIds(artifacts), ['report', 'table']);
 });
@@ -444,10 +448,37 @@ function canAnswerFromProjection(decision: {
     && ['agentserver', 'backend', 'harness-policy'].includes(decision.decisionOwner);
 }
 
-function visibleArtifactIds(artifacts: Array<{ id: string; delivery: string }>) {
+function visibleArtifactIds(artifacts: RuntimeArtifact[]) {
   return artifacts
-    .filter((artifact) => artifact.delivery === 'primary-deliverable' || artifact.delivery === 'supporting-evidence')
+    .filter(artifactHasUserFacingDelivery)
     .map((artifact) => artifact.id);
+}
+
+function artifactDeliveryFixture(
+  id: string,
+  role: NonNullable<RuntimeArtifact['delivery']>['role'],
+  previewPolicy: NonNullable<RuntimeArtifact['delivery']>['previewPolicy'],
+  refs: { readableRef?: string; dataRef?: string; path?: string } = {},
+): RuntimeArtifact {
+  return {
+    id,
+    type: 'runtime-artifact',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    dataRef: refs.dataRef,
+    path: refs.path,
+    delivery: {
+      contractId: 'sciforge.artifact-delivery.v1',
+      ref: `artifact:${id}`,
+      role,
+      declaredMediaType: 'text/markdown',
+      declaredExtension: 'md',
+      contentShape: 'raw-file',
+      readableRef: refs.readableRef,
+      rawRef: 'output.json',
+      previewPolicy,
+    },
+  };
 }
 
 async function collectFiles(dir: string): Promise<string[]> {

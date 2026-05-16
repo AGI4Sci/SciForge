@@ -27,7 +27,7 @@ import {
 } from './generated-task-validation-guard.js';
 import { selectedComponentIdsForRequest } from './gateway-request.js';
 import { recordCapabilityEvolutionRuntimeEvent } from './capability-evolution-events.js';
-import { capabilityProviderRoutesForHandoff } from './capability-provider-preflight.js';
+import { capabilityProviderRoutesForGatewayInvocation, capabilityProviderRoutesForHandoff } from './capability-provider-preflight.js';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
 import {
   evaluateGeneratedTaskPayloadPreflight,
@@ -504,6 +504,7 @@ export async function buildGeneratedTaskRunInputLifecycle(
   input: GeneratedTaskRunInputLifecycleInput,
 ): Promise<GeneratedTaskRunInputLifecycle> {
   const currentRefs = currentTurnReferences(input.request);
+  const internalProviderRoutes = capabilityProviderRoutesForGatewayInvocation(input.request);
   const providerRoutes = capabilityProviderRoutesForHandoff(input.request);
   const priorAttempts = currentRefs.length
     ? []
@@ -537,7 +538,7 @@ export async function buildGeneratedTaskRunInputLifecycle(
         ok: providerRoutes.ok,
         routes: providerRoutes.routes,
       },
-      providerInvocation: providerInvocationForGeneratedTask(providerRoutes),
+      providerInvocation: providerInvocationForGeneratedTask(internalProviderRoutes),
       capabilityFirstPolicy: {
         schemaVersion: 'sciforge.generated-task-capability-first.v1',
         policy: 'provider-first',
@@ -556,7 +557,7 @@ export async function buildGeneratedTaskRunInputLifecycle(
   };
 }
 
-function providerInvocationForGeneratedTask(providerRoutes: ReturnType<typeof capabilityProviderRoutesForHandoff>) {
+function providerInvocationForGeneratedTask(providerRoutes: ReturnType<typeof capabilityProviderRoutesForGatewayInvocation>) {
   const adapters = providerRoutes.routes
     .filter((route) => route.status === 'ready')
     .map((route) => {

@@ -1,7 +1,7 @@
 import type { ContractValidationFailure, ContractValidationFailureKind } from '@sciforge-ui/runtime-contract';
 import { collectRuntimeRefsFromValue, runtimePayloadKeyLooksLikeBodyCarrier } from '@sciforge-ui/runtime-contract/references';
 import type { RuntimeArtifact, RuntimeExecutionUnit, SciForgeRun, SciForgeSession } from '../domain';
-import { artifactPresentationRole } from '../../../../packages/support/object-references';
+import { artifactHasUserFacingDelivery } from '../../../../packages/support/object-references';
 import type { RuntimeResolvedViewPlan } from './results/viewPlanResolver';
 import { asString, asStringList, isRecord } from './results/resultArtifactHelpers';
 import { artifactsForRun, auditExecutionUnitsForRun, runUsesContextOnlyFastPath } from './results/executionUnitsForRun';
@@ -382,9 +382,7 @@ function presentationArtifacts(session: SciForgeSession, run?: SciForgeRun, view
   const byId = new Map<string, RuntimeArtifact>();
   for (const artifact of artifacts) {
     if (!artifact?.id || byId.has(artifact.id)) continue;
-    if (artifact.delivery?.previewPolicy === 'audit-only') continue;
-    const role = artifactPresentationRole(artifact);
-    if (role === 'audit' || role === 'diagnostic' || role === 'internal') continue;
+    if (!artifactHasUserFacingDelivery(artifact)) continue;
     byId.set(artifact.id, artifact);
   }
   return Array.from(byId.values()).map((artifact) => ({
@@ -424,18 +422,7 @@ function projectionAvailableArtifacts(
   const projectionRefs = conversationProjectionArtifactRefs(projection);
   if (!projectionRefs.length) return availableArtifacts;
   const ids = new Set(projectionRefs.map(artifactIdFromRef));
-  const matched = availableArtifacts.filter((artifact) => ids.has(artifact.id));
-  const missing = projectionRefs
-    .filter((ref) => !matched.some((artifact) => artifact.id === artifactIdFromRef(ref)))
-    .map((ref) => {
-      const projectionArtifact = projection.artifacts.find((artifact) => artifact.ref === ref);
-      return {
-        id: artifactIdFromRef(ref),
-        type: projectionArtifact?.mime ?? 'artifact',
-        title: projectionArtifact?.label ?? artifactIdFromRef(ref),
-      };
-    });
-  return [...matched, ...missing];
+  return availableArtifacts.filter((artifact) => ids.has(artifact.id));
 }
 
 function artifactIdFromRef(ref: string) {

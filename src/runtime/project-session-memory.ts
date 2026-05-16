@@ -25,19 +25,36 @@ export type ProjectSessionEventKind =
   | 'history-edit-recorded'
   | 'human-approval-recorded';
 
-export type ProjectMemoryRefKind =
+export const PROJECT_MEMORY_REF_KINDS = [
+  'artifact',
+  'task-input',
+  'task-output',
+  'stdout',
+  'stderr',
+  'log',
+  'source',
+  'verification',
+  'bundle',
+  'ledger-event',
+  'projection',
+  'execution-unit',
+  'handoff',
+  'context',
+  'retrieval',
+  'run-audit',
+] as const;
+
+export type ProjectMemoryRefKind = typeof PROJECT_MEMORY_REF_KINDS[number];
+
+export type RefKindGroup =
   | 'artifact'
-  | 'task-input'
-  | 'task-output'
-  | 'stdout'
-  | 'stderr'
-  | 'log'
-  | 'source'
-  | 'verification'
-  | 'bundle'
-  | 'ledger-event'
-  | 'projection'
-  | 'execution-unit';
+  | 'execution'
+  | 'context'
+  | 'handoff'
+  | 'retrieval'
+  | 'audit';
+
+export type ProjectMemoryRefRetention = 'hot' | 'warm' | 'cold' | 'audit-only';
 
 export interface ProjectMemoryRef {
   ref: string;
@@ -48,7 +65,7 @@ export interface ProjectMemoryRef {
   producerRunId?: string;
   preview?: string;
   readable?: boolean;
-  retention?: 'hot' | 'warm' | 'cold' | 'audit-only';
+  retention?: ProjectMemoryRefRetention;
 }
 
 export interface ProjectSessionEvent {
@@ -172,6 +189,56 @@ type ConversationEventLike = {
 };
 
 type SessionLike = Record<string, unknown>;
+
+const PROJECT_MEMORY_REF_KIND_SET = new Set<ProjectMemoryRefKind>(PROJECT_MEMORY_REF_KINDS);
+
+const REF_KIND_GROUPS: Record<ProjectMemoryRefKind, RefKindGroup> = {
+  artifact: 'artifact',
+  'task-input': 'execution',
+  'task-output': 'execution',
+  stdout: 'execution',
+  stderr: 'execution',
+  log: 'execution',
+  source: 'artifact',
+  verification: 'audit',
+  bundle: 'context',
+  'ledger-event': 'audit',
+  projection: 'context',
+  'execution-unit': 'execution',
+  handoff: 'handoff',
+  context: 'context',
+  retrieval: 'retrieval',
+  'run-audit': 'audit',
+};
+
+const RETENTION_BY_REF_KIND_GROUP: Record<RefKindGroup, ProjectMemoryRefRetention> = {
+  artifact: 'warm',
+  execution: 'hot',
+  context: 'warm',
+  handoff: 'hot',
+  retrieval: 'cold',
+  audit: 'audit-only',
+};
+
+const REF_KIND_ALIASES: Record<string, ProjectMemoryRefKind> = {
+  audit: 'run-audit',
+  'backend-handoff': 'handoff',
+  'compaction-audit': 'run-audit',
+  'context-ref': 'context',
+  'context-snapshot': 'context',
+  'handoff-packet': 'handoff',
+  'retrieval-audit': 'run-audit',
+  'retrieval-evidence': 'retrieval',
+  'run-audit-ref': 'run-audit',
+};
+
+export function projectMemoryRefKindGroup(kind: ProjectMemoryRefKind): RefKindGroup {
+  return REF_KIND_GROUPS[kind];
+}
+
+export function projectMemoryRefRetention(kind: ProjectMemoryRefKind): ProjectMemoryRefRetention {
+  return RETENTION_BY_REF_KIND_GROUP[projectMemoryRefKindGroup(kind)];
+}
 
 export function normalizeProjectSessionMemory(
   input: unknown,
@@ -555,6 +622,10 @@ function extractRefs(record: Record<string, unknown> | undefined): unknown[] {
     ['source', record.codeRef ?? record.sourceRef],
     ['verification', record.verificationRef],
     ['bundle', record.sessionBundleRef ?? record.bundleRef],
+    ['handoff', record.handoffRef ?? record.handoffPacketRef],
+    ['context', record.contextRef ?? record.contextSnapshotRef],
+    ['retrieval', record.retrievalRef ?? record.retrievalEvidenceRef],
+    ['run-audit', record.runAuditRef ?? record.auditRef ?? record.compactionAuditRef ?? record.retrievalAuditRef],
   ].flatMap(([kind, ref]) => (typeof ref === 'string' && ref.trim() ? [{ kind, ref }] : []));
   const directRefs = directRef
     ? [{ ...record, ref: directRef, kind: stringValue(record.kind) ?? inferRefKind(directRef) }]
@@ -597,7 +668,6 @@ function normalizeRef(value: unknown, producerRunId?: string): ProjectMemoryRef 
     producerRunId: stringValue(record?.producerRunId) ?? producerRunId,
     preview: stringValue(record?.preview) ?? stringValue(record?.label),
     readable: booleanValue(record?.readable),
-    retention: normalizeRetention(stringValue(record?.retention)),
   });
 }
 
@@ -620,7 +690,7 @@ function finalizeRef(ref: Omit<ProjectMemoryRef, 'digest' | 'sizeBytes'> & Parti
     producerRunId: ref.producerRunId,
     preview: ref.preview,
     readable: ref.readable,
-    retention: ref.retention,
+    retention: projectMemoryRefRetention(ref.kind),
   };
 }
 
@@ -713,38 +783,26 @@ function normalizeActor(actor: unknown): ProjectSessionActor {
 }
 
 function normalizeRefKind(kind: string | undefined, ref: string): ProjectMemoryRefKind {
-  if (kind && [
-    'artifact',
-    'task-input',
-    'task-output',
-    'stdout',
-    'stderr',
-    'log',
-    'source',
-    'verification',
-    'bundle',
-    'ledger-event',
-    'projection',
-    'execution-unit',
-  ].includes(kind)) return kind as ProjectMemoryRefKind;
+  if (kind && PROJECT_MEMORY_REF_KIND_SET.has(kind as ProjectMemoryRefKind)) return kind as ProjectMemoryRefKind;
+  if (kind && REF_KIND_ALIASES[kind]) return REF_KIND_ALIASES[kind];
   return inferRefKind(ref);
 }
 
 function inferRefKind(ref: string): ProjectMemoryRefKind {
+  if (/handoff|handoffs/i.test(ref)) return 'handoff';
+  if (/run-audit|retrieval-audit|compaction-audit|audit|trace|decision/i.test(ref)) return 'run-audit';
+  if (/retriev|evidence/i.test(ref)) return 'retrieval';
+  if (/context-snapshot|context-ref|^context:|\/context\//i.test(ref)) return 'context';
   if (/stderr/i.test(ref)) return 'stderr';
   if (/stdout/i.test(ref)) return 'stdout';
   if (/verification/i.test(ref)) return 'verification';
-  if (/bundle|sessions\//i.test(ref)) return 'bundle';
   if (/task-input|input/i.test(ref)) return 'task-input';
   if (/task-output|task-results|output/i.test(ref)) return 'task-output';
+  if (/artifact|artifacts/i.test(ref)) return 'artifact';
   if (/\.log$/i.test(ref)) return 'log';
+  if (/bundle|sessions\//i.test(ref)) return 'bundle';
   if (/\.(ts|tsx|js|jsx|py|sh|md)$/i.test(ref)) return 'source';
   return 'artifact';
-}
-
-function normalizeRetention(value: string | undefined): ProjectMemoryRef['retention'] | undefined {
-  if (value === 'hot' || value === 'warm' || value === 'cold' || value === 'audit-only') return value;
-  return undefined;
 }
 
 function hasFailureSignal(record: Record<string, unknown>): boolean {

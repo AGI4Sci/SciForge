@@ -6,6 +6,8 @@ import {
   buildRepairPacket,
   compileContextProjection,
   normalizeProjectSessionMemory,
+  projectMemoryRefKindGroup,
+  projectMemoryRefRetention,
   recoverProjectSessionProjection,
   type ProjectSessionEvent,
 } from './project-session-memory.js';
@@ -108,6 +110,37 @@ test('normalizes ref digests and builds a stable ref index from session-like run
   assert.equal(refs.find((ref) => ref.ref.endsWith('stderr.log'))?.kind, 'stderr');
   assert.equal(refs.find((ref) => ref.ref.endsWith('verdict.json'))?.digest, 'sha256:known');
   assert.equal(projection.events.find((event) => event.runId === 'run-a')?.kind, 'failure-classified');
+});
+
+test('derives ref kind groups and retention for context handoff retrieval and audit refs', () => {
+  const projection = normalizeProjectSessionMemory({
+    sessionId: 'session-ref-policy',
+    events: [{
+      id: 'ref-policy',
+      type: 'HarnessDecisionRecorded',
+      payload: {
+        refs: [
+          { ref: 'handoffs/current-packet.json', kind: 'handoff-packet', retention: 'cold' },
+          { ref: 'context:snapshot/current', kind: 'context-snapshot', retention: 'audit-only' },
+          { ref: 'retrieval:evidence/current', kind: 'retrieval-evidence', retention: 'hot' },
+          { ref: 'run-audit:decision/current', kind: 'retrieval-audit', retention: 'warm' },
+        ],
+      },
+    }],
+  });
+
+  const refsByRef = new Map(projection.refIndex.map((ref) => [ref.ref, ref]));
+
+  assert.equal(refsByRef.get('handoffs/current-packet.json')?.kind, 'handoff');
+  assert.equal(refsByRef.get('handoffs/current-packet.json')?.retention, 'hot');
+  assert.equal(refsByRef.get('context:snapshot/current')?.kind, 'context');
+  assert.equal(refsByRef.get('context:snapshot/current')?.retention, 'warm');
+  assert.equal(refsByRef.get('retrieval:evidence/current')?.kind, 'retrieval');
+  assert.equal(refsByRef.get('retrieval:evidence/current')?.retention, 'cold');
+  assert.equal(refsByRef.get('run-audit:decision/current')?.kind, 'run-audit');
+  assert.equal(refsByRef.get('run-audit:decision/current')?.retention, 'audit-only');
+  assert.equal(projectMemoryRefKindGroup('run-audit'), 'audit');
+  assert.equal(projectMemoryRefRetention('retrieval'), 'cold');
 });
 
 test('keeps stable prefix hash unchanged when only the current tail task changes', () => {

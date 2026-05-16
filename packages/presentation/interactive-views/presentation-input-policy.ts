@@ -1,9 +1,10 @@
-import type {
-  PresentationInput,
-  PresentationInputKind,
-  RuntimeArtifact,
-  UIComponentConsumes,
-  UIComponentManifest,
+import {
+  artifactHasUserFacingDelivery,
+  type RuntimeArtifact,
+  type PresentationInput,
+  type PresentationInputKind,
+  type UIComponentConsumes,
+  type UIComponentManifest,
 } from '@sciforge-ui/runtime-contract';
 
 const MARKDOWN_EXTENSIONS = new Set(['md', 'markdown']);
@@ -15,16 +16,7 @@ const BINARY_EXTENSIONS = new Set(['pdf', 'doc', 'docx', 'xls', 'xlsx', 'png', '
 export function resolvePresentationInputForArtifact(artifact?: RuntimeArtifact): PresentationInput | undefined {
   if (!artifact) return undefined;
   const delivery = artifact.delivery;
-  if (!delivery) {
-    return {
-      kind: 'unsupported',
-      ref: artifact.path ?? artifact.dataRef,
-      title: artifactTitle(artifact),
-      artifactRef: `artifact:${artifact.id}`,
-      reason: 'artifact missing ArtifactDelivery contract',
-    };
-  }
-  if (delivery.role === 'audit' || delivery.role === 'internal' || delivery.previewPolicy === 'audit-only') return undefined;
+  if (!delivery || !artifactHasUserFacingDelivery(artifact)) return undefined;
   const ref = delivery.readableRef ?? artifact.path ?? artifact.dataRef;
   const base = {
     ref,
