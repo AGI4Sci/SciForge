@@ -145,6 +145,52 @@ test('AgentServer prompt renders workspace context projection without legacy mem
   assert.doesNotMatch(prompt, /projectSessionMemoryProjection|handoffMemoryProjection|"availableSkills"/);
 });
 
+test('AgentServer generation prompt requires provider-first code when ready web routes exist', () => {
+  const prompt = buildAgentServerGenerationPrompt({
+    prompt: 'fresh literature run: search recent papers and summarize evidence.',
+    skillDomain: 'literature',
+    freshCurrentTurn: true,
+    contextEnvelope: {
+      scenarioFacts: {
+        capabilityProviderRoutes: {
+          requiredCapabilityIds: ['web_search', 'web_fetch'],
+          ok: true,
+          routes: [{
+            capabilityId: 'web_search',
+            primaryProviderId: 'sciforge.web-worker.web_search',
+            fallbackProviderIds: [],
+            status: 'ready',
+            reason: 'sciforge.web-worker.web_search is ready.',
+            routeTraceRef: 'runtime://capability-provider-route/web_search',
+            providers: [{
+              providerId: 'sciforge.web-worker.web_search',
+              source: 'package',
+              transport: 'http',
+              healthStatus: 'ready',
+            }],
+          }],
+        },
+      },
+    },
+    workspaceTreeSummary: [],
+    availableSkills: [],
+    artifactSchema: {},
+    uiManifestContract: {},
+    priorAttempts: [],
+  });
+
+  assert.match(prompt, /"capabilityFirstPolicy"/);
+  assert.match(prompt, /"policy": "provider-first"/);
+  assert.match(prompt, /"readyCapabilityIds": \[\s+"web_search"/);
+  assert.match(prompt, /invoke_capability/);
+  assert.match(prompt, /invoke_provider/);
+  assert.match(prompt, /canonicalPythonAdapter/);
+  assert.match(prompt, /invoke_capability\(task_input, \\?"web_search\\?"/);
+  assert.match(prompt, /Provider-first authoring template/);
+  assert.match(prompt, /requests, urllib, httpx/);
+  assert.match(prompt, /Do not generate task code that uses direct network packages/);
+});
+
 function ref(id: string, kind: ProjectMemoryRef['kind']): ProjectMemoryRef {
   return {
     ref: id,

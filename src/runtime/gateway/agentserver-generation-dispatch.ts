@@ -39,20 +39,51 @@ export function requestUsesRepairContext(request: GatewayRequest) {
     : isRecord(uiState.contextIsolation)
       ? uiState.contextIsolation
       : {};
-  if (contextReusePolicy.mode === 'repair') return true;
   const harnessHandoff = isRecord(uiState.agentHarnessHandoff) ? uiState.agentHarnessHandoff : {};
   const continuityDecision = isRecord(harnessHandoff.continuityDecision) ? harnessHandoff.continuityDecision : {};
   const runtimeSignals = isRecord(continuityDecision.runtimeSignals) ? continuityDecision.runtimeSignals : {};
-  if (runtimeSignals.policyMode === 'repair') return true;
   const trace = isRecord(continuityDecision.trace) ? continuityDecision.trace : {};
   const tracePolicy = isRecord(trace.policy) ? trace.policy : {};
-  if (tracePolicy.mode === 'repair') return true;
   const conversationPolicy = isRecord(uiState.conversationPolicy) ? uiState.conversationPolicy : {};
   const goalSnapshot = isRecord(conversationPolicy.goalSnapshot) ? conversationPolicy.goalSnapshot : {};
-  if (goalSnapshot.taskRelation === 'repair') return true;
+  const hasExplicitRepairPolicy = contextReusePolicy.mode === 'repair'
+    || runtimeSignals.policyMode === 'repair'
+    || tracePolicy.mode === 'repair'
+    || goalSnapshot.taskRelation === 'repair';
+  if (hasExplicitRepairPolicy) return requestHasRepairContinuationTarget(request);
   const executionModePlan = isRecord(conversationPolicy.executionModePlan) ? conversationPolicy.executionModePlan : {};
-  if (executionModePlan.executionMode === 'repair-or-continue-project') return true;
+  const signals = toStringList(executionModePlan.signals);
+  if (executionModePlan.executionMode === 'repair-or-continue-project' && signals.includes('repair')) {
+    return requestHasRepairContinuationTarget(request);
+  }
   return false;
+}
+
+const REPAIR_TARGET_STATUSES = new Set(['failed', 'error', 'repair-needed', 'failed-with-reason', 'needs-human']);
+
+function requestHasRepairContinuationTarget(request: GatewayRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const records = [
+    ...toRecordList(uiState.recentExecutionRefs),
+    ...toRecordList(uiState.recentRuns),
+    ...toRecordList(uiState.recentExecutionUnits),
+    ...toRecordList(uiState.executionUnits),
+    ...toRecordList(isRecord(uiState.workspaceKernelProjection) ? uiState.workspaceKernelProjection.executionUnits : undefined),
+    ...toRecordList(isRecord(uiState.workspaceKernelProjection) ? uiState.workspaceKernelProjection.runs : undefined),
+    isRecord(uiState.activeRun) ? uiState.activeRun : undefined,
+    isRecord(uiState.currentRun) ? uiState.currentRun : undefined,
+  ].filter((record): record is Record<string, unknown> => Boolean(record));
+  return records.some(isRepairTargetRecord);
+}
+
+function isRepairTargetRecord(record: Record<string, unknown>) {
+  const status = typeof record.status === 'string' ? record.status.trim().toLowerCase() : '';
+  if (REPAIR_TARGET_STATUSES.has(status)) return true;
+  return Boolean(
+    typeof record.failureReason === 'string' && record.failureReason.trim()
+      || typeof record.stderrRef === 'string' && record.stderrRef.trim()
+      || typeof record.errorRef === 'string' && record.errorRef.trim(),
+  );
 }
 
 export type AgentServerGenerationParams = {

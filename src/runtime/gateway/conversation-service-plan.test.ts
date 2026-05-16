@@ -61,6 +61,10 @@ test('turn composition scopes session facts for isolated turns', () => {
   assert.deepEqual(composition.contextSession.executionUnits, []);
   assert.deepEqual(composition.contextSession.runs, []);
   assert.deepEqual(composition.contextSession.messages, []);
+  assert.deepEqual(composition.recentFailures, []);
+  assert.deepEqual(composition.priorAttempts, []);
+  assert.deepEqual(composition.executionClassifierInput?.recentFailures, []);
+  assert.deepEqual(composition.executionClassifierInput?.priorAttempts, []);
   assert.deepEqual(composition.currentReferences, [{
     kind: 'file',
     ref: 'reports/current.md',
@@ -136,6 +140,8 @@ test('explicit refs do not reopen historical session facts for isolated turns', 
   assert.deepEqual(composition.contextSession.executionUnits, []);
   assert.deepEqual(composition.contextSession.runs, []);
   assert.deepEqual(composition.contextSession.messages, []);
+  assert.deepEqual(composition.recentFailures, []);
+  assert.deepEqual(composition.priorAttempts, []);
   assert.deepEqual(composition.currentReferences, [explicitRef]);
   assert.deepEqual(composition.executionClassifierInput?.currentReferences, [explicitRef]);
   assert.equal((composition.executionClassifierInput?.turnExecutionConstraints as Record<string, unknown>).agentServerForbidden, true);

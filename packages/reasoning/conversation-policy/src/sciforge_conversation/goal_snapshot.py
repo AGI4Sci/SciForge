@@ -7,7 +7,12 @@ from typing import Any, Mapping
 REPORT_HINTS = re.compile(r"\b(report|memo|summary|summari[sz]e|markdown|md)\b|综述|报告|总结|备忘录", re.I)
 VISUAL_HINTS = re.compile(r"\b(plot|chart|figure|visuali[sz]e|image|diagram)\b|图|可视化|绘图", re.I)
 WORKFLOW_HINTS = re.compile(r"\b(run|execute|workflow|pipeline|notebook|script)\b|复现|运行|执行|流程|分析", re.I)
-REPAIR_HINTS = re.compile(r"\b(repair|fix|debug|failed|failure|error|log|rerun)\b|修复|失败|报错|日志|重跑|排查", re.I)
+REPAIR_ACTION_HINTS = re.compile(r"\b(repair|fix|debug|log|rerun)\b|修复|修正|报错|日志|重跑|排查", re.I)
+FAILURE_REPORT_HINTS = re.compile(r"\b(failed|failure|error)\b|失败", re.I)
+REPAIR_HINTS = re.compile(
+    rf"(?:{REPAIR_ACTION_HINTS.pattern})|(?:{FAILURE_REPORT_HINTS.pattern})",
+    re.I,
+)
 CONTINUE_HINTS = re.compile(
     r"\b(continue|follow[- ]?up|previous|prior|last round|remember|recall|what did i ask|what was my first)\b"
     r"|接着|继续|上一轮|刚才|前面|还记得|记得.*(?:一开始|最开始|开始|之前)|一开始.*(?:问题|问|说)|最开始.*(?:问题|问|说)",
@@ -63,10 +68,11 @@ def build_goal_snapshot(request: Mapping[str, Any] | Any) -> dict[str, Any]:
     provided_refs = _string_list(_get(request, "references") or _get(request, "refs") or [])
     explicit_refs = _dedupe([*provided_refs, *_extract_refs(prompt)])
 
-    goal_type = _infer_goal_type(prompt, explicit_refs)
+    has_prior_context = _has_prior_context(request)
+    goal_type = _infer_goal_type(prompt, explicit_refs, has_prior_context)
     required_formats = _infer_formats(prompt, goal_type)
     required_artifacts = _infer_artifacts(prompt, goal_type)
-    task_relation = _infer_task_relation(prompt, bool(explicit_refs), _has_prior_context(request))
+    task_relation = _infer_task_relation(prompt, bool(explicit_refs), has_prior_context)
 
     snapshot: dict[str, Any] = {
         "schemaVersion": "sciforge.conversation.goal-snapshot.v1",
@@ -95,8 +101,8 @@ def build_goal_snapshot(request: Mapping[str, Any] | Any) -> dict[str, Any]:
     return snapshot
 
 
-def _infer_goal_type(prompt: str, refs: list[str]) -> str:
-    if REPAIR_HINTS.search(prompt):
+def _infer_goal_type(prompt: str, refs: list[str], has_prior_context: bool) -> str:
+    if _has_repair_intent(prompt, bool(refs), has_prior_context):
         return "repair"
     if VISUAL_HINTS.search(prompt):
         return "visualization"
@@ -110,9 +116,7 @@ def _infer_goal_type(prompt: str, refs: list[str]) -> str:
 def _infer_task_relation(prompt: str, has_explicit_refs: bool, has_prior_context: bool) -> str:
     if NEW_TASK_HINTS.search(prompt):
         return "new-task"
-    if REPAIR_HINTS.search(prompt) and CONTINUE_HINTS.search(prompt):
-        return "repair"
-    if REPAIR_HINTS.search(prompt):
+    if _has_repair_intent(prompt, has_explicit_refs, has_prior_context):
         return "repair"
     if CONTINUE_HINTS.search(prompt):
         return "continue"
@@ -121,6 +125,14 @@ def _infer_task_relation(prompt: str, has_explicit_refs: bool, has_prior_context
     if has_explicit_refs:
         return "new-task"
     return "new-task"
+
+
+def _has_repair_intent(prompt: str, has_explicit_refs: bool, has_prior_context: bool) -> bool:
+    if not REPAIR_ACTION_HINTS.search(prompt):
+        return False
+    if has_prior_context or has_explicit_refs or CONTINUE_HINTS.search(prompt):
+        return True
+    return False
 
 
 def _infer_formats(prompt: str, goal_type: str) -> list[str]:

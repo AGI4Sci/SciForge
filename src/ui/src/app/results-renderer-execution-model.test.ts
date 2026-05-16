@@ -111,6 +111,74 @@ test('results renderer execution model prefers conversation projection recover a
   assert.ok(runAuditRefs(session, session.runs[0]).includes('file:.sciforge/logs/provider.stderr.log'));
 });
 
+test('results renderer execution model surfaces run display intent projection without session materialization', () => {
+  const session = {
+    schemaVersion: 2,
+    sessionId: 'session-run-display-intent-projection',
+    scenarioId: 'literature-evidence-review',
+    title: 'run display intent projection',
+    createdAt: '2026-05-16T00:00:00.000Z',
+    messages: [],
+    runs: [{
+      id: 'run-display-intent-projection',
+      scenarioId: 'literature-evidence-review',
+      status: 'failed',
+      prompt: 'search arxiv with ready provider route',
+      response: 'failed with reason',
+      createdAt: '2026-05-16T00:00:00.000Z',
+      raw: {
+        displayIntent: {
+          taskOutcomeProjection: {
+            conversationProjection: {
+              schemaVersion: 'sciforge.conversation-projection.v1',
+              conversationId: 'task-outcome:run-display-intent-projection',
+              visibleAnswer: {
+                status: 'external-blocked',
+                diagnostic: 'Generated task attempted direct urllib network access while web_fetch was ready.',
+                artifactRefs: ['artifact:provider-policy-diagnostic'],
+              },
+              activeRun: {
+                id: 'run-display-intent-projection',
+                status: 'external-blocked',
+              },
+              artifacts: [],
+              executionProcess: [{
+                eventId: 'event-provider-policy',
+                type: 'runtime-diagnostic',
+                summary: 'Provider-first preflight blocked direct urllib network access.',
+                timestamp: '2026-05-16T00:00:01.000Z',
+              }],
+              recoverActions: ['Regenerate task code through ready web_fetch/web_search provider routes.'],
+              verificationState: { status: 'failed' },
+              auditRefs: ['artifact:provider-policy-diagnostic'],
+              diagnostics: [{
+                severity: 'error',
+                code: 'generated-task-capability-first-policy',
+                message: 'Direct urllib network access is not allowed when provider routes are ready.',
+              }],
+            },
+          },
+        },
+      },
+    }],
+    uiManifest: [],
+    claims: [],
+    executionUnits: [],
+    artifacts: [],
+    notebook: [],
+    versions: [],
+    updatedAt: '2026-05-16T00:00:01.000Z',
+  } as SciForgeSession;
+
+  const state = runPresentationState(session, session.runs[0]);
+
+  assert.equal(state.kind, 'recoverable');
+  assert.match(state.reason, /direct urllib network access/);
+  assert.notEqual(state.title, '主结果等待 ConversationProjection');
+  assert.deepEqual(runRecoverActions(session, session.runs[0]), ['Regenerate task code through ready web_fetch/web_search provider routes.']);
+  assert.ok(runAuditRefs(session, session.runs[0]).includes('artifact:provider-policy-diagnostic'));
+});
+
 test('results renderer execution model scopes failure units through active run artifact refs', () => {
   const session = executionFailureSession();
   session.runs.push({

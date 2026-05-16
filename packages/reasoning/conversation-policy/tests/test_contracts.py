@@ -121,6 +121,40 @@ class ConversationPolicyContractTest(unittest.TestCase):
         self.assertNotIn("capabilityBriefs", result)
         self.assertTrue(result["userVisiblePlan"])
 
+    def test_service_keeps_fresh_failure_reporting_request_out_of_repair_mode(self):
+        result = handle_payload({
+            "schemaVersion": REQUEST_SCHEMA_VERSION,
+            "requestId": "fresh-provider-failure-reporting",
+            "turn": {
+                "role": "user",
+                "turnId": "turn-fresh",
+                "text": (
+                    "请用最小检索验证 arXiv 是否可访问：搜索 CRISPR prime editing review，"
+                    "返回 3 篇候选论文标题和来源；如果外部 provider 不可用，"
+                    "请给出可恢复失败原因，不要编造结果。"
+                ),
+                "refs": [],
+            },
+            "history": [],
+            "capabilities": [{
+                "id": "literature.search",
+                "title": "Literature search",
+                "keywords": ["literature", "search"],
+                "inputTypes": ["query"],
+                "outputTypes": ["paper-list"],
+                "riskLevel": "low",
+                "internalAgent": False,
+            }],
+            "policyHints": {
+                "requiredArtifacts": [],
+            },
+        })
+
+        self.assertEqual(result["goalSnapshot"]["taskRelation"], "new-task")
+        self.assertNotEqual(result["goalSnapshot"]["goalType"], "repair")
+        self.assertNotEqual(result["contextPolicy"]["mode"], "repair")
+        self.assertNotEqual(result["executionModePlan"]["executionMode"], "repair-or-continue-project")
+
     def test_service_emits_no_execution_turn_constraints(self):
         request = {
             "schemaVersion": REQUEST_SCHEMA_VERSION,

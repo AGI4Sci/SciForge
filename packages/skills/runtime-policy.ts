@@ -79,6 +79,7 @@ export interface AgentServerGeneratedTaskContractResponse {
 export const AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE = 'agentserver-generation-retry' as const;
 export const AGENTSERVER_GENERATED_TASK_MATERIALIZED_EVENT_TYPE = 'workspace-task-materialized' as const;
 export const AGENTSERVER_SUPPLEMENTAL_GENERATION_EVENT_TYPE = 'workspace-task-start' as const;
+export const CAPABILITY_ROUTE_SUMMARY_SCHEMA_VERSION = 'sciforge.capability-provider-routes.v1' as const;
 
 const skillPromotionDomainFallback: SkillPackageDomain = 'literature';
 const skillPackageDomainSet = new Set<SkillPackageDomain>(['literature', 'structure', 'omics', 'knowledge']);
@@ -282,6 +283,9 @@ export function agentServerGeneratedTaskPromptPolicyLines() {
     'Generated ToolPayload construction contract: initialize top-level claims, uiManifest, executionUnits, and artifacts as arrays. Append uiManifest slots as array entries such as {"componentId":"table-viewer","artifactRef":"artifact-id"}; never use an object descriptor such as {"preferredView":...,"views":[...]} for uiManifest.',
     'Generated artifact contract: every artifact should include stable id and type, for example {"id":"research-report","type":"research-report","path":"research-report.md","mimeType":"text/markdown"}. uiManifest[].artifactRef must match the artifact id, not a filename unless that filename is the id.',
     'View/content separation contract: uiManifest only routes components to artifact ids. Put preferred views, tables, report markdown, rows, provider traces, and layout/content details in artifacts[].data, artifacts[].metadata, or artifacts[].dataRef.',
+    'Provider-first generated task contract: when task input includes capabilityProviderRoutes.routes with ready capability routes, generated Python must import from sciforge_task and call invoke_capability(task_input, capabilityId, input). invoke_provider is the compatibility alias for provider-backed web_search/web_fetch.',
+    'Provider-first prohibition: do not use direct network packages or APIs such as requests, urllib, httpx, aiohttp, fetch, node:http, node:https, or bespoke scraper/download code for web work covered by ready SciForge provider routes. The only allowed network transport in generated task code for that work is sciforge_task.invoke_capability or sciforge_task.invoke_provider.',
+    'Provider failure contract: if invoke_provider reports unavailable, empty, unauthorized, rate limited, or timed out, write a failed-with-reason or repair-needed ToolPayload with failureReason, recoverActions, nextStep, provider route refs, and any partial evidence; do not fall back to direct network APIs.',
   ];
 }
 
@@ -363,6 +367,8 @@ export function agentServerWorkspaceTaskRoutingPromptPolicyLines(group: 'all' | 
 export function agentServerCapabilityRoutingPromptPolicyLines() {
   return [
     'Runtime capability routing contract: use capabilityBrokerBrief as the compact broker-ranked capability list; the old scattered capability catalog is omitted by default, and full schemas, examples, implementation notes, and repair hints stay lazy until execution or repair needs them.',
+    'Provider route contract: task input will expose capabilityProviderRoutes and providerInvocation adapters. If a selected capability has a ready provider route, generated tasks must use the provider route through sciforge_task.invoke_capability instead of synthesizing a direct client or scraper.',
+    'Provider-first authoring template: generated Python should start from sciforge_task.load_input, inspect the loaded task_input, call invoke_capability(task_input, capabilityId, capabilityInput), handle ProviderInvocationError, then write_payload(output_path, tool_payload).',
     'When capabilityBrokerBrief or selectedToolIds includes local.vision-sense/observe.vision, treat the current turn as having an optional pure-vision Computer Use sense plugin available: construct text + screenshot/image modality requests, keep the package executor-agnostic, emit text-form click/type_text/press_key/scroll/wait commands or vision-trace artifacts, and preserve only compact screenshot refs/grounding/execution/pixel-diff summaries across turns. Do not read DOM or accessibility tree for that vision path, and fail closed for send/delete/pay/authorize/publish actions unless upstream confirmation is explicit.',
     'If the user explicitly asks to use Computer Use, GUI automation, desktop control, mouse, or keyboard, do not satisfy that request by substituting non-GUI generation code such as python-pptx, scripts, repository edits, or synthetic artifacts unless the user explicitly accepts a non-GUI fallback in the current turn. If the Computer Use path fails, return failed-with-reason with the exact failing provider, endpoint/path when available, trace ref, and recovery action instead of claiming the requested GUI task is complete.',
     'If local.vision-sense is selected but no GUI executor/browser/desktop bridge or screenshot input is configured for the current run, do not scan the repository to compensate. Return a concise ToolPayload diagnosis or failed-with-reason ExecutionUnit that says the vision sense contract was detected but the runtime executor bridge is missing, and include the next expected vision-trace file-ref shape instead of fabricating GUI results.',
@@ -411,12 +417,15 @@ export function agentServerWorkspaceTaskRepairPromptPolicyLines(group: 'all' | '
   return [...groups.intro, ...groups.completion];
 }
 
-export function agentServerGeneratedTaskRetryDetail(kind: 'entrypoint' | 'path-only-task-files' | 'task-interface') {
+export function agentServerGeneratedTaskRetryDetail(kind: 'entrypoint' | 'path-only-task-files' | 'task-interface' | 'provider-first-payload-preflight') {
   if (kind === 'entrypoint') {
     return 'Retrying AgentServer generation once; entrypoint must be executable code, while reports/data must be emitted as artifacts or direct ToolPayload content.';
   }
   if (kind === 'path-only-task-files') {
     return 'Retrying AgentServer generation once; taskFiles must include inline content or be physically written before returning.';
+  }
+  if (kind === 'provider-first-payload-preflight') {
+    return 'Retrying AgentServer generation once; generated tasks must use ready SciForge provider routes for web work instead of direct external network libraries.';
   }
   return 'Retrying AgentServer generation once; generated tasks must consume the SciForge task input and write the declared output payload, not bake the current answer into static code.';
 }
@@ -524,6 +533,7 @@ export function agentServerExternalIoReliabilityContractLines() {
     'An empty external search is not a successful literature result by itself: record the exact query strings, HTTP statuses/errors, totalResults when available, fallback attempts, and whether the empty result came from rate limiting, invalid query syntax, no matching records, or network failure.',
     'If all external retrieval attempts fail, the task must still write a valid ToolPayload with executionUnits.status="failed-with-reason", concise failureReason, stdoutRef/stderrRef/outputRef evidence refs when available, recoverActions, nextStep, and any partial artifacts that are honest and useful. Do not leave the user with only a traceback, an endless stream wait, or a missing output file.',
     'Prefer installed/workspace client libraries or capability tools for remote retrieval when they provide rate-limit handling, pagination, or caching; otherwise keep custom HTTP code small, auditable, and source-agnostic.',
+    'Ready SciForge web_search/web_fetch provider routes override custom HTTP code: generated task source must not use direct network packages or APIs such as requests, urllib, httpx, aiohttp, fetch, node:http, or node:https for those web operations; call sciforge_task.invoke_capability or sciforge_task.invoke_provider and surface provider errors as failed-with-reason or repair-needed payloads.',
   ];
 }
 

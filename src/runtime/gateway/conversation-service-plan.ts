@@ -174,8 +174,8 @@ export function buildConversationTurnComposition(request: unknown): Conversation
   const currentReferenceDigests = recordList(data.currentReferenceDigests);
   const contextSession = contextSessionForPolicy(session, contextPolicy, contextProjection);
   const currentReferences = currentReferencesForTurn(policyInput, currentReferenceDigests);
-  const recentFailures = recentFailuresForTurn(policyInput);
-  const priorAttempts = priorAttemptsForTurn(policyInput);
+  const recentFailures = recentFailuresForTurn(policyInput, contextSession);
+  const priorAttempts = priorAttemptsForTurn(policyInput, contextSession);
   const userGuidanceQueue = userGuidanceQueueForTurn(policyInput);
   const selectedTools = selectedPolicyList(policyInput, 'selectedTools', 'tools');
   const selectedSenses = selectedPolicyList(policyInput, 'selectedSenses', 'senses');
@@ -336,7 +336,7 @@ function recoveryPlanForTurn(policyInput: JsonMap, currentReferenceDigests: Json
   };
 }
 
-function recentFailuresForTurn(policyInput: JsonMap): unknown[] {
+function recentFailuresForTurn(policyInput: JsonMap, contextSession: JsonMap): unknown[] {
   const hints = recordValue(policyInput.policyHints);
   const metadata = recordValue(policyInput.metadata);
   const failures: unknown[] = [];
@@ -348,25 +348,24 @@ function recentFailuresForTurn(policyInput: JsonMap): unknown[] {
   ]) {
     if (Array.isArray(candidate)) failures.push(...candidate);
   }
-  for (const run of recordList(recordValue(policyInput.session).runs)) {
+  for (const run of recordList(contextSession.runs)) {
     if (['failed', 'error'].includes((stringValue(run.status) ?? '').toLowerCase())) failures.push(run);
   }
   return failures;
 }
 
-function priorAttemptsForTurn(policyInput: JsonMap): unknown[] {
+function priorAttemptsForTurn(policyInput: JsonMap, contextSession: JsonMap): unknown[] {
   const hints = recordValue(policyInput.policyHints);
   const metadata = recordValue(policyInput.metadata);
-  const session = recordValue(policyInput.session);
   const attempts: unknown[] = [];
   for (const candidate of [
     hints.priorAttempts,
     hints.attempts,
     metadata.priorAttempts,
     metadata.attempts,
-    session.attempts,
-    session.runs,
-    session.executionUnits,
+    contextSession.attempts,
+    contextSession.runs,
+    contextSession.executionUnits,
   ]) {
     if (Array.isArray(candidate)) attempts.push(...candidate);
   }

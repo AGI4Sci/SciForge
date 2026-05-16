@@ -68,6 +68,7 @@ Event -> State -> Contract -> Decision -> Projection
 - Workspace ledger 负责可恢复事实；AgentServer 负责 session memory/current work/recent turns/context compaction 的运行态编排；SciForge 生成 `contextPolicy`、`contextEnvelope`、current refs、digest、audit refs 和 cache-aware projection blocks。
 - Scenario package 已收敛为 policy-only：允许 artifact schema、默认 view、capability policy、domain vocabulary、verifier policy、privacy/safety boundaries；拒绝 execution code、prompt regex、provider branch、多轮 semantic judge、prompt special case 和 preset-answer/system-prompt 字段。
 - UI 是 projection shell：主状态、主按钮、visible answer、verification tag 和 recovery focus 只消费 `ConversationProjection` 与 ref preview；raw runs、task attempts、executionUnits、backend stream 和 validation trace 只能进入 audit/debug channel。
+- Capability-first provider route 是执行边界：web/literature/retrieval 任务必须通过标准 capability 和 ProviderManifest route 执行；Backend 不能在已有 `web_search` / `web_fetch` / retrieval provider route 时生成 `urllib`、`requests` 或站点直连脚本绕过 Gateway。
 - `ContractValidationFailure`、WorkEvidence、stable refs、failure owner、verification gate、background checkpoint 和 validation-to-repair loop 是失败恢复主路径。
 - Export bundle 打包 event log、restored projection、refs manifest 和 audit-only raw attachments；它不维护第二套 replay 逻辑。
 
@@ -207,6 +208,7 @@ Resolver 的职责：
 - 对每个 required capability 选择 primary provider 和 fallback providers。
 - 检查 health、permissions、workspace access、auth、network availability 和 rate-limit state。
 - 将 provider route 写入 handoff，让 backend 知道应调用标准 capability，而不是临时生成站点 scraper。
+- 对已存在标准 provider route 的任务，拒绝 `urllib`、`requests`、raw socket、worker endpoint 直连或 provider-specific scraper 作为替代执行路径；这些 bypass 应被 preflight 归类为 capability-first 约束失败，并 materialize 成用户可见的 recoverable Projection，而不是 projectionless waiting。
 - 对 zero-result、rate-limit、provider offline 和 permission denied 做统一 failure classification。
 
 ## Distributed Tool Integration
@@ -330,6 +332,10 @@ SciForge 不把 worker release 逻辑写进 scenario、skill 或 prompt。它只
 - 被哪些 skills/scenarios 依赖。
 
 这条边界可以防止 agent 在缺少 web search 时自行写临时 DuckDuckGo scraper，也能让用户清楚知道“任务失败是能力缺失、provider 限流、权限未开，还是运行逻辑错误”。
+
+Provider route 一旦 ready，不能只作为 preflight 诊断传给 Backend。SciForge 的生成合约必须把 ready route 渲染成标准任务 authoring template：`sciforge_task.load_input` 读取任务输入，`invoke_provider(task_input, capabilityId, providerInput)` 调用预设 provider/tool，`write_payload` 输出 Projection 可消费的 ToolPayload；直连网络库只能作为 Gateway 内部实现细节或没有 provider route 时的显式能力选择，不能成为 generated task 的默认路径。
+
+为保持可扩展性，新增工具不应新增 prompt 特例。最小接入顺序是 CapabilityManifest → ProviderManifest/route resolver → HarnessContract capability decision → compact context envelope/broker brief → authoring contract/helper SDK → `Gateway.execute` invocation → manifest validator/preflight → ArtifactDelivery/Projection → conformance fixture。生成任务统一优先使用 `sciforge_task.invoke_capability(task_input, capabilityId, input)`；`invoke_provider` 只是 provider-backed web route 的兼容别名。
 
 ## Harness-governed Scientific Agent OS
 
@@ -759,7 +765,7 @@ Policy response 会写回 `GatewayRequest.uiState`，但这些字段都是下一
 - AgentServer session/current-work 是多轮 context orchestration 和 backend handoff 的运行态来源。
 - SciForge 的 `contextProjection`、`conversationLedger`、`selectedMessageRefs`、`selectedRunRefs` 只用于构建本轮 context envelope、projection block 和 prompt snapshot；不能把 raw 历史内联成 prompt 记忆。
 - 早期问题 recall、跨轮自然语言记忆和 current-work continuity 应通过 AgentServer `/context`、`/compact`、stable `agentId`、`contextPolicy.includeCurrentWork/includeRecentTurns/persistRunSummary` 和 workspace ledger refs 协同恢复；UI recent messages 不能在 AgentServer 不可用时升级成唯一记忆替代品。
-- fresh/new-task 默认使用 fresh agent scope 或 `includeRecentTurns: false`，避免旧记忆污染。
+- fresh/new-task 默认使用 fresh agent scope 或 `includeRecentTurns: false`，避免旧记忆污染。fresh-chat 首轮是强 session boundary：必须重置 `contextReusePolicy` 为 `isolate`，不继承旧 session 的 failure/repair/current-work/handoff refs，也不能从 archived/historical runs 推断 repair。
 - continuation/repair 必须显式打开 AgentServer `includeCurrentWork`、`includeRecentTurns`、`persistRunSummary` 等开关，并携带稳定 agent id。
 - 如果 AgentServer context/compact API 不可用，SciForge 可以用 workspace ledger 做 refs-first fallback 和用户可见诊断，但不能把完整本地历史直接塞回 backend。
 

@@ -37,6 +37,7 @@ export interface RepairPolicyRefs {
   outputRel?: string;
   stdoutRel?: string;
   stderrRel?: string;
+  executionUnitStatus?: 'repair-needed' | 'failed-with-reason' | 'needs-human';
   evidenceRefs?: string[];
   blocker?: string;
   agentServerRefs?: Record<string, unknown>;
@@ -107,11 +108,13 @@ export function repairNeededPayload(
     ? validationFailurePrompt(repairFailure)
     : backendFailurePrompt(repairFailure);
   const artifactId = `${request.skillDomain}-runtime-result`;
+  const executionUnitStatus = refs.executionUnitStatus ?? 'repair-needed';
+  const payloadClaimType = executionUnitStatus === 'failed-with-reason' ? 'runtime-diagnostic' : 'fact';
   const executionUnit = {
     id,
     tool: WORKSPACE_RUNTIME_GATEWAY_REPAIR_TOOL_ID,
     params: JSON.stringify(repairParams(request, skill, repairFailure)),
-    status: 'repair-needed',
+    status: executionUnitStatus,
     hash: sha1(`${id}:${repairReason}`).slice(0, 12),
     time: new Date().toISOString(),
     environment: 'SciForge workspace runtime gateway',
@@ -143,7 +146,7 @@ export function repairNeededPayload(
   return {
     message: `SciForge runtime gateway needs repair or AgentServer task generation: ${displayReason}`,
     confidence: 0.2,
-    claimType: 'fact',
+    claimType: payloadClaimType,
     evidenceLevel: 'runtime',
     reasoningTrace: [
       ...repairReasoningTrace(repairFailure),
@@ -170,6 +173,7 @@ export function repairNeededPayload(
       diagnostic,
       displayReason,
       executionUnit,
+      status: executionUnitStatus,
       evidenceRefs,
       recoverActions,
       nextStep,
@@ -291,6 +295,7 @@ function repairDiagnosticArtifact(input: {
   diagnostic: AgentServerBackendFailureDiagnostic;
   displayReason: string;
   executionUnit: Record<string, unknown>;
+  status: 'repair-needed' | 'failed-with-reason' | 'needs-human';
   evidenceRefs: string[];
   recoverActions: string[];
   nextStep: string;
@@ -300,7 +305,7 @@ function repairDiagnosticArtifact(input: {
     type: 'runtime-diagnostic',
     schemaVersion: 'sciforge.runtime-diagnostic.v1',
     data: {
-      status: 'repair-needed',
+      status: input.status,
       skillDomain: input.request.skillDomain,
       skillId: input.skill.id,
       message: input.displayReason,
@@ -317,7 +322,7 @@ function repairDiagnosticArtifact(input: {
       nextStep: input.nextStep,
     },
     metadata: {
-      status: 'repair-needed',
+      status: input.status,
       failureKind: input.repairFailure.failureKind,
       diagnosticKind: input.diagnostic.kind,
       source: 'workspace-runtime-repair-policy',

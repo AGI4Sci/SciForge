@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { SciForgeSession, SciForgeWorkspaceState } from '../domain';
+import { createOptimisticUserTurnSession, requestPayloadForTurn } from '../app/chat/sessionTransforms';
 import {
   clearArchivedSessions,
   deleteActiveChat,
@@ -62,6 +63,44 @@ test('starts a new chat while archiving the previous active session', () => {
   assert.equal(next.archivedSessions[0].sessionId, 'active');
   assert.equal(next.sessionsByScenario['scenario-any'].title, 'Scenario new chat');
   assert.notEqual(next.sessionsByScenario['scenario-any'].sessionId, 'active');
+});
+
+test('first request after new chat does not retain archived repair run context', () => {
+  const repairSession = session('repair-session', 'literature-evidence-review', ['summarize paper']);
+  repairSession.runs = [{
+    id: 'run-bounded-stop',
+    scenarioId: 'literature-evidence-review',
+    status: 'failed',
+    prompt: 'summarize paper',
+    response: 'AgentServer repair generation bounded-stop after 60001 total tokens',
+    createdAt: '2026-05-07T00:01:00.000Z',
+    raw: {
+      contextReusePolicy: { mode: 'repair' },
+      executionModePlan: { executionMode: 'repair-or-continue-project' },
+    },
+  }];
+  repairSession.executionUnits = [{
+    id: 'EU-bounded-stop',
+    tool: 'agentserver.repair',
+    params: '{}',
+    status: 'repair-needed',
+    hash: 'bounded-stop',
+    failureReason: 'AgentServer repair generation bounded-stop',
+    stderrRef: '.sciforge/sessions/repair/logs/bounded-stop.stderr.log',
+  }];
+  const next = startNewChat(workspace(repairSession), 'literature-evidence-review', 'Literature new chat');
+  const freshSession = next.sessionsByScenario['literature-evidence-review'];
+  const firstTurn = createOptimisticUserTurnSession({
+    baseSession: freshSession,
+    prompt: 'fresh unrelated prompt',
+    references: [],
+  });
+  const payload = requestPayloadForTurn(firstTurn.session, firstTurn.userMessage, []);
+
+  assert.equal(next.archivedSessions[0].sessionId, 'repair-session');
+  assert.equal(payload.runs.length, 0);
+  assert.equal(payload.executionUnits.length, 0);
+  assert.deepEqual(payload.messages.map((message) => message.id), [firstTurn.userMessage.id]);
 });
 
 test('starts a new chat without archiving an inactive seed-only session', () => {

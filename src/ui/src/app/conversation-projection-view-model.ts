@@ -124,10 +124,14 @@ export function conversationProjectionForSession(session: SciForgeSession, run?:
     source.currentConversationProjection,
     source.conversationProjection,
   ];
-  return candidates.map(normalizeConversationProjection).find(Boolean);
+  return candidates.map(normalizeConversationProjection).find(Boolean) ?? conversationProjectionFromRun(run);
 }
 
 export function conversationProjectionMigrationAuditFixtureForRun(run?: SciForgeRun): UiConversationProjection | undefined {
+  return conversationProjectionFromRun(run);
+}
+
+function conversationProjectionFromRun(run?: SciForgeRun): UiConversationProjection | undefined {
   const raw = isRecord(run?.raw) ? run.raw : undefined;
   const displayIntent = isRecord(raw?.displayIntent) ? raw.displayIntent : undefined;
   const resultPresentation = isRecord(raw?.resultPresentation) ? raw.resultPresentation : undefined;

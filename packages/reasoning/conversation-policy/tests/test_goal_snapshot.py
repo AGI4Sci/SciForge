@@ -59,6 +59,28 @@ class GoalSnapshotTest(unittest.TestCase):
         self.assertEqual(snapshot["requiredReferences"], [])
         self.assertEqual(snapshot["taskRelation"], "new-task")
 
+    def test_fresh_failure_reporting_request_does_not_inherit_repair_context(self) -> None:
+        snapshot = build_goal_snapshot(
+            {
+                "prompt": (
+                    "请用最小检索验证 arXiv 是否可访问：搜索 CRISPR prime editing review，"
+                    "返回 3 篇候选论文标题和来源；如果外部 provider 不可用，"
+                    "请给出可恢复失败原因，不要编造结果。"
+                ),
+                "session": {
+                    "messages": [],
+                    "executionUnits": [],
+                    "runs": [],
+                    "artifacts": [],
+                },
+            }
+        )
+
+        self.assertEqual(snapshot["taskRelation"], "new-task")
+        self.assertNotEqual(snapshot["goalType"], "repair")
+        self.assertIn("do-not-import-stale-prior-task-assumptions", snapshot["acceptanceCriteria"])
+        self.assertNotIn("freshness", snapshot)
+
     def test_scoped_no_rerun_repair_continuation_does_not_forbid_execution(self) -> None:
         snapshot = build_goal_snapshot(
             {

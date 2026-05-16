@@ -2,11 +2,13 @@ import type { GatewayRequest } from '../runtime-types.js';
 import { capabilityProviderRoutesForGatewayInvocation } from './capability-provider-preflight.js';
 
 export const GENERATED_TASK_PAYLOAD_PREFLIGHT_SCHEMA_VERSION = 'sciforge.generated-task-payload-preflight.v1' as const;
+export const GENERATED_TASK_CAPABILITY_FIRST_PREFLIGHT_ISSUE_KIND = 'capability-first-direct-network' as const;
 const GENERATED_TASK_PAYLOAD_PREFLIGHT_POLICY_ID = 'sciforge.generated-task-payload-preflight.v1' as const;
 const REQUIRED_TOOL_PAYLOAD_KEYS = ['message', 'claims', 'uiManifest', 'executionUnits', 'artifacts'] as const;
 
 export interface GeneratedTaskPayloadPreflightIssue {
   id: string;
+  kind?: typeof GENERATED_TASK_CAPABILITY_FIRST_PREFLIGHT_ISSUE_KIND;
   severity: 'guidance' | 'repair-needed';
   path: string;
   reason: string;
@@ -101,6 +103,10 @@ export function generatedTaskPayloadPreflightRecoverActions(preflight: Generated
     'Regenerate the task code so the object written to outputPath matches the SciForge ToolPayload schema before any expensive work runs.',
     'Preserve generated task refs and use this preflight report as repair context.',
   ]);
+}
+
+export function isGeneratedTaskCapabilityFirstPolicyIssue(issue: GeneratedTaskPayloadPreflightIssue) {
+  return issue.kind === GENERATED_TASK_CAPABILITY_FIRST_PREFLIGHT_ISSUE_KIND || issue.path === 'capabilityFirstPolicy';
 }
 
 export function generatedTaskPayloadPreflightForTaskInput(preflight: GeneratedTaskPayloadPreflightReport) {
@@ -230,6 +236,7 @@ function generatedTaskProviderFirstNetworkIssuesForSource(
   if (!directNetworkUses.length) return [];
   return [{
     id: `${sourceRef}:provider-first-direct-network:${routes.map((route) => route.capabilityId).join(',')}`,
+    kind: GENERATED_TASK_CAPABILITY_FIRST_PREFLIGHT_ISSUE_KIND,
     severity: 'repair-needed',
     path: 'capabilityFirstPolicy',
     sourceRef,

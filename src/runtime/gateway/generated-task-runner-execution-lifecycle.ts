@@ -17,6 +17,7 @@ import {
   generatedTaskPayloadPreflightRecoverActions,
   type GeneratedTaskRuntimeRefs,
 } from './generated-task-runner-validation-lifecycle.js';
+import { isGeneratedTaskCapabilityFirstPolicyIssue } from './generated-task-payload-preflight.js';
 import type { GeneratedTaskRunnerDeps } from './generated-task-runner.js';
 import { AGENTSERVER_GENERATED_TASK_MATERIALIZED_EVENT_TYPE } from '../../../packages/skills/runtime-policy';
 
@@ -88,6 +89,7 @@ export async function runGeneratedTaskExecutionLifecycle(
     request: input.request,
   });
   if (payloadPreflight.status === 'blocked') {
+    const capabilityFirstBlocked = generatedTaskCapabilityFirstPreflightBlocked(payloadPreflight);
     return {
       kind: 'payload',
       payload: input.deps.repairNeededPayload(
@@ -100,6 +102,8 @@ export async function runGeneratedTaskExecutionLifecycle(
           outputRel: refs.outputRel,
           stdoutRel: refs.stdoutRel,
           stderrRel: refs.stderrRel,
+          blocker: capabilityFirstBlocked ? 'generated-task-capability-first-policy' : 'generated-task-payload-preflight',
+          executionUnitStatus: capabilityFirstBlocked ? 'failed-with-reason' : undefined,
           recoverActions: generatedTaskPayloadPreflightRecoverActions(payloadPreflight),
           agentServerRefs: {
             generatedTaskPayloadPreflight: payloadPreflight,
@@ -142,6 +146,10 @@ export async function runGeneratedTaskExecutionLifecycle(
       supplementArtifactTypes: supplementScopeForGeneratedRun(input.request, input.generation.response.expectedArtifacts),
     },
   };
+}
+
+function generatedTaskCapabilityFirstPreflightBlocked(preflight: ReturnType<typeof evaluateGeneratedTaskPayloadPreflight>) {
+  return preflight.issues.some((issue) => issue.severity === 'repair-needed' && isGeneratedTaskCapabilityFirstPolicyIssue(issue));
 }
 
 async function materializeGeneratedTaskFiles(input: GeneratedTaskExecutionLifecycleInput & { taskId: string; sessionBundleRel: string }): Promise<
@@ -328,6 +336,15 @@ function sciforgeTaskHelperSource() {
     '        return _invoke_provider_node_cli(adapter, capability_id, provider_input, timeout_seconds)',
     '    reason = adapter.get("reason") or f"Unsupported provider invocation adapter kind: {kind}"',
     '    raise ProviderInvocationError(str(reason))',
+    '',
+    '',
+    'def invoke_capability(task_input: Mapping[str, Any], capability_id: str, capability_input: Mapping[str, Any], *, timeout_seconds: float | None = None) -> Any:',
+    '    """Invoke any ready SciForge capability route exposed in task_input.',
+    '',
+    '    This is the generic alias for future tools. invoke_provider remains',
+    '    available for provider-backed web_search/web_fetch compatibility.',
+    '    """',
+    '    return invoke_provider(task_input, capability_id, capability_input, timeout_seconds=timeout_seconds)',
     '',
     '',
     'def _invoke_provider_http(adapter: Mapping[str, Any], capability_id: str, provider_input: Mapping[str, Any], timeout_seconds: float | None) -> Any:',

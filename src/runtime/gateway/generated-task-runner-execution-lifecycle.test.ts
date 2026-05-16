@@ -8,6 +8,7 @@ import { join } from 'node:path';
 
 import type { GatewayRequest, SkillAvailability, ToolPayload } from '../runtime-types.js';
 import { runGeneratedTaskExecutionLifecycle } from './generated-task-runner-execution-lifecycle.js';
+import { repairNeededPayload } from './payload-validation.js';
 
 test('generated task files are materialized only inside the session bundle', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-generated-session-bundle-'));
@@ -84,6 +85,7 @@ test('generated task files are materialized only inside the session bundle', asy
   const taskInput = JSON.parse(await readFile(join(workspace, inputRel), 'utf8'));
   assert.equal(taskInput.taskHelperSdk.moduleName, 'sciforge_task');
   assert.match(taskInput.taskHelperSdk.helperRef, /\/sciforge_task\.py$/);
+  assert.match(taskInput.taskHelperSdk.importHint, /invoke_capability/);
   assert.match(taskInput.taskHelperSdk.importHint, /invoke_provider/);
   assert.ok(taskInput.capabilityFirstPolicy.rules.some((line: string) => /provider route/.test(line)));
   assert.equal(taskInput.providerInvocation.schemaVersion, 'sciforge.generated-task-provider-invocation.v1');
@@ -435,5 +437,98 @@ test('generated task preflight blocks direct network when web provider route is 
   assert.match(result.payload.message, /direct external network APIs/i);
   assert.match(result.payload.reasoningTrace, /sciforge_task/);
   assert.match(result.payload.reasoningTrace, /repair-needed ToolPayload/);
+  await assert.rejects(access(join(workspace, markerRel)));
+});
+
+test('capability-first policy preflight block returns failed-with-reason diagnostic Projection', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-generated-provider-first-projection-'));
+  const request: GatewayRequest = {
+    workspacePath: workspace,
+    skillDomain: 'literature',
+    prompt: 'fetch and search current papers through SciForge providers',
+    selectedToolIds: ['web_fetch', 'web_search'],
+    artifacts: [],
+    uiState: {
+      sessionId: 'session-literature-provider-first-projection',
+      sessionCreatedAt: '2026-05-12T06:00:00.000Z',
+      capabilityProviderAvailability: [{
+        id: 'sciforge.web-worker.web_fetch',
+        available: true,
+        status: 'available',
+      }, {
+        id: 'sciforge.web-worker.web_search',
+        available: true,
+        status: 'available',
+      }],
+    },
+    scenarioPackageRef: { id: 'literature-evidence-review', version: '1.0.0', source: 'built-in' },
+  };
+  const skill = {
+    id: 'literature-test',
+    kind: 'builtin',
+    available: true,
+    reason: 'test',
+    checkedAt: '2026-05-12T06:00:00.000Z',
+    manifestPath: 'builtin',
+    manifest: {},
+  } as unknown as SkillAvailability;
+  const markerRel = '.sciforge/provider-first-projection-should-not-run.txt';
+
+  const result = await runGeneratedTaskExecutionLifecycle({
+    workspace,
+    request,
+    skill,
+    generation: {
+      ok: true,
+      runId: 'run-provider-first-projection',
+      response: {
+        taskFiles: [{
+          path: 'tasks/direct-urllib.py',
+          language: 'python',
+          content: [
+            'import json, sys',
+            'import urllib.request',
+            'from pathlib import Path',
+            '_, input_path, output_path = sys.argv',
+            `Path("${markerRel}").write_text("ran")`,
+            'urllib.request.urlopen("https://example.com")',
+            'payload = {"message": "ok", "confidence": 0.8, "claimType": "fact", "evidenceLevel": "runtime", "reasoningTrace": "bad", "claims": [], "uiManifest": [], "executionUnits": [{"id": "unit", "status": "done"}], "artifacts": []}',
+            'Path(output_path).write_text(json.dumps(payload))',
+          ].join('\n'),
+        }],
+        entrypoint: { language: 'python', path: 'tasks/direct-urllib.py' },
+        environmentRequirements: {},
+        validationCommand: '',
+        expectedArtifacts: ['research-report'],
+      },
+    },
+    deps: { repairNeededPayload },
+  });
+
+  assert.equal(result.kind, 'payload');
+  if (result.kind !== 'payload') return;
+  const payload = result.payload;
+  const unit = payload.executionUnits[0] as Record<string, any>;
+  const diagnostic = payload.artifacts.find((artifact) => artifact.type === 'runtime-diagnostic') as Record<string, any> | undefined;
+  const displayIntent = payload.displayIntent as Record<string, any> | undefined;
+  const outcome = displayIntent?.taskOutcomeProjection as Record<string, any> | undefined;
+  const projection = outcome?.conversationProjection as Record<string, any> | undefined;
+  const visibleAnswer = projection?.visibleAnswer as Record<string, any> | undefined;
+  const resultPresentation = displayIntent?.resultPresentation as Record<string, any> | undefined;
+
+  assert.equal(payload.claimType, 'runtime-diagnostic');
+  assert.equal(unit.status, 'failed-with-reason');
+  assert.equal(unit.blocker, 'generated-task-capability-first-policy');
+  assert.match(unit.failureReason, /direct external network APIs \(urllib\)/);
+  assert.match(unit.failureReason, /web_fetch, web_search/);
+  assert.equal(diagnostic?.schemaVersion, 'sciforge.runtime-diagnostic.v1');
+  assert.equal(diagnostic?.data?.status, 'failed-with-reason');
+  assert.equal(projection?.schemaVersion, 'sciforge.conversation-projection.v1');
+  assert.equal(visibleAnswer?.status, 'repair-needed');
+  assert.match(String(visibleAnswer?.text), /direct external network APIs \(urllib\)/);
+  assert.ok(projection?.diagnostics?.some((entry: Record<string, unknown>) => /urllib/.test(String(entry.message))));
+  assert.ok(Array.isArray(resultPresentation?.answerBlocks));
+  assert.ok(resultPresentation.answerBlocks.some((block: Record<string, unknown>) => /urllib/.test(String(block.text))));
+  assert.ok(Array.isArray(resultPresentation?.diagnosticsRefs));
   await assert.rejects(access(join(workspace, markerRel)));
 });

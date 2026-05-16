@@ -45,6 +45,11 @@ import {
   agentServerPathOnlyTaskFilesReason,
   agentServerStablePayloadTaskId,
 } from '../../../packages/skills/runtime-policy';
+import {
+  evaluateGeneratedTaskPayloadPreflight,
+  generatedTaskPayloadPreflightFailureReason,
+  isGeneratedTaskCapabilityFirstPolicyIssue,
+} from './generated-task-payload-preflight.js';
 
 export const AGENTSERVER_DIRECT_PAYLOAD_TASK_REF = 'agentserver://direct-payload' as const;
 
@@ -182,7 +187,9 @@ export async function resolveGeneratedTaskGenerationRetryLifecycle(
 
   const interfaceResult = await retryGeneratedTaskInterfaceContract(input, generation);
   if (interfaceResult.kind === 'payload') return interfaceResult;
-  return interfaceResult;
+  generation = interfaceResult.generation;
+
+  return await retryGeneratedTaskPayloadPreflightContract(input, generation);
 }
 
 export async function completeAgentServerDirectPayloadLifecycle(input: {
@@ -468,6 +475,62 @@ async function retryGeneratedTaskInterfaceContract(
     );
   }
   return { kind: 'task-files', generation: retriedGeneration };
+}
+
+async function retryGeneratedTaskPayloadPreflightContract(
+  input: ResolveGeneratedTaskGenerationLifecycleInput,
+  generation: AgentServerTaskFilesGeneration,
+): Promise<ResolveGeneratedTaskGenerationLifecycleResult> {
+  const preflight = await generatedTaskPayloadPreflightForGeneration(input.workspace, generation.response, input.request);
+  if (!preflight.issues.some((issue) => issue.severity === 'repair-needed' && isGeneratedTaskCapabilityFirstPolicyIssue(issue))) {
+    return { kind: 'task-files', generation };
+  }
+  const reason = generatedTaskPayloadPreflightFailureReason(preflight);
+  emitGenerationRetryEvent(input.callbacks, reason, 'provider-first-payload-preflight');
+  const retriedGeneration = await requestStrictGenerationRetry(input, reason);
+  if (!retriedGeneration.ok) return repairNeeded(input, retriedGeneration.error);
+  if ('directPayload' in retriedGeneration) {
+    return {
+      kind: 'payload',
+      payload: await completeAgentServerDirectPayloadLifecycle({
+        ...directPayloadCompletionInput(input, retriedGeneration),
+        kind: 'strict-retry',
+        stableTaskKind: 'direct-retry-provider-first-preflight',
+        logLine: `AgentServer provider-first preflight retry direct ToolPayload run: ${retriedGeneration.runId || 'unknown'}\n`,
+        source: 'agentserver-direct-payload',
+      }),
+    };
+  }
+  const retryPreflight = await generatedTaskPayloadPreflightForGeneration(input.workspace, retriedGeneration.response, input.request);
+  const retryCapabilityIssues = retryPreflight.issues.filter((issue) => (
+    issue.severity === 'repair-needed' && isGeneratedTaskCapabilityFirstPolicyIssue(issue)
+  ));
+  if (retryCapabilityIssues.length) {
+    return repairNeeded(
+      input,
+      `AgentServer generation contract violation: ${reason}. Strict retry still bypassed ready provider routes: ${generatedTaskPayloadPreflightFailureReason(retryPreflight)}`,
+    );
+  }
+  return { kind: 'task-files', generation: retriedGeneration };
+}
+
+async function generatedTaskPayloadPreflightForGeneration(
+  workspace: string,
+  response: AgentServerGenerationResponse,
+  request: GatewayRequest,
+) {
+  const taskFiles = await Promise.all(response.taskFiles.map(async (file) => ({
+    ...file,
+    content: typeof file.content === 'string'
+      ? file.content
+      : await readGeneratedTaskFileIfPresent(workspace, file.path),
+  })));
+  return evaluateGeneratedTaskPayloadPreflight({
+    request,
+    entrypoint: response.entrypoint,
+    expectedArtifacts: response.expectedArtifacts,
+    taskFiles,
+  });
 }
 
 async function generatedTaskInterfaceContractReason(workspace: string, response: AgentServerGenerationResponse) {

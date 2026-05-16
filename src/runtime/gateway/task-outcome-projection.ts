@@ -319,6 +319,7 @@ function conversationKernelFromTaskOutcome(input: {
   }
   const terminalEventType = terminalEventTypeForOutcome(input.protocolStatus, input.taskOutcome, input.nextStepAttribution.ownerLayer);
   const terminalRefs = materializedRefs.length ? materializedRefs : [{ ref: `task-card:${input.taskRunCard.id}`, label: 'TaskRunCard' }];
+  const terminalFailureReason = terminalFailureReasonFromPayload(input.payload) ?? input.nextStepAttribution.reason;
   log = appendConversationEvent(log, {
     id: `${conversationId}:terminal`,
     type: terminalEventType,
@@ -330,8 +331,8 @@ function conversationKernelFromTaskOutcome(input: {
     payload: {
       text: input.payload.message,
       summary: input.payload.message || input.nextStepAttribution.nextStep,
-      reason: input.nextStepAttribution.reason,
-      failureReason: input.nextStepAttribution.reason,
+      reason: terminalFailureReason,
+      failureReason: terminalFailureReason,
       refs: terminalRefs,
     },
   }).log;
@@ -843,6 +844,18 @@ function failureSignaturesFromPayload(payload: ToolPayload): FailureSignatureInp
     }] : [];
   });
   return [...fromUnits, ...fromWorkEvidence];
+}
+
+function terminalFailureReasonFromPayload(payload: ToolPayload): string | undefined {
+  const fromUnit = toRecordList(payload.executionUnits)
+    .map((unit) => stringField(unit.failureReason) ?? stringField(unit.error) ?? stringField(unit.message))
+    .find((value): value is string => Boolean(value));
+  if (fromUnit) return fromUnit;
+  const fromWorkEvidence = (payload.workEvidence ?? [])
+    .map((evidence) => evidence.failureReason ?? evidence.diagnostics?.[0] ?? evidence.nextStep)
+    .find((value): value is string => Boolean(value));
+  if (fromWorkEvidence) return fromWorkEvidence;
+  return payload.claimType === 'runtime-diagnostic' ? stringField(payload.message) : undefined;
 }
 
 function refsFromPayload(

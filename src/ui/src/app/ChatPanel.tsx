@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { scenarios, type ScenarioId } from '../data';
 import { SCENARIO_SPECS } from '@sciforge/scenario-core/scenario-specs';
 import { buildSilentStreamRunId, guidanceQueuedEvent, userInterruptEvent } from '@sciforge-ui/runtime-contract';
@@ -160,6 +160,7 @@ export function ChatPanel({
   const streamEventsRef = useRef<AgentStreamEvent[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const userAbortRequestedRef = useRef(false);
+  const activeRunTokenRef = useRef(0);
   const messagesRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const autoScrollRef = useRef(true);
@@ -185,7 +186,7 @@ export function ChatPanel({
   const targetPeers = useMemo(() => enabledPeerInstances(config), [config.peerInstances]);
   const targetPeer = useMemo(() => selectedPeerInstance(config, targetInstanceName), [config.peerInstances, targetInstanceName]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     activeSessionRef.current = session;
   }, [session]);
 
@@ -209,12 +210,18 @@ export function ChatPanel({
     streamEventsRef.current = streamEvents;
   }, [streamEvents]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    activeRunTokenRef.current += 1;
+    userAbortRequestedRef.current = true;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setIsSending(false);
     setStreamEvents([]);
     streamEventsRef.current = [];
     setAssistantDraft('');
     setRetainedContextWindowState(undefined);
     setGuidanceQueue([]);
+    guidanceQueueRef.current = [];
     setErrorText('');
   }, [scenarioId, session.sessionId]);
 
@@ -454,6 +461,10 @@ export function ChatPanel({
   }
 
   async function runPrompt(prompt: string, baseSession: SciForgeSession, references: SciForgeReference[] = [], sourceGuidance?: GuidanceQueueRecord) {
+    const runToken = activeRunTokenRef.current + 1;
+    activeRunTokenRef.current = runToken;
+    const turnSessionId = baseSession.sessionId;
+    const isCurrentTurn = () => activeRunTokenRef.current === runToken && activeSessionRef.current.sessionId === turnSessionId;
     const preflightStreamEvents = streamEventsRef.current;
     onInputChange('');
     inputRef.current = '';
@@ -482,6 +493,7 @@ export function ChatPanel({
     let runEndedReason: string | undefined;
     try {
       const handleStreamEvent = (event: AgentStreamEvent) => {
+        if (!isCurrentTurn()) return;
         const next = coalesceStreamEvents(streamEventsRef.current, event).slice(-160);
         streamEventsRef.current = next;
         const latestContext = latestContextWindowState(next);
@@ -514,10 +526,12 @@ export function ChatPanel({
         activeSession: () => activeSessionRef.current,
         onStreamEvent: handleStreamEvent,
         onOptimisticSession: (optimisticSession) => {
+          if (!isCurrentTurn()) return;
           onSessionChange(optimisticSession);
           activeSessionRef.current = optimisticSession;
         },
       });
+      if (!isCurrentTurn()) return;
       if (result.status === 'failed') {
         runFailed = true;
         runEndedReason = '当前 run 失败；追加引导已保留为 deferred，等待用户确认、修复或重新运行后再合并。';
@@ -554,6 +568,7 @@ export function ChatPanel({
       activeSessionRef.current = mergedSessionWithHandledGuidance;
       onActiveRunChange(finalResponseWithProcess.run.id);
     } catch (error) {
+      if (!isCurrentTurn()) return;
       const wasUserCancelled = userAbortRequestedRef.current;
       runFailed = !wasUserCancelled;
       runEndedReason = wasUserCancelled
@@ -571,6 +586,7 @@ export function ChatPanel({
         onSessionChange(sessionWithSourceGuidance);
       }
     } finally {
+      if (activeRunTokenRef.current !== runToken) return;
       const wasUserCancelled = userAbortRequestedRef.current;
       setIsSending(false);
       setAssistantDraft('');
@@ -594,6 +610,32 @@ export function ChatPanel({
         }, 80);
       }
     }
+  }
+
+  function clearTransientTurnState() {
+    streamEventsRef.current = [];
+    guidanceQueueRef.current = [];
+    setStreamEvents([]);
+    setAssistantDraft('');
+    setRetainedContextWindowState(undefined);
+    setGuidanceQueue([]);
+    setPendingReferences([]);
+    setReferencePickMode(false);
+    setReferenceContextMenu(null);
+    setErrorText('');
+    setIsSending(false);
+  }
+
+  function handleNewChat() {
+    activeRunTokenRef.current += 1;
+    userAbortRequestedRef.current = true;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    inputRef.current = '';
+    onInputChange('');
+    onActiveRunChange(undefined);
+    clearTransientTurnState();
+    onNewChat();
   }
 
   function markGuidanceHandledByRun(session: SciForgeSession, guidance: GuidanceQueueRecord | undefined, handlingRunId: string) {
@@ -785,7 +827,7 @@ export function ChatPanel({
         archivedCount={archivedCount}
         isSending={isSending}
         onConfigChange={onConfigChange}
-        onNewChat={onNewChat}
+        onNewChat={handleNewChat}
         onToggleHistory={() => setHistoryOpen((value) => !value)}
         onAbort={handleAbort}
         onExport={handleExport}

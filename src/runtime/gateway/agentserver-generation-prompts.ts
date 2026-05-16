@@ -2,7 +2,7 @@ import type { SciForgeSkillDomain } from '../runtime-types.js';
 import { extractAgentServerCurrentUserRequest } from '@sciforge-ui/runtime-contract/agentserver-prompt-policy';
 import { agentServerArtifactSelectionPromptPolicyLines, agentServerBibliographicVerificationPromptPolicyLines, agentServerCurrentReferencePromptPolicyLines, agentServerShouldIncludeBibliographicVerificationPromptPolicy, agentServerToolPayloadProtocolContractLines } from '@sciforge-ui/runtime-contract/artifact-policy';
 import { collectRuntimeRefsFromValue, runtimePayloadKeyLooksLikeBodyCarrier } from '@sciforge-ui/runtime-contract/references';
-import { agentServerBackendDecisionPromptPolicyLines, agentServerCapabilityRoutingPromptPolicyLines, agentServerContinuationPromptPolicyLines, agentServerCurrentTurnSnapshotPromptPolicyLines, agentServerExecutionModePromptPolicyLines, agentServerExternalIoReliabilityContractLines, agentServerFreshRetrievalPromptPolicyLines, agentServerGeneratedTaskPromptPolicyLines, agentServerGenerationOutputContract, agentServerGenerationOutputContractLines, agentServerLargeFilePromptContractLines, agentServerPriorAttemptsPromptPolicyLines, agentServerRepairPromptPolicyLines, agentServerToolPayloadShapeContract, agentServerViewSelectionPromptPolicyLines, agentServerWorkspaceTaskRoutingPromptPolicyLines } from '../../../packages/skills/runtime-policy';
+import { CAPABILITY_ROUTE_SUMMARY_SCHEMA_VERSION, agentServerBackendDecisionPromptPolicyLines, agentServerCapabilityRoutingPromptPolicyLines, agentServerContinuationPromptPolicyLines, agentServerCurrentTurnSnapshotPromptPolicyLines, agentServerExecutionModePromptPolicyLines, agentServerExternalIoReliabilityContractLines, agentServerFreshRetrievalPromptPolicyLines, agentServerGeneratedTaskPromptPolicyLines, agentServerGenerationOutputContract, agentServerGenerationOutputContractLines, agentServerLargeFilePromptContractLines, agentServerPriorAttemptsPromptPolicyLines, agentServerRepairPromptPolicyLines, agentServerToolPayloadShapeContract, agentServerViewSelectionPromptPolicyLines, agentServerWorkspaceTaskRoutingPromptPolicyLines } from '../../../packages/skills/runtime-policy';
 import { summarizeArtifactRefs, summarizeConversationPolicyForAgentServer, summarizeExecutionRefs, summarizeTaskAttemptsForAgentServer, summarizeVerificationRecordForEnvelope, summarizeVerificationResultRecords } from './context-envelope.js';
 import { AGENTSERVER_BACKEND_HANDOFF_VERSION, validateBackendHandoffPacket, type BackendHandoffPacket } from './agentserver-context-contract.js';
 import { clipForAgentServerJson, clipForAgentServerPrompt, hashJson, isRecord, toRecordList, toStringList, uniqueStrings } from '../gateway-utils.js';
@@ -73,6 +73,8 @@ export function buildAgentServerGenerationPrompt(request: {
       ? request.availableRuntimeCapabilities
       : undefined;
   const capabilityBrokerRouteSummary = compactCapabilityBrokerRouteSummary(capabilityBrokerBrief);
+  const capabilityProviderRouteSummary = compactCapabilityProviderRouteSummary(scenarioFacts.capabilityProviderRoutes);
+  const capabilityFirstPolicy = capabilityFirstPolicyForAgentServer(capabilityProviderRouteSummary);
   const backendHandoffPacket = backendHandoffPacketForPrompt(request, contextEnvelope);
   const promptRenderPlanSummary = promptRenderPlanSummaryForAgentServer(request, contextEnvelope, sessionFacts);
   const contextProjection = isRecord(sessionFacts.contextProjection)
@@ -86,6 +88,8 @@ export function buildAgentServerGenerationPrompt(request: {
     conversationPolicySummary,
     executionMode,
     capabilityBrokerRouteSummary,
+    capabilityProviderRouteSummary,
+    capabilityFirstPolicy,
     contextProjection,
   });
   return [
@@ -127,6 +131,8 @@ export function buildAgentServerGenerationPrompt(request: {
     '',
     JSON.stringify(clipForAgentServerJson({
       ...compactGenerationRequestForAgentServer(request, capabilityBrokerRouteSummary, promptRenderPlanSummary),
+      capabilityProviderRoutes: capabilityProviderRouteSummary,
+      capabilityFirstPolicy,
       taskContract: {
         argv: ['inputPath', 'outputPath'],
         outputPayloadKeys: ['message', 'confidence', 'claimType', 'evidenceLevel', 'reasoningTrace', 'claims', 'displayIntent', 'uiManifest', 'executionUnits', 'artifacts', 'objectReferences'],
@@ -144,6 +150,8 @@ function agentServerCurrentTurnSnapshotFromHandoff(params: {
   conversationPolicySummary: Record<string, unknown> | undefined;
   executionMode: ReturnType<typeof executionModeDecisionForPrompt>;
   capabilityBrokerRouteSummary: Record<string, unknown> | undefined;
+  capabilityProviderRouteSummary: Record<string, unknown> | undefined;
+  capabilityFirstPolicy: Record<string, unknown> | undefined;
   contextProjection: Record<string, unknown> | undefined;
 }) {
   const packet = params.backendHandoffPacket;
@@ -182,6 +190,8 @@ function agentServerCurrentTurnSnapshotFromHandoff(params: {
       } : undefined,
     } : undefined,
     capabilityBrokerBrief: params.capabilityBrokerRouteSummary,
+    capabilityProviderRoutes: params.capabilityProviderRouteSummary,
+    capabilityFirstPolicy: params.capabilityFirstPolicy,
     promptRenderPlanSummary: params.promptRenderPlanSummary,
     contextProjection: params.contextProjection ? {
       schemaVersion: params.contextProjection.schemaVersion,
@@ -295,6 +305,74 @@ function compactCapabilityBrokerRouteSummary(value: Record<string, unknown> | un
       toolBudgetKeys: toStringList(value.inputSummary.toolBudgetKeys).slice(0, 16),
     } : undefined,
   };
+}
+
+function compactCapabilityProviderRouteSummary(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  const routes = toRecordList(value.routes).map((route) => ({
+    capabilityId: stringField(route.capabilityId),
+    primaryProviderId: stringField(route.primaryProviderId),
+    fallbackProviderIds: toStringList(route.fallbackProviderIds).slice(0, 4),
+    status: stringField(route.status),
+    reason: clipForAgentServerPrompt(route.reason, 220),
+    routeTraceRef: stringField(route.routeTraceRef),
+    providers: toRecordList(route.providers).slice(0, 4).map((provider) => ({
+      providerId: stringField(provider.providerId),
+      source: stringField(provider.source),
+      transport: stringField(provider.transport),
+      healthStatus: stringField(provider.healthStatus),
+    })),
+  }));
+  if (!routes.length && !toStringList(value.requiredCapabilityIds).length) return undefined;
+  return {
+    schemaVersion: stringField(value.schemaVersion) ?? CAPABILITY_ROUTE_SUMMARY_SCHEMA_VERSION,
+    requiredCapabilityIds: toStringList(value.requiredCapabilityIds).slice(0, 12),
+    ok: value.ok === true,
+    routes,
+    readyProviderFirstCapabilityIds: readyProviderFirstCapabilityIds(routes),
+  };
+}
+
+function capabilityFirstPolicyForAgentServer(routeSummary: Record<string, unknown> | undefined) {
+  const readyCapabilityIds = readyProviderFirstCapabilityIds(toRecordList(routeSummary?.routes));
+  if (!readyCapabilityIds.length) return undefined;
+  return {
+    schemaVersion: 'sciforge.generated-task-capability-first.v1',
+    policy: 'provider-first',
+    routeSource: 'capabilityProviderRoutes',
+    readyCapabilityIds,
+    helperSdk: {
+      moduleName: 'sciforge_task',
+      requiredImport: 'from sciforge_task import load_input, write_payload, invoke_capability, invoke_provider, ProviderInvocationError',
+      invocationSignature: 'invoke_capability(task_input, capability_id, capability_input, timeout_seconds=optional_seconds); invoke_provider is the web provider alias',
+      taskInputFields: ['capabilityProviderRoutes', 'providerInvocation', 'capabilityFirstPolicy'],
+    },
+    canonicalPythonAdapter: [
+      'import sys',
+      'from sciforge_task import load_input, write_payload, invoke_capability, ProviderInvocationError',
+      '_, input_path, output_path = sys.argv',
+      'task_input = load_input(input_path)',
+      'try:',
+      '    results = invoke_capability(task_input, "web_search", {"query": task_input.get("prompt", ""), "maxResults": 3})',
+      '    # For URL reads use invoke_capability(task_input, "web_fetch", {"url": url, "maxChars": 12000}).',
+      'except ProviderInvocationError as error:',
+      '    write_payload(output_path, failed_with_reason_payload(str(error), task_input))',
+      '    raise SystemExit(0)',
+      'write_payload(output_path, success_payload(results, task_input))',
+    ],
+    taskCodeRules: [
+      'Generated task code must follow canonicalPythonAdapter shape: load task_input, call invoke_capability(task_input, "web_search"|"web_fetch", providerInput), and write_payload.',
+      'Do not generate task code that uses direct network packages or APIs such as requests, urllib, httpx, aiohttp, fetch, or Node http/https for external web retrieval while a matching provider route is ready.',
+      'If the ready provider returns empty, unauthorized, rate-limited, or unavailable results, write failed-with-reason or repair-needed ToolPayload evidence; do not fall back to direct external network APIs.',
+    ],
+  };
+}
+
+function readyProviderFirstCapabilityIds(routes: Array<Record<string, unknown>>) {
+  return uniqueStrings(routes
+    .filter((route) => route.status === 'ready')
+    .map((route) => stringField(route.capabilityId))
+    .filter((capabilityId): capabilityId is string => capabilityId === 'web_search' || capabilityId === 'web_fetch'));
 }
 
 function compactHarnessInputAuditForPrompt(value: unknown) {

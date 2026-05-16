@@ -60,6 +60,11 @@ test('skills runtime policy owns AgentServer retrieval and task prompt snippets'
   assert.match(taskPolicy, /every artifact should include stable id and type/);
   assert.match(taskPolicy, /claims, uiManifest, executionUnits, and artifacts as arrays/);
   assert.match(taskPolicy, /never use an object descriptor/);
+  assert.match(taskPolicy, /Provider-first generated task contract/);
+  assert.match(taskPolicy, /sciforge_task/);
+  assert.match(taskPolicy, /invoke_capability/);
+  assert.match(taskPolicy, /invoke_provider/);
+  assert.match(taskPolicy, /do not use direct network packages or APIs such as requests, urllib, httpx, aiohttp/);
 
   assert.match(agentServerCurrentTurnSnapshotPromptPolicyLines().join('\n'), /CURRENT TURN SNAPSHOT/);
   assert.match(agentServerBackendDecisionPromptPolicyLines({ freshCurrentTurn: true }).join('\n'), /FRESH GENERATION MODE/);
@@ -72,6 +77,9 @@ test('skills runtime policy owns AgentServer retrieval and task prompt snippets'
   assert.match(agentServerGenerationOutputContractLines().join('\n'), /ToolPayload array contract/);
   assert.match(agentServerWorkspaceTaskRoutingPromptPolicyLines().join('\n'), /generated task paths under the current session bundle tasks directory/);
   assert.match(agentServerCapabilityRoutingPromptPolicyLines().join('\n'), /Runtime capability routing contract/);
+  assert.match(agentServerCapabilityRoutingPromptPolicyLines().join('\n'), /capabilityProviderRoutes/);
+  assert.match(agentServerCapabilityRoutingPromptPolicyLines().join('\n'), /invoke_capability/);
+  assert.match(agentServerCapabilityRoutingPromptPolicyLines().join('\n'), /Provider-first authoring template/);
   assert.match(agentServerLargeFilePromptContractLines().join('\n'), /Large-file contract/);
   assert.match(agentServerViewSelectionPromptPolicyLines().join('\n'), /selectedComponentIds/);
   assert.match(agentServerContinuationPromptPolicyLines().join('\n'), /continuation requests/);
@@ -88,6 +96,8 @@ test('skills runtime policy owns AgentServer retrieval and task prompt snippets'
   const externalIo = agentServerExternalIoReliabilityContractLines().join('\n');
   assert.match(externalIo, /External I\/O reliability contract/);
   assert.match(externalIo, /For provider-specific APIs/);
+  assert.match(externalIo, /Ready SciForge web_search\/web_fetch provider routes override custom HTTP code/);
+  assert.match(externalIo, /failed-with-reason or repair-needed payloads/);
 });
 
 test('skills runtime policy owns generated task retry and interface contract semantics', () => {
