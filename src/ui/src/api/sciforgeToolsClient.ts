@@ -206,7 +206,7 @@ export async function sendSciForgeToolMessage(
       roleView: input.roleView,
       artifacts: artifactSummary,
       references: referenceSummary,
-      availableSkills: selectedSkillIds,
+      selectedSkillIds,
       selectedToolIds,
       selectedToolContracts,
       selectedSenseIds,

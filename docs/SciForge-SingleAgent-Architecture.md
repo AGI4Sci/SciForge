@@ -369,8 +369,10 @@ Gateway 对外是一个统一模块，内部分四层，每层可独立测试：
 
 ### 对外 API
 
+Gateway 的 execution public API 只有 `execute`。Registry read-model API 可以被 AgentServer Context Core 或 Backend 按需读取 capability metadata，但它们不属于 Runtime Bridge 的 execution API，也不能暴露 route/preflight/invoke/materialize/validate 中间状态。
+
 ```typescript
-// Registry Layer
+// Registry read-model API, not Runtime Bridge execution API
 listCapabilities(): CapabilityManifest[]
 listProviders(capabilityId?: string): ProviderManifest[]
 getCapabilityBrief(options?: BriefOptions): CapabilityBrief
@@ -838,7 +840,7 @@ type DirectContextDecision = {
 - direct-context decision 必须来自 AgentServer / Backend / harness policy 的结构化输出，并落盘为 decision/audit ref；Runtime Bridge 不用关键词或 artifact kind 自行判断。
 - `answer-from-projection` 不访问新工具、不读取未展开正文、不查询外部网络、不扩大 context；需要这些能力时必须 `route-to-agentserver`。
 - 输出必须引用 supporting refs；无法给出 supporting refs 时视为 insufficient。
-- capability/provider/skill 状态查询必须走 Capability Registry / ProviderManifest / AgentServer worker registry，而不是从 UI 配置或 prompt 文案猜测。
+- capability/provider/skill 状态查询必须先由 Capability Registry / ProviderManifest / AgentServer worker registry 生成 typed facts/ref；direct-context 只能消费这些已落盘 facts。Runtime Bridge 不能因为用户文本看起来像“状态查询”就现场执行 registry/preflight，也不能从 UI 配置或 prompt 文案猜测状态。
 
 ### Harness policy 放置
 
@@ -942,7 +944,7 @@ type RefSelectionPolicy = {
     maxCount: number        // 0 means excluded
     priority: number        // lower number wins
   }>
-  fallbackOrder: Array<'explicit' | 'active-artifact' | 'latest-primary-artifact' | 'latest-failure-evidence' | 'recent-context-index'>
+  fallbackOrder: Array<'explicit' | 'bounded-active-artifact-index' | 'bounded-primary-artifact-index' | 'bounded-failure-evidence-index' | 'recent-context-index'>
 }
 ```
 
@@ -953,7 +955,7 @@ type RefSelectionPolicy = {
 1. 注册 `currentTurnRef`，把当前用户问题放入 `currentTask`，作为本轮唯一语义中心。
 2. 复制用户显式选择和 UI selection 到 `currentTask.explicitRefs`，计算 `userVisibleSelectionDigest`。
 3. 根据 mode 收紧上下文：`fresh` 默认不带 recent turns；`continue` 才允许 current work；`repair` 只允许 `failureRef`、evidence refs 和当前 projection refs。
-4. 用 `RefSelectionPolicy` 从 explicit refs、primary artifacts、failure evidence、context index 中生成 bounded `selectedRefs`。
+4. 用 `RefSelectionPolicy` 从 explicit refs、primary artifact descriptors、failure evidence descriptors、context index 中生成 bounded `selectedRefs`。
 5. 构造 `cachePlan`：真正稳定的合约、workspace identity、capability brief、stable goal/session state 进入 `stablePrefixRefs`；其他 bounded indexes、当前 turn、explicit refs、failure packet 和 retrieval evidence 进入 `perTurnPayloadRefs`。
 6. 构造 `retrievalPolicy`，把动态语义选择交给 AgentServer retrieval primitives。
 7. 写入 `refSelectionAudit`，记录 policy digest、source counts、bytes 和是否截断。
@@ -964,8 +966,8 @@ type RefSelectionPolicy = {
 1. currentTask.currentTurnRef
 2. currentTask.explicitRefs / user-visible selection
 3. currentTask.failureRef, only in repair mode
-4. bounded primary artifact index
-5. bounded recent failure index
+4. bounded primary artifact descriptors
+5. bounded recent failure descriptors
 6. stable session state block
 7. retrieval tools and budget
 ```
@@ -976,13 +978,13 @@ type RefSelectionPolicy = {
 
 ```text
 explicit refs
-  -> active artifact
-  -> latest primary artifact
-  -> latest failure evidence
+  -> bounded active artifact descriptor
+  -> bounded primary artifact descriptor
+  -> bounded failure evidence descriptor
   -> recent context index
 ```
 
-fallback 结果必须受 `maxSelectedRefs` 和 `maxTotalRefBytes` 约束，并写入 `refSelectionAudit.truncated/sourceCounts`。
+fallback 结果只能选择 descriptors/ref ids，不能读取正文，不能作为 `currentTask.currentTurnRef` 或语义 anchor。它们必须受 `maxSelectedRefs` 和 `maxTotalRefBytes` 约束，并写入 `refSelectionAudit.truncated/sourceCounts`。
 
 #### KV cache 分层
 
@@ -1614,11 +1616,11 @@ Capability brief 有 digest 和 changelog。provider/schema/permission/route pol
 
 | 用例 | 预期结果 |
 |---|---|
-| mock provider，调用 listCapabilities | 返回 manifest，格式正确 |
+| AgentServer/Backend 读取 Registry read-model | 返回 manifest/brief，格式正确；不暴露 execution stage |
 | provider/schema/permission 变化 | 追加 `capability-changed` event，旧 capabilityBriefRef digest 失效 |
-| 相同 CapabilityRequest + ProviderPolicy | resolveRoute 返回相同 routeDigest |
-| provider 偏好越权 | resolveRoute 返回 `permission-denied` |
-| 断开 provider，调用 preflight | 返回 `provider-unavailable`，不进入执行 |
+| 相同 CapabilityRequest + ProviderPolicy 经 execute replay | 内部 routeDigest 稳定，result refs 一致 |
+| provider 偏好越权 | execute 返回 `permission-denied`，不进入 invoke |
+| 断开 provider，经 execute 触发内部 preflight | execute 返回 `provider-unavailable`，不进入执行 |
 | 给定相同 input，replay execute | result refs 一致，内部 stage 诊断可查 |
 | Runtime Bridge 尝试调用 resolveRoute/preflight | contract/lint test 失败，只允许 public `execute` |
 | 产出不符合 contract | execute 返回 validation failure，含 missingFields |

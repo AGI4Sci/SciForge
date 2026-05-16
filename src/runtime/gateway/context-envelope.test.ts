@@ -97,6 +97,31 @@ test('context envelope exposes workspace context projection on the public sessio
   assert.doesNotMatch(JSON.stringify(envelope), /projectSessionMemoryProjection|memoryPlan|"availableSkills"/);
 });
 
+test('context envelope marks legacy handoffMemoryProjection reads as migration aliases', () => {
+  const envelope = buildContextEnvelope({
+    skillDomain: 'literature',
+    prompt: 'continue with selected context',
+    artifacts: [],
+    uiState: {
+      handoffMemoryProjection: {
+        mode: 'continue',
+        contextRefs: ['projection:legacy'],
+        selectedMessageRefs: [{ id: 'msg-legacy', role: 'assistant', refs: ['projection:legacy'] }],
+      },
+    },
+  } as GatewayRequest, { workspace: '/tmp/sciforge-test' });
+
+  const sessionFacts = record(envelope.sessionFacts);
+  const projection = record(sessionFacts.contextProjection);
+  assert.equal(projection.source, 'migration:legacy-handoff-memory-projection');
+  assert.deepEqual(record(projection.migrationAlias), {
+    from: 'handoffMemoryProjection',
+    to: 'contextProjection',
+    scope: 'historical-ui-state-read',
+  });
+  assert.equal('handoffMemoryProjection' in sessionFacts, false);
+});
+
 test('context envelope keeps ref-backed artifact bodies and log refs bounded for continuation', () => {
   const envelope = buildContextEnvelope({
     skillDomain: 'knowledge',

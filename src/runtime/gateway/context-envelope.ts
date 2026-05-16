@@ -301,6 +301,7 @@ function continuityPolicySummaryForEnvelope(
 }
 
 function contextProjectionForEnvelope(uiState: Record<string, unknown>) {
+  const usedLegacyProjection = !isRecord(uiState.contextProjection) && isRecord(uiState.handoffMemoryProjection);
   const source = isRecord(uiState.contextProjection)
     ? uiState.contextProjection
     : isRecord(uiState.handoffMemoryProjection)
@@ -331,9 +332,14 @@ function contextProjectionForEnvelope(uiState: Record<string, unknown>) {
     : undefined;
   return {
     schemaVersion: 'sciforge.context-projection-envelope.v1',
-    source: isRecord(uiState.contextProjection)
+    source: !usedLegacyProjection
       ? 'conversation-policy.context-projection'
       : 'migration:legacy-handoff-memory-projection',
+    migrationAlias: usedLegacyProjection ? {
+      from: 'handoffMemoryProjection',
+      to: 'contextProjection',
+      scope: 'historical-ui-state-read',
+    } : undefined,
     authority: 'workspaceKernel refs are canonical truth; AgentServer consumes contextRefs, capabilityBriefRef, and cachePlan',
     mode: stringField(source.mode),
     workspaceKernel,

@@ -2,7 +2,7 @@ import { scoreSkillByPackagePolicy, selectSkillByPackagePolicy, skillAllowedByPa
 import type { GatewayRequest, SciForgeSkillDomain, SkillAvailability, SkillManifest } from '../runtime-types.js';
 
 export function matchSkill(request: GatewayRequest, skills: SkillAvailability[]): SkillAvailability | undefined {
-  const allowed = new Set(request.availableSkills?.filter(Boolean) ?? []);
+  const allowed = new Set((request.selectedSkillIds ?? request.availableSkills)?.filter(Boolean) ?? []);
   const prompt = request.prompt.toLowerCase();
   const scored = skills
     .filter((skill) => skill.available)

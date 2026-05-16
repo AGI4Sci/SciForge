@@ -266,7 +266,8 @@ test('UI handoff filters agentserver selected skill overrides when current turn 
     references: [{ id: 'ref-1', kind: 'file', title: 'Existing evidence', ref: 'file:.sciforge/refs/ref-1.json' }],
   }), {});
 
-  assert.deepEqual(bodies[0]?.availableSkills, ['scp.biomedical-web-search', 'local.pdf-extract']);
+  assert.deepEqual(bodies[0]?.selectedSkillIds, ['scp.biomedical-web-search', 'local.pdf-extract']);
+  assert.equal('availableSkills' in (bodies[0] ?? {}), false);
   assert.equal(
     ((bodies[0]?.uiState as { turnExecutionConstraints?: { agentServerForbidden?: boolean } } | undefined)
       ?.turnExecutionConstraints?.agentServerForbidden),

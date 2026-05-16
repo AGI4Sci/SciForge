@@ -33,7 +33,11 @@ export function normalizeGatewayRequest(body: Record<string, unknown>): GatewayR
     artifacts,
     references,
     uiState: normalizedUiState,
-    availableSkills: Array.isArray(body.availableSkills) ? body.availableSkills.map(String) : undefined,
+    selectedSkillIds: Array.isArray(body.selectedSkillIds)
+      ? uniqueStrings(body.selectedSkillIds.map(String))
+      : Array.isArray(body.availableSkills)
+        ? uniqueStrings(body.availableSkills.map(String))
+        : undefined,
     selectedToolIds: Array.isArray(body.selectedToolIds) ? uniqueStrings(body.selectedToolIds.map(String)) : undefined,
     selectedSenseIds: uniqueStrings([
       ...(Array.isArray(body.selectedSenseIds) ? body.selectedSenseIds.map(String) : []),

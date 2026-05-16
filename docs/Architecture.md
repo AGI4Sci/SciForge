@@ -474,7 +474,7 @@ backend 主要理解 `packages/` 暴露的 capability meta 和 `src/` 暴露的 
 
 固定平台和插拔能力的当前 inventory 由 [`../tools/check-boundary-inventory.ts`](../tools/check-boundary-inventory.ts) 输出并验证。该 inventory 只记录 ownership 和拆分计划；实际 enforcement 仍由 `smoke:fixed-platform-boundary`、`packages:check`、`smoke:module-boundaries`、`smoke:no-src-capability-semantics` 和 `smoke:long-file-budget` 执行。
 
-最终 cutover 的旧链路由 `smoke:no-legacy-paths` 冻结 UI 语义 fallback、provider/scenario/prompt 特例和 legacy facade/re-export 基线。当前清单已经是 closed inventory：没有剩余可容忍的 legacy baseline；若未来某个 guard 面被重新打开，必须在同一变更中记录 owner、truth source、删除条件和 smoke 证据。
+最终 cutover 的旧链路由 `smoke:no-legacy-paths` 冻结 UI 语义 fallback、provider/scenario/prompt 特例和 legacy facade/re-export 基线。当前清单是 closed inventory：已知残留只允许作为 tracked warning、migration/audit alias、negative guard 或 compatibility fixture 存在，不能驱动主路径；任何新增或计数增加都会失败。若未来某个 guard 面被重新打开，必须在同一变更中记录 owner、truth source、删除条件和 smoke 证据。
 
 ### 一切模块都是 Capability
 
@@ -707,7 +707,7 @@ runtime payload 中包含：
 
 - `contextEnvelope.scenarioFacts.capabilityBrokerBrief.schemaVersion === "sciforge.agentserver.capability-broker-brief.v1"`。
 - `availableRuntimeCapabilities` 来自 `buildCapabilityBrokerBriefForAgentServer`。
-- `availableSkills` 保留为空兼容字段，不再承载 capability list。
+- `selectedSkillIds` 是 UI → runtime 本地 skill selection 字段；`availableSkills` 只允许作为历史 ingress alias 或 negative guard 字段。它不进入默认 prompt/handoff 主路径；若历史 API 形状仍携带该字段，prompt builder 必须丢弃它并改用 capability broker brief。
 - 旧 full skill/tool/runtime catalog 即使被误传给 prompt builder，也不会进入默认 AgentServer prompt。
 
 AgentServer context endpoint 是多轮 context orchestration 和压缩的优先入口：

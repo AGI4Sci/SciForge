@@ -140,6 +140,8 @@ export interface BuildAgentHandoffPayloadInput extends AgentHandoffPolicySet {
   roleView?: string;
   artifacts?: Array<Record<string, unknown>>;
   references?: Array<Record<string, unknown>>;
+  selectedSkillIds?: string[];
+  /** @deprecated Historical alias. Use selectedSkillIds. */
   availableSkills?: string[];
   selectedToolIds?: string[];
   selectedToolContracts?: Array<Record<string, unknown>>;
@@ -233,6 +235,7 @@ export function isAgentHandoffVerificationSnapshot(value: unknown): value is Age
 export function buildAgentHandoffPayload(input: BuildAgentHandoffPayloadInput) {
   const source = normalizeAgentHandoffSource(input.handoffSource, 'cli');
   const sharedAgentContract = buildSharedAgentHandoffContract(source);
+  const selectedSkillIds = input.selectedSkillIds ?? input.availableSkills;
   const policySet = compactRecord({
     artifactPolicy: input.artifactPolicy,
     referencePolicy: input.referencePolicy,
@@ -248,7 +251,7 @@ export function buildAgentHandoffPayload(input: BuildAgentHandoffPayloadInput) {
     expectedArtifactTypes: input.expectedArtifactTypes,
     selectedComponentIds: input.selectedComponentIds,
     availableComponentIds: input.availableComponentIds,
-    selectedSkillIds: input.availableSkills,
+    selectedSkillIds,
     selectedToolIds: input.selectedToolIds,
     selectedToolContracts: input.selectedToolContracts,
     selectedSenseIds: input.selectedSenseIds,
@@ -291,7 +294,7 @@ export function buildAgentHandoffPayload(input: BuildAgentHandoffPayloadInput) {
     roleView: input.roleView,
     artifacts: input.artifacts ?? [],
     references: input.references ?? [],
-    availableSkills: input.availableSkills,
+    selectedSkillIds,
     selectedToolIds: input.selectedToolIds,
     selectedToolContracts: input.selectedToolContracts,
     selectedSenseIds: input.selectedSenseIds,

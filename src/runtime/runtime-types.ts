@@ -63,6 +63,8 @@ export interface GatewayRequest {
   artifacts: Array<Record<string, unknown>>;
   references?: Array<Record<string, unknown>>;
   uiState?: Record<string, unknown>;
+  selectedSkillIds?: string[];
+  /** @deprecated Historical request alias. Use selectedSkillIds. */
   availableSkills?: string[];
   selectedToolIds?: string[];
   selectedSenseIds?: string[];
