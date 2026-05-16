@@ -35,7 +35,7 @@ test('AgentServerContextRequest canonical serialization is deterministic and ref
   assert.equal(canonicalSerializeAgentServerContextRequest(JSON.parse(serialized) as AgentServerContextRequest), serialized);
 });
 
-test('AgentServerContextRequest rejects raw history, raw body, full ref list, and untagged selected refs', () => {
+test('AgentServerContextRequest rejects raw history, raw body, full ref list, compaction state, recent turns, and untagged selected refs', () => {
   const polluted = {
     ...buildContextRequest(),
     currentTask: {
@@ -51,6 +51,14 @@ test('AgentServerContextRequest rejects raw history, raw body, full ref list, an
       ],
     },
     fullRefList: [ref('artifact:all-refs')],
+    contextPolicy: {
+      ...buildContextRequest().contextPolicy,
+      compactionState: { status: 'old' },
+    },
+    refSelectionAudit: {
+      ...buildContextRequest().refSelectionAudit,
+      recentTurns: [{ role: 'assistant', content: 'old bounded turn' }],
+    },
   };
 
   const result = validateAgentServerContextRequest(polluted);
@@ -58,10 +66,12 @@ test('AgentServerContextRequest rejects raw history, raw body, full ref list, an
   assert.match(result.errors.join('\n'), /rawHistory/);
   assert.match(result.errors.join('\n'), /body/);
   assert.match(result.errors.join('\n'), /fullRefList/);
+  assert.match(result.errors.join('\n'), /compactionState/);
+  assert.match(result.errors.join('\n'), /recentTurns/);
   assert.match(result.errors.join('\n'), /selectedRefs\[0\]\.source/);
 });
 
-test('DegradedHandoffPacket canonical guard forbids recent turns, full refs, raw history, and compaction state', () => {
+test('DegradedHandoffPacket canonical guard forbids recent turns, full refs, raw history, raw bodies, and compaction state', () => {
   const packet = buildDegradedPacket();
   const serialized = canonicalSerializeDegradedHandoffPacket(packet);
   assert.doesNotMatch(serialized, /recentTurns|fullRefList|rawHistory|compactionState/);
@@ -75,12 +85,17 @@ test('DegradedHandoffPacket canonical guard forbids recent turns, full refs, raw
       ...packet.degradedReason,
       compactionState: { summary: 'must stay out even when nested' },
     },
+    boundedArtifactIndex: [
+      ...packet.boundedArtifactIndex,
+      { ref: 'artifact:raw-body', kind: 'artifact', body: 'RAW_ARTIFACT_BODY' },
+    ],
   };
   const result = validateDegradedHandoffPacket(polluted);
   assert.equal(result.ok, false);
   assert.match(result.errors.join('\n'), /recentTurns/);
   assert.match(result.errors.join('\n'), /fullRefList/);
   assert.match(result.errors.join('\n'), /rawHistory/);
+  assert.match(result.errors.join('\n'), /body/);
   assert.match(result.errors.join('\n'), /compactionState/);
 });
 

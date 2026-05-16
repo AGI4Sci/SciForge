@@ -46,6 +46,9 @@ export const PROJECT_MEMORY_REF_KINDS = [
 
 export type ProjectMemoryRefKind = typeof PROJECT_MEMORY_REF_KINDS[number];
 
+export const WORKSPACE_MEMORY_REF_KINDS = PROJECT_MEMORY_REF_KINDS;
+export type WorkspaceMemoryRefKind = ProjectMemoryRefKind;
+
 export type RefKindGroup =
   | 'artifact'
   | 'execution'
@@ -83,6 +86,10 @@ export interface ProjectSessionEvent {
   metadata?: Record<string, unknown>;
 }
 
+export type WorkspaceLedgerActor = ProjectSessionActor;
+export type WorkspaceLedgerEventKind = ProjectSessionEventKind;
+export type WorkspaceLedgerEvent = ProjectSessionEvent;
+
 export interface ContextProjectionBlock {
   blockId: string;
   kind:
@@ -107,6 +114,8 @@ export interface ProjectSessionLedgerProjection {
   events: ProjectSessionEvent[];
   refIndex: ProjectMemoryRef[];
 }
+
+export type WorkspaceLedgerProjection = ProjectSessionLedgerProjection;
 
 export interface CompileContextProjectionInput {
   sessionId: string;
@@ -176,6 +185,8 @@ export interface ProjectSessionRecoveryProjection {
   };
 }
 
+export type WorkspaceRecoveryProjection = ProjectSessionRecoveryProjection;
+
 type ConversationEventLike = {
   id?: unknown;
   type?: unknown;
@@ -240,6 +251,30 @@ export function projectMemoryRefRetention(kind: ProjectMemoryRefKind): ProjectMe
   return RETENTION_BY_REF_KIND_GROUP[projectMemoryRefKindGroup(kind)];
 }
 
+export function normalizeWorkspaceKernelAuditInput(
+  input: unknown,
+  options: { sessionId?: string; createdAt?: string } = {},
+): WorkspaceLedgerProjection {
+  return normalizeProjectSessionMemory(input, options);
+}
+
+export function recoverWorkspaceKernelProjection(events: readonly WorkspaceLedgerEvent[]): WorkspaceRecoveryProjection {
+  return recoverProjectSessionProjection(events);
+}
+
+export function compileWorkspaceContextProjection(input: CompileContextProjectionInput): ContextProjectionCompileResult {
+  return compileContextProjection(input);
+}
+
+export function buildWorkspaceCompactionRecordedEvent(input: CompactionRecordedEventInput): WorkspaceLedgerEvent {
+  return buildCompactionRecordedEvent(input);
+}
+
+/**
+ * @deprecated Migration/audit adapter for legacy session-shaped records.
+ * Use WorkspaceKernel.appendEvent as the runtime entrypoint and
+ * normalizeWorkspaceKernelAuditInput only when importing historical data.
+ */
 export function normalizeProjectSessionMemory(
   input: unknown,
   options: { sessionId?: string; createdAt?: string } = {},
@@ -376,6 +411,10 @@ export function compileContextProjection(input: CompileContextProjectionInput): 
   };
 }
 
+/**
+ * @deprecated Migration/audit adapter for old repair packet callers.
+ * New runtime handoff packets should be written through WorkspaceKernel refs.
+ */
 export function buildRepairPacket(input: {
   failedRunId: string;
   failureSummary: string;
@@ -405,6 +444,10 @@ export function buildRepairPacket(input: {
   };
 }
 
+/**
+ * @deprecated Migration/audit adapter for legacy compaction ledger records.
+ * New compaction facts should be appended as WorkspaceKernel events.
+ */
 export function buildCompactionRecordedEvent(input: CompactionRecordedEventInput): ProjectSessionEvent {
   const createdAt = input.createdAt ?? '1970-01-01T00:00:00.000Z';
   const eventId = input.eventId
@@ -435,6 +478,10 @@ export function buildCompactionRecordedEvent(input: CompactionRecordedEventInput
   };
 }
 
+/**
+ * @deprecated Migration/audit adapter for legacy ProjectSessionMemory recovery.
+ * Use WorkspaceKernel.restoreProjection for current runtime recovery.
+ */
 export function recoverProjectSessionProjection(events: readonly ProjectSessionEvent[]): ProjectSessionRecoveryProjection {
   const sessionId = events.at(-1)?.sessionId ?? events[0]?.sessionId ?? 'session-unknown';
   const activeRunId = [...events].reverse().map((event) => event.runId).find(Boolean);

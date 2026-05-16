@@ -269,12 +269,12 @@ async function coverStaticContracts() {
   const baseline: Record<string, number> = {
     'C06-runtime-local-direct-context-strategy#src/runtime/gateway/direct-context-fast-path.ts': 0,
     'C06-runtime-prompt-requires-strategy#src/runtime/gateway/capability-provider-preflight.ts': 0,
-    'C07-runtime-visible-preflight#src/runtime/gateway/direct-context-fast-path.ts': 1,
-    'C07-runtime-visible-preflight#src/runtime/gateway/capability-provider-preflight.ts': 1,
-    'C07-runtime-visible-preflight#src/runtime/gateway/generated-task-payload-preflight.ts': 1,
-    'C05-degraded-raw-history-shape#src/runtime/gateway/agentserver-context-contract.ts': 6,
-    'C05-degraded-raw-history-shape#src/runtime/gateway/agentserver-context-window.ts': 2,
-    'C05-degraded-raw-history-shape#src/runtime/gateway/agentserver-prompts.ts': 2,
+    'C07-runtime-visible-preflight#src/runtime/gateway/direct-context-fast-path.ts': 0,
+    'C07-runtime-visible-preflight#src/runtime/gateway/capability-provider-preflight.ts': 0,
+    'C07-runtime-visible-preflight#src/runtime/gateway/generated-task-payload-preflight.ts': 0,
+    'C05-degraded-raw-history-shape#src/runtime/gateway/agentserver-context-contract.ts': 0,
+    'C05-degraded-raw-history-shape#src/runtime/gateway/agentserver-context-window.ts': 1,
+    'C05-degraded-raw-history-shape#src/runtime/gateway/agentserver-prompts.ts': 1,
     'C12-ui-legacy-raw-terminal-fallback#src/ui/src/app/appShell/workspaceState.ts': 3,
   };
 
@@ -321,6 +321,7 @@ async function collectStaticFindings() {
     lines.forEach((line, index) => {
       if (!isCodeLine(line)) return;
       for (const rule of rules) {
+        if (ignoredStaticRuleLine(rule.id, lines, index)) continue;
         if (rule.match(line, rel)) findings.push({ file: rel, line: index + 1, rule: rule.id, text: line.trim() });
       }
     });
@@ -507,6 +508,21 @@ function isCodeLine(line: string) {
     && !trimmed.startsWith('import ')
     && !trimmed.startsWith('//')
     && !trimmed.startsWith('*');
+}
+
+function ignoredStaticRuleLine(ruleId: string, lines: string[], index: number) {
+  return ruleId === 'C05-degraded-raw-history-shape' && isForbiddenFieldRegistryLine(lines, index);
+}
+
+function isForbiddenFieldRegistryLine(lines: string[], index: number) {
+  const line = lines[index]?.trim() ?? '';
+  if (!/^['"](?:recentTurns|fullRefList|rawHistory|compactionState)['"],?$/.test(line)) return false;
+  for (let cursor = index; cursor >= Math.max(0, index - 12); cursor -= 1) {
+    const candidate = lines[cursor]?.trim() ?? '';
+    if (/^(?:const\s+)?[A-Z0-9_]*FORBIDDEN[A-Z0-9_]*\s*=\s*new Set\(\[/.test(candidate)) return true;
+    if (cursor < index && /^\]\);?$/.test(candidate)) return false;
+  }
+  return false;
 }
 
 function countByRuleFile(findings: Finding[]) {

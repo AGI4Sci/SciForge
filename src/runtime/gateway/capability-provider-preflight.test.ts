@@ -4,7 +4,6 @@ import test from 'node:test';
 import type { GatewayRequest } from '../runtime-types.js';
 import {
   capabilityProviderPreflight,
-  capabilityProviderPreflightPayload,
   capabilityProviderRoutesForHandoff,
   requestWithDiscoveredCapabilityProviders,
 } from './capability-provider-preflight.js';
@@ -18,15 +17,10 @@ test('capability provider preflight blocks web search when provider is not confi
   };
 
   const preflight = capabilityProviderPreflight(request);
-  const payload = capabilityProviderPreflightPayload(request, preflight);
 
   assert.equal(preflight.ok, false);
   assert.ok(preflight.requiredCapabilityIds.includes('web_search'));
   assert.match(preflight.blockingRoutes[0]?.reason ?? '', /requires config|unknown health|No provider/);
-  assert.ok(payload);
-  assert.equal(payload.executionUnits[0]?.tool, 'sciforge.capability-provider-preflight');
-  assert.equal(payload.executionUnits[0]?.status, 'needs-human');
-  assert.match(payload.message, /尚未就绪的工具能力/);
 });
 
 test('AgentServer discovery maps worker tool routes into provider availability', async () => {
@@ -84,7 +78,6 @@ test('capability provider preflight accepts explicit AgentServer provider availa
 
   assert.equal(preflight.ok, true);
   assert.equal(preflight.routes[0]?.primaryProviderId, 'sciforge.web-worker.web_search');
-  assert.equal(capabilityProviderPreflightPayload(request, preflight), undefined);
 });
 
 test('capability provider handoff exposes only public route shape', () => {
@@ -130,7 +123,7 @@ test('capability provider handoff exposes only public route shape', () => {
   assertNoProviderRouteLeaks(handoff);
 });
 
-test('capability provider preflight payload redacts route internals', () => {
+test('capability provider handoff redacts unavailable route internals', () => {
   const request: GatewayRequest = {
     skillDomain: 'literature',
     prompt: 'search latest papers',
@@ -153,11 +146,10 @@ test('capability provider preflight payload redacts route internals', () => {
     },
   };
 
-  const preflight = capabilityProviderPreflight(request);
-  const payload = capabilityProviderPreflightPayload(request, preflight);
+  const handoff = capabilityProviderRoutesForHandoff(request);
 
-  assert.ok(payload);
-  assertNoProviderRouteLeaks(payload);
+  assert.equal(handoff.ok, false);
+  assertNoProviderRouteLeaks(handoff);
 });
 
 test('capability provider preflight accepts scenario tool provider routes', () => {

@@ -2,14 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  buildCompactionRecordedEvent,
+  buildWorkspaceCompactionRecordedEvent,
   buildRepairPacket,
-  compileContextProjection,
-  normalizeProjectSessionMemory,
+  compileWorkspaceContextProjection,
+  normalizeWorkspaceKernelAuditInput,
   projectMemoryRefKindGroup,
   projectMemoryRefRetention,
-  recoverProjectSessionProjection,
-  type ProjectSessionEvent,
+  recoverWorkspaceKernelProjection,
+  type WorkspaceLedgerEvent,
 } from './project-session-memory.js';
 import type { ConversationEventLog } from './conversation-kernel/types.js';
 
@@ -56,8 +56,8 @@ test('normalizes conversation event logs append-only without rewriting existing 
     ],
   };
 
-  const base = normalizeProjectSessionMemory(baseLog);
-  const appended = normalizeProjectSessionMemory(appendedLog);
+  const base = normalizeWorkspaceKernelAuditInput(baseLog);
+  const appended = normalizeWorkspaceKernelAuditInput(appendedLog);
 
   assert.equal(base.schemaVersion, 'sciforge.project-session-ledger-projection.v1');
   assert.equal(appended.events.length, base.events.length + 1);
@@ -69,7 +69,7 @@ test('normalizes conversation event logs append-only without rewriting existing 
 });
 
 test('normalizes ref digests and builds a stable ref index from session-like runs', () => {
-  const projection = normalizeProjectSessionMemory({
+  const projection = normalizeWorkspaceKernelAuditInput({
     sessionId: 'session-refs',
     runs: [
       {
@@ -113,7 +113,7 @@ test('normalizes ref digests and builds a stable ref index from session-like run
 });
 
 test('derives ref kind groups and retention for context handoff retrieval and audit refs', () => {
-  const projection = normalizeProjectSessionMemory({
+  const projection = normalizeWorkspaceKernelAuditInput({
     sessionId: 'session-ref-policy',
     events: [{
       id: 'ref-policy',
@@ -156,11 +156,11 @@ test('keeps stable prefix hash unchanged when only the current tail task changes
       index: ['conversation:artifact-1'],
     },
   };
-  const first = compileContextProjection({
+  const first = compileWorkspaceContextProjection({
     ...stableInput,
     currentTaskPacket: { request: 'summarize section A', selectedRefs: ['report.md'] },
   });
-  const second = compileContextProjection({
+  const second = compileWorkspaceContextProjection({
     ...stableInput,
     currentTaskPacket: { request: 'summarize section B', selectedRefs: ['report.md'] },
   });
@@ -189,7 +189,7 @@ test('repair packet and compaction event append without rewriting stable project
     stableSessionState: { goal: 'finish failed run', decisions: ['provider-first'] },
     index: { failures: ['run-failed'] },
   };
-  const before = compileContextProjection({
+  const before = compileWorkspaceContextProjection({
     ...stable,
     currentTaskPacket: { request: 'diagnose failed run' },
   });
@@ -204,7 +204,7 @@ test('repair packet and compaction event append without rewriting stable project
     }],
     nextStep: 'repair artifact ref only',
   });
-  const after = compileContextProjection({
+  const after = compileWorkspaceContextProjection({
     ...stable,
     currentTaskPacket: packet,
     sourceEventIds: {
@@ -217,7 +217,7 @@ test('repair packet and compaction event append without rewriting stable project
   assert.equal(after.blocks.at(-1)?.kind, 'task-packet');
   assert.match(after.blocks.at(-1)?.content ?? '', /sciforge\.recovery-packet\.v1/);
 
-  const compaction = buildCompactionRecordedEvent({
+  const compaction = buildWorkspaceCompactionRecordedEvent({
     sessionId: 'session-repair',
     sourceEventIds: ['conversation:turn-1', 'conversation:repair-needed'],
     decisionOwner: 'runtime',
@@ -238,7 +238,7 @@ test('repair packet and compaction event append without rewriting stable project
 });
 
 test('recovers active run, artifact index, failure index, and next handoff from ledger events only', () => {
-  const projection = normalizeProjectSessionMemory({
+  const projection = normalizeWorkspaceKernelAuditInput({
     sessionId: 'session-recover',
     messages: [{ id: 'm1', role: 'user', content: 'recover the failed run' }],
     runs: [{
@@ -255,7 +255,7 @@ test('recovers active run, artifact index, failure index, and next handoff from 
     }],
   });
 
-  const recovered = recoverProjectSessionProjection(projection.events);
+  const recovered = recoverWorkspaceKernelProjection(projection.events);
   assert.equal(recovered.schemaVersion, 'sciforge.project-session-recovery-projection.v1');
   assert.equal(recovered.activeRunId, 'run-failed');
   assert.deepEqual(recovered.artifactIndex.map((ref) => ref.ref), [
@@ -267,7 +267,7 @@ test('recovers active run, artifact index, failure index, and next handoff from 
   assert.deepEqual(recovered.nextHandoffPacket.retrievalTools, ['retrieve', 'read_ref', 'workspace_search']);
 });
 
-function assertProjectEvent(event: ProjectSessionEvent): void {
+function assertProjectEvent(event: WorkspaceLedgerEvent): void {
   assert.equal(event.schemaVersion, 'sciforge.project-session-event.v1');
   assert.ok(event.eventId);
   assert.ok(event.summary);

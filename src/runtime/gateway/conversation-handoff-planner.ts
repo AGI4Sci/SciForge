@@ -6,6 +6,17 @@ type JsonMap = Record<string, unknown>;
 
 const DEFAULT_MARKDOWN_REPORT_TYPE = ['research', 'report'].join('-');
 const REFERENCE_KEYS = ['ref', 'dataRef', 'path', 'filePath', 'markdownRef', 'contentRef', 'stdoutRef', 'stderrRef', 'outputRef'] as const;
+const FORBIDDEN_HANDOFF_KEYS = new Set([
+  'recentTurns',
+  'fullRefList',
+  'rawHistory',
+  'history',
+  'rawBody',
+  'body',
+  'rawArtifactBody',
+  'artifactBody',
+  'compactionState',
+]);
 
 export interface ConversationHandoffPlanInput {
   [key: string]: unknown;
@@ -209,8 +220,6 @@ function compactHandoffProjection(projection: JsonMap, budget: Record<string, nu
     'retrievalTools',
     'currentReferenceFocus',
     'pollutionGuard',
-    'recentConversation',
-    'recentRuns',
     'priorAttempts',
   ]) {
     const value = projection[key];
@@ -222,7 +231,47 @@ function compactHandoffProjection(projection: JsonMap, budget: Record<string, nu
     const compact = compactValue(value, budget, decisions, ['handoffMemoryProjection', key]);
     if (!isEmpty(compact)) out[key] = compact;
   }
+  compactProjectionAlias(
+    out,
+    projection,
+    'selectedMessageRefs',
+    ['recentConversation'],
+    budget,
+    decisions,
+  );
+  compactProjectionAlias(
+    out,
+    projection,
+    'selectedRunRefs',
+    ['recentRuns'],
+    budget,
+    decisions,
+  );
   return out;
+}
+
+function compactProjectionAlias(
+  out: JsonMap,
+  projection: JsonMap,
+  targetKey: string,
+  legacyKeys: string[],
+  budget: Record<string, number>,
+  decisions: JsonMap[],
+): void {
+  const sourceKey = projection[targetKey] !== undefined
+    ? targetKey
+    : legacyKeys.find((key) => projection[key] !== undefined);
+  if (!sourceKey) return;
+  if (sourceKey !== targetKey) {
+    decisions.push({
+      kind: kind('handoff', 'projection', 'legacy', 'key'),
+      reason: kind('refs', 'first', 'rename'),
+      sourceKey,
+      targetKey,
+    });
+  }
+  const compact = compactValue(projection[sourceKey], budget, decisions, ['handoffMemoryProjection', targetKey]);
+  if (!isEmpty(compact)) out[targetKey] = compact;
 }
 
 function compactValue(value: unknown, budget: Record<string, number>, decisions: JsonMap[], path: string[]): unknown {
@@ -250,9 +299,16 @@ function compactValue(value: unknown, budget: Record<string, number>, decisions:
     if (estimateBytes(record) > budget.maxInlineJsonBytes && REFERENCE_KEYS.some((key) => stringValue(record[key]))) {
       return refsFromRecord(record);
     }
-    const entries = Object.entries(record).slice(0, budget.maxObjectKeys);
+    const entries = Object.entries(record)
+      .filter(([key]) => !FORBIDDEN_HANDOFF_KEYS.has(key))
+      .slice(0, budget.maxObjectKeys);
     if (Object.keys(record).length > budget.maxObjectKeys) {
       decisions.push({ kind: 'object', reason: kind('object', 'key', 'budget'), pointer: `/${path.join('/')}`, originalCount: Object.keys(record).length, keptCount: budget.maxObjectKeys });
+    }
+    for (const key of Object.keys(record)) {
+      if (FORBIDDEN_HANDOFF_KEYS.has(key)) {
+        decisions.push({ kind: kind('forbidden', 'field'), reason: kind('refs', 'first'), pointer: `/${[...path, key].join('/')}` });
+      }
     }
     return Object.fromEntries(entries.map(([key, nested]) => [String(key), compactValue(nested, budget, decisions, [...path, String(key)])]));
   }

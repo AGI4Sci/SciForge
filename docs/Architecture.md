@@ -10,6 +10,8 @@
 
 Archive/historical note: 旧的 `ProjectSessionMemory.md` 专项稿已并入 [`SciForge-SingleAgent-Architecture.md`](SciForge-SingleAgent-Architecture.md) 并删除。相关概念现在分别落在 Workspace Kernel、AgentServer Context Core、Context Bridge、KV cache、防漂移和 retention/conformance 章节。
 
+Archive/historical note: 根目录 `PROJECT.md` 中 2026-05-14/15 的 CAP/PSM/MEM/H022 长段已归档到 [`archive/PROJECT-history-2026-05-14-15.md`](archive/PROJECT-history-2026-05-14-15.md)。本文和归档内容只提供实现背景；当前 runtime work item 以 `PROJECT.md` 的 SA-* 任务板和 [`SciForge-SingleAgent-Architecture.md`](SciForge-SingleAgent-Architecture.md) 为准。
+
 ## 当前边界
 
 SciForge 当前是本地 workspace-backed 科研 Agent 工作台。它的职责不是维护一套硬编码回复模板，而是把用户请求、workspace 引用、scenario contract、能力 brief、backend stream、artifact、ExecutionUnit、反馈和修复证据组织成可审计系统。

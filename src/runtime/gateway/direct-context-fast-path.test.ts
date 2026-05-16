@@ -421,6 +421,8 @@ test('provider status follow-up reuses current context without AgentServer gener
   assert.equal(payload.executionUnits[0]?.status, 'done');
   assert.match(payload.message, /sciforge\.web-worker\.web_fetch/);
   assert.match(payload.message, /Example Domain/);
+  assert.doesNotMatch(payload.message, /worker=/);
+  assert.doesNotMatch(JSON.stringify(payload), /(?:\\")?(workerId|runtimeLocation|endpoint|baseUrl|invokeUrl|invokePath)(?:\\")?\s*:/);
 });
 
 test('provider wording does not steal fresh retrieval requests from AgentServer dispatch', () => {

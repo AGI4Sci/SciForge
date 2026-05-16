@@ -3,10 +3,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { GatewayRequest, ToolPayload } from '../../../../src/runtime/runtime-types.js';
+import type { GatewayRequest } from '../../../../src/runtime/runtime-types.js';
 import {
   capabilityProviderPreflight,
-  capabilityProviderPreflightPayload,
   capabilityProviderRoutesForHandoff,
   requestWithDiscoveredCapabilityProviders,
   type PublicCapabilityProviderPreflightResult,
@@ -42,7 +41,7 @@ export interface ProviderTransitionRound {
   prompt: string;
   request: GatewayRequest;
   handoffRoutes: PublicCapabilityProviderPreflightResult;
-  visiblePreflightPayload?: ToolPayload;
+  gatewayBlockedReason?: string;
   agentServerRunCountBefore: number;
   agentServerRunCountAfter: number;
   dispatched: boolean;
@@ -96,16 +95,15 @@ export async function runProviderTransitionRound(
 ): Promise<ProviderTransitionRound> {
   const request = await requestWithDiscoveredCapabilityProviders(baseGatewayRequest(harness, prompt));
   const preflight = capabilityProviderPreflight(request);
-  const visiblePreflightPayload = capabilityProviderPreflightPayload(request, preflight);
   const handoffRoutes = capabilityProviderRoutesForHandoff(request);
   const agentServerRunCountBefore = harness.agentServer.requests.runs.length;
 
-  if (visiblePreflightPayload) {
+  if (!preflight.ok) {
     return {
       prompt,
       request,
       handoffRoutes,
-      visiblePreflightPayload,
+      gatewayBlockedReason: preflight.blockingRoutes.map((route) => `${route.capabilityId}: ${route.reason}`).join('; '),
       agentServerRunCountBefore,
       agentServerRunCountAfter: harness.agentServer.requests.runs.length,
       dispatched: false,
@@ -136,16 +134,15 @@ export async function runProviderTransitionRound(
 
 export function assertFailClosedBeforeAgentServerDispatch(round: ProviderTransitionRound) {
   assert.equal(round.dispatched, false, 'unavailable providers must fail closed before AgentServer dispatch');
-  assert.equal(round.agentServerRunCountAfter, round.agentServerRunCountBefore, 'fail-closed preflight must not call /runs/stream');
-  assert.ok(round.visiblePreflightPayload, 'fail-closed round should expose a visible recoverable preflight payload');
-  assert.equal(round.visiblePreflightPayload.executionUnits[0]?.tool, 'sciforge.capability-provider-preflight');
+  assert.equal(round.agentServerRunCountAfter, round.agentServerRunCountBefore, 'fail-closed provider routing must not call /runs/stream');
+  assert.match(round.gatewayBlockedReason ?? '', /web_fetch|web_search/);
   assert.deepEqual(round.handoffRoutes.requiredCapabilityIds, ['web_fetch', 'web_search']);
   assert.deepEqual(round.handoffRoutes.blockingRoutes.map((route) => route.capabilityId), ['web_fetch', 'web_search']);
   assert.equal(round.handoffRoutes.ok, false);
 }
 
 export function assertReadyRoundDispatchesToAgentServer(round: ProviderTransitionRound) {
-  assert.equal(round.visiblePreflightPayload, undefined, 'ready provider status must not become a visible Runtime preflight stage');
+  assert.equal(round.gatewayBlockedReason, undefined, 'ready provider status must not become a visible Runtime preflight stage');
   assert.equal(round.dispatched, true, 'ready providers should enter AgentServer dispatch');
   assert.equal(round.agentServerRunCountAfter, round.agentServerRunCountBefore + 1);
   assert.equal(round.handoffRoutes.ok, true);

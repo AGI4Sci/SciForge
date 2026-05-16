@@ -18,6 +18,7 @@ Archive/historical 清理状态：
 
 - archive/historical: `ProjectSessionMemory.md` 已被 [`SciForge-SingleAgent-Architecture.md`](SciForge-SingleAgent-Architecture.md) 吸收并删除；对应内容现在落在 Workspace Kernel、AgentServer Context Core、Context Bridge、KV cache 和 retention/conformance 章节。
 - archive/historical: `Extending.md`、`SciForgeConversationSessionRecovery.md` 不在当前 `docs/` 中，已从权威入口移除；相关扩展 contract 以 package README、源码 contract 和 `Architecture.md` / `SciForge-SingleAgent-Architecture.md` 为准。
+- archive/historical: 2026-05-14/15 的 PROJECT 历史长段已归档到 [`archive/PROJECT-history-2026-05-14-15.md`](archive/PROJECT-history-2026-05-14-15.md)。其中 CAP/PSM/MEM/H022 未完成项只能作为 evidence/source lineage，当前实现入口只认根目录 `PROJECT.md` 的 SA-* 任务板。
 
 根目录 [`../README.md`](../README.md) 是产品入口和快速开始；本目录的文档是实现细节入口。若出现冲突，运行时设计以 [`SciForge-SingleAgent-Architecture.md`](SciForge-SingleAgent-Architecture.md) 为准，已落地实现细节以代码真相源为准。
 

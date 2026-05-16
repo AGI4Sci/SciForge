@@ -1127,7 +1127,9 @@ function compactAgentServerCoreSnapshotForPrompt(value: unknown) {
   if (!isRecord(value)) return undefined;
   const session = isRecord(value.session) ? value.session : {};
   const currentWork = isRecord(value.currentWork) ? value.currentWork : {};
-  const recentTurns = toRecordList(value.recentTurns);
+  const recentTurnRefs = toRecordList(value.recentTurnRefs);
+  const legacyRecentTurns = toRecordList(value.recentTurns);
+  const boundedTurnRefs = recentTurnRefs.length ? recentTurnRefs : legacyRecentTurns;
   const compactionTags = toRecordList(currentWork.compactionTags);
   return {
     source: stringField(value.source) ?? 'AgentServer Core /context',
@@ -1136,14 +1138,16 @@ function compactAgentServerCoreSnapshotForPrompt(value: unknown) {
       status: stringField(session.status),
       updatedAt: stringField(session.updatedAt),
     },
-    recentTurnRefs: recentTurns.slice(-6).map((turn) => ({
+    recentTurnRefs: boundedTurnRefs.slice(-6).map((turn) => ({
       turnNumber: typeof turn.turnNumber === 'number' ? turn.turnNumber : undefined,
       role: stringField(turn.role),
       runId: stringField(turn.runId),
       contentRef: stringField(turn.contentRef),
       contentOmitted: true,
-      contentDigest: typeof turn.content === 'string' ? hashJson(turn.content) : undefined,
-      contentChars: typeof turn.content === 'string' ? turn.content.length : undefined,
+      contentDigest: stringField(turn.contentDigest) ?? stringField(turn.digest) ?? (typeof turn.content === 'string' ? hashJson(turn.content) : undefined),
+      contentChars: typeof turn.contentChars === 'number' && Number.isFinite(turn.contentChars)
+        ? turn.contentChars
+        : typeof turn.content === 'string' ? turn.content.length : undefined,
       createdAt: stringField(turn.createdAt),
     })),
     currentWork: {

@@ -4,7 +4,9 @@ import test from 'node:test';
 import {
   appendConversationEvent,
   conversationEventLogDigest,
+  createInMemoryWorkspaceStorageAdapter,
   createConversationEventLog,
+  createWorkspaceKernel,
   projectConversation,
   replayConversationState,
   validateBackgroundContinuation,
@@ -12,6 +14,109 @@ import {
   type ConversationEvent,
 } from './conversation-kernel';
 import { materializeTaskOutcomeProjection } from './gateway/task-outcome-projection';
+
+test('workspace kernel appendEvent synchronously persists ledger and materialized projection version', () => {
+  const kernel = createWorkspaceKernel({ sessionId: 'workspace-kernel-main' });
+  const first = kernel.appendEvent({
+    id: 'turn-main',
+    type: 'TurnReceived',
+    storage: 'inline',
+    actor: 'user',
+    timestamp: '2026-05-16T00:00:00.000Z',
+    turnId: 'turn-main',
+    payload: { prompt: 'Summarize the retained refs.' },
+  });
+
+  assert.equal(first.eventId, 'turn-main');
+  assert.equal(first.projectionVersion, 1);
+  assert.equal(first.projection.projectionVersion, 1);
+  assert.equal(first.projection.currentTurn?.prompt, 'Summarize the retained refs.');
+
+  const second = kernel.appendEvent({
+    id: 'answer-main',
+    type: 'Satisfied',
+    storage: 'inline',
+    actor: 'backend',
+    timestamp: '2026-05-16T00:00:01.000Z',
+    turnId: 'turn-main',
+    runId: 'run-main',
+    payload: { text: 'Done from Workspace Kernel projection.' },
+  }, { expectedProjectionVersion: 1 });
+
+  assert.equal(second.projectionVersion, 2);
+  assert.equal(second.projection.visibleAnswer?.text, 'Done from Workspace Kernel projection.');
+  assert.deepEqual(kernel.restoreProjection('workspace-kernel-main'), second.projection);
+
+  const historical = kernel.replayProjection('workspace-kernel-main', { untilEventId: 'turn-main' });
+  assert.equal(historical.projectionVersion, 1);
+  assert.equal(historical.visibleAnswer, undefined);
+
+  assert.throws(
+    () => kernel.appendEvent({
+      id: 'stale-writer',
+      type: 'Planned',
+      storage: 'inline',
+      actor: 'kernel',
+      timestamp: '2026-05-16T00:00:02.000Z',
+      payload: { summary: 'stale writer should be rejected' },
+    }, { expectedProjectionVersion: 1 }),
+    /Expected projectionVersion 1 but current projectionVersion is 2/,
+  );
+  assert.equal(kernel.restoreProjection('workspace-kernel-main').projectionVersion, 2);
+});
+
+test('workspace kernel appends after cold ledger restore when materialized projection is absent', () => {
+  const storage = createInMemoryWorkspaceStorageAdapter();
+  storage.appendLedgerEvent('workspace-kernel-cold', {
+    id: 'cold-turn',
+    type: 'TurnReceived',
+    storage: 'inline',
+    actor: 'user',
+    timestamp: '2026-05-16T00:00:00.000Z',
+    turnId: 'cold-turn',
+    payload: { prompt: 'resume from ledger only' },
+  });
+
+  const kernel = createWorkspaceKernel({ sessionId: 'workspace-kernel-cold', storage });
+  const appended = kernel.appendEvent({
+    id: 'cold-answer',
+    type: 'Satisfied',
+    storage: 'inline',
+    actor: 'backend',
+    timestamp: '2026-05-16T00:00:01.000Z',
+    turnId: 'cold-turn',
+    runId: 'cold-run',
+    payload: { text: 'Restored and appended.' },
+  }, { expectedProjectionVersion: 1 });
+
+  assert.equal(appended.projectionVersion, 2);
+  assert.equal(appended.projection.currentTurn?.prompt, 'resume from ledger only');
+  assert.equal(appended.projection.visibleAnswer?.text, 'Restored and appended.');
+});
+
+test('workspace kernel registerRef derives retention and keeps listRefs descriptor-only', () => {
+  const kernel = createWorkspaceKernel({ sessionId: 'workspace-kernel-refs' });
+  const ref = kernel.registerRef('full report body that stays outside projection', {
+    ref: 'artifact:report',
+    kind: 'artifact',
+    mime: 'text/markdown',
+    preview: 'Report preview',
+    metadata: { retention: 'audit-only' },
+  });
+
+  assert.equal(ref.kind, 'artifact');
+  assert.equal(ref.retention, 'warm');
+  assert.equal(ref.sizeBytes, new TextEncoder().encode('full report body that stays outside projection').byteLength);
+
+  const listed = kernel.listRefs({ limit: 1 });
+  assert.equal(listed.descriptors.length, 1);
+  assert.equal(listed.descriptors[0].ref, 'artifact:report');
+  assert.equal(listed.descriptors[0].retention, 'warm');
+  assert.equal(Object.hasOwn(listed.descriptors[0], 'body'), false);
+
+  const read = kernel.readRef(ref);
+  assert.equal(read?.body, 'full report body that stays outside projection');
+});
 
 test('conversation kernel rejects large inline payloads and requires refs for large evidence', () => {
   const log = createConversationEventLog('c-large');

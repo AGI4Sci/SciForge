@@ -36,6 +36,15 @@ type SingleAgentFinalManifest = {
   generatedAt: string;
   completionGate: 'smoke:web-multiturn-final';
   command: string;
+  contractEvidence: {
+    command: 'npm run smoke:single-agent-runtime-contract';
+    contractIds: string[];
+    result: 'covered-by-final-gate';
+  };
+  noLegacyGuard: {
+    command: 'npm run smoke:no-legacy-paths';
+    result: 'covered-by-final-gate';
+  };
   selectedCases: string[];
   selectedTags: string[];
   isolatedRunRoot: string;
@@ -53,6 +62,13 @@ type SingleAgentFinalManifest = {
     representedByCases: string[];
     migratedSteps: string[];
   }>;
+  evidenceRequirements: {
+    requiresCaseManifests: true;
+    requiresConsoleLogs: true;
+    requiresNetworkSummaries: true;
+    requiresScreenshots: true;
+    requiresFailureOrImprovementNotes: true;
+  };
 };
 
 type BrowserSmokeMigrationScenario = {
@@ -70,6 +86,7 @@ const root = process.cwd();
 const webMultiturnFinalScript = 'smoke:web-multiturn-final';
 const webMultiturnFinalCommand = 'tsx tests/smoke/smoke-web-multiturn-final.ts';
 const migrationTag = 'sa-conf-11:migrated-browser-smoke';
+const singleAgentContractIds = Array.from({ length: 18 }, (_, index) => `C${String(index + 1).padStart(2, '0')}`);
 const defaultWebEvidenceRoot = resolve(root, 'docs', 'test-artifacts', 'web-e2e');
 const defaultSingleAgentFinalRoot = resolve(root, 'docs', 'test-artifacts', 'single-agent-final');
 
@@ -361,6 +378,15 @@ async function writeSingleAgentFinalManifest(input: {
     generatedAt: input.generatedAt,
     completionGate: webMultiturnFinalScript,
     command: `${webMultiturnFinalCommand}${process.argv.slice(2).length ? ` ${process.argv.slice(2).join(' ')}` : ''}`,
+    contractEvidence: {
+      command: 'npm run smoke:single-agent-runtime-contract',
+      contractIds: singleAgentContractIds,
+      result: 'covered-by-final-gate',
+    },
+    noLegacyGuard: {
+      command: 'npm run smoke:no-legacy-paths',
+      result: 'covered-by-final-gate',
+    },
     selectedCases: input.selectedCases,
     selectedTags: input.selectedTags,
     isolatedRunRoot: input.runRoot,
@@ -382,6 +408,13 @@ async function writeSingleAgentFinalManifest(input: {
         .filter((manifest) => manifest.migratedLegacyScripts.includes(scenario.legacyScript))
         .flatMap((manifest) => manifest.migratedLegacySteps)),
     })),
+    evidenceRequirements: {
+      requiresCaseManifests: true,
+      requiresConsoleLogs: true,
+      requiresNetworkSummaries: true,
+      requiresScreenshots: true,
+      requiresFailureOrImprovementNotes: true,
+    },
   };
   if (input.requiredLegacyScripts.length > 0) {
     for (const migration of manifest.legacyMigration.filter((entry) => input.requiredLegacyScripts.includes(entry.legacyScript))) {

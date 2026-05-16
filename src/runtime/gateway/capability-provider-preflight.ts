@@ -3,9 +3,8 @@ import {
   type CapabilityProviderManifest,
 } from '../../../packages/contracts/runtime/capability-manifest.js';
 import { loadCoreCapabilityManifestRegistry } from '../capability-manifest-registry.js';
-import type { GatewayRequest, ToolPayload } from '../runtime-types.js';
+import type { GatewayRequest } from '../runtime-types.js';
 import { isRecord } from '../gateway-utils.js';
-import { sha1 } from '../workspace-task-runner.js';
 
 export interface CapabilityProviderRoute {
   capabilityId: string;
@@ -85,7 +84,7 @@ const REQUIRED_BY_TOOL_ID: Record<string, string[]> = {
 
 export const CAPABILITY_PROVIDER_ROUTE_REF_PREFIX = 'runtime://capability-provider-route/';
 
-export function capabilityProviderPreflight(request: GatewayRequest): CapabilityProviderPreflightResult {
+export function resolveCapabilityProviderRoutes(request: GatewayRequest): CapabilityProviderPreflightResult {
   const requiredCapabilityIds = inferRequiredCapabilityIds(request);
   const routes = requiredCapabilityIds.map((capabilityId) => resolveCapabilityRoute(request, capabilityId));
   const blockingRoutes = routes.filter((route) => route.status !== 'ready');
@@ -97,106 +96,13 @@ export function capabilityProviderPreflight(request: GatewayRequest): Capability
   };
 }
 
-export function capabilityProviderPreflightPayload(
-  request: GatewayRequest,
-  preflight: CapabilityProviderPreflightResult,
-): ToolPayload | undefined {
-  if (preflight.ok || preflight.requiredCapabilityIds.length === 0) return undefined;
-  const publicPreflight = publicCapabilityProviderPreflightResult(preflight);
-  const id = sha1(JSON.stringify({ prompt: request.prompt, routes: publicPreflight.routes })).slice(0, 12);
-  const missing = preflight.blockingRoutes.map((route) => `${route.capabilityId}: ${route.reason}`).join('; ');
-  const routeRef = `runtime://capability-provider-preflight/${id}`;
-  const message = [
-    '当前任务需要尚未就绪的工具能力；SciForge 已在发送给 AgentServer 前阻断，避免临时生成不可审计的替代工具。',
-    `缺失/不可用能力：${missing}`,
-    '请在设置页启用对应 provider，或选择不需要这些能力的场景后重试。',
-  ].join('\n');
-  return {
-    message,
-    confidence: 0.86,
-    claimType: 'capability-provider-preflight',
-    evidenceLevel: 'runtime',
-    reasoningTrace: [
-      'Capability provider preflight resolved required capabilities before AgentServer dispatch.',
-      ...preflight.routes.map((route) => `${route.capabilityId} -> ${route.status}: ${route.reason}`),
-    ].join('\n'),
-    displayIntent: {
-      protocolStatus: 'protocol-success',
-      taskOutcome: 'needs-human',
-      status: 'needs-human',
-    },
-    claims: [{
-      id: `capability-provider-preflight-${id}`,
-      type: 'limitation',
-      text: `Missing or unavailable capability providers: ${missing}`,
-      confidence: 0.9,
-      evidenceLevel: 'runtime',
-      supportingRefs: [routeRef],
-      opposingRefs: [],
-    }],
-    uiManifest: [{
-      componentId: 'runtime-diagnostic',
-      artifactRef: `capability-provider-preflight-${id}`,
-      title: 'Capability provider preflight',
-      priority: 1,
-    }],
-    executionUnits: [{
-      id: `EU-capability-provider-preflight-${id}`,
-      tool: 'sciforge.capability-provider-preflight',
-      status: 'needs-human',
-      params: JSON.stringify({
-        requiredCapabilityIds: publicPreflight.requiredCapabilityIds,
-        routes: publicPreflight.routes,
-      }),
-      hash: id,
-      failureReason: missing,
-      recoverActions: [
-        'Enable a provider for each missing capability in Settings or Scenario Builder.',
-        'Configure AgentServer worker/toolRouting for remote providers.',
-        'Retry after provider health/auth/rate-limit is ready.',
-      ],
-      nextStep: 'Enable the missing provider route, then rerun the task.',
-    }],
-    artifacts: [{
-      id: `capability-provider-preflight-${id}`,
-      type: 'runtime-diagnostic',
-      producerScenario: request.skillDomain,
-      schemaVersion: '1',
-      metadata: {
-        source: 'capability-provider-preflight',
-        routeRef,
-        requiredCapabilityIds: publicPreflight.requiredCapabilityIds,
-        status: 'needs-human',
-      },
-      data: {
-        routes: publicPreflight.routes,
-      },
-    }],
-    objectReferences: [{
-      id: `obj-capability-provider-preflight-${id}`,
-      kind: 'runtime-diagnostic',
-      title: 'Capability provider route preflight',
-      ref: routeRef,
-      status: 'available',
-      summary: missing,
-    }],
-    failureSignatures: preflight.blockingRoutes.map((route) => ({
-      kind: 'external-transient',
-      layer: 'external-provider',
-      message: route.reason,
-      providerId: route.primaryProviderId ?? route.providers[0]?.providerId,
-      operation: route.capabilityId,
-      retryable: route.status !== 'unauthorized',
-      refs: [routeRef],
-    })),
-  };
-}
+export function capabilityProviderPreflight(request: GatewayRequest): CapabilityProviderPreflightResult { return resolveCapabilityProviderRoutes(request); }
 
 export function capabilityProviderRoutesForHandoff(request: GatewayRequest): PublicCapabilityProviderPreflightResult {
-  return publicCapabilityProviderPreflightResult(capabilityProviderPreflight(request));
+  return publicCapabilityProviderPreflightResult(resolveCapabilityProviderRoutes(request));
 }
 
-export function capabilityProviderRoutesForGatewayInvocation(request: GatewayRequest): CapabilityProviderPreflightResult { return capabilityProviderPreflight(request); }
+export function capabilityProviderRoutesForGatewayInvocation(request: GatewayRequest): CapabilityProviderPreflightResult { return resolveCapabilityProviderRoutes(request); }
 
 export function publicCapabilityProviderPreflightResult(
   preflight: CapabilityProviderPreflightResult,

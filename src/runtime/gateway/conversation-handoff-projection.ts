@@ -22,8 +22,8 @@ export interface ConversationHandoffMemoryProjection {
   contextRefs: string[];
   selectedContextRefs: string[];
   retrievalTools: string[];
-  recentConversation: JsonMap[];
-  recentRuns: JsonMap[];
+  selectedMessageRefs: JsonMap[];
+  selectedRunRefs: JsonMap[];
   currentReferenceFocus: string[];
   pollutionGuard: JsonMap;
 }
@@ -136,8 +136,8 @@ export function buildConversationHandoffMemoryProjection(request: unknown): Conv
     ]),
     selectedContextRefs,
     retrievalTools: ['retrieve', 'read_ref', 'workspace_search'],
-    recentConversation: selectedMessages,
-    recentRuns: selectedRuns,
+    selectedMessageRefs: selectedMessages,
+    selectedRunRefs: selectedRuns,
     currentReferenceFocus: explicitRefs,
     pollutionGuard: {
       source: 'project-session-memory-projection',

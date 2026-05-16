@@ -6,6 +6,7 @@ import {
   appendConversationEvent,
   classifyFailureOwner,
   createConversationEventLog,
+  createWorkspaceKernel,
   projectConversation,
   replayConversationState,
   type ConversationEvent,
@@ -139,6 +140,20 @@ assert.deepEqual(
     'artifact:verification-evidence',
   ],
 );
+
+const workspaceKernel = createWorkspaceKernel({ sessionId: 'smoke-workspace-kernel-main' });
+const workspaceFirst = workspaceKernel.appendEvent(inlineEvent('wk-turn', 'TurnReceived', {
+  prompt: 'restore projection from Workspace Kernel',
+}, { turnId: 'wk-turn' }));
+const workspaceSecond = workspaceKernel.appendEvent(refEvent('wk-satisfied', 'Satisfied', {
+  text: 'Workspace Kernel is the projection entrypoint.',
+  refs: [{ ref: 'artifact:wk-final', digest: 'sha256:wkfinal', mime: 'text/markdown', sizeBytes: 64 }],
+}, { turnId: 'wk-turn', runId: 'wk-run' }), { expectedProjectionVersion: workspaceFirst.projectionVersion });
+assert.equal(workspaceFirst.projection.projectionVersion, 1);
+assert.equal(workspaceSecond.projection.projectionVersion, 2);
+assert.equal(workspaceSecond.projection.visibleAnswer?.text, 'Workspace Kernel is the projection entrypoint.');
+assert.deepEqual(workspaceKernel.restoreProjection('smoke-workspace-kernel-main'), workspaceSecond.projection);
+assert.equal(workspaceKernel.replayProjection('smoke-workspace-kernel-main', { untilEventId: 'wk-turn' }).visibleAnswer, undefined);
 
 const backgroundLog = appendAll(createConversationEventLog('smoke-background-recorded'), [
   inlineEvent('turn-bg', 'TurnReceived', { prompt: 'return a partial answer and continue verification' }, { turnId: 't-bg' }),

@@ -172,6 +172,7 @@ export interface HarnessDecisionState {
 export interface ConversationProjection {
   schemaVersion: 'sciforge.conversation-projection.v1';
   conversationId: string;
+  projectionVersion?: number;
   currentTurn?: {
     id: string;
     prompt?: string;

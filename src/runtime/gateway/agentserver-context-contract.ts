@@ -139,6 +139,7 @@ export interface ContractValidationResult {
 }
 
 const REQUEST_FORBIDDEN_FIELDS = new Set([
+  'recentTurns',
   'rawHistory',
   'history',
   'rawBody',
@@ -146,12 +147,18 @@ const REQUEST_FORBIDDEN_FIELDS = new Set([
   'rawArtifactBody',
   'artifactBody',
   'fullRefList',
+  'compactionState',
 ]);
 
 const DEGRADED_FORBIDDEN_FIELDS = new Set([
   'recentTurns',
   'fullRefList',
   'rawHistory',
+  'history',
+  'rawBody',
+  'body',
+  'rawArtifactBody',
+  'artifactBody',
   'compactionState',
 ]);
 

@@ -735,7 +735,9 @@ export async function fetchAgentServerContextSnapshot(baseUrl: string, agentId: 
 }
 
 export function compactAgentServerCoreSnapshot(snapshot: Record<string, unknown>) {
-  const recentTurns = toRecordList(snapshot.recentTurns);
+  const recentTurnRefs = toRecordList(snapshot.recentTurnRefs);
+  const legacyRecentTurns = toRecordList(snapshot.recentTurns);
+  const boundedTurnRefs = recentTurnRefs.length ? recentTurnRefs : legacyRecentTurns;
   const currentWorkEntries = toRecordList(snapshot.currentWorkEntries);
   return {
     source: 'AgentServer Core /context',
@@ -750,7 +752,7 @@ export function compactAgentServerCoreSnapshot(snapshot: Record<string, unknown>
     workBudget: clipForAgentServerJson(snapshot.workBudget, 2),
     persistentBudget: clipForAgentServerJson(snapshot.persistentBudget, 2),
     memoryBudget: clipForAgentServerJson(snapshot.memoryBudget, 2),
-    recentTurns: recentTurns.slice(-6).map(compactAgentServerCoreRecentTurn),
+    recentTurnRefs: boundedTurnRefs.slice(-6).map(compactAgentServerCoreRecentTurnRef),
     currentWork: {
       entryCount: currentWorkEntries.length,
       rawTurnCount: currentWorkEntries.filter((entry) => entry.kind === 'turn' || entry.role).length,
@@ -768,15 +770,15 @@ export function compactAgentServerCoreSnapshot(snapshot: Record<string, unknown>
   };
 }
 
-function compactAgentServerCoreRecentTurn(turn: Record<string, unknown>) {
+function compactAgentServerCoreRecentTurnRef(turn: Record<string, unknown>) {
   const rawContent = stringField(turn.content);
   return {
     turnNumber: typeof turn.turnNumber === 'number' ? turn.turnNumber : undefined,
     role: stringField(turn.role),
     runId: stringField(turn.runId),
     contentRef: stringField(turn.contentRef),
-    contentDigest: stringField(turn.contentDigest) ?? (rawContent ? sha1(rawContent) : undefined),
-    contentChars: firstFiniteNumber(turn.contentChars, rawContent?.length),
+    contentDigest: stringField(turn.contentDigest) ?? stringField(turn.digest) ?? (rawContent ? sha1(rawContent) : undefined),
+    contentChars: firstFiniteNumber(turn.contentChars, turn.sizeBytes, rawContent?.length),
     contentOmitted: turn.contentOmitted === true || Boolean(rawContent),
     createdAt: stringField(turn.createdAt),
   };

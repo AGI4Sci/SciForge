@@ -1,5 +1,5 @@
 import type { GatewayRequest } from '../runtime-types.js';
-import { capabilityProviderPreflight } from './capability-provider-preflight.js';
+import { capabilityProviderRoutesForGatewayInvocation } from './capability-provider-preflight.js';
 
 export const GENERATED_TASK_PAYLOAD_PREFLIGHT_SCHEMA_VERSION = 'sciforge.generated-task-payload-preflight.v1' as const;
 const GENERATED_TASK_PAYLOAD_PREFLIGHT_POLICY_ID = 'sciforge.generated-task-payload-preflight.v1' as const;
@@ -246,7 +246,7 @@ function generatedTaskProviderFirstNetworkIssuesForSource(
 function readyWebProviderRoutes(request?: GatewayRequest) {
   if (!request) return [];
   const selectedToolIds = new Set([...(request.selectedToolIds ?? []), 'web_search', 'web_fetch']);
-  return capabilityProviderPreflight({ ...request, selectedToolIds: [...selectedToolIds] }).routes
+  return capabilityProviderRoutesForGatewayInvocation({ ...request, selectedToolIds: [...selectedToolIds] }).routes
     .filter((route) => (route.capabilityId === 'web_search' || route.capabilityId === 'web_fetch') && route.status === 'ready');
 }
 

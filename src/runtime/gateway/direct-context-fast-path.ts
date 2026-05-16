@@ -9,7 +9,7 @@ import {
   directContextFastPathMessage,
   directContextFastPathSupportingRefs,
 } from '@sciforge-ui/runtime-contract/artifact-policy';
-import { capabilityProviderPreflight } from './capability-provider-preflight.js';
+import { capabilityProviderRoutesForHandoff } from './capability-provider-preflight.js';
 
 export function directContextFastPathPayload(request: GatewayRequest): ToolPayload | undefined {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
@@ -424,25 +424,26 @@ function capabilityStatusFastPathPayload(request: GatewayRequest): ToolPayload |
     recentExecutionRefs: uiState.recentExecutionRefs,
     executionUnits: uiState.executionUnits,
   });
-  const preflight = capabilityProviderPreflight(request);
+  const routeStatus = capabilityProviderRoutesForHandoff(request);
   const selectedIds = uniqueStrings([
     ...(request.selectedToolIds ?? []),
     ...(request.selectedSenseIds ?? []),
     ...(request.selectedVerifierIds ?? []),
     ...toStringList(uiState.selectedToolIds),
   ]);
-  if (!preflight.routes.length && !selectedIds.length && !context.length) return undefined;
+  if (!routeStatus.routes.length && !selectedIds.length && !context.length) return undefined;
   const id = sha1(JSON.stringify({
     prompt: request.prompt,
-    routes: preflight.routes,
+    routes: routeStatus.routes,
     selectedIds,
     refs: directContextFastPathSupportingRefs(context),
   })).slice(0, 12);
-  const routeLines = preflight.routes.length
-    ? preflight.routes.map((route) => {
+  const routeLines = routeStatus.routes.length
+    ? routeStatus.routes.map((route) => {
       const primary = route.primaryProviderId ?? route.providers[0]?.providerId ?? 'none';
-      const worker = route.providers.find((provider) => provider.providerId === primary)?.workerId;
-      return `- ${route.capabilityId}: ${route.status}; primary=${primary}${worker ? `; worker=${worker}` : ''}; ${route.reason}`;
+      const provider = route.providers.find((candidate) => candidate.providerId === primary);
+      const transport = provider?.transport ? `; transport=${provider.transport}` : '';
+      return `- ${route.capabilityId}: ${route.status}; primary=${primary}${transport}; ${route.reason}`;
     })
     : ['- No core web/pdf provider route was required by this status query.'];
   const selectedLine = selectedIds.length ? `Selected runtime ids: ${selectedIds.join(', ')}` : 'Selected runtime ids: none reported.';
@@ -473,7 +474,7 @@ function capabilityStatusFastPathPayload(request: GatewayRequest): ToolPayload |
     },
     claims: [{
       id: `capability-provider-status-${id}`,
-      text: preflight.ok ? 'Required provider routes are available.' : 'Some requested provider routes are unavailable.',
+      text: routeStatus.ok ? 'Required provider routes are available.' : 'Some requested provider routes are unavailable.',
       type: 'observation',
       confidence: 0.86,
       evidenceLevel: 'runtime',
@@ -486,9 +487,9 @@ function capabilityStatusFastPathPayload(request: GatewayRequest): ToolPayload |
       tool: DIRECT_CONTEXT_FAST_PATH_POLICY.executionToolId,
       params: JSON.stringify({
         policy: 'capability-status-fast-path',
-        requiredCapabilityIds: preflight.requiredCapabilityIds,
+        requiredCapabilityIds: routeStatus.requiredCapabilityIds,
         selectedIds,
-        routes: preflight.routes,
+        routes: routeStatus.routes,
       }),
       status: 'done',
       hash: id,
@@ -503,11 +504,11 @@ function capabilityStatusFastPathPayload(request: GatewayRequest): ToolPayload |
         source: 'capability-status-fast-path',
         routeRef,
         selectedIds,
-        requiredCapabilityIds: preflight.requiredCapabilityIds,
+        requiredCapabilityIds: routeStatus.requiredCapabilityIds,
       },
       data: {
         markdown: message,
-        routes: preflight.routes,
+        routes: routeStatus.routes,
         selectedIds,
         context,
       },
@@ -517,7 +518,7 @@ function capabilityStatusFastPathPayload(request: GatewayRequest): ToolPayload |
       kind: 'runtime-diagnostic',
       title: 'Capability provider status',
       ref: routeRef,
-      status: preflight.ok ? 'available' : 'needs-attention',
+      status: routeStatus.ok ? 'available' : 'needs-attention',
       summary: routeLines.join(' '),
     }],
   };

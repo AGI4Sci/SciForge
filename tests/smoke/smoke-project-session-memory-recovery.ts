@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 
 import {
-  compileContextProjection,
-  normalizeProjectSessionMemory,
-  recoverProjectSessionProjection,
+  compileWorkspaceContextProjection,
+  normalizeWorkspaceKernelAuditInput,
+  recoverWorkspaceKernelProjection,
 } from '../../src/runtime/project-session-memory.js';
 
-const ledger = normalizeProjectSessionMemory({
+const ledger = normalizeWorkspaceKernelAuditInput({
   sessionId: 'session-psm-smoke',
   messages: [
     { id: 'm-start', role: 'user', content: 'Find recent agent reliability papers.' },
@@ -34,7 +34,7 @@ const ledger = normalizeProjectSessionMemory({
   }],
 });
 
-const recovered = recoverProjectSessionProjection(ledger.events);
+const recovered = recoverWorkspaceKernelProjection(ledger.events);
 assert.equal(recovered.sessionId, 'session-psm-smoke');
 assert.equal(recovered.activeRunId, 'run-provider-failed');
 assert.equal(recovered.nextHandoffPacket.mode, 'repair-continuation');
@@ -42,7 +42,7 @@ assert.ok(recovered.artifactIndex.some((ref) => ref.ref.endsWith('partial-report
 assert.ok(recovered.failureIndex.some((failure) => /provider route unavailable/.test(failure.summary)));
 assert.ok(recovered.nextHandoffPacket.refs.some((ref) => ref.kind === 'stderr'));
 
-const context = compileContextProjection({
+const context = compileWorkspaceContextProjection({
   sessionId: ledger.sessionId,
   immutablePrefix: {
     runtimeContract: 'refs-first bounded handoff',
@@ -67,7 +67,7 @@ const context = compileContextProjection({
   },
 });
 
-const replayContext = compileContextProjection({
+const replayContext = compileWorkspaceContextProjection({
   sessionId: ledger.sessionId,
   immutablePrefix: {
     runtimeContract: 'refs-first bounded handoff',

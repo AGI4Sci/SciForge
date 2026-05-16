@@ -16,7 +16,7 @@ test('SA-WEB-05 fails closed without web providers, then dispatches the same tas
   try {
     const unavailableRound = await runProviderTransitionRound(harness, PROVIDER_TRANSITION_PROMPT);
     assertFailClosedBeforeAgentServerDispatch(unavailableRound);
-    assertNoProviderEndpointShapeLeaks(unavailableRound.visiblePreflightPayload);
+    assertNoProviderEndpointShapeLeaks(unavailableRound.handoffRoutes);
 
     markWebProvidersReady(harness);
 

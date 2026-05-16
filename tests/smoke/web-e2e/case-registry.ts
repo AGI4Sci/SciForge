@@ -182,7 +182,7 @@ export const webE2eCaseRegistry: WebE2eCaseDefinition[] = [
       try {
         const unavailableRound = await runProviderTransitionRound(harness, PROVIDER_TRANSITION_PROMPT);
         assertFailClosedBeforeAgentServerDispatch(unavailableRound);
-        assertNoProviderEndpointShapeLeaks(unavailableRound.visiblePreflightPayload);
+        assertNoProviderEndpointShapeLeaks(unavailableRound.handoffRoutes);
 
         markWebProvidersReady(harness);
 

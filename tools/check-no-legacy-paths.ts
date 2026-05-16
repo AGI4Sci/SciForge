@@ -104,7 +104,7 @@ const rules: Rule[] = [
 // of these paths, lower the matching count in this table in the same change.
 const trackedBaselineCounts: Record<string, number> = {
   'src/runtime/gateway/agent-backend-config.ts#provider-scenario-prompt-special-case': 0,
-  'src/runtime/gateway/capability-provider-preflight.ts#provider-scenario-prompt-special-case': 28,
+  'src/runtime/gateway/capability-provider-preflight.ts#provider-scenario-prompt-special-case': 26,
   'src/runtime/gateway/direct-context-fast-path.ts#provider-scenario-prompt-special-case': 5,
   'src/runtime/gateway/generated-task-runner-validation-lifecycle.ts#provider-scenario-prompt-special-case': 1,
   'src/runtime/gateway/runtime-routing.ts#provider-scenario-prompt-special-case': 3,
@@ -120,12 +120,12 @@ const trackedBaselineCounts: Record<string, number> = {
   'src/runtime/gateway/workspace-event-normalizer.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/direct-context-fast-path.ts#sa-direct-context-local-strategy': 0,
   'src/runtime/gateway/capability-provider-preflight.ts#sa-direct-context-local-strategy': 0,
-  'src/runtime/gateway/direct-context-fast-path.ts#sa-runtime-visible-preflight': 1,
-  'src/runtime/gateway/capability-provider-preflight.ts#sa-runtime-visible-preflight': 1,
-  'src/runtime/gateway/generated-task-payload-preflight.ts#sa-runtime-visible-preflight': 1,
-  'src/runtime/gateway/agentserver-context-contract.ts#sa-degraded-raw-context-shape': 6,
-  'src/runtime/gateway/agentserver-context-window.ts#sa-degraded-raw-context-shape': 2,
-  'src/runtime/gateway/agentserver-prompts.ts#sa-degraded-raw-context-shape': 2,
+  'src/runtime/gateway/direct-context-fast-path.ts#sa-runtime-visible-preflight': 0,
+  'src/runtime/gateway/capability-provider-preflight.ts#sa-runtime-visible-preflight': 0,
+  'src/runtime/gateway/generated-task-payload-preflight.ts#sa-runtime-visible-preflight': 0,
+  'src/runtime/gateway/agentserver-context-contract.ts#sa-degraded-raw-context-shape': 0,
+  'src/runtime/gateway/agentserver-context-window.ts#sa-degraded-raw-context-shape': 1,
+  'src/runtime/gateway/agentserver-prompts.ts#sa-degraded-raw-context-shape': 1,
   'src/ui/src/app/appShell/workspaceState.ts#sa-ui-legacy-raw-terminal-fallback': 0,
   'src/ui/src/app/ComponentWorkbenchPage.tsx#ui-semantic-fallback': 0,
   'src/ui/src/app/ScenarioBuilderPanel.tsx#ui-semantic-fallback': 1,
@@ -167,6 +167,7 @@ async function main() {
     lines.forEach((line, index) => {
       for (const rule of rules) {
         if (!rule.appliesTo(rel) || !rule.match(line, rel)) continue;
+        if (ignoredRuleLine(rule.id, lines, index)) continue;
         findings.push({
           file: rel,
           line: index + 1,
@@ -269,6 +270,21 @@ function isLegacyPolicySurface(file: string) {
     || file === 'src/runtime/skill-markdown-catalog.ts'
     || file === 'src/ui/src/app/chat/runOrchestrator.ts'
     || file === 'src/ui/src/app/results/viewPlanResolver.ts';
+}
+
+function ignoredRuleLine(ruleId: string, lines: string[], index: number) {
+  return ruleId === 'sa-degraded-raw-context-shape' && isForbiddenFieldRegistryLine(lines, index);
+}
+
+function isForbiddenFieldRegistryLine(lines: string[], index: number) {
+  const line = lines[index]?.trim() ?? '';
+  if (!/^['"](?:recentTurns|fullRefList|rawHistory|compactionState)['"],?$/.test(line)) return false;
+  for (let cursor = index; cursor >= Math.max(0, index - 12); cursor -= 1) {
+    const candidate = lines[cursor]?.trim() ?? '';
+    if (/^(?:const\s+)?[A-Z0-9_]*FORBIDDEN[A-Z0-9_]*\s*=\s*new Set\(\[/.test(candidate)) return true;
+    if (cursor < index && /^\]\);?$/.test(candidate)) return false;
+  }
+  return false;
 }
 
 async function collectSourceFilesIfExists(dir: string): Promise<string[]> {

@@ -9,3 +9,4 @@ export * from './ref-store';
 export * from './state-machine';
 export * from './types';
 export * from './verification-gate';
+export * from './workspace-kernel';

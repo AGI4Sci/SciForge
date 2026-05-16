@@ -105,7 +105,7 @@ test('repair continuation uses stable session id without implicit raw AgentServe
   });
 });
 
-test('AgentServer core snapshot recent turns are refs and digests only', () => {
+test('AgentServer core snapshot turn refs are refs and digests only', () => {
   const snapshot = compactAgentServerCoreSnapshot({
     session: { id: 'agent-session-1', status: 'active' },
     recentTurns: [{
@@ -118,12 +118,13 @@ test('AgentServer core snapshot recent turns are refs and digests only', () => {
     }],
   }) as Record<string, unknown>;
 
-  const recentTurns = snapshot.recentTurns as Array<Record<string, unknown>>;
-  assert.equal(recentTurns.length, 1);
-  assert.equal(recentTurns[0]?.contentRef, '.sciforge/refs/turn-7.md');
-  assert.equal(recentTurns[0]?.contentChars, 'RAW_AGENTSERVER_TURN_BODY_SHOULD_NOT_LEAK'.length);
-  assert.equal(typeof recentTurns[0]?.contentDigest, 'string');
-  assert.equal(recentTurns[0]?.contentOmitted, true);
-  assert.equal('content' in (recentTurns[0] ?? {}), false);
+  const recentTurnRefs = snapshot.recentTurnRefs as Array<Record<string, unknown>>;
+  assert.equal(recentTurnRefs.length, 1);
+  assert.equal(recentTurnRefs[0]?.contentRef, '.sciforge/refs/turn-7.md');
+  assert.equal(recentTurnRefs[0]?.contentChars, 'RAW_AGENTSERVER_TURN_BODY_SHOULD_NOT_LEAK'.length);
+  assert.equal(typeof recentTurnRefs[0]?.contentDigest, 'string');
+  assert.equal(recentTurnRefs[0]?.contentOmitted, true);
+  assert.equal('content' in (recentTurnRefs[0] ?? {}), false);
+  assert.equal('recentTurns' in snapshot, false);
   assert.doesNotMatch(JSON.stringify(snapshot), /RAW_AGENTSERVER_TURN_BODY_SHOULD_NOT_LEAK/);
 });
