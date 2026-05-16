@@ -28,6 +28,27 @@ export async function webSearch(input: JsonObject): Promise<JsonObject> {
     fallbackErrors.push(`duckduckgo-html: ${errorMessage(error)}`);
   }
 
+  const arxivRequested = shouldTryArxivSearch(query);
+  if (arxivRequested) {
+    try {
+      const arxivResults = await arxivSearch(query, limit);
+      if (arxivResults.length > 0) {
+        return {
+          query,
+          rawQuery,
+          provider: 'arxiv-api',
+          fallbackFrom: 'duckduckgo-html',
+          fallbackReasons: fallbackErrors,
+          results: arxivResults,
+        };
+      }
+      fallbackErrors.push('arxiv-api returned no records');
+    } catch (error) {
+      fallbackErrors.push(`arxiv-api: ${errorMessage(error)}`);
+    }
+    throw new RetryableToolError(`arxiv-api could not satisfy explicit arXiv query: ${fallbackErrors.join('; ')}`);
+  }
+
   try {
     const europePmcResults = await europePmcSearch(query, limit);
     if (europePmcResults.length > 0) {
@@ -81,6 +102,24 @@ async function duckDuckGoSearch(query: string, limit: number, region: string): P
   return parseDuckDuckGoResults(html).slice(0, limit);
 }
 
+async function arxivSearch(query: string, limit: number): Promise<WebSearchResult[]> {
+  const searchUrl = new URL('https://export.arxiv.org/api/query');
+  searchUrl.searchParams.set('search_query', arxivSearchQuery(query));
+  searchUrl.searchParams.set('start', '0');
+  searchUrl.searchParams.set('max_results', String(limit));
+  searchUrl.searchParams.set('sortBy', 'submittedDate');
+  searchUrl.searchParams.set('sortOrder', 'descending');
+
+  const response = await fetchWithTimeout(searchUrl, 25000, {
+    headers: { 'user-agent': 'SciForgeWebWorker/0.1 (+https://sciforge.local)' },
+  });
+  const xml = await response.text();
+  if (!response.ok) {
+    throw new RetryableToolError(`arXiv API returned HTTP ${response.status}`);
+  }
+  return parseArxivResults(xml).slice(0, limit);
+}
+
 export async function webFetch(input: JsonObject): Promise<JsonObject> {
   const url = normalizeHttpUrl(requiredString(input.url, 'url'));
   const maxChars = clampNumber(input.maxChars, 12000, 100, 50000);
@@ -125,6 +164,48 @@ function parseDuckDuckGoResults(html: string): WebSearchResult[] {
     if (title && url) {
       results.push({ title, url, snippet });
     }
+  }
+  return results;
+}
+
+function parseArxivResults(xml: string): WebSearchResult[] {
+  const results: WebSearchResult[] = [];
+  const entryPattern = /<entry\b[^>]*>([\s\S]*?)<\/entry>/gi;
+  for (const match of xml.matchAll(entryPattern)) {
+    const entry = match[1] ?? '';
+    const title = xmlText(entry, 'title') || 'Untitled arXiv result';
+    const summary = xmlText(entry, 'summary');
+    const published = xmlText(entry, 'published');
+    const updated = xmlText(entry, 'updated');
+    const authors = xmlTexts(entry, 'name');
+    const links = xmlLinks(entry);
+    const absUrl = links.find((link) => link.rel === 'alternate')?.href
+      ?? xmlText(entry, 'id')
+      ?? links[0]?.href;
+    if (!absUrl) continue;
+    const pdfUrl = links.find((link) => link.title === 'pdf' || link.type === 'application/pdf')?.href
+      ?? arxivPdfUrl(absUrl);
+    const arxivId = extractArxivId(absUrl);
+    const parts = [
+      arxivId ? `arXiv:${arxivId}` : undefined,
+      published ? `published:${published}` : undefined,
+      updated && updated !== published ? `updated:${updated}` : undefined,
+      authors.length > 0 ? `authors:${authors.slice(0, 6).join(', ')}` : undefined,
+      pdfUrl ? `pdf:${pdfUrl}` : undefined,
+      summary,
+    ].filter((part): part is string => Boolean(part));
+    const result: WebSearchResult = {
+      title: cleanText(title),
+      url: normalizeArxivUrl(absUrl),
+      snippet: parts.join(' | '),
+    };
+    if (arxivId) result.arxivId = arxivId;
+    if (published) result.published = published;
+    if (updated) result.updated = updated;
+    if (authors.length > 0) result.authors = authors;
+    if (pdfUrl) result.pdfUrl = pdfUrl;
+    if (summary) result.summary = summary;
+    results.push(result);
   }
   return results;
 }
@@ -201,6 +282,160 @@ async function crossrefSearch(query: string, limit: number): Promise<WebSearchRe
     ].filter((part): part is string => Boolean(part));
     return { title: cleanText(title), url, snippet: parts.join(' | ') };
   });
+}
+
+function shouldTryArxivSearch(query: string): boolean {
+  return /\barxiv\b/i.test(query) || /\b\d{4}\.\d{4,5}(?:v\d+)?\b/i.test(query);
+}
+
+function arxivSearchQuery(query: string): string {
+  const arxivId = query.match(/\b\d{4}\.\d{4,5}(?:v\d+)?\b/i)?.[0];
+  if (arxivId) {
+    return `id:${arxivId}`;
+  }
+  const terms = arxivTopicQuery(query)
+    .replace(/-/g, ' ')
+    .split(/\s+/)
+    .map((term) => term.replace(/^[._-]+|[._-]+$/g, ''))
+    .filter((term) => term.length > 1 && !ARXIV_QUERY_STOPWORDS.has(term.toLowerCase()))
+    .slice(0, 8);
+  return terms.length > 0 ? terms.map((term) => `all:${term}`).join(' AND ') : `all:${query}`;
+}
+
+const ARXIV_QUERY_STOPWORDS = new Set([
+  'a',
+  'about',
+  'abs',
+  'abstract',
+  'abstracts',
+  'an',
+  'and',
+  'answer',
+  'arxiv',
+  'article',
+  'articles',
+  'artifact',
+  'authors',
+  'candidate',
+  'candidates',
+  'cannot',
+  'chinese',
+  'choose',
+  'compare',
+  'date',
+  'days',
+  'do',
+  'evidence',
+  'fail',
+  'for',
+  'from',
+  'full',
+  'honestly',
+  'id',
+  'if',
+  'in',
+  'is',
+  'last',
+  'latest',
+  'link',
+  'links',
+  'list',
+  'matrix',
+  'metadata',
+  'must',
+  'not',
+  'of',
+  'old',
+  'on',
+  'or',
+  'paper',
+  'papers',
+  'pdf',
+  'preprint',
+  'provider',
+  'query',
+  'read',
+  'reasons',
+  'recent',
+  'report',
+  'say',
+  'search',
+  'select',
+  'source',
+  'sources',
+  'submission',
+  'submit',
+  'submitt',
+  'submitted',
+  'text',
+  'the',
+  'title',
+  'titles',
+  'to',
+  'today',
+  'try',
+  'unread',
+  'updated',
+  'use',
+  'verified',
+  'with',
+  'yesterday',
+]);
+
+function arxivTopicQuery(query: string): string {
+  const topic = query
+    .replace(/\b(?:arxiv|preprint|paper|papers|article|articles|pdf|full[-\s]?text|latest|recent|today|yesterday|last\s+\d+\s+(?:day|days|week|weeks|month|months))\b/gi, ' ')
+    .replace(/\b(?:choose|select|compare|report|matrix|evidence|source|sources|authors?|title|titles?|date|dates?|link|links?)\b/gi, ' ')
+    .replace(/[^\p{L}\p{N}._-]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return topic || query;
+}
+
+function xmlText(xml: string, tag: string): string | undefined {
+  const match = xml.match(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i'));
+  const value = match ? cleanText(match[1] ?? '') : '';
+  return value || undefined;
+}
+
+function xmlTexts(xml: string, tag: string): string[] {
+  const pattern = new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'gi');
+  return Array.from(xml.matchAll(pattern))
+    .map((match) => cleanText(match[1] ?? ''))
+    .filter(Boolean);
+}
+
+function xmlLinks(xml: string): Array<{ href?: string; rel?: string; title?: string; type?: string }> {
+  return Array.from(xml.matchAll(/<link\b[^>]*>/gi)).map((match) => {
+    const tag = match[0] ?? '';
+    return {
+      href: xmlAttribute(tag, 'href'),
+      rel: xmlAttribute(tag, 'rel'),
+      title: xmlAttribute(tag, 'title'),
+      type: xmlAttribute(tag, 'type'),
+    };
+  });
+}
+
+function xmlAttribute(tag: string, name: string): string | undefined {
+  const match = tag.match(new RegExp(`\\b${name}=["']([^"']+)["']`, 'i'));
+  const value = match ? decodeHtml(match[1] ?? '').trim() : '';
+  return value || undefined;
+}
+
+function extractArxivId(url: string): string | undefined {
+  const match = url.match(/arxiv\.org\/(?:abs|pdf)\/([^?#\s]+?)(?:\.pdf)?(?:[?#]|$)/i);
+  return match?.[1];
+}
+
+function arxivPdfUrl(url: string): string | undefined {
+  const id = extractArxivId(url);
+  return id ? `https://arxiv.org/pdf/${id}` : undefined;
+}
+
+function normalizeArxivUrl(url: string): string {
+  const id = extractArxivId(url);
+  return id ? `https://arxiv.org/abs/${id}` : url;
 }
 
 function decodeDuckDuckGoUrl(url: string): string {

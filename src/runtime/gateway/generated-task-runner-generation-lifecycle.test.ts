@@ -70,6 +70,8 @@ test('generation lifecycle routes provider-first payload preflight violations to
   const source = result.generation.response.taskFiles[0]?.content ?? '';
   assert.match(source, /invoke_capability/);
   assert.match(source, /_search_query/);
+  assert.match(source, /arxiv_ids = re\.findall/);
+  assert.match(source, /do\\s\+not\|don/);
   assert.match(source, /provider metadata is not full-text verified evidence/);
   assert.match(source, /"status": "failed-with-reason"/);
   assert.doesNotMatch(source, /"status": "done", "tool": "invoke_capability"/);
