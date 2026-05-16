@@ -128,10 +128,60 @@ function scopedDirectContextPayloadContext(
   request: GatewayRequest,
   context: ReturnType<typeof buildDirectContextFastPathItems>,
 ) {
+  const promptNamedContext = promptNamedDirectContextItems(request, context);
+  if (promptNamedContext.length) return promptNamedContext;
   const selectedRefs = selectedReferenceTokens(request);
   if (!selectedRefs.length || !explicitSelectedOnlyPrompt(request.prompt)) return context;
   const selectedContext = context.filter((item) => directContextItemMatchesSelectedRef(item, selectedRefs));
   return selectedContext.length ? selectedContext : context;
+}
+
+function promptNamedDirectContextItems(
+  request: GatewayRequest,
+  context: ReturnType<typeof buildDirectContextFastPathItems>,
+) {
+  const prompt = normalizeDirectContextMentionText(request.prompt);
+  if (!prompt) return [];
+  return context.filter((item) => directContextItemMatchesPromptMention(item, prompt));
+}
+
+function directContextItemMatchesPromptMention(
+  item: ReturnType<typeof buildDirectContextFastPathItems>[number],
+  normalizedPrompt: string,
+) {
+  return directContextPromptMentionCandidates(item)
+    .some((candidate) => normalizedPrompt.includes(candidate));
+}
+
+function directContextPromptMentionCandidates(
+  item: ReturnType<typeof buildDirectContextFastPathItems>[number],
+) {
+  return uniqueStrings([
+    item.ref,
+    item.label,
+  ].filter((value): value is string => Boolean(value))
+    .flatMap((value) => selectedReferenceTokenVariants(value))
+    .map(normalizeDirectContextMentionText)
+    .filter(isStrongDirectContextMentionCandidate));
+}
+
+function normalizeDirectContextMentionText(value: string) {
+  let text = value.trim().toLowerCase();
+  try {
+    text = decodeURIComponent(text);
+  } catch {
+    // Keep the original string when it is not URI-encoded.
+  }
+  return text
+    .replace(/[`'"“”‘’<>()[\],;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isStrongDirectContextMentionCandidate(value: string) {
+  if (value.length < 8) return false;
+  if (/^(?:report|research-report|reproduction-report|runtime-context-summary|selected|current|artifact|file)$/i.test(value)) return false;
+  return /[._/-]/.test(value);
 }
 
 function readableArtifactFileRef(artifact: Record<string, unknown>) {
@@ -917,8 +967,11 @@ function selectedReportEvidenceStatusAnswerMessage(
   const prompt = request.prompt;
   if (!/(selected|reference|report|artifact|选中|引用|报告|产物)/i.test(prompt)) return undefined;
   if (!/(PDF|full[-\s]?text|arXiv|evidence|verification|verify|verified|support|completion|read|全文|证据|读取|阅读|验证|支持|完成|结论)/i.test(prompt)) return undefined;
+  const promptNamedContext = promptNamedDirectContextItems(request, context);
   const selectedRefs = selectedReferenceTokens(request);
-  const selectedContext = selectedRefs.length
+  const selectedContext = promptNamedContext.length
+    ? promptNamedContext
+    : selectedRefs.length
     ? context.filter((item) => directContextItemMatchesSelectedRef(item, selectedRefs))
     : context;
   const answerContext = (selectedContext.length ? selectedContext : context)
@@ -977,6 +1030,11 @@ function selectedReportTitle(request: GatewayRequest) {
     .map((reference) => stringField(reference.title) ?? stringField(reference.ref))
     .filter((value): value is string => Boolean(value)))
     .find(Boolean);
+}
+
+function directContextDisplayTitle(item: ReturnType<typeof buildDirectContextFastPathItems>[number]) {
+  const value = item.label ?? item.ref;
+  return value?.replace(/^(?:artifact|file|reference|research-report|runtime-context-summary)\s+(.+)$/i, '$1').trim();
 }
 
 function evidenceStatusSourceLines(sourceText: string) {
@@ -1059,8 +1117,11 @@ function selectedReportSourceText(
   request: GatewayRequest,
   context: ReturnType<typeof buildDirectContextFastPathItems>,
 ) {
+  const promptNamedContext = promptNamedDirectContextItems(request, context);
   const selectedRefs = selectedReferenceTokens(request);
-  const selectedContext = selectedRefs.length
+  const selectedContext = promptNamedContext.length
+    ? promptNamedContext
+    : selectedRefs.length
     ? context.filter((item) => directContextItemMatchesSelectedRef(item, selectedRefs))
     : context;
   return uniqueStrings((selectedContext.length ? selectedContext : context)

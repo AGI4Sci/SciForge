@@ -182,3 +182,29 @@ test('generated task preflight allows artifacts beside outputPath parent', () =>
   assert.equal(report.status, 'ready');
   assert.equal(report.issues.some((issue) => issue.id.includes('outputPath-used-as-directory')), false);
 });
+
+test('generated task preflight allows artifact refs whose id and type can be derived at boundary', () => {
+  const report = evaluateGeneratedTaskPayloadPreflight({
+    entrypoint: { path: 'tasks/generate_report.py' },
+    taskFiles: [{
+      path: 'tasks/generate_report.py',
+      language: 'python',
+      content: [
+        'import json, os, sys',
+        '_, input_path, output_path = sys.argv',
+        'output_dir = os.path.join(os.path.dirname(output_path), "research-package")',
+        'artifact_refs = [',
+        '    {"ref": os.path.join(output_dir, "README.md"), "kind": "artifact"},',
+        '    {"ref": os.path.join(output_dir, "timeline_budget.md"), "kind": "artifact"},',
+        ']',
+        'payload = {"message": "ok", "confidence": 1, "claimType": "report", "evidenceLevel": "generated", "reasoningTrace": "wrote report", "claims": [], "uiManifest": [{"componentId": "report-viewer", "artifactRef": os.path.join(output_dir, "README.md")}], "executionUnits": [], "artifacts": artifact_refs}',
+        'with open(output_path, "w", encoding="utf-8") as f:',
+        '    json.dump(payload, f)',
+      ].join('\n'),
+    }],
+  });
+
+  assert.notEqual(report.status, 'blocked');
+  assert.ok(report.issues.every((issue) => issue.severity === 'guidance'));
+  assert.ok(report.issues.some((issue) => /identity can be derived/.test(issue.reason)));
+});

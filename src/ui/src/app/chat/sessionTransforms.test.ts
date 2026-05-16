@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { guidanceQueuedEvent } from '@sciforge-ui/runtime-contract';
+import { guidanceQueuedEvent, normalizeRunTermination } from '@sciforge-ui/runtime-contract';
 import type { BackgroundCompletionRuntimeEvent, NormalizedAgentResponse, RuntimeArtifact, RuntimeExecutionUnit, SciForgeMessage, SciForgeReference, SciForgeRun, SciForgeSession, UserGoalSnapshot } from '../../domain';
 import {
   applyHistoricalUserMessageEdit,
@@ -718,6 +718,30 @@ test('merges response records and failed runs without dropping existing session 
   assert.equal(merged.artifacts[0].metadata?.title, 'new');
   assert.equal(failed.session.runs.at(-1)?.status, 'failed');
   assert.equal(failed.session.messages.at(-1)?.content, 'backend down');
+});
+
+test('failed runs expose a terminal repair projection instead of leaving results waiting', () => {
+  const failed = appendFailedRunToSession({
+    optimisticSession: session({ messages: [message('msg-user', 'user', 'run data analysis', '2026-05-07T01:00:00.000Z')] }),
+    scenarioId: 'literature-evidence-review',
+    scenarioPackageRef: { id: 'pkg', version: '1', source: 'built-in' },
+    skillPlanRef: 'skill-plan',
+    uiPlanRef: 'ui-plan',
+    prompt: 'run data analysis',
+    message: 'Load failed',
+    references: [{ id: 'ref-1', kind: 'file', title: 'input.csv', ref: 'artifact:input-csv' }],
+    goalSnapshot,
+    termination: normalizeRunTermination({ backendError: true, detail: 'Load failed' }),
+  });
+  const run = failed.session.runs.at(-1);
+  const projection = conversationProjectionMigrationAuditFixtureForRun(run);
+
+  assert.equal(run?.status, 'failed');
+  assert.equal(projection?.visibleAnswer?.status, 'repair-needed');
+  assert.equal(projection?.activeRun?.id, run?.id);
+  assert.equal(projection?.visibleAnswer?.text, 'Load failed');
+  assert.ok(projection?.recoverActions.some((action) => /Retry or continue/.test(action)));
+  assert.ok(projection?.auditRefs.includes('artifact:input-csv'));
 });
 
 test('merge helpers keep recent repair-needed refs when compacting crowded sessions', () => {

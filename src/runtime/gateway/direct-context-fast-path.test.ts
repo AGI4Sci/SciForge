@@ -931,6 +931,67 @@ test('selected reproduction report counterfactual threshold audit stays direct-c
   assert.doesNotMatch(payload.message, /Credibility verdict|Biggest remaining risk/i);
 });
 
+test('explicit filename reproduction report question overrides stale selected runtime summary', () => {
+  const reportMarkdown = [
+    '# Logistic Growth ODE Parameter Estimation Reproduction Report',
+    '',
+    '| Parameter | True Value | Fitted Value | Error (%) |',
+    '|-----------|------------|--------------|-----------|',
+    '| r         | 0.5000    | 0.4767      | 4.67%    |',
+    '| K         | 200.0    | 201.5      | 0.77%    |',
+    '| RMSE      | —          | 4.3505      | —         |',
+    '',
+    '**Reproduction success: YES**',
+    '',
+    '- r error: 4.67% (threshold 15%) → PASS',
+    '- K error: 0.77% (threshold 15%) → PASS',
+    '- RMSE: 4.3505 (threshold 15) → PASS',
+  ].join('\n');
+  const filename = 'generated-literature-8ef4985b7dc3-reproduction-report.md';
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: `只基于文件 ${filename}：如果新门槛改成 r error <= 1%、K error <= 1%、RMSE <= 3，这个 toy reproduction 是否仍可判成功？请逐项给 pass/fail，不要给泛化可信度总结。`,
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    expectedArtifactTypes: ['notebook-timeline'],
+    artifacts: [{
+      id: 'old-direct-context-summary',
+      type: 'runtime-context-summary',
+      data: {
+        markdown: 'UNSELECTED old answer says Credibility verdict: credible as a toy reproduction. Missing expected artifacts: notebook-timeline.',
+      },
+    }, {
+      id: 'generated-literature-8ef4985b7dc3-reproduction-report',
+      type: 'research-report',
+      title: filename,
+      data: { markdown: reportMarkdown },
+      metadata: {
+        reportRef: `workspace/parallel/p3/${filename}`,
+      },
+    }],
+    uiState: {
+      currentReferences: [{
+        kind: 'artifact',
+        ref: 'artifact:old-direct-context-summary',
+        title: 'old-direct-context-summary',
+      }],
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.equal(payload.executionUnits[0]?.tool, 'sciforge.direct-context-fast-path');
+  assert.equal(payload.displayIntent?.taskOutcome, 'satisfied');
+  assert.match(payload.message, /是否仍可判成功：不能/);
+  assert.match(payload.message, /r: observed error=4\.67%; new threshold<=1%; verdict=FAIL/);
+  assert.match(payload.message, /K: observed error=0\.77%; new threshold<=1%; verdict=PASS/);
+  assert.match(payload.message, /RMSE: observed value=4\.3505; new threshold<=3; verdict=FAIL/);
+  assert.doesNotMatch(payload.message, /Credibility verdict|UNSELECTED|Missing expected artifacts/i);
+  assert.deepEqual(payload.objectReferences?.map((reference) => reference.ref), [
+    'artifact:generated-literature-8ef4985b7dc3-reproduction-report',
+  ]);
+});
+
 test('selected reproduction report rerun question does not invent missing command or full path', () => {
   const reportMarkdown = [
     '# Logistic Growth Parameter Estimation - Reproduction Report',

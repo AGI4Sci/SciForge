@@ -421,9 +421,23 @@ function artifactArrayItemLiteral(source: string, item: string) {
 
 function artifactIdentityDerivableFromFields(fields: Map<string, string>) {
   const values = ['id', 'type', 'artifactType', 'ref', 'path', 'dataRef', 'fileRef', 'filename', 'title', 'label', 'kind', 'mimeType']
-    .map((key) => literalStringValue(fields.get(key)))
+    .flatMap((key) => {
+      const value = fields.get(key);
+      return [
+        literalStringValue(value),
+        artifactRefSegmentFromExpression(value),
+      ];
+    })
     .filter((value): value is string => Boolean(value));
   return values.some((value) => /[A-Za-z0-9]/.test(value) && !/^(?:file|artifact)$/i.test(value));
+}
+
+function artifactRefSegmentFromExpression(value: string | undefined) {
+  if (!value) return undefined;
+  const stringLiterals = Array.from(value.matchAll(/["']([^"']+)["']/g), (match) => match[1] ?? '')
+    .filter(Boolean);
+  return stringLiterals.find((entry) => /\.[A-Za-z0-9]{1,8}$/.test(entry))
+    ?? stringLiterals.find((entry) => /[\\/]/.test(entry));
 }
 
 function parseTopLevelObjectFields(objectText: string): Map<string, string> {

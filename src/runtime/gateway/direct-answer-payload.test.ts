@@ -51,6 +51,35 @@ test('workspace task payload coercion derives required envelope fields from usef
   assert.deepEqual(schemaErrors(payload), []);
 });
 
+test('workspace task payload coercion normalizes loose generated artifact refs', () => {
+  const payload = coerceWorkspaceTaskPayload({
+    message: 'Research package generated successfully.',
+    confidence: 0.95,
+    claimType: 'research-package',
+    evidenceLevel: 'generated',
+    reasoningTrace: 'Generated markdown files beside outputPath.',
+    claims: [],
+    uiManifest: [
+      { componentId: 'report-viewer', artifactRef: '/tmp/research-package/README.md' },
+      { componentId: 'notebook-timeline', artifactRef: '/tmp/research-package/timeline_budget.md' },
+    ],
+    executionUnits: [{ id: 'generate-package', status: 'done', tool: 'workspace-task' }],
+    artifacts: [
+      { ref: '/tmp/research-package/README.md', kind: 'artifact' },
+      { ref: '/tmp/research-package/timeline_budget.md', kind: 'artifact' },
+    ],
+  });
+
+  assert.ok(payload);
+  assert.equal(payload.artifacts[0]?.id, 'README');
+  assert.equal(payload.artifacts[0]?.type, 'research-report');
+  assert.equal(payload.artifacts[1]?.id, 'timeline_budget');
+  assert.equal(payload.artifacts[1]?.type, 'notebook-timeline');
+  assert.equal(payload.uiManifest[0]?.artifactRef, 'README');
+  assert.equal(payload.uiManifest[1]?.artifactRef, 'timeline_budget');
+  assert.deepEqual(schemaErrors(payload), []);
+});
+
 test('structured direct answers without displayIntent default to satisfied Projection outcome', () => {
   const payload = coerceWorkspaceTaskPayload({
     message: 'ConversationProjection is the single source of truth for user-visible output.',

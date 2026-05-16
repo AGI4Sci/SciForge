@@ -63,6 +63,9 @@ test('skills runtime policy owns AgentServer retrieval and task prompt snippets'
   assert.match(taskPolicy, /Generated Python dependency contract/);
   assert.match(taskPolicy, /DataFrame\.to_markdown requires tabulate/);
   assert.match(taskPolicy, /ToolPayload write/);
+  assert.match(taskPolicy, /Generated Python statistics contract/);
+  assert.match(taskPolicy, /X = X\.astype\(float\)/);
+  assert.match(taskPolicy, /failed-with-reason ToolPayload/);
   assert.match(taskPolicy, /every artifact should include stable id and type/);
   assert.match(taskPolicy, /claims, uiManifest, executionUnits, and artifacts as arrays/);
   assert.match(taskPolicy, /never use an object descriptor/);

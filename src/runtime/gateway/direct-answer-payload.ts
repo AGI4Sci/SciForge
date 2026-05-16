@@ -554,9 +554,11 @@ function artifactIdFromRef(ref: string | undefined) {
 function artifactTypeFromRef(ref: string | undefined) {
   const id = artifactIdFromRef(ref)?.toLowerCase();
   if (!id) return undefined;
-  if (/research-report|report|summary|review/.test(id)) return 'research-report';
+  if (/research-report|report|summary|review|readme|project[-_]?brief|brief/.test(id)) return 'research-report';
   if (/paper-list|papers|bibliography|references/.test(id)) return 'paper-list';
   if (/evidence-matrix|evidence|matrix/.test(id)) return 'evidence-matrix';
+  if (/timeline|budget/.test(id)) return 'notebook-timeline';
+  if (/risk[-_]?register|decision[-_]?log/.test(id)) return 'evidence-matrix';
   if (/\.?csv$/.test(ref ?? '')) return 'data-table';
   if (/\.?md$|\.?markdown$/.test(ref ?? '')) return 'markdown';
   return id;
