@@ -545,7 +545,7 @@ export async function buildGeneratedTaskRunInputLifecycle(
         policy: 'provider-first',
         rules: [
           'Import sciforge_task from the generated task entrypoint directory for input loading, ToolPayload writing, and provider route inspection.',
-          'When capabilityProviderRoutes declares a ready capability route, call invoke_capability(task_input, capabilityId, input). invoke_provider is the web provider alias for web_search/web_fetch.',
+          'When capabilityProviderRoutes declares a ready capability route, call invoke_capability(task_input, capabilityId, input). invoke_provider remains a compatibility alias for provider-backed web capabilities.',
           'Do not call requests, urllib, fetch, httpx, aiohttp, or Node http/https for web work that has a ready SciForge provider route.',
           'After invoke_capability, check provider_result_is_empty(result); if empty, write_payload(output_path, empty_result_payload(...)) with refine/recover actions instead of waiting or repairing indefinitely.',
           'If a provider route is unavailable, empty, unauthorized, or rate limited, write an honest repair-needed or failed-with-reason ToolPayload with recoverActions.',
@@ -568,11 +568,20 @@ function providerRouteRequestForGeneratedTask(request: GatewayRequest, expectedA
     selectedToolIds.add('web_search');
     selectedToolIds.add('web_fetch');
   }
+  if (browserProviderRoutesRequested(request, expectedArtifacts)) {
+    selectedToolIds.add('browser_search');
+    selectedToolIds.add('browser_fetch');
+  }
   if (!selectedToolIds.size) return request;
   return {
     ...request,
     selectedToolIds: [...selectedToolIds],
   };
+}
+
+function browserProviderRoutesRequested(request: GatewayRequest, expectedArtifacts: string[]): boolean {
+  const prompt = `${request.prompt ?? ''} ${expectedArtifacts.join(' ')}`;
+  return /(?:browser|chromium|rendered|javascript|\bjs\b|dynamic page|single-page|spa|网页|浏览器|渲染|动态页面|打开网页|下载|pdf|full[-\s]?text|全文|阅读全文)/i.test(prompt);
 }
 
 function providerInvocationForGeneratedTask(providerRoutes: ReturnType<typeof capabilityProviderRoutesForGatewayInvocation>) {

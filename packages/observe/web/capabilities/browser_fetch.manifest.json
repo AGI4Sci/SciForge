@@ -1,0 +1,88 @@
+{
+  "contract": "sciforge.capability-manifest.v1",
+  "id": "browser_fetch",
+  "name": "browser fetch",
+  "version": "0.1.0",
+  "ownerPackage": "packages/observe/web",
+  "kind": "observe",
+  "brief": "Open a public URL through a real headless browser and return rendered text, links, status, and provider diagnostics.",
+  "routingTags": ["web", "fetch", "browser", "rendered", "javascript", "download", "url", "html"],
+  "domains": ["web", "knowledge", "literature"],
+  "requiredCapabilities": ["browser_fetch"],
+  "inputSchema": {
+    "type": "object",
+    "required": ["url"],
+    "properties": {
+      "url": { "type": "string" },
+      "maxChars": { "type": "number", "minimum": 1 },
+      "timeoutMs": { "type": "number", "minimum": 1000 }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "required": ["url", "finalUrl", "status", "text"],
+    "properties": {
+      "url": { "type": "string" },
+      "finalUrl": { "type": "string" },
+      "status": { "type": "number" },
+      "title": { "type": "string" },
+      "text": { "type": "string" },
+      "links": { "type": "array" },
+      "providerDiagnostics": { "type": "object" }
+    }
+  },
+  "sideEffects": ["network", "external-api", "browser"],
+  "safety": {
+    "risk": "medium",
+    "dataScopes": ["public-web", "workspace-refs"]
+  },
+  "examples": [
+    {
+      "title": "fetch a rendered page",
+      "inputRef": "capability:browser_fetch/input.example",
+      "outputRef": "capability:browser_fetch/output.example"
+    }
+  ],
+  "validators": [
+    {
+      "id": "browser_fetch.schema",
+      "kind": "schema",
+      "contractRef": "browser_fetch#outputSchema"
+    }
+  ],
+  "repairHints": [
+    {
+      "failureCode": "browser-unavailable",
+      "summary": "Report that the browser provider is unavailable instead of synthesizing rendered-page evidence.",
+      "recoverActions": ["record-provider-status", "install-browser-runtime", "retry-browser-provider"]
+    },
+    {
+      "failureCode": "fetch-failed",
+      "summary": "Return browser-neutral fetch diagnostics such as timeout, permission denied, rate limit, blocked navigation, or unsupported content.",
+      "recoverActions": ["record-fetch-diagnostics", "try-web-fetch-provider", "continue-with-metadata"]
+    }
+  ],
+  "providers": [
+    {
+      "id": "sciforge.web-worker.browser_fetch",
+      "label": "SciForge web worker browser_fetch",
+      "kind": "external",
+      "contractRef": "packages/observe/web/capabilities/browser_fetch.manifest.json",
+      "requiredConfig": [],
+      "priority": 2,
+      "capabilityId": "browser_fetch",
+      "source": "package",
+      "transport": "http",
+      "workerId": "sciforge.web-worker",
+      "runtimeLocation": "packages/workers/web-worker",
+      "permissions": ["network", "browser"],
+      "auth": { "required": false },
+      "fallbackEligible": true,
+      "status": "unknown"
+    }
+  ],
+  "lifecycle": {
+    "status": "draft",
+    "sourceRef": "packages/observe/web/capabilities/browser_fetch.manifest.json"
+  }
+}

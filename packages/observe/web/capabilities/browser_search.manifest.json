@@ -1,0 +1,87 @@
+{
+  "contract": "sciforge.capability-manifest.v1",
+  "id": "browser_search",
+  "name": "browser search",
+  "version": "0.1.0",
+  "ownerPackage": "packages/observe/web",
+  "kind": "observe",
+  "brief": "Search public web pages through a real headless browser and return ranked rendered result refs with provider diagnostics.",
+  "routingTags": ["web", "search", "browser", "rendered", "latest", "internet"],
+  "domains": ["web", "knowledge", "literature"],
+  "requiredCapabilities": ["browser_search"],
+  "inputSchema": {
+    "type": "object",
+    "required": ["query"],
+    "properties": {
+      "query": { "type": "string" },
+      "limit": { "type": "number", "minimum": 1, "maximum": 10 },
+      "region": { "type": "string" },
+      "engine": { "type": "string", "enum": ["bing", "duckduckgo"] },
+      "timeoutMs": { "type": "number", "minimum": 1000 }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "required": ["query", "results"],
+    "properties": {
+      "query": { "type": "string" },
+      "finalUrl": { "type": "string" },
+      "results": { "type": "array" },
+      "providerDiagnostics": { "type": "object" }
+    }
+  },
+  "sideEffects": ["network", "external-api", "browser"],
+  "safety": {
+    "risk": "medium",
+    "dataScopes": ["public-web", "workspace-refs"]
+  },
+  "examples": [
+    {
+      "title": "search with a rendered browser",
+      "inputRef": "capability:browser_search/input.example",
+      "outputRef": "capability:browser_search/output.example"
+    }
+  ],
+  "validators": [
+    {
+      "id": "browser_search.schema",
+      "kind": "schema",
+      "contractRef": "browser_search#outputSchema"
+    }
+  ],
+  "repairHints": [
+    {
+      "failureCode": "browser-unavailable",
+      "summary": "Report that the browser provider is unavailable instead of synthesizing browser-observed evidence.",
+      "recoverActions": ["record-provider-status", "install-browser-runtime", "retry-browser-provider"]
+    },
+    {
+      "failureCode": "empty-result",
+      "summary": "Report the empty rendered search result with query/provider diagnostics before broadening search terms.",
+      "recoverActions": ["record-empty-result", "broaden-query", "try-web-search-provider"]
+    }
+  ],
+  "providers": [
+    {
+      "id": "sciforge.web-worker.browser_search",
+      "label": "SciForge web worker browser_search",
+      "kind": "external",
+      "contractRef": "packages/observe/web/capabilities/browser_search.manifest.json",
+      "requiredConfig": [],
+      "priority": 2,
+      "capabilityId": "browser_search",
+      "source": "package",
+      "transport": "http",
+      "workerId": "sciforge.web-worker",
+      "runtimeLocation": "packages/workers/web-worker",
+      "permissions": ["network", "browser"],
+      "auth": { "required": false },
+      "fallbackEligible": true,
+      "status": "unknown"
+    }
+  ],
+  "lifecycle": {
+    "status": "draft",
+    "sourceRef": "packages/observe/web/capabilities/browser_search.manifest.json"
+  }
+}

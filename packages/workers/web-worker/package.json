@@ -15,7 +15,8 @@
     "sciforge-web-worker": "./src/cli.ts"
   },
   "dependencies": {
-    "@sciforge/tool-worker-contract": "^0.1.0"
+    "@sciforge/tool-worker-contract": "^0.1.0",
+    "playwright-core": "^1.59.1"
   },
   "exports": {
     ".": "./src/index.ts",

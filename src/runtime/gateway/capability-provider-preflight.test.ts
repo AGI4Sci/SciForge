@@ -35,6 +35,23 @@ test('capability provider preflight recognizes manifest-declared web search requ
   assert.equal(preflight.ok, false);
 });
 
+test('capability provider preflight infers browser routes for rendered page work', () => {
+  const preflight = capabilityProviderPreflight({
+    skillDomain: 'literature',
+    prompt: 'Open the rendered JavaScript webpage in a browser and extract the full text.',
+    artifacts: [],
+    uiState: {
+      capabilityProviderAvailability: [
+        { id: 'sciforge.web-worker.browser_search', capabilityId: 'browser_search', available: true, status: 'available' },
+        { id: 'sciforge.web-worker.browser_fetch', capabilityId: 'browser_fetch', available: true, status: 'available' },
+      ],
+    },
+  } as GatewayRequest);
+
+  assert.deepEqual(preflight.requiredCapabilityIds, ['browser_fetch', 'browser_search']);
+  assert.equal(preflight.ok, true);
+});
+
 test('AgentServer discovery maps worker tool routes into provider availability', async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;

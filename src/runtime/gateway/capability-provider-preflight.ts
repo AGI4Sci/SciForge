@@ -234,7 +234,17 @@ function inferRequiredCapabilityIds(request: GatewayRequest): string[] {
   }
   for (const capabilityId of structuredRequiredCapabilityIds(request)) ids.add(capabilityId);
   if (request.externalIoRequired === true) ids.add('web_search');
+  if (browserProviderIntent(request)) {
+    ids.add('browser_search');
+    ids.add('browser_fetch');
+  }
   return [...ids].sort();
+}
+
+function browserProviderIntent(request: GatewayRequest): boolean {
+  const prompt = stringField(request.prompt) ?? '';
+  const selected = [...(request.selectedToolIds ?? []), ...toStringList(request.uiState?.selectedToolIds)].join(' ');
+  return /(?:browser|chromium|rendered|javascript|\bjs\b|dynamic page|single-page|spa|网页|浏览器|渲染|动态页面|打开网页|下载|pdf|full[-\s]?text|全文|阅读全文)/i.test(`${prompt} ${selected}`);
 }
 
 function requiredCapabilityIdsForSelectedTool(toolId: string) {

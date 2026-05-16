@@ -387,6 +387,8 @@ function defaultPackageCapabilityManifestDiscovery(): PackageCapabilityManifestD
       manifests: [
         loadJsonFile<CapabilityManifest>('../../packages/observe/web/capabilities/web_search.manifest.json'),
         loadJsonFile<CapabilityManifest>('../../packages/observe/web/capabilities/web_fetch.manifest.json'),
+        loadJsonFile<CapabilityManifest>('../../packages/observe/web/capabilities/browser_search.manifest.json'),
+        loadJsonFile<CapabilityManifest>('../../packages/observe/web/capabilities/browser_fetch.manifest.json'),
       ],
     }],
   };

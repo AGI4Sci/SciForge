@@ -1,7 +1,7 @@
 import type { ToolInvokeRequest, ToolInvokeResponse, ToolWorker } from '../../../contracts/tool-worker/src/index';
 import { validateToolInput } from '../../../contracts/tool-worker/src/index';
 import { webWorkerManifest } from './manifest';
-import { RetryableToolError, webFetch, webSearch } from './web-tools';
+import { browserFetch, browserSearch, RetryableToolError, webFetch, webSearch } from './web-tools';
 
 export function createWebWorker(): ToolWorker {
   return {
@@ -31,13 +31,21 @@ export async function invokeWebTool(request: ToolInvokeRequest): Promise<ToolInv
   }
 
   try {
-    const output = request.toolId === 'web_search' ? await webSearch(request.input) : await webFetch(request.input);
+    const output = await invokeWebToolHandler(request.toolId, request.input);
     return { ok: true, requestId: request.requestId, output };
   } catch (error) {
     const retryable = error instanceof RetryableToolError;
     const message = error instanceof Error ? error.message : 'Unknown web worker error';
     return failure(request, retryable ? 'network_error' : 'web_worker_error', message, retryable);
   }
+}
+
+async function invokeWebToolHandler(toolId: string, input: ToolInvokeRequest['input']) {
+  if (toolId === 'web_search') return webSearch(input);
+  if (toolId === 'web_fetch') return webFetch(input);
+  if (toolId === 'browser_search') return browserSearch(input);
+  if (toolId === 'browser_fetch') return browserFetch(input);
+  throw new Error(`Unknown tool: ${toolId}`);
 }
 
 function failure(request: ToolInvokeRequest, code: string, message: string, retryable = false): ToolInvokeResponse {

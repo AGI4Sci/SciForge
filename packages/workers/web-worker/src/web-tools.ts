@@ -1,4 +1,5 @@
 import type { JsonObject } from '../../../contracts/tool-worker/src/index';
+import type { Page } from 'playwright-core';
 
 export interface WebSearchResult extends JsonObject {
   title: string;
@@ -6,10 +7,28 @@ export interface WebSearchResult extends JsonObject {
   snippet: string;
 }
 
+interface ArxivSearchResponse {
+  results: WebSearchResult[];
+  searchQuery: string;
+  dateRange?: JsonObject;
+}
+
+export interface BrowserAutomationForTests {
+  search(input: JsonObject): Promise<JsonObject>;
+  fetch(input: JsonObject): Promise<JsonObject>;
+}
+
+let browserAutomationForTests: BrowserAutomationForTests | undefined;
+
+export function setBrowserAutomationForTests(provider: BrowserAutomationForTests | undefined): void {
+  browserAutomationForTests = provider;
+}
+
 export async function webSearch(input: JsonObject): Promise<JsonObject> {
   const rawQuery = requiredString(input.query, 'query');
   const query = normalizeSearchQuery(rawQuery);
   const limit = clampNumber(input.limit ?? input.maxResults, 5, 1, 10);
+  const now = typeof input.now === 'string' && input.now.trim() ? new Date(input.now) : new Date();
   const region = typeof input.region === 'string' && input.region.length > 0 ? input.region : 'us-en';
   const fallbackErrors: string[] = [];
 
@@ -31,22 +50,44 @@ export async function webSearch(input: JsonObject): Promise<JsonObject> {
   const arxivRequested = shouldTryArxivSearch(query);
   if (arxivRequested) {
     try {
-      const arxivResults = await arxivSearch(query, limit);
-      if (arxivResults.length > 0) {
+      const arxivResponse = await arxivSearch(query, limit, now);
+      if (arxivResponse.results.length > 0) {
         return {
           query,
           rawQuery,
           provider: 'arxiv-api',
+          providerQuery: arxivResponse.searchQuery,
+          ...(arxivResponse.dateRange ? { dateRange: arxivResponse.dateRange } : {}),
           fallbackFrom: 'duckduckgo-html',
           fallbackReasons: fallbackErrors,
-          results: arxivResults,
+          results: arxivResponse.results,
         };
       }
-      fallbackErrors.push('arxiv-api returned no records');
+      fallbackErrors.push(`arxiv-api returned no records for ${arxivResponse.searchQuery}`);
     } catch (error) {
       fallbackErrors.push(`arxiv-api: ${errorMessage(error)}`);
     }
     throw new RetryableToolError(`arxiv-api could not satisfy explicit arXiv query: ${fallbackErrors.join('; ')}`);
+  }
+
+  try {
+    const browserResponse = await browserSearch({ query, rawQuery, limit, region });
+    const browserResults = Array.isArray(browserResponse.results)
+      ? browserResponse.results as unknown as WebSearchResult[]
+      : [];
+    if (browserResults.length > 0) {
+      return {
+        ...browserResponse,
+        query,
+        rawQuery,
+        fallbackFrom: 'duckduckgo-html',
+        fallbackReasons: fallbackErrors,
+        results: browserResults,
+      };
+    }
+    fallbackErrors.push('playwright-chromium browser_search returned no parseable results');
+  } catch (error) {
+    fallbackErrors.push(`playwright-chromium browser_search: ${errorMessage(error)}`);
   }
 
   try {
@@ -86,6 +127,64 @@ export async function webSearch(input: JsonObject): Promise<JsonObject> {
   throw new RetryableToolError(`All search providers failed or returned no records: ${fallbackErrors.join('; ')}`);
 }
 
+export async function browserSearch(input: JsonObject): Promise<JsonObject> {
+  const rawQuery = requiredString(input.rawQuery ?? input.query, 'query');
+  const query = normalizeSearchQuery(requiredString(input.query ?? rawQuery, 'query'));
+  const limit = clampNumber(input.limit ?? input.maxResults, 5, 1, 10);
+  const region = typeof input.region === 'string' && input.region.length > 0 ? input.region : 'us-en';
+  const engine = typeof input.engine === 'string' && /duckduckgo/i.test(input.engine) ? 'duckduckgo' : 'bing';
+  const timeoutMs = clampNumber(input.timeoutMs, 25000, 5000, 60000);
+  const request: JsonObject = { rawQuery, query, limit, region, engine, timeoutMs };
+  if (browserAutomationForTests) {
+    return browserAutomationForTests.search(request);
+  }
+
+  const searchUrl = browserSearchUrl(engine, query, region);
+
+  return withBrowserPage(timeoutMs, async (page) => {
+    const response = await page.goto(searchUrl.toString(), { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+    await waitForBrowserSettle(page, timeoutMs);
+    const html = await page.content();
+    const parsedResults = engine === 'duckduckgo'
+      ? parseDuckDuckGoResults(html)
+      : await browserBingResults(page);
+    const anchorResults = parsedResults.length > 0 ? [] : await browserAnchorResults(page);
+    const results = (parsedResults.length > 0 ? parsedResults : anchorResults).slice(0, limit);
+    return {
+      query,
+      rawQuery,
+      provider: 'playwright-chromium',
+      engine: engine === 'duckduckgo' ? 'duckduckgo-html-rendered' : 'bing-rendered',
+      searchUrl: searchUrl.toString(),
+      finalUrl: page.url(),
+      status: response?.status() ?? 0,
+      ok: response?.ok() ?? false,
+      title: cleanText(await page.title().catch(() => '')),
+      rendered: true,
+      results,
+    };
+  });
+}
+
+function browserSearchUrl(engine: 'bing' | 'duckduckgo', query: string, region: string): URL {
+  if (engine === 'duckduckgo') {
+    const searchUrl = new URL('https://duckduckgo.com/html/');
+    searchUrl.searchParams.set('q', query);
+    searchUrl.searchParams.set('kl', region);
+    return searchUrl;
+  }
+  const searchUrl = new URL('https://www.bing.com/search');
+  searchUrl.searchParams.set('q', query);
+  if (region.startsWith('us')) {
+    searchUrl.searchParams.set('cc', 'US');
+    searchUrl.searchParams.set('mkt', 'en-US');
+    searchUrl.searchParams.set('setlang', 'en-US');
+  } else {
+    searchUrl.searchParams.set('setlang', region);
+  }
+  return searchUrl;
+}
+
 async function duckDuckGoSearch(query: string, limit: number, region: string): Promise<WebSearchResult[]> {
   const searchUrl = new URL('https://duckduckgo.com/html/');
   searchUrl.searchParams.set('q', query);
@@ -102,9 +201,10 @@ async function duckDuckGoSearch(query: string, limit: number, region: string): P
   return parseDuckDuckGoResults(html).slice(0, limit);
 }
 
-async function arxivSearch(query: string, limit: number): Promise<WebSearchResult[]> {
+async function arxivSearch(query: string, limit: number, now: Date): Promise<ArxivSearchResponse> {
   const searchUrl = new URL('https://export.arxiv.org/api/query');
-  searchUrl.searchParams.set('search_query', arxivSearchQuery(query));
+  const arxivQuery = arxivSearchQuery(query, now);
+  searchUrl.searchParams.set('search_query', arxivQuery.searchQuery);
   searchUrl.searchParams.set('start', '0');
   searchUrl.searchParams.set('max_results', String(limit));
   searchUrl.searchParams.set('sortBy', 'submittedDate');
@@ -117,10 +217,17 @@ async function arxivSearch(query: string, limit: number): Promise<WebSearchResul
   if (!response.ok) {
     throw new RetryableToolError(`arXiv API returned HTTP ${response.status}`);
   }
-  return parseArxivResults(xml).slice(0, limit);
+  return {
+    results: parseArxivResults(xml).slice(0, limit),
+    searchQuery: arxivQuery.searchQuery,
+    dateRange: arxivQuery.dateRange,
+  };
 }
 
 export async function webFetch(input: JsonObject): Promise<JsonObject> {
+  if (input.rendered === true || input.browser === true) {
+    return browserFetch(input);
+  }
   const url = normalizeHttpUrl(requiredString(input.url, 'url'));
   const maxChars = clampNumber(input.maxChars, 12000, 100, 50000);
   const response = await fetchWithTimeout(url, 20000, {
@@ -147,11 +254,150 @@ export async function webFetch(input: JsonObject): Promise<JsonObject> {
   return result;
 }
 
+export async function browserFetch(input: JsonObject): Promise<JsonObject> {
+  const url = normalizeHttpUrl(requiredString(input.url, 'url'));
+  const maxChars = clampNumber(input.maxChars, 12000, 100, 50000);
+  const timeoutMs = clampNumber(input.timeoutMs, 25000, 5000, 60000);
+  const request: JsonObject = { url, maxChars, timeoutMs };
+  if (browserAutomationForTests) {
+    return browserAutomationForTests.fetch(request);
+  }
+
+  return withBrowserPage(timeoutMs, async (page) => {
+    const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+    await waitForBrowserSettle(page, timeoutMs);
+    const rawText = await page.innerText('body', { timeout: Math.min(5000, timeoutMs) })
+      .catch(async () => htmlToText(await page.content()));
+    const text = cleanText(rawText);
+    const title = cleanText(await page.title().catch(() => ''));
+    const links = await browserLinks(page);
+    const headers = response?.headers() ?? {};
+    const result: JsonObject = {
+      url,
+      finalUrl: page.url(),
+      status: response?.status() ?? 0,
+      ok: response?.ok() ?? false,
+      contentType: headers['content-type'] ?? '',
+      provider: 'playwright-chromium',
+      rendered: true,
+      text: text.slice(0, maxChars),
+      truncated: text.length > maxChars,
+      links,
+    };
+    if (title) {
+      result.title = title;
+    }
+    return result;
+  });
+}
+
 export class RetryableToolError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'RetryableToolError';
   }
+}
+
+async function withBrowserPage<T>(timeoutMs: number, run: (page: Page) => Promise<T>): Promise<T> {
+  let chromium: Awaited<typeof import('playwright-core')>['chromium'];
+  try {
+    ({ chromium } = await import('playwright-core'));
+  } catch (error) {
+    throw new RetryableToolError(`Playwright browser automation is unavailable: ${errorMessage(error)}`);
+  }
+
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+  try {
+    browser = await chromium.launch({
+      headless: true,
+      args: ['--disable-dev-shm-usage', '--no-sandbox'],
+    });
+    const context = await browser.newContext({
+      locale: 'en-US',
+      viewport: { width: 1365, height: 900 },
+      userAgent: 'SciForgeBrowserWorker/0.1 (+https://sciforge.local)',
+    });
+    try {
+      const page = await context.newPage();
+      page.setDefaultNavigationTimeout(timeoutMs);
+      page.setDefaultTimeout(timeoutMs);
+      return await run(page);
+    } finally {
+      await context.close().catch(() => undefined);
+    }
+  } catch (error) {
+    if (error instanceof RetryableToolError) throw error;
+    throw new RetryableToolError(`Playwright Chromium browser automation failed: ${errorMessage(error)}`);
+  } finally {
+    await browser?.close().catch(() => undefined);
+  }
+}
+
+async function waitForBrowserSettle(page: Page, timeoutMs: number): Promise<void> {
+  await page.waitForLoadState('networkidle', { timeout: Math.min(5000, timeoutMs) }).catch(() => undefined);
+}
+
+async function browserBingResults(page: Page): Promise<WebSearchResult[]> {
+  const rows = await page.$$eval('li.b_algo', (nodes) => nodes.map((node) => {
+    const titleNode = node.querySelector('h2');
+    const anchor = titleNode?.querySelector('a[href]') ?? node.querySelector('a[href]');
+    const snippetNode = node.querySelector('.b_caption p') ?? node.querySelector('p');
+    return {
+      title: (titleNode?.textContent ?? anchor?.textContent ?? '').replace(/\s+/g, ' ').trim(),
+      url: anchor instanceof HTMLAnchorElement ? anchor.href : '',
+      snippet: (snippetNode?.textContent ?? '').replace(/\s+/g, ' ').trim(),
+    };
+  }));
+  const seen = new Set<string>();
+  const results: WebSearchResult[] = [];
+  for (const row of rows) {
+    if (!row.title || !/^https?:\/\//i.test(row.url) || seen.has(row.url)) continue;
+    seen.add(row.url);
+    results.push({
+      title: cleanText(row.title),
+      url: row.url,
+      snippet: cleanText(row.snippet),
+    });
+  }
+  return results;
+}
+
+async function browserAnchorResults(page: Page): Promise<WebSearchResult[]> {
+  const anchors = await page.$$eval('a[href]', (nodes) => nodes.map((node) => {
+    const anchor = node as HTMLAnchorElement;
+    const title = (anchor.textContent ?? '').replace(/\s+/g, ' ').trim();
+    const url = anchor.href;
+    return { title, url };
+  }));
+  const seen = new Set<string>();
+  const results: WebSearchResult[] = [];
+  for (const anchor of anchors) {
+    const url = decodeDuckDuckGoUrl(anchor.url);
+    if (!anchor.title || !/^https?:\/\//i.test(url) || seen.has(url)) continue;
+    if (/duckduckgo\.com|javascript:|#$/i.test(url)) continue;
+    seen.add(url);
+    results.push({ title: cleanText(anchor.title), url, snippet: '' });
+  }
+  return results;
+}
+
+async function browserLinks(page: Page): Promise<JsonObject[]> {
+  const rows = await page.$$eval('a[href]', (nodes) => nodes.map((node) => {
+    const anchor = node as HTMLAnchorElement;
+    return {
+      text: (anchor.textContent ?? '').replace(/\s+/g, ' ').trim(),
+      url: anchor.href,
+    };
+  }));
+  const seen = new Set<string>();
+  const links: JsonObject[] = [];
+  for (const row of rows) {
+    if (!row.url || !/^https?:\/\//i.test(row.url) || seen.has(row.url)) continue;
+    seen.add(row.url);
+    links.push({ text: cleanText(row.text).slice(0, 160), url: row.url });
+    if (links.length >= 40) break;
+  }
+  return links;
 }
 
 function parseDuckDuckGoResults(html: string): WebSearchResult[] {
@@ -288,18 +534,75 @@ function shouldTryArxivSearch(query: string): boolean {
   return /\barxiv\b/i.test(query) || /\b\d{4}\.\d{4,5}(?:v\d+)?\b/i.test(query);
 }
 
-function arxivSearchQuery(query: string): string {
+function arxivSearchQuery(query: string, now: Date): { searchQuery: string; dateRange?: JsonObject } {
   const arxivId = query.match(/\b\d{4}\.\d{4,5}(?:v\d+)?\b/i)?.[0];
   if (arxivId) {
-    return `id:${arxivId}`;
+    return { searchQuery: `id:${arxivId}` };
   }
+  const dateRange = parseArxivDateRange(query, Number.isNaN(now.valueOf()) ? new Date() : now);
   const terms = arxivTopicQuery(query)
     .replace(/-/g, ' ')
     .split(/\s+/)
     .map((term) => term.replace(/^[._-]+|[._-]+$/g, ''))
-    .filter((term) => term.length > 1 && !ARXIV_QUERY_STOPWORDS.has(term.toLowerCase()))
+    .filter((term) => term.length > 1 && !/^\d+$/.test(term) && !ARXIV_QUERY_STOPWORDS.has(term.toLowerCase()))
     .slice(0, 8);
-  return terms.length > 0 ? terms.map((term) => `all:${term}`).join(' AND ') : `all:${query}`;
+  const topicQuery = terms.length > 0 ? terms.map((term) => `all:${term}`).join(' AND ') : `all:${query}`;
+  if (!dateRange) {
+    return { searchQuery: topicQuery };
+  }
+  return {
+    searchQuery: `${topicQuery} AND submittedDate:[${dateRange.from} TO ${dateRange.to}]`,
+    dateRange,
+  };
+}
+
+function parseArxivDateRange(query: string, now: Date): JsonObject | undefined {
+  const anchor = dateAnchor(query) ?? now;
+  const daysMatch = query.match(/\b(?:last|past|recent)\s+(\d{1,3})\s+(?:day|days)\b/i)
+    ?? query.match(/最近\s*(\d{1,3})\s*天/);
+  if (daysMatch?.[1]) {
+    const days = Math.max(1, Math.min(365, Number.parseInt(daysMatch[1], 10)));
+    return arxivSubmittedDateRange(addUtcDays(anchor, -(days - 1)), anchor);
+  }
+  const hoursMatch = query.match(/\b(?:last|past|recent)\s+(\d{1,3})\s+(?:hour|hours)\b/i)
+    ?? query.match(/最近\s*(\d{1,3})\s*(?:小时|小時)/);
+  if (hoursMatch?.[1]) {
+    const hours = Math.max(1, Math.min(24 * 365, Number.parseInt(hoursMatch[1], 10)));
+    return arxivSubmittedDateRange(addUtcDays(anchor, -(Math.ceil(hours / 24) - 1)), anchor);
+  }
+  if (/\btoday\b/i.test(query) || /今天/.test(query)) {
+    return arxivSubmittedDateRange(anchor, anchor);
+  }
+  return undefined;
+}
+
+function dateAnchor(query: string): Date | undefined {
+  const match = query.match(/\b(?:today\s+is\s+)?(20\d{2})-(\d{2})-(\d{2})\b/i);
+  if (!match) return undefined;
+  return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+}
+
+function arxivSubmittedDateRange(from: Date, to: Date): JsonObject {
+  return {
+    from: `${formatUtcDate(from)}0000`,
+    to: `${formatUtcDate(to)}2359`,
+    fromDate: isoDate(from),
+    toDate: isoDate(to),
+  };
+}
+
+function addUtcDays(date: Date, days: number): Date {
+  const next = new Date(date);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function formatUtcDate(date: Date): string {
+  return isoDate(date).replace(/-/g, '');
+}
+
+function isoDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
 }
 
 const ARXIV_QUERY_STOPWORDS = new Set([
@@ -384,6 +687,7 @@ const ARXIV_QUERY_STOPWORDS = new Set([
 
 function arxivTopicQuery(query: string): string {
   const topic = query
+    .replace(/\b(?:today\s+is\s+)?20\d{2}-\d{2}-\d{2}\b/gi, ' ')
     .replace(/\b(?:arxiv|preprint|paper|papers|article|articles|pdf|full[-\s]?text|latest|recent|today|yesterday|last\s+\d+\s+(?:day|days|week|weeks|month|months))\b/gi, ' ')
     .replace(/\b(?:choose|select|compare|report|matrix|evidence|source|sources|authors?|title|titles?|date|dates?|link|links?)\b/gi, ' ')
     .replace(/[^\p{L}\p{N}._-]+/gu, ' ')

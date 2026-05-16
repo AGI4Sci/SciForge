@@ -15,7 +15,9 @@
     ".": "./manifest.ts",
     "./manifest": "./manifest.ts",
     "./web_search": "./capabilities/web_search.manifest.json",
-    "./web_fetch": "./capabilities/web_fetch.manifest.json"
+    "./web_fetch": "./capabilities/web_fetch.manifest.json",
+    "./browser_search": "./capabilities/browser_search.manifest.json",
+    "./browser_fetch": "./capabilities/browser_fetch.manifest.json"
   },
   "files": [
     "capabilities",

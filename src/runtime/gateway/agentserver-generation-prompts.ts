@@ -384,7 +384,7 @@ function capabilityFirstPolicyForAgentServer(routeSummary: Record<string, unknow
       '    capability_id = task_input.get("capabilityFirstPolicy", {}).get("readyCapabilityIds", ["web_search"])[0]',
       '    provider_input = {"query": task_input.get("prompt", ""), "maxResults": 3}',
       '    results = invoke_capability(task_input, capability_id, provider_input)',
-      '    # For URL reads use invoke_capability(task_input, "web_fetch", {"url": url, "maxChars": 12000}).',
+      '    # For URL reads use invoke_capability(task_input, "web_fetch", {"url": url, "maxChars": 12000}); use browser_fetch for rendered/JavaScript pages.',
       'except ProviderInvocationError as error:',
       '    write_payload(output_path, failed_with_reason_payload(str(error), task_input))',
       '    raise SystemExit(0)',

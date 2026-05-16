@@ -251,7 +251,7 @@ function generatedTaskProviderFirstNetworkIssuesForSource(
     evidence: clipEvidence(evidence.join(', ')),
     reason,
     recoverActions: [
-      'Regenerate the task to use the SciForge provider route contract for web_search/web_fetch work before any direct external network call or unavailable provider SDK import.',
+      'Regenerate the task to use the SciForge provider route contract for web_search/web_fetch/browser_search/browser_fetch work before any direct external network call or unavailable provider SDK import.',
       'Import sciforge_task from the entrypoint directory and inspect capabilityProviderRoutes/provider-first policy from task input.',
       'If the provider returns empty results or is unavailable at runtime, write a repair-needed ToolPayload with recoverActions instead of falling back to direct network libraries.',
     ],
@@ -260,10 +260,12 @@ function generatedTaskProviderFirstNetworkIssuesForSource(
 
 function readyWebProviderRoutes(request?: GatewayRequest) {
   if (!request) return [];
-  const selectedToolIds = new Set([...(request.selectedToolIds ?? []), 'web_search', 'web_fetch']);
+  const selectedToolIds = new Set([...(request.selectedToolIds ?? []), ...WEB_PROVIDER_CAPABILITY_IDS]);
   return capabilityProviderRoutesForGatewayInvocation({ ...request, selectedToolIds: [...selectedToolIds] }).routes
-    .filter((route) => (route.capabilityId === 'web_search' || route.capabilityId === 'web_fetch') && route.status === 'ready');
+    .filter((route) => WEB_PROVIDER_CAPABILITY_IDS.includes(route.capabilityId) && route.status === 'ready');
 }
+
+const WEB_PROVIDER_CAPABILITY_IDS = ['web_search', 'web_fetch', 'browser_search', 'browser_fetch'];
 
 function directExternalNetworkUses(source: string) {
   const uses = new Set<string>();
