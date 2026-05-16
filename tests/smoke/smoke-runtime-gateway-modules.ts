@@ -52,9 +52,9 @@ try {
         contentPreview: `Round ${index + 1}`,
       })),
       contextReusePolicy: { mode: 'continue', historyReuse: { allowed: true, scope: 'same-task-recent-turns' } },
-      handoffMemoryProjection: {
+      contextProjection: {
         mode: 'continue',
-        recentConversation: [{ id: 'msg-20', role: 'assistant', summary: 'Round 20', refs: ['artifact:prior-report'] }],
+        selectedMessageRefs: [{ id: 'msg-20', role: 'assistant', summary: 'Round 20', refs: ['artifact:prior-report'] }],
         currentReferenceFocus: [],
       },
       expectedArtifactTypes: ['paper-list'],
@@ -133,7 +133,8 @@ try {
   assert.deepEqual(envelope.scenarioFacts.expectedArtifactTypes, ['research-report', 'paper-list']);
   const sessionFacts = envelope.sessionFacts as Record<string, unknown>;
   assert.equal(sessionFacts.conversationLedger, undefined);
-  assert.equal((sessionFacts.handoffMemoryProjection as Record<string, unknown> | undefined)?.authority, 'workspace ledger/ref store is canonical truth; AgentServer orchestrates context');
+  assert.equal((sessionFacts.contextProjection as Record<string, unknown> | undefined)?.authority, 'workspaceKernel refs are canonical truth; AgentServer consumes contextRefs, capabilityBriefRef, and cachePlan');
+  assert.equal('handoffMemoryProjection' in sessionFacts, false);
   assert.equal((sessionFacts.contextReusePolicy as Record<string, unknown> | undefined)?.mode, 'continue');
 
   await mkdir(dirname(join(workspace, '.sciforge/task-results/report.md')), { recursive: true });

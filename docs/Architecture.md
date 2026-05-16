@@ -748,7 +748,7 @@ Policy response 会写回 `GatewayRequest.uiState`，但这些字段都是下一
 
 - `goalSnapshot`：当前 turn 的目标、引用和任务关系。
 - `contextReusePolicy` / `contextIsolation`：告诉 runtime/AgentServer 本轮是 `continue`、`repair` 还是 `isolate`。
-- `handoffMemoryProjection`：本轮可暴露的 bounded summaries、refs 和 pollution guard；它是 projection hint，不承担 canonical recall。
+- `contextProjection`：本轮可暴露的 bounded summaries、refs、projection blocks 和 pollution guard；它是 projection hint，不承担 canonical recall。旧 `handoffMemoryProjection` 只能作为历史 fixture / migration audit alias 读取，不能作为 public runtime contract 主路径。
 - `currentReferences` / `currentReferenceDigests` / `artifactIndex`：当前 refs 和可点击对象索引。
 - `capabilityBrief` / `handoffPlan`：能力和传输预算投影。
 - `acceptancePlan` / `recoveryPlan` / `userVisiblePlan`：协议验收、失败恢复和用户可见计划。
@@ -757,7 +757,7 @@ Policy response 会写回 `GatewayRequest.uiState`，但这些字段都是下一
 
 - Workspace append-only Project Session Ledger 是可恢复事实源。
 - AgentServer session/current-work 是多轮 context orchestration 和 backend handoff 的运行态来源。
-- SciForge 的 `handoffMemoryProjection`、`conversationLedger`、`recentConversation`、`recentRuns` 只用于构建本轮 context envelope、projection block 和 prompt snapshot；不能把 raw 历史内联成 prompt 记忆。
+- SciForge 的 `contextProjection`、`conversationLedger`、`selectedMessageRefs`、`selectedRunRefs` 只用于构建本轮 context envelope、projection block 和 prompt snapshot；不能把 raw 历史内联成 prompt 记忆。
 - 早期问题 recall、跨轮自然语言记忆和 current-work continuity 应通过 AgentServer `/context`、`/compact`、stable `agentId`、`contextPolicy.includeCurrentWork/includeRecentTurns/persistRunSummary` 和 workspace ledger refs 协同恢复；UI recent messages 不能在 AgentServer 不可用时升级成唯一记忆替代品。
 - fresh/new-task 默认使用 fresh agent scope 或 `includeRecentTurns: false`，避免旧记忆污染。
 - continuation/repair 必须显式打开 AgentServer `includeCurrentWork`、`includeRecentTurns`、`persistRunSummary` 等开关，并携带稳定 agent id。

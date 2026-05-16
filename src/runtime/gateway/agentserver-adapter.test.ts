@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   DEFAULT_AGENTSERVER_ADAPTER_MODE,
   EXPLICIT_THIRD_PARTY_ADAPTER_COMPATIBILITY_MODE,
+  backendAdapterForAgentServerAdapter,
   createInlineAgentServerAdapter,
 } from './agentserver-adapter.js';
 
@@ -17,6 +18,7 @@ test('AgentServerAdapter defaults to owned orchestrator with third-party backend
   assert.equal(adapter.decisionOwner, 'AgentServer');
   assert.equal(adapter.backendBoundary, 'third-party-backend');
   assert.deepEqual(await adapter.generateTask({} as never), { ok: false, error: 'not-dispatched' });
+  assert.equal(backendAdapterForAgentServerAdapter(adapter, 'codex').backend, 'codex');
 });
 
 test('third-party-adapter mode is fail-closed unless explicit compatibility is requested', () => {

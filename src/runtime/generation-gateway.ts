@@ -54,7 +54,6 @@ import {
   requestNeedsAgentServerContinuity,
 } from './gateway/agentserver-context-window.js';
 import {
-  agentBackendAdapter,
   agentServerBackendSelectionDecision,
   isBlockingAgentServerConfigurationFailure,
 } from './gateway/agent-backend-config.js';
@@ -166,6 +165,17 @@ import {
   requestWithDiscoveredCapabilityProviders,
 } from './gateway/capability-provider-preflight.js';
 import { directContextFastPathPayload } from './gateway/direct-context-fast-path.js';
+import {
+  DEFAULT_AGENTSERVER_ADAPTER_MODE,
+  backendAdapterForAgentServerAdapter,
+  createInlineAgentServerAdapter,
+  type AgentServerAdapter,
+  type AgentServerGenerationAdapterResult,
+} from './gateway/agentserver-adapter.js';
+import {
+  createTurnPipeline,
+  createWorkspaceKernel,
+} from './conversation-kernel/index.js';
 
 configureDirectAnswerArtifactContext(collectArtifactReferenceContext);
 configurePayloadValidationContext(attemptPlanRefs);
@@ -966,7 +976,7 @@ export function requestUsesRepairContext(request: GatewayRequest) {
   return false;
 }
 
-async function requestAgentServerGeneration(params: {
+type AgentServerGenerationParams = {
   baseUrl: string;
   request: GatewayRequest;
   skill: SkillAvailability;
@@ -974,7 +984,153 @@ async function requestAgentServerGeneration(params: {
   workspace: string;
   callbacks?: WorkspaceRuntimeCallbacks;
   strictTaskFilesReason?: string;
+};
+
+async function requestAgentServerGeneration(params: AgentServerGenerationParams): Promise<AgentServerGenerationResult> {
+  let adapter: AgentServerAdapter | undefined;
+  adapter = createInlineAgentServerAdapter((adapterParams) => dispatchAgentServerGeneration(adapterParams, requireAgentServerAdapter(adapter)), {
+    mode: DEFAULT_AGENTSERVER_ADAPTER_MODE,
+  });
+  return executeAgentServerGenerationTurnPipeline({ adapter, params });
+}
+
+async function executeAgentServerGenerationTurnPipeline(input: {
+  adapter: AgentServerAdapter;
+  params: AgentServerGenerationParams;
 }): Promise<AgentServerGenerationResult> {
+  let driveResult: AgentServerGenerationAdapterResult | undefined;
+  const turn = agentServerGenerationTurnPipelineInput(input.params);
+  const pipeline = createTurnPipeline({
+    kernel: createWorkspaceKernel({ sessionId: `agentserver-generation-${turn.key}` }),
+    hooks: {
+      requestContext: () => {
+        emitWorkspaceRuntimeEvent(input.params.callbacks, agentServerTurnPipelineStageEvent('requestContext', input.adapter, turn));
+        return {
+          contextRef: `agentserver://generation/context/${turn.key}`,
+          contextRefs: [
+            `agentserver://adapter/${input.adapter.mode}`,
+            `agentserver://backend-boundary/${input.adapter.backendBoundary}`,
+            `agentserver://generation/context/${turn.key}`,
+          ],
+        };
+      },
+      driveRun: async () => {
+        emitWorkspaceRuntimeEvent(input.params.callbacks, agentServerTurnPipelineStageEvent('driveRun', input.adapter, turn));
+        driveResult = await input.adapter.generateTask(input.params);
+        if (!driveResult.ok) {
+          return {
+            status: 'failed',
+            resultRefs: [],
+            failure: {
+              failureClass: 'external' as const,
+              owner: 'external-provider' as const,
+              reason: driveResult.error,
+            },
+          };
+        }
+        return {
+          status: 'succeeded',
+          resultRefs: agentServerGenerationResultRefs(driveResult, turn.key),
+        };
+      },
+      finalizeRun: (stageInput) => {
+        emitWorkspaceRuntimeEvent(input.params.callbacks, agentServerTurnPipelineStageEvent('finalizeRun', input.adapter, turn));
+        return {
+          status: 'satisfied',
+          text: 'AgentServer generation completed through declarative TurnPipeline.',
+          artifactRefs: stageInput.resultRefs,
+        };
+      },
+      onFailure: (failure) => ({
+        status: 'repair-needed',
+        text: failure.reason,
+        artifactRefs: failure.evidenceRefs,
+      }),
+    },
+  });
+  emitWorkspaceRuntimeEvent(input.params.callbacks, agentServerTurnPipelineStageEvent('registerTurn', input.adapter, turn));
+  await pipeline.execute({
+    turnId: turn.turnId,
+    runId: turn.runId,
+    currentTurnRef: turn.currentTurnRef,
+    summary: 'AgentServer generation request registered.',
+  });
+  return finalizeAgentServerAdapterGenerationResult(driveResult);
+}
+
+function finalizeAgentServerAdapterGenerationResult(
+  result: AgentServerGenerationAdapterResult | undefined,
+): AgentServerGenerationResult {
+  if (!result) return { ok: false, error: 'AgentServer TurnPipeline finished without driveRun result' };
+  if (!result.ok) {
+    return {
+      ok: false,
+      error: result.error,
+      diagnostics: result.diagnostics as AgentServerGenerationFailureDiagnostics | undefined,
+    };
+  }
+  if ('response' in result) return { ok: true, runId: result.runId, response: result.response };
+  return { ok: true, runId: result.runId, directPayload: result.directPayload as ToolPayload };
+}
+
+function agentServerTurnPipelineStageEvent(
+  stage: 'registerTurn' | 'requestContext' | 'driveRun' | 'finalizeRun',
+  adapter: AgentServerAdapter,
+  turn: ReturnType<typeof agentServerGenerationTurnPipelineInput>,
+): WorkspaceRuntimeEvent {
+  return {
+    type: 'agentserver-turn-pipeline-stage',
+    source: 'workspace-runtime',
+    status: stage,
+    message: `AgentServer TurnPipeline stage: ${stage}`,
+    raw: {
+      schemaVersion: 'sciforge.turn-pipeline-stage.v1',
+      stage,
+      adapterMode: adapter.mode,
+      backendBoundary: adapter.backendBoundary,
+      decisionOwner: adapter.decisionOwner,
+      turnId: turn.turnId,
+      runId: turn.runId,
+      currentTurnRef: turn.currentTurnRef,
+    },
+  };
+}
+
+function agentServerGenerationTurnPipelineInput(params: AgentServerGenerationParams) {
+  const uiState = isRecord(params.request.uiState) ? params.request.uiState : {};
+  const sessionId = typeof uiState.sessionId === 'string' && uiState.sessionId.trim()
+    ? uiState.sessionId.trim()
+    : sha1(JSON.stringify({
+      workspace: params.workspace,
+      baseUrl: cleanUrl(params.baseUrl),
+      skillDomain: params.request.skillDomain,
+      skillId: params.skill.id,
+    })).slice(0, 16);
+  const key = sessionId.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 80) || 'default';
+  return {
+    key,
+    turnId: `turn-${key}`,
+    runId: `run-${key}`,
+    currentTurnRef: `runtime://agentserver-generation/current-turn/${key}`,
+  };
+}
+
+function agentServerGenerationResultRefs(result: AgentServerGenerationAdapterResult, key: string): string[] {
+  if (!result.ok) return [];
+  return [
+    result.runId ? `agentserver://run/${result.runId}` : undefined,
+    'response' in result
+      ? `agentserver://generation-response/${key}`
+      : `agentserver://direct-payload/${key}`,
+  ].filter((ref): ref is string => Boolean(ref));
+}
+
+function requireAgentServerAdapter(adapter: AgentServerAdapter | undefined): AgentServerAdapter {
+  if (!adapter) throw new Error('AgentServerAdapter was not initialized before generation dispatch.');
+  return adapter;
+}
+
+async function dispatchAgentServerGeneration(params: AgentServerGenerationParams, agentServerAdapter: AgentServerAdapter): Promise<AgentServerGenerationResult> {
   const controller = new AbortController();
   const timeoutMs = Number(process.env.SCIFORGE_AGENTSERVER_GENERATION_TIMEOUT_MS || 900000);
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -996,7 +1152,7 @@ async function requestAgentServerGeneration(params: {
     if (!llmRuntime.llmEndpoint && requiresUserLlmEndpoint(params.baseUrl)) {
       return { ok: false, error: missingUserLlmEndpointMessage() };
     }
-    const adapter = agentBackendAdapter(backend);
+    const adapter = backendAdapterForAgentServerAdapter(agentServerAdapter, backend);
     const agentId = agentServerAgentId(promptRequest, 'task-generation');
     for (let dispatchAttempt = 1; dispatchAttempt <= 2; dispatchAttempt += 1) {
     const preflight = await preflightAgentServerContextWindow({

@@ -22,14 +22,14 @@ def _load_module(name: str):
 
 build_context_policy = _load_module("context_policy").build_context_policy
 build_goal_snapshot = _load_module("goal_snapshot").build_goal_snapshot
-build_handoff_memory_projection = _load_module("handoff_projection").build_handoff_memory_projection
+build_context_projection = _load_module("context_projection").build_context_projection
 
 
-class HandoffMemoryProjectionTest(unittest.TestCase):
+class ContextProjectionTest(unittest.TestCase):
     def test_explicit_reference_filters_stale_history(self) -> None:
         snapshot = build_goal_snapshot({"prompt": "只根据 current.csv 总结。", "references": ["current.csv"]})
         policy = build_context_policy({"prompt": snapshot["rawPrompt"], "goalSnapshot": snapshot})
-        plan = build_handoff_memory_projection(
+        plan = build_context_projection(
             {
                 "goalSnapshot": snapshot,
                 "contextPolicy": policy,
@@ -46,14 +46,14 @@ class HandoffMemoryProjectionTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual([message["id"] for message in plan["recentConversation"]], ["m-current"])
-        self.assertEqual([run["id"] for run in plan["recentRuns"]], ["r-current"])
+        self.assertEqual([message["id"] for message in plan["selectedMessageRefs"]], ["m-current"])
+        self.assertEqual([run["id"] for run in plan["selectedRunRefs"]], ["r-current"])
         self.assertIn({"id": "m-old", "reason": "not-current-reference-grounded"}, plan["pollutionGuard"]["excludedHistory"])
 
     def test_continue_previous_round_keeps_recent_conversation(self) -> None:
         snapshot = build_goal_snapshot({"prompt": "继续上一轮，补充方法部分。"})
         policy = build_context_policy({"prompt": snapshot["rawPrompt"], "goalSnapshot": snapshot})
-        plan = build_handoff_memory_projection(
+        plan = build_context_projection(
             {
                 "goalSnapshot": snapshot,
                 "contextPolicy": policy,
@@ -62,13 +62,13 @@ class HandoffMemoryProjectionTest(unittest.TestCase):
         )
 
         self.assertEqual(plan["mode"], "continue")
-        self.assertEqual(plan["recentConversation"][0]["id"], "m1")
+        self.assertEqual(plan["selectedMessageRefs"][0]["id"], "m1")
         self.assertEqual(plan["pollutionGuard"]["excludedHistory"], [])
 
     def test_repair_uses_failed_run_and_removes_inline_image_payloads(self) -> None:
         snapshot = build_goal_snapshot({"prompt": "修复上一轮失败。"})
         policy = build_context_policy({"prompt": snapshot["rawPrompt"], "goalSnapshot": snapshot})
-        plan = build_handoff_memory_projection(
+        plan = build_context_projection(
             {
                 "goalSnapshot": snapshot,
                 "contextPolicy": policy,
@@ -81,9 +81,9 @@ class HandoffMemoryProjectionTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual([run["id"] for run in plan["recentRuns"]], ["r-fail"])
-        self.assertNotIn("data:image", plan["recentRuns"][0]["summary"])
-        self.assertNotIn(";base64,", plan["recentRuns"][0]["summary"])
+        self.assertEqual([run["id"] for run in plan["selectedRunRefs"]], ["r-fail"])
+        self.assertNotIn("data:image", plan["selectedRunRefs"][0]["summary"])
+        self.assertNotIn(";base64,", plan["selectedRunRefs"][0]["summary"])
 
 
 if __name__ == "__main__":

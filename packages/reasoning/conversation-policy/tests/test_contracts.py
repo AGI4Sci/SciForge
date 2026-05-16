@@ -82,6 +82,19 @@ class ConversationPolicyContractTest(unittest.TestCase):
         self.assertTrue(response.turnExecutionConstraints["agentServerForbidden"])
         self.assertEqual(to_json_dict(response)["schemaVersion"], RESPONSE_SCHEMA_VERSION)
 
+    def test_response_legacy_projection_field_is_migration_alias_only(self):
+        payload = _read_fixture("response_basic.json")
+        legacy_projection = {"schemaVersion": "sciforge.conversation.handoff-memory-projection.v1"}
+        payload.pop("contextProjection")
+        payload["handoffMemoryProjection"] = legacy_projection
+
+        response = response_from_json(payload)
+        result = to_json_dict(response)
+
+        self.assertNotIn("handoffMemoryProjection", result)
+        self.assertEqual(result["contextProjection"]["schemaVersion"], legacy_projection["schemaVersion"])
+        self.assertEqual(result["contextProjection"]["migrationAlias"]["from"], "handoffMemoryProjection")
+
     def test_service_matches_basic_golden_fixture(self):
         request = _read_fixture("request_basic.json")
         expected = _read_fixture("response_basic.json")
@@ -92,7 +105,8 @@ class ConversationPolicyContractTest(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["goalSnapshot"]["taskRelation"], "continue")
         self.assertEqual(result["contextPolicy"]["mode"], "continue")
-        self.assertEqual(result["handoffMemoryProjection"]["schemaVersion"], "sciforge.conversation.handoff-memory-projection.v1")
+        self.assertEqual(result["contextProjection"]["schemaVersion"], "sciforge.conversation.context-projection.v1")
+        self.assertNotIn("handoffMemoryProjection", result)
         self.assertEqual(result["handoffPlan"]["status"], "ready")
         self.assertEqual(result["executionModePlan"]["executionMode"], "repair-or-continue-project")
         self.assertIn("turnExecutionConstraints", result)

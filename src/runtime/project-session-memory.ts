@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-export type ProjectSessionActor =
+export type WorkspaceLedgerActor =
   | 'user'
   | 'ui'
   | 'runtime'
@@ -10,7 +10,13 @@ export type ProjectSessionActor =
   | 'verifier'
   | 'system';
 
-export type ProjectSessionEventKind =
+/**
+ * @deprecated Migration/audit compatibility alias. Runtime contracts should use
+ * WorkspaceLedgerActor.
+ */
+export type ProjectSessionActor = WorkspaceLedgerActor;
+
+export type WorkspaceLedgerEventKind =
   | 'user-turn'
   | 'assistant-visible-message'
   | 'backend-dispatch'
@@ -26,6 +32,12 @@ export type ProjectSessionEventKind =
   | 'compaction-recorded'
   | 'history-edit-recorded'
   | 'human-approval-recorded';
+
+/**
+ * @deprecated Migration/audit compatibility alias. Runtime contracts should use
+ * WorkspaceLedgerEventKind.
+ */
+export type ProjectSessionEventKind = WorkspaceLedgerEventKind;
 
 export const PROJECT_MEMORY_REF_KINDS = [
   'artifact',
@@ -73,7 +85,9 @@ export interface ProjectMemoryRef {
   retention?: ProjectMemoryRefRetention;
 }
 
-export interface ProjectSessionEvent {
+export type WorkspaceMemoryRef = ProjectMemoryRef;
+
+export interface WorkspaceLedgerEvent {
   schemaVersion: 'sciforge.workspace-ledger-event.v1';
   eventId: string;
   sessionId: string;
@@ -81,16 +95,18 @@ export interface ProjectSessionEvent {
   runId?: string;
   parentEventIds?: string[];
   createdAt: string;
-  actor: ProjectSessionActor;
-  kind: ProjectSessionEventKind;
+  actor: WorkspaceLedgerActor;
+  kind: WorkspaceLedgerEventKind;
   summary: string;
   refs: ProjectMemoryRef[];
   metadata?: Record<string, unknown>;
 }
 
-export type WorkspaceLedgerActor = ProjectSessionActor;
-export type WorkspaceLedgerEventKind = ProjectSessionEventKind;
-export type WorkspaceLedgerEvent = ProjectSessionEvent;
+/**
+ * @deprecated Migration/audit compatibility alias. Runtime contracts should use
+ * WorkspaceLedgerEvent.
+ */
+export type ProjectSessionEvent = WorkspaceLedgerEvent;
 
 export interface ContextProjectionBlock {
   blockId: string;
@@ -110,14 +126,18 @@ export interface ContextProjectionBlock {
   content: string;
 }
 
-export interface ProjectSessionLedgerProjection {
+export interface WorkspaceLedgerProjection {
   schemaVersion: 'sciforge.workspace-ledger-projection.v1';
   sessionId: string;
-  events: ProjectSessionEvent[];
+  events: WorkspaceLedgerEvent[];
   refIndex: ProjectMemoryRef[];
 }
 
-export type WorkspaceLedgerProjection = ProjectSessionLedgerProjection;
+/**
+ * @deprecated Migration/audit compatibility alias. Runtime contracts should use
+ * WorkspaceLedgerProjection.
+ */
+export type ProjectSessionLedgerProjection = WorkspaceLedgerProjection;
 
 export interface CompileContextProjectionInput {
   sessionId: string;
@@ -159,7 +179,7 @@ export interface CompactionRecordedEventInput {
   createdAt?: string;
   sourceEventIds: string[];
   outputProjectionRefs: ProjectMemoryRef[];
-  actor?: ProjectSessionActor;
+  actor?: WorkspaceLedgerActor;
   decisionOwner: string;
   trigger: string;
   reason: string;
@@ -167,7 +187,7 @@ export interface CompactionRecordedEventInput {
   metadata?: Record<string, unknown>;
 }
 
-export interface ProjectSessionRecoveryProjection {
+export interface WorkspaceRecoveryProjection {
   schemaVersion: 'sciforge.workspace-recovery-projection.v1';
   sessionId: string;
   activeRunId?: string;
@@ -187,7 +207,11 @@ export interface ProjectSessionRecoveryProjection {
   };
 }
 
-export type WorkspaceRecoveryProjection = ProjectSessionRecoveryProjection;
+/**
+ * @deprecated Migration/audit compatibility alias. Runtime contracts should use
+ * WorkspaceRecoveryProjection.
+ */
+export type ProjectSessionRecoveryProjection = WorkspaceRecoveryProjection;
 
 type ConversationEventLike = {
   id?: unknown;
@@ -257,11 +281,11 @@ export function normalizeWorkspaceKernelAuditInput(
   input: unknown,
   options: { sessionId?: string; createdAt?: string } = {},
 ): WorkspaceLedgerProjection {
-  return normalizeProjectSessionMemory(input, options);
+  return normalizeWorkspaceLedgerProjection(input, options);
 }
 
 export function recoverWorkspaceKernelProjection(events: readonly WorkspaceLedgerEvent[]): WorkspaceRecoveryProjection {
-  return recoverProjectSessionProjection(events);
+  return recoverWorkspaceLedgerProjection(events);
 }
 
 export function compileWorkspaceContextProjection(input: CompileContextProjectionInput): ContextProjectionCompileResult {
@@ -273,16 +297,15 @@ export function buildWorkspaceCompactionRecordedEvent(input: CompactionRecordedE
 }
 
 /**
- * @deprecated Migration/audit adapter for legacy session-shaped records.
- * Use WorkspaceKernel.appendEvent as the runtime entrypoint and
- * normalizeWorkspaceKernelAuditInput only when importing historical data.
+ * Normalizes historical session-shaped records into the workspace ledger
+ * projection shape used by audit/migration tooling.
  */
-export function normalizeProjectSessionMemory(
+export function normalizeWorkspaceLedgerProjection(
   input: unknown,
   options: { sessionId?: string; createdAt?: string } = {},
-): ProjectSessionLedgerProjection {
+): WorkspaceLedgerProjection {
   const sessionId = inferSessionId(input, options.sessionId);
-  const events: ProjectSessionEvent[] = [];
+  const events: WorkspaceLedgerEvent[] = [];
 
   const conversationEvents = extractConversationEvents(input);
   for (const event of conversationEvents) {
@@ -328,7 +351,18 @@ export function normalizeProjectSessionMemory(
   };
 }
 
-export function buildProjectMemoryRefIndex(events: readonly ProjectSessionEvent[]): ProjectMemoryRef[] {
+/**
+ * @deprecated Migration/audit adapter for legacy session-shaped records.
+ * Use normalizeWorkspaceLedgerProjection.
+ */
+export function normalizeProjectSessionMemory(
+  input: unknown,
+  options: { sessionId?: string; createdAt?: string } = {},
+): WorkspaceLedgerProjection {
+  return normalizeWorkspaceLedgerProjection(input, options);
+}
+
+export function buildProjectMemoryRefIndex(events: readonly WorkspaceLedgerEvent[]): ProjectMemoryRef[] {
   const byRef = new Map<string, ProjectMemoryRef>();
   for (const event of events) {
     for (const ref of event.refs) {
@@ -450,7 +484,7 @@ export function buildRepairPacket(input: {
  * @deprecated Migration/audit adapter for legacy compaction ledger records.
  * New compaction facts should be appended as WorkspaceKernel events.
  */
-export function buildCompactionRecordedEvent(input: CompactionRecordedEventInput): ProjectSessionEvent {
+export function buildCompactionRecordedEvent(input: CompactionRecordedEventInput): WorkspaceLedgerEvent {
   const createdAt = input.createdAt ?? '1970-01-01T00:00:00.000Z';
   const eventId = input.eventId
     ?? `compaction:${digestStableBytes({
@@ -482,9 +516,13 @@ export function buildCompactionRecordedEvent(input: CompactionRecordedEventInput
 
 /**
  * @deprecated Migration/audit adapter for legacy ProjectSessionMemory recovery.
- * Use WorkspaceKernel.restoreProjection for current runtime recovery.
+ * Use recoverWorkspaceLedgerProjection or WorkspaceKernel.restoreProjection.
  */
-export function recoverProjectSessionProjection(events: readonly ProjectSessionEvent[]): ProjectSessionRecoveryProjection {
+export function recoverProjectSessionProjection(events: readonly WorkspaceLedgerEvent[]): WorkspaceRecoveryProjection {
+  return recoverWorkspaceLedgerProjection(events);
+}
+
+export function recoverWorkspaceLedgerProjection(events: readonly WorkspaceLedgerEvent[]): WorkspaceRecoveryProjection {
   const sessionId = events.at(-1)?.sessionId ?? events[0]?.sessionId ?? 'session-unknown';
   const activeRunId = [...events].reverse().map((event) => event.runId).find(Boolean);
   const refIndex = buildProjectMemoryRefIndex(events);
@@ -520,7 +558,7 @@ function normalizeConversationEvent(
   event: ConversationEventLike,
   sessionId: string,
   fallbackCreatedAt?: string,
-): ProjectSessionEvent {
+): WorkspaceLedgerEvent {
   const id = stringValue(event.id) ?? digestStableBytes(event).slice('sha256:'.length, 'sha256:'.length + 16);
   const payload = asRecord(event.payload);
   const refs = normalizeRefs(extractRefs(payload), stringValue(event.runId));
@@ -544,7 +582,7 @@ function normalizeConversationEvent(
   };
 }
 
-function normalizeRunLike(value: unknown, sessionId: string, fallbackCreatedAt?: string): ProjectSessionEvent | undefined {
+function normalizeRunLike(value: unknown, sessionId: string, fallbackCreatedAt?: string): WorkspaceLedgerEvent | undefined {
   const record = asRecord(value);
   if (!record) return undefined;
   const runId = stringValue(record.runId) ?? stringValue(record.id);
@@ -571,7 +609,7 @@ function normalizeRunLike(value: unknown, sessionId: string, fallbackCreatedAt?:
   };
 }
 
-function normalizeMessageLike(value: unknown, sessionId: string, fallbackCreatedAt?: string): ProjectSessionEvent | undefined {
+function normalizeMessageLike(value: unknown, sessionId: string, fallbackCreatedAt?: string): WorkspaceLedgerEvent | undefined {
   const record = asRecord(value);
   if (!record) return undefined;
   const id = stringValue(record.id)
@@ -609,10 +647,10 @@ function normalizeMessageLike(value: unknown, sessionId: string, fallbackCreated
 function normalizeRecordLike(
   value: unknown,
   sessionId: string,
-  kind: ProjectSessionEventKind,
+  kind: WorkspaceLedgerEventKind,
   source: string,
   fallbackCreatedAt?: string,
-): ProjectSessionEvent | undefined {
+): WorkspaceLedgerEvent | undefined {
   const record = asRecord(value);
   if (!record) return undefined;
   const id = stringValue(record.id)
@@ -766,7 +804,7 @@ function renderBlock(input: {
   };
 }
 
-function mapConversationKind(type: string | undefined): ProjectSessionEventKind {
+function mapConversationKind(type: string | undefined): WorkspaceLedgerEventKind {
   switch (type) {
     case 'TurnReceived':
       return 'user-turn';
@@ -829,11 +867,11 @@ function inferSessionId(input: unknown, fallback?: string): string {
     ?? 'session-unknown';
 }
 
-function normalizeActor(actor: unknown): ProjectSessionActor {
+function normalizeActor(actor: unknown): WorkspaceLedgerActor {
   const value = stringValue(actor);
   if (value === 'kernel') return 'runtime';
   if (value && ['user', 'ui', 'runtime', 'agentserver', 'backend', 'worker', 'verifier', 'system'].includes(value)) {
-    return value as ProjectSessionActor;
+    return value as WorkspaceLedgerActor;
   }
   return 'runtime';
 }

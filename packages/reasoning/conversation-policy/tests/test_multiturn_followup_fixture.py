@@ -44,7 +44,7 @@ class MultiTurnFollowupFixtureTest(unittest.TestCase):
                 data = to_json_dict(response)
                 self.assertEqual(data["contextPolicy"]["mode"], expected_mode)
                 self.assertTrue(data["contextPolicy"]["historyReuse"]["allowed"])
-                self.assertGreaterEqual(len(data["handoffMemoryProjection"]["recentConversation"]), 1)
+                self.assertGreaterEqual(len(data["contextProjection"]["selectedMessageRefs"]), 1)
                 self.assertIn("round-report", _entry_ids(data))
                 self.assertIn("round-chart", _entry_ids(data))
                 self.assertIn("file:.sciforge/artifacts/report.md", _clickable_refs(data))
@@ -54,12 +54,12 @@ class MultiTurnFollowupFixtureTest(unittest.TestCase):
             fresh_data = to_json_dict(fresh)
             self.assertEqual(fresh_data["contextPolicy"]["mode"], "isolate")
             self.assertFalse(fresh_data["contextPolicy"]["historyReuse"]["allowed"])
-            self.assertEqual(fresh_data["handoffMemoryProjection"]["recentConversation"], [])
+            self.assertEqual(fresh_data["contextProjection"]["selectedMessageRefs"], [])
             self.assertNotIn("round-report", _entry_ids(fresh_data))
             self.assertEqual(fresh_data["artifactIndex"]["entries"], [])
             self.assertIn(
                 {"id": "m-report", "reason": "isolated-new-task"},
-                fresh_data["handoffMemoryProjection"]["pollutionGuard"]["excludedHistory"],
+                fresh_data["contextProjection"]["pollutionGuard"]["excludedHistory"],
             )
 
 

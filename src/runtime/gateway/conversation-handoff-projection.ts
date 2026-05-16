@@ -3,8 +3,8 @@ import {
   compileWorkspaceContextProjection,
   normalizeWorkspaceKernelAuditInput,
   type ContextProjectionBlock,
-  type ProjectMemoryRef,
-  type ProjectSessionEvent,
+  type WorkspaceLedgerEvent,
+  type WorkspaceMemoryRef,
 } from '../project-session-memory.js';
 import {
   buildAgentServerContextRequest,
@@ -21,11 +21,11 @@ export interface ConversationContextProjection {
   schemaVersion: typeof CONVERSATION_CONTEXT_PROJECTION_SCHEMA_VERSION;
   authority: 'workspace-kernel-context-projection';
   mode: string;
-  workspaceLedger: JsonMap;
+  workspaceKernel: JsonMap;
   contextProjectionBlocks: ContextProjectionBlock[];
   stablePrefixHash: string;
-  contextRefs: ProjectMemoryRef[];
-  capabilityBriefRef: ProjectMemoryRef;
+  contextRefs: WorkspaceMemoryRef[];
+  capabilityBriefRef: WorkspaceMemoryRef;
   cachePlan: AgentServerContextRequest['cachePlan'];
   agentServerContextRequest: AgentServerContextRequest;
   selectedContextRefs: string[];
@@ -171,7 +171,7 @@ export function buildConversationContextProjection(request: unknown): Conversati
     schemaVersion: CONVERSATION_CONTEXT_PROJECTION_SCHEMA_VERSION,
     authority: 'workspace-kernel-context-projection',
     mode,
-    workspaceLedger: {
+    workspaceKernel: {
       schemaVersion: workspaceLedger.schemaVersion,
       sessionId: workspaceLedger.sessionId,
       eventCount: workspaceLedger.events.length,
@@ -273,7 +273,7 @@ function compactRun(item: JsonMap): JsonMap {
   };
 }
 
-function eventIndex(events: ProjectSessionEvent[]): JsonMap[] {
+function eventIndex(events: WorkspaceLedgerEvent[]): JsonMap[] {
   return events.slice(-40).map((event) => ({
     eventId: event.eventId,
     kind: event.kind,
@@ -285,7 +285,7 @@ function eventIndex(events: ProjectSessionEvent[]): JsonMap[] {
   }));
 }
 
-function refIndex(refs: ProjectMemoryRef[]): JsonMap[] {
+function refIndex(refs: WorkspaceMemoryRef[]): JsonMap[] {
   return refs.slice(-80).map((ref) => ({
     ref: ref.ref,
     kind: ref.kind,
@@ -299,7 +299,7 @@ function refIndex(refs: ProjectMemoryRef[]): JsonMap[] {
   }));
 }
 
-function projectionBlockRef(block: ContextProjectionBlock): ProjectMemoryRef {
+function projectionBlockRef(block: ContextProjectionBlock): WorkspaceMemoryRef {
   return {
     ref: `projection-block:${block.blockId}`,
     kind: 'projection',
@@ -310,7 +310,7 @@ function projectionBlockRef(block: ContextProjectionBlock): ProjectMemoryRef {
   };
 }
 
-function memoryRef(ref: string, kind: ProjectMemoryRef['kind'], preview: string): ProjectMemoryRef {
+function memoryRef(ref: string, kind: WorkspaceMemoryRef['kind'], preview: string): WorkspaceMemoryRef {
   return {
     ref,
     kind,
@@ -321,7 +321,7 @@ function memoryRef(ref: string, kind: ProjectMemoryRef['kind'], preview: string)
   };
 }
 
-function failureIndex(events: ProjectSessionEvent[]): JsonMap[] {
+function failureIndex(events: WorkspaceLedgerEvent[]): JsonMap[] {
   return events
     .filter((event) => event.kind === 'failure-classified')
     .slice(-12)
@@ -333,7 +333,7 @@ function failureIndex(events: ProjectSessionEvent[]): JsonMap[] {
     }));
 }
 
-function selectedEventIds(events: ProjectSessionEvent[], selectedMessages: JsonMap[], selectedRuns: JsonMap[]): string[] {
+function selectedEventIds(events: WorkspaceLedgerEvent[], selectedMessages: JsonMap[], selectedRuns: JsonMap[]): string[] {
   const selectedIds = new Set([
     ...selectedMessages.map((message) => textValue(message.id)).filter(Boolean),
     ...selectedRuns.map((run) => textValue(run.id) || textValue(run.runId)).filter(Boolean),

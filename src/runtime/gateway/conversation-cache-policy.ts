@@ -182,7 +182,7 @@ function hasRecentFailure(data: JsonMap): boolean {
 
 function hasExplicitRefs(data: JsonMap): boolean {
   if (arrayValue(data.currentReferences).length || arrayValue(data.references).length || arrayValue(data.refs).length) return true;
-  const projection = recordValue(data.handoffMemoryProjection) ?? {};
+  const projection = recordValue(data.contextProjection) ?? {};
   return Boolean(arrayValue(projection.currentReferenceFocus).length);
 }
 

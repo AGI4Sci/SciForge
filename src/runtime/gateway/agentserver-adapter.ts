@@ -1,4 +1,5 @@
-import type { AgentServerGenerationResponse, GatewayRequest, SkillAvailability, WorkspaceRuntimeCallbacks } from '../runtime-types.js';
+import type { AgentBackendAdapter, AgentServerGenerationResponse, GatewayRequest, SkillAvailability, WorkspaceRuntimeCallbacks } from '../runtime-types.js';
+import { agentBackendAdapter } from './agent-backend-config.js';
 
 export const DEFAULT_AGENTSERVER_ADAPTER_MODE = 'owned-orchestrator-third-party-backend' as const;
 export const EXPLICIT_THIRD_PARTY_ADAPTER_COMPATIBILITY_MODE = 'explicit-third-party-adapter' as const;
@@ -60,6 +61,16 @@ export function createInlineAgentServerAdapter(
   options: Omit<CreateAgentServerAdapterOptions, 'generateTask'> = {},
 ): AgentServerAdapter {
   return createAgentServerAdapter({ ...options, generateTask });
+}
+
+export function backendAdapterForAgentServerAdapter(
+  adapter: Pick<AgentServerAdapter, 'mode' | 'backendBoundary'>,
+  backend: string,
+): AgentBackendAdapter {
+  if (adapter.mode === DEFAULT_AGENTSERVER_ADAPTER_MODE && adapter.backendBoundary !== 'third-party-backend') {
+    throw new Error('AgentServerAdapter owned orchestrator mode requires a third-party-backend boundary');
+  }
+  return agentBackendAdapter(backend);
 }
 
 export function assertAgentServerAdapterMode(

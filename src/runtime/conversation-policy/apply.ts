@@ -105,7 +105,7 @@ export function requestWithPolicyResponse(
   response: ConversationPolicyResponse,
 ): GatewayRequest {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
-  const handoffMemoryProjection = isRecord(response.handoffMemoryProjection) ? response.handoffMemoryProjection : {};
+  const contextProjection = isRecord(response.contextProjection) ? response.contextProjection : {};
   const handoffPlan = isRecord(response.handoffPlan) ? response.handoffPlan : {};
   const handoffPayload = isRecord(handoffPlan.payload) ? handoffPlan.payload : {};
   const contextPolicy = isRecord(response.contextPolicy) ? response.contextPolicy : undefined;
@@ -151,12 +151,16 @@ export function requestWithPolicyResponse(
       goalSnapshot: response.goalSnapshot,
       contextReusePolicy: contextPolicy,
       contextIsolation: contextPolicy,
-      handoffMemoryProjection,
-      projectSessionMemoryProjection: isRecord(handoffMemoryProjection.projectSessionMemory)
-        ? handoffMemoryProjection.projectSessionMemory
+      contextProjection,
+      workspaceKernelProjection: isRecord(contextProjection.workspaceKernel)
+        ? contextProjection.workspaceKernel
+        : isRecord(contextProjection.workspaceLedger)
+          ? contextProjection.workspaceLedger
+          : isRecord(contextProjection.projectSessionMemory)
+            ? contextProjection.projectSessionMemory
         : undefined,
-      projectSessionContextProjectionBlocks: toRecordList(handoffMemoryProjection.contextProjectionBlocks),
-      projectSessionContextRefs: toStringList(handoffMemoryProjection.contextRefs),
+      workspaceKernelContextProjectionBlocks: toRecordList(contextProjection.contextProjectionBlocks),
+      workspaceKernelContextRefs: contextRefsFromPolicyProjection(contextProjection.contextRefs),
       currentReferences,
       currentReferenceDigests,
       conversationLedger: uiState.conversationLedger,
@@ -181,10 +185,12 @@ function buildConversationPolicyRequest(
   },
 ): ConversationPolicyRequest {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
-  const projectSessionMemory = isRecord(uiState.projectSessionMemoryProjection)
-    ? uiState.projectSessionMemoryProjection
+  const workspaceKernel = isRecord(uiState.workspaceKernelProjection)
+    ? uiState.workspaceKernelProjection
+    : isRecord(uiState.projectSessionMemoryProjection)
+      ? uiState.projectSessionMemoryProjection
     : undefined;
-  const projectSessionEvents = toRecordList(projectSessionMemory?.eventIndex);
+  const workspaceKernelEvents = toRecordList(workspaceKernel?.eventIndex);
   const recentExecutionRefs = toRecordList(uiState.recentExecutionRefs);
   const turnExecutionConstraints = normalizeTurnExecutionConstraints(uiState.turnExecutionConstraints);
   const currentTurnReferences = mergeRecordsByRef([
@@ -208,7 +214,7 @@ function buildConversationPolicyRequest(
       runs: toRecordList(uiState.recentRuns).slice(-12),
       artifacts: request.artifacts.slice(-24),
       executionUnits: mergeRecordsByRef([
-        ...projectSessionEvents.slice(-24),
+        ...workspaceKernelEvents.slice(-24),
         ...recentExecutionRefs.slice(-24),
       ]).slice(-24),
       contextReusePolicy: isRecord(uiState.contextReusePolicy) ? uiState.contextReusePolicy : undefined,
@@ -236,6 +242,15 @@ function buildConversationPolicyRequest(
       turnExecutionConstraints: isRecord(uiState.turnExecutionConstraints) ? uiState.turnExecutionConstraints : undefined,
     },
   };
+}
+
+function contextRefsFromPolicyProjection(value: unknown) {
+  if (!Array.isArray(value)) return toStringList(value);
+  return value.flatMap((entry) => {
+    if (typeof entry === 'string' && entry) return [entry];
+    if (!isRecord(entry)) return [];
+    return stringField(entry.ref) ?? [];
+  });
 }
 
 function policySessionMessages(uiState: Record<string, unknown>) {

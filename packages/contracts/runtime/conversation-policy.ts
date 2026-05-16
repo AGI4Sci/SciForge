@@ -54,7 +54,7 @@ export interface ConversationPolicyResponse {
    * SciForge recall ledger.
    */
   contextPolicy?: Record<string, unknown>;
-  handoffMemoryProjection?: Record<string, unknown>;
+  contextProjection?: Record<string, unknown>;
   currentReferences?: Array<Record<string, unknown>>;
   currentReferenceDigests?: Array<Record<string, unknown>>;
   artifactIndex?: Record<string, unknown>;
@@ -194,7 +194,7 @@ export function normalizeConversationPolicyResponse(value: unknown): Conversatio
     schemaVersion: CONVERSATION_POLICY_RESPONSE_VERSION,
     goalSnapshot: optionalRecord(record.goalSnapshot),
     contextPolicy: optionalRecord(record.contextPolicy),
-    handoffMemoryProjection: optionalRecord(record.handoffMemoryProjection),
+    contextProjection: contextProjectionRecord(record),
     currentReferences: optionalRecordList(record.currentReferences),
     currentReferenceDigests: optionalRecordList(record.currentReferenceDigests),
     artifactIndex: optionalRecord(record.artifactIndex),
@@ -219,6 +219,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function optionalRecord(value: unknown) {
   return isRecord(value) ? value : undefined;
+}
+
+function contextProjectionRecord(record: Record<string, unknown>) {
+  const contextProjection = optionalRecord(record.contextProjection);
+  if (contextProjection) return contextProjection;
+  const legacyProjection = optionalRecord(record.handoffMemoryProjection);
+  if (!legacyProjection) return undefined;
+  return {
+    ...legacyProjection,
+    migrationAlias: {
+      from: 'handoffMemoryProjection',
+      to: 'contextProjection',
+      scope: 'historical-response-read',
+    },
+  };
 }
 
 function policyRecord(value: unknown, fallback: Record<string, unknown>) {

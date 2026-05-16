@@ -12,8 +12,8 @@
     "schemaVersion": "sciforge.conversation.context-policy.v1",
     "mode": "continue"
   },
-  "handoffMemoryProjection": {
-    "schemaVersion": "sciforge.conversation.handoff-memory-projection.v1"
+  "contextProjection": {
+    "schemaVersion": "sciforge.conversation.context-projection.v1"
   },
   "currentReferences": [],
   "currentReferenceDigests": [],

@@ -61,6 +61,42 @@ test('context envelope uses package policy for current request and verification 
   ]);
 });
 
+test('context envelope exposes workspace context projection on the public session path', () => {
+  const envelope = buildContextEnvelope({
+    skillDomain: 'knowledge',
+    prompt: 'Continue with compact context refs.',
+    artifacts: [],
+    uiState: {
+      contextProjection: {
+        mode: 'continue',
+        workspaceKernel: {
+          schemaVersion: 'sciforge.workspace-ledger-projection.v1',
+          sessionId: 'session-context-projection',
+          eventCount: 2,
+          refCount: 3,
+        },
+        contextRefs: [{ ref: 'projection:ctx', kind: 'projection', digest: 'sha256:ctx', sizeBytes: 16 }],
+        capabilityBriefRef: { ref: 'projection:brief', kind: 'projection', digest: 'sha256:brief', sizeBytes: 16 },
+        cachePlan: {
+          stablePrefixRefs: [{ ref: 'projection:stable', kind: 'projection', digest: 'sha256:stable', sizeBytes: 16 }],
+          perTurnPayloadRefs: [{ ref: 'ledger-event:turn', kind: 'ledger-event', digest: 'sha256:turn', sizeBytes: 16 }],
+        },
+        selectedMessageRefs: [{ id: 'msg-1', role: 'assistant', summary: 'Bounded prior turn.', refs: ['projection:ctx'] }],
+      },
+    },
+  } as GatewayRequest, { workspace: '/tmp/sciforge-test' });
+
+  const sessionFacts = record(envelope.sessionFacts);
+  const projection = record(sessionFacts.contextProjection);
+  assert.equal(projection.schemaVersion, 'sciforge.context-projection-envelope.v1');
+  assert.equal(record(projection.workspaceKernel).sessionId, 'session-context-projection');
+  assert.deepEqual(records(projection.contextRefs).map((entry) => entry.ref), ['projection:ctx']);
+  assert.equal(record(projection.capabilityBriefRef).ref, 'projection:brief');
+  assert.equal(record(projection.cachePlan).stablePrefixRefs instanceof Array, true);
+  assert.equal('handoffMemoryProjection' in sessionFacts, false);
+  assert.doesNotMatch(JSON.stringify(envelope), /projectSessionMemoryProjection|memoryPlan|"availableSkills"/);
+});
+
 test('context envelope keeps ref-backed artifact bodies and log refs bounded for continuation', () => {
   const envelope = buildContextEnvelope({
     skillDomain: 'knowledge',

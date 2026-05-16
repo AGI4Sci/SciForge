@@ -32,7 +32,7 @@ class ExecutionClassifierInput:
     current_reference_digests: Sequence[Any] = field(default_factory=tuple)
     artifacts: Sequence[Mapping[str, Any]] = field(default_factory=tuple)
     context_policy: Mapping[str, Any] = field(default_factory=dict)
-    handoff_memory_projection: Mapping[str, Any] = field(default_factory=dict)
+    context_projection: Mapping[str, Any] = field(default_factory=dict)
     goal_snapshot: Mapping[str, Any] = field(default_factory=dict)
     capability_brief: Mapping[str, Any] = field(default_factory=dict)
     turn_execution_constraints: Mapping[str, Any] = field(default_factory=dict)
@@ -90,7 +90,7 @@ def _coerce_request(value: ExecutionClassifierInput | Mapping[str, Any] | Any) -
             "current_references": "currentReferences",
             "current_reference_digests": "currentReferenceDigests",
             "context_policy": "contextPolicy",
-            "handoff_memory_projection": "handoffMemoryProjection",
+            "context_projection": "contextProjection",
             "goal_snapshot": "goalSnapshot",
             "capability_brief": "capabilityBrief",
             "turn_execution_constraints": "turnExecutionConstraints",

@@ -1,4 +1,4 @@
-"""Python bridge for bounded Project Session Memory projection.
+"""Python bridge for bounded conversation context projection.
 
 Workspace ledger/ref store owns recoverable facts. This module builds bounded
 projection hints and cache-aware refs for transport.
@@ -81,11 +81,11 @@ def _payload(value: Mapping[str, Any] | Any) -> JsonMap:
     return jsonable if isinstance(jsonable, dict) else {}
 
 
-def build_handoff_memory_projection(request: Mapping[str, Any] | Any) -> JsonMap:
-    result = _from_gateway(_payload(request), "buildConversationHandoffMemoryProjection")
+def build_context_projection(request: Mapping[str, Any] | Any) -> JsonMap:
+    result = _from_gateway(_payload(request), "buildConversationContextProjection")
     if not isinstance(result, dict):
-        raise RuntimeError("conversation handoff projection bridge returned a non-object payload")
+        raise RuntimeError("conversation context projection bridge returned a non-object payload")
     return result
 
 
-__all__ = ["build_handoff_memory_projection"]
+__all__ = ["build_context_projection"]

@@ -46,13 +46,14 @@ export function planConversationHandoff(request: ConversationHandoffPlanInput = 
   const budget = normalizeBudget(recordValue(request.budget));
   const decisions: JsonMap[] = [];
   const requiredArtifacts = requiredArtifactsFor(request);
+  const contextProjection = contextProjectionInputForPlanner(request, decisions);
   let payload = omitEmpty({
     goal: compactValue(request.goal ?? {}, budget, decisions, ['goal']),
     prompt: compactPrompt(stringValue(request.prompt) ?? stringValue(recordValue(request.goal)?.prompt), budget, decisions),
     policy: compactValue(request.policy ?? {}, budget, decisions, ['policy']),
     currentReferenceDigests: compactRefs(arrayValue(request.currentReferenceDigests ?? request.digests), budget, decisions),
     artifacts: compactArtifacts(arrayValue(request.artifacts), budget, decisions),
-    handoffMemoryProjection: compactHandoffProjection(recordValue(request.handoffMemoryProjection) ?? {}, budget, decisions),
+    contextProjection: compactContextProjection(contextProjection, budget, decisions),
     requiredArtifacts,
   });
   payload = normalizeCanonicalHandoffValue(payload, {
@@ -211,14 +212,33 @@ function compactArtifacts(artifacts: unknown[], budget: Record<string, number>, 
   return out;
 }
 
-function compactHandoffProjection(projection: JsonMap, budget: Record<string, number>, decisions: JsonMap[]): JsonMap {
+function contextProjectionInputForPlanner(request: JsonMap, decisions: JsonMap[]): JsonMap {
+  const contextProjection = recordValue(request.contextProjection) ?? {};
+  if (Object.keys(contextProjection).length) return contextProjection;
+  const legacyProjection = recordValue(request.handoffMemoryProjection) ?? {};
+  if (Object.keys(legacyProjection).length) {
+    decisions.push({
+      kind: kind('context', 'projection', 'legacy', 'input'),
+      reason: kind('migration', 'audit'),
+      sourceKey: 'handoffMemoryProjection',
+      targetKey: 'contextProjection',
+    });
+  }
+  return legacyProjection;
+}
+
+function compactContextProjection(projection: JsonMap, budget: Record<string, number>, decisions: JsonMap[]): JsonMap {
   const out: JsonMap = {};
   for (const key of [
     'authority',
-    'projectSessionMemory',
+    'workspaceKernel',
+    'workspaceLedger',
     'contextProjectionBlocks',
     'stablePrefixHash',
     'contextRefs',
+    'capabilityBriefRef',
+    'cachePlan',
+    'agentServerContextRequest',
     'selectedContextRefs',
     'retrievalTools',
     'currentReferenceFocus',
@@ -227,13 +247,21 @@ function compactHandoffProjection(projection: JsonMap, budget: Record<string, nu
   ]) {
     const value = projection[key];
     if (key === 'priorAttempts' && Array.isArray(value) && value.length > budget.maxPriorAttempts) {
-      out[key] = value.slice(-budget.maxPriorAttempts).map((item, index) => compactValue(item, budget, decisions, ['handoffMemoryProjection', key, String(index)]));
+      out[key] = value.slice(-budget.maxPriorAttempts).map((item, index) => compactValue(item, budget, decisions, ['contextProjection', key, String(index)]));
       decisions.push({ kind: kind('prior', 'attempts'), reason: kind('array', 'budget'), originalCount: value.length, keptCount: budget.maxPriorAttempts });
       continue;
     }
-    const compact = compactValue(value, budget, decisions, ['handoffMemoryProjection', key]);
+    const compact = compactValue(value, budget, decisions, ['contextProjection', key]);
     if (!isEmpty(compact)) out[key] = compact;
   }
+  compactProjectionAlias(
+    out,
+    projection,
+    'workspaceKernel',
+    ['projectSessionMemory'],
+    budget,
+    decisions,
+  );
   compactProjectionAlias(
     out,
     projection,
@@ -267,13 +295,13 @@ function compactProjectionAlias(
   if (!sourceKey) return;
   if (sourceKey !== targetKey) {
     decisions.push({
-      kind: kind('handoff', 'projection', 'legacy', 'key'),
+      kind: kind('context', 'projection', 'legacy', 'key'),
       reason: kind('refs', 'first', 'rename'),
       sourceKey,
       targetKey,
     });
   }
-  const compact = compactValue(projection[sourceKey], budget, decisions, ['handoffMemoryProjection', targetKey]);
+  const compact = compactValue(projection[sourceKey], budget, decisions, ['contextProjection', targetKey]);
   if (!isEmpty(compact)) out[targetKey] = compact;
 }
 

@@ -59,7 +59,7 @@ RESPONSE_JSON_SCHEMA: JsonMap = {
         "status": {"enum": ["ok", "rejected", "failed"]},
         "goalSnapshot": {"type": "object"},
         "contextPolicy": {"type": "object"},
-        "handoffMemoryProjection": {"type": "object"},
+        "contextProjection": {"type": "object"},
         "currentReferences": {"type": "array"},
         "currentReferenceDigests": {"type": "array"},
         "artifactIndex": {"type": "object"},
@@ -195,7 +195,7 @@ class ConversationPolicyResponse:
     schemaVersion: str = RESPONSE_SCHEMA_VERSION
     requestId: str | None = None
     status: PolicyStatus = "ok"
-    handoffMemoryProjection: JsonMap = field(default_factory=dict)
+    contextProjection: JsonMap = field(default_factory=dict)
     currentReferences: list[JsonMap] = field(default_factory=list)
     currentReferenceDigests: list[JsonMap] = field(default_factory=list)
     artifactIndex: JsonMap = field(default_factory=dict)
@@ -267,7 +267,7 @@ def response_from_json(payload: JsonMap) -> ConversationPolicyResponse:
         status=payload.get("status", "ok"),
         goalSnapshot=_optional_mapping(payload.get("goalSnapshot"), "goalSnapshot"),
         contextPolicy=_optional_mapping(payload.get("contextPolicy"), "contextPolicy"),
-        handoffMemoryProjection=_optional_mapping(payload.get("handoffMemoryProjection"), "handoffMemoryProjection"),
+        contextProjection=_context_projection_from_response(payload),
         currentReferences=[
             item for item in _optional_list(payload.get("currentReferences"), "currentReferences")
             if isinstance(item, dict)
@@ -296,6 +296,23 @@ def response_from_json(payload: JsonMap) -> ConversationPolicyResponse:
         errors=_optional_list(payload.get("errors"), "errors"),
         metadata=_optional_mapping(payload.get("metadata"), "metadata"),
     )
+
+
+def _context_projection_from_response(payload: JsonMap) -> JsonMap:
+    value = payload.get("contextProjection")
+    if isinstance(value, dict):
+        return _optional_mapping(value, "contextProjection")
+    legacy = payload.get("handoffMemoryProjection")
+    if isinstance(legacy, dict):
+        return {
+            **_optional_mapping(legacy, "handoffMemoryProjection"),
+            "migrationAlias": {
+                "from": "handoffMemoryProjection",
+                "to": "contextProjection",
+                "scope": "historical-fixture-read",
+            },
+        }
+    return {}
 
 
 def _turn_from_json(payload: Any) -> ConversationTurn:

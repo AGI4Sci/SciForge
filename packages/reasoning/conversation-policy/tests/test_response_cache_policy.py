@@ -172,7 +172,7 @@ def _policy_request(
         risk_flags.append("recent-failure")
     request = {
         "contextPolicy": {"mode": context_mode},
-        "handoffMemoryProjection": {"currentReferenceFocus": ["fixtures/sample.md"] if include_refs else []},
+        "contextProjection": {"currentReferenceFocus": ["fixtures/sample.md"] if include_refs else []},
         "executionModePlan": {
             "executionMode": mode,
             "stagePlanHint": _stage_hint(mode),

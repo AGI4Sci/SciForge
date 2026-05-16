@@ -105,6 +105,46 @@ test('AgentServer generation prompt renderer consumes BackendHandoffPacket and b
   assert.doesNotMatch(prompt, /"promptRenderPlan":/);
 });
 
+test('AgentServer prompt renders workspace context projection without legacy memory field names', () => {
+  const prompt = buildAgentServerGenerationPrompt({
+    prompt: 'Use the supplied context refs.',
+    skillDomain: 'literature',
+    contextEnvelope: {
+      sessionFacts: {
+        contextProjection: {
+          schemaVersion: 'sciforge.context-projection-envelope.v1',
+          authority: 'workspaceKernel refs are canonical truth',
+          workspaceKernel: {
+            schemaVersion: 'sciforge.workspace-ledger-projection.v1',
+            sessionId: 'session-ctx',
+            eventCount: 1,
+            refCount: 2,
+          },
+          stablePrefixHash: 'sha256:stable',
+          contextRefs: [ref('projection:ctx', 'projection')],
+          capabilityBriefRef: ref('projection:capability-brief', 'projection'),
+          cachePlan: {
+            stablePrefixRefs: [ref('projection:stable', 'projection')],
+            perTurnPayloadRefs: [ref('ledger-event:turn-1', 'ledger-event')],
+          },
+          retrievalTools: ['read_ref'],
+        },
+      },
+    },
+    workspaceTreeSummary: [],
+    availableSkills: [],
+    artifactSchema: {},
+    uiManifestContract: {},
+    priorAttempts: [],
+  });
+
+  assert.match(prompt, /"contextProjection"/);
+  assert.match(prompt, /"workspaceKernel"/);
+  assert.match(prompt, /"capabilityBriefRef"/);
+  assert.match(prompt, /"cachePlan"/);
+  assert.doesNotMatch(prompt, /projectSessionMemoryProjection|handoffMemoryProjection|"availableSkills"/);
+});
+
 function ref(id: string, kind: ProjectMemoryRef['kind']): ProjectMemoryRef {
   return {
     ref: id,

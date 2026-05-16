@@ -135,8 +135,8 @@ SA evidence / blocked 模板：
 
 #### P0：删除旧链路和命名漂移
 
-- [ ] SA-DEL-01：把 `src/runtime/project-session-memory.ts`、`src/runtime/gateway/conversation-handoff-projection.ts` 中仍以 ProjectSessionMemory 命名的主路径迁移为 `workspace-kernel` / `context-projection` 命名；旧名字不得作为 public runtime contract 暴露。
-- [ ] SA-DEL-02：删除或迁移 `handoffMemoryProjection`、`memoryPlan`、`availableSkills` 这类旧兼容字段；如果 backend/harness 仍需读取，改成 explicit `AgentServerContextRequest.contextRefs` / `capabilityBriefRef` / `cachePlan`。
+- [x] SA-DEL-01：把 `src/runtime/project-session-memory.ts`、`src/runtime/gateway/conversation-handoff-projection.ts` 中仍以 ProjectSessionMemory 命名的主路径迁移为 `workspace-kernel` / `context-projection` 命名；旧名字不得作为 public runtime contract 暴露。Evidence：`project-session-memory.ts` 主导出改为 `WorkspaceLedger*` / `WorkspaceRecoveryProjection`，旧 `ProjectSession*` 只保留 deprecated migration/audit alias；`conversation-handoff-projection.ts` 输出 `ConversationContextProjection` / `workspaceKernel`；Python bridge 改为 `context_projection.py` 调用 `buildConversationContextProjection`；targeted TS tests、`python -m pytest packages/reasoning/conversation-policy/tests`、`npm run typecheck` 通过。
+- [x] SA-DEL-02：删除或迁移 `handoffMemoryProjection`、`memoryPlan`、`availableSkills` 这类旧兼容字段；如果 backend/harness 仍需读取，改成 explicit `AgentServerContextRequest.contextRefs` / `capabilityBriefRef` / `cachePlan`。Evidence：conversation-policy response/service、context envelope、prompt snapshot 和 planner payload 主路径改为 `contextProjection`、`contextRefs`、`capabilityBriefRef`、`cachePlan`；旧 `handoffMemoryProjection` 只作为 explicit migration alias 被读取并记录 rename decision；`agentserver-context-contract` forbidden-field guard、prompt/context/planner tests、C01-C18 smoke 与 typecheck 通过。
 - [x] SA-DEL-03：删除 UI 中 `legacyRawRecoverableReasonForRun`、`legacy raw recover action`、raw compact summary 等主路径 fallback；历史 session 只允许 audit-only 展示。Evidence：`ResultsRenderer` / `ArchiveDrawer` / `ChatPanel` / `workspaceState` 改为 session-level `ConversationProjection` 主路径，raw `resultPresentation` / `verificationResult` / recover action 只保留 migration/audit fixture；`ArchiveDrawer.test.tsx`、`ChatPanel.test.ts`、`workspaceState.test.ts`、`results-renderer-execution-model.test.ts` 与 `smoke:web-multiturn-final` SA-WEB-14 覆盖。
 - [x] SA-DEL-04：删除 Runtime/Gateway 中把 malformed backend text、raw JSON、legacy task output 伪装成成功结果的 fallback；必须归类 `contract-incompatible`、`validation` 或 `failed-with-reason`。Evidence：`direct-answer-payload` plain AgentServer text guard 保持 fail-closed，`payload-validation.test.ts` 新增纯结构 validator fixture，malformed/loose payload 走 repair/diagnostic 而不是成功；`node --import tsx --test src/runtime/gateway/direct-context-fast-path.test.ts src/runtime/gateway/capability-provider-preflight.test.ts src/runtime/gateway/payload-validation.test.ts`、`npm run smoke:no-legacy-paths`、`npm run smoke:single-agent-runtime-contract` 通过；拒绝兼容方案：不把 plain prose/raw taskFiles/legacy JSON 自动包装成 completed ToolPayload。
 - [x] SA-DEL-05：清理 docs/tests 中旧 `ProjectSessionMemory.md`、`Extending.md`、`SciForgeConversationSessionRecovery.md` 权威入口引用；当前 `smoke:docs-scenario-package` 已改为检查最终文档，后续继续扩展为断链 guard。Evidence：`docs/README.md` / `docs/Architecture.md` 标记旧文档为 archive/historical；`smoke:docs-scenario-package` 校验旧 docs 不存在、旧名只出现在 archive/historical 语境且 docs markdown 链接可解析。
@@ -161,7 +161,7 @@ SA evidence / blocked 模板：
 
 #### P2：AgentServer Context Core 与 buildContextRequest
 
-- [ ] SA-CONTEXT-01：新增/收口 `AgentServerAdapter`，默认模式固定为 `owned-orchestrator-third-party-backend`；`third-party-adapter` 只能作为显式兼容模式，不能是默认路径。
+- [x] SA-CONTEXT-01：新增/收口 `AgentServerAdapter`，默认模式固定为 `owned-orchestrator-third-party-backend`；`third-party-adapter` 只能作为显式兼容模式，不能是默认路径。Evidence：`createInlineAgentServerAdapter()` 默认 `owned-orchestrator-third-party-backend` + `third-party-backend` boundary；`third-party-adapter` 必须显式 `compatibilityMode=explicit-third-party-adapter`；`generation-gateway.ts` 主 AgentServer generation 入口通过 adapter，backend adapter 创建收口到 `backendAdapterForAgentServerAdapter()`；`agentserver-adapter.test.ts`、runtime targeted tests、C10 static guard 与 typecheck 通过。
 - [x] SA-CONTEXT-02：实现正式 `AgentServerContextRequest`：`currentTask.currentTurnRef` 必填，`stablePrefixRefs` / `perTurnPayloadRefs` 二层 cachePlan，selected refs 必须 bounded/source-tagged。Evidence：`buildAgentServerContextRequest()` 落地 current turn anchor、二层 cachePlan、source-tagged bounded selectedRefs 和 request canonical validation；`node --import tsx --test src/runtime/gateway/agentserver-context-contract.test.ts` 通过。
 - [x] SA-CONTEXT-03：实现 buildContextRequest 防漂移规则：fresh 默认隔离旧 recent turns；continue/repair 才打开 current work；无 explicit refs 时只提供 bounded indexes 和 retrievalPolicy，不猜“最相关 artifact”。Evidence：builder fixture 覆盖 fresh 清空 stable prefix/current work、continue 打开 current work、no explicit refs 只选 bounded context-index；`node --import tsx --test src/runtime/gateway/agentserver-context-contract.test.ts` 通过。
 - [x] SA-CONTEXT-04：实现 byte-level deterministic `RefSelectionPolicy` budgets，并禁止函数字段；AgentServer retrieval 不可用时只允许确定性 fallbackOrder。Evidence：`RefSelectionPolicy` v1 包含 byte/ref/cache budgets、deterministic flag、fallbackOrder 和 retrievalAvailable；validator 禁止函数值并检查 stablePrefix drift；retrieval-unavailable fixture 只保留 deterministic fallback refs；`npm run typecheck` 通过。
@@ -187,7 +187,7 @@ SA evidence / blocked 模板：
 
 #### P4：Runtime Bridge、Run lifecycle 与 failure
 
-- [ ] SA-RUNTIME-01：把主流程收敛为声明式 `TurnPipeline(registerTurn → requestContext → driveRun → finalizeRun)`；executor 禁止业务 `if` 和用户文本判断。Partial evidence：新增 `single-agent-runtime` contract 与 `createTurnPipeline()`，固定 stage 顺序、executor policy 和 `onFailure+RepairPolicy` 归属；`runtime-lifecycle.test.ts` 覆盖 register/context/drive/finalize 顺序与 run-status event；`tools/check-no-legacy-paths.ts` 新增 runtime user-text inspection guard；仍需把 `src/runtime/generation-gateway.ts` 主执行路径接入该 pipeline 后再关闭。
+- [x] SA-RUNTIME-01：把主流程收敛为声明式 `TurnPipeline(registerTurn → requestContext → driveRun → finalizeRun)`；executor 禁止业务 `if` 和用户文本判断。Evidence：`single-agent-runtime` contract 与 `createTurnPipeline()` 固定 stage 顺序、executor policy 和 `onFailure+RepairPolicy` 归属；`generation-gateway.ts` AgentServer generation 主入口接入 `createTurnPipeline()` 并发出 `agentserver-turn-pipeline-stage` 观测事件，实际 dispatch 只在 `driveRun` 中通过 `AgentServerAdapter.generateTask()`；`runtime-lifecycle.test.ts`、`generation-gateway.policy.test.ts`、`agentserver-adapter.test.ts`、C10 static guard、typecheck 与 runtime smoke 通过。
 - [x] SA-RUNTIME-02：RunStateMachine 不维护可变内存状态；所有 transition、checkpoint、terminal 都 append `run-status` / checkpoint event，并从 Projection 恢复。Evidence：新增 `RunStatusRecorded` / `RunCheckpointRecorded` event contract、validator、projection/replay support 和 `createRunStateMachine()`；checkpoint/failed terminal 只从 event log materialize，`recoverFromProjection()` 不读 mutable memory；targeted runtime tests 与 `smoke:single-agent-runtime-contract` 通过。
 - [x] SA-RUNTIME-03：EventRelay 实现 `producerSeq` / `cursor` / `callId + inputDigest + routeDigest` 幂等；重复 tool call 复用 resultRefs。Evidence：新增 `createEventRelay()` 与 `eventRelayIdempotencyKey()`，producer cursor resume 和 idempotent tool result reuse 由 runtime test 与 C08 smoke 使用真实 primitive 覆盖。
 - [x] SA-RUNTIME-04：WriteAheadSpool 只做 in-process bounded buffer；超过 depth/age 上限进入 `storage-unavailable` failed，不进入 degraded。Evidence：新增 `createWriteAheadSpool()`，depth/age overflow 返回 `FailureNormalizer` 的 `storage-unavailable` + `fail-closed`，不生成 degraded；runtime test 与 C09 smoke 覆盖。
@@ -280,26 +280,9 @@ Web E2E 任务：
 - [x] SA-WEB-26：实现 Web E2E flake policy：同一 case 失败必须输出最小复现 command、case manifest、last screenshot 和 first failed contract；禁止简单重试掩盖 nondeterministic context drift。Evidence：`tests/smoke/web-e2e/flake-policy.ts` 生成最小复现、case manifest、last screenshot、first failed contract，并对 context/projection digest drift fail closed；focused web-e2e helper tests 与 `typecheck` 通过。
 - [x] SA-WEB-27：将 `R-LIT-*`、`R-DATA-*`、`R-RUN-*`、`R-UI-*` 中已沉淀的真实多轮任务映射到 SA-WEB case tags，保留真实场景覆盖，但验收标准统一回最终 contract。Evidence：`tests/smoke/web-e2e/case-tags.ts` 将 36 个 R-LIT/R-DATA/R-RUN/R-UI 真实多轮任务映射到最终 SA-WEB case tags、complex multiturn source fixture ids 和 contract assertions；`case-tags.test.ts` 校验覆盖数、tag/source fixture 合法性和关键 lineage，`typecheck` 通过。
 
-#### 当前已识别旧链路候选
+#### 已关闭旧链路候选
 
-- `src/runtime/project-session-memory.ts`：旧命名仍在 runtime contract 中，需要迁移为 Workspace Kernel / context projection 命名。
-- `src/runtime/conversation-kernel/*`：与 `ProjectSessionMemory` 并存，需合并为唯一 Workspace Kernel 主路径。
-- `src/runtime/gateway/conversation-handoff-projection.ts`：仍调用 `normalizeProjectSessionMemory`，需要对齐 `AgentServerContextRequest` / `cachePlan`。
-- `src/runtime/gateway/conversation-handoff-planner.ts`、`src/runtime/workspace-task-input.ts`：重复承担 handoff budget/compaction/audit，需要收敛为一个 canonical handoff normalizer。
-- `src/runtime/gateway/agentserver-prompts.ts`：仍在主链路组装 prompt/currentTurnSnapshot，需要改为消费 `BackendHandoffPacket` / bounded render plan。
-- `src/runtime/gateway/agentserver-context-window.ts`：中间 snapshot 仍可能保留 clipped turn content，需要改成 ref/digest-only。
-- `src/runtime/gateway/direct-context-fast-path.ts`：已有收紧，但最终要改成结构化 `DirectContextDecision` 来源，不保留 Runtime Bridge 自判策略。
-- `src/runtime/gateway/capability-provider-preflight.ts`：preflight/route 作为 Runtime 可见阶段外泄，需要收回 Gateway 内部。
-- `src/runtime/generation-gateway.ts`：存在 direct-context/preflight 策略分支，需要纳入 declarative pipeline / AgentServer decision。
-- `src/ui/src/app/appShell/workspaceState.ts`：含 `legacyRawRecoverableReasonForRun`，需要删除主路径 fallback。
-- `src/ui/src/app/ResultsRenderer.tsx`、`src/ui/src/app/results-renderer-execution-model.test.ts`、`src/ui/src/app/chat/ArchiveDrawer.test.tsx`：含 compatibility / legacy raw 行为，需要改成 Projection/ArtifactDelivery/audit-only。
-- `src/ui/src/app/conversation-projection-view-model.ts`、`src/ui/src/app/results-renderer-execution-model.ts`、`src/ui/src/app/results/viewPlanResolver.ts`、`src/ui/src/app/chat/messageRunPresentation.tsx`、`src/ui/src/app/ChatPanel.tsx`：仍有 raw/projectionless 主展示入口，需要迁移到 Projection-only。
-- `packages/support/object-references/presentation-role.ts`、`packages/presentation/interactive-views/presentation-input-policy.ts`：ArtifactDelivery 可见性 helper 尚未完全统一，`diagnostic` role 需要 audit-only。
-- `packages/presentation/components/index.test.ts`：保留 compatibility alias 的测试需要重新评估；若是 UI component registry 迁移兼容，必须从 runtime 主路径移出。
-- `packages/agent-harness/src/profiles.ts`：仍有 prompt regex classifier，需要变成结构化 policy decision 输入或 fixture。
-- `tests/smoke/smoke-t098-latency-diagnostics-matrix.ts`：仍保护旧 direct-context/preflight 可见阶段，需要重写为 C06/C07/C16 guard。
-- `package.json` 的 `smoke:browser`、`smoke:browser-multiturn`、`smoke:browser-provider-preflight`：仍是旧浏览器验收入口，需要迁入 `smoke:web-multiturn-final` 或降级为子场景。
-- `docs/Architecture.md` 中仍记录 `availableSkills` 兼容字段、conversation-policy 主路径等当前实现背景；实现完成后应继续删减或标注 historical-only。
+旧链路候选已全部迁移到上方 SA-* 并关闭：Workspace Kernel / context projection 命名成为主路径，AgentServer context request 使用 `contextRefs` / `capabilityBriefRef` / `cachePlan`，Runtime Bridge 通过 declarative TurnPipeline + AgentServerAdapter 主路径运行，UI 主展示只来自 Projection/ArtifactDelivery。剩余旧名只允许出现在 archive/historical、migration/audit alias、negative guard 或 compatibility test 语境中。
 
 旧链路候选处理规则：本节以下只允许保留 archive/historical 摘要和 Stability Orchestration。旧 2026-05-14/15 任务的未完成 TODO 必须迁移到 SA-* 或关闭；不允许为了完成旧 TODO 新增兼容层。
 

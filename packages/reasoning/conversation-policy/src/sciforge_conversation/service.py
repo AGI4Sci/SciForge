@@ -25,7 +25,7 @@ from .execution_classifier import classify_execution_mode
 from .goal_snapshot import build_goal_snapshot
 from .handoff_planner import plan_handoff
 from .latency_policy import build_latency_policy
-from .handoff_projection import build_handoff_memory_projection
+from .context_projection import build_context_projection
 from .response_plan import build_background_plan, build_response_plan
 from .service_plan import build_error_response, build_policy_input, build_service_plan, build_turn_composition
 
@@ -45,7 +45,7 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
     policy_input = _policy_input(request)
     goal_snapshot = build_goal_snapshot(policy_input)
     context_policy = build_context_policy({**policy_input, "goalSnapshot": goal_snapshot})
-    handoff_memory_projection = build_handoff_memory_projection({
+    context_projection = build_context_projection({
         **policy_input,
         "goalSnapshot": goal_snapshot,
         "contextPolicy": context_policy,
@@ -59,7 +59,7 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         "policyInput": policy_input,
         "goalSnapshot": goal_snapshot,
         "contextPolicy": context_policy,
-        "handoffMemoryProjection": handoff_memory_projection,
+        "contextProjection": context_projection,
         "currentReferenceDigests": current_reference_digests,
         "capabilityBrief": capability_brief,
         "turnExecutionConstraints": _turn_execution_constraints(policy_input, goal_snapshot),
@@ -78,7 +78,7 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         "prompt": policy_input["prompt"],
         "goal": goal_snapshot,
         "policy": context_policy,
-        "handoffMemoryProjection": handoff_memory_projection,
+        "contextProjection": context_projection,
         "currentReferenceDigests": current_reference_digests,
         "artifacts": context_session.get("artifacts", []),
         "requiredArtifacts": goal_snapshot.get("requiredArtifacts", []),
@@ -97,7 +97,7 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         "policyInput": policy_input,
         "goalSnapshot": goal_snapshot,
         "contextPolicy": context_policy,
-        "handoffMemoryProjection": handoff_memory_projection,
+        "contextProjection": context_projection,
         "currentReferences": _mapping_list_from_plan(turn_composition, "currentReferences"),
         "currentReferenceDigests": current_reference_digests,
         "artifactIndex": clickable_refs,
@@ -128,7 +128,7 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         requestId=request.requestId,
         goalSnapshot=goal_snapshot,
         contextPolicy=context_policy,
-        handoffMemoryProjection=handoff_memory_projection,
+        contextProjection=context_projection,
         currentReferences=current_references,
         currentReferenceDigests=current_reference_digests,
         artifactIndex=clickable_refs,

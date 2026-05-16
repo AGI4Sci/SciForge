@@ -829,8 +829,8 @@ export function buildAgentServerGenerationPrompt(request: {
   const capabilityBrokerRouteSummary = compactCapabilityBrokerRouteSummary(capabilityBrokerBrief);
   const backendHandoffPacket = backendHandoffPacketForPrompt(request, contextEnvelope);
   const promptRenderPlanSummary = promptRenderPlanSummaryForAgentServer(request, contextEnvelope, sessionFacts);
-  const projectSessionProjection = isRecord(sessionFacts.handoffMemoryProjection)
-    ? compactProjectSessionMemoryProjectionForPrompt(sessionFacts.handoffMemoryProjection)
+  const contextProjection = isRecord(sessionFacts.contextProjection)
+    ? compactWorkspaceContextProjectionForPrompt(sessionFacts.contextProjection)
     : undefined;
   const currentTurnSnapshot = agentServerCurrentTurnSnapshotFromHandoff({
     request,
@@ -840,7 +840,7 @@ export function buildAgentServerGenerationPrompt(request: {
     conversationPolicySummary,
     executionMode,
     capabilityBrokerRouteSummary,
-    projectSessionProjection,
+    contextProjection,
   });
   return [
     ...agentServerCurrentTurnSnapshotPromptPolicyLines(),
@@ -898,7 +898,7 @@ function agentServerCurrentTurnSnapshotFromHandoff(params: {
   conversationPolicySummary: Record<string, unknown> | undefined;
   executionMode: ReturnType<typeof executionModeDecisionForPrompt>;
   capabilityBrokerRouteSummary: Record<string, unknown> | undefined;
-  projectSessionProjection: Record<string, unknown> | undefined;
+  contextProjection: Record<string, unknown> | undefined;
 }) {
   const packet = params.backendHandoffPacket;
   return {
@@ -937,12 +937,15 @@ function agentServerCurrentTurnSnapshotFromHandoff(params: {
     } : undefined,
     capabilityBrokerBrief: params.capabilityBrokerRouteSummary,
     promptRenderPlanSummary: params.promptRenderPlanSummary,
-    projectSessionMemoryProjection: params.projectSessionProjection ? {
-      schemaVersion: params.projectSessionProjection.schemaVersion,
-      stablePrefixHash: params.projectSessionProjection.stablePrefixHash,
-      selectedContextRefs: params.projectSessionProjection.selectedContextRefs,
-      contextRefs: params.projectSessionProjection.contextRefs,
-      retrievalTools: params.projectSessionProjection.retrievalTools,
+    contextProjection: params.contextProjection ? {
+      schemaVersion: params.contextProjection.schemaVersion,
+      stablePrefixHash: params.contextProjection.stablePrefixHash,
+      selectedContextRefs: params.contextProjection.selectedContextRefs,
+      contextRefs: params.contextProjection.contextRefs,
+      capabilityBriefRef: params.contextProjection.capabilityBriefRef,
+      cachePlan: params.contextProjection.cachePlan,
+      retrievalTools: params.contextProjection.retrievalTools,
+      workspaceKernel: params.contextProjection.workspaceKernel,
     } : undefined,
     strictTaskFilesReason: params.request.strictTaskFilesReason,
     repairContinuation: params.request.repairContinuation ? {
@@ -1100,32 +1103,38 @@ function compactCapabilityBriefForPrompt(brief: Record<string, unknown>) {
   };
 }
 
-function compactProjectSessionMemoryProjectionForPrompt(value: Record<string, unknown>) {
-  const projectSessionMemory = isRecord(value.projectSessionMemory) ? value.projectSessionMemory : {};
+function compactWorkspaceContextProjectionForPrompt(value: Record<string, unknown>) {
+  const workspaceKernel = isRecord(value.workspaceKernel)
+    ? value.workspaceKernel
+    : isRecord(value.workspaceLedger)
+      ? value.workspaceLedger
+      : isRecord(value.projectSessionMemory)
+        ? value.projectSessionMemory
+        : {};
   return {
     schemaVersion: stringField(value.schemaVersion),
     authority: stringField(value.authority),
     mode: stringField(value.mode),
-    projectSessionMemory: {
-      schemaVersion: stringField(projectSessionMemory.schemaVersion),
-      sessionId: stringField(projectSessionMemory.sessionId),
-      eventCount: typeof projectSessionMemory.eventCount === 'number' ? projectSessionMemory.eventCount : undefined,
-      refCount: typeof projectSessionMemory.refCount === 'number' ? projectSessionMemory.refCount : undefined,
-      eventIndex: toRecordList(projectSessionMemory.eventIndex).slice(-16).map((entry) => ({
+    workspaceKernel: {
+      schemaVersion: stringField(workspaceKernel.schemaVersion),
+      sessionId: stringField(workspaceKernel.sessionId),
+      eventCount: typeof workspaceKernel.eventCount === 'number' ? workspaceKernel.eventCount : undefined,
+      refCount: typeof workspaceKernel.refCount === 'number' ? workspaceKernel.refCount : undefined,
+      eventIndex: toRecordList(workspaceKernel.eventIndex).slice(-16).map((entry) => ({
         eventId: stringField(entry.eventId),
         kind: stringField(entry.kind),
         runId: stringField(entry.runId),
         summary: clipForAgentServerPrompt(entry.summary, 220),
         refs: toStringList(entry.refs).slice(0, 6),
       })),
-      refIndex: toRecordList(projectSessionMemory.refIndex).slice(-24).map((entry) => ({
+      refIndex: toRecordList(workspaceKernel.refIndex).slice(-24).map((entry) => ({
         ref: stringField(entry.ref),
         kind: stringField(entry.kind),
         digest: stringField(entry.digest),
         sizeBytes: typeof entry.sizeBytes === 'number' ? entry.sizeBytes : undefined,
         producerRunId: stringField(entry.producerRunId),
       })),
-      failureIndex: toRecordList(projectSessionMemory.failureIndex).slice(-8).map((entry) => ({
+      failureIndex: toRecordList(workspaceKernel.failureIndex).slice(-8).map((entry) => ({
         eventId: stringField(entry.eventId),
         runId: stringField(entry.runId),
         summary: clipForAgentServerPrompt(entry.summary, 220),
@@ -1142,8 +1151,38 @@ function compactProjectSessionMemoryProjectionForPrompt(value: Record<string, un
       sourceEventIds: toStringList(block.sourceEventIds).slice(0, 12),
     })),
     selectedContextRefs: toStringList(value.selectedContextRefs).slice(0, 24),
-    contextRefs: toStringList(value.contextRefs).slice(0, 48),
+    contextRefs: compactContextRefListForPrompt(value.contextRefs).slice(0, 48),
+    capabilityBriefRef: compactContextRefForPrompt(value.capabilityBriefRef),
+    cachePlan: compactCachePlanForPrompt(value.cachePlan),
     retrievalTools: toStringList(value.retrievalTools).slice(0, 8),
+  };
+}
+
+function compactCachePlanForPrompt(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  return {
+    stablePrefixRefs: compactContextRefListForPrompt(value.stablePrefixRefs).slice(0, 8),
+    perTurnPayloadRefs: compactContextRefListForPrompt(value.perTurnPayloadRefs).slice(0, 8),
+  };
+}
+
+function compactContextRefListForPrompt(value: unknown) {
+  if (!Array.isArray(value)) return toStringList(value).slice(0, 48);
+  return value.flatMap((entry) => compactContextRefForPrompt(entry) ?? []);
+}
+
+function compactContextRefForPrompt(value: unknown) {
+  if (typeof value === 'string' && value) return value;
+  if (!isRecord(value)) return undefined;
+  const ref = stringField(value.ref);
+  if (!ref) return undefined;
+  return {
+    ref,
+    kind: stringField(value.kind),
+    digest: stringField(value.digest),
+    sizeBytes: typeof value.sizeBytes === 'number' ? value.sizeBytes : undefined,
+    preview: clipForAgentServerPrompt(value.preview, 160),
+    retention: stringField(value.retention),
   };
 }
 
