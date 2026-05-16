@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { GatewayRequest, SkillAvailability, ToolPayload } from '../runtime-types.js';
-import { validateAndNormalizePayload } from './payload-validation.js';
+import { validateAndNormalizePayload, validateToolPayloadStructure } from './payload-validation.js';
 
 function request(workspacePath: string): GatewayRequest {
   return {
@@ -91,4 +91,20 @@ test('payload validation keeps structured failure diagnostics after normalizatio
   assert.deepEqual(normalized.diagnostics, { provider: 'example-provider', retryAfterMs: 3000 });
   assert.equal(normalized.executionUnits[0]?.failureReason, 'provider 429 after bounded retries');
   assert.deepEqual(normalized.executionUnits[0]?.diagnostics, { provider: 'example-provider', retryAfterMs: 3000 });
+});
+
+test('structural payload validation does not make semantic completion judgments', () => {
+  const errors = validateToolPayloadStructure({
+    message: 'I will retrieve the latest papers and analyze the results.',
+    confidence: 0.9,
+    claimType: 'fact',
+    evidenceLevel: 'runtime',
+    reasoningTrace: 'backend returned a structurally valid plan-only payload',
+    claims: [],
+    uiManifest: [],
+    executionUnits: [{ id: 'plan-only', status: 'done' }],
+    artifacts: [],
+  });
+
+  assert.deepEqual(errors, []);
 });

@@ -95,10 +95,32 @@ test('running message follows structured progress fields instead of prompt or sc
 });
 
 test('chat run process and key info prefer projection over raw failed execution units', () => {
-  const session: SciForgeSession = {
+  const projection = {
+    schemaVersion: 'sciforge.conversation-projection.v1',
+    conversationId: 'conversation-chat-projection',
+    currentTurn: { id: 'turn-chat-projection', prompt: 'summarize projected artifacts' },
+    visibleAnswer: {
+      status: 'satisfied',
+      text: 'Projection answer is ready.',
+      artifactRefs: ['artifact:projection-report'],
+    },
+    artifacts: [{ ref: 'artifact:projection-report', label: 'Projection Report', mime: 'research-report' }],
+    executionProcess: [{
+      eventId: 'event-projection-summary',
+      type: 'Satisfied',
+      summary: 'Projection summarized the durable report ref.',
+      timestamp: '2026-05-13T00:00:05.000Z',
+    }],
+    recoverActions: [],
+    verificationState: { status: 'pass', verifierRef: 'verification:projection' },
+    auditRefs: ['artifact:projection-report', 'execution-unit:EU-projection-audit'],
+    diagnostics: [],
+  };
+  const session = {
     schemaVersion: 2,
     sessionId: 'session-chat-projection',
     scenarioId: 'literature-evidence-review',
+    materializedConversationProjection: projection,
     title: 'chat projection',
     createdAt: '2026-05-13T00:00:00.000Z',
     updatedAt: '2026-05-13T00:00:10.000Z',
@@ -112,27 +134,7 @@ test('chat run process and key info prefer projection over raw failed execution 
       createdAt: '2026-05-13T00:00:00.000Z',
       raw: {
         resultPresentation: {
-          conversationProjection: {
-            schemaVersion: 'sciforge.conversation-projection.v1',
-            conversationId: 'conversation-chat-projection',
-            currentTurn: { id: 'turn-chat-projection', prompt: 'summarize projected artifacts' },
-            visibleAnswer: {
-              status: 'satisfied',
-              text: 'Projection answer is ready.',
-              artifactRefs: ['artifact:projection-report'],
-            },
-            artifacts: [{ ref: 'artifact:projection-report', label: 'Projection Report', mime: 'research-report' }],
-            executionProcess: [{
-              eventId: 'event-projection-summary',
-              type: 'Satisfied',
-              summary: 'Projection summarized the durable report ref.',
-              timestamp: '2026-05-13T00:00:05.000Z',
-            }],
-            recoverActions: [],
-            verificationState: { status: 'pass', verifierRef: 'verification:projection' },
-            auditRefs: ['artifact:projection-report', 'execution-unit:EU-projection-audit'],
-            diagnostics: [],
-          },
+          conversationProjection: { ...projection, visibleAnswer: { status: 'failed', text: 'RAW_PROJECTION_SHOULD_NOT_RENDER', artifactRefs: [] } },
         },
       },
     }],
@@ -166,7 +168,7 @@ test('chat run process and key info prefer projection over raw failed execution 
     notebook: [],
     versions: [],
     hiddenResultSlotIds: [],
-  };
+  } as SciForgeSession;
   const processHtml = renderToStaticMarkup(createElement(RunExecutionProcess, {
     runId: 'run-chat-projection',
     session,
@@ -189,7 +191,15 @@ test('chat run process and key info prefer projection over raw failed execution 
 test('chat verification badge is projection-only and ignores raw verification fallback', () => {
   const rawOnly = renderToStaticMarkup(createElement(RunVerificationTag, {
     runId: 'run-raw-verification',
-    runs: [{
+    session: {
+      schemaVersion: 2,
+      sessionId: 'session-raw-verification',
+      scenarioId: 'literature-evidence-review',
+      title: 'raw verification',
+      createdAt: '2026-05-13T00:00:00.000Z',
+      updatedAt: '2026-05-13T00:00:00.000Z',
+      messages: [],
+      runs: [{
       id: 'run-raw-verification',
       scenarioId: 'literature-evidence-review',
       status: 'completed',
@@ -201,10 +211,37 @@ test('chat verification badge is projection-only and ignores raw verification fa
         displayIntent: { verification: { verdict: 'fail' } },
       },
     }],
+      uiManifest: [],
+      claims: [],
+      executionUnits: [],
+      artifacts: [],
+      notebook: [],
+      versions: [],
+    } as SciForgeSession,
   }));
+  const projectedProjection = {
+    schemaVersion: 'sciforge.conversation-projection.v1',
+    conversationId: 'conversation-projected-verification',
+    visibleAnswer: { status: 'satisfied', text: 'Projection answer.', artifactRefs: [] },
+    artifacts: [],
+    executionProcess: [],
+    recoverActions: [],
+    verificationState: { status: 'pass', verifierRef: 'verification:projection' },
+    auditRefs: [],
+    diagnostics: [],
+  };
   const projected = renderToStaticMarkup(createElement(RunVerificationTag, {
     runId: 'run-projected-verification',
-    runs: [{
+    session: {
+      schemaVersion: 2,
+      sessionId: 'session-projected-verification',
+      scenarioId: 'literature-evidence-review',
+      materializedConversationProjection: projectedProjection,
+      title: 'projected verification',
+      createdAt: '2026-05-13T00:00:00.000Z',
+      updatedAt: '2026-05-13T00:00:00.000Z',
+      messages: [],
+      runs: [{
       id: 'run-projected-verification',
       scenarioId: 'literature-evidence-review',
       status: 'completed',
@@ -213,20 +250,17 @@ test('chat verification badge is projection-only and ignores raw verification fa
       createdAt: '2026-05-13T00:00:00.000Z',
       raw: {
         resultPresentation: {
-          conversationProjection: {
-            schemaVersion: 'sciforge.conversation-projection.v1',
-            conversationId: 'conversation-projected-verification',
-            visibleAnswer: { status: 'satisfied', text: 'Projection answer.', artifactRefs: [] },
-            artifacts: [],
-            executionProcess: [],
-            recoverActions: [],
-            verificationState: { status: 'pass', verifierRef: 'verification:projection' },
-            auditRefs: [],
-            diagnostics: [],
-          },
+          conversationProjection: { ...projectedProjection, verificationState: { status: 'fail', verifierRef: 'RAW_VERIFICATION_SHOULD_NOT_RENDER' } },
         },
       },
     }],
+      uiManifest: [],
+      claims: [],
+      executionUnits: [],
+      artifacts: [],
+      notebook: [],
+      versions: [],
+    } as SciForgeSession,
   }));
 
   assert.equal(rawOnly, '');

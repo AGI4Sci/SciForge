@@ -33,13 +33,17 @@ test('AgentServer discovery maps worker tool routes into provider availability',
       json: async () => ({
         providers: [{
           id: 'sciforge.web-worker.web_search',
-          providerId: 'sciforge.web-worker.web_search',
-          capabilityId: 'web_search',
-          workerId: 'sciforge.web-worker',
-          status: 'available',
-        }],
-      }),
-    } as Response;
+        providerId: 'sciforge.web-worker.web_search',
+        capabilityId: 'web_search',
+        workerId: 'sciforge.web-worker',
+        status: 'available',
+        endpoint: 'https://private-provider.example.test/internal',
+        baseUrl: 'https://private-base.example.test',
+        invokeUrl: 'https://private-invoke.example.test/run',
+        runtimeLocation: 'PRIVATE_RUNTIME_LOCATION_SHOULD_NOT_LEAK',
+      }],
+    }),
+  } as Response;
   }) as typeof fetch;
   try {
     const request = await requestWithDiscoveredCapabilityProviders({
@@ -51,9 +55,11 @@ test('AgentServer discovery maps worker tool routes into provider availability',
     });
 
     assert.ok(calls > 0);
+    assertNoProviderRouteLeaks(request.uiState?.capabilityProviderAvailability);
     const preflight = capabilityProviderPreflight(request);
     assert.equal(preflight.ok, true);
     assert.equal(preflight.routes[0]?.primaryProviderId, 'sciforge.web-worker.web_search');
+    assert.equal(preflight.routes[0]?.providers[0]?.endpoint, undefined);
   } finally {
     globalThis.fetch = originalFetch;
   }

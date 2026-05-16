@@ -5,6 +5,8 @@ import test from 'node:test';
 import {
   AGENTSERVER_BACKEND_HANDOFF_VERSION,
   AGENTSERVER_CONTEXT_REQUEST_VERSION,
+  REF_SELECTION_POLICY_VERSION,
+  buildAgentServerContextRequest,
   canonicalSerializeAgentServerContextRequest,
   canonicalSerializeDegradedHandoffPacket,
   validateAgentServerContextRequest,
@@ -119,6 +121,79 @@ test('SyntheticAuditMeta must explicitly mark synthetic true', () => {
     sourceRefs: [ref('projection:audit-source')],
   });
   assert.equal(valid.ok, true);
+});
+
+test('buildAgentServerContextRequest applies drift guards and deterministic byte budgets', () => {
+  const huge = { ref: 'artifact:huge-old-result', kind: 'artifact', digest: 'sha256:huge', sizeBytes: 9999 };
+  const fresh = buildAgentServerContextRequest({
+    sessionId: 'session-builder',
+    turnId: 'turn-fresh',
+    mode: 'fresh',
+    currentTurnRef: ref('ledger-event:builder-fresh'),
+    stableGoalRef: ref('projection:old-stable-goal'),
+    explicitRefs: [],
+    projectionPrimaryRefs: [huge],
+    boundedContextIndexRefs: [
+      { ref: 'projection:bounded-index-b', kind: 'projection', digest: 'sha256:b', sizeBytes: 120 },
+      { ref: 'projection:bounded-index-a', kind: 'projection', digest: 'sha256:a', sizeBytes: 120 },
+    ],
+    cachePlan: {
+      stablePrefixRefs: [ref('projection:old-stable-goal')],
+      perTurnPayloadRefs: [ref('ledger-event:builder-fresh')],
+    },
+    refSelectionPolicy: {
+      maxSelectedRefs: 1,
+      maxSelectedRefBytes: 160,
+      fallbackOrder: ['projection-primary', 'context-index'],
+    },
+  });
+
+  assert.equal(fresh.refSelectionPolicy?.schemaVersion, REF_SELECTION_POLICY_VERSION);
+  assert.equal(fresh.contextPolicy.includeCurrentWork, false);
+  assert.deepEqual(fresh.cachePlan.stablePrefixRefs, []);
+  assert.equal(fresh.currentTask.stableGoalRef, undefined);
+  assert.deepEqual(fresh.currentTask.selectedRefs.map((item) => [item.ref, item.source]), [
+    ['projection:bounded-index-a', 'context-index'],
+  ]);
+  assert.equal(fresh.refSelectionAudit.selectedRefBytes, 120);
+  assert.equal(validateAgentServerContextRequest(fresh).ok, true);
+
+  const continued = buildAgentServerContextRequest({
+    sessionId: 'session-builder',
+    turnId: 'turn-continue',
+    mode: 'continue',
+    currentTurnRef: ref('ledger-event:builder-continue'),
+    stableGoalRef: ref('projection:stable-goal'),
+    projectionPrimaryRefs: [
+      { ref: 'projection:current-work', kind: 'projection', digest: 'sha256:work', sizeBytes: 100 },
+    ],
+  });
+  assert.equal(continued.contextPolicy.includeCurrentWork, true);
+  assert.equal(continued.cachePlan.stablePrefixRefs[0]?.ref, 'projection:stable-goal');
+  assert.equal(continued.currentTask.selectedRefs[0]?.source, 'projection-primary');
+});
+
+test('buildAgentServerContextRequest retrieval-unavailable path uses deterministic fallback refs only', () => {
+  const request = buildAgentServerContextRequest({
+    sessionId: 'session-builder',
+    turnId: 'turn-retrieval-down',
+    mode: 'continue',
+    currentTurnRef: ref('ledger-event:builder-retrieval-down'),
+    retrievalAvailable: false,
+    projectionPrimaryRefs: [
+      { ref: 'projection:current-work', kind: 'projection', digest: 'sha256:work', sizeBytes: 100 },
+    ],
+    boundedContextIndexRefs: [
+      { ref: 'projection:bounded-index', kind: 'projection', digest: 'sha256:index', sizeBytes: 100 },
+    ],
+    refSelectionPolicy: {
+      fallbackOrder: ['projection-primary', 'context-index'],
+    },
+  });
+  assert.deepEqual(request.retrievalPolicy.tools, []);
+  assert.equal(request.retrievalPolicy.maxTailEvidenceBytes, 0);
+  assert.deepEqual(request.currentTask.selectedRefs.map((item) => item.source), ['context-index']);
+  assert.equal(request.refSelectionPolicy?.retrievalAvailable, false);
 });
 
 test('SA-CONF-03 golden fixtures cover context request and degraded handoff boundaries', () => {

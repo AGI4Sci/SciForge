@@ -15,6 +15,27 @@ test('context follow-up protocol enables direct context answer even when AgentSe
       metadata: { reportRef: '.sciforge/task-results/report.md' },
     }],
     uiState: {
+      directContextDecision: {
+        schemaVersion: 'sciforge.direct-context-decision.v1',
+        intent: 'context-summary',
+        requiredContext: ['current-session-context'],
+        sufficiency: 'sufficient',
+        allowDirectContext: true,
+      },
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        directContextDecision: {
+          schemaVersion: 'sciforge.direct-context-decision.v1',
+          intent: 'context-summary',
+          requiredContext: ['current-session-context'],
+          sufficiency: 'sufficient',
+          allowDirectContext: true,
+        },
+        executionModePlan: { executionMode: 'direct-context-answer' },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+        latencyPolicy: { blockOnContextCompaction: false },
+      },
       agentHarness: {
         contract: {
           schemaVersion: 'sciforge.agent-harness-contract.v1',
@@ -54,10 +75,19 @@ test('direct context fast path answers skill tool capability provider status que
         schemaVersion: 'sciforge.direct-context-decision.v1',
         intent: 'capability-status',
         requiredContext: ['capability-registry', 'provider-registry'],
+        sufficiency: 'sufficient',
+        allowDirectContext: true,
       },
       conversationPolicy: {
         applicationStatus: 'applied',
         policySource: 'python-conversation-policy',
+        directContextDecision: {
+          schemaVersion: 'sciforge.direct-context-decision.v1',
+          intent: 'context-summary',
+          requiredContext: ['current-session-context'],
+          sufficiency: 'sufficient',
+          allowDirectContext: true,
+        },
         executionModePlan: {
           executionMode: 'direct-context-answer',
           signals: ['context-summary'],
@@ -112,6 +142,46 @@ test('context follow-up protocol yields when AgentServer generation is explicitl
   assert.equal(directContextFastPathPayload(request), undefined);
 });
 
+test('agent harness audit hints do not generate direct context strategy without DirectContextDecision', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'What did the previous result use?',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [{
+      id: 'research-report',
+      type: 'research-report',
+      metadata: { reportRef: '.sciforge/task-results/report.md' },
+    }],
+    uiState: {
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        executionModePlan: { executionMode: 'direct-context-answer' },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+        latencyPolicy: { blockOnContextCompaction: false },
+      },
+      agentHarness: {
+        contract: {
+          schemaVersion: 'sciforge.agent-harness-contract.v1',
+          intentMode: 'audit',
+          capabilityPolicy: { preferredCapabilityIds: ['runtime.direct-context-answer'] },
+        },
+      },
+      turnExecutionConstraints: {
+        contextOnly: true,
+        preferredCapabilityIds: ['runtime.direct-context-answer'],
+      },
+      recentExecutionRefs: [{
+        id: 'unit-report',
+        tool: 'capability.report.generate',
+        outputRef: '.sciforge/task-results/report.json',
+      }],
+    },
+  };
+
+  assert.equal(directContextFastPathPayload(request), undefined);
+});
+
 test('context follow-up protocol does not direct-answer fresh work requests', () => {
   const request: GatewayRequest = {
     skillDomain: 'literature',
@@ -147,6 +217,13 @@ test('explicit no-execution context summary uses direct fast path from applied c
       conversationPolicy: {
         applicationStatus: 'applied',
         policySource: 'python-conversation-policy',
+        directContextDecision: {
+          schemaVersion: 'sciforge.direct-context-decision.v1',
+          intent: 'context-summary',
+          requiredContext: ['current-session-context'],
+          sufficiency: 'sufficient',
+          allowDirectContext: true,
+        },
         executionModePlan: {
           executionMode: 'direct-context-answer',
           signals: ['context-summary', 'no-execution-directive'],
@@ -353,6 +430,27 @@ test('context follow-up protocol returns needs-work when expected artifacts are 
       data: { markdown: 'Prior run failed before writing paper-list/report.' },
     }],
     uiState: {
+      directContextDecision: {
+        schemaVersion: 'sciforge.direct-context-decision.v1',
+        intent: 'context-summary',
+        requiredContext: ['current-session-context'],
+        sufficiency: 'sufficient',
+        allowDirectContext: true,
+      },
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        directContextDecision: {
+          schemaVersion: 'sciforge.direct-context-decision.v1',
+          intent: 'context-summary',
+          requiredContext: ['current-session-context'],
+          sufficiency: 'sufficient',
+          allowDirectContext: true,
+        },
+        executionModePlan: { executionMode: 'direct-context-answer' },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+        latencyPolicy: { blockOnContextCompaction: false },
+      },
       agentHarness: {
         contract: {
           schemaVersion: 'sciforge.agent-harness-contract.v1',
@@ -394,6 +492,8 @@ test('provider status follow-up reuses current context without AgentServer gener
         schemaVersion: 'sciforge.direct-context-decision.v1',
         intent: 'capability-status',
         requiredContext: ['capability-registry', 'provider-registry'],
+        sufficiency: 'sufficient',
+        allowDirectContext: true,
       },
       currentReferences: [{
         id: 'ref-fetch',

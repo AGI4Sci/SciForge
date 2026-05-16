@@ -40,7 +40,7 @@ import {
 import { UploadedDataUrlPreview, WorkspaceObjectPreview } from './results/WorkspaceObjectPreview';
 import type { EvidenceClaim, SciForgeConfig, SciForgeRun, SciForgeSession, ObjectAction, ObjectReference, PreviewDescriptor, RuntimeArtifact, RuntimeCompatibilityDiagnostic, UIManifestSlot } from '../domain';
 import {
-  conversationProjectionForRun,
+  conversationProjectionForSession,
   conversationProjectionStatus,
   type UiConversationProjection,
 } from './conversation-projection-view-model';
@@ -403,7 +403,7 @@ function PrimaryResult({
 }
 
 function ExecutionOnlyResult({ session, activeRun }: { session: SciForgeSession; activeRun?: SciForgeRun }) {
-  const projection = conversationProjectionForRun(activeRun ?? session.runs.at(-1));
+  const projection = conversationProjectionForSession(session, activeRun ?? session.runs.at(-1));
   const units = auditExecutionUnitsForRun(session, activeRun);
   if (projection) {
     return (
@@ -440,7 +440,7 @@ function ProjectionExecutionOnlyResult({ projection }: { projection: UiConversat
 
 function RunStatusSummary({ session, activeRun, viewPlan }: { session: SciForgeSession; activeRun?: SciForgeRun; viewPlan: RuntimeResolvedViewPlan }) {
   const run = activeRun ?? session.runs.at(-1);
-  const projection = conversationProjectionForRun(run);
+  const projection = conversationProjectionForSession(session, run);
   const failures = projection ? [] : failedExecutionUnits(session, activeRun);
   const blockers = runAuditBlockers(session, activeRun);
   const validationFailures = projection ? [] : contractValidationFailures(session, activeRun);
@@ -748,7 +748,7 @@ function compactVisibleFailureText(value: string) {
 
 function ViewPlanSummary({ viewPlan, session, activeRun }: { viewPlan: RuntimeResolvedViewPlan; session: SciForgeSession; activeRun?: SciForgeRun }) {
   const run = activeRun ?? session.runs.at(-1);
-  const projection = conversationProjectionForRun(run);
+  const projection = conversationProjectionForSession(session, run);
   const presentationState = runPresentationState(session, activeRun, viewPlan);
   const diagnosticCount = projection
     ? projectionDiagnosticsForViewSummary(projection, presentationState)

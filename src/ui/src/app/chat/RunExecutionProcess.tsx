@@ -10,7 +10,7 @@ import {
 import {
   conversationProjectionArtifactRefs,
   conversationProjectionAuditRefs,
-  conversationProjectionForRun,
+  conversationProjectionForSession,
   conversationProjectionStatus,
   type UiConversationProjection,
 } from '../conversation-projection-view-model';
@@ -38,7 +38,7 @@ export function RunExecutionProcess({
   onObjectFocus: (reference: ObjectReference) => void;
 }) {
   const run = session.runs.find((item) => item.id === runId);
-  const projection = conversationProjectionForRun(run);
+  const projection = conversationProjectionForSession(session, run);
   const units = projection ? [] : auditExecutionUnitsForRun(session, run).slice(-8);
   if (!run && !units.length && !trace) return null;
   const auditObjectReferences = projection
@@ -293,7 +293,7 @@ export function RunKeyInfo({
   onObjectFocus?: (reference: ObjectReference) => void;
 }) {
   const run = session.runs.find((item) => item.id === runId);
-  const projection = conversationProjectionForRun(run);
+  const projection = conversationProjectionForSession(session, run);
   if (!projection && run?.status === 'failed') return null;
   const objectRefs = run?.objectReferences ?? [];
   const artifactRefIds = new Set(objectRefs.filter((ref) => ref.kind === 'artifact').map((ref) => ref.ref.replace(/^artifact:/, '')));

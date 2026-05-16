@@ -2,24 +2,36 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { itemsForFocusMode, resolveViewPlan, selectDefaultResultItems } from './viewPlanResolver';
 import type { RuntimeArtifact, SciForgeRun, SciForgeSession } from '../../domain';
+import { conversationProjectionMigrationAuditFixtureForRun } from '../conversation-projection-view-model';
 
-const baseSession = (overrides: Partial<SciForgeSession> = {}): SciForgeSession => ({
-  schemaVersion: 2,
-  sessionId: 'session-test',
-  scenarioId: 'literature-evidence-review',
-  title: 'Test session',
-  createdAt: '2026-05-07T00:00:00.000Z',
-  updatedAt: '2026-05-07T00:00:00.000Z',
-  messages: [],
-  runs: [],
-  uiManifest: [],
-  claims: [],
-  executionUnits: [],
-  artifacts: [],
-  notebook: [],
-  versions: [],
-  ...overrides,
-});
+const baseSession = (overrides: Partial<SciForgeSession> = {}): SciForgeSession => {
+  const session = {
+    schemaVersion: 2,
+    sessionId: 'session-test',
+    scenarioId: 'literature-evidence-review',
+    title: 'Test session',
+    createdAt: '2026-05-07T00:00:00.000Z',
+    updatedAt: '2026-05-07T00:00:00.000Z',
+    messages: [],
+    runs: [],
+    uiManifest: [],
+    claims: [],
+    executionUnits: [],
+    artifacts: [],
+    notebook: [],
+    versions: [],
+    ...overrides,
+  } as SciForgeSession;
+  return withMaterializedProjectionFixture(session);
+};
+
+function withMaterializedProjectionFixture(session: SciForgeSession): SciForgeSession {
+  const projections = Object.fromEntries(session.runs.flatMap((run) => {
+    const projection = conversationProjectionMigrationAuditFixtureForRun(run);
+    return projection ? [[run.id, projection]] : [];
+  }));
+  return Object.keys(projections).length ? { ...session, materializedConversationProjections: projections } as SciForgeSession : session;
+}
 
 function deliveryArtifact(artifact: RuntimeArtifact, readableRef: string, role: NonNullable<RuntimeArtifact['delivery']>['role'] = 'primary-deliverable'): RuntimeArtifact {
   const extension = readableRef.split(/[?#]/)[0]?.split('.').pop()?.toLowerCase() || 'md';

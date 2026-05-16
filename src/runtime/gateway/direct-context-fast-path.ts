@@ -15,8 +15,11 @@ export function directContextFastPathPayload(request: GatewayRequest): ToolPaylo
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   if (uiState.forceAgentServerGeneration === true) return undefined;
   const decision = directContextDecisionForRequest(request);
-  if (decision.intent === 'capability-status') return capabilityStatusFastPathPayload(request);
-  if (!policyRequestsDirectContext(request)) return undefined;
+  if (!decision) return undefined;
+  if (decision.intent === 'capability-status') return directContextDecisionAllowsAnswer(decision)
+    ? capabilityStatusFastPathPayload(request)
+    : undefined;
+  if (!policyRequestsDirectContext(request, decision)) return undefined;
   const context = buildDirectContextFastPathItems({
     artifacts: request.artifacts,
     uiArtifacts: uiState.artifacts,
@@ -28,7 +31,7 @@ export function directContextFastPathPayload(request: GatewayRequest): ToolPaylo
   });
   if (!context.length) return undefined;
   if (!hasCurrentContextEvidence(context)) return undefined;
-  const gate = directContextGate(request, context);
+  const gate = directContextGate(context, decision);
   if (!gate.allowed) return undefined;
   const missingExpectedArtifacts = missingExpectedArtifactTypes(request);
   if (missingExpectedArtifacts.length) return missingExpectedArtifactsPayload(request, context, missingExpectedArtifacts, gate);
@@ -219,14 +222,14 @@ interface DirectContextDecision {
   intent: DirectContextIntent;
   requiredContext?: string[];
   allowDirectContext?: boolean;
+  sufficiency?: 'sufficient' | 'insufficient';
   blockReason?: string;
 }
 
 function directContextGate(
-  request: GatewayRequest,
   context: ReturnType<typeof buildDirectContextFastPathItems>,
+  decision: DirectContextDecision,
 ): DirectContextGateDecision {
-  const decision = directContextDecisionForRequest(request);
   const intent = decision.intent;
   const usedContextRefs = directContextFastPathSupportingRefs(context).slice(0, 12);
   const requiredContext = decision.requiredContext?.length ? decision.requiredContext : requiredContextForDirectIntent(intent);
@@ -278,36 +281,15 @@ function directContextGate(
   };
 }
 
-function directContextDecisionForRequest(request: GatewayRequest): DirectContextDecision {
+function directContextDecisionForRequest(request: GatewayRequest): DirectContextDecision | undefined {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   const conversationPolicy = isRecord(uiState.conversationPolicy) ? uiState.conversationPolicy : {};
   const execution = isRecord(conversationPolicy.executionModePlan) ? conversationPolicy.executionModePlan : {};
-  const explicit = firstDirectContextDecision(
+  return firstDirectContextDecision(
     uiState.directContextDecision,
     conversationPolicy.directContextDecision,
     execution.directContextDecision,
   );
-  if (explicit) return explicit;
-  const constraints = isRecord(uiState.turnExecutionConstraints) ? uiState.turnExecutionConstraints : {};
-  if (
-    constraints.contextOnly === true
-    && toStringList(constraints.preferredCapabilityIds).includes('runtime.direct-context-answer')
-  ) {
-    return { intent: 'context-summary', requiredContext: ['current-session-context'], allowDirectContext: true };
-  }
-  const agentHarness = isRecord(uiState.agentHarness) ? uiState.agentHarness : {};
-  const contract = isRecord(agentHarness.contract) ? agentHarness.contract : {};
-  const capabilityPolicy = isRecord(contract.capabilityPolicy) ? contract.capabilityPolicy : {};
-  if (
-    stringField(contract.intentMode) === 'audit'
-    && toStringList(capabilityPolicy.preferredCapabilityIds).includes('runtime.direct-context-answer')
-  ) {
-    return { intent: 'context-summary', requiredContext: ['current-session-context'], allowDirectContext: true };
-  }
-  if (stringField(execution.executionMode) === 'direct-context-answer') {
-    return { intent: 'context-summary', requiredContext: ['current-session-context'], allowDirectContext: true };
-  }
-  return { intent: 'unknown', requiredContext: ['typed-current-context'] };
 }
 
 function firstDirectContextDecision(...values: unknown[]): DirectContextDecision | undefined {
@@ -326,6 +308,7 @@ function normalizeDirectContextDecision(value: unknown): DirectContextDecision |
     intent,
     requiredContext: toStringList(value.requiredContext),
     allowDirectContext: value.allowDirectContext === false ? false : value.allowDirectContext === true ? true : undefined,
+    sufficiency: value.sufficiency === 'sufficient' || value.sufficiency === 'insufficient' ? value.sufficiency : undefined,
     blockReason: stringField(value.blockReason),
   };
 }
@@ -524,18 +507,12 @@ function capabilityStatusFastPathPayload(request: GatewayRequest): ToolPayload |
   };
 }
 
-function policyRequestsDirectContext(request: GatewayRequest) {
+function policyRequestsDirectContext(request: GatewayRequest, decision: DirectContextDecision) {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   if (uiState.forceAgentServerGeneration === true) return false;
+  if (!directContextDecisionAllowsAnswer(decision)) return false;
   const conversationPolicy = isRecord(uiState.conversationPolicy) ? uiState.conversationPolicy : {};
   if (stringField(conversationPolicy.applicationStatus) === 'failed') return false;
-  const agentHarness = isRecord(uiState.agentHarness) ? uiState.agentHarness : {};
-  const contract = isRecord(agentHarness.contract) ? agentHarness.contract : {};
-  const capabilityPolicy = isRecord(contract.capabilityPolicy) ? contract.capabilityPolicy : {};
-  if (
-    stringField(contract.intentMode) === 'audit'
-    && toStringList(capabilityPolicy.preferredCapabilityIds).includes('runtime.direct-context-answer')
-  ) return true;
   if (
     stringField(conversationPolicy.applicationStatus) !== 'applied'
     || stringField(conversationPolicy.policySource) !== DIRECT_CONTEXT_FAST_PATH_POLICY.policyOwner
@@ -548,6 +525,11 @@ function policyRequestsDirectContext(request: GatewayRequest) {
   return mode === 'direct-context-answer'
     && (initialMode === undefined || initialMode === 'direct-context-answer')
     && latencyPolicy.blockOnContextCompaction !== true;
+}
+
+function directContextDecisionAllowsAnswer(decision: DirectContextDecision) {
+  return decision.allowDirectContext === true
+    && (decision.sufficiency === undefined || decision.sufficiency === 'sufficient');
 }
 
 function stringField(value: unknown) {

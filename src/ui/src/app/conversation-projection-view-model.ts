@@ -1,4 +1,4 @@
-import type { SciForgeRun } from '../domain';
+import type { SciForgeRun, SciForgeSession } from '../domain';
 import { isConversationEventLog } from '../../../runtime/conversation-kernel/event-log';
 import { projectConversation } from '../../../runtime/conversation-kernel/projection';
 
@@ -71,6 +71,14 @@ export interface UiConversationProjectionRecoverFocusSignal {
   reason: 'active-run' | 'recover-actions' | 'verification' | 'background';
 }
 
+type SessionWithConversationProjection = SciForgeSession & {
+  conversationProjection?: unknown;
+  materializedConversationProjection?: unknown;
+  currentConversationProjection?: unknown;
+  conversationProjections?: unknown;
+  materializedConversationProjections?: unknown;
+};
+
 const projectionStatuses = new Set<UiConversationProjectionStatus>([
   'idle',
   'planned',
@@ -107,7 +115,19 @@ const recoverFocusBackgroundStatuses = new Set([
   'queued',
 ]);
 
-export function conversationProjectionForRun(run?: SciForgeRun): UiConversationProjection | undefined {
+export function conversationProjectionForSession(session: SciForgeSession, run?: SciForgeRun): UiConversationProjection | undefined {
+  const source = session as SessionWithConversationProjection;
+  const candidates = [
+    projectionFromSessionProjectionMap(source.materializedConversationProjections, run),
+    projectionFromSessionProjectionMap(source.conversationProjections, run),
+    source.materializedConversationProjection,
+    source.currentConversationProjection,
+    source.conversationProjection,
+  ];
+  return candidates.map(normalizeConversationProjection).find(Boolean);
+}
+
+export function conversationProjectionMigrationAuditFixtureForRun(run?: SciForgeRun): UiConversationProjection | undefined {
   const raw = isRecord(run?.raw) ? run.raw : undefined;
   const displayIntent = isRecord(raw?.displayIntent) ? raw.displayIntent : undefined;
   const resultPresentation = isRecord(raw?.resultPresentation) ? raw.resultPresentation : undefined;
@@ -130,6 +150,18 @@ export function conversationProjectionForRun(run?: SciForgeRun): UiConversationP
     taskOutcomeProjection?.conversationProjection,
     responseResultPresentation?.conversationProjection,
   ].map(normalizeConversationProjection).find(Boolean);
+}
+
+function projectionFromSessionProjectionMap(value: unknown, run?: SciForgeRun): unknown {
+  if (!isRecord(value)) return undefined;
+  const runId = run?.id;
+  if (runId && value[runId]) return value[runId];
+  const currentRunId = asString(value.currentRunId) ?? asString(value.activeRunId);
+  if (currentRunId && isRecord(value.projections) && value.projections[currentRunId]) return value.projections[currentRunId];
+  if (isRecord(value.current)) return value.current;
+  if (isRecord(value.latest)) return value.latest;
+  if (runId && isRecord(value.projections) && value.projections[runId]) return value.projections[runId];
+  return undefined;
 }
 
 function projectConversationEventLogForUi(value: unknown): UiConversationProjection | undefined {

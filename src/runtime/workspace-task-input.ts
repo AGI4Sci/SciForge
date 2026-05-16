@@ -57,6 +57,24 @@ const MAX_ARRAY_ITEMS = 24;
 const MAX_OBJECT_KEYS = 80;
 const MAX_DEPTH = 7;
 
+export const CANONICAL_HANDOFF_FORBIDDEN_KEYS = new Set([
+  'recentTurns',
+  'fullRefList',
+  'rawHistory',
+  'history',
+  'rawBody',
+  'body',
+  'rawArtifactBody',
+  'artifactBody',
+  'compactionState',
+]);
+
+export interface CanonicalHandoffNormalizerOptions {
+  maxArrayItems?: number;
+  maxObjectKeys?: number;
+  maxDepth?: number;
+}
+
 export function buildWorkspaceTaskInput(input: Record<string, unknown>, refs: WorkspaceTaskInputRefs) {
   const compacted = compactObject(input, [], 0);
   return {
@@ -101,7 +119,13 @@ export async function normalizeBackendHandoff<T = unknown>(
     payload: input,
   });
 
-  let payload = normalizeHandoffValue(input, {
+  const canonicalInput = normalizeCanonicalHandoffValue(input, {
+    maxArrayItems: budget.maxArrayItems,
+    maxObjectKeys: budget.maxObjectKeys,
+    maxDepth: budget.maxDepth,
+  });
+
+  let payload = normalizeHandoffValue(canonicalInput, {
     budget,
     rawRef,
     path: [],
@@ -119,7 +143,7 @@ export async function normalizeBackendHandoff<T = unknown>(
 
   let normalizedBytes = estimateBytes(payload);
   if (normalizedBytes > budget.maxPayloadBytes && !looksLikeAgentServerRunPayload(input)) {
-    payload = attachHandoffManifest(normalizeHandoffValue(input, {
+    payload = attachHandoffManifest(normalizeHandoffValue(canonicalInput, {
       budget: {
         ...budget,
         maxInlineStringChars: Math.min(1200, budget.maxInlineStringChars),
@@ -153,7 +177,7 @@ export async function normalizeBackendHandoff<T = unknown>(
       rawRef,
       estimatedBytes: rawBytes,
     });
-    payload = attachHandoffManifest(compactAgentServerRunPayload(input, {
+    payload = attachHandoffManifest(compactAgentServerRunPayload(isRecord(canonicalInput) ? canonicalInput : input as Record<string, unknown>, {
       budget,
       rawRef,
       decisions,
@@ -299,6 +323,56 @@ export async function normalizeBackendHandoff<T = unknown>(
     slimmingTraceRef,
     slimmingTraceSha1,
   };
+}
+
+export function normalizeCanonicalHandoffValue(
+  value: unknown,
+  options: CanonicalHandoffNormalizerOptions = {},
+  path: string[] = [],
+  seen = new WeakSet<object>(),
+): unknown {
+  const maxDepth = options.maxDepth ?? MAX_DEPTH;
+  const maxArrayItems = options.maxArrayItems ?? MAX_ARRAY_ITEMS;
+  const maxObjectKeys = options.maxObjectKeys ?? MAX_OBJECT_KEYS;
+  if (value === null || value === undefined || typeof value !== 'object') return value;
+  if (seen.has(value)) {
+    return {
+      _sciforgeCompacted: true,
+      kind: 'circular-reference',
+      pointer: jsonPointer(path),
+    };
+  }
+  seen.add(value);
+  if (path.length >= maxDepth) {
+    seen.delete(value);
+    return compactSummary(value, 'canonical-max-depth');
+  }
+  if (Array.isArray(value)) {
+    const out: unknown[] = [];
+    const hashes = new Set<string>();
+    for (const [index, item] of value.entries()) {
+      const normalized = normalizeCanonicalHandoffValue(item, options, [...path, String(index)], seen);
+      const hash = sha1Json(normalized);
+      if (hashes.has(hash)) continue;
+      hashes.add(hash);
+      out.push(normalized);
+      if (out.length >= maxArrayItems) break;
+    }
+    seen.delete(value);
+    return out;
+  }
+  if (!isRecord(value)) {
+    seen.delete(value);
+    return value;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value)
+    .filter(([key]) => !CANONICAL_HANDOFF_FORBIDDEN_KEYS.has(key))
+    .slice(0, maxObjectKeys)) {
+    out[key] = normalizeCanonicalHandoffValue(nested, options, [...path, key], seen);
+  }
+  seen.delete(value);
+  return out;
 }
 
 function looksLikeAgentServerRunPayload(value: unknown): value is Record<string, unknown> {

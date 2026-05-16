@@ -783,7 +783,7 @@ export function requestPayloadForTurn(session: SciForgeSession, userMessage: Sci
     || session.executionUnits.length > 0;
   if (hasPriorWork || hasExplicitReferences) {
     const messages = compactMessagesForRequestPayload(session.messages, userMessage.id);
-    const projectionContexts = projectionContinuationContexts(session.runs, references);
+    const projectionContexts = projectionContinuationContexts(session, references);
     return {
       messages,
       artifacts: session.artifacts.slice(-REQUEST_PAYLOAD_ARTIFACT_LIMIT).map(compactArtifactForRequestPayload),

@@ -143,6 +143,42 @@ test('derives ref kind groups and retention for context handoff retrieval and au
   assert.equal(projectMemoryRefRetention('retrieval'), 'cold');
 });
 
+test('normalizes explicit import events as ledger facts with derived imported refs', () => {
+  const projection = normalizeWorkspaceKernelAuditInput({
+    sessionId: 'session-import-target',
+    events: [{
+      id: 'import-1',
+      type: 'ExplicitImportRecorded',
+      timestamp: '2026-05-16T00:00:00.000Z',
+      actor: 'kernel',
+      storage: 'ref',
+      payload: {
+        schemaVersion: 'sciforge.explicit-import-event.v1',
+        summary: 'Imported prior report.',
+        reason: 'User selected prior evidence.',
+        refs: [{
+          ref: 'import:session-import-target/session-source/report',
+          kind: 'artifact',
+          digest: 'sha256:imported',
+          retention: 'audit-only',
+        }],
+        imports: [{
+          schemaVersion: 'sciforge.cross-session-ref.v1',
+          sourceSessionId: 'session-source',
+          sourceRef: '.sciforge/sessions/session-source/artifacts/report.md',
+          targetSessionId: 'session-import-target',
+          importedRef: 'import:session-import-target/session-source/report',
+          digest: 'sha256:imported',
+        }],
+      },
+    }],
+  });
+
+  assert.equal(projection.events[0].kind, 'explicit-import-recorded');
+  assert.equal(projection.refIndex[0].ref, 'import:session-import-target/session-source/report');
+  assert.equal(projection.refIndex[0].retention, 'warm');
+});
+
 test('keeps stable prefix hash unchanged when only the current tail task changes', () => {
   const stableInput = {
     sessionId: 'session-cache',

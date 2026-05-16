@@ -1,6 +1,6 @@
-import type { SciForgeMessage, SciForgeRun } from '../../domain';
+import type { SciForgeMessage, SciForgeRun, SciForgeSession } from '../../domain';
 import { Badge, type BadgeVariant } from '../uiPrimitives';
-import { conversationProjectionForRun } from '../conversation-projection-view-model';
+import { conversationProjectionForSession } from '../conversation-projection-view-model';
 
 type VerificationTagModel = {
   label: string;
@@ -8,8 +8,8 @@ type VerificationTagModel = {
   variant: BadgeVariant;
 };
 
-export function RunVerificationTag({ runs, runId }: { runs: SciForgeRun[]; runId?: string }) {
-  const model = runId ? verificationTagForRun(runs, runId) : undefined;
+export function RunVerificationTag({ session, runId }: { session: SciForgeSession; runId?: string }) {
+  const model = runId ? verificationTagForRun(session, runId) : undefined;
   if (!model) return null;
   return <span title={model.title}><Badge variant={model.variant}>{model.label}</Badge></span>;
 }
@@ -54,9 +54,9 @@ function normalizeRunPrompt(value: string) {
   return value.replace(/^运行中引导：/, '').trim();
 }
 
-function verificationTagForRun(runs: SciForgeRun[], runId: string): VerificationTagModel | undefined {
-  const run = runs.find((item) => item.id === runId);
-  const projection = conversationProjectionForRun(run);
+function verificationTagForRun(session: SciForgeSession, runId: string): VerificationTagModel | undefined {
+  const run = session.runs.find((item) => item.id === runId);
+  const projection = conversationProjectionForSession(session, run);
   const projectionVerdict = projection?.verificationState?.verdict ?? projection?.verificationState?.status;
   if (projection && projectionVerdict) {
     return {

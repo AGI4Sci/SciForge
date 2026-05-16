@@ -55,6 +55,8 @@ export function applyConversationEvent(state: ConversationState, event: Conversa
         terminal: false,
         harnessDecision: harnessDecisionStateFromEvent(event) ?? next.harnessDecision,
       };
+    case 'ExplicitImportRecorded':
+      return { ...next, terminal: false };
     case 'Dispatched':
       return { ...next, status: 'dispatched', terminal: false };
     case 'PartialReady':
@@ -73,6 +75,11 @@ export function applyConversationEvent(state: ConversationState, event: Conversa
       return withFailure(next, 'repair-needed', event);
     case 'NeedsHuman':
       return { ...next, status: 'needs-human', terminal: true };
+    case 'RefArchived':
+    case 'RefPinned':
+    case 'RefDeleted':
+    case 'RefTombstoned':
+      return { ...next, terminal: false };
     case 'HistoryEdited': {
       const historyEdit = historyEditStateFromEvent(event);
       return {

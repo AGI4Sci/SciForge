@@ -9,6 +9,7 @@ const root = process.cwd();
 const verifyScript = 'verify:single-agent-final';
 const finalGateGuardScript = 'smoke:single-agent-final-gate';
 const webMultiturnFinalScript = 'smoke:web-multiturn-final';
+const webFinalConformanceScript = 'smoke:web-final-conformance';
 const finalEvidenceScript = 'smoke:single-agent-final-evidence';
 const webMultiturnFinalCommand = 'tsx tests/smoke/smoke-web-multiturn-final.ts';
 const requiredFinalGateOrder = [
@@ -16,6 +17,7 @@ const requiredFinalGateOrder = [
   'test',
   'smoke:single-agent-runtime-contract',
   'smoke:no-legacy-paths',
+  webFinalConformanceScript,
   webMultiturnFinalScript,
   finalEvidenceScript,
 ];
@@ -36,6 +38,10 @@ if (scripts[finalEvidenceScript] !== 'tsx tests/smoke/smoke-single-agent-final-e
   errors.push(`${finalEvidenceScript} must run the final evidence manifest validator`);
 }
 
+if (scripts[webFinalConformanceScript] !== 'tsx tests/smoke/smoke-web-final-conformance.ts') {
+  errors.push(`${webFinalConformanceScript} must run the Web final conformance smoke`);
+}
+
 const finalGateSteps = packageScriptSteps(scripts[verifyScript]);
 if (finalGateSteps.length === 0) {
   errors.push(`${verifyScript} must be declared as the final single-agent completion gate`);
@@ -48,7 +54,7 @@ if (errors.length) {
   for (const error of errors) console.error(`- ${error}`);
   process.exitCode = 1;
 } else {
-  console.log(`[ok] ${verifyScript} wires typecheck, core tests, C01-C18, no-legacy guard, browser web-multiturn-final, and final evidence validation`);
+  console.log(`[ok] ${verifyScript} wires typecheck, core tests, C01-C18, no-legacy guard, Web final conformance, browser web-multiturn-final, and final evidence validation`);
 }
 
 function packageScriptSteps(script: string | undefined): string[] {

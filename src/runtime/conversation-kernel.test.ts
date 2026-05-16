@@ -101,7 +101,6 @@ test('workspace kernel registerRef derives retention and keeps listRefs descript
     kind: 'artifact',
     mime: 'text/markdown',
     preview: 'Report preview',
-    metadata: { retention: 'audit-only' },
   });
 
   assert.equal(ref.kind, 'artifact');
@@ -116,6 +115,34 @@ test('workspace kernel registerRef derives retention and keeps listRefs descript
 
   const read = kernel.readRef(ref);
   assert.equal(read?.body, 'full report body that stays outside projection');
+});
+
+test('workspace kernel makes storage adapter sync-write and retention override guards explicit', () => {
+  const storage = createInMemoryWorkspaceStorageAdapter();
+  assert.equal(storage.contractVersion, 'sciforge.workspace-storage-adapter.v1');
+  assert.equal(storage.kind, 'in-memory');
+  assert.equal(storage.synchronousWrites, true);
+
+  const kernel = createWorkspaceKernel({ sessionId: 'workspace-kernel-ref-guard', storage });
+  assert.throws(
+    () => kernel.registerRef('body', {
+      ref: 'artifact:override',
+      kind: 'artifact',
+      metadata: { retention: 'audit-only' },
+    }),
+    /retention is derived from RefKindGroup/,
+  );
+
+  assert.throws(
+    () => createWorkspaceKernel({
+      sessionId: 'workspace-kernel-bad-storage',
+      storage: {
+        ...storage,
+        synchronousWrites: false as true,
+      },
+    }),
+    /synchronous-on-write/,
+  );
 });
 
 test('conversation kernel rejects large inline payloads and requires refs for large evidence', () => {
@@ -133,6 +160,108 @@ test('conversation kernel rejects large inline payloads and requires refs for la
 
   assert.equal(result.log.events.length, 0);
   assert.equal(result.rejected?.code, 'inline-payload-too-large');
+});
+
+test('conversation kernel requires degraded and failure ref events to keep small facts inline', () => {
+  const result = appendConversationEvent(createConversationEventLog('c-ref-summary'), {
+    id: 'external-no-summary',
+    type: 'ExternalBlocked',
+    storage: 'ref',
+    actor: 'runtime',
+    timestamp: '2026-05-16T00:00:00.000Z',
+    payload: {
+      refs: [{ ref: 'log:provider-stderr', digest: 'sha256:provider' }],
+    },
+  });
+
+  assert.equal(result.rejected?.code, 'ref-event-inline-facts-required');
+  assert.equal(result.log.events.length, 0);
+});
+
+test('conversation kernel records explicit cross-session imports instead of bare path copies', () => {
+  const accepted = appendConversationEvent(createConversationEventLog('session-target'), {
+    id: 'import-accepted',
+    type: 'ExplicitImportRecorded',
+    storage: 'ref',
+    actor: 'kernel',
+    timestamp: '2026-05-16T00:00:00.000Z',
+    payload: {
+      schemaVersion: 'sciforge.explicit-import-event.v1',
+      summary: 'Imported prior report by digest.',
+      reason: 'User explicitly asked to continue from session-source evidence.',
+      refs: [{
+        ref: 'import:session-target/session-source/report',
+        digest: 'sha256:report',
+        mime: 'text/markdown',
+        sizeBytes: 512,
+      }],
+      imports: [{
+        schemaVersion: 'sciforge.cross-session-ref.v1',
+        sourceSessionId: 'session-source',
+        sourceRef: '.sciforge/sessions/session-source/artifacts/report.md',
+        targetSessionId: 'session-target',
+        importedRef: 'import:session-target/session-source/report',
+        digest: 'sha256:report',
+        mime: 'text/markdown',
+        sizeBytes: 512,
+        reason: 'User selected this prior report.',
+      }],
+    },
+  });
+  assert.equal(accepted.rejected, undefined);
+  assert.equal(accepted.log.events.length, 1);
+
+  const rejected = appendConversationEvent(createConversationEventLog('session-target'), {
+    id: 'import-bare-path',
+    type: 'ExplicitImportRecorded',
+    storage: 'ref',
+    actor: 'kernel',
+    timestamp: '2026-05-16T00:00:01.000Z',
+    payload: {
+      schemaVersion: 'sciforge.explicit-import-event.v1',
+      summary: 'Bare path copy should be rejected.',
+      reason: 'Regression guard.',
+      refs: [{ ref: '.sciforge/sessions/session-source/artifacts/report.md', digest: 'sha256:report' }],
+      imports: [{
+        schemaVersion: 'sciforge.cross-session-ref.v1',
+        sourceSessionId: 'session-source',
+        sourceRef: '.sciforge/sessions/session-source/artifacts/report.md',
+        targetSessionId: 'session-target',
+        importedRef: '.sciforge/sessions/session-source/artifacts/report.md',
+        digest: 'sha256:report',
+      }],
+    },
+  });
+  assert.equal(rejected.rejected?.code, 'cross-session-ref-explicit-import-required');
+});
+
+test('conversation kernel records ref archive pin delete and tombstone as append-only events', () => {
+  const log = appendConversationEvent(createConversationEventLog('c-ref-lifecycle'), {
+    id: 'pin-report',
+    type: 'RefPinned',
+    storage: 'ref',
+    actor: 'kernel',
+    timestamp: '2026-05-16T00:00:00.000Z',
+    payload: {
+      summary: 'Pinned final report for active handoff.',
+      refs: [{ ref: 'artifact:final-report', digest: 'sha256:report' }],
+    },
+  });
+
+  assert.equal(log.rejected, undefined);
+  assert.deepEqual(projectConversation(log.log).auditRefs, ['artifact:final-report']);
+
+  const rejected = appendConversationEvent(createConversationEventLog('c-ref-lifecycle'), {
+    id: 'tombstone-without-reason',
+    type: 'RefTombstoned',
+    storage: 'ref',
+    actor: 'kernel',
+    timestamp: '2026-05-16T00:00:01.000Z',
+    payload: {
+      refs: [{ ref: 'artifact:bad-report', digest: 'sha256:bad' }],
+    },
+  });
+  assert.equal(rejected.rejected?.code, 'ref-lifecycle-reason-required');
 });
 
 test('conversation kernel replays external failure into projection without code repair as first action', () => {

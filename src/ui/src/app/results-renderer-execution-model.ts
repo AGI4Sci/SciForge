@@ -8,7 +8,7 @@ import { artifactsForRun, auditExecutionUnitsForRun, runUsesContextOnlyFastPath 
 import {
   conversationProjectionArtifactRefs,
   conversationProjectionAuditRefs,
-  conversationProjectionForRun,
+  conversationProjectionForSession,
   conversationProjectionIsRecoverable,
   conversationProjectionPrimaryDiagnostic,
   conversationProjectionRecoverActions,
@@ -50,7 +50,7 @@ export type RunPresentationProgress = {
 
 export function shouldOpenRunAuditDetails(session: SciForgeSession, activeRun?: SciForgeRun) {
   const run = activeRun ?? session.runs.at(-1);
-  const projection = conversationProjectionForRun(run);
+  const projection = conversationProjectionForSession(session, run);
   if (projection) {
     return conversationProjectionStatus(projection) !== 'satisfied'
       || projection.diagnostics.length > 0
@@ -66,7 +66,7 @@ export function shouldOpenRunAuditDetails(session: SciForgeSession, activeRun?: 
 
 export function shouldDefaultOpenRunAuditDetails(session: SciForgeSession, activeRun?: SciForgeRun) {
   const run = activeRun ?? session.runs.at(-1);
-  const projection = conversationProjectionForRun(run);
+  const projection = conversationProjectionForSession(session, run);
   if (!projection) return false;
   return conversationProjectionStatus(projection) !== 'satisfied'
     || projection.diagnostics.length > 0
@@ -75,7 +75,7 @@ export function shouldDefaultOpenRunAuditDetails(session: SciForgeSession, activ
 
 export function runPresentationState(session: SciForgeSession, activeRun?: SciForgeRun, viewPlan?: RuntimeResolvedViewPlan): RunPresentationState {
   const run = activeRun ?? session.runs.at(-1);
-  const projection = conversationProjectionForRun(run);
+  const projection = conversationProjectionForSession(session, run);
   const availableArtifacts = presentationArtifacts(session, run, viewPlan);
   if (projection) return runPresentationStateFromProjection(projection, run, availableArtifacts);
   return projectionlessRunPresentationState(session, run);
@@ -110,7 +110,7 @@ function projectionlessAuditHasDiagnostics(session: SciForgeSession, run?: SciFo
 
 export function failedExecutionUnits(session: SciForgeSession, activeRun?: SciForgeRun): RuntimeExecutionUnit[] {
   const run = activeRun ?? session.runs.at(-1);
-  if (conversationProjectionForRun(run)) return [];
+  if (conversationProjectionForSession(session, run)) return [];
   return [];
 }
 
@@ -128,7 +128,7 @@ function isBlockingExecutionUnitStatus(status: unknown) {
 
 export function runAuditBlockers(session: SciForgeSession, activeRun?: SciForgeRun) {
   const run = activeRun ?? session.runs.at(-1);
-  const projection = conversationProjectionForRun(run);
+  const projection = conversationProjectionForSession(session, run);
   if (projection) {
     if (conversationProjectionStatus(projection) === 'satisfied') return [];
     return Array.from(new Set([
@@ -141,14 +141,14 @@ export function runAuditBlockers(session: SciForgeSession, activeRun?: SciForgeR
 
 export function runRecoverActions(session: SciForgeSession, activeRun?: SciForgeRun) {
   const run = activeRun ?? session.runs.at(-1);
-  const projection = conversationProjectionForRun(run);
+  const projection = conversationProjectionForSession(session, run);
   if (projection) return conversationProjectionRecoverActions(projection);
   return [];
 }
 
 export function runAuditRefs(session: SciForgeSession, activeRun?: SciForgeRun) {
   const run = activeRun ?? session.runs.at(-1);
-  const projection = conversationProjectionForRun(run);
+  const projection = conversationProjectionForSession(session, run);
   if (projection) return conversationProjectionAuditRefs(projection);
   const raw = isRecord(run?.raw) ? run?.raw : undefined;
   return Array.from(new Set([
@@ -170,7 +170,7 @@ const contractValidationFailureKinds: ContractValidationFailureKind[] = ['payloa
 
 export function contractValidationFailures(session: SciForgeSession, activeRun?: SciForgeRun): ContractValidationFailure[] {
   const run = activeRun ?? session.runs.at(-1);
-  if (conversationProjectionForRun(run)) return [];
+  if (conversationProjectionForSession(session, run)) return [];
   return [];
 }
 
@@ -187,7 +187,7 @@ function auditContractValidationFailures(session: SciForgeSession, activeRun?: S
 
 export function backendRepairStates(session: SciForgeSession, activeRun?: SciForgeRun): BackendRepairState[] {
   const run = activeRun ?? session.runs.at(-1);
-  if (conversationProjectionForRun(run)) return [];
+  if (conversationProjectionForSession(session, run)) return [];
   return [];
 }
 

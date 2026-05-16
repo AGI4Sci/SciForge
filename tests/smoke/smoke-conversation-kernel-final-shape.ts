@@ -142,6 +142,20 @@ assert.deepEqual(
 );
 
 const workspaceKernel = createWorkspaceKernel({ sessionId: 'smoke-workspace-kernel-main' });
+const smokeRef = workspaceKernel.registerRef('workspace ref body', {
+  ref: 'artifact:smoke-registered-ref',
+  kind: 'artifact',
+  mime: 'text/plain',
+});
+assert.equal(smokeRef.retention, 'warm');
+assert.throws(
+  () => workspaceKernel.registerRef('bad retention override', {
+    ref: 'artifact:smoke-bad-retention',
+    kind: 'artifact',
+    metadata: { retention: 'audit-only' },
+  }),
+  /retention is derived from RefKindGroup/,
+);
 const workspaceFirst = workspaceKernel.appendEvent(inlineEvent('wk-turn', 'TurnReceived', {
   prompt: 'restore projection from Workspace Kernel',
 }, { turnId: 'wk-turn' }));
@@ -154,6 +168,45 @@ assert.equal(workspaceSecond.projection.projectionVersion, 2);
 assert.equal(workspaceSecond.projection.visibleAnswer?.text, 'Workspace Kernel is the projection entrypoint.');
 assert.deepEqual(workspaceKernel.restoreProjection('smoke-workspace-kernel-main'), workspaceSecond.projection);
 assert.equal(workspaceKernel.replayProjection('smoke-workspace-kernel-main', { untilEventId: 'wk-turn' }).visibleAnswer, undefined);
+
+const refOnlyFailure = appendConversationEvent(createConversationEventLog('smoke-ref-only-failure'), refEvent('ref-only-failure', 'ExternalBlocked', {
+  refs: [{ ref: 'log:provider-stderr', digest: 'sha256:provider' }],
+}));
+assert.equal(refOnlyFailure.rejected?.code, 'ref-event-inline-facts-required');
+
+const explicitImportLog = appendAll(createConversationEventLog('smoke-explicit-import'), [
+  refEvent('explicit-import', 'ExplicitImportRecorded', {
+    schemaVersion: 'sciforge.explicit-import-event.v1',
+    summary: 'Imported selected source-session artifact.',
+    reason: 'User selected a prior session artifact to continue from.',
+    refs: [{
+      ref: 'import:smoke-explicit-import/source-session/report',
+      digest: 'sha256:imported-report',
+      mime: 'text/markdown',
+      sizeBytes: 512,
+    }],
+    imports: [{
+      schemaVersion: 'sciforge.cross-session-ref.v1',
+      sourceSessionId: 'source-session',
+      sourceRef: '.sciforge/sessions/source-session/artifacts/report.md',
+      targetSessionId: 'smoke-explicit-import',
+      importedRef: 'import:smoke-explicit-import/source-session/report',
+      digest: 'sha256:imported-report',
+      mime: 'text/markdown',
+      sizeBytes: 512,
+    }],
+  }),
+]);
+assert.deepEqual(projectConversation(explicitImportLog).auditRefs, ['import:smoke-explicit-import/source-session/report']);
+
+const refLifecycleLog = appendAll(createConversationEventLog('smoke-ref-lifecycle'), [
+  refEvent('ref-tombstone', 'RefTombstoned', {
+    summary: 'Tombstoned stale imported ref.',
+    reason: 'Source artifact was superseded by a verified report.',
+    refs: [{ ref: 'artifact:stale-import', digest: 'sha256:stale' }],
+  }),
+]);
+assert.deepEqual(projectConversation(refLifecycleLog).auditRefs, ['artifact:stale-import']);
 
 const backgroundLog = appendAll(createConversationEventLog('smoke-background-recorded'), [
   inlineEvent('turn-bg', 'TurnReceived', { prompt: 'return a partial answer and continue verification' }, { turnId: 't-bg' }),

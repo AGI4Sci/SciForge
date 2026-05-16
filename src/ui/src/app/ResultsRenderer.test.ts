@@ -8,6 +8,7 @@ import { nextPinnedObjectReferences, resolveObjectReferenceActionPlan } from './
 import { RegistrySlot } from './results-renderer-registry-slot';
 import { createResultsRendererViewModel } from './results-renderer-view-model';
 import { applyBackgroundCompletionEventToSession } from './chat/sessionTransforms';
+import { conversationProjectionMigrationAuditFixtureForRun } from './conversation-projection-view-model';
 import type { ContractValidationFailure } from '@sciforge-ui/runtime-contract';
 import type { ObjectReference, RuntimeArtifact, SciForgeConfig, SciForgeRun, SciForgeSession } from '../domain';
 
@@ -115,7 +116,7 @@ test('coerceReportPayload synthesizes readable report sections from related arti
 });
 
 test('completed runs with partial retrieval notes do not open failure audit by default', () => {
-  const session: SciForgeSession = {
+  const session = {
     schemaVersion: 2,
     sessionId: 'session-partial-retrieval',
     scenarioId: 'literature-evidence-review',
@@ -147,7 +148,7 @@ test('completed runs with partial retrieval notes do not open failure audit by d
     notebook: [],
     versions: [],
     updatedAt: '2026-05-09T00:01:00.000Z',
-  };
+  } as SciForgeSession;
 
   assert.equal(shouldOpenRunAuditDetails(session, session.runs[0]), false);
 });
@@ -266,14 +267,14 @@ test('hidden result slots are scoped to the active run when a run is selected', 
       }],
     },
   };
-  const session: SciForgeSession = {
+  const session: SciForgeSession = withMaterializedProjectionFixture({
     ...emptySession(),
     runs: [runA, runB],
     artifacts: [
       (runA.raw as { artifacts: RuntimeArtifact[] }).artifacts[0],
       (runB.raw as { artifacts: RuntimeArtifact[] }).artifacts[0],
     ],
-  };
+  });
   const runAView = createResultsRendererViewModel({
     scenarioId: 'literature-evidence-review',
     session,
@@ -307,10 +308,10 @@ test('hidden result slots are scoped to the active run when a run is selected', 
 });
 
 test('ResultsRenderer empty completed run is presented as empty rather than ready', () => {
-  const session: SciForgeSession = {
+  const session = {
     ...emptySession(),
     runs: [completedRun('run-empty-artifacts')],
-  };
+  } as SciForgeSession;
 
   const html = renderResultsRenderer(session, { activeRunId: 'run-empty-artifacts' });
 
@@ -321,7 +322,7 @@ test('ResultsRenderer empty completed run is presented as empty rather than read
 });
 
 test('ResultsRenderer lets projection satisfied state suppress raw failed run and execution unit UI', () => {
-  const session: SciForgeSession = {
+  const session = {
     ...emptySession(),
     runs: [{
       ...completedRun('run-projection-visible-ready'),
@@ -357,7 +358,7 @@ test('ResultsRenderer lets projection satisfied state suppress raw failed run an
       hash: 'legacy',
       failureReason: 'LEGACY_EXECUTION_UNIT_SHOULD_NOT_RENDER',
     }],
-  };
+  } as SciForgeSession;
 
   const html = renderResultsRenderer(session, { activeRunId: 'run-projection-visible-ready' });
 
@@ -369,7 +370,7 @@ test('ResultsRenderer lets projection satisfied state suppress raw failed run an
 });
 
 test('ResultsRenderer restores projection from ConversationEventLog before stale raw projection', () => {
-  const session: SciForgeSession = {
+  const session = {
     ...emptySession(),
     runs: [{
       ...completedRun('run-event-log-authoritative'),
@@ -424,7 +425,7 @@ test('ResultsRenderer restores projection from ConversationEventLog before stale
         },
       },
     }],
-  };
+  } as SciForgeSession;
 
   const html = renderResultsRenderer(session, { activeRunId: 'run-event-log-authoritative' });
   const mainHtml = html.slice(0, html.indexOf('Raw JSON / stdout / stderr refs'));
@@ -434,7 +435,7 @@ test('ResultsRenderer restores projection from ConversationEventLog before stale
 });
 
 test('ResultsRenderer uses projection execution process instead of raw execution units in execution focus', () => {
-  const session: SciForgeSession = {
+  const session = {
     ...emptySession(),
     runs: [{
       ...completedRun('run-projection-execution'),
@@ -474,7 +475,7 @@ test('ResultsRenderer uses projection execution process instead of raw execution
       hash: 'legacy',
       failureReason: 'LEGACY_RAW_EU_SHOULD_NOT_RENDER_IN_MAIN_EXECUTION_FOCUS',
     }],
-  };
+  } as SciForgeSession;
 
   const html = renderResultsRenderer(session, { activeRunId: 'run-projection-execution', initialFocusMode: 'execution' });
   const model = createResultsRendererViewModel({
@@ -493,7 +494,7 @@ test('ResultsRenderer uses projection execution process instead of raw execution
 });
 
 test('ResultsRenderer surfaces runtime compatibility drift without rerunning old sessions', () => {
-  const session: SciForgeSession = {
+  const session = {
     ...emptySession(),
     messages: [{ id: 'msg-old-session', role: 'user', content: 'continue old work', createdAt: '2026-05-09T00:00:00.000Z' }],
     runtimeCompatibilityDiagnostics: [{
@@ -522,7 +523,7 @@ test('ResultsRenderer surfaces runtime compatibility drift without rerunning old
       recoverableActions: ['Migrate the session payload', 'Start a new run when drift blocks safe recovery'],
       createdAt: '2026-05-09T00:00:00.000Z',
     }],
-  };
+  } as SciForgeSession;
 
   const html = renderResultsRenderer(session);
 
@@ -535,7 +536,7 @@ test('ResultsRenderer surfaces runtime compatibility drift without rerunning old
 });
 
 test('ResultsRenderer does not let raw running progress drive the main summary without projection', () => {
-  const session: SciForgeSession = {
+  const session = {
     ...emptySession(),
     runs: [{
       ...completedRun('run-partial-first'),
@@ -567,7 +568,7 @@ test('ResultsRenderer does not let raw running progress drive the main summary w
       schemaVersion: '1',
       metadata: { title: 'Partial report', runId: 'run-partial-first' },
     }],
-  };
+  } as SciForgeSession;
 
   const html = renderResultsRenderer(session, { activeRunId: 'run-partial-first' });
 
@@ -634,7 +635,7 @@ test('ResultsRenderer execution focus shows background artifact stages as execut
 });
 
 test('ResultsRenderer execution table separates verification states from completed status', () => {
-  const session: SciForgeSession = {
+  const session = {
     ...emptySession(),
     runs: [completedRun('run-verification-states')],
     executionUnits: [
@@ -644,7 +645,7 @@ test('ResultsRenderer execution table separates verification states from complet
       { id: 'EU-verification-failed', tool: 'verifier.run', params: '{}', status: 'done', hash: 'failed', outputRef: 'run:run-verification-states#failed', verificationVerdict: 'fail', verificationRef: 'verification:failed' },
       { id: 'EU-release-verified', tool: 'verifier.run', params: '{}', status: 'done', hash: 'passed', outputRef: 'run:run-verification-states#passed', verificationVerdict: 'pass', verificationRef: 'verification:passed' },
     ],
-  };
+  } as SciForgeSession;
 
   const html = renderResultsRenderer(session, { activeRunId: 'run-verification-states', initialFocusMode: 'execution' });
 
@@ -879,7 +880,7 @@ test('ResultsRenderer falls back from mismatched manifest component to artifact-
       previewPolicy: 'inline',
     },
   };
-  const session: SciForgeSession = {
+  const session = withMaterializedProjectionFixture({
     ...emptySession(),
     artifacts: [artifact],
     runs: [{
@@ -893,7 +894,7 @@ test('ResultsRenderer falls back from mismatched manifest component to artifact-
       artifactRef: 'report-owned-artifact',
       title: 'Backend requested paper cards',
     }],
-  };
+  });
   const html = renderResultsRenderer(session, { activeRunId: 'run-mismatch' });
   const model = createResultsRendererViewModel({
     scenarioId: 'literature-evidence-review',
@@ -927,7 +928,7 @@ test('results renderer view model projects hidden result empty state and manifes
       previewPolicy: 'inline',
     },
   };
-  const session: SciForgeSession = {
+  const session = withMaterializedProjectionFixture({
     ...emptySession(),
     artifacts: [artifact],
     runs: [{
@@ -936,7 +937,7 @@ test('results renderer view model projects hidden result empty state and manifes
         resultPresentation: projectionResultPresentation('run-view-model-report', ['artifact:report']),
       },
     }],
-  };
+  });
   const initial = createResultsRendererViewModel({
     scenarioId: 'literature-evidence-review',
     session,
@@ -1195,10 +1196,11 @@ function projectionResultPresentation(runId: string, artifactRefs: string[]) {
 }
 
 function renderResultsRenderer(session: SciForgeSession, options: { activeRunId?: string; initialFocusMode?: 'all' | 'visual' | 'evidence' | 'execution' } = {}) {
+  const effectiveSession = withMaterializedProjectionFixture(session);
   return renderToStaticMarkup(createElement(ResultsRenderer, {
     scenarioId: 'literature-evidence-review',
     config: testConfig(),
-    session,
+    session: effectiveSession,
     defaultSlots: [],
     onArtifactHandoff: () => undefined,
     collapsed: false,
@@ -1210,6 +1212,14 @@ function renderResultsRenderer(session: SciForgeSession, options: { activeRunId?
     onWorkspaceFileEditorChange: () => undefined,
     initialFocusMode: options.initialFocusMode,
   }));
+}
+
+function withMaterializedProjectionFixture(session: SciForgeSession): SciForgeSession {
+  const projections = Object.fromEntries(session.runs.flatMap((run) => {
+    const projection = conversationProjectionMigrationAuditFixtureForRun(run);
+    return projection ? [[run.id, projection]] : [];
+  }));
+  return Object.keys(projections).length ? { ...session, materializedConversationProjections: projections } as SciForgeSession : session;
 }
 
 function testConfig(): SciForgeConfig {

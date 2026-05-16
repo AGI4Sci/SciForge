@@ -7,6 +7,10 @@ test('handoff planner emits selected refs and omits forbidden legacy context fie
   const plan = planConversationHandoff({
     prompt: 'Use the selected refs only.',
     currentReferenceDigests: [{ ref: 'artifact:current-digest', digest: 'sha256:current' }],
+    artifacts: [
+      { id: 'a1', type: 'report', dataRef: 'artifact:duplicate-report' },
+      { id: 'a1', type: 'report', dataRef: 'artifact:duplicate-report' },
+    ],
     handoffMemoryProjection: {
       authority: 'workspace-project-session-memory',
       stablePrefixHash: 'sha256:stable',
@@ -37,6 +41,7 @@ test('handoff planner emits selected refs and omits forbidden legacy context fie
   assert.equal('recentConversation' in projection, false);
   assert.equal('recentRuns' in projection, false);
   assert.doesNotMatch(JSON.stringify(plan.payload), /rawHistory|fullRefList|recentTurns|compactionState|rawBody|\"body\"|RAW_MESSAGE_BODY|RAW_RUN_BODY/);
+  assert.equal((plan.payload?.artifacts as unknown[] | undefined)?.length, 1);
   assert.ok(plan.decisions.some((decision) => String(decision.kind) === 'handoff-projection-legacy-key'));
   assert.ok(plan.decisions.some((decision) => String(decision.kind) === 'forbidden-field'));
 });

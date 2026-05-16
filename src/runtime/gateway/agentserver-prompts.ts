@@ -19,6 +19,11 @@ import { collectRuntimeRefsFromValue, runtimePayloadKeyLooksLikeBodyCarrier } fr
 import { normalizeTurnExecutionConstraints } from '@sciforge-ui/runtime-contract/turn-constraints';
 import { agentServerBackendDecisionPromptPolicyLines, agentServerCapabilityRoutingPromptPolicyLines, agentServerContinuationPromptPolicyLines, agentServerCurrentTurnSnapshotPromptPolicyLines, agentServerExecutionModePromptPolicyLines, agentServerExternalIoReliabilityContractLines, agentServerFreshRetrievalPromptPolicyLines, agentServerGeneratedTaskPromptPolicyLines, agentServerGenerationOutputContract, agentServerGenerationOutputContractLines, agentServerLargeFilePromptContractLines, agentServerPriorAttemptsPromptPolicyLines, agentServerRepairPromptPolicyLines, agentServerToolPayloadShapeContract, agentServerViewSelectionPromptPolicyLines, agentServerWorkspaceTaskRepairPromptPolicyLines, agentServerWorkspaceTaskRoutingPromptPolicyLines } from '../../../packages/skills/runtime-policy';
 import { minimalValidInteractiveToolPayloadExample } from '../../../packages/presentation/interactive-views/runtime-ui-manifest-policy';
+import {
+  AGENTSERVER_BACKEND_HANDOFF_VERSION,
+  validateBackendHandoffPacket,
+  type BackendHandoffPacket,
+} from './agentserver-context-contract.js';
 
 export const AGENT_BACKEND_ANSWER_PRINCIPLE = [
   'All normal user-visible answers must be reasoned by the agent backend.',
@@ -802,61 +807,41 @@ export function buildAgentServerGenerationPrompt(request: {
   retryAudit?: unknown;
   freshCurrentTurn?: boolean;
   repairContinuation?: boolean;
+  backendHandoffPacket?: BackendHandoffPacket;
+  boundedRenderPlan?: Record<string, unknown>;
 }) {
   const contextEnvelope = isRecord(request.contextEnvelope) ? request.contextEnvelope : {};
   const sessionFacts = isRecord(contextEnvelope.sessionFacts) ? contextEnvelope.sessionFacts : {};
   const scenarioFacts = isRecord(contextEnvelope.scenarioFacts) ? contextEnvelope.scenarioFacts : {};
   const currentUserRequest = stringField(sessionFacts.currentUserRequest) ?? extractAgentServerCurrentUserRequest(request.prompt);
   const executionMode = executionModeDecisionForPrompt(sessionFacts, scenarioFacts);
-  const conversationPolicySummary = isRecord(sessionFacts.conversationPolicySummary)
+  const rawConversationPolicySummary = isRecord(sessionFacts.conversationPolicySummary)
     ? sessionFacts.conversationPolicySummary
     : isRecord(scenarioFacts.conversationPolicySummary)
       ? scenarioFacts.conversationPolicySummary
       : summarizeConversationPolicyForAgentServer(request.uiStateSummary);
+  const conversationPolicySummary = isRecord(rawConversationPolicySummary) ? rawConversationPolicySummary : undefined;
   const capabilityBrokerBrief = isRecord(scenarioFacts.capabilityBrokerBrief)
     ? scenarioFacts.capabilityBrokerBrief
     : isRecord(request.availableRuntimeCapabilities) && request.availableRuntimeCapabilities.schemaVersion === 'sciforge.agentserver.capability-broker-brief.v1'
       ? request.availableRuntimeCapabilities
       : undefined;
   const capabilityBrokerRouteSummary = compactCapabilityBrokerRouteSummary(capabilityBrokerBrief);
+  const backendHandoffPacket = backendHandoffPacketForPrompt(request, contextEnvelope);
   const promptRenderPlanSummary = promptRenderPlanSummaryForAgentServer(request, contextEnvelope, sessionFacts);
   const projectSessionProjection = isRecord(sessionFacts.handoffMemoryProjection)
     ? compactProjectSessionMemoryProjectionForPrompt(sessionFacts.handoffMemoryProjection)
     : undefined;
-  const currentTurnSnapshot = {
-    kind: 'SciForgeCurrentTurnSnapshot',
-    prompt: request.prompt,
+  const currentTurnSnapshot = agentServerCurrentTurnSnapshotFromHandoff({
+    request,
     currentUserRequest,
-    skillDomain: request.skillDomain,
-    expectedArtifactTypes: request.expectedArtifactTypes ?? [],
-    selectedComponentIds: request.selectedComponentIds ?? [],
-    executionModeRecommendation: executionMode.executionModeRecommendation,
-    complexityScore: executionMode.complexityScore,
-    uncertaintyScore: executionMode.uncertaintyScore,
-    reproducibilityLevel: executionMode.reproducibilityLevel,
-    stagePlanHint: executionMode.stagePlanHint,
-    executionModeReason: executionMode.executionModeReason,
-    conversationPolicySummary,
-    executionScope: 'backend-decides',
-    selectedToolIds: toStringList(scenarioFacts.selectedToolIds),
-    selectedSenseIds: toStringList(scenarioFacts.selectedSenseIds),
-    capabilityBrokerBrief: capabilityBrokerRouteSummary,
+    backendHandoffPacket,
     promptRenderPlanSummary,
-    currentReferences: Array.isArray(sessionFacts.currentReferences) ? sessionFacts.currentReferences : undefined,
-    currentReferenceDigests: Array.isArray(sessionFacts.currentReferenceDigests) ? sessionFacts.currentReferenceDigests : undefined,
-    projectSessionMemory: projectSessionProjection,
-    strictTaskFilesReason: request.strictTaskFilesReason,
-    repairContinuation: request.repairContinuation ? {
-      mode: 'minimal-single-stage-repair-continuation',
-      terminalPayloadContract: [
-        'Return only one terminal compact JSON object.',
-        'Allowed success shape: AgentServerGenerationResponse containing a minimal provider-route adapter task for the existing failed unit.',
-        'Allowed blocked shape: SciForge ToolPayload with executionUnits.status="failed-with-reason", failureReason, recoverActions, nextStep, and refs/digests-only follow-up.',
-        'No broad repair loop, full pipeline regeneration, or exploratory history scan.',
-      ],
-    } : undefined,
-    outputContract: agentServerGenerationOutputContract(),
-  };
+    conversationPolicySummary,
+    executionMode,
+    capabilityBrokerRouteSummary,
+    projectSessionProjection,
+  });
   return [
     ...agentServerCurrentTurnSnapshotPromptPolicyLines(),
     JSON.stringify(clipForAgentServerJson(currentTurnSnapshot), null, 2),
@@ -905,6 +890,74 @@ export function buildAgentServerGenerationPrompt(request: {
   ].join('\n');
 }
 
+function agentServerCurrentTurnSnapshotFromHandoff(params: {
+  request: Parameters<typeof buildAgentServerGenerationPrompt>[0];
+  currentUserRequest: string;
+  backendHandoffPacket: BackendHandoffPacket | undefined;
+  promptRenderPlanSummary: Record<string, unknown> | undefined;
+  conversationPolicySummary: Record<string, unknown> | undefined;
+  executionMode: ReturnType<typeof executionModeDecisionForPrompt>;
+  capabilityBrokerRouteSummary: Record<string, unknown> | undefined;
+  projectSessionProjection: Record<string, unknown> | undefined;
+}) {
+  const packet = params.backendHandoffPacket;
+  return {
+    kind: 'SciForgeCurrentTurnSnapshot',
+    snapshotSource: packet ? 'BackendHandoffPacket' : 'bounded-render-plan',
+    currentUserRequest: params.currentUserRequest,
+    skillDomain: params.request.skillDomain,
+    expectedArtifactTypes: params.request.expectedArtifactTypes ?? [],
+    selectedComponentIds: params.request.selectedComponentIds ?? [],
+    executionModeRecommendation: params.executionMode.executionModeRecommendation,
+    complexityScore: params.executionMode.complexityScore,
+    uncertaintyScore: params.executionMode.uncertaintyScore,
+    reproducibilityLevel: params.executionMode.reproducibilityLevel,
+    stagePlanHint: params.executionMode.stagePlanHint,
+    executionModeReason: params.executionMode.executionModeReason,
+    conversationPolicySummary: params.conversationPolicySummary,
+    executionScope: 'backend-decides',
+    backendHandoffPacket: packet ? {
+      contractVersion: packet._contractVersion,
+      sessionId: packet.sessionId,
+      turnId: packet.turnId,
+      currentTurnRef: packet.currentTurnRef,
+      contextRefs: packet.contextRefs.slice(0, 24),
+      retrievalTools: packet.retrievalTools,
+      contextSnapshotRef: packet.contextSnapshotRef,
+      compactionAuditRefs: packet.compactionAuditRefs?.slice(0, 8),
+      retrievalAuditRefs: packet.retrievalAuditRefs?.slice(0, 8),
+      syntheticAuditMeta: packet.syntheticAuditMeta ? {
+        synthetic: true,
+        source: packet.syntheticAuditMeta.source,
+        upstream: packet.syntheticAuditMeta.upstream,
+        reason: packet.syntheticAuditMeta.reason,
+        confidence: packet.syntheticAuditMeta.confidence,
+        sourceRefs: packet.syntheticAuditMeta.sourceRefs.slice(0, 8),
+      } : undefined,
+    } : undefined,
+    capabilityBrokerBrief: params.capabilityBrokerRouteSummary,
+    promptRenderPlanSummary: params.promptRenderPlanSummary,
+    projectSessionMemoryProjection: params.projectSessionProjection ? {
+      schemaVersion: params.projectSessionProjection.schemaVersion,
+      stablePrefixHash: params.projectSessionProjection.stablePrefixHash,
+      selectedContextRefs: params.projectSessionProjection.selectedContextRefs,
+      contextRefs: params.projectSessionProjection.contextRefs,
+      retrievalTools: params.projectSessionProjection.retrievalTools,
+    } : undefined,
+    strictTaskFilesReason: params.request.strictTaskFilesReason,
+    repairContinuation: params.request.repairContinuation ? {
+      mode: 'minimal-single-stage-repair-continuation',
+      terminalPayloadContract: [
+        'Return only one terminal compact JSON object.',
+        'Allowed success shape: AgentServerGenerationResponse containing a minimal provider-route adapter task for the existing failed unit.',
+        'Allowed blocked shape: SciForge ToolPayload with executionUnits.status="failed-with-reason", failureReason, recoverActions, nextStep, and refs/digests-only follow-up.',
+        'No broad repair loop, full pipeline regeneration, or exploratory history scan.',
+      ],
+    } : undefined,
+    outputContract: agentServerGenerationOutputContract(),
+  };
+}
+
 function agentServerRepairContinuationHardStopPromptLines() {
   return [
     'Repair-continuation hard stop:',
@@ -929,6 +982,7 @@ function compactGenerationRequestForAgentServer(
     availableTools: _availableTools,
     availableRuntimeCapabilities: _availableRuntimeCapabilities,
     contextEnvelope,
+    boundedRenderPlan: _boundedRenderPlan,
     metadata: _metadata,
     ...rest
   } = request;
@@ -1305,21 +1359,36 @@ function promptRenderPlanSummaryForAgentServer(
   sessionFacts: Record<string, unknown>,
 ) {
   const metadata = isRecord(request.metadata) ? request.metadata : {};
-  const scenarioFacts = isRecord(contextEnvelope.scenarioFacts) ? contextEnvelope.scenarioFacts : {};
   const candidates: Array<{ source: string; value: unknown }> = [
-    { source: 'contextEnvelope.sessionFacts.agentHarnessHandoff', value: sessionFacts.agentHarnessHandoff },
-    { source: 'contextEnvelope.sessionFacts.promptRenderPlan', value: sessionFacts.promptRenderPlan },
-    { source: 'contextEnvelope.scenarioFacts.agentHarnessHandoff', value: scenarioFacts.agentHarnessHandoff },
-    { source: 'contextEnvelope.scenarioFacts.promptRenderPlan', value: scenarioFacts.promptRenderPlan },
-    { source: 'contextEnvelope.agentHarnessHandoff', value: contextEnvelope.agentHarnessHandoff },
-    { source: 'contextEnvelope.promptRenderPlan', value: contextEnvelope.promptRenderPlan },
-    { source: 'request.metadata.agentHarnessHandoff', value: metadata.agentHarnessHandoff },
-    { source: 'request.metadata.promptRenderPlan', value: metadata.promptRenderPlan },
+    { source: 'request.boundedRenderPlan', value: request.boundedRenderPlan },
+    { source: 'contextEnvelope.boundedRenderPlan', value: contextEnvelope.boundedRenderPlan },
+    { source: 'contextEnvelope.sessionFacts.boundedRenderPlan', value: sessionFacts.boundedRenderPlan },
+    { source: 'request.metadata.boundedRenderPlan', value: metadata.boundedRenderPlan },
   ];
   for (const candidate of candidates) {
     const plan = promptRenderPlanFromCandidate(candidate.value);
     const summary = plan ? promptRenderPlanSummaryFromPlan(plan, candidate.source) : undefined;
     if (summary) return summary;
+  }
+  return undefined;
+}
+
+function backendHandoffPacketForPrompt(
+  request: Parameters<typeof buildAgentServerGenerationPrompt>[0],
+  contextEnvelope: Record<string, unknown>,
+): BackendHandoffPacket | undefined {
+  const metadata = isRecord(request.metadata) ? request.metadata : {};
+  const candidates = [
+    request.backendHandoffPacket,
+    contextEnvelope.backendHandoffPacket,
+    metadata.backendHandoffPacket,
+  ];
+  for (const candidate of candidates) {
+    if (!isRecord(candidate)) continue;
+    const result = validateBackendHandoffPacket(candidate);
+    if (result.ok && candidate._contractVersion === AGENTSERVER_BACKEND_HANDOFF_VERSION) {
+      return candidate as unknown as BackendHandoffPacket;
+    }
   }
   return undefined;
 }

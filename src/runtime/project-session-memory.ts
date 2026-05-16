@@ -20,6 +20,8 @@ export type ProjectSessionEventKind =
   | 'verification-recorded'
   | 'failure-classified'
   | 'decision-recorded'
+  | 'explicit-import-recorded'
+  | 'ref-lifecycle-recorded'
   | 'context-projection-recorded'
   | 'compaction-recorded'
   | 'history-edit-recorded'
@@ -783,6 +785,13 @@ function mapConversationKind(type: string | undefined): ProjectSessionEventKind 
       return 'history-edit-recorded';
     case 'HarnessDecisionRecorded':
       return 'decision-recorded';
+    case 'ExplicitImportRecorded':
+      return 'explicit-import-recorded';
+    case 'RefArchived':
+    case 'RefPinned':
+    case 'RefDeleted':
+    case 'RefTombstoned':
+      return 'ref-lifecycle-recorded';
     case 'Satisfied':
     case 'PartialReady':
       return 'assistant-visible-message';

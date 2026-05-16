@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { normalizeBackendHandoff } from './workspace-task-input';
+import { normalizeBackendHandoff, normalizeCanonicalHandoffValue } from './workspace-task-input';
 
 test('backend handoff slimming preserves AgentServer input.text contract under tight budgets', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-backend-handoff-'));
@@ -55,7 +55,7 @@ test('backend handoff slimming preserves AgentServer input.text contract under t
     assert.ok(input);
     assert.equal(typeof input.text, 'string');
     assert.match(input.text as string, /SciForge compacted backend input\.text/);
-    assert.ok(result.decisions.some((decision) => decision.kind === 'backend-handoff-envelope'));
+    assert.ok(result.decisions.some((decision) => decision.kind === 'backend-input-text'));
     assert.notEqual(payload.kind, 'backend-handoff');
   } finally {
     await rm(workspace, { recursive: true, force: true });
@@ -113,4 +113,27 @@ test('backend handoff slimming keeps ref-backed large logs and documents summary
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
+});
+
+test('canonical handoff normalizer removes forbidden carriers and deduplicates arrays', () => {
+  const normalized = normalizeCanonicalHandoffValue({
+    refs: [
+      { ref: 'artifact:a', digest: 'sha256:a' },
+      { ref: 'artifact:a', digest: 'sha256:a' },
+      { ref: 'artifact:b', digest: 'sha256:b', rawBody: 'RAW_BODY' },
+    ],
+    recentTurns: [{ role: 'assistant', content: 'RAW_TURN' }],
+    nested: {
+      fullRefList: ['artifact:all'],
+      items: [
+        { id: 'same', value: 1 },
+        { id: 'same', value: 1 },
+      ],
+    },
+  }) as Record<string, unknown>;
+
+  const serialized = JSON.stringify(normalized);
+  assert.doesNotMatch(serialized, /recentTurns|fullRefList|rawBody|RAW_TURN|RAW_BODY/);
+  assert.equal((normalized.refs as unknown[]).length, 2);
+  assert.equal(((normalized.nested as Record<string, unknown>).items as unknown[]).length, 1);
 });

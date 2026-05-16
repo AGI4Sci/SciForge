@@ -20,7 +20,7 @@ import { applyArtifactHandoffToWorkspace } from '../../workspace/artifactHandoff
 import { handoffAutoRunPrompt } from '../results/autoRunPrompts';
 import { artifactsForRun, auditExecutionUnitsForRun } from '../results/executionUnitsForRun';
 import {
-  conversationProjectionForRun,
+  conversationProjectionForSession,
   conversationProjectionRecoverFocusSignal,
 } from '../conversation-projection-view-model';
 import type { HandoffAutoRunRequest } from '../results/viewPlanResolver';
@@ -229,7 +229,7 @@ function uniqueTimelineRefs(values: string[]) {
 }
 
 function recoverableReasonForRun(session: SciForgeSession, run: SciForgeRun): { reason: WorkspaceRecoveryFocus['reason']; activeRunId?: string } | undefined {
-  const projection = conversationProjectionForRun(run);
+  const projection = conversationProjectionForSession(session, run);
   const focusSignal = conversationProjectionRecoverFocusSignal(projection);
   if (focusSignal) return { reason: 'repair-needed-run', activeRunId: focusSignal.activeRunId };
   return undefined;

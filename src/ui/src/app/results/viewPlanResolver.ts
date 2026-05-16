@@ -8,7 +8,7 @@ import {
 } from '../../../../../packages/support/object-references';
 import {
   conversationProjectionArtifactRefs,
-  conversationProjectionForRun,
+  conversationProjectionForSession,
   conversationProjectionPrimaryDiagnostic,
   conversationProjectionVisibleText,
   type UiConversationProjection,
@@ -128,7 +128,7 @@ export function resolveViewPlan({
   pinnedObjectReferences?: ObjectReference[];
 }): RuntimeResolvedViewPlan {
   const effectiveRun = activeRun ?? session.runs.at(-1);
-  const projection = conversationProjectionForRun(effectiveRun);
+  const projection = conversationProjectionForSession(session, effectiveRun);
   const resultArtifacts = projection
     ? artifactsForConversationProjection(session, projection)
     : [];

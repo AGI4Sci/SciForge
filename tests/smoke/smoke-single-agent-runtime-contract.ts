@@ -248,10 +248,53 @@ cover('C17', () => {
 });
 
 cover('C18', () => {
-  const scenarioPackage = { kind: 'policy-only', promptRegex: undefined, providerBranch: undefined, executionCode: undefined };
-  const workerDiscovery = { providerManifest: { id: 'web-worker', capabilities: ['web_search'] }, endpoint: undefined, invokeUrl: undefined };
+  const scenarioPackage = {
+    kind: 'policy-only',
+    policy: {
+      verifierPolicy: { requiredInputs: ['query'] },
+      capabilities: { allowedToolIds: ['web_search'] },
+      domainVocabulary: { artifactTypes: ['research-report'] },
+    },
+  };
+  const forbiddenScenarioPackage = {
+    ...scenarioPackage,
+    policy: {
+      ...scenarioPackage.policy,
+      executionCode: 'await runScenario()',
+      verifierPolicy: {
+        ...scenarioPackage.policy.verifierPolicy,
+        promptRegex: '/latest papers/i',
+        multiTurnSemanticJudge: 'infer whether the user wants repair',
+      },
+      capabilities: {
+        ...scenarioPackage.policy.capabilities,
+        providerBranches: { local: ['fake-answer'] },
+      },
+      domainVocabulary: {
+        ...scenarioPackage.policy.domainVocabulary,
+        answerTemplate: 'preset answer',
+        systemPrompt: 'override backend',
+      },
+    },
+  };
+  const workerDiscovery = {
+    providerManifest: { id: 'web-worker', capabilities: ['web_search'], healthStatus: 'ready' },
+    endpoint: undefined,
+    invokeUrl: undefined,
+    workerId: undefined,
+  };
   assert.equal(scenarioPackage.kind, 'policy-only');
+  assert.deepEqual(scenarioPolicyOnlyViolations(scenarioPackage), []);
+  assert.deepEqual(scenarioPolicyOnlyViolations(forbiddenScenarioPackage).sort(), [
+    'policy.capabilities.providerBranches',
+    'policy.domainVocabulary.answerTemplate',
+    'policy.domainVocabulary.systemPrompt',
+    'policy.executionCode',
+    'policy.verifierPolicy.multiTurnSemanticJudge',
+    'policy.verifierPolicy.promptRegex',
+  ]);
   assert.equal(workerDiscovery.endpoint, undefined);
+  assert.equal(workerDiscovery.workerId, undefined);
   assert.ok(workerDiscovery.providerManifest.capabilities.includes('web_search'));
 });
 
@@ -272,6 +315,8 @@ async function coverStaticContracts() {
     'C07-runtime-visible-preflight#src/runtime/gateway/direct-context-fast-path.ts': 0,
     'C07-runtime-visible-preflight#src/runtime/gateway/capability-provider-preflight.ts': 0,
     'C07-runtime-visible-preflight#src/runtime/gateway/generated-task-payload-preflight.ts': 0,
+    'C08-gateway-public-api-internal-stage#src/runtime/generation-gateway.ts': 0,
+    'C06-runtime-direct-context-implicit-strategy#src/runtime/gateway/direct-context-fast-path.ts': 0,
     'C05-degraded-raw-history-shape#src/runtime/gateway/agentserver-context-contract.ts': 0,
     'C05-degraded-raw-history-shape#src/runtime/gateway/agentserver-context-window.ts': 1,
     'C05-degraded-raw-history-shape#src/runtime/gateway/agentserver-prompts.ts': 1,
@@ -304,6 +349,18 @@ async function collectStaticFindings() {
     {
       id: 'C07-runtime-visible-preflight',
       match: (line: string, file: string) => file.startsWith('src/runtime/') && /\bcapabilityProviderPreflight\s*\(/.test(line) && !/^export\s+function\b/.test(line.trim()),
+    },
+    {
+      id: 'C08-gateway-public-api-internal-stage',
+      match: (line: string, file: string) => file.startsWith('src/runtime/')
+        && !file.startsWith('src/runtime/gateway/')
+        && file !== 'src/runtime/generation-gateway.ts'
+        && /\bGateway\.(?:resolveRoute|preflight|invoke|materialize|validate)\s*\(/.test(line),
+    },
+    {
+      id: 'C06-runtime-direct-context-implicit-strategy',
+      match: (line: string, file: string) => file === 'src/runtime/gateway/direct-context-fast-path.ts'
+        && /\b(?:agentHarness|turnExecutionConstraints|preferredCapabilityIds|intentMode)\b/.test(line),
     },
     {
       id: 'C05-degraded-raw-history-shape',
@@ -480,6 +537,37 @@ function artifactDeliveryFixture(
       previewPolicy,
     },
   };
+}
+
+function scenarioPolicyOnlyViolations(value: unknown) {
+  const forbidden = new Map([
+    ['executionCode', 'executionCode'],
+    ['promptRegex', 'promptRegex'],
+    ['providerBranch', 'providerBranch'],
+    ['providerBranches', 'providerBranches'],
+    ['multiTurnSemanticJudge', 'multiTurnSemanticJudge'],
+    ['answerTemplate', 'answerTemplate'],
+    ['directAnswer', 'directAnswer'],
+    ['responseTemplate', 'responseTemplate'],
+    ['systemPrompt', 'systemPrompt'],
+  ]);
+  const violations: string[] = [];
+  visitScenarioPolicy(value, [], (path, key) => {
+    if (forbidden.has(key)) violations.push([...path, key].join('.'));
+  });
+  return violations;
+}
+
+function visitScenarioPolicy(value: unknown, path: string[], onKey: (path: string[], key: string) => void) {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => visitScenarioPolicy(item, [...path, String(index)], onKey));
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+  for (const [key, nested] of Object.entries(value)) {
+    onKey(path, key);
+    visitScenarioPolicy(nested, [...path, key], onKey);
+  }
 }
 
 async function collectFiles(dir: string): Promise<string[]> {

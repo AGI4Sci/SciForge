@@ -1,4 +1,8 @@
 import { createHash } from 'node:crypto';
+import {
+  CANONICAL_HANDOFF_FORBIDDEN_KEYS,
+  normalizeCanonicalHandoffValue,
+} from '../workspace-task-input.js';
 
 export const CONVERSATION_HANDOFF_PLAN_SCHEMA_VERSION = 'sciforge.conversation.handoff-plan.v1' as const;
 
@@ -6,17 +10,7 @@ type JsonMap = Record<string, unknown>;
 
 const DEFAULT_MARKDOWN_REPORT_TYPE = ['research', 'report'].join('-');
 const REFERENCE_KEYS = ['ref', 'dataRef', 'path', 'filePath', 'markdownRef', 'contentRef', 'stdoutRef', 'stderrRef', 'outputRef'] as const;
-const FORBIDDEN_HANDOFF_KEYS = new Set([
-  'recentTurns',
-  'fullRefList',
-  'rawHistory',
-  'history',
-  'rawBody',
-  'body',
-  'rawArtifactBody',
-  'artifactBody',
-  'compactionState',
-]);
+const FORBIDDEN_HANDOFF_KEYS = CANONICAL_HANDOFF_FORBIDDEN_KEYS;
 
 export interface ConversationHandoffPlanInput {
   [key: string]: unknown;
@@ -61,6 +55,11 @@ export function planConversationHandoff(request: ConversationHandoffPlanInput = 
     handoffMemoryProjection: compactHandoffProjection(recordValue(request.handoffMemoryProjection) ?? {}, budget, decisions),
     requiredArtifacts,
   });
+  payload = normalizeCanonicalHandoffValue(payload, {
+    maxArrayItems: budget.maxArrayItems,
+    maxObjectKeys: budget.maxObjectKeys,
+    maxDepth: 7,
+  }) as JsonMap;
   let normalizedBytes = estimateBytes(payload);
 
   if (normalizedBytes > budget.maxPayloadBytes) {
@@ -70,7 +69,11 @@ export function planConversationHandoff(request: ConversationHandoffPlanInput = 
       estimatedBytes: normalizedBytes,
       maxPayloadBytes: budget.maxPayloadBytes,
     });
-    payload = emergencyPayload(request, requiredArtifacts, budget, decisions);
+    payload = normalizeCanonicalHandoffValue(emergencyPayload(request, requiredArtifacts, budget, decisions), {
+      maxArrayItems: budget.maxArrayItems,
+      maxObjectKeys: budget.maxObjectKeys,
+      maxDepth: 7,
+    }) as JsonMap;
     normalizedBytes = estimateBytes(payload);
   }
 

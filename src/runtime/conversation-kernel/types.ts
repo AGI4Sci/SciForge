@@ -38,6 +38,18 @@ export interface ConversationRef {
   label?: string;
 }
 
+export interface CrossSessionRef {
+  schemaVersion: 'sciforge.cross-session-ref.v1';
+  sourceSessionId: string;
+  sourceRef: string;
+  targetSessionId: string;
+  importedRef: string;
+  digest: string;
+  mime?: string;
+  sizeBytes?: number;
+  reason?: string;
+}
+
 export interface InlineEventPayload {
   [key: string]: unknown;
 }
@@ -46,6 +58,12 @@ export interface RefEventPayload {
   refs: ConversationRef[];
   summary?: string;
   [key: string]: unknown;
+}
+
+export interface ExplicitImportEventPayload extends RefEventPayload {
+  schemaVersion: 'sciforge.explicit-import-event.v1';
+  imports: CrossSessionRef[];
+  reason: string;
 }
 
 export interface ConversationEventBase {
@@ -74,6 +92,7 @@ export type ConversationEventType =
   | 'TurnReceived'
   | 'Planned'
   | 'HarnessDecisionRecorded'
+  | 'ExplicitImportRecorded'
   | 'Dispatched'
   | 'PartialReady'
   | 'OutputMaterialized'
@@ -83,6 +102,10 @@ export type ConversationEventType =
   | 'ExternalBlocked'
   | 'RepairNeeded'
   | 'NeedsHuman'
+  | 'RefArchived'
+  | 'RefPinned'
+  | 'RefDeleted'
+  | 'RefTombstoned'
   | 'HistoryEdited'
   | 'BackgroundRunning'
   | 'BackgroundCompleted'

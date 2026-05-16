@@ -59,7 +59,12 @@ export interface WorkspaceRefPage {
   nextCursor?: string;
 }
 
+export type WorkspaceStorageAdapterKind = 'in-memory' | 'filesystem' | 'sqlite';
+
 export interface WorkspaceStorageAdapter {
+  contractVersion: 'sciforge.workspace-storage-adapter.v1';
+  kind: WorkspaceStorageAdapterKind;
+  synchronousWrites: true;
   appendLedgerEvent(
     sessionId: string,
     event: WorkspaceEvent,
@@ -91,6 +96,7 @@ export function createWorkspaceKernel(input: {
 }): WorkspaceKernel {
   const sessionId = requireSessionId(input.sessionId);
   const storage = input.storage ?? createInMemoryWorkspaceStorageAdapter();
+  assertWorkspaceStorageAdapter(storage);
 
   return {
     appendEvent(event: WorkspaceEvent, options: WorkspaceAppendOptions = {}): WorkspaceAppendResult {
@@ -139,6 +145,7 @@ export function createWorkspaceKernel(input: {
     },
 
     registerRef(content: WorkspaceRefContent, meta: WorkspaceRefMeta): ProjectMemoryRef {
+      assertNoRetentionOverride(meta);
       return storage.putRef(content, meta);
     },
 
@@ -161,6 +168,10 @@ export function createInMemoryWorkspaceStorageAdapter(
   const refStore = createInMemoryRefStore(now);
 
   return {
+    contractVersion: 'sciforge.workspace-storage-adapter.v1',
+    kind: 'in-memory',
+    synchronousWrites: true,
+
     appendLedgerEvent(
       sessionId: string,
       event: WorkspaceEvent,
@@ -213,6 +224,7 @@ export function createInMemoryWorkspaceStorageAdapter(
     },
 
     putRef(content: WorkspaceRefContent, meta: WorkspaceRefMeta): ProjectMemoryRef {
+      assertNoRetentionOverride(meta);
       const descriptor = refStore.registerRef({
         ref: meta.ref,
         body: content,
@@ -324,6 +336,38 @@ function projectionVersionOf(projection: ConversationProjection | undefined): nu
 function requireSessionId(sessionId: string): string {
   if (!sessionId.trim()) throw new WorkspaceKernelError('invalid-session-id', 'WorkspaceKernel requires a non-empty sessionId.');
   return sessionId;
+}
+
+function assertWorkspaceStorageAdapter(storage: WorkspaceStorageAdapter): void {
+  if (storage.contractVersion !== 'sciforge.workspace-storage-adapter.v1') {
+    throw new WorkspaceKernelError(
+      'storage-adapter-contract-version-required',
+      'WorkspaceStorageAdapter must declare contractVersion sciforge.workspace-storage-adapter.v1.',
+    );
+  }
+  if (!['in-memory', 'filesystem', 'sqlite'].includes(storage.kind)) {
+    throw new WorkspaceKernelError(
+      'storage-adapter-kind-required',
+      'WorkspaceStorageAdapter kind must be one of in-memory, filesystem, or sqlite.',
+    );
+  }
+  if (storage.synchronousWrites !== true) {
+    throw new WorkspaceKernelError(
+      'storage-adapter-sync-write-required',
+      'WorkspaceStorageAdapter appendLedgerEvent/saveProjection/putRef must be synchronous-on-write.',
+    );
+  }
+}
+
+function assertNoRetentionOverride(meta: WorkspaceRefMeta): void {
+  const explicitRetention = (meta as unknown as Record<string, unknown>).retention
+    ?? meta.metadata?.retention;
+  if (explicitRetention !== undefined) {
+    throw new WorkspaceKernelError(
+      'ref-retention-override-forbidden',
+      'ProjectMemoryRef retention is derived from RefKindGroup; callers must not override retention per ref.',
+    );
+  }
 }
 
 function clone<T>(value: T): T {

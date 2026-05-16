@@ -6,7 +6,7 @@ import type { SciForgeRun, SciForgeSession } from '../../domain';
 import { runAuditBlockers, runAuditRefs, runRecoverActions } from '../results-renderer-execution-model';
 import {
   conversationProjectionAuditRefs,
-  conversationProjectionForRun,
+  conversationProjectionForSession,
   conversationProjectionPrimaryDiagnostic,
   conversationProjectionRecoverActions,
   conversationProjectionStatus,
@@ -130,7 +130,7 @@ function sessionHistoryRunSummary(session: SciForgeSession) {
   const lastRun = session.runs.at(-1);
   const taskRunCard = taskRunCardForRun(lastRun);
   if (taskRunCard) return sessionHistoryTaskRunCardSummary(taskRunCard, lastRun);
-  const projection = conversationProjectionForRun(lastRun);
+  const projection = conversationProjectionForSession(session, lastRun);
   if (projection) return sessionHistoryConversationProjectionSummary(projection, lastRun);
   if (!lastRun) {
     const userMessages = session.messages.filter((message) => message.role === 'user' && !message.id.startsWith('seed')).length;
@@ -269,7 +269,7 @@ function sessionHistoryPackageLabel(session: SciForgeSession) {
 function sessionHistoryLastRunLabel(session: SciForgeSession) {
   const lastRun = session.runs.at(-1);
   if (!lastRun) return undefined;
-  const projection = conversationProjectionForRun(lastRun);
+  const projection = conversationProjectionForSession(session, lastRun);
   if (projection) return `projection ${conversationProjectionStatusLabel(conversationProjectionStatus(projection))}`;
   return `last run ${lastRun.status}`;
 }
@@ -285,7 +285,7 @@ function compactHistoryText(value: string) {
 
 function sessionHistoryLastRunVariant(session: SciForgeSession): 'info' | 'success' | 'warning' | 'danger' | 'muted' {
   const lastRun = session.runs.at(-1);
-  const projection = conversationProjectionForRun(lastRun);
+  const projection = conversationProjectionForSession(session, lastRun);
   if (projection) return projectionStatusVariant(conversationProjectionStatus(projection));
   const status = lastRun?.status;
   if (status === 'completed') return 'success';

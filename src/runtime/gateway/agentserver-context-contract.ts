@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { ContextProjectionBlock, ProjectMemoryRef } from '../project-session-memory.js';
 
 export const AGENTSERVER_CONTEXT_REQUEST_VERSION = 'sciforge.context-request.v1' as const;
@@ -26,6 +27,21 @@ export interface SelectedRefDescriptor extends RefDescriptor {
   priority: number;
 }
 
+export const REF_SELECTION_POLICY_VERSION = 'sciforge.ref-selection-policy.v1' as const;
+
+export interface RefSelectionPolicy {
+  schemaVersion: typeof REF_SELECTION_POLICY_VERSION;
+  deterministic: true;
+  maxSelectedRefs: number;
+  maxSelectedRefBytes: number;
+  maxRefPreviewBytes: number;
+  maxStablePrefixRefs: number;
+  maxPerTurnPayloadRefs: number;
+  maxPerTurnPayloadBytes: number;
+  retrievalAvailable: boolean;
+  fallbackOrder: SelectedRefSource[];
+}
+
 export interface AgentServerContextRequest {
   _contractVersion: typeof AGENTSERVER_CONTEXT_REQUEST_VERSION;
   sessionId: string;
@@ -50,6 +66,7 @@ export interface AgentServerContextRequest {
     requireEvidenceForClaims: boolean;
     maxTailEvidenceBytes: number;
   };
+  refSelectionPolicy?: RefSelectionPolicy;
   refSelectionAudit: {
     policyDigest: string;
     selectedRefCount: number;
@@ -69,6 +86,32 @@ export interface AgentServerContextRequest {
     persistRunSummary: boolean;
     maxContextTokens: number;
   };
+}
+
+export interface BuildAgentServerContextRequestInput {
+  sessionId: string;
+  turnId: string;
+  mode: ContextMode;
+  currentTurnRef: ProjectMemoryRef;
+  stableGoalRef?: ProjectMemoryRef;
+  failureRef?: ProjectMemoryRef;
+  explicitRefs?: RefDescriptor[];
+  projectionPrimaryRefs?: RefDescriptor[];
+  failureEvidenceRefs?: RefDescriptor[];
+  boundedContextIndexRefs?: RefDescriptor[];
+  cachePlan?: {
+    stablePrefixRefs?: ProjectMemoryRef[];
+    perTurnPayloadRefs?: ProjectMemoryRef[];
+  };
+  retrievalTools?: RetrievalTool[];
+  retrievalAvailable?: boolean;
+  retrievalScope?: 'current-session' | 'workspace';
+  requireEvidenceForClaims?: boolean;
+  maxTailEvidenceBytes?: number;
+  maxContextTokens?: number;
+  persistRunSummary?: boolean;
+  refSelectionPolicy?: Partial<Omit<RefSelectionPolicy, 'schemaVersion' | 'deterministic'>>;
+  userVisibleSelectionDigest?: string;
 }
 
 export interface DegradedReason {
@@ -162,6 +205,18 @@ const DEGRADED_FORBIDDEN_FIELDS = new Set([
   'compactionState',
 ]);
 
+const BACKEND_HANDOFF_FORBIDDEN_FIELDS = new Set([
+  'recentTurns',
+  'fullRefList',
+  'rawHistory',
+  'history',
+  'rawBody',
+  'body',
+  'rawArtifactBody',
+  'artifactBody',
+  'compactionState',
+]);
+
 const SELECTED_REF_SOURCES = new Set<SelectedRefSource>([
   'explicit',
   'projection-primary',
@@ -175,6 +230,103 @@ const RETRIEVAL_TOOLS = new Set<RetrievalTool>([
   'workspace_search',
   'list_session_artifacts',
 ]);
+
+const DEFAULT_REF_SELECTION_POLICY: RefSelectionPolicy = {
+  schemaVersion: REF_SELECTION_POLICY_VERSION,
+  deterministic: true,
+  maxSelectedRefs: 8,
+  maxSelectedRefBytes: 32_768,
+  maxRefPreviewBytes: 512,
+  maxStablePrefixRefs: 4,
+  maxPerTurnPayloadRefs: 8,
+  maxPerTurnPayloadBytes: 16_384,
+  retrievalAvailable: true,
+  fallbackOrder: ['explicit', 'failure-evidence', 'projection-primary', 'context-index'],
+};
+
+export function buildAgentServerContextRequest(input: BuildAgentServerContextRequestInput): AgentServerContextRequest {
+  const mode = input.mode;
+  const retrievalAvailable = input.retrievalAvailable !== false;
+  const refSelectionPolicy = normalizeRefSelectionPolicy(input.refSelectionPolicy, retrievalAvailable);
+  const selectedRefs = selectRefsForContextRequest(input, refSelectionPolicy);
+  const stablePrefixRefs = boundProjectMemoryRefs(
+    mode === 'fresh' ? [] : input.cachePlan?.stablePrefixRefs ?? (input.stableGoalRef ? [input.stableGoalRef] : []),
+    refSelectionPolicy.maxStablePrefixRefs,
+    Number.POSITIVE_INFINITY,
+  ).refs;
+  const perTurnPayloadRefs = boundProjectMemoryRefs(
+    [
+      input.currentTurnRef,
+      ...(input.failureRef ? [input.failureRef] : []),
+      ...(input.cachePlan?.perTurnPayloadRefs ?? []),
+    ],
+    refSelectionPolicy.maxPerTurnPayloadRefs,
+    refSelectionPolicy.maxPerTurnPayloadBytes,
+  ).refs;
+  const selectedRefBytes = selectedRefs.reduce((total, ref) => total + refDescriptorBytes(ref), 0);
+  const sourceCounts = selectedRefs.reduce((counts, ref) => {
+    counts[ref.source] += 1;
+    return counts;
+  }, {
+    explicit: 0,
+    'projection-primary': 0,
+    'failure-evidence': 0,
+    'context-index': 0,
+  } as Record<SelectedRefSource, number>);
+  const retrievalTools = retrievalAvailable
+    ? stableUniqueRetrievalTools(input.retrievalTools ?? ['read_ref', 'retrieve', 'workspace_search'])
+    : [];
+  const includeCurrentWork = mode === 'continue' || mode === 'repair';
+
+  const request: AgentServerContextRequest = {
+    _contractVersion: AGENTSERVER_CONTEXT_REQUEST_VERSION,
+    sessionId: input.sessionId,
+    turnId: input.turnId,
+    cachePlan: {
+      stablePrefixRefs,
+      perTurnPayloadRefs,
+    },
+    currentTask: {
+      currentTurnRef: input.currentTurnRef,
+      stableGoalRef: mode === 'fresh' ? undefined : input.stableGoalRef,
+      failureRef: input.failureRef,
+      mode,
+      explicitRefs: boundedRefDescriptors(input.explicitRefs ?? [], refSelectionPolicy),
+      selectedRefs,
+      userVisibleSelectionDigest: input.userVisibleSelectionDigest,
+    },
+    retrievalPolicy: {
+      tools: retrievalTools,
+      scope: input.retrievalScope ?? (mode === 'repair' ? 'workspace' : 'current-session'),
+      preferExplicitRefs: true,
+      requireEvidenceForClaims: input.requireEvidenceForClaims ?? true,
+      maxTailEvidenceBytes: retrievalAvailable ? input.maxTailEvidenceBytes ?? 4096 : 0,
+    },
+    refSelectionPolicy,
+    refSelectionAudit: {
+      policyDigest: `sha256:${sha256Json(refSelectionPolicy)}`,
+      selectedRefCount: selectedRefs.length,
+      selectedRefBytes,
+      truncated: selectedRefs.length < refCandidatesForMode(input).length
+        || selectedRefBytes >= refSelectionPolicy.maxSelectedRefBytes,
+      sourceCounts: {
+        explicit: sourceCounts.explicit,
+        projectionPrimary: sourceCounts['projection-primary'],
+        failureEvidence: sourceCounts['failure-evidence'],
+        contextIndex: sourceCounts['context-index'],
+      },
+    },
+    contextPolicy: {
+      mode,
+      includeCurrentWork,
+      includeRecentTurns: false,
+      persistRunSummary: input.persistRunSummary ?? mode !== 'fresh',
+      maxContextTokens: input.maxContextTokens ?? 8000,
+    },
+  };
+  assertAgentServerContextRequest(request);
+  return request;
+}
 
 export function canonicalSerializeAgentServerContextRequest(request: AgentServerContextRequest): string {
   assertAgentServerContextRequest(request);
@@ -205,6 +357,7 @@ export function validateAgentServerContextRequest(value: unknown): ContractValid
     errors.push('request.cachePlan must be an object');
   } else {
     validateProjectMemoryRefs(cachePlan.stablePrefixRefs, 'request.cachePlan.stablePrefixRefs', errors);
+    validateStablePrefixRefs(cachePlan.stablePrefixRefs, 'request.cachePlan.stablePrefixRefs', errors);
     validateProjectMemoryRefs(cachePlan.perTurnPayloadRefs, 'request.cachePlan.perTurnPayloadRefs', errors);
   }
 
@@ -235,6 +388,9 @@ export function validateAgentServerContextRequest(value: unknown): ContractValid
     expectNonNegativeNumber(retrievalPolicy.maxTailEvidenceBytes, 'request.retrievalPolicy.maxTailEvidenceBytes', errors);
   }
 
+  if (request.refSelectionPolicy !== undefined) {
+    validateRefSelectionPolicy(request.refSelectionPolicy, errors);
+  }
   validateRefSelectionAudit(request.refSelectionAudit, errors);
   const contextPolicy = asRecord(request.contextPolicy);
   if (!contextPolicy) {
@@ -281,6 +437,7 @@ export function validateBackendHandoffPacket(value: unknown): ContractValidation
   const errors: string[] = [];
   const packet = asRecord(value);
   if (!packet) return invalid('handoff packet must be an object');
+  collectForbiddenFieldErrors(packet, BACKEND_HANDOFF_FORBIDDEN_FIELDS, 'BackendHandoffPacket', errors);
   expectLiteral(packet._contractVersion, AGENTSERVER_BACKEND_HANDOFF_VERSION, 'packet._contractVersion', errors);
   expectNonEmptyString(packet.sessionId, 'packet.sessionId', errors);
   expectNonEmptyString(packet.turnId, 'packet.turnId', errors);
@@ -353,6 +510,44 @@ function validateRefSelectionAudit(value: unknown, errors: string[]): void {
   expectNonNegativeInteger(counts.projectionPrimary, 'request.refSelectionAudit.sourceCounts.projectionPrimary', errors);
   expectNonNegativeInteger(counts.failureEvidence, 'request.refSelectionAudit.sourceCounts.failureEvidence', errors);
   expectNonNegativeInteger(counts.contextIndex, 'request.refSelectionAudit.sourceCounts.contextIndex', errors);
+}
+
+function validateRefSelectionPolicy(value: unknown, errors: string[]): void {
+  const policy = asRecord(value);
+  if (!policy) {
+    errors.push('request.refSelectionPolicy must be an object');
+    return;
+  }
+  collectFunctionFieldErrors(policy, 'request.refSelectionPolicy', errors);
+  expectLiteral(policy.schemaVersion, REF_SELECTION_POLICY_VERSION, 'request.refSelectionPolicy.schemaVersion', errors);
+  if (policy.deterministic !== true) errors.push('request.refSelectionPolicy.deterministic must be true');
+  expectPositiveNumber(policy.maxSelectedRefs, 'request.refSelectionPolicy.maxSelectedRefs', errors);
+  expectNonNegativeNumber(policy.maxSelectedRefBytes, 'request.refSelectionPolicy.maxSelectedRefBytes', errors);
+  expectNonNegativeNumber(policy.maxRefPreviewBytes, 'request.refSelectionPolicy.maxRefPreviewBytes', errors);
+  expectPositiveNumber(policy.maxStablePrefixRefs, 'request.refSelectionPolicy.maxStablePrefixRefs', errors);
+  expectPositiveNumber(policy.maxPerTurnPayloadRefs, 'request.refSelectionPolicy.maxPerTurnPayloadRefs', errors);
+  expectNonNegativeNumber(policy.maxPerTurnPayloadBytes, 'request.refSelectionPolicy.maxPerTurnPayloadBytes', errors);
+  expectBoolean(policy.retrievalAvailable, 'request.refSelectionPolicy.retrievalAvailable', errors);
+  if (!Array.isArray(policy.fallbackOrder) || policy.fallbackOrder.length === 0) {
+    errors.push('request.refSelectionPolicy.fallbackOrder must be a non-empty array');
+  } else {
+    policy.fallbackOrder.forEach((source, index) => {
+      if (!SELECTED_REF_SOURCES.has(source as SelectedRefSource)) {
+        errors.push(`request.refSelectionPolicy.fallbackOrder[${index}] must be a selected ref source`);
+      }
+    });
+  }
+}
+
+function validateStablePrefixRefs(value: unknown, path: string, errors: string[]): void {
+  if (!Array.isArray(value)) return;
+  value.forEach((entry, index) => {
+    const ref = asRecord(entry);
+    const valueText = `${String(ref?.kind ?? '')}:${String(ref?.ref ?? '')}`;
+    if (/(?:^|[:/_-])(turn|run|timestamp|ledger-event)(?:$|[:/_-])/i.test(valueText)) {
+      errors.push(`${path}[${index}] must not contain turn, run, timestamp, or ledger-event refs`);
+    }
+  });
 }
 
 function validateDegradedReason(value: unknown, path: string, errors: string[]): void {
@@ -466,8 +661,166 @@ function collectForbiddenFieldErrors(
   }
 }
 
+function collectFunctionFieldErrors(value: unknown, path: string, errors: string[]): void {
+  if (typeof value === 'function') {
+    errors.push(`${path} must not contain function values`);
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => collectFunctionFieldErrors(item, `${path}[${index}]`, errors));
+    return;
+  }
+  const record = asRecord(value);
+  if (!record) return;
+  for (const [key, child] of Object.entries(record)) {
+    collectFunctionFieldErrors(child, `${path}.${key}`, errors);
+  }
+}
+
 function canonicalJson(value: unknown): string {
   return JSON.stringify(sortForCanonicalJson(value));
+}
+
+function normalizeRefSelectionPolicy(
+  input: BuildAgentServerContextRequestInput['refSelectionPolicy'] | undefined,
+  retrievalAvailable: boolean,
+): RefSelectionPolicy {
+  return {
+    ...DEFAULT_REF_SELECTION_POLICY,
+    ...input,
+    schemaVersion: REF_SELECTION_POLICY_VERSION,
+    deterministic: true,
+    retrievalAvailable,
+    fallbackOrder: stableSelectedRefSources(input?.fallbackOrder ?? DEFAULT_REF_SELECTION_POLICY.fallbackOrder),
+  };
+}
+
+function stableSelectedRefSources(values: unknown): SelectedRefSource[] {
+  const out: SelectedRefSource[] = [];
+  for (const value of Array.isArray(values) ? values : []) {
+    if (SELECTED_REF_SOURCES.has(value as SelectedRefSource) && !out.includes(value as SelectedRefSource)) {
+      out.push(value as SelectedRefSource);
+    }
+  }
+  return out.length ? out : [...DEFAULT_REF_SELECTION_POLICY.fallbackOrder];
+}
+
+function selectRefsForContextRequest(
+  input: BuildAgentServerContextRequestInput,
+  policy: RefSelectionPolicy,
+): SelectedRefDescriptor[] {
+  const candidates = refCandidatesForMode(input);
+  const allowedSources = policy.retrievalAvailable
+    ? policy.fallbackOrder
+    : policy.fallbackOrder.filter((source) => source === 'context-index' || source === 'explicit' || source === 'failure-evidence');
+  const ordered = candidates
+    .filter((candidate) => allowedSources.includes(candidate.source))
+    .sort((a, b) => {
+      const sourceDelta = allowedSources.indexOf(a.source) - allowedSources.indexOf(b.source);
+      if (sourceDelta !== 0) return sourceDelta;
+      return stableRefSortKey(a).localeCompare(stableRefSortKey(b));
+    });
+  const selected: SelectedRefDescriptor[] = [];
+  let bytes = 0;
+  for (const candidate of ordered) {
+    if (selected.some((ref) => ref.ref === candidate.ref)) continue;
+    const nextBytes = refDescriptorBytes(candidate);
+    if (selected.length >= policy.maxSelectedRefs) break;
+    if (bytes + nextBytes > policy.maxSelectedRefBytes) break;
+    selected.push({
+      ...candidate,
+      preview: candidate.preview && Buffer.byteLength(candidate.preview, 'utf8') > policy.maxRefPreviewBytes
+        ? candidate.preview.slice(0, policy.maxRefPreviewBytes)
+        : candidate.preview,
+      priority: selected.length,
+    });
+    bytes += nextBytes;
+  }
+  return selected;
+}
+
+function refCandidatesForMode(input: BuildAgentServerContextRequestInput): SelectedRefDescriptor[] {
+  const explicit = (input.explicitRefs ?? []).map((ref, index) => selectedRef(ref, 'explicit', index));
+  const failure = [
+    ...(input.failureRef ? [projectMemoryRefDescriptor(input.failureRef)] : []),
+    ...(input.failureEvidenceRefs ?? []),
+  ].map((ref, index) => selectedRef(ref, 'failure-evidence', explicit.length + index));
+  const projection = input.mode === 'continue' || input.mode === 'repair'
+    ? (input.projectionPrimaryRefs ?? []).map((ref, index) => selectedRef(ref, 'projection-primary', explicit.length + failure.length + index))
+    : [];
+  const contextIndex = (input.boundedContextIndexRefs ?? []).map((ref, index) => selectedRef(ref, 'context-index', explicit.length + failure.length + projection.length + index));
+  if (explicit.length > 0) return [...explicit, ...failure];
+  return [...failure, ...projection, ...contextIndex];
+}
+
+function selectedRef(ref: RefDescriptor, source: SelectedRefSource, priority: number): SelectedRefDescriptor {
+  return {
+    ...ref,
+    source,
+    priority,
+  };
+}
+
+function projectMemoryRefDescriptor(ref: ProjectMemoryRef): RefDescriptor {
+  return {
+    ref: ref.ref,
+    kind: ref.kind,
+    digest: ref.digest,
+    sizeBytes: ref.sizeBytes,
+  };
+}
+
+function boundedRefDescriptors(refs: RefDescriptor[], policy: RefSelectionPolicy): RefDescriptor[] {
+  const out: RefDescriptor[] = [];
+  for (const ref of refs.sort((a, b) => stableRefSortKey(a).localeCompare(stableRefSortKey(b)))) {
+    if (out.some((entry) => entry.ref === ref.ref)) continue;
+    if (out.length >= policy.maxSelectedRefs) break;
+    out.push({
+      ...ref,
+      preview: ref.preview && Buffer.byteLength(ref.preview, 'utf8') > policy.maxRefPreviewBytes
+        ? ref.preview.slice(0, policy.maxRefPreviewBytes)
+        : ref.preview,
+    });
+  }
+  return out;
+}
+
+function boundProjectMemoryRefs(refs: ProjectMemoryRef[], maxRefs: number, maxBytes: number): { refs: ProjectMemoryRef[]; truncated: boolean } {
+  const out: ProjectMemoryRef[] = [];
+  let bytes = 0;
+  for (const ref of refs.sort((a, b) => stableRefSortKey(a).localeCompare(stableRefSortKey(b)))) {
+    if (out.some((entry) => entry.ref === ref.ref)) continue;
+    const nextBytes = typeof ref.sizeBytes === 'number' && Number.isFinite(ref.sizeBytes) ? ref.sizeBytes : ref.ref.length;
+    if (out.length >= maxRefs || bytes + nextBytes > maxBytes) return { refs: out, truncated: true };
+    out.push(ref);
+    bytes += nextBytes;
+  }
+  return { refs: out, truncated: false };
+}
+
+function stableUniqueRetrievalTools(tools: RetrievalTool[]): RetrievalTool[] {
+  const out: RetrievalTool[] = [];
+  for (const tool of tools) {
+    if (RETRIEVAL_TOOLS.has(tool) && !out.includes(tool)) out.push(tool);
+  }
+  return out;
+}
+
+function refDescriptorBytes(ref: RefDescriptor): number {
+  if (typeof ref.sizeBytes === 'number' && Number.isFinite(ref.sizeBytes)) return ref.sizeBytes;
+  return Buffer.byteLength(canonicalJson(ref), 'utf8');
+}
+
+function stableRefSortKey(ref: RefDescriptor | ProjectMemoryRef): string {
+  return [
+    String(ref.kind ?? ''),
+    String(ref.ref ?? ''),
+    String(ref.digest ?? ''),
+  ].join('\0');
+}
+
+function sha256Json(value: unknown): string {
+  return createHash('sha256').update(canonicalJson(value), 'utf8').digest('hex');
 }
 
 function sortForCanonicalJson(value: unknown): unknown {

@@ -72,6 +72,13 @@ type ProviderAvailability = {
   timeoutMs?: number;
 };
 
+type DiscoveredProviderManifestProjection = Pick<ProviderAvailability, 'id' | 'available' | 'status' | 'reason'> & {
+  providerId?: string;
+  capabilityId?: string;
+  source?: CapabilityProviderManifest['source'];
+  transport?: CapabilityProviderManifest['transport'];
+};
+
 const REQUIRED_BY_TOOL_ID: Record<string, string[]> = {
   'web-search': ['web_search'],
   web_search: ['web_search'],
@@ -83,6 +90,8 @@ const REQUIRED_BY_TOOL_ID: Record<string, string[]> = {
 };
 
 export const CAPABILITY_PROVIDER_ROUTE_REF_PREFIX = 'runtime://capability-provider-route/';
+const DISCOVERED_MANIFEST_SOURCES = new Set<string>(['local', 'agentserver', 'mcp', 'http', 'ssh', 'client-worker', 'backend-native', 'package', 'workspace', 'external']);
+const DISCOVERED_MANIFEST_TRANSPORTS = new Set<string>(['in-process', 'agentserver-worker', 'http', 'mcp', 'command', 'ssh', 'backend-native']);
 
 export function resolveCapabilityProviderRoutes(request: GatewayRequest): CapabilityProviderPreflightResult {
   const requiredCapabilityIds = inferRequiredCapabilityIds(request);
@@ -160,14 +169,14 @@ export async function requestWithDiscoveredCapabilityProviders(request: GatewayR
   };
 }
 
-async function discoverAgentServerProviderAvailability(baseUrl: string): Promise<Array<Record<string, unknown>>> {
+async function discoverAgentServerProviderAvailability(baseUrl: string): Promise<DiscoveredProviderManifestProjection[]> {
   const endpoints = [
     '/api/agent-server/tools/manifest',
     '/api/agent-server/workers',
     '/tools/manifest',
     '/workers',
   ];
-  const rows: Array<Record<string, unknown>> = [];
+  const rows: DiscoveredProviderManifestProjection[] = [];
   await Promise.all(endpoints.map(async (endpoint) => {
     try {
       const controller = new AbortController();
@@ -190,7 +199,7 @@ function unwrapDiscoveryPayload(payload: unknown): unknown {
   return payload;
 }
 
-function providerAvailabilityRowsFromDiscoveryPayload(payload: unknown): Array<Record<string, unknown>> {
+function providerAvailabilityRowsFromDiscoveryPayload(payload: unknown): DiscoveredProviderManifestProjection[] {
   const records = Array.isArray(payload)
     ? payload
     : isRecord(payload) && Array.isArray(payload.providers)
@@ -203,16 +212,25 @@ function providerAvailabilityRowsFromDiscoveryPayload(payload: unknown): Array<R
   return records.filter(isRecord).flatMap((record) => {
     const id = stringField(record.id) ?? stringField(record.providerId) ?? stringField(record.workerId);
     const available = record.available === true || record.status === 'available' || record.status === 'online' || record.health === 'online';
-    const rows: Array<Record<string, unknown>> = [];
-    if (id) rows.push({ ...record, id, available });
+    const rows: DiscoveredProviderManifestProjection[] = [];
+    if (id) rows.push({
+      id,
+      providerId: stringField(record.providerId) ?? (stringField(record.id) ? stringField(record.id) : undefined),
+      capabilityId: stringField(record.capabilityId),
+      source: normalizeProviderSource(record.source),
+      transport: normalizeProviderTransport(record.transport),
+      available,
+      status: normalizeRouteStatus(stringField(record.status) ?? stringField(record.health)),
+      reason: stringField(record.reason) ?? stringField(record.detail),
+    });
     return rows;
   });
 }
 
-function dedupeProviderRows(rows: Array<Record<string, unknown>>) {
-  const byId = new Map<string, Record<string, unknown>>();
+function dedupeProviderRows(rows: DiscoveredProviderManifestProjection[]) {
+  const byId = new Map<string, DiscoveredProviderManifestProjection>();
   for (const row of rows) {
-    const id = stringField(row.id) ?? stringField(row.providerId) ?? stringField(row.workerId);
+    const id = row.id;
     if (id) byId.set(id, row);
   }
   return [...byId.values()];
@@ -443,6 +461,18 @@ function normalizeRouteStatus(value: string | undefined): CapabilityProviderRout
   if (/missing|offline|unavailable|failed|不可用|离线/.test(value)) return 'provider-unavailable';
   if (/ready|available|online|ok|健康/.test(value)) return 'ready';
   return undefined;
+}
+
+function normalizeProviderSource(value: unknown): CapabilityProviderManifest['source'] | undefined {
+  return typeof value === 'string' && DISCOVERED_MANIFEST_SOURCES.has(value)
+    ? value as CapabilityProviderManifest['source']
+    : undefined;
+}
+
+function normalizeProviderTransport(value: unknown): CapabilityProviderManifest['transport'] | undefined {
+  return typeof value === 'string' && DISCOVERED_MANIFEST_TRANSPORTS.has(value)
+    ? value as CapabilityProviderManifest['transport']
+    : undefined;
 }
 
 function stringField(value: unknown) {

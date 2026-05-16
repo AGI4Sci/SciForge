@@ -23,6 +23,7 @@ import {
 } from './sessionTransforms';
 import { streamProcessTranscript } from './RunningWorkProcess';
 import { latestProgressModelFromCompactTrace } from '../../processProgress';
+import { conversationProjectionMigrationAuditFixtureForRun } from '../conversation-projection-view-model';
 
 const goalSnapshot: UserGoalSnapshot = {
   turnId: 'turn-1',
@@ -40,7 +41,7 @@ function message(id: string, role: SciForgeMessage['role'], content: string, cre
 }
 
 function session(overrides: Partial<SciForgeSession> = {}): SciForgeSession {
-  return {
+  const value = {
     schemaVersion: 2,
     sessionId: 'session-1',
     scenarioId: 'literature-evidence-review',
@@ -57,7 +58,12 @@ function session(overrides: Partial<SciForgeSession> = {}): SciForgeSession {
     hiddenResultSlotIds: [],
     updatedAt: '2026-05-07T00:00:00.000Z',
     ...overrides,
-  };
+  } as SciForgeSession;
+  const projections = Object.fromEntries(value.runs.flatMap((run) => {
+    const projection = conversationProjectionMigrationAuditFixtureForRun(run);
+    return projection ? [[run.id, projection]] : [];
+  }));
+  return Object.keys(projections).length ? { ...value, materializedConversationProjections: projections } as SciForgeSession : value;
 }
 
 test('creates optimistic user turns and only derives a title for the first real message', () => {

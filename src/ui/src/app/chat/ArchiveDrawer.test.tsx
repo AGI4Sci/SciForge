@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { createTaskRunCard } from '@sciforge-ui/runtime-contract/task-run-card';
 import type { SciForgeSession } from '../../domain';
 import { ArchiveDrawer } from './ArchiveDrawer';
+import { conversationProjectionMigrationAuditFixtureForRun } from '../conversation-projection-view-model';
 
 test('archive drawer shows compact run boundary, refs, and restore impact', () => {
   const html = renderToStaticMarkup(createElement(ArchiveDrawer, {
@@ -49,7 +50,7 @@ test('archive drawer shows compact run boundary, refs, and restore impact', () =
   assert.match(html, /literature-abcdef1/);
   assert.match(html, /External retrieval returned zero results/);
   assert.match(html, /execution-unit:EU-literature/);
-  assert.match(html, /expand provider-neutral query/);
+  assert.doesNotMatch(html, /expand provider-neutral query/);
   assert.match(html, /不会自动重跑历史任务/);
 });
 
@@ -111,6 +112,21 @@ test('archive drawer prefers conversation projection summary over legacy raw run
     archivedSessions: [session({
       sessionId: 'projection-session',
       title: 'projection-backed run',
+      materializedConversationProjection: {
+        schemaVersion: 'sciforge.conversation-projection.v1',
+        conversationId: 'conversation-archive-projection',
+        visibleAnswer: {
+          status: 'repair-needed',
+          diagnostic: 'Projection repair boundary is authoritative.',
+          artifactRefs: ['artifact:projection-report'],
+        },
+        artifacts: [{ ref: 'artifact:projection-report', label: 'projection report' }],
+        executionProcess: [],
+        recoverActions: ['Continue from projection refs.'],
+        verificationState: { status: 'failed', verifierRef: 'verification:projection' },
+        auditRefs: ['execution-unit:EU-projection'],
+        diagnostics: [],
+      },
       runs: [{
         id: 'run-projection-abcdef123456',
         scenarioId: 'literature-evidence-review',
@@ -205,8 +221,8 @@ test('archive drawer shows diagnostic-only boundary for historical literature do
   assert.match(html, /不会自动重跑历史任务/);
 });
 
-function session(overrides: Partial<SciForgeSession> = {}): SciForgeSession {
-  return {
+function session(overrides: Partial<SciForgeSession> & Record<string, unknown> = {}): SciForgeSession {
+  const value = {
     schemaVersion: 2,
     sessionId: 'session-1',
     scenarioId: 'literature-evidence-review',
@@ -223,5 +239,7 @@ function session(overrides: Partial<SciForgeSession> = {}): SciForgeSession {
     versions: [],
     hiddenResultSlotIds: [],
     ...overrides,
-  };
+  } as SciForgeSession;
+  const projection = value.runs.map(conversationProjectionMigrationAuditFixtureForRun).find(Boolean);
+  return projection ? { ...value, materializedConversationProjection: projection } as SciForgeSession : value;
 }

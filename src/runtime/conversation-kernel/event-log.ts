@@ -11,6 +11,20 @@ import { validateHarnessDecisionRecordedEvent } from './harness-decision';
 
 export const CONVERSATION_INLINE_EVENT_MAX_BYTES = 8 * 1024;
 
+const REF_EVENT_INLINE_FACT_TYPES = new Set([
+  'DegradedResult',
+  'ExternalBlocked',
+  'RepairNeeded',
+  'NeedsHuman',
+]);
+
+const REF_LIFECYCLE_EVENT_TYPES = new Set([
+  'RefArchived',
+  'RefPinned',
+  'RefDeleted',
+  'RefTombstoned',
+]);
+
 export function createConversationEventLog(conversationId: string): ConversationEventLog {
   return {
     schemaVersion: 'sciforge.conversation-event-log.v1',
@@ -56,6 +70,12 @@ export function validateConversationEvent(
     }
     return undefined;
   }
+  const inlineFactDiagnostic = validateRefEventInlineFacts(event);
+  if (inlineFactDiagnostic) return inlineFactDiagnostic;
+  const refLifecycleDiagnostic = validateRefLifecycleEvent(event);
+  if (refLifecycleDiagnostic) return refLifecycleDiagnostic;
+  const explicitImportDiagnostic = validateExplicitImportRecordedEvent(event);
+  if (explicitImportDiagnostic) return explicitImportDiagnostic;
   if (!Array.isArray(event.payload.refs) || event.payload.refs.length === 0) {
     return {
       severity: 'error',
@@ -147,6 +167,111 @@ export function eventSummary(event: ConversationEvent): string {
   return event.type;
 }
 
+function validateRefEventInlineFacts(event: ConversationEvent): ConversationKernelDiagnostic | undefined {
+  if (!REF_EVENT_INLINE_FACT_TYPES.has(event.type)) return undefined;
+  const summary = stringValue(event.payload.summary);
+  const reason = stringValue(event.payload.reason) ?? stringValue(event.payload.failureReason);
+  if (summary && (event.type === 'DegradedResult' || event.type === 'NeedsHuman' || reason)) return undefined;
+  return {
+    severity: 'error',
+    code: 'ref-event-inline-facts-required',
+    eventId: event.id,
+    message: 'Degraded and failure ref events must keep the small summary/reason facts inline; refs are only for large evidence bodies.',
+  };
+}
+
+function validateRefLifecycleEvent(event: ConversationEvent): ConversationKernelDiagnostic | undefined {
+  if (!REF_LIFECYCLE_EVENT_TYPES.has(event.type)) return undefined;
+  if (!stringValue(event.payload.summary) && !stringValue(event.payload.reason)) {
+    return {
+      severity: 'error',
+      code: 'ref-lifecycle-reason-required',
+      eventId: event.id,
+      message: 'Ref archive/pin/delete/tombstone changes must be appended as events with an inline summary or reason.',
+    };
+  }
+  return undefined;
+}
+
+function validateExplicitImportRecordedEvent(event: ConversationEvent): ConversationKernelDiagnostic | undefined {
+  if (event.type !== 'ExplicitImportRecorded') return undefined;
+  if (event.payload.schemaVersion !== 'sciforge.explicit-import-event.v1') {
+    return {
+      severity: 'error',
+      code: 'explicit-import-schema-required',
+      eventId: event.id,
+      message: 'ExplicitImportRecorded payload must use sciforge.explicit-import-event.v1.',
+    };
+  }
+  if (!stringValue(event.payload.reason)) {
+    return {
+      severity: 'error',
+      code: 'explicit-import-reason-required',
+      eventId: event.id,
+      message: 'Explicit import events must record why the cross-session ref was imported.',
+    };
+  }
+  if (!Array.isArray(event.payload.imports) || event.payload.imports.length === 0) {
+    return {
+      severity: 'error',
+      code: 'explicit-imports-required',
+      eventId: event.id,
+      message: 'Explicit import events must include at least one CrossSessionRef import record.',
+    };
+  }
+  const refIds = new Set(Array.isArray(event.payload.refs)
+    ? event.payload.refs.map((ref) => ref.ref).filter((ref): ref is string => typeof ref === 'string')
+    : []);
+  for (const imported of event.payload.imports) {
+    if (!isRecord(imported) || imported.schemaVersion !== 'sciforge.cross-session-ref.v1') {
+      return {
+        severity: 'error',
+        code: 'cross-session-ref-schema-required',
+        eventId: event.id,
+        message: 'CrossSessionRef records must use sciforge.cross-session-ref.v1.',
+      };
+    }
+    const sourceSessionId = stringValue(imported.sourceSessionId);
+    const targetSessionId = stringValue(imported.targetSessionId);
+    const sourceRef = stringValue(imported.sourceRef);
+    const importedRef = stringValue(imported.importedRef);
+    const digest = stringValue(imported.digest);
+    if (!sourceSessionId || !targetSessionId || !sourceRef || !importedRef || !digest) {
+      return {
+        severity: 'error',
+        code: 'cross-session-ref-fields-required',
+        eventId: event.id,
+        message: 'CrossSessionRef requires sourceSessionId, targetSessionId, sourceRef, importedRef, and digest.',
+      };
+    }
+    if (sourceSessionId === targetSessionId) {
+      return {
+        severity: 'error',
+        code: 'cross-session-ref-source-target-required',
+        eventId: event.id,
+        message: 'CrossSessionRef sourceSessionId and targetSessionId must be different.',
+      };
+    }
+    if (sourceRef === importedRef) {
+      return {
+        severity: 'error',
+        code: 'cross-session-ref-explicit-import-required',
+        eventId: event.id,
+        message: 'Cross-session memory must be imported under an explicit importedRef, not copied as the bare source path.',
+      };
+    }
+    if (!refIds.has(importedRef)) {
+      return {
+        severity: 'error',
+        code: 'cross-session-ref-missing-imported-ref',
+        eventId: event.id,
+        message: 'Explicit import event refs must include every importedRef recorded in imports.',
+      };
+    }
+  }
+  return undefined;
+}
+
 function isConversationEvent(value: unknown): value is ConversationEvent {
   if (!isRecord(value)) return false;
   if (typeof value.id !== 'string' || !value.id.trim()) return false;
@@ -160,6 +285,10 @@ function isConversationEvent(value: unknown): value is ConversationEvent {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
 function utf8ByteLength(value: string): number {

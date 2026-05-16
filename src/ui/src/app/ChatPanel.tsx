@@ -11,6 +11,13 @@ import { assistantDraftFromStreamEvents, coalesceStreamEvents, streamEventCounts
 import { makeId, nowIso, type AgentContextWindowState, type AgentStreamEvent, type GuidanceQueueRecord, type GuidanceQueueStatus, type SciForgeConfig, type SciForgeMessage, type SciForgeReference, type SciForgeRun, type SciForgeSession, type ObjectReference, type ScenarioInstanceId, type ScenarioRuntimeOverride, type TimelineEventRecord } from '../domain';
 import { exportJsonFile } from './exportUtils';
 import { Badge, ClaimTag, ConfidenceBar, EvidenceTag, cx } from './uiPrimitives';
+import {
+  appendUIActionAuditLog,
+  compactUIActionPromptPreview,
+  createUIAction,
+  uiActionReferenceRefs,
+  type UIAction,
+} from './uiActionBoundary';
 import { AcceptancePanel } from './chat/AcceptancePanel';
 import { ArchiveDrawer } from './chat/ArchiveDrawer';
 import { ChatComposer } from './chat/ChatComposer';
@@ -149,6 +156,7 @@ export function ChatPanel({
   const activeSessionRef = useRef(session);
   const inputRef = useRef(input);
   const guidanceQueueRef = useRef<GuidanceQueueRecord[]>([]);
+  const uiActionAuditLogRef = useRef<UIAction[]>([]);
   const streamEventsRef = useRef<AgentStreamEvent[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const userAbortRequestedRef = useRef(false);
@@ -378,6 +386,14 @@ export function ChatPanel({
       setComposerExpanded(true);
       return;
     }
+    recordUIAction(createUIAction({
+      id: makeId('ui-action'),
+      session: activeSessionRef.current,
+      createdAt: nowIso(),
+      type: 'submit-turn',
+      promptPreview: compactUIActionPromptPreview(prompt),
+      referenceRefs: uiActionReferenceRefs(pendingReferences),
+    }));
     await runPrompt(prompt, activeSessionRef.current, pendingReferences);
   }
 
@@ -613,6 +629,15 @@ export function ChatPanel({
 
   function handleRunningGuidance(prompt: string) {
     const now = nowIso();
+    recordUIAction(createUIAction({
+      id: makeId('ui-action'),
+      session: activeSessionRef.current,
+      createdAt: now,
+      type: 'concurrency-decision',
+      activeRunId,
+      decision: 'queue-guidance',
+      promptPreview: compactUIActionPromptPreview(prompt),
+    }));
     const guidance = createGuidanceQueueRecord(prompt, {
       receivedAt: now,
       activeRunId,
@@ -634,6 +659,14 @@ export function ChatPanel({
     if (!abortRef.current) return;
     const interruptedAt = nowIso();
     const rejectedIds = guidanceQueueRef.current.map((item) => item.id);
+    recordUIAction(createUIAction({
+      id: makeId('ui-action'),
+      session: activeSessionRef.current,
+      createdAt: interruptedAt,
+      type: 'cancel-run',
+      runId: activeRunId,
+      rejectedGuidanceIds: rejectedIds,
+    }));
     if (rejectedIds.length) {
       const rejectedSession = updateGuidanceQueueRecords(activeSessionRef.current, rejectedIds, {
         status: 'rejected',
@@ -647,6 +680,10 @@ export function ChatPanel({
     setStreamEvents((current) => [...current.slice(-31), userInterruptEvent({ id: makeId('evt'), createdAt: interruptedAt })]);
     userAbortRequestedRef.current = true;
     abortRef.current.abort();
+  }
+
+  function recordUIAction(action: UIAction) {
+    uiActionAuditLogRef.current = appendUIActionAuditLog(uiActionAuditLogRef.current, action);
   }
 
   function beginComposerResize(event: React.MouseEvent<HTMLDivElement>) {
@@ -809,7 +846,7 @@ export function ChatPanel({
                 {message.confidence ? <ConfidenceBar value={message.confidence} /> : null}
                 {message.evidence ? <EvidenceTag level={message.evidence} /> : null}
                 {message.claimType ? <ClaimTag type={message.claimType} /> : null}
-                <RunVerificationTag runs={session.runs} runId={messageRunId} />
+                <RunVerificationTag session={session} runId={messageRunId} />
                 {message.status === 'failed' ? <Badge variant="danger">failed</Badge> : null}
                 {message.guidanceQueue ? <Badge variant={guidanceBadgeVariant(message.guidanceQueue.status)}>{guidanceStatusLabel(message.guidanceQueue.status)}</Badge> : null}
                 {message.acceptance ? (

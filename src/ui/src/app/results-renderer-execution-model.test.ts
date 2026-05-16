@@ -12,6 +12,15 @@ import {
   shouldOpenRunAuditDetails,
 } from './results-renderer-execution-model';
 import type { SciForgeSession } from '../domain';
+import { conversationProjectionMigrationAuditFixtureForRun } from './conversation-projection-view-model';
+
+function withMaterializedProjectionFixture(session: SciForgeSession): SciForgeSession {
+  const projections = Object.fromEntries(session.runs.flatMap((run) => {
+    const projection = conversationProjectionMigrationAuditFixtureForRun(run);
+    return projection ? [[run.id, projection]] : [];
+  }));
+  return Object.keys(projections).length ? { ...session, materializedConversationProjections: projections } as SciForgeSession : session;
+}
 
 test('results renderer execution model projects failure audit data without React rendering', () => {
   const session = executionFailureSession();
@@ -50,7 +59,7 @@ test('results renderer execution model keeps response JSON failures audit-only',
 });
 
 test('results renderer execution model prefers conversation projection recover actions and audit refs', () => {
-  const session: SciForgeSession = {
+  const session = withMaterializedProjectionFixture({
     schemaVersion: 2,
     sessionId: 'session-projection-bridge',
     scenarioId: 'literature-evidence-review',
@@ -91,7 +100,7 @@ test('results renderer execution model prefers conversation projection recover a
     notebook: [],
     versions: [],
     updatedAt: '2026-05-13T00:00:01.000Z',
-  };
+  } as SciForgeSession);
 
   const state = runPresentationState(session, session.runs[0]);
 
@@ -134,7 +143,7 @@ test('results renderer execution model scopes failure units through active run a
 });
 
 test('results renderer execution model does not call completed empty runs ready', () => {
-  const session: SciForgeSession = {
+  const session = withMaterializedProjectionFixture({
     schemaVersion: 2,
     sessionId: 'session-empty-result',
     scenarioId: 'literature-evidence-review',
@@ -157,7 +166,7 @@ test('results renderer execution model does not call completed empty runs ready'
     notebook: [],
     versions: [],
     updatedAt: '2026-05-10T00:01:00.000Z',
-  };
+  } as SciForgeSession);
 
   const state = runPresentationState(session, session.runs[0]);
 
@@ -167,7 +176,7 @@ test('results renderer execution model does not call completed empty runs ready'
 });
 
 test('results renderer execution model lets conversation projection override raw failed state', () => {
-  const session: SciForgeSession = {
+  const session = withMaterializedProjectionFixture({
     schemaVersion: 2,
     sessionId: 'session-projection-satisfied',
     scenarioId: 'literature-evidence-review',
@@ -216,7 +225,7 @@ test('results renderer execution model lets conversation projection override raw
     notebook: [],
     versions: [],
     updatedAt: '2026-05-13T00:00:10.000Z',
-  };
+  } as SciForgeSession);
 
   const state = runPresentationState(session, session.runs[0]);
 
@@ -228,7 +237,7 @@ test('results renderer execution model lets conversation projection override raw
 });
 
 test('results renderer execution model uses projection recovery details before raw repair fallbacks', () => {
-  const session: SciForgeSession = {
+  const session = withMaterializedProjectionFixture({
     schemaVersion: 2,
     sessionId: 'session-projection-repair',
     scenarioId: 'literature-evidence-review',
@@ -277,7 +286,7 @@ test('results renderer execution model uses projection recovery details before r
     notebook: [],
     versions: [],
     updatedAt: '2026-05-13T00:00:10.000Z',
-  };
+  } as SciForgeSession);
 
   const state = runPresentationState(session, session.runs[0]);
 
@@ -290,7 +299,7 @@ test('results renderer execution model uses projection recovery details before r
 });
 
 test('results renderer execution model lists only user-facing ArtifactDelivery artifacts', () => {
-  const session: SciForgeSession = {
+  const session = withMaterializedProjectionFixture({
     schemaVersion: 2,
     sessionId: 'session-delivery-visible-artifacts',
     scenarioId: 'literature-evidence-review',
@@ -337,7 +346,7 @@ test('results renderer execution model lists only user-facing ArtifactDelivery a
     notebook: [],
     versions: [],
     updatedAt: '2026-05-13T00:00:10.000Z',
-  };
+  } as SciForgeSession);
 
   const state = runPresentationState(session, session.runs[0]);
 
@@ -346,7 +355,7 @@ test('results renderer execution model lists only user-facing ArtifactDelivery a
 });
 
 test('results renderer execution model treats zero-result projections with recovery as recoverable', () => {
-  const session: SciForgeSession = {
+  const session = withMaterializedProjectionFixture({
     schemaVersion: 2,
     sessionId: 'session-empty-provider-result',
     scenarioId: 'literature-evidence-review',
@@ -398,7 +407,7 @@ test('results renderer execution model treats zero-result projections with recov
     notebook: [],
     versions: [],
     updatedAt: '2026-05-15T00:01:00.000Z',
-  };
+  } as SciForgeSession);
 
   const state = runPresentationState(session, session.runs[0]);
 

@@ -37,6 +37,10 @@ export function configurePayloadValidationContext(builder: AttemptPlanRefsBuilde
   attemptPlanRefsBuilder = builder;
 }
 
+export function validateToolPayloadStructure(payload: unknown) {
+  return toolPayloadSchemaErrors(payload);
+}
+
 type AgentServerGenerationFailureDiagnostics = {
   kind: 'contextWindowExceeded' | 'rateLimit' | 'agentserver';
   backend?: string;

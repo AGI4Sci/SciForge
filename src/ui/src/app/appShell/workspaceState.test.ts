@@ -3,9 +3,10 @@ import test from 'node:test';
 import type { SciForgeSession, SciForgeWorkspaceState, TimelineEventRecord } from '../../domain';
 import { sessionWriteConflictsForState, withSessionWriteGuard } from '../../sessionStore';
 import { appendTimelineEventToWorkspace, applySessionUpdateToWorkspace, recoverableRunFocusForSession, touchWorkspaceUpdatedAt, tryApplySessionUpdateToWorkspace, workspaceRecoveryFocusForState } from './workspaceState';
+import { conversationProjectionMigrationAuditFixtureForRun } from '../conversation-projection-view-model';
 
 function session(runs: SciForgeSession['runs'] = []): SciForgeSession {
-  return {
+  const value = {
     schemaVersion: 2,
     sessionId: 'session-1',
     scenarioId: 'scenario-any',
@@ -30,7 +31,12 @@ function session(runs: SciForgeSession['runs'] = []): SciForgeSession {
     versions: [],
     hiddenResultSlotIds: [],
     updatedAt: '2026-05-07T00:00:00.000Z',
-  };
+  } as SciForgeSession;
+  const projections = Object.fromEntries(value.runs.flatMap((run) => {
+    const projection = conversationProjectionMigrationAuditFixtureForRun(run);
+    return projection ? [[run.id, projection]] : [];
+  }));
+  return Object.keys(projections).length ? { ...value, materializedConversationProjections: projections } as SciForgeSession : value;
 }
 
 function workspace(active = session()): SciForgeWorkspaceState {
@@ -253,6 +259,18 @@ test('recoverable focus selects projection-level repair-needed run and ignores t
     }]),
     sessionId: 'session-repair',
     scenarioId: 'scenario-repair',
+    materializedConversationProjection: {
+      schemaVersion: 'sciforge.conversation-projection.v1',
+      conversationId: 'conversation-repair',
+      visibleAnswer: { status: 'satisfied', text: 'Partial result is available.', artifactRefs: [] },
+      activeRun: { id: 'run-repair-needed', status: 'repair-needed' },
+      artifacts: [],
+      executionProcess: [],
+      recoverActions: [],
+      verificationState: { status: 'unverified' },
+      auditRefs: ['audit:projection-repair'],
+      diagnostics: [],
+    },
   };
   const state = {
     ...workspace(oldFailedSession),
@@ -293,7 +311,8 @@ test('recoverable focus selects projection-level repair-needed run and ignores t
 });
 
 test('recoverable focus follows conversation projection before raw run status', () => {
-  const projectedSatisfied = session([{
+  const projectedSatisfied = {
+    ...session([{
     id: 'run-projected-satisfied',
     scenarioId: 'scenario-any',
     status: 'failed' as const,
@@ -315,8 +334,21 @@ test('recoverable focus follows conversation projection before raw run status', 
         },
       },
     },
-  }]);
-  const projectedRepair = session([{
+    }]),
+    materializedConversationProjection: {
+      schemaVersion: 'sciforge.conversation-projection.v1',
+      conversationId: 'conversation-projected-satisfied',
+      visibleAnswer: { status: 'satisfied', text: 'Done.', artifactRefs: [] },
+      artifacts: [],
+      executionProcess: [],
+      recoverActions: [],
+      verificationState: { status: 'not-required' },
+      auditRefs: [],
+      diagnostics: [],
+    },
+  } as SciForgeSession;
+  const projectedRepair = {
+    ...session([{
     id: 'run-projected-repair',
     scenarioId: 'scenario-any',
     status: 'completed' as const,
@@ -338,7 +370,19 @@ test('recoverable focus follows conversation projection before raw run status', 
         },
       },
     },
-  }]);
+    }]),
+    materializedConversationProjection: {
+      schemaVersion: 'sciforge.conversation-projection.v1',
+      conversationId: 'conversation-projected-repair',
+      visibleAnswer: { status: 'repair-needed', diagnostic: 'repair from projection', artifactRefs: [] },
+      artifacts: [],
+      executionProcess: [],
+      recoverActions: ['continue from projection refs'],
+      verificationState: { status: 'failed' },
+      auditRefs: ['audit:projection'],
+      diagnostics: [],
+    },
+  } as SciForgeSession;
 
   assert.equal(recoverableRunFocusForSession(projectedSatisfied), undefined);
   assert.equal(recoverableRunFocusForSession(projectedRepair)?.activeRunId, 'run-projected-repair');
@@ -346,7 +390,8 @@ test('recoverable focus follows conversation projection before raw run status', 
 });
 
 test('recoverable focus can be driven by projection verification and background state', () => {
-  const projectedVerification = session([{
+  const projectedVerification = {
+    ...session([{
     id: 'run-projected-verification',
     scenarioId: 'scenario-any',
     status: 'completed' as const,
@@ -369,8 +414,22 @@ test('recoverable focus can be driven by projection verification and background 
         },
       },
     },
-  }]);
-  const projectedBackground = session([{
+    }]),
+    materializedConversationProjection: {
+      schemaVersion: 'sciforge.conversation-projection.v1',
+      conversationId: 'conversation-projected-verification',
+      visibleAnswer: { status: 'satisfied', text: 'Visible result is ready.', artifactRefs: [] },
+      activeRun: { id: 'run:run-projected-verification', status: 'satisfied' },
+      artifacts: [],
+      executionProcess: [],
+      recoverActions: [],
+      verificationState: { status: 'failed', verifierRef: 'verification:projection' },
+      auditRefs: [],
+      diagnostics: [],
+    },
+  } as SciForgeSession;
+  const projectedBackground = {
+    ...session([{
     id: 'run-projected-background',
     scenarioId: 'scenario-any',
     status: 'completed' as const,
@@ -398,7 +457,25 @@ test('recoverable focus can be driven by projection verification and background 
         },
       },
     },
-  }]);
+    }]),
+    materializedConversationProjection: {
+      schemaVersion: 'sciforge.conversation-projection.v1',
+      conversationId: 'conversation-projected-background',
+      visibleAnswer: { status: 'satisfied', text: 'Foreground partial is ready.', artifactRefs: [] },
+      activeRun: { id: 'run-projected-background', status: 'satisfied' },
+      artifacts: [],
+      executionProcess: [],
+      recoverActions: [],
+      verificationState: { status: 'unverified' },
+      backgroundState: {
+        status: 'running',
+        checkpointRefs: ['checkpoint:background'],
+        revisionPlan: 'Merge the background revision when it completes.',
+      },
+      auditRefs: [],
+      diagnostics: [],
+    },
+  } as SciForgeSession;
 
   assert.equal(recoverableRunFocusForSession(projectedVerification)?.activeRunId, 'run-projected-verification');
   assert.equal(recoverableRunFocusForSession(projectedBackground)?.activeRunId, 'run-projected-background');

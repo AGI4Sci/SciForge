@@ -83,6 +83,29 @@ const rules: Rule[] = [
       && !/^export\s+function\b/.test(line.trim()),
   },
   {
+    id: 'sa-gateway-public-api-internal-stage',
+    message: 'Runtime Bridge must not call Gateway internal route/preflight/invoke/materialize/validate stages; public API stays execute-only.',
+    appliesTo: (file) => file.startsWith('src/runtime/')
+      && !file.startsWith('src/runtime/gateway/')
+      && file !== 'src/runtime/generation-gateway.ts',
+    match: (line) => isCodeLine(line)
+      && /\bGateway\.(?:resolveRoute|preflight|invoke|materialize|validate)\s*\(/.test(line),
+  },
+  {
+    id: 'sa-direct-context-implicit-strategy',
+    message: 'Direct-context fast path must consume explicit DirectContextDecision, not derive strategy from harness hints or turn constraints.',
+    appliesTo: (file) => file === 'src/runtime/gateway/direct-context-fast-path.ts',
+    match: (line) => isCodeLine(line)
+      && /\b(?:agentHarness|turnExecutionConstraints|preferredCapabilityIds|intentMode)\b/.test(line),
+  },
+  {
+    id: 'sa-provider-discovery-endpoint-leak',
+    message: 'AgentServer worker discovery must normalize to ProviderManifest projection and must not spread endpoint-shaped worker records.',
+    appliesTo: (file) => file === 'src/runtime/gateway/capability-provider-preflight.ts',
+    match: (line) => isCodeLine(line)
+      && /\.\.\.record\b/.test(line),
+  },
+  {
     id: 'sa-degraded-raw-context-shape',
     message: 'Single-Agent degraded handoff packets must stay refs-first and must not grow raw history/full ref list/compaction state fields.',
     appliesTo: (file) => file.startsWith('src/runtime/gateway/'),
@@ -123,6 +146,8 @@ const trackedBaselineCounts: Record<string, number> = {
   'src/runtime/gateway/direct-context-fast-path.ts#sa-runtime-visible-preflight': 0,
   'src/runtime/gateway/capability-provider-preflight.ts#sa-runtime-visible-preflight': 0,
   'src/runtime/gateway/generated-task-payload-preflight.ts#sa-runtime-visible-preflight': 0,
+  'src/runtime/gateway/direct-context-fast-path.ts#sa-direct-context-implicit-strategy': 0,
+  'src/runtime/gateway/capability-provider-preflight.ts#sa-provider-discovery-endpoint-leak': 0,
   'src/runtime/gateway/agentserver-context-contract.ts#sa-degraded-raw-context-shape': 0,
   'src/runtime/gateway/agentserver-context-window.ts#sa-degraded-raw-context-shape': 1,
   'src/runtime/gateway/agentserver-prompts.ts#sa-degraded-raw-context-shape': 1,

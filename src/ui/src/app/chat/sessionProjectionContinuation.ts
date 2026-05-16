@@ -2,13 +2,14 @@ import type {
   RuntimeExecutionUnit,
   SciForgeReference,
   SciForgeRun,
+  SciForgeSession,
 } from '../../domain';
 import { collectRuntimeRefsFromValue } from '@sciforge-ui/runtime-contract/references';
 import { CONVERSATION_PROJECTION_CONTINUATION_TOOL_ID } from '@sciforge-ui/runtime-contract/events';
 import {
   conversationProjectionArtifactRefs,
   conversationProjectionAuditRefs,
-  conversationProjectionForRun,
+  conversationProjectionForSession,
   conversationProjectionPrimaryDiagnostic,
   conversationProjectionStatus,
   conversationProjectionVisibleText,
@@ -59,13 +60,13 @@ interface ConversationProjectionContinuationSummary {
 }
 
 export function projectionContinuationContexts(
-  runs: SciForgeRun[],
+  session: SciForgeSession,
   references: SciForgeReference[],
 ): ProjectionContinuationContext[] {
   const selectedRefs = compactSelectedRefsForProjectionContinuation(references);
-  return runs
+  return session.runs
     .map((run) => {
-      const projection = conversationProjectionForRun(run);
+      const projection = conversationProjectionForSession(session, run);
       if (!projection) return undefined;
       const auditRefs = uniqueStringRefs([
         ...conversationProjectionAuditRefs(projection),

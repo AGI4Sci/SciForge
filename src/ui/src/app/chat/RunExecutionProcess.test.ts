@@ -4,6 +4,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { RuntimeExecutionUnit, SciForgeSession } from '../../domain';
 import { RunExecutionProcess } from './RunExecutionProcess';
+import { conversationProjectionMigrationAuditFixtureForRun } from '../conversation-projection-view-model';
 
 test('execution process renders blocking execution units without Checked success state', () => {
   const html = renderProcess([
@@ -133,7 +134,7 @@ test('execution process renders failed execution units preserved in run raw payl
 test('execution process uses projection events instead of raw audit execution units when projection exists', () => {
   const html = renderToStaticMarkup(createElement(RunExecutionProcess, {
     runId: 'run-projection-process',
-    session: {
+    session: withMaterializedProjectionFixture({
       ...session([]),
       runs: [{
         id: 'run-projection-process',
@@ -170,7 +171,7 @@ test('execution process uses projection events instead of raw audit execution un
         status: 'repair-needed',
         failureReason: 'LEGACY_RAW_AUDIT_UNIT_SHOULD_NOT_RENDER',
       })],
-    },
+    }),
     onObjectFocus: () => undefined,
   }));
 
@@ -229,6 +230,11 @@ function session(executionUnits: RuntimeExecutionUnit[]): SciForgeSession {
     versions: [],
     hiddenResultSlotIds: [],
   };
+}
+
+function withMaterializedProjectionFixture(session: SciForgeSession): SciForgeSession {
+  const projection = session.runs.map(conversationProjectionMigrationAuditFixtureForRun).find(Boolean);
+  return projection ? { ...session, materializedConversationProjection: projection } as SciForgeSession : session;
 }
 
 function executionUnit(overrides: Partial<RuntimeExecutionUnit>): RuntimeExecutionUnit {
