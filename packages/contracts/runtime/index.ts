@@ -673,6 +673,7 @@ export type {
   ResultPresentationVisibilityProjection,
 } from './result-presentation';
 export type {
+  CodingDeliverySummary,
   FailureSignature,
   FailureSignatureInput,
   FailureSignatureKind,

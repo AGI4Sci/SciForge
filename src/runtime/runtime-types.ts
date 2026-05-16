@@ -1,6 +1,6 @@
 import type { SciForgeAgentHandoffSource, SciForgeSharedSkillDomain, SharedAgentHandoffContract } from '@sciforge-ui/runtime-contract/handoff';
 import type { AgentCompactCapability, AgentContextWindowSource, RuntimeArtifactDerivation, RuntimeVerificationVerdict } from '@sciforge-ui/runtime-contract';
-import type { FailureSignatureInput, TaskRunCard } from '@sciforge-ui/runtime-contract/task-run-card';
+import type { CodingDeliverySummary, FailureSignatureInput, TaskRunCard } from '@sciforge-ui/runtime-contract/task-run-card';
 import type { RuntimeBackendContextWindowSource } from '@sciforge-ui/runtime-contract/agent-backend-policy';
 import type { CapabilityInvocationBudgetDebitRecord } from '@sciforge-ui/runtime-contract/capability-budget';
 import type { SkillEntrypointType } from '@sciforge-skill/packages/runtime-policy';
@@ -548,6 +548,7 @@ export interface TaskAttemptRecord {
   selfHealReason?: string;
   patchSummary?: string;
   diffRef?: string;
+  codingDeliverySummary?: Partial<CodingDeliverySummary>;
   failureCode?: string;
   failureKind?: FailureSignatureInput['kind'];
   failureLayer?: FailureSignatureInput['layer'];

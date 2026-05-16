@@ -197,6 +197,17 @@ export interface TaskRunCardConversationProjectionSummary {
   };
 }
 
+export interface CodingDeliverySummary {
+  schemaVersion: 'sciforge.coding-delivery-summary.v1';
+  readFiles: string[];
+  plannedFiles: string[];
+  modifiedFiles: string[];
+  patchRefs: string[];
+  verificationCommands: string[];
+  riskChecklist: string[];
+  generalityStatement?: string;
+}
+
 export interface TaskRunCardInput {
   id?: string;
   taskId?: string;
@@ -214,6 +225,7 @@ export interface TaskRunCardInput {
   nextStep?: string;
   conversationProjectionRef?: string;
   conversationProjectionSummary?: Partial<TaskRunCardConversationProjectionSummary>;
+  codingDeliverySummary?: Partial<CodingDeliverySummary>;
   noHardcodeReview?: Partial<NoHardcodeReview>;
   updatedAt?: string;
 }
@@ -237,6 +249,7 @@ export interface TaskRunCard {
   nextStep: string;
   conversationProjectionRef?: string;
   conversationProjectionSummary?: TaskRunCardConversationProjectionSummary;
+  codingDeliverySummary?: CodingDeliverySummary;
   noHardcodeReview: NoHardcodeReview;
   updatedAt: string;
 }
@@ -329,6 +342,7 @@ export function createTaskRunCard(input: TaskRunCardInput): TaskRunCard {
     nextStep,
     conversationProjectionRef: stringField(input.conversationProjectionRef),
     conversationProjectionSummary: normalizeConversationProjectionSummary(input.conversationProjectionSummary),
+    codingDeliverySummary: normalizeCodingDeliverySummary(input.codingDeliverySummary),
     noHardcodeReview: createNoHardcodeReview(input.noHardcodeReview, genericAttributionLayer),
     updatedAt: stringField(input.updatedAt) ?? new Date(0).toISOString(),
   };
@@ -422,6 +436,18 @@ export function validateTaskRunCard(card: unknown): string[] {
   if (card.ownershipLayerSuggestions !== undefined && !Array.isArray(card.ownershipLayerSuggestions)) {
     issues.push('ownershipLayerSuggestions must be an array when present.');
   }
+  if (card.codingDeliverySummary !== undefined) {
+    if (!isRecord(card.codingDeliverySummary)) {
+      issues.push('codingDeliverySummary must be an object when present.');
+    } else {
+      if (card.codingDeliverySummary.schemaVersion !== 'sciforge.coding-delivery-summary.v1') {
+        issues.push('codingDeliverySummary.schemaVersion is invalid.');
+      }
+      for (const key of ['readFiles', 'plannedFiles', 'modifiedFiles', 'patchRefs', 'verificationCommands', 'riskChecklist']) {
+        if (!Array.isArray(card.codingDeliverySummary[key])) issues.push(`codingDeliverySummary.${key} must be an array.`);
+      }
+    }
+  }
   for (const [index, suggestion] of Array.isArray(card.ownershipLayerSuggestions) ? card.ownershipLayerSuggestions.entries() : []) {
     if (!isRecord(suggestion)) {
       issues.push(`ownershipLayerSuggestions[${index}] must be an object.`);
@@ -437,6 +463,31 @@ export function validateTaskRunCard(card: unknown): string[] {
     issues.push('passing noHardcodeReview must apply generally.');
   }
   return issues;
+}
+
+function normalizeCodingDeliverySummary(
+  summary: Partial<CodingDeliverySummary> | undefined,
+): CodingDeliverySummary | undefined {
+  if (!summary) return undefined;
+  const readFiles = uniqueStrings(summary.readFiles ?? []);
+  const plannedFiles = uniqueStrings(summary.plannedFiles ?? []);
+  const modifiedFiles = uniqueStrings(summary.modifiedFiles ?? []);
+  const patchRefs = uniqueStrings(summary.patchRefs ?? []);
+  const verificationCommands = uniqueStrings(summary.verificationCommands ?? []);
+  const riskChecklist = uniqueStrings(summary.riskChecklist ?? []);
+  if (!readFiles.length && !plannedFiles.length && !modifiedFiles.length && !patchRefs.length && !verificationCommands.length && !riskChecklist.length) {
+    return undefined;
+  }
+  return {
+    schemaVersion: 'sciforge.coding-delivery-summary.v1',
+    readFiles,
+    plannedFiles,
+    modifiedFiles,
+    patchRefs,
+    verificationCommands,
+    riskChecklist,
+    generalityStatement: stringField(summary.generalityStatement),
+  };
 }
 
 function createNoHardcodeReview(input: Partial<NoHardcodeReview> | undefined, ownerLayer: TaskAttributionLayer): NoHardcodeReview {

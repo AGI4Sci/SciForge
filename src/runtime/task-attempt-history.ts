@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import {
   createFailureSignature,
   createTaskRunCard,
+  type CodingDeliverySummary,
   type FailureSignatureInput,
   type OwnershipLayerSuggestion,
   type TaskAttributionLayer,
@@ -36,9 +37,10 @@ export async function appendTaskAttempt(workspacePath: string, record: TaskAttem
   const recordWithAudit = await withValidationRepairAuditMetadata(workspace, recordWithEvidence);
   const recordWithBundleAudit = await withSessionBundleAuditMetadata(workspace, recordWithAudit, true);
   const recordWithConversationProjection = await withConversationProjectionMetadata(workspace, recordWithBundleAudit);
-  const normalizedRecord = recordWithConversationProjection.status === 'done'
-    ? { ...recordWithConversationProjection, failureReason: undefined }
-    : recordWithConversationProjection;
+  const recordWithCodingDelivery = await withCodingDeliverySummary(workspace, recordWithConversationProjection);
+  const normalizedRecord = recordWithCodingDelivery.status === 'done'
+    ? { ...recordWithCodingDelivery, failureReason: undefined }
+    : recordWithCodingDelivery;
   const normalizedRecordWithCard = withTaskRunCard(normalizedRecord);
   const path = normalizedRecord.sessionBundleRef
     ? join(workspace, normalizedRecord.sessionBundleRef, 'records', 'task-attempts', `${safeName(record.id)}.json`)
@@ -160,7 +162,8 @@ async function withAttemptDerivedMetadata(workspace: string, attempts: TaskAttem
     const withTelemetry = await withValidationRepairTelemetryMetadata(workspace, withAudit);
     const withBundleAudit = await withSessionBundleAuditMetadata(workspace, withTelemetry);
     const withConversationProjection = await withConversationProjectionMetadata(workspace, withBundleAudit);
-    return withTaskRunCard(withConversationProjection);
+    const withCodingDelivery = await withCodingDeliverySummary(workspace, withConversationProjection);
+    return withTaskRunCard(withCodingDelivery);
   }));
 }
 
@@ -192,6 +195,7 @@ function withTaskRunCard(record: TaskAttemptRecord): TaskAttemptRecord {
       ownershipLayerSuggestions: ownershipLayerSuggestionsForAttempt(record, genericAttributionLayer),
       conversationProjectionRef: conversationProjection.ref,
       conversationProjectionSummary: conversationProjection.summary,
+      codingDeliverySummary: codingDeliverySummaryFromAttempt(record),
       updatedAt: record.createdAt,
       noHardcodeReview: {
         appliesGenerally: true,
@@ -330,7 +334,19 @@ function taskRunCardRefsForAttempt(record: TaskAttemptRecord): TaskRunCardRef[] 
     taskRef('log', record.stdoutRef, 'stdout'),
     taskRef('log', record.stderrRef, 'stderr'),
     taskRef('bundle', record.sessionBundleRef, 'session bundle'),
+    ...codingDeliveryRefsForAttempt(record),
     ...attemptRecordRefs(record),
+  ].filter((ref): ref is TaskRunCardRef => Boolean(ref));
+}
+
+function codingDeliveryRefsForAttempt(record: TaskAttemptRecord): TaskRunCardRef[] {
+  const summary = codingDeliverySummaryFromAttempt(record);
+  if (!summary) return [];
+  return [
+    ...summary.readFiles.map((ref) => taskRef('file', ref, 'codingDelivery.readFiles')),
+    ...summary.plannedFiles.map((ref) => taskRef('file', ref, 'codingDelivery.plannedFiles')),
+    ...summary.modifiedFiles.map((ref) => taskRef('file', ref, 'codingDelivery.modifiedFiles')),
+    ...summary.patchRefs.map((ref) => taskRef('artifact', ref, 'codingDelivery.patchRefs')),
   ].filter((ref): ref is TaskRunCardRef => Boolean(ref));
 }
 
@@ -428,6 +444,106 @@ async function withConversationProjectionMetadata(workspace: string, record: Tas
       ...(ref ? { conversationProjection: [ref] } : {}),
     },
   } as TaskAttemptRecord;
+}
+
+async function withCodingDeliverySummary(workspace: string, record: TaskAttemptRecord): Promise<TaskAttemptRecord> {
+  const fromAttempt = codingDeliverySummaryFromAttempt(record);
+  const fromOutput = record.outputRef
+    ? await codingDeliverySummaryFromOutput(workspace, record.outputRef)
+    : undefined;
+  const summary = mergeCodingDeliverySummaries(fromAttempt, fromOutput);
+  if (!summary) return record;
+  const current = record as TaskAttemptRecord & { refs?: Record<string, unknown> };
+  return {
+    ...record,
+    codingDeliverySummary: summary,
+    refs: {
+      ...(isRecord(current.refs) ? current.refs : {}),
+      codingDeliveryReadFiles: summary.readFiles,
+      codingDeliveryPlannedFiles: summary.plannedFiles,
+      codingDeliveryModifiedFiles: summary.modifiedFiles,
+      codingDeliveryPatchRefs: summary.patchRefs,
+    },
+  } as TaskAttemptRecord;
+}
+
+function codingDeliverySummaryFromAttempt(record: TaskAttemptRecord): CodingDeliverySummary | undefined {
+  return normalizeCodingDeliverySummary(record.codingDeliverySummary);
+}
+
+async function codingDeliverySummaryFromOutput(
+  workspace: string,
+  outputRef: string,
+): Promise<CodingDeliverySummary | undefined> {
+  const outputPath = workspaceSafePath(workspace, outputRef);
+  if (!outputPath || !await fileExists(outputPath)) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(outputPath, 'utf8'));
+  } catch {
+    return undefined;
+  }
+  return codingDeliverySummaryFromPayload(parsed);
+}
+
+function codingDeliverySummaryFromPayload(payload: unknown): CodingDeliverySummary | undefined {
+  const root = isRecord(payload) ? payload : {};
+  const displayIntent = isRecord(root.displayIntent) ? root.displayIntent : {};
+  const taskOutcomeProjection = isRecord(displayIntent.taskOutcomeProjection) ? displayIntent.taskOutcomeProjection : {};
+  const resultPresentation = isRecord(displayIntent.resultPresentation) ? displayIntent.resultPresentation : {};
+  const taskRunCard = isRecord(displayIntent.taskRunCard)
+    ? displayIntent.taskRunCard
+    : isRecord(taskOutcomeProjection.taskRunCard)
+      ? taskOutcomeProjection.taskRunCard
+      : isRecord(resultPresentation.taskRunCard)
+        ? resultPresentation.taskRunCard
+        : {};
+  return normalizeCodingDeliverySummary(
+    root.codingDeliverySummary
+      ?? displayIntent.codingDeliverySummary
+      ?? taskOutcomeProjection.codingDeliverySummary
+      ?? resultPresentation.codingDeliverySummary
+      ?? taskRunCard.codingDeliverySummary,
+  );
+}
+
+function mergeCodingDeliverySummaries(
+  left: CodingDeliverySummary | undefined,
+  right: CodingDeliverySummary | undefined,
+): CodingDeliverySummary | undefined {
+  if (!left) return right;
+  if (!right) return left;
+  return normalizeCodingDeliverySummary({
+    readFiles: [...left.readFiles, ...right.readFiles],
+    plannedFiles: [...left.plannedFiles, ...right.plannedFiles],
+    modifiedFiles: [...left.modifiedFiles, ...right.modifiedFiles],
+    patchRefs: [...left.patchRefs, ...right.patchRefs],
+    verificationCommands: [...left.verificationCommands, ...right.verificationCommands],
+    riskChecklist: [...left.riskChecklist, ...right.riskChecklist],
+    generalityStatement: left.generalityStatement ?? right.generalityStatement,
+  });
+}
+
+function normalizeCodingDeliverySummary(value: unknown): CodingDeliverySummary | undefined {
+  if (!isRecord(value)) return undefined;
+  const summary = {
+    schemaVersion: 'sciforge.coding-delivery-summary.v1' as const,
+    readFiles: uniqueStrings(stringArray(value.readFiles)),
+    plannedFiles: uniqueStrings(stringArray(value.plannedFiles)),
+    modifiedFiles: uniqueStrings(stringArray(value.modifiedFiles)),
+    patchRefs: uniqueStrings(stringArray(value.patchRefs)),
+    verificationCommands: uniqueStrings(stringArray(value.verificationCommands)),
+    riskChecklist: uniqueStrings(stringArray(value.riskChecklist)),
+    generalityStatement: stringField(value.generalityStatement),
+  };
+  return summary.readFiles.length
+    || summary.plannedFiles.length
+    || summary.modifiedFiles.length
+    || summary.patchRefs.length
+    || summary.verificationCommands.length
+    || summary.riskChecklist.length
+    ? summary
+    : undefined;
 }
 
 function conversationProjectionMetadataFromAttempt(record: TaskAttemptRecord): {
@@ -746,6 +862,12 @@ function firstString(value: unknown) {
 
 function stringField(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function stringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : [];
 }
 
 async function withWorkEvidenceSummary(workspace: string, record: TaskAttemptRecord): Promise<TaskAttemptRecord> {

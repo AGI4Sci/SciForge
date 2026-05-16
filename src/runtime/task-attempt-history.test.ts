@@ -126,6 +126,92 @@ test('task attempts suggest ownership layers from generic runtime metadata', asy
   }
 });
 
+test('task attempts preserve coding delivery summary as machine-readable card evidence', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-task-coding-delivery-'));
+  try {
+    const attempt: TaskAttemptRecord = {
+      id: 'coding-delivery-attempt',
+      prompt: 'read the runtime code, create a small patch, and provide risk checklist',
+      skillDomain: 'knowledge',
+      skillId: 'agentserver.generate.coding',
+      attempt: 1,
+      status: 'done',
+      outputRef: '.sciforge/task-results/coding-delivery.json',
+      codingDeliverySummary: {
+        readFiles: [
+          'src/runtime/task-attempt-history.ts',
+          'packages/contracts/runtime/task-run-card.ts',
+        ],
+        plannedFiles: ['src/runtime/runtime-types.ts'],
+        modifiedFiles: ['packages/contracts/runtime/task-run-card.ts'],
+        patchRefs: ['.sciforge/patches/coding-delivery.patch'],
+        verificationCommands: ['npm run typecheck'],
+        riskChecklist: ['Downstream readers must tolerate missing summaries on non-coding tasks.'],
+        generalityStatement: 'Records durable coding evidence for any workspace coding task, independent of prompt text or backend.',
+      },
+      createdAt: '2026-05-12T00:00:00.000Z',
+    } as TaskAttemptRecord;
+
+    await appendTaskAttempt(workspace, attempt);
+    const [stored] = await readTaskAttempts(workspace, attempt.id);
+    const summary = stored?.taskRunCard?.codingDeliverySummary;
+
+    assert.equal(stored?.failureReason, undefined);
+    assert.equal(summary?.schemaVersion, 'sciforge.coding-delivery-summary.v1');
+    assert.deepEqual([...(summary?.readFiles ?? [])].sort(), [
+      'src/runtime/task-attempt-history.ts',
+      'packages/contracts/runtime/task-run-card.ts',
+    ].sort());
+    assert.deepEqual(summary?.verificationCommands, ['npm run typecheck']);
+    assert.ok(stored?.taskRunCard?.refs.some((ref) => ref.kind === 'file' && ref.ref === 'src/runtime/task-attempt-history.ts'));
+    assert.ok(stored?.taskRunCard?.refs.some((ref) => ref.kind === 'artifact' && ref.ref === '.sciforge/patches/coding-delivery.patch'));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('task attempts hydrate coding delivery summary from task output payload', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-task-coding-output-'));
+  try {
+    const outputRef = '.sciforge/task-results/coding-output.json';
+    await mkdir(join(workspace, '.sciforge/task-results'), { recursive: true });
+    await writeFile(join(workspace, outputRef), JSON.stringify({
+      displayIntent: {
+        taskRunCard: {
+          codingDeliverySummary: {
+            readFiles: ['src/runtime/task-attempt-history.ts'],
+            plannedFiles: ['src/runtime/task-attempt-history.ts'],
+            modifiedFiles: ['src/runtime/task-attempt-history.ts'],
+            patchRefs: ['.sciforge/patches/from-output.patch'],
+            verificationCommands: ['node --test src/runtime/task-attempt-history.test.ts'],
+            riskChecklist: ['Output-derived summaries must remain bounded.'],
+          },
+        },
+      },
+    }), 'utf8');
+
+    const attempt: TaskAttemptRecord = {
+      id: 'coding-output-attempt',
+      prompt: 'create a patch artifact with tests',
+      skillDomain: 'knowledge',
+      skillId: 'agentserver.generate.coding',
+      attempt: 1,
+      status: 'record-only',
+      outputRef,
+      createdAt: '2026-05-12T00:00:00.000Z',
+    } as TaskAttemptRecord;
+
+    await appendTaskAttempt(workspace, attempt);
+    const [stored] = await readTaskAttempts(workspace, attempt.id);
+
+    assert.deepEqual(stored?.taskRunCard?.codingDeliverySummary?.modifiedFiles, ['src/runtime/task-attempt-history.ts']);
+    assert.deepEqual(stored?.taskRunCard?.codingDeliverySummary?.patchRefs, ['.sciforge/patches/from-output.patch']);
+    assert.ok(stored?.taskRunCard?.refs.some((ref) => ref.ref === '.sciforge/patches/from-output.patch'));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('task attempt history records a run-level failure signature registry across runs', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-failure-signature-registry-'));
   try {

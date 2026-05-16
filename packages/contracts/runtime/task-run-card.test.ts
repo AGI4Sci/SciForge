@@ -254,3 +254,30 @@ test('carries conversation projection refs and compact kernel summaries', () => 
   assert.ok(card.refs.some((ref) => ref.ref === '.sciforge/task-results/run.json#displayIntent.conversationProjection'));
   assert.deepEqual(validateTaskRunCard(card), []);
 });
+
+test('carries machine-readable coding delivery summary without changing task outcome semantics', () => {
+  const card = createTaskRunCard({
+    goal: 'Read code, generate a patch, and explain verification risks.',
+    protocolStatus: 'protocol-success',
+    taskOutcome: 'needs-work',
+    refs: [{ kind: 'artifact', ref: '.sciforge/task-results/coding-patch.json' }],
+    codingDeliverySummary: {
+      readFiles: ['src/runtime/task-attempt-history.ts', 'packages/contracts/runtime/task-run-card.ts'],
+      plannedFiles: ['src/runtime/runtime-types.ts'],
+      modifiedFiles: ['packages/contracts/runtime/task-run-card.ts'],
+      patchRefs: ['.sciforge/patches/coding-delivery.patch'],
+      verificationCommands: ['npm run typecheck'],
+      riskChecklist: ['Schema consumers must tolerate absent codingDeliverySummary.'],
+      generalityStatement: 'Applies to any coding task that needs durable read/change/verification evidence.',
+    },
+  });
+
+  assert.equal(card.status, 'needs-work');
+  assert.equal(card.codingDeliverySummary?.schemaVersion, 'sciforge.coding-delivery-summary.v1');
+  assert.deepEqual([...(card.codingDeliverySummary?.readFiles ?? [])].sort(), [
+    'src/runtime/task-attempt-history.ts',
+    'packages/contracts/runtime/task-run-card.ts',
+  ].sort());
+  assert.deepEqual(card.codingDeliverySummary?.patchRefs, ['.sciforge/patches/coding-delivery.patch']);
+  assert.deepEqual(validateTaskRunCard(card), []);
+});
