@@ -63,6 +63,7 @@ export {
   runAuditRefs,
   runPresentationState,
   runRecoverActions,
+  shouldDefaultOpenRunAuditDetails,
   shouldOpenRunAuditDetails,
 } from './results-renderer-execution-model';
 import {
@@ -384,7 +385,7 @@ function PrimaryResult({
           session={session}
           activeRun={activeRun}
           viewPlan={viewPlan}
-          defaultOpen={model.auditOpen}
+          defaultOpen={model.auditDefaultOpen}
         />
       ) : null}
       {viewPlan.allItems.length ? (

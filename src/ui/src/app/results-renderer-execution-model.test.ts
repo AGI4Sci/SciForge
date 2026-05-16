@@ -162,8 +162,8 @@ test('results renderer execution model does not call completed empty runs ready'
   const state = runPresentationState(session, session.runs[0]);
 
   assert.equal(state.kind, 'empty');
-  assert.equal(state.title, '本轮没有生成可展示 artifact');
-  assert.match(state.reason, /没有 ConversationProjection 或可展示产物/);
+  assert.equal(state.title, '主结果等待 ConversationProjection');
+  assert.match(state.reason, /等待 Projection/);
 });
 
 test('results renderer execution model lets conversation projection override raw failed state', () => {
@@ -428,8 +428,9 @@ test('results renderer execution model treats cited historical execution units a
   const state = runPresentationState(session, session.runs[0]);
 
   assert.equal(failedExecutionUnits(session, session.runs[0]).some((unit) => unit.id === 'EU-old-failed'), false);
-  assert.equal(state.kind, 'ready');
-  assert.ok(state.availableArtifacts.some((artifact) => artifact.id === 'direct-context-summary'));
+  assert.equal(state.kind, 'empty');
+  assert.equal(state.title, '主结果等待 ConversationProjection');
+  assert.equal(state.availableArtifacts.some((artifact) => artifact.id === 'direct-context-summary'), false);
 
   const compactedSession = structuredClone(session);
   compactedSession.runs[0]!.raw = {
@@ -442,8 +443,8 @@ test('results renderer execution model treats cited historical execution units a
 
   assert.equal(failedExecutionUnits(compactedSession, compactedSession.runs[0]).some((unit) => unit.id === 'EU-old-failed'), false);
   const compactedState = runPresentationState(compactedSession, compactedSession.runs[0]);
-  assert.equal(compactedState.kind, 'ready');
-  assert.equal(compactedState.availableArtifacts.some((artifact) => artifact.id === 'direct-context-summary'), true);
+  assert.equal(compactedState.kind, 'empty');
+  assert.equal(compactedState.availableArtifacts.some((artifact) => artifact.id === 'direct-context-summary'), false);
   assert.equal(compactedState.availableArtifacts.some((artifact) => artifact.id === 'old-runtime-diagnostic'), false);
   assert.deepEqual(runRecoverActions(compactedSession, compactedSession.runs[0]), []);
   assert.equal(shouldOpenRunAuditDetails(compactedSession, compactedSession.runs[0]), false);
@@ -701,9 +702,10 @@ test('results renderer execution model does not let raw running progress drive m
 
   const state = runPresentationState(session, session.runs[0]);
 
-  assert.equal(state.kind, 'ready');
+  assert.equal(state.kind, 'empty');
+  assert.equal(state.title, '主结果等待 ConversationProjection');
   assert.equal(state.progress, undefined);
-  assert.ok(state.availableArtifacts.some((artifact) => artifact.id === 'partial-report'));
+  assert.equal(state.availableArtifacts.some((artifact) => artifact.id === 'partial-report'), false);
   assert.deepEqual(state.nextSteps, []);
 });
 
@@ -887,7 +889,8 @@ test('presentation state ignores natural-language partial and needs-human words 
 
   const state = runPresentationState(session, session.runs[0]);
 
-  assert.equal(state.kind, 'ready');
+  assert.equal(state.kind, 'empty');
+  assert.equal(state.title, '主结果等待 ConversationProjection');
 });
 
 function executionFailureSession(): SciForgeSession {

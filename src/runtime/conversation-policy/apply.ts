@@ -152,9 +152,11 @@ export function requestWithPolicyResponse(
       contextReusePolicy: contextPolicy,
       contextIsolation: contextPolicy,
       handoffMemoryProjection,
-      handoffRecentConversationProjection: toRecordList(handoffMemoryProjection.recentConversation),
-      handoffRecentRunsProjection: toRecordList(handoffMemoryProjection.recentRuns),
-      handoffConversationLedgerProjection: toRecordList(handoffMemoryProjection.conversationLedger),
+      projectSessionMemoryProjection: isRecord(handoffMemoryProjection.projectSessionMemory)
+        ? handoffMemoryProjection.projectSessionMemory
+        : undefined,
+      projectSessionContextProjectionBlocks: toRecordList(handoffMemoryProjection.contextProjectionBlocks),
+      projectSessionContextRefs: toStringList(handoffMemoryProjection.contextRefs),
       currentReferences,
       currentReferenceDigests,
       conversationLedger: uiState.conversationLedger,
@@ -179,8 +181,10 @@ function buildConversationPolicyRequest(
   },
 ): ConversationPolicyRequest {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
-  const ledger = toRecordList(uiState.conversationLedger);
-  const ledgerTail = toRecordList(isRecord(uiState.conversationLedger) ? uiState.conversationLedger.tail : undefined);
+  const projectSessionMemory = isRecord(uiState.projectSessionMemoryProjection)
+    ? uiState.projectSessionMemoryProjection
+    : undefined;
+  const projectSessionEvents = toRecordList(projectSessionMemory?.eventIndex);
   const recentExecutionRefs = toRecordList(uiState.recentExecutionRefs);
   const turnExecutionConstraints = normalizeTurnExecutionConstraints(uiState.turnExecutionConstraints);
   const currentTurnReferences = mergeRecordsByRef([
@@ -204,7 +208,7 @@ function buildConversationPolicyRequest(
       runs: toRecordList(uiState.recentRuns).slice(-12),
       artifacts: request.artifacts.slice(-24),
       executionUnits: mergeRecordsByRef([
-        ...(ledgerTail.length ? ledgerTail.slice(-24) : ledger.slice(-24)),
+        ...projectSessionEvents.slice(-24),
         ...recentExecutionRefs.slice(-24),
       ]).slice(-24),
       contextReusePolicy: isRecord(uiState.contextReusePolicy) ? uiState.contextReusePolicy : undefined,

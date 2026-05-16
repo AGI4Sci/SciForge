@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { access, mkdtemp, readFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -82,7 +84,9 @@ test('generated task files are materialized only inside the session bundle', asy
   const taskInput = JSON.parse(await readFile(join(workspace, inputRel), 'utf8'));
   assert.equal(taskInput.taskHelperSdk.moduleName, 'sciforge_task');
   assert.match(taskInput.taskHelperSdk.helperRef, /\/sciforge_task\.py$/);
+  assert.match(taskInput.taskHelperSdk.importHint, /invoke_provider/);
   assert.ok(taskInput.capabilityFirstPolicy.rules.some((line: string) => /provider route/.test(line)));
+  assert.equal(taskInput.providerInvocation.schemaVersion, 'sciforge.generated-task-provider-invocation.v1');
   assert.equal(taskInput.generatedTaskPayloadPreflight.status, 'ready');
   assert.deepEqual(taskInput.generatedTaskPayloadPreflight.requiredEnvelopeKeys, ['message', 'claims', 'uiManifest', 'executionUnits', 'artifacts']);
   assert.ok(taskInput.generatedTaskPayloadPreflight.guidance.some((line: string) => /ToolPayload envelope/.test(line)));
@@ -247,6 +251,110 @@ test('generated task output shape preflight resolves same-file artifact variable
   assert.ok(taskInput.generatedTaskPayloadPreflight.issues.every((issue: { severity: string }) => issue.severity === 'guidance'));
   const output = JSON.parse(await readFile(join(workspace, result.execution.run.outputRef), 'utf8'));
   assert.deepEqual(output.artifacts.map((artifact: { type: string }) => artifact.type), ['research-report', 'paper-list']);
+});
+
+test('generated Python task can invoke ready provider through helper adapter', async () => {
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({
+      ok: true,
+      output: {
+        echoedToolId: body.toolId,
+        finalUrl: body.input?.url,
+        status: 200,
+        text: 'provider bridge ok',
+      },
+    }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const endpoint = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    const workspace = await mkdtemp(join(tmpdir(), 'sciforge-generated-provider-invoke-'));
+    const request: GatewayRequest = {
+      workspacePath: workspace,
+      skillDomain: 'literature',
+      prompt: 'fetch url with web_fetch provider',
+      selectedToolIds: ['web_fetch'],
+      artifacts: [],
+      uiState: {
+        sessionId: 'session-literature-provider-invoke',
+        sessionCreatedAt: '2026-05-12T05:00:00.000Z',
+        capabilityProviderAvailability: [{
+          id: 'sciforge.web-worker.web_fetch',
+          available: true,
+          status: 'available',
+          endpoint,
+        }],
+      },
+      scenarioPackageRef: { id: 'literature-evidence-review', version: '1.0.0', source: 'built-in' },
+    };
+    const skill = {
+      id: 'literature-test',
+      kind: 'builtin',
+      available: true,
+      reason: 'test',
+      checkedAt: '2026-05-12T05:00:00.000Z',
+      manifestPath: 'builtin',
+      manifest: {},
+    } as unknown as SkillAvailability;
+
+    const result = await runGeneratedTaskExecutionLifecycle({
+      workspace,
+      request,
+      skill,
+      generation: {
+        ok: true,
+        runId: 'run-provider-invoke',
+        response: {
+          taskFiles: [{
+            path: 'tasks/provider-fetch.py',
+            language: 'python',
+            content: [
+              'import sys',
+              'from sciforge_task import load_input, write_payload, invoke_provider',
+              '_, input_path, output_path = sys.argv',
+              'task_input = load_input(input_path)',
+              'fetched = invoke_provider(task_input, "web_fetch", {"url": "https://example.com", "maxChars": 50})',
+              'payload = {"message": fetched["text"], "confidence": 0.9, "claimType": "observation", "evidenceLevel": "provider", "reasoningTrace": "used invoke_provider web_fetch", "claims": [], "uiManifest": [], "executionUnits": [{"id": "unit", "status": "done", "tool": "web_fetch"}], "artifacts": [{"id": "fetch-result", "type": "runtime-context-summary", "data": fetched}]}',
+              'write_payload(output_path, payload)',
+            ].join('\n'),
+          }],
+          entrypoint: { language: 'python', path: 'tasks/provider-fetch.py' },
+          environmentRequirements: {},
+          validationCommand: '',
+          expectedArtifacts: ['runtime-context-summary'],
+        },
+      },
+      deps: {
+        repairNeededPayload: (_request, _skill, reason): ToolPayload => ({
+          message: reason,
+          confidence: 0,
+          claimType: 'fact',
+          evidenceLevel: 'runtime',
+          reasoningTrace: reason,
+          claims: [],
+          uiManifest: [],
+          executionUnits: [],
+          artifacts: [],
+        }),
+      },
+    });
+
+    assert.equal(result.kind, 'run');
+    if (result.kind !== 'run') return;
+    assert.equal(result.execution.run.exitCode, 0);
+    const taskInput = JSON.parse(await readFile(join(workspace, result.execution.inputRel ?? ''), 'utf8'));
+    assert.equal(taskInput.providerInvocation.adapters[0]?.kind, 'http');
+    assert.equal(taskInput.providerInvocation.adapters[0]?.endpoint, endpoint);
+    const output = JSON.parse(await readFile(join(workspace, result.execution.run.outputRef), 'utf8'));
+    assert.equal(output.message, 'provider bridge ok');
+    assert.equal(output.artifacts[0].data.echoedToolId, 'web_fetch');
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  }
 });
 
 test('generated task preflight blocks direct network when web provider route is ready', async () => {

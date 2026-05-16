@@ -199,7 +199,20 @@ function compactArtifacts(artifacts: unknown[], budget: Record<string, number>, 
 
 function compactHandoffProjection(projection: JsonMap, budget: Record<string, number>, decisions: JsonMap[]): JsonMap {
   const out: JsonMap = {};
-  for (const key of ['recentConversation', 'ledger', 'priorAttempts']) {
+  for (const key of [
+    'authority',
+    'projectSessionMemory',
+    'contextProjectionBlocks',
+    'stablePrefixHash',
+    'contextRefs',
+    'selectedContextRefs',
+    'retrievalTools',
+    'currentReferenceFocus',
+    'pollutionGuard',
+    'recentConversation',
+    'recentRuns',
+    'priorAttempts',
+  ]) {
     const value = projection[key];
     if (key === 'priorAttempts' && Array.isArray(value) && value.length > budget.maxPriorAttempts) {
       out[key] = value.slice(-budget.maxPriorAttempts).map((item, index) => compactValue(item, budget, decisions, ['handoffMemoryProjection', key, String(index)]));

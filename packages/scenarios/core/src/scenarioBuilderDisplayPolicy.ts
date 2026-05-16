@@ -512,7 +512,7 @@ export function scenarioBuilderComponentDisplay(
   return {
     label: component.label,
     detail: component.description,
-    meta: componentManifestMeta(component),
+    meta: componentManifestMeta(component, registry),
   };
 }
 
@@ -577,11 +577,17 @@ function skillDisplayToken(skillId: string, registry: ElementRegistry): Scenario
   };
 }
 
-function componentManifestMeta(component: UIComponentElement) {
+function componentManifestMeta(component: UIComponentElement, registry: ElementRegistry) {
   const accepted = component.acceptsArtifactTypes.join(', ') || '*';
   const consumes = component.consumes.join(', ') || 'none';
+  const fieldKeys = Array.from(new Set(
+    component.acceptsArtifactTypes.flatMap((artifactType) => (
+      registry.artifacts.find((item) => item.artifactType === artifactType)?.fields ?? []
+    ).map((field) => field.key)),
+  )).slice(0, 8);
+  const fields = ` · fields ${fieldKeys.length ? fieldKeys.join(', ') : 'not declared'}`;
   const fallbackPolicy = component.fallback || 'component manifest default';
-  return `accepts ${accepted} · consumes ${consumes} · fallback ${fallbackPolicy}`;
+  return `accepts ${accepted} · consumes ${consumes}${fields} · fallback ${fallbackPolicy}`;
 }
 
 function extractSensitiveWorkspaceRefs(json: string, workspacePath: string) {

@@ -325,9 +325,27 @@ function handoffMemoryProjectionForEnvelope(uiState: Record<string, unknown>) {
     .filter((entry) => entry.id || entry.status || entry.summary || entry.refs.length);
   return {
     schemaVersion: 'sciforge.handoff-memory-projection.v1',
-    source: 'conversation-policy.handoffMemoryProjection',
-    authority: 'SciForge projection only; AgentServer owns recall',
+    source: 'conversation-policy.project-session-memory-projection',
+    authority: 'workspace ledger/ref store is canonical truth; AgentServer orchestrates context',
     mode: stringField(source.mode),
+    projectSessionMemory: isRecord(source.projectSessionMemory)
+      ? clipForAgentServerJson(source.projectSessionMemory, 4)
+      : undefined,
+    contextProjectionBlocks: toRecordList(source.contextProjectionBlocks)
+      .slice(0, 8)
+      .map((entry) => ({
+        blockId: stringField(entry.blockId),
+        kind: stringField(entry.kind),
+        sha256: stringField(entry.sha256),
+        tokenEstimate: typeof entry.tokenEstimate === 'number' ? entry.tokenEstimate : undefined,
+        cacheTier: stringField(entry.cacheTier),
+        sourceEventIds: toStringList(entry.sourceEventIds).slice(0, 16),
+        supersedes: toStringList(entry.supersedes).slice(0, 16),
+      })),
+    stablePrefixHash: stringField(source.stablePrefixHash),
+    contextRefs: toStringList(source.contextRefs).slice(0, 64),
+    selectedContextRefs: toStringList(source.selectedContextRefs).slice(0, 32),
+    retrievalTools: toStringList(source.retrievalTools).slice(0, 8),
     recentConversation: recentConversation.length ? recentConversation : undefined,
     recentRuns: recentRuns.length ? recentRuns : undefined,
     currentReferenceFocus: toStringList(source.currentReferenceFocus).slice(0, 12),

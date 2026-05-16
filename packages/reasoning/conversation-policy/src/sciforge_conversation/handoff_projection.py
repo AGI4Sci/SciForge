@@ -1,7 +1,7 @@
-"""Python bridge for bounded handoff memory projection.
+"""Python bridge for bounded Project Session Memory projection.
 
-AgentServer owns multi-turn recall. This module only builds current-turn
-summaries and refs for transport.
+Workspace ledger/ref store owns recoverable facts. This module builds bounded
+projection hints and cache-aware refs for transport.
 """
 
 from __future__ import annotations
@@ -88,11 +88,4 @@ def build_handoff_memory_projection(request: Mapping[str, Any] | Any) -> JsonMap
     return result
 
 
-def build_conversation_ledger(messages: list[Any], runs: list[Any] | None = None) -> list[JsonMap]:
-    result = _from_gateway({"__args": [messages, runs or []]}, "buildConversationLedger")
-    if not isinstance(result, list):
-        raise RuntimeError("conversation memory ledger bridge returned a non-list payload")
-    return [dict(item) for item in result if isinstance(item, Mapping)]
-
-
-__all__ = ["build_handoff_memory_projection", "build_conversation_ledger"]
+__all__ = ["build_handoff_memory_projection"]

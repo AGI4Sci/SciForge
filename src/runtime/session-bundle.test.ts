@@ -59,13 +59,19 @@ test('session bundle manifest and audit expose pack/restore/audit checklist', as
 
     const manifest = JSON.parse(await readFile(join(workspace, bundleRel, 'manifest.json'), 'utf8'));
     assert.equal(manifest.restore.taskAttemptsRoot, `${bundleRel}/records/task-attempts/`);
+    assert.equal(manifest.restore.projectSessionLedgerRef, `${bundleRel}/ledger/events.jsonl`);
+    assert.equal(manifest.restore.currentProjectionRef, `${bundleRel}/projection/current.jsonl`);
+    assert.equal(manifest.layout.ledger, 'ledger/');
+    assert.equal(manifest.layout.projection, 'projection/');
     assert.ok(manifest.migrationChecklist.some((item: { id?: string }) => item.id === 'pack.generated-work'));
+    assert.ok(manifest.migrationChecklist.some((item: { id?: string }) => item.id === 'pack.project-session-memory'));
     assert.ok(manifest.migrationChecklist.some((item: { id?: string }) => item.id === 'restore.entrypoints'));
     assert.ok(manifest.migrationChecklist.some((item: { id?: string }) => item.id === 'audit.replay-evidence'));
 
     const report = await auditSessionBundle(workspace, bundleRel, new Date('2026-05-12T00:01:00.000Z'));
     assert.equal(report.ready, true);
     assert.equal(report.checklist.find((item) => item.id === 'pack.session-records')?.status, 'pass');
+    assert.equal(report.checklist.find((item) => item.id === 'pack.project-session-memory')?.status, 'pass');
     assert.equal(report.checklist.find((item) => item.id === 'audit.replay-evidence')?.status, 'warn');
 
     const written = await writeSessionBundleAudit(workspace, bundleRel, new Date('2026-05-12T00:02:00.000Z'));

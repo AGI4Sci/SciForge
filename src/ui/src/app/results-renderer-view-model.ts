@@ -10,7 +10,7 @@ import {
   type ResolvedViewPlanItem,
   type RuntimeResolvedViewPlan,
 } from './results/viewPlanResolver';
-import { runPresentationState, shouldOpenRunAuditDetails, type RunPresentationState } from './results-renderer-execution-model';
+import { runPresentationState, shouldDefaultOpenRunAuditDetails, shouldOpenRunAuditDetails, type RunPresentationState } from './results-renderer-execution-model';
 
 const deferredSectionOrder: ViewPlanSection[] = ['supporting', 'provenance', 'raw', 'primary'];
 
@@ -42,6 +42,7 @@ export type ResultsRendererViewModel = {
   deferredSections: ResultsRendererSectionModel[];
   emptyState?: ResultsRendererEmptyStateModel;
   auditOpen: boolean;
+  auditDefaultOpen: boolean;
   manifestDiagnostics: ResultsRendererManifestDiagnostic[];
 };
 
@@ -99,6 +100,7 @@ export function projectResultsRendererViewModel({
     deferredSections: projectDeferredSections(deferredItems),
     emptyState: planItems.length ? undefined : emptyResultsState(focusMode, dismissedAllInFilter, presentationState),
     auditOpen: shouldOpenRunAuditDetails(session, activeRun),
+    auditDefaultOpen: shouldDefaultOpenRunAuditDetails(session, activeRun),
     manifestDiagnostics: projectManifestDiagnostics(viewPlan.allItems),
   };
 }

@@ -9,8 +9,9 @@ const requiredDocs = [
   'docs/README.md',
   'docs/Usage.md',
   'docs/Architecture.md',
-  'docs/Extending.md',
-  'docs/SciForgeConversationSessionRecovery.md',
+  'docs/SciForge-SingleAgent-Architecture.md',
+  'docs/AgentHarnessStandard.md',
+  'docs/HarnessResearchGuide.md',
   'README.md',
 ];
 
@@ -22,15 +23,17 @@ for (const path of requiredDocs) {
 const docsIndex = await readFile('docs/README.md', 'utf8');
 assert.match(docsIndex, /\[`Usage\.md`\]\(Usage\.md\)/);
 assert.match(docsIndex, /\[`Architecture\.md`\]\(Architecture\.md\)/);
-assert.match(docsIndex, /\[`Extending\.md`\]\(Extending\.md\)/);
-assert.match(docsIndex, /\[`SciForgeConversationSessionRecovery\.md`\]\(SciForgeConversationSessionRecovery\.md\)/);
+assert.match(docsIndex, /\[`SciForge-SingleAgent-Architecture\.md`\]\(SciForge-SingleAgent-Architecture\.md\)/);
+assert.match(docsIndex, /\[`AgentHarnessStandard\.md`\]\(AgentHarnessStandard\.md\)/);
+assert.match(docsIndex, /\[`HarnessResearchGuide\.md`\]\(HarnessResearchGuide\.md\)/);
 
 const usageText = await readFile('docs/Usage.md', 'utf8');
 assert.match(usageText, /npm run dev/);
 const architectureText = await readFile('docs/Architecture.md', 'utf8');
 assert.match(architectureText, /\/api\/agent-server\/runs\/stream/);
-const extendingText = await readFile('docs/Extending.md', 'utf8');
-assert.match(extendingText, /\.sciforge\/scenarios\/<safe-id>/);
+const singleAgentText = await readFile('docs/SciForge-SingleAgent-Architecture.md', 'utf8');
+assert.match(singleAgentText, /Scenario package 只能是 policy/);
+assert.match(singleAgentText, /Core Conformance Suite/);
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-docs-scenario-'));
 const scenarioPackage = buildBuiltInScenarioPackage('literature-evidence-review', '2026-05-08T00:00:00.000Z');

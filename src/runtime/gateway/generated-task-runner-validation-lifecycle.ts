@@ -1,5 +1,7 @@
 import { writeFile } from 'node:fs/promises';
 import { relative, resolve, sep } from 'node:path';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 
 import type { ValidationFindingProjectionInput } from '@sciforge-ui/runtime-contract/validation-repair-audit';
 import type { GatewayRequest, SkillAvailability, TaskAttemptRecord, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceTaskRunResult, WorkspaceTaskSpec } from '../runtime-types.js';
@@ -528,19 +530,20 @@ export async function buildGeneratedTaskRunInputLifecycle(
         schemaVersion: 'sciforge.generated-task-helper.v1',
         moduleName: 'sciforge_task',
         helperRef: input.taskHelperRel,
-        importHint: 'from sciforge_task import load_input, write_payload, provider_route, has_ready_provider, require_provider_first',
+        importHint: 'from sciforge_task import load_input, write_payload, provider_route, has_ready_provider, require_provider_first, invoke_provider',
       },
       capabilityProviderRoutes: {
         requiredCapabilityIds: providerRoutes.requiredCapabilityIds,
         ok: providerRoutes.ok,
         routes: providerRoutes.routes,
       },
+      providerInvocation: providerInvocationForGeneratedTask(providerRoutes),
       capabilityFirstPolicy: {
         schemaVersion: 'sciforge.generated-task-capability-first.v1',
         policy: 'provider-first',
         rules: [
           'Import sciforge_task from the generated task entrypoint directory for input loading, ToolPayload writing, and provider route inspection.',
-          'When capabilityProviderRoutes declares a ready web_search or web_fetch route, use the provider route contract instead of direct external network calls.',
+          'When capabilityProviderRoutes declares a ready web_search or web_fetch route, call invoke_provider(task_input, capabilityId, input) instead of direct external network calls.',
           'Do not call requests, urllib, fetch, httpx, aiohttp, or Node http/https for web work that has a ready SciForge provider route.',
           'If a provider route is unavailable, empty, unauthorized, or rate limited, write an honest repair-needed or failed-with-reason ToolPayload with recoverActions.',
         ],
@@ -551,6 +554,73 @@ export async function buildGeneratedTaskRunInputLifecycle(
     },
     retentionProtectedInputRels: input.generatedInputRels,
   };
+}
+
+function providerInvocationForGeneratedTask(providerRoutes: ReturnType<typeof capabilityProviderRoutesForHandoff>) {
+  const adapters = providerRoutes.routes
+    .filter((route) => route.status === 'ready')
+    .map((route) => {
+      const provider = route.providers.find((candidate) => candidate.providerId === route.primaryProviderId) ?? route.providers[0];
+      const base = {
+        capabilityId: route.capabilityId,
+        providerId: route.primaryProviderId ?? provider?.providerId,
+        toolId: route.capabilityId,
+        status: route.status,
+      };
+      const endpoint = provider ? providerEndpoint(provider) : undefined;
+      if (endpoint) {
+        return {
+          ...base,
+          kind: 'http',
+          endpoint,
+          invokePath: provider?.invokePath ?? '/invoke',
+          timeoutMs: provider?.timeoutMs ?? 30000,
+        };
+      }
+      if (provider?.workerId === 'sciforge.web-worker' || /^sciforge\.web-worker\./.test(provider?.providerId ?? '')) {
+        const cli = localWebWorkerCliAdapter();
+        if (cli) {
+          return {
+            ...base,
+            kind: 'node-cli',
+            command: cli.command,
+            argsPrefix: [...cli.argsPrefix, 'invoke', route.capabilityId],
+            inputArg: 'json-last',
+            timeoutMs: provider?.timeoutMs ?? 30000,
+          };
+        }
+      }
+      return {
+        ...base,
+        kind: 'unavailable',
+        reason: 'No generated-task invocation adapter is registered for this provider.',
+      };
+    });
+  return {
+    schemaVersion: 'sciforge.generated-task-provider-invocation.v1',
+    adapters,
+  };
+}
+
+function providerEndpoint(provider: { endpoint?: unknown; baseUrl?: unknown; url?: unknown; invokeUrl?: unknown }) {
+  for (const value of [provider.invokeUrl, provider.endpoint, provider.baseUrl, provider.url]) {
+    if (typeof value === 'string' && /^https?:\/\//i.test(value)) return value.replace(/\/+$/, '');
+  }
+  return undefined;
+}
+
+function localWebWorkerCliAdapter() {
+  try {
+    const require = createRequire(import.meta.url);
+    const tsxLoader = require.resolve('tsx');
+    const cliPath = fileURLToPath(new URL('../../../packages/workers/web-worker/src/cli.ts', import.meta.url));
+    return {
+      command: process.execPath,
+      argsPrefix: ['--import', tsxLoader, resolve(cliPath)],
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 export async function appendGeneratedTaskGenerationFailureLifecycle(

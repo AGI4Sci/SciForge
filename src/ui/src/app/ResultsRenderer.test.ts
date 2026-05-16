@@ -219,9 +219,10 @@ test('hidden result slots are scoped to the active run when a run is selected', 
   const runA = {
     ...completedRun('run-a'),
     raw: {
+      resultPresentation: projectionResultPresentation('run-a', ['artifact:report-a']),
       uiManifest: [{ componentId: 'report-viewer', artifactRef: 'report', title: 'Report' }],
       artifacts: [{
-        id: 'report',
+        id: 'report-a',
         type: 'research-report',
         producerScenario: 'literature-evidence-review',
         schemaVersion: '1',
@@ -243,9 +244,10 @@ test('hidden result slots are scoped to the active run when a run is selected', 
   const runB = {
     ...completedRun('run-b'),
     raw: {
+      resultPresentation: projectionResultPresentation('run-b', ['artifact:report-b']),
       uiManifest: [{ componentId: 'report-viewer', artifactRef: 'report', title: 'Report' }],
       artifacts: [{
-        id: 'report',
+        id: 'report-b',
         type: 'research-report',
         producerScenario: 'literature-evidence-review',
         schemaVersion: '1',
@@ -312,8 +314,8 @@ test('ResultsRenderer empty completed run is presented as empty rather than read
 
   const html = renderResultsRenderer(session, { activeRunId: 'run-empty-artifacts' });
 
-  assert.match(html, /本轮没有生成可展示 artifact/);
-  assert.match(html, /没有 ConversationProjection 或可展示产物/);
+  assert.match(html, /主结果等待 ConversationProjection/);
+  assert.match(html, /结果区等待 Projection 声明可见状态与 ArtifactDelivery/);
   assert.doesNotMatch(html, /重新运行或要求生成可展示 artifact/);
   assert.doesNotMatch(html, /ready result/);
 });
@@ -569,7 +571,8 @@ test('ResultsRenderer does not let raw running progress drive the main summary w
 
   const html = renderResultsRenderer(session, { activeRunId: 'run-partial-first' });
 
-  assert.match(html, /本轮没有生成可展示 artifact/);
+  assert.match(html, /主结果等待 ConversationProjection/);
+  assert.match(html, /结果区等待 Projection 声明可见状态与 ArtifactDelivery/);
   assert.doesNotMatch(html, /report: Partial report/);
   assert.doesNotMatch(html, /已有部分结果，后台仍在继续/);
   assert.doesNotMatch(html, /当前阶段：stage fulltext · running|当前阶段：fulltext · running/);
@@ -852,11 +855,9 @@ test('ResultsRenderer explains missing ArtifactDelivery through the package empt
   };
   const html = renderResultsRenderer(session, { activeRunId: 'run-broken-report' });
 
-  assert.match(html, /Markdown report document/);
-  assert.match(html, /research-report · broken-report/);
-  assert.match(html, /Awaiting research-report/);
-  assert.match(html, /当前 artifact 没有通过 ArtifactDelivery 解析出 markdown PresentationInput/);
-  assert.match(html, /不声明消费 unsupported/);
+  assert.match(html, /主结果等待 ConversationProjection/);
+  assert.match(html, /结果区等待 Projection 声明可见状态与 ArtifactDelivery/);
+  assert.doesNotMatch(html, /Awaiting research-report/);
   assert.doesNotMatch(html, /contract drift: markdown was not produced/);
 });
 
@@ -881,7 +882,12 @@ test('ResultsRenderer falls back from mismatched manifest component to artifact-
   const session: SciForgeSession = {
     ...emptySession(),
     artifacts: [artifact],
-    runs: [completedRun('run-mismatch')],
+    runs: [{
+      ...completedRun('run-mismatch'),
+      raw: {
+        resultPresentation: projectionResultPresentation('run-mismatch', ['artifact:report-owned-artifact']),
+      },
+    }],
     uiManifest: [{
       componentId: 'paper-card-list',
       artifactRef: 'report-owned-artifact',
@@ -924,11 +930,18 @@ test('results renderer view model projects hidden result empty state and manifes
   const session: SciForgeSession = {
     ...emptySession(),
     artifacts: [artifact],
+    runs: [{
+      ...completedRun('run-view-model-report'),
+      raw: {
+        resultPresentation: projectionResultPresentation('run-view-model-report', ['artifact:report']),
+      },
+    }],
   };
   const initial = createResultsRendererViewModel({
     scenarioId: 'literature-evidence-review',
     session,
     defaultSlots: [],
+    activeRun: session.runs[0],
     focusMode: 'all',
   });
   assert.ok(initial.visibleItems.length > 0);
@@ -943,6 +956,7 @@ test('results renderer view model projects hidden result empty state and manifes
     scenarioId: 'literature-evidence-review',
     session: hiddenSession,
     defaultSlots: [],
+    activeRun: hiddenSession.runs[0],
     focusMode: 'all',
   });
 
@@ -1163,6 +1177,20 @@ function completedRun(id: string): SciForgeRun {
     response: 'completed',
     createdAt: '2026-05-09T00:00:00.000Z',
     completedAt: '2026-05-09T00:01:00.000Z',
+  };
+}
+
+function projectionResultPresentation(runId: string, artifactRefs: string[]) {
+  return {
+    conversationProjection: {
+      schemaVersion: 'sciforge.conversation-projection.v1',
+      runId,
+      visibleAnswer: { status: 'satisfied', text: 'Projection result ready.', artifactRefs },
+      artifacts: artifactRefs.map((ref) => ({ ref, label: ref.replace(/^artifact::?/, '') })),
+      executionProcess: [],
+      diagnostics: [],
+      auditRefs: [],
+    },
   };
 }
 

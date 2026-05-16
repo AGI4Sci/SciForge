@@ -254,9 +254,11 @@ const direct = await runWorkspaceRuntimeGateway({
     }],
   },
 }, { onEvent: (event) => directEvents.push(event) });
-assert.ok(directEvents.some((event) => event.type === 'direct-context-fast-path'));
-assert.match(direct.message, /不启动新的 workspace task/);
-assert.equal(direct.executionUnits.some((unit) => unit.tool === 'sciforge.direct-context-fast-path'), true);
+assert.equal(directEvents.some((event) => event.type === 'direct-context-fast-path'), false);
+assert.match(direct.message, /AgentServer task generation|AgentServer/);
+assert.equal(direct.executionUnits.some((unit) => unit.tool === 'sciforge.direct-context-fast-path'), false);
+assert.equal(direct.executionUnits.some((unit) => unit.tool === 'sciforge.workspace-runtime-gateway'), true);
+assert.equal(direct.executionUnits[0]?.status, 'repair-needed');
 assert.equal(direct.verificationResults?.[0]?.verdict, 'unverified');
 assert.equal((direct.displayIntent?.verification as { nonBlocking?: boolean } | undefined)?.nonBlocking, false);
 assert.equal(
@@ -299,12 +301,20 @@ const repairProvider = await runWorkspaceRuntimeGateway({
   },
 }, { onEvent: (event) => repairProviderEvents.push(event) });
 assert.equal(repairProviderEvents.some((event) => event.type === 'direct-context-fast-path'), false);
-assert.equal(repairProvider.claimType, 'capability-provider-preflight');
-assert.equal(repairProvider.executionUnits.some((unit) => unit.tool === 'sciforge.capability-provider-preflight'), true);
-assert.match(repairProvider.message, /web_search|web_fetch/);
+assert.equal(repairProvider.executionUnits.some((unit) => unit.tool === 'sciforge.capability-provider-preflight'), false);
+assert.equal(repairProvider.executionUnits.some((unit) => unit.tool === 'sciforge.workspace-runtime-gateway'), true);
+const repairRouteDecision = isRecord(repairProvider.executionUnits[0]?.routeDecision)
+  ? repairProvider.executionUnits[0].routeDecision
+  : {};
+const repairProviderRoutes = Array.isArray(repairRouteDecision.capabilityProviderRoutes)
+  ? repairRouteDecision.capabilityProviderRoutes.filter(isRecord)
+  : [];
+assert.equal(repairProviderRoutes.some((route) => route.capabilityId === 'web_search'), true);
+assert.equal(repairProviderRoutes.some((route) => route.capabilityId === 'web_fetch'), true);
+assert.match(repairProvider.message, /AgentServer task generation|AgentServer/);
 assert.doesNotMatch(repairProvider.message, /Tool\/provider status answered/);
 
-console.log('[ok] T098 latency diagnostics matrix covers Python-owned policy fields, TS pass-through, cache hit/miss telemetry, waits, silent-stream timing, background duration, and repair provider-route fast-path regression without external providers');
+console.log('[ok] T098 latency diagnostics matrix covers Python-owned policy fields, TS pass-through, cache hit/miss telemetry, waits, silent-stream timing, background duration, and final-runtime AgentServer routing without direct-context/preflight result shortcuts');
 
 function callPythonPolicy(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
   return new Promise((resolvePromise, reject) => {

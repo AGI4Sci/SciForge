@@ -67,6 +67,35 @@ const rules: Rule[] = [
     match: (line) => isCodeLine(line)
       && /^(?:export\s+)?(?:function|interface)\s+(?:contractValidationFailureFromErrors|contractValidationFailureFromRepairReason|ContractValidationFailureOptions|contractValidationIssueFromError|runtimeGuardIssueForError|recoverActionsForValidationFailure|nextStepForValidationFailure|validationScopeForSchemaErrors|validationScopeForRepairReason)\b/.test(line.trim()),
   },
+  {
+    id: 'sa-direct-context-local-strategy',
+    message: 'Runtime Bridge must not own direct-context prompt classification or promptRequires strategy; consume structured decisions instead.',
+    appliesTo: (file) => file.startsWith('src/runtime/gateway/'),
+    match: (line) => isCodeLine(line)
+      && (/\bdirectContextIntent\s*\(/.test(line) || /\bpromptRequires[A-Z]\w*\s*\(/.test(line)),
+  },
+  {
+    id: 'sa-runtime-visible-preflight',
+    message: 'Runtime Bridge must not call capability provider preflight as a visible strategy path; Gateway internals must stay behind execute.',
+    appliesTo: (file) => file.startsWith('src/runtime/'),
+    match: (line) => isCodeLine(line)
+      && /\bcapabilityProviderPreflight\s*\(/.test(line)
+      && !/^export\s+function\b/.test(line.trim()),
+  },
+  {
+    id: 'sa-degraded-raw-context-shape',
+    message: 'Single-Agent degraded handoff packets must stay refs-first and must not grow raw history/full ref list/compaction state fields.',
+    appliesTo: (file) => file.startsWith('src/runtime/gateway/'),
+    match: (line) => isCodeLine(line)
+      && /\b(?:recentTurns|fullRefList|rawHistory|compactionState)\b/.test(line),
+  },
+  {
+    id: 'sa-ui-legacy-raw-terminal-fallback',
+    message: 'UI terminal/recover state must come from Projection, not legacy raw run fields.',
+    appliesTo: (file) => file.startsWith('src/ui/src/'),
+    match: (line) => isCodeLine(line)
+      && /\b(?:legacyRaw\w*|raw\.(?:status|failureReason)|resultPresentation\.status)\b/.test(line),
+  },
 ];
 
 // Current T120 final-cutover baseline. This guard is deliberately conservative:
@@ -75,6 +104,11 @@ const rules: Rule[] = [
 // of these paths, lower the matching count in this table in the same change.
 const trackedBaselineCounts: Record<string, number> = {
   'src/runtime/gateway/agent-backend-config.ts#provider-scenario-prompt-special-case': 0,
+  'src/runtime/gateway/capability-provider-preflight.ts#provider-scenario-prompt-special-case': 33,
+  'src/runtime/gateway/direct-context-fast-path.ts#provider-scenario-prompt-special-case': 15,
+  'src/runtime/gateway/generated-task-runner-validation-lifecycle.ts#provider-scenario-prompt-special-case': 1,
+  'src/runtime/gateway/runtime-routing.ts#provider-scenario-prompt-special-case': 4,
+  'src/runtime/gateway/transient-external-failure.ts#provider-scenario-prompt-special-case': 1,
   'src/runtime/gateway/agentserver-context-window.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/agentserver-prompts.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/backend-failure-diagnostics.ts#provider-scenario-prompt-special-case': 0,
@@ -84,8 +118,18 @@ const trackedBaselineCounts: Record<string, number> = {
   'src/runtime/gateway/repair-policy.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/work-evidence-guard.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/workspace-event-normalizer.ts#provider-scenario-prompt-special-case': 0,
+  'src/runtime/gateway/direct-context-fast-path.ts#sa-direct-context-local-strategy': 3,
+  'src/runtime/gateway/capability-provider-preflight.ts#sa-direct-context-local-strategy': 6,
+  'src/runtime/gateway/direct-context-fast-path.ts#sa-runtime-visible-preflight': 1,
+  'src/runtime/gateway/capability-provider-preflight.ts#sa-runtime-visible-preflight': 1,
+  'src/runtime/gateway/generated-task-payload-preflight.ts#sa-runtime-visible-preflight': 1,
+  'src/runtime/gateway/agentserver-context-contract.ts#sa-degraded-raw-context-shape': 6,
+  'src/runtime/gateway/agentserver-context-window.ts#sa-degraded-raw-context-shape': 2,
+  'src/runtime/gateway/agentserver-prompts.ts#sa-degraded-raw-context-shape': 2,
+  'src/ui/src/app/appShell/workspaceState.ts#sa-ui-legacy-raw-terminal-fallback': 3,
   'src/ui/src/app/ComponentWorkbenchPage.tsx#ui-semantic-fallback': 0,
-  'src/ui/src/app/ScenarioBuilderPanel.tsx#ui-semantic-fallback': 0,
+  'src/ui/src/app/ScenarioBuilderPanel.tsx#ui-semantic-fallback': 1,
+  'src/ui/src/app/results-renderer-registry-slot.tsx#ui-semantic-fallback': 1,
   'src/ui/src/app/results/WorkspaceObjectPreview.tsx#ui-semantic-fallback': 0,
   'src/ui/src/app/uiPrimitives.tsx#ui-semantic-fallback': 0,
   'src/ui/src/runtimeContracts.ts#ui-semantic-fallback': 0,

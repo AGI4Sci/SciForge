@@ -19,6 +19,12 @@ export interface CapabilityProviderRoute {
     transport?: CapabilityProviderManifest['transport'];
     workerId?: string;
     runtimeLocation?: string;
+    endpoint?: string;
+    baseUrl?: string;
+    url?: string;
+    invokeUrl?: string;
+    invokePath?: string;
+    timeoutMs?: number;
     healthStatus: CapabilityProviderRoute['status'] | 'unknown';
     permissions: string[];
     requiredConfig: string[];
@@ -37,6 +43,12 @@ type ProviderAvailability = {
   available: boolean;
   status?: CapabilityProviderRoute['status'];
   reason?: string;
+  endpoint?: string;
+  baseUrl?: string;
+  url?: string;
+  invokeUrl?: string;
+  invokePath?: string;
+  timeoutMs?: number;
 };
 
 const REQUIRED_BY_TOOL_ID: Record<string, string[]> = {
@@ -267,6 +279,12 @@ function resolveCapabilityRoute(request: GatewayRequest, capabilityId: string): 
     transport: provider.provider.transport,
     workerId: provider.provider.workerId,
     runtimeLocation: provider.provider.runtimeLocation,
+    endpoint: provider.endpoint,
+    baseUrl: provider.baseUrl,
+    url: provider.url,
+    invokeUrl: provider.invokeUrl,
+    invokePath: provider.invokePath,
+    timeoutMs: provider.timeoutMs,
     healthStatus: provider.status,
     permissions: provider.provider.permissions ?? [],
     requiredConfig: provider.provider.requiredConfig,
@@ -302,6 +320,12 @@ function providerCandidates(request: GatewayRequest, manifest: CapabilityManifes
     const status = providerStatus(provider, override);
     return {
       provider,
+      endpoint: override?.endpoint,
+      baseUrl: override?.baseUrl,
+      url: override?.url,
+      invokeUrl: override?.invokeUrl,
+      invokePath: override?.invokePath,
+      timeoutMs: override?.timeoutMs,
       status,
       reason: override?.reason ?? providerStatusReason(provider, status),
     };
@@ -342,6 +366,12 @@ function providerAvailabilityById(request: GatewayRequest) {
       available,
       status: normalizeRouteStatus(stringField(row.status) ?? stringField(row.health)),
       reason: stringField(row.reason) ?? stringField(row.detail),
+      endpoint: stringField(row.endpoint),
+      baseUrl: stringField(row.baseUrl),
+      url: stringField(row.url),
+      invokeUrl: stringField(row.invokeUrl),
+      invokePath: stringField(row.invokePath),
+      timeoutMs: numberField(row.timeoutMs),
     });
   }
   return map;
@@ -361,6 +391,12 @@ function providerAvailabilityRowsFromToolProviderRoutes(value: unknown): Array<R
         providerId: primaryProviderId,
         capabilityId: stringField(route.capabilityId),
         source: stringField(route.source),
+        endpoint: stringField(route.endpoint),
+        baseUrl: stringField(route.baseUrl),
+        url: stringField(route.url),
+        invokeUrl: stringField(route.invokeUrl),
+        invokePath: stringField(route.invokePath),
+        timeoutMs: numberField(route.timeoutMs),
         available,
         status,
         reason: 'Configured by scenario tool provider route.',
@@ -370,6 +406,12 @@ function providerAvailabilityRowsFromToolProviderRoutes(value: unknown): Array<R
         providerId,
         capabilityId: stringField(route.capabilityId),
         source: stringField(route.source),
+        endpoint: stringField(route.endpoint),
+        baseUrl: stringField(route.baseUrl),
+        url: stringField(route.url),
+        invokeUrl: stringField(route.invokeUrl),
+        invokePath: stringField(route.invokePath),
+        timeoutMs: numberField(route.timeoutMs),
         available,
         status,
         reason: 'Configured as scenario tool provider fallback.',
@@ -405,6 +447,10 @@ function normalizeRouteStatus(value: string | undefined): CapabilityProviderRout
 
 function stringField(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function numberField(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function toStringList(value: unknown) {

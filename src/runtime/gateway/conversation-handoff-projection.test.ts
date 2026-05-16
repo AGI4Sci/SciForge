@@ -21,6 +21,10 @@ test('explicit reference filters stale messages and runs', () => {
 
   assert.deepEqual(plan.recentConversation.map((message) => message.id), ['m-current']);
   assert.deepEqual(plan.recentRuns.map((run) => run.id), ['r-current']);
+  assert.equal(plan.authority, 'workspace-project-session-memory');
+  assert.equal(plan.projectSessionMemory.schemaVersion, 'sciforge.project-session-ledger-projection.v1');
+  assert.ok(plan.contextProjectionBlocks.some((block) => block.kind === 'index'));
+  assert.ok(plan.contextRefs.some((ref) => String(ref).startsWith('ledger-event:')));
   assert.deepEqual(
     plan.pollutionGuard.excludedHistory,
     [
@@ -37,6 +41,7 @@ test('continuation keeps recent conversation and repair keeps failed runs withou
   });
   assert.equal(continuePlan.mode, 'continue');
   assert.equal(continuePlan.recentConversation[0].id, 'm1');
+  assert.ok(continuePlan.stablePrefixHash.startsWith('sha256:'));
   assert.deepEqual(continuePlan.pollutionGuard.excludedHistory, []);
 
   const repairPlan = buildConversationHandoffMemoryProjection({
@@ -49,6 +54,8 @@ test('continuation keeps recent conversation and repair keeps failed runs withou
     },
   });
   assert.deepEqual(repairPlan.recentRuns.map((run) => run.id), ['r-fail']);
+  assert.ok(Array.isArray(repairPlan.projectSessionMemory.failureIndex));
+  assert.ok(repairPlan.projectSessionMemory.failureIndex.length >= 1);
   assert.doesNotMatch(String(repairPlan.recentRuns[0].summary), /data:image/);
   assert.doesNotMatch(String(repairPlan.recentRuns[0].summary), /;base64,/);
 });

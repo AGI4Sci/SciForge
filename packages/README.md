@@ -2,7 +2,7 @@
 
 该目录包含 SciForge 的可复用能力、共享契约、worker/provider 和运行时支持包。
 
-新增或修改 package 前，先对照 [`../docs/Architecture.md`](../docs/Architecture.md) 的 Capability、Provider、Runtime Resolver 和 `src`/`packages` 边界。这里的核心原则是两条轴同时成立：
+新增或修改 package 前，先对照 [`../docs/Architecture.md`](../docs/Architecture.md) 的 Capability、Provider、Runtime Resolver 和 `src`/`packages` 边界；Single-Agent runtime contract 以 [`../docs/SciForge-SingleAgent-Architecture.md`](../docs/SciForge-SingleAgent-Architecture.md) 为准。这里的核心原则是两条轴同时成立：
 
 - 行为边界回答“能力在 agent loop 中扮演什么角色”：`observe`、`actions`、`verifiers`、`presentation`、`skills`。
 - 执行边界回答“在哪里运行、怎么运行”：每个可搬运执行包必须声明 worker/provider manifest；worker 可以内嵌在 1:1 能力包中，也可以在 `packages/workers` 中独立发布。
@@ -17,13 +17,13 @@
 - 跨多个 capability、需要独立部署生命周期的执行包进入 `packages/workers`。
 - 共享 capability/worker 协议进入 `packages/contracts`。
 
-如果迁移旧目录中的能力，先给目标 package 补 capability manifest、schema、validator、README 和 worker/provider manifest，再把调用方切到稳定 package entrypoint。只有旧 facade 或 adapter 真的删除后，才降低 `smoke:no-legacy-paths` baseline，并在 [`../docs/legacy-cutover-inventory.md`](../docs/legacy-cutover-inventory.md) 记录证据。
+如果迁移旧目录中的能力，先给目标 package 补 capability manifest、schema、validator、README 和 worker/provider manifest，再把调用方切到稳定 package entrypoint。只有旧 facade 或 adapter 真的删除后，才降低 `smoke:no-legacy-paths` baseline，并在同一变更中记录 owner、truth source、删除条件和 smoke 证据。
 
 ## Package 边界
 
 新增模块先判断边界：
 
-当前 `src` 固定平台与 `packages` 插拔能力清单见 [`../docs/boundary-inventory.md`](../docs/boundary-inventory.md)，机器可读来源是 [`../tools/check-boundary-inventory.ts`](../tools/check-boundary-inventory.ts)。package 新增或迁移前先确认 inventory 中已有对应能力类别；如果没有，先补清单和对应 checks，再扩展实现。
+当前 `src` 固定平台与 `packages` 插拔能力清单由 [`../tools/check-boundary-inventory.ts`](../tools/check-boundary-inventory.ts) 输出并验证。package 新增或迁移前先确认 inventory 中已有对应能力类别；如果没有，先补清单和对应 checks，再扩展实现。
 
 - 属于平台秩序的逻辑进入 `src/`：lifecycle、loading、routing shell、provider dispatch、validation/repair loop、workspace refs、artifact persistence、global safety 和 app/runtime orchestration。
 - 属于能力语义的逻辑进入 `packages/`：capability manifest、schema、validator、examples、repair hints、scenario/view/skill policy 和 composed capability。
@@ -61,6 +61,7 @@
 - `worker/provider manifest`：worker id/version/protocol、provider ids、capability ids、transport、endpoint/command、auth、permissions、workspace roots、fallback eligibility 和 release channel。
 - `health`：liveness/readiness、依赖、授权、quota/rate-limit 和最近失败。
 - `invoke`：结构化 request/result envelope，失败必须带 provider-neutral failure code、recover actions 和 diagnostics。
+- `generated task provider invocation layer`：如果该 provider 可能被 AgentServer 生成的 Python/R/shell task 使用，必须声明 generated task 可执行的调用桥，而不只是 manifest 中的 provider id。至少要给 runtime 足够信息生成 `providerInvocation` adapter（例如 HTTP endpoint + invokePath，或受控本地 CLI/command adapter），并在示例中展示通过 `sciforge_task.invoke_provider(task_input, capabilityId, input)` 调用。不要只写“必须使用 provider route”却不给 generated task 可执行 API。
 - `smoke`：manifest discovery、health、invoke、permission denied、rate-limit、empty-result 和 fallback route trace。
 - `README`：本机运行、复制到远程机器、环境变量、端口、权限和版本兼容说明。
 
@@ -110,6 +111,7 @@ Verify 是闭环的必要阶段，但 verifier 的类型和强度可按风险选
 - 会产生副作用的执行资源放在 `actions`，并带 approval、trace、sandbox、rollback 和 safety guard。
 - 1:1 capability/provider 默认合并在对应能力包中；1:N worker 或 N:1 provider matrix 才拆到 `packages/workers`。
 - 关键 observe provider、安全敏感 action、长时间 workflow 或高成本能力使用 native runtime adapter。
+- 任何 provider-first 能力如果会进入 generated task 路径，都必须同时提供 `providerInvocation` 接入方式；否则模型只能知道“不能直接调用外网/本地工具”，却无法在生成脚本中完成真实调用。
 
 agent 应先接收紧凑的 capability brief，然后只懒加载被选中 package 的详细契约或 `SKILL.md`。
 

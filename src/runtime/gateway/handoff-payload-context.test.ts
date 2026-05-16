@@ -88,7 +88,14 @@ test('harness-projected verification policy and result enter the next-turn conte
     reason: verificationPolicy?.reason,
     selectedVerifierIds: verificationPolicy?.selectedVerifierIds,
   }, common.verificationPolicy);
-  assert.deepEqual(envelope.sessionFacts.verificationResult, verificationResult);
+  const projectedVerificationResult = envelope.sessionFacts.verificationResult as Record<string, unknown>;
+  assert.deepEqual({
+    id: projectedVerificationResult.id,
+    verdict: projectedVerificationResult.verdict,
+    confidence: projectedVerificationResult.confidence,
+    evidenceRefs: projectedVerificationResult.evidenceRefs,
+    repairHints: projectedVerificationResult.repairHints,
+  }, verificationResult);
   assert.ok(envelope.longTermRefs.verificationResults?.some((entry) => (entry as Record<string, unknown>).id === 'verify-1'));
 });
 

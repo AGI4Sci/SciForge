@@ -820,6 +820,9 @@ export function buildAgentServerGenerationPrompt(request: {
       : undefined;
   const capabilityBrokerRouteSummary = compactCapabilityBrokerRouteSummary(capabilityBrokerBrief);
   const promptRenderPlanSummary = promptRenderPlanSummaryForAgentServer(request, contextEnvelope, sessionFacts);
+  const projectSessionProjection = isRecord(sessionFacts.handoffMemoryProjection)
+    ? compactProjectSessionMemoryProjectionForPrompt(sessionFacts.handoffMemoryProjection)
+    : undefined;
   const currentTurnSnapshot = {
     kind: 'SciForgeCurrentTurnSnapshot',
     prompt: request.prompt,
@@ -841,6 +844,7 @@ export function buildAgentServerGenerationPrompt(request: {
     promptRenderPlanSummary,
     currentReferences: Array.isArray(sessionFacts.currentReferences) ? sessionFacts.currentReferences : undefined,
     currentReferenceDigests: Array.isArray(sessionFacts.currentReferenceDigests) ? sessionFacts.currentReferenceDigests : undefined,
+    projectSessionMemory: projectSessionProjection,
     strictTaskFilesReason: request.strictTaskFilesReason,
     repairContinuation: request.repairContinuation ? {
       mode: 'minimal-single-stage-repair-continuation',
@@ -1039,6 +1043,53 @@ function compactCapabilityBriefForPrompt(brief: Record<string, unknown>) {
       limits: clipForAgentServerPrompt(budget.limits, 120),
     },
     excluded: clipForAgentServerPrompt(brief.excluded, 180),
+  };
+}
+
+function compactProjectSessionMemoryProjectionForPrompt(value: Record<string, unknown>) {
+  const projectSessionMemory = isRecord(value.projectSessionMemory) ? value.projectSessionMemory : {};
+  return {
+    schemaVersion: stringField(value.schemaVersion),
+    authority: stringField(value.authority),
+    mode: stringField(value.mode),
+    projectSessionMemory: {
+      schemaVersion: stringField(projectSessionMemory.schemaVersion),
+      sessionId: stringField(projectSessionMemory.sessionId),
+      eventCount: typeof projectSessionMemory.eventCount === 'number' ? projectSessionMemory.eventCount : undefined,
+      refCount: typeof projectSessionMemory.refCount === 'number' ? projectSessionMemory.refCount : undefined,
+      eventIndex: toRecordList(projectSessionMemory.eventIndex).slice(-16).map((entry) => ({
+        eventId: stringField(entry.eventId),
+        kind: stringField(entry.kind),
+        runId: stringField(entry.runId),
+        summary: clipForAgentServerPrompt(entry.summary, 220),
+        refs: toStringList(entry.refs).slice(0, 6),
+      })),
+      refIndex: toRecordList(projectSessionMemory.refIndex).slice(-24).map((entry) => ({
+        ref: stringField(entry.ref),
+        kind: stringField(entry.kind),
+        digest: stringField(entry.digest),
+        sizeBytes: typeof entry.sizeBytes === 'number' ? entry.sizeBytes : undefined,
+        producerRunId: stringField(entry.producerRunId),
+      })),
+      failureIndex: toRecordList(projectSessionMemory.failureIndex).slice(-8).map((entry) => ({
+        eventId: stringField(entry.eventId),
+        runId: stringField(entry.runId),
+        summary: clipForAgentServerPrompt(entry.summary, 220),
+        refs: toStringList(entry.refs).slice(0, 6),
+      })),
+    },
+    stablePrefixHash: stringField(value.stablePrefixHash),
+    contextProjectionBlocks: toRecordList(value.contextProjectionBlocks).slice(0, 8).map((block) => ({
+      blockId: stringField(block.blockId),
+      kind: stringField(block.kind),
+      sha256: stringField(block.sha256),
+      cacheTier: stringField(block.cacheTier),
+      tokenEstimate: typeof block.tokenEstimate === 'number' ? block.tokenEstimate : undefined,
+      sourceEventIds: toStringList(block.sourceEventIds).slice(0, 12),
+    })),
+    selectedContextRefs: toStringList(value.selectedContextRefs).slice(0, 24),
+    contextRefs: toStringList(value.contextRefs).slice(0, 48),
+    retrievalTools: toStringList(value.retrievalTools).slice(0, 8),
   };
 }
 

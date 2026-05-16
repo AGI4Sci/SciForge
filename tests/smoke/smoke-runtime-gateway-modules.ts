@@ -133,7 +133,7 @@ try {
   assert.deepEqual(envelope.scenarioFacts.expectedArtifactTypes, ['research-report', 'paper-list']);
   const sessionFacts = envelope.sessionFacts as Record<string, unknown>;
   assert.equal(sessionFacts.conversationLedger, undefined);
-  assert.equal((sessionFacts.handoffMemoryProjection as Record<string, unknown> | undefined)?.authority, 'SciForge projection only; AgentServer owns recall');
+  assert.equal((sessionFacts.handoffMemoryProjection as Record<string, unknown> | undefined)?.authority, 'workspace ledger/ref store is canonical truth; AgentServer orchestrates context');
   assert.equal((sessionFacts.contextReusePolicy as Record<string, unknown> | undefined)?.mode, 'continue');
 
   await mkdir(dirname(join(workspace, '.sciforge/task-results/report.md')), { recursive: true });
@@ -282,6 +282,7 @@ try {
     selectedSkill: 'agentserver.generation.literature',
     selectedRuntime: 'agentserver-generation',
     fallbackReason: 'smoke fallback',
+    capabilityProviderRoutes: [],
     selectedAt: routingRefs.routeDecision.selectedAt,
   });
   assert.equal(typeof routingRefs.routeDecision.selectedAt, 'string');

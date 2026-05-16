@@ -133,7 +133,7 @@ test('completed run does not promote bare file object references as main artifac
   assert.equal(items.some((item) => item.input?.ref === '.sciforge/sessions/session/task-results/generated-report.md'), false);
 });
 
-test('completed run promotes delivery-backed artifacts as main results', () => {
+test('completed run without projection does not promote delivery-backed artifacts as main results', () => {
   const completedRun: SciForgeRun = {
     id: 'run-delivery-artifact',
     scenarioId: 'literature-evidence-review',
@@ -156,8 +156,9 @@ test('completed run promotes delivery-backed artifacts as main results', () => {
   const plan = resolveViewPlan({ scenarioId: 'literature-evidence-review', session, activeRun: completedRun, defaultSlots: [] });
   const items = itemsForFocusMode(plan, 'all');
 
-  assert.equal(items.some((item) => item.input?.kind === 'markdown'), true);
-  assert.equal(items.some((item) => item.input?.ref === '.sciforge/sessions/session/task-results/generated-report.md'), true);
+  assert.equal(items.some((item) => item.input?.kind === 'markdown'), false);
+  assert.equal(items.some((item) => item.input?.ref === '.sciforge/sessions/session/task-results/generated-report.md'), false);
+  assert.equal(plan.allItems.length, 0);
 });
 
 test('failed active run without projection keeps runtime diagnostic artifacts out of the main plan', () => {
@@ -211,7 +212,7 @@ test('failed active run without projection keeps runtime diagnostic artifacts ou
   assert.ok(plan.diagnostics.some((line) => line.includes('没有 ConversationProjection')));
 });
 
-test('fallback display intent keeps artifact order instead of reading prompt semantics', () => {
+test('projectionless display intent waits instead of inferring from artifacts or prompt semantics', () => {
   const matrix: RuntimeArtifact = deliveryArtifact({
     id: 'matrix-result',
     type: 'expression-matrix',
@@ -241,9 +242,10 @@ test('fallback display intent keeps artifact order instead of reading prompt sem
 
   const plan = resolveViewPlan({ scenarioId: 'literature-evidence-review', session, activeRun, defaultSlots: [] });
 
-  assert.deepEqual(plan.displayIntent.requiredArtifactTypes, ['expression-matrix', 'research-report']);
-  assert.equal(plan.displayIntent.primaryGoal, '展示当前 session 的 runtime artifacts');
-  assert.equal(plan.displayIntent.source, 'fallback-inference');
+  assert.deepEqual(plan.displayIntent.requiredArtifactTypes, []);
+  assert.equal(plan.displayIntent.primaryGoal, '等待 ConversationProjection');
+  assert.equal(plan.displayIntent.source, 'runtime-artifact');
+  assert.equal(plan.allItems.length, 0);
 });
 
 test('active run presentation scopes artifacts to that run', () => {
@@ -287,7 +289,7 @@ test('active run presentation scopes artifacts to that run', () => {
 
   const plan = resolveViewPlan({ scenarioId: 'literature-evidence-review', session, activeRun: oldRun, defaultSlots: [] });
 
-  assert.equal(plan.allItems.some((item) => item.artifact?.id === 'old-report'), true);
+  assert.equal(plan.allItems.some((item) => item.artifact?.id === 'old-report'), false);
   assert.equal(plan.allItems.some((item) => item.artifact?.id === 'new-report'), false);
 });
 
@@ -331,8 +333,9 @@ test('display intent and UI manifest selection outrank artifact type wording dur
 
   const plan = resolveViewPlan({ scenarioId: 'literature-evidence-review', session, activeRun, defaultSlots: [] });
 
-  assert.equal(plan.allItems.some((item) => item.artifact?.id === 'backend-selected-pdb'), true);
+  assert.equal(plan.allItems.some((item) => item.artifact?.id === 'backend-selected-pdb'), false);
   assert.equal(plan.allItems.some((item) => item.artifact?.id === 'semantic-looking-html'), false);
+  assert.equal(plan.allItems.length, 0);
 });
 
 test('raw result presentation artifact actions are audit-only without projection', () => {
@@ -367,9 +370,9 @@ test('raw result presentation artifact actions are audit-only without projection
   const plan = resolveViewPlan({ scenarioId: 'literature-evidence-review', session, activeRun, defaultSlots: [] });
   const displayIntentItems = plan.allItems.filter((item) => item.source === 'display-intent');
 
-  assert.equal(plan.displayIntent.primaryGoal, '展示当前 session 的 runtime artifacts');
-  assert.deepEqual(plan.displayIntent.requiredArtifactTypes, ['research-report']);
-  assert.equal(displayIntentItems.some((item) => item.artifact?.id === 'analysis-report'), true);
+  assert.equal(plan.displayIntent.primaryGoal, '等待 ConversationProjection');
+  assert.deepEqual(plan.displayIntent.requiredArtifactTypes, []);
+  assert.equal(displayIntentItems.some((item) => item.artifact?.id === 'analysis-report'), false);
   assert.equal(displayIntentItems.some((item) => item.slot.title === 'Open analysis report'), false);
   assert.ok(plan.diagnostics.some((line) => line.includes('没有 ConversationProjection')));
 });
@@ -531,10 +534,8 @@ test('raw result presentation chart revisions do not create multiple main plan i
   const plan = resolveViewPlan({ scenarioId: 'omics-differential-exploration', session, activeRun, defaultSlots: [] });
   const chartItems = plan.allItems.filter((item) => item.source === 'display-intent' && item.artifact?.id === 'base-plot');
 
-  assert.equal(chartItems.length, 1);
-  assert.equal(chartItems[0]?.slot.title, 'Scientific plot viewer');
-  assert.equal(chartItems[0]?.slot.encoding, undefined);
-  assert.equal(chartItems[0]?.slot.transform, undefined);
+  assert.equal(chartItems.length, 0);
+  assert.equal(plan.allItems.length, 0);
   assert.ok(plan.diagnostics.some((line) => line.includes('没有 ConversationProjection')));
 });
 
@@ -620,16 +621,16 @@ test('result presentation artifact actions keep active run scope across mixed ar
   const visualItems = itemsForFocusMode(plan, 'visual');
 
   assert.equal(allItems.some((item) => item.artifact?.id === 'new-report'), false);
-  assert.ok(allItems.some((item) => item.artifact?.id === 'old-papers'));
-  assert.ok(allItems.some((item) => item.artifact?.id === 'old-report'));
-  assert.ok(allItems.some((item) => item.artifact?.id === 'old-diagnostic'));
-  assert.ok(allItems.some((item) => item.artifact?.id === 'old-verification'));
+  assert.equal(allItems.some((item) => item.artifact?.id === 'old-papers'), false);
+  assert.equal(allItems.some((item) => item.artifact?.id === 'old-report'), false);
+  assert.equal(allItems.some((item) => item.artifact?.id === 'old-diagnostic'), false);
+  assert.equal(allItems.some((item) => item.artifact?.id === 'old-verification'), false);
   assert.deepEqual(
     allItems.filter((item) => item.source === 'display-intent').map((item) => item.artifact?.id),
-    ['old-report', 'old-papers', 'old-diagnostic', 'old-verification'],
+    [],
   );
   assert.equal(visualItems.some((item) => item.artifact?.id === 'new-report'), false);
-  assert.ok(visualItems.some((item) => item.artifact?.id === 'old-report'));
+  assert.equal(visualItems.some((item) => item.artifact?.id === 'old-report'), false);
 });
 
 test('raw required artifact type is ignored without projection', () => {
@@ -664,8 +665,8 @@ test('raw required artifact type is ignored without projection', () => {
   const plan = resolveViewPlan({ scenarioId: 'literature-evidence-review', session, activeRun, defaultSlots: [] });
   const displayIntentItems = plan.allItems.filter((item) => item.source === 'display-intent');
 
-  assert.deepEqual(plan.displayIntent.requiredArtifactTypes, ['pdb-file']);
-  assert.equal(displayIntentItems.some((item) => item.artifact?.id === 'pdb-result'), true);
+  assert.deepEqual(plan.displayIntent.requiredArtifactTypes, []);
+  assert.equal(displayIntentItems.some((item) => item.artifact?.id === 'pdb-result'), false);
   assert.ok(plan.diagnostics.some((line) => line.includes('没有 ConversationProjection')));
 });
 
@@ -713,7 +714,8 @@ test('artifact delivery audit-only refs stay out of primary projection result pl
     response: 'Done',
     createdAt: '2026-05-07T00:00:01.000Z',
     raw: {
-      restoredConversationProjection: {
+      resultPresentation: {
+        conversationProjection: {
         schemaVersion: 'sciforge.conversation-projection.v1',
         runId: 'run-delivery',
         visibleAnswer: { status: 'satisfied', text: 'Report ready', artifactRefs: ['artifact:readable-report', 'artifact:raw-payload'] },
@@ -724,6 +726,7 @@ test('artifact delivery audit-only refs stay out of primary projection result pl
         executionProcess: [],
         diagnostics: [],
         auditRefs: ['artifact:raw-payload'],
+        },
       },
     },
   };

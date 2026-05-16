@@ -10,7 +10,7 @@ describe('artifact intent', () => {
       selectedComponentIds: ['graph-viewer', 'structure-viewer', 'evidence-matrix'],
     });
 
-    assert.deepEqual(new Set(artifacts), new Set(['paper-list', 'evidence-matrix', 'structure-summary', 'knowledge-graph']));
+    assert.deepEqual(new Set(artifacts), new Set(['evidence-matrix', 'structure-summary', 'knowledge-graph']));
   });
 
   it('does not expand component compatibility aliases into required artifacts', () => {

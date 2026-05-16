@@ -1,3 +1,11 @@
+import {
+  compileContextProjection,
+  normalizeProjectSessionMemory,
+  type ContextProjectionBlock,
+  type ProjectMemoryRef,
+  type ProjectSessionEvent,
+} from '../project-session-memory.js';
+
 export const CONVERSATION_HANDOFF_PROJECTION_SCHEMA_VERSION = 'sciforge.conversation.handoff-memory-projection.v1' as const;
 
 type JsonMap = Record<string, unknown>;
@@ -6,10 +14,16 @@ const INLINE_IMAGE_PAYLOAD = /data:image|;base64,/gi;
 
 export interface ConversationHandoffMemoryProjection {
   schemaVersion: typeof CONVERSATION_HANDOFF_PROJECTION_SCHEMA_VERSION;
+  authority: 'workspace-project-session-memory';
   mode: string;
+  projectSessionMemory: JsonMap;
+  contextProjectionBlocks: ContextProjectionBlock[];
+  stablePrefixHash: string;
+  contextRefs: string[];
+  selectedContextRefs: string[];
+  retrievalTools: string[];
   recentConversation: JsonMap[];
   recentRuns: JsonMap[];
-  conversationLedger: JsonMap[];
   currentReferenceFocus: string[];
   pollutionGuard: JsonMap;
 }
@@ -25,20 +39,108 @@ export function buildConversationHandoffMemoryProjection(request: unknown): Conv
   const messages = arrayValue(session.messages);
   const runs = arrayValue(session.runs);
   const mode = textValue(policy.mode) || 'isolate';
+  const sessionId = textValue(session.sessionId)
+    || textValue(data.sessionId)
+    || textValue(data.requestId)
+    || 'session-unknown';
+  const projectSession = normalizeProjectSessionMemory({
+    session,
+    sessionId,
+    artifacts: arrayValue(session.artifacts),
+    verifications: arrayValue(session.verifications),
+  }, { sessionId });
 
-  const ledger = buildConversationLedger(messages, runs);
   const selectedMessages = selectMessages(messages, mode, explicitRefs);
   const selectedRuns = selectRuns(runs, mode, explicitRefs);
   const excluded = excludedHistory(messages, runs, selectedMessages, selectedRuns, mode, explicitRefs);
+  const selectedContextRefs = dedupe([
+    ...explicitRefs,
+    ...selectedMessages.flatMap((entry) => stringListValue(entry.refs)),
+    ...selectedRuns.flatMap((entry) => stringListValue(entry.refs)),
+  ]);
+  const contextProjection = compileContextProjection({
+    sessionId,
+    immutablePrefix: {
+      schemaVersion: 'sciforge.project-session-memory.immutable-prefix.v1',
+      runtimeContract: 'ToolPayload refs-first handoff',
+      rules: [
+        'workspace ledger is canonical truth',
+        'AgentServer orchestrates context',
+        'backend reads refs on demand',
+      ],
+    },
+    workspaceIdentity: {
+      sessionId,
+      workspace: recordValue(data.workspace),
+      sessionResourceRoot: textValue(session.sessionResourceRoot) || textValue(session.sessionBundleRef),
+    },
+    stableSessionState: {
+      sessionId,
+      persistentState: recordValue(session.persistentState),
+      openQuestions: arrayValue(session.openQuestions).slice(-12),
+      decisions: arrayValue(session.decisions).slice(-24),
+    },
+    index: {
+      schemaVersion: 'sciforge.project-session-memory.index.v1',
+      eventCount: projectSession.events.length,
+      refCount: projectSession.refIndex.length,
+      eventIndex: eventIndex(projectSession.events),
+      refIndex: refIndex(projectSession.refIndex),
+      failureIndex: failureIndex(projectSession.events),
+    },
+    currentTaskPacket: {
+      mode,
+      currentReferenceFocus: explicitRefs,
+      selectedContextRefs,
+      currentGoal: clip(sanitizeText(
+        textValue(snapshot.normalizedPrompt)
+        || textValue(snapshot.summary)
+        || textValue(firstValue(data, 'prompt'))
+        || textValue(recordValue(data.turn)?.prompt)
+        || textValue(recordValue(data.turn)?.text),
+      ), 900),
+      selectedEventIds: selectedEventIds(projectSession.events, selectedMessages, selectedRuns),
+      pollutionGuard: {
+        explicitReferencesFirst: explicitRefs.length > 0,
+        excludedHistory: excluded,
+      },
+    },
+    sourceEventIds: {
+      stableSessionState: projectSession.events
+        .filter((event) => event.kind === 'decision-recorded' || event.kind === 'human-approval-recorded')
+        .map((event) => event.eventId),
+      index: projectSession.events.map((event) => event.eventId),
+      currentTaskPacket: selectedEventIds(projectSession.events, selectedMessages, selectedRuns),
+    },
+  });
 
   return {
     schemaVersion: CONVERSATION_HANDOFF_PROJECTION_SCHEMA_VERSION,
+    authority: 'workspace-project-session-memory',
     mode,
+    projectSessionMemory: {
+      schemaVersion: projectSession.schemaVersion,
+      sessionId: projectSession.sessionId,
+      eventCount: projectSession.events.length,
+      refCount: projectSession.refIndex.length,
+      eventIndex: eventIndex(projectSession.events),
+      refIndex: refIndex(projectSession.refIndex),
+      failureIndex: failureIndex(projectSession.events),
+    },
+    contextProjectionBlocks: contextProjection.blocks,
+    stablePrefixHash: contextProjection.stablePrefixHash,
+    contextRefs: dedupe([
+      ...projectSession.events.map((event) => `ledger-event:${event.eventId}`),
+      ...contextProjection.blocks.map((block) => `projection-block:${block.blockId}`),
+      ...projectSession.refIndex.map((ref) => ref.ref),
+    ]),
+    selectedContextRefs,
+    retrievalTools: ['retrieve', 'read_ref', 'workspace_search'],
     recentConversation: selectedMessages,
     recentRuns: selectedRuns,
-    conversationLedger: ledger,
     currentReferenceFocus: explicitRefs,
     pollutionGuard: {
+      source: 'project-session-memory-projection',
       fileRefOnly: true,
       explicitReferencesFirst: explicitRefs.length > 0,
       excludedHistory: excluded,
@@ -47,31 +149,6 @@ export function buildConversationHandoffMemoryProjection(request: unknown): Conv
 }
 
 export const buildHandoffMemoryProjection = buildConversationHandoffMemoryProjection;
-
-export function buildConversationLedger(messages: unknown[], runs: unknown[] | null = null): JsonMap[] {
-  const ledger: JsonMap[] = [];
-  messages.forEach((message, index) => {
-    const item = recordValue(message) ?? {};
-    ledger.push({
-      kind: 'message',
-      id: textValue(item.id) || `message-${index + 1}`,
-      role: textValue(item.role) || 'unknown',
-      summary: digestSummary(item, 'session-message-body'),
-      refs: refsFromItem(item),
-    });
-  });
-  (runs ?? []).forEach((run, index) => {
-    const item = recordValue(run) ?? {};
-    ledger.push({
-      kind: 'run',
-      id: textValue(item.id) || textValue(item.runId) || `run-${index + 1}`,
-      status: textValue(item.status) || 'unknown',
-      summary: clip(sanitizeText(textValue(item.summary) || textValue(item.message) || textValue(item.error)), 220),
-      refs: refsFromItem(item),
-    });
-  });
-  return ledger.slice(-30);
-}
 
 function selectMessages(messages: unknown[], mode: string, explicitRefs: string[]): JsonMap[] {
   const selected: JsonMap[] = [];
@@ -146,6 +223,57 @@ function compactRun(item: JsonMap): JsonMap {
   };
 }
 
+function eventIndex(events: ProjectSessionEvent[]): JsonMap[] {
+  return events.slice(-40).map((event) => ({
+    eventId: event.eventId,
+    kind: event.kind,
+    actor: event.actor,
+    turnId: event.turnId,
+    runId: event.runId,
+    summary: clip(sanitizeText(event.summary), 260),
+    refs: event.refs.slice(0, 8).map((ref) => ref.ref),
+  }));
+}
+
+function refIndex(refs: ProjectMemoryRef[]): JsonMap[] {
+  return refs.slice(-80).map((ref) => ({
+    ref: ref.ref,
+    kind: ref.kind,
+    digest: ref.digest,
+    sizeBytes: ref.sizeBytes,
+    mime: ref.mime,
+    producerRunId: ref.producerRunId,
+    preview: clip(sanitizeText(ref.preview ?? ''), 160) || undefined,
+    readable: ref.readable,
+    retention: ref.retention,
+  }));
+}
+
+function failureIndex(events: ProjectSessionEvent[]): JsonMap[] {
+  return events
+    .filter((event) => event.kind === 'failure-classified')
+    .slice(-12)
+    .map((event) => ({
+      eventId: event.eventId,
+      runId: event.runId,
+      summary: clip(sanitizeText(event.summary), 260),
+      refs: event.refs.slice(0, 8).map((ref) => ref.ref),
+    }));
+}
+
+function selectedEventIds(events: ProjectSessionEvent[], selectedMessages: JsonMap[], selectedRuns: JsonMap[]): string[] {
+  const selectedIds = new Set([
+    ...selectedMessages.map((message) => textValue(message.id)).filter(Boolean),
+    ...selectedRuns.map((run) => textValue(run.id) || textValue(run.runId)).filter(Boolean),
+  ]);
+  return events
+    .filter((event) => {
+      const localId = event.eventId.replace(/^(message|run|conversation):/, '');
+      return selectedIds.has(localId) || (event.runId ? selectedIds.has(event.runId) : false);
+    })
+    .map((event) => event.eventId);
+}
+
 function itemMentionsRefs(item: JsonMap, refs: string[]): boolean {
   if (!refs.length) return false;
   const haystack = refsFromItem(item).join('\n').toLowerCase();
@@ -183,16 +311,6 @@ function digestRecord(item: JsonMap, fallbackOmitted: string): JsonMap {
   return body
     ? { omitted: fallbackOmitted, chars: body.length, hash: stableTextHash(body), refs: refsFromItem({ ...item, content: undefined, text: undefined, prompt: undefined }) }
     : { omitted: fallbackOmitted, chars: 0, refs: refsFromItem({ ...item, content: undefined, text: undefined, prompt: undefined }) };
-}
-
-function digestSummary(item: JsonMap, fallbackOmitted: string) {
-  const digest = digestRecord(item, fallbackOmitted);
-  const hash = textValue(digest.hash) || 'none';
-  const chars = typeof digest.chars === 'number' ? digest.chars : 0;
-  const refs = stringListValue(digest.refs);
-  return refs.length
-    ? `${fallbackOmitted} omitted; hash=${hash}; chars=${chars}; refs=${refs.slice(0, 4).join(', ')}`
-    : `${fallbackOmitted} omitted; hash=${hash}; chars=${chars}`;
 }
 
 function sanitizeText(text: string): string {

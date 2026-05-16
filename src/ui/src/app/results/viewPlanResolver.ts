@@ -1,4 +1,3 @@
-import { compileSlotsForScenario } from '@sciforge/scenario-core/ui-plan-compiler';
 import { uiModuleRegistry, type RuntimeUIModule } from '../../uiModuleRegistry';
 import type { DisplayIntent, ObjectReference, PresentationInput, ResolvedViewPlan, RuntimeArtifact, ScenarioInstanceId, SciForgeRun, SciForgeSession, UIManifestSlot, ViewPlanSection } from '../../domain';
 import type { ScenarioId } from '../../data';
@@ -30,7 +29,6 @@ import {
   findInteractiveViewModuleById,
   findInteractiveViewModuleForObjectReference,
   findRenderableInteractiveArtifact,
-  inferDisplayIntentFromInteractiveArtifacts,
   interactiveViewFallbackModuleIds,
   interactiveViewPlanSourceIds,
   interactiveViewVisiblePresentationGroupKey,
@@ -114,10 +112,6 @@ export interface HandoffAutoRunRequest {
   prompt: string;
 }
 
-function defaultSlotsForAgent(scenarioId: ScenarioId): UIManifestSlot[] {
-  return compileSlotsForScenario(scenarioId);
-}
-
 export function resolveViewPlan({
   scenarioId,
   session,
@@ -137,11 +131,11 @@ export function resolveViewPlan({
   const projection = conversationProjectionForRun(effectiveRun);
   const resultArtifacts = projection
     ? artifactsForConversationProjection(session, projection)
-    : artifactsForProjectionlessMainPlan(session, effectiveRun);
+    : [];
   const resultExecutionUnits: [] = [];
   const displayIntent = projection
     ? displayIntentFromConversationProjection(projection, resultArtifacts)
-    : inferDisplayIntentFromInteractiveArtifacts(resultArtifacts, uiModuleRegistry);
+    : projectionlessDisplayIntent();
   const presentationArtifactActions = projection
     ? projectionArtifactActions(projection, resultArtifacts)
     : [];
@@ -155,9 +149,7 @@ export function resolveViewPlan({
     : runtimeSlots;
   const seedSlots = (projection
     ? projectionRuntimeSlots
-    : resultArtifacts.length
-      ? runtimeSlots.length ? runtimeSlots : defaultSlots?.length ? defaultSlots : defaultSlotsForAgent(scenarioId)
-      : [])
+    : [])
     .slice()
     .sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99));
   const diagnostics: string[] = projection ? [] : projectionlessAuditDiagnostics(session, effectiveRun);
@@ -361,6 +353,17 @@ function displayIntentFromConversationProjection(
   };
 }
 
+function projectionlessDisplayIntent(): DisplayIntent {
+  return {
+    primaryGoal: '等待 ConversationProjection',
+    requiredArtifactTypes: [],
+    preferredModules: [],
+    fallbackAcceptable: [],
+    acceptanceCriteria: ['wait-for-conversation-projection'],
+    source: 'runtime-artifact',
+  };
+}
+
 function projectionArtifactActions(
   projection: UiConversationProjection,
   artifacts: RuntimeArtifact[],
@@ -503,41 +506,6 @@ function artifactsForConversationProjection(session: SciForgeSession, projection
   return Array.from(unique.values()).filter(isUserVisibleDeliveryArtifact);
 }
 
-function artifactsForProjectionlessMainPlan(session: SciForgeSession, activeRun?: SciForgeRun) {
-  if (!activeRun) return session.runs.length ? [] : session.artifacts.filter(isUserVisibleDeliveryArtifact);
-  if (projectionlessRunHasBlockingAudit(session, activeRun)) return [];
-  const byId = new Map(session.artifacts.map((artifact) => [artifact.id, artifact]));
-  const manifestArtifactIds = new Set(
-    session.uiManifest
-      .map((slot) => slot.artifactRef ? stripArtifactRef(slot.artifactRef) : undefined)
-      .filter((id): id is string => Boolean(id)),
-  );
-  const explicitArtifactIds = new Set([
-    ...(activeRun.objectReferences ?? [])
-      .filter((reference) => reference.kind === 'artifact' && (!reference.runId || reference.runId === activeRun.id))
-      .map((reference) => stripArtifactRef(reference.ref)),
-    ...(activeRun.references ?? [])
-      .filter((reference) => (!reference.runId || reference.runId === activeRun.id) && reference.ref.includes('artifact:'))
-      .map((reference) => stripArtifactRef(reference.ref)),
-  ]);
-  const explicitArtifacts = [...explicitArtifactIds]
-    .map((id) => byId.get(id))
-    .filter((artifact): artifact is RuntimeArtifact => Boolean(artifact))
-    .filter((artifact) => isUserVisibleDeliveryArtifact(artifact) || artifactBelongsToRun(artifact, activeRun));
-  const ownedArtifacts = session.artifacts
-    .filter((artifact) => artifactBelongsToRun(artifact, activeRun))
-    .filter((artifact) => isUserVisibleDeliveryArtifact(artifact) || manifestArtifactIds.has(artifact.id) || explicitArtifactIds.has(artifact.id));
-  const manifestArtifacts = [...manifestArtifactIds]
-    .map((id) => byId.get(id))
-    .filter((artifact): artifact is RuntimeArtifact => Boolean(artifact));
-  const ownedManifestArtifacts = manifestArtifacts
-    .filter((artifact) => artifactBelongsToRun(artifact, activeRun) || session.runs.length <= 1);
-  if (explicitArtifacts.length || ownedArtifacts.length || ownedManifestArtifacts.length) {
-    return uniqueArtifacts([...explicitArtifacts, ...ownedArtifacts, ...ownedManifestArtifacts]);
-  }
-  return session.runs.length <= 1 ? session.artifacts.filter(isUserVisibleDeliveryArtifact) : [];
-}
-
 function isUserVisibleDeliveryArtifact(artifact: RuntimeArtifact) {
   return artifactHasUserFacingDelivery(artifact);
 }
@@ -588,21 +556,6 @@ function isBlockingExecutionUnitStatus(status: unknown) {
     || status === 'failed-with-reason'
     || status === 'repair-needed'
     || status === 'needs-human';
-}
-
-function artifactBelongsToRun(artifact: RuntimeArtifact, run: SciForgeRun) {
-  const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
-  return asString(metadata.runId) === run.id
-    || asString(metadata.sourceRunId) === run.id
-    || asString(metadata.producerRunId) === run.id;
-}
-
-function uniqueArtifacts(artifacts: RuntimeArtifact[]) {
-  const byId = new Map<string, RuntimeArtifact>();
-  for (const artifact of artifacts) {
-    if (artifact.id && !byId.has(artifact.id)) byId.set(artifact.id, artifact);
-  }
-  return Array.from(byId.values());
 }
 
 function diagnosticArtifactFallbackItems(

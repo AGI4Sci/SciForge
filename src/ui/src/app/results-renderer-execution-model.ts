@@ -64,38 +64,35 @@ export function shouldOpenRunAuditDetails(session: SciForgeSession, activeRun?: 
   );
 }
 
+export function shouldDefaultOpenRunAuditDetails(session: SciForgeSession, activeRun?: SciForgeRun) {
+  const run = activeRun ?? session.runs.at(-1);
+  const projection = conversationProjectionForRun(run);
+  if (!projection) return false;
+  return conversationProjectionStatus(projection) !== 'satisfied'
+    || projection.diagnostics.length > 0
+    || projection.executionProcess.length > 0;
+}
+
 export function runPresentationState(session: SciForgeSession, activeRun?: SciForgeRun, viewPlan?: RuntimeResolvedViewPlan): RunPresentationState {
   const run = activeRun ?? session.runs.at(-1);
   const projection = conversationProjectionForRun(run);
   const availableArtifacts = presentationArtifacts(session, run, viewPlan);
   if (projection) return runPresentationStateFromProjection(projection, run, availableArtifacts);
-  return projectionlessRunPresentationState(session, run, availableArtifacts);
+  return projectionlessRunPresentationState(session, run);
 }
 
 function projectionlessRunPresentationState(
   session: SciForgeSession,
   run: SciForgeRun | undefined,
-  availableArtifacts: RunPresentationState['availableArtifacts'],
 ): RunPresentationState {
   const hasAuditDiagnostics = projectionlessAuditHasDiagnostics(session, run);
-  const mainArtifacts = hasAuditDiagnostics ? [] : availableArtifacts;
   const refs = runAuditRefs(session, run).slice(0, 8);
-  if (mainArtifacts.length) {
-    return {
-      kind: 'ready',
-      title: '结果可展示',
-      reason: `${mainArtifacts.length} 个显式 legacy/ref 产物可用于右侧展示。`,
-      nextSteps: [],
-      availableArtifacts: mainArtifacts,
-      refs,
-    };
-  }
   return {
     kind: 'empty',
-    title: hasAuditDiagnostics ? '主结果等待 ConversationProjection' : '本轮没有生成可展示 artifact',
+    title: '主结果等待 ConversationProjection',
     reason: hasAuditDiagnostics
       ? '没有 ConversationProjection；raw run、ExecutionUnit、validation 与 resultPresentation 已保留在审计中，不驱动主状态。'
-      : '当前 run 没有 ConversationProjection 或可展示产物。',
+      : '当前 run 没有 ConversationProjection；结果区等待 Projection 声明可见状态与 ArtifactDelivery。',
     nextSteps: [],
     availableArtifacts: [],
     refs,

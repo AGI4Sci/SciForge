@@ -70,7 +70,6 @@ import {
   normalizeToolPayloadShape,
   toolPayloadFromPlainAgentOutput,
 } from './gateway/direct-answer-payload.js';
-import { directContextFastPathPayload } from './gateway/direct-context-fast-path.js';
 import {
   agentServerLlmRuntime,
   AGENT_BACKEND_ANSWER_PRINCIPLE,
@@ -151,7 +150,6 @@ import {
   agentServerDispatchEvent,
   agentServerSilentStreamGuardEvent,
   conversationPolicyStartedEvent,
-  directContextFastPathEvent,
   gatewayRequestReceivedEvent,
   repairAttemptResultEvent,
   repairAttemptStartEvent,
@@ -164,8 +162,6 @@ import {
 import { CONVERSATION_POLICY_TOOL_ID } from '@sciforge-ui/runtime-contract/conversation-policy';
 import { normalizeTurnExecutionConstraints, TURN_EXECUTION_CONSTRAINTS_TOOL_ID } from '@sciforge-ui/runtime-contract/turn-constraints';
 import {
-  capabilityProviderPreflight,
-  capabilityProviderPreflightPayload,
   requestWithDiscoveredCapabilityProviders,
 } from './gateway/capability-provider-preflight.js';
 
@@ -188,32 +184,6 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, 
     const request = await requestWithDiscoveredCapabilityProviders(
       await requestWithAgentHarnessShadow(policyApplication.request, telemetry.callbacks, policyApplication),
     );
-    const directContextPayload = directContextFastPathPayload(request);
-    if (directContextPayload) {
-      emitWorkspaceRuntimeEvent(telemetry.callbacks, directContextFastPathEvent({
-        executionModePlan: request.uiState?.executionModePlan,
-        responsePlan: request.uiState?.responsePlan,
-        latencyPolicy: request.uiState?.latencyPolicy,
-      }));
-      telemetry.markVerificationStart();
-      const verified = await recordValidationRepairTelemetryForPayload(
-        await applyRuntimeVerificationPolicy(directContextPayload, request),
-        request,
-      );
-      telemetry.markVerificationEnd();
-      return finalizeGatewayPayload(telemetry.emitFinal(verified) ?? verified, request, runtimeReplayRecorder, telemetry.callbacks);
-    }
-    const providerPreflight = capabilityProviderPreflight(request);
-    const providerPreflightPayload = capabilityProviderPreflightPayload(request, providerPreflight);
-    if (providerPreflightPayload) {
-      telemetry.markVerificationStart();
-      const verified = await recordValidationRepairTelemetryForPayload(
-        await applyRuntimeVerificationPolicy(providerPreflightPayload, request),
-        request,
-      );
-      telemetry.markVerificationEnd();
-      return finalizeGatewayPayload(telemetry.emitFinal(verified) ?? verified, request, runtimeReplayRecorder, telemetry.callbacks);
-    }
     const runtimeForbiddenPayload = runtimeExecutionForbiddenPayload(request);
     if (runtimeForbiddenPayload) {
       telemetry.markVerificationStart();
