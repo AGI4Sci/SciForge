@@ -38,7 +38,7 @@
 
 目标：用 Codex in-app browser 对真实 Web UI 做 fresh、continue、repair、provider/tool、refresh restore、artifact selection、audit/debug 路径测试；发现问题后写入本任务板，并做通用修复，直到最终方案稳定运行。
 
-当前 milestone：Parallel Browser Stability & Speed。重点不是再证明 fixture smoke 能过，而是多开独立端口和独立 workspace/state 的真实网页进程，压测多轮对话是否稳定且足够快。每个进程必须只改通用模块，不允许为某个 prompt、端口、backend、provider 或浏览器会话写特例。
+当前 milestone：Parallel Browser Stability & Speed。重点不是再证明 fixture smoke 能过，而是多开独立端口和独立 workspace/state 的真实网页进程，在能成功完成对话任务的前提下，压测多轮对话是否稳定、足够快。每个进程必须只改通用模块，不允许为某个 prompt、端口、backend、provider 或浏览器会话写特例。
 
 ### 阶段门
 
@@ -48,6 +48,16 @@
 4. **Projection Gate**：用户可见 terminal state 必须来自 ConversationProjection + ArtifactDelivery；raw run、stream delta、ExecutionUnit 只进 transient/audit/debug。
 5. **Conformance Gate**：修复后至少跑相关 targeted tests、`npm run typecheck`、`npm run smoke:single-agent-runtime-contract`；milestone 完成前跑 `npm run verify:single-agent-final`。
 6. **Sync Gate**：完成 milestone 后更新本文件、提交并 push 到 `origin/main`。
+
+### 成功底线
+
+稳定、快速的前提是多轮对话任务能真正完成。任何速度优化都必须遵守以下优先级：
+
+1. **完成任务优先**：fresh、continue、repair、provider/tool、artifact follow-up 必须在真实 browser 中产出用户请求的有效结果，或在确实缺少权限/证据/输入时给出可恢复的下一步。
+2. **Projection terminal 必须可信**：`satisfied` 代表任务完成；`background-running` 代表已有可读前台结果且后台继续；`needs-human` / `repair-needed` / `failed-with-reason` 只能用于真实阻塞，不得用来掩盖 backend 慢或实现缺口。
+3. **不能用快失败冒充快**：提前 fail-closed、返回空结果、跳过 provider/tool、跳过验证、直接给 degraded answer，除非 contract 明确证明继续执行不可行。
+4. **快的是首个有用反馈和收敛路径**：可以更早展示计划、进度、partial answer、recover action，但不能牺牲最终任务质量、refs grounding、ArtifactDelivery 或 verification boundary。
+5. **多轮连续性是成功的一部分**：第二轮必须接住上一轮目标和结果；repair 必须基于当前失败 refs；artifact follow-up 必须基于用户选择的 refs。
 
 ### 活动任务
 
@@ -59,11 +69,11 @@
 | BM-004 | completed | 补齐回归测试和 conformance 证据。 | targeted tests、typecheck、single-agent runtime smoke、web conformance、`verify:single-agent-final` 均通过。 |
 | BM-005 | completed | 同步文档和 GitHub。 | `PROJECT.md` 已更新；本次 milestone commit + push `main` 完成。 |
 | PBT-001 | todo | 建立并行端口/状态隔离矩阵，让多个进程可同时跑 SciForge Web UI、workspace writer、AgentServer 和 in-app browser。 | 每个进程有唯一 `SCIFORGE_INSTANCE`、UI port、workspace port、AgentServer port、state dir、workspace path、config path；互不覆盖 local state / `.sciforge` / workspace artifacts。 |
-| PBT-002 | todo | 建立真实网页速度 baseline：记录从发送到首个可见状态、首个 backend event、Projection terminal、可读结果的耗时。 | 每个路径输出 browser DOM snapshot + console summary + run id + timing；慢点写入 Issue Queue，不只写“感觉慢”。 |
-| PBT-003 | todo | 修复长时间 running / 软等待 / Projection 等待问题。 | 任何已有 backend 进展但长时间无 terminal 的 run，必须在 bounded 时间内进入 Projection-visible `background-running`、`needs-human`、`repair-needed` 或 `failed-with-reason`；不能无限显示“主结果等待 ConversationProjection”。 |
-| PBT-004 | todo | 优化 fresh -> continue 常规对话速度。 | fresh/continue 在真实 browser 中快速显示结构化进度；continue 只复用 bounded Projection/refs，不重放 raw history；首屏结果不被历史 repair/provider 状态污染。 |
-| PBT-005 | todo | 优化 provider/tool 路径速度和稳定性。 | ready provider/tool route 必须尽早进入 capability-first authoring contract；provider unavailable 必须快速 fail-closed 成 Projection；不得长时间等待 backend 自行生成直连网络代码。 |
-| PBT-006 | todo | 压测 repair from failure 的速度和 bounded-stop。 | repair 只用同 session failure refs/digests；重复失败或 token/静默超限必须快速返回最小 recover action，不自动无限 repair。 |
+| PBT-002 | todo | 建立真实网页成功率 + 速度 baseline：记录任务是否完成，以及从发送到首个可见状态、首个 backend event、Projection terminal、可读结果的耗时。 | 每个路径输出 browser DOM snapshot + console summary + run id + timing + success/failure reason；慢点写入 Issue Queue，不只写“感觉慢”。 |
+| PBT-003 | todo | 修复长时间 running / 软等待 / Projection 等待问题，同时保留任务完成能力。 | 有 backend 进展的 run 应继续推动任务完成；确实 stalled 时必须在 bounded 时间内进入 Projection-visible `background-running`（已有可读前台结果）或真实阻塞的 `needs-human` / `repair-needed` / `failed-with-reason`；不能无限显示“主结果等待 ConversationProjection”。 |
+| PBT-004 | todo | 优化 fresh -> continue 常规对话成功率和速度。 | fresh/continue 在真实 browser 中完成用户请求并快速显示结构化进度；continue 只复用 bounded Projection/refs，不重放 raw history；首屏结果不被历史 repair/provider 状态污染。 |
+| PBT-005 | todo | 优化 provider/tool 路径任务完成率、速度和稳定性。 | ready provider/tool route 必须尽早进入 capability-first authoring contract 并实际完成检索/读取/产物生成；provider unavailable 只有在确认无可用 route 时才快速 Projection-visible 阻塞；不得长时间等待 backend 自行生成直连网络代码。 |
+| PBT-006 | todo | 压测 repair from failure 的任务恢复能力和 bounded-stop。 | repair 应优先恢复并完成原任务；只用同 session failure refs/digests；重复失败或 token/静默超限时才返回最小 Projection recover action，不自动无限 repair。 |
 | PBT-007 | todo | 验证 refresh/reopen restore 真实浏览器路径。 | reload/reopen 后右侧主结果、recover actions、artifact refs 从 persisted Projection 恢复；不能因 compact storage 丢 projection 而显示等待 Projection。 |
 | PBT-008 | todo | 验证 artifact selection 真实交互边界。 | 点击/选择旧 artifact 后追问，request 只带 selected explicit refs；不得混入 latest artifact 或当前 run raw body。 |
 | PBT-009 | todo | 把真实 browser evidence 纳入 final gate。 | 至少新增 3 条真实浏览器证据：Projection restore、artifact selection、provider/tool latency；final evidence manifest 不再只有 fixture-managed/mock-only 记录。 |
@@ -135,7 +145,12 @@ SCIFORGE_AGENT_SERVER_URL=http://127.0.0.1:18080
 
 ### 速度验收口径
 
-所有进程统一记录这些指标，避免只凭体感判断“慢”：
+所有进程统一记录这些指标，避免只凭体感判断“慢”。速度指标必须和成功指标一起看；未完成任务的“快”不计入优化成功。
+
+- `TaskSuccess`：是否完成用户请求；完成必须有 `satisfied` Projection、可读 answer、必要 artifact refs、以及与用户当前轮目标一致的 evidence。
+- `UsefulPartial`：如果任务进入 `background-running`，前台必须已有有用 partial answer 或 artifact；不能只是空壳进度。
+- `BlockingTruth`：如果进入 `needs-human` / `repair-needed` / `failed-with-reason`，必须有真实 blocker、recover action 和 refs；不能只是 timeout 包装。
+- `MultiturnContinuity`：continue/repair/follow-up 是否保留当前目标并只使用合法 refs。
 
 - `T_first_progress`：发送后到 UI 出现结构化 progress 的时间，目标 <= 3s。
 - `T_first_backend_event`：发送后到第一个 workspace/runtime/backend event 的时间，目标 <= 15s；超过要有 visible waiting reason。
@@ -148,7 +163,7 @@ SCIFORGE_AGENT_SERVER_URL=http://127.0.0.1:18080
 
 #### Open
 
-- `PBT-SPEED-001` - P1/P2 真实 browser 发现 provider/tool 路径可进入长时间 running：已有 backend event 后反复 soft wait，右侧仍显示“主结果等待 ConversationProjection”。需要通用 bounded stall/terminal Projection 策略。
+- `PBT-SPEED-001` - P1/P2 真实 browser 发现 provider/tool 路径可进入长时间 running：已有 backend event 后反复 soft wait，右侧仍显示“主结果等待 ConversationProjection”。需要通用 bounded stall/terminal Projection 策略，但修复必须优先推动任务完成，不能用快速 degraded/failed-with-reason 代替真实 provider/tool 执行。
 - `PBT-EVIDENCE-001` - 当前 `verify:single-agent-final` 的 Web matrix 主要是 fixture/scriptable mock；final manifest 缺真实 in-app/browser screenshot、console、network evidence。需要把至少 3 条真实 browser evidence 纳入 final gate。
 - `PBT-RESTORE-001` - refresh/reopen 真实路径需要验证 compact storage 是否保留 Projection；否则可能恢复成 projection wait。
 - `PBT-SELECTION-001` - artifact 点击可能只是 focus，不一定进入 explicit refs；需要真实浏览器验证 selected old artifact follow-up 是否隔离 latest artifacts。
