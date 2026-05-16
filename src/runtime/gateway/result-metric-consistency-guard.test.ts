@@ -57,8 +57,94 @@ test('result metric consistency guard flags success claims contradicted by high 
   assert.match(finding.successClaims.join('\n'), /succeeded|close/i);
 });
 
+test('result metric consistency guard recognizes common prose percent error forms', () => {
+  const finding = evaluateResultMetricConsistency(payload({
+    artifacts: [{
+      id: 'output',
+      type: 'text',
+      content: [
+        'true r=0.8, fitted r=64.9299',
+        'relative error r 8016%',
+        'K error is 26.40 percent',
+      ].join('\n'),
+    }],
+  }), request);
+
+  assert.ok(finding);
+  assert.equal(finding.failedMetrics[0]?.label, 'parameter error (r)');
+  assert.equal(finding.failedMetrics[0]?.value, 8016);
+});
+
+test('result metric consistency guard recognizes metric-first prose percent errors', () => {
+  const finding = evaluateResultMetricConsistency(payload({
+    artifacts: [{
+      id: 'output',
+      type: 'text',
+      content: 'The reproduction succeeded. r error is 8016 percent after fitting.',
+    }],
+  }), request);
+
+  assert.ok(finding);
+  assert.equal(finding.failedMetrics[0]?.label, 'parameter error (r)');
+  assert.equal(finding.failedMetrics[0]?.value, 8016);
+});
+
 test('generated task guard evaluates metric consistency before generic work evidence', () => {
   const finding = evaluateGeneratedTaskGuardFinding(payload(), request);
+
+  assert.ok(finding);
+  assert.equal(finding.source, 'result-metric-consistency');
+});
+
+test('result metric consistency guard flags confounder conclusions contradicted by identical coefficients', () => {
+  const finding = evaluateResultMetricConsistency(payload({
+    message: 'Batch robustness analysis completed.',
+    claims: [{
+      id: 'claim-1',
+      text: 'Controlling for batch reduces the estimated effect and confirms B3 confounds the naive analysis.',
+      type: 'analysis',
+      confidence: 0.9,
+    }],
+    artifacts: [{
+      id: 'robustness',
+      type: 'research-report',
+      data: {
+        markdown: [
+          'Without batch control: drugA@48h coeff = 2.771, p = 0.000000',
+          'With batch control:    drugA@48h coeff = 2.771, p = 0.000000',
+          'Difference in coefficient: 0.000',
+          'Conclusion: Controlling for batch reduces the estimated effect size, confirming that B3 confounds the naive analysis.',
+        ].join('\n'),
+      },
+    }],
+  }), request);
+
+  assert.ok(finding);
+  assert.equal(finding.severity, 'repair-needed');
+  assert.equal(finding.contradictoryComparisons?.[0]?.left, 2.771);
+  assert.equal(finding.contradictoryComparisons?.[0]?.right, 2.771);
+  assert.match(finding.reason, /robustness|confounder|coefficients/i);
+});
+
+test('generated task guard routes contradicted confounder conclusions through metric consistency', () => {
+  const finding = evaluateGeneratedTaskGuardFinding(payload({
+    message: 'Batch robustness analysis completed.',
+    claims: [{
+      id: 'claim-1',
+      text: 'Adjusting with batch isolates an unbiased drug effect.',
+      type: 'analysis',
+      confidence: 0.9,
+    }],
+    artifacts: [{
+      id: 'robustness',
+      type: 'research-report',
+      content: [
+        'Without batch control: drugA@48h coef: 1.234',
+        'With batch control: drugA@48h coef: 1.234',
+        'Controlling for batch lowers the drugA effect and removes confounding.',
+      ].join('\n'),
+    }],
+  }), request);
 
   assert.ok(finding);
   assert.equal(finding.source, 'result-metric-consistency');
