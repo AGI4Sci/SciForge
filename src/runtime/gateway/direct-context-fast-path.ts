@@ -219,10 +219,13 @@ interface DirectContextGateDecision {
 type DirectContextIntent = DirectContextGateDecision['audit']['intent'];
 
 interface DirectContextDecision {
+  decisionRef: string;
+  decisionOwner: 'agentserver' | 'backend' | 'harness-policy';
   intent: DirectContextIntent;
-  requiredContext?: string[];
+  requiredTypedContext: string[];
+  usedRefs: string[];
   allowDirectContext?: boolean;
-  sufficiency?: 'sufficient' | 'insufficient';
+  sufficiency: 'sufficient' | 'insufficient';
   blockReason?: string;
 }
 
@@ -231,8 +234,9 @@ function directContextGate(
   decision: DirectContextDecision,
 ): DirectContextGateDecision {
   const intent = decision.intent;
-  const usedContextRefs = directContextFastPathSupportingRefs(context).slice(0, 12);
-  const requiredContext = decision.requiredContext?.length ? decision.requiredContext : requiredContextForDirectIntent(intent);
+  const contextRefs = directContextFastPathSupportingRefs(context);
+  const usedContextRefs = uniqueStrings([...decision.usedRefs, ...contextRefs]).slice(0, 12);
+  const requiredContext = decision.requiredTypedContext.length ? decision.requiredTypedContext : requiredContextForDirectIntent(intent);
   if (intent === 'capability-status') {
     return {
       allowed: false,
@@ -302,15 +306,39 @@ function firstDirectContextDecision(...values: unknown[]): DirectContextDecision
 
 function normalizeDirectContextDecision(value: unknown): DirectContextDecision | undefined {
   if (!isRecord(value)) return undefined;
+  const decisionRef = stringField(value.decisionRef);
+  const decisionOwner = normalizeDirectContextDecisionOwner(value.decisionOwner);
   const intent = normalizeDirectContextIntent(value.intent);
-  if (!intent) return undefined;
+  const requiredTypedContext = toStringList(value.requiredTypedContext);
+  const usedRefs = normalizeDirectContextUsedRefs(value.usedRefs);
+  const sufficiency = value.sufficiency === 'sufficient' || value.sufficiency === 'insufficient' ? value.sufficiency : undefined;
+  if (!decisionRef || !decisionOwner || !intent || !requiredTypedContext.length || !usedRefs.length || !sufficiency) return undefined;
   return {
+    decisionRef,
+    decisionOwner,
     intent,
-    requiredContext: toStringList(value.requiredContext),
+    requiredTypedContext,
+    usedRefs,
     allowDirectContext: value.allowDirectContext === false ? false : value.allowDirectContext === true ? true : undefined,
-    sufficiency: value.sufficiency === 'sufficient' || value.sufficiency === 'insufficient' ? value.sufficiency : undefined,
+    sufficiency,
     blockReason: stringField(value.blockReason),
   };
+}
+
+function normalizeDirectContextDecisionOwner(value: unknown): DirectContextDecision['decisionOwner'] | undefined {
+  if (value === 'agentserver' || value === 'backend' || value === 'harness-policy') return value;
+  if (value === 'AgentServer') return 'agentserver';
+  if (value === 'Backend') return 'backend';
+  return undefined;
+}
+
+function normalizeDirectContextUsedRefs(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return uniqueStrings(value.flatMap((item) => {
+    if (typeof item === 'string') return [item];
+    if (isRecord(item)) return [stringField(item.ref)].filter((ref): ref is string => Boolean(ref));
+    return [];
+  }));
 }
 
 function normalizeDirectContextIntent(value: unknown): DirectContextIntent | undefined {
@@ -529,7 +557,10 @@ function policyRequestsDirectContext(request: GatewayRequest, decision: DirectCo
 
 function directContextDecisionAllowsAnswer(decision: DirectContextDecision) {
   return decision.allowDirectContext === true
-    && (decision.sufficiency === undefined || decision.sufficiency === 'sufficient');
+    && decision.sufficiency === 'sufficient'
+    && Boolean(decision.decisionRef)
+    && decision.requiredTypedContext.length > 0
+    && decision.usedRefs.length > 0;
 }
 
 function stringField(value: unknown) {

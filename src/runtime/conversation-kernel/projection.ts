@@ -17,6 +17,7 @@ export function projectConversation(log: ConversationEventLog, state: Conversati
     || event.type === 'RepairNeeded'
     || event.type === 'NeedsHuman'
     || event.type === 'HistoryEdited'
+    || (event.type === 'RunStatusRecorded' && terminalRunStatus(event.payload.status))
   );
   const artifacts = uniqueRefs(log.events.flatMap((event) => event.storage === 'ref' ? event.payload.refs : []));
   const auditRefs = uniqueStrings(log.events.flatMap(eventRefs));
@@ -85,4 +86,8 @@ function uniqueStrings(values: string[]): string[] {
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function terminalRunStatus(value: unknown): boolean {
+  return value === 'succeeded' || value === 'failed' || value === 'storage-unavailable';
 }

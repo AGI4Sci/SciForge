@@ -8,6 +8,7 @@ import { validateBackgroundContinuationEvent } from './background-continuation';
 import { validateVerificationRecordedEvent } from './verification-gate';
 import { validateHistoryEditedEvent } from './history-edit';
 import { validateHarnessDecisionRecordedEvent } from './harness-decision';
+import { RUN_CHECKPOINT_EVENT_SCHEMA_VERSION, RUN_STATUS_EVENT_SCHEMA_VERSION } from '@sciforge-ui/runtime-contract';
 
 export const CONVERSATION_INLINE_EVENT_MAX_BYTES = 8 * 1024;
 
@@ -55,7 +56,8 @@ export function validateConversationEvent(
   const eventContractDiagnostic = validateBackgroundContinuationEvent(event)
     ?? validateVerificationRecordedEvent(event)
     ?? validateHistoryEditedEvent(event)
-    ?? validateHarnessDecisionRecordedEvent(event);
+    ?? validateHarnessDecisionRecordedEvent(event)
+    ?? validateRunLifecycleEvent(event);
   if (eventContractDiagnostic) return eventContractDiagnostic;
 
   if (event.storage === 'inline') {
@@ -268,6 +270,57 @@ function validateExplicitImportRecordedEvent(event: ConversationEvent): Conversa
         message: 'Explicit import event refs must include every importedRef recorded in imports.',
       };
     }
+  }
+  return undefined;
+}
+
+function validateRunLifecycleEvent(event: ConversationEvent): ConversationKernelDiagnostic | undefined {
+  if (event.type === 'RunStatusRecorded') {
+    if (event.payload.schemaVersion !== RUN_STATUS_EVENT_SCHEMA_VERSION) {
+      return {
+        severity: 'error',
+        code: 'run-status-schema-required',
+        eventId: event.id,
+        message: 'RunStatusRecorded payload must use sciforge.run-status-event.v1.',
+      };
+    }
+    if (!stringValue(event.payload.status)) {
+      return {
+        severity: 'error',
+        code: 'run-status-required',
+        eventId: event.id,
+        message: 'RunStatusRecorded payload must include a run lifecycle status.',
+      };
+    }
+    return undefined;
+  }
+  if (event.type !== 'RunCheckpointRecorded') return undefined;
+  if (event.storage !== 'ref') {
+    return {
+      severity: 'error',
+      code: 'run-checkpoint-ref-required',
+      eventId: event.id,
+      message: 'RunCheckpointRecorded must be ref-backed so checkpoints are replayable.',
+    };
+  }
+  if (event.payload.schemaVersion !== RUN_CHECKPOINT_EVENT_SCHEMA_VERSION) {
+    return {
+      severity: 'error',
+      code: 'run-checkpoint-schema-required',
+      eventId: event.id,
+      message: 'RunCheckpointRecorded payload must use sciforge.run-checkpoint-event.v1.',
+    };
+  }
+  const checkpointRefs = Array.isArray(event.payload.checkpointRefs)
+    ? event.payload.checkpointRefs.filter((ref): ref is string => typeof ref === 'string' && ref.length > 0)
+    : [];
+  if (checkpointRefs.length === 0) {
+    return {
+      severity: 'error',
+      code: 'run-checkpoint-refs-required',
+      eventId: event.id,
+      message: 'RunCheckpointRecorded payload must include checkpointRefs.',
+    };
   }
   return undefined;
 }

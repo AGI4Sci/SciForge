@@ -46,6 +46,8 @@ export interface AgentServerContextRequest {
   _contractVersion: typeof AGENTSERVER_CONTEXT_REQUEST_VERSION;
   sessionId: string;
   turnId: string;
+  capabilityBriefRef: ProjectMemoryRef;
+  contextRefs: ProjectMemoryRef[];
   cachePlan: {
     stablePrefixRefs: ProjectMemoryRef[];
     perTurnPayloadRefs: ProjectMemoryRef[];
@@ -93,6 +95,7 @@ export interface BuildAgentServerContextRequestInput {
   turnId: string;
   mode: ContextMode;
   currentTurnRef: ProjectMemoryRef;
+  capabilityBriefRef?: ProjectMemoryRef;
   stableGoalRef?: ProjectMemoryRef;
   failureRef?: ProjectMemoryRef;
   explicitRefs?: RefDescriptor[];
@@ -191,6 +194,9 @@ const REQUEST_FORBIDDEN_FIELDS = new Set([
   'artifactBody',
   'fullRefList',
   'compactionState',
+  'handoffMemoryProjection',
+  'memoryPlan',
+  'availableSkills',
 ]);
 
 const DEGRADED_FORBIDDEN_FIELDS = new Set([
@@ -203,6 +209,9 @@ const DEGRADED_FORBIDDEN_FIELDS = new Set([
   'rawArtifactBody',
   'artifactBody',
   'compactionState',
+  'handoffMemoryProjection',
+  'memoryPlan',
+  'availableSkills',
 ]);
 
 const BACKEND_HANDOFF_FORBIDDEN_FIELDS = new Set([
@@ -215,6 +224,9 @@ const BACKEND_HANDOFF_FORBIDDEN_FIELDS = new Set([
   'rawArtifactBody',
   'artifactBody',
   'compactionState',
+  'handoffMemoryProjection',
+  'memoryPlan',
+  'availableSkills',
 ]);
 
 const SELECTED_REF_SOURCES = new Set<SelectedRefSource>([
@@ -263,6 +275,16 @@ export function buildAgentServerContextRequest(input: BuildAgentServerContextReq
     refSelectionPolicy.maxPerTurnPayloadRefs,
     refSelectionPolicy.maxPerTurnPayloadBytes,
   ).refs;
+  const capabilityBriefRef = input.capabilityBriefRef ?? deterministicProjectionRef(
+    `projection:${input.sessionId}:capability-brief`,
+    'AgentServer capability brief projection',
+  );
+  const contextRefs = boundProjectMemoryRefs([
+    capabilityBriefRef,
+    ...stablePrefixRefs,
+    ...perTurnPayloadRefs,
+    ...selectedRefs.flatMap(projectMemoryRefFromSelectedDescriptor),
+  ], refSelectionPolicy.maxStablePrefixRefs + refSelectionPolicy.maxPerTurnPayloadRefs + refSelectionPolicy.maxSelectedRefs + 1, Number.POSITIVE_INFINITY).refs;
   const selectedRefBytes = selectedRefs.reduce((total, ref) => total + refDescriptorBytes(ref), 0);
   const sourceCounts = selectedRefs.reduce((counts, ref) => {
     counts[ref.source] += 1;
@@ -282,6 +304,8 @@ export function buildAgentServerContextRequest(input: BuildAgentServerContextReq
     _contractVersion: AGENTSERVER_CONTEXT_REQUEST_VERSION,
     sessionId: input.sessionId,
     turnId: input.turnId,
+    capabilityBriefRef,
+    contextRefs,
     cachePlan: {
       stablePrefixRefs,
       perTurnPayloadRefs,
@@ -351,6 +375,8 @@ export function validateAgentServerContextRequest(value: unknown): ContractValid
   expectLiteral(request._contractVersion, AGENTSERVER_CONTEXT_REQUEST_VERSION, 'request._contractVersion', errors);
   expectNonEmptyString(request.sessionId, 'request.sessionId', errors);
   expectNonEmptyString(request.turnId, 'request.turnId', errors);
+  validateProjectMemoryRef(request.capabilityBriefRef, 'request.capabilityBriefRef', errors);
+  validateProjectMemoryRefs(request.contextRefs, 'request.contextRefs', errors);
 
   const cachePlan = asRecord(request.cachePlan);
   if (!cachePlan) {
@@ -768,6 +794,56 @@ function projectMemoryRefDescriptor(ref: ProjectMemoryRef): RefDescriptor {
     digest: ref.digest,
     sizeBytes: ref.sizeBytes,
   };
+}
+
+function projectMemoryRefFromSelectedDescriptor(ref: SelectedRefDescriptor): ProjectMemoryRef[] {
+  if (!ref.digest || typeof ref.sizeBytes !== 'number') return [];
+  return [{
+    ref: ref.ref,
+    kind: projectMemoryRefKind(ref.kind, ref.ref),
+    digest: ref.digest,
+    sizeBytes: ref.sizeBytes,
+    mime: ref.mime,
+    preview: ref.preview,
+    readable: ref.readable,
+  }];
+}
+
+function deterministicProjectionRef(ref: string, preview: string): ProjectMemoryRef {
+  return {
+    ref,
+    kind: 'projection',
+    digest: `sha256:${sha256Json({ ref, preview })}`,
+    sizeBytes: Buffer.byteLength(preview, 'utf8'),
+    preview,
+    retention: 'warm',
+  };
+}
+
+function projectMemoryRefKind(kind: unknown, ref: string): ProjectMemoryRef['kind'] {
+  if (kind === 'artifact'
+    || kind === 'task-input'
+    || kind === 'task-output'
+    || kind === 'stdout'
+    || kind === 'stderr'
+    || kind === 'log'
+    || kind === 'source'
+    || kind === 'verification'
+    || kind === 'bundle'
+    || kind === 'ledger-event'
+    || kind === 'projection'
+    || kind === 'execution-unit'
+    || kind === 'handoff'
+    || kind === 'context'
+    || kind === 'retrieval'
+    || kind === 'run-audit') {
+    return kind;
+  }
+  if (ref.startsWith('ledger-event:')) return 'ledger-event';
+  if (ref.startsWith('projection:')) return 'projection';
+  if (ref.startsWith('retrieval:')) return 'retrieval';
+  if (ref.startsWith('handoff:')) return 'handoff';
+  return 'artifact';
 }
 
 function boundedRefDescriptors(refs: RefDescriptor[], policy: RefSelectionPolicy): RefDescriptor[] {

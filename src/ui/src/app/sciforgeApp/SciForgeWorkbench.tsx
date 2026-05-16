@@ -8,6 +8,7 @@ import type { WorkspaceFileContent } from '../../api/workspaceClient';
 import { ChatPanel } from '../ChatPanel';
 import { ResultsRenderer } from '../ResultsRenderer';
 import { recoverableRunFocusForSession } from '../appShell/workspaceState';
+import { recordUIActionInSession, type OpenDebugAuditUIAction, type TriggerRecoverUIAction, type UIAction } from '../uiActionBoundary';
 import type { HandoffAutoRunRequest } from '../results/viewPlanResolver';
 import { scopedResultSlotId } from '../results/viewPlanResolver';
 import { defaultElementSelectionForScenario, ScenarioBuilderPanel } from '../ScenarioBuilderPanel';
@@ -151,6 +152,27 @@ export function Workbench({
   function handleObjectFocus(reference: ObjectReference) {
     setFocusedObjectReference(reference);
     if (reference.runId) setActiveRunId(reference.runId);
+    setResultsCollapsed(false);
+    setMobilePane('results');
+  }
+
+  function recordWorkbenchUIAction(action: UIAction) {
+    const nextSession = recordUIActionInSession(session, action);
+    onSessionChange(nextSession);
+    return nextSession;
+  }
+
+  function handleTriggerRecoverAction(action: TriggerRecoverUIAction) {
+    recordWorkbenchUIAction(action);
+    onDraftChange(scenarioId, action.recoverAction);
+    if (action.runId) setActiveRunId(action.runId);
+    setResultsCollapsed(false);
+    setMobilePane('chat');
+  }
+
+  function handleOpenDebugAuditAction(action: OpenDebugAuditUIAction) {
+    recordWorkbenchUIAction(action);
+    if (action.runId) setActiveRunId(action.runId);
     setResultsCollapsed(false);
     setMobilePane('results');
   }
@@ -314,6 +336,8 @@ export function Workbench({
             onPreviewPackageRequest={(reference, path, descriptor) => onPreviewPackageRequest(scenarioId, reference, path, descriptor)}
             workspaceFileEditor={workspaceFileEditor}
             onWorkspaceFileEditorChange={onWorkspaceFileEditorChange}
+            onTriggerRecoverAction={handleTriggerRecoverAction}
+            onOpenDebugAuditAction={handleOpenDebugAuditAction}
             onDismissResultSlotPresentation={(presentationId) => {
               const scopedPresentationId = scopedResultSlotId(activeRunId, presentationId);
               onSessionChange({

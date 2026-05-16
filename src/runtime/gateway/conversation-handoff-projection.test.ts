@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildConversationHandoffMemoryProjection } from './conversation-handoff-projection.js';
+import { buildConversationContextProjection } from './conversation-handoff-projection.js';
 
 test('explicit reference filters stale messages and runs', () => {
-  const plan = buildConversationHandoffMemoryProjection({
+  const plan = buildConversationContextProjection({
     goalSnapshot: { requiredReferences: ['current.csv'] },
     contextPolicy: { mode: 'isolate' },
     session: {
@@ -21,10 +21,12 @@ test('explicit reference filters stale messages and runs', () => {
 
   assert.deepEqual(plan.selectedMessageRefs.map((message) => message.id), ['m-current']);
   assert.deepEqual(plan.selectedRunRefs.map((run) => run.id), ['r-current']);
-  assert.equal(plan.authority, 'workspace-project-session-memory');
-  assert.equal(plan.projectSessionMemory.schemaVersion, 'sciforge.project-session-ledger-projection.v1');
+  assert.equal(plan.authority, 'workspace-kernel-context-projection');
+  assert.equal(plan.workspaceLedger.schemaVersion, 'sciforge.workspace-ledger-projection.v1');
   assert.ok(plan.contextProjectionBlocks.some((block) => block.kind === 'index'));
-  assert.ok(plan.contextRefs.some((ref) => String(ref).startsWith('ledger-event:')));
+  assert.ok(plan.contextRefs.some((ref) => ref.ref.startsWith('ledger-event:')));
+  assert.equal(plan.agentServerContextRequest.capabilityBriefRef.ref, plan.capabilityBriefRef.ref);
+  assert.deepEqual(plan.agentServerContextRequest.cachePlan, plan.cachePlan);
   assert.deepEqual(
     plan.pollutionGuard.excludedHistory,
     [
@@ -35,7 +37,7 @@ test('explicit reference filters stale messages and runs', () => {
 });
 
 test('continuation keeps recent conversation and repair keeps failed runs without inline image payloads', () => {
-  const continuePlan = buildConversationHandoffMemoryProjection({
+  const continuePlan = buildConversationContextProjection({
     contextPolicy: { mode: 'continue' },
     session: { messages: [{ id: 'm1', role: 'assistant', content: '上一轮计划' }] },
   });
@@ -46,7 +48,7 @@ test('continuation keeps recent conversation and repair keeps failed runs withou
   assert.equal('recentConversation' in continuePlan, false);
   assert.equal('recentRuns' in continuePlan, false);
 
-  const repairPlan = buildConversationHandoffMemoryProjection({
+  const repairPlan = buildConversationContextProjection({
     contextPolicy: { mode: 'repair' },
     session: {
       runs: [
@@ -56,8 +58,8 @@ test('continuation keeps recent conversation and repair keeps failed runs withou
     },
   });
   assert.deepEqual(repairPlan.selectedRunRefs.map((run) => run.id), ['r-fail']);
-  assert.ok(Array.isArray(repairPlan.projectSessionMemory.failureIndex));
-  assert.ok(repairPlan.projectSessionMemory.failureIndex.length >= 1);
+  assert.ok(Array.isArray(repairPlan.workspaceLedger.failureIndex));
+  assert.ok(repairPlan.workspaceLedger.failureIndex.length >= 1);
   assert.doesNotMatch(String(repairPlan.selectedRunRefs[0].summary), /data:image/);
   assert.doesNotMatch(String(repairPlan.selectedRunRefs[0].summary), /;base64,/);
   assert.doesNotMatch(JSON.stringify(repairPlan), /recentConversation|recentRuns|rawHistory|fullRefList|compactionState/);

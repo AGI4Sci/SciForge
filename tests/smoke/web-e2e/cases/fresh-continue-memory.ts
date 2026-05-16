@@ -233,6 +233,7 @@ function buildRound(
   stableGoalSource: StableGoalSource | undefined,
 ): FreshContinueMemoryRound {
   const currentTurnRef = memoryRef(`message:${messageIdForRound(roundId)}`, 'task-input');
+  const capabilityBriefRef = memoryRef(`projection:${fixture.sessionId}:capability-brief`, 'projection');
   const stableGoalRef = mode === 'fresh' ? undefined : memoryRef(freshContinueMemoryStableGoalRef, 'projection');
   const selectedRefs = mode === 'fresh'
     ? []
@@ -245,6 +246,13 @@ function buildRound(
       stablePrefixRefs: stableGoalRef ? [stableGoalRef] : [],
       perTurnPayloadRefs: [currentTurnRef],
     },
+    capabilityBriefRef,
+    contextRefs: [
+      capabilityBriefRef,
+      ...(stableGoalRef ? [stableGoalRef] : []),
+      currentTurnRef,
+      ...selectedRefs.map((ref) => memoryRef(ref.ref, ref.kind === 'projection' ? 'projection' : 'artifact')),
+    ],
     currentTask: {
       currentTurnRef,
       ...(stableGoalRef ? { stableGoalRef } : {}),

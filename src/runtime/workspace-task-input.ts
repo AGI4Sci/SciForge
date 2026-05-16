@@ -538,6 +538,8 @@ function normalizeAgentHarnessHandoff(value: Record<string, unknown>, context: {
   }
   for (const key of [
     'contextRefs',
+    'capabilityBriefRef',
+    'cachePlan',
     'contextBudget',
     'repairContextPolicy',
     'promptDirectives',

@@ -74,7 +74,7 @@ export interface ProjectMemoryRef {
 }
 
 export interface ProjectSessionEvent {
-  schemaVersion: 'sciforge.project-session-event.v1';
+  schemaVersion: 'sciforge.workspace-ledger-event.v1';
   eventId: string;
   sessionId: string;
   turnId?: string;
@@ -111,7 +111,7 @@ export interface ContextProjectionBlock {
 }
 
 export interface ProjectSessionLedgerProjection {
-  schemaVersion: 'sciforge.project-session-ledger-projection.v1';
+  schemaVersion: 'sciforge.workspace-ledger-projection.v1';
   sessionId: string;
   events: ProjectSessionEvent[];
   refIndex: ProjectMemoryRef[];
@@ -168,7 +168,7 @@ export interface CompactionRecordedEventInput {
 }
 
 export interface ProjectSessionRecoveryProjection {
-  schemaVersion: 'sciforge.project-session-recovery-projection.v1';
+  schemaVersion: 'sciforge.workspace-recovery-projection.v1';
   sessionId: string;
   activeRunId?: string;
   artifactIndex: ProjectMemoryRef[];
@@ -179,7 +179,7 @@ export interface ProjectSessionRecoveryProjection {
     refs: ProjectMemoryRef[];
   }>;
   nextHandoffPacket: {
-    schemaVersion: 'sciforge.project-session-handoff-packet.v1';
+    schemaVersion: 'sciforge.workspace-handoff-packet.v1';
     mode: 'continue' | 'repair-continuation';
     refs: ProjectMemoryRef[];
     retrievalTools: ['retrieve', 'read_ref', 'workspace_search'];
@@ -321,7 +321,7 @@ export function normalizeProjectSessionMemory(
   }
 
   return {
-    schemaVersion: 'sciforge.project-session-ledger-projection.v1',
+    schemaVersion: 'sciforge.workspace-ledger-projection.v1',
     sessionId,
     events,
     refIndex: buildProjectMemoryRefIndex(events),
@@ -343,7 +343,7 @@ export function compileContextProjection(input: CompileContextProjectionInput): 
   const createdAt = input.createdAt ?? '1970-01-01T00:00:00.000Z';
   const blocks: ContextProjectionBlock[] = [
     renderBlock({
-      blockId: `psm:${input.sessionId}:immutable-prefix`,
+      blockId: `workspace-context:${input.sessionId}:immutable-prefix`,
       kind: 'immutable-prefix',
       cacheTier: 'stable-prefix',
       content: input.immutablePrefix,
@@ -351,7 +351,7 @@ export function compileContextProjection(input: CompileContextProjectionInput): 
       createdAt,
     }),
     renderBlock({
-      blockId: `psm:${input.sessionId}:workspace-identity`,
+      blockId: `workspace-context:${input.sessionId}:workspace-identity`,
       kind: 'workspace-identity',
       cacheTier: 'stable-prefix',
       content: input.workspaceIdentity,
@@ -359,7 +359,7 @@ export function compileContextProjection(input: CompileContextProjectionInput): 
       createdAt,
     }),
     renderBlock({
-      blockId: `psm:${input.sessionId}:stable-session-state`,
+      blockId: `workspace-context:${input.sessionId}:stable-session-state`,
       kind: 'stable-session-state',
       cacheTier: 'stable-prefix',
       content: input.stableSessionState,
@@ -368,7 +368,7 @@ export function compileContextProjection(input: CompileContextProjectionInput): 
       createdAt,
     }),
     renderBlock({
-      blockId: `psm:${input.sessionId}:index`,
+      blockId: `workspace-context:${input.sessionId}:index`,
       kind: 'index',
       cacheTier: 'mostly-stable',
       content: input.index,
@@ -380,7 +380,7 @@ export function compileContextProjection(input: CompileContextProjectionInput): 
 
   if (input.currentTaskPacket !== undefined) {
     blocks.push(renderBlock({
-      blockId: `psm:${input.sessionId}:task-packet`,
+      blockId: `workspace-context:${input.sessionId}:task-packet`,
       kind: 'task-packet',
       cacheTier: 'tail',
       content: input.currentTaskPacket,
@@ -390,7 +390,7 @@ export function compileContextProjection(input: CompileContextProjectionInput): 
   }
   if (input.retrievedEvidence !== undefined) {
     blocks.push(renderBlock({
-      blockId: `psm:${input.sessionId}:retrieved-evidence`,
+      blockId: `workspace-context:${input.sessionId}:retrieved-evidence`,
       kind: 'retrieved-evidence',
       cacheTier: 'tail',
       content: input.retrievedEvidence,
@@ -461,7 +461,7 @@ export function buildCompactionRecordedEvent(input: CompactionRecordedEventInput
       reason: input.reason,
     }).slice('sha256:'.length, 'sha256:'.length + 16)}`;
   return {
-    schemaVersion: 'sciforge.project-session-event.v1',
+    schemaVersion: 'sciforge.workspace-ledger-event.v1',
     eventId,
     sessionId: input.sessionId,
     createdAt,
@@ -501,13 +501,13 @@ export function recoverProjectSessionProjection(events: readonly ProjectSessionE
     ? latestFailure.refs
     : refIndex.slice(-16);
   return {
-    schemaVersion: 'sciforge.project-session-recovery-projection.v1',
+    schemaVersion: 'sciforge.workspace-recovery-projection.v1',
     sessionId,
     activeRunId,
     artifactIndex,
     failureIndex,
     nextHandoffPacket: {
-      schemaVersion: 'sciforge.project-session-handoff-packet.v1',
+      schemaVersion: 'sciforge.workspace-handoff-packet.v1',
       mode: latestFailure ? 'repair-continuation' : 'continue',
       refs,
       retrievalTools: ['retrieve', 'read_ref', 'workspace_search'],
@@ -525,7 +525,7 @@ function normalizeConversationEvent(
   const payload = asRecord(event.payload);
   const refs = normalizeRefs(extractRefs(payload), stringValue(event.runId));
   return {
-    schemaVersion: 'sciforge.project-session-event.v1',
+    schemaVersion: 'sciforge.workspace-ledger-event.v1',
     eventId: `conversation:${id}`,
     sessionId,
     turnId: stringValue(event.turnId),
@@ -550,7 +550,7 @@ function normalizeRunLike(value: unknown, sessionId: string, fallbackCreatedAt?:
   const runId = stringValue(record.runId) ?? stringValue(record.id);
   const refs = normalizeRefs(extractRefs(record), runId);
   return {
-    schemaVersion: 'sciforge.project-session-event.v1',
+    schemaVersion: 'sciforge.workspace-ledger-event.v1',
     eventId: `run:${runId ?? digestStableBytes(record).slice('sha256:'.length, 'sha256:'.length + 16)}`,
     sessionId: stringValue(record.sessionId) ?? sessionId,
     runId,
@@ -580,7 +580,7 @@ function normalizeMessageLike(value: unknown, sessionId: string, fallbackCreated
   const role = stringValue(record.role) ?? stringValue(record.actor);
   const refs = normalizeRefs(extractRefs(record), stringValue(record.runId));
   return {
-    schemaVersion: 'sciforge.project-session-event.v1',
+    schemaVersion: 'sciforge.workspace-ledger-event.v1',
     eventId: `message:${id}`,
     sessionId: stringValue(record.sessionId) ?? sessionId,
     turnId: stringValue(record.turnId),
@@ -621,7 +621,7 @@ function normalizeRecordLike(
     ?? digestStableBytes(record).slice('sha256:'.length, 'sha256:'.length + 16);
   const refs = normalizeRefs(extractRefsForSource(record, source), stringValue(record.runId) ?? stringValue(record.producerRunId));
   return {
-    schemaVersion: 'sciforge.project-session-event.v1',
+    schemaVersion: 'sciforge.workspace-ledger-event.v1',
     eventId: `${source}:${id}`,
     sessionId: stringValue(record.sessionId) ?? sessionId,
     runId: stringValue(record.runId) ?? stringValue(record.producerRunId),

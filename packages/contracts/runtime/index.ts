@@ -2,6 +2,35 @@ import type { ReactNode } from 'react';
 import type { ArtifactDelivery } from './artifacts';
 
 export {
+  EVENT_RELAY_SCHEMA_VERSION,
+  FAILURE_NORMALIZER_SCHEMA_VERSION,
+  HARNESS_POLICY_REFS_SCHEMA_VERSION,
+  RUN_CHECKPOINT_EVENT_SCHEMA_VERSION,
+  RUN_STATUS_EVENT_SCHEMA_VERSION,
+  SINGLE_AGENT_RUNTIME_CONTRACT_ID,
+  TURN_PIPELINE_SCHEMA_VERSION,
+  TURN_PIPELINE_STAGES,
+  WRITE_AHEAD_SPOOL_SCHEMA_VERSION,
+  createTurnPipelineDefinition,
+  eventRelayIdempotencyKey,
+} from './single-agent-runtime';
+export type {
+  EventRelayIdentity,
+  EventRelayToolResult,
+  HarnessPolicyRefs,
+  IdempotentToolCallKey,
+  NormalizedRuntimeFailure,
+  RunCheckpointEventPayload,
+  RunLifecycleStatus,
+  RunStatusEventPayload,
+  RuntimeFailureClass,
+  RuntimeFailureOwner,
+  RuntimeFailureRecoverability,
+  TurnPipelineDefinition,
+  TurnPipelineStage,
+  WriteAheadSpoolLimits,
+} from './single-agent-runtime';
+export {
   RUNTIME_AGENTSERVER_MANAGED_COMPACTION_BACKENDS,
   SUPPORTED_RUNTIME_AGENT_BACKENDS,
   compactCapabilityForAgentBackend,

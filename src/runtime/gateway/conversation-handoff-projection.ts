@@ -1,25 +1,33 @@
+import { createHash } from 'node:crypto';
 import {
-  compileContextProjection,
-  normalizeProjectSessionMemory,
+  compileWorkspaceContextProjection,
+  normalizeWorkspaceKernelAuditInput,
   type ContextProjectionBlock,
   type ProjectMemoryRef,
   type ProjectSessionEvent,
 } from '../project-session-memory.js';
+import {
+  buildAgentServerContextRequest,
+  type AgentServerContextRequest,
+} from './agentserver-context-contract.js';
 
-export const CONVERSATION_HANDOFF_PROJECTION_SCHEMA_VERSION = 'sciforge.conversation.handoff-memory-projection.v1' as const;
+export const CONVERSATION_CONTEXT_PROJECTION_SCHEMA_VERSION = 'sciforge.conversation.context-projection.v1' as const;
 
 type JsonMap = Record<string, unknown>;
 
 const INLINE_IMAGE_PAYLOAD = /data:image|;base64,/gi;
 
-export interface ConversationHandoffMemoryProjection {
-  schemaVersion: typeof CONVERSATION_HANDOFF_PROJECTION_SCHEMA_VERSION;
-  authority: 'workspace-project-session-memory';
+export interface ConversationContextProjection {
+  schemaVersion: typeof CONVERSATION_CONTEXT_PROJECTION_SCHEMA_VERSION;
+  authority: 'workspace-kernel-context-projection';
   mode: string;
-  projectSessionMemory: JsonMap;
+  workspaceLedger: JsonMap;
   contextProjectionBlocks: ContextProjectionBlock[];
   stablePrefixHash: string;
-  contextRefs: string[];
+  contextRefs: ProjectMemoryRef[];
+  capabilityBriefRef: ProjectMemoryRef;
+  cachePlan: AgentServerContextRequest['cachePlan'];
+  agentServerContextRequest: AgentServerContextRequest;
   selectedContextRefs: string[];
   retrievalTools: string[];
   selectedMessageRefs: JsonMap[];
@@ -28,7 +36,7 @@ export interface ConversationHandoffMemoryProjection {
   pollutionGuard: JsonMap;
 }
 
-export function buildConversationHandoffMemoryProjection(request: unknown): ConversationHandoffMemoryProjection {
+export function buildConversationContextProjection(request: unknown): ConversationContextProjection {
   const data = recordValue(request) ?? {};
   const session = firstRecord(data.session);
   const policy = firstRecord(data.contextPolicy, data.context_policy);
@@ -43,7 +51,7 @@ export function buildConversationHandoffMemoryProjection(request: unknown): Conv
     || textValue(data.sessionId)
     || textValue(data.requestId)
     || 'session-unknown';
-  const projectSession = normalizeProjectSessionMemory({
+  const workspaceLedger = normalizeWorkspaceKernelAuditInput({
     session,
     sessionId,
     artifacts: arrayValue(session.artifacts),
@@ -58,10 +66,10 @@ export function buildConversationHandoffMemoryProjection(request: unknown): Conv
     ...selectedMessages.flatMap((entry) => stringListValue(entry.refs)),
     ...selectedRuns.flatMap((entry) => stringListValue(entry.refs)),
   ]);
-  const contextProjection = compileContextProjection({
+  const contextProjection = compileWorkspaceContextProjection({
     sessionId,
     immutablePrefix: {
-      schemaVersion: 'sciforge.project-session-memory.immutable-prefix.v1',
+      schemaVersion: 'sciforge.workspace-kernel.immutable-prefix.v1',
       runtimeContract: 'ToolPayload refs-first handoff',
       rules: [
         'workspace ledger is canonical truth',
@@ -81,12 +89,12 @@ export function buildConversationHandoffMemoryProjection(request: unknown): Conv
       decisions: arrayValue(session.decisions).slice(-24),
     },
     index: {
-      schemaVersion: 'sciforge.project-session-memory.index.v1',
-      eventCount: projectSession.events.length,
-      refCount: projectSession.refIndex.length,
-      eventIndex: eventIndex(projectSession.events),
-      refIndex: refIndex(projectSession.refIndex),
-      failureIndex: failureIndex(projectSession.events),
+      schemaVersion: 'sciforge.workspace-kernel.index.v1',
+      eventCount: workspaceLedger.events.length,
+      refCount: workspaceLedger.refIndex.length,
+      eventIndex: eventIndex(workspaceLedger.events),
+      refIndex: refIndex(workspaceLedger.refIndex),
+      failureIndex: failureIndex(workspaceLedger.events),
     },
     currentTaskPacket: {
       mode,
@@ -99,56 +107,98 @@ export function buildConversationHandoffMemoryProjection(request: unknown): Conv
         || textValue(recordValue(data.turn)?.prompt)
         || textValue(recordValue(data.turn)?.text),
       ), 900),
-      selectedEventIds: selectedEventIds(projectSession.events, selectedMessages, selectedRuns),
+      selectedEventIds: selectedEventIds(workspaceLedger.events, selectedMessages, selectedRuns),
       pollutionGuard: {
         explicitReferencesFirst: explicitRefs.length > 0,
         excludedHistory: excluded,
       },
     },
     sourceEventIds: {
-      stableSessionState: projectSession.events
+      stableSessionState: workspaceLedger.events
         .filter((event) => event.kind === 'decision-recorded' || event.kind === 'human-approval-recorded')
         .map((event) => event.eventId),
-      index: projectSession.events.map((event) => event.eventId),
-      currentTaskPacket: selectedEventIds(projectSession.events, selectedMessages, selectedRuns),
+      index: workspaceLedger.events.map((event) => event.eventId),
+      currentTaskPacket: selectedEventIds(workspaceLedger.events, selectedMessages, selectedRuns),
     },
+  });
+  const capabilityBriefRef = memoryRef(
+    `projection:${sessionId}:capability-brief`,
+    'projection',
+    'AgentServer capability brief projection',
+  );
+  const currentTurnRef = memoryRef(
+    `ledger-event:${textValue(recordValue(data.turn)?.turnId) || textValue(data.turnId) || textValue(data.requestId) || 'current-turn'}`,
+    'ledger-event',
+    'Current turn anchor',
+  );
+  const stablePrefixRefs = contextProjection.blocks
+    .filter((block) => block.cacheTier === 'stable-prefix')
+    .map((block) => projectionBlockRef(block));
+  const perTurnPayloadRefs = [
+    currentTurnRef,
+    ...contextProjection.blocks
+      .filter((block) => block.cacheTier !== 'stable-prefix')
+      .map((block) => projectionBlockRef(block)),
+  ];
+  const contextRequest = buildAgentServerContextRequest({
+    sessionId,
+    turnId: currentTurnRef.ref.replace(/^ledger-event:/, ''),
+    mode: mode === 'continue' || mode === 'repair' || mode === 'answer-from-registry' ? mode : 'fresh',
+    currentTurnRef,
+    capabilityBriefRef,
+    explicitRefs: explicitRefs.map((ref) => ({ ref, kind: 'artifact' })),
+    projectionPrimaryRefs: contextProjection.blocks.map((block) => ({
+      ref: `projection-block:${block.blockId}`,
+      kind: 'projection',
+      digest: block.sha256,
+      sizeBytes: Buffer.byteLength(block.content, 'utf8'),
+    })),
+    boundedContextIndexRefs: workspaceLedger.refIndex.slice(0, 12).map((ref) => ({
+      ref: ref.ref,
+      kind: ref.kind,
+      digest: ref.digest,
+      sizeBytes: ref.sizeBytes,
+      preview: ref.preview,
+    })),
+    cachePlan: {
+      stablePrefixRefs,
+      perTurnPayloadRefs,
+    },
+    retrievalTools: ['retrieve', 'read_ref', 'workspace_search'],
   });
 
   return {
-    schemaVersion: CONVERSATION_HANDOFF_PROJECTION_SCHEMA_VERSION,
-    authority: 'workspace-project-session-memory',
+    schemaVersion: CONVERSATION_CONTEXT_PROJECTION_SCHEMA_VERSION,
+    authority: 'workspace-kernel-context-projection',
     mode,
-    projectSessionMemory: {
-      schemaVersion: projectSession.schemaVersion,
-      sessionId: projectSession.sessionId,
-      eventCount: projectSession.events.length,
-      refCount: projectSession.refIndex.length,
-      eventIndex: eventIndex(projectSession.events),
-      refIndex: refIndex(projectSession.refIndex),
-      failureIndex: failureIndex(projectSession.events),
+    workspaceLedger: {
+      schemaVersion: workspaceLedger.schemaVersion,
+      sessionId: workspaceLedger.sessionId,
+      eventCount: workspaceLedger.events.length,
+      refCount: workspaceLedger.refIndex.length,
+      eventIndex: eventIndex(workspaceLedger.events),
+      refIndex: refIndex(workspaceLedger.refIndex),
+      failureIndex: failureIndex(workspaceLedger.events),
     },
     contextProjectionBlocks: contextProjection.blocks,
     stablePrefixHash: contextProjection.stablePrefixHash,
-    contextRefs: dedupe([
-      ...projectSession.events.map((event) => `ledger-event:${event.eventId}`),
-      ...contextProjection.blocks.map((block) => `projection-block:${block.blockId}`),
-      ...projectSession.refIndex.map((ref) => ref.ref),
-    ]),
+    contextRefs: contextRequest.contextRefs,
+    capabilityBriefRef,
+    cachePlan: contextRequest.cachePlan,
+    agentServerContextRequest: contextRequest,
     selectedContextRefs,
     retrievalTools: ['retrieve', 'read_ref', 'workspace_search'],
     selectedMessageRefs: selectedMessages,
     selectedRunRefs: selectedRuns,
     currentReferenceFocus: explicitRefs,
     pollutionGuard: {
-      source: 'project-session-memory-projection',
+      source: 'workspace-kernel-context-projection',
       fileRefOnly: true,
       explicitReferencesFirst: explicitRefs.length > 0,
       excludedHistory: excluded,
     },
   };
 }
-
-export const buildHandoffMemoryProjection = buildConversationHandoffMemoryProjection;
 
 function selectMessages(messages: unknown[], mode: string, explicitRefs: string[]): JsonMap[] {
   const selected: JsonMap[] = [];
@@ -247,6 +297,28 @@ function refIndex(refs: ProjectMemoryRef[]): JsonMap[] {
     readable: ref.readable,
     retention: ref.retention,
   }));
+}
+
+function projectionBlockRef(block: ContextProjectionBlock): ProjectMemoryRef {
+  return {
+    ref: `projection-block:${block.blockId}`,
+    kind: 'projection',
+    digest: block.sha256,
+    sizeBytes: Buffer.byteLength(block.content, 'utf8'),
+    preview: `${block.kind} context projection block`,
+    retention: block.cacheTier === 'tail' ? 'hot' : 'warm',
+  };
+}
+
+function memoryRef(ref: string, kind: ProjectMemoryRef['kind'], preview: string): ProjectMemoryRef {
+  return {
+    ref,
+    kind,
+    digest: `sha256:${createHash('sha256').update(`${kind}\n${ref}\n${preview}`).digest('hex')}`,
+    sizeBytes: Buffer.byteLength(preview, 'utf8'),
+    preview,
+    retention: kind === 'ledger-event' ? 'audit-only' : 'warm',
+  };
 }
 
 function failureIndex(events: ProjectSessionEvent[]): JsonMap[] {

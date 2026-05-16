@@ -2,6 +2,12 @@ import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import { extname, join, relative } from 'node:path';
 import { artifactHasUserFacingDelivery, type RuntimeArtifact } from '@sciforge-ui/runtime-contract/artifacts';
+import { createTurnPipelineDefinition } from '@sciforge-ui/runtime-contract';
+import {
+  createEventRelay,
+  createWriteAheadSpool,
+  normalizeRuntimeFailure,
+} from '../../src/runtime/conversation-kernel/index.js';
 
 type Ref = {
   id: string;
@@ -68,6 +74,8 @@ const contextRequest = {
     stablePrefixRefs: [capabilityBriefRef, stableGoalRef],
     perTurnPayloadRefs: [currentTurnRef, explicitArtifactRef],
   },
+  capabilityBriefRef,
+  contextRefs: [capabilityBriefRef, stableGoalRef, currentTurnRef, explicitArtifactRef],
   currentTask: {
     currentTurnRef,
     stableGoalRef,
@@ -100,10 +108,12 @@ const contextRequest = {
 };
 
 cover('C02', () => {
-  assertNoKeysDeep(contextRequest, ['rawHistory', 'rawArtifactBody', 'artifactBody', 'fullRefList']);
+  assertNoKeysDeep(contextRequest, ['rawHistory', 'rawArtifactBody', 'artifactBody', 'fullRefList', 'handoffMemoryProjection', 'memoryPlan', 'availableSkills']);
   assertNoRefBodies(contextRequest);
   assert.ok(contextRequest.currentTask.selectedRefs.length <= 3);
   assert.ok(contextRequest.refSelectionAudit.selectedRefBytes <= 4096);
+  assert.equal(contextRequest.capabilityBriefRef.id, capabilityBriefRef.id);
+  assert.ok(contextRequest.contextRefs.some((entry) => entry.id === currentTurnRef.id));
 });
 
 cover('C03', () => {
@@ -139,22 +149,43 @@ cover('C05', () => {
 });
 
 cover('C08', () => {
-  const gateway = createIdempotentToolExecutor();
+  const gateway = createEventRelay<{ type: string }>({ producerId: 'single-agent-smoke' });
+  const firstEvent = gateway.emit({ type: 'tool-call-started' });
+  const secondEvent = gateway.emit({ type: 'tool-call-progress' });
+  assert.equal(firstEvent.identity.producerSeq, 1);
+  assert.deepEqual(gateway.replayAfter(firstEvent.identity.cursor).map((event) => event.identity.cursor), [secondEvent.identity.cursor]);
+
   const key = { callId: 'call-1', inputDigest: 'sha256:input', routeDigest: 'sha256:route' };
-  const first = gateway.execute(key);
-  const second = gateway.execute(key);
-  assert.equal(first.resultRef, second.resultRef);
-  assert.equal(gateway.sideEffectCount, 1);
+  let sideEffectCount = 0;
+  const first = gateway.executeToolCall(key, () => {
+    sideEffectCount += 1;
+    return { resultRefs: ['ref-tool-result-1'] };
+  });
+  const second = gateway.executeToolCall(key, () => {
+    sideEffectCount += 1;
+    return { resultRefs: ['ref-tool-result-2'] };
+  });
+  assert.deepEqual(first.resultRefs, second.resultRefs);
+  assert.equal(second.reused, true);
+  assert.equal(sideEffectCount, 1);
 });
 
 cover('C09', () => {
-  const failure = {
-    failureClass: 'validation',
-    recoverability: 'repairable',
-    owner: 'gateway',
-    failureSignature: 'sha256:schema-mismatch',
-  };
+  const failure = normalizeRuntimeFailure({
+    reason: 'schema validation failed for materialized payload',
+    evidenceRefs: ['artifact:bad-payload'],
+  });
   assertRequiredKeys(failure, ['failureClass', 'recoverability', 'owner', 'failureSignature']);
+  assert.equal(failure.failureClass, 'validation');
+  assert.equal(failure.recoverability, 'repairable');
+  assert.equal(failure.owner, 'gateway');
+
+  const spool = createWriteAheadSpool({ limits: { maxDepth: 1, maxAgeMs: 100 }, now: () => 1 });
+  assert.equal(spool.append({ id: 'event:1', refs: ['ref:1'] }).ok, true);
+  const overflow = spool.append({ id: 'event:2', refs: ['ref:2'] });
+  assert.equal(overflow.ok, false);
+  assert.equal(overflow.failure.failureClass, 'storage-unavailable');
+  assert.notEqual(overflow.failure.failureClass, 'external');
 });
 
 cover('C10', () => {
@@ -172,6 +203,11 @@ cover('C10', () => {
 });
 
 cover('C11', () => {
+  const pipeline = createTurnPipelineDefinition();
+  assert.deepEqual(pipeline.stages, ['registerTurn', 'requestContext', 'driveRun', 'finalizeRun']);
+  assert.equal(pipeline.executorPolicy.declarativeOnly, true);
+  assert.equal(pipeline.executorPolicy.forbidUserTextInspection, true);
+
   const policy = {
     maxForegroundRuns: 1,
     allowBackgroundRuns: true,
@@ -402,22 +438,6 @@ function createFixtureKernel() {
   };
 }
 
-function createIdempotentToolExecutor() {
-  const results = new Map<string, { resultRef: string }>();
-  return {
-    sideEffectCount: 0,
-    execute(input: { callId: string; inputDigest: string; routeDigest: string }) {
-      const key = `${input.callId}:${input.inputDigest}:${input.routeDigest}`;
-      const existing = results.get(key);
-      if (existing) return existing;
-      this.sideEffectCount += 1;
-      const result = { resultRef: `ref-tool-result-${this.sideEffectCount}` };
-      results.set(key, result);
-      return result;
-    },
-  };
-}
-
 function ref(id: string, kind: string, group: string, size = 128): Ref {
   return { id, kind, group, retention: retentionForGroup(group), size, digest: `sha256:${id}` };
 }
@@ -464,8 +484,9 @@ function assertNoRefBodies(value: unknown) {
   for (const nested of Object.values(record)) assertNoRefBodies(nested);
 }
 
-function assertRequiredKeys(value: Record<string, unknown>, keys: string[]) {
-  for (const key of keys) assert.ok(value[key], `missing ${key}`);
+function assertRequiredKeys(value: object, keys: string[]) {
+  const record = value as Record<string, unknown>;
+  for (const key of keys) assert.ok(record[key], `missing ${key}`);
 }
 
 function shouldAutoRepair(policy: { maxAutoRecoveryAttempts: number; maxSameOwnerRetries: number; maxSameFailureSignatureRetries: number }, failures: Array<{ owner: string; failureSignature: string; canAutoRecover: boolean }>) {

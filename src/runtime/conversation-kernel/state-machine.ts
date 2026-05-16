@@ -120,6 +120,34 @@ export function applyConversationEvent(state: ConversationState, event: Conversa
         ...next,
         verification: verificationFromEvent(event),
       };
+    case 'RunStatusRecorded':
+      return stateFromRunStatus(next, event);
+    case 'RunCheckpointRecorded':
+      return {
+        ...next,
+        status: 'partial-ready',
+        terminal: false,
+      };
+  }
+}
+
+function stateFromRunStatus(state: ConversationState, event: ConversationEvent): ConversationState {
+  const status = stringOrUndefined(event.payload.status);
+  switch (status) {
+    case 'registered':
+    case 'context-requested':
+      return { ...state, status: 'planned', terminal: false };
+    case 'running':
+      return { ...state, status: 'dispatched', terminal: false };
+    case 'checkpointed':
+      return { ...state, status: 'partial-ready', terminal: false };
+    case 'succeeded':
+      return { ...state, status: 'satisfied', terminal: true };
+    case 'storage-unavailable':
+    case 'failed':
+      return withFailure(state, 'repair-needed', event, 'runtime-runner');
+    default:
+      return { ...state, status: 'dispatched', terminal: false };
   }
 }
 
@@ -133,7 +161,7 @@ function withFailure(
     ? event.payload.reason
     : typeof event.payload.failureReason === 'string'
       ? event.payload.failureReason
-      : undefined;
+      : failureReasonFromPayload(event.payload.failure);
   const evidenceRefs = event.storage === 'ref'
     ? event.payload.refs.map((ref) => ref.ref)
     : Array.isArray(event.payload.evidenceRefs)
@@ -184,4 +212,10 @@ function verificationFromEvent(event: ConversationEvent): NonNullable<Conversati
 
 function stringOrUndefined(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function failureReasonFromPayload(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const reason = (value as Record<string, unknown>).reason;
+  return stringOrUndefined(reason);
 }

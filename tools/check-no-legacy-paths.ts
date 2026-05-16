@@ -106,6 +106,20 @@ const rules: Rule[] = [
       && /\.\.\.record\b/.test(line),
   },
   {
+    id: 'sa-runtime-user-text-inspection',
+    message: 'Runtime TurnPipeline/RunStateMachine executors must not inspect user text; routing facts must arrive as structured refs/decisions.',
+    appliesTo: (file) => file.startsWith('src/runtime/conversation-kernel/'),
+    match: (line) => isCodeLine(line)
+      && /\b(?:prompt|userText|content)\b.*\.(?:includes|match|test|startsWith|endsWith)\s*\(/.test(line),
+  },
+  {
+    id: 'sa-runtime-harness-policy-body',
+    message: 'Runtime Bridge must consume Harness policy as decision/contract/trace refs, not inline semantic policy bodies.',
+    appliesTo: (file) => file.startsWith('src/runtime/conversation-kernel/'),
+    match: (line) => isCodeLine(line)
+      && /\b(?:domainSemantics|semanticPolicy|harnessPolicyBody|policyBody)\b/.test(line),
+  },
+  {
     id: 'sa-degraded-raw-context-shape',
     message: 'Single-Agent degraded handoff packets must stay refs-first and must not grow raw history/full ref list/compaction state fields.',
     appliesTo: (file) => file.startsWith('src/runtime/gateway/'),

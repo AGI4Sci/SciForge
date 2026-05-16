@@ -109,7 +109,9 @@ export type ConversationEventType =
   | 'HistoryEdited'
   | 'BackgroundRunning'
   | 'BackgroundCompleted'
-  | 'VerificationRecorded';
+  | 'VerificationRecorded'
+  | 'RunStatusRecorded'
+  | 'RunCheckpointRecorded';
 
 export interface ConversationEventLog {
   schemaVersion: 'sciforge.conversation-event-log.v1';

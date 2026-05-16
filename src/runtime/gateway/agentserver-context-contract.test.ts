@@ -26,7 +26,9 @@ test('AgentServerContextRequest canonical serialization is deterministic and ref
   assert.deepEqual(Object.keys(reparsed), [
     '_contractVersion',
     'cachePlan',
+    'capabilityBriefRef',
     'contextPolicy',
+    'contextRefs',
     'currentTask',
     'refSelectionAudit',
     'retrievalPolicy',
@@ -71,6 +73,17 @@ test('AgentServerContextRequest rejects raw history, raw body, full ref list, co
   assert.match(result.errors.join('\n'), /compactionState/);
   assert.match(result.errors.join('\n'), /recentTurns/);
   assert.match(result.errors.join('\n'), /selectedRefs\[0\]\.source/);
+
+  const legacyCompat = validateAgentServerContextRequest({
+    ...buildContextRequest(),
+    handoffMemoryProjection: {},
+    memoryPlan: {},
+    availableSkills: ['legacy.skill'],
+  });
+  assert.equal(legacyCompat.ok, false);
+  assert.match(legacyCompat.errors.join('\n'), /handoffMemoryProjection/);
+  assert.match(legacyCompat.errors.join('\n'), /memoryPlan/);
+  assert.match(legacyCompat.errors.join('\n'), /availableSkills/);
 });
 
 test('DegradedHandoffPacket canonical guard forbids recent turns, full refs, raw history, raw bodies, and compaction state', () => {
@@ -150,6 +163,9 @@ test('buildAgentServerContextRequest applies drift guards and deterministic byte
 
   assert.equal(fresh.refSelectionPolicy?.schemaVersion, REF_SELECTION_POLICY_VERSION);
   assert.equal(fresh.contextPolicy.includeCurrentWork, false);
+  assert.equal(fresh.capabilityBriefRef.ref, 'projection:session-builder:capability-brief');
+  assert.ok(fresh.contextRefs.some((item) => item.ref === fresh.capabilityBriefRef.ref));
+  assert.ok(fresh.contextRefs.some((item) => item.ref === fresh.currentTask.currentTurnRef.ref));
   assert.deepEqual(fresh.cachePlan.stablePrefixRefs, []);
   assert.equal(fresh.currentTask.stableGoalRef, undefined);
   assert.deepEqual(fresh.currentTask.selectedRefs.map((item) => [item.ref, item.source]), [
@@ -281,6 +297,13 @@ function buildContextRequest(): AgentServerContextRequest {
       stablePrefixRefs: [ref('projection:immutable-prefix')],
       perTurnPayloadRefs: [ref('ledger-event:turn-1')],
     },
+    capabilityBriefRef: ref('projection:capability-brief'),
+    contextRefs: [
+      ref('projection:capability-brief'),
+      ref('projection:immutable-prefix'),
+      ref('ledger-event:turn-1'),
+      ref('artifact:paper-1'),
+    ],
     currentTask: {
       currentTurnRef: ref('ledger-event:turn-1'),
       mode: 'fresh',
@@ -349,10 +372,10 @@ function ref(id: string): ProjectMemoryRef {
 }
 
 const SA_CONF_03_REQUEST_GOLDEN_SHA256 = {
-  freshExplicitRefs: 'd438f4fe90491b2b741cd1763c848d384a5a810a121c8f0966fbc4c58a6e6779',
-  continueNoExplicitRefs: '3505aa182d8b28be6e00b6568578cc0b250d74c124282bff693d6cc244686cb1',
-  repairExplicitRefs: '0568aad8b3f406eda6d1e41beab02d11573b1ed570a3da2643837a71cdbd78fc',
-  retrievalUnavailable: '251e72a5b957e9cb5c7fbfbf8d923ed6cf0d5ddd44eb8c49c5b2636af2c1e396',
+  freshExplicitRefs: '451386c40d9245ad7f0443bf3f7a52ee3d1c731abe87efb237cf5f58deadbc2a',
+  continueNoExplicitRefs: '77b1b3a13077c8a70356225323c469fc81aa5bcb9c3c08f757ab5f999ad158f6',
+  repairExplicitRefs: '01af8d4756eef564031a61fc0d3191a19a67d3201ab126db4ae1c985cff8d622',
+  retrievalUnavailable: 'ad81c3abcb67f8ad506c6aaef01a6760fefab1d92ae7a873d76df11a0123b9fe',
 } as const;
 
 const SA_CONF_03_DEGRADED_GOLDEN_SHA256 = {
@@ -370,6 +393,13 @@ function buildSaConf03RequestFixtures(): Record<string, AgentServerContextReques
       stablePrefixRefs: [ref('projection:sa-conf-03-stable-goal')],
       perTurnPayloadRefs: [ref('ledger-event:sa-conf-03-fresh')],
     },
+    capabilityBriefRef: ref('projection:sa-conf-03-capability-brief'),
+    contextRefs: [
+      ref('projection:sa-conf-03-capability-brief'),
+      ref('projection:sa-conf-03-stable-goal'),
+      ref('ledger-event:sa-conf-03-fresh'),
+      ref('artifact:sa-conf-03-paper'),
+    ],
     currentTask: {
       currentTurnRef: ref('ledger-event:sa-conf-03-fresh'),
       stableGoalRef: ref('projection:sa-conf-03-stable-goal'),
@@ -421,6 +451,13 @@ function buildSaConf03RequestFixtures(): Record<string, AgentServerContextReques
       stablePrefixRefs: [ref('projection:sa-conf-03-stable-goal')],
       perTurnPayloadRefs: [ref('ledger-event:sa-conf-03-continue')],
     },
+    capabilityBriefRef: ref('projection:sa-conf-03-capability-brief'),
+    contextRefs: [
+      ref('projection:sa-conf-03-capability-brief'),
+      ref('projection:sa-conf-03-stable-goal'),
+      ref('ledger-event:sa-conf-03-continue'),
+      ref('projection:sa-conf-03-current-work'),
+    ],
     currentTask: {
       currentTurnRef: ref('ledger-event:sa-conf-03-continue'),
       stableGoalRef: ref('projection:sa-conf-03-stable-goal'),
@@ -472,6 +509,14 @@ function buildSaConf03RequestFixtures(): Record<string, AgentServerContextReques
       stablePrefixRefs: [ref('projection:sa-conf-03-stable-goal')],
       perTurnPayloadRefs: [ref('ledger-event:sa-conf-03-repair'), ref('failure:sa-conf-03-validation')],
     },
+    capabilityBriefRef: ref('projection:sa-conf-03-capability-brief'),
+    contextRefs: [
+      ref('projection:sa-conf-03-capability-brief'),
+      ref('projection:sa-conf-03-stable-goal'),
+      ref('ledger-event:sa-conf-03-repair'),
+      ref('failure:sa-conf-03-validation'),
+      ref('artifact:sa-conf-03-failing-output'),
+    ],
     currentTask: {
       currentTurnRef: ref('ledger-event:sa-conf-03-repair'),
       stableGoalRef: ref('projection:sa-conf-03-stable-goal'),
@@ -530,6 +575,12 @@ function buildSaConf03RequestFixtures(): Record<string, AgentServerContextReques
       stablePrefixRefs: [ref('projection:sa-conf-03-stable-goal')],
       perTurnPayloadRefs: [ref('ledger-event:sa-conf-03-retrieval-unavailable')],
     },
+    contextRefs: [
+      ref('projection:sa-conf-03-capability-brief'),
+      ref('projection:sa-conf-03-stable-goal'),
+      ref('ledger-event:sa-conf-03-retrieval-unavailable'),
+      ref('projection:sa-conf-03-bounded-context-index'),
+    ],
     currentTask: {
       ...continueNoExplicitRefs.currentTask,
       currentTurnRef: ref('ledger-event:sa-conf-03-retrieval-unavailable'),

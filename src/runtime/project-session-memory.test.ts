@@ -59,7 +59,7 @@ test('normalizes conversation event logs append-only without rewriting existing 
   const base = normalizeWorkspaceKernelAuditInput(baseLog);
   const appended = normalizeWorkspaceKernelAuditInput(appendedLog);
 
-  assert.equal(base.schemaVersion, 'sciforge.project-session-ledger-projection.v1');
+  assert.equal(base.schemaVersion, 'sciforge.workspace-ledger-projection.v1');
   assert.equal(appended.events.length, base.events.length + 1);
   assert.deepEqual(appended.events.slice(0, base.events.length), base.events);
   assert.equal(appended.events[0].eventId, 'conversation:turn-1');
@@ -292,7 +292,7 @@ test('recovers active run, artifact index, failure index, and next handoff from 
   });
 
   const recovered = recoverWorkspaceKernelProjection(projection.events);
-  assert.equal(recovered.schemaVersion, 'sciforge.project-session-recovery-projection.v1');
+  assert.equal(recovered.schemaVersion, 'sciforge.workspace-recovery-projection.v1');
   assert.equal(recovered.activeRunId, 'run-failed');
   assert.deepEqual(recovered.artifactIndex.map((ref) => ref.ref), [
     '.sciforge/sessions/session-recover/artifacts/partial-report.md',
@@ -304,7 +304,7 @@ test('recovers active run, artifact index, failure index, and next handoff from 
 });
 
 function assertProjectEvent(event: WorkspaceLedgerEvent): void {
-  assert.equal(event.schemaVersion, 'sciforge.project-session-event.v1');
+  assert.equal(event.schemaVersion, 'sciforge.workspace-ledger-event.v1');
   assert.ok(event.eventId);
   assert.ok(event.summary);
 }

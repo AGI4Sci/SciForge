@@ -12,10 +12,10 @@ import { makeId, nowIso, type AgentContextWindowState, type AgentStreamEvent, ty
 import { exportJsonFile } from './exportUtils';
 import { Badge, ClaimTag, ConfidenceBar, EvidenceTag, cx } from './uiPrimitives';
 import {
-  appendUIActionAuditLog,
-  compactUIActionPromptPreview,
-  createUIAction,
-  uiActionReferenceRefs,
+  createCancelRunUIAction,
+  createConcurrencyDecisionUIAction,
+  createSubmitTurnUIAction,
+  recordUIActionInSession,
   type UIAction,
 } from './uiActionBoundary';
 import { AcceptancePanel } from './chat/AcceptancePanel';
@@ -350,7 +350,7 @@ export function ChatPanel({
     if (!autoRunRequest || autoRunRequest.targetScenario !== scenarioId || isSending) return;
     onAutoRunConsumed(autoRunRequest.id);
     window.setTimeout(() => {
-      void runPrompt(autoRunRequest.prompt, activeSessionRef.current);
+      void submitTurn(autoRunRequest.prompt);
     }, 120);
   }, [scenarioId, autoRunRequest, isSending, onAutoRunConsumed]);
 
@@ -386,15 +386,7 @@ export function ChatPanel({
       setComposerExpanded(true);
       return;
     }
-    recordUIAction(createUIAction({
-      id: makeId('ui-action'),
-      session: activeSessionRef.current,
-      createdAt: nowIso(),
-      type: 'submit-turn',
-      promptPreview: compactUIActionPromptPreview(prompt),
-      referenceRefs: uiActionReferenceRefs(pendingReferences),
-    }));
-    await runPrompt(prompt, activeSessionRef.current, pendingReferences);
+    await submitTurn(prompt, pendingReferences);
   }
 
   async function handleFileUpload(files: FileList | null) {
@@ -448,6 +440,17 @@ export function ChatPanel({
 
   function focusPendingReference(reference: SciForgeReference) {
     highlightReferencedContent(reference);
+  }
+
+  async function submitTurn(prompt: string, references: SciForgeReference[] = []) {
+    recordUIAction(createSubmitTurnUIAction({
+      id: makeId('ui-action'),
+      session: activeSessionRef.current,
+      createdAt: nowIso(),
+      prompt,
+      references,
+    }));
+    await runPrompt(prompt, activeSessionRef.current, references);
   }
 
   async function runPrompt(prompt: string, baseSession: SciForgeSession, references: SciForgeReference[] = [], sourceGuidance?: GuidanceQueueRecord) {
@@ -629,14 +632,13 @@ export function ChatPanel({
 
   function handleRunningGuidance(prompt: string) {
     const now = nowIso();
-    recordUIAction(createUIAction({
+    recordUIAction(createConcurrencyDecisionUIAction({
       id: makeId('ui-action'),
       session: activeSessionRef.current,
       createdAt: now,
-      type: 'concurrency-decision',
       activeRunId,
       decision: 'queue-guidance',
-      promptPreview: compactUIActionPromptPreview(prompt),
+      prompt,
     }));
     const guidance = createGuidanceQueueRecord(prompt, {
       receivedAt: now,
@@ -659,11 +661,10 @@ export function ChatPanel({
     if (!abortRef.current) return;
     const interruptedAt = nowIso();
     const rejectedIds = guidanceQueueRef.current.map((item) => item.id);
-    recordUIAction(createUIAction({
+    recordUIAction(createCancelRunUIAction({
       id: makeId('ui-action'),
       session: activeSessionRef.current,
       createdAt: interruptedAt,
-      type: 'cancel-run',
       runId: activeRunId,
       rejectedGuidanceIds: rejectedIds,
     }));
@@ -683,7 +684,10 @@ export function ChatPanel({
   }
 
   function recordUIAction(action: UIAction) {
-    uiActionAuditLogRef.current = appendUIActionAuditLog(uiActionAuditLogRef.current, action);
+    const nextSession = recordUIActionInSession(activeSessionRef.current, action);
+    uiActionAuditLogRef.current = nextSession.uiActionAuditLog ?? [];
+    activeSessionRef.current = nextSession;
+    onSessionChange(nextSession);
   }
 
   function beginComposerResize(event: React.MouseEvent<HTMLDivElement>) {
@@ -749,7 +753,7 @@ export function ChatPanel({
         setErrorText('历史消息已更新；下游结果存在冲突，请确认是否保留受影响 refs 或从编辑边界重新运行。');
         return;
       }
-      void runPrompt(content, editResult.session, editedMessage.references ?? []);
+      void submitTurn(content, editedMessage.references ?? []);
       return;
     }
     onEditMessage(editingMessageId, content);
