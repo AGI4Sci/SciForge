@@ -222,6 +222,8 @@ test('UI handoff does not synthesize verification policy defaults or pass throug
   assert.equal(bodies[0]?.humanApprovalPolicy, undefined);
   assert.equal(bodies[0]?.unverifiedReason, undefined);
   assert.match(String((bodies[0]?.uiState as { silentStreamRunId?: string } | undefined)?.silentStreamRunId), /^session-test:turn-/);
+  assert.equal((bodies[0]?.uiState as { contextReusePolicy?: { mode?: string; historyReuse?: { allowed?: boolean } } } | undefined)?.contextReusePolicy?.mode, 'fresh');
+  assert.equal((bodies[0]?.uiState as { contextReusePolicy?: { mode?: string; historyReuse?: { allowed?: boolean } } } | undefined)?.contextReusePolicy?.historyReuse?.allowed, false);
 
   await sendSciForgeToolMessage(messageInput({
     verificationPolicy: { required: false, mode: 'none', reason: 'explicit scenario policy' },
@@ -436,6 +438,8 @@ test('UI handoff keeps ref-backed artifact bodies and log refs bounded on contin
   assert.doesNotMatch(JSON.stringify(bodies[0]), /inline evidence should not travel again inline evidence should not travel again/);
   const uiState = bodies[0]?.uiState as { recentExecutionRefs?: Array<Record<string, unknown>> } | undefined;
   assert.equal(uiState?.recentExecutionRefs?.[0]?.stdoutRef, '.sciforge/sessions/run/logs/report.stdout.log');
+  assert.equal((uiState as { contextReusePolicy?: { mode?: string; historyReuse?: { allowed?: boolean } } } | undefined)?.contextReusePolicy?.mode, 'continue');
+  assert.equal((uiState as { contextReusePolicy?: { mode?: string; historyReuse?: { allowed?: boolean } } } | undefined)?.contextReusePolicy?.historyReuse?.allowed, true);
   const referencePolicy = bodies[0]?.referencePolicy as { defaultAction?: string } | undefined;
   assert.match(referencePolicy?.defaultAction ?? '', /stdoutRef\/stderrRef as audit refs/);
 });

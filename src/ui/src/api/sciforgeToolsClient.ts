@@ -84,6 +84,7 @@ export async function sendSciForgeToolMessage(
     selectedComponentIds,
   });
   const failureRecoveryPolicy = buildFailureRecoveryPolicy(input.executionUnits ?? [], input.runs ?? []);
+  const contextReusePolicy = buildTransportContextReusePolicy(input);
   let activeRequestController: AbortController | undefined;
   let timedOut = false;
   let retryForSilentFirstEvent = false;
@@ -249,6 +250,8 @@ export async function sendSciForgeToolMessage(
         turnExecutionConstraints,
         recentExecutionRefs,
         recentRuns: compactTransportRuns(input.runs ?? []),
+        contextReusePolicy,
+        contextIsolation: contextReusePolicy,
         failureRecoveryPolicy,
         workspacePersistence: workspacePersistenceSummary(input),
         artifactExpectationMode: expectedArtifactTypes.length ? 'explicit-current-turn' : 'backend-decides',
@@ -357,6 +360,39 @@ export async function sendSciForgeToolMessage(
     globalThis.clearInterval(silenceWatchdog);
     signal?.removeEventListener('abort', linkedAbort);
   }
+}
+
+function buildTransportContextReusePolicy(input: SendAgentMessageInput) {
+  const nonSeedMessageCount = (input.messages ?? []).filter((message) => !message.id.startsWith('seed')).length;
+  const hasPriorWork = nonSeedMessageCount > 1
+    || (input.runs?.length ?? 0) > 0
+    || (input.artifacts?.length ?? 0) > 0
+    || (input.executionUnits?.length ?? 0) > 0;
+  const failedExecutionRefCount = (input.executionUnits ?? [])
+    .filter((unit) => /failed|repair-needed|needs-human/i.test(String(unit.status || ''))).length;
+  const repairRequested = hasPriorWork
+    && failedExecutionRefCount > 0
+    && /\b(repair|fix|recover|retry|rerun|resume)\b|修复|恢复|重试|失败/i.test(input.prompt);
+  const mode = repairRequested ? 'repair' : hasPriorWork ? 'continue' : 'fresh';
+  return {
+    schemaVersion: 'sciforge.context-reuse-policy.v1',
+    mode,
+    historyReuse: {
+      allowed: hasPriorWork,
+      source: 'ui-transport-prior-work',
+    },
+    selectedRefsOnly: !hasPriorWork && (input.references?.length ?? 0) > 0,
+    priorWorkSignals: {
+      nonSeedMessageCount,
+      runCount: input.runs?.length ?? 0,
+      artifactCount: input.artifacts?.length ?? 0,
+      executionUnitCount: input.executionUnits?.length ?? 0,
+      failedExecutionRefCount,
+    },
+    reason: hasPriorWork
+      ? 'Current turn belongs to an existing session with projection/audit refs available; reuse must stay bounded by Projection and refs.'
+      : 'Fresh session turn; no prior session work is eligible for history reuse.',
+  };
 }
 
 function compactTargetInstanceContext(input: SendAgentMessageInput) {

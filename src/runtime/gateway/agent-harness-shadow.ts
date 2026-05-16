@@ -500,7 +500,9 @@ function agentHarnessInputFromRequest(request: GatewayRequest): Record<string, u
         ? uiState.harness
         : {};
   const input: Record<string, unknown> = {};
-  const intentMode = stringField(harness.intentMode) ?? stringField(uiState.harnessIntentMode);
+  const intentMode = stringField(harness.intentMode)
+    ?? stringField(uiState.harnessIntentMode)
+    ?? intentModeFromContextReusePolicy(uiState);
   if (intentMode && ['fresh', 'continuation', 'repair', 'audit', 'file-grounded', 'interactive'].includes(intentMode)) {
     input.intentMode = intentMode;
   }
@@ -513,6 +515,19 @@ function agentHarnessInputFromRequest(request: GatewayRequest): Record<string, u
   if (isRecord(harness.budgetOverrides)) input.budgetOverrides = harness.budgetOverrides;
   if (isRecord(harness.conversationSignals)) input.conversationSignals = harness.conversationSignals;
   return input;
+}
+
+function intentModeFromContextReusePolicy(uiState: Record<string, unknown>) {
+  const policy = isRecord(uiState.contextReusePolicy)
+    ? uiState.contextReusePolicy
+    : isRecord(uiState.contextIsolation)
+      ? uiState.contextIsolation
+      : undefined;
+  const mode = stringField(policy?.mode);
+  if (mode === 'continue') return 'continuation';
+  if (mode === 'repair') return 'repair';
+  if (mode === 'fresh' || mode === 'isolate') return 'fresh';
+  return undefined;
 }
 
 function requestContextRefs(request: GatewayRequest) {

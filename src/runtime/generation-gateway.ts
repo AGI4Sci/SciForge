@@ -127,6 +127,7 @@ import {
   firstPayloadFailureReason,
   payloadHasFailureStatus,
 } from './gateway/runtime-routing.js';
+import { attachResultPresentationContract } from './gateway/result-presentation-contract.js';
 import {
   isAgentServerRepairContinuationBoundedStopError,
   agentServerGenerationTokenGuardLimit,
@@ -416,11 +417,12 @@ function finalizeGatewayPayload(
   runtimeReplayRecorder: ReturnType<typeof applyRuntimeReplayRecorder>,
   callbacks: WorkspaceRuntimeCallbacks,
 ): ToolPayload {
-  return attachIntentFirstVerification(
+  const verifiedPayload = attachIntentFirstVerification(
     attachRuntimeReplayRecorderRefs(payload, runtimeReplayRecorder),
     request,
     { callbacks, runWorkVerify: true },
   );
+  return attachResultPresentationContract(verifiedPayload, { request });
 }
 
 async function runAgentServerGeneratedTask(

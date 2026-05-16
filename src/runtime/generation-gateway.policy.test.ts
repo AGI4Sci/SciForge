@@ -29,6 +29,11 @@ test('runtime gateway fails closed before AgentServer when conversation policy f
     assert.equal(payload.executionUnits[0]?.tool, 'sciforge.conversation-policy');
     assert.match(payload.message, /fail-closed|没有启动新的 runtime/);
     assert.doesNotMatch(JSON.stringify(payload), /agentserver\.generate/);
+    const displayIntent = payload.displayIntent as Record<string, any>;
+    assert.equal(displayIntent.conversationProjection?.schemaVersion, 'sciforge.conversation-projection.v1');
+    assert.equal(displayIntent.conversationProjection?.visibleAnswer?.status, 'degraded-result');
+    assert.match(String(displayIntent.conversationProjection?.visibleAnswer?.text), /fail-closed|runtime/i);
+    assert.equal(displayIntent.taskOutcomeProjection?.conversationEventLog?.schemaVersion, 'sciforge.conversation-event-log.v1');
   } finally {
     restoreEnv('SCIFORGE_CONVERSATION_POLICY_MODE', original.mode);
     restoreEnv('SCIFORGE_CONVERSATION_POLICY_PYTHON', original.command);
@@ -67,6 +72,11 @@ test('agentServerForbidden constraints override forced AgentServer generation', 
     assert.equal(payload.artifacts[0]?.id, 'agentserver-dispatch-forbidden');
     assert.equal(payload.executionUnits[0]?.tool, 'sciforge.turn-execution-constraints');
     assert.match(payload.message, /没有启动 AgentServer/);
+    const displayIntent = payload.displayIntent as Record<string, any>;
+    assert.equal(displayIntent.conversationProjection?.schemaVersion, 'sciforge.conversation-projection.v1');
+    assert.equal(displayIntent.conversationProjection?.visibleAnswer?.status, 'degraded-result');
+    assert.match(String(displayIntent.conversationProjection?.visibleAnswer?.text), /AgentServer|runtime/i);
+    assert.equal(displayIntent.taskOutcomeProjection?.conversationEventLog?.schemaVersion, 'sciforge.conversation-event-log.v1');
   } finally {
     restoreEnv('SCIFORGE_CONVERSATION_POLICY_MODE', original);
     await rm(workspace, { recursive: true, force: true });
