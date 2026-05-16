@@ -4,13 +4,10 @@ import test from 'node:test';
 import { buildSilentStreamDecisionRecord } from '@sciforge-ui/runtime-contract';
 import type { GatewayRequest } from '../runtime-types.js';
 import {
-  AgentServerGenerationConvergenceGuardError,
-  AgentServerRepairContinuationBoundedStopError,
   agentServerGenerationTokenGuardLimit,
   agentServerSilentStreamGuardAudit,
   currentReferenceDigestSilentGuardMs,
   currentReferenceDigestSilentGuardPolicy,
-  isAgentServerRepairContinuationBoundedStopError,
   readAgentServerRunStream,
   type AgentServerSilentStreamGuardAudit,
 } from './agentserver-stream.js';
@@ -101,7 +98,7 @@ test('silent stream guard consumes harness progressPlan silencePolicy for timeou
   assert.ok(capturedAudit.detail.includes('status=Retrying compact AgentServer stream'));
 });
 
-test('generation token budget stops runaway normal AgentServer streams and tightens when digest refs exist', async () => {
+test('generation token budget is disabled so long AgentServer streams can complete', async () => {
   const request = {
     skillDomain: 'literature',
     prompt: 'guard runaway generation',
@@ -109,11 +106,11 @@ test('generation token budget stops runaway normal AgentServer streams and tight
     maxContextWindowTokens: 200_000,
     uiState: {},
   } satisfies GatewayRequest;
-  assert.equal(agentServerGenerationTokenGuardLimit(request), 300_000);
+  assert.equal(agentServerGenerationTokenGuardLimit(request), undefined);
   assert.equal(agentServerGenerationTokenGuardLimit({
     ...request,
     uiState: { currentReferenceDigests: [{ ref: 'refs/current/a.json' }] },
-  }), 80_000);
+  }), undefined);
 
   const encoder = new TextEncoder();
   const response = new Response(new ReadableStream<Uint8Array>({
@@ -137,32 +134,14 @@ test('generation token budget stops runaway normal AgentServer streams and tight
       controller.close();
     },
   }));
-  let guardMessage = '';
-  let thrown: unknown;
-  await assert.rejects(
-    async () => {
-      try {
-        await readAgentServerRunStream(response, () => {}, {
-          maxTotalUsage: agentServerGenerationTokenGuardLimit(request),
-          convergenceGuardMode: 'generation',
-          onGuardTrip: (message) => {
-            guardMessage = message;
-          },
-        });
-      } catch (error) {
-        thrown = error;
-        throw error;
-      }
-    },
-    /generation stopped by convergence guard after 310001 total tokens/,
-  );
-  assert.ok(thrown instanceof AgentServerGenerationConvergenceGuardError);
-  assert.equal(thrown.totalUsage, 310_001);
-  assert.equal(thrown.limit, 300_000);
-  assert.match(guardMessage, /limit 300000/);
+  const result = await readAgentServerRunStream(response, () => {}, {
+    maxTotalUsage: agentServerGenerationTokenGuardLimit(request),
+    convergenceGuardMode: 'generation',
+  });
+  assert.equal(result.run.id, 'run-large-total-usage');
 });
 
-test('repair continuation generation guard fails before broad convergence loop budget', async () => {
+test('repair continuation token budget is disabled while stream silence guard remains responsible for stalls', async () => {
   const request = {
     skillDomain: 'literature',
     prompt: 'continue the failed run using compact repair refs',
@@ -179,8 +158,7 @@ test('repair continuation generation guard fails before broad convergence loop b
       }],
     },
   } satisfies GatewayRequest;
-  assert.equal(agentServerGenerationTokenGuardLimit(request, { repairContinuation: true }), 60_000);
-  assert.ok(agentServerGenerationTokenGuardLimit(request, { repairContinuation: true }) < agentServerGenerationTokenGuardLimit(request));
+  assert.equal(agentServerGenerationTokenGuardLimit(request, { repairContinuation: true }), undefined);
 
   const encoder = new TextEncoder();
   const response = new Response(new ReadableStream<Uint8Array>({
@@ -194,32 +172,11 @@ test('repair continuation generation guard fails before broad convergence loop b
       controller.close();
     },
   }));
-  let guardMessage = '';
-  let thrown: unknown;
-  await assert.rejects(
-    async () => {
-      try {
-        await readAgentServerRunStream(response, () => {}, {
-          maxTotalUsage: agentServerGenerationTokenGuardLimit(request, { repairContinuation: true }),
-          convergenceGuardMode: 'repair-continuation',
-          onGuardTrip: (message) => {
-            guardMessage = message;
-          },
-        });
-      } catch (error) {
-        thrown = error;
-        throw error;
-      }
-    },
-    /repair generation bounded-stop after 60001 total tokens/,
-  );
-  assert.ok(thrown instanceof AgentServerRepairContinuationBoundedStopError);
-  assert.equal(isAgentServerRepairContinuationBoundedStopError(thrown), true);
-  assert.equal(thrown.totalUsage, 60_001);
-  assert.equal(thrown.limit, 60_000);
-  assert.match(guardMessage, /limit 60000/);
-  assert.match(guardMessage, /failed-with-reason ToolPayload/);
-  assert.match(guardMessage, /refs\/digests-only follow-up/);
+  const result = await readAgentServerRunStream(response, () => {}, {
+    maxTotalUsage: agentServerGenerationTokenGuardLimit(request, { repairContinuation: true }),
+    convergenceGuardMode: 'repair-continuation',
+  });
+  assert.deepEqual(result.run, {});
 });
 
 test('request failure message preserves silent stream guard diagnostics', () => {

@@ -2,6 +2,15 @@ import { scenarios } from '../../data';
 import type { SciForgeSession, ScenarioInstanceId } from '../../domain';
 import { uiModuleRegistry, type RuntimeUIModule } from '../../uiModuleRegistry';
 
+export function updateDraftRecord(
+  current: Record<ScenarioInstanceId, string>,
+  scenarioId: ScenarioInstanceId,
+  value: string,
+): Record<ScenarioInstanceId, string> {
+  if ((current[scenarioId] ?? '') === value) return current;
+  return { ...current, [scenarioId]: value };
+}
+
 function newestSessionFirst(left: SciForgeSession, right: SciForgeSession) {
   return Date.parse(right.updatedAt || right.createdAt) - Date.parse(left.updatedAt || left.createdAt);
 }

@@ -46,6 +46,8 @@ export function toolPayloadFromPlainAgentOutput(text: string, request: GatewayRe
   if (nested) return ensureDirectAnswerReportArtifact(nested, request, directAnswerResultPolicyIds.structuredAnswerSource);
   const directTextGuard = classifyPlainAgentText(text);
   if (directTextGuard.kind === 'human-answer') {
+    const missingExecutionEvidence = directPlainAnswerMissingRequiredExecutionEvidence(text, request);
+    if (missingExecutionEvidence) return guardedDirectTextDiagnosticPayload(text, request, missingExecutionEvidence);
     return toolPayloadFromPlainHumanAnswer(text, request, directTextGuard);
   }
   return guardedDirectTextDiagnosticPayload(text, request, directTextGuard);
@@ -93,6 +95,33 @@ export function classifyPlainAgentText(text: string): PlainAgentTextClassificati
     return { kind: 'process-narration', reason: 'direct text looks like intermediate process narration rather than a final answer' };
   }
   return { kind: 'human-answer', reason: 'direct text appears to be a user-facing answer' };
+}
+
+function directPlainAnswerMissingRequiredExecutionEvidence(
+  text: string,
+  request: GatewayRequest,
+): PlainAgentTextClassification | undefined {
+  const taskText = `${request.skillDomain ?? ''}\n${request.prompt ?? ''}`.toLowerCase();
+  const asksForRuntimeWork = /\b(reproduc|code|coding|script|python|demo|run|self[-\s]?check|execute|debug|repair|fix|bug|patch|implement|refactor|test|metric|rmse|parameter|pr|pull request)\b/.test(taskText);
+  if (!asksForRuntimeWork) return undefined;
+  const asksForCodingDelivery = /\b(code|coding|repo|repository|source|typescript|javascript|python|debug|repair|fix|bug|patch|implement|refactor|test|pr|pull request)\b/.test(taskText);
+  const answer = text.toLowerCase();
+  const claimsRuntimeCompletion = /\b(i\s+(?:ran|executed|tested|verified|fixed|implemented|patched|updated|modified|changed|refactored)|ran|executed|self[-\s]?checked|succeeded|successfully|reproduced|recovered|fixed|implemented|patched|updated|modified|changed|refactored|tests?\s+(?:pass|passed)|typecheck\s+(?:pass|passed)|pr\s+ready|ready\s+for\s+pr|fit(?:ted)?|rmse|parameter\s+error)\b/.test(answer);
+  if (!claimsRuntimeCompletion) return undefined;
+  const hasStructuredEvidenceRef = /\b(script path|run command|exit code|stdout|stderr|output(?:\s+artifact|\s+ref)?|code(?:\s+artifact|\s+ref)?|codeRef|diffRef|patchRefs?|workEvidence|executionUnits|artifact:|task-results|verification(?:\s+ref)?)\b/i.test(text);
+  const hasFilePathEvidence = /(?:^|[`'"\s])(?:\.{0,2}\/)?(?:src|packages|tests?|server|client|app|tools|docs|workspace|\.sciforge)\/[A-Za-z0-9._/@+-]+(?:\/[A-Za-z0-9._/@+-]+)*\.(?:ts|tsx|js|mjs|cjs|py|rs|go|java|md|json|ya?ml|toml|css|scss|html)\b/i.test(text);
+  const hasVerificationCommand = /\b(?:npm|pnpm|yarn|npx|node|tsx|tsc|python3?|pytest|cargo|go)\b[^\n.;]{0,160}\b(?:test|typecheck|check|build|run|--test|passed|pass)\b/i.test(text)
+    || /\b(?:verification|verified|tests?|typecheck|build)\b[^\n.;]{0,80}\b(?:passed|pass|ok|green|exit code\s+0)\b/i.test(text);
+  const hasDurableExecutionEvidence = asksForCodingDelivery
+    ? hasStructuredEvidenceRef || (hasFilePathEvidence && hasVerificationCommand)
+    : hasStructuredEvidenceRef || hasFilePathEvidence || hasVerificationCommand;
+  if (hasDurableExecutionEvidence) return undefined;
+  return {
+    kind: 'process-narration',
+    reason: asksForCodingDelivery
+      ? 'direct text claims coding or repair completion but does not cite structured patch/test refs or both modified file paths and verification commands'
+      : 'direct text claims code/reproduction execution success but does not cite durable workspace execution evidence',
+  };
 }
 
 function looksLikeUserFacingStageResult(text: string) {

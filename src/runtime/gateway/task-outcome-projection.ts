@@ -169,9 +169,9 @@ export function materializeTaskOutcomeProjection(input: GatewayTaskOutcomeProjec
   const units = runtimeExecutionUnits(input.payload);
   const failures = failureSignaturesFromPayload(input.payload);
   const protocolStatus = protocolStatusFromPayload(input.payload, units);
-  const nextStepAttribution = nextStepAttributionFromPayload(input.payload, refs, failures);
+  const nextStepAttribution = nextStepAttributionFromPayload(input.payload, input.request, refs, failures);
   const userSatisfactionProxy = userSatisfactionProxyFromPayload(input.payload, input.request, refs, protocolStatus, nextStepAttribution);
-  const taskOutcome = taskOutcomeFromProjection(protocolStatus, input.payload, userSatisfactionProxy);
+  const taskOutcome = taskOutcomeFromProjection(protocolStatus, input.payload, input.request, userSatisfactionProxy);
   const conversationProjectionRef = conversationProjectionRefFromContext(input.refs);
   const conversationEventLogRef = conversationEventLogRefFromContext(input.refs);
   const preliminaryCard = createTaskRunCard({
@@ -330,8 +330,8 @@ function conversationKernelFromTaskOutcome(input: {
     turnId,
     runId,
     payload: {
-      text: input.payload.message,
-      summary: input.payload.message || input.nextStepAttribution.nextStep,
+      text: terminalUserVisibleText(input.payload, input.request, input.protocolStatus, input.taskOutcome, input.nextStepAttribution),
+      summary: terminalUserVisibleText(input.payload, input.request, input.protocolStatus, input.taskOutcome, input.nextStepAttribution),
       reason: terminalFailureReason,
       failureReason: terminalFailureReason,
       refs: terminalRefs,
@@ -393,6 +393,30 @@ function conversationKernelFromTaskOutcome(input: {
     log,
     projection: projectConversation(log, replayConversationState(log)),
   };
+}
+
+function terminalUserVisibleText(
+  payload: ToolPayload,
+  request: GatewayRequest | undefined,
+  protocolStatus: TaskProtocolStatus,
+  taskOutcome: TaskOutcomeStatus,
+  nextStep: NextStepAttribution,
+) {
+  if (verificationRequiredButUnsatisfied(payload, request)) {
+    return [
+      'Result artifacts are available, but required verification is still unverified; this cannot be counted as task success.',
+      nextStep.nextStep,
+      payload.message ? `Draft result summary: ${payload.message}` : undefined,
+    ].filter(Boolean).join('\n\n');
+  }
+  if (protocolStatus === 'protocol-success' && taskOutcome !== 'satisfied') {
+    return [
+      'Partial result artifacts are available, but the user goal is not fully satisfied yet.',
+      nextStep.nextStep ? `Next step: ${nextStep.nextStep}` : undefined,
+      payload.message ? `Draft result summary: ${payload.message}` : undefined,
+    ].filter(Boolean).join('\n\n');
+  }
+  return payload.message || nextStep.nextStep;
 }
 
 function harnessDecisionEventFromTaskOutcome(input: {
@@ -714,10 +738,15 @@ function protocolStatusFromPayload(payload: ToolPayload, units: RuntimeExecution
 function taskOutcomeFromProjection(
   protocolStatus: TaskProtocolStatus,
   payload: ToolPayload,
+  request: GatewayRequest | undefined,
   proxy: UserSatisfactionProxy,
 ): TaskOutcomeStatus {
   const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
   const explicit = stringField(displayIntent.taskOutcome);
+  if (verificationRequiredButUnsatisfied(payload, request)) {
+    if (explicit === 'needs-human' || proxy.status === 'needs-human') return 'needs-human';
+    return 'needs-work';
+  }
   if (isTaskOutcomeStatus(explicit)) return explicit;
   if (proxy.status === 'needs-human') return 'needs-human';
   if (proxy.status === 'blocked') return 'blocked';
@@ -725,6 +754,47 @@ function taskOutcomeFromProjection(
   if (protocolStatus === 'cancelled') return 'blocked';
   if (protocolStatus === 'protocol-failed') return proxy.preservesWorkRefs || proxy.usableResultVisible ? 'needs-work' : 'blocked';
   return proxy.status === 'likely-satisfied' ? 'satisfied' : 'needs-work';
+}
+
+function requiredVerificationIsUnverified(payload: ToolPayload) {
+  return (payload.verificationResults ?? []).some((result) => {
+    if (result.verdict !== 'unverified') return false;
+    const diagnostics = isRecord(result.diagnostics) ? result.diagnostics : {};
+    return diagnostics.required === true || diagnostics.visibleUnverified === true;
+  });
+}
+
+function verificationRequiredButUnsatisfied(payload: ToolPayload, request: GatewayRequest | undefined) {
+  const verificationResults = payload.verificationResults ?? [];
+  if (requiredVerificationIsUnverified(payload)) return true;
+  if (!verificationRequiredByRequest(payload, request)) return false;
+  return !verificationResults.some((result) => result.verdict === 'pass');
+}
+
+function verificationRequiredByRequest(payload: ToolPayload, request: GatewayRequest | undefined) {
+  const policy = isRecord(request?.verificationPolicy) ? request?.verificationPolicy : undefined;
+  if (policy?.required === true) return true;
+  if ((request?.selectedVerifierIds ?? []).length > 0) return true;
+  if (request?.userExplicitVerification && !['none', 'unverified'].includes(request.userExplicitVerification)) return true;
+  const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
+  const displayVerification = isRecord(displayIntent.verificationStatus) ? displayIntent.verificationStatus : {};
+  const displayVerificationText = [
+    stringField(displayVerification.status),
+    stringField(displayVerification.verdict),
+    stringField(displayVerification.response),
+    stringField(displayVerification.summary),
+    stringField(displayVerification.label),
+  ].filter(Boolean).join(' ');
+  const requestText = [
+    request?.prompt,
+    payload.message,
+  ].filter(Boolean).join('\n');
+  return explicitVerificationRequestPattern().test(requestText)
+    || (explicitVerificationRequestPattern().test(requestText) && /unverified|未验证|no verification/i.test(displayVerificationText));
+}
+
+function explicitVerificationRequestPattern() {
+  return /\b(required verification|required verifier|verification required|must verify|verify before|human approval|release gate)\b|必须.{0,16}验证|验证.{0,16}必须|不能.{0,16}声称.{0,16}(完成|success|satisfied)|标记.{0,8}blocker|blocker/i;
 }
 
 function userSatisfactionProxyFromPayload(
@@ -750,14 +820,16 @@ function userSatisfactionProxyFromPayload(
   const structuredNextStep = Boolean(nextStep.nextStep);
   const preservesWorkRefs = refs.length > 0;
   const avoidsDuplicateWork = !explicitFailure || preservesWorkRefs || usableResultVisible;
+  const requiredUnverified = verificationRequiredButUnsatisfied(payload, request);
   const reasons = [
     answeredLatestRequest ? 'structured task outcome marks the latest request satisfied' : 'latest request is not marked satisfied by structured outcome metadata',
     usableResultVisible ? 'usable answer/artifact evidence is visible' : 'no usable visible result or artifact was detected',
     expectedArtifactsPresent ? 'expected artifact coverage is present or not required' : 'one or more expected artifact types are missing',
+    requiredUnverified ? 'required verification is explicitly unverified and cannot count as task success' : undefined,
     structuredNextStep ? 'structured next step is available' : 'structured next step is missing',
     preservesWorkRefs ? 'work refs are preserved for resume/audit' : 'no durable work refs are preserved',
     avoidsDuplicateWork ? 'projection can continue from existing refs' : 'rerun would risk repeating work without refs',
-  ];
+  ].filter((reason): reason is string => Boolean(reason));
   const score = Math.round(100 * [
     answeredLatestRequest,
     usableResultVisible,
@@ -768,7 +840,9 @@ function userSatisfactionProxyFromPayload(
   ].filter(Boolean).length / 6) / 100;
   const status = needsHuman
     ? 'needs-human'
-    : explicitFailure && !usableResultVisible && !preservesWorkRefs
+    : requiredUnverified
+      ? 'needs-work'
+      : explicitFailure && !usableResultVisible && !preservesWorkRefs
       ? 'blocked'
       : protocolStatus === 'running' || protocolStatus === 'not-run'
         ? 'unknown'
@@ -790,6 +864,7 @@ function userSatisfactionProxyFromPayload(
 
 function nextStepAttributionFromPayload(
   payload: ToolPayload,
+  request: GatewayRequest | undefined,
   refs: TaskRunCardRef[],
   failures: FailureSignatureInput[],
 ): NextStepAttribution {
@@ -799,13 +874,16 @@ function nextStepAttributionFromPayload(
   const unitWithNextStep = units.find((unit) => stringField(unit.nextStep) || toStringList(unit.recoverActions).length);
   const workEvidenceWithNextStep = evidence.find((item) => item.nextStep || item.recoverActions.length);
   const verificationWithNextStep = verification.find((item) => item.repairHints?.length);
-  const nextStep = stringField(unitWithNextStep?.nextStep)
+  const verificationGateUnsatisfied = verificationRequiredButUnsatisfied(payload, request);
+  const nextStep = verificationGateUnsatisfied
+    ? 'Run the required verifier or attach human approval before marking the task satisfied.'
+    : stringField(unitWithNextStep?.nextStep)
     ?? toStringList(unitWithNextStep?.recoverActions)[0]
     ?? workEvidenceWithNextStep?.nextStep
     ?? workEvidenceWithNextStep?.recoverActions[0]
     ?? verificationWithNextStep?.repairHints?.[0]
     ?? defaultNextStepForPayload(payload, refs);
-  const ownerLayer = layerFromPayload(payload, failures);
+  const ownerLayer = verificationGateUnsatisfied ? 'verification' : layerFromPayload(payload, failures);
   return {
     schemaVersion: NEXT_STEP_ATTRIBUTION_SCHEMA_VERSION,
     ownerLayer,

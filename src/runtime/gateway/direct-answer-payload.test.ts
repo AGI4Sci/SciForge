@@ -173,6 +173,59 @@ test('plain AgentServer text wraps human-facing prose in an audited ToolPayload'
   assert.deepEqual(schemaErrors(payload), []);
 });
 
+test('plain AgentServer text cannot claim reproduction execution without durable evidence', () => {
+  const payload = toolPayloadFromPlainAgentOutput(
+    'I ran the logistic ODE reproduction successfully. It fitted r=64.9299 versus true r=0.8, RMSE=28.6483, and recovered the method.',
+    {
+      skillDomain: 'knowledge',
+      prompt: 'Create Python code, run it, self-check RMSE and parameter errors, and say whether the reproduction succeeded.',
+      artifacts: [],
+    },
+  );
+
+  assert.equal(payload.claimType, 'runtime-diagnostic');
+  assert.equal(payload.displayIntent?.status, 'needs-human');
+  assert.equal(payload.executionUnits[0]?.status, 'needs-human');
+  assert.match(payload.reasoningTrace, /structured patch\/test refs|durable workspace execution evidence/i);
+  assert.deepEqual(schemaErrors(payload), []);
+});
+
+test('plain AgentServer text cannot claim coding repair success without patch or test evidence', () => {
+  const payload = toolPayloadFromPlainAgentOutput(
+    'I fixed the gateway bug, updated the tests, and everything passes. This is ready for PR.',
+    {
+      skillDomain: 'knowledge',
+      prompt: 'Inspect this repository, implement a bug fix, update tests, and produce a PR-ready summary.',
+      artifacts: [],
+    },
+  );
+
+  assert.equal(payload.claimType, 'runtime-diagnostic');
+  assert.equal(payload.displayIntent?.status, 'needs-human');
+  assert.equal(payload.executionUnits[0]?.status, 'needs-human');
+  assert.match(payload.reasoningTrace, /claims coding or repair completion/i);
+  assert.deepEqual(schemaErrors(payload), []);
+});
+
+test('plain AgentServer text can summarize coding completion when file paths and verification commands are cited', () => {
+  const payload = toolPayloadFromPlainAgentOutput(
+    [
+      'Implemented the patch in `src/runtime/gateway/direct-answer-payload.ts` and updated `src/runtime/gateway/direct-answer-payload.test.ts`.',
+      'Verification: `npx tsx src/runtime/gateway/direct-answer-payload.test.ts` passed.',
+    ].join('\n'),
+    {
+      skillDomain: 'knowledge',
+      prompt: 'Inspect this repository, implement a bug fix, update tests, and produce a PR-ready summary.',
+      artifacts: [],
+    },
+  );
+
+  assert.equal(payload.claimType, 'agentserver-direct-answer');
+  assert.equal(payload.displayIntent?.status, 'completed');
+  assert.equal(payload.executionUnits[0]?.status, 'done');
+  assert.deepEqual(schemaErrors(payload), []);
+});
+
 test('plain AgentServer text wraps markdown stage results even when they mention ToolPayload output refs', () => {
   const text = [
     '## Stage Result: implement — RCG-003 ODE Parameter-Fitting Repair',

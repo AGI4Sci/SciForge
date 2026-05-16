@@ -84,6 +84,7 @@ import {
   buildArchivedSessionCountsByScenario,
   buildArchivedSessionsByScenario,
   defaultPublishedRuntimeComponentIds,
+  updateDraftRecord,
 } from './sciforgeApp/appStateModels';
 import { FeedbackInboxPage } from './sciforgeApp/FeedbackInboxPage';
 import { Workbench } from './sciforgeApp/SciForgeWorkbench';
@@ -372,7 +373,7 @@ export function SciForgeApp() {
   }
 
   function updateDraft(nextScenarioId: ScenarioInstanceId, value: string) {
-    setDrafts((current) => ({ ...current, [nextScenarioId]: value }));
+    setDrafts((current) => updateDraftRecord(current, nextScenarioId, value));
   }
 
   function updateMessageScrollTop(nextScenarioId: ScenarioInstanceId, value: number) {

@@ -300,17 +300,9 @@ export function currentReferenceDigestGuardLimit(request: GatewayRequest) {
 }
 
 export function agentServerGenerationTokenGuardLimit(request: GatewayRequest, options: { repairContinuation?: boolean } = {}) {
-  const configured = typeof request.maxContextWindowTokens === 'number' && Number.isFinite(request.maxContextWindowTokens)
-    ? request.maxContextWindowTokens
-    : 200_000;
-  const generalLimit = Math.max(120_000, Math.floor(configured * 1.5));
-  if (options.repairContinuation) {
-    const repairLimit = Math.max(40_000, Math.min(90_000, Math.floor(configured * 0.3)));
-    const digestLimit = currentReferenceDigestGuardLimit(request);
-    return digestLimit ? Math.min(repairLimit, digestLimit) : repairLimit;
-  }
-  const digestLimit = currentReferenceDigestGuardLimit(request);
-  return digestLimit ? Math.min(generalLimit, digestLimit) : generalLimit;
+  void request;
+  void options;
+  return undefined;
 }
 
 export function currentReferenceDigestSilentGuardMs(request: GatewayRequest) {

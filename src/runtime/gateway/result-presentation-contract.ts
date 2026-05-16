@@ -43,10 +43,10 @@ export function attachResultPresentationContract(
     forceRecomputeProjection: context.forceRecomputeProjection ?? Boolean(context.request),
   };
   if (validateResultPresentationContract(existing).ok) {
-    return attachTaskOutcomeProjection({
+    return withProjectionAwareResultPresentation(attachTaskOutcomeProjection({
       ...payload,
       displayIntent,
-    }, projectionContext);
+    }, projectionContext));
   }
 
   const payloadWithPresentation = {
@@ -60,7 +60,7 @@ export function attachResultPresentationContract(
   const outcomeDisplayIntent = isRecord(payloadWithOutcome.displayIntent) ? payloadWithOutcome.displayIntent : {};
   const resultPresentation = isRecord(outcomeDisplayIntent.resultPresentation) ? outcomeDisplayIntent.resultPresentation : undefined;
   const taskRunCard = isRecord(outcomeDisplayIntent.taskRunCard) ? outcomeDisplayIntent.taskRunCard : undefined;
-  return {
+  return withProjectionAwareResultPresentation({
     ...payloadWithOutcome,
     displayIntent: {
       ...outcomeDisplayIntent,
@@ -71,9 +71,53 @@ export function attachResultPresentationContract(
         }
         : outcomeDisplayIntent.resultPresentation,
     },
-  };
+  });
 }
 
 function stringField(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function withProjectionAwareResultPresentation(payload: ToolPayload): ToolPayload {
+  const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
+  const resultPresentation = isRecord(displayIntent.resultPresentation) ? displayIntent.resultPresentation : undefined;
+  const taskRunCard = isRecord(displayIntent.taskRunCard) ? displayIntent.taskRunCard : undefined;
+  if (!resultPresentation || !taskRunCard || taskRunCard.taskOutcome === 'satisfied') return payload;
+  if (resultPresentation.status !== 'complete') return payload;
+  const answerBlocks = Array.isArray(resultPresentation.answerBlocks)
+    ? resultPresentation.answerBlocks.filter(isRecord)
+    : [];
+  const originalAnswerText = answerBlocks
+    .map((block) => stringField(block.text))
+    .filter((text): text is string => Boolean(text))
+    .join('\n\n');
+  const nextStep = stringField(taskRunCard.nextStep);
+  return {
+    ...payload,
+    displayIntent: {
+      ...displayIntent,
+      resultPresentation: {
+        ...resultPresentation,
+        status: resultPresentation.status === 'complete' ? 'partial' : resultPresentation.status,
+        answerBlocks: [
+          {
+            id: 'answer-needs-work',
+            kind: 'paragraph',
+            text: [
+              'Partial result artifacts are available, but the user goal is not fully satisfied yet.',
+              nextStep ? `Next step: ${nextStep}` : undefined,
+            ].filter(Boolean).join('\n\n'),
+          },
+          ...(originalAnswerText
+            ? [{
+                id: 'answer-draft-summary',
+                kind: 'paragraph',
+                text: `Draft result summary: ${originalAnswerText}`,
+              }]
+            : []),
+          ...answerBlocks.filter((block) => stringField(block.id) !== 'answer-summary'),
+        ],
+      },
+    },
+  };
 }

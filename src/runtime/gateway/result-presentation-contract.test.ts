@@ -90,8 +90,15 @@ test('attachResultPresentationContract separates protocol success from unmet tas
   assert.equal(proxy?.usableResultVisible, true);
   const conversationProjection = projection?.conversationProjection as Record<string, unknown> | undefined;
   const visibleAnswer = conversationProjection?.visibleAnswer as Record<string, unknown> | undefined;
+  const resultPresentation = attached.displayIntent?.resultPresentation as Record<string, any> | undefined;
+  const answerBlocks = resultPresentation?.answerBlocks as Array<Record<string, unknown>> | undefined;
   assert.equal(conversationProjection?.schemaVersion, 'sciforge.conversation-projection.v1');
   assert.equal(visibleAnswer?.status, 'degraded-result');
+  assert.match(String(visibleAnswer?.text), /Partial result artifacts are available/i);
+  assert.doesNotMatch(String(visibleAnswer?.text).split('Draft result summary:')[0] ?? '', /completed|complete|已完成|完成/i);
+  assert.equal(resultPresentation?.status, 'partial');
+  assert.match(String(answerBlocks?.[0]?.text), /Partial result artifacts are available/i);
+  assert.doesNotMatch(String(answerBlocks?.[0]?.text), /completed|complete|已完成|完成/i);
   assert.ok(Array.isArray(proxy?.reasons));
   assert.match(String(card?.nextStep), /requested report|preserved table refs/i);
 });
@@ -167,6 +174,150 @@ test('attachResultPresentationContract treats complete evidenced presentation as
   assert.equal(card?.taskOutcome, 'satisfied');
   assert.equal(proxy?.answeredLatestRequest, true);
   assert.equal(visibleAnswer?.status, 'satisfied');
+});
+
+test('attachResultPresentationContract blocks satisfied outcome when required verification remains unverified', () => {
+  const attached = attachResultPresentationContract(payload({
+    message: 'Protocol artifact is ready.',
+    claims: [{
+      id: 'claim-protocol-ready',
+      text: 'Protocol artifact is ready.',
+      supportingRefs: ['artifact:protocol'],
+    }],
+    artifacts: [{
+      id: 'protocol',
+      type: 'markdown',
+      title: 'Protocol',
+      dataRef: '.sciforge/task-results/protocol.md',
+    }],
+    executionUnits: [{
+      id: 'protocol-generation',
+      status: 'done',
+      tool: 'workspace-task',
+      outputRef: '.sciforge/task-results/protocol.md',
+    }],
+    verificationResults: [{
+      id: 'verification-required',
+      verdict: 'unverified',
+      confidence: 0,
+      evidenceRefs: ['execution-unit:protocol-generation'],
+      repairHints: ['Run an appropriate verifier or request human approval.'],
+      diagnostics: {
+        required: true,
+        visibleUnverified: true,
+      },
+    }],
+    displayIntent: {
+      taskOutcome: 'satisfied',
+      resultPresentation: createResultPresentationContract({
+        id: 'protocol-presentation',
+        status: 'complete',
+        answerBlocks: [{ id: 'answer', kind: 'paragraph', text: 'Protocol artifact is ready.', citationIds: ['artifact-protocol'] }],
+        keyFindings: [{
+          id: 'protocol-ready',
+          text: 'Protocol artifact is ready.',
+          verificationState: 'supported',
+          citationIds: ['artifact-protocol'],
+        }],
+        inlineCitations: [{ id: 'artifact-protocol', label: 'Protocol', ref: '.sciforge/task-results/protocol.md', kind: 'artifact' }],
+        artifactActions: [{ id: 'protocol', label: 'Protocol', ref: '.sciforge/task-results/protocol.md', action: 'inspect', kind: 'inspect' }],
+      }),
+    },
+  }), {
+    request: {
+      skillDomain: 'knowledge',
+      prompt: 'Create and verify a protocol artifact.',
+      artifacts: [],
+    },
+  });
+
+  const projection = attached.displayIntent?.taskOutcomeProjection as Record<string, any> | undefined;
+  const proxy = projection?.userSatisfactionProxy as Record<string, any> | undefined;
+  const card = attached.displayIntent?.taskRunCard as Record<string, any> | undefined;
+  const conversationProjection = projection?.conversationProjection as Record<string, any> | undefined;
+  const visibleAnswer = conversationProjection?.visibleAnswer as Record<string, any> | undefined;
+  const resultPresentation = attached.displayIntent?.resultPresentation as Record<string, any> | undefined;
+  const answerBlocks = resultPresentation?.answerBlocks as Array<Record<string, unknown>> | undefined;
+
+  assert.equal(projection?.protocolSuccess, true);
+  assert.equal(projection?.taskSuccess, false);
+  assert.equal(card?.taskOutcome, 'needs-work');
+  assert.equal(card?.status, 'needs-work');
+  assert.equal(proxy?.status, 'needs-work');
+  assert.equal(conversationProjection?.verificationState?.status, 'unverified');
+  assert.equal(visibleAnswer?.status, 'degraded-result');
+  assert.match(String(visibleAnswer?.text), /required verification is still unverified/i);
+  assert.doesNotMatch(String(visibleAnswer?.text).split('Draft result summary:')[0] ?? '', /ready|completed|已完成/i);
+  assert.equal(resultPresentation?.status, 'partial');
+  assert.match(String(answerBlocks?.[0]?.text), /Partial result artifacts are available/i);
+  assert.doesNotMatch(String(answerBlocks?.[0]?.text), /ready|completed|已完成|完成/i);
+  assert.match(String(card?.nextStep), /verifier|human approval/i);
+});
+
+test('attachResultPresentationContract blocks satisfied outcome when request requires verification but no verdict exists', () => {
+  const attached = attachResultPresentationContract(payload({
+    message: 'P5 methodology review is complete. Please see the generated report.',
+    claims: [{
+      id: 'claim-methodology-review',
+      text: 'A methodology report was generated.',
+      supportingRefs: ['artifact:methodology-report'],
+    }],
+    artifacts: [{
+      id: 'methodology-report',
+      type: 'markdown',
+      title: 'Methodology report',
+      dataRef: '.sciforge/task-results/methodology-report.md',
+    }],
+    executionUnits: [{
+      id: 'methodology-review',
+      status: 'done',
+      tool: 'workspace-task',
+      outputRef: '.sciforge/task-results/methodology-report.md',
+    }],
+    displayIntent: {
+      taskOutcome: 'satisfied',
+      verificationStatus: {
+        response: 'Verification: 未验证',
+      },
+      resultPresentation: createResultPresentationContract({
+        id: 'methodology-review-presentation',
+        status: 'complete',
+        answerBlocks: [{ id: 'answer', kind: 'paragraph', text: 'P5 methodology review is complete.', citationIds: ['artifact-report'] }],
+        keyFindings: [{
+          id: 'review-ready',
+          text: 'A methodology report was generated.',
+          verificationState: 'supported',
+          citationIds: ['artifact-report'],
+        }],
+        inlineCitations: [{ id: 'artifact-report', label: 'Report', ref: '.sciforge/task-results/methodology-report.md', kind: 'artifact' }],
+        artifactActions: [{ id: 'methodology-report', label: 'Report', ref: '.sciforge/task-results/methodology-report.md', action: 'inspect', kind: 'inspect' }],
+      }),
+    },
+  }), {
+    request: {
+      skillDomain: 'knowledge',
+      prompt: 'Create the methodology review, but required verification must pass before you can claim completion.',
+      artifacts: [],
+    },
+  });
+
+  const projection = attached.displayIntent?.taskOutcomeProjection as Record<string, any> | undefined;
+  const proxy = projection?.userSatisfactionProxy as Record<string, any> | undefined;
+  const card = attached.displayIntent?.taskRunCard as Record<string, any> | undefined;
+  const conversationProjection = projection?.conversationProjection as Record<string, any> | undefined;
+  const visibleAnswer = conversationProjection?.visibleAnswer as Record<string, any> | undefined;
+  const resultPresentation = attached.displayIntent?.resultPresentation as Record<string, any> | undefined;
+  const answerBlocks = resultPresentation?.answerBlocks as Array<Record<string, unknown>> | undefined;
+
+  assert.equal(projection?.taskSuccess, false);
+  assert.equal(card?.taskOutcome, 'needs-work');
+  assert.equal(proxy?.status, 'needs-work');
+  assert.equal(visibleAnswer?.status, 'degraded-result');
+  assert.match(String(visibleAnswer?.text), /required verification is still unverified/i);
+  assert.equal(resultPresentation?.status, 'partial');
+  assert.match(String(answerBlocks?.[0]?.text), /Partial result artifacts are available/i);
+  assert.doesNotMatch(String(answerBlocks?.[0]?.text), /complete|完成/i);
+  assert.match(String(card?.nextStep), /required verifier|human approval/i);
 });
 
 test('attachResultPresentationContract recomputes stale needs-work projection when current presentation completes the request', () => {

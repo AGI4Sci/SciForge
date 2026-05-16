@@ -207,6 +207,8 @@ function verificationFromEvent(event: ConversationEvent): NonNullable<Conversati
   const verdict = stringOrUndefined(event.payload.verdict);
   if (!verifierRef) return { status: 'unverified', verdict };
   if (verdict === 'failed') return { status: 'failed', verifierRef, verdict };
+  if (verdict === 'unverified') return { status: 'unverified', verifierRef, verdict };
+  if (verdict === 'needs-human' || verdict === 'uncertain') return { status: 'failed', verifierRef, verdict };
   return { status: 'verified', verifierRef, verdict };
 }
 

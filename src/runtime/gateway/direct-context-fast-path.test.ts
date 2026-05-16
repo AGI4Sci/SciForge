@@ -609,6 +609,115 @@ test('selected workspace file summary can come from current ui references withou
   assert.doesNotMatch(payload.message, /Generated workspace task failed/);
 });
 
+test('selected reproduction report credibility follow-up does not become a planning register', () => {
+  const reportMarkdown = [
+    '# Logistic Growth ODE Parameter Estimation Reproduction Report',
+    '',
+    'Reproduction success: YES',
+    '',
+    '| parameter | true | fitted | percent error |',
+    '| --- | ---: | ---: | ---: |',
+    '| r | 0.5000 | 0.4767 | 4.67% |',
+    '| K | 200.0 | 201.5 | 0.77% |',
+    '',
+    'RMSE: 4.3505',
+    '',
+    'This is a toy synthetic noisy logistic-growth reproduction with a fixed seed.',
+  ].join('\n');
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'Using only the selected reproduction report, tell me whether this toy reproduction is credible. List the exact metrics that support the verdict, the biggest remaining risk, and one next validation step. Do not use unrelated previous diagnostics.',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    references: [],
+    artifacts: [],
+    uiState: {
+      currentReferences: [{
+        kind: 'file',
+        ref: 'file:workspace/parallel/p3/generated-literature-8ef4985b7dc3-reproduction-report.md',
+        title: 'generated-literature-8ef4985b7dc3-reproduction-report.md',
+        payload: { selectedText: reportMarkdown },
+      }],
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        ...canonicalDirectDecision('context-summary', {
+          usedRefs: ['file:workspace/parallel/p3/generated-literature-8ef4985b7dc3-reproduction-report.md'],
+        }),
+        executionModePlan: { executionMode: 'direct-context-answer' },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+        latencyPolicy: { blockOnContextCompaction: false },
+      },
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.match(payload.message, /Answered directly from the selected report/);
+  assert.match(payload.message, /Reproduction success: YES/);
+  assert.match(payload.message, /r true 0\.5000, fitted 0\.4767, error 4\.67%/);
+  assert.match(payload.message, /K true 200\.0, fitted 201\.5, error 0\.77%/);
+  assert.match(payload.message, /RMSE 4\.3505/);
+  assert.match(payload.message, /synthetic data|fixed seed|toy setup/);
+  assert.match(payload.message, /multiple random seeds and noise levels/);
+  assert.doesNotMatch(payload.message, /Planning register/);
+  assert.doesNotMatch(payload.message, /## Budget/);
+});
+
+test('selected metadata-only literature report answers full-text status from selected artifact only', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: '只基于我刚刚选中的 research-report-provider-recovery 报告回答：这份报告实际读取了哪些 arXiv PDF/全文证据？哪些没有读取或未验证？它能否支持“全文调研已完成”的结论？请不要使用未选中的历史消息、其它 artifact 或外部新检索。',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    references: [],
+    artifacts: [{
+      id: 'research-report-provider-recovery',
+      type: 'research-report',
+      data: {
+        markdown: 'Recovered through the SciForge web_search provider route and produced an evidence matrix with 8 candidate evidence items. Treat rows as provider-grounded metadata until full-text verification.',
+      },
+    }, {
+      id: 'latest-unselected-report',
+      type: 'research-report',
+      data: {
+        markdown: 'UNSELECTED: arXiv:2501.00001 PDF was read and full-text verification completed.',
+      },
+    }],
+    uiState: {
+      claims: [{
+        id: 'claim-unselected-fulltext',
+        type: 'prediction',
+        text: 'UNSELECTED claim says full-text research completed.',
+      }],
+      currentReferences: [{
+        kind: 'artifact',
+        ref: 'artifact:research-report-provider-recovery',
+        title: 'research-report-provider-recovery',
+      }],
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        ...canonicalDirectDecision('context-summary', {
+          usedRefs: ['artifact:research-report-provider-recovery'],
+        }),
+        executionModePlan: { executionMode: 'direct-context-answer' },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+        latencyPolicy: { blockOnContextCompaction: false },
+      },
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.match(payload.message, /只基于当前选中的 research-report-provider-recovery/);
+  assert.match(payload.message, /没有记录任何已经读取、下载或验证过的 arXiv PDF\/全文证据/);
+  assert.match(payload.message, /不能支持“全文调研已完成”/);
+  assert.match(payload.message, /provider-grounded metadata/);
+  assert.doesNotMatch(payload.message, /上一轮可见答案/);
+  assert.doesNotMatch(payload.message, /2501\.00001|UNSELECTED|full-text research completed/);
+});
+
 test('direct context fast path answers skill tool capability provider status queries from runtime registry', () => {
   const request: GatewayRequest = {
     skillDomain: 'literature',
@@ -1021,6 +1130,50 @@ test('selected-reference planning register applies current-turn constraint overr
   assert.match(payload.message, /Month 9/);
   assert.match(payload.message, /Original 12-month schedule is invalidated/);
   assert.match(payload.message, /Original \$250,000 funding assumption is invalidated/);
+});
+
+test('selected-reference artifact mutation with updated file paths routes to backend', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: [
+      '基于我刚才选中的交付物继续，不要重新发散。',
+      '现在关键约束改变：总预算从 120k USD 降到 80k USD，项目周期从 12 个月缩到 9 个月，仍然不能使用真实 patient data，团队人数不变。',
+      '请更新所有受影响结论：brief 的 scope/success metrics、decision log、risk register 的 likelihood/impact/mitigation、timeline/budget。',
+      '请明确列出哪些旧结论被替换，哪些保持不变，并给出更新后的 artifact/file 路径。',
+    ].join(' '),
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [{
+      id: 'project-brief',
+      type: 'research-report',
+      metadata: { reportRef: '.sciforge/task-results/project-brief.md' },
+    }],
+    references: [{ ref: 'artifact:project-brief', title: 'Project brief' }],
+    uiState: {
+      conversationPolicy: {
+        applicationStatus: 'applied',
+        policySource: 'python-conversation-policy',
+        ...canonicalDirectDecision('context-summary', {
+          usedRefs: ['artifact:project-brief'],
+          transformMode: 'answer-only-planning-register',
+        }),
+        executionModePlan: { executionMode: 'direct-context-answer' },
+        responsePlan: { initialResponseMode: 'direct-context-answer' },
+      },
+      currentReferenceDigests: [{
+        sourceRef: 'artifact:project-brief',
+        digestText: [
+          '**Duration:** 12 months',
+          '**Funding Request:** $120,000 direct costs',
+          'Budget cap: $120,000 total direct costs.',
+          'Timeline: 12 months fixed.',
+        ].join('\n'),
+      }],
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.equal(payload, undefined);
 });
 
 test('reload selected-reference risk follow-up keeps unresolved risks without explicit transform mode', () => {

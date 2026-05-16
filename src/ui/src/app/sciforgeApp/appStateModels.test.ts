@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createBuiltInScenarioRecord } from '@sciforge/scenario-core/scenario-routing-policy';
 import type { SciForgeSession } from '../../domain';
 import {
   buildArchivedSessionCountsByScenario,
   buildArchivedSessionsByScenario,
   defaultPublishedRuntimeComponentIds,
+  updateDraftRecord,
 } from './appStateModels';
 
 function session(scenarioId: string, sessionId: string, updatedAt: string): SciForgeSession {
@@ -54,4 +56,11 @@ test('selects unique published runtime component ids by default', () => {
     { componentId: 'beta', lifecycle: 'published' },
     { componentId: 'alpha', lifecycle: 'published' },
   ]), ['alpha', 'beta']);
+});
+
+test('draft updates preserve identity when textarea value is unchanged', () => {
+  const current = { ...createBuiltInScenarioRecord(''), 'literature-evidence-review': 'long prompt' };
+
+  assert.equal(updateDraftRecord(current, 'literature-evidence-review', 'long prompt'), current);
+  assert.equal(updateDraftRecord(current, 'literature-evidence-review', 'new prompt')['literature-evidence-review'], 'new prompt');
 });

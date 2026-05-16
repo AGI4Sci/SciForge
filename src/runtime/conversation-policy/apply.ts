@@ -108,7 +108,12 @@ export function requestWithPolicyResponse(
   const contextProjection = isRecord(response.contextProjection) ? response.contextProjection : {};
   const handoffPlan = isRecord(response.handoffPlan) ? response.handoffPlan : {};
   const handoffPayload = isRecord(handoffPlan.payload) ? handoffPlan.payload : {};
-  const contextPolicy = isRecord(response.contextPolicy) ? response.contextPolicy : undefined;
+  const transportFreshIsolation = transportDeclaresFreshIsolation(uiState);
+  const contextPolicy = sanitizeContextPolicyForTransportBoundary(
+    isRecord(response.contextPolicy) ? response.contextPolicy : undefined,
+    uiState,
+    { transportFreshIsolation },
+  );
   const acceptancePlan = isRecord(response.acceptancePlan) ? response.acceptancePlan : undefined;
   const recoveryPlan = isRecord(response.recoveryPlan) ? response.recoveryPlan : undefined;
   const capabilityBrief = isRecord(response.capabilityBrief) ? response.capabilityBrief : undefined;
@@ -120,10 +125,10 @@ export function requestWithPolicyResponse(
     ?? normalizeTurnExecutionConstraints(uiState.turnExecutionConstraints);
   const executionModeDecision = executionModeDecisionFromPolicy(response.executionModePlan);
   const artifactPolicy = isRecord(handoffPayload.policy) ? handoffPayload.policy : isRecord(handoffPlan) ? handoffPlan : undefined;
-  const currentReferences = response.currentReferences?.length
+  const currentReferences = !transportFreshIsolation && response.currentReferences?.length
     ? response.currentReferences
     : toRecordList(uiState.currentReferences);
-  const currentReferenceDigests = response.currentReferenceDigests?.length
+  const currentReferenceDigests = !transportFreshIsolation && response.currentReferenceDigests?.length
     ? response.currentReferenceDigests
     : toRecordList(uiState.currentReferenceDigests);
 
@@ -150,12 +155,12 @@ export function requestWithPolicyResponse(
       cachePolicy,
       goalSnapshot: response.goalSnapshot,
       contextReusePolicy: contextPolicy,
-      contextProjection,
-      workspaceKernelProjection: isRecord(contextProjection.workspaceKernel)
+      contextProjection: transportFreshIsolation ? {} : contextProjection,
+      workspaceKernelProjection: !transportFreshIsolation && isRecord(contextProjection.workspaceKernel)
         ? contextProjection.workspaceKernel
-        : isRecord(contextProjection.workspaceLedger)
+        : !transportFreshIsolation && isRecord(contextProjection.workspaceLedger)
           ? contextProjection.workspaceLedger
-          : isRecord(contextProjection.projectSessionMemory)
+          : !transportFreshIsolation && isRecord(contextProjection.projectSessionMemory)
             ? contextProjection.projectSessionMemory
         : undefined,
       workspaceKernelContextProjectionBlocks: toRecordList(contextProjection.contextProjectionBlocks),
@@ -174,6 +179,47 @@ export function requestWithPolicyResponse(
       userVisiblePlan: response.userVisiblePlan,
       turnExecutionConstraints,
     },
+  };
+}
+
+function transportDeclaresFreshIsolation(uiState: Record<string, unknown>) {
+  const policy = isRecord(uiState.contextReusePolicy) ? uiState.contextReusePolicy : undefined;
+  const historyReuse = isRecord(policy?.historyReuse) ? policy.historyReuse : {};
+  const priorWorkSignals = isRecord(policy?.priorWorkSignals) ? policy.priorWorkSignals : {};
+  if (historyReuse.allowed !== false) return false;
+  const counts = [
+    priorWorkSignals.nonSeedMessageCount,
+    priorWorkSignals.runCount,
+    priorWorkSignals.artifactCount,
+    priorWorkSignals.executionUnitCount,
+    priorWorkSignals.failedExecutionRefCount,
+  ];
+  const hasPriorCount = counts.some((value) => typeof value === 'number' && value > 0);
+  return !hasPriorCount && priorWorkSignals.repairTargetAvailable !== true;
+}
+
+function sanitizeContextPolicyForTransportBoundary(
+  policy: Record<string, unknown> | undefined,
+  uiState: Record<string, unknown>,
+  options: { transportFreshIsolation: boolean },
+) {
+  if (!options.transportFreshIsolation) return policy;
+  const prior = isRecord(uiState.contextReusePolicy) ? uiState.contextReusePolicy : {};
+  const priorWorkSignals = isRecord(prior.priorWorkSignals) ? prior.priorWorkSignals : {};
+  return {
+    ...(policy ?? {}),
+    mode: 'isolate',
+    historyReuse: {
+      ...(isRecord(policy?.historyReuse) ? policy.historyReuse : {}),
+      allowed: false,
+      source: 'ui-transport-fresh-isolation',
+    },
+    selectedRefsOnly: false,
+    priorWorkSignals: {
+      ...priorWorkSignals,
+      repairTargetAvailable: false,
+    },
+    isolationReason: 'Transport declared a fresh session turn with no prior work; downstream policy may not promote it to repair/continue or inject archived context.',
   };
 }
 

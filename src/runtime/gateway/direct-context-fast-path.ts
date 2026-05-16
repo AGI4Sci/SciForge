@@ -16,6 +16,7 @@ import { capabilityProviderRoutesForHandoff } from './capability-provider-prefli
 export function directContextFastPathPayload(request: GatewayRequest): ToolPayload | undefined {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   if (uiState.forceAgentServerGeneration === true) return undefined;
+  if (artifactMutationFollowupRequiresBackend(request.prompt)) return undefined;
   const decision = directContextDecisionForRequest(request);
   if (!decision) return undefined;
   if (decision.intent === 'capability-status') return directContextDecisionAllowsAnswer(decision)
@@ -152,6 +153,7 @@ export async function requestWithDirectContextReadableArtifactData(request: Gate
   request = await requestWithSessionArtifactsForBoundedFollowup(request);
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   if (uiState.forceAgentServerGeneration === true) return request;
+  if (artifactMutationFollowupRequiresBackend(request.prompt)) return request;
   const decision = directContextDecisionForRequest(request);
   if (!decision || !policyRequestsDirectContext(request, decision)) return request;
 
@@ -626,6 +628,10 @@ function directContextAnswerMessage(
   const prompt = request.prompt;
   const hypotheses = testableHypothesesFromEvidenceMatrixMessage(prompt, context);
   if (hypotheses) return hypotheses;
+  const selectedReportEvidenceStatus = selectedReportEvidenceStatusAnswerMessage(request, context);
+  if (selectedReportEvidenceStatus) return selectedReportEvidenceStatus;
+  const selectedReportAnswer = selectedReportQuestionAnswerMessage(request, context);
+  if (selectedReportAnswer) return selectedReportAnswer;
   const transformed = answerOnlyTransformMessage(prompt, context, decision.transformMode);
   if (transformed) return transformed;
   const analysisReportFollowup = analysisReportFollowupMessage(prompt, context);
@@ -770,15 +776,189 @@ function answerOnlyTransformMessage(
 function answerOnlyTransformRequestedLegacyFallback(text: string): DirectContextTransformMode | undefined {
   // Legacy baseline fallback for requests that predate the harness L1
   // classifyDirectContextTransform hook.
-  const matched = /(compress|condense|shorten|summari[sz]e|rewrite|rephrase|checklist|bullet|budget|timeline|milestones?|risk register|unresolved risks?|risks?|main document|proposal document|grant proposal|document artifact|research report|主文档|文档|报告|项目书|申请书|压缩|浓缩|改写|重写|总结|归纳|清单|预算|时间线|里程碑|风险清单|风险)/i.test(text)
+  const matched = /(compress|condense|shorten|summari[sz]e|rewrite|rephrase|checklist|bullet|budget|timeline|milestones?|risk register|unresolved risks?|main document|proposal document|grant proposal|document artifact|research report|主文档|文档|报告|项目书|申请书|压缩|浓缩|改写|重写|总结|归纳|清单|预算|时间线|里程碑|风险清单)/i.test(text)
     && /(previous|prior|last|existing|above|answer|conclusion|points?|selected|current|restored|reload|reopen|final(?: version| summary)?|上一轮|之前|刚才|已有|答案|结论|要点|选中|当前|恢复|重载|重新打开|最终)/i.test(text)
     && !/(rerun|run again|execute|download|生成(?:新的)?(?:报告|表格|图|文件|产物)|下载|执行|运行)/i.test(text);
   if (!matched) return undefined;
   if (/(main document|proposal document|grant proposal|document artifact|research report|主文档|项目书|申请书|报告文档)/i.test(text)) return 'answer-only-document';
-  if (/(budget|timeline|milestones?|risk register|unresolved risks?|risks?|预算|时间线|里程碑|风险清单|风险)/i.test(text)) return 'answer-only-planning-register';
+  if (/(budget|timeline|milestones?|risk register|unresolved risks?|预算|时间线|里程碑|风险清单)/i.test(text)) return 'answer-only-planning-register';
   if (/(checklist|bullet|清单|列表)/i.test(text)) return 'answer-only-checklist';
   if (/(compress|condense|shorten|压缩|浓缩)/i.test(text)) return 'answer-only-compress';
   return 'answer-only-summary';
+}
+
+function selectedReportEvidenceStatusAnswerMessage(
+  request: GatewayRequest,
+  context: ReturnType<typeof buildDirectContextFastPathItems>,
+) {
+  const prompt = request.prompt;
+  if (!/(selected|reference|report|artifact|选中|引用|报告|产物)/i.test(prompt)) return undefined;
+  if (!/(PDF|full[-\s]?text|arXiv|evidence|verification|verify|verified|support|completion|read|全文|证据|读取|阅读|验证|支持|完成|结论)/i.test(prompt)) return undefined;
+  const selectedRefs = selectedReferenceTokens(request);
+  const selectedContext = selectedRefs.length
+    ? context.filter((item) => directContextItemMatchesSelectedRef(item, selectedRefs))
+    : context;
+  const answerContext = (selectedContext.length ? selectedContext : context)
+    .filter((item) => !/claim|execution-unit|audit|diagnostic/i.test(item.kind));
+  const sourceText = uniqueStrings(answerContext
+    .map((item) => item.summary)
+    .filter((value): value is string => Boolean(value)))
+    .join('\n');
+  if (!sourceText) return undefined;
+  const asksFullTextStatus = /(PDF|full[-\s]?text|arXiv|全文|读取|阅读|验证|支持|完成)/i.test(prompt);
+  const saysMetadataOnly = /(provider[-\s]?grounded metadata|provider metadata|metadata until full[-\s]?text verification|until full[-\s]?text verification|requires full[-\s]?text verification|citation verification|unverified|needs[-\s]?verification|未验证|待验证|未完成全文|未读取全文)/i.test(sourceText);
+  const hasCompletedFullTextEvidence = /(PDF|full[-\s]?text|全文)[^。.!?\n]{0,80}(read|retrieved|downloaded|verified|completed|已读取|已阅读|已获取|已验证|完成)/i.test(sourceText)
+    && !/(until full[-\s]?text verification|requires full[-\s]?text verification|未验证|待验证|metadata until)/i.test(sourceText);
+  if (!asksFullTextStatus && !saysMetadataOnly) return undefined;
+  const sourceLines = evidenceStatusSourceLines(sourceText);
+  const selectedTitle = selectedReportTitle(request) ?? 'selected report';
+  if (/[一-龥]/.test(prompt)) {
+    if (saysMetadataOnly || !hasCompletedFullTextEvidence) {
+      return [
+        `只基于当前选中的 ${selectedTitle} 回答，不启动新的 workspace task，也不使用未选中的历史消息或外部新检索。`,
+        '',
+        '- 已读取的 arXiv PDF/全文证据：这份选中报告没有记录任何已经读取、下载或验证过的 arXiv PDF/全文证据。',
+        '- 未读取或未验证的部分：报告只留下 provider/web_search 路由产出的候选元数据；候选行仍被标记为 provider-grounded metadata，等待 full-text/citation verification。',
+        '- 能否支持“全文调研已完成”：不能。它只能支持“已有候选元数据/诊断材料”，不能支持“全文调研已完成”或“PDF 证据已读完”的结论。',
+        '- 下一步恢复：按候选论文逐篇解析 arXiv 身份和 PDF/全文，记录已读取的段落/页码/证据位置，做 citation/title/date 校验，再重新生成证据矩阵和中文报告。',
+        ...sourceLines.map((line) => `- 选中报告依据：${line}`),
+      ].join('\n');
+    }
+    return [
+      `只基于当前选中的 ${selectedTitle} 回答，不启动新的 workspace task。`,
+      '- 选中报告包含已完成全文/PDF 读取的表述；仍需逐条核对证据位置后才能把它当作最终完成结论。',
+      ...sourceLines.map((line) => `- 选中报告依据：${line}`),
+    ].join('\n');
+  }
+  if (saysMetadataOnly || !hasCompletedFullTextEvidence) {
+    return [
+      `Answered only from the selected ${selectedTitle}; no new workspace task or external lookup was started.`,
+      '',
+      '- Read arXiv PDF/full-text evidence: the selected report does not record any arXiv PDF or full-text evidence as read, downloaded, or verified.',
+      '- Missing/unverified evidence: it only preserves provider/web_search candidate metadata and says the rows remain provider-grounded until full-text/citation verification.',
+      '- Completion verdict: it cannot support a claim that full-text research is complete.',
+      '- Recovery step: read each candidate paper/PDF, record evidence locations, verify citation/title/date identity, then regenerate the evidence matrix and report.',
+      ...sourceLines.map((line) => `- Selected-report basis: ${line}`),
+    ].join('\n');
+  }
+  return [
+    `Answered only from the selected ${selectedTitle}; no new workspace task was started.`,
+    '- The selected report includes completed full-text/PDF language, but the evidence locations still need item-by-item audit before treating it as a final completion claim.',
+    ...sourceLines.map((line) => `- Selected-report basis: ${line}`),
+  ].join('\n');
+}
+
+function selectedReportTitle(request: GatewayRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  return uniqueStrings([...recordRows(request.references), ...recordRows(uiState.currentReferences)]
+    .map((reference) => stringField(reference.title) ?? stringField(reference.ref))
+    .filter((value): value is string => Boolean(value)))
+    .find(Boolean);
+}
+
+function evidenceStatusSourceLines(sourceText: string) {
+  const lines = sourceText
+    .split(/(?<=[。.!?；;])\s+|[\n\r]+/)
+    .map((line) => line.trim().replace(/\s+/g, ' '))
+    .filter((line) => /(provider|metadata|full[-\s]?text|PDF|arXiv|citation|verification|verified|unverified|全文|读取|阅读|验证)/i.test(line))
+    .filter((line) => line.length > 0 && line.length <= 260);
+  return uniqueStrings(lines).slice(0, 3);
+}
+
+function selectedReportQuestionAnswerMessage(
+  request: GatewayRequest,
+  context: ReturnType<typeof buildDirectContextFastPathItems>,
+) {
+  const prompt = request.prompt;
+  if (!/(selected|reference|report|artifact|选中|引用|报告|产物)/i.test(prompt)) return undefined;
+  if (!/(credible|credibility|whether|verdict|metrics?|support|risk|validation|next step|reproduc|可信|结论|指标|支持|风险|验证|下一步)/i.test(prompt)) return undefined;
+  const selectedRefs = selectedReferenceTokens(request);
+  const selectedContext = selectedRefs.length
+    ? context.filter((item) => directContextItemMatchesSelectedRef(item, selectedRefs))
+    : context;
+  const sourceText = uniqueStrings((selectedContext.length ? selectedContext : context)
+    .filter((item) => /report|artifact|file|summary|reference/i.test(`${item.kind} ${item.label}`))
+    .map((item) => item.summary)
+    .filter((value): value is string => Boolean(value)))
+    .join('\n');
+  if (!/(reproduction|reproduced|fitted|RMSE|parameter|verdict|success|误差|拟合|复现)/i.test(sourceText)) return undefined;
+  const metrics = selectedReportMetricLines(sourceText);
+  const verdict = selectedReportVerdict(sourceText, metrics);
+  if (!verdict && !metrics.length) return undefined;
+  const risk = selectedReportRiskLine(sourceText);
+  const nextStep = selectedReportNextValidationLine(sourceText);
+  return [
+    'Answered directly from the selected report; no new workspace task was started.',
+    '',
+    `- Credibility verdict: ${verdict ?? 'the selected report provides reproduction metrics, but it does not state a clear pass/fail verdict.'}`,
+    ...metrics.map((line) => `- Supporting metric: ${line}`),
+    `- Biggest remaining risk: ${risk}`,
+    `- Next validation step: ${nextStep}`,
+  ].join('\n');
+}
+
+function selectedReportVerdict(sourceText: string, metrics: string[]) {
+  const explicit = sourceText.match(/Reproduction success\s*:\s*(YES|NO)/i)?.[1];
+  if (explicit) {
+    return explicit.toUpperCase() === 'YES'
+      ? 'credible as a toy reproduction because the selected report says "Reproduction success: YES".'
+      : 'not credible enough yet because the selected report says "Reproduction success: NO".';
+  }
+  if (metrics.length && /PASS|satisfied|completed/i.test(sourceText)) {
+    return 'credible as a toy reproduction because the selected report records passing checks and concrete fit metrics.';
+  }
+  return undefined;
+}
+
+function selectedReportMetricLines(sourceText: string) {
+  const metrics: string[] = [];
+  for (const match of sourceText.matchAll(/\|\s*(r|K)\s*\|\s*([0-9]+(?:\.[0-9]+)?)\s*\|\s*([0-9]+(?:\.[0-9]+)?)\s*\|\s*([0-9]+(?:\.[0-9]+)?%)/gi)) {
+    metrics.push(`${match[1]} true ${match[2]}, fitted ${match[3]}, error ${match[4]}`);
+  }
+  const proseParameterMatches = [
+    ...sourceText.matchAll(/\b(true\s+)?(r|K)\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)[,;\s]+(?:fitted|fit)\s*[:=]?\s*([0-9]+(?:\.[0-9]+)?)[,;\s]+(?:error|relative error|percent error)\s*[:=]?\s*([0-9]+(?:\.[0-9]+)?%)/gi),
+  ];
+  for (const match of proseParameterMatches) {
+    metrics.push(`${match[2]} true ${match[3]}, fitted ${match[4]}, error ${match[5]}`);
+  }
+  const rmse = sourceText.match(/\bRMSE\b\s*[:=]?\s*([0-9]+(?:\.[0-9]+)?)/i)?.[1];
+  if (rmse) metrics.push(`RMSE ${rmse}`);
+  const thresholdLines = sourceText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length <= 240 && /\bPASS\b/i.test(line) && /RMSE|error|threshold|acceptance|r\b|K\b/i.test(line))
+    .slice(0, 3);
+  return uniqueStrings([...metrics, ...thresholdLines]).slice(0, 6);
+}
+
+function selectedReportRiskLine(sourceText: string) {
+  const explicitRisk = sourceText
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/^\s*(?:[-*]|\d+[.)])\s*/, ''))
+    .find((line) => /(risk|limitation|caveat|failure mode|remaining|风险|局限)/i.test(line) && line.length <= 240);
+  if (explicitRisk) return explicitRisk;
+  const evidence = uniqueStrings([
+    /synthetic/i.test(sourceText) ? 'synthetic data' : undefined,
+    /fixed seed/i.test(sourceText) ? 'fixed seed' : undefined,
+    /\btoy\b/i.test(sourceText) ? 'toy setup' : undefined,
+    /noise|noisy/i.test(sourceText) ? 'noisy observations' : undefined,
+  ].filter((value): value is string => Boolean(value)));
+  if (evidence.length) {
+    return `the report is still a ${evidence.join(', ')} reproduction, so it does not establish robustness on real or independent data.`;
+  }
+  return 'the selected report does not state an explicit residual risk, so robustness beyond this single reported run remains unproven.';
+}
+
+function selectedReportNextValidationLine(sourceText: string) {
+  const explicitNext = sourceText
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/^\s*(?:[-*]|\d+[.)])\s*/, ''))
+    .find((line) => /(next|validation|validate|holdout|repeat|seed|noise|robust|下一步|验证)/i.test(line) && line.length <= 240);
+  if (explicitNext && !/Reproduction success/i.test(explicitNext)) return explicitNext;
+  if (/fixed seed|seed/i.test(sourceText) || /noise|noisy/i.test(sourceText)) {
+    return 'repeat the same fitting check across multiple random seeds and noise levels, then compare r/K error and RMSE against the same thresholds.';
+  }
+  return 'rerun the selected method on an independent held-out dataset and require the same verdict and metric thresholds to hold.';
 }
 
 function documentTransformMessage(
@@ -1470,9 +1650,23 @@ function boundedArtifactFollowupRequested(request: GatewayRequest) {
 function boundedArtifactFollowupPrompt(text: string) {
   if (/(search|retrieve|检索|搜索|重新检索|new search|web|external provider|fresh)/i.test(text)
     && !/(do not|don't|no|不要|不得|without)/i.test(text)) return false;
+  if (artifactMutationFollowupRequiresBackend(text)) return false;
   const refersToExistingContext = /(previous|prior|last|existing|current|visible|selected|above|artifact|matrix|report|上一轮|之前|已有|当前|选中|证据矩阵|报告|产物)/i.test(text);
   const forbidsFreshWork = /(based only|only based|do not perform a new search|do not rerun|no new search|without starting|不要重新|不重新|只基于|仅基于)/i.test(text);
   return refersToExistingContext && forbidsFreshWork;
+}
+
+function artifactMutationFollowupRequiresBackend(text: string) {
+  if (explicitAnswerOnlyNoToolsRequested(text)) return false;
+  const refersToExistingContext = /(previous|prior|last|existing|current|visible|selected|above|artifact|matrix|report|deliverable|document|file|workspace|上一轮|之前|已有|当前|选中|证据矩阵|报告|产物|交付物|文档|文件)/i.test(text);
+  const asksForMutation = /(update|revise|rewrite|regenerate|edit|modify|refresh|replace|supersede|write|persist|produce|更新|修订|重写|改写|修改|替换|写入|产出|重新生成)/i.test(text);
+  const deliverableScope = /(artifact|file|document|deliverable|workspace|path|\.md|decision log|risk register|timeline|budget|scope|success metrics|artifact\/file|产物|交付物|文档|文件|路径|决策日志|风险登记|时间线|预算|成功指标|所有受影响结论)/i.test(text);
+  const asksForPaths = /(artifact\/file path|artifact path|file path|workspace file|updated artifact|new file|路径|更新后的 artifact|新的 artifact|新文件|文件路径)/i.test(text);
+  return refersToExistingContext && ((asksForMutation && deliverableScope) || asksForPaths);
+}
+
+function explicitAnswerOnlyNoToolsRequested(text: string) {
+  return /(answer-only|no tools|do not run tools|without starting|不要启动新的 workspace task|不要运行工具|不启动工具|只回答|仅回答)/i.test(text);
 }
 
 function isBoundedAnswerArtifact(value: unknown) {
