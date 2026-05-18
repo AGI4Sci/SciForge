@@ -151,12 +151,13 @@ const trackedBaselineCounts: Record<string, number> = {
   // packages/contracts/runtime/capability-provider-policy.ts; generated-work
   // prompt policy has moved to packages/contracts/runtime/generated-work-policy.ts;
   // reference discovery labels moved to
-  // packages/contracts/runtime/reference-discovery-policy.ts.
+  // packages/contracts/runtime/reference-discovery-policy.ts; direct-context
+  // follow-up routing/copy moved to direct-context-followup-policy.ts.
   'src/runtime/gateway/artifact-mutation-fast-path.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/capability-provider-preflight.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/conversation-reference-digest.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/conversation-service-plan.ts#provider-scenario-prompt-special-case': 0,
-  'src/runtime/gateway/direct-context-fast-path.ts#provider-scenario-prompt-special-case': 64,
+  'src/runtime/gateway/direct-context-fast-path.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/generated-task-runner-execution-lifecycle.ts#provider-scenario-prompt-special-case': 1,
   'src/runtime/gateway/generated-task-payload-preflight.ts#provider-scenario-prompt-special-case': 4,
   'src/runtime/gateway/generated-task-runner-generation-lifecycle.ts#provider-scenario-prompt-special-case': 19,

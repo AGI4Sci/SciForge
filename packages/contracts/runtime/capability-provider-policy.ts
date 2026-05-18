@@ -4,6 +4,17 @@ export type CapabilityProviderRouteStatus = 'ready' | 'missing-provider' | 'prov
 
 export type CapabilityProviderRouteHealthStatus = CapabilityProviderRouteStatus | 'unknown';
 
+export interface CapabilityProviderStatusRoutePolicyInput {
+  capabilityId: string;
+  primaryProviderId?: string;
+  status: string;
+  reason: string;
+  providers: Array<{
+    providerId: string;
+    transport?: string;
+  }>;
+}
+
 export const CAPABILITY_PROVIDER_DISCOVERY_ENDPOINTS = [
   '/api/agent-server/tools/manifest',
   '/api/agent-server/workers',
@@ -111,6 +122,52 @@ export function capabilityProviderStatusReason(
   if (status === 'rate-limited') return `${provider.id} is rate limited.`;
   if (provider.requiredConfig.length > 0) return `${provider.id} requires config: ${provider.requiredConfig.join(', ')}`;
   return `${provider.id} has unknown health.`;
+}
+
+export function capabilityProviderStatusFastPathMessage(input: {
+  routes: CapabilityProviderStatusRoutePolicyInput[];
+  selectedIds: string[];
+  contextMessage?: string;
+}) {
+  const routeLines = input.routes.length
+    ? input.routes.map((route) => capabilityProviderStatusRouteLine(route))
+    : ['- No core web/pdf provider route was required by this status query.'];
+  const selectedLine = input.selectedIds.length ? `Selected runtime ids: ${input.selectedIds.join(', ')}` : 'Selected runtime ids: none reported.';
+  return [
+    'Tool/provider status answered from SciForge runtime registries without dispatching AgentServer generation.',
+    selectedLine,
+    'Provider routes:',
+    ...routeLines,
+    input.contextMessage ?? '',
+  ].filter((line) => line !== '').join('\n');
+}
+
+export function capabilityProviderStatusReasoningTrace() {
+  return [
+    'Capability/provider status queries are answered from runtime registry and preflight route discovery.',
+    'This fast path avoids sending large prior conversation payloads to AgentServer for registry-only follow-up questions.',
+  ].join('\n');
+}
+
+export function capabilityProviderStatusClaimText(ok: boolean) {
+  return ok ? 'Required provider routes are available.' : 'Some requested provider routes are unavailable.';
+}
+
+export function capabilityProviderStatusRouteSummaryLines(routes: CapabilityProviderStatusRoutePolicyInput[]) {
+  return routes.length
+    ? routes.map((route) => capabilityProviderStatusRouteLine(route))
+    : ['- No core web/pdf provider route was required by this status query.'];
+}
+
+export function capabilityProviderStatusRouteRef(id: string) {
+  return `runtime://capability-provider-status/${id}`;
+}
+
+function capabilityProviderStatusRouteLine(route: CapabilityProviderStatusRoutePolicyInput) {
+  const primary = route.primaryProviderId ?? route.providers[0]?.providerId ?? 'none';
+  const provider = route.providers.find((candidate) => candidate.providerId === primary);
+  const transport = provider?.transport ? `; transport=${provider.transport}` : '';
+  return `- ${route.capabilityId}: ${route.status}; primary=${primary}${transport}; ${route.reason}`;
 }
 
 export function capabilityProviderRouteStatusFromHealth(status: CapabilityProviderRouteHealthStatus): CapabilityProviderRouteStatus {

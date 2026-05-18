@@ -12,11 +12,53 @@ import {
   directContextFastPathSupportingRefs,
 } from '@sciforge-ui/runtime-contract/artifact-policy';
 import {
+  capabilityProviderStatusClaimText,
+  capabilityProviderStatusFastPathMessage,
+  capabilityProviderStatusReasoningTrace,
+  capabilityProviderStatusRouteRef,
+  capabilityProviderStatusRouteSummaryLines,
+} from '@sciforge-ui/runtime-contract';
+import {
+  directContextBoundedArtifactIntent,
+  directContextBoundedArtifactTransformMode,
+  directContextCapabilityStatusBlockedContextPolicy,
   directContextEvidenceStatusSourceLines,
+  directContextGateBlockedReasonForIntent,
+  directContextIntentSummaryLimit,
   directContextIsLiteraturePaperRow,
+  directContextLibraryBudgetTarget,
+  directContextLiteratureMetadataEvidenceAnswerLines,
   directContextLiteratureFullTextStatus,
+  directContextLiteratureSourceHasCompletedFullTextEvidence,
+  directContextLiteratureSourceIsMetadataOnly,
   directContextLiteratureNoResultScope,
+  directContextNoConfirmedLiteratureAnswerLines,
+  directContextPromptAsksConfounding,
+  directContextPromptAsksQcImpact,
+  directContextPromptAsksStatistics,
+  directContextPromptMentionsQcArtifact,
+  directContextPromptMentionsChart,
+  directContextPromptRequestsEvidenceMatrixArtifact,
+  directContextPromptRequestsFreshExternalWork,
+  directContextPromptRequestsAnalysisReportFollowup,
+  directContextPromptRequestsChartSufficiency,
+  directContextPromptRequestsCounterfactualThreshold,
+  directContextPromptRequestsCredibilityAudit,
+  directContextPromptRequestsEvidenceBoundary,
+  directContextPromptRequestsEvidenceMatrixHypotheses,
+  directContextPromptRequestsLiteralFacts,
+  directContextPromptRequestsPassFailAudit,
+  directContextPromptRequestsPriorityLiteratureRows,
+  directContextPromptRequestsProtocolBudgetAdaptation,
+  directContextPromptRequestsQcMissingnessImpact,
+  directContextPromptRequestsRerunInfo,
+  directContextPromptRequestsSelectedReport,
+  directContextPromptRequestsSelectedReportBullets,
+  directContextPromptRequestsSelectedReportQuestion,
+  directContextRecordLooksLikeEvidenceMatrix,
+  directContextRequiredContextForIntentPolicy,
   directContextSelectedLiteratureReportBasisLines,
+  directContextSelectedReportLiteralFactKinds,
   directContextTextAsksFullTextEvidenceStatus,
   directContextTextWantsChinese,
 } from '@sciforge-ui/runtime-contract/direct-context-followup-policy';
@@ -450,8 +492,8 @@ async function requestWithSessionArtifactsForBoundedFollowup(request: GatewayReq
     ? request.artifacts.some((artifact) => isRecord(artifact) && recordMatchesPromptMentionedFile(artifact, promptFileTitle))
     : false;
   if (request.artifacts.some(isBoundedAnswerArtifact) && (
-    !/evidence[-\s_]?matrix|证据矩阵|matrix artifact/i.test(request.prompt)
-    || request.artifacts.some((artifact) => isRecord(artifact) && /evidence[-\s_]?matrix/i.test(`${stringField(artifact.type) ?? ''} ${stringField(artifact.id) ?? ''}`))
+    !directContextPromptRequestsEvidenceMatrixArtifact(request.prompt)
+    || request.artifacts.some((artifact) => isRecord(artifact) && directContextRecordLooksLikeEvidenceMatrix(`${stringField(artifact.type) ?? ''} ${stringField(artifact.id) ?? ''}`))
   ) && (!promptFileTitle || hasPromptNamedArtifact)) return request;
   if (!boundedArtifactFollowupPrompt(request.prompt)) return request;
   const sessionId = sessionIdFromUiState(request.uiState);
@@ -742,10 +784,10 @@ function directContextGate(
       audit: {
         decisionRef: decision.decisionRef,
         intent,
-        requiredContext: ['capability-registry', 'tool-registry', 'provider-registry', 'agentserver-worker-registry'],
+        requiredContext: directContextCapabilityStatusBlockedContextPolicy(),
         usedContextRefs,
         sufficiency: 'insufficient',
-        blockReason: decision.blockReason ?? 'Skill/tool/capability/provider status must be answered from registries, not artifact summaries.',
+        blockReason: decision.blockReason ?? directContextGateBlockedReasonForIntent(intent),
       },
     };
   }
@@ -758,7 +800,7 @@ function directContextGate(
         requiredContext,
         usedContextRefs,
         sufficiency: 'insufficient',
-        blockReason: decision.blockReason ?? 'Fresh execution or external lookup request requires backend/tool routing.',
+        blockReason: decision.blockReason ?? directContextGateBlockedReasonForIntent(intent),
       },
     };
   }
@@ -771,7 +813,7 @@ function directContextGate(
         requiredContext,
         usedContextRefs,
         sufficiency: 'insufficient',
-        blockReason: decision.blockReason ?? 'Structured direct-context decision did not authorize a direct answer.',
+        blockReason: decision.blockReason ?? directContextGateBlockedReasonForIntent(intent),
       },
     };
   }
@@ -879,12 +921,7 @@ function normalizeDirectContextTransformMode(value: unknown): DirectContextTrans
 }
 
 function requiredContextForDirectIntent(intent: DirectContextIntent) {
-  if (intent === 'run-diagnostic') return ['run-trace', 'execution-units', 'failure-evidence'];
-  if (intent === 'artifact-status') return ['artifact-index', 'object-references', 'current-refs'];
-  if (intent.startsWith('context-summary')) return ['current-session-context'];
-  if (intent === 'capability-status') return ['capability-registry', 'tool-registry', 'provider-registry'];
-  if (intent === 'fresh-execution') return ['backend-routing', 'capability-provider-routes'];
-  return ['typed-current-context'];
+  return directContextRequiredContextForIntentPolicy(intent);
 }
 
 function directContextInstance(
@@ -996,8 +1033,7 @@ function testableHypothesesFromEvidenceMatrixMessage(
   prompt: string,
   context: ReturnType<typeof buildDirectContextFastPathItems>,
 ) {
-  if (!/(hypoth(?:esis|eses)|可检验|假设|validation experiment|minimal validation)/i.test(prompt)) return undefined;
-  if (!/(evidence matrix|matrix|证据矩阵)/i.test(prompt)) return undefined;
+  if (!directContextPromptRequestsEvidenceMatrixHypotheses(prompt)) return undefined;
   const sourceItems = context.filter((item) => /evidence[-\s_]?matrix|row \d+/i.test(`${item.label}\n${item.summary}`));
   const rowStatements = uniqueStrings(sourceItems.flatMap((item) => statementParts(item.summary)))
     .filter((line) => /^Row \d+:/i.test(line) || /doi:|PMID|PMC|ref:/i.test(line))
@@ -1048,7 +1084,7 @@ function analysisReportFollowupMessage(
   prompt: string,
   context: ReturnType<typeof buildDirectContextFastPathItems>,
 ) {
-  if (!/(treatment effect|confounders?|robustness|batch|timepoint|main conclusion|处理效应|混杂|稳健性)/i.test(prompt)) return undefined;
+  if (!directContextPromptRequestsAnalysisReportFollowup(prompt)) return undefined;
   const reportText = uniqueStrings(context
     .filter((item) => /report|analysis/i.test(`${item.label} ${item.kind}`))
     .map((item) => item.summary)
@@ -1059,7 +1095,7 @@ function analysisReportFollowupMessage(
   if (!treatment.length) return undefined;
   const confounders = confounderLines(reportText);
   const robustness = robustnessCheckLines(reportText);
-  const english = !/[一-龥]/.test(prompt);
+  const english = !directContextTextWantsChinese(prompt);
   if (!english) {
     return [
       '基于当前可见分析报告直接回答，不启动新的 workspace task。',
@@ -1092,11 +1128,10 @@ function protocolLibraryBudgetAdaptationMessage(
   prompt: string,
   context: ReturnType<typeof buildDirectContextFastPathItems>,
 ) {
-  if (!/(budget|librar(?:y|ies)|sequencing|timepoints?|预算|测序|文库|时间点)/i.test(prompt)) return undefined;
-  if (!/(protocol|trial|RCT|study design|方案|研究设计)/i.test(`${prompt}\n${directContextJoinedText(context).slice(0, 2000)}`)) return undefined;
-  const targetLibraries = libraryCountFromPrompt(prompt);
-  if (!targetLibraries) return undefined;
   const sourceText = directContextJoinedText(context);
+  if (!directContextPromptRequestsProtocolBudgetAdaptation(prompt, sourceText.slice(0, 2000))) return undefined;
+  const targetLibraries = directContextLibraryBudgetTarget(prompt);
+  if (!targetLibraries) return undefined;
   const patientCount = firstIntegerMatch(sourceText, /(\d+)\s*(?:IBS\s*)?(?:patients?|subjects?|participants?|名|例)/i);
   const currentLibraries = firstIntegerMatch(sourceText, /(\d+)\s*(?:sequencing\s*)?librar(?:y|ies)\b/i)
     ?? firstIntegerMatch(sourceText, /(?:最多|max(?:imum)?|total|共|最多)\D{0,24}(\d+)\s*(?:个\s*)?(?:sequencing\s*)?(?:librar(?:y|ies)|文库)/i);
@@ -1114,7 +1149,7 @@ function protocolLibraryBudgetAdaptationMessage(
   const dropped = timepoints.filter((timepoint) => timepoint !== baseline && timepoint !== finalTimepoint);
   const underpowered = /underpowered|low power|insufficient power|needs-work|低效能|统计功效不足/i.test(sourceText);
   const antibioticBlocker = /antibiotic[\s\S]{0,120}blocker|blocker[\s\S]{0,120}antibiotic|抗生素[\s\S]{0,120}blocker/i.test(sourceText);
-  const chinese = /[一-龥]/.test(prompt);
+  const chinese = directContextTextWantsChinese(prompt);
   if (chinese) {
     return [
       '基于当前 protocol artifact 直接回答，不启动新的 workspace task，也不写入新的 artifact。',
@@ -1148,11 +1183,6 @@ function directContextJoinedText(context: ReturnType<typeof buildDirectContextFa
     .map((item) => item.summary)
     .filter((value): value is string => Boolean(value)))
     .join('\n\n');
-}
-
-function libraryCountFromPrompt(prompt: string) {
-  return firstIntegerMatch(prompt, /(\d+)\s*(?:sequencing\s*)?librar(?:y|ies)\b/i)
-    ?? firstIntegerMatch(prompt, /预算\D{0,16}(\d+)\s*(?:个\s*)?(?:librar(?:y|ies)|文库)/i);
 }
 
 function firstIntegerMatch(text: string, pattern: RegExp) {
@@ -1231,7 +1261,7 @@ function selectedReportEvidenceStatusAnswerMessage(
   context: ReturnType<typeof buildDirectContextFastPathItems>,
 ) {
   const prompt = request.prompt;
-  if (!/(selected|reference|report|artifact|选中|引用|报告|产物)/i.test(prompt)) return undefined;
+  if (!directContextPromptRequestsSelectedReport(prompt)) return undefined;
   const asksFullTextStatus = directContextTextAsksFullTextEvidenceStatus(prompt);
   if (!asksFullTextStatus) return undefined;
   const promptNamedContext = promptNamedDirectContextItems(request, context);
@@ -1257,9 +1287,8 @@ function selectedReportEvidenceStatusAnswerMessage(
     .filter((value): value is string => Boolean(value)))
     .join('\n');
   if (!sourceText) return undefined;
-  const saysMetadataOnly = /(provider[-\s]?grounded metadata|provider metadata|metadata until full[-\s]?text verification|until full[-\s]?text verification|requires full[-\s]?text verification|citation verification|unverified|needs[-\s]?verification|未验证|待验证|未完成全文|未读取全文)/i.test(sourceText);
-  const hasCompletedFullTextEvidence = /(PDF|full[-\s]?text|全文)[^。.!?\n]{0,80}(read|retrieved|downloaded|verified|completed|已读取|已阅读|已获取|已验证|完成)/i.test(sourceText)
-    && !/(until full[-\s]?text verification|requires full[-\s]?text verification|未验证|待验证|metadata until)/i.test(sourceText);
+  const saysMetadataOnly = directContextLiteratureSourceIsMetadataOnly(sourceText);
+  const hasCompletedFullTextEvidence = directContextLiteratureSourceHasCompletedFullTextEvidence(sourceText);
   const sourceLines = directContextEvidenceStatusSourceLines(sourceText);
   const selectedTitle = selectedReportTitle(request) ?? 'selected report';
   const noConfirmedPapers = selectedLiteratureReportNoConfirmedPapers(sourceText);
@@ -1269,63 +1298,20 @@ function selectedReportEvidenceStatusAnswerMessage(
     const basisLines = sourceLines.length
       ? sourceLines
       : directContextSelectedLiteratureReportBasisLines(sourceText);
-    if (directContextTextWantsChinese(prompt)) {
-      return [
-        `只基于当前选中的 ${selectedTitle} 回答，不启动新的 workspace task，也不使用未选中的历史消息或外部新检索。`,
-        '',
-        `- 是否确认${scope.conditionLabel}的相关论文：没有。选中报告明确是无可确认结果/最新论文列表为空，不能把本轮结果解读成已经确认到满足请求条件的论文。`,
-        `- PDF/全文状态：没有可对应到论文的 PDF/全文可读记录；${reason ?? '报告没有给出可引用论文的 PDF 或全文读取证据。'}`,
-        `- 证据位置边界：证据只停留在 provider/运行诊断或失败原因层面；没有可引用的${scope.sourceEvidenceLabel}链接、页码、段落或论文内证据位置。`,
-        '- 关键结论：本轮可以诚实支持“未确认到满足请求条件的论文”，不能支持“已完成阅读全文调研”。',
-        `- 局限性：可能受 provider 限流、日期窗口、查询词和 bounded run 影响；需要稍后重试${scope.sourceRetryLabel}、放宽日期窗口或逐篇拉取 PDF 后才能形成 citation-grade 结论。`,
-        ...basisLines.map((line) => `- 选中报告依据：${line}`),
-      ].join('\n');
-    }
-    return [
-      `Answered only from the selected ${selectedTitle}; no new workspace task or external lookup was started.`,
-      '',
-      `- Confirmed papers for the requested scope: none. The selected report records an empty/no-confirmed-result literature list for ${scope.englishScope}.`,
-      `- PDF/full-text status: no paper-level PDF or full-text evidence was read or verified; ${reason ?? 'the report does not provide citable paper/PDF evidence.'}`,
-      `- Evidence-location boundary: only provider/runtime diagnostics are available; no ${scope.englishEvidenceLabel}, page, section, or snippet can be cited from the selected report.`,
-      '- Key conclusion: this supports an honest no-confirmed-result answer, not a completed full-text literature review.',
-      `- Limitations: provider rate limits, date-window strictness, query wording, and bounded execution may have caused false negatives; retry ${scope.englishRetryLabel} and paper-level PDF extraction are still required for citation-grade conclusions.`,
-      ...basisLines.map((line) => `- Selected-report basis: ${line}`),
-    ].join('\n');
+    return directContextNoConfirmedLiteratureAnswerLines({
+      chinese: directContextTextWantsChinese(prompt),
+      selectedTitle,
+      scope,
+      reason,
+      basisLines,
+    }).join('\n');
   }
-  if (directContextTextWantsChinese(prompt)) {
-    if (saysMetadataOnly || !hasCompletedFullTextEvidence) {
-      return [
-        `只基于当前选中的 ${selectedTitle} 回答，不启动新的 workspace task，也不使用未选中的历史消息或外部新检索。`,
-        '',
-        '- 已读取的 arXiv PDF/全文证据：这份选中报告没有记录任何已经读取、下载或验证过的 arXiv PDF/全文证据。',
-        '- 未读取或未验证的部分：报告只留下 provider/web_search 路由产出的候选元数据；候选行仍被标记为 provider-grounded metadata，等待 full-text/citation verification。',
-        '- 能否支持“全文调研已完成”：不能。它只能支持“已有候选元数据/诊断材料”，不能支持“全文调研已完成”或“PDF 证据已读完”的结论。',
-        '- 下一步恢复：按候选论文逐篇解析 arXiv 身份和 PDF/全文，记录已读取的段落/页码/证据位置，做 citation/title/date 校验，再重新生成证据矩阵和中文报告。',
-        ...sourceLines.map((line) => `- 选中报告依据：${line}`),
-      ].join('\n');
-    }
-    return [
-      `只基于当前选中的 ${selectedTitle} 回答，不启动新的 workspace task。`,
-      '- 选中报告包含已完成全文/PDF 读取的表述；仍需逐条核对证据位置后才能把它当作最终完成结论。',
-      ...sourceLines.map((line) => `- 选中报告依据：${line}`),
-    ].join('\n');
-  }
-  if (saysMetadataOnly || !hasCompletedFullTextEvidence) {
-    return [
-      `Answered only from the selected ${selectedTitle}; no new workspace task or external lookup was started.`,
-      '',
-      '- Read arXiv PDF/full-text evidence: the selected report does not record any arXiv PDF or full-text evidence as read, downloaded, or verified.',
-      '- Missing/unverified evidence: it only preserves provider/web_search candidate metadata and says the rows remain provider-grounded until full-text/citation verification.',
-      '- Completion verdict: it cannot support a claim that full-text research is complete.',
-      '- Recovery step: read each candidate paper/PDF, record evidence locations, verify citation/title/date identity, then regenerate the evidence matrix and report.',
-      ...sourceLines.map((line) => `- Selected-report basis: ${line}`),
-    ].join('\n');
-  }
-  return [
-    `Answered only from the selected ${selectedTitle}; no new workspace task was started.`,
-    '- The selected report includes completed full-text/PDF language, but the evidence locations still need item-by-item audit before treating it as a final completion claim.',
-    ...sourceLines.map((line) => `- Selected-report basis: ${line}`),
-  ].join('\n');
+  return directContextLiteratureMetadataEvidenceAnswerLines({
+    chinese: directContextTextWantsChinese(prompt),
+    selectedTitle,
+    sourceLines,
+    completedFullTextEvidence: !saysMetadataOnly && hasCompletedFullTextEvidence,
+  }).join('\n');
 }
 
 function selectedLiteratureReportNoConfirmedPapers(sourceText: string) {
@@ -1355,9 +1341,7 @@ function selectedLiteratureReportBulletSummaryMessage(
   context: ReturnType<typeof buildDirectContextFastPathItems>,
 ) {
   const prompt = request.prompt;
-  if (!/(selected|reference|report|artifact|引用|选中|报告|产物|刚刚)/i.test(prompt)) return undefined;
-  if (!/(flow\s*matching|perturbation|single[-\s]?cell|pdf|full[-\s]?text|全文|文献|论文)/i.test(prompt)) return undefined;
-  if (!/(bullet|bullets?|points?|summari[sz]e|conclusions?|priorit|read first|highest|reason|evidence|limitation|三条|3\s*条|总结|结论|要点|指出|优先|先读|理由|原因|证据|局限)/i.test(prompt)) return undefined;
+  if (!directContextPromptRequestsSelectedReportBullets(prompt)) return undefined;
   const sourceText = selectedReportSourceText(request, context);
   if (!sourceText || !/(候选论文|fullTextStatus|PDF\/full-text|arXiv|perturbation|flow matching|single-cell)/i.test(sourceText)) {
     return undefined;
@@ -1366,7 +1350,7 @@ function selectedLiteratureReportBulletSummaryMessage(
   if (!rows.length) return undefined;
   const picks = pickLiteratureReportSummaryRows(rows);
   if (!picks.length) return undefined;
-  const wantsPriority = /(priorit|read first|highest|先读|优先|最值得|推荐)/i.test(prompt);
+  const wantsPriority = directContextPromptRequestsPriorityLiteratureRows(prompt);
   return [
     '基于当前 report artifact 直接回答，不启动新的 workspace task，也不重新检索。',
     '',
@@ -1674,10 +1658,9 @@ function selectedQcMissingnessImpactAnswerMessage(
   context: ReturnType<typeof buildDirectContextFastPathItems>,
 ) {
   const prompt = request.prompt;
-  if (!/(selected|reference|artifact|file|table|csv|QC|missingness|选中|引用|产物|文件|表|缺失|质控)/i.test(prompt)) return undefined;
-  const promptMentionsQcArtifact = /(missing|missingness|outlier|protocol[-_\s]?deviations?|QC|quality[-_\s]?control|table|csv|缺失|质控|离群|异常|违背|表格)/i.test(prompt);
-  const promptAsksQcImpact = /(treatment[-_\s]?effect|treatment|effect|prove|overturn|bias|sensitivity|robust|治疗|效应|证明|推翻|偏倚|敏感|稳健|影响)/i.test(prompt);
-  if (!promptMentionsQcArtifact && !promptAsksQcImpact) return undefined;
+  if (!directContextPromptRequestsQcMissingnessImpact(prompt)) return undefined;
+  const promptMentionsQcArtifact = directContextPromptMentionsQcArtifact(prompt);
+  const promptAsksQcImpact = directContextPromptAsksQcImpact(prompt);
   const selectedRefs = selectedReferenceTokens(request);
   const selectedContext = selectedRefs.length
     ? context.filter((item) => directContextItemMatchesSelectedRef(item, selectedRefs))
@@ -1812,22 +1795,21 @@ function selectedChartSufficiencyAnswerMessage(
   context: ReturnType<typeof buildDirectContextFastPathItems>,
 ) {
   const prompt = request.prompt;
-  if (!/(selected|reference|artifact|chart|plot|figure|image|选中|引用|产物|图表|图片)/i.test(prompt)) return undefined;
-  if (!/(alone|only|single|support|prove|conclude|conclusion|statistical|significance|p[-\s]?value|confidence interval|batch|confound|causal|单独|仅|只|支持|证明|结论|显著|混杂|批次)/i.test(prompt)) return undefined;
+  if (!directContextPromptRequestsChartSufficiency(prompt)) return undefined;
   const selectedRefs = selectedReferenceTokens(request);
   const selectedContext = selectedRefs.length
     ? context.filter((item) => directContextItemMatchesSelectedRef(item, selectedRefs))
     : context.filter(directContextItemLooksLikeChartByIdentity);
-  const promptMentionsChart = /(chart|plot|figure|image|png|jpe?g|webp|svg|boxplot|violin|heatmap|图表|图片|图像)/i.test(prompt);
+  const promptMentionsChart = directContextPromptMentionsChart(prompt);
   const selectedLooksLikeChart = selectedContext.some(directContextItemLooksLikeChartByIdentity);
   if (!promptMentionsChart && !selectedLooksLikeChart) return undefined;
   const chartContext = selectedContext.filter(directContextItemLooksLikeChartByIdentity);
   const answerContext = chartContext.length ? chartContext : selectedContext;
   if (!answerContext.length) return undefined;
   const refLine = directContextFastPathSupportingRefs(answerContext).slice(0, 3).join(', ') || answerContext[0]?.label || 'selected chart';
-  const asksStatistics = /(statistical|significance|p[-\s]?value|confidence interval|interval|sample size|effect|model|test|显著|p\s*值|置信|样本|效应|模型|检验)/i.test(prompt);
-  const asksConfounding = /(batch|confound|adjust|control|stratif|批次|混杂|控制|调整|分层)/i.test(prompt);
-  if (/[一-龥]/.test(prompt)) {
+  const asksStatistics = directContextPromptAsksStatistics(prompt);
+  const asksConfounding = directContextPromptAsksConfounding(prompt);
+  if (directContextTextWantsChinese(prompt)) {
     return [
       `只基于当前选中的图表引用回答：${refLine}。没有启动新的 workspace task，也不使用其他引用。`,
       '',
@@ -1915,9 +1897,7 @@ function selectedReportCounterfactualThresholdAnswerMessage(
   context: ReturnType<typeof buildDirectContextFastPathItems>,
 ) {
   const prompt = request.prompt;
-  if (!/(selected|reference|report|artifact|reproduc|选中|引用|报告|产物|复现)/i.test(prompt)) return undefined;
-  if (!/(counterfactual|if|new threshold|stricter|still|success|反事实|如果|新门槛|新阈值|仍可|仍然|判成功|验收|门槛|阈值|<=|≤)/i.test(prompt)) return undefined;
-  if (!/(r\b|K\b|RMSE|error|误差)/i.test(prompt)) return undefined;
+  if (!directContextPromptRequestsCounterfactualThreshold(prompt)) return undefined;
   const sourceText = selectedReportSourceText(request, context);
   if (!sourceText) return undefined;
   const rows = selectedReportPassFailRows(sourceText);
@@ -1926,7 +1906,7 @@ function selectedReportCounterfactualThresholdAnswerMessage(
   if (!checks.length) return undefined;
   const failed = checks.filter((check) => !check.pass);
   const selectedTitle = selectedReportTitle(request) ?? 'selected report';
-  if (/[一-龥]/.test(prompt)) {
+  if (directContextTextWantsChinese(prompt)) {
     return [
       `只基于当前选中的 ${selectedTitle} 做反事实门槛验收，不启动新的 workspace task，也不沿用原报告的 success 结论替代重新判断。`,
       '',
@@ -1971,13 +1951,13 @@ function selectedReportCounterfactualThresholdChecks(
   });
 }
 
-function selectedReportThresholdsFromPrompt(prompt: string) {
+function selectedReportThresholdsFromPrompt(text: string) {
   return [
     { metric: 'r', pattern: /\br\s*(?:error|误差)?\s*(?:<=|≤|不超过|小于等于)\s*([0-9]+(?:\.[0-9]+)?)\s*%?/i, suffix: '%' },
     { metric: 'K', pattern: /\bK\s*(?:error|误差)?\s*(?:<=|≤|不超过|小于等于)\s*([0-9]+(?:\.[0-9]+)?)\s*%?/i, suffix: '%' },
     { metric: 'RMSE', pattern: /\bRMSE\b\s*(?:<=|≤|不超过|小于等于)\s*([0-9]+(?:\.[0-9]+)?)/i, suffix: '' },
   ].flatMap(({ metric, pattern, suffix }) => {
-    const match = prompt.match(pattern);
+    const match = text.match(pattern);
     if (!match) return [];
     const threshold = Number(match[1]);
     if (!Number.isFinite(threshold)) return [];
@@ -2002,14 +1982,13 @@ function selectedReportRerunInfoAnswerMessage(
   context: ReturnType<typeof buildDirectContextFastPathItems>,
 ) {
   const prompt = request.prompt;
-  if (!/(selected|reference|report|artifact|reproduc|选中|引用|报告|产物|复现)/i.test(prompt)) return undefined;
-  if (!/(rerun command|run command|complete rerun|copy-pasteable command|script path|复跑性|复现命令|运行命令|完整.{0,8}命令|脚本路径)/i.test(prompt)) return undefined;
+  if (!directContextPromptRequestsRerunInfo(prompt)) return undefined;
   const sourceText = selectedReportSourceText(request, context);
   if (!sourceText) return undefined;
   const commandLines = selectedReportCommandLines(sourceText);
   const scriptName = selectedReportGeneratedByScript(sourceText);
   const selectedTitle = selectedReportTitle(request) ?? 'selected report';
-  if (/[一-龥]/.test(prompt)) {
+  if (directContextTextWantsChinese(prompt)) {
     return [
       `只基于当前选中的 ${selectedTitle} 核对复跑信息，不补造 report 里没有出现的命令或路径。`,
       '',
@@ -2068,20 +2047,20 @@ function selectedReportLiteralFactAnswerMessage(
   context: ReturnType<typeof buildDirectContextFastPathItems>,
 ) {
   const prompt = request.prompt;
-  if (!/(selected|reference|report|artifact|reproduc|选中|引用|报告|产物|复现)/i.test(prompt)) return undefined;
-  if (!/(random seed|seed|optimizer|bounds?|parameter bounds?|noise|std|脚本|路径|随机种子|优化器|参数边界|取值边界|边界条件|噪声)/i.test(prompt)) return undefined;
+  if (!directContextPromptRequestsLiteralFacts(prompt)) return undefined;
   const sourceText = selectedReportSourceText(request, context);
   if (!sourceText) return undefined;
+  const kinds = directContextSelectedReportLiteralFactKinds(prompt);
   const facts = [
-    /random seed|seed|随机种子/i.test(prompt) ? ['Random seed', selectedReportFieldValue(sourceText, /^(?:[-*]\s*)?Random seed\s*[:：]\s*(.+)$/i)] : undefined,
-    /optimizer|优化器/i.test(prompt) ? ['Optimizer', selectedReportFieldValue(sourceText, /^(?:[-*]\s*)?Optimizer\s*[:：]\s*(.+)$/i)] : undefined,
-    /bounds?|parameter bounds?|参数边界|取值边界|边界条件/i.test(prompt) ? ['Bounds', selectedReportFieldValue(sourceText, /^(?:[-*]\s*)?Bounds\s*[:：]\s*(.+)$/i)] : undefined,
-    /noise|std|噪声/i.test(prompt) ? ['Synthetic noise std', selectedReportFieldValue(sourceText, /^(?:[-*]\s*)?Synthetic noise std\s*[:：]\s*(.+)$/i)] : undefined,
-    /script|脚本|路径/i.test(prompt) ? ['Report generated by', selectedReportGeneratedByScript(sourceText)] : undefined,
+    kinds.seed ? ['Random seed', selectedReportFieldValue(sourceText, /^(?:[-*]\s*)?Random seed\s*[:：]\s*(.+)$/i)] : undefined,
+    kinds.optimizer ? ['Optimizer', selectedReportFieldValue(sourceText, /^(?:[-*]\s*)?Optimizer\s*[:：]\s*(.+)$/i)] : undefined,
+    kinds.bounds ? ['Bounds', selectedReportFieldValue(sourceText, /^(?:[-*]\s*)?Bounds\s*[:：]\s*(.+)$/i)] : undefined,
+    kinds.noise ? ['Synthetic noise std', selectedReportFieldValue(sourceText, /^(?:[-*]\s*)?Synthetic noise std\s*[:：]\s*(.+)$/i)] : undefined,
+    kinds.script ? ['Report generated by', selectedReportGeneratedByScript(sourceText)] : undefined,
   ].filter((item): item is [string, string | undefined] => Boolean(item));
   if (!facts.length) return undefined;
   const selectedTitle = selectedReportTitle(request) ?? 'selected report';
-  if (/[一-龥]/.test(prompt)) {
+  if (directContextTextWantsChinese(prompt)) {
     return [
       `只基于当前选中的 ${selectedTitle} 回答，不给可信度总结。`,
       '',
@@ -2100,14 +2079,13 @@ function selectedReportEvidenceBoundaryAnswerMessage(
   context: ReturnType<typeof buildDirectContextFastPathItems>,
 ) {
   const prompt = request.prompt;
-  if (!/(selected|reference|report|artifact|reproduc|这份|当前|选中|引用|报告|产物|复现)/i.test(prompt)) return undefined;
-  if (!/(cannot prove|cannot show|not prove|extrapolat|limitation|boundary|不能证明|不能外推|外推|边界|局限|缺口)/i.test(prompt)) return undefined;
+  if (!directContextPromptRequestsEvidenceBoundary(prompt)) return undefined;
   const sourceText = selectedReportSourceText(request, context);
   if (!sourceText) return undefined;
   const limitations = selectedReportBoundaryLimitations(sourceText).slice(0, 6);
   if (limitations.length < 2) return undefined;
   const selectedTitle = selectedReportTitle(request) ?? 'selected report';
-  if (/[一-龥]/.test(prompt)) {
+  if (directContextTextWantsChinese(prompt)) {
     return [
       `只基于当前选中的 ${selectedTitle} 做证据边界审计，不启动新的 workspace task。`,
       '',
@@ -2149,8 +2127,7 @@ function selectedReportCredibilityAuditAnswerMessage(
   context: ReturnType<typeof buildDirectContextFastPathItems>,
 ) {
   const prompt = request.prompt;
-  if (!/(selected|reference|report|artifact|reproduc|当前|选中|引用|报告|产物|复现)/i.test(prompt)) return undefined;
-  if (!/(over.?optimistic|too optimistic|credible as a toy reproduction|supporting evidence|counter.?evidence|audit|过度乐观|支持证据|反对证据|一致性审计)/i.test(prompt)) return undefined;
+  if (!directContextPromptRequestsCredibilityAudit(prompt)) return undefined;
   const sourceText = selectedReportSourceText(request, context);
   if (!sourceText) return undefined;
   const rows = selectedReportPassFailRows(sourceText);
@@ -2161,7 +2138,7 @@ function selectedReportCredibilityAuditAnswerMessage(
   const boundedNo = failed.length === 0;
   const support = metrics.length ? metrics.slice(0, 4) : rows.map(formatSelectedReportPassFailRowEn).slice(0, 4);
   const counter = selectedReportBoundaryLimitations(sourceText).slice(0, 3);
-  if (/[一-龥]/.test(prompt)) {
+  if (directContextTextWantsChinese(prompt)) {
     return [
       `只基于当前选中的 ${selectedTitle} 做一致性审计，不使用未选中的历史消息。`,
       '',
@@ -2190,8 +2167,7 @@ function selectedReportPassFailAuditAnswerMessage(
   context: ReturnType<typeof buildDirectContextFastPathItems>,
 ) {
   const prompt = request.prompt;
-  if (!/(selected|reference|report|artifact|reproduc|选中|引用|报告|产物|复现)/i.test(prompt)) return undefined;
-  if (!/(PASS|FAIL|pass\/fail|true|fitted|error|threshold|RMSE|达标|未达标|没达标|阈值|逐项|核对|指标|误差|拟合)/i.test(prompt)) return undefined;
+  if (!directContextPromptRequestsPassFailAudit(prompt)) return undefined;
   const selectedRefs = selectedReferenceTokens(request);
   const selectedContext = selectedRefs.length
     ? context.filter((item) => directContextItemMatchesSelectedRef(item, selectedRefs))
@@ -2206,7 +2182,7 @@ function selectedReportPassFailAuditAnswerMessage(
   if (!rows.length) return undefined;
   const failed = rows.filter((row) => row.verdict === 'FAIL');
   const selectedTitle = selectedReportTitle(request) ?? 'selected report';
-  if (/[一-龥]/.test(prompt)) {
+  if (directContextTextWantsChinese(prompt)) {
     return [
       `只基于当前选中的 ${selectedTitle} 逐项核对，不启动新的 workspace task，也不使用未选中的历史消息或其它 artifact。`,
       '',
@@ -2285,8 +2261,7 @@ function selectedReportQuestionAnswerMessage(
   context: ReturnType<typeof buildDirectContextFastPathItems>,
 ) {
   const prompt = request.prompt;
-  if (!/(selected|reference|report|artifact|选中|引用|报告|产物)/i.test(prompt)) return undefined;
-  if (!/(credible|credibility|whether|verdict|metrics?|support|risk|validation|next step|可信|是否|结论|指标|支持|风险|验证|下一步)/i.test(prompt)) return undefined;
+  if (!directContextPromptRequestsSelectedReportQuestion(prompt)) return undefined;
   const selectedRefs = selectedReferenceTokens(request);
   const selectedContext = selectedRefs.length
     ? context.filter((item) => directContextItemMatchesSelectedRef(item, selectedRefs))
@@ -2913,8 +2888,8 @@ function intentSummaryAnswer(
   if (intent !== 'context-summary:risk' && intent !== 'context-summary:method' && intent !== 'context-summary:timeline') return undefined;
   const sentences = uniqueStrings(context.flatMap((item) => contextSummarySentencesFromText(item.summary, intent)));
   if (!sentences.length) return undefined;
-  const selected = sentences.slice(0, /two|2|两|二/.test(prompt) ? 2 : 3);
-  if (/[一-龥]/.test(prompt)) {
+  const selected = sentences.slice(0, directContextIntentSummaryLimit(prompt));
+  if (directContextTextWantsChinese(prompt)) {
     return `基于当前会话已有上下文直接回答，不启动新的 workspace task。${selected.join('；')}。`;
   }
   return `Answered directly from current-session context without starting a new workspace task. ${selected.join('; ')}.`;
@@ -2979,35 +2954,21 @@ function capabilityStatusFastPathPayload(request: GatewayRequest): ToolPayload |
     selectedIds,
     refs: directContextFastPathSupportingRefs(context),
   })).slice(0, 12);
-  const routeLines = routeStatus.routes.length
-    ? routeStatus.routes.map((route) => {
-      const primary = route.primaryProviderId ?? route.providers[0]?.providerId ?? 'none';
-      const provider = route.providers.find((candidate) => candidate.providerId === primary);
-      const transport = provider?.transport ? `; transport=${provider.transport}` : '';
-      return `- ${route.capabilityId}: ${route.status}; primary=${primary}${transport}; ${route.reason}`;
-    })
-    : ['- No core web/pdf provider route was required by this status query.'];
-  const selectedLine = selectedIds.length ? `Selected runtime ids: ${selectedIds.join(', ')}` : 'Selected runtime ids: none reported.';
   const contextMessage = context.length
     ? `\n\nCurrent context summary:\n${directContextFastPathMessage(context)}`
     : '';
-  const message = [
-    'Tool/provider status answered from SciForge runtime registries without dispatching AgentServer generation.',
-    selectedLine,
-    'Provider routes:',
-    ...routeLines,
+  const message = capabilityProviderStatusFastPathMessage({
+    routes: routeStatus.routes,
+    selectedIds,
     contextMessage,
-  ].filter((line) => line !== '').join('\n');
-  const routeRef = `runtime://capability-provider-status/${id}`;
+  });
+  const routeRef = capabilityProviderStatusRouteRef(id);
   return {
     message,
     confidence: 0.86,
     claimType: 'capability-provider-status',
     evidenceLevel: 'runtime',
-    reasoningTrace: [
-      'Capability/provider status queries are answered from runtime registry and preflight route discovery.',
-      'This fast path avoids sending large prior conversation payloads to AgentServer for registry-only follow-up questions.',
-    ].join('\n'),
+    reasoningTrace: capabilityProviderStatusReasoningTrace(),
     displayIntent: {
       protocolStatus: 'protocol-success',
       taskOutcome: 'satisfied',
@@ -3015,7 +2976,7 @@ function capabilityStatusFastPathPayload(request: GatewayRequest): ToolPayload |
     },
     claims: [{
       id: `capability-provider-status-${id}`,
-      text: routeStatus.ok ? 'Required provider routes are available.' : 'Some requested provider routes are unavailable.',
+      text: capabilityProviderStatusClaimText(routeStatus.ok),
       type: 'observation',
       confidence: 0.86,
       evidenceLevel: 'runtime',
@@ -3060,7 +3021,7 @@ function capabilityStatusFastPathPayload(request: GatewayRequest): ToolPayload |
       title: 'Capability provider status',
       ref: routeRef,
       status: routeStatus.ok ? 'available' : 'needs-attention',
-      summary: routeLines.join(' '),
+      summary: capabilityProviderStatusRouteSummaryLines(routeStatus.routes).join(' '),
     }],
   };
 }
@@ -3098,11 +3059,11 @@ function fallbackDirectContextDecisionForBoundedArtifactFollowup(request: Gatewa
   return {
     decisionRef: `decision:harness-bounded-artifact-${sha1(JSON.stringify({ prompt: request.prompt, refs })).slice(0, 10)}`,
     decisionOwner: 'harness-policy',
-    intent: /fail|risk|失败|风险/i.test(request.prompt) ? 'context-summary:risk' : 'context-summary',
+    intent: directContextBoundedArtifactIntent(request.prompt),
     requiredTypedContext: ['current-session-context', 'artifact-index'],
     usedRefs: refs.slice(0, 8),
     allowDirectContext: true,
-    transformMode: /hypoth(?:esis|eses)|可检验|假设/i.test(request.prompt) ? 'answer-only-summary' : undefined,
+    transformMode: directContextBoundedArtifactTransformMode(request.prompt),
     sufficiency: 'sufficient',
   };
 }
@@ -3115,8 +3076,7 @@ function boundedArtifactFollowupRequested(request: GatewayRequest) {
 }
 
 function boundedArtifactFollowupPrompt(text: string) {
-  if (/(search|retrieve|检索|搜索|重新检索|new search|web|external provider|fresh)/i.test(text)
-    && !/(do not|don't|no|不要|不得|不(?:启动|运行|重新|做|进行)|without)/i.test(text)) return false;
+  if (directContextPromptRequestsFreshExternalWork(text)) return false;
   if (artifactMutationFollowupRequiresBackend(text)) return false;
   const refersToSelectedOrCurrent = /(current|visible|selected|above|artifact|matrix|report|this report|this artifact|reproduction|当前|选中|刚才|刚刚|证据矩阵|报告|产物|这份|这个|该报告|本报告|原报告)/i.test(text);
   const refersToBroadHistory = /(previous|prior|last|existing|上一轮|之前|已有)/i.test(text);
