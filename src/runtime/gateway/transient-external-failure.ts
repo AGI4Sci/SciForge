@@ -3,6 +3,10 @@ import { createHash } from 'node:crypto';
 import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceTaskRunResult } from '../runtime-types.js';
 import { classifyFailureOwner } from '../conversation-kernel/failure-classifier.js';
 import type { FailureOwnerDecision } from '../conversation-kernel/types.js';
+import {
+  externalProviderFailureRequiresBackoff,
+  externalProviderRecoverActions,
+} from '@sciforge-ui/runtime-contract/agent-backend-policy';
 
 const TRANSIENT_EXTERNAL_FAILURE_CODES = new Set([
   'transient-unavailable',
@@ -68,18 +72,13 @@ export function externalProviderFailureDecision(input: {
     reason,
     evidenceRefs: input.evidenceRefs,
   });
-  return decision.ownerLayer === 'external-provider' && decision.action === 'retry-after-backoff'
+  return externalProviderFailureRequiresBackoff(decision)
     ? decision
     : undefined;
 }
 
 export function externalFailureRecoverActions(reason: string) {
-  return [
-    `External provider appears transiently unavailable: ${reason}`,
-    'Retry after provider backoff or rate-limit reset.',
-    'Use cached/mirrored evidence if available, and label freshness/coverage explicitly.',
-    'For partial multi-fetch runs, keep already downloaded full text and metadata refs; continue the partial report from those refs before repeating failed downloads.',
-  ];
+  return externalProviderRecoverActions(reason);
 }
 
 function stableId(value: string) {

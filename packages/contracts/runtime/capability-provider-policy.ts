@@ -163,6 +163,17 @@ export function capabilityProviderStatusRouteRef(id: string) {
   return `runtime://capability-provider-status/${id}`;
 }
 
+export function capabilityProviderRouteTraceRef(capabilityId: string) {
+  return `runtime://capability-provider-route/${capabilityId}`;
+}
+
+export function capabilityProviderPrimaryRouteProvider<T extends { providerId: string }>(route: {
+  primaryProviderId?: string;
+  providers: T[];
+}) {
+  return route.providers.find((candidate) => candidate.providerId === route.primaryProviderId);
+}
+
 function capabilityProviderStatusRouteLine(route: CapabilityProviderStatusRoutePolicyInput) {
   const primary = route.primaryProviderId ?? route.providers[0]?.providerId ?? 'none';
   const provider = route.providers.find((candidate) => candidate.providerId === primary);

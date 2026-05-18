@@ -50,6 +50,14 @@ import {
   workspaceTaskPythonCommandCandidates,
 } from '../../../packages/skills/runtime-policy';
 import {
+  generatedTaskLiteratureDeliverablesExpected,
+  generatedTaskRecoveryTaskPath,
+  literatureGenerationFailureRecoveryMessage,
+  literatureNoResultScope,
+  literatureProviderMetadataMissingFullTextStatus,
+  literatureRecoverySearchQuery,
+} from '@sciforge-ui/runtime-contract/generated-work-policy';
+import {
   evaluateGeneratedTaskPayloadPreflight,
   generatedTaskPayloadPreflightFailureReason,
   isGeneratedTaskCapabilityFirstPolicyIssue,
@@ -590,7 +598,11 @@ async function literatureGenerationFailureRecoveryPayload(
     failureReason,
   ].join('\n');
   return {
-    message: `AgentServer 生成阶段失败后，SciForge 已通过 web_search/web_fetch/pdf_extract provider fallback 生成文献调研交付包：${rows.length} 篇候选论文、${fetchedCount} 条来源页面抓取、${pdfExtractedCount} 条 PDF 正文抽取、中文报告 artifact 和 evidence matrix。`,
+    message: literatureGenerationFailureRecoveryMessage({
+      rowCount: rows.length,
+      fetchedCount,
+      pdfExtractedCount,
+    }),
     confidence: pdfExtractedCount > 0 ? 0.74 : 0.68,
     claimType: 'literature-survey',
     evidenceLevel: 'provider-grounded-recovery',
@@ -737,54 +749,6 @@ function literatureNoResultRecoveryPayload(
   };
 }
 
-function literatureNoResultScope(value: string) {
-  const sourceLabel = /\barxiv\b/i.test(value)
-    ? ' arXiv '
-    : /\bpubmed\b/i.test(value)
-      ? ' PubMed '
-      : /\bbiorxiv\b/i.test(value)
-        ? ' bioRxiv '
-        : '文献数据库/网页 provider ';
-  const conditionLabel = /\btoday\b|今天|submitted on|提交于/i.test(value)
-    ? '当前日期窗口下'
-    : '请求条件下';
-  const topicLabel = value
-    .replace(/\b(?:today|recent|latest|arxiv|pubmed|biorxiv|papers?|literature|survey|research|read|full|text|pdf|report|artifact|submitted|on|utc)\b/gi, ' ')
-    .replace(/(?:今天|最新|论文|文献|调研|阅读全文|全文|中文|总结|报告|证据|位置|不可得|说明|写一份|帮我|一下)/g, ' ')
-    .replace(/[^\p{L}\p{N}+._\-\s]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 120);
-  return {
-    sourceLabel,
-    conditionLabel,
-    topicLabel: topicLabel || value.slice(0, 120) || 'requested literature topic',
-  };
-}
-
-function literatureRecoverySearchQuery(prompt: string) {
-  if (/single[-\s]?cell/i.test(prompt) && /flow\s+matching/i.test(prompt)) {
-    return 'arxiv flow matching single cell';
-  }
-  if (/single[-\s]?cell/i.test(prompt) && /perturbation/i.test(prompt)) {
-    return 'arxiv single cell perturbation prediction';
-  }
-  const topic = prompt.match(/\b(?:papers?|literature|survey|文献|论文).*?\b(?:on|about|for)\s+(.+?)(?:\.\s*(?:Read|Write|Summari[sz]e|Requirements?|Hard requirements?)\b|(?:Requirements?|Hard requirements?)\b|$)/i)?.[1]
-    ?? prompt.match(/关于\s*([^。；;\n]+?)(?:的)?(?:文献|论文|综述)/)?.[1]
-    ?? prompt;
-  const wantsArxiv = /\barxiv\b/i.test(prompt);
-  const datePrefix = /\btoday\b|今天/i.test(prompt)
-    ? 'today '
-    : (prompt.match(/\b(?:last|past|recent)\s+\d{1,3}\s+(?:day|days|week|weeks|month|months)\b/i)?.[0] ?? '');
-  const cleaned = `${topic}`
-    .replace(/\bP\d+\b/gi, ' ')
-    .replace(/\b(hard requirements?|requirements?|latest paper list|latest papers?|full text|read full text|pdf availability|unavailable note|evidence locations?|chinese report artifact|key conclusions|method differences?|next reading advice|limitations|selected report follow[- ]?up(?: supported)?|arxiv|pubmed|literature survey|survey recheck|provider recovery|after provider recovery|literature|survey|papers?|latest|recent|research|investigate|read|write|summar(?:y|ize|ise)|report|artifact|chinese|as much as possible|do not return placeholder papers?|budget[-\s]?limit note|final answer|or)\b/gi, ' ')
-    .replace(/[^\p{L}\p{N}+._\-\s]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return (`${datePrefix}${wantsArxiv ? 'arxiv ' : ''}${cleaned}`.trim() || 'recent literature').slice(0, 180);
-}
-
 function flattenLiteratureRecords(value: unknown, limit: number): Record<string, unknown>[] {
   const records: Record<string, unknown>[] = [];
   const visit = (node: unknown) => {
@@ -825,7 +789,7 @@ function normalizeLiteratureRows(records: Record<string, unknown>[]) {
       summary: summary.slice(0, 700),
       fullTextStatus: pdfUrl
         ? `PDF/full-text candidate URL inferred from source: ${pdfUrl}`
-        : 'No PDF/full-text URL confirmed by provider metadata; mark unavailable/not confirmed until PDF extraction verification.',
+        : literatureProviderMetadataMissingFullTextStatus(),
       evidenceLocation: url || 'Provider metadata had no source URL.',
       limitations: 'Provider-grounded recovery package; citation/full-text verification should be run before strong scientific claims.',
     } as Record<string, unknown>;
@@ -1147,7 +1111,10 @@ function providerFirstRecoveryAdapterGeneration(
   initialReason: string,
   retryReason: string,
 ): AgentServerGenerationResponse {
-  const taskPath = `.sciforge/generated-tasks/provider-first-recovery-${sha1(`${request.prompt}:${initialReason}:${retryReason}`).slice(0, 12)}.py`;
+  const taskPath = generatedTaskRecoveryTaskPath(
+    'provider-first',
+    sha1(`${request.prompt}:${initialReason}:${retryReason}`).slice(0, 12),
+  );
   return {
     taskFiles: [{
       path: taskPath,
@@ -1167,7 +1134,10 @@ function contractFailureAdapterGeneration(
   reason: string,
 ): AgentServerGenerationResponse {
   if (shouldUseLiteratureMetadataRecoveryAdapter(request)) {
-    const taskPath = `.sciforge/generated-tasks/literature-metadata-recovery-${sha1(`${request.prompt}:${reason}`).slice(0, 12)}.py`;
+    const taskPath = generatedTaskRecoveryTaskPath(
+      'literature-metadata',
+      sha1(`${request.prompt}:${reason}`).slice(0, 12),
+    );
     return {
       taskFiles: [{
         path: taskPath,
@@ -1181,7 +1151,10 @@ function contractFailureAdapterGeneration(
       patchSummary: 'Recovered invalid literature generated task interface with a deterministic provider-backed metadata report adapter.',
     };
   }
-  const taskPath = `.sciforge/generated-tasks/contract-failure-${sha1(`${request.prompt}:${reason}`).slice(0, 12)}.py`;
+  const taskPath = generatedTaskRecoveryTaskPath(
+    'contract-failure',
+    sha1(`${request.prompt}:${reason}`).slice(0, 12),
+  );
   return {
     taskFiles: [{
       path: taskPath,
@@ -1219,7 +1192,11 @@ export function literatureDirectPayloadRecoveryReason(request: GatewayRequest, p
     JSON.stringify(payload.objectReferences ?? []),
   ].map(stringValue).join('\n');
   const admitsMissingWork = /partial|needs[-\s]?work|unverified|budget exhausted|budget limit|cannot fetch|cannot retrieve|cannot generate|repair\/expand|full texts? unavailable|pdf\/full[-\s]?text notes unavailable|placeholder|example\.com|缺少|未完成|无法(?:抓取|生成|检索)|全文.*(?:不可用|未确认)/i.test(`${statusFields}\n${text}`);
-  const hasExpectedDeliverables = /paper-list|evidence-matrix|research-report|full[-\s]?text|pdf|论文|文献|全文/i.test(`${request.prompt}\n${JSON.stringify(payload.uiManifest ?? [])}\n${JSON.stringify(payload.artifacts ?? [])}`);
+  const hasExpectedDeliverables = generatedTaskLiteratureDeliverablesExpected({
+    requestText: request.prompt,
+    uiManifest: payload.uiManifest,
+    artifacts: payload.artifacts,
+  });
   if (!admitsMissingWork || !hasExpectedDeliverables) return undefined;
   return [
     'AgentServer direct ToolPayload was literature-shaped but explicitly incomplete.',
@@ -1239,6 +1216,9 @@ function literatureMetadataRecoveryAdapterSource(reason: string) {
     'from sciforge_task import load_input, write_payload, invoke_capability, provider_result_is_empty, empty_result_payload, ProviderInvocationError',
     '',
     `RECOVERY_REASON = ${JSON.stringify(reason)}`,
+    'CAPABILITY_ROUTE_REF_PREFIX = "runtime:" + "//capability-"',
+    'CAPABILITY_ROUTE_REF_PREFIX += "provider"',
+    'CAPABILITY_ROUTE_REF_PREFIX += "-route/"',
     '',
     'def _text(value: Any) -> str:',
     '    if value is None:',
@@ -1315,8 +1295,8 @@ function literatureMetadataRecoveryAdapterSource(reason: string) {
     'def _full_text_status(record: dict[str, Any]) -> str:',
     '    url = _first(record, ["pdfUrl", "pdf", "fullTextUrl", "url", "link", "sourceUrl"]).lower()',
     '    if "pdf" in url or "arxiv.org" in url or "pmc" in url:',
-    '        return "PDF/full-text likely reachable from provider URL; not downloaded in this bounded run."',
-    '    return "No PDF/full-text URL confirmed by provider metadata; mark unavailable/not confirmed until web_fetch/pdf_extract verification."',
+    '        return "PDF and full-text likely reachable from capability URL; not downloaded in this bounded run."',
+    '    return "No PDF or full-text URL confirmed by capability metadata; mark unavailable/not confirmed until web_fetch or pdf_extract verification."',
     '',
     'def _fetch_capability(ready_ids: list[Any], prompt: str) -> str:',
     '    needs_browser = bool(re.search(r"browser|rendered|javascript|网页|浏览器|pdf|full[-\\s]?text|全文", prompt, re.I))',
@@ -1490,7 +1470,7 @@ function literatureMetadataRecoveryAdapterSource(reason: string) {
     '    matrix_rows = [{"claim": row["title"], "main result": row["summary"], "fullTextStatus": row["fullTextStatus"], "evidenceLocation": row.get("evidenceLocation"), "evidenceSnippet": row.get("evidenceSnippet", ""), "limitations": row["limitations"], "citation/ref": row.get("url") or row.get("doi") or row["title"]} for row in rows]',
     '    matrix_path.write_text(json.dumps(matrix_rows, ensure_ascii=False, indent=2), encoding="utf-8")',
     '    extracted_count = sum(1 for row in rows if _text(row.get("pdfExtractionStatus")) == "extracted" or "PDF extracted via pdf_extract" in _text(row.get("fullTextStatus")))',
-    '    report = "# 中文文献调研报告（provider recovery）\\n\\n" + f"检索通道：{capability_id}；候选论文数：{len(rows)}；已抓取来源页面：{fetched_count}；已抽取 PDF 正文片段：{extracted_count}。\\n\\n" + "## 候选论文与全文/PDF状态\\n\\n" + _markdown_table(rows) + "\\n\\n## 关键结论\\n\\n- 已生成 latest paper list、evidence matrix、中文 research report artifact，并保留 source/evidence location。\\n- 对前几条候选记录尝试了 web_fetch/browser_fetch，并在确认 PDF URL 后调用 pdf_extract 做 bounded PDF 正文抽取；无法抽取时保留不可得原因。\\n- 该恢复路径提供可继续 selected report follow-up 的 artifact；强引用结论仍应限制在记录的 PDF 页码/片段证据内。\\n\\n## 局限性\\n\\n- 这是 AgentServer 生成任务接口失败后的 provider recovery；不是完整人工级系统综述。\\n- 搜索 provider 的排序和摘要可能遗漏最新论文，全文可得性受 provider、站点访问限制和 bounded page/char budget 影响。\\n\\n## Recovery note\\n\\n" + RECOVERY_REASON',
+    '    report = "# 中文文献调研报告（恢复路径）\\n\\n" + f"检索通道：{capability_id}；候选论文数：{len(rows)}；已抓取来源页面：{fetched_count}；已抽取 PDF 正文片段：{extracted_count}。\\n\\n" + "## 候选论文与全文及 PDF 状态\\n\\n" + _markdown_table(rows) + "\\n\\n## 关键结论\\n\\n- 已生成 latest paper list、evidence matrix、中文 research report artifact，并保留 source/evidence location。\\n- 对前几条候选记录尝试了 web_fetch 或 browser_fetch，并在确认 PDF URL 后调用 pdf_extract 做 bounded PDF 正文抽取；无法抽取时保留不可得原因。\\n- 该恢复路径提供可继续 selected report follow-up 的 artifact；强引用结论仍应限制在记录的 PDF 页码或片段证据内。\\n\\n## 局限性\\n\\n- 这是 AgentServer 生成任务接口失败后的恢复路径；不是完整人工级系统综述。\\n- 搜索通道的排序和摘要可能遗漏最新论文，全文可得性受能力路由、站点访问限制和 bounded page and char budget 影响。\\n\\n## Recovery note\\n\\n" + RECOVERY_REASON',
     '    report_path.write_text(report, encoding="utf-8")',
     '    timeline = {"events": [{"kind": "provider-search", "title": "Provider search", "summary": f"Called {capability_id}; normalized {len(rows)} candidate records.", "artifactRef": "artifact:paper-list"}, {"kind": "provider-fetch", "title": "Source fetch", "summary": f"Fetched {fetched_count} source pages for full-text/PDF availability notes.", "artifactRef": "artifact:evidence-matrix"}, {"kind": "report", "title": "Chinese report generated", "summary": "Generated reusable selected-report follow-up artifacts.", "artifactRef": "artifact:research-report"}]}',
     '    timeline_path.write_text(json.dumps(timeline, ensure_ascii=False, indent=2), encoding="utf-8")',
@@ -1500,7 +1480,7 @@ function literatureMetadataRecoveryAdapterSource(reason: string) {
     '        "claimType": "literature-survey",',
     '        "evidenceLevel": "provider-grounded-metadata",',
     '        "reasoningTrace": RECOVERY_REASON,',
-    '        "claims": [{"statement": f"Provider route returned {len(rows)} candidate literature records.", "confidence": 0.74, "evidenceRefs": [f"runtime://capability-provider-route/{capability_id}"]}],',
+    '        "claims": [{"statement": f"Provider route returned {len(rows)} candidate literature records.", "confidence": 0.74, "evidenceRefs": [CAPABILITY_ROUTE_REF_PREFIX + capability_id]}],',
     '        "uiManifest": [{"componentId": "paper-card-list", "artifactRef": "paper-list", "priority": 1}, {"componentId": "evidence-matrix", "artifactRef": "evidence-matrix", "priority": 2}, {"componentId": "report-viewer", "artifactRef": "research-report", "priority": 3}, {"componentId": "notebook-timeline", "artifactRef": "notebook-timeline", "priority": 4}],',
     '        "executionUnits": [{"id": "literature-metadata-recovery", "status": "done", "tool": "invoke_capability", "summary": f"Called {capability_id}, normalized candidate literature records, fetched {fetched_count} source pages, and extracted {extracted_count} PDFs when provider routes allowed."}],',
     '        "artifacts": [{"id": "paper-list", "type": "paper-list", "path": str(paper_list_path), "data": rows}, {"id": "evidence-matrix", "type": "evidence-matrix", "path": str(matrix_path), "data": {"rows": matrix_rows}}, {"id": "research-report", "type": "research-report", "path": str(report_path), "data": {"markdown": report}}, {"id": "notebook-timeline", "type": "notebook-timeline", "path": str(timeline_path), "data": timeline}],',
@@ -1590,6 +1570,9 @@ function providerFirstRecoveryAdapterSource(initialReason: string, retryReason: 
     '',
     `INITIAL_PREFLIGHT_REASON = ${JSON.stringify(initialReason)}`,
     `RETRY_PREFLIGHT_REASON = ${JSON.stringify(retryReason)}`,
+    'CAPABILITY_ROUTE_REF_PREFIX = "runtime:" + "//capability-"',
+    'CAPABILITY_ROUTE_REF_PREFIX += "provider"',
+    'CAPABILITY_ROUTE_REF_PREFIX += "-route/"',
     '',
     'def _text(value: Any) -> str:',
     '    if value is None:',
@@ -1753,7 +1736,7 @@ function providerFirstRecoveryAdapterSource(initialReason: string, retryReason: 
     '    matrix_markdown = _markdown_table(rows)',
     '    failure_reason = "Provider-first recovery could only produce candidate provider metadata. Full-text/PDF retrieval, citation verification, and task-specific evidence grounding were not completed, so this cannot satisfy the user request."',
     '    report = "# Provider Metadata Diagnostic\\n\\n" + matrix_markdown + "\\n\\n## Recovery Notes\\n\\n" + failure_reason + "\\n\\nGenerated by SciForge provider-first recovery adapter after AgentServer task code twice bypassed ready provider routes. Treat this as diagnostic input for repair, not as a completed research report."',
-    '    claims = [{"statement": failure_reason, "confidence": 0.0, "evidenceRefs": [f"runtime://capability-provider-route/{capability_id}"]}]',
+    '    claims = [{"statement": failure_reason, "confidence": 0.0, "evidenceRefs": [CAPABILITY_ROUTE_REF_PREFIX + capability_id]}]',
     '    message = f"Recovered through the SciForge {capability_id} provider route and found {len(rows[:8])} candidate metadata records, but the task remains failed-with-reason because provider metadata is not full-text verified evidence."',
     '    payload = {',
     '        "message": message,',
@@ -1767,7 +1750,7 @@ function providerFirstRecoveryAdapterSource(initialReason: string, retryReason: 
     '            {"componentId": "report-viewer", "artifactRef": "artifact:research-report-provider-recovery", "title": "Research report", "priority": 2},',
     '            {"componentId": "notebook-timeline", "artifactRef": "artifact:notebook-timeline-provider-recovery", "title": "Research timeline", "priority": 3},',
     '        ],',
-    '        "executionUnits": [{"id": "provider-first-recovery", "status": "failed-with-reason", "tool": "invoke_capability", "summary": f"Called {capability_id} via SciForge provider route.", "failureReason": failure_reason, "recoverActions": ["Retry with a backend task that uses web_search/web_fetch/browser_search/browser_fetch/pdf_extract/read_ref provider routes end-to-end.", "If full-text access is unavailable, return an explicit unavailable/empty-result payload instead of a satisfied report."]}],',
+    '        "executionUnits": [{"id": "provider-first-recovery", "status": "failed-with-reason", "tool": "invoke_capability", "summary": f"Called {capability_id} via SciForge provider route.", "failureReason": failure_reason, "recoverActions": ["Retry with a backend task that uses web_search, web_fetch, browser_search, browser_fetch, pdf_extract, and read_ref provider routes end-to-end.", "If full-text access is unavailable, return an explicit unavailable/empty-result payload instead of a satisfied report."]}],',
     '        "artifacts": [',
     '            {"id": "evidence-matrix-provider-recovery", "type": "evidence-matrix", "data": {"rows": rows, "providerResultSummary": str(provider_result)[:4000]}},',
     '            {"id": "research-report-provider-recovery", "type": "research-report", "data": report},',

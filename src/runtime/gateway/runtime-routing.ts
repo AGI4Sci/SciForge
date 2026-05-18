@@ -1,5 +1,6 @@
 import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceTaskRunResult } from '../runtime-types.js';
 import { skillRuntimeRoutePolicy } from '../../../packages/skills/runtime-policy';
+import { capabilityProviderPrimaryRouteProvider, capabilityProviderRouteTraceRef } from '@sciforge-ui/runtime-contract/capability-provider-policy';
 import { isRecord } from '../gateway-utils.js';
 import { sessionBundleRelForRequest } from '../session-bundle.js';
 import { agentServerBackend } from './agent-backend-config.js';
@@ -22,15 +23,18 @@ export function attemptPlanRefs(request: GatewayRequest, skill?: SkillAvailabili
       selectedSkill: skill?.id,
       selectedRuntime: selectedRuntimeForSkill(skill),
       fallbackReason,
-      capabilityProviderRoutes: capabilityProviderRoutesForHandoff(request).routes.map((route) => ({
-        capabilityId: route.capabilityId,
-        primaryProviderId: route.primaryProviderId,
-        fallbackProviderIds: route.fallbackProviderIds,
-        status: route.status,
-        transport: route.providers.find((provider) => provider.providerId === route.primaryProviderId)?.transport,
-        healthStatus: route.providers.find((provider) => provider.providerId === route.primaryProviderId)?.healthStatus,
-        routeTraceRef: `runtime://capability-provider-route/${route.capabilityId}`,
-      })),
+      capabilityProviderRoutes: capabilityProviderRoutesForHandoff(request).routes.map((route) => {
+        const primary = capabilityProviderPrimaryRouteProvider(route);
+        return {
+          capabilityId: route.capabilityId,
+          primaryProviderId: route.primaryProviderId,
+          fallbackProviderIds: route.fallbackProviderIds,
+          status: route.status,
+          transport: primary?.transport,
+          healthStatus: primary?.healthStatus,
+          routeTraceRef: capabilityProviderRouteTraceRef(route.capabilityId),
+        };
+      }),
       selectedAt: new Date().toISOString(),
     },
   };

@@ -1,5 +1,6 @@
 import type { AgentBackendAdapter, AgentBackendCapabilities, BackendContextCompactionResult, BackendContextWindowState, GatewayRequest, WorkspaceRuntimeCallbacks, WorkspaceRuntimeContextBudget, WorkspaceRuntimeContextCompaction, WorkspaceRuntimeEvent } from '../runtime-types.js';
 import {
+  agentServerRecentTurnsCompatibilityField,
   compactCapabilityForAgentBackend,
   estimateRuntimeAgentBackendModelContextWindow,
   fallbackCompactCapabilityForRuntimeAgentBackend,
@@ -732,8 +733,8 @@ export async function fetchAgentServerContextSnapshot(baseUrl: string, agentId: 
 
 export function compactAgentServerCoreSnapshot(snapshot: Record<string, unknown>) {
   const recentTurnRefs = toRecordList(snapshot.recentTurnRefs);
-  const legacyRecentTurns = toRecordList(snapshot.recentTurns);
-  const boundedTurnRefs = recentTurnRefs.length ? recentTurnRefs : legacyRecentTurns;
+  const legacyRecentTurnRecords = toRecordList(snapshot[agentServerRecentTurnsCompatibilityField()]);
+  const boundedTurnRefs = recentTurnRefs.length ? recentTurnRefs : legacyRecentTurnRecords;
   const currentWorkEntries = toRecordList(snapshot.currentWorkEntries);
   return {
     source: 'AgentServer Core /context',

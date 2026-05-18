@@ -143,34 +143,33 @@ const trackedBaselineCounts: Record<string, number> = {
   'src/runtime/gateway/agent-backend-config.ts#provider-scenario-prompt-special-case': 0,
   // T120 migration note, 2026-05-18 Integration Worker:
   // P1/P6 user-level closures added bounded provider/full-text recovery and
-  // selected artifact direct-context answers. These are frozen here as
-  // migration debt; move them into manifests/catalog policies before reducing
-  // the baseline. Markdown artifact read/write fast-path prompt policy has
-  // already moved to packages/contracts/runtime/markdown-artifact-policy.ts;
-  // provider prompt/status/discovery policy has moved to
-  // packages/contracts/runtime/capability-provider-policy.ts; generated-work
-  // prompt policy has moved to packages/contracts/runtime/generated-work-policy.ts;
-  // reference discovery labels moved to
-  // packages/contracts/runtime/reference-discovery-policy.ts; direct-context
-  // follow-up routing/copy moved to direct-context-followup-policy.ts.
+  // selected artifact direct-context answers. Markdown artifact read/write
+  // fast-path prompt policy moved to markdown-artifact-policy.ts; provider
+  // prompt/status/discovery and route projection policy moved to
+  // capability-provider-policy.ts; generated-work prompt/recovery policy moved
+  // to generated-work-policy.ts; reference discovery labels moved to
+  // reference-discovery-policy.ts; direct-context follow-up routing/copy moved
+  // to direct-context-followup-policy.ts; artifact preview notices moved to
+  // artifacts.ts; AgentServer compatibility/context and external provider
+  // recovery policy moved to agent-backend-policy.ts.
   'src/runtime/gateway/artifact-mutation-fast-path.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/capability-provider-preflight.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/conversation-reference-digest.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/conversation-service-plan.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/direct-context-fast-path.ts#provider-scenario-prompt-special-case': 0,
-  'src/runtime/gateway/generated-task-runner-execution-lifecycle.ts#provider-scenario-prompt-special-case': 1,
-  'src/runtime/gateway/generated-task-payload-preflight.ts#provider-scenario-prompt-special-case': 4,
-  'src/runtime/gateway/generated-task-runner-generation-lifecycle.ts#provider-scenario-prompt-special-case': 19,
+  'src/runtime/gateway/generated-task-runner-execution-lifecycle.ts#provider-scenario-prompt-special-case': 0,
+  'src/runtime/gateway/generated-task-payload-preflight.ts#provider-scenario-prompt-special-case': 0,
+  'src/runtime/gateway/generated-task-runner-generation-lifecycle.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/generated-task-runner-supplement-lifecycle.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/generated-task-runner-validation-lifecycle.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/markdown-readonly-fast-path.ts#provider-scenario-prompt-special-case': 0,
-  'src/runtime/gateway/runtime-routing.ts#provider-scenario-prompt-special-case': 3,
-  'src/runtime/gateway/transient-external-failure.ts#provider-scenario-prompt-special-case': 1,
+  'src/runtime/gateway/runtime-routing.ts#provider-scenario-prompt-special-case': 0,
+  'src/runtime/gateway/transient-external-failure.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/agentserver-context-window.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/agentserver-prompts.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/backend-failure-diagnostics.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/context-envelope.ts#provider-scenario-prompt-special-case': 0,
-  'src/runtime/gateway/gateway-request.ts#provider-scenario-prompt-special-case': 1,
+  'src/runtime/gateway/gateway-request.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/capability-evolution-events.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/repair-policy.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/work-evidence-guard.ts#provider-scenario-prompt-special-case': 0,
@@ -183,12 +182,12 @@ const trackedBaselineCounts: Record<string, number> = {
   'src/runtime/gateway/direct-context-fast-path.ts#sa-direct-context-implicit-strategy': 0,
   'src/runtime/gateway/capability-provider-preflight.ts#sa-provider-discovery-endpoint-leak': 0,
   'src/runtime/gateway/agentserver-context-contract.ts#sa-degraded-raw-context-shape': 0,
-  'src/runtime/gateway/agentserver-context-window.ts#sa-degraded-raw-context-shape': 1,
+  'src/runtime/gateway/agentserver-context-window.ts#sa-degraded-raw-context-shape': 0,
   'src/runtime/gateway/agentserver-prompts.ts#sa-degraded-raw-context-shape': 0,
   'src/ui/src/app/appShell/workspaceState.ts#sa-ui-legacy-raw-terminal-fallback': 0,
   'src/ui/src/app/ComponentWorkbenchPage.tsx#ui-semantic-fallback': 0,
   'src/ui/src/app/ScenarioBuilderPanel.tsx#ui-semantic-fallback': 0,
-  'src/ui/src/app/results-renderer-registry-slot.tsx#ui-semantic-fallback': 1,
+  'src/ui/src/app/results-renderer-registry-slot.tsx#ui-semantic-fallback': 0,
   'src/ui/src/app/results/WorkspaceObjectPreview.tsx#ui-semantic-fallback': 0,
   'src/ui/src/app/uiPrimitives.tsx#ui-semantic-fallback': 0,
   'src/ui/src/runtimeContracts.ts#ui-semantic-fallback': 0,

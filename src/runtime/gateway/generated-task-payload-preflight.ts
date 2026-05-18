@@ -1,4 +1,11 @@
 import type { GatewayRequest } from '../runtime-types.js';
+import {
+  generatedTaskDefinesOrImportsProviderInvocationHelper,
+  generatedTaskProviderFirstNetworkIssuePolicy,
+  generatedTaskProviderHelperMissingImportIssuePolicy,
+  generatedTaskProviderInvocationHelperEvidence,
+  generatedTaskUsesProviderInvocationHelper,
+} from '@sciforge-ui/runtime-contract/generated-work-policy';
 import { capabilityProviderRoutesForGatewayInvocation } from './capability-provider-preflight.js';
 
 export const GENERATED_TASK_PAYLOAD_PREFLIGHT_SCHEMA_VERSION = 'sciforge.generated-task-payload-preflight.v1' as const;
@@ -309,22 +316,21 @@ function generatedTaskProviderFirstNetworkIssuesForSource(
   const unavailableProviderSdkUses = unavailableProviderSdkUsesForReadyRoutes(source);
   if (!directNetworkUses.length && !unavailableProviderSdkUses.length) return [];
   const evidence = [...directNetworkUses, ...unavailableProviderSdkUses];
-  const reason = directNetworkUses.length
-    ? `Generated task uses direct external network APIs (${directNetworkUses.join(', ')}) even though SciForge has ready provider route(s) for ${routes.map((route) => route.capabilityId).join(', ')}.`
-    : `Generated task imports unavailable provider SDKs (${unavailableProviderSdkUses.join(', ')}) even though SciForge generated tasks must use the local sciforge_task helper for ready provider route(s) ${routes.map((route) => route.capabilityId).join(', ')}.`;
+  const policy = generatedTaskProviderFirstNetworkIssuePolicy({
+    sourceRef,
+    directNetworkUses,
+    unavailableProviderSdkUses,
+    capabilityIds: routes.map((route) => route.capabilityId),
+  });
   return [{
-    id: `${sourceRef}:provider-first-direct-network:${routes.map((route) => route.capabilityId).join(',')}`,
+    id: policy.id,
     kind: GENERATED_TASK_CAPABILITY_FIRST_PREFLIGHT_ISSUE_KIND,
     severity: 'repair-needed',
     path: 'capabilityFirstPolicy',
     sourceRef,
     evidence: clipEvidence(evidence.join(', ')),
-    reason,
-    recoverActions: [
-      'Regenerate the task to use the SciForge provider route contract for web_search/web_fetch/browser_search/browser_fetch work before any direct external network call or unavailable provider SDK import.',
-      'Import sciforge_task from the entrypoint directory and inspect capabilityProviderRoutes/provider-first policy from task input.',
-      'If the provider returns empty results or is unavailable at runtime, write a repair-needed ToolPayload with recoverActions instead of falling back to direct network libraries.',
-    ],
+    reason: policy.reason,
+    recoverActions: policy.recoverActions,
   }];
 }
 
@@ -336,28 +342,24 @@ function generatedTaskProviderHelperIssuesForSource(
   const routes = readyWebProviderRoutes(request);
   if (!routes.length) return [];
   const stripped = stripGeneratedTaskComments(source);
-  const usesHelper = /\binvoke_(?:capability|provider)\s*\(/.test(stripped);
+  const usesHelper = generatedTaskUsesProviderInvocationHelper(stripped);
   if (!usesHelper) return [];
-  if (generatedTaskDefinesOrImportsProviderHelper(stripped)) return [];
+  if (generatedTaskDefinesOrImportsProviderInvocationHelper(stripped)) return [];
+  const policy = generatedTaskProviderHelperMissingImportIssuePolicy({
+    sourceRef,
+    capabilityIds: routes.map((route) => route.capabilityId),
+    evidence: generatedTaskProviderInvocationHelperEvidence(stripped),
+  });
   return [{
-    id: `${sourceRef}:provider-helper-missing-import:${routes.map((route) => route.capabilityId).join(',')}`,
+    id: policy.id,
     kind: GENERATED_TASK_CAPABILITY_FIRST_PREFLIGHT_ISSUE_KIND,
     severity: 'repair-needed',
     path: 'capabilityFirstPolicy',
     sourceRef,
-    evidence: clipEvidence(stripped.match(/^[^\n]*\binvoke_(?:capability|provider)\s*\([^\n]*/m)?.[0] ?? 'invoke_capability(...)'),
-    reason: 'Generated task calls invoke_capability/invoke_provider without importing the SciForge sciforge_task helper, so provider-first execution would fail at runtime.',
-    recoverActions: [
-      'Regenerate the task with: from sciforge_task import load_input, write_payload, invoke_capability, provider_result_is_empty, empty_result_payload, ProviderInvocationError.',
-      'Do not catch missing invoke_capability as an empty result; missing provider helper is a task-code error that requires repair.',
-    ],
+    evidence: clipEvidence(policy.evidence),
+    reason: policy.reason,
+    recoverActions: policy.recoverActions,
   }];
-}
-
-function generatedTaskDefinesOrImportsProviderHelper(source: string) {
-  return /(?:^|\n)\s*from\s+sciforge_task\s+import\s+[^\n]*(?:invoke_capability|invoke_provider)/.test(source)
-    || /(?:^|\n)\s*import\s+sciforge_task\b/.test(source)
-    || /(?:^|\n)\s*def\s+invoke_(?:capability|provider)\s*\(/.test(source);
 }
 
 function readyWebProviderRoutes(request?: GatewayRequest) {

@@ -33,7 +33,10 @@ export type {
 export {
   RUNTIME_AGENTSERVER_MANAGED_COMPACTION_BACKENDS,
   SUPPORTED_RUNTIME_AGENT_BACKENDS,
+  agentServerRecentTurnsCompatibilityField,
   compactCapabilityForAgentBackend,
+  externalProviderFailureRequiresBackoff,
+  externalProviderRecoverActions,
   estimateRuntimeAgentBackendModelContextWindow,
   fallbackCompactCapabilityForRuntimeAgentBackend,
   normalizeRuntimeLlmEndpoint,
@@ -268,6 +271,7 @@ export type {
   RuntimeArtifactVisibility,
 } from './artifacts';
 export {
+  artifactDeliveryPreviewNotice,
   artifactHasUserFacingDelivery,
   validateArtifactDeliveryContract,
 } from './artifacts';
@@ -491,6 +495,8 @@ export {
   capabilityProviderStatusFastPathMessage,
   capabilityProviderStatusReason,
   capabilityProviderStatusReasoningTrace,
+  capabilityProviderPrimaryRouteProvider,
+  capabilityProviderRouteTraceRef,
   capabilityProviderStatusRouteRef,
   capabilityProviderStatusRouteSummaryLines,
   capabilityProviderRouteStatusFromHealth,
@@ -525,6 +531,18 @@ export type {
 } from './markdown-artifact-policy';
 export {
   freshCodeDebugExecutionPromptPolicy,
+  generatedTaskDefinesOrImportsProviderInvocationHelper,
+  generatedTaskLiteratureDeliverablesExpected,
+  generatedTaskProviderFirstNetworkIssuePolicy,
+  generatedTaskProviderHelperMissingImportIssuePolicy,
+  generatedTaskProviderInvocationHelperEvidence,
+  generatedTaskRecoveryTaskPath,
+  generatedTaskUsesProviderInvocationHelper,
+  generatedWorkSelectedComponentsAllowed,
+  literatureGenerationFailureRecoveryMessage,
+  literatureNoResultScope,
+  literatureProviderMetadataMissingFullTextStatus,
+  literatureRecoverySearchQuery,
   workspaceCodeTaskPromptPolicy,
 } from './generated-work-policy';
 export {

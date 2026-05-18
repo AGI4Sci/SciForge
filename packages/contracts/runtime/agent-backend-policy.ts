@@ -256,6 +256,26 @@ export function runtimeAgentBackendConfigurationNextStep(reason: string) {
     : undefined;
 }
 
+export function externalProviderRecoverActions(reason: string) {
+  return [
+    `External provider appears transiently unavailable: ${reason}`,
+    'Retry after provider backoff or rate-limit reset.',
+    'Use cached/mirrored evidence if available, and label freshness/coverage explicitly.',
+    'For partial multi-fetch runs, keep already downloaded full text and metadata refs; continue the partial report from those refs before repeating failed downloads.',
+  ];
+}
+
+export function externalProviderFailureRequiresBackoff(decision: {
+  ownerLayer?: string;
+  action?: string;
+}) {
+  return decision.ownerLayer === 'external-provider' && decision.action === 'retry-after-backoff';
+}
+
+export function agentServerRecentTurnsCompatibilityField() {
+  return 'recentTurns';
+}
+
 export function normalizeRuntimeLlmEndpoint(value: unknown): RuntimeLlmEndpointConfig | undefined {
   if (!isRuntimePolicyRecord(value)) return undefined;
   const provider = trimmedPolicyString(value.provider);

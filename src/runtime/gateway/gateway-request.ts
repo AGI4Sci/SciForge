@@ -3,7 +3,7 @@ import { cleanUrl, isRecord, toStringList, uniqueStrings } from '../gateway-util
 import { buildSharedAgentHandoffContract, normalizeAgentHandoffSource, normalizeSharedSkillDomain, type SciForgeAgentHandoffSource } from '@sciforge-ui/runtime-contract/handoff';
 import { normalizeRuntimeLlmEndpoint } from '@sciforge-ui/runtime-contract/agent-backend-policy';
 import { normalizeTurnExecutionConstraints } from '@sciforge-ui/runtime-contract/turn-constraints';
-import { freshCodeDebugExecutionPromptPolicy } from '@sciforge-ui/runtime-contract/generated-work-policy';
+import { freshCodeDebugExecutionPromptPolicy, generatedWorkSelectedComponentsAllowed } from '@sciforge-ui/runtime-contract/generated-work-policy';
 import { normalizeRuntimeScenarioPackageRef } from '@sciforge-ui/runtime-contract/scenario-package-ref';
 
 export function normalizeGatewayRequest(body: Record<string, unknown>): GatewayRequest {
@@ -132,7 +132,8 @@ export function expectedArtifactTypesForRequest(request: GatewayRequest) {
 }
 
 export function selectedComponentIdsForRequest(request: Pick<GatewayRequest, 'selectedComponentIds' | 'uiState'> & { prompt?: string }) {
-  if ('prompt' in request && typeof request.prompt === 'string' && freshCodeDebugExecutionPromptPolicy(request.prompt)) return [];
+  const requestText = request.prompt;
+  if (typeof requestText === 'string' && !generatedWorkSelectedComponentsAllowed(requestText)) return [];
   return uniqueStrings([
     ...(request.selectedComponentIds ?? []),
     ...toStringList(request.uiState?.selectedComponentIds),

@@ -17,6 +17,7 @@ import {
   isUnknownArtifactInspectorComponent,
   type UIComponentRendererProps,
 } from '../../../../packages/presentation/interactive-views';
+import { artifactDeliveryPreviewNotice } from '../../../../packages/contracts/runtime';
 import type { PresentationInput, SciForgeConfig, SciForgeSession, ObjectReference, RuntimeArtifact, UIManifestSlot } from '../domain';
 import { exportTextFile } from './exportUtils';
 import { ActionButton, Badge, Card, EmptyArtifactState, SectionHeader, cx } from './uiPrimitives';
@@ -265,15 +266,15 @@ export function RegistrySlot({
   const artifact = item.artifact ?? findArtifact(session, slot.artifactRef);
   const entry = registryEntryForComponent(slot.componentId);
   const handoffTargets = artifact ? handoffTargetsForArtifact(artifact, scenarioId) : [];
-  const deliveryFallback = artifactDeliveryFallback(artifact);
-  const deliveryOpenRef = deliveryFallback?.openRef;
-  if (artifact && deliveryFallback) {
+  const deliveryNotice = artifactDeliveryPreview(artifact);
+  const deliveryOpenRef = deliveryNotice?.openRef;
+  if (artifact && deliveryNotice) {
     return (
       <Card
         className={cx('registry-slot', item.section === 'primary' && 'primary-slot')}
         data-sciforge-reference={sciForgeReferenceAttribute(referenceForArtifact(artifact, artifactReferenceKind(artifact, slot.componentId)))}
       >
-        <SectionHeader icon={Target} title={artifactDeliveryTitle(slot, artifact)} subtitle={deliveryFallback.subtitle} />
+        <SectionHeader icon={Target} title={artifactDeliveryTitle(slot, artifact)} subtitle={deliveryNotice.subtitle} />
         <ArtifactCardControls
           artifact={artifact}
           presentationId={item.id}
@@ -283,7 +284,7 @@ export function RegistrySlot({
           onDismissResultSlotPresentation={onDismissResultSlotPresentation}
         />
         <div className="empty-artifact-state">
-          <p>{deliveryFallback.detail}</p>
+          <p>{deliveryNotice.detail}</p>
           <div className="artifact-card-actions">
             {deliveryOpenRef ? (
               <button
@@ -362,18 +363,8 @@ export function RegistrySlot({
   );
 }
 
-function artifactDeliveryFallback(artifact?: RuntimeArtifact): { subtitle: string; detail: string; openRef?: string } | undefined {
-  const delivery = artifact?.delivery;
-  if (!artifact || !delivery) return undefined;
-  if (delivery.previewPolicy !== 'open-system' && delivery.previewPolicy !== 'unsupported') return undefined;
-  const openRef = delivery.readableRef ?? artifact.dataRef ?? artifact.path;
-  return {
-    subtitle: delivery.previewPolicy === 'open-system' ? '当前格式交给系统默认程序打开' : '当前 UI 暂不支持内联预览',
-    detail: delivery.previewPolicy === 'open-system'
-      ? '这个 artifact 已通过 ArtifactDelivery contract 标记为本地文件交付物；SciForge 保留引用和审计信息，完整内容可用系统默认程序打开。'
-      : '这个 artifact 的格式与当前已发布 UI component 不匹配；主内容不会被当作 JSON fallback 展示，原始材料已保留用于审计。',
-    openRef,
-  };
+function artifactDeliveryPreview(artifact?: RuntimeArtifact): { subtitle: string; detail: string; openRef?: string } | undefined {
+  return artifactDeliveryPreviewNotice(artifact);
 }
 
 function artifactDeliveryTitle(slot: UIManifestSlot, artifact: RuntimeArtifact) {

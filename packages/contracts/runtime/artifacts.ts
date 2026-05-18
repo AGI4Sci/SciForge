@@ -55,6 +55,7 @@ export interface RuntimeArtifact {
 }
 
 export type ArtifactDeliveryVisibilityInput = Pick<RuntimeArtifact, 'data' | 'dataRef' | 'path' | 'delivery'>;
+export type ArtifactDeliveryPreviewNoticeInput = Pick<RuntimeArtifact, 'dataRef' | 'path' | 'delivery'>;
 
 export function runtimeArtifactRef(id: string) {
   return `artifact:${id}`;
@@ -72,6 +73,20 @@ export function artifactHasUserFacingDelivery(artifact: ArtifactDeliveryVisibili
   const delivery = artifact?.delivery;
   return artifactDeliveryTargetsUserFacingSurface(artifact)
     && delivery?.contentShape !== 'json-envelope';
+}
+
+export function artifactDeliveryPreviewNotice(artifact: ArtifactDeliveryPreviewNoticeInput | undefined): { subtitle: string; detail: string; openRef?: string } | undefined {
+  const delivery = artifact?.delivery;
+  if (!artifact || !delivery) return undefined;
+  if (delivery.previewPolicy !== 'open-system' && delivery.previewPolicy !== 'unsupported') return undefined;
+  const openRef = delivery.readableRef ?? artifact.dataRef ?? artifact.path;
+  return {
+    subtitle: delivery.previewPolicy === 'open-system' ? '当前格式交给系统默认程序打开' : '当前 UI 暂不支持内联预览',
+    detail: delivery.previewPolicy === 'open-system'
+      ? '这个 artifact 已通过 ArtifactDelivery contract 标记为本地文件交付物；SciForge 保留引用和审计信息，完整内容可用系统默认程序打开。'
+      : '这个 artifact 的格式与当前已发布 UI component 不匹配；主内容不会被当作 JSON fallback 展示，原始材料已保留用于审计。',
+    openRef,
+  };
 }
 
 export function validateArtifactDeliveryContract(artifact: Pick<RuntimeArtifact, 'id' | 'data' | 'dataRef' | 'path' | 'delivery'>): string[] {

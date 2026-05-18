@@ -243,7 +243,7 @@ Owner：UI-Execution Decoupling Owner
 
 ### UX-SYSTEM-TASK-20260517-answer-first-results-panel
 
-状态：todo
+状态：blocked / compact-repair-smoke-risk
 Owner：unassigned
 
 目标：结果区默认按用户任务组织：任务是否解决、主答案/报告、关键证据、下一步/恢复按钮；run/audit/raw payload/execution unit 默认进 debug drawer。下一轮 P1-P6 每个进程至少记录一个完成/失败/partial 结果区用户视角评测。
@@ -442,6 +442,7 @@ Todo：
 轻量证据：P5 microbiome session `workspace/parallel/p5/.sciforge/sessions/2026-05-16_literature-evidence-review_session-workspace-biomedical-knowledge-graph-_kras-g12d_-_-mp8tjp68-mp8y1pdp-7ymg7a`；primary task `generated-literature-99177170665d` failed with Python syntax error；supplemental task `generated-literature-1b4e7268e935` wrote useful `research-report.md` / `evidence-matrix.md` / `notebook-timeline.md`，但 user-visible Projection stayed foregrounded on primary syntax failure。
 通用性说明：任何 generated task can fail before writing intended ToolPayload while supplement/recovery creates useful artifacts; Projection should promote repaired attempt or expose one coherent repair-needed state, not mix failed primary and useful artifacts ambiguously.
 疑似边界：generated-task execution / supplement lifecycle / Projection / ArtifactDelivery
+集成复查：2026-05-18 18:04 CST 额外运行 `npm exec -- tsx tests/smoke/smoke-agentserver-supplement-scoped.ts` 通过；`npm exec -- tsx tests/smoke/smoke-agentserver-compact-repair.ts` 仍暴露 blocked stderr evidence 可能进入 repair prompt，`npm exec -- tsx tests/smoke/smoke-agentserver-supplement.ts` 仍暴露 primary omics artifact 未保留。该风险属于 compact repair/supplement 专项闭环，未混入本轮 T120 no-legacy contract 迁移提交。
 
 Todo：
 - [x] 最小复现
@@ -583,6 +584,8 @@ docs/archive/
 ```
 
 ## Activity Log
+
+- 2026-05-18 18:04 Integration Worker：继续推进剩余 T120/no-legacy 风险；`git fetch --all --prune` 后候选 `origin/codex/m13-complex-multiturn`、`origin/codex/result-presentation-r015`、`origin/codex/sciforge-paper-reproduction-loop`、`origin/codex/t122-boundary-smoke` 均 `ahead=0`，无可合 worker diff。本轮未合并远端分支，继续通用 contract 收敛：把 generated-task provider-first network/helper policy、literature recovery query/no-result/full-text/recovery copy、generated task recovery path、runtime route projection refs、external provider backoff/recover actions、AgentServer recentTurns compatibility field、ArtifactDelivery preview notice、fresh-code selected component gating 从 gateway/UI 迁入 `packages/contracts/runtime/*`；`smoke:no-legacy-paths` tracked findings 从 31 降到 0，并将 baseline 全部归零。验证：targeted generated-task/AgentServer/UI 76 tests pass、`npm run smoke:no-legacy-paths` pass（0 tracked findings）、`npm run typecheck` pass、`git diff --check` pass、`npm run verify:single-agent-final` pass（1268 tests、C01-C18、no-legacy guard、16 Web E2E、final evidence manifest）。额外复查 P5 supplement/compact-repair 旧风险时，scoped supplement smoke pass，但 compact-repair/supplement smoke 仍有独立 blocker，已保留在 `DISC-20260517-P5-004`，未混入本轮 T120 closure。
 
 - 2026-05-18 17:04 Integration Worker：继续推进剩余 T120 风险；`git fetch --all --prune` 后候选 `origin/codex/m13-complex-multiturn`、`origin/codex/result-presentation-r015`、`origin/codex/sciforge-paper-reproduction-loop`、`origin/codex/t122-boundary-smoke` 均 `ahead=0`，无可合 worker diff。本轮未合并远端分支，继续通用 contract 收敛：把 direct-context evidence-matrix/protocol/report/QC/chart/reproduction/literature follow-up prompt policy、语言/summary limit、bounded artifact fallback intent/transform、capability provider status copy/ref 迁入 `direct-context-followup-policy` 与 `capability-provider-policy`；gateway 只保留上下文收集与 payload 组装；`smoke:no-legacy-paths` tracked findings 从 95 降到 31，并将 `direct-context-fast-path` provider/prompt baseline 64 -> 0。验证：targeted direct-context 63 tests、`npm run typecheck`、`git diff --check`、`npm run smoke:no-legacy-paths`、`npm run verify:single-agent-final` pass（1268 tests、C01-C18、no-legacy guard、16 Web E2E、final evidence manifest）。剩余风险：无 direct-context T120 blocker；仍保留 31 个冻结 findings（generated-task/provider recovery 29、results renderer fallback copy 1、degraded handoff compatibility field 1），git gc loose object warning 未 destructive prune。
 
