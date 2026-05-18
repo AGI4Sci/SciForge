@@ -116,6 +116,10 @@ assert.ok(lifecycleSupplementDebit.sinkRefs.auditRefs.includes('audit:supplement
 assert.ok(lifecycleSupplementDebit.sinkRefs.auditRefs.includes('.sciforge/capability-evolution-ledger/records.jsonl#L999'));
 assert.ok(lifecycleMerged.workEvidence?.some((entry) => entry.id === 'primary-omics-evidence'));
 assert.ok(lifecycleMerged.workEvidence?.some((entry) => entry.budgetDebitRefs?.includes('budgetDebit:supplement-supplement-smoke')));
+assert.ok(lifecycleMerged.artifacts.some((artifact) => artifact.type === 'omics-differential-expression'));
+assert.ok(lifecycleMerged.artifacts.some((artifact) => artifact.type === 'research-report'));
+assert.ok(lifecycleMerged.uiManifest.some((slot) => slot.componentId === 'point-set-viewer'));
+assert.ok(lifecycleMerged.uiManifest.some((slot) => slot.componentId === 'report-viewer'));
 
 let sawSupplementPrompt = false;
 

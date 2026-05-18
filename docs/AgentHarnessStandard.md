@@ -525,6 +525,10 @@ high-recall-literature requests network
 - 空检索结果必须返回 failed-with-reason 或 partial payload，不能伪成功。
 - 任务异常、超时或未写 output 时，workspace runner 必须写最小 failed-with-reason payload；该状态是合法终态，不应自动触发 repair rerun。
 
+Repair context 是 contract-only 边界。AgentServer repair prompt 只采纳 `agentHarnessHandoff`、`agentHarness.contract` 或已经投影且带 `sourceKind` / `deterministicDecisionRef` 的 policy；旧 `repairContextPolicy` 字段只能进入 ignored-legacy audit，不能授权读取 stdout/stderr/validation 正文。若没有明确 handoff，默认 policy 是 fail-closed：允许 stdout ref 摘要审计，阻断 stderr/validation 正文和 prior attempts。即使 failureReason 由 runtime 拼接而来，raw traceback/stderr body 也必须在 prompt/result 可见字段中被压缩成 refs-only 摘要。
+
+Supplement lifecycle 是 additive merge，不是替换。primary payload 已经产生的 artifacts、uiManifest、WorkEvidence 和 budget debit 必须保留；supplement 只补齐 missing expected artifact types。UI manifest 不得为缺失的 targeted artifact 编造 `artifactRef`，例如没有 `research-report` artifact 时不能给 `report-viewer` 填 `research-report` phantom ref；slot 可以保持无 artifactRef，等待 supplement 或最终 repair-needed 状态。
+
 ### Experiment 2: File-grounded Summary
 
 输入：

@@ -172,6 +172,22 @@ test('runtime ui manifest policy infers package view encoding and layout', () =>
   assert.equal((manifest[0].layout as Record<string, unknown>).mode, 'side-by-side');
 });
 
+test('runtime ui manifest policy does not fabricate missing targeted artifact refs', () => {
+  const manifest = composeRuntimeUiManifestSlots(
+    [{ componentId: 'point-set-viewer', artifactRef: 'omics-differential-expression', priority: 1 }],
+    [{ id: 'omics-differential-expression', type: 'omics-differential-expression', data: { rows: [] } }],
+    {
+      skillDomain: 'omics',
+      prompt: 'Generate omics data and a report.',
+      selectedComponentIds: ['report-viewer', 'point-set-viewer'],
+    },
+  );
+
+  const reportSlot = manifest.find((slot) => slot.componentId === 'report-viewer');
+  assert.equal(reportSlot?.artifactRef, undefined);
+  assert.equal(manifest.find((slot) => slot.componentId === 'point-set-viewer')?.artifactRef, 'omics-differential-expression');
+});
+
 test('interactive view policy owns prompt artifact intent and component binding', () => {
   const artifactTypes = expectedArtifactTypesForIntent({
     scenarioId: 'biomedical-knowledge-graph',

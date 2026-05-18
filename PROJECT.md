@@ -243,14 +243,14 @@ Owner：UI-Execution Decoupling Owner
 
 ### UX-SYSTEM-TASK-20260517-answer-first-results-panel
 
-状态：blocked / compact-repair-smoke-risk
+状态：partial / compact-repair-risk-cleared / pending-results-panel-owner
 Owner：unassigned
 
 目标：结果区默认按用户任务组织：任务是否解决、主答案/报告、关键证据、下一步/恢复按钮；run/audit/raw payload/execution unit 默认进 debug drawer。下一轮 P1-P6 每个进程至少记录一个完成/失败/partial 结果区用户视角评测。
 
 ### UX-SYSTEM-TASK-20260517-strict-user-proxy-process
 
-状态：todo
+状态：done / user-level-closed
 Owner：Orchestrator + P1-P6
 
 目标：把 P1-P6 重新作为开放式真实用户进程，而不是固定剧本回归。每轮必须记录 hard requirements、TaskSuccess、AnswerQuality、root boundary、是否启动 sub agents、修复和验证结果。
@@ -437,19 +437,20 @@ Todo：
 
 ### DISC-20260517-P5-004 Generated-task syntax failure can remain as failed projection despite supplemental artifacts
 
-状态：todo
+状态：done / user-level-closed
 发现者：P5
 轻量证据：P5 microbiome session `workspace/parallel/p5/.sciforge/sessions/2026-05-16_literature-evidence-review_session-workspace-biomedical-knowledge-graph-_kras-g12d_-_-mp8tjp68-mp8y1pdp-7ymg7a`；primary task `generated-literature-99177170665d` failed with Python syntax error；supplemental task `generated-literature-1b4e7268e935` wrote useful `research-report.md` / `evidence-matrix.md` / `notebook-timeline.md`，但 user-visible Projection stayed foregrounded on primary syntax failure。
 通用性说明：任何 generated task can fail before writing intended ToolPayload while supplement/recovery creates useful artifacts; Projection should promote repaired attempt or expose one coherent repair-needed state, not mix failed primary and useful artifacts ambiguously.
 疑似边界：generated-task execution / supplement lifecycle / Projection / ArtifactDelivery
 集成复查：2026-05-18 18:04 CST 额外运行 `npm exec -- tsx tests/smoke/smoke-agentserver-supplement-scoped.ts` 通过；`npm exec -- tsx tests/smoke/smoke-agentserver-compact-repair.ts` 仍暴露 blocked stderr evidence 可能进入 repair prompt，`npm exec -- tsx tests/smoke/smoke-agentserver-supplement.ts` 仍暴露 primary omics artifact 未保留。该风险属于 compact repair/supplement 专项闭环，未混入本轮 T120 no-legacy contract 迁移提交。
+闭环：2026-05-18 18:45 CST 已通用修复。Repair prompt 删除本地 duplicate ref-first filter，统一走 `agentserver-repair-context-policy`；contract/supplement profile 不再让 raw stderr/traceback 混入 prompt/result 可见 failureReason/selfHealReason，legacy repairContextPolicy 只进 ignored audit；无明确 repair handoff 时默认 refs-only/fail-closed。Supplement/UI 侧删除 `report-viewer -> research-report` phantom ref，supplement additive merge 保留 primary artifacts/uiManifest/workEvidence/budgetDebits。验证：`smoke-agentserver-compact-repair`、`smoke-agentserver-supplement`、`smoke-agentserver-supplement-scoped`、interactive/work-evidence/generated-output targeted tests 均通过。
 
 Todo：
 - [x] 最小复现
-- [ ] 定位 root boundary
-- [ ] 通用修复
-- [ ] targeted tests / 必要 browser 复验证据
-- [ ] 更新 Activity Log
+- [x] 定位 root boundary
+- [x] 通用修复
+- [x] targeted tests / 必要 browser 复验证据
+- [x] 更新 Activity Log
 
 ### DISC-20260518-P1-001 Fresh literature generated task can pass intent but fail outputPath contract
 
@@ -584,6 +585,8 @@ docs/archive/
 ```
 
 ## Activity Log
+
+- 2026-05-18 18:45 Integration Worker：继续推进 `DISC-20260517-P5-004` 到用户级闭环；`git fetch --all --prune` 后候选 `codex/*` / `integration/*` 无新增可合 worker diff，本轮未合并分支。通用修复：删除 AgentServer repair prompt 内部 duplicate ref-first policy，统一使用 contract-only `agentserver-repair-context-policy`；已投影 contract policy 可作为 continuation source，legacy `repairContextPolicy` 只审计不采纳；supplement/default repair policy 不再把 raw stderr/traceback 注入 prompt/result 可见 failureReason/selfHealReason；无明确 handoff 时 fail-closed 为 refs-only。UI/supplement 修复：runtime ui manifest 不再为缺失 targeted artifact 编造 `research-report` phantom ref，supplement lifecycle smoke 增加 primary+supplement artifacts/uiManifest additive merge 断言。文档更新 `docs/AgentHarnessStandard.md`、`docs/Architecture.md`。验证：`smoke-agentserver-compact-repair`、`smoke-agentserver-supplement`、`smoke-agentserver-supplement-scoped`、interactive/work-evidence/generated-output targeted tests、`npm run typecheck`、`npm run smoke:no-legacy-paths`、`git diff --check`、`npm run verify:single-agent-final` 全部通过（1269 tests、C01-C18、no-legacy guard、16 Web E2E、final evidence manifest）。
 
 - 2026-05-18 18:04 Integration Worker：继续推进剩余 T120/no-legacy 风险；`git fetch --all --prune` 后候选 `origin/codex/m13-complex-multiturn`、`origin/codex/result-presentation-r015`、`origin/codex/sciforge-paper-reproduction-loop`、`origin/codex/t122-boundary-smoke` 均 `ahead=0`，无可合 worker diff。本轮未合并远端分支，继续通用 contract 收敛：把 generated-task provider-first network/helper policy、literature recovery query/no-result/full-text/recovery copy、generated task recovery path、runtime route projection refs、external provider backoff/recover actions、AgentServer recentTurns compatibility field、ArtifactDelivery preview notice、fresh-code selected component gating 从 gateway/UI 迁入 `packages/contracts/runtime/*`；`smoke:no-legacy-paths` tracked findings 从 31 降到 0，并将 baseline 全部归零。验证：targeted generated-task/AgentServer/UI 76 tests pass、`npm run smoke:no-legacy-paths` pass（0 tracked findings）、`npm run typecheck` pass、`git diff --check` pass、`npm run verify:single-agent-final` pass（1268 tests、C01-C18、no-legacy guard、16 Web E2E、final evidence manifest）。额外复查 P5 supplement/compact-repair 旧风险时，scoped supplement smoke pass，但 compact-repair/supplement smoke 仍有独立 blocker，已保留在 `DISC-20260517-P5-004`，未混入本轮 T120 closure。
 

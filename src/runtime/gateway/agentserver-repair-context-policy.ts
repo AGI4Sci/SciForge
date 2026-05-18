@@ -43,6 +43,7 @@ export function repairContextPolicySummaryForAgentServer(
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   const agentHarness = isRecord(uiState.agentHarness) ? uiState.agentHarness : {};
   const ignoredLegacySources = ignoredLegacyRepairContextPolicySources(request, repairContext);
+  const embeddedPolicy = contractEmbeddedRepairContextPolicy(repairContext?.repairContextPolicy);
   const candidates: Array<{
     source: string;
     sourceKind: AgentServerRepairContextPolicySummary['sourceKind'];
@@ -52,10 +53,16 @@ export function repairContextPolicySummaryForAgentServer(
     { source: 'request.metadata.agentHarnessHandoff', sourceKind: 'contract-handoff', value: requestMetadata?.agentHarnessHandoff },
     { source: 'request.uiState.agentHarnessHandoff', sourceKind: 'contract-handoff', value: uiState.agentHarnessHandoff },
     { source: 'request.uiState.agentHarness.contract', sourceKind: 'contract', value: agentHarness.contract },
+    ...(embeddedPolicy ? [{
+      source: 'repairContext.repairContextPolicy',
+      sourceKind: embeddedPolicy.sourceKind,
+      value: embeddedPolicy.value,
+    }] : []),
   ];
   for (const candidate of candidates) {
     const policy = repairContextPolicyFromCandidate(candidate.value);
     if (!policy) continue;
+    if (stringField(policy.kind) === 'supplement') continue;
     const sourceRefs = repairContextPolicySourceRefs(candidate.value);
     const summary: AgentServerRepairContextPolicySummary = {
       schemaVersion: 'sciforge.agentserver.repair-context-policy-summary.v1',
@@ -77,7 +84,9 @@ export function repairContextPolicySummaryForAgentServer(
     if (ignoredLegacySources.length) summary.ignoredLegacySources = ignoredLegacySources;
     return summary;
   }
-  return undefined;
+  return repairContext
+    ? defaultRepairContextPolicySummaryForAgentServer(ignoredLegacySources)
+    : undefined;
 }
 
 export function ignoredLegacyRepairContextPolicyAuditForAgentServer(
@@ -128,9 +137,13 @@ export function applyRepairContextPolicyForAgentServer(
 
   const failure = isRecord(repairContext.failure) ? { ...repairContext.failure } : {};
   const failureEvidenceText: string[] = [];
+  const stderrDecision = repairEvidenceDecision(stderrRefs, policy, policy.includeStderrSummary);
   applyFailureFieldPolicy(failure, 'failureReason', failureReasonRefs, true, policy, audit, failureEvidenceText);
   applyFailureFieldPolicy(failure, 'stdoutTail', stdoutRefs, policy.includeStdoutSummary, policy, audit, failureEvidenceText);
   applyFailureFieldPolicy(failure, 'stderrTail', stderrRefs, policy.includeStderrSummary, policy, audit, failureEvidenceText);
+  recordRepairEvidenceDecision(audit, 'diagnostics.stdoutRef', repairEvidenceDecision(stdoutRefs, policy, policy.includeStdoutSummary));
+  recordRepairEvidenceDecision(audit, 'diagnostics.stderrRef', stderrDecision);
+  sanitizeFailureReasonEmbeddedBlockedStderr(failure, stderrDecision, audit);
   applyFailureFieldPolicy(failure, 'outputHead', outputRefs, true, policy, audit, failureEvidenceText);
   applyFailureFieldPolicy(failure, 'workEvidenceSummary', outputRefs, true, policy, audit);
   filterSchemaErrorsForRepairPolicy(failure, validationRefs, policy, audit, failureEvidenceText);
@@ -165,6 +178,31 @@ function applyFailureFieldPolicy(
   if (failureEvidenceText && typeof failure[field] === 'string') {
     failureEvidenceText.push(failure[field]);
   }
+}
+
+function sanitizeFailureReasonEmbeddedBlockedStderr(
+  failure: Record<string, unknown>,
+  stderrDecision: RepairEvidenceDecision,
+  audit: Record<string, unknown>,
+) {
+  if (stderrDecision.include || typeof failure.failureReason !== 'string') return;
+  const sanitized = redactEmbeddedStderrFromFailureReason(failure.failureReason);
+  if (sanitized === failure.failureReason) return;
+  failure.failureReason = sanitized;
+  recordRepairEvidenceDecision(audit, 'failure.failureReason.embeddedStderr', stderrDecision);
+}
+
+function redactEmbeddedStderrFromFailureReason(value: string) {
+  if (!failureReasonLooksLikeEmbeddedStderr(value)) return value;
+  const exitMatch = value.match(/\bAgentServer generated task exited\s+(\d+)/i);
+  if (exitMatch) {
+    return `AgentServer generated task exited ${exitMatch[1]}; stderr details omitted by repairContextPolicy.`;
+  }
+  return 'Generated task failed during execution; stderr details omitted by repairContextPolicy.';
+}
+
+function failureReasonLooksLikeEmbeddedStderr(value: string) {
+  return /BLOCKED_STDERR_SECRET|Traceback \(most recent call last\)|\b(?:RuntimeError|SyntaxError|ValueError|TypeError|Exception|Error):|(?:^|\n)\s*File ".*?", line \d+/i.test(value);
 }
 
 function filterSchemaErrorsForRepairPolicy(
@@ -292,6 +330,41 @@ function repairContextPolicyFromCandidate(value: unknown): Record<string, unknow
   if (isRecord(value.repairContextPolicy)) return value.repairContextPolicy;
   if (stringField(value.kind) || value.maxAttempts !== undefined) return value;
   return undefined;
+}
+
+function contractEmbeddedRepairContextPolicy(value: unknown): {
+  sourceKind: AgentServerRepairContextPolicySummary['sourceKind'];
+  value: Record<string, unknown>;
+} | undefined {
+  if (!isRecord(value)) return undefined;
+  const sourceKind = value.sourceKind === 'contract' || value.sourceKind === 'contract-handoff'
+    ? value.sourceKind
+    : undefined;
+  if (!sourceKind || !stringField(value.deterministicDecisionRef)) return undefined;
+  if (stringField(value.kind) === 'supplement') return undefined;
+  return { sourceKind, value };
+}
+
+function defaultRepairContextPolicySummaryForAgentServer(
+  ignoredLegacySources: AgentServerIgnoredLegacyRepairContextPolicySource[],
+): AgentServerRepairContextPolicySummary {
+  const summary: AgentServerRepairContextPolicySummary = {
+    schemaVersion: 'sciforge.agentserver.repair-context-policy-summary.v1',
+    source: 'runtime.defaultAgentServerRepairHandoff',
+    sourceKind: 'contract-handoff',
+    deterministicDecisionRef: '',
+    kind: 'none',
+    maxAttempts: 0,
+    includeStdoutSummary: true,
+    includeStderrSummary: false,
+    includeValidationFindings: false,
+    includePriorAttemptRefs: false,
+    allowedFailureEvidenceRefs: ['stdout'],
+    blockedFailureEvidenceRefs: ['stderr', 'validation:findings'],
+  };
+  summary.deterministicDecisionRef = repairContextPolicyDecisionRef(summary);
+  if (ignoredLegacySources.length) summary.ignoredLegacySources = ignoredLegacySources;
+  return summary;
 }
 
 function repairContextPolicySourceRefs(value: unknown) {

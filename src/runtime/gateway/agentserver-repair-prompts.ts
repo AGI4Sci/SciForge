@@ -5,8 +5,12 @@ import { agentServerExternalIoReliabilityContractLines, agentServerRepairPromptP
 import { minimalValidInteractiveToolPayloadExample } from '../../../packages/presentation/interactive-views/runtime-ui-manifest-policy';
 import { expectedArtifactTypesForRequest, selectedComponentIdsForRequest } from './gateway-request.js';
 import { summarizeArtifactRefs, summarizeExecutionRefs, summarizeTaskAttemptsForAgentServer } from './context-envelope.js';
-import { clipForAgentServerPrompt, extractLikelyErrorLine, isRecord, toRecordList, toStringList, uniqueStrings } from '../gateway-utils.js';
-import { ignoredLegacyRepairContextPolicyAuditForAgentServer, repairContextPolicySummaryForAgentServer } from './agentserver-repair-context-policy.js';
+import { clipForAgentServerPrompt, extractLikelyErrorLine, isRecord, toRecordList, toStringList } from '../gateway-utils.js';
+import {
+  applyRepairContextPolicyForAgentServer,
+  ignoredLegacyRepairContextPolicyAuditForAgentServer,
+  repairContextPolicySummaryForAgentServer,
+} from './agentserver-repair-context-policy.js';
 import { sanitizePromptHandoffValue } from './agentserver-generation-prompts.js';
 import { summarizeUiStateForAgentServer } from './agentserver-context-summary.js';
 
@@ -69,7 +73,7 @@ export async function buildCompactRepairContext(params: {
     priorAttempts: summarizeTaskAttemptsForAgentServer(params.priorAttempts).slice(0, 4),
   };
   const repairContextPolicySummary = repairContextPolicySummaryForAgentServer(params.request, rawContext);
-  const compactRepairContext = applyRefFirstRepairContextPolicyForAgentServer(rawContext, repairContextPolicySummary);
+  const compactRepairContext = applyRepairContextPolicyForAgentServer(rawContext, repairContextPolicySummary) ?? rawContext;
   const refFirstRepairContext = projectRepairContextForAgentServerPrompt(compactRepairContext);
   return withIgnoredLegacyRepairContextPolicyAudit(
     refFirstRepairContext,
@@ -109,141 +113,6 @@ function repairMaterialRefs(run: WorkspaceTaskRunResult, inputRef: string) {
 function repairMaterialRef(kind: string, ref: string | undefined, role: string) {
   if (!ref) return undefined;
   return { kind, ref, role };
-}
-
-function applyRefFirstRepairContextPolicyForAgentServer(
-  repairContext: Record<string, unknown>,
-  policy: ReturnType<typeof repairContextPolicySummaryForAgentServer>,
-) {
-  if (!policy) return repairContext;
-  const workspaceRefs = isRecord(repairContext.workspaceRefs) ? repairContext.workspaceRefs : {};
-  const filtered: Record<string, unknown> = {
-    ...repairContext,
-    repairContextPolicy: {
-      source: policy.source,
-      sourceKind: policy.sourceKind,
-      contractRef: policy.contractRef,
-      traceRef: policy.traceRef,
-      deterministicDecisionRef: policy.deterministicDecisionRef,
-      kind: policy.kind,
-      maxAttempts: policy.maxAttempts,
-      includeStdoutSummary: policy.includeStdoutSummary,
-      includeStderrSummary: policy.includeStderrSummary,
-      includeValidationFindings: policy.includeValidationFindings,
-      includePriorAttemptRefs: policy.includePriorAttemptRefs,
-      allowedFailureEvidenceRefs: policy.allowedFailureEvidenceRefs,
-      blockedFailureEvidenceRefs: policy.blockedFailureEvidenceRefs,
-    },
-  };
-  const audit = refFirstRepairContextPolicyAudit(policy);
-  const failure = isRecord(repairContext.failure) ? { ...repairContext.failure } : {};
-  applyRefFirstFailureFieldPolicy(failure, 'failureReason', repairPolicyRefs(workspaceRefs.outputRef, 'failureReason', 'failure:reason'), true, policy, audit);
-  applyRefFirstFailureFieldPolicy(failure, 'workEvidenceSummary', repairPolicyRefs(workspaceRefs.outputRef, 'output', 'workEvidenceSummary'), true, policy, audit);
-  filterRefFirstSchemaErrors(failure, repairPolicyRefs(workspaceRefs.outputRef, 'validation:findings', 'validator:findings', 'schemaErrors'), policy, audit);
-  recordRefFirstEvidenceDecision(audit, 'diagnostics.stdoutRef', refFirstRepairEvidenceDecision(repairPolicyRefs(workspaceRefs.stdoutRef, 'stdout', 'stdoutSummary'), policy, policy.includeStdoutSummary));
-  recordRefFirstEvidenceDecision(audit, 'diagnostics.stderrRef', refFirstRepairEvidenceDecision(repairPolicyRefs(workspaceRefs.stderrRef, 'stderr', 'stderrSummary'), policy, policy.includeStderrSummary));
-  filtered.failure = failure;
-  filtered.priorAttempts = policy.includePriorAttemptRefs ? repairContext.priorAttempts : [];
-  if (!policy.includePriorAttemptRefs && Array.isArray(repairContext.priorAttempts) && repairContext.priorAttempts.length) {
-    recordRefFirstEvidenceDecision(audit, 'priorAttempts', { include: false, reason: 'disabled', refs: ['priorAttempts'] });
-  }
-  filtered.repairContextPolicyAudit = audit;
-  return filtered;
-}
-
-function applyRefFirstFailureFieldPolicy(
-  failure: Record<string, unknown>,
-  field: string,
-  refs: string[],
-  enabled: boolean,
-  policy: NonNullable<ReturnType<typeof repairContextPolicySummaryForAgentServer>>,
-  audit: Record<string, unknown>,
-) {
-  if (failure[field] === undefined) return;
-  const decision = refFirstRepairEvidenceDecision(refs, policy, enabled);
-  recordRefFirstEvidenceDecision(audit, `failure.${field}`, decision);
-  if (!decision.include) delete failure[field];
-}
-
-function filterRefFirstSchemaErrors(
-  failure: Record<string, unknown>,
-  refs: string[],
-  policy: NonNullable<ReturnType<typeof repairContextPolicySummaryForAgentServer>>,
-  audit: Record<string, unknown>,
-) {
-  if (!Array.isArray(failure.schemaErrors)) return;
-  const decision = refFirstRepairEvidenceDecision(refs, policy, policy.includeValidationFindings);
-  recordRefFirstEvidenceDecision(audit, 'failure.schemaErrors', decision);
-  if (!decision.include) delete failure.schemaErrors;
-}
-
-function refFirstRepairEvidenceDecision(
-  refs: string[],
-  policy: NonNullable<ReturnType<typeof repairContextPolicySummaryForAgentServer>>,
-  enabled = true,
-) {
-  const normalizedRefs = uniqueStrings(refs);
-  if (!enabled) return { include: false, reason: 'disabled', refs: normalizedRefs };
-  const blocked = normalizedRefs.filter((ref) => policy.blockedFailureEvidenceRefs.includes(ref));
-  if (blocked.length) return { include: false, reason: 'blocked', refs: blocked };
-  if (policy.allowedFailureEvidenceRefs.length) {
-    const allowed = normalizedRefs.filter((ref) => policy.allowedFailureEvidenceRefs.includes(ref));
-    if (!allowed.length) return { include: false, reason: 'not-allowed', refs: normalizedRefs };
-    return { include: true, refs: allowed };
-  }
-  return { include: true, refs: normalizedRefs };
-}
-
-function recordRefFirstEvidenceDecision(
-  audit: Record<string, unknown>,
-  path: string,
-  decision: { include: boolean; reason?: string; refs: string[] },
-) {
-  if (decision.include) {
-    audit.includedFailureEvidenceRefs = uniqueStrings([
-      ...toStringList(audit.includedFailureEvidenceRefs),
-      ...decision.refs,
-    ]);
-    return;
-  }
-  audit.omittedFailureEvidenceRefs = uniqueStrings([
-    ...toStringList(audit.omittedFailureEvidenceRefs),
-    ...decision.refs,
-  ]);
-  const omittedFields = Array.isArray(audit.omittedFields) ? audit.omittedFields.filter(isRecord) : [];
-  omittedFields.push({ path, reason: decision.reason, refs: decision.refs });
-  audit.omittedFields = omittedFields;
-}
-
-function refFirstRepairContextPolicyAudit(
-  policy: NonNullable<ReturnType<typeof repairContextPolicySummaryForAgentServer>>,
-) {
-  return {
-    schemaVersion: 'sciforge.agentserver.repair-context-policy-audit.v1',
-    source: policy.source,
-    sourceKind: policy.sourceKind,
-    contractRef: policy.contractRef,
-    traceRef: policy.traceRef,
-    deterministicDecisionRef: policy.deterministicDecisionRef,
-    deterministic: true,
-    allowedFailureEvidenceRefs: policy.allowedFailureEvidenceRefs,
-    blockedFailureEvidenceRefs: policy.blockedFailureEvidenceRefs,
-    includeStdoutSummary: policy.includeStdoutSummary,
-    includeStderrSummary: policy.includeStderrSummary,
-    includeValidationFindings: policy.includeValidationFindings,
-    includePriorAttemptRefs: policy.includePriorAttemptRefs,
-    ignoredLegacySources: policy.ignoredLegacySources,
-    includedFailureEvidenceRefs: [],
-    omittedFailureEvidenceRefs: [],
-    omittedFields: [],
-  };
-}
-
-function repairPolicyRefs(...refs: unknown[]) {
-  return uniqueStrings(refs.flatMap((ref) => {
-    const value = stringField(ref);
-    return value ? [value] : [];
-  }));
 }
 
 function projectRepairContextForAgentServerPrompt(repairContext: Record<string, unknown>) {
@@ -297,13 +166,21 @@ function repairDiagnosticsForPrompt(
 ) {
   return removeUndefinedFields({
     exitCode: failure.exitCode,
-    failureReason: failure.failureReason,
+    failureReason: promptSafeFailureReason(failure.failureReason),
     schemaErrors: failure.schemaErrors,
     likelyErrorLine: failure.likelyErrorLine,
     workEvidenceSummary: failure.workEvidenceSummary,
     evidenceRefs: repairDiagnosticEvidenceRefs(repairContext),
     materialBodies: 'omitted-ref-first',
   });
+}
+
+function promptSafeFailureReason(value: unknown) {
+  if (typeof value !== 'string') return value;
+  if (!/BLOCKED_STDERR_SECRET|Traceback \(most recent call last\)|\b(?:RuntimeError|SyntaxError|ValueError|TypeError|Exception|Error):|(?:^|\n)\s*File ".*?", line \d+/i.test(value)) return value;
+  const exitMatch = value.match(/\bAgentServer generated task exited\s+(\d+)/i);
+  if (exitMatch) return `AgentServer generated task exited ${exitMatch[1]}; raw process log details are available only through policy-approved refs.`;
+  return 'Generated task failed during execution; raw process log details are available only through policy-approved refs.';
 }
 
 function repairDiagnosticEvidenceRefs(repairContext: Record<string, unknown>) {
@@ -347,8 +224,9 @@ export function buildAgentServerRepairPrompt(params: {
   repairContext?: Record<string, unknown>;
 }) {
   const repairContextPolicySummary = repairContextPolicySummaryForAgentServer(params.request, params.repairContext);
+  const filteredRepairContext = applyRepairContextPolicyForAgentServer(params.repairContext, repairContextPolicySummary);
   const repairContextWithAudit = withIgnoredLegacyRepairContextPolicyAudit(
-    params.repairContext,
+    filteredRepairContext,
     ignoredLegacyRepairContextPolicyAuditForAgentServer(params.request, params.repairContext),
   );
   const repairContext = repairContextWithAudit

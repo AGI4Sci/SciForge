@@ -439,6 +439,8 @@ Conversation policy 是 harness 的输入之一，不是 harness 本身，也不
 
 因此，未来不应继续在 conversation-policy 模块里扩大 keyword intent、任务 workflow、UI 文案或 prompt 内联历史。若需要新增行为策略，应进入 harness callback/profile；若需要新增能力，应进入 capability manifest/package；若需要多轮记忆能力，应扩展 Project Session Ledger、context projection block、AgentServer retrieval/compaction contract 或 cache-aware handoff compiler。
 
+Repair/supplement projection 也遵循同一边界：repair context policy 只来自 contract handoff 或已审计的 contract projection，legacy policy 字段仅记录 ignored audit；stderr/traceback 正文不能混入 failureReason、selfHealReason 或 route fallback copy。Supplemental generation 必须补齐 missing artifact types，并把 primary artifacts / UI slots / WorkEvidence additive merge 回最终 payload；view policy 不能为了 selected component 编造不存在的 artifact ref。
+
 ### src 与 packages 边界：固定平台 vs 插拔能力
 
 最终版本采用清晰的工程边界：

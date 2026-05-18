@@ -352,9 +352,9 @@ function inferArtifactRef(componentId: string, artifacts: Array<Record<string, u
     return firstArtifactRef(artifacts);
   }
   const targetType = componentTargetType(componentId, artifacts);
-  if (targetType === 'research-report') return 'research-report';
   const direct = artifacts.find((artifact) => artifact.type === targetType || artifact.id === targetType);
-  return refForArtifact(direct) ?? firstArtifactRef(artifacts);
+  if (direct) return refForArtifact(direct);
+  return targetType ? undefined : firstArtifactRef(artifacts);
 }
 
 function componentTargetType(componentId: string, artifacts: Array<Record<string, unknown>>) {

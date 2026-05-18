@@ -846,6 +846,7 @@ async function tryAgentServerRepairAndRerun(params: {
   const maxAttempts = agentServerRepairMaxAttempts();
   const attempt = Math.max(2, priorAttempts.length + 1);
   const parentAttempt = attempt - 1;
+  const visibleFailureReason = agentServerVisibleRepairFailureReason(params.failureReason);
   if (attempt > maxAttempts) {
     return terminalAgentServerRepairFailurePayload(params, `AgentServer repair reached the maximum attempt budget (${maxAttempts}) before producing a valid ToolPayload.`);
   }
@@ -889,10 +890,10 @@ async function tryAgentServerRepairAndRerun(params: {
       prompt: params.request.prompt,
       skillDomain: params.request.skillDomain,
       skillId: params.skill.id,
-      ...attemptPlanRefs(params.request, params.skill, params.failureReason),
+      ...attemptPlanRefs(params.request, params.skill, visibleFailureReason),
       attempt,
       parentAttempt,
-      selfHealReason: params.failureReason,
+      selfHealReason: visibleFailureReason,
       patchSummary: [diffSummary, repairBoundaryViolation.reason].filter(Boolean).join('\n\n'),
       diffRef: diffRel,
       status: 'repair-needed',
@@ -930,10 +931,10 @@ async function tryAgentServerRepairAndRerun(params: {
       prompt: params.request.prompt,
       skillDomain: params.request.skillDomain,
       skillId: params.skill.id,
-      ...attemptPlanRefs(params.request, params.skill, params.failureReason),
+      ...attemptPlanRefs(params.request, params.skill, visibleFailureReason),
       attempt,
       parentAttempt,
-      selfHealReason: params.failureReason,
+      selfHealReason: visibleFailureReason,
       patchSummary: repair.error,
       diffRef: diffRel,
       status: 'failed-with-reason',
@@ -958,10 +959,10 @@ async function tryAgentServerRepairAndRerun(params: {
       prompt: params.request.prompt,
       skillDomain: params.request.skillDomain,
       skillId: params.skill.id,
-      ...attemptPlanRefs(params.request, params.skill, params.failureReason),
+      ...attemptPlanRefs(params.request, params.skill, visibleFailureReason),
       attempt,
       parentAttempt,
-      selfHealReason: params.failureReason,
+      selfHealReason: visibleFailureReason,
       patchSummary: diffSummary,
       diffRef: diffRel,
       status: 'failed-with-reason',
@@ -991,7 +992,7 @@ async function tryAgentServerRepairAndRerun(params: {
       attempt,
       parentAttempt,
       skillId: params.skill.id,
-      selfHealReason: params.failureReason,
+      selfHealReason: visibleFailureReason,
       agentServerRunId: repair.runId,
       artifacts: params.request.artifacts,
       uiStateSummary: params.request.uiState,
@@ -1019,10 +1020,10 @@ async function tryAgentServerRepairAndRerun(params: {
       prompt: params.request.prompt,
       skillDomain: params.request.skillDomain,
       skillId: params.skill.id,
-      ...attemptPlanRefs(params.request, params.skill, params.failureReason),
+      ...attemptPlanRefs(params.request, params.skill, visibleFailureReason),
       attempt,
       parentAttempt,
-      selfHealReason: params.failureReason,
+      selfHealReason: visibleFailureReason,
       patchSummary: diffSummary,
       diffRef: diffRel,
       status: 'failed-with-reason',
@@ -1086,10 +1087,10 @@ async function tryAgentServerRepairAndRerun(params: {
       prompt: params.request.prompt,
       skillDomain: params.request.skillDomain,
       skillId: params.skill.id,
-      ...attemptPlanRefs(params.request, params.skill, params.failureReason),
+      ...attemptPlanRefs(params.request, params.skill, visibleFailureReason),
       attempt,
       parentAttempt,
-      selfHealReason: params.failureReason,
+      selfHealReason: visibleFailureReason,
       patchSummary: diffSummary,
       diffRef: diffRel,
       status: attemptStatus,
@@ -1165,17 +1166,17 @@ async function tryAgentServerRepairAndRerun(params: {
       reasoningTrace: [
         normalized.reasoningTrace,
         `AgentServer repair run: ${repair.runId || 'unknown'} (attempt ${attempt}/${maxAttempts})`,
-        `Self-heal reason: ${params.failureReason}`,
+        `Self-heal reason: ${visibleFailureReason}`,
         `Diff ref: ${diffRel}`,
         proposal ? `Skill promotion proposal: .sciforge/skill-proposals/${proposal.id}` : '',
       ].filter(Boolean).join('\n'),
       executionUnits: normalized.executionUnits.map((unit) => isRecord(unit) ? {
         ...unit,
-        ...attemptPlanRefs(params.request, params.skill, params.failureReason),
+        ...attemptPlanRefs(params.request, params.skill, visibleFailureReason),
         status: 'self-healed',
         attempt,
         parentAttempt,
-        selfHealReason: params.failureReason,
+        selfHealReason: visibleFailureReason,
         patchSummary: diffSummary,
         diffRef: diffRel,
         agentServerRunId: repair.runId,
@@ -1191,10 +1192,10 @@ async function tryAgentServerRepairAndRerun(params: {
       prompt: params.request.prompt,
       skillDomain: params.request.skillDomain,
       skillId: params.skill.id,
-      ...attemptPlanRefs(params.request, params.skill, params.failureReason),
+      ...attemptPlanRefs(params.request, params.skill, visibleFailureReason),
       attempt,
       parentAttempt,
-      selfHealReason: params.failureReason,
+      selfHealReason: visibleFailureReason,
       patchSummary: diffSummary,
       diffRef: diffRel,
       status: 'failed-with-reason',
@@ -1268,6 +1269,15 @@ function normalizeRepairFailureReason(value: unknown) {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 500);
+}
+
+function agentServerVisibleRepairFailureReason(value: string) {
+  if (!/BLOCKED_STDERR_SECRET|Traceback \(most recent call last\)|\b(?:RuntimeError|SyntaxError|ValueError|TypeError|Exception|Error):|(?:^|\n)\s*File ".*?", line \d+/i.test(value)) {
+    return value;
+  }
+  const exitMatch = value.match(/\bAgentServer generated task exited\s+(\d+)/i);
+  if (exitMatch) return `AgentServer generated task exited ${exitMatch[1]}; raw process log details are available through refs.`;
+  return 'Generated task failed during execution; raw process log details are available through refs.';
 }
 
 export { requestUsesRepairContext } from './gateway/agentserver-generation-dispatch.js';
