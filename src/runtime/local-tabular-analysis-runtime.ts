@@ -44,6 +44,8 @@ export async function tryRunLocalTabularAnalysisRuntime(
   request: GatewayRequest,
   callbacks: WorkspaceRuntimeCallbacks = {},
 ): Promise<ToolPayload | undefined> {
+  if (isExplicitCodeDebugRequest(request.prompt)) return undefined;
+  if (isMethodologyFinalizerRequest(request.prompt)) return undefined;
   if (!/(csv|tsv|table|tabular|dataframe|messy|缺失|clean(?:ing)?|清洗|统计|模型|图表|复现|reproducible|qc|sensitivity|robustness|limitations?|rerun|report|chart|current analysis|previous analysis|this current dataset|结果|限制|复跑|稳健|敏感性|当前分析|上次分析)/i.test(request.prompt)) {
     return undefined;
   }
@@ -72,6 +74,7 @@ export async function tryRunLocalTabularAnalysisRuntime(
     cleaned: join(root, 'cleaned.csv'),
     report: join(root, 'analysis-report.md'),
     chart: join(root, 'change-by-group.svg'),
+    qcChart: join(root, 'qc-summary.svg'),
     results: join(root, 'results.json'),
     script: join(root, 'rerun_analysis.py'),
   };
@@ -83,12 +86,14 @@ export async function tryRunLocalTabularAnalysisRuntime(
   }))));
   const report = buildReport({ stats, rel, rowCount: cleaned.length, includedCount: included.length });
   const chart = buildSvgChart(stats.groupSummaries, stats.unitLabel, stats.measureLabel);
+  const qcChart = buildQcSvgChart(cleaned);
   const script = buildRerunScript();
 
   await writeFile(files.raw, rawCsv, 'utf8');
   await writeFile(files.cleaned, cleanedCsv, 'utf8');
   await writeFile(files.report, report, 'utf8');
   await writeFile(files.chart, chart, 'utf8');
+  await writeFile(files.qcChart, qcChart, 'utf8');
   await writeFile(files.results, JSON.stringify(stats, null, 2), 'utf8');
   await writeFile(files.script, script, 'utf8');
   const rerunVerification = await verifyRerunScript(
@@ -115,7 +120,7 @@ export async function tryRunLocalTabularAnalysisRuntime(
     `Approximate 95% CI: [${stats.primaryModel.diagnostics.confidenceInterval95.join(', ')}] ${stats.unitLabel}; approximate p=${formatPValue(stats.primaryModel.diagnostics.pValueApprox)}.`,
     `QC: ${stats.qcSummary.join('; ')}.`,
     `Sensitivity: including flagged outliers gives ${stats.primaryModel.comparisonLabel} mean-change delta ${round(stats.sensitivity.includeFlaggedOutliersPrimaryDelta)} ${stats.unitLabel}; duplicate-first policy gives ${round(stats.sensitivity.keepFirstDuplicatePrimaryDelta)} ${stats.unitLabel}.`,
-    `Artifacts: report=${rel.report}, cleaned data=${rel.cleaned}, chart=${rel.chart}, rerun script=${rel.script}.`,
+    `Artifacts: report=${rel.report}, cleaned data=${rel.cleaned}, charts=${rel.chart} and ${rel.qcChart}, rerun script=${rel.script}.`,
   ].join('\n');
 
   return {
@@ -163,13 +168,15 @@ export async function tryRunLocalTabularAnalysisRuntime(
       artifact(`${artifactId}-report`, 'research-report', rel.report, { source: TOOL_ID, resultsRef: rel.results }),
       artifact(`${artifactId}-cleaned`, 'data-table', rel.cleaned, { source: TOOL_ID, rawRef: rel.raw, rowCount: cleaned.length }),
       artifact(`${artifactId}-chart`, 'figure', rel.chart, { source: TOOL_ID, resultsRef: rel.results }),
+      artifact(`${artifactId}-qc-chart`, 'figure', rel.qcChart, { source: TOOL_ID, resultsRef: rel.results }),
       artifact(`${artifactId}-code`, 'notebook-timeline', rel.script, { source: TOOL_ID, command: `python ${rel.script} ${rel.raw} ${rootRel}/rerun-output.json` }),
       artifact(`${artifactId}-results`, 'statistical-result', rel.results, { source: TOOL_ID }),
     ],
     objectReferences: [
       objectRef('report', 'file', 'Analysis report', rel.report),
       objectRef('cleaned', 'file', 'Cleaned CSV', rel.cleaned),
-      objectRef('chart', 'file', 'QC and change chart', rel.chart),
+      objectRef('chart', 'file', 'Primary effect chart', rel.chart),
+      objectRef('qc-chart', 'file', 'QC inclusion chart', rel.qcChart),
       objectRef('script', 'file', 'Rerun script', rel.script),
       objectRef('results', 'file', 'Statistical results JSON', rel.results),
     ],
@@ -181,6 +188,8 @@ async function tryRunLocalTabularFollowupRuntime(
   workspace: string,
   callbacks: WorkspaceRuntimeCallbacks,
 ): Promise<ToolPayload | undefined> {
+  if (isExplicitCodeDebugRequest(request.prompt)) return undefined;
+  if (isMethodologyFinalizerRequest(request.prompt)) return undefined;
   if (!/(current|previous|existing|this dataset|上次|当前|已有|robustness|sensitivity|limitations?|rerun|report|chart|clean(?:ing)?|qc|model|statistical|结果|限制|复跑|稳健|敏感性|清洗|统计|模型|图表)/i.test(request.prompt)) {
     return undefined;
   }
@@ -196,6 +205,7 @@ async function tryRunLocalTabularFollowupRuntime(
   const resultsRel = `${rootRel}/results.json`;
   const scriptRel = `${rootRel}/rerun_analysis.py`;
   const chartRel = `${rootRel}/change-by-group.svg`;
+  const qcChartRel = `${rootRel}/qc-summary.svg`;
   const cleanedRel = `${rootRel}/cleaned.csv`;
   const report = await readFile(join(workspace, reportRel), 'utf8').catch(() => undefined);
   const results = await readFile(join(workspace, resultsRel), 'utf8').then((text) => JSON.parse(text) as Record<string, unknown>).catch(() => undefined);
@@ -234,7 +244,7 @@ async function tryRunLocalTabularFollowupRuntime(
     sensitivity ? `Robustness: ${compactMarkdownBullets(sensitivity)}` : undefined,
     limitations ? `Limitations: ${compactMarkdownBullets(limitations)}` : undefined,
     /rerun|复跑|command/i.test(request.prompt) ? `Rerun command: ${compactMarkdownBullets(rerun)}` : undefined,
-    `Artifacts: report=${reportRel}, chart=${chartRel}, cleaned=${cleanedRel}, results=${resultsRel}, rerun script=${scriptRel}.`,
+    `Artifacts: report=${reportRel}, charts=${chartRel} and ${qcChartRel}, cleaned=${cleanedRel}, results=${resultsRel}, rerun script=${scriptRel}.`,
   ].filter(Boolean).join('\n');
 
   emitWorkspaceRuntimeEvent(callbacks, {
@@ -298,17 +308,31 @@ async function tryRunLocalTabularFollowupRuntime(
       artifact(`${artifactId}-report`, 'research-report', reportRel, { source: `${TOOL_ID}.followup`, resultsRef: resultsRel }),
       artifact(`${artifactId}-cleaned`, 'data-table', cleanedRel, { source: `${TOOL_ID}.followup` }),
       artifact(`${artifactId}-chart`, 'figure', chartRel, { source: `${TOOL_ID}.followup`, resultsRef: resultsRel }),
+      artifact(`${artifactId}-qc-chart`, 'figure', qcChartRel, { source: `${TOOL_ID}.followup`, resultsRef: resultsRel }),
       artifact(`${artifactId}-code`, 'notebook-timeline', scriptRel, { source: `${TOOL_ID}.followup`, command: `python ${scriptRel} ${rootRel}/input.csv ${rootRel}/rerun-output.json` }),
       artifact(`${artifactId}-results`, 'statistical-result', resultsRel, { source: `${TOOL_ID}.followup` }),
     ],
     objectReferences: [
       objectRef('report', 'file', 'Current analysis report', reportRel),
       objectRef('cleaned', 'file', 'Current cleaned CSV', cleanedRel),
-      objectRef('chart', 'file', 'Current analysis chart', chartRel),
+      objectRef('chart', 'file', 'Current primary effect chart', chartRel),
+      objectRef('qc-chart', 'file', 'Current QC inclusion chart', qcChartRel),
       objectRef('script', 'file', 'Current rerun script', scriptRel),
       objectRef('results', 'file', 'Current statistical results JSON', resultsRel),
     ],
   };
+}
+
+function isExplicitCodeDebugRequest(prompt: string) {
+  return /\b(?:pytest|unit tests?|test_.*\.py|debug|fix|patch|root cause|implementation file|rerun tests?|代码调试|修复|补丁|复跑测试)\b/i.test(prompt)
+    || /\bpython\s+-m\s+pytest\b/i.test(prompt)
+    || /\.(?:py|ts|tsx|js|jsx)\b/i.test(prompt);
+}
+
+function isMethodologyFinalizerRequest(prompt: string) {
+  const durableWriteback = /(write(?:\s+back)?|persist|save|final package|final protocol|artifact path|file path|写回|保存|落盘|最终(?:方案|protocol|package|文件|产物))/i.test(prompt);
+  const methodology = /(methodolog|protocol|sample[-\s/]?statistics|risk register|execution checklist|preregistration|technical replicates?|方法学|方案|样本|统计|风险|预注册|技术重复)/i.test(prompt);
+  return durableWriteback && methodology;
 }
 
 function extractInlineTable(prompt: string): TableInput | undefined {
@@ -824,7 +848,8 @@ function buildReport(input: { stats: ReturnType<typeof summarizeAnalysis>; rel: 
     '',
     '## Artifacts',
     `- Cleaned data: \`${input.rel.cleaned}\``,
-    `- Chart: \`${input.rel.chart}\``,
+    `- Primary effect chart: \`${input.rel.chart}\``,
+    `- QC inclusion chart: \`${input.rel.qcChart}\``,
     `- Results JSON: \`${input.rel.results}\``,
     `- Rerun script: \`${input.rel.script}\``,
     '',
@@ -849,6 +874,32 @@ function buildSvgChart(groups: Array<{ group: string; meanChange: number }>, uni
   }).join('');
   const height = Math.max(220, 80 + groups.length * 70);
   return `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="${height}" viewBox="0 0 640 ${height}"><rect width="640" height="${height}" fill="#0f172a"/><text x="20" y="30" fill="#e2e8f0" font-size="18">${escapeXml(titleCase(measureLabel))} by group</text><line x1="${axisX}" y1="45" x2="${axisX}" y2="${height - 40}" stroke="#e2e8f0" stroke-width="1"/><g fill="#e2e8f0">${bars}</g></svg>`;
+}
+
+function buildQcSvgChart(rows: CleanRow[]) {
+  const included = rows.filter((row) => row.analysis_included).length;
+  const excluded = rows.length - included;
+  const flagCounts = new Map<string, number>();
+  for (const row of rows) {
+    for (const flag of row.qc_flags) flagCounts.set(flag, (flagCounts.get(flag) ?? 0) + 1);
+  }
+  const bars = [
+    { label: 'included in primary model', count: included, fill: '#14b8a6' },
+    { label: 'excluded from primary model', count: excluded, fill: '#f97316' },
+    ...[...flagCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([flag, count], index) => ({
+      label: flag.replaceAll('_', ' '),
+      count,
+      fill: ['#64748b', '#a855f7', '#0ea5e9', '#eab308', '#ec4899', '#22c55e'][index] ?? '#64748b',
+    })),
+  ];
+  const maxCount = Math.max(1, ...bars.map((bar) => bar.count));
+  const height = Math.max(240, 80 + bars.length * 46);
+  const body = bars.map((bar, index) => {
+    const y = 58 + index * 46;
+    const width = Math.max(1, (bar.count / maxCount) * 300);
+    return `<g><text x="20" y="${y + 18}" font-size="13">${escapeXml(truncateLabel(bar.label, 34))}</text><rect x="280" y="${y}" width="${round(width)}" height="24" fill="${bar.fill}"/><text x="${round(288 + width)}" y="${y + 18}" font-size="13">${bar.count}</text></g>`;
+  }).join('');
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="${height}" viewBox="0 0 640 ${height}"><rect width="640" height="${height}" fill="#0f172a"/><text x="20" y="30" fill="#e2e8f0" font-size="18">QC inclusion summary</text><g fill="#e2e8f0">${body}</g></svg>`;
 }
 
 function buildRerunScript() {
@@ -1061,7 +1112,7 @@ function collectLocalTabularRoots(value: unknown) {
   const visit = (candidate: unknown, depth: number) => {
     if (depth > 7 || candidate === null || candidate === undefined) return;
     if (typeof candidate === 'string') {
-      for (const match of candidate.matchAll(/(?:file:)?(\.sciforge\/local-tabular-analysis\/[a-f0-9]{12})\/(?:analysis-report\.md|results\.json|rerun_analysis\.py|cleaned\.csv|change-by-group\.svg|input\.csv)/g)) {
+      for (const match of candidate.matchAll(/(?:file:)?(\.sciforge\/local-tabular-analysis\/[a-f0-9]{12})\/(?:analysis-report\.md|results\.json|rerun_analysis\.py|cleaned\.csv|change-by-group\.svg|qc-summary\.svg|input\.csv)/g)) {
         if (match[1]) roots.push(match[1]);
       }
       return;

@@ -333,7 +333,7 @@ Root boundary：AgentServer generated-task authoring 仍会返回 static/non-int
 
 ### P2 Data Analysis / Reproducibility
 
-状态：partial / local-tabular-runtime-integrated-targeted-pass / needs-browser-recheck
+状态：pass / local-tabular-runtime-browser-closed
 建议任务：用户上传或描述 messy CSV/TSV 分析任务，要求 QC、统计模型、图表、复跑命令、sensitivity/robustness 和 selected chart follow-up。
 重点挑战：generated code syntax/repair、result consistency、artifact grounding。
 
@@ -355,11 +355,12 @@ AnswerQuality：fail；诚实标为 recoverable，但未满足用户 hard requir
 Root boundary：AgentServer generated-task generation lifecycle / entrypoint contract / syntax preflight；同类旧证据 `generated-literature-2182f65faaaa` 还暴露 Python syntax preflight `df´l` 失败。
 修复动作：generation lifecycle 现在在执行前校验 entrypoint 必须可 materialize，并对 Python entrypoint 做语法预检；失败时触发 bounded strict generation retry，而不是直接执行或终态失败。
 验证：`node --import tsx --test src/runtime/gateway/generated-task-runner-generation-lifecycle.test.ts src/runtime/gateway/generated-task-runner-execution-lifecycle.test.ts`；`node --import tsx --test src/ui/src/app/ResultsRenderer.test.ts`；`npm run typecheck`。
-剩余风险：本轮未重新跑修复后 browser 端端到端成功路径；默认数据分析任务仍被 literature scenario label 承载，需要后续 routing/capability eval。
+最新闭环：2026-05-18 integration Browser `http://127.0.0.1:5773` run `project-literature-evidence-review-mpb3yp7j-ybg3iy` / session `session-literature-evidence-review-mpb3yntl-6p3b15` 已通过本地 tabular runtime 返回 satisfied/verified；主回复包含 QC、清洗策略、模型、CI/p 值、sensitivity/robustness、复跑命令和限制说明；artifact/object refs 包含 `analysis-report.md`、`cleaned.csv`、`change-by-group.svg`、`qc-summary.svg`、`rerun_analysis.py`、`results.json`。修复后还补齐至少两个 chart artifact，并验证 explicit code-debug / methodology finalizer prompt 不会被 tabular follow-up 污染。
+剩余风险：当前 P2 数据分析用户级闭环无阻断项；更复杂外部数据/provider 分析仍按 capability/AgentServer 路径单独评估。
 
 ### P3 Paper Reproduction / Code Debug
 
-状态：partial / local-code-debug-runtime-integrated-targeted-pass / needs-browser-recheck
+状态：pass / local-code-debug-runtime-browser-closed
 建议任务：真实代码调试/论文复现任务，要求先跑测试、定位 root cause、改代码、复跑测试、报告 remaining risks。
 重点挑战：`DISC-20260517-P3-005` generated task syntax preflight 后是否能 bounded repair/regenerate，而不是把内部生成错误当终态主回复。
 
@@ -381,7 +382,8 @@ AnswerQuality：partial；P3-005 targeted blocker 已有通用修复和测试，
 Root boundary：generated-task execution syntax preflight / bounded repair rerun；新残留 blocker 为 AgentServer generation malformed payload / scenario routing。
 修复动作：syntax preflight blocked 后现在写入诊断 refs，记录一次 repair-needed attempt，并复用现有 AgentServer bounded repair/rerun 生命周期；repair 成功时返回 repaired payload，而不是把 preflight 文本作为终态主结果。
 验证：`node --import tsx --test src/runtime/gateway/generated-task-runner-execution-lifecycle.test.ts src/runtime/gateway/generated-task-runner-generation-lifecycle.test.ts`；`node --import tsx --test src/runtime/gateway/agentserver-generation-dispatch.test.ts`；`node --import tsx --test src/ui/src/app/ResultsRenderer.test.ts`；`npm run typecheck`；`git diff --check`。
-剩余风险：真实 P3 code-debug 任务仍可能被 malformed generation response 卡住；本轮没有获得完整 patch/test/risk 用户交付。
+最新闭环：2026-05-18 integration Browser `http://127.0.0.1:5773` run `project-literature-evidence-review-mpb42xmh-pa7orn` 对 `p3-debug/stats_impl.py` / `p3-debug/test_stats_impl.py` 完成用户级代码调试：initial `python -m pytest p3-debug/test_stats_impl.py -q` failed，runtime patch `doc_kernel` square-root denominator 与 `two_sample_distance` identical-input zero contract，rerun passed；前台显示 satisfied/verified、patch summary、测试结果和 remaining risks。修复同轮发现的 cross-runtime 污染：tabular follow-up 对 pytest/debug/patch prompt fail-open，且 code-debug stage 排在 tabular 前。
+剩余风险：当前 P3 本地 pytest repair 用户级闭环无阻断项；超出 bounded repair rules 的复杂代码修改仍落回 AgentServer/capability pipeline。
 
 ### P4 SciForge Self-Improvement Coding
 
@@ -391,9 +393,10 @@ Root boundary：generated-task execution syntax preflight / bounded repair rerun
 
 ### P5 Methodology / Experimental Design
 
-状态：ready-for-next-milestone / local-methodology-finalizer-integrated-targeted-pass / needs-browser-recheck
+状态：pass / local-methodology-finalizer-browser-closed
 建议任务：带资源/伦理/样本限制的 protocol review 或实验设计迭代。
 重点挑战：`DISC-20260517-P5-004` primary task syntax failure 后 supplemental artifacts 是否能形成 coherent repair-needed 或 promoted repaired attempt。
+最新闭环：2026-05-18 integration Browser `http://127.0.0.1:5773` run `project-literature-evidence-review-mpb46tpx-ugb1mr` / verified rerun 使用当前 methodology artifact 写回 `task-results/methodology-final-package-75d33c5a09ea/`，包含 `final_protocol.md`、`sample_statistics.md`、`risk_register.md`、`execution_checklist.md`、`alternative_plan.md`、`preregistration_notes.md`、`manifest.json`；主回复说明 9 independent biological units、技术重复非独立、探索性功效、缺口和下一步。修复同轮发现的 cross-runtime 污染：methodology finalizer stage 排在 tabular 前，tabular 对 final protocol/risk register/preregistration durable writeback prompt fail-open；finalizer 现在输出 verification result，UI 显示 `Verification: 已验证`。
 
 ### P6 Long-Context / Deliverable Iteration
 
@@ -585,6 +588,8 @@ docs/archive/
 ```
 
 ## Activity Log
+
+- 2026-05-18 19:26 Integration Worker：按用户要求同步所有 worktree 到最新 `origin/main`。P2/P3/P4/P5 dirty worktree 先归档到 `.sciforge/integration-worktree-archives/20260518-1905-sync-to-main/`（status、diff stat、tracked patch、untracked tar）并 `stash -u` 保存原现场，然后切到 detached `4aa1ace`；所有存在的 `.codex/worktrees/*/SciForge` 也切到 detached `4aa1ace`；仅 `/private/tmp/sciforge-main-sync.L351Zv` 是缺失 prunable 记录，未 prune。继续推进 P2/P3/P5 剩余风险到 browser 闭环：P2 tabular runtime 补第二个 QC chart artifact，integration Browser run `project-literature-evidence-review-mpb3yp7j-ybg3iy` satisfied/verified，交付 QC、模型、CI/p、sensitivity、两个 chart、复跑命令；P3 修 cross-runtime 污染，code-debug stage 先于 tabular，tabular 对 pytest/debug/patch fail-open，Browser run `project-literature-evidence-review-mpb42xmh-pa7orn` 完成 initial pytest fail -> patch -> rerun pass；P5 修 methodology finalizer 与 tabular 污染，finalizer 先于 tabular，tabular 对 final protocol/risk register/preregistration durable writeback fail-open，finalizer 增加 verification result，Browser run `project-literature-evidence-review-mpb46tpx-ugb1mr` verified 写出 `task-results/methodology-final-package-75d33c5a09ea/`。设计文档更新 bounded local closure runtime 优先级/fail-open 规则。验证：targeted local-tabular/local-code-debug/local-methodology/gateway policy tests pass，`npm run typecheck` pass，`git diff --check` pass，`npm run verify:single-agent-final` pass（1302 tests、C01-C18、no-legacy guard、16 Web E2E、final evidence manifest）。
 
 - 2026-05-18 18:55 Integration Worker：按用户要求复查其他 worktree；`git fetch --all --prune` 后本地/远端 `codex/*`、`integration/*` 候选分支相对 `main` 均 `ahead=0`，无未合并提交。发现 `SciForge-p2-data-analysis-gauntlet`、`SciForge-p3-code-debug-repair`、`SciForge-p4-self-improvement`、`SciForge-p5-methodology-repair` 仍有旧基线 dirty worktree diff；整棵 diff 相对当前 `main` 会删除/回退约 9k 行主线 contract/gateway/UI 文件，已跳过 destructive merge。已从 dirty diff 中小步摘取并集成三个通用自包含 runtime：`local-tabular-analysis-runtime`、`local-code-debug-runtime`、`local-methodology-finalizer-runtime`，接入 gateway stage order，并更新 `docs/Architecture.md` 的 bounded local closure runtime 设计说明；P3 旧 `generated-task-syntax-preflight` 未搬入，因为主线已有更新的 syntax preflight/repair 实现。验证：local runtime targeted tests 31/31 pass，`generation-gateway.policy.test.ts` 7/7 pass，`npm run typecheck` pass，`git diff --check` pass，`npm run smoke:no-legacy-paths` pass（0 tracked findings），`npm run verify:single-agent-final` pass（1300 tests、C01-C18、no-legacy guard、16 Web E2E、final evidence manifest）。剩余风险：P2/P3/P5 仍需对应 Browser 端到端 recheck；P4 dirty diff 未发现可安全摘取的独立小步，需 owner 基于当前 main 重新拆分。
 

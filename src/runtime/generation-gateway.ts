@@ -242,11 +242,11 @@ export const GATEWAY_PIPELINE_STAGE_ORDER: GatewayPipelineStageName[] = [
   STAGE_ARTIFACT_MUTATION_FAST_PATH,
   STAGE_RUNTIME_EXECUTION_CONSTRAINTS,
   STAGE_VISION_SENSE_RUNTIME,
+  STAGE_LOCAL_CODE_DEBUG_RUNTIME,
+  STAGE_LOCAL_METHODOLOGY_FINALIZER_RUNTIME,
   STAGE_LOCAL_TABULAR_ANALYSIS_RUNTIME,
   STAGE_LOCAL_DATA_SENSITIVITY_RUNTIME,
-  STAGE_LOCAL_CODE_DEBUG_RUNTIME,
   STAGE_LOCAL_REPRODUCIBLE_METHOD_RUNTIME,
-  STAGE_LOCAL_METHODOLOGY_FINALIZER_RUNTIME,
   STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS,
   STAGE_AGENTSERVER_GENERATION,
 ];
@@ -346,6 +346,20 @@ export const GATEWAY_PIPELINE_STAGES: GatewayPipelineStage[] = [
     },
   },
   {
+    name: STAGE_LOCAL_CODE_DEBUG_RUNTIME,
+    async execute(context) {
+      const payload = await tryRunLocalCodeDebugRuntime(context.request, context.telemetry.callbacks);
+      return payload ? { kind: 'short-circuit', payload } : { kind: 'continue' };
+    },
+  },
+  {
+    name: STAGE_LOCAL_METHODOLOGY_FINALIZER_RUNTIME,
+    async execute(context) {
+      const payload = await tryRunLocalMethodologyFinalizerRuntime(context.request, context.telemetry.callbacks);
+      return payload ? { kind: 'short-circuit', payload } : { kind: 'continue' };
+    },
+  },
+  {
     name: STAGE_LOCAL_TABULAR_ANALYSIS_RUNTIME,
     async execute(context) {
       const payload = await tryRunLocalTabularAnalysisRuntime(context.request, context.telemetry.callbacks);
@@ -360,23 +374,9 @@ export const GATEWAY_PIPELINE_STAGES: GatewayPipelineStage[] = [
     },
   },
   {
-    name: STAGE_LOCAL_CODE_DEBUG_RUNTIME,
-    async execute(context) {
-      const payload = await tryRunLocalCodeDebugRuntime(context.request, context.telemetry.callbacks);
-      return payload ? { kind: 'short-circuit', payload } : { kind: 'continue' };
-    },
-  },
-  {
     name: STAGE_LOCAL_REPRODUCIBLE_METHOD_RUNTIME,
     async execute(context) {
       const payload = await tryRunLocalReproducibleMethodRuntime(context.request, context.telemetry.callbacks);
-      return payload ? { kind: 'short-circuit', payload } : { kind: 'continue' };
-    },
-  },
-  {
-    name: STAGE_LOCAL_METHODOLOGY_FINALIZER_RUNTIME,
-    async execute(context) {
-      const payload = await tryRunLocalMethodologyFinalizerRuntime(context.request, context.telemetry.callbacks);
       return payload ? { kind: 'short-circuit', payload } : { kind: 'continue' };
     },
   },

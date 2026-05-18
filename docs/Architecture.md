@@ -697,6 +697,8 @@ SciForge 可以在 AgentServer 之前运行少量 deterministic local closure ru
 - `local-code-debug-runtime`：当用户明确给出 `python -m pytest ...` 这类本地测试命令并要求 root cause/patch/rerun 时，先运行测试，只应用内置 bounded repair rules，再复跑同一命令；无法定位实现文件或规则不匹配时返回 coherent failed-with-reason，而不是假成功。
 - `local-methodology-finalizer-runtime`：当用户基于当前 artifact 明确要求写回/保存最终 methodology protocol package，且禁止或不需要外部调用时，从当前 refs/session artifacts 生成 durable protocol、sample/statistics、risk register、execution checklist、preregistration notes 和 manifest。
 
+这些 runtime 的路由优先级按“显式文件修改 / durable writeback / 数据分析 follow-up”排序：code-debug 和 methodology finalizer 先于 tabular analysis。tabular follow-up 必须对 `pytest`/代码补丁/最终 protocol package/risk register/preregistration 等显式非数据分析请求 fail-open，避免上一轮 CSV artifact 污染当前 coding 或 methodology 任务。
+
 这些 runtime 的触发条件必须锚定当前 prompt、显式文件/refs、当前 artifacts 或 workspace session artifact；不能读取旧失败记录来推断新任务，也不能在缺少输入材料时编造结果。任何超出 bounded rules 的复杂推理、外部检索、provider 选择、长程代码修改或多阶段计划仍应落回 AgentServer/capability pipeline，并通过标准失败恢复或 provider recovery 交付。
 
 T096/T097 升级后的可复现任务链路：

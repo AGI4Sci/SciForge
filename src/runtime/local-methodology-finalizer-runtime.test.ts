@@ -31,7 +31,11 @@ test('local methodology finalizer writes a durable protocol package from current
 
   assert.ok(payload);
   assert.equal(payload.displayIntent?.taskOutcome, 'satisfied');
+  assert.equal((payload.displayIntent?.verificationStatus as { verdict?: string } | undefined)?.verdict, 'pass');
+  assert.equal(payload.verificationResults?.[0]?.verdict, 'pass');
+  assert.match(payload.verificationResults?.[0]?.critique ?? '', /manifest plus 6 package file/);
   assert.equal(payload.executionUnits[0]?.tool, 'sciforge.local-methodology-finalizer.write-package');
+  assert.match(String(payload.executionUnits[0]?.verificationRef ?? ''), /^verification:verify-methodology-final-package-/);
   assert.match(payload.message, /写入 task-results\/methodology-final-package-/);
   assert.match(payload.message, /9 independent biological units|9 个独立/);
   assert.doesNotMatch(payload.message, /AgentServer generation stopped|repair-needed/i);

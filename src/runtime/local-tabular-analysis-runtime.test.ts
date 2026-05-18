@@ -56,16 +56,21 @@ S014,treatment,D,b4,14.5,mg/L,9.1,mg/L,95,duplicate correction candidate`;
   assert.ok(refs.some((ref) => ref.endsWith('analysis-report.md')));
   assert.ok(refs.some((ref) => ref.endsWith('rerun_analysis.py')));
   assert.equal(deliveryOf(payload?.artifacts?.find((artifact) => artifact.type === 'research-report')).role, 'primary-deliverable');
-  assert.equal(deliveryOf(payload?.artifacts?.find((artifact) => artifact.type === 'figure')).previewPolicy, 'open-system');
+  assert.equal(payload?.artifacts?.filter((artifact) => artifact.type === 'figure').length, 2);
+  assert.equal(deliveryOf(payload?.artifacts?.find((artifact) => String(artifact.id ?? '').endsWith('-chart'))).previewPolicy, 'open-system');
   assert.equal(payload?.verificationResults?.[0]?.verdict, 'pass');
   assert.match(String(payload?.executionUnits?.[0]?.verificationRef ?? ''), /^verification:local-tabular-rerun-/);
   const reportRef = refs.find((ref) => ref.endsWith('analysis-report.md'))!.replace(/^file:/, '');
+  const qcChartRef = refs.find((ref) => ref.endsWith('qc-summary.svg'))!.replace(/^file:/, '');
   const report = await readFile(join(workspace, reportRef), 'utf8');
+  const qcChart = await readFile(join(workspace, qcChartRef), 'utf8');
   assert.match(report, /## QC/);
   assert.match(report, /## Sensitivity/);
   assert.match(report, /## Design Diagnostics/);
   assert.match(report, /Approximate 95% CI/);
   assert.match(report, /Rerun Command/);
+  assert.match(report, /QC inclusion chart/);
+  assert.match(qcChart, /QC inclusion summary/);
 });
 
 test('local tabular analysis runtime reads referenced workspace CSV files', async () => {
@@ -359,6 +364,66 @@ P10,East,coaching,60,70,`,
   assert.match(followup?.message ?? '', /Robustness:/);
   assert.match(followup?.message ?? '', /Limitations:/);
   assert.equal(followup?.executionUnits?.[0]?.tool, 'sciforge.local-tabular-analysis.csv.followup');
+});
+
+test('local tabular analysis runtime does not hijack explicit code-debug pytest turns', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-local-tabular-analysis-code-debug-'));
+  const initial = await tryRunLocalTabularAnalysisRuntime({
+    skillDomain: 'literature',
+    prompt: `Analyze this education CSV with QC, cleaning, model, chart, sensitivity, rerun command, and limitations.
+participant,center,arm,pre_score,post_score
+P01,North,standard,62,64
+P02,North,coaching,61,70
+P03,North,coaching,59,68
+P04,South,standard,58,57
+P05,South,coaching,63,74
+P06,South,standard,60,61
+P07,East,standard,64,65
+P08,East,coaching,60,70`,
+    workspacePath: workspace,
+    artifacts: [],
+  });
+  assert.ok(initial);
+
+  const followup = await tryRunLocalTabularAnalysisRuntime({
+    skillDomain: 'literature',
+    prompt: 'Debug p3-debug/stats_impl.py. First run exactly: python -m pytest p3-debug/test_stats_impl.py -q, patch the implementation file, rerun tests, and report remaining risks.',
+    workspacePath: workspace,
+    artifacts: initial.artifacts ?? [],
+    references: initial.objectReferences ?? [],
+  });
+
+  assert.equal(followup, undefined);
+});
+
+test('local tabular analysis runtime does not hijack durable methodology finalizer turns', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-local-tabular-analysis-methodology-'));
+  const initial = await tryRunLocalTabularAnalysisRuntime({
+    skillDomain: 'literature',
+    prompt: `Analyze this education CSV with QC, cleaning, model, chart, sensitivity, rerun command, and limitations.
+participant,center,arm,pre_score,post_score
+P01,North,standard,62,64
+P02,North,coaching,61,70
+P03,North,coaching,59,68
+P04,South,standard,58,57
+P05,South,coaching,63,74
+P06,South,standard,60,61
+P07,East,standard,64,65
+P08,East,coaching,60,70`,
+    workspacePath: workspace,
+    artifacts: [],
+  });
+  assert.ok(initial);
+
+  const followup = await tryRunLocalTabularAnalysisRuntime({
+    skillDomain: 'literature',
+    prompt: '请基于刚才已有 methodology artifact 写回最终 protocol package，更新 sample/statistics table、risk register、execution checklist 和 preregistration notes。',
+    workspacePath: workspace,
+    artifacts: initial.artifacts ?? [],
+    references: initial.objectReferences ?? [],
+  });
+
+  assert.equal(followup, undefined);
 });
 
 test('local tabular analysis runtime prefers newly referenced CSV over stale current-analysis artifacts', async () => {
