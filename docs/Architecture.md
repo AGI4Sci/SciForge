@@ -676,6 +676,7 @@ User turn
   -> applyConversationPolicy
   -> build HarnessContract + context envelope + capability broker brief
   -> optional observe/action adapter only when explicitly selected and allowed
+  -> bounded local closure runtime when the request is explicit and self-contained
   -> AgentServer backend owns reasoning / planning / capability selection
   -> request AgentServer /api/agent-server/runs/stream
   -> direct ToolPayload or generated workspace task
@@ -685,6 +686,18 @@ User turn
   -> restore ConversationProjection
   -> UI renders projection + ref previews
 ```
+
+### Bounded Local Closure Runtimes
+
+SciForge 可以在 AgentServer 之前运行少量 deterministic local closure runtimes，但它们不是 prompt 特例，也不能绕过用户目标验收。它们只处理输入、证据和执行边界都已经在当前 workspace 内可核查的任务，并且必须返回完整 `ToolPayload`、`ConversationProjection` 兼容状态、artifact/object refs、execution units 和 verification records。
+
+当前 gateway 顺序中这些 runtime 位于 provider preflight、direct-context/artifact mutation、turn execution constraints 和 observe/vision 之后，AgentServer dispatch 之前：
+
+- `local-tabular-analysis-runtime`：当用户提供或引用 CSV/TSV 并明确要求 QC、统计模型、图表、敏感性分析和复跑命令时，生成 workspace 内可复跑分析包；后续图表/QC/robustness 问题只读取已写 artifact。
+- `local-code-debug-runtime`：当用户明确给出 `python -m pytest ...` 这类本地测试命令并要求 root cause/patch/rerun 时，先运行测试，只应用内置 bounded repair rules，再复跑同一命令；无法定位实现文件或规则不匹配时返回 coherent failed-with-reason，而不是假成功。
+- `local-methodology-finalizer-runtime`：当用户基于当前 artifact 明确要求写回/保存最终 methodology protocol package，且禁止或不需要外部调用时，从当前 refs/session artifacts 生成 durable protocol、sample/statistics、risk register、execution checklist、preregistration notes 和 manifest。
+
+这些 runtime 的触发条件必须锚定当前 prompt、显式文件/refs、当前 artifacts 或 workspace session artifact；不能读取旧失败记录来推断新任务，也不能在缺少输入材料时编造结果。任何超出 bounded rules 的复杂推理、外部检索、provider 选择、长程代码修改或多阶段计划仍应落回 AgentServer/capability pipeline，并通过标准失败恢复或 provider recovery 交付。
 
 T096/T097 升级后的可复现任务链路：
 

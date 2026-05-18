@@ -333,7 +333,7 @@ Root boundary：AgentServer generated-task authoring 仍会返回 static/non-int
 
 ### P2 Data Analysis / Reproducibility
 
-状态：partial / strict-eval-failed-fixed-generation-boundary
+状态：partial / local-tabular-runtime-integrated-targeted-pass / needs-browser-recheck
 建议任务：用户上传或描述 messy CSV/TSV 分析任务，要求 QC、统计模型、图表、复跑命令、sensitivity/robustness 和 selected chart follow-up。
 重点挑战：generated code syntax/repair、result consistency、artifact grounding。
 
@@ -359,7 +359,7 @@ Root boundary：AgentServer generated-task generation lifecycle / entrypoint con
 
 ### P3 Paper Reproduction / Code Debug
 
-状态：partial / strict-eval-failed-targeted-fix-landed
+状态：partial / local-code-debug-runtime-integrated-targeted-pass / needs-browser-recheck
 建议任务：真实代码调试/论文复现任务，要求先跑测试、定位 root cause、改代码、复跑测试、报告 remaining risks。
 重点挑战：`DISC-20260517-P3-005` generated task syntax preflight 后是否能 bounded repair/regenerate，而不是把内部生成错误当终态主回复。
 
@@ -391,7 +391,7 @@ Root boundary：generated-task execution syntax preflight / bounded repair rerun
 
 ### P5 Methodology / Experimental Design
 
-状态：ready-for-next-milestone
+状态：ready-for-next-milestone / local-methodology-finalizer-integrated-targeted-pass / needs-browser-recheck
 建议任务：带资源/伦理/样本限制的 protocol review 或实验设计迭代。
 重点挑战：`DISC-20260517-P5-004` primary task syntax failure 后 supplemental artifacts 是否能形成 coherent repair-needed 或 promoted repaired attempt。
 
@@ -585,6 +585,8 @@ docs/archive/
 ```
 
 ## Activity Log
+
+- 2026-05-18 18:55 Integration Worker：按用户要求复查其他 worktree；`git fetch --all --prune` 后本地/远端 `codex/*`、`integration/*` 候选分支相对 `main` 均 `ahead=0`，无未合并提交。发现 `SciForge-p2-data-analysis-gauntlet`、`SciForge-p3-code-debug-repair`、`SciForge-p4-self-improvement`、`SciForge-p5-methodology-repair` 仍有旧基线 dirty worktree diff；整棵 diff 相对当前 `main` 会删除/回退约 9k 行主线 contract/gateway/UI 文件，已跳过 destructive merge。已从 dirty diff 中小步摘取并集成三个通用自包含 runtime：`local-tabular-analysis-runtime`、`local-code-debug-runtime`、`local-methodology-finalizer-runtime`，接入 gateway stage order，并更新 `docs/Architecture.md` 的 bounded local closure runtime 设计说明；P3 旧 `generated-task-syntax-preflight` 未搬入，因为主线已有更新的 syntax preflight/repair 实现。验证：local runtime targeted tests 31/31 pass，`generation-gateway.policy.test.ts` 7/7 pass，`npm run typecheck` pass，`git diff --check` pass，`npm run smoke:no-legacy-paths` pass（0 tracked findings），`npm run verify:single-agent-final` pass（1300 tests、C01-C18、no-legacy guard、16 Web E2E、final evidence manifest）。剩余风险：P2/P3/P5 仍需对应 Browser 端到端 recheck；P4 dirty diff 未发现可安全摘取的独立小步，需 owner 基于当前 main 重新拆分。
 
 - 2026-05-18 18:45 Integration Worker：继续推进 `DISC-20260517-P5-004` 到用户级闭环；`git fetch --all --prune` 后候选 `codex/*` / `integration/*` 无新增可合 worker diff，本轮未合并分支。通用修复：删除 AgentServer repair prompt 内部 duplicate ref-first policy，统一使用 contract-only `agentserver-repair-context-policy`；已投影 contract policy 可作为 continuation source，legacy `repairContextPolicy` 只审计不采纳；supplement/default repair policy 不再把 raw stderr/traceback 注入 prompt/result 可见 failureReason/selfHealReason；无明确 handoff 时 fail-closed 为 refs-only。UI/supplement 修复：runtime ui manifest 不再为缺失 targeted artifact 编造 `research-report` phantom ref，supplement lifecycle smoke 增加 primary+supplement artifacts/uiManifest additive merge 断言。文档更新 `docs/AgentHarnessStandard.md`、`docs/Architecture.md`。验证：`smoke-agentserver-compact-repair`、`smoke-agentserver-supplement`、`smoke-agentserver-supplement-scoped`、interactive/work-evidence/generated-output targeted tests、`npm run typecheck`、`npm run smoke:no-legacy-paths`、`git diff --check`、`npm run verify:single-agent-final` 全部通过（1269 tests、C01-C18、no-legacy guard、16 Web E2E、final evidence manifest）。
 
