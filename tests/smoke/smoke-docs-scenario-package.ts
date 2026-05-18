@@ -10,6 +10,7 @@ const requiredDocs = [
   'docs/Usage.md',
   'docs/Architecture.md',
   'docs/TuiGuiProtocol.md',
+  'docs/CodexRuntimeMigration.md',
   'docs_old/README_SNAPSHOT.md',
   'docs_old/SciForge-SingleAgent-Architecture.md',
   'docs_old/AgentHarnessStandard.md',
@@ -40,6 +41,7 @@ const docsIndex = await readFile('docs/README.md', 'utf8');
 assert.match(docsIndex, /\[`Usage\.md`\]\(Usage\.md\)/);
 assert.match(docsIndex, /\[`Architecture\.md`\]\(Architecture\.md\)/);
 assert.match(docsIndex, /\[`TuiGuiProtocol\.md`\]\(TuiGuiProtocol\.md\)/);
+assert.match(docsIndex, /\[`CodexRuntimeMigration\.md`\]\(CodexRuntimeMigration\.md\)/);
 assert.match(docsIndex, /\[`..\/docs_old`\]\(..\/docs_old\)/);
 const oldDocsSnapshot = await readFile('docs_old/README_SNAPSHOT.md', 'utf8');
 assert.match(oldDocsSnapshot, /旧设计快照/);
@@ -55,9 +57,11 @@ assert.match(architectureText, /Hot region 至少包含 focused panel/);
 assert.match(architectureText, /只读虚拟资源树/);
 assert.match(architectureText, /GUI 的智能是确定性的 presentation autonomy/);
 assert.match(architectureText, /不需要独立 AgentServer/);
+assert.match(architectureText, /deepseek-v4-flash/);
 const protocolText = await readFile('docs/TuiGuiProtocol.md', 'utf8');
 assert.match(protocolText, /GUI 给 TUI 的输入全部是文本/);
 assert.match(protocolText, /不要求独立 AgentServer/);
+assert.match(protocolText, /Codex custom provider \/ proxy/);
 assert.match(protocolText, /GUI 内部语义事件总线/);
 assert.match(protocolText, /Read-Only GUI Resource Tree/);
 assert.match(protocolText, /gui\.list/);
@@ -67,6 +71,12 @@ assert.match(protocolText, /gui\.apply_batch/);
 assert.match(protocolText, /interactionMode/);
 assert.match(protocolText, /suggestions/);
 assert.match(protocolText, /GUI 不用 LLM 猜应该调用什么 GUI 函数/);
+const codexMigrationText = await readFile('docs/CodexRuntimeMigration.md', 'utf8');
+assert.match(codexMigrationText, /Phase 1：`codex exec --json`/);
+assert.match(codexMigrationText, /Phase 2：`AgentCliAdapter`/);
+assert.match(codexMigrationText, /Dev Codex/);
+assert.match(codexMigrationText, /Runtime Codex/);
+assert.match(codexMigrationText, /sciforge-runtime-deepseek/);
 assert.match(architectureText, /SciForge 不再定义 `registerCommand`/);
 assert.match(architectureText, /Capability Discovery/);
 assert.match(architectureText, /Harness \/ Policy 属于 TUI 原生扩展/);

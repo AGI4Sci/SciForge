@@ -8,7 +8,7 @@ SciForge 是 TUI agent 的 GUI extension，不是 agent host。
 
 > **TUI / agent host 拥有全部任务逻辑；GUI 把用户意图变成文本，并把自己作为 intent-based `gui.*` extension 暴露给 TUI。**
 
-Codex CLI、Claude Code CLI 或其它终端 TUI host 负责上下文、记忆、工具、插件、算法、修复和执行。SciForge GUI 负责人体工学输入、可视化展示、确认、输入收集和焦点控制。
+Codex backend 负责上下文、记忆、工具、插件、算法、修复和执行。SciForge 长期只支持 Codex backend；DeepSeek `deepseek-v4-flash` 是默认 model provider，而不是另一个 backend。SciForge GUI 负责人体工学输入、可视化展示、确认、输入收集和焦点控制。
 
 ## 最终分层
 
@@ -120,8 +120,8 @@ GUI 不是无脑像素壳，也不是第二个 agent。它应该“对任务无�
 
 事实前提：
 
-1. Codex CLI / Claude Code CLI 已经能在终端里作为成熟 TUI agent host 提供服务。
-2. Codex / Claude Code 已经有各自原生 plugin、skill、tool、MCP 机制。
+1. Codex CLI / app-server 已经能在终端 host 边界后提供 agent 能力和富客户端事件流。
+2. Codex 已经有原生 plugin、skill、tool、MCP 和 custom model provider 配置。
 3. TUI 接受的信息用文本就够。
 4. GUI 作为 TUI 可调用的 extension，比 GUI 自己用 LLM 猜 UI 操作更稳定。
 
@@ -159,10 +159,12 @@ GUI 不是无脑像素壳，也不是第二个 agent。它应该“对任务无�
 SciForge 不定义新的 agent extension API。所有算法和策略扩展都使用目标 TUI host 的原生机制：
 
 - Codex CLI plugin / skill / tool / MCP。
-- Claude Code skill / slash command / MCP / tool。
-- 自研 TUI host 的内部插件系统。
+- Codex custom model provider / `model_providers.<id>.base_url`。
+- 必要时的本地 Codex provider proxy。
 
-默认集成目标是 Codex CLI 或 Claude Code CLI：GUI 启动或连接一个终端进程，把用户操作翻译成文本写入该进程，再消费其结构化事件流或 JSONL 输出。SciForge 不再要求常驻 AgentServer；历史 `AgentServer` / `runtime gateway` 只能作为当前代码兼容层或迁移来源，不是最终架构依赖。
+默认生产集成目标是上游 Codex backend + custom model provider，优先通过配置接入 DeepSeek `deepseek-v4-flash` 或用户配置的低成本 provider endpoint。GUI 启动或连接 Codex app-server / Codex CLI 进程，把用户操作翻译成文本写入该进程，再消费其结构化事件流或 JSONL 输出。SciForge 不再要求常驻 AgentServer；历史 `AgentServer` / `runtime gateway` 只能作为当前代码兼容层或迁移来源，不是最终架构依赖。
+
+迁移只做两阶段：Phase 1 使用 `codex exec --json` 作为轻量事件源；Phase 2 抽出 `AgentCliAdapter` 隔离进程和 JSONL 细节。Codex app-server 暂不作为主迁移路径，等需要长期 thread、审批和富客户端状态时再接入。细节见 [`CodexRuntimeMigration.md`](CodexRuntimeMigration.md)。
 
 因此 SciForge 不再定义 `registerCommand`、`registerTool`、`registerPolicy`、`HarnessRuntime`、`CapabilityGateway` 或自己的 TUI plugin manifest。
 
@@ -213,9 +215,10 @@ React/UI 不做 provider branch、capability ranking、repair policy、prompt ro
 
 - 同一任务在纯 TUI 中可完成。
 - 接入 SciForge GUI 后只增加展示和交互能力，不增加算法能力。
-- 不需要独立 AgentServer；默认直接连接 Codex CLI / Claude Code CLI 终端服务。
+- 不需要独立 AgentServer；默认直接连接 Codex backend。
+- 默认运行期不得消耗 OpenAI token，除非用户显式 opt in；生产默认应让 Codex backend 走 DeepSeek `deepseek-v4-flash` 或用户配置的低成本 provider/proxy。
 - GUI 没有 provider 分支、repair 策略、capability ranking、prompt route。
 - 所有 GUI 按钮最终只发送文本。
 - TUI 用原生机制调用 intent-based `gui.*` tools；GUI 可协商、延迟或拒绝。
 - GUI 默认只向 TUI 披露 shell + hot region 状态。
-- 算法模块可以直接给 Codex CLI / Claude Code CLI 使用。
+- 算法模块可以直接给 Codex plugin / skill / tool / MCP 使用。

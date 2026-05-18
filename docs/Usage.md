@@ -4,7 +4,7 @@
 
 本文只描述当前代码已经落地的用法。脚本真相源是 [`../package.json`](../package.json)，配置默认值真相源是 [`../src/ui/src/config.ts`](../src/ui/src/config.ts)。
 
-架构目标已经调整为 **SciForge GUI 是 TUI agent 的 GUI extension**；见 [`Architecture.md`](Architecture.md) 和 [`TuiGuiProtocol.md`](TuiGuiProtocol.md)。最终形态默认直接连接 Codex CLI / Claude Code CLI 终端进程，不需要独立 AgentServer。本文件里的 `workspace writer`、`AgentServer`、`runtime gateway`、`scenario` 等仍是当前实现路径或迁移期兼容层，不代表最终职责归属。
+架构目标已经调整为 **SciForge GUI 是 Codex backend 的 GUI extension**；见 [`Architecture.md`](Architecture.md) 和 [`TuiGuiProtocol.md`](TuiGuiProtocol.md)。最终形态默认连接 Codex app-server / CLI bridge，生产默认让 Codex 使用 DeepSeek `deepseek-v4-flash` 或用户配置的低成本 provider/proxy，不需要独立 AgentServer。本文件里的 `workspace writer`、`AgentServer`、`runtime gateway`、`scenario` 等仍是当前实现路径或迁移期兼容层，不代表最终职责归属。
 
 ## 快速启动
 
@@ -13,7 +13,7 @@
 - Node.js 20+
 - npm
 - 一个本地 workspace 目录
-- 目标架构下的 Codex CLI 或 Claude Code CLI
+- 目标架构下的 Codex app-server / CLI bridge，以及 DeepSeek provider/proxy 配置
 
 安装依赖并启动完整本地工作台：
 
@@ -53,15 +53,48 @@ UI 配置存于浏览器 `localStorage`，workspace writer 的本地配置可通
 
 核心字段：
 
-- `agentServerBaseUrl`：迁移期兼容字段。最终应替换为 Codex CLI / Claude Code CLI 进程连接配置。
+- `agentServerBaseUrl`：迁移期兼容字段。最终应替换为 Codex app-server / CLI bridge 连接配置。
 - `workspaceWriterBaseUrl`：workspace writer，默认 `http://127.0.0.1:5174`。
 - `workspacePath`：当前工作区根目录。代码会把传入的 `/.sciforge` 子路径归一回 workspace 根。
 - `agentBackend`：当前允许值为 `codex`、`openteam_agent`、`claude-code`、`hermes-agent`、`openclaw`、`gemini`。
-- `modelProvider`、`modelBaseUrl`、`modelName`、`apiKey`：迁移期兼容字段。最终模型、认证和工具权限由目标 TUI CLI 自己管理。
+- `modelProvider`、`modelBaseUrl`、`modelName`、`apiKey`：迁移期兼容字段。最终应成为 Codex custom provider / provider proxy 配置；默认 provider 应为 DeepSeek，默认模型为 `deepseek-v4-flash`，不得静默 fallback 到 OpenAI。
 - `requestTimeoutMs`：UI 等待 workspace stream 的超时，默认 900000ms。
 - `maxContextWindowTokens`：上下文预算，默认 200000。
 - `peerInstances`：双实例互修目标，字段见 [`../src/ui/src/domain.ts`](../src/ui/src/domain.ts) 的 `PeerInstance`。
 - `feedbackGithubRepo`、`feedbackGithubToken`：反馈收件箱同步 GitHub Issue 时使用。
+
+## Codex 实例隔离
+
+开发 SciForge 的 Codex 和 SciForge 运行期 Codex 必须分开：
+
+```text
+Dev Codex
+  model: GPT-5.5 或开发者选择的模型
+  cwd: SciForge repo
+  purpose: 修改 SciForge 代码
+
+Runtime Codex
+  profile: sciforge-runtime-deepseek
+  model provider: DeepSeek deepseek-v4-flash 或 provider proxy
+  cwd: 用户 workspace
+  purpose: 服务 SciForge 用户任务
+```
+
+示例：
+
+```bash
+codex --model gpt-5.5 -C /path/to/SciForge
+```
+
+```bash
+codex exec --json \
+  --profile sciforge-runtime-deepseek \
+  --cd "$SCIFORGE_USER_WORKSPACE" \
+  --sandbox workspace-write \
+  "$SCIFORGE_USER_TEXT_COMMAND"
+```
+
+Runtime Codex 不能静默继承开发者 profile；缺少 DeepSeek key、runtime profile 或 provider proxy 时必须 fail closed。完整迁移教程见 [`CodexRuntimeMigration.md`](CodexRuntimeMigration.md)。
 
 ## 常用工作流
 
@@ -89,12 +122,14 @@ ChatPanel
 
 用户不需要手工拼现有 HTTP payload。选择 scenario、添加文件/结果引用、输入问题后，当前 SciForge 会把 turn、显式 refs、最近 run、artifact summary、组件选择和 backend 配置组装成 handoff payload。
 
-上面是当前代码路径，不是目标路径。目标架构应删除 AgentServer 这一层，让 Codex CLI / Claude Code CLI 在终端中直接承担 agent host：
+上面是当前代码路径，不是目标路径。目标架构应删除 AgentServer 这一层，让 Codex app-server / CLI bridge 在终端中直接承担 agent host：
 
 ```text
 GUI event
   -> terminal-equivalent text
-  -> Codex CLI / Claude Code CLI terminal process
+  -> Codex app-server / CLI bridge
+  -> Codex custom model provider
+  -> DeepSeek deepseek-v4-flash / configured provider proxy by default
   -> native plugins / skills / tools / MCP
   -> read-only GUI resources for shell/hot-region/region-detail state
   -> intent-based gui.* tool calls for presentation
@@ -174,7 +209,7 @@ export SCIFORGE_VISION_DESKTOP_BRIDGE=1
 
 ## Skill 晋升
 
-迁移期 runtime 生成的成功 workspace task 可以生成 skill promotion proposal。真实逻辑在 [`../src/runtime/skill-promotion.ts`](../src/runtime/skill-promotion.ts)。目标架构下，skill/plugin 晋升应优先沉淀为 Codex CLI / Claude Code CLI 原生 skill、plugin、MCP 或 slash command。
+迁移期 runtime 生成的成功 workspace task 可以生成 skill promotion proposal。真实逻辑在 [`../src/runtime/skill-promotion.ts`](../src/runtime/skill-promotion.ts)。目标架构下，skill/plugin 晋升应优先沉淀为 Codex 原生 tool、skill、plugin、MCP 或 slash command。
 
 流程：
 

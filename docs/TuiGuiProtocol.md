@@ -8,7 +8,7 @@ SciForge 不定义新的 TUI plugin/runtime 协议。最终协议只有两个方
 
 > **GUI 给 TUI 的输入全部是文本；TUI 通过原生 tool/plugin/MCP 机制向 GUI 表达展示意图。**
 
-Codex CLI、Claude Code CLI 或其他终端 TUI host 如何注册 plugin、skill、tool、MCP、slash command，全部使用各自原生机制。SciForge 不定义 `registerCommand`、`registerTool`、`registerPolicy` 这类 host API，也不要求独立 AgentServer。
+Codex CLI / app-server 如何注册 tool、plugin、skill、MCP、slash command 和 custom model provider，全部使用 Codex 原生机制。SciForge 不定义 `registerCommand`、`registerTool`、`registerPolicy` 这类 host API，也不要求独立 AgentServer。
 
 ## 数据方向
 
@@ -448,11 +448,12 @@ The short rule is: GUI is smart about presentation, dumb about tasks.
 
 | Host | 适配方式 |
 |---|---|
-| Codex CLI | GUI 连接 Codex CLI 终端进程；用 Codex 原生 plugin/skill/tool/MCP 机制声明 `gui.*` intent tools，并消费 app-server 或 JSONL event stream。 |
-| Claude Code CLI | GUI 连接 Claude Code CLI 终端进程；用 Claude Code 原生 tool/MCP/skill 机制声明 `gui.*` intent tools，并消费其可用的结构化事件输出。 |
-| 自研 TUI | 可以内部实现同名 tools，但不把内部 API 变成 SciForge 标准。 |
+| Codex CLI / `codex exec --json` | Phase 1 生产迁移路径。GUI 或 bridge 启动 Codex CLI，注入同一组 `gui.*` tools / resources，并消费 JSONL event stream。 |
+| `AgentCliAdapter` | Phase 2 抽象层。隔离 Codex 进程启动、profile、workspace、JSONL parsing、stderr audit 和 exit code handling。 |
+| Codex app-server | 后续可选路径。只有当需要长期 thread、审批、历史和富客户端状态时再接入。 |
+| Codex custom provider / proxy | 默认成本路径。Codex backend 使用 DeepSeek `deepseek-v4-flash` 或本地 provider proxy；SciForge 不直接维护第二个 agent backend。 |
 
-AgentServer 不属于最终协议层。若当前实现仍存在 AgentServer adapter，它只是迁移期兼容层，目标是被 Codex CLI / Claude Code CLI 进程连接取代。
+AgentServer 不属于最终协议层。若当前实现仍存在 AgentServer adapter，它只是迁移期兼容层，目标是被 Codex app-server / CLI bridge 取代。
 
 ## 最小实现
 
@@ -460,7 +461,7 @@ AgentServer 不属于最终协议层。若当前实现仍存在 AgentServer adap
 2. GUI 内部建立 semantic event bus 和 hot-region projector。
 3. 把 shell、hot-region、region detail 和 debug material 暴露为只读 GUI resource tree。
 4. 通过目标 TUI 的原生方式注入 `gui.present`、`gui.ask_user`、`gui.notify`、`gui.set_status`、`gui.apply_batch`、`gui.get_context` 和只读 `gui.list/read/search/stat/watch`。
-5. GUI 直接连接 Codex CLI / Claude Code CLI 终端服务，不引入独立 AgentServer。
+5. GUI 直接连接 Codex backend；Codex 默认 model provider 走 DeepSeek `deepseek-v4-flash` 或用户配置的低成本 provider/proxy，OpenAI provider 仅在显式选择时使用。
 6. TUI agent 先读 GUI resources/context，再调 `gui.*` intent tools 表达视图意图。
 7. GUI 基于 revision、interaction mode、lastChangeOrigin 和 precondition 执行、延迟、拒绝或建议替代方案。
 8. 算法、capability discovery、harness、provider 都留在 TUI 原生扩展生态。
