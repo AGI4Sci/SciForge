@@ -204,11 +204,11 @@ export function ScenarioBuilderPanel({
     setSelection((current) => ({ ...current, [key]: next }));
     if (key === 'selectedSkillIds' || key === 'selectedToolIds') patchRuntimeSelection(key, next);
   }
-  function toolProviderRouteFor(routeKey: string, fallback: ToolProviderRouteOverride) {
-    return { ...fallback, ...(scenario.toolProviderRoutes?.[routeKey] ?? {}) };
+  function toolProviderRouteFor(routeKey: string, baseRoute: ToolProviderRouteOverride) {
+    return { ...baseRoute, ...(scenario.toolProviderRoutes?.[routeKey] ?? {}) };
   }
-  function patchToolProviderRoute(routeKey: string, fallback: ToolProviderRouteOverride, routePatch: Partial<ToolProviderRouteOverride>) {
-    const nextRoute = { ...toolProviderRouteFor(routeKey, fallback), ...routePatch };
+  function patchToolProviderRoute(routeKey: string, baseRoute: ToolProviderRouteOverride, routePatch: Partial<ToolProviderRouteOverride>) {
+    const nextRoute = { ...toolProviderRouteFor(routeKey, baseRoute), ...routePatch };
     const routes = { ...(scenario.toolProviderRoutes ?? {}), [routeKey]: nextRoute };
     patch({ toolProviderRoutes: routes });
   }

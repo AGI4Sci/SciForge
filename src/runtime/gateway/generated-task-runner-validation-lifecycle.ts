@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 import type { ValidationFindingProjectionInput } from '@sciforge-ui/runtime-contract/validation-repair-audit';
-import { capabilityIdsForGeneratedTaskProviderRoutes } from '@sciforge-ui/runtime-contract/capability-provider-policy';
+import { GENERATED_TASK_CAPABILITY_DISCOVERY_RULES, GENERATED_TASK_CAPABILITY_FIRST_RULES, PLAYWRIGHT_EDGE_PROVIDER_CLI_RELATIVE_URL, capabilityIdsForGeneratedTaskProviderRoutes, generatedTaskProviderEndpoint, generatedTaskProviderUsesMcpCli, generatedTaskProviderUsesWebWorkerCli } from '@sciforge-ui/runtime-contract/capability-provider-policy';
 import type { GatewayRequest, SkillAvailability, TaskAttemptRecord, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceTaskRunResult, WorkspaceTaskSpec } from '../runtime-types.js';
 import { errorMessage, isRecord, toRecordList, toStringList } from '../gateway-utils.js';
 import { sessionBundleRelForRequest } from '../session-bundle.js';
@@ -540,12 +540,7 @@ export async function buildGeneratedTaskRunInputLifecycle(
         status: 'available',
         api: ['search', 'expand', 'plan', 'explain'],
         progressiveDisclosure: true,
-        rules: [
-          'Use capability_discovery.search when compact capabilityProviderRoutes/capabilityBrokerBrief are insufficient or a provider/verification/repair route needs alternatives.',
-          'Use capability_discovery.expand only for selected capability ids; full schemas/examples/providers are not present in the initial handoff.',
-          'Use capability_discovery.plan for composition, fallback, missing provider, missing permission, and expected artifact planning.',
-          'Discovery output is audit/planning evidence only; complete the actual task through invoke_capability or an honest failed-with-reason ToolPayload.',
-        ],
+        rules: [...GENERATED_TASK_CAPABILITY_DISCOVERY_RULES],
         safety: {
           noSecrets: true,
           noInternalEndpoints: true,
@@ -562,13 +557,7 @@ export async function buildGeneratedTaskRunInputLifecycle(
       capabilityFirstPolicy: {
         schemaVersion: 'sciforge.generated-task-capability-first.v1',
         policy: 'provider-first',
-        rules: [
-          'Import sciforge_task from the generated task entrypoint directory for input loading, ToolPayload writing, and provider route inspection.',
-          'When capabilityProviderRoutes declares a ready capability route, call invoke_capability(task_input, capabilityId, input). invoke_provider remains a compatibility alias for provider-backed web capabilities.',
-          'Do not call requests, urllib, fetch, httpx, aiohttp, or Node http/https for web work that has a ready SciForge provider route.',
-          'After invoke_capability, check provider_result_is_empty(result); if empty, write_payload(output_path, empty_result_payload(...)) with refine/recover actions instead of waiting or repairing indefinitely.',
-          'If a provider route is unavailable, empty, unauthorized, or rate limited, write an honest repair-needed or failed-with-reason ToolPayload with recoverActions.',
-        ],
+        rules: [...GENERATED_TASK_CAPABILITY_FIRST_RULES],
       },
       generatedTaskPayloadPreflight: input.payloadPreflight
         ? generatedTaskPayloadPreflightForTaskInput(input.payloadPreflight)
@@ -596,15 +585,15 @@ function providerInvocationForGeneratedTask(providerRoutes: ReturnType<typeof ca
   const adapters = providerRoutes.routes
     .filter((route) => route.status === 'ready')
     .map((route) => {
-      const provider = route.providers.find((candidate) => candidate.providerId === route.primaryProviderId) ?? route.providers[0];
+      const candidate = route.providers.find((item) => item.providerId === route.primaryProviderId) ?? route.providers[0];
       const base = {
         capabilityId: route.capabilityId,
-        providerId: route.primaryProviderId ?? provider?.providerId,
+        providerId: route.primaryProviderId ?? candidate?.providerId,
         toolId: route.capabilityId,
         status: route.status,
       };
-      const endpoint = provider ? providerEndpoint(provider) : undefined;
-      if (route.capabilityId === 'playwright_edge_browser' || provider?.transport === 'mcp') {
+      const endpoint = generatedTaskProviderEndpoint(candidate);
+      if (generatedTaskProviderUsesMcpCli(route, candidate)) {
         const cli = localPlaywrightEdgeMcpCliAdapter();
         if (cli) {
           return {
@@ -617,7 +606,7 @@ function providerInvocationForGeneratedTask(providerRoutes: ReturnType<typeof ca
               ...(endpoint ? ['--mcp-url', endpoint] : []),
             ],
             inputArg: 'json-last',
-            timeoutMs: provider?.timeoutMs ?? 60000,
+            timeoutMs: candidate?.timeoutMs ?? 60000,
           };
         }
       }
@@ -626,11 +615,11 @@ function providerInvocationForGeneratedTask(providerRoutes: ReturnType<typeof ca
           ...base,
           kind: 'http',
           endpoint,
-          invokePath: provider?.invokePath ?? '/invoke',
-          timeoutMs: provider?.timeoutMs ?? 30000,
+          invokePath: candidate?.invokePath ?? '/invoke',
+          timeoutMs: candidate?.timeoutMs ?? 30000,
         };
       }
-      if (provider?.workerId === 'sciforge.web-worker' || /^sciforge\.web-worker\./.test(provider?.providerId ?? '')) {
+      if (generatedTaskProviderUsesWebWorkerCli(candidate)) {
         const cli = localWebWorkerCliAdapter();
         if (cli) {
           return {
@@ -639,7 +628,7 @@ function providerInvocationForGeneratedTask(providerRoutes: ReturnType<typeof ca
             command: cli.command,
             argsPrefix: [...cli.argsPrefix, 'invoke', route.capabilityId],
             inputArg: 'json-last',
-            timeoutMs: provider?.timeoutMs ?? 30000,
+            timeoutMs: candidate?.timeoutMs ?? 30000,
           };
         }
       }
@@ -653,13 +642,6 @@ function providerInvocationForGeneratedTask(providerRoutes: ReturnType<typeof ca
     schemaVersion: 'sciforge.generated-task-provider-invocation.v1',
     adapters,
   };
-}
-
-function providerEndpoint(provider: { endpoint?: unknown; baseUrl?: unknown; url?: unknown; invokeUrl?: unknown }) {
-  for (const value of [provider.invokeUrl, provider.endpoint, provider.baseUrl, provider.url]) {
-    if (typeof value === 'string' && /^https?:\/\//i.test(value)) return value.replace(/\/+$/, '');
-  }
-  return undefined;
 }
 
 function localWebWorkerCliAdapter() {
@@ -680,7 +662,7 @@ function localPlaywrightEdgeMcpCliAdapter() {
   try {
     const require = createRequire(import.meta.url);
     const tsxLoader = require.resolve('tsx');
-    const cliPath = fileURLToPath(new URL('../../../packages/observe/web/mcp/playwright-edge-provider-cli.ts', import.meta.url));
+    const cliPath = fileURLToPath(new URL(PLAYWRIGHT_EDGE_PROVIDER_CLI_RELATIVE_URL, import.meta.url));
     return {
       command: process.execPath,
       argsPrefix: ['--import', tsxLoader, resolve(cliPath)],

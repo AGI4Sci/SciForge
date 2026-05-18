@@ -11,6 +11,15 @@ import {
   directContextFastPathMessage,
   directContextFastPathSupportingRefs,
 } from '@sciforge-ui/runtime-contract/artifact-policy';
+import {
+  directContextEvidenceStatusSourceLines,
+  directContextIsLiteraturePaperRow,
+  directContextLiteratureFullTextStatus,
+  directContextLiteratureNoResultScope,
+  directContextSelectedLiteratureReportBasisLines,
+  directContextTextAsksFullTextEvidenceStatus,
+  directContextTextWantsChinese,
+} from '@sciforge-ui/runtime-contract/direct-context-followup-policy';
 import { capabilityProviderRoutesForHandoff } from './capability-provider-preflight.js';
 
 export function directContextFastPathPayload(request: GatewayRequest): ToolPayload | undefined {
@@ -1223,7 +1232,7 @@ function selectedReportEvidenceStatusAnswerMessage(
 ) {
   const prompt = request.prompt;
   if (!/(selected|reference|report|artifact|选中|引用|报告|产物)/i.test(prompt)) return undefined;
-  const asksFullTextStatus = promptAsksFullTextEvidenceStatus(prompt);
+  const asksFullTextStatus = directContextTextAsksFullTextEvidenceStatus(prompt);
   if (!asksFullTextStatus) return undefined;
   const promptNamedContext = promptNamedDirectContextItems(request, context);
   const promptFileTitle = promptMentionedFileTitle(request.prompt);
@@ -1251,16 +1260,16 @@ function selectedReportEvidenceStatusAnswerMessage(
   const saysMetadataOnly = /(provider[-\s]?grounded metadata|provider metadata|metadata until full[-\s]?text verification|until full[-\s]?text verification|requires full[-\s]?text verification|citation verification|unverified|needs[-\s]?verification|未验证|待验证|未完成全文|未读取全文)/i.test(sourceText);
   const hasCompletedFullTextEvidence = /(PDF|full[-\s]?text|全文)[^。.!?\n]{0,80}(read|retrieved|downloaded|verified|completed|已读取|已阅读|已获取|已验证|完成)/i.test(sourceText)
     && !/(until full[-\s]?text verification|requires full[-\s]?text verification|未验证|待验证|metadata until)/i.test(sourceText);
-  const sourceLines = evidenceStatusSourceLines(sourceText);
+  const sourceLines = directContextEvidenceStatusSourceLines(sourceText);
   const selectedTitle = selectedReportTitle(request) ?? 'selected report';
   const noConfirmedPapers = selectedLiteratureReportNoConfirmedPapers(sourceText);
   if (noConfirmedPapers) {
     const reason = selectedLiteratureReportUnavailableReason(sourceText);
-    const scope = selectedLiteratureNoResultScope(sourceText, prompt);
+    const scope = directContextLiteratureNoResultScope(sourceText, prompt);
     const basisLines = sourceLines.length
       ? sourceLines
-      : selectedLiteratureReportBasisLines(sourceText);
-    if (promptWantsChinese(prompt)) {
+      : directContextSelectedLiteratureReportBasisLines(sourceText);
+    if (directContextTextWantsChinese(prompt)) {
       return [
         `只基于当前选中的 ${selectedTitle} 回答，不启动新的 workspace task，也不使用未选中的历史消息或外部新检索。`,
         '',
@@ -1283,7 +1292,7 @@ function selectedReportEvidenceStatusAnswerMessage(
       ...basisLines.map((line) => `- Selected-report basis: ${line}`),
     ].join('\n');
   }
-  if (promptWantsChinese(prompt)) {
+  if (directContextTextWantsChinese(prompt)) {
     if (saysMetadataOnly || !hasCompletedFullTextEvidence) {
       return [
         `只基于当前选中的 ${selectedTitle} 回答，不启动新的 workspace task，也不使用未选中的历史消息或外部新检索。`,
@@ -1319,34 +1328,6 @@ function selectedReportEvidenceStatusAnswerMessage(
   ].join('\n');
 }
 
-function selectedLiteratureNoResultScope(sourceText: string, prompt: string) {
-  const text = `${sourceText}\n${prompt}`;
-  const source = /\barxiv\b/i.test(text)
-    ? 'arXiv'
-    : /\bpubmed\b/i.test(text)
-      ? 'PubMed'
-      : /\bbiorxiv\b/i.test(text)
-        ? 'bioRxiv'
-        : 'provider';
-  const conditionLabel = /\btoday\b|今天|submitted on|提交于/i.test(text) ? '当前日期窗口下' : '请求条件下';
-  return {
-    conditionLabel,
-    sourceEvidenceLabel: source === 'arXiv' ? ' arXiv abs/PDF ' : ` ${source} 论文/PDF `,
-    sourceRetryLabel: source === 'provider' ? '相关 provider' : ` ${source}`,
-    englishScope: source === 'provider' ? 'the requested provider/query scope' : `the requested ${source} query/date scope`,
-    englishEvidenceLabel: source === 'arXiv' ? 'arXiv abs/PDF link' : `${source} paper/PDF link`,
-    englishRetryLabel: source === 'provider' ? 'the relevant provider query' : `${source}`,
-  };
-}
-
-function promptAsksFullTextEvidenceStatus(prompt: string) {
-  return /(PDF|full[-\s]?text|fulltext|arXiv|全文|全文证据|PDF证据|全文调研|论文全文|原文|读取|阅读|已读|读完|downloaded?|retrieved?|citation verification|引用验证|引文验证|文献验证|证据位置|页码|段落)/i.test(prompt);
-}
-
-function promptWantsChinese(prompt: string) {
-  return /[一-龥]/.test(prompt) || /\b(?:answer|write|respond|summari[sz]e|report)\s+in\s+Chinese\b|\bChinese\s+(?:answer|response|summary|report)\b|中文|汉语|普通话/i.test(prompt);
-}
-
 function selectedLiteratureReportNoConfirmedPapers(sourceText: string) {
   return /(无可确认结果|未能确认|没有确认|未确认到|没有可规范化论文|最新论文列表[^。.!?\n]{0,40}(?:为空|空|无)|latest paper list[^。.!?\n]{0,40}(?:empty|none)|no confirmed (?:paper|result)|no citable (?:paper|result))/i.test(sourceText);
 }
@@ -1357,15 +1338,6 @@ function selectedLiteratureReportUnavailableReason(sourceText: string) {
     .map((part) => part.trim().replace(/\s+/g, ' '))
     .find((part) => /(HTTP\s*429|rate limit|限流|unavailable|不可得|could not satisfy|failed|failure|错误|失败)/i.test(part));
   return line && line.length <= 260 ? line : undefined;
-}
-
-function selectedLiteratureReportBasisLines(sourceText: string) {
-  return uniqueStrings(sourceText
-    .split(/[\n\r]+|(?<=[。.!?；;])\s+/)
-    .map((line) => line.trim().replace(/^\s*(?:[-*]|\d+[.)])\s*/, '').replace(/\s+/g, ' '))
-    .filter((line) => /(无可确认|未能确认|最新论文列表|PDF|全文|证据位置|HTTP\s*429|arXiv|provider|diagnostic|局限|limitations?)/i.test(line))
-    .filter((line) => line.length > 0 && line.length <= 260))
-    .slice(0, 4);
 }
 
 interface LiteratureReportRow {
@@ -1402,7 +1374,7 @@ function selectedLiteratureReportBulletSummaryMessage(
       `- ${wantsPriority ? `优先阅读 ${index + 1}` : pick.theme}：${literatureRowConclusion(pick.row)}`,
       `  理由：${literatureReadFirstReason(pick.row, pick.theme)}`,
       `  证据位置：选中 report 的候选论文表；title="${pick.row.title}"${pick.row.url ? `；URL=${pick.row.url}` : ''}${pick.row.evidenceLocation ? `；evidence=${pick.row.evidenceLocation}` : ''}`,
-      `  PDF/full-text 状态：${literatureFullTextStatus(pick.row)}`,
+      `  PDF/full-text 状态：${directContextLiteratureFullTextStatus(pick.row.fullTextStatus ?? '')}`,
       `  局限性：${literatureLimitation(pick.row)}`,
     ].join('\n')),
   ].join('\n');
@@ -1442,7 +1414,7 @@ function literatureReportRows(sourceText: string): LiteratureReportRow[] {
     ...rows,
     ...literatureReportRowsFromPipeCells(sourceText),
     ...literatureRowsFromEvidenceMatrixSummary(sourceText),
-  ]).filter(isLiteraturePaperRow).slice(0, 12);
+  ]).filter(directContextIsLiteraturePaperRow).slice(0, 12);
 }
 
 function literatureReportRowsFromJsonLike(sourceText: string): LiteratureReportRow[] {
@@ -1591,7 +1563,7 @@ function uniqueLiteratureRows(rows: LiteratureReportRow[]) {
 }
 
 function pickLiteratureReportSummaryRows(rows: LiteratureReportRow[]) {
-  const paperRows = rows.filter(isLiteraturePaperRow);
+  const paperRows = rows.filter(directContextIsLiteraturePaperRow);
   const used = new Set<LiteratureReportRow>();
   const pick = (theme: string, pattern: RegExp) => {
     const row = paperRows.find((candidate) => !used.has(candidate) && pattern.test(`${candidate.title}\n${candidate.summary ?? ''}`));
@@ -1620,16 +1592,6 @@ function literatureRowPriorityScore(row: LiteratureReportRow) {
   if (/GUI|browser|web agents?|computer-use|computer\/OS|OS exploration|SaaS/i.test(text)) score += 2;
   if ((row.summary ?? '').length >= 80) score += 1;
   return score;
-}
-
-function isLiteraturePaperRow(row: LiteratureReportRow) {
-  if (/(provider search|web_search|browser_fetch|source fetch|fetch status|called provider|normalized \d+ candidate|检索通道)/i.test(row.title)) {
-    return false;
-  }
-  if (row.url && !/^https?:\/\//i.test(row.url)) return false;
-  if (row.fullTextStatus && !/(PDF|PDF\/full-text|full[-\s]?text|download|reach|extract|unavailable|not confirmed|failed|provider|candidate)/i.test(row.fullTextStatus)) return false;
-  const text = `${row.title}\n${row.year ?? ''}\n${row.url ?? ''}\n${row.evidenceLocation ?? ''}\n${row.fullTextStatus ?? ''}\n${row.summary ?? ''}`;
-  return /(arxiv|pubmed|doi\b|pmid\b|pdf|full[-\s]?text|published|20\d{2}|论文|文献)/i.test(text);
 }
 
 function literatureRowConclusion(row: LiteratureReportRow) {
@@ -1661,17 +1623,6 @@ function isUsefulLiteratureSentence(value: string) {
   if (/^(?:arXiv:)?\d{4}\.\d{4,5}(?:v\d+)?$/i.test(cleaned)) return false;
   if (/^\d{4}\.\d{4,5}(?:v\d+)?$/i.test(cleaned)) return false;
   return /[A-Za-z]{12,}|[一-龥]{8,}/.test(cleaned);
-}
-
-function literatureFullTextStatus(row: LiteratureReportRow) {
-  const status = row.fullTextStatus ?? '';
-  const pdfUrl = status.match(/https?:\/\/\S+/i)?.[0]?.replace(/[).,;，。]+$/, '');
-  if (/candidate link found|candidate URL inferred/i.test(status)) {
-    return pdfUrl ? `已发现候选 PDF/全文链接（${pdfUrl}），仍建议做逐篇全文核验。` : '已发现候选 PDF/全文链接，仍建议做逐篇全文核验。';
-  }
-  if (/likely reachable/i.test(status)) return 'provider URL 显示 PDF/全文大概率可达，但本轮 bounded run 未下载或逐段核验。';
-  if (/not confirmed|unavailable|failed|no PDF/i.test(status)) return '本轮未确认 PDF/全文可用性；需后续 PDF 提取或网页抓取验证。';
-  return status || '当前 report 未写明 PDF/full-text 状态。';
 }
 
 function literatureReadFirstReason(row: LiteratureReportRow, theme: string) {
@@ -1711,15 +1662,6 @@ function promptMentionedFileTitle(text: string) {
   return match?.[1]?.split(/[\\/]/).pop();
 }
 
-function evidenceStatusSourceLines(sourceText: string) {
-  const lines = sourceText
-    .split(/(?<=[。.!?；;])\s+|[\n\r]+/)
-    .map((line) => line.trim().replace(/\s+/g, ' '))
-    .filter((line) => /(provider|metadata|full[-\s]?text|PDF|arXiv|citation|verification|verified|unverified|全文|读取|阅读|验证)/i.test(line))
-    .filter((line) => line.length > 0 && line.length <= 260);
-  return uniqueStrings(lines).slice(0, 3);
-}
-
 interface QcMissingnessMetric {
   key: 'total' | 'missingBaseline' | 'missingOutcome' | 'outliers' | 'protocolDeviations';
   label: string;
@@ -1753,7 +1695,7 @@ function selectedQcMissingnessImpactAnswerMessage(
   if (!hasMetricEvidence && !looksLikeQcArtifact) return undefined;
   const refLine = directContextFastPathSupportingRefs(answerContext).slice(0, 3).join(', ') || answerContext[0]?.label || 'selected QC/missingness artifact';
   const metricLine = qcMissingnessMetricLine(metrics);
-  if (promptWantsChinese(prompt)) {
+  if (directContextTextWantsChinese(prompt)) {
     return [
       `只基于当前选中的 QC/missingness 引用回答：${refLine}。没有启动新的 workspace task，也不使用未选中的报告、CSV、图表或历史消息。`,
       '',

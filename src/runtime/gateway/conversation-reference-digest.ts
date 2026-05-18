@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { runtimeReferenceDiscoverySource } from '@sciforge-ui/runtime-contract/reference-discovery-policy';
 
 export const CONVERSATION_REFERENCE_DIGEST_SCHEMA_VERSION = 'sciforge.reference-digest.v1' as const;
 
@@ -70,7 +71,7 @@ export function buildConversationReferenceDigests(input: DigestBuildInput): Conv
     const digest = digestConversationReference(sourceRef, options, root);
     digest.audit = {
       ...digest.audit,
-      refDiscoverySource: explicitCandidates.has(sourceRef) ? 'explicit-reference' : 'prompt-discovered-reference',
+      refDiscoverySource: runtimeReferenceDiscoverySource(explicitCandidates.has(sourceRef)),
     };
     digests.push(digest);
   }

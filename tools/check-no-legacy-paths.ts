@@ -149,17 +149,19 @@ const trackedBaselineCounts: Record<string, number> = {
   // already moved to packages/contracts/runtime/markdown-artifact-policy.ts;
   // provider prompt/status/discovery policy has moved to
   // packages/contracts/runtime/capability-provider-policy.ts; generated-work
-  // prompt policy has moved to packages/contracts/runtime/generated-work-policy.ts.
+  // prompt policy has moved to packages/contracts/runtime/generated-work-policy.ts;
+  // reference discovery labels moved to
+  // packages/contracts/runtime/reference-discovery-policy.ts.
   'src/runtime/gateway/artifact-mutation-fast-path.ts#provider-scenario-prompt-special-case': 0,
-  'src/runtime/gateway/capability-provider-preflight.ts#provider-scenario-prompt-special-case': 6,
-  'src/runtime/gateway/conversation-reference-digest.ts#provider-scenario-prompt-special-case': 1,
-  'src/runtime/gateway/conversation-service-plan.ts#provider-scenario-prompt-special-case': 1,
-  'src/runtime/gateway/direct-context-fast-path.ts#provider-scenario-prompt-special-case': 72,
+  'src/runtime/gateway/capability-provider-preflight.ts#provider-scenario-prompt-special-case': 0,
+  'src/runtime/gateway/conversation-reference-digest.ts#provider-scenario-prompt-special-case': 0,
+  'src/runtime/gateway/conversation-service-plan.ts#provider-scenario-prompt-special-case': 0,
+  'src/runtime/gateway/direct-context-fast-path.ts#provider-scenario-prompt-special-case': 64,
   'src/runtime/gateway/generated-task-runner-execution-lifecycle.ts#provider-scenario-prompt-special-case': 1,
   'src/runtime/gateway/generated-task-payload-preflight.ts#provider-scenario-prompt-special-case': 4,
   'src/runtime/gateway/generated-task-runner-generation-lifecycle.ts#provider-scenario-prompt-special-case': 19,
   'src/runtime/gateway/generated-task-runner-supplement-lifecycle.ts#provider-scenario-prompt-special-case': 0,
-  'src/runtime/gateway/generated-task-runner-validation-lifecycle.ts#provider-scenario-prompt-special-case': 4,
+  'src/runtime/gateway/generated-task-runner-validation-lifecycle.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/markdown-readonly-fast-path.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/runtime-routing.ts#provider-scenario-prompt-special-case': 3,
   'src/runtime/gateway/transient-external-failure.ts#provider-scenario-prompt-special-case': 1,
@@ -184,7 +186,7 @@ const trackedBaselineCounts: Record<string, number> = {
   'src/runtime/gateway/agentserver-prompts.ts#sa-degraded-raw-context-shape': 0,
   'src/ui/src/app/appShell/workspaceState.ts#sa-ui-legacy-raw-terminal-fallback': 0,
   'src/ui/src/app/ComponentWorkbenchPage.tsx#ui-semantic-fallback': 0,
-  'src/ui/src/app/ScenarioBuilderPanel.tsx#ui-semantic-fallback': 1,
+  'src/ui/src/app/ScenarioBuilderPanel.tsx#ui-semantic-fallback': 0,
   'src/ui/src/app/results-renderer-registry-slot.tsx#ui-semantic-fallback': 1,
   'src/ui/src/app/results/WorkspaceObjectPreview.tsx#ui-semantic-fallback': 0,
   'src/ui/src/app/uiPrimitives.tsx#ui-semantic-fallback': 0,

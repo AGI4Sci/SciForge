@@ -1,5 +1,5 @@
 import { type CapabilityManifest, type CapabilityProviderManifest } from '../../../packages/contracts/runtime/capability-manifest.js';
-import { CAPABILITY_PROVIDER_DISCOVERY_ENDPOINTS, capabilityProviderAvailabilityFromRouteStatus, capabilityProviderDiscoveryUrl, capabilityIdsFromProviderPromptPolicy, capabilityProviderStatusFromManifest, capabilityProviderStatusReason, capabilityProviderTransportFromAvailability, normalizeCapabilityProviderRouteStatus, normalizeCapabilityRouteId } from '../../../packages/contracts/runtime/capability-provider-policy.js';
+import { CAPABILITY_PROVIDER_DISCOVERY_ENDPOINTS, capabilityProviderAvailabilityFromRouteStatus, capabilityProviderDiscoveryUrl, capabilityIdsFromProviderPromptPolicy, capabilityProviderRouteStatusFromHealth, capabilityProviderStatusFromManifest, capabilityProviderStatusReason, capabilityProviderTransportFromAvailability, normalizeCapabilityProviderRouteStatus, normalizeCapabilityRouteId } from '../../../packages/contracts/runtime/capability-provider-policy.js';
 import { loadCoreCapabilityManifestRegistry } from '../capability-manifest-registry.js';
 import type { GatewayRequest } from '../runtime-types.js';
 import { isRecord } from '../gateway-utils.js';
@@ -270,38 +270,38 @@ function resolveCapabilityRoute(request: GatewayRequest, capabilityId: string): 
     };
   }
   const primary = providers[0]!;
-  const ready = providers.find((provider) => provider.status === 'ready');
-  const routeProviders = providers.map((provider) => ({
-    providerId: provider.provider.id,
-    source: provider.provider.source,
-    transport: provider.provider.transport,
-    workerId: provider.provider.workerId,
-    runtimeLocation: provider.provider.runtimeLocation,
-    endpoint: provider.endpoint,
-    baseUrl: provider.baseUrl,
-    url: provider.url,
-    invokeUrl: provider.invokeUrl,
-    invokePath: provider.invokePath,
-    timeoutMs: provider.timeoutMs,
-    healthStatus: provider.status,
-    permissions: provider.provider.permissions ?? [],
-    requiredConfig: provider.provider.requiredConfig,
+  const ready = providers.find((candidate) => candidate.status === 'ready');
+  const routeProviders = providers.map((candidate) => ({
+    providerId: candidate.manifest.id,
+    source: candidate.manifest.source,
+    transport: candidate.manifest.transport,
+    workerId: candidate.manifest.workerId,
+    runtimeLocation: candidate.manifest.runtimeLocation,
+    endpoint: candidate.endpoint,
+    baseUrl: candidate.baseUrl,
+    url: candidate.url,
+    invokeUrl: candidate.invokeUrl,
+    invokePath: candidate.invokePath,
+    timeoutMs: candidate.timeoutMs,
+    healthStatus: candidate.status,
+    permissions: candidate.manifest.permissions ?? [],
+    requiredConfig: candidate.manifest.requiredConfig,
   }));
   if (ready) {
     return {
       capabilityId,
-      primaryProviderId: ready.provider.id,
-      fallbackProviderIds: providers.filter((provider) => provider.provider.id !== ready.provider.id).map((provider) => provider.provider.id),
+      primaryProviderId: ready.manifest.id,
+      fallbackProviderIds: providers.filter((candidate) => candidate.manifest.id !== ready.manifest.id).map((candidate) => candidate.manifest.id),
       status: 'ready',
-      reason: `${ready.provider.id} is ready.`,
+      reason: `${ready.manifest.id} is ready.`,
       providers: routeProviders,
     };
   }
   return {
     capabilityId,
-    primaryProviderId: primary.provider.id,
-    fallbackProviderIds: providers.slice(1).map((provider) => provider.provider.id),
-    status: primary.status === 'unknown' ? 'provider-unavailable' : primary.status,
+    primaryProviderId: primary.manifest.id,
+    fallbackProviderIds: providers.slice(1).map((candidate) => candidate.manifest.id),
+    status: capabilityProviderRouteStatusFromHealth(primary.status),
     reason: primary.reason,
     providers: routeProviders,
   };
@@ -325,13 +325,13 @@ function providerCandidates(request: GatewayRequest, manifest: CapabilityManifes
   const availability = providerAvailabilityById(request);
   const manifestProviders = manifest?.providers ?? [];
   const configuredFallbackProviders = configuredProviderIdsForCapability(request, capabilityId)
-    .filter((providerId) => !manifestProviders.some((provider) => provider.id === providerId))
+    .filter((providerId) => !manifestProviders.some((candidate) => candidate.id === providerId))
     .map((providerId) => providerManifestFromAvailability(providerId, availability.get(providerId), capabilityId));
-  return [...manifestProviders, ...configuredFallbackProviders].map((provider) => {
-    const override = availability.get(provider.id) ?? availability.get(provider.workerId ?? '');
-    const status = providerStatus(provider, override);
+  return [...manifestProviders, ...configuredFallbackProviders].map((manifestProvider) => {
+    const override = availability.get(manifestProvider.id) ?? availability.get(manifestProvider.workerId ?? '');
+    const status = providerStatus(manifestProvider, override);
     return {
-      provider,
+      manifest: manifestProvider,
       endpoint: override?.endpoint,
       baseUrl: override?.baseUrl,
       url: override?.url,
@@ -339,7 +339,7 @@ function providerCandidates(request: GatewayRequest, manifest: CapabilityManifes
       invokePath: override?.invokePath,
       timeoutMs: override?.timeoutMs,
       status,
-      reason: override?.reason ?? capabilityProviderStatusReason(provider, status),
+      reason: override?.reason ?? capabilityProviderStatusReason(manifestProvider, status),
     };
   });
 }

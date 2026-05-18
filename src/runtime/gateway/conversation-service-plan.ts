@@ -1,6 +1,7 @@
 import { isRecord } from '../gateway-utils.js';
 import { planConversationRecovery } from './conversation-recovery-policy.js';
 import { normalizeWorkspaceProcessEvents } from './workspace-event-normalizer.js';
+import { runtimeReferenceDiscoverySourceAllowsTurnReference } from '@sciforge-ui/runtime-contract/reference-discovery-policy';
 
 export const CONVERSATION_ACCEPTANCE_PLAN_SCHEMA_VERSION = 'sciforge.conversation.acceptance-plan.v1' as const;
 
@@ -292,7 +293,7 @@ function currentReferencesForTurn(policyInput: JsonMap, currentReferenceDigests:
   if (explicit.length > 0) return explicit;
   const digestRefs = currentReferenceDigests.flatMap((digest) => {
     const audit = recordValue(digest.audit) ?? {};
-    if (stringValue(audit.refDiscoverySource) === 'prompt-discovered-reference') return [];
+    if (!runtimeReferenceDiscoverySourceAllowsTurnReference(stringValue(audit.refDiscoverySource))) return [];
     const sourceRef = stringValue(digest.path)
       ?? stringValue(digest.sourceRef)
       ?? stringValue(digest.clickableRef);

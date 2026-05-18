@@ -479,13 +479,20 @@ export type {
 } from './capability-budget';
 export {
   CAPABILITY_PROVIDER_DISCOVERY_ENDPOINTS,
+  GENERATED_TASK_CAPABILITY_DISCOVERY_RULES,
+  GENERATED_TASK_CAPABILITY_FIRST_RULES,
+  PLAYWRIGHT_EDGE_PROVIDER_CLI_RELATIVE_URL,
   capabilityProviderAvailabilityFromRouteStatus,
   capabilityProviderDiscoveryUrl,
   capabilityIdsForGeneratedTaskProviderRoutes,
   capabilityIdsFromProviderPromptPolicy,
   capabilityProviderStatusFromManifest,
   capabilityProviderStatusReason,
+  capabilityProviderRouteStatusFromHealth,
   capabilityProviderTransportFromAvailability,
+  generatedTaskProviderEndpoint,
+  generatedTaskProviderUsesMcpCli,
+  generatedTaskProviderUsesWebWorkerCli,
   normalizeCapabilityProviderRouteStatus,
   normalizeCapabilityRouteId,
 } from './capability-provider-policy';
@@ -518,10 +525,29 @@ export {
   normalizeRuntimeScenarioPackageRef,
   normalizeRuntimeScenarioPackageSource,
 } from './scenario-package-ref';
+export {
+  runtimeReferenceDiscoverySource,
+  runtimeReferenceDiscoverySourceAllowsTurnReference,
+} from './reference-discovery-policy';
+export {
+  directContextEvidenceStatusSourceLines,
+  directContextIsLiteraturePaperRow,
+  directContextLiteratureFullTextStatus,
+  directContextLiteratureNoResultScope,
+  directContextSelectedLiteratureReportBasisLines,
+  directContextTextAsksFullTextEvidenceStatus,
+  directContextTextWantsChinese,
+} from './direct-context-followup-policy';
 export type {
   RuntimeScenarioPackageRef,
   RuntimeScenarioPackageSource,
 } from './scenario-package-ref';
+export type {
+  RuntimeReferenceDiscoverySource,
+} from './reference-discovery-policy';
+export type {
+  DirectContextLiteratureReportRowPolicyInput,
+} from './direct-context-followup-policy';
 export {
   AUDIT_RECORD_OUTCOMES,
   REPAIR_DECISION_ACTIONS,
