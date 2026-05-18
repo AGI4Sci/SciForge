@@ -1,851 +1,221 @@
 # SciForge 架构
 
-最后更新：2026-05-17
+最后更新：2026-05-19
 
-本文描述 SciForge 的产品架构和关键边界。它优先解释 big idea：SciForge 不是第二个 agent，而是把 backend 推理、capability 执行、证据、refs、验证、恢复和 UI 投影收束到一条可 replay、可审计的 conversation kernel。
+## 北极星
 
-## 文档状态
+SciForge 是 TUI agent 的 GUI extension，不是 agent host。
 
-本文是当前实现背景和产品架构地图，解释已经落地或正在落地的 backend-first、capability-driven、harness-governed 工作台边界。2026-05-16 起，Single-Agent 多轮运行时的最终 contract 以 [`SciForge-SingleAgent-Architecture.md`](SciForge-SingleAgent-Architecture.md) 为准；本文不再重复定义 Workspace Kernel、AgentServer Context Core、Runtime Bridge、Gateway 和 conformance 的完整接口。
+> **TUI / agent host 拥有全部任务逻辑；GUI 把用户意图变成文本，并把自己作为 intent-based `gui.*` extension 暴露给 TUI。**
 
-Archive/historical note: 旧的 `ProjectSessionMemory.md` 专项稿已并入 [`SciForge-SingleAgent-Architecture.md`](SciForge-SingleAgent-Architecture.md) 并删除。相关概念现在分别落在 Workspace Kernel、AgentServer Context Core、Context Bridge、KV cache、防漂移和 retention/conformance 章节。
+Codex CLI、Claude Code CLI 或其它终端 TUI host 负责上下文、记忆、工具、插件、算法、修复和执行。SciForge GUI 负责人体工学输入、可视化展示、确认、输入收集和焦点控制。
 
-Archive/historical note: 根目录 `PROJECT.md` 中 2026-05-14/15 的 CAP/PSM/MEM/H022 长段已归档到 [`archive/PROJECT-history-2026-05-14-15.md`](archive/PROJECT-history-2026-05-14-15.md)。本文和归档内容只提供实现背景；当前 runtime work item 以 `PROJECT.md` 的 SA-* 任务板和 [`SciForge-SingleAgent-Architecture.md`](SciForge-SingleAgent-Architecture.md) 为准。
-
-## 当前边界
-
-SciForge 当前是本地 workspace-backed 科研 Agent 工作台。它的职责不是维护一套硬编码回复模板，而是把用户请求、workspace 引用、scenario contract、能力 brief、backend stream、artifact、ExecutionUnit、反馈和修复证据组织成可审计系统。
-
-产品边界必须同时保护通用性和专业性：SciForge 复用通用 backend agent 的理解、规划、文件操作、代码生成、检索和修复能力；SciForge 自身只在科研资产形成的关键节点提供 contract、artifact schema、viewer、verifier、projection、权限、审计和 repair loop。换句话说，SciForge 是带专业收敛能力的通用科研 Agent 工作台，而不是僵硬流程系统，也不是第二个通用 coding agent。
-
-核心原则来自 [`../PROJECT.md`](../PROJECT.md)：
-
-- SciForge 的根本定位是 downstream scenario adapter，不是第二套 agent；它应尽可能复用 agent backend 的通用推理、检索、文件读取、artifact 解析、工具选择、多轮恢复和胶水代码生成能力。
-- 用户入口和探索过程默认保持开放：不要要求用户先理解或选择 contract bundle、artifact schema、provider route 或 verifier policy；自然语言目标、当前 selection 和 workspace refs 应足以启动一次 backend-driven run。
-- 专业化只在资产边界收敛：当结果需要展示、复用、交接、验证、修复、导出或进入团队流程时，必须落入 artifact / ExecutionUnit / evidence / verifier / Projection contract。
-- 保留 escape hatch：用户可以要求先快速探索、临时试算或绕开严格交付格式；系统仍应记录最小事实和风险标记，但不能把所有探索都提前压成强 schema。
-- 正常用户请求必须交给 AgentServer/agent backend 真实理解和回答。
-- 多轮对话的权威事实来源是 workspace 本地 append-only ledger/ref store；AgentServer 负责 context orchestration、retrieval、compaction 和 backend handoff；SciForge 不把完整聊天历史当 prompt 记忆，只把 ledger/ref/blob store 投影成当前 turn 所需的 bounded context packet。详见 [`SciForge-SingleAgent-Architecture.md`](SciForge-SingleAgent-Architecture.md)。
-- Python conversation-policy package 是多轮对话策略算法主路径；其中 execution mode classifier 是 `direct-context-answer` / `thin-reproducible-adapter` / `single-stage-task` / `multi-stage-project` / `repair-or-continue-project` 的唯一策略源。
-- TypeScript 保留 transport、runtime 执行边界、workspace writer 和 UI 渲染；只能透传 classifier 字段、执行 workspace shell、调用 guard、持久化 refs 和提供诊断/显示级 fallback，不维护并行复杂度、执行模式或用户意图推断算法。
-- Agent 输出必须落到标准 `ToolPayload`、artifact、日志、ExecutionUnit 和 conversation event。
-- 错误、缺失输入、失败原因和恢复建议必须进入下一轮上下文。
-- 新增任务路由、证据和恢复能力必须是通用 contract，不为单一 provider、scenario、prompt、backend、站点或固定错误文本写特例。
-
-## 当前最终形态：Conversation Kernel v2
-
-SciForge 的最终形态是 **Backend-first, Capability-driven, Harness-governed, Event-sourced**。一句话说：backend 负责理解和组合能力，SciForge 负责把每一轮对话变成可信事件账本，再从账本确定性投影出 UI、恢复上下文、后台 continuation 和审计导出。
-
-核心链路是：
+## 最终分层
 
 ```text
-User intent
-  -> ConversationEventLog
-  -> ConversationStateMachine
-  -> Contract gates
-  -> HarnessDecisionRecorded
-  -> HarnessContract
-  -> backend / capability dispatch
-  -> materialized refs, artifacts and evidence
-  -> validation and failure classification
-  -> ConversationProjection
-  -> UI, continuation and audit export
+GUI Shell
+  translates user gestures to text
+  maintains semantic GUI event bus and hot-region projection
+  exposes a read-only virtual GUI resource tree for state inspection
+  exposes intent-based gui.* tools to TUI agent
+  negotiates placement, timing, conflicts and rendering
+
+TUI Agent Host
+  receives text
+  owns reasoning, command parsing, context, memory, planning and repair
+  uses native plugins / skills / tools / MCP / providers
+  calls gui.* tools when it has presentation or user-interaction intent
+
+Native Agent Extensions
+  capability discovery, scientific algorithms, policy/harness, providers,
+  verifiers, artifact generation, workspace operations
 ```
 
-这条链路看起来长，但心智模型只有五个原语：
+## 两个方向
+
+### 1. GUI → TUI：全部是文本
+
+GUI 所有用户动作都变成终端等价文本：
 
 ```text
-Event -> State -> Contract -> Decision -> Projection
+点击删除文件      -> rm report.md
+点击重试          -> /rerun run-123
+点击修复          -> /recover run-123 --with-evidence
+点击打开 artifact -> open artifacts/report.md
+表单提交          -> /capabilities prefer literature.search pdf.extract
 ```
 
-- **Event 是事实。** 用户输入、dispatch、backend stream、artifact materialization、verification、failure、background continuation、history edit 和 harness decision 都进入 append-only `ConversationEventLog`。刷新、恢复、跨标签同步和导出都从 event log replay，不信任临时 UI state。
-- **State 是合法状态。** `ConversationStateMachine` 只回答当前会话是否 satisfied、external-blocked、repair-needed、needs-human、background-running 或 degraded；它不做领域推理，也不按 prompt、provider 或 artifact 文件名猜状态。
-- **Contract 是可信边界。** Contract gates 检查 payload、refs、artifacts、verification evidence、background checkpoint 和 failure owner。完成态必须有可见结果或 empty-result 说明；失败态必须有 owner、reason、evidence refs 和 next step。
-- **Decision 是事件化策略。** Harness hook 可以选择上下文、预算、能力倾向、验证强度、repair policy 和 progress policy，但首次决策必须记录为 `HarnessDecisionRecorded`。replay 时消费历史 decision，不重新运行依赖时间、token budget、provider health 或外部配置的 hook。
-- **Projection 是只读视图。** `ConversationProjection` 是 UI 和下一轮 handoff 的主输入，包含 visible answer、active run、artifact refs、execution process、recover actions、verification、background 和 audit refs。Projection 可以被丢弃并从 event log 重建，不能成为新的事实来源。
+没有 `deleteFile(path)`、`triggerRecover(actionId)`、`updateCapabilityPreference(patch)` 这类 GUI -> TUI 业务函数。
 
-这个形态下，SciForge 不通过前端关键词、场景 id、固定 prompt、最近 run、raw execution unit 或 UI fallback 猜用户想要什么。SciForge 只声明“有什么能力、协议是什么、策略边界是什么、怎么校验、在哪里执行、结果如何持久化和投影”。LLM/backend 的作用是读取 capability meta 和当前 contract，理解用户需求，选择能力、连接能力、生成必要胶水代码，执行后根据结构化错误继续修复。
+### 2. TUI → GUI：表达 GUI intent
 
-当前架构边界：
-
-- `CapabilityManifest` 是核心能力真相源，`requiredCapabilities` 声明该 manifest/tool 需要的 provider-backed 能力；`CORE_CAPABILITY_MANIFESTS` 覆盖 AgentServer generation、artifact resolver/read/render、workspace read/write、command/python task、vision observe、computer-use action、report/evidence views 和 schema verifier。
-- Capability broker 默认只给 backend compact brief；schema、examples、repair hints、providers、failure history 和 ledger refs 只在选中能力或 repair 时按需展开。
-- `capability_discovery` 是 agent 可调用的原子能力，而不是 runtime 固定触发的隐藏检索流程；当前为 partial backend retry consumption + ledger replay refs + default UI summary card + debug folding / blocked-on-P1-P6-browser-validation，AgentServer stream-side tool-call、session audit record、session-bundle ledger event、bounded retry result consumption 和最小 UI summary projection 已落地，默认 Results UI 能力计划卡与 debug folding action boundary 已接入，真实 P1-P6 browser 验收仍按专项设计继续推进。专项设计见 [`CapabilityDiscovery.md`](CapabilityDiscovery.md)。
-- Workspace ledger 负责可恢复事实；AgentServer 负责 session memory/current work/recent turns/context compaction 的运行态编排；SciForge 生成 `contextPolicy`、`contextEnvelope`、current refs、digest、audit refs 和 cache-aware projection blocks。
-- Scenario package 已收敛为 policy-only：允许 artifact schema、默认 view、capability policy、domain vocabulary、verifier policy、privacy/safety boundaries；拒绝 execution code、prompt regex、provider branch、多轮 semantic judge、prompt special case 和 preset-answer/system-prompt 字段。
-- UI 是 projection shell：主状态、主按钮、visible answer、verification tag 和 recovery focus 只消费 `ConversationProjection` 与 ref preview；raw runs、task attempts、executionUnits、backend stream 和 validation trace 只能进入 audit/debug channel。目标状态下，网页端通过函数式 `ProjectionApi` / `UserActionApi` 读写 presentation 状态和用户动作，不绑定 HTTP 路由，专项设计见 [`UIExecutionDecoupling.md`](UIExecutionDecoupling.md)。
-- Capability-first provider route 是执行边界：web/literature/retrieval 任务必须通过标准 capability 和 ProviderManifest route 执行；Backend 不能在已有 `web_search` / `web_fetch` / retrieval provider route 时生成 `urllib`、`requests` 或站点直连脚本绕过 Gateway。
-- `ContractValidationFailure`、WorkEvidence、stable refs、failure owner、verification gate、background checkpoint 和 validation-to-repair loop 是失败恢复主路径。
-- Export bundle 打包 event log、restored projection、refs manifest 和 audit-only raw attachments；它不维护第二套 replay 逻辑。
-
-## LLM-gated Direct Context
-
-Direct-context fast path 不能是纯模板化回答。它可以保留为低延迟路径，但必须先经过 LLM 或同等语义 classifier 的 intent/context match：判断用户问题需要哪类 typed context，当前 projection 是否足够，是否必须查询 AgentServer、capability registry、tool registry 或启动 workspace task。
-
-推荐边界：
+TUI 通过原生 tool/plugin 机制调用 GUI intent tools：
 
 ```text
-User follow-up
-  -> intent/context classifier
-  -> required typed context
-  -> context sufficiency check
-  -> deterministic direct answer OR routed backend/tool query
+gui.present(...)
+gui.ask_user(...)
+gui.notify(...)
+gui.set_status(...)
+gui.apply_batch(...)
+gui.get_context(...)
 ```
 
-允许 direct-context 回答的问题必须满足三个条件：
+这些 tools 只表达 presentation、confirmation、input、focus 和 GUI-local transaction 意图。GUI 根据 hot region、interaction mode、lastChangeOrigin、revision 和 precondition 决定执行、延迟、拒绝或建议替代方案。真实任务操作仍由 TUI agent 和它的原生 tools 完成。
 
-- 意图是只读当前会话事实，例如失败原因、当前 artifact、上一次 run 状态、已有证据引用。
-- 所需 typed context 已存在于 `ConversationProjection`、run trace、artifact index、current refs 或 failure evidence 中。
-- 回答能附带 supporting refs，并且无需访问新工具、外部网络、skill/tool registry、AgentServer context 或 workspace 文件正文。
+## GUI 状态投影
 
-禁止 direct-context 直接回答的问题：
-
-- skill/tool/capability/provider 状态查询，例如“现在有哪些 skill 被激活”“有没有 web search”。
-- 需要外部新信息的问题，例如“今天最新 arXiv/新闻/网页结果”。
-- 需要读取未展开 artifact 正文、大文件、workspace 目录或远程服务的问题。
-- 需要继续执行、修复、下载、验证、生成报告或改变 workspace 的问题。
-
-这类问题必须路由到对应事实源：
-
-- skill/capability/provider 状态：Capability Registry / Tool Registry / AgentServer worker registry。
-- 多轮自然语言记忆：workspace ledger + AgentServer session/current-work/context projection。
-- 运行失败诊断：run trace、TaskRunCard、ExecutionUnit、stdout/stderr、failure registry。
-- 最新检索和网页内容：`web_search` / `web_fetch` provider。
-
-fast path 的输出也必须事件化：记录 classifier 判定、required context、已使用 context ids、未使用原因和是否跳过 workspace task。这样 direct-context 是可审计的低延迟 projection，而不是隐藏的第二个回答器。
-
-## Capability, Skill, Tool 与 Provider 四层模型
-
-SciForge 的工具生态必须拆成四个清晰层次，避免把 `SKILL.md`、runtime tool、远程机器和场景策略混成一团。
+GUI 可以有内部逻辑，但它属于 presentation behavior。GUI 内部事件先进入 semantic event bus，再投影成 TUI 可用的 progressive context：
 
 ```text
-Skill Layer
-  describes workflow, domain method, prompt strategy
-
-Capability Layer
-  defines abstract abilities and contracts
-
-Provider Layer
-  binds capabilities to local, AgentServer, MCP, HTTP, ssh, client-worker, or backend-native executors
-
-Runtime Resolver
-  selects a provider for each required capability per run and records the route
+DOM / pointer / keyboard / scroll / modal events
+  -> GUI semantic event bus
+  -> shell context + hot region context
+  -> optional region detail or debug snapshot on request
 ```
 
-### Skill Layer
+默认只暴露 hot region，不暴露完整 DOM。Hot region 至少包含 focused panel、selected refs、interaction mode、lastChangeOrigin、available actions 和 revision。
 
-Skill 描述“如何做任务”，不是“工具已经可执行”。`SKILL.md` 适合承载领域方法、触发条件、流程约束、提示词策略、质量标准和使用示例。它可以声明 required/optional capabilities，但不能单独代表网络、文件、浏览器、API 或远程机器能力已经接入。
+## TUI 感知 GUI：只读虚拟资源树
 
-示例：
-
-```yaml
-id: literature-evidence-review
-requires:
-  - web_search
-  - web_fetch
-  - pdf_extract
-optional:
-  - arxiv_search
-  - semantic_scholar_search
-  - evidence_matrix_validate
-```
-
-### Capability Layer
-
-Capability 是抽象能力和协议真相源，回答“系统能做什么”。每个 capability 必须有稳定 id、输入输出 schema、side effects、权限、validator、repair hints、examples 和 provider constraints。场景、skill 和 backend 只依赖 capability id，不依赖某台机器或某个 provider 名字。
-
-典型 capability：
-
-- `web_search`
-- `web_fetch`
-- `pdf_extract`
-- `arxiv_search`
-- `semantic_scholar_search`
-- `read_file`
-- `write_file`
-- `run_command`
-- `artifact_render`
-- `evidence_matrix_validate`
-
-### Capability Discovery Layer（partial backend retry consumption + ledger replay refs + default UI summary card + debug folding / blocked-on-P1-P6-browser-validation）
-
-详见 [`CapabilityDiscovery.md`](CapabilityDiscovery.md)。本层目标是提供 agent-callable `capability_discovery.search/expand/plan/explain` API，通过分层揭示让 backend 在能力不足时自主发现和组合能力。当前代码已具备 manifest registry、broker、provider preflight、harness candidate projection、`invoke_capability` authoring path、discovery service、tiny handoff brief、generated-task helper bridge、AgentServer stream-side tool-call bridge、session-bundle audit record、ledger replay refs、bounded retry result consumption、最小 UI summary projection 与 targeted tests；默认 Results UI 能力计划卡和 debug folding action boundary 已接入，真实 P1-P6 browser 验收仍是后续任务。
-
-### Provider Layer
-
-Provider 是 capability 的具体执行来源，回答“在哪里执行、由谁执行”。同一个 capability 可以有多个 provider：
-
-- `local.pdf_extract`
-- `sciforge.web-worker.web_search`
-- `mac-local.web_fetch`
-- `lab-search-box.web_search`
-- `mcp.semantic_scholar_search`
-- `ssh-gpu.run_command`
-- `backend-native.browser_open`
-
-Provider 必须声明来源、transport、权限、健康检查、可访问 workspace roots、认证方式、网络边界、latency/quality hints 和 fallback eligibility。UI 配置页必须显示 provider 的来源和状态，而不是只显示一个扁平 tool 名称。
-
-推荐 Tool Manifest：
-
-```yaml
-id: sciforge-web-search
-capability: web_search
-provider: sciforge.web-worker
-transport: http
-endpoint: /invoke
-inputSchema: sciforge.capability.web_search.input.v1
-outputSchema: sciforge.capability.web_search.output.v1
-permissions:
-  - network
-healthcheck: /health
-fallbackEligible: true
-```
-
-### Runtime Resolver
-
-Runtime Resolver 在每次 run 前把 skill/scenario 需要的 capability 解析为具体 provider，并把选择写入 run context、ExecutionUnit 和 audit trace。它必须在任务启动前做 capability preflight：
+TUI 不应该通过截图、DOM dump、ANSI buffer 或 GUI 私有对象理解界面状态。更稳的模型是把 GUI 看成一个只读虚拟资源树，像读文件系统一样分层探测：
 
 ```text
-Scenario requires: web_search, web_fetch, pdf_extract
-Available: pdf_extract(local)
-Missing: web_search, web_fetch
-Decision: block run before dispatch; ask user to enable a search provider
+/gui/shell.json
+/gui/hot-region.json
+/gui/regions/<regionId>/summary.md
+/gui/regions/<regionId>/refs.json
+/gui/regions/<regionId>/actions.json
+/gui/debug/dom-summary.json
 ```
 
-Resolver 的职责：
+TUI 使用原子读操作获取状态：
 
-- 合并 scenario allowlist、skill requirements、user-selected tools、workspace policy 和 AgentServer worker registry。
-- 对每个 required capability 选择 primary provider 和 fallback providers。
-- 检查 health、permissions、workspace access、auth、network availability 和 rate-limit state。
-- 将 provider route 写入 handoff，让 backend 知道应调用标准 capability，而不是临时生成站点 scraper。
-- 对已存在标准 provider route 的任务，拒绝 `urllib`、`requests`、raw socket、worker endpoint 直连或 provider-specific scraper 作为替代执行路径；这些 bypass 应被 preflight 归类为 capability-first 约束失败，并 materialize 成用户可见的 recoverable Projection，而不是 projectionless waiting。
-- 对 zero-result、rate-limit、provider offline 和 permission denied 做统一 failure classification。
+| 操作 | 作用 |
+|---|---|
+| `gui.list(path)` | 列出可见的 GUI resource 子节点。 |
+| `gui.read(path)` | 读取某个 resource 的语义快照。 |
+| `gui.search(query, scope)` | 在语义索引里搜索 ref、标题、可见文本、action label。 |
+| `gui.stat(path)` | 获取 revision、更新时间、大小、披露级别和权限。 |
+| `gui.watch(path)` | 订阅语义变化事件，而不是低级 DOM 事件。 |
 
-## Distributed Tool Integration
+如果目标 TUI host 支持 MCP resources、LSP-like resources 或原生 context provider，应优先复用这些机制；否则把同名操作作为 `gui.*` read-only tools 注入。它们只读 GUI 语义状态，不触发任务操作。
 
-AgentServer 是分布式工具执行的控制面。新增机器时，如果这台机器提供的是系统已认识的标准 primitive/capability，理想路径应当只改配置，不改 SciForge 代码。
+这个模型解决两件事：
 
-配置化接入示例：
+- TUI 可用熟悉的 `list/read/search/stat/watch` 组合逐层探测 GUI，而不需要一次吃完整页面。
+- GUI 可以隐藏大多数同时无关的区域，只暴露 shell、hot region 和按需 region detail。
 
-```json
-{
-  "id": "lab-search-box",
-  "kind": "client-worker",
-  "endpoint": "http://10.0.0.8:3457",
-  "authToken": "...",
-  "allowedRoots": ["/data/workspaces"],
-  "capabilities": ["network", "filesystem"]
-}
-```
+`gui.search` 不是让 TUI grep 原始 DOM。它搜索的是 GUI projector 生成的语义文本和结构化 refs；debug resource 只用于审计/排障，默认不进入 agent context。
 
-路由示例：
+## GUI 智能边界
 
-```json
-{
-  "tools": ["web_search", "web_fetch"],
-  "primary": "lab-search-box",
-  "fallbacks": ["backend-server", "mac-local"]
-}
-```
+GUI 不是无脑像素壳，也不是第二个 agent。它应该“对任务无知，对呈现聪明”：
 
-只改配置可行的前提：
+- 可以做：布局选择、renderer 选择、焦点保护、modal 排队、hot region 投影、interaction mode 识别、revision/precondition 检查、defer/reject/suggestion、GUI-local batch transaction。
+- 不可以做：任务意图分类、算法选择、provider route、capability ranking、repair strategy、workspace 执行、结果真伪判断、completion 判断。
 
-- worker 使用 AgentServer 支持的 transport，例如 `backend-server`、`server`、`client-worker`、`ssh`、`container`、`remote-service`。
-- 工具名对应已注册 capability 或标准 primitive。
-- 新机器暴露健康检查、权限、allowed roots 和认证信息。
-- capability schema、validator 和 failure semantics 已存在。
+换句话说，GUI 的智能是确定性的 presentation autonomy；TUI agent 的智能是任务推理和行动决策。这样 GUI 不会变重，也不会退化成完全无法保护用户交互状态的被动视图。
 
-如果新增的是全新工具类型，例如 `semantic_scholar_graph_search`，不能只靠 `SKILL.md`。它必须先通过 Tool Manifest 注册 capability/provider contract；之后场景和 skill 才能声明依赖它。长期目标是 worker/tool server 暴露 manifests，AgentServer discovery 后进入 Capability Registry，SciForge 配置页只负责选择、授权和展示状态。
+## 为什么不定义新的 plugin API
 
-### SciForge Tool Worker Protocol
+事实前提：
 
-SciForge 对远程 worker 的依赖必须落到一套稳定的 **Tool Worker Protocol**，而不是依赖某个临时 HTTP shape、prompt 约定或 UI 配置分支。协议目标是让 worker 可以独立发布、独立升级、独立做 health/readiness 验证，同时被 AgentServer registry/router 发现并路由为 SciForge provider。
+1. Codex CLI / Claude Code CLI 已经能在终端里作为成熟 TUI agent host 提供服务。
+2. Codex / Claude Code 已经有各自原生 plugin、skill、tool、MCP 机制。
+3. TUI 接受的信息用文本就够。
+4. GUI 作为 TUI 可调用的 extension，比 GUI 自己用 LLM 猜 UI 操作更稳定。
 
-最小协议面：
+因此 SciForge 不应定义第二套 agent extension runtime。它只定义 GUI 作为 extension 时的最小 tool surface，且这个 surface 通过目标 TUI 的原生机制注入。
+
+## 职责归属
+
+| 问题 | 归属 |
+|---|---|
+| 用户文本是什么意思 | TUI agent。 |
+| 调哪个工具、provider、插件 | TUI agent / 原生扩展系统。 |
+| capability discovery | TUI 原生扩展。 |
+| harness / policy / repair | TUI 原生扩展。 |
+| 文件读写、命令执行、验证 | TUI 原生 tools。 |
+| GUI 展示哪个结果 | TUI 调 `gui.present`，GUI 决定 renderer/placement。 |
+| 用户确认、补充输入 | TUI 调 `gui.ask_user`，GUI 收集后发文本。 |
+| TUI 想知道 GUI 当前状态 | TUI 读只读 GUI resource tree 或调用 `gui.get_context`。 |
+| GUI 布局、焦点、主题 | GUI 本地人体工学状态。 |
+
+## 旧概念映射
+
+| 旧概念 | 新归属 |
+|---|---|
+| Conversation Kernel / ledger | TUI agent host session log。 |
+| Runtime Bridge | 连接 TUI 的薄 adapter，不承载业务。 |
+| Capability Gateway | TUI 原生 tool/provider 生态。 |
+| Capability Discovery | TUI 原生 extension。 |
+| Harness / Conversation Policy | TUI 原生 policy extension。 |
+| ProjectionApi | `gui.present` / `gui.get_context` / GUI 本地 view state。 |
+| UserActionApi | 文本命令生成器。 |
+| Scenario package | TUI skill/plugin/context，不是 GUI runtime。 |
+
+## Native Extension Model
+
+SciForge 不定义新的 agent extension API。所有算法和策略扩展都使用目标 TUI host 的原生机制：
+
+- Codex CLI plugin / skill / tool / MCP。
+- Claude Code skill / slash command / MCP / tool。
+- 自研 TUI host 的内部插件系统。
+
+默认集成目标是 Codex CLI 或 Claude Code CLI：GUI 启动或连接一个终端进程，把用户操作翻译成文本写入该进程，再消费其结构化事件流或 JSONL 输出。SciForge 不再要求常驻 AgentServer；历史 `AgentServer` / `runtime gateway` 只能作为当前代码兼容层或迁移来源，不是最终架构依赖。
+
+因此 SciForge 不再定义 `registerCommand`、`registerTool`、`registerPolicy`、`HarnessRuntime`、`CapabilityGateway` 或自己的 TUI plugin manifest。
+
+典型归属：
+
+| 能力 | 归属 |
+|---|---|
+| 文献检索、PDF 解析、引用核验 | TUI 原生 plugin/tool/skill。 |
+| 数据分析、统计、绘图 | TUI 原生 plugin/tool/skill。 |
+| Capability Discovery | TUI 原生 plugin/tool/skill。 |
+| Harness / policy / budget / repair | TUI 原生 policy/plugin/skill。 |
+| Provider route / MCP / remote worker | TUI 原生 provider/tool 生态。 |
+| Artifact schema / verifier | TUI 原生 tool 或 skill。 |
+| GUI 展示、确认、输入收集 | SciForge GUI extension 暴露的 intent-based `gui.*` tools。 |
+
+## Capability Discovery
+
+Capability Discovery 不属于 GUI/runtime。用户若从 GUI 触发能力发现，GUI 只发送文本：
 
 ```text
-GET  /.well-known/sciforge-worker.json
-GET  /health
-POST /tools/:toolId/invoke
-GET  /runs/:runId/events
-POST /runs/:runId/cancel
+/capabilities search "build an evidence matrix for recent papers"
+/capabilities expand literature.search pdf.extract citation.verify
+/capabilities plan --goal "build evidence matrix"
 ```
 
-`/.well-known/sciforge-worker.json` 是 worker manifest 的发现入口，必须声明：
+工具名可以沿用 `capability_discovery.search/expand/plan/explain`，但注册、权限、审计、provider readiness、progressive disclosure 都由 TUI host 原生机制负责。Discovery plan 不构成 completion evidence；展示必须通过 `gui.present` 或 `gui.ask_user`。
 
-- `workerId`、`version`、`protocolVersion`、`publisher` 和 `releaseChannel`。
-- `transport`：`http`、`stdio`、`ssh`、`mcp`、`container` 或 `remote-service`。
-- `capabilities`：每个 capability 的 id、版本、input/output schema、side effects、permissions、validator、repair hints 和 examples refs。
-- `providers`：每个 provider 的 tool id、endpoint/command、workspace roots、auth scope、network boundary、fallback eligibility、rate-limit metadata、latency/quality hints。
-- `health`：liveness/readiness、dependency checks、auth checks、quota checks 和 last failure。
-- `audit`：event stream、log refs、stdout/stderr refs、artifact refs 和 trace retention policy。
+## Harness / Policy
 
-工具调用必须是结构化 envelope：
+Harness / Policy 属于 TUI 原生扩展。它可以决定 context refs、tool/provider budget、capability preference、verification depth、repair action、background continuation 和 progress milestones。
 
-```json
-{
-  "runId": "run_...",
-  "capabilityId": "web_search",
-  "providerId": "lab-search-box.web_search",
-  "input": {},
-  "context": {
-    "workspaceRoot": "/data/workspaces/project",
-    "allowedRoots": ["/data/workspaces/project"],
-    "permissions": ["network"],
-    "deadlineMs": 60000,
-    "traceId": "trace_..."
-  }
-}
-```
+它可以通过 `gui.present`、`gui.ask_user`、`gui.notify`、`gui.set_status` 影响 GUI 展示，但不能把策略写进 GUI，也不能让 GUI 变成第二个 agent。
 
-输出必须表达 `success`、`partial`、`failed`、`needs-human`、`empty-result` 等状态，并携带 artifact refs、stdout/stderr/log refs、failure code、recover actions、validator result 和 provider route trace。worker 不应返回只有自然语言的成功文本来替代 contract result。
+## UI Implementation Boundary
 
-SciForge 侧只信任经 AgentServer registry/router 归一化后的 provider route：
+React/UI 只做 presentation behavior：
 
-```text
-worker manifest
-  -> AgentServer worker registry
-  -> tool/capability router
-  -> SciForge provider registry
-  -> Runtime Resolver preflight
-  -> AgentServer run handoff / ExecutionUnit / audit trace
-```
+- user gesture -> command text。
+- semantic event bus -> shell/hot-region context。
+- read-only virtual GUI resources -> `list/read/search/stat/watch`。
+- `gui.*` intent implementation。
+- layout、focus、theme、draft、folding、selection。
+- intent negotiation、precondition check、defer/reject/suggestion。
 
-### 独立发布 Worker
+React/UI 不做 provider branch、capability ranking、repair policy、prompt route、workspace execution 或 task completion 判断。
 
-标准 worker 必须能作为独立包发布，而不是和 SciForge UI/runtime 绑死。推荐发布单元包括：
+## 成功标准
 
-- `worker.json` / `package manifest`：协议版本、capability/provider manifests、schema refs、兼容 AgentServer 版本范围。
-- `schemas/`：输入输出 schema、event schema、failure code schema。
-- `validators/`：可复用的输出校验器或声明式 validator refs。
-- `examples/`：典型 invoke、empty result、permission denied、rate limit、partial result 和 repair 示例。
-- `smoke/`：health、manifest discovery、invoke、cancel、event stream、auth failure、route fallback 的最小测试。
-- `release notes`：新增/删除 capability、schema breaking change、权限变化和迁移提示。
-
-独立发布 worker 的兼容规则：
-
-- patch/minor 发布不能改变既有 schema 的 required 字段语义、failure code 语义或权限边界。
-- breaking change 必须升级 capability/provider version，并保留旧 route 或明确迁移窗口。
-- 新增 provider 默认不能自动成为 primary route，必须经过 AgentServer router policy 或用户配置选择。
-- worker manifest 的权限扩张必须 fail-closed，SciForge preflight 需要重新展示授权状态。
-
-SciForge 不把 worker release 逻辑写进 scenario、skill 或 prompt。它只消费 AgentServer 提供的 registry snapshot、route decision 和 health/permission 状态，并在 UI 展示 worker 来源、版本、route、fallback 和 failure evidence。
-
-配置页必须展示：
-
-- capability id 和用户可读说明。
-- provider 来源：local、AgentServer、MCP、HTTP、ssh、client-worker、backend-native。
-- 运行位置和 workspace access。
-- 健康状态、授权状态、rate-limit/配额状态。
-- 权限：network、filesystem、shell、external account、browser/computer-use。
-- primary/fallback route。
-- 被哪些 skills/scenarios 依赖。
-
-这条边界可以防止 agent 在缺少 web search 时自行写临时 DuckDuckGo scraper，也能让用户清楚知道“任务失败是能力缺失、provider 限流、权限未开，还是运行逻辑错误”。
-
-Provider route 一旦 ready，不能只作为 preflight 诊断传给 Backend。SciForge 的生成合约必须把 ready route 渲染成标准任务 authoring template：`sciforge_task.load_input` 读取任务输入，`invoke_provider(task_input, capabilityId, providerInput)` 调用预设 provider/tool，`write_payload` 输出 Projection 可消费的 ToolPayload；直连网络库只能作为 Gateway 内部实现细节或没有 provider route 时的显式能力选择，不能成为 generated task 的默认路径。
-
-为保持可扩展性，新增工具不应新增 prompt 特例。最小接入顺序是 CapabilityManifest → ProviderManifest/route resolver → HarnessContract capability decision → compact context envelope/broker brief → authoring contract/helper SDK → `Gateway.execute` invocation → manifest validator/preflight → ArtifactDelivery/Projection → conformance fixture。生成任务统一优先使用 `sciforge_task.invoke_capability(task_input, capabilityId, input)`；`invoke_provider` 只是 provider-backed web route 的兼容别名。
-
-## Harness-governed Scientific Agent OS
-
-Backend-first 解决“谁理解用户意图”，capability-driven 解决“系统能做什么”，harness-governed 解决“agent 在每个阶段如何被约束”。SciForge 不把 agent harness 散落在 gateway、prompt builder、conversation policy、UI 和 repair loop 里，而是把 harness 作为独立、可版本化、可切换的 policy 层维护。
-
-核心原则：
-
-- **Harness 是项目级策略资产，不是散落 prompt 片段。** 探索预算、上下文选择、工具使用约束、技能偏好、验证强度、恢复策略和用户可见进度都应来自统一 harness policy。
-- **Runtime 负责阶段化 hook，harness 负责阶段决策。** 业务代码只定义稳定阶段和传入事实，不在各处拼接领域指令、探索规则或 prompt 特例。
-- **Harness 输出结构化 contract，再由 prompt/transport 层渲染。** hook 返回探索深度、允许读取的 refs、禁止读取的 refs、tool budget、skill hints、verification level、progress plan 和 prompt directives；prompt builder 只负责把结构化决策渲染给 backend。
-- **探索不是禁用，而是预算化、目的化和可审计。** fresh request 默认允许读取当前 scenario contract、capability brief、workspace root summary、配置摘要和必要 schema；只有 continuation、repair、audit、file-grounded 等模式才扩大到旧 attempts、task results、stdout/stderr 和历史 artifacts。
-- **Harness profile 可切换。** 同一 runtime 可按任务和产品目标选择 `fast-answer`、`research-grade`、`debug-repair`、`low-cost`、`high-recall-literature`、`privacy-strict` 等 profile，而不改核心 runtime。
-- **Skills 保持通用生态。** 文献检索、PDF 下载、全文抽取、批量总结、引用核验等应作为可组合 skills/capabilities 加入 registry；harness 可以偏好某类 skill，但不把单一案例固化成隐藏 workflow。
-
-推荐分层：
-
-```text
-User request / refs / scenario
-  -> request classifier
-  -> harness profile selector
-  -> staged harness hooks
-  -> structured HarnessContract
-  -> context envelope + capability broker + prompt renderer
-  -> agent backend / capability execution
-  -> validation, repair, ledger and UI progress
-```
-
-### Agent Harness Standard
-
-[`AgentHarnessStandard.md`](AgentHarnessStandard.md) 是 agent harness 的唯一编程标准。它采用 Lightning-style callback 分层，定义主运行循环、分级 hooks、`HarnessContract` schema、decision merge 规则、最小实验案例和 `packages/agent-harness` 建议布局。
-
-Architecture 只保留边界原则：
-
-- `HarnessRuntime` 负责生命周期调用、decision merge、trace 记录和 runtime enforcement。
-- `HarnessProfile` 组合 callbacks、默认预算和 merge policy。
-- `HarnessCallback` 只能读取稳定 `HarnessContext` 并返回结构化 `HarnessDecision`。
-- `HarnessContract` 是 context builder、capability broker、prompt renderer、validator、repair loop 和 UI 共同消费的唯一行为契约。
-- `HarnessTrace` 是后续 agent harness 研究、profile 比较、失败复盘和 capability promotion 的事实依据。
-
-后续新增 hook、profile、merge rule 或最小实验案例时，必须先更新 [`AgentHarnessStandard.md`](AgentHarnessStandard.md)，再落代码。
-
-### Agent Harness 与 Capability 的关系
-
-Harness 不替代 capability。Capability 声明“能做什么、输入输出是什么、如何校验”；harness 决定“这一轮应该以多大预算、哪些上下文、哪些能力倾向和哪些安全边界使用这些 capability”。
-
-```text
-Capability registry = ability truth source
-Harness policy      = behavior governance source
-Runtime gateway     = lifecycle and enforcement source
-Agent backend       = reasoning and composition source
-```
-
-因此 harness package 应避免写死某个站点、某个 prompt、某个 scenario 的结果。它可以声明通用策略，例如：
-
-- fresh request 只读 compact workspace/scenario/capability brief。
-- continuation request 可以读取当前 session selected refs 和最近成功 artifact digest。
-- repair request 可以读取相关 failed run 的 stdout/stderr/log refs。
-- audit request 可以扩大到 ledger、历史 attempts 和 verification records。
-- high-recall research profile 可以提高检索/下载/验证预算。
-- low-cost profile 可以限制全文下载、并行度和后台任务。
-
-### 角色边界
-
-- Agent backend / AgentServer：AgentServer 负责多轮 context 编排、retrieval、compaction、BackendHandoffPacket 和 session current-work 运行态；agent backend 负责用户意图理解、能力选择、任务规划、胶水代码生成、artifact 内容读取、失败诊断、继续执行和修复。
-- SciForge runtime：负责 append-only project ledger、capability registry、capability broker、workspace refs/blob store、权限边界、执行 sandbox、stream events、日志、artifact 持久化、contract validation、verifier 调用和错误回传。
-- Agent harness policy：负责按阶段约束 backend 行为，包括 intent mode、探索预算、上下文选择、skill hints、tool-use policy、验证强度、repair policy 和用户可见进度；它是独立策略层，不散落在 runtime 或 UI 分支中。
-- Scenario package：只声明领域定制内容，例如 artifact schemas、默认 views、可用 capabilities、领域词表、verifier policy、隐私/安全边界；不写多轮语义判断和 prompt 特例。
-- Packages：不只是代码复用单元，而是 capability contract 单元。每个 package 都应能声明自己暴露的能力、输入输出协议、side effects、validator、repair hints 和 provider variants。
-- UI：只负责把 session、artifact、object refs、views、execution units、validation errors 和 recover actions 可视化；不作为语义路由层或第二个 agent。
-
-### Agent Harness 与 Conversation Policy 的关系
-
-Conversation policy 是 harness 的输入之一，不是 harness 本身，也不是长期记忆系统。它应定位为低层上下文与运行安全策略编译器：产出 current-turn facts、引用/历史隔离、bounded digest、handoff 压缩、acceptance/recovery/cache/latency 的保守默认值。Harness profile 可以采纳、覆盖或收紧这些建议，并形成最终 `HarnessContract`。
-
-保留在 conversation policy 的职责：
-
-- context isolation、explicit refs first、pollution guard、repair evidence inclusion。
-- bounded memory projection、current reference digest、artifact index 和 clickable refs；这些字段只描述本轮 handoff 应暴露什么，不替代 workspace ledger 或 AgentServer context orchestration。
-- handoff budget、large string/data URL 省略、refs-first compaction。
-- protocol-level acceptance/recovery signals，例如 missing output、missing artifact ref、silent stream、retryability。
-- latency/cache/response/background 的保守默认值。
-- continuation/repair/isolate 的结构化信号，用于告诉 AgentServer 何时复用 session/current-work，何时只看当前 refs。
-
-上移到 harness hook/profile 的职责：
-
-- `intentMode` / `executionMode` 的最终选择；conversation classifier 只提供 `TurnIntentSignals` 和 recommendation。
-- context、tool、capability、verification、repair、progress budget 的最终 merge 与 enforcement。
-- capability profile、skill hints、tool-use policy、side-effect allowance 和 provider constraints。
-- repair executor 选择：patch/rerun、supplement、peer handoff、ask user、needs-human、fail-closed。
-- UI interaction policy：progress、clarification、human approval、mid-run guidance、cancelled/failed 区分。
-
-因此，未来不应继续在 conversation-policy 模块里扩大 keyword intent、任务 workflow、UI 文案或 prompt 内联历史。若需要新增行为策略，应进入 harness callback/profile；若需要新增能力，应进入 capability manifest/package；若需要多轮记忆能力，应扩展 Project Session Ledger、context projection block、AgentServer retrieval/compaction contract 或 cache-aware handoff compiler。
-
-Repair/supplement projection 也遵循同一边界：repair context policy 只来自 contract handoff 或已审计的 contract projection，legacy policy 字段仅记录 ignored audit；stderr/traceback 正文不能混入 failureReason、selfHealReason 或 route fallback copy。Supplemental generation 必须补齐 missing artifact types，并把 primary artifacts / UI slots / WorkEvidence additive merge 回最终 payload；view policy 不能为了 selected component 编造不存在的 artifact ref。
-
-### src 与 packages 边界：固定平台 vs 插拔能力
-
-最终版本采用清晰的工程边界：
-
-```text
-src/
-  fixed platform logic
-  owns: lifecycle, loading, routing shell, validation loop, persistence, safety
-
-packages/
-  pluggable capabilities
-  owns: manifests, schemas, validators, providers, examples, repair hints
-```
-
-判断规则：
-
-- 如果逻辑回答“系统怎么运行”，放 `src/`。
-- 如果逻辑回答“系统能做什么”，放 `packages/`。
-- 如果高频稳定逻辑是平台秩序，放 `src/`；如果是能力组合，放 `packages/` 作为 composed capability。
-
-`src/` 是产品固定逻辑和运行时骨架，适合写死：
-
-- app shell、UI 状态管理、workspace writer、runtime server。
-- request/stream transport、backend run 生命周期、stream resume/poll。
-- capability registry loader、capability broker 主流程、provider dispatch。
-- contract validation / repair loop 编排、`ContractValidationFailure` 生成。
-- workspace ref resolver 主流程、artifact persistence、materialization。
-- permission / safety boundary、sandbox、外部动作确认。
-- Capability Evolution Ledger 写入、module boundary smoke、no-legacy-paths guard。
-
-`packages/` 是即插即用能力生态，适合承载：
-
-- observe providers、skills、actions、verifiers、views。
-- importers/exporters、domain scenario packages、mock/test fixtures。
-- capability manifests、schemas、validators、examples、repair hints。
-- provider-specific adapters，例如 external API、本地 Python、browser/computer-use provider。
-- composed capabilities，例如 `artifact_to_markdown_report`、`paper_search_to_evidence_matrix`、`failed_run_repair_loop`。
-
-示例边界：
-
-- `read_artifact` 的权限、路径约束、ref resolver 生命周期属于 `src/`。
-- `render_research_report_to_markdown` 属于 `packages/` capability。
-- capability broker 的筛选框架属于 `src/`。
-- biomedical 文献检索能力的 manifest、schema、provider 和 validator 属于 `packages/`。
-- validation loop 编排属于 `src/`。
-- evidence matrix schema validator 属于 `packages/`。
-
-backend 主要理解 `packages/` 暴露的 capability meta 和 `src/` 暴露的 runtime contract；不需要理解 `src/` 内部实现。`src/` 不应硬编码某个 package 的领域语义，`packages/` 不应绕过 `src/` 的安全、refs、validation 和 persistence 边界。
-
-固定平台和插拔能力的当前 inventory 由 [`../tools/check-boundary-inventory.ts`](../tools/check-boundary-inventory.ts) 输出并验证。该 inventory 只记录 ownership 和拆分计划；实际 enforcement 仍由 `smoke:fixed-platform-boundary`、`packages:check`、`smoke:module-boundaries`、`smoke:no-src-capability-semantics` 和 `smoke:long-file-budget` 执行。
-
-最终 cutover 的旧链路由 `smoke:no-legacy-paths` 冻结 UI 语义 fallback、provider/scenario/prompt 特例和 legacy facade/re-export 基线。当前清单是 closed inventory：已知残留只允许作为 tracked warning、migration/audit alias、negative guard 或 compatibility fixture 存在，不能驱动主路径；任何新增或计数增加都会失败。若未来某个 guard 面被重新打开，必须在同一变更中记录 owner、truth source、删除条件和 smoke 证据。
-
-### 一切模块都是 Capability
-
-以下模块都应收敛到统一 capability contract，而不是散落成隐式调用约定：
-
-- Observe / 感官：vision、browser、computer use、file watcher、workspace scanner。
-- Skills：文献检索、结构分析、统计建模、Python task、报告生成、数据转换。
-- Actions：写文件、运行命令、调用 API、修改 workspace、下载/导出。
-- Verifiers：schema 校验、事实核查、artifact 质量检查、UI smoke、acceptance repair。
-- Views：report viewer、evidence matrix、graph、table、molecule viewer、unknown artifact inspector。
-- Context projection：artifact index、failure history refs、current references、current reference digests、context compaction signals 和 cache-aware projection blocks。workspace ledger 是事实源；AgentServer 是 context orchestration；projection 不是第二套 prompt 记忆。
-- Importers / exporters：PDF、Markdown、JSON、PPT、CSV、package import/export。
-
-每个 capability 至少应有：
-
-- `name` / `version` / owner package。
-- `brief`：几十 token 的用途摘要，供 broker 默认暴露给 backend。
-- `inputSchema` / `outputSchema`：机器可校验协议。
-- `sideEffects`：读写 workspace、网络、进程、UI、外部账号等边界。
-- `safety`：权限、隐私、人工确认和 sandbox 要求。
-- `examples`：少量典型调用，按需展开。
-- `validator`：输出、refs、artifact、evidence 和 side effect 校验。
-- `repairHints`：失败时给 backend 的结构化修复提示。
-- `providers`：local Python、AgentServer、browser、external API、mock/test fixture、future cloud executor 等可替换实现。
-
-### Meta 暴露与热路径固化
-
-为了避免 token 开销失控，capability meta 必须分层暴露：
-
-- 默认只给 backend `brief` 和少量 routing tags。
-- broker 根据当前 prompt、object refs、artifact index、failure history 和 scenario policy 筛出相关 capability。
-- backend 决定调用某个 capability 时，再展开 contract summary。
-- validation failed 或需要修复时，才展开 full schema、examples、repair hints，以及与被选 capability 相关的 failure/log refs。
-
-频繁使用、稳定、token 开销大的组合可以固化为 composed/compiled capability，例如 `artifact_to_markdown_report`、`paper_search_to_evidence_matrix`、`python_task_generate_run_verify`。但固化不能变成隐藏 UI 分支；固化后的热路径仍必须暴露 capability contract、validator、repair hints 和 fallback。失败时 backend 可以下钻到底层原子能力，重新生成胶水代码或修复实现。
-
-判断是否固化的原则：
-
-- 稳定重复性工作交给代码。
-- 不确定性、跨能力组合和异常修复交给 backend。
-- 固化的是“可声明、可验证、可替换的组合能力”，不是不可见的业务特例。
-
-### Composed Capability Fallback and Evolution Ledger
-
-Composed capability 失败时是否回退到原子能力，不由 LLM 主观判断，而由代码校验、failure classifier 和 capability manifest 中的 fallback policy 共同决定。backend 决定“回退后如何重组”，SciForge runtime 决定“是否允许回退、暴露哪些原子能力、携带哪些失败上下文”。
-
-推荐流程：
-
-```text
-run composed capability
-  -> validator checks output
-  -> failure classifier assigns failureCode
-  -> fallbackPolicy decides fallbackable / non-fallbackable
-  -> if fallbackable and retry budget remains:
-       expose atomicCapabilities + contract summaries + failure context
-       backend writes new glue code or selects alternate provider
-       runtime executes and validates again
-     else if needs user/action/safety:
-       return needs-human with recoverActions
-     else:
-       return structured ContractValidationFailure
-  -> append success/failure trace to Capability Evolution Ledger
-```
-
-每个 composed capability manifest 应声明：
-
-- `atomicCapabilities`：可下钻的原子能力列表。
-- `fallbackPolicy.fallbackToAtomicWhen`：允许下钻的失败类型，例如 `schema_invalid`、`missing_required_artifact`、`invalid_ref`、`empty_result`、`partial_result_below_threshold`、`provider_timeout`、`verifier_failed`、`repair_attempts_exhausted`。
-- `fallbackPolicy.doNotFallbackWhen`：不应自动下钻的失败类型，例如 `permission_denied`、`missing_user_input`、`safety_blocked`、`quota_exceeded`、`unsupported_task`。
-- `retryBudget`：最大下钻次数、最大耗时、最大外部调用次数和可接受成本。
-- `fallbackContext`：下钻时必须交给 backend 的 related refs、partial artifacts、stdout/stderr/log refs、failureReason、recoverActions 和 validator details。
-
-capability result 至少应能表达：
-
-- `status`: `success` / `partial` / `failed` / `needs-human`。
-- `failureCode` 和 `failureReason`。
-- `fallbackable`。
-- `confidence` / `coverage`，用于判断部分成功是否可接受。
-- `recoverActions`。
-- `atomicTrace` / `executionUnitRefs`。
-- `relatedArtifactRefs` / `relatedRunRefs`。
-
-胶水代码和修复轨迹本身是项目资产，应进入 **Capability Evolution Ledger**。每次 backend 为能力组合生成胶水代码、执行 composed capability、下钻原子能力或完成 repair loop，都应记录：
-
-- user goal summary。
-- selected capabilities 和 provider。
-- input/output schema refs。
-- glue code ref / patch ref / generated task ref。
-- execution trace、stdoutRef、stderrRef、logRef。
-- validation result、failureCode、recoverActions。
-- repair attempts 和最终状态。
-- produced artifacts / views / WorkEvidence refs。
-- latency、外部调用次数、可选成本摘要。
-- 是否建议沉淀为 composed capability、改进 validator 或更新 repair hints。
-
-Ledger 的作用不是让 backend 每轮读取全部历史，而是为 capability broker、文档、测试和后续固化提供事实依据：
-
-- 高频且稳定成功的胶水代码可以提议晋升为 composed capability。
-- 高频失败模式可以改进 validator、fallbackPolicy 和 repair hints。
-- 常见能力组合可以形成 capability graph，帮助 broker 更快筛选相关能力。
-- 已固化能力失败时，ledger 可以提供历史成功路径和失败边界，但仍只通过 refs/digests/briefs 分层暴露。
-
-### Validation and Repair Loop
-
-SciForge 的核心稳定性来自 contract validation，而不是前端兜底：
-
-```text
-Backend response / capability result
-  -> schema validation
-  -> ref resolution validation
-  -> artifact and UIManifest validation
-  -> WorkEvidence / verifier validation
-  -> if valid: persist and render
-  -> if invalid: return ContractValidationFailure to backend
-```
-
-`ContractValidationFailure` 应是机器可读对象，至少包含：
-
-- schema path / contract id / capability id。
-- expected vs actual。
-- missing fields / invalid refs / unresolved URI。
-- stdoutRef / stderrRef / logRef / rawRef。
-- failureReason。
-- recoverActions。
-- nextStep。
-- related artifact refs、executionUnit refs、run refs。
-
-backend 收到 validation failure 后应优先修复输出、补读 artifact、重写胶水代码或继续同一 run。SciForge 不应把不合法输出改写成看似成功的 UI 结果；`completed` 必须表示已经真实交付文本、artifact 或稳定 object ref。
-
-### Backend-first 多轮 Artifact 使用
-
-多轮对话的长期事实来源是 workspace 本地 Project Session Ledger、stable refs 和 AgentServer context projection，而不是 SciForge 本地自然语言历史，也不是 backend native thread。用户说“你还记得一开始的问题吗”“给我 markdown 报告”“继续刚才那个结果”“按失败原因修一下”时，AgentServer 应先从 ledger/projection/current-work 生成小而准的 handoff packet；backend 再通过通用工具按需读取事实：
-
-- `list_session_artifacts(sessionId)`
-- `resolve_object_reference(ref)`
-- `read_artifact(ref, format)`
-- `render_artifact(ref, markdown|json|text)`
-- `resume_run(runId)`
-- `retrieve(query, scope)`
-- `workspace_search(query, roots)`
-
-SciForge 每轮只传必要上下文投影：当前用户请求、continuation/repair/isolate 信号、当前 selection、visible object refs、artifact descriptors、execution history 摘要、failure/recover records、capability brief、scenario contract refs 和 projection block refs。大文件、网页正文、stdout/stderr、长 report、raw payload 和旧对话全文默认只传 ref、digest 和 preview。SciForge 不把这些投影当成 prompt 记忆；它们是从 append-only ledger 派生出的可丢弃视图，用来帮助 AgentServer 收窄上下文并让 backend 按需读取。
-
-`agentserver://.../output` 等 backend 临时 URI 必须可被 resolver 读取，或在 run completed 前 materialize 成 `.sciforge/task-results/*.json|md` 稳定 workspace ref。UI 只应依赖稳定 refs 重建结果面板。
-
-每个可展示 artifact 必须带 `ArtifactDelivery` contract，声明 `role`、`declaredMediaType`、`declaredExtension`、`contentShape`、`readableRef`、`rawRef` 和 `previewPolicy`。materializer 可以用轻量规则把 JSON envelope 中的 `markdown/content/html/csv/text` 拆成真实可读文件，但原始 payload 必须保留为 `rawRef`。`primary-deliverable` 和 `supporting-evidence` 只能进入 `ConversationProjection` 的可见结果；`audit`、`diagnostic` 和 `internal` 只进入审计通道。UI renderer 只按 `previewPolicy` 分流：`inline` 走内置预览，`open-system` 走 workspace writer 的系统默认程序打开，`audit-only` 默认折叠，`unsupported` 显示不可内联预览而不把 JSON fallback 伪装成主结果。
-
-
-## 模块地图
-
-```text
-src/ui/                         React + Vite 工作台
-src/ui/src/api/sciforgeToolsClient.ts
-                                UI -> workspace runtime handoff
-src/runtime/workspace-server.ts Workspace writer HTTP API
-src/runtime/generation-gateway.ts
-                                Runtime gateway 主编排
-src/runtime/gateway/*           AgentServer context、payload、repair、diagnostics 子模块
-src/runtime/conversation-policy/*
-                                TypeScript -> Python policy bridge
-packages/reasoning/conversation-policy/
-                                goal/context/projection/digest/capability/recovery 策略
-packages/scenarios/core/         scenario package 与质量门禁
-packages/contracts/runtime/      capability、observe、handoff、artifact、session 等共享 contract
-src/runtime/observe/            observe adapter 接入壳；provider 语义留在 packages
-packages/presentation/components/         interactive artifact view registry
-packages/skills/                skill registry 与 package skills
-packages/observe/vision/        vision observe provider
-packages/actions/computer-use/  sense-agnostic GUI action loop
-```
-
-## Runtime 请求链路
-
-```text
-User turn
-  -> ChatPanel / runPromptOrchestrator
-  -> sendSciForgeToolMessage
-  -> workspace writer /api/sciforge/tools/run/stream
-  -> runWorkspaceRuntimeGateway
-  -> append ConversationEventLog
-  -> applyConversationPolicy
-  -> build HarnessContract + context envelope + capability broker brief
-  -> optional observe/action adapter only when explicitly selected and allowed
-  -> bounded local closure runtime when the request is explicit and self-contained
-  -> AgentServer backend owns reasoning / planning / capability selection
-  -> request AgentServer /api/agent-server/runs/stream
-  -> direct ToolPayload or generated workspace task
-  -> runWorkspaceTask
-  -> validate payload / refs / artifacts / UIManifest / WorkEvidence
-  -> append success/failure/verification/background events
-  -> restore ConversationProjection
-  -> UI renders projection + ref previews
-```
-
-### Bounded Local Closure Runtimes
-
-SciForge 可以在 AgentServer 之前运行少量 deterministic local closure runtimes，但它们不是 prompt 特例，也不能绕过用户目标验收。它们只处理输入、证据和执行边界都已经在当前 workspace 内可核查的任务，并且必须返回完整 `ToolPayload`、`ConversationProjection` 兼容状态、artifact/object refs、execution units 和 verification records。
-
-当前 gateway 顺序中这些 runtime 位于 provider preflight、direct-context/artifact mutation、turn execution constraints 和 observe/vision 之后，AgentServer dispatch 之前：
-
-- `local-tabular-analysis-runtime`：当用户提供或引用 CSV/TSV 并明确要求 QC、统计模型、图表、敏感性分析和复跑命令时，生成 workspace 内可复跑分析包；后续图表/QC/robustness 问题只读取已写 artifact。
-- `local-code-debug-runtime`：当用户明确给出 `python -m pytest ...` 这类本地测试命令并要求 root cause/patch/rerun 时，先运行测试，只应用内置 bounded repair rules，再复跑同一命令；无法定位实现文件或规则不匹配时返回 coherent failed-with-reason，而不是假成功。
-- `local-methodology-finalizer-runtime`：当用户基于当前 artifact 明确要求写回/保存最终 methodology protocol package，且禁止或不需要外部调用时，从当前 refs/session artifacts 生成 durable protocol、sample/statistics、risk register、execution checklist、preregistration notes 和 manifest。
-
-这些 runtime 的路由优先级按“显式文件修改 / durable writeback / 数据分析 follow-up”排序：code-debug 和 methodology finalizer 先于 tabular analysis。tabular follow-up 必须对 `pytest`/代码补丁/最终 protocol package/risk register/preregistration 等显式非数据分析请求 fail-open，避免上一轮 CSV artifact 污染当前 coding 或 methodology 任务。
-
-这些 runtime 的触发条件必须锚定当前 prompt、显式文件/refs、当前 artifacts 或 workspace session artifact；不能读取旧失败记录来推断新任务，也不能在缺少输入材料时编造结果。任何超出 bounded rules 的复杂推理、外部检索、provider 选择、长程代码修改或多阶段计划仍应落回 AgentServer/capability pipeline，并通过标准失败恢复或 provider recovery 交付。
-
-T096/T097 升级后的可复现任务链路：
-
-```mermaid
-flowchart LR
-  A["user request"] --> B["Python classifier"]
-  B --> C["execution mode"]
-  C --> D["AgentServer stage/task generation"]
-  D --> E["SciForge runner"]
-  E --> F["WorkEvidence"]
-  F --> G["next stage / repair / final payload"]
-```
-
-职责边界：
-
-- Python 负责算法策略：任务分类、复杂度评分、不确定性判断、可复现等级、stage planning hints、repair/continuation 策略和可调 fixture 规则。实现入口是 `packages/reasoning/conversation-policy/src/sciforge_conversation/execution_classifier.py`，测试入口是 `packages/reasoning/conversation-policy/tests/test_execution_classifier.py`。
-- TypeScript 负责 runtime execution shell：HTTP/stream transport、workspace project/stage 目录、生成代码落盘、命令执行、stdout/stderr/ref 持久化、backend tool stream 到 WorkEvidence 的通用字段适配、WorkEvidence/guidance guard 调用、UI 状态和 AgentServer 往返。TS 侧只读取 `executionModePlan` / `executionModeDecision` 的稳定字段，缺失时回退为 `unknown` / `backend-decides`，不得用 prompt regex 重新判定 execution mode 或 capability requirements。
-- AgentServer 负责理解任务、选择通用能力、生成当前 stage/task 代码或 patch/spec；多阶段模式下只生成下一阶段，不一次性展开整条 pipeline。
-- WorkEvidence 是执行事实的审计/恢复真相源；UI WorkEvent 可以从它投影摘要，但不替代它。最终展示仍以 `ConversationProjection` 为准。
-
-## AgentServer Contract
-
-SciForge dispatch 到 AgentServer 的 stream endpoint：
-
-```text
-POST <agentServerBaseUrl>/api/agent-server/runs/stream
-```
-
-runtime payload 中包含：
-
-- `agent`：backend、agent id、workspace、system prompt。
-- `input.text`：由 context envelope、workspace tree、compact capability broker brief、artifact schema、UI contract、repair context 和当前 prompt 组成的生成提示。
-- `contextPolicy`：声明 AgentServer 本轮如何使用 current work、recent turns、persistent projection、memory projection 和 compacted session state；该字段是 context orchestration policy，不是 prompt 内联历史。
-- `runtime`：backend、cwd、用户侧 LLM endpoint、sandbox 和 context-window metadata。
-- `metadata`：SciForge source、task purpose、context budget、重试策略。
-
-默认 handoff 只传紧凑能力摘要：
-
-- `contextEnvelope.scenarioFacts.capabilityBrokerBrief.schemaVersion === "sciforge.agentserver.capability-broker-brief.v1"`。
-- `availableRuntimeCapabilities` 来自 `buildCapabilityBrokerBriefForAgentServer`。
-- `selectedSkillIds` 是 UI → runtime 本地 skill selection 字段；`availableSkills` 只允许作为历史 ingress alias 或 negative guard 字段。它不进入默认 prompt/handoff 主路径；若历史 API 形状仍携带该字段，prompt builder 必须丢弃它并改用 capability broker brief。
-- 旧 full skill/tool/runtime catalog 即使被误传给 prompt builder，也不会进入默认 AgentServer prompt。
-
-AgentServer context endpoint 是多轮 context orchestration 和压缩的优先入口：
-
-- dispatch 前读取 `/api/agent-server/agents/{agentId}/context`，获取 session/current-work snapshot、context-window state、compacted turn refs 和 operational guidance。
-- context-window 接近上限时优先调用 AgentServer compact API；SciForge handoff slimming 只作为传输降级，canonical truth 仍在 workspace ledger/ref store。
-- fresh turn 使用 fresh agent scope，避免旧 session 污染；continuation/repair 使用稳定 agent scope，让 AgentServer 能命中自己的 recent turns、current work、compacted summaries 和 workspace ledger projection。
-- AgentServer 运行态 memory 必须可由 workspace ledger 校验或重建；backend native thread 不得成为唯一可恢复来源。
-
-AgentServer 可以返回两类成功结果：
-
-- 直接 `ToolPayload`：用于已经由 backend 推理完的 report-only 或结构化答案。
-- `AgentServerGenerationResponse`：包含 `taskFiles`、`entrypoint`、`environmentRequirements`、`validationCommand` 和 `expectedArtifacts`，随后由 SciForge 写入 workspace 并执行。
-
-stream 过程会透传 AgentServer normalized events。SciForge 支持标准 `{ "event": ... }` envelope，也兼容 AgentServer/上游 backend 直接输出的顶层 `status`、`text-delta`/`text_delta`、`tool-call`、`tool-result`、`usage-update`、`contextWindowState` 等 NDJSON 事件。非最终 `result` 的进度事件会先经过 `normalizeAgentServerWorkspaceEvent`，再作为 workspace runtime event 进入 UI worklog；这样用户可以看到 backend 正在检索、写文件、调用工具、等待权限或仍在运行，而不是只看到 HTTP stream silent wait。
-
-生成的 workspace task 必须通过 `inputPath` 和 `outputPath` argv 读写，最终输出合法 `ToolPayload`。runtime runner 在执行前写入最小 `running` checkpoint；如果任务异常、超时或没有写出最终 output，runner 必须覆盖为最小 `failed-with-reason` payload，保留 `codeRef`、`inputRef`、`outputRef`、`stdoutRef`、`stderrRef`、`exitCode`、`failureReason`、`recoverActions` 和 `nextStep`。`failed-with-reason` 是合法终态，不再因为非零 exit code 自动进入 repair；只有 schema 错误、证据 guard 或明确 `repair-needed` 才触发 repair。repair 后没有任务代码变更时直接记录为 repair no-op，并停止 rerun。
-
-## Conversation Policy
-
-会话策略的主路径是 Python package，默认开启。它的职责是把 UI/session/runtime facts、ledger refs 和 projection hints 编译成本轮 handoff 策略，而不是保存长期对话记忆：
-
-- Bridge：[`../src/runtime/conversation-policy/python-bridge.ts`](../src/runtime/conversation-policy/python-bridge.ts)
-- TS apply/enrichment：[`../src/runtime/conversation-policy/apply.ts`](../src/runtime/conversation-policy/apply.ts)
-- TS request/response contract：[`../packages/contracts/runtime/conversation-policy.ts`](../packages/contracts/runtime/conversation-policy.ts)
-- Python contract：[`../packages/reasoning/conversation-policy/src/sciforge_conversation/contracts.py`](../packages/reasoning/conversation-policy/src/sciforge_conversation/contracts.py)
-- Python service：[`../packages/reasoning/conversation-policy/src/sciforge_conversation/service.py`](../packages/reasoning/conversation-policy/src/sciforge_conversation/service.py)
-
-环境变量：
-
-- `SCIFORGE_CONVERSATION_POLICY_MODE=active|off`，默认 `active`。
-- `SCIFORGE_CONVERSATION_POLICY_PYTHON`，默认 `python3`。
-- `SCIFORGE_CONVERSATION_POLICY_MODULE`，默认 `sciforge_conversation.service`。
-- `SCIFORGE_CONVERSATION_POLICY_PYTHONPATH`，默认 `packages/reasoning/conversation-policy/src`。
-- `SCIFORGE_CONVERSATION_POLICY_TIMEOUT_MS`，默认 3500ms。
-
-Policy response 会写回 `GatewayRequest.uiState`，但这些字段都是下一轮 handoff 投影：
-
-- `goalSnapshot`：当前 turn 的目标、引用和任务关系。
-- `contextReusePolicy`：由 Python conversation policy 写入的 canonical context/mode projection，告诉 runtime/AgentServer 本轮是 `fresh`、`continue`、`repair` 还是 `isolate`。UI transport 只发送原始 session/runs/projections/refs 状态，不写入 mode；旧 `contextIsolation` alias 不再作为 runtime 读取路径。
-- `contextProjection`：本轮可暴露的 bounded summaries、refs、projection blocks 和 pollution guard；它是 projection hint，不承担 canonical recall。旧 `handoffMemoryProjection` 只能作为历史 fixture / migration audit alias 读取，不能作为 public runtime contract 主路径。
-- `currentReferences` / `currentReferenceDigests` / `artifactIndex`：当前 refs 和可点击对象索引。
-- `capabilityBrief` / `handoffPlan`：能力和传输预算投影。
-- `acceptancePlan` / `recoveryPlan` / `userVisiblePlan`：协议验收、失败恢复和用户可见计划。
-
-记忆归属边界：
-
-- Workspace append-only Project Session Ledger 是可恢复事实源。
-- AgentServer session/current-work 是多轮 context orchestration 和 backend handoff 的运行态来源。
-- SciForge 的 `contextProjection`、`conversationLedger`、`selectedMessageRefs`、`selectedRunRefs` 只用于构建本轮 context envelope、projection block 和 prompt snapshot；不能把 raw 历史内联成 prompt 记忆。
-- 早期问题 recall、跨轮自然语言记忆和 current-work continuity 应通过 AgentServer `/context`、`/compact`、stable `agentId`、`contextPolicy.includeCurrentWork/includeRecentTurns/persistRunSummary` 和 workspace ledger refs 协同恢复；UI recent messages 不能在 AgentServer 不可用时升级成唯一记忆替代品。
-- fresh/new-task 默认使用 fresh agent scope 或 `includeRecentTurns: false`，避免旧记忆污染。fresh-chat 首轮是强 session boundary：必须重置 `contextReusePolicy` 为 `isolate`，不继承旧 session 的 failure/repair/current-work/handoff refs，也不能从 archived/historical runs 推断 repair。
-- continuation/repair 必须显式打开 AgentServer `includeCurrentWork`、`includeRecentTurns`、`persistRunSummary` 等开关，并携带稳定 agent id。
-- 如果 AgentServer context/compact API 不可用，SciForge 可以用 workspace ledger 做 refs-first fallback 和用户可见诊断，但不能把完整本地历史直接塞回 backend。
-
-`executionModePlan` 字段边界：
-
-- Python 输出：`executionMode`、`complexityScore`、`uncertaintyScore`、`reproducibilityLevel`、`stagePlanHint`、`reason`、`riskFlags`、`signals`、`requiredCapabilities`。
-- TS enrichment：`src/runtime/conversation-policy/apply.ts` 把 Python 字段映射为 `executionModeRecommendation`、`complexityScore`、`uncertaintyScore`、`reproducibilityLevel`、`stagePlanHint`、`executionModeReason`。
-- Context envelope：`src/runtime/gateway/context-envelope.ts` 把这些字段放入 `sessionFacts` 和 `scenarioFacts`，只做裁剪、hash 和 fallback。
-- AgentServer prompt：`src/runtime/gateway/agentserver-prompts.ts` 把字段放入 `CURRENT TURN SNAPSHOT`，并说明每种 mode 的执行边界。prompt 文案是 contract，不是 TS 策略算法。
-
-如果 Python policy 失败，runtime 会发出 `conversation-policy` failed event，并继续用 transport-only fallback；这保证策略层问题不会阻塞普通运行。fallback 仍必须遵守“workspace owns truth, AgentServer owns orchestration, backend consumes projection”的边界。
-
-## Context 与恢复
-
-SciForge 不把完整历史和大文件无界塞进 backend，也不把本地 ledger 当作 prompt transcript。当前 turn 优先使用显式 refs、bounded digest、artifact index、最近 projection summary、cache-aware stable blocks 和 audit refs；多轮指代、早期问题回忆和 current-work continuity 由 workspace ledger 与 AgentServer session/context 机制共同恢复。大内容只通过 ref、digest、preview 和 checkpoint 进入上下文，backend 需要正文时通过受控 `read_ref` / `retrieve` / `workspace_search` 按需读取。
-
-恢复策略包括：
-
-- context-window preflight 和 handoff slimming。
-- AgentServer context snapshot / compact API 优先；handoff slimming 只处理传输预算，workspace ledger/ref store 保留事实源。
-- AgentServer rate limit / context exceeded 的一次紧凑重试。
-- 当前引用 digest recovery。
-- schema failure 后的 repair prompt 和 rerun。
-- silent stream watchdog 与 timeout 诊断。
-- cache-aware projection compiler：稳定 prefix 字节级复用，动态 task packet 和 retrieved evidence 后置。
-
-## 守门状态与运行观察项
-
-最终形态的边界由 smoke 和 package checks 锁住。守门重点不是覆盖每个文件路径，而是持续防止四类回流：
-
-- UI semantic fallback、provider/scenario/prompt special case 和旧 validation fallback 回流。
-- `src/**` 重新持有 package-owned artifact/component/provider/scenario/domain 语义。
-- 默认 handoff 泄露 full catalog、ledger full logs 或大 raw payload。
-- 主 UI 绕过 `ConversationProjection`，重新从 raw run、task attempt、ExecutionUnit 或 backend stream 推断状态。
-
-仍需产品运行中持续观察的是运营质量，而不是架构迁移缺口：
-
-- 真实 AgentServer backend 是否稳定遵守 execution mode、stage boundary 和 structured repair contract。
-- 外部 provider 字段漂移是否继续能被通用 WorkEvidence adapter 吸收，而不是诱导新增 provider 特例。
-- 长任务中用户 guidance、stage feedback、repair continuation 和 artifact reuse 的可见体验是否足够清晰。
-- skill promotion / composed capability 晋升是否有足够样本支持，避免把偶发胶水代码过早固化。
-
-## Workspace Writer API
-
-Workspace writer 是本地 HTTP API，承载 workspace snapshot、file read/write、preview、scenario metadata、feedback、repair handoff 和 tool stream。它的架构职责是把文件系统、外部动作和 runtime gateway 放在同一个 workspace root 边界内；`open-external`、`reveal-in-folder` 等动作必须在 server 端做路径和权限检查。
-
-## Feedback 与双实例互修
-
-反馈不是直接在单实例里启动内嵌 repair agent。当前实现是 peer instance handoff：
-
-1. 目标实例收集 feedback comment / request / GitHub issue metadata。
-2. 执行方实例在主聊天栏选择 target instance。
-3. UI 根据自然语言里的 `feedback #id` 或 `GitHub #number` 调目标 writer 读取 issue bundle。
-4. AgentServer payload 中带上 `repairHandoffRunner` contract。
-5. `repair-handoff-runner` 在目标 repo 的隔离 worktree 中运行修复、测试和 diff 收集。
-6. 结果写回目标实例 `/repair-result`，可同步到 GitHub Issue。
+- 同一任务在纯 TUI 中可完成。
+- 接入 SciForge GUI 后只增加展示和交互能力，不增加算法能力。
+- 不需要独立 AgentServer；默认直接连接 Codex CLI / Claude Code CLI 终端服务。
+- GUI 没有 provider 分支、repair 策略、capability ranking、prompt route。
+- 所有 GUI 按钮最终只发送文本。
+- TUI 用原生机制调用 intent-based `gui.*` tools；GUI 可协商、延迟或拒绝。
+- GUI 默认只向 TUI 披露 shell + hot region 状态。
+- 算法模块可以直接给 Codex CLI / Claude Code CLI 使用。

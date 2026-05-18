@@ -2,7 +2,7 @@
 
 该目录包含 SciForge 的可复用能力、共享契约、worker/provider 和运行时支持包。
 
-新增或修改 package 前，先对照 [`../docs/Architecture.md`](../docs/Architecture.md) 的 Capability、Provider、Runtime Resolver 和 `src`/`packages` 边界；Single-Agent runtime contract 以 [`../docs/SciForge-SingleAgent-Architecture.md`](../docs/SciForge-SingleAgent-Architecture.md) 为准。这里的核心原则是两条轴同时成立：
+新增或修改 package 前，先对照 [`../docs/Architecture.md`](../docs/Architecture.md) 和 [`../docs/TuiGuiProtocol.md`](../docs/TuiGuiProtocol.md)。当前架构目标是：算法、capability discovery、harness/policy、provider route 和 verifier 使用 Codex CLI / Claude Code CLI 等目标 TUI agent 的原生 plugin/skill/tool/MCP 机制；SciForge GUI 只作为 read-only GUI resource tree + intent-based `gui.*` extension 提供状态感知、展示和交互能力，不再要求独立 AgentServer。这里的核心原则是两条轴同时成立：
 
 - 行为边界回答“能力在 agent loop 中扮演什么角色”：`observe`、`actions`、`verifiers`、`presentation`、`skills`。
 - 执行边界回答“在哪里运行、怎么运行”：每个可搬运执行包必须声明 worker/provider manifest；worker 可以内嵌在 1:1 能力包中，也可以在 `packages/workers` 中独立发布。
@@ -61,7 +61,7 @@
 - `worker/provider manifest`：worker id/version/protocol、provider ids、capability ids、transport、endpoint/command、auth、permissions、workspace roots、fallback eligibility 和 release channel。
 - `health`：liveness/readiness、依赖、授权、quota/rate-limit 和最近失败。
 - `invoke`：结构化 request/result envelope，失败必须带 provider-neutral failure code、recover actions 和 diagnostics。
-- `generated task provider invocation layer`：如果该 provider 可能被 AgentServer 生成的 Python/R/shell task 使用，必须声明 generated task 可执行的调用桥，而不只是 manifest 中的 provider id。至少要给 runtime 足够信息生成 `providerInvocation` adapter（例如 HTTP endpoint + invokePath，或受控本地 CLI/command adapter），并在示例中展示通过 `sciforge_task.invoke_provider(task_input, capabilityId, input)` 调用。不要只写“必须使用 provider route”却不给 generated task 可执行 API。
+- `generated task provider invocation layer`：如果该 provider 可能被 TUI CLI 生成的 Python/R/shell task 使用，必须声明 generated task 可执行的调用桥，而不只是 manifest 中的 provider id。至少要给 runtime 足够信息生成 `providerInvocation` adapter（例如受控本地 CLI/command adapter、MCP tool，或迁移期 HTTP endpoint + invokePath），并在示例中展示通过标准调用层调用。不要只写“必须使用 provider route”却不给 generated task 可执行 API。
 - `smoke`：manifest discovery、health、invoke、permission denied、rate-limit、empty-result 和 fallback route trace。
 - `README`：本机运行、复制到远程机器、环境变量、端口、权限和版本兼容说明。
 

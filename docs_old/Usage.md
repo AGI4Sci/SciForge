@@ -1,10 +1,8 @@
 # SciForge 使用与运维
 
-最后更新：2026-05-19
+最后更新：2026-05-10
 
 本文只描述当前代码已经落地的用法。脚本真相源是 [`../package.json`](../package.json)，配置默认值真相源是 [`../src/ui/src/config.ts`](../src/ui/src/config.ts)。
-
-架构目标已经调整为 **SciForge GUI 是 TUI agent 的 GUI extension**；见 [`Architecture.md`](Architecture.md) 和 [`TuiGuiProtocol.md`](TuiGuiProtocol.md)。最终形态默认直接连接 Codex CLI / Claude Code CLI 终端进程，不需要独立 AgentServer。本文件里的 `workspace writer`、`AgentServer`、`runtime gateway`、`scenario` 等仍是当前实现路径或迁移期兼容层，不代表最终职责归属。
 
 ## 快速启动
 
@@ -13,7 +11,7 @@
 - Node.js 20+
 - npm
 - 一个本地 workspace 目录
-- 目标架构下的 Codex CLI 或 Claude Code CLI
+- 可选：AgentServer 或兼容 backend，默认 `http://127.0.0.1:18080`
 
 安装依赖并启动完整本地工作台：
 
@@ -27,6 +25,7 @@ npm run dev
 ```text
 UI: http://127.0.0.1:5173
 Workspace writer: http://127.0.0.1:5174
+AgentServer: http://127.0.0.1:18080
 ```
 
 只启动 UI：
@@ -53,11 +52,11 @@ UI 配置存于浏览器 `localStorage`，workspace writer 的本地配置可通
 
 核心字段：
 
-- `agentServerBaseUrl`：迁移期兼容字段。最终应替换为 Codex CLI / Claude Code CLI 进程连接配置。
+- `agentServerBaseUrl`：AgentServer 或兼容 backend gateway，默认 `http://127.0.0.1:18080`。
 - `workspaceWriterBaseUrl`：workspace writer，默认 `http://127.0.0.1:5174`。
 - `workspacePath`：当前工作区根目录。代码会把传入的 `/.sciforge` 子路径归一回 workspace 根。
 - `agentBackend`：当前允许值为 `codex`、`openteam_agent`、`claude-code`、`hermes-agent`、`openclaw`、`gemini`。
-- `modelProvider`、`modelBaseUrl`、`modelName`、`apiKey`：迁移期兼容字段。最终模型、认证和工具权限由目标 TUI CLI 自己管理。
+- `modelProvider`、`modelBaseUrl`、`modelName`、`apiKey`：用户侧模型配置，会传给 AgentServer runtime。
 - `requestTimeoutMs`：UI 等待 workspace stream 的超时，默认 900000ms。
 - `maxContextWindowTokens`：上下文预算，默认 200000。
 - `peerInstances`：双实例互修目标，字段见 [`../src/ui/src/domain.ts`](../src/ui/src/domain.ts) 的 `PeerInstance`。
@@ -72,7 +71,7 @@ UI 配置存于浏览器 `localStorage`，workspace writer 的本地配置可通
 - `omics-differential-exploration`：组学差异分析。
 - `biomedical-knowledge-graph`：生物医学知识图谱。
 
-当前代码里，一次普通请求的实际路径是：
+一次普通请求的实际路径是：
 
 ```text
 ChatPanel
@@ -87,28 +86,16 @@ ChatPanel
   -> ToolPayload + artifacts + ExecutionUnits
 ```
 
-用户不需要手工拼现有 HTTP payload。选择 scenario、添加文件/结果引用、输入问题后，当前 SciForge 会把 turn、显式 refs、最近 run、artifact summary、组件选择和 backend 配置组装成 handoff payload。
+用户不需要手工拼协议。选择 scenario、添加文件/结果引用、输入问题后，SciForge 会把当前 turn、显式 refs、最近 run、artifact summary、组件选择和 backend 配置组装成 handoff payload。
 
-上面是当前代码路径，不是目标路径。目标架构应删除 AgentServer 这一层，让 Codex CLI / Claude Code CLI 在终端中直接承担 agent host：
-
-```text
-GUI event
-  -> terminal-equivalent text
-  -> Codex CLI / Claude Code CLI terminal process
-  -> native plugins / skills / tools / MCP
-  -> read-only GUI resources for shell/hot-region/region-detail state
-  -> intent-based gui.* tool calls for presentation
-  -> GUI negotiate / render / confirm / collect input
-```
-
-所有算法、capability discovery、harness/policy、provider route 都应迁移为 TUI 原生扩展；GUI 自身通过只读 GUI resource tree、intent-based `gui.*` tools 和 progressive hot-region context 注入。GUI 的本地逻辑只覆盖 renderer、layout、focus、interaction mode、precondition、defer/reject/suggestion 等 presentation behavior，不承担任务推理。
+当前 handoff 是 backend-first/capability-first：UI 不用 prompt 或 artifact type 猜用户语义；scenario package 只作为 policy 输入；AgentServer 默认只看到 compact capability broker brief。schema、examples、repair hints 和失败日志 refs 只在选中 capability 或修复时按需展开。
 
 ## Workspace 产物
 
 Workspace writer 会在当前 workspace 下维护 `.sciforge/` 状态。常见目录和文件：
 
 - `.sciforge/workspace-state.json`：UI session、消息、run、artifact 和反馈状态。
-- `.sciforge/task-attempts/`：迁移期任务尝试、失败原因、修复记录和输出引用；目标架构下应由 TUI CLI 的原生日志/事件流和 SciForge GUI refs 共同承载。
+- `.sciforge/task-attempts/`：AgentServer 生成任务、失败原因、修复记录和输出引用。
 - `.sciforge/capability-evolution-ledger/`：能力组合、胶水代码、validation result、失败/修复和晋升候选的 compact ledger。
 - `.sciforge/scenarios/<id>/`：workspace scenario package。
 - `.sciforge/skill-proposals/<id>/`：可晋升 skill 候选。
@@ -131,6 +118,7 @@ npm run dev:dual
 ```text
 A  UI http://127.0.0.1:5173  writer http://127.0.0.1:5174
 B  UI http://127.0.0.1:5273  writer http://127.0.0.1:5274
+AgentServer shared http://127.0.0.1:18080
 ```
 
 互修边界：
@@ -174,7 +162,7 @@ export SCIFORGE_VISION_DESKTOP_BRIDGE=1
 
 ## Skill 晋升
 
-迁移期 runtime 生成的成功 workspace task 可以生成 skill promotion proposal。真实逻辑在 [`../src/runtime/skill-promotion.ts`](../src/runtime/skill-promotion.ts)。目标架构下，skill/plugin 晋升应优先沉淀为 Codex CLI / Claude Code CLI 原生 skill、plugin、MCP 或 slash command。
+AgentServer 生成的成功 workspace task 可以生成 skill promotion proposal。真实逻辑在 [`../src/runtime/skill-promotion.ts`](../src/runtime/skill-promotion.ts)。
 
 流程：
 
@@ -215,10 +203,10 @@ npm run packages:check
 npm run smoke:fixed-platform-boundary
 npm run smoke:no-src-capability-semantics
 npm run smoke:no-legacy-paths
+npx tsx tests/smoke/smoke-capability-broker.ts
+npx tsx tests/smoke/smoke-agentserver-broker-payload.ts
 npx tsx tests/smoke/smoke-official-packages.ts
 ```
-
-迁移期兼容检查仍可能覆盖旧 AgentServer adapter；它们不是最终架构依赖。
 
 更重的长任务和 Computer Use 回归：
 

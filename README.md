@@ -21,7 +21,7 @@ SciForge 的目标是把 AI 从“研究聊天助手”推进到“可审计、�
 
 ## 产品定位：自由探索，专业沉淀
 
-SciForge 不试图替代 Codex、Claude Code、OpenCodex 或其它通用 Agent 的理解、规划和代码生成能力。相反，SciForge 应尽可能复用这些 backend 的通用能力，把它们接到一个面向科研的 contract/workbench 增益层中。
+SciForge 不试图替代 Codex CLI、Claude Code CLI 或其它通用终端 Agent 的理解、规划和代码生成能力。相反，SciForge 应尽可能复用这些成熟 TUI agent host 的原生能力，把它们接到一个面向科研的 GUI/workbench 增益层中。
 
 核心定位是：**通用 Agent 能力做底座，专业科研 contract 和交互工作台做增益层。**
 
@@ -53,29 +53,23 @@ SciForge 的反馈不是普通“点踩”。UI 中的 artifact、视图、运�
 
 SciForge 提供注册式科学 UI 组件和 interactive views，例如 evidence matrix、paper cards、molecular/structure viewer、sequence viewer、scientific plot、image annotation、knowledge graph、timeline、protocol editor、model evaluation view 等。Agent 输出结构化 artifact 和 `UIManifest`，SciForge 用可信组件渲染，而不是让 LLM 随机生成前端代码。
 
-### 4. 多 Backend 支持：把 Agent 能力接到同一个科研工作台
+### 4. TUI CLI 优先：把成熟 Agent 接到同一个科研工作台
 
-SciForge 通过 AgentServer/backend gateway 连接不同推理后端。配置后可以在 Settings 中切换 Codex、Claude Code、Gemini、Hermes、OpenClaw、OpenTeam Agent 或其它兼容 backend。
+SciForge 的目标不是维护自己的 AgentServer，而是直接连接 Codex CLI、Claude Code CLI 或其它终端 TUI agent。GUI 把用户动作翻译成终端等价文本，写入 CLI 进程；再消费 CLI 的结构化事件流、JSONL 输出或原生 app-server stream 来渲染过程。
 
-后端负责理解、规划和生成任务；SciForge 负责 workspace contract、artifact schema、UI 渲染、执行轨迹、失败恢复、反馈交接和版本化。这样可以比较不同模型/Agent 的科研能力，同时保留同一套可审计数据层。
+TUI CLI 负责理解、规划、工具调用、文件操作、修复和插件生态；SciForge 负责 GUI 输入、GUI 状态资源、UI 渲染、确认、反馈交接和科研 artifact 呈现。这样可以比较不同成熟 Agent 的科研能力，同时避免 SciForge 变成第二个 agent runtime。
 
-当前默认 handoff 只把与本轮相关的 compact capability broker brief 交给 backend；schema、examples、repair hints 和失败日志 refs 只在选中能力或修复时按需展开。UI 和 scenario 不再通过 prompt/scenario/artifact type 特例决定答案。
+迁移期代码中仍可能出现 AgentServer/backend gateway 字段；它们只代表当前实现兼容层，不是最终架构依赖。
 
-### 5. Harness-governed：可维护、可切换的 Agent 行为治理
+### 5. GUI-as-extension：让成熟 TUI agent 拥有逻辑
 
-SciForge 不把 agent harness 写散在 UI、gateway、prompt builder、conversation policy 和 repair 分支里。探索预算、上下文选择、技能偏好、工具使用约束、验证强度和用户可见进度应由独立 harness policy 管理，再通过稳定阶段 hook 注入 runtime。
+新的架构方向是让 SciForge GUI 成为 TUI agent 的 GUI extension。GUI 把用户操作翻译成终端等价文本；Codex CLI、Claude Code CLI 或自研 TUI host 继续使用各自原生 plugin/skill/tool/MCP 机制承载 capability discovery、harness/policy、provider route、verifier 和 workspace 操作。
 
-这意味着：
+GUI 自身暴露两类稳定表面：只读虚拟 GUI resource tree 用于状态感知，例如 `gui.list/read/search/stat/watch`；intent-based `gui.*` tools 用于展示和交互，例如 `gui.present`、`gui.ask_user`、`gui.notify`、`gui.set_status` 和 `gui.apply_batch`。TUI 读取 shell/hot-region/region-detail 来理解界面，再表达展示意图；GUI 基于 hot region、interaction mode、revision 和本地 presentation rules 执行、延迟、拒绝或建议替代方案。
 
-- harness 要像 PyTorch Lightning callback 一样标准化：`HarnessRuntime` 调生命周期，`HarnessProfile` 组合策略，`HarnessCallback` 返回结构化 decision，`HarnessContract` 成为本轮唯一行为契约，`HarnessTrace` 记录每个阶段的决策和预算消耗。
-- fresh request 仍会做必要探索，但默认只读取当前 scenario、workspace 摘要、capability brief 和必要 schema。
-- continuation / repair / audit 才扩大到旧 attempts、task results、stdout/stderr、ledger 和历史 artifacts。
-- 文献检索、PDF 下载、全文抽取、批量总结、引用核验等能力作为通用 skills/capabilities 加入生态，而不是把某个 prompt 写成隐藏 workflow。
-- 同一系统可以切换 `fast-answer`、`research-grade`、`debug-repair`、`low-cost`、`privacy-strict` 等 profile，而不改核心 runtime。
+当前设计真相源见 [`docs/Architecture.md`](docs/Architecture.md) 和 [`docs/TuiGuiProtocol.md`](docs/TuiGuiProtocol.md)。
 
-SciForge 的长期形态是 **Backend-first, Contract-enforced, Capability-driven, Harness-governed**：backend 负责理解和组合，capabilities 负责可声明能力，harness 负责阶段行为治理，runtime 负责执行边界和校验。
-
-Harness 的编程标准见 [`docs/AgentHarnessStandard.md`](docs/AgentHarnessStandard.md)：它定义主运行循环、分级 hooks、contract schema、merge 规则和最小实验案例。
+迁移前的旧方案快照保存在 [`docs_old/README_SNAPSHOT.md`](docs_old/README_SNAPSHOT.md)，仅用于对照和迁移，不再作为当前设计入口。
 
 ### 6. 为什么需要自建 Agent
 
@@ -111,23 +105,22 @@ Harness 的编程标准见 [`docs/AgentHarnessStandard.md`](docs/AgentHarnessSta
 
 ```text
 Scientific question / paper / dataset / UI feedback
-  -> Scenario + workspace refs
-  -> Harness profile + staged policy hooks
-  -> Capability broker
-  -> Agent backend reasoning
-  -> workspace task code / tool calls / computer use
-  -> ContractValidationFailure repair loop when needed
+  -> GUI translates input to terminal-equivalent text
+  -> Codex CLI / Claude Code CLI terminal agent
+  -> native plugins / skills / tools / MCP
+  -> workspace files / tool calls / computer use
+  -> agent-native repair loop when needed
   -> artifacts + ExecutionUnits + traces
   -> registered interactive scientific views
   -> comments / verification / repair handoff
-  -> stable skill, scenario, or software update
+  -> native skill, plugin, MCP, or software update
 ```
 
 能力分层：
 
 ```text
 Observe   senses：视觉、图像、文件、窗口状态、未来仪器信号
-Reason    skills + agent backend：科研策略、任务规划、代码生成
+Reason    TUI CLI + native skills：科研策略、任务规划、代码生成
 Action    tools + computer use：文件、GUI、kernel、外部系统操作
 Verify    verifiers：schema、测试、人类反馈、环境观察、agent critique
 Present   interactive views：科学 artifact 的可读、可点选、可评论界面
@@ -147,7 +140,7 @@ Present   interactive views：科学 artifact 的可读、可点选、可评论�
 - Node.js 20+
 - npm
 - 一个本地 workspace 目录
-- 可选但推荐：AgentServer endpoint，用于真实 agent-backed task generation
+- Codex CLI 或 Claude Code CLI，用于真实 agent-backed task execution
 
 安装并启动完整本地应用：
 
@@ -177,8 +170,7 @@ npm run workspace:server
 在 Settings 中配置：
 
 - `Workspace Path`：`.sciforge/` 状态、任务文件、日志、artifact 和 scenario packages 的存储目录。
-- `AgentServer Base URL`：AgentServer 或兼容 backend gateway 地址。
-- `Agent Backend`：Codex、Claude Code、Gemini、Hermes、OpenClaw、OpenTeam Agent 或其它已配置 backend。
+- 迁移期设置里可能仍有 `AgentServer Base URL` / `Agent Backend` 字段；目标架构下应改为 Codex CLI / Claude Code CLI 进程连接、事件流和权限配置。
 - provider、base URL、model、API key、timeout 和 context-window budget。
 
 ## 使用说明
@@ -190,7 +182,7 @@ npm run workspace:server
 - 论文复现工作流
 - 自我进化修复工作流
 - Computer Use 工作流
-- 多 backend 切换
+- Codex CLI / Claude Code CLI 连接
 - 双实例互修开发模式
 - 常用验证命令
 
@@ -208,7 +200,6 @@ npm run dev:dual
 ```text
 A  UI http://127.0.0.1:5173  writer http://127.0.0.1:5174
 B  UI http://127.0.0.1:5273  writer http://127.0.0.1:5274
-AgentServer shared http://127.0.0.1:18080
 ```
 
 常用检查：

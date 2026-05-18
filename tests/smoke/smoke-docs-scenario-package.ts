@@ -9,9 +9,10 @@ const requiredDocs = [
   'docs/README.md',
   'docs/Usage.md',
   'docs/Architecture.md',
-  'docs/SciForge-SingleAgent-Architecture.md',
-  'docs/AgentHarnessStandard.md',
-  'docs/HarnessResearchGuide.md',
+  'docs/TuiGuiProtocol.md',
+  'docs_old/README_SNAPSHOT.md',
+  'docs_old/SciForge-SingleAgent-Architecture.md',
+  'docs_old/AgentHarnessStandard.md',
   'README.md',
 ];
 
@@ -38,17 +39,37 @@ await assertMarkdownLinksResolve(await collectMarkdownFiles('docs'));
 const docsIndex = await readFile('docs/README.md', 'utf8');
 assert.match(docsIndex, /\[`Usage\.md`\]\(Usage\.md\)/);
 assert.match(docsIndex, /\[`Architecture\.md`\]\(Architecture\.md\)/);
-assert.match(docsIndex, /\[`SciForge-SingleAgent-Architecture\.md`\]\(SciForge-SingleAgent-Architecture\.md\)/);
-assert.match(docsIndex, /\[`AgentHarnessStandard\.md`\]\(AgentHarnessStandard\.md\)/);
-assert.match(docsIndex, /\[`HarnessResearchGuide\.md`\]\(HarnessResearchGuide\.md\)/);
+assert.match(docsIndex, /\[`TuiGuiProtocol\.md`\]\(TuiGuiProtocol\.md\)/);
+assert.match(docsIndex, /\[`..\/docs_old`\]\(..\/docs_old\)/);
+const oldDocsSnapshot = await readFile('docs_old/README_SNAPSHOT.md', 'utf8');
+assert.match(oldDocsSnapshot, /旧设计快照/);
+assert.match(oldDocsSnapshot, /当前设计真相源已经迁移到/);
 
 const usageText = await readFile('docs/Usage.md', 'utf8');
 assert.match(usageText, /npm run dev/);
 const architectureText = await readFile('docs/Architecture.md', 'utf8');
-assert.match(architectureText, /\/api\/agent-server\/runs\/stream/);
-const singleAgentText = await readFile('docs/SciForge-SingleAgent-Architecture.md', 'utf8');
-assert.match(singleAgentText, /Scenario package 只能是 policy/);
-assert.match(singleAgentText, /Core Conformance Suite/);
+assert.match(architectureText, /SciForge 是 TUI agent 的 GUI extension/);
+assert.match(architectureText, /GUI → TUI：全部是文本/);
+assert.match(architectureText, /TUI → GUI：表达 GUI intent/);
+assert.match(architectureText, /Hot region 至少包含 focused panel/);
+assert.match(architectureText, /只读虚拟资源树/);
+assert.match(architectureText, /GUI 的智能是确定性的 presentation autonomy/);
+assert.match(architectureText, /不需要独立 AgentServer/);
+const protocolText = await readFile('docs/TuiGuiProtocol.md', 'utf8');
+assert.match(protocolText, /GUI 给 TUI 的输入全部是文本/);
+assert.match(protocolText, /不要求独立 AgentServer/);
+assert.match(protocolText, /GUI 内部语义事件总线/);
+assert.match(protocolText, /Read-Only GUI Resource Tree/);
+assert.match(protocolText, /gui\.list/);
+assert.match(protocolText, /gui\.search/);
+assert.match(protocolText, /gui\.present/);
+assert.match(protocolText, /gui\.apply_batch/);
+assert.match(protocolText, /interactionMode/);
+assert.match(protocolText, /suggestions/);
+assert.match(protocolText, /GUI 不用 LLM 猜应该调用什么 GUI 函数/);
+assert.match(architectureText, /SciForge 不再定义 `registerCommand`/);
+assert.match(architectureText, /Capability Discovery/);
+assert.match(architectureText, /Harness \/ Policy 属于 TUI 原生扩展/);
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-docs-scenario-'));
 const scenarioPackage = buildBuiltInScenarioPackage('literature-evidence-review', '2026-05-08T00:00:00.000Z');
@@ -106,6 +127,7 @@ async function collectMarkdownFiles(root: string): Promise<string[]> {
   const entries = await readdir(root, { withFileTypes: true });
   const files = await Promise.all(
     entries.map(async (entry) => {
+      if (entry.isDirectory() && (entry.name === 'archive' || entry.name === 'plans' || entry.name === 'test-artifacts')) return [];
       const path = join(root, entry.name);
       if (entry.isDirectory()) return collectMarkdownFiles(path);
       return entry.isFile() && entry.name.endsWith('.md') ? [path] : [];
