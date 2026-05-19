@@ -79,6 +79,8 @@ function looksLikeRawJson(value: string) {
 function userVisibleFailureSummary(structured: Record<string, unknown>, fallback: string) {
   const status = asString(structured.status) ?? asString(structured.errorStatus) ?? asString(structured.state);
   const finalText = asString(structured.finalText) ?? asString(structured.error) ?? asString(structured.detail);
+  const explicitStatus = status?.trim().toLowerCase();
+  if (!finalText && explicitStatus && /^(?:done|completed|succeeded|success|satisfied)$/.test(explicitStatus)) return undefined;
   const isRawFailureText = looksLikeRawFailureText(fallback);
   const source = finalText || ((looksLikeRawJson(fallback) || isRawFailureText) ? fallback : '');
   if (!source) return undefined;
@@ -87,7 +89,7 @@ function userVisibleFailureSummary(structured: Record<string, unknown>, fallback
   // detection to the status field only. This avoids false positives from success messages that mention
   // previously-failed operations (e.g. "Backend repaired the failed run.").
   const textToCheck = (finalText || isRawFailureText) ? `${status ?? ''} ${compact}` : `${status ?? ''}`;
-  const failed = /failed|error|unauthorized|forbidden|timeout|timed out|401|403|429|5\d\d/i.test(textToCheck);
+  const failed = /failed|error|unauthorized|forbidden|timeout|timed out|\b(?:401|403|429)\b|\bHTTP\s+5\d\d\b/i.test(textToCheck);
   if (!failed) return undefined;
   const httpStatus = compact.match(/\bHTTP\s+(\d{3})(?:\s+([A-Za-z][A-Za-z -]{2,40}))?/i);
   const timeout = /\b(?:timeout|timed out)\b/i.test(compact);

@@ -36,13 +36,13 @@ test('silent wait and retry thresholds come from latencyPolicy with safe fallbac
   const fallback = latencyThresholdsFromPolicy({}, { requestTimeoutMs: 60_000 } as SciForgeConfig);
   assert.equal(fallback.firstEventWarningMs, 20_000);
   assert.equal(fallback.silentRetryMs, 45_000);
-  assert.equal(fallback.stallBoundMs, 120_000);
+  assert.equal(fallback.stallBoundMs, 300_000);
   assert.equal(fallback.requestTimeoutMs, 60_000);
 
   const capped = latencyThresholdsFromPolicy({
     stallBoundMs: 900_000,
   }, { requestTimeoutMs: 60_000 } as SciForgeConfig);
-  assert.equal(capped.stallBoundMs, 120_000);
+  assert.equal(capped.stallBoundMs, 300_000);
 });
 
 test('conversation policy stream event makes quick status visible before workspace result', async () => {

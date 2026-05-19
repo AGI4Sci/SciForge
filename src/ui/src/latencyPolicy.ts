@@ -27,7 +27,7 @@ export interface RuntimeLatencyThresholds {
 export const SAFE_LATENCY_THRESHOLDS = {
   firstEventWarningMs: 20_000,
   silentRetryMs: 45_000,
-  stallBoundMs: 120_000,
+  stallBoundMs: 300_000,
 } as const;
 
 export function latencyThresholdsFromPolicy(

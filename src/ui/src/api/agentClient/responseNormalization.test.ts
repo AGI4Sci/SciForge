@@ -125,6 +125,51 @@ test('unwraps structured payloads from Runtime Codex done message envelopes', ()
   assert.ok(response.message.objectReferences?.some((reference) => reference.ref === 'artifact:p4-live-report'));
 });
 
+test('keeps natural Runtime Codex done messages visible when audit metadata contains urls and hash-like numbers', () => {
+  const response = normalizeAgentResponse('literature-evidence-review', 'P6 final live acceptance', {
+    ok: true,
+    data: {
+      run: {
+        id: 'codex-command-live-acceptance',
+        status: 'completed',
+        output: {
+          result: JSON.stringify({
+            schemaVersion: 'sciforge.codex.normalized-event.v1',
+            type: 'done',
+            status: 'done',
+            provider: 'sciforge-deepseek-proxy',
+            model: 'bailian/deepseek-v4-flash',
+            profile: 'sciforge-runtime-deepseek',
+            workspace: '/Applications/workspace/ailab/research/app/SciForge-p6-legacy-cleanup/workspace/parallel/p6',
+            commandId: 'codex-796991576a4a7c99',
+            attemptId: 'codex-796991576a4a7c99-attempt',
+            evidenceRefs: [
+              'audit:codex-runtime:codex-796991576a4a7c99:attempt:raw-jsonl',
+              'audit:codex-runtime:codex-796991576a4a7c99:attempt:stderr',
+            ],
+            message: [
+              'P6 final acceptance passed.',
+              'Provider: sciforge-deepseek-proxy',
+              'Model: bailian/deepseek-v4-flash via http://127.0.0.1:4765/v1',
+              'Runtime Codex route: http://127.0.0.1:18085',
+              'No OpenAI fallback.',
+            ].join('\n'),
+            exitCode: 0,
+            output: {
+              message: 'P6 final acceptance passed.',
+            },
+          }),
+        },
+      },
+    },
+  });
+
+  assert.match(response.message.content, /P6 final acceptance passed/);
+  assert.match(response.message.content, /Runtime Codex route/);
+  assert.doesNotMatch(response.message.content, /backend failure/);
+  assert.equal(response.message.status, 'completed');
+});
+
 test('canonicalizes artifact-prefixed Runtime Codex artifact ids before building refs', () => {
   const response = normalizeAgentResponse('literature-evidence-review', '生成 p4 live report artifact', {
     ok: true,

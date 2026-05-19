@@ -23,6 +23,7 @@ import { handleScenarioLibraryRoutes } from './server/scenario-library-routes.js
 import { handleWorkspaceFileApiRoutes, readLastWorkspacePath } from './server/workspace-file-api.js';
 import { handleCodexRuntimeRoutes } from './codex/codex-runtime-server.js';
 import { normalizeInstanceName, parallelProfile } from './parallel-instance-profile.js';
+import { ensureRuntimeHome } from '../../packages/backend/src/runtime-home.js';
 
 const INSTANCE_ID = process.env.SCIFORGE_INSTANCE_ID || process.env.SCIFORGE_INSTANCE || 'default';
 const INSTANCE_ROLE = process.env.SCIFORGE_INSTANCE_ROLE || INSTANCE_ID;
@@ -104,6 +105,9 @@ createServer(async (req, res) => {
       writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
     }
     return;
+  }
+  if (url.pathname === '/api/sciforge/runtime/codex/stream') {
+    await syncRuntimeCodexHomeFromLocalConfig();
   }
   if (await handleCodexRuntimeRoutes(req, res, url)) return;
   if (url.pathname === '/api/sciforge/instance/stable-version' && req.method === 'GET') {
@@ -787,6 +791,15 @@ async function writeLocalSciForgeConfig(config: Record<string, unknown>) {
   };
   await mkdir(dirname(configLocalPath()), { recursive: true });
   await writeFile(configLocalPath(), JSON.stringify(next, null, 2));
+  await syncRuntimeCodexHomeFromLocalConfig(next.llm);
+}
+
+async function syncRuntimeCodexHomeFromLocalConfig(configuredLlm?: Record<string, unknown>) {
+  const localConfig = configuredLlm ? { llm: configuredLlm } : await readConfigLocalJson();
+  const llm = isRecord(localConfig.llm) ? localConfig.llm : {};
+  const proxyBaseUrl = typeof llm.baseUrl === 'string' ? llm.baseUrl.trim().replace(/\/+$/, '') : '';
+  if (!proxyBaseUrl) return;
+  await ensureRuntimeHome({ proxyBaseUrl, overwrite: true });
 }
 
 function preserveConfiguredSecretString(nextValue: unknown, currentValue: unknown) {
