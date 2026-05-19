@@ -7,7 +7,10 @@ tmp/
 __pycache__/
 *.py[cod]
 .sciforge/
+.codex-runtime/
+packages/backend/.codex-runtime/
 .bioagent/
+history.md
 config.local.json
 config.*.local.json
 docs/test-artifacts/

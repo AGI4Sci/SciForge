@@ -4,32 +4,43 @@
 
 ## Current Truth
 
-SciForge 是面向终端 Agent 的 GUI extension。GUI 输入只发文本，GUI 状态只读，GUI 输出只做 intent-based `gui.*` tools。目标架构不需要独立 AgentServer。
+SciForge 当前路线是 **UI/packages preserved, runtime rewritten**。
 
-运行期不能被 OpenAI token 成本锁死。长期 backend 可以只支持 Codex，但必须优先通过上游 Codex 的 custom `model_provider` / `model_providers.<id>.base_url` 接入 DeepSeek `deepseek-v4-flash` 或本地 provider proxy。开发者用 Codex CLI 实现迁移，不代表 SciForge 用户运行任务时必须消耗 OpenAI token。
+核心架构：
 
-`docs/` 是当前设计真相源，`docs_old/` 是旧方案快照，只用于对照和迁移。
+- Codex CLI / TUI owns agent logic.
+- SciForge GUI 是翻译壳、观察层和可复用展示层。
+- GUI -> runtime 只发送 terminal-equivalent plain text command。
+- runtime -> GUI 只返回 normalized events、audit events 或 intent results。
+- GUI 可以做 presentation behavior，不能重新变成 agent runtime。
 
-## Kept Principles
+必须保留：
 
-下面是值得长期遵守的条目：
+- `src/ui/**` 现有页面体验和视觉结构；runtime 迁移期间不允许换成临时 demo shell。
+- `packages/**` 中的模块化资产、contracts、presentation components、skills、workers、observe/actions/verifiers 等可复用包。
+- `docs/` 当前新设计，`docs_old/` 旧方案快照。
 
-- 默认通用聊天入口，不要求普通用户先理解 builder、allowlist、execution unit 或 raw payload。
-- Answer-first，默认结果区先给主答案、完成度、关键证据和下一步。
-- 诚实失败，能力不足、provider 不可用、数据不可得或验证失败时必须说明缺口和恢复路径。
-- Capability discovery 和其它扩展能力必须 progressive disclosure，初始 context 只暴露最小必要信息。
-- UI / 执行层必须函数化，raw payload、stdout、stderr、hand-off JSON 只能进 audit/debug。
-- 真实 browser 优先，terminal smoke 只能补充不能替代用户可见证据。
-- 反假成功优先，`satisfied`、artifact refs、summary、plan 不能单独算完成。
-- 所有修复必须通用，不写单 prompt、单 provider、单 session、单端口特例。
-- 成本透明，运行期 provider/model 必须可见、可审计、可测试；禁止静默 fallback 到更贵 provider。
-- 文档与代码同步，设计 contract 先写 `docs/`，再同步实现和 smoke。
-- 同步优先，完成一个迁移或修复后要更新任务板并保持证据可追溯。
-- 代码卫生优先，发现冗余逻辑链条、重复实现、死分支或无效兼容层时要清理，不保留“看起来也能跑”的旧路径。
-- 旧逻辑与新方案冲突时，默认以新方案为准，直接删除旧逻辑并重写，不用历史包袱维持两套并行语义。
-- 单文件超过约 2000 行时应主动拆分，按职责、视图、协议、适配器或测试边界切开，避免把复杂性压进一个大文件。
-- 新增兼容层必须有明确退役条件；如果没有退役计划，它不是兼容层，而是债务。
-- 重构时优先切断不必要的链式转发和薄包装层，保留真正有语义的边界，删掉纯转述代码。
+可以清理或重写：
+
+- `src/runtime/**` 旧 AgentServer-first gateway / harness / generation / workspace runtime 链路。
+- 临时缓存、构建产物、无引用实验残留。
+- 与 Codex CLI-first 方案冲突的 runtime 默认路径。
+
+删除约束：
+
+- 不能先物理删除仍被现有 UI import 的投影/状态模型。
+- 删除旧 AgentServer-first 文件前，必须确认无引用，并跑 targeted tests、`npm run build`、`git diff --check` 和真实 browser UI 验收。
+
+## Non-Negotiable Principles
+
+- 成本透明，provider/model/profile/workspace/command id 必须可见、可审计、可测试。
+- Runtime Codex 默认使用 DeepSeek `bailian/deepseek-v4-flash`，通过 `sciforge-runtime-deepseek` profile 和 backend proxy。
+- Runtime Codex 不得静默继承 Developer Codex profile。
+- `allowOpenAiRuntime=false` 时禁止 OpenAI provider fallback。
+- raw provider SSE、raw Codex JSONL、stderr 只进 audit/debug，默认折叠，不进入主回复 DOM。
+- 新增兼容层必须写清退役条件。
+- 单文件超过约 2000 行时必须拆分。
+- 真实 browser E2E 是最终验收；terminal smoke 只能补充。
 
 ## Required Reading
 
@@ -38,245 +49,235 @@ SciForge 是面向终端 Agent 的 GUI extension。GUI 输入只发文本，GUI 
 - [`docs/CodexRuntimeMigration.md`](docs/CodexRuntimeMigration.md)
 - [`docs/Usage.md`](docs/Usage.md)
 - [`docs_old/README_SNAPSHOT.md`](docs_old/README_SNAPSHOT.md)
+- [`packages/backend/CODEX_COMPATIBILITY.md`](packages/backend/CODEX_COMPATIBILITY.md)
 
-## Current Goal For Codex CLI
+## Completed Baseline
 
-把 SciForge 从 AgentServer-first 迁移为 Codex CLI-first GUI extension。Codex CLI `/goal` 应按下面顺序执行：
+### BASELINE-20260519 preserve UI and packages
 
-1. 先读 Required Reading 和本文件的 Active Work。
-2. 先做 Phase 1：`codex exec --json` bridge，让现有前端 streaming API 能消费 Codex JSONL。
-3. 再做 Phase 2：抽 `AgentCliAdapter`，把 spawn、profile、JSONL normalize、cancel、audit 隔离到小模块。
-4. 同步更新 settings、runtime health、header、结果区和 docs/tests，确保默认运行期 profile 是 `sciforge-runtime-deepseek`。
-5. 最后清理或隔离 AgentServer 默认路径，跑 targeted tests、docs smoke、真实 browser E2E，并勾选已完成 todo。
+状态：done
 
-不要实现新的 AgentServer / AgentHost / app-server wrapper。不要 fork Codex。只有当 Codex custom provider 不能直接接入 DeepSeek 时，才做最小 `codex-provider-proxy`。
+- [x] 恢复 `src/ui/**`，保证页面与清理前一致
+- [x] 恢复 `packages/**` 模块化资产
+- [x] 恢复 `src/runtime/**`，避免现有 UI 投影模型断引用
+- [x] 恢复原 `package.json` / `vite.config.ts` / `tsconfig.json` / `config.example.json`
+- [x] 删除临时重写 stub：`src/ui/src/guiProtocol.ts`、`tests/smoke/smoke-clean-rewrite-baseline.ts`
+- [x] 清理 `.pytest_cache`、`__pycache__`、`dist-ui`、Vite 临时缓存
+- [x] 启动 `npm run dev:ui`，用浏览器确认 UI 页面恢复
+- [x] 跑 `git diff --check`
+- [x] 跑 `npm run build`
+
+### BACKEND-20260519 Codex DeepSeek compatibility
+
+状态：done
+
+落点：
+
+- `packages/backend/**`
+- `packages/backend/.codex-runtime/**` 本地 ignored runtime state
+
+已完成：
+
+- [x] 新增 `@sciforge/backend` workspace package
+- [x] 新增 OpenAI Responses -> Chat Completions compatibility proxy
+- [x] 新增 isolated Runtime Codex home：`packages/backend/.codex-runtime/codex-home`
+- [x] 新增 `sciforge-runtime-deepseek` profile 模板
+- [x] 新增 `backend:codex-runtime:setup`
+- [x] 新增 `backend:codex-runtime:exec`
+- [x] 记录 upstream Codex CLI 不 fork 决策和升级 checklist：`packages/backend/CODEX_COMPATIBILITY.md`
+- [x] 修复 DeepSeek streaming tool-call empty delta 覆盖工具名的问题
+- [x] 验证 DeepSeek Runtime Codex 能完成真实工具任务：读 CSV、执行命令、写 `report.md` / `summary.json`
+
+通过验证：
+
+- [x] `npm --workspace @sciforge/backend test`
+- [x] `npm run typecheck`
+- [x] `git diff --check`
+- [x] direct proxy tool-call shape smoke
+- [x] Runtime Codex complex tool-use acceptance
 
 ## Active Work
 
-### MIGRATION-20260519 Codex exec JSON runtime
+### RUNTIME-REWRITE-20260519 Codex exec runtime bridge
 
 状态：active
-Owner：Codex CLI `/goal`
-目标：用 Codex backend 替换 AgentServer 默认运行层。Phase 1 走 `codex exec --json`，Phase 2 抽 `AgentCliAdapter`。长期只支持 Codex backend；DeepSeek `deepseek-v4-flash` 是默认 model provider。
 
-#### A. Config / Settings / Cost Guard
+目标：用 strangler 方式替换 `src/runtime/**` 旧 AgentServer-first 链路。保留 UI 和 packages，新增最小 Codex CLI runtime bridge；先切默认路径，再删除无引用旧代码。
 
 代码落点：
 
-- `config.example.json`
-- `src/ui/src/config.ts`
-- `src/ui/src/domain.ts`
-- `src/ui/src/app/appShell/ShellPanelsSettingsDialog.tsx`
-- `src/ui/src/app/runtimeHealthPanel.tsx`
-- `src/ui/src/app/chat/ChatPanelHeader.tsx`
-- `src/ui/src/app/chat/ContextWindowMeter.tsx`
-- `src/ui/src/app/appShell/appHelpers.ts`
-- `src/ui/src/config.test.ts`
-
-Todo：
-
-- [ ] 将默认配置从 `agentServerBaseUrl` / 多 backend 改为 Codex runtime profile：`sciforge-runtime-deepseek`
-- [ ] 保留 `agentServerBaseUrl` 只作 legacy/migration 字段，不在默认 UI 中作为主配置
-- [ ] 设置默认 model provider 为 DeepSeek `deepseek-v4-flash` 或 Codex custom provider/proxy
-- [ ] 新增 `allowOpenAiRuntime` 显式开关；默认禁止 OpenAI provider
-- [ ] Settings 文案改为 `Codex Runtime`、`Runtime Profile`、`Model Provider`、`Model`、`Base URL`、`API Key`
-- [ ] Runtime health panel 检查 Codex runtime/profile/proxy，而不是 AgentServer health
-- [ ] Header backend picker 从多 backend 改为 Codex runtime profile / provider 状态
-- [ ] Context window 文案从 AgentServer ownership 改为 Codex runtime / GUI projection 边界
-- [ ] 配置测试覆盖：默认不含 AgentServer 主路径；缺 key/profile fail closed；OpenAI 需要显式 opt in
-
-#### B. Codex Exec Bridge / AgentCliAdapter
-
-代码落点：
-
-- 新增 `src/runtime/codex/agent-cli-adapter.ts`
-- 新增 `src/runtime/codex/codex-exec-json-adapter.ts`
-- 新增 `src/runtime/codex/codex-event-normalizer.ts`
-- 新增 `src/runtime/codex/codex-runtime-config.ts`
+- `src/runtime/codex/agent-cli-adapter.ts`
+- `src/runtime/codex/codex-exec-json-adapter.ts`
+- `src/runtime/codex/codex-event-normalizer.ts`
+- `src/runtime/codex/codex-runtime-config.ts`
+- `src/runtime/codex/codex-runtime-server.ts`
 - `src/runtime/workspace-server.ts`
 - `src/runtime/workspace-runtime-gateway.ts`
 - `src/runtime/generation-gateway.ts`
-- `src/runtime/workspace-runtime-events.ts`
 - `src/ui/src/api/sciforgeToolsClient.ts`
 - `src/ui/src/app/chat/runOrchestrator.ts`
-- `src/ui/src/streamEventPresentation.ts`
+- `src/ui/src/app/runtimeHealthPanel.tsx`
+- `src/ui/src/app/chat/ChatPanelHeader.tsx`
+- `src/ui/src/app/appShell/ShellPanelsSettingsDialog.tsx`
+- `vite.config.ts`
 
 Todo：
 
-- [ ] 定义 `AgentCliAdapter.startTurn({ commandText, workspacePath, profile })`
-- [ ] 实现 `CodexExecJsonAdapter`：spawn `codex exec --json --profile <profile> --cd <workspace> <commandText>`
-- [ ] 将 stdout JSONL 归一化为 `NormalizedAgentEvent`
-- [ ] 将 stderr 只进入 audit/debug event，不进入默认主回复
-- [ ] 将 exit code 映射为 turn completed / failed
-- [ ] 支持 abort/cancel，确保子进程被清理
-- [ ] 在 workspace server 暴露新的 runtime endpoint，或让现有 `/api/sciforge/tools/run/stream` 转接 Codex adapter
-- [ ] `runOrchestrator` / `sendSciForgeToolMessage` 继续保持前端 API 稳定，但内部不再默认走 AgentServer dispatch
-- [ ] 请求和结果都记录 provider/model/profile/workspace/command id
-- [ ] 保留现有 stream event presentation 的 answer-first / audit-folding 约束，避免 Codex JSONL 泄漏到主 DOM
+- [ ] 新建 `src/runtime/codex`，只放 Codex CLI bridge，不新增旧 gateway/harness/generation code
+- [ ] 定义 `AgentCliAdapter.startTurn({ commandText, workspacePath, profile, abortSignal })`
+- [ ] 实现 `CodexExecJsonAdapter`：spawn `codex exec --json --profile sciforge-runtime-deepseek --cd <workspace> <commandText>`
+- [ ] adapter 必须使用 `packages/backend` isolated `CODEX_HOME`，不得使用 `~/.codex`
+- [ ] stdout JSONL -> `NormalizedAgentEvent`
+- [ ] stderr -> audit/debug event only
+- [ ] exit code -> `done` / `failed`
+- [ ] abort/cancel 必须清理子进程
+- [ ] runtime config fail closed：缺 profile、缺 workspace、缺 DeepSeek key/proxy 都失败
+- [ ] `allowOpenAiRuntime=false` 时禁止 OpenAI provider
+- [ ] 提供最小本地 HTTP/SSE endpoint，供现有 GUI streaming path 消费
+- [ ] 每个 run 在 GUI 和 audit 中显示 provider/model/profile/workspace/command id
 
-#### C. GUI Resource Tree / Intent Tools
-
-代码落点：
-
-- `src/ui/src/app/projectionApi.ts`
-- `src/ui/src/app/uiActionBoundary.test.ts`
-- `src/ui/src/app/ResultsRenderer.tsx`
-- `src/ui/src/app/ResultsRenderer.test.ts`
-- 可新增 `src/ui/src/app/guiResourceTree.ts`
-- 可新增 `src/ui/src/app/guiIntentTools.ts`
-
-Todo：
-
-- [ ] 实现最小只读 GUI resource tree：`/gui/shell.json`、`/gui/hot-region.json`
-- [ ] 实现 `gui.list` / `gui.read` / `gui.search` / `gui.stat` 的 mockable adapter
-- [ ] GUI action 仍只产生命令文本，不直接调用业务函数
-- [ ] 实现最小 intent tools：`gui.present`、`gui.notify`、`gui.set_status`
-- [ ] 所有 GUI intent 返回 `ok/appliedRevision/deferred/reason/suggestions`
-- [ ] 结果区可见显示本轮 provider/model/profile
-- [ ] debug/audit 默认折叠，raw JSONL/stdout/stderr 不出现在默认 DOM
-
-#### D. Remove / Quarantine AgentServer Defaults
-
-代码落点：
-
-- `src/runtime/gateway/agentserver-adapter.ts`
-- `src/runtime/gateway/agentserver-stream.ts`
-- `src/runtime/gateway/agentserver-generation-dispatch.ts`
-- `src/runtime/gateway/agentserver-prompts.ts`
-- `src/runtime/gateway/agentserver-repair-prompts.ts`
-- `src/runtime/gateway/agentserver-context-*`
-- `packages/contracts/runtime/*agentserver*`
-- `package.json` smoke scripts
-- `tests/smoke/smoke-agentserver-*.ts`
-- `tests/smoke/web-e2e/scriptable-agentserver-mock.ts`
-
-Todo：
-
-- [ ] AgentServer 代码标记为 legacy shim，不再作为默认 dispatch path
-- [ ] 新 runtime code 不得 import legacy AgentServer modules
-- [ ] package smoke 新增 Codex runtime smoke；`smoke:all` 不再默认串起 agentserver smoke
-- [ ] 旧 agentserver smoke 移到 migration/legacy 分类，或者改名明确只验证 legacy shim
-- [ ] 删除与新方案冲突的多 backend 选择逻辑；不要保留两套并行语义
-- [ ] 若保留 legacy shim，必须写清退役条件和测试边界
-
-#### E. Verification / Browser E2E
-
-代码落点：
-
-- `tests/smoke/smoke-docs-scenario-package.ts`
-- `tests/smoke/smoke-harness-research-guide.ts`
-- 新增 `tests/smoke/smoke-codex-exec-json-runtime.ts`
-- 新增或更新 `tests/smoke/web-e2e/*`
-
-Todo：
-
-- [ ] 测试默认配置不会访问 OpenAI endpoint
-- [ ] 测试缺少 DeepSeek key/profile 时 fail closed
-- [ ] 测试 mock Codex JSONL 能被归一化为 GUI event
-- [ ] 测试 provider/model/profile 出现在 run audit 和结果区
-- [ ] 跑 `npm run typecheck`
-- [ ] 跑相关单测，例如 `node --import tsx --test src/runtime/codex/*.test.ts src/ui/src/config.test.ts`
-- [ ] 跑新增 `npm run smoke:codex-runtime` 或等价 smoke
-- [ ] 跑 `npm run smoke:harness-research-guide`
-- [ ] 跑 `npm run smoke:docs-scenario-package`
-- [ ] 跑 `git diff --check`
-- [ ] 启动本地 dev server，用真实浏览器模拟深度使用 SciForge
-- [ ] 至少完成一条真实用户任务，验证主回复解决问题、artifact 可打开、debug 默认折叠、provider/model/profile 正确显示
-
-### CODEX-UPSTREAM-20260519 minimal upstream strategy
+### GUI-PROTOCOL-20260519 resource tree and intent tools
 
 状态：active
-Owner：Runtime Migration Owner
-目标：长期只支持 Codex backend，但尽量不 fork、不改官方代码，确保官方更新后能快速迁移。
+
+目标：在现有 UI 上增量实现 GUI resource tree 和 intent tools，而不是替换 UI。
 
 Todo：
 
-- [ ] 不在 SciForge 父目录默认 clone / 修改 Codex；先用已安装 Codex CLI 和官方 config 验证 custom provider
-- [ ] 如需读源码，只 clone upstream 到 sibling `../codex-upstream` 作为 read-only reference，不把它作为 SciForge 构建依赖
-- [ ] 如需本地服务，优先做 SciForge 自己的 `codex-provider-proxy` 或 `codex-bridge` 小项目，而不是改 Codex core
-- [ ] 如果必须 fork Codex，只改最小文件集，并新增 `docs/CodexUpstreamPatchLog.md`
-- [ ] `CodexUpstreamPatchLog.md` 必须记录 upstream commit、修改文件、修改原因、如何 rebase、如何验证
-- [ ] 每次升级官方 Codex 后，先跑 provider/proxy contract tests，再跑 browser E2E
+- [ ] 固化 `/gui/shell.json`
+- [ ] 固化 `/gui/hot-region.json`
+- [ ] 固化 `/gui/intent-log.json`
+- [ ] 实现 `gui.list(path)` / `gui.read(path)` / `gui.search(query)` / `gui.stat(path)`
+- [ ] 实现 intent tools：`gui.present`、`gui.notify`、`gui.set_status`
+- [ ] intent result 必须包含 `ok/appliedRevision/deferred/reason/suggestions`
+- [ ] GUI 内部行为只做 presentation policy，不做 agent 决策
+- [ ] raw runtime JSONL/stdout/stderr 默认折叠，只进 audit
 
-## Backlog After Runtime Migration
+### LEGACY-CLEANUP-20260519 AgentServer quarantine
 
-这些任务保留为迁移后的 UX / contract 收尾，不是当前 `/goal` 的第一目标。若实现迁移时顺手触及这些边界，可以同步完成并勾选；否则不要为了它们扩大本轮改动。
+状态：active
 
-### UX-SYSTEM-TASK-20260517-universal-chat-entry
-
-状态：active / partial
-目标：默认入口无需 builder 术语就能承接 literature、data analysis、coding / self-improvement 任务。
-
-Todo：
-
-- [x] 去掉 shell 里的 builder 式默认措辞
-- [ ] 验证默认入口覆盖 literature / analysis / coding / self-improvement
-- [ ] 验证 answer-first 结果面板可直接读懂
-- [ ] 保持 debug / raw payload 默认折叠
-
-### UX-SYSTEM-TASK-20260517-ui-execution-decoupling
-
-状态：in_progress
-目标：让用户动作和调试展开都走函数式 API，而不是原始 payload。
+目标：清理默认路径里的 AgentServer-first 语义，但保留 UI 当前仍需要的投影模型直到迁移完成。
 
 Todo：
 
-- [x] 保留 `ProjectionApi` / `UserActionApi` / `ProjectionSubscriptionApi`
-- [ ] 完成 import / verify / confirm 事务流
-- [ ] 继续把 preview / audit helpers 推到函数边界后面
-- [ ] 保持 raw ToolPayload / stdout / stderr 只进 audit channel
+- [ ] 新 runtime code 不得 import legacy AgentServer modules
+- [ ] 找出 UI 仍直接 import 的旧 runtime 投影/状态模型
+- [ ] 把必要 contract 迁移到 neutral runtime / GUI protocol 命名
+- [ ] `smoke:all` 不应依赖 AgentServer 默认路径
+- [ ] legacy AgentServer smoke 移到 legacy/migration 分类，或改名明确边界
+- [ ] 删除纯转发、重复实现、无退役条件兼容层
+- [ ] 每次删除前跑 import check、targeted tests、`npm run build`、browser UI 截图
+
+### VERIFICATION-20260519 final acceptance
+
+状态：active
+
+Todo：
+
+- [ ] mock JSONL smoke：delta/done/failed/stderr/audit/cancel
+- [ ] runtime config tests：fail closed、OpenAI opt-in、profile/provider visibility
+- [ ] GUI resource tests：list/read/search/stat
+- [ ] intent tool tests：present/notify/set_status result schema
+- [ ] audit folding tests：raw JSONL/stdout/stderr 不进主 DOM
+- [ ] real browser E2E：默认聊天入口提交任务，看到 provider/model/profile，看到主输出，audit 默认折叠
+- [ ] real browser E2E 必须使用 Codex in-app browser，不用系统浏览器、macOS `open`、外部 Chrome 或 Playwright 替代用户级验收
+
+## Parallel Execution Prompts
+
+下面 prompt 可分别复制给多个独立 Codex 进程并行执行。主进程负责最后集成。所有进程都必须先读本文件和 Required Reading。
+
+### Prompt A: Backend Runtime Bridge Worker
+
+```text
+/goal You are Worker A for SciForge. Work in /Applications/workspace/ailab/research/app/SciForge.
+
+Read PROJECT.md first, then docs/Architecture.md, docs/CodexRuntimeMigration.md, docs/Usage.md, and packages/backend/CODEX_COMPATIBILITY.md. You own only the runtime bridge implementation in src/runtime/codex/** plus the smallest necessary integration hooks in src/runtime/workspace-server.ts, src/runtime/workspace-runtime-gateway.ts, and src/runtime/generation-gateway.ts. Do not edit UI components except if a type export is strictly needed. Do not delete packages/** or replace the UI.
+
+Implement RUNTIME-REWRITE-20260519 for the backend side. Create AgentCliAdapter, CodexExecJsonAdapter, Codex event normalizer, runtime config guard, cancel handling, and a tiny HTTP/SSE endpoint. The adapter must spawn:
+
+codex exec --json --profile sciforge-runtime-deepseek --cd <workspace> <plain text command>
+
+It must force Runtime Codex to use packages/backend/.codex-runtime/codex-home as CODEX_HOME. It must fail closed if the runtime profile, DeepSeek key, proxy, or workspace is missing. It must not inherit ~/.codex. It must not fallback to OpenAI unless allowOpenAiRuntime=true. stderr and raw JSONL are audit/debug only. stdout JSONL must normalize to stable events with provider/model/profile/workspace/command id.
+
+Add focused tests for JSONL normalization, exit code mapping, stderr audit events, cancel cleanup, fail-closed config, and OpenAI opt-in. Run npm --workspace @sciforge/backend test, targeted runtime tests, npm run typecheck, and git diff --check. Do not run destructive git commands. Report changed files, verification commands, and remaining integration points.
+```
+
+### Prompt B: GUI Protocol Worker
+
+```text
+/goal You are Worker B for SciForge. Work in /Applications/workspace/ailab/research/app/SciForge.
+
+Read PROJECT.md first, then docs/TuiGuiProtocol.md, docs/Architecture.md, docs/Usage.md, and docs_old/README_SNAPSHOT.md. You own the GUI protocol layer and tests. Preserve the existing src/ui/** visual structure. Do not replace the app with a temporary shell. Do not implement agent logic in the GUI.
+
+Implement GUI-PROTOCOL-20260519 incrementally on the existing UI. Add or update modules for /gui/shell.json, /gui/hot-region.json, /gui/intent-log.json, gui.list(path), gui.read(path), gui.search(query), and gui.stat(path). Implement intent tools gui.present, gui.notify, and gui.set_status. Intent results must return ok, appliedRevision, deferred, reason, and suggestions. GUI behavior may apply presentation policy only; all agent decisions stay in Codex CLI/TUI.
+
+Raw runtime JSONL/stdout/stderr must be folded by default and must not appear in the main answer DOM. Add focused tests for resource reads, search/stat behavior, intent result schema, and audit folding. Run targeted UI tests, npm run typecheck, and git diff --check. Do not touch backend proxy code unless a shared type requires it. Report changed files, tests, and any contract assumptions.
+```
+
+### Prompt C: UI Integration Worker
+
+```text
+/goal You are Worker C for SciForge. Work in /Applications/workspace/ailab/research/app/SciForge.
+
+Read PROJECT.md first, then docs/Architecture.md, docs/CodexRuntimeMigration.md, docs/Usage.md, and packages/backend/CODEX_COMPATIBILITY.md. You own existing UI integration points: src/ui/src/api/sciforgeToolsClient.ts, src/ui/src/app/chat/runOrchestrator.ts, src/ui/src/app/runtimeHealthPanel.tsx, src/ui/src/app/chat/ChatPanelHeader.tsx, src/ui/src/app/appShell/ShellPanelsSettingsDialog.tsx, and closely related tests.
+
+Connect the existing SciForge chat streaming path to the new Codex runtime bridge without changing the main UI layout. The user should see provider/model/profile/workspace/command id for each run. Settings and runtime health should talk about Codex Runtime, Runtime Profile, Model Provider, Model, Base URL, and API Key. AgentServer wording should be legacy-only. Context/window copy should describe the Codex runtime / GUI projection boundary.
+
+Do not introduce multi-backend fallback semantics. Runtime Codex defaults to sciforge-runtime-deepseek and DeepSeek through packages/backend proxy. allowOpenAiRuntime must be explicit and default false. Raw JSONL/stdout/stderr go to audit only and stay folded by default.
+
+Add focused tests for settings defaults, health panel display, header provider visibility, stream presentation, and audit folding. Run targeted UI tests, npm run typecheck, and git diff --check. Do not delete legacy runtime files; leave deletion to the cleanup worker after imports are moved. Report changed files, visible UI behavior, and remaining blockers.
+```
+
+### Prompt D: Legacy Cleanup Worker
+
+```text
+/goal You are Worker D for SciForge. Work in /Applications/workspace/ailab/research/app/SciForge.
+
+Read PROJECT.md first, then docs/Architecture.md, docs/CodexRuntimeMigration.md, docs/Usage.md, and docs_old/README_SNAPSHOT.md. You own analysis and cleanup planning for AgentServer-first legacy paths. Be conservative: do not delete files that current UI imports. Do not touch packages/backend runtime proxy except for documentation references.
+
+Map all AgentServer-first default paths in src/runtime/gateway/**, src/runtime/generation-gateway.ts, src/runtime/workspace-runtime-gateway.ts, package smoke scripts, and tests/smoke/smoke-agentserver-*.ts. Identify which files are still imported by the UI or active runtime. Rename or quarantine tests only when the new Codex runtime bridge has replacement coverage. Remove only pure dead code or generated residue that import checks prove unused.
+
+Produce a cleanup patch with minimal safe changes plus a migration report. New runtime code must not import legacy AgentServer modules. Legacy shims must have explicit retirement conditions. Run import checks with rg, targeted tests for any touched area, npm run typecheck, npm run build if you changed runtime boundaries, and git diff --check. Report deleted/kept files with reasons.
+```
+
+### Prompt E: Verification And Browser Acceptance Worker
+
+```text
+/goal You are Worker E for SciForge. Work in /Applications/workspace/ailab/research/app/SciForge.
+
+Read PROJECT.md first, then docs/Architecture.md, docs/TuiGuiProtocol.md, docs/CodexRuntimeMigration.md, docs/Usage.md, and packages/backend/CODEX_COMPATIBILITY.md. You own verification assets and browser acceptance. Do not implement large product features unless a test harness needs a small hook.
+
+Create or update tests for the final acceptance surface: mock Codex JSONL delta/done/failed/stderr/audit/cancel, runtime profile fail-closed, OpenAI opt-in, provider/model/profile audit visibility, GUI resource reads, intent result schema, and audit folding. Add a real browser E2E that starts from the existing default chat entry, submits a task through Runtime Codex, confirms provider/model/profile are visible, confirms the main answer appears, and confirms raw audit is folded by default.
+
+All user-level browser validation must use Codex in-app browser only. Do not use system browser, macOS open, external Chrome, or Playwright as a replacement for acceptance. Before starting servers, do port preflight. Main orchestrator should use 5173; supporting workers should use distinct ports such as 5174-5178 and report the actual port if changed.
+
+Run npm run typecheck, targeted tests, git diff --check, and the browser E2E if the runtime bridge is available. If runtime bridge is not ready, land the mock/contract tests and clearly mark the browser E2E as blocked on Worker A/C integration.
+```
 
 ## Definition Of Done
 
-- 默认配置、设置页、runtime health 和结果区都指向 Codex runtime profile，而不是 AgentServer。
-- Runtime Codex 使用 `sciforge-runtime-deepseek` / DeepSeek `deepseek-v4-flash` 或显式配置的 provider proxy。
-- 缺少 runtime profile、DeepSeek key 或 provider proxy 时 fail closed；不得静默 fallback 到 OpenAI。
-- `allowOpenAiRuntime=true` 是唯一允许 OpenAI runtime provider 的路径，并且 UI 和 audit 必须显式显示。
-- `codex exec --json` JSONL 事件被归一化为稳定 `NormalizedAgentEvent`，前端不直接解析 Codex 原始 JSONL。
-- GUI 状态通过只读 resource tree 分级披露；TUI/Codex 改变 GUI 时只发 intent tools。
-- AgentServer 不再是默认 dispatch path；保留的 legacy shim 有退役条件和测试边界。
-- 真实 browser E2E 至少证明一条深度用户任务完成：主答案可用、artifact 可打开、debug 默认折叠、provider/model/profile 可见、无隐藏 OpenAI 请求。
+- 原 UI 页面保持一致，browser 截图确认没有退化成临时壳。
+- `packages/**` 模块资产保留。
+- `packages/backend` DeepSeek compatibility proxy 继续通过复杂工具任务验收。
+- `src/runtime/**` 默认路径切到 Codex bridge。
+- legacy AgentServer-first 文件只有在仍被 UI 引用时短期保留，并有删除任务。
+- provider/model/profile/workspace/command id 在 GUI 和 audit 中可见。
+- raw JSONL/stdout/stderr 默认折叠，只进 audit/debug。
+- `npm run typecheck` 通过。
+- `npm run build` 通过。
+- `git diff --check` 通过。
+- 真实 Codex in-app browser E2E 证明一条用户任务能通过 Runtime Codex 完成。
 
-## Codex CLI `/goal` Prompt
+## Local Worktree Policy
 
-```text
-/goal Read PROJECT.md first, then docs/Architecture.md, docs/TuiGuiProtocol.md, docs/CodexRuntimeMigration.md, docs/Usage.md, and docs_old/README_SNAPSHOT.md. Implement MIGRATION-20260519: migrate SciForge from AgentServer-first to Codex CLI-first GUI extension.
-
-Use Phase 1 + Phase 2 only. Phase 1: add a codex exec --json bridge that starts Codex CLI with --profile sciforge-runtime-deepseek and --cd <user workspace>, consumes stdout JSONL, maps stderr to audit/debug only, handles exit code and cancel, and feeds the existing streaming UI path without exposing raw JSONL in the main DOM. Phase 2: extract a minimal AgentCliAdapter/CodexExecJsonAdapter/Codex event normalizer so spawn/profile/JSONL/cancel/audit details are isolated and testable.
-
-Cost guard is mandatory. Runtime Codex must default to DeepSeek deepseek-v4-flash through Codex custom model_provider or a minimal SciForge provider proxy. Do not fork Codex and do not build a new AgentServer or AgentHost. Do not silently inherit the developer Codex profile. Do not silently fallback to OpenAI; only allow OpenAI runtime when allowOpenAiRuntime=true and show provider/model/profile in UI and audit.
-
-Update config.example.json, src/ui/src/config.ts, src/ui/src/domain.ts, settings UI, runtime health, chat header, context window copy, workspace runtime gateway/server, runOrchestrator/sendSciForgeToolMessage, stream presentation, and relevant contracts/tests. Add a minimal read-only GUI resource tree (/gui/shell.json, /gui/hot-region.json), gui.list/read/search/stat, and intent tools gui.present/gui.notify/gui.set_status with ok/appliedRevision/deferred/reason/suggestions.
-
-Quarantine AgentServer as legacy only: new runtime code must not import legacy AgentServer modules, smoke:all must not depend on agentserver smoke, and any retained legacy shim needs retirement conditions. Remove conflicting multi-backend semantics instead of maintaining parallel behavior.
-
-Add targeted tests for config fail-closed behavior, OpenAI opt-in, Codex JSONL normalization, cancel/exit handling, provider/model/profile audit visibility, and GUI audit folding. Run npm run typecheck, targeted tests, docs smokes, git diff --check, and a real browser E2E that mimics deep SciForge usage and proves the user task succeeds. As each task is completed, update PROJECT.md checkboxes and record validation evidence.
-```
-
-## Working Rules
-
-- 真实 browser 优先；terminal smoke 只能补充，不能替代用户可见证据。
-- `TaskSuccess=true` 必须代表用户 hard requirements 被准确、完整、可核查地解决。
-- 反假成功优先；`satisfied`、artifact refs、summary、plan 都不能单独算完成。
-- 所有修复必须通用，不写 prompt/provider/session/端口特例。
-- 设计 contract 先写 `docs/`，再同步代码与 smoke。
-- 成本边界优先；默认运行期不得消耗 OpenAI token，除非用户显式 opt-in。
-
-## Verification
-
-常用检查：
-
-```bash
-npm run smoke:harness-research-guide
-npm run smoke:docs-scenario-package
-git diff --check
-```
-
-当迁移代码落地后，再补对应模块的 targeted tests 和必要 browser 证据。
+- `history.md` 是本地中断记录，不进入 git。
+- `packages/backend/.codex-runtime/**` 是 Runtime Codex 本地状态，不进入 git。
+- 不用 `git reset --hard` 或 `git checkout --` 回退用户改动。
+- 清理 worktree 时只删除明确生成的缓存、临时 workspace 和构建产物。
 
 ## Historical Archive
 
-长期历史和旧运行日志不再堆在这里。需要追溯时看：
-
-- [`docs/archive/`](docs/archive/)
-- [`docs_old/`](docs_old/)
+- `docs_old/` keeps the old design snapshot.
+- Git history keeps removed source files.
+- Do not reintroduce old runtime code unless a task explicitly proves it is reusable and not AgentServer-first debt.

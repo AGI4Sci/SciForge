@@ -6,6 +6,7 @@
   "type": "module",
   "workspaces": [
     "packages/contracts/runtime",
+    "packages/backend",
     "packages/presentation/components",
     "packages/presentation/components/*",
     "packages/support/artifact-preview",
@@ -27,6 +28,9 @@
     "dev:dual": "tsx tools/dev-dual.ts",
     "worktree:dual": "tsx tools/worktree-dual.ts",
     "dev:ui": "vite --host 0.0.0.0",
+    "backend:codex-proxy": "tsx packages/backend/src/cli.ts",
+    "backend:codex-runtime:setup": "tsx packages/backend/src/setup-runtime-home.ts",
+    "backend:codex-runtime:exec": "tsx packages/backend/src/exec-runtime-codex.ts",
     "build": "vite build",
     "skills:generate": "tsx tools/generate-skill-catalog.ts",
     "test": "node --import tsx --test \"src/ui/src/**/*.test.ts\" \"src/runtime/**/*.test.ts\" \"packages/**/*.test.ts\" \"packages/**/*.test.tsx\"",

@@ -1,0 +1,18 @@
+model = "bailian/deepseek-v4-flash"
+profile = "sciforge-runtime-deepseek"
+
+[profiles.sciforge-runtime-deepseek]
+model = "bailian/deepseek-v4-flash"
+model_provider = "sciforge-deepseek-proxy"
+model_reasoning_effort = "low"
+model_reasoning_summary = "none"
+
+[model_providers.sciforge-deepseek-proxy]
+name = "SciForge DeepSeek Proxy"
+base_url = "http://127.0.0.1:3891/v1"
+env_key = "SCIFORGE_RUNTIME_API_KEY"
+wire_api = "responses"
+
+[features]
+memories = true
+prevent_idle_sleep = true

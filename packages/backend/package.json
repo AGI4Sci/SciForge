@@ -1,0 +1,32 @@
+{
+  "name": "@sciforge/backend",
+  "version": "0.1.0",
+  "type": "module",
+  "private": false,
+  "description": "SciForge backend compatibility tools for CLI agent runtimes.",
+  "sciforge": {
+    "lifecycleLayer": "tools",
+    "skillFacing": false,
+    "sideEffects": "network",
+    "publicContract": true,
+    "runtimeAdapter": true
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./codex-responses-proxy": "./src/proxy.ts",
+    "./runtime-home": "./src/runtime-home.ts",
+    "./response-compat": "./src/response-compat.ts"
+  },
+  "files": [
+    "src",
+    "runtime-config",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "codex:proxy": "tsx src/cli.ts",
+    "codex:runtime:setup": "tsx src/setup-runtime-home.ts",
+    "codex:runtime:exec": "tsx src/exec-runtime-codex.ts",
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
+  }
+}
