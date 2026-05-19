@@ -161,7 +161,7 @@ function createGuiResourceTree(): Map<string, { revision: number; body: string }
         schemaVersion: 'sciforge.gui-context.v1',
         revision: 8,
         focusedPanel: 'chat',
-        availableGuiTools: ['gui.list', 'gui.read', 'gui.search', 'gui.stat', 'gui.present', 'gui.notify', 'gui.set_status'],
+        availableGuiTools: ['gui.present', 'gui.ask_user', 'gui.notify', 'gui.set_status', 'gui.apply_batch', 'gui.get_context', 'gui.list', 'gui.read', 'gui.search', 'gui.stat', 'gui.watch'],
       }, null, 2),
     }],
     ['/gui/hot-region.json', {

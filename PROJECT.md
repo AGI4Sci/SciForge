@@ -115,7 +115,7 @@ Needs rerun:
 
 ### DOC-SYNC-20260519 authoritative doc map
 
-状态：planned
+状态：completed / parallel-p2-gui-protocol
 
 目标：只更新文档索引和测试期望，让仓库承认 `packages/backend/CodexRuntimeMigration.md` 是 backend 运行期迁移真相源；`docs/` 保留架构与协议真相源。
 
@@ -141,22 +141,33 @@ Todo：
 
 Todo：
 
-- [ ] `GuiProtocolController` 暴露 `gui.get_context/list/read/search/stat/watch` 只读状态操作。
-- [ ] `GuiProtocolController` 暴露 `gui.present/ask_user/notify/set_status/apply_batch` intent 操作。
-- [ ] `gui.ask_user` 只产生 confirmation/input/choice presentation state 和 terminal-equivalent command affordances。
-- [ ] `gui.apply_batch` 支持 `all-or-nothing` 与 `best-effort` GUI-local transaction，只能修改 GUI view state，不触碰 workspace state。
-- [ ] `gui.watch` 订阅语义 resource revision/change，不暴露低级 DOM 事件。
-- [ ] Runtime Codex MCP manifest/server 注入完整 `gui.*` tool surface，并把 intent tools 持久化到 GUI extension state。
-- [ ] UI 结果区消费 TUI `gui.present` intent 作为完成态来源；不得从 raw stdout/jsonl/message 猜完成态。
-- [ ] `availableGuiTools`、MCP tool list、docs tool list 和 tests 保持一致。
+- [x] `GuiProtocolController` 暴露 `gui.get_context/list/read/search/stat/watch` 只读状态操作。
+- [x] `GuiProtocolController` 暴露 `gui.present/ask_user/notify/set_status/apply_batch` intent 操作。
+- [x] `gui.ask_user` 只产生 confirmation/input/choice presentation state 和 terminal-equivalent command affordances。
+- [x] `gui.apply_batch` 支持 `all-or-nothing` 与 `best-effort` GUI-local transaction，只能修改 GUI view state，不触碰 workspace state。
+- [x] `gui.watch` 订阅语义 resource revision/change，不暴露低级 DOM 事件。
+- [x] Runtime Codex MCP manifest/server 注入完整 `gui.*` tool surface，并把 intent tools 持久化到 GUI extension state。
+- [ ] UI 结果区消费真实 Runtime Codex `gui.present` intent 作为完成态来源；本轮验证到 file-backed GUI extension state 可被 UI resource reader 加载，真实 run 的结果区最终渲染仍留给 live Runtime Codex gate。
+- [x] `availableGuiTools`、MCP tool list、docs tool list 和 tests 保持一致。
 
 验收：
 
-- [ ] `node --import tsx --test src/ui/src/app/guiProtocol.test.ts`
-- [ ] `node --import tsx --test src/runtime/codex/gui-extension-manifest.test.ts`
-- [ ] `node --import tsx --test "src/runtime/codex/*.test.ts"`
-- [ ] `npm run smoke:harness-research-guide`
+- [x] `node --import tsx --test src/ui/src/app/guiProtocol.test.ts`
+- [x] `node --import tsx --test src/runtime/codex/gui-extension-manifest.test.ts`
+- [x] `node --import tsx --test "src/runtime/codex/*.test.ts"`
+- [x] `npm run smoke:harness-research-guide`
 - [ ] `npm run smoke:docs-scenario-package`
+
+p2 GUI protocol 阶段证据（2026-05-19）：
+
+- worktree：`/Applications/workspace/ailab/research/app/SciForge-p2-gui-protocol`，分支 `codex/parallel-p2-gui-protocol`，基线 `dev@505c46c`。
+- 实际端口：UI `http://127.0.0.1:5174/`，workspace writer `http://127.0.0.1:6174`，Runtime Codex URL `http://127.0.0.1:18081`；端口预检均为空闲。
+- 路径：workspace `workspace/parallel/p2`，state `.sciforge/parallel/p2`，logs `.sciforge/parallel/p2/logs`，evidence `docs/test-artifacts/parallel/p2`。
+- 实现：`availableGuiTools`、Runtime MCP manifest、MCP dispatcher/server 和 docs smoke 统一到 11 个工具：`gui.present/ask_user/notify/set_status/apply_batch/get_context/list/read/search/stat/watch`。
+- Browser：Codex in-app browser 从默认聊天入口打开 `http://127.0.0.1:5174/`，可见 GUI tools、terminal-equivalent command affordance `/runtime-codex submit "<prompt>"`、provider/model/profile；默认 DOM 检查未发现 raw JSONL/stdout/stderr/raw DOM 泄漏。
+- Browser 证据：`docs/test-artifacts/parallel/p2/p2-gui-protocol-browser-manifest.json`、`docs/test-artifacts/parallel/p2/p2-gui-protocol-dom.txt`、`docs/test-artifacts/parallel/p2/p2-gui-protocol-screenshot.png`。
+- 新增/更新测试：`src/runtime/codex/gui-mcp-tools.test.ts` 覆盖完整 MCP dispatcher；`src/runtime/codex/gui-extension-manifest.test.ts` 覆盖 `ask_user/apply_batch/watch` 与 file-backed state 持久化；`src/ui/src/app/guiProtocol.test.ts` 覆盖 `ask_user` 文本 affordance、`apply_batch` atomicity、`watch` 语义 revision。
+- 剩余风险：本轮未宣称 live Runtime Codex agent 实际调用 `gui.present` 后结果区完成态端到端 passed；该项仍需真实 Runtime Codex credential/proxy gate 继续验证。
 
 ### RUNTIME-CODEX-20260519 session, GUI extension, and audit boundary
 

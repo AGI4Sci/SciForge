@@ -6,9 +6,12 @@ export type GuiMcpToolName =
   | 'gui.read'
   | 'gui.search'
   | 'gui.stat'
+  | 'gui.watch'
   | 'gui.present'
+  | 'gui.ask_user'
   | 'gui.notify'
-  | 'gui.set_status';
+  | 'gui.set_status'
+  | 'gui.apply_batch';
 
 export interface GuiMcpToolCallResult extends Record<string, unknown> {
   content: [{ type: 'text'; text: string }];
@@ -47,12 +50,22 @@ function callGuiTool(controller: GuiProtocolController, name: GuiMcpToolName, ar
       });
     case 'gui.stat':
       return controller.stat({ path: requiredString(args.path, 'path') });
+    case 'gui.watch':
+      return controller.watch({
+        path: requiredString(args.path, 'path'),
+        events: Array.isArray(args.events) ? args.events.filter((item): item is never => typeof item === 'string') : undefined,
+        sinceRevision: numberField(args.sinceRevision),
+      });
     case 'gui.present':
       return controller.present(args as never);
+    case 'gui.ask_user':
+      return controller.askUser(args as never);
     case 'gui.notify':
       return controller.notify(args as never);
     case 'gui.set_status':
       return controller.setStatus(args as never);
+    case 'gui.apply_batch':
+      return controller.applyBatch(args as never);
   }
 }
 

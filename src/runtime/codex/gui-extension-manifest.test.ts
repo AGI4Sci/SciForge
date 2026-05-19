@@ -16,14 +16,17 @@ test('Runtime GUI extension manifest exposes native MCP resources and gui tools 
   const manifest = runtimeGuiExtensionManifest(injection);
 
   assert.deepEqual(injection.toolNames, [
+    'gui.present',
+    'gui.ask_user',
+    'gui.notify',
+    'gui.set_status',
+    'gui.apply_batch',
     'gui.get_context',
     'gui.list',
     'gui.read',
     'gui.search',
     'gui.stat',
-    'gui.present',
-    'gui.notify',
-    'gui.set_status',
+    'gui.watch',
   ]);
   assert.deepEqual(injection.resourceUris, [
     'sciforge-gui:/gui/shell.json',
@@ -51,6 +54,7 @@ test('Runtime GUI MCP tools read semantic resources and negotiate presentation p
 
   const context = callGuiMcpTool(controller, 'gui.get_context', { level: 'hot-region' }).structuredContent as { hotRegion: { interactionMode: string } };
   const stat = callGuiMcpTool(controller, 'gui.stat', { path: '/gui/hot-region.json' }).structuredContent as { readonly: boolean };
+  const watch = callGuiMcpTool(controller, 'gui.watch', { path: '/gui/hot-region.json', sinceRevision: 4 }).structuredContent as { semanticOnly: boolean; includesRawDom: boolean; events: Array<{ kind: string }> };
   const deferred = callGuiMcpTool(controller, 'gui.present', {
     intent: 'show-diff',
     content: { kind: 'diff', value: 'diff --git a/report.md b/report.md' },
@@ -61,11 +65,64 @@ test('Runtime GUI MCP tools read semantic resources and negotiate presentation p
 
   assert.equal(context.hotRegion.interactionMode, 'editing');
   assert.equal(stat.readonly, true);
+  assert.equal(watch.semanticOnly, true);
+  assert.equal(watch.includesRawDom, false);
+  assert.deepEqual(watch.events.map((event) => event.kind), ['changed']);
   assert.equal(deferred.ok, false);
   assert.equal(deferred.deferred, true);
   assert.equal(deferred.reason, 'user-editing');
   assert.deepEqual(deferred.suggestions, [{ action: 'defer', until: 'editing-complete' }, { action: 'notify-only' }]);
   assert.deepEqual(log.entries.map((entry) => [entry.tool, entry.reason]), [['gui.present', 'user-editing']]);
+});
+
+test('Runtime GUI MCP ask_user and apply_batch persist GUI intent state', async () => {
+  const workspace = await tempWorkspace();
+  const statePath = join(workspace, 'gui-state.json');
+  await saveGuiExtensionSnapshot(statePath, {
+    revision: 3,
+    focusedPanel: 'results',
+    hotRegion: {
+      panel: 'results',
+      selectedRefs: ['artifact:report'],
+      interactionMode: 'reading',
+      lastChangeAt: '2026-05-19T00:00:00.000Z',
+    },
+  });
+  const { controller, flush } = await createFileBackedGuiProtocolController(statePath);
+
+  const ask = callGuiMcpTool(controller, 'gui.ask_user', {
+    kind: 'choice',
+    title: 'Choose next step',
+    choices: [
+      { label: 'Explain report', commandText: 'ask --ref artifact:report "Explain the report"' },
+      { label: 'Cancel', commandText: '/reject approval-789' },
+      { label: 'Unsafe', commandText: 'triggerRecover({ runId: "run-1" })' },
+    ],
+  }).structuredContent as { ok: boolean; placement: { panel: string } };
+  const batch = callGuiMcpTool(controller, 'gui.apply_batch', {
+    atomicity: 'best-effort',
+    ops: [
+      { tool: 'set_status', args: { text: 'Waiting for user choice', tone: 'running' } },
+      { tool: 'notify', args: { level: 'info', message: 'Choice requested.' } },
+    ],
+  }).structuredContent as { ok: boolean; operationResults: Array<{ ok: boolean }> };
+  await flush();
+
+  const uiReader = createGuiProtocolController(await loadGuiExtensionSnapshot(statePath));
+  const shell = JSON.parse(uiReader.read({ path: '/gui/shell.json' }).content) as { pendingModal: { kind: string } };
+  const actions = JSON.parse(uiReader.read({ path: '/gui/regions/modal/actions.json' }).content) as { actions: Array<{ commandText: string }> };
+  const intentLog = JSON.parse(uiReader.read({ path: '/gui/intent-log.json' }).content) as { entries: Array<{ tool: string; applied: boolean }> };
+
+  assert.equal(ask.ok, true);
+  assert.equal(ask.placement.panel, 'modal');
+  assert.equal(batch.ok, true);
+  assert.deepEqual(batch.operationResults.map((result) => result.ok), [true, true]);
+  assert.equal(shell.pendingModal.kind, 'choice');
+  assert.deepEqual(actions.actions.map((action) => action.commandText), ['ask --ref artifact:report "Explain the report"', '/reject approval-789']);
+  assert.deepEqual(intentLog.entries.map((entry) => [entry.tool, entry.applied]), [
+    ['gui.ask_user', true],
+    ['gui.apply_batch', true],
+  ]);
 });
 
 test('TUI gui.present writes intent state that the UI resource reader can load', async () => {

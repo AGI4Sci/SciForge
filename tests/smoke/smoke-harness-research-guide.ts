@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 const architecture = await readFile('docs/Architecture.md', 'utf8');
 const protocol = await readFile('docs/TuiGuiProtocol.md', 'utf8');
-const codexMigration = await readFile('docs/CodexRuntimeMigration.md', 'utf8');
+const codexMigration = await readFile('packages/backend/CodexRuntimeMigration.md', 'utf8');
 
 for (const required of [
   'Native Extension Model',
@@ -25,12 +25,18 @@ for (const boundary of [
   'Codex custom provider / proxy',
   'GUI 内部语义事件总线',
   'Progressive GUI Context',
-  'Read-Only GUI Resource Tree',
-  'gui.list',
-  'gui.search',
-  'gui.present',
-  'gui.ask_user',
-  'gui.apply_batch',
+	  'Read-Only GUI Resource Tree',
+	  'gui.get_context',
+	  'gui.list',
+	  'gui.read',
+	  'gui.search',
+	  'gui.stat',
+	  'gui.watch',
+	  'gui.present',
+	  'gui.ask_user',
+	  'gui.notify',
+	  'gui.set_status',
+	  'gui.apply_batch',
   'Tool Results and Negotiation',
   'GUI Presentation Autonomy',
   'GUI 不用 LLM 猜应该调用什么 GUI 函数',

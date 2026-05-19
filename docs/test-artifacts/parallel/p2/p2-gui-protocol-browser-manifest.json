@@ -1,0 +1,34 @@
+{
+  "schemaVersion": "sciforge.browser-evidence.v1",
+  "task": "T1-GUI-PROTOCOL-20260519",
+  "status": "passed",
+  "capturedAt": "2026-05-19T12:52:41.597Z",
+  "url": "http://127.0.0.1:5174/",
+  "ports": {
+    "ui": 5174,
+    "workspace": 6174,
+    "runtimeCodex": 18081
+  },
+  "workspace": "workspace/parallel/p2",
+  "state": ".sciforge/parallel/p2",
+  "logs": ".sciforge/parallel/p2/logs",
+  "evidence": "docs/test-artifacts/parallel/p2",
+  "browser": "Codex in-app browser",
+  "defaultChatEntry": true,
+  "guiProtocolSurface": {
+    "commandText": "/runtime-codex submit \"<prompt>\"",
+    "rawDomDefaultContext": "false",
+    "text": "GUI toolsgui.presentgui.ask_usergui.notifygui.set_statusgui.apply_batchgui.get_contextgui.listgui.readgui.searchgui.statgui.watch/runtime-codex submit \"<prompt>\"semantic hot-regiondebug folded",
+    "tools": "gui.present gui.ask_user gui.notify gui.set_status gui.apply_batch gui.get_context gui.list gui.read gui.search gui.stat gui.watch"
+  },
+  "checks": {
+    "guiToolsVisible": true,
+    "terminalEquivalentCommandVisible": true,
+    "rawDomInDefaultContext": false
+  },
+  "artifacts": {
+    "screenshot": "docs/test-artifacts/parallel/p2/p2-gui-protocol-screenshot.png",
+    "dom": "docs/test-artifacts/parallel/p2/p2-gui-protocol-dom.txt",
+    "manifest": "docs/test-artifacts/parallel/p2/p2-gui-protocol-browser-manifest.json"
+  }
+}

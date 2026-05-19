@@ -42,12 +42,16 @@ test('GuiProtocol exposes shell, hot-region, and intent-log resources as bounded
   assert.equal(shell.revision, 7);
   assert.deepEqual(shell.availableGuiTools, [
     'gui.present',
+    'gui.ask_user',
     'gui.notify',
     'gui.set_status',
+    'gui.apply_batch',
+    'gui.get_context',
     'gui.list',
     'gui.read',
     'gui.search',
     'gui.stat',
+    'gui.watch',
   ]);
   assert.equal(hotRegion.hotRegion.primaryRef, 'artifact:report');
   assert.deepEqual(intentLog.entries, []);
@@ -162,4 +166,105 @@ test('GuiProtocol defers presentation intents when presentation policy protects 
   assert.equal(result.currentRevision, 4);
   assert.equal(log.entries[0]?.applied, false);
   assert.equal(log.entries[0]?.reason, 'user-editing');
+});
+
+test('GuiProtocol ask_user creates modal state with terminal-equivalent command affordances', () => {
+  const gui = createGuiProtocolController({
+    revision: 2,
+    focusedPanel: 'results',
+    hotRegion: {
+      panel: 'results',
+      selectedRefs: ['artifact:report'],
+      interactionMode: 'reading',
+      lastChangeAt: '2026-05-19T00:00:00.000Z',
+    },
+  });
+
+  const result = gui.askUser({
+    kind: 'confirmation',
+    title: 'Delete report?',
+    message: 'Confirm before removing the visible report.',
+    choices: [
+      { label: 'Delete', commandText: '/approve approval-456', style: 'danger' },
+      { label: 'Cancel', commandText: '/reject approval-456' },
+      { label: 'Unsafe legacy', commandText: 'deleteFile("report.md")' },
+    ],
+  });
+  const shell = JSON.parse(gui.read({ path: '/gui/shell.json' }).content) as { pendingModal: { kind: string } };
+  const hot = JSON.parse(gui.read({ path: '/gui/hot-region.json' }).content) as { hotRegion: { panel: string; interactionMode: string; availableActions: Array<{ commandText: string }> } };
+  const modalActions = JSON.parse(gui.read({ path: '/gui/regions/modal/actions.json' }).content) as { actions: Array<{ commandText: string }> };
+  const log = JSON.parse(gui.read({ path: '/gui/intent-log.json' }).content) as { entries: Array<{ tool: string; applied: boolean }> };
+
+  assert.equal(result.ok, true);
+  assert.equal(result.placement?.panel, 'modal');
+  assert.equal(shell.pendingModal.kind, 'confirmation');
+  assert.equal(hot.hotRegion.panel, 'modal');
+  assert.equal(hot.hotRegion.interactionMode, 'modal');
+  assert.deepEqual(hot.hotRegion.availableActions.map((action) => action.commandText), ['/approve approval-456', '/reject approval-456']);
+  assert.deepEqual(modalActions.actions.map((action) => action.commandText), ['/approve approval-456', '/reject approval-456']);
+  assert.deepEqual(log.entries.map((entry) => [entry.tool, entry.applied]), [['gui.ask_user', true]]);
+});
+
+test('GuiProtocol apply_batch supports GUI-local all-or-nothing and best-effort transactions', () => {
+  const atomic = createGuiProtocolController({
+    revision: 10,
+    focusedPanel: 'results',
+    hotRegion: {
+      panel: 'results',
+      selectedRefs: ['artifact:report'],
+      interactionMode: 'reading',
+      lastChangeAt: '2026-05-19T00:00:00.000Z',
+    },
+  });
+
+  const rejected = atomic.applyBatch({
+    atomicity: 'all-or-nothing',
+    ops: [
+      { tool: 'set_status', args: { text: 'Opening diff', tone: 'running' } },
+      { tool: 'present', args: { intent: 'show-diff', content: { kind: 'diff', value: 'diff --git a/report.md b/report.md' }, precondition: { expectedRevision: 999 } } },
+    ],
+  });
+  const rejectedLog = JSON.parse(atomic.read({ path: '/gui/intent-log.json' }).content) as { entries: Array<{ tool: string; applied: boolean; reason: string | null }> };
+
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.reason, 'stale-precondition');
+  assert.deepEqual(rejected.operationResults.map((item) => [item.tool, item.ok, item.reason]), [
+    ['set_status', false, 'state-conflict'],
+    ['present', false, 'stale-precondition'],
+  ]);
+  assert.deepEqual(rejectedLog.entries.map((entry) => [entry.tool, entry.applied, entry.reason]), [['gui.apply_batch', false, 'stale-precondition']]);
+
+  const bestEffort = createGuiProtocolController({ revision: 20 });
+  const partial = bestEffort.applyBatch({
+    atomicity: 'best-effort',
+    ops: [
+      { tool: 'set_status', args: { text: 'Rendering result', tone: 'running' } },
+      { tool: 'present', args: { intent: 'show-diff', content: { kind: 'diff', value: 'diff --git a/report.md b/report.md' }, precondition: { expectedRevision: 999 } } },
+      { tool: 'notify', args: { level: 'success', message: 'Rendered what was available.' } },
+    ],
+  });
+
+  assert.equal(partial.ok, true);
+  assert.deepEqual(partial.operationResults.map((item) => [item.tool, item.ok, item.reason]), [
+    ['set_status', true, null],
+    ['present', false, 'stale-precondition'],
+    ['notify', true, null],
+  ]);
+});
+
+test('GuiProtocol watch reports semantic resource revisions without raw DOM disclosure', () => {
+  const gui = createGuiProtocolController({ revision: 12, updatedAt: '2026-05-19T00:00:00.000Z' });
+
+  const current = gui.watch({ path: '/gui/hot-region.json', sinceRevision: 12 });
+  const changed = gui.watch({ path: '/gui/hot-region.json', sinceRevision: 11 });
+  const debug = gui.watch({ path: '/gui/debug/intent-log.json', sinceRevision: 0 });
+
+  assert.deepEqual(current.events, []);
+  assert.equal(changed.semanticOnly, true);
+  assert.equal(changed.includesRawDom, false);
+  assert.deepEqual(changed.events.map((event) => [event.kind, event.path, event.revision, event.disclosure]), [
+    ['changed', '/gui/hot-region.json', 12, 'hot-region'],
+  ]);
+  assert.equal(debug.disclosure, 'debug');
+  assert.equal(debug.includesRawDom, false);
 });
