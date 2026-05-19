@@ -160,7 +160,7 @@ Todo：
 
 ### RUNTIME-CODEX-20260519 session, GUI extension, and audit boundary
 
-状态：ready
+状态：in-progress / p4 compat guard landed / live credential blocked
 
 目标：保留薄 adapter 语义，把 Runtime Codex 作为唯一默认生产 runtime；GUI 只发送 terminal-equivalent text，并通过 Codex 原生 MCP/tool/resource 机制暴露 `gui.*` extension。
 
@@ -171,8 +171,9 @@ Todo：
 - [ ] 持久化 Codex thread id、attempt id、workspace、profile、command id 和 evidence refs；继续对话时调用 `codex exec resume <thread_id> <prompt>`。
 - [ ] 新建 run 使用 `codex exec`；同一会话后续 turn 使用 `codex exec resume`，不得由 GUI 拼接历史消息模拟多轮。
 - [ ] resume 失败时 fail closed，并把 thread id、exit code、stderr 摘要、profile、workspace 写入 audit/debug。
-- [ ] Runtime Codex 缺 profile、workspace、DeepSeek key/proxy 时 fail closed。
-- [ ] `allowOpenAiRuntime` 保持显式 opt-in，默认 false。
+- [x] Runtime Codex 缺 profile、workspace、DeepSeek key/proxy 时 fail closed。
+- [x] `allowOpenAiRuntime` 保持显式 opt-in，默认 false；CLI wrapper 同样拒绝 OpenAI-looking proxy，除非显式 `SCIFORGE_ALLOW_OPENAI_RUNTIME=1`。
+- [x] 默认不 fork Codex：Runtime adapter 和 backend exec wrapper 拒绝 `SCIFORGE_RUNTIME_CODEX_COMMAND` 指向非 upstream `codex`，除非 fork gate 记录 config/profile/proxy 已失败、Codex CLI internal blocker、`docs/CodexUpstreamPatchLog.md`、upstream commit、rebase、验证和回滚证据。
 - [ ] raw JSONL/stdout/stderr/plugin warning 只进 audit/debug，主回复 DOM 和 foreground waiting summary 不展示原始日志。
 - [ ] 每个 run 的 provider/model/profile/workspace/command id 写入 normalized event 和 GUI/audit 可见区域。
 - [x] DeepSeek 真实两轮验收：第一轮记暗号，第二轮通过 Codex 原生 session/resume 回答暗号。
@@ -192,9 +193,17 @@ p2 阶段证据（2026-05-19）：
 - in-app browser 已打开 `http://127.0.0.1:5174/` 并保存 UI/chat DOM、截图和 manifest 到 `docs/test-artifacts/parallel/p2/m1-runtime-reliability-manifest.json`。
 - 本轮 RuntimeCodex sidecar 未启动：`/Applications/workspace/ailab/research/app/RuntimeCodex` 不存在；因此仍需 live RuntimeCodex browser rerun，不能宣称完整 live pass。
 
+p4 compat/browser 阶段证据（2026-05-19）：
+
+- worktree：`/Applications/workspace/ailab/research/app/SciForge-p4-compat-browser`，branch `codex/parallel-p4-compat-browser`，基线 `dev@505c46c`。
+- 实际端口/路径：UI `http://127.0.0.1:5176/`，workspace writer `http://127.0.0.1:6176`，Runtime Codex sidecar `http://127.0.0.1:18083`，workspace `workspace/parallel/p4`，state `.sciforge/parallel/p4`，logs `.sciforge/parallel/p4/logs`，evidence `docs/test-artifacts/parallel/p4`。
+- T3 修复：新增 `packages/backend/src/codex-compatibility-gate.ts`，adapter 和 backend exec wrapper 默认只允许 upstream `codex`；provider proxy 回归新增“首个 DeepSeek tool delta id/name 为空、后续补齐”测试，避免发出空 `name`/`call_id`；`assertRuntimeReady` 现在拒绝 OpenAI-looking proxy，除非显式 opt-in。
+- T3 证据：`npm --workspace @sciforge/backend test` 通过；`node --import tsx --test src/runtime/codex/codex-exec-json-adapter.test.ts src/runtime/codex/codex-runtime-config.test.ts` 通过；`npm run backend:codex-runtime:setup` 通过；`npm run backend:codex-runtime:exec -- --prompt "Reply with exactly: SCIFORGE_DEEPSEEK_OK"` fail-closed，原因是缺少 `SCIFORGE_RUNTIME_API_KEY`，未 fallback 到 OpenAI。
+- 剩余风险：live Runtime Codex simple/complex tool-use smoke 仍需真实 `SCIFORGE_RUNTIME_API_KEY` 和 provider proxy；本轮只能证明缺 credential 时阻断正确，不能宣称 live completion passed。
+
 ### VERIFICATION-20260519 real in-app browser acceptance
 
-状态：planned / blocked-by-gui-present-integration
+状态：blocked-by-live-runtime-credential / p4 strict manifest fail-closed
 
 目标：只用 Codex in-app browser 从默认聊天入口证明用户级路径可用；不能用系统浏览器、macOS `open`、外部 Chrome 或 Playwright 替代结论。
 
@@ -243,6 +252,15 @@ p4 artifact open/follow-up 阶段证据（2026-05-19）：
 - 修复：Runtime bridge 现在用 `workspace-write` sandbox / `approval never` 启动 Codex；Runtime Codex 返回 `artifact:*` id 时会 canonicalize 为无前缀 artifact id，避免 `artifact:artifact:*` selected-ref commandText。
 - 证据位于 `docs/test-artifacts/parallel/p4/p4-artifact-followup-manifest.json`、`p4-canonical-selected-ref-live-dom.txt`、`p4-canonical-selected-ref-live-screenshot.png`，旧失败截图/DOM 继续保留作回归上下文。
 - 剩余风险：artifact open/follow-up 已 live usable，但 focused run 的主结果区仍显示等待 `ConversationProjection`；M0 final 仍需 `gui.present`/ConversationProjection 闭环。
+
+p4 compat/browser strict gate 阶段证据（2026-05-19）：
+
+- strict browser smoke 已改为按 `SCIFORGE_INSTANCE_ID=p4` 使用 p4 profile：UI `5176`、workspace writer `6176`、Runtime Codex `18083`、workspace `workspace/parallel/p4`、evidence `docs/test-artifacts/parallel/p4`。
+- Codex in-app browser 已打开 `http://127.0.0.1:5176/` 默认聊天入口并保存 blocked evidence：`docs/test-artifacts/parallel/p4/p4-compat-default-chat-blocked-dom.txt`、`p4-compat-default-chat-blocked.png`。
+- strict manifest：`docs/test-artifacts/parallel/p4/manifest.json`，状态 `blocked`，记录 screenshot、DOM、notes、实际端口、workspace、profile `sciforge-runtime-deepseek`、provider `sciforge-deepseek-proxy`、model `bailian/deepseek-v4-flash`；没有 command id，因为缺 credential 时未提交 Runtime Codex live run。
+- negative fixture validator 现在按 p4 profile 生成临时自测数据，覆盖 fake passed、missing DOM/screenshot、missing command id、missing task result、seed/demo、blocked/failed/partial 和 unparseable evidence，不再把临时 fixture 当作用户级 evidence。
+- `SCIFORGE_INSTANCE_ID=p4 npm run smoke:runtime-codex-browser-acceptance` 通过并写 blocked manifest；`SCIFORGE_INSTANCE_ID=p4 SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 npm run smoke:runtime-codex-browser-acceptance` 按要求失败，拒绝 blocked manifest 作为 release acceptance。
+- 剩余风险：缺少 `SCIFORGE_RUNTIME_API_KEY`，因此 single-turn、artifact follow-up、多轮暗号均未提交 live Runtime Codex，不能标 passed；获得 credential 后必须从同一默认聊天入口重新跑 strict live browser acceptance。
 
 M2 / p3 GUI presentation、seed boundary、no-hardcoding 阶段证据（2026-05-19）：
 

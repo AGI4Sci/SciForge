@@ -1,0 +1,106 @@
+{
+  "schemaVersion": "sciforge.runtime-codex.browser-acceptance.v1",
+  "status": "blocked",
+  "source": "codex-in-app-browser",
+  "observedAt": "2026-05-19T12:53:15.915Z",
+  "requestedRolePort": 5176,
+  "actualWorkspaceWriterPort": 6176,
+  "actualWorkspaceWriterUrl": "http://127.0.0.1:6176",
+  "actualRuntimeCodexPort": 18083,
+  "actualRuntimeCodexUrl": "http://127.0.0.1:18083",
+  "actualUrl": "http://127.0.0.1:5176/",
+  "actualPort": 5176,
+  "workspacePath": "/Applications/workspace/ailab/research/app/SciForge-p4-compat-browser/workspace/parallel/p4",
+  "profile": "sciforge-runtime-deepseek",
+  "provider": "sciforge-deepseek-proxy",
+  "model": "bailian/deepseek-v4-flash",
+  "startedFromDefaultChatEntry": true,
+  "submittedThroughRuntimeCodex": false,
+  "providerModelProfileVisible": false,
+  "workspaceVisible": true,
+  "commandIdVisible": false,
+  "mainAnswerVisible": false,
+  "rawAuditFoldedByDefault": true,
+  "automationSubstituteUsed": false,
+  "seedDemoFixtureEvidenceUsed": false,
+  "acceptanceConclusionFromRealBrowser": false,
+  "seedOrDemoMessagesExcluded": true,
+  "liveAcceptanceScope": "non-seed-runtime-codex-messages-only",
+  "acceptanceRubric": {
+    "userIntent": "Prove the real default-chat Runtime Codex path can complete single-turn, selected-ref, and multi-turn tasks.",
+    "expectedObservableResult": "Visible live Runtime Codex/gui.present answers with provider/model/profile/workspace/command id and folded audit logs.",
+    "actualResult": "Blocked before release acceptance: Runtime Codex API key is not configured; live browser E2E must fail closed until SCIFORGE_RUNTIME_API_KEY is present.",
+    "evidenceRefs": [
+      "docs/test-artifacts/parallel/p4/manifest.json",
+      "docs/test-artifacts/parallel/p4/blocked-runtime-config.md"
+    ],
+    "negativeChecks": [
+      "fake passed status rejected",
+      "missing DOM or screenshot rejected",
+      "missing command id rejected",
+      "missing task result rejected",
+      "seed/demo evidence rejected",
+      "blocked/failed/partial status rejected in strict mode"
+    ],
+    "remainingRisks": "Live browser acceptance still requires configured Runtime Codex credentials and a visible second-turn answer."
+  },
+  "negativeChecks": {
+    "fakePassedStatusRejected": true,
+    "missingDomOrScreenshotRejected": true,
+    "missingCommandIdRejected": true,
+    "missingTaskResultRejected": true,
+    "seedDemoEvidenceRejected": true,
+    "blockedFailedPartialRejected": true,
+    "rawStdoutJsonlRejected": true
+  },
+  "reason": "Runtime Codex API key is not configured; live browser E2E must fail closed until SCIFORGE_RUNTIME_API_KEY is present.",
+  "blocker": "Runtime Codex API key is not configured; live browser E2E must fail closed until SCIFORGE_RUNTIME_API_KEY is present.",
+  "blockedOn": [
+    "Runtime Codex environment configuration",
+    "Codex in-app browser execution"
+  ],
+  "singleTurn": {
+    "status": "blocked",
+    "prompt": "single-turn Runtime Codex browser acceptance is blocked before submission",
+    "visibleAnswerConfirmed": false,
+    "providerModelProfileVisible": false,
+    "workspaceCommandIdVisible": false,
+    "rawAuditFoldedByDefault": true,
+    "reason": "Runtime Codex API key is not configured; live browser E2E must fail closed until SCIFORGE_RUNTIME_API_KEY is present.",
+    "evidence": {
+      "notesPath": "docs/test-artifacts/parallel/p4/blocked-runtime-config.md"
+    }
+  },
+  "artifactFollowUp": {
+    "status": "blocked",
+    "prompt": "artifact follow-up Runtime Codex browser acceptance is blocked before selected-ref follow-up submission",
+    "visibleAnswerConfirmed": false,
+    "providerModelProfileVisible": false,
+    "workspaceCommandIdVisible": false,
+    "rawAuditFoldedByDefault": true,
+    "reason": "Runtime Codex API key is not configured; live browser E2E must fail closed until SCIFORGE_RUNTIME_API_KEY is present.",
+    "evidence": {
+      "notesPath": "docs/test-artifacts/parallel/p4/blocked-runtime-config.md"
+    }
+  },
+  "multiTurn": {
+    "status": "blocked",
+    "prompt": "Remember this passphrase for the next browser turn: SCIFORGE-CODEX-BROWSER-MT-20260519. Reply only remembered.",
+    "visibleAnswerConfirmed": false,
+    "providerModelProfileVisible": false,
+    "workspaceCommandIdVisible": false,
+    "rawAuditFoldedByDefault": true,
+    "reason": "Runtime Codex API key is not configured; live browser E2E must fail closed until SCIFORGE_RUNTIME_API_KEY is present.",
+    "evidence": {
+      "notesPath": "docs/test-artifacts/parallel/p4/blocked-runtime-config.md"
+    },
+    "followUpPrompt": "Now reply only with the passphrase from the previous turn.",
+    "expectedPassphrase": "SCIFORGE-CODEX-BROWSER-MT-20260519",
+    "secondTurnVisibleAnswerConfirmed": false
+  },
+  "evidence": {
+    "screenshotPath": "docs/test-artifacts/parallel/p4/p4-compat-default-chat-blocked.png",
+    "domSnapshotPath": "docs/test-artifacts/parallel/p4/p4-compat-default-chat-blocked-dom.txt",
+    "notesPath": "docs/test-artifacts/parallel/p4/blocked-runtime-config.md"
+  }
+}

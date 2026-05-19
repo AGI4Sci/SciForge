@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DEFAULT_PROXY_BASE_URL,
+  ensureRuntimeHome,
   RUNTIME_KEY_ENV,
   RUNTIME_MODEL,
   RUNTIME_PROFILE,
@@ -116,6 +117,7 @@ test('runtime environment forces isolated CODEX_HOME over inherited values', () 
 });
 
 async function tempWorkspace() {
+  await ensureRuntimeHome();
   const dir = await mkdtemp(join(tmpdir(), 'sciforge-codex-runtime-'));
   await mkdir(dir, { recursive: true });
   return dir;

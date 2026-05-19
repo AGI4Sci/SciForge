@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { normalizeInstanceName, parallelProfile } from '../../src/runtime/parallel-instance-profile.js';
 
 type BrowserAcceptanceStatus = 'blocked' | 'failed' | 'partial' | 'passed';
 
@@ -110,13 +112,32 @@ type NegativeChecks = {
 };
 
 const root = process.cwd();
-const outputDir = resolve(root, 'docs', 'test-artifacts', 'runtime-codex-browser-acceptance');
+const requestedInstance = normalizeInstanceName(process.env.SCIFORGE_INSTANCE_ID ?? process.env.SCIFORGE_PARALLEL_INSTANCE);
+const instanceProfile = parallelProfile(requestedInstance);
+const isParallelInstance = /^p[2-8]$/.test(instanceProfile.id);
+const outputDir = process.env.SCIFORGE_BROWSER_ACCEPTANCE_EVIDENCE_DIR
+  ? resolve(root, process.env.SCIFORGE_BROWSER_ACCEPTANCE_EVIDENCE_DIR)
+  : isParallelInstance
+    ? resolve(root, 'docs', 'test-artifacts', 'parallel', instanceProfile.id)
+    : resolve(root, 'docs', 'test-artifacts', 'runtime-codex-browser-acceptance');
 const manifestPath = join(outputDir, 'manifest.json');
 const blockedNotesPath = join(outputDir, 'blocked-runtime-config.md');
-const requestedRolePort = portFromEnv(process.env.SCIFORGE_UI_PORT, process.env.SCIFORGE_WORKER5_UI_PORT, 5173);
-const requestedWorkspaceWriterPort = portFromEnv(process.env.SCIFORGE_WORKSPACE_PORT, process.env.SCIFORGE_WORKER5_WORKSPACE_PORT, 6173);
-const requestedRuntimeCodexPort = portFromEnv(process.env.SCIFORGE_RUNTIME_CODEX_PORT, process.env.SCIFORGE_WORKER5_RUNTIME_CODEX_PORT, 18080);
-const workspacePath = process.env.SCIFORGE_WORKSPACE_PATH ?? resolve(root, 'workspace', 'parallel', process.env.SCIFORGE_INSTANCE_ID ?? 'p1');
+const requestedRolePort = portFromEnv(
+  process.env.SCIFORGE_UI_PORT,
+  process.env[`SCIFORGE_${instanceProfile.id.toUpperCase()}_UI_PORT`],
+  Number(instanceProfile.uiPort),
+);
+const requestedWorkspaceWriterPort = portFromEnv(
+  process.env.SCIFORGE_WORKSPACE_PORT,
+  process.env[`SCIFORGE_${instanceProfile.id.toUpperCase()}_WORKSPACE_PORT`],
+  Number(instanceProfile.workspacePort),
+);
+const requestedRuntimeCodexPort = portFromEnv(
+  process.env.SCIFORGE_RUNTIME_CODEX_PORT,
+  process.env[`SCIFORGE_${instanceProfile.id.toUpperCase()}_RUNTIME_CODEX_PORT`],
+  Number(instanceProfile.runtimeCodexPort),
+);
+const workspacePath = process.env.SCIFORGE_WORKSPACE_PATH ?? resolve(root, instanceProfile.workspacePath);
 const actualUrl = `http://127.0.0.1:${requestedRolePort}/`;
 const actualWorkspaceWriterUrl = `http://127.0.0.1:${requestedWorkspaceWriterPort}`;
 const actualRuntimeCodexUrl = `http://127.0.0.1:${requestedRuntimeCodexPort}`;
@@ -455,8 +476,8 @@ function existingBrowserEvidence(): {
   evidence: BrowserAcceptanceEvidence;
 } {
   const defaultObservation = scenarioObservation({
-    domCandidates: ['default-chat-dom.txt', 'worker5-chat-entry-dom.txt'],
-    screenshotCandidates: ['default-chat.png', 'worker5-default-chat.png'],
+    domCandidates: ['default-chat-dom.txt', 'worker5-chat-entry-dom.txt', 'p4-compat-default-chat-blocked-dom.txt'],
+    screenshotCandidates: ['default-chat.png', 'worker5-default-chat.png', 'p4-compat-default-chat-blocked.png'],
   });
   const singleTurn = scenarioObservation({
     domCandidates: ['single-turn-after-submit-dom.txt', 'worker5-single-turn-after-submit-dom.txt'],
@@ -635,7 +656,7 @@ function blockedAcceptanceRubric(reason: string): AcceptanceRubric {
 }
 
 function assertNegativeFixtures(): void {
-  const fixtureDir = resolve(root, 'docs', 'test-artifacts', 'parallel', 'p5', 'negative-manifest-validator');
+  const fixtureDir = mkdtempSync(join(tmpdir(), `sciforge-${instanceProfile.id}-negative-manifest-validator-`));
   writeNegativeFixtures(fixtureDir);
   const fixtures = [
     'fake-passed-missing-dom.json',
@@ -643,6 +664,8 @@ function assertNegativeFixtures(): void {
     'fake-passed-missing-command-id.json',
     'fake-passed-missing-task-result.json',
     'fake-passed-unparseable-evidence.json',
+    'blocked-status.json',
+    'failed-status.json',
     'partial-status.json',
   ];
   for (const fixture of fixtures) {
@@ -659,13 +682,13 @@ function assertNegativeFixtures(): void {
 
 function writeNegativeFixtures(fixtureDir: string): void {
   mkdirSync(fixtureDir, { recursive: true });
-  const artifactRoot = 'docs/test-artifacts/parallel/p5/negative-manifest-validator';
+  const artifactRoot = relativeFromRoot(fixtureDir);
   const fixturePath = (file: string): string => `${artifactRoot}/${file}`;
   writeFixture(fixtureDir, 'valid-dom.txt', [
     '- main:',
     '  - strong: Ask SciForge',
-    '  - generic: Actual browser URL http://127.0.0.1:5177/',
-    '  - generic: workspace /Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p5',
+    `  - generic: Actual browser URL ${actualUrl}`,
+    `  - generic: workspace ${workspacePath}`,
     '  - generic: sciforge-runtime-deepseek',
     '  - generic: sciforge-deepseek-proxy',
     '  - generic: bailian/deepseek-v4-flash',
@@ -679,8 +702,8 @@ function writeNegativeFixtures(fixtureDir: string): void {
   writeFixture(fixtureDir, 'seed-demo-dom.txt', [
     '- main:',
     '  - strong: Ask SciForge',
-    '  - generic: Actual browser URL http://127.0.0.1:5177/',
-    '  - generic: workspace /Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p5',
+    `  - generic: Actual browser URL ${actualUrl}`,
+    `  - generic: workspace ${workspacePath}`,
     '  - generic: sciforge-runtime-deepseek',
     '  - generic: sciforge-deepseek-proxy',
     '  - generic: bailian/deepseek-v4-flash',
@@ -697,7 +720,7 @@ function writeNegativeFixtures(fixtureDir: string): void {
     '',
     'User intent: prove the real default-chat Runtime Codex browser path completed the requested task.',
     'Expected observable result: visible live Runtime Codex/gui.present output with URL, workspace, provider, model, profile, and command id.',
-    'Actual task result: Runtime Codex rendered a live answer for command codex-command-negative-001 at http://127.0.0.1:5177/ in workspace /Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p5.',
+    `Actual task result: Runtime Codex rendered a live answer for command codex-command-negative-001 at ${actualUrl} in workspace ${workspacePath}.`,
     'Evidence refs: valid-dom.txt and screen.png.',
     'Negative checks: seed/demo excluded; audit/debug output not used as the main answer; forged passed and partial states rejected.',
     'Remaining risks: none for this validator fixture.',
@@ -723,6 +746,16 @@ function writeNegativeFixtures(fixtureDir: string): void {
   delete missingTaskResult.actualTaskResult;
   writeJsonFixture(fixtureDir, 'fake-passed-missing-task-result.json', missingTaskResult);
   writeJsonFixture(fixtureDir, 'fake-passed-unparseable-evidence.json', passedFixtureManifest(validDom, badEvidence, screenshot));
+  writeJsonFixture(fixtureDir, 'blocked-status.json', {
+    ...passedFixtureManifest(validDom, notes, screenshot),
+    status: 'blocked',
+    reason: 'blocked status must remain release-blocking',
+  });
+  writeJsonFixture(fixtureDir, 'failed-status.json', {
+    ...passedFixtureManifest(validDom, notes, screenshot),
+    status: 'failed',
+    reason: 'failed status must remain release-blocking',
+  });
   writeJsonFixture(fixtureDir, 'partial-status.json', {
     ...passedFixtureManifest(validDom, notes, screenshot),
     status: 'partial',
@@ -736,13 +769,13 @@ function passedFixtureManifest(domPath: string, notesPath: string, screenshotPat
     schemaVersion: 'sciforge.runtime-codex.browser-acceptance.v1',
     status: 'passed',
     source: 'codex-in-app-browser',
-    actualUrl: 'http://127.0.0.1:5177/',
-    actualPort: 5177,
-    actualWorkspaceWriterPort: 6177,
-    actualWorkspaceWriterUrl: 'http://127.0.0.1:6177',
-    actualRuntimeCodexPort: 18084,
-    actualRuntimeCodexUrl: 'http://127.0.0.1:18084',
-    workspacePath: '/Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p5',
+    actualUrl,
+    actualPort: requestedRolePort,
+    actualWorkspaceWriterPort: requestedWorkspaceWriterPort,
+    actualWorkspaceWriterUrl,
+    actualRuntimeCodexPort: requestedRuntimeCodexPort,
+    actualRuntimeCodexUrl,
+    workspacePath,
     profile: 'sciforge-runtime-deepseek',
     provider: 'sciforge-deepseek-proxy',
     model: 'bailian/deepseek-v4-flash',
