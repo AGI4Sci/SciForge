@@ -1,0 +1,245 @@
+{
+  "schemaVersion": "sciforge.native-extension-ownership-map.v1",
+  "updatedAt": "2026-05-19",
+  "principles": {
+    "guiInputContract": "GUI sends terminal-equivalent text only.",
+    "guiCapabilityCommands": [
+      "search",
+      "expand",
+      "plan",
+      "explain"
+    ],
+    "guiRankingAllowed": false,
+    "runtimeRankingAllowed": false,
+    "rawRuntimeOutputPlacement": "folded-audit-debug-only",
+    "runtimeOpenAiFallback": "explicit-opt-in-only"
+  },
+  "entries": [
+    {
+      "id": "capability-discovery",
+      "status": "codex-native",
+      "owner": "codex-native-plugin-skill-tool-mcp",
+      "targetNativeSurfaces": [
+        "Codex plugin",
+        "Codex skill",
+        "MCP tool/resource",
+        "slash command"
+      ],
+      "currentImplementationPaths": [
+        "src/runtime/capability-discovery.ts",
+        "src/runtime/capability-broker.ts",
+        "src/ui/src/app/uiActionBoundary.ts"
+      ],
+      "targetImplementationPaths": [
+        "$CODEX_HOME/skills/**/SKILL.md",
+        ".codex-plugin/plugin.json",
+        "mcp://capability-discovery",
+        "slash-command:/capabilities"
+      ],
+      "enforcementScripts": [
+        "npm run smoke:native-extension-ownership",
+        "npm run smoke:no-src-capability-semantics"
+      ],
+      "allowedGuiCommandVerbs": [
+        "search",
+        "expand",
+        "plan",
+        "explain"
+      ],
+      "forbiddenOwners": [
+        "React/UI ranking",
+        "runtime gateway ranking",
+        "AgentServer-first capability gateway"
+      ],
+      "migrationNote": "GUI affordances may construct only /capabilities search|expand|plan|explain text. Discovery results are not completion evidence and must be presented through gui.present or gui.ask_user."
+    },
+    {
+      "id": "harness-policy-budget-repair",
+      "status": "codex-native",
+      "owner": "codex-tui-native-extension",
+      "targetNativeSurfaces": [
+        "Codex policy plugin",
+        "Codex skill",
+        "MCP resource/tool"
+      ],
+      "currentImplementationPaths": [
+        "packages/agent-harness",
+        "packages/reasoning/conversation-policy",
+        "src/runtime/gateway/repair-policy.ts"
+      ],
+      "targetImplementationPaths": [
+        ".codex-plugin/plugin.json",
+        "$CODEX_HOME/skills/**/SKILL.md",
+        "mcp://harness-policy"
+      ],
+      "enforcementScripts": [
+        "npm run smoke:native-extension-ownership",
+        "npm run smoke:no-scattered-harness-policy"
+      ],
+      "allowedGuiCommandVerbs": [],
+      "forbiddenOwners": [
+        "React/UI decision policy",
+        "workspace writer decision policy",
+        "provider prompt stuffing"
+      ],
+      "migrationNote": "Harness, policy, budget, and repair choices are TUI-native decisions. GUI can show status, ask the user, or send terminal-equivalent rerun/recover text, but it does not choose the repair strategy."
+    },
+    {
+      "id": "provider-route",
+      "status": "codex-native",
+      "owner": "codex-provider-mcp-tool-ecosystem",
+      "targetNativeSurfaces": [
+        "Codex custom model provider",
+        "local provider proxy",
+        "MCP server",
+        "Codex tool"
+      ],
+      "currentImplementationPaths": [
+        "packages/backend/CodexRuntimeMigration.md",
+        "packages/backend/CODEX_COMPATIBILITY.md",
+        "src/runtime/codex"
+      ],
+      "targetImplementationPaths": [
+        "$CODEX_HOME/config.toml model_providers.*",
+        "packages/backend/src/proxy.ts",
+        "mcp://provider-route"
+      ],
+      "enforcementScripts": [
+        "npm run smoke:native-extension-ownership",
+        "node --import tsx --test \"src/runtime/codex/*.test.ts\""
+      ],
+      "allowedGuiCommandVerbs": [],
+      "forbiddenOwners": [
+        "React/UI provider branch",
+        "silent OpenAI fallback",
+        "Developer Codex profile inheritance"
+      ],
+      "migrationNote": "Runtime adapter may enforce profile, provider, model, workspace, and command-id audit, but route selection belongs to Codex native provider/tool configuration and must fail closed when missing."
+    },
+    {
+      "id": "verifier",
+      "status": "codex-native",
+      "owner": "codex-native-verifier-tool-skill",
+      "targetNativeSurfaces": [
+        "Codex tool",
+        "Codex skill",
+        "MCP verifier"
+      ],
+      "currentImplementationPaths": [
+        "src/runtime/gateway/runtime-verifier-registry.ts",
+        "src/runtime/gateway/verification-policy.ts",
+        "packages/verifiers"
+      ],
+      "targetImplementationPaths": [
+        "$CODEX_HOME/skills/**/SKILL.md",
+        ".codex-plugin/plugin.json",
+        "mcp://verifier"
+      ],
+      "enforcementScripts": [
+        "npm run smoke:native-extension-ownership",
+        "npm run smoke:package-runtime-boundary"
+      ],
+      "allowedGuiCommandVerbs": [],
+      "forbiddenOwners": [
+        "React/UI truth judgment",
+        "raw stdout completion judgment"
+      ],
+      "migrationNote": "Verification output is evidence, verdict, critique, or repair hints. GUI renders verifier intent and folded audit refs; it does not decide task completion from raw logs."
+    },
+    {
+      "id": "skill-promotion",
+      "status": "codex-native-target",
+      "owner": "codex-skill-plugin-mcp-slash-command",
+      "targetNativeSurfaces": [
+        "Codex skill",
+        "Codex plugin",
+        "MCP server",
+        "slash command"
+      ],
+      "currentImplementationPaths": [
+        "src/runtime/skill-promotion.ts",
+        "packages/skills/runtime-policy.ts",
+        ".sciforge/skill-proposals"
+      ],
+      "targetImplementationPaths": [
+        "$CODEX_HOME/skills/**/SKILL.md",
+        ".codex-plugin/plugin.json",
+        "mcp://skill-promotion",
+        "slash-command:/skill"
+      ],
+      "enforcementScripts": [
+        "npm run smoke:native-extension-ownership",
+        "npm run smoke:self-evolving-skill"
+      ],
+      "allowedGuiCommandVerbs": [],
+      "forbiddenOwners": [
+        "workspace-only evolved skill as final target",
+        "React/UI promotion logic"
+      ],
+      "migrationNote": "Workspace skill proposals are staging artifacts only. Accepted promotions should land as Codex-native skills, plugins, MCP tools/resources, or slash commands."
+    },
+    {
+      "id": "computer-use",
+      "status": "codex-native-with-upstream-bridge",
+      "owner": "sense-plugin-plus-upstream-desktop-bridge",
+      "targetNativeSurfaces": [
+        "packages/observe/vision sense plugin",
+        "packages/actions/computer-use action provider",
+        "upstream desktop bridge"
+      ],
+      "currentImplementationPaths": [
+        "packages/observe/vision",
+        "packages/actions/computer-use",
+        "src/runtime/computer-use",
+        "src/runtime/vision-sense-runtime.ts"
+      ],
+      "targetImplementationPaths": [
+        "packages/observe/vision",
+        "packages/actions/computer-use",
+        "upstream-desktop-bridge"
+      ],
+      "enforcementScripts": [
+        "npm run smoke:native-extension-ownership",
+        "npm run smoke:vision-sense-runtime"
+      ],
+      "allowedGuiCommandVerbs": [],
+      "forbiddenOwners": [
+        "React/UI Computer Use executor",
+        "DOM-specific action runner",
+        "raw screenshot payload in main response"
+      ],
+      "migrationNote": "Vision sense remains observation. Desktop execution stays in the action provider and upstream bridge, with trace refs and high-risk confirmation gates."
+    },
+    {
+      "id": "dual-instance-self-repair",
+      "status": "retired-for-default-runtime",
+      "owner": "retired-unless-codex-native",
+      "targetNativeSurfaces": [
+        "Codex native repair workflow",
+        "Codex skill/plugin",
+        "external supervisor"
+      ],
+      "currentImplementationPaths": [
+        "tools/dev-dual.ts",
+        "tools/worktree-dual.ts",
+        "src/runtime/repair-handoff-runner.ts"
+      ],
+      "targetImplementationPaths": [
+        "$CODEX_HOME/skills/**/SKILL.md",
+        ".codex-plugin/plugin.json",
+        "external-supervisor"
+      ],
+      "enforcementScripts": [
+        "npm run smoke:native-extension-ownership",
+        "npm run smoke:dual-instance",
+        "npm run smoke:repair-handoff-runner"
+      ],
+      "allowedGuiCommandVerbs": [],
+      "forbiddenOwners": [
+        "two SciForge React apps as default repair runtime",
+        "AgentServer-first self-repair loop"
+      ],
+      "migrationNote": "Existing dual-instance/dev worktree smokes are migration diagnostics only. Default self-repair must become Codex-native or remain retired."
+    }
+  ]
+}

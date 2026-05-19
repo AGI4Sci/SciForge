@@ -113,6 +113,56 @@ Needs rerun:
 
 ## Active Tasks
 
+### T5-NATIVE-EXTENSIONS-20260519 capability, harness, skills, computer-use
+
+状态：in-progress / parallel-p5
+
+工作区：
+
+- worktree：`/Applications/workspace/ailab/research/app/SciForge-p5-native-extensions`
+- branch：`codex/parallel-p5-native-extensions`
+- UI：`http://127.0.0.1:5177/`
+- workspace writer：`http://127.0.0.1:6177`
+- Runtime Codex：`http://127.0.0.1:18084`
+- workspace：`workspace/parallel/p5`
+- state：`.sciforge/parallel/p5`
+- logs：`.sciforge/parallel/p5/logs`
+- evidence：`docs/test-artifacts/parallel/p5`
+
+目标：盘点并迁移 capability discovery、harness/policy、provider route、verifier、skill promotion、Computer Use 和 dual-instance/self-repair 的归属到 Codex 原生 plugin/skill/tool/MCP/provider 生态。
+
+已处理：
+
+- [x] 新增 gateable ownership manifest：`docs/native-extension-ownership-map.json`。
+- [x] 新增 readable ownership doc：`docs/NativeExtensionOwnershipMap.md`，并加入 `docs/README.md` 权威文档表。
+- [x] 新增 `npm run smoke:native-extension-ownership`，并接入 `smoke:package-runtime-boundary`。
+- [x] GUI capability preference 命令收敛为允许的 `/capabilities plan --prefer ...`；GUI capability 指令只允许 `search|expand|plan|explain`。
+- [x] `docs/Usage.md` 将双实例互修降级为迁移期开发诊断模式；默认自修复必须 Codex-native，否则退役。
+- [x] 新增 `docs/native-extension-src-semantics-baseline.json`，把当前残留 src capability semantics 记录为 T5/T122 迁移债务；`smoke:no-src-capability-semantics` 继续阻止新增或增加。
+- [x] `packages/actions/computer-use` 和 `packages/observe/vision` 保持 Computer Use action/sense split；React/UI 不承载 executor。
+
+证据：
+
+- [x] `npm run smoke:native-extension-ownership`
+- [x] `npm run smoke:package-runtime-boundary`
+- [x] `npm run smoke:no-src-capability-semantics`
+- [x] `node --import tsx --test src/ui/src/app/uiActionBoundary.test.ts src/ui/src/app/projectionApi.test.ts`
+- [x] Codex in-app browser：`http://127.0.0.1:5177/` 默认聊天入口提交 `/capabilities plan --prefer literature.search pdf.extract`，证据位于 `docs/test-artifacts/parallel/p5/p5-native-extensions-browser-manifest.json`、`p5-native-extensions-capability-dom.txt`、`p5-native-extensions-capability.png`。
+
+待完成：
+
+- [x] `npm run smoke:package-runtime-boundary` 最终 rerun。
+- [x] `npm run smoke:no-src-capability-semantics` 最终 rerun。
+- [x] Browser 验收：Codex in-app browser 打开 `http://127.0.0.1:5177/`，从默认聊天入口验证 capability 相关 UI 只生成文本命令，debug/audit 折叠，并保存 screenshot、DOM、manifest。
+- [x] `git diff --check`
+- [ ] commit 并 push。
+
+剩余风险：
+
+- `docs/native-extension-src-semantics-baseline.json` 是迁移债务 snapshot，不代表 src capability semantics 已清零；后续 T122/legacy cleanup 需要逐项降低 counts。
+- dual-instance/self-repair 的现有脚本仍保留为迁移诊断，不应作为默认 runtime ownership。
+- 本轮 Runtime Codex 因 `packages/backend/.codex-runtime/codex-home` 缺失 fail closed；T5 browser 验收只声明 capability text boundary 和 folded audit/debug 通过，不声明 live Runtime Codex 任务完成。
+
 ### DOC-SYNC-20260519 authoritative doc map
 
 状态：completed / parallel-p2-gui-protocol

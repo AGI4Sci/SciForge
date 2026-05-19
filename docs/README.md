@@ -14,6 +14,7 @@ GUI 给 TUI 的操作输入全部是文本。默认 TUI 服务是 Codex backend�
 |---|---|---|
 | [`Architecture.md`](Architecture.md) | **当前总架构真相源** | GUI-as-extension 的产品边界、职责归属、扩展模型、capability discovery、harness/policy 和 UI 边界。 |
 | [`TuiGuiProtocol.md`](TuiGuiProtocol.md) | **当前协议真相源** | GUI → TUI 文本输入，TUI 读取 GUI resource tree，TUI → GUI intent-based `gui.*` tools，hot region、precondition 和协商。 |
+| [`NativeExtensionOwnershipMap.md`](NativeExtensionOwnershipMap.md) / [`native-extension-ownership-map.json`](native-extension-ownership-map.json) | **TUI native extension 归属图** | capability discovery、harness/policy、provider route、verifier、skill promotion、Computer Use 和 dual-instance repair 的 Codex 原生归属与 gateable manifest。 |
 | [`CodexRuntimeMigration.md`](CodexRuntimeMigration.md) | 当前迁移路线 | Phase 1 `codex exec --json`、Phase 2 `AgentCliAdapter`、DeepSeek provider、两个 Codex 实例隔离和审计。 |
 | [`Usage.md`](Usage.md) | 当前操作手册 | 当前代码启动、配置、验证命令；它描述现状，不代表最终职责归属。 |
 

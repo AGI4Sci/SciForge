@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "sciforge.native-extension.browser-acceptance.v1",
+  "status": "passed",
+  "source": "codex-in-app-browser",
+  "observedAt": "2026-05-19T12:50:02.704Z",
+  "worktree": "/Applications/workspace/ailab/research/app/SciForge-p5-native-extensions",
+  "branch": "codex/parallel-p5-native-extensions",
+  "actualUrl": "http://127.0.0.1:5177/",
+  "actualPort": 5177,
+  "actualWorkspaceWriterPort": 6177,
+  "actualRuntimeCodexPort": 18084,
+  "portConflict": false,
+  "workspacePath": "/Applications/workspace/ailab/research/app/SciForge-p5-native-extensions/workspace/parallel/p5",
+  "stateDir": "/Applications/workspace/ailab/research/app/SciForge-p5-native-extensions/.sciforge/parallel/p5",
+  "logDir": "/Applications/workspace/ailab/research/app/SciForge-p5-native-extensions/.sciforge/parallel/p5/logs",
+  "startedFromDefaultChatEntry": true,
+  "submittedCommandText": "/capabilities plan --prefer literature.search pdf.extract",
+  "allowedCapabilityCommandVerb": "plan",
+  "oldCapabilityPreferCommandVisible": false,
+  "guiGeneratedBusinessPayload": false,
+  "guiRuntimeCapabilityRankingObserved": false,
+  "rawJsonlStdoutStderrPluginWarningVisibleInMainDom": false,
+  "debugAuditFoldedByDefault": true,
+  "runtimeCodex": {
+    "profileVisible": true,
+    "profile": "sciforge-runtime-deepseek",
+    "blocker": "Runtime Codex CODEX_HOME is missing under packages/backend/.codex-runtime/codex-home",
+    "failClosed": true
+  },
+  "evidence": {
+    "screenshotPath": "docs/test-artifacts/parallel/p5/p5-native-extensions-capability.png",
+    "domSnapshotPath": "docs/test-artifacts/parallel/p5/p5-native-extensions-capability-dom.txt",
+    "browserChecksPath": "docs/test-artifacts/parallel/p5/p5-native-extensions-browser-checks.json",
+    "sessionRecordPath": "workspace/parallel/p5/.sciforge/sessions/2026-05-19_literature-evidence-review_session-literature-evidence-review-mpcmodo1-tzm6e0/records/session.json"
+  },
+  "negativeChecks": {
+    "systemBrowserUsed": false,
+    "macosOpenUsed": false,
+    "externalChromeUsed": false,
+    "playwrightSubstitutedForAcceptance": false,
+    "rawAuditPromotedToMainAnswer": false
+  }
+}
