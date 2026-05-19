@@ -368,7 +368,41 @@ function attachRuntimeGuiPresentationToResponse(
       ? result.output.guiPresentation
       : undefined;
   const source = asString(presentation?.source);
-  if (!source?.startsWith('gui.present:')) return response;
+  if (source?.startsWith('gui.present:')) {
+    return {
+      ...response,
+      message: {
+        ...response.message,
+        provenance: {
+          ...(response.message.provenance ?? {}),
+          kind: 'live-runtime-codex',
+          source,
+          runtimeRequestEligible: false,
+          liveAcceptanceEligible: true,
+          commandId: asString(presentation?.commandId),
+          attemptId: asString(presentation?.attemptId),
+          provider: asString(presentation?.provider),
+          model: asString(presentation?.model),
+          profile: asString(presentation?.profile),
+          workspace: asString(presentation?.workspace),
+        },
+      },
+      run: {
+        ...response.run,
+        raw: {
+          ...(isRecord(response.run.raw) ? response.run.raw : {}),
+          guiPresentation: presentation,
+        },
+      },
+    };
+  }
+  const nativeMessage = isRecord(result) && isRecord(result.nativeCodexMessage)
+    ? result.nativeCodexMessage
+    : isRecord(result) && isRecord(result.output) && isRecord(result.output.nativeCodexMessage)
+      ? result.output.nativeCodexMessage
+      : undefined;
+  const nativeSource = asString(nativeMessage?.source);
+  if (!nativeSource?.startsWith('codex.native-message:')) return response;
   return {
     ...response,
     message: {
@@ -376,22 +410,22 @@ function attachRuntimeGuiPresentationToResponse(
       provenance: {
         ...(response.message.provenance ?? {}),
         kind: 'live-runtime-codex',
-        source,
+        source: nativeSource,
         runtimeRequestEligible: false,
-        liveAcceptanceEligible: true,
-        commandId: asString(presentation?.commandId),
-        attemptId: asString(presentation?.attemptId),
-        provider: asString(presentation?.provider),
-        model: asString(presentation?.model),
-        profile: asString(presentation?.profile),
-        workspace: asString(presentation?.workspace),
+        liveAcceptanceEligible: false,
+        commandId: asString(nativeMessage?.commandId),
+        attemptId: asString(nativeMessage?.attemptId),
+        provider: asString(nativeMessage?.provider),
+        model: asString(nativeMessage?.model),
+        profile: asString(nativeMessage?.profile),
+        workspace: asString(nativeMessage?.workspace),
       },
     },
     run: {
       ...response.run,
       raw: {
         ...(isRecord(response.run.raw) ? response.run.raw : {}),
-        guiPresentation: presentation,
+        nativeCodexMessage: nativeMessage,
       },
     },
   };
@@ -664,6 +698,7 @@ function runtimeCodexFailedResponse(input: {
   const failureEvent = [...input.runtimeEvents].reverse().find(isRuntimeCodexFailedEvent);
   const metadata = runtimeFailureMetadata(input.request, failureEvent, input.runtimeEvents);
   const message = 'Runtime Codex 运行未完成；失败 run、审计 refs 和恢复状态已保留。';
+  const publicFailureReason = metadata.publicFailureReason ?? `Runtime Codex exited with code ${metadata.exitCode ?? 'unknown'}.`;
   const structuredFailure = {
     status: 'failed',
     message,
@@ -681,7 +716,7 @@ function runtimeCodexFailedResponse(input: {
           status: 'repair-needed',
           text: message,
           artifactRefs: [],
-          diagnostic: `Runtime Codex exited with code ${metadata.exitCode ?? 'unknown'}.`,
+          diagnostic: publicFailureReason,
         },
         activeRun: {
           id: input.request.commandId,
@@ -691,7 +726,7 @@ function runtimeCodexFailedResponse(input: {
         executionProcess: [{
           eventId: `${input.request.commandId}:runtime-codex-failed`,
           type: 'RunFailed',
-          summary: `Runtime Codex failed with exit code ${metadata.exitCode ?? 'unknown'}.`,
+          summary: publicFailureReason,
           timestamp: nowIso(),
         }],
         recoverActions: [
@@ -706,7 +741,7 @@ function runtimeCodexFailedResponse(input: {
         diagnostics: [{
           severity: 'error',
           code: 'runtime-codex-nonzero-exit',
-          message: `Runtime Codex exited with code ${metadata.exitCode ?? 'unknown'}.`,
+          message: publicFailureReason,
           refs: metadata.evidenceRefs.map((ref) => ({ ref })),
         }],
       },
@@ -723,7 +758,7 @@ function runtimeCodexFailedResponse(input: {
       attemptId: metadata.attemptId,
       codexSessionId: metadata.codexSessionId,
       exitCode: metadata.exitCode,
-      failureReason: `Runtime Codex exited with code ${metadata.exitCode ?? 'unknown'}.`,
+      failureReason: publicFailureReason,
       recoverActions: [
         'Retry or continue from preserved Runtime Codex audit refs.',
       ],
@@ -801,6 +836,19 @@ function runtimeFailureMetadata(
     `audit:codex-runtime:${request.commandId}:${asString(raw.attemptId) ?? request.attemptId ?? `${request.commandId}:attempt`}:normalized-events`,
     `audit:codex-runtime:${request.commandId}:${asString(raw.attemptId) ?? request.attemptId ?? `${request.commandId}:attempt`}:stderr`,
   ]);
+  const exitCode = asFiniteNumber(raw.exitCode) ?? asFiniteNumber(rawNested.exitCode);
+  const stderrSummary = asString(rawNested.stderrSummary) ?? summarizeRuntimeStderr(events);
+  const boundary = asString(raw.boundary) ?? asString(rawNested.boundary);
+  const boundaryReason = boundary === 'gui-present-required'
+    ? 'Runtime Codex completed without gui.present; SciForge withheld raw provider text from the primary result.'
+    : undefined;
+  const failureSignal = boundaryReason
+    ?? actionableRuntimeStderrSummary([
+      stderrSummary,
+      summarizeRuntimeFailureMessages(events),
+    ].filter(Boolean).join(' '))
+    ?? stderrSummary;
+  const publicFailureReason = publicRuntimeFailureReason(failureSignal, exitCode);
   return {
     schemaVersion: 'sciforge.runtime-codex-failed-run.v1',
     commandId: asString(raw.commandId) ?? request.commandId,
@@ -810,8 +858,9 @@ function runtimeFailureMetadata(
     provider: asString(raw.provider) ?? asString(rawNested.provider) ?? asString(runtime.provider) ?? 'unknown',
     model: asString(raw.model) ?? asString(rawNested.model) ?? asString(runtime.model) ?? 'unknown',
     codexSessionId: asString(raw.codexSessionId) ?? asString(rawNested.codexSessionId) ?? request.codexSessionId,
-    exitCode: asFiniteNumber(raw.exitCode) ?? asFiniteNumber(rawNested.exitCode),
-    stderrSummary: asString(rawNested.stderrSummary) ?? summarizeRuntimeStderr(events),
+    exitCode,
+    stderrSummary,
+    publicFailureReason,
     evidenceRefs,
     recoverState: {
       status: 'repair-needed',
@@ -823,7 +872,8 @@ function runtimeFailureMetadata(
       provider: asString(raw.provider) ?? asString(rawNested.provider) ?? asString(runtime.provider) ?? 'unknown',
       model: asString(raw.model) ?? asString(rawNested.model) ?? asString(runtime.model) ?? 'unknown',
       codexSessionId: asString(raw.codexSessionId) ?? asString(rawNested.codexSessionId) ?? request.codexSessionId,
-      stderrSummary: asString(rawNested.stderrSummary) ?? summarizeRuntimeStderr(events),
+      stderrSummary,
+      publicFailureReason,
       evidenceRefs,
       recoverActions: [
         'Retry or continue from this failed Runtime Codex run using preserved audit refs only.',
@@ -831,6 +881,32 @@ function runtimeFailureMetadata(
       ],
     },
   };
+}
+
+function publicRuntimeFailureReason(stderrSummary: string | undefined, exitCode: number | undefined) {
+  const text = stderrSummary ?? '';
+  if (/completed without gui\.present|gui-present-required/i.test(text)) {
+    return 'Runtime Codex completed without gui.present; SciForge withheld raw provider text from the primary result.';
+  }
+  if (/401|unauthorized|invalid token/i.test(text)) {
+    return 'Runtime Codex provider rejected credentials (401 Unauthorized). Check SCIFORGE_RUNTIME_API_KEY and the configured proxy upstream.';
+  }
+  if (/403|forbidden/i.test(text)) {
+    return 'Runtime Codex provider or plugin access was forbidden (403). Check the configured proxy upstream credentials and account access.';
+  }
+  if (/429|rate limit|quota|insufficient_quota/i.test(text)) {
+    return 'Runtime Codex provider rate limit or quota blocked the run. Check the configured proxy upstream account limits.';
+  }
+  if (/502|bad gateway/i.test(text)) {
+    return 'Runtime Codex provider gateway returned 502 Bad Gateway. Treat this as an upstream/transient provider failure and retry with preserved audit refs.';
+  }
+  if (/ECONNREFUSED|connection refused|failed to connect/i.test(text)) {
+    return 'Runtime Codex could not reach the configured provider proxy. Check that the proxy is running and the base URL is correct.';
+  }
+  if (/ENOTFOUND|network|timeout|timed out/i.test(text)) {
+    return 'Runtime Codex provider network request failed. Check network access and the configured proxy upstream.';
+  }
+  return `Runtime Codex exited with code ${exitCode ?? 'unknown'}.`;
 }
 
 function summarizeRuntimeStderr(events: AgentStreamEvent[]) {
@@ -843,7 +919,48 @@ function summarizeRuntimeStderr(events: AgentStreamEvent[]) {
   });
   const compact = chunks.join(' ').replace(/\s+/g, ' ').trim();
   if (!compact) return undefined;
+  const actionable = actionableRuntimeStderrSummary(compact);
+  if (actionable) return actionable;
   return compact.length > 240 ? `${compact.slice(0, 237)}...` : compact;
+}
+
+function summarizeRuntimeFailureMessages(events: AgentStreamEvent[]) {
+  const compact = events.flatMap((event) => {
+    const raw = isRecord(event.raw) ? event.raw : {};
+    const nested = isRecord(raw.raw) ? raw.raw : {};
+    const error = isRecord(raw.error) ? raw.error : isRecord(nested.error) ? nested.error : {};
+    return [
+      event.detail,
+      (event as { message?: unknown }).message,
+      asString(raw.message),
+      asString(nested.message),
+      asString(error.message),
+    ];
+  }).filter((value): value is string => Boolean(value)).join(' ').replace(/\s+/g, ' ').trim();
+  if (!compact) return undefined;
+  return actionableRuntimeStderrSummary(compact) ?? (compact.length > 240 ? `${compact.slice(0, 237)}...` : compact);
+}
+
+function actionableRuntimeStderrSummary(compact: string): string | undefined {
+  for (const pattern of [
+    /unexpected status\s+401[^.]*|401\s+Unauthorized[^.]*|Invalid token[^.]*/i,
+    /unexpected status\s+429[^.]*|429\s+Too Many Requests[^.]*|rate limit[^.]*|quota[^.]*/i,
+    /unexpected status\s+502[^.]*|502\s+Bad Gateway[^.]*|Bad Gateway[^.]*/i,
+    /ECONNREFUSED[^.]*|connection refused[^.]*|failed to connect[^.]*/i,
+    /ENOTFOUND[^.]*|timed out[^.]*/i,
+    /unexpected status\s+403[^.]*|403\s+Forbidden[^.]*/i,
+  ]) {
+    const match = pattern.exec(compact);
+    if (match?.[0] && !isRemotePluginAuthWarning(compact, match.index)) {
+      return match[0].length > 240 ? `${match[0].slice(0, 237)}...` : match[0];
+    }
+  }
+  return undefined;
+}
+
+function isRemotePluginAuthWarning(text: string, matchIndex: number) {
+  const context = text.slice(Math.max(0, matchIndex - 180), matchIndex + 240);
+  return /codex_core_plugins|remote plugin sync|chatgpt\.com\/backend-api\/plugins|featured plugin ids/i.test(context);
 }
 
 function runtimeAuditEventSummary(event: AgentStreamEvent) {
@@ -900,6 +1017,7 @@ function isForegroundReadableResultEvent(event: AgentStreamEvent) {
   const refs = asStringArray(raw.refs) ?? asStringArray(raw.evidenceRefs) ?? asStringArray(raw.artifactRefs);
   const qualitySignals = isRecord(raw.qualitySignals) ? raw.qualitySignals : undefined;
   if (type === 'first-readable-result') return true;
+  if ((type === 'message' || type === 'message_delta') && asString(raw.text) && String(raw.schemaVersion || '').startsWith('sciforge.codex.')) return true;
   if (qualitySignals?.userVisible === true && (qualitySignals.partialResult === true || readableRef || refs?.length)) return true;
   if (readableRef && /partial|readable|foreground|background-running/.test(type || status)) return true;
   return false;

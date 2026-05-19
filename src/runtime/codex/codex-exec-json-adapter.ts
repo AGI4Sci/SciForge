@@ -250,7 +250,31 @@ function guiExtensionOptions(
 function summarizeStderr(stderr: string): string | undefined {
   const compact = stderr.replace(/\s+/g, ' ').trim();
   if (!compact) return undefined;
+  const actionable = actionableStderrSummary(compact);
+  if (actionable) return actionable;
   return compact.length > 240 ? `${compact.slice(0, 237)}...` : compact;
+}
+
+function actionableStderrSummary(compact: string): string | undefined {
+  for (const pattern of [
+    /unexpected status\s+401[^.]*|401\s+Unauthorized[^.]*|Invalid token[^.]*/i,
+    /unexpected status\s+429[^.]*|429\s+Too Many Requests[^.]*|rate limit[^.]*|quota[^.]*/i,
+    /unexpected status\s+502[^.]*|502\s+Bad Gateway[^.]*|Bad Gateway[^.]*/i,
+    /ECONNREFUSED[^.]*|connection refused[^.]*|failed to connect[^.]*/i,
+    /ENOTFOUND[^.]*|timed out[^.]*/i,
+    /unexpected status\s+403[^.]*|403\s+Forbidden[^.]*/i,
+  ]) {
+    const match = pattern.exec(compact);
+    if (match?.[0] && !isRemotePluginAuthWarning(compact, match.index)) {
+      return match[0].length > 240 ? `${match[0].slice(0, 237)}...` : match[0];
+    }
+  }
+  return undefined;
+}
+
+function isRemotePluginAuthWarning(text: string, matchIndex: number) {
+  const context = text.slice(Math.max(0, matchIndex - 180), matchIndex + 240);
+  return /codex_core_plugins|remote plugin sync|chatgpt\.com\/backend-api\/plugins|featured plugin ids/i.test(context);
 }
 
 function codexExecArgs(input: {

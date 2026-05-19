@@ -63,6 +63,47 @@ test('maps Codex item.completed agent_message into a visible message event', () 
   assert.equal(events[1]?.itemId, 'item-2');
 });
 
+test('maps native Codex response_item payload messages into visible message events', () => {
+  const events = normalizeCodexJsonlEvent({
+    type: 'response_item',
+    payload: {
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'output_text', text: 'Report written to tasks/output/report.md' }],
+    },
+  }, metadata);
+
+  assert.equal(events[0]?.type, 'audit');
+  assert.equal(events[1]?.type, 'message');
+  assert.equal(events[1]?.text, 'Report written to tasks/output/report.md');
+});
+
+test('keeps native Codex reconnecting provider errors as retry audit instead of failed', () => {
+  const events = normalizeCodexJsonlEvent({
+    type: 'error',
+    message: 'Reconnecting... 1/5 (unexpected status 502 Bad Gateway: Unknown error, url: http://127.0.0.1:3891/v1/responses)',
+  }, metadata);
+
+  assert.equal(events[0]?.type, 'audit');
+  assert.equal(events[0]?.status, 'raw-jsonl');
+  assert.equal(events[1]?.type, 'audit');
+  assert.equal(events[1]?.status, 'provider-retry');
+  assert.equal(events.some((event) => event.type === 'failed'), false);
+});
+
+test('maps terminal native Codex error payload messages into failed events', () => {
+  const events = normalizeCodexJsonlEvent({
+    type: 'turn.failed',
+    error: {
+      message: 'unexpected status 502 Bad Gateway: Unknown error, url: http://127.0.0.1:3891/v1/responses',
+    },
+  }, metadata);
+
+  assert.equal(events[0]?.type, 'audit');
+  assert.equal(events[1]?.type, 'failed');
+  assert.match(events[1]?.message ?? '', /502 Bad Gateway/);
+});
+
 test('maps completed gui.present tool calls into explicit completion events', () => {
   const events = normalizeCodexJsonlEvent({
     type: 'item.completed',

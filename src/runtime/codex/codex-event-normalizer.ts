@@ -208,15 +208,17 @@ export function normalizeCodexJsonlEvent(raw: unknown, metadata: CodexRuntimeMet
   const codexSessionId = codexSessionIdFromRaw(raw);
   if (codexSessionId) metadata.codexSessionId = codexSessionId;
   const rawEvent = isRecord(raw) ? raw : {};
-  const type = stringField(rawEvent.type) ?? stringField(rawEvent.event) ?? '';
-  const item = isRecord(rawEvent.item) ? rawEvent.item : rawEvent;
-  const itemType = stringField(item.type) ?? '';
-  const text = textFromRaw(rawEvent) ?? textFromRaw(item);
+  const payload = isRecord(rawEvent.payload) ? rawEvent.payload : undefined;
+  const type = stringField(rawEvent.type) ?? stringField(rawEvent.event) ?? stringField(payload?.type) ?? '';
+  const item = isRecord(rawEvent.item) ? rawEvent.item : isRecord(payload?.item) ? payload.item : payload ?? rawEvent;
+  const itemType = stringField(item.type) ?? stringField(payload?.type) ?? '';
+  const text = textFromRaw(rawEvent) ?? textFromRaw(item) ?? (payload ? textFromRaw(payload) : undefined);
   const itemId = stringField(item.id) ?? stringField(rawEvent.item_id) ?? stringField(rawEvent.id);
   const toolName = stringField(item.name)
     ?? stringField(item.tool_name)
     ?? stringField(rawEvent.tool_name)
-    ?? stringField(rawEvent.name);
+    ?? stringField(rawEvent.name)
+    ?? stringField(payload?.name);
 
   const events: NormalizedAgentEvent[] = [rawJsonlAuditEvent(metadata, raw)];
   const guiPresent = guiPresentFromRaw(rawEvent, item);
@@ -226,6 +228,15 @@ export function normalizeCodexJsonlEvent(raw: unknown, metadata: CodexRuntimeMet
   }
 
   if (/error|failed|failure/i.test(type)) {
+    if (text && isCodexSamplingRetryMessage(text)) {
+      events.push(event(metadata, 'audit', {
+        status: 'provider-retry',
+        message: text,
+        itemId,
+        raw,
+      }));
+      return events;
+    }
     events.push(event(metadata, 'failed', {
       status: 'failed',
       message: text ?? stringField(rawEvent.message) ?? type,
@@ -263,6 +274,11 @@ export function normalizeCodexJsonlEvent(raw: unknown, metadata: CodexRuntimeMet
   }
 
   return events;
+}
+
+function isCodexSamplingRetryMessage(value: string): boolean {
+  return /Reconnecting\.\.\.\s+\d+\/\d+/i.test(value)
+    || /stream disconnected - retrying sampling request/i.test(value);
 }
 
 function guiPresentFromRaw(
@@ -358,15 +374,27 @@ export function event(
 }
 
 function textFromRaw(value: Record<string, unknown>): string | undefined {
+  const error = isRecord(value.error) ? value.error : undefined;
   return stringField(value.text)
     ?? stringField(value.delta)
     ?? stringField(value.message)
+    ?? stringField(error?.message)
     ?? stringField(value.output_text)
-    ?? stringField(value.content);
+    ?? stringField(value.content)
+    ?? textFromContent(value.content);
 }
 
 function stringField(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function textFromContent(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const text = value.map((entry) => {
+    if (!isRecord(entry)) return undefined;
+    return stringField(entry.text) ?? stringField(entry.content);
+  }).filter((entry): entry is string => Boolean(entry)).join('');
+  return text || undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

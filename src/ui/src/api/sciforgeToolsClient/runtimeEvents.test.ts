@@ -27,12 +27,9 @@ test('SSE reader preserves generic workspace message events without synthesizing
   assert.equal('displayIntent' in (stream.result as Record<string, unknown>), false);
 });
 
-test('SSE reader requires gui.present for Runtime Codex completion', async () => {
+test('SSE reader still requires gui.present or a native assistant message for Runtime Codex completion', async () => {
   const commandId = 'codex-command-gui-required';
   const body = [
-    'event: message',
-    'data: {"type":"message","text":"RAW_PROVIDER_MESSAGE_SHOULD_NOT_COMPLETE"}',
-    '',
     'event: done',
     `data: ${JSON.stringify({
       schemaVersion: 'sciforge.codex.normalized-event.v1',
@@ -59,7 +56,54 @@ test('SSE reader requires gui.present for Runtime Codex completion', async () =>
   assert.equal(stream.result, undefined);
   assert.match(stream.error ?? '', /without gui\.present/);
   assert.equal((seen.at(-1) as { type?: string }).type, 'failed');
-  assert.doesNotMatch(stream.error ?? '', /RAW_PROVIDER_MESSAGE_SHOULD_NOT_COMPLETE/);
+});
+
+test('SSE reader promotes native Runtime Codex assistant messages when gui.present is absent', async () => {
+  const commandId = 'codex-command-native-message';
+  const body = [
+    'event: message',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'message',
+      text: 'VISIBLE_FROM_CODEX_NATIVE_MESSAGE',
+      commandId,
+      profile: 'sciforge-runtime-deepseek',
+    })}`,
+    '',
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      message: 'Runtime Codex completed successfully.',
+      provider: 'sciforge-deepseek-proxy',
+      model: 'bailian/deepseek-v4-flash',
+      profile: 'sciforge-runtime-deepseek',
+      workspace: '/tmp/current',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+      evidenceRefs: [`audit:codex-runtime:${commandId}:${commandId}-attempt-1:raw-jsonl`],
+    })}`,
+    '',
+  ].join('\n');
+  const seen: unknown[] = [];
+  const response = new Response(body, {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream; charset=utf-8' },
+  });
+
+  const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
+  const result = stream.result as {
+    message?: string;
+    nativeCodexMessage?: { source?: string };
+    displayIntent?: { conversationProjection?: { verificationState?: { status?: string; verdict?: string } } };
+  };
+
+  assert.equal(stream.error, undefined);
+  assert.equal(result.message, 'VISIBLE_FROM_CODEX_NATIVE_MESSAGE');
+  assert.equal(result.nativeCodexMessage?.source, `codex.native-message:${commandId}`);
+  assert.equal(result.displayIntent?.conversationProjection?.verificationState?.status, 'unverified');
+  assert.equal(result.displayIntent?.conversationProjection?.verificationState?.verdict, 'native-message');
 });
 
 test('SSE reader promotes gui.present into the visible Runtime Codex result', async () => {
@@ -142,7 +186,7 @@ test('Runtime Codex raw JSONL and stderr warnings normalize to folded audit summ
   assert.doesNotMatch(stderr.detail ?? '', /failed to load plugin|\/tmp\/plugin\.json/);
 });
 
-test('Runtime Codex provider message events stay audit-style until gui.present', () => {
+test('Runtime Codex provider message events summarize native-message layering without leaking raw payload internals', () => {
   const event = normalizeWorkspaceRuntimeEvent({
     schemaVersion: 'sciforge.codex.normalized-event.v1',
     type: 'message',
@@ -151,8 +195,57 @@ test('Runtime Codex provider message events stay audit-style until gui.present',
     profile: 'sciforge-runtime-deepseek',
   });
 
-  assert.match(event.detail ?? '', /visible completion requires gui\.present/);
+  assert.match(event.detail ?? '', /native assistant message recorded/i);
+  assert.match(event.detail ?? '', /folded in the run audit/i);
   assert.doesNotMatch(event.detail ?? '', /RAW_PROVIDER_MESSAGE_SHOULD_NOT_SURFACE/);
+});
+
+test('Runtime Codex foreground final message can use native assistant message provenance', async () => {
+  const originalFetch = globalThis.fetch;
+  const commandIdPattern = /^codex-command-/;
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      const commandId = String(body.commandId);
+      assert.match(commandId, commandIdPattern);
+      return new Response([
+        'event: message\n',
+        `data: ${JSON.stringify({
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'message',
+          text: 'VISIBLE_FOREGROUND_NATIVE_MESSAGE',
+          provider: 'sciforge-deepseek-proxy',
+          model: 'bailian/deepseek-v4-flash',
+          profile: 'sciforge-runtime-deepseek',
+          workspace: '/tmp/current',
+          commandId,
+          attemptId: `${commandId}-attempt-1`,
+        })}\n\n`,
+        'event: done\n',
+        `data: ${JSON.stringify({
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'done',
+          status: 'done',
+          message: 'Runtime Codex completed successfully.',
+          provider: 'sciforge-deepseek-proxy',
+          model: 'bailian/deepseek-v4-flash',
+          profile: 'sciforge-runtime-deepseek',
+          workspace: '/tmp/current',
+          commandId,
+          attemptId: `${commandId}-attempt-1`,
+        })}\n\n`,
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage(runtimeRequestInput());
+
+    assert.equal(response.message.content, 'VISIBLE_FOREGROUND_NATIVE_MESSAGE');
+    assert.equal(response.message.provenance?.kind, 'live-runtime-codex');
+    assert.match(String(response.message.provenance?.source), /^codex\.native-message:codex-command-/);
+    assert.equal(response.message.provenance?.liveAcceptanceEligible, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('Runtime Codex foreground final message uses gui.present provenance', async () => {
@@ -493,6 +586,69 @@ test('Runtime Codex failed SSE returns a persistable failed run with folded audi
     assert.equal(reloadedRecoverState.model, 'bailian/deepseek-v4-flash');
     assert.equal(reloadedRecoverState.stderrSummary, 'RAW_STDERR_SHOULD_NOT_RENDER');
     assert.ok((reloadedFailure.evidenceRefs as string[]).includes(`audit:codex-runtime:${response.run.id}:${response.run.id}-attempt-1:stderr`));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Runtime Codex provider auth failures surface a sanitized recoverable reason', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      const commandId = String(body.commandId);
+      const attemptId = String(body.attemptId);
+      const stderrRef = `audit:codex-runtime:${commandId}:${attemptId}:stderr`;
+      const rawStderr = 'unexpected status 401 Unauthorized: Invalid token (request id: req-secret-123), url: http://127.0.0.1:3891/v1/responses';
+      return new Response([
+        'event: run_started\n',
+        `data: ${JSON.stringify({ type: 'run_started', provider: 'sciforge-deepseek-proxy', model: 'bailian/deepseek-v4-flash', profile: 'sciforge-runtime-deepseek', workspace: '/tmp/current', commandId, attemptId, evidenceRefs: [stderrRef] })}\n\n`,
+        'event: failed\n',
+        `data: ${JSON.stringify({ type: 'failed', status: 'failed', message: rawStderr, provider: 'sciforge-deepseek-proxy', model: 'bailian/deepseek-v4-flash', profile: 'sciforge-runtime-deepseek', workspace: '/tmp/current', commandId, attemptId })}\n\n`,
+        'event: failed\n',
+        `data: ${JSON.stringify({ type: 'failed', status: 'failed', message: 'Runtime Codex exited with code 1.', provider: 'sciforge-deepseek-proxy', model: 'bailian/deepseek-v4-flash', profile: 'sciforge-runtime-deepseek', workspace: '/tmp/current', commandId, attemptId, exitCode: 1, raw: { stderrSummary: 'startup warning before provider failure', evidenceRefs: [stderrRef] } })}\n\n`,
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage(runtimeRequestInput());
+    const raw = response.run.raw as Record<string, unknown>;
+    const failure = raw.codexRuntimeFailure as Record<string, unknown>;
+    const recoverState = failure.recoverState as Record<string, unknown>;
+    const publicReason = 'Runtime Codex provider rejected credentials (401 Unauthorized). Check SCIFORGE_RUNTIME_API_KEY and the configured proxy upstream.';
+
+    assert.equal(failure.publicFailureReason, publicReason);
+    assert.equal(recoverState.publicFailureReason, publicReason);
+    assert.doesNotMatch(response.message.content, /Invalid token|req-secret-123|127\.0\.0\.1:3891/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Runtime Codex provider gateway failures surface a retryable upstream reason', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      const commandId = String(body.commandId);
+      const attemptId = String(body.attemptId);
+      const rawGateway = 'unexpected status 502 Bad Gateway: Unknown error, url: http://127.0.0.1:3891/v1/responses';
+      return new Response([
+        'event: failed\n',
+        `data: ${JSON.stringify({ type: 'failed', status: 'failed', message: rawGateway, provider: 'sciforge-deepseek-proxy', model: 'bailian/deepseek-v4-flash', profile: 'sciforge-runtime-deepseek', workspace: '/tmp/current', commandId, attemptId })}\n\n`,
+        'event: failed\n',
+        `data: ${JSON.stringify({ type: 'failed', status: 'failed', message: 'Runtime Codex exited with code 1.', provider: 'sciforge-deepseek-proxy', model: 'bailian/deepseek-v4-flash', profile: 'sciforge-runtime-deepseek', workspace: '/tmp/current', commandId, attemptId, exitCode: 1 })}\n\n`,
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage(runtimeRequestInput());
+    const raw = response.run.raw as Record<string, unknown>;
+    const failure = raw.codexRuntimeFailure as Record<string, unknown>;
+    const recoverState = failure.recoverState as Record<string, unknown>;
+    const publicReason = 'Runtime Codex provider gateway returned 502 Bad Gateway. Treat this as an upstream/transient provider failure and retry with preserved audit refs.';
+
+    assert.equal(failure.publicFailureReason, publicReason);
+    assert.equal(recoverState.publicFailureReason, publicReason);
+    assert.doesNotMatch(response.message.content, /127\.0\.0\.1:3891/);
   } finally {
     globalThis.fetch = originalFetch;
   }

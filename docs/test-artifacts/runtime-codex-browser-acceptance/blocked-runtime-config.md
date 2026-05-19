@@ -1,6 +1,6 @@
 # Runtime Codex browser acceptance blocked
 
-Observed at: 2026-05-19T14:21:22.523Z
+Observed at: 2026-05-19T16:25:00.189Z
 Requested UI port: 5173
 Requested workspace writer port: 6173
 Actual/intended URL: http://127.0.0.1:5173/

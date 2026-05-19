@@ -188,8 +188,13 @@ async function readWorkspaceToolSse(
         result = withGuiPresentRuntimeResult(data, guiPresent);
         return;
       }
+      const nativeMessage = genericMessages.join('\n').trim();
+      if (isRuntimeCodexDoneEvent(data) && nativeMessage) {
+        result = withNativeCodexMessageRuntimeResult(data, nativeMessage);
+        return;
+      }
       if (!isRuntimeCodexDoneEvent(data)) {
-        result = withVisibleRuntimeMessage(data, genericMessages.join('\n'));
+        result = withVisibleRuntimeMessage(data, nativeMessage);
         return;
       }
       const failed = runtimeCodexMissingGuiPresentFailure(data);
@@ -267,6 +272,63 @@ function withGuiPresentRuntimeResult(result: unknown, guiPresent: Record<string,
       ...output,
       message: presentation.text,
       guiPresentation: presentation,
+    },
+  };
+}
+
+function withNativeCodexMessageRuntimeResult(result: unknown, message: string): unknown {
+  if (!message.trim() || !isRecord(result)) return result;
+  const output = isRecord(result.output) ? result.output : {};
+  const commandId = asString(result.commandId);
+  const auditRefs = asStringArray(result.evidenceRefs) ?? [];
+  return {
+    ...result,
+    message,
+    nativeCodexMessage: {
+      schemaVersion: 'sciforge.runtime-codex-native-message.v1',
+      source: commandId ? `codex.native-message:${commandId}` : 'codex.native-message',
+      text: message,
+      commandId,
+      attemptId: asString(result.attemptId),
+      provider: asString(result.provider),
+      model: asString(result.model),
+      profile: asString(result.profile),
+      workspace: asString(result.workspace),
+      codexSessionId: asString(result.codexSessionId),
+    },
+    displayIntent: {
+      source: commandId ? `codex.native-message:${commandId}` : 'codex.native-message',
+      conversationProjection: {
+        schemaVersion: 'sciforge.conversation-projection.v1',
+        conversationId: commandId ? `runtime-codex:${commandId}` : 'runtime-codex:native-message',
+        visibleAnswer: {
+          status: 'satisfied',
+          text: message,
+          artifactRefs: [],
+        },
+        artifacts: [],
+        executionProcess: [{
+          eventId: `${commandId ?? 'runtime-codex'}:native-message`,
+          type: 'NativeCodexMessage',
+          summary: 'Runtime Codex completed with a native assistant message; tool process and raw diagnostics stay in the folded run audit.',
+          timestamp: asString(result.timestamp) ?? new Date().toISOString(),
+        }],
+        recoverActions: [
+          'Use gui.present on rerun only when the task needs a structured artifact projection beyond the native Codex assistant answer.',
+        ],
+        verificationState: {
+          status: 'unverified',
+          verdict: 'native-message',
+          verifierRef: commandId ? `codex.native-message:${commandId}` : 'codex.native-message',
+        },
+        auditRefs,
+        diagnostics: [],
+      },
+    },
+    output: {
+      ...output,
+      message,
+      nativeCodexMessage: true,
     },
   };
 }
@@ -378,7 +440,7 @@ function runtimeCodexProviderMessageSummary(record: Record<string, unknown>) {
   const type = asString(record.type)?.toLowerCase();
   if (type !== 'message' && type !== 'message_delta') return undefined;
   if (!isRuntimeCodexEventRecord(record)) return undefined;
-  return 'Runtime Codex provider message recorded; visible completion requires gui.present and details stay in the folded run audit.';
+  return 'Runtime Codex native assistant message recorded; the final assistant answer can render as the primary reply, while raw JSONL, stderr, and plugin diagnostics stay folded in the run audit.';
 }
 
 function rawEventDetailFallback(record: Record<string, unknown>) {

@@ -84,6 +84,55 @@ test('adapter converts stderr to audit events and nonzero exit to failed', async
   assert.equal(events.at(-1)?.exitCode, 7);
 });
 
+test('adapter prioritizes actionable provider errors in stderr summaries', async () => {
+  const child = fakeChild();
+  const workspace = await tempWorkspace();
+  const adapter = new CodexExecJsonAdapter({
+    env: { [RUNTIME_KEY_ENV]: 'test-key' },
+    spawnProcess() {
+      setTimeout(() => {
+        child.stderr.write(`${'warning '.repeat(80)} unexpected status 401 Unauthorized: Invalid token (request id: req-test), url: http://127.0.0.1:3891/v1/responses`);
+        child.close(1);
+      }, 0);
+      return child.process;
+    },
+  });
+
+  const turn = await adapter.startTurn({ commandText: 'fail please', workspacePath: workspace, guiExtension: { enabled: false } });
+  const events = await collect(turn.events);
+  const failed = events.at(-1);
+  const raw = failed?.raw as { stderrSummary?: string } | undefined;
+
+  assert.equal(failed?.type, 'failed');
+  assert.match(raw?.stderrSummary ?? '', /401 Unauthorized/);
+  assert.doesNotMatch(raw?.stderrSummary ?? '', /^warning warning/);
+});
+
+test('adapter preserves actionable 502 gateway errors in stderr summaries', async () => {
+  const child = fakeChild();
+  const workspace = await tempWorkspace();
+  const adapter = new CodexExecJsonAdapter({
+    env: { [RUNTIME_KEY_ENV]: 'test-key' },
+    spawnProcess() {
+      setTimeout(() => {
+        child.stderr.write(`${'warning '.repeat(80)} unexpected status 502 Bad Gateway: Unknown error, url: http://127.0.0.1:3891/v1/responses`);
+        child.close(1);
+      }, 0);
+      return child.process;
+    },
+  });
+
+  const turn = await adapter.startTurn({ commandText: 'fail please', workspacePath: workspace, guiExtension: { enabled: false } });
+  const events = await collect(turn.events);
+  const failed = events.at(-1);
+  const raw = failed?.raw as { stderrSummary?: string } | undefined;
+
+  assert.equal(failed?.type, 'failed');
+  assert.match(raw?.stderrSummary ?? '', /502 Bad Gateway/);
+  assert.doesNotMatch(raw?.stderrSummary ?? '', /^warning warning/);
+});
+
+
 test('adapter emits gui_present from file-backed GUI intent state before done', async () => {
   const child = fakeChild();
   const workspace = await tempWorkspace();

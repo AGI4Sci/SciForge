@@ -9,10 +9,11 @@ const LEGACY_DEFAULT_AGENT_SERVER_URL = 'http://127.0.0.1:18080';
 const LEGACY_DEFAULT_WORKSPACE_WRITER_URL = 'http://127.0.0.1:5174';
 const LEGACY_DEFAULT_WORKSPACE_PATH = '/Applications/workspace/ailab/research/app/SciForge/workspace';
 const DEFAULT_WORKSPACE_PATH = '/Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p1';
+const LEGACY_DEFAULT_CODEX_RUNTIME_BASE_URL = 'http://127.0.0.1:4765/v1';
 export const DEFAULT_CODEX_RUNTIME_PROFILE = 'sciforge-runtime-deepseek';
 export const DEFAULT_CODEX_RUNTIME_PROVIDER = 'sciforge-deepseek-proxy';
 export const DEFAULT_CODEX_RUNTIME_MODEL = 'bailian/deepseek-v4-flash';
-export const DEFAULT_CODEX_RUNTIME_BASE_URL = 'http://127.0.0.1:4765/v1';
+export const DEFAULT_CODEX_RUNTIME_BASE_URL = 'http://127.0.0.1:3891/v1';
 
 export const defaultSciForgeConfig: SciForgeConfig = {
   schemaVersion: 1,
@@ -59,6 +60,9 @@ function applyBuildRuntimeDefaults(config: SciForgeConfig): SciForgeConfig {
     workspacePath: config.workspacePath === LEGACY_DEFAULT_WORKSPACE_PATH
       ? defaultSciForgeConfig.workspacePath
       : config.workspacePath,
+    modelBaseUrl: config.modelBaseUrl === LEGACY_DEFAULT_CODEX_RUNTIME_BASE_URL
+      ? defaultSciForgeConfig.modelBaseUrl
+      : config.modelBaseUrl,
   };
 }
 

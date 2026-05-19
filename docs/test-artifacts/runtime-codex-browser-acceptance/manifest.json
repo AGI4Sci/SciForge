@@ -2,7 +2,7 @@
   "schemaVersion": "sciforge.runtime-codex.browser-acceptance.v1",
   "status": "blocked",
   "source": "codex-in-app-browser",
-  "observedAt": "2026-05-19T14:21:22.526Z",
+  "observedAt": "2026-05-19T16:25:00.190Z",
   "requestedRolePort": 5173,
   "actualWorkspaceWriterPort": 6173,
   "actualWorkspaceWriterUrl": "http://127.0.0.1:6173",

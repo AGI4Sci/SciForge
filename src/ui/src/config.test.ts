@@ -103,6 +103,7 @@ describe('SciForge config persistence', () => {
       agentServerBaseUrl: 'http://127.0.0.1:18080',
       workspaceWriterBaseUrl: 'http://127.0.0.1:5174',
       workspacePath: '/Applications/workspace/ailab/research/app/SciForge/workspace',
+      modelBaseUrl: 'http://127.0.0.1:4765/v1',
     }));
 
     const loaded = loadSciForgeConfig();
@@ -110,6 +111,7 @@ describe('SciForge config persistence', () => {
     assert.equal(loaded.agentServerBaseUrl, defaultSciForgeConfig.agentServerBaseUrl);
     assert.equal(loaded.workspaceWriterBaseUrl, defaultSciForgeConfig.workspaceWriterBaseUrl);
     assert.equal(loaded.workspacePath, defaultSciForgeConfig.workspacePath);
+    assert.equal(loaded.modelBaseUrl, defaultSciForgeConfig.modelBaseUrl);
   });
 
   it('normalizes peer instances for config reads', () => {
