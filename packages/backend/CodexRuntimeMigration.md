@@ -187,6 +187,6 @@ Phase 2 只抽象 CLI 细节，不扩展 backend 范围：
 
 ## AgentServer 遗留清理地图
 
-当前 AgentServer-first 清理清单记录在
-[`AgentServerLegacyCleanupReport.md`](AgentServerLegacyCleanupReport.md)。删除
-或 quarantine AgentServer gateway 模块与 smoke 脚本前，必须先对照该报告。
+当前 AgentServer-first 清理清单已经并入仓库级任务板。删除或 quarantine
+AgentServer gateway 模块与 smoke 脚本前，必须先满足 `PROJECT.md` 中
+`LEGACY-CLEANUP-20260519` 的退役条件。
