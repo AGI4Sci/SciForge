@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from '
 import { dirname, resolve } from 'node:path';
 import { formatUiDevServerHealth, readUiDevServerHealth } from './dev-health';
 import { isOwnedSciForgeViteDevProcess, parseListeningPids, type DevProcessOwnershipRecord } from './dev-process';
+import { normalizeInstanceName, parallelProfile } from '../src/runtime/parallel-instance-profile.js';
 
 applyInstanceDefaults();
 
@@ -331,52 +332,19 @@ function applyInstanceDefaults() {
   process.env.SCIFORGE_INSTANCE_ROLE ||= profile.role;
   process.env.SCIFORGE_UI_PORT ||= profile.uiPort;
   process.env.SCIFORGE_WORKSPACE_PORT ||= profile.workspacePort;
-  process.env.SCIFORGE_AGENT_SERVER_PORT ||= profile.agentServerPort;
+  process.env.SCIFORGE_AGENT_SERVER_PORT ||= profile.runtimeCodexPort;
+  process.env.SCIFORGE_RUNTIME_CODEX_PORT ||= profile.runtimeCodexPort;
   process.env.SCIFORGE_WORKSPACE_PATH ||= resolve(profile.workspacePath);
   process.env.SCIFORGE_STATE_DIR ||= resolve(profile.stateDir);
   process.env.SCIFORGE_LOG_DIR ||= resolve(profile.logDir);
   process.env.SCIFORGE_CONFIG_PATH ||= resolve(profile.configPath);
   process.env.SCIFORGE_WORKSPACE_WRITER_URL ||= `http://127.0.0.1:${process.env.SCIFORGE_WORKSPACE_PORT}`;
   process.env.SCIFORGE_AGENT_SERVER_URL ||= `http://127.0.0.1:${process.env.SCIFORGE_AGENT_SERVER_PORT || 18080}`;
+  process.env.SCIFORGE_RUNTIME_CODEX_URL ||= `http://127.0.0.1:${process.env.SCIFORGE_RUNTIME_CODEX_PORT || 18080}`;
   process.env.SCIFORGE_COUNTERPART_JSON ||= JSON.stringify(profile.counterpart);
   if (profile.agentAutostart && process.env.SCIFORGE_AGENT_SERVER_AUTOSTART === undefined) {
     process.env.SCIFORGE_AGENT_SERVER_AUTOSTART = profile.agentAutostart;
   }
-}
-
-function parallelProfile(instance: string) {
-  const match = /^p([1-6])$/.exec(instance);
-  const index = match ? Number(match[1]) : 1;
-  const id = `p${index}`;
-  const peerIndex = index === 1 ? 2 : 1;
-  const uiPort = 5173 + ((index - 1) * 100);
-  const workspacePort = 5174 + ((index - 1) * 100);
-  const agentServerPort = 18080 + ((index - 1) * 100);
-  return {
-    id,
-    role: id,
-    uiPort: String(uiPort),
-    workspacePort: String(workspacePort),
-    agentServerPort: String(agentServerPort),
-    workspacePath: `workspace/parallel/${id}`,
-    stateDir: `.sciforge/parallel/${id}`,
-    logDir: `.sciforge/parallel/${id}/logs`,
-    configPath: `.sciforge/parallel/${id}/config.local.json`,
-    agentAutostart: undefined,
-    counterpart: {
-      agentId: `p${peerIndex}`,
-      appUrl: `http://127.0.0.1:${5173 + ((peerIndex - 1) * 100)}`,
-      workspaceWriterUrl: `http://127.0.0.1:${5174 + ((peerIndex - 1) * 100)}`,
-    },
-  };
-}
-
-function normalizeInstanceName(value: string) {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === 'repair' || normalized === 'b' || normalized === 'sciforge-b') return 'p2';
-  if (normalized === 'main' || normalized === 'a' || normalized === 'sciforge-a' || normalized === 'default') return 'p1';
-  if (/^p[1-6]$/.test(normalized)) return normalized;
-  return normalized;
 }
 
 function readArgValue(name: string) {

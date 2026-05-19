@@ -13,6 +13,9 @@ export type SpawnCodexProcess = (
   options: { cwd: string; env: NodeJS.ProcessEnv; stdio: ['ignore', 'pipe', 'pipe'] },
 ) => CodexChildProcess;
 
+const RUNTIME_CODEX_SANDBOX = 'workspace-write';
+const RUNTIME_CODEX_APPROVAL_POLICY = 'never';
+
 interface CodexChildProcess {
   stdout: Readable;
   stderr: Readable;
@@ -200,13 +203,20 @@ function codexExecArgs(input: {
   codexSessionId?: string;
   configArgs?: string[];
 }): string[] {
+  const globalArgs = [
+    ...(input.configArgs ?? []),
+    '--profile',
+    input.profile,
+    '--cd',
+    input.workspace,
+    '--sandbox',
+    RUNTIME_CODEX_SANDBOX,
+    '--ask-for-approval',
+    RUNTIME_CODEX_APPROVAL_POLICY,
+  ];
   if (input.codexSessionId) {
     return [
-      ...(input.configArgs ?? []),
-      '--profile',
-      input.profile,
-      '--cd',
-      input.workspace,
+      ...globalArgs,
       'exec',
       'resume',
       '--json',
@@ -216,14 +226,10 @@ function codexExecArgs(input: {
     ];
   }
   return [
+    ...globalArgs,
     'exec',
     '--json',
     ...RUNTIME_CODEX_EXEC_ISOLATION_ARGS,
-    ...(input.configArgs ?? []),
-    '--profile',
-    input.profile,
-    '--cd',
-    input.workspace,
     input.commandText,
   ];
 }

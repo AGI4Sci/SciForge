@@ -1,0 +1,69 @@
+{
+  "generatedAt": "2026-05-19T09:39:00.259Z",
+  "payload": {
+    "schemaVersion": "sciforge.codex-runtime-stream-request.v1",
+    "commandId": "codex-command-mpcfxxqh-lwlec9",
+    "attemptId": "codex-command-mpcfxxqh-lwlec9-attempt-1",
+    "commandText": "ask --ref \"artifact:live-report\" \"p3 live boundary check: reply with one short sentence and do not use demo data.\"",
+    "workspacePath": "/Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p3",
+    "profile": "sciforge-runtime-deepseek",
+    "allowOpenAiRuntime": false,
+    "guiExtension": {
+      "enabled": true
+    },
+    "auditMetadata": {
+      "schemaVersion": "sciforge.codex-runtime-stream-audit.v1",
+      "boundary": "GUI-to-TUI input is terminal-equivalent text only; non-text fields are adapter metadata and must not be interpreted as task context.",
+      "promptCarriedBy": "commandText",
+      "legacyHandoffBoundary": "GUI transcript, artifact bodies, expected results, capability selection, provider routing, and recovery policy stay outside the Runtime Codex task request.",
+      "runtime": {
+        "kind": "codex",
+        "provider": "native",
+        "model": "bailian/deepseek-v4-flash",
+        "profile": "sciforge-runtime-deepseek",
+        "apiKeyConfigured": false,
+        "allowOpenAiRuntime": false
+      },
+      "guiLocalProjection": {
+        "selectedRefCount": 1,
+        "refs": [
+          "artifact:live-report",
+          "live-ref"
+        ],
+        "counts": {
+          "nonSeedMessages": 0,
+          "seedMessagesExcluded": 1,
+          "runRefs": 0,
+          "artifactRefs": 1,
+          "claimRefs": 0,
+          "executionUnitRefs": 0
+        }
+      },
+      "silentStreamRunId": "p3-payload-session:turn-afb64s",
+      "evidenceRefs": [
+        "audit:codex-runtime:codex-command-mpcfxxqh-lwlec9:codex-command-mpcfxxqh-lwlec9-attempt-1:raw-jsonl",
+        "audit:codex-runtime:codex-command-mpcfxxqh-lwlec9:codex-command-mpcfxxqh-lwlec9-attempt-1:stderr",
+        "audit:codex-runtime:codex-command-mpcfxxqh-lwlec9:codex-command-mpcfxxqh-lwlec9-attempt-1:normalized-events"
+      ]
+    }
+  },
+  "checks": {
+    "commandText": "ask --ref \"artifact:live-report\" \"p3 live boundary check: reply with one short sentence and do not use demo data.\"",
+    "excludesSeedMessageRef": true,
+    "excludesSeedSelectedText": true,
+    "excludesSeedMessageBody": true,
+    "excludesArtifactBody": true,
+    "hasLiveRef": true,
+    "topLevelKeys": [
+      "allowOpenAiRuntime",
+      "attemptId",
+      "auditMetadata",
+      "commandId",
+      "commandText",
+      "guiExtension",
+      "profile",
+      "schemaVersion",
+      "workspacePath"
+    ]
+  }
+}

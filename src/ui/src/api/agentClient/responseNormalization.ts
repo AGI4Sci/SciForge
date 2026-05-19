@@ -210,7 +210,7 @@ export function normalizeAgentResponse(
   const runRecord = isRecord(root.run) ? root.run : {};
   const transportProjectionAnswer = projectionVisibleAnswer(raw) ?? projectionVisibleAnswer(root);
   const outputText = transportProjectionAnswer?.text ?? extractOutputText(root);
-  const structured = extractJsonObject(outputText) ?? payloadLikeRecord(root) ?? {};
+  const structured = structuredPayloadFromOutput(outputText, root) ?? {};
   const projectionAnswer = transportProjectionAnswer ?? projectionVisibleAnswer(structured);
   const contractValidationFailure = findContractValidationFailure(structured, root, runRecord);
   const projectionIsSatisfied = projectionAnswer?.status === 'satisfied';
@@ -337,6 +337,24 @@ export function normalizeAgentResponse(
   };
 }
 
+function structuredPayloadFromOutput(outputText: string, root: Record<string, unknown>): Record<string, unknown> | undefined {
+  const parsedOutput = extractJsonObject(outputText);
+  return payloadFromRuntimeEnvelope(parsedOutput)
+    ?? (parsedOutput ? payloadLikeRecord(parsedOutput) : undefined)
+    ?? parsedOutput
+    ?? payloadLikeRecord(root);
+}
+
+function payloadFromRuntimeEnvelope(value: unknown): Record<string, unknown> | undefined {
+  const record = isRecord(value) ? value : undefined;
+  if (!record) return undefined;
+  const directPayload = payloadLikeRecord(record);
+  if (directPayload && record.type !== 'done') return directPayload;
+  const text = asString(record.message) ?? asString(record.text) ?? asString(record.finalText);
+  const nested = text ? extractJsonObject(text) : undefined;
+  return nested ? payloadLikeRecord(nested) ?? nested : undefined;
+}
+
 function projectionVisibleAnswer(value: unknown): { status?: string; text: string } | undefined {
   const record = isRecord(value) ? value : {};
   const displayIntent = isRecord(record.displayIntent) ? record.displayIntent : {};
@@ -378,7 +396,7 @@ function payloadLikeRecord(value: Record<string, unknown>) {
 function normalizeRuntimeArtifacts(value: unknown, scenarioId: ScenarioInstanceId): RuntimeArtifact[] {
   return Array.isArray(value) ? value.filter(isRecord).map((artifact) => {
     const artifactType = asString(artifact.type) || 'artifact';
-    const artifactId = asString(artifact.id) || asString(artifact.ref) || artifactType || makeId('artifact');
+    const artifactId = canonicalArtifactId(asString(artifact.id) || asString(artifact.ref) || artifactType || makeId('artifact'));
     const path = asString(artifact.path) || asString(artifact.markdownRef) || asString(artifact.reportRef);
     const metadata = {
       ...(isRecord(artifact.metadata) ? artifact.metadata : {}),
@@ -402,6 +420,10 @@ function normalizeRuntimeArtifacts(value: unknown, scenarioId: ScenarioInstanceI
       exportPolicy: asExportPolicy(artifact.exportPolicy),
     };
   }) : [];
+}
+
+function canonicalArtifactId(value: string) {
+  return value.replace(/^artifact::?/i, '').trim() || value;
 }
 
 function uniqueStringList(values: string[]) {

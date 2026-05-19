@@ -144,10 +144,23 @@ try {
 
   assert.ok(handoff);
   const bodyText = JSON.stringify(handoff);
-  assert.match(bodyText, /artifact-evidence-matrix/);
-  assert.match(bodyText, /Missing required column: confidence_score/);
-  assert.match(bodyText, /不要覆盖原始 evidence matrix/);
+  const auditMetadata = handoff.auditMetadata as Record<string, unknown>;
+  const guiLocalProjection = auditMetadata.guiLocalProjection as Record<string, unknown>;
+  const refs = guiLocalProjection.refs as string[];
+  const counts = guiLocalProjection.counts as Record<string, unknown>;
+  assert.equal(handoff.commandText, '继续刚才失败的筛选，我把 confidence_score 映射为 confidence。');
   assert.match(bodyText, /confidence_score 映射为 confidence/);
+  assert.match(bodyText, /artifact-evidence-matrix/);
+  assert.ok(refs.includes('run:run-failed'));
+  assert.ok(refs.includes('artifact:artifact-evidence-matrix'));
+  assert.ok(refs.includes('execution-unit:unit-failed'));
+  assert.equal(counts.nonSeedMessages, 3);
+  assert.equal(counts.seedMessagesExcluded, 1);
+  assert.equal(counts.runRefs, 1);
+  assert.equal(counts.artifactRefs, 1);
+  assert.equal(counts.executionUnitRefs, 1);
+  assert.doesNotMatch(bodyText, /Missing required column: confidence_score/);
+  assert.doesNotMatch(bodyText, /不要覆盖原始 evidence matrix/);
   assert.doesNotMatch(bodyText, /large inline evidence row/);
   assert.doesNotMatch(bodyText, /event-24/);
   console.log('complex multiturn chat regression smoke passed');

@@ -148,6 +148,9 @@ test('HTTP/SSE endpoint rejects legacy handoff fields nested in audit metadata',
           nested: {
             artifactBody: 'ARTIFACT_BODY_SHOULD_NOT_ENTER_CODEX',
             expectedResult: 'EXPECTED_RESULT_SHOULD_NOT_ENTER_CODEX',
+            guiLocalProjection: {
+              messages: [{ content: 'SEED_MESSAGE_SHOULD_NOT_LEAK' }],
+            },
           },
         },
       }),
@@ -156,9 +159,9 @@ test('HTTP/SSE endpoint rejects legacy handoff fields nested in audit metadata',
 
     assert.match(text, /event: error/);
     assert.match(text, /auditMetadata contains non-adapter fields/);
-    assert.match(text, /nested\.artifactBody|nested\.expectedResult/);
+    assert.match(text, /nested\.artifactBody|nested\.expectedResult|nested\.guiLocalProjection\.messages/);
     assert.equal(adapter.lastInput, undefined);
-    assert.doesNotMatch(text, /ARTIFACT_BODY_SHOULD_NOT_ENTER_CODEX|EXPECTED_RESULT_SHOULD_NOT_ENTER_CODEX/);
+    assert.doesNotMatch(text, /ARTIFACT_BODY_SHOULD_NOT_ENTER_CODEX|EXPECTED_RESULT_SHOULD_NOT_ENTER_CODEX|SEED_MESSAGE_SHOULD_NOT_LEAK/);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

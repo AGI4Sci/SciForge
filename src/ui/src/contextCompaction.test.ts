@@ -131,7 +131,7 @@ test('context meter display reflects ratio, status, and source trust level', () 
   }, true);
   assert.equal(providerWatch.level, 'watch');
   assert.equal(providerWatch.sourceLabel, 'provider');
-  assert.match(providerWatch.title, /发送前达到阈值时会请求 AgentServer/);
+  assert.match(providerWatch.title, /发送前达到阈值时会请求 Codex Runtime 原生压缩/);
 
   const estimatedNearLimit = buildContextWindowMeterModel({
     ...beforeState,

@@ -1,0 +1,107 @@
+{
+  "schemaVersion": "sciforge.parallel.p4.artifact-followup-evidence.v2",
+  "recordedAt": "2026-05-19T10:31:00.000Z",
+  "worker": "p4",
+  "worktree": "/Applications/workspace/ailab/research/app/SciForge-p4-artifact-followup",
+  "urls": {
+    "ui": "http://127.0.0.1:5176/",
+    "workspaceWriter": "http://127.0.0.1:6176",
+    "runtimeCodexConfigured": "http://127.0.0.1:18083",
+    "observedBrowserUrl": "http://127.0.0.1:5176/"
+  },
+  "liveAcceptance": {
+    "status": "pass-with-remaining-projection-risk",
+    "sessionId": "session-literature-evidence-review-mpcho66d-jh4f33",
+    "artifactCommandId": "codex-command-mpchozlp-xzaerd",
+    "followupCommandId": "codex-command-mpchqa53-kndh9s",
+    "promptToken": "P4-CANONICAL-REF-1835",
+    "promptSource": "user-authored default chat composer in the in-app browser",
+    "artifactRef": "artifact:p4-canonical-ref-report",
+    "artifactPath": "workspace/parallel/p4/artifacts/p4-canonical-ref-report.md",
+    "preview": {
+      "uiOpened": true,
+      "visibleTitle": "P4 Canonical Ref Report",
+      "visibleToken": "P4-CANONICAL-REF-1835",
+      "workspaceFileRead": "curl /api/sciforge/workspace/file returned the markdown content"
+    },
+    "selectedRefCommandText": "ask --ref \"artifact:p4-canonical-ref-report\" \"Using only the selected artifact, report the token and the exact bullet topic that mentions RNA-seq.\u203b1\"",
+    "followupAnswerEvidence": {
+      "usedSelectedArtifact": true,
+      "answerMentionsToken": "P4-CANONICAL-REF-1835",
+      "answerMentionsArtifactBullet": "RNA-seq differential expression",
+      "runtimeSessionLog": "packages/backend/.codex-runtime/codex-home/sessions/2026/05/19/rollout-2026-05-19T18-29-02-019e3fc8-2802-78d3-859f-d96944bd6c1c.jsonl"
+    },
+    "sessionRefs": [
+      "workspace/parallel/p4/.sciforge/sessions/2026-05-19_literature-evidence-review_session-literature-evidence-review-mpcho66d-jh4f33/records/session.json",
+      "workspace/parallel/p4/.sciforge/sessions/2026-05-19_literature-evidence-review_session-literature-evidence-review-mpcho66d-jh4f33/records/messages.json",
+      "workspace/parallel/p4/.sciforge/sessions/2026-05-19_literature-evidence-review_session-literature-evidence-review-mpcho66d-jh4f33/records/runs.json",
+      "workspace/parallel/p4/.sciforge/sessions/2026-05-19_literature-evidence-review_session-literature-evidence-review-mpcho66d-jh4f33/manifest.json"
+    ]
+  },
+  "negativeChecks": {
+    "noSelectedRefFirstTurn": "The first live artifact command had no selected refs in the user message.",
+    "noFakeSelectedRef": "The selected-ref terminal text only appeared after the user selected p4-canonical-ref-report in the UI.",
+    "seedDemoExcluded": "The passing evidence uses live token P4-CANONICAL-REF-1835 and live command ids, not seed/demo artifacts."
+  },
+  "priorBlockedAttempt": {
+    "sessionId": "session-literature-evidence-review-mpcf45uq-fdqc63",
+    "commandId": "codex-command-mpcf4k0g-shhonu",
+    "promptToken": "P4-SELECTED-REF-LIVE-1718",
+    "status": "failed-terminal-projection",
+    "artifactRefs": [],
+    "previewRefs": [],
+    "generatedEvidence": {
+      "dom": "docs/test-artifacts/parallel/p4/p4-runtime-codex-live-failed-dom.txt",
+      "screenshot": "docs/test-artifacts/parallel/p4/p4-runtime-codex-live-failed-screenshot.png"
+    }
+  },
+  "acceptanceRubric": [
+    {
+      "id": "live-user-artifact",
+      "expectation": "The live default-chat Runtime Codex turn must create or expose a user-facing research-report artifact containing the selected token.",
+      "observed": "Runtime Codex wrote workspace/parallel/p4/artifacts/p4-canonical-ref-report.md; UI exposed artifact:p4-canonical-ref-report with inline markdown preview containing P4-CANONICAL-REF-1835.",
+      "verdict": "pass"
+    },
+    {
+      "id": "selected-ref-followup",
+      "expectation": "After a user selects the artifact/ref, the follow-up must become terminal-equivalent text with a generic selected ref, and the answer must use that ref content.",
+      "observed": "Runtime Codex native session recorded ask --ref \"artifact:p4-canonical-ref-report\"; the answer returned the token and the RNA-seq differential expression bullet from the artifact.",
+      "verdict": "pass"
+    },
+    {
+      "id": "artifact-open-read",
+      "expectation": "Artifact content must open or read through preview/file API/state refs consistently.",
+      "observed": "UI inline preview rendered the markdown artifact; workspace file API returned the same token and bullet content.",
+      "verdict": "pass"
+    },
+    {
+      "id": "workspace-restore",
+      "expectation": "Workspace refresh must restore artifact, run, message, and selected refs from session state.",
+      "observed": "After reload, the session restored the artifact preview, two completed runs, messages, and selected user ref artifact:p4-canonical-ref-report.",
+      "verdict": "pass"
+    },
+    {
+      "id": "projection-risk",
+      "expectation": "M0 final live acceptance ultimately expects ConversationProjection/gui.present to drive the main result pane.",
+      "observed": "Artifact open/follow-up is live usable, but the right result view still says it is waiting for ConversationProjection for the focused run.",
+      "verdict": "remaining-risk"
+    }
+  ],
+  "generatedEvidence": {
+    "dom": "docs/test-artifacts/parallel/p4/p4-canonical-selected-ref-live-dom.txt",
+    "screenshot": "docs/test-artifacts/parallel/p4/p4-canonical-selected-ref-live-screenshot.png"
+  },
+  "commands": {
+    "node --import tsx --test src/ui/src/api/agentClient/responseNormalization.test.ts": "pass",
+    "node --import tsx --test src/runtime/codex/codex-exec-json-adapter.test.ts": "pass",
+    "node --import tsx --test src/ui/src/app/chat/sessionTransforms.test.ts": "pass",
+    "node --import tsx --test src/ui/src/api/sciforgeToolsClient/runtimeEvents.test.ts": "pass",
+    "npm run smoke:runtime-codex-artifact-followup": "pass",
+    "git diff --check": "pass"
+  },
+  "notes": [
+    "Runtime bridge now starts Codex with workspace-write sandbox and approval never, matching the documented backend wrapper.",
+    "Runtime Codex artifact ids returned as artifact:* are canonicalized before building UI ObjectReference refs, preventing artifact:artifact:* commandText.",
+    "The v1 failed evidence is kept in this manifest for regression context."
+  ]
+}

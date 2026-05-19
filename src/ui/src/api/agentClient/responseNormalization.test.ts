@@ -78,6 +78,78 @@ test('normalizes ContractValidationFailure as failed diagnostic output with reco
   assert.equal((raw.contractValidationFailure as Record<string, unknown>)?.failureReason, 'research-report artifact is missing markdown content.');
 });
 
+test('unwraps structured payloads from Runtime Codex done message envelopes', () => {
+  const response = normalizeAgentResponse('literature-evidence-review', '生成 p4 live report artifact', {
+    ok: true,
+    data: {
+      run: {
+        id: 'codex-command-live-artifact',
+        status: 'completed',
+        output: {
+          result: JSON.stringify({
+            schemaVersion: 'sciforge.codex.normalized-event.v1',
+            type: 'done',
+            status: 'done',
+            message: JSON.stringify({
+              message: 'P4 live report artifact is ready.',
+              artifacts: [{
+                id: 'p4-live-report',
+                type: 'research-report',
+                path: '.sciforge/sessions/session-live/artifacts/p4-live-report.md',
+                delivery: {
+                  contractId: 'sciforge.artifact-delivery.v1',
+                  ref: 'artifact:p4-live-report',
+                  readableRef: '.sciforge/sessions/session-live/artifacts/p4-live-report.md',
+                  declaredMediaType: 'text/markdown',
+                  declaredExtension: 'md',
+                  previewPolicy: 'inline',
+                },
+              }],
+              objectReferences: [{
+                id: 'obj-p4-live-report',
+                kind: 'artifact',
+                ref: 'artifact:p4-live-report',
+                title: 'P4 live report',
+              }],
+              executionUnits: [{ id: 'EU-live-report', tool: 'codex.exec', status: 'done', params: '{}' }],
+            }),
+          }),
+        },
+      },
+    },
+  });
+
+  assert.equal(response.message.content, 'P4 live report artifact is ready.');
+  assert.equal(response.artifacts[0]?.id, 'p4-live-report');
+  assert.equal(response.artifacts[0]?.delivery?.readableRef, '.sciforge/sessions/session-live/artifacts/p4-live-report.md');
+  assert.ok(response.message.objectReferences?.some((reference) => reference.ref === 'artifact:p4-live-report'));
+});
+
+test('canonicalizes artifact-prefixed Runtime Codex artifact ids before building refs', () => {
+  const response = normalizeAgentResponse('literature-evidence-review', '生成 p4 live report artifact', {
+    ok: true,
+    data: {
+      run: { id: 'codex-command-prefixed-artifact', status: 'completed' },
+      output: {
+        message: JSON.stringify({
+          message: 'P4 live report artifact is ready.',
+          artifacts: [{
+            id: 'artifact:p4-live-report',
+            type: 'research-report',
+            path: '.sciforge/sessions/session-live/artifacts/p4-live-report.md',
+            delivery: { ref: 'artifact:p4-live-report' },
+          }],
+          executionUnits: [{ id: 'EU-live-report', tool: 'codex.exec', status: 'done', params: '{}' }],
+        }),
+      },
+    },
+  });
+
+  assert.equal(response.artifacts[0]?.id, 'p4-live-report');
+  assert.ok(response.message.objectReferences?.some((reference) => reference.ref === 'artifact:p4-live-report'));
+  assert.ok(!response.message.objectReferences?.some((reference) => reference.ref === 'artifact:artifact:p4-live-report'));
+});
+
 test('summarizes raw backend failure payloads without leaking response body or refs into chat text', () => {
   const response = normalizeAgentResponse('literature-evidence-review', '生成报告', {
     ok: true,

@@ -8,6 +8,7 @@ import type { WorkspaceFileContent } from '../../api/workspaceClient';
 import { ChatPanel } from '../ChatPanel';
 import { ResultsRenderer } from '../ResultsRenderer';
 import { recoverableRunFocusForSession } from '../appShell/workspaceState';
+import { composerReferenceForObjectReference } from '../chat/composerReferences';
 import { recordUIActionInSession, type CommandTextUIAction, type OpenDebugAuditUIAction, type UIAction } from '../uiActionBoundary';
 import type { HandoffAutoRunRequest } from '../results/viewPlanResolver';
 import { scopedResultSlotId } from '../results/viewPlanResolver';
@@ -99,6 +100,7 @@ export function Workbench({
   const [mobilePane, setMobilePane] = useState<'builder' | 'chat' | 'results'>('chat');
   const [activeRunId, setActiveRunId] = useState<string | undefined>();
   const [focusedObjectReference, setFocusedObjectReference] = useState<ObjectReference | undefined>();
+  const [resultReferenceRequest, setResultReferenceRequest] = useState<{ id: string; reference: SciForgeReference } | undefined>();
   const [chatColumnWidth, setChatColumnWidth] = useState(42);
   const workbenchResizeRef = useRef<{ startX: number; startWidth: number; gridWidth: number } | null>(null);
   const autoFocusedRunKeyRef = useRef<string | undefined>(undefined);
@@ -154,6 +156,28 @@ export function Workbench({
     if (reference.runId) setActiveRunId(reference.runId);
     setResultsCollapsed(false);
     setMobilePane('results');
+  }
+
+  function handleResultObjectFocus(reference: ObjectReference | undefined) {
+    if (!reference) {
+      setFocusedObjectReference(undefined);
+      return;
+    }
+    handleObjectFocus(reference);
+    setResultReferenceRequest({
+      id: `result-ref-${reference.id}-${Date.now()}`,
+      reference: composerReferenceForObjectReference(reference),
+    });
+  }
+
+  const activeExternalReferenceRequest = externalReferenceRequest ?? resultReferenceRequest;
+
+  function handleExternalReferenceConsumed(requestId: string) {
+    if (resultReferenceRequest?.id === requestId) {
+      setResultReferenceRequest(undefined);
+      return;
+    }
+    onExternalReferenceConsumed(requestId);
   }
 
   function recordWorkbenchUIAction(action: UIAction) {
@@ -304,8 +328,8 @@ export function Workbench({
             onActiveRunChange={handleActiveRunChange}
             onMarkReusableRun={(runId) => onMarkReusableRun(scenarioId, runId)}
             onObjectFocus={handleObjectFocus}
-            externalReferenceRequest={externalReferenceRequest}
-            onExternalReferenceConsumed={onExternalReferenceConsumed}
+            externalReferenceRequest={activeExternalReferenceRequest}
+            onExternalReferenceConsumed={handleExternalReferenceConsumed}
             availableComponentIds={availableComponentIds}
             runtimeHealth={runtimeHealth}
           />
@@ -332,7 +356,7 @@ export function Workbench({
             activeRunId={activeRunId}
             onActiveRunChange={handleActiveRunChange}
             focusedObjectReference={focusedObjectReference}
-            onFocusedObjectChange={setFocusedObjectReference}
+            onFocusedObjectChange={handleResultObjectFocus}
             onPreviewPackageRequest={(reference, path, descriptor) => onPreviewPackageRequest(scenarioId, reference, path, descriptor)}
             workspaceFileEditor={workspaceFileEditor}
             onWorkspaceFileEditorChange={onWorkspaceFileEditorChange}

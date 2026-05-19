@@ -86,6 +86,14 @@ export interface GuidanceQueueRecord {
   reason?: string;
 }
 
+export type SciForgeMessageProvenance = {
+  kind?: string;
+  source?: string;
+  runtimeRequestEligible?: boolean;
+  liveAcceptanceEligible?: boolean;
+  [key: string]: unknown;
+};
+
 export interface SciForgeMessage {
   id: string;
   role: MessageRole;
@@ -100,7 +108,28 @@ export interface SciForgeMessage {
   tokenUsage?: AgentTokenUsage;
   references?: SciForgeReference[];
   objectReferences?: ObjectReference[];
+  provenance?: SciForgeMessageProvenance;
   goalSnapshot?: UserGoalSnapshot;
   acceptance?: TurnAcceptance;
   guidanceQueue?: GuidanceQueueRecord;
+}
+
+export function isSeedDemoOrFixtureMessage(message: Pick<SciForgeMessage, 'id' | 'role' | 'provenance'>): boolean {
+  const provenance = message.provenance;
+  const marker = [
+    message.id,
+    message.role,
+    provenance?.kind,
+    provenance?.source,
+  ].map((value) => String(value ?? '').toLowerCase()).join(' ');
+  if (provenance?.kind === 'seed-demo' || provenance?.kind === 'fixture') return true;
+  if (/\b(seed|demo|fixture)\b|scenariodemodata/.test(marker)) return true;
+  if (provenance?.kind === 'live-runtime-codex' || provenance?.liveAcceptanceEligible === true) return false;
+  if (provenance?.runtimeRequestEligible === false || provenance?.liveAcceptanceEligible === false) return true;
+  return false;
+}
+
+export function isLiveRuntimeCodexMessage(message: Pick<SciForgeMessage, 'provenance'>): boolean {
+  return message.provenance?.kind === 'live-runtime-codex'
+    && message.provenance.liveAcceptanceEligible === true;
 }

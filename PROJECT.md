@@ -38,8 +38,8 @@ SciForge 当前路线是 **UI/packages preserved, runtime rewritten, desktop-rea
 ## GitHub Sync Status
 
 - 2026-05-19：已执行 `git fetch origin --prune`。
-- 当前分支：`dev`。
-- 最近已同步计划提交：`09a6436 Update SciForge runtime migration plan`，已 push 到 `origin/dev`。
+- 当前集成分支：`codex/integrate-parallel-20260519`，从 `dev` 创建。
+- 最近 dev 基线：`5891aeb test(runtime-codex): harden p2 reliability evidence`。
 - 本文件只记录任务计划和约束；实时 ahead/behind 以 `git status -sb` 为准。
 - 注意：Git 提示 `.git/gc.log` 阻塞自动 gc，且 loose objects 过多；这是仓库维护项，不应混入 feature/runtime 改动。
 
@@ -51,7 +51,7 @@ SciForge 当前路线是 **UI/packages preserved, runtime rewritten, desktop-rea
 - `allowOpenAiRuntime=false` 时禁止 OpenAI provider fallback。
 - raw provider SSE、raw Codex JSONL、stdout、stderr、plugin warning 只进 audit/debug，默认折叠，不进入主回复 DOM 或 foreground waiting summary。
 - 用户级 browser 验收必须使用 Codex in-app browser，从默认聊天入口开始；系统浏览器、macOS `open`、外部 Chrome、Playwright 只能作为辅助诊断。
-- 多 agent / 多 server 验收前必须做端口预检；主 orchestrator 默认 `5173`，支持进程默认 `5174`-`5178`，若改端口必须记录实际端口。
+- 多 agent / 多 server 验收前必须做端口预检；并行进程默认 `p1=5173/6173/18080` 到 `p8=5180/6180/18087`，若改端口必须记录实际端口。
 - 新增兼容层必须写清退役条件。
 - 单文件超过约 2000 行时必须拆分。
 - 真实 browser E2E 是最终验收；terminal smoke 只能补充。
@@ -78,6 +78,38 @@ SciForge 当前路线是 **UI/packages preserved, runtime rewritten, desktop-rea
 
 - Fake Responses provider：`packages/backend/.codex-runtime/resume-evidence/fake-1779173374`；thread id `019e3eff-3b59-7201-aa7e-445db26a8d19`；第二轮 `codex exec resume` 返回第一轮 token。
 - 真实 DeepSeek proxy：`packages/backend/.codex-runtime/resume-evidence/real-1779173487`；thread id `019e3f00-f59e-7351-8d8d-a652e951cb09`；第一轮返回 `remembered.`，第二轮返回 `SCIFORGE_REAL_RESUME_NONCE_8426`；`turn1Failed=false`，`turn2Failed=false`。
+
+## Parallel Integration Status
+
+集成时间：2026-05-19。集成分支：`codex/integrate-parallel-20260519`。
+
+合入原则：
+
+- 不整分支合并带 legacy 基底的 `codex/parallel-*` 分支，只合入审查过的目标提交或等价代码。
+- `codex/parallel-p1-live-acceptance-legacy-6026923` 指向 legacy cleanup 大范围分支，本轮未合入。
+- `codex/parallel-p5-strict-gates` 的 manifest 明确 `status=blocked` 且该分支记录 `verify:single-agent-final` 失败，本轮未直接合入；仅通过 p8 合入通用的 strict evidence/gate drift 修复。
+
+Merged:
+
+- `codex/parallel-p1-live-acceptance`：合入 live evidence、terminal-equivalent ref command text、runtime request boundary tests。p1 worktree rerun 证明单轮 live visible answer，证据在 `docs/test-artifacts/parallel/p1/`。完整 M0 release 仍需 strict manifest rerun。
+- `codex/parallel-p2-runtime-reliability`：等价成果已在 dev 基线 `5891aeb`，本轮未重复合并 stale legacy 基底。
+- `codex/parallel-p3-gui-seed-boundary`：合入 provenance badge/data attributes、seed/demo/fixture exclusion、request payload boundary 和证据。该分支证明“不能误判 seed/demo 为 live”，不是 live pass。
+- `codex/parallel-p4-artifact-followup`：合入 canonical artifact id、selected-ref command text、response normalization、workspace preview/focus 相关修复和 live artifact follow-up 证据。剩余风险是 focused result pane 仍需 `gui.present`/ConversationProjection 闭环。
+- `codex/parallel-p6-adversarial-browser` 与 `codex/parallel-p6-adversarial-browser-cont`：p6 live 任务本身 blocked；合入阻塞证据、failed-run recovery 持久化相关等价修复，以及 complex multiturn request-boundary regression。
+- `codex/parallel-p7-desktop-platform`：合入 `parallelProfile` 和 p1-p8 端口/目录默认规则；desktop 产品化仍等 live browser gate 后再推进。
+- `codex/parallel-p8-spare-repair`：合入 strict browser manifest validator、no-hardcoded-success gate、long-file cache exclusion 和 evidence drift checks；本轮将 release smoke 默认端口恢复为 p1/main `5173/6173/18080`。
+
+Blocked:
+
+- `codex/parallel-p5-strict-gates`：blocked by missing live Runtime Codex credential and recorded typecheck drift in that branch; not merged as a source of truth.
+- `codex/parallel-p6-adversarial-browser` live scenario：Runtime Codex command failed before artifact creation; no multi-turn or selected-artifact success claimed.
+- Full M0/M3 release acceptance：requires a strict `status=passed` Codex in-app browser manifest with command id, workspace, actual task result, live Runtime Codex proof, screenshot/DOM/notes, and negative checks.
+
+Needs rerun:
+
+- `SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 npm run smoke:runtime-codex-browser-acceptance` after live Runtime Codex credentials/proxy are configured.
+- `npm run verify:single-agent-final` after strict live manifest passes.
+- A default-chat in-app browser path proving second-turn visible answer and selected artifact follow-up under the integrated branch, not only worker worktrees.
 
 ## Active Tasks
 
@@ -183,6 +215,15 @@ Todo：
 - [ ] `tests/smoke/smoke-runtime-codex-browser-acceptance.ts` 的 manifest 只有在真实 in-app browser 观察到可见结果后才能标 passed。
 - [ ] blocked/failed manifest 必须写清端口、URL、profile、原因、截图/DOM 证据位置。
 
+p1 worktree live acceptance 阶段证据（2026-05-19）：
+
+- 并行 worker p1 已迁到独立 git worktree `/Applications/workspace/ailab/research/app/SciForge-p1-live-acceptance`，分支 `codex/parallel-p1-live-acceptance`；旧本地同名 legacy 分支保留为 `codex/parallel-p1-live-acceptance-legacy-6026923`。
+- p1 实际端口：UI `http://127.0.0.1:5173/`，workspace writer `http://127.0.0.1:6173`，RuntimeCodex/OpenTeam sidecar `http://127.0.0.1:18080`，proxy `http://127.0.0.1:3891/v1`。
+- 真实 in-app browser worktree rerun 从默认聊天入口提交 `p1 worktree live acceptance 20260519 reply only with uppercase version of p1worktreeproxyok`，可见答案为 `P1WORKTREEPROXYOK`；该大写答案未在 prompt 中原样出现。
+- 同一验收链路互相印证：GUI run `codex-command-mpci6iqi-tie3z4`、Runtime Codex command `codex-c1b0a7cf246d83e9`、attempt `codex-c1b0a7cf246d83e9-attempt-mpci6iuv`、Codex session `019e3fd3-b807-7051-832c-a0da54ff1227`。
+- 证据：`docs/test-artifacts/parallel/p1/worktree-rerun-manifest.json`、`docs/test-artifacts/parallel/p1/worktree-acceptance-rubric.md`、`docs/test-artifacts/parallel/p1/p1-worktree-live-rerun-dom.txt`、`docs/test-artifacts/parallel/p1/p1-worktree-live-rerun.png`；早前完整 M0 单轮/两轮 resume/selected-ref 证据仍保留在 `docs/test-artifacts/runtime-codex-browser-acceptance/manifest.json` 和 `p1-acceptance-rubric.md`。
+- 负向检查：错误配置 proxy 时曾出现 `Runtime Codex exited with code 1`，该 run 已记录但未计入成功；当前通过 run 不是 seed/demo/fixture，不是 blocked/failed manifest，不以 raw stdout/jsonl/stderr 作为主答案。
+
 p6 对抗性 browser 阶段证据（2026-05-19）：
 
 - 并行 worker p6 使用 `http://127.0.0.1:5178/`、workspace writer `http://127.0.0.1:6178`、workspace `workspace/parallel/p6`，从 in-app browser 默认聊天入口提交非 fixture 任务 `p6-rotor-thermal-20260519`。
@@ -190,14 +231,18 @@ p6 对抗性 browser 阶段证据（2026-05-19）：
 - 刷新页面后同一 failed / repair-needed run 仍可见；证据位于 `docs/test-artifacts/parallel/p6/p6-adversarial-browser-report.md` 和 `p6-adversarial-browser-manifest.json`。
 - 修复：首轮 SSE / failed-run 中的 `codexSessionId` 会提升到 normalized run/message refs，后续 turn 可从 failed metadata、legacy nested result 或 `codex-thread:` ref 恢复；failed recover state 现在要求保留 `stderrSummary`。
 - 剩余风险：现有 pre-fix p6 persisted run 的 `recoverState` 缺少 `stderrSummary`；后续 failed run 由测试覆盖。真实 RuntimeCodex/provider failure 仍阻塞 artifact、第二轮和第三轮可见答案验收。
+- worktree continuation：已创建 `/Applications/workspace/ailab/research/app/SciForge-p6-adversarial-browser`，分支 `codex/parallel-p6-adversarial-browser-cont`；`smoke:complex-multiturn-chat` 已按 terminal-equivalent boundary 更新为只验证当前命令和 GUI refs/counts，不再要求把失败正文或 guidance 正文塞进 Runtime Codex request。
+- continuation 验收：`npm run smoke:browser-multiturn`、`npm run smoke:complex-multiturn-chat`、`git diff --check` 通过；`npm run smoke:runtime-codex-browser-acceptance` 仍 fail-closed blocked，原因是 `SCIFORGE_RUNTIME_API_KEY` 未配置。in-app browser 已打开 worktree UI `http://127.0.0.1:5178/`，证据为 `worktree-continuation-initial-dom.txt` 和 `worktree-continuation-initial.png`。
 
 p4 artifact open/follow-up 阶段证据（2026-05-19）：
 
-- 并行 worker p4 使用 `http://127.0.0.1:5176/`、workspace writer `http://127.0.0.1:6176`、workspace `workspace/parallel/p4`，从 in-app browser 默认聊天入口提交 live 非 seed 任务 `P4-SELECTED-REF-LIVE-1718`。
-- Runtime Codex command `codex-command-mpcf4k0g-shhonu` 产生了 folded audit refs 和 terminal failed projection；UI/session bundle 持久化了 user-authored message、failed run 和 audit refs，但没有持久化 user-facing artifact 或 preview refs，因此不能宣称 artifact open/follow-up live pass。
-- 修复：selected ObjectReference 现在通过 provenance/path/dataRef/delivery refs 做 request scoping；结果区 focus 会经 external-reference request 进入 composer pending refs；缺失的 `smoke:runtime-codex-artifact-followup` 脚本现在覆盖 Runtime Codex selected-ref 负向/作用域测试。
-- 证据位于 `docs/test-artifacts/parallel/p4/p4-artifact-followup-manifest.json`、`p4-runtime-codex-live-failed-dom.txt` 和 `p4-runtime-codex-live-failed-screenshot.png`。
-- 剩余风险：live Runtime Codex 未通过 `gui.present` 或等效 artifact publishing 产出可选 artifact；selected-ref 第二轮只能证明代码级 terminal-equivalent ref 机制，不能作为 M0 最终 live acceptance。
+- p4 后续迁移到独立 git worktree `/Applications/workspace/ailab/research/app/SciForge-p4-artifact-followup`，端口仍使用 `http://127.0.0.1:5176/`、workspace writer `http://127.0.0.1:6176`、workspace `workspace/parallel/p4`。
+- 旧失败证据仍保留：live 非 seed 任务 `P4-SELECTED-REF-LIVE-1718` / command `codex-command-mpcf4k0g-shhonu` 只有 folded audit refs，没有 user-facing artifact 或 preview refs。
+- 新通过证据：in-app browser 默认聊天入口提交 live 非 seed 任务 `P4-CANONICAL-REF-1835`，Runtime Codex command `codex-command-mpchozlp-xzaerd` 写出并暴露 `artifact:p4-canonical-ref-report`；UI inline preview 成功打开/read markdown artifact，workspace file API 读到同一 token 和 `RNA-seq differential expression` bullet。
+- selected-ref follow-up 通过：用户在 UI 选择 `p4-canonical-ref-report` 后追问，Runtime Codex 原生日志记录 terminal-equivalent text `ask --ref "artifact:p4-canonical-ref-report" ...`，follow-up command `codex-command-mpchqa53-kndh9s` 的答案实际引用 artifact 内容，返回 token `P4-CANONICAL-REF-1835` 和 `RNA-seq differential expression` bullet。
+- 修复：Runtime bridge 现在用 `workspace-write` sandbox / `approval never` 启动 Codex；Runtime Codex 返回 `artifact:*` id 时会 canonicalize 为无前缀 artifact id，避免 `artifact:artifact:*` selected-ref commandText。
+- 证据位于 `docs/test-artifacts/parallel/p4/p4-artifact-followup-manifest.json`、`p4-canonical-selected-ref-live-dom.txt`、`p4-canonical-selected-ref-live-screenshot.png`，旧失败截图/DOM 继续保留作回归上下文。
+- 剩余风险：artifact open/follow-up 已 live usable，但 focused run 的主结果区仍显示等待 `ConversationProjection`；M0 final 仍需 `gui.present`/ConversationProjection 闭环。
 
 M2 / p3 GUI presentation、seed boundary、no-hardcoding 阶段证据（2026-05-19）：
 

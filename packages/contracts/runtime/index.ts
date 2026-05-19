@@ -1087,6 +1087,10 @@ export {
   workspaceSkillSelectedEvent,
   workspaceRuntimeResultCompletion,
 } from './events';
+export {
+  isLiveRuntimeCodexMessage,
+  isSeedDemoOrFixtureMessage,
+} from './messages';
 export type {
   GuidanceQueueRecord,
   GuidanceQueueStatus,
@@ -1095,6 +1099,7 @@ export type {
   RuntimeClaimType,
   RuntimeEvidenceLevel,
   SciForgeMessage,
+  SciForgeMessageProvenance,
   SemanticTurnAcceptance,
   TurnAcceptance,
   TurnAcceptanceFailure,

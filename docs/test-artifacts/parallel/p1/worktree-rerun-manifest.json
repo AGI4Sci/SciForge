@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "sciforge.runtime-codex.browser-acceptance.v1",
+  "status": "passed",
+  "source": "codex-in-app-browser",
+  "observedAt": "2026-05-19T10:41:43.517Z",
+  "worktree": "/Applications/workspace/ailab/research/app/SciForge-p1-live-acceptance",
+  "actualUrl": "http://127.0.0.1:5173/",
+  "actualPort": 5173,
+  "actualWorkspaceWriterPort": 6173,
+  "workspacePath": "/Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p1",
+  "stateDir": "/Applications/workspace/ailab/research/app/SciForge/.sciforge/parallel/p1",
+  "profile": "sciforge-runtime-deepseek",
+  "provider": "sciforge-deepseek-proxy",
+  "model": "bailian/deepseek-v4-flash",
+  "startedFromDefaultChatEntry": true,
+  "submittedThroughRuntimeCodex": true,
+  "mainAnswerVisible": true,
+  "rawAuditFoldedByDefault": true,
+  "automationSubstituteUsed": false,
+  "acceptanceConclusionFromRealBrowser": true,
+  "singleTurnWorktreeRerun": {
+    "status": "passed",
+    "prompt": "p1 worktree live acceptance 20260519 reply only with uppercase version of p1worktreeproxyok",
+    "expectedAnswer": "P1WORKTREEPROXYOK",
+    "guiRunId": "codex-command-mpci6iqi-tie3z4",
+    "runtimeCommandId": "codex-c1b0a7cf246d83e9",
+    "attemptId": "codex-c1b0a7cf246d83e9-attempt-mpci6iuv",
+    "codexSessionId": "019e3fd3-b807-7051-832c-a0da54ff1227",
+    "sessionRecord": "workspace/parallel/p1/.sciforge/sessions/2026-05-19_literature-evidence-review_session-literature-evidence-review-mpci6fxo-q2lxrl/records/session.json",
+    "evidence": {
+      "domSnapshotPath": "docs/test-artifacts/parallel/p1/p1-worktree-live-rerun-dom.txt",
+      "screenshotPath": "docs/test-artifacts/parallel/p1/p1-worktree-live-rerun.png"
+    }
+  },
+  "negativeChecks": {
+    "answerNotPresentVerbatimInPrompt": true,
+    "notSeedDemoOrFixture": true,
+    "notRawStdoutJsonlOrStderrMainAnswer": true,
+    "notBlockedOrFailedManifest": true,
+    "previousProxyMisconfigFailureNotCounted": true
+  }
+}

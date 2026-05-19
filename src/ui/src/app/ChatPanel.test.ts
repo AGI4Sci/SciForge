@@ -110,7 +110,7 @@ test('chat run process and key info prefer projection over raw failed execution 
     executionProcess: [{
       eventId: 'event-projection-summary',
       type: 'Satisfied',
-      summary: 'Projection summarized the durable report ref.',
+      summary: 'GUI intent summarized the durable report ref.',
       timestamp: '2026-05-13T00:00:05.000Z',
     }],
     recoverActions: [],
@@ -182,7 +182,8 @@ test('chat run process and key info prefer projection over raw failed execution 
     onObjectFocus: () => undefined,
   }));
 
-  assert.match(processHtml, /Projection summarized the durable report ref/);
+  assert.match(processHtml, /GUI intent summarized the durable report ref/);
+  assert.doesNotMatch(processHtml, /ConversationProjection/);
   assert.match(processHtml, /状态：satisfied/);
   assert.doesNotMatch(processHtml, /LEGACY_EXECUTION_UNIT_SHOULD_NOT_RENDER/);
   assert.doesNotMatch(processHtml, /legacy\.raw/);
@@ -377,6 +378,85 @@ test('chat final message body ignores raw displayIntent resultPresentation', () 
 
   assert.match(html, /ORIGINAL_CHAT_BODY/);
   assert.doesNotMatch(html, /DISPLAY_INTENT_SHOULD_NOT_RENDER/);
+});
+
+test('chat message DOM and badges distinguish demo seed from live Runtime Codex answers', () => {
+  const session: SciForgeSession = {
+    schemaVersion: 2,
+    sessionId: 'session-provenance-dom',
+    scenarioId: 'literature-evidence-review',
+    title: 'provenance dom',
+    createdAt: '2026-05-19T00:00:00.000Z',
+    updatedAt: '2026-05-19T00:00:10.000Z',
+    messages: [{
+      id: 'seed-demo-message',
+      role: 'scenario',
+      content: 'demo answer',
+      createdAt: '2026-05-19T00:00:00.000Z',
+      provenance: {
+        kind: 'seed-demo',
+        source: 'scenarioDemoData:literature-evidence-review',
+        runtimeRequestEligible: false,
+        liveAcceptanceEligible: false,
+      },
+    }, {
+      id: 'live-runtime-message',
+      role: 'scenario',
+      content: 'live answer',
+      createdAt: '2026-05-19T00:00:05.000Z',
+      status: 'completed',
+      provenance: {
+        kind: 'live-runtime-codex',
+        source: 'gui.present:codex-command-live',
+        runtimeRequestEligible: false,
+        liveAcceptanceEligible: true,
+      },
+    }],
+    runs: [],
+    uiManifest: [],
+    claims: [],
+    executionUnits: [],
+    artifacts: [],
+    notebook: [],
+    versions: [],
+    hiddenResultSlotIds: [],
+  };
+
+  const html = renderToStaticMarkup(createElement(ChatPanel, {
+    scenarioId: 'literature-evidence-review',
+    role: 'Researcher',
+    config: defaultSciForgeConfig,
+    session,
+    input: '',
+    savedScrollTop: 0,
+    onInputChange: () => undefined,
+    onScrollTopChange: () => undefined,
+    onSessionChange: () => undefined,
+    onNewChat: () => undefined,
+    onDeleteChat: () => undefined,
+    archivedSessions: [],
+    onRestoreArchivedSession: () => undefined,
+    onDeleteArchivedSessions: () => undefined,
+    onClearArchivedSessions: () => undefined,
+    onEditMessage: () => undefined,
+    onDeleteMessage: () => undefined,
+    archivedCount: 0,
+    onAutoRunConsumed: () => undefined,
+    onConfigChange: () => undefined,
+    onTimelineEvent: () => undefined,
+    onActiveRunChange: () => undefined,
+    onMarkReusableRun: () => undefined,
+    onObjectFocus: () => undefined,
+    runtimeHealth: [],
+  }));
+
+  assert.match(html, /data-message-id="seed-demo-message"/);
+  assert.match(html, /data-message-provenance="seed-demo"/);
+  assert.match(html, /seed-demo/);
+  assert.match(html, /data-message-id="live-runtime-message"/);
+  assert.match(html, /data-message-provenance="live-runtime-codex"/);
+  assert.match(html, /data-live-acceptance-eligible="true"/);
+  assert.match(html, /live Runtime Codex/);
 });
 
 test('default chat shell uses universal workspace copy instead of scenario-first labels', () => {

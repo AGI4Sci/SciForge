@@ -1,0 +1,104 @@
+- complementary:
+  - generic: BA
+  - button "导航":
+  - generic: 导航
+  - button "收起侧栏":
+  - navigation:
+    - button "研究概览":
+      - generic: 研究概览
+    - button "聊天工作台":
+      - generic: 聊天工作台
+    - button "组件工作台":
+      - generic: 组件工作台
+    - button "研究时间线":
+      - generic: 研究时间线
+    - button "反馈收件箱":
+      - generic: 反馈收件箱
+  - button "新建文件":
+  - button "新建文件夹":
+  - button "刷新":
+  - button "全部折叠":
+  - tree "工作区文件树":
+    - status: 已加载 1 项
+    - treeitem "折叠 p6" [expanded]:
+      - button "折叠":
+      - generic: p6
+    - treeitem "展开 .sciforge":
+      - button "展开":
+      - generic: .sciforge
+    - generic "打开其他文件夹…"
+  - separator "拖拽调整左侧栏宽度"
+- banner:
+  - textbox "搜索文件、报告、运行、问题..."
+  - generic: SciForge · ready
+  - button "切换白天模式":
+    - text: 切换白天模式
+  - button "设置":
+    - text: 设置
+- main:
+  - button "SciForge 工作台":
+    - generic: SciForge 工作台
+  - generic "感官插件":
+    - button "vision-sense on" [pressed]:
+      - generic: vision-sense
+      - generic: "on"
+  - strong: Ask SciForge
+  - generic: sciforge-runtime-deepseek
+  - generic: native
+  - generic: bailian/deepseek-v4-flash
+  - generic: 在线
+  - generic "选择下一次 Runtime Codex 运行使用的兼容 backend 标识":
+    - generic: runtime
+    - combobox "runtime":
+      - option "Codex" [selected]
+      - option "OpenTeam"
+      - option "Claude Code"
+      - option "Hermes"
+      - option "OpenClaw"
+      - option "Gemini"
+  - button "开启新聊天":
+    - text: 开启新聊天
+  - button "历史会话":
+    - text: 历史会话
+  - button "导出当前聊天":
+    - text: 导出当前聊天
+  - button "删除当前聊天":
+    - text: 删除当前聊天
+  - button "复制"
+  - button "编辑"
+  - paragraph: 检索近三年关于 KRAS G12C 抑制剂耐药机制的文献，并标注证据强度。
+  - strong: SciForge
+  - generic: 91%
+  - generic: 队列研究
+  - generic: 推断
+  - button "复制"
+  - button "编辑"
+  - paragraph: 已形成可审计文献证据矩阵：47 篇相关文献中，12 篇直接研究耐药机制。EGFR/MET 旁路激活是当前支持最强的机制，KRAS Y96D 二次突变和组织学转化为需要并排展示的备选机制。
+  - generic: action
+  - generic: 输入研究问题后即可运行；Shift+Enter 换行，Enter 发送。
+  - code: literature-evidence-review@1.0.0
+  - button "输入研究问题，或点选对象后继续追问...":
+    - generic: 输入研究问题，或点选对象后继续追问...
+  - separator "调整聊天区和结果区宽度"
+  - button "向右收缩结果面板":
+  - tablist:
+    - tab "结果视图 结果视图" [selected]:
+      - generic: 结果视图
+      - text: 结果视图
+    - tab "证据矩阵 证据矩阵":
+      - generic: 证据矩阵
+      - text: 证据矩阵
+  - generic "结果区 focus mode":
+    - button "全部"
+    - button "只看图"
+    - button "只看证据"
+    - button "只看执行单元"
+  - heading "结果视图" [level=2]
+  - paragraph: 优先展示用户本轮要看的结果；更多内容默认收起
+  - heading "主结果等待 ConversationProjection" [level=2]
+  - paragraph: 当前 session
+  - generic: 当前 run 没有 ConversationProjection；结果区等待 Projection 声明可见状态与 ArtifactDelivery。
+  - generic: empty
+  - strong: 主结果等待 ConversationProjection
+  - paragraph: 当前 run 没有 ConversationProjection；结果区等待 Projection 声明可见状态与 ArtifactDelivery。
+  - generic "可尝试的恢复动作"

@@ -22,12 +22,14 @@ import {
 import { handleScenarioLibraryRoutes } from './server/scenario-library-routes.js';
 import { handleWorkspaceFileApiRoutes, readLastWorkspacePath } from './server/workspace-file-api.js';
 import { handleCodexRuntimeRoutes } from './codex/codex-runtime-server.js';
+import { normalizeInstanceName, parallelProfile } from './parallel-instance-profile.js';
 
-const PORT = Number(process.env.SCIFORGE_WORKSPACE_PORT || 5174);
 const INSTANCE_ID = process.env.SCIFORGE_INSTANCE_ID || process.env.SCIFORGE_INSTANCE || 'default';
 const INSTANCE_ROLE = process.env.SCIFORGE_INSTANCE_ROLE || INSTANCE_ID;
-const UI_PORT = Number(process.env.SCIFORGE_UI_PORT || 5173);
 const DEFAULT_PARALLEL_INSTANCE_ID = normalizeParallelInstanceId(INSTANCE_ID);
+const DEFAULT_PARALLEL_PROFILE = parallelProfile(DEFAULT_PARALLEL_INSTANCE_ID);
+const PORT = Number(process.env.SCIFORGE_WORKSPACE_PORT || DEFAULT_PARALLEL_PROFILE.workspacePort);
+const UI_PORT = Number(process.env.SCIFORGE_UI_PORT || DEFAULT_PARALLEL_PROFILE.uiPort);
 const DEFAULT_PARALLEL_STATE_DIR = join(process.cwd(), '.sciforge', 'parallel', DEFAULT_PARALLEL_INSTANCE_ID);
 const DEFAULT_PARALLEL_WORKSPACE_PATH = join(process.cwd(), 'workspace', 'parallel', DEFAULT_PARALLEL_INSTANCE_ID);
 const STATE_DIR = resolve(process.env.SCIFORGE_STATE_DIR || DEFAULT_PARALLEL_STATE_DIR);
@@ -38,10 +40,8 @@ const STARTED_AT = new Date().toISOString();
 const LIFECYCLE_TOKEN = process.env.SCIFORGE_SERVICE_LIFECYCLE_TOKEN || '';
 
 function normalizeParallelInstanceId(value: string) {
-  const normalized = value.trim().toLowerCase();
-  if (/^p[1-6]$/.test(normalized)) return normalized;
-  if (normalized === 'repair' || normalized === 'b' || normalized === 'sciforge-b') return 'p2';
-  return 'p1';
+  const normalized = normalizeInstanceName(value);
+  return /^p[1-8]$/.test(normalized) ? normalized : 'p1';
 }
 
 createServer(async (req, res) => {
@@ -720,7 +720,9 @@ async function readLocalSciForgeConfig() {
   const sciforge = isRecord(parsed.sciforge) ? parsed.sciforge : {};
   const visionSense = isRecord(parsed.visionSense) ? parsed.visionSense : {};
   const agentServerBaseUrl = process.env.SCIFORGE_AGENT_SERVER_URL
-    || (typeof sciforge.agentServerBaseUrl === 'string' ? sciforge.agentServerBaseUrl : 'http://127.0.0.1:18080');
+    || (typeof sciforge.agentServerBaseUrl === 'string' ? sciforge.agentServerBaseUrl : `http://127.0.0.1:${DEFAULT_PARALLEL_PROFILE.runtimeCodexPort}`);
+  const runtimeCodexBaseUrl = process.env.SCIFORGE_RUNTIME_CODEX_URL
+    || (typeof sciforge.runtimeCodexBaseUrl === 'string' ? sciforge.runtimeCodexBaseUrl : `http://127.0.0.1:${DEFAULT_PARALLEL_PROFILE.runtimeCodexPort}`);
   const workspaceWriterBaseUrl = process.env.SCIFORGE_WORKSPACE_WRITER_URL
     || (typeof sciforge.workspaceWriterBaseUrl === 'string' ? sciforge.workspaceWriterBaseUrl : `http://127.0.0.1:${PORT}`);
   const workspacePath = process.env.SCIFORGE_WORKSPACE_PATH
@@ -728,6 +730,7 @@ async function readLocalSciForgeConfig() {
   return {
     schemaVersion: 1,
     agentServerBaseUrl,
+    runtimeCodexBaseUrl,
     workspaceWriterBaseUrl,
     workspacePath: normalizeWorkspaceRootPath(resolve(workspacePath)),
     peerInstances: normalizePeerInstances(sciforge.peerInstances),

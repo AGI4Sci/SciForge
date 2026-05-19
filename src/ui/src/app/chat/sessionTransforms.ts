@@ -427,6 +427,19 @@ function backgroundMessageForEvent(
     status: event.status,
     updatedAt,
     objectReferences: mergeObjectReferences(objectReferences, previous?.objectReferences ?? []),
+    provenance: event.status === 'completed' && event.finalResponse
+      ? {
+        kind: 'live-runtime-codex',
+        source: `background-completion:${event.runId}`,
+        runtimeRequestEligible: false,
+        liveAcceptanceEligible: true,
+      }
+      : {
+        kind: 'system-ui',
+        source: `background-completion:${event.runId}`,
+        runtimeRequestEligible: false,
+        liveAcceptanceEligible: false,
+      },
   };
 }
 
@@ -712,6 +725,12 @@ export function appendFailedRunToSession({
     createdAt: nowIso(),
     status: termination?.sessionStatus ?? 'failed',
     goalSnapshot,
+    provenance: {
+      kind: 'system-ui',
+      source: 'failed-run-terminal-projection',
+      runtimeRequestEligible: false,
+      liveAcceptanceEligible: false,
+    },
   };
   return {
     failedRunId,
@@ -860,9 +879,9 @@ function stableTextHash(value: string) {
 
 export function requestPayloadForTurn(session: SciForgeSession, userMessage: SciForgeMessage, references: SciForgeReference[]) {
   const hasExplicitReferences = references.length > 0;
-  const selectedRefSet = new Set(references.map((reference) => reference.ref).filter(Boolean));
+  const selectedRefSet = selectedReferenceScope(references);
   const priorMessages = session.messages.filter((message) => message.id !== userMessage.id);
-  const hasRealPriorMessages = priorMessages.some((message) => !message.id.startsWith('seed'));
+  const hasRealPriorMessages = priorMessages.some((message) => !isSeedDemoOrFixtureMessage(message));
   const hasPriorWork = hasRealPriorMessages
     || session.runs.length > 0
     || session.artifacts.length > 0
@@ -890,6 +909,53 @@ export function requestPayloadForTurn(session: SciForgeSession, userMessage: Sci
   };
 }
 
+function selectedReferenceScope(references: SciForgeReference[]) {
+  return new Set(references.flatMap(selectedReferenceAliases).filter(Boolean));
+}
+
+function selectedReferenceAliases(reference: SciForgeReference): string[] {
+  const payload = isRecord(reference.payload) ? reference.payload : {};
+  const currentReference = isRecord(payload.currentReference) ? payload.currentReference : isRecord(payload.objectReference) ? payload.objectReference : {};
+  const provenance = isRecord(currentReference.provenance) ? currentReference.provenance : {};
+  const aliases = [
+    reference.ref,
+    reference.sourceId,
+    stringField(payload.path),
+    stringField(payload.dataRef),
+    stringField(payload.ref),
+    stringField(currentReference.ref),
+    stringField(currentReference.id),
+    stringField(currentReference.artifactType),
+    stringField(provenance.path),
+    stringField(provenance.dataRef),
+  ];
+  if (reference.sourceId) aliases.push(`artifact:${reference.sourceId}`);
+  const currentId = stringField(currentReference.id);
+  if (currentId) aliases.push(`artifact:${currentId}`);
+  return Array.from(new Set(aliases.filter((value): value is string => Boolean(value && value.trim()))));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function isSeedDemoOrFixtureMessage(message: unknown) {
+  if (!isRecord(message)) return false;
+  const provenance = isRecord(message.provenance) ? message.provenance : {};
+  const marker = [
+    message.id,
+    message.role,
+    provenance.kind,
+    provenance.source,
+  ].map((value) => String(value ?? '').toLowerCase()).join(' ');
+  if (provenance.runtimeRequestEligible === false || provenance.liveAcceptanceEligible === false) return true;
+  return /\b(seed|demo|fixture)\b|scenariodemodata/.test(marker) || message.role === 'scenario';
+}
+
 function claimsForRequestPayload(claims: EvidenceClaim[]) {
   return claims.slice(0, 24).map((claim) => ({
     id: claim.id,
@@ -903,9 +969,28 @@ function claimsForRequestPayload(claims: EvidenceClaim[]) {
 
 function artifactsForRequestPayload(artifacts: RuntimeArtifact[], selectedRefs: Set<string>) {
   const scoped = selectedRefs.size > 0
-    ? artifacts.filter((artifact) => selectedRefs.has(`artifact:${artifact.id}`) || selectedRefs.has(artifact.delivery?.ref ?? ''))
+    ? artifacts.filter((artifact) => artifactMatchesSelectedRefs(artifact, selectedRefs))
     : artifacts;
   return scoped.slice(-REQUEST_PAYLOAD_ARTIFACT_LIMIT);
+}
+
+function artifactMatchesSelectedRefs(artifact: RuntimeArtifact, selectedRefs: Set<string>) {
+  return artifactReferenceAliases(artifact).some((ref) => selectedRefs.has(ref));
+}
+
+function artifactReferenceAliases(artifact: RuntimeArtifact) {
+  return [
+    artifact.id,
+    `artifact:${artifact.id}`,
+    artifact.dataRef,
+    artifact.path,
+    artifact.delivery?.ref,
+    artifact.delivery?.readableRef,
+    artifact.delivery?.rawRef,
+    stringField(artifact.metadata?.markdownRef),
+    stringField(artifact.metadata?.outputRef),
+    stringField(artifact.metadata?.artifactRef),
+  ].filter((value): value is string => Boolean(value && value.trim()));
 }
 
 function executionUnitsForRequestPayload(units: RuntimeExecutionUnit[], selectedRefs: Set<string>) {
@@ -1053,25 +1138,13 @@ function compactArtifactForRequestPayload(artifact: RuntimeArtifact): RuntimeArt
     metadata: compactRecord(artifact.metadata, 1_500),
   };
   if (artifact.data === undefined) return compacted;
-  if (artifact.dataRef || artifact.path) {
-    compacted.metadata = {
-      ...(compacted.metadata ?? {}),
-      inlineDataOmittedFromChatPayload: true,
-    };
-    delete compacted.data;
-    return compacted;
-  }
   const compactedData = compactInlineValue(artifact.data, REQUEST_PAYLOAD_INLINE_DATA_LIMIT);
-  if (compactedData.omitted) {
-    compacted.metadata = {
-      ...(compacted.metadata ?? {}),
-      inlineDataOmittedFromChatPayload: true,
-      inlineDataApproxBytes: compactedData.approxBytes,
-    };
-    delete compacted.data;
-    return compacted;
-  }
-  compacted.data = compactedData.value;
+  compacted.metadata = {
+    ...(compacted.metadata ?? {}),
+    inlineDataOmittedFromChatPayload: true,
+    inlineDataApproxBytes: compactedData.approxBytes,
+  };
+  delete compacted.data;
   return compacted;
 }
 

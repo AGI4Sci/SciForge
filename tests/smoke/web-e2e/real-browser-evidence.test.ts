@@ -95,3 +95,45 @@ test('real in-app browser evidence manifest rejects TaskSuccess=false records', 
     /TaskSuccess must be true/,
   );
 });
+
+test('real in-app browser evidence manifest rejects seed/demo/fixture evidence', async () => {
+  const manifest = await readRealBrowserEvidenceManifest();
+  assert.ok(manifest.records?.[0], 'fixture manifest must have at least one record');
+  const seeded = {
+    ...manifest,
+    records: [
+      {
+        ...manifest.records[0],
+        messageProvenance: 'seed-demo' as const,
+        seedDemoFixtureEvidenceUsed: true,
+      },
+      ...manifest.records.slice(1),
+    ],
+  };
+
+  await assert.rejects(
+    () => assertRealBrowserEvidenceManifest(seeded),
+    /seed\/demo\/fixture evidence|messageProvenance must prove live Runtime Codex DOM provenance/,
+  );
+});
+
+test('real in-app browser evidence manifest requires DOM-level live provenance', async () => {
+  const manifest = await readRealBrowserEvidenceManifest();
+  assert.ok(manifest.records?.[0], 'fixture manifest must have at least one record');
+  const missingDomProvenance = {
+    ...manifest,
+    records: [
+      {
+        ...manifest.records[0],
+        messageProvenance: 'live-runtime-codex' as const,
+        domEvidence: ['visible answer text only'],
+      },
+      ...manifest.records.slice(1),
+    ],
+  };
+
+  await assert.rejects(
+    () => assertRealBrowserEvidenceManifest(missingDomProvenance),
+    /DOM evidence must include live Runtime Codex message provenance/,
+  );
+});

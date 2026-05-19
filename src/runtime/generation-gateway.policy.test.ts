@@ -13,6 +13,7 @@ import {
   STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS,
   STAGE_ARTIFACT_MUTATION_FAST_PATH,
   STAGE_CAPABILITY_PROVIDER_PREFLIGHT,
+  STAGE_CODEX_RUNTIME_BRIDGE,
   STAGE_CONVERSATION_POLICY,
   STAGE_DIRECT_CONTEXT_FAST_PATH,
   STAGE_LOCAL_CODE_DEBUG_RUNTIME,
@@ -265,6 +266,7 @@ test('gateway pipeline audit records stage sequence and replayable registry orde
         STAGE_DIRECT_CONTEXT_FAST_PATH,
         STAGE_ARTIFACT_MUTATION_FAST_PATH,
         STAGE_RUNTIME_EXECUTION_CONSTRAINTS,
+        STAGE_CODEX_RUNTIME_BRIDGE,
         STAGE_VISION_SENSE_RUNTIME,
         STAGE_LOCAL_CODE_DEBUG_RUNTIME,
         STAGE_LOCAL_METHODOLOGY_FINALIZER_RUNTIME,
@@ -276,7 +278,7 @@ test('gateway pipeline audit records stage sequence and replayable registry orde
     );
     assert.deepEqual(
       stageAudits.map((event) => event.raw.shortCircuit),
-      [false, false, false, false, false, false, false, false, false, false, false, false, false, true],
+      [false, false, false, false, false, false, false, false, false, false, false, false, false, false, true],
     );
     const dispatchAudit = stageAudits.at(-1);
     assert.equal(dispatchAudit.raw.stage, STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS);

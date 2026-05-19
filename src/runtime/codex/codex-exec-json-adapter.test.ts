@@ -37,20 +37,21 @@ test('adapter spawns codex exec --json with isolated CODEX_HOME and plain text c
 
   assert.equal(spawnCall?.[0], 'codex');
   const argv = spawnCall?.[1] ?? [];
-  assert.deepEqual(argv.slice(0, 2), ['exec', '--json']);
+  assert.ok(argv.includes('exec'));
+  assert.ok(argv.includes('--json'));
   assert.ok(argv.includes('--skip-git-repo-check'));
   assert.ok(argv.includes('--ignore-rules'));
+  assert.ok(argv.includes('--sandbox'));
+  assert.equal(argv[(argv.indexOf('--sandbox') ?? -2) + 1], 'workspace-write');
+  assert.ok(argv.includes('--ask-for-approval'));
+  assert.equal(argv[(argv.indexOf('--ask-for-approval') ?? -2) + 1], 'never');
   await assert.rejects(access(join(workspace, '.git')));
   assert.ok(argv.includes(`mcp_servers.${GUI_MCP_SERVER_NAME}.command="node"`));
   assert.ok(argv.some((arg) => arg.startsWith(`mcp_servers.${GUI_MCP_SERVER_NAME}.args=`) && arg.includes('gui-mcp-server.ts')));
   assert.ok(argv.includes(`mcp_servers.${GUI_MCP_SERVER_NAME}.env.${GUI_EXTENSION_STATE_ENV}="${guiStatePath}"`));
-  assert.deepEqual(argv.slice(-5), [
-    '--profile',
-    RUNTIME_PROFILE,
-    '--cd',
-    workspace,
-    'Summarize the workspace',
-  ]);
+  assert.equal(argv[argv.indexOf('--profile') + 1], RUNTIME_PROFILE);
+  assert.equal(argv[argv.indexOf('--cd') + 1], workspace);
+  assert.deepEqual(argv.slice(-5), ['exec', '--json', '--skip-git-repo-check', '--ignore-rules', 'Summarize the workspace']);
   assert.equal(argv.filter((arg) => arg === 'Summarize the workspace').length, 1);
   assert.match(spawnCall?.[2].env.CODEX_HOME ?? '', /packages\/backend\/\.codex-runtime\/codex-home$/);
   assert.equal(events.find((event) => event.type === 'message')?.text, 'OK');
@@ -147,12 +148,14 @@ test('adapter resumes native Codex session when codexSessionId is provided', asy
   assert.equal(spawnCall?.[0], 'codex');
   const argv = spawnCall?.[1] ?? [];
   assert.ok(argv.includes(`mcp_servers.${GUI_MCP_SERVER_NAME}.command="node"`));
+  assert.ok(argv.includes('--sandbox'));
+  assert.equal(argv[(argv.indexOf('--sandbox') ?? -2) + 1], 'workspace-write');
+  assert.ok(argv.includes('--ask-for-approval'));
+  assert.equal(argv[(argv.indexOf('--ask-for-approval') ?? -2) + 1], 'never');
   await assert.rejects(access(join(workspace, '.git')));
-  assert.deepEqual(argv.slice(-11), [
-    '--profile',
-    RUNTIME_PROFILE,
-    '--cd',
-    workspace,
+  assert.equal(argv[argv.indexOf('--profile') + 1], RUNTIME_PROFILE);
+  assert.equal(argv[argv.indexOf('--cd') + 1], workspace);
+  assert.deepEqual(argv.slice(-7), [
     'exec',
     'resume',
     '--json',

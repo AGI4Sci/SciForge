@@ -12,13 +12,17 @@ function lowerField(value: unknown) {
   return stringField(value)?.toLowerCase() ?? '';
 }
 
+function lowerRecordField(record: Record<string, unknown>, key: string) {
+  return lowerField(record[key]);
+}
+
 export function isRuntimeAuditOnlyEvent(value: unknown): boolean {
   const record = isRecord(value) ? value : {};
   const raw = isRecord(record.raw) ? record.raw : {};
   const type = lowerField(record.type ?? record.kind);
   const rawType = lowerField(raw.type ?? raw.kind);
   const status = lowerField(record.status);
-  const rawStatus = lowerField(raw.status);
+  const rawStatus = lowerRecordField(raw, 'status');
   const role = lowerField(record.presentationRole ?? record.role ?? record.displayRole);
   const rawRole = lowerField(raw.presentationRole ?? raw.role ?? raw.displayRole);
   const stream = lowerField(record.stream ?? raw.stream);
@@ -62,7 +66,7 @@ export function runtimeAuditOnlyEventSummary(value: unknown): string {
     record.status,
     record.source,
     raw.type,
-    raw.status,
+    lowerRecordField(raw, 'status'),
     raw.stream,
     raw.message,
     raw.chunk,

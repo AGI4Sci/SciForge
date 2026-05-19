@@ -1,0 +1,160 @@
+- complementary:
+  - generic: BA
+  - button "导航":
+  - generic: 导航
+  - button "收起侧栏":
+  - navigation:
+    - button "研究概览":
+      - generic: 研究概览
+    - button "聊天工作台":
+      - generic: 聊天工作台
+    - button "组件工作台":
+      - generic: 组件工作台
+    - button "研究时间线":
+      - generic: 研究时间线
+    - button "反馈收件箱":
+      - generic: 反馈收件箱
+  - button "新建文件":
+  - button "新建文件夹":
+  - button "刷新":
+  - button "全部折叠":
+  - tree "工作区文件树":
+    - status: 已加载 7 项
+    - treeitem "折叠 p6" [expanded]:
+      - button "折叠":
+      - generic: p6
+    - treeitem "展开 .sciforge":
+      - button "展开":
+      - generic: .sciforge
+    - treeitem "展开 artifacts:p6-mini-grant":
+      - button "展开":
+      - generic: artifacts:p6-mini-grant
+    - treeitem "展开 generic-eval":
+      - button "展开":
+      - generic: generic-eval
+    - treeitem "展开 p6-generic-closure":
+      - button "展开":
+      - generic: p6-generic-closure
+    - treeitem "展开 p6-mini-grant":
+      - button "展开":
+      - generic: p6-mini-grant
+    - treeitem "展开 research-package":
+      - button "展开":
+      - generic: research-package
+    - treeitem "research-package.md":
+      - generic: research-package.md
+    - generic "打开其他文件夹…"
+  - separator "拖拽调整左侧栏宽度"
+- banner:
+  - textbox "搜索文件、报告、运行、问题..."
+  - generic: SciForge · ready
+  - button "切换白天模式":
+    - text: 切换白天模式
+  - button "设置":
+    - text: 设置
+- main:
+  - button "SciForge 工作台":
+    - generic: SciForge 工作台
+  - generic "感官插件":
+    - button "vision-sense on" [pressed]:
+      - generic: vision-sense
+      - generic: "on"
+  - strong: Ask SciForge
+  - generic: sciforge-runtime-deepseek
+  - generic: native
+  - generic: bailian/deepseek-v4-flash
+  - generic: 在线
+  - generic: 7 archived
+  - generic "选择下一次 Runtime Codex 运行使用的兼容 backend 标识":
+    - generic: runtime
+    - combobox "runtime":
+      - option "Codex" [selected]
+      - option "OpenTeam"
+      - option "Claude Code"
+      - option "Hermes"
+      - option "OpenClaw"
+      - option "Gemini"
+  - button "开启新聊天":
+    - text: 开启新聊天
+  - button "历史会话":
+    - text: 历史会话
+  - button "导出当前聊天":
+    - text: 导出当前聊天
+  - button "删除当前聊天":
+    - text: 删除当前聊天
+  - generic "chat-composer":
+    - generic: user-authored
+  - generic "Projection verification fail":
+    - generic: "Verification: 未通过"
+  - button "复制"
+  - button "编辑"
+  - paragraph: "P6 adversarial live browser turn 1, scenario id p6-rotor-thermal-20260519. This is not a fixture: design a validation artifact package for a small wind-tunnel rotor thermal drift experiment. Create/write an artifact file named p6-rotor-thermal-drift/validation-plan.md. Hard requirements: token=P6-THERMAL-NOVEL-7Q4Z; sensors=two thermistors and one tachometer; sample windows=12 runs of 90 seconds; output metrics=drift slope, RPM stability, and sensor disagreement; include sections Scope, Data Columns, Acceptance Rubric, Failure Recovery. The visible final answer must name the artifact path, list the active hard requirements, and state that no hardcoded shortcut or fixture answer was used."
+  - strong: SciForge
+  - generic "run:codex-command-mpcf3797-g575sh · Normalized from a live Runtime Codex/workspace stream result.":
+    - generic: live Runtime Codex
+  - button "run codex-co"
+  - generic: 78%
+  - generic: 计算预测
+  - generic: 推断
+  - generic "Projection verification fail":
+    - generic: "Verification: 未通过"
+  - generic: failed
+  - button "复制"
+  - button "编辑"
+  - paragraph: Runtime Codex 运行未完成；失败 run、审计 refs 和恢复状态已保留。
+  - generic "本轮关键信息":
+    - strong: 本轮结果
+    - generic: 0 objects · 1 claims
+    - paragraph: 本轮没有生成新的可预览对象。 已提取 1 条判断。 过程记录已折叠在下方。
+    - paragraph:
+      - generic: 判断：Runtime Codex 运行未完成；失败 run、审计 refs 和恢复状态已保留。
+      - generic: prediction · confidence 78%
+  - generic "按顺序记录的工作过程":
+    - generic "Received P6 adversarial live browser turn 1, scenario id p6-rotor-thermal-20260519. This is not a fixtur...":
+      - generic: Received
+      - generic: P6 adversarial live browser turn 1, scenario id p6-rotor-thermal-20260519. This is not a fixtur...
+    - generic "RunFailed Runtime Codex failed with exit code 1. repair-needed · 2026-05-19T09:17:01.273Z":
+      - generic: RunFailed
+      - generic: Runtime Codex failed with exit code 1.
+      - generic: repair-needed · 2026-05-19T09:17:01.273Z
+  - generic: action
+  - generic: 输入研究问题后即可运行；Shift+Enter 换行，Enter 发送。
+  - code: literature-evidence-review@1.0.0
+  - button "输入研究问题，或点选对象后继续追问...":
+    - generic: 输入研究问题，或点选对象后继续追问...
+  - separator "调整聊天区和结果区宽度"
+  - button "向右收缩结果面板":
+  - tablist:
+    - tab "结果视图 结果视图" [selected]:
+      - generic: 结果视图
+      - text: 结果视图
+    - tab "证据矩阵 证据矩阵":
+      - generic: 证据矩阵
+      - text: 证据矩阵
+  - generic "结果区 focus mode":
+    - button "全部"
+    - button "只看图"
+    - button "只看证据"
+    - button "只看执行单元"
+  - strong: 当前聚焦 run
+  - generic: codex-command-mpcf3797-g575sh · failed · literature-evidence-review@1.0.0
+  - button "取消高亮"
+  - heading "结果视图" [level=2]
+  - paragraph: 优先展示用户本轮要看的结果；更多内容默认收起
+  - heading "运行需要恢复" [level=2]
+  - paragraph: codex-command-mpcf3797-g575sh · recoverable
+  - generic: Runtime Codex exited with code 1.
+  - generic: 当前阶段：Runtime Codex failed with exit code 1. · RunFailed
+  - code: safe · Retry or continue from this failed Runtime Codex run with the preserved command id, attempt id, profile, workspace, and audit refs.
+  - code: safe · Inspect folded audit/debug refs before rerunning if the same profile or workspace may fail again.
+  - code: Retry or continue from this failed Runtime Codex run with the preserved command id, attempt id, profile, workspace, and audit refs.
+  - code: Inspect folded audit/debug refs before rerunning if the same profile or workspace may fail again.
+  - generic: Runtime Codex exited with code 1.
+  - button "Retry or continue from this failed Runtime Codex run with the preserved command id, attempt id, profile, workspace, and audit refs."
+  - button "Inspect folded audit/debug refs before rerunning if the same profile or workspace may fail again."
+  - generic "查看运行细节 1 EU":
+    - generic: 查看运行细节
+    - generic: 1 EU
+  - generic "视图状态 1 modules":
+    - generic: 视图状态
+    - generic: 1 modules

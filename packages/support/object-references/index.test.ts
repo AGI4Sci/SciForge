@@ -136,6 +136,25 @@ assert.equal(pathForObjectReference(reportObject, { artifacts: [reportArtifact] 
 assert.equal(referenceForArtifact(reportArtifact, 'file').ref, 'file:.sciforge/artifacts/run/research-report.md');
 assert.equal(artifactReferenceKind(reportArtifact, 'report-viewer'), 'file');
 
+const newerReportArtifact: RuntimeArtifact = {
+  ...reportArtifact,
+  id: 'research-report-newer',
+  dataRef: '.sciforge/task-results/newer-output.json',
+  metadata: {
+    ...reportArtifact.metadata,
+    markdownRef: '.sciforge/artifacts/newer/research-report.md',
+    outputRef: '.sciforge/task-results/newer-output.json',
+  },
+};
+assert.equal(
+  artifactForObjectReference(reportObject, { artifacts: [newerReportArtifact, reportArtifact] })?.id,
+  'research-report',
+);
+assert.equal(
+  pathForObjectReference(reportObject, { artifacts: [newerReportArtifact, reportArtifact] }),
+  '.sciforge/artifacts/run/research-report.md',
+);
+
 const normalizedResponseRefs = normalizeResponseObjectReferences({
   objectReferences: [{
     ref: 'artifact:research-report',

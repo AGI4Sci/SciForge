@@ -511,11 +511,12 @@ function assertCodexRuntimeStreamRequestBoundary(request: ReturnType<typeof buil
 
 function buildCodexRuntimeCommandText(input: Parameters<typeof buildCodexRuntimeStreamRequest>[0]) {
   const prompt = input.input.prompt.trim();
-  const refs = input.referenceSummary
-    .map((reference) => asString(reference.ref) || asString(reference.path) || asString(reference.dataRef) || asString(reference.id))
-    .filter((value): value is string => Boolean(value));
+  const refs = uniqueRuntimeStringList(input.referenceSummary.flatMap((reference) => {
+    const readableRefs = [reference.dataRef, reference.path, reference.ref].filter((value): value is string => Boolean(asString(value)));
+    return readableRefs.length ? readableRefs : [reference.id];
+  })).slice(0, 12);
   if (!refs.length) return prompt;
-  const refFlags = refs.slice(0, 12).map((ref) => `--ref ${quoteTerminalArg(ref)}`).join(' ');
+  const refFlags = refs.map((ref) => `--ref ${quoteTerminalArg(ref)}`).join(' ');
   return `ask ${refFlags} ${quoteTerminalArg(prompt)}`;
 }
 

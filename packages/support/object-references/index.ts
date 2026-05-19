@@ -210,9 +210,28 @@ export function findArtifact(session: Pick<ObjectReferenceSessionLike, 'artifact
     || Object.values(artifact.metadata ?? {}).some((value) => value === ref));
 }
 
+function findArtifactByDurableRef(session: Pick<ObjectReferenceSessionLike, 'artifacts'>, ref?: string): RuntimeArtifact | undefined {
+  if (!ref) return undefined;
+  const normalizedRef = normalizeArtifactRef(ref);
+  return session.artifacts.find((artifact) => artifact.id === ref
+    || artifact.id === normalizedRef
+    || artifact.dataRef === ref
+    || artifact.dataRef === normalizedRef
+    || artifact.path === ref
+    || artifact.delivery?.ref === ref
+    || artifact.delivery?.readableRef === ref
+    || artifact.delivery?.rawRef === ref
+    || artifact.metadata?.markdownRef === ref
+    || artifact.metadata?.outputRef === ref
+    || artifact.metadata?.artifactRef === ref);
+}
+
 export function artifactForObjectReference(reference: ObjectReference, session: Pick<ObjectReferenceSessionLike, 'artifacts'>): RuntimeArtifact | undefined {
   if (reference.kind !== 'artifact') return undefined;
-  return findArtifact(session, reference.ref)
+  return findArtifactByDurableRef(session, reference.ref)
+    ?? findArtifactByDurableRef(session, reference.provenance?.path)
+    ?? findArtifactByDurableRef(session, reference.provenance?.dataRef)
+    ?? findArtifact(session, reference.ref)
     ?? findArtifact(session, reference.artifactType)
     ?? session.artifacts.find((artifact) => artifact.id === reference.id || artifact.type === reference.artifactType);
 }
@@ -220,9 +239,9 @@ export function artifactForObjectReference(reference: ObjectReference, session: 
 export function pathForObjectReference(reference: ObjectReference, session: Pick<ObjectReferenceSessionLike, 'artifacts'>): string | undefined {
   const artifact = artifactForObjectReference(reference, session);
   if (artifact) {
-    return preferredArtifactPath(artifact)
-      || reference.provenance?.path
-      || reference.provenance?.dataRef;
+    return reference.provenance?.path
+      || reference.provenance?.dataRef
+      || preferredArtifactPath(artifact);
   }
   if (reference.kind === 'file' || reference.kind === 'folder') return reference.ref.replace(/^(file|folder)::?/i, '');
   if (reference.kind === 'url') return reference.ref.replace(/^url:/i, '');

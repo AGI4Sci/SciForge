@@ -1,0 +1,54 @@
+{
+  "schemaVersion": "sciforge.parallel.p6.adversarial-browser.v1",
+  "date": "2026-05-19",
+  "instanceId": "p6",
+  "ports": {
+    "ui": "http://127.0.0.1:5178/",
+    "workspaceWriter": "http://127.0.0.1:6178",
+    "runtimeCodex": "http://127.0.0.1:18085"
+  },
+  "workspace": "/Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p6",
+  "stateDir": "/Applications/workspace/ailab/research/app/SciForge/.sciforge/parallel/p6",
+  "scenario": {
+    "id": "p6-rotor-thermal-20260519",
+    "kind": "adversarial-live-browser-artifact",
+    "fixture": false,
+    "token": "P6-THERMAL-NOVEL-7Q4Z",
+    "requestedArtifact": "p6-rotor-thermal-drift/validation-plan.md"
+  },
+  "command": {
+    "id": "codex-command-mpcf3797-g575sh",
+    "attemptId": "codex-command-mpcf3797-g575sh-attempt-1",
+    "status": "failed",
+    "recoverStateVisibleAfterReload": true
+  },
+  "verdict": {
+    "multiTurn": "blocked",
+    "artifactCreated": false,
+    "refreshRecovery": "partial-pass",
+    "notes": "The same failed Runtime Codex run stayed visible after reload, but no visible second-turn or third-turn answer was observed."
+  },
+  "evidence": [
+    "default-chat-initial-dom.txt",
+    "default-chat-initial.png",
+    "turn1-prompt.txt",
+    "turn1-after-submit-dom.txt",
+    "turn1-after-submit.png",
+    "turn1-terminal-dom.txt",
+    "turn1-terminal.png",
+    "turn1-reload-dom.txt",
+    "turn1-reload.png",
+    "p6-adversarial-browser-report.md",
+    "worktree-continuation-initial-dom.txt",
+    "worktree-continuation-initial.png"
+  ],
+  "continuation": {
+    "worktree": "/Applications/workspace/ailab/research/app/SciForge-p6-adversarial-browser",
+    "branch": "codex/parallel-p6-adversarial-browser-cont",
+    "smokeBrowserMultiturn": "passed",
+    "smokeComplexMultiturnChat": "passed",
+    "smokeRuntimeCodexBrowserAcceptance": "blocked: SCIFORGE_RUNTIME_API_KEY is not configured",
+    "gitDiffCheck": "passed"
+  },
+  "sessionBundle": "workspace/parallel/p6/.sciforge/sessions/2026-05-19_literature-evidence-review_session-literature-evidence-review-mpcf2d4o-7bq3ri"
+}

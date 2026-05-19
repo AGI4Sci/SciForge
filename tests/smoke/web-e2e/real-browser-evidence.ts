@@ -19,6 +19,8 @@ export type RealBrowserEvidenceRecord = {
   prompt?: string;
   selectedRefs?: string[];
   requestSummary?: string;
+  messageProvenance?: 'live-runtime-codex' | 'seed-demo' | 'fixture' | 'unknown';
+  seedDemoFixtureEvidenceUsed?: boolean;
   domEvidence?: string[];
   consoleSummary?: string;
   networkSummary?: string;
@@ -89,7 +91,22 @@ export async function assertRealBrowserEvidenceManifest(
     assert.ok(record.runId?.trim(), `${record.id}: runId is required`);
     assert.ok(record.prompt?.trim(), `${record.id}: prompt is required`);
     assert.ok(record.requestSummary?.trim(), `${record.id}: requestSummary is required`);
+    assert.notEqual(record.seedDemoFixtureEvidenceUsed, true, `${record.id}: seed/demo/fixture evidence cannot satisfy live browser acceptance`);
+    assert.ok(
+      record.messageProvenance === undefined || record.messageProvenance === 'live-runtime-codex',
+      `${record.id}: messageProvenance must be live-runtime-codex when recorded`,
+    );
     assert.ok((record.domEvidence ?? []).length > 0, `${record.id}: DOM evidence is required`);
+    if (record.messageProvenance === 'live-runtime-codex') {
+      assert.ok(
+        (record.domEvidence ?? []).some((item) => /data-message-provenance=["']live-runtime-codex["']|messageProvenance=live-runtime-codex|message-provenance:live-runtime-codex/i.test(item)),
+        `${record.id}: DOM evidence must include live Runtime Codex message provenance`,
+      );
+      assert.ok(
+        (record.domEvidence ?? []).some((item) => /data-live-acceptance-eligible=["']true["']|liveAcceptanceEligible=true|live-acceptance-eligible:true/i.test(item)),
+        `${record.id}: DOM evidence must include live acceptance eligibility`,
+      );
+    }
     assert.ok(typeof record.consoleSummary === 'string', `${record.id}: console summary is required`);
     assert.ok(typeof record.networkSummary === 'string', `${record.id}: network summary is required`);
     assert.ok(record.timing && typeof record.timing === 'object', `${record.id}: timing is required`);

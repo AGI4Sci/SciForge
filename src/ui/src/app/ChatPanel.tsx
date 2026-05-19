@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { scenarios, type ScenarioId } from '../data';
 import { SCENARIO_SPECS } from '@sciforge/scenario-core/scenario-specs';
-import { buildSilentStreamRunId, guidanceQueuedEvent, userInterruptEvent } from '@sciforge-ui/runtime-contract';
+import { buildSilentStreamRunId, guidanceQueuedEvent, isLiveRuntimeCodexMessage, isSeedDemoOrFixtureMessage, userInterruptEvent } from '@sciforge-ui/runtime-contract';
 import { estimateContextWindowState, latestContextWindowState } from '../contextWindow';
 import { builtInScenarioPackageRef } from '@sciforge/scenario-core/scenario-package';
 import { builtInScenarioIdForRuntimeInput } from '@sciforge/scenario-core/scenario-routing-policy';
@@ -73,6 +73,23 @@ interface ReferenceContextMenuState {
 
 function builtInScenarioIdForInstance(scenarioId: ScenarioInstanceId, scenarioOverride?: ScenarioRuntimeOverride): ScenarioId {
   return builtInScenarioIdForRuntimeInput({ scenarioId, scenarioOverride });
+}
+
+function messageProvenanceKind(message: SciForgeMessage) {
+  if (isLiveRuntimeCodexMessage(message)) return 'live-runtime-codex';
+  return message.provenance?.kind
+    ?? (message.role === 'user' ? 'user-authored' : message.role === 'system' ? 'system-ui' : 'seed-demo');
+}
+
+function MessageProvenanceBadge({ message }: { message: SciForgeMessage }) {
+  const kind = messageProvenanceKind(message);
+  if (isLiveRuntimeCodexMessage(message)) return <Badge variant="success">live Runtime Codex</Badge>;
+  if (isSeedDemoOrFixtureMessage(message)) {
+    return <Badge variant={kind === 'fixture' ? 'muted' : 'warning'}>{kind === 'fixture' ? 'fixture' : 'seed-demo'}</Badge>;
+  }
+  if (kind === 'user-authored') return <Badge variant="info">user-authored</Badge>;
+  if (kind === 'system-ui') return <Badge variant="muted">system UI</Badge>;
+  return <Badge variant="muted">{kind}</Badge>;
 }
 
 export function ChatPanel({
@@ -896,11 +913,16 @@ export function ChatPanel({
         {visibleMessages.map((message, visibleIndex) => {
           const index = visibleMessageStart + visibleIndex;
           const messageRunId = runIdForMessage(message, index, messages, session.runs);
+          const provenanceKind = messageProvenanceKind(message);
           return (
           <div
             key={message.id}
             className={cx('message', message.role, activeRunId && messageRunId === activeRunId && 'active-run')}
             data-testid="chat-message"
+            data-message-id={message.id}
+            data-message-provenance={provenanceKind}
+            data-runtime-request-eligible={message.provenance?.runtimeRequestEligible === true ? 'true' : 'false'}
+            data-live-acceptance-eligible={isLiveRuntimeCodexMessage(message) ? 'true' : 'false'}
             data-session-id={session.sessionId}
             data-run-id={messageRunId}
             data-sciforge-reference={sciForgeReferenceAttribute(referenceForMessage(message, messageRunId))}
@@ -916,6 +938,7 @@ export function ChatPanel({
                 {message.confidence ? <ConfidenceBar value={message.confidence} /> : null}
                 {message.evidence ? <EvidenceTag level={message.evidence} /> : null}
                 {message.claimType ? <ClaimTag type={message.claimType} /> : null}
+                <MessageProvenanceBadge message={message} />
                 <RunVerificationTag session={session} runId={messageRunId} />
                 {message.status === 'failed' ? <Badge variant="danger">failed</Badge> : null}
                 {message.guidanceQueue ? <Badge variant={guidanceBadgeVariant(message.guidanceQueue.status)}>{guidanceStatusLabel(message.guidanceQueue.status)}</Badge> : null}

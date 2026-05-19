@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 
 import type { AgentStreamEvent, PeerInstance, SciForgeConfig, SciForgeSession } from '../../domain';
+import { CODEX_RUNTIME_STREAM_PATH } from '../../api/sciforgeToolsClient';
 import {
   TARGET_ISSUE_LOOKUP_FAILED_EVENT_TYPE,
   TARGET_ISSUE_READ_EVENT_TYPE,
@@ -25,7 +26,7 @@ afterEach(() => {
 describe('runPromptOrchestrator target instance guard', () => {
   it('does not dispatch AgentServer or repair current instance when target issue bundle lookup fails', async () => {
     const fetched: string[] = [];
-    globalThis.fetch = (async (input: string | URL | Request) => {
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
       fetched.push(url);
       return jsonResponse({ ok: false, error: 'feedback issue not found: feedback-missing' }, 404);
@@ -63,7 +64,8 @@ describe('runPromptOrchestrator target instance guard', () => {
   });
 
   it('emits target issue repair handoff events through runtime contract projection', async () => {
-    globalThis.fetch = (async (input: string | URL | Request) => {
+    const runtimeRequests: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
       if (url.startsWith('http://127.0.0.1:6274/api/sciforge/feedback/issues/feedback-1')) {
         return jsonResponse({
@@ -76,7 +78,8 @@ describe('runPromptOrchestrator target instance guard', () => {
           },
         });
       }
-      if (url === 'http://127.0.0.1:5174/api/sciforge/tools/run/stream') {
+      if (url === `http://127.0.0.1:5174${CODEX_RUNTIME_STREAM_PATH}`) {
+        runtimeRequests.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
         return streamResponse([{
           result: {
             message: 'Repair completed.',
@@ -95,7 +98,11 @@ describe('runPromptOrchestrator target instance guard', () => {
       onStreamEvent: (event) => events.push(event),
     }));
 
-    assert.equal(result.status, 'completed');
+    assert.equal(result.status, 'completed', result.status === 'failed' ? result.message : undefined);
+    assert.equal(runtimeRequests.length, 1);
+    assert.equal(runtimeRequests[0]?.commandText, '修复 B 的 feedback #feedback-1');
+    const runtimeAudit = runtimeRequests[0]?.auditMetadata as { guiLocalProjection?: { refs?: string[] } };
+    assert.equal(runtimeAudit.guiLocalProjection?.refs?.includes('artifact:feedback-1'), false);
     assert.deepEqual(
       events
         .filter((event) => event.type.startsWith('target-'))
@@ -210,14 +217,24 @@ describe('runPromptOrchestrator target instance guard', () => {
       prompt,
       baseSession: session,
       activeSession: () => session,
+      references: [{
+        id: 'ref-research-report',
+        kind: 'task-result',
+        title: 'research-report',
+        ref: 'artifact:research-report',
+        payload: { dataRef: '.sciforge/sessions/session-test/task-results/research-report.md' },
+      }],
     }));
 
     assert.equal(result.status, 'completed');
     assert.equal(requestBodies.length, 1);
-    assert.equal(requestBodies[0].prompt, prompt);
-    assert.equal((requestBodies[0].uiState as { rawUserPrompt?: string }).rawUserPrompt, prompt);
-    assert.equal((requestBodies[0].uiState as { agentDispatchPolicy?: string }).agentDispatchPolicy, 'runtime-policy-decides');
-    assert.equal((requestBodies[0].artifacts as Array<{ id?: string }>)[0]?.id, 'research-report');
+    assert.equal(requestBodies[0].commandText, `ask --ref ".sciforge/sessions/session-test/task-results/research-report.md" --ref "artifact:research-report" "${prompt}"`);
+    assert.equal('prompt' in requestBodies[0], false);
+    assert.equal('uiState' in requestBodies[0], false);
+    assert.equal('artifacts' in requestBodies[0], false);
+    const audit = requestBodies[0].auditMetadata as { guiLocalProjection?: { selectedRefCount?: number; refs?: string[] } };
+    assert.equal(audit.guiLocalProjection?.selectedRefCount, 1);
+    assert.equal(audit.guiLocalProjection?.refs?.includes('artifact:research-report'), true);
     assert.equal(result.finalResponse.message.content, 'Backend rendered report follow-up.');
     assert.equal(result.finalResponse.executionUnits[0]?.tool, 'capability.report.followup');
     assert.notEqual(result.finalResponse.executionUnits[0]?.tool, 'sciforge.existing-artifact-followup');
@@ -260,15 +277,24 @@ describe('runPromptOrchestrator target instance guard', () => {
       prompt,
       baseSession: session,
       activeSession: () => session,
+      references: [{
+        id: 'ref-volcano-plot',
+        kind: 'task-result',
+        title: 'volcano-plot',
+        ref: 'artifact:volcano-plot',
+        payload: { dataRef: '.sciforge/sessions/session-test/task-results/volcano-plot.json' },
+      }],
     }));
 
     assert.equal(result.status, 'completed');
     assert.equal(requestBodies.length, 1);
-    assert.equal(requestBodies[0].prompt, prompt);
-    assert.equal((requestBodies[0].uiState as { rawUserPrompt?: string }).rawUserPrompt, prompt);
-    assert.equal((requestBodies[0].uiState as { agentDispatchPolicy?: string }).agentDispatchPolicy, 'runtime-policy-decides');
-    assert.equal((requestBodies[0].artifacts as Array<{ id?: string; type?: string }>)[0]?.id, 'volcano-plot');
-    assert.equal((requestBodies[0].artifacts as Array<{ id?: string; type?: string }>)[0]?.type, 'figure');
+    assert.equal(requestBodies[0].commandText, `ask --ref ".sciforge/sessions/session-test/task-results/volcano-plot.json" --ref "artifact:volcano-plot" "${prompt}"`);
+    assert.equal('prompt' in requestBodies[0], false);
+    assert.equal('uiState' in requestBodies[0], false);
+    assert.equal('artifacts' in requestBodies[0], false);
+    const audit = requestBodies[0].auditMetadata as { guiLocalProjection?: { selectedRefCount?: number; refs?: string[] } };
+    assert.equal(audit.guiLocalProjection?.selectedRefCount, 1);
+    assert.equal(audit.guiLocalProjection?.refs?.includes('artifact:volcano-plot'), true);
     assert.equal(result.finalResponse.message.content, 'Backend inspected artifact follow-up.');
     assert.equal(result.finalResponse.executionUnits[0]?.tool, 'capability.artifact.followup');
     assert.notEqual(result.finalResponse.executionUnits[0]?.tool, 'sciforge.existing-artifact-followup');
@@ -307,22 +333,17 @@ describe('runPromptOrchestrator target instance guard', () => {
       activeSession: () => session,
     }));
 
-    const failureRecoveryPolicy = requestBodies[0]?.failureRecoveryPolicy as {
-      mode?: string;
-      priorFailureReason?: string;
-      recoverActions?: string[];
-      attemptHistory?: Array<{ id?: string; tool?: string; status?: string; failureReason?: string }>;
-    };
     assert.equal(result.status, 'completed');
     assert.equal(requestBodies.length, 1);
-    assert.equal(requestBodies[0].prompt, prompt);
-    assert.equal((requestBodies[0].uiState as { rawUserPrompt?: string }).rawUserPrompt, prompt);
-    assert.equal((requestBodies[0].uiState as { agentDispatchPolicy?: string }).agentDispatchPolicy, 'runtime-policy-decides');
-    assert.equal(failureRecoveryPolicy.mode, 'preserve-context');
-    assert.match(failureRecoveryPolicy.priorFailureReason ?? '', /schema validation failed/);
-    assert.deepEqual(failureRecoveryPolicy.recoverActions, ['Regenerate the report artifact with schemaVersion=1.']);
-    assert.equal(failureRecoveryPolicy.attemptHistory?.[0]?.tool, 'capability.report.generate');
-    assert.deepEqual((requestBodies[0].uiState as { failureRecoveryPolicy?: unknown }).failureRecoveryPolicy, requestBodies[0].failureRecoveryPolicy);
+    assert.equal(requestBodies[0].commandText, prompt);
+    assert.equal('prompt' in requestBodies[0], false);
+    assert.equal('uiState' in requestBodies[0], false);
+    assert.equal('failureRecoveryPolicy' in requestBodies[0], false);
+    const audit = requestBodies[0].auditMetadata as { guiLocalProjection?: { refs?: string[]; counts?: { runRefs?: number; executionUnitRefs?: number } } };
+    assert.equal(audit.guiLocalProjection?.refs?.includes('run:run-failed-report'), true);
+    assert.equal(audit.guiLocalProjection?.refs?.includes('execution-unit:unit-failed-report'), true);
+    assert.equal(audit.guiLocalProjection?.counts?.runRefs, 1);
+    assert.equal(audit.guiLocalProjection?.counts?.executionUnitRefs, 1);
     assert.equal(result.finalResponse.message.content, 'Backend repaired the failed run.');
     assert.equal(result.finalResponse.executionUnits[0]?.tool, 'capability.failure.repair');
     assert.equal(result.finalResponse.executionUnits.some((unit) => unit.status === 'self-healed'), false);

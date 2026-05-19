@@ -163,6 +163,42 @@ test('Runtime Codex stream request resumes from persisted nested Runtime Codex s
   assert.equal(bodies[0]?.codexSessionId, previousCodexSessionId);
 });
 
+test('Runtime Codex stream request carries selected artifact dataRef before short artifact ref', async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies: Array<Record<string, unknown>> = [];
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+      return new Response([
+        'event: done\n',
+        'data: {"type":"done","status":"done","message":"ok"}\n\n',
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      references: [{
+        id: 'ref-report',
+        kind: 'task-result',
+        title: 'Report',
+        ref: 'artifact:report-1',
+        payload: {
+          dataRef: '.sciforge/sessions/session-live/task-results/report.md',
+          selectedText: 'ARTIFACT_BODY_SHOULD_NOT_LEAK',
+        },
+      }],
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const commandText = String(bodies[0]?.commandText ?? '');
+  assert.equal(commandText.includes('--ref ".sciforge/sessions/session-live/task-results/report.md"'), true);
+  assert.equal(commandText.includes('--ref "artifact:report-1"'), true);
+  assert.equal(commandText.indexOf('task-results/report.md') < commandText.indexOf('artifact:report-1'), true);
+  assert.doesNotMatch(commandText, /ARTIFACT_BODY_SHOULD_NOT_LEAK/);
+});
+
 test('Runtime Codex stream request excludes selected seed and fixture refs from command text and audit refs', async () => {
   const originalFetch = globalThis.fetch;
   const bodies: Array<Record<string, unknown>> = [];
