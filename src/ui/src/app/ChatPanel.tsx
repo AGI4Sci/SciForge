@@ -43,6 +43,7 @@ import { runReadiness, runningMessageContentFromStream, runtimeReadinessIssue } 
 import { waitForNextPaint } from './chat/nextPaint';
 import { fileToUploadedArtifact, objectReferenceForUploadedArtifact, referenceForUploadedArtifact } from './chat/uploadedArtifact';
 import type { RuntimeHealthItem } from './runtimeHealthPanel';
+import { createGuiProtocolController } from './guiProtocol';
 import {
   sciForgeReferenceAttribute,
   objectReferenceKindLabel,
@@ -205,6 +206,27 @@ export function ChatPanel({
     ?? estimateContextWindowState(session, config, streamEvents);
   const targetPeers = useMemo(() => enabledPeerInstances(config), [config.peerInstances]);
   const targetPeer = useMemo(() => selectedPeerInstance(config, targetInstanceName), [config.peerInstances, targetInstanceName]);
+  const guiProtocolSurface = useMemo(() => {
+    const selectedRefs = pendingReferences.map((reference) => reference.ref);
+    const controller = createGuiProtocolController({
+      focusedPanel: 'chat',
+      hotRegion: {
+        panel: 'chat',
+        selectedRefs,
+        primaryRef: selectedRefs[0],
+        interactionMode: isSending ? 'editing' : 'idle',
+        lastChangeOrigin: 'user',
+        lastChangeAt: nowIso(),
+        availableActions: [{ label: 'Submit turn', commandText: selectedRefs[0] ? `ask --ref ${JSON.stringify(selectedRefs[0])} "<prompt>"` : '/runtime-codex submit "<prompt>"' }],
+      },
+    });
+    const shell = controller.getContext({ level: 'shell' }) as { availableGuiTools: string[] };
+    const hot = controller.getContext({ level: 'hot-region' }) as { hotRegion: { availableActions: Array<{ commandText: string }> } };
+    return {
+      tools: shell.availableGuiTools,
+      commandText: hot.hotRegion.availableActions[0]?.commandText ?? '/runtime-codex submit "<prompt>"',
+    };
+  }, [isSending, pendingReferences]);
 
   useLayoutEffect(() => {
     activeSessionRef.current = session;
@@ -1025,6 +1047,21 @@ export function ChatPanel({
         message={readiness.message}
         packageLabel={`${scenarioPackageRef.id}@${scenarioPackageRef.version}`}
       />
+      <div
+        className="gui-protocol-strip"
+        data-testid="gui-protocol-surface"
+        data-gui-tools={guiProtocolSurface.tools.join(' ')}
+        data-terminal-command-text={guiProtocolSurface.commandText}
+        data-default-context-raw-dom="false"
+      >
+        <span className="gui-protocol-strip-label">GUI tools</span>
+        <span className="gui-protocol-tool-list">
+          {guiProtocolSurface.tools.map((tool: string) => <code key={tool}>{tool}</code>)}
+        </span>
+        <code className="gui-protocol-command">{guiProtocolSurface.commandText}</code>
+        <Badge variant="muted">semantic hot-region</Badge>
+        <Badge variant="success">debug folded</Badge>
+      </div>
       <ChatComposer
         expanded={composerExpanded}
         input={input}

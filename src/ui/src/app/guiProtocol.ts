@@ -24,7 +24,7 @@ export interface GuiShellContext {
   revision: number;
   focusedPanel: string;
   layoutMode: GuiLayoutMode;
-  pendingModal?: { id: string; kind: 'confirmation' | 'input' };
+  pendingModal?: { id: string; kind: 'confirmation' | 'input' | 'choice' };
   availableGuiTools: string[];
 }
 
@@ -137,9 +137,57 @@ export type GuiSetStatusInput = {
   precondition?: GuiPrecondition;
 };
 
+export type GuiAskUserInput = {
+  kind: 'confirmation' | 'input' | 'choice';
+  title: string;
+  message?: string;
+  precondition?: GuiPrecondition;
+  submitCommandTemplate?: string;
+  choices?: Array<{ label: string; commandText: string; style?: 'primary' | 'secondary' | 'danger' }>;
+};
+
+export type GuiApplyBatchOperation =
+  | { tool: 'present'; args: GuiPresentInput }
+  | { tool: 'notify'; args: GuiNotifyInput }
+  | { tool: 'set_status'; args: GuiSetStatusInput };
+
+export type GuiApplyBatchInput = {
+  precondition?: GuiPrecondition;
+  atomicity: 'all-or-nothing' | 'best-effort';
+  ops: GuiApplyBatchOperation[];
+};
+
+export interface GuiBatchOperationResult {
+  index: number;
+  tool: GuiApplyBatchOperation['tool'];
+  ok: boolean;
+  reason: GuiIntentReason | null;
+  placement?: GuiToolResult['placement'];
+}
+
+export type GuiApplyBatchResult = GuiToolResult & {
+  operationResults: GuiBatchOperationResult[];
+};
+
+export interface GuiWatchResult {
+  path: string;
+  revision: number;
+  disclosure: GuiContextLevel;
+  cursor: string;
+  semanticOnly: true;
+  includesRawDom: false;
+  events: Array<{
+    kind: 'changed' | 'removed' | 'permission-changed';
+    path: string;
+    revision: number;
+    updatedAt: string;
+    disclosure: GuiContextLevel;
+  }>;
+}
+
 export interface GuiIntentLogEntry {
   id: string;
-  tool: 'gui.present' | 'gui.notify' | 'gui.set_status';
+  tool: 'gui.present' | 'gui.ask_user' | 'gui.notify' | 'gui.set_status' | 'gui.apply_batch';
   createdAt: string;
   revision: number;
   summary: string;
@@ -168,9 +216,12 @@ export interface GuiProtocolController {
   read(input: { path: string; maxBytes?: number }): GuiResourceReadResult;
   search(input: { query: string; scope?: string; kinds?: GuiSearchKind[] }): GuiResourceSearchResult[];
   stat(input: { path: string }): GuiResourceStatResult;
+  watch(input: { path: string; events?: Array<'changed' | 'removed' | 'permission-changed'>; sinceRevision?: number }): GuiWatchResult;
   present(input: GuiPresentInput): GuiToolResult;
+  askUser(input: GuiAskUserInput): GuiToolResult;
   notify(input: GuiNotifyInput): GuiToolResult;
   setStatus(input: GuiSetStatusInput): GuiToolResult;
+  applyBatch(input: GuiApplyBatchInput): GuiApplyBatchResult;
 }
 
 type ResourceNode = {
@@ -183,12 +234,16 @@ type ResourceNode = {
 
 const AVAILABLE_GUI_TOOLS = [
   'gui.present',
+  'gui.ask_user',
   'gui.notify',
   'gui.set_status',
+  'gui.apply_batch',
+  'gui.get_context',
   'gui.list',
   'gui.read',
   'gui.search',
   'gui.stat',
+  'gui.watch',
 ] as const;
 
 export function createGuiProtocolController(input: GuiProtocolSnapshotInput = {}): GuiProtocolController {
@@ -295,48 +350,110 @@ export function createGuiProtocolController(input: GuiProtocolSnapshotInput = {}
         readonly: true,
       };
     },
+    watch({ path, events, sinceRevision }) {
+      const normalized = normalizePath(path);
+      const node = resourceNodes().get(normalized);
+      if (!node) throw new Error(`Unknown GUI resource path: ${path}`);
+      const eventKinds = new Set(events?.length ? events : ['changed']);
+      const changed = sinceRevision === undefined || sinceRevision < revision;
+      return {
+        path: normalized,
+        revision,
+        disclosure: node.disclosure,
+        cursor: `${revision}:${normalized}`,
+        semanticOnly: true,
+        includesRawDom: false,
+        events: changed && eventKinds.has('changed')
+          ? [{ kind: 'changed', path: normalized, revision, updatedAt: node.updatedAt, disclosure: node.disclosure }]
+          : [],
+      };
+    },
     present(intent) {
       return applyIntent('gui.present', summarizePresent(intent), intent.precondition, () => {
         const unsupported = unsupportedRendererReason(intent);
         if (unsupported) return unsupported;
-        const panel = intent.target?.panel ?? placementPanelForPresent(intent);
-        const placement = { panel, viewId: intent.target?.viewId ?? intent.ref };
-        focusedPanel = panel;
+        return { placement: applyPresentMutation(intent) };
+      });
+    },
+    askUser(intent) {
+      return applyIntent('gui.ask_user', summarizeAskUser(intent), intent.precondition, () => {
+        const choices = normalizeGuiActions(intent.choices ?? []);
+        const submitCommandTemplate = normalizeCommandTemplate(intent.submitCommandTemplate);
+        if ((intent.kind === 'confirmation' || intent.kind === 'choice') && choices.length === 0) {
+          return { reason: 'state-conflict', suggestions: [{ action: 'retry-with-context', level: 'hot-region' }] };
+        }
+        const modalId = `gui-ask-${revision + 1}`;
+        pendingModal = { id: modalId, kind: intent.kind };
+        focusedPanel = 'modal';
         hotRegion = {
           ...hotRegion,
-          panel,
-          viewId: placement.viewId,
-          primaryRef: intent.ref ?? hotRegion.primaryRef,
-          selectedRefs: intent.ref ? uniqueStrings([intent.ref, ...hotRegion.selectedRefs]) : hotRegion.selectedRefs,
-          interactionMode: 'reading',
+          panel: 'modal',
+          viewId: modalId,
+          interactionMode: 'modal',
           lastChangeOrigin: 'agent',
           lastChangeAt: updatedAt,
-          availableActions: intent.actions ?? hotRegion.availableActions,
+          availableActions: choices,
         };
         regions = upsertRegion(regions, {
-          regionId: panel,
-          viewId: placement.viewId,
+          regionId: 'modal',
+          viewId: modalId,
           visibleRefs: hotRegion.selectedRefs,
-          selectionSummary: intent.title ?? intent.ref,
-          summary: presentRegionSummary(intent),
-          title: intent.title ?? intent.ref,
-          rendererState: { intent: intent.intent, hint: intent.hint ?? intent.content?.kind ?? 'auto' },
-          affordances: intent.actions ?? [],
+          selectionSummary: intent.title,
+          summary: [intent.title, intent.message].filter(Boolean).join('\n\n'),
+          title: intent.title,
+          rendererState: withoutUndefined({ kind: intent.kind, submitCommandTemplate }),
+          affordances: choices,
         });
-        return { placement };
+        return { placement: { panel: 'modal', viewId: modalId } };
       });
     },
     notify(intent) {
       return applyIntent('gui.notify', `${intent.level}: ${intent.message}`, intent.precondition, () => {
-        status = { text: intent.message, tone: intent.level === 'info' ? 'neutral' : intent.level };
+        applyNotifyMutation(intent);
         return {};
       });
     },
     setStatus(intent) {
       return applyIntent('gui.set_status', intent.text, intent.precondition, () => {
-        status = { text: intent.text, tone: intent.tone ?? 'neutral' };
+        applySetStatusMutation(intent);
         return {};
       });
+    },
+    applyBatch(intent) {
+      const operationResults: GuiBatchOperationResult[] = [];
+      const result = applyIntent('gui.apply_batch', summarizeBatch(intent), intent.precondition, () => {
+        const evaluations = intent.ops.map((op, index) => evaluateBatchOperation(op, index));
+        if (intent.atomicity === 'all-or-nothing') {
+          const failed = evaluations.find((item) => item.reason);
+          if (failed) {
+            operationResults.push(...evaluations.map((item) => ({
+              index: item.index,
+              tool: item.tool,
+              ok: false,
+              reason: item.reason ?? 'state-conflict',
+              placement: item.placement,
+            })));
+            return { reason: failed.reason ?? 'state-conflict', suggestions: failed.suggestions };
+          }
+        }
+
+        for (const evaluation of evaluations) {
+          if (evaluation.reason) {
+            operationResults.push({ index: evaluation.index, tool: evaluation.tool, ok: false, reason: evaluation.reason });
+            continue;
+          }
+          const placement = evaluation.apply();
+          operationResults.push({ index: evaluation.index, tool: evaluation.tool, ok: true, reason: null, placement });
+        }
+
+        const applied = operationResults.filter((item) => item.ok);
+        if (!applied.length) {
+          const first = operationResults[0];
+          return { reason: first?.reason ?? 'state-conflict', suggestions: [{ action: 'retry-with-context', level: 'hot-region' }] };
+        }
+        return { placement: applied.findLast((item) => item.placement)?.placement };
+      });
+      return { ...result, operationResults };
     },
   };
 
@@ -453,6 +570,71 @@ export function createGuiProtocolController(input: GuiProtocolSnapshotInput = {}
     };
   }
 
+  function applyPresentMutation(intent: GuiPresentInput): GuiToolResult['placement'] {
+    const panel = intent.target?.panel ?? placementPanelForPresent(intent);
+    const placement = { panel, viewId: intent.target?.viewId ?? intent.ref };
+    focusedPanel = panel;
+    hotRegion = {
+      ...hotRegion,
+      panel,
+      viewId: placement.viewId,
+      primaryRef: intent.ref ?? hotRegion.primaryRef,
+      selectedRefs: intent.ref ? uniqueStrings([intent.ref, ...hotRegion.selectedRefs]) : hotRegion.selectedRefs,
+      interactionMode: 'reading',
+      lastChangeOrigin: 'agent',
+      lastChangeAt: updatedAt,
+      availableActions: intent.actions ? normalizeGuiActions(intent.actions) : hotRegion.availableActions,
+    };
+    regions = upsertRegion(regions, {
+      regionId: panel,
+      viewId: placement.viewId,
+      visibleRefs: hotRegion.selectedRefs,
+      selectionSummary: intent.title ?? intent.ref,
+      summary: presentRegionSummary(intent),
+      title: intent.title ?? intent.ref,
+      rendererState: { intent: intent.intent, hint: intent.hint ?? intent.content?.kind ?? 'auto' },
+      affordances: normalizeGuiActions(intent.actions ?? []),
+    });
+    return placement;
+  }
+
+  function applyNotifyMutation(intent: GuiNotifyInput): void {
+    status = { text: intent.message, tone: intent.level === 'info' ? 'neutral' : intent.level };
+  }
+
+  function applySetStatusMutation(intent: GuiSetStatusInput): void {
+    status = { text: intent.text, tone: intent.tone ?? 'neutral' };
+  }
+
+  function evaluateBatchOperation(op: GuiApplyBatchOperation, index: number): {
+    index: number;
+    tool: GuiApplyBatchOperation['tool'];
+    reason: GuiIntentReason | null;
+    suggestions: GuiSuggestion[];
+    placement?: GuiToolResult['placement'];
+    apply: () => GuiToolResult['placement'] | undefined;
+  } {
+    const blocked = preconditionResult(op.args.precondition);
+    if (blocked) {
+      return { index, tool: op.tool, reason: blocked.reason, suggestions: blocked.suggestions, apply: () => undefined };
+    }
+    if (op.tool === 'present') {
+      const unsupported = unsupportedRendererReason(op.args);
+      if (unsupported) return { index, tool: op.tool, reason: unsupported.reason, suggestions: unsupported.suggestions, apply: () => undefined };
+      return { index, tool: op.tool, reason: null, suggestions: [], apply: () => applyPresentMutation(op.args) };
+    }
+    if (op.tool === 'notify') {
+      return { index, tool: op.tool, reason: null, suggestions: [], apply: () => {
+        applyNotifyMutation(op.args);
+        return undefined;
+      } };
+    }
+    return { index, tool: op.tool, reason: null, suggestions: [], apply: () => {
+      applySetStatusMutation(op.args);
+      return undefined;
+    } };
+  }
+
   function preconditionResult(precondition: GuiPrecondition | undefined): { reason: GuiIntentReason; suggestions: GuiSuggestion[] } | undefined {
     if (!precondition) return undefined;
     if (precondition.expectedRevision !== undefined && precondition.expectedRevision !== revision) {
@@ -528,6 +710,12 @@ function normalizeGuiActions(actions: GuiAction[]): GuiAction[] {
       commandText: action.commandText.replace(/\s+/g, ' ').trim(),
     }))
     .filter((action) => action.label.length > 0 && isTerminalEquivalentCommandText(action.commandText));
+}
+
+function normalizeCommandTemplate(template: string | undefined): string | undefined {
+  if (!template) return undefined;
+  const normalized = template.replace(/\s+/g, ' ').trim();
+  return isTerminalEquivalentCommandText(normalized) ? normalized : undefined;
 }
 
 function isTerminalEquivalentCommandText(commandText: string) {
@@ -629,6 +817,14 @@ function presentRegionSummary(input: GuiPresentInput) {
 
 function summarizePresent(input: GuiPresentInput) {
   return [input.intent, input.ref, input.title].filter(Boolean).join(' ') || input.intent;
+}
+
+function summarizeAskUser(input: GuiAskUserInput) {
+  return [input.kind, input.title].filter(Boolean).join(' ');
+}
+
+function summarizeBatch(input: GuiApplyBatchInput) {
+  return `${input.atomicity} ${input.ops.length} GUI operation(s)`;
 }
 
 function suggestionsForReason(reason: GuiIntentReason): GuiSuggestion[] {

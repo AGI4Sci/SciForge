@@ -24,14 +24,17 @@ export interface RuntimeGuiExtensionInjection {
 }
 
 export const GUI_NATIVE_TOOL_NAMES = [
+  'gui.present',
+  'gui.ask_user',
+  'gui.notify',
+  'gui.set_status',
+  'gui.apply_batch',
   'gui.get_context',
   'gui.list',
   'gui.read',
   'gui.search',
   'gui.stat',
-  'gui.present',
-  'gui.notify',
-  'gui.set_status',
+  'gui.watch',
 ] as const;
 
 export const GUI_NATIVE_RESOURCE_URIS = [
@@ -79,7 +82,11 @@ export function runtimeGuiExtensionManifest(injection: RuntimeGuiExtensionInject
     statePath: injection.statePath,
     tools: injection.toolNames.map((name) => ({
       name,
-      boundary: name.startsWith('gui.present') || name.startsWith('gui.notify') || name.startsWith('gui.set_status')
+      boundary: name.startsWith('gui.present')
+        || name.startsWith('gui.ask_user')
+        || name.startsWith('gui.notify')
+        || name.startsWith('gui.set_status')
+        || name.startsWith('gui.apply_batch')
         ? 'presentation-intent'
         : 'read-only-gui-state',
     })),
