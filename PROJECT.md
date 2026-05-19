@@ -452,7 +452,7 @@ p7 阶段证据（2026-05-19）：
 
 ### P8-SPARE-REPAIR-20260519 docs and gate drift
 
-状态：in-progress / parallel-p8
+状态：completed-with-residual-risk / parallel-p8
 
 接手范围：补位修复 docs/test drift、gate 漏洞和小范围状态不一致；避开 p1-p7 已声明的大模块改造。
 
@@ -460,22 +460,25 @@ p7 阶段证据（2026-05-19）：
 
 - [x] `smoke:no-legacy-paths` 覆盖当前 runtime/UI audit 路径的 raw legacy access 漂移，确认不再新增 legacy 命中。
 - [x] `smoke:long-file-budget` 排除 `.sciforge/`、`.codex-runtime/`、`workspace/` 这类并行运行缓存，避免把生成状态误报为源码长文件。
-- [x] `smoke:runtime-codex-browser-acceptance` 保持缺少 live credential 时 fail-closed，并输出 blocked manifest 作为证据。
+- [x] `verify:fast` 与 `verify:single-agent-final` 串入 `smoke:no-hardcoded-success`，`smoke:single-agent-final-gate` 同步校验 no-legacy/no-hardcoded source hygiene gate 不再漂移。
+- [x] `smoke:runtime-codex-browser-acceptance` 保持缺少 live credential 时 fail-closed；本轮补充 live key 后从 Codex in-app browser 默认聊天入口复验。
+- [x] T9 long-file split：拆分 direct-context selected-report / shared helpers、generated lifecycle literature recovery、UI sciforgeToolsClient transport context，并保持 public import surface。
 
 Long-file split tracking：
 
-- [ ] `src/runtime/gateway/direct-context-fast-path.ts`：保留为 runtime gateway legacy split follow-up，后续拆出 request classification、artifact/ref projection 和 provider dispatch。
-- [ ] `src/runtime/gateway/direct-context-fast-path.test.ts`：随 gateway split 同步拆成 classification、artifact/ref projection、provider dispatch 三组测试。
-- [ ] `src/runtime/gateway/generated-task-runner-generation-lifecycle.ts`：保留为 generation lifecycle boundary follow-up，后续拆出 lifecycle state machine、artifact publication 和 error projection。
-- [ ] `src/ui/src/api/sciforgeToolsClient.ts`：Runtime Codex stream/session/audit 兼容修复后继续偏长，后续拆成 request builder、SSE normalizer、session resume extractor 和 audit payload builder。
+- [x] `src/runtime/gateway/direct-context-fast-path.ts`：拆出 `direct-context-fast-path-shared.ts` 与 `direct-context-fast-path-selected-report.ts`，主文件降到 long-file watch 区。
+- [x] `src/runtime/gateway/direct-context-fast-path.test.ts`：拆出 selected-report 与 helpers 测试文件，避免单测文件继续超过 long-file budget。
+- [x] `src/runtime/gateway/generated-task-runner-generation-lifecycle.ts`：拆出 `generated-task-runner-literature-recovery.ts`，保留原模块 re-export 兼容既有测试。
+- [x] `src/ui/src/api/sciforgeToolsClient.ts`：改成 public barrel，主体迁移到 `sciforgeToolsClient/client.ts`，transport/session compaction helpers 拆到 `sciforgeToolsClient/transportContext.ts`。
 
 Acceptance rubric：
 
 - 用户意图：p8 只补无人负责的小范围漂移和门禁漏洞，不抢占其它 worker 的主文件所有权。
-- 任务完成：修复以 targeted gate 为准，不硬编码成功路径；缺失 live browser credential 时必须 blocked/fail-closed。
-- 证据链：最低保留 `npm run typecheck`、`npm run smoke:no-legacy-paths`、`npm run smoke:long-file-budget`、`npm run smoke:runtime-codex-browser-acceptance` 和 `git diff --check` 输出。
+- 任务完成：修复以 targeted gate 为准，不硬编码成功路径；缺失 live browser credential 时必须 blocked/fail-closed，live key 存在时必须从默认聊天入口跑真实 Runtime Codex。
+- 证据链：`npm run typecheck`、`npm run smoke:long-file-budget`、`npm run smoke:no-hardcoded-success`、`npm run smoke:no-legacy-paths`、`npm run smoke:single-agent-final-gate`、targeted tests 和 `git diff --check` 已通过；Codex in-app browser 证据位于 `docs/test-artifacts/parallel/p8/browser-acceptance-manifest.json`、`browser-acceptance.dom.txt`、`browser-acceptance.png`、`browser-console.json`、`browser-runtime-audit-summary.json`。
 - 负向检查：`SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1` 在没有 `SCIFORGE_RUNTIME_API_KEY` 时必须失败，不能用 fixture 假装 live pass。
-- 剩余风险：当前并行 worktree 仍包含其它 worker 的未提交 runtime/UI 改动；p8 提交前只能 stage 已理解且属于本 lane 的文件。
+- Browser 结果：p8 live run 使用 UI `5180`、workspace writer `6180`、Runtime Codex sidecar `18087`、proxy `3891`、workspace `workspace/parallel/p8`、state `.sciforge/parallel/p8`；默认聊天入口提交 `p8 browser acceptance...`，生成 `workspace/parallel/p8/p8-browser-acceptance.md` 并在工作区文件面板预览，过程记录保持折叠摘要且 raw JSONL/stderr 未进入主 DOM。
+- 剩余风险：该 live run 的主结果区仍显示 `主结果等待 ConversationProjection`，但 workspace 文件预览与 folded audit 已验证；ConversationProjection/ArtifactDelivery 的最终投影修复不在本 T9 source-hygiene lane 内。
 
 ## Definition Of Done
 

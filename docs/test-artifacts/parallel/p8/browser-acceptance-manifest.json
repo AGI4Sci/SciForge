@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "sciforge.parallel.p8.browser-acceptance.v1",
+  "task": "T9-LONG-FILE-SPLIT and cross-gate drift repair",
+  "status": "passed_with_residual_risk",
+  "residualRisk": "The live Runtime Codex run completed and generated a workspace markdown artifact that previews in the file panel. The main result panel still reports missing ConversationProjection for this run, so final PROJECT.md records this as remaining cross-gate/UI projection risk rather than claiming full release readiness.",
+  "requestedPorts": {
+    "ui": 5180,
+    "workspaceWriter": 6180,
+    "runtimeCodex": 18087,
+    "proxy": 3891
+  },
+  "actualPorts": {
+    "ui": 5180,
+    "workspaceWriter": 6180,
+    "runtimeCodex": 18087,
+    "proxy": 3891
+  },
+  "url": "http://127.0.0.1:5180/",
+  "workspace": "workspace/parallel/p8",
+  "state": ".sciforge/parallel/p8",
+  "logs": ".sciforge/parallel/p8/logs",
+  "evidenceDir": "docs/test-artifacts/parallel/p8",
+  "browser": "Codex in-app browser",
+  "startedFromDefaultChatEntry": true,
+  "liveRuntimeKeyConfigured": true,
+  "generatedArtifact": "workspace/parallel/p8/p8-browser-acceptance.md",
+  "checks": {
+    "defaultChatEntryOpened": true,
+    "defaultChatSubmissionAttempted": true,
+    "runtimeCodexCompleted": true,
+    "providerModelProfileWorkspaceCommandVisible": true,
+    "noOpenAiFallbackVisible": true,
+    "artifactPreviewVerified": true,
+    "foldedAuditVerified": true,
+    "rawJsonLeakVisible": false,
+    "resultProjectionMissing": true
+  },
+  "files": {
+    "screenshot": "docs/test-artifacts/parallel/p8/browser-acceptance.png",
+    "dom": "docs/test-artifacts/parallel/p8/browser-acceptance.dom.txt",
+    "console": "docs/test-artifacts/parallel/p8/browser-console.json",
+    "runtimeAuditSummary": "docs/test-artifacts/parallel/p8/browser-runtime-audit-summary.json"
+  }
+}

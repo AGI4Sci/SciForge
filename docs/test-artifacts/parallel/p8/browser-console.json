@@ -1,0 +1,62 @@
+[
+  {
+    "level": "debug",
+    "message": "[vite] connecting...",
+    "timestamp": "2026-05-19T13:00:31.626Z",
+    "url": "http://127.0.0.1:5180/@vite/client"
+  },
+  {
+    "level": "debug",
+    "message": "[vite] connected.",
+    "timestamp": "2026-05-19T13:00:31.656Z",
+    "url": "http://127.0.0.1:5180/@vite/client"
+  },
+  {
+    "level": "info",
+    "message": "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold",
+    "timestamp": "2026-05-19T13:00:33.671Z",
+    "url": "http://127.0.0.1:5180/@fs/Applications/workspace/ailab/research/app/SciForge-p8-source-hygiene/node_modules/.vite/deps/react-dom_client.js?v=a57eca3c"
+  },
+  {
+    "level": "log",
+    "message": "[vite] server connection lost. Polling for restart...",
+    "timestamp": "2026-05-19T13:05:55.127Z",
+    "url": "http://127.0.0.1:5180/@vite/client"
+  },
+  {
+    "level": "debug",
+    "message": "[vite] connecting...",
+    "timestamp": "2026-05-19T13:06:22.018Z",
+    "url": "http://127.0.0.1:5180/@vite/client"
+  },
+  {
+    "level": "debug",
+    "message": "[vite] connected.",
+    "timestamp": "2026-05-19T13:06:22.036Z",
+    "url": "http://127.0.0.1:5180/@vite/client"
+  },
+  {
+    "level": "info",
+    "message": "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold",
+    "timestamp": "2026-05-19T13:06:24.654Z",
+    "url": "http://127.0.0.1:5180/@fs/Applications/workspace/ailab/research/app/SciForge-p8-source-hygiene/node_modules/.vite/deps/react-dom_client.js?v=f557cfa1"
+  },
+  {
+    "level": "debug",
+    "message": "[vite] connecting...",
+    "timestamp": "2026-05-19T13:06:52.601Z",
+    "url": "http://127.0.0.1:5180/@vite/client"
+  },
+  {
+    "level": "debug",
+    "message": "[vite] connected.",
+    "timestamp": "2026-05-19T13:06:52.614Z",
+    "url": "http://127.0.0.1:5180/@vite/client"
+  },
+  {
+    "level": "info",
+    "message": "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold",
+    "timestamp": "2026-05-19T13:06:54.133Z",
+    "url": "http://127.0.0.1:5180/@fs/Applications/workspace/ailab/research/app/SciForge-p8-source-hygiene/node_modules/.vite/deps/react-dom_client.js?v=f557cfa1"
+  }
+]
