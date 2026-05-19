@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ChildProcessByStdio } from 'node:child_process';
 import type { Readable } from 'node:stream';
-import { RUNTIME_KEY_ENV, RUNTIME_PROFILE } from '../../../packages/backend/src/runtime-home.js';
+import { ensureRuntimeHome, RUNTIME_KEY_ENV, RUNTIME_PROFILE } from '../../../packages/backend/src/runtime-home.js';
 import { CodexExecJsonAdapter, type SpawnCodexProcess } from './codex-exec-json-adapter.js';
 import { GUI_EXTENSION_STATE_ENV, GUI_MCP_SERVER_NAME } from './gui-extension-manifest.js';
 import { saveGuiExtensionSnapshot } from './gui-extension-state.js';
@@ -244,6 +244,31 @@ test('adapter rejects Developer profile instead of falling back from runtime pro
   assert.equal(spawnCalled, false);
 });
 
+test('adapter refuses forked Codex command overrides unless compatibility fork gate is documented', async () => {
+  let spawnCalled = false;
+  const workspace = await tempWorkspace();
+  const adapter = new CodexExecJsonAdapter({
+    env: {
+      [RUNTIME_KEY_ENV]: 'test-key',
+      SCIFORGE_RUNTIME_CODEX_COMMAND: '/vendor/codex-fork/bin/codex',
+    },
+    spawnProcess() {
+      spawnCalled = true;
+      return fakeChild().process;
+    },
+  });
+
+  await assert.rejects(
+    () => adapter.startTurn({
+      commandText: 'should use upstream codex',
+      workspacePath: workspace,
+      guiExtension: { enabled: false },
+    }),
+    /must use upstream "codex"/,
+  );
+  assert.equal(spawnCalled, false);
+});
+
 test('adapter resumes native Codex session when codexSessionId is provided', async () => {
   const child = fakeChild();
   let spawnCall: Parameters<SpawnCodexProcess> | undefined;
@@ -344,6 +369,7 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
 }
 
 async function tempWorkspace() {
+  await ensureRuntimeHome();
   const dir = await mkdtemp(join(tmpdir(), 'sciforge-codex-adapter-'));
   await mkdir(dir, { recursive: true });
   return dir;

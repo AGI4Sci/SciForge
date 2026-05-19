@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { attemptIdForCommand, codexSessionIdFromRaw, commandIdForText, exitEvent, guiPresentEvent, invalidJsonlAuditEvent, normalizeCodexJsonlEvent, resumeFailureAuditEvent, runStartedEvent, stderrAuditEvent, type CodexRuntimeMetadata, type NormalizedAgentEvent } from './codex-event-normalizer.js';
 import { type AgentCliAdapter, type AgentCliStartTurnInput, type AgentCliTurn } from './agent-cli-adapter.js';
+import { assertCodexNoForkGate } from '../../../packages/backend/src/codex-compatibility-gate.js';
 import { assertCodexRuntimeConfig, codexRuntimeEnv } from './codex-runtime-config.js';
 import { prepareRuntimeGuiExtensionInjection } from './gui-extension-manifest.js';
 import { loadGuiExtensionSnapshot } from './gui-extension-state.js';
@@ -65,12 +66,14 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
       codexSessionId: input.codexSessionId,
       configArgs: guiInjection?.configArgs ?? [],
     });
-    const env = codexRuntimeEnv(this.options.env ?? process.env, config.codexHome);
+    const runtimeEnv = this.options.env ?? process.env;
+    const codexGate = assertCodexNoForkGate({ codexCommand: runtimeEnv.SCIFORGE_RUNTIME_CODEX_COMMAND });
+    const env = codexRuntimeEnv(runtimeEnv, config.codexHome);
     if (guiInjection) {
       env.PATH = [guiInjection.binDir, env.PATH].filter(Boolean).join(':');
       env.SCIFORGE_GUI_EXTENSION_STATE = guiInjection.statePath;
     }
-    const child = (this.options.spawnProcess ?? spawn)('codex', args, {
+    const child = (this.options.spawnProcess ?? spawn)(codexGate.codexCommand, args, {
       cwd: config.workspace,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],

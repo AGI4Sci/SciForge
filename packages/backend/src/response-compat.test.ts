@@ -129,3 +129,43 @@ test('preserves streaming tool call name across empty DeepSeek deltas', async ()
     await new Promise<void>((resolve, reject) => upstream.close((error) => (error ? reject(error) : resolve())));
   }
 });
+
+test('does not emit an empty streaming tool call name when DeepSeek sends metadata late', async () => {
+  const upstream = createServer((request, response) => {
+    assert.equal(request.url, '/v1/chat/completions');
+    response.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8' });
+    response.write('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"","type":"function","function":{"name":"","arguments":"{\\"cmd\\":\\"printf "}}]}}]}\n\n');
+    response.write('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_late","function":{"name":"exec_command","arguments":"OK\\"}"}}]}}]}\n\n');
+    response.write('data: [DONE]\n\n');
+    response.end();
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const upstreamPort = (upstream.address() as AddressInfo).port;
+  const proxy = await startCodexResponsesProxyServer({
+    upstreamBaseUrl: `http://127.0.0.1:${upstreamPort}/v1`,
+    port: 0,
+  });
+
+  try {
+    const response = await fetch(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer test' },
+      body: JSON.stringify({
+        model: 'bailian/deepseek-v4-flash',
+        input: 'Use a tool',
+        stream: true,
+        tools: [{ type: 'function', name: 'exec_command', parameters: { type: 'object', properties: {} } }],
+      }),
+    });
+    const text = await response.text();
+    assert.equal(response.status, 200);
+    assert.match(text, /"call_id":"call_late"/);
+    assert.match(text, /"name":"exec_command"/);
+    assert.doesNotMatch(text, /"name":""/);
+    assert.doesNotMatch(text, /"call_id":""/);
+    assert.match(text, /printf OK/);
+  } finally {
+    await proxy.close();
+    await new Promise<void>((resolve, reject) => upstream.close((error) => (error ? reject(error) : resolve())));
+  }
+});

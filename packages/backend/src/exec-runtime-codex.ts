@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
+import { assertCodexNoForkGate } from './codex-compatibility-gate';
 import {
   assertRuntimeReady,
   ensureRuntimeHome,
@@ -15,8 +16,9 @@ const workspace = resolveRuntimeWorkspace({
 });
 await mkdir(workspace, { recursive: true });
 await assertRuntimeReady(paths);
+const codexGate = assertCodexNoForkGate({ codexCommand: process.env.SCIFORGE_RUNTIME_CODEX_COMMAND });
 
-const child = spawn('codex', [
+const child = spawn(codexGate.codexCommand, [
   'exec',
   '--json',
   '--profile',

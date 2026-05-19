@@ -39,6 +39,8 @@ type StreamingState = {
 type MutableToolCall = {
   itemId: string;
   outputIndex: number;
+  outputItemAdded: boolean;
+  flushedArgumentsLength: number;
   call: ChatToolCall;
 };
 
@@ -224,37 +226,25 @@ function applyToolCallDelta(response: ServerResponse, state: StreamingState, val
     entry = {
       itemId,
       outputIndex: state.nextOutputIndex++,
+      outputItemAdded: false,
+      flushedArgumentsLength: 0,
       call: {
-        id: typeof record.id === 'string' ? record.id : makeId('call'),
+        id: typeof record.id === 'string' && record.id ? record.id : makeId('call'),
         type: 'function',
         function: {
-          name: typeof fn.name === 'string' ? fn.name : '',
+          name: typeof fn.name === 'string' && fn.name ? fn.name : '',
           arguments: '',
         },
       },
     };
     state.toolCalls.set(index, entry);
-    writeResponseEvent(response, 'response.output_item.added', {
-      output_index: entry.outputIndex,
-      item: {
-        id: itemId,
-        type: 'function_call',
-        status: 'in_progress',
-        call_id: entry.call.id,
-        name: entry.call.function.name,
-        arguments: '',
-      },
-    });
   }
   if (typeof record.id === 'string' && record.id) entry.call.id = record.id;
   if (typeof fn.name === 'string' && fn.name) entry.call.function.name = fn.name;
+  ensureToolCallStarted(response, entry);
   if (typeof fn.arguments === 'string' && fn.arguments) {
     entry.call.function.arguments += fn.arguments;
-    writeResponseEvent(response, 'response.function_call_arguments.delta', {
-      item_id: entry.itemId,
-      output_index: entry.outputIndex,
-      delta: fn.arguments,
-    });
+    flushToolCallArguments(response, entry);
   }
 }
 
@@ -282,6 +272,9 @@ function finishStreamingItems(response: ServerResponse, state: StreamingState): 
   }
 
   for (const entry of [...state.toolCalls.values()].sort((left, right) => left.outputIndex - right.outputIndex)) {
+    if (!entry.call.function.name) entry.call.function.name = 'unknown_tool';
+    ensureToolCallStarted(response, entry);
+    flushToolCallArguments(response, entry);
     const item = functionCallOutputItem(entry.call, entry.itemId);
     output.push(item);
     writeResponseEvent(response, 'response.function_call_arguments.done', {
@@ -295,6 +288,34 @@ function finishStreamingItems(response: ServerResponse, state: StreamingState): 
     });
   }
   return output;
+}
+
+function ensureToolCallStarted(response: ServerResponse, entry: MutableToolCall) {
+  if (entry.outputItemAdded || !entry.call.function.name) return;
+  entry.outputItemAdded = true;
+  writeResponseEvent(response, 'response.output_item.added', {
+    output_index: entry.outputIndex,
+    item: {
+      id: entry.itemId,
+      type: 'function_call',
+      status: 'in_progress',
+      call_id: entry.call.id,
+      name: entry.call.function.name,
+      arguments: '',
+    },
+  });
+}
+
+function flushToolCallArguments(response: ServerResponse, entry: MutableToolCall) {
+  if (!entry.outputItemAdded) return;
+  const nextDelta = entry.call.function.arguments.slice(entry.flushedArgumentsLength);
+  if (!nextDelta) return;
+  entry.flushedArgumentsLength = entry.call.function.arguments.length;
+  writeResponseEvent(response, 'response.function_call_arguments.delta', {
+    item_id: entry.itemId,
+    output_index: entry.outputIndex,
+    delta: nextDelta,
+  });
 }
 
 async function proxyRaw(

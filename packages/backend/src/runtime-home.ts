@@ -109,6 +109,22 @@ export async function assertRuntimeReady(paths = getRuntimeHomePaths()): Promise
   if (!process.env[RUNTIME_KEY_ENV]) {
     throw new Error(`Missing ${RUNTIME_KEY_ENV}; set it in the service environment, not in repository files.`);
   }
+  const profileConfig = tableBlock(config, `profiles.${RUNTIME_PROFILE}`);
+  const provider = valueForKey(profileConfig, 'model_provider') ?? valueForKey(config, 'model_provider');
+  const model = valueForKey(profileConfig, 'model') ?? valueForKey(config, 'model');
+  const proxyBaseUrl = valueForKey(tableBlock(config, `model_providers.${RUNTIME_PROVIDER}`), 'base_url');
+  if (provider !== RUNTIME_PROVIDER) {
+    throw new Error(`Runtime Codex profile must use provider ${RUNTIME_PROVIDER}; found ${provider || 'missing'}.`);
+  }
+  if (model !== RUNTIME_MODEL) {
+    throw new Error(`Runtime Codex profile must use model ${RUNTIME_MODEL}; found ${model || 'missing'}.`);
+  }
+  if (!proxyBaseUrl) {
+    throw new Error(`Runtime Codex provider ${RUNTIME_PROVIDER} is missing proxy base_url.`);
+  }
+  if (process.env.SCIFORGE_ALLOW_OPENAI_RUNTIME !== '1' && /openai/i.test(`${provider}\n${model}\n${proxyBaseUrl}`)) {
+    throw new Error('OpenAI Runtime Codex provider/model is disabled unless SCIFORGE_ALLOW_OPENAI_RUNTIME=1.');
+  }
 }
 
 export function assertPathInside(child: string, parent: string, label: string): void {
@@ -126,4 +142,23 @@ async function fileExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function tableBlock(config: string, table: string): string {
+  const lines = config.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim() === `[${table}]`);
+  if (start < 0) return '';
+  const block: string[] = [];
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index]!;
+    if (/^\s*\[/.test(line)) break;
+    block.push(line);
+  }
+  return block.join('\n');
+}
+
+function valueForKey(config: string, key: string): string | undefined {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = new RegExp(`^\\s*${escaped}\\s*=\\s*"([^"]+)"`, 'm').exec(config);
+  return match?.[1];
 }
