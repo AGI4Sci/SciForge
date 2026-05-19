@@ -387,30 +387,38 @@ Todo：
 
 ### RUNTIME-LAUNCHER-20260519 production runtime boundary
 
-状态：planned / after-runtime-codex
+状态：partial / p7 launcher boundary implemented
 
 目标：把开发启动脚本和生产 runtime launcher 分开，让 runtime 能被 Electron main process 稳定嵌入和管理。
 
 Todo：
 
-- [ ] 新增 production runtime launcher，统一管理端口或 IPC、ready/health、stdout/stderr audit、graceful shutdown。
-- [ ] launcher 启动失败必须 fail closed，并把原因变成结构化 health/audit event。
-- [ ] 生产桌面端不得把 `5173` 或其它固定开发端口写成用户可见契约；若使用 loopback，必须选择空闲端口并只通过受控配置传给 renderer。
-- [ ] 应用全局配置、Runtime Codex home、日志、缓存、用户 workspace `.sciforge/` 状态分离。
-- [ ] Runtime Codex home 从仓库内临时路径迁移到系统 app data 目录，保留开发期 isolated home 作为 test/dev 路径。
-- [ ] provider API key 默认进入系统 keychain / credential store；明文配置只能作为显式调试 fallback。
-- [ ] 平台能力集中到 platform service：open external、reveal in folder、terminal command、path quoting、kill process、permission probe。
-- [ ] macOS、Windows、Linux 的 shell/path/process 差异不得散落到 React 组件或 Codex adapter。
+- [x] 新增 production runtime launcher，统一管理端口或 IPC、ready/health、stdout/stderr audit、graceful shutdown。
+- [x] launcher 启动失败必须 fail closed，并把原因变成结构化 health/audit event。
+- [x] 生产桌面端不得把 `5173` 或其它固定开发端口写成用户可见契约；若使用 loopback，必须选择空闲端口并只通过受控配置传给 renderer。
+- [x] 应用全局配置、Runtime Codex home、日志、缓存、用户 workspace `.sciforge/` 状态分离。
+- [x] Runtime Codex home 从仓库内临时路径迁移到系统 app data 目录，保留开发期 isolated home 作为 test/dev 路径。
+- [x] provider API key 默认进入系统 keychain / credential store；明文配置只能作为显式调试 fallback。
+- [x] 平台能力集中到 platform service：open external、reveal in folder、terminal command、path quoting、kill process、permission probe。
+- [x] macOS、Windows、Linux 的 shell/path/process 差异不得散落到 React 组件或 Codex adapter。
 
 验收：
 
-- [ ] launcher unit tests 覆盖 ready/health、port conflict、child exit、stderr audit、shutdown。
-- [ ] platform service tests 覆盖 path/command quoting 的跨平台 contract。
-- [ ] secret storage 有 mockable contract 和 fail-closed 行为。
+- [x] launcher unit tests 覆盖 ready/health、port conflict、child exit、stderr audit、shutdown。
+- [x] platform service tests 覆盖 path/command quoting 的跨平台 contract。
+- [x] secret storage 有 mockable contract 和 fail-closed 行为。
+
+p7 阶段证据（2026-05-19）：
+
+- 新增 `src/runtime/desktop/runtime-launcher.ts`、`app-data-layout.ts`、`platform-service.ts`、`secret-storage.ts` 和 `electron-shell-boundary.ts`；Electron/runtime 边界保持在 runtime/desktop 层，没有把进程管理写入 React/UI。
+- `packages/backend/src/runtime-home.ts` 支持通过 launcher env 把 Runtime Codex root/CODEX_HOME/default workspace 移到系统 AppData，同时保留 `packages/backend/.codex-runtime` 作为 dev/test fallback。
+- 验证通过：`node --import tsx --test 'src/runtime/desktop/*.test.ts' packages/backend/src/runtime-home.test.ts`、`npm run typecheck`、`npm run build`、`git diff --check`。
+- p7 端口预检无冲突：UI `5179`、workspace writer `6179`、Runtime Codex `18086`；Web 验收使用 Codex in-app browser 打开 `http://127.0.0.1:5179/` 并进入默认聊天工作台，证据在 `docs/test-artifacts/parallel/p7/p7-launcher-desktop-manifest.json`。
+- 剩余风险：launcher 已可测但尚未接入真实 Electron app lifecycle；系统 keychain 只完成 contract/mock/fail-closed，未绑定 OS credential provider 包。
 
 ### DESKTOP-PRODUCTIZATION-20260519 Electron desktop shell
 
-状态：planned / after-runtime-launcher
+状态：partial / blocked-by-electron-shell
 
 依据：[`docs/Architecture.md`](docs/Architecture.md) 的 `Desktop Packaging Direction` 和 [`packages/backend/CodexRuntimeMigration.md`](packages/backend/CodexRuntimeMigration.md) 的 `Desktop Runtime Productization`。
 
@@ -418,11 +426,11 @@ Todo：
 
 Todo：
 
-- [ ] 新增 desktop app 边界，例如 `apps/desktop` 或 `desktop/`，避免 Electron 逻辑散落到 React/UI。
+- [x] 新增 desktop app 边界，例如 `apps/desktop` 或 `desktop/`，避免 Electron 逻辑散落到 React/UI。
 - [ ] Electron main 加载 `vite build` 产物，而不是启动 Vite dev server。
 - [ ] Electron main 管理窗口、菜单、协议、系统权限、日志目录和退出清理。
 - [ ] Electron main 启动、停止并观测 workspace server、`packages/backend` provider proxy、Runtime Codex 进程。
-- [ ] Renderer 只通过稳定 IPC 或 loopback API 发送命令、读取 normalized events 和 audit events。
+- [x] Renderer 只通过稳定 IPC 或 loopback API 发送命令、读取 normalized events 和 audit events。
 - [ ] 桌面窗口内完成一次真实 Codex-backed run，并展示 provider/model/profile/workspace/command id。
 - [ ] 保持 Web/desktop 双运行能力；开发期仍可用 Vite + workspace server 做浏览器验收。
 
@@ -435,6 +443,12 @@ Todo：
 - [ ] debug/audit 默认折叠。
 - [ ] provider fallback 禁止。
 - [ ] 退出后本地子进程清理干净。
+
+p7 阶段证据（2026-05-19）：
+
+- 新增 `src/runtime/desktop/electron-shell-boundary.ts`，用测试锁定生产 Electron main 只能加载 `vite build` 产物、不能把 `5173`/`5179` 等 Vite dev URL 作为生产 renderer contract。
+- 新增 production launcher health contract 暴露 renderer transport 为 `stable-ipc-or-loopback`，raw stdout/stderr 只进入 folded audit，不进入 foreground DOM。
+- 真实 Electron package/window 尚未落地，因此 desktop cold start、桌面窗口真实 Codex run、artifact follow-up 和退出后子进程清理仍 blocked；本轮只完成产品化边界和 Web path 不退化验收。
 
 ### P8-SPARE-REPAIR-20260519 docs and gate drift
 
