@@ -1,0 +1,17 @@
+{
+  "runId": "codex-command-mpcndbq3-mykn4a",
+  "status": "completed",
+  "response": "**p8-browser-acceptance.md** created — one sentence confirming the source hygiene split is live. The artifact is a single-sentence markdown file serving as a lightweight browser-acceptance marker for the p8 parallel workspace.",
+  "providerModelProfileWorkspaceCommand": "provider native · model bailian/deepseek-v4-flash · profile sciforge-runtime-deepseek · workspace /Applications/workspace/ailab/research/app/SciForge-p8-source-hygiene/workspace/parallel/p8 · command codex-command-mpcndbq3-mykn4a",
+  "runtimeStart": "Runtime Codex started with sciforge-deepseek-proxy/bailian/deepseek-v4-flash profile sciforge-runtime-deepseek",
+  "normalizedProvider": "sciforge-deepseek-proxy",
+  "normalizedModel": "bailian/deepseek-v4-flash",
+  "normalizedProfile": "sciforge-runtime-deepseek",
+  "normalizedWorkspace": "/Applications/workspace/ailab/research/app/SciForge-p8-source-hygiene/workspace/parallel/p8",
+  "normalizedCommandId": "codex-0e262a8956bab7eb",
+  "evidenceRefs": [
+    "audit:codex-runtime:codex-0e262a8956bab7eb:codex-0e262a8956bab7eb-attempt-mpcndbqj:raw-jsonl",
+    "audit:codex-runtime:codex-0e262a8956bab7eb:codex-0e262a8956bab7eb-attempt-mpcndbqj:stderr",
+    "audit:codex-runtime:codex-0e262a8956bab7eb:codex-0e262a8956bab7eb-attempt-mpcndbqj:normalized-events"
+  ]
+}

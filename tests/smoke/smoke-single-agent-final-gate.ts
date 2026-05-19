@@ -13,12 +13,14 @@ const webFinalConformanceScript = 'smoke:web-final-conformance';
 const finalEvidenceScript = 'smoke:single-agent-final-evidence';
 const runtimeCodexFinalAcceptanceScript = 'smoke:runtime-codex-final-acceptance';
 const runtimeCodexBrowserAcceptanceScript = 'smoke:runtime-codex-browser-acceptance';
+const noHardcodedSuccessScript = 'smoke:no-hardcoded-success';
 const webMultiturnFinalCommand = 'tsx tests/smoke/smoke-web-multiturn-final.ts';
 const requiredFinalGateOrder = [
   'typecheck',
   'test',
   'smoke:single-agent-runtime-contract',
   'smoke:no-legacy-paths',
+  noHardcodedSuccessScript,
   runtimeCodexFinalAcceptanceScript,
   runtimeCodexBrowserAcceptanceScript,
   webFinalConformanceScript,
@@ -54,6 +56,10 @@ if (scripts[runtimeCodexBrowserAcceptanceScript] !== 'tsx tests/smoke/smoke-runt
   errors.push(`${runtimeCodexBrowserAcceptanceScript} must run the Runtime Codex browser acceptance evidence gate`);
 }
 
+if (scripts[noHardcodedSuccessScript] !== 'tsx tests/smoke/smoke-no-hardcoded-success.ts') {
+  errors.push(`${noHardcodedSuccessScript} must run the release-path hardcoded-success guard`);
+}
+
 const finalGateSteps = packageScriptSteps(scripts[verifyScript]);
 if (finalGateSteps.length === 0) {
   errors.push(`${verifyScript} must be declared as the final single-agent completion gate`);
@@ -66,7 +72,7 @@ if (errors.length) {
   for (const error of errors) console.error(`- ${error}`);
   process.exitCode = 1;
 } else {
-  console.log(`[ok] ${verifyScript} wires typecheck, core tests, C01-C18, no-legacy guard, Runtime Codex final acceptance, browser acceptance evidence, Web final conformance, browser web-multiturn-final, and final evidence validation`);
+  console.log(`[ok] ${verifyScript} wires typecheck, core tests, C01-C18, no-legacy/no-hardcoded source hygiene guards, Runtime Codex final acceptance, browser acceptance evidence, Web final conformance, browser web-multiturn-final, and final evidence validation`);
 }
 
 function packageScriptSteps(script: string | undefined): string[] {
