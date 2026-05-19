@@ -54,6 +54,15 @@
     "src/ui/src/app/conversation-projection-view-model.ts#domain-prompt-regex": 3,
     "src/ui/src/app/guiProtocol.ts#domain-prompt-regex": 2,
     "src/ui/src/app/uiActionBoundary.ts#artifact-id-hardcode": 3,
-    "src/ui/src/app/uiActionBoundary.ts#domain-prompt-regex": 1
+    "src/ui/src/app/uiActionBoundary.ts#domain-prompt-regex": 1,
+    "src/runtime/gateway/direct-context-fast-path-selected-report.ts#domain-prompt-regex": 14,
+    "src/runtime/gateway/direct-context-fast-path-shared.ts#domain-prompt-regex": 14,
+    "src/runtime/gateway/direct-context-fast-path-shared.ts#component-id-hardcode": 2,
+    "src/runtime/gateway/generated-task-runner-literature-recovery.ts#domain-default-routing": 13,
+    "src/runtime/gateway/generated-task-runner-literature-recovery.ts#component-id-hardcode": 16,
+    "src/runtime/gateway/generated-task-runner-literature-recovery.ts#artifact-id-hardcode": 4,
+    "src/runtime/gateway/generated-task-runner-literature-recovery.ts#scenario-provider-id-hardcode": 1,
+    "src/runtime/gateway/generated-task-runner-literature-recovery.ts#domain-prompt-regex": 1,
+    "src/ui/src/api/sciforgeToolsClient/client.ts#scenario-provider-id-hardcode": 1
   }
 }

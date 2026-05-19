@@ -2,7 +2,7 @@
   "schemaVersion": "sciforge.runtime-codex.browser-acceptance.v1",
   "status": "blocked",
   "source": "codex-in-app-browser",
-  "observedAt": "2026-05-19T11:17:22.815Z",
+  "observedAt": "2026-05-19T14:21:22.526Z",
   "requestedRolePort": 5173,
   "actualWorkspaceWriterPort": 6173,
   "actualWorkspaceWriterUrl": "http://127.0.0.1:6173",
@@ -30,7 +30,7 @@
   "acceptanceRubric": {
     "userIntent": "Prove the real default-chat Runtime Codex path can complete single-turn, selected-ref, and multi-turn tasks.",
     "expectedObservableResult": "Visible live Runtime Codex/gui.present answers with provider/model/profile/workspace/command id and folded audit logs.",
-    "actualResult": "Blocked before release acceptance: Runtime Codex API key is not configured; live browser E2E must fail closed until SCIFORGE_RUNTIME_API_KEY is present.",
+    "actualResult": "Blocked before release acceptance: Runtime Codex UI stream path is not aligned with the workspace server route: missing",
     "evidenceRefs": [
       "docs/test-artifacts/runtime-codex-browser-acceptance/manifest.json",
       "docs/test-artifacts/runtime-codex-browser-acceptance/blocked-runtime-config.md"
@@ -54,11 +54,11 @@
     "blockedFailedPartialRejected": true,
     "rawStdoutJsonlRejected": true
   },
-  "reason": "Runtime Codex API key is not configured; live browser E2E must fail closed until SCIFORGE_RUNTIME_API_KEY is present.",
-  "blocker": "Runtime Codex API key is not configured; live browser E2E must fail closed until SCIFORGE_RUNTIME_API_KEY is present.",
+  "reason": "Runtime Codex UI stream path is not aligned with the workspace server route: missing",
+  "blocker": "Runtime Codex UI stream path is not aligned with the workspace server route: missing",
   "blockedOn": [
-    "Runtime Codex environment configuration",
-    "Codex in-app browser execution"
+    "Runtime Codex bridge integration",
+    "UI Runtime Codex integration"
   ],
   "singleTurn": {
     "status": "blocked",
@@ -67,7 +67,7 @@
     "providerModelProfileVisible": true,
     "workspaceCommandIdVisible": true,
     "rawAuditFoldedByDefault": true,
-    "reason": "Runtime Codex API key is not configured; live browser E2E must fail closed until SCIFORGE_RUNTIME_API_KEY is present.",
+    "reason": "Runtime Codex UI stream path is not aligned with the workspace server route: missing",
     "evidence": {
       "screenshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit.png",
       "domSnapshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit-dom.txt",
@@ -81,7 +81,7 @@
     "providerModelProfileVisible": false,
     "workspaceCommandIdVisible": false,
     "rawAuditFoldedByDefault": true,
-    "reason": "Runtime Codex API key is not configured; live browser E2E must fail closed until SCIFORGE_RUNTIME_API_KEY is present.",
+    "reason": "Runtime Codex UI stream path is not aligned with the workspace server route: missing",
     "evidence": {
       "notesPath": "docs/test-artifacts/runtime-codex-browser-acceptance/blocked-runtime-config.md"
     }
@@ -93,7 +93,7 @@
     "providerModelProfileVisible": false,
     "workspaceCommandIdVisible": false,
     "rawAuditFoldedByDefault": true,
-    "reason": "Runtime Codex API key is not configured; live browser E2E must fail closed until SCIFORGE_RUNTIME_API_KEY is present.",
+    "reason": "Runtime Codex UI stream path is not aligned with the workspace server route: missing",
     "evidence": {
       "notesPath": "docs/test-artifacts/runtime-codex-browser-acceptance/blocked-runtime-config.md"
     },

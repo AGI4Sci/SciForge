@@ -38,7 +38,20 @@ const requiredEntries = [
   'computer-use',
   'dual-instance-self-repair',
 ];
-const ignoredDirs = new Set(['.git', 'node_modules', 'dist', 'dist-ui', 'build', 'coverage', 'docs_old', 'archive']);
+const ignoredDirs = new Set([
+  '.git',
+  'node_modules',
+  'dist',
+  'dist-ui',
+  'build',
+  'coverage',
+  'docs_old',
+  'archive',
+  '.codex-runtime',
+  '.sciforge',
+  '.tmp',
+  'workspace',
+]);
 const sourceExtensions = new Set(['.ts', '.tsx', '.js', '.jsx', '.md', '.json']);
 
 async function main() {
@@ -122,7 +135,7 @@ async function collectFiles(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
   const out: string[] = [];
   for (const entry of entries) {
-    if (ignoredDirs.has(entry.name)) continue;
+    if (ignoredDirs.has(entry.name) || entry.name.startsWith('.')) continue;
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
       out.push(...await collectFiles(full));

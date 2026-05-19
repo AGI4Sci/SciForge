@@ -318,26 +318,27 @@ export async function sendSciForgeToolMessage(
       },
     },
   });
+  const presented = attachRuntimeGuiPresentationToResponse(normalized, result);
   const codexSessionId = codexSessionIdFromRuntimeResult(result);
-  if (!codexSessionId) return normalized;
+  if (!codexSessionId) return presented;
   const codexThreadRef = codexThreadObjectReference(codexSessionId, commandId);
   return {
-    ...normalized,
+    ...presented,
     run: {
-      ...normalized.run,
+      ...presented.run,
       raw: {
-        ...(isRecord(normalized.run.raw) ? normalized.run.raw : {}),
+        ...(isRecord(presented.run.raw) ? presented.run.raw : {}),
         codexSessionId,
       },
       objectReferences: [
-        ...(normalized.run.objectReferences ?? []),
+        ...(presented.run.objectReferences ?? []),
         codexThreadRef,
       ],
     },
     message: {
-      ...normalized.message,
+      ...presented.message,
       objectReferences: [
-        ...(normalized.message.objectReferences ?? []),
+        ...(presented.message.objectReferences ?? []),
         codexThreadRef,
       ],
     },
@@ -355,6 +356,45 @@ export async function sendSciForgeToolMessage(
     globalThis.clearInterval(silenceWatchdog);
     signal?.removeEventListener('abort', linkedAbort);
   }
+}
+
+function attachRuntimeGuiPresentationToResponse(
+  response: NormalizedAgentResponse,
+  result: unknown,
+): NormalizedAgentResponse {
+  const presentation = isRecord(result) && isRecord(result.guiPresentation)
+    ? result.guiPresentation
+    : isRecord(result) && isRecord(result.output) && isRecord(result.output.guiPresentation)
+      ? result.output.guiPresentation
+      : undefined;
+  const source = asString(presentation?.source);
+  if (!source?.startsWith('gui.present:')) return response;
+  return {
+    ...response,
+    message: {
+      ...response.message,
+      provenance: {
+        ...(response.message.provenance ?? {}),
+        kind: 'live-runtime-codex',
+        source,
+        runtimeRequestEligible: false,
+        liveAcceptanceEligible: true,
+        commandId: asString(presentation?.commandId),
+        attemptId: asString(presentation?.attemptId),
+        provider: asString(presentation?.provider),
+        model: asString(presentation?.model),
+        profile: asString(presentation?.profile),
+        workspace: asString(presentation?.workspace),
+      },
+    },
+    run: {
+      ...response.run,
+      raw: {
+        ...(isRecord(response.run.raw) ? response.run.raw : {}),
+        guiPresentation: presentation,
+      },
+    },
+  };
 }
 
 function buildCodexRuntimeStreamRequest(input: {
