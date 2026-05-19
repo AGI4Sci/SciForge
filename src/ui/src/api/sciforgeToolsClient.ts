@@ -7,8 +7,7 @@ import { SCENARIO_SPECS } from '@sciforge/scenario-core/scenario-specs';
 import { builtInScenarioIdForRuntimeInput, skillDomainForRuntimeInput } from '@sciforge/scenario-core/scenario-routing-policy';
 import { expectedArtifactsForCurrentTurn, selectedComponentsForCurrentTurn } from '../artifactIntent';
 import { normalizeAgentResponse } from './agentClient';
-import { DEFAULT_AGENT_REQUEST_TIMEOUT_MS, buildSharedAgentHandoffContract } from '@sciforge-ui/runtime-contract/handoff';
-import { buildAgentHandoffPayload } from '@sciforge-ui/runtime-contract/handoff-payload';
+import { DEFAULT_AGENT_REQUEST_TIMEOUT_MS } from '@sciforge-ui/runtime-contract/handoff';
 import { collectRuntimeRefsFromValue } from '@sciforge-ui/runtime-contract/references';
 import {
   CURRENT_REFERENCE_EVIDENCE_POLICY_DEFAULT_ACTION,
@@ -31,6 +30,10 @@ import {
   withConfiguredContextWindowLimit,
   workspaceResultCompletion,
 } from './sciforgeToolsClient/runtimeEvents';
+
+export const CODEX_RUNTIME_STREAM_PATH = '/api/sciforge/runtime/codex/stream';
+const CODEX_RUNTIME_REQUEST_SCHEMA_VERSION = 'sciforge.codex-runtime-stream-request.v1';
+const DEFAULT_RUNTIME_PROFILE = 'sciforge-runtime-deepseek';
 
 const TRANSPORT_SESSION_MESSAGE_LIMIT = 12;
 const TRANSPORT_RUN_LIMIT = 8;
@@ -65,27 +68,6 @@ export async function sendSciForgeToolMessage(
 ): Promise<NormalizedAgentResponse> {
   const builtInScenarioId = builtInScenarioIdForRuntimeInput(input);
   const referenceSummary = (input.references ?? []).map(compactSciForgeReference);
-  const artifactSummary = (input.artifacts ?? []).slice(-TRANSPORT_ARTIFACT_LIMIT).map(sanitizeTransportArtifact);
-  const claimSummary = (input.claims ?? []).slice(-24).map(compactTransportClaim);
-  const recentExecutionRefs = compactTransportExecutionUnits(input.executionUnits ?? []);
-  const skillDomain = skillDomainForRuntimeInput(input);
-  const configuredComponentIds = input.availableComponentIds?.length
-    ? input.availableComponentIds
-    : (input.scenarioOverride?.defaultComponents?.length
-      ? input.scenarioOverride.defaultComponents
-      : SCENARIO_SPECS[builtInScenarioId].componentPolicy.defaultComponents);
-  const selectedComponentIds = selectedComponentsForCurrentTurn(input.prompt, configuredComponentIds);
-  const turnExecutionConstraints = normalizeTurnExecutionConstraints(input.scenarioOverride?.turnExecutionConstraints);
-  const selectedSkillIds = selectedRuntimeSkillIds(input, skillDomain, turnExecutionConstraints);
-  const selectedToolIds = selectedRuntimeToolIds(input);
-  const selectedToolContracts = selectedRuntimeToolContracts(selectedToolIds);
-  const expectedArtifactTypes = expectedArtifactsForCurrentTurn({
-    scenarioId: builtInScenarioId,
-    prompt: input.prompt,
-    selectedComponentIds,
-  });
-  const failureRecoveryPolicy = buildFailureRecoveryPolicy(input.executionUnits ?? [], input.runs ?? []);
-  const contextReusePolicy = buildTransportContextReusePolicy(input);
   let activeRequestController: AbortController | undefined;
   let timedOut = false;
   let retryForSilentFirstEvent = false;
@@ -205,100 +187,22 @@ export async function sendSciForgeToolMessage(
     }
   }, 10_000);
   try {
-    callbacks.onEvent?.(toolEvent('current-plan', `当前计划：发送用户原始请求、显式引用和 session 事实到 workspace runtime；上下文选择、digest、能力筛选、验收和恢复由 Python conversation-policy 决定。`));
+    callbacks.onEvent?.(toolEvent('current-plan', `当前计划：把 GUI 用户操作转换为 terminal-equivalent text，交给 Codex Runtime bridge；任务上下文、记忆、工具和展示意图由 Codex/TUI 原生机制负责。`));
     callbacks.onEvent?.(projectToolStartedEvent({ id: makeId('evt'), createdAt: nowIso() }, builtInScenarioId));
-    const sharedAgentContract = buildSharedAgentHandoffContract('ui-chat');
-    const selectedSenseIds = selectedRuntimeSenseIds(input, selectedToolIds);
-    const selectedActionIds = selectedRuntimeActionIds(input);
-    const selectedVerifierIds = selectedRuntimeVerifierIds(input);
-    const humanApprovalPolicy = configuredHumanApprovalPolicy(input);
-    const unverifiedReason = asString(input.scenarioOverride?.unverifiedReason);
-    const scenarioOverride = scenarioOverrideForTransport(input.scenarioOverride);
-    const toolProviderRoutes = mergeToolProviderRoutes(
-      input.config.toolProviderRoutes,
-      input.scenarioOverride?.toolProviderRoutes,
-    );
-    const targetInstanceContext = compactTargetInstanceContext(input);
-    const repairHandoffRunner = buildRepairHandoffRunnerPayload(input);
-    const requestBody = buildAgentHandoffPayload({
-      scenarioId: builtInScenarioId,
-      handoffSource: 'ui-chat',
-      scenarioPackageRef: input.scenarioPackageRef,
-      skillPlanRef: input.skillPlanRef,
-      uiPlanRef: input.uiPlanRef,
-      skillDomain,
-      agentBackend: input.config.agentBackend,
-      prompt: input.prompt,
-      workspacePath: input.config.workspacePath,
-      agentServerBaseUrl: input.config.agentServerBaseUrl,
-      modelProvider: input.config.modelProvider,
-      modelName: input.config.modelName,
-      maxContextWindowTokens: input.config.maxContextWindowTokens,
-      llmEndpoint: buildToolLlmEndpoint(input),
-      roleView: input.roleView,
-      artifacts: artifactSummary,
-      references: referenceSummary,
-      selectedSkillIds,
-      selectedToolIds,
-      selectedToolContracts,
-      selectedSenseIds,
-      selectedActionIds,
-      selectedVerifierIds,
-      expectedArtifactTypes,
-      selectedComponentIds,
-      availableComponentIds: configuredComponentIds,
-      artifactPolicy: undefined,
-      referencePolicy: buildReferencePolicy(referenceSummary),
-      failureRecoveryPolicy,
-      humanApprovalPolicy,
-      unverifiedReason,
-      verificationResult: input.verificationResult,
-      recentVerificationResults: input.recentVerificationResults,
-      uiState: {
-        sessionId: input.sessionId,
-        sessionCreatedAt: input.sessionCreatedAt,
-        sessionUpdatedAt: input.sessionUpdatedAt,
-        silentStreamRunId,
-        scopeCheck: {
-          source: sharedAgentContract.source,
-          decisionOwner: 'runtime-policy',
-          dispatchPolicy: sharedAgentContract.dispatchPolicy,
-          answerPolicy: sharedAgentContract.answerPolicy,
-          note: 'SciForge dispatch is constrained by versioned current-turn policy records before any AgentServer generation is allowed.',
-        },
-        scenarioOverride,
-        toolProviderRoutes,
-        scenarioPackageRef: input.scenarioPackageRef,
-        skillPlanRef: input.skillPlanRef,
-        uiPlanRef: input.uiPlanRef,
-        currentPrompt: input.prompt,
-        currentTurnId: input.currentTurnId,
-        maxContextWindowTokens: input.config.maxContextWindowTokens,
-        sessionMessages: stableSessionMessages(input),
-        claims: claimSummary,
-        currentReferences: referenceSummary,
-        targetInstance: targetInstanceContext,
-        targetInstanceContext,
-        repairHandoffRunner,
-        turnExecutionConstraints,
-        recentExecutionRefs,
-        recentRuns: compactTransportRuns(input.runs ?? []),
-        contextReusePolicy,
-        failureRecoveryPolicy,
-        workspacePersistence: workspacePersistenceSummary(input),
-        artifactExpectationMode: expectedArtifactTypes.length ? 'explicit-current-turn' : 'backend-decides',
-        rawUserPrompt: input.prompt,
-        contextPolicyOwner: 'python-conversation-policy',
-        agentDispatchPolicy: 'runtime-policy-decides',
-      },
-      agentContext: buildTransportAgentContext(input, configuredComponentIds, selectedToolContracts, repairHandoffRunner),
+    const commandId = makeId('codex-command');
+    const requestBody = buildCodexRuntimeStreamRequest({
+      input,
+      commandId,
+      referenceSummary,
+      silentStreamRunId,
     });
     const requestBodyText = JSON.stringify(requestBody);
     callbacks.onEvent?.(contextWindowTelemetryEvent(
       input,
       requestBodyText,
-      'AgentServer handoff preflight estimate',
+      'Codex Runtime command/projection preflight estimate',
     ));
+    callbacks.onEvent?.(codexRuntimeRunEvent(requestBody));
     let response: Response | undefined;
     let result: unknown;
     let error: string | undefined;
@@ -313,7 +217,7 @@ export async function sendSciForgeToolMessage(
       }
       try {
         if (signal?.aborted) activeRequestController.abort();
-        response = await fetch(`${input.config.workspaceWriterBaseUrl}/api/sciforge/tools/run/stream`, {
+        response = await fetch(`${input.config.workspaceWriterBaseUrl}${CODEX_RUNTIME_STREAM_PATH}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: requestBodyText,
@@ -373,7 +277,7 @@ export async function sendSciForgeToolMessage(
     ok: true,
     data: {
       run: {
-        id: makeId(`project-${builtInScenarioId}`),
+        id: commandId,
         status: completion.status,
         createdAt: nowIso(),
         completedAt: nowIso(),
@@ -396,6 +300,96 @@ export async function sendSciForgeToolMessage(
     globalThis.clearInterval(silenceWatchdog);
     signal?.removeEventListener('abort', linkedAbort);
   }
+}
+
+function buildCodexRuntimeStreamRequest(input: {
+  input: SendAgentMessageInput;
+  commandId: string;
+  referenceSummary: Array<Record<string, unknown>>;
+  silentStreamRunId: string;
+}) {
+  const config = input.input.config;
+  const profile = config.runtimeProfile?.trim() || DEFAULT_RUNTIME_PROFILE;
+  const provider = config.modelProvider.trim() || 'sciforge-deepseek-proxy';
+  const model = config.modelName.trim() || 'bailian/deepseek-v4-flash';
+  const commandText = buildCodexRuntimeCommandText(input);
+  const codexSessionId = latestCodexSessionId(input.input.runs);
+  return {
+    schemaVersion: CODEX_RUNTIME_REQUEST_SCHEMA_VERSION,
+    commandId: input.commandId,
+    commandText,
+    workspacePath: config.workspacePath,
+    profile,
+    codexSessionId,
+    allowOpenAiRuntime: config.allowOpenAiRuntime === true,
+    runtime: {
+      kind: 'codex',
+      profile,
+      provider,
+      model,
+      baseUrl: config.modelBaseUrl.trim(),
+      apiKeyConfigured: Boolean(config.apiKey.trim()),
+      allowOpenAiRuntime: config.allowOpenAiRuntime === true,
+    },
+    transportAudit: {
+      boundary: 'GUI-to-TUI input is terminal-equivalent text only; non-text fields are adapter metadata and must not be interpreted as task context.',
+      silentStreamRunId: input.silentStreamRunId,
+      selectedRefCount: input.referenceSummary.length,
+    },
+  };
+}
+
+function buildCodexRuntimeCommandText(input: Parameters<typeof buildCodexRuntimeStreamRequest>[0]) {
+  const prompt = input.input.prompt.trim();
+  const refs = input.referenceSummary
+    .map((reference) => asString(reference.ref) || asString(reference.path) || asString(reference.dataRef) || asString(reference.id))
+    .filter((value): value is string => Boolean(value));
+  if (!refs.length) return prompt;
+  const refFlags = refs.slice(0, 12).map((ref) => `--ref ${quoteTerminalArg(ref)}`).join(' ');
+  return `ask ${refFlags} ${quoteTerminalArg(prompt)}`;
+}
+
+function latestCodexSessionId(runs: SendAgentMessageInput['runs']): string | undefined {
+  for (const run of [...(runs ?? [])].reverse()) {
+    const raw = isRecord(run.raw) ? run.raw : undefined;
+    const direct = asString(raw?.codexSessionId) ?? asString(raw?.nativeSessionId);
+    if (direct) return direct;
+    const result = isRecord(raw?.result) ? raw.result : undefined;
+    const resultSessionId = asString(result?.codexSessionId) ?? asString(result?.nativeSessionId);
+    if (resultSessionId) return resultSessionId;
+  }
+  return undefined;
+}
+
+function quoteTerminalArg(value: string) {
+  return JSON.stringify(value);
+}
+
+function codexRuntimeRunEvent(request: ReturnType<typeof buildCodexRuntimeStreamRequest>): AgentStreamEvent {
+  const runtime = request.runtime;
+  const detail = [
+    `provider ${runtime.provider}`,
+    `model ${runtime.model}`,
+    `profile ${request.profile}`,
+    `workspace ${request.workspacePath}`,
+    `command ${request.commandId}`,
+  ].join(' · ');
+  return {
+    id: makeId('evt'),
+    type: 'codex-runtime-run',
+    label: 'Codex Runtime',
+    detail,
+    createdAt: nowIso(),
+    raw: {
+      type: 'codex-runtime-run',
+      provider: runtime.provider,
+      model: runtime.model,
+      profile: request.profile,
+      workspacePath: request.workspacePath,
+      commandId: request.commandId,
+      allowOpenAiRuntime: request.allowOpenAiRuntime,
+    },
+  };
 }
 
 function isBackendProgressEvent(event: AgentStreamEvent) {

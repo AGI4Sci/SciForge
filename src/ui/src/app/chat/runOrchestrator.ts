@@ -270,9 +270,9 @@ export async function runPreflightContextCompaction({
   onStreamEvent({
     id: makeId('evt'),
     type: 'contextCompaction',
-    label: '上下文压缩',
-    detail: blockOnContextCompaction
-      ? '发送前达到阈值，正在请求 AgentServer/backend 原生压缩。'
+      label: '上下文压缩',
+      detail: blockOnContextCompaction
+      ? '发送前达到阈值，正在请求 Codex Runtime 上下文压缩。'
       : '发送前达到阈值，已启动非阻塞上下文压缩；当前请求继续发送。',
     contextWindowState: {
       ...preflightState,
@@ -288,7 +288,7 @@ export async function runPreflightContextCompaction({
       startedAt,
       reason: 'auto-threshold-before-send',
       message: blockOnContextCompaction
-        ? '发送前达到阈值，正在请求 AgentServer/backend 原生压缩。'
+        ? '发送前达到阈值，正在请求 Codex Runtime 上下文压缩。'
         : '发送前达到阈值，已启动非阻塞上下文压缩；当前请求继续发送。',
     },
     raw: { latencyPolicy: { blockOnContextCompaction } },

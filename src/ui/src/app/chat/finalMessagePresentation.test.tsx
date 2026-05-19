@@ -121,6 +121,60 @@ test('raw payload-only messages promote embedded human answer and fold payload m
   assert.equal(presentation.auditSections[0].evidenceType, 'raw-json');
 });
 
+test('runtime JSONL stdout and stderr stay folded out of the main answer DOM', () => {
+  const markup = renderToStaticMarkup(
+    <FinalMessageContent
+      content={[
+        'Done: artifact::analysis-report contains the user-facing result.',
+        '',
+        '## Runtime event',
+        '```jsonl',
+        '{"type":"stdout","data":"RAW_STDOUT_SHOULD_NOT_RENDER","line":1}',
+        '{"type":"stderr","data":"RAW_STDERR_SHOULD_NOT_RENDER","line":2}',
+        '{"type":"debug","raw_jsonl":"RAW_JSONL_SHOULD_NOT_RENDER"}',
+        '```',
+      ].join('\n')}
+      references={[]}
+      onObjectFocus={() => undefined}
+    />,
+  );
+  const foldStart = markup.indexOf('final-message-audit-fold');
+  const mainDom = foldStart >= 0 ? markup.slice(0, foldStart) : markup;
+
+  assert.match(markup, /final-message-audit-fold/);
+  assert.doesNotMatch(markup, /<details class="message-fold depth-2 final-message-audit-fold" open/);
+  assert.match(mainDom, /Done:/);
+  assert.doesNotMatch(mainDom, /RAW_STDOUT_SHOULD_NOT_RENDER|RAW_STDERR_SHOULD_NOT_RENDER|RAW_JSONL_SHOULD_NOT_RENDER/);
+});
+
+test('Runtime Codex plugin and transport warnings stay out of the main answer DOM', () => {
+  const pluginWarning = Array.from({ length: 24 }, (_, index) => (
+    `warn plugin manifest ${index}: failed to load plugin manifest from /private/tmp/sciforge-plugin-${index}.json`
+  )).join('\n');
+  const markup = renderToStaticMarkup(
+    <FinalMessageContent
+      content={[
+        'Done: artifact::analysis-report contains the user-facing result.',
+        '',
+        '## Runtime stderr',
+        '```stderr',
+        pluginWarning,
+        '<!DOCTYPE html><html><title>Attention Required! Cloudflare</title><body>CF-RAY RAW_HTML_SHOULD_NOT_RENDER</body></html>',
+        '{"type":"raw_jsonl","rawJsonl":"RAW_JSONL_SHOULD_NOT_RENDER"}',
+        '```',
+      ].join('\n')}
+      references={[]}
+      onObjectFocus={() => undefined}
+    />,
+  );
+  const foldStart = markup.indexOf('final-message-audit-fold');
+  const mainDom = foldStart >= 0 ? markup.slice(0, foldStart) : markup;
+
+  assert.match(markup, /final-message-audit-fold/);
+  assert.match(mainDom, /Done:/);
+  assert.doesNotMatch(mainDom, /plugin manifest|failed to load plugin|Attention Required|CF-RAY|RAW_JSONL_SHOULD_NOT_RENDER/i);
+});
+
 test('generic ToolPayload and Received sections fold without hiding later result headings', () => {
   const content = [
     '# Result',

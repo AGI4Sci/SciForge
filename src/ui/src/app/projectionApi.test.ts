@@ -75,6 +75,7 @@ test('ProjectionApi exposes manual artifact preview and selected artifact action
 
   assert.equal(preview.status, 'requires-manual-load');
   assert.deepEqual(preview.actions.map((action) => action.kind), ['load-preview']);
+  assert.deepEqual(preview.actions.map((action) => action.commandText), ['open "artifact:large-report"']);
   assert.equal(loaded.artifactRef, 'artifact:large-report');
   assert.equal(loaded.sourceAction?.type, 'load-artifact-preview');
   assert.equal(loaded.sourceAction?.type === 'load-artifact-preview' ? loaded.sourceAction.artifactRef : '', 'artifact:large-report');
@@ -205,6 +206,7 @@ test('UserActionApi records retry with repair evidence as an action result', asy
   assert.equal(result.accepted, true);
   assert.equal(result.action?.type, 'request-retry');
   assert.equal(result.action?.type === 'request-retry' ? result.action.scope : '', 'with-repair-evidence');
+  assert.match(result.commandText ?? '', /^\/rerun "run-retry" --with-repair-evidence --reason "repair missing verifier refs"/);
   assert.deepEqual(result.action?.type === 'request-retry' ? result.action.auditRefs : [], ['artifact:partial-report', 'audit:verification']);
   assert.equal(result.projection?.visibleAnswer.status, 'repair-needed');
 });
@@ -355,6 +357,7 @@ test('UserActionApi records recover, debug audit, approval, and cancel as semant
   assert.equal(recover.accepted, true);
   assert.equal(recover.action?.type, 'trigger-recover');
   assert.equal(recover.action?.type === 'trigger-recover' ? recover.action.recoverAction : '', 'Import and verify candidate artifacts.');
+  assert.match(recover.commandText ?? '', /^\/recover "run-actions" --with-evidence --action "Import and verify candidate artifacts\."/);
   assert.deepEqual(recover.action?.type === 'trigger-recover' ? recover.action.auditRefs : [], ['artifact:partial-report', 'audit:recover']);
   assert.equal(openAudit.action?.type, 'open-debug-audit');
   assert.deepEqual(openAudit.action?.type === 'open-debug-audit' ? openAudit.action.auditRefs : [], ['artifact:partial-report', 'audit:recover']);

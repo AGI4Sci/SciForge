@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { backendRepairStates, coerceReportPayload, contractValidationFailures, renderRegisteredWorkbenchSlot, requestOpenDebugAuditThroughUserActionApi, requestRecoverActionThroughUserActionApi, ResultsRenderer, runAuditRefs, runRecoverActions, shouldOpenRunAuditDetails } from './ResultsRenderer';
+import { backendRepairStates, coerceReportPayload, contractValidationFailures, renderRegisteredWorkbenchSlot, requestOpenDebugAuditThroughUserActionApi, requestRecoverCommandTextAction, ResultsRenderer, runAuditRefs, runRecoverActions, shouldOpenRunAuditDetails } from './ResultsRenderer';
 import { ArtifactInspectorDrawer } from './results-renderer-artifact-inspector';
 import { nextPinnedObjectReferences, performObjectReferenceAction, resolveObjectReferenceActionPlan } from './results-renderer-object-actions';
 import { RegistrySlot } from './results-renderer-registry-slot';
@@ -1123,6 +1123,23 @@ test('object reference selection actions route through UserActionApi', async () 
 
   assert.equal(copyResult.sourceAction, undefined);
   assert.deepEqual(copiedPaths, ['.sciforge/artifacts/report.md']);
+
+  const openResult = await performObjectReferenceAction({
+    action: 'open-external',
+    config: testConfig(),
+    pinnedObjectReferences: [],
+    reference,
+    session,
+    userActionApi: {
+      async selectObject() {
+        assert.fail('open-external must not be recorded as a selected-object action');
+      },
+    },
+  });
+
+  assert.equal(openResult.commandTextAction?.type, 'command-text');
+  assert.equal(openResult.commandTextAction?.source, 'open');
+  assert.equal(openResult.commandTextAction?.commandText, 'open ".sciforge/artifacts/report.md"');
 });
 
 test('artifact inspector drawer renders lineage, reproducible refs, preview, and handoff targets', () => {
@@ -1184,17 +1201,18 @@ test('artifact inspector drawer renders lineage, reproducible refs, preview, and
   assert.match(html, /结构探索/);
 });
 
-test('requestRecoverActionThroughUserActionApi routes result recover buttons through UserActionApi', async () => {
+test('requestRecoverCommandTextAction routes result recover buttons to terminal-equivalent commandText', async () => {
   const session = contractFailureSession();
-  const action = await requestRecoverActionThroughUserActionApi({
+  const action = await requestRecoverCommandTextAction({
     session,
     activeRun: session.runs[0],
     recoverAction: 'regenerate report artifact with markdownRef',
   });
 
-  assert.equal(action?.type, 'trigger-recover');
+  assert.equal(action?.type, 'command-text');
+  assert.equal(action?.source, 'recover');
   assert.equal(action?.runId, 'run-contract-failure');
-  assert.equal(action?.recoverAction, 'regenerate report artifact with markdownRef');
+  assert.match(action?.commandText ?? '', /^\/recover "run-contract-failure" --with-evidence --action "regenerate report artifact with markdownRef"/);
   assert.ok(action?.auditRefs.includes('execution-unit:EU-report'));
   assert.ok(action?.auditRefs.includes('artifact:research-report'));
 });

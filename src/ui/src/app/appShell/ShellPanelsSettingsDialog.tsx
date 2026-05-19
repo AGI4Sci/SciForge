@@ -49,7 +49,7 @@ export function SettingsDialog({
         <div className="settings-head">
           <div>
             <h2>设置</h2>
-            <p>统一配置 AgentServer、模型连接和本地 workspace。</p>
+            <p>统一配置 Codex Runtime、模型连接和本地 workspace。</p>
           </div>
           <IconButton icon={ChevronDown} label="关闭设置" onClick={onClose} />
         </div>
@@ -63,7 +63,7 @@ export function SettingsDialog({
             </select>
           </label>
           <label>
-            <span>AgentServer Base URL</span>
+            <span>Codex Runtime Base URL</span>
             <input value={config.agentServerBaseUrl} onChange={(event) => onChange({ agentServerBaseUrl: event.target.value })} />
           </label>
           <label>
@@ -137,7 +137,7 @@ export function SettingsDialog({
             ) : null}
           </div>
           <label>
-            <span>Agent Backend</span>
+            <span>Runtime Backend</span>
             <select value={config.agentBackend} onChange={(event) => onChange({ agentBackend: event.target.value })}>
               <option value="codex">Codex</option>
               <option value="openteam_agent">OpenTeam Agent</option>
@@ -146,6 +146,10 @@ export function SettingsDialog({
               <option value="openclaw">OpenClaw</option>
               <option value="gemini">Gemini</option>
             </select>
+          </label>
+          <label>
+            <span>Runtime Profile</span>
+            <input value={config.runtimeProfile ?? ''} onChange={(event) => onChange({ runtimeProfile: event.target.value })} placeholder="sciforge-runtime-deepseek" />
           </label>
           <label>
             <span>Model Provider</span>
@@ -159,16 +163,24 @@ export function SettingsDialog({
             </select>
           </label>
           <label>
-            <span>Model Name</span>
+            <span>Model</span>
             <input value={config.modelName} onChange={(event) => onChange({ modelName: event.target.value })} placeholder="gpt-5.4 / local-model / ..." />
           </label>
           <label>
-            <span>Model Base URL</span>
+            <span>Base URL</span>
             <input value={config.modelBaseUrl} onChange={(event) => onChange({ modelBaseUrl: event.target.value })} placeholder="https://.../v1" />
           </label>
           <label>
             <span>API Key</span>
             <input type="password" value={config.apiKey} onChange={(event) => onChange({ apiKey: event.target.value })} placeholder="stored in local config.json" />
+          </label>
+          <label className="wide settings-check-row">
+            <input
+              type="checkbox"
+              checked={config.allowOpenAiRuntime === true}
+              onChange={(event) => onChange({ allowOpenAiRuntime: event.target.checked })}
+            />
+            <span>显式允许 Runtime Codex 使用 OpenAI provider</span>
           </label>
           <label>
             <span>Timeout ms</span>
@@ -222,9 +234,9 @@ export function SettingsDialog({
           <span>
             {settingsSaveStateText(saveState)}
             {' '}
-            下一次 AgentServer 请求会使用当前模型：
+            下一次 Codex Runtime 请求会使用：
             {' '}
-            <code>{config.agentBackend}</code>
+            <code>{config.runtimeProfile || 'sciforge-runtime-deepseek'}</code>
             <strong>{config.modelProvider || 'native'}</strong>
             {config.modelName.trim() ? <code>{config.modelName.trim()}</code> : <em>user model not set</em>}
           </span>

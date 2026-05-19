@@ -8,7 +8,7 @@ import type { WorkspaceFileContent } from '../../api/workspaceClient';
 import { ChatPanel } from '../ChatPanel';
 import { ResultsRenderer } from '../ResultsRenderer';
 import { recoverableRunFocusForSession } from '../appShell/workspaceState';
-import { recordUIActionInSession, type OpenDebugAuditUIAction, type TriggerRecoverUIAction, type UIAction } from '../uiActionBoundary';
+import { recordUIActionInSession, type CommandTextUIAction, type OpenDebugAuditUIAction, type UIAction } from '../uiActionBoundary';
 import type { HandoffAutoRunRequest } from '../results/viewPlanResolver';
 import { scopedResultSlotId } from '../results/viewPlanResolver';
 import { defaultElementSelectionForScenario, ScenarioBuilderPanel } from '../ScenarioBuilderPanel';
@@ -162,9 +162,9 @@ export function Workbench({
     return nextSession;
   }
 
-  function handleTriggerRecoverAction(action: TriggerRecoverUIAction) {
+  function handleCommandTextAction(action: CommandTextUIAction) {
     recordWorkbenchUIAction(action);
-    onDraftChange(scenarioId, action.recoverAction);
+    onDraftChange(scenarioId, action.commandText);
     if (action.runId) setActiveRunId(action.runId);
     setResultsCollapsed(false);
     setMobilePane('chat');
@@ -273,7 +273,7 @@ export function Workbench({
       </div>
       <div
         className={cx('workbench-grid', 'workbench-canvas', resultsCollapsed && 'results-collapsed')}
-        style={!resultsCollapsed && !mobileWorkbenchLayout ? { gridTemplateColumns: `minmax(280px, ${chatColumnWidth}%) 10px minmax(0, 1fr)` } : undefined}
+        style={!resultsCollapsed && !mobileWorkbenchLayout ? { gridTemplateColumns: `minmax(360px, ${chatColumnWidth}%) 10px minmax(300px, 1fr)` } : undefined}
       >
         <div className={cx('mobile-pane', mobilePane !== 'chat' && 'mobile-hidden')}>
           <ChatPanel
@@ -336,7 +336,7 @@ export function Workbench({
             onPreviewPackageRequest={(reference, path, descriptor) => onPreviewPackageRequest(scenarioId, reference, path, descriptor)}
             workspaceFileEditor={workspaceFileEditor}
             onWorkspaceFileEditorChange={onWorkspaceFileEditorChange}
-            onTriggerRecoverAction={handleTriggerRecoverAction}
+            onCommandTextAction={handleCommandTextAction}
             onOpenDebugAuditAction={handleOpenDebugAuditAction}
             onDismissResultSlotPresentation={(presentationId) => {
               const scopedPresentationId = scopedResultSlotId(activeRunId, presentationId);

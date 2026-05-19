@@ -12,6 +12,7 @@ import {
   workspaceRuntimeResultCompletion,
 } from '@sciforge-ui/runtime-contract';
 import { runtimeInteractionProgressEventFromCompactRecord } from '@sciforge-ui/runtime-contract/events';
+import { isRuntimeAuditOnlyEvent, runtimeAuditOnlyEventSummary, runtimeTextLooksAuditOnly } from '../../runtimeAuditEvents';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -105,6 +106,9 @@ export async function readWorkspaceToolStream(
     if (isRecord(json) && json.ok === true) return { result: json.result };
     return { error: isRecord(json) ? asString(json.error) || asString(json.message) : text || `HTTP ${response.status}` };
   }
+  if ((response.headers.get('content-type') ?? '').toLowerCase().includes('text/event-stream')) {
+    return readWorkspaceToolSse(response, onEvent);
+  }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -133,6 +137,81 @@ export async function readWorkspaceToolStream(
   return { result, error };
 }
 
+async function readWorkspaceToolSse(
+  response: Response,
+  onEvent: (event: unknown) => void,
+): Promise<{ result?: unknown; error?: string }> {
+  if (!response.body) return { error: `HTTP ${response.status}` };
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let result: unknown;
+  let error: string | undefined;
+  const messageDeltas: string[] = [];
+  const messages: string[] = [];
+  function consumeBlock(block: string) {
+    const lines = block.split(/\r?\n/);
+    const eventName = lines
+      .map((line) => /^event:\s*(.*)$/.exec(line)?.[1]?.trim())
+      .find((value): value is string => Boolean(value)) ?? 'message';
+    const dataText = lines
+      .map((line) => /^data:\s?(.*)$/.exec(line)?.[1])
+      .filter((value): value is string => value !== undefined)
+      .join('\n')
+      .trim();
+    if (!dataText) return;
+    let data: unknown = dataText;
+    try {
+      data = JSON.parse(dataText) as unknown;
+    } catch {
+      // Keep text-only SSE data as diagnostics.
+    }
+    if (eventName === 'error' || eventName === 'failed') {
+      error = isRecord(data) ? asString(data.error) || asString(data.message) || JSON.stringify(data) : String(data);
+      onEvent(data);
+      return;
+    }
+    onEvent(data);
+    if (isRecord(data)) {
+      if ((eventName === 'message_delta' || data.type === 'message_delta') && asString(data.text)) {
+        messageDeltas.push(asString(data.text)!);
+      }
+      if ((eventName === 'message' || data.type === 'message') && asString(data.text)) {
+        messages.push(asString(data.text)!);
+      }
+    }
+    if (eventName === 'done' || (isRecord(data) && data.type === 'done')) {
+      result = withVisibleRuntimeMessage(data, messages.length ? messages.join('\n') : messageDeltas.join(''));
+    }
+  }
+  for (;;) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+    while (/\r?\n\r?\n/.test(buffer)) {
+      const match = /\r?\n\r?\n/.exec(buffer);
+      if (!match) break;
+      consumeBlock(buffer.slice(0, match.index));
+      buffer = buffer.slice(match.index + match[0].length);
+    }
+    if (done) break;
+  }
+  if (buffer.trim()) consumeBlock(buffer);
+  return { result, error };
+}
+
+function withVisibleRuntimeMessage(result: unknown, message: string): unknown {
+  if (!message.trim() || !isRecord(result)) return result;
+  const output = isRecord(result.output) ? result.output : {};
+  return {
+    ...result,
+    message,
+    output: {
+      ...output,
+      message,
+    },
+  };
+}
+
 export function normalizeWorkspaceRuntimeEvent(raw: unknown): AgentStreamEvent {
   const record = isRecord(raw) ? raw : {};
   const interactionProgressRecord = runtimeInteractionProgressEventFromCompactRecord(record);
@@ -148,7 +227,9 @@ export function normalizeWorkspaceRuntimeEvent(raw: unknown): AgentStreamEvent {
   const contextCompaction = normalizeContextCompaction(record.contextCompaction ?? record.compaction ?? record.context_compaction, type, record);
   const workEvidence = normalizeWorkEvidenceRecords(record.workEvidence ?? record.work_evidence);
   const rawFallbackDetail = rawEventDetailFallback(record);
-  const baseDetail = interactionProgress?.detail
+  const auditOnlyDetail = isRuntimeAuditOnlyEvent(record) ? runtimeAuditOnlyEventSummary(record) : undefined;
+  const baseDetail = auditOnlyDetail
+    || interactionProgress?.detail
     || safeVisibleDetail(record.detail, rawFallbackDetail)
     || safeVisibleDetail(record.message, rawFallbackDetail)
     || safeVisibleDetail(record.text, rawFallbackDetail)
@@ -173,8 +254,9 @@ export function normalizeWorkspaceRuntimeEvent(raw: unknown): AgentStreamEvent {
 }
 
 function rawEventDetailFallback(record: Record<string, unknown>) {
+  if (isRuntimeAuditOnlyEvent(record)) return runtimeAuditOnlyEventSummary(record);
   if (!Object.keys(record).length) return undefined;
-  const rawShaped = ['payload', 'raw', 'stdoutRef', 'stderrRef', 'rawRef', 'runtimeEventsRef'].some((key) => key in record);
+  const rawShaped = ['payload', 'raw', 'stdout', 'stderr', 'jsonl', 'rawJsonl', 'stdoutRef', 'stderrRef', 'rawRef', 'runtimeEventsRef'].some((key) => key in record);
   if (!rawShaped) return undefined;
   return 'Runtime event recorded; structured details are available in the run audit.';
 }
@@ -192,7 +274,8 @@ function isLowInformationStatus(value: string) {
 
 function looksPrivateRuntimeText(value: string) {
   return /^[{[]/.test(value.trim())
-    || /\b(?:stdoutRef|stderrRef|rawRef|runtimeEventsRef)\b/i.test(value)
+    || runtimeTextLooksAuditOnly(value)
+    || /\b(?:stdout|stderr|jsonl|rawJsonl|stdoutRef|stderrRef|rawRef|runtimeEventsRef)\b/i.test(value)
     || /\bhttps?:\/\/[^\s"'<>]+/i.test(value)
     || /\b(?:Invalid token|Unauthorized|Forbidden)\b/i.test(value);
 }

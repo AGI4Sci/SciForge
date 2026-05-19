@@ -9,6 +9,10 @@ const LEGACY_DEFAULT_AGENT_SERVER_URL = 'http://127.0.0.1:18080';
 const LEGACY_DEFAULT_WORKSPACE_WRITER_URL = 'http://127.0.0.1:5174';
 const LEGACY_DEFAULT_WORKSPACE_PATH = '/Applications/workspace/ailab/research/app/SciForge/workspace';
 const DEFAULT_WORKSPACE_PATH = '/Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p1';
+export const DEFAULT_CODEX_RUNTIME_PROFILE = 'sciforge-runtime-deepseek';
+export const DEFAULT_CODEX_RUNTIME_PROVIDER = 'sciforge-deepseek-proxy';
+export const DEFAULT_CODEX_RUNTIME_MODEL = 'bailian/deepseek-v4-flash';
+export const DEFAULT_CODEX_RUNTIME_BASE_URL = 'http://127.0.0.1:4765/v1';
 
 export const defaultSciForgeConfig: SciForgeConfig = {
   schemaVersion: 1,
@@ -20,9 +24,11 @@ export const defaultSciForgeConfig: SciForgeConfig = {
   feedbackGithubRepo: 'AGI4Sci/SciForge',
   theme: 'dark',
   agentBackend: 'codex',
-  modelProvider: 'native',
-  modelBaseUrl: '',
-  modelName: '',
+  runtimeProfile: DEFAULT_CODEX_RUNTIME_PROFILE,
+  allowOpenAiRuntime: false,
+  modelProvider: DEFAULT_CODEX_RUNTIME_PROVIDER,
+  modelBaseUrl: DEFAULT_CODEX_RUNTIME_BASE_URL,
+  modelName: DEFAULT_CODEX_RUNTIME_MODEL,
   apiKey: '',
   requestTimeoutMs: 900_000,
   maxContextWindowTokens: 200_000,
@@ -100,6 +106,8 @@ export function normalizeConfig(value: unknown): SciForgeConfig {
     peerInstances: normalizePeerInstances(raw.peerInstances),
     theme: raw.theme === 'light' ? 'light' : 'dark',
     agentBackend: normalizeAgentBackend(raw.agentBackend),
+    runtimeProfile: normalizeRuntimeProfile(raw.runtimeProfile),
+    allowOpenAiRuntime: raw.allowOpenAiRuntime === true,
     modelProvider: typeof raw.modelProvider === 'string' ? raw.modelProvider : defaultSciForgeConfig.modelProvider,
     modelBaseUrl: cleanUrl(raw.modelBaseUrl) || '',
     modelName: typeof raw.modelName === 'string' ? raw.modelName : '',
@@ -244,6 +252,10 @@ function normalizeAgentBackend(value: unknown) {
   return ['codex', 'openteam_agent', 'claude-code', 'hermes-agent', 'openclaw', 'gemini'].includes(backend)
     ? backend
     : defaultSciForgeConfig.agentBackend;
+}
+
+function normalizeRuntimeProfile(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : defaultSciForgeConfig.runtimeProfile;
 }
 
 function normalizePeerRole(value: unknown): PeerInstanceRole {

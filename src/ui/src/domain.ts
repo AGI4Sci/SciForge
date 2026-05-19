@@ -505,6 +505,8 @@ export interface SciForgeConfig {
   feedbackGithubToken?: string;
   theme?: 'dark' | 'light';
   agentBackend: string;
+  runtimeProfile?: string;
+  allowOpenAiRuntime?: boolean;
   modelProvider: string;
   modelBaseUrl: string;
   modelName: string;

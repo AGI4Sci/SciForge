@@ -58,6 +58,18 @@ packages/backend/.codex-runtime/
 
 Secrets must stay in process environment variables, especially `SCIFORGE_RUNTIME_API_KEY`.
 
+## Native Session Resume
+
+Current upstream Codex CLI exposes:
+
+```bash
+codex exec resume --json <SESSION_ID> <PROMPT>
+```
+
+SciForge runtime may use that native path for multi-turn continuity when the previous turn surfaced a `codexSessionId` from Codex JSONL `session_meta.payload.id` or the isolated Codex session store. The resumed prompt must remain terminal-equivalent user text; GUI transcript replay, custom AgentServer session logs, provider/capability policy injection, and artifact-body prompt stuffing are outside the runtime bridge boundary.
+
+If `codex exec resume` is unavailable or cannot recover the native session inside `packages/backend/.codex-runtime/codex-home`, browser acceptance should report: single-turn Runtime Codex works, multi-turn is blocked by Phase 1 Codex exec capability and must move to Phase 2 Codex app-server/thread integration.
+
 ## Known DeepSeek Compatibility Fix
 
 DeepSeek Chat Completions streaming tool-call chunks may send empty string fields in later deltas:

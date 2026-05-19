@@ -88,6 +88,104 @@ test('conversation policy stream event makes quick status visible before workspa
   assert.ok(events.find((event) => event.type === 'conversation-policy'));
 });
 
+test('聊天流式请求连接到 Codex Runtime bridge 并暴露运行元数据', async () => {
+  const urls: string[] = [];
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (url, init) => {
+    urls.push(String(url));
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return streamResponse([
+      {
+        event: {
+          type: 'codex-runtime-output',
+          message: 'Codex Runtime normalized event.',
+        },
+      },
+      {
+        result: {
+          message: 'Codex Runtime result ready.',
+          executionUnits: [{ id: 'unit-codex-runtime', status: 'done' }],
+          artifacts: [],
+        },
+      },
+    ]);
+  }) as typeof fetch;
+
+  const events: AgentStreamEvent[] = [];
+  const response = await sendSciForgeToolMessage(messageInput(), {
+    onEvent: (event) => events.push(event),
+  });
+
+  assert.equal(response.message.status, 'completed');
+  assert.match(urls[0] ?? '', /\/api\/sciforge\/runtime\/codex\/stream$/);
+  const body = bodies[0]!;
+  assert.equal(body.schemaVersion, 'sciforge.codex-runtime-stream-request.v1');
+  assert.equal(body.profile, 'sciforge-runtime-deepseek');
+  assert.equal(body.allowOpenAiRuntime, false);
+  assert.equal(body.workspacePath, '/tmp/current');
+  assert.match(String(body.commandId), /^codex-command-/);
+  const runtime = body.runtime as Record<string, unknown>;
+  assert.equal(runtime.provider, 'native');
+  assert.equal(runtime.allowOpenAiRuntime, false);
+  assert.equal(body.commandText, 'Summarize current context');
+  assert.equal(body.codexSessionId, undefined);
+  const metadataEvent = events.find((event) => event.type === 'codex-runtime-run');
+  assert.ok(metadataEvent);
+  assert.match(metadataEvent.detail ?? '', /provider native/);
+  assert.match(metadataEvent.detail ?? '', /profile sciforge-runtime-deepseek/);
+  assert.match(metadataEvent.detail ?? '', /workspace \/tmp\/current/);
+  assert.match(metadataEvent.detail ?? '', /command codex-command-/);
+});
+
+test('聊天流式请求用上一轮 native Codex session id 恢复多轮上下文', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_url, init) => {
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return new Response([
+      'event: done\n',
+      'data: {"type":"done","status":"done","message":"remembered","codexSessionId":"019e3e82-164d-79b2-a5d4-b16241620b10"}\n\n',
+    ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+  }) as typeof fetch;
+
+  await sendSciForgeToolMessage(messageInput(undefined, {
+    runs: [{
+      id: 'run-previous',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'remember code',
+      response: 'remembered',
+      createdAt: '2026-05-19T00:00:00.000Z',
+      completedAt: '2026-05-19T00:00:01.000Z',
+      raw: { codexSessionId: '019e3e82-164d-79b2-a5d4-b16241620b10' },
+    }],
+  }));
+
+  assert.equal(bodies[0]?.commandText, 'Summarize current context');
+  assert.equal(bodies[0]?.codexSessionId, '019e3e82-164d-79b2-a5d4-b16241620b10');
+});
+
+test('Codex Runtime SSE stream 会归一化展示且 raw JSONL 不进入主事件文本', async () => {
+  globalThis.fetch = (async () => new Response([
+    'event: run_started\n',
+    'data: {"type":"run_started","provider":"sciforge-deepseek-proxy","model":"bailian/deepseek-v4-flash","profile":"sciforge-runtime-deepseek","workspace":"/tmp/current","commandId":"cmd-sse","message":"started"}\n\n',
+    'event: raw_jsonl\n',
+    'data: {"type":"raw_jsonl","rawJsonl":"{\\"secret\\":\\"RAW_JSONL_SHOULD_STAY_AUDIT\\"}","presentationRole":"audit"}\n\n',
+    'event: done\n',
+    'data: {"type":"done","status":"done","message":"Codex Runtime result ready."}\n\n',
+  ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } })) as typeof fetch;
+
+  const events: AgentStreamEvent[] = [];
+  const response = await sendSciForgeToolMessage(messageInput(), {
+    onEvent: (event) => events.push(event),
+  });
+
+  assert.equal(response.message.status, 'completed');
+  assert.ok(events.find((event) => event.type === 'run_started'));
+  const rawEvent = events.find((event) => event.type === 'raw_jsonl');
+  assert.ok(rawEvent);
+  assert.doesNotMatch(rawEvent.detail ?? '', /RAW_JSONL_SHOULD_STAY_AUDIT/);
+});
+
 test('configured tool provider routes are sent in runtime uiState', async () => {
   const bodies: Array<Record<string, unknown>> = [];
   globalThis.fetch = (async (_input, init) => {

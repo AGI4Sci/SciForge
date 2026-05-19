@@ -179,6 +179,7 @@ import { tryRunArtifactMutationFastPath } from './gateway/artifact-mutation-fast
 import { tryRunMarkdownReadonlyFastPath } from './gateway/markdown-readonly-fast-path.js';
 import { requestAgentServerGeneration } from './gateway/agentserver-generation-dispatch.js';
 import { requestContextRefs } from './gateway/request-context-refs.js';
+import { tryRunCodexRuntimeGateway } from './codex/codex-runtime-gateway.js';
 
 configureDirectAnswerArtifactContext(collectArtifactReferenceContext);
 configurePayloadValidationContext(attemptPlanRefs);
@@ -190,6 +191,7 @@ export const STAGE_DIRECT_CONTEXT_FAST_PATH = 'direct-context-fast-path';
 export const STAGE_ARTIFACT_MUTATION_FAST_PATH = 'artifact-mutation-fast-path';
 export const STAGE_PLAYWRIGHT_EDGE_BROWSER_RUNTIME = 'playwright-edge-browser-runtime';
 export const STAGE_RUNTIME_EXECUTION_CONSTRAINTS = 'runtime-execution-constraints';
+export const STAGE_CODEX_RUNTIME_BRIDGE = 'codex-runtime-bridge';
 export const STAGE_VISION_SENSE_RUNTIME = 'vision-sense-runtime';
 export const STAGE_LOCAL_TABULAR_ANALYSIS_RUNTIME = 'local-tabular-analysis-runtime';
 export const STAGE_LOCAL_DATA_SENSITIVITY_RUNTIME = 'local-data-sensitivity-runtime';
@@ -207,6 +209,7 @@ export type GatewayPipelineStageName =
   | typeof STAGE_ARTIFACT_MUTATION_FAST_PATH
   | typeof STAGE_PLAYWRIGHT_EDGE_BROWSER_RUNTIME
   | typeof STAGE_RUNTIME_EXECUTION_CONSTRAINTS
+  | typeof STAGE_CODEX_RUNTIME_BRIDGE
   | typeof STAGE_VISION_SENSE_RUNTIME
   | typeof STAGE_LOCAL_TABULAR_ANALYSIS_RUNTIME
   | typeof STAGE_LOCAL_DATA_SENSITIVITY_RUNTIME
@@ -241,6 +244,7 @@ export const GATEWAY_PIPELINE_STAGE_ORDER: GatewayPipelineStageName[] = [
   STAGE_DIRECT_CONTEXT_FAST_PATH,
   STAGE_ARTIFACT_MUTATION_FAST_PATH,
   STAGE_RUNTIME_EXECUTION_CONSTRAINTS,
+  STAGE_CODEX_RUNTIME_BRIDGE,
   STAGE_VISION_SENSE_RUNTIME,
   STAGE_LOCAL_CODE_DEBUG_RUNTIME,
   STAGE_LOCAL_METHODOLOGY_FINALIZER_RUNTIME,
@@ -335,6 +339,13 @@ export const GATEWAY_PIPELINE_STAGES: GatewayPipelineStage[] = [
     name: STAGE_RUNTIME_EXECUTION_CONSTRAINTS,
     async execute(context) {
       const payload = runtimeExecutionForbiddenPayload(context.request);
+      return payload ? { kind: 'short-circuit', payload } : { kind: 'continue' };
+    },
+  },
+  {
+    name: STAGE_CODEX_RUNTIME_BRIDGE,
+    async execute(context) {
+      const payload = await tryRunCodexRuntimeGateway(context.request, context.telemetry.callbacks);
       return payload ? { kind: 'short-circuit', payload } : { kind: 'continue' };
     },
   },

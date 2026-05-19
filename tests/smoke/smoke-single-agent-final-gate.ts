@@ -11,12 +11,16 @@ const finalGateGuardScript = 'smoke:single-agent-final-gate';
 const webMultiturnFinalScript = 'smoke:web-multiturn-final';
 const webFinalConformanceScript = 'smoke:web-final-conformance';
 const finalEvidenceScript = 'smoke:single-agent-final-evidence';
+const runtimeCodexFinalAcceptanceScript = 'smoke:runtime-codex-final-acceptance';
+const runtimeCodexBrowserAcceptanceScript = 'smoke:runtime-codex-browser-acceptance';
 const webMultiturnFinalCommand = 'tsx tests/smoke/smoke-web-multiturn-final.ts';
 const requiredFinalGateOrder = [
   'typecheck',
   'test',
   'smoke:single-agent-runtime-contract',
   'smoke:no-legacy-paths',
+  runtimeCodexFinalAcceptanceScript,
+  runtimeCodexBrowserAcceptanceScript,
   webFinalConformanceScript,
   webMultiturnFinalScript,
   finalEvidenceScript,
@@ -42,6 +46,14 @@ if (scripts[webFinalConformanceScript] !== 'tsx tests/smoke/smoke-web-final-conf
   errors.push(`${webFinalConformanceScript} must run the Web final conformance smoke`);
 }
 
+if (scripts[runtimeCodexFinalAcceptanceScript] !== 'tsx tests/smoke/smoke-runtime-codex-final-acceptance.ts') {
+  errors.push(`${runtimeCodexFinalAcceptanceScript} must run the Runtime Codex final acceptance contract smoke`);
+}
+
+if (scripts[runtimeCodexBrowserAcceptanceScript] !== 'tsx tests/smoke/smoke-runtime-codex-browser-acceptance.ts') {
+  errors.push(`${runtimeCodexBrowserAcceptanceScript} must run the Runtime Codex browser acceptance evidence gate`);
+}
+
 const finalGateSteps = packageScriptSteps(scripts[verifyScript]);
 if (finalGateSteps.length === 0) {
   errors.push(`${verifyScript} must be declared as the final single-agent completion gate`);
@@ -54,7 +66,7 @@ if (errors.length) {
   for (const error of errors) console.error(`- ${error}`);
   process.exitCode = 1;
 } else {
-  console.log(`[ok] ${verifyScript} wires typecheck, core tests, C01-C18, no-legacy guard, Web final conformance, browser web-multiturn-final, and final evidence validation`);
+  console.log(`[ok] ${verifyScript} wires typecheck, core tests, C01-C18, no-legacy guard, Runtime Codex final acceptance, browser acceptance evidence, Web final conformance, browser web-multiturn-final, and final evidence validation`);
 }
 
 function packageScriptSteps(script: string | undefined): string[] {

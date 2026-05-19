@@ -21,6 +21,7 @@ import {
 } from './server/file-preview.js';
 import { handleScenarioLibraryRoutes } from './server/scenario-library-routes.js';
 import { handleWorkspaceFileApiRoutes, readLastWorkspacePath } from './server/workspace-file-api.js';
+import { handleCodexRuntimeRoutes } from './codex/codex-runtime-server.js';
 
 const PORT = Number(process.env.SCIFORGE_WORKSPACE_PORT || 5174);
 const INSTANCE_ID = process.env.SCIFORGE_INSTANCE_ID || process.env.SCIFORGE_INSTANCE || 'default';
@@ -104,6 +105,7 @@ createServer(async (req, res) => {
     }
     return;
   }
+  if (await handleCodexRuntimeRoutes(req, res, url)) return;
   if (url.pathname === '/api/sciforge/instance/stable-version' && req.method === 'GET') {
     try {
       writeJson(res, 200, {

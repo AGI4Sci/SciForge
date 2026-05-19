@@ -168,7 +168,13 @@ export const scenarioDashboardPrimaryImportAction: ScenarioDashboardAction = {
   label: '导入文献场景',
 };
 
-export function scenarioBuilderChromeNavItems(input: { includeAgentRuntimeUi?: boolean } = {}): ScenarioBuilderChromeNavItem[] {
+export function scenarioBuilderChromeNavItems(input: { includeAgentRuntimeUi?: boolean; embeddedMinimal?: boolean } = {}): ScenarioBuilderChromeNavItem[] {
+  if (input.embeddedMinimal) {
+    return [
+      { id: scenarioBuilderChromePaneIds.skills, label: 'Skills' },
+      { id: scenarioBuilderChromePaneIds.tools, label: 'Tools' },
+    ];
+  }
   const items: ScenarioBuilderChromeNavItem[] = [
     { id: scenarioBuilderChromePaneIds.sceneInfo, label: '场景信息' },
   ];
@@ -191,7 +197,13 @@ export function scenarioBuilderChromeNavItems(input: { includeAgentRuntimeUi?: b
 export function scenarioBuilderChromeFallbackPane(input: {
   pane: ScenarioBuilderChromePaneId;
   includeAgentRuntimeUi?: boolean;
+  embeddedMinimal?: boolean;
 }): ScenarioBuilderChromePaneId {
+  if (input.embeddedMinimal) {
+    return input.pane === scenarioBuilderChromePaneIds.tools
+      ? scenarioBuilderChromePaneIds.tools
+      : scenarioBuilderChromePaneIds.skills;
+  }
   return input.pane === scenarioBuilderChromePaneIds.agentRuntimeUi && !input.includeAgentRuntimeUi
     ? scenarioBuilderChromePaneIds.scenarioPackageUi
     : input.pane;

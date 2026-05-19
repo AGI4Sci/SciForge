@@ -85,6 +85,29 @@ test('builds generic waiting progress after 5s without new backend events and ke
   assert.match(formatProgressHeadline(model) ?? '', /最近 读取/);
 });
 
+test('silent waiting progress does not use audit-only stderr as the recent foreground event', () => {
+  const silent = buildSilentStreamProgressEvent({
+    events: [
+      event({ type: 'run_started', label: 'Runtime Codex', detail: 'Runtime Codex started', createdAt: '2026-05-08T00:00:00.000Z' }),
+      event({
+        type: 'audit',
+        label: 'audit',
+        detail: 'Plugin manifest warning: failed to load plugin from /tmp/plugin.json',
+        createdAt: '2026-05-08T00:00:10.000Z',
+        raw: { type: 'audit', status: 'stderr', raw: { stream: 'stderr', chunk: 'Plugin manifest warning: failed to load plugin from /tmp/plugin.json' } },
+      }),
+    ],
+    nowMs: Date.parse('2026-05-08T00:00:16.000Z'),
+    backend: 'codex',
+  });
+
+  const model = silent ? progressModelFromEvent(silent) : undefined;
+
+  assert.equal(model?.phase, PROCESS_PROGRESS_PHASE.WAIT);
+  assert.equal(model?.lastEvent?.label, 'Runtime Codex');
+  assert.doesNotMatch(formatProgressHeadline(model) ?? '', /Plugin manifest warning|failed to load plugin|\/tmp\/plugin\.json/);
+});
+
 test('builds generic waiting progress after 5s without any real backend event', () => {
   const silent = buildSilentStreamProgressEvent({
     events: [

@@ -94,14 +94,20 @@ export function ScenarioBuilderPanel({
   };
   const includeAgentRuntimeUi = Boolean(onAgentRuntimeComponentIdsChange);
   const chromeNavItems = useMemo(
-    () => scenarioBuilderChromeNavItems({ includeAgentRuntimeUi }),
-    [includeAgentRuntimeUi],
+    () => scenarioBuilderChromeNavItems({ includeAgentRuntimeUi, embeddedMinimal: chromeEmbedded }),
+    [chromeEmbedded, includeAgentRuntimeUi],
   );
-  useEffect(() => {
-    if (!chromeEmbedded) return;
-    const nextPane = scenarioBuilderChromeFallbackPane({ pane: chromePane, includeAgentRuntimeUi });
-    if (nextPane !== chromePane) setChromePane(nextPane);
-  }, [chromeEmbedded, chromePane, includeAgentRuntimeUi]);
+  const chromePaneForRender = scenarioBuilderChromeFallbackPane({
+    pane: chromePane,
+    includeAgentRuntimeUi,
+    embeddedMinimal: chromeEmbedded,
+  });
+  useEffect(
+    () => {
+      if (chromePaneForRender !== chromePane) setChromePane(chromePaneForRender);
+    },
+    [chromePane, chromePaneForRender],
+  );
   function navigateLegacyStep(step: BuilderLegacyStepId) {
     setLegacyStep(step);
     requestAnimationFrame(() => {
@@ -111,7 +117,7 @@ export function ScenarioBuilderPanel({
   function legacyStepMuted(step: BuilderLegacyStepId) {
     return legacyStep !== step;
   }
-  const metadataBuilderStep = chromeEmbedded ? chromePane : legacyStep;
+  const metadataBuilderStep = chromeEmbedded ? chromePaneForRender : legacyStep;
   const [previewTab, setPreviewTab] = useState<'scenario' | 'skill' | 'ui' | 'validation'>('scenario');
   const [advancedPreviewOpen, setAdvancedPreviewOpen] = useState(false);
   const [publishStatus, setPublishStatus] = useState('');
@@ -544,8 +550,8 @@ export function ScenarioBuilderPanel({
                 <button
                   key={id}
                   type="button"
-                  className={cx('nav-item', chromePane === id && 'active')}
-                  aria-current={chromePane === id ? 'page' : undefined}
+                  className={cx('nav-item', chromePaneForRender === id && 'active')}
+                  aria-current={chromePaneForRender === id ? 'page' : undefined}
                   onClick={() => setChromePane(id)}
                 >
                   {label}
@@ -553,42 +559,42 @@ export function ScenarioBuilderPanel({
               ))}
             </nav>
             <div className="builder-chrome-pane">
-              {chromePane === scenarioBuilderChromePaneIds.sceneInfo ? (
+              {chromePaneForRender === scenarioBuilderChromePaneIds.sceneInfo ? (
                 <div className="builder-step-panel">
                   <DescribeFields />
                 </div>
               ) : null}
-              {chromePane === scenarioBuilderChromePaneIds.agentRuntimeUi && onAgentRuntimeComponentIdsChange ? (
+              {chromePaneForRender === scenarioBuilderChromePaneIds.agentRuntimeUi && onAgentRuntimeComponentIdsChange ? (
                 <div className="builder-step-panel">
                   <AgentRuntimeUiSelector />
                 </div>
               ) : null}
-              {chromePane === scenarioBuilderChromePaneIds.scenarioPackageUi ? (
+              {chromePaneForRender === scenarioBuilderChromePaneIds.scenarioPackageUi ? (
                 <div className="builder-step-panel">
                   <ScenarioPackageUiSelector />
                 </div>
               ) : null}
-              {chromePane === scenarioBuilderChromePaneIds.skills ? (
+              {chromePaneForRender === scenarioBuilderChromePaneIds.skills ? (
                 <div className="builder-step-panel">
                   <SkillsSelector />
                 </div>
               ) : null}
-              {chromePane === scenarioBuilderChromePaneIds.tools ? (
+              {chromePaneForRender === scenarioBuilderChromePaneIds.tools ? (
                 <div className="builder-step-panel">
                   <ToolsSelector />
                 </div>
               ) : null}
-              {chromePane === scenarioBuilderChromePaneIds.artifacts ? (
+              {chromePaneForRender === scenarioBuilderChromePaneIds.artifacts ? (
                 <div className="builder-step-panel">
                   <ArtifactsSelector />
                 </div>
               ) : null}
-              {chromePane === scenarioBuilderChromePaneIds.failurePolicies ? (
+              {chromePaneForRender === scenarioBuilderChromePaneIds.failurePolicies ? (
                 <div className="builder-step-panel">
                   <FailurePoliciesSelector />
                 </div>
               ) : null}
-              {chromePane === scenarioBuilderChromePaneIds.contract ? (
+              {chromePaneForRender === scenarioBuilderChromePaneIds.contract ? (
                 <>
                   <div className="builder-step-panel">
                     <label className="wide">
@@ -628,7 +634,7 @@ export function ScenarioBuilderPanel({
                   </div>
                 </>
               ) : null}
-              {chromePane === scenarioBuilderChromePaneIds.quality ? (
+              {chromePaneForRender === scenarioBuilderChromePaneIds.quality ? (
                 <div className="manifest-diagnostics">
                   <strong>Quality gate</strong>
                   <span><Badge variant={qualityCounts.blocking ? 'danger' : 'success'}>{qualityCounts.blocking} blocking</Badge></span>
@@ -637,7 +643,7 @@ export function ScenarioBuilderPanel({
                   <code>{qualityReport.items.slice(0, 3).map((item) => `${item.severity}:${item.code}`).join(' · ') || 'ready'}</code>
                 </div>
               ) : null}
-              {chromePane === scenarioBuilderChromePaneIds.publish ? (
+              {chromePaneForRender === scenarioBuilderChromePaneIds.publish ? (
                 <div className="scenario-publish-row">
                   <div>
                     <Badge variant={compileResult.validationReport.ok ? 'success' : 'warning'}>

@@ -51,6 +51,31 @@ function agentServerModelEnvFromLocalConfig() {
   }
 }
 
+function runtimeCodexEnvFromLocalConfig() {
+  const configPath = CONFIG_LOCAL_PATH;
+  if (!existsSync(configPath)) return {};
+  try {
+    const parsed = JSON.parse(readFileSync(configPath, 'utf8'));
+    const llm = isRecord(parsed?.llm) ? parsed.llm : {};
+    const apiKey = stringValue(parsed.apiKey) || stringValue(llm.apiKey);
+    const provider = stringValue(parsed.modelProvider) || stringValue(llm.provider);
+    const baseUrl = stringValue(parsed.modelBaseUrl) || stringValue(llm.baseUrl);
+    const model = stringValue(parsed.modelName) || stringValue(llm.model) || stringValue(llm.modelName);
+    return {
+      ...(apiKey ? { SCIFORGE_RUNTIME_API_KEY: apiKey } : {}),
+      ...(provider ? { SCIFORGE_RUNTIME_PROVIDER: provider } : {}),
+      ...(baseUrl ? { SCIFORGE_RUNTIME_BASE_URL: baseUrl.replace(/\/+$/, '') } : {}),
+      ...(model ? { SCIFORGE_RUNTIME_MODEL: model } : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
+function stringValue(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -61,7 +86,7 @@ if (workspaceHealth.ok) {
 } else if (await isListening(WORKSPACE_PORT)) {
   console.warn(`SciForge workspace writer is running on http://127.0.0.1:${WORKSPACE_PORT}, but its health check failed. Stop the old workspace server and rerun npm run dev.`);
 } else {
-  children.push(start('workspace', ['run', 'workspace:server']));
+  children.push(start('workspace', ['run', 'workspace:server'], process.cwd(), runtimeCodexEnvFromLocalConfig()));
 }
 
 if (await isListening(UI_PORT)) {

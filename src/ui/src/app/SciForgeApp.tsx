@@ -363,7 +363,7 @@ export function SciForgeApp() {
       .then(() => {
         const savedAt = nowIso();
         setConfigSaveState({ status: 'saved', savedAt });
-        setWorkspaceStatus('设置已保存并对下一次 AgentServer 请求生效');
+        setWorkspaceStatus('设置已保存并对下一次 Codex Runtime 请求生效');
       })
       .catch((err) => {
         const message = `设置未保存：${err instanceof Error ? err.message : String(err)}`;

@@ -19,6 +19,11 @@ import {
   createSubmitTurnUIAction,
   createTriggerRecoverUIAction,
   createUpdateCapabilityPreferenceUIAction,
+  commandTextForAskRef,
+  commandTextForCapabilityPreference,
+  commandTextForOpen,
+  commandTextForRecover,
+  commandTextForRerun,
   type UIAction,
 } from './uiActionBoundary';
 
@@ -109,6 +114,7 @@ export interface UserActionResult {
   queuedRunId?: string;
   message?: string;
   auditRef?: string;
+  commandText?: string;
   action?: UIAction;
 }
 
@@ -123,6 +129,7 @@ export interface UserActionDescriptor {
   id: string;
   label: string;
   kind: 'inspect' | 'load-preview' | 'retry' | 'approve' | 'cancel' | 'debug' | 'capability-preference';
+  commandText: string;
   ref?: string;
 }
 
@@ -245,6 +252,7 @@ export function createLocalUserActionApi(projectionApi: ProjectionApi = createLo
       return acceptedAction(action, await projectionApi.getConversationProjection({ session: input.session, focusedRunId: run?.id }), '调试审计展开动作已记录。');
     },
     async requestRetry(input) {
+      const auditRefs = runAuditRefs(input.session, focusedRun(input.session, input.runId));
       const action = createRequestRetryUIAction({
         session: input.session,
         id: actionId('request-retry'),
@@ -252,20 +260,31 @@ export function createLocalUserActionApi(projectionApi: ProjectionApi = createLo
         runId: input.runId,
         reason: input.reason,
         scope: input.scope,
-        auditRefs: runAuditRefs(input.session, focusedRun(input.session, input.runId)),
+        auditRefs,
       });
-      return acceptedAction(action, await projectionApi.getConversationProjection({ session: input.session, focusedRunId: input.runId }), '重试请求已记录为语义动作。');
+      return acceptedAction(
+        action,
+        await projectionApi.getConversationProjection({ session: input.session, focusedRunId: input.runId }),
+        '重试请求已转换为终端等价文本。',
+        commandTextForRerun({ runId: input.runId, scope: input.scope, reason: input.reason, auditRefs }),
+      );
     },
     async triggerRecover(input) {
+      const auditRefs = runAuditRefs(input.session, focusedRun(input.session, input.runId));
       const action = createTriggerRecoverUIAction({
         session: input.session,
         id: actionId('trigger-recover'),
         createdAt: new Date().toISOString(),
         runId: input.runId,
         recoverAction: input.recoverAction,
-        auditRefs: runAuditRefs(input.session, focusedRun(input.session, input.runId)),
+        auditRefs,
       });
-      return acceptedAction(action, await projectionApi.getConversationProjection({ session: input.session, focusedRunId: input.runId }), '恢复动作已记录为语义动作。');
+      return acceptedAction(
+        action,
+        await projectionApi.getConversationProjection({ session: input.session, focusedRunId: input.runId }),
+        '恢复请求已转换为终端等价文本。',
+        commandTextForRecover({ runId: input.runId, recoverAction: input.recoverAction, auditRefs }),
+      );
     },
     async approveResult(input) {
       const action = createApproveResultUIAction({
@@ -295,7 +314,12 @@ export function createLocalUserActionApi(projectionApi: ProjectionApi = createLo
         createdAt: new Date().toISOString(),
         preference: input.preference,
       });
-      return acceptedAction(action, await projectionApi.getConversationProjection({ session: input.session }));
+      return acceptedAction(
+        action,
+        await projectionApi.getConversationProjection({ session: input.session }),
+        undefined,
+        commandTextForCapabilityPreference(input.preference),
+      );
     },
   };
 }
@@ -312,8 +336,13 @@ function conversationProjectionView(session: SciForgeSession, run?: SciForgeRun)
       text: projection ? conversationProjectionVisibleText(projection) ?? projection.visibleAnswer?.diagnostic ?? presentation.reason : presentation.reason,
       primaryArtifactRefs: artifactRefs,
       nextActions: [
-        ...artifactRefs.map((ref) => ({ id: `inspect:${ref}`, label: '查看 artifact', kind: 'inspect' as const, ref })),
-        ...recoverActions.map((action, index) => ({ id: `retry:${index}`, label: action, kind: 'retry' as const })),
+        ...artifactRefs.map((ref) => ({ id: `inspect:${ref}`, label: '基于该 artifact 追问', kind: 'inspect' as const, ref, commandText: commandTextForAskRef(ref) })),
+        ...recoverActions.map((action, index) => ({
+          id: `retry:${index}`,
+          label: action,
+          kind: 'retry' as const,
+          commandText: commandTextForRecover({ runId: run?.id, recoverAction: action, auditRefs: runAuditRefs(session, run) }),
+        })),
       ],
     },
     focusedRun: run ? runSummary(session, run) : undefined,
@@ -360,7 +389,7 @@ function artifactPreviewView(
       status: 'unsupported',
       title: artifactTitle(artifact),
       mediaType: artifact.type,
-      actions: [{ id: `debug:${artifactRef}`, label: '查看调试信息', kind: 'debug', ref: artifactRef }],
+      actions: [{ id: `debug:${artifactRef}`, label: '查看调试信息', kind: 'debug', ref: artifactRef, commandText: commandTextForOpen(artifactRef) }],
     };
   }
   const descriptor = normalizeArtifactPreviewDescriptor(artifact, artifactPath(artifact));
@@ -377,8 +406,8 @@ function artifactPreviewView(
     preview: manual ? undefined : inlineArtifactPreview(artifact, descriptor),
     structuredData: manual || mode === 'raw' ? undefined : structuredArtifactData(artifact),
     actions: manual
-      ? [{ id: `load:${artifactRef}`, label: '加载预览', kind: 'load-preview', ref: artifactRef }]
-      : [{ id: `select:${artifactRef}`, label: '基于该 artifact 追问', kind: 'inspect', ref: artifactRef }],
+      ? [{ id: `load:${artifactRef}`, label: '加载预览', kind: 'load-preview', ref: artifactRef, commandText: commandTextForOpen(artifactRef) }]
+      : [{ id: `select:${artifactRef}`, label: '基于该 artifact 追问', kind: 'inspect', ref: artifactRef, commandText: commandTextForAskRef(artifactRef) }],
   };
 }
 
@@ -458,12 +487,13 @@ function capabilityDiscoverySummaryFromToolResults(results: Record<string, unkno
   return `SciForge 已发现可用能力候选：${candidates.join('、')}。能力发现本身不是任务完成证据，仍需执行所选 capability 并验证结果。`;
 }
 
-function acceptedAction(action: UIAction, projection: ConversationProjectionView, message?: string): UserActionResult {
+function acceptedAction(action: UIAction, projection: ConversationProjectionView, message?: string, commandText?: string): UserActionResult {
   return {
     accepted: true,
     projection,
     message,
     auditRef: `ui-action:${action.id}`,
+    commandText,
     action,
   };
 }

@@ -38,7 +38,7 @@ export function ContextWindowMeter({
             </div>
           ))}
         </dl>
-        <small>AgentServer 负责多轮记忆；SciForge 只发送本轮 projection、refs 和 digests。</small>
+        <small>Codex Runtime owns the context window; SciForge sends the current GUI projection boundary, refs, and digests.</small>
       </div>
     </div>
   );

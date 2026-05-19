@@ -32,11 +32,13 @@ export function ChatPanelHeader({
         <scenario.icon size={18} />
       </div>
       <strong className="panel-scenario-name">Ask SciForge</strong>
-      <Badge variant="muted">当前上下文</Badge>
+      <Badge variant="muted">{config.runtimeProfile || 'sciforge-runtime-deepseek'}</Badge>
+      <Badge variant="muted">{config.modelProvider || 'provider unset'}</Badge>
+      {config.modelName.trim() ? <Badge variant="muted">{config.modelName.trim()}</Badge> : null}
       <Badge variant="success" glow>在线</Badge>
       {archivedCount ? <Badge variant="muted">{archivedCount} archived</Badge> : null}
-      <label className="backend-picker" title="选择下一次 AgentServer 运行使用的 agent backend">
-        <span>backend</span>
+      <label className="backend-picker" title="选择下一次 Runtime Codex 运行使用的兼容 backend 标识">
+        <span>runtime</span>
         <select value={config.agentBackend} onChange={(event) => onConfigChange({ agentBackend: event.target.value })}>
           <option value="codex">Codex</option>
           <option value="openteam_agent">OpenTeam</option>

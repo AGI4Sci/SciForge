@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 
 import { RUNTIME_HEALTH_STATUS } from '@sciforge-ui/runtime-contract';
 import { defaultSciForgeConfig, updateConfig } from './config';
-import { modelHealth, workspaceWriterHealth } from './runtimeHealth';
+import { codexRuntimeHealth, modelHealth, workspaceWriterHealth } from './runtimeHealth';
 
 describe('runtime health model status', () => {
   it('marks empty native model configuration as setup instead of online', () => {
@@ -16,7 +16,7 @@ describe('runtime health model status', () => {
 
     assert.equal(health.status, RUNTIME_HEALTH_STATUS.NOT_CONFIGURED);
     assert.equal(health.detail, 'native · user model not set');
-    assert.match(String(health.recoverAction), /不会回退到 AgentServer 默认模型/);
+    assert.match(String(health.recoverAction), /Runtime Codex 不会回退/);
   });
 
   it('treats native user model endpoints as an explicit online configuration', () => {
@@ -41,7 +41,16 @@ describe('runtime health model status', () => {
     }));
 
     assert.equal(health.status, RUNTIME_HEALTH_STATUS.NOT_CONFIGURED);
-    assert.equal(health.recoverAction, '填写 API Key 或使用 native backend');
+    assert.match(String(health.recoverAction), /allowOpenAiRuntime 默认 false/);
+  });
+
+  it('显示 Codex Runtime profile 健康状态', () => {
+    const health = codexRuntimeHealth(defaultSciForgeConfig, true);
+
+    assert.equal(health.id, 'codex-runtime');
+    assert.equal(health.label, 'Codex Runtime');
+    assert.equal(health.status, RUNTIME_HEALTH_STATUS.ONLINE);
+    assert.match(health.detail, /Runtime Profile sciforge-runtime-deepseek/);
   });
 
   it('diagnoses stale Workspace Writer port drift when the default writer is reachable', () => {

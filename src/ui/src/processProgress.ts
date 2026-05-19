@@ -16,6 +16,7 @@ import type { ProcessProgressModel, ProcessProgressPhase, RuntimeInteractionProg
 import type { AgentStreamEvent } from './domain';
 import { makeId, nowIso } from './domain';
 import type { RuntimeResponsePlan } from './latencyPolicy';
+import { isRuntimeAuditOnlyEvent } from './runtimeAuditEvents';
 
 export type { ProcessProgressModel, ProcessProgressPhase } from '@sciforge-ui/runtime-contract';
 
@@ -486,6 +487,7 @@ function progressModelFromInteractionProgress(progress: RuntimeInteractionProgre
 function latestNonSyntheticEvent(events: AgentStreamEvent[]) {
   for (const event of [...events].reverse()) {
     const raw = isRecord(event.raw) ? event.raw : {};
+    if (isRuntimeAuditOnlyEvent(event)) continue;
     if (raw.silentStreamWaiting === true) continue;
     if (event.type === PROCESS_PROGRESS_EVENT_TYPE && isRecord(raw.progress) && raw.progress.reason === PROCESS_PROGRESS_REASON.BACKEND_WAITING) continue;
     if (event.type === 'queued' || event.type === GUIDANCE_QUEUED_EVENT_TYPE || event.type === USER_INTERRUPT_EVENT_TYPE) continue;
@@ -539,6 +541,7 @@ function summarizeLastEvent(event: AgentStreamEvent) {
 
 function normalizeLastEvent(value: unknown): ProcessProgressModel['lastEvent'] | undefined {
   if (!isRecord(value)) return undefined;
+  if (isRuntimeAuditOnlyEvent(value)) return undefined;
   const label = asString(value.label) ?? asString(value.type);
   const detail = asString(value.detail) ?? asString(value.message) ?? asString(value.text);
   if (!label || !detail) return undefined;

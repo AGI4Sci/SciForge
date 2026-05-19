@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { defaultSciForgeConfig } from '../config';
-import { modelHealth, workspaceWriterHealth, type RuntimeHealthItem, type RuntimeHealthStatus } from '../runtimeHealth';
+import { codexRuntimeHealth, modelHealth, workspaceWriterHealth, type RuntimeHealthItem, type RuntimeHealthStatus } from '../runtimeHealth';
 import type { SciForgeConfig } from '../domain';
 import { startRuntimeServices } from '../api/workspaceClient';
 import { Badge, cx } from './uiPrimitives';
@@ -15,18 +15,15 @@ export function useRuntimeHealth(config: SciForgeConfig, libraryCount?: number) 
     setItems(buildInitialHealth(config, libraryCount));
     async function check() {
       const shouldCheckDefaultWriter = config.workspaceWriterBaseUrl.replace(/\/+$/, '') !== defaultSciForgeConfig.workspaceWriterBaseUrl.replace(/\/+$/, '');
-      const [workspaceOnline, defaultWorkspaceOnline, agentOnline] = await Promise.all([
+      const [workspaceOnline, defaultWorkspaceOnline] = await Promise.all([
         probeUrl(`${config.workspaceWriterBaseUrl.replace(/\/+$/, '')}/health`),
         shouldCheckDefaultWriter ? probeUrl(`${defaultSciForgeConfig.workspaceWriterBaseUrl.replace(/\/+$/, '')}/health`) : Promise.resolve(false),
-        probeUrl(`${config.agentServerBaseUrl.replace(/\/+$/, '')}/health`),
       ]);
       if (cancelled) return;
       setItems([
         { id: 'ui', label: 'Web UI', status: 'online', detail: '当前页面已加载' },
         workspaceWriterHealth(config, workspaceOnline, defaultWorkspaceOnline),
-        agentOnline
-          ? { id: 'agentserver', label: 'AgentServer', status: 'online', detail: config.agentServerBaseUrl }
-          : { id: 'agentserver', label: 'AgentServer', status: 'offline', detail: config.agentServerBaseUrl, recoverAction: '启动或修复 AgentServer；正常用户请求必须由 AgentServer/agent backend 判断回答' },
+        codexRuntimeHealth(config, workspaceOnline),
         modelHealth(config),
         {
           id: 'library',
@@ -41,8 +38,8 @@ export function useRuntimeHealth(config: SciForgeConfig, libraryCount?: number) 
       cancelled = true;
     };
   }, [
-    config.agentServerBaseUrl,
     config.workspaceWriterBaseUrl,
+    config.runtimeProfile,
     config.modelProvider,
     config.modelBaseUrl,
     config.modelName,
@@ -57,7 +54,7 @@ function buildInitialHealth(config: SciForgeConfig, libraryCount?: number): Runt
   return [
     { id: 'ui', label: 'Web UI', status: 'online', detail: '当前页面已加载' },
     { id: 'workspace', label: 'Workspace Writer', status: 'checking', detail: config.workspaceWriterBaseUrl },
-    { id: 'agentserver', label: 'AgentServer', status: 'checking', detail: config.agentServerBaseUrl },
+    { id: 'codex-runtime', label: 'Codex Runtime', status: 'checking', detail: `Runtime Profile ${config.runtimeProfile || 'sciforge-runtime-deepseek'}` },
     modelHealth(config),
     {
       id: 'library',
@@ -100,13 +97,13 @@ function healthLabel(status: RuntimeHealthStatus) {
 
 export function RuntimeHealthPanel({ items, compact = false }: { items: RuntimeHealthItem[]; compact?: boolean }) {
   const blocking = items.filter((item) => item.status === 'offline' || item.status === 'not-configured' || item.status === 'checking');
-  const shouldShowStart = items.some((item) => item.id === 'workspace' || item.id === 'agentserver');
+  const shouldShowStart = items.some((item) => item.id === 'workspace' || item.id === 'codex-runtime');
   const [startState, setStartState] = useState<'idle' | 'starting' | 'done' | 'error'>('idle');
   const [startDetail, setStartDetail] = useState('');
 
   async function handleStartRuntime() {
     setStartState('starting');
-    setStartDetail('正在启动 Workspace Writer 和 AgentServer...');
+    setStartDetail('正在启动 Workspace Writer 和 Codex Runtime bridge...');
     try {
       const result = await startRuntimeServices();
       const summary = result.services

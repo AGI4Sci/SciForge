@@ -180,6 +180,24 @@ SciForge 不定义新的 agent extension API。所有算法和策略扩展都使
 | Artifact schema / verifier | TUI 原生 tool 或 skill。 |
 | GUI 展示、确认、输入收集 | SciForge GUI extension 暴露的 intent-based `gui.*` tools。 |
 
+## Desktop Packaging Direction
+
+SciForge 的本地软件形态应复用现有 React + Vite GUI、Node/TypeScript workspace runtime、`packages/backend` proxy 和上游 Codex CLI bridge，而不是重写一套原生 UI 或 agent host。第一阶段桌面壳选型为 **Electron**：
+
+- Electron main process 负责窗口、菜单、协议、系统权限、日志目录、自动更新入口和本地 runtime 生命周期。
+- Vite build 产物作为 renderer 加载；React/UI 继续遵守上面的 presentation boundary，不引入 Electron-only 业务逻辑。
+- Workspace server、backend proxy、Codex CLI 作为受控本地进程或 sidecar 被 Electron main 启停和监控。
+- Renderer 与 runtime 通过受控 IPC 或 `127.0.0.1` loopback contract 通信；不得让 UI 直接散落进程管理、端口探测或平台判断。
+
+Tauri 暂不进入短中期主线。它可以作为长期优化项重新评估，前提是 runtime launcher、进程边界、AppData 状态目录、密钥存储和平台 adapter 已经稳定；在此之前，Tauri 会迫使 Node runtime、Codex CLI sidecar 和文件/进程权限过早迁移到 Rust command 层，增加当前迁移风险。
+
+到中期为止，桌面化目标不是改变 agent 架构，而是把现有本地 Web + 本地服务产品化：
+
+- 保留 Web/desktop 双运行能力，开发期仍可通过 Vite + workspace server 验证。
+- 把开发启动脚本与生产 runtime launcher 分开。
+- 将固定开发端口、仓库内 runtime state、shell/platform 特例和明文密钥逐步移出 UI/runtime 业务层。
+- macOS、Windows、Linux 的差异统一收敛到 desktop/platform service，而不是散落到 React 组件或 Codex adapter。
+
 ## Capability Discovery
 
 Capability Discovery 不属于 GUI/runtime。用户若从 GUI 触发能力发现，GUI 只发送文本：

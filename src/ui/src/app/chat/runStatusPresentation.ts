@@ -1,11 +1,17 @@
 import { formatProgressHeadline, latestProgressModel } from '../../processProgress';
 import { latestRunningEvent } from '../../streamEventPresentation';
+import { isRuntimeAuditOnlyEvent } from '../../runtimeAuditEvents';
 import type { AgentStreamEvent, RuntimeExecutionUnit, SciForgeConfig } from '../../domain';
 import type { RuntimeHealthItem } from '../runtimeHealthPanel';
 
 export function runningMessageContentFromStream(assistantDraft: string, streamEvents: AgentStreamEvent[]) {
   const latestWorklogLine = formatProgressHeadline(latestProgressModel(streamEvents), latestRunningEvent(streamEvents));
-  return assistantDraft || latestWorklogLine || '正在规划、生成或执行 workspace task，过程日志默认折叠。';
+  if (assistantDraft) return assistantDraft;
+  if (latestWorklogLine) return latestWorklogLine;
+  if (streamEvents.some(isRuntimeAuditOnlyEvent)) {
+    return 'Runtime Codex 正在运行，正在等待后端事件；原始日志已折叠到运行审计。';
+  }
+  return '正在规划、生成或执行 workspace task，过程日志默认折叠。';
 }
 
 export function runReadiness({
@@ -63,7 +69,7 @@ export function runReadiness({
 
 export function runtimeReadinessIssue(runtimeHealth?: RuntimeHealthItem[]) {
   if (!runtimeHealth?.length) return undefined;
-  const required = runtimeHealth.filter((item) => item.id === 'workspace' || item.id === 'agentserver');
+  const required = runtimeHealth.filter((item) => item.id === 'workspace' || item.id === 'codex-runtime');
   const checking = required.find((item) => item.status === 'checking');
   if (checking) {
     return {

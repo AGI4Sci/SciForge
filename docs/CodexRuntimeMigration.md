@@ -132,7 +132,16 @@ stderr -> audit/debug event
 exit code -> turn completed / failed
 ```
 
-Phase 1 不要求长期会话。每次用户任务可以是一个独立 `codex exec --json` turn。
+Phase 1 的默认新会话路径仍然是独立 `codex exec --json` turn。当前上游 Codex CLI 还提供原生恢复路径：
+
+```bash
+codex --profile sciforge-runtime-deepseek --cd "$SCIFORGE_USER_WORKSPACE" \
+  exec resume --json "$CODEX_SESSION_ID" "$SCIFORGE_USER_TEXT_COMMAND"
+```
+
+SciForge 可以把 Codex JSONL `session_meta.payload.id` 作为 `codexSessionId` 元数据保存到 GUI run raw 中，并在下一轮作为 adapter 元数据传回。这个字段只能用于调用 Codex 原生 `exec resume`，不得把 GUI 历史 transcript、provider route、capability policy 或 artifact body 拼进 `commandText`。
+
+如果当前 Codex CLI 版本没有 `codex exec resume`，或 resume 不能在 isolated `CODEX_HOME` 中恢复上下文，Phase 1 必须把多轮标记为 unsupported；完整长会话、审批和富客户端状态仍归 Phase 2 Codex app-server/thread 需求。
 
 ## Phase 2 Adapter
 
@@ -142,6 +151,27 @@ Phase 2 只抽象 CLI 细节，不扩展 backend 范围：
 - `CodexExecJsonAdapter` 是唯一生产 adapter。
 - 其它 adapter 只能用于测试或实验，不进入默认产品路径。
 - GUI 只消费 `NormalizedAgentEvent`，不直接解析 Codex JSONL。
+
+## Desktop Runtime Productization
+
+短中期桌面封装以 Electron 为生产壳，runtime 迁移必须提前收敛到可被 Electron main process 嵌入和管理的形态。这个阶段不引入新的 agent backend，也不把 Tauri 作为主线。
+
+短期 POC 必须证明：
+
+- Electron main 可以加载 `vite build` 产物，而不是启动 Vite dev server。
+- Electron main 可以启动、停止并观测 workspace server、`packages/backend` provider proxy 和 Runtime Codex 进程。
+- Renderer 只通过稳定 IPC 或 loopback API 发送用户命令、读取 normalized events 和 audit events。
+- 一次真实 Codex-backed run 能在桌面窗口内完成，并展示 provider/model/profile/workspace/command id。
+
+中期 runtime 边界必须具备：
+
+- Production runtime launcher：统一管理端口或 IPC、进程生命周期、崩溃退出、stderr/stdout audit、ready/health 状态和 graceful shutdown。
+- App data layout：应用全局配置、Runtime Codex home、日志、缓存和用户 workspace `.sciforge/` 状态分离；路径使用系统 app data 目录，而不是依赖仓库内临时路径。
+- Platform service：集中封装 open external、reveal in folder、terminal command、path quoting、kill process、permission probe 等 macOS/Windows/Linux 差异。
+- Secret storage：provider API key 默认进入系统 keychain/credential store；明文配置只能作为显式调试 fallback。
+- Packaging gates：桌面 smoke 至少覆盖 cold start、runtime health、真实 run、artifact open/follow-up、debug/audit folded、provider fallback 禁止和退出清理。
+
+开发期端口约定仍可用于 Vite/browser 验收；生产桌面端不得把 `5173` 或其它固定开发端口写成用户可见契约。实际使用 loopback 端口时，launcher 必须选择空闲端口并把绑定信息只通过受控配置传给 renderer。
 
 ## Browser E2E Gate
 
@@ -154,3 +184,9 @@ Phase 2 只抽象 CLI 细节，不扩展 backend 范围：
 - debug/audit 默认折叠；
 - 没有隐藏 OpenAI 请求；
 - run audit 能证明使用的是 DeepSeek/profile/proxy。
+
+## AgentServer 遗留清理地图
+
+当前 AgentServer-first 清理清单记录在
+[`AgentServerLegacyCleanupReport.md`](AgentServerLegacyCleanupReport.md)。删除
+或 quarantine AgentServer gateway 模块与 smoke 脚本前，必须先对照该报告。

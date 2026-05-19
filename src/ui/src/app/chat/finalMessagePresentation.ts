@@ -261,12 +261,13 @@ function classifyFinalMessageBlock(block: ContentBlock, pendingAuditHeading: str
   const headingAudit = explicitAuditHeading || /^工作过程摘要[:：]\s*$/i.test(text.trim());
   const rawJson = looksLikeRawJson(text);
   const logOutput = looksLikeLogOutput(block.language, text);
+  const runtimeAuditLog = looksLikeRuntimeAuditLogBlock(text);
   const failureDiagnostic = looksLikeFailureDiagnostic(text);
   const systemEnvelope = looksLikeSystemEnvelope(text);
   const runtimeMetadata = looksLikeRuntimeMetadataBlock(text);
   const processTranscript = looksLikeProcessTranscript(text);
   const userFacingPlanningList = looksLikeUserFacingPlanningList(block.kind, text);
-  const structuralEvidenceType = rawJson ? 'raw-json' : logOutput ? 'log-output' : undefined;
+  const structuralEvidenceType = rawJson ? 'raw-json' : logOutput || runtimeAuditLog ? 'log-output' : undefined;
   const evidenceType = block.kind === 'code'
     ? structuralEvidenceType ?? auditEvidenceType(haystack) ?? codeEvidenceType(block.language, text)
     : (failureDiagnostic || runtimeMetadata || processTranscript ? 'execution-audit' : undefined)
@@ -280,6 +281,7 @@ function classifyFinalMessageBlock(block: ContentBlock, pendingAuditHeading: str
       || systemEnvelope
       || runtimeMetadata
       || processTranscript
+      || runtimeAuditLog
       || (block.kind === 'code' && (evidenceType || rawJson || logOutput))
       || (block.kind !== 'heading' && failureDiagnostic)
       || (block.kind !== 'heading' && evidenceType && text.length > 240)
@@ -307,6 +309,7 @@ function auditEvidenceType(text: string): FinalMessageAuditSection['evidenceType
   if (/\b(raw trace|trace id|完整 trace|agent trace|reasoning trace)\b/.test(text)) return 'raw-trace';
   if (/\b(execution audit|execution details|execution process|executionunit|execution units?|audit trail|provenance|diagnostics?|debug(?:ging)? details|runtime metadata|backend events|route decision|schema validation|执行审计|执行单元|执行明细|执行过程|运行审计|诊断|调试信息|过程记录|中间文件)\b|工作过程摘要/.test(text)) return 'execution-audit';
   if (/\b(tool output|tool result|tool payload|toolpayload|raw payload|raw response|stdout|stderr|terminal output|command output|工具输出|工具结果|原始响应|原始输出|标准输出|错误输出)\b/.test(text)) return 'tool-output';
+  if (/\b(plugin manifest|manifest warning|raw jsonl|raw_jsonl|provider sse|cloudflare)\b/.test(text)) return 'tool-output';
   return undefined;
 }
 
@@ -334,6 +337,12 @@ function looksLikeLogOutput(language: string | undefined, text: string) {
   if (lines.length < 4 && !/stdout|stderr|trace|debug|error/i.test(`${language ?? ''}\n${text}`)) return false;
   const logLines = lines.filter((line) => /^\s*(?:\[[^\]]+\]|(?:debug|info|warn|error|trace)\b|(?:stdout|stderr)\s*:|\$ )/i.test(line));
   return logLines.length >= Math.max(2, Math.ceil(lines.length * 0.4));
+}
+
+function looksLikeRuntimeAuditLogBlock(text: string) {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  if (!compact) return false;
+  return /(?:\b(?:plugin manifest|manifest warning|invalid plugin|failed to load plugin|raw jsonl|raw_jsonl|provider sse|stdout|stderr|cloudflare|cf-ray)\b|<!doctype\s+html|<html\b|attention required)/i.test(compact);
 }
 
 function looksLikeFailureDiagnostic(text: string) {
@@ -411,6 +420,9 @@ function compactAuditFallback(text: string, evidenceType: FinalMessageAuditSecti
   if (humanText) return humanText;
   if (looksLikeFailureDiagnostic(compact)) {
     return '任务未完成，执行诊断、恢复线索和原始输出已折叠在下方，可展开查看后继续追问或重试。';
+  }
+  if (looksLikeRuntimeAuditLogBlock(compact)) {
+    return 'Runtime Codex 返回了运行期日志；原始 stderr、JSONL 或插件 warning 已折叠在下方，可展开审计查看。';
   }
   return `任务已返回 ${labelForEvidence(evidenceType)}。${compact.slice(0, 220)}${compact.length > 220 ? '...' : ''}`;
 }

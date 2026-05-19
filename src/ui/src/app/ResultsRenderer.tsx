@@ -89,8 +89,9 @@ import {
   type WorkbenchSlotRenderProps,
 } from './results-renderer-registry-slot';
 import {
+  createRecoverCommandTextUIAction,
+  type CommandTextUIAction,
   type OpenDebugAuditUIAction,
-  type TriggerRecoverUIAction,
 } from './uiActionBoundary';
 import { capabilityPlanSummaryForSession, createLocalUserActionApi, type CapabilityPlanSummary, type UserActionApi } from './projectionApi';
 
@@ -188,7 +189,7 @@ export function ResultsRenderer({
   workspaceFileEditor,
   onWorkspaceFileEditorChange,
   onDismissResultSlotPresentation,
-  onTriggerRecoverAction,
+  onCommandTextAction,
   onOpenDebugAuditAction,
   initialFocusMode = 'all',
 }: {
@@ -208,7 +209,7 @@ export function ResultsRenderer({
   onWorkspaceFileEditorChange: (next: { file: WorkspaceFileContent; draft: string } | null) => void;
   /** Hide a resolved results card from the UI only (artifacts and workspace files stay). */
   onDismissResultSlotPresentation?: (resolvedSlotPresentationId: string) => void;
-  onTriggerRecoverAction?: (action: TriggerRecoverUIAction) => void;
+  onCommandTextAction?: (action: CommandTextUIAction) => void;
   onOpenDebugAuditAction?: (action: OpenDebugAuditUIAction) => void;
   /** Test hook for rendering a non-default focus mode without browser events. */
   initialFocusMode?: ResultFocusMode;
@@ -251,6 +252,7 @@ export function ResultsRenderer({
     if (result.resultTab) setResultTab(result.resultTab);
     if (result.inspectedArtifact) setInspectedArtifact(result.inspectedArtifact);
     if (result.pinnedObjectReferences) setPinnedObjectReferences(result.pinnedObjectReferences);
+    if (result.commandTextAction) onCommandTextAction?.(result.commandTextAction);
     if (result.notice) setObjectActionNotice(result.notice);
     if (result.error) setObjectActionError(result.error);
   };
@@ -317,7 +319,7 @@ export function ResultsRenderer({
                 onInspectArtifact={setInspectedArtifact}
                 onObjectReferenceFocus={onFocusedObjectChange}
                 onDismissResultSlotPresentation={onDismissResultSlotPresentation}
-                onTriggerRecoverAction={onTriggerRecoverAction}
+                onCommandTextAction={onCommandTextAction}
                 onOpenDebugAuditAction={onOpenDebugAuditAction}
               />
             ) : resultTab === 'evidence' ? (
@@ -338,7 +340,7 @@ function PrimaryResult({
   onInspectArtifact,
   onObjectReferenceFocus,
   onDismissResultSlotPresentation,
-  onTriggerRecoverAction,
+  onCommandTextAction,
   onOpenDebugAuditAction,
 }: {
   scenarioId: ScenarioId;
@@ -351,7 +353,7 @@ function PrimaryResult({
   onInspectArtifact: (artifact: RuntimeArtifact) => void;
   onObjectReferenceFocus?: (reference: ObjectReference) => void;
   onDismissResultSlotPresentation?: (resolvedSlotPresentationId: string) => void;
-  onTriggerRecoverAction?: (action: TriggerRecoverUIAction) => void;
+  onCommandTextAction?: (action: CommandTextUIAction) => void;
   onOpenDebugAuditAction?: (action: OpenDebugAuditUIAction) => void;
 }) {
   const { viewPlan } = model;
@@ -390,7 +392,7 @@ function PrimaryResult({
         session={session}
         activeRun={activeRun}
         viewPlan={viewPlan}
-        onTriggerRecoverAction={onTriggerRecoverAction}
+        onCommandTextAction={onCommandTextAction}
       />
       <CapabilityPlanSummaryCard
         summary={capabilityPlanSummaryForSession(session, activeRun?.id)}
@@ -445,7 +447,7 @@ function PrimaryResult({
           viewPlan={viewPlan}
           defaultOpen={model.auditDefaultOpen}
           onOpenDebugAuditAction={onOpenDebugAuditAction}
-          onTriggerRecoverAction={onTriggerRecoverAction}
+          onCommandTextAction={onCommandTextAction}
         />
       ) : null}
       {viewPlan.allItems.length ? (
@@ -547,12 +549,12 @@ function RunStatusSummary({
   session,
   activeRun,
   viewPlan,
-  onTriggerRecoverAction,
+  onCommandTextAction,
 }: {
   session: SciForgeSession;
   activeRun?: SciForgeRun;
   viewPlan: RuntimeResolvedViewPlan;
-  onTriggerRecoverAction?: (action: TriggerRecoverUIAction) => void;
+  onCommandTextAction?: (action: CommandTextUIAction) => void;
 }) {
   const run = activeRun ?? session.runs.at(-1);
   const projection = conversationProjectionForSession(session, run);
@@ -597,9 +599,9 @@ function RunStatusSummary({
             <button
               key={action}
               type="button"
-              onClick={() => void requestRecoverActionThroughUserActionApi({ session, activeRun, recoverAction: action })
-                .then((recoverAction) => {
-                  if (recoverAction) onTriggerRecoverAction?.(recoverAction);
+              onClick={() => void requestRecoverCommandTextAction({ session, activeRun, recoverAction: action })
+                .then((commandAction) => {
+                  if (commandAction) onCommandTextAction?.(commandAction);
                 })}
             >
               {action}
@@ -696,7 +698,7 @@ function RunAuditDetails({
   viewPlan,
   defaultOpen,
   onOpenDebugAuditAction,
-  onTriggerRecoverAction,
+  onCommandTextAction,
 }: {
   scenarioId: ScenarioId;
   session: SciForgeSession;
@@ -704,7 +706,7 @@ function RunAuditDetails({
   viewPlan: RuntimeResolvedViewPlan;
   defaultOpen?: boolean;
   onOpenDebugAuditAction?: (action: OpenDebugAuditUIAction) => void;
-  onTriggerRecoverAction?: (action: TriggerRecoverUIAction) => void;
+  onCommandTextAction?: (action: CommandTextUIAction) => void;
 }) {
   const rawItems = rawAuditItems(session, activeRun, viewPlan);
   const failureCount = failedExecutionUnits(session, activeRun).length;
@@ -728,7 +730,7 @@ function RunAuditDetails({
           {failureCount ? `${failureCount} failure` : `${units.length} EU`}
         </Badge>
       </summary>
-      <RunAuditOverview session={session} activeRun={activeRun} onTriggerRecoverAction={onTriggerRecoverAction} />
+      <RunAuditOverview session={session} activeRun={activeRun} onCommandTextAction={onCommandTextAction} />
       <ExecutionPanel session={session} executionUnits={units} embedded />
       <NotebookTimeline scenarioId={scenarioId} notebook={session.notebook} embedded />
       <Card className="code-card">
@@ -742,11 +744,11 @@ function RunAuditDetails({
 function RunAuditOverview({
   session,
   activeRun,
-  onTriggerRecoverAction,
+  onCommandTextAction,
 }: {
   session: SciForgeSession;
   activeRun?: SciForgeRun;
-  onTriggerRecoverAction?: (action: TriggerRecoverUIAction) => void;
+  onCommandTextAction?: (action: CommandTextUIAction) => void;
 }) {
   const blockers = runAuditBlockers(session, activeRun);
   const refs = runAuditRefs(session, activeRun);
@@ -767,9 +769,9 @@ function RunAuditOverview({
             <button
               key={action}
               type="button"
-              onClick={() => void requestRecoverActionThroughUserActionApi({ session, activeRun, recoverAction: action })
-                .then((recoverAction) => {
-                  if (recoverAction) onTriggerRecoverAction?.(recoverAction);
+              onClick={() => void requestRecoverCommandTextAction({ session, activeRun, recoverAction: action })
+                .then((commandAction) => {
+                  if (commandAction) onCommandTextAction?.(commandAction);
                 })}
             >
               {action}
@@ -856,21 +858,21 @@ function BackendRepairStateSummary({ state, compact = false }: { state: BackendR
   );
 }
 
-export async function requestRecoverActionThroughUserActionApi(input: {
+export async function requestRecoverCommandTextAction(input: {
   session: SciForgeSession;
   activeRun?: SciForgeRun;
   recoverAction: string;
-  userActionApi?: Pick<UserActionApi, 'triggerRecover'>;
-}): Promise<TriggerRecoverUIAction | undefined> {
+}): Promise<CommandTextUIAction | undefined> {
   const run = input.activeRun ?? input.session.runs.at(-1);
   if (!run) return undefined;
-  const api = input.userActionApi ?? createLocalUserActionApi();
-  const result = await api.triggerRecover({
+  return createRecoverCommandTextUIAction({
     session: input.session,
+    id: actionId('command-recover'),
+    createdAt: new Date().toISOString(),
     runId: run.id,
     recoverAction: input.recoverAction,
+    auditRefs: runAuditRefs(input.session, run),
   });
-  return result.action?.type === 'trigger-recover' ? result.action : undefined;
 }
 
 export async function requestOpenDebugAuditThroughUserActionApi(input: {
@@ -885,6 +887,10 @@ export async function requestOpenDebugAuditThroughUserActionApi(input: {
     runId: run?.id,
   });
   return result.action?.type === 'open-debug-audit' ? result.action : undefined;
+}
+
+function actionId(prefix: string) {
+  return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function runtimeCompatibilityDiagnosticsForPresentation(session: SciForgeSession, activeRun?: SciForgeRun): RuntimeCompatibilityDiagnostic[] {

@@ -1,6 +1,7 @@
 import type { ScenarioInstanceId, SciForgeReference, SciForgeSession } from '../domain';
 
 export type UIActionType =
+  | 'command-text'
   | 'submit-turn'
   | 'select-object'
   | 'load-artifact-preview'
@@ -22,6 +23,15 @@ export interface UIActionBase {
 }
 
 export type UIAction =
+  | (UIActionBase & {
+    type: 'command-text';
+    source: 'submit-turn' | 'ask-ref' | 'open' | 'rerun' | 'recover' | 'capability-preference' | 'cancel' | 'approve';
+    commandText: string;
+    label?: string;
+    targetRef?: string;
+    runId?: string;
+    auditRefs: string[];
+  })
   | (UIActionBase & {
     type: 'submit-turn';
     promptPreview: string;
@@ -78,6 +88,7 @@ export type UIAction =
   });
 
 export type SubmitTurnUIAction = Extract<UIAction, { type: 'submit-turn' }>;
+export type CommandTextUIAction = Extract<UIAction, { type: 'command-text' }>;
 export type SelectObjectUIAction = Extract<UIAction, { type: 'select-object' }>;
 export type LoadArtifactPreviewUIAction = Extract<UIAction, { type: 'load-artifact-preview' }>;
 export type RequestRetryUIAction = Extract<UIAction, { type: 'request-retry' }>;
@@ -129,6 +140,74 @@ export function createSubmitTurnUIAction(input: {
     promptPreview: compactUIActionPromptPreview(input.prompt),
     referenceRefs: uiActionReferenceRefs(input.references ?? []),
   }) as SubmitTurnUIAction;
+}
+
+export function createCommandTextUIAction(input: {
+  session: SciForgeSession;
+  id: string;
+  createdAt: string;
+  source: CommandTextUIAction['source'];
+  commandText: string;
+  label?: string;
+  targetRef?: string;
+  runId?: string;
+  auditRefs?: string[];
+}): CommandTextUIAction {
+  return createUIAction({
+    id: input.id,
+    session: input.session,
+    createdAt: input.createdAt,
+    type: 'command-text',
+    source: input.source,
+    commandText: normalizeCommandText(input.commandText),
+    label: input.label ? compactUIActionPromptPreview(input.label) : undefined,
+    targetRef: input.targetRef,
+    runId: input.runId,
+    auditRefs: uniqueStringList(input.auditRefs ?? []),
+  }) as CommandTextUIAction;
+}
+
+export function createRecoverCommandTextUIAction(input: {
+  session: SciForgeSession;
+  id: string;
+  createdAt: string;
+  runId?: string;
+  recoverAction: string;
+  auditRefs?: string[];
+}): CommandTextUIAction {
+  return createCommandTextUIAction({
+    session: input.session,
+    id: input.id,
+    createdAt: input.createdAt,
+    source: 'recover',
+    commandText: commandTextForRecover({
+      runId: input.runId,
+      recoverAction: input.recoverAction,
+      auditRefs: input.auditRefs,
+    }),
+    label: input.recoverAction,
+    runId: input.runId,
+    auditRefs: input.auditRefs,
+  });
+}
+
+export function createOpenCommandTextUIAction(input: {
+  session: SciForgeSession;
+  id: string;
+  createdAt: string;
+  pathOrRef: string;
+  reveal?: boolean;
+  label?: string;
+}): CommandTextUIAction {
+  return createCommandTextUIAction({
+    session: input.session,
+    id: input.id,
+    createdAt: input.createdAt,
+    source: 'open',
+    commandText: commandTextForOpen(input.pathOrRef, { reveal: input.reveal }),
+    label: input.label ?? input.pathOrRef,
+    targetRef: input.pathOrRef,
+  });
 }
 
 export function createSelectObjectUIAction(input: {
@@ -239,6 +318,54 @@ export function createUpdateCapabilityPreferenceUIAction(input: {
   }) as UpdateCapabilityPreferenceUIAction;
 }
 
+export function commandTextForAskRef(ref: string, prompt?: string) {
+  const trimmedPrompt = prompt?.trim();
+  return trimmedPrompt
+    ? `ask --ref ${quoteTerminalArg(ref)} ${quoteTerminalArg(trimmedPrompt)}`
+    : `ask --ref ${quoteTerminalArg(ref)}`;
+}
+
+export function commandTextForOpen(pathOrRef: string, options: { reveal?: boolean } = {}) {
+  return ['open', options.reveal ? '--reveal' : undefined, quoteTerminalArg(pathOrRef)]
+    .filter(Boolean)
+    .join(' ');
+}
+
+export function commandTextForRerun(input: {
+  runId?: string;
+  scope?: RequestRetryUIAction['scope'];
+  reason?: string;
+  auditRefs?: string[];
+}) {
+  const parts = ['/rerun'];
+  if (input.runId) parts.push(quoteTerminalArg(input.runId));
+  if (input.scope === 'with-repair-evidence') parts.push('--with-repair-evidence');
+  if (input.scope === 'rediscover-capabilities') parts.push('--rediscover-capabilities');
+  if (input.reason?.trim()) parts.push('--reason', quoteTerminalArg(input.reason.trim()));
+  for (const ref of uniqueStringList(input.auditRefs ?? []).slice(0, 8)) parts.push('--ref', quoteTerminalArg(ref));
+  return parts.join(' ');
+}
+
+export function commandTextForRecover(input: {
+  runId?: string;
+  recoverAction?: string;
+  auditRefs?: string[];
+}) {
+  const parts = ['/recover'];
+  if (input.runId) parts.push(quoteTerminalArg(input.runId));
+  parts.push('--with-evidence');
+  if (input.recoverAction?.trim()) parts.push('--action', quoteTerminalArg(input.recoverAction.trim()));
+  for (const ref of uniqueStringList(input.auditRefs ?? []).slice(0, 8)) parts.push('--ref', quoteTerminalArg(ref));
+  return parts.join(' ');
+}
+
+export function commandTextForCapabilityPreference(preference: Record<string, unknown>) {
+  const ids = capabilityPreferenceIds(preference);
+  return ids.length
+    ? `/capabilities prefer ${ids.map(quoteTerminalArg).join(' ')}`
+    : `/capabilities prefer --json ${quoteTerminalArg(JSON.stringify(scrubPreference(preference)))}`;
+}
+
 export function createCancelRunUIAction(input: {
   session: SciForgeSession;
   id: string;
@@ -333,9 +460,35 @@ function isUIAction(value: unknown): value is UIAction {
     && typeof record.scenarioId === 'string'
     && typeof record.createdAt === 'string'
     && typeof record.type === 'string'
-    && ['submit-turn', 'select-object', 'load-artifact-preview', 'request-retry', 'trigger-recover', 'approve-result', 'update-capability-preference', 'cancel-run', 'concurrency-decision', 'open-debug-audit'].includes(record.type);
+    && ['command-text', 'submit-turn', 'select-object', 'load-artifact-preview', 'request-retry', 'trigger-recover', 'approve-result', 'update-capability-preference', 'cancel-run', 'concurrency-decision', 'open-debug-audit'].includes(record.type);
 }
 
 function scrubPreference(preference: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(preference).filter(([key]) => !/secret|token|api.?key|authorization|password/i.test(key)));
+}
+
+function normalizeCommandText(commandText: string) {
+  const trimmed = commandText.replace(/\s+/g, ' ').trim();
+  if (!trimmed) throw new Error('commandText is required for GUI-to-TUI actions.');
+  return trimmed;
+}
+
+function quoteTerminalArg(value: string) {
+  return JSON.stringify(value);
+}
+
+function capabilityPreferenceIds(preference: Record<string, unknown>) {
+  const scrubbed = scrubPreference(preference);
+  const values = [
+    scrubbed.prefer,
+    scrubbed.preferred,
+    scrubbed.capabilities,
+    scrubbed.capabilityIds,
+    scrubbed.ids,
+  ];
+  return uniqueStringList(values.flatMap((value) => {
+    if (typeof value === 'string') return value.split(/[\s,]+/).filter(Boolean);
+    if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+    return [];
+  }));
 }

@@ -24,7 +24,7 @@ export function buildContextWindowMeterModel(state: AgentContextWindowState, run
     { label: 'ratio', value: ratioDetail },
     { label: 'status', value: statusLabel },
     { label: 'source', value: sourceLabel },
-    { label: 'backend', value: state.backend || 'unknown' },
+    { label: 'runtime', value: state.backend || 'unknown' },
     { label: 'model', value: state.model || state.provider || 'unknown' },
     { label: 'compact', value: `${state.compactCapability || 'unknown'}${state.pendingCompact ? ' · pending' : ''}` },
     { label: 'thresholds', value: thresholdDetail },
@@ -37,13 +37,13 @@ export function buildContextWindowMeterModel(state: AgentContextWindowState, run
     `ratio: ${ratioDetail}`,
     `status: ${statusLabel}`,
     `source: ${sourceLabel}`,
-    `backend: ${state.backend || 'unknown'}`,
+    `runtime: ${state.backend || 'unknown'}`,
     `compact: ${state.compactCapability || 'unknown'}`,
     `compact threshold: ${state.autoCompactThreshold !== undefined ? `${Math.round(state.autoCompactThreshold * 100)}%` : 'unknown'}`,
     `last compacted: ${state.lastCompactedAt || 'never'}`,
   ].join('\n');
 
-  const memoryBoundaryLine = 'AgentServer owns multi-turn memory; SciForge sends current-turn projection, refs, and digests.';
+  const memoryBoundaryLine = 'Codex Runtime owns the context window; SciForge sends the current GUI projection boundary, refs, and digests.';
   return {
     ratio,
     ratioStyle: `${Math.min(100, Math.max(0, ratio * 100))}%`,
@@ -63,7 +63,7 @@ export function buildContextWindowMeterModel(state: AgentContextWindowState, run
     thresholdDetail,
     detailRows,
     memoryBoundaryLine,
-    title: `${title}\n发送前达到阈值时会请求 AgentServer/backend 原生压缩；运行中事件只读展示。\n${memoryBoundaryLine}`,
+    title: `${title}\n发送前达到阈值时会请求 Codex Runtime 原生压缩；运行中事件只读展示。\n${memoryBoundaryLine}`,
   };
 }
 
@@ -191,7 +191,7 @@ export function contextWindowSourceLabel(source: AgentContextWindowState['source
   if (source === 'unknown') return '未知';
   if (source === 'native') return 'native';
   if (source === 'provider-usage') return 'provider';
-  return 'AgentServer';
+  return source === 'agentserver' ? 'AgentServer legacy' : 'runtime';
 }
 
 function estimateModelContextWindow(modelName: string) {

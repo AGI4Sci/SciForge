@@ -23,6 +23,7 @@ import {
 import { runtimeInteractionProgressEventFromCompactRecord } from '@sciforge-ui/runtime-contract/events';
 import type { RuntimeInteractionProgressEvent } from '@sciforge-ui/runtime-contract';
 import type { AgentStreamEvent } from './domain';
+import { isRuntimeAuditOnlyEvent, runtimeAuditOnlyEventSummary } from './runtimeAuditEvents';
 import {
   classifyWorkEvent,
   emptyWorkEventCounts,
@@ -149,7 +150,10 @@ export function worklogEntryForEvent(event: AgentStreamEvent): StreamWorklogEntr
 export function latestRunningEvent(events: AgentStreamEvent[]) {
   const latestKey = [...events].reverse().find((event) => presentStreamEvent(event).visibleInRunningMessage);
   if (latestKey) return presentStreamEvent(latestKey).detail || presentStreamEvent(latestKey).usageDetail;
-  const latestBackground = [...events].reverse().find((event) => readableStreamEventDetail(event));
+  const latestBackground = [...events].reverse().find((event) => {
+    const presentation = presentStreamEvent(event);
+    return presentation.importance !== 'debug' && readableStreamEventDetail(event);
+  });
   return latestBackground ? '后台正在探索或执行，过程日志已折叠。' : undefined;
 }
 
@@ -251,10 +255,11 @@ export function assistantDraftDeltaFromStreamEvent(event: AgentStreamEvent) {
 }
 
 export function readableStreamEventDetail(event: AgentStreamEvent) {
+  if (isRawRuntimeAuditEvent(event)) return runtimeAuditOnlyEventSummary(event);
   if (event.contextWindowState) {
     const state = event.contextWindowState;
     const meter = buildContextWindowMeterModel(state, false);
-    return `used/window ${meter.used}/${meter.windowSize}, ratio ${meter.ratioLabel}, source ${meter.sourceLabel}, status ${meter.statusLabel}, backend ${state.backend || 'unknown'}, ${meter.compactLine}, last ${state.lastCompactedAt || 'never'}`;
+    return `used/window ${meter.used}/${meter.windowSize}, ratio ${meter.ratioLabel}, source ${meter.sourceLabel}, status ${meter.statusLabel}, runtime ${state.backend || 'unknown'}, ${meter.compactLine}, last ${state.lastCompactedAt || 'never'}`;
   }
   if (event.contextCompaction) {
     const compaction = event.contextCompaction;
@@ -281,6 +286,7 @@ export function readableStreamEventDetail(event: AgentStreamEvent) {
 function streamEventImportance(event: AgentStreamEvent, detail: string): StreamEventImportance {
   const type = event.type.toLowerCase();
   const interactionProgress = interactionProgressSummary(event);
+  if (isRawRuntimeAuditEvent(event)) return 'debug';
   if (interactionProgress) return interactionProgress.importance;
   const structured = structuredWorkEventSummary(event);
   if (structured) return 'key';
@@ -323,6 +329,7 @@ function streamEventTypeLabel(type: string, event?: AgentStreamEvent, detail = '
   if (type === STAGE_START_EVENT_TYPE) return '阶段开始';
   if (type === USAGE_UPDATE_EVENT_TYPE) return '用量';
   if (type === PROCESS_PROGRESS_EVENT_TYPE) return '工作过程';
+  if (type === 'codex-runtime-run') return 'Codex Runtime';
   return type;
 }
 
@@ -382,6 +389,18 @@ function isScriptOrArtifactGenerationDetail(value: string) {
 function looksLikeTransportJson(value: string) {
   const trimmed = value.trim();
   return (trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'));
+}
+
+function isRawRuntimeAuditEvent(event: AgentStreamEvent) {
+  if (isRuntimeAuditOnlyEvent(event)) return true;
+  const raw = isRecord(event.raw) ? event.raw : {};
+  const type = event.type.toLowerCase();
+  const rawType = stringField(raw.type)?.toLowerCase() ?? '';
+  const role = stringField(raw.presentationRole)?.toLowerCase() ?? stringField(raw.role)?.toLowerCase() ?? '';
+  return role === 'audit'
+    || type.includes('raw')
+    || rawType.includes('raw')
+    || ['stdout', 'stderr', 'jsonl', 'rawJsonl', 'rawRef', 'stdoutRef', 'stderrRef', 'runtimeEventsRef'].some((key) => key in raw);
 }
 
 function toolEventActionLabel(event: AgentStreamEvent | undefined, detail: string, fallback: string) {

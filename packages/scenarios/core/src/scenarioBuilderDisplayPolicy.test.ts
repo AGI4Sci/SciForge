@@ -40,6 +40,7 @@ describe('scenario builder display policy', () => {
   it('owns chrome pane ids and labels for the embedded builder shell', () => {
     const withoutAgentRuntime = scenarioBuilderChromeNavItems();
     const withAgentRuntime = scenarioBuilderChromeNavItems({ includeAgentRuntimeUi: true });
+    const embeddedMinimal = scenarioBuilderChromeNavItems({ includeAgentRuntimeUi: true, embeddedMinimal: true });
 
     assert.deepEqual(withoutAgentRuntime.map((item) => item.id), [
       scenarioBuilderChromePaneIds.sceneInfo,
@@ -58,6 +59,10 @@ describe('scenario builder display policy', () => {
       scenarioBuilderChromePaneIds.scenarioPackageUi,
     ]);
     assert.ok(withAgentRuntime.some((item) => item.label === '场景 UI allowlist'));
+    assert.deepEqual(embeddedMinimal.map((item) => item.id), [
+      scenarioBuilderChromePaneIds.skills,
+      scenarioBuilderChromePaneIds.tools,
+    ]);
   });
 
   it('keeps chrome fallback policy next to pane ids', () => {
@@ -71,6 +76,14 @@ describe('scenario builder display policy', () => {
         includeAgentRuntimeUi: true,
       }),
       scenarioBuilderChromePaneIds.agentRuntimeUi,
+    );
+    assert.equal(
+      scenarioBuilderChromeFallbackPane({
+        pane: scenarioBuilderChromePaneIds.sceneInfo,
+        includeAgentRuntimeUi: true,
+        embeddedMinimal: true,
+      }),
+      scenarioBuilderChromePaneIds.skills,
     );
   });
 

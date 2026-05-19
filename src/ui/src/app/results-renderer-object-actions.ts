@@ -1,11 +1,10 @@
-import { openWorkspaceObject } from '../api/workspaceClient';
 import type { ObjectAction, ObjectReference, RuntimeArtifact, SciForgeConfig, SciForgeSession } from '../domain';
 import {
   artifactForObjectReference,
   pathForObjectReference,
 } from '../../../../packages/support/object-references';
 import { createLocalUserActionApi, type UserActionApi } from './projectionApi';
-import type { SelectObjectUIAction } from './uiActionBoundary';
+import { createOpenCommandTextUIAction, type CommandTextUIAction, type SelectObjectUIAction } from './uiActionBoundary';
 
 type WorkspaceOpenObjectAction = Extract<ObjectAction, 'open-external' | 'reveal-in-folder'>;
 
@@ -43,6 +42,7 @@ export type ObjectReferenceActionPlan =
 
 export type ObjectReferenceActionResult = {
   activeRunId?: string;
+  commandTextAction?: CommandTextUIAction;
   error?: string;
   focusReference?: ObjectReference;
   inspectedArtifact?: RuntimeArtifact;
@@ -58,7 +58,6 @@ export type PerformObjectReferenceActionOptions = {
   pinnedObjectReferences: ObjectReference[];
   reference: ObjectReference;
   session: SciForgeSession;
-  openObject?: (config: SciForgeConfig, action: WorkspaceOpenObjectAction, path: string) => Promise<unknown>;
   userActionApi?: Pick<UserActionApi, 'selectObject'>;
   writeClipboard?: (text: string) => Promise<void>;
 };
@@ -117,11 +116,9 @@ export function nextPinnedObjectReferences(current: ObjectReference[], reference
 
 export async function performObjectReferenceAction({
   action,
-  config,
   pinnedObjectReferences,
   reference,
   session,
-  openObject = openWorkspaceObject,
   userActionApi = createLocalUserActionApi(),
   writeClipboard = writeClipboardText,
 }: PerformObjectReferenceActionOptions): Promise<ObjectReferenceActionResult> {
@@ -156,12 +153,18 @@ export async function performObjectReferenceAction({
     }
   }
   if (!plan.path) return { error: plan.error };
-  try {
-    await openObject(config, plan.action, plan.path);
-    return { notice: plan.notice };
-  } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) };
-  }
+  const commandTextAction = createOpenCommandTextUIAction({
+    session,
+    id: actionId('command-open'),
+    createdAt: new Date().toISOString(),
+    pathOrRef: plan.path,
+    reveal: plan.action === 'reveal-in-folder',
+    label: plan.notice,
+  });
+  return {
+    commandTextAction,
+    notice: `${plan.notice} 已生成命令：${commandTextAction.commandText}`,
+  };
 }
 
 async function selectedObjectActionForReference({
@@ -218,4 +221,8 @@ async function writeClipboardText(text: string) {
   } finally {
     document.body.removeChild(textarea);
   }
+}
+
+function actionId(prefix: string) {
+  return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
 }

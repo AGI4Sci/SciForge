@@ -558,6 +558,39 @@ test('workspace runtime raw-shaped event fallback does not expose JSON or privat
   assert.doesNotMatch(presentStreamWorklog([normalized]).entries.map((entry) => entry.operationLine).join('\n'), /stdoutRef|stderrRef|rawRef|Invalid token/);
 });
 
+test('Runtime Codex stderr and plugin warnings stay audit-only in running presentation', () => {
+  const stderrWarning = normalizeWorkspaceRuntimeEvent({
+    type: 'audit',
+    status: 'stderr',
+    message: 'Plugin manifest warning: failed to load plugin from /tmp/plugin.json',
+    raw: { stream: 'stderr', chunk: 'Plugin manifest warning: failed to load plugin from /tmp/plugin.json' },
+  });
+  const directStderr = event({
+    type: 'stderr',
+    label: 'stderr',
+    detail: '<!DOCTYPE html><html><title>Attention Required! Cloudflare</title><body>CF-RAY raw transport page</body></html>',
+    raw: { stream: 'stderr' },
+  });
+
+  const warningPresentation = presentStreamEvent(stderrWarning);
+  const stderrPresentation = presentStreamEvent(directStderr);
+  const worklog = presentStreamWorklog([stderrWarning, directStderr]);
+
+  assert.equal(warningPresentation.importance, 'debug');
+  assert.equal(warningPresentation.visibleInRunningMessage, false);
+  assert.equal(stderrPresentation.importance, 'debug');
+  assert.equal(stderrPresentation.visibleInRunningMessage, false);
+  assert.match(warningPresentation.detail, /plugin manifest warning recorded/i);
+  assert.match(stderrPresentation.detail, /stderr output recorded/i);
+  assert.equal(latestRunningEvent([stderrWarning, directStderr]), undefined);
+  assert.equal(worklog.entries.length, 0);
+  assert.doesNotMatch([
+    warningPresentation.detail,
+    stderrPresentation.detail,
+    latestRunningEvent([stderrWarning, directStderr]) ?? '',
+  ].join('\n'), /failed to load plugin|CF-RAY|Attention Required|<html/i);
+});
+
 test('raw provider scenario and prompt fields do not become structured WorkEvent facts', () => {
   const genericStatus = event({
     id: 'generic-status',

@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 
 import {
+  DEFAULT_CODEX_RUNTIME_BASE_URL,
+  DEFAULT_CODEX_RUNTIME_MODEL,
+  DEFAULT_CODEX_RUNTIME_PROFILE,
+  DEFAULT_CODEX_RUNTIME_PROVIDER,
   defaultSciForgeConfig,
   loadSciForgeConfig,
   normalizeConfig,
@@ -49,6 +53,20 @@ describe('SciForge config persistence', () => {
 
   it('defaults feedback github repo to upstream SciForge', () => {
     assert.equal(defaultSciForgeConfig.feedbackGithubRepo, 'AGI4Sci/SciForge');
+  });
+
+  it('默认 Runtime Codex 使用 DeepSeek profile 且不允许 OpenAI 自动回退', () => {
+    assert.equal(defaultSciForgeConfig.runtimeProfile, DEFAULT_CODEX_RUNTIME_PROFILE);
+    assert.equal(defaultSciForgeConfig.modelProvider, DEFAULT_CODEX_RUNTIME_PROVIDER);
+    assert.equal(defaultSciForgeConfig.modelName, DEFAULT_CODEX_RUNTIME_MODEL);
+    assert.equal(defaultSciForgeConfig.modelBaseUrl, DEFAULT_CODEX_RUNTIME_BASE_URL);
+    assert.equal(defaultSciForgeConfig.allowOpenAiRuntime, false);
+  });
+
+  it('显式配置 allowOpenAiRuntime 才会允许 Runtime Codex 使用 OpenAI provider', () => {
+    assert.equal(normalizeConfig({}).allowOpenAiRuntime, false);
+    assert.equal(normalizeConfig({ allowOpenAiRuntime: true }).allowOpenAiRuntime, true);
+    assert.equal(normalizeConfig({ allowOpenAiRuntime: 'true' }).allowOpenAiRuntime, false);
   });
 
   it('round-trips qwen/openrouter style model settings through localStorage', () => {

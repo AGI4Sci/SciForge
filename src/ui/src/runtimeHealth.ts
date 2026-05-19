@@ -1,12 +1,12 @@
 import { RUNTIME_HEALTH_STATUS } from '@sciforge-ui/runtime-contract';
 import type { RuntimeHealthStatus } from '@sciforge-ui/runtime-contract';
-import { defaultSciForgeConfig } from './config';
+import { DEFAULT_CODEX_RUNTIME_PROFILE, defaultSciForgeConfig } from './config';
 import type { SciForgeConfig } from './domain';
 
 export type { RuntimeHealthStatus } from '@sciforge-ui/runtime-contract';
 
 export interface RuntimeHealthItem {
-  id: 'ui' | 'workspace' | 'agentserver' | 'model' | 'library';
+  id: 'ui' | 'workspace' | 'codex-runtime' | 'agentserver' | 'model' | 'library';
   label: string;
   status: RuntimeHealthStatus;
   detail: string;
@@ -33,32 +33,52 @@ export function workspaceWriterHealth(config: SciForgeConfig, workspaceOnline: b
 }
 
 export function modelHealth(config: SciForgeConfig): RuntimeHealthItem {
-  const provider = config.modelProvider.trim() || 'native';
+  const provider = config.modelProvider.trim() || defaultSciForgeConfig.modelProvider;
+  const model = config.modelName.trim() || (provider === defaultSciForgeConfig.modelProvider ? defaultSciForgeConfig.modelName : '');
+  const baseUrl = config.modelBaseUrl.trim();
+  const apiKeyConfigured = Boolean(config.apiKey.trim());
   if (provider === 'native') {
-    const nativeModel = config.modelName.trim();
-    const nativeBaseUrl = config.modelBaseUrl.trim();
-    const nativeApiKey = config.apiKey.trim();
-    if (!nativeModel && !nativeBaseUrl && !nativeApiKey) {
+    if (!model && !baseUrl && !apiKeyConfigured) {
       return {
         id: 'model',
-        label: 'Model Backend',
+        label: 'Model Provider',
         status: RUNTIME_HEALTH_STATUS.NOT_CONFIGURED,
         detail: 'native · user model not set',
-        recoverAction: '填写用户侧 Model Name / Base URL / API Key；生成任务不会回退到 AgentServer 默认模型',
+        recoverAction: '填写 Model / Base URL / API Key；Runtime Codex 不会回退到其它 provider',
       };
     }
     return {
       id: 'model',
-      label: 'Model Backend',
+      label: 'Model Provider',
       status: RUNTIME_HEALTH_STATUS.ONLINE,
-      detail: `native${nativeModel ? ` · ${nativeModel}` : ''}${nativeBaseUrl ? ` · ${nativeBaseUrl}` : ''}`,
+      detail: `native${model ? ` · ${model}` : ''}${baseUrl ? ` · ${baseUrl}` : ''}`,
     };
   }
-  if (!config.modelBaseUrl.trim()) {
-    return { id: 'model', label: 'Model Backend', status: RUNTIME_HEALTH_STATUS.NOT_CONFIGURED, detail: provider, recoverAction: '填写 Model Base URL 或切回 native' };
+  if (!baseUrl) {
+    return { id: 'model', label: 'Model Provider', status: RUNTIME_HEALTH_STATUS.NOT_CONFIGURED, detail: provider, recoverAction: '填写 Base URL；默认应指向 packages/backend proxy' };
   }
-  if (!config.apiKey.trim()) {
-    return { id: 'model', label: 'Model Backend', status: RUNTIME_HEALTH_STATUS.NOT_CONFIGURED, detail: provider, recoverAction: '填写 API Key 或使用 native backend' };
+  if (!apiKeyConfigured) {
+    return { id: 'model', label: 'Model Provider', status: RUNTIME_HEALTH_STATUS.NOT_CONFIGURED, detail: `${provider} · ${model}`, recoverAction: '填写 API Key；allowOpenAiRuntime 默认 false，不会自动改用 OpenAI' };
   }
-  return { id: 'model', label: 'Model Backend', status: RUNTIME_HEALTH_STATUS.ONLINE, detail: `${provider}${config.modelName.trim() ? ` · ${config.modelName.trim()}` : ''}` };
+  return { id: 'model', label: 'Model Provider', status: RUNTIME_HEALTH_STATUS.ONLINE, detail: `${provider}${model ? ` · ${model}` : ''}` };
+}
+
+export function codexRuntimeHealth(config: SciForgeConfig, workspaceOnline: boolean): RuntimeHealthItem {
+  const profile = config.runtimeProfile?.trim() || DEFAULT_CODEX_RUNTIME_PROFILE;
+  if (!profile) {
+    return {
+      id: 'codex-runtime',
+      label: 'Codex Runtime',
+      status: RUNTIME_HEALTH_STATUS.NOT_CONFIGURED,
+      detail: 'Runtime Profile missing',
+      recoverAction: `配置 Runtime Profile，默认 ${DEFAULT_CODEX_RUNTIME_PROFILE}`,
+    };
+  }
+  return {
+    id: 'codex-runtime',
+    label: 'Codex Runtime',
+    status: workspaceOnline ? RUNTIME_HEALTH_STATUS.ONLINE : RUNTIME_HEALTH_STATUS.CHECKING,
+    detail: `Runtime Profile ${profile}`,
+    recoverAction: workspaceOnline ? undefined : '等待 Workspace Writer 暴露 Codex runtime bridge health',
+  };
 }

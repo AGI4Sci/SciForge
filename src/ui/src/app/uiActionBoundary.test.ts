@@ -5,9 +5,15 @@ import test from 'node:test';
 import type { SciForgeSession } from '../domain';
 import {
   appendUIActionAuditLog,
+  commandTextForAskRef,
+  commandTextForCapabilityPreference,
+  commandTextForOpen,
+  commandTextForRecover,
+  commandTextForRerun,
   createApproveResultUIAction,
   compactUIActionPromptPreview,
   createCancelRunUIAction,
+  createCommandTextUIAction,
   createConcurrencyDecisionUIAction,
   createLoadArtifactPreviewUIAction,
   createOpenDebugAuditUIAction,
@@ -77,6 +83,15 @@ test('UIAction audit log is append-only and bounded', () => {
 
 test('UIAction creators cover every final write intent and can be recorded on the session audit log', () => {
   const actions = [
+    createCommandTextUIAction({
+      id: 'ui-action-command',
+      session,
+      createdAt: '2026-05-16T00:00:59.000Z',
+      source: 'recover',
+      commandText: '/recover "run-failed" --with-evidence',
+      runId: 'run-failed',
+      auditRefs: ['audit:run', 'audit:run'],
+    }),
     createSubmitTurnUIAction({
       id: 'ui-action-submit',
       session,
@@ -156,6 +171,7 @@ test('UIAction creators cover every final write intent and can be recorded on th
   const log = uiActionAuditLogForSession(sessionWithLog);
 
   assert.deepEqual(log.map((action) => action.type), [
+    'command-text',
     'submit-turn',
     'trigger-recover',
     'select-object',
@@ -167,14 +183,33 @@ test('UIAction creators cover every final write intent and can be recorded on th
     'concurrency-decision',
     'open-debug-audit',
   ]);
-  assert.deepEqual(log[1].type === 'trigger-recover' ? log[1].auditRefs : [], ['audit:run']);
-  assert.equal(log[2].type === 'select-object' ? log[2].intent : '', 'ask-followup');
-  assert.equal(log[3].type === 'load-artifact-preview' ? log[3].byteLimit : 0, 4096);
-  assert.deepEqual(log[4].type === 'request-retry' ? log[4].auditRefs : [], ['artifact:candidate']);
-  assert.equal(log[5].type === 'approve-result' ? log[5].approval : '', 'reject-result');
-  assert.deepEqual(log[6].type === 'update-capability-preference' ? log[6].preference : {}, { prefer: 'web_search' });
-  assert.deepEqual(log[7].type === 'cancel-run' ? log[7].rejectedGuidanceIds : [], ['guidance-1']);
-  assert.deepEqual(log[9].type === 'open-debug-audit' ? log[9].auditRefs : [], ['execution-unit:EU-1']);
+  assert.deepEqual(log[0].type === 'command-text' ? log[0].auditRefs : [], ['audit:run']);
+  assert.deepEqual(log[2].type === 'trigger-recover' ? log[2].auditRefs : [], ['audit:run']);
+  assert.equal(log[3].type === 'select-object' ? log[3].intent : '', 'ask-followup');
+  assert.equal(log[4].type === 'load-artifact-preview' ? log[4].byteLimit : 0, 4096);
+  assert.deepEqual(log[5].type === 'request-retry' ? log[5].auditRefs : [], ['artifact:candidate']);
+  assert.equal(log[6].type === 'approve-result' ? log[6].approval : '', 'reject-result');
+  assert.deepEqual(log[7].type === 'update-capability-preference' ? log[7].preference : {}, { prefer: 'web_search' });
+  assert.deepEqual(log[8].type === 'cancel-run' ? log[8].rejectedGuidanceIds : [], ['guidance-1']);
+  assert.deepEqual(log[10].type === 'open-debug-audit' ? log[10].auditRefs : [], ['execution-unit:EU-1']);
+});
+
+test('commandText generators produce terminal-equivalent text for GUI affordances', () => {
+  assert.equal(commandTextForAskRef('artifact:report', 'Summarize it'), 'ask --ref "artifact:report" "Summarize it"');
+  assert.equal(commandTextForOpen('.sciforge/artifacts/report.md'), 'open ".sciforge/artifacts/report.md"');
+  assert.equal(commandTextForOpen('.sciforge/artifacts', { reveal: true }), 'open --reveal ".sciforge/artifacts"');
+  assert.equal(
+    commandTextForRerun({ runId: 'run-1', scope: 'with-repair-evidence', reason: 'missing refs', auditRefs: ['artifact:report'] }),
+    '/rerun "run-1" --with-repair-evidence --reason "missing refs" --ref "artifact:report"',
+  );
+  assert.equal(
+    commandTextForRecover({ runId: 'run-2', recoverAction: 'Import and verify candidate artifacts.', auditRefs: ['artifact:partial-report'] }),
+    '/recover "run-2" --with-evidence --action "Import and verify candidate artifacts." --ref "artifact:partial-report"',
+  );
+  assert.equal(
+    commandTextForCapabilityPreference({ prefer: ['literature.search', 'pdf.extract'], apiKey: 'SHOULD_NOT_LEAK' }),
+    '/capabilities prefer "literature.search" "pdf.extract"',
+  );
 });
 
 test('UI action boundary is the only app-level creator surface for final write intents', async () => {
@@ -187,7 +222,8 @@ test('UI action boundary is the only app-level creator surface for final write i
   assert.match(chatPanel, /createSubmitTurnUIAction/);
   assert.match(chatPanel, /createCancelRunUIAction/);
   assert.match(chatPanel, /createConcurrencyDecisionUIAction/);
-  assert.match(resultsRenderer, /requestRecoverActionThroughUserActionApi/);
+  assert.match(resultsRenderer, /requestRecoverCommandTextAction/);
+  assert.doesNotMatch(resultsRenderer, /requestRecoverActionThroughUserActionApi/);
   assert.match(resultsRenderer, /requestOpenDebugAuditThroughUserActionApi/);
 
   const illegalDirectActionCreates = [...sourceByFile.entries()]
