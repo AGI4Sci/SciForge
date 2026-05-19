@@ -30,6 +30,22 @@ test('runtime CODEX_HOME and default workspace stay under packages/backend', () 
   assert.equal(resolveRuntimeWorkspace(), paths.defaultWorkspace);
 });
 
+test('runtime CODEX_HOME can move to desktop AppData through explicit launcher env', () => {
+  const paths = getRuntimeHomePaths({
+    env: {
+      SCIFORGE_RUNTIME_ROOT: '/Users/example/Library/Application Support/SciForge/runtime',
+      SCIFORGE_RUNTIME_CODEX_HOME: '/Users/example/Library/Application Support/SciForge/runtime/codex-home',
+      SCIFORGE_RUNTIME_DEFAULT_WORKSPACE: '/Users/example/Library/Application Support/SciForge/runtime/workspaces/default',
+    },
+  });
+
+  assert.equal(paths.runtimeRoot, '/Users/example/Library/Application Support/SciForge/runtime');
+  assert.equal(paths.codexHome, '/Users/example/Library/Application Support/SciForge/runtime/codex-home');
+  assert.equal(paths.defaultWorkspace, '/Users/example/Library/Application Support/SciForge/runtime/workspaces/default');
+  assertPathInside(paths.codexHome, paths.runtimeRoot, 'runtime CODEX_HOME');
+  assertPathInside(paths.defaultWorkspace, paths.runtimeRoot, 'runtime workspace');
+});
+
 test('workspace outside runtime root is opt-in', () => {
   assert.throws(() => resolveRuntimeWorkspace({ workspace: '/tmp/sciforge-external-workspace' }), /must stay inside/);
   assert.equal(

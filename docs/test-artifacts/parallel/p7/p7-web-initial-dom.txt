@@ -1,0 +1,222 @@
+- complementary:
+  - generic: BA
+  - button "导航":
+  - generic: 导航
+  - button "收起侧栏":
+  - navigation:
+    - button "研究概览":
+      - generic: 研究概览
+    - button "聊天工作台":
+      - generic: 聊天工作台
+    - button "组件工作台":
+      - generic: 组件工作台
+    - button "研究时间线":
+      - generic: 研究时间线
+    - button "反馈收件箱":
+      - generic: 反馈收件箱
+  - button "新建文件":
+  - button "新建文件夹":
+  - button "刷新":
+  - button "全部折叠":
+  - tree "工作区文件树":
+    - treeitem "折叠 p7" [expanded]:
+      - button "折叠":
+      - generic: p7
+    - generic: 加载中…
+    - generic "打开其他文件夹…"
+  - separator "拖拽调整左侧栏宽度"
+- banner:
+  - textbox "搜索文件、报告、运行、问题..."
+  - generic: SciForge · 2 actions
+  - button "切换白天模式":
+    - text: 切换白天模式
+  - button "设置":
+    - text: 设置
+- main:
+  - heading "研究概览" [level=1]
+  - paragraph: 场景 markdown 编译为 ScenarioSpec，LLM 只生成结构化 artifact 和 UIManifest，组件库负责专业展示。
+  - generic: Get Started
+  - heading "从一个稳定研究服务开始" [level=2]
+  - paragraph: 导入官方 package、导入本地 package，或描述需求编译新场景。导入后会直接进入对应工作台。
+  - button "导入文献场景":
+    - text: 导入文献场景
+  - button "导入 package JSON":
+    - text: 导入 package JSON
+  - button "编译新场景":
+    - text: 编译新场景
+  - strong: Runtime Health
+  - generic: 2 actions
+  - button "启动服务"
+  - 'group "Web UI: online. 当前页面已加载"':
+    - generic: online
+    - strong: Web UI
+    - generic: 当前页面已加载
+  - 'group "Workspace Writer: checking. http://127.0.0.1:6179"':
+    - generic: checking
+    - strong: Workspace Writer
+    - generic: http://127.0.0.1:6179
+  - 'group "Codex Runtime: checking. Runtime Profile sciforge-runtime-deepseek"':
+    - generic: checking
+    - strong: Codex Runtime
+    - generic: Runtime Profile sciforge-runtime-deepseek
+  - 'group "Model Provider: online. sciforge-deepseek-proxy · bailian/deepseek-v4-flash"':
+    - generic: online
+    - strong: Model Provider
+    - generic: sciforge-deepseek-proxy · bailian/deepseek-v4-flash
+  - 'group "Scenario Library: optional. 可先导入官方 package 或编译新场景"':
+    - generic: optional
+    - strong: Scenario Library
+    - generic: 可先导入官方 package 或编译新场景
+  - generic: "4"
+  - generic: Built-in Scenarios
+  - generic: "18"
+  - generic: Execution Units
+  - generic: "64"
+  - generic: Evidence Claims
+  - generic: "11"
+  - generic: UI Components
+  - generic: AI Scenario Builder
+  - heading "描述你的研究场景，生成可编辑设置" [level=2]
+  - paragraph: 从一句自然语言开始，系统会选择 skill domain、推荐组件集合，并生成 Scenario markdown 草案。
+  - textbox "例如：帮我构建一个场景，读取单细胞表达矩阵，比较处理组和对照组，并展示火山图、热图和UMAP。": 我想比较KRAS G12D突变相关文献证据，并在需要时联动蛋白结构和知识图谱。
+  - button "生成场景设置":
+    - text: 生成场景设置
+  - button "进入可运行工作台":
+    - text: 进入可运行工作台
+  - text: 推荐场景
+  - strong: 我想比较KRAS G12D突变相关文献证据，并在场景
+  - emphasis: 生物医学知识图谱场景 · network-graph / paper-card-list / molecule-viewer / evidence-matrix / data-table / unknown-artifact-inspector · paper-list / structure-summary / knowledge-graph · confidence 82%
+  - code: Graph viewer (network-graph)
+  - code: Evidence paper cards
+  - code: Structure viewer (molecule-viewer)
+  - code: Evidence matrix panel
+  - code: Record table (data-table)
+  - code: Artifact inspector
+  - code: 文献卡片列表，可直接驱动 paper-card-list 和 evidence-matrix。
+  - code: 结构、口袋、残基和质量指标摘要。
+  - code: 节点、边、知识卡片和来源。
+  - code: drugsda-compound-retrieve
+  - code: PubChem Deep Dive
+  - code: admet_druglikeness_report
+  - code: atc_drug_classification
+  - generic: "# 我想比较KRAS G12D突变相关文献证据，并在 用户目标：我想比较KRAS G12D突变相关文献证据，并在需要时联动蛋白结构和知识图谱。 默认展示：network-graph、paper-card-list、molecule-viewer、evidence-matrix、data-table、unknown-artifact-inspector。 推荐 skills：scp.drugsda-compound-retrieve、scp.pubchem-deep-dive、scp.admet_druglikeness_report、scp.atc_drug_classification。 输入线索：entity、entityType、includeTrials。 输出 artifact：paper-list、structure-summary、knowledge-graph。 边界：Unsupported disease connector claims；clinical trial synthesis without connector；causal pathway proof。"
+  - heading "Scenario-first 架构状态" [level=2]
+  - paragraph: 所有场景共享同一套 chat / runtime / evidence / component registry
+  - strong: 场景即契约
+  - generic: 用户可以用 markdown 描述目标、输入输出、组件集合和诚实边界。
+  - strong: 配置驱动 UI
+  - generic: 场景差异通过 ScenarioSpec + UIManifest + registry 表达。
+  - strong: 可复现执行
+  - generic: ExecutionUnit 记录代码、参数、环境、数据指纹和产物。
+  - strong: 组件库优先
+  - generic: LLM 选择已注册组件和 View Composition；动态 plugin 默认关闭。
+  - heading "最近活跃度" [level=2]
+  - paragraph: workspace runtime events
+  - generic: loading
+  - strong: 加载活跃度图表
+  - heading "Scenario Library" [level=2]
+  - paragraph: 按综合等级优先展示常用、高质量、最近成功的场景；归档保留可恢复记录，删除会永久移除 workspace package
+  - button "导入 package":
+    - text: 导入 package
+  - button "刷新":
+    - text: 刷新
+  - textbox "搜索 Scenario Library":
+    - /placeholder: 搜索 package、描述、版本...
+  - combobox "按状态过滤":
+    - option "全部状态" [selected]
+    - option "published"
+    - option "draft"
+    - option "validated"
+    - option "archived"
+  - combobox "按来源过滤":
+    - option "全部来源" [selected]
+    - option "built-in"
+    - option "workspace"
+    - option "archived"
+  - combobox "按 skill domain 过滤":
+    - option "全部 domain" [selected]
+    - option "literature"
+    - option "structure"
+    - option "omics"
+    - option "knowledge"
+  - combobox "排序 Scenario Library":
+    - option "综合等级" [selected]
+    - option "最近版本"
+    - option "名称"
+    - option "质量状态"
+  - generic: published
+  - generic: built-in
+  - code: 1.0.0
+  - heading "文献证据评估场景" [level=3]
+  - paragraph: 从自然语言检索问题出发，生成 paper-list、证据矩阵、研究记录和可复现检索执行单元。
+  - code: literature-evidence-review
+  - generic: built-in · literature
+  - generic: quality pass
+  - generic: 0 issues
+  - generic: 1 versions
+  - generic: last run no runs yet
+  - generic: 0 failed / 0 runs
+  - code: latest 1.0.0 · published
+  - button "导入并打开":
+    - text: 导入并打开
+  - button "配置":
+    - text: 配置
+  - button "导出":
+    - text: 导出
+  - generic: published
+  - generic: built-in
+  - code: 1.0.0
+  - heading "结构探索场景" [level=3]
+  - paragraph: 检索、下载并可视化 PDB/AlphaFold 结构，展示结构质量、来源和可复现坐标下载记录。
+  - code: structure-exploration
+  - generic: built-in · structure
+  - generic: quality pass
+  - generic: 0 issues
+  - generic: 1 versions
+  - generic: last run no runs yet
+  - generic: 0 failed / 0 runs
+  - code: latest 1.0.0 · published
+  - button "导入并打开":
+    - text: 导入并打开
+  - button "配置":
+    - text: 配置
+  - button "导出":
+    - text: 导出
+  - generic: published
+  - generic: built-in
+  - code: 1.0.0
+  - heading "组学差异分析场景" [level=3]
+  - paragraph: 读取工作区矩阵和 metadata，生成差异表达、降维、热图与可复现实验记录。
+  - code: omics-differential-exploration
+  - generic: built-in · omics
+  - generic: quality pass
+  - generic: 0 issues
+  - generic: 1 versions
+  - generic: last run no runs yet
+  - generic: 0 failed / 0 runs
+  - code: latest 1.0.0 · published
+  - button "导入并打开":
+    - text: 导入并打开
+  - button "配置":
+    - text: 配置
+  - button "导出":
+    - text: 导出
+  - generic: published
+  - generic: built-in
+  - code: 1.0.0
+  - heading "生物医学知识图谱场景" [level=3]
+  - paragraph: 围绕基因、蛋白、疾病或化合物查询数据库事实，生成 graph/table/evidence 视图。
+  - code: biomedical-knowledge-graph
+  - generic: built-in · knowledge
+  - generic: quality pass
+  - generic: 0 issues
+  - generic: 1 versions
+  - generic: last run no runs yet
+  - generic: 0 failed / 0 runs
+  - code: latest 1.0.0 · published
+  - button "导入并打开":
+    - text: 导入并打开
+  - button "配置":
+    - text: 配置
+  - button "导出":
+    - text: 导出

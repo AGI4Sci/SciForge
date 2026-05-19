@@ -1,0 +1,75 @@
+{
+  "schemaVersion": "sciforge.parallel.p7.launcher-desktop.v1",
+  "status": "partial",
+  "createdAt": "2026-05-19T20:49:00+08:00",
+  "worktree": "/Applications/workspace/ailab/research/app/SciForge-p7-launcher-desktop",
+  "branch": "codex/parallel-p7-launcher-desktop",
+  "base": "dev@505c46c",
+  "ports": {
+    "ui": {
+      "requested": 5179,
+      "actual": 5179,
+      "conflict": false,
+      "url": "http://127.0.0.1:5179/"
+    },
+    "workspaceWriter": {
+      "requested": 6179,
+      "actual": 6179,
+      "conflict": false,
+      "url": "http://127.0.0.1:6179"
+    },
+    "runtimeCodex": {
+      "requested": 18086,
+      "actual": 18086,
+      "conflict": false,
+      "url": "http://127.0.0.1:18086"
+    }
+  },
+  "paths": {
+    "workspace": "workspace/parallel/p7",
+    "state": ".sciforge/parallel/p7",
+    "logs": ".sciforge/parallel/p7/logs",
+    "evidence": "docs/test-artifacts/parallel/p7",
+    "browserDom": "docs/test-artifacts/parallel/p7/p7-web-chat-dom.txt",
+    "browserScreenshot": "docs/test-artifacts/parallel/p7/p7-web-chat.png",
+    "initialDom": "docs/test-artifacts/parallel/p7/p7-web-initial-dom.txt",
+    "initialScreenshot": "docs/test-artifacts/parallel/p7/p7-web-initial.png"
+  },
+  "implemented": [
+    "production runtime launcher module with loopback ready/health/shutdown",
+    "dynamic control port conflict handling",
+    "managed child stdout/stderr folded audit log",
+    "child exit reflected in structured health",
+    "AppData layout contract separating config, Runtime Codex home, logs, cache, global state, and workspace state",
+    "Runtime Codex home explicit AppData override while preserving dev/test fallback",
+    "mockable secret storage with fail-closed default and explicit plaintext debug fallback",
+    "cross-platform platform service contract for external open, reveal, terminal, quoting, kill, and permission probe",
+    "Electron shell boundary contract requiring Vite build artifact loading and stable IPC/loopback transport"
+  ],
+  "browserAcceptance": {
+    "browser": "Codex in-app browser",
+    "status": "passed-web-path",
+    "startedFromDefaultChatEntry": true,
+    "observedUrl": "http://127.0.0.1:5179/",
+    "workspaceHealth": "ok",
+    "observedRuntimeProfile": "sciforge-runtime-deepseek",
+    "observedRuntimeProvider": "sciforge-deepseek-proxy",
+    "observedRuntimeModel": "bailian/deepseek-v4-flash",
+    "notes": "Verified the Web path did not regress and default chat workbench remained available. This is not a completed Electron desktop smoke."
+  },
+  "desktopAcceptance": {
+    "status": "blocked",
+    "blocker": "Electron app/package is not yet implemented in this worktree; p7 delivered the launcher/platform/secret-storage/Electron boundary modules and tests, not a packaged desktop window.",
+    "remainingRisk": [
+      "cold start desktop smoke still needs a real Electron app wrapper",
+      "desktop window real Runtime Codex run and artifact follow-up remain future work",
+      "system keychain integration is represented by a vault contract and mock tests; OS-specific provider package is not wired yet"
+    ]
+  },
+  "tests": {
+    "launcherPlatformSecretUnits": "node --import tsx --test 'src/runtime/desktop/*.test.ts' packages/backend/src/runtime-home.test.ts",
+    "typecheck": "npm run typecheck",
+    "build": "npm run build",
+    "diffCheck": "git diff --check"
+  }
+}
