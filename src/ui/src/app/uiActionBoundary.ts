@@ -362,8 +362,8 @@ export function commandTextForRecover(input: {
 export function commandTextForCapabilityPreference(preference: Record<string, unknown>) {
   const ids = capabilityPreferenceIds(preference);
   return ids.length
-    ? `/capabilities prefer ${ids.map(quoteTerminalArg).join(' ')}`
-    : `/capabilities prefer --json ${quoteTerminalArg(JSON.stringify(scrubPreference(preference)))}`;
+    ? `/capabilities plan --prefer ${ids.map(quoteTerminalArg).join(' ')}`
+    : `/capabilities plan --json ${quoteTerminalArg(JSON.stringify(scrubPreference(preference)))}`;
 }
 
 export function createCancelRunUIAction(input: {

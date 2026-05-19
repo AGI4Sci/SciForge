@@ -1,0 +1,46 @@
+{
+  "buttonTexts": [
+    "研究概览",
+    "聊天工作台",
+    "组件工作台",
+    "研究时间线",
+    "反馈收件箱",
+    "用作工作区根目录",
+    "SciForge 工作台",
+    "vision-senseon",
+    "Builder",
+    "Chat",
+    "Results",
+    "复制",
+    "编辑",
+    "复制",
+    "编辑",
+    "复制",
+    "编辑",
+    "输入研究问题，或点选对象后继续追问...",
+    "结果视图",
+    "证据矩阵",
+    "全部",
+    "只看图",
+    "只看证据",
+    "只看执行单元"
+  ],
+  "details": [
+    {
+      "open": false,
+      "text": "打开其他文件夹…用作工作区根目录"
+    },
+    {
+      "open": false,
+      "text": "可尝试的恢复动作运行当前场景导入匹配 package检查 artifact schema"
+    }
+  ],
+  "title": "SciForge",
+  "url": "http://127.0.0.1:5177/",
+  "visibleTextIncludesOldPreferCommand": false,
+  "visibleTextIncludesProviderNoFallbackWarning": false,
+  "visibleTextIncludesRawJsonlStdoutStderr": false,
+  "visibleTextIncludesRuntimeCodexBlocker": true,
+  "visibleTextIncludesRuntimeCodexProfile": true,
+  "visibleTextIncludesSubmittedCommand": true
+}

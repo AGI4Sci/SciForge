@@ -16,6 +16,11 @@ type Rule = {
   match: (line: string) => boolean;
 };
 
+type BaselineFile = {
+  schemaVersion?: string;
+  counts?: Record<string, number>;
+};
+
 const root = process.cwd();
 const ignoredDirs = new Set(['.git', 'node_modules', 'dist', 'dist-ui', 'build', 'coverage', '__pycache__']);
 const sourceExtensions = new Set(['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts']);
@@ -266,6 +271,10 @@ const migrationByFile: Array<{ file: RegExp; migration: string }> = [
 async function main() {
   const findings: Finding[] = [];
   const files = await collectSourceFilesIfExists(join(root, 'src'));
+  const baselineCounts = {
+    ...trackedBaselineCounts,
+    ...await readNativeExtensionBaselineCounts(),
+  };
 
   for (const file of files) {
     const rel = relative(root, file).replaceAll('\\', '/');
@@ -287,7 +296,7 @@ async function main() {
 
   const counts = countByFileRule(findings);
   const overflowKeys = new Set([...counts.entries()]
-    .filter(([key, count]) => count > (trackedBaselineCounts[key] ?? 0))
+    .filter(([key, count]) => count > (baselineCounts[key] ?? 0))
     .map(([key]) => key));
   const errors = findings.filter((finding) => overflowKeys.has(findingKey(finding)));
   const warnings = findings.filter((finding) => !overflowKeys.has(findingKey(finding)) && finding.migration);
@@ -300,7 +309,7 @@ async function main() {
   if (errors.length) {
     console.error('[no-src-capability-semantics] untracked or increased src capability semantics found');
     for (const [key, grouped] of groupBy(errors, findingKey)) {
-      console.error(`- ${key}: ${grouped[0].message} (${grouped.length}; baseline ${trackedBaselineCounts[key] ?? 0}, current ${counts.get(key) ?? 0})`);
+      console.error(`- ${key}: ${grouped[0].message} (${grouped.length}; baseline ${baselineCounts[key] ?? 0}, current ${counts.get(key) ?? 0})`);
       for (const finding of grouped) console.error(`  ${finding.file}:${finding.line} ${finding.text}`);
     }
     console.error('Move package-owned artifact/component/provider/scenario ids and prompt/domain regex into package manifests or package-owned policy. Only update this baseline when a T122 migration item explicitly tracks the exception.');
@@ -309,6 +318,16 @@ async function main() {
   }
 
   console.log(`[ok] no increased src capability semantics found: ${files.length} source files, ${warnings.length} tracked findings.`);
+}
+
+async function readNativeExtensionBaselineCounts(): Promise<Record<string, number>> {
+  try {
+    const parsed = JSON.parse(await readFile(join(root, 'docs/native-extension-src-semantics-baseline.json'), 'utf8')) as BaselineFile;
+    if (parsed.schemaVersion !== 'sciforge.native-extension-src-semantics-baseline.v1') return {};
+    return parsed.counts ?? {};
+  } catch {
+    return {};
+  }
 }
 
 function trackedMigration(file: string, rule: string) {

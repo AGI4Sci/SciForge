@@ -208,8 +208,20 @@ test('commandText generators produce terminal-equivalent text for GUI affordance
   );
   assert.equal(
     commandTextForCapabilityPreference({ prefer: ['literature.search', 'pdf.extract'], apiKey: 'SHOULD_NOT_LEAK' }),
-    '/capabilities prefer "literature.search" "pdf.extract"',
+    '/capabilities plan --prefer "literature.search" "pdf.extract"',
   );
+});
+
+test('capability command text only uses native discovery verbs', () => {
+  const commands = [
+    commandTextForCapabilityPreference({ prefer: ['literature.search', 'pdf.extract'] }),
+    commandTextForCapabilityPreference({ request: 'explain discovery readiness' }),
+  ];
+
+  for (const command of commands) {
+    const verb = /^\/capabilities\s+(\S+)/.exec(command)?.[1];
+    assert.ok(['search', 'expand', 'plan', 'explain'].includes(verb ?? ''), command);
+  }
 });
 
 test('UI action boundary is the only app-level creator surface for final write intents', async () => {

@@ -154,7 +154,7 @@ Workspace writer 会在当前 workspace 下维护 `.sciforge/` 状态。常见�
 
 ## 双实例互修
 
-双实例互修是当前实现的自我进化主路径。推荐用两个 git worktree，各自运行完整 SciForge 实例：
+双实例互修是迁移期的开发诊断模式，不是最终默认 runtime ownership。默认自修复路线必须收敛为 Codex 原生 skill/plugin/MCP/slash command 或外部 supervisor；否则保持退役状态。需要验证旧互修边界时，可以用两个 git worktree，各自运行完整 SciForge 实例：
 
 ```bash
 npm run worktree:dual -- create

@@ -38,7 +38,7 @@ GUI 所有输入都必须能还原成用户在终端里手敲的文本：
 重新运行按钮      -> "/rerun run-123"
 带证据修复按钮    -> "/recover run-123 --with-evidence"
 打开 artifact     -> "open artifacts/report.md"
-能力偏好          -> "/capabilities prefer literature.search pdf.extract"
+能力偏好          -> "/capabilities plan --prefer literature.search pdf.extract"
 选中对象后追问    -> "ask --ref artifacts/table.csv \"这些异常点是什么？\""
 ```
 

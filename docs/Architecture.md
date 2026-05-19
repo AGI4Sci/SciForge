@@ -42,7 +42,7 @@ GUI 所有用户动作都变成终端等价文本：
 点击重试          -> /rerun run-123
 点击修复          -> /recover run-123 --with-evidence
 点击打开 artifact -> open artifacts/report.md
-表单提交          -> /capabilities prefer literature.search pdf.extract
+表单提交          -> /capabilities plan --prefer literature.search pdf.extract
 ```
 
 没有 `deleteFile(path)`、`triggerRecover(actionId)`、`updateCapabilityPreference(patch)` 这类 GUI -> TUI 业务函数。
@@ -206,6 +206,7 @@ Capability Discovery 不属于 GUI/runtime。用户若从 GUI 触发能力发现
 /capabilities search "build an evidence matrix for recent papers"
 /capabilities expand literature.search pdf.extract citation.verify
 /capabilities plan --goal "build evidence matrix"
+/capabilities explain literature.search
 ```
 
 工具名可以沿用 `capability_discovery.search/expand/plan/explain`，但注册、权限、审计、provider readiness、progressive disclosure 都由 TUI host 原生机制负责。Discovery plan 不构成 completion evidence；展示必须通过 `gui.present` 或 `gui.ask_user`。
