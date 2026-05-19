@@ -3,6 +3,8 @@ import type { NormalizedAgentEvent } from './codex-event-normalizer.js';
 export interface AgentCliStartTurnInput {
   commandText: string;
   workspacePath: string;
+  commandId?: string;
+  attemptId?: string;
   profile?: string;
   codexSessionId?: string;
   abortSignal?: AbortSignal;
@@ -15,6 +17,7 @@ export interface AgentCliStartTurnInput {
 
 export interface AgentCliTurn {
   turnId: string;
+  attemptId: string;
   codexSessionId?: string;
   events: AsyncIterable<NormalizedAgentEvent>;
 }

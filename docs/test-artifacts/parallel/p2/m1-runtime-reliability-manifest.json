@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "sciforge.parallel-p2.m1-runtime-reliability-evidence.v1",
+  "status": "partial",
+  "createdAt": "2026-05-19T09:18:24.659Z",
+  "actualUrl": "http://127.0.0.1:5174/",
+  "actualPorts": {
+    "ui": 5174,
+    "workspaceWriter": 6174,
+    "runtimeCodex": 18081
+  },
+  "workspacePath": "/Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p2",
+  "stateDir": "/Applications/workspace/ailab/research/app/SciForge/.sciforge/parallel/p2",
+  "evidenceDir": "/Applications/workspace/ailab/research/app/SciForge/docs/test-artifacts/parallel/p2",
+  "usedCodexInAppBrowser": true,
+  "devServerStarted": true,
+  "portConflict": false,
+  "runtimeCodexSidecar": {
+    "status": "not-started",
+    "reason": "RuntimeCodex root not found at /Applications/workspace/ailab/research/app/RuntimeCodex; dev server continued with UI and workspace writer."
+  },
+  "acceptanceRubric": {
+    "userIntent": "Validate Runtime Codex reliability boundaries for p2: argv/resume isolation, request payload boundary, failed-run persistence/reload recovery, provider fail-closed.",
+    "expectedObservableResult": "UI loads on p2 port; tests prove Runtime Codex adapter/request/failure/provider behavior with negative checks and reload evidence.",
+    "actualResult": "UI and chat entry loaded in Codex in-app browser on port 5174; targeted tests provide fixture evidence for Runtime Codex behavior. Live RuntimeCodex sidecar was unavailable, so this is not a full live provider pass.",
+    "evidenceRefs": [
+      "docs/test-artifacts/parallel/p2/m1-runtime-reliability-ui-dom.txt",
+      "docs/test-artifacts/parallel/p2/m1-runtime-reliability-ui-screenshot.png",
+      "docs/test-artifacts/parallel/p2/m1-runtime-reliability-chat-dom.txt",
+      "docs/test-artifacts/parallel/p2/m1-runtime-reliability-chat-screenshot.png"
+    ],
+    "negativeChecks": [
+      "Server rejects non-adapter request fields before adapter context.",
+      "UI request serialization omits GUI transcript, seed/demo messages, artifact bodies, claims, expected result, tool/provider route.",
+      "Missing runtime key and developer/default profile fail before spawning codex.",
+      "Raw stderr/jsonl remain folded audit/debug and do not become primary chat answer."
+    ],
+    "remainingRisks": [
+      "RuntimeCodex sidecar root was absent, so no live model-backed browser run was completed in this p2 loop.",
+      "Repository has concurrent dirty changes outside p2 ownership; final staging must be scoped."
+    ]
+  }
+}

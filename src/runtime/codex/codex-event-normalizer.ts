@@ -17,8 +17,11 @@ export interface CodexRuntimeMetadata {
   profile: string;
   workspace: string;
   commandId: string;
+  attemptId: string;
   commandText?: string;
   codexSessionId?: string;
+  evidenceRefs: string[];
+  resumeRequested: boolean;
 }
 
 export interface NormalizedAgentEvent {
@@ -30,7 +33,9 @@ export interface NormalizedAgentEvent {
   profile: string;
   workspace: string;
   commandId: string;
+  attemptId: string;
   codexSessionId?: string;
+  evidenceRefs?: string[];
   message?: string;
   text?: string;
   itemId?: string;
@@ -44,6 +49,7 @@ export interface NormalizedAgentEvent {
 export interface CodexExitResult {
   exitCode: number | null;
   signal: NodeJS.Signals | string | null;
+  stderrSummary?: string;
 }
 
 export function commandIdForText(commandText: string, workspace: string): string {
@@ -58,10 +64,23 @@ export function commandIdForText(commandText: string, workspace: string): string
   return `codex-${digest}`;
 }
 
+export function attemptIdForCommand(commandId: string): string {
+  return `${commandId}-attempt-${Date.now().toString(36)}`;
+}
+
 export function runStartedEvent(metadata: CodexRuntimeMetadata): NormalizedAgentEvent {
   return event(metadata, 'run_started', {
     message: `Runtime Codex started with ${metadata.provider}/${metadata.model} profile ${metadata.profile}`,
-    raw: { commandText: metadata.commandText },
+    raw: {
+      commandText: metadata.commandText,
+      commandId: metadata.commandId,
+      attemptId: metadata.attemptId,
+      workspace: metadata.workspace,
+      profile: metadata.profile,
+      codexSessionId: metadata.codexSessionId,
+      resumeRequested: metadata.resumeRequested,
+      evidenceRefs: metadata.evidenceRefs,
+    },
   });
 }
 
@@ -88,6 +107,36 @@ export function invalidJsonlAuditEvent(metadata: CodexRuntimeMetadata, line: str
   });
 }
 
+export function resumeFailureAuditEvent(metadata: CodexRuntimeMetadata, input: {
+  exitCode: number | null;
+  signal: NodeJS.Signals | string | null;
+  stderrSummary?: string;
+}): NormalizedAgentEvent {
+  return event(metadata, 'audit', {
+    status: 'resume-failed',
+    message: [
+      `Runtime Codex resume failed for thread ${metadata.codexSessionId ?? 'unknown'}.`,
+      `exit=${input.exitCode ?? 'null'}`,
+      input.signal ? `signal=${input.signal}` : '',
+      input.stderrSummary ? `stderr=${input.stderrSummary}` : '',
+    ].filter(Boolean).join(' '),
+    exitCode: input.exitCode,
+    signal: input.signal,
+    raw: {
+      boundary: 'resume-fail-closed',
+      threadId: metadata.codexSessionId,
+      exitCode: input.exitCode,
+      signal: input.signal,
+      stderrSummary: input.stderrSummary,
+      profile: metadata.profile,
+      workspace: metadata.workspace,
+      commandId: metadata.commandId,
+      attemptId: metadata.attemptId,
+      evidenceRefs: metadata.evidenceRefs,
+    },
+  });
+}
+
 export function exitEvent(metadata: CodexRuntimeMetadata, result: CodexExitResult): NormalizedAgentEvent {
   if (result.signal) {
     return event(metadata, 'cancelled', {
@@ -110,6 +159,20 @@ export function exitEvent(metadata: CodexRuntimeMetadata, result: CodexExitResul
     message: `Runtime Codex exited with code ${result.exitCode ?? 1}.`,
     exitCode: result.exitCode,
     signal: result.signal,
+    raw: {
+      boundary: 'runtime-codex-exit',
+      exitCode: result.exitCode,
+      signal: result.signal,
+      stderrSummary: result.stderrSummary,
+      provider: metadata.provider,
+      model: metadata.model,
+      profile: metadata.profile,
+      workspace: metadata.workspace,
+      commandId: metadata.commandId,
+      attemptId: metadata.attemptId,
+      codexSessionId: metadata.codexSessionId,
+      evidenceRefs: metadata.evidenceRefs,
+    },
   });
 }
 
@@ -204,7 +267,9 @@ export function event(
     profile: metadata.profile,
     workspace: metadata.workspace,
     commandId: metadata.commandId,
+    attemptId: metadata.attemptId,
     codexSessionId: metadata.codexSessionId,
+    evidenceRefs: metadata.evidenceRefs,
     ...extra,
   };
 }

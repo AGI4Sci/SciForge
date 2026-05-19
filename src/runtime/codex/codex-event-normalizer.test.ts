@@ -14,6 +14,9 @@ const metadata: CodexRuntimeMetadata = {
   profile: 'sciforge-runtime-deepseek',
   workspace: '/tmp/sciforge-workspace',
   commandId: 'codex-test',
+  attemptId: 'codex-test-attempt-1',
+  evidenceRefs: ['audit:codex-runtime:codex-test:codex-test-attempt-1:normalized-events'],
+  resumeRequested: false,
 };
 
 test('normalizes stdout JSONL into stable GUI-facing events with runtime metadata', () => {

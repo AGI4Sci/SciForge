@@ -26,7 +26,8 @@ export async function handleCodexRuntimeRoutes(
 
   try {
     const body = await readJson(req);
-    const commandText = stringField(body.commandText) ?? stringField(body.prompt);
+    assertCodexRuntimeRequestBoundary(body);
+    const commandText = stringField(body.commandText);
     const workspacePath = stringField(body.workspacePath);
     if (!commandText) throw new Error('commandText is required');
     if (!workspacePath) throw new Error('workspacePath is required');
@@ -44,7 +45,7 @@ export async function handleCodexRuntimeRoutes(
         : undefined,
       abortSignal: abort.signal,
     });
-    writeSse(res, 'turn', { turnId: turn.turnId, codexSessionId: turn.codexSessionId });
+    writeSse(res, 'turn', { turnId: turn.turnId, attemptId: turn.attemptId, codexSessionId: turn.codexSessionId });
     for await (const event of turn.events) {
       writeSse(res, event.type, event);
     }
@@ -71,4 +72,82 @@ export function codexRuntimeBridgeRequested(body: Record<string, unknown>): bool
     || body.useCodexRuntimeBridge === true
     || uiState.runtimeBridge === 'codex-exec-json'
     || uiState.useCodexRuntimeBridge === true;
+}
+
+const CODEX_RUNTIME_REQUEST_ALLOWED_KEYS = new Set([
+  'schemaVersion',
+  'commandText',
+  'workspacePath',
+  'commandId',
+  'attemptId',
+  'profile',
+  'codexSessionId',
+  'nativeSessionId',
+  'allowOpenAiRuntime',
+  'guiExtension',
+  'auditMetadata',
+]);
+
+const CODEX_RUNTIME_GUI_EXTENSION_ALLOWED_KEYS = new Set([
+  'enabled',
+  'statePath',
+]);
+
+const CODEX_RUNTIME_FORBIDDEN_NESTED_KEYS = new Set([
+  'prompt',
+  'messages',
+  'transcript',
+  'sessionMessages',
+  'seedMessages',
+  'demoMessages',
+  'artifacts',
+  'artifactBody',
+  'artifactData',
+  'claims',
+  'claim',
+  'expectedArtifactTypes',
+  'expectedResult',
+  'expectedResults',
+  'selectedSkillIds',
+  'selectedToolIds',
+  'toolProviderRoutes',
+  'providerRoute',
+  'toolRoute',
+  'routeDecision',
+  'failureRecoveryPolicy',
+  'uiState',
+  'references',
+  'transportAgentContext',
+]);
+
+function assertCodexRuntimeRequestBoundary(body: unknown): asserts body is Record<string, unknown> {
+  if (!isRecord(body)) throw new Error('Runtime Codex request body must be an object');
+  const extraKeys = Object.keys(body).filter((key) => !CODEX_RUNTIME_REQUEST_ALLOWED_KEYS.has(key));
+  if (extraKeys.length) {
+    throw new Error(`Runtime Codex request contains non-adapter fields: ${extraKeys.join(', ')}`);
+  }
+  if (isRecord(body.guiExtension)) {
+    const extraGuiKeys = Object.keys(body.guiExtension).filter((key) => !CODEX_RUNTIME_GUI_EXTENSION_ALLOWED_KEYS.has(key));
+    if (extraGuiKeys.length) {
+      throw new Error(`Runtime Codex guiExtension contains non-adapter fields: ${extraGuiKeys.join(', ')}`);
+    }
+  }
+  if (isRecord(body.auditMetadata)) {
+    const forbiddenAuditKeys = nestedForbiddenKeys(body.auditMetadata, CODEX_RUNTIME_FORBIDDEN_NESTED_KEYS);
+    if (forbiddenAuditKeys.length) {
+      throw new Error(`Runtime Codex auditMetadata contains non-adapter fields: ${forbiddenAuditKeys.slice(0, 8).join(', ')}`);
+    }
+  }
+}
+
+function nestedForbiddenKeys(value: unknown, forbiddenKeys: Set<string>, path = ''): string[] {
+  if (!value || typeof value !== 'object') return [];
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) => nestedForbiddenKeys(item, forbiddenKeys, `${path}[${index}]`));
+  }
+  return Object.entries(value as Record<string, unknown>).flatMap(([key, entry]) => {
+    const current = path ? `${path}.${key}` : key;
+    const hit = forbiddenKeys.has(key) ? [current] : [];
+    return [...hit, ...nestedForbiddenKeys(entry, forbiddenKeys, current)];
+  });
 }

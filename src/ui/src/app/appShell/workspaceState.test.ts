@@ -428,6 +428,62 @@ test('recoverable focus follows conversation projection before raw run status', 
   assert.equal(recoverableRunFocusForSession(projectedRepair)?.reason, 'repair-needed-run');
 });
 
+test('recoverable focus survives reload for persisted Runtime Codex failed run state', () => {
+  const failedRun = {
+    id: 'codex-command-reload',
+    scenarioId: 'scenario-any',
+    status: 'failed' as const,
+    prompt: 'fail in runtime codex',
+    response: 'Runtime Codex failed',
+    createdAt: '2026-05-07T02:00:00.000Z',
+    completedAt: '2026-05-07T02:02:00.000Z',
+    raw: {
+      codexRuntimeFailure: {
+        schemaVersion: 'sciforge.runtime-codex-failed-run.v1',
+        commandId: 'codex-command-reload',
+        attemptId: 'codex-command-reload-attempt-1',
+        workspace: '/tmp/current',
+        profile: 'sciforge-runtime-deepseek',
+        provider: 'sciforge-deepseek-proxy',
+        model: 'bailian/deepseek-v4-flash',
+        codexSessionId: '019e3e82-164d-79b2-a5d4-b16241620b10',
+        exitCode: 7,
+        stderrSummary: 'folded stderr summary',
+        evidenceRefs: [
+          'audit:codex-runtime:codex-command-reload:codex-command-reload-attempt-1:stderr',
+          'audit:codex-runtime:codex-command-reload:codex-command-reload-attempt-1:normalized-events',
+        ],
+        recoverState: {
+          status: 'repair-needed',
+          retryable: true,
+          commandId: 'codex-command-reload',
+          attemptId: 'codex-command-reload-attempt-1',
+          workspace: '/tmp/current',
+          profile: 'sciforge-runtime-deepseek',
+          provider: 'sciforge-deepseek-proxy',
+          model: 'bailian/deepseek-v4-flash',
+          codexSessionId: '019e3e82-164d-79b2-a5d4-b16241620b10',
+          stderrSummary: 'folded stderr summary',
+          evidenceRefs: [
+            'audit:codex-runtime:codex-command-reload:codex-command-reload-attempt-1:stderr',
+          ],
+          recoverActions: ['Retry or continue from preserved Runtime Codex audit refs.'],
+        },
+      },
+    },
+  };
+  const reloadedSession = JSON.parse(JSON.stringify(session([failedRun]))) as SciForgeSession;
+
+  assert.deepEqual(recoverableRunFocusForSession(reloadedSession), {
+    scenarioId: 'scenario-any',
+    sessionId: 'session-1',
+    activeRunId: 'codex-command-reload',
+    reason: 'failed-run',
+    updatedAt: '2026-05-07T02:02:00.000Z',
+  });
+  assert.equal(workspaceRecoveryFocusForState(workspace(reloadedSession))?.activeRunId, 'codex-command-reload');
+});
+
 test('recoverable focus does not restore stale partial run after newer satisfied run in same session', () => {
   const stalePartialRun = {
     id: 'run-stale-partial',

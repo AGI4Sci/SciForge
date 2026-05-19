@@ -1,4 +1,4 @@
-import type { AgentStreamEvent, NormalizedAgentResponse, SendAgentMessageInput } from '../domain';
+import type { AgentStreamEvent, NormalizedAgentResponse, ObjectAction, ObjectReference, SendAgentMessageInput } from '../domain';
 import type { ScenarioId } from '../data';
 import { makeId, nowIso } from '../domain';
 import { extractLatencyPolicy, extractResponsePlan, latencyThresholdsFromPolicy, type RuntimeLatencyThresholds } from '../latencyPolicy';
@@ -51,6 +51,27 @@ function asString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
+function stringRecordField(record: Record<string, unknown>, key: string): string | undefined {
+  return asString(record[key]);
+}
+
+function asFiniteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function isSeedDemoOrFixtureMessage(message: unknown) {
+  if (!isRecord(message)) return false;
+  const provenance = isRecord(message.provenance) ? message.provenance : {};
+  const marker = [
+    message.id,
+    message.role,
+    provenance.kind,
+    provenance.source,
+  ].map((value) => String(value ?? '').toLowerCase()).join(' ');
+  if (provenance.runtimeRequestEligible === false || provenance.liveAcceptanceEligible === false) return true;
+  return /\b(seed|demo|fixture)\b|scenariodemodata/.test(marker) || message.role === 'scenario';
+}
+
 function asStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const out = value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
@@ -61,13 +82,17 @@ function uniqueStringList(values: unknown[]) {
   return Array.from(new Set(values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)));
 }
 
+function uniqueRuntimeStringList(values: unknown[]) {
+  return uniqueStringList(values);
+}
+
 export async function sendSciForgeToolMessage(
   input: SendAgentMessageInput,
   callbacks: { onEvent?: (event: AgentStreamEvent) => void } = {},
   signal?: AbortSignal,
 ): Promise<NormalizedAgentResponse> {
   const builtInScenarioId = builtInScenarioIdForRuntimeInput(input);
-  const referenceSummary = (input.references ?? []).map(compactSciForgeReference);
+  const referenceSummary = runtimeCodexEligibleReferenceSummary(input);
   let activeRequestController: AbortController | undefined;
   let timedOut = false;
   let retryForSilentFirstEvent = false;
@@ -196,6 +221,7 @@ export async function sendSciForgeToolMessage(
       referenceSummary,
       silentStreamRunId,
     });
+    assertCodexRuntimeStreamRequestBoundary(requestBody);
     const requestBodyText = JSON.stringify(requestBody);
     callbacks.onEvent?.(contextWindowTelemetryEvent(
       input,
@@ -203,6 +229,7 @@ export async function sendSciForgeToolMessage(
       'Codex Runtime command/projection preflight estimate',
     ));
     callbacks.onEvent?.(codexRuntimeRunEvent(requestBody));
+    const runtimeEvents: AgentStreamEvent[] = [];
     let response: Response | undefined;
     let result: unknown;
     let error: string | undefined;
@@ -228,6 +255,7 @@ export async function sendSciForgeToolMessage(
             normalizeWorkspaceRuntimeEvent(event),
             input.config.maxContextWindowTokens,
           );
+          runtimeEvents.push(normalized);
           if (isBackendProgressEvent(normalized)) {
             sawBackendEvent = true;
             lastRealEventAt = Date.now();
@@ -268,12 +296,20 @@ export async function sendSciForgeToolMessage(
         throw streamError;
       }
     }
+  if (error && runtimeEvents.some(isRuntimeCodexFailedEvent)) {
+    return runtimeCodexFailedResponse({
+      input,
+      request: requestBody,
+      runtimeEvents,
+      error,
+    });
+  }
   if (!response?.ok || error || !isRecord(result)) {
     throw new Error(error || `SciForge project tool failed: HTTP ${response?.status ?? 'no-response'}`);
   }
   const completion = workspaceResultCompletion(result);
   callbacks.onEvent?.(projectToolDoneEvent({ id: makeId('evt'), createdAt: nowIso() }, builtInScenarioId, completion));
-  return normalizeAgentResponse(builtInScenarioId, input.prompt, {
+  const normalized = normalizeAgentResponse(builtInScenarioId, input.prompt, {
     ok: true,
     data: {
       run: {
@@ -287,6 +323,30 @@ export async function sendSciForgeToolMessage(
       },
     },
   });
+  const codexSessionId = codexSessionIdFromRuntimeResult(result);
+  if (!codexSessionId) return normalized;
+  const codexThreadRef = codexThreadObjectReference(codexSessionId, commandId);
+  return {
+    ...normalized,
+    run: {
+      ...normalized.run,
+      raw: {
+        ...(isRecord(normalized.run.raw) ? normalized.run.raw : {}),
+        codexSessionId,
+      },
+      objectReferences: [
+        ...(normalized.run.objectReferences ?? []),
+        codexThreadRef,
+      ],
+    },
+    message: {
+      ...normalized.message,
+      objectReferences: [
+        ...(normalized.message.objectReferences ?? []),
+        codexThreadRef,
+      ],
+    },
+  };
   } catch (error) {
     if (boundedStallRecovery) return boundedStallRecovery;
     if (error instanceof DOMException && error.name === 'AbortError') {
@@ -314,29 +374,139 @@ function buildCodexRuntimeStreamRequest(input: {
   const model = config.modelName.trim() || 'bailian/deepseek-v4-flash';
   const commandText = buildCodexRuntimeCommandText(input);
   const codexSessionId = latestCodexSessionId(input.input.runs);
+  const attemptId = `${input.commandId}-attempt-1`;
   return {
     schemaVersion: CODEX_RUNTIME_REQUEST_SCHEMA_VERSION,
     commandId: input.commandId,
+    attemptId,
     commandText,
     workspacePath: config.workspacePath,
     profile,
     codexSessionId,
     allowOpenAiRuntime: config.allowOpenAiRuntime === true,
-    runtime: {
-      kind: 'codex',
-      profile,
-      provider,
-      model,
-      baseUrl: config.modelBaseUrl.trim(),
-      apiKeyConfigured: Boolean(config.apiKey.trim()),
-      allowOpenAiRuntime: config.allowOpenAiRuntime === true,
+    guiExtension: {
+      enabled: true,
     },
-    transportAudit: {
+    auditMetadata: {
+      schemaVersion: 'sciforge.codex-runtime-stream-audit.v1',
       boundary: 'GUI-to-TUI input is terminal-equivalent text only; non-text fields are adapter metadata and must not be interpreted as task context.',
+      promptCarriedBy: 'commandText',
+      legacyHandoffBoundary: 'GUI transcript, artifact bodies, expected results, capability selection, provider routing, and recovery policy stay outside the Runtime Codex task request.',
+      runtime: {
+        kind: 'codex',
+        provider,
+        model,
+        profile,
+        apiKeyConfigured: Boolean(config.apiKey.trim()),
+        allowOpenAiRuntime: config.allowOpenAiRuntime === true,
+      },
+      guiLocalProjection: auditOnlyGuiProjectionRefs(input.input, input.referenceSummary),
       silentStreamRunId: input.silentStreamRunId,
-      selectedRefCount: input.referenceSummary.length,
+      evidenceRefs: [
+        `audit:codex-runtime:${input.commandId}:${attemptId}:raw-jsonl`,
+        `audit:codex-runtime:${input.commandId}:${attemptId}:stderr`,
+        `audit:codex-runtime:${input.commandId}:${attemptId}:normalized-events`,
+      ],
     },
   };
+}
+
+function runtimeCodexEligibleReferenceSummary(input: SendAgentMessageInput) {
+  const excludedRefs = seedDemoOrFixtureMessageRefs(input);
+  return (input.references ?? [])
+    .map(compactSciForgeReference)
+    .filter((reference) => !referenceMatchesExcludedSeedDemoRef(reference, excludedRefs));
+}
+
+function seedDemoOrFixtureMessageRefs(input: SendAgentMessageInput) {
+  const refs = new Set<string>();
+  for (const message of input.messages ?? []) {
+    if (!isSeedDemoOrFixtureMessage(message)) continue;
+    refs.add(message.id);
+    refs.add(`message:${message.id}`);
+    for (const reference of message.references ?? []) refs.add(reference.ref);
+    for (const reference of message.objectReferences ?? []) refs.add(reference.ref);
+  }
+  return refs;
+}
+
+function referenceMatchesExcludedSeedDemoRef(reference: Record<string, unknown>, excludedRefs: Set<string>) {
+  if (!excludedRefs.size) return false;
+  return referenceRuntimeRefs(reference).some((ref) => {
+    if (excludedRefs.has(ref)) return true;
+    return Array.from(excludedRefs).some((excluded) => ref === `ui-text:${excluded}` || ref.startsWith(`${excluded}#`) || ref.startsWith(`ui-text:${excluded}#`));
+  });
+}
+
+function referenceRuntimeRefs(reference: Record<string, unknown>) {
+  const payload = isRecord(reference.payload) ? reference.payload : {};
+  return uniqueRuntimeStringList([
+    reference.id,
+    reference.ref,
+    reference.path,
+    reference.dataRef,
+    reference.sourceId,
+    payload.sourceRef,
+  ]);
+}
+
+function auditOnlyGuiProjectionRefs(
+  input: SendAgentMessageInput,
+  referenceSummary: Array<Record<string, unknown>>,
+) {
+  const references = uniqueRuntimeStringList(referenceSummary.flatMap((reference) => [
+    reference.ref,
+    reference.path,
+    reference.dataRef,
+    reference.id,
+  ])).slice(0, 12);
+  const runRefs = (input.runs ?? []).slice(-8).map((run) => `run:${run.id}`);
+  const artifactRefs = (input.artifacts ?? []).slice(-16).map((artifact) => `artifact:${artifact.id}`);
+  const claimRefs = (input.claims ?? []).slice(-16).map((claim) => `claim:${claim.id}`);
+  const executionRefs = (input.executionUnits ?? []).slice(-16).map((unit) => `execution-unit:${unit.id}`);
+  const nonSeedMessageCount = (input.messages ?? []).filter((message) => !isSeedDemoOrFixtureMessage(message)).length;
+  return {
+    currentTurnId: input.currentTurnId,
+    selectedRefCount: referenceSummary.length,
+    refs: uniqueRuntimeStringList([...references, ...runRefs, ...artifactRefs, ...claimRefs, ...executionRefs]).slice(0, 48),
+    counts: {
+      nonSeedMessages: nonSeedMessageCount,
+      seedMessagesExcluded: (input.messages ?? []).length - nonSeedMessageCount,
+      runRefs: input.runs?.length ?? 0,
+      artifactRefs: input.artifacts?.length ?? 0,
+      claimRefs: input.claims?.length ?? 0,
+      executionUnitRefs: input.executionUnits?.length ?? 0,
+    },
+  };
+}
+
+function assertCodexRuntimeStreamRequestBoundary(request: ReturnType<typeof buildCodexRuntimeStreamRequest>) {
+  const forbidden = [
+    'prompt',
+    'sessionMessages',
+    'artifacts',
+    'claims',
+    'expectedArtifactTypes',
+    'selectedSkillIds',
+    'toolProviderRoutes',
+    'failureRecoveryPolicy',
+    'uiState',
+    'references',
+    'expectedEvidenceKinds',
+    'selectedToolIds',
+    'selectedSenseIds',
+    'selectedActionIds',
+    'selectedComponentIds',
+    'selectedVerifierIds',
+    'transportAgentContext',
+  ];
+  const hits = forbidden.filter((key) => key in request);
+  const audit = isRecord(request.auditMetadata) ? request.auditMetadata : {};
+  const auditHits = forbidden.filter((key) => key in audit);
+  if (hits.length || auditHits.length) {
+    throw new Error(`Runtime Codex request contains legacy GUI handoff fields: ${[...hits, ...auditHits].join(', ')}`);
+  }
+  if (!request.commandText.trim()) throw new Error('Runtime Codex request commandText is required.');
 }
 
 function buildCodexRuntimeCommandText(input: Parameters<typeof buildCodexRuntimeStreamRequest>[0]) {
@@ -354,11 +524,62 @@ function latestCodexSessionId(runs: SendAgentMessageInput['runs']): string | und
     const raw = isRecord(run.raw) ? run.raw : undefined;
     const direct = asString(raw?.codexSessionId) ?? asString(raw?.nativeSessionId);
     if (direct) return direct;
+    const runtimeFailure = isRecord(raw?.codexRuntimeFailure) ? raw.codexRuntimeFailure : undefined;
+    const runtimeRecoverState = isRecord(runtimeFailure?.recoverState) ? runtimeFailure.recoverState : undefined;
+    const failureSessionId = asString(runtimeFailure?.codexSessionId) ?? asString(runtimeRecoverState?.codexSessionId);
+    if (failureSessionId) return failureSessionId;
     const result = isRecord(raw?.result) ? raw.result : undefined;
     const resultSessionId = asString(result?.codexSessionId) ?? asString(result?.nativeSessionId);
     if (resultSessionId) return resultSessionId;
+    const parsed = parsedRuntimeOutputResult(raw);
+    const parsedSessionId = codexSessionIdFromRuntimeResult(parsed);
+    if (parsedSessionId) return parsedSessionId;
+    const objectRefSessionId = run.objectReferences?.map((reference) => asString(reference.ref))
+      .find((ref): ref is string => Boolean(ref?.startsWith('codex-thread:')))
+      ?.replace(/^codex-thread:/, '')
+      .trim();
+    if (objectRefSessionId) return objectRefSessionId;
   }
   return undefined;
+}
+
+function parsedRuntimeOutputResult(raw: Record<string, unknown> | undefined): unknown {
+  const data = isRecord(raw?.data) ? raw.data : undefined;
+  const run = isRecord(data?.run) ? data.run : undefined;
+  const output = isRecord(run?.output) ? run.output : undefined;
+  const resultText = asString(output?.result);
+  if (!resultText) return undefined;
+  try {
+    return JSON.parse(resultText) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function codexSessionIdFromRuntimeResult(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  const output = isRecord(value.output) ? value.output : undefined;
+  const runtimeFailure = isRecord(value.runtimeFailure) ? value.runtimeFailure : undefined;
+  const recoverState = isRecord(runtimeFailure?.recoverState) ? runtimeFailure.recoverState : undefined;
+  return asString(value.codexSessionId)
+    ?? asString(value.nativeSessionId)
+    ?? asString(output?.codexSessionId)
+    ?? asString(output?.nativeSessionId)
+    ?? asString(runtimeFailure?.codexSessionId)
+    ?? asString(recoverState?.codexSessionId);
+}
+
+function codexThreadObjectReference(codexSessionId: string, runId: string): ObjectReference {
+  return {
+    id: `codex-thread-${stableRefId(codexSessionId)}`,
+    title: 'Runtime Codex thread',
+    kind: 'run' as const,
+    ref: `codex-thread:${codexSessionId}`,
+    runId,
+    actions: ['inspect'] satisfies ObjectAction[],
+    status: 'available' as const,
+    presentationRole: 'audit' as const,
+  };
 }
 
 function quoteTerminalArg(value: string) {
@@ -366,10 +587,13 @@ function quoteTerminalArg(value: string) {
 }
 
 function codexRuntimeRunEvent(request: ReturnType<typeof buildCodexRuntimeStreamRequest>): AgentStreamEvent {
-  const runtime = request.runtime;
+  const auditMetadata: Record<string, unknown> = isRecord(request.auditMetadata) ? request.auditMetadata : {};
+  const runtime: Record<string, unknown> = isRecord(auditMetadata.runtime) ? auditMetadata.runtime : {};
+  const provider = asString(runtime.provider) ?? 'unknown';
+  const model = asString(runtime.model) ?? 'unknown';
   const detail = [
-    `provider ${runtime.provider}`,
-    `model ${runtime.model}`,
+    `provider ${provider}`,
+    `model ${model}`,
     `profile ${request.profile}`,
     `workspace ${request.workspacePath}`,
     `command ${request.commandId}`,
@@ -382,14 +606,237 @@ function codexRuntimeRunEvent(request: ReturnType<typeof buildCodexRuntimeStream
     createdAt: nowIso(),
     raw: {
       type: 'codex-runtime-run',
-      provider: runtime.provider,
-      model: runtime.model,
+      provider,
+      model,
       profile: request.profile,
       workspacePath: request.workspacePath,
       commandId: request.commandId,
+      attemptId: request.attemptId,
+      codexSessionId: request.codexSessionId,
       allowOpenAiRuntime: request.allowOpenAiRuntime,
+      boundary: asString(auditMetadata.boundary),
     },
   };
+}
+
+function runtimeCodexFailedResponse(input: {
+  input: SendAgentMessageInput;
+  request: ReturnType<typeof buildCodexRuntimeStreamRequest>;
+  runtimeEvents: AgentStreamEvent[];
+  error: string;
+}): NormalizedAgentResponse {
+  const failureEvent = [...input.runtimeEvents].reverse().find(isRuntimeCodexFailedEvent);
+  const metadata = runtimeFailureMetadata(input.request, failureEvent, input.runtimeEvents);
+  const message = 'Runtime Codex 运行未完成；失败 run、审计 refs 和恢复状态已保留。';
+  const structuredFailure = {
+    status: 'failed',
+    message,
+    runtimeFailure: metadata,
+    displayIntent: {
+      status: 'repair-needed',
+      conversationProjection: {
+        schemaVersion: 'sciforge.conversation-projection.v1',
+        conversationId: input.input.sessionId,
+        currentTurn: {
+          id: input.input.currentTurnId ?? input.request.commandId,
+          prompt: input.input.prompt,
+        },
+        visibleAnswer: {
+          status: 'repair-needed',
+          text: message,
+          artifactRefs: [],
+          diagnostic: `Runtime Codex exited with code ${metadata.exitCode ?? 'unknown'}.`,
+        },
+        activeRun: {
+          id: input.request.commandId,
+          status: 'repair-needed',
+        },
+        artifacts: [],
+        executionProcess: [{
+          eventId: `${input.request.commandId}:runtime-codex-failed`,
+          type: 'RunFailed',
+          summary: `Runtime Codex failed with exit code ${metadata.exitCode ?? 'unknown'}.`,
+          timestamp: nowIso(),
+        }],
+        recoverActions: [
+          'Retry or continue from this failed Runtime Codex run with the preserved command id, attempt id, profile, workspace, and audit refs.',
+          'Inspect folded audit/debug refs before rerunning if the same profile or workspace may fail again.',
+        ],
+        verificationState: {
+          status: 'failed',
+          verdict: 'fail',
+        },
+        auditRefs: metadata.evidenceRefs,
+        diagnostics: [{
+          severity: 'error',
+          code: 'runtime-codex-nonzero-exit',
+          message: `Runtime Codex exited with code ${metadata.exitCode ?? 'unknown'}.`,
+          refs: metadata.evidenceRefs.map((ref) => ({ ref })),
+        }],
+      },
+    },
+    executionUnits: [{
+      id: `EU-${input.request.commandId}`,
+      status: 'failed',
+      title: 'Runtime Codex turn',
+      provider: metadata.provider,
+      model: metadata.model,
+      profile: metadata.profile,
+      workspace: metadata.workspace,
+      commandId: metadata.commandId,
+      attemptId: metadata.attemptId,
+      codexSessionId: metadata.codexSessionId,
+      exitCode: metadata.exitCode,
+      failureReason: `Runtime Codex exited with code ${metadata.exitCode ?? 'unknown'}.`,
+      recoverActions: [
+        'Retry or continue from preserved Runtime Codex audit refs.',
+      ],
+      evidenceRefs: metadata.evidenceRefs,
+    }],
+    objectReferences: metadata.evidenceRefs.map((ref) => ({
+      id: `audit-${stableRefId(ref)}`,
+      kind: 'run',
+      ref,
+      title: ref.includes('stderr') ? 'Runtime Codex stderr audit' : ref.includes('raw-jsonl') ? 'Runtime Codex raw JSONL audit' : 'Runtime Codex audit',
+      status: 'available',
+      actions: ['inspect'] satisfies ObjectAction[],
+      runId: input.request.commandId,
+      presentationRole: 'audit',
+    })),
+  };
+  const response = normalizeAgentResponse(builtInScenarioIdForRuntimeInput(input.input), input.input.prompt, {
+    ok: true,
+    data: {
+      run: {
+        id: input.request.commandId,
+        status: 'failed',
+        createdAt: nowIso(),
+        completedAt: nowIso(),
+        output: {
+          result: JSON.stringify(structuredFailure),
+        },
+      },
+    },
+  });
+  return {
+    ...response,
+    run: {
+      ...response.run,
+      status: 'failed',
+      raw: {
+        ...(isRecord(response.run.raw) ? response.run.raw : {}),
+        codexRuntimeFailure: metadata,
+        runtimeAudit: {
+          foldedByDefault: true,
+          policy: 'raw stderr/jsonl/stdout/plugin warning are audit/debug only and must not render in the primary reply DOM',
+          eventCount: input.runtimeEvents.length,
+          eventSummaries: input.runtimeEvents.slice(-24).map(runtimeAuditEventSummary),
+        },
+      },
+    },
+    message: {
+      ...response.message,
+      status: 'failed',
+      content: message,
+    },
+  };
+}
+
+function isRuntimeCodexFailedEvent(event: AgentStreamEvent) {
+  return String(event.type || '').toLowerCase().includes('failed')
+    || String(isRecord(event.raw) ? event.raw.type : '').toLowerCase() === 'failed'
+    || String(isRecord(event.raw) ? stringRecordField(event.raw, 'status') : '').toLowerCase() === 'failed';
+}
+
+function runtimeFailureMetadata(
+  request: ReturnType<typeof buildCodexRuntimeStreamRequest>,
+  failureEvent: AgentStreamEvent | undefined,
+  events: AgentStreamEvent[],
+) {
+  const raw = isRecord(failureEvent?.raw) ? failureEvent.raw : {};
+  const rawNested = isRecord(raw.raw) ? raw.raw : {};
+  const auditMetadata: Record<string, unknown> = isRecord(request.auditMetadata) ? request.auditMetadata : {};
+  const runtime: Record<string, unknown> = isRecord(auditMetadata.runtime) ? auditMetadata.runtime : {};
+  const auditEvidenceRefs = asStringArray(auditMetadata.evidenceRefs);
+  const evidenceRefs = uniqueRuntimeStringList([
+    ...(asStringArray(raw.evidenceRefs) ?? []),
+    ...(asStringArray(rawNested.evidenceRefs) ?? []),
+    ...(auditEvidenceRefs ?? []),
+    `audit:codex-runtime:${request.commandId}:${asString(raw.attemptId) ?? request.attemptId ?? `${request.commandId}:attempt`}:normalized-events`,
+    `audit:codex-runtime:${request.commandId}:${asString(raw.attemptId) ?? request.attemptId ?? `${request.commandId}:attempt`}:stderr`,
+  ]);
+  return {
+    schemaVersion: 'sciforge.runtime-codex-failed-run.v1',
+    commandId: asString(raw.commandId) ?? request.commandId,
+    attemptId: asString(raw.attemptId) ?? request.attemptId,
+    workspace: asString(raw.workspace) ?? asString(rawNested.workspace) ?? request.workspacePath,
+    profile: asString(raw.profile) ?? asString(rawNested.profile) ?? request.profile,
+    provider: asString(raw.provider) ?? asString(rawNested.provider) ?? asString(runtime.provider) ?? 'unknown',
+    model: asString(raw.model) ?? asString(rawNested.model) ?? asString(runtime.model) ?? 'unknown',
+    codexSessionId: asString(raw.codexSessionId) ?? asString(rawNested.codexSessionId) ?? request.codexSessionId,
+    exitCode: asFiniteNumber(raw.exitCode) ?? asFiniteNumber(rawNested.exitCode),
+    stderrSummary: asString(rawNested.stderrSummary) ?? summarizeRuntimeStderr(events),
+    evidenceRefs,
+    recoverState: {
+      status: 'repair-needed',
+      retryable: true,
+      commandId: asString(raw.commandId) ?? request.commandId,
+      attemptId: asString(raw.attemptId) ?? request.attemptId,
+      workspace: asString(raw.workspace) ?? asString(rawNested.workspace) ?? request.workspacePath,
+      profile: asString(raw.profile) ?? asString(rawNested.profile) ?? request.profile,
+      provider: asString(raw.provider) ?? asString(rawNested.provider) ?? asString(runtime.provider) ?? 'unknown',
+      model: asString(raw.model) ?? asString(rawNested.model) ?? asString(runtime.model) ?? 'unknown',
+      codexSessionId: asString(raw.codexSessionId) ?? asString(rawNested.codexSessionId) ?? request.codexSessionId,
+      stderrSummary: asString(rawNested.stderrSummary) ?? summarizeRuntimeStderr(events),
+      evidenceRefs,
+      recoverActions: [
+        'Retry or continue from this failed Runtime Codex run using preserved audit refs only.',
+        'Keep the same Runtime Codex profile/workspace unless the audit refs show a configuration failure.',
+      ],
+    },
+  };
+}
+
+function summarizeRuntimeStderr(events: AgentStreamEvent[]) {
+  const chunks = events.flatMap((event) => {
+    const raw = isRecord(event.raw) ? event.raw : {};
+    const nested = isRecord(raw.raw) ? raw.raw : {};
+    const stream = asString(nested.stream) ?? asString(raw.stream) ?? stringRecordField(raw, 'status');
+    if (stream !== 'stderr') return [];
+    return [asString(nested.chunk) ?? asString(raw.message) ?? asString(raw.detail)].filter((value): value is string => Boolean(value));
+  });
+  const compact = chunks.join(' ').replace(/\s+/g, ' ').trim();
+  if (!compact) return undefined;
+  return compact.length > 240 ? `${compact.slice(0, 237)}...` : compact;
+}
+
+function runtimeAuditEventSummary(event: AgentStreamEvent) {
+  const raw = isRecord(event.raw) ? event.raw : {};
+  return {
+    type: event.type,
+    status: stringRecordField(raw, 'status'),
+    commandId: asString(raw.commandId),
+    attemptId: asString(raw.attemptId),
+    evidenceRefs: asStringArray(raw.evidenceRefs),
+    detailDigest: digestRuntimeText(event.detail),
+  };
+}
+
+function digestRuntimeText(value: unknown) {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = ((hash << 5) - hash + value.charCodeAt(index)) | 0;
+  }
+  return {
+    omitted: 'text-body',
+    chars: value.length,
+    hash: Math.abs(hash).toString(36),
+  };
+}
+
+function stableRefId(value: string) {
+  return value.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').slice(0, 80) || 'runtime-audit';
 }
 
 function isBackendProgressEvent(event: AgentStreamEvent) {

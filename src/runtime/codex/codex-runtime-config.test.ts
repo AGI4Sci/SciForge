@@ -62,6 +62,19 @@ test('runtime config guard fails closed when runtime profile is missing', async 
   );
 });
 
+test('runtime config guard rejects Developer Codex profiles instead of inheriting them', async () => {
+  const workspace = await tempWorkspace();
+  await assert.rejects(
+    () => assertCodexRuntimeConfig({
+      workspacePath: workspace,
+      profile: 'developer',
+      env: { [RUNTIME_KEY_ENV]: 'test-key' },
+      configText: runtimeConfig(),
+    }),
+    new RegExp(`Unsupported Runtime Codex profile: developer. Expected ${RUNTIME_PROFILE}`),
+  );
+});
+
 test('runtime config guard fails closed when proxy base_url is missing', async () => {
   const workspace = await tempWorkspace();
   await assert.rejects(

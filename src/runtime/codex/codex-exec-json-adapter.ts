@@ -1,9 +1,11 @@
 import { spawn } from 'node:child_process';
 import type { Readable } from 'node:stream';
-import { codexSessionIdFromRaw, commandIdForText, exitEvent, invalidJsonlAuditEvent, normalizeCodexJsonlEvent, runStartedEvent, stderrAuditEvent, type CodexRuntimeMetadata, type NormalizedAgentEvent } from './codex-event-normalizer.js';
+import { attemptIdForCommand, codexSessionIdFromRaw, commandIdForText, exitEvent, invalidJsonlAuditEvent, normalizeCodexJsonlEvent, resumeFailureAuditEvent, runStartedEvent, stderrAuditEvent, type CodexRuntimeMetadata, type NormalizedAgentEvent } from './codex-event-normalizer.js';
 import { type AgentCliAdapter, type AgentCliStartTurnInput, type AgentCliTurn } from './agent-cli-adapter.js';
 import { assertCodexRuntimeConfig, codexRuntimeEnv } from './codex-runtime-config.js';
 import { prepareRuntimeGuiExtensionInjection } from './gui-extension-manifest.js';
+
+const RUNTIME_CODEX_EXEC_ISOLATION_ARGS = ['--skip-git-repo-check', '--ignore-rules'];
 
 export type SpawnCodexProcess = (
   command: string,
@@ -34,7 +36,10 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
     });
     const commandText = input.commandText.trim();
     if (!commandText) throw new Error('Runtime Codex command text is required.');
-    const commandId = commandIdForText(commandText, config.workspace);
+    const commandId = input.commandId?.trim() || commandIdForText(commandText, config.workspace);
+    const attemptId = input.attemptId?.trim() || attemptIdForCommand(commandId);
+    const resumeRequested = Boolean(input.codexSessionId);
+    const evidenceRefs = evidenceRefsForTurn(commandId, attemptId);
     const guiInjection = await prepareRuntimeGuiExtensionInjection(input.guiExtension);
     const metadata: CodexRuntimeMetadata = {
       provider: config.provider,
@@ -42,8 +47,11 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
       profile: config.profile,
       workspace: config.workspace,
       commandId,
+      attemptId,
       commandText,
       codexSessionId: input.codexSessionId,
+      evidenceRefs,
+      resumeRequested,
     };
     const args = codexExecArgs({
       profile: config.profile,
@@ -68,7 +76,7 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
       input.abortSignal?.removeEventListener('abort', abort);
       this.activeTurns.delete(commandId);
     });
-    return { turnId: commandId, codexSessionId: input.codexSessionId, events };
+    return { turnId: commandId, attemptId, codexSessionId: input.codexSessionId, events };
   }
 
   async cancel(turnId: string): Promise<void> {
@@ -92,6 +100,7 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
     let exitCode: number | null = null;
     let exitSignal: NodeJS.Signals | string | null = null;
     let spawnError: unknown;
+    const stderrChunks: string[] = [];
 
     const wake = () => waiters.splice(0).forEach((resolve) => resolve());
     const push = (event: NormalizedAgentEvent) => {
@@ -116,7 +125,10 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
         }
       }
     });
-    child.stderr.on('data', (chunk: string) => push(stderrAuditEvent(metadata, chunk)));
+    child.stderr.on('data', (chunk: string) => {
+      stderrChunks.push(chunk);
+      push(stderrAuditEvent(metadata, chunk));
+    });
     child.on('error', (error) => {
       spawnError = error;
     });
@@ -138,7 +150,18 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
           message: spawnError instanceof Error ? spawnError.message : String(spawnError),
         });
       } else {
-        push(exitEvent(metadata, { exitCode, signal: exitSignal }));
+        if (metadata.resumeRequested && code !== 0) {
+          push(resumeFailureAuditEvent(metadata, {
+            exitCode: code,
+            signal: exitSignal,
+            stderrSummary: summarizeStderr(stderrChunks.join('')),
+          }));
+        }
+        push(exitEvent(metadata, {
+          exitCode,
+          signal: exitSignal,
+          stderrSummary: code === 0 ? undefined : summarizeStderr(stderrChunks.join('')),
+        }));
       }
       closed = true;
       cleanup();
@@ -154,6 +177,20 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
       cleanup();
     }
   }
+}
+
+function evidenceRefsForTurn(commandId: string, attemptId: string): string[] {
+  return [
+    `audit:codex-runtime:${commandId}:${attemptId}:raw-jsonl`,
+    `audit:codex-runtime:${commandId}:${attemptId}:stderr`,
+    `audit:codex-runtime:${commandId}:${attemptId}:normalized-events`,
+  ];
+}
+
+function summarizeStderr(stderr: string): string | undefined {
+  const compact = stderr.replace(/\s+/g, ' ').trim();
+  if (!compact) return undefined;
+  return compact.length > 240 ? `${compact.slice(0, 237)}...` : compact;
 }
 
 function codexExecArgs(input: {
@@ -173,6 +210,7 @@ function codexExecArgs(input: {
       'exec',
       'resume',
       '--json',
+      ...RUNTIME_CODEX_EXEC_ISOLATION_ARGS,
       input.codexSessionId,
       input.commandText,
     ];
@@ -180,6 +218,7 @@ function codexExecArgs(input: {
   return [
     'exec',
     '--json',
+    ...RUNTIME_CODEX_EXEC_ISOLATION_ARGS,
     ...(input.configArgs ?? []),
     '--profile',
     input.profile,

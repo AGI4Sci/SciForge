@@ -164,6 +164,39 @@ test('聊天流式请求用上一轮 native Codex session id 恢复多轮上下�
   assert.equal(bodies[0]?.codexSessionId, '019e3e82-164d-79b2-a5d4-b16241620b10');
 });
 
+test('聊天流式请求从 failed Runtime Codex recover state 恢复 native session id', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_url, init) => {
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return new Response([
+      'event: done\n',
+      'data: {"type":"done","status":"done","message":"continued"}\n\n',
+    ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+  }) as typeof fetch;
+
+  await sendSciForgeToolMessage(messageInput(undefined, {
+    runs: [{
+      id: 'codex-command-failed',
+      scenarioId: 'literature-evidence-review',
+      status: 'failed',
+      prompt: 'write artifact',
+      response: 'failed',
+      createdAt: '2026-05-19T00:00:00.000Z',
+      completedAt: '2026-05-19T00:00:01.000Z',
+      raw: {
+        codexRuntimeFailure: {
+          codexSessionId: '019e3e82-164d-79b2-a5d4-b16241620b10',
+          recoverState: {
+            codexSessionId: '019e3e82-164d-79b2-a5d4-b16241620b10',
+          },
+        },
+      },
+    }],
+  }));
+
+  assert.equal(bodies[0]?.codexSessionId, '019e3e82-164d-79b2-a5d4-b16241620b10');
+});
+
 test('Codex Runtime SSE stream 会归一化展示且 raw JSONL 不进入主事件文本', async () => {
   globalThis.fetch = (async () => new Response([
     'event: run_started\n',

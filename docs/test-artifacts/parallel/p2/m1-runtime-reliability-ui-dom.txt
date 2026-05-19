@@ -1,0 +1,252 @@
+- complementary:
+  - generic: BA
+  - button "导航":
+  - generic: 导航
+  - button "收起侧栏":
+  - navigation:
+    - button "研究概览":
+      - generic: 研究概览
+    - button "聊天工作台":
+      - generic: 聊天工作台
+    - button "组件工作台":
+      - generic: 组件工作台
+    - button "研究时间线":
+      - generic: 研究时间线
+    - button "反馈收件箱":
+      - generic: 反馈收件箱
+  - button "新建文件":
+  - button "新建文件夹":
+  - button "刷新":
+  - button "全部折叠":
+  - tree "工作区文件树":
+    - status: 已加载 40 项
+    - treeitem "折叠 p2" [expanded]:
+      - button "折叠":
+      - generic: p2
+    - treeitem "展开 .sciforge":
+      - button "展开":
+      - generic: .sciforge
+    - treeitem "展开 artifacts":
+      - button "展开":
+      - generic: artifacts
+    - treeitem "展开 clinical_analysis_output":
+      - button "展开":
+      - generic: clinical_analysis_output
+    - treeitem "展开 output":
+      - button "展开":
+      - generic: output
+    - treeitem "analysis_report.md":
+      - generic: analysis_report.md
+    - treeitem "analysis.py":
+      - generic: analysis.py
+    - treeitem "analyze_messy_tsv.py":
+      - generic: analyze_messy_tsv.py
+    - treeitem "baseline_distribution.png":
+      - generic: baseline_distribution.png
+    - treeitem "batch_effect_analysis.png":
+      - generic: batch_effect_analysis.png
+    - treeitem "boxplot_batch_treatment.png":
+      - generic: boxplot_batch_treatment.png
+    - treeitem "boxplot_outcome_by_treatment.png":
+      - generic: boxplot_outcome_by_treatment.png
+    - treeitem "boxplot_response.png":
+      - generic: boxplot_response.png
+    - treeitem "boxplot_treatment_timepoint.png":
+      - generic: boxplot_treatment_timepoint.png
+    - treeitem "cleaned_clinical_data.csv":
+      - generic: cleaned_clinical_data.csv
+    - treeitem "clinical_analysis_input.json":
+      - generic: clinical_analysis_input.json
+    - treeitem "clinical_analysis_package.py":
+      - generic: clinical_analysis_package.py
+    - treeitem "clinical_analysis.py":
+      - generic: clinical_analysis.py
+    - treeitem "clinical_cleaned.csv":
+      - generic: clinical_cleaned.csv
+    - treeitem "clinical_qc.csv":
+      - generic: clinical_qc.csv
+    - treeitem "clinical_raw.csv":
+      - generic: clinical_raw.csv
+    - treeitem "clinical_report.md":
+      - generic: clinical_report.md
+    - treeitem "coefficient_plot.png":
+      - generic: coefficient_plot.png
+    - treeitem "drug_analysis_project.py":
+      - generic: drug_analysis_project.py
+    - treeitem "drugA_batch_analysis.py":
+      - generic: drugA_batch_analysis.py
+    - treeitem "drugA_batch_data.csv":
+      - generic: drugA_batch_data.csv
+    - treeitem "evidence_matrix.json":
+      - generic: evidence_matrix.json
+    - treeitem "evidence.json":
+      - generic: evidence.json
+    - treeitem "experiment_data.csv":
+      - generic: experiment_data.csv
+    - treeitem "generate_clinical_analysis.py":
+      - generic: generate_clinical_analysis.py
+    - treeitem "input.json":
+      - generic: input.json
+    - treeitem "missingness_table.csv":
+      - generic: missingness_table.csv
+    - treeitem "notebook_timeline.json":
+      - generic: notebook_timeline.json
+    - treeitem "Oops.rej":
+      - generic: Oops.rej
+    - treeitem "outcome_boxplot.png":
+      - generic: outcome_boxplot.png
+    - treeitem "output.json":
+      - generic: output.json
+    - treeitem "raw_clinical_data.csv":
+      - generic: raw_clinical_data.csv
+    - treeitem "report.md":
+      - generic: report.md
+    - treeitem "sensitivity_analysis.png":
+      - generic: sensitivity_analysis.png
+    - treeitem "simulated_data.csv":
+      - generic: simulated_data.csv
+    - treeitem "violin_48h.png":
+      - generic: violin_48h.png
+    - generic "打开其他文件夹…"
+  - separator "拖拽调整左侧栏宽度"
+- banner:
+  - textbox "搜索文件、报告、运行、问题..."
+  - generic: SciForge · ready
+  - button "切换白天模式":
+    - text: 切换白天模式
+  - button "设置":
+    - text: 设置
+- main:
+  - button "SciForge 工作台":
+    - generic: SciForge 工作台
+  - generic "感官插件":
+    - button "vision-sense on" [pressed]:
+      - generic: vision-sense
+      - generic: "on"
+  - strong: Ask SciForge
+  - generic: sciforge-runtime-deepseek
+  - generic: native
+  - generic: bailian/deepseek-v4-flash
+  - generic: 在线
+  - generic: 6 archived
+  - generic "选择下一次 Runtime Codex 运行使用的兼容 backend 标识":
+    - generic: runtime
+    - combobox "runtime":
+      - option "Codex" [selected]
+      - option "OpenTeam"
+      - option "Claude Code"
+      - option "Hermes"
+      - option "OpenClaw"
+      - option "Gemini"
+  - button "开启新聊天":
+    - text: 开启新聊天
+  - button "历史会话":
+    - text: 历史会话
+  - button "导出当前聊天":
+    - text: 导出当前聊天
+  - button "删除当前聊天":
+    - text: 删除当前聊天
+  - button "复制"
+  - button "编辑"
+  - paragraph: I am a wet-lab scientist and I need a reproducible analysis from this messy TSV, without configuring any scenario. Please create a complete reproducible data-analysis package in the workspace.
+  - paragraph: "Hard requirements:"
+  - list:
+    - listitem: Parse the TSV below as raw data and write it to a raw artifact.
+    - listitem: "Run QC: row counts, missingness by column, duplicated sample IDs, impossible values, outlier detection, group/timepoint/batch imbalance, and unit inconsistencies."
+    - listitem: State the cleaning strategy and write a cleaned CSV artifact.
+    - listitem: Fit a statistical model for response using treatment, timepoint, treatment*timepoint, batch, baseline_signal, and donor_age when usable. If the model needs simplification because of the small/messy data, explain the exact simplification.
+    - listitem: "Produce at least two chart artifacts: one QC/EDA chart and one model/effect chart."
+    - listitem: Give key conclusions with an effect direction and uncertainty for DrugA at 48h versus vehicle.
+    - listitem: Run at least one sensitivity/robustness check, e.g. excluding outliers and/or harmonizing units.
+    - listitem: Write a markdown report, an executable analysis script, and an exact rerun command.
+    - listitem: The final answer must tell me whether this is reproducible, list artifacts, state limitations, and not call it success if code/artifacts were not actually run/written.
+  - paragraph: "Messy TSV: sample_id batch treatment timepoint_h baseline_signal response donor_age unit dropout_flag S001 B1 vehicle 0 102 4.8 34 ng/ml 0 S002 B1 vehicle 24 98 5.1 35 ng/ml 0 S003 B1 vehicle 48 101 5.0 ng/ml 0 S004 B1 DrugA 0 99 5.2 44 ng/ml 0 S005 B1 DrugA 24 103 6.0 41 ng/ml 0 S006 B1 DrugA 48 104 7.6 40 ng/ml 0 S007 B1 DrugA 48 107 23.0 42 ng/ml 0 S008 B1 DrugB 24 96 5.5 39 ng/ml 0 S009 B2 vehicle 0 88 4.6 30 ng/ml 0 S010 B2 vehicle 24 91 4.9 31 ng/ml 0 S011 B2 vehicle 48 90 5.2 31 ng/ml 0 S012 B2 DrugA 0 89 4.8 52 ng/ml 0 S013 B2 DrugA 24 92 5.8 53 ng/ml 0 S014 B2 DrugA 48 94 7.0 51 ng/ml 0 S014 B2 DrugA 48 94 7.0 51 ng/ml 0 S015 B2 DrugB 48 93 5.7 50 ng/ml 1 S016 B3 vehicle 0 110 0.0047 46 ug/ml 0 S017 B3 vehicle 24 112 0.0049 45 ug/ml 0 S018 B3 vehicle 48 111 0.0050 45 ug/ml 0 S019 B3 DrugA 0 113 0.0051 47 ug/ml 0 S020 B3 DrugA 24 115 0.0061 47 ug/ml 0 S021 B3 DrugA 48 116 0.0074 49 ug/ml 0 S022 B3 DrugB 24 114 0.0056 48 ug/ml 0 S023 B4 vehicle 48 130 5.3 60 ng/ml 0 S024 B4 DrugA 48 132 7.9 61 ng/ml 0 S025 B4 DrugA 24 -5 6.2 60 ng/ml 0 S026 B4 vehicle 24 129 62 ng/ml 0"
+  - strong: SciForge
+  - button "run project-"
+  - generic: 20%
+  - generic: 计算预测
+  - generic: 推断
+  - generic "Projection verification unverified":
+    - generic: "Verification: 未验证"
+  - generic: failed
+  - button "复制"
+  - button "编辑"
+  - paragraph: Generated workspace task failed before writing a final structured task result. SciForge wrote a minimal failure payload with runtime refs.
+  - generic "本轮关键信息":
+    - strong: 本轮结果
+    - generic: 0 objects · 1 claims
+    - paragraph: 本轮没有生成新的可预览对象。 已提取 1 条判断。 过程记录已折叠在下方。
+    - paragraph:
+      - generic: 判断：Generated workspace task failed before writing a final structured task result. SciForge wrote a minimal failure payload with runtime refs.
+      - generic: prediction · confidence 72%
+  - generic "按顺序记录的工作过程":
+    - generic "Received I am a wet-lab scientist and I need a reproducible analysis from this messy TSV, without config...":
+      - generic: Received
+      - generic: I am a wet-lab scientist and I need a reproducible analysis from this messy TSV, without config...
+    - generic "TurnReceived I am a wet-lab scientist and I need a reproducible analysis from this messy TSV, without config... repair-needed · 2026-05-17T16:59:20.153Z":
+      - generic: TurnReceived
+      - generic: I am a wet-lab scientist and I need a reproducible analysis from this messy TSV, without config...
+      - generic: repair-needed · 2026-05-17T16:59:20.153Z
+    - generic "HarnessDecisionRecorded profile=balanced-default; intent=fresh; exploration=minimal repair-needed · 2026-05-17T16:59:20.153Z":
+      - generic: HarnessDecisionRecorded
+      - generic: profile=balanced-default; intent=fresh; exploration=minimal
+      - generic: repair-needed · 2026-05-17T16:59:20.153Z
+    - generic "Dispatched protocol=protocol-failed; task=needs-work repair-needed · 2026-05-17T16:59:20.153Z":
+      - generic: Dispatched
+      - generic: protocol=protocol-failed; task=needs-work
+      - generic: repair-needed · 2026-05-17T16:59:20.153Z
+    - generic "OutputMaterialized Materialized refs from runtime payload. repair-needed · 2026-05-17T16:59:20.153Z":
+      - generic: OutputMaterialized
+      - generic: Materialized refs from runtime payload.
+      - generic: repair-needed · 2026-05-17T16:59:20.153Z
+    - generic "RepairNeeded Generated workspace task failed before writing a final structured task result. SciForge wrote a... repair-needed · 2026-05-17T16:59:20.153Z":
+      - generic: RepairNeeded
+      - generic: Generated workspace task failed before writing a final structured task result. SciForge wrote a...
+      - generic: repair-needed · 2026-05-17T16:59:20.153Z
+  - generic: action
+  - generic: 输入研究问题后即可运行；Shift+Enter 换行，Enter 发送。
+  - code: literature-evidence-review@1.0.0
+  - button "输入研究问题，或点选对象后继续追问...":
+    - generic: 输入研究问题，或点选对象后继续追问...
+  - separator "调整聊天区和结果区宽度"
+  - button "向右收缩结果面板":
+  - tablist:
+    - tab "结果视图 结果视图" [selected]:
+      - generic: 结果视图
+      - text: 结果视图
+    - tab "证据矩阵 证据矩阵":
+      - generic: 证据矩阵
+      - text: 证据矩阵
+  - generic "结果区 focus mode":
+    - button "全部"
+    - button "只看图"
+    - button "只看证据"
+    - button "只看执行单元"
+  - strong: 当前聚焦 run
+  - generic: project-literature-evidence-review-mpa0si55-syqpd7 · failed · literature-evidence-review@1.0.0
+  - button "取消高亮"
+  - heading "结果视图" [level=2]
+  - paragraph: 优先展示用户本轮要看的结果；更多内容默认收起
+  - heading "运行需要恢复" [level=2]
+  - paragraph: project-literature-evidence-review-mpa0si55-syqpd7 · recoverable
+  - generic: "Workspace task exited 2: /opt/homebrew/Cellar/python@3.13/3.13.7/Frameworks/Python.framework/Versions/3.13/Resources/Python.app/Contents/MacOS/Python: can't open file '/Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p2/.sciforge/sessions/2026-05-17_literature-evidence-review_session-literature..."
+  - generic: 当前阶段：Generated workspace task failed before writing a final structured task result. SciForge wrote a minimal failure payload with runtime refs. · RepairNeeded
+  - code: safe · Repair runtime execution inputs, argv, sandbox, or output path and rerun.
+  - code: Repair runtime execution inputs, argv, sandbox, or output path and rerun.
+  - strong: capability-version-drift
+  - paragraph: 历史 session 的 runtime/capability contract 与当前代码不一致；继续前应检查 artifact refs、迁移旧 payload，或明确重跑。
+  - strong: 兼容性指纹
+  - code: "current: sciforge-runtime-compatibility-2026-05-13"
+  - code: "persisted: sciforge-runtime-compatibility-2026-05-13"
+  - code: Open the run audit and verify persisted artifact refs before continuing.
+  - code: Migrate the session payload if the current contract can read every referenced artifact.
+  - code: Start a new run when schema or capability drift blocks safe recovery.
+  - generic: "Workspace task exited 2: /opt/homebrew/Cellar/python@3.13/3.13.7/Frameworks/Python.framework/Versions/3.13/Resources/Python.app/Contents/MacOS/Python: can't open file '/Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p2/.sciforge/sessi..."
+  - button "Repair runtime execution inputs, argv, sandbox, or output path and rerun."
+  - generic "查看运行细节 1 EU":
+    - generic: 查看运行细节
+    - generic: 1 EU
+  - generic "视图状态 1 modules":
+    - generic: 视图状态
+    - generic: 1 modules
+- generic: "0"

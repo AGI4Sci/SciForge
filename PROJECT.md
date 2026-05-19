@@ -154,6 +154,12 @@ Todo：
 - [ ] `npm run typecheck`
 - [ ] `git diff --check`
 
+p2 阶段证据（2026-05-19）：
+
+- 已补强 adapter argv/resume、request payload boundary、failed-run reload/recover state、provider/profile fail-closed 的 fixture 化证据；`src/runtime/codex/*.test.ts`、Runtime Codex UI presentation targeted tests、`npm run typecheck` 和 `git diff --check` 均通过。
+- in-app browser 已打开 `http://127.0.0.1:5174/` 并保存 UI/chat DOM、截图和 manifest 到 `docs/test-artifacts/parallel/p2/m1-runtime-reliability-manifest.json`。
+- 本轮 RuntimeCodex sidecar 未启动：`/Applications/workspace/ailab/research/app/RuntimeCodex` 不存在；因此仍需 live RuntimeCodex browser rerun，不能宣称完整 live pass。
+
 ### VERIFICATION-20260519 real in-app browser acceptance
 
 状态：planned / blocked-by-gui-present-integration
@@ -176,6 +182,32 @@ Todo：
 - [ ] 多 turn browser 验收：第一轮记暗号，第二轮只回暗号；必须从默认聊天入口看到第二轮可见答案后才标 passed。
 - [ ] `tests/smoke/smoke-runtime-codex-browser-acceptance.ts` 的 manifest 只有在真实 in-app browser 观察到可见结果后才能标 passed。
 - [ ] blocked/failed manifest 必须写清端口、URL、profile、原因、截图/DOM 证据位置。
+
+p6 对抗性 browser 阶段证据（2026-05-19）：
+
+- 并行 worker p6 使用 `http://127.0.0.1:5178/`、workspace writer `http://127.0.0.1:6178`、workspace `workspace/parallel/p6`，从 in-app browser 默认聊天入口提交非 fixture 任务 `p6-rotor-thermal-20260519`。
+- 第一轮要求创建 `p6-rotor-thermal-drift/validation-plan.md` 并携带 token `P6-THERMAL-NOVEL-7Q4Z`、传感器、窗口、指标和章节约束；Runtime Codex command `codex-command-mpcf3797-g575sh` 失败，未产生 artifact，因此不能宣称多轮或 selected artifact continuation 成功。
+- 刷新页面后同一 failed / repair-needed run 仍可见；证据位于 `docs/test-artifacts/parallel/p6/p6-adversarial-browser-report.md` 和 `p6-adversarial-browser-manifest.json`。
+- 修复：首轮 SSE / failed-run 中的 `codexSessionId` 会提升到 normalized run/message refs，后续 turn 可从 failed metadata、legacy nested result 或 `codex-thread:` ref 恢复；failed recover state 现在要求保留 `stderrSummary`。
+- 剩余风险：现有 pre-fix p6 persisted run 的 `recoverState` 缺少 `stderrSummary`；后续 failed run 由测试覆盖。真实 RuntimeCodex/provider failure 仍阻塞 artifact、第二轮和第三轮可见答案验收。
+
+p4 artifact open/follow-up 阶段证据（2026-05-19）：
+
+- 并行 worker p4 使用 `http://127.0.0.1:5176/`、workspace writer `http://127.0.0.1:6176`、workspace `workspace/parallel/p4`，从 in-app browser 默认聊天入口提交 live 非 seed 任务 `P4-SELECTED-REF-LIVE-1718`。
+- Runtime Codex command `codex-command-mpcf4k0g-shhonu` 产生了 folded audit refs 和 terminal failed projection；UI/session bundle 持久化了 user-authored message、failed run 和 audit refs，但没有持久化 user-facing artifact 或 preview refs，因此不能宣称 artifact open/follow-up live pass。
+- 修复：selected ObjectReference 现在通过 provenance/path/dataRef/delivery refs 做 request scoping；结果区 focus 会经 external-reference request 进入 composer pending refs；缺失的 `smoke:runtime-codex-artifact-followup` 脚本现在覆盖 Runtime Codex selected-ref 负向/作用域测试。
+- 证据位于 `docs/test-artifacts/parallel/p4/p4-artifact-followup-manifest.json`、`p4-runtime-codex-live-failed-dom.txt` 和 `p4-runtime-codex-live-failed-screenshot.png`。
+- 剩余风险：live Runtime Codex 未通过 `gui.present` 或等效 artifact publishing 产出可选 artifact；selected-ref 第二轮只能证明代码级 terminal-equivalent ref 机制，不能作为 M0 最终 live acceptance。
+
+M2 / p3 GUI presentation、seed boundary、no-hardcoding 阶段证据（2026-05-19）：
+
+- 并行 worker p3 使用 `http://127.0.0.1:5175/`、workspace writer `http://127.0.0.1:6175`、RuntimeCodex `http://127.0.0.1:18082`、workspace `workspace/parallel/p3`。
+- 修复：chat message DOM 增加 `data-message-id`、`data-message-provenance`、`data-runtime-request-eligible`、`data-live-acceptance-eligible`，并显示 `user-authored`、`seed-demo`、`fixture`、`system UI`、`live Runtime Codex` provenance badge；seed/demo/fixture 不能通过 object refs 被误判为 live acceptance。
+- 修复：failed run、background completion、Runtime Codex request payload、selected-ref scoping 和 audit metadata boundary 均带 provenance/request eligibility；seed/demo/fixture refs、selected text、message body 和 artifact body 不进入 Runtime Codex request payload。
+- 证据：serialized request payload 位于 `docs/test-artifacts/parallel/p3/p3-request-payload-capture.json`，确认 `commandText=ask --ref "artifact:live-report" ...` 且排除 `message:seed-demo`、seed selected text、seed message body 和 artifact body。
+- in-app browser 证据位于 `docs/test-artifacts/parallel/p3/p3-provenance-after-fix-ui.json`、`p3-provenance-after-fix-dom.txt`、`p3-provenance-after-fix-screenshot.png`、`p3-live-submit-states.json`、`p3-live-submit-dom.txt` 和 `p3-live-submit-screenshot.png`。
+- live 默认聊天提交 `p3 live boundary check: reply with one short sentence and do not use demo data.` 后新增回复仍被 DOM 标为 `data-message-provenance="seed-demo"`、`data-live-acceptance-eligible="false"`，且内容包含样例式科学结论；因此 p3/M2 代码边界通过，live browser acceptance 仍不能标 passed。
+- 本阶段通过：`npm run smoke:no-hardcoded-success`、`node --import tsx --test src/ui/src/app/chat/sessionTransforms.test.ts`、`node --import tsx --test src/ui/src/streamEventPresentation.test.ts src/ui/src/app/guiProtocol.test.ts`、`node --import tsx --test src/ui/src/api/sciforgeToolsClient/runtimeEvents.test.ts src/runtime/codex/codex-runtime-server.test.ts src/runtime/codex/codex-exec-json-adapter.test.ts`、`node --import tsx --test tests/smoke/web-e2e/real-browser-evidence.test.ts`、`git diff --check`。
 
 验收：
 
@@ -268,6 +300,33 @@ Todo：
 - [ ] debug/audit 默认折叠。
 - [ ] provider fallback 禁止。
 - [ ] 退出后本地子进程清理干净。
+
+### P8-SPARE-REPAIR-20260519 docs and gate drift
+
+状态：in-progress / parallel-p8
+
+接手范围：补位修复 docs/test drift、gate 漏洞和小范围状态不一致；避开 p1-p7 已声明的大模块改造。
+
+已处理：
+
+- [x] `smoke:no-legacy-paths` 覆盖当前 runtime/UI audit 路径的 raw legacy access 漂移，确认不再新增 legacy 命中。
+- [x] `smoke:long-file-budget` 排除 `.sciforge/`、`.codex-runtime/`、`workspace/` 这类并行运行缓存，避免把生成状态误报为源码长文件。
+- [x] `smoke:runtime-codex-browser-acceptance` 保持缺少 live credential 时 fail-closed，并输出 blocked manifest 作为证据。
+
+Long-file split tracking：
+
+- [ ] `src/runtime/gateway/direct-context-fast-path.ts`：保留为 runtime gateway legacy split follow-up，后续拆出 request classification、artifact/ref projection 和 provider dispatch。
+- [ ] `src/runtime/gateway/direct-context-fast-path.test.ts`：随 gateway split 同步拆成 classification、artifact/ref projection、provider dispatch 三组测试。
+- [ ] `src/runtime/gateway/generated-task-runner-generation-lifecycle.ts`：保留为 generation lifecycle boundary follow-up，后续拆出 lifecycle state machine、artifact publication 和 error projection。
+- [ ] `src/ui/src/api/sciforgeToolsClient.ts`：Runtime Codex stream/session/audit 兼容修复后继续偏长，后续拆成 request builder、SSE normalizer、session resume extractor 和 audit payload builder。
+
+Acceptance rubric：
+
+- 用户意图：p8 只补无人负责的小范围漂移和门禁漏洞，不抢占其它 worker 的主文件所有权。
+- 任务完成：修复以 targeted gate 为准，不硬编码成功路径；缺失 live browser credential 时必须 blocked/fail-closed。
+- 证据链：最低保留 `npm run typecheck`、`npm run smoke:no-legacy-paths`、`npm run smoke:long-file-budget`、`npm run smoke:runtime-codex-browser-acceptance` 和 `git diff --check` 输出。
+- 负向检查：`SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1` 在没有 `SCIFORGE_RUNTIME_API_KEY` 时必须失败，不能用 fixture 假装 live pass。
+- 剩余风险：当前并行 worktree 仍包含其它 worker 的未提交 runtime/UI 改动；p8 提交前只能 stage 已理解且属于本 lane 的文件。
 
 ## Definition Of Done
 

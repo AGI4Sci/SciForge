@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { mkdir, mkdtemp } from 'node:fs/promises';
+import { access, mkdir, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -36,12 +36,22 @@ test('adapter spawns codex exec --json with isolated CODEX_HOME and plain text c
   const events = await collect(turn.events);
 
   assert.equal(spawnCall?.[0], 'codex');
-  assert.equal(spawnCall?.[1][0], 'exec');
-  assert.equal(spawnCall?.[1][1], '--json');
-  assert.ok(spawnCall?.[1].includes(`mcp_servers.${GUI_MCP_SERVER_NAME}.command="node"`));
-  assert.ok(spawnCall?.[1].some((arg) => arg.startsWith(`mcp_servers.${GUI_MCP_SERVER_NAME}.args=`) && arg.includes('gui-mcp-server.ts')));
-  assert.ok(spawnCall?.[1].includes(`mcp_servers.${GUI_MCP_SERVER_NAME}.env.${GUI_EXTENSION_STATE_ENV}="${guiStatePath}"`));
-  assert.equal(spawnCall?.[1].at(-1), 'Summarize the workspace');
+  const argv = spawnCall?.[1] ?? [];
+  assert.deepEqual(argv.slice(0, 2), ['exec', '--json']);
+  assert.ok(argv.includes('--skip-git-repo-check'));
+  assert.ok(argv.includes('--ignore-rules'));
+  await assert.rejects(access(join(workspace, '.git')));
+  assert.ok(argv.includes(`mcp_servers.${GUI_MCP_SERVER_NAME}.command="node"`));
+  assert.ok(argv.some((arg) => arg.startsWith(`mcp_servers.${GUI_MCP_SERVER_NAME}.args=`) && arg.includes('gui-mcp-server.ts')));
+  assert.ok(argv.includes(`mcp_servers.${GUI_MCP_SERVER_NAME}.env.${GUI_EXTENSION_STATE_ENV}="${guiStatePath}"`));
+  assert.deepEqual(argv.slice(-5), [
+    '--profile',
+    RUNTIME_PROFILE,
+    '--cd',
+    workspace,
+    'Summarize the workspace',
+  ]);
+  assert.equal(argv.filter((arg) => arg === 'Summarize the workspace').length, 1);
   assert.match(spawnCall?.[2].env.CODEX_HOME ?? '', /packages\/backend\/\.codex-runtime\/codex-home$/);
   assert.equal(events.find((event) => event.type === 'message')?.text, 'OK');
   assert.equal(events.at(-1)?.type, 'done');
@@ -69,6 +79,47 @@ test('adapter converts stderr to audit events and nonzero exit to failed', async
   assert.equal(events.at(-1)?.exitCode, 7);
 });
 
+test('adapter fails closed before spawn when runtime API key is missing', async () => {
+  let spawnCalled = false;
+  const workspace = await tempWorkspace();
+  const adapter = new CodexExecJsonAdapter({
+    env: {},
+    spawnProcess() {
+      spawnCalled = true;
+      return fakeChild().process;
+    },
+  });
+
+  await assert.rejects(
+    () => adapter.startTurn({ commandText: 'should not fall back', workspacePath: workspace, guiExtension: { enabled: false } }),
+    new RegExp(`Missing ${RUNTIME_KEY_ENV}`),
+  );
+  assert.equal(spawnCalled, false);
+});
+
+test('adapter rejects Developer profile instead of falling back from runtime profile', async () => {
+  let spawnCalled = false;
+  const workspace = await tempWorkspace();
+  const adapter = new CodexExecJsonAdapter({
+    env: { [RUNTIME_KEY_ENV]: 'test-key' },
+    spawnProcess() {
+      spawnCalled = true;
+      return fakeChild().process;
+    },
+  });
+
+  await assert.rejects(
+    () => adapter.startTurn({
+      commandText: 'should not use developer profile',
+      workspacePath: workspace,
+      profile: 'default',
+      guiExtension: { enabled: false },
+    }),
+    /Unsupported Runtime Codex profile: default/,
+  );
+  assert.equal(spawnCalled, false);
+});
+
 test('adapter resumes native Codex session when codexSessionId is provided', async () => {
   const child = fakeChild();
   let spawnCall: Parameters<SpawnCodexProcess> | undefined;
@@ -94,8 +145,10 @@ test('adapter resumes native Codex session when codexSessionId is provided', asy
 
   assert.equal(turn.codexSessionId, '019e3e82-164d-79b2-a5d4-b16241620b10');
   assert.equal(spawnCall?.[0], 'codex');
-  assert.ok(spawnCall?.[1].includes(`mcp_servers.${GUI_MCP_SERVER_NAME}.command="node"`));
-  assert.deepEqual(spawnCall?.[1].slice(-9), [
+  const argv = spawnCall?.[1] ?? [];
+  assert.ok(argv.includes(`mcp_servers.${GUI_MCP_SERVER_NAME}.command="node"`));
+  await assert.rejects(access(join(workspace, '.git')));
+  assert.deepEqual(argv.slice(-11), [
     '--profile',
     RUNTIME_PROFILE,
     '--cd',
@@ -103,9 +156,14 @@ test('adapter resumes native Codex session when codexSessionId is provided', asy
     'exec',
     'resume',
     '--json',
+    '--skip-git-repo-check',
+    '--ignore-rules',
     '019e3e82-164d-79b2-a5d4-b16241620b10',
     'What did I ask you to remember?',
   ]);
+  assert.equal(argv.filter((arg) => arg === 'What did I ask you to remember?').length, 1);
+  assert.equal(argv.at(-2), '019e3e82-164d-79b2-a5d4-b16241620b10');
+  assert.equal(argv.at(-1), 'What did I ask you to remember?');
 });
 
 test('adapter surfaces native Codex session id from session_meta events', async () => {

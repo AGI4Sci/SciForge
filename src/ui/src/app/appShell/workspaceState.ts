@@ -257,7 +257,38 @@ function recoverableReasonForRun(session: SciForgeSession, run: SciForgeRun): { 
   const projection = conversationProjectionForSession(session, run);
   const focusSignal = conversationProjectionRecoverFocusSignal(projection);
   if (focusSignal) return { reason: 'repair-needed-run', activeRunId: focusSignal.activeRunId };
+  if (runHasPersistedRuntimeCodexRecoverState(run)) return { reason: 'failed-run', activeRunId: run.id };
   return undefined;
+}
+
+function runHasPersistedRuntimeCodexRecoverState(run: SciForgeRun) {
+  if (run.status !== 'failed') return false;
+  const raw = isRecord(run.raw) ? run.raw : undefined;
+  const failure = isRecord(raw?.codexRuntimeFailure) ? raw.codexRuntimeFailure : undefined;
+  const recoverState = isRecord(failure?.recoverState) ? failure.recoverState : undefined;
+  const evidenceRefs = Array.isArray(failure?.evidenceRefs) ? failure.evidenceRefs : [];
+  const recoverEvidenceRefs = Array.isArray(recoverState?.evidenceRefs) ? recoverState.evidenceRefs : [];
+  return failure?.schemaVersion === 'sciforge.runtime-codex-failed-run.v1'
+    && recoverState?.status === 'repair-needed'
+    && typeof failure.commandId === 'string'
+    && typeof failure.attemptId === 'string'
+    && typeof failure.workspace === 'string'
+    && typeof failure.profile === 'string'
+    && typeof failure.provider === 'string'
+    && typeof failure.model === 'string'
+    && typeof failure.codexSessionId === 'string'
+    && typeof failure.stderrSummary === 'string'
+    && failure.stderrSummary.trim().length > 0
+    && recoverState.commandId === failure.commandId
+    && recoverState.attemptId === failure.attemptId
+    && recoverState.workspace === failure.workspace
+    && recoverState.profile === failure.profile
+    && recoverState.provider === failure.provider
+    && recoverState.model === failure.model
+    && recoverState.codexSessionId === failure.codexSessionId
+    && recoverState.stderrSummary === failure.stderrSummary
+    && evidenceRefs.length > 0
+    && recoverEvidenceRefs.length > 0;
 }
 
 function runSupersedesOlderRecoverableFocus(session: SciForgeSession, run: SciForgeRun) {
