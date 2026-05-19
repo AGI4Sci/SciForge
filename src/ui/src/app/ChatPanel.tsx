@@ -943,6 +943,7 @@ export function ChatPanel({
             data-testid="chat-message"
             data-message-id={message.id}
             data-message-provenance={provenanceKind}
+            data-message-provenance-source={message.provenance?.source}
             data-runtime-request-eligible={message.provenance?.runtimeRequestEligible === true ? 'true' : 'false'}
             data-live-acceptance-eligible={isLiveRuntimeCodexMessage(message) ? 'true' : 'false'}
             data-session-id={session.sessionId}

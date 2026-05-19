@@ -1,9 +1,11 @@
 import { spawn } from 'node:child_process';
+import { join } from 'node:path';
 import type { Readable } from 'node:stream';
-import { attemptIdForCommand, codexSessionIdFromRaw, commandIdForText, exitEvent, invalidJsonlAuditEvent, normalizeCodexJsonlEvent, resumeFailureAuditEvent, runStartedEvent, stderrAuditEvent, type CodexRuntimeMetadata, type NormalizedAgentEvent } from './codex-event-normalizer.js';
+import { attemptIdForCommand, codexSessionIdFromRaw, commandIdForText, exitEvent, guiPresentEvent, invalidJsonlAuditEvent, normalizeCodexJsonlEvent, resumeFailureAuditEvent, runStartedEvent, stderrAuditEvent, type CodexRuntimeMetadata, type NormalizedAgentEvent } from './codex-event-normalizer.js';
 import { type AgentCliAdapter, type AgentCliStartTurnInput, type AgentCliTurn } from './agent-cli-adapter.js';
 import { assertCodexRuntimeConfig, codexRuntimeEnv } from './codex-runtime-config.js';
 import { prepareRuntimeGuiExtensionInjection } from './gui-extension-manifest.js';
+import { loadGuiExtensionSnapshot } from './gui-extension-state.js';
 
 const RUNTIME_CODEX_EXEC_ISOLATION_ARGS = ['--skip-git-repo-check', '--ignore-rules'];
 
@@ -43,7 +45,7 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
     const attemptId = input.attemptId?.trim() || attemptIdForCommand(commandId);
     const resumeRequested = Boolean(input.codexSessionId);
     const evidenceRefs = evidenceRefsForTurn(commandId, attemptId);
-    const guiInjection = await prepareRuntimeGuiExtensionInjection(input.guiExtension);
+    const guiInjection = await prepareRuntimeGuiExtensionInjection(guiExtensionOptions(input.guiExtension, config.workspace));
     const metadata: CodexRuntimeMetadata = {
       provider: config.provider,
       model: config.model,
@@ -63,9 +65,14 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
       codexSessionId: input.codexSessionId,
       configArgs: guiInjection?.configArgs ?? [],
     });
+    const env = codexRuntimeEnv(this.options.env ?? process.env, config.codexHome);
+    if (guiInjection) {
+      env.PATH = [guiInjection.binDir, env.PATH].filter(Boolean).join(':');
+      env.SCIFORGE_GUI_EXTENSION_STATE = guiInjection.statePath;
+    }
     const child = (this.options.spawnProcess ?? spawn)('codex', args, {
       cwd: config.workspace,
-      env: codexRuntimeEnv(this.options.env ?? process.env, config.codexHome),
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     this.activeTurns.set(commandId, child);
@@ -75,9 +82,12 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
     };
     input.abortSignal?.addEventListener('abort', abort, { once: true });
 
-    const events = this.eventsForChild(child, metadata, () => {
-      input.abortSignal?.removeEventListener('abort', abort);
-      this.activeTurns.delete(commandId);
+    const events = this.eventsForChild(child, metadata, {
+      guiExtensionStatePath: guiInjection?.statePath,
+      cleanup: () => {
+        input.abortSignal?.removeEventListener('abort', abort);
+        this.activeTurns.delete(commandId);
+      },
     });
     return { turnId: commandId, attemptId, codexSessionId: input.codexSessionId, events };
   }
@@ -94,7 +104,7 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
   private async *eventsForChild(
     child: CodexChildProcess,
     metadata: CodexRuntimeMetadata,
-    cleanup: () => void,
+    options: { guiExtensionStatePath?: string; cleanup: () => void },
   ): AsyncIterable<NormalizedAgentEvent> {
     const queue: NormalizedAgentEvent[] = [runStartedEvent(metadata)];
     const waiters: Array<() => void> = [];
@@ -103,10 +113,12 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
     let exitCode: number | null = null;
     let exitSignal: NodeJS.Signals | string | null = null;
     let spawnError: unknown;
+    let sawGuiPresent = false;
     const stderrChunks: string[] = [];
 
     const wake = () => waiters.splice(0).forEach((resolve) => resolve());
     const push = (event: NormalizedAgentEvent) => {
+      if (event.type === 'gui_present') sawGuiPresent = true;
       queue.push(event);
       wake();
     };
@@ -135,7 +147,7 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
     child.on('error', (error) => {
       spawnError = error;
     });
-    child.on('close', (code, signal) => {
+    child.on('close', async (code, signal) => {
       if (stdoutRemainder.trim()) {
         try {
           const raw = JSON.parse(stdoutRemainder) as unknown;
@@ -153,6 +165,10 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
           message: spawnError instanceof Error ? spawnError.message : String(spawnError),
         });
       } else {
+        if (code === 0 && !sawGuiPresent && options.guiExtensionStatePath) {
+          const presentation = await latestGuiPresentFromState(options.guiExtensionStatePath).catch(() => undefined);
+          if (presentation) push(guiPresentEvent(metadata, presentation));
+        }
         if (metadata.resumeRequested && code !== 0) {
           push(resumeFailureAuditEvent(metadata, {
             exitCode: code,
@@ -167,7 +183,7 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
         }));
       }
       closed = true;
-      cleanup();
+      options.cleanup();
       wake();
     });
 
@@ -177,9 +193,36 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
         if (!closed) await new Promise<void>((resolve) => waiters.push(resolve));
       }
     } finally {
-      cleanup();
+      options.cleanup();
     }
   }
+}
+
+async function latestGuiPresentFromState(statePath: string): Promise<Parameters<typeof guiPresentEvent>[1] | undefined> {
+  const snapshot = await loadGuiExtensionSnapshot(statePath);
+  const present = [...(snapshot.intentLog ?? [])]
+    .reverse()
+    .find((entry) => entry.tool === 'gui.present' && entry.applied === true);
+  if (!present) return undefined;
+  const panel = present.placement?.panel ?? snapshot.hotRegion?.panel;
+  const viewId = present.placement?.viewId ?? snapshot.hotRegion?.viewId;
+  const region = (snapshot.regions ?? []).find((candidate) => {
+    if (viewId && candidate.viewId === viewId) return true;
+    return panel && candidate.regionId === panel;
+  }) ?? (snapshot.regions ?? []).find((candidate) => candidate.regionId !== 'chat') ?? (snapshot.regions ?? [])[0];
+  const text = stringField(region?.summary)
+    ?? stringField(region?.selectionSummary)
+    ?? stringField(region?.title)
+    ?? present.summary;
+  if (!text.trim()) return undefined;
+  return {
+    text,
+    source: undefined,
+    ref: stringField(snapshot.hotRegion?.primaryRef) ?? stringField(region?.visibleRefs?.[0]),
+    title: stringField(region?.title) ?? present.summary,
+    intentLogId: present.id,
+    placement: present.placement,
+  };
 }
 
 function evidenceRefsForTurn(commandId: string, attemptId: string): string[] {
@@ -188,6 +231,17 @@ function evidenceRefsForTurn(commandId: string, attemptId: string): string[] {
     `audit:codex-runtime:${commandId}:${attemptId}:stderr`,
     `audit:codex-runtime:${commandId}:${attemptId}:normalized-events`,
   ];
+}
+
+function guiExtensionOptions(
+  options: AgentCliStartTurnInput['guiExtension'],
+  workspace: string,
+): AgentCliStartTurnInput['guiExtension'] {
+  if (options?.enabled === false) return options;
+  return {
+    ...options,
+    statePath: options?.statePath ?? join(workspace, '.sciforge', 'runtime-gui-extension-state.json'),
+  };
 }
 
 function summarizeStderr(stderr: string): string | undefined {
@@ -232,4 +286,8 @@ function codexExecArgs(input: {
     ...RUNTIME_CODEX_EXEC_ISOLATION_ARGS,
     input.commandText,
   ];
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }

@@ -1,4 +1,4 @@
-import { access } from 'node:fs/promises';
+import { access, chmod, mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getRuntimeHomePaths } from '../../../packages/backend/src/runtime-home.js';
@@ -18,6 +18,8 @@ export interface RuntimeGuiExtensionInjection {
   mode: RuntimeGuiExtensionMode;
   serverName: typeof GUI_MCP_SERVER_NAME;
   statePath: string;
+  binDir: string;
+  shimPath: string;
   configArgs: string[];
   toolNames: string[];
   resourceUris: string[];
@@ -49,18 +51,22 @@ export async function prepareRuntimeGuiExtensionInjection(options: RuntimeGuiExt
   const sourceDir = dirname(fileURLToPath(import.meta.url));
   const projectRoot = resolve(sourceDir, '../../..');
   const serverPath = resolve(sourceDir, 'gui-mcp-server.ts');
+  const shimTargetPath = resolve(sourceDir, 'gui-present-cli.ts');
   const tsxLoaderPath = resolve(projectRoot, 'node_modules/tsx/dist/loader.mjs');
-  const missing = await missingFiles([serverPath, tsxLoaderPath]);
+  const missing = await missingFiles([serverPath, shimTargetPath, tsxLoaderPath]);
   if (missing.length) {
     throw new Error(`Runtime GUI extension injection unavailable; missing ${missing.join(', ')}`);
   }
   await ensureGuiExtensionState(statePath);
+  const { binDir, shimPath } = await writeGuiPresentShim({ statePath, shimTargetPath, tsxLoaderPath });
   const command = 'node';
   const args = ['--import', tsxLoaderPath, serverPath];
   return {
     mode: 'mcp-stdio',
     serverName: GUI_MCP_SERVER_NAME,
     statePath,
+    binDir,
+    shimPath,
     configArgs: [
       '-c',
       `mcp_servers.${GUI_MCP_SERVER_NAME}.command=${tomlString(command)}`,
@@ -98,6 +104,24 @@ export function defaultGuiExtensionStatePath(): string {
   return join(getRuntimeHomePaths().runtimeRoot, 'gui-extension', 'state.json');
 }
 
+async function writeGuiPresentShim(input: {
+  statePath: string;
+  shimTargetPath: string;
+  tsxLoaderPath: string;
+}): Promise<{ binDir: string; shimPath: string }> {
+  const binDir = join(getRuntimeHomePaths().runtimeRoot, 'gui-extension', 'bin');
+  const shimPath = join(binDir, 'gui.present');
+  await mkdir(binDir, { recursive: true });
+  await writeFile(shimPath, [
+    '#!/bin/sh',
+    `export ${GUI_EXTENSION_STATE_ENV}=${shellQuote(input.statePath)}`,
+    `exec node --import ${shellQuote(input.tsxLoaderPath)} ${shellQuote(input.shimTargetPath)} "$@"`,
+    '',
+  ].join('\n'), 'utf8');
+  await chmod(shimPath, 0o755);
+  return { binDir, shimPath };
+}
+
 async function missingFiles(paths: string[]): Promise<string[]> {
   const results = await Promise.all(paths.map(async (path) => {
     return await access(path).then(() => undefined, () => path);
@@ -111,4 +135,8 @@ function tomlString(value: string): string {
 
 function tomlStringArray(values: string[]): string {
   return `[${values.map(tomlString).join(', ')}]`;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }

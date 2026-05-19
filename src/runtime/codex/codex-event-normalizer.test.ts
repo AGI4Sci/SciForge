@@ -63,6 +63,50 @@ test('maps Codex item.completed agent_message into a visible message event', () 
   assert.equal(events[1]?.itemId, 'item-2');
 });
 
+test('maps completed gui.present tool calls into explicit completion events', () => {
+  const events = normalizeCodexJsonlEvent({
+    type: 'item.completed',
+    item: {
+      id: 'item-gui-present',
+      type: 'function_call',
+      name: 'gui.present',
+      arguments: JSON.stringify({
+        intent: 'show-result',
+        title: 'Runtime answer',
+        content: { kind: 'markdown', value: 'VISIBLE_GUI_PRESENT_RESULT' },
+      }),
+      result: JSON.stringify({
+        ok: true,
+        placement: { panel: 'chat', viewId: 'runtime-answer' },
+      }),
+    },
+  }, metadata);
+
+  assert.equal(events[0]?.type, 'audit');
+  assert.equal(events[1]?.type, 'gui_present');
+  assert.equal(events[1]?.text, 'VISIBLE_GUI_PRESENT_RESULT');
+  assert.equal(events[1]?.message, 'VISIBLE_GUI_PRESENT_RESULT');
+  assert.equal((events[1]?.raw as { boundary?: string }).boundary, 'gui-present-completion');
+  assert.equal(((events[1]?.raw as { presentation?: { source?: string } }).presentation)?.source, 'gui.present:codex-test');
+});
+
+test('does not treat gui.present start as completion', () => {
+  const events = normalizeCodexJsonlEvent({
+    type: 'item.started',
+    item: {
+      id: 'item-gui-present-start',
+      type: 'function_call',
+      name: 'gui.present',
+      arguments: JSON.stringify({
+        intent: 'show-result',
+        content: { kind: 'markdown', value: 'SHOULD_NOT_COMPLETE_FROM_STARTED_TOOL' },
+      }),
+    },
+  }, metadata);
+
+  assert.equal(events.some((event) => event.type === 'gui_present'), false);
+});
+
 test('extracts native Codex session ids from session metadata', () => {
   const sessionMetadata = {
     type: 'session_meta',

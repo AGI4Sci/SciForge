@@ -171,7 +171,7 @@ p2 GUI protocol 阶段证据（2026-05-19）：
 
 ### RUNTIME-CODEX-20260519 session, GUI extension, and audit boundary
 
-状态：ready
+状态：complete / p3-gui-present-browser-passed
 
 目标：保留薄 adapter 语义，把 Runtime Codex 作为唯一默认生产 runtime；GUI 只发送 terminal-equivalent text，并通过 Codex 原生 MCP/tool/resource 机制暴露 `gui.*` extension。
 
@@ -181,21 +181,21 @@ Todo：
 - [ ] 禁止把 GUI transcript、expected artifacts、capability selection、provider route、历史 run JSON 或 artifact body 拼进 `commandText`。
 - [ ] 持久化 Codex thread id、attempt id、workspace、profile、command id 和 evidence refs；继续对话时调用 `codex exec resume <thread_id> <prompt>`。
 - [ ] 新建 run 使用 `codex exec`；同一会话后续 turn 使用 `codex exec resume`，不得由 GUI 拼接历史消息模拟多轮。
-- [ ] resume 失败时 fail closed，并把 thread id、exit code、stderr 摘要、profile、workspace 写入 audit/debug。
-- [ ] Runtime Codex 缺 profile、workspace、DeepSeek key/proxy 时 fail closed。
+- [x] resume 失败时 fail closed，并把 thread id、exit code、stderr 摘要、profile、workspace 写入 audit/debug。
+- [x] Runtime Codex 缺 profile、workspace、DeepSeek key/proxy 时 fail closed。
 - [ ] `allowOpenAiRuntime` 保持显式 opt-in，默认 false。
-- [ ] raw JSONL/stdout/stderr/plugin warning 只进 audit/debug，主回复 DOM 和 foreground waiting summary 不展示原始日志。
-- [ ] 每个 run 的 provider/model/profile/workspace/command id 写入 normalized event 和 GUI/audit 可见区域。
+- [x] raw JSONL/stdout/stderr/plugin warning 只进 audit/debug，主回复 DOM 和 foreground waiting summary 不展示原始日志。
+- [x] 每个 run 的 provider/model/profile/workspace/command id 写入 normalized event 和 GUI/audit 可见区域。
 - [x] DeepSeek 真实两轮验收：第一轮记暗号，第二轮通过 Codex 原生 session/resume 回答暗号。
-- [ ] TUI 自主调用 `gui.present` 后，UI 能读取展示意图并更新结果区；不得由 GUI 从 raw message 猜测完成态。
+- [x] TUI 自主调用 `gui.present` 后，UI 能读取展示意图并更新结果区；不得由 GUI 从 raw message 猜测完成态。
 
 验收：
 
-- [ ] `node --import tsx --test "src/runtime/codex/*.test.ts"`
+- [x] `node --import tsx --test "src/runtime/codex/*.test.ts"`
 - [ ] `node --import tsx --test src/ui/src/api/sciforgeToolsClient/runtimeEvents.test.ts src/ui/src/streamEventPresentation.test.ts src/ui/src/processProgress.test.ts src/ui/src/app/chat/runStatusPresentation.test.ts src/ui/src/app/chat/finalMessagePresentation.test.tsx`
 - [ ] `node --import tsx --test src/ui/src/app/guiProtocol.test.ts`
-- [ ] `npm run typecheck`
-- [ ] `git diff --check`
+- [x] `npm run typecheck`
+- [x] `git diff --check`
 
 p2 阶段证据（2026-05-19）：
 
@@ -203,16 +203,27 @@ p2 阶段证据（2026-05-19）：
 - in-app browser 已打开 `http://127.0.0.1:5174/` 并保存 UI/chat DOM、截图和 manifest 到 `docs/test-artifacts/parallel/p2/m1-runtime-reliability-manifest.json`。
 - 本轮 RuntimeCodex sidecar 未启动：`/Applications/workspace/ailab/research/app/RuntimeCodex` 不存在；因此仍需 live RuntimeCodex browser rerun，不能宣称完整 live pass。
 
+p3 / T2 gui.present completion path 阶段证据（2026-05-19）：
+
+- 修复：Runtime Codex normalized event 新增明确 `gui_present` completion event；adapter 可从 completed `gui.present` tool JSONL 或 file-backed GUI intent state 生成 `source=gui.present:<commandId>`，且不会把 `gui.present` started 误判为完成。
+- 修复：Runtime GUI extension 同时暴露 MCP `gui.present` 和 workspace-local `gui.present` shim；shim 只写 GUI intent state，不把 stdout/provider message 当主答案。默认 state path 移到 Runtime workspace `.sciforge/runtime-gui-extension-state.json`，避免 shell sandbox 不能写 backend runtime root。
+- 修复：UI SSE reader 对 Runtime Codex `done` 要求先看到 `gui_present`；否则 fail closed，不再从 raw provider `message` / `message_delta` 拼主回复。前台完成消息写入 `provenance.kind=live-runtime-codex`、`source=gui.present:<commandId>`、`liveAcceptanceEligible=true`，DOM 暴露 `data-message-provenance-source`。
+- 修复：resume 非零退出新增 `resume-failed` audit，保留 thread id、exit code、stderr summary、profile、workspace、command id、attempt id 和 evidence refs。
+- 通过：`node --import tsx --test src/runtime/codex/*.test.ts`、`node --import tsx --test src/ui/src/api/sciforgeToolsClient/runtimeEvents.test.ts src/ui/src/app/chat/sessionTransforms.test.ts src/ui/src/app/ChatPanel.test.ts`、`npm run smoke:runtime-codex-artifact-followup`、`npm run smoke:runtime-codex-final-acceptance`、`npm run typecheck`、`git diff --check`。
+- Browser passed：请求端口 UI `5175` / writer `6175` 已被 `/Applications/workspace/ailab/research/app/SciForge-codex-parallel-20260519` 占用，按规则使用实际 UI `5178` / writer `6178` / Runtime Codex proxy `18082`。Codex in-app browser 从默认聊天入口提交 T2 prompt 后，live Runtime Codex 主回复显示 `P3-GUI-PRESENT-LIVE-PASS-20260519`，DOM 记录 `data-message-provenance-source="gui.present:codex-cf65a147bc0de00c"` 且 `data-live-acceptance-eligible="true"`。
+- 证据：`docs/test-artifacts/parallel/p3/p3-runtime-present-live-manifest.json`、`p3-runtime-present-live-dom.txt`、`p3-runtime-present-live-screenshot.png`、`p3-runtime-present-live-ui.json`；早前缺 key / 无 gui.present 负向证据仍保留在 `p3-runtime-present-browser-manifest.json` 和 blocked 文件。
+- 剩余风险：p3 已证明单轮 live gui.present completion path；selected-ref follow-up 仍由 p4 证据覆盖，本任务未重新跑 selected-ref 多轮。
+
 ### VERIFICATION-20260519 real in-app browser acceptance
 
-状态：planned / blocked-by-gui-present-integration
+状态：planned / p3-gui-present-live-passed
 
 目标：只用 Codex in-app browser 从默认聊天入口证明用户级路径可用；不能用系统浏览器、macOS `open`、外部 Chrome 或 Playwright 替代结论。
 
 阻塞：
 
 - [x] 多 turn 暗号验收已通过：`codex exec resume` + isolated `CODEX_HOME` 在 fake provider 和真实 DeepSeek proxy 中都能恢复上下文。
-- [ ] 结果区仍等待 TUI `gui.present` 或等效 intent；GUI 不应合成 `ConversationProjection` 冒充完成态。
+- [x] 结果区完成态已收敛到 TUI `gui.present` 或等效 intent；GUI 不应合成 `ConversationProjection` 冒充完成态。
 - [ ] blocked manifest 位于 ignored 路径：`docs/test-artifacts/runtime-codex-browser-acceptance/manifest.json`。
 
 Todo：
@@ -257,7 +268,7 @@ p4 artifact open/follow-up 阶段证据（2026-05-19）：
 
 M2 / p3 GUI presentation、seed boundary、no-hardcoding 阶段证据（2026-05-19）：
 
-- 并行 worker p3 使用 `http://127.0.0.1:5175/`、workspace writer `http://127.0.0.1:6175`、RuntimeCodex `http://127.0.0.1:18082`、workspace `workspace/parallel/p3`。
+- 并行 worker p3 默认端口为 `http://127.0.0.1:5175/`、workspace writer `http://127.0.0.1:6175`、RuntimeCodex `http://127.0.0.1:18082`、workspace `workspace/parallel/p3`；T2 rerun 因 5175/6175 被其它 worktree 占用，实际使用 `http://127.0.0.1:5178/`、writer `http://127.0.0.1:6178`、RuntimeCodex `http://127.0.0.1:18082`。
 - 修复：chat message DOM 增加 `data-message-id`、`data-message-provenance`、`data-runtime-request-eligible`、`data-live-acceptance-eligible`，并显示 `user-authored`、`seed-demo`、`fixture`、`system UI`、`live Runtime Codex` provenance badge；seed/demo/fixture 不能通过 object refs 被误判为 live acceptance。
 - 修复：failed run、background completion、Runtime Codex request payload、selected-ref scoping 和 audit metadata boundary 均带 provenance/request eligibility；seed/demo/fixture refs、selected text、message body 和 artifact body 不进入 Runtime Codex request payload。
 - 证据：serialized request payload 位于 `docs/test-artifacts/parallel/p3/p3-request-payload-capture.json`，确认 `commandText=ask --ref "artifact:live-report" ...` 且排除 `message:seed-demo`、seed selected text、seed message body 和 artifact body。
