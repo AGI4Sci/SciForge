@@ -13,6 +13,7 @@ SciForge 当前路线是 **UI/packages preserved, runtime rewritten, desktop-rea
 - GUI -> runtime 只发送 terminal-equivalent plain text command。
 - runtime -> GUI 只返回 normalized events、audit events 或 intent results。
 - GUI 可以做 deterministic presentation behavior，不能重新变成 agent runtime。
+- 多轮对话以 Codex CLI thread/session 为权威状态源；SciForge 只保存 thread id、attempt id、UI metadata 和证据索引，继续对话时调用 `codex exec resume <thread_id> <prompt>`。
 - `docs/` 保持产品/协议真相源；backend 运行期迁移真相源已收拢到 `packages/backend/CodexRuntimeMigration.md`。
 - 短中期桌面化选择 Electron；Tauri 只作为 runtime 边界稳定后的长期优化项。
 
@@ -31,15 +32,15 @@ SciForge 当前路线是 **UI/packages preserved, runtime rewritten, desktop-rea
 删除约束：
 
 - 不能先物理删除仍被现有 UI import 的投影/状态模型。
-- 删除旧 AgentServer-first 文件前，必须确认无引用，并跑 targeted tests、`npm run build`、`git diff --check` 和真实 browser UI 验收。
+- AgentServer 大爆破删除任务必须先生成 import graph，再移动/重命名必要 neutral contract，最后删除旧默认路径；不能把 AgentServer fallback 作为长期兼容层留下。
 - 不用 `git reset --hard` 或 `git checkout --` 回退用户改动。
 
 ## GitHub Sync Status
 
 - 2026-05-19：已执行 `git fetch origin --prune`。
 - 当前分支：`dev`。
-- 同步结果：`HEAD...origin/dev` 为 `0 0`，没有 ahead/behind；未执行 pull/rebase/reset。
-- 注意：当前 worktree 有大量未提交改动；继续集成时必须按 dirty worktree 协作规则处理。
+- 最近已同步计划提交：`09a6436 Update SciForge runtime migration plan`，已 push 到 `origin/dev`。
+- 本文件只记录任务计划和约束；实时 ahead/behind 以 `git status -sb` 为准。
 - 注意：Git 提示 `.git/gc.log` 阻塞自动 gc，且 loose objects 过多；这是仓库维护项，不应混入 feature/runtime 改动。
 
 ## Non-Negotiable Principles
@@ -63,15 +64,20 @@ SciForge 当前路线是 **UI/packages preserved, runtime rewritten, desktop-rea
 - [`docs/Usage.md`](docs/Usage.md)
 - [`packages/backend/CODEX_COMPATIBILITY.md`](packages/backend/CODEX_COMPATIBILITY.md)
 
-## Design Conflicts To Resolve
+## Resolved Design Decisions
 
-这些是进入实现前必须先讨论或在 task 中显式选择的冲突点：
+这些是 2026-05-19 已讨论并选定的实现方向；后续 task 不再回到旧设计，除非新的实验证据推翻结论。
 
-1. **文档位置冲突**：`CodexRuntimeMigration.md` 已移动到 `packages/backend/`，但 `docs/README.md`、`docs/Architecture.md`、`docs/Usage.md` 和若干 smoke 仍可能引用旧 `docs/` 路径。最终方案应把 backend 迁移文档视为 backend 包内真相源，`docs/` 只保留产品/协议真相源。
-2. **完成态来源冲突**：当前计划要求结果区等待 TUI `gui.present` 或等效 intent；不能让 GUI 从 raw message/stdout/jsonl 合成完成态。实现前要明确 `gui.present` intent state 如何进入现有结果区 view model。
-3. **多轮能力边界冲突**：Phase 1 依赖 `codex exec resume`，但真实 isolated `CODEX_HOME` 是否可恢复上下文尚未证明。若失败，不能用 GUI transcript 拼接伪多轮，必须转入 Phase 2 app-server/thread。
-4. **AgentServer 清理顺序冲突**：架构目标要求移除 AgentServer-first 默认路径，但现有 UI/测试仍可能依赖投影模型和 gateway fallback。清理必须在 Codex bridge 覆盖等价风险后分批做。
-5. **桌面化时机冲突**：Electron 是短中期方向，但必须等 production runtime launcher、app data layout、secret storage 和 platform service 边界清晰后再产品化，不能把开发端口和仓库内 runtime state 固化进桌面契约。
+1. **文档位置**：`packages/backend/CodexRuntimeMigration.md` 是 backend 运行期迁移真相源；`docs/` 只保留产品、架构、协议和用法真相源。任务只需要同步索引和 smoke 期望，不把文件移回 `docs/`。
+2. **完成态来源**：最终结果区只认 TUI/Codex 发出的 `gui.present` 或同语义 intent。raw stdout、raw JSONL、raw provider message、stderr、plugin warning 只能进入 audit/debug；GUI 不得从它们合成完成态。
+3. **多轮能力边界**：已验证 `codex exec resume` 在 isolated `CODEX_HOME` 中可恢复上下文；真实 DeepSeek proxy 链路也通过两轮暗号验收。SciForge 不自建 session manager，不用 GUI transcript 拼接伪多轮。
+4. **AgentServer 清理策略**：采用直接大爆破删除。目标是一个专门任务/PR 一次性移除 AgentServer-first 默认路径、fallback、smoke 命名和文档引用；中途临时适配只允许存在于该任务分支内，不能作为最终兼容层留下。
+5. **桌面化时机**：Electron 是短中期方向，但必须等 production runtime launcher、app data layout、secret storage 和 platform service 边界稳定后再产品化；不把 Vite dev port 或仓库内 runtime state 固化为桌面契约。
+
+第 3 项验证证据：
+
+- Fake Responses provider：`packages/backend/.codex-runtime/resume-evidence/fake-1779173374`；thread id `019e3eff-3b59-7201-aa7e-445db26a8d19`；第二轮 `codex exec resume` 返回第一轮 token。
+- 真实 DeepSeek proxy：`packages/backend/.codex-runtime/resume-evidence/real-1779173487`；thread id `019e3f00-f59e-7351-8d8d-a652e951cb09`；第一轮返回 `remembered.`，第二轮返回 `SCIFORGE_REAL_RESUME_NONCE_8426`；`turn1Failed=false`，`turn2Failed=false`。
 
 ## Active Tasks
 
@@ -122,7 +128,7 @@ Todo：
 
 ### RUNTIME-CODEX-20260519 session, GUI extension, and audit boundary
 
-状态：planned
+状态：ready
 
 目标：保留薄 adapter 语义，把 Runtime Codex 作为唯一默认生产 runtime；GUI 只发送 terminal-equivalent text，并通过 Codex 原生 MCP/tool/resource 机制暴露 `gui.*` extension。
 
@@ -130,12 +136,14 @@ Todo：
 
 - [ ] `commandText` 保持 terminal-equivalent text：无 ref 为用户原文，有 ref 为 `ask --ref "<ref>" "<prompt>"`。
 - [ ] 禁止把 GUI transcript、expected artifacts、capability selection、provider route、历史 run JSON 或 artifact body 拼进 `commandText`。
+- [ ] 持久化 Codex thread id、attempt id、workspace、profile、command id 和 evidence refs；继续对话时调用 `codex exec resume <thread_id> <prompt>`。
+- [ ] 新建 run 使用 `codex exec`；同一会话后续 turn 使用 `codex exec resume`，不得由 GUI 拼接历史消息模拟多轮。
+- [ ] resume 失败时 fail closed，并把 thread id、exit code、stderr 摘要、profile、workspace 写入 audit/debug。
 - [ ] Runtime Codex 缺 profile、workspace、DeepSeek key/proxy 时 fail closed。
 - [ ] `allowOpenAiRuntime` 保持显式 opt-in，默认 false。
 - [ ] raw JSONL/stdout/stderr/plugin warning 只进 audit/debug，主回复 DOM 和 foreground waiting summary 不展示原始日志。
 - [ ] 每个 run 的 provider/model/profile/workspace/command id 写入 normalized event 和 GUI/audit 可见区域。
-- [ ] DeepSeek 真实两轮验收：第一轮记暗号，第二轮通过 Codex 原生 session/resume 回答暗号。
-- [ ] 若 `codex exec resume` 在 isolated `CODEX_HOME` 中不能恢复上下文，明确标记为 Phase 2 app-server/thread 需求，不做 transcript 拼接 workaround。
+- [x] DeepSeek 真实两轮验收：第一轮记暗号，第二轮通过 Codex 原生 session/resume 回答暗号。
 - [ ] TUI 自主调用 `gui.present` 后，UI 能读取展示意图并更新结果区；不得由 GUI 从 raw message 猜测完成态。
 
 验收：
@@ -148,13 +156,13 @@ Todo：
 
 ### VERIFICATION-20260519 real in-app browser acceptance
 
-状态：planned / blocked-by-runtime
+状态：planned / blocked-by-gui-present-integration
 
 目标：只用 Codex in-app browser 从默认聊天入口证明用户级路径可用；不能用系统浏览器、macOS `open`、外部 Chrome 或 Playwright 替代结论。
 
 阻塞：
 
-- [ ] 多 turn 暗号验收未通过：必须确认 `codex exec resume` + isolated `CODEX_HOME` 在真实 Runtime Codex 环境里是否能恢复上下文。
+- [x] 多 turn 暗号验收已通过：`codex exec resume` + isolated `CODEX_HOME` 在 fake provider 和真实 DeepSeek proxy 中都能恢复上下文。
 - [ ] 结果区仍等待 TUI `gui.present` 或等效 intent；GUI 不应合成 `ConversationProjection` 冒充完成态。
 - [ ] blocked manifest 位于 ignored 路径：`docs/test-artifacts/runtime-codex-browser-acceptance/manifest.json`。
 
@@ -165,7 +173,7 @@ Todo：
 - [ ] 单 turn：主聊天出现 DeepSeek/Codex 回复。
 - [ ] 单 turn：raw stderr/jsonl/stdout/plugin warning 默认折叠。
 - [ ] artifact open/follow-up：通过 UI 选择 artifact 后追问，验证 TUI 使用 selected ref 生成 terminal-equivalent text。
-- [ ] 多 turn：第一轮记暗号，第二轮只回暗号；失败时记录为 Codex session 能力边界或实现缺口，不许改成 passed。
+- [ ] 多 turn browser 验收：第一轮记暗号，第二轮只回暗号；必须从默认聊天入口看到第二轮可见答案后才标 passed。
 - [ ] `tests/smoke/smoke-runtime-codex-browser-acceptance.ts` 的 manifest 只有在真实 in-app browser 观察到可见结果后才能标 passed。
 - [ ] blocked/failed manifest 必须写清端口、URL、profile、原因、截图/DOM 证据位置。
 
@@ -176,35 +184,38 @@ Todo：
 - [ ] `npm run verify:single-agent-final`
 - [ ] `git diff --check`
 
-### LEGACY-CLEANUP-20260519 AgentServer quarantine
+### LEGACY-CLEANUP-20260519 AgentServer big-bang delete
 
-状态：planned / blocked-by-codex-bridge-coverage
+状态：planned / direct-delete
 
-目标：清理默认路径里的 AgentServer-first 语义，但保留 UI 当前仍需要的投影模型直到 Codex bridge + GUI protocol 替代覆盖成立。
+目标：在一个专门任务/PR 中直接删除 AgentServer-first 默认路径、fallback、legacy smoke 命名和文档引用；最终仓库只保留 Codex Runtime + GUI protocol 路径。这个任务不做长期 quarantine，不保留“以后删”的兼容层。
 
 Todo：
 
-- [ ] 新 runtime code 不得 import legacy AgentServer modules。
-- [ ] 把必要 contract 迁移到 neutral runtime / GUI protocol 命名。
-- [ ] UI import check：不直接 import `src/runtime/gateway/**`、`src/runtime/generation-gateway.ts`、`src/runtime/workspace-runtime-gateway.ts`。
-- [ ] `src/runtime/codex/**` 不 import legacy AgentServer modules。
-- [ ] `smoke:all` 不应依赖 AgentServer 默认路径。
-- [ ] legacy AgentServer smoke 移到 legacy/migration 分类，或改名明确边界。
-- [ ] `targeted gateway policy smoke` 同步 `codex-runtime-bridge` 后的 stage-list 期望。
-- [ ] `smoke:runtime-ui-manifest` 输出/期望不一致，需要 runtime UI manifest owner 判断更新测试还是实现。
-- [ ] 删除纯转发、重复实现、无退役条件兼容层；每次删除前跑 import check、targeted tests、`npm run build`、browser UI 验收。
+- [ ] 生成 import graph：列出所有 `AgentServer|agentserver|agent-server` 运行时代码、测试、脚本、docs 引用，并区分历史归档允许项和必须删除项。
+- [ ] 删除 AgentServer-first gateway、harness、generation、workspace runtime fallback；必要公共 contract 迁移到 neutral runtime / GUI protocol 命名。
+- [ ] UI 不再直接 import legacy gateway；若仍需要投影/状态模型，移动到 neutral GUI/presentation 包或 Codex runtime adapter 可消费的位置。
+- [ ] `src/runtime/codex/**`、runtime gateway 默认路径和 workspace server 不 import legacy AgentServer modules。
+- [ ] package scripts 和 smoke 名称从 `agentserver-*` 改为 `runtime-codex-*`、`single-agent-*` 或删除；`smoke:all` 不再依赖 AgentServer 默认路径。
+- [ ] 删除或重写 `smoke:agentserver-*`、AgentServer prompt policy、AgentServer broker payload、AgentServer repair 等 legacy 默认路径测试。
+- [ ] 更新 docs、README、PROJECT 和 smoke expected，确保 AgentServer 只出现在历史归档说明或迁移审计上下文中。
+- [ ] 增加/更新 no-legacy-paths gate：运行时代码、UI 默认路径、package scripts 不允许出现 AgentServer-first 语义。
+- [ ] 大爆破删除后一次性跑完整 import check、targeted tests、`npm run build`、真实 browser UI 验收；失败则修到通过，不留下 quarantine 状态。
 
 参考：
 
 - [`packages/backend/CodexRuntimeMigration.md`](packages/backend/CodexRuntimeMigration.md)
-- 本任务条目是 AgentServer quarantine 的当前清理清单；旧 `docs/AgentServerLegacyCleanupReport.md` 不再是权威输入。
+- 本任务条目是 AgentServer 大爆破删除的当前清理清单；旧 `docs/AgentServerLegacyCleanupReport.md` 不再是权威输入。
 
 验收：
 
+- [ ] `rg -n "AgentServer|agentserver|agent-server" package.json src packages tests tools docs PROJECT.md` 只命中允许的历史归档/迁移说明。
 - [ ] `npm run smoke:no-legacy-paths`
 - [ ] `npm run smoke:docs-scenario-package`
-- [ ] `npm run build`
 - [ ] `npm run typecheck`
+- [ ] `npm run test`
+- [ ] `npm run build`
+- [ ] `npm run verify:single-agent-final`
 - [ ] `git diff --check`
 
 ### RUNTIME-LAUNCHER-20260519 production runtime boundary
@@ -264,9 +275,10 @@ Todo：
 - `packages/**` 模块资产保留。
 - `packages/backend` DeepSeek compatibility proxy 继续通过复杂工具任务验收。
 - `src/runtime/**` 默认路径切到 Codex bridge。
-- legacy AgentServer-first 文件只有在仍被 UI 引用时短期保留，并有删除任务。
+- AgentServer-first 默认路径、fallback、smoke 命名和文档入口被大爆破删除；必要状态/投影模型只能以 neutral runtime / GUI protocol 命名保留。
 - provider/model/profile/workspace/command id 在 GUI 和 audit 中可见。
 - raw JSONL/stdout/stderr/plugin warning 默认折叠，只进 audit/debug。
+- 多轮对话通过 Codex 原生 thread/session 和 `codex exec resume` 完成，不通过 GUI transcript 拼接。
 - 桌面化新增能力必须保持 Web/desktop 双运行，不把 Electron 业务逻辑写进 React/UI。
 - `npm run typecheck` 通过。
 - `npm run build` 通过。
