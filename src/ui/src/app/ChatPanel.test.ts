@@ -455,6 +455,7 @@ test('chat message DOM and badges distinguish demo seed from live Runtime Codex 
   assert.match(html, /seed-demo/);
   assert.match(html, /data-message-id="live-runtime-message"/);
   assert.match(html, /data-message-provenance="live-runtime-codex"/);
+  assert.match(html, /data-message-provenance-source="gui\.present:codex-command-live"/);
   assert.match(html, /data-live-acceptance-eligible="true"/);
   assert.match(html, /live Runtime Codex/);
 });

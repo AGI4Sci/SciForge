@@ -147,8 +147,8 @@ async function readWorkspaceToolSse(
   let buffer = '';
   let result: unknown;
   let error: string | undefined;
-  const messageDeltas: string[] = [];
-  const messages: string[] = [];
+  let guiPresent: Record<string, unknown> | undefined;
+  const genericMessages: string[] = [];
   function consumeBlock(block: string) {
     const lines = block.split(/\r?\n/);
     const eventName = lines
@@ -174,14 +174,27 @@ async function readWorkspaceToolSse(
     onEvent(data);
     if (isRecord(data)) {
       if ((eventName === 'message_delta' || data.type === 'message_delta') && asString(data.text)) {
-        messageDeltas.push(asString(data.text)!);
+        genericMessages.push(asString(data.text)!);
       }
       if ((eventName === 'message' || data.type === 'message') && asString(data.text)) {
-        messages.push(asString(data.text)!);
+        genericMessages.push(asString(data.text)!);
+      }
+      if (eventName === 'gui_present' || data.type === 'gui_present') {
+        guiPresent = data;
       }
     }
     if (eventName === 'done' || (isRecord(data) && data.type === 'done')) {
-      result = withVisibleRuntimeMessage(data, messages.length ? messages.join('\n') : messageDeltas.join(''));
+      if (guiPresent) {
+        result = withGuiPresentRuntimeResult(data, guiPresent);
+        return;
+      }
+      if (!isRuntimeCodexDoneEvent(data)) {
+        result = withVisibleRuntimeMessage(data, genericMessages.join('\n'));
+        return;
+      }
+      const failed = runtimeCodexMissingGuiPresentFailure(data);
+      onEvent(failed);
+      error = failed.message;
     }
   }
   for (;;) {
@@ -212,6 +225,112 @@ function withVisibleRuntimeMessage(result: unknown, message: string): unknown {
   };
 }
 
+function withGuiPresentRuntimeResult(result: unknown, guiPresent: Record<string, unknown>): unknown {
+  if (!isRecord(result)) return result;
+  const presentation = guiPresentationFromEvent(guiPresent, result);
+  if (!presentation.text.trim()) return result;
+  const output = isRecord(result.output) ? result.output : {};
+  const commandId = asString(result.commandId) ?? asString(guiPresent.commandId);
+  const auditRefs = asStringArray(result.evidenceRefs) ?? asStringArray(guiPresent.evidenceRefs) ?? [];
+  return {
+    ...result,
+    message: presentation.text,
+    guiPresentation: presentation,
+    displayIntent: {
+      source: presentation.source,
+      conversationProjection: {
+        schemaVersion: 'sciforge.conversation-projection.v1',
+        conversationId: commandId ? `runtime-codex:${commandId}` : 'runtime-codex:gui-present',
+        visibleAnswer: {
+          status: 'satisfied',
+          text: presentation.text,
+          artifactRefs: presentation.ref ? [presentation.ref] : [],
+        },
+        artifacts: presentation.ref ? [{
+          ref: presentation.ref,
+          label: presentation.title ?? presentation.ref,
+          mime: presentation.hint ?? 'markdown',
+        }] : [],
+        executionProcess: [{
+          eventId: `${commandId ?? 'runtime-codex'}:gui-present`,
+          type: 'GuiPresent',
+          summary: `Runtime Codex rendered completion through ${presentation.source}.`,
+          timestamp: asString(result.timestamp) ?? new Date().toISOString(),
+        }],
+        recoverActions: [],
+        verificationState: { status: 'pass', verifierRef: presentation.source },
+        auditRefs,
+        diagnostics: [],
+      },
+    },
+    output: {
+      ...output,
+      message: presentation.text,
+      guiPresentation: presentation,
+    },
+  };
+}
+
+function guiPresentationFromEvent(event: Record<string, unknown>, result: Record<string, unknown>) {
+  const raw = isRecord(event.raw) ? event.raw : {};
+  const nested = isRecord(raw.presentation) ? raw.presentation : {};
+  const text = asString(event.text)
+    ?? asString(event.message)
+    ?? asString(nested.text)
+    ?? asString(result.message)
+    ?? '';
+  const commandId = asString(event.commandId) ?? asString(result.commandId);
+  return {
+    schemaVersion: 'sciforge.runtime-codex-gui-present.v1',
+    source: asString(nested.source) ?? asString(raw.source) ?? (commandId ? `gui.present:${commandId}` : 'gui.present'),
+    text,
+    ref: asString(nested.ref),
+    title: asString(nested.title),
+    intent: asString(nested.intent),
+    hint: asString(nested.hint),
+    placement: isRecord(nested.placement) ? nested.placement : undefined,
+    commandId,
+    attemptId: asString(event.attemptId) ?? asString(result.attemptId),
+    provider: asString(event.provider) ?? asString(result.provider),
+    model: asString(event.model) ?? asString(result.model),
+    profile: asString(event.profile) ?? asString(result.profile),
+    workspace: asString(event.workspace) ?? asString(result.workspace),
+  };
+}
+
+function runtimeCodexMissingGuiPresentFailure(result: unknown): { type: 'failed'; status: 'failed'; message: string; raw: Record<string, unknown> } {
+  const record = isRecord(result) ? result : {};
+  return {
+    type: 'failed',
+    status: 'failed',
+    message: 'Runtime Codex completed without gui.present; SciForge failed closed instead of rendering raw provider text.',
+    raw: {
+      boundary: 'gui-present-required',
+      exitCode: asNumber(record.exitCode) ?? 0,
+      provider: asString(record.provider),
+      model: asString(record.model),
+      profile: asString(record.profile),
+      workspace: asString(record.workspace),
+      commandId: asString(record.commandId),
+      attemptId: asString(record.attemptId),
+      codexSessionId: asString(record.codexSessionId),
+      evidenceRefs: asStringArray(record.evidenceRefs),
+    },
+  };
+}
+
+function isRuntimeCodexDoneEvent(value: unknown) {
+  if (!isRecord(value)) return false;
+  return isRuntimeCodexEventRecord(value);
+}
+
+function isRuntimeCodexEventRecord(value: Record<string, unknown>) {
+  return value.schemaVersion === 'sciforge.codex.normalized-event.v1'
+    || Boolean(asString(value.commandId)?.startsWith('codex-command-'))
+    || asString(value.profile) === 'sciforge-runtime-deepseek'
+    || /Runtime Codex/i.test(asString(value.message) ?? '');
+}
+
 export function normalizeWorkspaceRuntimeEvent(raw: unknown): AgentStreamEvent {
   const record = isRecord(raw) ? raw : {};
   const interactionProgressRecord = runtimeInteractionProgressEventFromCompactRecord(record);
@@ -228,7 +347,9 @@ export function normalizeWorkspaceRuntimeEvent(raw: unknown): AgentStreamEvent {
   const workEvidence = normalizeWorkEvidenceRecords(record.workEvidence ?? record.work_evidence);
   const rawFallbackDetail = rawEventDetailFallback(record);
   const auditOnlyDetail = isRuntimeAuditOnlyEvent(record) ? runtimeAuditOnlyEventSummary(record) : undefined;
+  const providerMessageDetail = runtimeCodexProviderMessageSummary(record);
   const baseDetail = auditOnlyDetail
+    || providerMessageDetail
     || interactionProgress?.detail
     || safeVisibleDetail(record.detail, rawFallbackDetail)
     || safeVisibleDetail(record.message, rawFallbackDetail)
@@ -251,6 +372,13 @@ export function normalizeWorkspaceRuntimeEvent(raw: unknown): AgentStreamEvent {
     createdAt: nowIso(),
     raw,
   };
+}
+
+function runtimeCodexProviderMessageSummary(record: Record<string, unknown>) {
+  const type = asString(record.type)?.toLowerCase();
+  if (type !== 'message' && type !== 'message_delta') return undefined;
+  if (!isRuntimeCodexEventRecord(record)) return undefined;
+  return 'Runtime Codex provider message recorded; visible completion requires gui.present and details stay in the folded run audit.';
 }
 
 function rawEventDetailFallback(record: Record<string, unknown>) {

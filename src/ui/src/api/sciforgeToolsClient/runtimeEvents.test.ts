@@ -4,13 +4,13 @@ import type { SendAgentMessageInput } from '../../domain';
 import { sendSciForgeToolMessage } from '../sciforgeToolsClient';
 import { normalizeWorkspaceRuntimeEvent, readWorkspaceToolStream } from './runtimeEvents';
 
-test('SSE reader promotes Runtime Codex message events without synthesizing GUI projection', async () => {
+test('SSE reader preserves generic workspace message events without synthesizing GUI projection', async () => {
   const body = [
     'event: message',
     'data: {"type":"message","text":"SCIFORGE-MT-FIXED-5173"}',
     '',
     'event: done',
-    'data: {"type":"done","status":"done","message":"Runtime Codex completed successfully."}',
+    'data: {"type":"done","status":"done","message":"Workspace task completed successfully."}',
     '',
   ].join('\n');
   const seen: unknown[] = [];
@@ -25,6 +25,102 @@ test('SSE reader promotes Runtime Codex message events without synthesizing GUI 
   assert.equal((stream.result as { message?: string }).message, 'SCIFORGE-MT-FIXED-5173');
   assert.equal((stream.result as { output?: { message?: string } }).output?.message, 'SCIFORGE-MT-FIXED-5173');
   assert.equal('displayIntent' in (stream.result as Record<string, unknown>), false);
+});
+
+test('SSE reader requires gui.present for Runtime Codex completion', async () => {
+  const commandId = 'codex-command-gui-required';
+  const body = [
+    'event: message',
+    'data: {"type":"message","text":"RAW_PROVIDER_MESSAGE_SHOULD_NOT_COMPLETE"}',
+    '',
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      message: 'Runtime Codex completed successfully.',
+      provider: 'sciforge-deepseek-proxy',
+      model: 'bailian/deepseek-v4-flash',
+      profile: 'sciforge-runtime-deepseek',
+      workspace: '/tmp/current',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+    })}`,
+    '',
+  ].join('\n');
+  const seen: unknown[] = [];
+  const response = new Response(body, {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream; charset=utf-8' },
+  });
+
+  const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
+
+  assert.equal(stream.result, undefined);
+  assert.match(stream.error ?? '', /without gui\.present/);
+  assert.equal((seen.at(-1) as { type?: string }).type, 'failed');
+  assert.doesNotMatch(stream.error ?? '', /RAW_PROVIDER_MESSAGE_SHOULD_NOT_COMPLETE/);
+});
+
+test('SSE reader promotes gui.present into the visible Runtime Codex result', async () => {
+  const commandId = 'codex-command-gui-present';
+  const body = [
+    'event: message',
+    'data: {"type":"message","text":"RAW_PROVIDER_MESSAGE_SHOULD_NOT_RENDER"}',
+    '',
+    'event: gui_present',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'gui_present',
+      text: 'VISIBLE_FROM_GUI_PRESENT',
+      provider: 'sciforge-deepseek-proxy',
+      model: 'bailian/deepseek-v4-flash',
+      profile: 'sciforge-runtime-deepseek',
+      workspace: '/tmp/current',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+      evidenceRefs: [`audit:codex-runtime:${commandId}:${commandId}-attempt-1:stderr`],
+      raw: {
+        source: `gui.present:${commandId}`,
+        presentation: {
+          source: `gui.present:${commandId}`,
+          text: 'VISIBLE_FROM_GUI_PRESENT',
+          ref: 'artifact:runtime-answer',
+          title: 'Runtime answer',
+        },
+      },
+    })}`,
+    '',
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      message: 'Runtime Codex completed successfully.',
+      provider: 'sciforge-deepseek-proxy',
+      model: 'bailian/deepseek-v4-flash',
+      profile: 'sciforge-runtime-deepseek',
+      workspace: '/tmp/current',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+      evidenceRefs: [`audit:codex-runtime:${commandId}:${commandId}-attempt-1:stderr`],
+    })}`,
+    '',
+  ].join('\n');
+  const seen: unknown[] = [];
+  const response = new Response(body, {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream; charset=utf-8' },
+  });
+
+  const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
+  const result = stream.result as { message?: string; displayIntent?: { source?: string }; guiPresentation?: { source?: string } };
+
+  assert.equal(stream.error, undefined);
+  assert.equal(result.message, 'VISIBLE_FROM_GUI_PRESENT');
+  assert.equal(result.guiPresentation?.source, `gui.present:${commandId}`);
+  assert.equal(result.displayIntent?.source, `gui.present:${commandId}`);
+  assert.doesNotMatch(JSON.stringify(result), /RAW_PROVIDER_MESSAGE_SHOULD_NOT_RENDER/);
 });
 
 test('Runtime Codex raw JSONL and stderr warnings normalize to folded audit summaries', () => {
@@ -44,6 +140,77 @@ test('Runtime Codex raw JSONL and stderr warnings normalize to folded audit summ
   assert.match(stderr.detail ?? '', /plugin manifest warning recorded/i);
   assert.doesNotMatch(rawJsonl.detail ?? '', /RAW_JSONL_SHOULD_NOT_RENDER/);
   assert.doesNotMatch(stderr.detail ?? '', /failed to load plugin|\/tmp\/plugin\.json/);
+});
+
+test('Runtime Codex provider message events stay audit-style until gui.present', () => {
+  const event = normalizeWorkspaceRuntimeEvent({
+    schemaVersion: 'sciforge.codex.normalized-event.v1',
+    type: 'message',
+    text: 'RAW_PROVIDER_MESSAGE_SHOULD_NOT_SURFACE',
+    commandId: 'codex-command-provider-message',
+    profile: 'sciforge-runtime-deepseek',
+  });
+
+  assert.match(event.detail ?? '', /visible completion requires gui\.present/);
+  assert.doesNotMatch(event.detail ?? '', /RAW_PROVIDER_MESSAGE_SHOULD_NOT_SURFACE/);
+});
+
+test('Runtime Codex foreground final message uses gui.present provenance', async () => {
+  const originalFetch = globalThis.fetch;
+  const commandIdPattern = /^codex-command-/;
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      const commandId = String(body.commandId);
+      assert.match(commandId, commandIdPattern);
+      return new Response([
+        'event: message\n',
+        'data: {"type":"message","text":"RAW_PROVIDER_MESSAGE_SHOULD_NOT_RENDER"}\n\n',
+        'event: gui_present\n',
+        `data: ${JSON.stringify({
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'gui_present',
+          text: 'VISIBLE_FOREGROUND_GUI_PRESENT',
+          provider: 'sciforge-deepseek-proxy',
+          model: 'bailian/deepseek-v4-flash',
+          profile: 'sciforge-runtime-deepseek',
+          workspace: '/tmp/current',
+          commandId,
+          attemptId: `${commandId}-attempt-1`,
+          raw: {
+            source: `gui.present:${commandId}`,
+            presentation: {
+              source: `gui.present:${commandId}`,
+              text: 'VISIBLE_FOREGROUND_GUI_PRESENT',
+            },
+          },
+        })}\n\n`,
+        'event: done\n',
+        `data: ${JSON.stringify({
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'done',
+          status: 'done',
+          message: 'Runtime Codex completed successfully.',
+          provider: 'sciforge-deepseek-proxy',
+          model: 'bailian/deepseek-v4-flash',
+          profile: 'sciforge-runtime-deepseek',
+          workspace: '/tmp/current',
+          commandId,
+          attemptId: `${commandId}-attempt-1`,
+        })}\n\n`,
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage(runtimeRequestInput());
+
+    assert.equal(response.message.content, 'VISIBLE_FOREGROUND_GUI_PRESENT');
+    assert.equal(response.message.provenance?.kind, 'live-runtime-codex');
+    assert.match(String(response.message.provenance?.source), /^gui\.present:codex-command-/);
+    assert.equal(response.message.provenance?.liveAcceptanceEligible, true);
+    assert.doesNotMatch(response.message.content, /RAW_PROVIDER_MESSAGE_SHOULD_NOT_RENDER/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 test('Runtime Codex stream request carries command text and adapter metadata only', async () => {
   const originalFetch = globalThis.fetch;

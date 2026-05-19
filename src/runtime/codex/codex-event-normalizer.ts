@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 export type NormalizedAgentEventType =
   | 'run_started'
+  | 'gui_present'
   | 'message_delta'
   | 'message'
   | 'tool_started'
@@ -44,6 +45,16 @@ export interface NormalizedAgentEvent {
   exitCode?: number | null;
   signal?: NodeJS.Signals | string | null;
   raw?: unknown;
+}
+
+export interface GuiPresentRuntimePayload {
+  source: string;
+  text: string;
+  intent?: string;
+  ref?: string;
+  title?: string;
+  placement?: { panel?: string; viewId?: string };
+  intentLogId?: string;
 }
 
 export interface CodexExitResult {
@@ -96,6 +107,23 @@ export function rawJsonlAuditEvent(metadata: CodexRuntimeMetadata, raw: unknown)
   return event(metadata, 'audit', {
     status: 'raw-jsonl',
     raw,
+  });
+}
+
+export function guiPresentEvent(metadata: CodexRuntimeMetadata, presentation: Omit<GuiPresentRuntimePayload, 'source'> & { source?: string }): NormalizedAgentEvent {
+  const source = presentation.source ?? `gui.present:${metadata.commandId}`;
+  return event(metadata, 'gui_present', {
+    status: 'presented',
+    message: presentation.text,
+    text: presentation.text,
+    raw: {
+      boundary: 'gui-present-completion',
+      source,
+      presentation: {
+        ...presentation,
+        source,
+      },
+    },
   });
 }
 
@@ -191,6 +219,11 @@ export function normalizeCodexJsonlEvent(raw: unknown, metadata: CodexRuntimeMet
     ?? stringField(rawEvent.name);
 
   const events: NormalizedAgentEvent[] = [rawJsonlAuditEvent(metadata, raw)];
+  const guiPresent = guiPresentFromRaw(rawEvent, item);
+  if (guiPresent) {
+    events.push(guiPresentEvent(metadata, guiPresent));
+    return events;
+  }
 
   if (/error|failed|failure/i.test(type)) {
     events.push(event(metadata, 'failed', {
@@ -230,6 +263,56 @@ export function normalizeCodexJsonlEvent(raw: unknown, metadata: CodexRuntimeMet
   }
 
   return events;
+}
+
+function guiPresentFromRaw(
+  rawEvent: Record<string, unknown>,
+  item: Record<string, unknown>,
+): Omit<GuiPresentRuntimePayload, 'source'> | undefined {
+  const type = stringField(rawEvent.type) ?? stringField(rawEvent.event) ?? '';
+  const itemStatus = stringField(item.status) ?? stringField(rawEvent.status) ?? '';
+  const isCompleted = /completed|done|output/i.test(type) || /completed|done|ok|applied/i.test(itemStatus);
+  if (!isCompleted) return undefined;
+  const toolName = stringField(item.name)
+    ?? stringField(item.tool_name)
+    ?? stringField(rawEvent.tool_name)
+    ?? stringField(rawEvent.name);
+  if (toolName !== 'gui.present') return undefined;
+  const args = parseJsonRecord(item.arguments)
+    ?? parseJsonRecord(rawEvent.arguments)
+    ?? parseJsonRecord(item.input)
+    ?? parseJsonRecord(rawEvent.input)
+    ?? {};
+  const result = parseJsonRecord(item.result)
+    ?? parseJsonRecord(rawEvent.result)
+    ?? parseJsonRecord(item.output)
+    ?? parseJsonRecord(rawEvent.output)
+    ?? {};
+  if (result.ok === false || result.applied === false) return undefined;
+  const content = isRecord(args.content) ? args.content : {};
+  const contentText = typeof content.value === 'string' ? content.value : undefined;
+  const ref = stringField(args.ref);
+  const title = stringField(args.title);
+  const intent = stringField(args.intent);
+  const text = contentText
+    ?? title
+    ?? (ref ? `Presented ${ref}.` : undefined)
+    ?? stringField(result.summary)
+    ?? stringField(result.message);
+  if (!text?.trim()) return undefined;
+  const placement = isRecord(result.placement) ? result.placement : isRecord(args.target) ? args.target : undefined;
+  return {
+    text: text.trim(),
+    intent,
+    ref,
+    title,
+    placement: placement
+      ? {
+          panel: stringField(placement.panel),
+          viewId: stringField(placement.viewId),
+        }
+      : undefined,
+  };
 }
 
 export function codexSessionIdFromRaw(raw: unknown): string | undefined {
@@ -288,4 +371,15 @@ function stringField(value: unknown): string | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function parseJsonRecord(value: unknown): Record<string, unknown> | undefined {
+  if (isRecord(value)) return value;
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }

@@ -10,6 +10,7 @@ import type { Readable } from 'node:stream';
 import { RUNTIME_KEY_ENV, RUNTIME_PROFILE } from '../../../packages/backend/src/runtime-home.js';
 import { CodexExecJsonAdapter, type SpawnCodexProcess } from './codex-exec-json-adapter.js';
 import { GUI_EXTENSION_STATE_ENV, GUI_MCP_SERVER_NAME } from './gui-extension-manifest.js';
+import { saveGuiExtensionSnapshot } from './gui-extension-state.js';
 
 test('adapter spawns codex exec --json with isolated CODEX_HOME and plain text command', async () => {
   const child = fakeChild();
@@ -54,6 +55,9 @@ test('adapter spawns codex exec --json with isolated CODEX_HOME and plain text c
   assert.deepEqual(argv.slice(-5), ['exec', '--json', '--skip-git-repo-check', '--ignore-rules', 'Summarize the workspace']);
   assert.equal(argv.filter((arg) => arg === 'Summarize the workspace').length, 1);
   assert.match(spawnCall?.[2].env.CODEX_HOME ?? '', /packages\/backend\/\.codex-runtime\/codex-home$/);
+  assert.match(spawnCall?.[2].env.PATH ?? '', /packages\/backend\/\.codex-runtime\/gui-extension\/bin/);
+  assert.equal(spawnCall?.[2].env.SCIFORGE_GUI_EXTENSION_STATE, guiStatePath);
+  await access(join(spawnCall?.[2].env.PATH?.split(':')[0] ?? '', 'gui.present'));
   assert.equal(events.find((event) => event.type === 'message')?.text, 'OK');
   assert.equal(events.at(-1)?.type, 'done');
 });
@@ -78,6 +82,125 @@ test('adapter converts stderr to audit events and nonzero exit to failed', async
   assert.equal(events.find((event) => event.status === 'stderr')?.type, 'audit');
   assert.equal(events.at(-1)?.type, 'failed');
   assert.equal(events.at(-1)?.exitCode, 7);
+});
+
+test('adapter emits gui_present from file-backed GUI intent state before done', async () => {
+  const child = fakeChild();
+  const workspace = await tempWorkspace();
+  const guiStatePath = join(workspace, 'gui-state.json');
+  const adapter = new CodexExecJsonAdapter({
+    env: { [RUNTIME_KEY_ENV]: 'test-key' },
+    spawnProcess() {
+      setTimeout(() => {
+        void saveGuiExtensionSnapshot(guiStatePath, {
+          revision: 2,
+          focusedPanel: 'chat',
+          layoutMode: 'desktop',
+          hotRegion: {
+            panel: 'chat',
+            primaryRef: 'artifact:runtime-answer',
+            selectedRefs: ['artifact:runtime-answer'],
+            interactionMode: 'reading',
+            lastChangeOrigin: 'agent',
+            lastChangeAt: '2026-05-19T00:00:00.000Z',
+            availableActions: [],
+          },
+          regions: [{
+            regionId: 'chat',
+            viewId: 'artifact:runtime-answer',
+            visibleRefs: ['artifact:runtime-answer'],
+            affordances: [],
+            title: 'Runtime answer',
+            summary: 'VISIBLE_FROM_GUI_STATE',
+          }],
+          intentLog: [{
+            id: 'gui.present:1',
+            tool: 'gui.present',
+            createdAt: '2026-05-19T00:00:00.000Z',
+            revision: 2,
+            summary: 'show-result artifact:runtime-answer Runtime answer',
+            applied: true,
+            deferred: false,
+            reason: null,
+            placement: { panel: 'chat', viewId: 'artifact:runtime-answer' },
+          }],
+        }).then(() => child.close(0));
+      }, 0);
+      return child.process;
+    },
+  });
+
+  const turn = await adapter.startTurn({
+    commandText: 'present with GUI',
+    workspacePath: workspace,
+    guiExtension: { statePath: guiStatePath },
+  });
+  const events = await collect(turn.events);
+  const guiPresentIndex = events.findIndex((event) => event.type === 'gui_present');
+  const doneIndex = events.findIndex((event) => event.type === 'done');
+
+  assert.ok(guiPresentIndex >= 0);
+  assert.ok(doneIndex > guiPresentIndex);
+  assert.equal(events[guiPresentIndex]?.text, 'VISIBLE_FROM_GUI_STATE');
+  assert.equal(((events[guiPresentIndex]?.raw as { presentation?: { source?: string } }).presentation)?.source, `gui.present:${turn.turnId}`);
+});
+
+test('adapter defaults GUI intent state inside the Runtime workspace', async () => {
+  const child = fakeChild();
+  let spawnCall: Parameters<SpawnCodexProcess> | undefined;
+  const workspace = await tempWorkspace();
+  const adapter = new CodexExecJsonAdapter({
+    env: { [RUNTIME_KEY_ENV]: 'test-key' },
+    spawnProcess(command, args, options) {
+      spawnCall = [command, args, options];
+      setTimeout(() => child.close(0), 0);
+      return child.process;
+    },
+  });
+
+  const turn = await adapter.startTurn({
+    commandText: 'use GUI state',
+    workspacePath: workspace,
+    guiExtension: {},
+  });
+  await collect(turn.events);
+
+  const expectedStatePath = join(workspace, '.sciforge', 'runtime-gui-extension-state.json');
+  const argv = spawnCall?.[1] ?? [];
+  assert.ok(argv.includes(`mcp_servers.${GUI_MCP_SERVER_NAME}.env.${GUI_EXTENSION_STATE_ENV}="${expectedStatePath}"`));
+  assert.equal(spawnCall?.[2].env.SCIFORGE_GUI_EXTENSION_STATE, expectedStatePath);
+  await access(expectedStatePath);
+});
+
+test('adapter emits resume-failed audit before failed exit on native resume failure', async () => {
+  const child = fakeChild();
+  const workspace = await tempWorkspace();
+  const adapter = new CodexExecJsonAdapter({
+    env: { [RUNTIME_KEY_ENV]: 'test-key' },
+    spawnProcess() {
+      setTimeout(() => {
+        child.stderr.write('resume store missing');
+        child.close(9);
+      }, 0);
+      return child.process;
+    },
+  });
+
+  const turn = await adapter.startTurn({
+    commandText: 'resume please',
+    workspacePath: workspace,
+    codexSessionId: '019e3e82-164d-79b2-a5d4-b16241620b10',
+    guiExtension: { enabled: false },
+  });
+  const events = await collect(turn.events);
+  const resumeFailureIndex = events.findIndex((event) => event.status === 'resume-failed');
+  const failedIndex = events.findIndex((event) => event.type === 'failed');
+
+  assert.ok(resumeFailureIndex >= 0);
+  assert.ok(failedIndex > resumeFailureIndex);
+  assert.match(events[resumeFailureIndex]?.message ?? '', /019e3e82-164d-79b2-a5d4-b16241620b10/);
+  assert.equal(((events[resumeFailureIndex]?.raw as { boundary?: string }).boundary), 'resume-fail-closed');
+  assert.equal(((events[resumeFailureIndex]?.raw as { stderrSummary?: string }).stderrSummary), 'resume store missing');
 });
 
 test('adapter fails closed before spawn when runtime API key is missing', async () => {
