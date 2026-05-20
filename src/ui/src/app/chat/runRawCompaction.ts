@@ -13,6 +13,8 @@ export function compactRunRawForRequestPayload(raw: unknown, limits: RunRawCompa
     : undefined;
   const backgroundCompletion = recordField(record.backgroundCompletion);
   return {
+    codexSessionId: stringField(record.codexSessionId),
+    nativeSessionId: stringField(record.nativeSessionId),
     termination: compactRawRecord(record.termination),
     cancelBoundary: compactRawRecord(record.cancelBoundary),
     historicalEditConflict: compactRawRecord(record.historicalEditConflict),

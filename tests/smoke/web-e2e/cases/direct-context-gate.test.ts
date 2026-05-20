@@ -20,9 +20,9 @@ test('SA-WEB-13 direct context gate answers current run status only from suffici
     assertWebE2eContract(result.directStatus.verifierInput);
 
     assert.equal(result.directStatus.route, 'direct-context-answer');
-    assert.equal(result.directStatus.serverRequests, 0, 'current run status must not call AgentServer when DirectContextDecision is sufficient');
+    assert.equal(result.directStatus.serverRequests, 0, 'current run status must not call runtime dispatch when DirectContextDecision is sufficient');
     assert.equal(result.directStatus.decision.sufficiency, 'sufficient');
-    assert.equal(result.directStatus.decision.decisionOwner, 'AgentServer');
+    assert.equal(result.directStatus.decision.decisionOwner, 'harness-policy');
     assert.ok(result.directStatus.decision.requiredTypedContext.includes('run-status'));
     assert.ok(result.directStatus.decision.usedRefs.includes(result.directStatus.fixture.expectedProjection.runAuditRefs.find((ref) => ref === 'artifact:fixture-run-audit') ?? ''));
     assert.ok(result.directStatus.directPayload, 'sufficient current-run status should produce direct-context payload');
@@ -50,19 +50,19 @@ test('SA-WEB-13 direct context gate answers current run status only from suffici
   }
 });
 
-test('SA-WEB-13 routes generation, repair, and insufficient tool status decisions to AgentServer', async () => {
+test('SA-WEB-13 routes generation, repair, and insufficient tool status decisions to runtime dispatch', async () => {
   const result = await buildDirectContextGateCase({ baseDir });
 
   try {
     assert.equal(result.routed.length, 3);
-    assert.equal(result.server.requests.runs.length, 3, 'only insufficient branches should call AgentServer');
+    assert.equal(result.server.requests.runs.length, 3, 'only insufficient branches should call runtime dispatch');
 
     for (const routed of result.routed) {
       assertWebE2eContract(routed.verifierInput);
 
-      assert.equal(routed.route, 'route-to-agentserver');
+      assert.equal(routed.route, 'runtime-dispatch');
       assert.equal(routed.directPayload, undefined, `${routed.scenario} must not be answered by direct-context fast path`);
-      assert.ok(routed.agentServerRun, `${routed.scenario} must have a scriptable AgentServer mock run`);
+      assert.ok(routed.runtimeDispatchRun, `${routed.scenario} must have an offline runtime-dispatch fixture run`);
       assert.equal(routed.decision.sufficiency, 'insufficient');
       assert.equal(routed.decision.allowDirectContext, false);
       assert.ok(routed.decision.decisionRef.startsWith('decision:sa-web-13-'));
@@ -70,11 +70,11 @@ test('SA-WEB-13 routes generation, repair, and insufficient tool status decision
       assert.ok(routed.runAudit.refs.includes(routed.decision.decisionRef));
       assert.match(
         routed.fixture.expectedProjection.conversationProjection.visibleAnswer?.text ?? '',
-        /Routed to AgentServer/,
+        /runtime dispatch/i,
       );
       assert.ok(
-        routed.agentServerRun.events.some((event) => event.type === 'status' && event.status === 'route-to-agentserver'),
-        `${routed.scenario} mock stream must expose route-to-agentserver status`,
+        routed.runtimeDispatchRun.events.some((event) => event.type === 'status' && event.status === 'runtime-dispatch'),
+        `${routed.scenario} fixture stream must expose runtime-dispatch status`,
       );
     }
 
@@ -84,7 +84,7 @@ test('SA-WEB-13 routes generation, repair, and insufficient tool status decision
       const decision = request.body.directContextDecision;
       assert.equal(typeof decision, 'object');
       assert.equal((decision as { sufficiency?: unknown }).sufficiency, 'insufficient');
-      assert.equal((decision as { route?: unknown }).route, 'route-to-agentserver');
+      assert.equal((decision as { route?: unknown }).route, 'runtime-dispatch');
       assert.equal((decision as { allowDirectContext?: unknown }).allowDirectContext, false);
     }
   } finally {

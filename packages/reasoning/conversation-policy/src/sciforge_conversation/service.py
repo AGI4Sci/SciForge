@@ -55,8 +55,8 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
     policy_input = batch.get("policyInput") or {}
     context_policy = batch.get("contextPolicy") or {}
     context_projection = batch.get("contextProjection") or {}
-    current_reference_digests = batch.get("currentReferenceDigests") or []
-    artifact_index = batch.get("artifactIndex") or {}
+    current_ref_summaries = batch.get("currentReferenceDigests") or []
+    artifact_catalog = batch.get("artifactIndex") or {}
     turn_composition = batch.get("turnComposition") or {}
     handoff_plan = batch.get("handoffPlan") or {}
     recovery_plan = batch.get("recoveryPlan") or {}
@@ -77,7 +77,7 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         execution_mode_plan,
         turn_execution_constraints,
         current_references,
-        current_reference_digests,
+        current_ref_summaries,
         _coerce_list((policy_input_seed.get("session") or {}).get("artifacts") if isinstance(policy_input_seed.get("session"), dict) else []),
         _coerce_list((policy_input_seed.get("session") or {}).get("runs") if isinstance(policy_input_seed.get("session"), dict) else []),
         _coerce_list((policy_input_seed.get("session") or {}).get("messages") if isinstance(policy_input_seed.get("session"), dict) else []),
@@ -118,8 +118,8 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         contextPolicy=context_policy,
         contextProjection=context_projection,
         currentReferences=current_references,
-        currentReferenceDigests=current_reference_digests,
-        artifactIndex=artifact_index,
+        currentReferenceDigests=current_ref_summaries,
+        artifactIndex=artifact_catalog,
         capabilityBrief=capability_brief,
         directContextDecision=direct_context_decision,
         harnessContract=harness_contract,
@@ -234,7 +234,7 @@ def _direct_context_decision(
     execution_mode_plan: JsonMap,
     turn_execution_constraints: JsonMap,
     current_references: list[JsonMap],
-    current_reference_digests: list[JsonMap],
+    current_ref_summaries: list[JsonMap],
     session_artifacts: list[Any],
     session_runs: list[Any],
     session_messages: list[Any],
@@ -245,8 +245,8 @@ def _direct_context_decision(
         reasons.append("execution-not-forbidden")
     used_refs = _unique_strings([
         *(_string_field(ref.get("ref")) for ref in current_references if isinstance(ref, dict)),
-        *(_string_field(digest.get("ref")) for digest in current_reference_digests if isinstance(digest, dict)),
-        *(_string_field(digest.get("sourceRef")) for digest in current_reference_digests if isinstance(digest, dict)),
+        *(_string_field(digest.get("ref")) for digest in current_ref_summaries if isinstance(digest, dict)),
+        *(_string_field(digest.get("sourceRef")) for digest in current_ref_summaries if isinstance(digest, dict)),
         *(_session_artifact_ref(artifact) for artifact in session_artifacts),
         *(_session_run_ref(run) for run in session_runs),
         *(_session_message_ref(message) for message in session_messages),

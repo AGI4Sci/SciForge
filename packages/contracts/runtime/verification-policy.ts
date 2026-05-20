@@ -423,7 +423,7 @@ function relaxSoftHarnessVerificationPolicy(policy: RuntimeVerificationPolicy): 
     humanApprovalPolicy: policy.humanApprovalPolicy === 'required' ? 'optional' : policy.humanApprovalPolicy,
     reason: /non-blocking background verification/i.test(policy.reason)
       ? policy.reason
-      : `${policy.reason}; non-blocking background verification follows latency policy`,
+      : `${policy.reason}; non-blocking background verification follows latency settings`,
   };
 }
 

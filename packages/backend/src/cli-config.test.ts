@@ -23,6 +23,7 @@ test('proxy CLI reads upstream credentials from ignored local config', () => {
   assert.equal(options.upstreamApiKey, 'local-secret');
   assert.equal(options.upstreamKeySource, `${configPath}:codexProxy.apiKey`);
   assert.equal(options.defaultModel, 'deepseek-local');
+  assert.equal(options.forceNonStreamingUpstream, false);
 });
 
 test('proxy CLI lets env override local upstream credentials', () => {
@@ -46,4 +47,21 @@ test('proxy CLI lets env override local upstream credentials', () => {
   assert.equal(options.upstreamApiKey, 'env-secret');
   assert.equal(options.upstreamKeySource, 'SCIFORGE_RUNTIME_API_KEY');
   assert.equal(options.defaultModel, 'env-model');
+});
+
+test('proxy CLI enables non-streaming upstream compatibility mode from env or local config', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sciforge-proxy-config-'));
+  const configPath = join(dir, 'config.local.json');
+  writeFileSync(configPath, JSON.stringify({
+    codexProxy: {
+      upstreamBaseUrl: 'http://provider.local:3888/v1',
+      forceNonStreamingUpstream: true,
+    },
+  }));
+
+  assert.equal(resolveProxyCliOptions(['--config', configPath], {}).forceNonStreamingUpstream, true);
+  assert.equal(resolveProxyCliOptions(['--config', configPath], {
+    SCIFORGE_PROXY_FORCE_NON_STREAMING_UPSTREAM: '1',
+  }).forceNonStreamingUpstream, true);
+  assert.equal(resolveProxyCliOptions(['--force-non-streaming-upstream'], {}).forceNonStreamingUpstream, true);
 });

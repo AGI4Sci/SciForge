@@ -91,6 +91,52 @@ test('serves streaming Chat Completions as Responses SSE', async () => {
   }
 });
 
+test('can serve Responses SSE while forcing non-streaming upstream Chat Completions', async () => {
+  const upstream = createServer(async (request, response) => {
+    assert.equal(request.url, '/v1/chat/completions');
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { stream?: boolean };
+    assert.equal(body.stream, false);
+    response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    response.end(JSON.stringify({
+      id: 'chatcmpl_nonstream_1',
+      created: 1716100000,
+      model: 'bailian/deepseek-v4-flash',
+      choices: [{ message: { role: 'assistant', content: 'NONSTREAM_OK' }, finish_reason: 'stop', index: 0 }],
+      usage: { total_tokens: 12 },
+    }));
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const upstreamPort = (upstream.address() as AddressInfo).port;
+  const proxy = await startCodexResponsesProxyServer({
+    upstreamBaseUrl: `http://127.0.0.1:${upstreamPort}/v1`,
+    forceNonStreamingUpstream: true,
+    port: 0,
+  });
+
+  try {
+    const response = await fetch(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer test' },
+      body: JSON.stringify({
+        model: 'bailian/deepseek-v4-flash',
+        input: 'Reply with OK',
+        stream: true,
+      }),
+    });
+    const text = await response.text();
+    assert.equal(response.status, 200);
+    assert.match(text, /response\.output_text\.delta/);
+    assert.match(text, /response\.completed/);
+    assert.match(text, /NONSTREAM_OK/);
+    assert.match(text, /data: \[DONE\]/);
+  } finally {
+    await proxy.close();
+    await new Promise<void>((resolve, reject) => upstream.close((error) => (error ? reject(error) : resolve())));
+  }
+});
+
 test('preserves streaming tool call name across empty DeepSeek deltas', async () => {
   const upstream = createServer((request, response) => {
     assert.equal(request.url, '/v1/chat/completions');

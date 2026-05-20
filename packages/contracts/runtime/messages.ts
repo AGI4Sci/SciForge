@@ -116,6 +116,7 @@ export interface SciForgeMessage {
 
 export function isSeedDemoOrFixtureMessage(message: Pick<SciForgeMessage, 'id' | 'role' | 'provenance'>): boolean {
   const provenance = message.provenance;
+  if (provenance?.kind === 'live-runtime-codex' || provenance?.liveAcceptanceEligible === true) return false;
   const marker = [
     message.id,
     message.role,
@@ -124,7 +125,6 @@ export function isSeedDemoOrFixtureMessage(message: Pick<SciForgeMessage, 'id' |
   ].map((value) => String(value ?? '').toLowerCase()).join(' ');
   if (provenance?.kind === 'seed-demo' || provenance?.kind === 'fixture') return true;
   if (/\b(seed|demo|fixture)\b|scenariodemodata/.test(marker)) return true;
-  if (provenance?.kind === 'live-runtime-codex' || provenance?.liveAcceptanceEligible === true) return false;
   if (provenance?.runtimeRequestEligible === false || provenance?.liveAcceptanceEligible === false) return true;
   return false;
 }

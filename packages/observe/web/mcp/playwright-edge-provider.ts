@@ -265,10 +265,14 @@ async function browserPageInfo(client: Client, maxChars: number): Promise<PageIn
 async function callToolText(client: Client, name: string, args: Record<string, unknown>) {
   const result = await client.callTool({ name, arguments: args });
   const content = Array.isArray(result.content) ? result.content : [];
-  return content.map((part: unknown) => {
+  const text = content.map((part: unknown) => {
     if (isTextContent(part)) return part.text;
     return '';
   }).filter(Boolean).join('\n');
+  if ((result as { isError?: unknown }).isError === true) {
+    throw new Error(text || `Playwright MCP tool ${name} failed.`);
+  }
+  return text;
 }
 
 function normalizedMcpUrl(inputUrl: string | undefined) {

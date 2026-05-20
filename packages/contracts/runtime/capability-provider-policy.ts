@@ -37,6 +37,7 @@ export const GENERATED_TASK_CAPABILITY_DISCOVERY_RULES = [
   'Discovery output is audit/planning evidence only; complete the actual task through invoke_capability or an honest failed-with-reason ToolPayload.',
 ] as const;
 
+export const PLAYWRIGHT_BROWSER_PROVIDER_CLI_RELATIVE_URL = '../../../packages/observe/web/mcp/playwright-browser-provider-cli.ts';
 export const PLAYWRIGHT_EDGE_PROVIDER_CLI_RELATIVE_URL = '../../../packages/observe/web/mcp/playwright-edge-provider-cli.ts';
 
 export function capabilityIdsFromProviderPromptPolicy(input: {
@@ -47,14 +48,17 @@ export function capabilityIdsFromProviderPromptPolicy(input: {
   const ids = new Set<string>();
   const prompt = input.prompt ?? '';
   const selected = (input.selectedToolIds ?? []).join(' ');
+  const wantsHeadlessBrowserAutomation = headlessBrowserAutomationIntent(prompt, selected);
+  const wantsVisibleEdgeAutomation = visibleEdgeBrowserAutomationIntent(prompt, selected);
   if (input.externalIoRequired === true) ids.add('web_search');
   if (scholarlySearchProviderIntent(prompt)) ids.add('web_search');
-  if (browserProviderIntent(prompt, selected)) {
+  if (!wantsHeadlessBrowserAutomation && !wantsVisibleEdgeAutomation && browserProviderIntent(prompt, selected)) {
     ids.add('browser_search');
     ids.add('browser_fetch');
   }
   if (pdfFullTextProviderIntent(prompt, selected)) ids.add('pdf_extract');
-  if (interactiveBrowserAutomationIntent(prompt, selected)) ids.add('playwright_edge_browser');
+  if (wantsHeadlessBrowserAutomation) ids.add('playwright_browser_automation');
+  if (wantsVisibleEdgeAutomation) ids.add('playwright_edge_browser');
   return [...ids];
 }
 
@@ -209,7 +213,14 @@ export function generatedTaskProviderEndpoint(provider: {
 }
 
 export function generatedTaskProviderUsesMcpCli(route: { capabilityId?: string }, provider?: { transport?: unknown }) {
-  return route.capabilityId === 'playwright_edge_browser' || provider?.transport === 'mcp';
+  return route.capabilityId === 'playwright_browser_automation'
+    || route.capabilityId === 'playwright_edge_browser'
+    || provider?.transport === 'mcp';
+}
+
+export function generatedTaskMcpProviderCliRelativeUrl(route: { capabilityId?: string }) {
+  if (route.capabilityId === 'playwright_browser_automation') return PLAYWRIGHT_BROWSER_PROVIDER_CLI_RELATIVE_URL;
+  return PLAYWRIGHT_EDGE_PROVIDER_CLI_RELATIVE_URL;
 }
 
 export function generatedTaskProviderUsesWebWorkerCli(provider?: { workerId?: unknown; providerId?: unknown }) {
@@ -229,8 +240,12 @@ function pdfFullTextProviderIntent(prompt: string, selected: string): boolean {
   return /(?:pdf|full[-\s]?text|全文|阅读全文|全文阅读|extract(?:ed|ion)?|下载.*论文|论文.*下载)/i.test(`${prompt} ${selected}`);
 }
 
-function interactiveBrowserAutomationIntent(prompt: string, selected: string): boolean {
-  return /(?:playwright[_\s-]*edge|playwright[_\s-]*mcp|microsoft\s*edge|msedge|headed|visible browser|manual takeover|login|captcha|2fa|otp|form|fill|click|scroll|upload|download|browser automation|正常网页浏览器|可见浏览器|手动接管|登录|验证码|二次验证|双因素|表单|填写|点击|滚动|上传|下载|浏览器自动化)/i.test(`${prompt} ${selected}`);
+function headlessBrowserAutomationIntent(prompt: string, selected: string): boolean {
+  return /(?:playwright_browser_automation|playwright[_\s-]*browser|headless|isolated browser|background browser|unattended browser|browser automation|通用浏览器|后台浏览器|无感|不影响用户|浏览器自动化)/i.test(`${prompt} ${selected}`);
+}
+
+function visibleEdgeBrowserAutomationIntent(prompt: string, selected: string): boolean {
+  return /(?:playwright_edge_browser|sciforge\.observe\.playwright-edge-mcp|playwright[_\s-]*edge|microsoft\s*edge|msedge|headed|visible browser|manual takeover|login|captcha|2fa|otp|可见浏览器|手动接管|登录|验证码|二次验证|双因素)/i.test(`${prompt} ${selected}`);
 }
 
 function generatedTaskBrowserProviderRoutesRequested(text: string): boolean {

@@ -55,6 +55,7 @@ import {
 } from './gateway/agentserver-context-window.js';
 import {
   agentServerBackendSelectionDecision,
+  agentServerGenerationDispatchQuarantineDecision,
   isBlockingAgentServerConfigurationFailure,
 } from './gateway/agent-backend-config.js';
 import {
@@ -391,13 +392,14 @@ export const GATEWAY_PIPELINE_STAGES: GatewayPipelineStage[] = [
       return payload ? { kind: 'short-circuit', payload } : { kind: 'continue' };
     },
   },
-  {
-    name: STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS,
-    async execute(context) {
-      const payload = agentServerDispatchForbiddenPayload(context.request);
-      return payload ? { kind: 'short-circuit', payload } : { kind: 'continue' };
-    },
-  },
+	  {
+	    name: STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS,
+	    async execute(context) {
+	      const payload = agentServerDispatchForbiddenPayload(context.request)
+	        ?? agentServerDispatchQuarantinedPayload(context.request);
+	      return payload ? { kind: 'short-circuit', payload } : { kind: 'continue' };
+	    },
+	  },
   {
     name: STAGE_AGENTSERVER_GENERATION,
     async execute(context) {
@@ -639,6 +641,23 @@ function agentServerDispatchForbiddenPayload(request: GatewayRequest): ToolPaylo
     constraints,
     refs,
     reasons: constraints.reasons,
+  });
+}
+
+function agentServerDispatchQuarantinedPayload(request: GatewayRequest): ToolPayload | undefined {
+  const quarantine = agentServerGenerationDispatchQuarantineDecision(request, request.llmEndpoint);
+  if (quarantine.allowed) return undefined;
+  const skill = agentServerGenerationSkill(request.skillDomain);
+  return repairNeededPayload(request, skill, quarantine.reason, {
+    blocker: 'agentserver-generation-dispatch-quarantine',
+    executionUnitStatus: 'failed-with-reason',
+    recoverActions: [
+      'Route the request through Runtime Codex or a local deterministic runtime by default.',
+      'For legacy compatibility only, set an explicit AgentServer backend/base URL or SCIFORGE_LEGACY_AGENTSERVER_DEFAULT_DISPATCH=1.',
+    ],
+    agentServerRefs: {
+      agentServerGenerationDispatchQuarantine: quarantine,
+    },
   });
 }
 

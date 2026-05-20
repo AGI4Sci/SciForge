@@ -4,7 +4,17 @@ import type { Readable } from 'node:stream';
 import { attemptIdForCommand, codexSessionIdFromRaw, commandIdForText, exitEvent, guiPresentEvent, invalidJsonlAuditEvent, normalizeCodexJsonlEvent, resumeFailureAuditEvent, runStartedEvent, stderrAuditEvent, type CodexRuntimeMetadata, type NormalizedAgentEvent } from './codex-event-normalizer.js';
 import { type AgentCliAdapter, type AgentCliStartTurnInput, type AgentCliTurn } from './agent-cli-adapter.js';
 import { assertCodexNoForkGate } from '../../../packages/backend/src/codex-compatibility-gate.js';
+import {
+  resolveRuntimeCodexSandbox,
+  RUNTIME_WORKSPACE_WRITE_NETWORK_CONFIG_ARGS,
+} from '../../../packages/backend/src/runtime-home.js';
 import { assertCodexRuntimeConfig, codexRuntimeEnv } from './codex-runtime-config.js';
+import {
+  createRuntimeCodexAuditBundle,
+  scrubRuntimeCodexAuditText,
+  scrubRuntimeCodexEventForAudit,
+  type RuntimeCodexAuditBundle,
+} from './codex-runtime-audit-bundle.js';
 import { prepareRuntimeGuiExtensionInjection } from './gui-extension-manifest.js';
 import { loadGuiExtensionSnapshot } from './gui-extension-state.js';
 
@@ -16,7 +26,6 @@ export type SpawnCodexProcess = (
   options: { cwd: string; env: NodeJS.ProcessEnv; stdio: ['ignore', 'pipe', 'pipe'] },
 ) => CodexChildProcess;
 
-const RUNTIME_CODEX_SANDBOX = 'workspace-write';
 const RUNTIME_CODEX_APPROVAL_POLICY = 'never';
 
 interface CodexChildProcess {
@@ -46,7 +55,13 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
     const attemptId = input.attemptId?.trim() || attemptIdForCommand(commandId);
     const resumeRequested = Boolean(input.codexSessionId);
     const evidenceRefs = evidenceRefsForTurn(commandId, attemptId);
-    const guiInjection = await prepareRuntimeGuiExtensionInjection(guiExtensionOptions(input.guiExtension, config.workspace));
+    const guiInjection = await prepareRuntimeGuiExtensionInjection(guiExtensionOptions(input.guiExtension, {
+      workspace: config.workspace,
+      commandId,
+      attemptId,
+    }));
+    const runtimeEnv = this.options.env ?? process.env;
+    const runtimeSandbox = resolveRuntimeCodexSandbox(runtimeEnv);
     const metadata: CodexRuntimeMetadata = {
       provider: config.provider,
       model: config.model,
@@ -56,17 +71,20 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
       attemptId,
       commandText,
       codexSessionId: input.codexSessionId,
+      runtimeSandbox,
       evidenceRefs,
       resumeRequested,
     };
+    const auditBundle = createRuntimeCodexAuditBundle(metadata);
+    await auditBundle.initialize();
     const args = codexExecArgs({
       profile: config.profile,
       workspace: config.workspace,
       commandText,
       codexSessionId: input.codexSessionId,
+      sandbox: runtimeSandbox,
       configArgs: guiInjection?.configArgs ?? [],
     });
-    const runtimeEnv = this.options.env ?? process.env;
     const codexGate = assertCodexNoForkGate({ codexCommand: runtimeEnv.SCIFORGE_RUNTIME_CODEX_COMMAND });
     const env = codexRuntimeEnv(runtimeEnv, config.codexHome);
     if (guiInjection) {
@@ -86,6 +104,7 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
     input.abortSignal?.addEventListener('abort', abort, { once: true });
 
     const events = this.eventsForChild(child, metadata, {
+      auditBundle,
       guiExtensionStatePath: guiInjection?.statePath,
       cleanup: () => {
         input.abortSignal?.removeEventListener('abort', abort);
@@ -107,9 +126,11 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
   private async *eventsForChild(
     child: CodexChildProcess,
     metadata: CodexRuntimeMetadata,
-    options: { guiExtensionStatePath?: string; cleanup: () => void },
+    options: { auditBundle: RuntimeCodexAuditBundle; guiExtensionStatePath?: string; cleanup: () => void },
   ): AsyncIterable<NormalizedAgentEvent> {
-    const queue: NormalizedAgentEvent[] = [runStartedEvent(metadata)];
+    const started = runStartedEvent(metadata);
+    options.auditBundle.appendNormalizedEvent(started);
+    const queue: NormalizedAgentEvent[] = [started];
     const waiters: Array<() => void> = [];
     let stdoutRemainder = '';
     let closed = false;
@@ -121,8 +142,10 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
 
     const wake = () => waiters.splice(0).forEach((resolve) => resolve());
     const push = (event: NormalizedAgentEvent) => {
-      if (event.type === 'gui_present') sawGuiPresent = true;
-      queue.push(event);
+      const scrubbedEvent = scrubRuntimeCodexEventForAudit(event);
+      if (scrubbedEvent.type === 'gui_present') sawGuiPresent = true;
+      options.auditBundle.appendNormalizedEvent(scrubbedEvent);
+      queue.push(scrubbedEvent);
       wake();
     };
 
@@ -134,6 +157,7 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
       stdoutRemainder = lines.pop() ?? '';
       for (const line of lines) {
         if (!line.trim()) continue;
+        options.auditBundle.appendRawJsonlLine(line);
         try {
           const raw = JSON.parse(line) as unknown;
           metadata.codexSessionId = codexSessionIdFromRaw(raw) ?? metadata.codexSessionId;
@@ -145,49 +169,60 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
     });
     child.stderr.on('data', (chunk: string) => {
       stderrChunks.push(chunk);
-      push(stderrAuditEvent(metadata, chunk));
+      options.auditBundle.appendStderr(chunk);
+      push(stderrAuditEvent(metadata, scrubRuntimeCodexAuditText(chunk)));
     });
     child.on('error', (error) => {
       spawnError = error;
     });
     child.on('close', async (code, signal) => {
-      if (stdoutRemainder.trim()) {
-        try {
-          const raw = JSON.parse(stdoutRemainder) as unknown;
-          metadata.codexSessionId = codexSessionIdFromRaw(raw) ?? metadata.codexSessionId;
-          for (const event of normalizeCodexJsonlEvent(raw, metadata)) push(event);
-        } catch (error) {
-          push(invalidJsonlAuditEvent(metadata, stdoutRemainder, error));
+      try {
+        if (stdoutRemainder.trim()) {
+          options.auditBundle.appendRawJsonlLine(stdoutRemainder);
+          try {
+            const raw = JSON.parse(stdoutRemainder) as unknown;
+            metadata.codexSessionId = codexSessionIdFromRaw(raw) ?? metadata.codexSessionId;
+            for (const event of normalizeCodexJsonlEvent(raw, metadata)) push(event);
+          } catch (error) {
+            push(invalidJsonlAuditEvent(metadata, stdoutRemainder, error));
+          }
         }
-      }
-      exitCode = code;
-      exitSignal = signal;
-      if (spawnError) {
-        push({
-          ...exitEvent(metadata, { exitCode: 1, signal: null }),
-          message: spawnError instanceof Error ? spawnError.message : String(spawnError),
-        });
-      } else {
-        if (code === 0 && !sawGuiPresent && options.guiExtensionStatePath) {
-          const presentation = await latestGuiPresentFromState(options.guiExtensionStatePath).catch(() => undefined);
-          if (presentation) push(guiPresentEvent(metadata, presentation));
-        }
-        if (metadata.resumeRequested && code !== 0) {
-          push(resumeFailureAuditEvent(metadata, {
-            exitCode: code,
+        exitCode = code;
+        exitSignal = signal;
+        if (spawnError) {
+          push({
+            ...exitEvent(metadata, { exitCode: 1, signal: null }),
+            message: spawnError instanceof Error ? spawnError.message : String(spawnError),
+          });
+          await options.auditBundle.finalize({ status: 'failed', exitCode: 1, signal: null });
+        } else {
+          if (code === 0 && !sawGuiPresent && options.guiExtensionStatePath) {
+            const presentation = await latestGuiPresentFromState(options.guiExtensionStatePath).catch(() => undefined);
+            if (presentation) push(guiPresentEvent(metadata, presentation));
+          }
+          if (metadata.resumeRequested && code !== 0) {
+            push(resumeFailureAuditEvent(metadata, {
+              exitCode: code,
+              signal: exitSignal,
+              stderrSummary: summarizeStderr(stderrChunks.join('')),
+            }));
+          }
+          push(exitEvent(metadata, {
+            exitCode,
             signal: exitSignal,
-            stderrSummary: summarizeStderr(stderrChunks.join('')),
+            stderrSummary: code === 0 ? undefined : summarizeStderr(stderrChunks.join('')),
           }));
+          await options.auditBundle.finalize({
+            status: signal ? 'cancelled' : code === 0 ? 'done' : 'failed',
+            exitCode,
+            signal: exitSignal,
+          });
         }
-        push(exitEvent(metadata, {
-          exitCode,
-          signal: exitSignal,
-          stderrSummary: code === 0 ? undefined : summarizeStderr(stderrChunks.join('')),
-        }));
+      } finally {
+        closed = true;
+        options.cleanup();
+        wake();
       }
-      closed = true;
-      options.cleanup();
-      wake();
     });
 
     try {
@@ -238,12 +273,18 @@ function evidenceRefsForTurn(commandId: string, attemptId: string): string[] {
 
 function guiExtensionOptions(
   options: AgentCliStartTurnInput['guiExtension'],
-  workspace: string,
+  input: { workspace: string; commandId: string; attemptId: string },
 ): AgentCliStartTurnInput['guiExtension'] {
   if (options?.enabled === false) return options;
   return {
     ...options,
-    statePath: options?.statePath ?? join(workspace, '.sciforge', 'runtime-gui-extension-state.json'),
+    statePath: options?.statePath ?? join(
+      input.workspace,
+      '.sciforge',
+      'runtime-gui-extension-state',
+      input.commandId,
+      `${input.attemptId}.json`,
+    ),
   };
 }
 
@@ -251,8 +292,9 @@ function summarizeStderr(stderr: string): string | undefined {
   const compact = stderr.replace(/\s+/g, ' ').trim();
   if (!compact) return undefined;
   const actionable = actionableStderrSummary(compact);
-  if (actionable) return actionable;
-  return compact.length > 240 ? `${compact.slice(0, 237)}...` : compact;
+  if (actionable) return scrubRuntimeCodexAuditText(actionable);
+  const summary = compact.length > 240 ? `${compact.slice(0, 237)}...` : compact;
+  return scrubRuntimeCodexAuditText(summary);
 }
 
 function actionableStderrSummary(compact: string): string | undefined {
@@ -281,17 +323,19 @@ function codexExecArgs(input: {
   profile: string;
   workspace: string;
   commandText: string;
+  sandbox: string;
   codexSessionId?: string;
   configArgs?: string[];
 }): string[] {
   const globalArgs = [
     ...(input.configArgs ?? []),
+    ...RUNTIME_WORKSPACE_WRITE_NETWORK_CONFIG_ARGS,
     '--profile',
     input.profile,
     '--cd',
     input.workspace,
     '--sandbox',
-    RUNTIME_CODEX_SANDBOX,
+    input.sandbox,
     '--ask-for-approval',
     RUNTIME_CODEX_APPROVAL_POLICY,
   ];

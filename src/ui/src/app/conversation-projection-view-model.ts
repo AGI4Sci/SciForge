@@ -397,7 +397,8 @@ function normalizeActiveRun(value: unknown): UiConversationProjection['activeRun
 
 function normalizeStatus(value: unknown): UiConversationProjectionStatus | undefined {
   if (typeof value !== 'string') return undefined;
-  return projectionStatuses.has(value as UiConversationProjectionStatus) ? value as UiConversationProjectionStatus : undefined;
+  const normalized = value.trim().toLowerCase().replace(/[\s_]+/g, '-');
+  return projectionStatuses.has(normalized as UiConversationProjectionStatus) ? normalized as UiConversationProjectionStatus : undefined;
 }
 
 function parseMaybeJsonObject(value: unknown): Record<string, unknown> | undefined {

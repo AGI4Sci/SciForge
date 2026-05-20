@@ -268,6 +268,8 @@ function runHasPersistedRuntimeCodexRecoverState(run: SciForgeRun) {
   const recoverState = isRecord(failure?.recoverState) ? failure.recoverState : undefined;
   const evidenceRefs = Array.isArray(failure?.evidenceRefs) ? failure.evidenceRefs : [];
   const recoverEvidenceRefs = Array.isArray(recoverState?.evidenceRefs) ? recoverState.evidenceRefs : [];
+  const failureCodexSessionId = typeof failure?.codexSessionId === 'string' ? failure.codexSessionId : undefined;
+  const recoverCodexSessionId = typeof recoverState?.codexSessionId === 'string' ? recoverState.codexSessionId : undefined;
   return failure?.schemaVersion === 'sciforge.runtime-codex-failed-run.v1'
     && recoverState?.status === 'repair-needed'
     && typeof failure.commandId === 'string'
@@ -276,7 +278,6 @@ function runHasPersistedRuntimeCodexRecoverState(run: SciForgeRun) {
     && typeof failure.profile === 'string'
     && typeof failure.provider === 'string'
     && typeof failure.model === 'string'
-    && typeof failure.codexSessionId === 'string'
     && typeof failure.stderrSummary === 'string'
     && failure.stderrSummary.trim().length > 0
     && recoverState.commandId === failure.commandId
@@ -285,7 +286,8 @@ function runHasPersistedRuntimeCodexRecoverState(run: SciForgeRun) {
     && recoverState.profile === failure.profile
     && recoverState.provider === failure.provider
     && recoverState.model === failure.model
-    && recoverState.codexSessionId === failure.codexSessionId
+    && (!failureCodexSessionId || recoverCodexSessionId === failureCodexSessionId)
+    && (failureCodexSessionId || recoverState.resumeStrategy === 'audit-only-retry' || recoverState.nativeResumeSupported === false)
     && recoverState.stderrSummary === failure.stderrSummary
     && evidenceRefs.length > 0
     && recoverEvidenceRefs.length > 0;

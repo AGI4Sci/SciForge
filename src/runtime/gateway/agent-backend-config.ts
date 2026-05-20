@@ -18,6 +18,14 @@ export type AgentServerBackendSelectionSource =
   | 'llmEndpoint.baseUrl'
   | 'runtime.default';
 
+export type AgentServerGenerationDispatchOptInSource =
+  | 'request.agentBackend'
+  | 'request.forceAgentServerGeneration'
+  | 'request.agentServerBaseUrl'
+  | 'request.llmEndpoint'
+  | 'env.SCIFORGE_AGENTSERVER_BACKEND'
+  | 'env.SCIFORGE_LEGACY_AGENTSERVER_DEFAULT_DISPATCH';
+
 export interface AgentServerBackendSelectionDecision {
   schemaVersion: typeof AGENTSERVER_BACKEND_SELECTION_DECISION_SCHEMA_VERSION;
   shadowMode: true;
@@ -40,6 +48,15 @@ export interface AgentServerBackendSelectionDecision {
     selectionOrder: AgentServerBackendSelectionSource[];
     ignoredSources: string[];
   };
+}
+
+export interface AgentServerGenerationDispatchQuarantineDecision {
+  schemaVersion: 'sciforge.agentserver-generation-dispatch-quarantine.v1';
+  allowed: boolean;
+  source?: AgentServerGenerationDispatchOptInSource;
+  reason: string;
+  backendSelectionDecision: AgentServerBackendSelectionDecision;
+  explicitSignals: Record<string, boolean>;
 }
 
 export function isBlockingAgentServerConfigurationFailure(reason: string) {
@@ -97,6 +114,43 @@ export function agentServerBackendSelectionDecision(
   });
 }
 
+export function agentServerGenerationDispatchQuarantineDecision(
+  request?: GatewayRequest,
+  llmEndpoint?: LlmEndpointConfig,
+  llmEndpointSource?: string,
+): AgentServerGenerationDispatchQuarantineDecision {
+  const uiState = isRecord(request?.uiState) ? request.uiState : {};
+  const requestBackend = request?.agentBackend?.trim();
+  const envBackend = process.env.SCIFORGE_AGENTSERVER_BACKEND?.trim();
+	  const explicitSignals = {
+	    requestBackendSupported: runtimeAgentBackendSupported(requestBackend) && requestBackend !== 'codex',
+	    requestForceGeneration: uiState.forceAgentServerGeneration === true,
+	    requestAgentServerBaseUrl: Boolean(request?.agentServerBaseUrl?.trim()),
+	    requestLlmEndpoint: false,
+	    envBackendSupported: runtimeAgentBackendSupported(envBackend),
+    legacyCompatEnv: process.env.SCIFORGE_LEGACY_AGENTSERVER_DEFAULT_DISPATCH === '1',
+  };
+  const source = dispatchOptInSource(explicitSignals);
+  const backendSelectionDecision = agentServerBackendSelectionDecision(request, llmEndpoint);
+  if (source) {
+    return {
+      schemaVersion: 'sciforge.agentserver-generation-dispatch-quarantine.v1',
+      allowed: true,
+      source,
+      reason: `AgentServer generation dispatch is explicitly opted in by ${source}.`,
+      backendSelectionDecision,
+      explicitSignals,
+    };
+  }
+  return {
+    schemaVersion: 'sciforge.agentserver-generation-dispatch-quarantine.v1',
+    allowed: false,
+    reason: 'AgentServer generation dispatch is quarantined: no request, environment, or legacy compatibility opt-in was present.',
+    backendSelectionDecision,
+    explicitSignals,
+  };
+}
+
 export function agentBackendAdapter(backend: string): AgentBackendAdapter {
   const capabilities = agentBackendCapabilities(backend);
   return {
@@ -105,6 +159,20 @@ export function agentBackendAdapter(backend: string): AgentBackendAdapter {
     readContextWindowState: async (sessionRef) => readBackendContextWindowState(sessionRef, backend, capabilities),
     compactContext: async (sessionRef, reason) => compactBackendContext(sessionRef, backend, capabilities, reason),
   };
+}
+
+function dispatchOptInSource(signals: AgentServerGenerationDispatchQuarantineDecision['explicitSignals']): AgentServerGenerationDispatchOptInSource | undefined {
+  if (signals.requestBackendSupported) return 'request.agentBackend';
+  if (signals.requestForceGeneration) return 'request.forceAgentServerGeneration';
+  if (signals.requestAgentServerBaseUrl) return 'request.agentServerBaseUrl';
+  if (signals.requestLlmEndpoint) return 'request.llmEndpoint';
+  if (signals.envBackendSupported) return 'env.SCIFORGE_AGENTSERVER_BACKEND';
+  if (signals.legacyCompatEnv) return 'env.SCIFORGE_LEGACY_AGENTSERVER_DEFAULT_DISPATCH';
+  return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 export function agentBackendCapabilities(backend: string): AgentBackendCapabilities {

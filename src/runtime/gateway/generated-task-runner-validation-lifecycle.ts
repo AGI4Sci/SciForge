@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 import type { ValidationFindingProjectionInput } from '@sciforge-ui/runtime-contract/validation-repair-audit';
-import { GENERATED_TASK_CAPABILITY_DISCOVERY_RULES, GENERATED_TASK_CAPABILITY_FIRST_RULES, PLAYWRIGHT_EDGE_PROVIDER_CLI_RELATIVE_URL, capabilityIdsForGeneratedTaskProviderRoutes, generatedTaskProviderEndpoint, generatedTaskProviderUsesMcpCli, generatedTaskProviderUsesWebWorkerCli } from '@sciforge-ui/runtime-contract/capability-provider-policy';
+import { GENERATED_TASK_CAPABILITY_DISCOVERY_RULES, GENERATED_TASK_CAPABILITY_FIRST_RULES, capabilityIdsForGeneratedTaskProviderRoutes, generatedTaskMcpProviderCliRelativeUrl, generatedTaskProviderEndpoint, generatedTaskProviderUsesMcpCli, generatedTaskProviderUsesWebWorkerCli } from '@sciforge-ui/runtime-contract/capability-provider-policy';
 import type { GatewayRequest, SkillAvailability, TaskAttemptRecord, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceTaskRunResult, WorkspaceTaskSpec } from '../runtime-types.js';
 import { errorMessage, isRecord, toRecordList, toStringList } from '../gateway-utils.js';
 import { sessionBundleRelForRequest } from '../session-bundle.js';
@@ -594,7 +594,7 @@ function providerInvocationForGeneratedTask(providerRoutes: ReturnType<typeof ca
       };
       const endpoint = generatedTaskProviderEndpoint(candidate);
       if (generatedTaskProviderUsesMcpCli(route, candidate)) {
-        const cli = localPlaywrightEdgeMcpCliAdapter();
+        const cli = localPlaywrightMcpCliAdapter(route.capabilityId);
         if (cli) {
           return {
             ...base,
@@ -658,11 +658,11 @@ function localWebWorkerCliAdapter() {
   }
 }
 
-function localPlaywrightEdgeMcpCliAdapter() {
+function localPlaywrightMcpCliAdapter(capabilityId: string) {
   try {
     const require = createRequire(import.meta.url);
     const tsxLoader = require.resolve('tsx');
-    const cliPath = fileURLToPath(new URL(PLAYWRIGHT_EDGE_PROVIDER_CLI_RELATIVE_URL, import.meta.url));
+    const cliPath = fileURLToPath(new URL(generatedTaskMcpProviderCliRelativeUrl({ capabilityId }), import.meta.url));
     return {
       command: process.execPath,
       argsPrefix: ['--import', tsxLoader, resolve(cliPath)],

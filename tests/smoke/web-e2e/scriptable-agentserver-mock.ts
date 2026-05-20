@@ -128,7 +128,10 @@ function isCompactPath(pathname: string) {
 }
 
 function isRunPath(pathname: string) {
-  return pathname === '/api/agent-server/runs/stream' || pathname === '/api/agent-server/runs';
+  return pathname === '/api/agent-server/runs/stream' ||
+    pathname === '/api/agent-server/runs' ||
+    pathname === '/api/runtime-dispatch/runs/stream' ||
+    pathname === '/api/runtime-dispatch/runs';
 }
 
 function discoveryPayload(

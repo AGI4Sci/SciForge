@@ -202,6 +202,7 @@ test('next-turn payload prefers conversation projection and keeps raw execution 
     response: rawBody,
     createdAt: '2026-05-07T00:00:00.000Z',
     raw: {
+      codexSessionId: '019e3f11-1111-7000-9000-projectedrun',
       providerPayload: rawBody,
       resultPresentation: {
         conversationProjection: {
@@ -272,6 +273,7 @@ test('next-turn payload prefers conversation projection and keeps raw execution 
   const projectionUnit = payload.executionUnits.find((unit) => unit.tool === 'conversation.projection.continuation');
   const auditUnit = payload.executionUnits.find((unit) => unit.id === 'unit-audit');
   const rawRun = payload.runs[0]?.raw as {
+    codexSessionId?: string;
     projectionAudit?: { auditRefs?: string[]; selectedRefs?: string[] };
     streamProcess?: unknown;
   } | undefined;
@@ -287,6 +289,7 @@ test('next-turn payload prefers conversation projection and keeps raw execution 
   assert.match(projectionUnit?.params ?? '', /message:prior/);
   assert.match(rawRun?.projectionAudit?.auditRefs?.join('\n') ?? '', /provider\.log|verifier\.json/);
   assert.deepEqual(rawRun?.projectionAudit?.selectedRefs, ['message:prior']);
+  assert.equal(rawRun?.codexSessionId, '019e3f11-1111-7000-9000-projectedrun');
   assert.equal(rawRun?.streamProcess, undefined);
   assert.doesNotMatch(serialized, /RAW_SESSION_RUN_BODY provider payload/);
   assert.doesNotMatch(serialized, /RAW_EXECUTION_PARAMS large params/);
@@ -445,6 +448,48 @@ test('explicit old artifact follow-up only carries selected refs in request payl
   assert.deepEqual(payload.runs, []);
   assert.match(serialized, /artifact:old-report/);
   assert.doesNotMatch(serialized, /latest-report|LATEST_REPORT_BODY_SHOULD_NOT_APPEAR/);
+});
+
+test('selected Runtime Codex artifact follow-up preserves native session lineage', () => {
+  const codexSessionId = '019e4346-a69c-7981-a84b-089c12204c73';
+  const userMessage = message('msg-user', 'user', 'continue from the selected Runtime Codex artifact', '2026-05-07T01:00:00.000Z');
+  const payload = requestPayloadForTurn(session({
+    messages: [
+      {
+        ...message('msg-prior', 'scenario', 'source artifact ready', '2026-05-07T00:00:00.000Z'),
+        objectReferences: [{ id: 'obj-source', kind: 'artifact', ref: 'artifact:r-resume-01-source-report', title: 'R-RESUME-01 source report', runId: 'run-source' }],
+      },
+      userMessage,
+    ],
+    artifacts: [{
+      id: 'r-resume-01-source-report',
+      type: 'research-report',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: '1',
+      dataRef: '.sciforge/artifacts/r-resume-01-source-report.md',
+      metadata: { runId: 'run-source' },
+    }],
+    runs: [{
+      id: 'run-source',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'source artifact',
+      response: 'source artifact ready',
+      createdAt: '2026-05-07T00:00:00.000Z',
+      completedAt: '2026-05-07T00:00:01.000Z',
+      raw: { codexSessionId },
+      objectReferences: [{ id: 'obj-thread', kind: 'run', ref: `codex-thread:${codexSessionId}`, title: 'Runtime Codex thread', runId: 'run-source' }],
+    }],
+  }), userMessage, [{
+    id: 'ref-source',
+    kind: 'task-result',
+    title: 'R-RESUME-01 source report',
+    ref: 'artifact:r-resume-01-source-report',
+  }]);
+
+  const raw = payload.runs[0]?.raw as { codexSessionId?: string } | undefined;
+  assert.equal(raw?.codexSessionId, codexSessionId);
+  assert.deepEqual(payload.runs[0]?.objectReferences?.map((reference) => reference.ref), []);
 });
 
 test('rolls back an edited user message and prunes later run-owned state', () => {

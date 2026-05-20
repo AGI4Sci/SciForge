@@ -21,6 +21,7 @@ export interface CodexRuntimeMetadata {
   attemptId: string;
   commandText?: string;
   codexSessionId?: string;
+  runtimeSandbox?: string;
   evidenceRefs: string[];
   resumeRequested: boolean;
 }
@@ -72,7 +73,7 @@ export function commandIdForText(commandText: string, workspace: string): string
     .update(String(Date.now()))
     .digest('hex')
     .slice(0, 16);
-  return `codex-${digest}`;
+  return `codex-command-${digest}`;
 }
 
 export function attemptIdForCommand(commandId: string): string {
@@ -88,6 +89,7 @@ export function runStartedEvent(metadata: CodexRuntimeMetadata): NormalizedAgent
       attemptId: metadata.attemptId,
       workspace: metadata.workspace,
       profile: metadata.profile,
+      runtimeSandbox: metadata.runtimeSandbox,
       codexSessionId: metadata.codexSessionId,
       resumeRequested: metadata.resumeRequested,
       evidenceRefs: metadata.evidenceRefs,

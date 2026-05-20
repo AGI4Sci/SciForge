@@ -111,14 +111,39 @@ async function writeGuiPresentShim(input: {
 }): Promise<{ binDir: string; shimPath: string }> {
   const binDir = join(getRuntimeHomePaths().runtimeRoot, 'gui-extension', 'bin');
   const shimPath = join(binDir, 'gui.present');
+  const commandShimPath = join(binDir, 'gui');
   await mkdir(binDir, { recursive: true });
   await writeFile(shimPath, [
     '#!/bin/sh',
-    `export ${GUI_EXTENSION_STATE_ENV}=${shellQuote(input.statePath)}`,
+    `if [ -z "\${${GUI_EXTENSION_STATE_ENV}:-}" ]; then`,
+    `  ${GUI_EXTENSION_STATE_ENV}=${shellQuote(input.statePath)}`,
+    'fi',
+    `export ${GUI_EXTENSION_STATE_ENV}`,
     `exec node --import ${shellQuote(input.tsxLoaderPath)} ${shellQuote(input.shimTargetPath)} "$@"`,
     '',
   ].join('\n'), 'utf8');
+  await writeFile(commandShimPath, [
+    '#!/bin/sh',
+    'case "$1" in',
+    '  present|gui.present)',
+    '    shift',
+    '    exec "$(dirname "$0")/gui.present" "$@"',
+    '    ;;',
+    '  ""|--help|-h)',
+    '    echo "Usage: gui present [gui.present args...]"',
+    '    echo "The injected SciForge GUI executable is also available as gui.present."',
+    '    exit 0',
+    '    ;;',
+    '  *)',
+    '    echo "Unsupported gui subcommand: $1" >&2',
+    '    echo "Use gui.present directly, or gui present ..." >&2',
+    '    exit 2',
+    '    ;;',
+    'esac',
+    '',
+  ].join('\n'), 'utf8');
   await chmod(shimPath, 0o755);
+  await chmod(commandShimPath, 0o755);
   return { binDir, shimPath };
 }
 

@@ -295,6 +295,7 @@ function withNativeCodexMessageRuntimeResult(result: unknown, message: string): 
       profile: asString(result.profile),
       workspace: asString(result.workspace),
       codexSessionId: asString(result.codexSessionId),
+      liveAcceptanceEligible: false,
     },
     displayIntent: {
       source: commandId ? `codex.native-message:${commandId}` : 'codex.native-message',
@@ -302,9 +303,10 @@ function withNativeCodexMessageRuntimeResult(result: unknown, message: string): 
         schemaVersion: 'sciforge.conversation-projection.v1',
         conversationId: commandId ? `runtime-codex:${commandId}` : 'runtime-codex:native-message',
         visibleAnswer: {
-          status: 'satisfied',
+          status: 'visible-not-live-acceptance',
           text: message,
           artifactRefs: [],
+          liveAcceptanceEligible: false,
         },
         artifacts: [],
         executionProcess: [{
@@ -320,6 +322,7 @@ function withNativeCodexMessageRuntimeResult(result: unknown, message: string): 
           status: 'unverified',
           verdict: 'native-message',
           verifierRef: commandId ? `codex.native-message:${commandId}` : 'codex.native-message',
+          liveAcceptanceEligible: false,
         },
         auditRefs,
         diagnostics: [],

@@ -1,0 +1,30 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "outDir": "dist-desktop",
+    "rootDir": ".",
+    "noEmit": false,
+    "types": ["node"]
+  },
+  "include": [
+    "src/desktop/**/*.ts",
+    "src/runtime/desktop/**/*.ts",
+    "src/runtime/codex/**/*.ts",
+    "src/runtime/server/**/*.ts",
+    "src/runtime/workspace-server.ts",
+    "src/runtime/parallel-instance-profile.ts",
+    "src/runtime/workspace-paths.ts",
+    "packages/backend/src/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist-ui",
+    "dist-desktop",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.spec.ts",
+    "**/*.spec.tsx"
+  ]
+}

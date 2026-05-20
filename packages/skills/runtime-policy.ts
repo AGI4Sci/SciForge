@@ -425,7 +425,7 @@ export function agentServerWorkspaceTaskRepairPromptPolicyLines(group: 'all' | '
   return [...groups.intro, ...groups.completion];
 }
 
-export function agentServerGeneratedTaskRetryDetail(kind: 'entrypoint' | 'path-only-task-files' | 'task-interface' | 'syntax-preflight' | 'payload-preflight' | 'provider-first-payload-preflight' | 'provider-first-recovery-adapter') {
+export function agentServerGeneratedTaskRetryDetail(kind: 'entrypoint' | 'path-only-task-files' | 'task-interface' | 'syntax-preflight' | 'payload-preflight' | 'provider-first-payload-preflight' | 'provider-first-recovery-adapter' | 'raw-data-pre-execution-guard') {
   if (kind === 'entrypoint') {
     return 'Retrying AgentServer generation once; entrypoint must be executable code, while reports/data must be emitted as artifacts or direct ToolPayload content.';
   }
@@ -441,9 +441,12 @@ export function agentServerGeneratedTaskRetryDetail(kind: 'entrypoint' | 'path-o
   if (kind === 'syntax-preflight') {
     return 'Retrying AgentServer generation once; generated task entrypoints must parse before SciForge runs workspace code.';
   }
-  if (kind === 'provider-first-recovery-adapter') {
-    return 'Using deterministic provider-first recovery adapter after strict retry still bypassed ready SciForge provider routes.';
-  }
+	  if (kind === 'provider-first-recovery-adapter') {
+	    return 'Using deterministic provider-first recovery adapter after strict retry still bypassed ready SciForge provider routes.';
+	  }
+	  if (kind === 'raw-data-pre-execution-guard') {
+	    return 'Blocking generated raw-data execution before retry/adapters; raw downloads require a ready raw-data-readiness-dossier with approval, budgets, checksums, and environment refs.';
+	  }
   return 'Retrying AgentServer generation once; generated tasks must consume the SciForge task input and write the declared output payload, not bake the current answer into static code.';
 }
 

@@ -34,6 +34,8 @@ export async function handleCodexRuntimeRoutes(
     const turn = await adapter.startTurn({
       commandText,
       workspacePath,
+      commandId: stringField(body.commandId),
+      attemptId: stringField(body.attemptId),
       profile: stringField(body.profile),
       codexSessionId: stringField(body.codexSessionId) ?? stringField(body.nativeSessionId),
       allowOpenAiRuntime: body.allowOpenAiRuntime === true,

@@ -6,6 +6,7 @@ export type DesktopAppDataLayout = {
   appName: string;
   appDataRoot: string;
   configDir: string;
+  runtimeCodexRoot: string;
   runtimeCodexHome: string;
   logDir: string;
   cacheDir: string;
@@ -28,12 +29,14 @@ export function buildDesktopAppDataLayout(options: DesktopAppDataLayoutOptions):
   const appName = safeAppName(options.appName ?? DEFAULT_APP_NAME);
   const appDataRoot = resolve(options.appDataRoot ?? defaultAppDataRoot(appName, options.platform, options.env));
   const workspacePath = resolve(options.workspacePath);
+  const runtimeCodexRoot = join(appDataRoot, 'runtime-codex');
   return {
     schemaVersion: 'sciforge.desktop.app-data.v1',
     appName,
     appDataRoot,
     configDir: join(appDataRoot, 'config'),
-    runtimeCodexHome: join(appDataRoot, 'runtime-codex-home'),
+    runtimeCodexRoot,
+    runtimeCodexHome: join(runtimeCodexRoot, 'codex-home'),
     logDir: join(appDataRoot, 'logs'),
     cacheDir: join(appDataRoot, 'cache'),
     globalStateDir: join(appDataRoot, 'state'),

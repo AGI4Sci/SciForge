@@ -161,7 +161,8 @@ test('聊天流式请求用上一轮 native Codex session id 恢复多轮上下�
     }],
   }));
 
-  assert.equal(bodies[0]?.commandText, 'Summarize current context');
+  assert.match(String(bodies[0]?.commandText), /^Continue the active Runtime Codex session\./);
+  assert.match(String(bodies[0]?.commandText), /\n\nSummarize current context$/);
   assert.equal(bodies[0]?.codexSessionId, '019e3e82-164d-79b2-a5d4-b16241620b10');
 });
 

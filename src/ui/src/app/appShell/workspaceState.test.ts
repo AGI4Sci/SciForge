@@ -484,6 +484,66 @@ test('recoverable focus survives reload for persisted Runtime Codex failed run s
   assert.equal(workspaceRecoveryFocusForState(workspace(reloadedSession))?.activeRunId, 'codex-command-reload');
 });
 
+test('recoverable focus survives reload for Runtime Codex audit-only failures without native session id', () => {
+  const failedRun = {
+    id: 'codex-command-no-session',
+    scenarioId: 'scenario-any',
+    status: 'failed' as const,
+    prompt: 'fail before session metadata',
+    response: 'Runtime Codex failed before session id',
+    createdAt: '2026-05-07T02:00:00.000Z',
+    completedAt: '2026-05-07T02:02:00.000Z',
+    raw: {
+      codexRuntimeFailure: {
+        schemaVersion: 'sciforge.runtime-codex-failed-run.v1',
+        failureKind: 'external-network',
+        ownerLayer: 'external-network',
+        retryable: true,
+        nativeResumeSupported: false,
+        commandId: 'codex-command-no-session',
+        attemptId: 'codex-command-no-session-attempt-1',
+        workspace: '/tmp/current',
+        profile: 'sciforge-runtime-deepseek',
+        provider: 'sciforge-deepseek-proxy',
+        model: 'bailian/deepseek-v4-flash',
+        exitCode: 1,
+        stderrSummary: 'getaddrinfo ENOTFOUND export.arxiv.org',
+        evidenceRefs: [
+          'audit:codex-runtime:codex-command-no-session:codex-command-no-session-attempt-1:stderr',
+        ],
+        recoverState: {
+          status: 'repair-needed',
+          failureKind: 'external-network',
+          ownerLayer: 'external-network',
+          retryable: true,
+          nativeResumeSupported: false,
+          resumeStrategy: 'audit-only-retry',
+          commandId: 'codex-command-no-session',
+          attemptId: 'codex-command-no-session-attempt-1',
+          workspace: '/tmp/current',
+          profile: 'sciforge-runtime-deepseek',
+          provider: 'sciforge-deepseek-proxy',
+          model: 'bailian/deepseek-v4-flash',
+          stderrSummary: 'getaddrinfo ENOTFOUND export.arxiv.org',
+          evidenceRefs: [
+            'audit:codex-runtime:codex-command-no-session:codex-command-no-session-attempt-1:stderr',
+          ],
+          recoverActions: ['Retry this Runtime Codex command from preserved audit refs.'],
+        },
+      },
+    },
+  };
+  const reloadedSession = JSON.parse(JSON.stringify(session([failedRun]))) as SciForgeSession;
+
+  assert.deepEqual(recoverableRunFocusForSession(reloadedSession), {
+    scenarioId: 'scenario-any',
+    sessionId: 'session-1',
+    activeRunId: 'codex-command-no-session',
+    reason: 'failed-run',
+    updatedAt: '2026-05-07T02:02:00.000Z',
+  });
+});
+
 test('recoverable focus does not restore stale partial run after newer satisfied run in same session', () => {
   const stalePartialRun = {
     id: 'run-stale-partial',

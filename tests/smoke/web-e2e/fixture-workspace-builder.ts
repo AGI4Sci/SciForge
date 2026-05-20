@@ -466,7 +466,7 @@ function buildConversationEventLog(input: {
         decisionId: 'decision-web-e2e-fixture',
         profileId: 'balanced-default',
         digest: 'sha256:web-e2e-fixture-decision',
-        summary: 'Scripted fixture routes through AgentServer mock with explicit refs.',
+        summary: 'Scripted offline Web E2E fixture routes through runtime dispatch with explicit refs.',
         refs: [
           { ref: 'file:.sciforge/provider-manifest.json', digest: 'sha256:provider-manifest', mime: 'application/json' },
           { ref: 'artifact:fixture-old-report', digest: 'sha256:old-report', mime: 'text/markdown' },
@@ -573,7 +573,7 @@ function buildWorkspaceState(input: {
         primaryGoal: 'Render only projection-backed final state from seeded refs.',
         requiredArtifactTypes: ['research-report', 'differential-expression-table'],
         preferredModules: ['report-viewer', 'record-table'],
-        source: 'agentserver',
+        source: 'runtime-dispatch',
         conversationEventLog: input.eventLog,
         conversationProjection: input.conversationProjection,
         taskOutcomeProjection: {

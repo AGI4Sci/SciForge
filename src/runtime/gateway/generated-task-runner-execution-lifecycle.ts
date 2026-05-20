@@ -83,6 +83,11 @@ export async function runGeneratedTaskExecutionLifecycle(
       payload: input.deps.repairNeededPayload(input.request, input.skill, rawDataGuard.reason ?? 'Raw-data pre-execution guard blocked generated task execution.', {
         rawDataPreExecutionGuard: rawDataGuard,
         taskRel: refs.taskRel,
+        blocker: 'raw-data-pre-execution-guard',
+        executionUnitStatus: 'needs-human',
+        agentServerRefs: {
+          rawDataPreExecutionGuard: rawDataGuard,
+        },
       }),
     };
   }

@@ -35,6 +35,7 @@ import {
   literatureProviderMetadataMissingFullTextStatus,
   literatureRecoverySearchQuery,
 } from '@sciforge-ui/runtime-contract/generated-work-policy';
+import { evaluateRawDataPreExecutionGuard } from '@sciforge-ui/runtime-contract/raw-data-execution-guard';
 import {
   evaluateGeneratedTaskPayloadPreflight,
   generatedTaskPayloadPreflightFailureReason,
@@ -213,6 +214,9 @@ export async function resolveGeneratedTaskGenerationRetryLifecycle(
   input: ResolveGeneratedTaskGenerationLifecycleInput,
 ): Promise<ResolveGeneratedTaskGenerationLifecycleResult> {
   let generation = input.generation;
+  const rawDataGuardPayload = rawDataPreExecutionGuardPayload(input, generation);
+  if (rawDataGuardPayload) return rawDataGuardPayload;
+
   const entrypointResult = await retryGeneratedTaskEntrypointContract(input, generation);
   if (entrypointResult.kind === 'payload') return entrypointResult;
   generation = entrypointResult.generation;
@@ -230,6 +234,39 @@ export async function resolveGeneratedTaskGenerationRetryLifecycle(
   generation = syntaxResult.generation;
 
   return await retryGeneratedTaskPayloadPreflightContract(input, generation);
+}
+
+function rawDataPreExecutionGuardPayload(
+  input: ResolveGeneratedTaskGenerationLifecycleInput,
+  generation: AgentServerTaskFilesGeneration,
+): ResolveGeneratedTaskGenerationLifecycleResult | undefined {
+  const rawDataGuard = evaluateRawDataPreExecutionGuard({
+    taskFiles: generation.response.taskFiles,
+    artifacts: input.request.artifacts,
+    references: input.request.references,
+    uiState: input.request.uiState,
+    actionSideEffects: input.request.actionSideEffects,
+  });
+  if (!rawDataGuard.blocked) return undefined;
+  const reason = rawDataGuard.reason ?? 'Raw-data pre-execution guard blocked generated task execution.';
+  emitGenerationRetryEvent(input.callbacks, reason, 'raw-data-pre-execution-guard');
+  return {
+    kind: 'payload',
+    payload: input.deps.repairNeededPayload(input.request, input.skill, reason, {
+      taskRel: safeWorkspaceRel(generation.response.entrypoint.path),
+      blocker: 'raw-data-pre-execution-guard',
+      executionUnitStatus: 'needs-human',
+      recoverActions: [
+        'Attach a ready raw-data-readiness-dossier with approval, budget, checksum, and environment refs before executing raw-data downloads.',
+        'If raw execution is out of scope, regenerate the task to produce a bounded dry-run or missing-data report instead of downloading raw data.',
+      ],
+      agentServerRefs: {
+        rawDataPreExecutionGuard: rawDataGuard,
+        generatedTaskRunId: generation.runId,
+        generatedTaskFiles: generation.response.taskFiles.map((file) => safeWorkspaceRel(file.path)),
+      },
+    }),
+  };
 }
 
 export async function completeAgentServerDirectPayloadLifecycle(input: {

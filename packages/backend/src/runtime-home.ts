@@ -6,7 +6,14 @@ export const RUNTIME_PROFILE = 'sciforge-runtime-deepseek';
 export const RUNTIME_PROVIDER = 'sciforge-deepseek-proxy';
 export const RUNTIME_MODEL = 'bailian/deepseek-v4-flash';
 export const RUNTIME_KEY_ENV = 'SCIFORGE_RUNTIME_API_KEY';
+export const RUNTIME_CODEX_SANDBOX_ENV = 'SCIFORGE_RUNTIME_CODEX_SANDBOX';
+export const DEFAULT_RUNTIME_CODEX_SANDBOX = 'workspace-write';
 export const DEFAULT_PROXY_BASE_URL = 'http://127.0.0.1:3891/v1';
+export type RuntimeCodexSandbox = 'read-only' | 'workspace-write' | 'danger-full-access';
+export const RUNTIME_WORKSPACE_WRITE_NETWORK_CONFIG_ARGS = [
+  '--config',
+  'sandbox_workspace_write.network_access=true',
+] as const;
 
 const backendRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const devRuntimeRoot = join(backendRoot, '.codex-runtime');
@@ -99,6 +106,9 @@ wire_api = "responses"
 [features]
 memories = true
 prevent_idle_sleep = true
+
+[sandbox_workspace_write]
+network_access = true
 `;
 }
 
@@ -113,6 +123,7 @@ export function resolveRuntimeWorkspace(options: RuntimeExecOptions = {}): strin
 
 export async function assertRuntimeReady(paths = getRuntimeHomePaths()): Promise<void> {
   assertPathInside(paths.codexHome, paths.runtimeRoot, 'runtime CODEX_HOME');
+  resolveRuntimeCodexSandbox(process.env);
   const config = await readRuntimeConfig(paths.configPath);
   for (const required of [RUNTIME_PROFILE, RUNTIME_PROVIDER, RUNTIME_MODEL, RUNTIME_KEY_ENV, 'wire_api = "responses"']) {
     if (!config.includes(required)) {
@@ -138,6 +149,14 @@ export async function assertRuntimeReady(paths = getRuntimeHomePaths()): Promise
   if (process.env.SCIFORGE_ALLOW_OPENAI_RUNTIME !== '1' && /openai/i.test(`${provider}\n${model}\n${proxyBaseUrl}`)) {
     throw new Error('OpenAI Runtime Codex provider/model is disabled unless SCIFORGE_ALLOW_OPENAI_RUNTIME=1.');
   }
+}
+
+export function resolveRuntimeCodexSandbox(env: NodeJS.ProcessEnv = process.env): RuntimeCodexSandbox {
+  const value = env[RUNTIME_CODEX_SANDBOX_ENV]?.trim() || DEFAULT_RUNTIME_CODEX_SANDBOX;
+  if (value === 'read-only' || value === 'workspace-write' || value === 'danger-full-access') return value;
+  throw new Error(
+    `${RUNTIME_CODEX_SANDBOX_ENV} must be one of read-only, workspace-write, or danger-full-access; found ${value}.`,
+  );
 }
 
 export function assertPathInside(child: string, parent: string, label: string): void {

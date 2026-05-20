@@ -12,6 +12,7 @@ import { collectRuntimeRefsFromValue } from '@sciforge-ui/runtime-contract/refer
 import {
   buildSilentStreamDecisionRecord,
   buildSilentStreamRunId,
+  isSeedDemoOrFixtureMessage,
   projectToolDoneEvent,
   projectToolStartedEvent,
   type SilentStreamDecisionRecord,
@@ -52,19 +53,6 @@ function stringRecordField(record: Record<string, unknown>, key: string): string
 
 function asFiniteNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
-function isSeedDemoOrFixtureMessage(message: unknown) {
-  if (!isRecord(message)) return false;
-  const provenance = isRecord(message.provenance) ? message.provenance : {};
-  const marker = [
-    message.id,
-    message.role,
-    provenance.kind,
-    provenance.source,
-  ].map((value) => String(value ?? '').toLowerCase()).join(' ');
-  if (provenance.runtimeRequestEligible === false || provenance.liveAcceptanceEligible === false) return true;
-  return /\b(seed|demo|fixture)\b|scenariodemodata/.test(marker) || message.role === 'scenario';
 }
 
 function asStringArray(value: unknown): string[] | undefined {
@@ -319,7 +307,7 @@ export async function sendSciForgeToolMessage(
     },
   });
   const presented = attachRuntimeGuiPresentationToResponse(normalized, result);
-  const codexSessionId = codexSessionIdFromRuntimeResult(result);
+  const codexSessionId = codexSessionIdFromRuntimeResult(result) ?? codexSessionIdFromRuntimeEvents(runtimeEvents);
   if (!codexSessionId) return presented;
   const codexThreadRef = codexThreadObjectReference(codexSessionId, commandId);
   return {
@@ -369,6 +357,7 @@ function attachRuntimeGuiPresentationToResponse(
       : undefined;
   const source = asString(presentation?.source);
   if (source?.startsWith('gui.present:')) {
+    const presentedObjectReference = objectReferenceFromGuiPresentation(presentation, response.run.id);
     return {
       ...response,
       message: {
@@ -386,6 +375,7 @@ function attachRuntimeGuiPresentationToResponse(
           profile: asString(presentation?.profile),
           workspace: asString(presentation?.workspace),
         },
+        objectReferences: appendObjectReference(response.message.objectReferences, presentedObjectReference),
       },
       run: {
         ...response.run,
@@ -393,6 +383,7 @@ function attachRuntimeGuiPresentationToResponse(
           ...(isRecord(response.run.raw) ? response.run.raw : {}),
           guiPresentation: presentation,
         },
+        objectReferences: appendObjectReference(response.run.objectReferences, presentedObjectReference),
       },
     };
   }
@@ -431,6 +422,62 @@ function attachRuntimeGuiPresentationToResponse(
   };
 }
 
+function objectReferenceFromGuiPresentation(presentation: Record<string, unknown> | undefined, runId: string): ObjectReference | undefined {
+  const rawRef = asString(presentation?.ref);
+  if (!rawRef) return undefined;
+  const artifactId = artifactIdFromPresentationRef(rawRef);
+  return {
+    id: artifactId,
+    kind: 'artifact',
+    title: asString(presentation?.title) ?? artifactId,
+    ref: `artifact:${artifactId}`,
+    artifactType: artifactTypeFromPresentationHint(asString(presentation?.hint)),
+    runId,
+    preferredView: preferredViewFromPresentationHint(asString(presentation?.hint)),
+    presentationRole: 'primary-deliverable',
+    status: 'available',
+    summary: asString(presentation?.text)?.slice(0, 360) ?? rawRef,
+    provenance: {
+      dataRef: rawRef,
+      path: rawRef,
+      producer: asString(presentation?.source),
+    },
+  };
+}
+
+function appendObjectReference(
+  references: ObjectReference[] | undefined,
+  reference: ObjectReference | undefined,
+): ObjectReference[] | undefined {
+  if (!reference) return references;
+  const existing = references ?? [];
+  if (existing.some((item) => item.ref === reference.ref || item.id === reference.id)) return existing;
+  return [...existing, reference];
+}
+
+function artifactIdFromPresentationRef(ref: string): string {
+  const withoutScheme = ref.replace(/^artifact::?/i, '');
+  const lastSegment = withoutScheme.split(/[\\/]/).filter(Boolean).at(-1) ?? withoutScheme;
+  return lastSegment.replace(/\.[a-z0-9]+$/i, '') || 'runtime-artifact';
+}
+
+function artifactTypeFromPresentationHint(hint: string | undefined): string {
+  if (hint === 'table') return 'table';
+  if (hint === 'diff') return 'diff';
+  if (hint === 'image') return 'image';
+  if (hint === 'notebook') return 'notebook';
+  return 'research-report';
+}
+
+function preferredViewFromPresentationHint(hint: string | undefined): string | undefined {
+  if (hint === 'table') return 'record-table';
+  if (hint === 'diff') return 'diff-viewer';
+  if (hint === 'image') return 'image-viewer';
+  if (hint === 'notebook') return 'notebook-viewer';
+  if (hint === 'markdown' || hint === 'auto' || !hint) return 'report-viewer';
+  return undefined;
+}
+
 function buildCodexRuntimeStreamRequest(input: {
   input: SendAgentMessageInput;
   commandId: string;
@@ -441,8 +488,8 @@ function buildCodexRuntimeStreamRequest(input: {
   const profile = config.runtimeProfile?.trim() || DEFAULT_RUNTIME_PROFILE;
   const provider = config.modelProvider.trim() || 'sciforge-deepseek-proxy';
   const model = config.modelName.trim() || 'bailian/deepseek-v4-flash';
-  const commandText = buildCodexRuntimeCommandText(input);
-  const codexSessionId = latestCodexSessionId(input.input.runs);
+  const codexSessionId = selectedCodexSessionId(input.input) ?? latestCodexSessionId(input.input.runs);
+  const commandText = buildCodexRuntimeCommandText(input, { resumeRequested: Boolean(codexSessionId) });
   const attemptId = `${input.commandId}-attempt-1`;
   return {
     schemaVersion: CODEX_RUNTIME_REQUEST_SCHEMA_VERSION,
@@ -578,39 +625,186 @@ function assertCodexRuntimeStreamRequestBoundary(request: ReturnType<typeof buil
   if (!request.commandText.trim()) throw new Error('Runtime Codex request commandText is required.');
 }
 
-function buildCodexRuntimeCommandText(input: Parameters<typeof buildCodexRuntimeStreamRequest>[0]) {
+function buildCodexRuntimeCommandText(
+  input: Parameters<typeof buildCodexRuntimeStreamRequest>[0],
+  options: { resumeRequested?: boolean } = {},
+) {
   const prompt = input.input.prompt.trim();
   const refs = uniqueRuntimeStringList(input.referenceSummary.flatMap((reference) => {
     const readableRefs = [reference.dataRef, reference.path, reference.ref].filter((value): value is string => Boolean(asString(value)));
     return readableRefs.length ? readableRefs : [reference.id];
   })).slice(0, 12);
-  if (!refs.length) return prompt;
-  const refFlags = refs.map((ref) => `--ref ${quoteTerminalArg(ref)}`).join(' ');
-  return `ask ${refFlags} ${quoteTerminalArg(prompt)}`;
+  const taskText = refs.length
+    ? `ask ${refs.map((ref) => `--ref ${quoteTerminalArg(ref)}`).join(' ')} ${quoteTerminalArg(prompt)}`
+    : prompt;
+  if (!options.resumeRequested) return taskText;
+  return [
+    'Continue the active Runtime Codex session. Interpret relative references such as "previous turn", "last answer", or "that passphrase" against the immediately preceding non-seed user/assistant exchange in this native Codex session unless selected refs say otherwise.',
+    taskText,
+  ].join('\n\n');
 }
 
 function latestCodexSessionId(runs: SendAgentMessageInput['runs']): string | undefined {
   for (const run of [...(runs ?? [])].reverse()) {
-    const raw = isRecord(run.raw) ? run.raw : undefined;
-    const direct = asString(raw?.codexSessionId) ?? asString(raw?.nativeSessionId);
-    if (direct) return direct;
-    const runtimeFailure = isRecord(raw?.codexRuntimeFailure) ? raw.codexRuntimeFailure : undefined;
-    const runtimeRecoverState = isRecord(runtimeFailure?.recoverState) ? runtimeFailure.recoverState : undefined;
-    const failureSessionId = asString(runtimeFailure?.codexSessionId) ?? asString(runtimeRecoverState?.codexSessionId);
-    if (failureSessionId) return failureSessionId;
-    const result = isRecord(raw?.result) ? raw.result : undefined;
-    const resultSessionId = asString(result?.codexSessionId) ?? asString(result?.nativeSessionId);
-    if (resultSessionId) return resultSessionId;
-    const parsed = parsedRuntimeOutputResult(raw);
-    const parsedSessionId = codexSessionIdFromRuntimeResult(parsed);
-    if (parsedSessionId) return parsedSessionId;
-    const objectRefSessionId = run.objectReferences?.map((reference) => asString(reference.ref))
-      .find((ref): ref is string => Boolean(ref?.startsWith('codex-thread:')))
-      ?.replace(/^codex-thread:/, '')
-      .trim();
-    if (objectRefSessionId) return objectRefSessionId;
+    const sessionId = codexSessionIdFromRun(run);
+    if (sessionId) return sessionId;
   }
   return undefined;
+}
+
+function selectedCodexSessionId(input: SendAgentMessageInput): string | undefined {
+  if (!input.references?.length) return undefined;
+  const selectedRefs = selectedReferenceScope(input.references);
+  if (!selectedRefs.size) return undefined;
+  const runById = new Map((input.runs ?? []).map((run) => [run.id, run]));
+  for (const runId of selectedRunIdsFromReferences(input.references)) {
+    const sessionId = codexSessionIdFromRun(runById.get(runId));
+    if (sessionId) return sessionId;
+  }
+  for (const artifact of input.artifacts ?? []) {
+    if (!artifactReferenceAliases(artifact).some((ref) => selectedRefs.has(ref))) continue;
+    const runId = artifactRunId(artifact);
+    const sessionId = runId ? codexSessionIdFromRun(runById.get(runId)) : undefined;
+    if (sessionId) return sessionId;
+  }
+  for (const run of [...(input.runs ?? [])].reverse()) {
+    if (!runObjectReferenceAliases(run).some((ref) => selectedRefs.has(ref))) continue;
+    const sessionId = codexSessionIdFromRun(run);
+    if (sessionId) return sessionId;
+  }
+  for (const run of [...(input.runs ?? [])].reverse()) {
+    if (!runReferenceAliases(run).some((ref) => selectedRefs.has(ref))) continue;
+    const sessionId = codexSessionIdFromRun(run);
+    if (sessionId) return sessionId;
+  }
+  return undefined;
+}
+
+function codexSessionIdFromRun(run: NonNullable<SendAgentMessageInput['runs']>[number] | undefined): string | undefined {
+  if (!run) return undefined;
+  const raw = isRecord(run.raw) ? run.raw : undefined;
+  const direct = asString(raw?.codexSessionId) ?? asString(raw?.nativeSessionId);
+  if (direct) return direct;
+  const runtimeFailure = isRecord(raw?.codexRuntimeFailure) ? raw.codexRuntimeFailure : undefined;
+  const runtimeRecoverState = isRecord(runtimeFailure?.recoverState) ? runtimeFailure.recoverState : undefined;
+  const failureSessionId = asString(runtimeFailure?.codexSessionId) ?? asString(runtimeRecoverState?.codexSessionId);
+  if (failureSessionId) return failureSessionId;
+  const result = isRecord(raw?.result) ? raw.result : undefined;
+  const resultSessionId = asString(result?.codexSessionId) ?? asString(result?.nativeSessionId);
+  if (resultSessionId) return resultSessionId;
+  const parsed = parsedRuntimeOutputResult(raw);
+  const parsedSessionId = codexSessionIdFromRuntimeResult(parsed);
+  if (parsedSessionId) return parsedSessionId;
+  const objectRefSessionId = run.objectReferences?.map((reference) => asString(reference.ref))
+    .find((ref): ref is string => Boolean(ref?.startsWith('codex-thread:')))
+    ?.replace(/^codex-thread:/, '')
+    .trim();
+  return objectRefSessionId || undefined;
+}
+
+function selectedReferenceScope(references: NonNullable<SendAgentMessageInput['references']>) {
+  return new Set(references.flatMap(selectedReferenceAliases));
+}
+
+function selectedReferenceAliases(reference: NonNullable<SendAgentMessageInput['references']>[number]): string[] {
+  const payload = isRecord(reference.payload) ? reference.payload : {};
+  const currentReference = isRecord(payload.currentReference) ? payload.currentReference : {};
+  const objectReference = isRecord(payload.objectReference) ? payload.objectReference : {};
+  const provenance = isRecord(currentReference.provenance) ? currentReference.provenance : {};
+  const objectProvenance = isRecord(objectReference.provenance) ? objectReference.provenance : {};
+  const aliases = [
+    reference.ref,
+    reference.sourceId,
+    reference.runId ? `run:${reference.runId}` : undefined,
+    asString(payload.ref),
+    asString(payload.path),
+    asString(payload.dataRef),
+    asString(payload.sourceRef),
+    asString(currentReference.ref),
+    asString(currentReference.id),
+    asString(currentReference.runId) ? `run:${asString(currentReference.runId)}` : undefined,
+    asString(currentReference.artifactType),
+    asString(provenance.path),
+    asString(provenance.dataRef),
+    asString(objectReference.ref),
+    asString(objectReference.id),
+    asString(objectReference.runId) ? `run:${asString(objectReference.runId)}` : undefined,
+    asString(objectReference.artifactType),
+    asString(objectProvenance.path),
+    asString(objectProvenance.dataRef),
+  ];
+  if (reference.sourceId) aliases.push(`artifact:${reference.sourceId}`);
+  const currentId = asString(currentReference.id);
+  if (currentId) aliases.push(`artifact:${currentId}`);
+  const objectId = asString(objectReference.id);
+  if (objectId) aliases.push(`artifact:${objectId}`);
+  return uniqueRuntimeStringList(aliases);
+}
+
+function selectedRunIdsFromReferences(references: NonNullable<SendAgentMessageInput['references']>) {
+  return uniqueRuntimeStringList(references.flatMap((reference) => {
+    const payload = isRecord(reference.payload) ? reference.payload : {};
+    const currentReference = isRecord(payload.currentReference) ? payload.currentReference : {};
+    const objectReference = isRecord(payload.objectReference) ? payload.objectReference : {};
+    return [
+      reference.runId,
+      asString(payload.runId),
+      asString(currentReference.runId),
+      asString(objectReference.runId),
+    ];
+  }));
+}
+
+function artifactReferenceAliases(artifact: NonNullable<SendAgentMessageInput['artifacts']>[number]) {
+  return uniqueRuntimeStringList([
+    artifact.id,
+    `artifact:${artifact.id}`,
+    artifact.dataRef,
+    artifact.path,
+    artifact.delivery?.ref,
+    artifact.delivery?.readableRef,
+    artifact.delivery?.rawRef,
+    stringRecordField(artifact.metadata ?? {}, 'markdownRef'),
+    stringRecordField(artifact.metadata ?? {}, 'outputRef'),
+    stringRecordField(artifact.metadata ?? {}, 'artifactRef'),
+  ]);
+}
+
+function artifactRunId(artifact: NonNullable<SendAgentMessageInput['artifacts']>[number]) {
+  const metadata = artifact.metadata ?? {};
+  return stringRecordField(metadata, 'runId')
+    ?? stringRecordField(metadata, 'sourceRunId')
+    ?? stringRecordField(metadata, 'producerRunId');
+}
+
+function runReferenceAliases(run: NonNullable<SendAgentMessageInput['runs']>[number]) {
+  return uniqueRuntimeStringList([
+    run.id,
+    `run:${run.id}`,
+    ...(run.references ?? []).flatMap((reference) => [
+      reference.ref,
+      reference.sourceId,
+      reference.runId ? `run:${reference.runId}` : undefined,
+    ]),
+    ...(run.objectReferences ?? []).flatMap((reference) => [
+      reference.ref,
+      reference.id,
+      reference.runId ? `run:${reference.runId}` : undefined,
+      reference.provenance?.path,
+      reference.provenance?.dataRef,
+    ]),
+    ...collectRuntimeRefsFromValue(run.raw, { maxDepth: 4, maxRefs: 48, includeIds: true }),
+  ]);
+}
+
+function runObjectReferenceAliases(run: NonNullable<SendAgentMessageInput['runs']>[number]) {
+  return uniqueRuntimeStringList((run.objectReferences ?? []).flatMap((reference) => [
+    reference.ref,
+    reference.id,
+    reference.runId ? `run:${reference.runId}` : undefined,
+    reference.provenance?.path,
+    reference.provenance?.dataRef,
+  ]));
 }
 
 function parsedRuntimeOutputResult(raw: Record<string, unknown> | undefined): unknown {
@@ -637,6 +831,31 @@ function codexSessionIdFromRuntimeResult(value: unknown): string | undefined {
     ?? asString(output?.nativeSessionId)
     ?? asString(runtimeFailure?.codexSessionId)
     ?? asString(recoverState?.codexSessionId);
+}
+
+function codexSessionIdFromRuntimeEvents(events: AgentStreamEvent[]): string | undefined {
+  for (const event of [...events].reverse()) {
+    const eventRecord = isRecord(event) ? event as Record<string, unknown> : {};
+    const raw = isRecord(event.raw) ? event.raw : {};
+    const nestedRaw = isRecord(raw.raw) ? raw.raw : {};
+    const payload = isRecord(raw.payload) ? raw.payload : {};
+    const nestedPayload = isRecord(nestedRaw.payload) ? nestedRaw.payload : {};
+    const id = asString(eventRecord.codexSessionId)
+      ?? asString(raw.codexSessionId)
+      ?? asString(raw.nativeSessionId)
+      ?? asString(raw.thread_id)
+      ?? asString(nestedRaw.codexSessionId)
+      ?? asString(nestedRaw.nativeSessionId)
+      ?? asString(nestedRaw.thread_id)
+      ?? asString(payload.codexSessionId)
+      ?? asString(payload.nativeSessionId)
+      ?? asString(payload.thread_id)
+      ?? asString(nestedPayload.codexSessionId)
+      ?? asString(nestedPayload.nativeSessionId)
+      ?? asString(nestedPayload.thread_id);
+    if (id) return id;
+  }
+  return undefined;
 }
 
 function codexThreadObjectReference(codexSessionId: string, runId: string): ObjectReference {
@@ -848,35 +1067,46 @@ function runtimeFailureMetadata(
       summarizeRuntimeFailureMessages(events),
     ].filter(Boolean).join(' '))
     ?? stderrSummary;
-  const publicFailureReason = publicRuntimeFailureReason(failureSignal, exitCode);
+  const classification = classifyRuntimeFailure(failureSignal, exitCode);
+  const codexSessionId = asString(raw.codexSessionId) ?? asString(rawNested.codexSessionId) ?? request.codexSessionId;
   return {
     schemaVersion: 'sciforge.runtime-codex-failed-run.v1',
+    failureKind: classification.failureKind,
+    ownerLayer: classification.ownerLayer,
+    retryable: classification.retryable,
+    nativeResumeSupported: Boolean(codexSessionId),
     commandId: asString(raw.commandId) ?? request.commandId,
     attemptId: asString(raw.attemptId) ?? request.attemptId,
     workspace: asString(raw.workspace) ?? asString(rawNested.workspace) ?? request.workspacePath,
     profile: asString(raw.profile) ?? asString(rawNested.profile) ?? request.profile,
     provider: asString(raw.provider) ?? asString(rawNested.provider) ?? asString(runtime.provider) ?? 'unknown',
     model: asString(raw.model) ?? asString(rawNested.model) ?? asString(runtime.model) ?? 'unknown',
-    codexSessionId: asString(raw.codexSessionId) ?? asString(rawNested.codexSessionId) ?? request.codexSessionId,
+    codexSessionId,
     exitCode,
     stderrSummary,
-    publicFailureReason,
+    publicFailureReason: classification.publicFailureReason,
     evidenceRefs,
     recoverState: {
       status: 'repair-needed',
-      retryable: true,
+      failureKind: classification.failureKind,
+      ownerLayer: classification.ownerLayer,
+      retryable: classification.retryable,
+      nativeResumeSupported: Boolean(codexSessionId),
+      resumeStrategy: codexSessionId ? 'native-session-resume' : 'audit-only-retry',
       commandId: asString(raw.commandId) ?? request.commandId,
       attemptId: asString(raw.attemptId) ?? request.attemptId,
       workspace: asString(raw.workspace) ?? asString(rawNested.workspace) ?? request.workspacePath,
       profile: asString(raw.profile) ?? asString(rawNested.profile) ?? request.profile,
       provider: asString(raw.provider) ?? asString(rawNested.provider) ?? asString(runtime.provider) ?? 'unknown',
       model: asString(raw.model) ?? asString(rawNested.model) ?? asString(runtime.model) ?? 'unknown',
-      codexSessionId: asString(raw.codexSessionId) ?? asString(rawNested.codexSessionId) ?? request.codexSessionId,
+      codexSessionId,
       stderrSummary,
-      publicFailureReason,
+      publicFailureReason: classification.publicFailureReason,
       evidenceRefs,
       recoverActions: [
-        'Retry or continue from this failed Runtime Codex run using preserved audit refs only.',
+        codexSessionId
+          ? 'Resume the native Runtime Codex session with the preserved codexSessionId and audit refs.'
+          : 'Retry this Runtime Codex command from preserved audit refs; native resume is unavailable because no codexSessionId was produced.',
         'Keep the same Runtime Codex profile/workspace unless the audit refs show a configuration failure.',
       ],
     },
@@ -884,29 +1114,53 @@ function runtimeFailureMetadata(
 }
 
 function publicRuntimeFailureReason(stderrSummary: string | undefined, exitCode: number | undefined) {
+  return classifyRuntimeFailure(stderrSummary, exitCode).publicFailureReason;
+}
+
+function classifyRuntimeFailure(stderrSummary: string | undefined, exitCode: number | undefined) {
   const text = stderrSummary ?? '';
   if (/completed without gui\.present|gui-present-required/i.test(text)) {
-    return 'Runtime Codex completed without gui.present; SciForge withheld raw provider text from the primary result.';
+    return runtimeFailureClassification('missing-gui-present', 'runtime-projection', true, 'Runtime Codex completed without gui.present; SciForge withheld raw provider text from the primary result.');
   }
   if (/401|unauthorized|invalid token/i.test(text)) {
-    return 'Runtime Codex provider rejected credentials (401 Unauthorized). Check SCIFORGE_RUNTIME_API_KEY and the configured proxy upstream.';
+    return runtimeFailureClassification('provider-auth', 'provider-config', false, 'Runtime Codex provider rejected credentials (401 Unauthorized). Check SCIFORGE_RUNTIME_API_KEY and the configured proxy upstream.');
   }
   if (/403|forbidden/i.test(text)) {
-    return 'Runtime Codex provider or plugin access was forbidden (403). Check the configured proxy upstream credentials and account access.';
+    return runtimeFailureClassification('provider-forbidden', 'provider-access', false, 'Runtime Codex provider or plugin access was forbidden (403). Check the configured proxy upstream credentials and account access.');
   }
   if (/429|rate limit|quota|insufficient_quota/i.test(text)) {
-    return 'Runtime Codex provider rate limit or quota blocked the run. Check the configured proxy upstream account limits.';
+    return runtimeFailureClassification('provider-quota', 'provider-budget', false, 'Runtime Codex provider rate limit or quota blocked the run. Check the configured proxy upstream account limits.');
   }
   if (/502|bad gateway/i.test(text)) {
-    return 'Runtime Codex provider gateway returned 502 Bad Gateway. Treat this as an upstream/transient provider failure and retry with preserved audit refs.';
+    return runtimeFailureClassification('provider-gateway', 'provider-upstream', true, 'Runtime Codex provider gateway returned 502 Bad Gateway. Treat this as an upstream/transient provider failure and retry with preserved audit refs.');
   }
   if (/ECONNREFUSED|connection refused|failed to connect/i.test(text)) {
-    return 'Runtime Codex could not reach the configured provider proxy. Check that the proxy is running and the base URL is correct.';
+    return runtimeFailureClassification('provider-proxy-unreachable', 'provider-proxy', true, 'Runtime Codex could not reach the configured provider proxy. Check that the proxy is running and the base URL is correct.');
   }
-  if (/ENOTFOUND|network|timeout|timed out/i.test(text)) {
-    return 'Runtime Codex provider network request failed. Check network access and the configured proxy upstream.';
+  if (/ENOTFOUND|EAI_AGAIN|getaddrinfo|nodename nor servname|DNS|network|timeout|timed out/i.test(text)) {
+    return runtimeFailureClassification('external-network', 'external-network', true, 'Runtime Codex provider network request failed. Check network access and the configured proxy upstream.');
   }
-  return `Runtime Codex exited with code ${exitCode ?? 'unknown'}.`;
+  if (/ENOENT|spawn .*ENOENT|command not found|executable not found|No such file or directory/i.test(text)) {
+    return runtimeFailureClassification('runtime-tool-missing', 'local-runtime', false, 'Runtime Codex could not start a required local tool or executable. Check the Runtime Codex installation and PATH.');
+  }
+  if (/ENOSPC|no space left|tmpdir|temporary directory|permission denied|EACCES/i.test(text)) {
+    return runtimeFailureClassification('local-environment', 'local-environment', false, 'Runtime Codex failed in the local environment. Check disk space, temporary directory access, and workspace permissions.');
+  }
+  return runtimeFailureClassification('runtime-exit', 'runtime-codex', true, `Runtime Codex exited with code ${exitCode ?? 'unknown'}.`);
+}
+
+function runtimeFailureClassification(
+  failureKind: string,
+  ownerLayer: string,
+  retryable: boolean,
+  publicFailureReason: string,
+) {
+  return {
+    failureKind,
+    ownerLayer,
+    retryable,
+    publicFailureReason,
+  };
 }
 
 function summarizeRuntimeStderr(events: AgentStreamEvent[]) {
@@ -1024,7 +1278,7 @@ function isForegroundReadableResultEvent(event: AgentStreamEvent) {
 }
 
 function buildTransportContextReusePolicy(input: SendAgentMessageInput) {
-  const nonSeedMessageCount = (input.messages ?? []).filter((message) => !message.id.startsWith('seed')).length;
+  const nonSeedMessageCount = (input.messages ?? []).filter((message) => !isSeedDemoOrFixtureMessage(message)).length;
   const hasPriorWork = nonSeedMessageCount > 1
     || (input.runs?.length ?? 0) > 0
     || (input.artifacts?.length ?? 0) > 0

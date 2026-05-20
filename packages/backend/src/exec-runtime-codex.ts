@@ -4,12 +4,15 @@ import { assertCodexNoForkGate } from './codex-compatibility-gate';
 import {
   assertRuntimeReady,
   ensureRuntimeHome,
+  resolveRuntimeCodexSandbox,
   resolveRuntimeWorkspace,
   RUNTIME_PROFILE,
+  RUNTIME_WORKSPACE_WRITE_NETWORK_CONFIG_ARGS,
 } from './runtime-home';
 
 const options = parseArgs(process.argv.slice(2));
 const paths = await ensureRuntimeHome({ proxyBaseUrl: options.proxyBaseUrl });
+const sandbox = options.sandbox ?? resolveRuntimeCodexSandbox(process.env);
 const workspace = resolveRuntimeWorkspace({
   workspace: options.workspace,
   allowWorkspaceOutsideRuntimeRoot: options.allowWorkspaceOutsideRuntimeRoot,
@@ -19,6 +22,7 @@ await assertRuntimeReady(paths);
 const codexGate = assertCodexNoForkGate({ codexCommand: process.env.SCIFORGE_RUNTIME_CODEX_COMMAND });
 
 const child = spawn(codexGate.codexCommand, [
+  ...RUNTIME_WORKSPACE_WRITE_NETWORK_CONFIG_ARGS,
   'exec',
   '--json',
   '--profile',
@@ -26,7 +30,7 @@ const child = spawn(codexGate.codexCommand, [
   '--cd',
   workspace,
   '--sandbox',
-  options.sandbox,
+  sandbox,
   '--skip-git-repo-check',
   '--ephemeral',
   '--ignore-rules',
@@ -62,7 +66,7 @@ function parseArgs(args: string[]) {
     workspace: get('--workspace'),
     proxyBaseUrl: get('--proxy-base-url') ?? process.env.SCIFORGE_PROXY_BASE_URL,
     allowWorkspaceOutsideRuntimeRoot: args.includes('--allow-workspace-outside-runtime-root'),
-    sandbox: get('--sandbox') ?? 'workspace-write',
+    sandbox: get('--sandbox'),
   };
 }
 

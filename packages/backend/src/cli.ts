@@ -13,6 +13,7 @@ const server = await startCodexResponsesProxyServer({
   upstreamBaseUrl: options.upstreamBaseUrl,
   upstreamApiKey: options.upstreamApiKey,
   defaultModel: options.defaultModel,
+  forceNonStreamingUpstream: options.forceNonStreamingUpstream,
   log: options.quiet ? undefined : (message) => console.error(`[sciforge-backend] ${message}`),
 });
 
@@ -20,6 +21,7 @@ if (!options.quiet) {
   console.log(`SciForge Codex Responses proxy listening at ${server.url}/v1`);
   console.log(`Upstream Chat Completions base URL: ${options.upstreamBaseUrl}`);
   console.log(`Upstream key source: ${options.upstreamKeySource ?? 'incoming Authorization header'}`);
+  console.log(`Force non-streaming upstream: ${options.forceNonStreamingUpstream ? 'yes' : 'no'}`);
 }
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {

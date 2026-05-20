@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
-import { createServer } from 'node:net';
-import { mkdir, mkdtemp, readFile } from 'node:fs/promises';
+import { createServer, type AddressInfo } from 'node:net';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -18,9 +18,10 @@ test('production launcher exposes ready and health over dynamic loopback control
     workspacePath: join(root, 'workspace'),
     appDataRoot: join(root, 'app-data'),
     requestedControlPort: 0,
-    requestedUiPort: 5179,
-    requestedWorkspacePort: 6179,
-    requestedRuntimeCodexPort: 18086,
+    requestedUiPort: 0,
+    requestedWorkspacePort: 0,
+    requestedProviderProxyPort: 0,
+    requestedRuntimeCodexPort: 0,
   });
   const started = await launcher.start();
   try {
@@ -30,15 +31,14 @@ test('production launcher exposes ready and health over dynamic loopback control
     const health = await fetchJson(`${started.controlUrl}/health`) as Record<string, unknown>;
     assert.equal(health.ok, true);
     assert.equal(health.ready, true);
-    assert.deepEqual(
-      (health.ports as Array<{ name: string; actual: number }>).map((port) => [port.name, port.actual]),
-      [
-        ['control', new URL(started.controlUrl).port ? Number(new URL(started.controlUrl).port) : 0],
-        ['ui', 5179],
-        ['workspace-writer', 6179],
-        ['runtime-codex', 18086],
-      ],
-    );
+    const ports = health.ports as Array<{ name: string; requested: number; actual: number; url: string; conflict: boolean }>;
+    assert.deepEqual(ports.map((port) => port.name), ['control', 'ui', 'workspace-writer', 'provider-proxy', 'runtime-codex']);
+    for (const port of ports) {
+      assert.ok(port.actual > 0, `${port.name} actual port should be assigned`);
+      assert.equal(port.url, `http://127.0.0.1:${port.actual}`);
+      assert.equal(port.conflict, false, `${port.name} dynamic port should not report a conflict`);
+    }
+    assert.equal(ports.find((port) => port.name === 'control')?.actual, Number(new URL(started.controlUrl).port));
   } finally {
     await launcher.shutdown();
   }
@@ -71,6 +71,84 @@ test('production launcher moves control API to the next free loopback port on co
   }
 });
 
+test('production launcher resolves sidecar port conflicts and injects actual ports into managed services', async () => {
+  const root = await tempRoot();
+  const occupiedWorkspace = createServer();
+  const occupiedProviderProxy = createServer();
+  const occupiedRuntime = createServer();
+  occupiedWorkspace.listen(0, '127.0.0.1');
+  occupiedProviderProxy.listen(0, '127.0.0.1');
+  occupiedRuntime.listen(0, '127.0.0.1');
+  await Promise.all([
+    new Promise<void>((resolve) => occupiedWorkspace.once('listening', resolve)),
+    new Promise<void>((resolve) => occupiedProviderProxy.once('listening', resolve)),
+    new Promise<void>((resolve) => occupiedRuntime.once('listening', resolve)),
+  ]);
+  const workspacePort = portForServer(occupiedWorkspace);
+  const providerProxyPort = portForServer(occupiedProviderProxy);
+  const runtimeCodexPort = portForServer(occupiedRuntime);
+  const child = new FakeChild(1203);
+  const capturedEnv: NodeJS.ProcessEnv[] = [];
+  const launcher = new ProductionRuntimeLauncher({
+    workspacePath: join(root, 'workspace'),
+    appDataRoot: join(root, 'app-data'),
+    requestedControlPort: 0,
+    requestedUiPort: 0,
+    requestedWorkspacePort: workspacePort,
+    requestedProviderProxyPort: providerProxyPort,
+    requestedRuntimeCodexPort: runtimeCodexPort,
+    services: [service('provider-proxy'), service('runtime-codex')],
+    spawnProcess: ((_command, _args, options) => {
+      capturedEnv.push(options.env);
+      return child;
+    }) as SpawnManagedProcess,
+  });
+
+  try {
+    const started = await launcher.start();
+    const workspaceBinding = started.ports.find((port) => port.name === 'workspace-writer');
+    const providerBinding = started.ports.find((port) => port.name === 'provider-proxy');
+    const runtimeBinding = started.ports.find((port) => port.name === 'runtime-codex');
+    const uiBinding = started.ports.find((port) => port.name === 'ui');
+
+    assert.equal(workspaceBinding?.requested, workspacePort);
+    assert.equal(workspaceBinding?.conflict, true);
+    assert.notEqual(workspaceBinding?.actual, workspacePort);
+    assert.equal(providerBinding?.requested, providerProxyPort);
+    assert.equal(providerBinding?.conflict, true);
+    assert.notEqual(providerBinding?.actual, providerProxyPort);
+    assert.equal(runtimeBinding?.requested, runtimeCodexPort);
+    assert.equal(runtimeBinding?.conflict, true);
+    assert.notEqual(runtimeBinding?.actual, runtimeCodexPort);
+    assert.equal(uiBinding?.requested, 0);
+    assert.equal(uiBinding?.conflict, false);
+    assert.match(String(capturedEnv[0]?.SCIFORGE_UI_PORT), /^\d+$/);
+    assert.equal(capturedEnv[0]?.SCIFORGE_WORKSPACE_PORT, String(workspaceBinding?.actual));
+    assert.equal(capturedEnv[0]?.SCIFORGE_WORKSPACE_WRITER_URL, workspaceBinding?.url);
+    assert.equal(capturedEnv[0]?.SCIFORGE_PROXY_PORT, String(providerBinding?.actual));
+    assert.equal(capturedEnv[0]?.SCIFORGE_PROXY_BASE_URL, providerBinding?.url);
+    assert.equal(capturedEnv[0]?.SCIFORGE_RUNTIME_CODEX_PORT, String(runtimeBinding?.actual));
+    assert.equal(capturedEnv[0]?.SCIFORGE_RUNTIME_CODEX_URL, runtimeBinding?.url);
+    assert.equal(capturedEnv[0]?.SCIFORGE_CONFIG_PATH, join(root, 'app-data', 'config', 'config.local.json'));
+    assert.equal(capturedEnv[0]?.SCIFORGE_STATE_DIR, join(root, 'app-data', 'state'));
+    assert.equal(capturedEnv[0]?.SCIFORGE_LOG_DIR, join(root, 'app-data', 'logs'));
+    assert.equal(capturedEnv[0]?.SCIFORGE_RUNTIME_ROOT, join(root, 'app-data', 'runtime-codex'));
+    assert.equal(capturedEnv[0]?.SCIFORGE_RUNTIME_CODEX_HOME, join(root, 'app-data', 'runtime-codex', 'codex-home'));
+    assert.equal(capturedEnv[0]?.SCIFORGE_RUNTIME_DEFAULT_WORKSPACE, join(root, 'workspace'));
+    assert.equal(capturedEnv[0]?.SCIFORGE_WORKSPACE_PATH, join(root, 'workspace'));
+
+    const health = await fetchJson(`${started.controlUrl}/health`) as Record<string, unknown>;
+    assert.equal((health.productionContract as Record<string, unknown>).fixedDevPortsAreContract, false);
+  } finally {
+    await launcher.shutdown();
+    await Promise.all([
+      new Promise<void>((resolve) => occupiedWorkspace.close(() => resolve())),
+      new Promise<void>((resolve) => occupiedProviderProxy.close(() => resolve())),
+      new Promise<void>((resolve) => occupiedRuntime.close(() => resolve())),
+    ]);
+  }
+});
+
 test('production launcher records child stderr to folded audit and reports failed health on child exit', async () => {
   const root = await tempRoot();
   const child = new FakeChild(1201);
@@ -99,6 +177,44 @@ test('production launcher records child stderr to folded audit and reports faile
     assert.match(audit, /"stream":"stderr"/);
     assert.match(audit, /"stream":"lifecycle"/);
   } finally {
+    await launcher.shutdown();
+  }
+});
+
+test('production launcher projects only non-secret proxy config into app-data config for packaged sidecars', async () => {
+  const root = await tempRoot();
+  const sourceConfig = join(root, 'source-config.local.json');
+  await writeFile(sourceConfig, JSON.stringify({
+    codexProxy: {
+      upstreamBaseUrl: 'https://provider.example.test/openai-compatible',
+      defaultModel: 'bailian/deepseek-v4-flash',
+      apiKey: 'sk-should-not-copy',
+    },
+    llm: {
+      apiKey: 'sk-llm-should-not-copy',
+    },
+  }), 'utf8');
+  const previousConfigPath = process.env.SCIFORGE_CONFIG_PATH;
+  process.env.SCIFORGE_CONFIG_PATH = sourceConfig;
+
+  const launcher = new ProductionRuntimeLauncher({
+    workspacePath: join(root, 'workspace'),
+    appDataRoot: join(root, 'app-data'),
+    requestedControlPort: 0,
+  });
+  try {
+    await launcher.start();
+    const desktopConfigPath = join(root, 'app-data', 'config', 'config.local.json');
+    const desktopConfig = await readFile(desktopConfigPath, 'utf8');
+    assert.match(desktopConfig, /provider\.example\.test/);
+    assert.match(desktopConfig, /bailian\/deepseek-v4-flash/);
+    assert.doesNotMatch(desktopConfig, /apiKey|sk-should-not-copy|sk-llm-should-not-copy/);
+  } finally {
+    if (previousConfigPath === undefined) {
+      delete process.env.SCIFORGE_CONFIG_PATH;
+    } else {
+      process.env.SCIFORGE_CONFIG_PATH = previousConfigPath;
+    }
     await launcher.shutdown();
   }
 });
@@ -143,7 +259,7 @@ class FakeChild extends EventEmitter {
 function service(id: string): ManagedRuntimeServiceSpec {
   return {
     id,
-    role: id === 'runtime-codex' ? 'runtime-codex' : 'workspace-writer',
+    role: id === 'runtime-codex' ? 'runtime-codex' : id === 'provider-proxy' ? 'provider-proxy' : 'workspace-writer',
     command: 'node',
     args: ['service.js'],
   };
@@ -159,4 +275,11 @@ async function fetchJson(url: string): Promise<unknown> {
   const response = await fetch(url);
   assert.equal(response.ok, true);
   return response.json();
+}
+
+function portForServer(server: ReturnType<typeof createServer>): number {
+  const address = server.address();
+  assert.equal(typeof address, 'object');
+  assert.ok(address);
+  return (address as AddressInfo).port;
 }

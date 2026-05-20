@@ -256,6 +256,8 @@ export function compactRunRawAuditForProjectionPayload(
   const record = isCompactRecord(raw) ? raw : {};
   const backgroundCompletion = isCompactRecord(record.backgroundCompletion) ? record.backgroundCompletion : undefined;
   return {
+    codexSessionId: typeof record.codexSessionId === 'string' && record.codexSessionId.trim() ? record.codexSessionId.trim() : undefined,
+    nativeSessionId: typeof record.nativeSessionId === 'string' && record.nativeSessionId.trim() ? record.nativeSessionId.trim() : undefined,
     termination: record.termination,
     cancelBoundary: record.cancelBoundary,
     historicalEditConflict: record.historicalEditConflict,

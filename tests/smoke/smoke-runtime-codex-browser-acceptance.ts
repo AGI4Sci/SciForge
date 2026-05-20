@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { resolveProxyCliOptions } from '../../packages/backend/src/cli-config.js';
 import { normalizeInstanceName, parallelProfile } from '../../src/runtime/parallel-instance-profile.js';
 
 type BrowserAcceptanceStatus = 'blocked' | 'failed' | 'partial' | 'passed';
@@ -47,6 +48,52 @@ type BrowserAcceptanceManifest = {
   reason?: string;
   blocker?: string;
   blockedOn?: string[];
+  currentRunEvidenceScope?: 'preflight-only' | 'live-browser-current-run';
+  priorEvidenceRefs?: string[];
+  staleEvidenceRefs?: string[];
+  failureClass?: 'missing-runtime-env' | 'config-secret-source' | 'missing-upstream' | 'provider-unavailable' | 'runtime-bridge' | 'unknown';
+  owner?: 'environment' | 'provider' | 'repo';
+  policyViolations?: string[];
+  missingEnv?: string[];
+  nextActions?: BlockedNextAction[];
+  expectedRetestCommand?: string;
+  releaseBlocking?: boolean;
+  releaseEligible?: boolean;
+  providerPreflightRef?: string;
+  providerPreflightCategory?: string;
+  providerPreflightCheckedAt?: string;
+  providerPreflightReleaseAcceptance?: 'not-evaluated';
+  providerPreflightEvidenceMode?: 'current-env-diagnostic-only';
+  runtimeApiKeyPresentInServiceEnv?: boolean;
+  upstreamBaseUrlPresent?: boolean;
+  upstreamKeySourceKind?: 'env' | 'config-debug-fallback' | 'missing';
+  upstreamBaseUrlSourceKind?: 'env' | 'config' | 'missing';
+  configPathsChecked?: string[];
+  configSecretFallbackPaths?: string[];
+};
+
+type CurrentEnvProviderPreflightManifest = {
+  schemaVersion: 'sciforge.runtime-provider-preflight.current-env.v1';
+  checkedAt: string;
+  releaseAcceptance: 'not-evaluated';
+  runtimeApiKeyPresentInServiceEnv: boolean;
+  upstreamBaseUrlPresent: boolean;
+  upstreamKeySourceKind: 'env' | 'config-debug-fallback' | 'missing';
+  upstreamBaseUrlSourceKind: 'env' | 'config' | 'missing';
+  configPathsChecked: string[];
+  configSecretFallbackPaths: string[];
+  category: string;
+  owner: 'environment' | 'provider' | 'repo';
+  policyViolations: string[];
+  missingEnv: string[];
+  evidenceMode: 'current-env-diagnostic-only';
+};
+
+type BlockedNextAction = {
+  label: string;
+  command?: string;
+  expected?: string;
+  writesRepo?: boolean;
 };
 
 type BrowserAcceptanceScenario = {
@@ -122,6 +169,7 @@ const outputDir = process.env.SCIFORGE_BROWSER_ACCEPTANCE_EVIDENCE_DIR
     : resolve(root, 'docs', 'test-artifacts', 'runtime-codex-browser-acceptance');
 const manifestPath = join(outputDir, 'manifest.json');
 const blockedNotesPath = join(outputDir, 'blocked-runtime-config.md');
+const providerPreflightManifestPath = join(root, 'docs', 'test-artifacts', 'runtime-provider-preflight', 'manifest.json');
 const requestedRolePort = portFromEnv(
   process.env.SCIFORGE_UI_PORT,
   process.env[`SCIFORGE_${instanceProfile.id.toUpperCase()}_UI_PORT`],
@@ -141,25 +189,83 @@ const workspacePath = process.env.SCIFORGE_WORKSPACE_PATH ?? resolve(root, insta
 const actualUrl = `http://127.0.0.1:${requestedRolePort}/`;
 const actualWorkspaceWriterUrl = `http://127.0.0.1:${requestedWorkspaceWriterPort}`;
 const actualRuntimeCodexUrl = `http://127.0.0.1:${requestedRuntimeCodexPort}`;
-const singleTurnPrompt = 'Runtime Codex browser smoke single turn: reply in one short sentence with SCIFORGE-CODEX-BROWSER-SINGLE-20260519.';
+const singleTurnPrompt = 'Runtime Codex browser smoke single turn: reply in one short sentence with SCIFORGE-CODEX-BROWSER-SINGLE-20260520A.';
 const artifactFollowUpPrompt = 'Use only the selected artifact ref and answer what it says in one concise sentence.';
-const multiTurnPrompt = 'Remember this passphrase for the next browser turn: SCIFORGE-CODEX-BROWSER-MT-20260519. Reply only remembered.';
+const multiTurnPrompt = 'Remember this passphrase for the next browser turn: SCIFORGE-CODEX-BROWSER-MT-20260520A. Reply only remembered.';
 const multiTurnFollowUpPrompt = 'Now reply only with the passphrase from the previous turn.';
-const expectedMultiTurnPassphrase = 'SCIFORGE-CODEX-BROWSER-MT-20260519';
+const expectedMultiTurnPassphrase = 'SCIFORGE-CODEX-BROWSER-MT-20260520A';
 const requireLiveBrowserAcceptance = process.env.SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE === '1';
+const validateOnly = process.env.SCIFORGE_BROWSER_ACCEPTANCE_VALIDATE_ONLY === '1';
+const passedManifestMaxAgeMs = positiveNumberFromEnv(process.env.SCIFORGE_BROWSER_ACCEPTANCE_MAX_AGE_MINUTES, 30) * 60 * 1000;
+const evidenceMtimeToleranceMs = positiveNumberFromEnv(process.env.SCIFORGE_BROWSER_ACCEPTANCE_EVIDENCE_MTIME_TOLERANCE_MINUTES, 10) * 60 * 1000;
 
 assertNegativeFixtures();
 
 const blockedReason = runtimeBridgeBlockedReason();
 if (blockedReason) {
+  if (validateOnly) {
+    const manifest = await readManifest();
+    assertBrowserAcceptanceManifest(manifest);
+    console.log(`[validate-only] Runtime Codex browser acceptance evidence contract verified from ${manifestPath}; current preflight is blocked: ${blockedReason}`);
+    if (requireLiveBrowserAcceptance) {
+      console.error('[strict] SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 cannot accept prior evidence while the current preflight is blocked.');
+      process.exitCode = 1;
+    }
+    process.exit();
+  }
+  await writeBlockedAcceptanceManifest(blockedReason);
+  console.log(`[blocked] Runtime Codex browser E2E is blocked: ${blockedReason}; wrote ${manifestPath}`);
+  if (requireLiveBrowserAcceptance) {
+    console.error('[strict] SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 requires manifest.status === passed; blocked manifest is not release acceptance.');
+    process.exitCode = 1;
+  }
+} else {
+  let manifest = await readManifest().catch(async (error: unknown) => writeBlockedAcceptanceManifest(
+    `Current Runtime Codex provider preflight is ready, but Codex in-app browser acceptance evidence is missing: ${(error as Error).message}`,
+  ));
+  try {
+    assertBrowserAcceptanceManifest(manifest);
+  } catch (error) {
+    if (manifest.status === 'passed') throw error;
+    manifest = await writeBlockedAcceptanceManifest(
+      `Current Runtime Codex provider preflight is ready, but Codex in-app browser acceptance evidence is incomplete or stale: ${(error as Error).message}`,
+    );
+    assertBrowserAcceptanceManifest(manifest);
+  }
+  if (manifest.status !== 'passed') {
+    const currentReason = currentBrowserEvidenceBlockedReason();
+    if (stalePreflightOnlyManifest(manifest) || currentBlockedManifestNeedsRefresh(manifest, currentReason)) {
+      manifest = await writeBlockedAcceptanceManifest(currentReason);
+    }
+    assertBrowserAcceptanceManifest(manifest);
+  }
+  if (manifest.status === 'passed') {
+    console.log(`[ok] Runtime Codex in-app browser acceptance passed with real evidence from ${manifestPath}`);
+  } else {
+    console.log(`[${manifest.status}] Runtime Codex in-app browser acceptance is not passed; evidence contract verified from ${manifestPath}`);
+    if (requireLiveBrowserAcceptance) {
+      console.error(`[strict] SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 requires manifest.status === passed; got ${manifest.status}.`);
+      process.exitCode = 1;
+    }
+  }
+}
+
+async function writeBlockedAcceptanceManifest(blockedReason: string): Promise<BrowserAcceptanceManifest> {
   await mkdir(outputDir, { recursive: true });
-  await writeFile(blockedNotesPath, blockedNotes(blockedReason), 'utf8');
-  const browserEvidence = existingBrowserEvidence();
+  const providerPreflight = readOrWriteCurrentProviderPreflightManifest();
+  await writeFile(blockedNotesPath, blockedNotes(blockedReason, providerPreflight), 'utf8');
+  const observedAt = new Date().toISOString();
+  const priorBrowserEvidence = existingBrowserEvidence();
+  const preflightOnly = isPreflightOnlyBlockedReason(blockedReason) || !hasCurrentLiveBrowserEvidence(priorBrowserEvidence);
+  const browserEvidence = preflightOnly
+    ? preflightOnlyBrowserEvidence(priorBrowserEvidence)
+    : priorBrowserEvidence;
+  const diagnostics = blockedDiagnosticsForReason(blockedReason);
   const manifest: BrowserAcceptanceManifest = {
     schemaVersion: 'sciforge.runtime-codex.browser-acceptance.v1',
     status: 'blocked',
     source: 'codex-in-app-browser',
-    observedAt: new Date().toISOString(),
+    observedAt,
     requestedRolePort,
     actualWorkspaceWriterPort: requestedWorkspaceWriterPort,
     actualWorkspaceWriterUrl,
@@ -188,9 +294,29 @@ if (blockedReason) {
     negativeChecks: builtInNegativeChecks(),
     reason: blockedReason,
     blocker: blockedReason,
-    blockedOn: blockedReason.includes('API key')
-      ? ['Runtime Codex environment configuration', 'Codex in-app browser execution']
-      : ['Runtime Codex bridge integration', 'UI Runtime Codex integration'],
+    blockedOn: blockedOnForReason(blockedReason),
+    currentRunEvidenceScope: preflightOnly ? 'preflight-only' : 'live-browser-current-run',
+    priorEvidenceRefs: preflightOnly ? priorBrowserEvidence.priorEvidenceRefs : undefined,
+    staleEvidenceRefs: preflightOnly ? priorBrowserEvidence.staleEvidenceRefs : undefined,
+    failureClass: diagnostics.failureClass,
+    owner: diagnostics.owner,
+    policyViolations: diagnostics.policyViolations,
+    missingEnv: diagnostics.missingEnv,
+    nextActions: diagnostics.nextActions,
+    expectedRetestCommand: diagnostics.expectedRetestCommand,
+    providerPreflightRef: relativeFromRoot(providerPreflightManifestPath),
+    providerPreflightCategory: providerPreflight.category,
+    providerPreflightCheckedAt: providerPreflight.checkedAt,
+    providerPreflightReleaseAcceptance: providerPreflight.releaseAcceptance,
+    providerPreflightEvidenceMode: providerPreflight.evidenceMode,
+    runtimeApiKeyPresentInServiceEnv: providerPreflight.runtimeApiKeyPresentInServiceEnv,
+    upstreamBaseUrlPresent: providerPreflight.upstreamBaseUrlPresent,
+    upstreamKeySourceKind: providerPreflight.upstreamKeySourceKind,
+    upstreamBaseUrlSourceKind: providerPreflight.upstreamBaseUrlSourceKind,
+    configPathsChecked: providerPreflight.configPathsChecked,
+    configSecretFallbackPaths: providerPreflight.configSecretFallbackPaths,
+    releaseBlocking: true,
+    releaseEligible: false,
     singleTurn: blockedScenario(
       browserEvidence.singleTurnSubmitted ? singleTurnPrompt : 'single-turn Runtime Codex browser acceptance is blocked before submission',
       blockedReason,
@@ -221,23 +347,7 @@ if (blockedReason) {
   };
   assertBlockedOrFailedManifest(manifest);
   await writeManifest(manifest);
-  console.log(`[blocked] Runtime Codex browser E2E is blocked: ${blockedReason}; wrote ${manifestPath}`);
-  if (requireLiveBrowserAcceptance) {
-    console.error('[strict] SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 requires manifest.status === passed; blocked manifest is not release acceptance.');
-    process.exitCode = 1;
-  }
-} else {
-  const manifest = await readManifest();
-  assertBrowserAcceptanceManifest(manifest);
-  if (manifest.status === 'passed') {
-    console.log(`[ok] Runtime Codex in-app browser acceptance passed with real evidence from ${manifestPath}`);
-  } else {
-    console.log(`[${manifest.status}] Runtime Codex in-app browser acceptance is not passed; evidence contract verified from ${manifestPath}`);
-    if (requireLiveBrowserAcceptance) {
-      console.error(`[strict] SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 requires manifest.status === passed; got ${manifest.status}.`);
-      process.exitCode = 1;
-    }
-  }
+  return manifest;
 }
 
 function assertBrowserAcceptanceManifest(manifest: BrowserAcceptanceManifest): void {
@@ -276,7 +386,8 @@ function runtimeBridgeBlockedReason(): string | undefined {
   const missing = requiredFiles.filter((file) => !existsSync(resolve(root, file)));
   if (missing.length > 0) return `Runtime Codex bridge is missing files: ${missing.join(', ')}`;
   const uiIntegration = readIfExists('src/ui/src/app/chat/runOrchestrator.ts')
-    + readIfExists('src/ui/src/api/sciforgeToolsClient.ts');
+    + readIfExists('src/ui/src/api/sciforgeToolsClient.ts')
+    + readIfExists('src/ui/src/api/sciforgeToolsClient/client.ts');
   if (!/Runtime Codex|runtime codex|codex runtime/i.test(uiIntegration)) {
     return 'Runtime Codex UI streaming integration is not present.';
   }
@@ -285,15 +396,106 @@ function runtimeBridgeBlockedReason(): string | undefined {
   if (!uiPath || !serverText.includes(`url.pathname !== '${uiPath}'`)) {
     return `Runtime Codex UI stream path is not aligned with the workspace server route: ${uiPath ?? 'missing'}`;
   }
-  if (!process.env.SCIFORGE_RUNTIME_API_KEY) {
-    return 'Runtime Codex API key is not configured; live browser E2E must fail closed until SCIFORGE_RUNTIME_API_KEY is present.';
+  const localRuntimeReason = runtimeCodexLocalRuntimeBlockedReason();
+  if (localRuntimeReason) return localRuntimeReason;
+  const environmentReason = runtimeCodexEnvironmentBlockedReason();
+  if (environmentReason) return environmentReason;
+  return undefined;
+}
+
+function runtimeCodexEnvironmentBlockedReason(): string | undefined {
+  const credentials = runtimeCredentialPresence();
+  const blockers: string[] = [];
+  if (!credentials.runtimeApiKey) blockers.push('SCIFORGE_RUNTIME_API_KEY');
+  if (!credentials.proxyUpstreamBaseUrl) {
+    blockers.push('provider proxy upstream base URL');
+  }
+  if (!credentials.runtimeApiKey && credentials.configSecretPaths.length > 0) {
+    blockers.push('Runtime Codex secret must be supplied by service environment, not config file debug fallback');
+  }
+  if (blockers.length === 0) return undefined;
+  const missing = blockers.join(' and ');
+  const checked = credentials.checkedConfigPaths.length > 0
+    ? ` Checked config paths: ${credentials.checkedConfigPaths.join(', ')}.`
+    : '';
+  const configSecretNote = credentials.configSecretPaths.length > 0
+    ? ` Runtime secret-like keys were found in ignored config files (${credentials.configSecretPaths.join(', ')}); they are accepted only as local proxy debug fallback and cannot satisfy browser/release acceptance.`
+    : '';
+  return `Runtime Codex environment is not fully configured; missing ${missing}. Set SCIFORGE_RUNTIME_API_KEY in the service environment, and set SCIFORGE_PROXY_UPSTREAM_BASE_URL or config.local.json/.sciforge instance config codexProxy.upstreamBaseUrl/llm.baseUrl before live browser E2E can pass.${checked}${configSecretNote}`;
+}
+
+function runtimeCredentialPresence(): {
+  runtimeApiKey: boolean;
+  proxyUpstreamBaseUrl: boolean;
+  checkedConfigPaths: string[];
+  configSecretPaths: string[];
+} {
+  const checkedConfigPaths = runtimeConfigCandidatePaths().filter((path) => existsSync(resolve(root, path)));
+  const runtimeApiKey = Boolean(process.env.SCIFORGE_RUNTIME_API_KEY);
+  const configSecretPaths = checkedConfigPaths.filter((path) => runtimeApiKeyPresentInConfig(path));
+  const proxyUpstreamBaseUrl = checkedConfigPaths.some((path) => {
+    const options = resolveProxyCliOptions([], { ...process.env, SCIFORGE_CONFIG_PATH: path });
+    return Boolean(options.upstreamBaseUrl);
+  }) || Boolean(resolveProxyCliOptions([], process.env).upstreamBaseUrl);
+  return { runtimeApiKey, proxyUpstreamBaseUrl, checkedConfigPaths, configSecretPaths };
+}
+
+function runtimeConfigCandidatePaths(): string[] {
+  return uniqueStrings([
+    process.env.SCIFORGE_CONFIG_PATH,
+    instanceProfile.configPath,
+    'config.local.json',
+  ].flatMap((path) => typeof path === 'string' && path.trim() ? [path.trim()] : []));
+}
+
+function runtimeApiKeyPresentInConfig(path: string): boolean {
+  try {
+    const parsed = JSON.parse(readFileSync(resolve(root, path), 'utf8')) as unknown;
+    if (!isRecord(parsed)) return false;
+    const llm = isRecord(parsed.llm) ? parsed.llm : {};
+    const codexProxy = isRecord(parsed.codexProxy) ? parsed.codexProxy : {};
+    return Boolean(
+      stringValue(parsed.apiKey)
+      || stringValue(llm.apiKey)
+      || stringValue(llm.upstreamApiKey)
+      || stringValue(codexProxy.apiKey),
+    );
+  } catch {
+    return false;
+  }
+}
+
+function runtimeCodexLocalRuntimeBlockedReason(): string | undefined {
+  const configPath = 'packages/backend/.codex-runtime/codex-home/config.toml';
+  const configText = readIfExists(configPath);
+  if (!configText) return `Runtime Codex home config is missing at ${configPath}.`;
+  const requiredConfig: Array<[string, RegExp]> = [
+    ['profile sciforge-runtime-deepseek', /\bprofile\s*=\s*"sciforge-runtime-deepseek"/],
+    ['model bailian/deepseek-v4-flash', /\bmodel\s*=\s*"bailian\/deepseek-v4-flash"/],
+    ['profile table sciforge-runtime-deepseek', /\[profiles\.sciforge-runtime-deepseek\]/],
+    ['provider sciforge-deepseek-proxy', /\bmodel_provider\s*=\s*"sciforge-deepseek-proxy"/],
+    ['provider table sciforge-deepseek-proxy', /\[model_providers\.sciforge-deepseek-proxy\]/],
+    ['env_key SCIFORGE_RUNTIME_API_KEY', /\benv_key\s*=\s*"SCIFORGE_RUNTIME_API_KEY"/],
+    ['responses wire_api', /\bwire_api\s*=\s*"responses"/],
+  ];
+  const missingConfig = requiredConfig
+    .filter(([, pattern]) => !pattern.test(configText))
+    .map(([label]) => label);
+  if (missingConfig.length > 0) {
+    return `Runtime Codex config drift in ${configPath}: missing ${missingConfig.join(', ')}.`;
+  }
+  if (!existsSync(workspacePath)) {
+    return `Runtime Codex workspace path is missing: ${workspacePath}.`;
   }
   return undefined;
 }
 
 function assertPassedManifest(manifest: BrowserAcceptanceManifest): void {
   assert.equal(manifest.status, 'passed', 'release acceptance requires status=passed');
+  assertPassedManifestFreshness(manifest);
   assert.equal(manifest.acceptanceConclusionFromRealBrowser, true, 'passed requires a real in-app browser conclusion');
+  assert.equal(manifest.releaseEligible, true, 'passed manifest must be explicitly releaseEligible');
+  assert.equal(manifest.releaseBlocking, false, 'passed manifest must not remain releaseBlocking');
   assert.equal(manifest.seedDemoFixtureEvidenceUsed, false, 'passed requires live Runtime Codex output, not seed/demo/fixture messages');
   assert.equal(manifest.startedFromDefaultChatEntry, true, 'must start from existing default chat entry');
   assert.equal(manifest.submittedThroughRuntimeCodex, true, 'must submit through Runtime Codex');
@@ -322,9 +524,65 @@ function assertPassedManifest(manifest: BrowserAcceptanceManifest): void {
   assert.equal(manifest.multiTurn?.expectedPassphrase, expectedMultiTurnPassphrase, 'multi-turn expected passphrase must be recorded');
 }
 
+function assertPassedManifestFreshness(manifest: BrowserAcceptanceManifest): void {
+  const observedAt = manifest.observedAt;
+  if (typeof observedAt !== 'string') {
+    assert.fail('passed manifest must record observedAt from the live browser run');
+  }
+  assert.ok(observedAt.trim(), 'passed manifest observedAt must be non-empty');
+  const observedAtMs = Date.parse(observedAt);
+  assert.ok(Number.isFinite(observedAtMs), 'passed manifest observedAt must be parseable');
+  assert.ok(
+    observedAtMs <= Date.now() + 5 * 60 * 1000,
+    'passed manifest observedAt must not be in the future',
+  );
+  assert.ok(
+    observedAtMs >= Date.now() - passedManifestMaxAgeMs,
+    `passed manifest observedAt must be fresh within ${Math.round(passedManifestMaxAgeMs / 60_000)} minute(s)`,
+  );
+  assertEvidenceFreshEnough(manifest.evidence, observedAtMs, 'manifest evidence');
+  assertEvidenceFreshEnough(manifest.singleTurn?.evidence, observedAtMs, 'singleTurn evidence');
+  assertEvidenceFreshEnough(manifest.artifactFollowUp?.evidence, observedAtMs, 'artifactFollowUp evidence');
+  assertEvidenceFreshEnough(manifest.multiTurn?.evidence, observedAtMs, 'multiTurn evidence');
+}
+
 function assertBlockedOrFailedManifest(manifest: BrowserAcceptanceManifest): void {
   assert.ok(['blocked', 'failed', 'partial'].includes(manifest.status), `unexpected non-passed status: ${manifest.status}`);
   assert.match(manifest.reason ?? manifest.blocker ?? '', /blocked|failed|limitation|missing|unsupported|Phase 1|Codex|Runtime|API key|profile|browser|implementation/i);
+  assertAcceptanceRubric(manifest.acceptanceRubric, 'manifest acceptanceRubric');
+  assertNegativeChecks(manifest.negativeChecks, 'manifest negativeChecks');
+  assert.equal(manifest.releaseBlocking, true, 'blocked/failed/partial manifest must remain releaseBlocking');
+  assert.equal(manifest.releaseEligible, false, 'blocked/failed/partial manifest must explicitly reject release eligibility');
+  assert.ok(manifest.failureClass, 'blocked/failed/partial manifest must classify failureClass');
+  assert.ok(manifest.owner, 'blocked/failed/partial manifest must classify owner');
+  assert.ok((manifest.nextActions ?? []).length > 0, 'blocked/failed/partial manifest must record nextActions');
+  assert.ok(manifest.expectedRetestCommand?.trim(), 'blocked/failed/partial manifest must record expectedRetestCommand');
+  const providerPreflightRef = stringValue(manifest.providerPreflightRef);
+  assert.ok(providerPreflightRef, 'blocked/failed/partial manifest must record providerPreflightRef');
+  assertEvidenceRefsExist([providerPreflightRef], 'manifest providerPreflightRef');
+  assert.ok(manifest.providerPreflightCategory?.trim(), 'blocked/failed/partial manifest must record providerPreflightCategory');
+  assert.ok(manifest.providerPreflightCheckedAt?.trim(), 'blocked/failed/partial manifest must record providerPreflightCheckedAt');
+  assert.equal(manifest.providerPreflightReleaseAcceptance, 'not-evaluated', 'provider preflight must remain diagnostic-only');
+  assert.equal(manifest.providerPreflightEvidenceMode, 'current-env-diagnostic-only', 'provider preflight evidence mode must be current-env diagnostic only');
+  assert.ok(
+    manifest.currentRunEvidenceScope === 'preflight-only' || manifest.currentRunEvidenceScope === 'live-browser-current-run',
+    'blocked/failed/partial manifest must declare currentRunEvidenceScope',
+  );
+  if (manifest.currentRunEvidenceScope === 'preflight-only') {
+    assert.equal(manifest.submittedThroughRuntimeCodex, false, 'preflight-only blocked manifest cannot claim current Runtime Codex submission');
+    assert.equal(manifest.commandIdVisible, false, 'preflight-only blocked manifest cannot claim current command id visibility');
+    assert.equal(manifest.providerModelProfileVisible, false, 'preflight-only blocked manifest cannot claim current provider/model/profile visibility');
+    assert.equal(manifest.workspaceVisible, false, 'preflight-only blocked manifest cannot claim current workspace visibility');
+    assert.equal(manifest.commandId, undefined, 'preflight-only blocked manifest cannot reuse a stale command id');
+    assert.equal(manifest.evidence?.screenshotPath, undefined, 'preflight-only blocked manifest cannot reuse stale screenshot evidence as current evidence');
+    assert.equal(manifest.evidence?.domSnapshotPath, undefined, 'preflight-only blocked manifest cannot reuse stale DOM evidence as current evidence');
+    assert.ok(manifest.evidence?.notesPath, 'preflight-only blocked manifest must point at current notes');
+  } else {
+    assert.equal(manifest.submittedThroughRuntimeCodex, true, 'live-browser-current-run blocked/failed manifest must record current Runtime Codex submission');
+    assert.equal(manifest.commandIdVisible, true, 'live-browser-current-run blocked/failed manifest must record visible command id status');
+    assert.match(manifest.commandId ?? '', /^codex-command-[a-z0-9-]+$/i, 'live-browser-current-run blocked/failed manifest must record the current command id');
+    assertEvidenceExists(manifest.evidence, 'live-browser-current-run manifest evidence', { requireScreenshotAndDom: true });
+  }
   if (manifest.submittedThroughRuntimeCodex || manifest.commandIdVisible) {
     assert.match(manifest.commandId ?? '', /^codex-command-[a-z0-9-]+$/i, 'submitted blocked/failed manifests must record the observed Runtime Codex command id');
   }
@@ -366,10 +624,12 @@ function assertScenarioPassed(scenario: BrowserAcceptanceScenario | undefined, l
 
 function assertScenarioNotPassedUnlessManifestPassed(scenario: BrowserAcceptanceScenario | undefined, label: string): void {
   assert.ok(scenario, `${label} scenario must be present`);
-  if (scenario.status !== 'passed') {
-    assert.ok(scenario.reason, `${label} blocked/failed scenario must record a reason`);
-    assertEvidenceExists(scenario.evidence, `${label} evidence`);
-  }
+  assert.notEqual(scenario.status, 'passed', `${label} cannot be passed while manifest is blocked/failed/partial`);
+  assert.equal(scenario.visibleAnswerConfirmed, false, `${label} cannot claim visible answer while manifest is blocked/failed/partial`);
+  assert.notEqual(scenario.actualTaskResult?.status, 'passed', `${label} cannot contain a passed actualTaskResult while manifest is blocked/failed/partial`);
+  assert.notEqual(scenario.liveRuntimeCodexProof?.messageProvenance, 'live-runtime-codex', `${label} cannot contain live Runtime Codex proof while manifest is blocked/failed/partial`);
+  assert.ok(scenario.reason, `${label} blocked/failed scenario must record a reason`);
+  assertEvidenceExists(scenario.evidence, `${label} evidence`);
 }
 
 function assertEvidenceExists(
@@ -474,6 +734,8 @@ function existingBrowserEvidence(): {
   rawAuditFoldedByDefault: boolean;
   commandId?: string;
   evidence: BrowserAcceptanceEvidence;
+  priorEvidenceRefs: string[];
+  staleEvidenceRefs: string[];
 } {
   const defaultObservation = scenarioObservation({
     domCandidates: ['default-chat-dom.txt', 'worker5-chat-entry-dom.txt', 'p4-compat-default-chat-blocked-dom.txt'],
@@ -496,11 +758,13 @@ function existingBrowserEvidence(): {
   const workspaceCommandIdVisible = [singleTurn, artifactFollowUp, multiTurn].some((observation) => observation.workspaceCommandIdVisible);
   const rawAuditFoldedByDefault = [defaultObservation, singleTurn, artifactFollowUp, multiTurn].every((observation) => observation.rawAuditFoldedByDefault);
   const commandId = [singleTurn, artifactFollowUp, multiTurn, defaultObservation].map((observation) => observation.commandId).find(Boolean);
+  const priorEvidenceRefs = evidenceRefsFromObservations([defaultObservation, singleTurn, artifactFollowUp, multiTurn]);
   return {
     defaultChatEntryObserved: domText.includes('Ask SciForge') && domText.includes('聊天工作台'),
-    singleTurnSubmitted: singleTurn.domText.includes('SCIFORGE-CODEX-BROWSER-SINGLE-20260519') || singleTurn.domText.includes('SCIFORGE-W5-SINGLE-TURN'),
+    singleTurnSubmitted: /SCIFORGE-CODEX-BROWSER-SINGLE-[A-Z0-9-]+|SCIFORGE-W5-SINGLE-TURN/i.test(singleTurn.domText),
     artifactFollowUpSubmitted: /selected artifact|selected ref|用户引用的上下文|research-report|artifact:/i.test(artifactFollowUp.domText),
-    multiTurnSecondAnswerVisible: multiTurn.domText.includes(expectedMultiTurnPassphrase),
+    multiTurnSecondAnswerVisible: multiTurn.domText.includes(expectedMultiTurnPassphrase)
+      || /SCIFORGE-CODEX-BROWSER-MT-[A-Z0-9-]+/i.test(multiTurn.domText),
     singleTurn,
     artifactFollowUp,
     multiTurn,
@@ -514,7 +778,88 @@ function existingBrowserEvidence(): {
       ...(defaultObservation.evidence.domSnapshotPath ? { domSnapshotPath: defaultObservation.evidence.domSnapshotPath } : {}),
       notesPath: relativeFromRoot(blockedNotesPath),
     },
+    priorEvidenceRefs,
+    staleEvidenceRefs: priorEvidenceRefs,
   };
+}
+
+function stalePreflightOnlyManifest(manifest: BrowserAcceptanceManifest): boolean {
+  const reason = manifest.reason ?? manifest.blocker ?? '';
+  return manifest.currentRunEvidenceScope === 'preflight-only'
+    || manifest.providerPreflightCategory !== 'ready'
+    || manifest.runtimeApiKeyPresentInServiceEnv !== true
+    || manifest.upstreamBaseUrlPresent !== true
+    || /environment is not fully configured|SCIFORGE_RUNTIME_API_KEY|config file debug fallback|provider proxy upstream base URL/i.test(reason);
+}
+
+function currentBlockedManifestNeedsRefresh(manifest: BrowserAcceptanceManifest, currentReason: string): boolean {
+  const evidence = existingBrowserEvidence();
+  const nextActionLabels = (manifest.nextActions ?? []).map((action) => action.label).join('\n');
+  const blockedOn = (manifest.blockedOn ?? []).join('\n');
+  return manifest.reason !== currentReason
+    || (Boolean(evidence.commandId) && manifest.commandId !== evidence.commandId)
+    || /selected[- ]artifact|selected ref|artifact follow-up/i.test(currentReason)
+      && !/selected[- ]artifact|selected ref|artifact follow-up/i.test(`${nextActionLabels}\n${blockedOn}`);
+}
+
+function currentBrowserEvidenceBlockedReason(): string {
+  const evidence = existingBrowserEvidence();
+  const missing = [
+    ...(evidence.singleTurnSubmitted ? [] : ['single-turn visible Runtime Codex answer']),
+    ...(evidence.artifactFollowUpSubmitted ? [] : ['selected-artifact follow-up with selected refs']),
+    ...(evidence.multiTurnSecondAnswerVisible ? [] : ['multi-turn visible second-turn passphrase answer']),
+  ];
+  const missingText = missing.length > 0 ? missing.join(', ') : 'passed release manifest';
+  return `Current Runtime Codex provider preflight is ready, but Codex in-app browser acceptance is incomplete: missing ${missingText}.`;
+}
+
+function hasCurrentLiveBrowserEvidence(evidence: ReturnType<typeof existingBrowserEvidence>): boolean {
+  return Boolean(
+    evidence.commandId
+    || evidence.singleTurnSubmitted
+    || evidence.artifactFollowUpSubmitted
+    || evidence.multiTurnSecondAnswerVisible,
+  );
+}
+
+function preflightOnlyBrowserEvidence(prior: ReturnType<typeof existingBrowserEvidence>): ReturnType<typeof existingBrowserEvidence> {
+  const notesEvidence = { notesPath: relativeFromRoot(blockedNotesPath) };
+  const observed: ScenarioObservation = {
+    domText: '',
+    providerModelProfileVisible: false,
+    workspaceCommandIdVisible: false,
+    rawAuditFoldedByDefault: true,
+    evidence: notesEvidence,
+  };
+  return {
+    defaultChatEntryObserved: false,
+    singleTurnSubmitted: false,
+    artifactFollowUpSubmitted: false,
+    multiTurnSecondAnswerVisible: false,
+    singleTurn: observed,
+    artifactFollowUp: observed,
+    multiTurn: observed,
+    workspaceVisible: false,
+    providerModelProfileVisible: false,
+    workspaceCommandIdVisible: false,
+    rawAuditFoldedByDefault: true,
+    evidence: notesEvidence,
+    priorEvidenceRefs: prior.priorEvidenceRefs,
+    staleEvidenceRefs: prior.staleEvidenceRefs,
+  };
+}
+
+function evidenceRefsFromObservations(observations: ScenarioObservation[]): string[] {
+  return uniqueStrings(observations.flatMap((observation) => evidenceRefs(observation.evidence)));
+}
+
+function evidenceRefs(evidence: BrowserAcceptanceEvidence | undefined): string[] {
+  if (!evidence) return [];
+  return [
+    evidence.screenshotPath,
+    evidence.domSnapshotPath,
+    evidence.runtimeAuditPath,
+  ].filter((path): path is string => Boolean(path));
 }
 
 function scenarioObservation(input: { domCandidates: string[]; screenshotCandidates: string[] }): ScenarioObservation {
@@ -526,7 +871,7 @@ function scenarioObservation(input: { domCandidates: string[]; screenshotCandida
     providerModelProfileVisible: domText.includes('sciforge-runtime-deepseek')
       && domText.includes('bailian/deepseek-v4-flash')
       && /sciforge-deepseek-proxy|provider/i.test(domText),
-    workspaceCommandIdVisible: /workspace|工作区文件树/i.test(domText) && /codex-command|command id|commandId|command\s+codex-command/i.test(domText),
+    workspaceCommandIdVisible: /codex-command|command id|commandId|command\s+codex-command/i.test(domText),
     rawAuditFoldedByDefault: !/RAW_JSONL|RAW_STDERR|RAW_STDOUT|raw provider sse|plugin warning|stderr[^折]|stdout[^折]|jsonl[^折]/i.test(domText),
     commandId: /codex-command-[a-z0-9-]+/i.exec(domText)?.[0],
     evidence: {
@@ -537,7 +882,7 @@ function scenarioObservation(input: { domCandidates: string[]; screenshotCandida
   };
 }
 
-function blockedNotes(reason: string): string {
+function blockedNotes(reason: string, providerPreflight: CurrentEnvProviderPreflightManifest): string {
   return [
     '# Runtime Codex browser acceptance blocked',
     '',
@@ -552,15 +897,29 @@ function blockedNotes(reason: string): string {
     'Provider: sciforge-deepseek-proxy',
     'Model: bailian/deepseek-v4-flash',
     `Reason: ${reason}`,
+    `Provider preflight artifact: ${relativeFromRoot(providerPreflightManifestPath)}`,
+    `Provider preflight category: ${providerPreflight.category}`,
+    `Provider preflight checked at: ${providerPreflight.checkedAt}`,
+    `Provider preflight release acceptance: ${providerPreflight.releaseAcceptance}`,
+    `Runtime key in service env: ${providerPreflight.runtimeApiKeyPresentInServiceEnv ? 'present' : 'missing'}`,
+    `Provider upstream base URL: ${providerPreflight.upstreamBaseUrlPresent ? 'present' : 'missing'}`,
+    `Runtime key source: ${providerPreflight.upstreamKeySourceKind}`,
+    `Upstream URL source: ${providerPreflight.upstreamBaseUrlSourceKind}`,
     'Acceptance scope: non-seed Runtime Codex messages only; seed/demo/fixture messages are excluded from success criteria.',
     '',
     'Acceptance rubric:',
     '- User intent: prove the real default-chat Runtime Codex path can complete single-turn, selected-ref, and multi-turn tasks.',
     '- Expected observable result: visible live Runtime Codex/gui.present answers with provider/model/profile/workspace/command id and folded audit logs.',
     `- Actual result: blocked before release acceptance because ${reason}`,
-    '- Evidence refs: manifest.json plus screenshot/DOM/notes paths recorded in this bundle.',
+    '- Current evidence refs: manifest.json plus blocked notes. Prior or stale browser screenshots/DOM refs are diagnostic only and cannot count as current release evidence.',
     '- Negative checks: fake passed status, missing DOM/screenshot, missing command id, missing task result, seed/demo evidence, and partial/blocked/failed status remain release-blocking.',
-    '- Remaining risk: live browser acceptance still requires a configured Runtime Codex API key and visible second-turn answer.',
+    '- Required key: set SCIFORGE_RUNTIME_API_KEY in the service environment; do not store it in repository files.',
+    '- Config-file apiKey fallback: accepted only for local provider proxy debugging, and rejected as browser/release acceptance evidence.',
+    '- Required provider proxy upstream: set SCIFORGE_PROXY_UPSTREAM_BASE_URL or config.local.json codexProxy.upstreamBaseUrl/llm.baseUrl so the local proxy has an upstream OpenAI-compatible endpoint.',
+    '- Provider preflight artifact: docs/test-artifacts/runtime-provider-preflight/manifest.json records the current non-secret service-env/upstream diagnostic and remains diagnostic-only, not browser/release acceptance.',
+    '- Required Runtime Codex config: profile sciforge-runtime-deepseek, provider sciforge-deepseek-proxy, model bailian/deepseek-v4-flash, env_key SCIFORGE_RUNTIME_API_KEY, wire_api responses.',
+    '- Re-run strict release acceptance with SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 npm run smoke:runtime-codex-browser-acceptance after the key/upstream are present and the browser shows the second-turn answer.',
+    '- Remaining risk: live browser acceptance still requires configured Runtime Codex credentials/upstream and visible second-turn answer.',
     '',
     'No passed user-level conclusion is claimed.',
   ].join('\n') + '\n';
@@ -572,6 +931,7 @@ function assertAcceptanceRubric(rubric: AcceptanceRubric | undefined, label: str
   assert.ok(rubric.expectedObservableResult?.trim(), `${label}.expectedObservableResult is required`);
   assert.ok(rubric.actualResult?.trim(), `${label}.actualResult is required`);
   assert.ok((rubric.evidenceRefs ?? []).length > 0, `${label}.evidenceRefs are required`);
+  assertEvidenceRefsExist(rubric.evidenceRefs, `${label}.evidenceRefs`);
   assert.ok((rubric.negativeChecks ?? []).length > 0, `${label}.negativeChecks are required`);
   assert.ok(typeof rubric.remainingRisks === 'string', `${label}.remainingRisks is required`);
 }
@@ -583,6 +943,7 @@ function assertActualTaskResult(result: ActualTaskResult | undefined, label: str
   assert.equal(result.userIntentSatisfied, true, `${label}.userIntentSatisfied must be true`);
   assert.equal(result.outputVerified, true, `${label}.outputVerified must be true`);
   assert.ok((result.evidenceRefs ?? []).length > 0, `${label}.evidenceRefs are required`);
+  assertEvidenceRefsExist(result.evidenceRefs, `${label}.evidenceRefs`);
 }
 
 function assertLiveRuntimeCodexProof(proof: LiveRuntimeCodexProof | undefined, expectedCommandId: string | undefined, label: string): void {
@@ -592,6 +953,7 @@ function assertLiveRuntimeCodexProof(proof: LiveRuntimeCodexProof | undefined, e
   assert.equal(proof.runtimeOutputObserved, true, `${label}.runtimeOutputObserved must be true`);
   assert.equal(proof.seedOrDemoExcluded, true, `${label}.seedOrDemoExcluded must be true`);
   assert.ok((proof.eventEvidenceRefs ?? []).length > 0, `${label}.eventEvidenceRefs are required`);
+  assertEvidenceRefsExist(proof.eventEvidenceRefs, `${label}.eventEvidenceRefs`);
   if (expectedCommandId) {
     assert.equal(proof.commandId, expectedCommandId, `${label}.commandId must match manifest command id`);
   } else {
@@ -611,7 +973,7 @@ function assertNegativeChecks(checks: NegativeChecks | undefined, label: string)
 }
 
 function assertDoesNotUseSeedDemoOrRawEvidence(text: string, label: string): void {
-  assert.doesNotMatch(text, /\b(?:seed-|seed demo|seed-demo|demo message|fixture success|scriptable-mock|literature-evidence-review@1\.0\.0|KRAS G12C)\b/i, `${label} must not count seed/demo/fixture text as acceptance`);
+  assert.doesNotMatch(text, /\b(?:seed-|seed demo|seed-demo|demo message|fixture success|scriptable-mock|KRAS G12C)\b/i, `${label} must not count seed/demo/fixture text as acceptance`);
   assert.doesNotMatch(text, /\b(?:RAW_JSONL|RAW_STDERR|RAW_STDOUT|raw provider sse|plugin warning|stdout|stderr|jsonl)\b/i, `${label} must not use raw stdout/jsonl/stderr/provider logs as main-answer proof`);
 }
 
@@ -620,9 +982,44 @@ function assertIncludes(text: string, value: string | undefined, message: string
   assert.ok(text.includes(value ?? ''), message);
 }
 
+function assertEvidenceRefsExist(refs: string[] | undefined, label: string): void {
+  for (const ref of refs ?? []) {
+    if (!looksLikeFileEvidenceRef(ref)) continue;
+    const resolved = resolve(root, ref);
+    assert.ok(existsSync(resolved), `${label} path does not exist: ${ref}`);
+    assert.ok(statSync(resolved).isFile(), `${label} path is not a file: ${ref}`);
+    assert.ok(statSync(resolved).size > 0, `${label} path is empty: ${ref}`);
+  }
+}
+
+function looksLikeFileEvidenceRef(ref: string): boolean {
+  if (!ref.trim()) return false;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(ref) && !ref.startsWith('file:')) return false;
+  return ref.startsWith('/') || ref.startsWith('./') || ref.startsWith('../') || ref.includes('/');
+}
+
 function assertUrlPortMatches(url: string | undefined, port: number | undefined, label: string): void {
   assert.ok(url, `${label} is required`);
   assert.equal(new URL(url).port, String(port), `${label} port must match recorded actual port`);
+}
+
+function assertEvidenceFreshEnough(evidence: BrowserAcceptanceEvidence | undefined, observedAtMs: number, label: string): void {
+  if (!evidence) return;
+  const paths = [
+    evidence.screenshotPath,
+    evidence.domSnapshotPath,
+    evidence.notesPath,
+    evidence.runtimeAuditPath,
+  ].filter((path): path is string => Boolean(path));
+  for (const evidencePath of paths) {
+    const resolved = resolve(root, evidencePath);
+    if (!existsSync(resolved)) continue;
+    const mtimeMs = statSync(resolved).mtimeMs;
+    assert.ok(
+      mtimeMs >= observedAtMs - evidenceMtimeToleranceMs,
+      `${label} path is stale relative to observedAt: ${evidencePath}`,
+    );
+  }
 }
 
 function builtInNegativeChecks(): NegativeChecks {
@@ -651,8 +1048,185 @@ function blockedAcceptanceRubric(reason: string): AcceptanceRubric {
       'seed/demo evidence rejected',
       'blocked/failed/partial status rejected in strict mode',
     ],
-    remainingRisks: 'Live browser acceptance still requires configured Runtime Codex credentials and a visible second-turn answer.',
+    remainingRisks: 'Live browser acceptance still requires SCIFORGE_RUNTIME_API_KEY, provider proxy upstream base URL, the Runtime Codex profile/config below, and a visible second-turn answer.',
   };
+}
+
+function readOrWriteCurrentProviderPreflightManifest(): CurrentEnvProviderPreflightManifest {
+  const existing = readCurrentProviderPreflightManifest();
+  if (existing) return existing;
+  const credentials = runtimeCredentialPresence();
+  const runtimeApiKeyPresentInServiceEnv = Boolean(process.env.SCIFORGE_RUNTIME_API_KEY?.trim());
+  const upstreamBaseUrlPresent = credentials.proxyUpstreamBaseUrl;
+  const upstreamKeySourceKind: CurrentEnvProviderPreflightManifest['upstreamKeySourceKind'] = runtimeApiKeyPresentInServiceEnv
+    ? 'env'
+    : credentials.configSecretPaths.length > 0
+      ? 'config-debug-fallback'
+      : 'missing';
+  const upstreamBaseUrlSourceKind: CurrentEnvProviderPreflightManifest['upstreamBaseUrlSourceKind'] = process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL?.trim()
+    ? 'env'
+    : upstreamBaseUrlPresent
+      ? 'config'
+      : 'missing';
+  const category = !runtimeApiKeyPresentInServiceEnv && credentials.configSecretPaths.length > 0
+    ? 'config-secret-source'
+    : !runtimeApiKeyPresentInServiceEnv
+      ? 'missing-runtime-env'
+      : !upstreamBaseUrlPresent
+        ? 'missing-upstream'
+        : 'unknown';
+  const manifest: CurrentEnvProviderPreflightManifest = {
+    schemaVersion: 'sciforge.runtime-provider-preflight.current-env.v1',
+    checkedAt: new Date().toISOString(),
+    releaseAcceptance: 'not-evaluated',
+    runtimeApiKeyPresentInServiceEnv,
+    upstreamBaseUrlPresent,
+    upstreamKeySourceKind,
+    upstreamBaseUrlSourceKind,
+    configPathsChecked: credentials.checkedConfigPaths,
+    configSecretFallbackPaths: credentials.configSecretPaths,
+    category,
+    owner: category === 'unknown' ? 'repo' : 'environment',
+    policyViolations: !runtimeApiKeyPresentInServiceEnv && credentials.configSecretPaths.length > 0
+      ? ['config-file-secret-fallback-cannot-satisfy-browser-release-acceptance']
+      : [],
+    missingEnv: [
+      ...(runtimeApiKeyPresentInServiceEnv ? [] : ['SCIFORGE_RUNTIME_API_KEY']),
+      ...(upstreamBaseUrlPresent ? [] : ['SCIFORGE_PROXY_UPSTREAM_BASE_URL']),
+    ],
+    evidenceMode: 'current-env-diagnostic-only',
+  };
+  mkdirSync(join(root, 'docs', 'test-artifacts', 'runtime-provider-preflight'), { recursive: true });
+  writeFileSync(providerPreflightManifestPath, JSON.stringify(manifest, null, 2));
+  return manifest;
+}
+
+function readCurrentProviderPreflightManifest(): CurrentEnvProviderPreflightManifest | undefined {
+  if (!existsSync(providerPreflightManifestPath)) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(providerPreflightManifestPath, 'utf8')) as unknown;
+    if (!isRecord(parsed)) return undefined;
+    if (parsed.schemaVersion !== 'sciforge.runtime-provider-preflight.current-env.v1') return undefined;
+    if (parsed.releaseAcceptance !== 'not-evaluated') return undefined;
+    if (parsed.evidenceMode !== 'current-env-diagnostic-only') return undefined;
+    return parsed as CurrentEnvProviderPreflightManifest;
+  } catch {
+    return undefined;
+  }
+}
+
+function isPreflightOnlyBlockedReason(reason: string): boolean {
+  return /environment is not fully configured|SCIFORGE_RUNTIME_API_KEY|config file debug fallback|provider proxy upstream base URL|Runtime Codex home config|env_key|wire_api|profile|browser acceptance evidence is missing|browser acceptance evidence is incomplete or stale/i.test(reason);
+}
+
+function blockedDiagnosticsForReason(reason: string): Pick<
+  BrowserAcceptanceManifest,
+  'failureClass' | 'owner' | 'policyViolations' | 'missingEnv' | 'nextActions' | 'expectedRetestCommand'
+> {
+  const missingEnv: string[] = [];
+  const policyViolations: string[] = [];
+  const nextActions: BlockedNextAction[] = [];
+  const missingClause = /missing ([^.]+)\./i.exec(reason)?.[1] ?? '';
+  const hasRuntimeKeyIssue = /SCIFORGE_RUNTIME_API_KEY|API key/i.test(missingClause);
+  const hasConfigSecretFallback = /config file debug fallback|secret-like keys were found|not config file/i.test(reason);
+  const hasUpstreamIssue = /provider proxy upstream base URL|SCIFORGE_PROXY_UPSTREAM_BASE_URL/i.test(missingClause);
+  const hasProviderOutage = /502|Bad Gateway|429|timeout|DNS|provider outage|upstream returned|upstream availability/i.test(reason);
+  const hasSelectedArtifactGap = /selected[- ]artifact|selected ref|artifact follow-up/i.test(reason);
+
+  if (hasRuntimeKeyIssue) {
+    missingEnv.push('SCIFORGE_RUNTIME_API_KEY');
+    nextActions.push({
+      label: 'Set Runtime Codex provider key in the service environment that launches Runtime Codex/provider proxy.',
+      expected: 'Runtime preflight no longer reports missing SCIFORGE_RUNTIME_API_KEY.',
+      writesRepo: false,
+    });
+  }
+  if (hasConfigSecretFallback) {
+    policyViolations.push('config-file-secret-fallback-cannot-satisfy-browser-release-acceptance');
+    nextActions.push({
+      label: 'Keep config-file apiKey fields as local proxy debug fallback only, and do not count them as browser/release acceptance credentials.',
+      expected: 'Acceptance manifest reports service environment secret presence instead of config-file secret fallback.',
+      writesRepo: false,
+    });
+  }
+  if (hasUpstreamIssue) {
+    missingEnv.push('SCIFORGE_PROXY_UPSTREAM_BASE_URL');
+    nextActions.push({
+      label: 'Set provider proxy upstream URL in service env or ignored non-secret config.',
+      expected: 'Runtime preflight can resolve an upstream OpenAI-compatible endpoint.',
+      writesRepo: false,
+    });
+  }
+  if (hasSelectedArtifactGap) {
+    nextActions.push({
+      label: 'Run a real default-chat selected-artifact follow-up from a selected report/artifact ref.',
+      expected: 'The browser acceptance manifest records selectedRefs and visible live Runtime Codex output for artifactFollowUp.',
+      writesRepo: true,
+    });
+  }
+  nextActions.push({
+    label: 'Rerun default browser acceptance, then strict release acceptance only after a visible second-turn answer appears.',
+    command: 'npm run smoke:runtime-codex-browser-acceptance && SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 npm run smoke:runtime-codex-browser-acceptance',
+    expected: 'Default smoke writes current evidence; strict gate passes only when manifest.status is passed.',
+    writesRepo: true,
+  });
+
+  const failureClass = hasConfigSecretFallback
+    ? 'config-secret-source'
+    : hasRuntimeKeyIssue
+      ? 'missing-runtime-env'
+      : hasUpstreamIssue
+        ? 'missing-upstream'
+        : hasProviderOutage
+          ? 'provider-unavailable'
+          : /Runtime Codex|bridge|browser|implementation|profile|wire_api/i.test(reason)
+            ? 'runtime-bridge'
+            : 'unknown';
+  const owner = failureClass === 'provider-unavailable'
+    ? 'provider'
+    : failureClass === 'runtime-bridge'
+      ? 'repo'
+      : 'environment';
+  return {
+    failureClass,
+    owner,
+    policyViolations: uniqueStrings(policyViolations),
+    missingEnv: uniqueStrings(missingEnv),
+    nextActions,
+    expectedRetestCommand: 'npm run smoke:runtime-codex-browser-acceptance',
+  };
+}
+
+function blockedOnForReason(reason: string): string[] {
+  if (/selected[- ]artifact|selected ref|artifact follow-up/i.test(reason)) {
+    return [
+      'selected artifact/report live browser follow-up',
+      'visible Runtime Codex answer for the selected-ref task',
+      'artifactFollowUp scenario evidence refs',
+    ];
+  }
+  if (/config file debug fallback|service environment/i.test(reason) && /SCIFORGE_RUNTIME_API_KEY|secret/i.test(reason)) {
+    return [
+      'Runtime Codex service environment secret configuration',
+      'config-file debug secret fallback must not satisfy release acceptance',
+      'Codex in-app browser execution',
+    ];
+  }
+  if (/API key|upstream base URL|environment/i.test(reason)) {
+    return [
+      'Runtime Codex environment configuration',
+      'Runtime Codex provider proxy upstream configuration',
+      'Codex in-app browser execution',
+    ];
+  }
+  if (/502|Bad Gateway|429|timeout|DNS|provider|upstream|outage/i.test(reason)) {
+    return [
+      'provider proxy upstream availability',
+      'visible Runtime Codex answer not produced',
+      'selected artifact follow-up not reached',
+    ];
+  }
+  return ['Runtime Codex bridge integration', 'UI Runtime Codex integration'];
 }
 
 function assertNegativeFixtures(): void {
@@ -672,7 +1246,7 @@ function assertNegativeFixtures(): void {
     const manifest = JSON.parse(readFileSync(join(fixtureDir, fixture), 'utf8')) as BrowserAcceptanceManifest;
     let rejected = false;
     try {
-      assertPassedManifest(manifest);
+      assertBrowserAcceptanceManifest(manifest);
     } catch {
       rejected = true;
     }
@@ -787,6 +1361,8 @@ function passedFixtureManifest(domPath: string, notesPath: string, screenshotPat
     commandIdVisible: true,
     mainAnswerVisible: true,
     rawAuditFoldedByDefault: true,
+    releaseBlocking: false,
+    releaseEligible: true,
     automationSubstituteUsed: false,
     seedDemoFixtureEvidenceUsed: false,
     acceptanceConclusionFromRealBrowser: true,
@@ -872,6 +1448,11 @@ function portFromEnv(primary: string | undefined, secondary: string | undefined,
   return fallback;
 }
 
+function positiveNumberFromEnv(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 function relativeFromRoot(path: string): string {
   return path.startsWith(root) ? path.slice(root.length + 1) : path;
 }
@@ -886,6 +1467,18 @@ function readIfExists(path: string): string {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 async function writeManifest(manifest: BrowserAcceptanceManifest): Promise<void> {

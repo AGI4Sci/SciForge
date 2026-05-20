@@ -1,0 +1,239 @@
+{
+  "contract": "sciforge.capability-manifest.v1",
+  "id": "playwright_browser_automation",
+  "name": "Playwright browser automation",
+  "version": "0.1.0",
+  "ownerPackage": "packages/observe/web",
+  "kind": "observe",
+  "brief": "Drive a headless, isolated Playwright MCP browser for TUI agent web observation, rendered-page search, navigation, downloads, bounded page text inspection, and structured repeated-item extraction without using the human user's desktop browser.",
+  "routingTags": ["web", "browser", "playwright", "mcp", "headless", "isolated", "rendered", "javascript", "download", "accessibility-tree"],
+  "domains": ["web", "knowledge", "literature"],
+  "requiredCapabilities": ["playwright_browser_automation"],
+  "inputSchema": {
+    "type": "object",
+    "required": ["task"],
+    "properties": {
+      "task": { "type": "string" },
+      "query": { "type": "string" },
+      "url": { "type": "string" },
+      "startUrl": { "type": "string" },
+      "mode": { "type": "string", "enum": ["read", "search", "interactive", "download", "form"] },
+      "mcpServer": { "type": "string" },
+      "browserName": { "type": "string", "enum": ["chrome", "firefox", "webkit", "msedge"] },
+      "maxChars": { "type": "number", "minimum": 1 },
+      "maxLinks": { "type": "number", "minimum": 0 },
+      "timeoutMs": { "type": "number", "minimum": 1000 },
+      "outputDir": { "type": "string" },
+      "actions": {
+        "type": "array",
+        "description": "Optional ordered browser action queue for human-like browsing in the isolated Playwright MCP session.",
+        "items": {
+          "type": "object",
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "navigate",
+                "back",
+                "wait",
+                "click",
+                "hover",
+                "type",
+                "fillForm",
+                "pressKey",
+                "selectOption",
+                "drag",
+                "drop",
+                "uploadFiles",
+                "handleDialog",
+                "resize",
+                "tabs",
+                "snapshot",
+                "screenshot",
+                "evaluate",
+                "consoleMessages",
+                "networkRequests",
+                "networkRequest",
+                "downloadLinks"
+              ]
+            },
+            "target": { "type": "string" },
+            "element": { "type": "string" },
+            "text": { "type": "string" },
+            "url": { "type": "string" },
+            "time": { "type": "number" },
+            "textGone": { "type": "string" },
+            "key": { "type": "string" },
+            "fields": { "type": "array" },
+            "values": { "type": "array", "items": { "type": "string" } },
+            "paths": { "type": "array", "items": { "type": "string" } },
+            "filename": { "type": "string" },
+            "function": { "type": "string" },
+            "selector": { "type": "string" },
+            "hrefPattern": { "type": "string" },
+            "textPattern": { "type": "string" },
+            "maxFiles": { "type": "number" },
+            "maxBytes": { "type": "number" }
+          }
+        }
+      },
+      "download": {
+        "type": "object",
+        "description": "Optional link-discovery download request for PDFs, spreadsheets, archives, and other public page materials.",
+        "properties": {
+          "selector": { "type": "string" },
+          "hrefPattern": { "type": "string" },
+          "textPattern": { "type": "string" },
+          "urls": { "type": "array", "items": { "type": "string" } },
+          "maxFiles": { "type": "number", "minimum": 1 },
+          "maxBytes": { "type": "number", "minimum": 1024 },
+          "outputDir": { "type": "string" },
+          "filenamePrefix": { "type": "string" }
+        }
+      },
+      "extract": {
+        "type": "object",
+        "description": "Optional generic structured page extraction spec. Use repeated-items for result lists, paper lists, tables, cards, and feeds.",
+        "properties": {
+          "kind": { "type": "string", "enum": ["repeated-items"] },
+          "itemSelector": { "type": "string" },
+          "detailSource": { "type": "string", "enum": ["item", "nextElementSibling"] },
+          "maxItems": { "type": "number", "minimum": 1 },
+          "section": {
+            "type": "object",
+            "properties": {
+              "headingSelector": { "type": "string" },
+              "startText": { "type": "string" },
+              "startPattern": { "type": "string" },
+              "stopTexts": { "type": "array", "items": { "type": "string" } },
+              "stopPatterns": { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["name"],
+              "properties": {
+                "name": { "type": "string" },
+                "source": { "type": "string", "enum": ["item", "detail", "document"] },
+                "selector": { "type": "string" },
+                "attr": { "type": "string" },
+                "multiple": { "type": "boolean" },
+                "regex": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "required": ["status", "url", "title", "observations"],
+    "properties": {
+      "status": { "type": "string", "enum": ["succeeded", "partial", "failed", "needs-human"] },
+      "url": { "type": "string" },
+      "title": { "type": "string" },
+      "observations": { "type": "array" },
+      "resultLinks": { "type": "array" },
+      "links": { "type": "array" },
+      "structuredData": { "type": "object" },
+      "actionResults": { "type": "array" },
+      "downloadRefs": { "type": "array" },
+      "providerDiagnostics": { "type": "object" }
+    }
+  },
+  "sideEffects": ["network", "external-api"],
+  "costClass": "medium",
+  "latencyClass": "high",
+  "sideEffectClass": "network",
+  "safety": {
+    "risk": "medium",
+    "dataScopes": ["public-web", "downloads", "isolated-browser-session"],
+    "requiresHumanApproval": false
+  },
+  "examples": [
+    {
+      "title": "read a rendered page in a headless isolated browser",
+      "inputRef": "capability:playwright_browser_automation/input.read.example",
+      "outputRef": "capability:playwright_browser_automation/output.read.example"
+    }
+  ],
+  "validators": [
+    {
+      "id": "playwright_browser_automation.help",
+      "kind": "smoke",
+      "command": "npx @playwright/mcp@latest --browser=msedge --headless --isolated --help"
+    }
+  ],
+  "repairHints": [
+    {
+      "failureCode": "mcp-server-unavailable",
+      "summary": "Start or reconnect the configured headless Playwright MCP server before claiming browser-observed evidence.",
+      "recoverActions": ["start-playwright-browser-mcp", "check-mcp-client-config", "retry-browser-task"]
+    },
+    {
+      "failureCode": "browser-unavailable",
+      "summary": "Install or configure one supported Playwright MCP browser channel; do not silently reuse the human user's active browser profile.",
+      "recoverActions": ["install-browser-runtime", "choose-supported-browser-channel", "retry-with-isolated-profile"]
+    },
+    {
+      "failureCode": "site-limited",
+      "summary": "Return a blocked or partial result when a site rate-limits, requires authentication, blocks automation, or asks for human verification.",
+      "recoverActions": ["record-site-diagnostics", "respect-cooldown", "request-human-authorization-if-allowed"]
+    }
+  ],
+  "providers": [
+    {
+      "id": "sciforge.observe.playwright-browser-mcp",
+      "label": "SciForge headless Playwright MCP browser",
+      "kind": "external",
+      "contractRef": "packages/observe/web/capabilities/playwright_browser_automation.manifest.json",
+      "requiredConfig": ["mcpServers.playwright-browser"],
+      "priority": 1,
+      "capabilityId": "playwright_browser_automation",
+      "source": "mcp",
+      "transport": "mcp",
+      "mcpServer": "playwright-browser",
+      "runtimeLocation": "packages/observe/web/mcp/playwright-browser.ts",
+      "permissions": ["network", "filesystem"],
+      "auth": { "required": false },
+      "fallbackEligible": true,
+      "status": "unknown"
+    }
+  ],
+  "lifecycle": {
+    "status": "draft",
+    "sourceRef": "packages/observe/web/capabilities/playwright_browser_automation.manifest.json"
+  },
+  "metadata": {
+    "mcp": {
+      "serverName": "playwright-browser",
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest",
+        "--browser=msedge",
+        "--headless",
+        "--isolated",
+        "--viewport-size=1440x900"
+      ],
+      "headlessByDefault": true,
+      "profilePolicy": "isolated-in-memory-by-default",
+      "parallelPolicy": "use a separate MCP server process and port per independent TUI worker",
+      "desktopImpactPolicy": "does not attach to the user's active browser profile or visible desktop browser by default"
+    },
+    "toolNames": [
+      "browser_navigate",
+      "browser_snapshot",
+      "browser_click",
+      "browser_type",
+      "browser_fill_form",
+      "browser_press_key",
+      "browser_file_upload",
+      "browser_take_screenshot",
+      "browser_close"
+    ]
+  }
+}

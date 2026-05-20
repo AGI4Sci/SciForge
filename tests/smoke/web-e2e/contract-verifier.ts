@@ -13,6 +13,7 @@ import type {
   WebE2eExpectedProjection,
   WebE2eWorkspaceState,
 } from './types.js';
+import { CURRENT_PROJECT_WEB_E2E_COVERAGE } from './case-tags.js';
 
 export interface WebE2eBrowserVisibleState {
   status?: string;
@@ -75,6 +76,11 @@ export interface WebE2eContractVerificationResult {
 
 type JsonRecord = Record<string, unknown>;
 
+const CURRENT_PROJECT_WEB_E2E_TAG_ROOTS = new Set(
+  CURRENT_PROJECT_WEB_E2E_COVERAGE.flatMap((mapping) => mapping.saWebTags)
+    .map(canonicalWebE2eTagRoot),
+);
+
 export async function loadWebE2eContractVerifierInput(files: WebE2eContractVerifierFiles): Promise<WebE2eContractVerifierInput> {
   const expected = await readJson<WebE2eExpectedProjection>(files.expectedProjectionPath);
   const workspaceState = files.workspaceStatePath
@@ -117,6 +123,7 @@ export function verifyWebE2eContract(input: WebE2eContractVerifierInput): WebE2e
   compareArtifactDelivery('ArtifactDelivery manifest', artifactDelivery, expected.artifactDelivery, failures);
   compareArtifactDelivery('session bundle ArtifactDelivery', artifactDeliveryFromArtifacts(session.artifacts), expected.artifactDelivery, failures);
   compareInstrumentation(input.instrumentation, failures);
+  checkCurrentProjectRuntimeSource(input, run, failures);
 
   return { ok: failures.length === 0, failures };
 }
@@ -274,6 +281,59 @@ function compareInstrumentation(instrumentation: BrowserInstrumentationSnapshot 
   for (const [key, count] of Object.entries(instrumentation.counts)) {
     if (key === 'screenshots' || key === 'domSnapshots' || key === 'downloads' || count === 0) continue;
     failures.push(`browser instrumentation ${key} count must be 0, actual ${count}`);
+  }
+}
+
+function checkCurrentProjectRuntimeSource(
+  input: WebE2eContractVerifierInput,
+  run: SciForgeRun | undefined,
+  failures: string[],
+) {
+  const caseId = input.caseId ?? input.expected.caseId;
+  if (!isCurrentProjectWebE2eCase(caseId)) return;
+  const raw = isRecord(run?.raw) ? run.raw : undefined;
+  const rawDisplayIntent = isRecord(raw?.displayIntent) ? raw.displayIntent : undefined;
+  const rawResultPresentation = isRecord(raw?.resultPresentation) ? raw.resultPresentation : undefined;
+  const paths = [
+    ...findAgentServerSourcePaths(input.expected.conversationProjection, 'expected.conversationProjection'),
+    ...findAgentServerSourcePaths(input.kernelProjection, 'input.kernelProjection'),
+    ...findAgentServerSourcePaths(rawDisplayIntent, 'run.raw.displayIntent'),
+    ...findAgentServerSourcePaths(rawResultPresentation, 'run.raw.resultPresentation'),
+  ];
+  if (paths.length === 0) return;
+  failures.push(
+    `Current PROJECT web-e2e runtime payload cannot use source='agentserver': ${paths.join(', ')}`,
+  );
+}
+
+function isCurrentProjectWebE2eCase(caseId: string | undefined): boolean {
+  if (!caseId) return false;
+  return CURRENT_PROJECT_WEB_E2E_TAG_ROOTS.has(canonicalWebE2eTagRoot(caseId));
+}
+
+function canonicalWebE2eTagRoot(value: string): string {
+  return value.match(/^SA-WEB-\d{2}/)?.[0] ?? value;
+}
+
+function findAgentServerSourcePaths(value: unknown, path: string): string[] {
+  const paths: string[] = [];
+  const seen = new WeakSet<object>();
+  visitSourcePaths(value, path, paths, seen);
+  return paths;
+}
+
+function visitSourcePaths(value: unknown, path: string, paths: string[], seen: WeakSet<object>) {
+  if (!value || typeof value !== 'object') return;
+  if (seen.has(value)) return;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => visitSourcePaths(item, `${path}[${index}]`, paths, seen));
+    return;
+  }
+  const record = value as JsonRecord;
+  if (record.source === 'agentserver') paths.push(`${path}.source`);
+  for (const [key, child] of Object.entries(record)) {
+    visitSourcePaths(child, `${path}.${key}`, paths, seen);
   }
 }
 

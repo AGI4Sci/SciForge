@@ -75,6 +75,76 @@ import {
   closeDataAnalysisHappyPathCase,
   runDataAnalysisHappyPathCase,
 } from './cases/data-analysis-happy-path.js';
+import {
+  assertLargeFileDiagnosticsCase,
+  closeLargeFileDiagnosticsCase,
+  runLargeFileDiagnosticsCase,
+} from './cases/large-file-diagnostics.js';
+import {
+  assertLongitudinalMessyCsvCase,
+  closeLongitudinalMessyCsvCase,
+  runLongitudinalMessyCsvCase,
+} from './cases/longitudinal-messy-csv.js';
+import {
+  assertSchemaDriftConfounderCase,
+  closeSchemaDriftConfounderCase,
+  runSchemaDriftConfounderCase,
+} from './cases/schema-drift-confounder.js';
+import {
+  assertTwoTableLineageCase,
+  closeTwoTableLineageCase,
+  runTwoTableLineageCase,
+} from './cases/two-table-lineage.js';
+import {
+  assertGuiResourceProbingCase,
+  runGuiResourceProbingCase,
+} from './cases/gui-resource-probing.js';
+import {
+  assertGuiAskUserClarificationCase,
+  runGuiAskUserClarificationCase,
+} from './cases/gui-ask-user-clarification.js';
+import {
+  assertGuiActionCommandTraceCase,
+  runGuiActionCommandTraceCase,
+} from './cases/gui-action-command-trace.js';
+import {
+  assertNativeSessionArtifactFollowupContract,
+  runNativeSessionArtifactFollowupCase,
+} from './cases/native-session-artifact-followup.js';
+import {
+  assertLongContextConstraintStabilityCase,
+  runLongContextConstraintStabilityCase,
+} from './cases/long-context-constraint-stability.js';
+import {
+  assertLiteratureCurrentAndSelectedReportCase,
+  buildLiteratureCurrentAndSelectedReportCase,
+} from './cases/literature-current-and-selected-report.js';
+import {
+  assertLiteratureEvidenceConflictCase,
+  runLiteratureEvidenceConflictCase,
+} from './cases/literature-evidence-conflict.js';
+import {
+  assertDirtyWorktreeCollaborationContract,
+  assertTargetedCodeRepairContract,
+  buildDirtyWorktreeCollaborationCase,
+  buildTargetedCodeRepairCase,
+} from './cases/code-repair-collaboration.js';
+import {
+  assertScientificReviewerVerifierLoopCase,
+  buildScientificReviewerVerifierLoopCases,
+} from './cases/scientific-reviewer-verifier-loop.js';
+import {
+  assertCapabilitySkillComputerUseBoundariesCase,
+  runCapabilitySkillComputerUseBoundariesCase,
+} from './cases/capability-skill-computer-use-boundaries.js';
+import {
+  assertRunResumeLifecycleRecoveryFixture,
+  buildRunResumeLifecycleRecoveryFixture,
+} from './cases/run-resume-lifecycle-recovery.js';
+import {
+  assertProviderSecurityBudgetAuditFixture,
+  createProviderSecurityBudgetAuditFixture,
+} from './cases/provider-security-budget-audit-fixture.js';
 import { buildWebE2eFixtureWorkspace } from './fixture-workspace-builder.js';
 import type { ProjectionOnlyRestoreEvidence } from './refresh-reopen-helper.js';
 import type { WebE2eBrowserVisibleState } from './contract-verifier.js';
@@ -85,11 +155,11 @@ export type LegacyBrowserSmokeScript =
   | 'smoke:browser-multiturn'
   | 'smoke:browser-provider-preflight';
 
-export type WebE2eAgentServerMode = 'scriptable-mock' | 'real-provider-optional';
+export type WebE2eRuntimeDispatchMode = 'offline-fixture' | 'real-provider-optional';
 
 export interface WebE2eFinalDevService {
-  name: 'workspace-writer' | 'web-ui' | 'agentserver';
-  mode: 'fixture-managed' | 'scriptable-mock' | 'real-provider-optional';
+  name: 'workspace-writer' | 'web-ui' | 'runtime-dispatch';
+  mode: 'fixture-managed' | WebE2eRuntimeDispatchMode;
   status: 'ready';
   baseUrl?: string;
 }
@@ -97,7 +167,7 @@ export interface WebE2eFinalDevService {
 export interface WebE2eCaseRunContext {
   runRoot: string;
   evidenceRoot: string;
-  agentServerMode: WebE2eAgentServerMode;
+  runtimeDispatchMode: WebE2eRuntimeDispatchMode;
   devServices: WebE2eFinalDevService[];
 }
 
@@ -109,7 +179,7 @@ export interface WebE2eCaseRunSummary {
   migratedLegacySteps: string[];
   runRoot?: string;
   evidenceRoot?: string;
-  agentServerMode?: WebE2eAgentServerMode;
+  runtimeDispatchMode?: WebE2eRuntimeDispatchMode;
 }
 
 export interface WebE2eCaseDefinition {
@@ -430,13 +500,13 @@ export const webE2eCaseRegistry: WebE2eCaseDefinition[] = [
   },
   {
     id: 'SA-WEB-13',
-    title: 'Direct context gate routes insufficient work to AgentServer',
-    tags: finalCaseTags('SA-WEB-13', ['direct-context-gate', 'agentserver-route', 'smoke:browser-multiturn']),
+    title: 'Direct context gate uses runtime dispatch or blocked evidence',
+    tags: finalCaseTags('SA-WEB-13', ['direct-context-gate', 'runtime-dispatch', 'blocked-with-evidence', 'smoke:browser-multiturn']),
     migratedLegacyScripts: ['smoke:browser-multiturn'],
     migratedLegacySteps: [
       'bounded run-status direct answers require a structured DirectContextDecision',
-      'generation and repair prompts route to AgentServer when direct context is insufficient',
-      'tool/provider status cannot be answered from local prompt heuristics',
+      'generation and repair prompts use Runtime Codex runtime dispatch when direct context is insufficient',
+      'tool/provider status gaps are blocked with evidence instead of local prompt heuristics',
     ],
     async run(context) {
       const result = await buildDirectContextGateCase({ baseDir: context ? join(context.runRoot, this.id, 'workspace') : undefined });
@@ -444,7 +514,23 @@ export const webE2eCaseRegistry: WebE2eCaseDefinition[] = [
         assertWebE2eContract(result.directStatus.verifierInput);
         for (const routed of result.routed) assertWebE2eContract(routed.verifierInput);
         assert.equal(result.directStatus.route, 'direct-context-answer');
-        assert.ok(result.routed.every((scenario) => scenario.route === 'route-to-agentserver'));
+        assert.equal(result.directStatus.serverRequests, 0);
+        assert.deepEqual(
+          result.routed
+            .filter((scenario) => scenario.scenario === 'generation' || scenario.scenario === 'repair')
+            .map((scenario) => scenario.scenario)
+            .sort(),
+          ['generation', 'repair'],
+        );
+        for (const routed of result.routed) {
+          assert.equal(routed.decision.sufficiency, 'insufficient');
+          assert.equal(routed.decision.allowDirectContext, false);
+          assert.equal(routed.directPayload, undefined);
+          assert.ok(routed.runtimeDispatchRun, `${routed.scenario}: offline runtime-dispatch fixture must keep compatibility run evidence`);
+          assert.ok(routed.runAudit.refs.includes(routed.decision.decisionRef), `${routed.scenario}: blocked/runtime-dispatch evidence must retain decision ref`);
+        }
+        const blockedWithEvidence = result.routed.find((scenario) => scenario.scenario === 'tool-status-insufficient');
+        assert.equal(blockedWithEvidence?.decision.blockReason, 'tool-status-insufficient');
       } finally {
         await result.server.close();
       }
@@ -507,10 +593,331 @@ export const webE2eCaseRegistry: WebE2eCaseDefinition[] = [
       return summaryFor(this, context);
     },
   },
+  {
+    id: 'SA-WEB-19',
+    title: 'Large-file bounded diagnostics',
+    tags: finalCaseTags('SA-WEB-19', ['large-file-diagnostics', 'large-file-bounded-diagnostics', 'read-ref', 'smoke:browser-multiturn']),
+    migratedLegacyScripts: ['smoke:browser-multiturn'],
+    migratedLegacySteps: [
+      'large log/text source is referenced through an index instead of raw prompt text',
+      'follow-up anomaly inspection reads only bounded snippets from the selected large-file ref',
+      'terminal answer exports diagnostic report plus a read-fragment manifest proving no full-text transcript stuffing',
+    ],
+    async run(context) {
+      const result = await runLargeFileDiagnosticsCase({
+        baseDir: context ? join(context.runRoot, this.id, 'workspace') : undefined,
+        outputRoot: context?.evidenceRoot,
+      });
+      try {
+        await assertLargeFileDiagnosticsCase(result);
+      } finally {
+        await closeLargeFileDiagnosticsCase(result);
+      }
+      return summaryFor(this, context);
+    },
+  },
+  {
+    id: 'SA-WEB-20',
+    title: 'Long-format messy CSV coefficient comparison',
+    tags: finalCaseTags('SA-WEB-20', ['longitudinal-messy-csv', 'data-statistics-lineage', 'read-ref', 'smoke:browser-multiturn']),
+    migratedLegacyScripts: ['smoke:browser-multiturn'],
+    migratedLegacySteps: [
+      'long-format subject/group/timepoint/batch/outcome CSV is read through refs instead of raw prompt text',
+      'batch/timepoint covariates are added in a follow-up and treatment coefficient changes are compared',
+      'terminal answer exports report, cleaned data, chart, coefficient comparison, and rerun code refs',
+    ],
+    async run(context) {
+      const result = await runLongitudinalMessyCsvCase({
+        baseDir: context ? join(context.runRoot, this.id, 'workspace') : undefined,
+        outputRoot: context?.evidenceRoot,
+      });
+      try {
+        await assertLongitudinalMessyCsvCase(result);
+      } finally {
+        await closeLongitudinalMessyCsvCase(result);
+      }
+      return summaryFor(this, context);
+    },
+  },
+  {
+    id: 'SA-WEB-21',
+    title: 'Schema drift confounder reinterpretation',
+    tags: finalCaseTags('SA-WEB-21', ['schema-drift-confounder', 'stale-valid-refs', 'read-ref', 'smoke:browser-multiturn']),
+    migratedLegacyScripts: ['smoke:browser-multiturn'],
+    migratedLegacySteps: [
+      'generic schema table is analyzed without hard-coded treatment/placebo or biomarker assumptions',
+      'follow-up reveals a site/batch confounder and reclassifies earlier refs as stale or still valid',
+      'terminal answer exports a notebook-style method section and valid/stale refs manifest',
+    ],
+    async run(context) {
+      const result = await runSchemaDriftConfounderCase({
+        baseDir: context ? join(context.runRoot, this.id, 'workspace') : undefined,
+        outputRoot: context?.evidenceRoot,
+      });
+      try {
+        await assertSchemaDriftConfounderCase(result);
+      } finally {
+        await closeSchemaDriftConfounderCase(result);
+      }
+      return summaryFor(this, context);
+    },
+  },
+  {
+    id: 'SA-WEB-22',
+    title: 'Two-table merge lineage and reproducibility',
+    tags: finalCaseTags('SA-WEB-22', ['two-table-lineage', 'data-lineage', 'read-ref', 'smoke:browser-multiturn']),
+    migratedLegacyScripts: ['smoke:browser-multiturn'],
+    migratedLegacySteps: [
+      'two mismatched source tables and mapping rules are read by refs for an initial merge',
+      'mapping and filter updates recompute metrics while preserving lineage for final columns and rules',
+      'terminal answer exports cleaned data, mapping artifact, lineage manifest, and reproducibility command',
+    ],
+    async run(context) {
+      const result = await runTwoTableLineageCase({
+        baseDir: context ? join(context.runRoot, this.id, 'workspace') : undefined,
+        outputRoot: context?.evidenceRoot,
+      });
+      try {
+        await assertTwoTableLineageCase(result);
+      } finally {
+        await closeTwoTableLineageCase(result);
+      }
+      return summaryFor(this, context);
+    },
+  },
+  {
+    id: 'SA-WEB-23',
+    title: 'Progressive GUI resource probing',
+    tags: finalCaseTags('SA-WEB-23', ['progressive-gui-resource-probing', 'gui-resource-probing', 'protocol-coverage', 'smoke:browser-multiturn']),
+    migratedLegacyScripts: ['smoke:browser-multiturn'],
+    migratedLegacySteps: [
+      'GUI context is probed through shell and hot-region resources before any detail resource',
+      'region-detail is read only after a narrow commandText question',
+      'full DOM and debug snapshot resources stay unread and out of transcript/Projection',
+    ],
+    async run(context) {
+      const result = await runGuiResourceProbingCase({
+        baseDir: context ? join(context.runRoot, this.id, 'workspace') : undefined,
+      });
+      assertGuiResourceProbingCase(result);
+      return summaryFor(this, context);
+    },
+  },
+  {
+    id: 'SA-WEB-24',
+    title: 'gui.ask_user clarification commandText',
+    tags: finalCaseTags('SA-WEB-24', ['gui-ask-user-clarification', 'gui-ask-user', 'protocol-coverage', 'smoke:browser-multiturn']),
+    migratedLegacyScripts: ['smoke:browser-multiturn'],
+    migratedLegacySteps: [
+      'clarification intent renders a visible gui.ask_user prompt instead of applying local GUI logic',
+      'user confirmation text returns as terminal-equivalent commandText',
+      'confirmed commandText routes through runtime dispatch with no GUI local business function',
+    ],
+    async run(context) {
+      const result = await runGuiAskUserClarificationCase({
+        baseDir: context ? join(context.runRoot, this.id, 'workspace') : undefined,
+      });
+      assertGuiAskUserClarificationCase(result);
+      return summaryFor(this, context);
+    },
+  },
+  {
+    id: 'SA-WEB-28',
+    title: 'Text-only GUI action command trace',
+    tags: finalCaseTags('SA-WEB-28', ['text-only-gui-action', 'gui-action-command-trace', 'protocol-coverage', 'smoke:browser-multiturn']),
+    migratedLegacyScripts: ['smoke:browser-multiturn'],
+    migratedLegacySteps: [
+      'visible open/retry/export/recover/delete GUI actions reduce to terminal-equivalent commandText',
+      'commandText dispatches carry durable refs and audit trace across artifact, run, audit, recovery, and selected-object panels',
+      'hidden GUI business payloads and local business execution stay absent',
+    ],
+    async run(context) {
+      const result = await runGuiActionCommandTraceCase({
+        baseDir: context ? join(context.runRoot, this.id, 'workspace') : undefined,
+      });
+      assertGuiActionCommandTraceCase(result);
+      return summaryFor(this, context);
+    },
+  },
+  {
+    id: 'SA-WEB-29',
+    title: 'Native Runtime Codex selected-artifact resume follow-up',
+    tags: finalCaseTags('SA-WEB-29', ['native-session-artifact-followup', 'runtime-codex-native-resume', 'selected-artifact-followup', 'smoke:browser-multiturn']),
+    migratedLegacyScripts: ['smoke:browser-multiturn'],
+    migratedLegacySteps: [
+      'initial Runtime Codex task exposes codexSessionId and a durable artifact ref',
+      'selected-artifact follow-up commandText contains only the new user request plus selected refs',
+      'native resume metadata ties the derived artifact to the prior Codex session and exposes unsupported resume as blocked',
+    ],
+    async run(context) {
+      const result = await runNativeSessionArtifactFollowupCase({
+        baseDir: context ? join(context.runRoot, this.id, 'workspace') : undefined,
+      });
+      assertNativeSessionArtifactFollowupContract(result);
+      return summaryFor(this, context);
+    },
+  },
+  {
+    id: 'SA-WEB-30',
+    title: 'Long-context original constraint stability',
+    tags: finalCaseTags('SA-WEB-30', ['long-context-constraint-stability', 'stable-original-constraint', 'bounded-audit-refs', 'smoke:browser-multiturn']),
+    migratedLegacyScripts: ['smoke:browser-multiturn'],
+    migratedLegacySteps: [
+      'first turn records a concrete original constraint',
+      'unrelated artifact-heavy literature/data work creates long-context pressure without becoming final context',
+      'final answer recovers the original constraint and keeps unrelated artifact refs out of visible output and final audit refs',
+    ],
+    async run(context) {
+      const result = await runLongContextConstraintStabilityCase({
+        baseDir: context ? join(context.runRoot, this.id, 'workspace') : undefined,
+        outputRoot: context?.evidenceRoot,
+      });
+      assertLongContextConstraintStabilityCase(result);
+      return summaryFor(this, context);
+    },
+  },
+  {
+    id: 'SA-WEB-31',
+    title: 'Current literature retrieval and selected-report follow-up',
+    tags: finalCaseTags('SA-WEB-31', ['literature-current-selected-report', 'current-arxiv-retrieval', 'selected-report-followup', 'smoke:browser-multiturn']),
+    migratedLegacyScripts: ['smoke:browser-multiturn'],
+    migratedLegacySteps: [
+      'latest/today arXiv-style retrieval records queries, candidates, PDF/read states, blocked reasons, and Chinese report path',
+      'report reorder preserves method, environment/task, evidence strength, benchmark, and limitation axes',
+      'selected report follow-up proves old/new selected refs stay scoped instead of leaking latest artifact context',
+    ],
+    async run() {
+      const result = buildLiteratureCurrentAndSelectedReportCase();
+      assertLiteratureCurrentAndSelectedReportCase(result);
+      return summaryFor(this);
+    },
+  },
+  {
+    id: 'SA-WEB-32',
+    title: 'Contradictory literature evidence and dynamic web status',
+    tags: finalCaseTags('SA-WEB-32', ['literature-evidence-conflict', 'dynamic-web-evidence-status', 'blocked-web-status', 'smoke:browser-provider-preflight', 'smoke:browser-multiturn']),
+    migratedLegacyScripts: ['smoke:browser-provider-preflight', 'smoke:browser-multiturn'],
+    migratedLegacySteps: [
+      'arXiv, PubMed, Semantic Scholar, and web evidence remain separated by direction, quality, confounders, datasets, and replication risk',
+      'grant rewrite uses cautious claim language and exported citations instead of flattening contradiction evidence',
+      'dynamic web fact check records fetched, rendered, Cloudflare, 403, timeout, empty, and cached fallback statuses without fabricated content',
+    ],
+    async run(context) {
+      const result = await runLiteratureEvidenceConflictCase(context ? join(context.evidenceRoot, this.id) : undefined);
+      assertLiteratureEvidenceConflictCase(result);
+      return summaryFor(this, context);
+    },
+  },
+  {
+    id: 'SA-WEB-33',
+    title: 'Targeted code repair from failing test',
+    tags: finalCaseTags('SA-WEB-33', ['targeted-code-repair', 'generic-source-fix', 'no-artifact-fake-fix', 'smoke:browser-multiturn']),
+    migratedLegacyScripts: ['smoke:browser-multiturn'],
+    migratedLegacySteps: [
+      'repair starts from a concrete failing command and root-cause diagnosis',
+      'only the generic source file changes while diagnostic output artifacts remain evidence',
+      'targeted rerun, changed files, risks, and broader-test recommendation are reported',
+    ],
+    async run(context) {
+      const result = await buildTargetedCodeRepairCase({
+        baseDir: context ? join(context.runRoot, this.id, 'workspace') : undefined,
+      });
+      assertWebE2eContract(result.verifierInput);
+      assertTargetedCodeRepairContract(result.contract);
+      return summaryFor(this, context);
+    },
+  },
+  {
+    id: 'SA-WEB-34',
+    title: 'Dirty worktree repair preserves user changes',
+    tags: finalCaseTags('SA-WEB-34', ['dirty-worktree-preservation', 'protected-file-constraint', 'no-reset-revert', 'smoke:browser-multiturn']),
+    migratedLegacyScripts: ['smoke:browser-multiturn'],
+    migratedLegacySteps: [
+      'dirty worktree state is inspected before repair and user-owned files are recorded',
+      'later protected-file constraints are honored while only agent-owned repair file changes',
+      'diff summary includes byte-stable proof and no reset/revert behavior',
+    ],
+    async run(context) {
+      const result = await buildDirtyWorktreeCollaborationCase({
+        baseDir: context ? join(context.runRoot, this.id, 'workspace') : undefined,
+      });
+      assertWebE2eContract(result.verifierInput);
+      assertDirtyWorktreeCollaborationContract(result.contract);
+      return summaryFor(this, context);
+    },
+  },
+  {
+    id: 'SA-WEB-35',
+    title: 'Scientific reviewer and verifier repair loop',
+    tags: finalCaseTags('SA-WEB-35', ['scientific-reviewer-verifier-loop', 'protocol-reviewer-loop', 'evidence-graph-contradictions', 'verifier-critique-repair', 'smoke:browser-multiturn']),
+    migratedLegacyScripts: ['smoke:browser-multiturn'],
+    migratedLegacySteps: [
+      'protocol package reviewer loop updates dependent artifacts and keeps old values only in history',
+      'biomedical evidence graph carries evidence refs, contradiction evidence, confidence changes, and what-would-change-my-mind export',
+      'single-cell and verifier critique flows require repaired artifacts, UI refs, and audit refs before completion',
+    ],
+    async run(context) {
+      const cases = await buildScientificReviewerVerifierLoopCases({
+        baseDir: context ? join(context.runRoot, this.id, 'workspace') : undefined,
+      });
+      for (const entry of cases) assertScientificReviewerVerifierLoopCase(entry);
+      return summaryFor(this, context);
+    },
+  },
+  {
+    id: 'SA-WEB-36',
+    title: 'Capability, skill, and Computer Use boundaries',
+    tags: finalCaseTags('SA-WEB-36', ['capability-discovery-boundary', 'codex-native-skill-promotion', 'computer-use-evidence-folding', 'smoke:browser-multiturn']),
+    migratedLegacyScripts: ['smoke:browser-multiturn'],
+    migratedLegacySteps: [
+      'capability discovery remains a TUI-native progressive plan with alternatives and route changes, not GUI ranking or completion evidence',
+      'skill promotion is staged as Codex-native skill, plugin, MCP, and slash-command proposals with explicit validation gates',
+      'Computer Use raw screenshot/log refs fold into audit-only evidence and React/UI never executes Computer Use actions',
+    ],
+    async run(context) {
+      const result = await runCapabilitySkillComputerUseBoundariesCase({
+        baseDir: context ? join(context.runRoot, this.id, 'workspace') : undefined,
+      });
+      assertCapabilitySkillComputerUseBoundariesCase(result);
+      return summaryFor(this, context);
+    },
+  },
+  {
+    id: 'SA-WEB-37',
+    title: 'Run/resume lifecycle recovery boundaries',
+    tags: finalCaseTags('SA-WEB-37', ['service-lifecycle-recovery', 'cancel-partial-continuation', 'browser-refresh-recovery', 'smoke:browser-multiturn']),
+    migratedLegacyScripts: ['smoke:browser-multiturn'],
+    migratedLegacySteps: [
+      'stale process cleanup and actual fallback port evidence are required before service lifecycle recovery can pass',
+      'cancelled runs preserve partial artifacts and continue only the safe remaining steps',
+      'browser refresh restoration is distinguished from native Runtime Codex session continuity',
+    ],
+    async run(context) {
+      const result = buildRunResumeLifecycleRecoveryFixture();
+      assertRunResumeLifecycleRecoveryFixture(result);
+      return summaryFor(this, context);
+    },
+  },
+  {
+    id: 'SA-WEB-38',
+    title: 'Provider budget, security audit, and outage recovery',
+    tags: finalCaseTags('SA-WEB-38', ['runtime-provider-budget', 'secret-raw-stream-scrub', 'failed-run-audit-export', 'provider-outage-recovery', 'provider-security-budget-audit', 'smoke:browser-provider-preflight', 'smoke:browser-multiturn']),
+    migratedLegacyScripts: ['smoke:browser-provider-preflight', 'smoke:browser-multiturn'],
+    migratedLegacySteps: [
+      'DeepSeek Runtime Codex profile/model/provider/workspace/command transparency blocks silent OpenAI fallback',
+      'raw provider streams, stderr, HTML challenge bodies, endpoint fields, and secrets are scrubbed from foreground and audit evidence',
+      'provider outage runs stay repair-needed and later recovery must use fresh dispatch evidence instead of failed output',
+    ],
+    async run(context) {
+      const result = createProviderSecurityBudgetAuditFixture();
+      assertProviderSecurityBudgetAuditFixture(result);
+      return summaryFor(this, context);
+    },
+  },
 ];
 
 export function selectWebE2eCases(options: { tags?: string[]; cases?: string[] } = {}): WebE2eCaseDefinition[] {
-  const tags = options.tags ?? [];
+  const tags = (options.tags ?? []).flatMap((tag) => tag === 'SA-WEB-27' ? ['SA-WEB-18'] : [tag]);
   const cases = options.cases ?? [];
   const selected = webE2eCaseRegistry.filter((definition) => {
     const tagSelection = tags.includes('SA-WEB-01') ? tags.filter((tag) => tag !== 'SA-WEB-01') : tags;
@@ -600,7 +1007,7 @@ function summaryFor(definition: WebE2eCaseDefinition, context?: WebE2eCaseRunCon
     migratedLegacySteps: [...definition.migratedLegacySteps],
     runRoot: context?.runRoot,
     evidenceRoot: context?.evidenceRoot,
-    agentServerMode: context?.agentServerMode,
+    runtimeDispatchMode: context?.runtimeDispatchMode,
   };
 }
 

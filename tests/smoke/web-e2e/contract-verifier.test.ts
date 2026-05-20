@@ -63,6 +63,21 @@ test('SA-WEB-22 fails when Kernel Projection drifts from the expected case contr
   assert.ok(result.failures.includes('Kernel Projection mismatch'));
 });
 
+test('current PROJECT cases fail when runtime payloads retain AgentServer as display source', async () => {
+  const fixture = await fixtureWorkspace('SA-WEB-22-agentserver-source');
+  const input = verifierInput(fixture);
+  const session = 'session' in input.sessionBundle ? input.sessionBundle.session : input.sessionBundle;
+  const displayIntent = (session.runs[0]?.raw as { displayIntent?: { source?: string } }).displayIntent;
+  assert.ok(displayIntent);
+  displayIntent.source = 'agentserver';
+
+  const result = verifyWebE2eContract(input);
+
+  assert.equal(result.ok, false);
+  assert.match(result.failures.join('\n'), /runtime payload cannot use source='agentserver'/);
+  assert.match(result.failures.join('\n'), /run\.raw\.displayIntent\.source/);
+});
+
 test('SA-WEB-22 fails when the session bundle loses the expected Projection or explicit refs', async () => {
   const fixture = await fixtureWorkspace('SA-WEB-22-session-drift');
   const input = verifierInput(fixture);

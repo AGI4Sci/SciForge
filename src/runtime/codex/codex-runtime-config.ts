@@ -30,8 +30,8 @@ export interface RuntimeConfigGuardOptions {
 }
 
 export async function assertCodexRuntimeConfig(options: RuntimeConfigGuardOptions): Promise<CodexRuntimeConfig> {
-  const paths = getRuntimeHomePaths();
   const env = options.env ?? process.env;
+  const paths = getRuntimeHomePaths({ env });
   const profile = options.profile ?? RUNTIME_PROFILE;
   if (profile !== RUNTIME_PROFILE) {
     throw new Error(`Unsupported Runtime Codex profile: ${profile}. Expected ${RUNTIME_PROFILE}.`);

@@ -15,6 +15,31 @@ export const DEFAULT_CODEX_RUNTIME_PROVIDER = 'sciforge-deepseek-proxy';
 export const DEFAULT_CODEX_RUNTIME_MODEL = 'bailian/deepseek-v4-flash';
 export const DEFAULT_CODEX_RUNTIME_BASE_URL = 'http://127.0.0.1:3891/v1';
 
+type DesktopRuntimePortBinding = {
+  name?: unknown;
+  url?: unknown;
+};
+
+type DesktopRuntimeConfigRecord = {
+  schemaVersion?: unknown;
+  runtimeControlUrl?: unknown;
+  workspaceWriterBaseUrl?: unknown;
+  modelBaseUrl?: unknown;
+  runtimeCodexBaseUrl?: unknown;
+  workspacePath?: unknown;
+  ports?: unknown;
+};
+
+type SciForgeDesktopBridge = {
+  getRuntimeConfig?: () => Promise<unknown>;
+};
+
+declare global {
+  interface Window {
+    sciforgeDesktop?: SciForgeDesktopBridge;
+  }
+}
+
 export const defaultSciForgeConfig: SciForgeConfig = {
   schemaVersion: 1,
   agentServerBaseUrl: buildDefaults.VITE_SCIFORGE_DEFAULT_AGENT_SERVER_URL || 'http://127.0.0.1:18080',
@@ -48,6 +73,16 @@ export function loadSciForgeConfig(): SciForgeConfig {
   }
 }
 
+export async function loadDesktopRuntimeConfigDefaults(): Promise<Partial<SciForgeConfig> | undefined> {
+  if (typeof window === 'undefined') return undefined;
+  const bridge = window.sciforgeDesktop;
+  if (!bridge?.getRuntimeConfig) return undefined;
+  const raw = await bridge.getRuntimeConfig();
+  const runtimeConfig = normalizeDesktopRuntimeConfig(raw);
+  if (!runtimeConfig) return undefined;
+  return runtimeConfig;
+}
+
 function applyBuildRuntimeDefaults(config: SciForgeConfig): SciForgeConfig {
   return {
     ...config,
@@ -64,6 +99,51 @@ function applyBuildRuntimeDefaults(config: SciForgeConfig): SciForgeConfig {
       ? defaultSciForgeConfig.modelBaseUrl
       : config.modelBaseUrl,
   };
+}
+
+function normalizeDesktopRuntimeConfig(value: unknown): Partial<SciForgeConfig> | undefined {
+  if (!isDesktopRuntimeConfigRecord(value)) return undefined;
+  const ports = Array.isArray(value.ports) ? value.ports.filter(isDesktopRuntimePortBinding) : [];
+  const workspaceWriterBaseUrl = cleanUrl(value.workspaceWriterBaseUrl)
+    || portBindingUrl(ports, 'workspace-writer');
+  const providerProxyUrl = cleanUrl(value.modelBaseUrl)
+    || withV1BasePath(portBindingUrl(ports, 'provider-proxy'));
+  const runtimeCodexBaseUrl = cleanUrl(value.runtimeCodexBaseUrl)
+    || portBindingUrl(ports, 'runtime-codex')
+    || cleanUrl(value.runtimeControlUrl);
+  const workspacePath = normalizeWorkspaceRootPath(typeof value.workspacePath === 'string' ? value.workspacePath : '');
+  const config: Partial<SciForgeConfig> = {};
+  if (workspaceWriterBaseUrl) config.workspaceWriterBaseUrl = workspaceWriterBaseUrl;
+  if (providerProxyUrl) config.modelBaseUrl = providerProxyUrl;
+  if (runtimeCodexBaseUrl) config.agentServerBaseUrl = runtimeCodexBaseUrl;
+  if (workspacePath) config.workspacePath = workspacePath;
+  config.agentBackend = 'codex';
+  config.runtimeProfile = DEFAULT_CODEX_RUNTIME_PROFILE;
+  config.modelProvider = DEFAULT_CODEX_RUNTIME_PROVIDER;
+  config.modelName = DEFAULT_CODEX_RUNTIME_MODEL;
+  config.allowOpenAiRuntime = false;
+  return Object.keys(config).length ? config : undefined;
+}
+
+function isDesktopRuntimeConfigRecord(value: unknown): value is DesktopRuntimeConfigRecord {
+  return typeof value === 'object'
+    && value !== null
+    && !Array.isArray(value)
+    && (value as DesktopRuntimeConfigRecord).schemaVersion === 'sciforge.desktop.runtime-config.v1';
+}
+
+function isDesktopRuntimePortBinding(value: unknown): value is DesktopRuntimePortBinding {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function portBindingUrl(ports: DesktopRuntimePortBinding[], name: string): string {
+  const binding = ports.find((port) => port.name === name);
+  return cleanUrl(binding?.url);
+}
+
+function withV1BasePath(url: string): string {
+  if (!url) return '';
+  return /\/v1\/?$/i.test(url) ? url.replace(/\/+$/, '') : `${url.replace(/\/+$/, '')}/v1`;
 }
 
 export function saveSciForgeConfig(config: SciForgeConfig) {

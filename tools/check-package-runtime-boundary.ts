@@ -13,7 +13,17 @@ type Finding = {
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
 const root = process.cwd();
-const ignoredDirs = new Set(['.git', 'node_modules', 'dist', 'dist-ui', 'build', 'coverage']);
+const ignoredDirs = new Set([
+  '.git',
+  '.codex-runtime',
+  '.sciforge',
+  '.tmp',
+  'node_modules',
+  'dist',
+  'dist-ui',
+  'build',
+  'coverage',
+]);
 
 const metadataNames = new Set([
   'package.json',

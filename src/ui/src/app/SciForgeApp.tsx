@@ -48,7 +48,7 @@ import {
   startNewChat,
 } from '../workspace/sessionWorkspace';
 import { markReusableRunInWorkspace } from '../workspace/reusableTaskWorkspace';
-import { loadSciForgeConfig, normalizeWorkspaceRootPath, saveSciForgeConfig, updateConfig } from '../config';
+import { loadDesktopRuntimeConfigDefaults, loadSciForgeConfig, normalizeWorkspaceRootPath, saveSciForgeConfig, updateConfig } from '../config';
 import {
   loadFileBackedSciForgeConfig,
   loadPersistedWorkspaceState,
@@ -128,24 +128,33 @@ export function SciForgeApp() {
     saveStoredAppNavigation({ page, scenarioId });
   }, [page, scenarioId]);
 
-  useEffect(() => {
-    let cancelled = false;
-    loadFileBackedSciForgeConfig(config)
-      .then((fileConfig) => {
-        if (cancelled) return;
-        if (fileConfig) {
-          setConfig((current) => {
-            const next = mergeFileBackedConfig(current, fileConfig);
-            saveSciForgeConfig(next);
-            return next;
-          });
-          setWorkspaceState((current) => ({
-            ...current,
-            workspacePath: normalizeWorkspaceRootPath(fileConfig.workspacePath || current.workspacePath),
-          }));
-          setWorkspaceStatus('已从 config.local.json 加载统一配置');
-        }
-      })
+	  useEffect(() => {
+	    let cancelled = false;
+	    Promise.all([
+	      loadFileBackedSciForgeConfig(config),
+	      loadDesktopRuntimeConfigDefaults(),
+	    ])
+	      .then(([fileConfig, desktopRuntimeConfig]) => {
+	        if (cancelled) return;
+	        if (fileConfig || desktopRuntimeConfig) {
+	          setConfig((current) => {
+	            const fileMerged = fileConfig ? mergeFileBackedConfig(current, fileConfig) : current;
+	            const next = desktopRuntimeConfig ? updateConfig(fileMerged, desktopRuntimeConfig) : fileMerged;
+	            saveSciForgeConfig(next);
+	            return next;
+	          });
+	          const nextWorkspacePath = desktopRuntimeConfig?.workspacePath || fileConfig?.workspacePath;
+	          if (nextWorkspacePath) {
+	            setWorkspaceState((current) => ({
+	              ...current,
+	              workspacePath: normalizeWorkspaceRootPath(nextWorkspacePath || current.workspacePath),
+	            }));
+	          }
+	          setWorkspaceStatus(desktopRuntimeConfig
+	            ? '已从 Electron runtime config 加载桌面运行时配置'
+	            : '已从 config.local.json 加载统一配置');
+	        }
+	      })
       .catch((err) => {
         if (!cancelled) setWorkspaceStatus(`config.local.json 未加载：${err instanceof Error ? err.message : String(err)}`);
       })

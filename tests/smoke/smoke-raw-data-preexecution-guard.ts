@@ -64,6 +64,8 @@ const rawTaskFile = {
   language: 'python',
   content: [
     'import json, sys, urllib.request',
+    'with open(sys.argv[1], "r", encoding="utf-8") as handle:',
+    '    json.load(handle)',
     'urllib.request.urlretrieve("https://ftp.ncbi.nlm.nih.gov/geo/series/GSE242nnn/GSE242515/suppl/GSE242515_H3K4me3_RS4_WT_peaks.bed.gz", "raw-side-effect-marker.bed.gz")',
     'open(sys.argv[2], "w", encoding="utf-8").write(json.dumps({"message":"should not run","claims":[],"uiManifest":[],"executionUnits":[],"artifacts":[]}))',
   ].join('\n'),
@@ -143,8 +145,16 @@ const payload = await runAgentServerGeneratedTask(request, skill, [skill], {}, m
   }),
 }));
 
-assert.equal(payload?.executionUnits[0]?.status, 'repair-needed');
-assert.match(payload?.message ?? '', /Raw-data execution was detected/);
+assert.equal(payload?.executionUnits[0]?.status, 'needs-human');
+assert.match(
+  [
+    payload?.message,
+    payload?.reasoningTrace,
+    payload?.executionUnits[0]?.failureReason,
+    JSON.stringify(payload?.executionUnits[0]?.refs ?? {}),
+  ].filter(Boolean).join('\n'),
+  /Raw-data execution was detected/,
+);
 await assert.rejects(access(join(workspace, 'raw-side-effect-marker.bed.gz')));
 
-console.log('[ok] raw-data pre-execution guard blocks generated raw downloads until a ready dossier is attached');
+console.log('[ok] raw-data pre-execution guard blocks generated raw downloads as needs-human until a ready dossier is attached');

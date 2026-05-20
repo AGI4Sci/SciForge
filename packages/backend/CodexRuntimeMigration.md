@@ -1,6 +1,6 @@
 # Codex Runtime Migration
 
-最后更新：2026-05-19
+最后更新：2026-05-20
 
 ## 结论
 
@@ -48,7 +48,7 @@ Dev Codex
 
 Runtime Codex
   purpose: serve SciForge user tasks
-  model provider: DeepSeek deepseek-v4-flash by default
+  model provider: DeepSeek/proxy bailian/deepseek-v4-flash by default
   cwd: user workspace, not the SciForge repo unless explicitly debugging SciForge
   config/profile: sciforge-runtime-deepseek
   audit: provider/model/run id visible in SciForge UI
@@ -58,39 +58,49 @@ The runtime instance must never silently inherit the developer Codex profile.
 
 ## Profile 隔离
 
-推荐维护一个 runtime profile，例如 `sciforge-runtime-deepseek`：
+推荐维护一个 runtime profile，例如 `sciforge-runtime-deepseek`。当前 release smoke gate 以 provider proxy 路径为准：
 
 ```toml
-model = "deepseek-v4-flash"
-model_provider = "sciforge-deepseek"
+model = "bailian/deepseek-v4-flash"
+profile = "sciforge-runtime-deepseek"
 
-[model_providers.sciforge-deepseek]
-name = "DeepSeek"
-base_url = "https://api.deepseek.example/v1"
-env_key = "DEEPSEEK_API_KEY"
-```
-
-如果 Codex custom provider 不能直连 DeepSeek，则把 `base_url` 指向本地 proxy：
-
-```toml
-model = "deepseek-v4-flash"
+[profiles.sciforge-runtime-deepseek]
+model = "bailian/deepseek-v4-flash"
 model_provider = "sciforge-deepseek-proxy"
+model_reasoning_effort = "low"
+model_reasoning_summary = "none"
 
 [model_providers.sciforge-deepseek-proxy]
 name = "SciForge DeepSeek Proxy"
-base_url = "http://127.0.0.1:4765/v1"
-env_key = "DEEPSEEK_API_KEY"
+base_url = "http://127.0.0.1:3891/v1"
+env_key = "SCIFORGE_RUNTIME_API_KEY"
+wire_api = "responses"
+```
+
+这个文件由本地 setup 命令生成或刷新：
+
+```bash
+npm run backend:codex-runtime:setup -- --overwrite --proxy-base-url http://127.0.0.1:3891/v1
+```
+
+用于 browser/release acceptance 的 `SCIFORGE_RUNTIME_API_KEY` 不写入 `config.toml`、`config.local.json` 或仓库文件。只在启动 Runtime Codex / provider proxy 的 service 环境里设置；ignored local config 中的 key 只能作为本机 provider proxy 调试 fallback，不能满足 acceptance：
+
+```bash
+export SCIFORGE_RUNTIME_API_KEY="<provider-api-key>"
 ```
 
 SciForge 启动 runtime Codex 时必须显式指定 profile：
 
 ```bash
 codex exec --json \
+  --config sandbox_workspace_write.network_access=true \
   --profile sciforge-runtime-deepseek \
   --cd "$SCIFORGE_USER_WORKSPACE" \
   --sandbox workspace-write \
   "$SCIFORGE_USER_TEXT_COMMAND"
 ```
+
+文献检索、PDF/full-text 读取、PubMed/网页核查等任务依赖 Runtime Codex shell 内可用 DNS/HTTP。保持 `workspace-write` sandbox，但显式配置 `sandbox_workspace_write.network_access=true`；不要用 host shell 成功替代 Runtime Codex live evidence。
 
 开发实例可以使用自己的 profile：
 
@@ -103,10 +113,45 @@ codex --model gpt-5.5 -C /path/to/SciForge
 SciForge runtime bridge 必须做成本保护：
 
 - 默认 profile 必须是 DeepSeek / proxy。
-- 缺少 `DEEPSEEK_API_KEY` 或 runtime profile 时 fail closed。
+- 缺少 `SCIFORGE_RUNTIME_API_KEY`、provider proxy upstream base URL、runtime profile 或 runtime provider table 时 fail closed。
+- 当前 smoke gate 要求 provider `sciforge-deepseek-proxy`、model `bailian/deepseek-v4-flash`、`env_key = "SCIFORGE_RUNTIME_API_KEY"` 和 `wire_api = "responses"`。
 - 不允许自动 fallback 到 OpenAI provider。
 - 只有用户显式设置 `allowOpenAiRuntime=true` 时才允许 OpenAI provider。
 - 每个 run 的 provider、model、profile、workspace、command id 必须写入 audit event，并在 GUI 可见。
+
+## Provider Proxy Upstream
+
+`packages/backend` 的 provider proxy 对外暴露 OpenAI-compatible `/v1/responses`，并把请求转发到 upstream `/v1/chat/completions`。Runtime Codex profile 的 `base_url` 指向本地 proxy，upstream URL 由 proxy 自己解析。
+
+解析顺序：
+
+1. `npm run backend:codex-proxy -- --upstream-base-url <url>`
+2. `SCIFORGE_PROXY_UPSTREAM_BASE_URL`
+3. `config.local.json` 的 `codexProxy.upstreamBaseUrl` / `codexProxy.baseUrl`
+4. `config.local.json` 的 `llm.upstreamBaseUrl` / `llm.baseUrl`
+
+推荐 no-secret setup：
+
+```bash
+export SCIFORGE_RUNTIME_API_KEY="<provider-api-key>"
+export SCIFORGE_PROXY_UPSTREAM_BASE_URL="https://your-openai-compatible-endpoint.example/v1"
+npm run backend:codex-proxy
+```
+
+或者只把非 secret upstream 写进 `config.local.json`：
+
+```json
+{
+  "codexProxy": {
+    "upstreamBaseUrl": "https://your-openai-compatible-endpoint.example/v1",
+    "defaultModel": "bailian/deepseek-v4-flash"
+  }
+}
+```
+
+本地 parser 仍能读取 `codexProxy.apiKey` / `llm.apiKey` 作为显式调试 fallback，但 release acceptance 和团队文档路径不得依赖明文 secret 文件。Browser acceptance gate 会显式拒绝只存在于 `config.local.json` 或 `.sciforge/**/config.local.json` 的 secret-like key；没有 upstream URL 时，proxy CLI 会退出；没有 service 环境 `SCIFORGE_RUNTIME_API_KEY` 时，Runtime Codex wrapper 和 browser acceptance gate 都必须 fail closed。
+
+Provider proxy 的 `GET /healthz?check=upstream` 和 `npm run smoke:runtime-provider-preflight` 只做 live default-chat 前分诊：它会以短超时检查 upstream `/models`，输出 `config-missing` / `provider-auth` / `rate-limited` / `upstream-outage` / `repo-bug` / `ready`，并 scrub raw provider body、header 和 token。`verify:single-agent-final` 与 `verify:single-agent-release` 会在 browser acceptance 前运行该 preflight，但结果的 `releaseAcceptance` 固定为 `not-evaluated`，不能替代 Codex in-app browser strict acceptance。
 
 ## Phase 1 Adapter
 
@@ -185,8 +230,20 @@ Phase 2 只抽象 CLI 细节，不扩展 backend 范围：
 - 没有隐藏 OpenAI 请求；
 - run audit 能证明使用的是 DeepSeek/profile/proxy。
 
+当前 package smoke gate 中，`npm run verify:single-agent-final` 包含 `npm run smoke:runtime-provider-preflight`、`npm run smoke:runtime-codex-browser-acceptance`、`npm run smoke:fixed-platform-boundary` 和 `npm run smoke:single-agent-final-gate`。preflight 只用于在 browser acceptance 前分诊 provider/upstream 状态；默认浏览器 acceptance smoke 允许写出 blocked evidence 来证明 fail-closed。`npm run verify:single-agent-release` 额外先执行 `npm run desktop:package:dir`，再进入 strict browser acceptance，保证 release 前 packaged/production Electron lifecycle 也被验证。release rerun 必须使用 strict gate：
+
+```bash
+npm run smoke:runtime-codex-browser-acceptance:strict
+```
+
+strict mode 只接受真实 Codex in-app browser evidence 产生的 `manifest.status === "passed"`。blocked、partial、failed、seed/demo evidence、缺少 DOM/screenshot、缺少 command id、缺少 task result，或 multi-turn 第二轮答案不可见，都不能作为 release acceptance。
+
 ## AgentServer 遗留清理地图
 
-当前 AgentServer-first 清理清单已经并入仓库级任务板。删除或 quarantine
-AgentServer gateway 模块与 smoke 脚本前，必须先满足 `PROJECT.md` 中
-`LEGACY-CLEANUP-20260519` 的退役条件。
+当前 AgentServer-first 清理清单已经并入仓库级任务板和 package gate。删除或 quarantine
+AgentServer gateway 模块与 smoke 脚本前，必须先满足 `PROJECT.md` 中的 Runtime Codex
+真实 R-* 验收、`npm run smoke:runtime-codex-truth-source`、`npm run smoke:no-legacy-paths`
+和显式 `npm run verify:legacy-agentserver-compat` 退役检查。默认 `smoke:all` 和
+`smoke:real-task-matrix` 不再把 AgentServer-first 脚本作为 release truth source；`smoke:real-task-matrix`
+还会执行 `smoke:real-task-offline-gates`，把所有 no-secret R-* 类别 gate 纳入同一个矩阵检查。
+旧 AgentServer 脚本只能作为显式兼容覆盖运行。

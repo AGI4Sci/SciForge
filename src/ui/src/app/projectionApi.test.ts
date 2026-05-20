@@ -129,6 +129,47 @@ test('ProjectionSubscriptionApi publishes canonical projection without exposing 
   assert.doesNotMatch(JSON.stringify(event), /RAW_AGENTSERVER_TEXT|RAW_FAILURE/);
 });
 
+test('ProjectionApi normalizes status token separators from runtime projections', async () => {
+  const projection = {
+    schemaVersion: 'sciforge.conversation-projection.v1',
+    conversationId: 'conversation-status-token-normalization',
+    visibleAnswer: {
+      status: 'repair_needed',
+      diagnostic: 'Provider emitted underscore status token.',
+      artifactRefs: ['artifact:partial-report'],
+    },
+    activeRun: { id: 'run-status-token-normalization', status: 'repair_needed' },
+    artifacts: [{ ref: 'artifact:partial-report', label: 'Partial report' }],
+    executionProcess: [],
+    recoverActions: ['Retry after status normalization.'],
+    verificationState: { status: 'failed' },
+    auditRefs: ['audit:status-token'],
+    diagnostics: [],
+  };
+  const session = testSession({
+    runs: [{
+      id: 'run-status-token-normalization',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'repair',
+      response: 'RAW_RESPONSE_SHOULD_NOT_RENDER',
+      createdAt: '2026-05-17T00:00:00.000Z',
+      raw: {
+        displayIntent: { conversationProjection: projection },
+      },
+    }],
+    artifacts: [deliveryArtifact('partial-report')],
+  });
+
+  const view = await createLocalProjectionApi().getConversationProjection({ session, focusedRunId: 'run-status-token-normalization' });
+  const restored = conversationProjectionForSession(session, session.runs[0]);
+
+  assert.equal(view.visibleAnswer.status, 'repair-needed');
+  assert.equal(restored?.activeRun?.status, 'repair-needed');
+  assert.deepEqual(view.visibleAnswer.primaryArtifactRefs, ['artifact:partial-report']);
+  assert.doesNotMatch(JSON.stringify(view), /RAW_RESPONSE_SHOULD_NOT_RENDER/);
+});
+
 test('completion-candidate salvage creates recoverable projection without promoting raw ToolPayload to success', () => {
   const session = testSession({
     runs: [{

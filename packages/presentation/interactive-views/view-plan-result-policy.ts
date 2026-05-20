@@ -212,7 +212,17 @@ export function validateInteractiveViewModuleBinding(
     return { status: 'bound' };
   }
   if (!artifact) return { status: 'missing-artifact', reason: '等待 ArtifactDelivery artifact' };
+  if (!input && interactiveViewModuleAcceptsArtifact(module, artifact.type) && artifactHasRenderableInlineData(artifact)) {
+    return { status: 'bound' };
+  }
   return validatePresentationInputBinding(module, input);
+}
+
+function artifactHasRenderableInlineData(artifact: RuntimeArtifact): boolean {
+  const data = artifact.data;
+  if (Array.isArray(data)) return data.length > 0;
+  if (typeof data !== 'object' || data === null) return data !== undefined;
+  return Object.keys(data).length > 0;
 }
 
 export function resolveInteractiveViewPlanSection({

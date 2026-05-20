@@ -17,11 +17,14 @@ import {
   type WebE2eRunAuditEvidence,
 } from '../contract-verifier.js';
 import { buildWebE2eFixtureWorkspace } from '../fixture-workspace-builder.js';
-import { startScriptableAgentServerMock } from '../scriptable-agentserver-mock.js';
+import {
+  RUNTIME_DISPATCH_RUN_STREAM_PATH,
+  startScriptableRuntimeDispatchMock,
+  type ScriptableRuntimeDispatchMockHandle,
+  type ScriptableRuntimeDispatchToolPayload,
+} from '../scriptable-runtime-dispatch-mock.js';
 import type {
   JsonRecord,
-  ScriptableAgentServerMockHandle,
-  ScriptableAgentServerToolPayload,
   WebE2eExpectedProjection,
   WebE2eFixtureWorkspace,
 } from '../types.js';
@@ -33,12 +36,12 @@ export type DirectContextGateScenario = 'run-status' | 'generation' | 'repair' |
 export interface DirectContextDecisionEvidence {
   schemaVersion: 'sciforge.direct-context-decision.v1';
   decisionRef: string;
-  decisionOwner: 'AgentServer' | 'Backend' | 'harness-policy';
+  decisionOwner: 'Backend' | 'harness-policy';
   intent: 'run-status' | 'generation' | 'repair' | 'tool-status';
   requiredTypedContext: string[];
   usedRefs: string[];
   sufficiency: 'sufficient' | 'insufficient';
-  route: 'direct-context-answer' | 'route-to-agentserver';
+  route: 'direct-context-answer' | 'runtime-dispatch';
   allowDirectContext: boolean;
   blockReason?: string;
 }
@@ -47,9 +50,9 @@ export interface DirectContextGateScenarioResult {
   scenario: DirectContextGateScenario;
   fixture: WebE2eFixtureWorkspace;
   decision: DirectContextDecisionEvidence;
-  route: 'direct-context-answer' | 'route-to-agentserver';
+  route: 'direct-context-answer' | 'runtime-dispatch';
   directPayload?: ToolPayload;
-  agentServerRun?: MockRunFetchResult;
+  runtimeDispatchRun?: MockRunFetchResult;
   serverRequests: number;
   runAudit: WebE2eRunAuditEvidence;
   browserVisibleState: WebE2eBrowserVisibleState;
@@ -57,7 +60,7 @@ export interface DirectContextGateScenarioResult {
 }
 
 export interface DirectContextGateCaseResult {
-  server: ScriptableAgentServerMockHandle;
+  server: ScriptableRuntimeDispatchMockHandle;
   directStatus: DirectContextGateScenarioResult;
   routed: DirectContextGateScenarioResult[];
 }
@@ -81,13 +84,13 @@ const routePrompts: Record<Exclude<DirectContextGateScenario, 'run-status'>, str
 };
 
 const routeTexts: Record<Exclude<DirectContextGateScenario, 'run-status'>, string> = {
-  generation: 'Routed to AgentServer because generation requires fresh backend execution beyond the current run-status context.',
-  repair: 'Routed to AgentServer because repair requires validation/repair policy and bounded execution, not a local direct answer.',
-  'tool-status-insufficient': 'Routed to AgentServer because tool/provider status was insufficient without registry-backed AgentServer judgement.',
+  generation: 'Routed to Runtime Codex runtime dispatch because generation requires fresh backend execution beyond the current run-status context.',
+  repair: 'Routed to Runtime Codex runtime dispatch because repair requires validation/repair policy and bounded execution, not a local direct answer.',
+  'tool-status-insufficient': 'Blocked from direct context and routed to runtime dispatch because tool/provider status was insufficient without registry-backed capability evidence.',
 };
 
 export async function buildDirectContextGateCase(options: { baseDir?: string } = {}): Promise<DirectContextGateCaseResult> {
-  const server = await startScriptableAgentServerMock({
+  const server = await startScriptableRuntimeDispatchMock({
     seed: DIRECT_CONTEXT_GATE_CASE_ID,
     fixedNow: now,
     script: (request, exchange) => {
@@ -95,11 +98,11 @@ export async function buildDirectContextGateCase(options: { baseDir?: string } =
       const text = routeTexts[scenario];
       return {
         id: `${DIRECT_CONTEXT_GATE_CASE_ID}-${scenario}`,
-        runId: `agentserver-sa-web-13-${scenario}`,
+        runId: `runtime-dispatch-sa-web-13-${scenario}`,
         steps: [
           {
             kind: 'status',
-            status: 'route-to-agentserver',
+            status: 'runtime-dispatch',
             message: text,
             fields: {
               routeReason: scenario,
@@ -108,7 +111,7 @@ export async function buildDirectContextGateCase(options: { baseDir?: string } =
           },
           {
             kind: 'toolPayload',
-            payload: agentServerPayload(scenario, text),
+            payload: runtimeDispatchPayload(scenario, text),
           },
         ],
       };
@@ -131,7 +134,7 @@ export async function buildDirectContextGateCase(options: { baseDir?: string } =
 async function buildScenarioResult(input: {
   scenario: DirectContextGateScenario;
   baseDir: string | undefined;
-  server: ScriptableAgentServerMockHandle;
+  server: ScriptableRuntimeDispatchMockHandle;
 }): Promise<DirectContextGateScenarioResult> {
   const decision = decisionForScenario(input.scenario);
   const prompt = input.scenario === 'run-status' ? 'What is the current run status?' : routePrompts[input.scenario];
@@ -147,10 +150,10 @@ async function buildScenarioResult(input: {
   });
   const request = gatewayRequest(fixture, prompt, decision);
   const directPayload = directContextFastPathPayload(request);
-  const agentServerRun = directPayload ? undefined : await fetchRun(input.server.baseUrl, {
+  const runtimeDispatchRun = directPayload ? undefined : await fetchRun(input.server.baseUrl, {
     prompt,
     scenario: input.scenario,
-    route: 'route-to-agentserver',
+    route: 'runtime-dispatch',
     directContextDecision: jsonRecord(decision),
     currentTurnRef: fixture.expectedProjection.currentTask.currentTurnRef.ref,
     explicitRefs: fixture.expectedProjection.currentTask.explicitRefs.map((ref) => ref.ref),
@@ -187,7 +190,7 @@ async function buildScenarioResult(input: {
     decision,
     route: decision.route,
     directPayload,
-    agentServerRun,
+    runtimeDispatchRun,
     serverRequests: input.server.requests.runs.length,
     runAudit,
     browserVisibleState,
@@ -208,7 +211,7 @@ function decisionForScenario(scenario: DirectContextGateScenario): DirectContext
     return {
       schemaVersion: 'sciforge.direct-context-decision.v1',
       decisionRef: 'decision:sa-web-13-run-status',
-      decisionOwner: 'AgentServer',
+      decisionOwner: 'harness-policy',
       intent: 'run-status',
       requiredTypedContext: ['run-status', 'visible-answer', 'run-audit-ref'],
       usedRefs: ['run:run-sa-web-13-current', 'artifact:fixture-run-audit'],
@@ -230,7 +233,7 @@ function decisionForScenario(scenario: DirectContextGateScenario): DirectContext
     requiredTypedContext: requiredTypedContextForScenario(scenario),
     usedRefs: ['run:run-sa-web-13-current', 'artifact:fixture-run-audit'],
     sufficiency: 'insufficient',
-    route: 'route-to-agentserver',
+    route: 'runtime-dispatch',
     allowDirectContext: false,
     blockReason,
   };
@@ -239,7 +242,7 @@ function decisionForScenario(scenario: DirectContextGateScenario): DirectContext
 function requiredTypedContextForScenario(scenario: Exclude<DirectContextGateScenario, 'run-status'>): string[] {
   if (scenario === 'generation') return ['backend-routing', 'generation-capability', 'artifact-contract'];
   if (scenario === 'repair') return ['validation-decision', 'repair-policy', 'failed-run-evidence'];
-  return ['capability-registry', 'provider-health', 'agentserver-worker-registry'];
+  return ['capability-registry', 'provider-health', 'runtime-dispatch-capability-registry'];
 }
 
 function gatewayRequest(
@@ -252,7 +255,7 @@ function gatewayRequest(
     prompt,
     artifacts: fixture.seedArtifacts.map(jsonRecord),
     references: fixture.objectReferences.map(jsonRecord),
-    expectedArtifactTypes: decision.route === 'route-to-agentserver' ? ['research-report'] : undefined,
+    expectedArtifactTypes: decision.route === 'runtime-dispatch' ? ['research-report'] : undefined,
     selectedToolIds: decision.intent === 'tool-status' ? ['web_search'] : undefined,
     uiState: {
       activeRunId: fixture.runId,
@@ -297,12 +300,12 @@ function gatewayRequest(
             blockReason: decision.blockReason,
           },
         },
-        executionModePlan: { executionMode: decision.route === 'direct-context-answer' ? 'direct-context-answer' : 'agentserver' },
+        executionModePlan: { executionMode: decision.route === 'direct-context-answer' ? 'direct-context-answer' : 'runtime-dispatch' },
         responsePlan: { initialResponseMode: decision.route === 'direct-context-answer' ? 'direct-context-answer' : 'streaming' },
       },
       recentExecutionRefs: [{
         id: 'EU-sa-web-13-current-run',
-        tool: 'agentserver.direct-context',
+        tool: 'runtime.direct-context-decision',
         status: 'done',
         outputRef: 'artifact:fixture-current-report',
         runId,
@@ -339,7 +342,7 @@ function expectedForScenario(
         type: direct ? 'HarnessDecisionRecorded' : 'Dispatched',
         summary: direct
           ? 'Structured DirectContextDecision was sufficient for current run status.'
-          : `Structured DirectContextDecision was insufficient; ${input.scenario} routed to AgentServer.`,
+          : `Structured DirectContextDecision was insufficient; ${input.scenario} routed to Runtime Codex runtime dispatch.`,
         timestamp: now,
       },
     ],
@@ -352,7 +355,7 @@ function expectedForScenario(
       ...expected.conversationProjection.diagnostics,
       {
         severity: direct ? 'info' : 'warning',
-        code: direct ? 'direct-context-sufficient' : 'route-to-agentserver',
+        code: direct ? 'direct-context-sufficient' : 'runtime-dispatch',
         message: direct
           ? 'Direct context answer used only structured current run status refs.'
           : input.decision.blockReason ?? 'Direct context decision insufficient.',
@@ -393,7 +396,7 @@ function sessionForScenario(
       ...runRaw,
       displayIntent: {
         ...(isRecord(runRaw.displayIntent) ? runRaw.displayIntent : {}),
-        source: input.scenario === 'run-status' ? 'direct-context-decision' : 'agentserver',
+        source: input.scenario === 'run-status' ? 'direct-context-decision' : 'runtime-dispatch',
         conversationProjection: input.expectedProjection.conversationProjection,
         taskOutcomeProjection: {
           conversationProjection: input.expectedProjection.conversationProjection,
@@ -440,54 +443,54 @@ function executionUnitForScenario(input: {
   }
   return {
     id: `EU-sa-web-13-route-${input.scenario}`,
-    tool: 'agentserver.route-to-agentserver',
+    tool: 'runtime.runtime-dispatch',
     params: `scenario=${input.scenario}`,
     status: 'running',
     hash: `sa-web-13-${input.scenario}`,
     runId: input.expectedProjection.runId,
-    outputRef: `agentserver://mock/direct-context-gate/${input.scenario}`,
+    outputRef: `offline-web-e2e-fixture://direct-context-gate/${input.scenario}`,
     time: now,
   };
 }
 
-function agentServerPayload(
+function runtimeDispatchPayload(
   scenario: Exclude<DirectContextGateScenario, 'run-status'>,
   message: string,
-): ScriptableAgentServerToolPayload {
+): ScriptableRuntimeDispatchToolPayload {
   return {
     message,
     confidence: 0.8,
-    claimType: 'route-to-agentserver',
-    evidenceLevel: 'scriptable-agentserver-mock',
-    reasoningTrace: 'SA-WEB-13 route-to-agentserver branch consumed an insufficient DirectContextDecision.',
+    claimType: 'runtime-dispatch',
+    evidenceLevel: 'offline-runtime-dispatch-fixture',
+    reasoningTrace: 'SA-WEB-13 runtime-dispatch branch consumed an insufficient DirectContextDecision.',
     displayIntent: {
       protocolStatus: 'protocol-success',
       taskOutcome: 'running',
       status: 'running',
-      route: 'route-to-agentserver',
+      route: 'runtime-dispatch',
     },
     claims: [],
     uiManifest: [],
     executionUnits: [{
-      id: `EU-sa-web-13-agentserver-${scenario}`,
-      tool: 'agentserver.route-to-agentserver',
+      id: `EU-sa-web-13-runtime-dispatch-${scenario}`,
+      tool: 'runtime.runtime-dispatch',
       status: 'running',
-      outputRef: `agentserver://mock/direct-context-gate/${scenario}`,
+      outputRef: `offline-web-e2e-fixture://direct-context-gate/${scenario}`,
       evidenceRefs: [`decision:sa-web-13-${scenario}`],
-      runId: `agentserver-sa-web-13-${scenario}`,
+      runId: `runtime-dispatch-sa-web-13-${scenario}`,
     }],
     artifacts: [],
   };
 }
 
 async function fetchRun(baseUrl: string, body: JsonRecord): Promise<MockRunFetchResult> {
-  const response = await fetch(`${baseUrl}/api/agent-server/runs/stream`, {
+  const response = await fetch(`${baseUrl}${RUNTIME_DISPATCH_RUN_STREAM_PATH}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
   const text = await response.text();
-  if (!response.ok) throw new Error(`AgentServer mock run failed: ${response.status}: ${text}`);
+  if (!response.ok) throw new Error(`offline runtime-dispatch fixture run failed: ${response.status}: ${text}`);
   const envelopes = text.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as JsonRecord);
   return {
     envelopes,

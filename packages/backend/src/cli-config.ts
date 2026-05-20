@@ -8,6 +8,7 @@ export type ProxyCliOptions = {
   upstreamApiKey?: string;
   upstreamKeySource?: string;
   defaultModel?: string;
+  forceNonStreamingUpstream: boolean;
   quiet: boolean;
 };
 
@@ -39,6 +40,9 @@ export function resolveProxyCliOptions(
     upstreamApiKey,
     upstreamKeySource: apiKeyFromEnv ? apiKeyEnv : apiKeyFromLocal ? `${configPath}:codexProxy.apiKey` : undefined,
     defaultModel: get('--default-model') ?? env.SCIFORGE_PROXY_DEFAULT_MODEL ?? stringValue(local.defaultModel),
+    forceNonStreamingUpstream: args.includes('--force-non-streaming-upstream')
+      || env.SCIFORGE_PROXY_FORCE_NON_STREAMING_UPSTREAM === '1'
+      || local.forceNonStreamingUpstream === true,
     quiet: args.includes('--quiet') || env.SCIFORGE_PROXY_QUIET === '1',
   };
 }
@@ -66,6 +70,7 @@ function readLocalProxyConfig(path: string) {
         ?? stringValue(llm.defaultModel)
         ?? stringValue(llm.model)
         ?? stringValue(llm.modelName),
+      forceNonStreamingUpstream: codexProxy.forceNonStreamingUpstream === true,
     };
   } catch {
     return {};

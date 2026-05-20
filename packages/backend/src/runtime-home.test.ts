@@ -13,6 +13,8 @@ import {
   RUNTIME_MODEL,
   RUNTIME_PROFILE,
   RUNTIME_PROVIDER,
+  resolveRuntimeCodexSandbox,
+  RUNTIME_WORKSPACE_WRITE_NETWORK_CONFIG_ARGS,
   runtimeConfigToml,
 } from './runtime-home';
 
@@ -23,6 +25,11 @@ test('runtime config pins the DeepSeek profile to the local Responses proxy', ()
   assert.match(config, new RegExp(`model_provider = "${RUNTIME_PROVIDER}"`));
   assert.match(config, new RegExp(`env_key = "${RUNTIME_KEY_ENV}"`));
   assert.match(config, /wire_api = "responses"/);
+  assert.match(config, /\[sandbox_workspace_write\]\s+network_access = true/);
+  assert.deepEqual(RUNTIME_WORKSPACE_WRITE_NETWORK_CONFIG_ARGS, [
+    '--config',
+    'sandbox_workspace_write.network_access=true',
+  ]);
   assert.match(config, new RegExp(DEFAULT_PROXY_BASE_URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });
 
@@ -57,6 +64,15 @@ test('workspace outside runtime root is opt-in', () => {
       allowWorkspaceOutsideRuntimeRoot: true,
     }),
     '/tmp/sciforge-external-workspace',
+  );
+});
+
+test('runtime sandbox defaults to workspace-write and rejects invalid env overrides', () => {
+  assert.equal(resolveRuntimeCodexSandbox({}), 'workspace-write');
+  assert.equal(resolveRuntimeCodexSandbox({ SCIFORGE_RUNTIME_CODEX_SANDBOX: 'danger-full-access' }), 'danger-full-access');
+  assert.throws(
+    () => resolveRuntimeCodexSandbox({ SCIFORGE_RUNTIME_CODEX_SANDBOX: 'network-only' }),
+    /SCIFORGE_RUNTIME_CODEX_SANDBOX must be one of/,
   );
 });
 

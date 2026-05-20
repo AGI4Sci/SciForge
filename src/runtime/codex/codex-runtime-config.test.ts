@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -26,6 +26,26 @@ test('runtime config guard accepts isolated DeepSeek proxy profile', async () =>
   assert.equal(config.model, RUNTIME_MODEL);
   assert.equal(config.proxyBaseUrl, DEFAULT_PROXY_BASE_URL);
   assert.match(config.codexHome, /packages\/backend\/\.codex-runtime\/codex-home$/);
+});
+
+test('runtime config guard reads CODEX_HOME from the supplied runtime env', async () => {
+  const workspace = await tempWorkspace();
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-runtime-env-root-'));
+  const codexHome = join(root, 'codex-home');
+  await mkdir(codexHome, { recursive: true });
+  await writeFile(join(codexHome, 'config.toml'), runtimeConfig({ proxyBaseUrl: 'http://127.0.0.1:3892/v1' }), 'utf8');
+
+  const config = await assertCodexRuntimeConfig({
+    workspacePath: workspace,
+    env: {
+      SCIFORGE_RUNTIME_ROOT: root,
+      SCIFORGE_RUNTIME_CODEX_HOME: codexHome,
+      [RUNTIME_KEY_ENV]: 'test-key',
+    },
+  });
+
+  assert.equal(config.codexHome, codexHome);
+  assert.equal(config.proxyBaseUrl, 'http://127.0.0.1:3892/v1');
 });
 
 test('runtime config guard fails closed when workspace is missing', async () => {

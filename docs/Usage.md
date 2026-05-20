@@ -1,10 +1,10 @@
 # SciForge 使用与运维
 
-最后更新：2026-05-19
+最后更新：2026-05-20
 
 本文只描述当前代码已经落地的用法。脚本真相源是 [`../package.json`](../package.json)，配置默认值真相源是 [`../src/ui/src/config.ts`](../src/ui/src/config.ts)。
 
-架构目标已经调整为 **SciForge GUI 是 Codex backend 的 GUI extension**；见 [`Architecture.md`](Architecture.md) 和 [`TuiGuiProtocol.md`](TuiGuiProtocol.md)。最终形态默认连接 Codex app-server / CLI bridge，生产默认让 Codex 使用 DeepSeek `deepseek-v4-flash` 或用户配置的低成本 provider/proxy，不需要独立 AgentServer。本文件里的 `workspace writer`、`AgentServer`、`runtime gateway`、`scenario` 等仍是当前实现路径或迁移期兼容层，不代表最终职责归属。
+架构目标已经调整为 **SciForge GUI 是 Codex backend 的 GUI extension**；见 [`Architecture.md`](Architecture.md) 和 [`TuiGuiProtocol.md`](TuiGuiProtocol.md)。最终形态默认连接 Codex app-server / CLI bridge，生产默认让 Codex 使用 DeepSeek/proxy `bailian/deepseek-v4-flash` 或用户配置的低成本 provider/proxy，不需要独立 AgentServer。本文件里的 `workspace writer`、`AgentServer`、`runtime gateway`、`scenario` 等仍是当前实现路径或迁移期兼容层，不代表最终职责归属。
 
 ## 快速启动
 
@@ -13,7 +13,7 @@
 - Node.js 20+
 - npm
 - 一个本地 workspace 目录
-- 目标架构下的 Codex app-server / CLI bridge，以及 DeepSeek provider/proxy 配置
+- 目标架构下的 Codex app-server / CLI bridge，以及 DeepSeek provider/proxy 配置；Runtime Codex browser/release acceptance secret 只放进进程环境变量，ignored local config key 只可作为本机 proxy 调试 fallback
 
 安装依赖并启动完整本地工作台：
 
@@ -57,7 +57,7 @@ UI 配置存于浏览器 `localStorage`，workspace writer 的本地配置可通
 - `workspaceWriterBaseUrl`：workspace writer，默认 `http://127.0.0.1:5174`。
 - `workspacePath`：当前工作区根目录。代码会把传入的 `/.sciforge` 子路径归一回 workspace 根。
 - `agentBackend`：当前允许值为 `codex`、`openteam_agent`、`claude-code`、`hermes-agent`、`openclaw`、`gemini`。
-- `modelProvider`、`modelBaseUrl`、`modelName`、`apiKey`：迁移期兼容字段。最终应成为 Codex custom provider / provider proxy 配置；默认 provider 应为 DeepSeek，默认模型为 `deepseek-v4-flash`，不得静默 fallback 到 OpenAI。
+- `modelProvider`、`modelBaseUrl`、`modelName`、`apiKey`：迁移期兼容字段。最终应成为 Codex custom provider / provider proxy 配置；默认 provider 应为 DeepSeek/proxy，当前 Runtime Codex smoke gate 要求 `bailian/deepseek-v4-flash`，不得静默 fallback 到 OpenAI。不要把 Runtime Codex secret 写入这些字段；使用 `SCIFORGE_RUNTIME_API_KEY`。
 - `requestTimeoutMs`：UI 等待 workspace stream 的超时，默认 900000ms。
 - `maxContextWindowTokens`：上下文预算，默认 200000。
 - `peerInstances`：双实例互修目标，字段见 [`../src/ui/src/domain.ts`](../src/ui/src/domain.ts) 的 `PeerInstance`。
@@ -75,7 +75,7 @@ Dev Codex
 
 Runtime Codex
   profile: sciforge-runtime-deepseek
-  model provider: DeepSeek deepseek-v4-flash 或 provider proxy
+  model provider: DeepSeek/proxy bailian/deepseek-v4-flash
   cwd: 用户 workspace
   purpose: 服务 SciForge 用户任务
 ```
@@ -88,13 +88,72 @@ codex --model gpt-5.5 -C /path/to/SciForge
 
 ```bash
 codex exec --json \
+  --config sandbox_workspace_write.network_access=true \
   --profile sciforge-runtime-deepseek \
   --cd "$SCIFORGE_USER_WORKSPACE" \
   --sandbox workspace-write \
   "$SCIFORGE_USER_TEXT_COMMAND"
 ```
 
-Runtime Codex 不能静默继承开发者 profile；缺少 DeepSeek key、runtime profile 或 provider proxy 时必须 fail closed。完整迁移教程见 [`CodexRuntimeMigration.md`](CodexRuntimeMigration.md)。
+Runtime Codex 不能静默继承开发者 profile；缺少 `SCIFORGE_RUNTIME_API_KEY`、runtime profile 或 provider proxy upstream 时必须 fail closed。完整迁移教程见 [`CodexRuntimeMigration.md`](CodexRuntimeMigration.md)。
+需要文献、PDF、PubMed、动态网页等外部检索时，Runtime Codex 仍使用 `workspace-write`，但必须显式启用 `sandbox_workspace_write.network_access=true`；SciForge 的 runtime home 和 runtime adapter 会自动写入并传递该配置。
+
+## Runtime Codex no-secret 配置
+
+当前 smoke gate 要求 Runtime Codex 使用隔离 profile：
+
+```text
+profile: sciforge-runtime-deepseek
+provider: sciforge-deepseek-proxy
+model: bailian/deepseek-v4-flash
+env_key: SCIFORGE_RUNTIME_API_KEY
+wire_api: responses
+proxy base_url: http://127.0.0.1:3891/v1
+```
+
+Browser/release acceptance 使用的 Runtime Codex 密钥只进入启动 Runtime Codex / provider proxy 的 service 环境，不写入 git、`config.local.json`、manifest 或 acceptance notes：
+
+```bash
+export SCIFORGE_RUNTIME_API_KEY="<provider-api-key>"
+export SCIFORGE_PROXY_UPSTREAM_BASE_URL="https://your-openai-compatible-endpoint.example/v1"
+```
+
+如果不想把 upstream URL 放进 shell 环境，可以只把非 secret 的 upstream/model 写进被 `.gitignore` 忽略的 `config.local.json`。不要把这里的 `apiKey` 当成验收或 release secret：
+
+```json
+{
+  "codexProxy": {
+    "upstreamBaseUrl": "https://your-openai-compatible-endpoint.example/v1",
+    "defaultModel": "bailian/deepseek-v4-flash"
+  }
+}
+```
+
+Browser/release acceptance 会把 `config.local.json` 或 `.sciforge/**/config.local.json` 里的 `apiKey` / secret-like key 视为本地 proxy 调试 fallback，并在缺少 service 环境 `SCIFORGE_RUNTIME_API_KEY` 时 fail closed；这些配置文件里的 key 不能作为用户级验收或 release gate 的 Runtime Codex secret 来源。
+
+生成或刷新隔离的 Runtime Codex home：
+
+```bash
+npm run backend:codex-runtime:setup -- --overwrite --proxy-base-url http://127.0.0.1:3891/v1
+```
+
+启动本地 provider proxy：
+
+```bash
+npm run backend:codex-proxy
+```
+
+`npm run smoke:runtime-codex-browser-acceptance` 是当前 `npm run verify:single-agent-final` 的一部分。默认模式会验证 fail-closed evidence；如果缺少 `SCIFORGE_RUNTIME_API_KEY` 或 provider proxy upstream base URL，会写出 blocked manifest/notes，而不是假装通过。
+
+`npm run smoke:runtime-provider-preflight` / `GET /healthz?check=upstream` 只做 live default-chat 前的 provider upstream 分诊（`config-missing`、`provider-auth`、`rate-limited`、`upstream-outage`、`repo-bug`）。`verify:single-agent-final` 和 `verify:single-agent-release` 会在 browser acceptance 前运行它，但它的结果仍是 `releaseAcceptance: not-evaluated`，不等同于 browser/release acceptance passed。
+
+真实 release rerun 必须先在 Codex in-app browser 的默认聊天入口完成 live Runtime Codex 验收，并确认非 seed 的第二轮答案可见，然后启用 strict gate：
+
+```bash
+npm run smoke:runtime-codex-browser-acceptance:strict
+```
+
+strict gate 只接受 `manifest.status === "passed"`，并要求 provider/model/profile、workspace、command id、live `gui.present` 结果、折叠 audit、selected-ref follow-up 和 multi-turn second-turn answer 都有真实浏览器证据。
 
 ## 常用工作流
 
@@ -129,7 +188,7 @@ GUI event
   -> terminal-equivalent text
   -> Codex app-server / CLI bridge
   -> Codex custom model provider
-  -> DeepSeek deepseek-v4-flash / configured provider proxy by default
+  -> DeepSeek/proxy bailian/deepseek-v4-flash / configured provider proxy by default
   -> native plugins / skills / tools / MCP
   -> read-only GUI resources for shell/hot-region/region-detail state
   -> intent-based gui.* tool calls for presentation
@@ -241,6 +300,21 @@ npm run build
 
 ```bash
 npm run verify
+```
+
+单 agent final / release 验证：
+
+```bash
+npm run verify:single-agent-final
+npm run verify:single-agent-release
+```
+
+`verify:single-agent-release` 会先执行 strict Runtime Codex browser acceptance，缺少 live Runtime Codex service secret 时会立刻 fail closed；strict browser gate 通过后才继续执行 desktop package directory gate 和后续 release 检查。
+
+桌面 package 验证：
+
+```bash
+npm run desktop:package:dir
 ```
 
 最终架构边界检查：

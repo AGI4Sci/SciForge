@@ -2,13 +2,15 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer, type Server } from 'node:http';
 import { connect, type AddressInfo } from 'node:net';
-import { mkdir, appendFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, appendFile, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { Readable } from 'node:stream';
+import { ensureRuntimeHome } from '../../../packages/backend/src/runtime-home.js';
 import { buildDesktopAppDataLayout, type DesktopAppDataLayout } from './app-data-layout.js';
 
 export type RuntimeLauncherPortBinding = {
-  name: 'control' | 'ui' | 'workspace-writer' | 'runtime-codex';
+  name: 'control' | 'ui' | 'workspace-writer' | 'provider-proxy' | 'runtime-codex';
   requested?: number;
   actual: number;
   url: string;
@@ -25,7 +27,7 @@ export type RuntimeLauncherAuditEvent = {
 
 export type ManagedRuntimeServiceSpec = {
   id: string;
-  role: 'workspace-writer' | 'backend-proxy' | 'runtime-codex' | 'custom';
+  role: 'workspace-writer' | 'provider-proxy' | 'runtime-codex' | 'custom';
   command: string;
   args?: string[];
   cwd?: string;
@@ -53,6 +55,7 @@ export type RuntimeLauncherOptions = {
   requestedControlPort?: number;
   requestedUiPort?: number;
   requestedWorkspacePort?: number;
+  requestedProviderProxyPort?: number;
   requestedRuntimeCodexPort?: number;
   services?: ManagedRuntimeServiceSpec[];
   spawnProcess?: SpawnManagedProcess;
@@ -87,6 +90,7 @@ export type SpawnManagedProcess = (
 export class ProductionRuntimeLauncher {
   private server?: Server;
   private controlPort?: RuntimeLauncherPortBinding;
+  private readonly sidecarPorts = new Map<RuntimeLauncherPortBinding['name'], RuntimeLauncherPortBinding>();
   private readonly statuses = new Map<string, ManagedRuntimeServiceStatus>();
   private readonly children = new Map<string, ManagedChildProcess>();
   private shuttingDown = false;
@@ -109,6 +113,9 @@ export class ProductionRuntimeLauncher {
 
     const control = await this.bindControlServer(this.options.requestedControlPort);
     this.controlPort = control;
+    await this.resolveSidecarPorts();
+    await this.prepareDesktopLocalConfig();
+    await this.prepareRuntimeCodexHome();
     for (const service of this.options.services ?? []) {
       this.startService(service);
     }
@@ -150,6 +157,7 @@ export class ProductionRuntimeLauncher {
         startsViteDevServer: false,
         rendererTransport: 'stable-ipc-or-loopback',
         rawProcessOutputSurface: 'folded-audit',
+        fixedDevPortsAreContract: false,
       },
     };
   }
@@ -202,7 +210,7 @@ export class ProductionRuntimeLauncher {
       const spawnProcess = this.options.spawnProcess ?? defaultSpawnManagedProcess;
       const child = spawnProcess(service.command, service.args ?? [], {
         cwd: resolve(service.cwd ?? process.cwd()),
-        env: { ...process.env, ...service.env },
+        env: { ...process.env, ...this.sidecarEnv(), ...service.env },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       this.children.set(service.id, child);
@@ -256,10 +264,86 @@ export class ProductionRuntimeLauncher {
   private portBindings(): RuntimeLauncherPortBinding[] {
     const bindings: RuntimeLauncherPortBinding[] = [];
     if (this.controlPort) bindings.push(this.controlPort);
-    addConfiguredBinding(bindings, 'ui', this.options.requestedUiPort);
-    addConfiguredBinding(bindings, 'workspace-writer', this.options.requestedWorkspacePort);
-    addConfiguredBinding(bindings, 'runtime-codex', this.options.requestedRuntimeCodexPort);
+    for (const name of ['ui', 'workspace-writer', 'provider-proxy', 'runtime-codex'] as const) {
+      const binding = this.sidecarPorts.get(name);
+      if (binding) bindings.push(binding);
+    }
     return bindings;
+  }
+
+  private async resolveSidecarPorts(): Promise<void> {
+    await Promise.all([
+      this.resolveSidecarPort('ui', this.options.requestedUiPort),
+      this.resolveSidecarPort('workspace-writer', this.options.requestedWorkspacePort),
+      this.resolveSidecarPort('provider-proxy', this.options.requestedProviderProxyPort),
+      this.resolveSidecarPort('runtime-codex', this.options.requestedRuntimeCodexPort),
+    ]);
+  }
+
+  private async resolveSidecarPort(name: RuntimeLauncherPortBinding['name'], requestedPort: number | undefined): Promise<void> {
+    if (requestedPort === undefined) return;
+    const actual = await findAvailableLoopbackPort(requestedPort);
+    this.sidecarPorts.set(name, {
+      name,
+      requested: requestedPort,
+      actual,
+      url: `http://127.0.0.1:${actual}`,
+      conflict: requestedPort !== 0 && requestedPort !== actual,
+    });
+  }
+
+  private sidecarEnv(): Record<string, string> {
+    const env: Record<string, string> = {};
+    const ui = this.sidecarPorts.get('ui');
+    const workspace = this.sidecarPorts.get('workspace-writer');
+    const providerProxy = this.sidecarPorts.get('provider-proxy');
+    const runtimeCodex = this.sidecarPorts.get('runtime-codex');
+    if (this.appData) {
+      env.SCIFORGE_CONFIG_PATH = join(this.appData.configDir, 'config.local.json');
+      env.SCIFORGE_STATE_DIR = this.appData.globalStateDir;
+      env.SCIFORGE_LOG_DIR = this.appData.logDir;
+      env.SCIFORGE_RUNTIME_ROOT = this.appData.runtimeCodexRoot;
+      env.SCIFORGE_RUNTIME_CODEX_HOME = this.appData.runtimeCodexHome;
+      env.SCIFORGE_RUNTIME_DEFAULT_WORKSPACE = resolve(this.options.workspacePath);
+      env.SCIFORGE_WORKSPACE_PATH = resolve(this.options.workspacePath);
+    }
+    if (ui) env.SCIFORGE_UI_PORT = String(ui.actual);
+    if (workspace) {
+      env.SCIFORGE_WORKSPACE_PORT = String(workspace.actual);
+      env.SCIFORGE_WORKSPACE_WRITER_URL = workspace.url;
+    }
+    if (providerProxy) {
+      env.SCIFORGE_PROXY_PORT = String(providerProxy.actual);
+      env.SCIFORGE_PROXY_BASE_URL = providerProxy.url;
+    }
+    if (runtimeCodex) {
+      env.SCIFORGE_RUNTIME_CODEX_PORT = String(runtimeCodex.actual);
+      env.SCIFORGE_RUNTIME_CODEX_URL = runtimeCodex.url;
+    }
+    return env;
+  }
+
+  private async prepareRuntimeCodexHome(): Promise<void> {
+    if (!this.appData) return;
+    const providerProxy = this.sidecarPorts.get('provider-proxy');
+    await ensureRuntimeHome({
+      proxyBaseUrl: providerProxy ? `${providerProxy.url}/v1` : undefined,
+      overwrite: true,
+      paths: {
+        runtimeRoot: this.appData.runtimeCodexRoot,
+        codexHome: this.appData.runtimeCodexHome,
+        env: this.sidecarEnv(),
+      },
+    });
+  }
+
+  private async prepareDesktopLocalConfig(): Promise<void> {
+    if (!this.appData) return;
+    const source = await readNonSecretProxyConfig(process.env.SCIFORGE_CONFIG_PATH)
+      ?? await readNonSecretProxyConfig(resolve(process.cwd(), 'config.local.json'));
+    if (!source) return;
+    const target = join(this.appData.configDir, 'config.local.json');
+    await writeFile(target, `${JSON.stringify({ codexProxy: source }, null, 2)}\n`, 'utf8');
   }
 }
 
@@ -288,11 +372,6 @@ async function listenOnAvailableLoopbackPort(server: Server, preferredPort: numb
     }
   }
   throw new Error(`No available loopback port found starting at ${preferredPort}.`);
-}
-
-function addConfiguredBinding(bindings: RuntimeLauncherPortBinding[], name: RuntimeLauncherPortBinding['name'], port: number | undefined): void {
-  if (port === undefined) return;
-  bindings.push({ name, requested: port, actual: port, url: `http://127.0.0.1:${port}`, conflict: false });
 }
 
 function addressPort(server: Server): number {
@@ -326,4 +405,51 @@ async function createLayoutDirs(layout: DesktopAppDataLayout): Promise<void> {
 function writeJson(res: { writeHead(status: number, headers: Record<string, string>): void; end(body: string): void }, status: number, body: unknown): void {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(body));
+}
+
+type NonSecretProxyConfig = {
+  upstreamBaseUrl?: string;
+  baseUrl?: string;
+  defaultModel?: string;
+  model?: string;
+};
+
+async function readNonSecretProxyConfig(path: string | undefined): Promise<NonSecretProxyConfig | undefined> {
+  if (!path?.trim()) return undefined;
+  const configPath = resolve(path);
+  if (!existsSync(configPath)) return undefined;
+  try {
+    const parsed = JSON.parse(await readFile(configPath, 'utf8')) as unknown;
+    if (!isRecord(parsed)) return undefined;
+    const codexProxy = isRecord(parsed.codexProxy)
+      ? parsed.codexProxy
+      : isRecord(parsed.runtimeCodexProxy)
+        ? parsed.runtimeCodexProxy
+        : {};
+    const llm = isRecord(parsed.llm) ? parsed.llm : {};
+    const upstreamBaseUrl = stringValue(codexProxy.upstreamBaseUrl)
+      ?? stringValue(codexProxy.baseUrl)
+      ?? stringValue(llm.upstreamBaseUrl)
+      ?? stringValue(llm.baseUrl);
+    const defaultModel = stringValue(codexProxy.defaultModel)
+      ?? stringValue(codexProxy.model)
+      ?? stringValue(llm.defaultModel)
+      ?? stringValue(llm.model)
+      ?? stringValue(llm.modelName);
+    if (!upstreamBaseUrl && !defaultModel) return undefined;
+    return {
+      ...(upstreamBaseUrl ? { upstreamBaseUrl } : {}),
+      ...(defaultModel ? { defaultModel } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }

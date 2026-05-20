@@ -27,6 +27,8 @@ test('HTTP/SSE endpoint streams normalized runtime events without raw JSONL as m
       body: JSON.stringify({
         commandText: 'say hello',
         workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-ui',
+        attemptId: 'codex-command-ui-attempt-1',
         codexSessionId: '019e3e82-164d-79b2-a5d4-b16241620b10',
       }),
     });
@@ -39,6 +41,8 @@ test('HTTP/SSE endpoint streams normalized runtime events without raw JSONL as m
     assert.match(text, /event: done/);
     assert.equal(adapter.lastInput?.commandText, 'say hello');
     assert.equal(adapter.lastInput?.workspacePath, '/tmp/workspace');
+    assert.equal(adapter.lastInput?.commandId, 'codex-command-ui');
+    assert.equal(adapter.lastInput?.attemptId, 'codex-command-ui-attempt-1');
     assert.equal(adapter.lastInput?.codexSessionId, '019e3e82-164d-79b2-a5d4-b16241620b10');
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));

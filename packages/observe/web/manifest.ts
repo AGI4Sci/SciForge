@@ -1,9 +1,42 @@
 import browserFetchManifest from './capabilities/browser_fetch.manifest.json';
 import browserSearchManifest from './capabilities/browser_search.manifest.json';
+import playwrightBrowserAutomationManifest from './capabilities/playwright_browser_automation.manifest.json';
 import playwrightEdgeBrowserManifest from './capabilities/playwright_edge_browser.manifest.json';
 import webFetchManifest from './capabilities/web_fetch.manifest.json';
 import webSearchManifest from './capabilities/web_search.manifest.json';
 
+export {
+  buildParallelPlaywrightBrowserMcpServersConfig,
+  buildPlaywrightBrowserMcpCodexTomlSnippet,
+  buildPlaywrightBrowserMcpProviderAvailability,
+  buildPlaywrightBrowserMcpServerConfig,
+  buildPlaywrightBrowserMcpServersConfig,
+  buildPlaywrightBrowserMcpToolProviderRoutes,
+  playwrightBrowserMcpHttpUrl,
+  playwrightBrowserMcpOutputDir,
+  playwrightBrowserMcpServerName,
+  playwrightBrowserMcpUserDataDir,
+  PLAYWRIGHT_BROWSER_AUTOMATION_CAPABILITY_ID,
+  PLAYWRIGHT_BROWSER_MCP_DEFAULT_BROWSER,
+  PLAYWRIGHT_BROWSER_MCP_DEFAULT_VIEWPORT,
+  PLAYWRIGHT_BROWSER_MCP_PACKAGE,
+  PLAYWRIGHT_BROWSER_MCP_PROVIDER_ID,
+  PLAYWRIGHT_BROWSER_MCP_SERVER_NAME,
+  type PlaywrightBrowserMcpBrowser,
+  type PlaywrightBrowserMcpPathOptions,
+  type PlaywrightBrowserMcpProviderAvailabilityOptions,
+  type PlaywrightBrowserMcpServerConfig,
+  type PlaywrightBrowserMcpServerOptions,
+  type PlaywrightBrowserMcpServersConfig,
+} from './mcp/playwright-browser';
+export {
+  createPlaywrightBrowserAutomationProvider,
+  invokePlaywrightBrowserAutomation,
+  type PlaywrightBrowserAutomationInvocationInput,
+  type PlaywrightBrowserAutomationInvocationOutput,
+  type PlaywrightBrowserAutomationProvider,
+  type PlaywrightBrowserAutomationProviderOptions,
+} from './mcp/playwright-browser-provider';
 export {
   buildParallelPlaywrightEdgeMcpServersConfig,
   buildPlaywrightEdgeMcpCodexTomlSnippet,
@@ -41,6 +74,7 @@ export const webObserveCapabilityManifests = [
   webFetchManifest,
   browserSearchManifest,
   browserFetchManifest,
+  playwrightBrowserAutomationManifest,
   playwrightEdgeBrowserManifest,
 ];
 

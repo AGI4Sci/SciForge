@@ -113,10 +113,37 @@ test('capability provider preflight can route interactive browser automation to 
     },
   } as GatewayRequest);
 
-  assert.deepEqual(preflight.requiredCapabilityIds, ['browser_fetch', 'browser_search', 'playwright_edge_browser']);
+  assert.deepEqual(preflight.requiredCapabilityIds, ['playwright_edge_browser']);
   assert.equal(preflight.ok, true);
   assert.equal(preflight.routes.find((route) => route.capabilityId === 'playwright_edge_browser')?.primaryProviderId, 'sciforge.observe.playwright-edge-mcp');
   assert.equal(preflight.routes.find((route) => route.capabilityId === 'playwright_edge_browser')?.providers[0]?.transport, 'mcp');
+});
+
+test('capability provider preflight can route unattended browser automation to headless Playwright MCP', () => {
+  const preflight = capabilityProviderPreflight({
+    skillDomain: 'literature',
+    prompt: 'Use a headless isolated Playwright browser automation route to open https://example.com without affecting the user desktop.',
+    artifacts: [],
+    uiState: {
+      capabilityProviderAvailability: [
+        {
+          id: 'sciforge.observe.playwright-browser-mcp',
+          providerId: 'sciforge.observe.playwright-browser-mcp',
+          capabilityId: 'playwright_browser_automation',
+          source: 'mcp',
+          transport: 'mcp',
+          available: true,
+          status: 'available',
+          url: 'http://localhost:8933/mcp',
+        },
+      ],
+    },
+  } as GatewayRequest);
+
+  assert.deepEqual(preflight.requiredCapabilityIds, ['playwright_browser_automation']);
+  assert.equal(preflight.ok, true);
+  assert.equal(preflight.routes.find((route) => route.capabilityId === 'playwright_browser_automation')?.primaryProviderId, 'sciforge.observe.playwright-browser-mcp');
+  assert.equal(preflight.routes.find((route) => route.capabilityId === 'playwright_browser_automation')?.providers[0]?.transport, 'mcp');
 });
 
 test('AgentServer discovery maps worker tool routes into provider availability', async () => {

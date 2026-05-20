@@ -29,6 +29,25 @@ type FinalManifest = {
     requiredCategories?: string[];
     releaseBlocker?: boolean;
   };
+  runtimeCodexBrowserAcceptance?: {
+    manifestPath?: string;
+    status?: string;
+    currentRunEvidenceScope?: string;
+    releaseBlocking?: boolean;
+    releaseEligible?: boolean;
+    submittedThroughRuntimeCodex?: boolean;
+    commandId?: string;
+    expectedRetestCommand?: string;
+  };
+  releaseSummary?: {
+    status?: string;
+    releaseBlocking?: boolean;
+    releaseEligible?: boolean;
+    blocker?: string;
+    currentRunEvidenceScope?: string;
+    strictGate?: string;
+    expectedRetestCommand?: string;
+  };
   caseManifests?: Array<{
     caseId?: string;
     manifestPath?: string;
@@ -78,6 +97,7 @@ type CaseManifest = {
 
 const root = process.cwd();
 const finalManifestPath = resolve(root, 'docs', 'test-artifacts', 'single-agent-final', 'manifest.json');
+const runtimeCodexBrowserAcceptanceManifestPath = resolve(root, 'docs', 'test-artifacts', 'runtime-codex-browser-acceptance', 'manifest.json');
 const contractIds = Array.from({ length: 18 }, (_, index) => `C${String(index + 1).padStart(2, '0')}`);
 const requiredLegacyScripts = ['smoke:browser', 'smoke:browser-multiturn', 'smoke:browser-provider-preflight'];
 
@@ -109,6 +129,8 @@ assert.deepEqual(
 const realBrowserManifestPath = manifest.realBrowserEvidence.manifestPath ?? defaultRealBrowserEvidenceManifestPath;
 const realBrowserManifest = await readRealBrowserEvidenceManifest(realBrowserManifestPath);
 await assertRealBrowserEvidenceManifest(realBrowserManifest, { manifestPath: realBrowserManifestPath, requireFiles: true });
+await assertRuntimeCodexBrowserAcceptanceSummary(manifest);
+assertReleaseSummary(manifest);
 
 const selectedCases = new Set(assertStringArray(manifest.selectedCases, 'selectedCases'));
 const caseManifests = manifest.caseManifests ?? [];
@@ -148,15 +170,87 @@ for (const legacyScript of requiredLegacyScripts) {
   assert.ok((migration.migratedSteps ?? []).length > 0, `${legacyScript}: migrated steps are required`);
 }
 
-console.log(`[ok] single-agent final evidence manifest references C01-C18, no-legacy guard, ${caseManifests.length} Web E2E case manifest(s), and real in-app browser evidence`);
+console.log(`[ok] single-agent final evidence manifest references C01-C18, no-legacy guard, ${caseManifests.length} Web E2E case manifest(s), historical real in-app browser evidence, and current Runtime Codex browser acceptance status`);
 
 async function readCaseManifest(path: string): Promise<CaseManifest> {
   const resolved = isAbsolute(path) ? path : join(root, path);
   return JSON.parse(await readFile(resolved, 'utf8')) as CaseManifest;
 }
 
+async function assertRuntimeCodexBrowserAcceptanceSummary(manifest: FinalManifest): Promise<void> {
+  const summary = manifest.runtimeCodexBrowserAcceptance;
+  assert.ok(summary, 'final manifest must reference current Runtime Codex browser acceptance status');
+  assert.equal(summary.manifestPath, runtimeCodexBrowserAcceptanceManifestPath, 'Runtime Codex browser acceptance manifest path');
+  assert.ok(
+    isRuntimeCodexBrowserAcceptanceStatus(summary.status),
+    'Runtime Codex browser acceptance status must be missing/blocked/failed/partial/passed',
+  );
+  assert.equal(summary.expectedRetestCommand, 'npm run smoke:runtime-codex-browser-acceptance', 'Runtime Codex browser acceptance retest command');
+
+  const current = await readRuntimeCodexBrowserAcceptanceManifest(summary.manifestPath);
+  if (current) {
+    assert.equal(summary.status, current.status, 'final manifest Runtime Codex browser status must mirror current acceptance manifest');
+    assert.equal(summary.currentRunEvidenceScope, current.currentRunEvidenceScope, 'final manifest currentRunEvidenceScope must mirror current acceptance manifest');
+    assert.equal(summary.submittedThroughRuntimeCodex, current.submittedThroughRuntimeCodex, 'final manifest submittedThroughRuntimeCodex must mirror current acceptance manifest');
+    assert.equal(summary.commandId, current.commandId, 'final manifest commandId must mirror current acceptance manifest');
+  }
+
+  if (summary.status === 'passed') {
+    assert.equal(summary.releaseEligible, true, 'passed Runtime Codex browser acceptance is release eligible');
+    assert.equal(summary.releaseBlocking, false, 'passed Runtime Codex browser acceptance is not release blocking');
+    assert.equal(summary.submittedThroughRuntimeCodex, true, 'passed Runtime Codex browser acceptance must submit through Runtime Codex');
+    assert.ok(summary.commandId?.trim(), 'passed Runtime Codex browser acceptance must record commandId');
+    return;
+  }
+
+  assert.equal(summary.releaseEligible, false, `${summary.status}: Runtime Codex browser acceptance cannot be release eligible`);
+  assert.equal(summary.releaseBlocking, true, `${summary.status}: Runtime Codex browser acceptance must stay release blocking`);
+}
+
+function assertReleaseSummary(manifest: FinalManifest): void {
+  const releaseSummary = manifest.releaseSummary;
+  const browserSummary = manifest.runtimeCodexBrowserAcceptance;
+  assert.ok(releaseSummary, 'final manifest must include a top-level release summary');
+  assert.ok(browserSummary, 'final manifest Runtime Codex browser acceptance summary is required before release summary validation');
+  assert.equal(releaseSummary.strictGate, 'npm run smoke:runtime-codex-browser-acceptance:strict', 'release summary strict gate');
+  assert.equal(releaseSummary.expectedRetestCommand, browserSummary.expectedRetestCommand, 'release summary retest command');
+  assert.equal(releaseSummary.currentRunEvidenceScope, browserSummary.currentRunEvidenceScope, 'release summary currentRunEvidenceScope');
+
+  if (browserSummary.status === 'passed') {
+    assert.equal(releaseSummary.status, 'release-eligible', 'passed browser acceptance must make final manifest release-eligible');
+    assert.equal(releaseSummary.releaseEligible, true, 'release summary releaseEligible');
+    assert.equal(releaseSummary.releaseBlocking, false, 'release summary releaseBlocking');
+    assert.equal(releaseSummary.blocker, undefined, 'release summary must not carry blocker when release eligible');
+    return;
+  }
+
+  assert.equal(releaseSummary.status, 'blocked', 'non-passed browser acceptance must keep final manifest blocked');
+  assert.equal(releaseSummary.releaseEligible, false, 'blocked release summary cannot be release eligible');
+  assert.equal(releaseSummary.releaseBlocking, true, 'blocked release summary must be release blocking');
+  assert.equal(releaseSummary.blocker, 'runtime-codex-browser-acceptance', 'blocked release summary blocker');
+}
+
+async function readRuntimeCodexBrowserAcceptanceManifest(path: string | undefined): Promise<FinalManifest['runtimeCodexBrowserAcceptance'] | undefined> {
+  if (!path) return undefined;
+  try {
+    const raw = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+    return {
+      status: typeof raw.status === 'string' ? raw.status : 'missing',
+      currentRunEvidenceScope: typeof raw.currentRunEvidenceScope === 'string' ? raw.currentRunEvidenceScope : undefined,
+      submittedThroughRuntimeCodex: typeof raw.submittedThroughRuntimeCodex === 'boolean' ? raw.submittedThroughRuntimeCodex : undefined,
+      commandId: typeof raw.commandId === 'string' && raw.commandId.trim() ? raw.commandId.trim() : undefined,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 function assertStringArray(value: unknown, label: string): string[] {
   assert.ok(Array.isArray(value), `${label} must be an array`);
   assert.ok(value.every((item) => typeof item === 'string' && item.trim()), `${label} must contain non-empty strings`);
   return value as string[];
+}
+
+function isRuntimeCodexBrowserAcceptanceStatus(value: unknown): value is string {
+  return value === 'missing' || value === 'blocked' || value === 'failed' || value === 'partial' || value === 'passed';
 }

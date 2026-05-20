@@ -242,10 +242,11 @@ async function main() {
   const overflowKeys = new Set([...counts.entries()]
     .filter(([key, count]) => count > (trackedBaselineCounts[key] ?? 0))
     .map(([key]) => key));
-  const errors = findings.filter((finding) => overflowKeys.has(findingKey(finding)));
-  const warnings = findings.filter((finding) => !overflowKeys.has(findingKey(finding)) && finding.migration);
-  const shrinkableKeys = Object.entries(trackedBaselineCounts)
-    .filter(([key, baseline]) => (counts.get(key) ?? 0) < baseline);
+	  const errors = findings.filter((finding) => overflowKeys.has(findingKey(finding)));
+	  const warnings = findings.filter((finding) => !overflowKeys.has(findingKey(finding)) && finding.migration);
+	  const shrinkableKeys = Object.entries(trackedBaselineCounts)
+	    .filter(([key, baseline]) => (counts.get(key) ?? 0) < baseline);
+	  const structuralErrors = await legacyStructuralErrors();
 
   if (warnings.length) {
     console.warn('[no-legacy-paths] warnings: tracked T120 legacy paths remain');
@@ -259,18 +260,46 @@ async function main() {
     }
   }
 
-  if (errors.length) {
-    console.error('[no-legacy-paths] untracked or increased legacy paths found');
-    for (const [key, grouped] of groupBy(errors, findingKey)) {
-      console.error(`- ${key}: ${grouped[0].message} (${grouped.length}; baseline ${trackedBaselineCounts[key] ?? 0}, current ${counts.get(key) ?? 0})`);
-      for (const finding of grouped) console.error(`  ${finding.file}:${finding.line} ${finding.text}`);
-    }
-    console.error('Do not add new UI semantic fallback, provider/scenario/prompt special cases, or legacy adapter/compat re-exports. Move the behavior into manifests, catalogs, package-owned policy, or stable runtime entrypoints; only update this baseline with an explicit T120 migration note.');
-    process.exitCode = 1;
-    return;
-  }
+	  if (errors.length || structuralErrors.length) {
+	    console.error('[no-legacy-paths] untracked or increased legacy paths found');
+	    for (const [key, grouped] of groupBy(errors, findingKey)) {
+	      console.error(`- ${key}: ${grouped[0].message} (${grouped.length}; baseline ${trackedBaselineCounts[key] ?? 0}, current ${counts.get(key) ?? 0})`);
+	      for (const finding of grouped) console.error(`  ${finding.file}:${finding.line} ${finding.text}`);
+	    }
+	    for (const error of structuralErrors) console.error(`- structural: ${error}`);
+	    console.error('Do not add new UI semantic fallback, provider/scenario/prompt special cases, or legacy adapter/compat re-exports. Move the behavior into manifests, catalogs, package-owned policy, or stable runtime entrypoints; only update this baseline with an explicit T120 migration note.');
+	    process.exitCode = 1;
+	    return;
+	  }
 
-  console.log(`[ok] no increased legacy paths found: ${files.length} source files, ${warnings.length} tracked findings.`);
+	  console.log(`[ok] no increased legacy paths found: ${files.length} source files, ${warnings.length} tracked findings.`);
+	}
+
+async function legacyStructuralErrors(): Promise<string[]> {
+  const errors: string[] = [];
+  const gatewayText = await readTextIfExists(join(root, 'src', 'runtime', 'generation-gateway.ts'));
+  if (!gatewayText.includes('agentServerDispatchQuarantinedPayload(context.request)')) {
+    errors.push('generation-gateway.ts must quarantine terminal AgentServer generation before STAGE_AGENTSERVER_GENERATION can run.');
+  }
+  if (!gatewayText.includes('agentServerGenerationDispatchQuarantineDecision')) {
+    errors.push('generation-gateway.ts must use the canonical AgentServer generation dispatch quarantine decision.');
+  }
+  const backendConfigText = await readTextIfExists(join(root, 'src', 'runtime', 'gateway', 'agent-backend-config.ts'));
+  if (!/requestBackendSupported:\s*runtimeAgentBackendSupported\(requestBackend\)\s*&&\s*requestBackend\s*!==\s*'codex'/.test(backendConfigText)) {
+    errors.push('agent-backend-config.ts must not treat request.agentBackend=codex as AgentServer generation opt-in.');
+  }
+  if (/requestLlmEndpoint:\s*Boolean\(/.test(backendConfigText)) {
+    errors.push('agent-backend-config.ts must not treat a plain llmEndpoint/baseUrl as AgentServer generation opt-in.');
+  }
+  return errors;
+}
+
+async function readTextIfExists(path: string) {
+  try {
+    return await readFile(path, 'utf8');
+  } catch {
+    return '';
+  }
 }
 
 function trackedMigration(file: string, rule: string) {

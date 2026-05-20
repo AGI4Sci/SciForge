@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { createGuiProtocolController } from '../../ui/src/app/guiProtocol.js';
 import { createFileBackedGuiProtocolController, loadGuiExtensionSnapshot, saveGuiExtensionSnapshot } from './gui-extension-state.js';
-import { GUI_NATIVE_RESOURCE_URIS, GUI_NATIVE_TOOL_NAMES, prepareRuntimeGuiExtensionInjection, runtimeGuiExtensionManifest } from './gui-extension-manifest.js';
+import { GUI_EXTENSION_STATE_ENV, GUI_NATIVE_RESOURCE_URIS, GUI_NATIVE_TOOL_NAMES, prepareRuntimeGuiExtensionInjection, runtimeGuiExtensionManifest } from './gui-extension-manifest.js';
 import { callGuiMcpTool } from './gui-mcp-tools.js';
 
 test('Runtime GUI extension manifest exposes native MCP resources and gui tools only', async () => {
@@ -37,6 +38,37 @@ test('Runtime GUI extension manifest exposes native MCP resources and gui tools 
   assert.equal(JSON.stringify(manifest).includes('provider route'), false);
   assert.deepEqual(GUI_NATIVE_TOOL_NAMES, injection.toolNames);
   assert.deepEqual(GUI_NATIVE_RESOURCE_URIS, injection.resourceUris);
+});
+
+test('Runtime GUI extension also exposes gui present wrapper for shell-style probes', async () => {
+  const workspace = await tempWorkspace();
+  const statePath = join(workspace, 'gui-state.json');
+  const injection = await prepareRuntimeGuiExtensionInjection({ statePath });
+  assert.ok(injection);
+
+  const wrapperOutput = await execFileText(
+    join(injection.binDir, 'gui'),
+    [
+      'present',
+      '--intent',
+      'show-result',
+      '--title',
+      'Wrapper result',
+      '--ref',
+      'artifact:wrapper-result',
+      '--content',
+      'WRAPPER_RESULT_READY',
+    ],
+    { [GUI_EXTENSION_STATE_ENV]: statePath },
+  );
+  const snapshot = await loadGuiExtensionSnapshot(statePath);
+  const intentLog = snapshot.intentLog ?? [];
+  const regions = snapshot.regions ?? [];
+
+  assert.match(wrapperOutput, /"tool":"gui\.present"/);
+  assert.equal(intentLog.at(-1)?.tool, 'gui.present');
+  assert.equal(intentLog.at(-1)?.applied, true);
+  assert.equal(regions.at(-1)?.visibleRefs?.at(-1), 'artifact:wrapper-result');
 });
 
 test('Runtime GUI MCP tools read semantic resources and negotiate presentation preconditions', () => {
@@ -167,4 +199,16 @@ async function tempWorkspace(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'sciforge-gui-extension-'));
   await mkdir(dir, { recursive: true });
   return dir;
+}
+
+function execFileText(command: string, args: string[], env: Record<string, string> = {}): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { timeout: 5000, env: { ...process.env, ...env } }, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(`${error.message}\n${stderr}`));
+        return;
+      }
+      resolve(stdout.toString());
+    });
+  });
 }

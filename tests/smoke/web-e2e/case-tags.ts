@@ -1,4 +1,5 @@
 export type LegacyRealTaskPrefix = 'R-LIT' | 'R-DATA' | 'R-RUN' | 'R-UI';
+export type CurrentProjectRealTaskId = (typeof CURRENT_PROJECT_REAL_TASK_IDS)[number];
 
 export type WebE2eContractAssertion =
   | 'explicit-refs'
@@ -15,6 +16,31 @@ export type WebE2eContractAssertion =
   | 'no-legacy-ui'
   | 'literature-happy-path'
   | 'data-happy-path'
+  | 'large-file-bounded-diagnostics'
+  | 'longitudinal-messy-csv'
+  | 'schema-drift-confounder'
+  | 'two-table-lineage'
+  | 'progressive-gui-resource-probing'
+  | 'gui-ask-user-clarification'
+  | 'text-only-gui-action'
+  | 'native-session-artifact-followup'
+  | 'long-context-constraint-stability'
+  | 'literature-current-selected-report'
+  | 'literature-evidence-conflict'
+  | 'dynamic-web-evidence-status'
+  | 'targeted-code-repair'
+  | 'dirty-worktree-preservation'
+  | 'scientific-reviewer-verifier-loop'
+  | 'capability-discovery-boundary'
+  | 'codex-native-skill-promotion'
+  | 'computer-use-evidence-folding'
+  | 'service-lifecycle-recovery'
+  | 'cancel-partial-continuation'
+  | 'browser-refresh-recovery'
+  | 'runtime-provider-budget'
+  | 'secret-raw-stream-scrub'
+  | 'failed-run-audit-export'
+  | 'provider-outage-recovery'
   | 'case-tag-contract';
 
 export interface WebE2eLegacyTaskCaseTagMapping {
@@ -24,6 +50,105 @@ export interface WebE2eLegacyTaskCaseTagMapping {
   sourceFixtureTaskIds: string[];
   contractAssertions: WebE2eContractAssertion[];
 }
+
+export interface CurrentProjectTaskLegacyBoundary {
+  taskId: CurrentProjectRealTaskId;
+  evidenceSource: 'real-task-matrix-and-live-manifest';
+  legacyWebE2eMappingsCanSatisfy: false;
+}
+
+export interface CurrentProjectWebE2eCoverageMapping {
+  taskId: CurrentProjectRealTaskId;
+  title: string;
+  saWebTags: string[];
+  completionGate: 'smoke:web-multiturn-final';
+  contractAssertions: WebE2eContractAssertion[];
+}
+
+export interface CurrentProjectDesktopCoverageMapping {
+  taskId: Extract<CurrentProjectRealTaskId, 'R-DESK-01' | 'R-PKG-01'>;
+  title: string;
+  evidenceSource: 'desktop-live-acceptance-schema-and-real-task-matrix';
+  completionGate: 'smoke:desktop-live-acceptance-evidence';
+  releaseGate: 'production-desktop-cold-start-live-evidence';
+}
+
+export const CURRENT_PROJECT_REAL_TASK_IDS = [
+  'R-LIT-01',
+  'R-LIT-02',
+  'R-LIT-03',
+  'R-WEB-01',
+  'R-DATA-01',
+  'R-DATA-02',
+  'R-DATA-03',
+  'R-DATA-04',
+  'R-CODE-01',
+  'R-CODE-02',
+  'R-RUN-01',
+  'R-RUN-02',
+  'R-PROTO-01',
+  'R-PROTO-02',
+  'R-PROTO-03',
+  'R-RESUME-01',
+  'R-RESUME-02',
+  'R-MEM-01',
+  'R-BUDGET-01',
+  'R-SEC-01',
+  'R-AUDIT-01',
+  'R-FAIL-01',
+  'R-METHOD-01',
+  'R-KG-01',
+  'R-BIO-01',
+  'R-VERIFY-01',
+  'R-CAP-01',
+  'R-SKILL-01',
+  'R-CU-01',
+  'R-DESK-01',
+  'R-PKG-01',
+] as const;
+
+export const CURRENT_PROJECT_TASK_LEGACY_BOUNDARIES: CurrentProjectTaskLegacyBoundary[] = CURRENT_PROJECT_REAL_TASK_IDS.map((taskId) => ({
+  taskId,
+  evidenceSource: 'real-task-matrix-and-live-manifest',
+  legacyWebE2eMappingsCanSatisfy: false,
+}));
+
+export const CURRENT_PROJECT_WEB_E2E_COVERAGE: CurrentProjectWebE2eCoverageMapping[] = [
+  currentProjectCoverage('R-LIT-01', 'Current literature retrieval with arXiv-style evidence', ['SA-WEB-31'], ['literature-current-selected-report']),
+  currentProjectCoverage('R-LIT-02', 'Contradictory literature evidence synthesis', ['SA-WEB-32'], ['literature-evidence-conflict']),
+  currentProjectCoverage('R-LIT-03', 'Selected literature report follow-up scoping', ['SA-WEB-31'], ['literature-current-selected-report']),
+  currentProjectCoverage('R-WEB-01', 'Dynamic web evidence status boundaries', ['SA-WEB-32'], ['dynamic-web-evidence-status']),
+  currentProjectCoverage('R-DATA-01', 'Longitudinal messy CSV coefficient comparison', ['SA-WEB-20'], ['longitudinal-messy-csv']),
+  currentProjectCoverage('R-DATA-02', 'Schema drift confounder reinterpretation', ['SA-WEB-21'], ['schema-drift-confounder']),
+  currentProjectCoverage('R-DATA-03', 'Two-table merge lineage and reproducibility', ['SA-WEB-22'], ['two-table-lineage']),
+  currentProjectCoverage('R-DATA-04', 'Large-file bounded diagnostics', ['SA-WEB-19'], ['large-file-bounded-diagnostics']),
+  currentProjectCoverage('R-CODE-01', 'Targeted code repair from failing test', ['SA-WEB-33'], ['targeted-code-repair']),
+  currentProjectCoverage('R-CODE-02', 'Dirty worktree collaboration and preservation', ['SA-WEB-34'], ['dirty-worktree-preservation']),
+  currentProjectCoverage('R-RUN-01', 'Service lifecycle recovery with actual port evidence', ['SA-WEB-37'], ['service-lifecycle-recovery']),
+  currentProjectCoverage('R-RUN-02', 'Cancellation partial continuation safe remainder', ['SA-WEB-37'], ['cancel-partial-continuation']),
+  currentProjectCoverage('R-PROTO-01', 'Text-only GUI action contract', ['SA-WEB-28'], ['text-only-gui-action']),
+  currentProjectCoverage('R-PROTO-02', 'Progressive GUI resource probing', ['SA-WEB-23'], ['progressive-gui-resource-probing']),
+  currentProjectCoverage('R-PROTO-03', 'gui.ask_user clarification', ['SA-WEB-24'], ['gui-ask-user-clarification']),
+  currentProjectCoverage('R-RESUME-01', 'Native session resume with artifact follow-up', ['SA-WEB-29'], ['native-session-artifact-followup']),
+  currentProjectCoverage('R-RESUME-02', 'Browser refresh recovery without native-continuity shortcut', ['SA-WEB-37'], ['browser-refresh-recovery']),
+  currentProjectCoverage('R-MEM-01', 'Long-context original constraint stability', ['SA-WEB-30'], ['long-context-constraint-stability']),
+  currentProjectCoverage('R-BUDGET-01', 'Runtime provider budget and fallback transparency', ['SA-WEB-38'], ['runtime-provider-budget']),
+  currentProjectCoverage('R-SEC-01', 'Secret and raw stream scrub boundary', ['SA-WEB-38'], ['secret-raw-stream-scrub']),
+  currentProjectCoverage('R-AUDIT-01', 'Failed run bounded audit export', ['SA-WEB-38'], ['failed-run-audit-export']),
+  currentProjectCoverage('R-FAIL-01', 'Provider outage repair and fresh recovery', ['SA-WEB-38'], ['provider-outage-recovery']),
+  currentProjectCoverage('R-METHOD-01', 'Protocol package reviewer loop', ['SA-WEB-35'], ['scientific-reviewer-verifier-loop']),
+  currentProjectCoverage('R-KG-01', 'Biomedical evidence graph contradiction loop', ['SA-WEB-35'], ['scientific-reviewer-verifier-loop']),
+  currentProjectCoverage('R-BIO-01', 'Single-cell perturbation reviewer rejection loop', ['SA-WEB-35'], ['scientific-reviewer-verifier-loop']),
+  currentProjectCoverage('R-VERIFY-01', 'Verifier critique repair boundary', ['SA-WEB-35'], ['scientific-reviewer-verifier-loop']),
+  currentProjectCoverage('R-CAP-01', 'Capability discovery boundary', ['SA-WEB-36'], ['capability-discovery-boundary']),
+  currentProjectCoverage('R-SKILL-01', 'Codex-native skill promotion boundary', ['SA-WEB-36'], ['codex-native-skill-promotion']),
+  currentProjectCoverage('R-CU-01', 'Computer Use evidence folding boundary', ['SA-WEB-36'], ['computer-use-evidence-folding']),
+];
+
+export const CURRENT_PROJECT_DESKTOP_COVERAGE: CurrentProjectDesktopCoverageMapping[] = [
+  desktopProjectCoverage('R-DESK-01', 'Desktop cold-start user run'),
+  desktopProjectCoverage('R-PKG-01', 'Desktop package without dev-server contract'),
+];
 
 export const FINAL_WEB_E2E_CASE_TAGS = [
   'SA-WEB-03',
@@ -42,7 +167,24 @@ export const FINAL_WEB_E2E_CASE_TAGS = [
   'SA-WEB-16',
   'SA-WEB-17',
   'SA-WEB-18',
+  'SA-WEB-19',
+  'SA-WEB-20',
+  'SA-WEB-21',
+  'SA-WEB-22',
+  'SA-WEB-23',
+  'SA-WEB-24',
   'SA-WEB-27',
+  'SA-WEB-28',
+  'SA-WEB-29',
+  'SA-WEB-30',
+  'SA-WEB-31',
+  'SA-WEB-32',
+  'SA-WEB-33',
+  'SA-WEB-34',
+  'SA-WEB-35',
+  'SA-WEB-36',
+  'SA-WEB-37',
+  'SA-WEB-38',
 ] as const;
 
 export const WEB_E2E_LEGACY_TASK_MAPPINGS: WebE2eLegacyTaskCaseTagMapping[] = [
@@ -57,10 +199,10 @@ export const WEB_E2E_LEGACY_TASK_MAPPINGS: WebE2eLegacyTaskCaseTagMapping[] = [
   mapping('R-LIT-09', '历史文献任务恢复', ['SA-WEB-04', 'SA-WEB-11'], ['TS-28', 'TS-05'], ['failure-evidence', 'projection-restore']),
   mapping('R-LIT-10', '双语报告', ['SA-WEB-15', 'SA-WEB-17'], ['T10-06', 'T20-09'], ['artifact-delivery', 'literature-happy-path']),
 
-  mapping('R-DATA-01', 'CSV 多轮分析', ['SA-WEB-16', 'SA-WEB-17'], ['T5-06', 'T20-05'], ['data-happy-path', 'artifact-delivery']),
-  mapping('R-DATA-02', '两表合并冲突', ['SA-WEB-16', 'SA-WEB-17'], ['T10-04', 'T20-05'], ['data-happy-path', 'failure-evidence']),
-  mapping('R-DATA-03', '大文件摘要', ['SA-WEB-16', 'SA-WEB-17'], ['T20-10', 'T20-05'], ['data-happy-path', 'case-tag-contract']),
-  mapping('R-DATA-04', '图表迭代', ['SA-WEB-03', 'SA-WEB-16'], ['T20-04', 'T10-06'], ['explicit-refs', 'data-happy-path']),
+  mapping('R-DATA-01', '纵向 messy CSV 分析', ['SA-WEB-20', 'SA-WEB-16'], ['T5-06', 'T20-05'], ['longitudinal-messy-csv', 'data-happy-path']),
+  mapping('R-DATA-02', 'Schema drift 与因果重解释', ['SA-WEB-21', 'SA-WEB-16'], ['T10-04', 'T20-05'], ['schema-drift-confounder', 'data-happy-path']),
+  mapping('R-DATA-03', '两表合并和 lineage', ['SA-WEB-22', 'SA-WEB-16'], ['T10-04', 'T20-05'], ['two-table-lineage', 'data-happy-path']),
+  mapping('R-DATA-04', '大文件摘要和按需读取', ['SA-WEB-19', 'SA-WEB-16'], ['T20-10', 'T20-05'], ['large-file-bounded-diagnostics', 'data-happy-path']),
   mapping('R-DATA-05', '缺失文件恢复', ['SA-WEB-04', 'SA-WEB-16'], ['T5-04', 'TS-24'], ['failure-evidence', 'data-happy-path']),
   mapping('R-DATA-06', 'Notebook 风格任务', ['SA-WEB-07', 'SA-WEB-16'], ['T20-05', 'T20-11'], ['background-checkpoint', 'data-happy-path']),
   mapping('R-DATA-07', '外部数据源限流', ['SA-WEB-05', 'SA-WEB-16'], ['T10-10', 'T20-02'], ['provider-route', 'failure-evidence']),
@@ -92,6 +234,10 @@ export function mappingsForSaWebTag(tag: string): WebE2eLegacyTaskCaseTagMapping
   return WEB_E2E_LEGACY_TASK_MAPPINGS.filter((mapping) => mapping.saWebTags.includes(tag));
 }
 
+export function currentProjectMappingsForSaWebTag(tag: string): CurrentProjectWebE2eCoverageMapping[] {
+  return CURRENT_PROJECT_WEB_E2E_COVERAGE.filter((mapping) => mapping.saWebTags.includes(tag));
+}
+
 function mapping(
   rTaskId: WebE2eLegacyTaskCaseTagMapping['rTaskId'],
   title: string,
@@ -100,4 +246,32 @@ function mapping(
   contractAssertions: WebE2eContractAssertion[],
 ): WebE2eLegacyTaskCaseTagMapping {
   return { rTaskId, title, saWebTags, sourceFixtureTaskIds, contractAssertions };
+}
+
+function currentProjectCoverage(
+  taskId: CurrentProjectRealTaskId,
+  title: string,
+  saWebTags: string[],
+  contractAssertions: WebE2eContractAssertion[],
+): CurrentProjectWebE2eCoverageMapping {
+  return {
+    taskId,
+    title,
+    saWebTags,
+    completionGate: 'smoke:web-multiturn-final',
+    contractAssertions,
+  };
+}
+
+function desktopProjectCoverage(
+  taskId: Extract<CurrentProjectRealTaskId, 'R-DESK-01' | 'R-PKG-01'>,
+  title: string,
+): CurrentProjectDesktopCoverageMapping {
+  return {
+    taskId,
+    title,
+    evidenceSource: 'desktop-live-acceptance-schema-and-real-task-matrix',
+    completionGate: 'smoke:desktop-live-acceptance-evidence',
+    releaseGate: 'production-desktop-cold-start-live-evidence',
+  };
 }

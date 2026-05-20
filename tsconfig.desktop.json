@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": [
+    "src/desktop/**/*.ts",
+    "tests/smoke/smoke-desktop-*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist-ui"
+  ]
+}

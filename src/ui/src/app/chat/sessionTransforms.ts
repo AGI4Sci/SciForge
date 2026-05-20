@@ -19,6 +19,7 @@ import type {
 import { makeId, nowIso } from '../../domain';
 import { mergeObjectReferences } from '../../../../../packages/support/object-references';
 import { normalizeScenarioPromptTitle } from '@sciforge/scenario-core/scenario-routing-policy';
+import { isSeedDemoOrFixtureMessage } from '@sciforge-ui/runtime-contract';
 import {
   ACCEPTANCE_REPAIR_RERUN_TOOL_ID,
   BACKGROUND_COMPLETION_CONTRACT_ID,
@@ -889,6 +890,10 @@ export function requestPayloadForTurn(session: SciForgeSession, userMessage: Sci
   if (hasPriorWork || hasExplicitReferences) {
     const messages = compactMessagesForRequestPayload(session.messages, userMessage.id, selectedRefSet);
     const projectionContexts = projectionContinuationContexts(session, references);
+    const selectedRunIds = new Set([
+      ...selectedRunIdsFromReferences(references),
+      ...selectedRunIdsFromMessages(session.messages, selectedRefSet),
+    ]);
     return {
       messages,
       artifacts: artifactsForRequestPayload(session.artifacts, selectedRefSet).map(compactArtifactForRequestPayload),
@@ -896,7 +901,7 @@ export function requestPayloadForTurn(session: SciForgeSession, userMessage: Sci
       executionUnits: projectionContexts.length
         ? compactProjectionExecutionUnitsForRequestPayload(session.executionUnits, projectionContexts)
         : executionUnitsForRequestPayload(session.executionUnits, selectedRefSet).map(compactExecutionUnitForRequestPayload),
-      runs: runsForRequestPayload(session.runs, selectedRefSet, projectionContexts)
+      runs: runsForRequestPayload(session.runs, selectedRefSet, projectionContexts, selectedRunIds)
         .map((run) => compactRunForRequestPayload(run, projectionContexts, selectedRefSet)),
     };
   }
@@ -920,11 +925,14 @@ function selectedReferenceAliases(reference: SciForgeReference): string[] {
   const aliases = [
     reference.ref,
     reference.sourceId,
+    reference.runId ? `run:${reference.runId}` : undefined,
     stringField(payload.path),
     stringField(payload.dataRef),
     stringField(payload.ref),
+    stringField(payload.runId) ? `run:${stringField(payload.runId)}` : undefined,
     stringField(currentReference.ref),
     stringField(currentReference.id),
+    stringField(currentReference.runId) ? `run:${stringField(currentReference.runId)}` : undefined,
     stringField(currentReference.artifactType),
     stringField(provenance.path),
     stringField(provenance.dataRef),
@@ -935,25 +943,34 @@ function selectedReferenceAliases(reference: SciForgeReference): string[] {
   return Array.from(new Set(aliases.filter((value): value is string => Boolean(value && value.trim()))));
 }
 
+function selectedRunIdsFromReferences(references: SciForgeReference[]) {
+  return new Set(references.flatMap((reference) => {
+    const payload = isRecord(reference.payload) ? reference.payload : {};
+    const currentReference = isRecord(payload.currentReference) ? payload.currentReference : isRecord(payload.objectReference) ? payload.objectReference : {};
+    return [
+      reference.runId,
+      stringField(payload.runId),
+      stringField(currentReference.runId),
+    ];
+  }).filter((value): value is string => Boolean(value && value.trim())));
+}
+
+function selectedRunIdsFromMessages(messages: SciForgeMessage[], selectedRefs: Set<string>) {
+  if (selectedRefs.size === 0) return new Set<string>();
+  return new Set(messages.flatMap((message) => [
+    ...(message.objectReferences ?? []),
+    ...(message.acceptance?.objectReferences ?? []),
+  ].filter((reference) => selectedRefs.has(reference.ref))
+    .map((reference) => reference.runId)
+    .filter((value): value is string => Boolean(value && value.trim()))));
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function stringField(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
-function isSeedDemoOrFixtureMessage(message: unknown) {
-  if (!isRecord(message)) return false;
-  const provenance = isRecord(message.provenance) ? message.provenance : {};
-  const marker = [
-    message.id,
-    message.role,
-    provenance.kind,
-    provenance.source,
-  ].map((value) => String(value ?? '').toLowerCase()).join(' ');
-  if (provenance.runtimeRequestEligible === false || provenance.liveAcceptanceEligible === false) return true;
-  return /\b(seed|demo|fixture)\b|scenariodemodata/.test(marker) || message.role === 'scenario';
 }
 
 function claimsForRequestPayload(claims: EvidenceClaim[]) {
@@ -1004,16 +1021,17 @@ function runsForRequestPayload(
   runs: SciForgeRun[],
   selectedRefs: Set<string>,
   projectionContexts: ProjectionContinuationContext[],
+  selectedRunIds: Set<string> = new Set(),
 ) {
   if (selectedRefs.size === 0) return runs.slice(-REQUEST_PAYLOAD_RUN_LIMIT);
   const projectionRunIds = new Set(projectionContexts.map((context) => context.sourceRunId));
-  const scoped = runs.filter((run) => projectionRunIds.has(run.id) || runRefs(run).some((ref) => selectedRefs.has(ref)));
+  const scoped = runs.filter((run) => selectedRunIds.has(run.id) || projectionRunIds.has(run.id) || runRefs(run).some((ref) => selectedRefs.has(ref)));
   return scoped.slice(-REQUEST_PAYLOAD_RUN_LIMIT);
 }
 
 function compactMessagesForRequestPayload(messages: SciForgeMessage[], currentMessageId: string, selectedRefs = new Set<string>()) {
   return messages
-    .filter((message) => !message.id.startsWith('seed'))
+    .filter((message) => !isSeedDemoOrFixtureMessage(message))
     .filter((message) => selectedRefs.size === 0 || message.id === currentMessageId || messageRefs(message).some((ref) => selectedRefs.has(ref)))
     .slice(-REQUEST_PAYLOAD_MESSAGE_LIMIT)
     .map((message) => {

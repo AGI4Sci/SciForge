@@ -4,8 +4,11 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { DIRECT_CONTEXT_FAST_PATH_POLICY } from '@sciforge-ui/runtime-contract/artifact-policy';
 import { appendTaskAttempt } from '../../src/runtime/task-attempt-history.js';
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
+
+const readyWebSearchProvider = { id: 'sciforge.web-worker.web_search', available: true, status: 'ready' };
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-artifact-ref-followup-'));
 await mkdir(join(workspace, '.sciforge', 'artifacts'), { recursive: true });
@@ -46,6 +49,17 @@ await writeFile(join(workspace, '.sciforge', 'artifacts', 'session-smoke-researc
   type: 'research-report',
   data: { markdown: '## Summary\nAI agent papers cover deployment monitoring, software engineering, multi-agent anomaly detection, planning caches, and math proof systems.' },
 }, null, 2));
+
+const selectedReportRef = '.sciforge/artifacts/selected-old-research-report.md';
+await writeFile(join(workspace, selectedReportRef), [
+  '# Selected research report',
+  '',
+  '| Title | Year | Venue | URL | fullTextStatus | evidenceLocation | Summary | Limitations |',
+  '| --- | --- | --- | --- | --- | --- | --- | --- |',
+  '| ShopGym | 2026 | arXiv | https://arxiv.org/abs/2601.00001 | PDF/full-text extracted | https://arxiv.org/pdf/2601.00001#page=2 | GUI browser agents benchmark for shopping workflows. | Needs more replication. |',
+  '| ScreenSearch | 2026 | arXiv | https://arxiv.org/abs/2601.00002 | PDF/full-text extracted | https://arxiv.org/pdf/2601.00002#page=3 | Screen-grounded search for computer-use agents. | Synthetic tasks. |',
+  '| PAGER | 2026 | arXiv | https://arxiv.org/abs/2601.00003 | PDF/full-text metadata only | https://arxiv.org/abs/2601.00003 | Page exploration and retrieval for web agents. | Full text not verified. |',
+].join('\n'));
 
 let requestBody = '';
 let generationDispatchCount = 0;
@@ -104,134 +118,22 @@ const server = createServer(async (req, res) => {
     req.on('data', (chunk) => { body += chunk; });
     req.on('end', () => resolve(body));
   });
-  const parsed = JSON.parse(requestBody || '{}');
-  const metadata = isRecord(parsed.input) && isRecord(parsed.input.metadata) ? parsed.input.metadata : {};
-  const inputText = isRecord(parsed.input) && typeof parsed.input.text === 'string' ? parsed.input.text : '';
-  if (metadata.purpose === 'workspace-task-generation') {
-    if (/分别在哪里|按执行建议重新分组|不要重新开始独立任务|我在哪可以找到/.test(inputText)) {
-      const contextAnswerPayload = inputText.includes('按执行建议重新分组') ? {
-        message: [
-          '已只读取当前会话已有 paper-list 和 claims。',
-          '上一轮失败来自 path-only taskFiles；本轮不需要重新生成脚本。',
-          '证据分组摘要已写入 research-report，paper-list 应沿用上一轮上下文 artifact。',
-        ].join('\n'),
-        confidence: 0.91,
-        claimType: 'context-summary',
-        evidenceLevel: 'agentserver-context',
-        reasoningTrace: 'AgentServer returned only a direct report; SciForge should preserve existing context artifacts.',
-        claims: ['Existing paper-list should be carried through for context answers.'],
-        uiManifest: { components: ['report-viewer', 'paper-card-list', 'evidence-matrix'] },
-        executionUnits: [],
-        artifacts: [{
-          id: 'research-report',
-          type: 'research-report',
-          data: { markdown: '## Existing-context regrouping\nNo new scripts or papers were generated.' },
-        }],
-      } : {
-        message: [
-          '我先判断当前问题是在询问上一轮产物位置和主题要点，而不是请求重新检索。',
-          '任务脚本在 .sciforge/tasks/generated-literature-smoke/run.py，paper-list artifact 在 session-smoke-paper-list.json，research-report artifact 在 session-smoke-research-report.json。',
-          '主题包括 deployment monitoring、software engineering、multi-agent anomaly detection、planning caches 和 math proof systems。',
-        ].join('\n'),
-        confidence: 0.9,
-        claimType: 'context-summary',
-        evidenceLevel: 'agentserver-context',
-        reasoningTrace: 'AgentServer returned a structured context answer from prior refs.',
-        claims: ['Existing paper-list and claims are sufficient for this follow-up.'],
-        uiManifest: { components: ['paper-card-list', 'evidence-matrix', 'notebook-timeline'] },
-        executionUnits: [],
-        artifacts: [{
-          id: 'paper-list',
-          type: 'paper-list',
-          dataRef: '.sciforge/task-results/generated-literature-smoke.json',
-          metadata: { source: 'existing-context' },
-        }],
-      };
-      res.setHeader('Content-Type', 'application/jsonl');
-      res.end(JSON.stringify({
-        result: {
-          data: {
-            run: {
-              id: 'mock-backend-decision-context-answer',
-              status: 'completed',
-              output: {
-                text: `\`\`\`json\n${JSON.stringify(contextAnswerPayload, null, 2)}\n\`\`\``,
-              },
-            },
-          },
-        },
-      }) + '\n');
-      return;
-    }
-    res.setHeader('Content-Type', 'application/jsonl');
-    res.end(JSON.stringify({
-      result: {
-        ok: true,
-        data: {
-          run: {
-            id: 'mock-report-continuation-generation',
-            output: {
-              result: {
-                taskFiles: [{ path: '.sciforge/tasks/literature-continuation-report.py', language: 'python', content: generatedReportTask }],
-                entrypoint: { language: 'python', path: '.sciforge/tasks/literature-continuation-report.py' },
-                environmentRequirements: { language: 'python' },
-                validationCommand: 'python .sciforge/tasks/literature-continuation-report.py <input> <output>',
-                expectedArtifacts: ['paper-list', 'research-report'],
-                patchSummary: 'Generated a continuation report task from prior context.',
-              },
-            },
-          },
-        },
-      },
-    }) + '\n');
-    return;
-  }
   res.setHeader('Content-Type', 'application/jsonl');
-  const contextAnswerPayload = inputText.includes('按执行建议重新分组') ? {
-    message: [
-      '已只读取当前会话已有 paper-list 和 claims。',
-      '上一轮失败来自 path-only taskFiles；本轮不需要重新生成脚本。',
-      '证据分组摘要已写入 research-report，paper-list 应沿用上一轮上下文 artifact。',
-    ].join('\n'),
-    confidence: 0.91,
-    claimType: 'context-summary',
-    evidenceLevel: 'agentserver-context',
-    reasoningTrace: 'AgentServer returned only a direct report; SciForge should preserve existing context artifacts.',
-    claims: ['Existing paper-list should be carried through for context answers.'],
-    uiManifest: { components: ['report-viewer', 'paper-card-list', 'evidence-matrix'] },
-    executionUnits: [],
-    artifacts: [{
-      id: 'research-report',
-      type: 'research-report',
-      data: { markdown: '## Existing-context regrouping\nNo new scripts or papers were generated.' },
-    }],
-  } : {
-    message: [
-      '我先判断当前问题是在询问上一轮产物位置和主题要点，而不是请求重新检索。',
-      '任务脚本在 .sciforge/tasks/generated-literature-smoke/run.py，paper-list artifact 在 session-smoke-paper-list.json，research-report artifact 在 session-smoke-research-report.json。',
-      '主题包括 deployment monitoring、software engineering、multi-agent anomaly detection、planning caches 和 math proof systems。',
-    ].join('\n'),
-    confidence: 0.9,
-    claimType: 'context-summary',
-    evidenceLevel: 'agentserver-context',
-    reasoningTrace: 'AgentServer returned a structured context answer from prior refs.',
-    claims: ['Existing paper-list and claims are sufficient for this follow-up.'],
-    uiManifest: { components: ['paper-card-list', 'evidence-matrix', 'notebook-timeline'] },
-    executionUnits: [],
-    artifacts: [{
-      id: 'paper-list',
-      type: 'paper-list',
-      dataRef: '.sciforge/task-results/generated-literature-smoke.json',
-      metadata: { source: 'existing-context' },
-    }],
-  };
   res.end(JSON.stringify({
     result: {
+      ok: true,
       data: {
         run: {
-          id: 'mock-context-answer',
+          id: 'mock-report-continuation-generation',
           output: {
-            text: `\`\`\`json\n${JSON.stringify(contextAnswerPayload, null, 2)}\n\`\`\``,
+            result: {
+              taskFiles: [{ path: '.sciforge/tasks/literature-continuation-report.py', language: 'python', content: generatedReportTask }],
+              entrypoint: { language: 'python', path: '.sciforge/tasks/literature-continuation-report.py' },
+              environmentRequirements: { language: 'python' },
+              validationCommand: 'python .sciforge/tasks/literature-continuation-report.py <input> <output>',
+              expectedArtifacts: ['paper-list', 'research-report'],
+              patchSummary: 'Generated a continuation report task from prior context.',
+            },
           },
         },
       },
@@ -244,109 +146,69 @@ assert.ok(address && typeof address === 'object');
 const mockBaseUrl = `http://127.0.0.1:${address.port}`;
 
 let contextDispatchCount = 0;
-const result = await runWorkspaceRuntimeGateway({
+let directContextDispatchCount = 0;
+const selectedReference = {
+  ref: 'artifact:research-report',
+  title: 'selected research-report',
+  dataRef: selectedReportRef,
+  path: selectedReportRef,
+  kind: 'artifact',
+  artifactType: 'research-report',
+};
+const unselectedLatestReport = {
+  id: 'research-report',
+  type: 'research-report',
+  data: {
+    markdown: 'LATEST-NOT-SELECTED AlphaBeta contamination should never appear.',
+  },
+  metadata: { source: 'latest-unselected-run' },
+};
+const selectedReportFollowup = await runWorkspaceRuntimeGateway({
   skillDomain: 'literature',
-  prompt: 'Round 2：基于上一轮结果，不要重新检索。请告诉我上一轮生成的本地任务脚本、task result JSON、stdout/stderr 日志、paper-list artifact、research-report artifact 分别在哪里，并用 5 条要点总结上一轮检索到的论文主题。',
+  prompt: '只基于选中的 research-report，不启动新搜索。请按优先级列出 3 篇论文的要点、证据和局限。',
   workspacePath: workspace,
   agentServerBaseUrl: mockBaseUrl,
   scenarioPackageRef: { id: 'literature-evidence-review', version: '1.0.0', source: 'built-in' },
   skillPlanRef: 'skill-plan-smoke',
-  expectedArtifactTypes: ['paper-list', 'research-report'],
+  expectedArtifactTypes: ['research-report'],
+  references: [selectedReference],
   uiState: {
-    recentConversation: [
-      'user: Round 1 search recent AI agent papers',
-      'assistant: Completed and produced paper-list and research-report artifacts.',
-    ],
-    recentExecutionRefs: [{
-      id: 'generated-literature-task',
-      status: 'done',
-      codeRef: '.sciforge/tasks/generated-literature-smoke/run.py',
-      outputRef: '.sciforge/task-results/generated-literature-smoke.json',
-      stdoutRef: '.sciforge/logs/generated-literature-smoke.stdout.log',
-      stderrRef: '.sciforge/logs/generated-literature-smoke.stderr.log',
-    }],
+    capabilityProviderAvailability: [readyWebSearchProvider],
+    contextReusePolicy: { selectedRefsOnly: true },
+    currentReferences: [selectedReference],
   },
-  artifacts: [],
+  artifacts: [
+    { id: 'research-report', type: 'research-report', dataRef: selectedReportRef },
+    unselectedLatestReport,
+  ],
 }, {
   onEvent(event) {
     if (event.type === 'agentserver-context-answer-dispatch') contextDispatchCount += 1;
     if (event.type === 'agentserver-dispatch') generationDispatchCount += 1;
+    if (event.type === 'direct-context-fast-path') directContextDispatchCount += 1;
   },
 });
 
 assert.equal(contextDispatchCount, 0);
-assert.equal(generationDispatchCount, 1);
-assert.match(requestBody, /workspace-task-generation/);
-assert.match(requestBody, /contextEnvelope/);
-assert.match(requestBody, /recentExecutionRefs|priorAttempts|longTermRefs/);
-assert.match(result.reasoningTrace, /AgentServer reasoning|AgentServer returned plain text|context answer/i);
-assert.match(result.message, /generated-literature-smoke\/run\.py/);
-assert.match(result.message, /session-smoke-paper-list\.json/);
-assert.match(result.message, /session-smoke-research-report\.json/);
-assert.match(result.message, /软件工程|software|部署|deployment|多智能体|multi-agent/i);
-assert.notEqual(result.executionUnits[0]?.tool, 'sciforge.context-ref-inspector');
-assert.equal(result.executionUnits[0]?.status, 'done');
-const contextReport = result.artifacts.find((artifact) => artifact.type === 'research-report');
-assert.ok(contextReport);
-assert.notEqual(isRecord(contextReport.metadata) ? contextReport.metadata.status : undefined, 'repair-needed');
-assert.match(isRecord(contextReport.data) ? String(contextReport.data.markdown || '') : '', /generated-literature-smoke\/run\.py/);
-
-const existingOnlySummary = await runWorkspaceRuntimeGateway({
-  skillDomain: 'literature',
-  prompt: '不要生成新脚本，也不要检索新论文。请只读取当前会话已有 paper-list 和 claims，把上一轮证据按执行建议重新分组并给我摘要。',
-  workspacePath: workspace,
-  agentServerBaseUrl: mockBaseUrl,
-  scenarioPackageRef: { id: 'literature-evidence-review', version: '1.0.0', source: 'built-in' },
-  skillPlanRef: 'skill-plan-smoke',
-  expectedArtifactTypes: ['paper-list', 'research-report'],
-  uiState: {
-    recentConversation: [
-      'user: Round 1 search recent AI agent papers',
-      'assistant: Completed and produced paper-list, claims, and research-report artifacts.',
-    ],
-    recentExecutionRefs: [{
-      id: 'generated-literature-task',
-      status: 'done',
-      codeRef: '.sciforge/tasks/generated-literature-smoke/run.py',
-      outputRef: '.sciforge/task-results/generated-literature-smoke.json',
-      stdoutRef: '.sciforge/logs/generated-literature-smoke.stdout.log',
-      stderrRef: '.sciforge/logs/generated-literature-smoke.stderr.log',
-    }],
-  },
-  artifacts: result.artifacts,
-}, {
-  onEvent(event) {
-    if (event.type === 'agentserver-context-answer-dispatch') contextDispatchCount += 1;
-    if (event.type === 'agentserver-dispatch') generationDispatchCount += 1;
-  },
-});
-assert.equal(contextDispatchCount, 0);
-assert.equal(generationDispatchCount, 2);
-assert.match(existingOnlySummary.reasoningTrace, /AgentServer reasoning|AgentServer returned plain text|context answer|direct report|directly/i);
-const carriedPaperList = existingOnlySummary.artifacts.find((artifact) => artifact.type === 'paper-list');
-assert.ok(carriedPaperList);
-assert.notEqual(isRecord(carriedPaperList.metadata) ? carriedPaperList.metadata.status : undefined, 'repair-needed');
-
-const priorRoundDiagnosticSummary = await runWorkspaceRuntimeGateway({
-  skillDomain: 'literature',
-  prompt: 'Round 2：不要重新开始独立任务。请基于上一轮 artifacts 或诊断，总结已经完成什么、缺什么；如果上一轮进入 repair-needed/timeout，请解释原因并给出下一步可恢复计划。',
-  workspacePath: workspace,
-  agentServerBaseUrl: mockBaseUrl,
-  scenarioPackageRef: { id: 'literature-evidence-review', version: '1.0.0', source: 'built-in' },
-  skillPlanRef: 'skill-plan-smoke',
-  expectedArtifactTypes: ['paper-list', 'research-report'],
-  uiState: {},
-  artifacts: [],
-}, {
-  onEvent(event) {
-    if (event.type === 'agentserver-context-answer-dispatch') contextDispatchCount += 1;
-    if (event.type === 'agentserver-dispatch') generationDispatchCount += 1;
-  },
-});
-assert.equal(contextDispatchCount, 0);
-assert.equal(generationDispatchCount, 3);
-assert.match(priorRoundDiagnosticSummary.reasoningTrace, /AgentServer reasoning|AgentServer returned plain text|context answer|direct report|directly/i);
-assert.match(priorRoundDiagnosticSummary.message, /上一轮|任务脚本|paper-list|context/i);
+assert.equal(generationDispatchCount, 0);
+assert.equal(directContextDispatchCount, 1);
+assert.equal(requestBody, '');
+assert.equal(selectedReportFollowup.executionUnits[0]?.tool, DIRECT_CONTEXT_FAST_PATH_POLICY.executionToolId);
+assert.match(selectedReportFollowup.reasoningTrace, /direct-context fast path/i);
+assert.match(selectedReportFollowup.message, /ShopGym/);
+assert.match(selectedReportFollowup.message, /ScreenSearch/);
+assert.match(selectedReportFollowup.message, /PAGER/);
+assert.match(selectedReportFollowup.message, /不启动新的 workspace task|不重新检索/);
+assert.doesNotMatch(selectedReportFollowup.message, /LATEST-NOT-SELECTED|AlphaBeta/);
+assert.ok(selectedReportFollowup.objectReferences?.some((ref) => ref.ref === selectedReportRef));
+const selectedContextReport = selectedReportFollowup.artifacts.find((artifact) => artifact.type === DIRECT_CONTEXT_FAST_PATH_POLICY.reportArtifactType);
+assert.ok(selectedContextReport);
+const directContextRows = isRecord(selectedContextReport.data) && Array.isArray(selectedContextReport.data.context)
+  ? selectedContextReport.data.context.filter(isRecord)
+  : [];
+assert.ok(directContextRows.length >= 1);
+assert.ok(directContextRows.every((row) => String(row.ref || '').includes(selectedReportRef)));
+assert.doesNotMatch(JSON.stringify(directContextRows), /LATEST-NOT-SELECTED|AlphaBeta/);
 
 const reportContinuation = await runWorkspaceRuntimeGateway({
   skillDomain: 'literature',
@@ -357,6 +219,7 @@ const reportContinuation = await runWorkspaceRuntimeGateway({
   skillPlanRef: 'skill-plan-smoke',
   expectedArtifactTypes: ['paper-list', 'research-report'],
   uiState: {
+    capabilityProviderAvailability: [readyWebSearchProvider],
     recentConversation: [
       'user: Round 1 search recent AI agent papers',
       'assistant: Completed and produced paper-list and research-report artifacts.',
@@ -371,47 +234,25 @@ const reportContinuation = await runWorkspaceRuntimeGateway({
       stderrRef: '.sciforge/logs/generated-literature-smoke.stderr.log',
     }],
   },
-  artifacts: [],
+  artifacts: selectedReportFollowup.artifacts,
 }, {
   onEvent(event) {
     if (event.type === 'agentserver-context-answer-dispatch') contextDispatchCount += 1;
     if (event.type === 'agentserver-dispatch') generationDispatchCount += 1;
+    if (event.type === 'direct-context-fast-path') directContextDispatchCount += 1;
   },
 });
 assert.equal(contextDispatchCount, 0);
-assert.equal(generationDispatchCount, 4);
-assert.notEqual(reportContinuation.executionUnits[0]?.tool, 'sciforge.context-ref-inspector');
+assert.equal(generationDispatchCount, 1);
+assert.equal(directContextDispatchCount, 1);
+assert.match(requestBody, /workspace-task-generation/);
+assert.match(requestBody, /contextEnvelope/);
+assert.notEqual(reportContinuation.executionUnits[0]?.tool, DIRECT_CONTEXT_FAST_PATH_POLICY.executionToolId);
 assert.match(reportContinuation.reasoningTrace, /AgentServer generation run|continuation report task/i);
 assert.ok(reportContinuation.artifacts.some((artifact) => artifact.type === 'paper-list'));
 assert.ok(reportContinuation.artifacts.some((artifact) => artifact.type === 'research-report'));
 
 await new Promise<void>((resolve) => server.close(() => resolve()));
-
-const freshRound = await runWorkspaceRuntimeGateway({
-  skillDomain: 'literature',
-  prompt: [
-    'SciForge should complete the user task end-to-end.',
-    'Recent multi-turn conversation:',
-    'assistant: 上一轮已经有一些 refs。',
-    'Current user request:',
-    '真实多轮复杂任务测试 Round 1：请基于今天日期检索并整理最近 AI agent 相关论文，必须生成 paper-list 和 research-report，并明确写出生成的本地任务脚本、task result JSON、stdout/stderr 日志路径。',
-    'Work requirements:',
-    '- For continuation/repair requests, read previous refs before deciding.',
-    '- If the user asks where files are stored, answer with exact refs.',
-  ].join('\n'),
-  workspacePath: workspace,
-  agentServerBaseUrl: 'http://127.0.0.1:1',
-  scenarioPackageRef: { id: 'literature-evidence-review', version: '1.0.0', source: 'built-in' },
-  skillPlanRef: 'skill-plan-smoke',
-  expectedArtifactTypes: ['paper-list', 'research-report'],
-  uiState: {
-    recentConversation: ['assistant: 上一轮已经有一些 refs。'],
-    recentExecutionRefs: result.executionUnits,
-  },
-  artifacts: result.artifacts,
-});
-assert.notEqual(freshRound.executionUnits[0]?.tool, 'sciforge.context-ref-inspector');
-assert.match(freshRound.message, /AgentServer|runtime gateway|repair/i);
 
 const failedWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-artifact-ref-failed-'));
 await mkdir(join(failedWorkspace, '.sciforge', 'artifacts'), { recursive: true });
@@ -479,10 +320,10 @@ const failedAnswer = await runWorkspaceRuntimeGateway({
   },
   artifacts: [],
 });
-assert.match(failedAnswer.message, /AgentServer generation request failed|Agent backend context answer failed|Agent backend is required/);
+assert.match(failedAnswer.message, /Capability provider route preflight|AgentServer generation request failed|Agent backend context answer failed|Agent backend is required|repair/i);
 assert.doesNotMatch(failedAnswer.message, /old-success\.py|Unrelated old paper/);
 
-console.log('[ok] artifact reference follow-up is routed through AgentServer context reasoning');
+console.log('[ok] artifact reference follow-up uses selected durable refs and direct-context without legacy backend dispatch');
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);

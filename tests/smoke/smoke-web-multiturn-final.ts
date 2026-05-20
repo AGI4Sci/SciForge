@@ -7,10 +7,10 @@ import {
   allWebE2eCaseTags,
   assertWebE2eCaseRegistry,
   selectWebE2eCases,
-  type WebE2eAgentServerMode,
   type WebE2eCaseRunContext,
   type WebE2eCaseRunSummary,
   type WebE2eFinalDevService,
+  type WebE2eRuntimeDispatchMode,
 } from './web-e2e/case-registry.js';
 import {
   writeWebE2eEvidenceBundle,
@@ -55,11 +55,32 @@ type SingleAgentFinalManifest = {
     requiredCategories: ['projection-restore', 'artifact-selection', 'provider-tool-latency', 'golden-path'];
     releaseBlocker: true;
   };
+  runtimeCodexBrowserAcceptance: {
+    manifestPath: string;
+    status: 'missing' | 'blocked' | 'failed' | 'partial' | 'passed';
+    currentRunEvidenceScope?: string;
+    releaseBlocking: boolean;
+    releaseEligible: boolean;
+    submittedThroughRuntimeCodex?: boolean;
+    commandId?: string;
+    expectedRetestCommand?: string;
+  };
+  releaseSummary: {
+    status: 'blocked' | 'release-eligible';
+    releaseBlocking: boolean;
+    releaseEligible: boolean;
+    blocker?: 'runtime-codex-browser-acceptance';
+    currentRunEvidenceScope?: string;
+    strictGate: 'npm run smoke:runtime-codex-browser-acceptance:strict';
+    expectedRetestCommand?: string;
+  };
   devServices: WebE2eFinalDevService[];
-  agentServer: {
-    mode: WebE2eAgentServerMode;
-    mock: 'scriptable-agentserver-mock';
-    realProviderPolicy: 'optional-happy-path-only';
+  runtimeDispatch: {
+    mode: WebE2eRuntimeDispatchMode;
+    finalTruthSource: 'runtime-codex-or-blocked-with-evidence';
+    offlineFixture: 'scriptable-runtime-dispatch-fixture';
+    blockedPolicy: 'blocked-with-evidence';
+    realProviderPolicy: 'optional-runtime-dispatch-happy-path-only';
   };
   caseManifests: FinalWebE2eCaseManifestRef[];
   legacyMigration: Array<{
@@ -97,6 +118,7 @@ const singleAgentContractIds = Array.from({ length: 18 }, (_, index) => `C${Stri
 const defaultWebEvidenceRoot = resolve(root, 'docs', 'test-artifacts', 'web-e2e');
 const defaultSingleAgentFinalRoot = resolve(root, 'docs', 'test-artifacts', 'single-agent-final');
 const defaultRealBrowserEvidenceManifestPath = resolve(root, 'tests', 'fixtures', 'real-browser-evidence', 'manifest.json');
+const defaultRuntimeCodexBrowserAcceptanceManifestPath = resolve(root, 'docs', 'test-artifacts', 'runtime-codex-browser-acceptance', 'manifest.json');
 
 const scenarios: BrowserSmokeMigrationScenario[] = [
   {
@@ -135,17 +157,18 @@ const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as Pa
 const scripts = pkg.scripts ?? {};
 const requestedTags = requestedArgs('--tag');
 const requestedCases = requestedArgs('--case');
-const agentServerMode = requestedAgentServerMode();
+const runtimeDispatchMode = requestedRuntimeDispatchMode();
 const runRoot = await mkdtemp(join(tmpdir(), 'sciforge-web-multiturn-final-'));
 const webEvidenceRoot = requestedValue('--evidence-root') ?? defaultWebEvidenceRoot;
 const singleAgentFinalRoot = requestedValue('--final-manifest-root') ?? defaultSingleAgentFinalRoot;
 const knownFinalTags = new Set([
   'SA-WEB-01',
   'SA-WEB-18',
+  'SA-WEB-27',
   ...scenarios.flatMap((scenario) => scenario.manifestTags),
   ...allWebE2eCaseTags(),
 ]);
-const devServices = finalDevServices(agentServerMode);
+const devServices = finalDevServices(runtimeDispatchMode);
 
 assert.equal(
   scripts[webMultiturnFinalScript],
@@ -204,7 +227,7 @@ assert.ok(selectedCases.length > 0, `${webMultiturnFinalScript} must select at l
 const context: WebE2eCaseRunContext = {
   runRoot,
   evidenceRoot: webEvidenceRoot,
-  agentServerMode,
+  runtimeDispatchMode,
   devServices,
 };
 const summaries: WebE2eCaseRunSummary[] = [];
@@ -212,7 +235,7 @@ const caseManifests: FinalWebE2eCaseManifestRef[] = [];
 
 console.log(`[plan] ${webMultiturnFinalScript} isolated run root ${runRoot}`);
 console.log(`[plan] ${webMultiturnFinalScript} evidence root ${webEvidenceRoot}`);
-console.log(`[plan] ${webMultiturnFinalScript} AgentServer mode ${agentServerMode}`);
+console.log(`[plan] ${webMultiturnFinalScript} runtime dispatch mode ${runtimeDispatchMode}`);
 
 for (const webCase of selectedCases) {
   console.log(`[case] ${webCase.id} ${webCase.title}`);
@@ -239,7 +262,7 @@ const finalManifestPath = await writeSingleAgentFinalManifest({
   selectedCases: summaries.map((summary) => summary.caseId),
   caseManifests,
   devServices,
-  agentServerMode,
+  runtimeDispatchMode,
   requiredLegacyScripts: requiredLegacyScriptsForSelection(requestedTags, requestedCases),
 });
 
@@ -275,13 +298,14 @@ function requestedValue(name: '--evidence-root' | '--final-manifest-root'): stri
   return undefined;
 }
 
-function requestedAgentServerMode(): WebE2eAgentServerMode {
-  const raw = requestedValueLiteral('--agent-server') ?? 'scriptable-mock';
-  assert.ok(raw === 'scriptable-mock' || raw === 'real-provider-optional', `unknown --agent-server mode "${raw}"`);
-  return raw;
+function requestedRuntimeDispatchMode(): WebE2eRuntimeDispatchMode {
+  const raw = requestedValueLiteral('--runtime-dispatch') ?? requestedValueLiteral('--agent-server') ?? 'offline-fixture';
+  if (raw === 'offline-fixture' || raw === 'real-provider-optional') return raw;
+  if (raw === 'scriptable-mock') return 'offline-fixture';
+  assert.fail(`unknown runtime dispatch mode "${raw}"`);
 }
 
-function requestedValueLiteral(name: '--agent-server'): string | undefined {
+function requestedValueLiteral(name: '--runtime-dispatch' | '--agent-server'): string | undefined {
   for (let index = 2; index < process.argv.length; index += 1) {
     const arg = process.argv[index];
     if (arg === name) {
@@ -300,7 +324,7 @@ function delegatesToFinalTag(command: string | undefined, tag: string): boolean 
   return normalized === `npm run ${webMultiturnFinalScript} -- --tag ${tag}`;
 }
 
-function finalDevServices(agentServerMode: WebE2eAgentServerMode): WebE2eFinalDevService[] {
+function finalDevServices(runtimeDispatchMode: WebE2eRuntimeDispatchMode): WebE2eFinalDevService[] {
   return [
     {
       name: 'workspace-writer',
@@ -313,8 +337,8 @@ function finalDevServices(agentServerMode: WebE2eAgentServerMode): WebE2eFinalDe
       status: 'ready',
     },
     {
-      name: 'agentserver',
-      mode: agentServerMode === 'scriptable-mock' ? 'scriptable-mock' : 'real-provider-optional',
+      name: 'runtime-dispatch',
+      mode: runtimeDispatchMode,
       status: 'ready',
     },
   ];
@@ -352,7 +376,8 @@ async function writeFinalCaseEvidenceBundle(
       migratedLegacyScripts: summary.migratedLegacyScripts,
       migratedLegacySteps: summary.migratedLegacySteps,
       isolatedRunRoot: context.runRoot,
-      agentServerMode: context.agentServerMode,
+      runtimeDispatchMode: context.runtimeDispatchMode,
+      finalTruthSource: 'runtime-codex-or-blocked-with-evidence',
       devServices: devServicesJson(context.devServices),
     },
   });
@@ -376,11 +401,12 @@ async function writeSingleAgentFinalManifest(input: {
   selectedCases: string[];
   caseManifests: FinalWebE2eCaseManifestRef[];
   devServices: WebE2eFinalDevService[];
-  agentServerMode: WebE2eAgentServerMode;
+  runtimeDispatchMode: WebE2eRuntimeDispatchMode;
   requiredLegacyScripts: string[];
 }): Promise<string> {
   await mkdir(input.finalRoot, { recursive: true });
   const manifestPath = join(input.finalRoot, 'manifest.json');
+  const runtimeCodexBrowserAcceptance = await readRuntimeCodexBrowserAcceptanceSummary();
   const manifest: SingleAgentFinalManifest = {
     schemaVersion: 'sciforge.single-agent-final.manifest.v1',
     generatedAt: input.generatedAt,
@@ -405,11 +431,15 @@ async function writeSingleAgentFinalManifest(input: {
       requiredCategories: ['projection-restore', 'artifact-selection', 'provider-tool-latency', 'golden-path'],
       releaseBlocker: true,
     },
+    runtimeCodexBrowserAcceptance,
+    releaseSummary: releaseSummaryFromRuntimeCodexBrowserAcceptance(runtimeCodexBrowserAcceptance),
     devServices: input.devServices,
-    agentServer: {
-      mode: input.agentServerMode,
-      mock: 'scriptable-agentserver-mock',
-      realProviderPolicy: 'optional-happy-path-only',
+    runtimeDispatch: {
+      mode: input.runtimeDispatchMode,
+      finalTruthSource: 'runtime-codex-or-blocked-with-evidence',
+      offlineFixture: 'scriptable-runtime-dispatch-fixture',
+      blockedPolicy: 'blocked-with-evidence',
+      realProviderPolicy: 'optional-runtime-dispatch-happy-path-only',
     },
     caseManifests: input.caseManifests,
     legacyMigration: scenarios.map((scenario) => ({
@@ -441,8 +471,65 @@ async function writeSingleAgentFinalManifest(input: {
   return manifestPath;
 }
 
+function releaseSummaryFromRuntimeCodexBrowserAcceptance(
+  summary: SingleAgentFinalManifest['runtimeCodexBrowserAcceptance'],
+): SingleAgentFinalManifest['releaseSummary'] {
+  const releaseEligible = summary.status === 'passed' && summary.releaseEligible === true && summary.releaseBlocking === false;
+  return {
+    status: releaseEligible ? 'release-eligible' : 'blocked',
+    releaseBlocking: !releaseEligible,
+    releaseEligible,
+    ...(releaseEligible ? {} : { blocker: 'runtime-codex-browser-acceptance' as const }),
+    ...(summary.currentRunEvidenceScope ? { currentRunEvidenceScope: summary.currentRunEvidenceScope } : {}),
+    strictGate: 'npm run smoke:runtime-codex-browser-acceptance:strict',
+    expectedRetestCommand: summary.expectedRetestCommand,
+  };
+}
+
+async function readRuntimeCodexBrowserAcceptanceSummary(): Promise<SingleAgentFinalManifest['runtimeCodexBrowserAcceptance']> {
+  let raw: Record<string, unknown> | undefined;
+  try {
+    raw = JSON.parse(await readFile(defaultRuntimeCodexBrowserAcceptanceManifestPath, 'utf8')) as Record<string, unknown>;
+  } catch {
+    return {
+      manifestPath: defaultRuntimeCodexBrowserAcceptanceManifestPath,
+      status: 'missing',
+      releaseBlocking: true,
+      releaseEligible: false,
+      expectedRetestCommand: 'npm run smoke:runtime-codex-browser-acceptance',
+    };
+  }
+
+  const status = stringValue(raw.status);
+  const normalizedStatus = isRuntimeCodexBrowserAcceptanceStatus(status) ? status : 'missing';
+  const releaseEligible = normalizedStatus === 'passed';
+  return {
+    manifestPath: defaultRuntimeCodexBrowserAcceptanceManifestPath,
+    status: normalizedStatus,
+    currentRunEvidenceScope: optionalStringValue(raw.currentRunEvidenceScope),
+    releaseBlocking: raw.releaseBlocking === true || !releaseEligible,
+    releaseEligible,
+    submittedThroughRuntimeCodex: typeof raw.submittedThroughRuntimeCodex === 'boolean' ? raw.submittedThroughRuntimeCodex : undefined,
+    commandId: optionalStringValue(raw.commandId),
+    expectedRetestCommand: optionalStringValue(raw.expectedRetestCommand) ?? 'npm run smoke:runtime-codex-browser-acceptance',
+  };
+}
+
 function uniqueStrings(values: string[]): string[] {
   return [...new Set(values)];
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function optionalStringValue(value: unknown): string | undefined {
+  const text = stringValue(value);
+  return text || undefined;
+}
+
+function isRuntimeCodexBrowserAcceptanceStatus(value: string): value is SingleAgentFinalManifest['runtimeCodexBrowserAcceptance']['status'] {
+  return value === 'blocked' || value === 'failed' || value === 'partial' || value === 'passed';
 }
 
 function requiredLegacyScriptsForSelection(tags: string[], cases: string[]): string[] {

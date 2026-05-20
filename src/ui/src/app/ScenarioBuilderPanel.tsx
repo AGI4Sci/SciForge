@@ -29,7 +29,12 @@ import {
   CORE_CAPABILITY_MANIFESTS,
   type CapabilityManifest,
 } from '@sciforge-ui/runtime-contract';
-import { webObserveCapabilityManifest } from '@sciforge-observe/web/manifest';
+import browserFetchManifest from '@sciforge-observe/web/browser_fetch';
+import browserSearchManifest from '@sciforge-observe/web/browser_search';
+import playwrightBrowserAutomationManifest from '@sciforge-observe/web/playwright_browser_automation';
+import playwrightEdgeBrowserManifest from '@sciforge-observe/web/playwright_edge_browser';
+import webFetchManifest from '@sciforge-observe/web/web_fetch';
+import webSearchManifest from '@sciforge-observe/web/web_search';
 import { saveWorkspaceScenario, publishWorkspaceScenario } from '../api/workspaceClient';
 import type { SciForgeConfig, ScenarioRuntimeOverride, ToolProviderRouteOverride, ToolProviderSource } from '../domain';
 import type { RuntimeHealthItem } from '../runtimeHealth';
@@ -40,6 +45,14 @@ type BuilderLegacyStepId = 'describe' | 'elements' | 'contract' | 'quality' | 'p
 
 const toolProviderSourceOptions: ToolProviderSource[] = ['local', 'agentserver', 'mcp', 'http', 'ssh', 'client-worker', 'backend-native', 'package', 'workspace', 'external'];
 const coreProviderCapabilityIds = ['web_search', 'web_fetch', 'pdf_extract'];
+const webObserveCapabilityManifests = [
+  webSearchManifest,
+  webFetchManifest,
+  browserSearchManifest,
+  browserFetchManifest,
+  playwrightBrowserAutomationManifest,
+  playwrightEdgeBrowserManifest,
+] as CapabilityManifest[];
 
 export function ScenarioBuilderPanel({
   scenarioId,
@@ -820,7 +833,7 @@ export function defaultToolProviderRouteForCapability(capabilityId: string): Too
 }
 
 function defaultRouteManifestForCapability(capabilityId: string): CapabilityManifest | undefined {
-  return (webObserveCapabilityManifest(capabilityId) as CapabilityManifest | undefined)
+  return webObserveCapabilityManifests.find((manifest) => manifest.id === capabilityId)
     ?? CORE_CAPABILITY_MANIFESTS.find((candidate) => candidate.id === capabilityId);
 }
 

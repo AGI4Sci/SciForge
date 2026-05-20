@@ -42,6 +42,7 @@ assert.deepEqual(defaultGraphView?.sideEffects, ['none']);
 const defaultPdfSkill = coreRegistry.getManifest('skill.pdf-extract');
 const defaultWebSearch = coreRegistry.getManifest('web_search');
 const defaultWebFetch = coreRegistry.getManifest('web_fetch');
+const defaultPlaywrightBrowser = coreRegistry.getManifest('playwright_browser_automation');
 const defaultVisionSkill = coreRegistry.getManifest('skill.vision-gui-task');
 const defaultPlaywrightTool = coreRegistry.getManifest('tool.clawhub.playwright-mcp');
 const defaultVisionSenseTool = coreRegistry.getManifest('tool.local.vision-sense');
@@ -49,6 +50,8 @@ assert.ok(defaultPdfSkill, 'default registry should include compact packages/ski
 assert.equal(defaultWebSearch?.ownerPackage, 'packages/observe/web');
 assert.equal(defaultWebSearch?.kind, 'observe');
 assert.equal(defaultWebFetch?.ownerPackage, 'packages/observe/web');
+assert.equal(defaultPlaywrightBrowser?.ownerPackage, 'packages/observe/web');
+assert.equal(defaultPlaywrightBrowser?.sideEffectClass, 'network');
 assert.ok(defaultVisionSkill, 'default registry should include local compact packages/skills metadata');
 assert.ok(defaultPlaywrightTool, 'default registry should include compact packages/skills/tool_skills connector metadata');
 assert.ok(defaultVisionSenseTool, 'default registry should include compact packages/skills/tool_skills sense-plugin metadata');
@@ -96,7 +99,7 @@ const entry = audit.entries.find((item) => item.id === 'literature.metadata-enri
 assert.ok(entry, 'package-discovered manifest should be present in compact registry audit');
 assert.equal(audit.contract, 'sciforge.capability-manifest-registry-audit.v1');
 assert.equal(audit.sourceCounts.core, coreRegistry.compactAudit.sourceCounts.core);
-assert.equal(audit.sourceCounts.packageDiscovery, 3);
+assert.equal(audit.sourceCounts.packageDiscovery, 7);
 assert.equal(entry.source, 'package-discovery');
 assert.equal(entry.packageName, '@sciforge/pkg-literature-enrich');
 assert.equal(entry.packageRoot, 'packages/skills/literature-enrich');

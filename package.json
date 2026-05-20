@@ -4,6 +4,7 @@
   "description": "SciForge React web UI and design documentation.",
   "private": true,
   "type": "module",
+  "main": "dist-desktop/src/desktop/main.js",
   "workspaces": [
     "packages/contracts/runtime",
     "packages/backend",
@@ -32,14 +33,21 @@
     "backend:codex-runtime:setup": "tsx packages/backend/src/setup-runtime-home.ts",
     "backend:codex-runtime:exec": "tsx packages/backend/src/exec-runtime-codex.ts",
     "build": "vite build",
+    "desktop:copy-preload": "node -e \"require('fs').mkdirSync('dist-desktop/src/desktop',{recursive:true});require('fs').copyFileSync('src/desktop/preload.cjs','dist-desktop/src/desktop/preload.cjs')\"",
+    "desktop:bundle-sidecars": "node --import tsx tools/build-desktop-sidecars.ts",
+    "desktop:build": "npm run build && tsc -p tsconfig.desktop.build.json && npm run desktop:copy-preload && npm run desktop:bundle-sidecars",
+    "desktop:start:prod": "npm run desktop:build && electron dist-desktop/src/desktop/main.js",
+    "desktop:package:dir": "npm run desktop:build && electron-builder --dir && npm run smoke:desktop-package-artifact && npm run smoke:desktop-packaged-electron-lifecycle",
     "skills:generate": "tsx tools/generate-skill-catalog.ts",
     "test": "node --import tsx --test \"src/ui/src/**/*.test.ts\" \"src/runtime/**/*.test.ts\" \"packages/**/*.test.ts\" \"packages/**/*.test.tsx\"",
     "verify": "npm run verify:fast",
-    "verify:fast": "npm run typecheck && npm run test && npm run smoke:final-shape-verify-guard && npm run smoke:all && npm run build && npm run smoke:build-budget && npm run smoke:long-file-budget && npm run smoke:no-hardcoded-success && npm run smoke:module-boundaries && npm run smoke:fixed-platform-boundary && npm run smoke:no-src-capability-semantics && npm run smoke:no-legacy-paths && npm run packages:check",
+    "verify:fast": "npm run typecheck && npm run test && npm run smoke:final-shape-verify-guard && npm run smoke:all && npm run build && npm run smoke:build-budget && npm run smoke:long-file-budget && npm run smoke:no-hardcoded-success && npm run smoke:module-boundaries && npm run smoke:fixed-platform-boundary && npm run smoke:no-src-capability-semantics && npm run smoke:no-legacy-paths && npm run smoke:runtime-codex-truth-source && npm run packages:check",
     "verify:full": "npm run verify:fast && npm run smoke:browser && npm run artifacts:index",
-    "verify:single-agent-final": "npm run typecheck && npm run test && npm run smoke:single-agent-runtime-contract && npm run smoke:no-legacy-paths && npm run smoke:no-hardcoded-success && npm run smoke:runtime-codex-final-acceptance && npm run smoke:runtime-codex-browser-acceptance && npm run smoke:single-agent-final-gate && npm run smoke:web-final-conformance && npm run smoke:web-multiturn-final && npm run smoke:single-agent-final-evidence",
+    "verify:legacy-agentserver-compat": "npm run smoke:legacy-agentserver-compat",
+    "verify:single-agent-final": "npm run typecheck && npm run test && npm run smoke:single-agent-runtime-contract && npm run smoke:no-legacy-paths && npm run smoke:runtime-codex-truth-source && npm run smoke:no-hardcoded-success && npm run smoke:package-runtime-boundary && npm run smoke:fixed-platform-boundary && npm run smoke:runtime-codex-final-acceptance && npm run smoke:runtime-provider-preflight && npm run smoke:runtime-codex-browser-acceptance && npm run smoke:real-task-matrix && npm run smoke:single-agent-final-gate && npm run smoke:web-final-conformance && npm run smoke:web-multiturn-final && npm run smoke:single-agent-final-evidence",
+    "verify:single-agent-release": "npm run typecheck && npm run test && npm run smoke:single-agent-runtime-contract && npm run smoke:no-legacy-paths && npm run smoke:runtime-codex-truth-source && npm run smoke:no-hardcoded-success && npm run smoke:package-runtime-boundary && npm run smoke:fixed-platform-boundary && npm run smoke:runtime-codex-final-acceptance && npm run smoke:runtime-provider-preflight && npm run smoke:runtime-codex-browser-acceptance:strict && npm run desktop:package:dir && npm run smoke:real-task-matrix && npm run smoke:single-agent-final-gate && npm run smoke:web-final-conformance && npm run smoke:web-multiturn-final && npm run smoke:single-agent-final-evidence",
     "verify:deep": "npm run smoke:longform && npm run smoke:computer-use-long && npm run smoke:longform-prepare && npm run smoke:longform-quality && npm run smoke:longform-status && npm run smoke:longform-weekly-plan && npm run smoke:longform-weekly-prepare && npm run smoke:longform-next-round && npm run smoke:longform-missing-evidence && npm run smoke:longform-evidence-commands && npm run smoke:longform-runbook && npm run smoke:longform-record && npm run smoke:longform-evidence && npm run smoke:longform-finalize && npm run smoke:deep-report && npm run longform:validate && npm run longform:status && tsx tools/generate-deep-test-report.ts",
-    "smoke:all": "npm run smoke:fixtures && npm run smoke:official-packages && npm run smoke:skill-registry && npm run smoke:core-runtime && npm run smoke:design-system && npm run smoke:t057-kg && npm run smoke:knowledge-unsupported && npm run smoke:stable-runtime-contracts && npm run smoke:docs-scenario-package && npm run smoke:runtime-contracts && npm run smoke:conversation-kernel-final-shape && npm run smoke:project-session-memory && npm run smoke:release-gate && npm run smoke:notebook-branch && npm run smoke:user-feedback-convergence && npm run smoke:dirty-worktree-collaboration && npm run smoke:backend-comparison && npm run smoke:runtime-gateway-modules && npm run smoke:background-completion && npm run smoke:t098-latency && npm run smoke:object-references && npm run smoke:vision-sense-runtime && npm run smoke:repair && npm run smoke:agentserver-unavailable && npm run smoke:agentserver-generation && npm run smoke:backend-handoff-drift && npm run smoke:agentserver-context-window && npm run smoke:complex-multiturn-chat && npm run smoke:agentserver-artifact-followup && npm run smoke:agentserver-compact-repair && npm run smoke:agentserver-supplement && npm run smoke:agentserver-general-work && npm run smoke:agentserver-general-work-matrix && npm run smoke:agentserver-backend-matrix && npm run smoke:cell-benchmark && npm run smoke:agentserver-direct-text && npm run smoke:agentserver-backend-failure && npm run smoke:result-presentation-contract && npm run smoke:harness-latency-tiers && npm run smoke:harness-startup-context && npm run smoke:harness-workspace-memory && npm run smoke:harness-continuation-exploration && npm run smoke:harness-research-guide && npm run smoke:agentserver-llm-endpoint && npm run smoke:agentserver-fenced-generation && npm run smoke:agentserver-path-only && npm run smoke:agentserver-timeout-resume && npm run smoke:self-evolving-skill && npm run smoke:agentserver-repair && npm run smoke:agentserver-acceptance-repair && npm run smoke:workspace-agentserver-repair && npm run smoke:workspace-scenarios && npm run smoke:workspace-file-api && npm run smoke:service-lifecycle && npm run smoke:repair-handoff-runner && npm run smoke:dual-instance && npm run smoke:dual-worktree-instance && npm run smoke:stable-version-registry && npm run smoke:workspace-open && npm run smoke:bundle-import && npm run smoke:task-attempt-api && npm run smoke:workspace-retention && npm run smoke:versioned-runs && npm run smoke:view && npm run smoke:runtime-ui-manifest && npm run smoke:agent-harness-profile-coverage && npm run smoke:literature-reproduction-feasibility && npm run smoke:scientific-reproduction && npm run smoke:omics-runners",
+    "smoke:all": "npm run smoke:fixtures && npm run smoke:official-packages && npm run smoke:skill-registry && npm run smoke:core-runtime && npm run smoke:design-system && npm run smoke:t057-kg && npm run smoke:knowledge-unsupported && npm run smoke:stable-runtime-contracts && npm run smoke:docs-scenario-package && npm run smoke:runtime-contracts && npm run smoke:conversation-kernel-final-shape && npm run smoke:project-session-memory && npm run smoke:release-gate && npm run smoke:notebook-branch && npm run smoke:user-feedback-convergence && npm run smoke:dirty-worktree-collaboration && npm run smoke:backend-comparison && npm run smoke:runtime-gateway-modules && npm run smoke:background-completion && npm run smoke:t098-latency && npm run smoke:object-references && npm run smoke:vision-sense-runtime && npm run smoke:repair && npm run smoke:backend-handoff-drift && npm run smoke:complex-multiturn-chat && npm run smoke:cell-benchmark && npm run smoke:result-presentation-contract && npm run smoke:harness-latency-tiers && npm run smoke:harness-startup-context && npm run smoke:harness-workspace-memory && npm run smoke:harness-continuation-exploration && npm run smoke:harness-research-guide && npm run smoke:self-evolving-skill && npm run smoke:workspace-scenarios && npm run smoke:workspace-file-api && npm run smoke:service-lifecycle && npm run smoke:repair-handoff-runner && npm run smoke:dual-instance && npm run smoke:dual-worktree-instance && npm run smoke:stable-version-registry && npm run smoke:workspace-open && npm run smoke:bundle-import && npm run smoke:task-attempt-api && npm run smoke:workspace-retention && npm run smoke:versioned-runs && npm run smoke:view && npm run smoke:runtime-ui-manifest && npm run smoke:agent-harness-profile-coverage && npm run smoke:literature-reproduction-feasibility && npm run smoke:scientific-reproduction && npm run smoke:omics-runners",
     "smoke:fixtures": "tsx tests/smoke/smoke-sciforge-fixtures.ts",
     "smoke:official-packages": "tsx tests/smoke/smoke-official-packages.ts",
     "smoke:repair": "tsx tests/smoke/smoke-repair-needed.ts",
@@ -183,7 +191,22 @@
     "smoke:runtime-contracts": "tsx tests/smoke/smoke-runtime-contract-schemas.ts && tsx tests/smoke/smoke-runtime-contract-package-manifest.ts",
     "smoke:single-agent-runtime-contract": "tsx tests/smoke/smoke-single-agent-runtime-contract.ts",
     "smoke:runtime-codex-final-acceptance": "tsx tests/smoke/smoke-runtime-codex-final-acceptance.ts",
+    "smoke:runtime-provider-preflight": "tsx tests/smoke/smoke-runtime-provider-preflight.ts",
     "smoke:runtime-codex-browser-acceptance": "tsx tests/smoke/smoke-runtime-codex-browser-acceptance.ts",
+    "smoke:runtime-codex-browser-acceptance:strict": "SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 npm run smoke:runtime-codex-browser-acceptance",
+    "smoke:real-task-matrix": "tsx tests/smoke/smoke-real-task-matrix.ts && npm run smoke:real-task-offline-gates && node --import tsx --test tests/smoke/real-task-evidence-schema.test.ts",
+    "smoke:real-task-matrix:update": "tsx tests/smoke/smoke-real-task-matrix.ts --update-manifests && npm run smoke:real-task-offline-gates && node --import tsx --test tests/smoke/real-task-evidence-schema.test.ts",
+    "smoke:real-task-offline-gates": "npm run smoke:real-task-literature-web-gates && npm run smoke:real-task-data-gates && npm run smoke:real-task-code-gates && npm run smoke:real-task-scientific-gates && npm run smoke:real-task-capability-skill-cu-gates && npm run smoke:real-task-protocol-gates && npm run smoke:real-task-provider-security-gates && npm run smoke:real-task-run-resume-memory-gates && npm run smoke:desktop-live-acceptance-evidence",
+    "smoke:real-task-literature-web-gates": "node --import tsx tests/smoke/smoke-real-task-literature-web-gates.ts",
+    "smoke:real-task-data-gates": "node --import tsx tests/smoke/smoke-real-task-data-gates.ts",
+    "smoke:real-task-code-gates": "node --import tsx tests/smoke/smoke-real-task-code-gates.ts",
+    "smoke:real-task-scientific-gates": "node --import tsx tests/smoke/smoke-real-task-scientific-gates.ts",
+    "smoke:real-task-capability-skill-cu-gates": "node --import tsx tests/smoke/smoke-real-task-capability-skill-cu-gates.ts",
+    "smoke:real-task-protocol-gates": "tsx tests/smoke/smoke-real-task-protocol-gates.ts",
+    "smoke:real-task-provider-security-gates": "tsx tests/smoke/smoke-real-task-provider-security-gates.ts",
+    "smoke:real-task-run-resume-memory-gates": "node --import tsx tests/smoke/smoke-real-task-run-resume-memory-gates.ts",
+    "smoke:runtime-codex-cancellation-evidence": "node --import tsx --test src/runtime/codex/cancellation-evidence.test.ts",
+    "smoke:runtime-codex-service-lifecycle-evidence": "node --import tsx --test src/runtime/codex/service-lifecycle-evidence.test.ts",
     "smoke:no-hardcoded-success": "tsx tests/smoke/smoke-no-hardcoded-success.ts",
     "smoke:single-agent-final-gate": "tsx tests/smoke/smoke-single-agent-final-gate.ts",
     "smoke:single-agent-final-evidence": "tsx tests/smoke/smoke-single-agent-final-evidence.ts",
@@ -197,15 +220,22 @@
     "smoke:long-file-budget": "tsx tools/check-long-file-budget.ts",
     "smoke:module-boundaries": "tsx tools/check-module-boundaries.ts",
     "smoke:fixed-platform-boundary": "tsx tools/check-fixed-platform-boundary.ts",
+    "smoke:desktop-live-acceptance-evidence": "node --import tsx --test tests/smoke/smoke-desktop-live-acceptance-evidence.test.ts",
+    "smoke:desktop-electron-lifecycle": "node --import tsx tests/smoke/smoke-desktop-electron-lifecycle.ts",
+    "smoke:desktop-packaged-electron-lifecycle": "node --import tsx tests/smoke/packaged-electron-lifecycle-smoke.ts",
+    "smoke:desktop-production-launcher": "node --import tsx --test src/runtime/desktop/runtime-launcher.test.ts src/runtime/desktop/platform-service.test.ts src/runtime/desktop/secret-storage.test.ts",
+    "smoke:desktop-production-shell": "npm run desktop:build && tsc -p tsconfig.desktop.json && node --import tsx --test tests/smoke/smoke-desktop-*.ts",
+    "smoke:desktop-package-artifact": "tsx tools/check-desktop-production-artifact.ts",
     "smoke:no-src-capability-semantics": "tsx tools/check-no-src-capability-semantics.ts",
     "smoke:no-legacy-paths": "tsx tools/check-no-legacy-paths.ts",
+    "smoke:runtime-codex-truth-source": "tsx tools/check-runtime-codex-truth-source.ts",
     "smoke:native-extension-ownership": "tsx tools/check-native-extension-ownership-map.ts",
     "smoke:capability-manifest-registry": "tsx tools/check-package-catalog.ts",
     "smoke:workspace-package-metadata": "tsx tools/check-workspace-package-metadata.ts",
     "smoke:package-runtime-boundary": "tsx tools/check-package-runtime-boundary.ts && npm run smoke:native-extension-ownership",
     "smoke:view": "tsx tests/smoke/smoke-view-composition.ts",
     "smoke:runtime-ui-manifest": "tsx tests/smoke/smoke-runtime-ui-manifest.ts",
-    "smoke:scientific-reproduction": "tsx tests/smoke/smoke-scientific-reproduction-contracts.ts && tsx tests/smoke/smoke-scientific-reproduction-benchmark.ts && tsx tests/smoke/smoke-scientific-reproduction-missing-data-boundary.ts && tsx tests/smoke/smoke-scientific-reproduction-seed-plans.ts && tsx tests/smoke/smoke-scientific-reproduction-trajectory.ts && tsx tests/smoke/smoke-scientific-reproduction-real-paper-artifacts.ts && tsx tests/smoke/smoke-scientific-reproduction-2020-prdm9-reproduction.ts && tsx tests/smoke/smoke-scientific-reproduction-2025-reproduction-artifacts.ts && tsx tests/smoke/smoke-trajectory-training-record-export.ts && tsx tests/smoke/smoke-scientific-reproduction-verifier.ts && tsx tests/smoke/smoke-scientific-reproduction-verifier-pipeline.ts && tsx tests/smoke/smoke-scientific-reproduction-view-manifests.ts && tsx tests/smoke/smoke-scientific-reproduction-ui-failure.ts && tsx tests/smoke/smoke-reference-digest-pdf-diagnostics.ts && tsx tests/smoke/smoke-agentserver-repair-budget.ts && tsx tests/smoke/smoke-raw-data-preexecution-guard.ts && tsx tests/smoke/smoke-scientific-reproduction-n6-raw-reanalysis-preflight.ts && tsx tests/smoke/smoke-scientific-reproduction-n8-offline-dry-run.ts && tsx tests/smoke/smoke-raw-bed-domain-pilot.ts",
+    "smoke:scientific-reproduction": "tsx tests/smoke/smoke-scientific-reproduction-contracts.ts && tsx tests/smoke/smoke-scientific-reproduction-benchmark.ts && tsx tests/smoke/smoke-scientific-reproduction-missing-data-boundary.ts && tsx tests/smoke/smoke-scientific-reproduction-seed-plans.ts && tsx tests/smoke/smoke-scientific-reproduction-trajectory.ts && tsx tests/smoke/smoke-scientific-reproduction-real-paper-artifacts.ts && tsx tests/smoke/smoke-scientific-reproduction-2020-prdm9-reproduction.ts && tsx tests/smoke/smoke-scientific-reproduction-2025-reproduction-artifacts.ts && tsx tests/smoke/smoke-trajectory-training-record-export.ts && tsx tests/smoke/smoke-scientific-reproduction-verifier.ts && tsx tests/smoke/smoke-scientific-reproduction-verifier-pipeline.ts && tsx tests/smoke/smoke-scientific-reproduction-view-manifests.ts && tsx tests/smoke/smoke-scientific-reproduction-ui-failure.ts && tsx tests/smoke/smoke-reference-digest-pdf-diagnostics.ts && tsx tests/smoke/smoke-raw-data-preexecution-guard.ts && tsx tests/smoke/smoke-scientific-reproduction-n6-raw-reanalysis-preflight.ts && tsx tests/smoke/smoke-scientific-reproduction-n8-offline-dry-run.ts && tsx tests/smoke/smoke-raw-bed-domain-pilot.ts",
     "smoke:scientific-reproduction-real-paper-artifacts": "tsx tests/smoke/smoke-scientific-reproduction-real-paper-artifacts.ts",
     "smoke:scientific-reproduction-2020-prdm9": "tsx tests/smoke/smoke-scientific-reproduction-2020-prdm9-reproduction.ts",
     "smoke:scientific-reproduction-2025-setd1b": "tsx tests/smoke/smoke-scientific-reproduction-2025-reproduction-artifacts.ts",
@@ -224,7 +254,8 @@
     "bench:complex-multiturn": "tsx tools/export-complex-multiturn-benchmark.ts",
     "bench:complex-multiturn-runtime-replay": "tsx tools/export-complex-multiturn-runtime-replay.ts",
     "preview": "vite preview --host 0.0.0.0",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "smoke:legacy-agentserver-compat": "npm run smoke:agentserver-unavailable && npm run smoke:agentserver-generation && npm run smoke:agentserver-context-window && npm run smoke:agentserver-artifact-followup && npm run smoke:agentserver-compact-repair && npm run smoke:agentserver-supplement && npm run smoke:agentserver-general-work && npm run smoke:agentserver-general-work-matrix && npm run smoke:agentserver-backend-matrix && npm run smoke:agentserver-direct-text && npm run smoke:agentserver-backend-failure && npm run smoke:agentserver-llm-endpoint && npm run smoke:agentserver-fenced-generation && npm run smoke:agentserver-path-only && npm run smoke:agentserver-timeout-resume && npm run smoke:agentserver-repair && npm run smoke:agentserver-acceptance-repair && npm run smoke:workspace-agentserver-repair && npm run smoke:agentserver-repair-budget"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -243,10 +274,41 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
+    "electron": "^42.2.0",
+    "electron-builder": "^26.8.1",
+    "esbuild": "^0.27.7",
     "playwright-core": "^1.59.1",
     "tsx": "^4.21.0",
     "typescript": "^5.7.0",
     "vite": "^8.0.8"
+  },
+  "build": {
+    "appId": "ai.sciforge.desktop",
+    "productName": "SciForge",
+    "directories": {
+      "output": "dist-desktop-packages"
+    },
+    "files": [
+      "dist-ui/**/*",
+      "dist-desktop/**/*",
+      "!dist-desktop/**/*.test.js",
+      "!dist-desktop/**/*.test.js.map",
+      "!dist-desktop/**/*.spec.js",
+      "!dist-desktop/**/*.spec.js.map",
+      "package.json"
+    ],
+    "extraMetadata": {
+      "main": "dist-desktop/src/desktop/main.js"
+    },
+    "mac": {
+      "target": "dir"
+    },
+    "linux": {
+      "target": "dir"
+    },
+    "win": {
+      "target": "dir"
+    }
   },
   "engines": {
     "node": ">=20.0.0"

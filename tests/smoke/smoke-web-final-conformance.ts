@@ -48,14 +48,14 @@ try {
   const routedScenarios = directContextCase.routed.map((scenario) => scenario.scenario).sort();
   assert.deepEqual(routedScenarios, ['generation', 'repair', 'tool-status-insufficient']);
   for (const routed of directContextCase.routed) {
-    assert.equal(routed.route, 'route-to-agentserver');
+    assert.equal(routed.route, 'runtime-dispatch');
     assert.equal(routed.decision.sufficiency, 'insufficient');
     assert.equal(routed.decision.allowDirectContext, false);
     assert.equal(routed.directPayload, undefined);
-    assert.ok(routed.agentServerRun, `${routed.scenario} must route to AgentServer`);
+    assert.ok(routed.runtimeDispatchRun, `${routed.scenario} must route to runtime dispatch`);
     assert.ok(
-      routed.agentServerRun.events.some((event) => event.type === 'status' && event.status === 'route-to-agentserver'),
-      `${routed.scenario} must expose a route-to-agentserver stream event`,
+      routed.runtimeDispatchRun.events.some((event) => event.type === 'status' && event.status === 'runtime-dispatch'),
+      `${routed.scenario} must expose a runtime-dispatch stream event`,
     );
   }
 } finally {

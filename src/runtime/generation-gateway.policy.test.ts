@@ -8,10 +8,11 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import {
-  GATEWAY_PIPELINE_STAGE_ORDER,
-  GATEWAY_PIPELINE_STAGES,
-  STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS,
-  STAGE_ARTIFACT_MUTATION_FAST_PATH,
+	  GATEWAY_PIPELINE_STAGE_ORDER,
+	  GATEWAY_PIPELINE_STAGES,
+	  STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS,
+	  STAGE_AGENTSERVER_GENERATION,
+	  STAGE_ARTIFACT_MUTATION_FAST_PATH,
   STAGE_CAPABILITY_PROVIDER_PREFLIGHT,
   STAGE_CODEX_RUNTIME_BRIDGE,
   STAGE_CONVERSATION_POLICY,
@@ -26,7 +27,40 @@ import {
   STAGE_RUNTIME_EXECUTION_CONSTRAINTS,
   STAGE_VISION_SENSE_RUNTIME,
   runWorkspaceRuntimeGateway,
-} from './generation-gateway.js';
+	} from './generation-gateway.js';
+
+test('default terminal AgentServer generation is quarantined without explicit legacy opt-in', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-agentserver-quarantine-'));
+  const originalPolicy = process.env.SCIFORGE_CONVERSATION_POLICY_MODE;
+  const originalLegacy = process.env.SCIFORGE_LEGACY_AGENTSERVER_DEFAULT_DISPATCH;
+  process.env.SCIFORGE_CONVERSATION_POLICY_MODE = 'off';
+  delete process.env.SCIFORGE_LEGACY_AGENTSERVER_DEFAULT_DISPATCH;
+  const events: any[] = [];
+  try {
+    const payload = await runWorkspaceRuntimeGateway({
+      skillDomain: 'literature',
+      prompt: 'Use a general agent to draft a concise answer without local files.',
+      workspacePath: workspace,
+      artifacts: [],
+      references: [],
+    }, {
+      onEvent(event) {
+        events.push(event);
+      },
+    });
+
+    assert.match(payload.message, /AgentServer generation dispatch is quarantined/i);
+    assert.match(JSON.stringify(payload.executionUnits[0]?.refs ?? {}), /agentServerGenerationDispatchQuarantine/);
+    assert.doesNotMatch(JSON.stringify(payload), /agentServerRunId|agentserver-generation-literature/i);
+    const stageAudits = events.filter((event) => event.type === 'gateway-pipeline-stage-audit');
+    assert.ok(stageAudits.some((event) => event.raw.stage === STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS && event.raw.shortCircuit === true));
+    assert.equal(stageAudits.some((event) => event.raw.stage === STAGE_AGENTSERVER_GENERATION), false);
+  } finally {
+    restoreEnv('SCIFORGE_CONVERSATION_POLICY_MODE', originalPolicy);
+    restoreEnv('SCIFORGE_LEGACY_AGENTSERVER_DEFAULT_DISPATCH', originalLegacy);
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
 
 test('runtime gateway fails closed before AgentServer when conversation policy fails without turn constraints', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-policy-fail-closed-'));

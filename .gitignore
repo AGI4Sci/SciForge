@@ -1,6 +1,8 @@
 node_modules/
 dist/
 dist-ui/
+dist-desktop/
+dist-desktop-packages/
 tmp/
 .DS_Store
 *.log

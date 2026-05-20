@@ -1,7 +1,7 @@
 """Single tsx-subprocess batch bridge for the Python conversation policy.
 
-Replaces 9 separate tsx subprocess spawns (context_policy, context_projection,
-reference_digest, artifact_index, service_plan×3, latency_policy, handoff_planner)
+Replaces separate tsx subprocess spawns for context, reference summaries,
+artifact catalog, service planning, latency settings, and handoff planning
 with one call to conversation-policy-batch.ts, reducing tsx overhead from
 ~2.5 seconds to ~0.3 seconds per request.
 """
@@ -64,9 +64,9 @@ def run_policy_batch(
         timeout: Subprocess timeout in seconds (default 12).
 
     Returns:
-        Combined result with keys: policyInput, contextPolicy, contextProjection,
-        currentReferenceDigests, artifactIndex, turnComposition, latencyPolicy,
-        handoffPlan, servicePlan, recoveryPlan, currentReferences, recentFailures.
+        Combined result with context, reference summaries, artifact catalog,
+        turn composition, latency settings, handoff plan, service plan,
+        recovery plan, current references, and recent failures.
 
     Raises:
         RuntimeError: If the tsx subprocess exits non-zero or returns invalid JSON.
