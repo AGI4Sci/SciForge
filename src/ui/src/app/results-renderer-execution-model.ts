@@ -475,11 +475,11 @@ export function rawAuditItems(session: SciForgeSession, activeRun: SciForgeRun |
   const scopedExecutionUnits = auditExecutionUnitsForRun(session, run);
   const scopedArtifacts = artifactsForRun(session, run);
   return [
-    run ? { id: `run-${run.id}`, label: `run ${run.id}`, value: JSON.stringify(sanitizeAuditValue(run.raw ?? run), null, 2) } : undefined,
-    scopedArtifacts.length ? { id: 'artifacts', label: `artifacts (${scopedArtifacts.length})`, value: JSON.stringify(sanitizeAuditValue(scopedArtifacts), null, 2) } : undefined,
-    scopedExecutionUnits.length ? { id: 'execution-units', label: `execution audit (${scopedExecutionUnits.length})`, value: JSON.stringify(sanitizeAuditValue(scopedExecutionUnits), null, 2) } : undefined,
-    session.notebook.length ? { id: 'notebook', label: `timeline JSON (${session.notebook.length})`, value: JSON.stringify(session.notebook, null, 2) } : undefined,
-    viewPlan.allItems.length ? { id: 'view-plan', label: `resolved view plan (${viewPlan.allItems.length})`, value: JSON.stringify(viewPlan.allItems, null, 2) } : undefined,
+    run ? { id: `run-${run.id}`, label: '本轮记录', value: JSON.stringify(sanitizeAuditValue(run.raw ?? run), null, 2) } : undefined,
+    scopedArtifacts.length ? { id: 'artifacts', label: `结果材料（${scopedArtifacts.length}）`, value: JSON.stringify(sanitizeAuditValue(scopedArtifacts), null, 2) } : undefined,
+    scopedExecutionUnits.length ? { id: 'execution-units', label: `过程记录（${scopedExecutionUnits.length}）`, value: JSON.stringify(sanitizeAuditValue(scopedExecutionUnits), null, 2) } : undefined,
+    session.notebook.length ? { id: 'notebook', label: `时间线（${session.notebook.length}）`, value: JSON.stringify(session.notebook, null, 2) } : undefined,
+    viewPlan.allItems.length ? { id: 'view-plan', label: `展示摘要（${viewPlan.allItems.length}）`, value: JSON.stringify(viewPlan.allItems, null, 2) } : undefined,
   ].filter((item): item is { id: string; label: string; value: string } => Boolean(item));
 }
 
@@ -573,7 +573,7 @@ function projectionPresentationTitle(
   if (kind === 'recoverable') return '运行需要恢复';
   if (kind === 'failed') return '运行失败';
   if (kind === 'running') return '运行仍在进行';
-  return artifacts.length ? '结果可展示' : '本轮没有生成可展示 artifact';
+  return artifacts.length ? '结果可展示' : '本轮没有生成可展示内容';
 }
 
 function projectionPresentationReason(
@@ -582,14 +582,14 @@ function projectionPresentationReason(
   run: SciForgeRun | undefined,
 ) {
   if (conversationProjectionStatus(projection) === 'visible-not-live-acceptance') {
-    return compactHumanReason(conversationProjectionVisibleText(projection) ?? '回答已在聊天中显示；本轮没有生成独立 artifact。');
+    return compactHumanReason(conversationProjectionVisibleText(projection) ?? '回答已在聊天中显示；本轮没有生成独立内容。');
   }
   const explicit = conversationProjectionPrimaryDiagnostic(projection) ?? conversationProjectionVisibleText(projection);
   if (explicit) return compactHumanReason(explicit);
   if (projection.backgroundState?.revisionPlan) return compactHumanReason(projection.backgroundState.revisionPlan);
-  if (!artifacts.length && run?.status === 'completed') return '运行已结束，但 projection 没有声明可供右侧结果区渲染的 artifact。';
-  if (conversationProjectionStatus(projection) === 'background-running') return '后台仍在生成结果，当前只显示 projection 已声明的产物。';
-  return artifacts.length ? `${artifacts.length} 个 projection 产物可用于右侧展示。` : '当前 projection 没有可展示产物。';
+  if (!artifacts.length && run?.status === 'completed') return '运行已结束，但没有生成可在右侧展示的内容。';
+  if (conversationProjectionStatus(projection) === 'background-running') return '后台仍在生成结果，当前只显示已经准备好的内容。';
+  return artifacts.length ? `${artifacts.length} 个结果可用于右侧展示。` : '当前还没有可展示结果。';
 }
 
 function projectionPresentationProgress(
@@ -598,7 +598,7 @@ function projectionPresentationProgress(
 ): RunPresentationProgress {
   const completedParts = artifacts.slice(0, 8).map((artifact) => ({
     id: artifact.id,
-    label: artifact.title ? `${artifact.type}: ${artifact.title}` : artifact.type,
+    label: artifact.title ?? '结果',
     ref: `artifact:${artifact.id}`,
     status: 'available',
   }));

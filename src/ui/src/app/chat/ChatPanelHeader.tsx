@@ -33,7 +33,7 @@ export function ChatPanelHeader({
       </div>
       <strong className="panel-scenario-name">Ask SciForge</strong>
       <Badge variant="success" glow>在线</Badge>
-      {archivedCount ? <Badge variant="muted">{archivedCount} archived</Badge> : null}
+      {archivedCount ? <Badge variant="muted">{archivedCount} 已归档</Badge> : null}
       <div className="panel-actions">
         <IconButton icon={Plus} label="开启新聊天" onClick={onNewChat} />
         <IconButton icon={Clock} label="历史会话" onClick={onToggleHistory} />

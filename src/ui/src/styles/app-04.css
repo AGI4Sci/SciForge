@@ -864,6 +864,10 @@
   background: transparent;
 }
 
+.running-work-timeline {
+  gap: 5px;
+}
+
 .running-work-live-row {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
@@ -882,6 +886,26 @@
 .running-work-live-row.background,
 .running-work-live-row.debug {
   color: var(--bio-300);
+}
+
+.running-work-live-row.timeline-completed {
+  color: var(--bio-300);
+}
+
+.running-work-live-row.timeline-active {
+  color: var(--bio-050);
+}
+
+.running-work-completed-fold > summary {
+  min-height: 22px;
+  color: var(--bio-300);
+  font-size: 12px;
+}
+
+.running-work-completed-body {
+  display: grid;
+  gap: 4px;
+  padding: 2px 0 2px 14px;
 }
 
 .running-work-process-meta {

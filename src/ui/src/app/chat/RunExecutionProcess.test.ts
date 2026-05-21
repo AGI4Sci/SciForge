@@ -6,7 +6,7 @@ import type { RuntimeExecutionUnit, SciForgeSession } from '../../domain';
 import { RunExecutionProcess } from './RunExecutionProcess';
 import { conversationProjectionMigrationAuditFixtureForRun } from '../conversation-projection-view-model';
 
-test('execution process renders blocking execution units without Checked success state', () => {
+test('execution process groups blocking execution units into Codex-style folded sections', () => {
   const html = renderProcess([
     executionUnit({ id: 'failed-with-reason', status: 'failed-with-reason', failureReason: 'contract validation failed' }),
     executionUnit({
@@ -27,13 +27,15 @@ test('execution process renders blocking execution units without Checked success
     executionUnit({ id: 'needs-human', status: 'needs-human' }),
   ]);
 
-  assert.match(html, /<span class="cursor-step-kind">Failed<\/span>/);
-  assert.match(html, /<span class="cursor-step-kind">Repair<\/span>/);
-  assert.match(html, /<span class="cursor-step-kind">Needs Human<\/span>/);
-  assert.doesNotMatch(html, /<span class="cursor-step-kind">Checked<\/span>/);
-  assert.match(html, /恢复动作：Regenerate the report artifact with schemaVersion=1\./);
+  assert.match(html, /<span class="cursor-step-kind">过程<\/span>/);
+  assert.match(html, /<span class="cursor-step-kind">恢复线索<\/span>/);
+  assert.match(html, /<span class="cursor-step-kind">诊断<\/span>/);
+  assert.doesNotMatch(html, /<span class="cursor-step-kind">(?:Failed|Repair|Needs Human|Checked)<\/span>/);
+  assert.match(html, /Regenerate the report artifact with schemaVersion=1\./);
   assert.match(html, /下一步：Retry artifact materialization before presenting success\./);
-  assert.doesNotMatch(html, /标准输出：/);
+  assert.match(html, /失败边界：3 条记录需要关注/);
+  assert.match(html, /可追溯摘要：2 条文件记录、1 条产物记录、2 条执行日志/);
+  assertNoInternalTerms(html);
 });
 
 test('execution process scopes execution units to the selected run artifact refs', () => {
@@ -68,8 +70,10 @@ test('execution process scopes execution units to the selected run artifact refs
     onObjectFocus: () => undefined,
   }));
 
-  assert.match(html, /old\.tool/);
-  assert.doesNotMatch(html, /new\.tool/);
+  assert.match(html, /old report/);
+  assert.match(html, /old-report/);
+  assert.doesNotMatch(html, /new report|new-report|old\.tool|new\.tool/);
+  assertNoInternalTerms(html);
 });
 
 test('execution process does not fall back to same-package units from another run', () => {
@@ -93,9 +97,10 @@ test('execution process does not fall back to same-package units from another ru
 
   assert.match(html, /接收任务：old/);
   assert.doesNotMatch(html, /new\.tool/);
+  assertNoInternalTerms(html);
 });
 
-test('execution process renders failed execution units preserved in run raw payload', () => {
+test('execution process summarizes failed execution units preserved in run payload without internal refs', () => {
   const html = renderToStaticMarkup(createElement(RunExecutionProcess, {
     runId: 'run-failed-payload',
     session: {
@@ -126,9 +131,10 @@ test('execution process renders failed execution units preserved in run raw payl
     onObjectFocus: () => undefined,
   }));
 
-  assert.match(html, /EU-failed-payload/);
-  assert.match(html, /web\.probe/);
-  assert.match(html, /probe failed before rendering/);
+  assert.match(html, /失败边界：1 条记录需要关注/);
+  assert.match(html, /失败摘要：probe failed before rendering/);
+  assert.doesNotMatch(html, /EU-failed-payload|web\.probe/);
+  assertNoInternalTerms(html);
 });
 
 test('execution process uses projection events instead of raw audit execution units when projection exists', () => {
@@ -175,9 +181,15 @@ test('execution process uses projection events instead of raw audit execution un
     onObjectFocus: () => undefined,
   }));
 
-  assert.match(html, /Projection 事件：Projection output materialized/);
+  assert.match(html, /<span class="cursor-step-kind">过程<\/span>/);
+  assert.match(html, /<span class="cursor-step-kind">验证<\/span>/);
+  assert.match(html, /<span class="cursor-step-kind">诊断<\/span>/);
+  assert.match(html, /产物：产物已保存/);
+  assert.match(html, /可追溯摘要：1 条执行记录/);
+  assert.doesNotMatch(html, /Projection 事件/);
   assert.doesNotMatch(html, /legacy\.raw\.audit/);
   assert.doesNotMatch(html, /LEGACY_RAW_AUDIT_UNIT_SHOULD_NOT_RENDER/);
+  assertNoInternalTerms(html);
 });
 
 test('execution process distinguishes verification states from execution success', () => {
@@ -189,11 +201,13 @@ test('execution process distinguishes verification states from execution success
     executionUnit({ id: 'verify-passed', status: 'done', verificationVerdict: 'pass', verificationRef: 'verification:passed' }),
   ]);
 
-  assert.match(html, /验证状态：No verification requested/);
-  assert.match(html, /验证状态：Unverified/);
-  assert.match(html, /验证状态：Verifying/);
-  assert.match(html, /验证状态：Verification failed/);
-  assert.match(html, /验证状态：Verification passed/);
+  assert.match(html, /<span class="cursor-step-kind">验证<\/span>/);
+  assert.match(html, /验证状态：未请求额外验证/);
+  assert.match(html, /验证状态：未验证/);
+  assert.match(html, /验证状态：验证中/);
+  assert.match(html, /验证状态：未通过/);
+  assert.match(html, /验证状态：已验证/);
+  assertNoInternalTerms(html);
 });
 
 function renderProcess(executionUnits: RuntimeExecutionUnit[]) {
@@ -247,4 +261,22 @@ function executionUnit(overrides: Partial<RuntimeExecutionUnit>): RuntimeExecuti
     runId: 'run-1',
     ...overrides,
   };
+}
+
+function assertNoInternalTerms(html: string) {
+  for (const pattern of [
+    /\bConversationProjection\b/,
+    /\bExecutionUnit\b/,
+    /\bArtifactDelivery\b/,
+    /\bnative-message\b/i,
+    /\blive-runtime-codex\b/i,
+    /\braw\s+JSONL\b/i,
+    /\bSSE\b/,
+    /\bstdout\b/i,
+    /\bstderr\b/i,
+    /\bprovider\b/i,
+    /\brun\s*id\b/i,
+  ]) {
+    assert.doesNotMatch(html, pattern);
+  }
 }

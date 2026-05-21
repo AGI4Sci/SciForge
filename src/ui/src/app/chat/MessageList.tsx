@@ -36,7 +36,7 @@ export function MessageList({
           <div className="chat-empty compact-history-note">
             <MessageSquare size={18} />
             <strong>已折叠较早对话</strong>
-            <span>当前工作台仅渲染最近 {visibleMessageCount} 条消息，完整审计保留在 runs、ExecutionUnit 和 workspace artifacts 中。</span>
+            <span>当前工作台仅渲染最近 {visibleMessageCount} 条消息，较早过程、验证线索和产物记录仍保留，可从历史与结果入口追溯。</span>
           </div>
         ) : null}
         {children}

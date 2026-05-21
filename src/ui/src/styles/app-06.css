@@ -301,14 +301,16 @@
   margin: 14px 0;
 }
 
-.codex-quiet-shell .message-body {
-  max-width: min(760px, 92%);
+.codex-quiet-shell .message:not(.system) .message-body {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
   border-left-width: 0;
   border-radius: 10px;
 }
 
 .codex-quiet-shell .message.user .message-body {
-  max-width: min(640px, 78%);
+  max-width: 100%;
   padding: 12px 15px;
   border-radius: 18px;
 }

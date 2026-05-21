@@ -191,7 +191,7 @@ function structuredAuditSections(contract: ResultPresentationContractLike, fallb
     ].filter(Boolean).join('\n');
     if (processText) {
       sections.push({
-        label: 'Process summary',
+        label: '过程',
         text: processText,
         evidenceType: 'execution-audit',
         importance: 'diagnostic',
@@ -205,7 +205,7 @@ function structuredAuditSections(contract: ResultPresentationContractLike, fallb
     ].filter(Boolean).join('\n');
     if (!text) continue;
     sections.push({
-      label: stringField(diagnostic.label) ?? stringField(diagnostic.kind) ?? 'Diagnostic',
+      label: safeAuditLabel(stringField(diagnostic.label) ?? stringField(diagnostic.kind), diagnosticEvidenceType(stringField(diagnostic.kind))),
       text,
       evidenceType: diagnosticEvidenceType(stringField(diagnostic.kind)),
       importance: 'diagnostic',
@@ -213,7 +213,7 @@ function structuredAuditSections(contract: ResultPresentationContractLike, fallb
   }
   if (fallbackContent.trim() && looksLikeRuntimeMetadataBlock(fallbackContent)) {
     sections.push({
-      label: 'Original response',
+      label: '诊断',
       text: fallbackContent,
       evidenceType: 'tool-output',
       importance: 'supporting',
@@ -314,7 +314,7 @@ function classifyFinalMessageBlock(block: ContentBlock, pendingAuditHeading: str
   return {
     fold,
     auditHeading: headingAudit,
-    label: pendingAuditHeading || labelForEvidence(evidenceType ?? (rawJson ? 'raw-json' : logOutput ? 'log-output' : 'tool-output')),
+    label: safeAuditLabel(pendingAuditHeading, evidenceType ?? (rawJson ? 'raw-json' : logOutput ? 'log-output' : 'tool-output')),
     evidenceType: evidenceType ?? (rawJson ? 'raw-json' : logOutput ? 'log-output' : 'tool-output'),
     importance: evidenceType === 'execution-audit' ? 'diagnostic' : rawJson || logOutput ? 'raw' : 'supporting',
   };
@@ -418,11 +418,11 @@ function headingText(text: string) {
 }
 
 function labelForEvidence(evidenceType: FinalMessageAuditSection['evidenceType']) {
-  if (evidenceType === 'execution-audit') return '执行审计';
-  if (evidenceType === 'raw-trace') return 'Raw trace';
-  if (evidenceType === 'raw-json') return 'Raw JSON';
-  if (evidenceType === 'log-output') return '日志输出';
-  return 'Tool output';
+  if (evidenceType === 'execution-audit') return '过程';
+  if (evidenceType === 'raw-trace') return '诊断';
+  if (evidenceType === 'raw-json') return '诊断';
+  if (evidenceType === 'log-output') return '诊断';
+  return '诊断';
 }
 
 function auditSectionsSummary(sections: FinalMessageAuditSection[]) {
@@ -431,11 +431,11 @@ function auditSectionsSummary(sections: FinalMessageAuditSection[]) {
     return memo;
   }, {} as Record<FinalMessageAuditSection['evidenceType'], number>);
   return [
-    counts['execution-audit'] ? `${counts['execution-audit']} 审计` : '',
-    counts['tool-output'] ? `${counts['tool-output']} 工具输出` : '',
-    counts['raw-json'] ? `${counts['raw-json']} JSON` : '',
-    counts['log-output'] ? `${counts['log-output']} 日志` : '',
-    counts['raw-trace'] ? `${counts['raw-trace']} trace` : '',
+    counts['execution-audit'] ? `${counts['execution-audit']} 条过程` : '',
+    counts['tool-output'] ? `${counts['tool-output']} 条诊断` : '',
+    counts['raw-json'] ? `${counts['raw-json']} 条诊断` : '',
+    counts['log-output'] ? `${counts['log-output']} 条诊断` : '',
+    counts['raw-trace'] ? `${counts['raw-trace']} 条诊断` : '',
   ].filter(Boolean).join(' · ') || `${sections.length} 条明细`;
 }
 
@@ -444,12 +444,22 @@ function compactAuditFallback(text: string, evidenceType: FinalMessageAuditSecti
   const humanText = extractHumanTextFromRawPayload(text);
   if (humanText) return humanText;
   if (looksLikeFailureDiagnostic(compact)) {
-    return '任务未完成，执行诊断、恢复线索和原始输出已折叠在下方，可展开查看后继续追问或重试。';
+    return '任务未完成，诊断和恢复线索已折叠在下方，可展开查看后继续追问或重试。';
   }
   if (looksLikeRuntimeAuditLogBlock(compact)) {
-    return 'Runtime Codex 返回了运行期日志；原始 stderr、JSONL 或插件 warning 已折叠在下方，可展开审计查看。';
+    return '任务返回了运行期诊断；详细材料已折叠在下方，可展开查看。';
   }
   return `任务已返回 ${labelForEvidence(evidenceType)}。${compact.slice(0, 220)}${compact.length > 220 ? '...' : ''}`;
+}
+
+function safeAuditLabel(label: string | undefined, evidenceType: FinalMessageAuditSection['evidenceType']) {
+  const compact = (label ?? '').replace(/\s+/g, ' ').replace(/[:：]\s*$/, '').trim();
+  if (!compact) return labelForEvidence(evidenceType);
+  if (/raw|jsonl?|stdout|stderr|tool\s*output|tool\s*payload|payload|trace|debug|audit|provider|runtime|backend|execution\s*units?|executionunit|ConversationProjection|ArtifactDelivery/i.test(compact)) {
+    return labelForEvidence(evidenceType);
+  }
+  if (/执行|过程|验证|恢复|诊断|线索/.test(compact)) return compact;
+  return labelForEvidence(evidenceType);
 }
 
 function extractHumanTextFromRawPayload(text: string) {

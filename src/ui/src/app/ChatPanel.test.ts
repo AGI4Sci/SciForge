@@ -185,11 +185,120 @@ test('chat run process and key info prefer projection over raw failed execution 
 
   assert.match(processHtml, /GUI intent summarized the durable report ref/);
   assert.doesNotMatch(processHtml, /ConversationProjection/);
-  assert.match(processHtml, /状态：完成/);
+  assert.match(processHtml, /完成/);
   assert.doesNotMatch(processHtml, /LEGACY_EXECUTION_UNIT_SHOULD_NOT_RENDER/);
   assert.doesNotMatch(processHtml, /legacy\.raw/);
   assert.match(keyInfoHtml, /本轮结果/);
   assert.match(keyInfoHtml, /Projection Report/);
+});
+
+test('assistant message follows Codex-style answer, results, process, verification order', () => {
+  const projection = {
+    schemaVersion: 'sciforge.conversation-projection.v1',
+    conversationId: 'conversation-codex-style-order',
+    currentTurn: { id: 'turn-codex-style-order', prompt: '整理报告并验证' },
+    visibleAnswer: {
+      status: 'satisfied',
+      text: 'ORDER_MAIN_ANSWER',
+      artifactRefs: ['artifact:codex-style-report'],
+    },
+    artifacts: [{ ref: 'artifact:codex-style-report', label: 'Codex Style Report', mime: 'research-report' }],
+    executionProcess: [{
+      eventId: 'event-codex-style-order',
+      type: 'OutputMaterialized',
+      summary: '报告已写入并准备验证。',
+      timestamp: '2026-05-21T00:00:05.000Z',
+    }],
+    recoverActions: ['如需继续，基于当前报告追问即可。'],
+    verificationState: { status: 'pass', verifierRef: 'verification:codex-style-order' },
+    auditRefs: ['artifact:codex-style-report', 'execution-unit:EU-codex-style-order', 'file:.sciforge/logs/codex-style.stdout.log'],
+    diagnostics: [{ message: '过程摘要已保留，原始执行日志不进入主回答。' }],
+  };
+  const session = {
+    schemaVersion: 2,
+    sessionId: 'session-codex-style-order',
+    scenarioId: 'literature-evidence-review',
+    materializedConversationProjection: projection,
+    title: 'codex style order',
+    createdAt: '2026-05-21T00:00:00.000Z',
+    updatedAt: '2026-05-21T00:00:10.000Z',
+    messages: [
+      { id: 'msg-codex-style-user', role: 'user', content: '整理报告并验证', createdAt: '2026-05-21T00:00:00.000Z' },
+      { id: 'msg-codex-style-assistant', role: 'scenario', content: 'ORDER_MAIN_ANSWER', createdAt: '2026-05-21T00:00:06.000Z' },
+    ],
+    runs: [{
+      id: 'run-codex-style-order',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: '整理报告并验证',
+      response: 'ORDER_MAIN_ANSWER',
+      createdAt: '2026-05-21T00:00:01.000Z',
+    }],
+    uiManifest: [],
+    claims: [],
+    executionUnits: [],
+    artifacts: [{
+      id: 'codex-style-report',
+      type: 'research-report',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: '1',
+      metadata: { title: 'Codex Style Report', runId: 'run-codex-style-order' },
+      delivery: {
+        contractId: 'sciforge.artifact-delivery.v1',
+        ref: 'artifact:codex-style-report',
+        role: 'primary-deliverable',
+        declaredMediaType: 'text/markdown',
+        declaredExtension: 'md',
+        contentShape: 'raw-file',
+        readableRef: '.sciforge/artifacts/codex-style-report.md',
+        previewPolicy: 'inline',
+      },
+    }],
+    notebook: [],
+    versions: [],
+    hiddenResultSlotIds: [],
+  } as SciForgeSession;
+  const html = renderToStaticMarkup(createElement(ChatPanel, {
+    scenarioId: 'literature-evidence-review',
+    role: 'Researcher',
+    config: defaultSciForgeConfig,
+    session,
+    input: '',
+    savedScrollTop: 0,
+    onInputChange: () => undefined,
+    onScrollTopChange: () => undefined,
+    onSessionChange: () => undefined,
+    onNewChat: () => undefined,
+    onDeleteChat: () => undefined,
+    archivedSessions: [],
+    onRestoreArchivedSession: () => undefined,
+    onDeleteArchivedSessions: () => undefined,
+    onClearArchivedSessions: () => undefined,
+    onEditMessage: () => undefined,
+    onDeleteMessage: () => undefined,
+    archivedCount: 0,
+    onAutoRunConsumed: () => undefined,
+    onConfigChange: () => undefined,
+    onTimelineEvent: () => undefined,
+    onActiveRunChange: () => undefined,
+    onMarkReusableRun: () => undefined,
+    onObjectFocus: () => undefined,
+    runtimeHealth: [],
+  }));
+
+  const mainAnswerIndex = html.indexOf('ORDER_MAIN_ANSWER');
+  const keyInfoIndex = html.indexOf('本轮结果');
+  const processIndex = html.indexOf('<span class="cursor-step-kind">过程</span>');
+  const verificationIndex = html.indexOf('<span class="cursor-step-kind">验证</span>');
+  const recoveryIndex = html.indexOf('<span class="cursor-step-kind">恢复线索</span>');
+  const diagnosticsIndex = html.indexOf('<span class="cursor-step-kind">诊断</span>');
+  assert.ok(mainAnswerIndex >= 0);
+  assert.ok(keyInfoIndex > mainAnswerIndex);
+  assert.ok(processIndex > keyInfoIndex);
+  assert.ok(verificationIndex > processIndex);
+  assert.ok(recoveryIndex > verificationIndex);
+  assert.ok(diagnosticsIndex > recoveryIndex);
+  assert.doesNotMatch(html, /ConversationProjection|ExecutionUnit|ArtifactDelivery|native-message|live-runtime-codex|raw JSONL|SSE|stdout|stderr|provider|run id/);
 });
 
 test('run key info counts durable file refs as user-visible objects', () => {
@@ -229,7 +338,7 @@ test('run key info counts durable file refs as user-visible objects', () => {
     onObjectFocus: () => undefined,
   }));
 
-  assert.match(html, /1 objects · 0 claims/);
+  assert.match(html, /1 个对象 · 0 条判断/);
   assert.match(html, /file:p6-mini-grant\/timeline-budget\.md/);
 });
 
@@ -359,7 +468,7 @@ test('chat verification badge hides internal projection states', () => {
 });
 
 test('chat final message body ignores raw displayIntent resultPresentation', () => {
-  const session: SciForgeSession = {
+  const session = {
     schemaVersion: 2,
     sessionId: 'session-chat-display-intent',
     scenarioId: 'literature-evidence-review',
@@ -393,7 +502,7 @@ test('chat final message body ignores raw displayIntent resultPresentation', () 
     notebook: [],
     versions: [],
     hiddenResultSlotIds: [],
-  };
+  } as SciForgeSession;
   const html = renderToStaticMarkup(createElement(ChatPanel, {
     scenarioId: 'literature-evidence-review',
     role: 'Researcher',
@@ -446,9 +555,21 @@ test('chat message DOM and badges distinguish demo seed from live runtime answer
         liveAcceptanceEligible: false,
       },
     }, {
+      id: 'legacy-live-runtime-message',
+      role: 'scenario',
+      content: 'legacy live answer',
+      createdAt: '2026-05-19T00:00:04.000Z',
+      status: 'completed',
+      provenance: {
+        kind: 'live-runtime-codex',
+        source: 'background-completion:run-legacy-live',
+        runtimeRequestEligible: false,
+      },
+    }, {
       id: 'live-runtime-message',
       role: 'scenario',
       content: 'live answer',
+      confidence: 0.82,
       createdAt: '2026-05-19T00:00:05.000Z',
       status: 'completed',
       provenance: {
@@ -514,6 +635,10 @@ test('chat message DOM and badges distinguish demo seed from live runtime answer
   assert.match(html, /data-message-id="live-runtime-message"/);
   assert.match(html, /data-message-provenance="assistant-result"/);
   assert.match(html, /data-live-acceptance-eligible="true"/);
+  assert.match(html, /class="confidence"/);
+  assert.match(html, /82%/);
+  assert.match(html, /data-message-id="legacy-live-runtime-message"/);
+  assert.match(html, /legacy live answer/);
   assert.match(html, /data-message-id="native-runtime-message"/);
   assert.match(html, /data-message-provenance="assistant-result"/);
   assert.doesNotMatch(html, /native-message/);
@@ -576,16 +701,19 @@ test('default chat shell uses universal workspace copy instead of scenario-first
 
   assert.match(chatHtml, /Ask SciForge/);
   assert.match(chatHtml, /当前上下文/);
-  assert.match(chatHtml, /模型在线|模型待配置/);
+  assert.match(chatHtml, /助手已连接|连接待配置/);
   assert.match(chatHtml, /可写工作区/);
   assert.doesNotMatch(chatHtml, /workspace-write/);
   assert.doesNotMatch(chatHtml, /sciforge-runtime-deepseek/);
+  assert.doesNotMatch(chatHtml, /sciforge-deepseek-proxy/);
+  assert.doesNotMatch(chatHtml, /bailian\/deepseek-v4-flash/);
   assert.doesNotMatch(chatHtml, /GUI tools|gui\.present|\/runtime-codex|data-terminal-command-text/);
   assert.doesNotMatch(chatHtml, /used\/window|Codex Runtime owns|provider unset|model unset/);
   assert.doesNotMatch(chatHtml, /文献证据评估场景/);
   assert.doesNotMatch(chatHtml, /Scenario Runtime/);
-  assert.match(topbarHtml, /SciForge · ready/);
-  assert.match(topbarHtml, /搜索文件、报告、运行、问题/);
+  assert.match(topbarHtml, /SciForge · 就绪/);
+  assert.match(topbarHtml, /搜索文件、报告、问题/);
+  assert.doesNotMatch(topbarHtml, /搜索文件、报告、运行、问题|>\d+ actions<|>ready</);
   assert.doesNotMatch(topbarHtml, /Execution Unit/);
   assert.equal(navItems.find((item) => item.id === 'workbench')?.label, '聊天工作台');
 });
@@ -673,8 +801,14 @@ test('chat panel primary DOM omits runtime implementation terms', () => {
     '/runtime-codex',
     'workspace-write',
     'sciforge-runtime-deepseek',
+    'sciforge-deepseek-proxy',
+    'bailian/deepseek-v4-flash',
+    'provider',
+    'model',
+    'profile',
     'used/window',
     'raw output',
+    'run id',
     'run-codex',
   ]) {
     assert.doesNotMatch(html, new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
@@ -690,7 +824,6 @@ test('selected-reference follow-up messages show compact continuity context', ()
     title: 'Selected research report',
     ref: 'artifact:selected-report',
     status: 'available' as const,
-    runId: 'run-selected',
   };
   const session: SciForgeSession = {
     schemaVersion: 2,

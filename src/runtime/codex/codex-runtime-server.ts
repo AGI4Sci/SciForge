@@ -3,6 +3,8 @@ import { CodexExecJsonAdapter } from './codex-exec-json-adapter.js';
 import type { AgentCliAdapter } from './agent-cli-adapter.js';
 import { isRecord, readJson, writeJson } from '../server/http.js';
 
+const CODEX_RUNTIME_HEARTBEAT_MS = 5_000;
+
 export async function handleCodexRuntimeRoutes(
   req: IncomingMessage,
   res: ServerResponse,
@@ -23,7 +25,9 @@ export async function handleCodexRuntimeRoutes(
     Connection: 'keep-alive',
     'X-Accel-Buffering': 'no',
   });
+  res.flushHeaders?.();
 
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
   try {
     const body = await readJson(req);
     assertCodexRuntimeRequestBoundary(body);
@@ -31,11 +35,25 @@ export async function handleCodexRuntimeRoutes(
     const workspacePath = stringField(body.workspacePath);
     if (!commandText) throw new Error('commandText is required');
     if (!workspacePath) throw new Error('workspacePath is required');
+    const commandId = stringField(body.commandId);
+    const attemptId = stringField(body.attemptId);
+    const streamStartedAt = Date.now();
+    let lastRuntimeEventAt = streamStartedAt;
+    writeSse(res, 'process-progress', codexRuntimeAcceptedProgressEvent({ commandId, attemptId }));
+    heartbeat = setInterval(() => {
+      if (abort.signal.aborted || res.writableEnded || res.destroyed) return;
+      writeSse(res, 'heartbeat', codexRuntimeHeartbeatEvent({
+        commandId,
+        attemptId,
+        streamStartedAt,
+        lastRuntimeEventAt,
+      }));
+    }, CODEX_RUNTIME_HEARTBEAT_MS);
     const turn = await adapter.startTurn({
       commandText,
       workspacePath,
-      commandId: stringField(body.commandId),
-      attemptId: stringField(body.attemptId),
+      commandId,
+      attemptId,
       profile: stringField(body.profile),
       codexSessionId: stringField(body.codexSessionId) ?? stringField(body.nativeSessionId),
       allowOpenAiRuntime: body.allowOpenAiRuntime === true,
@@ -47,21 +65,100 @@ export async function handleCodexRuntimeRoutes(
         : undefined,
       abortSignal: abort.signal,
     });
+    lastRuntimeEventAt = Date.now();
     writeSse(res, 'turn', { turnId: turn.turnId, attemptId: turn.attemptId, codexSessionId: turn.codexSessionId });
     for await (const event of turn.events) {
+      lastRuntimeEventAt = Date.now();
       writeSse(res, event.type, event);
     }
   } catch (error) {
     writeSse(res, 'error', { ok: false, error: error instanceof Error ? error.message : String(error) });
   } finally {
+    if (heartbeat) clearInterval(heartbeat);
     res.end();
   }
   return true;
 }
 
 export function writeSse(res: ServerResponse, event: string, data: unknown): void {
+  if (res.writableEnded || res.destroyed) return;
   res.write(`event: ${event}\n`);
   res.write(`data: ${JSON.stringify(data)}\n\n`);
+  const flush = (res as ServerResponse & { flush?: () => void }).flush;
+  if (typeof flush === 'function') flush.call(res);
+}
+
+function codexRuntimeAcceptedProgressEvent({
+  commandId,
+  attemptId,
+}: {
+  commandId?: string;
+  attemptId?: string;
+}) {
+  const detail = '已接收文本命令，正在启动 Codex CLI stream。';
+  return {
+    type: 'process-progress',
+    label: 'Codex Runtime',
+    detail,
+    commandId,
+    attemptId,
+    progress: {
+      phase: 'execute',
+      title: '正在启动 Codex CLI',
+      detail,
+      waitingFor: 'Codex CLI 首个 JSONL 事件',
+      nextStep: '收到事件后按顺序展示执行轨迹。',
+      reason: 'runtime-codex-request-accepted',
+      canAbort: true,
+      canContinue: true,
+      status: 'running',
+    },
+    latencyPolicy: {
+      firstVisibleResponseMs: 0,
+      firstEventWarningMs: 8_000,
+      silentRetryMs: 45_000,
+      stallBoundMs: 300_000,
+    },
+  };
+}
+
+function codexRuntimeHeartbeatEvent({
+  commandId,
+  attemptId,
+  streamStartedAt,
+  lastRuntimeEventAt,
+}: {
+  commandId?: string;
+  attemptId?: string;
+  streamStartedAt: number;
+  lastRuntimeEventAt: number;
+}) {
+  const now = Date.now();
+  const quietSeconds = Math.max(0, Math.floor((now - lastRuntimeEventAt) / 1000));
+  const detail = `Codex CLI stream 仍然连接；已等待 ${quietSeconds}s，正在等待下一条 JSONL 事件。`;
+  return {
+    type: 'process-progress',
+    label: 'Codex Runtime',
+    detail,
+    commandId,
+    attemptId,
+    heartbeat: {
+      status: 'waiting-for-codex-jsonl',
+      elapsedMs: now - streamStartedAt,
+      quietMs: now - lastRuntimeEventAt,
+    },
+    progress: {
+      phase: 'wait',
+      title: 'Codex CLI 正在运行',
+      detail,
+      waitingFor: '下一条 Codex CLI JSONL 事件',
+      nextStep: '收到事件后继续按顺序展示执行轨迹。',
+      reason: 'runtime-codex-waiting-for-jsonl',
+      canAbort: true,
+      canContinue: true,
+      status: 'running',
+    },
+  };
 }
 
 function stringField(value: unknown): string | undefined {

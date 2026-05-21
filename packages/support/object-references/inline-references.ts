@@ -62,10 +62,14 @@ export function objectReferenceMentionedInText(content: string, reference: Objec
   const inlineCodeTokens = [...content.matchAll(/`([^`\n]+)`/g)].map((match) => match[1]?.trim().toLowerCase() ?? '');
   const explicitTokens = [...content.matchAll(/\b(?:artifact|file|folder|run|execution-unit|scenario-package)::?[^\s)\]）>，。；、,;]+/gi)]
     .map((match) => normalizeObjectRefKey(match[0].replace(/[.,;，。；、]+$/, '')));
+  const bareFileTokens = [...content.matchAll(bareFileMentionPattern())]
+    .map((match) => normalizeObjectRefKey(match[0].replace(/[.,;，。；、]+$/, '')));
   return candidates.some((candidate) => {
     if (candidate.length < 4) return false;
     const normalized = candidate.toLowerCase();
     return inlineCodeTokens.includes(normalized)
+      || bareFileTokens.includes(normalizeObjectRefKey(basenameForInlineToken(candidate) ?? candidate))
+      || bareFileTokens.includes(normalizeObjectRefKey(candidate))
       || explicitTokens.includes(normalizeObjectRefKey(candidate));
   });
 }
@@ -224,4 +228,8 @@ function objectReferenceLinkKeys(reference: ObjectReference) {
     reference.provenance?.dataRef ? `file::${reference.provenance.dataRef}` : undefined,
   ];
   return keys.filter((key): key is string => Boolean(key && key.trim()));
+}
+
+function bareFileMentionPattern() {
+  return /\b(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:md|markdown|txt|log|jsonl?|csv|tsv|html?|pdf|docx?|xlsx?|pptx?|png|jpe?g|gif|webp|svg|pdb|cif|mmcif)(?![A-Za-z0-9_./-])/gi;
 }

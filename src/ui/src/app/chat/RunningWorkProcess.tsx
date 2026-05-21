@@ -19,28 +19,33 @@ export function RunningWorkProcess({
   const usageLabel = formatAgentTokenUsage(tokenUsage);
   const worklog = presentStreamWorklog(events, { counts, guidanceCount, limit: 48 });
   const progress = latestProgressModel(worklog.entries.map((entry) => entry.event));
-  const highlightedEntries = visibleRunningWorkEntries(worklog, 5);
+  const highlightedEntries = visibleRunningWorkEntries(worklog, 8);
+  const completedEntries = highlightedEntries.slice(0, -1);
+  const activeEntry = highlightedEntries.at(-1);
   if (!worklog.entries.length && !guidanceCount && !usageLabel) return null;
   return (
     <div className="running-work-process">
       {progress ? <ProcessProgressCard progress={progress} /> : null}
       {highlightedEntries.length ? (
-        <div className="running-work-live">
-          {highlightedEntries.map((entry) => {
-            const presentation = entry.presentation;
-            return (
-              <div className={cx('running-work-live-row', presentation.uiClass)} key={`${entry.event.id}-live`}>
-                <Badge variant={presentation.tone}>{runningOperationLabel(entry)}</Badge>
-                <span>{compactRunningLine(entry)}</span>
+        <div className="running-work-live running-work-timeline" aria-label="正在执行的工作轨迹">
+          {completedEntries.length ? (
+            <details className="message-fold depth-3 running-work-completed-fold cursor-step-fold">
+              <summary>
+                <span className="cursor-step-kind">已完成</span>
+                <span className="stream-event-detail compact">{completedTimelineSummary(completedEntries)}</span>
+              </summary>
+              <div className="running-work-completed-body">
+                {completedEntries.map((entry) => renderLiveWorkRow(entry, 'completed'))}
               </div>
-            );
-          })}
+            </details>
+          ) : null}
+          {activeEntry ? renderLiveWorkRow(activeEntry, 'active') : null}
         </div>
       ) : null}
       <details className="message-fold depth-2 running-work-process-raw cursor-like-worklog">
         <summary>
-          <span className="worklog-summary-title">运行细节</span>
-          <span className="worklog-summary-detail">{worklog.summary}</span>
+          <span className="worklog-summary-title">执行轨迹</span>
+          <span className="worklog-summary-detail">{processFoldSummary(worklog, highlightedEntries)}</span>
           {usageLabel ? <span className="worklog-summary-usage">{usageLabel}</span> : null}
         </summary>
         <div className="running-work-process-body">
@@ -73,13 +78,12 @@ export function RunningWorkProcess({
 }
 
 export function visibleRunningWorkEntries(worklog: StreamWorklogPresentation, limit = 5): StreamWorklogEntry[] {
-  const operationEntries = worklog.entries
-    .filter((entry) => entry.operationLine && isVisibleRunningWorkKind(entry.operationKind))
-    .slice(-limit);
-  if (operationEntries.length) return operationEntries;
-  return worklog.entries
-    .filter((entry) => entry.presentation.visibleInRunningMessage)
-    .slice(-limit);
+  const operationEntries = compactTimelineEntries(worklog.entries
+    .filter((entry) => entry.operationLine && isVisibleRunningWorkKind(entry.operationKind)));
+  const entries = operationEntries.length
+    ? operationEntries
+    : compactTimelineEntries(worklog.entries.filter((entry) => entry.presentation.visibleInRunningMessage));
+  return keepTimelineAnchors(entries, limit);
 }
 
 export function latestVisibleWorkEvents(events: AgentStreamEvent[], limit: number) {
@@ -87,39 +91,150 @@ export function latestVisibleWorkEvents(events: AgentStreamEvent[], limit: numbe
 }
 
 function runningOperationLabel(entry: StreamWorklogEntry) {
-  if (entry.operationKind === 'explore') return 'Explore';
-  if (entry.operationKind === 'search') return 'Search';
-  if (entry.operationKind === 'fetch') return 'Fetch';
-  if (entry.operationKind === 'analyze') return 'Analyze';
-  if (entry.operationKind === 'read') return 'Read';
-  if (entry.operationKind === 'write') return 'Write';
-  if (entry.operationKind === 'command') return 'Run';
-  if (entry.operationKind === 'wait') return 'Wait';
-  if (entry.operationKind === 'validate') return 'Validate';
-  if (entry.operationKind === 'emit') return 'Emit';
-  if (entry.operationKind === 'artifact') return 'Artifact';
-  if (entry.operationKind === 'recover') return 'Recover';
-  if (entry.operationKind === 'diagnostic') return 'Diagnostic';
+  if (entry.operationKind === 'explore') return '探索';
+  if (entry.operationKind === 'search') return '检索';
+  if (entry.operationKind === 'fetch') return '获取';
+  if (entry.operationKind === 'analyze') return '分析';
+  if (entry.operationKind === 'read') return '读取';
+  if (entry.operationKind === 'write') return '写入';
+  if (entry.operationKind === 'command') return '执行';
+  if (entry.operationKind === 'wait') return '等待';
+  if (entry.operationKind === 'validate') return '验证';
+  if (entry.operationKind === 'emit') return '输出';
+  if (entry.operationKind === 'artifact') return '产物';
+  if (entry.operationKind === 'recover') return '恢复';
+  if (entry.operationKind === 'diagnostic') return '诊断';
   return entry.event.label || entry.presentation.typeLabel;
 }
 
-function compactRunningLine(entry: StreamWorklogEntry) {
+function compactRunningLine(entry: StreamWorklogEntry): string {
+  const progress = progressModelFromEvent(entry.event);
+  if (progress) return formatProgressHeadline(progress, fallbackRunningLine(entry)) || fallbackRunningLine(entry);
+  return fallbackRunningLine(entry);
+}
+
+function fallbackRunningLine(entry: StreamWorklogEntry): string {
   const structured = entry.structured;
-  if (!structured) return entry.operationLine || entry.presentation.shortDetail || entry.presentation.detail || entry.presentation.usageDetail || entry.presentation.typeLabel;
+  if (!structured) return stripOperationVerb(entry, entry.operationLine || entry.presentation.shortDetail || entry.presentation.detail || entry.presentation.usageDetail || entry.presentation.typeLabel);
   const project = structured.project
-    ? `Project ${structured.project.title || structured.project.id || 'project'}${structured.project.status ? ` · ${structured.project.status}` : ''}`
+    ? `项目 ${structured.project.title || structured.project.id || 'project'}${structured.project.status ? ` · ${structured.project.status}` : ''}`
     : '';
   const stage = structured.stage
-    ? `Stage ${structured.stage.index !== undefined ? `${structured.stage.index + 1} ` : ''}${structured.stage.title || structured.stage.kind || structured.stage.id || 'stage'}${structured.stage.status ? ` · ${structured.stage.status}` : ''}`
+    ? `阶段 ${structured.stage.index !== undefined ? `${structured.stage.index + 1} ` : ''}${structured.stage.title || structured.stage.kind || structured.stage.id || 'stage'}${structured.stage.status ? ` · ${structured.stage.status}` : ''}`
     : '';
   const recent = structured.failure
-    ? `Failure ${structured.failure}`
+    ? `阻断 ${structured.failure}`
     : structured.evidence
-      ? `Evidence ${structured.evidence}`
+      ? `证据 ${structured.evidence}`
       : structured.nextStep
-        ? `Next ${structured.nextStep}`
+        ? `下一步 ${structured.nextStep}`
         : '';
-  return [project, stage, recent].filter(Boolean).join(' · ') || entry.operationLine;
+  return [project, stage, recent].filter(Boolean).join(' · ') || stripOperationVerb(entry, entry.operationLine);
+}
+
+function renderLiveWorkRow(entry: StreamWorklogEntry, state: 'active' | 'completed') {
+  const presentation = entry.presentation;
+  return (
+    <div className={cx('running-work-live-row', `timeline-${state}`, presentation.uiClass)} key={`${entry.event.id}-live-${state}`}>
+      <Badge variant={state === 'completed' ? 'muted' : presentation.tone}>{runningOperationLabel(entry)}</Badge>
+      <span>{compactRunningLine(entry)}</span>
+    </div>
+  );
+}
+
+function compactTimelineEntries(entries: StreamWorklogEntry[]) {
+  const compacted: StreamWorklogEntry[] = [];
+  for (const entry of entries) {
+    const silentWaitIndex = isSilentWaitEntry(entry)
+      ? compacted.findLastIndex((candidate) => isSilentWaitEntry(candidate))
+      : -1;
+    if (silentWaitIndex >= 0) {
+      compacted[silentWaitIndex] = entry;
+      continue;
+    }
+    const key = timelineDedupeKey(entry);
+    const previous = compacted.at(-1);
+    if (previous && timelineDedupeKey(previous) === key) {
+      compacted[compacted.length - 1] = entry;
+      continue;
+    }
+    compacted.push(entry);
+  }
+  return compacted;
+}
+
+function keepTimelineAnchors(entries: StreamWorklogEntry[], limit: number) {
+  if (limit <= 0 || entries.length <= limit) return entries;
+  const head = entries[0];
+  const tail = entries.slice(-(limit - 1));
+  return [head, ...tail.filter((entry) => entry.event.id !== head.event.id)];
+}
+
+function timelineDedupeKey(entry: StreamWorklogEntry) {
+  return `${entry.operationKind}:${normalizeTimelineText(compactRunningLine(entry))}`;
+}
+
+function isSilentWaitEntry(entry: StreamWorklogEntry) {
+  if (entry.operationKind !== 'wait') return false;
+  const text = normalizeTimelineText([
+    entry.operationLine,
+    entry.presentation.detail,
+    entry.presentation.shortDetail,
+    compactRunningLine(entry),
+  ].join(' '));
+  return /没有输出新事件|没有收到新事件|http stream|codex cli|jsonl|backend|后端/.test(text);
+}
+
+function normalizeTimelineText(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/\b\d+\s*(?:ms|s|sec|seconds)\b/g, '<elapsed>')
+    .replace(/后端\s*\d+\s*s/g, '后端 <elapsed>')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function stripOperationVerb(entry: StreamWorklogEntry, value: string) {
+  const verb = operationVerbPattern(entry.operationKind);
+  return verb ? value.replace(verb, '').trim() || value : value;
+}
+
+function operationVerbPattern(kind: StreamWorklogEntry['operationKind']) {
+  if (kind === 'explore') return /^Explored\s+/i;
+  if (kind === 'search') return /^Searched\s+/i;
+  if (kind === 'fetch') return /^Fetched\s+/i;
+  if (kind === 'analyze') return /^Analyzed\s+/i;
+  if (kind === 'read') return /^Read\s+/i;
+  if (kind === 'write') return /^Wrote\s+/i;
+  if (kind === 'command') return /^Ran\s+/i;
+  if (kind === 'wait') return /^Waiting\s+/i;
+  if (kind === 'validate') return /^Validated\s+/i;
+  if (kind === 'emit') return /^Emitted\s+/i;
+  if (kind === 'artifact') return /^Created\s+/i;
+  if (kind === 'recover') return /^Recovered\s+/i;
+  return undefined;
+}
+
+function completedTimelineSummary(entries: StreamWorklogEntry[]) {
+  const labels = entries.map(runningOperationLabel);
+  return `${entries.length} 步 · ${labels.slice(-5).join(' · ')}`;
+}
+
+function processFoldSummary(worklog: StreamWorklogPresentation, timeline: StreamWorklogEntry[]) {
+  const active = timeline.at(-1);
+  const completedCount = Math.max(0, timeline.length - 1);
+  const parts = [
+    completedCount ? `已折叠 ${completedCount} 步` : '',
+    active ? `当前 ${runningOperationLabel(active)}：${shortSummaryText(compactRunningLine(active), 110)}` : worklog.summary,
+    worklog.counts.debug ? `${worklog.counts.debug} 条审计事件已折叠` : '',
+  ].filter(Boolean);
+  return parts.join(' · ') || worklog.summary;
+}
+
+function shortSummaryText(value: string, limit: number) {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= limit) return normalized;
+  return `${normalized.slice(0, Math.max(0, limit - 18))} ... ${normalized.slice(-14)}`;
 }
 
 function StructuredWorkEventFacts({ entry }: { entry: StreamWorklogEntry }) {

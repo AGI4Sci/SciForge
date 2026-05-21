@@ -248,6 +248,196 @@ test('scenario message refs can show explicit user-facing file references', () =
   assert.equal(references[0]?.ref, 'file:reports/evidence.csv');
 });
 
+test('scenario message resolves mentioned run artifact filenames into right-pane object refs', () => {
+  const message: SciForgeMessage = {
+    id: 'msg-ahe-summary',
+    role: 'scenario',
+    content: '完整中文总结见 AHE_Paper_Summary_CN.md。',
+    createdAt: '2026-05-21T00:00:01.000Z',
+    status: 'completed',
+  };
+  const session = sessionWithObjects({
+    runs: [{
+      id: 'run-ahe-summary',
+      prompt: 'summarize paper',
+      response: message.content,
+      status: 'completed',
+      scenarioId: 'literature-evidence-review',
+      createdAt: '2026-05-21T00:00:00.000Z',
+    }],
+    artifacts: [{
+      id: 'artifact-ahe-summary',
+      type: 'research-report',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: 'test.runtime-artifact.v1',
+      data: {},
+      delivery: {
+        contractId: 'sciforge.artifact-delivery.v1',
+        ref: 'artifact:artifact-ahe-summary',
+        readableRef: 'reports/AHE_Paper_Summary_CN.md',
+        previewPolicy: 'inline',
+        role: 'primary-deliverable',
+        contentShape: 'raw-file',
+        declaredMediaType: 'text/markdown',
+        declaredExtension: 'md',
+      },
+      metadata: {
+        runId: 'run-ahe-summary',
+        markdownRef: 'reports/AHE_Paper_Summary_CN.md',
+      },
+    }],
+  });
+
+  const references = inlineObjectReferencesForMessage(message, session, 'run-ahe-summary');
+  const markup = renderToStaticMarkup(
+    <MessageContent content={message.content} references={references} onObjectFocus={() => undefined} />,
+  );
+
+  assert.equal(references.length, 1);
+  assert.equal(references[0]?.kind, 'artifact');
+  assert.equal(references[0]?.ref, 'artifact:artifact-ahe-summary');
+  assert.equal((markup.match(/data-sciforge-reference=/g) ?? []).length, 1);
+  assert.match(markup, /markdown-object-ref/);
+  assert.doesNotMatch(markup, /inline-object-reference-chip/);
+});
+
+test('scenario message leaves ambiguous mentioned artifact filenames as plain text', () => {
+  const message: SciForgeMessage = {
+    id: 'msg-ambiguous-summary',
+    role: 'scenario',
+    content: '完整中文总结见 AHE_Paper_Summary_CN.md。',
+    createdAt: '2026-05-21T00:00:01.000Z',
+    status: 'completed',
+  };
+  const session = sessionWithObjects({
+    artifacts: [{
+      id: 'artifact-ahe-alpha',
+      type: 'research-report',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: 'test.runtime-artifact.v1',
+      data: {},
+      delivery: {
+        contractId: 'sciforge.artifact-delivery.v1',
+        ref: 'artifact:artifact-ahe-alpha',
+        readableRef: 'alpha/AHE_Paper_Summary_CN.md',
+        previewPolicy: 'inline',
+        role: 'primary-deliverable',
+        contentShape: 'raw-file',
+        declaredMediaType: 'text/markdown',
+        declaredExtension: 'md',
+      },
+      metadata: { markdownRef: 'alpha/AHE_Paper_Summary_CN.md' },
+    }, {
+      id: 'artifact-ahe-beta',
+      type: 'research-report',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: 'test.runtime-artifact.v1',
+      data: {},
+      delivery: {
+        contractId: 'sciforge.artifact-delivery.v1',
+        ref: 'artifact:artifact-ahe-beta',
+        readableRef: 'beta/AHE_Paper_Summary_CN.md',
+        previewPolicy: 'inline',
+        role: 'primary-deliverable',
+        contentShape: 'raw-file',
+        declaredMediaType: 'text/markdown',
+        declaredExtension: 'md',
+      },
+      metadata: { markdownRef: 'beta/AHE_Paper_Summary_CN.md' },
+    }],
+  });
+
+  const references = inlineObjectReferencesForMessage(message, session);
+  const markup = renderToStaticMarkup(
+    <MessageContent content={message.content} references={references} onObjectFocus={() => undefined} />,
+  );
+
+  assert.equal(references.length, 0);
+  assert.doesNotMatch(markup, /data-sciforge-reference=/);
+  assert.match(markup, /AHE_Paper_Summary_CN\.md/);
+});
+
+test('scenario message can focus a verified workspace-relative file mention', () => {
+  const message: SciForgeMessage = {
+    id: 'msg-workspace-file-summary',
+    role: 'scenario',
+    content: '完整中文总结见 `AHE_Paper_Summary_CN.md`。',
+    createdAt: '2026-05-21T00:00:01.000Z',
+    status: 'completed',
+  };
+
+  const references = inlineObjectReferencesForMessage(message, sessionWithObjects(), 'run-workspace-file', {
+    workspaceObjectReferences: [workspaceFileReference('AHE_Paper_Summary_CN.md')],
+  });
+  const markup = renderToStaticMarkup(
+    <MessageContent content={message.content} references={references} onObjectFocus={() => undefined} />,
+  );
+
+  assert.equal(references.length, 1);
+  assert.equal(references[0]?.kind, 'file');
+  assert.equal(references[0]?.ref, 'file:AHE_Paper_Summary_CN.md');
+  assert.match(markup, /markdown-object-ref/);
+});
+
+test('scenario message leaves unverified workspace-relative file mentions as code', () => {
+  const message: SciForgeMessage = {
+    id: 'msg-workspace-file-missing',
+    role: 'scenario',
+    content: '完整中文总结见 `AHE_Paper_Summary_CN.md`。',
+    createdAt: '2026-05-21T00:00:01.000Z',
+    status: 'completed',
+  };
+
+  const references = inlineObjectReferencesForMessage(message, sessionWithObjects(), 'run-workspace-file');
+  const markup = renderToStaticMarkup(
+    <MessageContent content={message.content} references={references} onObjectFocus={() => undefined} />,
+  );
+
+  assert.equal(references.length, 0);
+  assert.doesNotMatch(markup, /data-sciforge-reference=/);
+  assert.match(markup, /<code>AHE_Paper_Summary_CN\.md<\/code>/);
+});
+
+test('scenario message resolves verified workspace references across data modalities', () => {
+  const message: SciForgeMessage = {
+    id: 'msg-workspace-multimodal',
+    role: 'scenario',
+    content: [
+      '数据表见 inline_ref_table_20260521.csv。',
+      '图像见 `figures/agent_trace.png`，PDF 见 `papers/agent_harness.pdf`。',
+      'HTML 附录见 report.html，JSON 摘要见 `data/summary.json`。',
+    ].join(' '),
+    createdAt: '2026-05-21T00:00:01.000Z',
+    status: 'completed',
+  };
+
+  const references = inlineObjectReferencesForMessage(message, sessionWithObjects(), 'run-workspace-multimodal', {
+    workspaceObjectReferences: [
+      workspaceFileReference('tables/inline_ref_table_20260521.csv'),
+      workspaceFileReference('figures/agent_trace.png'),
+      workspaceFileReference('papers/agent_harness.pdf'),
+      workspaceFileReference('report.html'),
+      workspaceFileReference('data/summary.json'),
+    ],
+  });
+  const markup = renderToStaticMarkup(
+    <MessageContent content={message.content} references={references} onObjectFocus={() => undefined} />,
+  );
+
+  assert.deepEqual(
+    references.map((reference) => [reference.ref, reference.artifactType]),
+    [
+      ['file:tables/inline_ref_table_20260521.csv', 'data-table'],
+      ['file:figures/agent_trace.png', 'image'],
+      ['file:papers/agent_harness.pdf', 'pdf-document'],
+      ['file:report.html', 'html-document'],
+      ['file:data/summary.json', 'workspace-file'],
+    ],
+  );
+  assert.equal((markup.match(/data-sciforge-reference=/g) ?? []).length, 5);
+  assert.doesNotMatch(markup, /inline-object-reference-chip/);
+});
+
 test('object reference chips expose each selected chip object instead of the recent artifact', () => {
   const markup = renderToStaticMarkup(
     <ObjectReferenceChips
@@ -269,6 +459,23 @@ function firstRenderedReference(markup: string) {
   const reference = parseSciForgeReferenceAttribute(decodeHtmlAttribute(match[1]));
   assert.ok(reference, 'expected parseable SciForgeReference attribute');
   return reference;
+}
+
+function workspaceFileReference(path: string): ObjectReference {
+  return {
+    id: `workspace-${path.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+    kind: 'file',
+    title: path.split('/').at(-1) ?? path,
+    ref: `file:${path}`,
+    status: 'available',
+    presentationRole: 'supporting-evidence',
+    actions: ['focus-right-pane', 'reveal-in-folder', 'copy-path', 'pin'],
+    provenance: {
+      path,
+      producer: 'workspace',
+      size: 128,
+    },
+  };
 }
 
 function userMessage(overrides: Partial<SciForgeMessage> = {}): SciForgeMessage {

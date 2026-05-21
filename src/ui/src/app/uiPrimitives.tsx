@@ -46,7 +46,8 @@ export function ClaimTag({ type }: { type: ClaimType }) {
 }
 
 export function ConfidenceBar({ value }: { value: number }) {
-  const pct = Math.round(value * 100);
+  const safeValue = Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
+  const pct = Math.round(safeValue * 100);
   const color = pct >= 90 ? '#00E5A0' : pct >= 75 ? '#FFD54F' : '#FF7043';
   return (
     <div className="confidence">

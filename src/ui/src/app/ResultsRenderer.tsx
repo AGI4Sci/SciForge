@@ -262,7 +262,7 @@ export function ResultsRenderer({
       collapsed={collapsed}
       resultTab={resultTab}
       focusMode={focusMode}
-      activeRun={!focusedObjectReference ? activeRun : undefined}
+      activeRun={undefined}
       scenarioId={scenarioId}
       onToggleCollapse={onToggleCollapse}
       onResultTabChange={setResultTab}
@@ -359,6 +359,8 @@ function PrimaryResult({
 }) {
   const { viewPlan } = model;
   const runtimeState = browserVisibleRuntimeState(session, activeRun, viewPlan);
+  const hasResultPreview = model.visibleItems.length > 0 || model.deferredItems.length > 0;
+  const compatibilityDiagnostics = runtimeCompatibilityDiagnosticsForPresentation(session, activeRun);
   if (focusMode === 'execution') {
     return <ExecutionOnlyResult session={session} activeRun={activeRun} />;
   }
@@ -367,8 +369,6 @@ function PrimaryResult({
       <div
         className="runtime-visible-state-hook"
         data-testid="runtime-visible-state"
-        data-session-id={runtimeState.sessionId}
-        data-run-id={runtimeState.runId ?? ''}
         data-run-status={runtimeState.runStatus ?? ''}
         data-run-created-at={runtimeState.runCreatedAt ?? ''}
         data-run-completed-at={runtimeState.runCompletedAt ?? ''}
@@ -383,24 +383,28 @@ function PrimaryResult({
         data-visible-artifact-refs={runtimeState.visibleArtifactRefs.join(',')}
         data-recover-action-count={runtimeState.recoverActionCount}
         data-projection-wait-at-terminal={runtimeState.projectionWaitAtTerminal ? 'true' : 'false'}
-        data-raw-fallback-used={runtimeState.rawFallbackUsed ? 'true' : 'false'}
-        data-raw-leak={runtimeState.rawLeak ? 'true' : 'false'}
+        data-fallback-used={runtimeState.rawFallbackUsed ? 'true' : 'false'}
+        data-diagnostic-leak={runtimeState.rawLeak ? 'true' : 'false'}
         aria-hidden="true"
       />
-      <SectionHeader icon={FileText} title="结果视图" subtitle="优先展示用户本轮要看的结果；更多内容默认收起" />
       {viewPlan.blockedDesign ? <UIDesignBlockerCard blocker={viewPlan.blockedDesign} /> : null}
-      <RunStatusSummary
-        session={session}
-        activeRun={activeRun}
-        viewPlan={viewPlan}
-        onCommandTextAction={onCommandTextAction}
-      />
+      {hasResultPreview ? (
+        <RunStatusSummary
+          session={session}
+          activeRun={activeRun}
+          viewPlan={viewPlan}
+          onCommandTextAction={onCommandTextAction}
+        />
+      ) : null}
       <CapabilityPlanSummaryCard
         summary={capabilityPlanSummaryForSession(session, activeRun?.id)}
         session={session}
         activeRun={activeRun}
         onOpenDebugAuditAction={onOpenDebugAuditAction}
       />
+      {!hasResultPreview && compatibilityDiagnostics.length ? (
+        <RuntimeCompatibilityDetails diagnostics={compatibilityDiagnostics} />
+      ) : null}
       {model.emptyState ? (
         <EmptyArtifactState
           title={model.emptyState.title}
@@ -453,14 +457,7 @@ function PrimaryResult({
         />
       ) : null}
       {viewPlan.allItems.length ? (
-        <details className="result-details-panel subtle">
-          <summary>
-            <span>视图状态</span>
-            <Badge variant="muted">{viewPlan.allItems.length} modules</Badge>
-          </summary>
-          <ViewPlanSummary viewPlan={viewPlan} session={session} activeRun={activeRun} />
-          <ManifestDiagnostics items={model.manifestDiagnostics} />
-        </details>
+        <ViewPlanDetails viewPlan={viewPlan} session={session} activeRun={activeRun} items={model.manifestDiagnostics} />
       ) : null}
     </div>
   );
@@ -477,37 +474,42 @@ function CapabilityPlanSummaryCard({
   activeRun?: SciForgeRun;
   onOpenDebugAuditAction?: (action: OpenDebugAuditUIAction) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
   if (!summary || summary.status === 'none') return null;
   return (
-    <Card className="capability-plan-summary">
-      <SectionHeader
-        icon={Sparkles}
-        title="能力计划"
-        subtitle="自动发现的能力组合"
-      />
-      <p>{summary.summary}</p>
-      {summary.debugRefs.length ? (
-        <details
-          className="result-details-panel subtle"
-          onToggle={(event) => {
-            if (event.currentTarget.open) {
-              void requestOpenDebugAuditThroughUserActionApi({ session, activeRun })
-                .then((action) => {
-                  if (action) onOpenDebugAuditAction?.(action);
-                });
-            }
-          }}
-        >
-          <summary>
-            <span>能力发现记录</span>
-            <Badge variant="muted">{summary.debugRefs.length} refs</Badge>
-          </summary>
-          <div className="inspector-ref-list">
-            {summary.debugRefs.slice(0, 8).map((ref) => <code key={ref}>{ref}</code>)}
-          </div>
-        </details>
+    <details
+      className="result-details-panel subtle"
+      onToggle={(event) => {
+        const open = event.currentTarget.open;
+        setExpanded(open);
+        if (open) {
+          void requestOpenDebugAuditThroughUserActionApi({ session, activeRun })
+            .then((action) => {
+              if (action) onOpenDebugAuditAction?.(action);
+            });
+        }
+      }}
+    >
+      <summary>
+        <span>能力计划</span>
+        <Badge variant="muted">{summary.debugRefs.length ? `${summary.debugRefs.length} 条` : '已记录'}</Badge>
+      </summary>
+      {expanded ? (
+        <Card className="capability-plan-summary">
+          <SectionHeader
+            icon={Sparkles}
+            title="能力计划"
+            subtitle="自动发现的能力组合"
+          />
+          <p>{summary.summary}</p>
+          {summary.debugRefs.length ? (
+            <div className="inspector-ref-list">
+              {summary.debugRefs.slice(0, 8).map((ref) => <code key={ref}>{ref}</code>)}
+            </div>
+          ) : null}
+        </Card>
       ) : null}
-    </Card>
+    </details>
   );
 }
 
@@ -623,9 +625,9 @@ function RunStatusSummary({
       ) : null}
       {failures.map((unit) => (
         <div className="run-failure-card" key={unit.id}>
-          <strong>{unit.id}</strong>
+          <strong>过程需要处理</strong>
           <p>{compactVisibleFailureText(unit.failureReason || unit.selfHealReason || unit.nextStep || '执行失败，详情已保留在运行审计中。')}</p>
-          <p className="empty-state">{executionUnitRefCount(unit)} audit ref(s) retained for debug details.</p>
+          <p className="empty-state">已保留 {executionUnitRefCount(unit)} 条恢复线索。</p>
         </div>
       ))}
       {validationFailures.map((failure) => <ContractValidationFailureSummary key={contractValidationFailureKey(failure)} failure={failure} compact />)}
@@ -678,6 +680,27 @@ function RuntimeCompatibilityDiagnosticSummary({ diagnostic }: { diagnostic: Run
   );
 }
 
+function RuntimeCompatibilityDetails({ diagnostics }: { diagnostics: RuntimeCompatibilityDiagnostic[] }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!diagnostics.length) return null;
+  return (
+    <details
+      className="result-details-panel subtle"
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
+      <summary>
+        <span>验证</span>
+        <Badge variant="muted">{diagnostics.length} 条</Badge>
+      </summary>
+      {expanded ? (
+        <div className="stack">
+          {diagnostics.map((diagnostic) => <RuntimeCompatibilityDiagnosticSummary key={diagnostic.id} diagnostic={diagnostic} />)}
+        </div>
+      ) : null}
+    </details>
+  );
+}
+
 function RunPresentationStateSummary({ state }: { state: RunPresentationState }) {
   if (state.kind === 'ready' && !state.nextSteps.length) return null;
   return (
@@ -687,9 +710,9 @@ function RunPresentationStateSummary({ state }: { state: RunPresentationState })
       </div>
       {state.availableArtifacts.length ? (
         <div className="slot-meta">
-          <strong>可用产物</strong>
+          <strong>可用结果</strong>
           {state.availableArtifacts.slice(0, 6).map((artifact) => (
-            <code key={artifact.id}>{artifact.type}: {artifact.title ?? artifact.id}</code>
+            <code key={artifact.id}>{artifact.title ?? '结果'}</code>
           ))}
         </div>
       ) : null}
@@ -718,7 +741,7 @@ function RunProgressSummary({ progress }: { progress: NonNullable<RunPresentatio
         <div className="slot-meta">
           <strong>已完成部分</strong>
           {progress.completedParts.slice(0, 6).map((part) => (
-            <code key={`${part.id}-${part.ref ?? ''}`}>{part.label}{part.ref ? ` · ${part.ref}` : ''}</code>
+            <code key={`${part.id}-${part.ref ?? ''}`}>{part.label}</code>
           ))}
         </div>
       ) : null}
@@ -731,7 +754,7 @@ function RunProgressSummary({ progress }: { progress: NonNullable<RunPresentatio
       {progress.safeActions.length ? (
         <div className="run-recover-actions">
           {progress.safeActions.map((action) => (
-            <code key={`${action.kind}-${action.label}-${action.ref ?? ''}`}>{action.safe ? 'safe' : 'confirm'} · {action.label}</code>
+            <code key={`${action.kind}-${action.label}-${action.ref ?? ''}`}>{action.safe ? '可继续' : '需确认'} · {action.label}</code>
           ))}
         </div>
       ) : null}
@@ -756,15 +779,18 @@ function RunAuditDetails({
   onOpenDebugAuditAction?: (action: OpenDebugAuditUIAction) => void;
   onCommandTextAction?: (action: CommandTextUIAction) => void;
 }) {
-  const rawItems = rawAuditItems(session, activeRun, viewPlan);
   const failureCount = failedExecutionUnits(session, activeRun).length;
   const units = auditExecutionUnitsForRun(session, activeRun ?? session.runs.at(-1));
+  const [expanded, setExpanded] = useState(Boolean(defaultOpen));
+  const rawItems = expanded ? rawAuditItems(session, activeRun, viewPlan) : [];
   return (
     <details
       className="result-details-panel audit-details-panel"
       open={defaultOpen}
       onToggle={(event) => {
-        if (event.currentTarget.open) {
+        const open = event.currentTarget.open;
+        setExpanded(open);
+        if (open) {
           void requestOpenDebugAuditThroughUserActionApi({ session, activeRun })
             .then((action) => {
               if (action) onOpenDebugAuditAction?.(action);
@@ -773,18 +799,22 @@ function RunAuditDetails({
       }}
     >
       <summary>
-        <span>查看运行细节</span>
+        <span>过程记录</span>
         <Badge variant={failureCount ? 'danger' : 'muted'}>
-          {failureCount ? `${failureCount} failure` : `${units.length} EU`}
+          {failureCount ? `${failureCount} 项需处理` : `${units.length} 条`}
         </Badge>
       </summary>
-      <RunAuditOverview session={session} activeRun={activeRun} onCommandTextAction={onCommandTextAction} />
-      <ExecutionPanel session={session} executionUnits={units} embedded />
-      <NotebookTimeline scenarioId={scenarioId} notebook={session.notebook} embedded />
-      <Card className="code-card">
-        <SectionHeader icon={Terminal} title="运行审计材料" />
-        <p className="empty-state">{rawItems.length} structured audit item(s) retained for debug/export details.</p>
-      </Card>
+      {expanded ? (
+        <>
+          <RunAuditOverview session={session} activeRun={activeRun} onCommandTextAction={onCommandTextAction} />
+          <ExecutionPanel session={session} executionUnits={units} embedded />
+          <NotebookTimeline scenarioId={scenarioId} notebook={session.notebook} embedded />
+          <Card className="code-card">
+            <SectionHeader icon={Terminal} title="过程记录" />
+            <p className="empty-state">已保留 {rawItems.length} 条过程材料，可用于排查与复现。</p>
+          </Card>
+        </>
+      ) : null}
     </details>
   );
 }
@@ -805,12 +835,12 @@ function RunAuditOverview({
   const repairStates = backendRepairStates(session, activeRun);
   return (
     <Card className="audit-overview">
-      <SectionHeader icon={Shield} title="审计摘要" subtitle="失败原因、恢复动作和可复现引用" />
+      <SectionHeader icon={Shield} title="审计摘要" subtitle="验证、恢复和复现线索" />
       {blockers.length ? (
         <div className="run-status-lines">
           {blockers.map((line) => <span key={line}>{line}</span>)}
         </div>
-      ) : <p className="empty-state">没有阻塞项；结构化审计材料已在下方保留。</p>}
+      ) : <p className="empty-state">没有阻塞项；过程材料已在下方保留。</p>}
       {recoverActions.length ? (
         <div className="run-recover-actions">
           {recoverActions.map((action) => (
@@ -837,7 +867,7 @@ function RunAuditOverview({
           {repairStates.map((state) => <BackendRepairStateSummary key={state.id} state={state} />)}
         </div>
       ) : null}
-      {refs.length ? <p className="empty-state">{refs.length} audit ref(s) retained for debug details.</p> : null}
+      {refs.length ? <p className="empty-state">已保留 {refs.length} 条恢复线索。</p> : null}
     </Card>
   );
 }
@@ -853,18 +883,18 @@ function ContractValidationFailureSummary({ failure, compact = false }: { failur
   ].filter(Boolean).join(': '));
   return (
     <div className="run-failure-card">
-      <strong>ContractValidationFailure · {failure.failureKind}</strong>
+      <strong>验证未通过 · {contractFailureKindLabel(failure.failureKind)}</strong>
       <p>{compact ? compactVisibleFailureText(failure.failureReason) : failure.failureReason}</p>
       <div className="slot-meta">
-        <code>contractId={failure.contractId}</code>
-        <code>capabilityId={failure.capabilityId}</code>
-        {failure.schemaPath ? <code>schemaPath={failure.schemaPath}</code> : null}
+        <code>规则：{failure.contractId}</code>
+        <code>能力：{failure.capabilityId}</code>
+        {failure.schemaPath ? <code>位置：{failure.schemaPath}</code> : null}
       </div>
       {failure.missingFields.length || failure.invalidRefs.length || failure.unresolvedUris.length ? (
         <div className="slot-meta">
-          {failure.missingFields.map((field) => <code key={`missing-${field}`}>missingField: {field}</code>)}
-          {failure.invalidRefs.map((ref) => <code key={`invalid-${ref}`}>invalidRef: {ref}</code>)}
-          {failure.unresolvedUris.map((uri) => <code key={`unresolved-${uri}`}>unresolvedUri: {uri}</code>)}
+          {failure.missingFields.map((field) => <code key={`missing-${field}`}>缺少字段：{field}</code>)}
+          {failure.invalidRefs.map((ref) => <code key={`invalid-${ref}`}>不可用线索：{ref}</code>)}
+          {failure.unresolvedUris.map((uri) => <code key={`unresolved-${uri}`}>无法打开：{uri}</code>)}
         </div>
       ) : null}
       {!compact && issueLines.length ? (
@@ -874,23 +904,23 @@ function ContractValidationFailureSummary({ failure, compact = false }: { failur
       ) : null}
       {failure.relatedRefs.length ? (
         <div className="inspector-ref-list">
-          {failure.relatedRefs.map((ref) => <code key={`related-${ref}`}>relatedRef: {ref}</code>)}
+          {failure.relatedRefs.map((ref) => <code key={`related-${ref}`}>相关线索：{ref}</code>)}
         </div>
       ) : null}
-      {failure.nextStep ? <p className="empty-state">nextStep: {failure.nextStep}</p> : null}
+      {failure.nextStep ? <p className="empty-state">建议：{failure.nextStep}</p> : null}
     </div>
   );
 }
 
 function BackendRepairStateSummary({ state, compact = false }: { state: BackendRepairState; compact?: boolean }) {
-  const statusText = [state.status ? `status=${state.status}` : undefined, state.failureReason].filter(Boolean).join(' · ') || 'repair metadata recorded';
+  const statusText = [state.status ? `状态：${state.status}` : undefined, state.failureReason].filter(Boolean).join(' · ') || '已记录恢复线索';
   return (
     <div className="run-failure-card">
-      <strong>Backend repair state · {state.label}</strong>
+      <strong>恢复线索 · {repairStateLabel(state.label)}</strong>
       <p>{compact ? compactVisibleFailureText(statusText) : statusText}</p>
       <div className="slot-meta">
-        {state.sourceRunId ? <code>sourceRunId={state.sourceRunId}</code> : null}
-        {state.repairRunId ? <code>repairRunId={state.repairRunId}</code> : null}
+        {state.sourceRunId ? <code>来源记录：{state.sourceRunId}</code> : null}
+        {state.repairRunId ? <code>恢复记录：{state.repairRunId}</code> : null}
       </div>
       {state.refs.length ? (
         <div className="inspector-ref-list">
@@ -980,12 +1010,32 @@ function compactVisibleFailureText(value: string) {
   const previousFailureMatch = text.match(/Previous failure:\s*([^.;]+(?:[.;]|$))/i);
   const contractMatch = text.match(/ContractValidationFailure(?:\s+|\()([a-z-]+)/i);
   const pieces = [
-    contractMatch ? `ContractValidationFailure ${contractMatch[1]}` : undefined,
+    contractMatch ? `验证未通过 · ${contractFailureKindLabel(contractMatch[1])}` : undefined,
     previousFailureMatch?.[1]?.replace(/[.;]\s*$/, ''),
     reasonMatch?.[1]?.replace(/[.;]\s*$/, ''),
   ].filter((piece): piece is string => Boolean(piece));
   const compact = pieces.length ? Array.from(new Set(pieces)).join(' · ') : text;
   return compact.length > 260 ? `${compact.slice(0, 257).trim()}...` : compact;
+}
+
+function contractFailureKindLabel(kind: string) {
+  const labels: Record<string, string> = {
+    'payload-schema': '结果格式',
+    'artifact-schema': '结果内容',
+    reference: '线索',
+    'ui-manifest': '展示配置',
+    'work-evidence': '工作证据',
+    verifier: '验证',
+    unknown: '未知',
+  };
+  return labels[kind] ?? kind;
+}
+
+function repairStateLabel(label: string) {
+  if (/acceptance/i.test(label)) return '验收恢复';
+  if (/background/i.test(label)) return '后台恢复';
+  if (/repair/i.test(label)) return '恢复记录';
+  return '恢复记录';
 }
 
 function ViewPlanSummary({ viewPlan, session, activeRun }: { viewPlan: RuntimeResolvedViewPlan; session: SciForgeSession; activeRun?: SciForgeRun }) {
@@ -1019,6 +1069,37 @@ function projectionDiagnosticsForViewSummary(projection: UiConversationProjectio
   return Math.max(
     projection.diagnostics.length,
     conversationProjectionStatus(projection) === 'satisfied' ? 0 : 1,
+  );
+}
+
+function ViewPlanDetails({
+  viewPlan,
+  session,
+  activeRun,
+  items,
+}: {
+  viewPlan: RuntimeResolvedViewPlan;
+  session: SciForgeSession;
+  activeRun?: SciForgeRun;
+  items: ResultsRendererManifestDiagnostic[];
+}) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <details
+      className="result-details-panel subtle"
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
+      <summary>
+        <span>展示摘要</span>
+        <Badge variant="muted">{items.length} 项</Badge>
+      </summary>
+      {expanded ? (
+        <>
+          <ViewPlanSummary viewPlan={viewPlan} session={session} activeRun={activeRun} />
+          <ManifestDiagnostics items={items} />
+        </>
+      ) : null}
+    </details>
   );
 }
 
@@ -1272,10 +1353,18 @@ function ManifestDiagnostics({ items }: { items: ResultsRendererManifestDiagnost
   return (
     <div className="manifest-diagnostics">
       {items.map((item) => (
-        <code key={item.id} title={item.reason}>
-          {item.moduleId}{item.artifactType ? ` -> ${item.artifactType}` : ''}
+        <code key={item.id} title={item.detail}>
+          {item.label} · {resultStatusLabel(item.status)}
         </code>
       ))}
     </div>
   );
+}
+
+function resultStatusLabel(status: string) {
+  if (status === 'bound') return '可展示';
+  if (status === 'fallback') return '已降级';
+  if (status === 'missing-artifact') return '等待内容';
+  if (status === 'missing-component') return '等待展示';
+  return '已记录';
 }

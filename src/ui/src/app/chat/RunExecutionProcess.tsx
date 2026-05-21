@@ -1,8 +1,8 @@
 import type { ObjectReference, RuntimeExecutionUnit, SciForgeRun, SciForgeSession } from '../../domain';
-import { Badge } from '../uiPrimitives';
 import { MessageContent } from './MessageContent';
 import {
   artifactHasUserFacingDelivery,
+  displayTitleForObjectReference,
   isUserFacingObjectReference,
   mergeObjectReferences,
   objectReferenceForArtifactSummary,
@@ -15,12 +15,11 @@ import {
   sanitizeUserProjectionText,
   type UiConversationProjection,
 } from '../conversation-projection-view-model';
-import { executionStatusLabel, executionStatusShortLabel, executionVerificationPresentation } from '../results/executionStatusPresentation';
 import { auditExecutionUnitsForRun } from '../results/executionUnitsForRun';
 
-type ExecutionProcessStep = {
+type ExecutionProcessSection = {
   id: string;
-  kind: string;
+  label: string;
   title: string;
   meta?: string;
   content: string;
@@ -45,35 +44,33 @@ export function RunExecutionProcess({
   const auditObjectReferences = projection
     ? objectReferencesForProjection(projection, session, runId)
     : objectReferencesForAudit(run, session, runId);
-  const steps = projection
-    ? projectionExecutionProcessSteps(projection, auditObjectReferences)
-    : executionProcessSteps(run, units, auditObjectReferences, trace);
-  if (!steps.length) return null;
+  const sections = projection
+    ? projectionExecutionProcessSections(projection, auditObjectReferences)
+    : executionProcessSections(run, units, auditObjectReferences, trace);
+  if (!sections.length) return null;
   return (
     <div
       className="execution-process-thread"
       aria-label="按顺序记录的工作过程"
-      data-testid="runtime-execution-process"
-      data-source={projection ? 'projection' : 'audit'}
-      data-session-id={session.sessionId}
-      data-run-id="run"
+      data-testid="chat-process-thread"
+      data-process-source={projection ? 'semantic-summary' : 'recorded-summary'}
     >
-      {steps.map((step) => {
+      {sections.map((section) => {
         const references = mergeObjectReferences(
-          step.references ?? auditObjectReferences,
+          section.references ?? [],
           [],
           40,
         );
         return (
-          <details className="message-fold depth-2 execution-process-fold cursor-step-fold" key={step.id}>
+          <details className="message-fold depth-2 execution-process-fold cursor-step-fold" key={section.id}>
             <summary>
-              <span className="cursor-step-kind">{step.kind}</span>
-              <span className="cursor-step-title">{step.title}</span>
-              {step.meta ? <span className="cursor-step-meta">{step.meta}</span> : null}
+              <span className="cursor-step-kind">{section.label}</span>
+              <span className="cursor-step-title">{section.title}</span>
+              {section.meta ? <span className="cursor-step-meta">{section.meta}</span> : null}
             </summary>
             <div className="execution-process-body">
               <MessageContent
-                content={step.content}
+                content={section.content}
                 references={references}
                 onObjectFocus={onObjectFocus}
               />
@@ -85,95 +82,125 @@ export function RunExecutionProcess({
   );
 }
 
-function projectionExecutionProcessSteps(
+function projectionExecutionProcessSections(
   projection: UiConversationProjection,
   objectReferences: ObjectReference[],
-): ExecutionProcessStep[] {
-  const steps: ExecutionProcessStep[] = [];
+): ExecutionProcessSection[] {
+  const sections: ExecutionProcessSection[] = [];
+  const processLines: string[] = [];
   if (projection.currentTurn?.prompt) {
-    steps.push({
-      id: 'projection-turn',
-      kind: 'Received',
-      title: compactAuditText(projection.currentTurn.prompt, 96),
-      content: `接收任务：${projection.currentTurn.prompt}`,
-    });
+    processLines.push(`接收任务：${sanitizeProcessText(projection.currentTurn.prompt)}`);
   }
   projection.executionProcess.slice(-12).forEach((event) => {
     const status = conversationProjectionStatus(projection);
     const statusLabel = projectionStatusLabel(status);
-    steps.push({
-      id: `projection-${event.eventId}`,
-      kind: projectionEventKindLabel(event.type),
-      title: projectionEventTitle(event.summary || event.type, status),
-      meta: [statusLabel, event.timestamp].filter(Boolean).join(' · '),
-      content: [
-        `Projection 事件：${event.summary || event.type}。`,
-        `状态：${statusLabel}。`,
-      ].join('\n'),
-      references: objectReferences,
-    });
+    const summary = projectionEventTitle(event.summary || event.type, status);
+    processLines.push(`- ${projectionEventKindLabel(event.type)}：${summary}（${statusLabel}）`);
   });
-  producedObjectLines(objectReferences).forEach((line, index) => {
-    steps.push({
-      id: `projection-object-${index}`,
-      kind: 'Created',
-      title: compactAuditText(line, 96),
-      content: line,
-      references: objectReferences,
+  const producedLines = producedObjectLines(objectReferences);
+  if (producedLines.length) {
+    processLines.push(...producedLines.map((line) => `- ${line}`));
+  }
+  if (processLines.length) {
+    sections.push({
+      id: 'process',
+      label: '过程',
+      title: `${processLines.length} 条过程摘要`,
+      meta: projectionStatusLabel(conversationProjectionStatus(projection)),
+      content: processLines.join('\n'),
     });
-  });
-  return steps.slice(0, 24);
+  }
+  const verificationLines = projectionVerificationLines(projection);
+  if (verificationLines.length) {
+    sections.push({
+      id: 'verification',
+      label: '验证',
+      title: verificationSectionTitle(verificationLines),
+      content: verificationLines.join('\n'),
+    });
+  }
+  const recoveryLines = projection.recoverActions
+    .map((action) => sanitizeProcessText(action))
+    .filter(Boolean)
+    .map((action) => `- ${action}`);
+  if (recoveryLines.length) {
+    sections.push({
+      id: 'recovery',
+      label: '恢复线索',
+      title: `${recoveryLines.length} 条可执行建议`,
+      content: recoveryLines.join('\n'),
+    });
+  }
+  const diagnosticLines = projectionDiagnosticLines(projection);
+  if (diagnosticLines.length) {
+    sections.push({
+      id: 'diagnostics',
+      label: '诊断',
+      title: '可追溯摘要已保留',
+      content: diagnosticLines.join('\n'),
+    });
+  }
+  return sections.slice(0, 8);
 }
 
-function executionProcessSteps(
+function executionProcessSections(
   run: SciForgeRun | undefined,
   units: RuntimeExecutionUnit[],
   objectReferences: ObjectReference[],
   trace?: string,
-): ExecutionProcessStep[] {
-  const steps: ExecutionProcessStep[] = [];
+): ExecutionProcessSection[] {
+  const sections: ExecutionProcessSection[] = [];
+  const processLines: string[] = [];
   if (run?.prompt) {
-    steps.push({
-      id: 'prompt',
-      kind: 'Received',
-      title: compactAuditText(run.prompt, 96),
-      content: `接收任务：${run.prompt}`,
-    });
+    processLines.push(`接收任务：${sanitizeProcessText(run.prompt)}`);
   }
-  units.forEach((unit, index) => {
+  units.forEach((unit) => {
     const verb = executionUnitVerb(unit);
-    const target = executionUnitTarget(unit);
-    const details = executionUnitDetails(unit);
-    steps.push({
-      id: `unit-${unit.id || index}`,
-      kind: cursorStepKindForUnit(unit, verb),
-      title: `${unit.tool}${target ? ` · ${target}` : ''}`,
-      meta: [executionStatusLabel(unit.status), unit.time].filter(Boolean).join(' · '),
-      content: [
-        `${verb}：${unit.tool}${target ? `，${target}` : ''}。`,
-        `状态：${executionStatusLabel(unit.status)}${unit.time ? `，时间：${unit.time}` : ''}。`,
-        ...details.map((detail) => `- ${detail}`),
-      ].join('\n'),
-    });
+    const target = executionUnitTargetSummary(unit);
+    processLines.push(`- ${verb}${target ? `：${target}` : ''}（${executionStatusLabelForUser(unit.status)}）`);
+    if (unit.patchSummary) processLines.push(`  - 修改摘要：${sanitizeProcessText(unit.patchSummary)}`);
   });
-  producedObjectLines(objectReferences).forEach((line, index) => {
-    steps.push({
-      id: `object-${index}`,
-      kind: 'Created',
-      title: compactAuditText(line, 96),
-      content: line,
-      references: objectReferences,
-    });
-  });
-  if (trace) {
-    steps.push({
-      id: 'trace',
-      kind: 'Thought',
-      title: 'briefly',
-      content: `过程摘要与完整 trace：${compactAuditText(trace, 1200)}`,
+  const producedLines = producedObjectLines(objectReferences);
+  if (producedLines.length) processLines.push(...producedLines.map((line) => `- ${line}`));
+  if (processLines.length) {
+    sections.push({
+      id: 'process',
+      label: '过程',
+      title: `${processLines.length} 条过程摘要`,
+      content: processLines.join('\n'),
     });
   }
-  return steps.slice(0, 24);
+  const verificationLines = units.flatMap(executionUnitVerificationLines);
+  if (verificationLines.length) {
+    sections.push({
+      id: 'verification',
+      label: '验证',
+      title: verificationSectionTitle(verificationLines),
+      content: verificationLines.join('\n'),
+    });
+  }
+  const recoveryLines = units.flatMap(executionUnitRecoveryLines);
+  if (recoveryLines.length) {
+    sections.push({
+      id: 'recovery',
+      label: '恢复线索',
+      title: `${recoveryLines.length} 条可执行建议`,
+      content: recoveryLines.join('\n'),
+    });
+  }
+  const diagnosticLines = executionUnitDiagnosticLines(units);
+  if (trace) {
+    diagnosticLines.push(`- 过程摘录：${sanitizeProcessText(compactAuditText(trace, 1200))}`);
+  }
+  if (diagnosticLines.length) {
+    sections.push({
+      id: 'diagnostics',
+      label: '诊断',
+      title: '可追溯摘要已保留',
+      content: diagnosticLines.join('\n'),
+    });
+  }
+  return sections.slice(0, 8);
 }
 
 function objectReferencesForAudit(run: SciForgeRun | undefined, session: SciForgeSession, runId: string) {
@@ -184,7 +211,7 @@ function objectReferencesForAudit(run: SciForgeRun | undefined, session: SciForg
   const runArtifacts = session.artifacts
     .filter((artifact) => (runArtifactRefs.has(artifact.id) || artifact.metadata?.runId === runId) && artifactHasUserFacingDelivery(artifact))
     .map((artifact) => objectReferenceForArtifactSummary(artifact, runId));
-  return mergeObjectReferences(run.objectReferences ?? [], runArtifacts, 40);
+  return mergeObjectReferences(run.objectReferences ?? [], runArtifacts, 40).filter(isProcessObjectReference);
 }
 
 function objectReferencesForProjection(projection: UiConversationProjection, session: SciForgeSession, runId: string) {
@@ -192,49 +219,26 @@ function objectReferencesForProjection(projection: UiConversationProjection, ses
   const projectionArtifacts = session.artifacts
     .filter((artifact) => artifactIds.has(artifact.id) && artifactHasUserFacingDelivery(artifact))
     .map((artifact) => objectReferenceForArtifactSummary(artifact, runId));
-  const refObjects = conversationProjectionAuditRefs(projection)
-    .slice(0, 24)
-    .map((ref, index) => objectReferenceFromProjectionRef(ref, runId, index));
-  return mergeObjectReferences(projectionArtifacts, refObjects, 40);
+  return mergeObjectReferences(projectionArtifacts, [], 40).filter(isProcessObjectReference);
 }
 
-function objectReferenceFromProjectionRef(ref: string, runId: string, index: number): ObjectReference {
-  const normalized = ref.trim();
-  const kind = projectionRefKind(normalized);
-  return {
-    id: `projection-ref-${runId}-${index}`,
-    kind,
-    title: normalized,
-    ref: normalized,
-    runId,
-    status: normalized.startsWith('http') ? 'external' : 'available',
-  };
-}
-
-function projectionRefKind(ref: string): ObjectReference['kind'] {
-  if (/^artifact::?/i.test(ref)) return 'artifact';
-  if (/^execution-unit::?/i.test(ref)) return 'execution-unit';
-  if (/^run::?/i.test(ref)) return 'run';
-  if (/^https?:\/\//i.test(ref)) return 'url';
-  if (/^(file|folder)::?/i.test(ref) || /^\.?\/?[\w.-/]+(?:\.[a-z0-9]+)(?:[#?].*)?$/i.test(ref)) return 'file';
-  return 'run';
-}
-
-function cursorStepKindForUnit(unit: RuntimeExecutionUnit, verb: string) {
-  if (unit.status === 'failed' || unit.status === 'failed-with-reason' || unit.status === 'repair-needed' || unit.status === 'needs-human') {
-    return executionStatusShortLabel(unit.status);
-  }
-  if (verb === '探索文件') return 'Explored';
-  if (verb === '编辑文件') return 'Edited';
-  if (verb === '运行程序') return 'Ran';
-  return 'Checked';
+function isProcessObjectReference(reference: ObjectReference) {
+  return isUserFacingObjectReference(reference)
+    && !containsInternalProcessText(reference.ref)
+    && !containsInternalProcessText(reference.title)
+    && !containsInternalProcessText(reference.summary)
+    && !containsInternalProcessText(reference.provenance?.path)
+    && !containsInternalProcessText(reference.provenance?.dataRef);
 }
 
 function producedObjectLines(references: ObjectReference[]) {
   return references
     .filter((reference) => reference.kind === 'artifact' || reference.kind === 'file' || reference.kind === 'folder')
     .slice(0, 8)
-    .map((reference) => `产生/引用对象：${reference.title}（${reference.ref}）${reference.summary ? `，${compactAuditText(reference.summary, 120)}` : ''}`);
+    .map((reference) => {
+      const summary = reference.summary ? `，${sanitizeProcessText(compactAuditText(reference.summary, 120))}` : '';
+      return `产物：${sanitizeProcessText(displayTitleForObjectReference(reference))}${summary}`;
+    });
 }
 
 function projectionStatusLabel(status: ReturnType<typeof conversationProjectionStatus>) {
@@ -267,7 +271,111 @@ function projectionEventTitle(summary: string, status: ReturnType<typeof convers
   if (status === 'visible-not-live-acceptance' || /native.?codex.?message/i.test(summary)) {
     return '回答已在聊天中显示';
   }
-  return compactAuditText(summary, 96);
+  return sanitizeProcessText(compactAuditText(summary, 96));
+}
+
+function projectionVerificationLines(projection: UiConversationProjection) {
+  const verdict = projection.verificationState?.verdict ?? projection.verificationState?.status;
+  if (!verdict) return [];
+  return [`验证状态：${verificationVerdictLabelForUser(verdict)}。`];
+}
+
+function projectionDiagnosticLines(projection: UiConversationProjection) {
+  const lines: string[] = [];
+  const diagnostics = projection.diagnostics
+    .map((diagnostic) => sanitizeProcessText(diagnostic.message))
+    .filter(Boolean)
+    .slice(0, 5);
+  if (diagnostics.length) lines.push(...diagnostics.map((diagnostic) => `- ${diagnostic}`));
+  const auditSummary = auditRefSummary(conversationProjectionAuditRefs(projection));
+  if (auditSummary) lines.push(`- 可追溯摘要：${auditSummary}。`);
+  return lines;
+}
+
+function verificationSectionTitle(lines: string[]) {
+  const text = lines.join('\n');
+  if (/未通过|需人工|不确定/.test(text)) return '需要关注验证结果';
+  if (/已验证/.test(text)) return '已完成验证';
+  return '验证摘要';
+}
+
+function executionUnitVerificationLines(unit: RuntimeExecutionUnit) {
+  const label = verificationLabelForUnit(unit);
+  return label ? [`- ${label}`] : [];
+}
+
+function executionUnitRecoveryLines(unit: RuntimeExecutionUnit) {
+  return [
+    ...(unit.recoverActions ?? []).map((action) => `- ${sanitizeProcessText(compactAuditText(action, 180))}`),
+    unit.nextStep ? `- 下一步：${sanitizeProcessText(compactAuditText(unit.nextStep, 180))}` : '',
+    unit.selfHealReason ? `- 自修复说明：${sanitizeProcessText(compactAuditText(unit.selfHealReason, 180))}` : '',
+  ].filter(Boolean);
+}
+
+function executionUnitDiagnosticLines(units: RuntimeExecutionUnit[]) {
+  const lines: string[] = [];
+  const failedUnits = units.filter((unit) => ['failed', 'failed-with-reason', 'repair-needed', 'needs-human'].includes(unit.status));
+  if (failedUnits.length) lines.push(`- 失败边界：${failedUnits.length} 条记录需要关注。`);
+  units.forEach((unit) => {
+    if (unit.failureReason) lines.push(`- 失败摘要：${sanitizeProcessText(compactAuditText(unit.failureReason, 220))}`);
+  });
+  const refs = units.flatMap((unit) => [
+    unit.codeRef,
+    unit.diffRef,
+    unit.outputRef,
+    unit.stdoutRef,
+    unit.stderrRef,
+    ...(unit.inputData ?? []),
+    ...(unit.outputArtifacts ?? []).map((artifactId) => `artifact:${artifactId}`),
+    unit.verificationRef,
+  ]).filter((ref): ref is string => Boolean(ref));
+  const summary = auditRefSummary(refs);
+  if (summary) lines.push(`- 可追溯摘要：${summary}。`);
+  return lines.slice(0, 10);
+}
+
+function verificationLabelForUnit(unit: RuntimeExecutionUnit) {
+  const verdict = unit.verificationVerdict;
+  if (verdict) return `验证状态：${verificationVerdictLabelForUser(verdict)}。`;
+  if (unit.status === 'running' && (unit.verificationRef || unit.outputArtifacts?.length || unit.artifacts?.length || unit.outputRef)) {
+    return '验证状态：验证中。';
+  }
+  if (unit.status === 'done') return '验证状态：未请求额外验证。';
+  return undefined;
+}
+
+function verificationVerdictLabelForUser(verdict: string) {
+  const labels: Record<string, string> = {
+    pass: '已验证',
+    fail: '未通过',
+    uncertain: '不确定',
+    'needs-human': '需人工核验',
+    unverified: '未验证',
+    'not-required': '无需额外验证',
+    'native-message': '回答已显示',
+  };
+  return labels[verdict] ?? sanitizeProcessText(verdict);
+}
+
+function auditRefSummary(refs: string[]) {
+  const counts = refs.reduce<Record<string, number>>((accumulator, ref) => {
+    const kind = auditRefKindForUser(ref);
+    accumulator[kind] = (accumulator[kind] ?? 0) + 1;
+    return accumulator;
+  }, {});
+  const parts = Object.entries(counts).map(([kind, count]) => `${count} 条${kind}`);
+  return parts.join('、');
+}
+
+function auditRefKindForUser(ref: string) {
+  const value = ref.toLowerCase();
+  if (/stdout|stderr|jsonl|trace|debug|log/.test(value)) return '执行日志';
+  if (/execution-unit/.test(value)) return '执行记录';
+  if (/artifact/.test(value)) return '产物记录';
+  if (/verification|validate/.test(value)) return '验证记录';
+  if (/file|folder|\.[a-z0-9]+(?:[#?].*)?$/.test(value)) return '文件记录';
+  if (/run/.test(value)) return '过程记录';
+  return '审计记录';
 }
 
 function executionUnitVerb(unit: RuntimeExecutionUnit) {
@@ -278,40 +386,24 @@ function executionUnitVerb(unit: RuntimeExecutionUnit) {
   return '执行步骤';
 }
 
-function executionUnitTarget(unit: RuntimeExecutionUnit) {
+function executionUnitTargetSummary(unit: RuntimeExecutionUnit) {
   const refs = [
     formatExecutionRef(unit.entrypoint),
     formatExecutionRef(unit.codeRef),
     formatExecutionRef(unit.diffRef),
     formatExecutionRef(unit.outputRef),
-    formatExecutionRef(unit.stdoutRef),
-    formatExecutionRef(unit.stderrRef),
     ...(unit.inputData ?? []).map(formatExecutionRef),
     ...(unit.outputArtifacts ?? []).map((artifactId) => `artifact:${artifactId}`),
-  ].filter(Boolean).slice(0, 4);
-  return refs.length ? `涉及 ${refs.join('、')}` : '';
+  ].filter((ref): ref is string => Boolean(ref) && !containsInternalProcessText(ref)).slice(0, 4);
+  if (!refs.length) return '';
+  return `涉及 ${refs.map(executionRefLabelForUser).join('、')}`;
 }
 
-function executionUnitDetails(unit: RuntimeExecutionUnit) {
-  const verification = executionVerificationPresentation(unit);
-  const priorityDetails = [
-    unit.failureReason ? `失败原因：${unit.failureReason}` : '',
-    unit.recoverActions?.length ? `恢复动作：${unit.recoverActions.map((action) => compactAuditText(action, 180)).join('；')}` : '',
-    unit.nextStep ? `下一步：${compactAuditText(unit.nextStep, 180)}` : '',
-    unit.selfHealReason ? `自修复说明：${unit.selfHealReason}` : '',
-    `验证状态：${verification.label}（${verification.detail}）`,
-  ];
-  const supportingDetails = [
-    unit.params ? `参数：${compactAuditText(unit.params, 180)}` : '',
-    unit.codeRef ? `代码位置：${formatExecutionRef(unit.codeRef)}` : '',
-    unit.code ? `执行代码：${compactAuditText(unit.code, 220)}` : '',
-    unit.diffRef ? `编辑 diff：${formatExecutionRef(unit.diffRef)}` : '',
-    unit.stdoutRef ? `标准输出：${formatExecutionRef(unit.stdoutRef)}` : '',
-    unit.stderrRef ? `错误输出：${formatExecutionRef(unit.stderrRef)}` : '',
-    unit.outputRef ? `输出：${formatExecutionRef(unit.outputRef)}` : '',
-    unit.patchSummary ? `修改摘要：${unit.patchSummary}` : '',
-  ];
-  return [...priorityDetails, ...supportingDetails].filter(Boolean).slice(0, 5);
+function executionRefLabelForUser(ref: string) {
+  const normalized = ref.replace(/^[a-z-]+:{1,2}/i, '');
+  const segment = normalized.split(/[/?#]/).filter(Boolean).at(-1) ?? normalized;
+  if (!segment || containsInternalProcessText(segment)) return '记录对象';
+  return sanitizeProcessText(segment);
 }
 
 function formatExecutionRef(value?: string) {
@@ -319,6 +411,46 @@ function formatExecutionRef(value?: string) {
   if (/^(artifact|file|folder|run|execution-unit|scenario-package)::?/i.test(value) || /^https?:\/\//i.test(value)) return value;
   if (/^\.?\/?[\w.-/]+(?:\.[a-z0-9]+)(?:[#?].*)?$/i.test(value)) return `file::${value.replace(/^\.\//, '')}`;
   return value;
+}
+
+function executionStatusLabelForUser(status: RuntimeExecutionUnit['status'] | string | undefined) {
+  if (status === 'done') return '完成';
+  if (status === 'self-healed') return '已自修复';
+  if (status === 'failed' || status === 'failed-with-reason') return '失败';
+  if (status === 'repair-needed') return '需要恢复';
+  if (status === 'needs-human') return '需要人工处理';
+  if (status === 'record-only') return '仅记录';
+  if (status === 'planned') return '已计划';
+  if (status === 'running') return '进行中';
+  return status ? sanitizeProcessText(status) : '未知';
+}
+
+function sanitizeProcessText(value: string) {
+  return compactAuditText(sanitizeUserProjectionText(value) ?? value, 2400)
+    .replace(/\bConversationProjection\b/g, '对话摘要')
+    .replace(/\bExecutionUnit\b/g, '执行记录')
+    .replace(/\bArtifactDelivery\b/g, '产物交付')
+    .replace(/\bProjection output materialized\b/gi, '产物已保存')
+    .replace(/\bProjection\b/g, '结果')
+    .replace(/\bnative-message\b/gi, '回答已显示')
+    .replace(/\blive-runtime-codex\b/gi, '实时回答')
+    .replace(/\braw\s+JSONL\b/gi, '诊断日志')
+    .replace(/\braw\b/gi, '原始记录')
+    .replace(/\bSSE\b/g, '流式事件')
+    .replace(/\bprovider\b/gi, '服务配置')
+    .replace(/\brun\s*id\b/gi, '运行编号')
+    .replace(/\brunId\b/g, '运行编号')
+    .replace(/\bOutputMaterialized\b/g, '产物已保存')
+    .replace(/\bSatisfied\b/g, '已完成')
+    .replace(/\bNo verification requested\b/g, '未请求额外验证')
+    .replace(/\bUnverified\b/g, '未验证')
+    .replace(/\bVerifying\b/g, '验证中')
+    .replace(/\bVerification failed\b/g, '验证未通过')
+    .replace(/\bVerification passed\b/g, '已验证');
+}
+
+function containsInternalProcessText(value: string | undefined) {
+  return typeof value === 'string' && /(?:\b(?:ConversationProjection|ExecutionUnit|ArtifactDelivery|native-message|live-runtime-codex|raw\s+JSONL|raw|SSE|stdout|stderr|provider|run\s*id|runId|execution-unit)\b|(?:^|[#:/])EU-[\w-]+|^run:)/i.test(value);
 }
 
 function compactAuditText(value: string, limit: number) {
@@ -360,7 +492,7 @@ export function RunKeyInfo({
   const artifacts = session.artifacts.filter((artifact) => deliverableReferences.some((reference) => reference.ref === `artifact:${artifact.id}`));
   const claims = claimsForRun(session, runId, artifacts.map((artifact) => artifact.id)).slice(0, 3);
   if (!deliverableReferences.length && !claims.length) return null;
-  const artifactLinks = deliverableReferences.map((reference) => reference.ref).join('、');
+  const artifactLinks = deliverableReferences.map((reference) => displayTitleForObjectReference(reference)).join('、');
   const keyProse = [
     deliverableReferences.length ? `关键结果：${artifactLinks}。` : '本轮没有生成新的可预览对象。',
     claims.length ? `已提取 ${claims.length} 条判断。` : '',
@@ -370,7 +502,7 @@ export function RunKeyInfo({
     <div className="message-key-info" aria-label="本轮关键信息">
       <div className="message-key-info-head">
         <strong>本轮结果</strong>
-        <span>{deliverableReferences.length} objects · {claims.length} claims</span>
+        <span>{deliverableReferences.length} 个对象 · {claims.length} 条判断</span>
       </div>
       <div className="message-key-prose">
         <MessageContent content={keyProse} references={deliverableReferences} onObjectFocus={onObjectFocus ?? (() => undefined)} />
@@ -380,7 +512,7 @@ export function RunKeyInfo({
           {claims.map((claim, index) => (
             <p key={`${claim.id || 'claim'}-${index}`} className="message-key-row">
               <span>判断：{sanitizeUserProjectionText(claim.text) ?? claim.text}</span>
-              <small>{claim.evidenceLevel} · confidence {Math.round(claim.confidence * 100)}%</small>
+              <small>{claim.evidenceLevel} · 置信度 {Math.round(claim.confidence * 100)}%</small>
             </p>
           ))}
         </div>

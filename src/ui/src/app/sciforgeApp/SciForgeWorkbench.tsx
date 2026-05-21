@@ -4,7 +4,14 @@ import { compileScenarioIRFromSelection } from '@sciforge/scenario-core/scenario
 import { builtInScenarioIdForRuntimeInput, scenarioRuntimeOverrideForBuiltInScenario } from '@sciforge/scenario-core/scenario-routing-policy';
 import { scenarios, type ScenarioId } from '../../data';
 import { nowIso, type ObjectReference, type PreviewDescriptor, type RuntimeArtifact, type ScenarioInstanceId, type ScenarioRuntimeOverride, type SciForgeConfig, type SciForgeReference, type SciForgeSession, type TimelineEventRecord } from '../../domain';
-import type { WorkspaceFileContent } from '../../api/workspaceClient';
+import { listWorkspace, type WorkspaceEntry, type WorkspaceFileContent } from '../../api/workspaceClient';
+import {
+  artifactTypeForPath,
+  normalizeWorkspacePath,
+  stableHash,
+  toWorkspaceRelativePath,
+  workspacePathBasename,
+} from '../../../../../packages/support/object-references';
 import { ChatPanel } from '../ChatPanel';
 import { ResultsRenderer } from '../ResultsRenderer';
 import { recoverableRunFocusForSession } from '../appShell/workspaceState';
@@ -15,6 +22,22 @@ import { scopedResultSlotId } from '../results/viewPlanResolver';
 import { defaultElementSelectionForScenario, ScenarioBuilderPanel } from '../ScenarioBuilderPanel';
 import { useRuntimeHealth } from '../runtimeHealthPanel';
 import { cx } from '../uiPrimitives';
+
+const WORKSPACE_REFERENCE_SCAN_MAX_FILES = 600;
+const WORKSPACE_REFERENCE_SCAN_MAX_FOLDERS = 180;
+const WORKSPACE_REFERENCE_SCAN_MAX_DEPTH = 5;
+const WORKSPACE_REFERENCE_SKIP_FOLDERS = new Set([
+  '.git',
+  '.hg',
+  '.sciforge',
+  '.next',
+  '.turbo',
+  'node_modules',
+  'dist',
+  'build',
+  'coverage',
+  'out',
+]);
 
 export function Workbench({
   scenarioId,
@@ -101,6 +124,7 @@ export function Workbench({
   const [activeRunId, setActiveRunId] = useState<string | undefined>();
   const [focusedObjectReference, setFocusedObjectReference] = useState<ObjectReference | undefined>();
   const [resultReferenceRequest, setResultReferenceRequest] = useState<{ id: string; reference: SciForgeReference } | undefined>();
+  const [workspaceObjectReferences, setWorkspaceObjectReferences] = useState<ObjectReference[]>([]);
   const [chatColumnWidth, setChatColumnWidth] = useState(42);
   const workbenchResizeRef = useRef<{ startX: number; startWidth: number; gridWidth: number } | null>(null);
   const autoFocusedRunKeyRef = useRef<string | undefined>(undefined);
@@ -122,6 +146,25 @@ export function Workbench({
     if (!mobileWorkbenchLayout || mobilePane !== 'builder') return;
     setWorkbenchChromeExpanded(true);
   }, [mobileWorkbenchLayout, mobilePane]);
+
+  useEffect(() => {
+    const workspaceRoot = normalizeWorkspacePath(config.workspacePath || '');
+    if (!workspaceRoot) {
+      setWorkspaceObjectReferences([]);
+      return undefined;
+    }
+    let cancelled = false;
+    void collectWorkspaceObjectReferences(config)
+      .then((references) => {
+        if (!cancelled) setWorkspaceObjectReferences(references);
+      })
+      .catch(() => {
+        if (!cancelled) setWorkspaceObjectReferences([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [config.workspacePath, config.workspaceWriterBaseUrl, session.updatedAt]);
 
   const showWorkbenchChromeBody = workbenchChromeExpanded;
   const recoveryFocus = recoverableRunFocusForSession(session);
@@ -332,6 +375,7 @@ export function Workbench({
             onExternalReferenceConsumed={handleExternalReferenceConsumed}
             availableComponentIds={availableComponentIds}
             runtimeHealth={runtimeHealth}
+            workspaceObjectReferences={workspaceObjectReferences}
           />
         </div>
         {!resultsCollapsed ? (
@@ -375,4 +419,84 @@ export function Workbench({
       </div>
     </main>
   );
+}
+
+async function collectWorkspaceObjectReferences(config: SciForgeConfig): Promise<ObjectReference[]> {
+  const workspaceRoot = normalizeWorkspacePath(config.workspacePath || '');
+  if (!workspaceRoot) return [];
+  const queue: Array<{ path: string; depth: number }> = [{ path: workspaceRoot, depth: 0 }];
+  const visitedFolders = new Set<string>();
+  const references: ObjectReference[] = [];
+  while (queue.length && references.length < WORKSPACE_REFERENCE_SCAN_MAX_FILES && visitedFolders.size < WORKSPACE_REFERENCE_SCAN_MAX_FOLDERS) {
+    const current = queue.shift();
+    if (!current) break;
+    const folderPath = normalizeWorkspacePath(current.path);
+    if (!folderPath || visitedFolders.has(folderPath)) continue;
+    visitedFolders.add(folderPath);
+    const entries = await listWorkspace(folderPath, config);
+    for (const entry of entries) {
+      if (entry.kind === 'file') {
+        const reference = objectReferenceForWorkspaceEntry(entry, workspaceRoot);
+        if (reference) references.push(reference);
+        if (references.length >= WORKSPACE_REFERENCE_SCAN_MAX_FILES) break;
+        continue;
+      }
+      if (current.depth < WORKSPACE_REFERENCE_SCAN_MAX_DEPTH && shouldScanWorkspaceReferenceFolder(entry)) {
+        queue.push({ path: entry.path, depth: current.depth + 1 });
+      }
+    }
+    queue.sort((left, right) => workspaceFolderScanPriority(right.path) - workspaceFolderScanPriority(left.path));
+  }
+  return references;
+}
+
+function objectReferenceForWorkspaceEntry(entry: WorkspaceEntry, workspaceRoot: string): ObjectReference | undefined {
+  const path = workspaceReferencePath(entry, workspaceRoot);
+  if (!path || !workspaceReferencePathLooksPreviewable(path) || workspaceReferencePathIsPrivate(path)) return undefined;
+  const title = entry.name || workspacePathBasename(path) || path;
+  return {
+    id: `workspace-file-${stableHash(path)}`,
+    kind: 'file',
+    title,
+    ref: `file:${path}`,
+    artifactType: artifactTypeForPath(path, 'file'),
+    presentationRole: 'supporting-evidence',
+    actions: ['focus-right-pane', 'reveal-in-folder', 'copy-path', 'pin'],
+    status: 'available',
+    summary: 'Workspace file verified for right-pane preview',
+    provenance: {
+      path,
+      producer: 'workspace',
+      size: entry.size,
+    },
+  };
+}
+
+function workspaceReferencePath(entry: WorkspaceEntry, workspaceRoot: string) {
+  const relativePath = toWorkspaceRelativePath(workspaceRoot, entry.path).replace(/\\/g, '/').replace(/^\.\/+/, '');
+  if (!relativePath || relativePath === '.') return '';
+  if (!relativePath.startsWith('..') && !relativePath.startsWith('/')) return relativePath;
+  return normalizeWorkspacePath(entry.path).replace(/\\/g, '/');
+}
+
+function shouldScanWorkspaceReferenceFolder(entry: WorkspaceEntry) {
+  if (entry.kind !== 'folder') return false;
+  const name = entry.name.toLowerCase();
+  return !name.startsWith('.') && !WORKSPACE_REFERENCE_SKIP_FOLDERS.has(name);
+}
+
+function workspaceFolderScanPriority(path: string) {
+  const name = workspacePathBasename(path).toLowerCase();
+  if (/^(workspace|reports?|artifacts?|results?|outputs?|figures?|images?|tables?|data|papers?|parallel)$/.test(name)) return 3;
+  if (/^(docs?|examples?|fixtures?)$/.test(name)) return 2;
+  return 1;
+}
+
+function workspaceReferencePathLooksPreviewable(path: string) {
+  return /\.(?:md|markdown|txt|log|jsonl?|csv|tsv|html?|pdf|docx?|xlsx?|pptx?|png|jpe?g|gif|webp|svg|pdb|cif|mmcif)(?:$|[?#])/i.test(path);
+}
+
+function workspaceReferencePathIsPrivate(path: string) {
+  return /(?:^|\/)(?:\.git|\.sciforge|node_modules)(?:\/|$)/i.test(path)
+    || /\.sciforge\/sessions\//i.test(path);
 }

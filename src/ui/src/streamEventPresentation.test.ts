@@ -429,11 +429,52 @@ test('cursor-like worklog fixture summarizes operations and keeps runtime intern
   assert.match(worklog.entries[4].operationLine, /^Wrote /);
   assert.match(worklog.entries[5].operationLine, /^Ran /);
   assert.match(worklog.entries[6].operationLine, /^Waiting /);
-  assert.deepEqual(visibleRunningWorkEntries(worklog, 4).map((entry) => entry.operationLine.replace(/\s.+$/, '')), ['Read', 'Wrote', 'Ran', 'Waiting']);
+  assert.deepEqual(visibleRunningWorkEntries(worklog, 4).map((entry) => entry.operationLine.replace(/\s.+$/, '')), ['Explored', 'Wrote', 'Ran', 'Waiting']);
   assert.doesNotMatch(visibleRunningWorkEntries(worklog, 8).map((entry) => entry.operationLine).join('\n'), /Plan: implement/);
   assert.doesNotMatch(visibleRunningWorkEntries(worklog, 8).map((entry) => entry.operationLine).join('\n'), /used\/window/);
   assert.doesNotMatch(worklog.entries.map((entry) => entry.presentation.detail).join('\n'), /used\/window|Calling local model/);
   assert.equal(worklog.entries.every((entry) => entry.rawInitiallyCollapsed), true);
+});
+
+test('running work timeline keeps order while collapsing completed and repeated wait rows', () => {
+  const events = [
+    event({
+      id: 'search',
+      type: 'tool-call',
+      label: 'Search',
+      detail: '检索一下今天arxiv上Agentic harness自进化的文章',
+      raw: { toolName: 'web_search', detail: '检索一下今天arxiv上Agentic harness自进化的文章' },
+    }),
+    event({
+      id: 'wait-21',
+      type: 'backend-silent',
+      label: 'wait',
+      detail: '后端 21s 没有输出新事件；HTTP stream 仍在等待 codex 返回。',
+    }),
+    event({
+      id: 'wait-25',
+      type: 'backend-silent',
+      label: 'wait',
+      detail: '后端 25s 没有输出新事件；HTTP stream 仍在等待 codex 返回。',
+    }),
+  ];
+  const worklog = presentStreamWorklog(events);
+  const visible = visibleRunningWorkEntries(worklog, 8);
+  const markup = renderToStaticMarkup(React.createElement(RunningWorkProcess, {
+    events,
+    counts: streamEventCounts(events),
+    backend: 'test',
+    guidanceCount: 0,
+  }));
+
+  assert.deepEqual(visible.map((entry) => entry.event.id), ['search', 'wait-25']);
+  assert.equal(visible.filter((entry) => entry.operationKind === 'wait').length, 1);
+  assert.match(markup, /running-work-completed-fold/);
+  assert.match(markup, /已完成/);
+  assert.match(markup, /执行轨迹/);
+  assert.match(markup, /检索/);
+  assert.match(markup, /等待/);
+  assert.doesNotMatch(markup, /Search<\/span><span>Searched/);
 });
 
 test('live chat worklog filters internal runtime events but keeps meaningful work steps', () => {

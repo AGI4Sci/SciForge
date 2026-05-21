@@ -29,10 +29,9 @@ export type ResultsRendererSectionModel = {
 
 export type ResultsRendererManifestDiagnostic = {
   id: string;
-  moduleId: string;
-  artifactType?: string;
-  reason?: string;
-  title: string;
+  label: string;
+  detail?: string;
+  status: string;
 };
 
 export type ResultsRendererViewModel = {
@@ -107,7 +106,7 @@ export function projectResultsRendererViewModel({
 }
 
 export function primaryResultSectionTitle(focusMode: ResultFocusMode) {
-  if (focusMode === 'execution') return '执行记录';
+  if (focusMode === 'execution') return '过程记录';
   if (focusMode === 'evidence') return '证据重点';
   return '核心结果';
 }
@@ -116,12 +115,20 @@ export function emptyResultsState(focusMode: ResultFocusMode, dismissedAllInFilt
   if (dismissedAllInFilter) {
     return {
       title: '当前筛选下的视图已全部从界面移除',
-      detail: '这是仅影响呈现的隐藏列表，artifact 与工作区文件未被删除。新开聊天会清空该列表。',
+      detail: '这只影响当前呈现，已生成内容和工作区文件不会被删除。新开聊天会清空该列表。',
       dismissedAllInFilter,
     };
   }
   if (focusMode === 'all') {
     if (presentationState && (presentationState.kind !== 'ready' || presentationState.reason)) {
+      if (presentationState.kind === 'empty') {
+        return {
+          title: '暂无可预览内容',
+          detail: supportPaneEmptyDetail(presentationState),
+          dismissedAllInFilter,
+          recoverActions: [],
+        };
+      }
       return {
         title: presentationState.title,
         detail: [
@@ -129,19 +136,21 @@ export function emptyResultsState(focusMode: ResultFocusMode, dismissedAllInFilt
           presentationState.nextSteps.length ? `下一步：${presentationState.nextSteps[0]}` : undefined,
         ].filter(Boolean).join(' '),
         dismissedAllInFilter,
-        recoverActions: presentationState.kind === 'ready' ? [] : undefined,
+        recoverActions: [],
       };
     }
     return {
       title: '还没有可展示的关键结果',
-      detail: '发送请求后，这里只展示真实产物、当前 run 结果和被点选/引用的对象；空的系统模块会默认隐藏。',
+      detail: '主回答优先保留在聊天中；有可预览内容时会显示在这里。',
       dismissedAllInFilter,
+      recoverActions: [],
     };
   }
   return {
     title: '当前筛选没有匹配内容',
-    detail: '切回“全部”，或运行一个会生成对应 artifact 的任务。',
+    detail: '切回“全部”，或运行一个会生成对应结果的任务。',
     dismissedAllInFilter,
+    recoverActions: [],
   };
 }
 
@@ -149,7 +158,7 @@ export function projectDeferredSections(items: ResolvedViewPlanItem[]): ResultsR
   return deferredSectionOrder
     .map((section) => ({
       section,
-      title: viewPlanSectionLabel(section),
+      title: resultsSectionTitle(section),
       items: items.filter((item) => item.section === section),
     }))
     .filter((section) => section.items.length > 0);
@@ -158,11 +167,23 @@ export function projectDeferredSections(items: ResolvedViewPlanItem[]): ResultsR
 export function projectManifestDiagnostics(items: ResolvedViewPlanItem[]): ResultsRendererManifestDiagnostic[] {
   return items.map((item) => ({
     id: item.id,
-    moduleId: item.module.moduleId,
-    artifactType: item.artifact?.type,
-    reason: item.reason ?? item.module.description,
-    title: item.slot.title ?? item.module.title,
+    label: item.slot.title ?? item.module.title ?? '展示项',
+    detail: item.reason ?? item.module.description,
+    status: item.status,
   }));
+}
+
+function resultsSectionTitle(section: ViewPlanSection) {
+  if (section === 'provenance') return '过程记录';
+  if (section === 'raw') return '补充材料';
+  return viewPlanSectionLabel(section);
+}
+
+function supportPaneEmptyDetail(presentationState: RunPresentationState) {
+  if (/折叠过程|执行记录|校验|恢复线索/.test(presentationState.reason)) {
+    return '主回答优先保留在聊天中；过程记录、验证和恢复线索已折叠保留。';
+  }
+  return '主回答优先保留在聊天中；有可预览内容时会显示在这里。';
 }
 
 export { selectDefaultResultItems, viewPlanSectionLabel };

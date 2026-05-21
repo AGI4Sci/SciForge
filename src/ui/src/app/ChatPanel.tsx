@@ -50,7 +50,6 @@ import {
   parseSciForgeReferenceAttribute,
   referenceForMessage,
   referenceForObjectReference,
-  referenceForRun,
   referenceForTextSelection,
   referenceForUiElement,
 } from '../../../../packages/support/object-references';
@@ -86,18 +85,12 @@ function messageProvenanceKind(message: SciForgeMessage) {
 
 function MessageProvenanceBadge({ message }: { message: SciForgeMessage }) {
   const kind = messageProvenanceKind(message);
-  if (isLiveRuntimeCodexMessage(message) || kind === 'runtime-result' || kind === 'user-authored') return null;
+  if (isLiveRuntimeCodexMessage(message) || kind === 'live-runtime-codex' || kind === 'runtime-result' || kind === 'user-authored') return null;
   if (isSeedDemoOrFixtureMessage(message)) {
     return <Badge variant={kind === 'fixture' ? 'muted' : 'warning'}>{kind === 'fixture' ? 'fixture' : 'seed-demo'}</Badge>;
   }
   if (kind === 'system-ui') return <Badge variant="muted">系统消息</Badge>;
   return <Badge variant="muted">{kind}</Badge>;
-}
-
-function messageProvenanceSourceAttribute(message: SciForgeMessage) {
-  const source = message.provenance?.source;
-  if (!source || isInternalMessageProvenance(source)) return undefined;
-  return source;
 }
 
 function messageProvenanceAttribute(kind: string) {
@@ -109,7 +102,7 @@ function messageProvenanceAttribute(kind: string) {
 }
 
 function isInternalMessageProvenance(value: string) {
-  return /^(?:native-message|codex-command(?:-|$))|(?:^|[:/])codex-command(?:-|$)/i.test(value);
+  return /^(?:native-message|live-runtime-codex|runtime-result|codex-command(?:-|$))|(?:^|[:/])codex-command(?:-|$)/i.test(value);
 }
 
 function shouldShowMessageDiagnosticBadges(message: SciForgeMessage, provenanceKind: string) {
@@ -152,6 +145,7 @@ export function ChatPanel({
   onExternalReferenceConsumed,
   availableComponentIds = [],
   runtimeHealth = [],
+  workspaceObjectReferences = [],
 }: {
   scenarioId: ScenarioInstanceId;
   role: string;
@@ -184,6 +178,7 @@ export function ChatPanel({
   onExternalReferenceConsumed?: (requestId: string) => void;
   availableComponentIds?: string[];
   runtimeHealth?: RuntimeHealthItem[];
+  workspaceObjectReferences?: ObjectReference[];
 }) {
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState('');
@@ -343,7 +338,8 @@ export function ChatPanel({
     const elapsedMs = Number.isFinite(latestEventTime) ? Date.now() - latestEventTime : waitThresholdMs;
     const timeout = window.setTimeout(() => {
       publishWaitingProgress();
-      interval = window.setInterval(publishWaitingProgress, 15_000);
+      const repeatMs = Math.max(3_000, Math.min(waitThresholdMs, 5_000));
+      interval = window.setInterval(publishWaitingProgress, repeatMs);
     }, Math.max(0, waitThresholdMs - elapsedMs));
     return () => {
       window.clearTimeout(timeout);
@@ -959,7 +955,7 @@ export function ChatPanel({
             <div className="message-body">
               <div className="message-meta">
                 <strong>SciForge</strong>
-                <Badge variant="info">running</Badge>
+                <Badge variant="info">进行中</Badge>
               </div>
               <MessageContent content={runningMessageContent} references={[]} onObjectFocus={onObjectFocus} />
               <RunningWorkProcess
@@ -978,6 +974,7 @@ export function ChatPanel({
           const messageRunId = runIdForMessage(message, index, messages, session.runs);
           const provenanceKind = messageProvenanceKind(message);
           const showDiagnosticBadges = shouldShowMessageDiagnosticBadges(message, provenanceKind);
+          const showMessageConfidence = message.role !== 'user' && typeof message.confidence === 'number' && Number.isFinite(message.confidence);
           return (
           <div
             key={message.id}
@@ -985,11 +982,8 @@ export function ChatPanel({
             data-testid="chat-message"
             data-message-id={message.id}
             data-message-provenance={messageProvenanceAttribute(provenanceKind)}
-            data-message-provenance-source={messageProvenanceSourceAttribute(message)}
             data-runtime-request-eligible={message.provenance?.runtimeRequestEligible === true ? 'true' : 'false'}
             data-live-acceptance-eligible={isLiveRuntimeCodexMessage(message) ? 'true' : 'false'}
-            data-session-id={session.sessionId}
-            data-run-id={messageRunId ? 'run' : undefined}
             data-sciforge-reference={sciForgeReferenceAttribute(visibleMessageReference(message))}
           >
             <div className="message-body">
@@ -1000,23 +994,23 @@ export function ChatPanel({
                     过程
                   </button>
                 ) : null}
-                {showDiagnosticBadges && message.confidence !== undefined ? <ConfidenceBar value={message.confidence} /> : null}
+                {showMessageConfidence ? <ConfidenceBar value={message.confidence as number} /> : null}
                 {showDiagnosticBadges && message.evidence ? <EvidenceTag level={message.evidence} /> : null}
                 {showDiagnosticBadges && message.claimType ? <ClaimTag type={message.claimType} /> : null}
                 <MessageProvenanceBadge message={message} />
                 <RunVerificationTag session={session} runId={messageRunId} />
-                {message.status === 'failed' ? <Badge variant="danger">failed</Badge> : null}
+                {message.status === 'failed' ? <Badge variant="danger">未完成</Badge> : null}
                 {message.guidanceQueue ? <Badge variant={guidanceBadgeVariant(message.guidanceQueue.status)}>{guidanceStatusLabel(message.guidanceQueue.status)}</Badge> : null}
                 {message.acceptance ? (
                   <Badge variant={message.acceptance.pass ? 'success' : message.acceptance.severity === 'repairable' ? 'warning' : 'danger'}>
-                    gate {message.acceptance.severity}
+                    验收：{acceptanceSeverityLabel(message.acceptance.severity)}
                   </Badge>
                 ) : null}
                 <div className="message-actions">
                   <button
                     type="button"
                     onClick={() => void copyMessageContent(message.content)}
-                    title="复制原始 Markdown"
+                    title="复制 Markdown"
                   >
                     复制
                   </button>
@@ -1035,7 +1029,7 @@ export function ChatPanel({
                 <>
                   {message.role === 'user' ? (
                     <>
-                      <FollowupBindingLine message={message} sessionId={session.sessionId} />
+                      <FollowupBindingLine message={message} />
                       <MessageContent
                         content={sanitizeUserProjectionText(message.content) ?? message.content}
                         references={inlineObjectReferencesForMessage(message, session)}
@@ -1046,16 +1040,21 @@ export function ChatPanel({
                     <>
                       <FinalMessageContent
                         content={sanitizeUserProjectionText(message.content) ?? message.content}
-                        references={inlineObjectReferencesForMessage(message, session, messageRunId)}
+                        references={inlineObjectReferencesForMessage(message, session, messageRunId, { workspaceObjectReferences })}
                         resultPresentation={resultPresentationForRun(session, messageRunId)}
                         onObjectFocus={handleObjectReferenceClick}
                       />
                       {messageRunId ? (
-                        <RunKeyInfo
-                          runId={messageRunId}
-                          session={session}
-                          onObjectFocus={handleObjectReferenceClick}
-                        />
+                        <details className="message-fold depth-2 codex-result-clues-fold">
+                          <summary>
+                            <span>结果线索</span>
+                          </summary>
+                          <RunKeyInfo
+                            runId={messageRunId}
+                            session={session}
+                            onObjectFocus={handleObjectReferenceClick}
+                          />
+                        </details>
                       ) : null}
                       {messageRunId ? (
                         <RunExecutionProcess
@@ -1145,7 +1144,14 @@ export function ChatPanel({
   );
 }
 
-function FollowupBindingLine({ message, sessionId }: { message: SciForgeMessage; sessionId: string }) {
+function acceptanceSeverityLabel(value: string) {
+  if (value === 'repairable') return '可恢复';
+  if (value === 'blocking') return '阻塞';
+  if (value === 'warning') return '需留意';
+  return value;
+}
+
+function FollowupBindingLine({ message }: { message: SciForgeMessage }) {
   const references = message.references ?? [];
   if (!references.length) return null;
   const labels = references
@@ -1156,7 +1162,6 @@ function FollowupBindingLine({ message, sessionId }: { message: SciForgeMessage;
   return (
     <div className="message-continuity-line">
       <span>继续基于当前对话</span>
-      <code>{sessionId.replace(/^session-/, '').slice(0, 8)}</code>
       <span>和 {labels}{overflow}</span>
     </div>
   );

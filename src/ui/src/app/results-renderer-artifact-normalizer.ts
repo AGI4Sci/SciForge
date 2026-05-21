@@ -73,12 +73,12 @@ function artifactInspectorFiles(
   downloads: ArtifactInspectorDownload[],
 ): Array<[string, string]> {
   return [
-    artifact.dataRef ? ['dataRef', artifact.dataRef] : undefined,
-    executionUnit?.codeRef ? ['codeRef', executionUnit.codeRef] : undefined,
-    executionUnit?.stdoutRef ? ['stdoutRef', executionUnit.stdoutRef] : undefined,
-    executionUnit?.stderrRef ? ['stderrRef', executionUnit.stderrRef] : undefined,
-    executionUnit?.outputRef ? ['outputRef', executionUnit.outputRef] : undefined,
-    ...downloads.map((item) => [item.name, item.path || item.key || 'download payload'] as [string, string]),
+    artifact.dataRef ? ['材料', '源文件已归档'] : undefined,
+    executionUnit?.codeRef ? ['过程代码', '已归档'] : undefined,
+    executionUnit?.stdoutRef ? ['过程输出', '已归档'] : undefined,
+    executionUnit?.stderrRef ? ['过程诊断', '已归档'] : undefined,
+    executionUnit?.outputRef ? ['结果材料', '已归档'] : undefined,
+    ...downloads.map((item) => [item.name, safeDownloadValue(item.path || item.key || '可下载内容')] as [string, string]),
   ].filter((item): item is [string, string] => Boolean(item));
 }
 
@@ -90,13 +90,13 @@ function artifactLineageRows(
   const derivation: Record<string, unknown> = isRecord(metadata.derivation) ? metadata.derivation : {};
   const sourceRefs = asStringList(derivation.sourceRefs);
   return [
-    ['producer scenario', artifact.producerScenario],
-    ['producer skill', asStringList(artifact.metadata?.producerSkillIds).join(', ') || asString(artifact.metadata?.producerSkillId) || 'unknown'],
-    ['execution unit', executionUnit ? `${executionUnit.id} · ${executionUnit.tool} · ${executionUnit.status}` : 'missing'],
-    ['created', asString(artifact.metadata?.createdAt) ?? 'unknown'],
-    asString(derivation.kind) ? ['derivation kind', asString(derivation.kind)!] : undefined,
-    asString(derivation.parentArtifactRef) ? ['derivation parent', asString(derivation.parentArtifactRef)!] : undefined,
-    sourceRefs.length ? ['derivation sources', sourceRefs.join(', ')] : undefined,
+    ['来源场景', artifact.producerScenario],
+    ['生成能力', asStringList(artifact.metadata?.producerSkillIds).join(', ') || asString(artifact.metadata?.producerSkillId) || '未声明'],
+    ['过程状态', executionUnit ? '过程材料已匹配' : '等待过程线索'],
+    ['创建时间', asString(artifact.metadata?.createdAt) ?? '未声明'],
+    asString(derivation.kind) ? ['衍生方式', asString(derivation.kind)!] : undefined,
+    asString(derivation.parentArtifactRef) ? ['父级材料', '已保留'] : undefined,
+    sourceRefs.length ? ['来源材料', `${sourceRefs.length} 条已保留`] : undefined,
   ].filter((row): row is [string, string] => Boolean(row));
 }
 
@@ -105,4 +105,9 @@ function rowCountForReference(data: unknown) {
   if (!isRecord(data)) return undefined;
   const rows = Array.isArray(data.rows) ? data.rows : Array.isArray(data.records) ? data.records : undefined;
   return rows?.length;
+}
+
+function safeDownloadValue(value: string) {
+  if (/\.sciforge\/|dataRef|stdout|stderr|provider|execution-unit/i.test(value)) return '已归档';
+  return value;
 }

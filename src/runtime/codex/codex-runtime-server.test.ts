@@ -35,10 +35,13 @@ test('HTTP/SSE endpoint streams normalized runtime events without raw JSONL as m
     assert.equal(response.headers.get('content-type')?.startsWith('text/event-stream'), true);
     const text = await response.text();
 
+    assert.match(text, /event: process-progress/);
     assert.match(text, /event: turn/);
     assert.match(text, /event: run_started/);
     assert.match(text, /event: message/);
     assert.match(text, /event: done/);
+    assert.ok(text.indexOf('event: process-progress') < text.indexOf('event: turn'));
+    assert.match(text, /正在启动 Codex CLI/);
     assert.equal(adapter.lastInput?.commandText, 'say hello');
     assert.equal(adapter.lastInput?.workspacePath, '/tmp/workspace');
     assert.equal(adapter.lastInput?.commandId, 'codex-command-ui');

@@ -1,8 +1,8 @@
 {
   "schemaVersion": "sciforge.runtime-codex.browser-acceptance.v1",
-  "status": "passed",
+  "status": "blocked",
   "source": "codex-in-app-browser",
-  "observedAt": "2026-05-21T03:44:37.135Z",
+  "observedAt": "2026-05-21T10:35:24.466Z",
   "requestedRolePort": 5173,
   "actualWorkspaceWriterPort": 6173,
   "actualWorkspaceWriterUrl": "http://127.0.0.1:6173",
@@ -14,75 +14,35 @@
   "profile": "sciforge-runtime-deepseek",
   "provider": "sciforge-deepseek-proxy",
   "model": "bailian/deepseek-v4-flash",
-  "commandId": "codex-command-mpey219c-41ti2w",
-  "startedFromDefaultChatEntry": true,
-  "submittedThroughRuntimeCodex": true,
-  "providerModelProfileVisible": true,
-  "workspaceVisible": true,
-  "commandIdVisible": true,
-  "mainAnswerVisible": true,
+  "startedFromDefaultChatEntry": false,
+  "submittedThroughRuntimeCodex": false,
+  "providerModelProfileVisible": false,
+  "workspaceVisible": false,
+  "commandIdVisible": false,
+  "mainAnswerVisible": false,
   "rawAuditFoldedByDefault": true,
   "automationSubstituteUsed": false,
   "seedDemoFixtureEvidenceUsed": false,
-  "acceptanceConclusionFromRealBrowser": true,
+  "acceptanceConclusionFromRealBrowser": false,
   "seedOrDemoMessagesExcluded": true,
   "liveAcceptanceScope": "non-seed-runtime-codex-messages-only",
-  "releaseBlocking": false,
-  "releaseEligible": true,
   "acceptanceRubric": {
     "userIntent": "Prove the real default-chat Runtime Codex path can complete single-turn, selected-ref, and multi-turn tasks.",
-    "expectedObservableResult": "Visible live Runtime Codex/gui.present answers with provider/model/profile/workspace/command id and folded audit panels.",
-    "actualResult": "Passed in Codex in-app browser with visible single-turn, selected-ref, and multi-turn answers.",
+    "expectedObservableResult": "Visible live Runtime Codex/gui.present answers with provider/model/profile/workspace/command id and folded audit logs.",
+    "actualResult": "Blocked before release acceptance: Runtime Codex environment is not fully configured; missing SCIFORGE_RUNTIME_API_KEY and Runtime Codex secret must be supplied by service environment, not config file debug fallback. Set SCIFORGE_RUNTIME_API_KEY in the service environment, and set SCIFORGE_PROXY_UPSTREAM_BASE_URL or config.local.json/.sciforge instance config codexProxy.upstreamBaseUrl/llm.baseUrl before live browser E2E can pass. Checked config paths: workspace/parallel/p1/.sciforge/config.local.json, config.local.json. Runtime secret-like keys were found in ignored config files (workspace/parallel/p1/.sciforge/config.local.json); they are accepted only as local proxy debug fallback and cannot satisfy browser/release acceptance.",
     "evidenceRefs": [
-      "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat.png",
-      "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat-dom.txt",
-      "docs/test-artifacts/runtime-codex-browser-acceptance/passed-browser-acceptance.md",
-      "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit.png",
-      "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit-dom.txt",
-      "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-after-submit.png",
-      "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-after-submit-dom.txt",
-      "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn.png",
-      "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn-dom.txt"
+      "docs/test-artifacts/runtime-codex-browser-acceptance/manifest.json",
+      "docs/test-artifacts/runtime-codex-browser-acceptance/blocked-runtime-config.md"
     ],
     "negativeChecks": [
       "fake passed status rejected",
       "missing DOM or screenshot rejected",
       "missing command id rejected",
       "missing task result rejected",
-      "stand-in evidence rejected",
-      "blocked status rejected in strict mode",
-      "unfolded provider diagnostics rejected"
+      "seed/demo evidence rejected",
+      "blocked/failed/partial status rejected in strict mode"
     ],
-    "remainingRisks": "None known for this acceptance run; keep Runtime Codex service environment ready for release reruns."
-  },
-  "actualTaskResult": {
-    "status": "passed",
-    "summary": "Default-chat Runtime Codex acceptance passed for single-turn, selected-ref, and multi-turn scenarios.",
-    "userIntentSatisfied": true,
-    "outputVerified": true,
-    "evidenceRefs": [
-      "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat.png",
-      "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat-dom.txt",
-      "docs/test-artifacts/runtime-codex-browser-acceptance/passed-browser-acceptance.md",
-      "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit.png",
-      "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit-dom.txt",
-      "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-after-submit.png",
-      "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-after-submit-dom.txt",
-      "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn.png",
-      "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn-dom.txt"
-    ]
-  },
-  "liveRuntimeCodexProof": {
-    "messageProvenance": "live-runtime-codex",
-    "commandId": "codex-command-mpey219c-41ti2w",
-    "guiPresentObserved": true,
-    "runtimeOutputObserved": true,
-    "seedOrDemoExcluded": true,
-    "eventEvidenceRefs": [
-      "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat.png",
-      "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat-dom.txt",
-      "docs/test-artifacts/runtime-codex-browser-acceptance/passed-browser-acceptance.md"
-    ]
+    "remainingRisks": "Live browser acceptance still requires SCIFORGE_RUNTIME_API_KEY, provider proxy upstream base URL, the Runtime Codex profile/config below, and a visible second-turn answer."
   },
   "negativeChecks": {
     "fakePassedStatusRejected": true,
@@ -93,153 +53,119 @@
     "blockedFailedPartialRejected": true,
     "rawStdoutJsonlRejected": true
   },
-  "evidence": {
-    "screenshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat.png",
-    "domSnapshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat-dom.txt",
-    "notesPath": "docs/test-artifacts/runtime-codex-browser-acceptance/passed-browser-acceptance.md"
-  },
+  "reason": "Runtime Codex environment is not fully configured; missing SCIFORGE_RUNTIME_API_KEY and Runtime Codex secret must be supplied by service environment, not config file debug fallback. Set SCIFORGE_RUNTIME_API_KEY in the service environment, and set SCIFORGE_PROXY_UPSTREAM_BASE_URL or config.local.json/.sciforge instance config codexProxy.upstreamBaseUrl/llm.baseUrl before live browser E2E can pass. Checked config paths: workspace/parallel/p1/.sciforge/config.local.json, config.local.json. Runtime secret-like keys were found in ignored config files (workspace/parallel/p1/.sciforge/config.local.json); they are accepted only as local proxy debug fallback and cannot satisfy browser/release acceptance.",
+  "blocker": "Runtime Codex environment is not fully configured; missing SCIFORGE_RUNTIME_API_KEY and Runtime Codex secret must be supplied by service environment, not config file debug fallback. Set SCIFORGE_RUNTIME_API_KEY in the service environment, and set SCIFORGE_PROXY_UPSTREAM_BASE_URL or config.local.json/.sciforge instance config codexProxy.upstreamBaseUrl/llm.baseUrl before live browser E2E can pass. Checked config paths: workspace/parallel/p1/.sciforge/config.local.json, config.local.json. Runtime secret-like keys were found in ignored config files (workspace/parallel/p1/.sciforge/config.local.json); they are accepted only as local proxy debug fallback and cannot satisfy browser/release acceptance.",
+  "blockedOn": [
+    "Runtime Codex service environment secret configuration",
+    "config-file debug secret fallback must not satisfy release acceptance",
+    "Codex in-app browser execution"
+  ],
+  "currentRunEvidenceScope": "preflight-only",
+  "priorEvidenceRefs": [
+    "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat.png",
+    "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat-dom.txt",
+    "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit.png",
+    "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit-dom.txt",
+    "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up.png",
+    "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-dom.txt",
+    "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn.png",
+    "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn-dom.txt"
+  ],
+  "staleEvidenceRefs": [
+    "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat.png",
+    "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat-dom.txt",
+    "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit.png",
+    "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit-dom.txt",
+    "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up.png",
+    "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-dom.txt",
+    "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn.png",
+    "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn-dom.txt"
+  ],
+  "failureClass": "config-secret-source",
+  "owner": "environment",
+  "policyViolations": [
+    "config-file-secret-fallback-cannot-satisfy-browser-release-acceptance"
+  ],
+  "missingEnv": [
+    "SCIFORGE_RUNTIME_API_KEY"
+  ],
+  "nextActions": [
+    {
+      "label": "Set Runtime Codex provider key in the service environment that launches Runtime Codex/provider proxy.",
+      "expected": "Runtime preflight no longer reports missing SCIFORGE_RUNTIME_API_KEY.",
+      "writesRepo": false
+    },
+    {
+      "label": "Keep config-file apiKey fields as local proxy debug fallback only, and do not count them as browser/release acceptance credentials.",
+      "expected": "Acceptance manifest reports service environment secret presence instead of config-file secret fallback.",
+      "writesRepo": false
+    },
+    {
+      "label": "Rerun default browser acceptance, then strict release acceptance only after a visible second-turn answer appears.",
+      "command": "npm run smoke:runtime-codex-browser-acceptance && SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 npm run smoke:runtime-codex-browser-acceptance",
+      "expected": "Default smoke writes current evidence; strict gate passes only when manifest.status is passed.",
+      "writesRepo": true
+    }
+  ],
+  "expectedRetestCommand": "npm run smoke:runtime-codex-browser-acceptance",
+  "providerPreflightRef": "docs/test-artifacts/runtime-provider-preflight/manifest.json",
+  "providerPreflightCategory": "config-secret-source",
+  "providerPreflightCheckedAt": "2026-05-21T10:35:24.113Z",
+  "providerPreflightReleaseAcceptance": "not-evaluated",
+  "providerPreflightEvidenceMode": "current-env-diagnostic-only",
+  "runtimeApiKeyPresentInServiceEnv": false,
+  "upstreamBaseUrlPresent": false,
+  "upstreamKeySourceKind": "config-debug-fallback",
+  "upstreamBaseUrlSourceKind": "missing",
+  "configPathsChecked": [
+    "workspace/parallel/p1/.sciforge/config.local.json",
+    "config.local.json"
+  ],
+  "configSecretFallbackPaths": [
+    "workspace/parallel/p1/.sciforge/config.local.json"
+  ],
+  "releaseBlocking": true,
+  "releaseEligible": false,
   "singleTurn": {
-    "status": "passed",
-    "prompt": "Runtime Codex browser smoke single turn: reply in one short sentence with SCIFORGE-CODEX-BROWSER-SINGLE-20260520A.",
-    "userIntent": "Single-turn default-chat Runtime Codex answer is visible and matches the requested passphrase.",
-    "actualTaskResult": {
-      "status": "passed",
-      "summary": "Single-turn default-chat Runtime Codex answer is visible and matches the requested passphrase.",
-      "userIntentSatisfied": true,
-      "outputVerified": true,
-      "evidenceRefs": [
-        "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit.png",
-        "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit-dom.txt",
-        "docs/test-artifacts/runtime-codex-browser-acceptance/passed-browser-acceptance.md"
-      ]
-    },
-    "liveRuntimeCodexProof": {
-      "messageProvenance": "live-runtime-codex",
-      "commandId": "codex-command-mpexwy03-ejaeuy",
-      "guiPresentObserved": true,
-      "runtimeOutputObserved": true,
-      "seedOrDemoExcluded": true,
-      "eventEvidenceRefs": [
-        "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit.png",
-        "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit-dom.txt",
-        "docs/test-artifacts/runtime-codex-browser-acceptance/passed-browser-acceptance.md"
-      ]
-    },
-    "negativeChecks": {
-      "fakePassedStatusRejected": true,
-      "missingDomOrScreenshotRejected": true,
-      "missingCommandIdRejected": true,
-      "missingTaskResultRejected": true,
-      "seedDemoEvidenceRejected": true,
-      "blockedFailedPartialRejected": true,
-      "rawStdoutJsonlRejected": true
-    },
-    "visibleAnswerConfirmed": true,
-    "providerModelProfileVisible": true,
-    "workspaceCommandIdVisible": true,
+    "status": "blocked",
+    "prompt": "single-turn Runtime Codex browser acceptance is blocked before submission",
+    "visibleAnswerConfirmed": false,
+    "providerModelProfileVisible": false,
+    "workspaceCommandIdVisible": false,
     "rawAuditFoldedByDefault": true,
+    "reason": "Runtime Codex environment is not fully configured; missing SCIFORGE_RUNTIME_API_KEY and Runtime Codex secret must be supplied by service environment, not config file debug fallback. Set SCIFORGE_RUNTIME_API_KEY in the service environment, and set SCIFORGE_PROXY_UPSTREAM_BASE_URL or config.local.json/.sciforge instance config codexProxy.upstreamBaseUrl/llm.baseUrl before live browser E2E can pass. Checked config paths: workspace/parallel/p1/.sciforge/config.local.json, config.local.json. Runtime secret-like keys were found in ignored config files (workspace/parallel/p1/.sciforge/config.local.json); they are accepted only as local proxy debug fallback and cannot satisfy browser/release acceptance.",
     "evidence": {
-      "screenshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit.png",
-      "domSnapshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit-dom.txt",
-      "notesPath": "docs/test-artifacts/runtime-codex-browser-acceptance/passed-browser-acceptance.md"
+      "notesPath": "docs/test-artifacts/runtime-codex-browser-acceptance/blocked-runtime-config.md"
     }
   },
   "artifactFollowUp": {
-    "status": "passed",
-    "prompt": "Use only the selected artifact ref and answer what it says in one concise sentence.",
-    "selectedRefs": [
-      "file:/Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p1/arxiv_multi_agent_report_20260521.md"
-    ],
-    "userIntent": "Selected report follow-up is visible and answers from the selected arxiv_multi_agent_report_20260521.md file.",
-    "actualTaskResult": {
-      "status": "passed",
-      "summary": "Selected report follow-up is visible and answers from the selected arxiv_multi_agent_report_20260521.md file.",
-      "userIntentSatisfied": true,
-      "outputVerified": true,
-      "evidenceRefs": [
-        "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-after-submit.png",
-        "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-after-submit-dom.txt",
-        "docs/test-artifacts/runtime-codex-browser-acceptance/passed-browser-acceptance.md"
-      ]
-    },
-    "liveRuntimeCodexProof": {
-      "messageProvenance": "live-runtime-codex",
-      "commandId": "codex-command-mpey0ojv-w5tikl",
-      "guiPresentObserved": true,
-      "runtimeOutputObserved": true,
-      "seedOrDemoExcluded": true,
-      "eventEvidenceRefs": [
-        "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-after-submit.png",
-        "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-after-submit-dom.txt",
-        "docs/test-artifacts/runtime-codex-browser-acceptance/passed-browser-acceptance.md"
-      ]
-    },
-    "negativeChecks": {
-      "fakePassedStatusRejected": true,
-      "missingDomOrScreenshotRejected": true,
-      "missingCommandIdRejected": true,
-      "missingTaskResultRejected": true,
-      "seedDemoEvidenceRejected": true,
-      "blockedFailedPartialRejected": true,
-      "rawStdoutJsonlRejected": true
-    },
-    "visibleAnswerConfirmed": true,
-    "providerModelProfileVisible": true,
-    "workspaceCommandIdVisible": true,
+    "status": "blocked",
+    "prompt": "artifact follow-up Runtime Codex browser acceptance is blocked before selected-ref follow-up submission",
+    "visibleAnswerConfirmed": false,
+    "providerModelProfileVisible": false,
+    "workspaceCommandIdVisible": false,
     "rawAuditFoldedByDefault": true,
+    "reason": "Runtime Codex environment is not fully configured; missing SCIFORGE_RUNTIME_API_KEY and Runtime Codex secret must be supplied by service environment, not config file debug fallback. Set SCIFORGE_RUNTIME_API_KEY in the service environment, and set SCIFORGE_PROXY_UPSTREAM_BASE_URL or config.local.json/.sciforge instance config codexProxy.upstreamBaseUrl/llm.baseUrl before live browser E2E can pass. Checked config paths: workspace/parallel/p1/.sciforge/config.local.json, config.local.json. Runtime secret-like keys were found in ignored config files (workspace/parallel/p1/.sciforge/config.local.json); they are accepted only as local proxy debug fallback and cannot satisfy browser/release acceptance.",
     "evidence": {
-      "screenshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-after-submit.png",
-      "domSnapshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-after-submit-dom.txt",
-      "notesPath": "docs/test-artifacts/runtime-codex-browser-acceptance/passed-browser-acceptance.md"
+      "notesPath": "docs/test-artifacts/runtime-codex-browser-acceptance/blocked-runtime-config.md"
     }
   },
   "multiTurn": {
-    "status": "passed",
+    "status": "blocked",
     "prompt": "Remember this passphrase for the next browser turn: SCIFORGE-CODEX-BROWSER-MT-20260520A. Reply only remembered.",
+    "visibleAnswerConfirmed": false,
+    "providerModelProfileVisible": false,
+    "workspaceCommandIdVisible": false,
+    "rawAuditFoldedByDefault": true,
+    "reason": "Runtime Codex environment is not fully configured; missing SCIFORGE_RUNTIME_API_KEY and Runtime Codex secret must be supplied by service environment, not config file debug fallback. Set SCIFORGE_RUNTIME_API_KEY in the service environment, and set SCIFORGE_PROXY_UPSTREAM_BASE_URL or config.local.json/.sciforge instance config codexProxy.upstreamBaseUrl/llm.baseUrl before live browser E2E can pass. Checked config paths: workspace/parallel/p1/.sciforge/config.local.json, config.local.json. Runtime secret-like keys were found in ignored config files (workspace/parallel/p1/.sciforge/config.local.json); they are accepted only as local proxy debug fallback and cannot satisfy browser/release acceptance.",
+    "evidence": {
+      "notesPath": "docs/test-artifacts/runtime-codex-browser-acceptance/blocked-runtime-config.md"
+    },
     "followUpPrompt": "Now reply only with the passphrase from the previous turn.",
     "expectedPassphrase": "SCIFORGE-CODEX-BROWSER-MT-20260520A",
-    "userIntent": "Multi-turn default-chat Runtime Codex answer is visible on the second turn and returns the remembered passphrase.",
-    "actualTaskResult": {
-      "status": "passed",
-      "summary": "Multi-turn default-chat Runtime Codex answer is visible on the second turn and returns the remembered passphrase.",
-      "userIntentSatisfied": true,
-      "outputVerified": true,
-      "evidenceRefs": [
-        "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn.png",
-        "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn-dom.txt",
-        "docs/test-artifacts/runtime-codex-browser-acceptance/passed-browser-acceptance.md"
-      ]
-    },
-    "liveRuntimeCodexProof": {
-      "messageProvenance": "live-runtime-codex",
-      "commandId": "codex-command-mpey219c-41ti2w",
-      "guiPresentObserved": true,
-      "runtimeOutputObserved": true,
-      "seedOrDemoExcluded": true,
-      "eventEvidenceRefs": [
-        "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn.png",
-        "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn-dom.txt",
-        "docs/test-artifacts/runtime-codex-browser-acceptance/passed-browser-acceptance.md"
-      ]
-    },
-    "negativeChecks": {
-      "fakePassedStatusRejected": true,
-      "missingDomOrScreenshotRejected": true,
-      "missingCommandIdRejected": true,
-      "missingTaskResultRejected": true,
-      "seedDemoEvidenceRejected": true,
-      "blockedFailedPartialRejected": true,
-      "rawStdoutJsonlRejected": true
-    },
-    "visibleAnswerConfirmed": true,
-    "secondTurnVisibleAnswerConfirmed": true,
-    "providerModelProfileVisible": true,
-    "workspaceCommandIdVisible": true,
-    "rawAuditFoldedByDefault": true,
-    "evidence": {
-      "screenshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn.png",
-      "domSnapshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn-dom.txt",
-      "notesPath": "docs/test-artifacts/runtime-codex-browser-acceptance/passed-browser-acceptance.md"
-    }
+    "secondTurnVisibleAnswerConfirmed": false
+  },
+  "evidence": {
+    "notesPath": "docs/test-artifacts/runtime-codex-browser-acceptance/blocked-runtime-config.md"
   }
 }

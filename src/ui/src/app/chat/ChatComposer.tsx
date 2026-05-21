@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, CircleStop, Cpu, FileUp, Folder, Quote, ShieldCheck, Sparkles } from 'lucide-react';
+import { ChevronDown, ChevronUp, CircleStop, FileUp, Folder, Quote, ShieldCheck, Sparkles } from 'lucide-react';
 import { ActionButton, cx } from '../uiPrimitives';
 import type { ReactNode, RefObject } from 'react';
 import type { SciForgeReference } from '../../domain';
@@ -128,18 +128,18 @@ export function ChatComposer({
         </div>
       ) : null}
       {runtimeContext ? (
-        <div className="composer-runtime-row" aria-label="运行上下文">
-          <span className="composer-runtime-pill" title={runtimeContext.workspacePath || 'workspace 未设置'}>
+        <div className="composer-runtime-row" aria-label="上下文提示">
+          <span className="composer-runtime-pill" title={workspaceTitle(runtimeContext.workspacePath)}>
             <Folder size={13} />
             {workspaceLabel(runtimeContext.workspacePath)}
           </span>
-          <span className="composer-runtime-pill" title="当前模型在线">
-            <Cpu size={13} />
-            {runtimeModelLabel(runtimeContext)}
+          <span className="composer-runtime-pill" title="助手连接状态">
+            <Sparkles size={13} />
+            {assistantConnectionLabel(runtimeContext)}
           </span>
-          <span className="composer-runtime-pill permission" title="可以在当前工作区读写文件">
+          <span className="composer-runtime-pill permission" title="权限状态">
             <ShieldCheck size={13} />
-            {runtimeContext.permissionMode}
+            {permissionLabel(runtimeContext.permissionMode)}
           </span>
         </div>
       ) : null}
@@ -170,10 +170,22 @@ export function ChatComposer({
 
 function workspaceLabel(path: string) {
   const trimmed = path.trim();
-  if (!trimmed) return 'workspace';
-  return trimmed.split(/[\\/]/).filter(Boolean).at(-1) || trimmed;
+  return trimmed ? '当前项目' : '项目未选择';
 }
 
-function runtimeModelLabel(context: NonNullable<Parameters<typeof ChatComposer>[0]['runtimeContext']>) {
-  return context.model.trim() ? '模型在线' : '模型待配置';
+function workspaceTitle(path: string) {
+  return path.trim() ? '当前项目' : '项目未选择';
+}
+
+function assistantConnectionLabel(context: NonNullable<Parameters<typeof ChatComposer>[0]['runtimeContext']>) {
+  return context.model.trim() ? '助手已连接' : '连接待配置';
+}
+
+function permissionLabel(permissionMode: string) {
+  const normalized = permissionMode.trim();
+  if (!normalized) return '权限待确认';
+  if (/read[-_\s]?only|readonly|只读/i.test(normalized)) return '只读工作区';
+  if (/write|写|可写/i.test(normalized)) return '可写工作区';
+  if (/ask|approve|confirm|确认|审批/i.test(normalized)) return '需确认权限';
+  return '权限已设置';
 }

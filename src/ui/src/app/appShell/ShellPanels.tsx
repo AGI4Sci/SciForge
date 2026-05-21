@@ -65,7 +65,9 @@ export function sidebarThreadTitle(session: SciForgeSession) {
   const title = compactSidebarLine(session.title, 44);
   if (title && !isEvidenceLikeThreadTitle(title)) return title;
   const firstUserPrompt = session.messages.find((message) => message.role === 'user' && !message.id.startsWith('seed'))?.content;
-  return compactSidebarLine(firstUserPrompt || '未命名聊天', 44);
+  const promptTitle = compactSidebarLine(firstUserPrompt || '', 44);
+  if (promptTitle && !isEvidenceLikeThreadTitle(promptTitle)) return promptTitle;
+  return '未命名聊天';
 }
 
 export function buildSidebarThreadItems(sessionsByScenario: Partial<Record<ScenarioInstanceId, SciForgeSession>>): SidebarThreadItem[] {
@@ -134,20 +136,38 @@ function compactSidebarLine(value: string | undefined, maxLength: number) {
 function isEvidenceLikeThreadTitle(title: string) {
   return /^(artifact|file|folder|run|execution-unit|stdout|stderr|trace|log|debug):/i.test(title)
     || /^[a-z][a-z0-9+.-]*:\/\//i.test(title)
-    || /\.(jsonl?|log|stdout|stderr)$/i.test(title);
+    || /\.(jsonl?|log|stdout|stderr)$/i.test(title)
+    || containsSidebarInternalTerm(title);
 }
 
 function sidebarThreadDetail(session: SciForgeSession) {
-  const pieces = [
-    session.messages.filter((message) => !message.id.startsWith('seed')).length ? `${session.messages.filter((message) => !message.id.startsWith('seed')).length} messages` : '',
-    session.runs.length ? `${session.runs.length} runs` : '',
-    session.artifacts.length ? `${session.artifacts.length} artifacts` : '',
-  ].filter(Boolean);
-  return pieces.length ? pieces.join(' · ') : '新聊天';
+  const latestMessage = [...session.messages].reverse().find((message) => !message.id.startsWith('seed'));
+  if (latestMessage) {
+    const snippet = sidebarUserSemanticSnippet(latestMessage.content);
+    if (snippet) {
+      if (latestMessage.role === 'user') return `最近提问：${snippet}`;
+      if (latestMessage.role === 'scenario') return `最近回答：${snippet}`;
+      return `最近更新：${snippet}`;
+    }
+    return latestMessage.role === 'user' ? '最近有新提问' : '最近有新进展';
+  }
+  if (session.runs.length || session.artifacts.length || session.executionUnits.length || session.notebook.length) return '有结果可继续';
+  return '新聊天';
 }
 
 function containsNeedle(value: string, needle: string) {
   return value.toLocaleLowerCase().includes(needle);
+}
+
+function sidebarUserSemanticSnippet(value: string | undefined) {
+  const compact = compactSidebarLine((value ?? '').replace(/[`*_>#\-\[\]()]/g, ' '), 36);
+  if (!compact || containsSidebarInternalTerm(compact)) return '';
+  return compact;
+}
+
+function containsSidebarInternalTerm(value: string) {
+  return /\b(?:ExecutionUnit|execution-unit|provider|model|profile|runtime\s+codex|live-runtime-codex|native-message|raw\s+JSONL|stdout|stderr|ConversationProjection|ArtifactDelivery|codex-command|run\s+id|workspace\s+command)\b/i.test(value)
+    || /\brun-[a-z0-9][a-z0-9_-]*\b/i.test(value);
 }
 
 function uniqueSidebarMatches(matches: SidebarSearchMatch[]) {
@@ -160,10 +180,10 @@ function uniqueSidebarMatches(matches: SidebarSearchMatch[]) {
 }
 
 function conciseWorkspaceOnboardingReason(path: string, workspaceError: string, workspaceStatus: string) {
-  if (!path.trim()) return '还没有项目。选择 workspace path 后会显示文件。';
+  if (!path.trim()) return '还没有项目。选择项目路径后会显示文件。';
   const diagnostic = `${workspaceError} ${workspaceStatus}`;
   if (/EACCES|EPERM|permission|权限/i.test(diagnostic)) return '无法读取当前项目；请检查权限。';
-  if (/ENOENT|not found|未找到/i.test(diagnostic)) return '未找到 .sciforge 工作区。';
+  if (/ENOENT|not found|未找到/i.test(diagnostic)) return '未找到项目工作区。';
   return '项目尚未初始化。';
 }
 
@@ -426,19 +446,19 @@ export function Sidebar({
   async function initializeWorkspacePath() {
     const root = config.workspacePath.trim();
     if (!root) {
-      setWorkspaceError('请先填写 workspace path。');
+      setWorkspaceError('请先填写项目路径。');
       return;
     }
     try {
       setWorkspaceError('');
-      setWorkspaceNotice('正在创建 SciForge workspace...');
+      setWorkspaceNotice('正在创建 SciForge 项目工作区...');
       await mutateWorkspaceFile(config, workspaceActions.createFolder, { path: root });
       await mutateWorkspaceFile(config, workspaceActions.createFolder, { path: `${root.replace(/\/+$/, '')}/.sciforge` });
       for (const resource of ['tasks', 'logs', 'task-results', 'scenarios', 'exports', 'artifacts', 'sessions', 'versions']) {
         await mutateWorkspaceFile(config, workspaceActions.createFolder, { path: `${root.replace(/\/+$/, '')}/.sciforge/${resource}` });
       }
       await refreshExplorer();
-      setWorkspaceNotice('SciForge workspace 已创建；可以导入 package 或运行场景。');
+      setWorkspaceNotice('SciForge 项目工作区已创建；可以导入 package 或运行场景。');
     } catch (err) {
       setWorkspaceError(workspaceOnboardingError(err));
       setWorkspaceNotice('');
@@ -703,8 +723,8 @@ export function Sidebar({
               </section>
               <section className="sidebar-section sidebar-section-threads" aria-labelledby="sidebar-threads-title">
                 <div className="sidebar-section-title" id="sidebar-threads-title">
-                  <span>Threads</span>
-                  {archivedThreadCount ? <Badge variant="muted">{archivedThreadCount} archived</Badge> : null}
+                  <span>线程</span>
+                  {archivedThreadCount ? <Badge variant="muted">{archivedThreadCount} 已归档</Badge> : null}
                 </div>
                 {sidebarThreadItems.length ? (
                   <div className="sidebar-thread-list">
@@ -731,11 +751,11 @@ export function Sidebar({
               <section className="sidebar-section sidebar-section-tools" aria-label="工具">
                 <button type="button" className={cx('nav-item sidebar-command', page === 'components' && 'active')} onClick={() => setPage('components')}>
                   <Plug size={17} />
-                  <span>Plugins</span>
+                  <span>插件</span>
                 </button>
-                <div className="sidebar-static-row" aria-label="Automations">
+                <div className="sidebar-static-row" aria-label="自动化">
                   <Workflow size={17} />
-                  <span>Automations</span>
+                  <span>自动化</span>
                   <Badge variant="muted">0</Badge>
                 </div>
                 <p className="sidebar-empty-note">暂无自动化</p>
@@ -751,7 +771,7 @@ export function Sidebar({
             </div>
             <div className="scenario-list scenario-list-workspace">
               <div className="sidebar-section-title sidebar-project-title">
-                <span>Projects</span>
+                <span>项目</span>
                 {workspaceRoot ? <small>{pathBasename(workspaceRoot) || workspaceRoot}</small> : null}
               </div>
               <div className="scenario-list-explorer-toolbar">
@@ -794,10 +814,10 @@ export function Sidebar({
               >
                 {workspaceNeedsOnboarding(config.workspacePath, workspaceError, workspaceStatus) ? (
                   <div className="workspace-onboarding">
-                    <strong>{config.workspacePath.trim() ? '初始化 SciForge workspace' : '设置 workspace path'}</strong>
+                    <strong>{config.workspacePath.trim() ? '初始化 SciForge 项目' : '设置项目路径'}</strong>
                     <p>{conciseWorkspaceOnboardingReason(config.workspacePath, workspaceError, workspaceStatus)}</p>
                     <button type="button" onClick={() => void initializeWorkspacePath()}>
-                      创建 .sciforge 工作区
+                      创建项目工作区
                     </button>
                   </div>
                 ) : null}
@@ -933,8 +953,8 @@ export function Sidebar({
                         if (event.key === 'Enter') void refreshExplorer();
                       }}
                       spellCheck={false}
-                      title={workspaceStatus || 'Workspace 根路径'}
-                      aria-label="Workspace 根路径"
+                      title={workspaceStatus || '项目根路径'}
+                      aria-label="项目根路径"
                     />
                     <div className="explorer-folder-picker-actions">
                       <button type="button" className="explorer-cta-btn" onClick={() => onWorkspacePathChange(pathEditDraft.trim())}>
@@ -949,7 +969,7 @@ export function Sidebar({
             <div className="sidebar-footer-actions">
               <button type="button" className="nav-item sidebar-command" onClick={() => onSettingsOpen?.()}>
                 <Settings size={17} />
-                <span>Settings</span>
+                <span>设置</span>
               </button>
             </div>
           </div>
@@ -993,11 +1013,11 @@ export function TopBar({
     <header className="topbar">
       <form className="searchbox" onSubmit={handleSubmit}>
         <Search size={15} />
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索文件、报告、运行、问题..." />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索文件、报告、问题..." />
       </form>
       <div className="topbar-actions">
         <Badge variant={healthProblems ? 'warning' : 'success'} glow>
-          SciForge · {healthProblems ? `${healthProblems} actions` : 'ready'}
+          SciForge · {healthProblems ? `${healthProblems} 项需处理` : '就绪'}
         </Badge>
         <IconButton icon={(theme ?? 'dark') === 'dark' ? Sun : Moon} label={(theme ?? 'dark') === 'dark' ? '切换白天模式' : '切换黑夜模式'} onClick={onThemeToggle} />
         <IconButton icon={Settings} label="设置" onClick={onSettingsOpen} />

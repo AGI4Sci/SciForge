@@ -703,8 +703,6 @@ export function readableElementTitle(element: HTMLElement) {
 
 export function stableElementSelector(element: HTMLElement) {
   if (element.id) return `#${element.id}`;
-  const dataRunId = element.dataset.runId;
-  if (dataRunId) return `[data-run-id="${dataRunId}"]`;
   const className = element.className.toString().split(/\s+/).filter(Boolean).slice(0, 3).join('.');
   return `${element.tagName.toLowerCase()}${className ? `.${className}` : ''}`;
 }
@@ -721,7 +719,117 @@ export function parseSciForgeReferenceAttribute(value: string | undefined): SciF
 }
 
 export function sciForgeReferenceAttribute(reference: SciForgeReference | undefined) {
-  return reference ? JSON.stringify(reference) : undefined;
+  return reference ? JSON.stringify(safeReferenceAttribute(reference)) : undefined;
+}
+
+function safeReferenceAttribute(reference: SciForgeReference): SciForgeReference {
+  const payload = safeReferencePayload(reference.payload);
+  return {
+    id: safeReferenceId(reference),
+    kind: reference.kind,
+    title: safeReferenceText(reference.title, '引用对象'),
+    ref: safeReferenceRef(reference),
+    sourceId: safeOptionalText(reference.sourceId),
+    summary: safeOptionalText(reference.summary),
+    locator: safeReferenceLocator(reference.locator),
+    payload,
+  };
+}
+
+function safeReferencePayload(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  const payload: Record<string, unknown> = {};
+  const marker = asString(value.composerMarker);
+  if (marker) payload.composerMarker = marker;
+  const currentReference = safeObjectReference(value.currentReference ?? value.objectReference);
+  if (currentReference) {
+    payload.currentReference = currentReference;
+    payload.objectReference = currentReference;
+  }
+  return Object.keys(payload).length ? payload : undefined;
+}
+
+function safeObjectReference(value: unknown): ObjectReference | undefined {
+  if (!isRecord(value)) return undefined;
+  const id = asString(value.id);
+  const kind = asString(value.kind);
+  const ref = asString(value.ref);
+  if (!id || !kind || !ref) return undefined;
+  const title = asString(value.title) || ref;
+  return {
+    id: safeReferenceText(id, `obj-${stableHash(id).slice(0, 10)}`),
+    kind: kind as ObjectReference['kind'],
+    title: safeReferenceText(title, '对象'),
+    ref: safePublicRef(ref, kind),
+    status: normalizeObjectReferenceStatus(asString(value.status)),
+    summary: safeOptionalText(asString(value.summary)),
+    provenance: safeObjectReferenceProvenance(value.provenance),
+  };
+}
+
+function normalizeObjectReferenceStatus(value: string | undefined): ObjectReference['status'] | undefined {
+  if (value === 'available' || value === 'blocked' || value === 'external' || value === 'missing' || value === 'expired') return value;
+  return undefined;
+}
+
+function safeObjectReferenceProvenance(value: unknown): ObjectReference['provenance'] | undefined {
+  if (!isRecord(value)) return undefined;
+  const provenance = {
+    dataRef: safeOptionalText(asString(value.dataRef)),
+    path: safeOptionalText(asString(value.path)),
+    producer: safeOptionalText(asString(value.producer)),
+    version: safeOptionalText(asString(value.version)),
+    hash: safeOptionalText(asString(value.hash)),
+    size: typeof value.size === 'number' && Number.isFinite(value.size) ? value.size : undefined,
+    screenshotRef: safeOptionalText(asString(value.screenshotRef)),
+  };
+  return Object.values(provenance).some((entry) => entry !== undefined) ? provenance : undefined;
+}
+
+function safeReferenceId(reference: SciForgeReference) {
+  const raw = reference.id || `${reference.kind}:${reference.ref}`;
+  if (!unsafeReferenceText(raw)) return raw;
+  return `ref-${reference.kind}-${stableHash(raw).slice(0, 12)}`;
+}
+
+function safeReferenceRef(reference: SciForgeReference) {
+  if (reference.kind === 'task-result' || /^run::?/i.test(reference.ref)) {
+    return `task:${stableHash(reference.ref || reference.id).slice(0, 12)}`;
+  }
+  if (reference.kind === 'message' || /^message::?/i.test(reference.ref)) {
+    return `message:${stableHash(reference.ref || reference.id).slice(0, 12)}`;
+  }
+  return safePublicRef(reference.ref, reference.kind);
+}
+
+function safePublicRef(ref: string, kind?: string) {
+  if (!ref || unsafeReferenceText(ref)) return `reference:${stableHash(ref || kind || 'reference').slice(0, 12)}`;
+  return ref;
+}
+
+function safeReferenceLocator(locator: SciForgeReference['locator']) {
+  if (!locator) return undefined;
+  const textRange = safeOptionalText(locator.textRange);
+  const region = safeOptionalText(locator.region);
+  if (!textRange && !region) return undefined;
+  return { textRange, region };
+}
+
+function safeReferenceText(value: string | undefined, fallback: string) {
+  const safe = safeOptionalText(value);
+  return safe || fallback;
+}
+
+function safeOptionalText(value: string | undefined) {
+  if (!value) return undefined;
+  const compact = value.replace(/\s+/g, ' ').trim();
+  if (!compact) return undefined;
+  if (unsafeReferenceText(compact)) return undefined;
+  return compact.slice(0, 160);
+}
+
+function unsafeReferenceText(value: string) {
+  return /(?:native-message|live-runtime-codex|runtime-artifact|raw[-_\s]?jsonl|stdout|stderr|provider|run\s*id|runId|command\s*id|commandId|ConversationProjection|ArtifactDelivery|codex-command|codex-runtime|agentserver:\/\/|execution-unit|stdoutRef|stderrRef|rawRef|traceRef|\.sciforge\/)/i.test(value);
 }
 
 export function appendReferenceMarkerToInput(currentInput: string, reference: SciForgeReference) {

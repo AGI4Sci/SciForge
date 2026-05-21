@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { structureSummaryMetricPresentation, uploadedInteractiveEvidenceArtifacts } from '@sciforge/interactive-views';
-import { scenarioPackageRefLabel } from '@sciforge/scenario-core/scenario-builder-display-policy';
 import { ChevronDown, ChevronUp, Clock, Download, FileCode, Lock, Shield } from 'lucide-react';
 import { buildExecutionBundle, evaluateExecutionBundleExport } from '../../exportPolicy';
 import { scenarios, type ScenarioId } from '../../data';
@@ -162,25 +161,25 @@ export function ExecutionPanel({
     <div className="stack">
       <SectionHeader
         icon={Lock}
-        title="可复现执行单元"
-        subtitle={embedded ? '执行摘要、审计状态和数据指纹' : '代码 + 参数 + 环境 + 数据指纹'}
-        action={<ActionButton icon={Download} variant="secondary" onClick={() => exportExecutionBundle(session, activeRun, rows)}>导出 JSON Bundle</ActionButton>}
+        title="可复现过程"
+        subtitle={embedded ? '过程摘要、验证状态和数据指纹' : '步骤、环境和数据指纹'}
+        action={<ActionButton icon={Download} variant="secondary" onClick={() => exportExecutionBundle(session, activeRun, rows)}>导出过程包</ActionButton>}
       />
       {rows.length ? (
         <div className="eu-table">
           <div className="eu-head">
-            <span>EU ID</span>
-            <span>Tool</span>
-            <span>Params</span>
-            <span>Code Artifact</span>
-            <span>Status</span>
-            <span>Hash</span>
+            <span>步骤</span>
+            <span>动作</span>
+            <span>输入</span>
+            <span>材料</span>
+            <span>状态</span>
+            <span>指纹</span>
           </div>
           {rows.map((unit, index) => (
             <div className="eu-row" key={`${unit.id}-${unit.hash || index}-${index}`}>
-              <code>{unit.id}</code>
-              <span>{unit.tool}</span>
-              <code title={unit.params}>{compactParams(unit.params)}</code>
+              <code>{index + 1}</code>
+              <span>{executionActionLabel(unit)}</span>
+              <code title={safeExecutionDetail(unit.params)}>{compactParams(executionInputLabel(unit.params))}</code>
               <code title={unit.code || unit.language || ''}>
                 {unit.code || unit.language || auditMaterialLabel(unit)}
               </code>
@@ -188,7 +187,7 @@ export function ExecutionPanel({
                 <Badge variant={executionStatusVariant(unit.status)}>{executionStatusLabel(unit.status)}</Badge>
                 <Badge variant={executionVerificationPresentation(unit).variant}>{executionVerificationPresentation(unit).label}</Badge>
               </span>
-              <code>{unit.hash}</code>
+              <code>{executionFingerprintLabel(unit.hash)}</code>
               {executionStatusDetail(unit) ? (
                 <div className="eu-detail">
                   {executionStatusDetail(unit)}
@@ -197,9 +196,9 @@ export function ExecutionPanel({
             </div>
           ))}
         </div>
-      ) : <EmptyArtifactState title="等待真实 ExecutionUnit" detail="执行面板只展示当前会话的 runtime executionUnits，不再填充 demo 执行记录。" />}
+      ) : <EmptyArtifactState title="等待过程记录" detail="当前会话产生可追溯过程后会显示在这里。" />}
       <Card className="code-card">
-        <SectionHeader icon={FileCode} title="环境定义" />
+        <SectionHeader icon={FileCode} title="环境摘要" />
         <pre>{executionEnvironmentText(rows)}</pre>
       </Card>
     </div>
@@ -217,64 +216,88 @@ function executionStatusVariant(status: RuntimeExecutionUnit['status']): Executi
 function executionStatusDetail(unit: RuntimeExecutionUnit) {
   const verification = executionVerificationPresentation(unit);
   const lines = [
-    unit.attempt ? `attempt=${unit.attempt}` : undefined,
-    unit.parentAttempt ? `parentAttempt=${unit.parentAttempt}` : undefined,
-    unit.runtimeProfileId ? `runtimeProfile=${unit.runtimeProfileId}` : undefined,
-    unit.routeDecision?.selectedSkill ? `selectedSkill=${unit.routeDecision.selectedSkill}` : undefined,
-    unit.routeDecision?.selectedRuntime ? `selectedRuntime=${unit.routeDecision.selectedRuntime}` : undefined,
-    unit.routeDecision?.fallbackReason ? `fallback=${unit.routeDecision.fallbackReason}` : undefined,
-    unit.scenarioPackageRef ? `package=${scenarioPackageRefLabel(unit.scenarioPackageRef)}` : undefined,
-    unit.skillPlanRef ? `skillPlan=${unit.skillPlanRef}` : undefined,
-    unit.uiPlanRef ? `uiPlan=${unit.uiPlanRef}` : undefined,
-    unit.selfHealReason ? `selfHealReason=${unit.selfHealReason}` : undefined,
-    unit.failureReason ? `failureReason=${unit.failureReason}` : undefined,
-    unit.requiredInputs?.length ? `requiredInputs=${unit.requiredInputs.join(', ')}` : undefined,
-    unit.recoverActions?.length ? `recover=${unit.recoverActions.join(' | ')}` : undefined,
-    unit.nextStep ? `nextStep=${unit.nextStep}` : undefined,
-    unit.patchSummary ? `patchSummary=${unit.patchSummary}` : undefined,
-    auditRefCount(unit) ? `${auditRefCount(unit)} audit ref(s) retained` : undefined,
-    unit.verificationVerdict ? `verdict=${unit.verificationVerdict}` : undefined,
-    `verificationStatus=${verification.detail}`,
+    unit.failureReason ? `失败摘要：${safeExecutionDetail(unit.failureReason)}` : undefined,
+    unit.recoverActions?.length ? `恢复建议：${unit.recoverActions.map(safeExecutionDetail).join('；')}` : undefined,
+    unit.nextStep ? `下一步：${safeExecutionDetail(unit.nextStep)}` : undefined,
+    unit.patchSummary ? `修改摘要：${safeExecutionDetail(unit.patchSummary)}` : undefined,
+    auditRefCount(unit) ? `已保留 ${auditRefCount(unit)} 条过程材料` : undefined,
+    `验证：${verification.detail}`,
   ].filter(Boolean);
   return sanitizeUserProjectionText(lines.join(' · ')) ?? (lines.length ? lines.join(' · ') : '');
 }
 
 function executionEnvironmentText(rows: RuntimeExecutionUnit[]) {
-  if (!rows.length) return 'No runtime execution units yet.';
+  if (!rows.length) return '暂无过程记录。';
   const text = rows.map((unit) => [
-    `id: ${unit.id}`,
-    `tool: ${unit.tool}`,
-    `language: ${unit.language || 'unspecified'}`,
-    `entrypoint: ${unit.entrypoint || 'n/a'}`,
-    `environment: ${unit.environment || 'n/a'}`,
-    `auditRefs: ${auditRefCount(unit)} retained`,
-    `verificationVerdict: ${unit.verificationVerdict || 'n/a'}`,
-    `runtimeProfileId: ${unit.runtimeProfileId || 'n/a'}`,
-    `selectedSkill: ${unit.routeDecision?.selectedSkill || 'n/a'}`,
-    `selectedRuntime: ${unit.routeDecision?.selectedRuntime || 'n/a'}`,
-    `fallbackReason: ${unit.routeDecision?.fallbackReason || 'n/a'}`,
-    `scenarioPackageRef: ${scenarioPackageRefLabel(unit.scenarioPackageRef, { includeSource: true })}`,
-    `skillPlanRef: ${unit.skillPlanRef || 'n/a'}`,
-    `uiPlanRef: ${unit.uiPlanRef || 'n/a'}`,
-    `attempt: ${unit.attempt || 'n/a'}`,
-    `parentAttempt: ${unit.parentAttempt || 'n/a'}`,
-    `selfHealReason: ${unit.selfHealReason || 'n/a'}`,
-    `failureReason: ${unit.failureReason || 'n/a'}`,
-    `patchSummary: ${unit.patchSummary || 'n/a'}`,
-    `requiredInputs: ${(unit.requiredInputs ?? []).join(', ') || 'n/a'}`,
-    `recoverActions: ${(unit.recoverActions ?? []).join(' | ') || 'n/a'}`,
-    `nextStep: ${unit.nextStep || 'n/a'}`,
-    `databases: ${(unit.databaseVersions ?? []).join(', ') || 'n/a'}`,
+    `步骤：${executionActionLabel(unit)}`,
+    `语言：${safeExecutionDetail(unit.language || '未声明')}`,
+    `环境：${safeExecutionDetail(unit.environment || '未声明')}`,
+    `材料：${auditRefCount(unit)} 条`,
+    `验证：${executionVerdictText(unit)}`,
+    unit.failureReason ? `失败摘要：${safeExecutionDetail(unit.failureReason)}` : undefined,
+    unit.patchSummary ? `修改摘要：${safeExecutionDetail(unit.patchSummary)}` : undefined,
+    unit.nextStep ? `下一步：${safeExecutionDetail(unit.nextStep)}` : undefined,
+    unit.databaseVersions?.length ? `数据版本：${unit.databaseVersions.map(safeExecutionDetail).join('、')}` : undefined,
   ].join('\n')).join('\n\n');
   return sanitizeUserProjectionText(text) ?? text;
 }
 
 function auditMaterialLabel(unit: RuntimeExecutionUnit) {
-  return auditRefCount(unit) ? 'audit material retained' : 'n/a';
+  return auditRefCount(unit) ? '过程材料已保留' : '未声明';
 }
 
 function auditRefCount(unit: RuntimeExecutionUnit) {
   return [unit.codeRef, unit.stdoutRef, unit.stderrRef, unit.outputRef, unit.diffRef, unit.verificationRef].filter(Boolean).length;
+}
+
+function executionActionLabel(unit: RuntimeExecutionUnit) {
+  const haystack = `${unit.tool} ${unit.entrypoint ?? ''} ${unit.params ?? ''}`.toLowerCase();
+  if (/read|cat|sed|rg|grep|ls|find|open|inspect|search|fetch|download|读取|检索|查看|下载/.test(haystack)) return '读取/检索';
+  if (/edit|write|patch|apply|diff|save|create|mutate|生成|编辑|写入|修改/.test(haystack)) return '写入/生成';
+  if (/verify|validate|test|check|验证|检查|测试/.test(haystack)) return '验证';
+  if (/python|node|npm|tsx|pytest|run|exec|shell|运行|执行/.test(haystack)) return '执行';
+  return '处理';
+}
+
+function safeExecutionDetail(value: string | undefined) {
+  const compact = (value ?? '').replace(/\s+/g, ' ').trim();
+  if (!compact) return '未声明';
+  return compact
+    .replace(/\bsciforge\.background-completion(?:\.v\d+)?\b/gi, '后台过程')
+    .replace(/\brunId\s*=\s*[\w:-]+/gi, '本轮任务')
+    .replace(/\bstageId\s*=\s*[\w:-]+/gi, '当前阶段')
+    .replace(/\bverification:[\w:-]+/gi, '验证线索')
+    .replace(/\bexecution-unit:[\w:-]+/gi, '过程线索')
+    .replace(/\bEU-[\w:-]+/g, '过程步骤')
+    .replace(/\brun-[\w:-]+/gi, '本轮任务')
+    .replace(/\brun:[\w:/#.-]+/gi, '运行线索')
+    .replace(/\.sciforge\/[\w./-]+/gi, '本地材料')
+    .replace(/\bstdout(?:Ref)?\b/gi, '输出线索')
+    .replace(/\bstderr(?:Ref)?\b/gi, '错误线索')
+    .replace(/\bprovider\b/gi, '外部服务')
+    .replace(/\bruntimeProfile\w*/gi, '运行配置')
+    .replace(/\bExecutionUnit\b/gi, '过程步骤')
+    .replace(/\braw\s*JSONL\b/gi, '诊断日志')
+    .replace(/\bcodex-command-[\w-]+/gi, '本轮任务')
+    .slice(0, 220);
+}
+
+function executionInputLabel(params: string | undefined) {
+  const safe = safeExecutionDetail(params);
+  if (safe === '{}' || safe === '未声明') return safe;
+  if (/本轮任务|当前阶段|运行线索|过程线索|本地材料|验证线索/.test(safe)) return '参数已归档';
+  return safe;
+}
+
+function executionFingerprintLabel(hash: string | undefined) {
+  const safe = safeExecutionDetail(hash);
+  if (!safe || safe === '未声明') return '已记录';
+  if (/本轮任务|当前阶段|运行线索|过程线索|本地材料|验证线索/.test(safe)) return '已记录';
+  return safe;
+}
+
+function executionVerdictText(unit: RuntimeExecutionUnit) {
+  return executionVerificationPresentation(unit).label;
 }
 
 export function NotebookTimeline({ scenarioId, notebook = [], embedded = false }: { scenarioId: ScenarioId; notebook?: NotebookRecord[]; embedded?: boolean }) {

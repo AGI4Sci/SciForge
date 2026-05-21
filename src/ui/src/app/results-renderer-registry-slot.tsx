@@ -44,6 +44,7 @@ import {
   sciForgeReferenceAttribute,
   referenceForArtifact,
 } from '../../../../packages/support/object-references';
+import { sanitizeUserProjectionText } from './conversation-projection-view-model';
 
 export type RegistryRendererProps = {
   scenarioId: ScenarioId;
@@ -76,13 +77,13 @@ function UnknownArtifactInspector({ slot, artifact, session }: RegistryRendererP
       <ArtifactSourceBar artifact={artifact} session={session} />
       <ArtifactDownloads artifact={artifact} />
       <div className="slot-meta">
-        <Badge variant="warning">inspector</Badge>
-        {artifact ? <code>{artifact.type}</code> : null}
+        <Badge variant="warning">详情</Badge>
+        {artifact ? <code>{artifactTypeLabel(artifact.type)}</code> : null}
         {viewCompositionSummary(slot) ? <code>{viewCompositionSummary(slot)}</code> : null}
       </div>
       {refs.length ? (
         <div className="slot-meta">
-          <span className="muted-inline">{refs.length} audit ref(s) retained for debug details.</span>
+          <span className="muted-inline">{refs.length} 条过程材料已保留。</span>
         </div>
       ) : null}
       {table.rows.length ? (
@@ -143,8 +144,8 @@ function ComponentEmptyState({
   ];
   return (
     <EmptyArtifactState
-      title={title ?? component?.emptyState.title ?? '等待 runtime artifact'}
-      detail={detail ?? component?.emptyState.detail ?? '当前组件没有可展示 artifact；请运行场景或导入匹配数据。'}
+      title={title ?? component?.emptyState.title ?? '等待结果材料'}
+      detail={detail ?? component?.emptyState.detail ?? '当前组件没有可展示材料；请运行场景或导入匹配数据。'}
       recoverActions={Array.from(new Set(recoverActions))}
     />
   );
@@ -157,21 +158,44 @@ function ArtifactSourceBar({ artifact, session }: { artifact?: RuntimeArtifact; 
     return (
       <div className="artifact-source-bar">
         <Badge variant="muted">empty</Badge>
-        <code>no runtime artifact</code>
+        <code>等待结果材料</code>
       </div>
     );
   }
   return (
     <div className="artifact-source-bar" data-sciforge-reference={sciForgeReferenceAttribute(referenceForArtifact(artifact, artifactReferenceKind(artifact)))}>
-      <Badge variant={sourceVariant(source)}>{source}</Badge>
+      <Badge variant={sourceVariant(source)}>{artifactSourceLabel(source)}</Badge>
       <code>{artifact.id}</code>
-      <code>{artifact.type}</code>
-      <code>schema={artifact.schemaVersion}</code>
-      {artifact.path ? <code title={artifact.path}>path={compactParams(artifact.path)}</code> : null}
-      {artifact.dataRef ? <code title={artifact.dataRef}>dataRef={compactParams(artifact.dataRef)}</code> : null}
-      {unit ? <code title={unit.params}>tool={unit.tool} · {unit.status}</code> : <code>audit warning: no ExecutionUnit</code>}
+      <code>{artifactTypeLabel(artifact.type)}</code>
+      <code>版本 {artifact.schemaVersion}</code>
+      {artifact.path || artifact.dataRef ? <code title="材料路径已归档">材料已归档</code> : null}
+      {unit ? <code title="过程材料已匹配">{safeSourceBarLabel(`${unit.tool} ${unit.status}`)}</code> : <code>等待过程线索</code>}
     </div>
   );
+}
+
+function safeSourceBarLabel(value: string) {
+  const safe = sanitizeUserProjectionText(value)
+    ?? value
+      .replace(/\bExecutionUnit\b/gi, '过程步骤')
+      .replace(/\bEU-[\w:-]+/g, '过程步骤')
+      .replace(/\bstdout|stderr|provider|runtime|debug|raw|tool\b/gi, '过程')
+      .replace(/\brun[-:]?[\w:-]+/gi, '本轮任务');
+  return compactParams(safe.trim() || '过程材料已匹配');
+}
+
+function artifactSourceLabel(source: string) {
+  if (source === 'runtime-artifact') return '运行结果';
+  if (source === 'project-tool') return '运行结果';
+  if (source === 'user-upload') return '用户上传';
+  if (source === 'external') return '外部材料';
+  if (source === 'empty') return '等待材料';
+  return source.replace(/runtime|artifact/gi, '材料');
+}
+
+function artifactTypeLabel(type: string) {
+  if (type === 'runtime-artifact') return '结果材料';
+  return type.replace(/runtime-artifact/gi, '结果材料');
 }
 
 function packageRendererProps(props: RegistryRendererProps): UIComponentRendererProps {
@@ -252,7 +276,7 @@ export function renderRegisteredWorkbenchSlot(props: RegistryRendererProps): Rea
     return (
       <EmptyArtifactState
         title={interactiveUnknownComponentFallbackPolicy({ componentId: props.slot.componentId }).title}
-        detail={`componentId: ${props.slot.componentId}`}
+        detail={`组件：${props.slot.componentId}`}
       />
     );
   }
@@ -336,8 +360,8 @@ export function RegistrySlot({
         data-sciforge-reference={sciForgeReferenceAttribute(artifact ? referenceForArtifact(artifact, artifactReferenceKind(artifact)) : referenceForResultSlot(item))}
       >
         <SectionHeader icon={AlertTriangle} title={fallback.title} subtitle={fallback.subtitle} />
-        <p className="empty-state">{fallback.detail}</p>
-        {fallback.missingArtifactDetail ? <p className="empty-state">{fallback.missingArtifactDetail}</p> : null}
+        <p className="empty-state">{safeFallbackText(fallback.detail)}</p>
+        {fallback.missingArtifactDetail ? <p className="empty-state">{safeFallbackText(fallback.missingArtifactDetail)}</p> : null}
         <ArtifactCardControls
           artifact={artifact}
           presentationId={item.id}
@@ -379,6 +403,17 @@ export function RegistrySlot({
       {entry.render({ scenarioId, config, session, slot, artifact, input: item.input, onObjectReferenceFocus })}
     </Card>
   );
+}
+
+function safeFallbackText(value: string) {
+  return value
+    .replace(/componentId/gi, '组件')
+    .replace(/\bScenario\b/g, '场景')
+    .replace(/\bartifactRef\b/gi, '材料引用')
+    .replace(/\bartifact\b/gi, '材料')
+    .replace(/\bmanifest\b/gi, '展示配置')
+    .replace(/\binspector\b/gi, '详情视图')
+    .replace(/日志引用/g, '过程材料');
 }
 
 function artifactDeliveryPreview(artifact?: RuntimeArtifact): { subtitle: string; detail: string; openRef?: string } | undefined {

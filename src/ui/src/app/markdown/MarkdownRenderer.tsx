@@ -113,9 +113,10 @@ function linkExplicitReferenceString(
 ): ReactNode {
   const pieces: ReactNode[] = [];
   let cursor = 0;
-  for (const match of value.matchAll(/\b(?:(?:artifact|file|folder|run|execution-unit|scenario-package)::?[^\s)\]）>，。；、,;]+|https?:\/\/[^\s)\]）>，。；、]+)[^\s)\]）>，。；、,;]*/gi)) {
+  for (const match of value.matchAll(inlineReferenceTextPattern())) {
     const token = match[0].replace(/[.,;，。；、]+$/, '');
     const index = match.index ?? 0;
+    if (index < cursor) continue;
     const reference = resolveInlineObjectReferenceToken(token, references);
     if (!reference) continue;
     if (index > cursor) pieces.push(value.slice(cursor, index));
@@ -135,6 +136,10 @@ function linkExplicitReferenceString(
   if (cursor === 0) return value;
   if (cursor < value.length) pieces.push(value.slice(cursor));
   return pieces;
+}
+
+function inlineReferenceTextPattern() {
+  return /\b(?:(?:artifact|file|folder|run|execution-unit|scenario-package)::?[^\s)\]）>，。；、,;]+|https?:\/\/[^\s)\]）>，。；、]+|(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:md|markdown|txt|log|jsonl?|csv|tsv|html?|pdf|docx?|xlsx?|pptx?|png|jpe?g|gif|webp|svg|pdb|cif|mmcif))(?![A-Za-z0-9_./-])/gi;
 }
 
 function referenceWithObjectPayload(reference: ObjectReference) {
