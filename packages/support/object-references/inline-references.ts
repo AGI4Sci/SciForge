@@ -60,7 +60,14 @@ export function objectReferenceMentionedInText(content: string, reference: Objec
   const candidates = objectReferenceLinkKeys(reference)
     .flatMap((key) => [key, basenameForInlineToken(key)].filter((value): value is string => Boolean(value)));
   const inlineCodeTokens = [...content.matchAll(/`([^`\n]+)`/g)].map((match) => match[1]?.trim().toLowerCase() ?? '');
-  return candidates.some((candidate) => candidate.length >= 4 && inlineCodeTokens.includes(candidate.toLowerCase()));
+  const explicitTokens = [...content.matchAll(/\b(?:artifact|file|folder|run|execution-unit|scenario-package)::?[^\s)\]）>，。；、,;]+/gi)]
+    .map((match) => normalizeObjectRefKey(match[0].replace(/[.,;，。；、]+$/, '')));
+  return candidates.some((candidate) => {
+    if (candidate.length < 4) return false;
+    const normalized = candidate.toLowerCase();
+    return inlineCodeTokens.includes(normalized)
+      || explicitTokens.includes(normalizeObjectRefKey(candidate));
+  });
 }
 
 function objectReferenceFromInlineToken(raw: string, runId?: string): ObjectReference | undefined {

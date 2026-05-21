@@ -70,7 +70,7 @@ test('message markdown renderer supports GFM tables while structured object refs
   assert.match(markup, /Picked methods file/);
 });
 
-test('message markdown renderer upgrades only resolvable inline code object refs', () => {
+test('message markdown renderer upgrades resolvable inline code and explicit prose refs', () => {
   const markup = renderToStaticMarkup(
     <MessageContent
       content="Use `file:papers/methods.md` as literal text, then open file:papers/methods.md."
@@ -79,8 +79,23 @@ test('message markdown renderer upgrades only resolvable inline code object refs
     />,
   );
 
-  assert.equal((markup.match(/data-sciforge-reference=/g) ?? []).length, 1);
+  assert.equal((markup.match(/data-sciforge-reference=/g) ?? []).length, 2);
   assert.match(markup, /<button[^>]+markdown-object-ref/);
+});
+
+test('message markdown renderer keeps unresolved explicit prose refs as plain text', () => {
+  const markup = renderToStaticMarkup(
+    <MessageContent
+      content="Open artifact:missing-report and keep it as plain text."
+      references={[pickedFile]}
+      onObjectFocus={() => undefined}
+    />,
+  );
+
+  assert.equal((markup.match(/data-sciforge-reference=/g) ?? []).length, 1);
+  assert.doesNotMatch(markup, /artifact:missing-report[^<]*<\/button>/);
+  assert.match(markup, /artifact:missing-report/);
+  assert.match(markup, /Picked methods file/);
 });
 
 test('message markdown renderer links unique bare filenames and leaves ambiguous code alone', () => {

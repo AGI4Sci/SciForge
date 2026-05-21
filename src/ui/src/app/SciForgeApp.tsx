@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   builtInScenarioIdForRuntimeInput,
   createBuiltInScenarioRecord,
-  defaultBuiltInScenarioId,
 } from '@sciforge/scenario-core/scenario-routing-policy';
 import { scenarios, type ScenarioId, type PageId } from '../data';
 import { FeedbackCaptureLayer } from '../feedback/FeedbackCaptureLayer';
@@ -88,6 +87,7 @@ import {
 } from './sciforgeApp/appStateModels';
 import { FeedbackInboxPage } from './sciforgeApp/FeedbackInboxPage';
 import { Workbench } from './sciforgeApp/SciForgeWorkbench';
+import { loadStoredAppNavigation, saveStoredAppNavigation } from './sciforgeApp/navigationStorage';
 
 export function SciForgeApp() {
   const initialNavigation = useMemo(() => loadStoredAppNavigation(), []);
@@ -487,9 +487,18 @@ export function SciForgeApp() {
       <Sidebar
         page={page}
         setPage={setPage}
-        scenarioId={activeBuiltInScenarioId}
+        scenarioId={scenarioId}
         setScenarioId={setScenarioId}
         config={config}
+        sessionsByScenario={sessions}
+        archivedSessions={workspaceState.archivedSessions}
+        onNewChat={(nextScenarioId) => {
+          setScenarioId(nextScenarioId);
+          setPage('workbench');
+          newChat(nextScenarioId);
+        }}
+        onSearchNavigate={handleSearch}
+        onSettingsOpen={() => setSettingsOpen(true)}
         workspaceStatus={workspaceStatus}
         onWorkspacePathChange={setWorkspacePath}
         deferWorkbenchFilePreview={page === 'workbench'}
@@ -606,40 +615,4 @@ export function SciForgeApp() {
       ) : null}
     </div>
   );
-}
-
-const APP_NAVIGATION_STORAGE_KEY = 'sciforge.app-navigation.v1';
-const validPages = new Set<PageId>(['dashboard', 'workbench', 'components', 'timeline', 'feedback']);
-
-function appNavigationStorageKey() {
-  if (typeof window === 'undefined') return APP_NAVIGATION_STORAGE_KEY;
-  const host = window.location.host.trim();
-  return host ? `${APP_NAVIGATION_STORAGE_KEY}.${host}` : APP_NAVIGATION_STORAGE_KEY;
-}
-
-function loadStoredAppNavigation(): { page: PageId; scenarioId: ScenarioInstanceId } {
-  if (typeof window === 'undefined') return { page: 'dashboard', scenarioId: defaultBuiltInScenarioId };
-  try {
-    const raw = window.localStorage.getItem(appNavigationStorageKey());
-    if (!raw) return { page: 'dashboard', scenarioId: defaultBuiltInScenarioId };
-    const parsed = JSON.parse(raw) as { page?: unknown; scenarioId?: unknown };
-    const page = typeof parsed.page === 'string' && validPages.has(parsed.page as PageId)
-      ? parsed.page as PageId
-      : 'dashboard';
-    const scenarioId = typeof parsed.scenarioId === 'string' && parsed.scenarioId.trim()
-      ? parsed.scenarioId.trim()
-      : defaultBuiltInScenarioId;
-    return { page, scenarioId };
-  } catch {
-    return { page: 'dashboard', scenarioId: defaultBuiltInScenarioId };
-  }
-}
-
-function saveStoredAppNavigation(navigation: { page: PageId; scenarioId: ScenarioInstanceId }) {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(appNavigationStorageKey(), JSON.stringify(navigation));
-  } catch {
-    // Navigation restore is convenience state; workspace-state remains the durable source of truth.
-  }
 }

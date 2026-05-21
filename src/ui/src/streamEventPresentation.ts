@@ -255,6 +255,8 @@ export function assistantDraftDeltaFromStreamEvent(event: AgentStreamEvent) {
 }
 
 export function readableStreamEventDetail(event: AgentStreamEvent) {
+  const runningChatAuditDetail = readableRunningChatAuditDetail(event);
+  if (runningChatAuditDetail !== undefined) return runningChatAuditDetail;
   if (isRawRuntimeAuditEvent(event)) return runtimeAuditOnlyEventSummary(event);
   if (event.contextWindowState) {
     const state = event.contextWindowState;
@@ -286,6 +288,8 @@ export function readableStreamEventDetail(event: AgentStreamEvent) {
 function streamEventImportance(event: AgentStreamEvent, detail: string): StreamEventImportance {
   const type = event.type.toLowerCase();
   const interactionProgress = interactionProgressSummary(event);
+  const runningChatAuditImportance = streamImportanceForRunningChatAudit(event);
+  if (runningChatAuditImportance) return runningChatAuditImportance;
   if (isRawRuntimeAuditEvent(event)) return 'debug';
   if (interactionProgress) return interactionProgress.importance;
   const structured = structuredWorkEventSummary(event);
@@ -312,6 +316,54 @@ function streamEventImportance(event: AgentStreamEvent, detail: string): StreamE
     return runtimeStreamCompletionDetailIsKey(detail) ? 'key' : 'background';
   }
   return detail.length > 400 ? 'background' : 'key';
+}
+
+function readableRunningChatAuditDetail(event: AgentStreamEvent): string | undefined {
+  const type = event.type.toLowerCase();
+  if (type === CONTEXT_WINDOW_STATE_EVENT_TYPE.toLowerCase() && event.contextWindowState) {
+    const state = event.contextWindowState;
+    if (state.pendingCompact || state.status === 'compacting') return '上下文接近上限，正在准备压缩。';
+    if (state.status === 'blocked' || state.status === 'exceeded') return '上下文已接近上限，需要压缩或恢复后继续。';
+    if (state.status === 'near-limit') return '上下文接近上限，后续会优先保留关键上下文。';
+    return '';
+  }
+  if (isRunningChatInternalEvent(event)) return '';
+  return undefined;
+}
+
+function streamImportanceForRunningChatAudit(event: AgentStreamEvent): StreamEventImportance | undefined {
+  const type = event.type.toLowerCase();
+  if (type === CONTEXT_WINDOW_STATE_EVENT_TYPE.toLowerCase() && event.contextWindowState) {
+    const state = event.contextWindowState;
+    return state.pendingCompact
+      || state.status === 'compacting'
+      || state.status === 'blocked'
+      || state.status === 'exceeded'
+      || state.status === 'near-limit'
+      ? 'key'
+      : 'debug';
+  }
+  if (isRunningChatInternalEvent(event)) return 'debug';
+  return undefined;
+}
+
+function isRunningChatInternalEvent(event: AgentStreamEvent) {
+  const type = event.type.toLowerCase();
+  if (new Set(['current-plan', 'project-tool-start', 'project-tool-done', 'codex-runtime-run']).has(type)) return true;
+  const raw = isRecord(event.raw) ? event.raw : {};
+  const detailText = [event.label, event.detail, raw.message, raw.detail]
+    .map((item) => typeof item === 'string' ? item.toLowerCase() : '')
+    .join(' ');
+  if (/runtime codex native assistant message recorded|raw jsonl|folded in the run audit/.test(detailText)) return true;
+  if (/正在把本轮请求交给 workspace runtime|workspace runtime 首个事件|已收到请求/.test(detailText)) return true;
+  const role = [event.label, raw.presentationRole, raw.role, raw.displayRole]
+    .map((item) => typeof item === 'string' ? item.toLowerCase() : '')
+    .join(' ');
+  if (/\b(?:audit|debug)\b/.test(role)) return true;
+  if (type === 'status') {
+    return /\b(?:agentserver|runtime codex|local model|calling local model|codex runtime)\b/.test(detailText);
+  }
+  return false;
 }
 
 function streamEventTypeLabel(type: string, event?: AgentStreamEvent, detail = '') {

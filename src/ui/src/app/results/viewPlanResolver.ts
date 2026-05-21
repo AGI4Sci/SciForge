@@ -339,7 +339,7 @@ function displayIntentFromConversationProjection(
     primaryGoal: conversationProjectionVisibleText(projection)
       ?? firstProjectionArtifact?.label
       ?? conversationProjectionPrimaryDiagnostic(projection)
-      ?? '展示 ConversationProjection 产物',
+      ?? '展示本轮产物',
     requiredArtifactTypes: artifactTypes,
     preferredModules: [],
     fallbackAcceptable: [],
@@ -350,7 +350,7 @@ function displayIntentFromConversationProjection(
 
 function projectionlessDisplayIntent(): DisplayIntent {
   return {
-    primaryGoal: '等待 ConversationProjection',
+    primaryGoal: '等待本轮结果',
     requiredArtifactTypes: [],
     preferredModules: [],
     fallbackAcceptable: [],
@@ -497,7 +497,7 @@ function isUserVisibleDeliveryArtifact(artifact: RuntimeArtifact) {
 
 function projectionlessAuditDiagnostics(session: SciForgeSession, activeRun?: SciForgeRun) {
   return projectionlessRunHasAuditMaterial(session, activeRun)
-    ? ['没有 ConversationProjection；raw run、resultPresentation、validation 与 ExecutionUnit 仅作为审计材料，不生成主 view plan。']
+    ? ['本轮还没有可展示的主结果；执行记录、校验和恢复线索仅作为审计材料，不生成主视图。']
     : [];
 }
 

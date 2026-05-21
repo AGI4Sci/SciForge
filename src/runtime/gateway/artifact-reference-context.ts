@@ -231,6 +231,8 @@ function artifactMatchesSelectedRef(artifact: Record<string, unknown>, selectedR
     stringField(artifact.dataRef),
     stringField(artifact.path),
     stringField(delivery.ref),
+    stringField(delivery.readableRef),
+    stringField(delivery.rawRef),
     stringField(metadata.ref),
     stringField(metadata.dataRef),
     stringField(metadata.path),

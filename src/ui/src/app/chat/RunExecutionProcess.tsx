@@ -56,7 +56,7 @@ export function RunExecutionProcess({
       data-testid="runtime-execution-process"
       data-source={projection ? 'projection' : 'audit'}
       data-session-id={session.sessionId}
-      data-run-id={runId}
+      data-run-id="run"
     >
       {steps.map((step) => {
         const references = mergeObjectReferences(
@@ -99,14 +99,16 @@ function projectionExecutionProcessSteps(
     });
   }
   projection.executionProcess.slice(-12).forEach((event) => {
+    const status = conversationProjectionStatus(projection);
+    const statusLabel = projectionStatusLabel(status);
     steps.push({
       id: `projection-${event.eventId}`,
-      kind: event.type,
-      title: compactAuditText(event.summary || event.type, 96),
-      meta: [conversationProjectionStatus(projection), event.timestamp].filter(Boolean).join(' · '),
+      kind: projectionEventKindLabel(event.type),
+      title: projectionEventTitle(event.summary || event.type, status),
+      meta: [statusLabel, event.timestamp].filter(Boolean).join(' · '),
       content: [
         `Projection 事件：${event.summary || event.type}。`,
-        `状态：${conversationProjectionStatus(projection)}。`,
+        `状态：${statusLabel}。`,
       ].join('\n'),
       references: objectReferences,
     });
@@ -233,6 +235,39 @@ function producedObjectLines(references: ObjectReference[]) {
     .filter((reference) => reference.kind === 'artifact' || reference.kind === 'file' || reference.kind === 'folder')
     .slice(0, 8)
     .map((reference) => `产生/引用对象：${reference.title}（${reference.ref}）${reference.summary ? `，${compactAuditText(reference.summary, 120)}` : ''}`);
+}
+
+function projectionStatusLabel(status: ReturnType<typeof conversationProjectionStatus>) {
+  const labels: Record<ReturnType<typeof conversationProjectionStatus>, string> = {
+    idle: '未执行',
+    planned: '已计划',
+    dispatched: '已分发',
+    'partial-ready': '部分结果',
+    'output-materialized': '已保存输出',
+    validated: '已验证边界',
+    'visible-not-live-acceptance': '回答已显示',
+    satisfied: '完成',
+    'degraded-result': '降级结果',
+    'external-blocked': '外部阻塞',
+    'repair-needed': '需恢复',
+    'needs-human': '需人工处理',
+    'background-running': '后台继续中',
+  };
+  return labels[status];
+}
+
+function projectionEventKindLabel(type: string) {
+  if (/native.?codex.?message/i.test(type)) return '回答';
+  if (/materialized|artifact|output/i.test(type)) return '产物';
+  if (/verification|validate/i.test(type)) return '验证';
+  return '过程';
+}
+
+function projectionEventTitle(summary: string, status: ReturnType<typeof conversationProjectionStatus>) {
+  if (status === 'visible-not-live-acceptance' || /native.?codex.?message/i.test(summary)) {
+    return '回答已在聊天中显示';
+  }
+  return compactAuditText(summary, 96);
 }
 
 function executionUnitVerb(unit: RuntimeExecutionUnit) {

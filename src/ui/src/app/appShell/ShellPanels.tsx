@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsUp, Copy, File, FileCode, FilePlus, FileText, Folder, FolderOpen, FolderPlus, Moon, RefreshCw, Save, Search, Settings, Sun, Target } from 'lucide-react';
-import { navItems, type PageId, type ScenarioId } from '../../data';
-import type { SciForgeConfig, ScenarioInstanceId } from '../../domain';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsUp, Copy, File, FileCode, FilePlus, FileText, Folder, FolderOpen, FolderPlus, MessageSquare, Moon, Plug, Plus, RefreshCw, Save, Search, Settings, Sun, Target, Workflow } from 'lucide-react';
+import { navItems, scenarios, type PageId } from '../../data';
+import type { SciForgeConfig, SciForgeSession, ScenarioInstanceId } from '../../domain';
 import { listWorkspace, mutateWorkspaceFile, openWorkspaceObject, readWorkspaceFile, writeWorkspaceFile, type WorkspaceEntry, type WorkspaceFileContent } from '../../api/workspaceClient';
 import { Badge, IconButton, cx } from '../uiPrimitives';
 import type { RuntimeHealthItem } from '../runtimeHealthPanel';
@@ -17,7 +17,6 @@ import {
   workspaceActions,
   workspaceNeedsOnboarding,
   workspaceOnboardingError,
-  workspaceOnboardingReason,
   type WorkspaceAction,
 } from './explorerModels';
 export { SettingsDialog } from './ShellPanelsSettingsDialog';
@@ -37,12 +36,148 @@ function explorerFileGlyph(name: string) {
   return <File size={16} className="explorer-type-icon explorer-icon-muted" aria-hidden />;
 }
 
+export interface SidebarThreadItem {
+  sessionId: string;
+  scenarioId: ScenarioInstanceId;
+  title: string;
+  detail: string;
+  updatedAt: string;
+}
+
+export interface SidebarSearchMatch {
+  id: string;
+  label: string;
+  detail: string;
+  page: PageId;
+  scenarioId?: ScenarioInstanceId;
+}
+
+export function sidebarSessionActivityScore(session: SciForgeSession) {
+  const nonSeedMessages = session.messages.filter((message) => !message.id.startsWith('seed')).length;
+  return nonSeedMessages
+    + session.runs.length
+    + session.artifacts.length
+    + session.executionUnits.length
+    + session.notebook.length;
+}
+
+export function sidebarThreadTitle(session: SciForgeSession) {
+  const title = compactSidebarLine(session.title, 44);
+  if (title && !isEvidenceLikeThreadTitle(title)) return title;
+  const firstUserPrompt = session.messages.find((message) => message.role === 'user' && !message.id.startsWith('seed'))?.content;
+  return compactSidebarLine(firstUserPrompt || '未命名聊天', 44);
+}
+
+export function buildSidebarThreadItems(sessionsByScenario: Partial<Record<ScenarioInstanceId, SciForgeSession>>): SidebarThreadItem[] {
+  return Object.values(sessionsByScenario)
+    .filter((session): session is SciForgeSession => {
+      if (!session) return false;
+      return sidebarSessionActivityScore(session) > 0;
+    })
+    .map((session) => ({
+      sessionId: session.sessionId,
+      scenarioId: session.scenarioId,
+      title: sidebarThreadTitle(session),
+      detail: sidebarThreadDetail(session),
+      updatedAt: session.updatedAt || session.createdAt,
+    }))
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+    .slice(0, 8);
+}
+
+export function buildSidebarSearchMatches(
+  query: string,
+  sessionsByScenario: Partial<Record<ScenarioInstanceId, SciForgeSession>>,
+): SidebarSearchMatch[] {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return [];
+  const matches: SidebarSearchMatch[] = [];
+
+  for (const item of navItems) {
+    if (containsNeedle(`${item.label} ${item.id}`, needle)) {
+      matches.push({ id: `page:${item.id}`, label: item.label, detail: '页面', page: item.id });
+    }
+  }
+  for (const scenario of scenarios) {
+    const haystack = `${scenario.name} ${scenario.domain} ${scenario.desc} ${scenario.tools.join(' ')}`;
+    if (containsNeedle(haystack, needle)) {
+      matches.push({
+        id: `scenario:${scenario.id}`,
+        label: scenario.name,
+        detail: '聊天场景',
+        page: 'workbench',
+        scenarioId: scenario.id,
+      });
+    }
+  }
+  for (const thread of buildSidebarThreadItems(sessionsByScenario)) {
+    if (containsNeedle(`${thread.title} ${thread.detail} ${thread.scenarioId}`, needle)) {
+      matches.push({
+        id: `thread:${thread.sessionId}`,
+        label: thread.title,
+        detail: thread.detail,
+        page: 'workbench',
+        scenarioId: thread.scenarioId,
+      });
+    }
+  }
+
+  return uniqueSidebarMatches(matches).slice(0, 8);
+}
+
+function compactSidebarLine(value: string | undefined, maxLength: number) {
+  const compact = (value ?? '').replace(/\s+/g, ' ').trim();
+  if (compact.length <= maxLength) return compact;
+  return `${compact.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+function isEvidenceLikeThreadTitle(title: string) {
+  return /^(artifact|file|folder|run|execution-unit|stdout|stderr|trace|log|debug):/i.test(title)
+    || /^[a-z][a-z0-9+.-]*:\/\//i.test(title)
+    || /\.(jsonl?|log|stdout|stderr)$/i.test(title);
+}
+
+function sidebarThreadDetail(session: SciForgeSession) {
+  const pieces = [
+    session.messages.filter((message) => !message.id.startsWith('seed')).length ? `${session.messages.filter((message) => !message.id.startsWith('seed')).length} messages` : '',
+    session.runs.length ? `${session.runs.length} runs` : '',
+    session.artifacts.length ? `${session.artifacts.length} artifacts` : '',
+  ].filter(Boolean);
+  return pieces.length ? pieces.join(' · ') : '新聊天';
+}
+
+function containsNeedle(value: string, needle: string) {
+  return value.toLocaleLowerCase().includes(needle);
+}
+
+function uniqueSidebarMatches(matches: SidebarSearchMatch[]) {
+  const seen = new Set<string>();
+  return matches.filter((match) => {
+    if (seen.has(match.id)) return false;
+    seen.add(match.id);
+    return true;
+  });
+}
+
+function conciseWorkspaceOnboardingReason(path: string, workspaceError: string, workspaceStatus: string) {
+  if (!path.trim()) return '还没有项目。选择 workspace path 后会显示文件。';
+  const diagnostic = `${workspaceError} ${workspaceStatus}`;
+  if (/EACCES|EPERM|permission|权限/i.test(diagnostic)) return '无法读取当前项目；请检查权限。';
+  if (/ENOENT|not found|未找到/i.test(diagnostic)) return '未找到 .sciforge 工作区。';
+  return '项目尚未初始化。';
+}
+
 export function Sidebar({
   page,
   setPage,
   scenarioId,
   setScenarioId,
   config,
+  sessionsByScenario,
+  archivedSessions,
+  onNewChat,
+  onSearchNavigate,
+  onSettingsOpen,
   workspaceStatus,
   onWorkspacePathChange,
   deferWorkbenchFilePreview,
@@ -53,8 +188,13 @@ export function Sidebar({
   page: PageId;
   setPage: (page: PageId) => void;
   scenarioId: ScenarioInstanceId;
-  setScenarioId: (id: ScenarioId) => void;
+  setScenarioId: (id: ScenarioInstanceId) => void;
   config: SciForgeConfig;
+  sessionsByScenario?: Record<ScenarioInstanceId, SciForgeSession>;
+  archivedSessions?: SciForgeSession[];
+  onNewChat?: (scenarioId: ScenarioInstanceId) => void;
+  onSearchNavigate?: (query: string) => void;
+  onSettingsOpen?: () => void;
   workspaceStatus: string;
   onWorkspacePathChange: (value: string) => void;
   deferWorkbenchFilePreview?: boolean;
@@ -75,7 +215,22 @@ export function Sidebar({
   const [previewDraft, setPreviewDraft] = useState('');
   const [previewDirty, setPreviewDirty] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entry?: WorkspaceEntry } | null>(null);
+  const [sidebarSearchQuery, setSidebarSearchQuery] = useState('');
   const resizingRef = useRef(false);
+  const sidebarSessions: Partial<Record<ScenarioInstanceId, SciForgeSession>> = sessionsByScenario ?? {};
+  const sidebarArchivedSessions = archivedSessions ?? [];
+  const sidebarSearchMatches = useMemo(
+    () => buildSidebarSearchMatches(sidebarSearchQuery, sidebarSessions),
+    [sidebarSearchQuery, sidebarSessions],
+  );
+  const sidebarThreadItems = useMemo(
+    () => buildSidebarThreadItems(sidebarSessions),
+    [sidebarSessions],
+  );
+  const archivedThreadCount = useMemo(
+    () => sidebarArchivedSessions.filter((session) => sidebarSessionActivityScore(session) > 0).length,
+    [sidebarArchivedSessions],
+  );
 
   useEffect(() => {
     if (collapsed) return;
@@ -395,6 +550,28 @@ export function Sidebar({
     }
   }
 
+  function handleNewChat() {
+    setScenarioId(scenarioId);
+    setPage('workbench');
+    onNewChat?.(scenarioId);
+  }
+
+  function openSidebarSearchMatch(match: SidebarSearchMatch) {
+    if (match.scenarioId) setScenarioId(match.scenarioId);
+    setPage(match.page);
+  }
+
+  function handleSidebarSearchSubmit(event: FormEvent) {
+    event.preventDefault();
+    const firstMatch = sidebarSearchMatches[0];
+    if (firstMatch) {
+      openSidebarSearchMatch(firstMatch);
+      return;
+    }
+    const query = sidebarSearchQuery.trim();
+    if (query) onSearchNavigate?.(query);
+  }
+
   function renderExplorerDepth(depth: number, dirPath: string): ReactNode {
     const entries = folderChildren[dirPath];
     if (entries === undefined) {
@@ -491,15 +668,92 @@ export function Sidebar({
             </button>
           </div>
           <div className="sidebar-panel-body">
-            <nav className="nav-section">
-              {navItems.map((item) => (
-                <button key={item.id} className={cx('nav-item', page === item.id && 'active')} onClick={() => setPage(item.id)}>
-                  <item.icon size={18} />
-                  <span>{item.label}</span>
+            <div className="sidebar-scroll">
+              <section className="sidebar-section sidebar-section-actions" aria-label="主操作">
+                <button type="button" className="nav-item sidebar-command primary" onClick={handleNewChat}>
+                  <Plus size={17} />
+                  <span>新聊天</span>
                 </button>
-              ))}
-            </nav>
+                <form className="sidebar-search" onSubmit={handleSidebarSearchSubmit}>
+                  <Search size={15} />
+                  <input
+                    value={sidebarSearchQuery}
+                    onChange={(event) => setSidebarSearchQuery(event.target.value)}
+                    placeholder="搜索聊天、项目、页面"
+                    aria-label="搜索聊天、项目、页面"
+                  />
+                </form>
+                {sidebarSearchQuery.trim() ? (
+                  <div className="sidebar-search-results" aria-label="侧边栏搜索结果">
+                    {sidebarSearchMatches.length ? sidebarSearchMatches.map((match) => (
+                      <button
+                        key={match.id}
+                        type="button"
+                        className="sidebar-result-row"
+                        onClick={() => openSidebarSearchMatch(match)}
+                      >
+                        <span>{match.label}</span>
+                        <small>{match.detail}</small>
+                      </button>
+                    )) : (
+                      <p className="sidebar-empty-note">无搜索结果</p>
+                    )}
+                  </div>
+                ) : null}
+              </section>
+              <section className="sidebar-section sidebar-section-threads" aria-labelledby="sidebar-threads-title">
+                <div className="sidebar-section-title" id="sidebar-threads-title">
+                  <span>Threads</span>
+                  {archivedThreadCount ? <Badge variant="muted">{archivedThreadCount} archived</Badge> : null}
+                </div>
+                {sidebarThreadItems.length ? (
+                  <div className="sidebar-thread-list">
+                    {sidebarThreadItems.map((item) => (
+                      <button
+                        key={item.sessionId}
+                        type="button"
+                        className={cx('sidebar-thread-row', item.sessionId === sidebarSessions[scenarioId]?.sessionId && 'active')}
+                        onClick={() => {
+                          setScenarioId(item.scenarioId);
+                          setPage('workbench');
+                        }}
+                      >
+                        <MessageSquare size={15} />
+                        <span>{item.title}</span>
+                        <small>{item.detail}</small>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="sidebar-empty-note">还没有聊天</p>
+                )}
+              </section>
+              <section className="sidebar-section sidebar-section-tools" aria-label="工具">
+                <button type="button" className={cx('nav-item sidebar-command', page === 'components' && 'active')} onClick={() => setPage('components')}>
+                  <Plug size={17} />
+                  <span>Plugins</span>
+                </button>
+                <div className="sidebar-static-row" aria-label="Automations">
+                  <Workflow size={17} />
+                  <span>Automations</span>
+                  <Badge variant="muted">0</Badge>
+                </div>
+                <p className="sidebar-empty-note">暂无自动化</p>
+              </section>
+              <section className="sidebar-section sidebar-section-views" aria-label="工作区视图">
+                {navItems.filter((item) => item.id !== 'components').map((item) => (
+                  <button key={item.id} className={cx('nav-item', page === item.id && 'active')} onClick={() => setPage(item.id)}>
+                    <item.icon size={17} />
+                    <span>{item.label}</span>
+                  </button>
+                ))}
+              </section>
+            </div>
             <div className="scenario-list scenario-list-workspace">
+              <div className="sidebar-section-title sidebar-project-title">
+                <span>Projects</span>
+                {workspaceRoot ? <small>{pathBasename(workspaceRoot) || workspaceRoot}</small> : null}
+              </div>
               <div className="scenario-list-explorer-toolbar">
                 <div className="explorer-view-toolbar">
                   <button
@@ -541,7 +795,7 @@ export function Sidebar({
                 {workspaceNeedsOnboarding(config.workspacePath, workspaceError, workspaceStatus) ? (
                   <div className="workspace-onboarding">
                     <strong>{config.workspacePath.trim() ? '初始化 SciForge workspace' : '设置 workspace path'}</strong>
-                    <p>{workspaceOnboardingReason(config.workspacePath, workspaceError, workspaceStatus)}</p>
+                    <p>{conciseWorkspaceOnboardingReason(config.workspacePath, workspaceError, workspaceStatus)}</p>
                     <button type="button" onClick={() => void initializeWorkspacePath()}>
                       创建 .sciforge 工作区
                     </button>
@@ -691,6 +945,12 @@ export function Sidebar({
                   </div>
                 </details>
               </div>
+            </div>
+            <div className="sidebar-footer-actions">
+              <button type="button" className="nav-item sidebar-command" onClick={() => onSettingsOpen?.()}>
+                <Settings size={17} />
+                <span>Settings</span>
+              </button>
             </div>
           </div>
         </div>

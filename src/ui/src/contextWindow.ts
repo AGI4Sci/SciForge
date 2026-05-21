@@ -4,46 +4,26 @@ export function buildContextWindowMeterModel(state: AgentContextWindowState, run
   const ratio = state.ratio ?? 0;
   const level = contextWindowLevel(state);
   const sourceLabel = contextWindowSourceLabel(state.source);
-  const used = state.usedTokens !== undefined ? formatCompactNumber(state.usedTokens) : 'unknown';
-  const windowSize = state.windowTokens !== undefined ? formatCompactNumber(state.windowTokens) : 'unknown';
+  const used = state.usedTokens !== undefined ? formatCompactNumber(state.usedTokens) : '未知';
+  const windowSize = state.windowTokens !== undefined ? formatCompactNumber(state.windowTokens) : '未知';
   const remainingTokens = state.usedTokens !== undefined && state.windowTokens !== undefined
     ? Math.max(0, state.windowTokens - state.usedTokens)
     : undefined;
-  const ratioLabel = state.ratio !== undefined ? `${Math.round(state.ratio * 100)}%` : 'unknown';
-  const ratioDetail = state.ratio !== undefined ? `${Math.round(state.ratio * 1000) / 10}%` : 'unknown';
+  const ratioLabel = state.ratio !== undefined ? `${Math.round(state.ratio * 100)}%` : '未知';
+  const ratioDetail = state.ratio !== undefined ? `${Math.round(state.ratio * 1000) / 10}%` : '未知';
   const statusLabel = contextWindowStatusLabel(state);
-  const thresholdDetail = [
-    state.watchThreshold !== undefined ? `watch ${formatPercent(state.watchThreshold)}` : undefined,
-    state.autoCompactThreshold !== undefined ? `compact ${formatPercent(state.autoCompactThreshold)}` : undefined,
-    state.nearLimitThreshold !== undefined ? `near ${formatPercent(state.nearLimitThreshold)}` : undefined,
-  ].filter(Boolean).join(' / ') || 'unknown';
+  const thresholdDetail = contextCompactLabel(state);
   const budgetRows = contextBudgetRows(state);
   const detailRows = [
-    { label: 'used/window', value: `${formatExactNumber(state.usedTokens)} / ${formatExactNumber(state.windowTokens)} tokens` },
-    { label: 'remaining', value: remainingTokens !== undefined ? `${formatExactNumber(remainingTokens)} tokens` : 'unknown' },
-    { label: 'ratio', value: ratioDetail },
-    { label: 'status', value: statusLabel },
-    { label: 'source', value: sourceLabel },
-    { label: 'runtime', value: state.backend || 'unknown' },
-    { label: 'model', value: state.model || state.provider || 'unknown' },
-    { label: 'compact', value: `${state.compactCapability || 'unknown'}${state.pendingCompact ? ' · pending' : ''}` },
-    { label: 'thresholds', value: thresholdDetail },
-    { label: 'last compacted', value: state.lastCompactedAt || 'never' },
+    { label: '已用', value: `${ratioDetail} 上下文` },
+    { label: '剩余', value: remainingTokens !== undefined ? `${formatCompactNumber(remainingTokens)} tokens` : '未知' },
+    { label: '状态', value: statusLabel },
+    { label: '压缩', value: thresholdDetail },
     ...budgetRows,
   ];
-  const title = [
-    `used/window: ${formatExactNumber(state.usedTokens)}/${formatExactNumber(state.windowTokens)} tokens`,
-    `remaining: ${remainingTokens !== undefined ? formatExactNumber(remainingTokens) : 'unknown'} tokens`,
-    `ratio: ${ratioDetail}`,
-    `status: ${statusLabel}`,
-    `source: ${sourceLabel}`,
-    `runtime: ${state.backend || 'unknown'}`,
-    `compact: ${state.compactCapability || 'unknown'}`,
-    `compact threshold: ${state.autoCompactThreshold !== undefined ? `${Math.round(state.autoCompactThreshold * 100)}%` : 'unknown'}`,
-    `last compacted: ${state.lastCompactedAt || 'never'}`,
-  ].join('\n');
+  const title = `上下文 ${ratioDetail} · ${statusLabel}`;
 
-  const memoryBoundaryLine = 'Codex Runtime owns the context window; SciForge sends the current GUI projection boundary, refs, and digests.';
+  const memoryBoundaryLine = 'SciForge 会保留当前对话、选中对象和必要摘要。';
   return {
     ratio,
     ratioStyle: `${Math.min(100, Math.max(0, ratio * 100))}%`,
@@ -55,15 +35,15 @@ export function buildContextWindowMeterModel(state: AgentContextWindowState, run
     windowSize,
     isEstimated: state.source === 'estimate' || state.source === 'agentserver-estimate',
     isUnknown: state.source === 'unknown',
-    compactLine: `compact ${state.compactCapability || 'unknown'}${state.pendingCompact ? ' · pending' : ''}`,
-    lastLine: `last ${state.lastCompactedAt ? formatShortTime(state.lastCompactedAt) : 'never'}`,
-    remaining: remainingTokens !== undefined ? formatCompactNumber(remainingTokens) : 'unknown',
-    remainingExact: remainingTokens !== undefined ? formatExactNumber(remainingTokens) : 'unknown',
+    compactLine: `压缩 ${contextCompactCapabilityLabel(state.compactCapability)}${state.pendingCompact ? ' · 排队中' : ''}`,
+    lastLine: `上次 ${state.lastCompactedAt ? formatShortTime(state.lastCompactedAt) : '未压缩'}`,
+    remaining: remainingTokens !== undefined ? formatCompactNumber(remainingTokens) : '未知',
+    remainingExact: remainingTokens !== undefined ? formatExactNumber(remainingTokens) : '未知',
     ratioDetail,
     thresholdDetail,
     detailRows,
     memoryBoundaryLine,
-    title: `${title}\n发送前达到阈值时会请求 Codex Runtime 原生压缩；运行中事件只读展示。\n${memoryBoundaryLine}`,
+    title,
   };
 }
 
@@ -189,9 +169,9 @@ export function contextWindowLevel(state: AgentContextWindowState) {
 export function contextWindowSourceLabel(source: AgentContextWindowState['source']) {
   if (source === 'estimate' || source === 'agentserver-estimate') return '估算';
   if (source === 'unknown') return '未知';
-  if (source === 'native') return 'native';
-  if (source === 'provider-usage') return 'provider';
-  return source === 'agentserver' ? 'AgentServer legacy' : 'runtime';
+  if (source === 'native') return '本机';
+  if (source === 'provider-usage') return '用量';
+  return source === 'agentserver' ? '服务端' : '运行时';
 }
 
 function estimateModelContextWindow(modelName: string) {
@@ -222,17 +202,21 @@ function wasRecentlyCompacted(value?: string) {
 }
 
 function contextWindowStatusLabel(state: AgentContextWindowState) {
-  if (state.ratio !== undefined && state.ratio >= 1) return 'exceeded';
-  if (state.ratio !== undefined && state.ratio >= (state.nearLimitThreshold ?? 0.86)) return 'near-limit';
-  if (state.ratio !== undefined && state.ratio >= (state.watchThreshold ?? 0.68) && (state.status === 'healthy' || state.status === 'unknown' || !state.status)) return 'watch';
-  if (state.status === 'healthy') return 'healthy';
-  if (state.status === 'watch') return 'watch';
-  if (state.status === 'near-limit') return 'near-limit';
-  if (state.status === 'exceeded') return 'exceeded';
-  if (state.status === 'compacting') return 'compacting';
-  if (state.status === 'blocked') return 'blocked';
-  if (state.status === 'unknown') return 'unknown';
-  return contextWindowLevel(state);
+  if (state.ratio !== undefined && state.ratio >= 1) return '超限';
+  if (state.ratio !== undefined && state.ratio >= (state.nearLimitThreshold ?? 0.86)) return '接近上限';
+  if (state.ratio !== undefined && state.ratio >= (state.watchThreshold ?? 0.68) && (state.status === 'healthy' || state.status === 'unknown' || !state.status)) return '注意';
+  if (state.status === 'healthy') return '良好';
+  if (state.status === 'watch') return '注意';
+  if (state.status === 'near-limit') return '接近上限';
+  if (state.status === 'exceeded') return '超限';
+  if (state.status === 'compacting') return '压缩中';
+  if (state.status === 'blocked') return '已阻塞';
+  if (state.status === 'unknown') return '未知';
+  const level = contextWindowLevel(state);
+  if (level === 'ok') return '良好';
+  if (level === 'watch') return '注意';
+  if (level === 'near-limit') return '接近上限';
+  return '未知';
 }
 
 function formatCompactNumber(value: number) {
@@ -242,12 +226,24 @@ function formatCompactNumber(value: number) {
 }
 
 function formatExactNumber(value?: number) {
-  if (value === undefined || !Number.isFinite(value)) return 'unknown';
+  if (value === undefined || !Number.isFinite(value)) return '未知';
   return Math.trunc(value).toLocaleString('en-US');
 }
 
-function formatPercent(value: number) {
-  return `${Math.round(value * 100)}%`;
+function contextCompactLabel(state: AgentContextWindowState) {
+  if (state.pendingCompact) return '准备压缩';
+  if (state.compactCapability === 'native') return '自动管理';
+  if (state.compactCapability && state.compactCapability !== 'unknown') return '可压缩';
+  return '按需保留';
+}
+
+function contextCompactCapabilityLabel(capability: AgentContextWindowState['compactCapability']) {
+  if (capability === 'native') return '自动';
+  if (capability === 'agentserver') return '服务端';
+  if (capability === 'session-rotate') return '轮转';
+  if (capability === 'handoff-slimming') return '精简';
+  if (capability === 'none') return '关闭';
+  return '按需';
 }
 
 function formatShortTime(value: string) {
@@ -261,16 +257,16 @@ function contextBudgetRows(state: AgentContextWindowState) {
   if (!budget) return [];
   return [
     budget.rawTokens !== undefined || budget.normalizedTokens !== undefined
-      ? { label: 'payload tokens', value: `${formatExactNumber(budget.normalizedTokens)} normalized / ${formatExactNumber(budget.rawTokens)} raw` }
+      ? { label: '请求大小', value: `${formatCompactNumber(budget.normalizedTokens ?? 0)} / ${formatCompactNumber(budget.rawTokens ?? 0)} tokens` }
       : undefined,
     budget.savedTokens !== undefined
-      ? { label: 'saved tokens', value: formatExactNumber(budget.savedTokens) }
+      ? { label: '已节省', value: `${formatCompactNumber(budget.savedTokens)} tokens` }
       : undefined,
     budget.maxPayloadBytes !== undefined || budget.normalizedBytes !== undefined
-      ? { label: 'payload bytes', value: `${formatExactNumber(budget.normalizedBytes)} / ${formatExactNumber(budget.maxPayloadBytes)}` }
+      ? { label: '请求体积', value: `${formatCompactNumber(budget.normalizedBytes ?? 0)} / ${formatCompactNumber(budget.maxPayloadBytes ?? 0)} bytes` }
       : undefined,
     budget.normalizedBudgetRatio !== undefined
-      ? { label: 'payload budget', value: `${Math.round(budget.normalizedBudgetRatio * 1000) / 10}%` }
+      ? { label: '请求预算', value: `${Math.round(budget.normalizedBudgetRatio * 1000) / 10}%` }
       : undefined,
   ].filter((row): row is { label: string; value: string } => Boolean(row));
 }

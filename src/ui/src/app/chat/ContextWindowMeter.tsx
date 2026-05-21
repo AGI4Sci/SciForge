@@ -23,11 +23,11 @@ export function ContextWindowMeter({
       style={{ '--context-window-ratio': meter.ratioStyle } as CSSProperties}
     >
       <span className="context-window-ring" aria-hidden="true">
-        <span>{meter.ratioLabel === 'unknown' ? '?' : meter.ratioLabel}</span>
+        <span>{meter.ratioLabel === '未知' ? '?' : meter.ratioLabel}</span>
       </span>
       <div className="context-window-popover" id={tooltipId} role="tooltip">
         <div className="context-window-popover-head">
-          <strong>Context window</strong>
+          <strong>当前上下文</strong>
           <em>{meter.statusLabel}</em>
         </div>
         <dl>
@@ -38,7 +38,7 @@ export function ContextWindowMeter({
             </div>
           ))}
         </dl>
-        <small>Codex Runtime owns the context window; SciForge sends the current GUI projection boundary, refs, and digests.</small>
+        <small>{meter.memoryBoundaryLine}</small>
       </div>
     </div>
   );

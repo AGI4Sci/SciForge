@@ -4,18 +4,15 @@ export function RunReadinessBar({
   ok,
   severity,
   message,
-  packageLabel,
 }: {
   ok: boolean;
   severity: 'info' | 'success' | 'warning' | 'danger' | 'muted' | 'coral';
   message: string;
-  packageLabel: string;
 }) {
   return (
     <div className="run-readiness">
-      <Badge variant={ok ? 'success' : severity}>{ok ? 'ready' : 'action'}</Badge>
+      <Badge variant={ok ? 'success' : severity}>{ok ? '可运行' : '提示'}</Badge>
       <span>{message}</span>
-      <code>{packageLabel}</code>
     </div>
   );
 }

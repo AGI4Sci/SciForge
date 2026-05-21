@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, CircleStop, FileUp, Quote, Sparkles } from 'lucide-react';
+import { ChevronDown, ChevronUp, CircleStop, Cpu, FileUp, Folder, Quote, ShieldCheck, Sparkles } from 'lucide-react';
 import { ActionButton, cx } from '../uiPrimitives';
 import type { ReactNode, RefObject } from 'react';
 import type { SciForgeReference } from '../../domain';
@@ -14,6 +14,7 @@ export function ChatComposer({
   fileInputRef,
   referenceChips,
   topAddon,
+  runtimeContext,
   onExpand,
   onCollapse,
   onToggleReferencePickMode,
@@ -34,6 +35,12 @@ export function ChatComposer({
   fileInputRef: RefObject<HTMLInputElement | null>;
   referenceChips: ReactNode;
   topAddon?: ReactNode;
+  runtimeContext?: {
+    provider: string;
+    model: string;
+    workspacePath: string;
+    permissionMode: string;
+  };
   onExpand: () => void;
   onCollapse: () => void;
   onToggleReferencePickMode: () => void;
@@ -120,6 +127,22 @@ export function ChatComposer({
           点击页面对象引用整块 UI，Esc 取消
         </div>
       ) : null}
+      {runtimeContext ? (
+        <div className="composer-runtime-row" aria-label="运行上下文">
+          <span className="composer-runtime-pill" title={runtimeContext.workspacePath || 'workspace 未设置'}>
+            <Folder size={13} />
+            {workspaceLabel(runtimeContext.workspacePath)}
+          </span>
+          <span className="composer-runtime-pill" title="当前模型在线">
+            <Cpu size={13} />
+            {runtimeModelLabel(runtimeContext)}
+          </span>
+          <span className="composer-runtime-pill permission" title="可以在当前工作区读写文件">
+            <ShieldCheck size={13} />
+            {runtimeContext.permissionMode}
+          </span>
+        </div>
+      ) : null}
       <textarea
         value={input}
         onChange={(event) => onInputChange(event.target.value)}
@@ -143,4 +166,14 @@ export function ChatComposer({
       </ActionButton>
     </div>
   );
+}
+
+function workspaceLabel(path: string) {
+  const trimmed = path.trim();
+  if (!trimmed) return 'workspace';
+  return trimmed.split(/[\\/]/).filter(Boolean).at(-1) || trimmed;
+}
+
+function runtimeModelLabel(context: NonNullable<Parameters<typeof ChatComposer>[0]['runtimeContext']>) {
+  return context.model.trim() ? '模型在线' : '模型待配置';
 }

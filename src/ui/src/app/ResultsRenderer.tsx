@@ -405,6 +405,7 @@ function PrimaryResult({
         <EmptyArtifactState
           title={model.emptyState.title}
           detail={model.emptyState.detail}
+          recoverActions={model.emptyState.recoverActions}
         />
       ) : null}
       <ResultItemsSection
@@ -530,20 +531,52 @@ function ExecutionOnlyResult({ session, activeRun }: { session: SciForgeSession;
 
 function ProjectionExecutionOnlyResult({ projection }: { projection: UiConversationProjection }) {
   const events = projection.executionProcess.slice(-12);
+  const status = conversationProjectionStatus(projection);
   return (
     <div className="stack">
       <Card className="code-card">
-        <SectionHeader icon={Terminal} title="Projection 执行过程" subtitle={conversationProjectionStatus(projection)} />
+        <SectionHeader icon={Terminal} title="运行过程" subtitle={projectionStatusLabel(status)} />
         {events.length ? (
           <div className="run-status-lines">
             {events.map((event) => (
-              <span key={event.eventId}>{event.type}: {event.summary || event.eventId}</span>
+              <span key={event.eventId}>{projectionEventLabel(event.type, status)}: {projectionEventSummary(event.summary || event.eventId, status)}</span>
             ))}
           </div>
-        ) : <p className="empty-state">当前 ConversationProjection 没有声明执行过程事件。</p>}
+        ) : <p className="empty-state">当前结果没有声明执行过程事件。</p>}
       </Card>
     </div>
   );
+}
+
+function projectionStatusLabel(status: ReturnType<typeof conversationProjectionStatus>) {
+  const labels: Record<ReturnType<typeof conversationProjectionStatus>, string> = {
+    idle: '未执行',
+    planned: '已计划',
+    dispatched: '已分发',
+    'partial-ready': '部分结果',
+    'output-materialized': '已保存输出',
+    validated: '已验证边界',
+    'visible-not-live-acceptance': '回答已显示',
+    satisfied: '完成',
+    'degraded-result': '降级结果',
+    'external-blocked': '外部阻塞',
+    'repair-needed': '需恢复',
+    'needs-human': '需人工处理',
+    'background-running': '后台继续中',
+  };
+  return labels[status];
+}
+
+function projectionEventLabel(type: string, status: ReturnType<typeof conversationProjectionStatus>) {
+  if (status === 'visible-not-live-acceptance' || /native.?codex.?message/i.test(type)) return '回答';
+  if (/artifact|output|materialized/i.test(type)) return '产物';
+  if (/verification|validated/i.test(type)) return '验证';
+  return '过程';
+}
+
+function projectionEventSummary(summary: string, status: ReturnType<typeof conversationProjectionStatus>) {
+  if (status === 'visible-not-live-acceptance' || /native.?codex.?message/i.test(summary)) return '回答已在聊天中显示';
+  return summary;
 }
 
 function RunStatusSummary({
@@ -564,8 +597,11 @@ function RunStatusSummary({
   const validationFailures = projection ? [] : contractValidationFailures(session, activeRun);
   const repairStates = projection ? [] : backendRepairStates(session, activeRun);
   const runtimeDriftDiagnostics = runtimeCompatibilityDiagnosticsForPresentation(session, activeRun);
-  const recoverActions = runRecoverActions(session, activeRun).slice(0, 4);
   const presentationState = runPresentationState(session, activeRun, viewPlan);
+  const suppressNativeAnswerRecovery = projection
+    && conversationProjectionStatus(projection) === 'visible-not-live-acceptance'
+    && presentationState.kind === 'ready';
+  const recoverActions = suppressNativeAnswerRecovery ? [] : runRecoverActions(session, activeRun).slice(0, 4);
   const shouldShowPresentationState = presentationState.kind !== 'ready' || presentationState.nextSteps.length > 0;
   const failureDriven = failures.length || validationFailures.length;
   const projectionStateDriven = projection && presentationState.kind !== 'ready';
@@ -576,7 +612,7 @@ function RunStatusSummary({
       <SectionHeader
         icon={runtimeDriftDiagnostics.length && !statusDriven ? Shield : AlertTriangle}
         title={failureDriven ? '运行需要处理' : projectionStateDriven ? presentationState.title : runtimeDriftDiagnostics.length ? '历史 session 需要兼容性检查' : presentationState.title}
-        subtitle={run ? `${run.id} · ${presentationState.kind}` : '当前 session'}
+        subtitle={run ? runStatusSubtitle(run.status, presentationState.kind) : '等待本轮结果'}
       />
       <RunPresentationStateSummary state={presentationState} />
       {runtimeDriftDiagnostics.map((diagnostic) => <RuntimeCompatibilityDiagnosticSummary key={diagnostic.id} diagnostic={diagnostic} />)}
@@ -612,6 +648,17 @@ function RunStatusSummary({
       ) : null}
     </Card>
   );
+}
+
+function runStatusSubtitle(status: SciForgeRun['status'], presentationKind: RunPresentationState['kind']) {
+  if (status === 'running') return '正在执行';
+  if (status === 'failed') return '需要处理';
+  if (status === 'cancelled') return '已取消';
+  if (presentationKind === 'empty') return '等待可展示结果';
+  if (presentationKind === 'partial') return '部分结果已就绪';
+  if (presentationKind === 'recoverable') return '可继续恢复';
+  if (presentationKind === 'needs-human') return '需要确认';
+  return '已完成';
 }
 
 function RuntimeCompatibilityDiagnosticSummary({ diagnostic }: { diagnostic: RuntimeCompatibilityDiagnostic }) {

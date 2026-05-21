@@ -106,19 +106,19 @@ test('context meter display reflects ratio, status, and source trust level', () 
     status: 'healthy',
   }, false);
   assert.equal(nativeHealthy.level, 'ok');
-  assert.equal(nativeHealthy.sourceLabel, 'native');
-  assert.equal(nativeHealthy.statusLabel, 'healthy');
+  assert.equal(nativeHealthy.sourceLabel, '本机');
+  assert.equal(nativeHealthy.statusLabel, '良好');
   assert.equal(nativeHealthy.ratioLabel, '42%');
   assert.equal(nativeHealthy.ratioStyle, '42%');
   assert.equal(nativeHealthy.ratioDetail, '42%');
   assert.equal(nativeHealthy.remainingExact, '58,000');
-  assert.match(nativeHealthy.title, /compact threshold: 82%/);
+  assert.match(nativeHealthy.title, /上下文 42% · 良好/);
   assert.deepEqual(
     nativeHealthy.detailRows.slice(0, 3),
     [
-      { label: 'used/window', value: '42,000 / 100,000 tokens' },
-      { label: 'remaining', value: '58,000 tokens' },
-      { label: 'ratio', value: '42%' },
+      { label: '已用', value: '42% 上下文' },
+      { label: '剩余', value: '58k tokens' },
+      { label: '状态', value: '良好' },
     ],
   );
 
@@ -130,8 +130,8 @@ test('context meter display reflects ratio, status, and source trust level', () 
     status: 'watch',
   }, true);
   assert.equal(providerWatch.level, 'watch');
-  assert.equal(providerWatch.sourceLabel, 'provider');
-  assert.match(providerWatch.title, /发送前达到阈值时会请求 Codex Runtime 原生压缩/);
+  assert.equal(providerWatch.sourceLabel, '用量');
+  assert.match(providerWatch.title, /上下文 74% · 注意/);
 
   const estimatedNearLimit = buildContextWindowMeterModel({
     ...beforeState,
@@ -149,11 +149,11 @@ test('context meter display reflects ratio, status, and source trust level', () 
     },
   }, false);
   assert.equal(estimatedNearLimit.level, 'near-limit');
-  assert.equal(estimatedNearLimit.statusLabel, 'near-limit');
+  assert.equal(estimatedNearLimit.statusLabel, '接近上限');
   assert.equal(estimatedNearLimit.sourceLabel, '估算');
   assert.equal(estimatedNearLimit.isEstimated, true);
-  assert.ok(estimatedNearLimit.detailRows.some((row) => row.label === 'payload tokens' && row.value === '38,000 normalized / 160,000 raw'));
-  assert.ok(estimatedNearLimit.detailRows.some((row) => row.label === 'saved tokens' && row.value === '122,000'));
+  assert.ok(estimatedNearLimit.detailRows.some((row) => row.label === '请求大小' && row.value === '38k / 160k tokens'));
+  assert.ok(estimatedNearLimit.detailRows.some((row) => row.label === '已节省' && row.value === '122k tokens'));
 
   const unknownBlocked = buildContextWindowMeterModel({
     source: 'unknown',
@@ -162,8 +162,8 @@ test('context meter display reflects ratio, status, and source trust level', () 
   }, false);
   assert.equal(unknownBlocked.level, 'near-limit');
   assert.equal(unknownBlocked.isUnknown, true);
-  assert.equal(unknownBlocked.ratioLabel, 'unknown');
-  assert.match(unknownBlocked.title, /source: 未知/);
+  assert.equal(unknownBlocked.ratioLabel, '未知');
+  assert.match(unknownBlocked.title, /未知/);
 });
 
 test('context meter uses ratio as the final authority when backend status is stale', () => {
@@ -177,7 +177,7 @@ test('context meter uses ratio as the final authority when backend status is sta
   }, false);
 
   assert.equal(exceeded.level, 'near-limit');
-  assert.equal(exceeded.statusLabel, 'exceeded');
+  assert.equal(exceeded.statusLabel, '超限');
   assert.equal(exceeded.ratioLabel, '105%');
 });
 
@@ -189,9 +189,9 @@ test('empty estimated context window reports zero usage when the model window is
   assert.equal(state.ratio, 0);
   const meter = buildContextWindowMeterModel(state, false);
   assert.deepEqual(meter.detailRows.slice(0, 3), [
-    { label: 'used/window', value: '0 / 200,000 tokens' },
-    { label: 'remaining', value: '200,000 tokens' },
-    { label: 'ratio', value: '0%' },
+    { label: '已用', value: '0% 上下文' },
+    { label: '剩余', value: '200k tokens' },
+    { label: '状态', value: '良好' },
   ]);
 });
 

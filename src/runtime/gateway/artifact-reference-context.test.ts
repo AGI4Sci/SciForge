@@ -124,6 +124,49 @@ test('selected explicit artifact refs do not merge latest artifacts or files', a
   }
 });
 
+test('selected readable artifact refs scope context to the matching artifact', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-artifact-context-'));
+  try {
+    const context = await collectArtifactReferenceContext(baseRequest(workspace, {
+      artifacts: [{
+        id: 'old-report',
+        type: 'research-report',
+        delivery: {
+          ref: 'artifact:old-report',
+          readableRef: '.sciforge/artifacts/old-report.md',
+          rawRef: '.sciforge/artifacts/old-report.json',
+        },
+      }, {
+        id: 'latest-report',
+        type: 'research-report',
+        delivery: {
+          ref: 'artifact:latest-report',
+          readableRef: '.sciforge/artifacts/latest-report.md',
+        },
+      }],
+      uiState: {
+        currentReferences: [{
+          id: 'ref-old-readable',
+          kind: 'file',
+          ref: '.sciforge/artifacts/old-report.md',
+          title: 'Old report markdown',
+        }],
+        contextReusePolicy: {
+          schemaVersion: 'sciforge.context-reuse-policy.v1',
+          mode: 'continue',
+          selectedRefsOnly: true,
+          historyReuse: { allowed: true },
+        },
+      },
+    }));
+
+    assert.deepEqual(context?.combinedArtifacts.map((artifact) => artifact.id), ['old-report']);
+    assert.doesNotMatch(JSON.stringify(context), /latest-report/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 function baseRequest(workspacePath: string, overrides: Partial<GatewayRequest> = {}): GatewayRequest {
   return {
     skillDomain: 'literature',

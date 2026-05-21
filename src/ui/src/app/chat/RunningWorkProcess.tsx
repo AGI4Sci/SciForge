@@ -8,7 +8,6 @@ export function RunningWorkProcess({
   events,
   counts,
   tokenUsage,
-  backend,
   guidanceCount,
 }: {
   events: AgentStreamEvent[];
@@ -18,8 +17,8 @@ export function RunningWorkProcess({
   guidanceCount: number;
 }) {
   const usageLabel = formatAgentTokenUsage(tokenUsage);
-  const progress = latestProgressModel(events);
   const worklog = presentStreamWorklog(events, { counts, guidanceCount, limit: 48 });
+  const progress = latestProgressModel(worklog.entries.map((entry) => entry.event));
   const highlightedEntries = visibleRunningWorkEntries(worklog, 5);
   if (!worklog.entries.length && !guidanceCount && !usageLabel) return null;
   return (
@@ -40,15 +39,14 @@ export function RunningWorkProcess({
       ) : null}
       <details className="message-fold depth-2 running-work-process-raw cursor-like-worklog">
         <summary>
-          <span className="worklog-summary-title">Explored</span>
+          <span className="worklog-summary-title">运行细节</span>
           <span className="worklog-summary-detail">{worklog.summary}</span>
           {usageLabel ? <span className="worklog-summary-usage">{usageLabel}</span> : null}
         </summary>
         <div className="running-work-process-body">
           <div className="running-work-process-meta">
-            <Badge variant="muted">{backend}</Badge>
             {guidanceCount ? <Badge variant="warning">{guidanceCount} 条引导排队</Badge> : null}
-            {counts.debug ? <Badge variant="muted">{counts.debug} debug</Badge> : null}
+            {counts.debug ? <Badge variant="muted">{counts.debug} 条审计事件已折叠</Badge> : null}
           </div>
           <div className="stream-events-list inline">
             {worklog.entries.map((entry) => {
@@ -63,13 +61,6 @@ export function RunningWorkProcess({
                   <div className="stream-event-expanded">
                     {entry.structured ? <StructuredWorkEventFacts entry={entry} /> : null}
                     {presentation.detail ? <pre>{presentation.detail}</pre> : <span>无额外详情。</span>}
-                    <details className="message-fold depth-3 stream-event-raw-fold" open={!entry.rawInitiallyCollapsed}>
-                      <summary>raw output</summary>
-                      <div className="stream-event-raw-body">
-                        <pre>{entry.rawOutput}</pre>
-                        <button type="button" onClick={() => void navigator.clipboard?.writeText(entry.rawOutput)}>复制 raw</button>
-                      </div>
-                    </details>
                   </div>
                 </details>
               );

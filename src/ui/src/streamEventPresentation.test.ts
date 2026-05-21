@@ -32,7 +32,7 @@ test('usage updates stay in background instead of becoming visible work content'
   assert.equal(streamEventCounts([usageEvent]).background, 1);
 });
 
-test('context warnings and repair events stay visible as key work status', () => {
+test('context warnings stay visible without exposing runtime window internals', () => {
   const contextEvent = event({
     type: 'contextWindowState',
     label: '上下文窗口',
@@ -51,8 +51,11 @@ test('context warnings and repair events stay visible as key work status', () =>
     detail: 'TurnAcceptanceGate 触发一次 backend artifact/execution repair rerun。',
   });
 
-  assert.equal(presentStreamEvent(contextEvent).importance, 'key');
-  assert.equal(presentStreamEvent(contextEvent).initiallyCollapsed, false);
+  const contextPresentation = presentStreamEvent(contextEvent);
+  assert.equal(contextPresentation.importance, 'key');
+  assert.equal(contextPresentation.initiallyCollapsed, false);
+  assert.match(contextPresentation.detail, /上下文接近上限/);
+  assert.doesNotMatch(contextPresentation.detail, /used\/window|runtime|source|last|codex/i);
   assert.equal(presentStreamEvent(repairEvent).visibleInRunningMessage, true);
   assert.match(latestRunningEvent([contextEvent, repairEvent]) || '', /TurnAcceptanceGate/);
 });
@@ -325,7 +328,7 @@ test('worklog restores compact interaction progress from structured detail only'
   assert.doesNotMatch(worklog.entries[0].operationLine, /NATURAL_LANGUAGE_FALLBACK_SHOULD_NOT_DECIDE/);
 });
 
-test('cursor-like worklog fixture summarizes operations and keeps raw output second-level collapsed', () => {
+test('cursor-like worklog fixture summarizes operations and keeps runtime internals out of live entries', () => {
   const events = [
     event({
       id: 'context',
@@ -419,18 +422,86 @@ test('cursor-like worklog fixture summarizes operations and keeps raw output sec
   assert.equal(worklog.operationCounts.write, 1);
   assert.equal(worklog.operationCounts.command, 1);
   assert.equal(worklog.operationCounts.wait, 1);
-  assert.deepEqual(worklog.entries.map((entry) => entry.operationKind), ['diagnostic', 'plan', 'other', 'explore', 'search', 'read', 'write', 'command', 'wait']);
-  assert.match(worklog.entries[3].operationLine, /^Explored /);
-  assert.match(worklog.entries[4].operationLine, /^Searched /);
-  assert.match(worklog.entries[5].operationLine, /^Read /);
-  assert.match(worklog.entries[6].operationLine, /^Wrote /);
-  assert.match(worklog.entries[7].operationLine, /^Ran /);
-  assert.match(worklog.entries[8].operationLine, /^Waiting /);
+  assert.deepEqual(worklog.entries.map((entry) => entry.operationKind), ['plan', 'explore', 'search', 'read', 'write', 'command', 'wait']);
+  assert.match(worklog.entries[1].operationLine, /^Explored /);
+  assert.match(worklog.entries[2].operationLine, /^Searched /);
+  assert.match(worklog.entries[3].operationLine, /^Read /);
+  assert.match(worklog.entries[4].operationLine, /^Wrote /);
+  assert.match(worklog.entries[5].operationLine, /^Ran /);
+  assert.match(worklog.entries[6].operationLine, /^Waiting /);
   assert.deepEqual(visibleRunningWorkEntries(worklog, 4).map((entry) => entry.operationLine.replace(/\s.+$/, '')), ['Read', 'Wrote', 'Ran', 'Waiting']);
   assert.doesNotMatch(visibleRunningWorkEntries(worklog, 8).map((entry) => entry.operationLine).join('\n'), /Plan: implement/);
   assert.doesNotMatch(visibleRunningWorkEntries(worklog, 8).map((entry) => entry.operationLine).join('\n'), /used\/window/);
+  assert.doesNotMatch(worklog.entries.map((entry) => entry.presentation.detail).join('\n'), /used\/window|Calling local model/);
   assert.equal(worklog.entries.every((entry) => entry.rawInitiallyCollapsed), true);
-  assert.match(worklog.entries.find((entry) => entry.operationKind === 'search')?.rawOutput ?? '', /run_command/);
+});
+
+test('live chat worklog filters internal runtime events but keeps meaningful work steps', () => {
+  const events = [
+    event({
+      id: 'internal-plan',
+      type: 'current-plan',
+      label: 'current-plan',
+      detail: 'Plan: route GUI prompt through Codex Runtime bridge.',
+    }),
+    event({
+      id: 'tool-start',
+      type: 'project-tool-start',
+      label: 'project-tool-start',
+      detail: 'SciForge project tool started with runtime profile sciforge-runtime-deepseek.',
+    }),
+    event({
+      id: 'context',
+      type: 'contextWindowState',
+      label: 'contextWindowState',
+      contextWindowState: {
+        source: 'native',
+        status: 'healthy',
+        usedTokens: 411,
+        windowTokens: 200_000,
+        ratio: 0.002,
+        backend: 'codex',
+      },
+    }),
+    event({
+      id: 'runtime-run',
+      type: 'codex-runtime-run',
+      label: 'codex-runtime-run',
+      detail: 'Runtime Codex started with provider=bailian model=deepseek profile=sciforge-runtime-deepseek workspace=/tmp/work',
+    }),
+    event({
+      id: 'request-accepted',
+      type: 'process-progress',
+      label: '已收到请求',
+      detail: '正在把本轮请求交给 workspace runtime：read PROJECT.md and summarize UX. 正在等：workspace runtime 首个事件。',
+    }),
+    event({
+      id: 'native-message-layer',
+      type: 'message',
+      label: 'Runtime Codex',
+      detail: 'Runtime Codex native assistant message recorded; the final assistant answer can render as the primary reply, while raw JSONL, stderr, and plugin diagnostics stay folded in the run audit.',
+    }),
+    event({
+      id: 'read-step',
+      type: 'tool-call',
+      label: 'Read PROJECT.md',
+      detail: 'sed -n 1,160p PROJECT.md',
+      raw: { toolName: 'run_command', detail: 'sed -n 1,160p PROJECT.md' },
+    }),
+  ];
+  const worklog = presentStreamWorklog(events);
+  const counts = streamEventCounts(events);
+  const markup = renderToStaticMarkup(React.createElement(RunningWorkProcess, {
+    events,
+    counts,
+    backend: 'codex',
+    guidanceCount: 0,
+  }));
+
+  assert.deepEqual(worklog.entries.map((entry) => entry.event.id), ['read-step']);
+  assert.equal(counts.debug, 6);
+  assert.match(markup, /Read PROJECT\.md|sed -n 1,160p PROJECT\.md/);
+  assert.doesNotMatch(markup, /current-plan|project-tool-start|codex-runtime-run|sciforge-runtime-deepseek|used\/window|workspace=|raw output|native assistant message|raw JSONL|workspace runtime 首个事件/);
 });
 
 test('WorkEvidence retrieval uses structured fields and displays Search', () => {
@@ -812,11 +883,11 @@ test('running work process renders structured progress without prompt or scenari
   assert.doesNotMatch(visibleMarkup, /SCENARIO_TEXT_SHOULD_NOT_DECIDE/);
   assert.doesNotMatch(visibleMarkup, /search write failed approval/);
   assert.doesNotMatch(visibleMarkup, /retrieval repair blocked/);
-  assert.match(markup, /PROMPT_TEXT_SHOULD_NOT_DECIDE/);
-  assert.match(markup, /SCENARIO_TEXT_SHOULD_NOT_DECIDE/);
+  assert.doesNotMatch(markup, /PROMPT_TEXT_SHOULD_NOT_DECIDE/);
+  assert.doesNotMatch(markup, /SCENARIO_TEXT_SHOULD_NOT_DECIDE/);
 });
 
-test('running work process keeps raw output inside collapsed raw fold', () => {
+test('running work process keeps raw output out of the live chat DOM', () => {
   const rawHeavyEvent = event({
     id: 'raw-heavy',
     type: 'tool-result',
@@ -840,9 +911,9 @@ test('running work process keeps raw output inside collapsed raw fold', () => {
     guidanceCount: 0,
   }));
 
-  assert.match(markup, /raw output/);
-  assert.match(markup, /stream-event-raw-fold/);
-  assert.doesNotMatch(markup, /stream-event-raw-fold" open=/);
+  assert.doesNotMatch(markup, /raw output/);
+  assert.doesNotMatch(markup, /复制 raw/);
+  assert.doesNotMatch(markup, /stream-event-raw-fold/);
   assert.doesNotMatch(markup, /RAW_PAYLOAD_SHOULD_STAY_IN_FOLD/);
-  assert.match(markup, /runtime-debug-sensitive/);
+  assert.doesNotMatch(markup, /runtime-debug-sensitive/);
 });

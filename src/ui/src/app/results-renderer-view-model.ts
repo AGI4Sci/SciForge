@@ -18,6 +18,7 @@ export type ResultsRendererEmptyStateModel = {
   title: string;
   detail: string;
   dismissedAllInFilter: boolean;
+  recoverActions?: string[];
 };
 
 export type ResultsRendererSectionModel = {
@@ -128,6 +129,7 @@ export function emptyResultsState(focusMode: ResultFocusMode, dismissedAllInFilt
           presentationState.nextSteps.length ? `下一步：${presentationState.nextSteps[0]}` : undefined,
         ].filter(Boolean).join(' '),
         dismissedAllInFilter,
+        recoverActions: presentationState.kind === 'ready' ? [] : undefined,
       };
     }
     return {

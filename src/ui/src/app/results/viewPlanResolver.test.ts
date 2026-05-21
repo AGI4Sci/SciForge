@@ -281,7 +281,7 @@ test('failed active run without projection keeps runtime diagnostic artifacts ou
   assert.equal(allItems.some((item) => item.artifact?.id === 'research-report'), false);
   assert.equal(allItems.some((item) => item.artifact?.id === 'literature-runtime-result'), false);
   assert.equal(plan.allItems.length, 0);
-  assert.ok(plan.diagnostics.some((line) => line.includes('没有 ConversationProjection')));
+  assert.ok(plan.diagnostics.some((line) => line.includes('本轮还没有可展示的主结果')));
 });
 
 test('projectionless display intent waits instead of inferring from artifacts or prompt semantics', () => {
@@ -315,7 +315,7 @@ test('projectionless display intent waits instead of inferring from artifacts or
   const plan = resolveViewPlan({ scenarioId: 'literature-evidence-review', session, activeRun, defaultSlots: [] });
 
   assert.deepEqual(plan.displayIntent.requiredArtifactTypes, []);
-  assert.equal(plan.displayIntent.primaryGoal, '等待 ConversationProjection');
+  assert.equal(plan.displayIntent.primaryGoal, '等待本轮结果');
   assert.equal(plan.displayIntent.source, 'runtime-artifact');
   assert.equal(plan.allItems.length, 0);
 });
@@ -442,11 +442,11 @@ test('raw result presentation artifact actions are audit-only without projection
   const plan = resolveViewPlan({ scenarioId: 'literature-evidence-review', session, activeRun, defaultSlots: [] });
   const displayIntentItems = plan.allItems.filter((item) => item.source === 'display-intent');
 
-  assert.equal(plan.displayIntent.primaryGoal, '等待 ConversationProjection');
+  assert.equal(plan.displayIntent.primaryGoal, '等待本轮结果');
   assert.deepEqual(plan.displayIntent.requiredArtifactTypes, []);
   assert.equal(displayIntentItems.some((item) => item.artifact?.id === 'analysis-report'), false);
   assert.equal(displayIntentItems.some((item) => item.slot.title === 'Open analysis report'), false);
-  assert.ok(plan.diagnostics.some((line) => line.includes('没有 ConversationProjection')));
+  assert.ok(plan.diagnostics.some((line) => line.includes('本轮还没有可展示的主结果')));
 });
 
 test('conversation projection drives result plan before raw display intent or response payloads', () => {
@@ -608,7 +608,7 @@ test('raw result presentation chart revisions do not create multiple main plan i
 
   assert.equal(chartItems.length, 0);
   assert.equal(plan.allItems.length, 0);
-  assert.ok(plan.diagnostics.some((line) => line.includes('没有 ConversationProjection')));
+  assert.ok(plan.diagnostics.some((line) => line.includes('本轮还没有可展示的主结果')));
 });
 
 test('result presentation artifact actions keep active run scope across mixed artifacts', () => {
@@ -739,7 +739,7 @@ test('raw required artifact type is ignored without projection', () => {
 
   assert.deepEqual(plan.displayIntent.requiredArtifactTypes, []);
   assert.equal(displayIntentItems.some((item) => item.artifact?.id === 'pdb-result'), false);
-  assert.ok(plan.diagnostics.some((line) => line.includes('没有 ConversationProjection')));
+  assert.ok(plan.diagnostics.some((line) => line.includes('本轮还没有可展示的主结果')));
 });
 
 test('artifact delivery audit-only refs stay out of primary projection result plan', () => {

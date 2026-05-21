@@ -478,6 +478,24 @@
   display: none;
 }
 
+.message-continuity-line {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+  margin-bottom: 5px;
+  color: var(--bio-300);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.message-continuity-line code {
+  padding: 0 4px;
+  color: var(--bio-200);
+  background: rgba(123, 147, 176, 0.12);
+  border-color: rgba(123, 147, 176, 0.2);
+}
+
 .message p,
 .message-content {
   margin: 0;
@@ -1573,6 +1591,44 @@
   border-radius: 6px;
   font-size: 11px;
   font-weight: 900;
+}
+
+.composer-runtime-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.composer-runtime-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: min(100%, 320px);
+  min-height: 23px;
+  padding: 0 8px;
+  color: var(--bio-300);
+  background: var(--surface-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 850;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-runtime-pill svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.composer-runtime-pill.permission {
+  color: var(--coral);
+  border-color: rgba(255, 112, 67, 0.34);
+  background: rgba(255, 112, 67, 0.08);
 }
 
 .reference-context-menu {

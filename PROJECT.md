@@ -1,120 +1,92 @@
-# SciForge 项目协议
+# SciForge 项目任务板
 
 最后更新：2026-05-21
 
-本文件是当前执行任务板，保留 2026-05-21 GUI-as-TUI-extension 任务和当前验收状态。详细历史证据、parallel worker 细账和旧 P1-P6 run log 不再保留在主入口；需要追溯时看 Git history、`docs/archive/` 或对应 `docs/test-artifacts/**`。
+当前目标：把 SciForge 的聊天体验蒸馏成 Codex / subagent 式体验。重点不是让 SciForge 和某个 prompt 输出一模一样，而是学习 Codex 如何按任务进度动态决定展示什么、折叠什么、把什么放到主回答、把什么放到过程或审计里，以及整体布局如何降低用户认知负担。
 
-当前目标：完整实现 2026-05-21 更新后的 GUI-as-TUI-extension 方案。
+旧任务和历史清单已从本入口移除。后续只围绕“Codex 用户体验蒸馏”推进。
 
-- GUI 是 TUI agent 的 extension，不是 agent host。
-- GUI -> TUI 只发送 terminal-equivalent text command。
-- TUI -> GUI 通过 normalized events、只读 GUI resources 和 intent-based `gui.*` tools。
-- TUI 任务能力和 GUI 展示能力分目录发现。
-- 可解析 artifact/file/run 引用必须能在右侧面板预览。
-- `confidence` 只能来自 TUI/verifier/harness 的可解释输出，GUI 不制造默认百分比。
+## 核心原则
 
-## 当前事实
+- 参考对象是 Codex 桌面端和 subagent 对话，而不是旧 SciForge 页面。
+- 每轮工作都要开启 subagent，并让 subagent 承担并行观察、对照、审查或局部实现任务；主会话负责整合和最终写入。
+- 不要求 subagent 和 SciForge 输入相同信息；验收目标是信息呈现体验一致。
+- 提问要足够复杂，覆盖规划、工具调用、中间状态、失败或部分完成、最终回答，才能观察完整折叠行为。
+- 用户首先看到答案和关键进度；raw JSON、SSE、stdout、stderr、provider/model/profile、run id、command id、内部审计默认折叠或隐藏。
+- 折叠策略必须随任务进度变化：等待、执行、产出、失败、恢复、完成时展示不同层级的信息。
+- 用户级浏览器验收只使用 Codex in-app browser，从默认聊天入口开始；不要用 Computer Use 替代用户体验验收。
+- 代码实现后必须用 targeted tests、`npm run typecheck`、`git diff --check` 和 in-app browser 证据关闭任务。
 
-- Runtime Codex 是当前优先路线；SciForge GUI 保留现有 React/Vite 页面体验和 `packages/**` 可复用资产。
-- `packages/presentation/components` 是 GUI 展示能力目录，只描述 renderer/viewer/workbench 能力。
-- Codex 原生 plugin/skill/tool/MCP/provider/verifier/harness 是 TUI 任务能力目录。
-- 短中期桌面化选择 Electron；Tauri 只作为后续长期优化项。
-- `docs/` 是产品/架构/协议/用法真相源；backend runtime migration 真相源是 `packages/backend/CodexRuntimeMigration.md`。
+## 工作协议
 
-LLM/API 注意事项：
+1. 先启动至少两个 subagent：
+   - 一个观察 Codex / subagent 对话格式，输出“展示、折叠、布局”基线。
+   - 一个观察 SciForge 当前页面和 DOM，列出不一致处和泄露的内部信息。
+2. 任务较大时继续分波次启动 subagent：
+   - explorer：只读对照、定位代码、审查风险。
+   - worker：只改明确分配的文件集合，避免互相覆盖。
+   - reviewer：在主会话集成后检查遗漏、回归和体验偏差。
+3. 主会话保持整合权：
+   - 先读 subagent 输出，再决定实际代码路径。
+   - 不直接复制 subagent 文案；把它们蒸馏成 SciForge 的交互规则。
+   - 不回滚用户已有改动；遇到冲突先说明并绕开。
+4. 每完成一阶段就清理无用 subagent，必要时重启新的 subagent 做下一阶段验证。
 
-- Runtime secret env: `SCIFORGE_RUNTIME_API_KEY`，不要把 API key、token 或 credential 写入仓库文件。
-- Runtime upstream env: `SCIFORGE_PROXY_UPSTREAM_BASE_URL`，本机调试使用 ignored local config 或 shell 环境变量。
+## Task 1：采集 Codex / Subagent 体验基线
 
-## 不可妥协原则
+- [ ] 记录 subagent 在复杂任务中的对话结构：主回答、进度、工具结果、错误、审计信息分别如何出现。
+- [ ] 记录 Codex 如何随进度动态折叠信息：任务开始、运行中、工具调用后、失败时、完成时各展示什么。
+- [ ] 记录布局规律：消息宽度、元信息位置、按钮密度、过程折叠区、引用和结果入口。
+- [ ] 输出一份可执行基线：哪些内容必须主显，哪些默认折叠，哪些只进 debug/audit。
 
-- 成本透明，provider/model/profile/workspace/command id 必须可见、可审计、可测试。
-- Runtime Codex 默认使用 DeepSeek / provider proxy：`sciforge-runtime-deepseek` profile，当前集成使用 `bailian/deepseek-v4-flash`。
-- Runtime Codex 不得静默继承 Developer Codex profile，不得 silent OpenAI fallback。
-- raw provider SSE、raw Codex JSONL、stdout、stderr、plugin warning 只进 audit/debug，默认折叠。
-- 用户级 browser 验收必须使用 Codex in-app browser，从默认聊天入口开始。
-- 多 agent / 多 server 验收前必须做端口预检，并记录实际端口。
-- 所有修改必须通用，可泛化到 task type、provider、artifact name 和用户输入变化，不能硬编码当前案例。
-- 代码路径保持唯一真相源；发现冗余链路时删除或合并旧链路。
-- 不用 `git reset --hard`、`git checkout --` 或等价 destructive command 回退用户改动。
+## Task 2：盘点 SciForge 当前差距
 
-## 必读文档
+- [ ] 从默认聊天入口检查 SciForge 可见文本、DOM 属性、右侧面板、composer、侧边栏和过程折叠区。
+- [ ] 标记所有不应主显的信息：raw JSON、event type、run id、provider/model/profile、workspace command、verification 内部状态、debug refs。
+- [ ] 标记所有布局不一致：过重的 badge、过多的 metadata、结果面板抢占主回答、空状态像调试面板。
+- [ ] 形成修复清单，并按“用户主路径优先”排序。
 
-- [`docs/README.md`](docs/README.md)：当前文档入口和核心边界。
-- [`docs/Architecture.md`](docs/Architecture.md)：总架构真相源，包含双目录能力发现、引用预览和 confidence 契约。
-- [`docs/TuiGuiProtocol.md`](docs/TuiGuiProtocol.md)：TUI/GUI 协议真相源，包含只读 GUI resources、`gui.*` tools、对象引用和 confidence payload。
-- [`docs/NativeExtensionOwnershipMap.md`](docs/NativeExtensionOwnershipMap.md)：native extension 归属说明。
-- [`docs/native-extension-ownership-map.json`](docs/native-extension-ownership-map.json)：可验证 ownership manifest。
-- [`docs/Usage.md`](docs/Usage.md)：当前启动、配置、运维和迁移期兼容说明。
-- [`packages/backend/CodexRuntimeMigration.md`](packages/backend/CodexRuntimeMigration.md)：Runtime Codex 迁移路线。
-- [`packages/backend/CODEX_COMPATIBILITY.md`](packages/backend/CODEX_COMPATIBILITY.md)：Codex CLI 兼容层说明。
+## Task 3：重做聊天信息层级
 
-## 实现任务板
+- [ ] 用户消息只展示用户输入和用户明确选择的上下文，不展示后来 runtime 附加的内部 refs。
+- [ ] assistant 消息优先展示最终回答；过程、验证、恢复建议和执行摘要放到折叠区。
+- [ ] 运行中消息只展示关键状态和当前动作，不滚动刷屏低价值事件。
+- [ ] 失败消息给出短原因、可执行下一步和折叠诊断，不把堆栈或原始 payload 放进主回答。
+- [ ] 多轮追问要清楚表达“正在延续哪个对象或回答”，避免像新任务。
 
-本节列任务和当前完成状态；只有已经由代码、targeted tests 或验收 gate 证明的任务才打勾。
+## Task 4：实现动态折叠策略
 
-### P0：协议实现闭环
+- [ ] 建立统一规则：什么事件在 waiting/running/partial/failed/completed 状态下主显、折叠或隐藏。
+- [ ] 把 raw logs、SSE、JSONL、stdout/stderr、provider payload、重复 token/usage 更新收进 audit。
+- [ ] 保留可展开的过程证据，但折叠标题必须是用户语义，例如“过程”“验证”“恢复线索”，不是内部类型名。
+- [ ] 对复杂任务验证：同一条任务从执行到完成期间，信息层级能随状态自然变化。
 
-- [x] GUI-TUI-01 展示能力目录资源：在 GUI protocol controller 中新增 `/gui/capabilities/presentation.json`、`/gui/renderers/` 和 `/gui/renderers/<componentId>.json` resource tree。数据来源必须是 `packages/presentation/components` 的现有 manifest/registry；TUI 只能通过 `gui.list/read/search/stat/watch` 发现，不得 import React 组件或读取 GUI 私有对象。
+## Task 5：对齐布局和控件体验
 
-- [x] GUI-TUI-02 Runtime Codex MCP/resource 注入：把新增 presentation catalog resources 纳入 Runtime Codex 注入的 `gui.*` MCP/resource surface。`gui.read('/gui/capabilities/presentation.json')`、`gui.search({ scope: '/gui/capabilities' })` 和单个 renderer resource 必须在 Codex runtime path 可用，且保持只读，不产生 workspace mutation。
+- [ ] composer 对齐 Codex：输入框、发送/中断、附件/选择对象、模型/权限/工作区提示保持低噪声。
+- [ ] 侧边栏对齐 Codex：新聊天、搜索、线程、项目、插件、自动化、设置的权重清晰。
+- [ ] 右侧面板只在有结果或对象预览时承担主视图角色；空状态要短，不像系统日志。
+- [ ] 引用 chip、artifact、file、run、report 的点击和预览行为稳定，且不暴露内部 ref 噪声。
 
-- [x] GUI-TUI-03 展示目录搜索语义：为 presentation catalog 建立 bounded semantic search index，支持按 component id、title、artifact type、preview kind、agent summary 搜索。搜索结果只能描述 renderer/viewer 能力，不能输出 task capability ranking、provider route 或算法建议。
+## Task 6：验收和回归
 
-- [x] GUI-TUI-04 对象引用统一解析：扩展消息和报告渲染中的 object reference pipeline，支持显式 `artifact:`、`file:`、`folder:`、`run:` 等 ref，也支持能精确匹配当前 session artifact 或 workspace file 的裸文件名。无法解析到真实对象的 inline code 必须保持普通文本，不能伪装成可点击引用。
+- [ ] 使用 Codex in-app browser 从 `http://localhost:5173/` 默认聊天入口执行复杂多轮任务。
+- [ ] 验收必须覆盖：第一轮回答、运行中折叠、失败或部分完成状态、artifact/引用点击、第二轮追问、最终回答。
+- [ ] DOM 检查 forbidden terms：`native-message`、`live-runtime-codex`、`raw JSONL`、`stdout`、`stderr`、`provider`、`run id`、`ConversationProjection`、`ArtifactDelivery` 等不应出现在主体验中。
+- [ ] 跑对应 targeted tests、`npm run typecheck -- --pretty false`、`git diff --check`。
+- [ ] 大范围 runtime/GUI 改动再跑 `npm run verify:single-agent-final`。
 
-- [x] GUI-TUI-05 右侧面板预览聚焦：点击可解析 artifact/file/run 引用时必须聚焦右侧面板，并通过 GUI 展示能力目录选择合适 renderer。Markdown 文件例如 `arxiv_multi_agent_report_20260521.md` 应能进入 report/markdown 预览；预览失败只能显示展示错误，不能改变 task success/failure 判断。
+## 当前 TODO
 
-- [x] GUI-TUI-06 `gui.present` 与本地点击一致性：TUI 显式调用 `gui.present({ intent: 'focus-existing', ref, hint })` 与用户点击 inline object reference 必须走同一右侧预览/focus 路径，返回 applied/deferred/rejected/suggestion 结果，并遵守 revision/precondition。
+- [ ] 为下一轮实现启动第一波 subagent：Codex/subagent 基线观察、SciForge DOM 差距扫描、折叠策略代码定位。
+- [ ] 设计一条足够复杂的验收 prompt，能触发规划、工具进度、引用、失败恢复或部分结果、最终总结。
+- [ ] 把观察结果转成 `ChatPanel`、`RunningWorkProcess`、`ResultsRenderer`、`ChatComposer` 的具体修改任务。
+- [ ] 增加 forbidden-term 回归测试，防止内部运行时词重新进入主聊天或 DOM。
+- [ ] 用 in-app browser 截图和 DOM 摘要记录每轮前后差异。
 
-- [x] GUI-TUI-07 Confidence 来源收敛：移除 GUI/normalizer 中所有默认 `0.78` 或类似默认百分比。`message.confidence`、claim confidence 和 result confidence 只有在 TUI/verifier/harness payload 明确给出时才展示；缺失时隐藏百分比或显示“未评分”。
+## 完成定义
 
-- [x] GUI-TUI-08 Confidence explanation contract：新增或补齐 `confidenceExplanation` 结构化契约，至少覆盖 `evidenceLevel`、`sourceScore`、`evidenceDefault`、`evidenceCap`、`penalties` 和 `summary`。GUI 只渲染 explanation，不计算 truth；TUI/verifier/harness 负责公式、扣分和 evidence refs。
-
-- [x] GUI-TUI-09 旧 AgentServer/UI 文案清理：清理当前 UI/workbench/runtime 中把 `availableComponentIds`、component allowlist 或能力发现描述成 AgentServer/capability gateway 的文案。最终表述必须区分 GUI presentation catalog 与 TUI-native task capabilities。
-
-- [x] GUI-TUI-10 TUI--GUI 接口通信排查：逐项审计 Runtime Codex path，确认 GUI -> TUI 只发送 terminal-equivalent `commandText`，TUI -> GUI 只通过 normalized events、`gui.*` intent tools 和只读 GUI resources 通信。发现 direct business function、hidden payload、GUI ranking 或 GUI truth judgment 时登记并修复。
-
-### P1：测试与验收任务
-
-- [x] GUI-TUI-11 Protocol controller 单测：为 `/gui/capabilities/presentation.json`、`/gui/renderers/<componentId>.json`、`gui.list/read/search/stat` 新增 focused tests，验证 schema、bounded output、只读语义、search scope 和不存在 component 的错误返回。
-
-- [x] GUI-TUI-12 Runtime Codex MCP 注入测试：新增或扩展 `src/runtime/codex` targeted tests，证明新增 GUI resources/tools 注入到 Codex runtime，且不会携带 workspace mutation、task capability ranking 或 React component internals。
-
-- [x] GUI-TUI-13 Inline reference 渲染测试：更新 message/report markdown tests，覆盖显式 refs、裸 markdown filename、重复 basename、不可解析 inline code、URL、artifact/file provenance 和点击后 `onObjectReferenceFocus`。旧测试若断言“绝不扫描文本 ref”，必须改为“只升级可解析真实对象”。
-
-- [x] GUI-TUI-14 右侧预览 browser 验收：用 Codex in-app browser 从默认聊天入口验证真实 artifact filename inline code 可点击并聚焦右侧预览；同时验证不可解析 code 片段不可点击。证据需包含 DOM、截图、selected refs、focused panel、renderer id 和 command/run id。
-  状态：passed；证据：`docs/test-artifacts/runtime-codex-browser-acceptance/inline-reference-right-panel-dom.txt`、`docs/test-artifacts/runtime-codex-browser-acceptance/inline-reference-right-panel.png`、`docs/test-artifacts/runtime-codex-browser-acceptance/r-proto-05-click-real-inline-structured-refs-dom.txt`。
-
-- [x] GUI-TUI-15 Confidence browser 验收：用 default-chat 触发一个没有 TUI/verifier confidence 的 native assistant message，确认不显示默认 78%；再触发一个带 `confidence` + `confidenceExplanation` 的结果，确认显示百分比、解释和 evidence refs，且 GUI 没有本地计算。
-  状态：passed；证据：`docs/test-artifacts/runtime-codex-browser-acceptance/confidence-unscored-dom.txt`、`docs/test-artifacts/runtime-codex-browser-acceptance/confidence-positive-dom.txt`、`docs/test-artifacts/runtime-codex-browser-acceptance/confidence-partial-dom.txt`、`docs/test-artifacts/runtime-codex-browser-acceptance/confidence-three-turn-summary.json`。
-
-- [x] GUI-TUI-16 Release gate 串联：把新增协议/渲染/confidence 测试纳入 touched-area gate。完成代码实现后至少跑 `npm run typecheck`、targeted tests、`npm run smoke:native-extension-ownership`、`git diff --check`，Runtime/GUI 修改还需跑匹配的 in-app browser 验收。
-  状态：passed；证据：targeted UI/normalizer/object-ref tests、`npm run smoke:real-task-matrix`、`npm run smoke:native-extension-ownership`、`npm run smoke:runtime-codex-browser-acceptance`、`npm run smoke:web-multiturn-final`、`npm run smoke:single-agent-final-evidence`。
-
-### P2：真实多轮压测新增场景
-
-- [x] R-PROTO-04 GUI presentation catalog discovery：第一轮生成多类型 artifacts；第二轮要求 agent 通过 `gui.list/read/search` 说明 GUI 当前能用哪些 renderer 预览这些 artifacts；第三轮让 TUI 调 `gui.present` 聚焦其中一个 artifact。必须证明 discovery 来自 `/gui/capabilities/presentation.json` 或 `/gui/renderers/<componentId>.json`，不是 React import、AgentServer gateway 或 GUI task ranking。
-  状态：passed；证据：`docs/test-artifacts/real-tasks/R-PROTO-04/manifest.json`、`docs/test-artifacts/runtime-codex-browser-acceptance/r-proto-04-summary.json`、`docs/test-artifacts/runtime-codex-browser-acceptance/r-proto-04-three-turn-dom.txt`。
-
-- [x] R-PROTO-05 Inline artifact reference right-panel preview：第一轮生成至少两个 markdown/table artifacts，其中一个在 assistant 文本里以裸文件名 inline code 出现；第二轮点击该裸文件名并验证右侧面板预览；第三轮切换到不可解析 inline code 和重复 basename 场景。必须证明只有可解析真实对象会升级为引用，且预览不改变 task truth。
-  状态：passed；证据：`docs/test-artifacts/real-tasks/R-PROTO-05/manifest.json`、`docs/test-artifacts/runtime-codex-browser-acceptance/r-proto-05-summary.json`、`docs/test-artifacts/runtime-codex-browser-acceptance/r-proto-05-click-real-inline-structured-refs-dom.txt`。
-
-- [x] R-VERIFY-02 Confidence source and explanation：第一轮生成无 verifier confidence 的普通回答，必须不显示默认百分比；第二轮生成 tool-backed 或 verifier-backed result，要求输出 `confidenceExplanation`；第三轮制造 partial/blocked 或 contradictory evidence，验证 confidence 降低并列出 penalties。必须证明 GUI 不计算 confidence，所有分数来自 TUI/verifier/harness payload。
-  状态：passed；证据：`docs/test-artifacts/real-tasks/R-VERIFY-02/manifest.json`、`docs/test-artifacts/runtime-codex-browser-acceptance/confidence-three-turn-summary.json`、`docs/test-artifacts/runtime-codex-browser-acceptance/confidence-three-turn-dom.txt`。
-
-## 验收规则
-
-- 文档或任务板修改：`git diff --check`。
-- 代码修改：`npm run typecheck`、touched areas 的 targeted tests、`git diff --check`。
-- Runtime/GUI 修改：再跑 `npm run smoke:runtime-provider-preflight`、`npm run smoke:runtime-codex-browser-acceptance` 和至少一个匹配 touched area 的 Codex in-app browser 验收。
-- Release 或大范围迁移：再跑 `npm run smoke:no-hardcoded-success`、`npm run smoke:no-legacy-paths`、`npm run smoke:runtime-codex-truth-source`、`npm run smoke:runtime-provider-preflight`、`npm run verify:single-agent-final`；真正 release 必须跑 `npm run verify:single-agent-release`，必要时 `npm run test` 和 `npm run build`。
-- 真实 browser E2E 是最终验收；terminal smoke 只能补充。
-- Pass 必须同时有 visible UI、workspace artifact 或明确无产物理由、audit refs、命令/测试输出；缺一项不能打勾。
-
-## 本地 worktree 策略
-
-- 本项目开发基于 `dev` 分支进行；长期只保留 `main` 和 `dev`。
-- `config.local.json`、`.sciforge/**` 和 `packages/backend/.codex-runtime/**` 是本机状态，不进入 git。
-- `docs/test-artifacts/**` 默认只作为本地验收证据；需要入库前必须确认体积、隐私和复现价值。
-- 清理 worktree 时只删除明确生成的缓存、临时 workspace 和构建产物。
+- 用户在 SciForge 里阅读多轮对话时，感到信息层级、节奏和折叠方式接近 Codex / subagent。
+- 主回答区域没有调试噪声；过程信息可追溯但默认不打扰。
+- 复杂任务、多轮追问、对象引用和失败恢复都能保持同一套呈现规则。
+- 所有改动都有测试或 in-app browser 证据支撑。

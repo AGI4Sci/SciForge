@@ -960,7 +960,7 @@ function selectedRunIdsFromMessages(messages: SciForgeMessage[], selectedRefs: S
   return new Set(messages.flatMap((message) => [
     ...(message.objectReferences ?? []),
     ...(message.acceptance?.objectReferences ?? []),
-  ].filter((reference) => selectedRefs.has(reference.ref))
+  ].filter((reference) => objectReferenceMatchesSelectedRefs(reference, selectedRefs))
     .map((reference) => reference.runId)
     .filter((value): value is string => Boolean(value && value.trim()))));
 }
@@ -1008,6 +1008,31 @@ function artifactReferenceAliases(artifact: RuntimeArtifact) {
     stringField(artifact.metadata?.outputRef),
     stringField(artifact.metadata?.artifactRef),
   ].filter((value): value is string => Boolean(value && value.trim()));
+}
+
+function objectReferenceMatchesSelectedRefs(reference: ObjectReference, selectedRefs: Set<string>) {
+  return objectReferenceAliases(reference).some((ref) => selectedRefs.has(ref));
+}
+
+function objectReferenceAliases(reference: ObjectReference): string[] {
+  const provenance = isRecord(reference.provenance) ? reference.provenance : {};
+  const path = stringField(provenance.path);
+  const dataRef = stringField(provenance.dataRef);
+  const aliases = [
+    reference.ref,
+    reference.id,
+    reference.runId ? `run:${reference.runId}` : undefined,
+    reference.artifactType,
+    path,
+    dataRef,
+    path ? `file:${path}` : undefined,
+    path ? `file::${path}` : undefined,
+    dataRef ? `file:${dataRef}` : undefined,
+    dataRef ? `file::${dataRef}` : undefined,
+  ];
+  if (reference.kind === 'artifact' && reference.id) aliases.push(`artifact:${reference.id}`);
+  if (reference.kind === 'file' && path) aliases.push(path);
+  return Array.from(new Set(aliases.filter((value): value is string => Boolean(value && value.trim()))));
 }
 
 function executionUnitsForRequestPayload(units: RuntimeExecutionUnit[], selectedRefs: Set<string>) {
@@ -1064,12 +1089,12 @@ function compactMessagesForRequestPayload(messages: SciForgeMessage[], currentMe
 
 function filterReferencesForRequestPayload(references: SciForgeReference[] | undefined, selectedRefs: Set<string>) {
   if (!references || selectedRefs.size === 0) return references;
-  return references.filter((reference) => selectedRefs.has(reference.ref));
+  return references.filter((reference) => selectedReferenceAliases(reference).some((ref) => selectedRefs.has(ref)));
 }
 
 function filterObjectReferencesForRequestPayload(objectReferences: ObjectReference[] | undefined, selectedRefs: Set<string>) {
   if (!objectReferences || selectedRefs.size === 0) return objectReferences;
-  return objectReferences.filter((reference) => selectedRefs.has(reference.ref));
+  return objectReferences.filter((reference) => objectReferenceMatchesSelectedRefs(reference, selectedRefs));
 }
 
 function compactReferencesForRequestPayload(references: SciForgeReference[] | undefined) {
@@ -1202,17 +1227,17 @@ function compactRunForRequestPayload(run: SciForgeRun, projectionContexts: Proje
 function messageRefs(message: SciForgeMessage) {
   return uniqueStringRefs([
     `message:${message.id}`,
-    ...(message.references ?? []).map((reference) => reference.ref),
-    ...(message.objectReferences ?? []).map((reference) => reference.ref),
-    ...(message.acceptance?.objectReferences ?? []).map((reference) => reference.ref),
+    ...(message.references ?? []).flatMap(selectedReferenceAliases),
+    ...(message.objectReferences ?? []).flatMap(objectReferenceAliases),
+    ...(message.acceptance?.objectReferences ?? []).flatMap(objectReferenceAliases),
   ]);
 }
 
 function runRefs(run: SciForgeRun) {
   return uniqueStringRefs([
     `run:${run.id}`,
-    ...(run.references ?? []).map((reference) => reference.ref),
-    ...(run.objectReferences ?? []).map((reference) => reference.ref),
+    ...(run.references ?? []).flatMap(selectedReferenceAliases),
+    ...(run.objectReferences ?? []).flatMap(objectReferenceAliases),
   ]);
 }
 

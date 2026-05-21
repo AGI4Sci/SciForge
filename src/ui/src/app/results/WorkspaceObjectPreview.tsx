@@ -254,8 +254,8 @@ function ArtifactFallbackPreview({
         {artifact?.type ? <code>{artifact.type}</code> : null}
         {path ? <code>{path}</code> : null}
       </div>
-      <p>这个对象的可读文件暂时打不开。引用和诊断仍保留在运行细节中，可稍后重试、重新生成，或用系统默认程序打开对应文件。</p>
-      {diagnostic ? <pre className="workspace-object-code">{diagnostic}</pre> : null}
+      <p>这个对象的可读文件暂时打不开。预览失败只影响展示，不改变本轮任务结果；引用和诊断仍保留在运行细节中。</p>
+      {diagnostic ? <PreviewDiagnosticFold diagnostic={diagnostic} /> : null}
       {path ? (
         <UnsupportedPreviewPackageNotice
           reference={reference}
@@ -417,7 +417,7 @@ function DescriptorPreview({
             />
           </div>
         ) : null}
-        {derivedError ? <pre className="workspace-object-code">{derivedError}</pre> : null}
+        {derivedError ? <PreviewDiagnosticFold diagnostic={derivedError} /> : null}
         <PreviewDescriptorActions descriptor={descriptor} reference={reference} />
       </div>
     );
@@ -470,7 +470,7 @@ function UnsupportedPreviewPackageNotice({
       <div className="source-list">
         {notice.codeLabels.map((label) => <code key={label}>{label}</code>)}
       </div>
-      {diagnostic ? <pre className="workspace-object-code">{diagnostic}</pre> : null}
+      {diagnostic ? <PreviewDiagnosticFold diagnostic={diagnostic} /> : null}
       <button
         type="button"
         className="unsupported-preview-package-action"
@@ -481,6 +481,15 @@ function UnsupportedPreviewPackageNotice({
         {notice.requestLabel}
       </button>
     </div>
+  );
+}
+
+function PreviewDiagnosticFold({ diagnostic }: { diagnostic: string }) {
+  return (
+    <details className="message-fold depth-3 workspace-object-diagnostic-fold">
+      <summary>预览诊断已折叠</summary>
+      <pre className="workspace-object-code">{diagnostic}</pre>
+    </details>
   );
 }
 

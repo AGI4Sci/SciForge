@@ -1,7 +1,7 @@
 import { formatProgressHeadline, latestProgressModel } from '../../processProgress';
 import { latestRunningEvent } from '../../streamEventPresentation';
 import { isRuntimeAuditOnlyEvent } from '../../runtimeAuditEvents';
-import type { AgentStreamEvent, RuntimeExecutionUnit, SciForgeConfig } from '../../domain';
+import type { AgentStreamEvent, SciForgeConfig } from '../../domain';
 import type { RuntimeHealthItem } from '../runtimeHealthPanel';
 
 export function runningMessageContentFromStream(assistantDraft: string, streamEvents: AgentStreamEvent[]) {
@@ -9,9 +9,9 @@ export function runningMessageContentFromStream(assistantDraft: string, streamEv
   if (assistantDraft) return assistantDraft;
   if (latestWorklogLine) return latestWorklogLine;
   if (streamEvents.some(isRuntimeAuditOnlyEvent)) {
-    return 'Runtime Codex 正在运行，正在等待后端事件；原始日志已折叠到运行审计。';
+    return '正在等待工作区进度；详细日志已收起。';
   }
-  return '正在规划、生成或执行 workspace task，过程日志默认折叠。';
+  return '正在规划或执行任务，过程细节默认收起。';
 }
 
 export function runReadiness({
@@ -19,17 +19,11 @@ export function runReadiness({
   isSending,
   config,
   runtimeHealth,
-  scenarioPackageRef,
-  skillPlanRef,
-  uiPlanRef,
 }: {
   input: string;
   isSending: boolean;
   config: SciForgeConfig;
   runtimeHealth?: RuntimeHealthItem[];
-  scenarioPackageRef: RuntimeExecutionUnit['scenarioPackageRef'];
-  skillPlanRef: string;
-  uiPlanRef: string;
 }) {
   if (!input.trim() && !isSending) {
     return {
@@ -42,7 +36,7 @@ export function runReadiness({
     return {
       ok: true,
       severity: 'info' as const,
-      message: '当前 run 正在执行；继续输入会排队为下一条引导。',
+      message: '当前任务正在执行；继续输入会排队为下一条引导。',
     };
   }
   if (!config.workspacePath.trim()) {
@@ -63,7 +57,7 @@ export function runReadiness({
   return {
     ok: true,
     severity: 'success' as const,
-    message: `将使用 ${scenarioPackageRef?.id ?? 'built-in'} · ${skillPlanRef} · ${uiPlanRef} 运行。`,
+    message: '将使用当前工作区和已选工具运行。',
   };
 }
 

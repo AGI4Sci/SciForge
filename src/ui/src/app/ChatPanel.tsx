@@ -78,19 +78,46 @@ function builtInScenarioIdForInstance(scenarioId: ScenarioInstanceId, scenarioOv
 
 function messageProvenanceKind(message: SciForgeMessage) {
   if (isLiveRuntimeCodexMessage(message)) return 'live-runtime-codex';
-  return message.provenance?.kind
+  const kind = message.provenance?.kind;
+  if (kind && isInternalMessageProvenance(kind)) return 'runtime-result';
+  return kind
     ?? (message.role === 'user' ? 'user-authored' : message.role === 'system' ? 'system-ui' : 'seed-demo');
 }
 
 function MessageProvenanceBadge({ message }: { message: SciForgeMessage }) {
   const kind = messageProvenanceKind(message);
-  if (isLiveRuntimeCodexMessage(message)) return <Badge variant="success">live Runtime Codex</Badge>;
+  if (isLiveRuntimeCodexMessage(message) || kind === 'runtime-result' || kind === 'user-authored') return null;
   if (isSeedDemoOrFixtureMessage(message)) {
     return <Badge variant={kind === 'fixture' ? 'muted' : 'warning'}>{kind === 'fixture' ? 'fixture' : 'seed-demo'}</Badge>;
   }
-  if (kind === 'user-authored') return <Badge variant="info">user-authored</Badge>;
-  if (kind === 'system-ui') return <Badge variant="muted">system UI</Badge>;
+  if (kind === 'system-ui') return <Badge variant="muted">系统消息</Badge>;
   return <Badge variant="muted">{kind}</Badge>;
+}
+
+function messageProvenanceSourceAttribute(message: SciForgeMessage) {
+  const source = message.provenance?.source;
+  if (!source || isInternalMessageProvenance(source)) return undefined;
+  return source;
+}
+
+function messageProvenanceAttribute(kind: string) {
+  if (kind === 'user-authored') return 'user-message';
+  if (kind === 'system-ui') return 'system-message';
+  if (kind === 'live-runtime-codex' || kind === 'runtime-result') return 'assistant-result';
+  if (kind === 'seed-demo' || kind === 'fixture') return kind;
+  return 'message';
+}
+
+function isInternalMessageProvenance(value: string) {
+  return /^(?:native-message|codex-command(?:-|$))|(?:^|[:/])codex-command(?:-|$)/i.test(value);
+}
+
+function shouldShowMessageDiagnosticBadges(message: SciForgeMessage, provenanceKind: string) {
+  return message.role !== 'user' && provenanceKind !== 'live-runtime-codex' && provenanceKind !== 'runtime-result';
+}
+
+function visibleMessageReference(message: SciForgeMessage) {
+  return referenceForMessage(message);
 }
 
 export function ChatPanel({
@@ -164,7 +191,7 @@ export function ChatPanel({
   const [errorText, setErrorText] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [composerHeight, setComposerHeight] = useState(58);
-  const [composerExpanded, setComposerExpanded] = useState(false);
+  const [composerExpanded, setComposerExpanded] = useState(() => shouldOpenComposerByDefault(session));
   const [streamEvents, setStreamEvents] = useState<AgentStreamEvent[]>([]);
   const [assistantDraft, setAssistantDraft] = useState('');
   const [retainedContextWindowState, setRetainedContextWindowState] = useState<AgentContextWindowState | undefined>();
@@ -269,6 +296,7 @@ export function ChatPanel({
     setGuidanceQueue([]);
     guidanceQueueRef.current = [];
     setErrorText('');
+    setComposerExpanded(shouldOpenComposerByDefault(session));
   }, [scenarioId, session.sessionId]);
 
   useEffect(() => {
@@ -593,6 +621,7 @@ export function ChatPanel({
       if (result.status === 'failed') {
         runFailed = true;
         runEndedReason = '当前 run 失败；追加引导已保留为 deferred，等待用户确认、修复或重新运行后再合并。';
+        restoreSubmittedDraftAfterFailure(prompt, references, sourceGuidance);
         const activeGuidanceForRun = guidanceForCurrentRun(sourceGuidance, guidanceQueueRef.current);
         const failedSessionWithProcess = attachGuidanceQueueToSessionRun(
           attachStreamProcessToFailedSession(result.failedSession, result.failedRunId, streamEventsRef.current),
@@ -633,6 +662,7 @@ export function ChatPanel({
         ? '用户显式中断当前 backend run；正在处理的追加引导已跨过 cancel boundary，不能自动恢复。'
         : '当前 run 在 backend orchestration 期间异常结束；追加引导已保留为 deferred，等待用户确认、修复或重新运行后再合并。';
       const message = error instanceof Error ? error.message : String(error);
+      restoreSubmittedDraftAfterFailure(prompt, references, sourceGuidance);
       setErrorText(compactFailureNotice(message || runEndedReason));
       const sessionWithSourceGuidance = markGuidanceTerminalOutcome(activeSessionRef.current, sourceGuidance, {
         status: wasUserCancelled ? 'rejected' : 'deferred',
@@ -728,6 +758,20 @@ export function ChatPanel({
       seen.add(item.id);
       return true;
     });
+  }
+
+  function restoreSubmittedDraftAfterFailure(
+    prompt: string,
+    references: SciForgeReference[],
+    sourceGuidance?: GuidanceQueueRecord,
+  ) {
+    if (sourceGuidance) return;
+    if (inputRef.current.trim() || pendingReferencesRef.current.length) return;
+    inputRef.current = prompt;
+    onInputChange(prompt);
+    pendingReferencesRef.current = references;
+    setPendingReferences(references);
+    setComposerExpanded(true);
   }
 
   function handleRunningGuidance(prompt: string, references: SciForgeReference[] = pendingReferencesRef.current) {
@@ -826,9 +870,6 @@ export function ChatPanel({
     isSending,
     config,
     runtimeHealth,
-    scenarioPackageRef,
-    skillPlanRef,
-    uiPlanRef,
   });
 
   function beginEditMessage(message: SciForgeMessage) {
@@ -936,31 +977,32 @@ export function ChatPanel({
           const index = visibleMessageStart + visibleIndex;
           const messageRunId = runIdForMessage(message, index, messages, session.runs);
           const provenanceKind = messageProvenanceKind(message);
+          const showDiagnosticBadges = shouldShowMessageDiagnosticBadges(message, provenanceKind);
           return (
           <div
             key={message.id}
             className={cx('message', message.role, activeRunId && messageRunId === activeRunId && 'active-run')}
             data-testid="chat-message"
             data-message-id={message.id}
-            data-message-provenance={provenanceKind}
-            data-message-provenance-source={message.provenance?.source}
+            data-message-provenance={messageProvenanceAttribute(provenanceKind)}
+            data-message-provenance-source={messageProvenanceSourceAttribute(message)}
             data-runtime-request-eligible={message.provenance?.runtimeRequestEligible === true ? 'true' : 'false'}
             data-live-acceptance-eligible={isLiveRuntimeCodexMessage(message) ? 'true' : 'false'}
             data-session-id={session.sessionId}
-            data-run-id={messageRunId}
-            data-sciforge-reference={sciForgeReferenceAttribute(referenceForMessage(message, messageRunId))}
+            data-run-id={messageRunId ? 'run' : undefined}
+            data-sciforge-reference={sciForgeReferenceAttribute(visibleMessageReference(message))}
           >
             <div className="message-body">
               <div className="message-meta">
                 <strong>{message.role === 'user' ? '你' : message.role === 'system' ? '系统' : 'SciForge'}</strong>
                 {messageRunId ? (
-                  <button type="button" className="message-run-link" onClick={() => onActiveRunChange(messageRunId)}>
-                    run {messageRunId.replace(/^run-/, '').slice(0, 8)}
+                  <button type="button" className="message-run-link" onClick={() => onActiveRunChange(messageRunId)} title="查看本轮过程">
+                    过程
                   </button>
                 ) : null}
-                {message.confidence !== undefined ? <ConfidenceBar value={message.confidence} /> : null}
-                {message.evidence ? <EvidenceTag level={message.evidence} /> : null}
-                {message.claimType ? <ClaimTag type={message.claimType} /> : null}
+                {showDiagnosticBadges && message.confidence !== undefined ? <ConfidenceBar value={message.confidence} /> : null}
+                {showDiagnosticBadges && message.evidence ? <EvidenceTag level={message.evidence} /> : null}
+                {showDiagnosticBadges && message.claimType ? <ClaimTag type={message.claimType} /> : null}
                 <MessageProvenanceBadge message={message} />
                 <RunVerificationTag session={session} runId={messageRunId} />
                 {message.status === 'failed' ? <Badge variant="danger">failed</Badge> : null}
@@ -992,11 +1034,14 @@ export function ChatPanel({
               ) : (
                 <>
                   {message.role === 'user' ? (
-                    <MessageContent
-                      content={sanitizeUserProjectionText(message.content) ?? message.content}
-                      references={inlineObjectReferencesForMessage(message, session)}
-                      onObjectFocus={handleObjectReferenceClick}
-                    />
+                    <>
+                      <FollowupBindingLine message={message} sessionId={session.sessionId} />
+                      <MessageContent
+                        content={sanitizeUserProjectionText(message.content) ?? message.content}
+                        references={inlineObjectReferencesForMessage(message, session)}
+                        onObjectFocus={handleObjectReferenceClick}
+                      />
+                    </>
                   ) : (
                     <>
                       <FinalMessageContent
@@ -1046,23 +1091,7 @@ export function ChatPanel({
         ok={readiness.ok}
         severity={readiness.severity}
         message={readiness.message}
-        packageLabel={`${scenarioPackageRef.id}@${scenarioPackageRef.version}`}
       />
-      <div
-        className="gui-protocol-strip"
-        data-testid="gui-protocol-surface"
-        data-gui-tools={guiProtocolSurface.tools.join(' ')}
-        data-terminal-command-text={guiProtocolSurface.commandText}
-        data-default-context-raw-dom="false"
-      >
-        <span className="gui-protocol-strip-label">GUI tools</span>
-        <span className="gui-protocol-tool-list">
-          {guiProtocolSurface.tools.map((tool: string) => <code key={tool}>{tool}</code>)}
-        </span>
-        <code className="gui-protocol-command">{guiProtocolSurface.commandText}</code>
-        <Badge variant="muted">semantic hot-region</Badge>
-        <Badge variant="success">debug folded</Badge>
-      </div>
       <ChatComposer
         expanded={composerExpanded}
         input={input}
@@ -1072,6 +1101,12 @@ export function ChatPanel({
         pendingReferences={pendingReferences}
         contextMeter={<ContextWindowMeter state={contextWindowState} running={isSending} />}
         fileInputRef={fileInputRef}
+        runtimeContext={{
+          provider: config.modelProvider || 'provider unset',
+          model: config.modelName.trim() || 'model unset',
+          workspacePath: config.workspacePath,
+          permissionMode: '可写工作区',
+        }}
         topAddon={(
           <TargetInstanceSelector
             peers={targetPeers}
@@ -1106,6 +1141,23 @@ export function ChatPanel({
           }}
         />
       ) : null}
+    </div>
+  );
+}
+
+function FollowupBindingLine({ message, sessionId }: { message: SciForgeMessage; sessionId: string }) {
+  const references = message.references ?? [];
+  if (!references.length) return null;
+  const labels = references
+    .slice(0, 3)
+    .map((reference) => reference.title || reference.ref)
+    .join('、');
+  const overflow = references.length > 3 ? ` +${references.length - 3}` : '';
+  return (
+    <div className="message-continuity-line">
+      <span>继续基于当前对话</span>
+      <code>{sessionId.replace(/^session-/, '').slice(0, 8)}</code>
+      <span>和 {labels}{overflow}</span>
     </div>
   );
 }
@@ -1210,6 +1262,10 @@ function referenceTargetFromEvent(event: MouseEvent): { element: HTMLElement; re
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function shouldOpenComposerByDefault(session: SciForgeSession) {
+  return session.messages.length === 0 && session.runs.length === 0;
 }
 
 function resultPresentationForRun(session: SciForgeSession, runId: string | undefined) {

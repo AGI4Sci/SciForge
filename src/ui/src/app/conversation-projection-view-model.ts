@@ -11,6 +11,7 @@ export type UiConversationProjectionStatus =
   | 'output-materialized'
   | 'validated'
   | 'satisfied'
+  | 'visible-not-live-acceptance'
   | 'degraded-result'
   | 'external-blocked'
   | 'repair-needed'
@@ -88,6 +89,7 @@ const projectionStatuses = new Set<UiConversationProjectionStatus>([
   'output-materialized',
   'validated',
   'satisfied',
+  'visible-not-live-acceptance',
   'degraded-result',
   'external-blocked',
   'repair-needed',

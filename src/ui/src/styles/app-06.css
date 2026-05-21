@@ -439,6 +439,10 @@
   border-radius: 10px;
 }
 
+.codex-quiet-shell .composer-runtime-pill {
+  border-radius: 10px;
+}
+
 .codex-quiet-shell .composer textarea {
   background: transparent;
   border-color: transparent;

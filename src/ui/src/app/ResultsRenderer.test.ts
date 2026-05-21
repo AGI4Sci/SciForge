@@ -214,7 +214,7 @@ test('ResultsRenderer keeps raw ContractValidationFailure audit-only without syn
     onWorkspaceFileEditorChange: () => undefined,
   }));
 
-  assert.match(html, /主结果等待 ConversationProjection/);
+  assert.match(html, /等待本轮结果/);
   assert.doesNotMatch(html, /运行需要处理/);
   assert.match(html, /structured audit item\(s\) retained/);
   assert.match(html, /audit ref\(s\) retained/);
@@ -239,7 +239,7 @@ test('ResultsRenderer keeps raw failure text out of the first-screen main summar
   };
 
   const html = renderResultsRenderer(session, { activeRunId: 'run-contract-failure' });
-  const summaryStart = html.indexOf('主结果等待 ConversationProjection');
+  const summaryStart = html.indexOf('等待本轮结果');
   const auditStart = html.indexOf('查看运行细节');
   const summaryHtml = html.slice(summaryStart, auditStart);
 
@@ -349,8 +349,8 @@ test('ResultsRenderer empty completed run is presented as empty rather than read
 
   const html = renderResultsRenderer(session, { activeRunId: 'run-empty-artifacts' });
 
-  assert.match(html, /主结果等待 ConversationProjection/);
-  assert.match(html, /结果区等待 Projection 声明可见状态与 ArtifactDelivery/);
+  assert.match(html, /等待本轮结果/);
+  assert.match(html, /当前还没有可展示的结果；回答或产物准备好后会出现在这里。/);
   assert.doesNotMatch(html, /重新运行或要求生成可展示 artifact/);
   assert.doesNotMatch(html, /ready result/);
 });
@@ -520,8 +520,8 @@ test('ResultsRenderer uses projection execution process instead of raw execution
     focusMode: 'all',
   });
 
-  assert.match(html, /Projection 执行过程/);
-  assert.match(html, /OutputMaterialized: Projection output was materialized from event log/);
+  assert.match(html, /运行过程/);
+  assert.match(html, /产物: Projection output was materialized from event log/);
   assert.doesNotMatch(html, /legacy\.raw\.execution/);
   assert.doesNotMatch(html, /LEGACY_RAW_EU_SHOULD_NOT_RENDER_IN_MAIN_EXECUTION_FOCUS/);
   assert.equal(model.viewPlan.allItems.some((item) => item.module.moduleId === 'execution-provenance-table'), false);
@@ -606,8 +606,8 @@ test('ResultsRenderer does not let raw running progress drive the main summary w
 
   const html = renderResultsRenderer(session, { activeRunId: 'run-partial-first' });
 
-  assert.match(html, /主结果等待 ConversationProjection/);
-  assert.match(html, /结果区等待 Projection 声明可见状态与 ArtifactDelivery/);
+  assert.match(html, /等待本轮结果/);
+  assert.match(html, /当前还没有可展示的结果；回答或产物准备好后会出现在这里。/);
   assert.doesNotMatch(html, /report: Partial report/);
   assert.doesNotMatch(html, /已有部分结果，后台仍在继续/);
   assert.doesNotMatch(html, /当前阶段：stage fulltext · running|当前阶段：fulltext · running/);
@@ -752,7 +752,7 @@ test('ResultsRenderer failed run audit renders execution units from failed paylo
 
   const html = renderResultsRenderer(session, { activeRunId: 'run-failed-payload' });
 
-  assert.match(html, /主结果等待 ConversationProjection/);
+  assert.match(html, /等待本轮结果/);
   assert.doesNotMatch(html, /运行需要处理/);
   assert.match(html, /1 EU/);
   assert.match(html, /EU-failed-payload/);
@@ -890,8 +890,8 @@ test('ResultsRenderer explains missing ArtifactDelivery through the package empt
   };
   const html = renderResultsRenderer(session, { activeRunId: 'run-broken-report' });
 
-  assert.match(html, /主结果等待 ConversationProjection/);
-  assert.match(html, /结果区等待 Projection 声明可见状态与 ArtifactDelivery/);
+  assert.match(html, /等待本轮结果/);
+  assert.match(html, /当前还没有可展示的结果；回答或产物准备好后会出现在这里。/);
   assert.doesNotMatch(html, /Awaiting research-report/);
   assert.doesNotMatch(html, /contract drift: markdown was not produced/);
 });

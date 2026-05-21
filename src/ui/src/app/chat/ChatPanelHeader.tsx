@@ -5,10 +5,10 @@ import type { ScenarioViewConfig } from '../../data';
 
 export function ChatPanelHeader({
   scenario,
-  config,
+  config: _config,
   archivedCount,
   isSending,
-  onConfigChange,
+  onConfigChange: _onConfigChange,
   onNewChat,
   onToggleHistory,
   onAbort,
@@ -32,22 +32,8 @@ export function ChatPanelHeader({
         <scenario.icon size={18} />
       </div>
       <strong className="panel-scenario-name">Ask SciForge</strong>
-      <Badge variant="muted">{config.runtimeProfile || 'sciforge-runtime-deepseek'}</Badge>
-      <Badge variant="muted">{config.modelProvider || 'provider unset'}</Badge>
-      {config.modelName.trim() ? <Badge variant="muted">{config.modelName.trim()}</Badge> : null}
       <Badge variant="success" glow>在线</Badge>
       {archivedCount ? <Badge variant="muted">{archivedCount} archived</Badge> : null}
-      <label className="backend-picker" title="选择下一次 Runtime Codex 运行使用的兼容 backend 标识">
-        <span>runtime</span>
-        <select value={config.agentBackend} onChange={(event) => onConfigChange({ agentBackend: event.target.value })}>
-          <option value="codex">Codex</option>
-          <option value="openteam_agent">OpenTeam</option>
-          <option value="claude-code">Claude Code</option>
-          <option value="hermes-agent">Hermes</option>
-          <option value="openclaw">OpenClaw</option>
-          <option value="gemini">Gemini</option>
-        </select>
-      </label>
       <div className="panel-actions">
         <IconButton icon={Plus} label="开启新聊天" onClick={onNewChat} />
         <IconButton icon={Clock} label="历史会话" onClick={onToggleHistory} />

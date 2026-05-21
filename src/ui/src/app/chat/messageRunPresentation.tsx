@@ -59,9 +59,11 @@ function verificationTagForRun(session: SciForgeSession, runId: string): Verific
   const projection = conversationProjectionForSession(session, run);
   const projectionVerdict = projection?.verificationState?.verdict ?? projection?.verificationState?.status;
   if (projection && projectionVerdict) {
+    const label = verificationVerdictLabel(projectionVerdict);
+    if (!label) return undefined;
     return {
-      label: `Verification: ${verificationVerdictLabel(projectionVerdict)}`,
-      title: projection.verificationState?.verifierRef ?? `Projection verification ${projectionVerdict}`,
+      label: `验证：${label}`,
+      title: verificationVerdictTitle(label, projection.verificationState?.verifierRef),
       variant: verificationVerdictVariant(projectionVerdict),
     };
   }
@@ -76,7 +78,17 @@ function verificationVerdictLabel(verdict: string) {
     'needs-human': '需人工核验',
     unverified: '未验证',
   };
-  return labels[verdict] ?? verdict;
+  return labels[verdict];
+}
+
+function verificationVerdictTitle(label: string, verifierRef?: string) {
+  return verifierRef && !isInternalVerificationRef(verifierRef)
+    ? `验证状态：${label} · ${verifierRef}`
+    : `验证状态：${label}`;
+}
+
+function isInternalVerificationRef(value: string) {
+  return /^(native-message|codex-command(?:-|$))/i.test(value);
 }
 
 function verificationVerdictVariant(verdict: string): BadgeVariant {

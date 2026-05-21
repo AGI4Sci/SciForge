@@ -34,7 +34,7 @@ test('results renderer execution model projects failure audit data without React
 
   assert.equal(shouldOpenRunAuditDetails(session, activeRun), true);
   assert.equal(state.kind, 'empty');
-  assert.equal(state.title, '主结果等待 ConversationProjection');
+  assert.equal(state.title, '等待本轮结果');
   assert.equal(failures.length, 0);
   assert.deepEqual(runRecoverActions(session, activeRun), []);
   assert.deepEqual(runAuditBlockers(session, activeRun), []);
@@ -231,7 +231,7 @@ test('results renderer execution model surfaces run display intent projection wi
 
   assert.equal(state.kind, 'recoverable');
   assert.match(state.reason, /direct urllib network access/);
-  assert.notEqual(state.title, '主结果等待 ConversationProjection');
+  assert.notEqual(state.title, '等待本轮结果');
   assert.deepEqual(runRecoverActions(session, session.runs[0]), ['Regenerate task code through ready web_fetch/web_search provider routes.']);
   assert.ok(runAuditRefs(session, session.runs[0]).includes('artifact:provider-policy-diagnostic'));
 });
@@ -296,8 +296,8 @@ test('results renderer execution model does not call completed empty runs ready'
   const state = runPresentationState(session, session.runs[0]);
 
   assert.equal(state.kind, 'empty');
-  assert.equal(state.title, '主结果等待 ConversationProjection');
-  assert.match(state.reason, /等待 Projection/);
+  assert.equal(state.title, '等待本轮结果');
+  assert.match(state.reason, /当前还没有可展示的结果/);
 });
 
 test('results renderer execution model lets conversation projection override raw failed state', () => {
@@ -619,7 +619,7 @@ test('results renderer execution model treats cited historical execution units a
 
   assert.equal(failedExecutionUnits(session, session.runs[0]).some((unit) => unit.id === 'EU-old-failed'), false);
   assert.equal(state.kind, 'empty');
-  assert.equal(state.title, '主结果等待 ConversationProjection');
+  assert.equal(state.title, '等待本轮结果');
   assert.equal(state.availableArtifacts.some((artifact) => artifact.id === 'direct-context-summary'), false);
 
   const compactedSession = structuredClone(session);
@@ -791,7 +791,7 @@ test('results renderer execution model scopes failed direct-context runs by stru
   assert.equal(failedExecutionUnits(session, session.runs[0]).some((unit) => unit.id === 'EU-direct-context-missing'), false);
   assert.deepEqual(runAuditBlockers(session, session.runs[0]), []);
   assert.equal(state.kind, 'empty');
-  assert.match(state.reason, /已保留在审计中，不驱动主状态/);
+  assert.match(state.reason, /已保留在折叠过程里，不抢占主视图/);
   assert.deepEqual(runRecoverActions(session, session.runs[0]), []);
   assert.equal(state.availableArtifacts.some((artifact) => artifact.id === 'old-runtime-diagnostic'), false);
   assert.match(rawItems.find((item) => item.id === 'execution-units')?.value ?? '', /EU-direct-context-missing/);
@@ -834,7 +834,7 @@ test('results renderer execution model keeps current-run repair state scoped to 
   const state = runPresentationState(session, session.runs[0]);
 
   assert.equal(state.kind, 'empty');
-  assert.match(state.reason, /已保留在审计中，不驱动主状态/);
+  assert.match(state.reason, /已保留在折叠过程里，不抢占主视图/);
   assert.deepEqual(runRecoverActions(session, session.runs[0]), []);
   assert.deepEqual(runAuditBlockers(session, session.runs[0]), []);
   assert.ok(runAuditRefs(session, session.runs[0]).includes('log:current-repair'));
@@ -893,7 +893,7 @@ test('results renderer execution model does not let raw running progress drive m
   const state = runPresentationState(session, session.runs[0]);
 
   assert.equal(state.kind, 'empty');
-  assert.equal(state.title, '主结果等待 ConversationProjection');
+  assert.equal(state.title, '等待本轮结果');
   assert.equal(state.progress, undefined);
   assert.equal(state.availableArtifacts.some((artifact) => artifact.id === 'partial-report'), false);
   assert.deepEqual(state.nextSteps, []);
@@ -1201,7 +1201,7 @@ test('presentation state ignores natural-language partial and needs-human words 
   const state = runPresentationState(session, session.runs[0]);
 
   assert.equal(state.kind, 'empty');
-  assert.equal(state.title, '主结果等待 ConversationProjection');
+  assert.equal(state.title, '等待本轮结果');
 });
 
 function deliveryArtifact(

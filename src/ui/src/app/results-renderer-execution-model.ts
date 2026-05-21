@@ -194,10 +194,10 @@ function projectionlessRunPresentationState(
   const refs = runAuditRefs(session, run).slice(0, 8);
   return {
     kind: 'empty',
-    title: '主结果等待 ConversationProjection',
+    title: '等待本轮结果',
     reason: hasAuditDiagnostics
-      ? '没有 ConversationProjection；raw run、ExecutionUnit、validation 与 resultPresentation 已保留在审计中，不驱动主状态。'
-      : '当前 run 没有 ConversationProjection；结果区等待 Projection 声明可见状态与 ArtifactDelivery。',
+      ? '本轮还没有可展示的主结果；执行记录、校验和恢复线索已保留在折叠过程里，不抢占主视图。'
+      : '当前还没有可展示的结果；回答或产物准备好后会出现在这里。',
     nextSteps: [],
     availableArtifacts: [],
     refs,
@@ -235,7 +235,8 @@ export function runAuditBlockers(session: SciForgeSession, activeRun?: SciForgeR
   const run = activeRun ?? session.runs.at(-1);
   const projection = conversationProjectionForSession(session, run);
   if (projection) {
-    if (conversationProjectionStatus(projection) === 'satisfied') return [];
+    const status = conversationProjectionStatus(projection);
+    if (status === 'satisfied' || status === 'visible-not-live-acceptance') return [];
     return Array.from(new Set([
       conversationProjectionPrimaryDiagnostic(projection),
       ...projection.diagnostics.map((diagnostic) => diagnostic.message),
@@ -247,7 +248,11 @@ export function runAuditBlockers(session: SciForgeSession, activeRun?: SciForgeR
 export function runRecoverActions(session: SciForgeSession, activeRun?: SciForgeRun) {
   const run = activeRun ?? session.runs.at(-1);
   const projection = conversationProjectionForSession(session, run);
-  if (projection) return conversationProjectionRecoverActions(projection);
+  if (projection) {
+    return conversationProjectionStatus(projection) === 'visible-not-live-acceptance'
+      ? []
+      : conversationProjectionRecoverActions(projection);
+  }
   return [];
 }
 
@@ -504,7 +509,7 @@ function runPresentationStateFromProjection(
 ): RunPresentationState {
   const status = conversationProjectionStatus(projection);
   const projectedArtifacts = projectionAvailableArtifacts(projection, availableArtifacts);
-  const nextSteps = conversationProjectionRecoverActions(projection).slice(0, 5);
+  const nextSteps = status === 'visible-not-live-acceptance' ? [] : conversationProjectionRecoverActions(projection).slice(0, 5);
   const refs = conversationProjectionAuditRefs(projection).slice(0, 8);
   const reason = projectionPresentationReason(projection, projectedArtifacts, run);
   const progress = projectionPresentationProgress(projection, projectedArtifacts);
@@ -540,6 +545,7 @@ function projectionPresentationKind(
 ): RunPresentationStateKind {
   const status = conversationProjectionStatus(projection);
   if (status === 'satisfied') return artifacts.length || conversationProjectionVisibleText(projection) ? 'ready' : 'empty';
+  if (status === 'visible-not-live-acceptance') return conversationProjectionVisibleText(projection) ? 'ready' : 'empty';
   if (status === 'needs-human') return 'needs-human';
   if (status === 'external-blocked' || status === 'repair-needed') return conversationProjectionIsRecoverable(projection) ? 'recoverable' : 'failed';
   if (status === 'degraded-result' && !artifacts.length && projectionHasEmptyResultRecovery(projection)) return 'recoverable';
@@ -560,6 +566,7 @@ function projectionPresentationTitle(
   status: ReturnType<typeof conversationProjectionStatus>,
   artifacts: RunPresentationState['availableArtifacts'],
 ) {
+  if (status === 'visible-not-live-acceptance' && !artifacts.length) return '回答已显示';
   if (kind === 'ready') return '结果可展示';
   if (kind === 'partial') return status === 'background-running' ? '已有部分结果，后台仍在继续' : '只得到部分结果';
   if (kind === 'needs-human') return '需要人工处理后继续';
@@ -574,6 +581,9 @@ function projectionPresentationReason(
   artifacts: RunPresentationState['availableArtifacts'],
   run: SciForgeRun | undefined,
 ) {
+  if (conversationProjectionStatus(projection) === 'visible-not-live-acceptance') {
+    return compactHumanReason(conversationProjectionVisibleText(projection) ?? '回答已在聊天中显示；本轮没有生成独立 artifact。');
+  }
   const explicit = conversationProjectionPrimaryDiagnostic(projection) ?? conversationProjectionVisibleText(projection);
   if (explicit) return compactHumanReason(explicit);
   if (projection.backgroundState?.revisionPlan) return compactHumanReason(projection.backgroundState.revisionPlan);
@@ -593,20 +603,21 @@ function projectionPresentationProgress(
     status: 'available',
   }));
   const latestEvent = [...projection.executionProcess].reverse().find((event) => event.summary || event.type);
-  const nextSteps = conversationProjectionRecoverActions(projection);
+  const status = conversationProjectionStatus(projection);
+  const nextSteps = status === 'visible-not-live-acceptance' ? [] : conversationProjectionRecoverActions(projection);
   return {
     completedParts,
     currentStage: latestEvent ? {
       id: latestEvent.eventId,
-      label: latestEvent.summary || latestEvent.type,
-      status: latestEvent.type,
+      label: projectionProgressEventLabel(latestEvent.summary || latestEvent.type, status),
+      status: projectionStatusLabel(status),
     } : undefined,
     backgroundStatus: projection.backgroundState?.status,
     safeActions: nextSteps.map((step) => ({
       kind: 'continue' as const,
       label: step,
       safe: true,
-      reason: '来自 ConversationProjection 的恢复动作，不从 raw execution 状态推断。',
+      reason: '来自本轮结果的恢复动作，不从底层执行状态推断。',
     })).slice(0, 6),
   };
 }
@@ -619,6 +630,32 @@ function artifactTitle(artifact: RuntimeArtifact) {
 function compactHumanReason(value: string) {
   const text = value.replace(/\s+/g, ' ').trim();
   return text.length > 320 ? `${text.slice(0, 317).trim()}...` : text;
+}
+
+function projectionProgressEventLabel(value: string, status: ReturnType<typeof conversationProjectionStatus>) {
+  if (status === 'visible-not-live-acceptance' || /native.?codex.?message/i.test(value)) {
+    return '回答已在聊天中显示';
+  }
+  return value;
+}
+
+function projectionStatusLabel(status: ReturnType<typeof conversationProjectionStatus>) {
+  const labels: Record<ReturnType<typeof conversationProjectionStatus>, string> = {
+    idle: '未执行',
+    planned: '已计划',
+    dispatched: '已分发',
+    'partial-ready': '部分结果',
+    'output-materialized': '已保存输出',
+    validated: '已验证边界',
+    'visible-not-live-acceptance': '回答已显示',
+    satisfied: '完成',
+    'degraded-result': '降级结果',
+    'external-blocked': '外部阻塞',
+    'repair-needed': '需恢复',
+    'needs-human': '需人工处理',
+    'background-running': '后台继续中',
+  };
+  return labels[status];
 }
 
 function runHasCurrentFailureBoundary(run?: SciForgeRun) {

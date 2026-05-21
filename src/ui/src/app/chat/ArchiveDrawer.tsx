@@ -185,6 +185,7 @@ function conversationProjectionStatusLabel(status: ReturnType<typeof conversatio
     'partial-ready': '部分结果',
     'output-materialized': '已保存输出',
     validated: '已验证边界',
+    'visible-not-live-acceptance': '可见验证待确认',
     satisfied: '完成',
     'degraded-result': '降级结果',
     'external-blocked': '外部阻塞',
