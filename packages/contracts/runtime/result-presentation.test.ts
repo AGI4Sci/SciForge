@@ -151,6 +151,50 @@ test('default presentation policy collapses process and diagnostics without scen
   assert.deepEqual(validateResultPresentationContract(contract), { ok: true, issues: [] });
 });
 
+test('payload evidence level alone does not create a confidence explanation', () => {
+  const presentation = resultPresentationFromPayload({
+    payload: {
+      message: 'The runtime returned an unscored answer.',
+      evidenceLevel: 'unverified',
+      claims: [{
+        id: 'finding-unscored',
+        text: 'This finding is intentionally unscored.',
+        verificationState: 'unverified',
+      }],
+    },
+  });
+
+  assert.equal(presentation.confidenceExplanation, undefined);
+});
+
+test('structured confidence explanation preserves verifier scoring fields', () => {
+  const presentation = resultPresentationFromPayload({
+    payload: {
+      message: 'The verifier returned a scored result.',
+      confidence: 0.68,
+      confidenceExplanation: {
+        level: 'medium',
+        evidenceLevel: 'tool-backed',
+        sourceScore: 0.74,
+        evidenceDefault: 0.72,
+        evidenceCap: 0.88,
+        penalties: [{ reason: 'Missing full-text evidence.', delta: 0.06 }],
+        summary: 'Verifier combined tool score with evidence policy.',
+        citationIds: ['citation-verifier'],
+      },
+    },
+  });
+
+  assert.equal(presentation.confidenceExplanation?.level, 'medium');
+  assert.equal(presentation.confidenceExplanation?.evidenceLevel, 'tool-backed');
+  assert.equal(presentation.confidenceExplanation?.sourceScore, 0.74);
+  assert.equal(presentation.confidenceExplanation?.evidenceDefault, 0.72);
+  assert.equal(presentation.confidenceExplanation?.evidenceCap, 0.88);
+  assert.deepEqual(presentation.confidenceExplanation?.penalties, [{ reason: 'Missing full-text evidence.', delta: 0.06 }]);
+  assert.equal(presentation.confidenceExplanation?.summary, 'Verifier combined tool score with evidence policy.');
+  assert.deepEqual(presentation.confidenceExplanation?.citationIds, ['citation-verifier']);
+});
+
 test('projection rules are scenario-agnostic and protect the human result layer', () => {
   assert.match(RESULT_PRESENTATION_PROJECTION_RULES.join('\n'), /Answer, evidence, artifact actions/);
   assert.match(RESULT_PRESENTATION_PROJECTION_RULES.join('\n'), /Raw JSON, ToolPayload/);

@@ -64,7 +64,7 @@ export async function tryRunLocalMethodologyFinalizerRuntime(
     confidence: 0.78,
     claimType: 'methodology-review',
     evidenceLevel: 'runtime',
-    reasoningTrace: 'SciForge local methodology finalizer wrote a bounded protocol package from current session artifacts without AgentServer generation or external IO.',
+    reasoningTrace: 'SciForge local methodology finalizer wrote a bounded protocol package from current session artifacts without remote backend generation or external IO.',
     displayIntent: {
       protocolStatus: 'protocol-success',
       taskOutcome: 'satisfied',
@@ -568,7 +568,7 @@ function finalizerMessage(
 ) {
   if (chinese) {
     return [
-      '已从当前会话 artifact 写出最终方法学 protocol package；没有调用 AgentServer，也没有访问外部资源。',
+      '已从当前会话 artifact 写出最终方法学 protocol package；没有调用远程后端，也没有访问外部资源。',
       '',
       `完成了什么：写入 ${packageDir}，包含 ${files.map((file) => file.name).join('、')}；统计口径按 ${unitLabel}，技术重复不作为独立样本。`,
       '缺什么：仍缺 pilot 方差/ICC/批次方差和真实失败率；不能升级为确认性功效结论。',
@@ -578,7 +578,7 @@ function finalizerMessage(
     ].filter((line): line is string => Boolean(line)).join('\n');
   }
   return [
-    'Final methodology protocol package was written from current session artifacts; no AgentServer or external access was used.',
+    'Final methodology protocol package was written from current session artifacts; no remote backend or external access was used.',
     '',
     `Completed: wrote ${packageDir} with ${files.map((file) => file.name).join(', ')}; statistics now use ${unitLabel}, with technical replicates excluded from independent n.`,
     'Missing: pilot variance/ICC/batch variance and empirical failure rates are still absent; confirmatory power cannot be claimed.',

@@ -171,14 +171,14 @@ export function normalizeContextCompaction(value: unknown, type: string, fallbac
     status,
     source: normalizeContextWindowSource(asString(record.source)),
     backend: asString(record.backend),
-    compactCapability: normalizeCompactCapability(asString(record.compactCapability) ?? asString(record.compactionCapability) ?? (isTag ? 'agentserver' : undefined)),
+    compactCapability: normalizeCompactCapability(asString(record.compactCapability) ?? asString(record.compactionCapability) ?? (isTag ? 'native' : undefined)),
     before: normalizeContextWindowState(record.before, 'contextWindowState', {}),
     after: normalizeContextWindowState(record.after, 'contextWindowState', {}),
-    auditRefs: asStringArray(record.auditRefs) ?? (isTag && asString(record.id) ? [`agentserver-compaction:${asString(record.id)}`] : undefined),
+    auditRefs: asStringArray(record.auditRefs) ?? (isTag && asString(record.id) ? [`runtime-compaction:${asString(record.id)}`] : undefined),
     startedAt: asString(record.startedAt),
     completedAt,
     lastCompactedAt,
-    reason: asString(record.reason) ?? (isTag ? 'agentserver-compact' : undefined),
+    reason: asString(record.reason) ?? (isTag ? 'runtime-compact' : undefined),
     message,
   };
 }
@@ -307,4 +307,3 @@ function streamEventLabel(type: string) {
   if (type.includes('complete') || type.includes('done')) return '完成';
   return type;
 }
-

@@ -175,6 +175,7 @@ function ArtifactSourceBar({ artifact, session }: { artifact?: RuntimeArtifact; 
 }
 
 function packageRendererProps(props: RegistryRendererProps): UIComponentRendererProps {
+  const markdownObjectReferences = mergeMarkdownObjectReferences(props.session, props.artifact);
   return {
     slot: props.slot,
     artifact: props.artifact,
@@ -185,10 +186,27 @@ function packageRendererProps(props: RegistryRendererProps): UIComponentRenderer
       ArtifactSourceBar: ({ artifact, session }) => <ArtifactSourceBar artifact={artifact as RuntimeArtifact | undefined} session={session as SciForgeSession | undefined} />,
       ArtifactDownloads: ({ artifact }) => <ArtifactDownloads artifact={artifact as RuntimeArtifact | undefined} />,
       ComponentEmptyState,
-      MarkdownBlock: (markdownProps) => <MarkdownBlock {...markdownProps} onObjectReferenceFocus={props.onObjectReferenceFocus} />,
+      MarkdownBlock: (markdownProps) => (
+        <MarkdownBlock
+          {...markdownProps}
+          objectReferences={markdownObjectReferences}
+          onObjectReferenceFocus={props.onObjectReferenceFocus}
+        />
+      ),
       readWorkspaceFile: (ref: string) => readWorkspaceFile(ref, props.config),
     },
   };
+}
+
+function mergeMarkdownObjectReferences(session: SciForgeSession, artifact: RuntimeArtifact | undefined): ObjectReference[] {
+  const artifactRefs = session.artifacts.map((item) => objectReferenceForArtifactSummary(item, String(item.metadata?.runId ?? '')));
+  const structuredRefs = [
+    ...(artifact ? [objectReferenceForArtifactSummary(artifact, String(artifact.metadata?.runId ?? ''))] : []),
+    ...session.messages.flatMap((message) => message.objectReferences ?? []),
+    ...session.runs.flatMap((run) => run.objectReferences ?? []),
+    ...artifactRefs,
+  ];
+  return Array.from(new Map(structuredRefs.map((reference) => [reference.ref, reference])).values()).slice(0, 80);
 }
 
 function registryEntryForComponent(componentId: string): RegistryEntry | undefined {

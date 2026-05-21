@@ -29,15 +29,50 @@ test('Runtime GUI extension manifest exposes native MCP resources and gui tools 
     'gui.stat',
     'gui.watch',
   ]);
-  assert.deepEqual(injection.resourceUris, [
-    'sciforge-gui:/gui/shell.json',
-    'sciforge-gui:/gui/hot-region.json',
-    'sciforge-gui:/gui/intent-log.json',
-  ]);
-  assert.equal(JSON.stringify(manifest).includes('capability'), false);
+  assert.ok(injection.resourceUris.includes('sciforge-gui:/gui/shell.json'));
+  assert.ok(injection.resourceUris.includes('sciforge-gui:/gui/hot-region.json'));
+  assert.ok(injection.resourceUris.includes('sciforge-gui:/gui/intent-log.json'));
+  assert.ok(injection.resourceUris.includes('sciforge-gui:/gui/capabilities/presentation.json'));
+  assert.ok(injection.resourceUris.includes('sciforge-gui:/gui/renderers/report-viewer.json'));
+  assert.ok(injection.resourceUris.every((uri) => uri.startsWith('sciforge-gui:/gui/')));
+  assert.equal(JSON.stringify(manifest).includes('task capability'), false);
   assert.equal(JSON.stringify(manifest).includes('provider route'), false);
+  assert.equal(JSON.stringify(manifest).includes('React'), false);
   assert.deepEqual(GUI_NATIVE_TOOL_NAMES, injection.toolNames);
   assert.deepEqual(GUI_NATIVE_RESOURCE_URIS, injection.resourceUris);
+});
+
+test('Runtime GUI MCP resources expose presentation catalog without task rankings or workspace mutation', () => {
+  const controller = createGuiProtocolController({ revision: 6, updatedAt: '2026-05-21T00:00:00.000Z' });
+
+  const list = callGuiMcpTool(controller, 'gui.list', { path: '/gui/capabilities' }).structuredContent as { value: Array<{ path: string }> };
+  const catalogRead = callGuiMcpTool(controller, 'gui.read', { path: '/gui/capabilities/presentation.json' }).structuredContent as { content: string; truncated: boolean };
+  const rendererRead = callGuiMcpTool(controller, 'gui.read', { path: '/gui/renderers/report-viewer.json' }).structuredContent as { content: string };
+  const search = callGuiMcpTool(controller, 'gui.search', {
+    scope: '/gui/capabilities',
+    query: 'markdown report',
+    kinds: ['renderer', 'artifact-type', 'preview-kind', 'visible-text'],
+  }).structuredContent as { value: Array<{ path: string; kind: string; text: string }> };
+  const stat = callGuiMcpTool(controller, 'gui.stat', { path: '/gui/capabilities/presentation.json' }).structuredContent as { readonly: boolean; kind: string };
+
+  const catalog = JSON.parse(catalogRead.content) as { schemaVersion: string; source: string; components: Array<{ componentId: string; lifecycleLayer: string; safety: { writesWorkspace: boolean } }> };
+  const renderer = JSON.parse(rendererRead.content) as { componentId: string; boundary: Record<string, boolean>; previewKinds: string[] };
+  const combined = [catalogRead.content, rendererRead.content, JSON.stringify(search)].join('\n');
+
+  assert.deepEqual(list.value.map((entry) => entry.path), ['/gui/capabilities/presentation.json']);
+  assert.equal(catalogRead.truncated, false);
+  assert.equal(catalog.schemaVersion, 'sciforge.gui-presentation-catalog.v1');
+  assert.equal(catalog.source, 'packages/presentation/components');
+  assert.ok(catalog.components.every((component) => component.lifecycleLayer === 'presentation' && component.safety.writesWorkspace === false));
+  assert.equal(renderer.componentId, 'report-viewer');
+  assert.ok(renderer.previewKinds.includes('markdown'));
+  assert.equal(renderer.boundary.taskCapability, false);
+  assert.equal(renderer.boundary.providerRoute, false);
+  assert.equal(renderer.boundary.importsReactComponent, false);
+  assert.ok(search.value.some((item) => item.path === '/gui/renderers/report-viewer.json'));
+  assert.equal(stat.readonly, true);
+  assert.equal(stat.kind, 'file');
+  assert.doesNotMatch(combined, /provider route|task ranking|algorithm recommendation|React component internals/i);
 });
 
 test('Runtime GUI extension also exposes gui present wrapper for shell-style probes', async () => {

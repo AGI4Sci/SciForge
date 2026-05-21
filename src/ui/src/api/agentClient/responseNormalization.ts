@@ -119,7 +119,7 @@ function extractOutputText(data: unknown): string {
     asString(output?.error) ||
     asString(data.message) ||
     asString(data.result) ||
-    'AgentServer 已返回结果，但响应中没有可展示文本。'
+    '运行时已返回结果，但响应中没有可展示文本。'
   );
 }
 
@@ -233,9 +233,9 @@ export function normalizeAgentResponse(
     : failureSummary
     ? failureSummary
     : runStatus === 'failed' && !hasStructuredOutput
-    ? `AgentServer 后端运行失败：${cleanOutputText}`
+    ? `运行时后端运行失败：${cleanOutputText}`
     : readableMessageFromStructured(structured, cleanOutputText);
-  const confidence = asNumber(structured.confidence) ?? 0.78;
+  const confidence = asNumber(structured.confidence);
   const claimType = pickClaimType(structured.claimType);
   const evidence = pickEvidence(structured.evidenceLevel ?? structured.evidence);
   const fallbackExecutionUnit: RuntimeExecutionUnit = {
@@ -252,30 +252,23 @@ export function normalizeAgentResponse(
     outputRef: contractValidationFailure?.relatedRefs[0],
   };
 
-  const claims = Array.isArray(structured.claims) ? structured.claims.map((item, index) => {
+  const claims = Array.isArray(structured.claims) ? structured.claims.flatMap((item) => {
     const record = isRecord(item) ? item : {};
-    return {
+    const claimConfidence = asNumber(record.confidence);
+    if (claimConfidence === undefined) return [];
+    return [{
       id: asString(record.id) || makeId('claim'),
       text: asString(record.text) || asString(record.claim) || messageText,
       type: pickClaimType(record.type),
-      confidence: asNumber(record.confidence) ?? confidence,
+      confidence: claimConfidence,
       evidenceLevel: pickEvidence(record.evidenceLevel ?? record.evidence),
       supportingRefs: Array.isArray(record.supportingRefs) ? record.supportingRefs.filter((entry): entry is string => typeof entry === 'string') : [],
       opposingRefs: Array.isArray(record.opposingRefs) ? record.opposingRefs.filter((entry): entry is string => typeof entry === 'string') : [],
       dependencyRefs: asStringArray(record.dependencyRefs),
       updateReason: asString(record.updateReason),
       updatedAt: now,
-    };
-  }) : [{
-    id: makeId('claim'),
-    text: messageText.split('\n')[0] || messageText,
-    type: claimType,
-    confidence,
-    evidenceLevel: evidence,
-    supportingRefs: [],
-    opposingRefs: [],
-    updatedAt: now,
-  }];
+    }];
+  }) : [];
   const artifacts = normalizeRuntimeArtifacts(structured.artifacts, scenarioId);
   const objectReferences = normalizeResponseObjectReferences({
     objectReferences: structured.objectReferences,
@@ -293,7 +286,7 @@ export function normalizeAgentResponse(
       confidence,
       evidence,
       claimType,
-      expandable: asString(structured.reasoningTrace) || asString(structured.reasoning) || `AgentServer run: ${runId}\nStatus: ${asString(runRecord.status) || 'completed'}`,
+      expandable: asString(structured.reasoningTrace) || asString(structured.reasoning) || `Runtime run: ${runId}\nStatus: ${asString(runRecord.status) || 'completed'}`,
       createdAt: now,
       status: runStatus,
       objectReferences,
@@ -333,7 +326,6 @@ export function normalizeAgentResponse(
       scenarioId,
       messageText,
       claimType,
-      confidence,
       now,
     }),
   };
@@ -434,8 +426,13 @@ function uniqueStringList(values: string[]) {
 
 function withRuntimePresentationMetadata(raw: unknown, structured: Record<string, unknown>, objectReferences: ObjectReference[], contractValidationFailure?: ContractValidationFailure) {
   const rawDisplayIntent = isRecord(raw) && isRecord(raw.displayIntent) ? raw.displayIntent : undefined;
+  const rawResultPresentation = isRecord(raw) && isRecord(raw.resultPresentation) ? raw.resultPresentation : undefined;
+  const structuredResultPresentation = isRecord(structured.resultPresentation) ? structured.resultPresentation : undefined;
+  const structuredDisplayIntent = isRecord(structured.displayIntent) ? structured.displayIntent : undefined;
+  const structuredDisplayResultPresentation = isRecord(structuredDisplayIntent?.resultPresentation) ? structuredDisplayIntent.resultPresentation : undefined;
   const metadata = {
-    displayIntent: isRecord(structured.displayIntent) ? structured.displayIntent : rawDisplayIntent,
+    resultPresentation: structuredResultPresentation ?? structuredDisplayResultPresentation ?? rawResultPresentation,
+    displayIntent: structuredDisplayIntent ?? rawDisplayIntent,
     verificationResults: Array.isArray(structured.verificationResults)
       ? structured.verificationResults
       : isRecord(structured.verificationResult)
@@ -548,25 +545,28 @@ function normalizeNotebookRecords(
     scenarioId: ScenarioInstanceId;
     messageText: string;
     claimType: ClaimType;
-    confidence: number;
     now: string;
   },
 ) {
   if (!Array.isArray(value)) return [];
-  const records = value.filter(isRecord).map((record) => ({
-    id: asString(record.id) || makeId('note'),
-    time: asString(record.time) || new Date(defaults.now).toLocaleString('zh-CN', { hour12: false }),
-    scenario: asString(record.scenario) || defaults.scenarioId,
-    title: asString(record.title) || asString(record.id) || 'Notebook record',
-    desc: asString(record.desc) || asString(record.description) || defaults.messageText.slice(0, 96),
-    claimType: pickClaimType(record.claimType),
-    confidence: asNumber(record.confidence) ?? defaults.confidence,
-    artifactRefs: asStringArray(record.artifactRefs),
-    executionUnitRefs: asStringArray(record.executionUnitRefs),
-    beliefRefs: asStringArray(record.beliefRefs),
-    dependencyRefs: asStringArray(record.dependencyRefs),
-    updateReason: asString(record.updateReason),
-  }));
+  const records = value.filter(isRecord).flatMap((record) => {
+    const confidence = asNumber(record.confidence);
+    if (confidence === undefined) return [];
+    return [{
+      id: asString(record.id) || makeId('note'),
+      time: asString(record.time) || new Date(defaults.now).toLocaleString('zh-CN', { hour12: false }),
+      scenario: asString(record.scenario) || defaults.scenarioId,
+      title: asString(record.title) || asString(record.id) || 'Notebook record',
+      desc: asString(record.desc) || asString(record.description) || defaults.messageText.slice(0, 96),
+      claimType: pickClaimType(record.claimType),
+      confidence,
+      artifactRefs: asStringArray(record.artifactRefs),
+      executionUnitRefs: asStringArray(record.executionUnitRefs),
+      beliefRefs: asStringArray(record.beliefRefs),
+      dependencyRefs: asStringArray(record.dependencyRefs),
+      updateReason: asString(record.updateReason),
+    }];
+  });
   return records;
 }
 

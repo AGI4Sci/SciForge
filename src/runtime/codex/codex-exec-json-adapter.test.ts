@@ -14,7 +14,7 @@ import {
   RUNTIME_WORKSPACE_WRITE_NETWORK_CONFIG_ARGS,
 } from '../../../packages/backend/src/runtime-home.js';
 import { CodexExecJsonAdapter, type SpawnCodexProcess } from './codex-exec-json-adapter.js';
-import { GUI_EXTENSION_STATE_ENV, GUI_MCP_SERVER_NAME } from './gui-extension-manifest.js';
+import { defaultGuiExtensionStatePath, GUI_EXTENSION_STATE_ENV, GUI_MCP_SERVER_NAME } from './gui-extension-manifest.js';
 import { saveGuiExtensionSnapshot } from './gui-extension-state.js';
 
 test('adapter spawns codex exec --json with isolated CODEX_HOME and plain text command', async () => {
@@ -363,7 +363,7 @@ test('adapter emits gui_present from file-backed GUI intent state before done', 
   assert.equal(((events[guiPresentIndex]?.raw as { presentation?: { source?: string } }).presentation)?.source, `gui.present:${turn.turnId}`);
 });
 
-test('adapter defaults GUI intent state inside the Runtime workspace', async () => {
+test('adapter defaults GUI intent state outside the user workspace', async () => {
   const child = fakeChild();
   let spawnCall: Parameters<SpawnCodexProcess> | undefined;
   const workspace = await tempWorkspace();
@@ -383,16 +383,11 @@ test('adapter defaults GUI intent state inside the Runtime workspace', async () 
   });
   await collect(turn.events);
 
-  const expectedStatePath = join(
-    workspace,
-    '.sciforge',
-    'runtime-gui-extension-state',
-    turn.turnId,
-    `${turn.attemptId}.json`,
-  );
+  const expectedStatePath = defaultGuiExtensionStatePath({ commandId: turn.turnId, attemptId: turn.attemptId });
   const argv = spawnCall?.[1] ?? [];
   assert.ok(argv.includes(`mcp_servers.${GUI_MCP_SERVER_NAME}.env.${GUI_EXTENSION_STATE_ENV}="${expectedStatePath}"`));
   assert.equal(spawnCall?.[2].env.SCIFORGE_GUI_EXTENSION_STATE, expectedStatePath);
+  assert.ok(relative(workspace, expectedStatePath).startsWith('..'));
   await access(expectedStatePath);
 });
 
@@ -446,16 +441,11 @@ test('adapter isolates default GUI intent state per command attempt', async () =
     guiExtension: {},
   });
   const events = await collect(turn.events);
-  const expectedStatePath = join(
-    workspace,
-    '.sciforge',
-    'runtime-gui-extension-state',
-    turn.turnId,
-    `${turn.attemptId}.json`,
-  );
+  const expectedStatePath = defaultGuiExtensionStatePath({ commandId: turn.turnId, attemptId: turn.attemptId });
 
   assert.equal(events.some((event) => event.type === 'gui_present'), false);
   assert.doesNotMatch(JSON.stringify(events), /STALE_GUI_PRESENT_SHOULD_NOT_LEAK|artifact:stale-report/);
+  assert.ok(relative(workspace, expectedStatePath).startsWith('..'));
   await access(expectedStatePath);
 });
 

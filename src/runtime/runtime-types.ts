@@ -1,5 +1,5 @@
 import type { SciForgeAgentHandoffSource, SciForgeSharedSkillDomain, SharedAgentHandoffContract } from '@sciforge-ui/runtime-contract/handoff';
-import type { AgentCompactCapability, AgentContextWindowSource, RuntimeArtifactDerivation, RuntimeVerificationVerdict } from '@sciforge-ui/runtime-contract';
+import type { AgentCompactCapability, AgentContextWindowSource, ResultPresentationConfidenceExplanation, RuntimeArtifactDerivation, RuntimeVerificationVerdict } from '@sciforge-ui/runtime-contract';
 import type { CodingDeliverySummary, FailureSignatureInput, TaskRunCard } from '@sciforge-ui/runtime-contract/task-run-card';
 import type { RuntimeBackendContextWindowSource } from '@sciforge-ui/runtime-contract/agent-backend-policy';
 import type { CapabilityInvocationBudgetDebitRecord } from '@sciforge-ui/runtime-contract/capability-budget';
@@ -199,7 +199,8 @@ export interface ScenarioPackageRef {
 
 export interface ToolPayload {
   message: string;
-  confidence: number;
+  confidence?: number;
+  confidenceExplanation?: ResultPresentationConfidenceExplanation;
   claimType: string;
   evidenceLevel: string;
   reasoningTrace: string;
@@ -288,7 +289,7 @@ export interface ResultPresentationContract {
   keyFindings: ResultPresentationKeyFinding[];
   inlineCitations: ResultPresentationCitation[];
   artifactActions: ResultPresentationArtifactAction[];
-  confidenceExplanation?: string;
+  confidenceExplanation?: ResultPresentationConfidenceExplanation;
   nextActions: string[];
   processSummary: {
     foldedByDefault: true;

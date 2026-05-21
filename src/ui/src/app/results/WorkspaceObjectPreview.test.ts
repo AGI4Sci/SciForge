@@ -6,7 +6,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import type { ObjectReference, RuntimeArtifact, SciForgeConfig, SciForgeSession } from '../../domain';
-import { descriptorNeedsManualPreviewLoad, requestManualArtifactPreviewLoad, WorkspaceObjectPreview } from './WorkspaceObjectPreview';
+import { descriptorNeedsManualPreviewLoad, requestManualArtifactPreviewLoad, WorkspaceFileInlineViewer, WorkspaceObjectPreview } from './WorkspaceObjectPreview';
 import { MarkdownBlock } from './reportContent';
 
 describe('WorkspaceObjectPreview presentation input', () => {
@@ -150,6 +150,35 @@ describe('WorkspaceObjectPreview presentation input', () => {
     assert.match(html, /<th>Paper<\/th>/);
     assert.match(html, /<strong>read<\/strong>/);
     assert.match(html, /type="checkbox"/);
+  });
+
+  it('upgrades resolvable markdown refs inside workspace preview reports', () => {
+    const reportRef: ObjectReference = {
+      id: 'obj-report-file',
+      kind: 'file',
+      title: 'Generated report',
+      ref: 'file:reports/generated-report.md',
+      status: 'available',
+      provenance: { path: 'reports/generated-report.md' },
+    };
+    const html = renderToStaticMarkup(createElement(WorkspaceFileInlineViewer, {
+      file: {
+        path: 'reports/generated-report.md',
+        name: 'generated-report.md',
+        content: 'Open `generated-report.md` and keep `missing-report.md` literal.',
+        size: 72,
+        language: 'markdown',
+        encoding: 'utf8',
+        mimeType: 'text/markdown',
+      },
+      objectReferences: [reportRef],
+      onObjectReferenceFocus: () => undefined,
+    }));
+
+    assert.equal((html.match(/data-sciforge-reference=/g) ?? []).length, 1);
+    assert.match(html, /markdown-object-ref/);
+    assert.match(html, /Generated report/);
+    assert.match(html, /<code>missing-report\.md<\/code>/);
   });
 
   it('renders system-open notice for binary deliveries', () => {

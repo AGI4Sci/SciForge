@@ -13,7 +13,7 @@ export const runtimeCapabilityProfiles: RuntimeCapabilityProfile[] = [
   {
     id: 'package-skill',
     label: 'Core capability package',
-    description: 'Schema-checked SciForge capability contracts that guide AgentServer workspace task generation.',
+    description: 'Schema-checked SciForge capability contracts that guide TUI-native workspace task generation.',
     capabilities: {
       'agentserver-generation': 'self-healing',
       'artifact-emission': 'schema-checked',
@@ -51,7 +51,7 @@ export const runtimeCapabilityProfiles: RuntimeCapabilityProfile[] = [
   },
   {
     id: 'agentserver-codex',
-    label: 'AgentServer Codex backend',
+    label: 'Runtime Codex backend',
     description: 'Code generation, repair, and workspace task synthesis backend.',
     capabilities: {
       'agentserver-generation': 'self-healing',
@@ -64,7 +64,7 @@ export const runtimeCapabilityProfiles: RuntimeCapabilityProfile[] = [
   },
   {
     id: 'agentserver-native',
-    label: 'AgentServer native backend',
+    label: 'Native runtime backend',
     description: 'Structured chat and JSON response backend.',
     capabilities: {
       'structured-json': 'schema-checked',

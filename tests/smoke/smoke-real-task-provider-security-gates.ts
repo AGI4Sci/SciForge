@@ -38,7 +38,7 @@ for (const [taskId, assertion] of [
 ] as const) {
   assert.ok(
     currentProjectMappingsForSaWebTag('SA-WEB-38').some(
-      (mapping) => mapping.taskId === taskId && mapping.contractAssertions.includes(assertion),
+      (mapping) => String(mapping.taskId) === taskId && mapping.contractAssertions.includes(assertion),
     ),
     `${taskId} must map to SA-WEB-38 ${assertion}`,
   );

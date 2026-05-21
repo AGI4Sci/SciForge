@@ -27,7 +27,9 @@ import { artifactPresentationRole, normalizeObjectReferencePresentationRole, obj
 export { stableHash } from './helpers';
 export {
   linkifyObjectReferences,
+  objectReferenceMentionedInText,
   objectReferencesFromInlineTokens,
+  resolveInlineObjectReferenceToken,
 } from './inline-references';
 export type { ObjectReferenceTextPiece } from './inline-references';
 export {

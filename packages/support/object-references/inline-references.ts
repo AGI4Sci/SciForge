@@ -45,6 +45,24 @@ export function linkifyObjectReferences(content: string, references: ObjectRefer
   return pieces.filter((piece) => piece.text.length > 0);
 }
 
+export function resolveInlineObjectReferenceToken(token: string, references: ObjectReference[]): ObjectReference | undefined {
+  const normalized = normalizeInlineObjectReferenceToken(token);
+  if (!normalized || !references.length) return undefined;
+  if (looksLikeExplicitObjectReference(normalized) || /^https?:\/\//i.test(normalized)) {
+    return explicitInlineReferenceMatch(normalized, references);
+  }
+  const candidates = references.filter((reference) => bareInlineTokenMatchesReference(normalized, reference));
+  const unique = uniqueReferencesByIdentity(candidates);
+  return unique.length === 1 ? unique[0] : undefined;
+}
+
+export function objectReferenceMentionedInText(content: string, reference: ObjectReference): boolean {
+  const candidates = objectReferenceLinkKeys(reference)
+    .flatMap((key) => [key, basenameForInlineToken(key)].filter((value): value is string => Boolean(value)));
+  const inlineCodeTokens = [...content.matchAll(/`([^`\n]+)`/g)].map((match) => match[1]?.trim().toLowerCase() ?? '');
+  return candidates.some((candidate) => candidate.length >= 4 && inlineCodeTokens.includes(candidate.toLowerCase()));
+}
+
 function objectReferenceFromInlineToken(raw: string, runId?: string): ObjectReference | undefined {
   if (/^https?:\/\//i.test(raw)) {
     const reference: ObjectReference = {
@@ -77,6 +95,59 @@ function objectReferenceFromInlineToken(raw: string, runId?: string): ObjectRefe
     provenance: prefix === 'file' || prefix === 'folder' ? { path: target } : { dataRef: target },
   };
   return reference;
+}
+
+function normalizeInlineObjectReferenceToken(token: string): string {
+  return token.trim().replace(/^`+|`+$/g, '').replace(/[.,;，。；、]+$/, '').trim();
+}
+
+function looksLikeExplicitObjectReference(token: string): boolean {
+  return /^(?:artifact|file|folder|run|execution-unit|scenario-package|url)::?/i.test(token);
+}
+
+function explicitInlineReferenceMatch(token: string, references: ObjectReference[]): ObjectReference | undefined {
+  const normalizedToken = normalizeObjectRefKey(token);
+  return references.find((reference) => {
+    return objectReferenceLinkKeys(reference)
+      .map(normalizeObjectRefKey)
+      .some((key) => key === normalizedToken);
+  });
+}
+
+function bareInlineTokenMatchesReference(token: string, reference: ObjectReference): boolean {
+  const normalizedToken = normalizeObjectRefKey(token);
+  if (!normalizedToken || looksLikeExplicitObjectReference(token)) return false;
+  return objectReferenceLinkKeys(reference).some((key) => {
+    const normalizedKey = normalizeObjectRefKey(key);
+    if (normalizedKey === normalizedToken) return true;
+    const basename = basenameForInlineToken(key);
+    return Boolean(basename && normalizeObjectRefKey(basename) === normalizedToken);
+  });
+}
+
+function uniqueReferencesByIdentity(references: ObjectReference[]): ObjectReference[] {
+  const byKey = new Map<string, ObjectReference>();
+  for (const reference of references) {
+    const key = normalizeObjectRefKey(reference.ref || reference.id);
+    if (key) byKey.set(key, reference);
+  }
+  return [...byKey.values()];
+}
+
+function basenameForInlineToken(value: string): string | undefined {
+  const withoutHash = value.replace(/[?#].*$/, '');
+  const last = withoutHash.split(/[\\/]/).filter(Boolean).at(-1);
+  return last && last !== withoutHash ? last : last;
+}
+
+function normalizeObjectRefKey(value: string): string {
+  return value
+    .trim()
+    .replace(/^(file|folder|artifact|run|execution-unit|scenario-package|url)::?/i, '$1:')
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '')
+    .replace(/\/+$/, '')
+    .toLowerCase();
 }
 
 function inlineObjectReferenceActions(kind: ObjectReferenceKind): ObjectAction[] {
@@ -134,7 +205,9 @@ function objectReferenceLinkKeys(reference: ObjectReference) {
     reference.ref,
     reference.ref.replace(/^file:/i, 'file::'),
     reference.ref.replace(/^folder:/i, 'folder::'),
+    reference.ref.replace(/^(?:file|folder)::?/i, ''),
     reference.ref.replace(/^artifact:/i, ''),
+    reference.ref.replace(/^url:/i, ''),
     reference.title,
     reference.provenance?.path,
     reference.provenance?.dataRef,

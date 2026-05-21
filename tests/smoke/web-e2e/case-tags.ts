@@ -41,6 +41,9 @@ export type WebE2eContractAssertion =
   | 'secret-raw-stream-scrub'
   | 'failed-run-audit-export'
   | 'provider-outage-recovery'
+  | 'gui-presentation-catalog-discovery'
+  | 'inline-reference-right-panel-preview'
+  | 'confidence-source-explanation'
   | 'case-tag-contract';
 
 export interface WebE2eLegacyTaskCaseTagMapping {
@@ -74,37 +77,9 @@ export interface CurrentProjectDesktopCoverageMapping {
 }
 
 export const CURRENT_PROJECT_REAL_TASK_IDS = [
-  'R-LIT-01',
-  'R-LIT-02',
-  'R-LIT-03',
-  'R-WEB-01',
-  'R-DATA-01',
-  'R-DATA-02',
-  'R-DATA-03',
-  'R-DATA-04',
-  'R-CODE-01',
-  'R-CODE-02',
-  'R-RUN-01',
-  'R-RUN-02',
-  'R-PROTO-01',
-  'R-PROTO-02',
-  'R-PROTO-03',
-  'R-RESUME-01',
-  'R-RESUME-02',
-  'R-MEM-01',
-  'R-BUDGET-01',
-  'R-SEC-01',
-  'R-AUDIT-01',
-  'R-FAIL-01',
-  'R-METHOD-01',
-  'R-KG-01',
-  'R-BIO-01',
-  'R-VERIFY-01',
-  'R-CAP-01',
-  'R-SKILL-01',
-  'R-CU-01',
-  'R-DESK-01',
-  'R-PKG-01',
+  'R-PROTO-04',
+  'R-PROTO-05',
+  'R-VERIFY-02',
 ] as const;
 
 export const CURRENT_PROJECT_TASK_LEGACY_BOUNDARIES: CurrentProjectTaskLegacyBoundary[] = CURRENT_PROJECT_REAL_TASK_IDS.map((taskId) => ({
@@ -114,41 +89,12 @@ export const CURRENT_PROJECT_TASK_LEGACY_BOUNDARIES: CurrentProjectTaskLegacyBou
 }));
 
 export const CURRENT_PROJECT_WEB_E2E_COVERAGE: CurrentProjectWebE2eCoverageMapping[] = [
-  currentProjectCoverage('R-LIT-01', 'Current literature retrieval with arXiv-style evidence', ['SA-WEB-31'], ['literature-current-selected-report']),
-  currentProjectCoverage('R-LIT-02', 'Contradictory literature evidence synthesis', ['SA-WEB-32'], ['literature-evidence-conflict']),
-  currentProjectCoverage('R-LIT-03', 'Selected literature report follow-up scoping', ['SA-WEB-31'], ['literature-current-selected-report']),
-  currentProjectCoverage('R-WEB-01', 'Dynamic web evidence status boundaries', ['SA-WEB-32'], ['dynamic-web-evidence-status']),
-  currentProjectCoverage('R-DATA-01', 'Longitudinal messy CSV coefficient comparison', ['SA-WEB-20'], ['longitudinal-messy-csv']),
-  currentProjectCoverage('R-DATA-02', 'Schema drift confounder reinterpretation', ['SA-WEB-21'], ['schema-drift-confounder']),
-  currentProjectCoverage('R-DATA-03', 'Two-table merge lineage and reproducibility', ['SA-WEB-22'], ['two-table-lineage']),
-  currentProjectCoverage('R-DATA-04', 'Large-file bounded diagnostics', ['SA-WEB-19'], ['large-file-bounded-diagnostics']),
-  currentProjectCoverage('R-CODE-01', 'Targeted code repair from failing test', ['SA-WEB-33'], ['targeted-code-repair']),
-  currentProjectCoverage('R-CODE-02', 'Dirty worktree collaboration and preservation', ['SA-WEB-34'], ['dirty-worktree-preservation']),
-  currentProjectCoverage('R-RUN-01', 'Service lifecycle recovery with actual port evidence', ['SA-WEB-37'], ['service-lifecycle-recovery']),
-  currentProjectCoverage('R-RUN-02', 'Cancellation partial continuation safe remainder', ['SA-WEB-37'], ['cancel-partial-continuation']),
-  currentProjectCoverage('R-PROTO-01', 'Text-only GUI action contract', ['SA-WEB-28'], ['text-only-gui-action']),
-  currentProjectCoverage('R-PROTO-02', 'Progressive GUI resource probing', ['SA-WEB-23'], ['progressive-gui-resource-probing']),
-  currentProjectCoverage('R-PROTO-03', 'gui.ask_user clarification', ['SA-WEB-24'], ['gui-ask-user-clarification']),
-  currentProjectCoverage('R-RESUME-01', 'Native session resume with artifact follow-up', ['SA-WEB-29'], ['native-session-artifact-followup']),
-  currentProjectCoverage('R-RESUME-02', 'Browser refresh recovery without native-continuity shortcut', ['SA-WEB-37'], ['browser-refresh-recovery']),
-  currentProjectCoverage('R-MEM-01', 'Long-context original constraint stability', ['SA-WEB-30'], ['long-context-constraint-stability']),
-  currentProjectCoverage('R-BUDGET-01', 'Runtime provider budget and fallback transparency', ['SA-WEB-38'], ['runtime-provider-budget']),
-  currentProjectCoverage('R-SEC-01', 'Secret and raw stream scrub boundary', ['SA-WEB-38'], ['secret-raw-stream-scrub']),
-  currentProjectCoverage('R-AUDIT-01', 'Failed run bounded audit export', ['SA-WEB-38'], ['failed-run-audit-export']),
-  currentProjectCoverage('R-FAIL-01', 'Provider outage repair and fresh recovery', ['SA-WEB-38'], ['provider-outage-recovery']),
-  currentProjectCoverage('R-METHOD-01', 'Protocol package reviewer loop', ['SA-WEB-35'], ['scientific-reviewer-verifier-loop']),
-  currentProjectCoverage('R-KG-01', 'Biomedical evidence graph contradiction loop', ['SA-WEB-35'], ['scientific-reviewer-verifier-loop']),
-  currentProjectCoverage('R-BIO-01', 'Single-cell perturbation reviewer rejection loop', ['SA-WEB-35'], ['scientific-reviewer-verifier-loop']),
-  currentProjectCoverage('R-VERIFY-01', 'Verifier critique repair boundary', ['SA-WEB-35'], ['scientific-reviewer-verifier-loop']),
-  currentProjectCoverage('R-CAP-01', 'Capability discovery boundary', ['SA-WEB-36'], ['capability-discovery-boundary']),
-  currentProjectCoverage('R-SKILL-01', 'Codex-native skill promotion boundary', ['SA-WEB-36'], ['codex-native-skill-promotion']),
-  currentProjectCoverage('R-CU-01', 'Computer Use evidence folding boundary', ['SA-WEB-36'], ['computer-use-evidence-folding']),
+  currentProjectCoverage('R-PROTO-04', 'GUI presentation catalog discovery', ['SA-WEB-39'], ['gui-presentation-catalog-discovery']),
+  currentProjectCoverage('R-PROTO-05', 'Inline artifact reference right-panel preview', ['SA-WEB-40'], ['inline-reference-right-panel-preview']),
+  currentProjectCoverage('R-VERIFY-02', 'Confidence source and explanation', ['SA-WEB-41'], ['confidence-source-explanation']),
 ];
 
-export const CURRENT_PROJECT_DESKTOP_COVERAGE: CurrentProjectDesktopCoverageMapping[] = [
-  desktopProjectCoverage('R-DESK-01', 'Desktop cold-start user run'),
-  desktopProjectCoverage('R-PKG-01', 'Desktop package without dev-server contract'),
-];
+export const CURRENT_PROJECT_DESKTOP_COVERAGE: CurrentProjectDesktopCoverageMapping[] = [];
 
 export const FINAL_WEB_E2E_CASE_TAGS = [
   'SA-WEB-03',
@@ -185,6 +131,9 @@ export const FINAL_WEB_E2E_CASE_TAGS = [
   'SA-WEB-36',
   'SA-WEB-37',
   'SA-WEB-38',
+  'SA-WEB-39',
+  'SA-WEB-40',
+  'SA-WEB-41',
 ] as const;
 
 export const WEB_E2E_LEGACY_TASK_MAPPINGS: WebE2eLegacyTaskCaseTagMapping[] = [

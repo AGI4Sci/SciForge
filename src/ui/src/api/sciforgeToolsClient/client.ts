@@ -425,21 +425,26 @@ function attachRuntimeGuiPresentationToResponse(
 function objectReferenceFromGuiPresentation(presentation: Record<string, unknown> | undefined, runId: string): ObjectReference | undefined {
   const rawRef = asString(presentation?.ref);
   if (!rawRef) return undefined;
-  const artifactId = artifactIdFromPresentationRef(rawRef);
+  const kind = objectReferenceKindFromPresentationRef(rawRef);
+  const target = targetFromPresentationRef(rawRef, kind);
+  const id = objectReferenceIdFromPresentationRef(kind, target);
+  const hint = asString(presentation?.hint);
+  const isArtifact = kind === 'artifact';
   return {
-    id: artifactId,
-    kind: 'artifact',
-    title: asString(presentation?.title) ?? artifactId,
-    ref: `artifact:${artifactId}`,
-    artifactType: artifactTypeFromPresentationHint(asString(presentation?.hint)),
+    id,
+    kind,
+    title: asString(presentation?.title) ?? presentationTitleFromRef(target),
+    ref: kind === 'url' ? `url:${target}` : `${kind}:${target}`,
+    artifactType: isArtifact ? artifactTypeFromPresentationHint(hint) : undefined,
     runId,
-    preferredView: preferredViewFromPresentationHint(asString(presentation?.hint)),
+    executionUnitId: kind === 'execution-unit' ? target : undefined,
+    preferredView: preferredViewFromPresentationHint(hint, kind),
     presentationRole: 'primary-deliverable',
     status: 'available',
     summary: asString(presentation?.text)?.slice(0, 360) ?? rawRef,
     provenance: {
-      dataRef: rawRef,
-      path: rawRef,
+      dataRef: isArtifact || kind === 'url' ? target : undefined,
+      path: kind === 'file' || kind === 'folder' ? target : undefined,
       producer: asString(presentation?.source),
     },
   };
@@ -455,10 +460,28 @@ function appendObjectReference(
   return [...existing, reference];
 }
 
-function artifactIdFromPresentationRef(ref: string): string {
-  const withoutScheme = ref.replace(/^artifact::?/i, '');
-  const lastSegment = withoutScheme.split(/[\\/]/).filter(Boolean).at(-1) ?? withoutScheme;
-  return lastSegment.replace(/\.[a-z0-9]+$/i, '') || 'runtime-artifact';
+function objectReferenceKindFromPresentationRef(ref: string): ObjectReference['kind'] {
+  if (/^https?:\/\//i.test(ref)) return 'url';
+  const prefix = ref.match(/^([a-z-]+)::?/i)?.[1]?.toLowerCase();
+  if (prefix === 'artifact' || prefix === 'file' || prefix === 'folder' || prefix === 'run' || prefix === 'execution-unit' || prefix === 'scenario-package' || prefix === 'url') {
+    return prefix;
+  }
+  if (/[\\/]/.test(ref) || /\.[a-z0-9]+(?:$|[?#])/i.test(ref)) return 'file';
+  return 'artifact';
+}
+
+function targetFromPresentationRef(ref: string, kind: ObjectReference['kind']): string {
+  if (kind === 'url') return ref.replace(/^url::?/i, '');
+  return ref.replace(new RegExp(`^${kind}::?`, 'i'), '');
+}
+
+function objectReferenceIdFromPresentationRef(kind: ObjectReference['kind'], target: string): string {
+  return `gui-present-${kind}-${target.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 72) || 'ref'}`;
+}
+
+function presentationTitleFromRef(ref: string): string {
+  const lastSegment = ref.split(/[\\/]/).filter(Boolean).at(-1) ?? ref;
+  return lastSegment || ref;
 }
 
 function artifactTypeFromPresentationHint(hint: string | undefined): string {
@@ -469,7 +492,9 @@ function artifactTypeFromPresentationHint(hint: string | undefined): string {
   return 'research-report';
 }
 
-function preferredViewFromPresentationHint(hint: string | undefined): string | undefined {
+function preferredViewFromPresentationHint(hint: string | undefined, kind: ObjectReference['kind']): string | undefined {
+  if (kind === 'file' && hint === 'markdown') return 'report-viewer';
+  if (kind !== 'artifact' && kind !== 'file') return undefined;
   if (hint === 'table') return 'record-table';
   if (hint === 'diff') return 'diff-viewer';
   if (hint === 'image') return 'image-viewer';

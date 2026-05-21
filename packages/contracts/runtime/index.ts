@@ -1312,7 +1312,7 @@ export interface UIComponentRenderHelpers {
   ArtifactSourceBar?: (props: { artifact?: UIComponentRuntimeArtifact; session?: unknown }) => ReactNode;
   ArtifactDownloads?: (props: { artifact?: UIComponentRuntimeArtifact }) => ReactNode;
   ComponentEmptyState?: (props: { componentId: string; artifactType?: string; title?: string; detail?: string }) => ReactNode;
-  MarkdownBlock?: (props: { markdown?: string }) => ReactNode;
+  MarkdownBlock?: (props: { markdown?: string; objectReferences?: unknown[] }) => ReactNode;
   readWorkspaceFile?: (ref: string) => Promise<{ content: string }>;
 }
 

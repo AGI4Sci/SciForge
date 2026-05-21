@@ -34,5 +34,5 @@ test('local data sensitivity runtime computes bootstrap CI from an existing CSV 
   assert.equal(payload.executionUnits[0]?.tool, 'sciforge.local-data-sensitivity.bootstrap-ci');
   assert.equal(payload.artifacts[0]?.type, 'research-report');
   assert.match(payload.message, /Bootstrap 95% CI/);
-  assert.match(payload.message, /no AgentServer generation/);
+  assert.match(payload.message, /no remote backend generation/);
 });

@@ -141,8 +141,8 @@ export const scenarioBuilderDefaultPrompt = '我想比较KRAS G12D突变相关�
 export const scenarioBuilderPromptPlaceholder = '例如：帮我构建一个场景，读取单细胞表达矩阵，比较处理组和对照组，并展示火山图、热图和UMAP。';
 export const scenarioBuilderComponentSelectorCopy = {
   agentRuntimeUi: {
-    title: 'Agent 运行时 UI 白名单',
-    description: '发往 AgentServer 的 availableComponentIds；每行包含组件 ID、标题与说明。与左侧「组件工作台」勾选列表一致。',
+    title: 'GUI 展示能力目录',
+    description: '发往 TUI runtime 的展示组件提示；每行包含组件 ID、标题与说明。它只描述 GUI renderer/viewer 能力，不代表任务能力或 provider route。',
   },
   scenarioPackageUi: {
     title: '场景 UI allowlist（Scenario package）',
@@ -179,7 +179,7 @@ export function scenarioBuilderChromeNavItems(input: { includeAgentRuntimeUi?: b
     { id: scenarioBuilderChromePaneIds.sceneInfo, label: '场景信息' },
   ];
   if (input.includeAgentRuntimeUi) {
-    items.push({ id: scenarioBuilderChromePaneIds.agentRuntimeUi, label: 'Agent 运行时 UI' });
+    items.push({ id: scenarioBuilderChromePaneIds.agentRuntimeUi, label: 'GUI 展示目录' });
   }
   items.push(
     { id: scenarioBuilderChromePaneIds.scenarioPackageUi, label: '场景 UI allowlist' },
@@ -258,7 +258,7 @@ export function scenarioReportViewerEmptyStatePolicy(input: { hasArtifact: boole
   return {
     componentId: 'report-viewer',
     artifactType: 'research-report',
-    detail: input.hasArtifact ? '当前 research-report 缺少 markdown/report/sections 字段；请检查 AgentServer 生成的 artifact contract。' : undefined,
+    detail: input.hasArtifact ? '当前 research-report 缺少 markdown/report/sections 字段；请检查 runtime 生成的 artifact contract。' : undefined,
   };
 }
 

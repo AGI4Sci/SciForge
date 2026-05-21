@@ -36,6 +36,15 @@ function stringField(value: unknown) {
   return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
+function normalizePayloadConfidence(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
 function artifactNeedsRepair(artifact: Record<string, unknown>) {
   return directAnswerArtifactNeedsRepair(artifact);
 }
@@ -67,14 +76,15 @@ function coerceAgentServerExplanationPayload(value: unknown, request: GatewayReq
   const evidenceLevel = stringField(value.evidenceLevel) ?? 'agentserver';
   const reasoningTrace = typeof value.reasoningTrace === 'string'
     ? value.reasoningTrace
-    : `AgentServer returned a structured explanation JSON without full ToolPayload arrays; SciForge normalized it at the direct-answer boundary.`;
+    : `Runtime backend returned a structured explanation JSON without full ToolPayload arrays; SciForge normalized it at the direct-answer boundary.`;
   const blocking = /\b(cannot|can't|unable|blocked|required|requires|missing|budget|quota|permission|credential|increase|refine|narrow|failed|failure)\b/i.test(message);
   const status = blocking ? 'failed-with-reason' : 'needs-human';
   const id = sha1(`agentserver-explanation:${message}`).slice(0, 10);
   const expected = expectedArtifactTypesForRequest(request);
+  const confidence = typeof value.confidence === 'number' ? value.confidence : undefined;
   return {
     message,
-    confidence: typeof value.confidence === 'number' ? value.confidence : 0.5,
+    ...(confidence !== undefined ? { confidence } : {}),
     claimType,
     evidenceLevel,
     reasoningTrace,
@@ -82,7 +92,7 @@ function coerceAgentServerExplanationPayload(value: unknown, request: GatewayReq
       id: `claim-agentserver-explanation-${id}`,
       text: message,
       type: claimType,
-      confidence: typeof value.confidence === 'number' ? value.confidence : 0.5,
+      ...(confidence !== undefined ? { confidence } : {}),
       evidenceLevel,
       supportingRefs: [],
       opposingRefs: [],
@@ -90,7 +100,7 @@ function coerceAgentServerExplanationPayload(value: unknown, request: GatewayReq
     uiManifest: [{
       componentId: reportViewerComponentId,
       artifactRef: `agentserver-explanation-${id}`,
-      title: blocking ? 'Blocked result explanation' : 'AgentServer explanation',
+      title: blocking ? 'Blocked result explanation' : 'Runtime explanation',
       priority: 1,
     }],
     executionUnits: [{
@@ -108,9 +118,9 @@ function coerceAgentServerExplanationPayload(value: unknown, request: GatewayReq
       id: `agentserver-explanation-${id}`,
       type: blocking ? 'runtime-blocker' : 'agentserver-explanation',
       format: 'markdown',
-      title: blocking ? 'Blocked result explanation' : 'AgentServer explanation',
+      title: blocking ? 'Blocked result explanation' : 'Runtime explanation',
       content: [
-        blocking ? '# Blocked result explanation' : '# AgentServer explanation',
+        blocking ? '# Blocked result explanation' : '# Runtime explanation',
         '',
         message,
         '',
@@ -261,18 +271,18 @@ function guardedDirectTextDiagnosticPayload(
   const expected = expectedArtifactTypesForRequest(request);
   const excerpt = clipForAgentServerJson(text, 2000);
   return {
-    message: 'AgentServer returned raw generated work instead of a user-facing result. SciForge preserved it as a diagnostic and did not present it as the final answer.',
+    message: 'Runtime backend returned raw generated work instead of a user-facing result. SciForge preserved it as a diagnostic and did not present it as the final answer.',
     confidence: 0,
     claimType: 'runtime-diagnostic',
     evidenceLevel: 'agentserver-direct-text-guard',
     reasoningTrace: [
-      'Plain AgentServer text was blocked by the strict ToolPayload boundary.',
+      'Plain runtime text was blocked by the strict ToolPayload boundary.',
       `classification=${classification.kind}`,
       `reason=${classification.reason}`,
     ].join('\n'),
     claims: [{
       id: `claim-direct-text-guard-${id}`,
-      text: 'Plain AgentServer output was not a structured ToolPayload or taskFiles response and cannot be promoted to a final answer.',
+      text: 'Plain runtime output was not a structured ToolPayload or taskFiles response and cannot be promoted to a final answer.',
       type: 'runtime-diagnostic',
       confidence: 0,
       evidenceLevel: 'agentserver-direct-text-guard',
@@ -308,9 +318,9 @@ function guardedDirectTextDiagnosticPayload(
       id: `agentserver-direct-text-diagnostic-${id}`,
       type: 'runtime-diagnostic',
       format: 'markdown',
-      title: 'AgentServer direct text guard',
+      title: 'Runtime direct text guard',
       content: [
-        '# AgentServer direct text guard',
+        '# Runtime direct text guard',
         '',
         `- Classification: ${classification.kind}`,
         `- Reason: ${classification.reason}`,
@@ -354,7 +364,7 @@ function toolPayloadFromPlainHumanAnswer(
     id: reportId,
     type: 'research-report',
     format: 'markdown',
-    title: 'AgentServer direct answer',
+    title: 'Runtime direct answer',
     schemaVersion: '1',
     metadata: {
       source: directAnswerResultPolicyIds.directTextTool,
@@ -382,20 +392,18 @@ function toolPayloadFromPlainHumanAnswer(
   ];
   return {
     message: trimmed,
-    confidence: 0.72,
     claimType: 'agentserver-direct-answer',
     evidenceLevel: 'agentserver',
     reasoningTrace: [
-      'Plain AgentServer text was classified as a user-facing answer.',
+      'Plain runtime text was classified as a user-facing answer.',
       'SciForge wrapped it in a strict ToolPayload so ConversationProjection remains the user-visible source of truth.',
       `classification=${classification.kind}`,
       `reason=${classification.reason}`,
     ].join('\n'),
     claims: [{
       id: `claim-direct-answer-${id}`,
-      text: trimmed.split('\n').map((line) => line.trim()).find(Boolean)?.slice(0, 240) || 'AgentServer completed the request.',
+      text: trimmed.split('\n').map((line) => line.trim()).find(Boolean)?.slice(0, 240) || 'Runtime backend completed the request.',
       type: 'inference',
-      confidence: 0.72,
       evidenceLevel: 'agentserver',
       supportingRefs: [],
       opposingRefs: [],
@@ -697,17 +705,15 @@ function coerceStandaloneArtifactPayload(value: Record<string, unknown>): ToolPa
 }
 
 export function normalizeToolPayloadShape(payload: ToolPayload): ToolPayload {
+  const { confidence: rawConfidence, ...payloadWithoutConfidence } = payload as ToolPayload & { confidence?: unknown };
+  const confidence = normalizePayloadConfidence(rawConfidence);
   const artifacts = normalizeWorkspaceTaskArtifacts(payload.artifacts);
   const rawDisplayIntent: unknown = payload.displayIntent;
   const message = String(payload.message || '');
   const executionUnits = normalizeAgentServerExecutionUnits(payload.executionUnits);
   return {
-    ...payload,
-    confidence: typeof payload.confidence === 'number' && Number.isFinite(payload.confidence)
-      ? payload.confidence
-      : typeof payload.confidence === 'string'
-        ? parseFloat(payload.confidence) || 0.72
-        : 0.72,
+    ...payloadWithoutConfidence,
+    ...(confidence !== undefined ? { confidence } : {}),
     claimType: String(payload.claimType || 'agentserver-answer'),
     evidenceLevel: String(payload.evidenceLevel || 'agentserver'),
     reasoningTrace: Array.isArray(payload.reasoningTrace)
@@ -750,18 +756,20 @@ function normalizeAgentServerToolPayloadCandidate(value: unknown, depth = 0): un
   const displayIntent = normalizeDirectAnswerDisplayIntent(value.displayIntent, message, executionUnits);
 
   if (!message || !claims.length || !uiManifest.length) return undefined;
+  const confidence = typeof value.confidence === 'number' ? value.confidence : undefined;
   return {
     message,
-    confidence: typeof value.confidence === 'number' ? value.confidence : 0.72,
+    ...(confidence !== undefined ? { confidence } : {}),
     claimType: String(value.claimType || 'agentserver-answer'),
     evidenceLevel: String(value.evidenceLevel || 'agentserver'),
-    reasoningTrace: String(value.reasoningTrace || 'AgentServer returned structured answer JSON; SciForge normalized it into a ToolPayload.'),
+    reasoningTrace: String(value.reasoningTrace || 'Runtime backend returned structured answer JSON; SciForge normalized it into a ToolPayload.'),
     claims,
     uiManifest,
     executionUnits,
     artifacts,
     displayIntent,
     objectReferences,
+    ...(isRecord(value.confidenceExplanation) ? { confidenceExplanation: value.confidenceExplanation as unknown as ToolPayload['confidenceExplanation'] } : {}),
     verificationResults: normalizeRuntimeVerificationResultsOrUndefined(value.verificationResults ?? value.verificationResult),
     verificationPolicy: isRecord(value.verificationPolicy) ? value.verificationPolicy as unknown as ToolPayload['verificationPolicy'] : undefined,
   };
@@ -839,16 +847,15 @@ function firstStringField(record: Record<string, unknown>, keys: string[]) {
 function normalizeAgentServerClaims(value: unknown, message?: string): Array<Record<string, unknown>> {
   if (Array.isArray(value)) {
     const claims = value.map((claim) => {
-      if (typeof claim === 'string') return { text: claim, type: 'inference', confidence: 0.72, evidenceLevel: 'agentserver' };
+      if (typeof claim === 'string') return { text: claim, type: 'inference', evidenceLevel: 'agentserver' };
       if (isRecord(claim)) return claim;
       return undefined;
     }).filter(isRecord);
     if (claims.length) return claims;
   }
   return [{
-    text: (message || 'AgentServer completed the request.').split('\n').map((line) => line.trim()).find(Boolean)?.slice(0, 240) || 'AgentServer completed the request.',
+    text: (message || 'Runtime backend completed the request.').split('\n').map((line) => line.trim()).find(Boolean)?.slice(0, 240) || 'Runtime backend completed the request.',
     type: 'inference',
-    confidence: 0.72,
     evidenceLevel: 'agentserver',
     supportingRefs: [],
     opposingRefs: [],

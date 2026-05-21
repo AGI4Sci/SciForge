@@ -2,19 +2,19 @@
   "schemaVersion": "sciforge.runtime-codex.browser-acceptance.v1",
   "status": "passed",
   "source": "codex-in-app-browser",
-  "observedAt": "2026-05-20T16:29:44.115Z",
-  "requestedRolePort": 5180,
-  "actualWorkspaceWriterPort": 6180,
-  "actualWorkspaceWriterUrl": "http://127.0.0.1:6180",
-  "actualRuntimeCodexPort": 6180,
-  "actualRuntimeCodexUrl": "http://127.0.0.1:6180",
-  "actualUrl": "http://127.0.0.1:5180/",
-  "actualPort": 5180,
-  "workspacePath": "/Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p8",
+  "observedAt": "2026-05-21T03:44:37.135Z",
+  "requestedRolePort": 5173,
+  "actualWorkspaceWriterPort": 6173,
+  "actualWorkspaceWriterUrl": "http://127.0.0.1:6173",
+  "actualRuntimeCodexPort": 18080,
+  "actualRuntimeCodexUrl": "http://127.0.0.1:18080",
+  "actualUrl": "http://127.0.0.1:5173/",
+  "actualPort": 5173,
+  "workspacePath": "/Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p1",
   "profile": "sciforge-runtime-deepseek",
   "provider": "sciforge-deepseek-proxy",
   "model": "bailian/deepseek-v4-flash",
-  "commandId": "codex-command-mpe9xl41-ei3mye",
+  "commandId": "codex-command-mpey219c-41ti2w",
   "startedFromDefaultChatEntry": true,
   "submittedThroughRuntimeCodex": true,
   "providerModelProfileVisible": true,
@@ -31,60 +31,57 @@
   "releaseEligible": true,
   "acceptanceRubric": {
     "userIntent": "Prove the real default-chat Runtime Codex path can complete single-turn, selected-ref, and multi-turn tasks.",
-    "expectedObservableResult": "Visible live Runtime Codex/gui.present answers with provider/model/profile/workspace/command id, selected refs, and folded diagnostics.",
-    "actualResult": "Single-turn marker, multi-turn passphrase recall, artifact creation, and selected artifact follow-up were visible in the Codex in-app browser.",
+    "expectedObservableResult": "Visible live Runtime Codex/gui.present answers with provider/model/profile/workspace/command id and folded audit panels.",
+    "actualResult": "Passed in Codex in-app browser with visible single-turn, selected-ref, and multi-turn answers.",
     "evidenceRefs": [
-      "docs/test-artifacts/runtime-codex-browser-acceptance/live-browser-acceptance-passed-20260520.md",
-      "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat-dom.txt",
       "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat.png",
-      "workspace/parallel/p8/.sciforge/runtime-codex/codex-command-mpe9eis1-vrwfdm/codex-command-mpe9eis1-vrwfdm-attempt-1/manifest.json",
-      "workspace/parallel/p8/.sciforge/runtime-gui-extension-state/codex-command-mpe9eis1-vrwfdm/codex-command-mpe9eis1-vrwfdm-attempt-1.json",
-      "workspace/parallel/p8/.sciforge/runtime-codex/codex-command-mpe9pljv-uc250r/codex-command-mpe9pljv-uc250r-attempt-1/manifest.json",
-      "workspace/parallel/p8/.sciforge/runtime-gui-extension-state/codex-command-mpe9pljv-uc250r/codex-command-mpe9pljv-uc250r-attempt-1.json",
-      "workspace/parallel/p8/.sciforge/runtime-codex/codex-command-mpe9rmoa-twdutx/codex-command-mpe9rmoa-twdutx-attempt-1/manifest.json",
-      "workspace/parallel/p8/.sciforge/runtime-gui-extension-state/codex-command-mpe9rmoa-twdutx/codex-command-mpe9rmoa-twdutx-attempt-1.json",
-      "workspace/parallel/p8/.sciforge/runtime-codex/codex-command-mpe9t9ki-fl4ghs/codex-command-mpe9t9ki-fl4ghs-attempt-1/manifest.json",
-      "workspace/parallel/p8/.sciforge/runtime-gui-extension-state/codex-command-mpe9t9ki-fl4ghs/codex-command-mpe9t9ki-fl4ghs-attempt-1.json",
-      "workspace/parallel/p8/.sciforge/runtime-codex/codex-command-mpe9xl41-ei3mye/codex-command-mpe9xl41-ei3mye-attempt-1/manifest.json",
-      "workspace/parallel/p8/.sciforge/runtime-gui-extension-state/codex-command-mpe9xl41-ei3mye/codex-command-mpe9xl41-ei3mye-attempt-1.json"
+      "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat-dom.txt",
+      "docs/test-artifacts/runtime-codex-browser-acceptance/passed-browser-acceptance.md",
+      "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit.png",
+      "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit-dom.txt",
+      "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-after-submit.png",
+      "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-after-submit-dom.txt",
+      "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn.png",
+      "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn-dom.txt"
     ],
     "negativeChecks": [
-      "fake pass rejected",
-      "missing DOM rejected",
+      "fake passed status rejected",
+      "missing DOM or screenshot rejected",
       "missing command id rejected",
-      "blocked status rejected"
+      "missing task result rejected",
+      "stand-in evidence rejected",
+      "blocked status rejected in strict mode",
+      "unfolded provider diagnostics rejected"
     ],
-    "remainingRisks": "PROJECT task-specific live R-* runs and desktop packaged live runs are separate from this shared browser acceptance."
+    "remainingRisks": "None known for this acceptance run; keep Runtime Codex service environment ready for release reruns."
   },
   "actualTaskResult": {
     "status": "passed",
-    "summary": "Default-chat Runtime Codex completed single-turn, selected artifact, and multi-turn browser acceptance.",
+    "summary": "Default-chat Runtime Codex acceptance passed for single-turn, selected-ref, and multi-turn scenarios.",
     "userIntentSatisfied": true,
     "outputVerified": true,
     "evidenceRefs": [
-      "docs/test-artifacts/runtime-codex-browser-acceptance/live-browser-acceptance-passed-20260520.md",
+      "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat.png",
       "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat-dom.txt",
-      "workspace/parallel/p8/.sciforge/runtime-codex/codex-command-mpe9xl41-ei3mye/codex-command-mpe9xl41-ei3mye-attempt-1/manifest.json",
-      "workspace/parallel/p8/.sciforge/runtime-gui-extension-state/codex-command-mpe9xl41-ei3mye/codex-command-mpe9xl41-ei3mye-attempt-1.json"
+      "docs/test-artifacts/runtime-codex-browser-acceptance/passed-browser-acceptance.md",
+      "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit.png",
+      "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit-dom.txt",
+      "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-after-submit.png",
+      "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-after-submit-dom.txt",
+      "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn.png",
+      "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn-dom.txt"
     ]
   },
   "liveRuntimeCodexProof": {
     "messageProvenance": "live-runtime-codex",
-    "commandId": "codex-command-mpe9xl41-ei3mye",
+    "commandId": "codex-command-mpey219c-41ti2w",
     "guiPresentObserved": true,
     "runtimeOutputObserved": true,
     "seedOrDemoExcluded": true,
     "eventEvidenceRefs": [
-      "workspace/parallel/p8/.sciforge/runtime-codex/codex-command-mpe9eis1-vrwfdm/codex-command-mpe9eis1-vrwfdm-attempt-1/manifest.json",
-      "workspace/parallel/p8/.sciforge/runtime-gui-extension-state/codex-command-mpe9eis1-vrwfdm/codex-command-mpe9eis1-vrwfdm-attempt-1.json",
-      "workspace/parallel/p8/.sciforge/runtime-codex/codex-command-mpe9pljv-uc250r/codex-command-mpe9pljv-uc250r-attempt-1/manifest.json",
-      "workspace/parallel/p8/.sciforge/runtime-gui-extension-state/codex-command-mpe9pljv-uc250r/codex-command-mpe9pljv-uc250r-attempt-1.json",
-      "workspace/parallel/p8/.sciforge/runtime-codex/codex-command-mpe9rmoa-twdutx/codex-command-mpe9rmoa-twdutx-attempt-1/manifest.json",
-      "workspace/parallel/p8/.sciforge/runtime-gui-extension-state/codex-command-mpe9rmoa-twdutx/codex-command-mpe9rmoa-twdutx-attempt-1.json",
-      "workspace/parallel/p8/.sciforge/runtime-codex/codex-command-mpe9t9ki-fl4ghs/codex-command-mpe9t9ki-fl4ghs-attempt-1/manifest.json",
-      "workspace/parallel/p8/.sciforge/runtime-gui-extension-state/codex-command-mpe9t9ki-fl4ghs/codex-command-mpe9t9ki-fl4ghs-attempt-1.json",
-      "workspace/parallel/p8/.sciforge/runtime-codex/codex-command-mpe9xl41-ei3mye/codex-command-mpe9xl41-ei3mye-attempt-1/manifest.json",
-      "workspace/parallel/p8/.sciforge/runtime-gui-extension-state/codex-command-mpe9xl41-ei3mye/codex-command-mpe9xl41-ei3mye-attempt-1.json"
+      "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat.png",
+      "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat-dom.txt",
+      "docs/test-artifacts/runtime-codex-browser-acceptance/passed-browser-acceptance.md"
     ]
   },
   "negativeChecks": {
@@ -99,33 +96,33 @@
   "evidence": {
     "screenshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat.png",
     "domSnapshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat-dom.txt",
-    "notesPath": "docs/test-artifacts/runtime-codex-browser-acceptance/live-browser-acceptance-passed-20260520.md"
+    "notesPath": "docs/test-artifacts/runtime-codex-browser-acceptance/passed-browser-acceptance.md"
   },
   "singleTurn": {
     "status": "passed",
-    "prompt": "Runtime Codex browser smoke single turn: reply in one short sentence with SCIFORGE-CODEX-BROWSER-SINGLE-20260520A. Use gui.present and include profile sciforge-runtime-deepseek, model bailian-deepseek-v4-flash, workspace path, command id, and live Runtime Codex answer rendered.",
-    "userIntent": "Prove a real default-chat single-turn Runtime Codex answer is visible.",
+    "prompt": "Runtime Codex browser smoke single turn: reply in one short sentence with SCIFORGE-CODEX-BROWSER-SINGLE-20260520A.",
+    "userIntent": "Single-turn default-chat Runtime Codex answer is visible and matches the requested passphrase.",
     "actualTaskResult": {
       "status": "passed",
-      "summary": "The single-turn marker SCIFORGE-CODEX-BROWSER-SINGLE-20260520A is visible in browser evidence.",
+      "summary": "Single-turn default-chat Runtime Codex answer is visible and matches the requested passphrase.",
       "userIntentSatisfied": true,
       "outputVerified": true,
       "evidenceRefs": [
-        "docs/test-artifacts/runtime-codex-browser-acceptance/live-browser-acceptance-passed-20260520.md",
+        "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit.png",
         "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit-dom.txt",
-        "workspace/parallel/p8/.sciforge/runtime-codex/codex-command-mpe9eis1-vrwfdm/codex-command-mpe9eis1-vrwfdm-attempt-1/manifest.json",
-        "workspace/parallel/p8/.sciforge/runtime-gui-extension-state/codex-command-mpe9eis1-vrwfdm/codex-command-mpe9eis1-vrwfdm-attempt-1.json"
+        "docs/test-artifacts/runtime-codex-browser-acceptance/passed-browser-acceptance.md"
       ]
     },
     "liveRuntimeCodexProof": {
       "messageProvenance": "live-runtime-codex",
-      "commandId": "codex-command-mpe9eis1-vrwfdm",
+      "commandId": "codex-command-mpexwy03-ejaeuy",
       "guiPresentObserved": true,
       "runtimeOutputObserved": true,
       "seedOrDemoExcluded": true,
       "eventEvidenceRefs": [
-        "workspace/parallel/p8/.sciforge/runtime-codex/codex-command-mpe9eis1-vrwfdm/codex-command-mpe9eis1-vrwfdm-attempt-1/manifest.json",
-        "workspace/parallel/p8/.sciforge/runtime-gui-extension-state/codex-command-mpe9eis1-vrwfdm/codex-command-mpe9eis1-vrwfdm-attempt-1.json"
+        "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit.png",
+        "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit-dom.txt",
+        "docs/test-artifacts/runtime-codex-browser-acceptance/passed-browser-acceptance.md"
       ]
     },
     "negativeChecks": {
@@ -144,39 +141,37 @@
     "evidence": {
       "screenshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit.png",
       "domSnapshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit-dom.txt",
-      "notesPath": "docs/test-artifacts/runtime-codex-browser-acceptance/live-browser-acceptance-passed-20260520.md"
+      "notesPath": "docs/test-artifacts/runtime-codex-browser-acceptance/passed-browser-acceptance.md"
     }
   },
   "artifactFollowUp": {
     "status": "passed",
-    "prompt": "Use only the selected artifact ref artifact:live-selected-report-20260521-p8 and answer what it says in one concise sentence. Read live-selected-report-20260521-p8.md from the artifacts directory. Use gui.present and include selected ref, profile sciforge-runtime-deepseek, model bailian-deepseek-v4-flash, workspace path, command id, and live Runtime Codex answer rendered.",
-    "followUpPrompt": "Use only the selected artifact ref artifact:live-selected-report-20260521-p8 and answer what it says in one concise sentence.",
+    "prompt": "Use only the selected artifact ref and answer what it says in one concise sentence.",
     "selectedRefs": [
-      ".sciforge/artifacts/live-selected-report-20260521-p8.md",
-      "artifact:live-selected-report-20260521-p8"
+      "file:/Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p1/arxiv_multi_agent_report_20260521.md"
     ],
-    "userIntent": "Prove a selected artifact follow-up uses selected refs instead of a fresh lookup.",
+    "userIntent": "Selected report follow-up is visible and answers from the selected arxiv_multi_agent_report_20260521.md file.",
     "actualTaskResult": {
       "status": "passed",
-      "summary": "The selected artifact follow-up read the selected report and returned green-phase.",
+      "summary": "Selected report follow-up is visible and answers from the selected arxiv_multi_agent_report_20260521.md file.",
       "userIntentSatisfied": true,
       "outputVerified": true,
       "evidenceRefs": [
-        "docs/test-artifacts/runtime-codex-browser-acceptance/live-browser-acceptance-passed-20260520.md",
-        "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-dom.txt",
-        "workspace/parallel/p8/.sciforge/runtime-codex/codex-command-mpe9xl41-ei3mye/codex-command-mpe9xl41-ei3mye-attempt-1/manifest.json",
-        "workspace/parallel/p8/.sciforge/runtime-gui-extension-state/codex-command-mpe9xl41-ei3mye/codex-command-mpe9xl41-ei3mye-attempt-1.json"
+        "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-after-submit.png",
+        "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-after-submit-dom.txt",
+        "docs/test-artifacts/runtime-codex-browser-acceptance/passed-browser-acceptance.md"
       ]
     },
     "liveRuntimeCodexProof": {
       "messageProvenance": "live-runtime-codex",
-      "commandId": "codex-command-mpe9xl41-ei3mye",
+      "commandId": "codex-command-mpey0ojv-w5tikl",
       "guiPresentObserved": true,
       "runtimeOutputObserved": true,
       "seedOrDemoExcluded": true,
       "eventEvidenceRefs": [
-        "workspace/parallel/p8/.sciforge/runtime-codex/codex-command-mpe9xl41-ei3mye/codex-command-mpe9xl41-ei3mye-attempt-1/manifest.json",
-        "workspace/parallel/p8/.sciforge/runtime-gui-extension-state/codex-command-mpe9xl41-ei3mye/codex-command-mpe9xl41-ei3mye-attempt-1.json"
+        "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-after-submit.png",
+        "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-after-submit-dom.txt",
+        "docs/test-artifacts/runtime-codex-browser-acceptance/passed-browser-acceptance.md"
       ]
     },
     "negativeChecks": {
@@ -193,38 +188,38 @@
     "workspaceCommandIdVisible": true,
     "rawAuditFoldedByDefault": true,
     "evidence": {
-      "screenshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up.png",
-      "domSnapshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-dom.txt",
-      "notesPath": "docs/test-artifacts/runtime-codex-browser-acceptance/live-browser-acceptance-passed-20260520.md"
+      "screenshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-after-submit.png",
+      "domSnapshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-after-submit-dom.txt",
+      "notesPath": "docs/test-artifacts/runtime-codex-browser-acceptance/passed-browser-acceptance.md"
     }
   },
   "multiTurn": {
     "status": "passed",
-    "prompt": "Remember this passphrase for the next browser turn: SCIFORGE-CODEX-BROWSER-MT-20260520A. Reply only remembered. Use gui.present and include profile sciforge-runtime-deepseek, model bailian-deepseek-v4-flash, workspace path, command id, and live Runtime Codex answer rendered.",
-    "followUpPrompt": "Now reply only with the passphrase from the previous turn. Use gui.present and include profile sciforge-runtime-deepseek, model bailian-deepseek-v4-flash, workspace path, command id, and live Runtime Codex answer rendered.",
+    "prompt": "Remember this passphrase for the next browser turn: SCIFORGE-CODEX-BROWSER-MT-20260520A. Reply only remembered.",
+    "followUpPrompt": "Now reply only with the passphrase from the previous turn.",
     "expectedPassphrase": "SCIFORGE-CODEX-BROWSER-MT-20260520A",
-    "userIntent": "Prove Runtime Codex preserves multi-turn continuity for a browser follow-up.",
+    "userIntent": "Multi-turn default-chat Runtime Codex answer is visible on the second turn and returns the remembered passphrase.",
     "actualTaskResult": {
       "status": "passed",
-      "summary": "The recall turn returned SCIFORGE-CODEX-BROWSER-MT-20260520A.",
+      "summary": "Multi-turn default-chat Runtime Codex answer is visible on the second turn and returns the remembered passphrase.",
       "userIntentSatisfied": true,
       "outputVerified": true,
       "evidenceRefs": [
-        "docs/test-artifacts/runtime-codex-browser-acceptance/live-browser-acceptance-passed-20260520.md",
+        "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn.png",
         "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn-dom.txt",
-        "workspace/parallel/p8/.sciforge/runtime-codex/codex-command-mpe9rmoa-twdutx/codex-command-mpe9rmoa-twdutx-attempt-1/manifest.json",
-        "workspace/parallel/p8/.sciforge/runtime-gui-extension-state/codex-command-mpe9rmoa-twdutx/codex-command-mpe9rmoa-twdutx-attempt-1.json"
+        "docs/test-artifacts/runtime-codex-browser-acceptance/passed-browser-acceptance.md"
       ]
     },
     "liveRuntimeCodexProof": {
       "messageProvenance": "live-runtime-codex",
-      "commandId": "codex-command-mpe9rmoa-twdutx",
+      "commandId": "codex-command-mpey219c-41ti2w",
       "guiPresentObserved": true,
       "runtimeOutputObserved": true,
       "seedOrDemoExcluded": true,
       "eventEvidenceRefs": [
-        "workspace/parallel/p8/.sciforge/runtime-codex/codex-command-mpe9rmoa-twdutx/codex-command-mpe9rmoa-twdutx-attempt-1/manifest.json",
-        "workspace/parallel/p8/.sciforge/runtime-gui-extension-state/codex-command-mpe9rmoa-twdutx/codex-command-mpe9rmoa-twdutx-attempt-1.json"
+        "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn.png",
+        "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn-dom.txt",
+        "docs/test-artifacts/runtime-codex-browser-acceptance/passed-browser-acceptance.md"
       ]
     },
     "negativeChecks": {
@@ -244,7 +239,7 @@
     "evidence": {
       "screenshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn.png",
       "domSnapshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn-dom.txt",
-      "notesPath": "docs/test-artifacts/runtime-codex-browser-acceptance/live-browser-acceptance-passed-20260520.md"
+      "notesPath": "docs/test-artifacts/runtime-codex-browser-acceptance/passed-browser-acceptance.md"
     }
   }
 }

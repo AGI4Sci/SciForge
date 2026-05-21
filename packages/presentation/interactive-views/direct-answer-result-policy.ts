@@ -19,7 +19,7 @@ export type ExistingArtifactFollowupArtifactLike = {
 
 export type StandaloneWorkspaceArtifactPayloadLike = {
   message: string;
-  confidence: number;
+  confidence?: number;
   claimType: string;
   evidenceLevel: string;
   reasoningTrace: string;
@@ -133,9 +133,10 @@ export function standaloneWorkspaceArtifactPayloadPolicy(value: Record<string, u
     entity,
     `${type} artifact generated from workspace task output.`,
   ].filter(Boolean).join(' ');
+  const confidence = typeof value.confidence === 'number' ? value.confidence : undefined;
   return {
     message,
-    confidence: typeof value.confidence === 'number' ? value.confidence : 0.72,
+    ...(confidence !== undefined ? { confidence } : {}),
     claimType: String(value.claimType || 'artifact-generation'),
     evidenceLevel: String(value.evidenceLevel || 'workspace-artifact'),
     reasoningTrace: 'Workspace task returned a standalone artifact JSON; SciForge wrapped it into a ToolPayload for display, persistence, and follow-up reuse.',
@@ -143,7 +144,7 @@ export function standaloneWorkspaceArtifactPayloadPolicy(value: Record<string, u
       id: `${id}-claim`,
       text: message,
       type: 'fact',
-      confidence: typeof value.confidence === 'number' ? value.confidence : 0.72,
+      ...(confidence !== undefined ? { confidence } : {}),
       evidenceLevel: String(value.evidenceLevel || 'workspace-artifact'),
       supportingRefs: [id],
       opposingRefs: [],
@@ -194,10 +195,10 @@ export function normalizeDirectAnswerArtifacts(value: unknown, message?: string)
       id: REPORT_ARTIFACT_TYPE,
       type: REPORT_ARTIFACT_TYPE,
       schemaVersion: '1',
-      metadata: { source: 'agentserver-structured-answer' },
+      metadata: { source: 'runtime-structured-answer' },
       data: {
         markdown: message,
-        sections: [{ title: 'AgentServer Report', content: message }],
+        sections: [{ title: 'Runtime Report', content: message }],
       },
     }];
   }
@@ -222,7 +223,7 @@ export function normalizeDirectAnswerArtifacts(value: unknown, message?: string)
       data: {
         ...data,
         markdown,
-        sections: [{ title: String(isRecord(artifact.metadata) ? artifact.metadata.title || 'AgentServer Report' : 'AgentServer Report'), content: markdown }],
+        sections: [{ title: String(isRecord(artifact.metadata) ? artifact.metadata.title || 'Runtime Report' : 'Runtime Report'), content: markdown }],
       },
     };
   });
@@ -291,12 +292,12 @@ function existingArtifactFollowupComponentForArtifact(artifact: ExistingArtifact
 function directAnswerReportArtifact(message: string, skillDomain: string, source: string, mode: 'plain-text' | 'structured-answer'): Record<string, unknown> {
   const markdownRef = markdownRefFromDirectAnswerText(message);
   const backendProcessText = looksLikeBackendProcessText(message);
-  const title = mode === 'plain-text' ? 'AgentServer Report' : 'AgentServer Answer';
+  const title = mode === 'plain-text' ? 'Runtime Report' : 'Runtime Answer';
   const metadata = {
     source,
     note: mode === 'plain-text'
-      ? 'AgentServer returned a natural-language answer instead of taskFiles; SciForge preserved it as a report artifact.'
-      : 'AgentServer returned a direct answer with user-visible content; SciForge preserved the answer as a report artifact instead of adding a repair placeholder.',
+      ? 'Runtime returned a natural-language answer instead of taskFiles; SciForge preserved it as a report artifact.'
+      : 'Runtime returned a direct answer with user-visible content; SciForge preserved the answer as a report artifact instead of adding a repair placeholder.',
     ...(markdownRef ? { reportRef: markdownRef, markdownRef } : {}),
   };
   return {

@@ -305,6 +305,7 @@ export function ResultsRenderer({
                 session={session}
                 config={config}
                 onPreviewPackageRequest={onPreviewPackageRequest}
+                onObjectReferenceFocus={onFocusedObjectChange}
               />
             ) : null}
             {resultTab === 'primary' ? (

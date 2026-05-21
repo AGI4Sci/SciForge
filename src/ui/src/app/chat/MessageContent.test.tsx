@@ -70,7 +70,7 @@ test('message markdown renderer supports GFM tables while structured object refs
   assert.match(markup, /Picked methods file/);
 });
 
-test('message markdown renderer only renders structured object refs, never text-scanned refs', () => {
+test('message markdown renderer upgrades only resolvable inline code object refs', () => {
   const markup = renderToStaticMarkup(
     <MessageContent
       content="Use `file:papers/methods.md` as literal text, then open file:papers/methods.md."
@@ -80,6 +80,63 @@ test('message markdown renderer only renders structured object refs, never text-
   );
 
   assert.equal((markup.match(/data-sciforge-reference=/g) ?? []).length, 1);
+  assert.match(markup, /<button[^>]+markdown-object-ref/);
+});
+
+test('message markdown renderer links unique bare filenames and leaves ambiguous code alone', () => {
+  const duplicateA: ObjectReference = {
+    ...pickedFile,
+    id: 'obj-duplicate-a',
+    title: 'Duplicate A',
+    ref: 'file:alpha/shared-report.md',
+    provenance: { path: 'alpha/shared-report.md' },
+  };
+  const duplicateB: ObjectReference = {
+    ...pickedFile,
+    id: 'obj-duplicate-b',
+    title: 'Duplicate B',
+    ref: 'file:beta/shared-report.md',
+    provenance: { path: 'beta/shared-report.md' },
+  };
+  const markup = renderToStaticMarkup(
+    <MessageContent
+      content="Open `methods.md`; keep `shared-report.md` and `missing-report.md` as code."
+      references={[pickedFile, duplicateA, duplicateB]}
+      onObjectFocus={() => undefined}
+    />,
+  );
+
+  assert.equal((markup.match(/data-sciforge-reference=/g) ?? []).length, 1);
+  assert.match(markup, /methods\.md/);
+  assert.match(markup, /<code>shared-report\.md<\/code>/);
+  assert.match(markup, /<code>missing-report\.md<\/code>/);
+});
+
+test('message markdown renderer does not resolve ambiguous bare filenames by shared title', () => {
+  const duplicateA: ObjectReference = {
+    ...pickedFile,
+    id: 'obj-duplicate-title-a',
+    title: 'duplicate_inline_ref.md',
+    ref: 'file:alpha/duplicate_inline_ref.md',
+    provenance: { path: 'alpha/duplicate_inline_ref.md' },
+  };
+  const duplicateB: ObjectReference = {
+    ...pickedFile,
+    id: 'obj-duplicate-title-b',
+    title: 'duplicate_inline_ref.md',
+    ref: 'file:beta/duplicate_inline_ref.md',
+    provenance: { path: 'beta/duplicate_inline_ref.md' },
+  };
+  const markup = renderToStaticMarkup(
+    <MessageContent
+      content="Open `methods.md`; keep `duplicate_inline_ref.md` as code."
+      references={[pickedFile, duplicateA, duplicateB]}
+      onObjectFocus={() => undefined}
+    />,
+  );
+
+  assert.equal((markup.match(/data-sciforge-reference=/g) ?? []).length, 1);
+  assert.match(markup, /<code>duplicate_inline_ref\.md<\/code>/);
 });
 
 test('user messages do not display object references produced by later agent work', () => {

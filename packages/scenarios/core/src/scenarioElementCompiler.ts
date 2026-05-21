@@ -203,7 +203,7 @@ export function recommendScenarioElements(
         ? 'Open-ended or multi-step request: compiled with generated capability policy as the stable artifact producer.'
         : 'Request matches registered deterministic capabilities; generated capability policy remains available when no local declared capability is enough.',
       options.allowAgentServer && options.agentServerBaseUrl
-        ? 'AgentServer recommendation API is reserved; deterministic heuristic recommendations remain available offline.'
+        ? 'Runtime recommendation API is reserved; deterministic heuristic recommendations remain available offline.'
         : 'Matched local element manifests by description, tags, examples, and skill domain.',
     ],
   };

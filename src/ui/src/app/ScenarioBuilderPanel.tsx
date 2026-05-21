@@ -73,7 +73,7 @@ export function ScenarioBuilderPanel({
   expanded: boolean;
   onToggle: () => void;
   onChange: (override: ScenarioRuntimeOverride) => void;
-  /** When set (e.g. workbench), exposes AgentServer `availableComponentIds` as the same selectable component list as the scenario UI allowlist. */
+  /** When set (e.g. workbench), exposes the GUI presentation catalog selection used by runtime display hints. */
   agentRuntimeComponentIds?: string[];
   onAgentRuntimeComponentIdsChange?: (ids: string[]) => void;
   /** Embedded shell: single toggle expands this panel body directly. */
@@ -390,7 +390,7 @@ export function ScenarioBuilderPanel({
           />
           <ToolProviderRouteEditor
             title="Core capability providers"
-            description="跨机器能力 route，例如 AgentServer 端 web_search/web_fetch。"
+            description="跨机器任务能力 route，例如 TUI/Codex 原生 web_search/web_fetch provider。"
             routes={coreProviderCapabilityIds.map((capabilityId) => {
               const manifest = defaultRouteManifestForCapability(capabilityId);
               return {

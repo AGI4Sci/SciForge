@@ -4,6 +4,7 @@ import {
   artifactHasUserFacingDelivery,
   hasExplicitUserFacingObjectReferenceRole,
   mergeObjectReferences,
+  objectReferenceMentionedInText,
   objectReferencePresentationRole,
   objectReferenceForArtifactSummary,
 } from '../../../../../packages/support/object-references';
@@ -22,8 +23,13 @@ export function MessageContent({
 }) {
   return (
     <div className="message-content">
-      <MarkdownRenderer markdown={content} className="message-markdown" />
-      <InlineObjectReferences references={references} onObjectFocus={onObjectFocus} />
+      <MarkdownRenderer
+        markdown={content}
+        className="message-markdown"
+        objectReferences={references}
+        onObjectReferenceFocus={onObjectFocus}
+      />
+      <InlineObjectReferences references={references.filter((reference) => !objectReferenceMentionedInText(content, reference))} onObjectFocus={onObjectFocus} />
     </div>
   );
 }

@@ -4,7 +4,21 @@ import { coerceArtifactReportPayload } from '@sciforge-ui/artifact-preview';
 
 export { coerceArtifactReportPayload as coerceReportPayload } from '@sciforge-ui/artifact-preview';
 
-export function MarkdownBlock({ markdown, onObjectReferenceFocus }: { markdown?: string; onObjectReferenceFocus?: (reference: ObjectReference) => void }) {
-  void onObjectReferenceFocus;
-  return <MarkdownRenderer markdown={markdown} className="markdown-block" />;
+export function MarkdownBlock({
+  markdown,
+  objectReferences = [],
+  onObjectReferenceFocus,
+}: {
+  markdown?: string;
+  objectReferences?: ObjectReference[];
+  onObjectReferenceFocus?: (reference: ObjectReference) => void;
+}) {
+  return (
+    <MarkdownRenderer
+      markdown={markdown}
+      className="markdown-block"
+      objectReferences={objectReferences}
+      onObjectReferenceFocus={onObjectReferenceFocus}
+    />
+  );
 }

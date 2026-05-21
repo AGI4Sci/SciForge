@@ -54,6 +54,7 @@ export interface GuiPresentRuntimePayload {
   intent?: string;
   ref?: string;
   title?: string;
+  hint?: string;
   placement?: { panel?: string; viewId?: string };
   intentLogId?: string;
 }
@@ -312,6 +313,7 @@ function guiPresentFromRaw(
   const ref = stringField(args.ref);
   const title = stringField(args.title);
   const intent = stringField(args.intent);
+  const hint = stringField(args.hint) ?? stringField(content.kind);
   const text = contentText
     ?? title
     ?? (ref ? `Presented ${ref}.` : undefined)
@@ -324,6 +326,7 @@ function guiPresentFromRaw(
     intent,
     ref,
     title,
+    hint,
     placement: placement
       ? {
           panel: stringField(placement.panel),

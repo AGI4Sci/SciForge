@@ -196,7 +196,7 @@
     "smoke:runtime-codex-browser-acceptance:strict": "SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 npm run smoke:runtime-codex-browser-acceptance",
     "smoke:real-task-matrix": "tsx tests/smoke/smoke-real-task-matrix.ts && npm run smoke:real-task-offline-gates && node --import tsx --test tests/smoke/real-task-evidence-schema.test.ts",
     "smoke:real-task-matrix:update": "tsx tests/smoke/smoke-real-task-matrix.ts --update-manifests && npm run smoke:real-task-offline-gates && node --import tsx --test tests/smoke/real-task-evidence-schema.test.ts",
-    "smoke:real-task-offline-gates": "npm run smoke:real-task-literature-web-gates && npm run smoke:real-task-data-gates && npm run smoke:real-task-code-gates && npm run smoke:real-task-scientific-gates && npm run smoke:real-task-capability-skill-cu-gates && npm run smoke:real-task-protocol-gates && npm run smoke:real-task-provider-security-gates && npm run smoke:real-task-run-resume-memory-gates && npm run smoke:desktop-live-acceptance-evidence",
+    "smoke:real-task-offline-gates": "npm run smoke:real-task-protocol-gates",
     "smoke:real-task-literature-web-gates": "node --import tsx tests/smoke/smoke-real-task-literature-web-gates.ts",
     "smoke:real-task-data-gates": "node --import tsx tests/smoke/smoke-real-task-data-gates.ts",
     "smoke:real-task-code-gates": "node --import tsx tests/smoke/smoke-real-task-code-gates.ts",

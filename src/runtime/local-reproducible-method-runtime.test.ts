@@ -22,7 +22,7 @@ test('local reproducible method runtime exports existing script refs without Age
   assert.ok(payload);
   assert.equal(payload.executionUnits[0]?.tool, 'sciforge.local-reproducible-method.export-existing-script');
   assert.equal(payload.artifacts[0]?.type, 'notebook-timeline');
-  assert.match(payload.message, /no AgentServer generation/);
+  assert.match(payload.message, /no remote backend generation/);
   assert.match(payload.message, /omics_differential_analysis\.py/);
 });
 

@@ -167,7 +167,8 @@ export async function validateAndNormalizePayload(
     message: referenceFailures.length
       ? `Current-turn reference contract failed: ${referenceFailures.join('; ')}`
       : String(payload.message || `${skill.id} completed.`),
-    confidence: typeof payload.confidence === 'number' ? payload.confidence : 0.5,
+    ...(typeof payload.confidence === 'number' ? { confidence: payload.confidence } : {}),
+    ...(isRecord(payload.confidenceExplanation) ? { confidenceExplanation: payload.confidenceExplanation as ToolPayload['confidenceExplanation'] } : {}),
     claimType: String(payload.claimType || 'fact'),
     evidenceLevel: String(payload.evidenceLevel || 'runtime'),
     reasoningTrace: [

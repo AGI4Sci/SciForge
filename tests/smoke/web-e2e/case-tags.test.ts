@@ -123,42 +123,16 @@ for (const mapping of CURRENT_PROJECT_WEB_E2E_COVERAGE) {
 assert.deepEqual(
   CURRENT_PROJECT_WEB_E2E_COVERAGE.map((mapping) => mapping.taskId).sort(),
   [
-    'R-AUDIT-01',
-    'R-BIO-01',
-    'R-BUDGET-01',
-    'R-CAP-01',
-    'R-CODE-01',
-    'R-CODE-02',
-    'R-CU-01',
-    'R-DATA-01',
-    'R-DATA-02',
-    'R-DATA-03',
-    'R-DATA-04',
-    'R-FAIL-01',
-    'R-KG-01',
-    'R-LIT-01',
-    'R-LIT-02',
-    'R-LIT-03',
-    'R-MEM-01',
-    'R-METHOD-01',
-    'R-PROTO-01',
-    'R-PROTO-02',
-    'R-PROTO-03',
-    'R-RESUME-01',
-    'R-RESUME-02',
-    'R-RUN-01',
-    'R-RUN-02',
-    'R-SEC-01',
-    'R-SKILL-01',
-    'R-VERIFY-01',
-    'R-WEB-01',
+    'R-PROTO-04',
+    'R-PROTO-05',
+    'R-VERIFY-02',
   ],
   'current PROJECT tasks with dedicated offline web-e2e contracts must have explicit coverage mappings',
 );
 assert.deepEqual(
   CURRENT_PROJECT_DESKTOP_COVERAGE.map((mapping) => mapping.taskId).sort(),
-  ['R-DESK-01', 'R-PKG-01'],
-  'desktop PROJECT tasks must have explicit desktop acceptance coverage mappings',
+  [],
+  'current PROJECT task board has no desktop acceptance task',
 );
 assert.ok(
   CURRENT_PROJECT_DESKTOP_COVERAGE.every(
@@ -175,143 +149,22 @@ assert.ok(
   'desktop PROJECT tasks must not be represented as web-e2e fixture coverage',
 );
 assert.ok(
-  currentProjectMappingsForSaWebTag('SA-WEB-31').some(
-    (mapping) => mapping.taskId === 'R-LIT-01' && mapping.contractAssertions.includes('literature-current-selected-report'),
+  currentProjectMappingsForSaWebTag('SA-WEB-39').some(
+    (mapping) => mapping.taskId === 'R-PROTO-04' && mapping.contractAssertions.includes('gui-presentation-catalog-discovery'),
   ),
-  'R-LIT-01 must map to SA-WEB-31 current literature retrieval',
+  'R-PROTO-04 must map to SA-WEB-39 GUI presentation catalog discovery',
 );
 assert.ok(
-  currentProjectMappingsForSaWebTag('SA-WEB-31').some(
-    (mapping) => mapping.taskId === 'R-LIT-03' && mapping.contractAssertions.includes('literature-current-selected-report'),
+  currentProjectMappingsForSaWebTag('SA-WEB-40').some(
+    (mapping) => mapping.taskId === 'R-PROTO-05' && mapping.contractAssertions.includes('inline-reference-right-panel-preview'),
   ),
-  'R-LIT-03 must map to SA-WEB-31 selected report follow-up scoping',
+  'R-PROTO-05 must map to SA-WEB-40 inline reference preview',
 );
 assert.ok(
-  currentProjectMappingsForSaWebTag('SA-WEB-32').some(
-    (mapping) => mapping.taskId === 'R-LIT-02' && mapping.contractAssertions.includes('literature-evidence-conflict'),
+  currentProjectMappingsForSaWebTag('SA-WEB-41').some(
+    (mapping) => mapping.taskId === 'R-VERIFY-02' && mapping.contractAssertions.includes('confidence-source-explanation'),
   ),
-  'R-LIT-02 must map to SA-WEB-32 contradictory literature evidence',
-);
-assert.ok(
-  currentProjectMappingsForSaWebTag('SA-WEB-32').some(
-    (mapping) => mapping.taskId === 'R-WEB-01' && mapping.contractAssertions.includes('dynamic-web-evidence-status'),
-  ),
-  'R-WEB-01 must map to SA-WEB-32 dynamic web evidence statuses',
-);
-assert.ok(
-  currentProjectMappingsForSaWebTag('SA-WEB-20').some(
-    (mapping) => mapping.taskId === 'R-DATA-01' && mapping.contractAssertions.includes('longitudinal-messy-csv'),
-  ),
-  'R-DATA-01 must map to SA-WEB-20 longitudinal messy CSV analysis',
-);
-assert.ok(
-  currentProjectMappingsForSaWebTag('SA-WEB-21').some(
-    (mapping) => mapping.taskId === 'R-DATA-02' && mapping.contractAssertions.includes('schema-drift-confounder'),
-  ),
-  'R-DATA-02 must map to SA-WEB-21 schema drift confounder reinterpretation',
-);
-assert.ok(
-  currentProjectMappingsForSaWebTag('SA-WEB-22').some(
-    (mapping) => mapping.taskId === 'R-DATA-03' && mapping.contractAssertions.includes('two-table-lineage'),
-  ),
-  'R-DATA-03 must map to SA-WEB-22 two-table lineage',
-);
-assert.ok(
-  currentProjectMappingsForSaWebTag('SA-WEB-19').some(
-    (mapping) => mapping.taskId === 'R-DATA-04' && mapping.contractAssertions.includes('large-file-bounded-diagnostics'),
-  ),
-  'R-DATA-04 must map to SA-WEB-19 large-file bounded diagnostics',
-);
-assert.ok(
-  currentProjectMappingsForSaWebTag('SA-WEB-33').some(
-    (mapping) => mapping.taskId === 'R-CODE-01' && mapping.contractAssertions.includes('targeted-code-repair'),
-  ),
-  'R-CODE-01 must map to SA-WEB-33 targeted code repair',
-);
-assert.ok(
-  currentProjectMappingsForSaWebTag('SA-WEB-34').some(
-    (mapping) => mapping.taskId === 'R-CODE-02' && mapping.contractAssertions.includes('dirty-worktree-preservation'),
-  ),
-  'R-CODE-02 must map to SA-WEB-34 dirty worktree preservation',
-);
-for (const [taskId, assertion] of [
-  ['R-RUN-01', 'service-lifecycle-recovery'],
-  ['R-RUN-02', 'cancel-partial-continuation'],
-  ['R-RESUME-02', 'browser-refresh-recovery'],
-] as const) {
-  assert.ok(
-    currentProjectMappingsForSaWebTag('SA-WEB-37').some(
-      (mapping) => mapping.taskId === taskId && mapping.contractAssertions.includes(assertion),
-    ),
-    `${taskId} must map to SA-WEB-37 ${assertion}`,
-  );
-}
-assert.ok(
-  currentProjectMappingsForSaWebTag('SA-WEB-28').some(
-    (mapping) => mapping.taskId === 'R-PROTO-01' && mapping.contractAssertions.includes('text-only-gui-action'),
-  ),
-  'R-PROTO-01 must map to SA-WEB-28 text-only GUI action command trace',
-);
-assert.ok(
-  currentProjectMappingsForSaWebTag('SA-WEB-23').some(
-    (mapping) => mapping.taskId === 'R-PROTO-02' && mapping.contractAssertions.includes('progressive-gui-resource-probing'),
-  ),
-  'R-PROTO-02 must map to SA-WEB-23 progressive GUI resource probing',
-);
-assert.ok(
-  currentProjectMappingsForSaWebTag('SA-WEB-24').some(
-    (mapping) => mapping.taskId === 'R-PROTO-03' && mapping.contractAssertions.includes('gui-ask-user-clarification'),
-  ),
-  'R-PROTO-03 must map to SA-WEB-24 gui.ask_user clarification',
-);
-assert.ok(
-  currentProjectMappingsForSaWebTag('SA-WEB-29').some(
-    (mapping) => mapping.taskId === 'R-RESUME-01' && mapping.contractAssertions.includes('native-session-artifact-followup'),
-  ),
-  'R-RESUME-01 must map to SA-WEB-29 native session artifact follow-up',
-);
-assert.ok(
-  currentProjectMappingsForSaWebTag('SA-WEB-30').some(
-    (mapping) => mapping.taskId === 'R-MEM-01' && mapping.contractAssertions.includes('long-context-constraint-stability'),
-  ),
-  'R-MEM-01 must map to SA-WEB-30 long-context constraint stability',
-);
-for (const [taskId, assertion] of [
-  ['R-BUDGET-01', 'runtime-provider-budget'],
-  ['R-SEC-01', 'secret-raw-stream-scrub'],
-  ['R-AUDIT-01', 'failed-run-audit-export'],
-  ['R-FAIL-01', 'provider-outage-recovery'],
-] as const) {
-  assert.ok(
-    currentProjectMappingsForSaWebTag('SA-WEB-38').some(
-      (mapping) => mapping.taskId === taskId && mapping.contractAssertions.includes(assertion),
-    ),
-    `${taskId} must map to SA-WEB-38 ${assertion}`,
-  );
-}
-assert.ok(
-  currentProjectMappingsForSaWebTag('SA-WEB-35').filter(
-    (mapping) => ['R-METHOD-01', 'R-KG-01', 'R-BIO-01', 'R-VERIFY-01'].includes(mapping.taskId),
-  ).every((mapping) => mapping.contractAssertions.includes('scientific-reviewer-verifier-loop')),
-  'R-METHOD/R-KG/R-BIO/R-VERIFY must map to SA-WEB-35 scientific reviewer/verifier loop',
-);
-assert.ok(
-  currentProjectMappingsForSaWebTag('SA-WEB-36').some(
-    (mapping) => mapping.taskId === 'R-CAP-01' && mapping.contractAssertions.includes('capability-discovery-boundary'),
-  ),
-  'R-CAP-01 must map to SA-WEB-36 capability discovery boundary',
-);
-assert.ok(
-  currentProjectMappingsForSaWebTag('SA-WEB-36').some(
-    (mapping) => mapping.taskId === 'R-SKILL-01' && mapping.contractAssertions.includes('codex-native-skill-promotion'),
-  ),
-  'R-SKILL-01 must map to SA-WEB-36 Codex-native skill promotion',
-);
-assert.ok(
-  currentProjectMappingsForSaWebTag('SA-WEB-36').some(
-    (mapping) => mapping.taskId === 'R-CU-01' && mapping.contractAssertions.includes('computer-use-evidence-folding'),
-  ),
-  'R-CU-01 must map to SA-WEB-36 Computer Use evidence folding',
+  'R-VERIFY-02 must map to SA-WEB-41 confidence source explanation',
 );
 
 for (const tag of requiredTags) {

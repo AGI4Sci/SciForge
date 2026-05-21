@@ -23,6 +23,8 @@ import {
   referenceKindForWorkspaceFileLike,
   referenceKindForWorkspacePreviewKind,
   referenceForWorkspaceFileLike,
+  mergeObjectReferences,
+  objectReferenceForArtifactSummary,
   withRegionLocator,
 } from '../../../../../packages/support/object-references';
 
@@ -33,6 +35,7 @@ export function WorkspaceObjectPreview({
   session,
   config,
   onPreviewPackageRequest,
+  onObjectReferenceFocus,
   userActionApi,
   hydrationApi,
 }: {
@@ -40,10 +43,12 @@ export function WorkspaceObjectPreview({
   session: SciForgeSession;
   config: SciForgeConfig;
   onPreviewPackageRequest?: (reference: ObjectReference, path?: string, descriptor?: PreviewDescriptor) => void;
+  onObjectReferenceFocus?: (reference: ObjectReference) => void;
   userActionApi?: UserActionApi;
   hydrationApi?: ArtifactPreviewHydrationApi;
 }) {
   const artifact = artifactForObjectReference(reference, session);
+  const objectReferences = useMemo(() => workspacePreviewObjectReferences(session, reference, artifact), [artifact, reference, session]);
   const inlinePreview = useMemo(() => uploadedArtifactPreview(artifact), [artifact]);
   const presentationInput = useMemo(() => resolvePresentationInputForArtifact(artifact), [artifact]);
   const path = presentationInput?.ref ?? pathForObjectReference(reference, session);
@@ -181,9 +186,11 @@ export function WorkspaceObjectPreview({
             config={config}
             reference={descriptorReference}
             objectReference={reference}
+            objectReferences={objectReferences}
             session={session}
             userActionApi={resolvedUserActionApi}
             hydrationApi={resolvedHydrationApi}
+            onObjectReferenceFocus={onObjectReferenceFocus}
           />
         )}
       </div>
@@ -208,7 +215,11 @@ export function WorkspaceObjectPreview({
         <strong>{file.path}</strong>
         <span>{formatBytes(file.size)}</span>
       </div>
-      <WorkspaceFileInlineViewer file={file} />
+      <WorkspaceFileInlineViewer
+        file={file}
+        objectReferences={objectReferences}
+        onObjectReferenceFocus={onObjectReferenceFocus}
+      />
     </div>
   );
 }
@@ -300,17 +311,21 @@ function DescriptorPreview({
   config,
   reference,
   objectReference,
+  objectReferences,
   session,
   userActionApi,
   hydrationApi,
+  onObjectReferenceFocus,
 }: {
   descriptor: PreviewDescriptor;
   config: SciForgeConfig;
   reference: SciForgeReference;
   objectReference: ObjectReference;
+  objectReferences: ObjectReference[];
   session: SciForgeSession;
   userActionApi: UserActionApi;
   hydrationApi: ArtifactPreviewHydrationApi;
+  onObjectReferenceFocus?: (reference: ObjectReference) => void;
 }) {
   const previewConfig = useMemo(() => config, [config.workspacePath, config.workspaceWriterBaseUrl]);
   const descriptorLoadKey = `${descriptor.kind}:${descriptor.inlinePolicy}:${descriptor.sizeBytes ?? 'unknown'}:${descriptor.ref}`;
@@ -395,7 +410,11 @@ function DescriptorPreview({
         {derivedFile ? (
           <div className="descriptor-derived-preview">
             <Badge variant="info">{derivedLabel}</Badge>
-            <WorkspaceFileInlineViewer file={derivedFile} />
+            <WorkspaceFileInlineViewer
+              file={derivedFile}
+              objectReferences={objectReferences}
+              onObjectReferenceFocus={onObjectReferenceFocus}
+            />
           </div>
         ) : null}
         {derivedError ? <pre className="workspace-object-code">{derivedError}</pre> : null}
@@ -465,9 +484,25 @@ function UnsupportedPreviewPackageNotice({
   );
 }
 
-function WorkspaceFileInlineViewer({ file }: { file: WorkspaceFileContent }) {
+export function WorkspaceFileInlineViewer({
+  file,
+  objectReferences = [],
+  onObjectReferenceFocus,
+}: {
+  file: WorkspaceFileContent;
+  objectReferences?: ObjectReference[];
+  onObjectReferenceFocus?: (reference: ObjectReference) => void;
+}) {
   const kind = fileKindForPath(file.path, file.language);
-  if (kind === 'markdown') return <MarkdownBlock markdown={file.content} />;
+  if (kind === 'markdown') {
+    return (
+      <MarkdownBlock
+        markdown={file.content}
+        objectReferences={objectReferences}
+        onObjectReferenceFocus={onObjectReferenceFocus}
+      />
+    );
+  }
   if (kind === 'json') return <pre className="workspace-object-code">{formatJsonLike(file.content)}</pre>;
   if (kind === 'csv' || kind === 'tsv') return <DelimitedTextPreview content={file.content} delimiter={kind === 'tsv' ? '\t' : ','} />;
   if (kind === 'image') {
@@ -527,6 +562,22 @@ function officePreviewLabel(kind: string) {
   if (kind === 'spreadsheet') return '表格文件';
   if (kind === 'presentation') return '演示文稿';
   return '文档文件';
+}
+
+function workspacePreviewObjectReferences(
+  session: SciForgeSession,
+  currentReference: ObjectReference,
+  artifact: RuntimeArtifact | undefined,
+): ObjectReference[] {
+  const artifactReferences = session.artifacts.map((item) => objectReferenceForArtifactSummary(item, String(item.metadata?.runId ?? '')));
+  const currentArtifactReference = artifact ? [objectReferenceForArtifactSummary(artifact, String(artifact.metadata?.runId ?? ''))] : [];
+  return mergeObjectReferences([
+    currentReference,
+    ...currentArtifactReference,
+    ...session.messages.flatMap((message) => message.objectReferences ?? []),
+    ...session.runs.flatMap((run) => run.objectReferences ?? []),
+    ...artifactReferences,
+  ], [], 100);
 }
 
 export function UploadedDataUrlPreview({

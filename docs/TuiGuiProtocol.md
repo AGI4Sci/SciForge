@@ -1,6 +1,6 @@
-# TUI / GUI Protocol
+# TUI / GUI 协议
 
-最后更新：2026-05-19
+最后更新：2026-05-21
 
 ## 结论
 
@@ -13,19 +13,19 @@ Codex CLI / app-server 如何注册 tool、plugin、skill、MCP、slash command 
 ## 数据方向
 
 ```text
-User -> GUI
-  GUI translates gestures/forms/files/selections into terminal-equivalent text
-  -> TUI stdin / chat input / native command input
+用户 -> GUI
+  GUI 将手势、表单、文件和选择翻译成终端等价文本
+  -> TUI stdin / chat input / 原生命令输入
 
-GUI internal state
-  DOM/local events -> semantic GUI event bus -> projected GUI context
-  -> exposed as compact context, gui.get_context, or read-only GUI resources
+GUI 内部状态
+  DOM/local events -> 语义 GUI event bus -> 投影后的 GUI context
+  -> 通过 compact context、gui.get_context 或只读 GUI resources 暴露
 
 TUI agent
-  parses text, reasons, uses native skills/plugins/tools
-  reads GUI resources when it needs state
-  calls injected gui.* tools with presentation intents
-  -> GUI negotiates placement, timing, conflicts and rendering
+  解析文本、推理，并使用原生 skills/plugins/tools
+  需要界面状态时读取 GUI resources
+  通过注入的 gui.* tools 表达展示意图
+  -> GUI 协商 placement、timing、conflict 和 rendering
 ```
 
 ## 唯一硬输入契约：GUI → TUI 是文本
@@ -64,7 +64,7 @@ guiSemanticBus.emit('modal-dismissed', { modalId: 'confirm-delete' });
 
 判断“什么值得投影”属于 GUI presentation behavior。TUI 不轮询 DOM，也不订阅低级 UI 事件。
 
-## Progressive GUI Context
+## Progressive GUI Context / 分级 GUI 上下文
 
 TUI 不能看完整 GUI。GUI 应分级披露状态，默认只暴露 hot region。
 
@@ -72,7 +72,7 @@ TUI 不能看完整 GUI。GUI 应分级披露状态，默认只暴露 hot region
 type GuiContextLevel = 'shell' | 'hot-region' | 'region-detail' | 'debug';
 ```
 
-### Level 0: shell
+### Level 0：shell
 
 ```ts
 type GuiShellContext = {
@@ -85,7 +85,7 @@ type GuiShellContext = {
 };
 ```
 
-### Level 1: hot region
+### Level 1：hot region
 
 ```ts
 type GuiHotRegionContext = GuiShellContext & {
@@ -102,9 +102,9 @@ type GuiHotRegionContext = GuiShellContext & {
 };
 ```
 
-### Level 2: requested region detail
+### Level 2：按需 region detail
 
-Only returned when TUI explicitly asks for a region:
+只有当 TUI 明确请求某个 region 时才返回：
 
 ```ts
 type GuiRegionDetail = {
@@ -117,20 +117,25 @@ type GuiRegionDetail = {
 };
 ```
 
-### Level 3: debug
+### Level 3：debug
 
-Debug snapshots are for audit/debug views only. They should not enter default agent context.
+Debug snapshot 只用于 audit/debug 视图，不应进入默认 agent context。
 
-## Read-Only GUI Resource Tree
+## Read-Only GUI Resource Tree / 只读 GUI 资源树
 
-`gui.get_context` is the compact API. For richer state inspection, the preferred mental model is a read-only virtual resource tree. TUI reads it the same way it reads files or MCP resources: list first, read the small node, search within a scope, then request details only when needed.
+`gui.get_context` 是紧凑 API。需要更丰富的状态探测时，首选心智模型是只读虚拟资源树。TUI 像读取文件或 MCP resources 一样读取它：先 list，再 read 小节点，在限定 scope 内 search，只有需要时再请求 detail。
 
-Example tree:
+示例资源树：
 
 ```text
 /gui/
   shell.json
   hot-region.json
+  capabilities/
+    presentation.json
+  renderers/
+    report-viewer.json
+    evidence-matrix.json
   regions/
     results/
       summary.md
@@ -144,7 +149,7 @@ Example tree:
     dom-summary.json
 ```
 
-Stable read operations:
+稳定读取操作：
 
 ```ts
 gui.list({ path: '/gui/regions' })
@@ -168,34 +173,79 @@ gui.watch({
 })
 ```
 
-If the host supports MCP resources, LSP-like resource providers, or a native file/context API, these operations should map to that native mechanism. If it does not, expose them as read-only `gui.*` tools. Either way, they are GUI state reads only; they never mutate GUI state or workspace state.
+如果 host 支持 MCP resources、LSP-like resource providers 或原生 file/context API，这些操作应映射到原生机制。否则就作为只读 `gui.*` tools 暴露。无论采用哪种方式，它们都只是 GUI state read，不会修改 GUI state 或 workspace state。
 
-Resource content must be semantic, bounded and progressively disclosed:
+Resource 内容必须是语义化、有边界、分级披露的：
 
-- `/gui/shell.json` gives layout, focused panel, modal summary, revision and available GUI tools.
-- `/gui/hot-region.json` gives the currently relevant panel, selected refs, interaction mode, last change origin and available actions.
-- `/gui/regions/<id>/summary.md` gives human-readable visible state for that region.
-- `/gui/regions/<id>/refs.json` gives stable object refs visible in that region.
-- `/gui/regions/<id>/actions.json` gives text-command affordances.
-- `/gui/debug/*` is opt-in debug/audit material and should not be injected into default agent context.
+- `/gui/shell.json` 给出 layout、focused panel、modal summary、revision 和 available GUI tools。
+- `/gui/hot-region.json` 给出当前相关 panel、selected refs、interaction mode、last change origin 和 available actions。
+- `/gui/capabilities/presentation.json` 给出 GUI 当前可用的展示组件目录。
+- `/gui/renderers/<componentId>.json` 给出单个展示组件的可渲染 artifact 类型、预览类型、安全边界和给 TUI 的简短说明。
+- `/gui/regions/<id>/summary.md` 给出该 region 的可读 visible state。
+- `/gui/regions/<id>/refs.json` 给出该 region 中可见的 stable object refs。
+- `/gui/regions/<id>/actions.json` 给出 text-command affordances。
+- `/gui/debug/*` 是 opt-in debug/audit material，不应注入默认 agent context。
 
-`gui.search` searches this semantic projection, not raw DOM. This keeps the “grep-like” ergonomics without coupling TUI to CSS selectors, component internals or hidden page structure.
+`gui.search` 搜索的是这个语义投影，而不是 raw DOM。这样保留了 grep-like 的使用体验，同时避免 TUI 依赖 CSS selector、组件内部结构或隐藏页面结构。
 
-## State Perception Rules
+## GUI 展示能力目录
 
-TUI and GUI perceive each other asymmetrically:
+`packages/presentation/components` 是 GUI 侧的展示能力目录。它只描述 GUI 能渲染什么，不描述 TUI 应该调用什么任务工具。TUI 通过只读资源发现这个目录：
 
-- GUI perceives TUI/Core through app-server or JSONL event streams and renders streamed agent events.
-- TUI perceives GUI through shell/hot-region context plus read-only resource operations.
-- GUI pushes only semantic changes from its event bus; TUI does not poll the whole page.
-- TUI reads deeper region detail only when the current task actually needs it.
-- Any GUI state used for a view-mutating intent should be paired with revision/precondition checks.
+```ts
+type GuiPresentationCatalog = {
+  schemaVersion: 'sciforge.gui-presentation-catalog.v1';
+  source: 'packages/presentation/components';
+  updatedAt: string;
+  components: GuiPresentationComponentSummary[];
+};
 
-This makes GUI state available enough for correct control, but not so complete that the TUI starts depending on layout internals.
+type GuiPresentationComponentSummary = {
+  componentId: string;
+  title: string;
+  description?: string;
+  acceptsArtifactTypes: string[];
+  previewKinds: Array<'markdown' | 'table' | 'diff' | 'image' | 'json' | 'notebook' | 'custom'>;
+  lifecycleLayer: 'presentation';
+  safety?: {
+    readsWorkspace?: boolean;
+    writesWorkspace?: false;
+    executesCode?: false;
+    requiresConfirmation?: boolean;
+  };
+  agentSummary?: string;
+};
+```
 
-## Intent-Based GUI Tools
+单个 renderer 资源可以包含更详细的 props contract、空状态、推荐 artifact metadata 和 fallback renderer：
 
-TUI should express intent, not remotely command layout. The primary tool surface is:
+```ts
+gui.read({ path: '/gui/renderers/report-viewer.json' })
+```
+
+发现规则：
+
+- TUI 可以 `gui.list('/gui/capabilities')`、`gui.read('/gui/capabilities/presentation.json')` 或 `gui.search({ scope: '/gui/capabilities', query })`。
+- TUI 不能 import React 组件，也不能把 GUI component 当成 task skill/tool。
+- GUI 不能把展示组件注册成 TUI capability，也不能用组件目录做算法、provider 或 skill ranking。
+- GUI 组件只通过 `gui.present`、右侧预览和 GUI-local renderer negotiation 发挥作用。
+- 任务 skills/tools/plugins 仍由 Codex 原生目录发现；GUI 若要触发任务能力发现，只发送 `/capabilities search|expand|plan|explain` 文本。
+
+## 状态感知规则
+
+TUI 和 GUI 对彼此的感知是非对称的：
+
+- GUI 通过 app-server 或 JSONL event stream 感知 TUI/Core，并渲染 streamed agent events。
+- TUI 通过 shell/hot-region context 加只读 resource operations 感知 GUI。
+- GUI 只推送 semantic event bus 的语义变化；TUI 不轮询整页。
+- TUI 只有在当前任务真正需要时才读取更深的 region detail。
+- 任何用于 view-mutating intent 的 GUI state，都应配套 revision/precondition 检查。
+
+这样 GUI state 足够支持正确控制，但又不完整到让 TUI 依赖 layout internals。
+
+## Intent-Based GUI Tools / 基于意图的 GUI 工具
+
+TUI 应表达意图，而不是远程命令布局。主要 tool surface 是：
 
 ```ts
 type GuiTool =
@@ -212,11 +262,11 @@ type GuiTool =
   | gui.watch;
 ```
 
-`gui.list/read/search/stat/watch` are read-only state operations. `gui.present/ask_user/notify/set_status/apply_batch` are intent operations. Lower-level names such as `gui.show_table` or `gui.show_artifact` can exist as host-specific aliases, but the stable design uses intent tools.
+`gui.list/read/search/stat/watch` 是只读 state operations。`gui.present/ask_user/notify/set_status/apply_batch` 是 intent operations。`gui.show_table` 或 `gui.show_artifact` 这类低层名称可以作为 host-specific alias 存在，但稳定设计使用 intent tools。
 
 ## `gui.present`
 
-Display or update something. GUI chooses panel, renderer, queueing, focus and conflict behavior.
+展示或更新某个内容。GUI 负责选择 panel、renderer、queueing、focus 和 conflict behavior。
 
 ```ts
 gui.present({
@@ -238,7 +288,7 @@ gui.present({
 })
 ```
 
-Examples:
+示例：
 
 ```ts
 gui.present({
@@ -257,9 +307,30 @@ gui.present({
 })
 ```
 
+## 对象引用与右侧预览
+
+消息、报告和工具结果中的对象引用应优先使用结构化 refs，而不是只把路径写成普通文本。支持的核心 ref 类型包括 artifact、file、folder、run、execution unit、URL 和 future GUI-local view refs。
+
+显式引用示例：
+
+```text
+artifact:artifacts/report.md
+file:workspace/results/table.csv
+run:run-123
+```
+
+裸文件名也可以升级为对象引用，但必须先解析到当前 session 的真实 artifact 或 workspace file。例如 `arxiv_multi_agent_report_20260521.md` 只有在能匹配到现有 artifact/file 时，才渲染为可点击引用；否则仍保留为普通 inline code。
+
+右侧预览规则：
+
+- 点击可解析 object reference 时，GUI 聚焦右侧面板并选择合适 renderer。
+- renderer 选择来自 `/gui/capabilities/presentation.json` 与 `/gui/renderers/<componentId>.json`，例如 Markdown 文件优先进入 report/markdown viewer。
+- TUI 可以显式调用 `gui.present({ intent: 'focus-existing', ref, hint })`，也可以只提供结构化 refs，由 GUI 本地处理点击和焦点。
+- 预览只改变 GUI view state，不读取或修改任务状态。预览失败不能被 GUI 当作任务失败；只能作为展示错误或缺失引用提示。
+
 ## `gui.ask_user`
 
-Ask for confirmation or input. User responses are sent back to TUI as text.
+请求确认或输入。用户响应必须作为文本发回 TUI。
 
 ```ts
 gui.ask_user({
@@ -272,7 +343,7 @@ gui.ask_user({
 })
 ```
 
-For confirmation:
+确认示例：
 
 ```ts
 gui.ask_user({
@@ -287,7 +358,7 @@ gui.ask_user({
 
 ## `gui.notify`
 
-Show a non-blocking notification.
+展示非阻塞通知。
 
 ```ts
 gui.notify({
@@ -298,7 +369,7 @@ gui.notify({
 
 ## `gui.set_status`
 
-Set shell or run status. This is presentation state, not task truth.
+设置 shell 或 run status。这是 presentation state，不是 task truth。
 
 ```ts
 gui.set_status({
@@ -307,9 +378,69 @@ gui.set_status({
 })
 ```
 
+`gui.set_status` 只设置展示状态，不代表结果真伪。结果可信度必须通过独立的 `confidence` / `confidenceExplanation` 字段表达。
+
+## Confidence / 置信度
+
+`confidence` 属于 TUI/verifier/harness 输出。GUI 不计算、不补默认值、不从 stdout/stderr 或措辞中推断可信度。
+
+推荐 payload：
+
+```ts
+type ResultConfidence = {
+  confidence?: number; // 0..1；缺失表示未评分
+  confidenceExplanation?: {
+    evidenceLevel:
+      | 'verified'
+      | 'tool-backed'
+      | 'reference-backed'
+      | 'model-inference'
+      | 'blocked'
+      | 'no-result';
+    sourceScore?: number;
+    evidenceDefault?: number;
+    evidenceCap?: number;
+    penalties?: Array<{ reason: string; delta: number }>;
+    summary: string;
+  };
+};
+```
+
+推荐公式：
+
+```text
+effectiveConfidence = clamp(min(sourceScore ?? evidenceDefault, evidenceCap) - sum(penalties), 0, 1)
+```
+
+证据等级建议：
+
+| evidenceLevel | evidenceDefault | evidenceCap | 使用场景 |
+|---|---:|---:|---|
+| `verified` | 0.90 | 0.95 | verifier 通过、复现成功或有可审计输出 refs。 |
+| `tool-backed` | 0.75 | 0.85 | 工具/provider 执行有 audit refs，但未完整复现。 |
+| `reference-backed` | 0.65 | 0.75 | 文献、网页、文件引用支撑，但没有执行验证。 |
+| `model-inference` | 0.45 | 0.55 | 主要来自模型推断或弱证据解释。 |
+| `blocked` | 0.20 | 0.35 | 任务被阻断、验证失败、证据缺失或 claim 冲突。 |
+| `no-result` | 0.00 | 0.00 | 没有结果，不应展示为可信结论。 |
+
+常见扣分项：
+
+- 缺少直接 evidence ref：`0.15`
+- 来源过期或未验证：`0.10`
+- verifier 失败：`0.25`
+- partial/zero-result：`0.20`
+- 关键 claim 冲突未解决：`0.20`
+
+GUI 展示规则：
+
+- `confidence` 缺失时不显示百分比，或显示“未评分”。
+- `confidence` 为 `0` 时可以显示低可信，但必须有解释。
+- 任何百分比都必须能追溯到 `confidenceExplanation` 或同等 verifier/harness 记录。
+- claim-level confidence、run status 和 GUI status 是三个不同概念，不得互相替代。
+
 ## `gui.apply_batch`
 
-Apply multiple presentation operations as a transaction. This is only for GUI view state, never workspace state.
+把多个 presentation operations 作为事务应用。它只作用于 GUI view state，绝不作用于 workspace state。
 
 ```ts
 gui.apply_batch({
@@ -323,11 +454,11 @@ gui.apply_batch({
 })
 ```
 
-Use this when “close current view, open diff, focus diff” should not partially apply.
+当“关闭当前视图、打开 diff、聚焦 diff”这类操作不应部分应用时使用。
 
 ## `gui.get_context`
 
-Request a progressive GUI context snapshot.
+请求一个分级 GUI context snapshot。
 
 ```ts
 gui.get_context({
@@ -336,13 +467,13 @@ gui.get_context({
 })
 ```
 
-Default agent context should include shell + hot-region only. Region detail and debug are on-demand.
+默认 agent context 只应包含 shell + hot-region。Region detail 和 debug 都是按需读取。
 
-Prefer `gui.get_context` for small snapshots and `gui.list/read/search/stat/watch` when the TUI wants filesystem-like exploration of GUI state.
+小 snapshot 优先用 `gui.get_context`；当 TUI 想像文件系统一样探测 GUI state 时，优先用 `gui.list/read/search/stat/watch`。
 
-## Preconditions
+## Preconditions / 前置条件
 
-View-mutating or interruptive calls should include preconditions. GUI may reject or defer if the user state changed.
+会改变视图或打断用户的调用应携带 preconditions。如果用户状态已经变化，GUI 可以拒绝或延迟执行。
 
 ```ts
 type GuiPrecondition = {
@@ -356,15 +487,15 @@ type GuiPrecondition = {
 };
 ```
 
-Suggested rules:
+建议规则：
 
-- `notify` and `set_status` are safe and usually need no precondition.
-- `present` is view-mutating and should include preconditions when targeting hot region.
-- `ask_user` and destructive-looking batch changes are interruptive and should include preconditions.
+- `notify` 和 `set_status` 通常是安全的，一般不需要 precondition。
+- `present` 会改变视图；当它目标指向 hot region 时应包含 preconditions。
+- `ask_user` 和看起来具有破坏性的 batch changes 是 interruptive 的，应包含 preconditions。
 
-## Tool Results and Negotiation
+## Tool Results and Negotiation / 工具结果与协商
 
-GUI tool calls are not fire-and-forget. GUI returns whether it applied the intent, deferred it, or suggests alternatives.
+GUI tool call 不是 fire-and-forget。GUI 必须返回 intent 是否已应用、是否延迟，或是否建议替代方案。
 
 ```ts
 type GuiToolResult = {
@@ -392,11 +523,11 @@ type GuiSuggestion =
   | { action: 'notify-only' };
 ```
 
-This turns GUI control into negotiation instead of blind remote control.
+这会把 GUI 控制变成协商，而不是盲目的远程控制。
 
 ## GUI Action
 
-Buttons and affordances still only contain text commands:
+按钮和 affordances 仍然只包含文本命令：
 
 ```ts
 type GuiAction = {
@@ -406,32 +537,32 @@ type GuiAction = {
 };
 ```
 
-User clicks send `commandText` back to TUI. GUI does not call business functions.
+用户点击后把 `commandText` 发回 TUI。GUI 不调用业务函数。
 
-## GUI Presentation Autonomy
+## GUI Presentation Autonomy / GUI 展示自治
 
-GUI may contain deterministic presentation logic. This does not make it a task agent.
+GUI 可以包含确定性的 presentation logic，但这不会让它变成 task agent。
 
-Allowed GUI logic:
+允许的 GUI logic：
 
-- choose renderer and placement for `gui.present`;
-- protect a user who is editing, selecting or dragging;
-- queue an interruptive intent behind an open modal;
-- convert low-level UI events into semantic hot-region updates;
-- expose bounded resource summaries and search indexes;
-- perform GUI-local all-or-nothing batches;
-- return suggestions when an intent cannot be applied safely.
+- 为 `gui.present` 选择 renderer 和 placement。
+- 保护正在 editing、selecting 或 dragging 的用户。
+- 把 interruptive intent 排到已打开 modal 后面。
+- 将低层 UI events 转成 semantic hot-region updates。
+- 暴露有边界的 resource summaries 和 search indexes。
+- 执行 GUI-local all-or-nothing batches。
+- 当 intent 无法安全应用时返回 suggestions。
 
-Forbidden GUI logic:
+禁止的 GUI logic：
 
-- infer the user's task goal with an LLM;
-- decide which scientific algorithm, provider, plugin or capability should run;
-- repair failed workspace execution;
-- judge whether the user-level task is complete;
-- read workspace files to choose business next steps;
-- mutate workspace state except through text commands sent back to TUI or explicit TUI-owned tools.
+- 用 LLM 推断用户的任务目标。
+- 决定应该运行哪个科学算法、provider、plugin 或 capability。
+- 修复失败的 workspace execution。
+- 判断 user-level task 是否完成。
+- 读取 workspace 文件来选择业务下一步。
+- 除了发回 TUI 的文本命令或显式 TUI-owned tools 之外，直接修改 workspace state。
 
-The short rule is: GUI is smart about presentation, dumb about tasks.
+一句话规则：GUI 对展示聪明，对任务无知。
 
 ## 禁止事项
 

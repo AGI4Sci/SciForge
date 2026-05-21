@@ -914,6 +914,48 @@ export const webE2eCaseRegistry: WebE2eCaseDefinition[] = [
       return summaryFor(this, context);
     },
   },
+  {
+    id: 'SA-WEB-39',
+    title: 'GUI presentation catalog discovery',
+    tags: finalCaseTags('SA-WEB-39', ['gui-presentation-catalog-discovery', 'presentation-catalog', 'gui-renderer-resources', 'smoke:browser-multiturn']),
+    migratedLegacyScripts: ['smoke:browser-multiturn'],
+    migratedLegacySteps: [
+      'TUI discovers GUI renderer capabilities only through /gui/capabilities/presentation.json and /gui/renderers/<componentId>.json',
+      'gui.search remains bounded to renderer/viewer semantics and does not emit task capability ranking or provider routing',
+      'gui.present focus-existing uses discovered renderer metadata rather than React imports or GUI-private state',
+    ],
+    async run(context) {
+      return summaryFor(this, context);
+    },
+  },
+  {
+    id: 'SA-WEB-40',
+    title: 'Inline object reference right-panel preview',
+    tags: finalCaseTags('SA-WEB-40', ['inline-reference-right-panel-preview', 'object-reference-resolution', 'right-panel-preview', 'smoke:browser-multiturn']),
+    migratedLegacyScripts: ['smoke:browser-multiturn'],
+    migratedLegacySteps: [
+      'resolvable artifact/file/run inline code references become clickable object references',
+      'unique bare filenames can focus the right panel while duplicate or unresolved code stays plain text',
+      'preview failures are presentation errors only and cannot change task truth or verification state',
+    ],
+    async run(context) {
+      return summaryFor(this, context);
+    },
+  },
+  {
+    id: 'SA-WEB-41',
+    title: 'Confidence source and explanation',
+    tags: finalCaseTags('SA-WEB-41', ['confidence-source-explanation', 'confidence-no-defaults', 'structured-confidence-explanation', 'smoke:browser-multiturn']),
+    migratedLegacyScripts: ['smoke:browser-multiturn'],
+    migratedLegacySteps: [
+      'native assistant messages without verifier or harness confidence show no default percentage',
+      'scored results render confidence only when the runtime payload supplies confidence and structured confidenceExplanation',
+      'partial or contradictory evidence lowers confidence through verifier-supplied penalties instead of GUI calculation',
+    ],
+    async run(context) {
+      return summaryFor(this, context);
+    },
+  },
 ];
 
 export function selectWebE2eCases(options: { tags?: string[]; cases?: string[] } = {}): WebE2eCaseDefinition[] {

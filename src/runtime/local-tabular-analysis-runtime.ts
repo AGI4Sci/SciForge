@@ -114,7 +114,7 @@ export async function tryRunLocalTabularAnalysisRuntime(
   const artifactId = `tabular-analysis-${id}`;
   const sourceDescription = table.sourceRef ? `referenced workspace CSV/TSV (${table.sourceRef})` : 'inline CSV/TSV in the current turn';
   const message = [
-    `Reproducible tabular analysis completed from the ${sourceDescription}; no AgentServer generation was started.`,
+    `Reproducible tabular analysis completed from the ${sourceDescription}; no remote backend generation was started.`,
     '',
     `Primary model: ${stats.primaryModel.formula}. Estimated ${stats.primaryModel.comparisonLabel} coefficient: ${round(stats.primaryModel.primaryGroupCoefficient)} ${stats.unitLabel}.`,
     `Approximate 95% CI: [${stats.primaryModel.diagnostics.confidenceInterval95.join(', ')}] ${stats.unitLabel}; approximate p=${formatPValue(stats.primaryModel.diagnostics.pValueApprox)}.`,
@@ -234,7 +234,7 @@ async function tryRunLocalTabularFollowupRuntime(
   const wantsChart = /chart|plot|figure|svg|visual|图表|图片|可视/i.test(request.prompt);
   const wantsDiagnostics = /confidence|interval|p[-\s]?value|p\s*值|置信|显著|sample size|样本|balance|imbalance|batch|site|center|diagnostic|诊断|平衡|批次|站点/i.test(request.prompt);
   const message = [
-    `Current tabular analysis follow-up answered from existing artifacts in ${rootRel}; no AgentServer generation was started.`,
+    `Current tabular analysis follow-up answered from existing artifacts in ${rootRel}; no remote backend generation was started.`,
     coefficient !== undefined ? `Primary model: ${comparisonLabel} coefficient ${round(coefficient)} ${unitLabel}.` : undefined,
     wantsCleaning && qc ? `QC: ${compactMarkdownBullets(qc)}` : undefined,
     wantsCleaning && cleaning ? `Cleaning strategy: ${compactMarkdownBullets(cleaning)}` : undefined,
@@ -268,7 +268,7 @@ async function tryRunLocalTabularFollowupRuntime(
     confidence: 0.86,
     claimType: 'analysis',
     evidenceLevel: 'runtime',
-    reasoningTrace: 'SciForge local tabular analysis follow-up runtime reused current analysis report/results refs and answered a continuation question without restarting AgentServer or duplicating analysis.',
+    reasoningTrace: 'SciForge local tabular analysis follow-up runtime reused current analysis report/results refs and answered a continuation question without restarting the remote backend or duplicating analysis.',
     displayIntent: {
       protocolStatus: 'protocol-success',
       taskOutcome: 'satisfied',

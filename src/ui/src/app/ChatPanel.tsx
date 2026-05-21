@@ -958,7 +958,7 @@ export function ChatPanel({
                     run {messageRunId.replace(/^run-/, '').slice(0, 8)}
                   </button>
                 ) : null}
-                {message.confidence ? <ConfidenceBar value={message.confidence} /> : null}
+                {message.confidence !== undefined ? <ConfidenceBar value={message.confidence} /> : null}
                 {message.evidence ? <EvidenceTag level={message.evidence} /> : null}
                 {message.claimType ? <ClaimTag type={message.claimType} /> : null}
                 <MessageProvenanceBadge message={message} />

@@ -28,7 +28,7 @@ export function formatClientErrorMessage(shape: SciForgeClientErrorShape) {
   return `${shape.title}：${shape.reason}${actions} [${shape.diagnosticRef}]`;
 }
 
-export function recoverActionsForService(service: 'workspace' | 'agentserver') {
+export function recoverActionsForService(service: 'workspace' | 'runtime') {
   if (service === 'workspace') {
     return [
       '确认 Workspace Writer URL 正确',
@@ -37,8 +37,8 @@ export function recoverActionsForService(service: 'workspace' | 'agentserver') {
     ];
   }
   return [
-    '确认 AgentServer URL 正确',
-    '启动 http://127.0.0.1:18080 对应服务',
+    '确认 runtime backend URL 正确',
+    '启动对应 runtime backend 服务',
     '可先使用当前场景 workspace/evolved capability 或 workspace runtime 继续',
   ];
 }

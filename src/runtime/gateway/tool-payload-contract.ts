@@ -5,7 +5,7 @@ import { TOOL_PAYLOAD_ARRAY_FIELDS } from '@sciforge-ui/runtime-contract/tool-pa
 export function isToolPayload(value: unknown): value is ToolPayload {
   if (!isRecord(value)) return false;
   return typeof value.message === 'string'
-    && typeof value.confidence === 'number'
+    && (!('confidence' in value) || typeof value.confidence === 'number')
     && typeof value.claimType === 'string'
     && typeof value.evidenceLevel === 'string'
     && typeof value.reasoningTrace === 'string'

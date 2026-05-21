@@ -135,7 +135,7 @@ assertSourceConcepts('R-MEM-01 long-context case tests', longContextTest, [
 
 assert.ok(
   currentProjectMappingsForSaWebTag('SA-WEB-29').some(
-    (mapping) => mapping.taskId === 'R-RESUME-01' && mapping.contractAssertions.includes('native-session-artifact-followup'),
+    (mapping) => String(mapping.taskId) === 'R-RESUME-01' && mapping.contractAssertions.includes('native-session-artifact-followup'),
   ),
   'R-RESUME-01 must map to SA-WEB-29 native session artifact follow-up',
 );
@@ -146,14 +146,14 @@ for (const [taskId, assertion] of [
 ] as const) {
   assert.ok(
     currentProjectMappingsForSaWebTag('SA-WEB-37').some(
-      (mapping) => mapping.taskId === taskId && mapping.contractAssertions.includes(assertion),
+      (mapping) => String(mapping.taskId) === taskId && mapping.contractAssertions.includes(assertion),
     ),
     `${taskId} must map to SA-WEB-37 ${assertion}`,
   );
 }
 assert.ok(
   currentProjectMappingsForSaWebTag('SA-WEB-30').some(
-    (mapping) => mapping.taskId === 'R-MEM-01' && mapping.contractAssertions.includes('long-context-constraint-stability'),
+    (mapping) => String(mapping.taskId) === 'R-MEM-01' && mapping.contractAssertions.includes('long-context-constraint-stability'),
   ),
   'R-MEM-01 must map to SA-WEB-30 long-context constraint stability',
 );

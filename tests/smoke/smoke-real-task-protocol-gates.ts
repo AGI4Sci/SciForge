@@ -4,71 +4,80 @@ import { join } from 'node:path';
 
 import { assertRealTaskProjectBoardTask } from './real-task-project-board.js';
 import {
-  CURRENT_PROJECT_WEB_E2E_COVERAGE,
   currentProjectMappingsForSaWebTag,
 } from './web-e2e/case-tags.js';
 
 const root = process.cwd();
-const [projectText, packageJson, registryText, guiActionCase, guiResourceCase, askUserCase] = await Promise.all([
+const [
+  projectText,
+  packageJson,
+  guiProtocol,
+  guiProtocolTest,
+  manifestTest,
+  inlineRefs,
+  messageContent,
+  messageContentTest,
+  responseNormalization,
+  responseNormalizationTest,
+  resultPresentation,
+  resultPresentationTest,
+] = await Promise.all([
   readText('PROJECT.md'),
   readJson<{ scripts?: Record<string, string> }>('package.json'),
-  readText('tests/smoke/web-e2e/case-registry.ts'),
-  readText('tests/smoke/web-e2e/cases/gui-action-command-trace.ts'),
-  readText('tests/smoke/web-e2e/cases/gui-resource-probing.ts'),
-  readText('tests/smoke/web-e2e/cases/gui-ask-user-clarification.ts'),
+  readText('src/ui/src/app/guiProtocol.ts'),
+  readText('src/ui/src/app/guiProtocol.test.ts'),
+  readText('src/runtime/codex/gui-extension-manifest.test.ts'),
+  readText('packages/support/object-references/inline-references.ts'),
+  readText('src/ui/src/app/chat/MessageContent.tsx'),
+  readText('src/ui/src/app/chat/MessageContent.test.tsx'),
+  readText('src/ui/src/api/agentClient/responseNormalization.ts'),
+  readText('src/ui/src/api/agentClient/responseNormalization.test.ts'),
+  readText('packages/contracts/runtime/result-presentation.ts'),
+  readText('packages/contracts/runtime/result-presentation.test.ts'),
 ]);
 
 assert.equal(
   packageJson.scripts?.['smoke:real-task-protocol-gates'],
   'tsx tests/smoke/smoke-real-task-protocol-gates.ts',
-  'package.json must expose the protocol real-task gate',
+  'package.json must expose the GUI/TUI real-task gate',
 );
 
-const proto01 = currentProjectMappingsForSaWebTag('SA-WEB-28').find((mapping) => mapping.taskId === 'R-PROTO-01');
-assert.ok(proto01, 'R-PROTO-01 must map to SA-WEB-28');
-assert.ok(proto01.contractAssertions.includes('text-only-gui-action'), 'R-PROTO-01 must require text-only GUI action command trace coverage');
-
-const proto02 = currentProjectMappingsForSaWebTag('SA-WEB-23').find((mapping) => mapping.taskId === 'R-PROTO-02');
-assert.ok(proto02, 'R-PROTO-02 must map to SA-WEB-23');
-assert.ok(proto02.contractAssertions.includes('progressive-gui-resource-probing'), 'R-PROTO-02 must require progressive GUI resource probing');
-
-const proto03 = currentProjectMappingsForSaWebTag('SA-WEB-24').find((mapping) => mapping.taskId === 'R-PROTO-03');
-assert.ok(proto03, 'R-PROTO-03 must map to SA-WEB-24');
-assert.ok(proto03.contractAssertions.includes('gui-ask-user-clarification'), 'R-PROTO-03 must require gui.ask_user clarification coverage');
-
-for (const taskId of ['R-PROTO-01', 'R-PROTO-02', 'R-PROTO-03'] as const) {
+for (const taskId of ['R-PROTO-04', 'R-PROTO-05', 'R-VERIFY-02'] as const) {
   assertRealTaskProjectBoardTask(projectText, taskId, { root });
 }
 
-const currentCoverageIds = new Set(CURRENT_PROJECT_WEB_E2E_COVERAGE.map((mapping) => mapping.taskId));
-for (const taskId of ['R-MEM-01', 'R-PROTO-01', 'R-PROTO-02', 'R-PROTO-03', 'R-RESUME-01'] as const) {
-  assert.equal(
-    currentCoverageIds.has(taskId),
-    true,
-    `${taskId}: protocol/resume/memory contract must remain covered as current-project web-e2e coverage expands`,
-  );
-}
+const proto04 = currentProjectMappingsForSaWebTag('SA-WEB-39').find((mapping) => mapping.taskId === 'R-PROTO-04');
+assert.ok(proto04, 'R-PROTO-04 must map to SA-WEB-39');
+assert.ok(proto04.contractAssertions.includes('gui-presentation-catalog-discovery'), 'R-PROTO-04 must require GUI presentation catalog discovery');
 
-assert.match(registryText, /id:\s*'SA-WEB-28'[\s\S]*Text-only GUI action command trace/, 'SA-WEB-28 must be registered');
-assert.match(registryText, /id:\s*'SA-WEB-23'[\s\S]*Progressive GUI resource probing/, 'SA-WEB-23 must be registered');
-assert.match(registryText, /id:\s*'SA-WEB-24'[\s\S]*gui\.ask_user clarification commandText/, 'SA-WEB-24 must be registered');
+const proto05 = currentProjectMappingsForSaWebTag('SA-WEB-40').find((mapping) => mapping.taskId === 'R-PROTO-05');
+assert.ok(proto05, 'R-PROTO-05 must map to SA-WEB-40');
+assert.ok(proto05.contractAssertions.includes('inline-reference-right-panel-preview'), 'R-PROTO-05 must require inline object reference right-panel preview');
 
-assert.match(guiActionCase, /open[\s\S]*retry[\s\S]*export[\s\S]*recover[\s\S]*delete/, 'R-PROTO-01 must cover open/retry/export/recover/delete visible GUI actions');
-assert.match(guiActionCase, /terminal-equivalent commandText|terminalEquivalent/, 'R-PROTO-01 GUI actions must reduce to terminal-equivalent commandText');
-assert.match(guiActionCase, /refs[\s\S]*auditTraceRef/, 'R-PROTO-01 command dispatches must carry refs and audit trace');
-assert.match(guiActionCase, /hidden business payload|businessPayload|localBusinessExecution/i, 'R-PROTO-01 must forbid hidden GUI business payload/local execution');
-assert.doesNotMatch(guiActionCase, /businessPayload:\s*\{[^}]/, 'R-PROTO-01 fixture must not include a hidden business payload');
+const verify02 = currentProjectMappingsForSaWebTag('SA-WEB-41').find((mapping) => mapping.taskId === 'R-VERIFY-02');
+assert.ok(verify02, 'R-VERIFY-02 must map to SA-WEB-41');
+assert.ok(verify02.contractAssertions.includes('confidence-source-explanation'), 'R-VERIFY-02 must require confidence source and explanation coverage');
 
-assert.match(guiResourceCase, /shell[\s\S]*hot-region[\s\S]*region-detail/, 'R-PROTO-02 must cover progressive resource order');
-assert.match(guiResourceCase, /full DOM|debug snapshot|debug/i, 'R-PROTO-02 must forbid full DOM/debug snapshots');
-assert.match(guiResourceCase, /commandText/, 'R-PROTO-02 narrow question must be represented as commandText');
-assert.doesNotMatch(guiResourceCase, /readFullDom|fullDomAllowed:\s*true/, 'R-PROTO-02 must not allow full DOM reads');
+assert.match(guiProtocol, /\/gui\/capabilities\/presentation\.json/, 'R-PROTO-04 must expose the presentation catalog resource');
+assert.match(guiProtocol, /\/gui\/renderers\/<componentId>\.json|\/gui\/renderers\//, 'R-PROTO-04 must expose renderer resources');
+assert.match(guiProtocol, /uiComponentManifests/, 'R-PROTO-04 catalog must come from package manifests');
+assert.match(guiProtocol, /renderer['"]\s*\|\s*['"]artifact-type['"]\s*\|\s*['"]preview-kind/, 'R-PROTO-04 search must index renderer/artifact/preview semantics');
+assert.match(guiProtocolTest, /presentation catalog and renderer resources/, 'R-PROTO-04 protocol tests must cover presentation resources');
+assert.match(manifestTest, /without task rankings or workspace mutation/, 'R-PROTO-04 runtime MCP tests must reject task rankings and workspace mutation');
 
-assert.match(askUserCase, /gui\.ask_user/, 'R-PROTO-03 must include gui.ask_user intent evidence');
-assert.match(askUserCase, /terminal-equivalent commandText|commandText/, 'R-PROTO-03 user confirmation must return as commandText');
-assert.match(askUserCase, /local business function|localBusinessFunction/i, 'R-PROTO-03 must forbid GUI local business functions');
+assert.match(inlineRefs, /resolveInlineObjectReferenceToken/, 'R-PROTO-05 must use a shared inline object reference resolver');
+assert.match(inlineRefs, /uniqueReferencesByIdentity/, 'R-PROTO-05 must keep duplicate basename references ambiguous');
+assert.match(messageContent, /onObjectReferenceFocus/, 'R-PROTO-05 message markdown must route clicks to the right-panel focus callback');
+assert.match(messageContentTest, /unique bare filenames and leaves ambiguous code alone/, 'R-PROTO-05 tests must cover unique and ambiguous bare filenames');
 
-console.log('[ok] real-task protocol gates cover R-PROTO-01/02/03 through SA-WEB-28/23/24 text-only action, progressive resource, and gui.ask_user commandText contracts');
+assert.doesNotMatch(responseNormalization, /0\.78/, 'R-VERIFY-02 normalizer must not synthesize the old 78% confidence');
+assert.match(responseNormalizationTest, /does not synthesize confidence when runtime payload is unscored/, 'R-VERIFY-02 tests must cover unscored runtime payloads');
+assert.match(resultPresentation, /evidenceDefault/, 'R-VERIFY-02 contract must preserve evidenceDefault');
+assert.match(resultPresentation, /evidenceCap/, 'R-VERIFY-02 contract must preserve evidenceCap');
+assert.match(resultPresentation, /penalties/, 'R-VERIFY-02 contract must preserve verifier penalties');
+assert.match(resultPresentationTest, /structured confidence explanation preserves verifier scoring fields/, 'R-VERIFY-02 tests must cover structured confidence explanation');
+
+console.log('[ok] real-task GUI/TUI gates cover R-PROTO-04, R-PROTO-05, and R-VERIFY-02 catalog, inline refs, and confidence-source contracts');
 
 async function readText(path: string): Promise<string> {
   return readFile(join(root, path), 'utf8');

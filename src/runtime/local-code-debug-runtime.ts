@@ -31,7 +31,7 @@ export async function tryRunLocalCodeDebugRuntime(
     type: 'local-code-debug-runtime',
     source: 'workspace-runtime-gateway',
     status: 'started',
-    message: 'Running bounded local pytest repair before AgentServer dispatch.',
+    message: 'Running bounded local pytest repair before remote backend dispatch.',
     detail: pytest.command,
   });
 
@@ -65,7 +65,7 @@ export async function tryRunLocalCodeDebugRuntime(
   const artifactId = `local-code-debug-${id}`;
   const message = [
     completed
-      ? 'Local code-debug runtime completed the requested bounded repair without AgentServer generation.'
+      ? 'Local code-debug runtime completed the requested bounded repair without remote backend generation.'
       : 'Local code-debug runtime could not complete the requested repair.',
     '',
     'Patch summary:',
@@ -82,7 +82,7 @@ export async function tryRunLocalCodeDebugRuntime(
     'Remaining risks:',
     completed
       ? '- The repair is intentionally narrow and derived from local failing tests plus source/test contract cues; broader scientific validity still needs domain review.'
-      : '- The local fallback only handles small deterministic pytest repairs; use AgentServer after provider credentials are restored for broader debugging.',
+      : '- The local fallback only handles small deterministic pytest repairs; use Runtime Codex after provider credentials are restored for broader debugging.',
   ].join('\n');
 
   emitWorkspaceRuntimeEvent(callbacks, {
@@ -143,7 +143,7 @@ export async function tryRunLocalCodeDebugRuntime(
         ? `Rerun passed: ${pytest.command}.`
         : `Rerun did not pass: ${pytest.command}.`,
       evidenceRefs: [`execution-unit:EU-${artifactId}-rerun`, ...changedRefs],
-      repairHints: completed ? [] : ['Restore AgentServer credentials for broader repair or inspect pytest stderr.'],
+      repairHints: completed ? [] : ['Restore Runtime Codex provider credentials for broader repair or inspect pytest stderr.'],
       diagnostics: {
         required: false,
         command: pytest.command,

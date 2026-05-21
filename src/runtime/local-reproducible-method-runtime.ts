@@ -23,7 +23,7 @@ export async function tryRunLocalReproducibleMethodRuntime(
     'python - <<\'PY\'\nimport pandas as pd\n# Load the CSV artifact and rerun the bootstrap sensitivity check from the SciForge report.\nPY',
   ].filter((line): line is string => Boolean(line));
   const message = [
-    'Existing reproducible method exported from current artifacts; no AgentServer generation was started.',
+    'Existing reproducible method exported from current artifacts; no remote backend generation was started.',
     bootstrapClaim && /final|conclusion|bootstrap|CI|结论|置信区间/i.test(request.prompt)
       ? `Final analysis conclusion from restored artifacts: ${bootstrapClaim}`
       : undefined,
@@ -35,7 +35,7 @@ export async function tryRunLocalReproducibleMethodRuntime(
     ...commands.map((line) => `- \`${line.replace(/\n/g, '\\n')}\``),
     '',
     '## Recovery note',
-    'The export was satisfied by current artifact refs. If a notebook file is required later, convert the script with a bounded local converter rather than dispatching AgentServer generation.',
+    'The export was satisfied by current artifact refs. If a notebook file is required later, convert the script with a bounded local converter rather than dispatching remote backend generation.',
   ].filter((line): line is string => Boolean(line)).join('\n');
   emitWorkspaceRuntimeEvent(callbacks, {
     type: 'local-reproducible-method-runtime',
@@ -49,7 +49,7 @@ export async function tryRunLocalReproducibleMethodRuntime(
     confidence: 0.76,
     claimType: 'analysis',
     evidenceLevel: 'runtime',
-    reasoningTrace: 'SciForge local reproducible-method runtime reused existing script/dataset artifact refs without AgentServer generation.',
+    reasoningTrace: 'SciForge local reproducible-method runtime reused existing script/dataset artifact refs without remote backend generation.',
     displayIntent: {
       protocolStatus: 'protocol-success',
       taskOutcome: 'satisfied',

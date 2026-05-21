@@ -23,6 +23,7 @@ import {
   referenceKindForWorkspaceFileLike,
   referenceKindForWorkspacePreviewKind,
   referenceToPreviewTarget,
+  resolveInlineObjectReferenceToken,
   syntheticArtifactForObjectReference,
   toWorkspaceRelativePath,
   withComposerMarker,
@@ -218,6 +219,15 @@ assert.equal(inlineRefs[0].runId, 'run-inline');
 assert.deepEqual(inlineRefs[1].actions, ['focus-right-pane', 'reveal-in-folder', 'copy-path', 'pin']);
 assert.equal(inlineRefs[1].provenance?.path, 'reports/final.md');
 assert.equal(inlineRefs[2].status, 'external');
+
+assert.equal(resolveInlineObjectReferenceToken('artifact:artifact-1', [artifactRef])?.ref, 'artifact:artifact-1');
+assert.equal(resolveInlineObjectReferenceToken('reports/final.md', [fileRef])?.ref, 'file:reports/final.md');
+assert.equal(resolveInlineObjectReferenceToken('final.md', [fileRef])?.ref, 'file:reports/final.md');
+assert.equal(resolveInlineObjectReferenceToken('duplicate.md', [
+  { ...fileRef, id: 'file-a', ref: 'file:alpha/duplicate.md', provenance: { path: 'alpha/duplicate.md' } },
+  { ...fileRef, id: 'file-b', ref: 'file:beta/duplicate.md', provenance: { path: 'beta/duplicate.md' } },
+]), undefined);
+assert.equal(resolveInlineObjectReferenceToken('not-a-real-output.md', [fileRef]), undefined);
 
 const linked = linkifyObjectReferences(
   '打开 file:reports/final.md 或 artifact-1。',

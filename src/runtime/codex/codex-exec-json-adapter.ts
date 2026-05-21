@@ -15,7 +15,7 @@ import {
   scrubRuntimeCodexEventForAudit,
   type RuntimeCodexAuditBundle,
 } from './codex-runtime-audit-bundle.js';
-import { prepareRuntimeGuiExtensionInjection } from './gui-extension-manifest.js';
+import { defaultGuiExtensionStatePath, prepareRuntimeGuiExtensionInjection } from './gui-extension-manifest.js';
 import { loadGuiExtensionSnapshot } from './gui-extension-state.js';
 
 const RUNTIME_CODEX_EXEC_ISOLATION_ARGS = ['--skip-git-repo-check', '--ignore-rules'];
@@ -278,13 +278,10 @@ function guiExtensionOptions(
   if (options?.enabled === false) return options;
   return {
     ...options,
-    statePath: options?.statePath ?? join(
-      input.workspace,
-      '.sciforge',
-      'runtime-gui-extension-state',
-      input.commandId,
-      `${input.attemptId}.json`,
-    ),
+    statePath: options?.statePath ?? defaultGuiExtensionStatePath({
+      commandId: input.commandId,
+      attemptId: input.attemptId,
+    }),
   };
 }
 

@@ -254,7 +254,7 @@ test('local code debug follow-up summarizes prior verified artifact without back
       },
       data: {
         markdown: [
-          'Local code-debug runtime completed the requested bounded repair without AgentServer generation.',
+          'Local code-debug runtime completed the requested bounded repair without remote backend generation.',
           '',
           'Patch summary:',
           '- stats_impl.py: doc_kernel: wrapped denominator in np.sqrt because the local contract/tests expected a square-root denominator.',
@@ -295,7 +295,7 @@ test('local code debug follow-up can reuse bounded multi-turn message previews',
         id: 'assistant-prior',
         role: 'assistant',
         contentPreview: [
-          'Local code-debug runtime completed the requested bounded repair without AgentServer generation.',
+          'Local code-debug runtime completed the requested bounded repair without remote backend generation.',
           'Patch summary:',
           '- stats_impl.py: doc_kernel: wrapped denominator in np.sqrt because the local contract/tests expected a square-root denominator.',
           '测试结果:',
@@ -320,7 +320,7 @@ test('local code debug follow-up skips polluted failed continuation records and 
     runs: [{
       id: 'project-local-debug-success',
       response: [
-        'Local code-debug runtime completed the requested bounded repair without AgentServer generation.',
+        'Local code-debug runtime completed the requested bounded repair without remote backend generation.',
         '',
         'Patch summary:',
         '- metric.py: repaired the local metric implementation.',
@@ -375,7 +375,7 @@ test('local code debug follow-up hydrates prior artifact from bounded context re
     },
     data: {
       markdown: [
-        'Local code-debug runtime completed the requested bounded repair without AgentServer generation.',
+        'Local code-debug runtime completed the requested bounded repair without remote backend generation.',
         '',
         'Patch summary:',
         '- solver.py: normalized the denominator using the documented square-root contract.',
@@ -425,7 +425,7 @@ test('local code debug follow-up maps execution-unit refs back to report artifac
     },
     data: {
       markdown: [
-        'Local code-debug runtime completed the requested bounded repair without AgentServer generation.',
+        'Local code-debug runtime completed the requested bounded repair without remote backend generation.',
         '',
         'Patch summary:',
         '- metric.py: repaired the local metric implementation.',
@@ -470,7 +470,7 @@ test('local code debug follow-up uses raw current prompt when enriched prompt co
     },
     data: {
       markdown: [
-        'Local code-debug runtime completed the requested bounded repair without AgentServer generation.',
+        'Local code-debug runtime completed the requested bounded repair without remote backend generation.',
         '',
         'Patch summary:',
         '- enriched.py: reused the prior verified repair report.',
@@ -516,7 +516,7 @@ test('local code debug follow-up hydrates prior artifact from inline agent harne
     },
     data: {
       markdown: [
-        'Local code-debug runtime completed the requested bounded repair without AgentServer generation.',
+        'Local code-debug runtime completed the requested bounded repair without remote backend generation.',
         '',
         'Patch summary:',
         '- model.py: reconciled the implementation with the local test contract.',

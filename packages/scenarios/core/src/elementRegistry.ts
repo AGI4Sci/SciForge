@@ -43,7 +43,7 @@ function buildGeneratedCapabilitySkills(): SkillElement[] {
       kind: 'skill',
       version: '1.0.0',
       label: `Agent backend ${domain} generator`,
-      description: `Use the configured AgentServer/native backend to synthesize a task plan, tool calls, artifacts, and report outputs for open-ended ${domain} scenarios.`,
+      description: `Use the configured TUI-native runtime/backend to synthesize a task plan, tool calls, artifacts, and report outputs for open-ended ${domain} scenarios.`,
       source: 'generated',
       skillDomains: [domain],
       inputContract: {
@@ -284,7 +284,7 @@ function buildFailurePolicies(): FailurePolicyElement[] {
       kind: 'failure-policy',
       version: '1.0.0',
       label: 'Backend unavailable',
-      description: 'The selected runtime, connector, or AgentServer backend is unavailable.',
+      description: 'The selected runtime, connector, or backend is unavailable.',
       source: 'built-in',
       failureMode: 'backend-unavailable',
       recoverActions: ['start-backend', 'select-fallback-runtime', 'save-draft'],

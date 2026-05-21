@@ -38,6 +38,97 @@ test('normalizes verification metadata without leaking Verification footer into 
   assert.equal((raw.verificationResults as Array<Record<string, unknown>>)[0]?.verdict, 'unverified');
 });
 
+test('does not synthesize confidence when runtime payload is unscored', () => {
+  const response = normalizeAgentResponse('literature-evidence-review', '生成未评分回答', {
+    ok: true,
+    data: {
+      run: { id: 'run-unscored-message', status: 'completed' },
+      output: {
+        message: JSON.stringify({
+          message: '这是一个没有 verifier confidence 的普通回答。',
+          claims: [{ id: 'claim-unscored', text: '没有显式 confidence 的 claim。' }],
+          notebook: [{ id: 'note-unscored', title: '未评分记录', desc: '没有显式 confidence 的 notebook 记录。' }],
+          executionUnits: [{ id: 'EU-unscored', tool: 'analysis.task', status: 'done', params: '{}' }],
+          artifacts: [],
+        }),
+      },
+    },
+  });
+
+  assert.equal(response.message.confidence, undefined);
+  assert.deepEqual(response.claims, []);
+  assert.deepEqual(response.notebook, []);
+});
+
+test('preserves only explicit runtime confidence on messages, claims, and notebook rows', () => {
+  const response = normalizeAgentResponse('literature-evidence-review', '生成已评分回答', {
+    ok: true,
+    data: {
+      run: { id: 'run-scored-message', status: 'completed' },
+      output: {
+        message: JSON.stringify({
+          message: '这是 verifier 给出显式 confidence 的回答。',
+          confidence: 0.64,
+          claims: [
+            { id: 'claim-scored', text: '显式评分 claim。', confidence: 0.51, evidenceLevel: 'review' },
+            { id: 'claim-unscored', text: '未评分 claim。' },
+          ],
+          notebook: [
+            { id: 'note-scored', title: '已评分记录', desc: '显式评分 notebook 记录。', confidence: 0.43, claimType: 'fact' },
+            { id: 'note-unscored', title: '未评分记录', desc: '未评分 notebook 记录。' },
+          ],
+          executionUnits: [{ id: 'EU-scored', tool: 'analysis.task', status: 'done', params: '{}' }],
+          artifacts: [],
+        }),
+      },
+    },
+  });
+
+  assert.equal(response.message.confidence, 0.64);
+  assert.deepEqual(response.claims.map((claim) => claim.id), ['claim-scored']);
+  assert.equal(response.claims[0]?.confidence, 0.51);
+  assert.deepEqual(response.notebook.map((record) => record.id), ['note-scored']);
+  assert.equal(response.notebook[0]?.confidence, 0.43);
+});
+
+test('promotes explicit Runtime Codex resultPresentation for chat rendering', () => {
+  const response = normalizeAgentResponse('literature-evidence-review', 'render confidence explanation', {
+    ok: true,
+    data: {
+      run: { id: 'codex-command-confidence-result', status: 'completed' },
+      output: {
+        message: JSON.stringify({
+          message: 'Scored answer.',
+          confidence: 0.83,
+          displayIntent: {
+            resultPresentation: {
+              status: 'complete',
+              answerBlocks: [{ id: 'answer', text: 'Scored answer.' }],
+              confidenceExplanation: {
+                evidenceLevel: 'review',
+                sourceScore: 0.91,
+                evidenceDefault: 0.72,
+                evidenceCap: 0.86,
+                penalties: [{ reason: 'single browser run', delta: -0.03 }],
+                summary: 'Verifier supplied the score.',
+              },
+            },
+          },
+          executionUnits: [{ id: 'EU-scored', tool: 'analysis.task', status: 'done', params: '{}' }],
+          artifacts: [],
+        }),
+      },
+    },
+  });
+
+  const raw = response.run.raw as Record<string, unknown>;
+  const resultPresentation = raw.resultPresentation as Record<string, unknown>;
+  const confidenceExplanation = resultPresentation.confidenceExplanation as Record<string, unknown>;
+  assert.equal(response.message.confidence, 0.83);
+  assert.equal(resultPresentation.status, 'complete');
+  assert.equal(confidenceExplanation.sourceScore, 0.91);
+});
+
 test('normalizes ContractValidationFailure as failed diagnostic output with recover actions and related refs', () => {
   const response = normalizeAgentResponse('literature-evidence-review', '生成报告', {
     ok: true,

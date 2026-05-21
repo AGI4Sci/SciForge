@@ -32,10 +32,12 @@ test('GuiProtocol exposes shell, hot-region, and intent-log resources as bounded
   const intentLog = JSON.parse(gui.read({ path: '/gui/intent-log.json', maxBytes: 2000 }).content) as { entries: unknown[] };
 
   assert.deepEqual(rootEntries.map((entry) => entry.path), [
+    '/gui/capabilities',
     '/gui/debug',
     '/gui/hot-region.json',
     '/gui/intent-log.json',
     '/gui/regions',
+    '/gui/renderers',
     '/gui/shell.json',
   ]);
   assert.equal(shell.schemaVersion, 'sciforge.gui-context.v1');
@@ -55,6 +57,70 @@ test('GuiProtocol exposes shell, hot-region, and intent-log resources as bounded
   ]);
   assert.equal(hotRegion.hotRegion.primaryRef, 'artifact:report');
   assert.deepEqual(intentLog.entries, []);
+});
+
+test('GuiProtocol exposes presentation catalog and renderer resources from package manifests', () => {
+  const gui = createGuiProtocolController({
+    revision: 8,
+    updatedAt: '2026-05-21T00:00:00.000Z',
+  });
+
+  const capabilityEntries = gui.list({ path: '/gui/capabilities' });
+  const rendererEntries = gui.list({ path: '/gui/renderers' });
+  const catalog = JSON.parse(gui.read({ path: '/gui/capabilities/presentation.json' }).content) as {
+    schemaVersion: string;
+    source: string;
+    components: Array<{
+      componentId: string;
+      acceptsArtifactTypes: string[];
+      previewKinds: string[];
+      lifecycleLayer: string;
+      safety: { writesWorkspace: boolean; executesCode: boolean };
+      agentSummary?: string;
+    }>;
+  };
+  const report = JSON.parse(gui.read({ path: '/gui/renderers/report-viewer.json' }).content) as {
+    schemaVersion: string;
+    componentId: string;
+    previewKinds: string[];
+    boundary: { taskCapability: boolean; providerRoute: boolean; importsReactComponent: boolean };
+  };
+  const search = gui.search({ scope: '/gui/capabilities', query: 'markdown research report', kinds: ['artifact-type', 'preview-kind', 'visible-text'] });
+  const scopedSearch = gui.search({ scope: '/gui/capabilities', query: 'report', kinds: ['visible-text', 'renderer', 'artifact-type', 'preview-kind'] });
+  const catalogStat = gui.stat({ path: '/gui/capabilities/presentation.json' });
+  const rendererStat = gui.stat({ path: '/gui/renderers/report-viewer.json' });
+  const boundedRead = gui.read({ path: '/gui/capabilities/presentation.json', maxBytes: 80 });
+  const broadSearch = gui.search({ scope: '/gui/capabilities', query: 'renderer presentation markdown table json report artifact preview component' });
+
+  assert.deepEqual(capabilityEntries.map((entry) => entry.path), ['/gui/capabilities/presentation.json']);
+  assert.ok(rendererEntries.some((entry) => entry.path === '/gui/renderers/report-viewer.json'));
+  assert.equal(catalog.schemaVersion, 'sciforge.gui-presentation-catalog.v1');
+  assert.equal(catalog.source, 'packages/presentation/components');
+  assert.ok(catalog.components.some((component) => component.componentId === 'report-viewer'));
+  assert.ok(catalog.components.every((component) => component.lifecycleLayer === 'presentation'));
+  assert.ok(catalog.components.every((component) => component.safety.writesWorkspace === false && component.safety.executesCode === false));
+  assert.equal(report.schemaVersion, 'sciforge.gui-renderer.v1');
+  assert.equal(report.componentId, 'report-viewer');
+  assert.ok(report.previewKinds.includes('markdown'));
+  assert.deepEqual(report.boundary, {
+    taskCapability: false,
+    providerRoute: false,
+    algorithmRecommendation: false,
+    importsReactComponent: false,
+  });
+  assert.ok(search.some((entry) => entry.path === '/gui/renderers/report-viewer.json'));
+  assert.ok(scopedSearch.length > 0);
+  assert.ok(scopedSearch.every((entry) => entry.path === '/gui/capabilities/presentation.json' || entry.path.startsWith('/gui/renderers/')));
+  assert.equal(catalogStat.path, '/gui/capabilities/presentation.json');
+  assert.equal(catalogStat.readonly, true);
+  assert.equal(catalogStat.kind, 'file');
+  assert.equal(rendererStat.path, '/gui/renderers/report-viewer.json');
+  assert.equal(rendererStat.readonly, true);
+  assert.equal(boundedRead.content.length, 80);
+  assert.equal(boundedRead.truncated, true);
+  assert.ok(broadSearch.length <= 25);
+  assert.ok(broadSearch.every((entry) => entry.text.length <= 320));
+  assert.throws(() => gui.read({ path: '/gui/renderers/not-a-component.json' }), /Unknown GUI resource file/);
 });
 
 test('GuiProtocol searches semantic refs/actions and stats resources without raw DOM coupling', () => {
@@ -111,7 +177,7 @@ test('GuiProtocol intent tools return negotiation schema and append intent log e
   });
 
   const present = gui.present({
-    intent: 'show-artifact',
+    intent: 'focus-existing',
     ref: 'artifact:report',
     hint: 'markdown',
     title: 'Report',

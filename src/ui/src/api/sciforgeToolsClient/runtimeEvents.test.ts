@@ -140,6 +140,7 @@ test('SSE reader promotes gui.present into the visible Runtime Codex result', as
           text: 'VISIBLE_FROM_GUI_PRESENT',
           ref: 'artifact:runtime-answer',
           title: 'Runtime answer',
+          hint: 'markdown',
         },
       },
     })}`,
@@ -167,12 +168,14 @@ test('SSE reader promotes gui.present into the visible Runtime Codex result', as
   });
 
   const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
-  const result = stream.result as { message?: string; displayIntent?: { source?: string }; guiPresentation?: { source?: string } };
+  const result = stream.result as { message?: string; displayIntent?: { source?: string; conversationProjection?: { artifacts?: Array<{ mime?: string }> } }; guiPresentation?: { source?: string; hint?: string } };
 
   assert.equal(stream.error, undefined);
   assert.equal(result.message, 'VISIBLE_FROM_GUI_PRESENT');
   assert.equal(result.guiPresentation?.source, `gui.present:${commandId}`);
+  assert.equal(result.guiPresentation?.hint, 'markdown');
   assert.equal(result.displayIntent?.source, `gui.present:${commandId}`);
+  assert.equal(result.displayIntent?.conversationProjection?.artifacts?.[0]?.mime, 'markdown');
   assert.doesNotMatch(JSON.stringify(result), /RAW_PROVIDER_MESSAGE_SHOULD_NOT_RENDER/);
 });
 
@@ -315,10 +318,66 @@ test('Runtime Codex foreground final message uses gui.present provenance', async
     assert.equal(response.message.provenance?.kind, 'live-runtime-codex');
     assert.match(String(response.message.provenance?.source), /^gui\.present:codex-command-/);
     assert.equal(response.message.provenance?.liveAcceptanceEligible, true);
-    assert.deepEqual(response.message.objectReferences?.map((reference) => reference.ref), ['artifact:live-selected-report']);
-    assert.equal(response.message.objectReferences?.[0]?.provenance?.dataRef, '.sciforge/artifacts/live-selected-report.md');
-    assert.deepEqual(response.run.objectReferences?.map((reference) => reference.ref), ['artifact:live-selected-report']);
+    assert.deepEqual(response.message.objectReferences?.map((reference) => reference.ref), ['file:.sciforge/artifacts/live-selected-report.md']);
+    assert.equal(response.message.objectReferences?.[0]?.provenance?.path, '.sciforge/artifacts/live-selected-report.md');
+    assert.deepEqual(response.run.objectReferences?.map((reference) => reference.ref), ['file:.sciforge/artifacts/live-selected-report.md']);
     assert.doesNotMatch(response.message.content, /RAW_PROVIDER_MESSAGE_SHOULD_NOT_RENDER/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Runtime Codex gui.present preserves explicit file and run references instead of coercing to artifacts', async () => {
+  const originalFetch = globalThis.fetch;
+  const refs = ['file:reports/final.md', 'run:run-visible-preview'];
+  try {
+    for (const ref of refs) {
+      globalThis.fetch = (async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+        const commandId = String(body.commandId);
+        return new Response([
+          'event: gui_present\n',
+          `data: ${JSON.stringify({
+            schemaVersion: 'sciforge.codex.normalized-event.v1',
+            type: 'gui_present',
+            text: `PRESENTED ${ref}`,
+            provider: 'sciforge-deepseek-proxy',
+            model: 'bailian/deepseek-v4-flash',
+            profile: 'sciforge-runtime-deepseek',
+            workspace: '/tmp/current',
+            commandId,
+            attemptId: `${commandId}-attempt-1`,
+            raw: {
+              presentation: {
+                source: `gui.present:${commandId}`,
+                text: `PRESENTED ${ref}`,
+                intent: 'focus-existing',
+                ref,
+                hint: ref.startsWith('file:') ? 'markdown' : 'auto',
+              },
+            },
+          })}\n\n`,
+          'event: done\n',
+          `data: ${JSON.stringify({
+            schemaVersion: 'sciforge.codex.normalized-event.v1',
+            type: 'done',
+            status: 'done',
+            message: 'Runtime Codex completed successfully.',
+            provider: 'sciforge-deepseek-proxy',
+            model: 'bailian/deepseek-v4-flash',
+            profile: 'sciforge-runtime-deepseek',
+            workspace: '/tmp/current',
+            commandId,
+            attemptId: `${commandId}-attempt-1`,
+          })}\n\n`,
+        ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+      }) as typeof fetch;
+
+      const response = await sendSciForgeToolMessage(runtimeRequestInput());
+      assert.deepEqual(response.message.objectReferences?.map((reference) => [reference.kind, reference.ref]), [
+        ref.startsWith('file:') ? ['file', ref] : ['run', ref],
+      ]);
+    }
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -382,7 +441,7 @@ test('Runtime Codex gui.present stores event session lineage for selected artifa
     const first = await sendSciForgeToolMessage(runtimeRequestInput());
     assert.equal((first.run.raw as Record<string, unknown>).codexSessionId, eventCodexSessionId);
     assert.deepEqual(first.run.objectReferences?.map((reference) => reference.ref), [
-      'artifact:live-selected-report',
+      'file:.sciforge/artifacts/live-selected-report.md',
       `codex-thread:${eventCodexSessionId}`,
     ]);
 

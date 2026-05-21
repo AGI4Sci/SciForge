@@ -1,6 +1,6 @@
 # SciForge 架构
 
-最后更新：2026-05-19
+最后更新：2026-05-21
 
 ## 北极星
 
@@ -14,21 +14,21 @@ Codex backend 负责上下文、记忆、工具、插件、算法、修复和执
 
 ```text
 GUI Shell
-  translates user gestures to text
-  maintains semantic GUI event bus and hot-region projection
-  exposes a read-only virtual GUI resource tree for state inspection
-  exposes intent-based gui.* tools to TUI agent
-  negotiates placement, timing, conflicts and rendering
+  将用户手势翻译成文本
+  维护语义 GUI event bus 和 hot-region projection
+  暴露只读虚拟 GUI resource tree 供 TUI 探测状态
+  向 TUI agent 暴露 intent-based gui.* tools
+  协商 placement、timing、conflicts 和 rendering
 
 TUI Agent Host
-  receives text
-  owns reasoning, command parsing, context, memory, planning and repair
-  uses native plugins / skills / tools / MCP / providers
-  calls gui.* tools when it has presentation or user-interaction intent
+  接收文本
+  拥有 reasoning、command parsing、context、memory、planning 和 repair
+  使用原生 plugins / skills / tools / MCP / providers
+  有 presentation 或 user-interaction intent 时调用 gui.* tools
 
 Native Agent Extensions
-  capability discovery, scientific algorithms, policy/harness, providers,
-  verifiers, artifact generation, workspace operations
+  capability discovery、scientific algorithms、policy/harness、providers、
+  verifiers、artifact generation、workspace operations
 ```
 
 ## 两个方向
@@ -82,6 +82,8 @@ TUI 不应该通过截图、DOM dump、ANSI buffer 或 GUI 私有对象理解界
 ```text
 /gui/shell.json
 /gui/hot-region.json
+/gui/capabilities/presentation.json
+/gui/renderers/<componentId>.json
 /gui/regions/<regionId>/summary.md
 /gui/regions/<regionId>/refs.json
 /gui/regions/<regionId>/actions.json
@@ -106,6 +108,31 @@ TUI 使用原子读操作获取状态：
 - GUI 可以隐藏大多数同时无关的区域，只暴露 shell、hot region 和按需 region detail。
 
 `gui.search` 不是让 TUI grep 原始 DOM。它搜索的是 GUI projector 生成的语义文本和结构化 refs；debug resource 只用于审计/排障，默认不进入 agent context。
+
+## 双目录能力发现
+
+能力分成两个目录，不能混在一起：
+
+1. **任务能力目录**：skills、tools、plugins、MCP、provider、verifier、harness 和 capability discovery 都属于 TUI/Codex 原生生态。GUI 想触发发现时，只发送终端等价文本，例如 `/capabilities search`、`/capabilities expand`、`/capabilities plan`、`/capabilities explain`。
+2. **展示能力目录**：`packages/presentation/components` 里的 renderer、viewer、workbench 组件属于 GUI extension。它们只说明“GUI 能怎么展示某类 artifact/ref”，不说明“任务应该调用哪个算法或工具”。
+
+GUI 展示能力通过只读资源暴露给 TUI：
+
+```text
+/gui/capabilities/presentation.json
+/gui/renderers/<componentId>.json
+```
+
+TUI 的最小发现流程是：
+
+```text
+gui.list('/gui/capabilities')
+gui.read('/gui/capabilities/presentation.json')
+gui.search({ query: 'markdown report viewer', scope: '/gui/capabilities' })
+gui.present({ ref: 'artifacts/report.md', hint: 'markdown' })
+```
+
+这个方案的可靠性来自单一归属：TUI 不 import React 组件、不维护 GUI renderer registry；GUI 不注册任务 skills/tools、不做 capability ranking。双方只通过现有的 `gui.read/search` 和 `gui.present` 协作。
 
 ## GUI 智能边界
 
@@ -136,10 +163,27 @@ GUI 不是无脑像素壳，也不是第二个 agent。它应该“对任务无�
 | capability discovery | TUI 原生扩展。 |
 | harness / policy / repair | TUI 原生扩展。 |
 | 文件读写、命令执行、验证 | TUI 原生 tools。 |
+| `packages/presentation/components` 中的 GUI 组件 | GUI extension 的展示能力目录；TUI 通过 `/gui/capabilities/presentation.json` 与 `/gui/renderers/<componentId>.json` 只读发现。 |
 | GUI 展示哪个结果 | TUI 调 `gui.present`，GUI 决定 renderer/placement。 |
 | 用户确认、补充输入 | TUI 调 `gui.ask_user`，GUI 收集后发文本。 |
 | TUI 想知道 GUI 当前状态 | TUI 读只读 GUI resource tree 或调用 `gui.get_context`。 |
 | GUI 布局、焦点、主题 | GUI 本地人体工学状态。 |
+
+## 引用与右侧预览契约
+
+agent 回复、报告正文和消息 metadata 中出现的 artifact/file/run 引用必须尽量变成结构化 object reference，而不是只能显示成普通文本。可解析引用包括显式 `artifact:`、`file:`、`run:` ref，也包括能精确匹配当前 session artifact 或 workspace file 的裸文件名，例如 `arxiv_multi_agent_report_20260521.md`。
+
+裸文件名只能在“已解析到真实 artifact/file”时升级为可点击引用，避免把任意 Markdown 代码片段误当成文件。用户点击这类引用时，GUI 应聚焦右侧面板，并用展示能力目录中的合适 renderer 预览；TUI 也可以显式调用：
+
+```ts
+gui.present({
+  intent: 'focus-existing',
+  ref: 'artifacts/arxiv_multi_agent_report_20260521.md',
+  hint: 'markdown'
+})
+```
+
+右侧预览是 GUI 展示能力，不是任务能力。预览失败时 GUI 可以提示缺少 artifact/file/ref，但不能因此推断任务失败或成功。
 
 ## 旧概念映射
 
@@ -217,14 +261,37 @@ Harness / Policy 属于 TUI 原生扩展。它可以决定 context refs、tool/p
 
 它可以通过 `gui.present`、`gui.ask_user`、`gui.notify`、`gui.set_status` 影响 GUI 展示，但不能把策略写进 GUI，也不能让 GUI 变成第二个 agent。
 
+## Confidence / 置信度契约
+
+`confidence` 是 TUI/verifier/harness 对结果可信度的可解释输出，不是 GUI 根据日志、文案或默认值猜出来的分数。GUI 只能渲染 TUI 明确给出的 `confidence` 与 `confidenceExplanation`；如果缺失，GUI 应隐藏百分比或显示“未评分”，不得补一个默认 78%。
+
+推荐的 TUI 侧计算形态是：
+
+```text
+effectiveConfidence = clamp(min(sourceScore ?? evidenceDefault, evidenceCap) - penalties, 0, 1)
+```
+
+其中 `sourceScore` 是工具、verifier 或 provider 自带分数；`evidenceDefault` 和 `evidenceCap` 由证据等级决定；`penalties` 来自缺失证据、过期来源、验证失败、partial/zero-result、冲突 claim 等可审计因素。
+
+| 证据等级 | 默认值 | 上限 | 说明 |
+|---|---:|---:|---|
+| 已复现或 verifier 通过，且有输出/evidence refs | 0.90 | 0.95 | 最高可信，但仍保留人工复核空间。 |
+| 工具/provider 支撑，且有 audit refs | 0.75 | 0.85 | 有外部或本地执行证据，但未完整复现。 |
+| 只有引用/ref 支撑，未复现 | 0.65 | 0.75 | 适合文献摘要、引用型结论。 |
+| 纯模型推断或弱证据解释 | 0.45 | 0.55 | 必须在解释中标注不确定性。 |
+| 阻断、失败、证据缺失或冲突未解 | 0.20 | 0.35 | 只能表达低可信或待修复。 |
+| 没有结果 | 0.00 | 0.00 | 不展示为可信结论。 |
+
+常见 penalty 建议：缺少直接 evidence ref `-0.15`，来源过期或未验证 `-0.10`，验证失败 `-0.25`，partial/zero-result `-0.20`，关键 claim 冲突未解决 `-0.20`。最终展示必须带简短解释，例如“工具执行通过，缺少全文复现，扣 0.10”。
+
 ## UI Implementation Boundary
 
 React/UI 只做 presentation behavior：
 
-- user gesture -> command text。
+- 用户手势 -> 命令文本。
 - semantic event bus -> shell/hot-region context。
-- read-only virtual GUI resources -> `list/read/search/stat/watch`。
-- `gui.*` intent implementation。
+- 只读虚拟 GUI resources -> `list/read/search/stat/watch`。
+- `gui.*` intent 的执行。
 - layout、focus、theme、draft、folding、selection。
 - intent negotiation、precondition check、defer/reject/suggestion。
 
@@ -241,3 +308,5 @@ React/UI 不做 provider branch、capability ranking、repair policy、prompt ro
 - TUI 用原生机制调用 intent-based `gui.*` tools；GUI 可协商、延迟或拒绝。
 - GUI 默认只向 TUI 披露 shell + hot region 状态。
 - 算法模块可以直接给 Codex plugin / skill / tool / MCP 使用。
+- 可解析 artifact/file 引用可以在右侧面板预览；无法解析的普通代码片段不得伪装成对象引用。
+- GUI 不制造默认 confidence；所有百分比都必须来自 TUI/verifier/harness 的可解释输出。

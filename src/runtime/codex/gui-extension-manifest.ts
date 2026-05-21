@@ -2,6 +2,7 @@ import { access, chmod, mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getRuntimeHomePaths } from '../../../packages/backend/src/runtime-home.js';
+import { guiPresentationResourcePaths } from '../../ui/src/app/guiProtocol.js';
 import { ensureGuiExtensionState } from './gui-extension-state.js';
 
 export const GUI_MCP_SERVER_NAME = 'sciforge_gui';
@@ -43,6 +44,7 @@ export const GUI_NATIVE_RESOURCE_URIS = [
   'sciforge-gui:/gui/shell.json',
   'sciforge-gui:/gui/hot-region.json',
   'sciforge-gui:/gui/intent-log.json',
+  ...guiPresentationResourcePaths().map((path) => `sciforge-gui:${path}`),
 ] as const;
 
 export async function prepareRuntimeGuiExtensionInjection(options: RuntimeGuiExtensionOptions = {}): Promise<RuntimeGuiExtensionInjection | undefined> {
@@ -100,8 +102,12 @@ export function runtimeGuiExtensionManifest(injection: RuntimeGuiExtensionInject
   };
 }
 
-export function defaultGuiExtensionStatePath(): string {
-  return join(getRuntimeHomePaths().runtimeRoot, 'gui-extension', 'state.json');
+export function defaultGuiExtensionStatePath(scope?: { commandId?: string; attemptId?: string }): string {
+  const root = join(getRuntimeHomePaths().runtimeRoot, 'gui-extension');
+  if (scope?.commandId || scope?.attemptId) {
+    return join(root, 'state', scope.commandId ?? 'command', `${scope.attemptId ?? 'attempt'}.json`);
+  }
+  return join(root, 'state.json');
 }
 
 async function writeGuiPresentShim(input: {

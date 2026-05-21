@@ -99,6 +99,24 @@ test('structured direct answers without displayIntent default to satisfied Proje
   assert.deepEqual(schemaErrors(payload), []);
 });
 
+test('direct-answer normalization does not invent confidence scores', () => {
+  const payload = coerceWorkspaceTaskPayload({
+    message: 'ConversationProjection is the single source of truth for user-visible output.',
+    claimType: 'direct-answer',
+    evidenceLevel: 'runtime',
+    reasoningTrace: 'Answered without execution.',
+    claims: ['ConversationProjection is authoritative.'],
+    uiManifest: [{ componentId: 'report-viewer' }],
+    executionUnits: [{ id: 'direct-answer', status: 'done', tool: 'runtime.direct-text' }],
+    artifacts: [],
+  });
+
+  assert.ok(payload);
+  assert.equal(payload.confidence, undefined);
+  assert.equal(payload.claims[0]?.confidence, undefined);
+  assert.deepEqual(schemaErrors(payload), []);
+});
+
 test('structured direct answers with nonblocking displayIntent merge satisfied defaults', () => {
   const payload = coerceWorkspaceTaskPayload({
     message: 'ConversationProjection is the single source of truth for user-visible output.',

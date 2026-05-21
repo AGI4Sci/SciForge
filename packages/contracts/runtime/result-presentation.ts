@@ -131,9 +131,23 @@ export interface ResultPresentationArtifactAction {
   exportProfile?: Record<string, unknown>;
 }
 
+export type ResultPresentationConfidenceLevel = 'high' | 'medium' | 'low' | 'unverified';
+
+export interface ResultPresentationConfidencePenalty {
+  reason: string;
+  delta?: number;
+  citationIds?: string[];
+  refs?: string[];
+}
+
 export interface ResultPresentationConfidenceExplanation {
-  level: 'high' | 'medium' | 'low' | 'unverified';
-  summary?: string;
+  level?: ResultPresentationConfidenceLevel;
+  evidenceLevel?: string;
+  sourceScore?: number;
+  evidenceDefault?: number;
+  evidenceCap?: number;
+  penalties?: ResultPresentationConfidencePenalty[];
+  summary: string;
   explanation?: string;
   citationIds?: string[];
 }
@@ -554,18 +568,77 @@ function pushDiagnostic(refs: ResultPresentationDiagnosticsRef[], kind: ResultPr
 }
 
 function confidenceFromPayload(payload: Record<string, unknown>, citations: ResultPresentationInlineCitation[]): ResultPresentationConfidenceExplanation | undefined {
+  const explicit = isRecord(payload.confidenceExplanation) ? payload.confidenceExplanation : undefined;
   const confidence = numberField(payload.confidence);
-  const evidenceLevel = stringField(payload.evidenceLevel);
-  const level = confidence === undefined
-    ? evidenceLevel === 'unverified' ? 'unverified' : undefined
-    : confidence >= 0.82 ? 'high' : confidence >= 0.55 ? 'medium' : 'low';
-  if (!level) return undefined;
+  if (!explicit && confidence === undefined) return undefined;
+
+  const evidenceLevel = stringField(explicit?.evidenceLevel) ?? stringField(payload.evidenceLevel);
+  const sourceScore = firstNumber(explicit?.sourceScore, payload.sourceScore, payload.confidenceSourceScore, confidence);
+  const evidenceDefault = firstNumber(explicit?.evidenceDefault, payload.evidenceDefault);
+  const evidenceCap = firstNumber(explicit?.evidenceCap, payload.evidenceCap);
+  const penalties = confidencePenaltiesFromValue(explicit?.penalties ?? payload.confidencePenalties ?? payload.penalties);
+  const summary = stringField(explicit?.summary)
+    ?? stringField(explicit?.explanation)
+    ?? confidenceSummaryFromFields({ confidence, evidenceLevel, sourceScore, evidenceDefault, evidenceCap, penalties });
+  if (!summary) return undefined;
+  const citationIds = stringList(explicit?.citationIds);
   return {
-    level,
-    summary: evidenceLevel ? `Evidence level: ${evidenceLevel}; confidence ${confidence ?? 'not provided'}.` : `Confidence ${confidence}.`,
-    explanation: evidenceLevel ? `Evidence level: ${evidenceLevel}; confidence ${confidence ?? 'not provided'}.` : `Confidence ${confidence}.`,
-    citationIds: citations.slice(0, 3).map((citation) => citation.id),
+    level: confidenceLevelField(explicit?.level),
+    evidenceLevel,
+    sourceScore,
+    evidenceDefault,
+    evidenceCap,
+    penalties: penalties.length ? penalties : undefined,
+    summary,
+    explanation: stringField(explicit?.explanation),
+    citationIds: citationIds.length ? citationIds : citations.slice(0, 3).map((citation) => citation.id),
   };
+}
+
+function confidencePenaltiesFromValue(value: unknown): ResultPresentationConfidencePenalty[] {
+  return recordList(value).flatMap((penalty) => {
+    const reason = stringField(penalty.reason) ?? stringField(penalty.summary) ?? stringField(penalty.label);
+    if (!reason) return [];
+    const citationIds = stringList(penalty.citationIds);
+    const refs = stringList(penalty.refs);
+    const normalized: ResultPresentationConfidencePenalty = { reason };
+    const delta = firstNumber(penalty.delta, penalty.value, penalty.amount);
+    if (delta !== undefined) normalized.delta = delta;
+    if (citationIds.length) normalized.citationIds = citationIds;
+    if (refs.length) normalized.refs = refs;
+    return [normalized];
+  });
+}
+
+function confidenceSummaryFromFields(input: {
+  confidence?: number;
+  evidenceLevel?: string;
+  sourceScore?: number;
+  evidenceDefault?: number;
+  evidenceCap?: number;
+  penalties: ResultPresentationConfidencePenalty[];
+}) {
+  const parts = [
+    input.confidence !== undefined ? `Confidence ${input.confidence}.` : undefined,
+    input.evidenceLevel ? `Evidence level: ${input.evidenceLevel}.` : undefined,
+    input.sourceScore !== undefined && input.confidence === undefined ? `Source score ${input.sourceScore}.` : undefined,
+    input.evidenceDefault !== undefined ? `Evidence default ${input.evidenceDefault}.` : undefined,
+    input.evidenceCap !== undefined ? `Evidence cap ${input.evidenceCap}.` : undefined,
+    input.penalties.length ? `Penalties: ${input.penalties.map((penalty) => penalty.reason).join('; ')}.` : undefined,
+  ].filter(Boolean);
+  return parts.join(' ');
+}
+
+function confidenceLevelField(value: unknown): ResultPresentationConfidenceLevel | undefined {
+  return value === 'high' || value === 'medium' || value === 'low' || value === 'unverified' ? value : undefined;
+}
+
+function firstNumber(...values: unknown[]) {
+  for (const value of values) {
+    const number = numberField(value);
+    if (number !== undefined) return number;
+  }
+  return undefined;
 }
 
 function processStatusFromPayload(payload: Record<string, unknown>): ResultPresentationProcessSummary['status'] {

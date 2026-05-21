@@ -1,6 +1,6 @@
 # Runtime Codex browser acceptance blocked
 
-Observed at: 2026-05-20T01:07:35.843Z
+Observed at: 2026-05-21T03:33:40.302Z
 Requested UI port: 5173
 Requested workspace writer port: 6173
 Actual/intended URL: http://127.0.0.1:5173/
@@ -10,10 +10,10 @@ Workspace path: /Applications/workspace/ailab/research/app/SciForge/workspace/pa
 Profile: sciforge-runtime-deepseek
 Provider: sciforge-deepseek-proxy
 Model: bailian/deepseek-v4-flash
-Reason: Current Runtime Codex provider preflight is ready, but Codex in-app browser acceptance is incomplete: missing selected-artifact follow-up with selected refs.
+Reason: Current Runtime Codex provider preflight is ready, but Codex in-app browser acceptance is incomplete: missing passed release manifest.
 Provider preflight artifact: docs/test-artifacts/runtime-provider-preflight/manifest.json
 Provider preflight category: ready
-Provider preflight checked at: 2026-05-20T01:07:35.344Z
+Provider preflight checked at: 2026-05-21T03:33:26.976Z
 Provider preflight release acceptance: not-evaluated
 Runtime key in service env: present
 Provider upstream base URL: present
@@ -24,7 +24,7 @@ Acceptance scope: non-seed Runtime Codex messages only; seed/demo/fixture messag
 Acceptance rubric:
 - User intent: prove the real default-chat Runtime Codex path can complete single-turn, selected-ref, and multi-turn tasks.
 - Expected observable result: visible live Runtime Codex/gui.present answers with provider/model/profile/workspace/command id and folded audit logs.
-- Actual result: blocked before release acceptance because Current Runtime Codex provider preflight is ready, but Codex in-app browser acceptance is incomplete: missing selected-artifact follow-up with selected refs.
+- Actual result: blocked before release acceptance because Current Runtime Codex provider preflight is ready, but Codex in-app browser acceptance is incomplete: missing passed release manifest.
 - Current evidence refs: manifest.json plus blocked notes. Prior or stale browser screenshots/DOM refs are diagnostic only and cannot count as current release evidence.
 - Negative checks: fake passed status, missing DOM/screenshot, missing command id, missing task result, seed/demo evidence, and partial/blocked/failed status remain release-blocking.
 - Required key: set SCIFORGE_RUNTIME_API_KEY in the service environment; do not store it in repository files.

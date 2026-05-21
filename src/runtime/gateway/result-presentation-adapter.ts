@@ -1,5 +1,6 @@
 import {
   artifactHasUserFacingDelivery,
+  type ResultPresentationConfidenceExplanation,
   type RuntimeArtifactDerivation,
 } from '@sciforge-ui/runtime-contract';
 import type {
@@ -300,15 +301,63 @@ function nextActionsFromPayload(payload: ToolPayload) {
   ].filter((entry): entry is string => Boolean(entry?.trim())));
 }
 
-function confidenceExplanation(payload: ToolPayload) {
+function confidenceExplanation(payload: ToolPayload): ResultPresentationConfidenceExplanation | undefined {
+  if (isRecord(payload.confidenceExplanation)) {
+    const summary = stringField(payload.confidenceExplanation.summary)
+      || stringField(payload.confidenceExplanation.explanation);
+    if (summary) {
+      return {
+        level: confidenceLevelField(payload.confidenceExplanation.level),
+        evidenceLevel: stringField(payload.confidenceExplanation.evidenceLevel),
+        sourceScore: numberField(payload.confidenceExplanation.sourceScore),
+        evidenceDefault: numberField(payload.confidenceExplanation.evidenceDefault),
+        evidenceCap: numberField(payload.confidenceExplanation.evidenceCap),
+        penalties: confidencePenaltiesFromValue(payload.confidenceExplanation.penalties),
+        summary,
+        explanation: stringField(payload.confidenceExplanation.explanation),
+        citationIds: toStringList(payload.confidenceExplanation.citationIds),
+      };
+    }
+  }
+  const confidence = typeof payload.confidence === 'number' && Number.isFinite(payload.confidence)
+    ? payload.confidence
+    : undefined;
   const parts = [
-    Number.isFinite(payload.confidence) ? `confidence ${Math.round(payload.confidence * 100)}%` : undefined,
+    confidence !== undefined ? `confidence ${Math.round(confidence * 100)}%` : undefined,
     payload.evidenceLevel ? `evidence ${payload.evidenceLevel}` : undefined,
     payload.verificationResults?.length
       ? `verification ${payload.verificationResults.map((result) => result.verdict).join(', ')}`
       : undefined,
   ].filter(Boolean);
-  return parts.length ? parts.join('; ') : undefined;
+  if (!parts.length) return undefined;
+  return {
+    evidenceLevel: payload.evidenceLevel || undefined,
+    sourceScore: confidence,
+    summary: parts.join('; '),
+  };
+}
+
+function confidencePenaltiesFromValue(value: unknown): ResultPresentationConfidenceExplanation['penalties'] {
+  const penalties: NonNullable<ResultPresentationConfidenceExplanation['penalties']> = [];
+  for (const penalty of toRecordList(value)) {
+    const reason = stringField(penalty.reason) || stringField(penalty.summary) || stringField(penalty.label);
+    if (!reason) continue;
+    const normalized: NonNullable<ResultPresentationConfidenceExplanation['penalties']>[number] = { reason };
+    const delta = numberField(penalty.delta);
+    const citationIds = toStringList(penalty.citationIds);
+    const refs = toStringList(penalty.refs);
+    if (delta !== undefined) normalized.delta = delta;
+    if (citationIds.length) normalized.citationIds = citationIds;
+    if (refs.length) normalized.refs = refs;
+    penalties.push(normalized);
+  }
+  return penalties.length ? penalties : undefined;
+}
+
+function confidenceLevelField(value: unknown): ResultPresentationConfidenceExplanation['level'] | undefined {
+  return value === 'high' || value === 'medium' || value === 'low' || value === 'unverified'
+    ? value
+    : undefined;
 }
 
 function defaultExpandedSections(input: {

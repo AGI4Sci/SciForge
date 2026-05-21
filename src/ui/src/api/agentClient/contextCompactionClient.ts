@@ -39,9 +39,9 @@ export async function compactAgentContext(input: SendAgentMessageInput, reason: 
     },
   };
   const endpoints = [
-    `${baseUrl}/api/agent-server/compact`,
-    `${baseUrl}/api/agent-server/context/compact`,
-    `${baseUrl}/api/agent-server/agents/${encodeURIComponent(scenario.runtimeId)}/compact`,
+    `${baseUrl}/api/runtime/compact`,
+    `${baseUrl}/api/runtime/context/compact`,
+    `${baseUrl}/api/runtime/agents/${encodeURIComponent(scenario.runtimeId)}/compact`,
   ];
   const errors: string[] = [];
   for (const endpoint of endpoints) {
@@ -76,26 +76,26 @@ export async function compactAgentContext(input: SendAgentMessageInput, reason: 
       if (isRecord(json) && 'data' in json && json.data === null) {
         return {
           status: 'skipped',
-          source: 'agentserver',
+          source: 'native',
           backend: input.config.agentBackend,
           compactCapability: compactCapabilityForBackend(input.config.agentBackend),
           completedAt: nowIso(),
           reason,
-          message: 'AgentServer compact returned no compaction tag; current backend/session did not find compressible work.',
-          auditRefs: [`agentserver-compact:no-op:${input.sessionId ?? 'no-session'}:${reason}`],
+          message: 'Runtime compact returned no compaction tag; current backend/session did not find compressible work.',
+          auditRefs: [`runtime-compact:no-op:${input.sessionId ?? 'no-session'}:${reason}`],
         };
       }
       const data = isRecord(json) && isRecord(json.data) ? json.data : json;
       const event = normalizeContextCompaction(isRecord(data) ? data.contextCompaction ?? data.compaction ?? data : data, 'contextCompaction', isRecord(data) ? data : {});
       return event ?? {
         status: 'completed',
-        source: 'agentserver',
+        source: 'native',
         backend: input.config.agentBackend,
-        compactCapability: 'agentserver',
+        compactCapability: compactCapabilityForBackend(input.config.agentBackend),
         completedAt: nowIso(),
         lastCompactedAt: nowIso(),
         reason,
-        auditRefs: [`agentserver-compact:${input.sessionId ?? 'no-session'}:${reason}`],
+        auditRefs: [`runtime-compact:${input.sessionId ?? 'no-session'}:${reason}`],
       };
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError' && !endpointTimedOut) throw err;
@@ -113,7 +113,7 @@ export async function compactAgentContext(input: SendAgentMessageInput, reason: 
     backend: input.config.agentBackend,
     compactCapability: 'unknown',
     reason,
-    message: `AgentServer compact API unavailable: ${errors.slice(0, 2).join('; ') || 'no endpoint responded'}`,
-    auditRefs: [`agentserver-compact-unavailable:${input.sessionId ?? 'no-session'}:${reason}`],
+    message: `Runtime compact API unavailable: ${errors.slice(0, 2).join('; ') || 'no endpoint responded'}`,
+    auditRefs: [`runtime-compact-unavailable:${input.sessionId ?? 'no-session'}:${reason}`],
   };
 }

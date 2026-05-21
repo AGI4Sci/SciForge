@@ -506,8 +506,8 @@ function assertContractShape(contract: unknown, fixture: PresentationFixture) {
   assert.ok(artifactActions.length > 0, `${fixture.id}: artifactActions must be non-empty`);
   assert.ok(nextActions.length > 0, `${fixture.id}: nextActions must be non-empty`);
   assert.ok(
-    isRecord(contract.confidenceExplanation) || typeof contract.confidenceExplanation === 'string',
-    `${fixture.id}: confidenceExplanation must be present`,
+    isRecord(contract.confidenceExplanation),
+    `${fixture.id}: confidenceExplanation must be present as structured data`,
   );
   assert.ok(isRecord(contract.processSummary), `${fixture.id}: processSummary must be structured and collapsible`);
   assert.equal(contract.processSummary.foldedByDefault, true, `${fixture.id}: processSummary must fold by default`);

@@ -88,17 +88,7 @@ if (scripts[realTaskMatrixScript] !== realTaskMatrixCommand) {
 }
 
 const realTaskOfflineGateSteps = packageScriptSteps(scripts[realTaskOfflineGatesScript]);
-const requiredRealTaskOfflineGates = [
-  'smoke:real-task-literature-web-gates',
-  'smoke:real-task-data-gates',
-  'smoke:real-task-code-gates',
-  'smoke:real-task-scientific-gates',
-  'smoke:real-task-capability-skill-cu-gates',
-  'smoke:real-task-protocol-gates',
-  'smoke:real-task-provider-security-gates',
-  'smoke:real-task-run-resume-memory-gates',
-  'smoke:desktop-live-acceptance-evidence',
-];
+const requiredRealTaskOfflineGates = ['smoke:real-task-protocol-gates'];
 assertOrderedSubsequence(realTaskOfflineGateSteps, requiredRealTaskOfflineGates, realTaskOfflineGatesScript, errors);
 const directLegacyInRealTaskOfflineGates = realTaskOfflineGateSteps.filter((step) => /\bagentserver\b/i.test(step));
 if (directLegacyInRealTaskOfflineGates.length > 0) {

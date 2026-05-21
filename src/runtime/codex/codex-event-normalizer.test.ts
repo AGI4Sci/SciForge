@@ -115,6 +115,7 @@ test('maps completed gui.present tool calls into explicit completion events', ()
         intent: 'show-result',
         title: 'Runtime answer',
         content: { kind: 'markdown', value: 'VISIBLE_GUI_PRESENT_RESULT' },
+        hint: 'markdown',
       }),
       result: JSON.stringify({
         ok: true,
@@ -129,6 +130,7 @@ test('maps completed gui.present tool calls into explicit completion events', ()
   assert.equal(events[1]?.message, 'VISIBLE_GUI_PRESENT_RESULT');
   assert.equal((events[1]?.raw as { boundary?: string }).boundary, 'gui-present-completion');
   assert.equal(((events[1]?.raw as { presentation?: { source?: string } }).presentation)?.source, 'gui.present:codex-test');
+  assert.equal(((events[1]?.raw as { presentation?: { hint?: string } }).presentation)?.hint, 'markdown');
 });
 
 test('does not treat gui.present start as completion', () => {

@@ -1,6 +1,6 @@
 {
   "schemaVersion": "sciforge.native-extension-ownership-map.v1",
-  "updatedAt": "2026-05-19",
+  "updatedAt": "2026-05-21",
   "principles": {
     "guiInputContract": "GUI sends terminal-equivalent text only.",
     "guiCapabilityCommands": [
@@ -12,7 +12,9 @@
     "guiRankingAllowed": false,
     "runtimeRankingAllowed": false,
     "rawRuntimeOutputPlacement": "folded-audit-debug-only",
-    "runtimeOpenAiFallback": "explicit-opt-in-only"
+    "runtimeOpenAiFallback": "explicit-opt-in-only",
+    "guiPresentationCatalogOwner": "GUI extension 只拥有展示组件；任务能力仍属于 Codex 原生生态。",
+    "resultConfidenceOwner": "confidence 由 Codex 原生 verifier 或 harness 拥有；GUI 只渲染已提供的分数。"
   },
   "entries": [
     {
@@ -52,6 +54,68 @@
         "AgentServer-first capability gateway"
       ],
       "migrationNote": "GUI affordances may construct only /capabilities search|expand|plan|explain text. Discovery results are not completion evidence and must be presented through gui.present or gui.ask_user."
+    },
+    {
+      "id": "presentation-component-catalog",
+      "status": "gui-extension-presentation-only",
+      "owner": "sciforge-gui-extension",
+      "targetNativeSurfaces": [
+        "gui.read /gui/capabilities/presentation.json",
+        "gui.read /gui/renderers/<componentId>.json",
+        "gui.search scope=/gui/capabilities",
+        "gui.present"
+      ],
+      "currentImplementationPaths": [
+        "packages/presentation/components",
+        "src/ui/src/app/results-renderer-registry-slot.tsx",
+        "src/ui/src/app/guiProtocol.ts"
+      ],
+      "targetImplementationPaths": [
+        "/gui/capabilities/presentation.json",
+        "/gui/renderers/<componentId>.json",
+        "gui.present"
+      ],
+      "enforcementScripts": [
+        "npm run smoke:native-extension-ownership"
+      ],
+      "allowedGuiCommandVerbs": [],
+      "forbiddenOwners": [
+        "Codex-native task capability registry",
+        "React/UI task ranking",
+        "TUI React component import"
+      ],
+      "migrationNote": "GUI presentation components 只是 renderer 能力。TUI 通过只读 gui resources 发现它们，并通过 gui.present 表达展示意图；任务 skills/tools 仍属于 Codex 原生生态。"
+    },
+    {
+      "id": "result-confidence",
+      "status": "codex-native-verifier-owned",
+      "owner": "codex-native-verifier-harness",
+      "targetNativeSurfaces": [
+        "Codex verifier",
+        "Codex harness/policy",
+        "MCP verifier result",
+        "result payload confidenceExplanation"
+      ],
+      "currentImplementationPaths": [
+        "src/ui/src/api/agentClient/responseNormalization.ts",
+        "packages/contracts/runtime/result-presentation.ts",
+        "src/ui/src/app/uiPrimitives.tsx"
+      ],
+      "targetImplementationPaths": [
+        "TUI result payload confidence",
+        "TUI result payload confidenceExplanation",
+        "mcp://verifier"
+      ],
+      "enforcementScripts": [
+        "npm run smoke:native-extension-ownership"
+      ],
+      "allowedGuiCommandVerbs": [],
+      "forbiddenOwners": [
+        "React/UI default confidence",
+        "GUI truth judgment",
+        "raw stdout confidence inference"
+      ],
+      "migrationNote": "confidence 必须来自 Codex 原生 verifier、harness、policy 或 tool payload evidence。GUI 可以渲染分数和解释，但不能制造默认值，也不能从日志推断真伪。"
     },
     {
       "id": "harness-policy-budget-repair",

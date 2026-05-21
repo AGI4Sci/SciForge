@@ -198,7 +198,7 @@ export function ComponentWorkbenchPage({
       <SectionHeader
         icon={SlidersHorizontal}
         title="组件工作台"
-        subtitle="先稳定组件 contract，再让对话运行时从用户勾选的组件白名单里查询和配置。"
+        subtitle="先稳定展示组件 contract，再让对话运行时通过 GUI presentation catalog 查询和配置。"
         action={(
           <div className="component-actions">
             <ActionButton icon={Check} variant="secondary" onClick={() => onSelectedComponentIdsChange(publishedComponentIds)}>选择 published</ActionButton>
@@ -210,7 +210,7 @@ export function ComponentWorkbenchPage({
         <div>
           <span>已选组件</span>
           <strong>{selectedComponentIds.length}</strong>
-          <small>进入 AgentServer 的 `availableComponentIds` 白名单</small>
+          <small>当前 GUI presentation catalog 可用组件集</small>
         </div>
         <div>
           <span>注册模块</span>

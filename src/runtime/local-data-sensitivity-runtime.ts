@@ -33,7 +33,7 @@ export async function tryRunLocalDataSensitivityRuntime(
   const id = sha1(JSON.stringify({ prompt: request.prompt, csvRef, effect, lower, upper })).slice(0, 12);
   const artifactId = `bootstrap-ci-${id}`;
   const message = [
-    'Local bounded sensitivity analysis completed from the existing dataset; no AgentServer generation was started.',
+    'Local bounded sensitivity analysis completed from the existing dataset; no remote backend generation was started.',
     '',
     `- Observed drugA-control mean difference: ${round(effect)}`,
     `- Bootstrap 95% CI: [${round(lower)}, ${round(upper)}] from 1000 stratified resamples within treatment groups.`,
@@ -52,7 +52,7 @@ export async function tryRunLocalDataSensitivityRuntime(
     confidence: 0.78,
     claimType: 'analysis',
     evidenceLevel: 'runtime',
-    reasoningTrace: 'SciForge local bounded data sensitivity runtime read an existing CSV artifact and computed a deterministic bootstrap CI without AgentServer generation.',
+    reasoningTrace: 'SciForge local bounded data sensitivity runtime read an existing CSV artifact and computed a deterministic bootstrap CI without remote backend generation.',
     displayIntent: {
       protocolStatus: 'protocol-success',
       taskOutcome: 'satisfied',

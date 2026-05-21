@@ -267,13 +267,24 @@ test('structured result presentation drives primary answer and folds diagnostics
     ],
     artifactActions: [{ id: 'artifact-1', label: 'Open report', artifactType: 'research-report', ref: 'artifact:analysis-report' }],
     nextActions: [{ id: 'next-1', label: 'Inspect the cited table row.', kind: 'inspect' }],
-    confidenceExplanation: { level: 'high', summary: 'Evidence is attached to the finding.', citationIds: ['citation-table'] },
+    confidenceExplanation: {
+      level: 'high',
+      evidenceLevel: 'tool-backed',
+      sourceScore: 0.91,
+      evidenceDefault: 0.82,
+      evidenceCap: 0.94,
+      penalties: [{ reason: 'One source remains unreplicated.', delta: 0.03 }],
+      summary: 'Evidence is attached to the finding.',
+      citationIds: ['citation-table'],
+    },
     processSummary: { foldedByDefault: true, summary: 'Execution details are available for audit.' },
     diagnosticsRefs: [{ id: 'raw-1', label: 'Raw payload', kind: 'raw-payload', ref: '.sciforge/task-results/raw.json' }],
   });
 
   assert.match(presentation.primaryContent, /The analysis completed/);
   assert.match(presentation.primaryContent, /Treatment B/);
+  assert.match(presentation.primaryContent, /sourceScore: 0.91/);
+  assert.match(presentation.primaryContent, /One source remains unreplicated/);
   assert.doesNotMatch(presentation.primaryContent, /artifact::analysis-report/);
   assert.doesNotMatch(presentation.primaryContent, /file::\.sciforge\/data\/table\.csv#row-b/);
   assert.doesNotMatch(presentation.primaryContent, /executionUnits|ToolPayload|raw diagnostics/i);

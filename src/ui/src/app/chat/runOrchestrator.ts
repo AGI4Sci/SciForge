@@ -281,7 +281,7 @@ export async function runPreflightContextCompaction({
     },
     contextCompaction: {
       status: 'started',
-      source: 'agentserver',
+      source: 'native',
       backend: config.agentBackend,
       compactCapability: preflightState.compactCapability,
       before: preflightState,

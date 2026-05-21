@@ -180,7 +180,7 @@ test('uses work evidence and verification refs without scenario-specific assumpt
   assert.ok(presentation.nextActions.includes('Ask whether to continue from partial records.'));
   assert.ok(presentation.nextActions.includes('Run an additional verifier.'));
   assert.ok(presentation.diagnosticsRefs.some((ref) => ref.kind === 'work-evidence'));
-  assert.match(presentation.confidenceExplanation ?? '', /verification uncertain/);
+  assert.match(presentation.confidenceExplanation?.summary ?? '', /verification uncertain/);
 });
 
 test('marks uncited claims as unverified instead of inventing evidence', () => {

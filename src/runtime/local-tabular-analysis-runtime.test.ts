@@ -359,7 +359,7 @@ P10,East,coaching,60,70,`,
   assert.ok(followup);
   assert.equal(followup?.displayIntent?.taskOutcome, 'satisfied');
   assert.match(followup?.message ?? '', /answered from existing artifacts/);
-  assert.match(followup?.message ?? '', /no AgentServer generation was started/);
+  assert.match(followup?.message ?? '', /no remote backend generation was started/);
   assert.match(followup?.message ?? '', /coaching vs standard/);
   assert.match(followup?.message ?? '', /Robustness:/);
   assert.match(followup?.message ?? '', /Limitations:/);

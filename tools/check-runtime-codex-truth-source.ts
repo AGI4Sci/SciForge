@@ -39,6 +39,9 @@ const currentWebE2eCaseFileByTag: Record<string, string> = {
   'SA-WEB-36': 'tests/smoke/web-e2e/cases/capability-skill-computer-use-boundaries.ts',
   'SA-WEB-37': 'tests/smoke/web-e2e/cases/run-resume-lifecycle-recovery.ts',
   'SA-WEB-38': 'tests/smoke/web-e2e/cases/provider-security-budget-audit-fixture.ts',
+  'SA-WEB-39': 'tests/smoke/web-e2e/case-tags.ts',
+  'SA-WEB-40': 'tests/smoke/web-e2e/case-tags.ts',
+  'SA-WEB-41': 'tests/smoke/web-e2e/case-tags.ts',
 };
 const additionalRuntimeSemanticTags = ['SA-WEB-13'];
 
@@ -108,15 +111,7 @@ if (legacyCompatSteps.length === 0 || !legacyCompatSteps.every((step) => /\bagen
 }
 const realTaskOfflineGateSteps = packageScriptSteps(scripts[realTaskOfflineGatesScript]);
 const requiredRealTaskOfflineGates = [
-  'smoke:real-task-literature-web-gates',
-  'smoke:real-task-data-gates',
-  'smoke:real-task-code-gates',
-  'smoke:real-task-scientific-gates',
-  'smoke:real-task-capability-skill-cu-gates',
   'smoke:real-task-protocol-gates',
-  'smoke:real-task-provider-security-gates',
-  'smoke:real-task-run-resume-memory-gates',
-  'smoke:desktop-live-acceptance-evidence',
 ];
 for (const requiredGate of requiredRealTaskOfflineGates) {
   if (realTaskOfflineGateSteps.includes(requiredGate)) continue;

@@ -305,7 +305,7 @@ function failClosedPayload(
       ...topLevelRefs(payload),
       ...verificationGateAuditRefs(gateAudit),
     },
-    confidence: Math.min(payload.confidence, 0.35),
+    confidence: Math.min(typeof payload.confidence === 'number' ? payload.confidence : result.confidence, 0.35),
     claimType: String(payload.claimType || '').includes('error') ? payload.claimType : 'verification-gated',
     evidenceLevel: 'verification-required',
     claims: [

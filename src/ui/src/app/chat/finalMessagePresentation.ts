@@ -150,7 +150,32 @@ function confidenceMarkdown(value: unknown) {
   const summary = stringField(value.summary) ?? stringField(value.explanation);
   if (!summary) return undefined;
   const level = stringField(value.level);
-  return `${level ? `${level}: ` : ''}${summary}`;
+  const details = [
+    fieldLine('evidenceLevel', stringField(value.evidenceLevel)),
+    fieldLine('sourceScore', numberField(value.sourceScore)),
+    fieldLine('evidenceDefault', numberField(value.evidenceDefault)),
+    fieldLine('evidenceCap', numberField(value.evidenceCap)),
+  ].filter(Boolean);
+  const penalties = recordList(value.penalties).map((penalty) => {
+    const reason = stringField(penalty.reason) ?? stringField(penalty.summary) ?? stringField(penalty.label);
+    if (!reason) return '';
+    const delta = numberField(penalty.delta);
+    return `- ${delta === undefined ? reason : `${reason} (${formatNumber(delta)})`}`;
+  }).filter(Boolean);
+  return [
+    `${level ? `${level}: ` : ''}${summary}`,
+    ...details.map((detail) => `- ${detail}`),
+    ...penalties,
+  ].join('\n');
+}
+
+function fieldLine(label: string, value: string | number | undefined) {
+  if (value === undefined) return undefined;
+  return `${label}: ${typeof value === 'number' ? formatNumber(value) : value}`;
+}
+
+function formatNumber(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
 }
 
 function structuredAuditSections(contract: ResultPresentationContractLike, fallbackContent: string): FinalMessageAuditSection[] {
@@ -487,6 +512,10 @@ function recordList(value: unknown) {
 
 function stringField(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function numberField(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function stringList(value: unknown) {

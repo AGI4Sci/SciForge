@@ -1,9 +1,12 @@
+import { uiComponentManifests } from '../../../../packages/presentation/components/manifest-registry';
+import type { UIComponentManifest } from '../../../../packages/presentation/components/types';
+
 export type GuiContextLevel = 'shell' | 'hot-region' | 'region-detail' | 'debug';
 export type GuiLayoutMode = 'desktop' | 'tablet' | 'mobile';
 export type GuiInteractionMode = 'idle' | 'reading' | 'editing' | 'selecting' | 'dragging' | 'modal';
 export type GuiLastChangeOrigin = 'user' | 'agent' | 'system';
 export type GuiResourceKind = 'directory' | 'file';
-export type GuiSearchKind = 'ref' | 'title' | 'visible-text' | 'action' | 'status';
+export type GuiSearchKind = 'ref' | 'title' | 'visible-text' | 'action' | 'status' | 'renderer' | 'artifact-type' | 'preview-kind';
 export type GuiIntentReason =
   | 'state-conflict'
   | 'user-editing'
@@ -84,6 +87,54 @@ export interface GuiResourceStatResult {
   sizeBytes: number;
   disclosure: GuiContextLevel;
   readonly: true;
+}
+
+export type GuiPreviewKind = 'markdown' | 'table' | 'diff' | 'image' | 'json' | 'notebook' | 'custom';
+
+export interface GuiPresentationComponentSummary {
+  componentId: string;
+  title: string;
+  description?: string;
+  acceptsArtifactTypes: string[];
+  previewKinds: GuiPreviewKind[];
+  lifecycleLayer: 'presentation';
+  safety: {
+    readsWorkspace: boolean;
+    writesWorkspace: false;
+    executesCode: false;
+    requiresConfirmation: boolean;
+  };
+  agentSummary?: string;
+}
+
+export interface GuiPresentationRendererResource extends GuiPresentationComponentSummary {
+  schemaVersion: 'sciforge.gui-renderer.v1';
+  source: 'packages/presentation/components';
+  moduleId: string;
+  packageName: string;
+  outputArtifactTypes: string[];
+  fallbackRendererIds: string[];
+  docs: {
+    readmePath?: string;
+    agentSummary?: string;
+  };
+  workbenchDemo?: {
+    artifactType?: string;
+    hasFixture: boolean;
+  };
+  boundary: {
+    taskCapability: false;
+    providerRoute: false;
+    algorithmRecommendation: false;
+    importsReactComponent: false;
+  };
+}
+
+export interface GuiPresentationCatalog {
+  schemaVersion: 'sciforge.gui-presentation-catalog.v1';
+  source: 'packages/presentation/components';
+  updatedAt: string;
+  components: GuiPresentationComponentSummary[];
 }
 
 export type GuiSuggestion =
@@ -246,6 +297,13 @@ const AVAILABLE_GUI_TOOLS = [
   'gui.watch',
 ] as const;
 
+export function guiPresentationResourcePaths(): string[] {
+  return [
+    '/gui/capabilities/presentation.json',
+    ...presentationRendererResources().map((renderer) => renderer.path),
+  ];
+}
+
 export function createGuiProtocolController(input: GuiProtocolSnapshotInput = {}): GuiProtocolController {
   let revision = input.revision ?? 1;
   let updatedAt = input.updatedAt ?? new Date(0).toISOString();
@@ -328,12 +386,13 @@ export function createGuiProtocolController(input: GuiProtocolSnapshotInput = {}
       const kindSet = kinds?.length ? new Set(kinds) : undefined;
       const normalizedScope = normalizePath(scope);
       return searchIndex()
-        .filter((item) => item.path === normalizedScope || item.path.startsWith(`${normalizedScope.replace(/\/$/, '')}/`))
+        .filter((item) => searchScopeIncludesPath(normalizedScope, item.path))
         .filter((item) => !kindSet || kindSet.has(item.kind))
         .map((item) => ({ item, score: searchScore(item, normalizedQuery) }))
         .filter(({ score }) => score > 0)
         .sort((left, right) => right.score - left.score || left.item.path.localeCompare(right.item.path))
-        .map(({ item, score }) => ({ ...item, score }));
+        .slice(0, 25)
+        .map(({ item, score }) => ({ ...item, text: clipSearchText(item.text), score }));
     },
     stat({ path }) {
       const normalized = normalizePath(path);
@@ -487,6 +546,12 @@ export function createGuiProtocolController(input: GuiProtocolSnapshotInput = {}
       status,
       entries: intentLog,
     })));
+    add(directory('/gui/capabilities', 'shell', updatedAt));
+    add(file('/gui/capabilities/presentation.json', 'shell', updatedAt, () => json(presentationCatalog(updatedAt))));
+    add(directory('/gui/renderers', 'shell', updatedAt));
+    for (const renderer of presentationRendererResources()) {
+      add(file(renderer.path, 'shell', updatedAt, () => json(renderer.resource)));
+    }
     add(directory('/gui/regions', 'region-detail', updatedAt));
     for (const region of regions) {
       const base = `/gui/regions/${resourceSegment(region.regionId)}`;
@@ -511,6 +576,25 @@ export function createGuiProtocolController(input: GuiProtocolSnapshotInput = {}
       ...hot.hotRegion.availableActions.map((action) => ({ path: '/gui/hot-region.json', kind: 'action' as const, text: `${action.label} ${action.commandText}`, action })),
       ...intentLog.map((entry) => ({ path: '/gui/intent-log.json', kind: 'status' as const, text: `${entry.tool} ${entry.summary} ${entry.reason ?? ''}` })),
     ];
+    const catalog = presentationCatalog(updatedAt);
+    items.push({
+      path: '/gui/capabilities/presentation.json',
+      kind: 'visible-text',
+      text: `presentation catalog ${catalog.source} ${catalog.components.length} renderers`,
+    });
+    for (const renderer of presentationRendererResources()) {
+      const resource = renderer.resource;
+      items.push({ path: renderer.path, kind: 'renderer', text: `${resource.componentId} ${resource.moduleId}`, ref: renderer.path });
+      items.push({ path: renderer.path, kind: 'title', text: resource.title });
+      if (resource.description) items.push({ path: renderer.path, kind: 'visible-text', text: resource.description });
+      if (resource.agentSummary) items.push({ path: renderer.path, kind: 'visible-text', text: resource.agentSummary });
+      for (const artifactType of resource.acceptsArtifactTypes) {
+        items.push({ path: renderer.path, kind: 'artifact-type', text: `${resource.componentId} accepts ${artifactType}` });
+      }
+      for (const previewKind of resource.previewKinds) {
+        items.push({ path: renderer.path, kind: 'preview-kind', text: `${resource.componentId} preview ${previewKind}` });
+      }
+    }
     for (const region of regions) {
       const base = `/gui/regions/${resourceSegment(region.regionId)}`;
       if (region.title) items.push({ path: `${base}/summary.md`, kind: 'title', text: region.title });
@@ -794,6 +878,16 @@ function searchScore(item: Omit<GuiResourceSearchResult, 'score'>, query: string
   return query.split(/\s+/).filter((part) => part && text.includes(part)).length * 10;
 }
 
+function searchScopeIncludesPath(scope: string, path: string) {
+  const normalizedScope = scope.replace(/\/$/, '');
+  if (path === normalizedScope || path.startsWith(`${normalizedScope}/`)) return true;
+  return normalizedScope === '/gui/capabilities' && path.startsWith('/gui/renderers/');
+}
+
+function clipSearchText(value: string) {
+  return value.length > 320 ? `${value.slice(0, 317)}...` : value;
+}
+
 function unsupportedRendererReason(input: GuiPresentInput): { reason: GuiIntentReason; suggestions: GuiSuggestion[] } | undefined {
   const renderer = input.hint ?? input.content?.kind;
   if (renderer && !['markdown', 'table', 'diff', 'image', 'json', 'auto', 'notebook'].includes(renderer)) {
@@ -805,6 +899,7 @@ function unsupportedRendererReason(input: GuiPresentInput): { reason: GuiIntentR
 function placementPanelForPresent(input: GuiPresentInput) {
   if (input.intent === 'show-debug' || input.intent === 'show-progress-detail') return 'audit';
   if (input.intent === 'show-diff') return 'diff';
+  if (input.intent === 'focus-existing') return 'results';
   if (input.intent === 'show-artifact') return 'results';
   return 'chat';
 }
@@ -838,4 +933,95 @@ function suggestionsForReason(reason: GuiIntentReason): GuiSuggestion[] {
 function upsertRegion(regions: GuiRegionDetail[], next: GuiRegionDetail) {
   const without = regions.filter((region) => region.regionId !== next.regionId);
   return [...without, next];
+}
+
+function presentationCatalog(updatedAt: string): GuiPresentationCatalog {
+  return {
+    schemaVersion: 'sciforge.gui-presentation-catalog.v1',
+    source: 'packages/presentation/components',
+    updatedAt,
+    components: presentationRendererResources().map(({ resource }) => presentationSummary(resource)),
+  };
+}
+
+function presentationRendererResources(): Array<{ path: string; resource: GuiPresentationRendererResource }> {
+  return uiComponentManifests.map((manifest) => {
+    const componentId = resourceSegment(manifest.componentId);
+    return {
+      path: `/gui/renderers/${componentId}.json`,
+      resource: rendererResourceFromManifest(manifest),
+    };
+  });
+}
+
+function rendererResourceFromManifest(manifest: UIComponentManifest): GuiPresentationRendererResource {
+  return {
+    schemaVersion: 'sciforge.gui-renderer.v1',
+    source: 'packages/presentation/components',
+    moduleId: manifest.moduleId,
+    packageName: manifest.packageName,
+    componentId: manifest.componentId,
+    title: manifest.title,
+    description: manifest.description,
+    acceptsArtifactTypes: [...manifest.acceptsArtifactTypes],
+    outputArtifactTypes: [...(manifest.outputArtifactTypes ?? [])],
+    previewKinds: previewKindsForManifest(manifest),
+    lifecycleLayer: 'presentation',
+    safety: {
+      readsWorkspace: false,
+      writesWorkspace: false,
+      executesCode: false,
+      requiresConfirmation: false,
+    },
+    agentSummary: manifest.docs.agentSummary,
+    fallbackRendererIds: [...(manifest.fallbackModuleIds ?? [])],
+    docs: {
+      readmePath: manifest.docs.readmePath,
+      agentSummary: manifest.docs.agentSummary,
+    },
+    workbenchDemo: manifest.workbenchDemo
+      ? {
+        artifactType: manifest.workbenchDemo.artifactType,
+        hasFixture: true,
+      }
+      : undefined,
+    boundary: {
+      taskCapability: false,
+      providerRoute: false,
+      algorithmRecommendation: false,
+      importsReactComponent: false,
+    },
+  };
+}
+
+function presentationSummary(resource: GuiPresentationRendererResource): GuiPresentationComponentSummary {
+  return {
+    componentId: resource.componentId,
+    title: resource.title,
+    description: resource.description,
+    acceptsArtifactTypes: [...resource.acceptsArtifactTypes],
+    previewKinds: [...resource.previewKinds],
+    lifecycleLayer: 'presentation',
+    safety: { ...resource.safety },
+    agentSummary: resource.agentSummary,
+  };
+}
+
+function previewKindsForManifest(manifest: UIComponentManifest): GuiPreviewKind[] {
+  const haystack = [
+    manifest.componentId,
+    manifest.title,
+    manifest.description,
+    manifest.acceptsArtifactTypes.join(' '),
+    manifest.docs.agentSummary,
+  ].join(' ').toLowerCase();
+  const kinds: GuiPreviewKind[] = [];
+  if (/markdown|report|document|protocol|claim-verdict|negative-result|analysis-plan/.test(haystack)) kinds.push('markdown');
+  if (/table|matrix|dataframe|paper-list|record|csv|tsv|dataset|evidence/.test(haystack)) kinds.push('table');
+  if (/diff|comparison|compare/.test(haystack)) kinds.push('diff');
+  if (/image|microscopy|pathology|gel|blot|spatial/.test(haystack)) kinds.push('image');
+  if (/notebook|timeline|provenance/.test(haystack)) kinds.push('notebook');
+  if (/json|schema|graph|structure|model|artifact|viewer|plot|sequence|genome/.test(haystack)) kinds.push('json');
+  if (!kinds.length) kinds.push('custom');
+  return uniqueStrings(kinds) as GuiPreviewKind[];
 }
