@@ -19,9 +19,9 @@ for (const [id, uiPort, workspacePort, runtimeCodexPort] of expected) {
   assert.equal(profile.workspacePort, workspacePort);
   assert.equal(profile.runtimeCodexPort, runtimeCodexPort);
   assert.equal(profile.workspacePath, `workspace/parallel/${id}`);
-  assert.equal(profile.stateDir, `.sciforge/parallel/${id}`);
-  assert.equal(profile.logDir, `.sciforge/parallel/${id}/logs`);
-  assert.equal(profile.configPath, `.sciforge/parallel/${id}/config.local.json`);
+  assert.equal(profile.stateDir, `workspace/parallel/${id}/.sciforge`);
+  assert.equal(profile.logDir, `workspace/parallel/${id}/.sciforge/logs`);
+  assert.equal(profile.configPath, `workspace/parallel/${id}/.sciforge/config.local.json`);
 }
 
 assert.equal(normalizeInstanceName('main'), 'p1');

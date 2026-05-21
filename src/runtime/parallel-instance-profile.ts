@@ -32,16 +32,18 @@ export function parallelProfile(instance: string): ParallelInstanceProfile {
   const runtimeCodexPort = RUNTIME_CODEX_PORT_BASE + index - 1;
   const peerUiPort = UI_PORT_BASE + peerIndex - 1;
   const peerWorkspacePort = WORKSPACE_PORT_BASE + peerIndex - 1;
+  const workspacePath = `workspace/parallel/${id}`;
+  const stateDir = `${workspacePath}/.sciforge`;
   return {
     id,
     role: id,
     uiPort: String(uiPort),
     workspacePort: String(workspacePort),
     runtimeCodexPort: String(runtimeCodexPort),
-    workspacePath: `workspace/parallel/${id}`,
-    stateDir: `.sciforge/parallel/${id}`,
-    logDir: `.sciforge/parallel/${id}/logs`,
-    configPath: `.sciforge/parallel/${id}/config.local.json`,
+    workspacePath,
+    stateDir,
+    logDir: `${stateDir}/logs`,
+    configPath: `${stateDir}/config.local.json`,
     agentAutostart: undefined,
     counterpart: {
       agentId: `p${peerIndex}`,

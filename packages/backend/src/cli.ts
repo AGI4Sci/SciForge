@@ -14,6 +14,15 @@ const server = await startCodexResponsesProxyServer({
   upstreamApiKey: options.upstreamApiKey,
   defaultModel: options.defaultModel,
   forceNonStreamingUpstream: options.forceNonStreamingUpstream,
+  resolveDynamicOptions: () => {
+    const latest = resolveProxyCliOptions(process.argv.slice(2));
+    return {
+      upstreamBaseUrl: latest.upstreamBaseUrl,
+      upstreamApiKey: latest.upstreamApiKey,
+      defaultModel: latest.defaultModel,
+      forceNonStreamingUpstream: latest.forceNonStreamingUpstream,
+    };
+  },
   log: options.quiet ? undefined : (message) => console.error(`[sciforge-backend] ${message}`),
 });
 

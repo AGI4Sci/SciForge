@@ -11,6 +11,7 @@ applyInstanceDefaults();
 const WORKSPACE_PORT = Number(process.env.SCIFORGE_WORKSPACE_PORT || 5174);
 const UI_PORT = Number(process.env.SCIFORGE_UI_PORT || 5173);
 const AGENT_SERVER_PORT = Number(process.env.SCIFORGE_AGENT_SERVER_PORT || 18080);
+const CODEX_PROXY_PORT = Number(process.env.SCIFORGE_PROXY_PORT || 3891);
 const AGENT_SERVER_ROOT = resolve(process.env.SCIFORGE_AGENT_SERVER_ROOT || '../AgentServer');
 const CONFIG_LOCAL_PATH = resolve(process.env.SCIFORGE_CONFIG_PATH || 'config.local.json');
 const children: ChildProcess[] = [];
@@ -65,7 +66,7 @@ function runtimeCodexEnvFromLocalConfig() {
     return {
       ...(apiKey ? { SCIFORGE_RUNTIME_API_KEY: apiKey } : {}),
       ...(provider ? { SCIFORGE_RUNTIME_PROVIDER: provider } : {}),
-      ...(baseUrl ? { SCIFORGE_RUNTIME_BASE_URL: baseUrl.replace(/\/+$/, '') } : {}),
+      ...(baseUrl ? { SCIFORGE_RUNTIME_BASE_URL: baseUrl.replace(/\/+$/, ''), SCIFORGE_PROXY_UPSTREAM_BASE_URL: baseUrl.replace(/\/+$/, '') } : {}),
       ...(model ? { SCIFORGE_RUNTIME_MODEL: model } : {}),
     };
   } catch {
@@ -82,6 +83,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const workspaceHealth = await readHealth(WORKSPACE_PORT);
+if (await isListening(CODEX_PROXY_PORT)) {
+  console.log(`SciForge Codex proxy already running: http://127.0.0.1:${CODEX_PROXY_PORT}/v1`);
+} else {
+  children.push(start('codex-proxy', ['run', 'backend:codex-proxy'], process.cwd(), {
+    ...runtimeCodexEnvFromLocalConfig(),
+    SCIFORGE_CONFIG_PATH: CONFIG_LOCAL_PATH,
+    SCIFORGE_PROXY_PORT: String(CODEX_PROXY_PORT),
+    SCIFORGE_PROXY_QUIET: '1',
+  }));
+}
+
 if (workspaceHealth.ok) {
   console.log(`SciForge workspace writer already running: http://127.0.0.1:${WORKSPACE_PORT}`);
 } else if (await isListening(WORKSPACE_PORT)) {
@@ -265,7 +277,7 @@ async function processEnvironment(pid: number) {
 
 function uiDevPidfilePath(port: number) {
   const instance = process.env.SCIFORGE_INSTANCE_ID || process.env.SCIFORGE_INSTANCE || 'main';
-  const stateDir = process.env.SCIFORGE_STATE_DIR || '.sciforge/parallel/p1';
+  const stateDir = process.env.SCIFORGE_STATE_DIR || 'workspace/parallel/p1/.sciforge';
   return resolve(stateDir, 'dev', `ui-${instance}-${port}.pid.json`);
 }
 

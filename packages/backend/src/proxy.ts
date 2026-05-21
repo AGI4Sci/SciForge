@@ -19,6 +19,7 @@ export interface CodexResponsesProxyServerOptions extends CodexResponsesProxyOpt
   forceNonStreamingUpstream?: boolean;
   log?: (message: string) => void;
   fetchImpl?: typeof fetch;
+  resolveDynamicOptions?: () => Promise<Partial<CodexResponsesProxyServerOptions>> | Partial<CodexResponsesProxyServerOptions>;
 }
 
 export interface StartedCodexResponsesProxy {
@@ -71,16 +72,18 @@ type MutableToolCall = {
 
 export function createCodexResponsesProxyServer(options: CodexResponsesProxyServerOptions): Server {
   const fetchImpl = options.fetchImpl ?? fetch;
-  const upstreamBaseUrl = trimTrailingSlash(options.upstreamBaseUrl);
   const upstreamPreflightTimeoutMs = 2_500;
 
   return createServer(async (request, response) => {
     try {
+      const dynamicOptions = await options.resolveDynamicOptions?.();
+      const requestOptions = { ...options, ...dynamicOptions, fetchImpl, resolveDynamicOptions: options.resolveDynamicOptions };
+      const upstreamBaseUrl = trimTrailingSlash(requestOptions.upstreamBaseUrl);
       const url = new URL(request.url ?? '/', `http://${request.headers.host ?? '127.0.0.1'}`);
       if (request.method === 'OPTIONS') return sendCors(response);
       if (request.method === 'GET' && url.pathname === '/healthz') {
         if (url.searchParams.get('check') === 'upstream') {
-          const upstream = await preflightUpstream(request, fetchImpl, options, upstreamBaseUrl, upstreamPreflightTimeoutMs);
+          const upstream = await preflightUpstream(request, fetchImpl, requestOptions, upstreamBaseUrl, upstreamPreflightTimeoutMs);
           return sendJson(response, 200, {
             ok: upstream.ok,
             upstreamBaseUrl,
@@ -95,13 +98,13 @@ export function createCodexResponsesProxyServer(options: CodexResponsesProxyServ
         });
       }
       if (request.method === 'GET' && url.pathname === '/v1/models') {
-        return proxyRaw(request, response, fetchImpl, options, `${upstreamBaseUrl}/models`);
+        return proxyRaw(request, response, fetchImpl, requestOptions, `${upstreamBaseUrl}/models`);
       }
       if (request.method === 'POST' && url.pathname === '/v1/chat/completions') {
-        return proxyRaw(request, response, fetchImpl, options, `${upstreamBaseUrl}/chat/completions`);
+        return proxyRaw(request, response, fetchImpl, requestOptions, `${upstreamBaseUrl}/chat/completions`);
       }
       if (request.method === 'POST' && url.pathname === '/v1/responses') {
-        return handleResponsesRequest(request, response, fetchImpl, options, `${upstreamBaseUrl}/chat/completions`);
+        return handleResponsesRequest(request, response, fetchImpl, requestOptions, `${upstreamBaseUrl}/chat/completions`);
       }
       return sendJson(response, 404, { error: { code: 'not_found', message: 'Route not found' } });
     } catch (error) {

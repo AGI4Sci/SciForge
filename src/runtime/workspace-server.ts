@@ -22,8 +22,9 @@ import {
 import { handleScenarioLibraryRoutes } from './server/scenario-library-routes.js';
 import { handleWorkspaceFileApiRoutes, readLastWorkspacePath } from './server/workspace-file-api.js';
 import { handleCodexRuntimeRoutes } from './codex/codex-runtime-server.js';
+import { CodexExecJsonAdapter } from './codex/codex-exec-json-adapter.js';
 import { normalizeInstanceName, parallelProfile } from './parallel-instance-profile.js';
-import { ensureRuntimeHome } from '../../packages/backend/src/runtime-home.js';
+import { DEFAULT_PROXY_BASE_URL, ensureRuntimeHome } from '../../packages/backend/src/runtime-home.js';
 
 const INSTANCE_ID = process.env.SCIFORGE_INSTANCE_ID || process.env.SCIFORGE_INSTANCE || 'default';
 const INSTANCE_ROLE = process.env.SCIFORGE_INSTANCE_ROLE || INSTANCE_ID;
@@ -31,11 +32,11 @@ const DEFAULT_PARALLEL_INSTANCE_ID = normalizeParallelInstanceId(INSTANCE_ID);
 const DEFAULT_PARALLEL_PROFILE = parallelProfile(DEFAULT_PARALLEL_INSTANCE_ID);
 const PORT = Number(process.env.SCIFORGE_WORKSPACE_PORT || DEFAULT_PARALLEL_PROFILE.workspacePort);
 const UI_PORT = Number(process.env.SCIFORGE_UI_PORT || DEFAULT_PARALLEL_PROFILE.uiPort);
-const DEFAULT_PARALLEL_STATE_DIR = join(process.cwd(), '.sciforge', 'parallel', DEFAULT_PARALLEL_INSTANCE_ID);
-const DEFAULT_PARALLEL_WORKSPACE_PATH = join(process.cwd(), 'workspace', 'parallel', DEFAULT_PARALLEL_INSTANCE_ID);
+const DEFAULT_PARALLEL_STATE_DIR = join(process.cwd(), DEFAULT_PARALLEL_PROFILE.stateDir);
+const DEFAULT_PARALLEL_WORKSPACE_PATH = join(process.cwd(), DEFAULT_PARALLEL_PROFILE.workspacePath);
 const STATE_DIR = resolve(process.env.SCIFORGE_STATE_DIR || DEFAULT_PARALLEL_STATE_DIR);
 const LOG_DIR = resolve(process.env.SCIFORGE_LOG_DIR || join(STATE_DIR, 'logs'));
-const CONFIG_LOCAL_PATH = resolve(process.env.SCIFORGE_CONFIG_PATH || join(DEFAULT_PARALLEL_STATE_DIR, 'config.local.json'));
+const CONFIG_LOCAL_PATH = resolve(process.env.SCIFORGE_CONFIG_PATH || join(process.cwd(), DEFAULT_PARALLEL_PROFILE.configPath));
 const DEFAULT_WORKSPACE_PATH = normalizeWorkspaceRootPath(resolve(process.env.SCIFORGE_WORKSPACE_PATH || DEFAULT_PARALLEL_WORKSPACE_PATH));
 const STARTED_AT = new Date().toISOString();
 const LIFECYCLE_TOKEN = process.env.SCIFORGE_SERVICE_LIFECYCLE_TOKEN || '';
@@ -108,6 +109,8 @@ createServer(async (req, res) => {
   }
   if (url.pathname === '/api/sciforge/runtime/codex/stream') {
     await syncRuntimeCodexHomeFromLocalConfig();
+    const runtimeEnv = await runtimeCodexEnvFromLocalConfig();
+    if (await handleCodexRuntimeRoutes(req, res, url, new CodexExecJsonAdapter({ env: runtimeEnv }))) return;
   }
   if (await handleCodexRuntimeRoutes(req, res, url)) return;
   if (url.pathname === '/api/sciforge/instance/stable-version' && req.method === 'GET') {
@@ -797,17 +800,41 @@ async function writeLocalSciForgeConfig(config: Record<string, unknown>) {
 async function syncRuntimeCodexHomeFromLocalConfig(configuredLlm?: Record<string, unknown>) {
   const localConfig = configuredLlm ? { llm: configuredLlm } : await readConfigLocalJson();
   const llm = isRecord(localConfig.llm) ? localConfig.llm : {};
-  const proxyBaseUrl = typeof llm.baseUrl === 'string' ? llm.baseUrl.trim().replace(/\/+$/, '') : '';
-  if (!proxyBaseUrl) return;
+  const configuredBaseUrl = typeof llm.baseUrl === 'string' ? llm.baseUrl.trim().replace(/\/+$/, '') : '';
+  if (!configuredBaseUrl) return;
+  const proxyBaseUrl = stringValue(process.env.SCIFORGE_PROXY_BASE_URL)
+    ? `${stringValue(process.env.SCIFORGE_PROXY_BASE_URL).replace(/\/+$/, '')}/v1`
+    : DEFAULT_PROXY_BASE_URL;
   await ensureRuntimeHome({ proxyBaseUrl, overwrite: true });
+}
+
+async function runtimeCodexEnvFromLocalConfig(configuredLlm?: Record<string, unknown>): Promise<NodeJS.ProcessEnv> {
+  const localConfig = configuredLlm ? { llm: configuredLlm } : await readConfigLocalJson();
+  const llm = isRecord(localConfig.llm) ? localConfig.llm : {};
+  const apiKey = stringValue(localConfig.apiKey) || stringValue(llm.apiKey);
+  const provider = stringValue(localConfig.modelProvider) || stringValue(llm.provider);
+  const baseUrl = (stringValue(localConfig.modelBaseUrl) || stringValue(llm.baseUrl)).replace(/\/+$/, '');
+  const model = stringValue(localConfig.modelName) || stringValue(llm.model) || stringValue(llm.modelName);
+  return {
+    ...process.env,
+    ...(apiKey ? { SCIFORGE_RUNTIME_API_KEY: apiKey } : {}),
+    ...(provider ? { SCIFORGE_RUNTIME_PROVIDER: provider } : {}),
+    ...(baseUrl ? { SCIFORGE_RUNTIME_BASE_URL: baseUrl, SCIFORGE_PROXY_UPSTREAM_BASE_URL: baseUrl } : {}),
+    ...(model ? { SCIFORGE_RUNTIME_MODEL: model } : {}),
+  };
 }
 
 function preserveConfiguredSecretString(nextValue: unknown, currentValue: unknown) {
   const current = typeof currentValue === 'string' ? currentValue : '';
   if (typeof nextValue !== 'string') return current;
   const next = nextValue.trim();
+  if (/^••••/.test(next)) return current;
   if (!next && current.trim()) return current;
   return nextValue;
+}
+
+function stringValue(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 async function readConfigLocalJson(): Promise<Record<string, unknown>> {
