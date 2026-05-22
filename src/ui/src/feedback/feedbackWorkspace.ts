@@ -3,6 +3,8 @@ import {
   nowIso,
   type FeedbackCommentRecord,
   type FeedbackCommentStatus,
+  type FeedbackRepairActionRecord,
+  type FeedbackRepairGuidanceRecord,
   type FeedbackRepairResultRecord,
   type FeedbackRepairRunRecord,
   type FeedbackRepairStatus,
@@ -13,6 +15,7 @@ import {
   createUserFeedbackConvergence,
   type UserFeedbackConvergence,
 } from '@sciforge-ui/runtime-contract/user-feedback-convergence';
+import { isFeedbackCommentStatus } from '@sciforge-ui/runtime-contract';
 import type {
   FailureSignatureRegistry,
   TaskRunCard,
@@ -22,6 +25,29 @@ const FEEDBACK_COMMENT_LIMIT = 500;
 const FEEDBACK_REQUEST_LIMIT = 80;
 
 type FeedbackRequestRecord = NonNullable<SciForgeWorkspaceState['feedbackRequests']>[number];
+type FeedbackRequestMetadata = NonNullable<FeedbackRequestRecord['metadata']>;
+
+const DEFAULT_ALLOWED_REQUEST_OPERATIONS = [
+  'read selected feedback records',
+  'read evidence refs and screenshots',
+  'inspect linked session, run, artifact, and execution refs',
+  'prepare a bounded repair plan',
+  'apply scoped workspace patches after user confirmation',
+  'run focused tests and record output refs',
+  'write request status and repair audit updates',
+];
+
+const DEFAULT_FORBIDDEN_REQUEST_OPERATIONS = [
+  'hard-delete feedback records',
+  'delete screenshot, raw evidence, or feedback bundle files',
+  'delete, close, or rewrite linked GitHub issues',
+  'clear repair audit records or workspace patch refs',
+  'git reset --hard',
+  'unbounded git checkout or restore',
+  'modify ignored secret config or provider credentials',
+  'commit, push, PR, or merge without explicit user confirmation',
+  'fabricate tests or output artifacts',
+];
 
 export interface FeedbackRepairAuditViewModel {
   issueId: string;
@@ -42,10 +68,33 @@ export interface FeedbackRepairAuditViewModel {
   humanVerification?: string;
   githubSyncStatus: NonNullable<FeedbackRepairResultRecord['githubSyncStatus']> | 'not-synced';
   githubCommentUrl?: string;
+  latestBrowserVerification?: FeedbackRepairActionRecord['browserVerification'];
+  latestBrowserVerificationLabel?: string;
   missingTestEvidence: boolean;
   testsPassed: boolean;
   needsHumanVerification: boolean;
   githubSynced: boolean;
+  actionHistory: Array<{
+    id: string;
+    action: FeedbackRepairActionRecord['action'];
+    status: FeedbackRepairActionRecord['status'];
+    sideEffect: FeedbackRepairActionRecord['sideEffect'];
+    requestedAt: string;
+    confirmedAt?: string;
+    safeModeConfirmed?: boolean;
+    browserVerification?: FeedbackRepairActionRecord['browserVerification'];
+    message: string;
+  }>;
+  guidanceHistory: Array<{
+    id: string;
+    status: FeedbackRepairGuidanceRecord['status'];
+    requestedAt: string;
+    requestedBy: string;
+    message: string;
+    terminalMirrorRef?: string;
+    codexSessionId?: string;
+    responseSummary?: string;
+  }>;
   latestRun?: FeedbackRepairRunRecord;
   latestResult?: FeedbackRepairResultRecord;
 }
@@ -72,7 +121,9 @@ export function updateFeedbackCommentStatus(
   return {
     ...state,
     feedbackComments: (state.feedbackComments ?? []).map((comment) => selected.has(comment.id)
-      ? { ...comment, status, updatedAt }
+      ? comment.status === 'deleted' && status !== 'deleted'
+        ? comment
+        : { ...comment, status, updatedAt }
       : comment),
   };
 }
@@ -80,16 +131,38 @@ export function updateFeedbackCommentStatus(
 export function deleteFeedbackCommentsFromWorkspace(
   state: SciForgeWorkspaceState,
   ids: string[],
+  deletedAt = nowIso(),
+): SciForgeWorkspaceState {
+  return softDeleteFeedbackCommentsInWorkspace(state, ids, deletedAt);
+}
+
+export function softDeleteFeedbackCommentsInWorkspace(
+  state: SciForgeWorkspaceState,
+  ids: string[],
+  deletedAt = nowIso(),
 ): SciForgeWorkspaceState {
   if (!ids.length) return state;
   const selected = new Set(ids);
   return {
     ...state,
-    feedbackComments: (state.feedbackComments ?? []).filter((comment) => !selected.has(comment.id)),
-    feedbackRequests: (state.feedbackRequests ?? []).map((request) => ({
-      ...request,
-      feedbackIds: request.feedbackIds.filter((id) => !selected.has(id)),
-    })),
+    feedbackComments: (state.feedbackComments ?? []).map((comment) => selected.has(comment.id)
+      ? softDeleteFeedbackComment(comment, deletedAt)
+      : comment),
+  };
+}
+
+export function restoreFeedbackCommentsInWorkspace(
+  state: SciForgeWorkspaceState,
+  ids: string[],
+  restoredAt = nowIso(),
+): SciForgeWorkspaceState {
+  if (!ids.length) return state;
+  const selected = new Set(ids);
+  return {
+    ...state,
+    feedbackComments: (state.feedbackComments ?? []).map((comment) => selected.has(comment.id)
+      ? restoreFeedbackComment(comment, restoredAt)
+      : comment),
   };
 }
 
@@ -106,11 +179,15 @@ export function createFeedbackRequestFromComments(
   if (!ids.length) return state;
   const createdAt = options.createdAt ?? nowIso();
   const requestId = options.requestId ?? makeId('request');
-  const request = buildFeedbackRequest(state.feedbackComments ?? [], ids, title, requestId, createdAt);
+  const selectedComments = selectedFeedbackComments(state.feedbackComments ?? [], ids);
+  if (!selectedComments.length) return state;
+  const selectedIds = selectedComments.map((comment) => comment.id);
+  const request = buildFeedbackRequest(selectedComments, title, requestId, createdAt);
+  const selected = new Set(selectedIds);
   return {
     ...state,
     feedbackRequests: [request, ...(state.feedbackRequests ?? [])].slice(0, options.requestLimit ?? FEEDBACK_REQUEST_LIMIT),
-    feedbackComments: (state.feedbackComments ?? []).map((comment) => ids.includes(comment.id)
+    feedbackComments: (state.feedbackComments ?? []).map((comment) => selected.has(comment.id)
       ? { ...comment, status: comment.status === 'open' ? 'triaged' : comment.status, requestId, updatedAt: createdAt }
       : comment),
   };
@@ -179,32 +256,91 @@ export function upsertFeedbackRepairResultInWorkspace(
   };
 }
 
+export function upsertFeedbackRepairActionInWorkspace(
+  state: SciForgeWorkspaceState,
+  action: FeedbackRepairActionRecord,
+): SciForgeWorkspaceState {
+  const existing = state.feedbackRepairActions ?? [];
+  return {
+    ...state,
+    feedbackRepairActions: [action, ...existing.filter((item) => item.id !== action.id)].slice(0, FEEDBACK_REQUEST_LIMIT),
+  };
+}
+
+export function upsertFeedbackRepairGuidanceInWorkspace(
+  state: SciForgeWorkspaceState,
+  guidance: FeedbackRepairGuidanceRecord,
+): SciForgeWorkspaceState {
+  const existing = state.feedbackRepairGuidance ?? [];
+  return {
+    ...state,
+    feedbackRepairGuidance: [guidance, ...existing.filter((item) => item.id !== guidance.id)].slice(0, FEEDBACK_REQUEST_LIMIT),
+  };
+}
+
 export function feedbackRepairAuditForIssue(
   issueId: string,
   runs: FeedbackRepairRunRecord[] = [],
   results: FeedbackRepairResultRecord[] = [],
+  actions: FeedbackRepairActionRecord[] = [],
+  guidance: FeedbackRepairGuidanceRecord[] = [],
 ): FeedbackRepairAuditViewModel {
   const issueRuns = runs.filter((run) => run.issueId === issueId).sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
   const issueResults = results.filter((result) => result.issueId === issueId).sort((a, b) => Date.parse(b.completedAt) - Date.parse(a.completedAt));
+  const actionHistory = actions
+    .filter((action) => action.issueId === issueId)
+    .sort((a, b) => Date.parse(b.requestedAt) - Date.parse(a.requestedAt))
+    .slice(0, 20)
+    .map((action) => ({
+      id: action.id,
+      action: action.action,
+      status: action.status,
+      sideEffect: action.sideEffect,
+      requestedAt: action.requestedAt,
+      confirmedAt: action.confirmedAt,
+      safeModeConfirmed: action.safeModeConfirmed,
+      browserVerification: action.browserVerification,
+      message: action.message,
+    }));
+  const guidanceHistory = guidance
+    .filter((record) => record.issueId === issueId || runs.some((run) => run.id === record.repairRunId))
+    .sort((a, b) => Date.parse(b.requestedAt) - Date.parse(a.requestedAt))
+    .slice(0, 20)
+    .map((record) => ({
+      id: record.id,
+      status: record.status,
+      requestedAt: record.requestedAt,
+      requestedBy: record.requestedBy,
+      message: record.message,
+      terminalMirrorRef: record.terminalMirrorRef,
+      codexSessionId: record.codexSessionId,
+      responseSummary: record.responseSummary,
+    }));
   const latestRun = issueRuns[0];
   const latestResult = issueResults[0];
+  const latestBrowserVerification = actionHistory.find((action) => action.action === 'browser-recheck')?.browserVerification;
   const tests = normalizeRepairTests(latestResult?.tests ?? latestResult?.testResults ?? []);
   const testsPassed = tests.length > 0 && tests.every((test) => test.status === 'passed');
   const hasFailedTests = tests.some((test) => test.status === 'failed');
-  const status = repairAuditStatus(latestRun, latestResult, tests);
+  const rawStatus = repairAuditStatus(latestRun, latestResult, tests);
+  const evidence = repairAuditEvidenceCompleteness(latestRun, latestResult, tests);
+  const hasCompleteRepairEvidence = evidence.ready === evidence.total;
+  const status = rawStatus === 'github-synced' && !hasCompleteRepairEvidence && latestResult?.verdict === 'fixed'
+    ? 'fixed'
+    : rawStatus;
   const missingTestEvidence = Boolean(latestResult) && latestResult?.verdict === 'fixed' && tests.length === 0;
   const humanVerification = latestResult?.humanVerification;
   const needsHumanVerification = status === 'needs-human-verification'
     || humanVerification?.status === 'required'
     || humanVerification?.status === 'pending'
     || humanVerification?.status === 'failed';
-  const githubSynced = status === 'github-synced' || Boolean(latestResult?.githubCommentUrl);
+  const githubSynced = hasCompleteRepairEvidence && (rawStatus === 'github-synced' || Boolean(latestResult?.githubCommentUrl));
   return {
     issueId,
     status,
-    badge: repairAuditBadge(status, missingTestEvidence, hasFailedTests),
+    badge: repairAuditBadge(status, missingTestEvidence || !hasCompleteRepairEvidence, hasFailedTests),
     label: repairAuditLabel(status),
-    headline: repairAuditHeadline(status, { testsPassed, hasFailedTests, missingTestEvidence, needsHumanVerification, githubSynced }),
+    headline: repairAuditHeadline(status, { testsPassed, hasFailedTests, missingTestEvidence, needsHumanVerification, githubSynced, hasCompleteRepairEvidence }),
     detail: repairAuditDetail(latestRun, latestResult),
     executorInstance: executorInstanceLabel(latestRun, latestResult),
     latestRunStatus: latestRun?.status ?? 'not-started',
@@ -218,10 +354,14 @@ export function feedbackRepairAuditForIssue(
     humanVerification: humanVerificationLabel(humanVerification),
     githubSyncStatus: latestResult?.githubSyncStatus ?? 'not-synced',
     githubCommentUrl: latestResult?.githubCommentUrl,
+    latestBrowserVerification,
+    latestBrowserVerificationLabel: humanVerificationLabel(latestBrowserVerification),
     missingTestEvidence,
     testsPassed,
     needsHumanVerification,
     githubSynced,
+    actionHistory,
+    guidanceHistory,
     latestRun,
     latestResult,
   };
@@ -242,6 +382,41 @@ function repairAuditStatus(
   if (!run) return 'not-started';
   if (run.status === 'running') return 'analyzing';
   return run.status;
+}
+
+function repairAuditEvidenceCompleteness(
+  run: FeedbackRepairRunRecord | undefined,
+  result: FeedbackRepairResultRecord | undefined,
+  tests: ReturnType<typeof normalizeRepairTests>,
+) {
+  const resultMetadata = recordValue(recordValue(result)?.metadata);
+  const runMetadata = recordValue(run?.metadata);
+  const refs = recordValue(result?.refs);
+  const terminalMirror = [
+    run?.terminalMirrorRef,
+    result?.terminalMirrorRef,
+    metadataString(resultMetadata, 'terminalMirrorRef'),
+    metadataString(runMetadata, 'terminalMirrorRef'),
+    metadataString(refs, 'terminalMirrorRef'),
+  ].some(Boolean);
+  const plan = [
+    run?.planRef,
+    result?.planRef,
+    metadataString(resultMetadata, 'planRef'),
+    metadataString(runMetadata, 'planRef'),
+  ].some(Boolean);
+  const audit = [
+    result?.auditBundleRef,
+    metadataString(resultMetadata, 'auditBundleRef'),
+    metadataString(refs, 'auditBundleRef'),
+  ].some(Boolean);
+  const patch = Boolean(result?.diffRef || result?.refs?.patchRef || metadataString(resultMetadata, 'patchRef') || metadataString(resultMetadata, 'diffRef'));
+  const guardDigests = Boolean((run?.baseCommit && run?.dirtyWorktreeDigest && run?.protectedFilesDigest && run?.feedbackDataDigest) || recordValue(resultMetadata?.guardDigests));
+  const items = [plan, terminalMirror, patch, tests.length > 0, audit, guardDigests];
+  return {
+    ready: items.filter(Boolean).length,
+    total: items.length,
+  };
 }
 
 function repairAuditBadge(
@@ -278,6 +453,7 @@ function repairAuditHeadline(
     missingTestEvidence: boolean;
     needsHumanVerification: boolean;
     githubSynced: boolean;
+    hasCompleteRepairEvidence: boolean;
   },
 ) {
   if (status === 'not-started') return '还没有 repair handoff。';
@@ -289,6 +465,7 @@ function repairAuditHeadline(
   if (status === 'blocked') return '没有修好，目标实例报告阻塞。';
   if (facts.missingTestEvidence) return '缺测试证据，不能认定已修复。';
   if (facts.needsHumanVerification) return '需要人工核验。';
+  if (!facts.hasCompleteRepairEvidence && facts.testsPassed) return '测试通过，但修复证据不完整。';
   if (facts.githubSynced) return facts.testsPassed ? '测试通过，已同步 GitHub。' : '已同步 GitHub，但请检查测试证据。';
   if (status === 'fixed') return facts.testsPassed ? '已修好，测试通过。' : '已修好，但测试状态需要复核。';
   return 'repair result 已写回。';
@@ -346,22 +523,40 @@ function formatAuditTime(value: string) {
 
 function buildFeedbackRequest(
   comments: FeedbackCommentRecord[],
-  ids: string[],
   title: string,
   requestId: string,
   createdAt: string,
 ): FeedbackRequestRecord {
+  const feedbackIds = comments.map((comment) => comment.id);
+  const evidenceRefs = stableStringList(comments.flatMap((comment) => feedbackSourceRefs(comment)));
+  const allowedOperations = requestAllowedOperations(comments);
+  const forbiddenOperations = requestForbiddenOperations(comments);
+  const risks = requestRisks(comments);
+  const expectedResult = requestExpectedResult(comments);
+  const metadata = feedbackRequestMetadata({
+    requestId,
+    comments,
+    evidenceRefs,
+    expectedResult,
+    risks,
+    allowedOperations,
+    forbiddenOperations,
+    createdAt,
+  });
   return {
     id: requestId,
     schemaVersion: 1,
     title,
     status: 'draft',
-    feedbackIds: ids,
-    summary: `Codex change request from ${ids.length} feedback comments.`,
-    acceptanceCriteria: ids.map((id) => {
-      const comment = comments.find((item) => item.id === id);
-      return comment ? comment.comment : id;
-    }).slice(0, 12),
+    feedbackIds,
+    summary: `Codex change request from ${feedbackIds.length} feedback comments.`,
+    acceptanceCriteria: comments.map((comment) => feedbackAcceptanceCriterion(comment)).slice(0, 12),
+    evidenceRefs,
+    expectedResult,
+    risks,
+    allowedOperations,
+    forbiddenOperations,
+    metadata,
     createdAt,
     updatedAt: createdAt,
   };
@@ -370,10 +565,17 @@ function buildFeedbackRequest(
 function feedbackSourceRefs(comment: FeedbackCommentRecord) {
   return stableStringList([
     comment.screenshotRef,
+    comment.rawScreenshotRef,
+    comment.annotatedScreenshotRef,
+    comment.evidenceBundleRef,
+    ...(comment.evidenceAssets ?? []).flatMap((asset) => [asset.ref, asset.markdownImageUrl, asset.githubMarkdownUrl, asset.publicUrl, asset.uploadRef]),
+    comment.screenshot?.rawScreenshotRef,
+    comment.screenshot?.annotatedScreenshotRef,
     comment.githubIssueUrl,
     comment.runtime.sessionId ? `session:${comment.runtime.sessionId}` : undefined,
     comment.runtime.activeRunId ? `run:${comment.runtime.activeRunId}` : undefined,
     comment.target.selector ? `target:${comment.target.selector}` : undefined,
+    comment.target.stableSelector ? `target:${comment.target.stableSelector}` : undefined,
     ...(comment.runtime.artifactSummary ?? []).map((artifact) => `artifact:${artifact.id}`),
     ...(comment.runtime.executionSummary ?? []).map((unit) => `execution-unit:${unit.id}`),
   ].filter((ref): ref is string => Boolean(ref)));
@@ -381,4 +583,214 @@ function feedbackSourceRefs(comment: FeedbackCommentRecord) {
 
 function stableStringList(values: string[]) {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).sort();
+}
+
+function selectedFeedbackComments(comments: FeedbackCommentRecord[], ids: string[]) {
+  const byId = new Map(comments.map((comment) => [comment.id, comment]));
+  return uniqueStringList(ids)
+    .map((id) => byId.get(id))
+    .filter((comment): comment is FeedbackCommentRecord => comment !== undefined && comment.status !== 'deleted');
+}
+
+function uniqueStringList(values: string[]) {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+function softDeleteFeedbackComment(comment: FeedbackCommentRecord, deletedAt: string): FeedbackCommentRecord {
+  if (comment.status === 'deleted') return comment;
+  return {
+    ...comment,
+    status: 'deleted',
+    deletedAt,
+    updatedAt: deletedAt,
+    metadata: withFeedbackWorkspaceMetadata(comment.metadata, {
+      softDeleted: true,
+      previousStatus: comment.status,
+      deletedAt,
+      preservedFeedbackId: comment.id,
+      preservedRequestId: comment.requestId,
+      preservedGithubIssueUrl: comment.githubIssueUrl,
+      preservedGithubIssueNumber: comment.githubIssueNumber,
+      preservedEvidenceRefs: feedbackSourceRefs(comment),
+    }),
+  };
+}
+
+function restoreFeedbackComment(comment: FeedbackCommentRecord, restoredAt: string): FeedbackCommentRecord {
+  if (comment.status !== 'deleted' && !comment.deletedAt) return comment;
+  const workspaceMetadata = recordValue(comment.metadata?.feedbackWorkspace);
+  const restoredStatus = restorableFeedbackStatus(workspaceMetadata.previousStatus) ?? 'open';
+  return {
+    ...comment,
+    status: restoredStatus,
+    deletedAt: undefined,
+    restoredAt,
+    updatedAt: restoredAt,
+    metadata: withFeedbackWorkspaceMetadata(comment.metadata, {
+      softDeleted: false,
+      previousStatus: restoredStatus,
+      restoredAt,
+      lastDeletedAt: comment.deletedAt ?? stringValue(workspaceMetadata.deletedAt),
+      preservedFeedbackId: comment.id,
+      preservedRequestId: comment.requestId,
+      preservedGithubIssueUrl: comment.githubIssueUrl,
+      preservedGithubIssueNumber: comment.githubIssueNumber,
+      preservedEvidenceRefs: feedbackSourceRefs(comment),
+    }),
+  };
+}
+
+function restorableFeedbackStatus(value: unknown): FeedbackCommentStatus | undefined {
+  return isFeedbackCommentStatus(value) && value !== 'deleted' ? value : undefined;
+}
+
+function withFeedbackWorkspaceMetadata(metadata: FeedbackCommentRecord['metadata'], updates: Record<string, unknown>) {
+  const current = recordValue(metadata);
+  const feedbackWorkspace = recordValue(current.feedbackWorkspace);
+  return compactRecord({
+    ...current,
+    feedbackWorkspace: compactRecord({
+      ...feedbackWorkspace,
+      ...updates,
+    }),
+  });
+}
+
+function feedbackAcceptanceCriterion(comment: FeedbackCommentRecord) {
+  const expected = comment.expectedBehavior?.trim();
+  return expected ? `${comment.id}: ${expected}` : comment.comment;
+}
+
+function requestExpectedResult(comments: FeedbackCommentRecord[]) {
+  return comments.map((comment) => {
+    const expected = comment.expectedBehavior?.trim();
+    return expected ? `${comment.id}: ${expected}` : `${comment.id}: resolve feedback "${comment.comment.trim()}"`;
+  }).join('\n');
+}
+
+function requestRisks(comments: FeedbackCommentRecord[]) {
+  const routes = stableStringList(comments.map((comment) => comment.runtime.url || comment.runtime.page));
+  return stableStringList([
+    'Preserve local feedback records, repair audit records, workspace patch refs, GitHub links, and raw screenshot evidence.',
+    comments.some((comment) => comment.evidenceStatus?.status === 'partial' || comment.evidenceStatus?.status === 'missing')
+      ? 'Some selected feedback has partial or missing evidence; verify the target before editing.'
+      : undefined,
+    routes.length > 1 ? 'Selected feedback spans multiple routes; keep fixes scoped and verify each affected view.' : undefined,
+    comments.some((comment) => comment.githubIssueUrl)
+      ? 'Linked GitHub issues are trace refs only; do not mutate remote issue state from this local request bundle.'
+      : undefined,
+  ].filter((risk): risk is string => Boolean(risk)));
+}
+
+function requestAllowedOperations(comments: FeedbackCommentRecord[]) {
+  return stableStringList([
+    ...DEFAULT_ALLOWED_REQUEST_OPERATIONS,
+    ...comments.flatMap((comment) => comment.repairPolicy?.allowedOperations ?? []),
+  ]);
+}
+
+function requestForbiddenOperations(comments: FeedbackCommentRecord[]) {
+  return stableStringList([
+    ...DEFAULT_FORBIDDEN_REQUEST_OPERATIONS,
+    ...comments.flatMap((comment) => comment.repairPolicy?.forbiddenOperations ?? []),
+  ]);
+}
+
+function feedbackRequestMetadata(input: {
+  requestId: string;
+  comments: FeedbackCommentRecord[];
+  evidenceRefs: string[];
+  expectedResult: string;
+  risks: string[];
+  allowedOperations: string[];
+  forbiddenOperations: string[];
+  createdAt: string;
+}): FeedbackRequestMetadata {
+  return compactRecord({
+    schemaVersion: 1,
+    kind: 'feedback-request-bundle',
+    source: 'feedback-workspace',
+    requestId: input.requestId,
+    createdAt: input.createdAt,
+    selectedFeedbackIds: input.comments.map((comment) => comment.id),
+    selectedFeedback: input.comments.map((comment) => selectedFeedbackMetadata(comment)),
+    evidenceRefs: input.evidenceRefs,
+    expectedResult: input.expectedResult,
+    risks: input.risks,
+    operationScope: {
+      allowedOperations: input.allowedOperations,
+      forbiddenOperations: input.forbiddenOperations,
+    },
+    preservationPolicy: {
+      softDeleteOnly: true,
+      preserveEvidenceRefs: true,
+      preserveGithubLinks: true,
+      preserveRepairAudit: true,
+      preserveWorkspacePatchRefs: true,
+    },
+  });
+}
+
+function selectedFeedbackMetadata(comment: FeedbackCommentRecord) {
+  return compactRecord({
+    id: comment.id,
+    status: comment.status,
+    priority: comment.priority,
+    severity: comment.severity ?? comment.priority,
+    comment: comment.comment,
+    expectedBehavior: comment.expectedBehavior,
+    actualBehavior: comment.actualBehavior,
+    tags: comment.tags,
+    requestId: comment.requestId,
+    evidenceRefs: feedbackSourceRefs(comment),
+    evidenceStatus: comment.evidenceStatus ? compactRecord({
+      status: comment.evidenceStatus.status,
+      rawScreenshot: comment.evidenceStatus.rawScreenshot,
+      annotatedScreenshot: comment.evidenceStatus.annotatedScreenshot,
+      targetSnapshot: comment.evidenceStatus.targetSnapshot,
+      runtimeSnapshot: comment.evidenceStatus.runtimeSnapshot,
+      scrubbed: comment.evidenceStatus.scrubbed,
+      diagnostics: comment.evidenceStatus.diagnostics,
+    }) : undefined,
+    github: comment.githubIssueUrl ? compactRecord({
+      issueUrl: comment.githubIssueUrl,
+      issueNumber: comment.githubIssueNumber,
+      syncStatus: comment.githubSyncStatus,
+    }) : undefined,
+    target: compactRecord({
+      selector: comment.target.selector,
+      stableSelector: comment.target.stableSelector ?? comment.target.selector,
+      domPath: comment.target.domPath ?? comment.target.path,
+      textSnippet: comment.target.textSnippet ?? comment.target.text,
+      role: comment.target.role,
+      label: comment.target.label ?? comment.target.ariaLabel,
+      rect: comment.target.rect,
+      commentPoint: comment.target.commentPoint,
+    }),
+    runtime: compactRecord({
+      page: comment.runtime.page,
+      url: comment.runtime.url,
+      scenarioId: comment.runtime.scenarioId,
+      sessionId: comment.runtime.sessionId,
+      activeRunId: comment.runtime.activeRunId,
+      artifactRefs: (comment.runtime.artifactSummary ?? []).map((artifact) => `artifact:${artifact.id}`),
+      executionUnitRefs: (comment.runtime.executionSummary ?? []).map((unit) => `execution-unit:${unit.id}`),
+    }),
+  });
+}
+
+function compactRecord<T extends Record<string, unknown>>(record: T): FeedbackRequestMetadata {
+  return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined)) as FeedbackRequestMetadata;
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function stringValue(value: unknown) {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function metadataString(metadata: Record<string, unknown>, key: string) {
+  return stringValue(metadata[key]);
 }

@@ -77,9 +77,10 @@ export function requestTitleFromFeedback(comments: FeedbackCommentRecord[]) {
 
 export function feedbackStatusVariant(status: FeedbackCommentStatus): 'info' | 'success' | 'warning' | 'danger' | 'muted' {
   if (status === 'fixed') return 'success';
-  if (status === 'planned' || status === 'triaged') return 'info';
-  if (status === 'needs-discussion') return 'warning';
-  if (status === 'wont-fix') return 'danger';
+  if (status === 'planned' || status === 'triaged' || status === 'request' || status === 'github-open') return 'info';
+  if (status === 'needs-discussion' || status === 'comment') return 'warning';
+  if (status === 'wont-fix' || status === 'blocked') return 'danger';
+  if (status === 'deleted') return 'muted';
   return 'muted';
 }
 

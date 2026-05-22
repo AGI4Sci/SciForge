@@ -213,10 +213,18 @@ export interface GithubSyncedOpenIssueRecord {
   title: string;
   body: string;
   htmlUrl: string;
+  state?: string;
   updatedAt: string;
   authorLogin?: string;
   labels: string[];
   syncedAt: string;
+  conflict?: {
+    status: 'none' | 'local-edited-after-remote' | 'remote-edited-after-local' | 'body-diverged';
+    localFeedbackId?: string;
+    localUpdatedAt?: string;
+    remoteUpdatedAt?: string;
+    note?: string;
+  };
 }
 
 export interface SciForgeWorkspaceState {
@@ -229,6 +237,8 @@ export interface SciForgeWorkspaceState {
   feedbackRequests?: FeedbackRequestRecord[];
   feedbackRepairRuns?: FeedbackRepairRunRecord[];
   feedbackRepairResults?: FeedbackRepairResultRecord[];
+  feedbackRepairActions?: FeedbackRepairActionRecord[];
+  feedbackRepairGuidance?: FeedbackRepairGuidanceRecord[];
   /** Open GitHub Issues synced from the configured feedback repo (PRs excluded). Replaced on each sync. */
   githubSyncedOpenIssues?: GithubSyncedOpenIssueRecord[];
   beliefGraphs?: BeliefDependencyGraph[];
@@ -243,12 +253,17 @@ export interface SciForgeWorkspaceState {
 
 export interface FeedbackTargetSnapshot {
   selector: string;
+  stableSelector?: string;
   path: string;
+  domPath?: string;
   text: string;
+  textSnippet?: string;
   tagName: string;
   role?: string;
+  label?: string;
   ariaLabel?: string;
   rect: { x: number; y: number; width: number; height: number };
+  commentPoint?: { x: number; y: number };
 }
 
 export interface FeedbackRuntimeSnapshot {
@@ -268,13 +283,60 @@ export interface FeedbackRuntimeSnapshot {
 export interface FeedbackScreenshotEvidence {
   schemaVersion: 1;
   dataUrl: string;
+  rawDataUrl?: string;
+  annotatedDataUrl?: string;
+  rawScreenshotRef?: string;
+  annotatedScreenshotRef?: string;
   mediaType: 'image/jpeg' | 'image/png';
   width: number;
   height: number;
   capturedAt: string;
   targetRect: { x: number; y: number; width: number; height: number };
+  commentPoint?: { x: number; y: number };
+  annotationLabel?: string;
   includeForAgent?: boolean;
   note?: string;
+}
+
+export interface FeedbackEvidenceStatus {
+  status: 'complete' | 'partial' | 'missing';
+  rawScreenshot: boolean;
+  annotatedScreenshot: boolean;
+  targetSnapshot: boolean;
+  runtimeSnapshot: boolean;
+  scrubbed: boolean;
+  diagnostics: string[];
+}
+
+export interface FeedbackEvidenceAssetRecord {
+  schemaVersion: 1;
+  id: string;
+  kind: 'raw-screenshot' | 'annotated-screenshot' | 'scrubbed-annotated-screenshot';
+  label: string;
+  ref: string;
+  sourceRef?: string;
+  localRef?: string;
+  markdownImageUrl?: string;
+  githubMarkdownUrl?: string;
+  publicUrl?: string;
+  uploadRef?: string;
+  uploadProvider?: string;
+  uploadStatus?: 'private' | 'local' | 'ready' | 'uploaded' | 'failed';
+  uploadedAt?: string;
+  uploadedBy?: string;
+  uploadBranch?: string;
+  uploadCommitUrl?: string;
+  uploadError?: string;
+  localOnly?: boolean;
+  visibility?: 'public' | 'private';
+  mediaType?: 'image/jpeg' | 'image/png';
+  width?: number;
+  height?: number;
+  bytes?: number;
+  sha256?: string;
+  createdAt: string;
+  includeForAgent?: boolean;
+  metadata?: Record<string, unknown>;
 }
 
 export interface FeedbackCommentRecord {
@@ -283,19 +345,57 @@ export interface FeedbackCommentRecord {
   authorId: string;
   authorName: string;
   comment: string;
+  expectedBehavior?: string;
+  actualBehavior?: string;
   status: FeedbackCommentStatus;
   priority: FeedbackPriority;
+  severity?: FeedbackPriority;
   tags: string[];
   createdAt: string;
   updatedAt: string;
+  deletedAt?: string;
+  restoredAt?: string;
   requestId?: string;
   target: FeedbackTargetSnapshot;
   viewport: { width: number; height: number; devicePixelRatio: number; scrollX: number; scrollY: number };
   runtime: FeedbackRuntimeSnapshot;
   screenshotRef?: string;
+  rawScreenshotRef?: string;
+  annotatedScreenshotRef?: string;
+  evidenceBundleRef?: string;
+  evidenceAssets?: FeedbackEvidenceAssetRecord[];
+  evidenceStatus?: FeedbackEvidenceStatus;
   screenshot?: FeedbackScreenshotEvidence;
   githubIssueUrl?: string;
   githubIssueNumber?: number;
+  githubSyncStatus?: 'not-synced' | 'pending' | 'github-open' | 'conflict' | 'failed';
+  githubSyncError?: string;
+  repairPolicy?: {
+    defaultCommit: false;
+    defaultPush: false;
+    defaultMerge: false;
+    requiresUserConfirmation: true;
+    allowedOperations: string[];
+    forbiddenOperations: string[];
+  };
+  metadata?: Record<string, unknown>;
+}
+
+export interface FeedbackRepairGuidanceRecord {
+  schemaVersion: 1;
+  id: string;
+  issueId?: string;
+  repairRunId: string;
+  repairResultId?: string;
+  status: 'recorded' | 'resumed' | 'blocked';
+  requestedAt: string;
+  requestedBy: string;
+  message: string;
+  terminalMirrorRef?: string;
+  codexSessionId?: string;
+  eventCount?: number;
+  responseSummary?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface FeedbackRequestRecord {
@@ -306,6 +406,12 @@ export interface FeedbackRequestRecord {
   feedbackIds: string[];
   summary: string;
   acceptanceCriteria: string[];
+  evidenceRefs?: string[];
+  expectedResult?: string;
+  risks?: string[];
+  allowedOperations?: string[];
+  forbiddenOperations?: string[];
+  metadata?: Record<string, unknown>;
   githubIssueUrl?: string;
   createdAt: string;
   updatedAt: string;
@@ -354,6 +460,18 @@ export interface SciForgeInstanceManifest {
     };
   };
   capabilities: string[];
+}
+
+export interface SciForgeWorkspaceWriterHealth {
+  ok: boolean;
+  service: string;
+  schemaVersion: 1;
+  pid?: number;
+  startedAt?: string;
+  instanceId?: string;
+  lifecycleToken?: string;
+  capabilities: string[];
+  endpoints?: Record<string, unknown>;
 }
 
 export interface FeedbackScreenshotMetadata {
@@ -440,7 +558,41 @@ export interface FeedbackRepairRunRecord {
   startedAt: string;
   handoffRef?: string;
   note?: string;
+  terminalMirrorRef?: string;
+  terminalMirror?: Array<{ timestamp: string; stream: 'stdout' | 'stderr' | 'event'; text: string }>;
+  planRef?: string;
+  baseCommit?: string;
+  dirtyWorktreeDigest?: string;
+  protectedFilesDigest?: string;
+  feedbackDataDigest?: string;
+  confirmationPolicy?: {
+    commit: 'disabled' | 'requires-user-confirmation';
+    push: 'disabled' | 'requires-second-confirmation';
+    pr: 'disabled' | 'requires-second-confirmation';
+    merge: 'never';
+  };
   metadata?: Record<string, unknown>;
+}
+
+export interface FeedbackRepairActionRecord {
+  schemaVersion: 1;
+  id: string;
+  issueId: string;
+  repairResultId: string;
+  action: 'commit' | 'push' | 'pr' | 'merge' | 'browser-recheck';
+  status: 'requires-user-confirmation' | 'requires-second-confirmation' | 'requires-safe-mode-confirmation' | 'completed' | 'blocked';
+  sideEffect: 'none' | 'local-commit';
+  requestedAt: string;
+  confirmedAt?: string;
+  safeModeConfirmed?: boolean;
+  safeMode?: {
+    active: boolean;
+    reason: string;
+    matchedPaths: string[];
+    requiresExternalControlSurface?: boolean;
+  };
+  browserVerification?: FeedbackRepairHumanVerification;
+  message: string;
 }
 
 export interface FeedbackRepairResultRecord {
@@ -457,6 +609,9 @@ export interface FeedbackRepairResultRecord {
   diffRef?: string;
   commit?: string;
   refs?: { commitSha?: string; commitUrl?: string; prUrl?: string; patchRef?: string };
+  terminalMirrorRef?: string;
+  auditBundleRef?: string;
+  planRef?: string;
   tests?: FeedbackRepairTestEvidence[];
   testResults?: FeedbackRepairTestEvidence[];
   humanVerification?: FeedbackRepairHumanVerification;
@@ -478,6 +633,92 @@ export interface FeedbackIssueHandoffBundle extends Omit<FeedbackIssueSummary, '
   runtime: FeedbackRuntimeSnapshot;
   repairRuns: FeedbackRepairRunRecord[];
   repairResults: FeedbackRepairResultRecord[];
+}
+
+export interface RuntimeProviderPreflightManifest {
+  schemaVersion: 'sciforge.runtime-provider-preflight.current-env.v1';
+  checkedAt: string;
+  releaseAcceptance: 'not-evaluated';
+  runtimeApiKeyPresentInServiceEnv: boolean;
+  upstreamBaseUrlPresent: boolean;
+  upstreamKeySourceKind: 'env' | 'config-debug-fallback' | 'missing';
+  upstreamBaseUrlSourceKind: 'env' | 'config' | 'missing';
+  category: 'ready' | 'config-secret-source' | 'missing-runtime-env' | 'missing-upstream' | 'provider-auth' | 'rate-limited' | 'upstream-outage' | 'repo-bug' | 'unknown';
+  owner: 'environment' | 'provider' | 'repo';
+  policyViolations: string[];
+  missingEnv: string[];
+  evidenceMode: 'current-env-diagnostic-only';
+  checkedHealthz?: {
+    category: string;
+    ok: boolean;
+    retryable: boolean;
+    httpStatus?: number;
+    releaseAcceptance: 'not-evaluated';
+  };
+  nextActions: Array<{
+    label: string;
+    command?: string;
+    writesRepo: boolean;
+  }>;
+}
+
+export interface RuntimeCodexBrowserAcceptanceManifest {
+  schemaVersion: 'sciforge.runtime-codex.browser-acceptance.v1';
+  status: 'blocked' | 'failed' | 'partial' | 'passed';
+  source: 'codex-in-app-browser';
+  observedAt?: string;
+  actualUrl?: string;
+  actualPort?: number;
+  workspacePath?: string;
+  provider?: string;
+  model?: string;
+  commandId?: string;
+  startedFromDefaultChatEntry: boolean;
+  submittedThroughRuntimeCodex: boolean;
+  providerModelProfileVisible: boolean;
+  mainAnswerVisible: boolean;
+  rawAuditFoldedByDefault: boolean;
+  acceptanceConclusionFromRealBrowser?: boolean;
+  currentRunEvidenceScope?: 'preflight-only' | 'live-browser-current-run';
+  reason?: string;
+  blocker?: string;
+  blockedOn?: string[];
+  failureClass?: 'missing-runtime-env' | 'config-secret-source' | 'missing-upstream' | 'provider-unavailable' | 'runtime-bridge' | 'unknown';
+  owner?: 'environment' | 'provider' | 'repo';
+  policyViolations?: string[];
+  missingEnv?: string[];
+  expectedRetestCommand?: string;
+  releaseBlocking?: boolean;
+  releaseEligible?: boolean;
+  providerPreflightRef?: string;
+  providerPreflightCategory?: string;
+  providerPreflightCheckedAt?: string;
+  providerPreflightReleaseAcceptance?: 'not-evaluated';
+  providerPreflightEvidenceMode?: 'current-env-diagnostic-only';
+  runtimeApiKeyPresentInServiceEnv?: boolean;
+  upstreamBaseUrlPresent?: boolean;
+  upstreamKeySourceKind?: 'env' | 'config-debug-fallback' | 'missing';
+  upstreamBaseUrlSourceKind?: 'env' | 'config' | 'missing';
+  configPathsChecked?: string[];
+  configSecretFallbackPaths?: string[];
+  nextActions?: Array<{
+    label: string;
+    command?: string;
+    expected?: string;
+    writesRepo?: boolean;
+  }>;
+  evidence?: {
+    screenshotPath?: string;
+    domSnapshotPath?: string;
+    notesPath?: string;
+    runtimeAuditPath?: string;
+  };
+  freshness?: {
+    checkedAt: string;
+    observedAtFresh: boolean;
+    evidenceFresh: boolean;
+    staleEvidenceRefs: string[];
+  };
 }
 
 export interface ReusableTaskCandidateRecord {
@@ -503,6 +744,10 @@ export interface SciForgeConfig {
   feedbackGithubRepo?: string;
   /** GitHub PAT with Issues read (sync) + write (create). Stored like API keys (local config only). */
   feedbackGithubToken?: string;
+  feedbackGithubLabels?: string[];
+  feedbackGithubAssignees?: string[];
+  feedbackGithubMilestone?: number | string;
+  feedbackGithubDryRun?: boolean;
   theme?: 'dark' | 'light';
   agentBackend: string;
   runtimeProfile?: string;

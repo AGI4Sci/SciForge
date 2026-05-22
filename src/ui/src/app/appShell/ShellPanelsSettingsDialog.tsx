@@ -228,6 +228,42 @@ export function SettingsDialog({
               placeholder="classic PAT 或 fine-grained PAT（需 Issues 读写；仅存本地）"
             />
           </label>
+          <label className="wide">
+            <span>反馈 GitHub Labels</span>
+            <input
+              value={(config.feedbackGithubLabels ?? []).join(', ')}
+              onChange={(event) => onChange({ feedbackGithubLabels: event.target.value.split(',').map((label) => label.trim()).filter(Boolean) })}
+              placeholder="feedback, sciforge-inbox"
+            />
+          </label>
+          <label className="wide">
+            <span>反馈 GitHub Assignees</span>
+            <input
+              value={(config.feedbackGithubAssignees ?? []).join(', ')}
+              onChange={(event) => onChange({ feedbackGithubAssignees: event.target.value.split(',').map((login) => login.trim()).filter(Boolean) })}
+              placeholder="github-login-1, github-login-2"
+            />
+          </label>
+          <label>
+            <span>反馈 GitHub Milestone</span>
+            <input
+              value={config.feedbackGithubMilestone ?? ''}
+              onChange={(event) => {
+                const value = event.target.value.trim();
+                const numeric = Number(value);
+                onChange({ feedbackGithubMilestone: value && Number.isFinite(numeric) ? numeric : value || undefined });
+              }}
+              placeholder="number 或 title"
+            />
+          </label>
+          <label className="settings-check-row">
+            <input
+              type="checkbox"
+              checked={config.feedbackGithubDryRun === true}
+              onChange={(event) => onChange({ feedbackGithubDryRun: event.target.checked })}
+            />
+            <span>GitHub submit dry-run</span>
+          </label>
         </div>
         <div className="settings-save-state" role="status">
           <span className={cx('status-dot', saveState.status === 'error' ? 'offline' : saveState.status === 'saving' ? 'optional' : 'online')} />

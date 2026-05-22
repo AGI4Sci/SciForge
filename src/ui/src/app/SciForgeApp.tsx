@@ -5,15 +5,22 @@ import {
 } from '@sciforge/scenario-core/scenario-routing-policy';
 import { scenarios, type ScenarioId, type PageId } from '../data';
 import { FeedbackCaptureLayer } from '../feedback/FeedbackCaptureLayer';
+import { saveFeedbackCommentEvidenceBundle } from '../api/workspaceClient';
 import {
   importGithubOpenIssuesAsFeedback as applyGithubOpenIssuesAsFeedback,
   markFeedbackGithubIssueCreated,
+  markFeedbackGithubIssueSyncFailed,
+  markFeedbackGithubIssueSyncPending,
 } from '../feedback/githubFeedback';
 import {
   addFeedbackCommentToWorkspace,
   createFeedbackRequestFromComments,
   deleteFeedbackCommentsFromWorkspace,
   replaceGithubSyncedOpenIssuesInWorkspace,
+  restoreFeedbackCommentsInWorkspace,
+  upsertFeedbackRepairActionInWorkspace,
+  upsertFeedbackRepairGuidanceInWorkspace,
+  upsertFeedbackRepairResultInWorkspace,
   upsertFeedbackRepairRunInWorkspace,
   updateFeedbackCommentStatus,
 } from '../feedback/feedbackWorkspace';
@@ -26,6 +33,9 @@ import {
   type SciForgeConfig,
   type FeedbackCommentRecord,
   type FeedbackCommentStatus,
+  type FeedbackRepairActionRecord,
+  type FeedbackRepairGuidanceRecord,
+  type FeedbackRepairResultRecord,
   type FeedbackRepairRunRecord,
   type GithubSyncedOpenIssueRecord,
   type ObjectReference,
@@ -47,9 +57,10 @@ import {
   startNewChat,
 } from '../workspace/sessionWorkspace';
 import { markReusableRunInWorkspace } from '../workspace/reusableTaskWorkspace';
-import { loadDesktopRuntimeConfigDefaults, loadSciForgeConfig, normalizeWorkspaceRootPath, saveSciForgeConfig, updateConfig } from '../config';
+import { loadDesktopRuntimeConfigDefaults, loadSciForgeConfig, normalizeFeedbackGithubRepo, normalizeWorkspaceRootPath, saveSciForgeConfig, updateConfig } from '../config';
 import {
   loadFileBackedSciForgeConfig,
+  loadSciForgeInstanceManifest,
   loadPersistedWorkspaceState,
   persistWorkspaceState,
   saveFileBackedSciForgeConfig,
@@ -95,6 +106,7 @@ export function SciForgeApp() {
   const [scenarioId, setScenarioId] = useState<ScenarioInstanceId>(initialNavigation.scenarioId);
   const [config, setConfig] = useState<SciForgeConfig>(() => loadSciForgeConfig());
   const [configFileHydrated, setConfigFileHydrated] = useState(false);
+  const [detectedFeedbackGithubRepo, setDetectedFeedbackGithubRepo] = useState<string | undefined>();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [workspaceState, setWorkspaceState] = useState<SciForgeWorkspaceState>(() => {
     const state = loadWorkspaceState();
@@ -265,6 +277,22 @@ export function SciForgeApp() {
 
   useEffect(() => {
     if (!configFileHydrated) return;
+    let cancelled = false;
+    loadSciForgeInstanceManifest(config)
+      .then((manifest) => {
+        if (cancelled) return;
+        setDetectedFeedbackGithubRepo(normalizeFeedbackGithubRepo(manifest.repo.remote));
+      })
+      .catch(() => {
+        if (!cancelled) setDetectedFeedbackGithubRepo(undefined);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [configFileHydrated, config.workspacePath, config.workspaceWriterBaseUrl]);
+
+  useEffect(() => {
+    if (!configFileHydrated) return;
     saveSciForgeConfig(config);
     setConfigSaveState({ status: 'saving' });
     saveFileBackedSciForgeConfig(config)
@@ -302,6 +330,32 @@ export function SciForgeApp() {
 
   function addFeedbackComment(comment: FeedbackCommentRecord) {
     updateWorkspace((current) => addFeedbackCommentToWorkspace(current, comment));
+    saveFeedbackCommentEvidenceBundle(config, comment)
+      .then((bundle) => {
+        updateWorkspace((current) => ({
+          ...current,
+          feedbackComments: (current.feedbackComments ?? []).map((item) => item.id === comment.id
+            ? {
+              ...item,
+              evidenceBundleRef: bundle.evidenceBundleRef || item.evidenceBundleRef,
+              rawScreenshotRef: bundle.rawScreenshotRef || item.rawScreenshotRef,
+              annotatedScreenshotRef: bundle.annotatedScreenshotRef || item.annotatedScreenshotRef,
+              evidenceAssets: bundle.evidenceAssets?.length ? bundle.evidenceAssets : item.evidenceAssets,
+              screenshot: item.screenshot
+                ? {
+                  ...item.screenshot,
+                  rawScreenshotRef: bundle.rawScreenshotRef || item.screenshot.rawScreenshotRef,
+                  annotatedScreenshotRef: bundle.annotatedScreenshotRef || item.screenshot.annotatedScreenshotRef,
+                }
+                : item.screenshot,
+            }
+            : item),
+        }));
+        setWorkspaceStatus(`反馈证据已写入 ${bundle.evidenceBundleRef}`);
+      })
+      .catch((error) => {
+        setWorkspaceStatus(`反馈已保存在本地状态，但证据 bundle 未落盘：${error instanceof Error ? error.message : String(error)}`);
+      });
   }
 
   function addContextReference(reference: SciForgeReference) {
@@ -320,6 +374,11 @@ export function SciForgeApp() {
     updateWorkspace((current) => deleteFeedbackCommentsFromWorkspace(current, ids));
   }
 
+  function restoreFeedbackComments(ids: string[]) {
+    if (!ids.length) return;
+    updateWorkspace((current) => restoreFeedbackCommentsInWorkspace(current, ids));
+  }
+
   function createFeedbackRequest(ids: string[], title: string) {
     if (!ids.length) return;
     updateWorkspace((current) => createFeedbackRequestFromComments(current, ids, title));
@@ -329,12 +388,45 @@ export function SciForgeApp() {
     updateWorkspace((current) => upsertFeedbackRepairRunInWorkspace(current, run));
   }
 
+  function recordFeedbackRepairResult(result: FeedbackRepairResultRecord) {
+    updateWorkspace((current) => upsertFeedbackRepairResultInWorkspace(current, result));
+  }
+
+  function recordFeedbackRepairAction(action: FeedbackRepairActionRecord) {
+    updateWorkspace((current) => upsertFeedbackRepairActionInWorkspace(current, action));
+  }
+
+  function recordFeedbackRepairGuidance(guidance: FeedbackRepairGuidanceRecord) {
+    updateWorkspace((current) => upsertFeedbackRepairGuidanceInWorkspace(current, guidance));
+  }
+
+  function recordFeedbackEvidenceUpload(comment: FeedbackCommentRecord) {
+    updateWorkspace((current) => ({
+      ...current,
+      feedbackComments: (current.feedbackComments ?? []).map((item) => item.id === comment.id
+        ? {
+          ...item,
+          evidenceAssets: comment.evidenceAssets?.length ? comment.evidenceAssets : item.evidenceAssets,
+          updatedAt: comment.updatedAt || item.updatedAt,
+        }
+        : item),
+    }));
+  }
+
   function replaceGithubSyncedOpenIssues(issues: GithubSyncedOpenIssueRecord[]) {
     updateWorkspace((current) => replaceGithubSyncedOpenIssuesInWorkspace(current, issues, nowIso()));
   }
 
   function recordGithubIssueCreated(commentIds: string[], issue: { number: number; htmlUrl: string; title: string }) {
     updateWorkspace((current) => markFeedbackGithubIssueCreated(current, commentIds, issue));
+  }
+
+  function recordGithubIssueSyncPending(commentIds: string[]) {
+    updateWorkspace((current) => markFeedbackGithubIssueSyncPending(current, commentIds));
+  }
+
+  function recordGithubIssueSyncFailed(commentIds: string[], error: unknown) {
+    updateWorkspace((current) => markFeedbackGithubIssueSyncFailed(current, commentIds, error));
   }
 
   function importGithubOpenIssuesAsFeedback(issues: GithubSyncedOpenIssueRecord[]) {
@@ -579,15 +671,25 @@ export function SciForgeApp() {
               requests={workspaceState.feedbackRequests ?? []}
               repairRuns={workspaceState.feedbackRepairRuns ?? []}
               repairResults={workspaceState.feedbackRepairResults ?? []}
+              repairActions={workspaceState.feedbackRepairActions ?? []}
+              repairGuidance={workspaceState.feedbackRepairGuidance ?? []}
               onStatusChange={updateFeedbackStatus}
               onDelete={deleteFeedbackComments}
+              onRestore={restoreFeedbackComments}
               onCreateRequest={createFeedbackRequest}
               onRepairRunWritten={recordFeedbackRepairRun}
+              onRepairResultWritten={recordFeedbackRepairResult}
+              onRepairActionWritten={recordFeedbackRepairAction}
+              onRepairGuidanceWritten={recordFeedbackRepairGuidance}
+              onFeedbackEvidenceUploaded={recordFeedbackEvidenceUpload}
               feedbackGithubRepo={config.feedbackGithubRepo}
+              detectedGithubRepo={detectedFeedbackGithubRepo}
               feedbackGithubToken={config.feedbackGithubToken}
               githubSyncedOpenIssues={workspaceState.githubSyncedOpenIssues ?? []}
               onReplaceGithubSyncedOpenIssues={replaceGithubSyncedOpenIssues}
               onImportGithubOpenIssues={importGithubOpenIssuesAsFeedback}
+              onGithubIssueSyncPending={recordGithubIssueSyncPending}
+              onGithubIssueSyncFailed={recordGithubIssueSyncFailed}
               onGithubIssueCreated={recordGithubIssueCreated}
               onOpenGithubSettings={() => setSettingsOpen(true)}
             />

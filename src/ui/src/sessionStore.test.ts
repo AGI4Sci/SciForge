@@ -234,6 +234,45 @@ test('compactWorkspaceStateForStorage keeps recent session records', () => {
   );
 });
 
+test('parse and compact workspace state preserve feedback repair action audit', () => {
+  const actions = Array.from({ length: 24 }, (_, index) => ({
+    schemaVersion: 1,
+    id: `repair-action-${index}`,
+    issueId: 'feedback-1',
+    repairResultId: 'repair-result-1',
+    action: index === 0 ? 'browser-recheck' : index % 2 === 0 ? 'commit' : 'push',
+    status: index % 2 === 0 ? 'completed' : 'requires-second-confirmation',
+    sideEffect: index === 0 ? 'none' : index % 2 === 0 ? 'local-commit' : 'none',
+    requestedAt: `2026-05-07T00:${String(index).padStart(2, '0')}:00.000Z`,
+    confirmedAt: index % 2 === 0 ? `2026-05-07T00:${String(index).padStart(2, '0')}:10.000Z` : undefined,
+    safeModeConfirmed: index === 22,
+    browserVerification: index === 0 ? { status: 'passed', verifier: 'codex-in-app-browser', evidenceRefs: ['browser-recheck.png'] } : undefined,
+    message: `repair action ${index}`,
+  }));
+  const state = parseWorkspaceState({
+    schemaVersion: 2,
+    workspacePath: '/tmp/sciforge-workspace',
+    sessionsByScenario: {},
+    archivedSessions: [],
+    feedbackRepairActions: [
+      ...actions,
+      { schemaVersion: 1, id: 'invalid-missing-message', issueId: 'feedback-1' },
+    ],
+    updatedAt: '2026-05-07T00:00:00.000Z',
+  });
+
+  assert.equal(state.feedbackRepairActions?.length, 24);
+  assert.equal(state.feedbackRepairActions?.[0]?.action, 'browser-recheck');
+  assert.deepEqual(state.feedbackRepairActions?.[0]?.browserVerification?.evidenceRefs, ['browser-recheck.png']);
+  assert.equal(state.feedbackRepairActions?.[22]?.safeModeConfirmed, true);
+  assert.equal(state.feedbackRepairActions?.[23]?.message, 'repair action 23');
+
+  const compact = compactWorkspaceStateForStorage(state, 'minimal');
+  assert.equal(compact.feedbackRepairActions?.length, 20);
+  assert.equal(compact.feedbackRepairActions?.[0]?.id, 'repair-action-0');
+  assert.equal(compact.feedbackRepairActions?.at(-1)?.id, 'repair-action-19');
+});
+
 test('compactWorkspaceStateForStorage keeps recent repair-needed execution refs', () => {
   const state = parseWorkspaceState({
     schemaVersion: 2,

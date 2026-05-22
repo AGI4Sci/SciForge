@@ -7,6 +7,8 @@ import {
   type AlignmentContractRecord,
   makeId,
   nowIso,
+  type FeedbackRepairActionRecord,
+  type FeedbackRepairGuidanceRecord,
   type GithubSyncedOpenIssueRecord,
   type RuntimeCompatibilityDiagnostic,
   type RuntimeCompatibilityFingerprint,
@@ -197,6 +199,8 @@ export function createInitialWorkspaceState(): SciForgeWorkspaceState {
     feedbackComments: [],
     feedbackRequests: [],
     githubSyncedOpenIssues: [],
+    feedbackRepairActions: [],
+    feedbackRepairGuidance: [],
     updatedAt: now,
   });
 }
@@ -243,6 +247,12 @@ export function parseWorkspaceState(value: unknown): SciForgeWorkspaceState {
       : [],
     feedbackRepairResults: Array.isArray(raw.feedbackRepairResults)
       ? raw.feedbackRepairResults.filter(isFeedbackRepairResult)
+      : [],
+    feedbackRepairActions: Array.isArray(raw.feedbackRepairActions)
+      ? raw.feedbackRepairActions.filter(isFeedbackRepairAction)
+      : [],
+    feedbackRepairGuidance: Array.isArray(raw.feedbackRepairGuidance)
+      ? raw.feedbackRepairGuidance.filter(isFeedbackRepairGuidance)
       : [],
     githubSyncedOpenIssues: Array.isArray(raw.githubSyncedOpenIssues)
       ? raw.githubSyncedOpenIssues.filter(isGithubSyncedOpenIssue)
@@ -358,6 +368,36 @@ function isFeedbackRepairResult(value: unknown) {
     && typeof record.completedAt === 'string';
 }
 
+function isFeedbackRepairAction(value: unknown): value is FeedbackRepairActionRecord {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return record.schemaVersion === 1
+    && typeof record.id === 'string'
+    && typeof record.issueId === 'string'
+    && typeof record.repairResultId === 'string'
+    && (record.action === 'commit' || record.action === 'push' || record.action === 'pr' || record.action === 'merge' || record.action === 'browser-recheck')
+    && (record.status === 'requires-user-confirmation'
+      || record.status === 'requires-second-confirmation'
+      || record.status === 'requires-safe-mode-confirmation'
+      || record.status === 'completed'
+      || record.status === 'blocked')
+    && (record.sideEffect === 'none' || record.sideEffect === 'local-commit')
+    && typeof record.requestedAt === 'string'
+    && typeof record.message === 'string';
+}
+
+function isFeedbackRepairGuidance(value: unknown): value is FeedbackRepairGuidanceRecord {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return record.schemaVersion === 1
+    && typeof record.id === 'string'
+    && typeof record.repairRunId === 'string'
+    && (record.status === 'recorded' || record.status === 'resumed' || record.status === 'blocked')
+    && typeof record.requestedAt === 'string'
+    && typeof record.requestedBy === 'string'
+    && typeof record.message === 'string';
+}
+
 export function saveWorkspaceState(state: SciForgeWorkspaceState) {
   if (typeof window === 'undefined') return;
   const writableState = guardLocalWorkspaceWrite(state);
@@ -399,6 +439,8 @@ export function compactWorkspaceStateForStorage(
     feedbackRequests: state.feedbackRequests?.slice(0, mode === 'minimal' ? 8 : 40),
     feedbackRepairRuns: state.feedbackRepairRuns?.slice(0, mode === 'minimal' ? 20 : 120),
     feedbackRepairResults: state.feedbackRepairResults?.slice(0, mode === 'minimal' ? 20 : 120),
+    feedbackRepairActions: state.feedbackRepairActions?.slice(0, mode === 'minimal' ? 20 : 120),
+    feedbackRepairGuidance: state.feedbackRepairGuidance?.slice(0, mode === 'minimal' ? 20 : 120),
     githubSyncedOpenIssues: state.githubSyncedOpenIssues?.slice(0, mode === 'minimal' ? 40 : 120),
     timelineEvents: state.timelineEvents?.slice(0, limits.timeline),
     reusableTaskCandidates: state.reusableTaskCandidates?.slice(0, limits.reusable),
@@ -908,6 +950,8 @@ function workspaceContentRevision(state: SciForgeWorkspaceState): string {
     feedbackRequests: cleanState.feedbackRequests,
     feedbackRepairRuns: cleanState.feedbackRepairRuns,
     feedbackRepairResults: cleanState.feedbackRepairResults,
+    feedbackRepairActions: cleanState.feedbackRepairActions,
+    feedbackRepairGuidance: cleanState.feedbackRepairGuidance,
     githubSyncedOpenIssues: cleanState.githubSyncedOpenIssues,
     timelineEvents: cleanState.timelineEvents,
     reusableTaskCandidates: cleanState.reusableTaskCandidates,

@@ -2,7 +2,7 @@
   "schemaVersion": "sciforge.runtime-codex.browser-acceptance.v1",
   "status": "blocked",
   "source": "codex-in-app-browser",
-  "observedAt": "2026-05-21T10:35:24.466Z",
+  "observedAt": "2026-05-21T19:44:39.073Z",
   "requestedRolePort": 5173,
   "actualWorkspaceWriterPort": 6173,
   "actualWorkspaceWriterUrl": "http://127.0.0.1:6173",
@@ -14,11 +14,12 @@
   "profile": "sciforge-runtime-deepseek",
   "provider": "sciforge-deepseek-proxy",
   "model": "bailian/deepseek-v4-flash",
-  "startedFromDefaultChatEntry": false,
-  "submittedThroughRuntimeCodex": false,
-  "providerModelProfileVisible": false,
-  "workspaceVisible": false,
-  "commandIdVisible": false,
+  "commandId": "codex-command-mpexwy03-ejaeuy",
+  "startedFromDefaultChatEntry": true,
+  "submittedThroughRuntimeCodex": true,
+  "providerModelProfileVisible": true,
+  "workspaceVisible": true,
+  "commandIdVisible": true,
   "mainAnswerVisible": false,
   "rawAuditFoldedByDefault": true,
   "automationSubstituteUsed": false,
@@ -29,7 +30,7 @@
   "acceptanceRubric": {
     "userIntent": "Prove the real default-chat Runtime Codex path can complete single-turn, selected-ref, and multi-turn tasks.",
     "expectedObservableResult": "Visible live Runtime Codex/gui.present answers with provider/model/profile/workspace/command id and folded audit logs.",
-    "actualResult": "Blocked before release acceptance: Runtime Codex environment is not fully configured; missing SCIFORGE_RUNTIME_API_KEY and Runtime Codex secret must be supplied by service environment, not config file debug fallback. Set SCIFORGE_RUNTIME_API_KEY in the service environment, and set SCIFORGE_PROXY_UPSTREAM_BASE_URL or config.local.json/.sciforge instance config codexProxy.upstreamBaseUrl/llm.baseUrl before live browser E2E can pass. Checked config paths: workspace/parallel/p1/.sciforge/config.local.json, config.local.json. Runtime secret-like keys were found in ignored config files (workspace/parallel/p1/.sciforge/config.local.json); they are accepted only as local proxy debug fallback and cannot satisfy browser/release acceptance.",
+    "actualResult": "Blocked before release acceptance: Current Runtime Codex provider preflight is ready, but Codex in-app browser acceptance is incomplete: missing passed release manifest.",
     "evidenceRefs": [
       "docs/test-artifacts/runtime-codex-browser-acceptance/manifest.json",
       "docs/test-artifacts/runtime-codex-browser-acceptance/blocked-runtime-config.md"
@@ -53,53 +54,19 @@
     "blockedFailedPartialRejected": true,
     "rawStdoutJsonlRejected": true
   },
-  "reason": "Runtime Codex environment is not fully configured; missing SCIFORGE_RUNTIME_API_KEY and Runtime Codex secret must be supplied by service environment, not config file debug fallback. Set SCIFORGE_RUNTIME_API_KEY in the service environment, and set SCIFORGE_PROXY_UPSTREAM_BASE_URL or config.local.json/.sciforge instance config codexProxy.upstreamBaseUrl/llm.baseUrl before live browser E2E can pass. Checked config paths: workspace/parallel/p1/.sciforge/config.local.json, config.local.json. Runtime secret-like keys were found in ignored config files (workspace/parallel/p1/.sciforge/config.local.json); they are accepted only as local proxy debug fallback and cannot satisfy browser/release acceptance.",
-  "blocker": "Runtime Codex environment is not fully configured; missing SCIFORGE_RUNTIME_API_KEY and Runtime Codex secret must be supplied by service environment, not config file debug fallback. Set SCIFORGE_RUNTIME_API_KEY in the service environment, and set SCIFORGE_PROXY_UPSTREAM_BASE_URL or config.local.json/.sciforge instance config codexProxy.upstreamBaseUrl/llm.baseUrl before live browser E2E can pass. Checked config paths: workspace/parallel/p1/.sciforge/config.local.json, config.local.json. Runtime secret-like keys were found in ignored config files (workspace/parallel/p1/.sciforge/config.local.json); they are accepted only as local proxy debug fallback and cannot satisfy browser/release acceptance.",
+  "reason": "Current Runtime Codex provider preflight is ready, but Codex in-app browser acceptance is incomplete: missing passed release manifest.",
+  "blocker": "Current Runtime Codex provider preflight is ready, but Codex in-app browser acceptance is incomplete: missing passed release manifest.",
   "blockedOn": [
-    "Runtime Codex service environment secret configuration",
-    "config-file debug secret fallback must not satisfy release acceptance",
-    "Codex in-app browser execution"
+    "provider proxy upstream availability",
+    "visible Runtime Codex answer not produced",
+    "selected artifact follow-up not reached"
   ],
-  "currentRunEvidenceScope": "preflight-only",
-  "priorEvidenceRefs": [
-    "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat.png",
-    "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat-dom.txt",
-    "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit.png",
-    "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit-dom.txt",
-    "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up.png",
-    "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-dom.txt",
-    "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn.png",
-    "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn-dom.txt"
-  ],
-  "staleEvidenceRefs": [
-    "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat.png",
-    "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat-dom.txt",
-    "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit.png",
-    "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit-dom.txt",
-    "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up.png",
-    "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-dom.txt",
-    "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn.png",
-    "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn-dom.txt"
-  ],
-  "failureClass": "config-secret-source",
-  "owner": "environment",
-  "policyViolations": [
-    "config-file-secret-fallback-cannot-satisfy-browser-release-acceptance"
-  ],
-  "missingEnv": [
-    "SCIFORGE_RUNTIME_API_KEY"
-  ],
+  "currentRunEvidenceScope": "live-browser-current-run",
+  "failureClass": "runtime-bridge",
+  "owner": "repo",
+  "policyViolations": [],
+  "missingEnv": [],
   "nextActions": [
-    {
-      "label": "Set Runtime Codex provider key in the service environment that launches Runtime Codex/provider proxy.",
-      "expected": "Runtime preflight no longer reports missing SCIFORGE_RUNTIME_API_KEY.",
-      "writesRepo": false
-    },
-    {
-      "label": "Keep config-file apiKey fields as local proxy debug fallback only, and do not count them as browser/release acceptance credentials.",
-      "expected": "Acceptance manifest reports service environment secret presence instead of config-file secret fallback.",
-      "writesRepo": false
-    },
     {
       "label": "Rerun default browser acceptance, then strict release acceptance only after a visible second-turn answer appears.",
       "command": "npm run smoke:runtime-codex-browser-acceptance && SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 npm run smoke:runtime-codex-browser-acceptance",
@@ -109,14 +76,14 @@
   ],
   "expectedRetestCommand": "npm run smoke:runtime-codex-browser-acceptance",
   "providerPreflightRef": "docs/test-artifacts/runtime-provider-preflight/manifest.json",
-  "providerPreflightCategory": "config-secret-source",
-  "providerPreflightCheckedAt": "2026-05-21T10:35:24.113Z",
+  "providerPreflightCategory": "ready",
+  "providerPreflightCheckedAt": "2026-05-21T19:43:17.974Z",
   "providerPreflightReleaseAcceptance": "not-evaluated",
   "providerPreflightEvidenceMode": "current-env-diagnostic-only",
-  "runtimeApiKeyPresentInServiceEnv": false,
-  "upstreamBaseUrlPresent": false,
-  "upstreamKeySourceKind": "config-debug-fallback",
-  "upstreamBaseUrlSourceKind": "missing",
+  "runtimeApiKeyPresentInServiceEnv": true,
+  "upstreamBaseUrlPresent": true,
+  "upstreamKeySourceKind": "env",
+  "upstreamBaseUrlSourceKind": "env",
   "configPathsChecked": [
     "workspace/parallel/p1/.sciforge/config.local.json",
     "config.local.json"
@@ -128,25 +95,29 @@
   "releaseEligible": false,
   "singleTurn": {
     "status": "blocked",
-    "prompt": "single-turn Runtime Codex browser acceptance is blocked before submission",
+    "prompt": "Runtime Codex browser smoke single turn: reply in one short sentence with SCIFORGE-CODEX-BROWSER-SINGLE-20260520A.",
     "visibleAnswerConfirmed": false,
-    "providerModelProfileVisible": false,
-    "workspaceCommandIdVisible": false,
+    "providerModelProfileVisible": true,
+    "workspaceCommandIdVisible": true,
     "rawAuditFoldedByDefault": true,
-    "reason": "Runtime Codex environment is not fully configured; missing SCIFORGE_RUNTIME_API_KEY and Runtime Codex secret must be supplied by service environment, not config file debug fallback. Set SCIFORGE_RUNTIME_API_KEY in the service environment, and set SCIFORGE_PROXY_UPSTREAM_BASE_URL or config.local.json/.sciforge instance config codexProxy.upstreamBaseUrl/llm.baseUrl before live browser E2E can pass. Checked config paths: workspace/parallel/p1/.sciforge/config.local.json, config.local.json. Runtime secret-like keys were found in ignored config files (workspace/parallel/p1/.sciforge/config.local.json); they are accepted only as local proxy debug fallback and cannot satisfy browser/release acceptance.",
+    "reason": "Current Runtime Codex provider preflight is ready, but Codex in-app browser acceptance is incomplete: missing passed release manifest.",
     "evidence": {
+      "screenshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit.png",
+      "domSnapshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/single-turn-after-submit-dom.txt",
       "notesPath": "docs/test-artifacts/runtime-codex-browser-acceptance/blocked-runtime-config.md"
     }
   },
   "artifactFollowUp": {
     "status": "blocked",
-    "prompt": "artifact follow-up Runtime Codex browser acceptance is blocked before selected-ref follow-up submission",
+    "prompt": "Use only the selected artifact ref and answer what it says in one concise sentence.",
     "visibleAnswerConfirmed": false,
     "providerModelProfileVisible": false,
-    "workspaceCommandIdVisible": false,
+    "workspaceCommandIdVisible": true,
     "rawAuditFoldedByDefault": true,
-    "reason": "Runtime Codex environment is not fully configured; missing SCIFORGE_RUNTIME_API_KEY and Runtime Codex secret must be supplied by service environment, not config file debug fallback. Set SCIFORGE_RUNTIME_API_KEY in the service environment, and set SCIFORGE_PROXY_UPSTREAM_BASE_URL or config.local.json/.sciforge instance config codexProxy.upstreamBaseUrl/llm.baseUrl before live browser E2E can pass. Checked config paths: workspace/parallel/p1/.sciforge/config.local.json, config.local.json. Runtime secret-like keys were found in ignored config files (workspace/parallel/p1/.sciforge/config.local.json); they are accepted only as local proxy debug fallback and cannot satisfy browser/release acceptance.",
+    "reason": "Current Runtime Codex provider preflight is ready, but Codex in-app browser acceptance is incomplete: missing passed release manifest.",
     "evidence": {
+      "screenshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up.png",
+      "domSnapshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/artifact-follow-up-dom.txt",
       "notesPath": "docs/test-artifacts/runtime-codex-browser-acceptance/blocked-runtime-config.md"
     }
   },
@@ -154,11 +125,13 @@
     "status": "blocked",
     "prompt": "Remember this passphrase for the next browser turn: SCIFORGE-CODEX-BROWSER-MT-20260520A. Reply only remembered.",
     "visibleAnswerConfirmed": false,
-    "providerModelProfileVisible": false,
-    "workspaceCommandIdVisible": false,
+    "providerModelProfileVisible": true,
+    "workspaceCommandIdVisible": true,
     "rawAuditFoldedByDefault": true,
-    "reason": "Runtime Codex environment is not fully configured; missing SCIFORGE_RUNTIME_API_KEY and Runtime Codex secret must be supplied by service environment, not config file debug fallback. Set SCIFORGE_RUNTIME_API_KEY in the service environment, and set SCIFORGE_PROXY_UPSTREAM_BASE_URL or config.local.json/.sciforge instance config codexProxy.upstreamBaseUrl/llm.baseUrl before live browser E2E can pass. Checked config paths: workspace/parallel/p1/.sciforge/config.local.json, config.local.json. Runtime secret-like keys were found in ignored config files (workspace/parallel/p1/.sciforge/config.local.json); they are accepted only as local proxy debug fallback and cannot satisfy browser/release acceptance.",
+    "reason": "Current Runtime Codex provider preflight is ready, but Codex in-app browser acceptance is incomplete: missing passed release manifest.",
     "evidence": {
+      "screenshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn.png",
+      "domSnapshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/multiturn-second-turn-dom.txt",
       "notesPath": "docs/test-artifacts/runtime-codex-browser-acceptance/blocked-runtime-config.md"
     },
     "followUpPrompt": "Now reply only with the passphrase from the previous turn.",
@@ -166,6 +139,8 @@
     "secondTurnVisibleAnswerConfirmed": false
   },
   "evidence": {
+    "screenshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat.png",
+    "domSnapshotPath": "docs/test-artifacts/runtime-codex-browser-acceptance/default-chat-dom.txt",
     "notesPath": "docs/test-artifacts/runtime-codex-browser-acceptance/blocked-runtime-config.md"
   }
 }

@@ -48,6 +48,9 @@ export const defaultSciForgeConfig: SciForgeConfig = {
   peerInstances: [],
   /** Default feedback inbox target; override in settings if you fork or use another repo. */
   feedbackGithubRepo: 'AGI4Sci/SciForge',
+  feedbackGithubLabels: ['feedback', 'sciforge-inbox'],
+  feedbackGithubAssignees: [],
+  feedbackGithubDryRun: false,
   theme: 'dark',
   agentBackend: 'codex',
   runtimeProfile: DEFAULT_CODEX_RUNTIME_PROFILE,
@@ -175,11 +178,31 @@ export function normalizeFeedbackGithubToken(value: unknown): string | undefined
   return t ? t : undefined;
 }
 
+export function normalizeFeedbackGithubList(value: unknown): string[] | undefined {
+  const values = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(',')
+      : [];
+  const normalized = Array.from(new Set(values
+    .filter((entry): entry is string => typeof entry === 'string')
+    .map((entry) => entry.trim())
+    .filter(Boolean)));
+  return normalized.length ? normalized : undefined;
+}
+
 export function normalizeConfig(value: unknown): SciForgeConfig {
   const raw = typeof value === 'object' && value !== null ? value as Partial<SciForgeConfig> : {};
   const { feedbackGithubRepo: rawFeedbackRepo, feedbackGithubToken: rawFeedbackToken, ...rawRest } = raw;
   const feedbackGithubRepo = normalizeFeedbackGithubRepo(rawFeedbackRepo);
   const feedbackGithubToken = normalizeFeedbackGithubToken(rawFeedbackToken);
+  const feedbackGithubLabels = normalizeFeedbackGithubList(raw.feedbackGithubLabels);
+  const feedbackGithubAssignees = normalizeFeedbackGithubList(raw.feedbackGithubAssignees);
+  const feedbackGithubMilestone = typeof raw.feedbackGithubMilestone === 'number' && Number.isFinite(raw.feedbackGithubMilestone)
+    ? Math.trunc(raw.feedbackGithubMilestone)
+    : typeof raw.feedbackGithubMilestone === 'string' && raw.feedbackGithubMilestone.trim()
+      ? raw.feedbackGithubMilestone.trim()
+      : undefined;
   return {
     ...defaultSciForgeConfig,
     ...rawRest,
@@ -209,6 +232,10 @@ export function normalizeConfig(value: unknown): SciForgeConfig {
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : new Date().toISOString(),
     ...(feedbackGithubRepo ? { feedbackGithubRepo } : {}),
     ...(feedbackGithubToken ? { feedbackGithubToken } : {}),
+    feedbackGithubLabels: feedbackGithubLabels ?? defaultSciForgeConfig.feedbackGithubLabels,
+    feedbackGithubAssignees: feedbackGithubAssignees ?? defaultSciForgeConfig.feedbackGithubAssignees,
+    ...(feedbackGithubMilestone !== undefined ? { feedbackGithubMilestone } : {}),
+    feedbackGithubDryRun: raw.feedbackGithubDryRun === true,
   };
 }
 

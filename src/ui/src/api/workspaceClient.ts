@@ -1,14 +1,21 @@
 import type {
   FeedbackIssueHandoffBundle,
   FeedbackIssueSummary,
+  FeedbackCommentRecord,
+  FeedbackEvidenceAssetRecord,
+  FeedbackRepairActionRecord,
+  FeedbackRepairGuidanceRecord,
   FeedbackRepairResultRecord,
   FeedbackRepairRunRecord,
   SciForgeConfig,
   SciForgeInstanceManifest,
+  SciForgeWorkspaceWriterHealth,
   SciForgeWorkspaceState,
   PreviewDescriptor,
   PreviewDerivative,
   RuntimeExecutionUnit,
+  RuntimeCodexBrowserAcceptanceManifest,
+  RuntimeProviderPreflightManifest,
   TaskRunCard,
 } from '../domain';
 import type { ScenarioLibraryState } from '@sciforge/scenario-core/scenario-library';
@@ -140,6 +147,115 @@ export interface SkillPromotionValidationResult {
 }
 
 export type FeedbackRepairResultInput = Pick<FeedbackRepairResultRecord, 'verdict' | 'summary'> & Partial<Omit<FeedbackRepairResultRecord, 'schemaVersion' | 'issueId' | 'verdict' | 'summary' | 'completedAt'>>;
+
+export interface FeedbackCommentEvidenceBundle {
+  schemaVersion: 1;
+  id: string;
+  commentRef: string;
+  evidenceBundleRef: string;
+  rawScreenshotRef?: string;
+  annotatedScreenshotRef?: string;
+  evidenceAssets?: FeedbackEvidenceAssetRecord[];
+  comment?: FeedbackCommentRecord;
+}
+
+export interface FeedbackEvidenceUploadInput {
+  repo?: string;
+  token?: string;
+  branch?: string;
+  commitMessage?: string;
+  workspacePath?: string;
+}
+
+export interface FeedbackEvidenceUploadResult {
+  schemaVersion: 1;
+  issueId: string;
+  evidenceFolderRef?: string;
+  evidenceAssets: FeedbackEvidenceAssetRecord[];
+  uploadedAssets: FeedbackEvidenceAssetRecord[];
+  comment?: FeedbackCommentRecord;
+  diagnostics?: string[];
+}
+
+export interface FeedbackRepairHandoffRunInput {
+  executorInstance: {
+    id?: string;
+    name?: string;
+    appUrl?: string;
+    workspaceWriterUrl?: string;
+    workspacePath?: string;
+  };
+  targetInstance: {
+    id?: string;
+    name?: string;
+    appUrl?: string;
+    workspaceWriterUrl?: string;
+    workspacePath?: string;
+  };
+  targetWorkspacePath: string;
+  targetWorkspaceWriterUrl: string;
+  issueBundle: FeedbackIssueHandoffBundle;
+  expectedTests: Array<string | { name?: string; command: string }>;
+  githubSyncRequired: boolean;
+  repairRunId?: string;
+  executorBackend?: 'agent-server' | 'runtime-codex';
+  runtimeProfile?: string;
+  allowOpenAiRuntime?: boolean;
+  allowedWritePaths?: string[];
+  forbiddenWritePaths?: string[];
+  requestMetadata?: Record<string, unknown>;
+  confirmationPolicy?: {
+    commit: 'disabled' | 'requires-user-confirmation';
+    push: 'disabled' | 'requires-second-confirmation';
+    pr: 'disabled' | 'requires-second-confirmation';
+    merge: 'disabled' | 'never';
+  };
+}
+
+export interface FeedbackRepairActionInput {
+  action: FeedbackRepairActionRecord['action'];
+  resultId?: string;
+  confirmed?: boolean;
+  secondConfirmed?: boolean;
+  safeModeConfirmed?: boolean;
+  browserVerification?: FeedbackRepairActionRecord['browserVerification'];
+}
+
+export interface FeedbackRepairTerminalMirrorEntry {
+  timestamp: string;
+  stream: 'stdout' | 'stderr' | 'event';
+  text: string;
+}
+
+export interface FeedbackRepairTerminalMirrorTail {
+  terminalMirrorRef: string;
+  entries: FeedbackRepairTerminalMirrorEntry[];
+  cursor: number;
+  nextCursor: number;
+  totalEntries: number;
+}
+
+export interface FeedbackRepairStopResult {
+  repairRunId: string;
+  status: 'cancel-requested' | 'blocked' | 'not-running';
+  stopped: boolean;
+  message: string;
+  terminalMirrorRef?: string;
+  executorMode?: 'agent-server' | 'runtime-codex';
+}
+
+export interface FeedbackRepairGuidanceInput {
+  repairRunId: string;
+  repairResultId?: string;
+  message: string;
+  terminalMirrorRef?: string;
+  codexSessionId?: string;
+  workspacePath?: string;
+}
+
+export interface FeedbackRepairGuidanceResult {
+  guidance: FeedbackRepairGuidanceRecord;
+}
 
 export async function loadFileBackedSciForgeConfig(config: SciForgeConfig): Promise<SciForgeConfig | undefined> {
   const response = await fetchWorkspaceConfigWithFallback(config);
@@ -470,6 +586,23 @@ export async function loadSciForgeInstanceManifest(
   return json.manifest;
 }
 
+export async function loadWorkspaceWriterHealth(
+  config: SciForgeConfig,
+  workspaceWriterBaseUrl = config.workspaceWriterBaseUrl,
+): Promise<SciForgeWorkspaceWriterHealth> {
+  const cleanBaseUrl = workspaceWriterBaseUrl.replace(/\/+$/, '');
+  const response = await fetchWorkspace(config, `load workspace writer health ${cleanBaseUrl}`, `${cleanBaseUrl}/health`);
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `Load workspace writer health failed: HTTP ${response.status}`));
+  const json = await response.json() as SciForgeWorkspaceWriterHealth;
+  if (json.ok !== true || json.service !== 'sciforge-workspace-writer') {
+    throw new Error(`Workspace writer health returned unexpected service: ${json.service || 'unknown'}`);
+  }
+  return {
+    ...json,
+    capabilities: Array.isArray(json.capabilities) ? json.capabilities : [],
+  };
+}
+
 export async function listFeedbackIssues(
   config: SciForgeConfig,
   workspacePath = config.workspacePath,
@@ -496,6 +629,165 @@ export async function loadFeedbackIssueHandoffBundle(
   const json = await response.json() as { issue?: FeedbackIssueHandoffBundle };
   if (!json.issue) throw new Error(`Feedback issue ${id} returned no handoff bundle.`);
   return json.issue;
+}
+
+export async function saveFeedbackCommentEvidenceBundle(
+  config: SciForgeConfig,
+  comment: FeedbackCommentRecord,
+  workspacePath = config.workspacePath,
+): Promise<FeedbackCommentEvidenceBundle> {
+  if (!workspacePath.trim()) throw new Error('workspacePath is required');
+  if (!comment.id.trim()) throw new Error('feedback comment id is required');
+  const response = await fetchWorkspace(config, `save feedback comment ${comment.id}`, `${config.workspaceWriterBaseUrl}/api/sciforge/feedback/comments`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspacePath, comment }),
+  });
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `Save feedback comment failed: HTTP ${response.status}`));
+  const json = await response.json() as { bundle?: FeedbackCommentEvidenceBundle };
+  if (!json.bundle) throw new Error(`Save feedback comment ${comment.id} returned no bundle.`);
+  return json.bundle;
+}
+
+export async function runFeedbackIssueRepairHandoff(
+  config: SciForgeConfig,
+  contract: FeedbackRepairHandoffRunInput,
+): Promise<FeedbackRepairResultRecord> {
+  const response = await fetchWorkspace(config, `run feedback repair handoff ${contract.issueBundle.id}`, `${config.workspaceWriterBaseUrl}/api/sciforge/repair-handoff/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contract }),
+  });
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `Run feedback repair handoff failed: HTTP ${response.status}`));
+  const json = await response.json() as { result?: FeedbackRepairResultRecord };
+  if (!json.result) throw new Error(`Run feedback repair handoff for ${contract.issueBundle.id} returned no result.`);
+  return json.result;
+}
+
+export async function confirmFeedbackRepairAction(
+  config: SciForgeConfig,
+  id: string,
+  input: FeedbackRepairActionInput,
+  workspacePath = config.workspacePath,
+): Promise<{ action: FeedbackRepairActionRecord; result?: FeedbackRepairResultRecord }> {
+  const response = await fetchWorkspace(config, `confirm feedback repair ${input.action} ${id}`, `${config.workspaceWriterBaseUrl}/api/sciforge/feedback/issues/${encodeURIComponent(id)}/repair-actions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspacePath, ...input }),
+  });
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `Confirm feedback repair action failed: HTTP ${response.status}`));
+  const json = await response.json() as { action?: FeedbackRepairActionRecord; result?: FeedbackRepairResultRecord };
+  if (!json.action) throw new Error(`Confirm feedback repair action for ${id} returned no action record.`);
+  return { action: json.action, result: json.result };
+}
+
+export async function loadFeedbackRepairTerminalMirror(
+  config: SciForgeConfig,
+  input: { terminalMirrorRef: string; cursor?: number; limit?: number; workspacePath?: string },
+): Promise<FeedbackRepairTerminalMirrorTail> {
+  const ref = input.terminalMirrorRef.trim();
+  if (!ref) throw new Error('terminalMirrorRef is required');
+  const url = new URL(`${config.workspaceWriterBaseUrl}/api/sciforge/repair-handoff/terminal-mirror`);
+  url.searchParams.set('ref', ref);
+  url.searchParams.set('workspacePath', input.workspacePath || config.workspacePath);
+  if (typeof input.cursor === 'number') url.searchParams.set('cursor', String(input.cursor));
+  if (typeof input.limit === 'number') url.searchParams.set('limit', String(input.limit));
+  const response = await fetchWorkspace(config, `load repair terminal mirror ${ref}`, url);
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `Load repair terminal mirror failed: HTTP ${response.status}`));
+  const json = await response.json() as { tail?: FeedbackRepairTerminalMirrorTail };
+  if (!json.tail) throw new Error('Load repair terminal mirror returned no tail.');
+  return json.tail;
+}
+
+export async function stopFeedbackRepairHandoff(
+  config: SciForgeConfig,
+  input: { repairRunId: string; reason?: string; terminalMirrorRef?: string; workspacePath?: string },
+): Promise<FeedbackRepairStopResult> {
+  const repairRunId = input.repairRunId.trim();
+  if (!repairRunId) throw new Error('repairRunId is required');
+  const response = await fetchWorkspace(config, `stop feedback repair handoff ${repairRunId}`, `${config.workspaceWriterBaseUrl}/api/sciforge/repair-handoff/stop`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      repairRunId,
+      reason: input.reason,
+      terminalMirrorRef: input.terminalMirrorRef,
+      workspacePath: input.workspacePath || config.workspacePath,
+      requestedBy: 'feedback-inbox',
+    }),
+  });
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `Stop feedback repair handoff failed: HTTP ${response.status}`));
+  const json = await response.json() as { stop?: FeedbackRepairStopResult };
+  if (!json.stop) throw new Error(`Stop feedback repair handoff for ${repairRunId} returned no stop result.`);
+  return json.stop;
+}
+
+export async function sendFeedbackRepairGuidance(
+  config: SciForgeConfig,
+  issueId: string,
+  input: FeedbackRepairGuidanceInput,
+): Promise<FeedbackRepairGuidanceResult> {
+  const repairRunId = input.repairRunId.trim();
+  if (!issueId.trim()) throw new Error('feedback issue id is required');
+  if (!repairRunId) throw new Error('repairRunId is required');
+  if (!input.message.trim()) throw new Error('guidance message is required');
+  const response = await fetchWorkspace(config, `send feedback repair guidance ${repairRunId}`, `${config.workspaceWriterBaseUrl}/api/sciforge/feedback/issues/${encodeURIComponent(issueId)}/repair-guidance`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      workspacePath: input.workspacePath || config.workspacePath,
+      repairRunId,
+      repairResultId: input.repairResultId,
+      message: input.message,
+      terminalMirrorRef: input.terminalMirrorRef,
+      codexSessionId: input.codexSessionId,
+      requestedBy: 'feedback-inbox',
+    }),
+  });
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `Send feedback repair guidance failed: HTTP ${response.status}`));
+  const json = await response.json() as { guidance?: FeedbackRepairGuidanceRecord };
+  if (!json.guidance) throw new Error(`Send feedback repair guidance for ${repairRunId} returned no guidance record.`);
+  return { guidance: json.guidance };
+}
+
+export async function uploadFeedbackEvidenceAssets(
+  config: SciForgeConfig,
+  issueId: string,
+  input: FeedbackEvidenceUploadInput,
+): Promise<FeedbackEvidenceUploadResult> {
+  if (!issueId.trim()) throw new Error('feedback issue id is required');
+  const response = await fetchWorkspace(config, `upload feedback evidence ${issueId}`, `${config.workspaceWriterBaseUrl}/api/sciforge/feedback/issues/${encodeURIComponent(issueId)}/evidence/upload`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      workspacePath: input.workspacePath || config.workspacePath,
+      repo: input.repo,
+      token: input.token,
+      branch: input.branch,
+      commitMessage: input.commitMessage,
+      requestedBy: 'feedback-inbox',
+    }),
+  });
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `Upload feedback evidence failed: HTTP ${response.status}`));
+  const json = await response.json() as FeedbackEvidenceUploadResult;
+  if (!json.issueId) throw new Error(`Upload feedback evidence for ${issueId} returned no issue id.`);
+  return json;
+}
+
+export async function loadRuntimeProviderPreflightManifest(config: SciForgeConfig): Promise<RuntimeProviderPreflightManifest | undefined> {
+  const response = await fetchWorkspace(config, 'load runtime provider preflight manifest', `${config.workspaceWriterBaseUrl}/api/sciforge/runtime-provider-preflight/manifest`);
+  if (response.status === 404) return undefined;
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `Load runtime provider preflight manifest failed: HTTP ${response.status}`));
+  const json = await response.json() as { manifest?: RuntimeProviderPreflightManifest };
+  return json.manifest;
+}
+
+export async function loadRuntimeCodexBrowserAcceptanceManifest(config: SciForgeConfig): Promise<RuntimeCodexBrowserAcceptanceManifest | undefined> {
+  const response = await fetchWorkspace(config, 'load runtime codex browser acceptance manifest', `${config.workspaceWriterBaseUrl}/api/sciforge/runtime-codex-browser-acceptance/manifest`);
+  if (response.status === 404) return undefined;
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `Load runtime codex browser acceptance manifest failed: HTTP ${response.status}`));
+  const json = await response.json() as { manifest?: RuntimeCodexBrowserAcceptanceManifest };
+  return json.manifest;
 }
 
 export async function startFeedbackIssueRepairRun(

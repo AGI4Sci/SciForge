@@ -19,7 +19,19 @@ export type TimelineVariantKind = typeof TIMELINE_VARIANT_KINDS[number];
 export const TIMELINE_DECISION_STATUSES = [...RESEARCHER_DECISION_STATUSES, 'not-a-decision'] as const;
 export type TimelineDecisionStatus = typeof TIMELINE_DECISION_STATUSES[number];
 
-export const FEEDBACK_COMMENT_STATUSES = ['open', 'triaged', 'planned', 'fixed', 'needs-discussion', 'wont-fix'] as const;
+export const FEEDBACK_COMMENT_STATUSES = [
+  'comment',
+  'request',
+  'open',
+  'github-open',
+  'triaged',
+  'planned',
+  'fixed',
+  'blocked',
+  'needs-discussion',
+  'wont-fix',
+  'deleted',
+] as const;
 export type FeedbackCommentStatus = typeof FEEDBACK_COMMENT_STATUSES[number];
 
 export const FEEDBACK_PRIORITIES = ['low', 'normal', 'high', 'urgent'] as const;

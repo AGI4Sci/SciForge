@@ -12,10 +12,12 @@ import type { PageId } from '../data';
 import { makeId, nowIso } from '../domain';
 import { ActionButton } from '../app/uiPrimitives';
 import {
+  buildFeedbackEvidenceStatus,
   buildFeedbackRuntimeSnapshot,
   buildFeedbackTargetSnapshot,
   captureFeedbackScreenshotEvidence,
   compactSelectedText,
+  feedbackEvidenceRefs,
   referenceForFeedbackTarget,
   sciForgeReferenceFromElement,
 } from './captureModel';
@@ -43,7 +45,7 @@ interface ContextTarget {
 const MENU_WIDTH = 230;
 const MENU_HEIGHT = 160;
 const POPOVER_WIDTH = 380;
-const POPOVER_HEIGHT = 250;
+const POPOVER_HEIGHT = 540;
 
 export function FeedbackCaptureLayer({
   page,
@@ -57,8 +59,11 @@ export function FeedbackCaptureLayer({
 }: FeedbackCaptureLayerProps) {
   const [contextTarget, setContextTarget] = useState<ContextTarget | null>(null);
   const [comment, setComment] = useState('');
+  const [expectedBehavior, setExpectedBehavior] = useState('');
+  const [actualBehavior, setActualBehavior] = useState('');
   const [priority, setPriority] = useState<FeedbackPriority>('normal');
   const [tags, setTags] = useState('');
+  const [saveHint, setSaveHint] = useState('');
 
   useEffect(() => {
     function openMenu(event: MouseEvent) {
@@ -69,7 +74,7 @@ export function FeedbackCaptureLayer({
       setContextTarget({
         x: clampToViewport(event.clientX, MENU_WIDTH),
         y: clampToViewport(event.clientY, MENU_HEIGHT, 'height'),
-        target: buildFeedbackTargetSnapshot(element),
+        target: buildFeedbackTargetSnapshot(element, { x: event.clientX, y: event.clientY }),
         selectedText: compactSelectedText(window.getSelection()?.toString() ?? ''),
         objectReference: sciForgeReferenceFromElement(element),
         mode: 'menu',
@@ -100,15 +105,34 @@ export function FeedbackCaptureLayer({
     event.preventDefault();
     if (!contextTarget || !comment.trim()) return;
     const now = nowIso();
-    const screenshot = await captureFeedbackScreenshotEvidence(contextTarget.target, now);
+    const feedbackId = makeId('feedback');
+    const refs = feedbackEvidenceRefs(feedbackId);
+    const screenshot = await captureFeedbackScreenshotEvidence(contextTarget.target, now, { annotationLabel: '1' });
+    const screenshotWithRefs = screenshot
+      ? {
+        ...screenshot,
+        rawScreenshotRef: refs.rawScreenshotRef,
+        annotatedScreenshotRef: refs.annotatedScreenshotRef,
+      }
+      : undefined;
+    const runtime = buildFeedbackRuntimeSnapshot({ page, scenarioId, session, url: window.location.href, appVersion });
+    const evidenceStatus = buildFeedbackEvidenceStatus({
+      screenshot: screenshotWithRefs,
+      target: contextTarget.target,
+      runtime,
+      diagnostics: screenshotWithRefs ? [] : ['screenshot capture failed; saved target and runtime evidence only'],
+    });
     onSubmit({
-      id: makeId('feedback'),
+      id: feedbackId,
       schemaVersion: 1,
       authorId: author.authorId,
       authorName: author.authorName.trim() || 'Anonymous',
       comment: comment.trim(),
+      expectedBehavior: expectedBehavior.trim() || undefined,
+      actualBehavior: actualBehavior.trim() || undefined,
       status: 'open',
       priority,
+      severity: priority,
       tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean),
       createdAt: now,
       updatedAt: now,
@@ -120,9 +144,17 @@ export function FeedbackCaptureLayer({
         scrollX: window.scrollX,
         scrollY: window.scrollY,
       },
-      runtime: buildFeedbackRuntimeSnapshot({ page, scenarioId, session, url: window.location.href, appVersion }),
-      screenshot,
+      runtime,
+      screenshotRef: refs.annotatedScreenshotRef,
+      rawScreenshotRef: refs.rawScreenshotRef,
+      annotatedScreenshotRef: refs.annotatedScreenshotRef,
+      evidenceBundleRef: refs.evidenceBundleRef,
+      evidenceStatus,
+      screenshot: screenshotWithRefs,
     });
+    setSaveHint(evidenceStatus.status === 'complete'
+      ? '反馈已保存，截图和目标证据已记录。'
+      : '反馈已保存，但截图采集不完整；收件箱会标记 partial evidence。');
     resetDraft();
   }
 
@@ -149,6 +181,8 @@ export function FeedbackCaptureLayer({
   function resetDraft() {
     setContextTarget(null);
     setComment('');
+    setExpectedBehavior('');
+    setActualBehavior('');
     setTags('');
     setPriority('normal');
   }
@@ -187,6 +221,14 @@ export function FeedbackCaptureLayer({
             <span>评论内容</span>
             <textarea value={comment} onChange={(event) => setComment(event.target.value)} autoFocus placeholder="写下你希望这里如何改..." />
           </label>
+          <label className="feedback-field wide">
+            <span>期望行为</span>
+            <textarea value={expectedBehavior} onChange={(event) => setExpectedBehavior(event.target.value)} placeholder="这里应该发生什么..." />
+          </label>
+          <label className="feedback-field wide">
+            <span>实际行为</span>
+            <textarea value={actualBehavior} onChange={(event) => setActualBehavior(event.target.value)} placeholder="现在实际发生了什么..." />
+          </label>
           <div className="feedback-grid">
             <label className="feedback-field">
               <span>用户</span>
@@ -213,6 +255,16 @@ export function FeedbackCaptureLayer({
             <ActionButton icon={Check} disabled={!comment.trim()}>保存反馈</ActionButton>
           </div>
         </form>
+      ) : null}
+      {saveHint ? (
+        <div
+          className="feedback-context-menu"
+          style={{ right: '16px', bottom: '16px', minWidth: '260px' }}
+          role="status"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button type="button" onClick={() => setSaveHint('')}>{saveHint}</button>
+        </div>
       ) : null}
     </div>
   );

@@ -37,6 +37,10 @@ try {
     readManifest(main.port),
     readManifest(repair.port),
   ]);
+  const [mainConfig, repairConfig] = await Promise.all([
+    readConfig(main.port),
+    readConfig(repair.port),
+  ]);
 
   assert.notEqual(mainManifest.agentId, repairManifest.agentId);
   assert.notEqual(mainManifest.workspacePath, repairManifest.workspacePath);
@@ -45,6 +49,26 @@ try {
   assert.notEqual(mainManifest.configLocalPath, repairManifest.configLocalPath);
   assert.equal(mainManifest.agentServerBaseUrl, 'http://127.0.0.1:18080');
   assert.equal(repairManifest.agentServerBaseUrl, 'http://127.0.0.1:18080');
+  assert.deepEqual(mainConfig.peerInstances, [{
+    name: 'repair-smoke',
+    appUrl: '',
+    workspaceWriterUrl: `http://127.0.0.1:${repairPort}`,
+    workspacePath: '',
+    role: 'repair',
+    trustLevel: 'repair',
+    enabled: true,
+  }]);
+  assert.deepEqual(repairConfig.peerInstances, [{
+    name: 'main-smoke',
+    appUrl: '',
+    workspaceWriterUrl: `http://127.0.0.1:${mainPort}`,
+    workspacePath: '',
+    role: 'repair',
+    trustLevel: 'repair',
+    enabled: true,
+  }]);
+  await writeConfig(main.port, { ...mainConfig, peerInstances: [] });
+  assert.deepEqual((await readConfig(main.port)).peerInstances, []);
 
   await Promise.all([
     writeSnapshot(main.port, main.workspacePath, 'main-session'),
@@ -154,6 +178,22 @@ async function readManifest(port: number) {
   await assertOk(response);
   const json = await response.json() as { manifest: Record<string, string | number | undefined> };
   return json.manifest;
+}
+
+async function readConfig(port: number) {
+  const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/config`);
+  await assertOk(response);
+  const json = await response.json() as { config: { peerInstances?: unknown[] } };
+  return json.config;
+}
+
+async function writeConfig(port: number, config: Record<string, unknown>) {
+  const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/config`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ config }),
+  });
+  await assertOk(response);
 }
 
 async function writeSnapshot(port: number, workspacePath: string, sessionId: string) {

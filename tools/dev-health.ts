@@ -17,10 +17,44 @@ export interface UiDevServerHealth {
   probes: UiDevServerProbeResult[];
 }
 
+export interface WorkspaceWriterHealth {
+  ok: boolean;
+  capabilities: string[];
+}
+
 type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Pick<Response, 'ok' | 'status' | 'text'>>;
 
 const DEFAULT_UI_HEALTH_TIMEOUT_MS = 2500;
 const MAX_DETAIL_LENGTH = 240;
+export const REQUIRED_WORKSPACE_WRITER_CAPABILITIES = [
+  'workspace-snapshot',
+  'workspace-files',
+  'repair-handoff-runner',
+  'feedback-repair-terminal-mirror-tail',
+  'feedback-repair-stop-request',
+  'runtime-provider-preflight-manifest',
+  'runtime-codex-browser-acceptance-manifest',
+];
+
+export function workspaceWriterMissingCapabilities(
+  health: WorkspaceWriterHealth,
+  required: string[] = REQUIRED_WORKSPACE_WRITER_CAPABILITIES,
+) {
+  const available = new Set(health.capabilities);
+  return required.filter((capability) => !available.has(capability));
+}
+
+export function workspaceWriterHealthOk(health: WorkspaceWriterHealth) {
+  return health.ok && workspaceWriterMissingCapabilities(health).length === 0;
+}
+
+export function formatWorkspaceWriterHealth(health: WorkspaceWriterHealth) {
+  if (!health.ok) return 'workspace writer health check failed.';
+  const missing = workspaceWriterMissingCapabilities(health);
+  return missing.length
+    ? `workspace writer is missing required capability/capabilities: ${missing.join(', ')}`
+    : 'workspace writer health and capability probes passed.';
+}
 
 export function uiDevServerProbePaths(repoRoot = process.cwd()): UiDevServerProbe[] {
   return [{

@@ -55,6 +55,10 @@ try {
     readManifest(a.port, a.workspacePath),
     readManifest(b.port, b.workspacePath),
   ]);
+  const [configA, configB] = await Promise.all([
+    readConfig(a.port),
+    readConfig(b.port),
+  ]);
 
   assert.equal(manifestA.repo.detected, true);
   assert.equal(manifestB.repo.detected, true);
@@ -64,6 +68,24 @@ try {
   assert.notEqual(manifestA.workspacePath, manifestB.workspacePath);
   assert.notEqual(manifestA.stateDir, manifestB.stateDir);
   assert.notEqual(manifestA.configLocalPath, manifestB.configLocalPath);
+  assert.deepEqual(configA.peerInstances, [{
+    name: worktrees.b.agentId,
+    appUrl: '',
+    workspaceWriterUrl: `http://127.0.0.1:${worktrees.b.port}`,
+    workspacePath: worktrees.b.path,
+    role: 'repair',
+    trustLevel: 'repair',
+    enabled: true,
+  }]);
+  assert.deepEqual(configB.peerInstances, [{
+    name: worktrees.a.agentId,
+    appUrl: '',
+    workspaceWriterUrl: `http://127.0.0.1:${worktrees.a.port}`,
+    workspacePath: worktrees.a.path,
+    role: 'repair',
+    trustLevel: 'repair',
+    enabled: true,
+  }]);
 
   await Promise.all([
     writeSnapshot(a.port, a.workspacePath, 'session-a', 'bootstrap-a'),
@@ -178,6 +200,13 @@ async function readManifest(port: number, workspacePath: string) {
     repo: { detected: boolean; root: string };
   } };
   return json.manifest;
+}
+
+async function readConfig(port: number) {
+  const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/config`);
+  await assertOk(response);
+  const json = await response.json() as { config: { peerInstances?: unknown[] } };
+  return json.config;
 }
 
 async function writeSnapshot(port: number, workspacePath: string, sessionId: string, artifactId: string) {

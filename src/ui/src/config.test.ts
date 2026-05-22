@@ -53,6 +53,8 @@ describe('SciForge config persistence', () => {
 
   it('defaults feedback github repo to upstream SciForge', () => {
     assert.equal(defaultSciForgeConfig.feedbackGithubRepo, 'AGI4Sci/SciForge');
+    assert.deepEqual(defaultSciForgeConfig.feedbackGithubLabels, ['feedback', 'sciforge-inbox']);
+    assert.equal(defaultSciForgeConfig.feedbackGithubDryRun, false);
   });
 
   it('默认 Runtime Codex 使用 DeepSeek profile 且不允许 OpenAI 自动回退', () => {
@@ -155,6 +157,20 @@ describe('SciForge config persistence', () => {
         enabled: true,
       },
     ]);
+  });
+
+  it('normalizes feedback GitHub sync options without storing blank list entries', () => {
+    const config = normalizeConfig({
+      feedbackGithubLabels: 'feedback, bug, feedback, ',
+      feedbackGithubAssignees: ['alice', ' ', 'bob', 'alice'],
+      feedbackGithubMilestone: '42',
+      feedbackGithubDryRun: true,
+    });
+
+    assert.deepEqual(config.feedbackGithubLabels, ['feedback', 'bug']);
+    assert.deepEqual(config.feedbackGithubAssignees, ['alice', 'bob']);
+    assert.equal(config.feedbackGithubMilestone, '42');
+    assert.equal(config.feedbackGithubDryRun, true);
   });
 
   it('normalizes configured tool provider routes for runtime requests', () => {

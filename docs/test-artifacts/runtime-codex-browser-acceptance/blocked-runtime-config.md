@@ -1,6 +1,6 @@
 # Runtime Codex browser acceptance blocked
 
-Observed at: 2026-05-21T10:35:24.465Z
+Observed at: 2026-05-21T19:44:39.071Z
 Requested UI port: 5173
 Requested workspace writer port: 6173
 Actual/intended URL: http://127.0.0.1:5173/
@@ -10,21 +10,21 @@ Workspace path: /Applications/workspace/ailab/research/app/SciForge/workspace/pa
 Profile: sciforge-runtime-deepseek
 Provider: sciforge-deepseek-proxy
 Model: bailian/deepseek-v4-flash
-Reason: Runtime Codex environment is not fully configured; missing SCIFORGE_RUNTIME_API_KEY and Runtime Codex secret must be supplied by service environment, not config file debug fallback. Set SCIFORGE_RUNTIME_API_KEY in the service environment, and set SCIFORGE_PROXY_UPSTREAM_BASE_URL or config.local.json/.sciforge instance config codexProxy.upstreamBaseUrl/llm.baseUrl before live browser E2E can pass. Checked config paths: workspace/parallel/p1/.sciforge/config.local.json, config.local.json. Runtime secret-like keys were found in ignored config files (workspace/parallel/p1/.sciforge/config.local.json); they are accepted only as local proxy debug fallback and cannot satisfy browser/release acceptance.
+Reason: Current Runtime Codex provider preflight is ready, but Codex in-app browser acceptance is incomplete: missing passed release manifest.
 Provider preflight artifact: docs/test-artifacts/runtime-provider-preflight/manifest.json
-Provider preflight category: config-secret-source
-Provider preflight checked at: 2026-05-21T10:35:24.113Z
+Provider preflight category: ready
+Provider preflight checked at: 2026-05-21T19:43:17.974Z
 Provider preflight release acceptance: not-evaluated
-Runtime key in service env: missing
-Provider upstream base URL: missing
-Runtime key source: config-debug-fallback
-Upstream URL source: missing
+Runtime key in service env: present
+Provider upstream base URL: present
+Runtime key source: env
+Upstream URL source: env
 Acceptance scope: non-seed Runtime Codex messages only; seed/demo/fixture messages are excluded from success criteria.
 
 Acceptance rubric:
 - User intent: prove the real default-chat Runtime Codex path can complete single-turn, selected-ref, and multi-turn tasks.
 - Expected observable result: visible live Runtime Codex/gui.present answers with provider/model/profile/workspace/command id and folded audit logs.
-- Actual result: blocked before release acceptance because Runtime Codex environment is not fully configured; missing SCIFORGE_RUNTIME_API_KEY and Runtime Codex secret must be supplied by service environment, not config file debug fallback. Set SCIFORGE_RUNTIME_API_KEY in the service environment, and set SCIFORGE_PROXY_UPSTREAM_BASE_URL or config.local.json/.sciforge instance config codexProxy.upstreamBaseUrl/llm.baseUrl before live browser E2E can pass. Checked config paths: workspace/parallel/p1/.sciforge/config.local.json, config.local.json. Runtime secret-like keys were found in ignored config files (workspace/parallel/p1/.sciforge/config.local.json); they are accepted only as local proxy debug fallback and cannot satisfy browser/release acceptance.
+- Actual result: blocked before release acceptance because Current Runtime Codex provider preflight is ready, but Codex in-app browser acceptance is incomplete: missing passed release manifest.
 - Current evidence refs: manifest.json plus blocked notes. Prior or stale browser screenshots/DOM refs are diagnostic only and cannot count as current release evidence.
 - Negative checks: fake passed status, missing DOM/screenshot, missing command id, missing task result, seed/demo evidence, and partial/blocked/failed status remain release-blocking.
 - Required key: set SCIFORGE_RUNTIME_API_KEY in the service environment; do not store it in repository files.

@@ -2,7 +2,12 @@ import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { connect } from 'node:net';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { formatUiDevServerHealth, readUiDevServerHealth } from './dev-health';
+import {
+  formatUiDevServerHealth,
+  formatWorkspaceWriterHealth,
+  readUiDevServerHealth,
+  workspaceWriterHealthOk,
+} from './dev-health';
 import { isOwnedSciForgeViteDevProcess, parseListeningPids, type DevProcessOwnershipRecord } from './dev-process';
 import { normalizeInstanceName, parallelProfile } from '../src/runtime/parallel-instance-profile.js';
 
@@ -94,8 +99,11 @@ if (await isListening(CODEX_PROXY_PORT)) {
   }));
 }
 
-if (workspaceHealth.ok) {
+if (workspaceWriterHealthOk(workspaceHealth)) {
   console.log(`SciForge workspace writer already running: http://127.0.0.1:${WORKSPACE_PORT}`);
+} else if (workspaceHealth.ok) {
+  console.warn(`SciForge workspace writer is running on http://127.0.0.1:${WORKSPACE_PORT}, but it is stale for this dev launcher: ${formatWorkspaceWriterHealth(workspaceHealth)}`);
+  console.warn(`Stop the stale workspace writer on port ${WORKSPACE_PORT} and rerun npm run dev.`);
 } else if (await isListening(WORKSPACE_PORT)) {
   console.warn(`SciForge workspace writer is running on http://127.0.0.1:${WORKSPACE_PORT}, but its health check failed. Stop the old workspace server and rerun npm run dev.`);
 } else {

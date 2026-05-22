@@ -14,6 +14,14 @@ export type GithubIssueApiRow = {
   labels?: Array<{ name?: string }>;
 };
 
+export type GithubIssueCreateInput = {
+  title: string;
+  body: string;
+  labels?: string[];
+  assignees?: string[];
+  milestone?: number;
+};
+
 export type GithubRepoAccess = {
   fullName: string;
   private: boolean;
@@ -42,6 +50,23 @@ export function parseGithubRepoParts(repoFull: string): { owner: string; repo: s
   return owner && repo ? { owner, repo } : null;
 }
 
+function requireGithubApiInputs(repoFull: string, token: string): { owner: string; repo: string; token: string } {
+  const parts = parseGithubRepoParts(repoFull);
+  if (!parts) throw new Error('GitHub feedback sync blocked: 无效的 GitHub 仓库格式（需要 owner/repo）。本地反馈保持 pending，可修正仓库后重试。');
+  const cleanToken = token.trim();
+  if (!cleanToken) throw new Error('GitHub feedback sync blocked: 缺少 GitHub token。本地反馈保持 pending，请配置具备 Issues 读写权限的 token 后重试。');
+  return { ...parts, token: cleanToken };
+}
+
+async function githubFetch(input: string | URL, init: RequestInit, operation: string): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`GitHub API network failure during ${operation}: ${message}. 本地反馈保持 pending，可稍后重试。`);
+  }
+}
+
 async function readGithubError(response: Response, context: { operation?: 'create-issue' } = {}): Promise<string> {
   const text = await response.text();
   let message = '';
@@ -52,10 +77,27 @@ async function readGithubError(response: Response, context: { operation?: 'creat
   } catch {
     message = text || response.statusText || `HTTP ${response.status}`;
   }
-  return `GitHub API ${response.status}: ${friendlyGithubError(message, context)}`;
+  return `GitHub API ${response.status}: ${friendlyGithubError(message, {
+    ...context,
+    rateLimitRemaining: response.headers.get('x-ratelimit-remaining'),
+    rateLimitReset: response.headers.get('x-ratelimit-reset'),
+  })}`;
 }
 
-function friendlyGithubError(message: string, context: { operation?: 'create-issue' } = {}) {
+function friendlyGithubError(message: string, context: {
+  operation?: 'create-issue';
+  rateLimitRemaining?: string | null;
+  rateLimitReset?: string | null;
+} = {}) {
+  if (
+    context.rateLimitRemaining === '0'
+    || /rate limit|secondary rate limit|abuse detection/i.test(message)
+  ) {
+    const resetAt = context.rateLimitReset && /^\d+$/.test(context.rateLimitReset)
+      ? new Date(Number(context.rateLimitReset) * 1000).toISOString()
+      : undefined;
+    return `GitHub rate limit reached${resetAt ? `；预计 ${resetAt} 后可重试` : ''}。本地反馈保持 pending，不会被丢弃。`;
+  }
   if (/forbids access via a fine-grained personal access tokens/i.test(message) && /lifetime is greater than 366 days/i.test(message)) {
     return '当前组织禁止使用有效期超过 366 天的 fine-grained PAT。请到 GitHub 重新生成或调整该 token 的 expiration 为 366 天以内，并确保授予目标仓库 Issues 读写权限。';
   }
@@ -75,11 +117,10 @@ function friendlyGithubError(message: string, context: { operation?: 'create-iss
 }
 
 export async function checkGithubRepoAccess(repoFull: string, token: string): Promise<GithubRepoAccess> {
-  const parts = parseGithubRepoParts(repoFull);
-  if (!parts) throw new Error('无效的 GitHub 仓库格式（需要 owner/repo）。');
-  const response = await fetch(`https://api.github.com/repos/${parts.owner}/${parts.repo}`, {
-    headers: githubHeaders(token.trim()),
-  });
+  const parts = requireGithubApiInputs(repoFull, token);
+  const response = await githubFetch(`https://api.github.com/repos/${parts.owner}/${parts.repo}`, {
+    headers: githubHeaders(parts.token),
+  }, 'repo access check');
   if (!response.ok) throw new Error(await readGithubError(response));
   const data = await response.json() as {
     full_name?: string;
@@ -95,13 +136,12 @@ export async function checkGithubRepoAccess(repoFull: string, token: string): Pr
 }
 
 export async function checkGithubIssueWriteAccess(repoFull: string, token: string): Promise<void> {
-  const parts = parseGithubRepoParts(repoFull);
-  if (!parts) throw new Error('无效的 GitHub 仓库格式（需要 owner/repo）。');
-  const response = await fetch(`https://api.github.com/repos/${parts.owner}/${parts.repo}/issues`, {
+  const parts = requireGithubApiInputs(repoFull, token);
+  const response = await githubFetch(`https://api.github.com/repos/${parts.owner}/${parts.repo}/issues`, {
     method: 'POST',
-    headers: githubHeaders(token.trim()),
+    headers: githubHeaders(parts.token),
     body: JSON.stringify({ title: '', body: 'SciForge permission probe' }),
-  });
+  }, 'issue write permission probe');
   if (response.status === 422) return;
   if (!response.ok) throw new Error(await readGithubError(response, { operation: 'create-issue' }));
   throw new Error('GitHub Issue 写权限探测异常：空标题请求意外成功。');
@@ -110,18 +150,21 @@ export async function checkGithubIssueWriteAccess(repoFull: string, token: strin
 export async function createGithubIssue(
   repoFull: string,
   token: string,
-  input: { title: string; body: string; labels?: string[] },
+  input: GithubIssueCreateInput,
 ): Promise<{ htmlUrl: string; number: number }> {
-  const parts = parseGithubRepoParts(repoFull);
-  if (!parts) throw new Error('无效的 GitHub 仓库格式（需要 owner/repo）。');
+  const parts = requireGithubApiInputs(repoFull, token);
   const url = `https://api.github.com/repos/${parts.owner}/${parts.repo}/issues`;
-  const response = await fetch(url, {
+  const response = await githubFetch(url, {
     method: 'POST',
-    headers: githubHeaders(token.trim()),
-    body: JSON.stringify(input.labels?.length
-      ? { title: input.title, body: input.body, labels: input.labels }
-      : { title: input.title, body: input.body }),
-  });
+    headers: githubHeaders(parts.token),
+    body: JSON.stringify({
+      title: input.title,
+      body: input.body,
+      ...(input.labels?.length ? { labels: input.labels } : {}),
+      ...(input.assignees?.length ? { assignees: input.assignees } : {}),
+      ...(typeof input.milestone === 'number' ? { milestone: input.milestone } : {}),
+    }),
+  }, 'issue create');
   if (!response.ok) throw new Error(await readGithubError(response, { operation: 'create-issue' }));
   const data = await response.json() as { html_url?: string; number?: number };
   if (typeof data.html_url !== 'string' || typeof data.number !== 'number') {
@@ -132,8 +175,7 @@ export async function createGithubIssue(
 
 /** Lists open issues only; excludes pull requests (they appear in `/issues` but carry `pull_request`). */
 export async function fetchOpenGithubIssues(repoFull: string, token: string): Promise<GithubIssueApiRow[]> {
-  const parts = parseGithubRepoParts(repoFull);
-  if (!parts) throw new Error('无效的 GitHub 仓库格式（需要 owner/repo）。');
+  const parts = requireGithubApiInputs(repoFull, token);
   const collected: GithubIssueApiRow[] = [];
   for (let page = 1; page <= 20; page += 1) {
     const url = new URL(`https://api.github.com/repos/${parts.owner}/${parts.repo}/issues`);
@@ -142,7 +184,7 @@ export async function fetchOpenGithubIssues(repoFull: string, token: string): Pr
     url.searchParams.set('page', String(page));
     url.searchParams.set('sort', 'updated');
     url.searchParams.set('direction', 'desc');
-    const response = await fetch(url.toString(), { headers: githubHeaders(token.trim()) });
+    const response = await githubFetch(url, { headers: githubHeaders(parts.token) }, 'open issue list');
     if (!response.ok) throw new Error(await readGithubError(response));
     const batch = await response.json() as unknown;
     if (!Array.isArray(batch) || batch.length === 0) break;
