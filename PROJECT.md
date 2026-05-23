@@ -2,26 +2,90 @@
 
 最后更新：2026-05-23
 
-当前目标：把 **反馈收件箱** 做成 SciForge 的用户反馈和修复闭环：用户可以评论任意页面元素，反馈带截图和上下文证据进入收件箱；收件箱可以提交/拉取 GitHub issue；被勾选的问题可以交给为 SciForge 服务的 Codex CLI backend 修复。这里的 Codex CLI repair 指 SciForge 后端以 DeepSeek profile/provider 调用的 Codex CLI 服务，不是当前 Codex App 助手。
+当前目标：把反馈收件箱里的 repair 入口清理成一个干净、可解释、可实时交互的 **Direct Codex PTY Terminal**。Repair 本质是一次带 feedback context 的 Codex CLI session；UI 只负责生成/展示上下文提示、承载 PTY 交互、展示结果和确认边界，不再维护一条并行的 HTTP writer repair 路径。
 
-本文件是当前执行任务板。已完成的 R-* 真实多轮压测仅保留最终 gate 仍需对账的三条任务；其他旧 P1-P6 run log 和历史方案只保留在历史归档说明、Git history、`docs/archive/` 与 `docs/test-artifacts/` 中，不再作为当前实现入口。
+## 当前决策
 
-## 当前事实
+- 暂时不做多 agent repair 编排。Codex CLI 如需子任务，可由 Codex 自己在 CLI session 内 spawn subagents；SciForge UI 不先做跨 agent 调度层。
+- Direct Codex Terminal 是 Codex CLI 专用终端，不是开放的系统 shell。短期只允许与当前 feedback repair 绑定的 Codex CLI 交互，降低权限面和状态复杂度。
+- Repair UI 保留一个主路径：可选初始提示输入框 + `启动 Codex`；启动后进入 xterm/WebSocket PTY，支持实时读写和停止。不要再出现 `HTTP writer` 入口，也不要再有与 `启动 Codex` 语义重复的 `启动并发送`。
+- Provider 预检可以保留，但它只回答“当前 Codex CLI 配置是否可用”。API key、base URL、profile 等由设置入口让用户配置；页面、日志、GitHub issue 和 docs 不得暴露 secret。
+- Evidence / audit 需要继续存在，但目标是减少用户补充信息：系统自动带上反馈注释、目标元素、截图、DOM/route、terminal refs、patch/test refs；用户只需要确认问题是否解决，以及补充“还有什么问题”。
+- 用户确认边界改成产品选择：用户可以选择自动操作或手动 git 操作。默认仍不自动 commit/push/PR/merge；未来可以保留自动 merge 方向，但必须有显式策略和确认 gate。
+- 旧的跨实例 repair 编排、provider 预检、evidence/audit、用户确认边界只保留对当前产品仍有价值的部分；实现上以单一路径、可观察、可删除旧链路为优先。
 
-SciForge 当前路线是 **反馈收件箱优先，Runtime Codex/Codex CLI 后端修复，GUI 作为 TUI extension 和 repair control surface**。
+## 不可妥协原则
 
-核心架构：
+- 用户级 browser 验收必须使用 Codex in-app browser，从默认可见入口开始；系统浏览器、macOS `open`、外部 Chrome、Playwright 只能作为辅助诊断。
+- 每个 claimed success 都要能对应到实际文件改动、命令输出、browser/DOM/截图证据或明确的 blocked manifest；缺任何一项只能标 `partial` / `blocked`。
+- 已完成的 TODO 需要打勾，并补充 evidence 路径、日期和最终状态。
+- 所有修改必须通用，不能为当前案例写硬编码补丁。
+- 代码路径保持唯一真相源：发现冗余链路时删除或合并旧链路，避免长期并行实现。
+- 单文件超过约 2000 行时必须拆分或登记拆分任务。
 
-- Codex CLI / TUI 拥有 agent 逻辑、上下文、记忆、工具、插件、修复和执行。
-- SciForge GUI 是翻译壳、观察层和可复用展示层，不是 agent host。
-- GUI -> runtime 只发送 terminal-equivalent text command。
-- runtime -> GUI 只返回 normalized events、audit events 或 intent-based `gui.*` results。
-- GUI 可以做 deterministic presentation behavior，不能做 provider route、capability ranking、repair policy、prompt assembly 或 completion 判断。
-- 多轮对话以 Codex CLI thread/session 为权威状态源；SciForge 只保存 thread id、attempt id、UI metadata 和 evidence refs，继续对话时调用 Codex 原生 resume，而不是拼 GUI transcript。
-- `docs/` 是产品/架构/协议/用法真相源；backend runtime migration 真相源是 `packages/backend/CodexRuntimeMigration.md`。
-- 短中期桌面化选择 Electron；Tauri 只作为 runtime launcher、app data、secret storage 和 platform service 稳定后的长期优化项。
-- 反馈收件箱是 issue triage、GitHub 同步和 Codex CLI repair 的主入口；SciForge 工作台只提供任意元素评论、当前页面相关反馈提示和跳转入口，避免工作台自己被修时还承担完整修复控制台。
-- Codex CLI repair 进度在反馈收件箱中以 terminal mirror 方式呈现：直接透传 Codex CLI 的终端信息，像复刻一份 terminal。该 terminal mirror 可以主显给用户，但不能直接作为 completion 判断、GitHub issue 正文或永久审计内容；写入 issue 或持久审计前必须做 bounded/scrubbed 处理。
+## 必读文档
+
+- [`docs/README.md`](docs/README.md)：当前文档入口。
+- [`docs/Architecture.md`](docs/Architecture.md)：GUI-as-TUI-extension 总架构。
+- [`docs/TuiGuiProtocol.md`](docs/TuiGuiProtocol.md)：GUI 输入变成终端等价文本、TUI 通过 `gui.*` intent tools 驱动 GUI 的协议边界。
+- [`docs/NativeExtensionOwnershipMap.md`](docs/NativeExtensionOwnershipMap.md)：provider route、verifier、repair 等能力归属。
+- [`docs/Usage.md`](docs/Usage.md)：当前启动、配置、运维和 workspace 产物说明。
+- [`docs/FeedbackInboxDesignPrinciples.md`](docs/FeedbackInboxDesignPrinciples.md)：反馈收件箱设计原则。
+- [`packages/backend/CodexRuntimeMigration.md`](packages/backend/CodexRuntimeMigration.md)：Runtime Codex 迁移路线。
+- [`packages/backend/CODEX_COMPATIBILITY.md`](packages/backend/CODEX_COMPATIBILITY.md)：Codex CLI 兼容层说明。
+
+## 当前基线
+
+- 反馈收件箱已经有可见 `注释` 按钮、元素选择、截图/标注证据、本地 feedback bundle、GitHub issue 同步、repair audit 展示和 Direct Codex PTY Terminal。
+- 2026-05-23 已验证 Direct Codex PTY：Codex in-app browser 点击 `启动 Codex`，xterm 显示真实 Codex CLI trust prompt，通过 PTY 输入 `1` 后继续运行，terminal mirror 记录 `DIRECT_CODEX_PTY_OK` 和反馈标题。
+- 当前实现仍有旧 HTTP writer 代码和 UI 入口，这是下一步要删除的迁移债务。
+- 当前实现仍可能同时显示 `启动 Codex` 与 `启动并发送` 这类重复动作，这是下一步要合并的 UX 债务。
+- Runtime Codex/DeepSeek 本地运行依赖本机 ignored 配置或设置页注入的 provider 参数；任何公开产物不得包含 secret。
+
+## 当前任务板：Direct Codex Terminal 清理
+
+### RT-01 删除 HTTP writer 产品入口
+
+- [ ] 移除反馈收件箱里所有 `HTTP writer` 可见按钮、状态标签、help copy 和入口逻辑。
+- [ ] 移除 `启动并发送` 与 `启动 Codex` 的重复语义：未运行时只有一个启动动作，textarea 内容作为 initial prompt 进入同一次 Codex PTY session。
+- [ ] 运行中只保留 PTY terminal、停止、必要的复制/导出诊断动作；follow-up 输入应通过 PTY 本身完成，避免旁路 writer。
+
+### RT-02 删除 HTTP writer 前端代码
+
+- [ ] 清理 `FeedbackCodexTerminalPanel` / inbox 页面中的 HTTP writer mode、状态分支、按钮分支和样式。
+- [ ] 清理 workspace client 中只服务 HTTP writer 的 start/write/tail/stop 类型与调用。
+- [ ] 删除或改写 HTTP writer 专用测试，保留 PTY start、PTY interactive input、stop、terminal mirror、error state 的覆盖。
+
+### RT-03 删除 HTTP writer 后端代码
+
+- [ ] 删除 workspace server 中 HTTP writer terminal session 的 endpoint、state registry、poll/tail/write/stop 分支。
+- [ ] 删除旧的 direct HTTP writer repair prompt dispatch 适配层；feedback context prompt 只作为 Codex PTY 启动时的 initial message。
+- [ ] 保留 provider preflight、feedback bundle、terminal mirror、repair result persistence 和确认边界，但它们不应依赖 HTTP writer session。
+
+### RT-04 统一 Provider 设置与预检
+
+- [ ] 在 UI 中提供明确的 provider 设置入口，允许用户配置/检查 API key、base URL、profile/model，但不显示 secret 原文。
+- [ ] Provider 预检只做 readiness 诊断：缺 key、base URL、profile 错误、upstream outage 都要有明确状态和下一步。
+- [ ] 预检失败时可以阻止自动 repair，但不能让 terminal 面板看起来像按钮失效；需要可见说明和可恢复动作。
+
+### RT-05 简化 Evidence / Audit 和用户反馈闭环
+
+- [ ] Repair context 自动包含用户注释、目标元素、截图、DOM/route、workspace/session refs 和 GitHub issue refs，用户不需要重复描述。
+- [ ] Repair 结束后 UI 让用户只做两件事：确认问题是否解决；如果没有，补充剩余问题反馈。
+- [ ] Audit bundle 保留 plan、terminal mirror、patch/diff、tests、guard digests、provider preflight 和用户确认记录；展示层默认 summary-first。
+
+### RT-06 用户确认与 Git 操作模式
+
+- [ ] 提供“手动 git 操作”和“自动操作”模式选择。默认手动。
+- [ ] 自动模式也必须保留 commit、push、PR、merge 的分级确认；merge 不得静默执行。
+- [ ] 为未来多 agent 协作保留自动 merge 的产品位置，但当前实现不引入多 agent 编排。
+
+### RT-07 验收
+
+- [ ] `git diff --check`
+- [ ] `npm run typecheck`
+- [ ] Focused tests：feedback inbox、workspace client、workspace server PTY terminal、terminal panel。
+- [ ] Codex in-app browser：打开 `http://127.0.0.1:5173/`，确认没有 HTTP writer 入口、没有重复启动按钮；点击 `启动 Codex` 后进入真实 PTY，可实时输入、停止并看到结果/诊断。
 
 ## 归档真实多轮压测任务（最终 gate 对账）
 
@@ -34,288 +98,12 @@ SciForge 当前路线是 **反馈收件箱优先，Runtime Codex/Codex CLI 后�
 - [x] R-VERIFY-02 Confidence source and explanation：第一轮生成无 verifier confidence 的普通回答，必须不显示默认百分比；第二轮生成 tool-backed 或 verifier-backed result，要求输出 `confidenceExplanation`；第三轮制造 partial/blocked 或 contradictory evidence，验证 confidence 降低并列出 penalties。必须证明 GUI 不计算 confidence，所有分数来自 TUI/verifier/harness payload。
   - Evidence 2026-05-21: `docs/test-artifacts/real-tasks/R-VERIFY-02/manifest.json` is `status: passed`, `releaseEligible: true`, `attemptScope: task-specific-live-attempt`.
 
-
-## 不可妥协原则
-- 用户级 browser 验收必须使用 Codex in-app browser，从默认聊天入口开始；系统浏览器、macOS `open`、外部 Chrome、Playwright 只能作为辅助诊断。
-- 验收必须从用户意图反推：每个 claimed success 都要能对应到实际文件改动、命令输出、browser/DOM/截图证据或明确的 blocked manifest；缺任何一项只能标 `partial` / `blocked`，不能写 `passed`。
-- 单文件超过约 2000 行时必须拆分或登记拆分任务。
-- 真实 browser E2E 是最终验收；terminal smoke 只能补充。必须实现用户级验收：真正准确解决了用户的问题、优化用户体验
-- 已经完成的TODO需要打勾
-- 所有修改必须通用、可泛化到任何场景，不能在代码里面硬编码和为当前案例打补丁
-- 代码路径保持唯一真相源：发现冗余链路时删除、合并旧链路，避免长期并行实现。
-
-
-## 必读文档
-
-- [`docs/README.md`](docs/README.md)：当前文档入口，概括 SciForge GUI-as-TUI-extension 的总原则、权威文档列表和核心边界。
-- [`docs/Architecture.md`](docs/Architecture.md)：当前总架构真相源，定义 GUI、TUI agent host、native extensions、desktop packaging 和职责归属。
-- [`docs/TuiGuiProtocol.md`](docs/TuiGuiProtocol.md)：当前 TUI/GUI 协议真相源，规定 GUI 输入必须变成终端等价文本，TUI 通过只读 GUI resources 和 `gui.*` intent tools 感知/驱动 GUI。
-- [`docs/NativeExtensionOwnershipMap.md`](docs/NativeExtensionOwnershipMap.md)：native extension 归属说明，明确 capability discovery、harness/policy、provider route、verifier、skill promotion、Computer Use 和 repair 的 Codex 原生归属。
-- [`docs/Usage.md`](docs/Usage.md)：当前可运行代码的启动、配置、运维、workspace 产物和迁移期兼容路径说明，不能把其中的旧 AgentServer 路径当作最终架构。
-- [`packages/backend/CodexRuntimeMigration.md`](packages/backend/CodexRuntimeMigration.md)：Runtime Codex 迁移路线，定义 `codex exec --json`、profile 隔离、DeepSeek/provider proxy、native resume 和桌面 productization gate。
-- [`packages/backend/CODEX_COMPATIBILITY.md`](packages/backend/CODEX_COMPATIBILITY.md)：Codex CLI 兼容层说明，记录不 fork Codex、运行期隔离、DeepSeek streaming tool-call 修复、事件分层和升级检查清单。
-- Runtime Codex/DeepSeek 本地运行依赖 `SCIFORGE_RUNTIME_API_KEY` 和 provider proxy upstream base URL（`SCIFORGE_PROXY_UPSTREAM_BASE_URL` / `upstreamBaseUrl`）；本地 dev 可从 ignored `config.local.json` 注入 Runtime Codex launch env，但页面、日志、GitHub 和 docs 不得泄露 secret。缺任一项时只能记录 blocked/provider-preflight evidence，不能把当前 Codex App 或其他 provider silent fallback 当作 repair backend。
-
-## 当前基线
-
-- 反馈收件箱页面已经存在导航入口和空状态，但当前 active scope 是补齐真实业务闭环，而不是继续扩写旧 R-* 压测板。
-- GitHub issue 同步默认使用当前 `origin` repo；repo owner/name、base branch、labels、assignees、token source、dry-run/real-submit 必须可配置。没有配置或 token 不足时必须 fail closed，并保留本地反馈。
-- Codex CLI repair 默认不 commit、不 push、不 merge。默认产物是隔离 worktree/branch、repair plan、patch/diff、tests、terminal mirror、bounded audit refs 和风险说明；commit、push、PR、merge 都需要用户单独确认。
-- 修复控制主入口在反馈收件箱。工作台可显示“此元素/此页面有反馈”并跳转到收件箱，但不承担批量选择、repair queue、GitHub sync 和 patch approval 的完整流程。
-- 评论 evidence 必须同时包含用户评论、元素内容、页面上下文和截图证据。截图需要有原图和标注图，标注图必须框出目标元素并标出评论点位/编号。
-- Issue body 必须为人类和 agent 都可读：复现步骤、期望/实际行为、元素证据、截图、环境、workspace/session/run refs、GitHub sync metadata、修复状态和安全限制要结构化呈现。
-- 反馈数据、GitHub sync state、repair audit 和截图是产品数据；Codex CLI repair 不得删除或重写它们来伪装修复成功。
-- Repair autonomy 是硬边界：当前主 Codex 助手不得把自己的 root cause 分析、补丁方案、命令序列、测试捷径或隐藏上下文传给 Runtime Codex/Codex CLI repair；repair CLI 只能拿到用户反馈 bundle、截图/DOM/evidence、repo 当前状态、显式用户终端输入和固定护栏/验收策略，并必须自己完成推理和修复。
-
-## 长文件拆分登记
-
-- `tests/smoke/real-task-evidence-schema.test.ts`：超过 long-file budget；后续拆分为 schema fixtures、positive contract cases、negative contract cases。
-- `src/runtime/gateway/generated-task-runner-generation-lifecycle.ts`：超过 long-file budget；后续拆分 lifecycle state machine、event mapping、persistence helpers。
-- `src/ui/src/app/chat/sessionTransforms.ts`：超过 long-file budget；后续拆分 session normalization、message transforms、artifact/run projection helpers。
-
-执行规则：
-
-- 当前任务板只保留反馈收件箱闭环任务；旧 R-* 任务不再作为 active TODO。
-- 每个任务完成后直接把对应 `- [ ]` 改成 `- [x]`，并在该行或下一行补 evidence 路径、运行日期和最终状态。
-- 每个失败验收都要产出一个可执行修复点；修复点进入代码和测试，不在 `PROJECT.md` 复制成另一套任务清单。
-- 除非新的失败任务证明必要，不重开 worker branch 考古、大范围盲 rename/delete、seed/demo 成功声明、非 Codex browser acceptance 或 prompt-specific hardcode。
-
-## 反馈收件箱任务板
-
-所有用户级验收默认使用 Codex in-app browser 打开 `http://127.0.0.1:5173/`。terminal、unit test 和 smoke test 只能补充，不能替代用户级 browser evidence。
-
-### FB-00 当前阻塞：Repair Terminal 必须真正可用
-
-背景 2026-05-22：用户在反馈收件箱里多次点击 `Codex CLI terminal` 区域，观察到按钮和 terminal 仍然像装饰面板，不能稳定启动 repair。当前最新判断是：workspace writer / p2 同步只能作为可选诊断，不应成为 direct Codex CLI repair 的硬阻塞；用户可见 terminal 必须由当前控制面直接创建 run、显示事件、接收输入并触发 Codex CLI。
-
-完成前，不能把 FB-04/FB-06 的“repair backend 可用”作为当前用户级验收通过。
-
-- [x] FB-00.1 统一 terminal launch 真相源：`启动 repair` 必须调用当前主 workspace writer 的 direct Runtime Codex/Codex CLI repair 路径；p2/target workspace writer 只用于可选同步和 target state mirror，失败时写 terminal 诊断但不得阻断 Codex CLI dispatch。
-  - Evidence 2026-05-22: `FeedbackInboxPage` 现在通过当前 workspace writer 发起 `runFeedbackIssueRepairHandoff`，target writer manifest 失败只作为 fallback/metadata 诊断；focused tests、`npm run smoke:workspace-instance-feedback-api`、`node --import tsx tests/smoke/smoke-repair-handoff-runner.ts` 通过。
-- [x] FB-00.2 第一次点击必须有可见反应：点击 `启动 repair` 后 1 秒内，收件箱中同一反馈必须出现 `repairRunId`、`terminalMirrorRef`、至少一条 terminal event，以及明确状态文本；如果 provider/env 缺失，terminal 必须显示真实 provider/env blocker，而不是空白或只写页面底部 hint。
-  - Evidence 2026-05-22: Codex in-app browser 启动真实反馈 repair 后，同卡片立即出现 `feedback-repair-run-mpgk16oz-6vi0ie`、terminal ref 和 preparing/dispatching terminal events；后续 stop not-running 也写回 durable blocked audit。Browser evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-stop-blocked-audit-2026-05-22.png` and `.dom.txt`.
-- [ ] FB-00.3 输入框必须像 terminal command line：无 run 时输入内容作为 initial guidance 启动 repair；有 run 时输入内容走 native Codex resume/guidance；两种路径都必须在 terminal mirror 中追加用户输入事件和 backend 响应事件。
-  - Partial 2026-05-22: implementation and smoke coverage now persist initial guidance into the pre-dispatch terminal run, write guidance audit records through `/repair-guidance`, append user guidance plus backend response/blocked-resume messages to terminal mirror, and attempt native Runtime Codex resume only when a codex session id and isolated worktree are available. Verified with `npm run smoke:workspace-instance-feedback-api`, focused repair audit tests, and the 53-test focused feedback suite. Live browser typing of repair guidance remains open because the main session must not invent hidden repair instructions; it needs explicit human terminal input.
-  - Partial 2026-05-22: terminal input now makes the guidance boundary visible in the inbox: only text explicitly typed in the repair guidance box is sent as initial guidance or appended to terminal mirror, and the UI states that no main-session analysis, patch plan, or hidden context is attached. Codex in-app browser verified the boundary copy on 9 visible terminal inputs with no page/boundary overflow. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-repair-guidance-boundary-2026-05-22.json`, `.dom.txt`, and `.png`. Live typed human guidance is still pending.
-  - Partial 2026-05-23: feedback cards now expose a default `Codex 修复终端` path backed by current workspace writer HTTP writer endpoints: start builds a feedback-context prompt, records a direct terminal repair run, streams Codex CLI JSONL/stderr/message events to terminal mirror, accepts follow-up prompts, and supports stop/tail without p2/multi-agent orchestration. The old cross-instance repair audit remains under `高级 repair 交接与 audit`. Verified with `workspaceClient.feedback.test.ts`, `FeedbackInboxPage.test.ts`, `npm run typecheck`, `git diff --check`, and Codex in-app browser UI evidence `docs/test-artifacts/feedback-inbox-closure/feedback-direct-codex-terminal-ui-2026-05-23.{json,dom.txt,png}`. Live model dispatch was intentionally not clicked during UI verification.
-  - Evidence 2026-05-23: direct Codex terminal was upgraded to WebSocket/xterm PTY. The in-app browser clicked `启动 Codex` on feedback `feedback-mph6e6rt-432i4f`, saw the real Codex CLI trust prompt inside xterm, sent `1` through the terminal, and terminal mirror recorded `DIRECT_CODEX_PTY_OK` plus the selected feedback title `viewport screenshot evidence test`. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-direct-codex-terminal-websocket-pty-2026-05-23.{json,dom.txt,png,terminal.txt}`.
-- [x] FB-00.4 按钮功能逐个验收：`启动 repair`、`发送`、`展开/折叠`、`复制`、`导出 Bundle`、`停止` 都必须有实现、可测前置条件、可见成功/失败反馈；禁用按钮必须显示为什么禁用，不能让用户感觉“按了没反应”。
-  - Evidence 2026-05-22: Codex in-app browser verified the fixed repair card terminal controls: expand/collapse toggles terminal body state, copy reports clipboard-unavailable fallback instead of failing silently, export reports the terminal ref, and stop is disabled with `repair result is already available; no active repair turn is available to stop`. DOM evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-terminal-controls-current-2026-05-22.dom.txt`. `FeedbackRepairAuditPanel.test.tsx` and `smoke-workspace-instance-feedback-api.ts` cover no-run initial input copy, guidance audit append, stop, terminal tail, and export payloads.
-- [x] FB-00.5 Codex CLI 调用证据：terminal mirror 和 audit bundle 必须记录 runtime profile、command/attempt/session refs、provider preflight 结论、isolated worktree path、patch/test/audit refs；必须证明没有 silent fallback 到当前 Codex App 助手或旧 AgentServer-only 路径。
-  - Evidence 2026-05-22: current workspace writer now computes live provider preflight from Runtime Codex launch env and proxy `/healthz`, with `category=ready`, missing env `[]`, and no secret output. Terminal mirror for `feedback-repair-run-mpgncnp8-yceoy1` records `run_started Runtime Codex started with sciforge-deepseek-proxy/bailian/deepseek-v4-flash profile sciforge-runtime-deepseek`, isolated worktree, patch/test/audit refs, `done status=done exit=0`, and `Repair verdict fixed`.
-- [x] FB-00.6 成功 repair E2E：从 `http://localhost:5173/` 的真实反馈卡片点击启动，DeepSeek Runtime Codex/Codex CLI 生成 patch/diff/tests/audit；terminal 显示完成事件；反馈卡片显示 `fixed` 或明确 `needs-follow-up` 原因；未确认前不能 commit/push/PR/merge。
-  - Evidence 2026-05-22: Codex in-app browser created/select-started local feedback `feedback-deepseek-autonomous-1779437826689` from `http://localhost:5173/`. DeepSeek Runtime Codex autonomously created `tests/fixtures/deepseek-autonomous-repair-marker-1779437826689.txt`, wrote repair plan/patch/audit/test refs under `.sciforge/repair-results/feedback-repair-run-mpgncnp8-yceoy1`, passed `npm run typecheck` and `git diff --check`, produced `verdict: fixed`, `changedFiles: ["tests/fixtures/deepseek-autonomous-repair-marker-1779437826689.txt"]`, `targetResultPersistence.status=recorded`, and no commit/push/PR/merge.
-- [ ] FB-00.7 用户级 browser 验收：用 Codex in-app browser 真实点击按钮、输入引导、观察 terminal 行增长、导出 bundle、复制 terminal、停止一个 running/可停止 run，并保存截图/DOM 证据到 `docs/test-artifacts/feedback-inbox-closure/`。
-  - Partial 2026-05-22: live browser verified expand/copy/export/stop disabled feedback on a completed repair and preserved DOM evidence. Live submission of typed guidance was intentionally not performed by the main session because the user required that the main Codex assistant must not help or leak implementation hints to the repair CLI; guidance dispatch remains covered by API/smoke tests until the human user provides explicit terminal input.
-  - Partial 2026-05-22: live browser verified the terminal guidance safety boundary on the actual inbox: both initial-guidance and resume-style placeholders are visible and enabled, and every terminal input states that only explicit user text from the box is sent, with no hidden main-session analysis or patch plan. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-repair-guidance-boundary-2026-05-22.*`. This narrows the remaining gap to a human-provided guidance line and observing the resulting terminal growth.
-  - Evidence 2026-05-23: live browser verified PTY terminal growth and stop: the xterm showed Codex CLI startup/trust prompt, accepted `1` via terminal input, continued to model output, terminal mirror contained `DIRECT_CODEX_PTY_OK`, and the UI stop button brought the session back to `idle` with `Codex PTY exited with code 0`.
-- [x] FB-00.8 自动化覆盖：补齐 focused component/API/smoke 测试，至少覆盖 direct repair 不依赖 target writer、pre-dispatch blocked 仍有 terminal run、initial guidance 进入 contract、target writer 同步失败不阻断 Codex dispatch、button disabled reason 和 bundle export payload。
-  - Evidence 2026-05-22: focused feedback tests (54 pass), `npm run smoke:workspace-instance-feedback-api`, `node --import tsx tests/smoke/smoke-repair-handoff-runner.ts`, `npm --workspace @sciforge/backend test`, `npm run typecheck`, and `git diff --check` cover terminal controls, blocked/pre-dispatch records, direct Runtime Codex handoff, proxy rejection survival, current-writer fallback result persistence, GitHub evidence publishing, external GitHub confirmation boundaries, layout guardrails, and confirmation/safe-mode gates.
-- [x] FB-00.9 readiness 语义拆分：区分 `dispatchReady`、`executionReady`、`releaseReady`；当前 workspace writer 的 direct repair 不应被 peer sync/manifest 发布门阻断，但 peer/provider/browser gate 仍必须作为诊断、发布和 GitHub 同步证据显示。
-  - Evidence 2026-05-22: `docs/FeedbackInboxDesignPrinciples.md` 明确 dispatch/execution/release readiness；`FeedbackInboxPage` 以 configured peers 做 readiness 诊断，同时保留 current workspace direct target fallback。
-- [x] FB-00.10 first-click 本地 run 合约：任何启动或引导动作都必须先写入本地 pending/running run、terminal mirror ref 和用户输入事件，再执行异步 bundle/manifest/provider 调度；失败也要落到同一线程，而不是只显示 transient hint。
-  - Evidence 2026-05-22: handoff 开始前同步写 `preparingRun`、inline terminal events、terminalMirrorRef 和 planRef；stop not-running 会补写 blocked result 关闭同一线程。Verified with browser evidence and focused tests.
-- [x] FB-00.11 selected issue repair UX：用户勾选反馈后，工具栏必须能清楚显示“修复选中/修复当前列表”的作用范围，或自动展开目标反馈的 repair 控制面；不能要求用户猜测每张卡片里的隐藏入口。
-  - Evidence 2026-05-22: toolbar 新增 `修复选中`，单选反馈时 enabled，多选/未选时显示作用范围与禁用原因；Codex in-app browser verified the button is present and enabled after selecting one card.
-- [x] FB-00.12 Runtime Codex 工具桥验收：真实 DeepSeek repair 不能停在 `unsupported call: apply_patch`。如果上游 Codex CLI 在 `exec --json` 边界遇到不支持的工具调用，runtime 必须让 repair CLI 基于可用工具自主恢复或 fail closed 写入 durable backend limitation；主会话不得向 repair CLI 提供补丁方向、工具替代方案或隐藏提示。
-  - Evidence 2026-05-22: proxy async route now catches upstream fetch rejection and keeps service alive; backend regression `keeps proxy process alive when upstream Responses fetch rejects` passes. Live repair `feedback-repair-run-mpgncnp8-yceoy1` completed autonomously without main-session guidance, using available CLI tools to create the marker, run tests, produce patch/audit, and write `verdict: fixed`.
-
-FB-00 最终验收命令：
-
-- `node --import tsx --test src/ui/src/app/appShell/appHelpers.test.ts src/ui/src/feedback/FeedbackRepairAuditPanel.test.tsx src/ui/src/feedback/feedbackWorkspace.test.ts src/ui/src/api/workspaceClient.feedback.test.ts src/ui/src/app/sciforgeApp/FeedbackInboxPage.test.ts src/ui/src/feedback/githubFeedback.test.ts`
-- `node --import tsx tests/smoke/smoke-repair-handoff-runner.ts`
-- `npm run smoke:workspace-instance-feedback-api`
-- `npm run smoke:runtime-provider-preflight`
-- `npm run typecheck`
-- `git diff --check`
-- Codex in-app browser 用户级验收截图/DOM：必须证明 repair terminal 对真实点击和输入有响应。
-
-通过条件：
-
-- 从真实 UI 捕获至少一个元素评论，并能在反馈收件箱看到同一条反馈。
-- 至少一次 GitHub submit 和一次 GitHub pull/sync 路径被验证；无凭据时必须有 blocked evidence 和本地 fallback。
-- 至少一次勾选 issue 后调用 DeepSeek Codex CLI backend repair，并在反馈收件箱看到 terminal mirror 进度。
-- Repair 默认只生成 patch/diff/tests/audit，不自动 commit/push/merge；用户确认路径必须可见。
-- 修复必须泛化到 issue type、元素类型、repo 配置和用户输入变化，不能硬编码当前案例。
-
-### FB-07 当前阶段：反馈收件箱整体功能、布局和用户体验回归
-
-背景 2026-05-22：用户暂停后明确要求先继续列任务，并把整个反馈收件箱的功能、布局、用户体验都真实试一遍和优化。FB-07 是当前 UI/UX 回归任务，不替代 FB-00 repair terminal 阻塞；它覆盖用户进入收件箱后的完整理解、操作和验收体验。
-
-- [x] FB-07.1 信息结构必须 summary-first：反馈卡片首屏只显示标题、状态、关键 refs、证据预览、修复结论/阻塞原因和下一步；原始 audit、metadata、长 test output、refs 明细必须默认折叠，避免把内部字段全塞给用户。
-  - Evidence 2026-05-22: 卡片新增 repair summary callout，raw audit rows 不再渲染在主面；`FeedbackRepairAuditPanel.test.tsx` asserts no `latestRunStatus/latestResultVerdict/changedFiles/testResults` raw rows; browser evidence saved under `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-ux-after-layout-2026-05-22.*`.
-- [x] FB-07.2 反馈列表必须支持多线程展示：同一反馈下多个 repair thread/run 要按时间线、状态和 verdict 清楚分组；用户能看出哪个线程最新、哪个阻塞、哪个 fixed，以及为什么阻塞。
-  - Evidence 2026-05-22: repair panel shows compact `修复线程` history with latest/blocked/fixed verdicts; `feedbackWorkspace.test.ts` verifies a newer running run wins over stale results, and browser screenshot shows 5 repair threads on one feedback.
-- [x] FB-07.3 阻塞原因必须用户可理解：`修复受阻` 不能只是状态标签；卡片内必须解释阻塞来源、影响范围、用户现在能做什么，以及哪些操作仍然可用。
-  - Evidence 2026-05-22: blocked guide now renders `为什么修复受阻`、failure kind label、用户可介入下一步； stop not-running writes a durable blocked audit visible in browser evidence `feedback-inbox-stop-blocked-audit-2026-05-22.*`.
-- [x] FB-07.4 Evidence 体验必须可检查：整页截图、目标标注截图、原图/缩略图、尺寸、来源、refs 都要可见；缩略图必须清晰不失真；点击可放大和打开；无截图或截图加载失败时要有明确 fallback。
-  - Evidence 2026-05-22: evidence preview keeps full-resolution scrollable PNG instead of lossy shrink, action buttons stay readable, and lightbox opens the annotated screenshot. Browser evidence: `feedback-inbox-evidence-lightbox-2026-05-22.png` and `.dom.txt`.
-  - Evidence 2026-05-23: annotation capture now stores `visible-viewport` screenshot metadata with viewport dimensions and scroll offsets, labels the preview as `可见视口截图证据`, and scales the image into the card instead of showing only a clipped corner. Codex in-app browser created `feedback-mph6e6rt-432i4f`; its evidence image is `1087x1238`, matching the browser viewport, and the card caption/rendered preview were verified. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-screenshot-visible-viewport-2026-05-23.json`, `.dom.txt`, and `.png`.
-  - Evidence 2026-05-23: Codex in-app browser verified the topbar `注释` button is visible and opens annotation selection mode; clicking a page target opened the feedback form with selector, position, comment, expected/actual behavior, priority, tags, and save controls. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-annotation-mode-visible-button-2026-05-23.{json,dom.txt,png}`.
-- [x] FB-07.5 Terminal 必须像真实 Codex CLI 控制面：输入、发送、启动、停止、展开、复制、导出 bundle 都要有即时反馈、禁用原因和可验证结果；terminal 内容必须能持续增长，不让用户感觉按钮无效。
-  - Evidence 2026-05-22: terminal controls now show disabled reasons, copy/export hints, start-with-initial-guidance behavior, live terminal polling, and stop fail-closed audit. Browser verified copy/export/stop feedback in `feedback-inbox-terminal-controls-2026-05-22.*`; focused tests cover terminal input/no-run and disabled reasons.
-- [x] FB-07.6 队列操作必须可预测：筛选、搜索、选择当前列表、批量标记、软删除/恢复、生成 request、提交 GitHub、从 GitHub 同步都要显示作用范围、成功/失败提示和本地 fallback，不破坏证据或 audit。
-  - Partial 2026-05-22: Codex in-app browser verified that selecting one feedback enables the toolbar `修复选中` action and clearing the selection disables it again without triggering repair/GitHub side effects.
-  - Partial 2026-05-22: toolbar now filters by status plus search query, scopes request/GitHub/export/repair actions to selected visible comments or the current visible list, ignores hidden selections, and shows queue action hints after bulk mark/delete/restore/request/export. Codex in-app browser DOM evidence saved at `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-queue-github-trace-2026-05-22.dom.txt`.
-  - Partial 2026-05-22: refreshed Codex in-app browser evidence shows the current toolbar scope copy, hidden-selection tooltip, enabled `修复选中` after selecting one visible feedback, and no repair/GitHub side effect from selection alone. Search no-match was verified with real keypress input and showed `没有匹配当前筛选或搜索的反馈` plus recovery copy. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-browser-ui-regression-2026-05-22.dom.txt`, `...-screen.png`, `feedback-inbox-search-no-match-2026-05-22.dom.txt`, and `...-screen.png`.
-  - Partial 2026-05-22: GitHub external actions now require an in-app confirmation boundary before uploading evidence, creating an Issue, or syncing open issues. Codex in-app browser verified that clicking `提交到 GitHub` only shows `确认 GitHub 外部操作` with destination/scope/data and that `取消` closes it with `没有发送 token、issue payload 或 evidence`. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-github-confirmation-boundary-2026-05-22.dom.txt`, `.png`, `feedback-inbox-github-confirmation-cancel-2026-05-22.dom.txt`, and `.png`.
-  - Partial 2026-05-22: Codex in-app browser separately verified the `从 GitHub 同步` confirmation/cancel path without sending an external request. The confirmation dialog states destination/scope `GitHub open issues pull/sync`, token data `GitHub token for read-only issue sync; up to 500 open issues`, read-only impact, and `确认同步 GitHub`; cancel closes the dialog and shows `没有向 GitHub 发起读取请求，也没有发送 token 或改动本地同步缓存。` Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-github-sync-confirmation-boundary-2026-05-22.json`, `.dom.txt`, `.png`, `feedback-inbox-github-sync-confirmation-cancel-2026-05-22.json`, `.dom.txt`, and `.png`.
-  - Partial 2026-05-22: Codex in-app browser also verified the `上传 Evidence` confirmation/cancel path without sending external data. The confirmation dialog states `确认上传公开 evidence`, scope, `scrubbed/public screenshot evidence item(s)`, and that raw/private screenshots are not uploaded; cancel closes the dialog and shows `没有发送 token 或上传 evidence，公开 URL 不会被回写。` Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-github-upload-evidence-confirmation-boundary-2026-05-22.json`, `.dom.txt`, `.png`, `feedback-inbox-github-upload-evidence-confirmation-cancel-2026-05-22.json`, `.dom.txt`, and `.png`.
-  - Partial 2026-05-22: Codex in-app browser verified the local queue path on two seeded local feedback records: status filter isolation, `选择当前列表`, bulk mark `triaged -> planned`, `生成 Request`, `导出 Bundle`, in-app `确认本地队列操作` soft-delete boundary, cancel with no local/GitHub/evidence change, confirm soft-delete, deleted filter, and restore back to `planned`. The confirmation panel states that GitHub Issue、repair audit、workspace patch、terminal mirror and screenshot evidence are preserved, and the pass did not click any external GitHub confirm. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-local-queue-actions-2026-05-22.json`, `.dom.txt`, `.body.txt`, and `.png`.
-  - Evidence 2026-05-22: after explicit user approval for external GitHub calls, Codex in-app browser narrowed scope to one selected local feedback (`feedback-mpgbx5bc-5w2fgk`) instead of the 9-item visible list, confirmed `上传 Evidence`, confirmed `提交到 GitHub`, and confirmed `从 GitHub 同步`. The run uploaded the scrubbed screenshot to a public GitHub raw URL, created `AGI4Sci/SciForge#6`, and synced 4 open GitHub issues back into the local inbox with issue #6 state `open` and refreshed sync time. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-github-upload-real-boundary-2026-05-22.*`, `feedback-inbox-github-upload-real-result-2026-05-22.*`, `feedback-inbox-github-submit-real-boundary-2026-05-22.*`, `feedback-inbox-github-submit-real-result-2026-05-22.*`, `feedback-inbox-github-sync-real-boundary-2026-05-22.*`, and `feedback-inbox-github-sync-real-result-2026-05-22.*`.
-- [x] FB-07.7 GitHub 同步必须用户可追踪：卡片上能看到本地 feedback id、GitHub issue number/url/state、同步时间、冲突/失败原因；截图 evidence 通过 repo evidence 路径或对象 URL 引用，不把大块 data URL 塞进 issue body。
-  - Evidence 2026-05-22: card-level `GitHub sync trace` now renders local feedback id, sync status, issue link/state, sync time, conflict/error note, and public evidence ref; GitHub issue formatting filters private/local raw evidence and only publishes public scrubbed/uploaded evidence refs in markdown and folded JSON. Verified with `githubFeedback.test.ts` and browser DOM evidence `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-queue-github-trace-2026-05-22.dom.txt`.
-- [ ] FB-07.8 页面状态必须完整：空状态、加载中、无匹配筛选、workspace writer 失联、provider/env 缺失、peer sync 失败、截图缺失、GitHub token 缺失都要有清楚提示和下一步。
-  - Partial 2026-05-22: empty state now distinguishes true empty inbox from no matching status/search filters; queue action hints explain current visible scope and hidden selections. Codex in-app browser verified the no-match search state with real keypress input. Workspace writer/provider/GitHub-token failure states still need a full browser pass.
-  - Partial 2026-05-22: Codex in-app browser reload shows current workspace writer as `current`, provider preflight `ready`, strict browser acceptance as release-blocking, and offline p2 peer as a visible peer-sync diagnostic instead of silently blocking current-writer direct repair. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-browser-ui-regression-2026-05-22.dom.txt`.
-  - Partial 2026-05-22: inbox now has a top-level `页面状态诊断` panel that summarizes workspace writer health, provider/env preflight, repair peer sync, GitHub token state, and screenshot evidence gaps before the user clicks a risky action. Codex in-app browser verified the panel on live `http://localhost:5173/`: writer `current`, provider/env `ready`, p2 repair peer blocked/offline with next-step diagnostics, GitHub token `configured`, and screenshot evidence `3 partial`; mobile 390px has no state-panel overflow. The same pass verified missing screenshot previews now render `截图预览缺失` plus fallback refs instead of disappearing. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-page-state-diagnostics-2026-05-22.*` and `feedback-inbox-page-state-diagnostics-mobile-390-2026-05-22.*`. Source tests cover GitHub token missing, provider/env missing, stale/unreachable writer, and missing screenshot fallback copy.
-  - Partial 2026-05-22: fixed stale browser-cached GitHub token preservation so file-backed `config.local.json` is the authority for credential presence. Codex in-app browser verified a temporary missing-token state on `http://127.0.0.1:5173/`: page diagnostics showed `GitHub token missing`, toolbar showed `未配置 Token`, clicking `提交到 GitHub` opened settings instead of the GitHub confirmation boundary, and no external GitHub request was made. The original ignored config was restored afterward and still has a token present. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-missing-github-token-2026-05-22.json`, `.dom.txt`, `.body.txt`, and `.png`.
-  - Partial 2026-05-22: added a `workspace data` page-state row so config/workspace hydration has a first-class loading slot instead of an implicit empty inbox. During loading it renders `加载中` with config/workspace snapshot detail; after load it renders `loaded` plus the workspace sync/recovery status. Source tests cover the transient loading copy and prop wiring from `SciForgeApp`; Codex in-app browser verified the loaded row, six-row page-state grid, and no horizontal overflow. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-workspace-loading-state-row-2026-05-22.json`, `.dom.txt`, `.body.txt`, and `.png`.
-  - Partial 2026-05-22: workspace loading now has a short visible hold after config/workspace hydration so users can read the `加载中` row instead of seeing a flickering empty inbox. Codex in-app browser captured a deterministic live loading pass on `http://localhost:5173/`: `workspace data = 加载中`, detail explains feedback counts/filter/action scope refresh, no page/state-grid overflow; after 1.4s the row naturally recovered to `loaded` with the `.sciforge` sync detail. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-workspace-loading-live-2026-05-22.json`, `.dom.txt`, `.png`, and `feedback-inbox-workspace-loading-live-recovered-2026-05-22.json`, `.dom.txt`, `.png`.
-  - Partial 2026-05-22: user pointed to `workspace/parallel/p1/.sciforge/config.local.json` as the local secret source; a redacted config probe confirmed LLM/Codex proxy API keys and the feedback GitHub token are present without printing secret values. Codex in-app browser on `http://localhost:5173/` verified `provider/env` is `ready`, missing env is `none`, `GitHub token` is `configured` for `AGI4Sci/SciForge`, and no missing-token copy appears. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-config-key-present-2026-05-22.json`, `.dom.txt`, and `.png`. No external GitHub request was sent.
-  - Partial 2026-05-22: page diagnostics now include a `user confirmation` row so configured credentials cannot be mistaken for automatic external writes or hidden repair guidance. Codex in-app browser verified seven state rows on `http://localhost:5173/`, `user confirmation = manual gates`, detail `GitHub submit/sync require in-app confirmation; repair guidance is sent only from human terminal input`, and no state-grid/page horizontal overflow. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-user-confirmation-gates-2026-05-22.json`, `.dom.txt`, and `.png`.
-  - Partial 2026-05-22: workspace writer diagnostics now include the actual writer URL in both repair readiness and page-state rows, so users can tell which local service is being checked before interpreting `current`, `unreachable`, or stale-capability states. Source tests cover ready/stale/unreachable rows with URL detail. Codex in-app browser verified the restored current writer state after a temporary offline-injection attempt: `workspace writer = current`, detail `url=http://127.0.0.1:6173; pid=...; startedAt=...`, and no page/state-grid horizontal overflow. The original p1 `config.local.json` was restored and still points at `http://127.0.0.1:6173` with token present. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-writer-url-diagnostics-2026-05-22.json`, `.dom.txt`, and `.png`.
-  - Partial 2026-05-23: page diagnostics now have an in-panel `重新检查` control that re-runs workspace writer, provider/env, browser acceptance, and repair peer probes without requiring a full page reload. Codex in-app browser verified the button is unique and clickable on `http://127.0.0.1:5173/`; after click, the seven diagnostic rows stayed stable (`workspace writer: current`, `provider/env: upstream-outage`, `repair peer sync: 1/1`, `GitHub token: configured`, `user confirmation: manual gates`, `screenshot evidence: 3 partial`) with no page/state/action horizontal overflow. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-page-state-refresh-2026-05-23.json`, `.dom.txt`, `.before.dom.txt`, and `.png`. True provider/env-missing and writer-offline browser injections remain open because the browser refused navigation while the local app was intentionally unavailable.
-- [x] FB-07.9 布局必须适合重复使用：桌面宽屏、窄屏和移动宽度下，筛选栏、卡片、evidence、terminal、确认按钮不能重叠或截断；按钮文字、badge、长路径和代码 refs 必须换行或折叠。
-  - Partial 2026-05-22: narrow-screen CSS now gives toolbar search/status hints full-row behavior, lets card summaries and terminal header/actions wrap, renders terminal lines as prefix/body grid with mobile single-column fallback, and collapses safe-mode rows on small screens. Full multi-viewport browser screenshot matrix remains open.
-  - Partial 2026-05-22: `FeedbackInboxPage.test.ts` now asserts the narrow-layout guardrails for toolbar/search hints, card summaries, terminal header/actions, terminal line grid, and safe-mode rows so future CSS changes cannot silently drop them. Full multi-viewport in-app browser screenshot matrix remains open.
-  - Evidence 2026-05-22: Codex in-app browser viewport matrix captured desktop `1280x720`, narrow `820x720`, and mobile `390x800` screenshots/DOM/JSON under `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-responsive-*2026-05-22*`. Mobile toolbar/retry evidence now shows hidden delayed-help popovers have `display:none`/`scrollWidth:0`, progress rings stay inside help controls, toolbar `scrollWidth` equals container width, and expanded repair audit/grid children no longer overflow on 390px mobile. Evidence: `feedback-inbox-responsive-narrow-820-after-toolbar-fix-2026-05-22.*`, `feedback-inbox-responsive-mobile-390-after-toolbar-fix-2026-05-22.*`, `feedback-inbox-responsive-mobile-390-after-tooltip-fix-2026-05-22.*`, `feedback-inbox-responsive-mobile-390-after-help-progress-fix-2026-05-22.*`, `feedback-inbox-responsive-mobile-390-after-repair-audit-width-fix-2026-05-22.*`, and `feedback-inbox-mobile-terminal-open-after-toolbar-fix-2026-05-22.*`. Remaining wide screenshot image overflow is contained inside the intentional full-resolution screenshot scroller, not page/layout overflow.
-- [x] FB-07.10 可访问性和键盘路径：搜索、筛选、卡片 details、terminal 输入、证据放大、复制/导出/停止/确认按钮必须有可读 label、focus 状态和键盘可达路径。
-  - Evidence 2026-05-22: search input, status filter, toolbar actions, GitHub issue links, screenshot evidence object actions/list/details, repair audit buttons/selects, and repair guide summaries have readable labels or focus-visible states. Lightbox now focuses the close button when opened, closes on Esc, and restores focus to the zoom trigger; Codex in-app browser DOM evidence saved at `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-lightbox-keyboard-2026-05-22.dom.txt`.
-- [x] FB-07.11 文档同步：`docs/FeedbackInboxDesignPrinciples.md` 必须反映实际实现原则，包括 summary-first、证据托管、terminal mirror、direct Codex CLI、可选 peer sync、确认边界和用户介入方式。
-  - Evidence 2026-05-22: `docs/FeedbackInboxDesignPrinciples.md` updated with direct current-writer repair, optional peer sync, readiness split, first-click run, terminal disabled feedback, user confirmation state diagnostics, and `unsupported call: apply_patch` backend limitation handling.
-- [ ] FB-07.12 用户级 browser 验收：用 Codex in-app browser 真实走一遍创建反馈、查看收件箱、放大/打开截图、筛选/选择、GitHub submit/sync、启动/引导 repair、复制/导出 terminal、停止/确认边界，并保存截图/DOM 到 `docs/test-artifacts/feedback-inbox-closure/`。
-  - Partial 2026-05-22: Codex in-app browser verified current inbox reload, readiness rows, selecting a visible feedback, enabled `修复选中`, search no-match with keypress input, screenshot lightbox focus path, `Esc` close, and focus restoration to the `放大` trigger. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-browser-ui-regression-2026-05-22.dom.txt`, `...-screen.png`, `feedback-inbox-search-no-match-2026-05-22.dom.txt`, and `...-screen.png`. Repair guidance typing remains open; main session still must not inject hidden repair guidance.
-  - Partial 2026-05-22: Browser also verified the GitHub submit confirmation/cancel path without sending external data before approval, proving the no-send boundary for issue payloads and evidence.
-  - Partial 2026-05-22: Browser verified the local queue confirmation boundary and recovery path: select current filtered list, bulk mark, request generation, bundle export, soft-delete confirmation/cancel, confirm delete, deleted-filter verification, and restore. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-local-queue-actions-2026-05-22.*`. Remaining broad user-level gap is human-provided repair guidance typing/terminal growth.
-  - Partial 2026-05-22: Browser verified the configured-secret state after the user identified the p1 `config.local.json`: page diagnostics show provider/env `ready`, GitHub token `configured`, and no missing-token copy. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-config-key-present-2026-05-22.*`. That evidence did not send an external GitHub request.
-  - Partial 2026-05-22: Browser verified the visible user-action gate state: page diagnostics now explicitly state that GitHub submit/sync still need in-app confirmation and repair guidance is sent only from human terminal input. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-user-confirmation-gates-2026-05-22.*`.
-  - Partial 2026-05-22: Browser verified the GitHub sync confirmation/cancel path specifically: clicking `从 GitHub 同步` reaches the external-operation confirmation layer, and `取消` returns to the inbox with action-specific no-request/no-token/no-cache-change copy. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-github-sync-confirmation-boundary-2026-05-22.*` and `feedback-inbox-github-sync-confirmation-cancel-2026-05-22.*`.
-  - Partial 2026-05-22: Browser verified the GitHub evidence-upload confirmation/cancel path specifically: clicking `上传 Evidence` reaches the same external-operation confirmation layer, and `取消` returns to the inbox with action-specific no-token/no-upload/no-public-URL-writeback copy. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-github-upload-evidence-confirmation-boundary-2026-05-22.*` and `feedback-inbox-github-upload-evidence-confirmation-cancel-2026-05-22.*`.
-  - Partial 2026-05-22: Browser verified the restored current writer diagnostic URL after a temporary local config perturbation: both page-state and repair-readiness `workspace writer` rows show `url=http://127.0.0.1:6173` with current health, giving users an inspectable recovery anchor. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-writer-url-diagnostics-2026-05-22.*`.
-  - Partial 2026-05-22: Browser captured the live workspace loading state and recovery path: immediate reload shows `workspace data = 加载中`, then naturally returns to `loaded` with workspace sync detail. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-workspace-loading-live-2026-05-22.*` and `feedback-inbox-workspace-loading-live-recovered-2026-05-22.*`.
-  - Partial 2026-05-22: after explicit user approval, Browser completed the real external GitHub leg on one selected feedback: `上传 Evidence` wrote a public evidence URL, `提交到 GitHub` created `AGI4Sci/SciForge#6`, and `从 GitHub 同步` pulled 4 open issues back into the inbox. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-github-upload-real-*2026-05-22.*`, `feedback-inbox-github-submit-real-*2026-05-22.*`, and `feedback-inbox-github-sync-real-*2026-05-22.*`. Repair guidance typing still needs explicit human terminal text.
-  - Partial 2026-05-22: Browser verified the repair terminal input boundary in the current inbox after the safety copy update: 9 visible guidance inputs are enabled, include initial-guidance and resume-style placeholders, and state that only explicit user text from the box is sent to Runtime Codex, with no hidden main-session analysis, patch plan, or context. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-repair-guidance-boundary-2026-05-22.*`.
-  - Partial 2026-05-23: Browser verified the new page-state recovery path: clicking `重新检查` in the diagnostics panel re-runs local readiness probes in place and preserves stable rows/overflow bounds. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-page-state-refresh-2026-05-23.*`. Repair guidance typing still needs explicit human terminal text.
-  - Partial 2026-05-23: Browser verified the newly visible topbar `注释` entrypoint requested from a browser comment. Clicking `注释` enters annotation mode, shows a selection hint, the topbar health badge can be selected like an inspect-element target, the comment form opens, keyboard-entered feedback is saved, and the feedback inbox shows the new card with complete `Evidence 5/5`, target selector summary, runtime refs, and no horizontal overflow. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-topbar-annotation-entrypoint-2026-05-23.json`, `.dom.txt`, and `.png`. Browser text entry required single-key input because the in-app browser virtual clipboard was unavailable.
-  - Partial 2026-05-23: Browser verified the screenshot-fidelity fix with a fresh annotation comment. The saved record uses `captureMode=visible-viewport`, `width/height` equal to the active viewport, a public scrubbed screenshot ref, and the inbox preview caption `可见视口截图证据`; the preview renders scaled inside the card rather than as a partial oversized corner. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-screenshot-visible-viewport-2026-05-23.*`. Repair CLI redesign is intentionally paused for discussion.
-- [x] FB-07.13 自动化覆盖：补齐 focused UI/API tests，至少覆盖 summary-first 展示、多线程 repair threads、截图 viewer fallback、terminal disabled reason、queue 操作提示、GitHub sync conflict/fallback、窄屏布局关键 class/state。
-  - Evidence 2026-05-22: focused feedback suite covers summary-first repair audit, multiple repair threads, terminal disabled/initial input paths, workspace feedback queue state, search/no-match copy, visible selection scope hints, user confirmation state diagnostics, workspace writer URL diagnostics for ready/stale/unreachable states, workspace loading visible hold, action-specific GitHub cancel copy, GitHub sync metadata, conflict/fallback, public-only evidence publishing, external GitHub confirmation boundaries, and narrow layout guardrails for toolbar/search hints, card summaries, terminal header/actions, terminal line grid, and safe-mode rows. Reverified with `node --import tsx --test src/ui/src/app/appShell/appHelpers.test.ts src/ui/src/feedback/FeedbackRepairAuditPanel.test.tsx src/ui/src/feedback/feedbackWorkspace.test.ts src/ui/src/api/workspaceClient.feedback.test.ts src/ui/src/app/sciforgeApp/FeedbackInboxPage.test.ts src/ui/src/feedback/githubFeedback.test.ts` (58 pass).
-  - Evidence 2026-05-23: focused screenshot evidence coverage now asserts screenshot metadata preserves `captureMode`/scroll offsets and the preview labels visible viewport evidence honestly. Verified with `node --import tsx --test src/ui/src/feedback/captureModel.test.ts src/ui/src/feedback/FeedbackScreenshotPreview.test.tsx src/ui/src/feedback/FeedbackCaptureLayer.test.tsx` (11 pass) and `npm run typecheck`.
-
-FB-07 最终验收命令：
-
-- `node --import tsx --test src/ui/src/app/appShell/appHelpers.test.ts src/ui/src/feedback/FeedbackRepairAuditPanel.test.tsx src/ui/src/feedback/feedbackWorkspace.test.ts src/ui/src/api/workspaceClient.feedback.test.ts src/ui/src/app/sciforgeApp/FeedbackInboxPage.test.ts src/ui/src/feedback/githubFeedback.test.ts`
-- `npm run smoke:workspace-instance-feedback-api`
-- `npm run typecheck`
-- `git diff --check`
-- Codex in-app browser 用户级验收截图/DOM：必须证明收件箱从反馈浏览到 repair 操作都可理解、可操作、可恢复。
-
-### FB-01 任意元素评论与证据采集
-
-- [x] 支持用户对任意可见页面元素发起评论；评论入口不依赖特定组件名或硬编码 selector。
-- [x] 每条反馈必须记录：URL/route、viewport、scroll、devicePixelRatio、target role/label/text snippet、stable selector、DOM path、bounding box、评论正文、severity、期望行为、实际行为、session/run/artifact refs。
-- [x] 捕获原始截图和标注截图；标注截图必须框出目标元素并显示评论点位/编号。截图生成失败时反馈仍可保存，但必须标为 `partial evidence` 并提示用户。
-- [x] 证据写入本地 feedback bundle，且截图、selector、文本片段和 refs 都要做 secret/path/provider-body scrub。
-- [x] 验收：从工作台任选一个元素评论，在反馈收件箱看到反馈、标注截图、目标元素摘要和证据完整性状态。
-  - Evidence 2026-05-21: Codex in-app browser `http://127.0.0.1:5173/` captured `feedback-mpfloo3f-tsg98f`; local bundle at `workspace/parallel/p1/.sciforge/feedback/feedback-mpfloo3f-tsg98f`; screenshot artifact `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-browser-2026-05-21.png`; `npm run typecheck`; focused feedback tests.
-  - Evidence 2026-05-23: the comment entrypoint is now visible in the topbar as `注释` instead of relying on a hidden right-click path. Codex in-app browser verified the full path on `http://127.0.0.1:5173/`: enter annotation mode, select the topbar health badge, save a precise comment, and see it in the feedback inbox with complete screenshot/target/runtime evidence. Evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-topbar-annotation-entrypoint-2026-05-23.*`.
-
-### FB-02 反馈收件箱本地状态机
-
-- [x] 收件箱展示 `comment`、`request`、`open`、`GitHub open`、`triaged`、`fixed`、`blocked` 等状态，并支持筛选、批量勾选、标记、删除/恢复。
-- [x] 本地反馈、GitHub issue、repair request 三类对象必须有唯一 ID 和可追溯 refs，不能只靠标题或截图文件名关联。
-- [x] 生成 request bundle 时必须包含 selected feedback、证据 refs、期望结果、风险提示和允许/禁止操作范围。
-- [x] 删除选中只能软删除本地条目或取消 selection，不得删除 GitHub issue、repair audit、workspace patch 或截图原始证据。
-  - Evidence 2026-05-21: `feedbackWorkspace.test.ts`, `FeedbackRepairAuditPanel.test.tsx`, focused feedback test suite; browser inbox showed status filters, bulk controls, soft-delete/restore controls, IDs and refs.
-- [x] 验收：创建多条反馈，筛选/勾选/标记/恢复后计数和详情一致，刷新 browser 后状态仍可恢复。
-  - Evidence 2026-05-21: Codex in-app browser used two persisted feedback records; `feedback-mpflkt4d-kuc403` moved `open -> triaged -> deleted -> restored triaged`; after browser reload, filters showed `GitHub open (1)`, `triaged (1)`, `deleted (0)` with details intact; screenshot `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-state-machine-2026-05-21.png`.
-
-### FB-03 GitHub Issue 提交与拉取同步
-
-- [x] 默认同步当前 `origin` repo；repo、labels、assignees、milestone、token source、dry-run/real-submit 必须在配置中可覆盖。
-- [x] 提交 GitHub issue 时 issue body 必须格式化包含：summary、repro steps、expected/actual、target element evidence、annotated screenshot、raw screenshot link/ref、environment、local feedback id、session/run refs、repair policy。
-- [x] 拉取 GitHub open issues 时必须去重并保留 remote number/url/state/labels/updatedAt；本地修改和远端状态冲突时显示 sync conflict，不覆盖用户本地批注。
-- [x] GitHub token 缺失、权限不足、rate limit、repo 不存在、网络失败时必须 fail closed，保留本地 pending 状态和可重试诊断。
-  - Evidence 2026-05-21: browser dry-run generated GitHub payload without API call; a real browser submit exposed GitHub 422 body-length, fixed by omitting all screenshot data URLs from issue body/bundle JSON; `githubFeedback.test.ts`, `workspaceClient.feedback.test.ts`, `npm run smoke:workspace-instance-feedback-api`.
-- [x] 验收：提交一条本地反馈为 GitHub issue，再从 GitHub 拉取同一 issue，不重复创建，状态从本地 pending 正确变成 GitHub open。
-  - Evidence 2026-05-21: Codex in-app browser real-submit created `https://github.com/AGI4Sci/SciForge/issues/3`; subsequent `从 GitHub 同步` imported 1 open issue with no duplicate local feedback, `feedback-mpfloo3f-tsg98f` persisted as `github-open`, conflict `none`; screenshot `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-github-roundtrip-2026-05-21.png`; issue body has marker and screenshot refs, no inline `data:image/`.
-  - Evidence 2026-05-22: real GitHub submit is still live, not dry-run. `feedback-mpflkt4d-kuc403` created `https://github.com/AGI4Sci/SciForge/issues/4`; direct issue API and retry pull-sync confirmed it open, local state persisted `githubIssueNumber: 4` / `githubSyncStatus: github-open` / `status: github-open`; artifact `docs/test-artifacts/feedback-inbox-closure/real-github-issue-create-2026-05-22.json`. `githubFeedback.test.ts` now covers triaged feedback transitioning to `github-open` after real issue creation.
-  - Evidence 2026-05-22: user explicitly confirmed real issue creation again; `feedback-real-issue-mpfw8vrp` created real Issue `https://github.com/AGI4Sci/SciForge/issues/5`, direct GitHub API verification confirmed it `open`, local state persisted `status: github-open` / `githubSyncStatus: github-open` / `githubIssueNumber: 5`, issue body retained the SciForge feedback marker and omitted inline `data:image/`; artifact `docs/test-artifacts/feedback-inbox-closure/real-github-issue-create-2026-05-22-confirmed.json`.
-
-### FB-04 DeepSeek Codex CLI Repair Backend
-
-- [x] Codex CLI repair 必须走 SciForge 后端服务，以 DeepSeek/runtime profile 调用 Codex CLI；不能把当前 Codex App 助手当作 repair executor。
-- [x] 用户在反馈收件箱勾选一个或多个 issue 后，可生成 repair request，并在 readiness 通过时从后端启动 Codex CLI repair；工作台只提供相关 issue 跳转，不作为完整 repair queue。
-- [x] repair request 必须包含 issue refs、feedback evidence、repo config、base branch、允许写入路径、禁止写入路径、需要运行的 tests、用户确认策略。
-- [x] 进度展示采用 terminal mirror：后端启动后把 Codex CLI 的终端信息按时间顺序透传到反馈收件箱，支持复制、折叠、停止和导出；terminal mirror 不能被 GUI 解析成 completion verdict。
-  - Evidence 2026-05-22: implementation/smoke evidence only. Backend exposes terminal-mirror tail and safe stop endpoints; Runtime Codex repair registers the active turn and cancels only that turn on stop; inbox polls terminal entries, supports copy/fold/stop/export repair bundle, and keeps verdicts tied to result/test/audit data rather than terminal text. Completed results no longer present an enabled stop action. Verified with `FeedbackRepairAuditPanel.test.tsx`, `workspaceClient.feedback.test.ts`, `npm run smoke:workspace-instance-feedback-api`, `npm run smoke:repair-handoff-runner`, `npm run typecheck`; Codex in-app browser showed the feedback inbox, blocked repair readiness panel, 2 repair audit panels, terminal mirror controls, and safe-mode status at `http://127.0.0.1:5173/`.
-- [x] Codex CLI repair 输出路径写 bounded audit bundle；给用户看的 terminal mirror 可以实时直出，进入 issue/comment/audit summary 前必须 scrub secret、token、raw provider body 和绝对敏感路径。
-  - Evidence 2026-05-22: `npm run smoke:repair-handoff-runner`, `npm run smoke:runtime-provider-preflight`, `npm run smoke:runtime-codex-truth-source`; terminal mirror tests include secret-like tokens/provider body/user-path redaction, target run registration fails closed before executor dispatch, and preflight manifest is served through the workspace writer without exposing config-secret fallback paths. This verifies routing, audit, scrub/preflight classification, and truth-source policy, not a live DeepSeek repair.
-- [x] 验收：选择一个 issue 启动 repair，用户能在反馈收件箱看到近似 terminal 的实时输出、退出码、产物 refs 和失败/成功边界。
-  - Historical blocker 2026-05-22, superseded by later live success below: earlier local config had no enabled repair peer instance, and Runtime Codex provider preflight was diagnostic-only because `SCIFORGE_RUNTIME_API_KEY` and `SCIFORGE_PROXY_UPSTREAM_BASE_URL` were missing from the service environment. That failure mode now remains covered as fail-closed audit behavior, while current dev can inject ignored local config into Runtime Codex launch env without exposing secrets.
-  - Evidence 2026-05-22: workspace writer now exposes `runtime-codex-browser-acceptance-manifest`; the inbox readiness panel requires live repair peer `/health` plus instance manifest capabilities, provider preflight, and strict in-app browser acceptance evidence before displaying ready. A config-only peer is partial/checking, unhealthy or mismatched peers are blocked before executor dispatch, and the durable blocked audit records provider/browser/peer readiness metadata. Verified with focused feedback tests, `npm run smoke:workspace-instance-feedback-api`, `npm run smoke:repair-handoff-runner`, `npm run smoke:runtime-provider-preflight`, `npm run typecheck`, `git diff --check`, and strict browser validate-only exit `1`.
-  - Evidence 2026-05-22: repair handoff now seeds the source feedback comment into a fresh target peer before target run registration, preserves target writer/app URLs on repair results, and differentiates execution readiness from stale release/browser acceptance. Browser acceptance readiness rejects old `passed` manifests by `observedAt`/evidence freshness. Verified with 72 focused feedback tests, `npm run smoke:workspace-instance-feedback-api`, `npm run smoke:repair-handoff-runner`, `npm run smoke:runtime-provider-preflight`, `npm run typecheck`, `git diff --check`, and strict browser validate-only exit `1`.
-  - Evidence 2026-05-22: peer handoff contract no longer self-blocks on p1/p2 managed workspace siblings before target seeding: the runner boundary uses the executor instance workspace instead of the repo root, runner-owned `.sciforge/repair-results` and `.sciforge/repair-worktrees` are not treated as protected user paths, `.sciforge/feedback/**` is included in protected feedback hashing, terminal mirror polling resolves against the actual run/result target before dropdown defaults, and browser freshness requires at least one evidence file. Verified with focused feedback tests, `npm run smoke:workspace-instance-feedback-api`, `npm run smoke:repair-handoff-runner`, `npm run smoke:runtime-provider-preflight`, `npm run typecheck`, `git diff --check`, and strict browser validate-only exit `1`.
-  - Evidence 2026-05-22: the readiness panel now probes the active workspace writer `/health` and surfaces stale capabilities before repair acceptance. Current live `6173` writer is an old process that lacks `runtime-codex-browser-acceptance-manifest`, so the UI can tell the user to restart the workspace writer/dev server instead of hiding the failure behind a missing manifest. Verified with `FeedbackInboxPage.test.ts`, 73 focused feedback tests, `npm run typecheck`, and `git diff --check`.
-  - Evidence 2026-05-22: dual-instance dev no longer leaves the inbox with an empty repair-peer config when the launcher has already supplied a counterpart. The workspace writer now derives one default `repair` peer from `SCIFORGE_COUNTERPART_JSON` when `peerInstances` is absent, while an explicit `peerInstances: []` still disables peers. Verified with `npm run smoke:dual-instance`, `npm run smoke:dual-worktree-instance`, and `npm run typecheck`. This narrows the remaining live blocker to starting/syncing current worktrees plus provider env, not hidden peer config.
-  - Evidence 2026-05-22: `tools/dev.ts` now refuses to silently reuse a workspace writer that is `/health`-ok but missing repair/browser readiness capabilities, including `runtime-codex-browser-acceptance-manifest`; it reports the missing capabilities and asks for a writer restart instead of claiming "already running". Verified with `node --import tsx --test tools/dev-health.test.ts`, `npm run smoke:dual-instance`, `npm run smoke:dual-worktree-instance`, `npm run smoke:workspace-instance-feedback-api`, `npm run smoke:runtime-provider-preflight`, `npm run typecheck`, and strict validate-only browser acceptance exit `1`.
-  - Evidence 2026-05-22: current-code live peer handoff now works up to the provider boundary. Temporary current-code writers `p2`/`p1-current` on `6174`/`6175` exposed all repair/browser capabilities and derived `p2` as an enabled repair peer from `SCIFORGE_COUNTERPART_JSON`. Handoff for `feedback-mpflkt4d-kuc403` created isolated worktree `.sciforge/repair-worktrees/feedback-repair-live-peer-blocked-nogit-1779389918460`, terminal mirror `.sciforge/repair-results/feedback-repair-live-peer-blocked-nogit-1779389918460/terminal-mirror.ndjson`, patch/audit refs, and a durable `needs-follow-up` result in `workspace/parallel/p2/.sciforge/workspace-state.json`; terminal mirror shows `Missing SCIFORGE_RUNTIME_API_KEY` fail-closed, diff-check passed, commit audit passed with no executor commit, and `changedProtectedPaths: []`.
-  - Evidence 2026-05-22: Runtime Codex repair now performs a pre-dispatch provider gate before `git worktree add`, target repair-run registration, or executor dispatch when using the real adapter. Missing service `SCIFORGE_RUNTIME_API_KEY` returns a durable `needs-follow-up` result with `pre-dispatch-provider-preflight.json` and terminal mirror evidence, leaves `refs.worktreePath`/`refs.branch` empty, records `noExecutorDispatch`, `noIsolatedWorktreeCreated`, and `noTargetRepairRunRegistered`, and does not count config/adapter secret fallback as service env. Non-secret upstream base URL may still come from service env or ignored config. Repair-result handoff now carries the source `issueBundle`, so a fresh target peer can seed the feedback comment before saving a blocked result without creating a target repair run. If target writer result persistence fails, the runner keeps local `result.json`/terminal evidence and records `targetResultPersistence: failed` instead of dropping to a transient 400. Terminal mirror API smoke now covers cursor/limit, missing-file empty tails, and path-escape 400s. Verified with `npm run smoke:repair-handoff-runner`, `npm run smoke:workspace-instance-feedback-api`, `npm run smoke:runtime-provider-preflight`, `npm run smoke:runtime-codex-truth-source`, `npm run typecheck`, `git diff --check`, and strict browser validate-only exit `1`.
-  - Evidence 2026-05-22: terminal mirror stop endpoint now has smoke coverage for non-active repair runs: POST `/api/sciforge/repair-handoff/stop` with a valid `terminalMirrorRef` records a fail-closed mirror line, GET `/terminal-mirror` returns the appended stop evidence, and stop-path escape still returns 400. Verified with `npm run smoke:workspace-instance-feedback-api`.
-  - Evidence 2026-05-22: live DeepSeek Runtime Codex repair completed from current-code p1/p2 services. `feedback-live-runtime-repair-mpfwpa6z` produced `verdict: fixed`, patch ref `.sciforge/repair-results/feedback-repair-live-runtime-mpfwpa6z/repair.patch`, terminal mirror `.sciforge/repair-results/feedback-repair-live-runtime-mpfwpa6z/terminal-mirror.ndjson`, audit bundle `.sciforge/repair-results/feedback-repair-live-runtime-mpfwpa6z/dirty-worktree-protection.json`, and passed marker test output under the isolated repair worktree. Codex in-app browser at `http://127.0.0.1:5174/` showed the fixed repair audit, terminal mirror lines (`done status=done exit=0`, marker test passed, no executor commit, repair verdict fixed), patch/test/audit refs, and success/failure boundaries. Browser evidence: `docs/test-artifacts/feedback-inbox-closure/live-runtime-codex-repair-browser-recheck-2026-05-22.png` and `.dom.txt`. The live UI uncovered and verified a bounded fix allowing target workspace writers to read runner-owned repo-level `.sciforge/repair-results/**/terminal-mirror.ndjson` while path escape remains blocked; verified with `npm run smoke:workspace-instance-feedback-api` and `npm run typecheck`.
-  - Evidence 2026-05-22: current `http://localhost:5173/` direct inbox flow is now fixed-result E2E without a live p2 writer. Live preflight uses ignored p1 config only as Runtime Codex launch env, not as public evidence; UI click created `feedback-deepseek-autonomous-1779437826689`, repair run `feedback-repair-run-mpgncnp8-yceoy1`, terminal mirror `.sciforge/repair-results/feedback-repair-run-mpgncnp8-yceoy1/terminal-mirror.ndjson`, patch `.sciforge/repair-results/feedback-repair-run-mpgncnp8-yceoy1/repair.patch`, and result `verdict: fixed`. Browser DOM evidence: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-deepseek-repair-fixed-2026-05-22.dom.txt`; screen capture fallback: `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-deepseek-repair-fixed-2026-05-22-screen.png`.
-
-### FB-05 Repair 护栏与用户确认
-
-- [x] 每次 repair 在隔离 worktree/branch 中运行，开始前记录 base commit、dirty worktree 状态、protected files digest 和 feedback data digest。
-- [x] Codex CLI 先生成 repair plan，再允许 patch；plan 必须列出 root cause hypothesis、write scope、protected scope、commands/tests、rollback-free recovery strategy 和需要用户确认的风险。
-- [x] 默认不 commit、不 push、不 PR、不 merge。用户点确认后才允许生成 commit；push/PR 需要第二次单独确认；merge 永远不能自动执行。
-  - Evidence 2026-05-22: repair result action endpoint creates a local commit only inside `.sciforge/repair-worktrees/**` after explicit commit confirmation, `verdict: fixed`, passed dirty-worktree guard metadata, repair plan presence, no executor-created commit, and passing recorded tests. Non-fixed results, guard-blocked results, and `commit: disabled` remain blocked even if a caller passes confirmation; push/PR second-confirmation paths record no-op blocked audit with no remote mutation; merge fails closed. Confirmation records are preserved in `feedbackRepairActions`, rendered as an Action audit in the inbox, and exported in the repair bundle. Verified with `npm run smoke:workspace-instance-feedback-api`, `workspaceClient.feedback.test.ts`, `FeedbackRepairAuditPanel.test.tsx`, `sessionStore.test.ts`, `npm run typecheck`.
-- [x] 禁止 destructive repair：`git reset --hard`、无边界 `git checkout/restore`、删除反馈数据、改写 ignored secret config、修改 provider credentials、清空 audit、伪造 tests 或 output artifacts。
-- [x] 如果 repair 目标包含反馈收件箱自身或 repair backend，控制面进入 safe mode：已有 terminal mirror 保持只读，新的 patch apply/commit/push 需要额外确认或外部控制面。
-  - Evidence 2026-05-22: structured safe-mode scopes now cover `FeedbackInboxPage.tsx`, `src/ui/src/feedback/**`, `workspaceClient.ts`, `workspace-server.ts`, and `repair-handoff-runner.ts`; repair result/action metadata records `safeMode`, local commit requires both `confirmed` and `safeModeConfirmed` when those paths are touched, push/PR remain no-op/blocked, merge fails closed. Verified with `node --import tsx --test src/ui/src/feedback/FeedbackRepairAuditPanel.test.tsx src/ui/src/api/workspaceClient.feedback.test.ts`, `npm run smoke:workspace-instance-feedback-api`, `npm run smoke:repair-handoff-runner`, `npm run typecheck`, and Codex in-app browser render check at `http://127.0.0.1:5173/` (`docs/test-artifacts/feedback-inbox-closure/feedback-inbox-safe-mode-2026-05-22.png`).
-- [x] 验收：制造一个可修复问题，确认 Codex CLI 只产生 patch/diff/tests/audit；未点确认时没有 commit，点确认后只创建本地 commit，push/PR 仍等待单独确认。
-  - Historical partial 2026-05-22, superseded by later live success below: smoke verified the confirmation gates with fixture repair results and isolated temp worktrees before a configured DeepSeek repair produced real patch/diff/tests/audit from a selected issue.
-  - Evidence 2026-05-22: commit confirmation routing now uses the repair result target writer/workspace instead of assuming the source inbox writer, so peer repairs can commit only inside the target `.sciforge/repair-worktrees/**` after confirmation. Smoke coverage verifies target instance writer/app URL preservation and seeded target issue state; full E2E still waits on live DeepSeek output.
-  - Evidence 2026-05-22: browser recheck is now a first-class repair action with `sideEffect: none`; it updates the repair result `humanVerification`, merges evidence refs, preserves `browserVerification` through workspace compaction, renders an explicit `browserRecheck` audit row, never records `passed` without strict fresh in-app browser acceptance evidence plus refs, and failed/rejected browser verification blocks even a confirmed local commit. Verified with focused feedback tests and `npm run smoke:workspace-instance-feedback-api`.
-  - Evidence 2026-05-22: repair result persistence now closes the corresponding repair run status instead of leaving completed/blocked handoffs permanently `running`; `fixed` results mark the run `fixed`, `needs-follow-up` / `partially-fixed` mark it `needs-human-verification`, and failed results mark it `blocked`. Verified with `npm run smoke:workspace-instance-feedback-api`, `node --import tsx --test tools/dev-health.test.ts`, and `npm run typecheck`.
-  - Evidence 2026-05-22: repair runner guard no longer treats its own git worktree registration metadata as user-owned protected `.git` drift, while `.git` remains a forbidden executor write scope. Verified with `npm run smoke:repair-handoff-runner`; live handoff `feedback-repair-live-peer-blocked-nogit-1779389918460` persisted `changedProtectedPaths: []` and closed the run as `needs-human-verification` with no executor commit.
-  - Evidence 2026-05-22: direct current-writer fallback opens `allowExecutorRepoTarget` only for this controlled local Codex CLI path, still using an isolated worktree/branch under `.sciforge/repair-worktrees/**`. Live E2E `feedback-repair-run-mpgncnp8-yceoy1` produced one patch file, passed `typecheck`/`diff-check`, recorded no executor commit, and persisted the result back to current writer `http://127.0.0.1:6173`; focused tests, smoke tests, and `git diff --check` pass.
-  - Evidence 2026-05-22: repair audit presentation now gates full GitHub-synced success copy on durable evidence completeness across plan, terminal mirror, patch/diff, test output refs, audit bundle, and guard digests. A `fixed` result with only a superficial passed test stays evidence-partial, exports missing refs, and does not render “已同步 GitHub” as a completed success. Verified with `FeedbackRepairAuditPanel.test.tsx`, `FeedbackInboxPage.test.ts`, and `npm run typecheck`.
-  - Evidence 2026-05-22: live Runtime Codex repair for `feedback-live-runtime-repair-mpfwpa6z` changed only `tests/fixtures/runtime-codex-live-repair-marker-feedback-repair-live-runtime-mpfwpa6z.txt` inside isolated worktree `.sciforge/repair-worktrees/feedback-repair-live-runtime-mpfwpa6z`; dirty guard passed with no protected/forbidden/outside-allowed drift and executor commit audit recorded `created: false`. Before confirmation, commit action returned `requires-user-confirmation` and worktree HEAD stayed `fec71e82c9934d45ea6a80b5350973aa33a85d01`. Browser recheck then recorded `humanVerification.status: passed`. Explicit commit confirmation created only local isolated-worktree commit `72b798e27e78c75b3df477e0b150f9f76ee8d135`; push without second confirmation returned `requires-second-confirmation`, PR with second confirmation recorded no remote mutation, and merge returned HTTP 400. The live gate uncovered and verified a bounded fix allowing target workspace writers to commit runner-owned repo-level `.sciforge/repair-worktrees/**` while path boundaries remain constrained; verified with `npm run smoke:workspace-instance-feedback-api` and `npm run typecheck`.
-
-### FB-06 端到端真实验收
-
-- [x] 从 Codex in-app browser 对工作台任意元素评论，截图标注和证据进入反馈收件箱。
-  - Evidence 2026-05-21: `feedback-mpfloo3f-tsg98f`, `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-browser-2026-05-21.png`, local bundle under `workspace/parallel/p1/.sciforge/feedback/feedback-mpfloo3f-tsg98f`.
-- [x] 在反馈收件箱提交 GitHub issue，再从 GitHub 拉取同步，验证去重、状态和 issue body。
-  - Evidence 2026-05-22: GitHub Issue `AGI4Sci/SciForge#3` is a real open issue confirmed via GitHub API; synced issue state lives under `workspace/parallel/p1/.sciforge/workspace-state.json`, local feedback count stayed stable during the #3 roundtrip, `feedback-mpfloo3f-tsg98f` has `githubIssueNumber: 3` and `githubSyncStatus: github-open`; issue body has SciForge feedback markers and no inline `data:image/`.
-  - Evidence 2026-05-22: User explicitly allowed real issue creation again; `feedback-mpflkt4d-kuc403` created real Issue `AGI4Sci/SciForge#4`, direct issue API and retry pull-sync confirmed it open, and workspace state now has `status: github-open` plus `githubSyncStatus: github-open`.
-  - Evidence 2026-05-22: User explicitly confirmed real issue creation a third time; `feedback-real-issue-mpfw8vrp` created real Issue `AGI4Sci/SciForge#5`, direct issue API confirmed it open, and workspace state plus feedback bundle now carry `githubIssueNumber: 5`, `githubSyncStatus: github-open`, screenshot refs, and a no-inline-screenshot issue body.
-- [x] 勾选 issue 启动 DeepSeek Codex CLI repair，观察 terminal mirror，导出 patch/diff/tests/audit。
-  - Historical blocker 2026-05-22, superseded by later live success below: implementation exposed terminal mirror polling/stop/export controls and a visible DeepSeek repair readiness panel, but local acceptance could not run a real DeepSeek repair before the ignored local config was injected into Runtime Codex launch env.
-  - Evidence 2026-05-22: readiness is no longer config-only. The inbox probes each repair peer writer health and instance manifest, rejects missing workspace/capability mismatches, and loads the browser acceptance manifest served by the workspace writer. Current state still blocks correctly because no real repair peer and service env are configured.
-  - Evidence 2026-05-22: target peer handoff no longer assumes the selected feedback already exists in the target workspace; the source issue bundle seeds the target writer before run/result registration. This keeps the remaining blocker narrowed to real peer/env availability, not source/target state drift.
-  - Evidence 2026-05-22: reran the current blocked gates after launcher/readiness fixes. `npm run smoke:runtime-provider-preflight` still writes `current-env=config-secret-source`, and `SCIFORGE_BROWSER_ACCEPTANCE_VALIDATE_ONLY=1 SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 npm run smoke:runtime-codex-browser-acceptance` exits `1` because `SCIFORGE_RUNTIME_API_KEY` is absent from the service environment and config-file secrets are only local proxy debug fallback. This confirms the remaining blocker is provider/service env, not a stale-writer false positive.
-  - Historical provider-boundary evidence 2026-05-22, superseded by later live success below: selected-issue handoff was exercised against a live current-code repair peer, not only fixture smoke. Temporary current-code writers `p1-current`/`p2` on `6175`/`6174` loaded `feedback-mpflkt4d-kuc403`, seeded it into the target workspace, registered `feedback-repair-live-peer-blocked-nogit-1779389918460`, wrote terminal mirror and audit refs, and returned durable `needs-follow-up` because Runtime Codex failed closed on missing `SCIFORGE_RUNTIME_API_KEY`.
-  - Evidence 2026-05-22: the provider boundary is now cleaner than the live blocked handoff above. A real Runtime Codex adapter with missing service key is blocked before isolated worktree creation and before target repair-run registration, while still persisting bounded audit/result evidence; fake adapter smoke continues to cover the successful Runtime Codex contract path. Verified with `npm run smoke:repair-handoff-runner`, `npm run smoke:workspace-instance-feedback-api`, `npm run smoke:runtime-provider-preflight`, `npm run typecheck`, `git diff --check`, and strict validate-only browser acceptance exit `1`.
-  - Evidence 2026-05-22: with service env populated from ignored p1/p2 config and proxy `http://127.0.0.1:3891/v1`, a real Runtime Codex adapter invoked model `bailian/deepseek-v4-flash` through profile `sciforge-runtime-deepseek` and completed `feedback-repair-live-runtime-mpfwpa6z`. The exported evidence bundle includes terminal mirror, repair request plan, patch, dirty-worktree audit, request bundle, and passed marker test output. Codex in-app browser on p2 displayed the live terminal mirror tail and refs after target writer reload; browser evidence lives at `docs/test-artifacts/feedback-inbox-closure/live-runtime-codex-repair-browser-recheck-2026-05-22.png` and `.dom.txt`.
-  - Evidence 2026-05-22: current p1 inbox direct run from `http://localhost:5173/` completed a new DeepSeek repair without hidden main-session guidance. `feedback-deepseek-autonomous-1779437826689` shows `已修好`; `result.json` has `verdict=fixed`, `changedFiles=["tests/fixtures/deepseek-autonomous-repair-marker-1779437826689.txt"]`, `targetResultPersistence.status=recorded`, and passed `typecheck`/`diff-check`. Terminal mirror contains `run_started`, tool events, `done status=done exit=0`, no executor commit, and `Repair verdict fixed`.
-- [x] 用户确认后才允许 commit；push/PR 需要另一个确认动作。未确认时 `git status` 不能出现自动提交或远端变化。
-  - Historical partial 2026-05-22, superseded by later live success below: smoke verified no commit before confirmation, local isolated-worktree commit after confirmation, push/PR no-op/blocked with separate confirmation, safe-mode extra confirmation, and `commit: disabled` fail-closed before real DeepSeek repair output existed.
-  - Evidence 2026-05-22: live confirmation gate completed after real Runtime Codex output existed. Unconfirmed commit returned `requires-user-confirmation` and no HEAD movement; confirmed commit created local isolated-worktree commit `72b798e27e78c75b3df477e0b150f9f76ee8d135`. Push without second confirmation returned `requires-second-confirmation`; PR with second confirmation remained external-only with no remote mutation; merge remained policy-blocked.
-- [x] 修复后重新打开浏览器验证原问题解决，且反馈数据、GitHub sync state、terminal mirror 和 repair audit 未被破坏。
-  - Historical partial 2026-05-22, superseded by later live success below: product path was added to record post-repair Codex in-app browser verification as a durable `browser-recheck` action before real DeepSeek repair output existed. Failed/rejected browser rechecks still block commit, and pending rechecks stay visible.
-  - Evidence 2026-05-22: Codex in-app browser reopened p2 at `http://127.0.0.1:5174/`, selected Feedback Inbox, and verified the fixed repair result, terminal mirror lines, patch/test/audit refs, browser evidence refs, local commit action audit, push/PR no-op audit, and preserved feedback screenshot bundle. Durable browser recheck action recorded `status: passed` with evidence `docs/test-artifacts/feedback-inbox-closure/live-runtime-codex-repair-browser-recheck-2026-05-22.png` and `.dom.txt`; post-commit browser evidence was saved as `docs/test-artifacts/feedback-inbox-closure/live-runtime-codex-repair-confirmed-commit-browser-2026-05-22.png` and `.dom.txt`.
-  - Evidence 2026-05-22: Codex in-app browser reloaded `http://localhost:5173/` after the direct p1 repair and verified the feedback card shows `已修好`, the summary says `Repair handoff completed in the target isolated worktree with 1 changed file(s)`, and the repair terminal/audit refs remain attached. DOM evidence saved at `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-deepseek-repair-fixed-2026-05-22.dom.txt`; Browser screenshot capture timed out, so a local screen capture fallback was saved at `docs/test-artifacts/feedback-inbox-closure/feedback-inbox-deepseek-repair-fixed-2026-05-22-screen.png`.
-
-## 压测后的最低验证
+## 验证规则
 
 - 文档或任务板修改：`git diff --check`。
 - 代码修改：`npm run typecheck`、touched areas 的 targeted tests、`git diff --check`。
-- 反馈收件箱、GitHub sync 或 repair backend 修改：再跑匹配 touched area 的 targeted tests，并用 Codex in-app browser 完成至少一条 FB-* 用户级验收。
-- Runtime/Codex CLI/provider 修改：再跑 `npm run smoke:runtime-provider-preflight`，并证明 DeepSeek Codex CLI backend 被调用，不能 silent fallback 到当前 Codex App 或 OpenAI runtime。
+- 反馈收件箱、GitHub sync 或 repair backend 修改：再跑匹配 touched area 的 targeted tests，并用 Codex in-app browser 完成至少一条用户级验收。
+- Runtime/Codex CLI/provider 修改：再跑 `npm run smoke:runtime-provider-preflight`，并证明 Codex CLI backend 被调用，不能 silent fallback 到当前 Codex App 或其他 provider。
 - Release 或大范围迁移：再跑 `npm run smoke:no-hardcoded-success`、`npm run smoke:no-legacy-paths`、`npm run smoke:runtime-codex-truth-source`、`npm run smoke:runtime-provider-preflight`、`npm run verify:single-agent-final`；真正 release 必须跑 `npm run verify:single-agent-release`，必要时 `npm run test` 和 `npm run build`。
 
 ## 本地 worktree 策略
@@ -328,8 +116,8 @@ FB-07 最终验收命令：
 
 ## 历史归档说明
 
-- 2026-05-20 的 R-* 真实多轮压测大任务板已完成并从 active board 移出；证据仍保留在 `docs/test-artifacts/real-tasks/**`、相关 manifests、Git history 和旧任务板提交中。
+- 旧 FB-00 到 FB-07 详细 run log 已从 active board 删除；当前状态由 Git history、`docs/FeedbackInboxDesignPrinciples.md`、`docs/test-artifacts/feedback-inbox-closure/` 和相关 commits 保留。
+- 2026-05-20 的 R-* 真实多轮压测大任务板已完成并从 active board 移出；证据保留在 `docs/test-artifacts/real-tasks/**`、相关 manifests 和 Git history。
 - `docs/archive/` 保存旧 active task boards 和 detailed run histories。
 - `docs_old/` 保存迁移前设计快照。
-- Git history 保存已删除 source files、旧 task logs 和已完成任务板全文。
 - 除非任务明确证明旧 runtime code 可复用且不是 AgentServer-first debt，否则不要重新引入。
