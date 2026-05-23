@@ -38,7 +38,7 @@ export function resolveProxyCliOptions(
     port: Number(get('--port') ?? env.SCIFORGE_PROXY_PORT ?? 3891),
     upstreamBaseUrl,
     upstreamApiKey,
-    upstreamKeySource: apiKeyFromEnv ? apiKeyEnv : apiKeyFromLocal ? `${configPath}:codexProxy.apiKey` : undefined,
+    upstreamKeySource: apiKeyFromEnv ? apiKeyEnv : apiKeyFromLocal ? local.apiKeySource : undefined,
     defaultModel: get('--default-model') ?? env.SCIFORGE_PROXY_DEFAULT_MODEL ?? stringValue(local.defaultModel),
     forceNonStreamingUpstream: args.includes('--force-non-streaming-upstream')
       || env.SCIFORGE_PROXY_FORCE_NON_STREAMING_UPSTREAM === '1'
@@ -59,17 +59,22 @@ function readLocalProxyConfig(path: string) {
         ? root.runtimeCodexProxy
         : {};
     const llm = isRecord(root.llm) ? root.llm : {};
+    const upstreamBaseUrl = stringValue(llm.baseUrl)
+      ?? stringValue(llm.upstreamBaseUrl)
+      ?? stringValue(codexProxy.upstreamBaseUrl)
+      ?? stringValue(codexProxy.baseUrl);
+    const llmApiKey = stringValue(llm.apiKey) ?? stringValue(llm.upstreamApiKey);
+    const codexProxyApiKey = stringValue(codexProxy.apiKey);
+    const defaultModel = stringValue(llm.model)
+      ?? stringValue(llm.modelName)
+      ?? stringValue(llm.defaultModel)
+      ?? stringValue(codexProxy.defaultModel)
+      ?? stringValue(codexProxy.model);
     return {
-      upstreamBaseUrl: stringValue(codexProxy.upstreamBaseUrl)
-        ?? stringValue(codexProxy.baseUrl)
-        ?? stringValue(llm.upstreamBaseUrl)
-        ?? stringValue(llm.baseUrl),
-      apiKey: stringValue(codexProxy.apiKey) ?? stringValue(llm.upstreamApiKey) ?? stringValue(llm.apiKey),
-      defaultModel: stringValue(codexProxy.defaultModel)
-        ?? stringValue(codexProxy.model)
-        ?? stringValue(llm.defaultModel)
-        ?? stringValue(llm.model)
-        ?? stringValue(llm.modelName),
+      upstreamBaseUrl,
+      apiKey: llmApiKey ?? codexProxyApiKey,
+      apiKeySource: llmApiKey ? `${configPath}:llm.apiKey` : codexProxyApiKey ? `${configPath}:codexProxy.apiKey` : undefined,
+      defaultModel,
       forceNonStreamingUpstream: codexProxy.forceNonStreamingUpstream === true,
     };
   } catch {

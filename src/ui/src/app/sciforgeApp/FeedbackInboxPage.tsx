@@ -20,7 +20,7 @@ import { feedbackRepairAuditForIssue, type FeedbackRepairAuditViewModel } from '
 import { FeedbackRepairAuditPanel, repairSafeMode } from '../../feedback/FeedbackRepairAuditPanel';
 import { FeedbackCodexTerminalPanel } from '../../feedback/FeedbackCodexTerminalPanel';
 import { FeedbackScreenshotPreview } from '../../feedback/FeedbackScreenshotPreview';
-import { makeId, nowIso, type FeedbackCommentRecord, type FeedbackCommentStatus, type FeedbackRepairActionRecord, type FeedbackRepairGuidanceRecord, type FeedbackRepairResultRecord, type FeedbackRepairRunRecord, type GithubSyncedOpenIssueRecord, type PeerInstance, type RuntimeCodexBrowserAcceptanceManifest, type RuntimeProviderPreflightManifest, type SciForgeConfig, type SciForgeWorkspaceState, type SciForgeWorkspaceWriterHealth } from '../../domain';
+import { makeId, nowIso, type FeedbackCommentRecord, type FeedbackCommentStatus, type FeedbackRepairActionRecord, type FeedbackRepairGuidanceRecord, type FeedbackRepairHumanVerification, type FeedbackRepairResultRecord, type FeedbackRepairRunRecord, type GithubSyncedOpenIssueRecord, type PeerInstance, type RuntimeCodexBrowserAcceptanceManifest, type RuntimeProviderPreflightManifest, type SciForgeConfig, type SciForgeWorkspaceState, type SciForgeWorkspaceWriterHealth } from '../../domain';
 import { DelayedHelpButton } from '../DelayedHelpButton';
 import { exportJsonFile } from '../exportUtils';
 import { APP_BUILD_ID, feedbackStatusVariant, formatSessionTime, requestTitleFromFeedback } from '../appShell/appHelpers';
@@ -31,6 +31,7 @@ import { repairPeerReadinessFromProbe, repairReadinessSummary, workspaceWriterRe
 type FeedbackStatusFilter = FeedbackCommentStatus | 'all';
 type PendingGithubActionKind = 'upload-evidence' | 'submit-issue' | 'sync-open-issues';
 type PendingQueueActionKind = 'soft-delete';
+type FeedbackGitOperationMode = 'manual' | 'auto';
 type FeedbackPageStateNoticeState = 'ready' | 'partial' | 'blocked';
 
 interface PendingGithubAction {
@@ -46,6 +47,13 @@ interface PendingQueueAction {
   commentIds: string[];
   count: number;
   scopeLabel: string;
+}
+
+interface PendingRepairAction {
+  issueId: string;
+  action: FeedbackRepairActionRecord['action'];
+  safeModeActive: boolean;
+  safeModeDetail: string;
 }
 
 interface FeedbackPageStateNotice {
@@ -165,9 +173,13 @@ export function FeedbackInboxPage({
   const [evidenceUploadBusy, setEvidenceUploadBusy] = useState(false);
   const [pendingGithubAction, setPendingGithubAction] = useState<PendingGithubAction | undefined>();
   const [pendingQueueAction, setPendingQueueAction] = useState<PendingQueueAction | undefined>();
+  const [pendingRepairAction, setPendingRepairAction] = useState<PendingRepairAction | undefined>();
+  const [repairActionSafeModeConfirmed, setRepairActionSafeModeConfirmed] = useState(false);
+  const [gitOperationMode, setGitOperationMode] = useState<FeedbackGitOperationMode>('manual');
   const [handoffBusyById, setHandoffBusyById] = useState<Record<string, boolean>>({});
   const [handoffTargetById, setHandoffTargetById] = useState<Record<string, string>>({});
   const [handoffHintById, setHandoffHintById] = useState<Record<string, string>>({});
+  const [remainingProblemById, setRemainingProblemById] = useState<Record<string, string>>({});
   const [runtimePreflightManifest, setRuntimePreflightManifest] = useState<RuntimeProviderPreflightManifest | undefined>();
   const [runtimePreflightError, setRuntimePreflightError] = useState('');
   const [browserAcceptanceManifest, setBrowserAcceptanceManifest] = useState<RuntimeCodexBrowserAcceptanceManifest | undefined>();
@@ -589,31 +601,6 @@ export function FeedbackInboxPage({
     const target = repairTargets.find((peer) => peer.name === targetName);
     const selectedPeerReadiness = target ? peerReadinessByName[target.name] : undefined;
     const initialGuidance = input.initialGuidance?.trim();
-    if (target && repairReadiness.providerReady !== true) {
-      setHandoffBusyById((current) => ({ ...current, [item.id]: true }));
-      try {
-        const repairRun = blockedRepairTerminalRun(item, {
-          target,
-          failureKind: 'runtime-provider-preflight-blocked',
-          message: repairReadiness.providerBlocker,
-          initialGuidance,
-        });
-        onRepairRunWritten(repairRun);
-        const result = await persistBlockedRepairHandoffResult(item, {
-          failureKind: 'runtime-provider-preflight-blocked',
-          message: repairReadiness.providerBlocker,
-          target,
-          repairRun,
-          initialGuidance,
-        });
-        setHandoffHintById((current) => ({ ...current, [item.id]: `Repair blocked audit written: ${result.summary}` }));
-      } catch (error) {
-        setHandoffHintById((current) => ({ ...current, [item.id]: `Repair blocked audit write failed：${error instanceof Error ? error.message : String(error)}` }));
-      } finally {
-        setHandoffBusyById((current) => ({ ...current, [item.id]: false }));
-      }
-      return;
-    }
     if (!target) {
       setHandoffBusyById((current) => ({ ...current, [item.id]: true }));
       try {
@@ -681,6 +668,12 @@ export function FeedbackInboxPage({
         targetWorkspaceWriterUrl: target.workspaceWriterUrl,
         targetPeerReadiness: selectedPeerReadiness,
         initialTerminalGuidance: initialGuidance,
+        gitMode: gitOperationMode,
+        providerReadinessNotice: {
+          ready: repairReadiness.providerReady,
+          blocker: repairReadiness.providerBlocker,
+          displayOnly: true,
+        },
         dispatchPhase: 'preparing',
       },
     };
@@ -776,6 +769,7 @@ export function FeedbackInboxPage({
         executorBackend: 'runtime-codex',
         runtimeProfile: config.runtimeProfile || defaultSciForgeConfig.runtimeProfile,
         allowOpenAiRuntime: config.allowOpenAiRuntime === true,
+        gitMode: gitOperationMode,
         allowExecutorRepoTarget: usingCurrentWriterFallback,
         allowedWritePaths: DEFAULT_FEEDBACK_ALLOWED_WRITE_PATHS,
         forbiddenWritePaths: DEFAULT_FEEDBACK_FORBIDDEN_WRITE_PATHS,
@@ -787,6 +781,12 @@ export function FeedbackInboxPage({
           targetWorkspacePath: resolvedTargetWorkspacePath,
           targetPeerReadiness: selectedPeerReadiness,
           initialTerminalGuidance: initialGuidance,
+          gitMode: gitOperationMode,
+          providerReadinessNotice: {
+            ready: repairReadiness.providerReady,
+            blocker: repairReadiness.providerBlocker,
+            displayOnly: true,
+          },
           targetWriterFallbackToCurrent: usingCurrentWriterFallback,
         },
         initialGuidance,
@@ -885,7 +885,7 @@ export function FeedbackInboxPage({
     return result;
   }
 
-  async function confirmRepairAction(item: FeedbackCommentRecord, action: FeedbackRepairActionRecord['action']) {
+  function confirmRepairAction(item: FeedbackCommentRecord, action: FeedbackRepairActionRecord['action']) {
     const audit = feedbackRepairAuditForIssue(item.id, repairRuns, repairResults, repairActions, repairGuidance);
     const result = audit.latestResult;
     if (!result) {
@@ -893,24 +893,34 @@ export function FeedbackInboxPage({
       return;
     }
     const safeMode = repairSafeMode(audit);
-    let safeModeConfirmed = false;
+    if (action === 'browser-recheck') {
+      void executeRepairAction(item, action, { safeModeConfirmed: false });
+      return;
+    }
+    setRepairActionSafeModeConfirmed(false);
+    setPendingRepairAction({
+      issueId: item.id,
+      action,
+      safeModeActive: safeMode.active && action !== 'merge',
+      safeModeDetail: safeMode.matchedPaths.join(', ') || 'control surface metadata',
+    });
+  }
+
+  async function executeRepairAction(
+    item: FeedbackCommentRecord,
+    action: FeedbackRepairActionRecord['action'],
+    options: { safeModeConfirmed: boolean },
+  ) {
+    const audit = feedbackRepairAuditForIssue(item.id, repairRuns, repairResults, repairActions, repairGuidance);
+    const result = audit.latestResult;
+    if (!result) {
+      setHandoffHintById((current) => ({ ...current, [item.id]: '没有可确认的 repair result；请先完成 repair handoff。' }));
+      return;
+    }
     let browserVerification: FeedbackRepairActionRecord['browserVerification'];
-    if (action === 'merge') {
-      const confirmed = window.confirm('merge 永远不能自动执行；确定要记录一次被拒绝的 merge 尝试审计吗？');
-      if (!confirmed) return;
-    } else if (action === 'commit') {
-      const confirmed = window.confirm('确认只在隔离 repair worktree 中创建本地 commit？不会 push、PR 或 merge。');
-      if (!confirmed) return;
-    } else if (action === 'browser-recheck') {
+    if (action === 'browser-recheck') {
       browserVerification = browserRecheckInputForResult(result, browserAcceptanceManifest);
       if (!browserVerification) return;
-    } else {
-      const confirmed = window.confirm(`${action.toUpperCase()} 需要第二次单独确认；当前控制面只会记录 no-op 审计，不会真实 ${action === 'push' ? 'push' : '创建 PR'}。`);
-      if (!confirmed) return;
-    }
-    if (safeMode.active && action !== 'merge' && action !== 'browser-recheck') {
-      safeModeConfirmed = window.confirm(`Safe mode active：该 repair 触及反馈收件箱或 repair backend/control surface（${safeMode.matchedPaths.join(', ') || 'control surface metadata'}）。继续记录 ${action} 确认需要额外确认；更安全的路径是外部控制面复核。`);
-      if (!safeModeConfirmed) return;
     }
     setHandoffBusyById((current) => ({ ...current, [item.id]: true }));
     setHandoffHintById((current) => ({ ...current, [item.id]: `正在确认 repair ${action} 策略...` }));
@@ -921,14 +931,51 @@ export function FeedbackInboxPage({
         resultId: result.id,
         confirmed: action === 'commit',
         secondConfirmed: action === 'push' || action === 'pr',
-        safeModeConfirmed,
+        safeModeConfirmed: options.safeModeConfirmed,
         browserVerification,
       }, actionConfig.workspacePath);
       onRepairActionWritten(record);
       if (updatedResult) onRepairResultWritten(updatedResult);
       setHandoffHintById((current) => ({ ...current, [item.id]: record.message }));
+      setPendingRepairAction(undefined);
     } catch (error) {
       setHandoffHintById((current) => ({ ...current, [item.id]: `Repair ${action} failed closed：${error instanceof Error ? error.message : String(error)}` }));
+    } finally {
+      setHandoffBusyById((current) => ({ ...current, [item.id]: false }));
+    }
+  }
+
+  async function recordRepairResolutionFeedback(
+    item: FeedbackCommentRecord,
+    result: FeedbackRepairResultRecord,
+    resolution: 'solved' | 'remaining',
+  ) {
+    const remainingProblem = remainingProblemById[item.id]?.trim() ?? '';
+    if (resolution === 'remaining' && !remainingProblem) {
+      setHandoffHintById((current) => ({ ...current, [item.id]: '请先写下仍然存在的问题，再记录为未解决。' }));
+      return;
+    }
+    setHandoffBusyById((current) => ({ ...current, [item.id]: true }));
+    setHandoffHintById((current) => ({ ...current, [item.id]: resolution === 'solved' ? '正在记录：问题已解决。' : '正在记录：仍有问题，并保存剩余问题反馈。' }));
+    try {
+      const actionConfig = repairActionConfigForResult(config, result, repairTargets);
+      const browserVerification = repairResolutionVerificationForResult(result, browserAcceptanceManifest, resolution, remainingProblem);
+      const { action: record, result: updatedResult } = await confirmFeedbackRepairAction(actionConfig, item.id, {
+        action: 'browser-recheck',
+        resultId: result.id,
+        confirmed: resolution === 'solved',
+        secondConfirmed: false,
+        safeModeConfirmed: false,
+        browserVerification,
+      }, actionConfig.workspacePath);
+      onRepairActionWritten(record);
+      if (updatedResult) onRepairResultWritten(updatedResult);
+      if (resolution === 'remaining') {
+        setRemainingProblemById((current) => ({ ...current, [item.id]: '' }));
+      }
+      setHandoffHintById((current) => ({ ...current, [item.id]: record.message }));
+    } catch (error) {
+      setHandoffHintById((current) => ({ ...current, [item.id]: `Repair resolution feedback failed closed：${error instanceof Error ? error.message : String(error)}` }));
     } finally {
       setHandoffBusyById((current) => ({ ...current, [item.id]: false }));
     }
@@ -980,6 +1027,11 @@ export function FeedbackInboxPage({
                 打开设置
               </DelayedHelpButton>
             ) : null}
+            {!repairReadiness.providerReady ? (
+              <DelayedHelpButton onClick={onOpenGithubSettings} help="打开设置中的 Model Provider / API Key；provider 状态只提示，不改变 repair 目标路由。">
+                Provider 设置
+              </DelayedHelpButton>
+            ) : null}
           </div>
         ) : null}
       </section>
@@ -1009,6 +1061,45 @@ export function FeedbackInboxPage({
           ))}
         </div>
       </section>
+      {pendingRepairAction ? (
+        <section className="feedback-page-state" aria-label="repair git action confirmation">
+          <div className="feedback-page-state-head">
+            <div>
+              <strong>{repairActionTitle(pendingRepairAction.action)}</strong>
+              <span>{repairActionConfirmationCopy(pendingRepairAction.action, gitOperationMode)}</span>
+            </div>
+            <Badge variant={pendingRepairAction.action === 'merge' ? 'danger' : 'warning'}>
+              {pendingRepairAction.action}
+            </Badge>
+          </div>
+          {pendingRepairAction.safeModeActive ? (
+            <label className="settings-check-row">
+              <input
+                type="checkbox"
+                checked={repairActionSafeModeConfirmed}
+                onChange={(event) => setRepairActionSafeModeConfirmed(event.target.checked)}
+              />
+              <span>Safe mode extra confirmation: {pendingRepairAction.safeModeDetail}</span>
+            </label>
+          ) : null}
+          <div className="feedback-page-state-actions">
+            <button type="button" onClick={() => setPendingRepairAction(undefined)}>取消</button>
+            <button
+              type="button"
+              disabled={pendingRepairAction.safeModeActive && !repairActionSafeModeConfirmed}
+              onClick={() => {
+                const item = comments.find((candidate) => candidate.id === pendingRepairAction.issueId);
+                if (!item) return;
+                void executeRepairAction(item, pendingRepairAction.action, {
+                  safeModeConfirmed: pendingRepairAction.safeModeActive ? repairActionSafeModeConfirmed : false,
+                });
+              }}
+            >
+              确认记录
+            </button>
+          </div>
+        </section>
+      ) : null}
       <section className="feedback-toolbar">
         <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as FeedbackStatusFilter)} aria-label="按反馈状态筛选">
           {FEEDBACK_STATUS_FILTERS.map((option) => (
@@ -1025,6 +1116,13 @@ export function FeedbackInboxPage({
           aria-label="搜索反馈、GitHub Issue 或证据 ref"
         />
         <span className="feedback-selection-count">{selectionSummary}</span>
+        <label className="feedback-selection-count" aria-label="git operation mode">
+          Git:
+          <select value={gitOperationMode} onChange={(event) => setGitOperationMode(event.target.value === 'auto' ? 'auto' : 'manual')}>
+            <option value="manual">手动操作</option>
+            <option value="auto">自动操作</option>
+          </select>
+        </label>
         <DelayedHelpButton
           onClick={() => setSelectedIds(visibleIds)}
           disabled={!visibleIds.length || visibleSelectedCount === visibleIds.length}
@@ -1264,6 +1362,40 @@ export function FeedbackInboxPage({
 	                  </div>
 	                  <span>{repairSummary.nextAction}</span>
 	                </div>
+	                {audit.latestResult ? (
+	                  <section className="feedback-repair-guidance" aria-label="repair result user closure">
+	                    <div className="feedback-repair-subhead">
+	                      <div>
+	                        <strong>确认修复结果</strong>
+	                        <span>只需要确认这个问题是否已解决；仍有问题时再补充剩余现象。</span>
+	                      </div>
+	                      {audit.latestBrowserVerificationLabel ? <Badge variant="info">{audit.latestBrowserVerificationLabel}</Badge> : null}
+	                    </div>
+	                    <div className="feedback-repair-action-row">
+	                      <button
+	                        type="button"
+	                        disabled={Boolean(handoffBusyById[item.id])}
+	                        onClick={() => audit.latestResult && void recordRepairResolutionFeedback(item, audit.latestResult, 'solved')}
+	                      >
+	                        问题已解决
+	                      </button>
+	                      <button
+	                        type="button"
+	                        disabled={Boolean(handoffBusyById[item.id]) || !remainingProblemById[item.id]?.trim()}
+	                        onClick={() => audit.latestResult && void recordRepairResolutionFeedback(item, audit.latestResult, 'remaining')}
+	                      >
+	                        仍有问题
+	                      </button>
+	                    </div>
+	                    <textarea
+	                      value={remainingProblemById[item.id] ?? ''}
+	                      onChange={(event) => setRemainingProblemById((current) => ({ ...current, [item.id]: event.target.value }))}
+	                      placeholder="如果仍未解决，写下现在还存在的问题..."
+	                      aria-label="记录修复后仍然存在的问题"
+	                      disabled={Boolean(handoffBusyById[item.id])}
+	                    />
+	                  </section>
+	                ) : null}
 	                <FeedbackScreenshotPreview item={item} config={config} />
 	                {(item.expectedBehavior || item.actualBehavior) ? (
 	                  <details className="feedback-card-section">
@@ -1289,6 +1421,7 @@ export function FeedbackInboxPage({
 	                  item={item}
 	                  providerReady={repairReadiness.providerReady === true}
 	                  providerBlocker={repairReadiness.providerBlocker}
+                    gitMode={gitOperationMode}
 	                  onRepairRunWritten={onRepairRunWritten}
 	                />
 	                <details className="feedback-card-section" open={Boolean(handoffHintById[item.id])}>
@@ -1869,6 +2002,55 @@ function browserRecheckInputForResult(
   };
 }
 
+function repairResolutionVerificationForResult(
+  result: FeedbackRepairResultRecord,
+  browserManifest: RuntimeCodexBrowserAcceptanceManifest | undefined,
+  resolution: 'solved' | 'remaining',
+  remainingProblem: string,
+): FeedbackRepairHumanVerification {
+  const evidenceRefs = repairResolutionEvidenceRefs(result, browserManifest);
+  if (resolution === 'remaining') {
+    return {
+      status: 'failed',
+      verifier: 'feedback-inbox-user',
+      reviewer: 'feedback-inbox',
+      conclusion: remainingProblem,
+      evidenceRefs,
+      verifiedAt: nowIso(),
+      note: 'Recorded from the Feedback Inbox after reviewing the repair result; remaining-problem feedback is the next repair input.',
+    };
+  }
+  return {
+    status: evidenceRefs.length && browserManifestSupportsPassedRecheck(browserManifest) ? 'passed' : 'pending',
+    verifier: 'feedback-inbox-user',
+    reviewer: 'feedback-inbox',
+    conclusion: 'User confirmed the original feedback issue is solved after reviewing the repair result.',
+    evidenceRefs,
+    verifiedAt: nowIso(),
+    note: evidenceRefs.length && browserManifestSupportsPassedRecheck(browserManifest)
+      ? 'Recorded from the Feedback Inbox after a current Codex in-app browser acceptance pass.'
+      : 'User confirmed solved in the Feedback Inbox; strict current browser evidence was missing or stale, so commit remains gated.',
+  };
+}
+
+function repairResolutionEvidenceRefs(
+  result: FeedbackRepairResultRecord,
+  browserManifest: RuntimeCodexBrowserAcceptanceManifest | undefined,
+) {
+  const manifestEvidence = browserManifest?.evidence;
+  return [
+    browserManifest?.actualUrl,
+    browserManifest?.providerPreflightRef,
+    manifestEvidence?.screenshotPath,
+    manifestEvidence?.domSnapshotPath,
+    manifestEvidence?.notesPath,
+    manifestEvidence?.runtimeAuditPath,
+    result.diffRef,
+    result.refs?.patchRef,
+    ...(result.humanVerification?.evidenceRefs ?? []),
+  ].filter((value): value is string => Boolean(value?.trim()));
+}
+
 function browserManifestSupportsPassedRecheck(manifest: RuntimeCodexBrowserAcceptanceManifest | undefined) {
   if (!manifest) return false;
   if (manifest.status !== 'passed'
@@ -1886,6 +2068,23 @@ function browserManifestSupportsPassedRecheck(manifest: RuntimeCodexBrowserAccep
   return Number.isFinite(observedAtMs)
     && observedAtMs <= Date.now() + 5 * 60 * 1000
     && observedAtMs >= Date.now() - 30 * 60 * 1000;
+}
+
+function repairActionTitle(action: FeedbackRepairActionRecord['action']) {
+  if (action === 'commit') return '确认本地 commit';
+  if (action === 'push') return '确认 push 审计';
+  if (action === 'pr') return '确认 PR 审计';
+  if (action === 'merge') return '确认 merge 拒绝审计';
+  return '确认 repair action';
+}
+
+function repairActionConfirmationCopy(action: FeedbackRepairActionRecord['action'], mode: FeedbackGitOperationMode) {
+  const modeText = mode === 'auto' ? '自动操作模式已选择，但分级确认仍然生效。' : '手动 git 操作是默认模式。';
+  if (action === 'merge') return `${modeText} Merge 不会静默执行；这里只记录一次被拒绝的 merge 尝试审计。`;
+  if (action === 'commit') return `${modeText} Commit 只允许在隔离 repair worktree 中创建本地提交，不会 push、PR 或 merge。`;
+  if (action === 'push') return `${modeText} Push 需要第二次单独确认；当前控制面只记录 no-op 审计。`;
+  if (action === 'pr') return `${modeText} PR 需要第二次单独确认；当前控制面只记录 no-op 审计。`;
+  return modeText;
 }
 
 function firstNonEmptyString(...values: Array<string | undefined>) {

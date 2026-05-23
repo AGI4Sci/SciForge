@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import { RUNTIME_HEALTH_STATUS } from '@sciforge-ui/runtime-contract';
 import { defaultSciForgeConfig, updateConfig } from './config';
+import { providerReadinessNoticeFromManifest } from './providerReadiness';
 import { codexRuntimeHealth, modelHealth, workspaceWriterHealth } from './runtimeHealth';
 
 describe('runtime health model status', () => {
@@ -42,6 +43,29 @@ describe('runtime health model status', () => {
 
     assert.equal(health.status, RUNTIME_HEALTH_STATUS.NOT_CONFIGURED);
     assert.match(String(health.recoverAction), /allowOpenAiRuntime 默认 false/);
+  });
+
+  it('uses the shared provider preflight notice shape for repair display', () => {
+    const notice = providerReadinessNoticeFromManifest({
+      schemaVersion: 'sciforge.runtime-provider-preflight.current-env.v1',
+      checkedAt: '2026-05-07T00:00:00.000Z',
+      category: 'config-secret-source',
+      owner: 'environment',
+      releaseAcceptance: 'not-evaluated',
+      evidenceMode: 'current-env-diagnostic-only',
+      runtimeApiKeyPresentInServiceEnv: false,
+      upstreamBaseUrlPresent: true,
+      upstreamKeySourceKind: 'config-debug-fallback',
+      upstreamBaseUrlSourceKind: 'config',
+      missingEnv: ['SCIFORGE_RUNTIME_API_KEY'],
+      policyViolations: [],
+      nextActions: [{ label: 'Rerun provider preflight.', command: 'npm run smoke:runtime-provider-preflight', writesRepo: false }],
+    });
+
+    assert.equal(notice.ready, false);
+    assert.equal(notice.state, 'partial');
+    assert.match(notice.detail, /missing env: SCIFORGE_RUNTIME_API_KEY/);
+    assert.equal(notice.recoverAction, 'npm run smoke:runtime-provider-preflight');
   });
 
   it('显示 Codex Runtime profile 健康状态', () => {

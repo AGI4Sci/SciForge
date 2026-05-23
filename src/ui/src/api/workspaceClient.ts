@@ -201,6 +201,7 @@ export interface FeedbackRepairHandoffRunInput {
   executorBackend?: 'agent-server' | 'runtime-codex';
   runtimeProfile?: string;
   allowOpenAiRuntime?: boolean;
+  gitMode?: 'manual' | 'auto';
   allowExecutorRepoTarget?: boolean;
   initialGuidance?: string;
   allowedWritePaths?: string[];
@@ -260,7 +261,7 @@ export interface FeedbackRepairGuidanceResult {
 }
 
 export type FeedbackCodexTerminalStatus = 'starting' | 'running' | 'idle' | 'failed' | 'cancelled';
-export type FeedbackCodexTerminalTransport = 'http-writer' | 'websocket-pty';
+export type FeedbackCodexTerminalTransport = 'websocket-pty';
 
 export interface FeedbackCodexTerminalSession {
   schemaVersion: 1;
@@ -273,7 +274,6 @@ export interface FeedbackCodexTerminalSession {
   promptRef: string;
   promptPreview?: string;
   codexSessionId?: string;
-  activeTurnId?: string;
   startedAt: string;
   updatedAt: string;
   message?: string;
@@ -283,18 +283,9 @@ export interface FeedbackCodexTerminalSession {
   webSocketPath?: string;
 }
 
-export interface FeedbackCodexTerminalStartResult {
-  session: FeedbackCodexTerminalSession;
-  repairRun?: FeedbackRepairRunRecord;
-}
-
-export interface FeedbackCodexTerminalTailResult {
-  session?: FeedbackCodexTerminalSession;
-  tail: FeedbackRepairTerminalMirrorTail;
-}
-
-export interface FeedbackCodexPtyTerminalStartResult extends FeedbackCodexTerminalStartResult {
+export interface FeedbackCodexPtyTerminalStartResult {
   session: FeedbackCodexTerminalSession & { transport: 'websocket-pty' };
+  repairRun?: FeedbackRepairRunRecord;
 }
 
 export async function loadFileBackedSciForgeConfig(config: SciForgeConfig): Promise<SciForgeConfig | undefined> {
@@ -790,29 +781,6 @@ export async function sendFeedbackRepairGuidance(
   return { guidance: json.guidance };
 }
 
-export async function startFeedbackCodexTerminal(
-  config: SciForgeConfig,
-  issueId: string,
-  input: { workspacePath?: string; initialMessage?: string; runtimeProfile?: string; allowOpenAiRuntime?: boolean; gitMode?: 'manual' | 'auto' } = {},
-): Promise<FeedbackCodexTerminalStartResult> {
-  if (!issueId.trim()) throw new Error('feedback issue id is required');
-  const response = await fetchWorkspace(config, `start direct Codex terminal ${issueId}`, `${config.workspaceWriterBaseUrl}/api/sciforge/feedback/issues/${encodeURIComponent(issueId)}/codex-terminal/start`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      workspacePath: input.workspacePath || config.workspacePath,
-      initialMessage: input.initialMessage,
-      runtimeProfile: input.runtimeProfile || config.runtimeProfile,
-      allowOpenAiRuntime: input.allowOpenAiRuntime ?? config.allowOpenAiRuntime === true,
-      gitMode: input.gitMode || 'manual',
-    }),
-  });
-  if (!response.ok) throw new Error(await workspaceResponseError(response, `Start direct Codex terminal failed: HTTP ${response.status}`));
-  const json = await response.json() as { session?: FeedbackCodexTerminalSession; repairRun?: FeedbackRepairRunRecord };
-  if (!json.session) throw new Error(`Start direct Codex terminal for ${issueId} returned no session.`);
-  return { session: json.session, repairRun: json.repairRun };
-}
-
 export async function startFeedbackCodexPtyTerminal(
   config: SciForgeConfig,
   issueId: string,
@@ -877,64 +845,6 @@ export function feedbackCodexPtyWebSocketUrl(config: SciForgeConfig, session: Fe
   base.search = '';
   base.searchParams.set('workspacePath', session.workspacePath || config.workspacePath);
   return base.toString();
-}
-
-export async function sendFeedbackCodexTerminalInput(
-  config: SciForgeConfig,
-  sessionId: string,
-  input: { message: string; workspacePath?: string },
-): Promise<FeedbackCodexTerminalSession> {
-  if (!sessionId.trim()) throw new Error('direct Codex terminal session id is required');
-  if (!input.message.trim()) throw new Error('direct Codex terminal message is required');
-  const response = await fetchWorkspace(config, `send direct Codex terminal input ${sessionId}`, `${config.workspaceWriterBaseUrl}/api/sciforge/feedback/codex-terminal/${encodeURIComponent(sessionId)}/input`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      workspacePath: input.workspacePath || config.workspacePath,
-      message: input.message,
-    }),
-  });
-  if (!response.ok) throw new Error(await workspaceResponseError(response, `Send direct Codex terminal input failed: HTTP ${response.status}`));
-  const json = await response.json() as { session?: FeedbackCodexTerminalSession };
-  if (!json.session) throw new Error(`Send direct Codex terminal input for ${sessionId} returned no session.`);
-  return json.session;
-}
-
-export async function stopFeedbackCodexTerminal(
-  config: SciForgeConfig,
-  sessionId: string,
-  input: { reason?: string; workspacePath?: string } = {},
-): Promise<FeedbackCodexTerminalSession> {
-  if (!sessionId.trim()) throw new Error('direct Codex terminal session id is required');
-  const response = await fetchWorkspace(config, `stop direct Codex terminal ${sessionId}`, `${config.workspaceWriterBaseUrl}/api/sciforge/feedback/codex-terminal/${encodeURIComponent(sessionId)}/stop`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      workspacePath: input.workspacePath || config.workspacePath,
-      reason: input.reason || 'feedback inbox stop button',
-    }),
-  });
-  if (!response.ok) throw new Error(await workspaceResponseError(response, `Stop direct Codex terminal failed: HTTP ${response.status}`));
-  const json = await response.json() as { session?: FeedbackCodexTerminalSession };
-  if (!json.session) throw new Error(`Stop direct Codex terminal for ${sessionId} returned no session.`);
-  return json.session;
-}
-
-export async function loadFeedbackCodexTerminalTail(
-  config: SciForgeConfig,
-  sessionId: string,
-  input: { cursor?: number; limit?: number; workspacePath?: string } = {},
-): Promise<FeedbackCodexTerminalTailResult> {
-  if (!sessionId.trim()) throw new Error('direct Codex terminal session id is required');
-  const url = new URL(`${config.workspaceWriterBaseUrl}/api/sciforge/feedback/codex-terminal/${encodeURIComponent(sessionId)}/tail`);
-  url.searchParams.set('workspacePath', input.workspacePath || config.workspacePath);
-  if (typeof input.cursor === 'number') url.searchParams.set('cursor', String(input.cursor));
-  if (typeof input.limit === 'number') url.searchParams.set('limit', String(input.limit));
-  const response = await fetchWorkspace(config, `load direct Codex terminal tail ${sessionId}`, url);
-  if (!response.ok) throw new Error(await workspaceResponseError(response, `Load direct Codex terminal tail failed: HTTP ${response.status}`));
-  const json = await response.json() as { session?: FeedbackCodexTerminalSession; tail?: FeedbackRepairTerminalMirrorTail };
-  if (!json.tail) throw new Error(`Load direct Codex terminal tail for ${sessionId} returned no tail.`);
-  return { session: json.session, tail: json.tail };
 }
 
 export async function uploadFeedbackEvidenceAssets(

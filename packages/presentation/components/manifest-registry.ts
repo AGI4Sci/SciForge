@@ -22,6 +22,7 @@ import { manifest as sequenceViewer } from './sequence-viewer/manifest';
 import { manifest as spatialOmicsViewer } from './spatial-omics-viewer/manifest';
 import { manifest as statisticalAnnotationLayer } from './statistical-annotation-layer/manifest';
 import { manifest as structureViewer } from './structure-viewer/manifest';
+import { manifest as terminalSessionViewer } from './terminal-session-viewer/manifest';
 import { manifest as timeSeriesViewer } from './time-series-viewer/manifest';
 import { manifest as unknownArtifactInspector } from './unknown-artifact-inspector/manifest';
 import type { UIComponentManifest } from './types';
@@ -37,6 +38,7 @@ export const uiComponentManifests: UIComponentManifest[] = [
   pointSetViewer,
   matrixViewer,
   structureViewer,
+  terminalSessionViewer,
   scientificPlotViewer,
   sequenceViewer,
   alignmentViewer,

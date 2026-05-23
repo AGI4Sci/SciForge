@@ -144,6 +144,18 @@ export type {
   CapabilitySearchResult,
 } from './capability-discovery';
 export {
+  CODEX_REALTIME_SESSION_BRIDGE,
+  CODEX_REALTIME_SESSION_SCHEMA_VERSION,
+  CODEX_REALTIME_SESSION_STREAM_KIND,
+  assertCodexRealtimeSessionEnvelope,
+  codexThreadRef,
+  createCodexRealtimeSessionEnvelope,
+  isCodexRealtimeSessionEnvelope,
+} from './codex-realtime-session';
+export type {
+  CodexRealtimeSessionEnvelope,
+} from './codex-realtime-session';
+export {
   BACKEND_HANDOFF_DRIFT_EVENT_TYPE,
   BACKEND_HANDOFF_DRIFT_SCHEMA_VERSION,
   backendHandoffDriftEvent,

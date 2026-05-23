@@ -12,6 +12,12 @@
 - stderr 和 raw JSONL 只作为 audit/debug 事件，不进入主回复文本。
 - GUI 不得把历史 transcript 拼进 `commandText`；无选中 ref 时 command text 必须是用户原文，有选中 ref 时只能是终端等价 `ask --ref ... "<prompt>"`。
 
+RT-02 realtime 状态：
+
+- 当前主聊天桥接优先使用 WebSocket：`/api/sciforge/runtime/codex/realtime/ws` 发送 terminal-equivalent text，并接收结构化事件。
+- `realtimeSession` envelope 是 Codex-native session 语义标记，允许 `eventTransport: "websocket"`；HTTP SSE `POST /api/sciforge/runtime/codex/stream` 仍作为非浏览器/测试 fallback。
+- WebSocket 完成条件由 focused tests 覆盖：共享 envelope 允许 WebSocket transport，runtime server 接入 HTTP upgrade route，UI client over WebSocket 双向发送请求并读取 structured events。
+
 退役条件：
 
 - 当 SciForge 默认路径切到 Codex app-server 或上游 Codex 提供长期 thread 的稳定结构化事件 API 后，可以退役 `CodexExecJsonAdapter` 的进程/JSONL 细节。

@@ -1,5 +1,6 @@
 import { compactAgentContext } from '../../api/agentClient';
 import { sendSciForgeToolMessage } from '../../api/sciforgeToolsClient';
+import type { CodexRealtimeControlSender } from '../../api/sciforgeToolsClient/codexRealtimeSession';
 import { buildContextCompactionFailureResult, buildContextCompactionOutcome } from '../../contextCompaction';
 import {
   projectToolFailedEvent,
@@ -68,6 +69,7 @@ export interface RunPromptOrchestratorInput {
   activeSession: () => SciForgeSession;
   onStreamEvent: (event: AgentStreamEvent) => void;
   onOptimisticSession?: (session: SciForgeSession) => void;
+  onRealtimeControlReady?: (sender: CodexRealtimeControlSender) => void;
 }
 
 export type RunPromptOrchestratorResult = {
@@ -149,7 +151,7 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
     });
 
     emitPeerRepairStage(targetInstanceContext, input.onStreamEvent, targetRepairModifyingEvent);
-    const response = await runWithBackendFallback(request, input.signal, handleStreamEvent, input.onStreamEvent);
+    const response = await runWithBackendFallback(request, input.signal, handleStreamEvent, input.onStreamEvent, input.onRealtimeControlReady);
     emitPeerRepairStage(targetInstanceContext, input.onStreamEvent, targetRepairTestingEvent);
     emitPeerRepairStage(targetInstanceContext, input.onStreamEvent, targetRepairWrittenBackEvent);
     const responseWithUsage = latestRoundTokenUsage
@@ -347,9 +349,10 @@ export async function runWithBackendFallback(
   signal: AbortSignal,
   onEvent: (event: AgentStreamEvent) => void,
   emitEvent: (event: AgentStreamEvent) => void,
+  onRealtimeControlReady?: (sender: CodexRealtimeControlSender) => void,
 ) {
   try {
-    return await sendSciForgeToolMessage(request, { onEvent }, signal);
+    return await sendSciForgeToolMessage(request, { onEvent, onRealtimeControlReady }, signal);
   } catch (projectToolError) {
     const detail = projectToolError instanceof Error ? projectToolError.message : String(projectToolError);
     if (runtimeDetailIndicatesAbort(detail)) throw projectToolError;

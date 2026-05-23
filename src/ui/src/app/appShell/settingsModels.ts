@@ -13,3 +13,15 @@ export function settingsSaveStateText(state: ConfigSaveState) {
   }
   return '修改后点击“保存并生效”，SciForge 会写入 config.local.json。';
 }
+
+export function secretPresenceLabel(value: string | undefined, label = 'secret') {
+  return value?.trim() ? `${label}: present (masked)` : `${label}: missing`;
+}
+
+export function secretInputPlaceholder(value: string | undefined, emptyPlaceholder: string) {
+  return value?.trim() ? '已配置；输入新值会替换，留空保持 masked secret 不变' : emptyPlaceholder;
+}
+
+export function maskedSecretValue(value: string | undefined) {
+  return value?.trim() ? '********' : '';
+}

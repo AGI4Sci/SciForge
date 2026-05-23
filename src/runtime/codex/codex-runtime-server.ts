@@ -1,9 +1,22 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { Duplex } from 'node:stream';
+import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import { CodexExecJsonAdapter } from './codex-exec-json-adapter.js';
 import type { AgentCliAdapter } from './agent-cli-adapter.js';
 import { isRecord, readJson, writeJson } from '../server/http.js';
+import {
+  assertCodexRealtimeSessionEnvelope,
+  createCodexRealtimeControlAck,
+  createCodexRealtimeSessionEnvelope,
+  normalizeCodexRealtimeClientControl,
+  type CodexRealtimeClientControl,
+} from '@sciforge-ui/runtime-contract/codex-realtime-session';
 
 const CODEX_RUNTIME_HEARTBEAT_MS = 5_000;
+export const CODEX_RUNTIME_STREAM_PATH = '/api/sciforge/runtime/codex/stream';
+export const CODEX_RUNTIME_WEBSOCKET_PATH = '/api/sciforge/runtime/codex/realtime/ws';
+
+const codexRuntimeWss = new WebSocketServer({ noServer: true });
 
 export async function handleCodexRuntimeRoutes(
   req: IncomingMessage,
@@ -11,7 +24,7 @@ export async function handleCodexRuntimeRoutes(
   url: URL,
   adapter: AgentCliAdapter = new CodexExecJsonAdapter(),
 ): Promise<boolean> {
-  if (url.pathname !== '/api/sciforge/runtime/codex/stream') return false;
+  if (url.pathname !== CODEX_RUNTIME_STREAM_PATH) return false;
   if (req.method !== 'POST') {
     writeJson(res, 405, { ok: false, error: 'method not allowed' });
     return true;
@@ -27,35 +40,154 @@ export async function handleCodexRuntimeRoutes(
   });
   res.flushHeaders?.();
 
-  let heartbeat: ReturnType<typeof setInterval> | undefined;
   try {
     const body = await readJson(req);
-    assertCodexRuntimeRequestBoundary(body);
-    const commandText = stringField(body.commandText);
-    const workspacePath = stringField(body.workspacePath);
-    if (!commandText) throw new Error('commandText is required');
-    if (!workspacePath) throw new Error('workspacePath is required');
-    const commandId = stringField(body.commandId);
-    const attemptId = stringField(body.attemptId);
-    const streamStartedAt = Date.now();
-    let lastRuntimeEventAt = streamStartedAt;
-    writeSse(res, 'process-progress', codexRuntimeAcceptedProgressEvent({ commandId, attemptId }));
-    heartbeat = setInterval(() => {
-      if (abort.signal.aborted || res.writableEnded || res.destroyed) return;
-      writeSse(res, 'heartbeat', codexRuntimeHeartbeatEvent({
-        commandId,
-        attemptId,
-        streamStartedAt,
-        lastRuntimeEventAt,
-      }));
-    }, CODEX_RUNTIME_HEARTBEAT_MS);
+    await runCodexRuntimeTurn(body, adapter, abort.signal, {
+      expectedTransport: 'sse',
+      shouldContinue: () => !res.writableEnded && !res.destroyed,
+      emit: (event, data) => writeSse(res, event, data),
+    });
+  } catch (error) {
+    writeSse(res, 'error', { ok: false, error: error instanceof Error ? error.message : String(error) });
+  } finally {
+    res.end();
+  }
+  return true;
+}
+
+export function handleCodexRuntimeUpgrade(
+  req: IncomingMessage,
+  socket: Duplex,
+  head: Buffer,
+  adapter: AgentCliAdapter = new CodexExecJsonAdapter(),
+): boolean {
+  const url = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`);
+  if (url.pathname !== CODEX_RUNTIME_WEBSOCKET_PATH) return false;
+  codexRuntimeWss.handleUpgrade(req, socket, head, (ws) => {
+    connectCodexRuntimeSocket(ws, adapter).catch((err: unknown) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'error', error: err instanceof Error ? err.message : String(err) }));
+        ws.close(1011, 'codex realtime unavailable');
+      }
+    });
+  });
+  return true;
+}
+
+async function connectCodexRuntimeSocket(ws: WebSocket, adapter: AgentCliAdapter) {
+  const abort = new AbortController();
+  ws.on('close', () => abort.abort());
+  const pendingControlMessages: string[] = [];
+  let requestReceived = false;
+  let handleControlMessage: ((raw: string) => void) | undefined;
+  const raw = await new Promise<string>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('Runtime Codex WebSocket did not receive a request payload.')), 15_000);
+    const onMessage = (message: RawData) => {
+      const text = message.toString();
+      if (!requestReceived) {
+        requestReceived = true;
+        clearTimeout(timeout);
+        resolve(text);
+        return;
+      }
+      if (handleControlMessage) handleControlMessage(text);
+      else pendingControlMessages.push(text);
+    };
+    ws.on('message', onMessage);
+    ws.once('close', () => {
+      clearTimeout(timeout);
+      ws.off('message', onMessage);
+    });
+    ws.once('error', (error) => {
+      clearTimeout(timeout);
+      ws.off('message', onMessage);
+      reject(error);
+    });
+  });
+  const body = JSON.parse(raw) as unknown;
+  assertCodexRuntimeRequestBoundary(body);
+  const controlState: CodexRuntimeControlState = {
+    commandId: stringField(body.commandId),
+    attemptId: stringField(body.attemptId),
+  };
+  const emit = (event: string, data: unknown) => {
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'event', event, data }));
+  };
+  handleControlMessage = (message) => {
+    void applyCodexRealtimeControlMessage(message, {
+      adapter,
+      abort,
+      state: controlState,
+      emit,
+    }).catch((error: unknown) => {
+      emit('error', {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        source: 'codex-realtime-control',
+      });
+    });
+  };
+  for (const message of pendingControlMessages.splice(0)) handleControlMessage(message);
+
+  await runCodexRuntimeTurn(body, adapter, abort.signal, {
+    expectedTransport: 'websocket',
+    shouldContinue: () => ws.readyState === WebSocket.OPEN,
+    emit,
+  }, {
+    onTurnStarted(turn) {
+      controlState.turnId = turn.turnId;
+      controlState.attemptId = turn.attemptId;
+      controlState.codexSessionId = turn.codexSessionId;
+    },
+  });
+  if (ws.readyState === WebSocket.OPEN) ws.close(1000, 'codex realtime complete');
+}
+
+async function runCodexRuntimeTurn(
+  body: unknown,
+  adapter: AgentCliAdapter,
+  abortSignal: AbortSignal,
+  output: {
+    expectedTransport: 'sse' | 'websocket';
+    shouldContinue: () => boolean;
+    emit: (event: string, data: unknown) => void;
+  },
+  hooks: {
+    onTurnStarted?: (turn: { turnId: string; attemptId: string; codexSessionId?: string }) => void;
+  } = {},
+) {
+  assertCodexRuntimeRequestBoundary(body);
+  const commandText = stringField(body.commandText);
+  const workspacePath = stringField(body.workspacePath);
+  if (!commandText) throw new Error('commandText is required');
+  if (!workspacePath) throw new Error('workspacePath is required');
+  const commandId = stringField(body.commandId);
+  const attemptId = stringField(body.attemptId);
+  const realtimeSession = normalizeRealtimeSessionEnvelope(body, { commandId, attemptId });
+  if (realtimeSession.eventTransport !== output.expectedTransport) {
+    throw new Error(`Runtime Codex realtime session eventTransport must be ${output.expectedTransport} for this endpoint.`);
+  }
+  const streamStartedAt = Date.now();
+  let lastRuntimeEventAt = streamStartedAt;
+  output.emit('realtime_session', realtimeSession);
+  output.emit('process-progress', codexRuntimeAcceptedProgressEvent({ commandId, attemptId }));
+  const heartbeat = setInterval(() => {
+    if (abortSignal.aborted || !output.shouldContinue()) return;
+    output.emit('heartbeat', codexRuntimeHeartbeatEvent({
+      commandId,
+      attemptId,
+      streamStartedAt,
+      lastRuntimeEventAt,
+    }));
+  }, CODEX_RUNTIME_HEARTBEAT_MS);
+  try {
     const turn = await adapter.startTurn({
       commandText,
       workspacePath,
       commandId,
       attemptId,
       profile: stringField(body.profile),
-      codexSessionId: stringField(body.codexSessionId) ?? stringField(body.nativeSessionId),
+      codexSessionId: realtimeSession.codexSessionId ?? stringField(body.codexSessionId) ?? stringField(body.nativeSessionId),
       allowOpenAiRuntime: body.allowOpenAiRuntime === true,
       guiExtension: isRecord(body.guiExtension)
         ? {
@@ -63,21 +195,111 @@ export async function handleCodexRuntimeRoutes(
           statePath: stringField(body.guiExtension.statePath),
         }
         : undefined,
-      abortSignal: abort.signal,
+      abortSignal,
+    });
+    hooks.onTurnStarted?.({
+      turnId: turn.turnId,
+      attemptId: turn.attemptId,
+      codexSessionId: turn.codexSessionId,
     });
     lastRuntimeEventAt = Date.now();
-    writeSse(res, 'turn', { turnId: turn.turnId, attemptId: turn.attemptId, codexSessionId: turn.codexSessionId });
+    output.emit('turn', { turnId: turn.turnId, attemptId: turn.attemptId, codexSessionId: turn.codexSessionId });
     for await (const event of turn.events) {
       lastRuntimeEventAt = Date.now();
-      writeSse(res, event.type, event);
+      if (!output.shouldContinue()) break;
+      output.emit(event.type, event);
     }
-  } catch (error) {
-    writeSse(res, 'error', { ok: false, error: error instanceof Error ? error.message : String(error) });
   } finally {
-    if (heartbeat) clearInterval(heartbeat);
-    res.end();
+    clearInterval(heartbeat);
   }
-  return true;
+}
+
+interface CodexRuntimeControlState {
+  commandId?: string;
+  attemptId?: string;
+  codexSessionId?: string;
+  turnId?: string;
+}
+
+async function applyCodexRealtimeControlMessage(
+  raw: string,
+  input: {
+    adapter: AgentCliAdapter;
+    abort: AbortController;
+    state: CodexRuntimeControlState;
+    emit: (event: string, data: unknown) => void;
+  },
+) {
+  let control: CodexRealtimeClientControl;
+  try {
+    control = normalizeCodexRealtimeClientControl(JSON.parse(raw));
+    assertControlTargetsCurrentTurn(control, input.state);
+  } catch (error) {
+    input.emit('error', {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+      source: 'codex-realtime-control',
+    });
+    return;
+  }
+
+  switch (control.controlType) {
+    case 'cancel':
+      input.emit('realtime_control', createCodexRealtimeControlAck({
+        control,
+        status: 'accepted',
+        delivery: input.state.turnId || input.state.commandId ? 'adapter-cancel' : 'adapter-unavailable',
+        detail: '已接收结构化取消请求，正在取消当前 Codex Runtime turn。',
+      }));
+      await cancelActiveCodexTurn(input.adapter, input.abort, input.state);
+      return;
+    case 'interrupt':
+      input.emit('realtime_control', createCodexRealtimeControlAck({
+        control,
+        status: 'accepted',
+        delivery: control.mode === 'cancel-current' ? 'adapter-cancel' : 'next-turn-required',
+        detail: control.mode === 'cancel-current'
+          ? '已接收结构化干预请求，正在取消当前 turn；GUI 可把引导作为下一轮 terminal-equivalent text 发送。'
+          : '已接收结构化干预请求；当前 Codex exec JSON adapter 不接收 raw stdin，GUI 会把引导保留为下一轮 terminal-equivalent text。',
+      }));
+      if (control.mode === 'cancel-current') await cancelActiveCodexTurn(input.adapter, input.abort, input.state);
+      return;
+    case 'input_response':
+      input.emit('realtime_control', createCodexRealtimeControlAck({
+        control,
+        status: 'recorded',
+        delivery: 'next-turn-required',
+        detail: '已接收结构化输入响应；当前 Codex exec JSON adapter 暂无活动 input request 通道，响应不会写入 raw terminal。',
+      }));
+      return;
+    case 'approval_response':
+      input.emit('realtime_control', createCodexRealtimeControlAck({
+        control,
+        status: 'recorded',
+        delivery: 'next-turn-required',
+        detail: '已接收结构化审批响应；当前 Codex exec JSON adapter 暂无活动 approval request 通道，响应不会写入 raw terminal。',
+      }));
+      return;
+  }
+}
+
+async function cancelActiveCodexTurn(
+  adapter: AgentCliAdapter,
+  abort: AbortController,
+  state: CodexRuntimeControlState,
+) {
+  const turnId = state.turnId ?? state.commandId;
+  if (turnId) await adapter.cancel(turnId);
+  abort.abort();
+}
+
+function assertControlTargetsCurrentTurn(control: CodexRealtimeClientControl, state: CodexRuntimeControlState) {
+  if (control.commandId && state.commandId && control.commandId !== state.commandId) {
+    throw new Error('Runtime Codex realtime control commandId does not match the active request.');
+  }
+  if (control.attemptId && state.attemptId && control.attemptId !== state.attemptId) {
+    throw new Error('Runtime Codex realtime control attemptId does not match the active request.');
+  }
 }
 
 export function writeSse(res: ServerResponse, event: string, data: unknown): void {
@@ -175,6 +397,7 @@ export function codexRuntimeBridgeRequested(body: Record<string, unknown>): bool
 
 const CODEX_RUNTIME_REQUEST_ALLOWED_KEYS = new Set([
   'schemaVersion',
+  'realtimeSession',
   'commandText',
   'workspacePath',
   'commandId',
@@ -191,6 +414,19 @@ const CODEX_RUNTIME_GUI_EXTENSION_ALLOWED_KEYS = new Set([
   'enabled',
   'statePath',
 ]);
+
+function normalizeRealtimeSessionEnvelope(
+  body: Record<string, unknown>,
+  fallback: { commandId?: string; attemptId?: string },
+) {
+  const envelope = body.realtimeSession ?? createCodexRealtimeSessionEnvelope({
+    commandId: fallback.commandId,
+    attemptId: fallback.attemptId,
+    codexSessionId: stringField(body.codexSessionId) ?? stringField(body.nativeSessionId),
+  });
+  assertCodexRealtimeSessionEnvelope(envelope);
+  return envelope;
+}
 
 const CODEX_RUNTIME_FORBIDDEN_NESTED_KEYS = new Set([
   'prompt',

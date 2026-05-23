@@ -30,7 +30,7 @@ import {
 } from './server/file-preview.js';
 import { handleScenarioLibraryRoutes } from './server/scenario-library-routes.js';
 import { handleWorkspaceFileApiRoutes, readLastWorkspacePath } from './server/workspace-file-api.js';
-import { handleCodexRuntimeRoutes } from './codex/codex-runtime-server.js';
+import { CODEX_RUNTIME_WEBSOCKET_PATH, handleCodexRuntimeRoutes, handleCodexRuntimeUpgrade } from './codex/codex-runtime-server.js';
 import { CodexExecJsonAdapter } from './codex/codex-exec-json-adapter.js';
 import { assertCodexRuntimeConfig, codexRuntimeEnv } from './codex/codex-runtime-config.js';
 import { normalizeInstanceName, parallelProfile } from './parallel-instance-profile.js';
@@ -43,6 +43,7 @@ import {
   RUNTIME_WORKSPACE_WRITE_NETWORK_CONFIG_ARGS,
 } from '../../packages/backend/src/runtime-home.js';
 import { resolveProxyCliOptions } from '../../packages/backend/src/cli-config.js';
+import { startCodexResponsesProxyServer, type StartedCodexResponsesProxy } from '../../packages/backend/src/proxy.js';
 
 const INSTANCE_ID = process.env.SCIFORGE_INSTANCE_ID || process.env.SCIFORGE_INSTANCE || 'default';
 const INSTANCE_ROLE = process.env.SCIFORGE_INSTANCE_ROLE || INSTANCE_ID;
@@ -69,7 +70,7 @@ function normalizeParallelInstanceId(value: string) {
 }
 
 type FeedbackCodexTerminalStatus = 'starting' | 'running' | 'idle' | 'failed' | 'cancelled';
-type FeedbackCodexTerminalTransport = 'http-writer' | 'websocket-pty';
+type FeedbackCodexTerminalTransport = 'websocket-pty';
 
 interface FeedbackCodexTerminalSession {
   schemaVersion: 1;
@@ -82,7 +83,6 @@ interface FeedbackCodexTerminalSession {
   promptRef: string;
   promptPreview?: string;
   codexSessionId?: string;
-  activeTurnId?: string;
   startedAt: string;
   updatedAt: string;
   message?: string;
@@ -93,9 +93,6 @@ interface FeedbackCodexTerminalSession {
 }
 
 interface ActiveFeedbackCodexTerminalSession extends FeedbackCodexTerminalSession {
-  adapter?: CodexExecJsonAdapter;
-  abortController?: AbortController;
-  turnBusy?: boolean;
   ptyProcess?: IPty;
   ptyBacklog?: string[];
   ptySockets?: Set<WebSocket>;
@@ -103,6 +100,7 @@ interface ActiveFeedbackCodexTerminalSession extends FeedbackCodexTerminalSessio
 
 const activeFeedbackCodexTerminalSessions = new Map<string, ActiveFeedbackCodexTerminalSession>();
 const feedbackCodexPtyWss = new WebSocketServer({ noServer: true });
+let managedRuntimeProviderProxy: Promise<StartedCodexResponsesProxy | undefined> | undefined;
 
 const workspaceServer = createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -127,7 +125,6 @@ const workspaceServer = createServer(async (req, res) => {
         'workspace-files',
         'sciforge-tools',
         'repair-handoff-runner',
-        'feedback-direct-codex-terminal-http-writer',
         'feedback-direct-codex-terminal-websocket-pty',
         'feedback-repair-terminal-mirror-tail',
         'feedback-repair-stop-request',
@@ -202,8 +199,7 @@ const workspaceServer = createServer(async (req, res) => {
     return;
   }
   if (url.pathname === '/api/sciforge/runtime/codex/stream') {
-    await syncRuntimeCodexHomeFromLocalConfig();
-    const runtimeEnv = await runtimeCodexEnvFromLocalConfig();
+    const runtimeEnv = await prepareRuntimeCodexEnvFromLocalConfig();
     if (await handleCodexRuntimeRoutes(req, res, url, new CodexExecJsonAdapter({ env: runtimeEnv }))) return;
   }
   if (await handleCodexRuntimeRoutes(req, res, url)) return;
@@ -250,11 +246,8 @@ const workspaceServer = createServer(async (req, res) => {
       const body = await readJson(req);
       const contract = normalizeRepairHandoffContract(body);
       const runtimeCodexEnv = contract.executorBackend === 'runtime-codex'
-        ? await runtimeCodexEnvFromLocalConfig()
+        ? await prepareRuntimeCodexEnvFromLocalConfig()
         : undefined;
-      if (contract.executorBackend === 'runtime-codex') {
-        await syncRuntimeCodexHomeFromLocalConfig();
-      }
       const result = await runRepairHandoff(contract, {
         executorRepoPath: contract.executorInstance.workspacePath || process.cwd(),
         executorStateDir: STATE_DIR,
@@ -326,7 +319,7 @@ const workspaceServer = createServer(async (req, res) => {
         const root = await workspaceRootFromRequest(url);
         const cursor = Number(url.searchParams.get('cursor') || url.searchParams.get('after') || 0);
         const limit = Number(url.searchParams.get('limit') || 200);
-        const result = await loadFeedbackCodexTerminalTail(root, sessionId, { cursor, limit });
+        const result = await loadFeedbackCodexPtyTerminalTail(root, sessionId, { cursor, limit });
         writeJson(res, 200, { ok: true, workspacePath: root, ...result });
         return;
       }
@@ -334,38 +327,6 @@ const workspaceServer = createServer(async (req, res) => {
         const body = await readJson(req);
         const root = await workspaceRootFromBodyOrRequest(body, url);
         const session = await stopFeedbackCodexPtyTerminal(root, sessionId, body);
-        writeJson(res, 200, { ok: true, workspacePath: root, session });
-        return;
-      }
-    } catch (err) {
-      writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
-      return;
-    }
-  }
-  const feedbackCodexTerminalMatch = /^\/api\/sciforge\/feedback\/codex-terminal\/([^/]+)\/(input|stop|tail)$/.exec(url.pathname);
-  if (feedbackCodexTerminalMatch) {
-    try {
-      const sessionId = decodeURIComponent(feedbackCodexTerminalMatch[1]);
-      const action = feedbackCodexTerminalMatch[2];
-      if (action === 'tail' && req.method === 'GET') {
-        const root = await workspaceRootFromRequest(url);
-        const cursor = Number(url.searchParams.get('cursor') || url.searchParams.get('after') || 0);
-        const limit = Number(url.searchParams.get('limit') || 200);
-        const result = await loadFeedbackCodexTerminalTail(root, sessionId, { cursor, limit });
-        writeJson(res, 200, { ok: true, workspacePath: root, ...result });
-        return;
-      }
-      if (action === 'input' && req.method === 'POST') {
-        const body = await readJson(req);
-        const root = await workspaceRootFromBodyOrRequest(body, url);
-        const session = await sendFeedbackCodexTerminalInput(root, sessionId, body);
-        writeJson(res, 200, { ok: true, workspacePath: root, session });
-        return;
-      }
-      if (action === 'stop' && req.method === 'POST') {
-        const body = await readJson(req);
-        const root = await workspaceRootFromBodyOrRequest(body, url);
-        const session = await stopFeedbackCodexTerminal(root, sessionId, body);
         writeJson(res, 200, { ok: true, workspacePath: root, session });
         return;
       }
@@ -463,20 +424,6 @@ const workspaceServer = createServer(async (req, res) => {
       const root = await workspaceRootFromBodyOrRequest(body, url);
       const guidance = await runFeedbackRepairGuidance(root, issueId, body);
       writeJson(res, 200, { ok: true, workspacePath: root, guidance });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      writeJson(res, /not found/i.test(message) ? 404 : 400, { ok: false, error: message });
-    }
-    return;
-  }
-  const feedbackCodexTerminalStartMatch = /^\/api\/sciforge\/feedback\/issues\/([^/]+)\/codex-terminal\/start$/.exec(url.pathname);
-  if (feedbackCodexTerminalStartMatch && req.method === 'POST') {
-    try {
-      const issueId = decodeURIComponent(feedbackCodexTerminalStartMatch[1]);
-      const body = await readJson(req);
-      const root = await workspaceRootFromBodyOrRequest(body, url);
-      const result = await startFeedbackCodexTerminal(root, issueId, body);
-      writeJson(res, 200, { ok: true, workspacePath: root, ...result });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       writeJson(res, /not found/i.test(message) ? 404 : 400, { ok: false, error: message });
@@ -589,11 +536,23 @@ const workspaceServer = createServer(async (req, res) => {
   writeJson(res, 404, { ok: false, error: 'not found' });
 });
 
-workspaceServer.on('upgrade', handleFeedbackCodexPtyUpgrade);
+workspaceServer.on('upgrade', handleWorkspaceUpgrade);
 
 workspaceServer.listen(PORT, '127.0.0.1', () => {
   console.log(`SciForge workspace writer: http://127.0.0.1:${PORT}`);
 });
+
+function handleWorkspaceUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer) {
+  const url = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`);
+  if (url.pathname === CODEX_RUNTIME_WEBSOCKET_PATH) {
+    void (async () => {
+      const runtimeEnv = await prepareRuntimeCodexEnvFromLocalConfig();
+      if (!handleCodexRuntimeUpgrade(req, socket, head, new CodexExecJsonAdapter({ env: runtimeEnv }))) socket.destroy();
+    })().catch(() => socket.destroy());
+    return;
+  }
+  handleFeedbackCodexPtyUpgrade(req, socket, head);
+}
 
 function handleFeedbackCodexPtyUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer) {
   const url = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`);
@@ -806,7 +765,6 @@ async function buildInstanceManifest(root: string) {
       'feedback-issues-list',
       'feedback-issue-handoff-bundle',
       'feedback-comment-evidence-persistence',
-      'feedback-direct-codex-terminal-http-writer',
       'feedback-direct-codex-terminal-websocket-pty',
       'feedback-repair-run-record',
       'feedback-repair-result-record',
@@ -840,7 +798,7 @@ async function stableVersionEnvironment(root: string) {
 }
 
 async function readRuntimeProviderPreflightManifest() {
-  const runtimeEnv = await runtimeCodexEnvFromLocalConfig();
+  const runtimeEnv = await prepareRuntimeCodexEnvFromLocalConfig();
   const proxyOptions = resolveProxyCliOptions([], runtimeEnv);
   const runtimeApiKeyPresentInServiceEnv = Boolean(stringValue(runtimeEnv.SCIFORGE_RUNTIME_API_KEY));
   const upstreamBaseUrlPresent = Boolean(proxyOptions.upstreamBaseUrl);
@@ -1726,8 +1684,7 @@ async function runFeedbackRepairGuidance(root: string, issueId: string, body: Re
     return guidance;
   }
   try {
-    await syncRuntimeCodexHomeFromLocalConfig();
-    const runtimeCodexEnv = await runtimeCodexEnvFromLocalConfig();
+    const runtimeCodexEnv = await prepareRuntimeCodexEnvFromLocalConfig();
     const adapter = new CodexExecJsonAdapter({ env: runtimeCodexEnv });
     const turn = await adapter.startTurn({
       commandText: repairGuidancePrompt({ issueId: canonicalIssueId, repairRunId, message }),
@@ -1845,57 +1802,6 @@ function scrubGuidanceText(value: string) {
     .slice(0, 2000);
 }
 
-async function startFeedbackCodexTerminal(root: string, issueId: string, body: Record<string, unknown>) {
-  const state = await readWorkspaceStateFile(root);
-  const bundle = await buildFeedbackIssueBundle(root, state, issueId);
-  const comment = isRecord(bundle.comment) ? bundle.comment : undefined;
-  const canonicalIssueId = String(comment?.id || bundle.id || issueId);
-  const sessionId = `direct-codex-terminal-${safeName(canonicalIssueId)}-${Date.now().toString(36)}`;
-  const terminalMirrorRef = feedbackCodexTerminalMirrorRef(root, sessionId);
-  const promptRef = feedbackCodexTerminalPromptRef(root, sessionId);
-  const runtimeProfile = stringField(body.runtimeProfile) || 'sciforge-runtime-deepseek';
-  const allowOpenAiRuntime = body.allowOpenAiRuntime === true;
-  const prompt = buildFeedbackCodexTerminalPrompt({
-    root,
-    bundle,
-    issueId: canonicalIssueId,
-    userGuidance: stringField(body.initialMessage),
-  });
-  await mkdir(dirname(promptRef), { recursive: true });
-  await writeFile(promptRef, prompt);
-  const now = new Date().toISOString();
-  const session: ActiveFeedbackCodexTerminalSession = {
-    schemaVersion: 1,
-    id: sessionId,
-    issueId: canonicalIssueId,
-    repairRunId: sessionId,
-    status: 'starting',
-    workspacePath: root,
-    terminalMirrorRef,
-    promptRef,
-    promptPreview: compactString(prompt, 900),
-    startedAt: now,
-    updatedAt: now,
-    runtimeProfile,
-    allowOpenAiRuntime,
-    transport: 'http-writer',
-    message: 'Direct Codex terminal session is starting.',
-  };
-  activeFeedbackCodexTerminalSessions.set(session.id, session);
-  await persistFeedbackCodexTerminalSession(session);
-  await appendRepairTerminalMirrorEntry(terminalMirrorRef, 'event', `Direct Codex Terminal started for feedback ${canonicalIssueId}. Transport=http-writer; workspace=${root}`);
-  await appendRepairTerminalMirrorEntry(terminalMirrorRef, 'event', `Generated feedback prompt saved at ${promptRef}.`);
-  const repairRun = feedbackCodexTerminalRepairRun(session, comment, body);
-  const next = appendStateRecord(state, 'feedbackRepairRuns', repairRun);
-  await persistFeedbackRecord(root, 'repair-runs', repairRun.id, repairRun);
-  await writeWorkspaceStateFile(root, next);
-  queueFeedbackCodexTerminalTurn(session.id, prompt, { kind: 'initial' });
-  return {
-    session: feedbackCodexTerminalPublicSession(session),
-    repairRun,
-  };
-}
-
 async function startFeedbackCodexPtyTerminal(root: string, issueId: string, body: Record<string, unknown>) {
   const state = await readWorkspaceStateFile(root);
   const bundle = await buildFeedbackIssueBundle(root, state, issueId);
@@ -1957,8 +1863,7 @@ async function launchFeedbackCodexPtySession(
   body: Record<string, unknown>,
 ) {
   try {
-    await syncRuntimeCodexHomeFromLocalConfig();
-    const runtimeCodexEnv = await runtimeCodexEnvFromLocalConfig();
+    const runtimeCodexEnv = await prepareRuntimeCodexEnvFromLocalConfig();
     const config = await assertCodexRuntimeConfig({
       workspacePath: session.workspacePath,
       profile: session.runtimeProfile || RUNTIME_PROFILE,
@@ -2060,44 +1965,7 @@ async function stopFeedbackCodexPtyTerminal(root: string, sessionId: string, bod
   return feedbackCodexTerminalPublicSession(session);
 }
 
-async function sendFeedbackCodexTerminalInput(root: string, sessionId: string, body: Record<string, unknown>) {
-  const session = await activeOrStoredFeedbackCodexTerminalSession(root, sessionId);
-  const message = stringField(body.message);
-  if (!message) throw new Error('Codex terminal message is required');
-  if (session.turnBusy) {
-    throw new Error('Codex terminal is still running the current turn; wait for it to become idle before sending the next prompt.');
-  }
-  await appendRepairTerminalMirrorEntry(session.terminalMirrorRef, 'stdout', `user> ${scrubTerminalMirrorInput(message)}`);
-  session.status = 'starting';
-  session.message = 'Queued the next Codex prompt through HTTP writer.';
-  session.updatedAt = new Date().toISOString();
-  await persistFeedbackCodexTerminalSession(session);
-  queueFeedbackCodexTerminalTurn(session.id, message, { kind: 'input' });
-  return feedbackCodexTerminalPublicSession(session);
-}
-
-async function stopFeedbackCodexTerminal(root: string, sessionId: string, body: Record<string, unknown>) {
-  const session = await activeOrStoredFeedbackCodexTerminalSession(root, sessionId);
-  const reason = stringField(body.reason) || 'feedback inbox stop button';
-  const message = session.turnBusy && session.activeTurnId
-    ? `Stop requested for Direct Codex Terminal ${session.id}: ${reason}`
-    : `Stop requested for Direct Codex Terminal ${session.id}, but no active Codex turn is running in this writer process.`;
-  await appendRepairTerminalMirrorEntry(session.terminalMirrorRef, 'stderr', message);
-  if (session.turnBusy && session.activeTurnId) {
-    session.abortController?.abort();
-    await session.adapter?.cancel(session.activeTurnId);
-    session.status = 'cancelled';
-  } else {
-    session.status = session.status === 'running' || session.status === 'starting' ? 'idle' : session.status;
-  }
-  session.message = message;
-  session.updatedAt = new Date().toISOString();
-  await persistFeedbackCodexTerminalSession(session);
-  await persistDirectTerminalRepairRunStatus(session, session.status, message);
-  return feedbackCodexTerminalPublicSession(session);
-}
-
-async function loadFeedbackCodexTerminalTail(root: string, sessionId: string, options: { cursor?: number; limit?: number }) {
+async function loadFeedbackCodexPtyTerminalTail(root: string, sessionId: string, options: { cursor?: number; limit?: number }) {
   const session = activeFeedbackCodexTerminalSessions.get(sessionId) ?? await readFeedbackCodexTerminalSession(root, sessionId);
   const terminalPath = session?.terminalMirrorRef ?? feedbackCodexTerminalMirrorRef(root, sessionId);
   const text = await readFile(terminalPath, 'utf8').catch((err: unknown) => {
@@ -2114,91 +1982,6 @@ async function loadFeedbackCodexTerminalTail(root: string, sessionId: string, op
   };
 }
 
-function queueFeedbackCodexTerminalTurn(sessionId: string, commandText: string, input: { kind: 'initial' | 'input' }) {
-  void runFeedbackCodexTerminalTurn(sessionId, commandText, input).catch(async (err: unknown) => {
-    const session = activeFeedbackCodexTerminalSessions.get(sessionId);
-    if (!session) return;
-    const message = `Direct Codex Terminal failed before dispatch: ${err instanceof Error ? err.message : String(err)}`;
-    session.status = 'failed';
-    session.message = message;
-    session.turnBusy = false;
-    session.updatedAt = new Date().toISOString();
-    await appendRepairTerminalMirrorEntry(session.terminalMirrorRef, 'stderr', message).catch(() => undefined);
-    await persistFeedbackCodexTerminalSession(session).catch(() => undefined);
-    await persistDirectTerminalRepairRunStatus(session, 'failed', message).catch(() => undefined);
-  });
-}
-
-async function runFeedbackCodexTerminalTurn(sessionId: string, commandText: string, input: { kind: 'initial' | 'input' }) {
-  const session = activeFeedbackCodexTerminalSessions.get(sessionId);
-  if (!session) throw new Error(`Direct Codex Terminal session is not active: ${sessionId}`);
-  if (session.turnBusy) {
-    await appendRepairTerminalMirrorEntry(session.terminalMirrorRef, 'stderr', 'Direct Codex Terminal turn was not started because another turn is already running.');
-    return;
-  }
-  const now = Date.now();
-  const commandId = `${session.id}-${input.kind}-${now.toString(36)}`;
-  const attemptId = `${commandId}-attempt`;
-  const abortController = new AbortController();
-  session.turnBusy = true;
-  session.status = 'running';
-  session.activeTurnId = commandId;
-  session.abortController = abortController;
-  session.updatedAt = new Date().toISOString();
-  session.message = input.kind === 'initial'
-    ? 'Codex is running the generated feedback repair prompt.'
-    : 'Codex is running the human follow-up prompt.';
-  await persistFeedbackCodexTerminalSession(session);
-  await persistDirectTerminalRepairRunStatus(session, 'running', session.message);
-  try {
-    await syncRuntimeCodexHomeFromLocalConfig();
-    const runtimeCodexEnv = await runtimeCodexEnvFromLocalConfig();
-    const adapter = new CodexExecJsonAdapter({ env: runtimeCodexEnv });
-    session.adapter = adapter;
-    const turn = await adapter.startTurn({
-      commandText,
-      workspacePath: session.workspacePath,
-      commandId,
-      attemptId,
-      profile: session.runtimeProfile || 'sciforge-runtime-deepseek',
-      codexSessionId: input.kind === 'input' ? session.codexSessionId : undefined,
-      allowOpenAiRuntime: session.allowOpenAiRuntime === true,
-      abortSignal: abortController.signal,
-      guiExtension: { enabled: false },
-    });
-    session.activeTurnId = turn.turnId;
-    if (turn.codexSessionId) session.codexSessionId = turn.codexSessionId;
-    await persistFeedbackCodexTerminalSession(session);
-    let finalStatus: FeedbackCodexTerminalStatus = 'idle';
-    let eventCount = 0;
-    for await (const event of turn.events) {
-      eventCount += 1;
-      if (event.codexSessionId) session.codexSessionId = event.codexSessionId;
-      const text = terminalTextForCodexTerminalEvent(recordField(event) ?? {});
-      if (text) await appendRepairTerminalMirrorEntry(session.terminalMirrorRef, terminalStreamForCodexTerminalEvent(recordField(event) ?? {}), text);
-      if (event.type === 'failed') finalStatus = 'failed';
-      if (event.type === 'cancelled') finalStatus = 'cancelled';
-    }
-    session.status = finalStatus;
-    session.message = finalStatus === 'idle'
-      ? `Codex turn completed; terminal is ready for follow-up input. Events: ${eventCount}.`
-      : `Codex turn ended with ${finalStatus}; inspect terminal output before continuing.`;
-  } catch (err) {
-    const message = `Direct Codex Terminal dispatch failed: ${err instanceof Error ? err.message : String(err)}`;
-    session.status = abortController.signal.aborted ? 'cancelled' : 'failed';
-    session.message = message;
-    await appendRepairTerminalMirrorEntry(session.terminalMirrorRef, 'stderr', message);
-  } finally {
-    session.turnBusy = false;
-    session.adapter = undefined;
-    session.abortController = undefined;
-    session.activeTurnId = undefined;
-    session.updatedAt = new Date().toISOString();
-    await persistFeedbackCodexTerminalSession(session);
-    await persistDirectTerminalRepairRunStatus(session, session.status, session.message);
-  }
-}
-
 async function activeOrStoredFeedbackCodexTerminalSession(root: string, sessionId: string): Promise<ActiveFeedbackCodexTerminalSession> {
   const active = activeFeedbackCodexTerminalSessions.get(sessionId);
   if (active) return active;
@@ -2209,9 +1992,7 @@ async function activeOrStoredFeedbackCodexTerminalSession(root: string, sessionI
     ...stored,
     status: wasRunning ? 'idle' : stored.status,
     message: wasRunning
-      ? stored.transport === 'websocket-pty'
-        ? 'PTY session was revived from disk; no active terminal process is attached in this writer process.'
-        : 'Session was revived from disk; no active writer process turn is attached, but follow-up prompts can resume with the stored Codex session id when available.'
+      ? 'PTY session was revived from disk; no active terminal process is attached in this writer process.'
       : stored.message,
   };
   activeFeedbackCodexTerminalSessions.set(revived.id, revived);
@@ -2233,7 +2014,6 @@ async function readFeedbackCodexTerminalSession(root: string, sessionId: string)
     promptRef: stringField(manifest.promptRef) || feedbackCodexTerminalPromptRef(root, manifest.id),
     promptPreview: stringField(manifest.promptPreview),
     codexSessionId: stringField(manifest.codexSessionId),
-    activeTurnId: stringField(manifest.activeTurnId),
     startedAt: stringField(manifest.startedAt) || new Date().toISOString(),
     updatedAt: stringField(manifest.updatedAt) || new Date().toISOString(),
     message: stringField(manifest.message),
@@ -2261,7 +2041,6 @@ function feedbackCodexTerminalPublicSession(session: FeedbackCodexTerminalSessio
     promptRef: session.promptRef,
     promptPreview: session.promptPreview,
     codexSessionId: session.codexSessionId,
-    activeTurnId: session.activeTurnId,
     startedAt: session.startedAt,
     updatedAt: session.updatedAt,
     message: session.message,
@@ -2277,7 +2056,6 @@ function feedbackCodexTerminalRepairRun(
   comment: Record<string, unknown> | undefined,
   body: Record<string, unknown>,
 ) {
-  const isPty = session.transport === 'websocket-pty';
   return {
     schemaVersion: 1,
     id: session.repairRunId,
@@ -2287,14 +2065,12 @@ function feedbackCodexTerminalRepairRun(
     externalInstanceName: INSTANCE_ROLE,
     actor: 'direct-codex-terminal',
     startedAt: session.startedAt,
-    note: isPty
-      ? 'Direct Codex Terminal started from Feedback Inbox. UI is attached to a WebSocket/xterm PTY running the Codex CLI.'
-      : 'Direct Codex Terminal started from Feedback Inbox. UI streams Codex CLI events through HTTP writer and accepts human follow-up prompts.',
+    note: 'Direct Codex Terminal started from Feedback Inbox. UI is attached to a WebSocket/xterm PTY running the Codex CLI.',
     terminalMirrorRef: session.terminalMirrorRef,
     planRef: session.promptRef,
     terminalMirror: [
       { timestamp: session.startedAt, stream: 'event' as const, text: `Direct Codex Terminal started for ${session.issueId}.` },
-      { timestamp: session.startedAt, stream: 'event' as const, text: isPty ? 'Transport=websocket-pty; xterm is attached to a real Codex CLI PTY.' : 'Transport=http-writer; this is not a full PTY/xterm session.' },
+      { timestamp: session.startedAt, stream: 'event' as const, text: 'Transport=websocket-pty; xterm is attached to a real Codex CLI PTY.' },
     ],
     confirmationPolicy: normalizeRepairConfirmationPolicy({
       commit: 'requires-user-confirmation',
@@ -2306,7 +2082,7 @@ function feedbackCodexTerminalRepairRun(
       handoffKind: 'direct-codex-terminal',
       executorBackend: 'runtime-codex',
       terminalTransport: session.transport,
-      terminalMode: isPty ? 'interactive-codex-pty' : 'codex-turn-stream',
+      terminalMode: 'interactive-codex-pty',
       directCodexTerminalSessionId: session.id,
       codexSessionId: session.codexSessionId,
       runtimeProfile: session.runtimeProfile,
@@ -2339,7 +2115,7 @@ async function persistDirectTerminalRepairRunStatus(
     metadata: {
       ...(isRecord(existing.metadata) ? existing.metadata : {}),
       terminalTransport: session.transport,
-      terminalMode: session.transport === 'websocket-pty' ? 'interactive-codex-pty' : 'codex-turn-stream',
+      terminalMode: 'interactive-codex-pty',
       directCodexTerminalSessionId: session.id,
       codexSessionId: session.codexSessionId,
       directCodexTerminalStatus: status,
@@ -2434,17 +2210,6 @@ function feedbackPromptEvidenceRefs(comment: Record<string, unknown>) {
   ]);
 }
 
-function terminalTextForCodexTerminalEvent(event: Record<string, unknown>) {
-  if (event.type === 'audit' && event.status === 'raw-jsonl') return '';
-  return terminalTextForGuidanceEvent(event);
-}
-
-function terminalStreamForCodexTerminalEvent(event: Record<string, unknown>): 'stdout' | 'stderr' | 'event' {
-  if (event.type === 'message' || event.type === 'message_delta') return 'stdout';
-  if (event.type === 'failed' || event.type === 'cancelled' || event.status === 'stderr') return 'stderr';
-  return 'event';
-}
-
 function feedbackCodexPtyArgs(input: {
   profile: string;
   workspace: string;
@@ -2499,18 +2264,14 @@ function ptyDimension(value: unknown, fallback: number, min: number, max: number
   return Math.min(max, Math.max(min, Math.floor(parsed)));
 }
 
-function scrubTerminalMirrorInput(value: string) {
-  return scrubGuidanceText(value).replace(/\n{3,}/g, '\n\n');
-}
-
 function feedbackCodexTerminalStatus(value: unknown): FeedbackCodexTerminalStatus {
   return value === 'starting' || value === 'running' || value === 'idle' || value === 'failed' || value === 'cancelled'
     ? value
     : 'idle';
 }
 
-function feedbackCodexTerminalTransport(value: unknown): FeedbackCodexTerminalTransport {
-  return value === 'websocket-pty' ? 'websocket-pty' : 'http-writer';
+function feedbackCodexTerminalTransport(_value: unknown): FeedbackCodexTerminalTransport {
+  return 'websocket-pty';
 }
 
 function feedbackCodexTerminalDir(root: string, sessionId: string) {
@@ -3355,17 +3116,26 @@ async function writeLocalSciForgeConfig(config: Record<string, unknown>) {
   const llm = isRecord(parsed.llm) ? parsed.llm : {};
   const sciforge = isRecord(parsed.sciforge) ? parsed.sciforge : {};
   const visionSense = isRecord(parsed.visionSense) ? parsed.visionSense : {};
+  const codexProxy = isRecord(parsed.codexProxy) ? parsed.codexProxy : {};
+  const { runtimeCodexBaseUrl: _discardRuntimeCodexBaseUrl, ...storedSciforge } = sciforge;
+  void _discardRuntimeCodexBaseUrl;
   const next = {
     ...parsed,
     llm: {
       ...llm,
       provider: typeof config.modelProvider === 'string' ? config.modelProvider : llm.provider,
-      baseUrl: preserveConfiguredSecretString(config.modelBaseUrl, llm.baseUrl).replace(/\/+$/, ''),
+      baseUrl: configuredString(config.modelBaseUrl, llm.baseUrl).replace(/\/+$/, ''),
       apiKey: preserveConfiguredSecretString(config.apiKey, llm.apiKey),
       model: preserveConfiguredSecretString(config.modelName, llm.model),
     },
+    codexProxy: {
+      ...codexProxy,
+      upstreamBaseUrl: configuredString(config.modelBaseUrl, codexProxy.upstreamBaseUrl ?? llm.baseUrl).replace(/\/+$/, ''),
+      apiKey: preserveConfiguredSecretString(config.apiKey, codexProxy.apiKey ?? llm.apiKey),
+      defaultModel: preserveConfiguredSecretString(config.modelName, codexProxy.defaultModel ?? llm.model),
+    },
     sciforge: {
-      ...sciforge,
+      ...storedSciforge,
       agentServerBaseUrl: typeof config.agentServerBaseUrl === 'string' ? config.agentServerBaseUrl : sciforge.agentServerBaseUrl,
       workspaceWriterBaseUrl: typeof config.workspaceWriterBaseUrl === 'string' ? config.workspaceWriterBaseUrl : sciforge.workspaceWriterBaseUrl,
       workspacePath: normalizeWorkspaceRootPath(resolve(typeof config.workspacePath === 'string' ? config.workspacePath : typeof sciforge.workspacePath === 'string' ? sciforge.workspacePath : '')),
@@ -3393,34 +3163,125 @@ async function writeLocalSciForgeConfig(config: Record<string, unknown>) {
   };
   await mkdir(dirname(configLocalPath()), { recursive: true });
   await writeFile(configLocalPath(), JSON.stringify(next, null, 2));
-  await syncRuntimeCodexHomeFromLocalConfig(next.llm);
+  await prepareRuntimeCodexEnvFromLocalConfig(next);
 }
 
-async function syncRuntimeCodexHomeFromLocalConfig(configuredLlm?: Record<string, unknown>) {
-  const localConfig = configuredLlm ? { llm: configuredLlm } : await readConfigLocalJson();
-  const llm = isRecord(localConfig.llm) ? localConfig.llm : {};
-  const configuredBaseUrl = typeof llm.baseUrl === 'string' ? llm.baseUrl.trim().replace(/\/+$/, '') : '';
-  if (!configuredBaseUrl) return;
-  const proxyBaseUrl = stringValue(process.env.SCIFORGE_PROXY_BASE_URL)
-    ? `${stringValue(process.env.SCIFORGE_PROXY_BASE_URL).replace(/\/+$/, '')}/v1`
-    : DEFAULT_PROXY_BASE_URL;
+async function prepareRuntimeCodexEnvFromLocalConfig(configuredLocalConfig?: Record<string, unknown>): Promise<NodeJS.ProcessEnv> {
+  const runtimeEnv = await runtimeCodexEnvFromLocalConfig(configuredLocalConfig);
+  const proxyBaseUrl = await ensureRuntimeProviderProxy(runtimeEnv);
+  await syncRuntimeCodexHomeFromLocalConfig(runtimeEnv, proxyBaseUrl);
+  return runtimeEnv;
+}
+
+async function syncRuntimeCodexHomeFromLocalConfig(runtimeEnv: NodeJS.ProcessEnv = process.env, proxyBaseUrl = runtimeCodexProxyBaseUrl(runtimeEnv)) {
   await ensureRuntimeHome({ proxyBaseUrl, overwrite: true });
 }
 
-async function runtimeCodexEnvFromLocalConfig(configuredLlm?: Record<string, unknown>): Promise<NodeJS.ProcessEnv> {
-  const localConfig = configuredLlm ? { llm: configuredLlm } : await readConfigLocalJson();
-  const llm = isRecord(localConfig.llm) ? localConfig.llm : {};
-  const apiKey = stringValue(localConfig.apiKey) || stringValue(llm.apiKey);
-  const provider = stringValue(localConfig.modelProvider) || stringValue(llm.provider);
-  const baseUrl = (stringValue(localConfig.modelBaseUrl) || stringValue(llm.baseUrl)).replace(/\/+$/, '');
-  const model = stringValue(localConfig.modelName) || stringValue(llm.model) || stringValue(llm.modelName);
+async function runtimeCodexEnvFromLocalConfig(configuredLocalConfig?: Record<string, unknown>): Promise<NodeJS.ProcessEnv> {
+  const localConfig = configuredLocalConfig ?? await readConfigLocalJson();
+  const settings = localProviderSettings(localConfig);
   return {
     ...process.env,
-    ...(apiKey ? { SCIFORGE_RUNTIME_API_KEY: apiKey } : {}),
-    ...(provider ? { SCIFORGE_RUNTIME_PROVIDER: provider } : {}),
-    ...(baseUrl ? { SCIFORGE_RUNTIME_BASE_URL: baseUrl, SCIFORGE_PROXY_UPSTREAM_BASE_URL: baseUrl } : {}),
-    ...(model ? { SCIFORGE_RUNTIME_MODEL: model } : {}),
+    SCIFORGE_CONFIG_PATH: CONFIG_LOCAL_PATH,
+    ...(settings.apiKey ? { SCIFORGE_RUNTIME_API_KEY: settings.apiKey } : {}),
+    ...(settings.provider ? { SCIFORGE_RUNTIME_PROVIDER: settings.provider } : {}),
+    ...(settings.baseUrl ? { SCIFORGE_RUNTIME_BASE_URL: settings.baseUrl, SCIFORGE_PROXY_UPSTREAM_BASE_URL: settings.baseUrl } : {}),
+    ...(settings.model ? { SCIFORGE_RUNTIME_MODEL: settings.model } : {}),
   };
+}
+
+function localProviderSettings(localConfig: Record<string, unknown>) {
+  const llm = isRecord(localConfig.llm) ? localConfig.llm : {};
+  const codexProxy = isRecord(localConfig.codexProxy)
+    ? localConfig.codexProxy
+    : isRecord(localConfig.runtimeCodexProxy)
+      ? localConfig.runtimeCodexProxy
+      : {};
+  const apiKey = stringValue(localConfig.apiKey) || stringValue(llm.apiKey) || stringValue(llm.upstreamApiKey) || stringValue(codexProxy.apiKey);
+  const provider = stringValue(localConfig.modelProvider) || stringValue(llm.provider);
+  const baseUrl = (
+    stringValue(localConfig.modelBaseUrl)
+    || stringValue(llm.baseUrl)
+    || stringValue(llm.upstreamBaseUrl)
+    || stringValue(codexProxy.upstreamBaseUrl)
+    || stringValue(codexProxy.baseUrl)
+    || ''
+  ).replace(/\/+$/, '');
+  const model = stringValue(localConfig.modelName)
+    || stringValue(llm.model)
+    || stringValue(llm.modelName)
+    || stringValue(llm.defaultModel)
+    || stringValue(codexProxy.defaultModel)
+    || stringValue(codexProxy.model);
+  return { apiKey, provider, baseUrl, model };
+}
+
+async function ensureRuntimeProviderProxy(runtimeEnv: NodeJS.ProcessEnv): Promise<string> {
+  const configuredProxyBaseUrl = runtimeProviderProxyBaseUrl(runtimeEnv);
+  if (await runtimeProviderProxyLocalReady(configuredProxyBaseUrl)) return runtimeCodexProxyBaseUrl(runtimeEnv);
+
+  if (!managedRuntimeProviderProxy) {
+    managedRuntimeProviderProxy = startManagedRuntimeProviderProxy(runtimeEnv).catch((error) => {
+      managedRuntimeProviderProxy = undefined;
+      throw error;
+    });
+  }
+  const proxy = await managedRuntimeProviderProxy;
+  if (!proxy) return runtimeCodexProxyBaseUrl(runtimeEnv);
+  runtimeEnv.SCIFORGE_PROXY_BASE_URL = proxy.url;
+  runtimeEnv.SCIFORGE_PROXY_PORT = String(proxy.port);
+  return `${proxy.url.replace(/\/+$/, '')}/v1`;
+}
+
+async function startManagedRuntimeProviderProxy(runtimeEnv: NodeJS.ProcessEnv): Promise<StartedCodexResponsesProxy | undefined> {
+  const options = resolveProxyCliOptions([], runtimeEnv);
+  try {
+    const proxy = await startCodexResponsesProxyServer({
+      host: options.host,
+      port: options.port,
+      upstreamBaseUrl: options.upstreamBaseUrl,
+      upstreamApiKey: options.upstreamApiKey,
+      defaultModel: options.defaultModel,
+      forceNonStreamingUpstream: options.forceNonStreamingUpstream,
+      resolveDynamicOptions: () => {
+        const latest = resolveProxyCliOptions([], {
+          ...process.env,
+          SCIFORGE_CONFIG_PATH: CONFIG_LOCAL_PATH,
+        });
+        return {
+          upstreamBaseUrl: latest.upstreamBaseUrl,
+          upstreamApiKey: latest.upstreamApiKey,
+          defaultModel: latest.defaultModel,
+          forceNonStreamingUpstream: latest.forceNonStreamingUpstream,
+        };
+      },
+      log: (message) => console.error(`[sciforge-managed-codex-proxy] ${message}`),
+    });
+    console.log(`SciForge managed Codex Responses proxy: ${proxy.url}/v1`);
+    return proxy;
+  } catch (error) {
+    if (isAddrInUse(error) && await runtimeProviderProxyLocalReady(runtimeProviderProxyBaseUrl(runtimeEnv))) return undefined;
+    throw error;
+  }
+}
+
+async function runtimeProviderProxyLocalReady(baseUrl: string): Promise<boolean> {
+  try {
+    const response = await fetch(`${baseUrl}/healthz`, { signal: AbortSignal.timeout(900) });
+    const parsed = await response.json().catch(() => ({}));
+    return response.ok && isRecord(parsed) && typeof parsed.upstreamBaseUrl === 'string';
+  } catch {
+    return false;
+  }
+}
+
+function runtimeCodexProxyBaseUrl(env: NodeJS.ProcessEnv): string {
+  const proxyBase = runtimeProviderProxyBaseUrl(env);
+  return proxyBase.endsWith('/v1') ? proxyBase : `${proxyBase}/v1`;
+}
+
+function isAddrInUse(error: unknown): boolean {
+  return isRecord(error) && error.code === 'EADDRINUSE';
 }
 
 function preserveConfiguredSecretString(nextValue: unknown, currentValue: unknown) {
@@ -3430,6 +3291,11 @@ function preserveConfiguredSecretString(nextValue: unknown, currentValue: unknow
   if (/^••••/.test(next)) return current;
   if (!next && current.trim()) return current;
   return nextValue;
+}
+
+function configuredString(nextValue: unknown, currentValue: unknown) {
+  if (typeof nextValue === 'string') return nextValue.trim();
+  return typeof currentValue === 'string' ? currentValue.trim() : '';
 }
 
 function stringValue(value: unknown) {

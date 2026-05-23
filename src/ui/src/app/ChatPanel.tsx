@@ -36,6 +36,7 @@ import { MessageContent, inlineObjectReferencesForMessage } from './chat/Message
 import { sanitizeUserProjectionText } from './conversation-projection-view-model';
 import { addComposerReferenceWithMarker, addPendingComposerReference, composerReferenceForObjectReference, promptForComposerSend, removeComposerReference } from './chat/composerReferences';
 import { runPromptOrchestrator } from './chat/runOrchestrator';
+import type { CodexRealtimeControlSender } from '../api/sciforgeToolsClient';
 import { appendRunningGuidanceRecord, appendUploadMessageToSession, applyHistoricalUserMessageEdit, attachGuidanceQueueToSessionRun, createGuidanceQueueRecord, mergeAgentResponseIntoSession, resolveGuidanceQueueAfterRun, updateGuidanceQueueRecords } from './chat/sessionTransforms';
 import { attachStreamProcessToFailedSession, attachStreamProcessToResponse, compactFailureNotice, guidanceBadgeVariant, guidanceStatusLabel, latestTokenUsage } from './chat/runPresentation';
 import { RunVerificationTag, runIdForMessage } from './chat/messageRunPresentation';
@@ -202,6 +203,7 @@ export function ChatPanel({
   const uiActionAuditLogRef = useRef<UIAction[]>([]);
   const streamEventsRef = useRef<AgentStreamEvent[]>([]);
   const abortRef = useRef<AbortController | null>(null);
+  const realtimeControlRef = useRef<CodexRealtimeControlSender | null>(null);
   const userAbortRequestedRef = useRef(false);
   const activeRunTokenRef = useRef(0);
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -570,6 +572,7 @@ export function ChatPanel({
     await waitForNextPaint();
     const controller = new AbortController();
     abortRef.current = controller;
+    realtimeControlRef.current = null;
     userAbortRequestedRef.current = false;
     let runFailed = false;
     let runEndedReason: string | undefined;
@@ -611,6 +614,10 @@ export function ChatPanel({
           if (!isCurrentTurn()) return;
           onSessionChange(optimisticSession);
           activeSessionRef.current = optimisticSession;
+        },
+        onRealtimeControlReady: (sender) => {
+          if (!isCurrentTurn()) return;
+          realtimeControlRef.current = sender;
         },
       });
       if (!isCurrentTurn()) return;
@@ -675,6 +682,7 @@ export function ChatPanel({
       setIsSending(false);
       setAssistantDraft('');
       abortRef.current = null;
+      realtimeControlRef.current = null;
       userAbortRequestedRef.current = false;
       const guidanceResolution = resolveGuidanceQueueAfterRun(activeSessionRef.current, guidanceQueueRef.current, {
         userCancelled: wasUserCancelled,
@@ -797,6 +805,13 @@ export function ChatPanel({
     const nextQueue = [...guidanceQueueRef.current, guidance];
     guidanceQueueRef.current = nextQueue;
     setGuidanceQueue(nextQueue);
+    realtimeControlRef.current?.send({
+      controlType: 'interrupt',
+      mode: 'queue-next-turn',
+      message: prompt,
+      requestId: guidance.id,
+      reason: 'running-guidance',
+    });
     setStreamEvents((current) => [...current.slice(-32), guidanceQueuedEvent({ id: makeId('evt'), createdAt: now }, guidance)]);
   }
 
@@ -823,6 +838,15 @@ export function ChatPanel({
     setGuidanceQueue([]);
     setStreamEvents((current) => [...current.slice(-31), userInterruptEvent({ id: makeId('evt'), createdAt: interruptedAt })]);
     userAbortRequestedRef.current = true;
+    const sentControl = realtimeControlRef.current?.send({
+      controlType: 'cancel',
+      requestId: makeId('cancel'),
+      reason: 'user-interrupt',
+    }) === true;
+    if (sentControl) {
+      window.setTimeout(() => abortRef.current?.abort(), 150);
+      return;
+    }
     abortRef.current.abort();
   }
 

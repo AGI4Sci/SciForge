@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { SendAgentMessageInput } from '../../domain';
 import { sendSciForgeToolMessage } from '../sciforgeToolsClient';
+import { CODEX_REALTIME_SESSION_TRANSPORT_STATUS } from './codexRealtimeSession';
 import { normalizeWorkspaceRuntimeEvent, readWorkspaceToolStream } from './runtimeEvents';
 
 test('SSE reader preserves generic workspace message events without synthesizing GUI projection', async () => {
@@ -177,6 +178,15 @@ test('SSE reader promotes gui.present into the visible Runtime Codex result', as
   assert.equal(result.displayIntent?.source, `gui.present:${commandId}`);
   assert.equal(result.displayIntent?.conversationProjection?.artifacts?.[0]?.mime, 'markdown');
   assert.doesNotMatch(JSON.stringify(result), /RAW_PROVIDER_MESSAGE_SHOULD_NOT_RENDER/);
+});
+
+test('Runtime Codex realtime transport marker declares RT-02 WebSocket bridge complete', () => {
+  assert.equal(CODEX_REALTIME_SESSION_TRANSPORT_STATUS.rtGapId, 'RT-02');
+  assert.equal(CODEX_REALTIME_SESSION_TRANSPORT_STATUS.currentTransport, 'websocket');
+  assert.equal(CODEX_REALTIME_SESSION_TRANSPORT_STATUS.targetTransport, 'websocket');
+  assert.equal(CODEX_REALTIME_SESSION_TRANSPORT_STATUS.targetCapability, 'bidirectional-send-receive');
+  assert.equal(CODEX_REALTIME_SESSION_TRANSPORT_STATUS.websocketComplete, true);
+  assert.deepEqual(CODEX_REALTIME_SESSION_TRANSPORT_STATUS.blockers, []);
 });
 
 test('Runtime Codex raw JSONL and stderr warnings normalize to folded audit summaries', () => {
@@ -510,12 +520,24 @@ test('Runtime Codex stream request carries command text and adapter metadata onl
     'commandText',
     'guiExtension',
     'profile',
+    'realtimeSession',
     'schemaVersion',
     'workspacePath',
   ].sort());
   assert.equal(body.commandText, 'ask --ref "artifact:report-1" "Summarize current context"');
   assert.equal(body.workspacePath, '/tmp/current');
   assert.equal(body.profile, 'sciforge-runtime-deepseek');
+  const realtimeSession = body.realtimeSession as Record<string, unknown>;
+  assert.equal(realtimeSession.schemaVersion, 'sciforge.codex-realtime-session.v1');
+  assert.equal(realtimeSession.bridge, 'codex-native-realtime-session');
+  assert.equal(realtimeSession.streamKind, 'structured-events-plus-terminal-equivalent-text');
+  assert.equal(realtimeSession.eventTransport, 'sse');
+  assert.equal(realtimeSession.eventContract, 'structured-events');
+  assert.equal(realtimeSession.inputTextKind, 'terminal-equivalent-text');
+  assert.equal(realtimeSession.rawTerminal, false);
+  assert.equal(realtimeSession.commandId, body.commandId);
+  assert.equal(realtimeSession.attemptId, body.attemptId);
+  assert.equal(realtimeSession.resumeRequested, false);
   assert.match(String(body.commandId), /^codex-command-/);
   assert.match(String(body.attemptId), /^codex-command-.*-attempt-1$/);
   assert.deepEqual(body.guiExtension, { enabled: true });
@@ -549,6 +571,7 @@ test('Runtime Codex stream request carries command text and adapter metadata onl
   assert.deepEqual(recursiveForbiddenKeys(body, forbiddenKeys), []);
   assert.doesNotMatch(JSON.stringify(body), /SEED_MESSAGE_SHOULD_NOT_LEAK|ARTIFACT_BODY_SHOULD_NOT_LEAK|CLAIM_BODY_SHOULD_NOT_LEAK/);
   assert.doesNotMatch(JSON.stringify(body), /legacy\.skill|127\.0\.0\.1:7777|preserve-context/);
+  assert.doesNotMatch(JSON.stringify(body), /raw-terminal|pty|raw-bytes/);
 });
 
 test('Runtime Codex stream request resumes from persisted nested Runtime Codex session metadata', async () => {
@@ -600,6 +623,9 @@ test('Runtime Codex stream request resumes from persisted nested Runtime Codex s
   }
 
   assert.equal(bodies[0]?.codexSessionId, previousCodexSessionId);
+  assert.equal((bodies[0]?.realtimeSession as Record<string, unknown>).codexSessionId, previousCodexSessionId);
+  assert.equal((bodies[0]?.realtimeSession as Record<string, unknown>).threadRef, `codex-thread:${previousCodexSessionId}`);
+  assert.equal((bodies[0]?.realtimeSession as Record<string, unknown>).resumeRequested, true);
 });
 
 test('Runtime Codex native resume keeps GUI follow-up as command text plus refs only', async () => {

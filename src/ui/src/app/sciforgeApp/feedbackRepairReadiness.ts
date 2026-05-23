@@ -1,5 +1,6 @@
 import { validatePeerInstances } from '../../config';
 import { nowIso, type PeerInstance, type RuntimeCodexBrowserAcceptanceManifest, type RuntimeProviderPreflightManifest, type SciForgeInstanceManifest, type SciForgeWorkspaceWriterHealth } from '../../domain';
+import { providerReadinessNoticeFromManifest } from '../../providerReadiness';
 
 const REQUIRED_REPAIR_PEER_CAPABILITIES = [
   'feedback-repair-run-record',
@@ -9,7 +10,6 @@ const REQUIRED_REPAIR_PEER_CAPABILITIES = [
 ];
 const REQUIRED_WORKSPACE_WRITER_CAPABILITIES = [
   'repair-handoff-runner',
-  'feedback-direct-codex-terminal-http-writer',
   'feedback-direct-codex-terminal-websocket-pty',
   'feedback-repair-terminal-mirror-tail',
   'runtime-provider-preflight-manifest',
@@ -61,7 +61,8 @@ export function repairReadinessSummary(
   const peerValidationErrors = validatePeerInstances(peerInstances);
   const missingEnv = manifest?.missingEnv ?? [];
   const policyViolations = manifest?.policyViolations ?? [];
-  const providerReady = manifest?.category === 'ready' && missingEnv.length === 0 && policyViolations.length === 0;
+  const providerNotice = providerReadinessNoticeFromManifest(manifest, manifestError);
+  const providerReady = providerNotice.ready;
   const browserChecksPassed = browserManifest?.status === 'passed'
     && browserManifest.acceptanceConclusionFromRealBrowser === true
     && browserManifest.currentRunEvidenceScope === 'live-browser-current-run'
@@ -98,16 +99,7 @@ export function repairReadinessSummary(
             ? 'Strict in-app browser acceptance evidence is stale; rerun from the Codex in-app browser before claiming release acceptance.'
             : `Strict in-app browser acceptance is ${browserManifest.status}; live repair cannot be claimed complete yet.`
           : `Live repair needs strict in-app browser acceptance evidence${browserManifestError ? `: ${browserManifestError}` : '.'}`;
-  const providerBlocker = providerReady
-    ? ''
-    : !manifest
-      ? `Runtime provider preflight manifest is unavailable${manifestError ? `: ${manifestError}` : '.'}`
-      : [
-        `Runtime provider preflight category is ${manifest.category}`,
-        missingEnv.length ? `missing env: ${missingEnv.join(', ')}` : '',
-        policyViolations.length ? `policy violations: ${policyViolations.join(', ')}` : '',
-        `releaseAcceptance=${manifest.releaseAcceptance}`,
-      ].filter(Boolean).join('; ');
+  const providerBlocker = providerReady ? '' : providerNotice.detail;
   return {
     status,
     summary,
@@ -138,8 +130,8 @@ export function repairReadinessSummary(
       },
       {
         label: 'provider preflight',
-        value: manifest?.category ?? 'missing',
-        detail: manifest ? `release=${manifest.releaseAcceptance}; evidence=${manifest.evidenceMode}` : manifestError || 'run npm run smoke:runtime-provider-preflight',
+        value: providerNotice.value,
+        detail: providerReady ? providerNotice.detail : providerNotice.recoverAction ? `${providerNotice.detail}; ${providerNotice.recoverAction}` : providerNotice.detail,
         state: providerReady ? 'ready' : manifest ? 'partial' : 'blocked',
       },
       {

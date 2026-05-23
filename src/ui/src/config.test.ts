@@ -6,7 +6,9 @@ import {
   DEFAULT_CODEX_RUNTIME_MODEL,
   DEFAULT_CODEX_RUNTIME_PROFILE,
   DEFAULT_CODEX_RUNTIME_PROVIDER,
+  INTERNAL_CODEX_RESPONSES_PROXY_BASE_URL,
   defaultSciForgeConfig,
+  loadDesktopRuntimeConfigDefaults,
   loadSciForgeConfig,
   normalizeConfig,
   normalizeFeedbackGithubRepo,
@@ -62,6 +64,7 @@ describe('SciForge config persistence', () => {
     assert.equal(defaultSciForgeConfig.modelProvider, DEFAULT_CODEX_RUNTIME_PROVIDER);
     assert.equal(defaultSciForgeConfig.modelName, DEFAULT_CODEX_RUNTIME_MODEL);
     assert.equal(defaultSciForgeConfig.modelBaseUrl, DEFAULT_CODEX_RUNTIME_BASE_URL);
+    assert.equal(defaultSciForgeConfig.modelBaseUrl, '');
     assert.equal(defaultSciForgeConfig.allowOpenAiRuntime, false);
   });
 
@@ -114,6 +117,38 @@ describe('SciForge config persistence', () => {
     assert.equal(loaded.workspaceWriterBaseUrl, defaultSciForgeConfig.workspaceWriterBaseUrl);
     assert.equal(loaded.workspacePath, defaultSciForgeConfig.workspacePath);
     assert.equal(loaded.modelBaseUrl, defaultSciForgeConfig.modelBaseUrl);
+  });
+
+  it('does not persist internal Responses proxy URLs as the user-facing provider base URL', () => {
+    assert.equal(normalizeConfig({ modelBaseUrl: INTERNAL_CODEX_RESPONSES_PROXY_BASE_URL }).modelBaseUrl, '');
+  });
+
+  it('keeps desktop sidecar URLs out of user-facing model and AgentServer settings', async () => {
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: {
+        sciforgeDesktop: {
+          getRuntimeConfig: async () => ({
+            schemaVersion: 'sciforge.desktop.runtime-config.v1',
+            workspaceWriterBaseUrl: 'http://127.0.0.1:6173',
+            modelBaseUrl: 'http://127.0.0.1:3891/v1',
+            runtimeCodexBaseUrl: 'http://127.0.0.1:18080',
+            workspacePath: '/tmp/sciforge-workspace',
+            ports: [
+              { name: 'provider-proxy', url: 'http://127.0.0.1:3891' },
+              { name: 'runtime-codex', url: 'http://127.0.0.1:18080' },
+            ],
+          }),
+        },
+      },
+    });
+
+    const defaults = await loadDesktopRuntimeConfigDefaults();
+
+    assert.equal(defaults?.workspaceWriterBaseUrl, 'http://127.0.0.1:6173');
+    assert.equal(defaults?.workspacePath, '/tmp/sciforge-workspace');
+    assert.equal(defaults?.modelBaseUrl, undefined);
+    assert.equal(defaults?.agentServerBaseUrl, undefined);
   });
 
   it('normalizes peer instances for config reads', () => {

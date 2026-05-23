@@ -10,10 +10,11 @@ const LEGACY_DEFAULT_WORKSPACE_WRITER_URL = 'http://127.0.0.1:5174';
 const LEGACY_DEFAULT_WORKSPACE_PATH = '/Applications/workspace/ailab/research/app/SciForge/workspace';
 const DEFAULT_WORKSPACE_PATH = '/Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p1';
 const LEGACY_DEFAULT_CODEX_RUNTIME_BASE_URL = 'http://127.0.0.1:4765/v1';
+export const INTERNAL_CODEX_RESPONSES_PROXY_BASE_URL = 'http://127.0.0.1:3891/v1';
 export const DEFAULT_CODEX_RUNTIME_PROFILE = 'sciforge-runtime-deepseek';
 export const DEFAULT_CODEX_RUNTIME_PROVIDER = 'sciforge-deepseek-proxy';
 export const DEFAULT_CODEX_RUNTIME_MODEL = 'bailian/deepseek-v4-flash';
-export const DEFAULT_CODEX_RUNTIME_BASE_URL = 'http://127.0.0.1:3891/v1';
+export const DEFAULT_CODEX_RUNTIME_BASE_URL = '';
 
 type DesktopRuntimePortBinding = {
   name?: unknown;
@@ -98,7 +99,7 @@ function applyBuildRuntimeDefaults(config: SciForgeConfig): SciForgeConfig {
     workspacePath: config.workspacePath === LEGACY_DEFAULT_WORKSPACE_PATH
       ? defaultSciForgeConfig.workspacePath
       : config.workspacePath,
-    modelBaseUrl: config.modelBaseUrl === LEGACY_DEFAULT_CODEX_RUNTIME_BASE_URL
+    modelBaseUrl: isInternalRuntimeBaseUrl(config.modelBaseUrl)
       ? defaultSciForgeConfig.modelBaseUrl
       : config.modelBaseUrl,
   };
@@ -109,16 +110,9 @@ function normalizeDesktopRuntimeConfig(value: unknown): Partial<SciForgeConfig> 
   const ports = Array.isArray(value.ports) ? value.ports.filter(isDesktopRuntimePortBinding) : [];
   const workspaceWriterBaseUrl = cleanUrl(value.workspaceWriterBaseUrl)
     || portBindingUrl(ports, 'workspace-writer');
-  const providerProxyUrl = cleanUrl(value.modelBaseUrl)
-    || withV1BasePath(portBindingUrl(ports, 'provider-proxy'));
-  const runtimeCodexBaseUrl = cleanUrl(value.runtimeCodexBaseUrl)
-    || portBindingUrl(ports, 'runtime-codex')
-    || cleanUrl(value.runtimeControlUrl);
   const workspacePath = normalizeWorkspaceRootPath(typeof value.workspacePath === 'string' ? value.workspacePath : '');
   const config: Partial<SciForgeConfig> = {};
   if (workspaceWriterBaseUrl) config.workspaceWriterBaseUrl = workspaceWriterBaseUrl;
-  if (providerProxyUrl) config.modelBaseUrl = providerProxyUrl;
-  if (runtimeCodexBaseUrl) config.agentServerBaseUrl = runtimeCodexBaseUrl;
   if (workspacePath) config.workspacePath = workspacePath;
   config.agentBackend = 'codex';
   config.runtimeProfile = DEFAULT_CODEX_RUNTIME_PROFILE;
@@ -144,9 +138,15 @@ function portBindingUrl(ports: DesktopRuntimePortBinding[], name: string): strin
   return cleanUrl(binding?.url);
 }
 
-function withV1BasePath(url: string): string {
-  if (!url) return '';
-  return /\/v1\/?$/i.test(url) ? url.replace(/\/+$/, '') : `${url.replace(/\/+$/, '')}/v1`;
+function normalizeModelBaseUrl(value: unknown): string {
+  const url = cleanUrl(value);
+  return isInternalRuntimeBaseUrl(url) ? '' : url;
+}
+
+function isInternalRuntimeBaseUrl(value: string): boolean {
+  const url = value.replace(/\/+$/, '');
+  return url === LEGACY_DEFAULT_CODEX_RUNTIME_BASE_URL
+    || url === INTERNAL_CODEX_RESPONSES_PROXY_BASE_URL;
 }
 
 export function saveSciForgeConfig(config: SciForgeConfig) {
@@ -216,7 +216,7 @@ export function normalizeConfig(value: unknown): SciForgeConfig {
     runtimeProfile: normalizeRuntimeProfile(raw.runtimeProfile),
     allowOpenAiRuntime: raw.allowOpenAiRuntime === true,
     modelProvider: typeof raw.modelProvider === 'string' ? raw.modelProvider : defaultSciForgeConfig.modelProvider,
-    modelBaseUrl: cleanUrl(raw.modelBaseUrl) || '',
+    modelBaseUrl: normalizeModelBaseUrl(raw.modelBaseUrl),
     modelName: typeof raw.modelName === 'string' ? raw.modelName : '',
     apiKey: typeof raw.apiKey === 'string' ? raw.apiKey : '',
     requestTimeoutMs: typeof raw.requestTimeoutMs === 'number' && Number.isFinite(raw.requestTimeoutMs)

@@ -2,6 +2,7 @@ import { RUNTIME_HEALTH_STATUS } from '@sciforge-ui/runtime-contract';
 import type { RuntimeHealthStatus } from '@sciforge-ui/runtime-contract';
 import { DEFAULT_CODEX_RUNTIME_PROFILE, defaultSciForgeConfig } from './config';
 import type { SciForgeConfig } from './domain';
+import { providerReadinessHealth } from './providerReadiness';
 
 export type { RuntimeHealthStatus } from '@sciforge-ui/runtime-contract';
 
@@ -33,34 +34,7 @@ export function workspaceWriterHealth(config: SciForgeConfig, workspaceOnline: b
 }
 
 export function modelHealth(config: SciForgeConfig): RuntimeHealthItem {
-  const provider = config.modelProvider.trim() || defaultSciForgeConfig.modelProvider;
-  const model = config.modelName.trim() || (provider === defaultSciForgeConfig.modelProvider ? defaultSciForgeConfig.modelName : '');
-  const baseUrl = config.modelBaseUrl.trim();
-  const apiKeyConfigured = Boolean(config.apiKey.trim());
-  if (provider === 'native') {
-    if (!model && !baseUrl && !apiKeyConfigured) {
-      return {
-        id: 'model',
-        label: 'Model Provider',
-        status: RUNTIME_HEALTH_STATUS.NOT_CONFIGURED,
-        detail: 'native · user model not set',
-        recoverAction: '填写 Model / Base URL / API Key；Runtime Codex 不会回退到其它 provider',
-      };
-    }
-    return {
-      id: 'model',
-      label: 'Model Provider',
-      status: RUNTIME_HEALTH_STATUS.ONLINE,
-      detail: `native${model ? ` · ${model}` : ''}${baseUrl ? ` · ${baseUrl}` : ''}`,
-    };
-  }
-  if (!baseUrl) {
-    return { id: 'model', label: 'Model Provider', status: RUNTIME_HEALTH_STATUS.NOT_CONFIGURED, detail: provider, recoverAction: '填写 Base URL；默认应指向 packages/backend proxy' };
-  }
-  if (!apiKeyConfigured) {
-    return { id: 'model', label: 'Model Provider', status: RUNTIME_HEALTH_STATUS.NOT_CONFIGURED, detail: `${provider} · ${model}`, recoverAction: '填写 API Key；allowOpenAiRuntime 默认 false，不会自动改用 OpenAI' };
-  }
-  return { id: 'model', label: 'Model Provider', status: RUNTIME_HEALTH_STATUS.ONLINE, detail: `${provider}${model ? ` · ${model}` : ''}` };
+  return providerReadinessHealth(config);
 }
 
 export function codexRuntimeHealth(config: SciForgeConfig, workspaceOnline: boolean): RuntimeHealthItem {

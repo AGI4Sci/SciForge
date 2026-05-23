@@ -9,6 +9,7 @@ import { expectedArtifactsForCurrentTurn, selectedComponentsForCurrentTurn } fro
 import { normalizeAgentResponse } from '../agentClient';
 import { DEFAULT_AGENT_REQUEST_TIMEOUT_MS } from '@sciforge-ui/runtime-contract/handoff';
 import { collectRuntimeRefsFromValue } from '@sciforge-ui/runtime-contract/references';
+import { createCodexRealtimeSessionEnvelope } from '@sciforge-ui/runtime-contract/codex-realtime-session';
 import {
   buildSilentStreamDecisionRecord,
   buildSilentStreamRunId,
@@ -21,13 +22,12 @@ import { compactSciForgeReference, compactTransportExecutionUnits } from './tran
 import {
   contextWindowTelemetryEvent,
   normalizeWorkspaceRuntimeEvent,
-  readWorkspaceToolStream,
   toolEvent,
   withConfiguredContextWindowLimit,
   workspaceResultCompletion,
 } from './runtimeEvents';
+import { assertCodexRealtimeSessionRequestBoundary, createCodexRealtimeSessionClient, CODEX_RUNTIME_STREAM_PATH, type CodexRealtimeControlSender } from './codexRealtimeSession';
 
-export const CODEX_RUNTIME_STREAM_PATH = '/api/sciforge/runtime/codex/stream';
 const CODEX_RUNTIME_REQUEST_SCHEMA_VERSION = 'sciforge.codex-runtime-stream-request.v1';
 const DEFAULT_RUNTIME_PROFILE = 'sciforge-runtime-deepseek';
 
@@ -71,7 +71,10 @@ function uniqueRuntimeStringList(values: unknown[]) {
 
 export async function sendSciForgeToolMessage(
   input: SendAgentMessageInput,
-  callbacks: { onEvent?: (event: AgentStreamEvent) => void } = {},
+  callbacks: {
+    onEvent?: (event: AgentStreamEvent) => void;
+    onRealtimeControlReady?: (sender: CodexRealtimeControlSender) => void;
+  } = {},
   signal?: AbortSignal,
 ): Promise<NormalizedAgentResponse> {
   const builtInScenarioId = builtInScenarioIdForRuntimeInput(input);
@@ -205,6 +208,7 @@ export async function sendSciForgeToolMessage(
       silentStreamRunId,
     });
     assertCodexRuntimeStreamRequestBoundary(requestBody);
+    assertCodexRealtimeSessionRequestBoundary(requestBody);
     const requestBodyText = JSON.stringify(requestBody);
     callbacks.onEvent?.(contextWindowTelemetryEvent(
       input,
@@ -227,13 +231,11 @@ export async function sendSciForgeToolMessage(
       }
       try {
         if (signal?.aborted) activeRequestController.abort();
-        response = await fetch(`${input.config.workspaceWriterBaseUrl}${CODEX_RUNTIME_STREAM_PATH}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: requestBodyText,
-          signal: activeRequestController.signal,
+        const client = createCodexRealtimeSessionClient({
+          workspaceWriterBaseUrl: input.config.workspaceWriterBaseUrl,
+          onControlReady: callbacks.onRealtimeControlReady,
         });
-        const stream = await readWorkspaceToolStream(response, (event) => {
+        const stream = await client.stream(requestBodyText, (event) => {
           const normalized = withConfiguredContextWindowLimit(
             normalizeWorkspaceRuntimeEvent(event),
             input.config.maxContextWindowTokens,
@@ -257,7 +259,8 @@ export async function sendSciForgeToolMessage(
             }
           }
           callbacks.onEvent?.(normalized);
-        });
+        }, activeRequestController.signal);
+        response = stream.response;
         result = stream.result;
         error = stream.error;
         break;
@@ -518,6 +521,11 @@ function buildCodexRuntimeStreamRequest(input: {
   const attemptId = `${input.commandId}-attempt-1`;
   return {
     schemaVersion: CODEX_RUNTIME_REQUEST_SCHEMA_VERSION,
+    realtimeSession: createCodexRealtimeSessionEnvelope({
+      commandId: input.commandId,
+      attemptId,
+      codexSessionId,
+    }),
     commandId: input.commandId,
     attemptId,
     commandText,

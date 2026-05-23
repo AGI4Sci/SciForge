@@ -1,6 +1,7 @@
 import { formatProgressHeadline, latestProgressModel } from '../../processProgress';
 import { latestRunningEvent } from '../../streamEventPresentation';
 import { isRuntimeAuditOnlyEvent } from '../../runtimeAuditEvents';
+import { providerReadinessNoticeFromConfig } from '../../providerReadiness';
 import type { AgentStreamEvent, SciForgeConfig } from '../../domain';
 import type { RuntimeHealthItem } from '../runtimeHealthPanel';
 
@@ -52,6 +53,14 @@ export function runReadiness({
       ok: false,
       severity: blockingRuntime.severity,
       message: blockingRuntime.message,
+    };
+  }
+  const providerNotice = providerReadinessNoticeFromConfig(config);
+  if (!providerNotice.ready) {
+    return {
+      ok: true,
+      severity: 'warning' as const,
+      message: `Provider 诊断：${providerNotice.detail}。这只作为提示展示，不改变当前聊天路由。${providerNotice.recoverAction ? ` ${providerNotice.recoverAction}` : ''}`,
     };
   }
   return {

@@ -6,8 +6,11 @@ import { buildBlockedRepairHandoffResultInput } from './feedbackBlockedRepairRes
 import type { FeedbackCommentRecord, PeerInstance, RuntimeCodexBrowserAcceptanceManifest, RuntimeProviderPreflightManifest } from '../../domain';
 
 const feedbackInboxSource = readFileSync(new URL('./FeedbackInboxPage.tsx', import.meta.url), 'utf8');
+const projectSource = readFileSync(new URL('../../../../../PROJECT.md', import.meta.url), 'utf8');
 const feedbackInboxCss = readFileSync(new URL('../../styles/app-feedback.css', import.meta.url), 'utf8');
 const directCodexTerminalSource = readFileSync(new URL('../../feedback/FeedbackCodexTerminalPanel.tsx', import.meta.url), 'utf8');
+const feedbackRepairAuditPanelSource = readFileSync(new URL('../../feedback/FeedbackRepairAuditPanel.tsx', import.meta.url), 'utf8');
+const githubFeedbackSource = readFileSync(new URL('../../feedback/githubFeedback.ts', import.meta.url), 'utf8');
 const feedbackScreenshotPreviewSource = readFileSync(new URL('../../feedback/FeedbackScreenshotPreview.tsx', import.meta.url), 'utf8');
 const sciForgeAppSource = readFileSync(new URL('../SciForgeApp.tsx', import.meta.url), 'utf8');
 
@@ -134,7 +137,6 @@ test('workspace writer readiness surfaces stale capabilities before repair accep
     startedAt: '2026-05-07T00:01:00.000Z',
     capabilities: [
       'repair-handoff-runner',
-      'feedback-direct-codex-terminal-http-writer',
       'feedback-direct-codex-terminal-websocket-pty',
       'feedback-repair-terminal-mirror-tail',
       'runtime-provider-preflight-manifest',
@@ -216,26 +218,96 @@ test('feedback inbox defaults repair to direct Codex WebSocket PTY terminal', ()
   assert.match(feedbackInboxSource, /<FeedbackCodexTerminalPanel/);
   assert.match(feedbackInboxSource, /providerReady=\{repairReadiness\.providerReady === true\}/);
   assert.match(feedbackInboxSource, /providerBlocker=\{repairReadiness\.providerBlocker\}/);
+  assert.match(feedbackInboxSource, /gitMode=\{gitOperationMode\}/);
+  assert.match(feedbackInboxSource, /Provider 设置/);
+  assert.doesNotMatch(feedbackInboxSource, /repairReadiness\.providerReady !== true/);
   assert.match(feedbackInboxSource, /onRepairRunWritten=\{onRepairRunWritten\}/);
   assert.match(feedbackInboxSource, /高级 repair 交接与 audit/);
   assert.match(directCodexTerminalSource, /startFeedbackCodexPtyTerminal/);
   assert.match(directCodexTerminalSource, /stopFeedbackCodexPtyTerminal/);
   assert.match(directCodexTerminalSource, /feedbackCodexPtyWebSocketUrl/);
+  assert.match(directCodexTerminalSource, /renderTerminalSessionViewer/);
+  assert.match(directCodexTerminalSource, /componentId: 'terminal-session-viewer'/);
+  assert.match(directCodexTerminalSource, /liveSurfaceRef: xtermHostRef/);
+  assert.match(directCodexTerminalSource, /terminalViewerStatus/);
   assert.match(directCodexTerminalSource, /@xterm\/xterm/);
-  assert.match(directCodexTerminalSource, /startFeedbackCodexTerminal/);
-  assert.match(directCodexTerminalSource, /sendFeedbackCodexTerminalInput/);
-  assert.match(directCodexTerminalSource, /loadFeedbackCodexTerminalTail/);
-  assert.match(directCodexTerminalSource, /stopFeedbackCodexTerminal/);
   assert.match(directCodexTerminalSource, /WebSocket PTY/);
-  assert.match(directCodexTerminalSource, /HTTP writer fallback/);
+  assert.doesNotMatch(directCodexTerminalSource, /startFeedbackCodexTerminal/);
+  assert.doesNotMatch(directCodexTerminalSource, /sendFeedbackCodexTerminalInput/);
+  assert.doesNotMatch(directCodexTerminalSource, /loadFeedbackCodexTerminalTail/);
+  assert.doesNotMatch(directCodexTerminalSource, /stopFeedbackCodexTerminal/);
+  assert.doesNotMatch(directCodexTerminalSource, /HTTP writer|启动并发送/);
   assert.match(directCodexTerminalSource, /Direct Codex CLI/);
-  assert.match(directCodexTerminalSource, /Git commit\/push\/PR\/merge 默认手动确认/);
+  assert.match(directCodexTerminalSource, /provider 状态只展示，不改变 repair 目标路由/);
+  assert.match(directCodexTerminalSource, /Git commit\/push\/PR\/merge 保留分级确认，merge 不静默/);
+  assert.equal((directCodexTerminalSource.match(/onClick=\{\(\) => void startPtyTerminal\(\)\}/g) ?? []).length, 1);
   assert.match(feedbackInboxCss, /\.feedback-codex-terminal\s*\{/);
   assert.match(feedbackInboxCss, /@import '@xterm\/xterm\/css\/xterm\.css';/);
-  assert.match(feedbackInboxCss, /\.feedback-codex-xterm-shell\s*\{/);
+  assert.match(feedbackInboxCss, /\.feedback-codex-terminal \.terminal-session-viewer\s*\{/);
+  assert.match(feedbackInboxCss, /\.feedback-codex-terminal \.terminal-session-viewer-screen\s*\{/);
+  assert.match(feedbackInboxCss, /\.feedback-codex-terminal \.terminal-session-viewer-live-surface\s*\{/);
+  assert.doesNotMatch(directCodexTerminalSource, /feedback-codex-xterm-shell/);
   assert.match(feedbackInboxCss, /\.feedback-codex-terminal-preflight\s*\{[\s\S]*?grid-template-columns: max-content minmax\(0, 1fr\);/);
   assert.match(feedbackInboxCss, /\.feedback-codex-terminal-input\s*\{[\s\S]*?grid-template-columns: auto minmax\(0, 1fr\) auto;/);
   assert.match(feedbackInboxCss, /@media \(max-width: 720px\)\s*\{[\s\S]*?\.feedback-codex-terminal-input\s*\{[\s\S]*?grid-template-columns: auto minmax\(0, 1fr\);/);
+});
+
+test('RT-06 repair handoff carries structured evidence and audit refs without user restatement', () => {
+  assert.match(feedbackInboxSource, /loadFeedbackIssueHandoffBundle\(config, item\.id\)/);
+  assert.match(feedbackInboxSource, /handoffBundle: bundle/);
+  assert.match(feedbackInboxSource, /evidenceRefs: feedbackEvidenceRefList\(item\)/);
+  assert.match(feedbackInboxSource, /item\.evidenceBundleRef/);
+  assert.match(feedbackInboxSource, /item\.screenshotRef/);
+  assert.match(feedbackInboxSource, /item\.rawScreenshotRef/);
+  assert.match(feedbackInboxSource, /item\.annotatedScreenshotRef/);
+  assert.match(feedbackInboxSource, /item\.screenshot\?\.rawScreenshotRef/);
+  assert.match(feedbackInboxSource, /item\.screenshot\?\.annotatedScreenshotRef/);
+  assert.match(feedbackInboxSource, /terminalMirrorRef/);
+  assert.match(feedbackInboxSource, /planRef/);
+  assert.match(feedbackInboxSource, /DEFAULT_FEEDBACK_REPAIR_TESTS/);
+  assert.match(feedbackInboxSource, /providerReadinessNotice:\s*\{[\s\S]*?displayOnly: true,[\s\S]*?\}/);
+  assert.match(feedbackInboxSource, /GitHub sync trace/);
+  assert.doesNotMatch(feedbackInboxSource, /用户不需要重复描述/);
+});
+
+test('RT-06 treats terminal transcript as an evidence ref, not a completion verdict or GitHub body source', () => {
+  assert.match(feedbackRepairAuditPanelSource, /terminalMirrorRef/);
+  assert.match(feedbackRepairAuditPanelSource, /copyText = entries\.map/);
+  assert.match(feedbackRepairAuditPanelSource, /写入 GitHub 或 audit summary 前仍需 bounded scrub/);
+  assert.match(feedbackRepairAuditPanelSource, /repairEvidenceCompleteness/);
+  assert.match(feedbackRepairAuditPanelSource, /label: 'terminal'/);
+  assert.match(feedbackRepairAuditPanelSource, /label: 'tests'/);
+  assert.match(feedbackRepairAuditPanelSource, /label: 'guard-digests'/);
+  assert.match(feedbackInboxSource, /Runtime Codex repair finished: \$\{result\.verdict\}/);
+  assert.doesNotMatch(feedbackInboxSource, /terminalMirror(?:Ref)?[\s\S]{0,160}verdict|verdict[\s\S]{0,160}terminalMirror(?:Ref)?/);
+  assert.match(githubFeedbackSource, /Sync rule: GitHub metadata may be updated, but local annotations, screenshot refs, evidence bundles, and repair audit records remain the product source of truth/);
+  assert.doesNotMatch(githubFeedbackSource, /terminalMirror|terminal buffer|Codex CLI terminal|PTY/);
+});
+
+test('RT-06 repair result closure asks only solved or remaining problem feedback', () => {
+  assert.match(feedbackInboxSource, /const \[remainingProblemById, setRemainingProblemById\] = useState<Record<string, string>>\(\{\}\)/);
+  assert.match(feedbackInboxSource, /function recordRepairResolutionFeedback\(/);
+  assert.match(feedbackInboxSource, /repairResolutionVerificationForResult/);
+  assert.match(feedbackInboxSource, /aria-label="repair result user closure"/);
+  assert.match(feedbackInboxSource, /只需要确认这个问题是否已解决；仍有问题时再补充剩余现象。/);
+  assert.match(feedbackInboxSource, /问题已解决/);
+  assert.match(feedbackInboxSource, /仍有问题/);
+  assert.match(feedbackInboxSource, /placeholder="如果仍未解决，写下现在还存在的问题\.\.\."/);
+  assert.match(feedbackInboxSource, /aria-label="记录修复后仍然存在的问题"/);
+  assert.match(feedbackInboxSource, /请先写下仍然存在的问题，再记录为未解决。/);
+  assert.match(feedbackInboxSource, /remaining-problem feedback is the next repair input/);
+  assert.match(feedbackInboxSource, /action: 'browser-recheck'/);
+  assert.match(feedbackInboxSource, /status: 'failed'/);
+  assert.match(feedbackInboxSource, /status: evidenceRefs\.length && browserManifestSupportsPassedRecheck\(browserManifest\) \? 'passed' : 'pending'/);
+});
+
+test('PROJECT.md records RT-06 evidence coverage and remaining live audit gap', () => {
+  assert.match(projectSource, /### RT-06 Evidence \/ Audit 和反馈闭环/);
+  assert.match(projectSource, /RT-06 evidence note \(2026-05-23\)/);
+  assert.match(projectSource, /FeedbackInboxPage\.test\.ts/);
+  assert.match(projectSource, /terminal transcript/);
+  assert.match(projectSource, /bounded scrub/);
+  assert.match(projectSource, /Remaining gap/);
 });
 
 test('feedback inbox keeps visible selection scope hints and GitHub sync trace visible', () => {

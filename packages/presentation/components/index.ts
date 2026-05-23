@@ -25,6 +25,7 @@ export { renderGraphViewer } from './graph-viewer/render';
 export { renderPointSetViewer } from './point-set-viewer/render';
 export { renderMatrixViewer } from './matrix-viewer/render';
 export { renderStructureViewer } from './structure-viewer/render';
+export { renderTerminalSessionViewer } from './terminal-session-viewer/render';
 
 export { interactiveViewManifests, uiComponentManifests } from './manifest-registry';
 

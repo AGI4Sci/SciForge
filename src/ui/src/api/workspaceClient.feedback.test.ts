@@ -11,17 +11,13 @@ import {
   loadRuntimeProviderPreflightManifest,
   loadSciForgeInstanceManifest,
   loadWorkspaceWriterHealth,
-  loadFeedbackCodexTerminalTail,
   runFeedbackIssueRepairHandoff,
   saveFeedbackCommentEvidenceBundle,
   saveFeedbackIssueRepairResult,
-  sendFeedbackCodexTerminalInput,
   sendFeedbackRepairGuidance,
   startFeedbackCodexPtyTerminal,
-  startFeedbackCodexTerminal,
   startFeedbackIssueRepairRun,
   stopFeedbackCodexPtyTerminal,
-  stopFeedbackCodexTerminal,
   uploadFeedbackEvidenceAssets,
 } from './workspaceClient';
 
@@ -148,20 +144,6 @@ describe('workspaceClient feedback issue helpers', () => {
           },
         });
       }
-      if (url.includes('/api/sciforge/feedback/issues/feedback-1/codex-terminal/start')) {
-        return jsonResponse({
-          session: directCodexTerminalSession({ status: 'running' }),
-          repairRun: {
-            schemaVersion: 1,
-            id: 'direct-codex-terminal-feedback-1',
-            issueId: 'feedback-1',
-            status: 'running',
-            actor: 'direct-codex-terminal',
-            startedAt: '2026-05-07T00:06:00.000Z',
-            terminalMirrorRef: '/tmp/ws/.sciforge/repair-results/direct-codex-terminal-feedback-1/terminal-mirror.ndjson',
-          },
-        });
-      }
       if (url.includes('/api/sciforge/feedback/issues/feedback-1/codex-pty/start')) {
         return jsonResponse({
           session: directCodexTerminalSession({
@@ -181,28 +163,6 @@ describe('workspaceClient feedback issue helpers', () => {
             terminalMirrorRef: '/tmp/ws/.sciforge/repair-results/codex-pty-terminal-feedback-1/terminal-mirror.ndjson',
             metadata: { terminalTransport: 'websocket-pty' },
           },
-        });
-      }
-      if (url.includes('/api/sciforge/feedback/codex-terminal/direct-codex-terminal-feedback-1/input')) {
-        return jsonResponse({
-          session: directCodexTerminalSession({ status: 'running', message: 'Queued follow-up prompt.' }),
-        });
-      }
-      if (url.includes('/api/sciforge/feedback/codex-terminal/direct-codex-terminal-feedback-1/tail')) {
-        return jsonResponse({
-          session: directCodexTerminalSession({ status: 'idle', message: 'Ready for follow-up.' }),
-          tail: {
-            terminalMirrorRef: '/tmp/ws/.sciforge/repair-results/direct-codex-terminal-feedback-1/terminal-mirror.ndjson',
-            entries: [{ timestamp: '2026-05-07T00:06:01.000Z', stream: 'stdout', text: 'Codex turn completed.' }],
-            cursor: 0,
-            nextCursor: 1,
-            totalEntries: 1,
-          },
-        });
-      }
-      if (url.includes('/api/sciforge/feedback/codex-terminal/direct-codex-terminal-feedback-1/stop')) {
-        return jsonResponse({
-          session: directCodexTerminalSession({ status: 'cancelled', message: 'Stop requested.' }),
         });
       }
       if (url.includes('/api/sciforge/feedback/codex-pty/codex-pty-terminal-feedback-1/stop')) {
@@ -355,25 +315,8 @@ describe('workspaceClient feedback issue helpers', () => {
     assert.equal(guidanceResponse.guidance.status, 'recorded');
     assert.equal(guidanceResponse.guidance.message, 'Try the smaller scoped fix.');
 
-    const directStart = await startFeedbackCodexTerminal(config, 'feedback-1', {
-      initialMessage: 'Inspect the selected target before changing code.',
-    });
-    assert.equal(directStart.session.transport, 'http-writer');
-    assert.equal(directStart.repairRun?.actor, 'direct-codex-terminal');
-
-    const directInput = await sendFeedbackCodexTerminalInput(config, directStart.session.id, {
-      message: 'Run the focused feedback test next.',
-    });
-    assert.equal(directInput.message, 'Queued follow-up prompt.');
-
-    const directTail = await loadFeedbackCodexTerminalTail(config, directStart.session.id);
-    assert.equal(directTail.tail.entries[0].text, 'Codex turn completed.');
-
-    const directStop = await stopFeedbackCodexTerminal(config, directStart.session.id);
-    assert.equal(directStop.status, 'cancelled');
-
     const ptyStart = await startFeedbackCodexPtyTerminal(config, 'feedback-1', {
-      initialMessage: 'Use the real PTY path.',
+      initialMessage: 'Inspect the selected target before changing code.',
       cols: 120,
       rows: 30,
     });
@@ -411,7 +354,7 @@ describe('workspaceClient feedback issue helpers', () => {
     assert.equal(evidence.id, 'feedback-1');
     assert.equal(evidence.evidenceAssets?.[0]?.kind, 'scrubbed-annotated-screenshot');
 
-    assert.equal(calls.length, 16);
+    assert.equal(calls.length, 12);
     assert.equal(JSON.parse(String(calls[3].init?.body)).workspacePath, '/tmp/ws');
     assert.deepEqual(JSON.parse(String(calls[4].init?.body)).result, { verdict: 'fixed', summary: 'done' });
     const runnerBody = JSON.parse(String(calls[5].init?.body));
@@ -443,35 +386,20 @@ describe('workspaceClient feedback issue helpers', () => {
       initialMessage: 'Inspect the selected target before changing code.',
       allowOpenAiRuntime: false,
       gitMode: 'manual',
-    });
-    assert.deepEqual(JSON.parse(String(calls[9].init?.body)), {
-      workspacePath: '/tmp/ws',
-      message: 'Run the focused feedback test next.',
-    });
-    assert.match(calls[10].url, /\/api\/sciforge\/feedback\/codex-terminal\/direct-codex-terminal-feedback-1\/tail\?workspacePath=%2Ftmp%2Fws/);
-    assert.deepEqual(JSON.parse(String(calls[11].init?.body)), {
-      workspacePath: '/tmp/ws',
-      reason: 'feedback inbox stop button',
-    });
-    assert.deepEqual(JSON.parse(String(calls[12].init?.body)), {
-      workspacePath: '/tmp/ws',
-      initialMessage: 'Use the real PTY path.',
-      allowOpenAiRuntime: false,
-      gitMode: 'manual',
       cols: 120,
       rows: 30,
     });
-    assert.deepEqual(JSON.parse(String(calls[13].init?.body)), {
+    assert.deepEqual(JSON.parse(String(calls[9].init?.body)), {
       workspacePath: '/tmp/ws',
       reason: 'feedback inbox PTY stop button',
     });
-    assert.deepEqual(JSON.parse(String(calls[14].init?.body)), {
+    assert.deepEqual(JSON.parse(String(calls[10].init?.body)), {
       workspacePath: '/tmp/ws',
       repo: 'org/repo',
       token: 'github_pat_test',
       requestedBy: 'feedback-inbox',
     });
-    assert.equal(JSON.parse(String(calls[15].init?.body)).comment.id, 'feedback-1');
+    assert.equal(JSON.parse(String(calls[11].init?.body)).comment.id, 'feedback-1');
   });
 });
 
@@ -570,7 +498,7 @@ function directCodexTerminalSession(overrides: Record<string, unknown> = {}) {
     promptRef: '/tmp/ws/.sciforge/repair-results/direct-codex-terminal-feedback-1/feedback-codex-prompt.md',
     startedAt: '2026-05-07T00:06:00.000Z',
     updatedAt: '2026-05-07T00:06:01.000Z',
-    transport: 'http-writer',
+    transport: 'websocket-pty',
     ...overrides,
   };
 }

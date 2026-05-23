@@ -427,15 +427,15 @@ async function readNonSecretProxyConfig(path: string | undefined): Promise<NonSe
         ? parsed.runtimeCodexProxy
         : {};
     const llm = isRecord(parsed.llm) ? parsed.llm : {};
-    const upstreamBaseUrl = stringValue(codexProxy.upstreamBaseUrl)
-      ?? stringValue(codexProxy.baseUrl)
+    const upstreamBaseUrl = stringValue(llm.baseUrl)
       ?? stringValue(llm.upstreamBaseUrl)
-      ?? stringValue(llm.baseUrl);
-    const defaultModel = stringValue(codexProxy.defaultModel)
-      ?? stringValue(codexProxy.model)
+      ?? stringValue(codexProxy.upstreamBaseUrl)
+      ?? stringValue(codexProxy.baseUrl);
+    const defaultModel = stringValue(llm.model)
+      ?? stringValue(llm.modelName)
       ?? stringValue(llm.defaultModel)
-      ?? stringValue(llm.model)
-      ?? stringValue(llm.modelName);
+      ?? stringValue(codexProxy.defaultModel)
+      ?? stringValue(codexProxy.model);
     if (!upstreamBaseUrl && !defaultModel) return undefined;
     return {
       ...(upstreamBaseUrl ? { upstreamBaseUrl } : {}),

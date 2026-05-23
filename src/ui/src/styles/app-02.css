@@ -90,6 +90,35 @@
   font-size: 13px;
 }
 
+.settings-secret-input {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-secret-input input[readonly] {
+  color: var(--bio-300);
+  font-family: Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+.settings-secret-toggle {
+  display: grid;
+  place-items: center;
+  min-height: 38px;
+  color: var(--bio-100);
+  background: var(--surface-input);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.settings-secret-toggle:hover,
+.settings-secret-toggle:focus-visible {
+  color: var(--bio-50);
+  border-color: var(--bio-500);
+}
+
 .settings-grid .settings-check-row input[type="checkbox"] {
   min-height: 18px;
   width: 18px;

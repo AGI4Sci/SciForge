@@ -26,6 +26,29 @@ test('proxy CLI reads upstream credentials from ignored local config', () => {
   assert.equal(options.forceNonStreamingUpstream, false);
 });
 
+test('proxy CLI treats llm settings as the primary user-facing provider config', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sciforge-proxy-config-'));
+  const configPath = join(dir, 'config.local.json');
+  writeFileSync(configPath, JSON.stringify({
+    llm: {
+      baseUrl: 'http://provider-user.local:3888/v1',
+      apiKey: 'user-secret',
+      model: 'user-model',
+    },
+    codexProxy: {
+      upstreamBaseUrl: 'http://stale-proxy.local:3888/v1',
+      apiKey: 'stale-secret',
+      defaultModel: 'stale-model',
+    },
+  }));
+
+  const options = resolveProxyCliOptions(['--config', configPath], {});
+
+  assert.equal(options.upstreamBaseUrl, 'http://provider-user.local:3888/v1');
+  assert.equal(options.upstreamApiKey, 'user-secret');
+  assert.equal(options.defaultModel, 'user-model');
+});
+
 test('proxy CLI lets env override local upstream credentials', () => {
   const dir = mkdtempSync(join(tmpdir(), 'sciforge-proxy-config-'));
   const configPath = join(dir, 'config.local.json');

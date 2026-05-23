@@ -1,5 +1,5 @@
-import { useEffect } from 'react';
-import { ChevronDown, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { ChevronDown, Eye, EyeOff, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
 import { validatePeerInstances } from '../../config';
 import type { PeerInstance, SciForgeConfig } from '../../domain';
 import { RuntimeHealthPanel, useRuntimeHealth } from '../runtimeHealthPanel';
@@ -9,7 +9,7 @@ import {
   removePeerInstanceAt,
   updatePeerInstanceAt,
 } from './ShellPanels.settingsModel';
-import { settingsSaveStateText, type ConfigSaveState } from './settingsModels';
+import { maskedSecretValue, secretInputPlaceholder, secretPresenceLabel, settingsSaveStateText, type ConfigSaveState } from './settingsModels';
 
 export function SettingsDialog({
   config,
@@ -27,6 +27,9 @@ export function SettingsDialog({
   const healthItems = useRuntimeHealth(config);
   const peerInstances = config.peerInstances ?? [];
   const peerValidationErrors = validatePeerInstances(peerInstances);
+  const [apiKeyVisible, setApiKeyVisible] = useState(false);
+  const apiKeyConfigured = Boolean(config.apiKey.trim());
+  const apiKeyInputValue = apiKeyVisible || !apiKeyConfigured ? config.apiKey : maskedSecretValue(config.apiKey);
   const updatePeerInstance = (index: number, patch: Partial<PeerInstance>) => {
     onChange({ peerInstances: updatePeerInstanceAt(peerInstances, index, patch) });
   };
@@ -136,6 +139,13 @@ export function SettingsDialog({
               </div>
             ) : null}
           </div>
+          <div className="wide settings-peer-section" aria-label="Runtime provider settings">
+            <div className="settings-peer-section-head">
+              <span>Runtime Provider</span>
+              <code>{config.apiKey.trim() ? 'API key configured: yes (masked)' : 'API key configured: no'}</code>
+            </div>
+            <p className="settings-peer-empty">Main chat Runtime Codex and repair Codex CLI share this provider, model, upstream Chat Completions URL, Runtime Profile, and API key. The local Responses proxy is internal compatibility plumbing.</p>
+          </div>
           <label>
             <span>Runtime Backend</span>
             <select value={config.agentBackend} onChange={(event) => onChange({ agentBackend: event.target.value })}>
@@ -167,12 +177,32 @@ export function SettingsDialog({
             <input value={config.modelName} onChange={(event) => onChange({ modelName: event.target.value })} placeholder="gpt-5.4 / local-model / ..." />
           </label>
           <label>
-            <span>Base URL</span>
+            <span>Provider Base URL</span>
             <input value={config.modelBaseUrl} onChange={(event) => onChange({ modelBaseUrl: event.target.value })} placeholder="https://.../v1" />
           </label>
           <label>
             <span>API Key</span>
-            <input type="password" value={config.apiKey} onChange={(event) => onChange({ apiKey: event.target.value })} placeholder="stored in local config.json" />
+            <div className="settings-secret-input">
+              <input
+                type={apiKeyVisible ? 'text' : 'password'}
+                autoComplete="off"
+                value={apiKeyInputValue}
+                readOnly={apiKeyConfigured && !apiKeyVisible}
+                onChange={(event) => onChange({ apiKey: event.target.value })}
+                placeholder={secretInputPlaceholder(config.apiKey, 'stored in local config.json')}
+                aria-describedby="settings-api-key-status"
+              />
+              <button
+                type="button"
+                className="settings-secret-toggle"
+                aria-label={apiKeyVisible ? '隐藏 API key' : '查看 API key'}
+                title={apiKeyVisible ? '隐藏 API key' : '查看 API key'}
+                onClick={() => setApiKeyVisible((visible) => !visible)}
+              >
+                {apiKeyVisible ? <EyeOff size={14} aria-hidden /> : <Eye size={14} aria-hidden />}
+              </button>
+            </div>
+            <small id="settings-api-key-status">{secretPresenceLabel(config.apiKey, 'API key')}</small>
           </label>
           <label className="wide settings-check-row">
             <input
@@ -223,10 +253,12 @@ export function SettingsDialog({
             <input
               type="password"
               autoComplete="off"
-              value={config.feedbackGithubToken ?? ''}
+              value=""
               onChange={(event) => onChange({ feedbackGithubToken: event.target.value.trim() || undefined })}
-              placeholder="classic PAT 或 fine-grained PAT（需 Issues 读写；仅存本地）"
+              placeholder={secretInputPlaceholder(config.feedbackGithubToken, 'classic PAT 或 fine-grained PAT（需 Issues 读写；仅存本地）')}
+              aria-describedby="settings-feedback-github-token-status"
             />
+            <small id="settings-feedback-github-token-status">{secretPresenceLabel(config.feedbackGithubToken, 'GitHub token')}</small>
           </label>
           <label className="wide">
             <span>反馈 GitHub Labels</span>

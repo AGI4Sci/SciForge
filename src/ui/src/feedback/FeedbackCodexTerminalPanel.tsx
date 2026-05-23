@@ -1,17 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
-import { Loader2, Play, Send, Square, TerminalSquare } from 'lucide-react';
+import { Loader2, Play, Square, TerminalSquare } from 'lucide-react';
+import { renderTerminalSessionViewer } from '../../../../packages/presentation/components/terminal-session-viewer/render';
 import {
   feedbackCodexPtyWebSocketUrl,
-  loadFeedbackCodexTerminalTail,
-  sendFeedbackCodexTerminalInput,
   startFeedbackCodexPtyTerminal,
-  startFeedbackCodexTerminal,
   stopFeedbackCodexPtyTerminal,
-  stopFeedbackCodexTerminal,
   type FeedbackCodexTerminalSession,
-  type FeedbackRepairTerminalMirrorEntry,
 } from '../api/workspaceClient';
 import type { FeedbackCommentRecord, FeedbackRepairRunRecord, SciForgeConfig } from '../domain';
 import { Badge, cx } from '../app/uiPrimitives';
@@ -22,6 +18,7 @@ export interface FeedbackCodexTerminalPanelProps {
   item: FeedbackCommentRecord;
   providerReady: boolean;
   providerBlocker?: string;
+  gitMode?: 'manual' | 'auto';
   onRepairRunWritten?: (run: FeedbackRepairRunRecord) => void;
 }
 
@@ -36,14 +33,13 @@ export function FeedbackCodexTerminalPanel({
   item,
   providerReady,
   providerBlocker,
+  gitMode = 'manual',
   onRepairRunWritten,
 }: FeedbackCodexTerminalPanelProps) {
   const [session, setSession] = useState<FeedbackCodexTerminalSession | undefined>();
-  const [entries, setEntries] = useState<FeedbackRepairTerminalMirrorEntry[]>([]);
   const [inputText, setInputText] = useState('');
   const [hint, setHint] = useState('');
   const [busy, setBusy] = useState(false);
-  const [tailError, setTailError] = useState('');
   const [ptyConnected, setPtyConnected] = useState(false);
   const xtermHostRef = useRef<HTMLDivElement | null>(null);
   const xtermRef = useRef<Terminal | null>(null);
@@ -51,11 +47,9 @@ export function FeedbackCodexTerminalPanel({
   const socketRef = useRef<WebSocket | null>(null);
   const isRunning = session?.status === 'starting' || session?.status === 'running';
   const isPtySession = session?.transport === 'websocket-pty';
-  const isHttpWriterSession = session?.transport === 'http-writer';
-  const canSend = Boolean(isHttpWriterSession && inputText.trim() && !isRunning && !busy);
   const canStart = Boolean(!session && !busy);
   const canStop = Boolean(session && isRunning && !busy);
-  const visibleEntries = useMemo(() => entries.slice(-180), [entries]);
+  const canEditInitialPrompt = Boolean(!session && !busy);
 
   useEffect(() => {
     if (!xtermHostRef.current || xtermRef.current) return;
@@ -118,36 +112,6 @@ export function FeedbackCodexTerminalPanel({
     };
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    let timer: number | undefined;
-    async function poll() {
-      if (!session?.id || session.transport === 'websocket-pty') return;
-      try {
-        const result = await loadFeedbackCodexTerminalTail(config, session.id, {
-          workspacePath: session.workspacePath || config.workspacePath,
-          cursor: 0,
-          limit: 500,
-        });
-        if (cancelled) return;
-        setTailError('');
-        setEntries(result.tail.entries);
-        if (result.session) setSession(result.session);
-      } catch (error) {
-        if (!cancelled) setTailError(error instanceof Error ? error.message : String(error));
-      } finally {
-        if (!cancelled && session?.id) {
-          timer = window.setTimeout(poll, isRunning ? 1400 : 4500);
-        }
-      }
-    }
-    void poll();
-    return () => {
-      cancelled = true;
-      if (timer) window.clearTimeout(timer);
-    };
-  }, [config, config.workspacePath, session?.id, session?.workspacePath, session?.transport, isRunning]);
-
   function connectPtySocket(nextSession: FeedbackCodexTerminalSession) {
     const terminal = xtermRef.current;
     if (!terminal) return;
@@ -194,7 +158,7 @@ export function FeedbackCodexTerminalPanel({
         initialMessage: inputText.trim() || undefined,
         runtimeProfile: config.runtimeProfile,
         allowOpenAiRuntime: config.allowOpenAiRuntime === true,
-        gitMode: 'manual',
+        gitMode,
         cols: terminal?.cols,
         rows: terminal?.rows,
       });
@@ -210,61 +174,15 @@ export function FeedbackCodexTerminalPanel({
     }
   }
 
-  async function startHttpWriterTerminal() {
-    setBusy(true);
-    setHint('正在启动 Codex CLI HTTP writer session...');
-    try {
-      const result = await startFeedbackCodexTerminal(config, item.id, {
-        workspacePath: config.workspacePath,
-        initialMessage: inputText.trim() || undefined,
-        runtimeProfile: config.runtimeProfile,
-        allowOpenAiRuntime: config.allowOpenAiRuntime === true,
-        gitMode: 'manual',
-      });
-      setSession(result.session);
-      setInputText('');
-      setHint('Codex HTTP writer 已启动，输出会自动刷新。');
-      if (result.repairRun) onRepairRunWritten?.(result.repairRun);
-    } catch (error) {
-      setHint(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function sendInput() {
-    if (!session || !inputText.trim() || !isHttpWriterSession) return;
-    setBusy(true);
-    setHint('正在发送下一条 Codex 提示...');
-    try {
-      const next = await sendFeedbackCodexTerminalInput(config, session.id, {
-        workspacePath: session.workspacePath || config.workspacePath,
-        message: inputText,
-      });
-      setSession(next);
-      setInputText('');
-      setHint('已发送到 Codex CLI。');
-    } catch (error) {
-      setHint(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function stopTerminal() {
     if (!session) return;
     setBusy(true);
-    setHint(isPtySession ? '正在停止 Codex PTY...' : '正在请求停止当前 Codex turn...');
+    setHint('正在停止 Codex PTY...');
     try {
-      const next = isPtySession
-        ? await stopFeedbackCodexPtyTerminal(config, session.id, {
-          workspacePath: session.workspacePath || config.workspacePath,
-          reason: 'feedback inbox direct PTY terminal stop',
-        })
-        : await stopFeedbackCodexTerminal(config, session.id, {
-          workspacePath: session.workspacePath || config.workspacePath,
-          reason: 'feedback inbox direct terminal stop',
-        });
+      const next = await stopFeedbackCodexPtyTerminal(config, session.id, {
+        workspacePath: session.workspacePath || config.workspacePath,
+        reason: 'feedback inbox direct PTY terminal stop',
+      });
       setSession(next);
       setHint(next.message || '停止请求已记录。');
     } catch (error) {
@@ -282,26 +200,9 @@ export function FeedbackCodexTerminalPanel({
           <strong>Codex 修复终端</strong>
           <Badge variant={statusBadgeVariant(session?.status)}>{session?.status ?? 'not-started'}</Badge>
           <Badge variant={isPtySession ? 'success' : 'muted'}>{isPtySession ? 'WebSocket PTY' : 'xterm ready'}</Badge>
-          {isHttpWriterSession ? <Badge variant="muted">HTTP writer fallback</Badge> : null}
           {isPtySession ? <Badge variant={ptyConnected ? 'success' : 'warning'}>{ptyConnected ? 'connected' : 'disconnected'}</Badge> : null}
         </div>
         <div className="feedback-codex-terminal-actions">
-          <DelayedHelpButton
-            onClick={() => void startPtyTerminal()}
-            disabled={!canStart}
-            help="启动带当前 feedback context 的 Codex CLI，并用 WebSocket/xterm 连接真实 PTY。"
-          >
-            {busy && !session ? <Loader2 size={14} className="feedback-inline-spin" aria-hidden /> : <Play size={14} aria-hidden />}
-            启动 Codex
-          </DelayedHelpButton>
-          <DelayedHelpButton
-            onClick={() => void startHttpWriterTerminal()}
-            disabled={!canStart}
-            help="保留旧 HTTP writer 路径作为 fallback；可用于 WebSocket/PTY 不可用时的 Codex turn stream。"
-          >
-            <Send size={14} aria-hidden />
-            HTTP writer
-          </DelayedHelpButton>
           <DelayedHelpButton
             onClick={() => void stopTerminal()}
             disabled={!canStop}
@@ -314,23 +215,49 @@ export function FeedbackCodexTerminalPanel({
       </div>
       <div className={cx('feedback-codex-terminal-preflight', providerReady ? 'ready' : 'warning')}>
         <span>{providerReady ? 'provider ready' : 'provider diagnostic'}</span>
-        <code>{providerReady ? '配置可用；直接启动 Codex CLI' : providerBlocker || '预检未通过；仍可启动并查看真实 CLI 输出'}</code>
+        <code>{providerReady ? '配置可用；provider 状态只展示，不改变 repair 目标路由。' : providerBlocker || '预检未通过；仍可启动并查看真实 CLI 输出，provider 状态不改变 repair 目标路由。'}</code>
       </div>
-      <div className="feedback-codex-xterm-shell" aria-label="Direct Codex PTY terminal">
-        <div ref={xtermHostRef} className="feedback-codex-xterm" />
-      </div>
-      {isHttpWriterSession ? (
-        <pre className="feedback-codex-terminal-body" aria-label="Direct Codex Terminal output">
-          {visibleEntries.length ? visibleEntries.map((entry, index) => (
-            <span className={cx('feedback-codex-terminal-line', entry.stream)} key={`${entry.timestamp}-${index}`}>
-              <span className="feedback-codex-terminal-prefix">{entry.stream}</span>
-              <span>{entry.text}</span>
-            </span>
-          )) : (
-            <span className="feedback-codex-terminal-empty">启动后会显示 Codex CLI JSONL 事件、stderr 和回答文本。</span>
-          )}
-        </pre>
-      ) : null}
+      {renderTerminalSessionViewer({
+        slot: {
+          componentId: 'terminal-session-viewer',
+          title: 'Direct Codex PTY',
+          props: {
+            sessionRef: session?.id ?? `feedback:${item.id}:codex-pty`,
+            status: terminalViewerStatus(session?.status, ptyConnected),
+            title: 'Direct Codex PTY',
+            rows: xtermRef.current?.rows,
+            cols: xtermRef.current?.cols,
+            theme: 'dark',
+            buffer: '',
+            liveSurfaceRef: xtermHostRef,
+            liveSurfaceLabel: 'Direct Codex PTY terminal',
+            capabilities: {
+              input: false,
+              paste: false,
+              resize: true,
+              copy: false,
+              download: false,
+              stop: false,
+              focus: true,
+            },
+            metadata: {
+              transport: 'websocket-pty',
+              workspace: config.workspacePath,
+              provider: providerReady ? 'ready' : 'diagnostic',
+            },
+          },
+        },
+        artifact: {
+          id: session?.id ?? `feedback-${item.id}-codex-pty`,
+          type: 'runtime-terminal-session',
+          producerScenario: 'feedback-repair-terminal',
+          schemaVersion: '0.1.0',
+          data: {
+            sessionRef: session?.id ?? `feedback:${item.id}:codex-pty`,
+            status: terminalViewerStatus(session?.status, ptyConnected),
+          },
+        },
+      })}
       <div className="feedback-codex-terminal-input">
         <span className="feedback-repair-prompt">$</span>
         <textarea
@@ -339,31 +266,28 @@ export function FeedbackCodexTerminalPanel({
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault();
-              if (isHttpWriterSession) void sendInput();
-              else if (!session) void startPtyTerminal();
+              if (!session) void startPtyTerminal();
             }
           }}
-          disabled={busy || isRunning || isPtySession}
-          placeholder={isHttpWriterSession ? '输入给 Codex 的下一条提示...' : '可选：先写给 Codex 的初始提示，再启动...'}
-          aria-label={isHttpWriterSession ? '输入给 Codex 的下一条提示' : '输入 Direct Codex Terminal 初始提示'}
+          disabled={!canEditInitialPrompt}
+          placeholder="可选：先写给 Codex 的初始提示，再启动..."
+          aria-label="输入 Direct Codex Terminal 初始提示"
         />
         <DelayedHelpButton
-          onClick={() => isHttpWriterSession ? void sendInput() : void startPtyTerminal()}
-          disabled={isHttpWriterSession ? !canSend : !canStart}
-          help={isHttpWriterSession
-            ? '通过 HTTP writer 追加下一条用户提示。'
-            : '生成 feedback prompt 并启动 Codex CLI WebSocket PTY；启动后直接在终端内输入。'}
+          onClick={() => void startPtyTerminal()}
+          disabled={!canStart}
+          help="生成 feedback prompt 并启动 Codex CLI WebSocket PTY；启动后直接在终端内输入。"
         >
-          {busy ? <Loader2 size={14} className="feedback-inline-spin" aria-hidden /> : <Send size={14} aria-hidden />}
-          {isHttpWriterSession ? '发送' : '启动并发送'}
+          {busy ? <Loader2 size={14} className="feedback-inline-spin" aria-hidden /> : <Play size={14} aria-hidden />}
+          启动 Codex
         </DelayedHelpButton>
         <span className="feedback-codex-terminal-boundary">
-          Direct Codex CLI；Git commit/push/PR/merge 默认手动确认。
+          Direct Codex CLI；Git commit/push/PR/merge 保留分级确认，merge 不静默。
         </span>
       </div>
-      {session?.message || hint || tailError ? (
+      {session?.message || hint ? (
         <p className="feedback-codex-terminal-hint" role="status">
-          {tailError || hint || session?.message}
+          {hint || session?.message}
         </p>
       ) : null}
     </section>
@@ -385,4 +309,12 @@ function statusBadgeVariant(status?: FeedbackCodexTerminalSession['status']) {
   if (status === 'failed' || status === 'cancelled') return 'danger';
   if (status === 'running' || status === 'starting') return 'warning';
   return 'muted';
+}
+
+function terminalViewerStatus(status: FeedbackCodexTerminalSession['status'] | undefined, connected: boolean) {
+  if (connected) return 'connected';
+  if (status === 'starting' || status === 'running') return 'running';
+  if (status === 'failed' || status === 'cancelled') return 'error';
+  if (status === 'idle') return 'stopped';
+  return 'idle';
 }
