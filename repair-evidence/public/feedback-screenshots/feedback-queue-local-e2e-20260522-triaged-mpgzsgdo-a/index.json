@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "feedbackId": "feedback-queue-local-e2e-20260522-triaged-mpgzsgdo-a",
+  "visibility": "public",
+  "folderRef": "repair-evidence/public/feedback-screenshots/feedback-queue-local-e2e-20260522-triaged-mpgzsgdo-a",
+  "assets": [
+    {
+      "schemaVersion": 1,
+      "id": "feedback-evidence-feedback-queue-local-e2e-20260522-triaged-mpgzsgdo-a-scrubbed-annotated",
+      "feedbackId": "feedback-queue-local-e2e-20260522-triaged-mpgzsgdo-a",
+      "kind": "scrubbed-annotated-screenshot",
+      "ref": "repair-evidence/public/feedback-screenshots/feedback-queue-local-e2e-20260522-triaged-mpgzsgdo-a/scrubbed-annotated.png",
+      "sourceRef": ".sciforge/feedback/feedback-queue-local-e2e-20260522-triaged-mpgzsgdo-a/annotated-screenshot.data-url",
+      "mediaType": "image/png",
+      "width": 1,
+      "height": 1,
+      "bytes": 68,
+      "sha256": "4b5c5c92cec3b23e6a294fc0eea43234ef5126c5a64f4c6c531ac8430ab0b844",
+      "createdAt": "2026-05-22T14:11:14.304Z",
+      "localOnly": false,
+      "visibility": "public",
+      "uploadStatus": "local",
+      "includeForAgent": false,
+      "metadata": {
+        "scrubPolicy": "Inline data URL omitted from GitHub and public issue bodies; annotated screenshot pixels are retained as captured evidence."
+      }
+    }
+  ],
+  "updatedAt": "2026-05-22T14:11:14.327Z"
+}

@@ -127,7 +127,7 @@ test('sidebar shell renders Codex-style navigation labels without internal runti
     }),
   ));
 
-  for (const label of ['新聊天', '搜索聊天、项目、页面', '线程', '项目', '插件', '自动化', '设置', 'SciForge · 就绪']) {
+  for (const label of ['新聊天', '搜索聊天、项目、页面', '线程', '项目', '插件', '自动化', '设置', '注释', 'SciForge · 就绪']) {
     assert.match(html, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
   assert.match(html, /最近回答：已整理计划。/);

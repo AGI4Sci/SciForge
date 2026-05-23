@@ -1,8 +1,11 @@
-import { createServer } from 'node:http';
+import { createServer, type IncomingMessage } from 'node:http';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { access, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import type { Duplex } from 'node:stream';
+import { spawn as spawnPty, type IPty } from '@homebridge/node-pty-prebuilt-multiarch';
+import { WebSocket, WebSocketServer } from 'ws';
 import { runSciForgeTool } from './sciforge-tools.js';
 import { syncRepairResultToGithubIssue } from './github-repair-sync.js';
 import {
@@ -29,8 +32,17 @@ import { handleScenarioLibraryRoutes } from './server/scenario-library-routes.js
 import { handleWorkspaceFileApiRoutes, readLastWorkspacePath } from './server/workspace-file-api.js';
 import { handleCodexRuntimeRoutes } from './codex/codex-runtime-server.js';
 import { CodexExecJsonAdapter } from './codex/codex-exec-json-adapter.js';
+import { assertCodexRuntimeConfig, codexRuntimeEnv } from './codex/codex-runtime-config.js';
 import { normalizeInstanceName, parallelProfile } from './parallel-instance-profile.js';
-import { DEFAULT_PROXY_BASE_URL, ensureRuntimeHome } from '../../packages/backend/src/runtime-home.js';
+import { assertCodexNoForkGate } from '../../packages/backend/src/codex-compatibility-gate.js';
+import {
+  DEFAULT_PROXY_BASE_URL,
+  ensureRuntimeHome,
+  resolveRuntimeCodexSandbox,
+  RUNTIME_PROFILE,
+  RUNTIME_WORKSPACE_WRITE_NETWORK_CONFIG_ARGS,
+} from '../../packages/backend/src/runtime-home.js';
+import { resolveProxyCliOptions } from '../../packages/backend/src/cli-config.js';
 
 const INSTANCE_ID = process.env.SCIFORGE_INSTANCE_ID || process.env.SCIFORGE_INSTANCE || 'default';
 const INSTANCE_ROLE = process.env.SCIFORGE_INSTANCE_ROLE || INSTANCE_ID;
@@ -56,7 +68,43 @@ function normalizeParallelInstanceId(value: string) {
   return /^p[1-8]$/.test(normalized) ? normalized : 'p1';
 }
 
-createServer(async (req, res) => {
+type FeedbackCodexTerminalStatus = 'starting' | 'running' | 'idle' | 'failed' | 'cancelled';
+type FeedbackCodexTerminalTransport = 'http-writer' | 'websocket-pty';
+
+interface FeedbackCodexTerminalSession {
+  schemaVersion: 1;
+  id: string;
+  issueId: string;
+  repairRunId: string;
+  status: FeedbackCodexTerminalStatus;
+  workspacePath: string;
+  terminalMirrorRef: string;
+  promptRef: string;
+  promptPreview?: string;
+  codexSessionId?: string;
+  activeTurnId?: string;
+  startedAt: string;
+  updatedAt: string;
+  message?: string;
+  runtimeProfile?: string;
+  allowOpenAiRuntime?: boolean;
+  transport: FeedbackCodexTerminalTransport;
+  webSocketPath?: string;
+}
+
+interface ActiveFeedbackCodexTerminalSession extends FeedbackCodexTerminalSession {
+  adapter?: CodexExecJsonAdapter;
+  abortController?: AbortController;
+  turnBusy?: boolean;
+  ptyProcess?: IPty;
+  ptyBacklog?: string[];
+  ptySockets?: Set<WebSocket>;
+}
+
+const activeFeedbackCodexTerminalSessions = new Map<string, ActiveFeedbackCodexTerminalSession>();
+const feedbackCodexPtyWss = new WebSocketServer({ noServer: true });
+
+const workspaceServer = createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -79,6 +127,8 @@ createServer(async (req, res) => {
         'workspace-files',
         'sciforge-tools',
         'repair-handoff-runner',
+        'feedback-direct-codex-terminal-http-writer',
+        'feedback-direct-codex-terminal-websocket-pty',
         'feedback-repair-terminal-mirror-tail',
         'feedback-repair-stop-request',
         'feedback-repair-guidance-input',
@@ -210,8 +260,9 @@ createServer(async (req, res) => {
         executorStateDir: STATE_DIR,
         executorLogDir: LOG_DIR,
         executorConfigLocalPath: CONFIG_LOCAL_PATH,
+        allowExecutorRepoTarget: contract.allowExecutorRepoTarget === true,
         runtimeCodexEnv,
-        runtimeCodexServiceEnv: process.env,
+        runtimeCodexServiceEnv: runtimeCodexEnv,
       });
       writeJson(res, 200, { ok: true, result });
     } catch (err) {
@@ -265,6 +316,63 @@ createServer(async (req, res) => {
       writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
     }
     return;
+  }
+  const feedbackCodexPtyTerminalMatch = /^\/api\/sciforge\/feedback\/codex-pty\/([^/]+)\/(stop|tail)$/.exec(url.pathname);
+  if (feedbackCodexPtyTerminalMatch) {
+    try {
+      const sessionId = decodeURIComponent(feedbackCodexPtyTerminalMatch[1]);
+      const action = feedbackCodexPtyTerminalMatch[2];
+      if (action === 'tail' && req.method === 'GET') {
+        const root = await workspaceRootFromRequest(url);
+        const cursor = Number(url.searchParams.get('cursor') || url.searchParams.get('after') || 0);
+        const limit = Number(url.searchParams.get('limit') || 200);
+        const result = await loadFeedbackCodexTerminalTail(root, sessionId, { cursor, limit });
+        writeJson(res, 200, { ok: true, workspacePath: root, ...result });
+        return;
+      }
+      if (action === 'stop' && req.method === 'POST') {
+        const body = await readJson(req);
+        const root = await workspaceRootFromBodyOrRequest(body, url);
+        const session = await stopFeedbackCodexPtyTerminal(root, sessionId, body);
+        writeJson(res, 200, { ok: true, workspacePath: root, session });
+        return;
+      }
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      return;
+    }
+  }
+  const feedbackCodexTerminalMatch = /^\/api\/sciforge\/feedback\/codex-terminal\/([^/]+)\/(input|stop|tail)$/.exec(url.pathname);
+  if (feedbackCodexTerminalMatch) {
+    try {
+      const sessionId = decodeURIComponent(feedbackCodexTerminalMatch[1]);
+      const action = feedbackCodexTerminalMatch[2];
+      if (action === 'tail' && req.method === 'GET') {
+        const root = await workspaceRootFromRequest(url);
+        const cursor = Number(url.searchParams.get('cursor') || url.searchParams.get('after') || 0);
+        const limit = Number(url.searchParams.get('limit') || 200);
+        const result = await loadFeedbackCodexTerminalTail(root, sessionId, { cursor, limit });
+        writeJson(res, 200, { ok: true, workspacePath: root, ...result });
+        return;
+      }
+      if (action === 'input' && req.method === 'POST') {
+        const body = await readJson(req);
+        const root = await workspaceRootFromBodyOrRequest(body, url);
+        const session = await sendFeedbackCodexTerminalInput(root, sessionId, body);
+        writeJson(res, 200, { ok: true, workspacePath: root, session });
+        return;
+      }
+      if (action === 'stop' && req.method === 'POST') {
+        const body = await readJson(req);
+        const root = await workspaceRootFromBodyOrRequest(body, url);
+        const session = await stopFeedbackCodexTerminal(root, sessionId, body);
+        writeJson(res, 200, { ok: true, workspacePath: root, session });
+        return;
+      }
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      return;
+    }
   }
   if (url.pathname === '/api/sciforge/feedback/issues' && req.method === 'GET') {
     try {
@@ -361,6 +469,34 @@ createServer(async (req, res) => {
     }
     return;
   }
+  const feedbackCodexTerminalStartMatch = /^\/api\/sciforge\/feedback\/issues\/([^/]+)\/codex-terminal\/start$/.exec(url.pathname);
+  if (feedbackCodexTerminalStartMatch && req.method === 'POST') {
+    try {
+      const issueId = decodeURIComponent(feedbackCodexTerminalStartMatch[1]);
+      const body = await readJson(req);
+      const root = await workspaceRootFromBodyOrRequest(body, url);
+      const result = await startFeedbackCodexTerminal(root, issueId, body);
+      writeJson(res, 200, { ok: true, workspacePath: root, ...result });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      writeJson(res, /not found/i.test(message) ? 404 : 400, { ok: false, error: message });
+    }
+    return;
+  }
+  const feedbackCodexPtyTerminalStartMatch = /^\/api\/sciforge\/feedback\/issues\/([^/]+)\/codex-pty\/start$/.exec(url.pathname);
+  if (feedbackCodexPtyTerminalStartMatch && req.method === 'POST') {
+    try {
+      const issueId = decodeURIComponent(feedbackCodexPtyTerminalStartMatch[1]);
+      const body = await readJson(req);
+      const root = await workspaceRootFromBodyOrRequest(body, url);
+      const result = await startFeedbackCodexPtyTerminal(root, issueId, body);
+      writeJson(res, 200, { ok: true, workspacePath: root, ...result });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      writeJson(res, /not found/i.test(message) ? 404 : 400, { ok: false, error: message });
+    }
+    return;
+  }
   const feedbackEvidenceUploadMatch = /^\/api\/sciforge\/feedback\/issues\/([^/]+)\/evidence\/upload$/.exec(url.pathname);
   if (feedbackEvidenceUploadMatch && req.method === 'POST') {
     try {
@@ -451,9 +587,94 @@ createServer(async (req, res) => {
     return;
   }
   writeJson(res, 404, { ok: false, error: 'not found' });
-}).listen(PORT, '127.0.0.1', () => {
+});
+
+workspaceServer.on('upgrade', handleFeedbackCodexPtyUpgrade);
+
+workspaceServer.listen(PORT, '127.0.0.1', () => {
   console.log(`SciForge workspace writer: http://127.0.0.1:${PORT}`);
 });
+
+function handleFeedbackCodexPtyUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer) {
+  const url = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`);
+  const match = /^\/api\/sciforge\/feedback\/codex-pty\/([^/]+)\/ws$/.exec(url.pathname);
+  if (!match) {
+    socket.destroy();
+    return;
+  }
+  feedbackCodexPtyWss.handleUpgrade(req, socket, head, (ws) => {
+    void connectFeedbackCodexPtySocket(ws, decodeURIComponent(match[1]), url).catch((err: unknown) => {
+      ws.send(JSON.stringify({ type: 'error', message: err instanceof Error ? err.message : String(err) }));
+      ws.close(1011, 'codex pty unavailable');
+    });
+  });
+}
+
+async function connectFeedbackCodexPtySocket(ws: WebSocket, sessionId: string, url: URL) {
+  const requestedRoot = url.searchParams.get('workspacePath')?.trim();
+  const session = activeFeedbackCodexTerminalSessions.get(sessionId)
+    ?? (requestedRoot ? await activeOrStoredFeedbackCodexTerminalSession(normalizeWorkspaceRootPath(resolve(requestedRoot)), sessionId) : undefined);
+  if (!session || session.transport !== 'websocket-pty') {
+    ws.send(JSON.stringify({ type: 'error', message: `Codex PTY session not found: ${sessionId}` }));
+    ws.close(1011, 'codex pty session not found');
+    return;
+  }
+  session.ptySockets = session.ptySockets ?? new Set();
+  session.ptySockets.add(ws);
+  ws.send(JSON.stringify({ type: 'status', session: feedbackCodexTerminalPublicSession(session) }));
+  for (const chunk of session.ptyBacklog ?? []) {
+    ws.send(JSON.stringify({ type: 'output', data: chunk }));
+  }
+  ws.on('message', (raw) => {
+    const message = parseFeedbackCodexPtyClientMessage(raw.toString());
+    if (!message) return;
+    if (message.type === 'input') {
+      if (session.ptyProcess) session.ptyProcess.write(message.data);
+      else ws.send(JSON.stringify({ type: 'error', message: 'Codex PTY process is not running.' }));
+    }
+    if (message.type === 'resize' && session.ptyProcess) {
+      session.ptyProcess.resize(message.cols, message.rows);
+    }
+    if (message.type === 'stop') {
+      void stopFeedbackCodexPtyTerminal(session.workspacePath, session.id, { reason: 'websocket stop request' }).catch(() => undefined);
+    }
+  });
+  ws.on('close', () => {
+    session.ptySockets?.delete(ws);
+  });
+}
+
+function parseFeedbackCodexPtyClientMessage(raw: string):
+  | { type: 'input'; data: string }
+  | { type: 'resize'; cols: number; rows: number }
+  | { type: 'stop' }
+  | undefined {
+  const parsed = safeParseJson(raw);
+  if (!isRecord(parsed) || typeof parsed.type !== 'string') return undefined;
+  if (parsed.type === 'input') {
+    return { type: 'input', data: typeof parsed.data === 'string' ? parsed.data : '' };
+  }
+  if (parsed.type === 'resize') {
+    return {
+      type: 'resize',
+      cols: ptyDimension(parsed.cols, 110, 40, 240),
+      rows: ptyDimension(parsed.rows, 28, 12, 80),
+    };
+  }
+  if (parsed.type === 'stop') return { type: 'stop' };
+  return undefined;
+}
+
+function broadcastFeedbackCodexPty(session: ActiveFeedbackCodexTerminalSession, payload: Record<string, unknown>) {
+  const text = JSON.stringify(payload);
+  for (const socket of session.ptySockets ?? []) {
+    if (socket.readyState === WebSocket.OPEN) socket.send(text);
+  }
+}
+
+function broadcastFeedbackCodexPtyStatus(session: ActiveFeedbackCodexTerminalSession) {
+  broadcastFeedbackCodexPty(session, { type: 'status', session: feedbackCodexTerminalPublicSession(session) });
+}
 
 function normalizeRepairHandoffContract(body: Record<string, unknown>): RepairHandoffRunnerContract {
   const contract = isRecord(body.contract) ? body.contract : body;
@@ -473,6 +694,8 @@ function normalizeRepairHandoffContract(body: Record<string, unknown>): RepairHa
     executorBackend: contract.executorBackend === 'runtime-codex' ? 'runtime-codex' : contract.executorBackend === 'agent-server' ? 'agent-server' : undefined,
     runtimeProfile: typeof contract.runtimeProfile === 'string' ? contract.runtimeProfile : undefined,
     allowOpenAiRuntime: contract.allowOpenAiRuntime === true,
+    allowExecutorRepoTarget: contract.allowExecutorRepoTarget === true,
+    initialGuidance: typeof contract.initialGuidance === 'string' ? contract.initialGuidance : undefined,
     allowedWritePaths: stringArray(contract.allowedWritePaths),
     forbiddenWritePaths: stringArray(contract.forbiddenWritePaths),
     requestMetadata: isRecord(contract.requestMetadata) ? contract.requestMetadata : undefined,
@@ -583,6 +806,8 @@ async function buildInstanceManifest(root: string) {
       'feedback-issues-list',
       'feedback-issue-handoff-bundle',
       'feedback-comment-evidence-persistence',
+      'feedback-direct-codex-terminal-http-writer',
+      'feedback-direct-codex-terminal-websocket-pty',
       'feedback-repair-run-record',
       'feedback-repair-result-record',
       'feedback-repair-terminal-mirror-tail',
@@ -615,32 +840,130 @@ async function stableVersionEnvironment(root: string) {
 }
 
 async function readRuntimeProviderPreflightManifest() {
-  const manifestPath = join(process.cwd(), 'docs', 'test-artifacts', 'runtime-provider-preflight', 'manifest.json');
-  const parsed = await readOptionalJson(manifestPath);
-  if (!parsed) return undefined;
-  if (!isRecord(parsed)) throw new Error('runtime provider preflight manifest is invalid');
+  const runtimeEnv = await runtimeCodexEnvFromLocalConfig();
+  const proxyOptions = resolveProxyCliOptions([], runtimeEnv);
+  const runtimeApiKeyPresentInServiceEnv = Boolean(stringValue(runtimeEnv.SCIFORGE_RUNTIME_API_KEY));
+  const upstreamBaseUrlPresent = Boolean(proxyOptions.upstreamBaseUrl);
+  const upstreamKeySourceKind = runtimeApiKeyPresentInServiceEnv ? 'env' : 'missing';
+  const upstreamBaseUrlSourceKind = stringValue(runtimeEnv.SCIFORGE_PROXY_UPSTREAM_BASE_URL) ? 'env' : upstreamBaseUrlPresent ? 'config' : 'missing';
+  const checkedHealthz = runtimeApiKeyPresentInServiceEnv && upstreamBaseUrlPresent
+    ? await requestRuntimeProviderProxyHealthz(runtimeEnv)
+    : undefined;
+  const category = runtimeProviderPreflightCategory({
+    runtimeApiKeyPresentInServiceEnv,
+    upstreamBaseUrlPresent,
+    healthzCategory: checkedHealthz?.category,
+  });
   return {
-    schemaVersion: parsed.schemaVersion,
-    checkedAt: parsed.checkedAt,
-    releaseAcceptance: parsed.releaseAcceptance,
-    runtimeApiKeyPresentInServiceEnv: parsed.runtimeApiKeyPresentInServiceEnv === true,
-    upstreamBaseUrlPresent: parsed.upstreamBaseUrlPresent === true,
-    upstreamKeySourceKind: stringValue(parsed.upstreamKeySourceKind),
-    upstreamBaseUrlSourceKind: stringValue(parsed.upstreamBaseUrlSourceKind),
-    category: stringValue(parsed.category),
-    owner: stringValue(parsed.owner),
-    policyViolations: stringArray(parsed.policyViolations),
-    missingEnv: stringArray(parsed.missingEnv),
-    evidenceMode: parsed.evidenceMode,
-    checkedHealthz: isRecord(parsed.checkedHealthz) ? parsed.checkedHealthz : undefined,
-    nextActions: Array.isArray(parsed.nextActions)
-      ? parsed.nextActions.filter(isRecord).map((action) => ({
-        label: stringValue(action.label),
-        command: stringValue(action.command) || undefined,
-        writesRepo: action.writesRepo === true,
-      })).filter((action) => action.label)
-      : [],
+    schemaVersion: 'sciforge.runtime-provider-preflight.current-env.v1',
+    checkedAt: new Date().toISOString(),
+    releaseAcceptance: 'not-evaluated',
+    runtimeApiKeyPresentInServiceEnv,
+    upstreamBaseUrlPresent,
+    upstreamKeySourceKind,
+    upstreamBaseUrlSourceKind,
+    category,
+    owner: runtimeProviderPreflightOwner(category),
+    policyViolations: [],
+    missingEnv: [
+      ...(runtimeApiKeyPresentInServiceEnv ? [] : ['SCIFORGE_RUNTIME_API_KEY']),
+      ...(upstreamBaseUrlPresent ? [] : ['SCIFORGE_PROXY_UPSTREAM_BASE_URL']),
+    ],
+    evidenceMode: 'current-env-diagnostic-only',
+    checkedHealthz,
+    nextActions: runtimeProviderPreflightNextActions({
+      runtimeApiKeyPresentInServiceEnv,
+      upstreamBaseUrlPresent,
+      category,
+    }),
   };
+}
+
+async function requestRuntimeProviderProxyHealthz(env: NodeJS.ProcessEnv) {
+  const baseUrl = runtimeProviderProxyBaseUrl(env);
+  try {
+    const response = await fetch(`${baseUrl}/healthz?check=upstream`, { signal: AbortSignal.timeout(3_500) });
+    const parsed = await response.json().catch(() => ({}));
+    const upstream = isRecord(parsed) && isRecord(parsed.upstream) ? parsed.upstream : {};
+    const category = stringValue(upstream.category) || (response.ok ? 'ready' : 'unknown');
+    return {
+      category,
+      ok: upstream.ok === true || category === 'ready',
+      retryable: upstream.retryable === true,
+      ...(typeof upstream.httpStatus === 'number' ? { httpStatus: upstream.httpStatus } : {}),
+      releaseAcceptance: 'not-evaluated' as const,
+    };
+  } catch {
+    return {
+      category: 'upstream-outage',
+      ok: false,
+      retryable: true,
+      releaseAcceptance: 'not-evaluated' as const,
+    };
+  }
+}
+
+function runtimeProviderProxyBaseUrl(env: NodeJS.ProcessEnv) {
+  const configured = stringValue(env.SCIFORGE_PROXY_BASE_URL) || DEFAULT_PROXY_BASE_URL;
+  const trimmed = configured.replace(/\/+$/, '');
+  return trimmed.endsWith('/v1') ? trimmed.slice(0, -3) : trimmed;
+}
+
+function runtimeProviderPreflightCategory(input: {
+  runtimeApiKeyPresentInServiceEnv: boolean;
+  upstreamBaseUrlPresent: boolean;
+  healthzCategory?: string;
+}) {
+  if (!input.runtimeApiKeyPresentInServiceEnv) return 'missing-runtime-env';
+  if (!input.upstreamBaseUrlPresent) return 'missing-upstream';
+  if (isRuntimeProviderPreflightCategory(input.healthzCategory)) return input.healthzCategory;
+  return 'unknown';
+}
+
+function isRuntimeProviderPreflightCategory(value: string | undefined) {
+  return value === 'ready'
+    || value === 'provider-auth'
+    || value === 'rate-limited'
+    || value === 'upstream-outage'
+    || value === 'repo-bug';
+}
+
+function runtimeProviderPreflightOwner(category: string) {
+  if (category === 'provider-auth' || category === 'rate-limited' || category === 'upstream-outage') return 'provider';
+  if (category === 'repo-bug' || category === 'unknown') return 'repo';
+  return 'environment';
+}
+
+function runtimeProviderPreflightNextActions(input: {
+  runtimeApiKeyPresentInServiceEnv: boolean;
+  upstreamBaseUrlPresent: boolean;
+  category: string;
+}) {
+  const actions: Array<{ label: string; command?: string; writesRepo: boolean }> = [];
+  if (!input.runtimeApiKeyPresentInServiceEnv) {
+    actions.push({
+      label: 'Set SCIFORGE_RUNTIME_API_KEY in the Runtime Codex launch environment.',
+      writesRepo: false,
+    });
+  }
+  if (!input.upstreamBaseUrlPresent) {
+    actions.push({
+      label: 'Set SCIFORGE_PROXY_UPSTREAM_BASE_URL or ignored local provider base URL for the Runtime Codex proxy.',
+      writesRepo: false,
+    });
+  }
+  if (input.category === 'provider-auth' || input.category === 'rate-limited' || input.category === 'upstream-outage') {
+    actions.push({
+      label: `Resolve provider-side ${input.category} before live repair can pass.`,
+      writesRepo: false,
+    });
+  }
+  actions.push({
+    label: 'Rerun provider preflight and strict Runtime Codex browser acceptance.',
+    command: 'npm run smoke:runtime-provider-preflight && npm run smoke:runtime-codex-browser-acceptance:strict',
+    writesRepo: true,
+  });
+  return actions;
 }
 
 async function readRuntimeCodexBrowserAcceptanceManifest() {
@@ -1522,6 +1845,691 @@ function scrubGuidanceText(value: string) {
     .slice(0, 2000);
 }
 
+async function startFeedbackCodexTerminal(root: string, issueId: string, body: Record<string, unknown>) {
+  const state = await readWorkspaceStateFile(root);
+  const bundle = await buildFeedbackIssueBundle(root, state, issueId);
+  const comment = isRecord(bundle.comment) ? bundle.comment : undefined;
+  const canonicalIssueId = String(comment?.id || bundle.id || issueId);
+  const sessionId = `direct-codex-terminal-${safeName(canonicalIssueId)}-${Date.now().toString(36)}`;
+  const terminalMirrorRef = feedbackCodexTerminalMirrorRef(root, sessionId);
+  const promptRef = feedbackCodexTerminalPromptRef(root, sessionId);
+  const runtimeProfile = stringField(body.runtimeProfile) || 'sciforge-runtime-deepseek';
+  const allowOpenAiRuntime = body.allowOpenAiRuntime === true;
+  const prompt = buildFeedbackCodexTerminalPrompt({
+    root,
+    bundle,
+    issueId: canonicalIssueId,
+    userGuidance: stringField(body.initialMessage),
+  });
+  await mkdir(dirname(promptRef), { recursive: true });
+  await writeFile(promptRef, prompt);
+  const now = new Date().toISOString();
+  const session: ActiveFeedbackCodexTerminalSession = {
+    schemaVersion: 1,
+    id: sessionId,
+    issueId: canonicalIssueId,
+    repairRunId: sessionId,
+    status: 'starting',
+    workspacePath: root,
+    terminalMirrorRef,
+    promptRef,
+    promptPreview: compactString(prompt, 900),
+    startedAt: now,
+    updatedAt: now,
+    runtimeProfile,
+    allowOpenAiRuntime,
+    transport: 'http-writer',
+    message: 'Direct Codex terminal session is starting.',
+  };
+  activeFeedbackCodexTerminalSessions.set(session.id, session);
+  await persistFeedbackCodexTerminalSession(session);
+  await appendRepairTerminalMirrorEntry(terminalMirrorRef, 'event', `Direct Codex Terminal started for feedback ${canonicalIssueId}. Transport=http-writer; workspace=${root}`);
+  await appendRepairTerminalMirrorEntry(terminalMirrorRef, 'event', `Generated feedback prompt saved at ${promptRef}.`);
+  const repairRun = feedbackCodexTerminalRepairRun(session, comment, body);
+  const next = appendStateRecord(state, 'feedbackRepairRuns', repairRun);
+  await persistFeedbackRecord(root, 'repair-runs', repairRun.id, repairRun);
+  await writeWorkspaceStateFile(root, next);
+  queueFeedbackCodexTerminalTurn(session.id, prompt, { kind: 'initial' });
+  return {
+    session: feedbackCodexTerminalPublicSession(session),
+    repairRun,
+  };
+}
+
+async function startFeedbackCodexPtyTerminal(root: string, issueId: string, body: Record<string, unknown>) {
+  const state = await readWorkspaceStateFile(root);
+  const bundle = await buildFeedbackIssueBundle(root, state, issueId);
+  const comment = isRecord(bundle.comment) ? bundle.comment : undefined;
+  const canonicalIssueId = String(comment?.id || bundle.id || issueId);
+  const sessionId = `codex-pty-terminal-${safeName(canonicalIssueId)}-${Date.now().toString(36)}`;
+  const terminalMirrorRef = feedbackCodexTerminalMirrorRef(root, sessionId);
+  const promptRef = feedbackCodexTerminalPromptRef(root, sessionId);
+  const runtimeProfile = stringField(body.runtimeProfile) || RUNTIME_PROFILE;
+  const allowOpenAiRuntime = body.allowOpenAiRuntime === true;
+  const prompt = buildFeedbackCodexTerminalPrompt({
+    root,
+    bundle,
+    issueId: canonicalIssueId,
+    userGuidance: stringField(body.initialMessage),
+  });
+  await mkdir(dirname(promptRef), { recursive: true });
+  await writeFile(promptRef, prompt);
+  const now = new Date().toISOString();
+  const webSocketPath = `/api/sciforge/feedback/codex-pty/${encodeURIComponent(sessionId)}/ws`;
+  const session: ActiveFeedbackCodexTerminalSession = {
+    schemaVersion: 1,
+    id: sessionId,
+    issueId: canonicalIssueId,
+    repairRunId: sessionId,
+    status: 'starting',
+    workspacePath: root,
+    terminalMirrorRef,
+    promptRef,
+    promptPreview: compactString(prompt, 900),
+    startedAt: now,
+    updatedAt: now,
+    runtimeProfile,
+    allowOpenAiRuntime,
+    transport: 'websocket-pty',
+    webSocketPath,
+    ptyBacklog: [],
+    ptySockets: new Set(),
+    message: 'Direct Codex PTY terminal session is starting.',
+  };
+  activeFeedbackCodexTerminalSessions.set(session.id, session);
+  await persistFeedbackCodexTerminalSession(session);
+  await appendRepairTerminalMirrorEntry(terminalMirrorRef, 'event', `Direct Codex Terminal started for feedback ${canonicalIssueId}. Transport=websocket-pty; workspace=${root}`);
+  await appendRepairTerminalMirrorEntry(terminalMirrorRef, 'event', `Generated feedback prompt saved at ${promptRef}.`);
+  const repairRun = feedbackCodexTerminalRepairRun(session, comment, body);
+  const next = appendStateRecord(state, 'feedbackRepairRuns', repairRun);
+  await persistFeedbackRecord(root, 'repair-runs', repairRun.id, repairRun);
+  await writeWorkspaceStateFile(root, next);
+  await launchFeedbackCodexPtySession(session, prompt, body);
+  return {
+    session: feedbackCodexTerminalPublicSession(session),
+    repairRun,
+  };
+}
+
+async function launchFeedbackCodexPtySession(
+  session: ActiveFeedbackCodexTerminalSession,
+  prompt: string,
+  body: Record<string, unknown>,
+) {
+  try {
+    await syncRuntimeCodexHomeFromLocalConfig();
+    const runtimeCodexEnv = await runtimeCodexEnvFromLocalConfig();
+    const config = await assertCodexRuntimeConfig({
+      workspacePath: session.workspacePath,
+      profile: session.runtimeProfile || RUNTIME_PROFILE,
+      allowOpenAiRuntime: session.allowOpenAiRuntime === true,
+      env: runtimeCodexEnv,
+    });
+    const runtimeSandbox = resolveRuntimeCodexSandbox(runtimeCodexEnv);
+    const codexGate = assertCodexNoForkGate({ codexCommand: runtimeCodexEnv.SCIFORGE_RUNTIME_CODEX_COMMAND });
+    const env = withCodexPtyPath(codexRuntimeEnv(runtimeCodexEnv, config.codexHome));
+    const codexCommand = await resolveCodexPtyCommand(codexGate.codexCommand, env);
+    const args = feedbackCodexPtyArgs({
+      profile: config.profile,
+      workspace: config.workspace,
+      sandbox: runtimeSandbox,
+      prompt,
+    });
+    const cols = ptyDimension(body.cols, 110, 40, 240);
+    const rows = ptyDimension(body.rows, 28, 12, 80);
+    await appendRepairTerminalMirrorEntry(
+      session.terminalMirrorRef,
+      'event',
+      `Starting Codex PTY command: ${codexCommand} ${args.filter((arg) => arg !== prompt).join(' ')} [generated feedback prompt]`,
+    );
+    const ptyProcess = spawnPty(codexCommand, args, {
+      name: 'xterm-256color',
+      cols,
+      rows,
+      cwd: config.workspace,
+      env,
+    });
+    session.ptyProcess = ptyProcess;
+    session.ptyBacklog = [];
+    session.ptySockets = session.ptySockets ?? new Set();
+    session.status = 'running';
+    session.message = 'Codex CLI is running in a WebSocket/xterm PTY.';
+    session.updatedAt = new Date().toISOString();
+    await persistFeedbackCodexTerminalSession(session);
+    await persistDirectTerminalRepairRunStatus(session, 'running', session.message);
+    broadcastFeedbackCodexPtyStatus(session);
+    ptyProcess.onData((data) => {
+      const chunk = data.slice(0, 12_000);
+      session.ptyBacklog = [...(session.ptyBacklog ?? []), chunk].slice(-250);
+      broadcastFeedbackCodexPty(session, { type: 'output', data: chunk });
+      void appendRepairTerminalMirrorEntry(session.terminalMirrorRef, 'stdout', chunk).catch(() => undefined);
+    });
+    ptyProcess.onExit((event) => {
+      void finishFeedbackCodexPtySession(session.id, event.exitCode, event.signal).catch(() => undefined);
+    });
+  } catch (err) {
+    const message = `Direct Codex PTY dispatch failed: ${err instanceof Error ? err.message : String(err)}`;
+    session.status = 'failed';
+    session.message = message;
+    session.updatedAt = new Date().toISOString();
+    await appendRepairTerminalMirrorEntry(session.terminalMirrorRef, 'stderr', message);
+    await persistFeedbackCodexTerminalSession(session);
+    await persistDirectTerminalRepairRunStatus(session, 'failed', message);
+    broadcastFeedbackCodexPtyStatus(session);
+    throw err;
+  }
+}
+
+async function finishFeedbackCodexPtySession(sessionId: string, exitCode: number, signal?: number) {
+  const session = activeFeedbackCodexTerminalSessions.get(sessionId);
+  if (!session) return;
+  session.ptyProcess = undefined;
+  const finalStatus: FeedbackCodexTerminalStatus = exitCode === 0 ? 'idle' : 'failed';
+  const message = exitCode === 0
+    ? 'Codex PTY session completed; inspect output and verify the repair.'
+    : `Codex PTY session exited with code ${exitCode}${signal ? ` signal ${signal}` : ''}.`;
+  session.status = finalStatus;
+  session.message = message;
+  session.updatedAt = new Date().toISOString();
+  await appendRepairTerminalMirrorEntry(session.terminalMirrorRef, finalStatus === 'idle' ? 'event' : 'stderr', message);
+  await persistFeedbackCodexTerminalSession(session);
+  await persistDirectTerminalRepairRunStatus(session, finalStatus, message);
+  broadcastFeedbackCodexPty(session, { type: 'exit', exitCode, signal, session: feedbackCodexTerminalPublicSession(session) });
+  broadcastFeedbackCodexPtyStatus(session);
+}
+
+async function stopFeedbackCodexPtyTerminal(root: string, sessionId: string, body: Record<string, unknown>) {
+  const session = await activeOrStoredFeedbackCodexTerminalSession(root, sessionId);
+  const reason = stringField(body.reason) || 'feedback inbox PTY stop button';
+  const message = session.ptyProcess
+    ? `Stop requested for Direct Codex PTY ${session.id}: ${reason}`
+    : `Stop requested for Direct Codex PTY ${session.id}, but no active PTY process is attached.`;
+  await appendRepairTerminalMirrorEntry(session.terminalMirrorRef, 'stderr', message);
+  if (session.ptyProcess) {
+    session.ptyProcess.kill();
+    session.ptyProcess = undefined;
+    session.status = 'cancelled';
+  } else {
+    session.status = session.status === 'running' || session.status === 'starting' ? 'idle' : session.status;
+  }
+  session.message = message;
+  session.updatedAt = new Date().toISOString();
+  await persistFeedbackCodexTerminalSession(session);
+  await persistDirectTerminalRepairRunStatus(session, session.status, message);
+  broadcastFeedbackCodexPtyStatus(session);
+  return feedbackCodexTerminalPublicSession(session);
+}
+
+async function sendFeedbackCodexTerminalInput(root: string, sessionId: string, body: Record<string, unknown>) {
+  const session = await activeOrStoredFeedbackCodexTerminalSession(root, sessionId);
+  const message = stringField(body.message);
+  if (!message) throw new Error('Codex terminal message is required');
+  if (session.turnBusy) {
+    throw new Error('Codex terminal is still running the current turn; wait for it to become idle before sending the next prompt.');
+  }
+  await appendRepairTerminalMirrorEntry(session.terminalMirrorRef, 'stdout', `user> ${scrubTerminalMirrorInput(message)}`);
+  session.status = 'starting';
+  session.message = 'Queued the next Codex prompt through HTTP writer.';
+  session.updatedAt = new Date().toISOString();
+  await persistFeedbackCodexTerminalSession(session);
+  queueFeedbackCodexTerminalTurn(session.id, message, { kind: 'input' });
+  return feedbackCodexTerminalPublicSession(session);
+}
+
+async function stopFeedbackCodexTerminal(root: string, sessionId: string, body: Record<string, unknown>) {
+  const session = await activeOrStoredFeedbackCodexTerminalSession(root, sessionId);
+  const reason = stringField(body.reason) || 'feedback inbox stop button';
+  const message = session.turnBusy && session.activeTurnId
+    ? `Stop requested for Direct Codex Terminal ${session.id}: ${reason}`
+    : `Stop requested for Direct Codex Terminal ${session.id}, but no active Codex turn is running in this writer process.`;
+  await appendRepairTerminalMirrorEntry(session.terminalMirrorRef, 'stderr', message);
+  if (session.turnBusy && session.activeTurnId) {
+    session.abortController?.abort();
+    await session.adapter?.cancel(session.activeTurnId);
+    session.status = 'cancelled';
+  } else {
+    session.status = session.status === 'running' || session.status === 'starting' ? 'idle' : session.status;
+  }
+  session.message = message;
+  session.updatedAt = new Date().toISOString();
+  await persistFeedbackCodexTerminalSession(session);
+  await persistDirectTerminalRepairRunStatus(session, session.status, message);
+  return feedbackCodexTerminalPublicSession(session);
+}
+
+async function loadFeedbackCodexTerminalTail(root: string, sessionId: string, options: { cursor?: number; limit?: number }) {
+  const session = activeFeedbackCodexTerminalSessions.get(sessionId) ?? await readFeedbackCodexTerminalSession(root, sessionId);
+  const terminalPath = session?.terminalMirrorRef ?? feedbackCodexTerminalMirrorRef(root, sessionId);
+  const text = await readFile(terminalPath, 'utf8').catch((err: unknown) => {
+    if (isNodeErrorCode(err, 'ENOENT')) return '';
+    throw err;
+  });
+  return {
+    session: session ? feedbackCodexTerminalPublicSession(session) : undefined,
+    tail: parseRepairTerminalMirrorNdjson(text, {
+      cursor: Number.isFinite(options.cursor) ? options.cursor : 0,
+      limit: Number.isFinite(options.limit) ? options.limit : 200,
+      terminalMirrorRef: terminalPath,
+    }),
+  };
+}
+
+function queueFeedbackCodexTerminalTurn(sessionId: string, commandText: string, input: { kind: 'initial' | 'input' }) {
+  void runFeedbackCodexTerminalTurn(sessionId, commandText, input).catch(async (err: unknown) => {
+    const session = activeFeedbackCodexTerminalSessions.get(sessionId);
+    if (!session) return;
+    const message = `Direct Codex Terminal failed before dispatch: ${err instanceof Error ? err.message : String(err)}`;
+    session.status = 'failed';
+    session.message = message;
+    session.turnBusy = false;
+    session.updatedAt = new Date().toISOString();
+    await appendRepairTerminalMirrorEntry(session.terminalMirrorRef, 'stderr', message).catch(() => undefined);
+    await persistFeedbackCodexTerminalSession(session).catch(() => undefined);
+    await persistDirectTerminalRepairRunStatus(session, 'failed', message).catch(() => undefined);
+  });
+}
+
+async function runFeedbackCodexTerminalTurn(sessionId: string, commandText: string, input: { kind: 'initial' | 'input' }) {
+  const session = activeFeedbackCodexTerminalSessions.get(sessionId);
+  if (!session) throw new Error(`Direct Codex Terminal session is not active: ${sessionId}`);
+  if (session.turnBusy) {
+    await appendRepairTerminalMirrorEntry(session.terminalMirrorRef, 'stderr', 'Direct Codex Terminal turn was not started because another turn is already running.');
+    return;
+  }
+  const now = Date.now();
+  const commandId = `${session.id}-${input.kind}-${now.toString(36)}`;
+  const attemptId = `${commandId}-attempt`;
+  const abortController = new AbortController();
+  session.turnBusy = true;
+  session.status = 'running';
+  session.activeTurnId = commandId;
+  session.abortController = abortController;
+  session.updatedAt = new Date().toISOString();
+  session.message = input.kind === 'initial'
+    ? 'Codex is running the generated feedback repair prompt.'
+    : 'Codex is running the human follow-up prompt.';
+  await persistFeedbackCodexTerminalSession(session);
+  await persistDirectTerminalRepairRunStatus(session, 'running', session.message);
+  try {
+    await syncRuntimeCodexHomeFromLocalConfig();
+    const runtimeCodexEnv = await runtimeCodexEnvFromLocalConfig();
+    const adapter = new CodexExecJsonAdapter({ env: runtimeCodexEnv });
+    session.adapter = adapter;
+    const turn = await adapter.startTurn({
+      commandText,
+      workspacePath: session.workspacePath,
+      commandId,
+      attemptId,
+      profile: session.runtimeProfile || 'sciforge-runtime-deepseek',
+      codexSessionId: input.kind === 'input' ? session.codexSessionId : undefined,
+      allowOpenAiRuntime: session.allowOpenAiRuntime === true,
+      abortSignal: abortController.signal,
+      guiExtension: { enabled: false },
+    });
+    session.activeTurnId = turn.turnId;
+    if (turn.codexSessionId) session.codexSessionId = turn.codexSessionId;
+    await persistFeedbackCodexTerminalSession(session);
+    let finalStatus: FeedbackCodexTerminalStatus = 'idle';
+    let eventCount = 0;
+    for await (const event of turn.events) {
+      eventCount += 1;
+      if (event.codexSessionId) session.codexSessionId = event.codexSessionId;
+      const text = terminalTextForCodexTerminalEvent(recordField(event) ?? {});
+      if (text) await appendRepairTerminalMirrorEntry(session.terminalMirrorRef, terminalStreamForCodexTerminalEvent(recordField(event) ?? {}), text);
+      if (event.type === 'failed') finalStatus = 'failed';
+      if (event.type === 'cancelled') finalStatus = 'cancelled';
+    }
+    session.status = finalStatus;
+    session.message = finalStatus === 'idle'
+      ? `Codex turn completed; terminal is ready for follow-up input. Events: ${eventCount}.`
+      : `Codex turn ended with ${finalStatus}; inspect terminal output before continuing.`;
+  } catch (err) {
+    const message = `Direct Codex Terminal dispatch failed: ${err instanceof Error ? err.message : String(err)}`;
+    session.status = abortController.signal.aborted ? 'cancelled' : 'failed';
+    session.message = message;
+    await appendRepairTerminalMirrorEntry(session.terminalMirrorRef, 'stderr', message);
+  } finally {
+    session.turnBusy = false;
+    session.adapter = undefined;
+    session.abortController = undefined;
+    session.activeTurnId = undefined;
+    session.updatedAt = new Date().toISOString();
+    await persistFeedbackCodexTerminalSession(session);
+    await persistDirectTerminalRepairRunStatus(session, session.status, session.message);
+  }
+}
+
+async function activeOrStoredFeedbackCodexTerminalSession(root: string, sessionId: string): Promise<ActiveFeedbackCodexTerminalSession> {
+  const active = activeFeedbackCodexTerminalSessions.get(sessionId);
+  if (active) return active;
+  const stored = await readFeedbackCodexTerminalSession(root, sessionId);
+  if (!stored) throw new Error(`Direct Codex Terminal session not found: ${sessionId}`);
+  const wasRunning = stored.status === 'running' || stored.status === 'starting';
+  const revived: ActiveFeedbackCodexTerminalSession = {
+    ...stored,
+    status: wasRunning ? 'idle' : stored.status,
+    message: wasRunning
+      ? stored.transport === 'websocket-pty'
+        ? 'PTY session was revived from disk; no active terminal process is attached in this writer process.'
+        : 'Session was revived from disk; no active writer process turn is attached, but follow-up prompts can resume with the stored Codex session id when available.'
+      : stored.message,
+  };
+  activeFeedbackCodexTerminalSessions.set(revived.id, revived);
+  await persistFeedbackCodexTerminalSession(revived);
+  return revived;
+}
+
+async function readFeedbackCodexTerminalSession(root: string, sessionId: string): Promise<FeedbackCodexTerminalSession | undefined> {
+  const manifest = await readOptionalJson(feedbackCodexTerminalManifestRef(root, sessionId)).catch(() => undefined);
+  if (!isRecord(manifest) || manifest.schemaVersion !== 1 || typeof manifest.id !== 'string') return undefined;
+  return {
+    schemaVersion: 1,
+    id: manifest.id,
+    issueId: stringField(manifest.issueId),
+    repairRunId: stringField(manifest.repairRunId) || manifest.id,
+    status: feedbackCodexTerminalStatus(manifest.status),
+    workspacePath: stringField(manifest.workspacePath) || root,
+    terminalMirrorRef: stringField(manifest.terminalMirrorRef) || feedbackCodexTerminalMirrorRef(root, manifest.id),
+    promptRef: stringField(manifest.promptRef) || feedbackCodexTerminalPromptRef(root, manifest.id),
+    promptPreview: stringField(manifest.promptPreview),
+    codexSessionId: stringField(manifest.codexSessionId),
+    activeTurnId: stringField(manifest.activeTurnId),
+    startedAt: stringField(manifest.startedAt) || new Date().toISOString(),
+    updatedAt: stringField(manifest.updatedAt) || new Date().toISOString(),
+    message: stringField(manifest.message),
+    runtimeProfile: stringField(manifest.runtimeProfile),
+    allowOpenAiRuntime: manifest.allowOpenAiRuntime === true,
+    transport: feedbackCodexTerminalTransport(manifest.transport),
+    webSocketPath: stringField(manifest.webSocketPath),
+  };
+}
+
+async function persistFeedbackCodexTerminalSession(session: FeedbackCodexTerminalSession) {
+  await mkdir(dirname(feedbackCodexTerminalManifestRef(session.workspacePath, session.id)), { recursive: true });
+  await writeFile(feedbackCodexTerminalManifestRef(session.workspacePath, session.id), JSON.stringify(feedbackCodexTerminalPublicSession(session), null, 2));
+}
+
+function feedbackCodexTerminalPublicSession(session: FeedbackCodexTerminalSession): FeedbackCodexTerminalSession {
+  return {
+    schemaVersion: 1,
+    id: session.id,
+    issueId: session.issueId,
+    repairRunId: session.repairRunId,
+    status: feedbackCodexTerminalStatus(session.status),
+    workspacePath: session.workspacePath,
+    terminalMirrorRef: session.terminalMirrorRef,
+    promptRef: session.promptRef,
+    promptPreview: session.promptPreview,
+    codexSessionId: session.codexSessionId,
+    activeTurnId: session.activeTurnId,
+    startedAt: session.startedAt,
+    updatedAt: session.updatedAt,
+    message: session.message,
+    runtimeProfile: session.runtimeProfile,
+    allowOpenAiRuntime: session.allowOpenAiRuntime,
+    transport: session.transport,
+    webSocketPath: session.webSocketPath,
+  };
+}
+
+function feedbackCodexTerminalRepairRun(
+  session: FeedbackCodexTerminalSession,
+  comment: Record<string, unknown> | undefined,
+  body: Record<string, unknown>,
+) {
+  const isPty = session.transport === 'websocket-pty';
+  return {
+    schemaVersion: 1,
+    id: session.repairRunId,
+    issueId: session.issueId,
+    status: 'running',
+    externalInstanceId: INSTANCE_ID,
+    externalInstanceName: INSTANCE_ROLE,
+    actor: 'direct-codex-terminal',
+    startedAt: session.startedAt,
+    note: isPty
+      ? 'Direct Codex Terminal started from Feedback Inbox. UI is attached to a WebSocket/xterm PTY running the Codex CLI.'
+      : 'Direct Codex Terminal started from Feedback Inbox. UI streams Codex CLI events through HTTP writer and accepts human follow-up prompts.',
+    terminalMirrorRef: session.terminalMirrorRef,
+    planRef: session.promptRef,
+    terminalMirror: [
+      { timestamp: session.startedAt, stream: 'event' as const, text: `Direct Codex Terminal started for ${session.issueId}.` },
+      { timestamp: session.startedAt, stream: 'event' as const, text: isPty ? 'Transport=websocket-pty; xterm is attached to a real Codex CLI PTY.' : 'Transport=http-writer; this is not a full PTY/xterm session.' },
+    ],
+    confirmationPolicy: normalizeRepairConfirmationPolicy({
+      commit: 'requires-user-confirmation',
+      push: 'requires-second-confirmation',
+      pr: 'requires-second-confirmation',
+      merge: 'never',
+    }),
+    metadata: {
+      handoffKind: 'direct-codex-terminal',
+      executorBackend: 'runtime-codex',
+      terminalTransport: session.transport,
+      terminalMode: isPty ? 'interactive-codex-pty' : 'codex-turn-stream',
+      directCodexTerminalSessionId: session.id,
+      codexSessionId: session.codexSessionId,
+      runtimeProfile: session.runtimeProfile,
+      allowOpenAiRuntime: session.allowOpenAiRuntime === true,
+      targetWorkspacePath: session.workspacePath,
+      promptRef: session.promptRef,
+      webSocketPath: session.webSocketPath,
+      evidenceRefs: feedbackPromptEvidenceRefs(comment ?? {}),
+      initialTerminalGuidance: stringField(body.initialMessage),
+      userGitMode: stringField(body.gitMode) || 'manual-git-default',
+    },
+  };
+}
+
+async function persistDirectTerminalRepairRunStatus(
+  session: FeedbackCodexTerminalSession,
+  status: FeedbackCodexTerminalStatus,
+  message?: string,
+) {
+  const state = await readWorkspaceStateFileOrDefault(session.workspacePath);
+  const runs = Array.isArray(state.feedbackRepairRuns) ? state.feedbackRepairRuns.filter(isRecord) : [];
+  const existing = runs.find((run) => run.id === session.repairRunId);
+  if (!existing) return;
+  const updated = {
+    ...existing,
+    status: repairRunStatusForCodexTerminal(status),
+    note: message || stringField(existing.note),
+    terminalMirrorRef: session.terminalMirrorRef,
+    planRef: session.promptRef,
+    metadata: {
+      ...(isRecord(existing.metadata) ? existing.metadata : {}),
+      terminalTransport: session.transport,
+      terminalMode: session.transport === 'websocket-pty' ? 'interactive-codex-pty' : 'codex-turn-stream',
+      directCodexTerminalSessionId: session.id,
+      codexSessionId: session.codexSessionId,
+      directCodexTerminalStatus: status,
+      webSocketPath: session.webSocketPath,
+      updatedAt: session.updatedAt,
+      message,
+    },
+  };
+  const next = {
+    ...state,
+    feedbackRepairRuns: [updated, ...runs.filter((run) => run.id !== session.repairRunId)].slice(0, 200),
+    updatedAt: new Date().toISOString(),
+  };
+  await persistFeedbackRecord(session.workspacePath, 'repair-runs', session.repairRunId, updated);
+  await writeWorkspaceStateFile(session.workspacePath, next);
+}
+
+function repairRunStatusForCodexTerminal(status: FeedbackCodexTerminalStatus) {
+  if (status === 'failed' || status === 'cancelled') return 'blocked';
+  if (status === 'idle') return 'needs-human-verification';
+  return 'running';
+}
+
+function buildFeedbackCodexTerminalPrompt(input: {
+  root: string;
+  bundle: Record<string, unknown>;
+  issueId: string;
+  userGuidance?: string;
+}) {
+  const comment = isRecord(input.bundle.comment) ? input.bundle.comment : {};
+  const target = isRecord(input.bundle.target) ? input.bundle.target : isRecord(comment.target) ? comment.target : {};
+  const runtime = isRecord(input.bundle.runtime) ? input.bundle.runtime : isRecord(comment.runtime) ? comment.runtime : {};
+  const request = isRecord(input.bundle.request) ? input.bundle.request : undefined;
+  const evidenceRefs = feedbackPromptEvidenceRefs(comment);
+  return [
+    `You are Codex CLI running directly inside the SciForge workspace.`,
+    `Workspace: ${input.root}`,
+    `Feedback issue: ${input.issueId}`,
+    '',
+    'Task',
+    '- Repair the feedback below in the current workspace.',
+    '- Use the feedback target, runtime, screenshot refs, and existing code to make the smallest correct change.',
+    '- Run focused checks when the change is testable.',
+    '- End by summarizing changed files, verification, and any remaining user-facing questions.',
+    '',
+    'Human feedback',
+    `- Comment: ${stringField(comment.comment) || stringField(input.bundle.title) || '(missing comment)'}`,
+    stringField(comment.expectedBehavior) ? `- Expected: ${stringField(comment.expectedBehavior)}` : '',
+    stringField(comment.actualBehavior) ? `- Actual: ${stringField(comment.actualBehavior)}` : '',
+    request && stringField(request.title) ? `- Request: ${stringField(request.title)}` : '',
+    input.userGuidance ? `- Initial guidance: ${input.userGuidance}` : '',
+    '',
+    'Target element',
+    `- Selector: ${stringField(target.selector) || '(missing selector)'}`,
+    `- Path: ${stringField(target.path) || stringField(target.domPath) || '(missing path)'}`,
+    `- Tag: ${stringField(target.tagName) || '(missing tag)'}`,
+    stringField(target.text) ? `- Visible text: ${compactString(stringField(target.text), 500)}` : '',
+    isRecord(target.rect) ? `- Rect: x=${target.rect.x ?? '?'} y=${target.rect.y ?? '?'} w=${target.rect.width ?? '?'} h=${target.rect.height ?? '?'}` : '',
+    '',
+    'Runtime context',
+    `- Page: ${stringField(runtime.page) || '(missing page)'}`,
+    `- URL: ${stringField(runtime.url) || '(missing url)'}`,
+    `- Scenario: ${stringField(runtime.scenarioId) || '(missing scenario)'}`,
+    stringField(runtime.sessionId) ? `- Session: ${stringField(runtime.sessionId)}` : '',
+    stringField(runtime.activeRunId) ? `- Active run: ${stringField(runtime.activeRunId)}` : '',
+    '',
+    'Evidence refs',
+    ...(evidenceRefs.length ? evidenceRefs.map((ref) => `- ${ref}`) : ['- No durable screenshot/evidence refs were recorded. Inspect the UI and code directly.']),
+    '',
+    'Operation boundaries',
+    '- This is a direct Codex terminal session, not the old cross-instance repair runner.',
+    '- Do not commit, push, create a PR, merge, or rewrite ignored secret config unless the human explicitly asks in this terminal.',
+    '- Keep feedback records, screenshots, terminal mirror files, and repair audit files intact.',
+    '- If provider/config errors appear, report the exact blocker and stop rather than fabricating a repair.',
+  ].filter((line) => line !== '').join('\n');
+}
+
+function feedbackPromptEvidenceRefs(comment: Record<string, unknown>) {
+  const assets = Array.isArray(comment.evidenceAssets) ? comment.evidenceAssets.filter(isRecord) : [];
+  return uniqueStrings([
+    stringField(comment.evidenceBundleRef),
+    stringField(comment.screenshotRef),
+    stringField(comment.rawScreenshotRef),
+    stringField(comment.annotatedScreenshotRef),
+    ...assets.flatMap((asset) => [
+      stringField(asset.ref),
+      stringField(asset.localRef),
+      stringField(asset.publicUrl),
+      stringField(asset.markdownImageUrl),
+      stringField(recordField(asset.metadata)?.manifestRef),
+    ]),
+  ]);
+}
+
+function terminalTextForCodexTerminalEvent(event: Record<string, unknown>) {
+  if (event.type === 'audit' && event.status === 'raw-jsonl') return '';
+  return terminalTextForGuidanceEvent(event);
+}
+
+function terminalStreamForCodexTerminalEvent(event: Record<string, unknown>): 'stdout' | 'stderr' | 'event' {
+  if (event.type === 'message' || event.type === 'message_delta') return 'stdout';
+  if (event.type === 'failed' || event.type === 'cancelled' || event.status === 'stderr') return 'stderr';
+  return 'event';
+}
+
+function feedbackCodexPtyArgs(input: {
+  profile: string;
+  workspace: string;
+  sandbox: string;
+  prompt: string;
+}): string[] {
+  return [
+    ...RUNTIME_WORKSPACE_WRITE_NETWORK_CONFIG_ARGS,
+    '--profile',
+    input.profile,
+    '--cd',
+    input.workspace,
+    '--sandbox',
+    input.sandbox,
+    '--ask-for-approval',
+    'never',
+    '--no-alt-screen',
+    input.prompt,
+  ];
+}
+
+function withCodexPtyPath(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const fallbackDirs = ['/opt/homebrew/bin', '/usr/local/bin', '/opt/local/bin', '/usr/bin', '/bin'];
+  const existing = (env.PATH || '').split(':').filter(Boolean);
+  return {
+    ...env,
+    PATH: uniqueStrings([...existing, ...fallbackDirs]).join(':'),
+  };
+}
+
+async function resolveCodexPtyCommand(command: string, env: NodeJS.ProcessEnv) {
+  if (isAbsolute(command) || command.includes(sep)) return command;
+  for (const dir of (env.PATH || '').split(':').filter(Boolean)) {
+    const candidate = join(dir, command);
+    if (await fileExists(candidate)) return candidate;
+  }
+  return command;
+}
+
+async function fileExists(path: string) {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function ptyDimension(value: unknown, fallback: number, min: number, max: number) {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(parsed)));
+}
+
+function scrubTerminalMirrorInput(value: string) {
+  return scrubGuidanceText(value).replace(/\n{3,}/g, '\n\n');
+}
+
+function feedbackCodexTerminalStatus(value: unknown): FeedbackCodexTerminalStatus {
+  return value === 'starting' || value === 'running' || value === 'idle' || value === 'failed' || value === 'cancelled'
+    ? value
+    : 'idle';
+}
+
+function feedbackCodexTerminalTransport(value: unknown): FeedbackCodexTerminalTransport {
+  return value === 'websocket-pty' ? 'websocket-pty' : 'http-writer';
+}
+
+function feedbackCodexTerminalDir(root: string, sessionId: string) {
+  const normalized = normalizeFeedbackBundleId(sessionId);
+  return join(root, '.sciforge', 'repair-results', normalized);
+}
+
+function feedbackCodexTerminalMirrorRef(root: string, sessionId: string) {
+  return join(feedbackCodexTerminalDir(root, sessionId), 'terminal-mirror.ndjson');
+}
+
+function feedbackCodexTerminalPromptRef(root: string, sessionId: string) {
+  return join(feedbackCodexTerminalDir(root, sessionId), 'feedback-codex-prompt.md');
+}
+
+function feedbackCodexTerminalManifestRef(root: string, sessionId: string) {
+  return join(feedbackCodexTerminalDir(root, sessionId), 'direct-codex-terminal.json');
+}
+
 function scrubFeedbackError(value: string) {
   return value
     .replace(/sk-[A-Za-z0-9_-]{8,}/g, '[redacted-api-key]')
@@ -1538,6 +2546,14 @@ function stringField(value: unknown) {
 
 function recordField(value: unknown): Record<string, unknown> | undefined {
   return isRecord(value) ? value : undefined;
+}
+
+function safeParseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
 }
 
 function firstNonEmptyString(...values: Array<string | undefined>) {

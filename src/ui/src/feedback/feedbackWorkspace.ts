@@ -95,6 +95,19 @@ export interface FeedbackRepairAuditViewModel {
     codexSessionId?: string;
     responseSummary?: string;
   }>;
+  repairThreads: Array<{
+    id: string;
+    status: FeedbackRepairRunRecord['status'] | 'result-only';
+    startedAt: string;
+    executorInstance?: string;
+    terminalMirrorRef?: string;
+    planRef?: string;
+    resultId?: string;
+    resultStatus?: FeedbackRepairResultRecord['status'];
+    resultVerdict?: FeedbackRepairResultRecord['verdict'];
+    resultSummary?: string;
+    completedAt?: string;
+  }>;
   latestRun?: FeedbackRepairRunRecord;
   latestResult?: FeedbackRepairResultRecord;
 }
@@ -317,7 +330,44 @@ export function feedbackRepairAuditForIssue(
       responseSummary: record.responseSummary,
     }));
   const latestRun = issueRuns[0];
-  const latestResult = issueResults[0];
+  const latestResult = latestResultForCurrentThread(latestRun, issueResults);
+  const resultsByRunId = new Map(issueResults
+    .filter((result): result is FeedbackRepairResultRecord & { repairRunId: string } => Boolean(result.repairRunId))
+    .map((result) => [result.repairRunId, result]));
+  const runIds = new Set(issueRuns.map((run) => run.id));
+  const repairThreads = [
+    ...issueRuns.map((run) => {
+      const result = resultsByRunId.get(run.id);
+      return {
+        id: run.id,
+        status: run.status,
+        startedAt: run.startedAt,
+        executorInstance: executorInstanceLabel(run, result),
+        terminalMirrorRef: run.terminalMirrorRef ?? result?.terminalMirrorRef,
+        planRef: run.planRef ?? result?.planRef,
+        resultId: result?.id,
+        resultStatus: result?.status,
+        resultVerdict: result?.verdict,
+        resultSummary: result?.summary,
+        completedAt: result?.completedAt,
+      };
+    }),
+    ...issueResults
+      .filter((result) => !result.repairRunId || !runIds.has(result.repairRunId))
+      .map((result) => ({
+        id: result.repairRunId ?? result.id,
+        status: 'result-only' as const,
+        startedAt: result.completedAt,
+        executorInstance: executorInstanceLabel(undefined, result),
+        terminalMirrorRef: result.terminalMirrorRef,
+        planRef: result.planRef,
+        resultId: result.id,
+        resultStatus: result.status,
+        resultVerdict: result.verdict,
+        resultSummary: result.summary,
+        completedAt: result.completedAt,
+      })),
+  ].slice(0, 12);
   const latestBrowserVerification = actionHistory.find((action) => action.action === 'browser-recheck')?.browserVerification;
   const tests = normalizeRepairTests(latestResult?.tests ?? latestResult?.testResults ?? []);
   const testsPassed = tests.length > 0 && tests.every((test) => test.status === 'passed');
@@ -362,9 +412,23 @@ export function feedbackRepairAuditForIssue(
     githubSynced,
     actionHistory,
     guidanceHistory,
+    repairThreads,
     latestRun,
     latestResult,
   };
+}
+
+function latestResultForCurrentThread(
+  latestRun: FeedbackRepairRunRecord | undefined,
+  issueResults: FeedbackRepairResultRecord[],
+) {
+  const newestResult = issueResults[0];
+  if (!latestRun || !newestResult) return newestResult;
+  if (newestResult.repairRunId === latestRun.id) return newestResult;
+  const resultTime = Date.parse(newestResult.completedAt);
+  const runTime = Date.parse(latestRun.startedAt);
+  if (Number.isFinite(resultTime) && Number.isFinite(runTime) && resultTime >= runTime) return newestResult;
+  return issueResults.find((result) => result.repairRunId === latestRun.id);
 }
 
 function repairAuditStatus(

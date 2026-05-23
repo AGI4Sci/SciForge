@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "feedbackId": "feedback-mpgbx5bc-5w2fgk",
+  "uploadedAt": "2026-05-22T15:40:52.738Z",
+  "requestedBy": "feedback-inbox",
+  "target": {
+    "provider": "github-contents",
+    "repo": "AGI4Sci/SciForge",
+    "branch": "dev"
+  },
+  "assets": [
+    {
+      "schemaVersion": 1,
+      "id": "feedback-evidence-feedback-mpgbx5bc-5w2fgk-scrubbed-annotated",
+      "kind": "scrubbed-annotated-screenshot",
+      "label": "Scrubbed annotated screenshot",
+      "ref": "repair-evidence/public/feedback-screenshots/feedback-mpgbx5bc-5w2fgk/scrubbed-annotated.png",
+      "sourceRef": ".sciforge/feedback/feedback-mpgbx5bc-5w2fgk/annotated-screenshot.data-url",
+      "localRef": "repair-evidence/public/feedback-screenshots/feedback-mpgbx5bc-5w2fgk/scrubbed-annotated.png",
+      "markdownImageUrl": "https://raw.githubusercontent.com/AGI4Sci/SciForge/dev/repair-evidence/public/feedback-screenshots/feedback-mpgbx5bc-5w2fgk/scrubbed-annotated.png",
+      "githubMarkdownUrl": "https://raw.githubusercontent.com/AGI4Sci/SciForge/dev/repair-evidence/public/feedback-screenshots/feedback-mpgbx5bc-5w2fgk/scrubbed-annotated.png",
+      "mediaType": "image/png",
+      "width": 2072,
+      "height": 1214,
+      "bytes": 65383,
+      "sha256": "27c53bcde7d323db457732e56ecff218dbb8c8e45f462fc98127c9ea5c5955ba",
+      "createdAt": "2026-05-22T02:57:29.966Z",
+      "localOnly": false,
+      "visibility": "public",
+      "uploadStatus": "uploaded",
+      "includeForAgent": false,
+      "metadata": {
+        "scrubPolicy": "Inline data URL omitted from GitHub and public issue bodies; annotated screenshot pixels are retained as captured evidence.",
+        "manifestRef": "repair-evidence/public/feedback-screenshots/feedback-mpgbx5bc-5w2fgk/scrubbed-annotated.manifest.json"
+      },
+      "publicUrl": "https://raw.githubusercontent.com/AGI4Sci/SciForge/dev/repair-evidence/public/feedback-screenshots/feedback-mpgbx5bc-5w2fgk/scrubbed-annotated.png",
+      "uploadRef": "repair-evidence/public/feedback-screenshots/feedback-mpgbx5bc-5w2fgk/scrubbed-annotated.png",
+      "uploadProvider": "github-contents",
+      "uploadedAt": "2026-05-22T15:40:52.738Z",
+      "uploadedBy": "feedback-inbox",
+      "uploadCommitUrl": "https://github.com/AGI4Sci/SciForge/commit/487ed5246e1fd234440a5b4a9e6cc4a124283c76",
+      "uploadBranch": "dev"
+    }
+  ],
+  "diagnostics": []
+}

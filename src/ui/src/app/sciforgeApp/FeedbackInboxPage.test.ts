@@ -1,8 +1,15 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { repairReadinessSummary, workspaceWriterReadinessRows, type RepairPeerReadinessByName } from './feedbackRepairReadiness';
 import { buildBlockedRepairHandoffResultInput } from './feedbackBlockedRepairResult';
 import type { FeedbackCommentRecord, PeerInstance, RuntimeCodexBrowserAcceptanceManifest, RuntimeProviderPreflightManifest } from '../../domain';
+
+const feedbackInboxSource = readFileSync(new URL('./FeedbackInboxPage.tsx', import.meta.url), 'utf8');
+const feedbackInboxCss = readFileSync(new URL('../../styles/app-feedback.css', import.meta.url), 'utf8');
+const directCodexTerminalSource = readFileSync(new URL('../../feedback/FeedbackCodexTerminalPanel.tsx', import.meta.url), 'utf8');
+const feedbackScreenshotPreviewSource = readFileSync(new URL('../../feedback/FeedbackScreenshotPreview.tsx', import.meta.url), 'utf8');
+const sciForgeAppSource = readFileSync(new URL('../SciForgeApp.tsx', import.meta.url), 'utf8');
 
 const repairPeer: PeerInstance = {
   name: 'repair',
@@ -113,9 +120,10 @@ test('workspace writer readiness surfaces stale capabilities before repair accep
     pid: 123,
     startedAt: '2026-05-07T00:00:00.000Z',
     capabilities: ['workspace-snapshot', 'runtime-provider-preflight-manifest'],
-  }, '');
+  }, '', 'http://127.0.0.1:6173/');
   assert.equal(stale[0].state, 'blocked');
   assert.equal(stale[0].value, 'stale-capabilities');
+  assert.match(stale[0].detail ?? '', /url=http:\/\/127\.0\.0\.1:6173/);
   assert.match(stale[0].detail ?? '', /runtime-codex-browser-acceptance-manifest/);
 
   const current = workspaceWriterReadinessRows({
@@ -126,13 +134,22 @@ test('workspace writer readiness surfaces stale capabilities before repair accep
     startedAt: '2026-05-07T00:01:00.000Z',
     capabilities: [
       'repair-handoff-runner',
+      'feedback-direct-codex-terminal-http-writer',
+      'feedback-direct-codex-terminal-websocket-pty',
       'feedback-repair-terminal-mirror-tail',
       'runtime-provider-preflight-manifest',
       'runtime-codex-browser-acceptance-manifest',
     ],
-  }, '');
+  }, '', 'http://127.0.0.1:6173/');
   assert.equal(current[0].state, 'ready');
   assert.equal(current[0].value, 'current');
+  assert.match(current[0].detail ?? '', /url=http:\/\/127\.0\.0\.1:6173/);
+
+  const unreachable = workspaceWriterReadinessRows(undefined, 'Workspace Writer 未连接：http://127.0.0.1:6199 无法访问', 'http://127.0.0.1:6199/');
+  assert.equal(unreachable[0].state, 'blocked');
+  assert.equal(unreachable[0].value, 'unreachable');
+  assert.match(unreachable[0].detail ?? '', /url=http:\/\/127\.0\.0\.1:6199/);
+  assert.match(unreachable[0].detail ?? '', /Workspace Writer 未连接/);
 });
 
 test('blocked provider handoff builds durable repair audit payload', () => {
@@ -181,6 +198,159 @@ test('blocked provider handoff builds durable repair audit payload', () => {
   assert.equal((result.metadata?.runtimePreflightManifest as RuntimeProviderPreflightManifest).category, 'config-secret-source');
   assert.equal(result.metadata?.targetWorkspaceWriterUrl, repairPeer.workspaceWriterUrl);
   assert.equal((result.metadata?.confirmationPolicy as { commit?: string }).commit, 'requires-user-confirmation');
+});
+
+test('feedback inbox keeps search field wired to no-match empty state copy', () => {
+  assert.match(feedbackInboxSource, /value=\{searchQuery\}/);
+  assert.match(feedbackInboxSource, /onChange=\{\(event\) => setSearchQuery\(event\.target\.value\)\}/);
+  assert.match(feedbackInboxSource, /aria-label="搜索反馈、GitHub Issue 或证据 ref"/);
+  assert.match(feedbackInboxSource, /placeholder="搜索反馈、Issue、ref\.\.\."/);
+  assert.match(feedbackInboxSource, /没有匹配当前筛选或搜索的反馈/);
+  assert.match(feedbackInboxSource, /调整状态筛选、清空搜索/);
+  assert.match(feedbackInboxSource, /点击顶栏“注释”进入注释模式/);
+  assert.match(feedbackInboxSource, /隐藏选择不会参与当前操作/);
+});
+
+test('feedback inbox defaults repair to direct Codex WebSocket PTY terminal', () => {
+  assert.match(feedbackInboxSource, /import \{ FeedbackCodexTerminalPanel \} from '..\/..\/feedback\/FeedbackCodexTerminalPanel'/);
+  assert.match(feedbackInboxSource, /<FeedbackCodexTerminalPanel/);
+  assert.match(feedbackInboxSource, /providerReady=\{repairReadiness\.providerReady === true\}/);
+  assert.match(feedbackInboxSource, /providerBlocker=\{repairReadiness\.providerBlocker\}/);
+  assert.match(feedbackInboxSource, /onRepairRunWritten=\{onRepairRunWritten\}/);
+  assert.match(feedbackInboxSource, /高级 repair 交接与 audit/);
+  assert.match(directCodexTerminalSource, /startFeedbackCodexPtyTerminal/);
+  assert.match(directCodexTerminalSource, /stopFeedbackCodexPtyTerminal/);
+  assert.match(directCodexTerminalSource, /feedbackCodexPtyWebSocketUrl/);
+  assert.match(directCodexTerminalSource, /@xterm\/xterm/);
+  assert.match(directCodexTerminalSource, /startFeedbackCodexTerminal/);
+  assert.match(directCodexTerminalSource, /sendFeedbackCodexTerminalInput/);
+  assert.match(directCodexTerminalSource, /loadFeedbackCodexTerminalTail/);
+  assert.match(directCodexTerminalSource, /stopFeedbackCodexTerminal/);
+  assert.match(directCodexTerminalSource, /WebSocket PTY/);
+  assert.match(directCodexTerminalSource, /HTTP writer fallback/);
+  assert.match(directCodexTerminalSource, /Direct Codex CLI/);
+  assert.match(directCodexTerminalSource, /Git commit\/push\/PR\/merge 默认手动确认/);
+  assert.match(feedbackInboxCss, /\.feedback-codex-terminal\s*\{/);
+  assert.match(feedbackInboxCss, /@import '@xterm\/xterm\/css\/xterm\.css';/);
+  assert.match(feedbackInboxCss, /\.feedback-codex-xterm-shell\s*\{/);
+  assert.match(feedbackInboxCss, /\.feedback-codex-terminal-preflight\s*\{[\s\S]*?grid-template-columns: max-content minmax\(0, 1fr\);/);
+  assert.match(feedbackInboxCss, /\.feedback-codex-terminal-input\s*\{[\s\S]*?grid-template-columns: auto minmax\(0, 1fr\) auto;/);
+  assert.match(feedbackInboxCss, /@media \(max-width: 720px\)\s*\{[\s\S]*?\.feedback-codex-terminal-input\s*\{[\s\S]*?grid-template-columns: auto minmax\(0, 1fr\);/);
+});
+
+test('feedback inbox keeps visible selection scope hints and GitHub sync trace visible', () => {
+  assert.match(feedbackInboxSource, /selectedVisibleActiveComments\.length \? selectedVisibleActiveComments : visibleComments\.filter/);
+  assert.match(feedbackInboxSource, /当前列表已选 \$\{visibleSelectedCount\} 条；另有 \$\{hiddenSelectedCount\} 条隐藏选择不参与当前操作/);
+  assert.match(feedbackInboxSource, /选择当前筛选和搜索结果中的所有反馈；隐藏选择不会参与当前操作。/);
+  assert.match(feedbackInboxSource, /只把当前可见且已选的未删除反馈标记为下拉框中的共享状态；隐藏选择不会被修改。/);
+  assert.match(feedbackInboxSource, /导出当前可见已选反馈；如果当前列表没有可见选择，则导出当前筛选和搜索结果。/);
+  assert.match(feedbackInboxSource, /aria-label="GitHub sync trace"/);
+  assert.match(feedbackInboxSource, /local <code>\{item\.id\}<\/code>/);
+  assert.match(feedbackInboxSource, /sync <strong>\{githubTrace\.syncStatus\}<\/strong>/);
+  assert.match(feedbackInboxSource, /issue <strong>\{githubTrace\.issueLabel\}<\/strong>/);
+  assert.match(feedbackInboxSource, /state <strong>\{githubTrace\.state\}<\/strong>/);
+  assert.match(feedbackInboxSource, /evidence <code>\{githubTrace\.publicEvidenceRef\}<\/code>/);
+});
+
+test('feedback inbox surfaces page state diagnostics for incomplete states', () => {
+  assert.match(feedbackInboxSource, /function feedbackPageStateNotices/);
+  assert.match(feedbackInboxSource, /aria-label="页面状态诊断"/);
+  assert.match(feedbackInboxSource, /const \[diagnosticProbeKey, setDiagnosticProbeKey\] = useState\(0\)/);
+  assert.match(feedbackInboxSource, /function refreshPageDiagnostics\(\) \{[\s\S]*?setDiagnosticProbeKey\(\(key\) => key \+ 1\);[\s\S]*?\}/);
+  assert.match(feedbackInboxSource, /aria-label="重新检查页面状态诊断"/);
+  assert.match(feedbackInboxSource, /<RefreshCcw size=\{14\} aria-hidden \/>/);
+  assert.match(feedbackInboxSource, /workspace writer/);
+  assert.match(feedbackInboxSource, /workspaceLoading = false/);
+  assert.match(feedbackInboxSource, /workspaceLoadingDetail/);
+  assert.match(feedbackInboxSource, /workspace data/);
+  assert.match(feedbackInboxSource, /value: input\.workspaceLoading \? '加载中' : 'loaded'/);
+  assert.match(feedbackInboxSource, /正在加载 config\.local\.json 和 \.sciforge\/workspace-state\.json/);
+  assert.match(sciForgeAppSource, /MIN_WORKSPACE_LOADING_VISIBLE_MS = 600/);
+  assert.match(sciForgeAppSource, /const \[workspaceLoadingVisible, setWorkspaceLoadingVisible\] = useState\(true\)/);
+  assert.match(sciForgeAppSource, /const workspaceLoadingActive = !configFileHydrated \|\| !workspaceHydrated/);
+  assert.match(sciForgeAppSource, /setTimeout\(\(\) => setWorkspaceLoadingVisible\(false\), MIN_WORKSPACE_LOADING_VISIBLE_MS\)/);
+  assert.match(sciForgeAppSource, /workspaceLoading=\{workspaceLoadingVisible\}/);
+  assert.match(sciForgeAppSource, /正在恢复 \.sciforge\/workspace-state\.json/);
+  assert.match(sciForgeAppSource, /正在完成 workspace 状态刷新；反馈计数、筛选和操作范围已经恢复，将在片刻后切换为 loaded。/);
+  assert.match(feedbackInboxSource, /provider\/env/);
+  assert.match(feedbackInboxSource, /repair peer sync/);
+  assert.match(feedbackInboxSource, /GitHub token/);
+  assert.match(feedbackInboxSource, /user confirmation/);
+  assert.match(feedbackInboxSource, /GitHub submit\/sync require in-app confirmation; repair guidance is sent only from human terminal input/);
+  assert.match(feedbackInboxSource, /screenshot evidence/);
+  assert.match(feedbackInboxSource, /missing PAT for \$\{input\.effectiveGithubRepo \|\| 'configured repo'\}; submit\/sync opens settings and keeps local state/);
+  assert.match(feedbackInboxSource, /missing and \$\{partialEvidenceCount\} partial active feedback item\(s\); affected cards show fallback refs and diagnostics/);
+  assert.match(feedbackInboxCss, /\.feedback-page-state-grid\s*\{[\s\S]*?grid-template-columns: repeat\(7, minmax\(0, 1fr\)\);/);
+  assert.match(feedbackInboxCss, /\.feedback-page-state-actions\s*\{[\s\S]*?flex-wrap: wrap;[\s\S]*?min-width: 0;/);
+  assert.match(feedbackInboxCss, /\.feedback-page-state-refresh\s*\{[\s\S]*?white-space: normal;/);
+  assert.match(feedbackInboxCss, /@media \(max-width: 560px\)\s*\{[\s\S]*?\.feedback-page-state-grid\s*\{[\s\S]*?grid-template-columns: 1fr;/);
+  assert.match(feedbackInboxCss, /@media \(max-width: 560px\)\s*\{[\s\S]*?\.feedback-page-state-actions\s*\{[\s\S]*?justify-content: flex-start;/);
+});
+
+test('feedback screenshot preview explains missing images instead of disappearing', () => {
+  assert.match(feedbackScreenshotPreviewSource, /className=\{cx\('feedback-screenshot-empty', evidenceStatus\)\} role="status"/);
+  assert.match(feedbackScreenshotPreviewSource, /截图预览缺失/);
+  assert.match(feedbackScreenshotPreviewSource, /function missingScreenshotFallback/);
+  assert.match(feedbackScreenshotPreviewSource, /仅找到 evidence ref/);
+  assert.match(feedbackScreenshotPreviewSource, /重新评论该元素可补采截图/);
+  assert.match(feedbackInboxCss, /\.feedback-screenshot-empty\.missing\s*\{[\s\S]*?border-color: rgba\(255, 117, 117, 0\.36\);/);
+});
+
+test('feedback inbox confirms destructive local queue actions inside the inbox', () => {
+  const softDeleteRequest = feedbackInboxSource.match(/function requestSoftDeleteSelected\(ids: string\[\]\) \{[\s\S]*?\n  \}/)?.[0] ?? '';
+  const softDeleteConfirm = feedbackInboxSource.match(/function confirmPendingQueueAction\(\) \{[\s\S]*?\n  \}/)?.[0] ?? '';
+  assert.match(feedbackInboxSource, /type PendingQueueActionKind = 'soft-delete'/);
+  assert.match(feedbackInboxSource, /const \[pendingQueueAction, setPendingQueueAction\]/);
+  assert.match(feedbackInboxSource, /function requestSoftDeleteSelected\(ids: string\[\]\)/);
+  assert.doesNotMatch(softDeleteRequest, /window\.confirm/);
+  assert.doesNotMatch(softDeleteConfirm, /window\.confirm/);
+  assert.match(feedbackInboxSource, /role="alertdialog" aria-label="确认本地队列操作"/);
+  assert.match(feedbackInboxSource, /确认软删除本地反馈/);
+  assert.match(feedbackInboxSource, /不会删除 GitHub Issue、repair audit、workspace patch、terminal mirror 或截图原始证据/);
+  assert.match(feedbackInboxSource, /已取消本地队列操作/);
+  assert.match(feedbackInboxSource, /onClick=\{\(\) => requestSoftDeleteSelected\(selectedVisibleActiveComments\.map/);
+  assert.match(feedbackInboxCss, /\.feedback-queue-confirmation\s*\{/);
+  assert.match(feedbackInboxCss, /\.feedback-queue-confirmation-grid,[\s\S]*?\.feedback-github-confirmation-grid\s*\{[\s\S]*?grid-template-columns: max-content minmax\(0, 1fr\);/);
+  assert.match(feedbackInboxCss, /@media \(max-width: 720px\)\s*\{[\s\S]*?\.feedback-queue-confirmation-grid\s*\{[\s\S]*?grid-template-columns: 1fr;/);
+});
+
+test('feedback inbox requires confirmation before GitHub external actions', () => {
+  assert.match(feedbackInboxSource, /type PendingGithubActionKind = 'upload-evidence' \| 'submit-issue' \| 'sync-open-issues'/);
+  assert.match(feedbackInboxSource, /const \[pendingGithubAction, setPendingGithubAction\]/);
+  assert.match(feedbackInboxSource, /function requestGithubAction\(kind: PendingGithubActionKind\)/);
+  assert.match(feedbackInboxSource, /role="alertdialog" aria-label="确认 GitHub 外部操作"/);
+  assert.match(feedbackInboxSource, /确认创建 GitHub Issue/);
+  assert.match(feedbackInboxSource, /会把结构化 issue body 和公开 evidence refs 发送到 GitHub/);
+  assert.match(feedbackInboxSource, /onClick=\{\(\) => requestGithubAction\('submit-issue'\)\}/);
+  assert.match(feedbackInboxSource, /onClick=\{\(\) => requestGithubAction\('sync-open-issues'\)\}/);
+  assert.match(feedbackInboxSource, /已取消 GitHub 外部操作/);
+  assert.match(feedbackInboxSource, /function githubActionCancelImpact/);
+  assert.match(feedbackInboxSource, /没有向 GitHub 发起读取请求，也没有发送 token 或改动本地同步缓存/);
+  assert.match(feedbackInboxCss, /\.feedback-github-confirmation\s*\{/);
+  assert.match(feedbackInboxCss, /\.feedback-github-confirmation-grid\s*\{[\s\S]*?grid-template-columns: max-content minmax\(0, 1fr\);/);
+  assert.match(feedbackInboxCss, /@media \(max-width: 720px\)\s*\{[\s\S]*?\.feedback-github-confirmation-grid\s*\{[\s\S]*?grid-template-columns: 1fr;/);
+});
+
+test('feedback inbox keeps narrow layout safeguards for queue and terminal controls', () => {
+  assert.match(feedbackInboxCss, /\.feedback-toolbar\s*\{[\s\S]*?flex-wrap: wrap;/);
+  assert.match(feedbackInboxCss, /\.feedback-toolbar select,[\s\S]*?\.feedback-toolbar-token-note\s*\{[\s\S]*?min-width: 0;[\s\S]*?max-width: 100%;/);
+  assert.match(feedbackInboxCss, /\.feedback-toolbar button\s*\{[\s\S]*?max-width: 100%;[\s\S]*?white-space: normal;/);
+  assert.match(feedbackInboxCss, /\.delayed-help-progress\s*\{[\s\S]*?top: 3px;[\s\S]*?right: 3px;[\s\S]*?width: 14px;[\s\S]*?height: 14px;/);
+  assert.match(feedbackInboxCss, /\.delayed-help-popover\s*\{[\s\S]*?display: none;[\s\S]*?max-width: calc\(100vw - 24px\);[\s\S]*?overflow-wrap: anywhere;/);
+  assert.match(feedbackInboxCss, /\.delayed-help-control:hover:not\(\.is-disabled\) \.delayed-help-popover,[\s\S]*?\.delayed-help-control:focus-within:not\(\.is-disabled\) \.delayed-help-popover\s*\{[\s\S]*?display: block;/);
+  assert.match(feedbackInboxCss, /\.feedback-toolbar input\[type='search'\]\s*\{[\s\S]*?flex: 1 1 220px;[\s\S]*?min-width: min\(220px, 100%\);/);
+  assert.match(feedbackInboxCss, /@media \(max-width: 720px\)\s*\{[\s\S]*?\.feedback-toolbar select,[\s\S]*?\.feedback-toolbar input\[type='search'\],[\s\S]*?\.feedback-selection-count,[\s\S]*?\.feedback-toolbar-token-note,[\s\S]*?\.feedback-queue-hint,[\s\S]*?\.feedback-github-hint\s*\{[\s\S]*?flex-basis: 100%;/);
+  assert.match(feedbackInboxCss, /@media \(max-width: 720px\)\s*\{[\s\S]*?\.feedback-toolbar \.delayed-help-control\s*\{[\s\S]*?flex: 1 1 128px;/);
+  assert.match(feedbackInboxCss, /\.feedback-card-section > summary\s*\{[\s\S]*?flex-wrap: wrap;[\s\S]*?min-width: 0;[\s\S]*?overflow-wrap: anywhere;/);
+  assert.match(feedbackInboxCss, /\.feedback-repair-audit > \*,[\s\S]*?\.feedback-repair-thread-strip > \*\s*\{[\s\S]*?min-width: 0;[\s\S]*?max-width: 100%;/);
+  assert.match(feedbackInboxCss, /\.feedback-repair-audit-title > \*,[\s\S]*?\.feedback-repair-thread-item > div > \*\s*\{[\s\S]*?overflow-wrap: anywhere;/);
+  assert.match(feedbackInboxCss, /\.feedback-repair-terminal-head\s*\{[\s\S]*?flex-wrap: wrap;/);
+  assert.match(feedbackInboxCss, /\.feedback-repair-terminal-actions,[\s\S]*?\.feedback-repair-boundary-grid\s*\{[\s\S]*?max-width: 100%;[\s\S]*?min-width: 0;/);
+  assert.match(feedbackInboxCss, /\.feedback-repair-terminal-line\s*\{[\s\S]*?grid-template-columns: auto minmax\(0, 1fr\);/);
+  assert.match(feedbackInboxCss, /\.feedback-repair-guidance-boundary\s*\{[\s\S]*?overflow-wrap: anywhere;/);
+  assert.match(feedbackInboxCss, /@media \(max-width: 720px\)\s*\{[\s\S]*?\.feedback-repair-guidance-boundary\s*\{[\s\S]*?grid-column: 2;/);
+  assert.match(feedbackInboxCss, /@media \(max-width: 720px\)\s*\{[\s\S]*?\.feedback-repair-terminal-line\s*\{[\s\S]*?grid-template-columns: 1fr;/);
+  assert.match(feedbackInboxCss, /@media \(max-width: 720px\)\s*\{[\s\S]*?\.feedback-repair-safe-mode\s*\{[\s\S]*?grid-template-columns: auto minmax\(0, 1fr\);/);
 });
 
 function readyProviderPreflight(): RuntimeProviderPreflightManifest {

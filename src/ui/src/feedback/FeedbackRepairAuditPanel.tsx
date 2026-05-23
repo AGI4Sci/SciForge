@@ -13,7 +13,7 @@ export interface FeedbackRepairAuditPanelProps {
   busy?: boolean;
   hint?: string;
   onTargetChange: (targetName: string) => void;
-  onHandoff: () => void;
+  onHandoff: (input?: { initialGuidance?: string }) => void | Promise<void>;
   onConfirmAction?: (action: FeedbackRepairActionRecord['action']) => void;
   onLoadTerminalMirror?: (input: { terminalMirrorRef: string; cursor: number }) => Promise<{ entries: TerminalMirrorEntry[]; nextCursor: number; totalEntries: number }>;
   onStopRepair?: (input: { repairRunId: string; terminalMirrorRef?: string }) => Promise<{ stopped: boolean; status: string; message: string }>;
@@ -46,6 +46,7 @@ export function FeedbackRepairAuditPanel({
   const [guidanceText, setGuidanceText] = useState('');
   const [guidanceHint, setGuidanceHint] = useState('');
   const [guidanceBusy, setGuidanceBusy] = useState(false);
+  const [exportHint, setExportHint] = useState('');
   const [liveTerminalEntries, setLiveTerminalEntries] = useState<TerminalMirrorEntry[]>([]);
   const terminal = repairTerminalMirror(audit, liveTerminalEntries);
   const evidence = repairEvidenceCompleteness(audit, terminal);
@@ -53,13 +54,38 @@ export function FeedbackRepairAuditPanel({
   const safeMode = repairSafeMode(audit);
   const visibleTerminalEntries = terminalCollapsed ? terminal.entries.slice(-6) : terminal.entries;
   const stopControl = repairStopControl(audit);
+  const userGuide = repairUserGuide(audit, evidence, repairTargets.length, Boolean(onSendGuidance));
   const canStop = Boolean(onStopRepair && stopControl.available);
-  const canSendGuidance = Boolean(onSendGuidance && audit.latestRun?.id && guidanceText.trim() && !guidanceBusy);
+  const hasTerminalCommand = Boolean(guidanceText.trim());
+  const terminalCommandMode = repairTerminalCommandMode(audit);
+  const commandStartsNewRepair = terminalCommandMode === 'start';
+  const canSendGuidance = Boolean(onSendGuidance && audit.latestRun?.id && hasTerminalCommand && !guidanceBusy && !commandStartsNewRepair);
+  const canSendTerminalCommand = Boolean(hasTerminalCommand && !guidanceBusy && !busy && (commandStartsNewRepair ? onHandoff : onSendGuidance));
+  const guidancePrompt = commandStartsNewRepair
+    ? audit.latestRun?.id
+      ? '输入引导，Enter 会启动一条新的 repair 线程；Shift+Enter 换行...'
+      : '输入初始引导，Enter 会启动 repair；Shift+Enter 换行...'
+    : '输入给 Codex CLI 的引导，Enter 发送；Shift+Enter 换行...';
+  const guidanceBoundary = commandStartsNewRepair
+    ? '只把此输入框中的显式用户文字作为 initial guidance；不会附带主会话分析、补丁方案或隐藏上下文。'
+    : '只把此输入框中的显式用户文字追加到 terminal mirror；不会自动补发主会话分析、补丁方案或隐藏上下文。';
+  const disabledReasons = terminalDisabledReasons({
+    busy,
+    hasTerminalCommand,
+    terminalEntries: terminal.entries.length,
+    exportAvailable: Boolean(terminal.copyText || terminal.ref),
+    stopControl,
+    canStop,
+    commandStartsNewRepair,
+    hasHandoff: Boolean(onHandoff),
+    hasGuidance: Boolean(onSendGuidance),
+  });
 
   useEffect(() => {
     setLiveTerminalEntries([]);
     setStopHint('');
     setGuidanceHint('');
+    setExportHint('');
   }, [terminal.ref]);
 
   useEffect(() => {
@@ -101,14 +127,32 @@ export function FeedbackRepairAuditPanel({
     }
   }
 
-  async function sendGuidance() {
-    if (!canSendGuidance || !audit.latestRun?.id || !onSendGuidance) return;
+  async function sendTerminalCommand() {
+    if (!canSendTerminalCommand) return;
     const message = guidanceText.trim();
     setGuidanceBusy(true);
+    if (commandStartsNewRepair) {
+      setGuidanceHint('正在启动 repair，并把这行输入作为初始引导...');
+      try {
+        await onHandoff({ initialGuidance: message });
+        setGuidanceText('');
+        setGuidanceHint('Repair 启动请求已发送；终端会在 run 写入后开始显示 Codex CLI 行。');
+      } catch (error) {
+        setGuidanceHint(`Repair start failed closed: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        setGuidanceBusy(false);
+      }
+      return;
+    }
+    const latestRunId = audit.latestRun?.id;
+    if (!canSendGuidance || !onSendGuidance || !latestRunId) {
+      setGuidanceBusy(false);
+      return;
+    }
     setGuidanceHint('正在写入 guidance audit...');
     try {
       const response = await onSendGuidance({
-        repairRunId: audit.latestRun.id,
+        repairRunId: latestRunId,
         repairResultId: audit.latestResult?.id,
         terminalMirrorRef: terminal.ref,
         message,
@@ -121,6 +165,35 @@ export function FeedbackRepairAuditPanel({
       setGuidanceBusy(false);
     }
   }
+
+  async function startRepairFromTerminal() {
+    if (busy || guidanceBusy) return;
+    const initialGuidance = guidanceText.trim();
+    if (initialGuidance) {
+      setGuidanceBusy(true);
+      setGuidanceHint('正在启动 repair，并带上当前输入的初始引导...');
+    } else {
+      setGuidanceHint('正在启动 repair；终端会先写入 run metadata 和准备事件。');
+    }
+    try {
+      await onHandoff(initialGuidance ? { initialGuidance } : undefined);
+      if (initialGuidance) setGuidanceText('');
+      setGuidanceHint(initialGuidance
+        ? 'Repair 启动请求已发送，当前输入已作为初始引导。'
+        : 'Repair 启动请求已发送；终端会在 run 写入后显示 Codex CLI 行。');
+    } catch (error) {
+      setGuidanceHint(`Repair start failed closed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      if (initialGuidance) setGuidanceBusy(false);
+    }
+  }
+
+  function exportTerminalBundle() {
+    exportJsonFile(`sciforge-repair-bundle-${safeFilenamePart(audit.issueId)}-${new Date().toISOString().slice(0, 10)}.json`, terminal.exportPayload);
+    setExportHint(terminal.ref
+      ? `Bundle exported with terminal ref ${terminal.ref}.`
+      : 'Bundle exported with inline repair metadata; terminal ref is not available yet.');
+  }
   return (
     <div className="feedback-repair-audit" aria-label="repair audit panel">
       <div className="feedback-repair-audit-head">
@@ -130,33 +203,43 @@ export function FeedbackRepairAuditPanel({
         </div>
         <span>{audit.detail}</span>
       </div>
-      <div className="feedback-repair-handoff">
-        <select
-          value={targetValue}
-          onChange={(event) => onTargetChange(event.target.value)}
-          disabled={!repairTargets.length || busy}
-          aria-label="选择 repair 目标实例"
-        >
-          {repairTargets.length ? repairTargets.map((peer) => (
-            <option key={peer.name} value={peer.name}>{peer.name}</option>
-          )) : <option value="">无 repair 实例</option>}
-        </select>
-        <DelayedHelpButton
-          onClick={onHandoff}
-          disabled={busy}
-          help={repairTargets.length
-            ? '记录 repair handoff 并把目标实例写入审计；收件箱只负责交接和展示写回结果。'
-            : '没有 repair 实例时也会写入 blocked audit，保留可追踪的 readiness 诊断。'}
-        >
-          {busy ? <Loader2 size={14} className="feedback-inline-spin" aria-hidden /> : <ArrowRight size={14} aria-hidden />}
-          {repairTargets.length ? '交给实例...' : '记录阻断'}
-        </DelayedHelpButton>
+      <div className={cx('feedback-repair-guide', userGuide.tone)} aria-label="repair user guide">
+        <div className="feedback-repair-subhead">
+          <strong>{userGuide.title}</strong>
+          <Badge variant={userGuide.tone === 'danger' ? 'danger' : userGuide.tone === 'warning' ? 'warning' : 'info'}>
+            {userGuide.badge}
+          </Badge>
+        </div>
+        <p>{userGuide.reason}</p>
+        <details open={userGuide.open}>
+          <summary>用户可以介入的下一步</summary>
+          <ol>
+            {userGuide.steps.map((step) => <li key={step}>{step}</li>)}
+          </ol>
+        </details>
       </div>
-      <div className="feedback-repair-evidence-grid">
-        {repairAuditRows(audit).map((row) => (
-          <AuditRow key={row.label} label={row.label} value={row.value} href={row.href} />
-        ))}
-      </div>
+      {audit.repairThreads.length ? (
+        <div className="feedback-repair-thread-strip" aria-label="repair thread history">
+          <div className="feedback-repair-subhead">
+            <strong>修复线程</strong>
+            <Badge variant="muted">{audit.repairThreads.length}</Badge>
+          </div>
+          <div className="feedback-repair-thread-list">
+            {audit.repairThreads.slice(0, 6).map((thread) => (
+              <div className={cx('feedback-repair-thread-item', thread.resultVerdict === 'failed' || thread.status === 'blocked' ? 'blocked' : thread.resultVerdict === 'fixed' ? 'fixed' : undefined)} key={`${thread.id}-${thread.resultId ?? 'run'}`}>
+                <div>
+                  <strong>{thread.executorInstance ?? thread.id}</strong>
+                  <Badge variant={thread.resultVerdict === 'fixed' ? 'success' : thread.resultVerdict === 'failed' || thread.status === 'blocked' ? 'danger' : 'muted'}>
+                    {thread.resultVerdict ?? thread.status}
+                  </Badge>
+                </div>
+                <span>{thread.completedAt ?? thread.startedAt}</span>
+                <p>{thread.resultSummary ?? (thread.terminalMirrorRef ? `terminal ${thread.terminalMirrorRef}` : '等待 repair 写回结果。')}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
       <div className={cx('feedback-repair-evidence-completeness', evidence.status)}>
         <div className="feedback-repair-subhead">
           <strong>Evidence completeness</strong>
@@ -176,14 +259,36 @@ export function FeedbackRepairAuditPanel({
         <div className="feedback-repair-terminal-head">
           <div>
             <TerminalSquare size={14} aria-hidden />
-            <strong>Terminal mirror</strong>
+            <strong>Codex CLI terminal</strong>
             <span>{terminal.ref ? terminal.ref : 'waiting for repair run metadata'}</span>
           </div>
           <div className="feedback-repair-terminal-actions">
+            <div className="feedback-repair-terminal-launch" aria-label="repair terminal launch controls">
+              <select
+                value={targetValue}
+                onChange={(event) => onTargetChange(event.target.value)}
+                disabled={!repairTargets.length || busy}
+                aria-label="选择 repair 目标实例"
+              >
+                {repairTargets.length ? repairTargets.map((peer) => (
+                  <option key={peer.name} value={peer.name}>{peer.name}</option>
+                )) : <option value="">无 repair 实例</option>}
+              </select>
+              <DelayedHelpButton
+                onClick={() => void startRepairFromTerminal()}
+                disabled={busy || guidanceBusy}
+                help={repairTargets.length
+                  ? '启动或重试 Runtime Codex repair；如果下方已经输入文字，会把它作为初始引导一起发送。'
+                  : '没有 repair 实例时写入 blocked audit，保留 readiness 诊断。'}
+              >
+                {busy ? <Loader2 size={14} className="feedback-inline-spin" aria-hidden /> : <ArrowRight size={14} aria-hidden />}
+                {repairTargets.length ? '启动 repair' : '记录阻断'}
+              </DelayedHelpButton>
+            </div>
             <DelayedHelpButton
               onClick={() => setTerminalCollapsed((current) => !current)}
               disabled={!terminal.entries.length}
-              help="折叠或展开按时间顺序透传的 Codex CLI terminal mirror；GUI 不从这里推断完成结论。"
+              help="折叠或展开按时间顺序透传的 Codex CLI terminal mirror。"
             >
               {terminalCollapsed ? <ChevronRight size={14} aria-hidden /> : <ChevronDown size={14} aria-hidden />}
               {terminalCollapsed ? '展开' : '折叠'}
@@ -197,7 +302,7 @@ export function FeedbackRepairAuditPanel({
               复制
             </DelayedHelpButton>
             <DelayedHelpButton
-              onClick={() => exportJsonFile(`sciforge-repair-bundle-${safeFilenamePart(audit.issueId)}-${new Date().toISOString().slice(0, 10)}.json`, terminal.exportPayload)}
+              onClick={exportTerminalBundle}
               disabled={!terminal.copyText && !terminal.ref}
               help="导出 repair run/result metadata、patch/diff/tests/audit refs 和 terminal mirror，供离线审计。"
             >
@@ -216,6 +321,11 @@ export function FeedbackRepairAuditPanel({
             </DelayedHelpButton>
           </div>
         </div>
+        {disabledReasons.length ? (
+          <div className="feedback-repair-terminal-disabled" aria-label="terminal control disabled reasons">
+            {disabledReasons.map((reason) => <span key={reason}>{reason}</span>)}
+          </div>
+        ) : null}
         {terminal.entries.length ? (
           <pre className={cx('feedback-repair-terminal-body', terminalCollapsed && 'collapsed')}>
             {visibleTerminalEntries.map((entry, index) => (
@@ -229,26 +339,38 @@ export function FeedbackRepairAuditPanel({
           <p className="feedback-repair-terminal-empty">尚无 inline terminal lines；等待 repair run 写入 mirror 或 terminalMirrorRef。</p>
         )}
         {copyHint ? <p className="feedback-repair-hint">{copyHint}</p> : null}
+        {exportHint ? <p className="feedback-repair-hint">{exportHint}</p> : null}
         {stopHint ? <p className={cx('feedback-repair-hint', stopHint.includes('failed closed') && 'danger')}>{stopHint}</p> : null}
-        {audit.latestRun?.id ? (
-          <div className="feedback-repair-guidance" aria-label="repair guidance input">
-            <textarea
-              value={guidanceText}
-              onChange={(event) => setGuidanceText(event.target.value)}
-              placeholder="给 Runtime Codex repair 输入引导..."
-              rows={3}
-              aria-label="repair guidance"
-            />
-            <DelayedHelpButton
-              onClick={() => void sendGuidance()}
-              disabled={!canSendGuidance}
-              help="把用户引导写入 audit 和 terminal mirror；若已有 Codex session id，backend 会用 Codex 原生 resume 继续。"
-            >
-              {guidanceBusy ? <Loader2 size={14} className="feedback-inline-spin" aria-hidden /> : <Send size={14} aria-hidden />}
-              发送引导
-            </DelayedHelpButton>
-          </div>
-        ) : null}
+        <div className="feedback-repair-guidance" aria-label="repair guidance input">
+          <span className="feedback-repair-prompt">$</span>
+          <textarea
+            value={guidanceText}
+            onChange={(event) => setGuidanceText(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                void sendTerminalCommand();
+              }
+            }}
+            placeholder={guidancePrompt}
+            rows={2}
+            aria-label="repair guidance"
+            disabled={guidanceBusy || busy}
+          />
+          <DelayedHelpButton
+            onClick={() => void sendTerminalCommand()}
+            disabled={!canSendTerminalCommand}
+            help={audit.latestRun?.id
+              ? commandStartsNewRepair
+                ? '当前线程没有可恢复的 Codex session；这行输入会启动一条新的 direct repair 线程。'
+                : '把这行输入写入 audit 和 terminal mirror；若已有 Codex session id，backend 会用 Codex 原生 resume 继续。'
+              : '没有 repair run 时，这行输入会作为初始引导启动 Runtime Codex repair。'}
+          >
+            {guidanceBusy ? <Loader2 size={14} className="feedback-inline-spin" aria-hidden /> : <Send size={14} aria-hidden />}
+            发送
+          </DelayedHelpButton>
+          <p className="feedback-repair-guidance-boundary">{guidanceBoundary}</p>
+        </div>
         {guidanceHint ? <p className={cx('feedback-repair-hint', guidanceHint.includes('failed closed') && 'danger')}>{guidanceHint}</p> : null}
       </div>
       <div className="feedback-repair-confirmation" aria-label="repair confirmation boundaries">
@@ -406,6 +528,108 @@ export function repairAuditStateMessages(audit: FeedbackRepairAuditViewModel) {
   return messages;
 }
 
+export function repairUserGuide(
+  audit: FeedbackRepairAuditViewModel,
+  evidence: ReturnType<typeof repairEvidenceCompleteness>,
+  repairTargetCount: number,
+  guidanceEnabled: boolean,
+) {
+  const resultMetadata = recordValue(audit.latestResult?.metadata);
+  const failureKind = metadataString(resultMetadata, 'failureKind');
+  const latestSummary = audit.summary ?? audit.latestResult?.summary;
+  const isBlocked = audit.status === 'blocked' || audit.latestResultVerdict === 'failed' || audit.latestResultVerdict === 'wont-fix';
+  const needsEvidence = evidence.status !== 'complete' && audit.status !== 'not-started' && !isBlocked;
+  const title = isBlocked ? '为什么修复受阻' : audit.status === 'not-started' ? '如何开始修复' : '当前修复状态';
+  const badge = isBlocked ? 'blocked' : audit.status === 'not-started' ? 'start here' : audit.label;
+  const reason = repairGuideReason({
+    audit,
+    failureKind,
+    latestSummary,
+    isBlocked,
+    needsEvidence,
+    repairTargetCount,
+  });
+  const steps = repairGuideSteps({
+    audit,
+    evidence,
+    repairTargetCount,
+    guidanceEnabled,
+    isBlocked,
+    needsEvidence,
+  });
+  return {
+    title,
+    badge,
+    reason,
+    steps,
+    open: isBlocked || audit.status === 'not-started' || needsEvidence,
+    tone: isBlocked ? 'danger' : needsEvidence || audit.needsHumanVerification ? 'warning' : 'info',
+  };
+}
+
+function repairGuideReason(input: {
+  audit: FeedbackRepairAuditViewModel;
+  failureKind?: string;
+  latestSummary?: string;
+  isBlocked: boolean;
+  needsEvidence: boolean;
+  repairTargetCount: number;
+}) {
+  if (input.failureKind) {
+    return `阻塞来源：${repairFailureKindLabel(input.failureKind)}。${input.latestSummary ?? input.audit.headline}`;
+  }
+  if (!input.repairTargetCount && input.audit.status === 'not-started') {
+    return '当前没有可选 repair 实例，所以只能记录阻断审计；需要先启动或配置 repair peer。';
+  }
+  if (input.audit.status === 'not-started') {
+    return '这条反馈还没有交给 repair 实例；选择目标实例后可以生成一条可追踪的修复线程。';
+  }
+  if (input.isBlocked) {
+    return input.latestSummary ?? input.audit.headline;
+  }
+  if (input.needsEvidence) {
+    return `修复有进展，但证据还不完整（${input.audit.label}，evidence ${input.audit.tests.length ? '有测试记录' : '缺测试记录'}）。`;
+  }
+  return input.latestSummary ?? input.audit.headline;
+}
+
+function repairGuideSteps(input: {
+  audit: FeedbackRepairAuditViewModel;
+  evidence: ReturnType<typeof repairEvidenceCompleteness>;
+  repairTargetCount: number;
+  guidanceEnabled: boolean;
+  isBlocked: boolean;
+  needsEvidence: boolean;
+}) {
+  if (input.audit.status === 'not-started') {
+    return input.repairTargetCount
+      ? ['选择一个 repair 实例并点击交给实例，生成新的修复线程。', '先打开整页截图证据确认问题位置，再把预期结果写进引导。']
+      : ['启动或配置一个 role=repair 的 peer 实例。', '点击记录阻断，把当前 readiness 原因保存在收件箱和 GitHub 同步链路里。'];
+  }
+  const steps = [
+    input.audit.latestRun?.id && input.guidanceEnabled
+      ? '在透传终端下方发送引导，补充你期望的修复方向或允许的取舍。'
+      : '展开透传终端，查看最近一次 Codex repair 到哪一步停住。',
+  ];
+  if (input.isBlocked) steps.push(input.audit.latestRun?.id
+    ? '根据阻塞原因补齐缺失配置、环境或人工判断后，再交给实例重新开一条线程。'
+    : '这次没有真正进入 repair 执行器；先处理 provider/env 或目标路径问题，再重新启动 direct Codex repair。');
+  if (input.needsEvidence) steps.push(`补齐缺失证据：${input.evidence.items.filter((item) => item.state === 'missing').map((item) => item.label).join(', ')}。`);
+  if (input.audit.latestResult) steps.push('修复后先记录 browser 复核，再按需确认 commit、push 或 PR。');
+  return steps;
+}
+
+function repairFailureKindLabel(kind: string) {
+  return ({
+    'no-repair-target': '没有可用 repair 实例',
+    'provider-preflight': 'LLM provider 预检失败',
+    'runtime-bridge': 'Runtime bridge 不可用',
+    'workspace-connection': 'workspace writer 连接失败',
+    'strict-acceptance': '严格验收未通过',
+    'repair-peer-readiness-blocked': 'repair 实例健康检查或 manifest 未通过',
+  } as Record<string, string>)[kind] ?? kind;
+}
+
 export interface TerminalMirrorEntry {
   timestamp: string;
   stream: 'stdout' | 'stderr' | 'event';
@@ -501,6 +725,50 @@ function repairStopControl(audit: FeedbackRepairAuditViewModel) {
         ? 'repair result is already available; no active repair turn is available to stop'
         : 'no running repair turn is available to stop',
   };
+}
+
+function repairTerminalCommandMode(audit: FeedbackRepairAuditViewModel): 'start' | 'resume' {
+  if (!audit.latestRun?.id) return 'start';
+  if (audit.latestRun.status === 'running' && !audit.latestResult) return 'resume';
+  const runMetadata = recordValue(audit.latestRun.metadata);
+  const resultMetadata = recordValue(audit.latestResult?.metadata);
+  const resultRefs = recordValue(audit.latestResult?.refs);
+  const agentServerRun = recordValue(resultMetadata?.agentServerRun) ?? recordValue(runMetadata?.agentServerRun);
+  const codexSessionId = firstString([
+    metadataString(agentServerRun, 'codexSessionId'),
+    metadataString(agentServerRun, 'nativeSessionId'),
+    metadataString(resultMetadata, 'codexSessionId'),
+    metadataString(runMetadata, 'codexSessionId'),
+  ]);
+  const isolatedWorktree = firstString([
+    metadataString(resultMetadata, 'isolatedWorktreePath'),
+    metadataString(runMetadata, 'isolatedWorktreePath'),
+    metadataString(resultRefs, 'worktreePath'),
+  ]);
+  const failureKind = metadataString(resultMetadata, 'failureKind') ?? metadataString(runMetadata, 'failureKind');
+  return codexSessionId && isolatedWorktree && !failureKind ? 'resume' : 'start';
+}
+
+function terminalDisabledReasons(input: {
+  busy: boolean;
+  hasTerminalCommand: boolean;
+  terminalEntries: number;
+  exportAvailable: boolean;
+  stopControl: ReturnType<typeof repairStopControl>;
+  canStop: boolean;
+  commandStartsNewRepair: boolean;
+  hasHandoff: boolean;
+  hasGuidance: boolean;
+}) {
+  const reasons: string[] = [];
+  if (input.busy) reasons.push('启动 repair：正在处理上一条请求');
+  if (!input.terminalEntries) reasons.push('展开 / 复制：等待 terminal 行写入');
+  if (!input.exportAvailable) reasons.push('导出 Bundle：等待 run metadata 或 terminal ref');
+  if (!input.hasTerminalCommand) reasons.push('发送：先输入一行引导');
+  if (input.commandStartsNewRepair && !input.hasHandoff) reasons.push('发送：当前页面没有 repair 启动入口');
+  if (!input.commandStartsNewRepair && !input.hasGuidance) reasons.push('发送：当前页面没有 native guidance 入口');
+  if (!input.canStop) reasons.push(`停止：${input.stopControl.reason}`);
+  return reasons;
 }
 
 function normalizeTerminalEntries(sources: unknown[]): TerminalMirrorEntry[] {

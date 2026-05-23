@@ -703,6 +703,8 @@ test('default chat shell uses universal workspace copy instead of scenario-first
   assert.match(chatHtml, /当前上下文/);
   assert.match(chatHtml, /助手已连接|连接待配置/);
   assert.match(chatHtml, /可写工作区/);
+  assert.match(topbarHtml, /注释/);
+  assert.match(topbarHtml, /aria-pressed="false"/);
   assert.doesNotMatch(chatHtml, /workspace-write/);
   assert.doesNotMatch(chatHtml, /sciforge-runtime-deepseek/);
   assert.doesNotMatch(chatHtml, /sciforge-deepseek-proxy/);

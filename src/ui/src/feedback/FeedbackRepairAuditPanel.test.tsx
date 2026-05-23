@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { PeerInstance } from '../domain';
-import { FeedbackRepairAuditPanel, repairAuditRows, repairAuditStateMessages, repairSafeMode, repairTerminalMirror } from './FeedbackRepairAuditPanel';
+import { FeedbackRepairAuditPanel, repairAuditRows, repairAuditStateMessages, repairSafeMode, repairTerminalMirror, repairUserGuide } from './FeedbackRepairAuditPanel';
 import { feedbackRepairAuditForIssue } from './feedbackWorkspace';
 import type { FeedbackRepairActionRecord, FeedbackRepairResultRecord, FeedbackRepairRunRecord } from '../domain';
 
@@ -16,7 +16,7 @@ const repairPeer: PeerInstance = {
   enabled: true,
 };
 
-test('repair audit panel renders handoff controls and full audit fields', () => {
+test('repair audit panel renders terminal controls without raw audit fields', () => {
   const audit = feedbackRepairAuditForIssue('feedback-1', [repairRun('assigned')], [repairResult()]);
   const html = renderToStaticMarkup(
     <FeedbackRepairAuditPanel
@@ -30,17 +30,41 @@ test('repair audit panel renders handoff controls and full audit fields', () => 
   );
 
   assert.match(html, /repair audit panel/);
-  assert.match(html, /交给实例\.\.\./);
+  assert.match(html, /Codex CLI terminal/);
+  assert.match(html, /启动 repair/);
+  assert.match(html, /输入引导，Enter 会启动一条新的 repair 线程/);
+  assert.match(html, /只把此输入框中的显式用户文字作为 initial guidance/);
+  assert.match(html, /不会附带主会话分析、补丁方案或隐藏上下文/);
   assert.match(html, /记录 browser 复核/);
   assert.match(html, /Repair Peer/);
-  assert.match(html, /latestRunStatus/);
-  assert.match(html, /latestResultVerdict/);
-  assert.match(html, /changedFiles/);
-  assert.match(html, /testResults/);
-  assert.match(html, /humanVerification/);
-  assert.match(html, /githubSyncStatus/);
-  assert.match(html, /githubCommentUrl/);
+  assert.doesNotMatch(html, /latestRunStatus/);
+  assert.doesNotMatch(html, /latestResultVerdict/);
+  assert.doesNotMatch(html, /changedFiles/);
+  assert.doesNotMatch(html, /testResults/);
+  assert.doesNotMatch(html, /humanVerification/);
+  assert.doesNotMatch(html, /githubSyncStatus/);
+  assert.doesNotMatch(html, /githubCommentUrl/);
   assert.doesNotMatch(html, /Repair Agent|需确认但不知道怎么确认/);
+});
+
+test('repair terminal input stays usable before a repair run exists', () => {
+  const audit = feedbackRepairAuditForIssue('feedback-1', [], []);
+  const html = renderToStaticMarkup(
+    <FeedbackRepairAuditPanel
+      audit={audit}
+      repairTargets={[repairPeer]}
+      targetValue="Repair Peer"
+      onTargetChange={() => undefined}
+      onHandoff={() => undefined}
+    />,
+  );
+
+  assert.match(html, /输入初始引导，Enter 会启动 repair/);
+  assert.doesNotMatch(html, /<textarea[^>]*disabled/);
+  assert.match(html, /没有 repair run 时，这行输入会作为初始引导启动 Runtime Codex repair/);
+  assert.match(html, /只把此输入框中的显式用户文字作为 initial guidance/);
+  assert.match(html, /展开 \/ 复制：等待 terminal 行写入/);
+  assert.match(html, /发送：先输入一行引导/);
 });
 
 test('repair audit rows and state messages use explicit UX copy', () => {
@@ -78,8 +102,87 @@ test('repair audit panel allows a blocked handoff audit when no repair target ex
 
   assert.match(html, /无 repair 实例/);
   assert.match(html, /记录阻断/);
-  assert.match(html, /没有 repair 实例时也会写入 blocked audit/);
+  assert.match(html, /如何开始修复/);
+  assert.match(html, /用户可以介入的下一步/);
+  assert.match(html, /没有 repair 实例时写入 blocked audit/);
   assert.doesNotMatch(html, /<button type="button" disabled="">[\s\S]*?记录阻断<\/button>/);
+});
+
+test('repair audit panel explains blocked reason and user intervention steps', () => {
+  const audit = feedbackRepairAuditForIssue('feedback-1', [repairRun('blocked')], [repairResult({
+    verdict: 'failed',
+    status: 'blocked',
+    summary: 'STRICT ACCEPTANCE blocked: smoke runtime bridge failed.',
+    metadata: { failureKind: 'strict-acceptance' },
+  })]);
+  const html = renderToStaticMarkup(
+    <FeedbackRepairAuditPanel
+      audit={audit}
+      repairTargets={[repairPeer]}
+      targetValue="Repair Peer"
+      onTargetChange={() => undefined}
+      onHandoff={() => undefined}
+      onSendGuidance={async () => ({ guidance: {
+        id: 'guidance-1',
+        schemaVersion: 1,
+        issueId: 'feedback-1',
+        repairRunId: 'repair-run-1',
+        status: 'recorded',
+        requestedAt: '2026-05-07T06:30:00.000Z',
+        requestedBy: 'Local User',
+        message: '继续修复 strict acceptance',
+      } })}
+    />,
+  );
+  const guide = repairUserGuide(audit, { status: 'partial', ready: 2, total: 6, items: [] }, 1, true);
+
+  assert.match(html, /为什么修复受阻/);
+  assert.match(html, /严格验收未通过/);
+  assert.match(html, /发送/);
+  assert.match(html, /输入引导，Enter 会启动一条新的 repair 线程/);
+  assert.match(html, /当前线程没有可恢复的 Codex session/);
+  assert.match(html, /重新开一条线程/);
+  assert.match(html, /只把此输入框中的显式用户文字作为 initial guidance/);
+  assert.equal(guide.open, true);
+  assert.equal(guide.tone, 'danger');
+});
+
+test('repair audit panel renders multiple repair threads as compact history', () => {
+  const audit = feedbackRepairAuditForIssue('feedback-1', [
+    repairRun('blocked', { id: 'repair-run-2', startedAt: '2026-05-07T05:00:00.000Z' }),
+    repairRun('assigned', { id: 'repair-run-1', startedAt: '2026-05-07T04:00:00.000Z' }),
+  ], [
+    repairResult({
+      id: 'repair-result-2',
+      repairRunId: 'repair-run-2',
+      verdict: 'failed',
+      status: 'blocked',
+      summary: 'Blocked by missing provider env.',
+      completedAt: '2026-05-07T05:10:00.000Z',
+    }),
+    repairResult({
+      id: 'repair-result-1',
+      repairRunId: 'repair-run-1',
+      verdict: 'needs-follow-up',
+      status: 'needs-human-verification',
+      summary: 'First pass needs human direction.',
+      completedAt: '2026-05-07T04:30:00.000Z',
+    }),
+  ]);
+  const html = renderToStaticMarkup(
+    <FeedbackRepairAuditPanel
+      audit={audit}
+      repairTargets={[repairPeer]}
+      targetValue="Repair Peer"
+      onTargetChange={() => undefined}
+      onHandoff={() => undefined}
+    />,
+  );
+
+  assert.equal(audit.repairThreads.length, 2);
+  assert.match(html, /修复线程/);
+  assert.match(html, /Blocked by missing provider env/);
+  assert.match(html, /First pass needs human direction/);
 });
 
 test('repair audit panel renders ordered terminal mirror lines and blocked stop control', () => {
@@ -128,12 +231,13 @@ test('repair audit panel renders ordered terminal mirror lines and blocked stop 
   assert.ok(first > 0, 'first terminal line should render');
   assert.ok(second > first, 'result metadata line should be ordered after the first run line');
   assert.ok(third > second, 'later run line should render last');
-  assert.match(html, /Terminal mirror/);
+  assert.match(html, /Codex CLI terminal/);
   assert.match(html, /复制/);
   assert.match(html, /导出 Bundle/);
   assert.match(html, /停止/);
   assert.match(html, /<button type="button" disabled="">[\s\S]*?停止<\/button>/);
   assert.match(html, /当前没有可安全停止的运行中 Runtime Codex repair turn/);
+  assert.match(html, /停止：repair result is already available/);
   assert.doesNotMatch(html, /请求 backend 安全取消当前 Runtime Codex repair turn/);
 });
 

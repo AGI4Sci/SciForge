@@ -1027,6 +1027,37 @@
   gap: 10px;
 }
 
+.topbar-annotation-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  max-width: 120px;
+  padding: 0 11px;
+  color: var(--bio-100);
+  background: rgba(0, 229, 160, 0.08);
+  border: 1px solid rgba(0, 229, 160, 0.22);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+  white-space: normal;
+}
+
+.topbar-annotation-button:hover,
+.topbar-annotation-button.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: rgba(0, 229, 160, 0.45);
+}
+
+.topbar-annotation-button:focus-visible {
+  outline: 2px solid rgba(0, 229, 160, 0.72);
+  outline-offset: 2px;
+}
+
 .content-shell {
   flex: 1;
   min-height: 0;

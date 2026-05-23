@@ -98,13 +98,13 @@ export function createCodexResponsesProxyServer(options: CodexResponsesProxyServ
         });
       }
       if (request.method === 'GET' && url.pathname === '/v1/models') {
-        return proxyRaw(request, response, fetchImpl, requestOptions, `${upstreamBaseUrl}/models`);
+        return await proxyRaw(request, response, fetchImpl, requestOptions, `${upstreamBaseUrl}/models`);
       }
       if (request.method === 'POST' && url.pathname === '/v1/chat/completions') {
-        return proxyRaw(request, response, fetchImpl, requestOptions, `${upstreamBaseUrl}/chat/completions`);
+        return await proxyRaw(request, response, fetchImpl, requestOptions, `${upstreamBaseUrl}/chat/completions`);
       }
       if (request.method === 'POST' && url.pathname === '/v1/responses') {
-        return handleResponsesRequest(request, response, fetchImpl, requestOptions, `${upstreamBaseUrl}/chat/completions`);
+        return await handleResponsesRequest(request, response, fetchImpl, requestOptions, `${upstreamBaseUrl}/chat/completions`);
       }
       return sendJson(response, 404, { error: { code: 'not_found', message: 'Route not found' } });
     } catch (error) {

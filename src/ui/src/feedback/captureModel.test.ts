@@ -84,6 +84,7 @@ const target: FeedbackTargetSnapshot = {
 
 const screenshot: FeedbackScreenshotEvidence = {
   schemaVersion: 1,
+  captureMode: 'visible-viewport',
   dataUrl: 'data:image/png;base64,abc123',
   rawDataUrl: 'data:image/png;base64,raw123',
   annotatedDataUrl: 'data:image/png;base64,annotated123',
@@ -93,6 +94,8 @@ const screenshot: FeedbackScreenshotEvidence = {
   capturedAt: '2026-05-07T00:00:00.000Z',
   targetRect: target.rect,
   commentPoint: target.commentPoint,
+  scrollX: 0,
+  scrollY: 120,
   annotationLabel: '1',
   includeForAgent: false,
 };
@@ -224,6 +227,8 @@ test('scrubs screenshot data and refs while preserving valid image data URLs', (
 
   assert.equal(scrubbed.rawDataUrl, 'data:image/png;base64,raw123');
   assert.match(scrubbed.dataUrl, /redacted-provider-body\]:screenshot-data/);
+  assert.equal(scrubbed.captureMode, 'visible-viewport');
+  assert.equal(scrubbed.scrollY, 120);
   assert.equal(scrubbed.rawScreenshotRef, '[redacted-feedback-path]');
   assert.equal(scrubbed.annotatedScreenshotRef, 'feedback-bundle:feedback-1/screenshots/annotated.png');
   assert.match(scrubbed.note ?? '', /redacted-feedback-secret/);

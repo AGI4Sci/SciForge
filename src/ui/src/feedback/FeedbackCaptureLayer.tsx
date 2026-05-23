@@ -31,6 +31,8 @@ interface FeedbackCaptureLayerProps {
   onAuthorChange: (author: { authorId: string; authorName: string }) => void;
   onSubmit: (comment: FeedbackCommentRecord) => void;
   onReference: (reference: SciForgeReference) => void;
+  annotationModeActive?: boolean;
+  onAnnotationModeChange?: (active: boolean) => void;
 }
 
 interface ContextTarget {
@@ -56,8 +58,11 @@ export function FeedbackCaptureLayer({
   onAuthorChange,
   onSubmit,
   onReference,
+  annotationModeActive = false,
+  onAnnotationModeChange,
 }: FeedbackCaptureLayerProps) {
   const [contextTarget, setContextTarget] = useState<ContextTarget | null>(null);
+  const [hoverTarget, setHoverTarget] = useState<FeedbackTargetSnapshot | null>(null);
   const [comment, setComment] = useState('');
   const [expectedBehavior, setExpectedBehavior] = useState('');
   const [actualBehavior, setActualBehavior] = useState('');
@@ -65,41 +70,102 @@ export function FeedbackCaptureLayer({
   const [tags, setTags] = useState('');
   const [saveHint, setSaveHint] = useState('');
 
+  function selectableElementFromEvent(event: MouseEvent) {
+    const element = event.target instanceof Element ? event.target : null;
+    if (!element || element.closest('[data-feedback-control="true"]')) return null;
+    return element;
+  }
+
+  function contextForElement(element: Element, event: MouseEvent, mode: ContextTarget['mode']): ContextTarget {
+    const width = mode === 'comment' ? POPOVER_WIDTH : MENU_WIDTH;
+    const height = mode === 'comment' ? POPOVER_HEIGHT : MENU_HEIGHT;
+    return {
+      x: clampToViewport(event.clientX, width),
+      y: clampToViewport(event.clientY, height, 'height'),
+      target: buildFeedbackTargetSnapshot(element, { x: event.clientX, y: event.clientY }),
+      selectedText: compactSelectedText(window.getSelection()?.toString() ?? ''),
+      objectReference: sciForgeReferenceFromElement(element),
+      mode,
+    };
+  }
+
+  function openAnnotationComment(element: Element, event: MouseEvent) {
+    setContextTarget(contextForElement(element, event, 'comment'));
+    setHoverTarget(null);
+    setSaveHint('');
+    onAnnotationModeChange?.(false);
+  }
+
+  useEffect(() => {
+    if (!annotationModeActive) {
+      setHoverTarget(null);
+      return;
+    }
+    setContextTarget(null);
+    setSaveHint('');
+    const previousCursor = document.body.style.cursor;
+    document.body.style.cursor = 'crosshair';
+    return () => {
+      document.body.style.cursor = previousCursor;
+    };
+  }, [annotationModeActive]);
+
   useEffect(() => {
     function openMenu(event: MouseEvent) {
-      const element = event.target instanceof Element ? event.target : null;
-      if (!element || element.closest('[data-feedback-control="true"]')) return;
+      const element = selectableElementFromEvent(event);
+      if (!element) return;
       event.preventDefault();
       event.stopPropagation();
-      setContextTarget({
-        x: clampToViewport(event.clientX, MENU_WIDTH),
-        y: clampToViewport(event.clientY, MENU_HEIGHT, 'height'),
-        target: buildFeedbackTargetSnapshot(element, { x: event.clientX, y: event.clientY }),
-        selectedText: compactSelectedText(window.getSelection()?.toString() ?? ''),
-        objectReference: sciForgeReferenceFromElement(element),
-        mode: 'menu',
-      });
+      setContextTarget(contextForElement(element, event, 'menu'));
     }
     function handleContextMenu(event: MouseEvent) {
+      if (annotationModeActive) {
+        const element = selectableElementFromEvent(event);
+        if (!element) return;
+        event.preventDefault();
+        event.stopPropagation();
+        openAnnotationComment(element, event);
+        return;
+      }
       openMenu(event);
     }
+    function handleMouseMove(event: MouseEvent) {
+      if (!annotationModeActive) return;
+      const element = selectableElementFromEvent(event);
+      setHoverTarget(element ? buildFeedbackTargetSnapshot(element, { x: event.clientX, y: event.clientY }) : null);
+    }
     function handleClick(event: MouseEvent) {
-      const element = event.target instanceof Element ? event.target : null;
-      if (element?.closest('[data-feedback-control="true"]')) return;
+      const element = selectableElementFromEvent(event);
+      if (annotationModeActive) {
+        if (!element) return;
+        event.preventDefault();
+        event.stopPropagation();
+        openAnnotationComment(element, event);
+        return;
+      }
+      if (!element) return;
       setContextTarget(null);
     }
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') setContextTarget(null);
+      if (event.key !== 'Escape') return;
+      if (annotationModeActive) {
+        onAnnotationModeChange?.(false);
+        setHoverTarget(null);
+        return;
+      }
+      setContextTarget(null);
     }
     document.addEventListener('contextmenu', handleContextMenu, true);
+    document.addEventListener('mousemove', handleMouseMove, true);
     document.addEventListener('click', handleClick, true);
     document.addEventListener('keydown', handleKeyDown, true);
     return () => {
       document.removeEventListener('contextmenu', handleContextMenu, true);
+      document.removeEventListener('mousemove', handleMouseMove, true);
       document.removeEventListener('click', handleClick, true);
       document.removeEventListener('keydown', handleKeyDown, true);
     };
-  }, []);
+  }, [annotationModeActive, onAnnotationModeChange]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -180,6 +246,7 @@ export function FeedbackCaptureLayer({
 
   function resetDraft() {
     setContextTarget(null);
+    setHoverTarget(null);
     setComment('');
     setExpectedBehavior('');
     setActualBehavior('');
@@ -187,8 +254,31 @@ export function FeedbackCaptureLayer({
     setPriority('normal');
   }
 
+  const activeHighlightTarget = contextTarget?.mode === 'comment' ? contextTarget.target : annotationModeActive ? hoverTarget : null;
+
   return (
     <div className="feedback-layer" data-feedback-control="true" aria-live="polite">
+      {annotationModeActive ? (
+        <div className="feedback-annotation-hint" role="status">
+          <div>
+            <strong>注释模式</strong>
+            <span>移动鼠标选择页面目标，点击添加精准评论；Esc 退出。</span>
+          </div>
+          <button type="button" onClick={() => onAnnotationModeChange?.(false)}>退出</button>
+        </div>
+      ) : null}
+      {activeHighlightTarget ? (
+        <div
+          className="feedback-highlight-box"
+          style={{
+            left: `${Math.max(0, activeHighlightTarget.rect.x - 3)}px`,
+            top: `${Math.max(0, activeHighlightTarget.rect.y - 3)}px`,
+            width: `${Math.max(1, activeHighlightTarget.rect.width + 6)}px`,
+            height: `${Math.max(1, activeHighlightTarget.rect.height + 6)}px`,
+          }}
+          aria-hidden
+        />
+      ) : null}
       {contextTarget?.mode === 'menu' ? (
         <div
           className="feedback-context-menu"

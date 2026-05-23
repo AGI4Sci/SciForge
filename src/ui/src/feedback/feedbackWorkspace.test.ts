@@ -409,6 +409,28 @@ test('surfaces assigned executor and active processing copy without requiring an
   assert.match(running.headline, /正在处理/);
 });
 
+test('keeps multiple repair attempts available as thread history', () => {
+  const firstRun = repairRun('blocked');
+  const secondRun = { ...repairRun('assigned'), id: 'repair-run-2', status: 'running' as const, startedAt: '2026-05-07T06:00:00.000Z' };
+  const firstResult = repairResult({
+    repairRunId: firstRun.id,
+    verdict: 'failed',
+    status: 'blocked',
+    summary: 'First repair attempt blocked.',
+    completedAt: '2026-05-07T05:30:00.000Z',
+  });
+  const audit = feedbackRepairAuditForIssue('feedback-1', [firstRun, secondRun], [firstResult]);
+
+  assert.equal(audit.status, 'analyzing');
+  assert.equal(audit.latestRun?.id, 'repair-run-2');
+  assert.equal(audit.latestResultVerdict, undefined);
+  assert.equal(audit.repairThreads.length, 2);
+  assert.equal(audit.repairThreads[0].id, 'repair-run-2');
+  assert.equal(audit.repairThreads[0].status, 'running');
+  assert.equal(audit.repairThreads[1].resultVerdict, 'failed');
+  assert.equal(audit.repairThreads[1].resultSummary, 'First repair attempt blocked.');
+});
+
 test('marks human verification as explicit instead of ambiguous confirmation', () => {
   const audit = feedbackRepairAuditForIssue('feedback-1', [], [repairResult({
     verdict: 'needs-follow-up',

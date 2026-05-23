@@ -239,43 +239,41 @@ try {
   assert.match(await fileText(String(targetRuns[0].terminalMirrorRef)), /SciForge repair request runner-focused accepted/);
 
   const agentRunsBeforeRecordFailure = agentServerRunCount;
-  await assert.rejects(
-    () => runRepairHandoff({
-      executorInstance: {
-        id: 'A',
-        name: 'Stable A',
-        workspacePath: executorRepo,
-        workspaceWriterUrl: 'http://127.0.0.1:1',
-      },
-      targetInstance: {
-        id: 'B',
-        name: 'Target B',
-        workspacePath: targetRepo,
-        workspaceWriterUrl: `http://127.0.0.1:${targetAddress.port}`,
-      },
-      targetWorkspacePath: targetRepo,
-      targetWorkspaceWriterUrl: `http://127.0.0.1:${targetAddress.port}`,
-      issueBundle: {
-        id: 'feedback-target-record-fails',
-        title: 'Target writer failure',
-        comment: { id: 'feedback-target-record-fails', comment: 'Target run registration must fail closed before executor dispatch.' },
-      },
-      expectedTests: ['test -f src/fixed.txt'],
-      githubSyncRequired: false,
-      agentServerBaseUrl: `http://127.0.0.1:${agentAddress.port}`,
-      repairRunId: 'runner-target-record-fails',
-    }, {
-      executorRepoPath: executorRepo,
-      executorStateDir,
-      executorLogDir,
-      executorConfigLocalPath,
-    }),
-    /blocked before executor dispatch.*HTTP 500/i,
-  );
-  assert.equal(agentServerRunCount, agentRunsBeforeRecordFailure);
-  await assertMissing(join(targetRepo, '.sciforge', 'repair-worktrees', 'runner-target-record-fails', 'src', 'fixed.txt'));
+  const targetRecordFailure = await runRepairHandoff({
+    executorInstance: {
+      id: 'A',
+      name: 'Stable A',
+      workspacePath: executorRepo,
+      workspaceWriterUrl: 'http://127.0.0.1:1',
+    },
+    targetInstance: {
+      id: 'B',
+      name: 'Target B',
+      workspacePath: targetRepo,
+      workspaceWriterUrl: `http://127.0.0.1:${targetAddress.port}`,
+    },
+    targetWorkspacePath: targetRepo,
+    targetWorkspaceWriterUrl: `http://127.0.0.1:${targetAddress.port}`,
+    issueBundle: {
+      id: 'feedback-target-record-fails',
+      title: 'Target writer failure',
+      comment: { id: 'feedback-target-record-fails', comment: 'Target run registration failure must not block direct Codex CLI dispatch.' },
+    },
+    expectedTests: ['test -f src/fixed.txt'],
+    githubSyncRequired: false,
+    agentServerBaseUrl: `http://127.0.0.1:${agentAddress.port}`,
+    repairRunId: 'runner-target-record-fails',
+  }, {
+    executorRepoPath: executorRepo,
+    executorStateDir,
+    executorLogDir,
+    executorConfigLocalPath,
+  });
+  assert.equal(targetRecordFailure.verdict, 'fixed');
+  assert.equal(agentServerRunCount, agentRunsBeforeRecordFailure + 1);
+  assert.equal(await exists(join(targetRecordFailure.refs.worktreePath ?? '', 'src', 'fixed.txt')), true);
   const failedRecordTerminal = join(targetRepo, '.sciforge', 'repair-results', 'runner-target-record-fails', 'terminal-mirror.ndjson');
-  assert.match(await fileText(failedRecordTerminal), /Target repair run registration failed closed before executor dispatch/);
+  assert.match(await fileText(failedRecordTerminal), /Target writer repair-run sync unavailable; continuing with direct Codex CLI dispatch/);
 
   const blocked = await runRepairHandoff({
     executorInstance: {
@@ -429,6 +427,7 @@ try {
     assert.match(input.commandText, /Allowed write paths: \["src"\]/);
     assert.match(input.commandText, /Forbidden write paths: .*"docs\/user-notes\.md"/);
     assert.match(input.commandText, /Confirmation policy: .*"commit":"disabled"/);
+    assert.match(input.commandText, /Initial user terminal guidance: Use a tiny marker patch from the inbox terminal\./);
     await mkdir(join(input.workspacePath, '.sciforge', 'repair-runs', 'runner-runtime-codex'), { recursive: true });
     await writeFile(join(input.workspacePath, '.sciforge', 'repair-runs', 'runner-runtime-codex', 'repair-plan.md'), [
       '# Runtime Codex repair plan',
@@ -469,6 +468,7 @@ try {
     executorBackend: 'runtime-codex',
     runtimeProfile: 'runtime-codex-repair-smoke',
     allowOpenAiRuntime: false,
+    initialGuidance: 'Use a tiny marker patch from the inbox terminal.',
     allowedWritePaths: ['src'],
     forbiddenWritePaths: ['docs/user-notes.md'],
     requestMetadata: { source: 'smoke', nested: { selectedIssue: 'feedback-runtime-codex' } },

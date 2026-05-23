@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,8 +12,11 @@ const serverCwd = join(workspace, 'server-cwd');
 const port = 24200 + Math.floor(Math.random() * 1000);
 const configPath = join(workspace, 'config.local.json');
 let child: ReturnType<typeof spawn> | undefined;
+let proxyHealthServer: Server | undefined;
 
 try {
+  const proxyHealth = await startProxyHealthFixture();
+  proxyHealthServer = proxyHealth.server;
   await mkdir(join(workspace, '.sciforge'), { recursive: true });
   await mkdir(join(serverCwd, 'docs', 'test-artifacts', 'runtime-provider-preflight'), { recursive: true });
   await mkdir(join(serverCwd, 'docs', 'test-artifacts', 'runtime-codex-browser-acceptance'), { recursive: true });
@@ -33,6 +38,10 @@ try {
       SCIFORGE_STATE_DIR: join(workspace, '.sciforge', 'server-state'),
       SCIFORGE_LOG_DIR: join(workspace, '.sciforge', 'server-logs'),
       SCIFORGE_WORKSPACE_PATH: workspace,
+      SCIFORGE_RUNTIME_API_KEY: 'test-runtime-api-key',
+      SCIFORGE_PROXY_API_KEY_ENV: 'SCIFORGE_RUNTIME_API_KEY',
+      SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'http://provider.example/v1',
+      SCIFORGE_PROXY_BASE_URL: `${proxyHealth.url}/v1`,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -71,24 +80,27 @@ try {
     };
   };
   assert.equal(providerPreflightJson.manifest.schemaVersion, 'sciforge.runtime-provider-preflight.current-env.v1');
-  assert.equal(providerPreflightJson.manifest.checkedAt, '2026-05-07T00:06:00.000Z');
+  assert.ok(Number.isFinite(Date.parse(providerPreflightJson.manifest.checkedAt)));
   assert.equal(providerPreflightJson.manifest.releaseAcceptance, 'not-evaluated');
-  assert.equal(providerPreflightJson.manifest.runtimeApiKeyPresentInServiceEnv, false);
-  assert.equal(providerPreflightJson.manifest.upstreamBaseUrlPresent, false);
-  assert.equal(providerPreflightJson.manifest.upstreamKeySourceKind, 'config-debug-fallback');
-  assert.equal(providerPreflightJson.manifest.upstreamBaseUrlSourceKind, 'missing');
-  assert.equal(providerPreflightJson.manifest.category, 'config-secret-source');
+  assert.equal(providerPreflightJson.manifest.runtimeApiKeyPresentInServiceEnv, true);
+  assert.equal(providerPreflightJson.manifest.upstreamBaseUrlPresent, true);
+  assert.equal(providerPreflightJson.manifest.upstreamKeySourceKind, 'env');
+  assert.equal(providerPreflightJson.manifest.upstreamBaseUrlSourceKind, 'env');
+  assert.equal(providerPreflightJson.manifest.category, 'ready');
   assert.equal(providerPreflightJson.manifest.owner, 'environment');
-  assert.deepEqual(providerPreflightJson.manifest.policyViolations, ['config-file-secret-fallback-cannot-satisfy-browser-release-acceptance']);
-  assert.deepEqual(providerPreflightJson.manifest.missingEnv, ['SCIFORGE_RUNTIME_API_KEY', 'SCIFORGE_PROXY_UPSTREAM_BASE_URL']);
+  assert.deepEqual(providerPreflightJson.manifest.policyViolations, []);
+  assert.deepEqual(providerPreflightJson.manifest.missingEnv, []);
   assert.equal(providerPreflightJson.manifest.evidenceMode, 'current-env-diagnostic-only');
-  assert.equal(providerPreflightJson.manifest.checkedHealthz, undefined);
+  assert.deepEqual(providerPreflightJson.manifest.checkedHealthz, {
+    category: 'ready',
+    ok: true,
+    retryable: false,
+    httpStatus: 200,
+    releaseAcceptance: 'not-evaluated',
+  });
   assert.deepEqual(providerPreflightJson.manifest.nextActions, [
-    { label: 'Set SCIFORGE_RUNTIME_API_KEY in the service environment that launches Runtime Codex/provider proxy.', writesRepo: false },
-    { label: 'Keep ignored config apiKey only for local proxy debugging; it cannot satisfy browser/release acceptance.', writesRepo: false },
-    { label: 'Set SCIFORGE_PROXY_UPSTREAM_BASE_URL in service env or a non-secret ignored config upstreamBaseUrl.', writesRepo: false },
     {
-      label: 'Rerun current provider preflight and then strict Runtime Codex browser acceptance.',
+      label: 'Rerun provider preflight and strict Runtime Codex browser acceptance.',
       command: 'npm run smoke:runtime-provider-preflight && npm run smoke:runtime-codex-browser-acceptance:strict',
       writesRepo: true,
     },
@@ -941,6 +953,7 @@ try {
   console.log('[ok] workspace instance manifest, feedback persistence, and handoff repair APIs expose structured confirmation gates');
 } finally {
   child?.kill('SIGTERM');
+  await closeServer(proxyHealthServer);
   await rm(workspace, { recursive: true, force: true });
 }
 
@@ -1085,6 +1098,37 @@ function runtimeCodexBrowserAcceptanceManifest() {
       writesRepo: true,
     }],
   };
+}
+
+async function startProxyHealthFixture(): Promise<{ server: Server; url: string }> {
+  const server = createServer((request, response) => {
+    if (request.method === 'GET' && request.url?.startsWith('/healthz')) {
+      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({
+        ok: true,
+        upstream: {
+          category: 'ready',
+          ok: true,
+          retryable: false,
+          httpStatus: 200,
+          releaseAcceptance: 'not-evaluated',
+        },
+      }));
+      return;
+    }
+    response.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
+    response.end(JSON.stringify({ ok: false }));
+  });
+  await new Promise<void>((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
+  const address = server.address() as AddressInfo;
+  return { server, url: `http://127.0.0.1:${address.port}` };
+}
+
+async function closeServer(server: Server | undefined) {
+  if (!server) return;
+  await new Promise<void>((resolveClose, reject) => {
+    server.close((error) => (error ? reject(error) : resolveClose()));
+  });
 }
 
 async function waitForHealth(portNumber: number) {

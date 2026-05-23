@@ -137,6 +137,38 @@ test('can serve Responses SSE while forcing non-streaming upstream Chat Completi
   }
 });
 
+test('keeps proxy process alive when upstream Responses fetch rejects', async () => {
+  const proxy = await startCodexResponsesProxyServer({
+    upstreamBaseUrl: 'http://127.0.0.1:1/v1',
+    port: 0,
+    fetchImpl: (async () => {
+      throw new TypeError('fetch failed');
+    }) as typeof fetch,
+  });
+
+  try {
+    const response = await fetch(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer test' },
+      body: JSON.stringify({
+        model: 'bailian/deepseek-v4-flash',
+        input: 'This upstream call will fail',
+        stream: true,
+      }),
+    });
+    const payload = await response.json() as { error?: { code?: string; message?: string } };
+    assert.equal(response.status, 500);
+    assert.equal(payload.error?.code, 'sciforge_proxy_error');
+    assert.match(payload.error?.message ?? '', /fetch failed/);
+
+    const health = await fetch(`${proxy.url}/healthz`);
+    assert.equal(health.status, 200);
+    assert.equal((await health.json() as { ok?: boolean }).ok, true);
+  } finally {
+    await proxy.close();
+  }
+});
+
 test('preserves streaming tool call name across empty DeepSeek deltas', async () => {
   const upstream = createServer((request, response) => {
     assert.equal(request.url, '/v1/chat/completions');

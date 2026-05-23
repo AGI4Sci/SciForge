@@ -200,6 +200,9 @@ export function markFeedbackGithubIssueCreated(
         githubIssueNumber: issue.number,
         githubSyncStatus: 'github-open',
         githubSyncError: undefined,
+        githubSyncedAt: updatedAt,
+        githubIssueState: 'open',
+        githubIssueUpdatedAt: updatedAt,
         updatedAt,
       }
       : comment),
@@ -249,6 +252,7 @@ export function markFeedbackGithubIssueSyncPending(
         ...comment,
         githubSyncStatus: 'pending',
         githubSyncError: undefined,
+        githubSyncedAt: updatedAt,
         updatedAt,
       }
       : comment),
@@ -272,6 +276,7 @@ export function markFeedbackGithubIssueSyncFailed(
         ...comment,
         githubSyncStatus: 'failed',
         githubSyncError: message || 'GitHub sync failed; local feedback preserved for retry.',
+        githubSyncedAt: updatedAt,
         updatedAt,
       }
       : comment),
@@ -309,6 +314,9 @@ export function importGithubOpenIssuesAsFeedback(
           githubIssueNumber: issue.number,
           githubSyncStatus: conflict.status === 'none' ? 'github-open' as const : 'conflict' as const,
           githubSyncError: conflict.status === 'none' ? undefined : conflict.note,
+          githubSyncedAt: issue.syncedAt || updatedAt,
+          githubIssueState: githubIssueState(issue.state),
+          githubIssueUpdatedAt: issue.updatedAt,
           status: nextComments[index].status === 'open' || nextComments[index].status === 'request' || nextComments[index].status === 'comment'
             ? 'github-open' as const
             : nextComments[index].status,
@@ -378,6 +386,9 @@ function githubIssueToFeedbackComment(
     githubIssueNumber: issue.number,
     githubSyncStatus: issue.conflict?.status && issue.conflict.status !== 'none' ? 'conflict' : 'github-open',
     githubSyncError: issue.conflict?.status && issue.conflict.status !== 'none' ? issue.conflict.note : undefined,
+    githubSyncedAt: issue.syncedAt || updatedAt,
+    githubIssueState: githubIssueState(issue.state),
+    githubIssueUpdatedAt: issue.updatedAt,
   };
 }
 
@@ -458,7 +469,7 @@ function appendScreenshotEvidenceMarkdown(lines: string[], comment: FeedbackComm
 }
 
 function appendEvidenceAssetMarkdown(lines: string[], comment: FeedbackCommentRecord) {
-  const assets = (comment.evidenceAssets ?? []).filter((asset) => asset.ref?.trim());
+  const assets = (comment.evidenceAssets ?? []).filter((asset) => isPublicGithubEvidenceAsset(asset));
   if (!assets.length) return;
   for (const asset of assets) {
     const url = asset.githubMarkdownUrl || asset.publicUrl || asset.markdownImageUrl || asset.ref;
@@ -470,6 +481,19 @@ function appendEvidenceAssetMarkdown(lines: string[], comment: FeedbackCommentRe
       lines.push(`  - Open: [${markdownText(asset.label || asset.kind)}](${markdownImageUrl(url)})`);
     }
   }
+}
+
+function isPublicGithubEvidenceAsset(asset: NonNullable<FeedbackCommentRecord['evidenceAssets']>[number]) {
+  const ref = asset.ref?.trim() ?? '';
+  if (!ref) return false;
+  if (asset.visibility === 'private' || asset.localOnly === true) return false;
+  if (ref.includes('/private/') || ref.startsWith('repair-evidence/private/')) return false;
+  if (asset.kind === 'raw-screenshot') return false;
+  return Boolean(asset.githubMarkdownUrl || asset.publicUrl || asset.markdownImageUrl || ref.startsWith('repair-evidence/public/'));
+}
+
+function githubIssueState(value: unknown): FeedbackCommentRecord['githubIssueState'] {
+  return value === 'open' || value === 'closed' ? value : undefined;
 }
 
 function appendEnvironmentMarkdown(lines: string[], comments: FeedbackCommentRecord[], appVersion: string) {
@@ -592,17 +616,25 @@ function appendFeedbackCommentMarkdown(lines: string[], comment: FeedbackComment
 function redactFeedbackBundleScreenshots(bundle: FeedbackBundle): FeedbackBundle {
   return {
     ...bundle,
-    comments: bundle.comments.map((comment) => comment.screenshot
-      ? {
-        ...comment,
-        screenshot: {
-          ...comment.screenshot,
-          dataUrl: '[omitted from GitHub JSON; original retained in local feedback bundle]',
-          rawDataUrl: comment.screenshot.rawDataUrl ? '[omitted from GitHub JSON; original retained in local feedback bundle]' : undefined,
-          annotatedDataUrl: comment.screenshot.annotatedDataUrl ? '[omitted from GitHub JSON; original retained in local feedback bundle]' : undefined,
-        },
-      }
-      : comment),
+    comments: bundle.comments.map(redactFeedbackCommentForGithubBundle),
+  };
+}
+
+function redactFeedbackCommentForGithubBundle(comment: FeedbackCommentRecord): FeedbackCommentRecord {
+  const publicEvidenceAssets = comment.evidenceAssets?.filter((asset) => isPublicGithubEvidenceAsset(asset));
+  const next: FeedbackCommentRecord = {
+    ...comment,
+    evidenceAssets: publicEvidenceAssets?.length ? publicEvidenceAssets : undefined,
+  };
+  if (!comment.screenshot) return next;
+  return {
+    ...next,
+    screenshot: {
+      ...comment.screenshot,
+      dataUrl: '[omitted from GitHub JSON; original retained in local feedback bundle]',
+      rawDataUrl: comment.screenshot.rawDataUrl ? '[omitted from GitHub JSON; original retained in local feedback bundle]' : undefined,
+      annotatedDataUrl: comment.screenshot.annotatedDataUrl ? '[omitted from GitHub JSON; original retained in local feedback bundle]' : undefined,
+    },
   };
 }
 

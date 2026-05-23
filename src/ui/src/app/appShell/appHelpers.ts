@@ -4,7 +4,7 @@ import { defaultSciForgeConfig, updateConfig } from '../../config';
 import { makeId } from '../../domain';
 
 const FEEDBACK_AUTHOR_KEY = 'sciforge.feedback.author.v1';
-export const APP_BUILD_ID = (import.meta.env.VITE_APP_VERSION as string | undefined) ?? 'local-dev';
+export const APP_BUILD_ID = (import.meta as ImportMeta & { env?: { VITE_APP_VERSION?: string } }).env?.VITE_APP_VERSION ?? 'local-dev';
 
 export function loadFeedbackAuthor() {
   if (typeof window === 'undefined') return { authorId: 'local-user', authorName: 'Local User' };
@@ -50,9 +50,6 @@ export function mergeFileBackedConfig(current: SciForgeConfig, fileConfig: SciFo
     preserve.modelBaseUrl = current.modelBaseUrl;
     preserve.modelName = current.modelName;
     preserve.apiKey = current.apiKey;
-  }
-  if (current.feedbackGithubToken?.trim() && !fileConfig.feedbackGithubToken?.trim()) {
-    preserve.feedbackGithubToken = current.feedbackGithubToken;
   }
   const fileRepoIsDefault = !fileConfig.feedbackGithubRepo?.trim()
     || fileConfig.feedbackGithubRepo.trim() === defaultSciForgeConfig.feedbackGithubRepo;

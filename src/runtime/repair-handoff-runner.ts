@@ -41,6 +41,8 @@ export interface RepairHandoffRunnerContract {
   executorBackend?: 'agent-server' | 'runtime-codex';
   runtimeProfile?: string;
   allowOpenAiRuntime?: boolean;
+  allowExecutorRepoTarget?: boolean;
+  initialGuidance?: string;
   allowedWritePaths?: string[];
   forbiddenWritePaths?: string[];
   requestMetadata?: Record<string, unknown>;
@@ -283,8 +285,7 @@ export async function runRepairHandoff(
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await terminalMirror.append('stderr', `Target repair run registration failed closed before executor dispatch: ${message}`);
-    throw new Error(`Repair handoff blocked before executor dispatch: ${message}`);
+    await terminalMirror.append('stderr', `Target writer repair-run sync unavailable; continuing with direct Codex CLI dispatch from executor workspace writer: ${message}`);
   }
   activeRepairHandoffRuns.set(repairRunId, activeRepairRun);
   let agentRun: RepairExecutorRun;
@@ -465,8 +466,22 @@ export async function runRepairHandoff(
       requestMetadata: contract.requestMetadata,
     },
   };
+  result.metadata.targetResultPersistence = {
+    status: 'recorded',
+    targetWorkspaceWriterUrl,
+  };
+  try {
+    await postTargetRepairResult(contract, issueId, result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await terminalMirror.append('stderr', `Target repair-result sync unavailable; local repair result remains available: ${message}`);
+    result.metadata.targetResultPersistence = {
+      status: 'failed',
+      targetWorkspaceWriterUrl,
+      error: scrubTerminalMirrorText(message).slice(0, 500),
+    };
+  }
   await writeFile(resultJsonPath, JSON.stringify(result, null, 2), 'utf8');
-  await postTargetRepairResult(contract, issueId, result);
   return result;
 }
 
@@ -883,6 +898,7 @@ function repairAgentMetadataContract(
     forbiddenWritePaths: repairForbiddenScopePaths(contract),
     confirmationPolicy: normalizeConfirmationPolicy(contract.confirmationPolicy),
     requestMetadata: contract.requestMetadata,
+    initialGuidance: contract.initialGuidance,
   };
 }
 
@@ -907,6 +923,7 @@ function repairPrompt(contract: RepairHandoffRunnerContract, options: { issueId:
     `Confirmation policy: ${JSON.stringify(confirmationPolicy)}`,
     `Allowed write paths: ${JSON.stringify(normalizePathScopes(contract.allowedWritePaths))}`,
     `Forbidden write paths: ${JSON.stringify(repairForbiddenScopePaths(contract))}`,
+    contract.initialGuidance ? `Initial user terminal guidance: ${contract.initialGuidance}` : '',
     '',
     'Issue bundle:',
     JSON.stringify(redactForAgent(contract.issueBundle), null, 2),

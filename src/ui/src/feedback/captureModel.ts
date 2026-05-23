@@ -96,19 +96,21 @@ export async function captureFeedbackScreenshotEvidence(
   });
   try {
     const { default: html2canvas } = await import('html2canvas');
-    const captureArea = feedbackPageCaptureArea();
-    const pageTarget = feedbackTargetInPageCoordinates(target);
+    const captureArea = feedbackVisibleViewportCaptureArea();
+    const pageTarget = feedbackTargetInViewportCoordinates(target);
     const scale = feedbackScreenshotScale(captureArea.width, captureArea.height, 1);
     const canvas = await html2canvas(document.body, {
       backgroundColor: '#0a0f1a',
+      useCORS: true,
+      allowTaint: false,
       logging: false,
       scale,
       width: captureArea.width,
       height: captureArea.height,
-      x: 0,
-      y: 0,
-      scrollX: 0,
-      scrollY: 0,
+      x: captureArea.scrollX,
+      y: captureArea.scrollY,
+      scrollX: -captureArea.scrollX,
+      scrollY: -captureArea.scrollY,
       windowWidth: captureArea.width,
       windowHeight: captureArea.height,
       ignoreElements: (element) => element instanceof HTMLElement && element.dataset.feedbackControl === 'true',
@@ -119,6 +121,7 @@ export async function captureFeedbackScreenshotEvidence(
     const annotatedDataUrl = annotated.toDataURL('image/png');
     return scrubFeedbackScreenshotEvidence({
       schemaVersion: 1,
+      captureMode: 'visible-viewport',
       dataUrl: annotatedDataUrl,
       rawDataUrl,
       annotatedDataUrl,
@@ -128,9 +131,11 @@ export async function captureFeedbackScreenshotEvidence(
       capturedAt,
       targetRect: { ...pageTarget.rect },
       commentPoint: pageTarget.commentPoint ? { ...pageTarget.commentPoint } : undefined,
+      scrollX: captureArea.scrollX,
+      scrollY: captureArea.scrollY,
       annotationLabel,
       includeForAgent: false,
-      note: `Full-page screenshot captured at ${Math.round(captureArea.width)}x${Math.round(captureArea.height)} CSS px; raw and annotated screenshots are stored as local evidence.`,
+      note: `Visible viewport screenshot captured at ${Math.round(captureArea.width)}x${Math.round(captureArea.height)} CSS px, scroll ${Math.round(captureArea.scrollX)},${Math.round(captureArea.scrollY)}; raw and annotated screenshots are stored as local evidence.`,
     });
   } catch {
     return fallbackFeedbackScreenshotEvidence(target, capturedAt, options.annotationLabel);
@@ -147,8 +152,8 @@ function fallbackFeedbackScreenshotEvidence(
   annotationLabelInput = '1',
 ): FeedbackScreenshotEvidence | undefined {
   if (typeof window === 'undefined' || typeof document === 'undefined') return undefined;
-  const captureArea = feedbackPageCaptureArea();
-  const pageTarget = feedbackTargetInPageCoordinates(target);
+  const captureArea = feedbackVisibleViewportCaptureArea();
+  const pageTarget = feedbackTargetInViewportCoordinates(target);
   const scale = feedbackScreenshotScale(captureArea.width, captureArea.height, 1);
   const width = Math.max(320, Math.round(captureArea.width * scale));
   const height = Math.max(240, Math.round(captureArea.height * scale));
@@ -169,6 +174,7 @@ function fallbackFeedbackScreenshotEvidence(
   const annotatedDataUrl = annotated.toDataURL('image/png');
   return scrubFeedbackScreenshotEvidence({
     schemaVersion: 1,
+    captureMode: 'fallback-viewport',
     dataUrl: annotatedDataUrl,
     rawDataUrl,
     annotatedDataUrl,
@@ -178,30 +184,20 @@ function fallbackFeedbackScreenshotEvidence(
     capturedAt,
     targetRect: { ...pageTarget.rect },
     commentPoint: pageTarget.commentPoint ? { ...pageTarget.commentPoint } : undefined,
+    scrollX: captureArea.scrollX,
+    scrollY: captureArea.scrollY,
     annotationLabel,
     includeForAgent: false,
-    note: `html2canvas capture failed; generated a scrubbed full-page evidence fallback at ${Math.round(captureArea.width)}x${Math.round(captureArea.height)} CSS px with target geometry, URL, and marker.`,
+    note: `html2canvas capture failed; generated a scrubbed visible viewport evidence fallback at ${Math.round(captureArea.width)}x${Math.round(captureArea.height)} CSS px, scroll ${Math.round(captureArea.scrollX)},${Math.round(captureArea.scrollY)} with target geometry, URL, and marker.`,
   });
 }
 
-function feedbackPageCaptureArea() {
-  const doc = document.documentElement;
-  const body = document.body;
+function feedbackVisibleViewportCaptureArea() {
   return {
-    width: Math.max(
-      window.innerWidth,
-      doc?.scrollWidth ?? 0,
-      body?.scrollWidth ?? 0,
-      doc?.clientWidth ?? 0,
-      body?.clientWidth ?? 0,
-    ),
-    height: Math.max(
-      window.innerHeight,
-      doc?.scrollHeight ?? 0,
-      body?.scrollHeight ?? 0,
-      doc?.clientHeight ?? 0,
-      body?.clientHeight ?? 0,
-    ),
+    width: Math.max(320, window.innerWidth || document.documentElement.clientWidth || document.body.clientWidth || 0),
+    height: Math.max(240, window.innerHeight || document.documentElement.clientHeight || document.body.clientHeight || 0),
+    scrollX: Math.max(0, window.scrollX || window.pageXOffset || 0),
+    scrollY: Math.max(0, window.scrollY || window.pageYOffset || 0),
   };
 }
 
@@ -213,20 +209,11 @@ function feedbackScreenshotScale(width: number, height: number, preferredScale: 
   ));
 }
 
-function feedbackTargetInPageCoordinates(target: FeedbackTargetSnapshot): FeedbackTargetSnapshot {
-  const scrollX = typeof window === 'undefined' ? 0 : window.scrollX;
-  const scrollY = typeof window === 'undefined' ? 0 : window.scrollY;
+function feedbackTargetInViewportCoordinates(target: FeedbackTargetSnapshot): FeedbackTargetSnapshot {
   return {
     ...target,
-    rect: {
-      ...target.rect,
-      x: target.rect.x + scrollX,
-      y: target.rect.y + scrollY,
-    },
-    commentPoint: target.commentPoint ? {
-      x: target.commentPoint.x + scrollX,
-      y: target.commentPoint.y + scrollY,
-    } : undefined,
+    rect: { ...target.rect },
+    commentPoint: target.commentPoint ? { ...target.commentPoint } : undefined,
   };
 }
 

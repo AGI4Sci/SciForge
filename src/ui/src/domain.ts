@@ -282,6 +282,7 @@ export interface FeedbackRuntimeSnapshot {
 
 export interface FeedbackScreenshotEvidence {
   schemaVersion: 1;
+  captureMode?: 'visible-viewport' | 'full-page' | 'fallback-viewport';
   dataUrl: string;
   rawDataUrl?: string;
   annotatedDataUrl?: string;
@@ -293,6 +294,8 @@ export interface FeedbackScreenshotEvidence {
   capturedAt: string;
   targetRect: { x: number; y: number; width: number; height: number };
   commentPoint?: { x: number; y: number };
+  scrollX?: number;
+  scrollY?: number;
   annotationLabel?: string;
   includeForAgent?: boolean;
   note?: string;
@@ -370,6 +373,9 @@ export interface FeedbackCommentRecord {
   githubIssueNumber?: number;
   githubSyncStatus?: 'not-synced' | 'pending' | 'github-open' | 'conflict' | 'failed';
   githubSyncError?: string;
+  githubSyncedAt?: string;
+  githubIssueState?: 'open' | 'closed';
+  githubIssueUpdatedAt?: string;
   repairPolicy?: {
     defaultCommit: false;
     defaultPush: false;

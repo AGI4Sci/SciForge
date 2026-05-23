@@ -4,17 +4,24 @@ import { afterEach, describe, it } from 'node:test';
 import type { SciForgeConfig } from '../domain';
 import {
   confirmFeedbackRepairAction,
+  feedbackCodexPtyWebSocketUrl,
   listFeedbackIssues,
   loadFeedbackIssueHandoffBundle,
   loadRuntimeCodexBrowserAcceptanceManifest,
   loadRuntimeProviderPreflightManifest,
   loadSciForgeInstanceManifest,
   loadWorkspaceWriterHealth,
+  loadFeedbackCodexTerminalTail,
   runFeedbackIssueRepairHandoff,
   saveFeedbackCommentEvidenceBundle,
   saveFeedbackIssueRepairResult,
+  sendFeedbackCodexTerminalInput,
   sendFeedbackRepairGuidance,
+  startFeedbackCodexPtyTerminal,
+  startFeedbackCodexTerminal,
   startFeedbackIssueRepairRun,
+  stopFeedbackCodexPtyTerminal,
+  stopFeedbackCodexTerminal,
   uploadFeedbackEvidenceAssets,
 } from './workspaceClient';
 
@@ -141,6 +148,75 @@ describe('workspaceClient feedback issue helpers', () => {
           },
         });
       }
+      if (url.includes('/api/sciforge/feedback/issues/feedback-1/codex-terminal/start')) {
+        return jsonResponse({
+          session: directCodexTerminalSession({ status: 'running' }),
+          repairRun: {
+            schemaVersion: 1,
+            id: 'direct-codex-terminal-feedback-1',
+            issueId: 'feedback-1',
+            status: 'running',
+            actor: 'direct-codex-terminal',
+            startedAt: '2026-05-07T00:06:00.000Z',
+            terminalMirrorRef: '/tmp/ws/.sciforge/repair-results/direct-codex-terminal-feedback-1/terminal-mirror.ndjson',
+          },
+        });
+      }
+      if (url.includes('/api/sciforge/feedback/issues/feedback-1/codex-pty/start')) {
+        return jsonResponse({
+          session: directCodexTerminalSession({
+            id: 'codex-pty-terminal-feedback-1',
+            repairRunId: 'codex-pty-terminal-feedback-1',
+            status: 'running',
+            transport: 'websocket-pty',
+            webSocketPath: '/api/sciforge/feedback/codex-pty/codex-pty-terminal-feedback-1/ws',
+          }),
+          repairRun: {
+            schemaVersion: 1,
+            id: 'codex-pty-terminal-feedback-1',
+            issueId: 'feedback-1',
+            status: 'running',
+            actor: 'direct-codex-terminal',
+            startedAt: '2026-05-07T00:06:30.000Z',
+            terminalMirrorRef: '/tmp/ws/.sciforge/repair-results/codex-pty-terminal-feedback-1/terminal-mirror.ndjson',
+            metadata: { terminalTransport: 'websocket-pty' },
+          },
+        });
+      }
+      if (url.includes('/api/sciforge/feedback/codex-terminal/direct-codex-terminal-feedback-1/input')) {
+        return jsonResponse({
+          session: directCodexTerminalSession({ status: 'running', message: 'Queued follow-up prompt.' }),
+        });
+      }
+      if (url.includes('/api/sciforge/feedback/codex-terminal/direct-codex-terminal-feedback-1/tail')) {
+        return jsonResponse({
+          session: directCodexTerminalSession({ status: 'idle', message: 'Ready for follow-up.' }),
+          tail: {
+            terminalMirrorRef: '/tmp/ws/.sciforge/repair-results/direct-codex-terminal-feedback-1/terminal-mirror.ndjson',
+            entries: [{ timestamp: '2026-05-07T00:06:01.000Z', stream: 'stdout', text: 'Codex turn completed.' }],
+            cursor: 0,
+            nextCursor: 1,
+            totalEntries: 1,
+          },
+        });
+      }
+      if (url.includes('/api/sciforge/feedback/codex-terminal/direct-codex-terminal-feedback-1/stop')) {
+        return jsonResponse({
+          session: directCodexTerminalSession({ status: 'cancelled', message: 'Stop requested.' }),
+        });
+      }
+      if (url.includes('/api/sciforge/feedback/codex-pty/codex-pty-terminal-feedback-1/stop')) {
+        return jsonResponse({
+          session: directCodexTerminalSession({
+            id: 'codex-pty-terminal-feedback-1',
+            repairRunId: 'codex-pty-terminal-feedback-1',
+            status: 'cancelled',
+            transport: 'websocket-pty',
+            webSocketPath: '/api/sciforge/feedback/codex-pty/codex-pty-terminal-feedback-1/ws',
+            message: 'PTY stop requested.',
+          }),
+        });
+      }
       if (url.includes('/api/sciforge/feedback/issues/feedback-1/evidence/upload')) {
         return jsonResponse({
           schemaVersion: 1,
@@ -244,6 +320,7 @@ describe('workspaceClient feedback issue helpers', () => {
       executorBackend: 'runtime-codex',
       runtimeProfile: 'sciforge-runtime-deepseek',
       allowOpenAiRuntime: false,
+      initialGuidance: 'Keep the thread visible while opening a new chat.',
       allowedWritePaths: ['src'],
       forbiddenWritePaths: ['config.local.json'],
       requestMetadata: { source: 'test' },
@@ -278,6 +355,37 @@ describe('workspaceClient feedback issue helpers', () => {
     assert.equal(guidanceResponse.guidance.status, 'recorded');
     assert.equal(guidanceResponse.guidance.message, 'Try the smaller scoped fix.');
 
+    const directStart = await startFeedbackCodexTerminal(config, 'feedback-1', {
+      initialMessage: 'Inspect the selected target before changing code.',
+    });
+    assert.equal(directStart.session.transport, 'http-writer');
+    assert.equal(directStart.repairRun?.actor, 'direct-codex-terminal');
+
+    const directInput = await sendFeedbackCodexTerminalInput(config, directStart.session.id, {
+      message: 'Run the focused feedback test next.',
+    });
+    assert.equal(directInput.message, 'Queued follow-up prompt.');
+
+    const directTail = await loadFeedbackCodexTerminalTail(config, directStart.session.id);
+    assert.equal(directTail.tail.entries[0].text, 'Codex turn completed.');
+
+    const directStop = await stopFeedbackCodexTerminal(config, directStart.session.id);
+    assert.equal(directStop.status, 'cancelled');
+
+    const ptyStart = await startFeedbackCodexPtyTerminal(config, 'feedback-1', {
+      initialMessage: 'Use the real PTY path.',
+      cols: 120,
+      rows: 30,
+    });
+    assert.equal(ptyStart.session.transport, 'websocket-pty');
+    assert.equal(ptyStart.repairRun?.metadata?.terminalTransport, 'websocket-pty');
+    assert.equal(
+      feedbackCodexPtyWebSocketUrl(config, ptyStart.session),
+      'ws://127.0.0.1:5174/api/sciforge/feedback/codex-pty/codex-pty-terminal-feedback-1/ws?workspacePath=%2Ftmp%2Fws',
+    );
+    const ptyStop = await stopFeedbackCodexPtyTerminal(config, ptyStart.session.id);
+    assert.equal(ptyStop.status, 'cancelled');
+
     const uploadResponse = await uploadFeedbackEvidenceAssets(config, 'feedback-1', {
       repo: 'org/repo',
       token: 'github_pat_test',
@@ -303,12 +411,13 @@ describe('workspaceClient feedback issue helpers', () => {
     assert.equal(evidence.id, 'feedback-1');
     assert.equal(evidence.evidenceAssets?.[0]?.kind, 'scrubbed-annotated-screenshot');
 
-    assert.equal(calls.length, 10);
+    assert.equal(calls.length, 16);
     assert.equal(JSON.parse(String(calls[3].init?.body)).workspacePath, '/tmp/ws');
     assert.deepEqual(JSON.parse(String(calls[4].init?.body)).result, { verdict: 'fixed', summary: 'done' });
     const runnerBody = JSON.parse(String(calls[5].init?.body));
     assert.equal(runnerBody.contract.executorBackend, 'runtime-codex');
     assert.equal(runnerBody.contract.allowOpenAiRuntime, false);
+    assert.equal(runnerBody.contract.initialGuidance, 'Keep the thread visible while opening a new chat.');
     assert.deepEqual(runnerBody.contract.confirmationPolicy, { commit: 'requires-user-confirmation', push: 'requires-second-confirmation', pr: 'requires-second-confirmation', merge: 'never' });
     assert.deepEqual(JSON.parse(String(calls[6].init?.body)), {
       workspacePath: '/tmp/ws',
@@ -331,11 +440,38 @@ describe('workspaceClient feedback issue helpers', () => {
     });
     assert.deepEqual(JSON.parse(String(calls[8].init?.body)), {
       workspacePath: '/tmp/ws',
+      initialMessage: 'Inspect the selected target before changing code.',
+      allowOpenAiRuntime: false,
+      gitMode: 'manual',
+    });
+    assert.deepEqual(JSON.parse(String(calls[9].init?.body)), {
+      workspacePath: '/tmp/ws',
+      message: 'Run the focused feedback test next.',
+    });
+    assert.match(calls[10].url, /\/api\/sciforge\/feedback\/codex-terminal\/direct-codex-terminal-feedback-1\/tail\?workspacePath=%2Ftmp%2Fws/);
+    assert.deepEqual(JSON.parse(String(calls[11].init?.body)), {
+      workspacePath: '/tmp/ws',
+      reason: 'feedback inbox stop button',
+    });
+    assert.deepEqual(JSON.parse(String(calls[12].init?.body)), {
+      workspacePath: '/tmp/ws',
+      initialMessage: 'Use the real PTY path.',
+      allowOpenAiRuntime: false,
+      gitMode: 'manual',
+      cols: 120,
+      rows: 30,
+    });
+    assert.deepEqual(JSON.parse(String(calls[13].init?.body)), {
+      workspacePath: '/tmp/ws',
+      reason: 'feedback inbox PTY stop button',
+    });
+    assert.deepEqual(JSON.parse(String(calls[14].init?.body)), {
+      workspacePath: '/tmp/ws',
       repo: 'org/repo',
       token: 'github_pat_test',
       requestedBy: 'feedback-inbox',
     });
-    assert.equal(JSON.parse(String(calls[9].init?.body)).comment.id, 'feedback-1');
+    assert.equal(JSON.parse(String(calls[15].init?.body)).comment.id, 'feedback-1');
   });
 });
 
@@ -419,5 +555,22 @@ function runtimeCodexBrowserAcceptanceManifest() {
       command: 'npm run smoke:runtime-codex-browser-acceptance:strict',
       writesRepo: true,
     }],
+  };
+}
+
+function directCodexTerminalSession(overrides: Record<string, unknown> = {}) {
+  return {
+    schemaVersion: 1,
+    id: 'direct-codex-terminal-feedback-1',
+    issueId: 'feedback-1',
+    repairRunId: 'direct-codex-terminal-feedback-1',
+    status: 'running',
+    workspacePath: '/tmp/ws',
+    terminalMirrorRef: '/tmp/ws/.sciforge/repair-results/direct-codex-terminal-feedback-1/terminal-mirror.ndjson',
+    promptRef: '/tmp/ws/.sciforge/repair-results/direct-codex-terminal-feedback-1/feedback-codex-prompt.md',
+    startedAt: '2026-05-07T00:06:00.000Z',
+    updatedAt: '2026-05-07T00:06:01.000Z',
+    transport: 'http-writer',
+    ...overrides,
   };
 }

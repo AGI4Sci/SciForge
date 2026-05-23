@@ -1,6 +1,6 @@
 # SciForge 文档
 
-最后更新：2026-05-21
+最后更新：2026-05-22
 
 当前架构重构的核心结论：
 
@@ -17,6 +17,7 @@ GUI 给 TUI 的操作输入全部是文本。默认 TUI 服务是 Codex backend�
 | [`NativeExtensionOwnershipMap.md`](NativeExtensionOwnershipMap.md) / [`native-extension-ownership-map.json`](native-extension-ownership-map.json) | **TUI native extension 归属图** | capability discovery、GUI 展示组件目录、confidence、harness/policy、provider route、verifier、skill promotion、Computer Use 和 dual-instance repair 的 Codex 原生/GUI extension 归属与可验证 manifest。 |
 | [`CodexRuntimeMigration.md`](CodexRuntimeMigration.md) | 当前迁移路线 | Phase 1 `codex exec --json`、Phase 2 `AgentCliAdapter`、DeepSeek provider、两个 Codex 实例隔离和审计。 |
 | [`Usage.md`](Usage.md) | 当前操作手册 | 当前代码启动、配置、验证命令；它描述现状，不代表最终职责归属。 |
+| [`FeedbackInboxDesignPrinciples.md`](FeedbackInboxDesignPrinciples.md) | **反馈收件箱设计原则** | 反馈收件箱作为本地反馈、GitHub sync、Runtime Codex repair 和证据审计控制面的设计边界、证据策略、readiness gate、terminal mirror 和确认原则。 |
 
 迁移前旧方案保存在 [`../docs_old`](../docs_old)，只作为历史对照和迁移输入；不要再把它当作当前架构真相源。
 

@@ -24,6 +24,7 @@ export function buildBlockedRepairHandoffResultInput(input: {
   runtimePreflightManifest?: RuntimeProviderPreflightManifest;
   browserAcceptanceManifest?: RuntimeCodexBrowserAcceptanceManifest;
   sourceWorkspacePath?: string;
+  initialGuidance?: string;
 }): FeedbackRepairResultInput {
   return {
     id: makeId('feedback-repair-blocked'),
@@ -63,6 +64,7 @@ export function buildBlockedRepairHandoffResultInput(input: {
       runtimePreflightManifest: input.runtimePreflightManifest,
       browserAcceptanceManifest: input.browserAcceptanceManifest,
       sourceWorkspacePath: input.sourceWorkspacePath,
+      initialTerminalGuidance: input.initialGuidance,
       targetWorkspacePath: input.target?.workspacePath,
       targetWorkspaceWriterUrl: input.target?.workspaceWriterUrl,
       terminalMirrorRef: input.repairRun?.terminalMirrorRef,

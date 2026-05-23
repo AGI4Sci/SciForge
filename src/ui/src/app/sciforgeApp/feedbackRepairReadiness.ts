@@ -9,6 +9,8 @@ const REQUIRED_REPAIR_PEER_CAPABILITIES = [
 ];
 const REQUIRED_WORKSPACE_WRITER_CAPABILITIES = [
   'repair-handoff-runner',
+  'feedback-direct-codex-terminal-http-writer',
+  'feedback-direct-codex-terminal-websocket-pty',
   'feedback-repair-terminal-mirror-tail',
   'runtime-provider-preflight-manifest',
   'runtime-codex-browser-acceptance-manifest',
@@ -183,12 +185,15 @@ function browserAcceptanceManifestFresh(manifest: RuntimeCodexBrowserAcceptanceM
 export function workspaceWriterReadinessRows(
   health: SciForgeWorkspaceWriterHealth | undefined,
   healthError: string,
+  workspaceWriterBaseUrl = '',
 ): RepairReadinessRow[] {
+  const writerUrl = workspaceWriterBaseUrl.replace(/\/+$/, '');
+  const urlDetail = writerUrl ? `url=${writerUrl}` : 'url=unknown';
   if (!health) {
     return [{
       label: 'workspace writer',
       value: healthError ? 'unreachable' : 'checking',
-      detail: healthError || 'checking /health capabilities for stale writer detection',
+      detail: healthError ? `${urlDetail}; ${healthError}` : `${urlDetail}; checking /health capabilities for stale writer detection`,
       state: healthError ? 'blocked' : 'partial',
     }];
   }
@@ -198,8 +203,8 @@ export function workspaceWriterReadinessRows(
     label: 'workspace writer',
     value: missing.length ? 'stale-capabilities' : 'current',
     detail: missing.length
-      ? `missing ${missing.join(', ')}; restart the workspace writer/dev server for this checkout`
-      : `pid=${health.pid ?? 'unknown'}; startedAt=${health.startedAt || 'unknown'}`,
+      ? `${urlDetail}; missing ${missing.join(', ')}; restart the workspace writer/dev server for this checkout`
+      : `${urlDetail}; pid=${health.pid ?? 'unknown'}; startedAt=${health.startedAt || 'unknown'}`,
     state: missing.length ? 'blocked' : 'ready',
   }];
 }

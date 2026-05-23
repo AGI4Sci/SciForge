@@ -121,6 +121,46 @@ test('formats screenshot evidence for GitHub using refs instead of inline data U
   assert.doesNotMatch(body, /data:image\/png;base64,(abc123|raw123|annotated123)/);
 });
 
+test('publishes only public scrubbed evidence refs in GitHub markdown', () => {
+  const withMixedEvidence: FeedbackCommentRecord = {
+    ...feedback,
+    evidenceAssets: [
+      {
+        schemaVersion: 1,
+        id: 'asset-private-raw',
+        kind: 'raw-screenshot',
+        label: 'Private raw screenshot',
+        ref: 'repair-evidence/private/feedback-screenshots/feedback-1/raw.png',
+        markdownImageUrl: 'repair-evidence/private/feedback-screenshots/feedback-1/raw.png',
+        githubMarkdownUrl: 'repair-evidence/private/feedback-screenshots/feedback-1/raw.png',
+        publicUrl: 'https://raw.githubusercontent.com/org/repo/main/repair-evidence/private/feedback-screenshots/feedback-1/raw.png',
+        uploadRef: 'github:contents:repair-evidence/private/feedback-screenshots/feedback-1/raw.png',
+        uploadStatus: 'private',
+        visibility: 'private',
+        localOnly: true,
+        createdAt: '2026-05-07T00:00:00.000Z',
+      },
+      {
+        schemaVersion: 1,
+        id: 'asset-public-scrubbed',
+        kind: 'scrubbed-annotated-screenshot',
+        label: 'Scrubbed annotated screenshot',
+        ref: 'repair-evidence/public/feedback-screenshots/feedback-1/scrubbed-annotated.png',
+        githubMarkdownUrl: 'https://raw.githubusercontent.com/org/repo/main/repair-evidence/public/feedback-screenshots/feedback-1/scrubbed-annotated.png',
+        uploadStatus: 'uploaded',
+        visibility: 'public',
+        createdAt: '2026-05-07T00:00:00.000Z',
+      },
+    ],
+  };
+  const body = buildFeedbackGithubIssueBody([withMixedEvidence], [], 'test-build');
+
+  assert.match(body, /repair-evidence\/public\/feedback-screenshots\/feedback-1\/scrubbed-annotated\.png/);
+  assert.doesNotMatch(body, /repair-evidence\/private/);
+  assert.doesNotMatch(body, /github:contents:repair-evidence\/private/);
+  assert.doesNotMatch(body, /Private raw screenshot/);
+});
+
 test('omits oversized screenshot data from GitHub markdown and bundle JSON', () => {
   const withLargeScreenshot: FeedbackCommentRecord = {
     ...feedback,
@@ -167,6 +207,9 @@ test('maps open GitHub issues into local feedback records generically', () => {
   assert.equal(imported?.runtime.scenarioId, 'github-feedback');
   assert.equal(imported?.priority, 'high');
   assert.equal(imported?.githubIssueUrl, 'https://github.com/org/repo/issues/42');
+  assert.equal(imported?.githubIssueState, 'open');
+  assert.equal(imported?.githubIssueUpdatedAt, '2026-05-07T02:00:00.000Z');
+  assert.equal(imported?.githubSyncedAt, '2026-05-07T03:00:00.000Z');
 });
 
 test('marks submitted feedback and linked requests with GitHub issue metadata', () => {
@@ -179,6 +222,8 @@ test('marks submitted feedback and linked requests with GitHub issue metadata', 
   assert.equal(next.feedbackComments?.[0].status, 'github-open');
   assert.equal(next.feedbackComments?.[0].githubSyncStatus, 'github-open');
   assert.equal(next.feedbackComments?.[0].githubIssueNumber, 7);
+  assert.equal(next.feedbackComments?.[0].githubIssueState, 'open');
+  assert.equal(next.feedbackComments?.[0].githubSyncedAt, '2026-05-07T05:00:00.000Z');
   assert.equal(next.feedbackRequests?.[0].status, 'in-progress');
   assert.equal(next.githubSyncedOpenIssues?.[0].number, 7);
 });

@@ -100,6 +100,8 @@ import { FeedbackInboxPage } from './sciforgeApp/FeedbackInboxPage';
 import { Workbench } from './sciforgeApp/SciForgeWorkbench';
 import { loadStoredAppNavigation, saveStoredAppNavigation } from './sciforgeApp/navigationStorage';
 
+const MIN_WORKSPACE_LOADING_VISIBLE_MS = 600;
+
 export function SciForgeApp() {
   const initialNavigation = useMemo(() => loadStoredAppNavigation(), []);
   const [page, setPage] = useState<PageId>(initialNavigation.page);
@@ -115,9 +117,11 @@ export function SciForgeApp() {
   });
   const [workspaceStatus, setWorkspaceStatus] = useState('');
   const [workspaceHydrated, setWorkspaceHydrated] = useState(false);
+  const [workspaceLoadingVisible, setWorkspaceLoadingVisible] = useState(true);
   const [handoffAutoRun, setHandoffAutoRun] = useState<HandoffAutoRunRequest | undefined>();
   const [workbenchWorkspaceFileEditor, setWorkbenchWorkspaceFileEditor] = useState<{ file: WorkspaceFileContent; draft: string } | null>(null);
   const [feedbackAuthor, setFeedbackAuthor] = useState(() => loadFeedbackAuthor());
+  const [feedbackAnnotationModeActive, setFeedbackAnnotationModeActive] = useState(false);
   const [configSaveState, setConfigSaveState] = useState<ConfigSaveState>({ status: 'idle' });
   const [externalReferenceRequest, setExternalReferenceRequest] = useState<{ id: string; scenarioId: ScenarioInstanceId; reference: SciForgeReference } | undefined>();
   const [scenarioOverrides, setScenarioOverrides] = useState<Partial<Record<ScenarioInstanceId, ScenarioRuntimeOverride>>>({});
@@ -307,6 +311,16 @@ export function SciForgeApp() {
         setWorkspaceStatus(message);
       });
   }, [config, configFileHydrated]);
+
+  const workspaceLoadingActive = !configFileHydrated || !workspaceHydrated;
+  useEffect(() => {
+    if (workspaceLoadingActive) {
+      setWorkspaceLoadingVisible(true);
+      return;
+    }
+    const timer = window.setTimeout(() => setWorkspaceLoadingVisible(false), MIN_WORKSPACE_LOADING_VISIBLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [workspaceLoadingActive]);
 
   useEffect(() => {
     if (page !== 'workbench') setWorkbenchWorkspaceFileEditor(null);
@@ -605,6 +619,8 @@ export function SciForgeApp() {
           theme={config.theme}
           onThemeToggle={() => updateRuntimeConfig({ theme: (config.theme ?? 'dark') === 'dark' ? 'light' : 'dark' })}
           healthItems={appHealthItems}
+          annotationModeActive={feedbackAnnotationModeActive}
+          onAnnotationModeToggle={() => setFeedbackAnnotationModeActive((current) => !current)}
         />
         <div className="content-shell">
           {page === 'dashboard' ? (
@@ -685,6 +701,14 @@ export function SciForgeApp() {
               feedbackGithubRepo={config.feedbackGithubRepo}
               detectedGithubRepo={detectedFeedbackGithubRepo}
               feedbackGithubToken={config.feedbackGithubToken}
+              workspaceLoading={workspaceLoadingVisible}
+              workspaceLoadingDetail={!configFileHydrated
+                ? '正在加载 config.local.json；反馈列表会先使用浏览器缓存，GitHub/repair 操作等待配置完成。'
+                : !workspaceHydrated
+                  ? '正在恢复 .sciforge/workspace-state.json；反馈计数、筛选和操作范围会在加载完成后刷新。'
+                  : workspaceLoadingVisible
+                    ? '正在完成 workspace 状态刷新；反馈计数、筛选和操作范围已经恢复，将在片刻后切换为 loaded。'
+                    : workspaceStatus || 'workspace snapshot loaded'}
               githubSyncedOpenIssues={workspaceState.githubSyncedOpenIssues ?? []}
               onReplaceGithubSyncedOpenIssues={replaceGithubSyncedOpenIssues}
               onImportGithubOpenIssues={importGithubOpenIssuesAsFeedback}
@@ -705,6 +729,8 @@ export function SciForgeApp() {
         onAuthorChange={setFeedbackAuthor}
         onSubmit={addFeedbackComment}
         onReference={addContextReference}
+        annotationModeActive={feedbackAnnotationModeActive}
+        onAnnotationModeChange={setFeedbackAnnotationModeActive}
       />
       {settingsOpen ? (
         <SettingsDialog
