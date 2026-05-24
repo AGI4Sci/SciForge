@@ -29,6 +29,8 @@ TUI Agent Host
 Native Agent Extensions
   capability discovery、scientific algorithms、policy/harness、providers、
   verifiers、artifact generation、workspace operations
+  只向 TUI Agent Host 暴露原生 tool/plugin/MCP/provider/worker surface
+  不直接 import 或调用 GUI implementation
 ```
 
 ## 两个方向
@@ -61,6 +63,29 @@ gui.get_context(...)
 ```
 
 这些 tools 只表达 presentation、confirmation、input、focus 和 GUI-local transaction 意图。GUI 根据 hot region、interaction mode、lastChangeOrigin、revision 和 precondition 决定执行、延迟、拒绝或建议替代方案。真实任务操作仍由 TUI agent 和它的原生 tools 完成。
+
+## 拓展模块交互模型
+
+所有 native extension 包，包括 Computer Use、飞书/微信连接器、verifier、provider、policy 和 skill，都只直接和 **TUI Agent Host** 通信。GUI 需要参与展示、确认或输入时，也必须由 TUI Host 调用 `gui.*`；extension package 自身不得 import、调用或依赖 React/UI、renderer registry、Workbench、AnnotationSidebar 或 GUI 私有状态。
+
+统一信息流：
+
+```text
+User / GUI gesture
+  -> terminal-equivalent text
+  -> TUI Agent Host
+  -> native extension module
+  -> refs-first result | approval request | repair hint | compact payload
+  -> TUI Agent Host
+  -> gui.present / gui.ask_user / gui.notify / gui.set_status
+  -> GUI Shell
+```
+
+这个模型把 GUI 定义为 TUI Host 可调用的 presentation/input service，而不是 extension 的依赖。Extension package 只暴露 typed request/result、manifest、trace/audit refs 和必要的 host port contract；TUI Host 负责把这些结果映射成 `ToolPayload`、事件流、`gui.present` 或 `gui.ask_user`。
+
+高风险副作用必须走同一条路径。Computer Use 的发送、删除、支付、授权、发布、外部提交，或飞书连接器的真实发送/同步/删除，不直接弹 GUI，也不直接执行；extension 返回 `needs-confirmation`、`approvalRequest`、`draftRef` 或 `auditRef`，TUI Host 决定是否调用 `gui.ask_user` 收集确认，确认后再发起下一次受控调用。
+
+Computer Use 的验收也按这个边界组织。基础真实输入 smoke 只能证明 action provider、Grounder、Executor 和 Verifier 链路可用；用户级 success 至少需要完成一个真实桌面产物任务，例如制作并保存一页 PPT。目标打通需要覆盖多 App 工作流，例如 Browser/资料页、slide app、Finder/保存对话框和 SciForge GUI 结果展示。GUI 在这些验收中仍只发送终端等价文本、展示 refs 和收集确认，不直接执行桌面操作。
 
 ## GUI 状态投影
 
@@ -237,10 +262,11 @@ SciForge 不定义新的 agent extension API。所有算法和策略扩展都使
 | Harness / policy / budget / repair | TUI 原生 policy/plugin/skill。 |
 | Provider route / MCP / remote worker | TUI 原生 provider/tool 生态。 |
 | 外部软件连接器，如飞书、微信、企业微信 | TUI 原生 connector/tool/MCP/worker；repo 内 adapter 放在 `packages/connectors`。 |
+| Computer Use | TUI 原生 action provider；repo 内能力主体放在 `packages/actions/computer-use`，可消费 `packages/observe/vision` 的 sense 输出，桌面/远程执行通过 TUI Host ports 接入。 |
 | Artifact schema / verifier | TUI 原生 tool 或 skill。 |
 | GUI 展示、确认、输入收集 | SciForge GUI extension 暴露的 intent-based `gui.*` tools。 |
 
-外部连接器遵守同一条边界：GUI 不直接调用第三方 SDK、CLI、桌面自动化或 API。GUI 按钮只生成终端等价文本，例如 `/connectors feishu draft-message ...`；TUI 决定是否调用 connector。连接器输出 refs-first 结果，例如 external refs、artifact refs、audit refs；发送、删除、同步等有外部副作用的操作必须经过 TUI 侧 approval / dry-run / idempotency 规则，并可通过 `gui.ask_user` 收集确认。
+外部连接器和 Computer Use 遵守同一条边界：GUI 不直接调用第三方 SDK、CLI、桌面自动化、Computer Use executor 或 API。GUI 按钮只生成终端等价文本，例如 `/connectors feishu draft-message ...` 或 `/computer-use run ...`；TUI 决定是否调用 connector/action provider。拓展模块输出 refs-first 结果，例如 external refs、artifact refs、trace refs、draft refs、approval request、audit refs；发送、删除、同步、桌面输入等有外部副作用的操作必须经过 TUI 侧 approval / dry-run / idempotency 规则，并由 TUI Host 通过 `gui.ask_user` 收集确认。
 
 ## Desktop Packaging Direction
 
@@ -314,6 +340,7 @@ React/UI 只做 presentation behavior：
 - intent negotiation、precondition check、defer/reject/suggestion。
 
 React/UI 不做 provider branch、capability ranking、repair policy、prompt route、workspace execution 或 task completion 判断。
+React/UI 也不直接执行 Computer Use、连接器 CLI、外部 API 或桌面 bridge；这些能力只能作为 TUI-owned extension 被 TUI Host 调用。
 
 ## 成功标准
 
