@@ -25,6 +25,9 @@ test('annotation sidebar renders intent-first references, action ladder, and sav
   assert.match(sidebarSource, /RunningWorkProcess/);
   assert.match(sidebarSource, /streamEvents/);
   assert.match(sidebarSource, /referenceComposerMarker/);
+  assert.match(sidebarSource, /onReferenceFocus/);
+  assert.match(sidebarSource, /annotation-reference-focus-button/);
+  assert.doesNotMatch(sidebarSource, /className="annotation-reference-row"[\s\S]*?role="button"/);
   assert.match(sidebarSource, /annotationPlanLatestChoices/);
   assert.match(sidebarSource, /onChoice\(choice\)/);
   assert.match(sidebarSource, /onSave/);

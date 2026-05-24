@@ -34,7 +34,7 @@ const removed = removeComposerReference({
   pendingReferences: added.pendingReferences,
   referenceId: source.id,
 });
-assert.equal(removed.input, 'Continue with this ');
+assert.equal(removed.input, 'Continue with this');
 assert.equal(removed.pendingReferences.length, 0);
 assert.equal(promptForComposerSend('', added.pendingReferences), '请基于已引用对象继续分析。');
 

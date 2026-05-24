@@ -11,7 +11,9 @@ import type {
 import type { PageId } from '../data';
 import { makeId, nowIso } from '../domain';
 import {
+  appendReferenceMarkerToInput,
   referenceComposerMarker,
+  removeReferenceMarkerFromInput,
   sciForgeReferenceKindLabel,
   withComposerMarker,
 } from '../../../../packages/support/object-references';
@@ -225,6 +227,24 @@ export function updateAnnotationPlanDescription(
   };
 }
 
+export function ensureAnnotationReferenceMarkers(draft: AnnotationPlanDraft): AnnotationPlanDraft {
+  const references = draft.references.reduce<AnnotationPlanReferenceRecord[]>((current, item) => {
+    const marker = referenceComposerMarker(item.reference);
+    const usedMarkers = new Set(current.map((record) => referenceComposerMarker(record.reference)));
+    const reference = /^※\d+$/.test(marker) && !usedMarkers.has(marker)
+      ? item.reference
+      : withComposerMarker(item.reference, current.map((record) => record.reference));
+    return [...current, { ...item, reference }];
+  }, []);
+  const description = references.reduce(
+    (current, item) => appendReferenceMarkerToInput(current, item.reference),
+    draft.description.replace(/※\?(?!\d)/g, ''),
+  );
+  return description === draft.description && references.every((item, index) => item.reference === draft.references[index]?.reference)
+    ? draft
+    : { ...draft, references, description };
+}
+
 export function addAnnotationReferenceToDraft(
   draft: AnnotationPlanDraft,
   input: { reference: SciForgeReference; target: FeedbackTargetSnapshot; selectedText?: string; now?: string },
@@ -239,7 +259,13 @@ export function addAnnotationReferenceToDraft(
         selectedText: input.selectedText || item.selectedText,
       }
       : item);
-    const nextDraft = { ...draft, references: nextReferences, updatedAt: now };
+    const existingReference = nextReferences[existingIndex]?.reference;
+    const nextDraft = {
+      ...draft,
+      references: nextReferences,
+      description: existingReference ? appendReferenceMarkerToInput(draft.description, existingReference) : draft.description,
+      updatedAt: now,
+    };
     return {
       ...nextDraft,
       status: annotationPlanReadyToSave(nextDraft) ? 'ready-to-save' : 'drafting',
@@ -258,6 +284,7 @@ export function addAnnotationReferenceToDraft(
         addedAt: now,
       },
     ],
+    description: appendReferenceMarkerToInput(draft.description, reference),
     updatedAt: now,
   };
   return {
@@ -271,9 +298,11 @@ export function removeAnnotationReferenceFromDraft(
   referenceId: string,
   now = nowIso(),
 ): AnnotationPlanDraft {
+  const removed = draft.references.find((item) => item.reference.id === referenceId || item.id === referenceId);
   const nextDraft = {
     ...draft,
     references: draft.references.filter((item) => item.reference.id !== referenceId && item.id !== referenceId),
+    description: removed ? removeReferenceMarkerFromInput(draft.description, removed.reference) : draft.description,
     updatedAt: now,
   };
   return {
@@ -351,7 +380,7 @@ export function buildAnnotationQuickActionEnvelope(
 }
 
 export function assessAnnotationQuickAction(draft: Pick<AnnotationPlanDraft, 'description' | 'references'>): AnnotationQuickActionAssessment {
-  const intent = normalizePlanText(draft.description);
+  const intent = normalizeIntentText(draft.description);
   if (!intent) {
     return {
       status: 'needs-intent',
@@ -675,7 +704,7 @@ function annotationPlanReadyToSave(draft: Pick<AnnotationPlanDraft, 'description
 
 function annotationPlanSummary(draft: AnnotationPlanDraft) {
   const description = normalizePlanText(draft.description);
-  if (description) return description;
+  if (normalizeIntentText(description)) return description;
   const latestUser = [...draft.messages].reverse().find((message) => message.role === 'user' && normalizePlanText(message.content));
   if (latestUser) return normalizePlanText(latestUser.content);
   const markers = draft.references.map((item) => `${referenceComposerMarker(item.reference)} ${item.reference.title}`).join('、');
@@ -703,7 +732,7 @@ function annotationPlanAcceptanceCriteria(draft: AnnotationPlanDraft) {
 
 function annotationPlanChoices(draft: AnnotationPlanDraft, content: string): AnnotationPlanChoice[] {
   const hasReferences = draft.references.length > 0;
-  const hasContent = Boolean(normalizePlanText(content || draft.description));
+  const hasContent = Boolean(normalizeIntentText(content || draft.description));
   return [
     {
       id: 'preview-change',
@@ -751,6 +780,10 @@ function annotationQuickActionWasApplied(draft: AnnotationPlanDraft) {
 
 function normalizePlanText(value: string) {
   return value.replace(/\s+/g, ' ').trim();
+}
+
+function normalizeIntentText(value: string) {
+  return normalizePlanText(value.replace(/※(?:\d+|\?)/g, ''));
 }
 
 function sameReference(a: SciForgeReference, b: SciForgeReference) {

@@ -6,6 +6,7 @@ import {
   displayTitleForObjectReference,
   artifactReferenceKind,
   artifactTypeForPath,
+  appendReferenceMarkerToInput,
   linkifyObjectReferences,
   mergeObjectReferences,
   normalizeResponseObjectReferences,
@@ -22,6 +23,7 @@ import {
   referenceForUploadedArtifact,
   referenceKindForWorkspaceFileLike,
   referenceKindForWorkspacePreviewKind,
+  removeReferenceMarkerFromInput,
   referenceToPreviewTarget,
   resolveInlineObjectReferenceToken,
   syntheticArtifactForObjectReference,
@@ -201,6 +203,14 @@ assert.match(visionObject.summary ?? '', /final screenshot/);
 
 const marked = withComposerMarker(source, []);
 assert.equal((marked.payload as { composerMarker: string }).composerMarker, '※1');
+const markerRefs: ReturnType<typeof withComposerMarker>[] = [];
+for (let index = 0; index < 9; index += 1) {
+  markerRefs.push(withComposerMarker({ ...source, id: `ref-${index}`, ref: `file:${index}.md` }, markerRefs));
+}
+const tenMarked = withComposerMarker({ ...source, id: 'ref-ten', ref: 'file:ten.md' }, markerRefs);
+assert.equal((tenMarked.payload as { composerMarker: string }).composerMarker, '※10');
+assert.equal(appendReferenceMarkerToInput('比较 ※10', marked), '比较 ※10 ※1');
+assert.equal(removeReferenceMarkerFromInput('比较 ※10 ※1', marked), '比较 ※10');
 
 const model = objectReferenceChipModel([
   { id: 'pending', title: 'Agent tmp', kind: 'file', ref: 'agentserver://tmp' },

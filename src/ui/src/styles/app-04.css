@@ -1228,25 +1228,38 @@
   min-width: 0;
 }
 
-.sciforge-reference-chip {
+.sciforge-reference-chip-shell {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
   min-height: 24px;
   max-width: 280px;
-  padding: 0 7px;
   color: var(--bio-100);
   background: rgba(123, 147, 176, 0.09);
   border: 1px solid rgba(123, 147, 176, 0.26);
   border-radius: 6px;
-  cursor: pointer;
   font-size: 11px;
   font-weight: 800;
 }
 
-.sciforge-reference-chip:hover {
+.sciforge-reference-chip-shell:hover,
+.sciforge-reference-chip-shell:focus-within {
   border-color: var(--accent-border);
   background: var(--accent-soft);
+}
+
+.sciforge-reference-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 22px;
+  max-width: 100%;
+  padding: 0 7px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
 }
 
 .sciforge-reference-chip > span {
@@ -1262,7 +1275,7 @@
   white-space: nowrap;
 }
 
-.sciforge-reference-chip i {
+.sciforge-reference-remove-button {
   display: inline-grid;
   place-items: center;
   width: 18px;
@@ -1272,7 +1285,6 @@
   border: 0;
   background: transparent;
   cursor: pointer;
-  font-style: normal;
 }
 
 .sciforge-reference-focus {

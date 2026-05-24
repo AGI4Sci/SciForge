@@ -34,6 +34,7 @@ import { CURRENT_TARGET_INSTANCE_VALUE, enabledPeerInstances, selectedPeerInstan
 import { MessageContent, inlineObjectReferencesForMessage } from './chat/MessageContent';
 import { sanitizeUserProjectionText } from './conversation-projection-view-model';
 import { addComposerReferenceWithMarker, addPendingComposerReference, composerReferenceForObjectReference, promptForComposerSend, removeComposerReference } from './chat/composerReferences';
+import { highlightSciForgeReference } from './chat/referenceFocus';
 import { runPromptOrchestrator } from './chat/runOrchestrator';
 import type { CodexRealtimeControlSender } from '../api/sciforgeToolsClient';
 import { appendRunningGuidanceRecord, appendUploadMessageToSession, applyHistoricalUserMessageEdit, attachGuidanceQueueToSessionRun, createGuidanceQueueRecord, mergeAgentResponseIntoSession, resolveGuidanceQueueAfterRun, updateGuidanceQueueRecords } from './chat/sessionTransforms';
@@ -48,7 +49,6 @@ import { referenceTargetFromEvent } from './contextMenu/contextMenuModel';
 import {
   sciForgeReferenceAttribute,
   objectReferenceKindLabel,
-  parseSciForgeReferenceAttribute,
   referenceForMessage,
   referenceForObjectReference,
 } from '../../../../packages/support/object-references';
@@ -489,7 +489,7 @@ export function ChatPanel({
   }
 
   function focusPendingReference(reference: SciForgeReference) {
-    highlightReferencedContent(reference);
+    highlightSciForgeReference(reference);
   }
 
   async function submitTurn(prompt: string, references: SciForgeReference[] = []) {
@@ -1051,7 +1051,7 @@ export function ChatPanel({
                 </>
               )}
               {message.references?.length ? (
-                <SciForgeReferenceChips references={message.references} />
+                <SciForgeReferenceChips references={message.references} onFocus={focusPendingReference} />
               ) : null}
               {message.acceptance && !message.acceptance.pass ? (
                 <AcceptancePanel acceptance={message.acceptance} />
@@ -1144,62 +1144,6 @@ function enrichRepairRaw(raw: unknown, repairHistory: unknown, sourceRunId: stri
   return raw && typeof raw === 'object' && !Array.isArray(raw)
     ? { ...raw, ...repairMetadata }
     : { raw, ...repairMetadata };
-}
-
-function highlightReferencedContent(reference: SciForgeReference) {
-  const element = elementForSciForgeReference(reference);
-  if (!element) return;
-  element.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  element.classList.add('sciforge-reference-focus');
-  window.setTimeout(() => element.classList.remove('sciforge-reference-focus'), 2200);
-  const payload = isRecord(reference.payload) ? reference.payload : undefined;
-  const selectedText = typeof payload?.selectedText === 'string' ? payload.selectedText : '';
-  if (selectedText) selectTextInElement(element, selectedText);
-}
-
-function elementForSciForgeReference(reference: SciForgeReference) {
-  const payload = isRecord(reference.payload) ? reference.payload : undefined;
-  const sourceRef = typeof payload?.sourceRef === 'string' ? payload.sourceRef : reference.ref;
-  const uiRef = sourceRef.replace(/^ui-text:/, '').replace(/#[^#]*$/, '');
-  if (uiRef.startsWith('ui:')) {
-    const selector = uiRef.slice(3);
-    try {
-      const element = document.querySelector(selector);
-      if (element instanceof HTMLElement) return element;
-    } catch {
-      // Ignore invalid selectors from legacy references and fall back to attribute matching.
-    }
-  }
-  for (const element of Array.from(document.querySelectorAll<HTMLElement>('[data-sciforge-reference]'))) {
-    const parsed = parseSciForgeReferenceAttribute(element.dataset.sciforgeReference);
-    if (parsed?.id === reference.id || parsed?.ref === sourceRef || parsed?.ref === reference.ref) return element;
-  }
-  return undefined;
-}
-
-function selectTextInElement(element: HTMLElement, text: string) {
-  const range = rangeForTextInElement(element, text);
-  if (!range) return;
-  const selection = window.getSelection();
-  selection?.removeAllRanges();
-  selection?.addRange(range);
-}
-
-function rangeForTextInElement(element: HTMLElement, text: string) {
-  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-  let node = walker.nextNode();
-  while (node) {
-    const value = node.textContent ?? '';
-    const offset = value.indexOf(text);
-    if (offset >= 0) {
-      const range = document.createRange();
-      range.setStart(node, offset);
-      range.setEnd(node, offset + text.length);
-      return range;
-    }
-    node = walker.nextNode();
-  }
-  return undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

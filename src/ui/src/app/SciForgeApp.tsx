@@ -48,6 +48,7 @@ import {
   buildAnnotationQuickActionPrompt,
   createAnnotationPlanDraft,
   discardAnnotationPlanDraft,
+  ensureAnnotationReferenceMarkers,
   loadPersistedAnnotationPlanDraft,
   markAnnotationPlanDraftSaved,
   persistAnnotationPlanDraft,
@@ -57,6 +58,7 @@ import {
   type AnnotationActionRecord,
   type AnnotationPlanChoice,
   type AnnotationPlanDraft,
+  type AnnotationPlanReferenceRecord,
 } from '../feedback/annotationPlanModel';
 import {
   makeId,
@@ -113,6 +115,7 @@ import { cx } from './uiPrimitives';
 import { resolveSearchNavigation, workbenchNavigationForScenario } from './appShell/navigation';
 import { SettingsPage, Sidebar, TopBar, type ConfigSaveState, type SidebarProjectThreadGroup } from './appShell/ShellPanels';
 import { runPromptOrchestrator } from './chat/runOrchestrator';
+import { highlightFeedbackTargetSnapshot } from './chat/referenceFocus';
 import type { SettingsSectionId } from './appShell/settingsPageModel';
 import { buildWorkspaceProjectActivation, findPeerInstanceForSidebarProject, isCurrentSidebarProject, removeSidebarProjectFromConfig } from './appShell/sidebarProjectModel';
 import {
@@ -175,7 +178,10 @@ export function SciForgeApp() {
   const [feedbackAuthor, setFeedbackAuthor] = useState(() => loadFeedbackAuthor());
   const [feedbackAnnotationModeActive, setFeedbackAnnotationModeActive] = useState(false);
   const [annotationSidebarOpen, setAnnotationSidebarOpen] = useState(false);
-  const [annotationDraft, setAnnotationDraft] = useState<AnnotationPlanDraft | null>(() => loadPersistedAnnotationPlanDraft());
+  const [annotationDraft, setAnnotationDraft] = useState<AnnotationPlanDraft | null>(() => {
+    const draft = loadPersistedAnnotationPlanDraft();
+    return draft ? ensureAnnotationReferenceMarkers(draft) : null;
+  });
   const [annotationStreamEvents, setAnnotationStreamEvents] = useState<AgentStreamEvent[]>([]);
   const [annotationSaving, setAnnotationSaving] = useState(false);
   const [annotationQuickActionRunning, setAnnotationQuickActionRunning] = useState(false);
@@ -486,7 +492,7 @@ export function SciForgeApp() {
   function ensureAnnotationDraft(current: AnnotationPlanDraft | null) {
     const context = annotationDraftContext();
     if (current && current.status !== 'saved' && current.status !== 'discarded') {
-      return refreshAnnotationPlanDraftContext(current, context);
+      return ensureAnnotationReferenceMarkers(refreshAnnotationPlanDraftContext(current, context));
     }
     return createAnnotationPlanDraft(context);
   }
@@ -569,6 +575,10 @@ export function SciForgeApp() {
 
   function handleAnnotationChoice(choice: AnnotationPlanChoice) {
     void runAnnotationPlanOnlyTurn(choice.prompt, choice);
+  }
+
+  function focusAnnotationReference(reference: AnnotationPlanReferenceRecord) {
+    highlightFeedbackTargetSnapshot(reference.target, reference.reference, reference.selectedText);
   }
 
   async function runAnnotationQuickAction() {
@@ -1320,6 +1330,7 @@ export function SciForgeApp() {
         onClarify={handleAnnotationClarify}
         onChoice={handleAnnotationChoice}
         onRemoveReference={(referenceId) => setAnnotationDraft((current) => current ? removeAnnotationReferenceFromDraft(current, referenceId) : current)}
+        onReferenceFocus={focusAnnotationReference}
         onDiscard={discardAnnotationDraft}
         onSave={saveAnnotationDraft}
         onSendToInbox={() => void saveAnnotationDraft({

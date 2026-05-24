@@ -71,38 +71,27 @@ export function SciForgeReferenceChips({
     <div className="sciforge-reference-strip" aria-label="用户引用的上下文">
       {references.slice(0, 8).map((reference) => (
         <span
-          role="button"
-          tabIndex={0}
           key={reference.id}
-          className={cx('sciforge-reference-chip', `kind-${reference.kind}`)}
-          title={reference.summary || reference.ref}
-          onClick={() => onFocus?.(reference)}
-          onKeyDown={(event) => {
-            if (event.key !== 'Enter' && event.key !== ' ') return;
-            event.preventDefault();
-            onFocus?.(reference);
-          }}
+          className={cx('sciforge-reference-chip-shell', `kind-${reference.kind}`)}
         >
-          <span>{referenceComposerMarker(reference)}</span>
-          <strong>{reference.title}</strong>
+          <button
+            type="button"
+            className="sciforge-reference-chip"
+            title={reference.summary || reference.ref}
+            onClick={() => onFocus?.(reference)}
+          >
+            <span>{referenceComposerMarker(reference)}</span>
+            <strong>{reference.title}</strong>
+          </button>
           {onRemove ? (
-            <i
-              role="button"
-              tabIndex={0}
-              onClick={(event) => {
-                event.stopPropagation();
-                onRemove(reference.id);
-              }}
-              onKeyDown={(event) => {
-                if (event.key !== 'Enter' && event.key !== ' ') return;
-                event.preventDefault();
-                event.stopPropagation();
-                onRemove(reference.id);
-              }}
+            <button
+              type="button"
+              className="sciforge-reference-remove-button"
+              onClick={() => onRemove(reference.id)}
               aria-label={`移除引用 ${reference.title}`}
             >
               <X size={12} />
-            </i>
+            </button>
           ) : null}
         </span>
       ))}

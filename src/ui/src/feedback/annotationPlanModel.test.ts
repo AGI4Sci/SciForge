@@ -11,6 +11,7 @@ import {
   buildAnnotationQuickActionEnvelope,
   buildAnnotationQuickActionPrompt,
   createAnnotationPlanDraft,
+  ensureAnnotationReferenceMarkers,
   hasAnnotationPlanOnlyEnvelopeMarker,
   isAnnotationPlanOnlyEnvelope,
   removeAnnotationReferenceFromDraft,
@@ -35,8 +36,105 @@ test('annotation plan assigns stable composer markers without a second reference
 
   assert.equal(referenceComposerMarker(withSecond.references[0].reference), '※1');
   assert.equal(referenceComposerMarker(withSecond.references[1].reference), '※2');
+  assert.match(withSecond.description, /※1/);
+  assert.match(withSecond.description, /※2/);
+  assert.doesNotMatch(withoutFirst.description, /※1/);
+  assert.match(withoutFirst.description, /※2/);
   assert.equal(referenceComposerMarker(withThird.references.find((item) => item.reference.id === 'ref-b')!.reference), '※2');
   assert.equal(referenceComposerMarker(withThird.references.find((item) => item.reference.id === 'ref-c')!.reference), '※1');
+});
+
+test('annotation plan markers do not count as quick-action intent by themselves', () => {
+  const draft = addAnnotationReferenceToDraft(createAnnotationPlanDraft({
+    page: 'workbench',
+    scenarioId: 'literature',
+    sessionId: 'session-1',
+    url: 'http://127.0.0.1:5173/',
+    now,
+  }), { reference: reference('a'), target: target('a'), now });
+  const assessment = assessAnnotationQuickAction(draft);
+
+  assert.equal(draft.description, '※1');
+  assert.equal(assessment.eligible, false);
+  assert.equal(assessment.status, 'needs-intent');
+});
+
+test('annotation plan hydrates persisted references into composer marker context', () => {
+  const draft = addAnnotationReferenceToDraft(createAnnotationPlanDraft({
+    page: 'workbench',
+    scenarioId: 'literature',
+    sessionId: 'session-1',
+    url: 'http://127.0.0.1:5173/',
+    now,
+  }), { reference: reference('a'), target: target('a'), now });
+  const stale = {
+    ...draft,
+    description: '比较这个对象和右侧反馈栏',
+    references: draft.references.map((item) => ({
+      ...item,
+      reference: {
+        ...item.reference,
+        payload: {},
+      },
+    })),
+  };
+  const hydrated = ensureAnnotationReferenceMarkers(stale);
+
+  assert.equal(referenceComposerMarker(hydrated.references[0].reference), '※1');
+  assert.equal(hydrated.description, '比较这个对象和右侧反馈栏 ※1');
+});
+
+test('annotation plan placeholder markers do not become intent during draft migration', () => {
+  const draft = addAnnotationReferenceToDraft(createAnnotationPlanDraft({
+    page: 'workbench',
+    scenarioId: 'literature',
+    sessionId: 'session-1',
+    url: 'http://127.0.0.1:5173/',
+    now,
+  }), { reference: reference('a'), target: target('a'), now });
+  const stale = {
+    ...draft,
+    description: '※?',
+    references: draft.references.map((item) => ({
+      ...item,
+      reference: {
+        ...item.reference,
+        payload: {},
+      },
+    })),
+  };
+  const hydrated = ensureAnnotationReferenceMarkers(stale);
+  const assessment = assessAnnotationQuickAction(hydrated);
+
+  assert.equal(hydrated.description, '※1');
+  assert.equal(assessment.eligible, false);
+  assert.equal(assessment.status, 'needs-intent');
+});
+
+test('annotation plan repairs duplicate persisted composer markers', () => {
+  const first = addAnnotationReferenceToDraft(createAnnotationPlanDraft({
+    page: 'workbench',
+    scenarioId: 'literature',
+    sessionId: 'session-1',
+    url: 'http://127.0.0.1:5173/',
+    now,
+  }), { reference: reference('a'), target: target('a'), now });
+  const draft = addAnnotationReferenceToDraft(first, { reference: reference('b'), target: target('b'), now });
+  const duplicated = {
+    ...draft,
+    description: '比较 ※1',
+    references: draft.references.map((item) => ({
+      ...item,
+      reference: {
+        ...item.reference,
+        payload: { composerMarker: '※1' },
+      },
+    })),
+  };
+  const repaired = ensureAnnotationReferenceMarkers(duplicated);
+
+  assert.deepEqual(repaired.references.map((item) => referenceComposerMarker(item.reference)), ['※1', '※2']);
+  assert.equal(repaired.description, '比较 ※1 ※2');
 });
 
 test('annotation plan envelope is structurally plan-only', () => {

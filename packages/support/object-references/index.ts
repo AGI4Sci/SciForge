@@ -848,16 +848,17 @@ function unsafeReferenceText(value: string) {
 
 export function appendReferenceMarkerToInput(currentInput: string, reference: SciForgeReference) {
   const marker = referenceComposerMarker(reference);
-  if (!marker || currentInput.includes(marker)) return currentInput;
+  if (!marker || referenceMarkerPattern(marker).test(currentInput)) return currentInput;
   return [currentInput.trimEnd(), marker].filter(Boolean).join(' ');
 }
 
 export function removeReferenceMarkerFromInput(currentInput: string, reference: SciForgeReference) {
   const marker = referenceComposerMarker(reference);
   return currentInput
-    .replace(marker, '')
+    .replace(referenceMarkerPattern(marker), '')
     .replace(/[ \t]{2,}/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
+    .trimEnd()
     .trimStart();
 }
 
@@ -865,6 +866,14 @@ export function referenceComposerMarker(reference: SciForgeReference) {
   const payload = isRecord(reference.payload) ? reference.payload : undefined;
   const marker = typeof payload?.composerMarker === 'string' ? payload.composerMarker : '';
   return marker || '※?';
+}
+
+function referenceMarkerPattern(marker: string) {
+  return new RegExp(`${escapeRegExp(marker)}(?!\\d)`, 'g');
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 export function withComposerMarker(reference: SciForgeReference, currentReferences: SciForgeReference[]) {

@@ -18,6 +18,7 @@ import {
   buildAnnotationPlanOnlyEnvelope,
   type AnnotationPlanChoice,
   type AnnotationPlanDraft,
+  type AnnotationPlanReferenceRecord,
 } from './annotationPlanModel';
 
 interface AnnotationSidebarProps {
@@ -32,6 +33,7 @@ interface AnnotationSidebarProps {
   onClarify: (content: string) => void;
   onChoice: (choice: AnnotationPlanChoice) => void;
   onRemoveReference: (referenceId: string) => void;
+  onReferenceFocus: (reference: AnnotationPlanReferenceRecord) => void;
   onDiscard: () => void;
   onSave: () => void;
   onSendToInbox: () => void;
@@ -53,6 +55,7 @@ export function AnnotationSidebar({
   onClarify,
   onChoice,
   onRemoveReference,
+  onReferenceFocus,
   onDiscard,
   onSave,
   onSendToInbox,
@@ -129,16 +132,32 @@ export function AnnotationSidebar({
             <SciForgeReferenceChips
               references={draft.references.map((item) => item.reference)}
               onRemove={onRemoveReference}
+              onFocus={(reference) => {
+                const record = draft.references.find((item) => item.reference.id === reference.id);
+                if (record) onReferenceFocus(record);
+              }}
             />
             <div className="annotation-reference-list">
               {draft.references.map((item) => (
                 <div key={item.reference.id} className="annotation-reference-row">
-                  <span>{referenceComposerMarker(item.reference)}</span>
-                  <div>
-                    <strong>{item.reference.title}</strong>
-                    <small>{sciForgeReferenceKindLabel(item.reference.kind)} · {item.target.selector}</small>
-                  </div>
-                  <button type="button" onClick={() => onRemoveReference(item.reference.id)} aria-label={`移除 ${item.reference.title}`}>
+                  <button
+                    type="button"
+                    className="annotation-reference-focus-button"
+                    onClick={() => onReferenceFocus(item)}
+                    title="定位引用对象"
+                  >
+                    <span>{referenceComposerMarker(item.reference)}</span>
+                    <div>
+                      <strong>{item.reference.title}</strong>
+                      <small>{sciForgeReferenceKindLabel(item.reference.kind)} · {item.target.selector}</small>
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    className="annotation-reference-remove-button"
+                    onClick={() => onRemoveReference(item.reference.id)}
+                    aria-label={`移除 ${item.reference.title}`}
+                  >
                     <X size={13} />
                   </button>
                 </div>
