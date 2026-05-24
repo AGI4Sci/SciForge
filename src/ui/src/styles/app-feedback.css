@@ -137,6 +137,299 @@
   cursor: not-allowed;
 }
 
+.annotation-sidebar {
+  display: grid;
+  position: relative;
+  z-index: 3;
+  flex: 0 0 clamp(340px, 30vw, 440px);
+  align-self: stretch;
+  grid-template-rows: auto auto auto minmax(0, auto) minmax(0, 1fr) auto auto;
+  gap: 10px;
+  width: clamp(340px, 30vw, 440px);
+  max-width: min(440px, 42vw);
+  height: 100vh;
+  overflow: hidden;
+  padding: 14px;
+  color: var(--bio-100);
+  background: color-mix(in srgb, var(--surface-panel) 94%, #020712 6%);
+  border-left: 1px solid var(--border-strong);
+  box-shadow: -18px 0 56px rgba(0, 0, 0, 0.42);
+  pointer-events: auto;
+}
+
+.annotation-sidebar-head,
+.annotation-section-head,
+.annotation-actions,
+.annotation-choice-row,
+.annotation-sidebar-footer,
+.annotation-sidebar-status,
+.annotation-sidebar-saved {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.annotation-sidebar-head {
+  justify-content: space-between;
+}
+
+.annotation-sidebar-head > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.annotation-sidebar h2,
+.annotation-sidebar p {
+  margin: 0;
+}
+
+.annotation-sidebar h2 {
+  color: var(--bio-50);
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.annotation-sidebar p,
+.annotation-muted,
+.annotation-sidebar-footer span,
+.annotation-reference-row small,
+.annotation-sidebar-saved code {
+  color: var(--bio-300);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.annotation-icon-button,
+.annotation-tool-button,
+.annotation-actions button,
+.annotation-choice-row button,
+.annotation-sidebar-footer button,
+.annotation-reference-row button,
+.annotation-sidebar-saved button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  max-width: 100%;
+  padding: 0 10px;
+  color: var(--bio-100);
+  background: rgba(123, 147, 176, 0.1);
+  border: 1px solid rgba(123, 147, 176, 0.28);
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.annotation-icon-button {
+  width: 32px;
+  padding: 0;
+}
+
+.annotation-tool-button.active,
+.annotation-actions button:hover:not(:disabled),
+.annotation-choice-row button:hover,
+.annotation-sidebar-footer button:hover:not(:disabled),
+.annotation-reference-row button:hover,
+.annotation-sidebar-saved button:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+.annotation-actions button:disabled,
+.annotation-sidebar-footer button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.annotation-sidebar-status {
+  min-height: 34px;
+  padding: 8px 10px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.annotation-sidebar-status strong {
+  color: var(--bio-50);
+  font-size: 12px;
+}
+
+.annotation-sidebar-status span:not(.annotation-status-dot) {
+  color: var(--bio-300);
+  font-size: 11px;
+}
+
+.annotation-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(123, 147, 176, 0.52);
+}
+
+.annotation-status-dot.active {
+  background: var(--accent);
+  box-shadow: 0 0 0 4px rgba(0, 229, 160, 0.12);
+}
+
+.annotation-sidebar-saved {
+  justify-content: space-between;
+  padding: 10px;
+  background: rgba(0, 229, 160, 0.08);
+  border: 1px solid rgba(0, 229, 160, 0.24);
+  border-radius: 8px;
+}
+
+.annotation-sidebar-saved strong {
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.annotation-sidebar-section {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px;
+  background: rgba(123, 147, 176, 0.06);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.annotation-sidebar-section.grow {
+  align-content: start;
+}
+
+.annotation-section-head {
+  justify-content: space-between;
+}
+
+.annotation-section-head strong,
+.annotation-field span,
+.annotation-message > span {
+  color: var(--bio-200);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.annotation-reference-list {
+  display: grid;
+  gap: 6px;
+  max-height: 176px;
+  overflow: auto;
+}
+
+.annotation-reference-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 42px;
+  padding: 8px;
+  background: rgba(4, 15, 26, 0.36);
+  border: 1px solid rgba(123, 147, 176, 0.16);
+  border-radius: 7px;
+}
+
+.annotation-reference-row > span {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.annotation-reference-row div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.annotation-reference-row strong,
+.annotation-reference-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.annotation-reference-row strong {
+  color: var(--bio-100);
+  font-size: 12px;
+}
+
+.annotation-reference-row button {
+  width: 28px;
+  min-height: 28px;
+  padding: 0;
+}
+
+.annotation-field {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.annotation-field textarea {
+  width: 100%;
+  min-height: 112px;
+  max-height: 220px;
+  resize: vertical;
+  padding: 10px;
+  color: var(--bio-100);
+  background: var(--surface-input);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  outline: none;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.annotation-actions,
+.annotation-sidebar-footer {
+  justify-content: space-between;
+}
+
+.annotation-sidebar-section.messages {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.annotation-message-list {
+  display: grid;
+  gap: 8px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.annotation-message {
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+  background: rgba(4, 15, 26, 0.34);
+  border: 1px solid rgba(123, 147, 176, 0.14);
+  border-radius: 8px;
+}
+
+.annotation-message.user {
+  border-color: rgba(0, 229, 160, 0.22);
+}
+
+.annotation-message .message-content,
+.annotation-message .message-markdown {
+  font-size: 12px;
+}
+
+.annotation-choice-row {
+  flex-wrap: wrap;
+}
+
+.annotation-sidebar-footer {
+  padding-top: 2px;
+}
+
 @media (max-width: 560px) {
   .feedback-annotation-hint {
     top: 12px;
@@ -146,6 +439,25 @@
 
   .feedback-annotation-hint button {
     width: 100%;
+  }
+}
+
+@media (max-width: 760px) {
+  .annotation-sidebar {
+    position: fixed;
+    z-index: 126;
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    flex: none;
+    width: 100%;
+    max-width: none;
+    height: min(78vh, 620px);
+    border-top: 1px solid var(--border-strong);
+    border-left: 0;
+    border-radius: 12px 12px 0 0;
+    box-shadow: 0 -18px 56px rgba(0, 0, 0, 0.46);
   }
 }
 

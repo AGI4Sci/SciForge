@@ -1,12 +1,14 @@
 # 反馈收件箱设计原则
 
-最后更新：2026-05-22
+最后更新：2026-05-24
 
 反馈收件箱是 SciForge 的用户反馈、GitHub 同步、Runtime Codex repair 和证据审计控制面。它不是普通列表页，也不是 agent host。它的职责是把用户在 GUI 中指出的问题变成可复现、可同步、可交接、可审计的产品数据，并把修复过程以受控方式呈现给用户。
 
 ## 定位
 
-反馈收件箱是 issue triage、GitHub sync 和 Codex CLI repair 的主入口。工作台只负责让用户对任意页面元素发起评论、显示相关反馈提示并跳转到收件箱；批量选择、request bundle、GitHub issue、repair queue、系统 Terminal launch、Web Viewer attach、repair log evidence、patch approval 和 post-repair browser recheck 都属于收件箱。
+反馈收件箱是 issue triage、GitHub sync 和 Codex CLI repair 的主入口，也是全局注释侧栏保存 `annotation-plan` 记录的落点。工作台和非工作台页面都通过同一条注释流程进入收件箱：用户点选一个或多个 GUI 对象，`AnnotationSidebar` 作为 GUI Shell input/presentation surface 承载 plan-only 澄清，保存后生成可审计的 feedback inbox record。
+
+顶部 `注释` 入口不再把注释讨论写入工作台主 composer。工作台主 composer 继续承担执行、研究和普通对话入口；注释侧栏只复用主 conversation kernel 的引用、stream/event 和会话能力，作为 `annotation-plan-only` projection 产出反馈草稿。批量选择、request bundle、GitHub issue、repair queue、系统 Terminal launch、Web Viewer attach、repair log evidence、patch approval 和 post-repair browser recheck 都属于收件箱。
 
 SciForge GUI 仍然是 TUI agent 的展示和控制扩展。repair executor 是 SciForge 后端以 Runtime Codex / Codex CLI profile 调用的服务，不是当前 Codex App 助手。收件箱可以启动 handoff、显示 mirror、发送 guidance、记录确认动作，但不能把 GUI transcript 拼成 agent truth，也不能从 terminal 文本自行推断成功。
 
@@ -17,6 +19,8 @@ SciForge GUI 仍然是 TUI agent 的展示和控制扩展。repair executor 是 
 本地 feedback bundle、screenshot evidence、GitHub sync state、repair run/result/action/guidance 和 repair log refs 是产品数据。GitHub issue 是协作和同步面，不取代本地批注和证据。Codex repair 不能删除、重写或伪造这些数据来制造成功。
 
 每条反馈必须有稳定本地 ID 和 refs。关联关系要靠 ID、bundle refs、issue number/url、repair run/result ids 和 evidence refs，而不是标题、截图文件名或可变文本。
+
+`annotation-plan` 记录也是本地反馈真相源。它必须保留引用对象列表、页面 URL/route、原始用户描述、plan-only 澄清问答摘要、修改建议、验收标准和 evidence refs；它不能把侧栏中的对话当成 repair 指令、GitHub issue body 或 workspace patch。
 
 ### 2. Repair 必须自主完成
 
@@ -48,7 +52,9 @@ GitHub issue body 和公开 JSON 不允许内联 `data:image/...`。GitHub 中�
 
 ### 5. 状态机必须可恢复
 
-反馈状态包括 `comment`、`request`、`open`、`github-open`、`triaged`、`planned`、`fixed`、`blocked`、`needs-discussion`、`wont-fix`、`deleted`。筛选、批量选择、批量标记、生成 request、软删除和恢复都必须依赖本地状态机，刷新后可恢复。
+反馈状态包括 `comment`、`annotation-plan`、`request`、`open`、`github-open`、`triaged`、`planned`、`fixed`、`blocked`、`needs-discussion`、`wont-fix`、`deleted`。筛选、批量选择、批量标记、生成 request、软删除和恢复都必须依赖本地状态机，刷新后可恢复。
+
+`annotation-plan` 来源的条目默认是 open/draft-ready，不自动进入 repair、code、GitHub sync 或 workspace write 路径。只有用户在收件箱中显式点击 repair/code/sync 类动作，并通过对应确认边界后，才可以把该记录升级为 request、GitHub issue 或 Runtime Codex repair 输入。
 
 删除只能软删除本地条目或取消选择。不能删除 GitHub issue、repair audit、patch、workspace diff、repair log evidence 或截图原始证据。恢复必须保留原有 refs 和 audit。
 
@@ -112,6 +118,8 @@ repair request 必须包含 issue refs、feedback evidence、repo config、base 
 
 用户级验收必须使用 Codex in-app browser。terminal smoke、unit test、API probe 和 Playwright-style diagnostics 只能补充。声称修复成功前，必须能对应到真实文件改动、命令输出、browser DOM/截图证据或明确 blocked manifest。
 
+涉及注释、反馈或收件箱的验收必须同时覆盖工作台页面和至少一个非工作台页面：两处都要能从可见 `注释` 入口点选多个对象，进入全局 `AnnotationSidebar`，完成 plan-only 澄清或跳过澄清，保存为反馈收件箱 `annotation-plan` 记录。仅验证旧的“顶部注释 -> 主 composer”路径不能算通过。
+
 post-repair browser recheck 是 first-class repair action。它必须记录结论、时间、verifier、evidence refs，并写回 repair result humanVerification。没有严格、新鲜的 in-app browser evidence 时，不能把 recheck 记成 passed。
 
 ### 11. 泛化优先，禁止 case patch
@@ -134,6 +142,13 @@ post-repair browser recheck 是 first-class repair action。它必须记录结�
 - `src/runtime/repair-handoff-runner.ts`：Runtime Codex repair handoff、isolated worktree、guard/audit、repair log evidence、provider pre-dispatch gate。
 - 当前 workspace writer direct repair 是默认启动面；peer writer/manifest 是可选同步和 target state mirror，不是 direct dispatch 的硬依赖。
 
+目标注释映射：
+
+- 全局 `AnnotationSidebar` 属于 GUI Shell input/presentation，不是 agent host。
+- 侧栏消息、引用 token、stream/event 展示和会话状态复用主 conversation kernel，并通过 `annotation-plan-only` envelope 限制输出。
+- Plan-only 侧栏禁止 workspace writes、repair/code execution、GitHub side effects 和隐藏 guidance 注入。
+- 保存动作只写本地 feedback inbox `annotation-plan` record；repair/code/GitHub sync 只能从收件箱显式启动。
+
 Evidence path policy：
 
 - `repair-evidence/public/feedback-screenshots/<feedback-id>/scrubbed-annotated.png` 可上传/托管，可写进 GitHub markdown。
@@ -145,7 +160,7 @@ Evidence path policy：
 
 改动反馈收件箱、capture、GitHub sync 或 repair backend 后，至少检查：
 
-1. 从 Codex in-app browser 真实创建一条反馈，收件箱能看到同一条反馈。
+1. 从 Codex in-app browser 真实创建反馈，收件箱能看到同一条反馈；注释流程必须在工作台页面和至少一个非工作台页面各保存一条 `annotation-plan` record。
 2. 反馈有 target snapshot、runtime snapshot、raw screenshot、scrubbed annotated screenshot 和 scrubbed status。
 3. 截图是整页 PNG；缩略图可以小，打开/放大必须是高清图。
 4. GitHub issue body 不包含 inline `data:image/`，但包含 screenshot refs 或 markdown image URL。

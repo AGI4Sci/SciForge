@@ -3,8 +3,10 @@ import {
   builtInScenarioIdForRuntimeInput,
   createBuiltInScenarioRecord,
 } from '@sciforge/scenario-core/scenario-routing-policy';
+import { referenceComposerMarker } from '../../../../packages/support/object-references';
 import { scenarios, type ScenarioId, type PageId } from '../data';
-import { FeedbackCaptureLayer } from '../feedback/FeedbackCaptureLayer';
+import { AnnotationSidebar } from '../feedback/AnnotationSidebar';
+import { FeedbackCaptureLayer, type AnnotationReferenceInput } from '../feedback/FeedbackCaptureLayer';
 import { saveFeedbackCommentEvidenceBundle } from '../api/workspaceClient';
 import {
   importGithubOpenIssuesAsFeedback as applyGithubOpenIssuesAsFeedback,
@@ -26,9 +28,30 @@ import {
   updateFeedbackCommentStatus,
 } from '../feedback/feedbackWorkspace';
 import {
+  buildFeedbackEvidenceStatus,
+  buildFeedbackRuntimeSnapshot,
+  buildFeedbackTargetSnapshot,
+  captureFeedbackScreenshotEvidence,
+  feedbackEvidenceRefs,
+} from '../feedback/captureModel';
+import {
+  addAnnotationReferenceToDraft,
+  advanceAnnotationPlanClarification,
+  buildAnnotationPlanFeedbackComment,
+  createAnnotationPlanDraft,
+  discardAnnotationPlanDraft,
+  loadPersistedAnnotationPlanDraft,
+  markAnnotationPlanDraftSaved,
+  persistAnnotationPlanDraft,
+  refreshAnnotationPlanDraftContext,
+  removeAnnotationReferenceFromDraft,
+  updateAnnotationPlanDescription,
+  type AnnotationPlanChoice,
+  type AnnotationPlanDraft,
+} from '../feedback/annotationPlanModel';
+import {
   makeId,
   nowIso,
-  type SciForgeReference,
   type SciForgeSession,
   type SciForgeWorkspaceState,
   type SciForgeConfig,
@@ -113,6 +136,10 @@ import { loadStoredAppNavigation, saveStoredAppNavigation } from './sciforgeApp/
 
 const MIN_WORKSPACE_LOADING_VISIBLE_MS = 600;
 
+function currentBrowserUrl() {
+  return typeof window === 'undefined' ? 'about:blank' : window.location.href;
+}
+
 export function SciForgeApp() {
   const initialNavigation = useMemo(() => loadStoredAppNavigation(), []);
   const [page, setPage] = useState<PageId>(initialNavigation.page);
@@ -134,8 +161,10 @@ export function SciForgeApp() {
   const [workbenchWorkspaceFileEditor, setWorkbenchWorkspaceFileEditor] = useState<{ file: WorkspaceFileContent; draft: string } | null>(null);
   const [feedbackAuthor, setFeedbackAuthor] = useState(() => loadFeedbackAuthor());
   const [feedbackAnnotationModeActive, setFeedbackAnnotationModeActive] = useState(false);
+  const [annotationSidebarOpen, setAnnotationSidebarOpen] = useState(false);
+  const [annotationDraft, setAnnotationDraft] = useState<AnnotationPlanDraft | null>(() => loadPersistedAnnotationPlanDraft());
+  const [annotationSaving, setAnnotationSaving] = useState(false);
   const [configSaveState, setConfigSaveState] = useState<ConfigSaveState>({ status: 'idle' });
-  const [externalReferenceRequest, setExternalReferenceRequest] = useState<{ id: string; scenarioId: ScenarioInstanceId; reference: SciForgeReference } | undefined>();
   const [scenarioOverrides, setScenarioOverrides] = useState<Partial<Record<ScenarioInstanceId, ScenarioRuntimeOverride>>>({});
   const [selectedRuntimeComponentIds, setSelectedRuntimeComponentIds] = useState<string[]>(() => defaultPublishedRuntimeComponentIds());
   const [drafts, setDrafts] = useState<Record<ScenarioInstanceId, string>>(() => createBuiltInScenarioRecord(''));
@@ -379,6 +408,10 @@ export function SciForgeApp() {
     saveFeedbackAuthor(feedbackAuthor);
   }, [feedbackAuthor]);
 
+  useEffect(() => {
+    persistAnnotationPlanDraft(annotationDraft);
+  }, [annotationDraft]);
+
   function updateWorkspace(mutator: (state: SciForgeWorkspaceState) => SciForgeWorkspaceState) {
     setWorkspaceState((current) => touchWorkspaceUpdatedAt(mutator(current), nowIso()));
   }
@@ -421,10 +454,124 @@ export function SciForgeApp() {
       });
   }
 
-  function addContextReference(reference: SciForgeReference) {
-    const requestId = makeId('context-ref');
-    setExternalReferenceRequest({ id: requestId, scenarioId, reference });
-    setPage('workbench');
+  function annotationDraftContext() {
+    return {
+      page,
+      scenarioId,
+      sessionId: activeSession.sessionId,
+      url: currentBrowserUrl(),
+    };
+  }
+
+  function ensureAnnotationDraft(current: AnnotationPlanDraft | null) {
+    const context = annotationDraftContext();
+    if (current && current.status !== 'saved' && current.status !== 'discarded') {
+      return refreshAnnotationPlanDraftContext(current, context);
+    }
+    return createAnnotationPlanDraft(context);
+  }
+
+  function toggleAnnotationSelectionMode() {
+    setAnnotationSidebarOpen(true);
+    setAnnotationDraft((current) => ensureAnnotationDraft(current));
+    setFeedbackAnnotationModeActive((current) => !current);
+  }
+
+  function closeAnnotationSidebar() {
+    setAnnotationSidebarOpen(false);
+    setFeedbackAnnotationModeActive(false);
+  }
+
+  function handleAnnotationReference(input: AnnotationReferenceInput) {
+    setAnnotationSidebarOpen(true);
+    setFeedbackAnnotationModeActive(true);
+    setAnnotationDraft((current) => addAnnotationReferenceToDraft(ensureAnnotationDraft(current), input));
+  }
+
+  function handleAnnotationDescriptionChange(description: string) {
+    setAnnotationSidebarOpen(true);
+    setAnnotationDraft((current) => updateAnnotationPlanDescription(ensureAnnotationDraft(current), description));
+  }
+
+  function handleAnnotationClarify(content: string) {
+    setAnnotationDraft((current) => current ? advanceAnnotationPlanClarification(current, { content }) : current);
+  }
+
+  function handleAnnotationChoice(choice: AnnotationPlanChoice) {
+    setAnnotationDraft((current) => current ? advanceAnnotationPlanClarification(current, { content: choice.prompt, choice }) : current);
+  }
+
+  function discardAnnotationDraft() {
+    setAnnotationDraft((current) => current ? discardAnnotationPlanDraft(current) : current);
+    setAnnotationDraft(null);
+    setAnnotationSidebarOpen(false);
+    setFeedbackAnnotationModeActive(false);
+  }
+
+  async function saveAnnotationDraft() {
+    if (!annotationDraft || annotationDraft.status === 'saved') return;
+    setAnnotationSaving(true);
+    try {
+      const now = nowIso();
+      const feedbackId = makeId('feedback');
+      const refs = feedbackEvidenceRefs(feedbackId);
+      const firstReference = annotationDraft.references[0];
+      const target = firstReference?.target ?? buildFeedbackTargetSnapshot(document.body);
+      const marker = firstReference ? referenceComposerMarker(firstReference.reference) : 'plan';
+      const screenshot = await captureFeedbackScreenshotEvidence(target, now, { annotationLabel: marker });
+      const screenshotWithRefs = screenshot
+        ? {
+          ...screenshot,
+          rawScreenshotRef: refs.rawScreenshotRef,
+          annotatedScreenshotRef: refs.annotatedScreenshotRef,
+        }
+        : undefined;
+      const runtime = buildFeedbackRuntimeSnapshot({
+        page,
+        scenarioId,
+        session: activeSession,
+        url: currentBrowserUrl(),
+        appVersion: APP_BUILD_ID,
+      });
+      const evidenceStatus = buildFeedbackEvidenceStatus({
+        screenshot: screenshotWithRefs,
+        target,
+        runtime,
+        diagnostics: screenshotWithRefs ? [] : ['screenshot capture failed; saved annotation plan target and runtime evidence only'],
+      });
+      const comment = buildAnnotationPlanFeedbackComment({
+        draft: annotationDraft,
+        feedbackId,
+        now,
+        author: feedbackAuthor,
+        target,
+        viewport: {
+          width: window.innerWidth,
+          height: window.innerHeight,
+          devicePixelRatio: window.devicePixelRatio || 1,
+          scrollX: window.scrollX,
+          scrollY: window.scrollY,
+        },
+        runtime,
+        screenshot: screenshotWithRefs,
+        refs,
+        evidenceStatus,
+      });
+      addFeedbackComment(comment);
+      setAnnotationDraft((current) => current ? markAnnotationPlanDraftSaved(current, feedbackId, now) : current);
+      setFeedbackAnnotationModeActive(false);
+      setWorkspaceStatus(`注释计划已保存到反馈收件箱：${feedbackId}`);
+    } catch (error) {
+      setWorkspaceStatus(`注释计划未保存：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setAnnotationSaving(false);
+    }
+  }
+
+  function openFeedbackInboxFromAnnotation() {
+    setPage('feedback');
+    setAnnotationSidebarOpen(false);
+    setFeedbackAnnotationModeActive(false);
   }
 
   function updateFeedbackStatus(ids: string[], status: FeedbackCommentStatus) {
@@ -756,7 +903,7 @@ export function SciForgeApp() {
           onThemeToggle={() => updateRuntimeConfig({ theme: (config.theme ?? 'dark') === 'dark' ? 'light' : 'dark' })}
           healthItems={appHealthItems}
           annotationModeActive={feedbackAnnotationModeActive}
-          onAnnotationModeToggle={() => setFeedbackAnnotationModeActive((current) => !current)}
+          onAnnotationModeToggle={toggleAnnotationSelectionMode}
         />
         <div className="content-shell">
           {page === 'workbench' ? (
@@ -789,10 +936,7 @@ export function SciForgeApp() {
               onPreviewPackageRequest={handlePreviewPackageRequest}
               workspaceFileEditor={workbenchWorkspaceFileEditor}
               onWorkspaceFileEditorChange={setWorkbenchWorkspaceFileEditor}
-              externalReferenceRequest={externalReferenceRequest?.scenarioId === scenarioId ? externalReferenceRequest : undefined}
-              onExternalReferenceConsumed={(requestId) => {
-                setExternalReferenceRequest((current) => current?.id === requestId ? undefined : current);
-              }}
+              onExternalReferenceConsumed={() => undefined}
               availableComponentIds={selectedRuntimeComponentIds}
               onAvailableComponentIdsChange={setSelectedRuntimeComponentIds}
             />
@@ -844,6 +988,22 @@ export function SciForgeApp() {
           )}
         </div>
       </div>
+      <AnnotationSidebar
+        open={annotationSidebarOpen}
+        draft={annotationDraft}
+        selectionActive={feedbackAnnotationModeActive}
+        saving={annotationSaving}
+        page={page}
+        onClose={closeAnnotationSidebar}
+        onToggleSelection={toggleAnnotationSelectionMode}
+        onDescriptionChange={handleAnnotationDescriptionChange}
+        onClarify={handleAnnotationClarify}
+        onChoice={handleAnnotationChoice}
+        onRemoveReference={(referenceId) => setAnnotationDraft((current) => current ? removeAnnotationReferenceFromDraft(current, referenceId) : current)}
+        onDiscard={discardAnnotationDraft}
+        onSave={saveAnnotationDraft}
+        onOpenInbox={openFeedbackInboxFromAnnotation}
+      />
       <FeedbackCaptureLayer
         page={page}
         scenarioId={scenarioId}
@@ -852,7 +1012,8 @@ export function SciForgeApp() {
         author={feedbackAuthor}
         onAuthorChange={setFeedbackAuthor}
         onSubmit={addFeedbackComment}
-        onReference={addContextReference}
+        onAnnotationReference={handleAnnotationReference}
+        annotationReferenceCount={annotationDraft?.references.length ?? 0}
         annotationModeActive={feedbackAnnotationModeActive}
         onAnnotationModeChange={setFeedbackAnnotationModeActive}
       />

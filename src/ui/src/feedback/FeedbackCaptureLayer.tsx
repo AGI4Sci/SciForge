@@ -30,9 +30,16 @@ interface FeedbackCaptureLayerProps {
   author: { authorId: string; authorName: string };
   onAuthorChange: (author: { authorId: string; authorName: string }) => void;
   onSubmit: (comment: FeedbackCommentRecord) => void;
-  onReference: (reference: SciForgeReference) => void;
+  onAnnotationReference: (input: AnnotationReferenceInput) => void;
+  annotationReferenceCount?: number;
   annotationModeActive?: boolean;
   onAnnotationModeChange?: (active: boolean) => void;
+}
+
+export interface AnnotationReferenceInput {
+  reference: SciForgeReference;
+  target: FeedbackTargetSnapshot;
+  selectedText?: string;
 }
 
 interface ContextTarget {
@@ -57,7 +64,8 @@ export function FeedbackCaptureLayer({
   author,
   onAuthorChange,
   onSubmit,
-  onReference,
+  onAnnotationReference,
+  annotationReferenceCount = 0,
   annotationModeActive = false,
   onAnnotationModeChange,
 }: FeedbackCaptureLayerProps) {
@@ -69,7 +77,6 @@ export function FeedbackCaptureLayer({
   const [priority, setPriority] = useState<FeedbackPriority>('normal');
   const [tags, setTags] = useState('');
   const [saveHint, setSaveHint] = useState('');
-  const [annotationReferenceCount, setAnnotationReferenceCount] = useState(0);
 
   function selectableElementFromEvent(event: MouseEvent) {
     const element = event.target instanceof Element ? event.target : null;
@@ -101,16 +108,14 @@ export function FeedbackCaptureLayer({
     const context = contextForElement(element, event, 'menu');
     const reference = context.objectReference
       ?? referenceForFeedbackTarget(context.target, context.selectedText, 'object');
-    onReference(reference);
+    onAnnotationReference({ reference, target: context.target, selectedText: context.selectedText });
     setHoverTarget(context.target);
-    setAnnotationReferenceCount((count) => count + 1);
     setSaveHint('');
   }
 
   useEffect(() => {
     if (!annotationModeActive) {
       setHoverTarget(null);
-      setAnnotationReferenceCount(0);
       return;
     }
     setContextTarget(null);
@@ -177,7 +182,7 @@ export function FeedbackCaptureLayer({
       document.removeEventListener('click', handleClick, true);
       document.removeEventListener('keydown', handleKeyDown, true);
     };
-  }, [annotationModeActive, onAnnotationModeChange]);
+  }, [annotationModeActive, onAnnotationModeChange, onAnnotationReference]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -241,7 +246,7 @@ export function FeedbackCaptureLayer({
     const reference = kind === 'object' && contextTarget.objectReference
       ? contextTarget.objectReference
       : referenceForFeedbackTarget(contextTarget.target, contextTarget.selectedText, kind);
-    onReference(reference);
+    onAnnotationReference({ reference, target: contextTarget.target, selectedText: contextTarget.selectedText });
     resetDraft();
   }
 
@@ -276,8 +281,8 @@ export function FeedbackCaptureLayer({
             <strong>注释模式</strong>
             <span>
               {annotationReferenceCount > 0
-                ? `已引用 ${annotationReferenceCount} 个对象到主对话；继续点选，或在输入栏描述关系。`
-                : '点击页面对象引用到主对话；可连续点选多个对象，右键添加反馈评论，Esc 退出。'}
+                ? `已加入 ${annotationReferenceCount} 个对象到注释侧栏；继续点选，或在侧栏描述关系。`
+                : '点击页面对象加入注释侧栏；可连续点选多个对象，右键添加反馈评论，Esc 退出。'}
             </span>
           </div>
           <button type="button" onClick={() => onAnnotationModeChange?.(false)}>退出</button>
@@ -302,8 +307,8 @@ export function FeedbackCaptureLayer({
           onClick={(event) => event.stopPropagation()}
         >
           <button type="button" onClick={openComment}>添加评论</button>
-          <button type="button" onClick={() => addReference('object')}>引用对象到对话</button>
-          <button type="button" onClick={() => addReference('selection')} disabled={!contextTarget.selectedText}>引用选中内容</button>
+          <button type="button" onClick={() => addReference('object')}>加入注释侧栏</button>
+          <button type="button" onClick={() => addReference('selection')} disabled={!contextTarget.selectedText}>加入选中内容</button>
         </div>
       ) : null}
       {contextTarget?.mode === 'comment' ? (

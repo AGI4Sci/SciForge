@@ -1,6 +1,6 @@
 # SciForge 文档
 
-最后更新：2026-05-22
+最后更新：2026-05-24
 
 当前架构重构的核心结论：
 
@@ -8,16 +8,18 @@
 
 GUI 给 TUI 的操作输入全部是文本。默认 TUI 服务是 Codex backend，不需要独立 AgentServer；长期只支持 Codex backend，但生产默认 model provider 应是 DeepSeek `deepseek-v4-flash` 或用户配置的低成本 provider/proxy。TUI 感知 GUI 状态时读取只读虚拟 GUI resource tree；TUI 改变 GUI 展示时调用 intent-based `gui.*` tools。算法、capability discovery、harness/policy、provider route、verifier、workspace 操作都使用 Codex 原生 plugin/skill/tool/MCP 和 custom model provider 机制。GUI 侧的 `packages/presentation/components` 只作为展示能力目录，通过 `/gui/capabilities/presentation.json` 和 `/gui/renderers/<componentId>.json` 只读暴露。
 
+当前注释路线是全局 `AnnotationSidebar`：它属于 GUI Shell input/presentation，复用主 conversation kernel 的 `annotation-plan-only` projection，只做澄清和 feedback draft。顶部 `注释` 不再把讨论写入工作台主 composer；保存只产生反馈收件箱 `annotation-plan` record，repair/code/GitHub sync 只能从收件箱显式启动。
+
 ## 权威文档
 
 | 文档 | 状态 | 用途 |
 |---|---|---|
-| [`Architecture.md`](Architecture.md) | **当前总架构真相源** | GUI-as-extension 的产品边界、职责归属、双目录能力发现、引用预览、confidence、harness/policy 和 UI 边界。 |
-| [`TuiGuiProtocol.md`](TuiGuiProtocol.md) | **当前协议真相源** | GUI → TUI 文本输入，TUI 读取 GUI resource tree，TUI → GUI intent-based `gui.*` tools，展示组件目录、对象引用、confidence、hot region、precondition 和协商。 |
+| [`Architecture.md`](Architecture.md) | **当前总架构真相源** | GUI-as-extension 的产品边界、职责归属、全局注释侧栏、双目录能力发现、引用预览、confidence、harness/policy 和 UI 边界。 |
+| [`TuiGuiProtocol.md`](TuiGuiProtocol.md) | **当前协议真相源** | GUI → TUI 文本输入，TUI 读取 GUI resource tree，TUI → GUI intent-based `gui.*` tools，`annotation-plan-only` envelope、展示组件目录、对象引用、confidence、hot region、precondition 和协商。 |
 | [`NativeExtensionOwnershipMap.md`](NativeExtensionOwnershipMap.md) / [`native-extension-ownership-map.json`](native-extension-ownership-map.json) | **TUI native extension 归属图** | capability discovery、GUI 展示组件目录、confidence、harness/policy、provider route、verifier、skill promotion、Computer Use 和 dual-instance repair 的 Codex 原生/GUI extension 归属与可验证 manifest。 |
 | [`CodexRuntimeMigration.md`](CodexRuntimeMigration.md) | 当前迁移路线 | Phase 1 `codex exec --json`、Phase 2 `AgentCliAdapter`、DeepSeek provider、两个 Codex 实例隔离和审计。 |
 | [`Usage.md`](Usage.md) | 当前操作手册 | 当前代码启动、配置、验证命令；它描述现状，不代表最终职责归属。 |
-| [`FeedbackInboxDesignPrinciples.md`](FeedbackInboxDesignPrinciples.md) | **反馈收件箱设计原则** | 反馈收件箱作为本地反馈、GitHub sync、Runtime Codex repair 和证据审计控制面的设计边界、证据策略、readiness gate、系统 Terminal/Web Viewer、repair log evidence 和确认原则。 |
+| [`FeedbackInboxDesignPrinciples.md`](FeedbackInboxDesignPrinciples.md) | **反馈收件箱设计原则** | 反馈收件箱作为本地反馈、`annotation-plan` 记录、GitHub sync、Runtime Codex repair 和证据审计控制面的设计边界、证据策略、readiness gate、系统 Terminal/Web Viewer、repair log evidence 和确认原则。 |
 
 迁移前旧方案保存在 [`../docs_old`](../docs_old)，只作为历史对照和迁移输入；不要再把它当作当前架构真相源。
 
@@ -49,3 +51,9 @@ GUI 给 TUI 的操作输入全部是文本。默认 TUI 服务是 Codex backend�
 
 9. **引用和 confidence 必须可解释。**
    可解析 artifact/file 引用应能聚焦右侧预览；`confidence` 只能来自 TUI/verifier/harness 的可解释输出，GUI 不补默认百分比。
+
+10. **注释侧栏是 plan-only projection。**
+   `AnnotationSidebar` 可以跨工作台和非工作台引用对象，但只能澄清、摘要和保存反馈草稿；不能写 workspace、启动 repair、运行 code 或提交 GitHub。
+
+11. **浏览器验收必须覆盖两类页面。**
+   注释、反馈收件箱和 repair UI 的用户级验收必须使用 Codex in-app browser，并同时覆盖工作台页面和至少一个非工作台页面。

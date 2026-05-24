@@ -211,8 +211,15 @@ test('feedback inbox keeps search field wired to no-match empty state copy', () 
   assert.match(feedbackInboxSource, /placeholder="搜索反馈、Issue、ref\.\.\."/);
   assert.match(feedbackInboxSource, /没有匹配当前筛选或搜索的反馈/);
   assert.match(feedbackInboxSource, /调整状态筛选、清空搜索/);
-  assert.match(feedbackInboxSource, /点击顶栏“注释”进入注释模式/);
+  assert.match(feedbackInboxSource, /点击顶栏“注释”打开全局注释侧栏/);
   assert.match(feedbackInboxSource, /隐藏选择不会参与当前操作/);
+});
+
+test('feedback inbox labels annotation-plan records as plan-only inbox entries', () => {
+  assert.match(feedbackInboxSource, /ANNOTATION_PLAN_SOURCE/);
+  assert.match(feedbackInboxSource, /feedbackAnnotationPlanMetadata\(item\)/);
+  assert.match(feedbackInboxSource, /<Badge variant="info">annotation-plan<\/Badge>/);
+  assert.match(feedbackInboxSource, /explicit inbox action/);
 });
 
 test('feedback inbox defaults repair to system Terminal with optional Web Viewer', () => {
@@ -326,13 +333,12 @@ test('RT-06 repair result closure asks only solved or remaining problem feedback
   assert.match(githubFeedbackSource, /export function markFeedbackGithubIssueClosed/);
 });
 
-test('PROJECT.md records RT-06 evidence coverage and remaining live audit gap', () => {
-  assert.match(projectSource, /### RT-06 Evidence \/ Audit 和反馈闭环/);
-  assert.match(projectSource, /RT-06 evidence note \(2026-05-23\)/);
-  assert.match(projectSource, /FeedbackInboxPage\.test\.ts/);
-  assert.match(projectSource, /terminal transcript/);
-  assert.match(projectSource, /bounded scrub/);
-  assert.match(projectSource, /Remaining gap/);
+test('PROJECT.md records the active global annotation sidebar protocol', () => {
+  assert.match(projectSource, /当前任务板：全局注释侧栏/);
+  assert.match(projectSource, /annotation-plan-only/);
+  assert.match(projectSource, /不允许修改项目代码、不启动 repair、不触发 runtime 执行/);
+  assert.match(projectSource, /在反馈收件箱中区分 `annotation-plan` 来源和传统单对象 comment/);
+  assert.match(projectSource, /Codex in-app browser 验收：在工作台页面和至少一个非工作台页面/);
 });
 
 test('feedback inbox keeps visible selection scope hints and GitHub sync trace visible', () => {

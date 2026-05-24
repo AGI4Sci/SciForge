@@ -210,6 +210,11 @@
   }
 
   .topbar-actions {
+    display: flex;
+    flex: 0 0 auto;
+  }
+
+  .topbar-actions > :not(.topbar-annotation-button) {
     display: none;
   }
 

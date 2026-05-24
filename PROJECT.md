@@ -16,6 +16,22 @@
 - Plan-only 模式禁止写文件、改代码、启动 repair、提交 GitHub issue 或调用会改变 workspace 的工具。
 - 从反馈收件箱启动 repair/code 必须是后续显式动作，不能由注释侧栏自动触发。
 
+## 当前事实
+
+SciForge 当前路线是 **反馈收件箱优先，Runtime Codex/Codex CLI 后端修复，GUI 作为 TUI extension 和 repair control surface**。
+
+核心架构：
+
+- Codex CLI / TUI 拥有 agent 逻辑、上下文、记忆、工具、插件、修复和执行。
+- SciForge GUI 是翻译壳、观察层和可复用展示层，不是 agent host。
+- GUI -> runtime 只发送 terminal-equivalent text command。
+- runtime -> GUI 只返回 normalized events、audit events 或 intent-based `gui.*` results。
+- GUI 可以做 deterministic presentation behavior，不能做 provider route、capability ranking、repair policy、prompt assembly 或 completion 判断。
+- 多轮对话以 Codex CLI thread/session 为权威状态源；SciForge 只保存 thread id、attempt id、UI metadata 和 evidence refs，继续对话时调用 Codex 原生 resume，而不是拼 GUI transcript。
+- `docs/` 是产品/架构/协议/用法真相源；backend runtime migration 真相源是 `packages/backend/CodexRuntimeMigration.md`。
+- 短中期桌面化选择 Electron；Tauri 只作为 runtime launcher、app data、secret storage 和 platform service 稳定后的长期优化项。
+
+
 ## 不可妥协原则
 
 - 用户级 browser 验收必须使用 Codex in-app browser，从真实可见入口开始；系统浏览器、macOS `open`、外部 Chrome 只能作为辅助诊断。
@@ -46,69 +62,77 @@
 
 ### AN-01 全局侧栏信息架构
 
-- [ ] 设计并实现全局 `AnnotationSidebar` 容器，在任何页面打开后固定显示在右侧或等价侧栏区域。
-- [ ] 顶部展示 plan-only 状态、当前页面 URL/route 和退出/收起控制。
-- [ ] 侧栏中展示已引用对象 chips，chip 显示 `※n`、对象标题、类型和移除按钮。
-- [ ] 侧栏底部提供简洁输入框和保存/放弃/继续澄清入口。
-- [ ] 工作台主 composer 在注释模式下不承载注释讨论，只显示必要提示或保持不干扰。
+- [x] 设计并实现全局 `AnnotationSidebar` 容器，在任何页面打开后固定显示在右侧或等价侧栏区域。
+- [x] 顶部展示 plan-only 状态、当前页面 URL/route 和退出/收起控制。
+- [x] 侧栏中展示已引用对象 chips，chip 显示 `※n`、对象标题、类型和移除按钮。
+- [x] 侧栏底部提供简洁输入框和保存/放弃/继续澄清入口。
+- [x] 工作台主 composer 在注释模式下不承载注释讨论，只显示必要提示或保持不干扰。
 - [ ] 侧栏输入和消息列表复用主对话 composer/message/stream 模型的能力边界，避免实现第二套聊天状态机。
 
 ### AN-02 统一对象引用采集
 
-- [ ] 注释模式左键点选任意页面对象，连续加入侧栏引用区并分配稳定 `※n` token。
-- [ ] 右键保留“添加精准反馈评论”的能力，但默认路径是加入侧栏引用区。
-- [ ] 支持引用工作台内部对象，包括主聊天消息、结果面板、左侧项目树、设置按钮和反馈收件箱条目。
-- [ ] 移除或迁移当前“点选后写入主 composer”的工作台专属行为，避免两套注释入口。
-- [ ] 引用对象继续使用 `SciForgeReference` 和现有 scrub/safe reference 策略。
+- [x] 注释模式左键点选任意页面对象，连续加入侧栏引用区并分配稳定 `※n` token。
+- [x] 右键保留“添加精准反馈评论”的能力，但默认路径是加入侧栏引用区。
+- [x] 支持引用工作台内部对象，包括主聊天消息、结果面板、左侧项目树、设置按钮和反馈收件箱条目。
+- [x] 移除或迁移当前“点选后写入主 composer”的工作台专属行为，避免两套注释入口。
+- [x] 引用对象继续使用 `SciForgeReference` 和现有 scrub/safe reference 策略。
 
 ### AN-03 Plan-Only 讨论协议
 
-- [ ] 给注释侧栏建立 plan-only 状态机：drafting、clarifying、ready-to-save、saved、discarded。
-- [ ] 定义 `annotation-plan-only` conversation envelope，复用主对话 kernel 的 session、references、guidance queue 和 structured events。
+- [x] 给注释侧栏建立 plan-only 状态机：drafting、clarifying、ready-to-save、saved、discarded。
+- [x] 定义 `annotation-plan-only` conversation envelope，复用主对话 kernel 的 session、references、guidance queue 和 structured events。
 - [ ] 为主 conversation kernel 增加 annotation-plan-only policy：只允许澄清、选择题、摘要和 feedback draft，不允许进入执行/repair/code path。
-- [ ] 明确禁止 side effects：不写 workspace、不启动 repair、不提交 GitHub、不运行代码修改。
-- [ ] 允许 agent 生成澄清问题、选择题和需求摘要，但输出必须保持为 feedback draft。
-- [ ] 选择题 UI 支持 2-3 个推荐选项和自由输入，适合“像 Claude 一样”连续澄清。
-- [ ] 用户可以随时跳过澄清，直接把当前描述和引用保存为反馈草稿。
+- [x] 明确禁止 side effects：不写 workspace、不启动 repair、不提交 GitHub、不运行代码修改。
+- [x] 允许 agent 生成澄清问题、选择题和需求摘要，但输出必须保持为 feedback draft。
+- [x] 选择题 UI 支持 2-3 个推荐选项和自由输入，适合“像 Claude 一样”连续澄清。
+- [x] 用户可以随时跳过澄清，直接把当前描述和引用保存为反馈草稿。
 
 ### AN-04 反馈收件箱沉淀
 
-- [ ] 保存时生成结构化 feedback record：引用对象列表、原始用户描述、澄清问答摘要、修改建议、验收标准、页面 URL、selector/DOM path、截图 refs。
-- [ ] 在反馈收件箱中区分 `annotation-plan` 来源和传统单对象 comment。
-- [ ] 反馈条目默认处于 open/draft-ready 状态，不自动 repair。
-- [ ] 从反馈收件箱启动 repair/code 必须有显式按钮和确认边界。
-- [ ] GitHub issue sync 只发送 scrubbed summary 和公开 evidence refs，不发送 raw transcript 或 secret。
+- [x] 保存时生成结构化 feedback record：引用对象列表、原始用户描述、澄清问答摘要、修改建议、验收标准、页面 URL、selector/DOM path、截图 refs。
+- [x] 在反馈收件箱中区分 `annotation-plan` 来源和传统单对象 comment。
+- [x] 反馈条目默认处于 open/draft-ready 状态，不自动 repair。
+- [x] 从反馈收件箱启动 repair/code 必须有显式按钮和确认边界。
+- [x] GitHub issue sync 只发送 scrubbed summary 和公开 evidence refs，不发送 raw transcript 或 secret。
 
 ### AN-05 视觉与交互细节
 
-- [ ] 侧栏宽度、层级和移动端行为不能遮挡关键页面内容；窄屏可转为底部 sheet。
-- [ ] 注释模式 hover highlight、selected outline 和侧栏 chips 需要颜色/编号一致。
-- [ ] 提供清晰文案：“仅澄清，不改代码”。
-- [ ] 支持 Esc 退出注释模式，但不丢弃已写草稿，除非用户选择放弃。
-- [ ] 保存成功后给出反馈收件箱入口和本地 evidence 状态。
+- [x] 侧栏宽度、层级和移动端行为不能遮挡关键页面内容；窄屏可转为底部 sheet。
+- [x] 注释模式 hover highlight、selected outline 和侧栏 chips 需要颜色/编号一致。
+- [x] 提供清晰文案：“仅澄清，不改代码”。
+- [x] 支持 Esc 退出注释模式，但不丢弃已写草稿，除非用户选择放弃。
+- [x] 保存成功后给出反馈收件箱入口和本地 evidence 状态。
 
 ### AN-06 数据与持久化
 
-- [ ] 为注释侧栏草稿定义最小持久化模型，避免刷新或页面切换时丢失关键草稿。
-- [ ] 草稿中保存引用对象、用户输入、澄清问答和 evidence refs，避免保存 raw DOM 或敏感 provider/runtime 内容。
-- [ ] 如果页面切换，侧栏保留草稿并标注原始页面 URL。
-- [ ] 截图和 target evidence 继续复用现有 `captureFeedbackScreenshotEvidence` / feedback bundle 写入路径。
+- [x] 为注释侧栏草稿定义最小持久化模型，避免刷新或页面切换时丢失关键草稿。
+- [x] 草稿中保存引用对象、用户输入、澄清问答和 evidence refs，避免保存 raw DOM 或敏感 provider/runtime 内容。
+- [x] 如果页面切换，侧栏保留草稿并标注原始页面 URL。
+- [x] 截图和 target evidence 继续复用现有 `captureFeedbackScreenshotEvidence` / feedback bundle 写入路径。
 
 ### AN-07 测试与验证
 
-- [ ] Unit/model tests：引用加入、移除、token 分配、草稿状态机、plan-only side-effect guard。
-- [ ] Component tests：侧栏渲染、选择题、保存/放弃、工作台和非工作台一致行为。
-- [ ] Feedback inbox tests：annotation-plan record 入队、展示、repair 显式启动边界。
-- [ ] `git diff --check`。
-- [ ] `npm run typecheck`，如被已有无关错误阻塞，需要记录具体错误和归属。
-- [ ] Codex in-app browser 验收：在工作台页面和至少一个非工作台页面各完成一次点选、多对象讨论、保存到反馈收件箱。
+- [x] Unit/model tests：引用加入、移除、token 分配、草稿状态机、plan-only side-effect guard。
+- [x] Component tests：侧栏渲染、选择题、保存/放弃、工作台和非工作台一致行为。
+- [x] Feedback inbox tests：annotation-plan record 入队、展示、repair 显式启动边界。
+- [x] `git diff --check`。
+- [x] `npm run typecheck`，如被已有无关错误阻塞，需要记录具体错误和归属。
+- [x] Codex in-app browser 验收：在工作台页面和至少一个非工作台页面各完成一次点选、多对象讨论、保存到反馈收件箱。
 
 ### AN-08 文档与收敛
 
-- [ ] 更新 `docs/FeedbackInboxDesignPrinciples.md`，说明全局注释侧栏和 feedback inbox 的关系。
-- [ ] 更新 `docs/Architecture.md` 或 `docs/TuiGuiProtocol.md`，说明 plan-only 侧栏不是执行入口。
-- [ ] 删除或归档与主 composer 注释讨论相关的旧文案，避免用户误解。
-- [ ] 更新 smoke/verification docs，明确 browser 验收必须覆盖工作台和非工作台页面。
+- [x] 更新 `docs/FeedbackInboxDesignPrinciples.md`，说明全局注释侧栏和 feedback inbox 的关系。
+- [x] 更新 `docs/Architecture.md` 或 `docs/TuiGuiProtocol.md`，说明 plan-only 侧栏不是执行入口。
+- [x] 删除或归档与主 composer 注释讨论相关的旧文案，避免用户误解。
+- [x] 更新 smoke/verification docs，明确 browser 验收必须覆盖工作台和非工作台页面。
+
+### AN-09 Evidence（2026-05-24）
+
+- [x] Targeted tests passed: `node --import tsx --test src/ui/src/feedback/AnnotationSidebar.test.tsx src/ui/src/feedback/annotationPlanModel.test.ts src/ui/src/feedback/FeedbackCaptureLayer.test.tsx src/ui/src/app/sciforgeApp/FeedbackInboxPage.test.ts`（24/24）。
+- [x] `git diff --check` passed。
+- [x] `npm run typecheck` 已执行并记录阻塞：当前失败来自既有 desktop preload / production shell planner / workspace-directory-picker test / ShellPanels sidebar project / smoke-sidebar-project-switch / vite config 类型问题，和本轮 annotation sidebar 改动无直接归属。
+- [x] Codex in-app browser 验收通过：工作台页面和反馈收件箱页面都完成了注释侧栏点选、保存，并在反馈收件箱中看到 `annotation-plan` record。
+- [x] 侧栏遮挡修复已验收：桌面端 `AnnotationSidebar` 改为 right sidecar，browser geometry 显示 `mainRight=1139`、`sidebarX=1139`、`overlap=false`。
 
 ## 验证规则
 

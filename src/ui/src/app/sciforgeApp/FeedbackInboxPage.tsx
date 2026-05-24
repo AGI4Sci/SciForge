@@ -20,6 +20,7 @@ import { feedbackRepairAuditForIssue, type FeedbackRepairAuditViewModel } from '
 import { FeedbackRepairAuditPanel, repairSafeMode } from '../../feedback/FeedbackRepairAuditPanel';
 import { FeedbackCodexTerminalPanel } from '../../feedback/FeedbackCodexTerminalPanel';
 import { FeedbackScreenshotPreview } from '../../feedback/FeedbackScreenshotPreview';
+import { ANNOTATION_PLAN_SOURCE } from '../../feedback/annotationPlanModel';
 import { makeId, nowIso, type FeedbackCommentRecord, type FeedbackCommentStatus, type FeedbackRepairActionRecord, type FeedbackRepairGuidanceRecord, type FeedbackRepairHumanVerification, type FeedbackRepairResultRecord, type FeedbackRepairRunRecord, type GithubSyncedOpenIssueRecord, type PeerInstance, type RuntimeCodexBrowserAcceptanceManifest, type RuntimeProviderPreflightManifest, type SciForgeConfig, type SciForgeWorkspaceState, type SciForgeWorkspaceWriterHealth } from '../../domain';
 import { DelayedHelpButton } from '../DelayedHelpButton';
 import { exportJsonFile } from '../exportUtils';
@@ -1382,7 +1383,7 @@ export function FeedbackInboxPage({
           ) : (
             <>
               <strong>还没有反馈</strong>
-              <p>点击顶栏“注释”进入注释模式，然后像检查元素一样点选任意页面目标保存精准反馈。</p>
+              <p>点击顶栏“注释”打开全局注释侧栏，点选页面目标后保存为 plan-only 反馈。</p>
             </>
           )}
         </div>
@@ -1409,6 +1410,7 @@ export function FeedbackInboxPage({
                   const terminalInfo = feedbackCommentTerminalInfo(item);
                   const repairSummary = feedbackRepairCardSummary(audit);
                   const githubTrace = feedbackGithubTrace(item, githubSyncedOpenIssues);
+                  const annotationPlan = feedbackAnnotationPlanMetadata(item);
                   const canUserCloseGithubIssue = Boolean(item.githubIssueNumber)
                     && item.githubIssueState !== 'closed'
                     && item.githubSyncStatus !== 'github-closed';
@@ -1419,6 +1421,7 @@ export function FeedbackInboxPage({
                   <div className="feedback-card-head-actions">
                     <Badge variant={feedbackStatusVariant(item.status)}>{feedbackStatusLabel(item.status)}</Badge>
                     <Badge variant={item.priority === 'urgent' || item.priority === 'high' ? 'warning' : 'muted'}>{item.priority}</Badge>
+                    {annotationPlan ? <Badge variant="info">annotation-plan</Badge> : null}
                     <Badge variant={audit.badge}>{audit.label}</Badge>
                   </div>
                 </div>
@@ -1466,6 +1469,7 @@ export function FeedbackInboxPage({
 	                  <span><strong>Evidence</strong> {evidence.ready}/{evidence.total} · {evidence.status}</span>
 	                  <span><strong>Repair</strong> {audit.label}</span>
 	                  <span><strong>Target</strong> {item.target.tagName || 'element'} · {item.runtime.scenarioId}</span>
+                    {annotationPlan ? <span><strong>Plan</strong> {annotationPlan.referenceCount} refs · explicit inbox action</span> : null}
 	                </div>
 	                <div className={cx('feedback-card-repair-callout', repairSummary.tone)} aria-label="repair summary">
 	                  <div>
@@ -2221,6 +2225,17 @@ function repairActionConfirmationCopy(action: FeedbackRepairActionRecord['action
 
 function firstNonEmptyString(...values: Array<string | undefined>) {
   return values.find((value) => value?.trim())?.trim();
+}
+
+function feedbackAnnotationPlanMetadata(item: FeedbackCommentRecord) {
+  const metadata = isRecord(item.metadata) ? item.metadata : undefined;
+  if (metadata?.source !== ANNOTATION_PLAN_SOURCE) return undefined;
+  const annotationPlan = isRecord(metadata.annotationPlan) ? metadata.annotationPlan : {};
+  const references = Array.isArray(annotationPlan.references) ? annotationPlan.references : [];
+  return {
+    referenceCount: references.length,
+    planState: stringField(annotationPlan.planState) ?? 'draft-ready',
+  };
 }
 
 function stringField(value: unknown) {

@@ -1,8 +1,8 @@
 # SciForge 使用与运维
 
-最后更新：2026-05-20
+最后更新：2026-05-24
 
-本文只描述当前代码已经落地的用法。脚本真相源是 [`../package.json`](../package.json)，配置默认值真相源是 [`../src/ui/src/config.ts`](../src/ui/src/config.ts)。
+本文描述当前代码已经落地的用法，以及当前目标架构要求的操作边界。脚本真相源是 [`../package.json`](../package.json)，配置默认值真相源是 [`../src/ui/src/config.ts`](../src/ui/src/config.ts)。
 
 架构目标已经调整为 **SciForge GUI 是 Codex backend 的 GUI extension**；见 [`Architecture.md`](Architecture.md) 和 [`TuiGuiProtocol.md`](TuiGuiProtocol.md)。最终形态默认连接 Codex app-server / CLI bridge，生产默认让 Codex 使用 DeepSeek/proxy `bailian/deepseek-v4-flash` 或用户配置的低成本 provider/proxy，不需要独立 AgentServer。本文件里的 `workspace writer`、`AgentServer`、`runtime gateway`、`scenario` 等仍是当前实现路径或迁移期兼容层，不代表最终职责归属。
 
@@ -155,6 +155,8 @@ npm run smoke:runtime-codex-browser-acceptance:strict
 
 strict gate 只接受 `manifest.status === "passed"`，并要求 provider/model/profile、workspace、command id、live `gui.present` 结果、折叠 audit、selected-ref follow-up 和 multi-turn second-turn answer 都有真实浏览器证据。
 
+涉及注释、反馈收件箱或 repair 控制面的用户级验收必须同样使用 Codex in-app browser，且必须覆盖工作台页面和至少一个非工作台页面。两处都要从可见 `注释` 入口进入全局 `AnnotationSidebar`，点选多个对象，完成 plan-only 澄清或跳过澄清，保存到反馈收件箱，并确认生成的是 `annotation-plan` record。只验证旧的“顶部注释 -> 工作台主 composer”路径不能作为通过证据。
+
 ## 常用工作流
 
 场景工作台的内置 scenario 来自 [`../packages/scenarios/core/src/scenarioSpecs.ts`](../packages/scenarios/core/src/scenarioSpecs.ts)：
@@ -196,6 +198,20 @@ GUI event
 ```
 
 所有算法、capability discovery、harness/policy、provider route 都应迁移为 TUI 原生扩展；GUI 自身通过只读 GUI resource tree、intent-based `gui.*` tools 和 progressive hot-region context 注入。GUI 的本地逻辑只覆盖 renderer、layout、focus、interaction mode、precondition、defer/reject/suggestion 等 presentation behavior，不承担任务推理。
+
+## 注释与反馈收件箱
+
+当前注释收敛目标是全局 `AnnotationSidebar`。用户在工作台或非工作台页面点击 `注释` 后，应进入同一条流程：
+
+1. 在页面上点选一个或多个 UI 对象，侧栏为它们分配 `※1`、`※2` 等引用 token。
+2. 侧栏复用主 conversation kernel 的消息、引用和 stream/event 能力，但请求必须处于 `annotation-plan-only` 模式。
+3. Plan-only 模式只能做需求澄清、选择题、摘要和 feedback draft；不能写 workspace、启动 repair、运行 code、提交 GitHub issue 或触发其他外部副作用。
+4. 用户可以跳过澄清，也可以完成 1-3 个短问题后保存。
+5. 保存只生成反馈收件箱 `annotation-plan` record，包含引用对象、原始描述、澄清摘要、修改建议、验收标准、页面 URL/route、selector/DOM path 和截图/evidence refs。
+
+工作台主 composer 不承载注释讨论。它仍是执行、研究和普通对话入口；工作台里的消息、结果面板、项目树、设置入口和反馈收件箱条目只是注释侧栏可以引用的对象。
+
+如果用户要把某条 `annotation-plan` 变成 repair/code/GitHub sync，必须先进入反馈收件箱，对该条记录点击显式 repair/code/sync 操作，并通过对应确认边界。侧栏保存本身不能自动触发这些动作。
 
 ## Workspace 产物
 
@@ -296,6 +312,12 @@ npm run smoke:all
 npm run build
 ```
 
+文档-only 修改至少运行：
+
+```bash
+git diff --check
+```
+
 快速完整验证：
 
 ```bash
@@ -310,6 +332,8 @@ npm run verify:single-agent-release
 ```
 
 `verify:single-agent-release` 会先执行 strict Runtime Codex browser acceptance，缺少 live Runtime Codex service secret 时会立刻 fail closed；strict browser gate 通过后才继续执行 desktop package directory gate 和后续 release 检查。
+
+注释、反馈收件箱和 repair UI 的 browser acceptance 证据必须来自 Codex in-app browser，并记录工作台页面与非工作台页面两条路径。证据中应能看到全局 `AnnotationSidebar`、多对象引用、`annotation-plan-only` 保存和反馈收件箱记录；terminal smoke、API probe 或外部浏览器只能作为辅助诊断。
 
 桌面 package 验证：
 

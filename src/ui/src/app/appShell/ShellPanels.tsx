@@ -1703,7 +1703,7 @@ export function TopBar({
           className={cx('topbar-annotation-button', annotationModeActive && 'active')}
           onClick={onAnnotationModeToggle}
           aria-pressed={annotationModeActive}
-          aria-label={annotationModeActive ? '退出注释模式' : '开启注释模式'}
+          aria-label={annotationModeActive ? '暂停注释点选' : '打开注释侧栏并开始点选'}
           data-feedback-control="true"
         >
           <MessageSquare size={15} aria-hidden />

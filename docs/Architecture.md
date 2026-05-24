@@ -75,6 +75,16 @@ DOM / pointer / keyboard / scroll / modal events
 
 默认只暴露 hot region，不暴露完整 DOM。Hot region 至少包含 focused panel、selected refs、interaction mode、lastChangeOrigin、available actions 和 revision。
 
+## 全局注释侧栏
+
+`AnnotationSidebar` 属于 GUI Shell 的 input/presentation 层。它可以在工作台和非工作台页面打开，负责点选对象、维护 `※1` / `※2` 引用 chips、展示 plan-only 消息流、收集澄清输入并把草稿保存到反馈收件箱；它不是第二套 agent host，也不是 workspace execution surface。
+
+顶部 `注释` 入口打开全局侧栏，不再把注释讨论塞进工作台主 composer。工作台主 composer 保持执行、研究和普通对话职责；工作台里的主聊天消息、结果面板、项目树、设置入口和反馈收件箱条目只是可被引用的 GUI 对象。
+
+注释侧栏复用主 conversation kernel 的 session、references、structured stream/event 和 GUI-TUI 对话能力，但所有请求都必须包在 `annotation-plan-only` envelope 中。这个 projection 只允许澄清问题、选择项、摘要和 feedback draft；禁止 workspace writes、repair、code execution、GitHub side effects、provider/tool route 变更和隐藏 guidance 注入。
+
+保存注释时，GUI 只生成本地 feedback inbox `annotation-plan` record，包括引用对象、原始描述、澄清问答摘要、修改建议、验收标准、URL/route、selector/DOM path 和 screenshot/evidence refs。后续 repair/code/GitHub sync 必须由用户在收件箱中显式启动，并经过对应确认边界。
+
 ## TUI 感知 GUI：只读虚拟资源树
 
 TUI 不应该通过截图、DOM dump、ANSI buffer 或 GUI 私有对象理解界面状态。更稳的模型是把 GUI 看成一个只读虚拟资源树，像读文件系统一样分层探测：
@@ -166,6 +176,8 @@ GUI 不是无脑像素壳，也不是第二个 agent。它应该“对任务无�
 | `packages/presentation/components` 中的 GUI 组件 | GUI extension 的展示能力目录；TUI 通过 `/gui/capabilities/presentation.json` 与 `/gui/renderers/<componentId>.json` 只读发现。 |
 | GUI 展示哪个结果 | TUI 调 `gui.present`，GUI 决定 renderer/placement。 |
 | 用户确认、补充输入 | TUI 调 `gui.ask_user`，GUI 收集后发文本。 |
+| 全局注释侧栏 | GUI Shell input/presentation；复用主 conversation kernel 的 `annotation-plan-only` projection，保存到反馈收件箱。 |
+| 从注释进入 repair/code/GitHub | 反馈收件箱中的显式用户动作和确认边界。 |
 | TUI 想知道 GUI 当前状态 | TUI 读只读 GUI resource tree 或调用 `gui.get_context`。 |
 | GUI 布局、焦点、主题 | GUI 本地人体工学状态。 |
 
@@ -309,6 +321,8 @@ React/UI 不做 provider branch、capability ranking、repair policy、prompt ro
 - 默认运行期不得消耗 OpenAI token，除非用户显式 opt in；生产默认应让 Codex backend 走 DeepSeek `deepseek-v4-flash` 或用户配置的低成本 provider/proxy。
 - GUI 没有 provider 分支、repair 策略、capability ranking、prompt route。
 - 所有 GUI 按钮最终只发送文本。
+- 全局注释侧栏只做 `annotation-plan-only` 澄清和反馈草稿保存，旧的“注释 -> 主 composer”执行路径不再作为成功路径。
+- 注释、反馈和收件箱的用户级验收必须使用 Codex in-app browser，并覆盖工作台页面和至少一个非工作台页面。
 - TUI 用原生机制调用 intent-based `gui.*` tools；GUI 可协商、延迟或拒绝。
 - GUI 默认只向 TUI 披露 shell + hot region 状态。
 - 算法模块可以直接给 Codex plugin / skill / tool / MCP 使用。
