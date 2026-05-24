@@ -1,9 +1,13 @@
-import type { FormEvent } from 'react';
-import { Inbox, MessageSquareText, MousePointer2, Save, Send, Trash2, X } from 'lucide-react';
+import { useRef } from 'react';
+import { Inbox, MessageSquareText, MousePointer2, Save, Trash2, X } from 'lucide-react';
 import type { PageId } from '../data';
+import type { AgentStreamEvent } from '../domain';
 import { Badge, cx } from '../app/uiPrimitives';
+import { ChatComposer } from '../app/chat/ChatComposer';
 import { MessageContent } from '../app/chat/MessageContent';
 import { SciForgeReferenceChips } from '../app/chat/ReferenceChips';
+import { RunningWorkProcess } from '../app/chat/RunningWorkProcess';
+import { streamEventCounts } from '../streamEventPresentation';
 import {
   referenceComposerMarker,
   sciForgeReferenceKindLabel,
@@ -30,6 +34,7 @@ interface AnnotationSidebarProps {
   onDiscard: () => void;
   onSave: () => void;
   onOpenInbox: () => void;
+  streamEvents?: AgentStreamEvent[];
 }
 
 export function AnnotationSidebar({
@@ -47,10 +52,14 @@ export function AnnotationSidebar({
   onDiscard,
   onSave,
   onOpenInbox,
+  streamEvents = [],
 }: AnnotationSidebarProps) {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   if (!open) return null;
   const choices = draft ? annotationPlanLatestChoices(draft) : [];
   const envelope = draft ? buildAnnotationPlanOnlyEnvelope(draft) : null;
+  const streamCounts = streamEventCounts(streamEvents);
   const canSave = Boolean(draft && draft.status !== 'saved' && (draft.references.length || draft.description.trim() || draft.messages.length));
   const statusLabel = draft?.status === 'saved'
     ? '已保存'
@@ -60,8 +69,7 @@ export function AnnotationSidebar({
         ? '澄清中'
         : '草稿';
 
-  function submitClarification(event: FormEvent) {
-    event.preventDefault();
+  function submitClarification() {
     if (!draft || !draft.description.trim()) return;
     onClarify(draft.description);
   }
@@ -131,27 +139,47 @@ export function AnnotationSidebar({
         )}
       </section>
 
-      <form className="annotation-sidebar-section grow" onSubmit={submitClarification}>
-        <label className="annotation-field">
-          <span>计划草稿</span>
-          <textarea
-            value={draft?.description ?? ''}
-            onChange={(event) => onDescriptionChange(event.target.value)}
-            placeholder="描述你希望这些对象如何变化..."
-            disabled={!draft || draft.status === 'saved'}
-          />
-        </label>
+      <section className="annotation-sidebar-section grow">
+        <div className="annotation-composer-label">
+          <strong>计划草稿</strong>
+          <span>主 composer shell · annotation-plan-only</span>
+        </div>
+        <ChatComposer
+          expanded
+          input={draft?.description ?? ''}
+          isSending={false}
+          composerHeight={118}
+          referencePickMode={false}
+          pendingReferences={[]}
+          contextMeter={<span className="annotation-context-meter">{draft?.references.length ?? 0} refs · no runtime</span>}
+          fileInputRef={fileInputRef}
+          referenceChips={null}
+          textareaRef={textareaRef}
+          onExpand={() => undefined}
+          onCollapse={() => undefined}
+          onToggleReferencePickMode={() => undefined}
+          onFileUpload={() => undefined}
+          onInputChange={onDescriptionChange}
+          onSend={submitClarification}
+          onAbort={() => undefined}
+          onBeginResize={() => undefined}
+          disabled={!draft || draft.status === 'saved'}
+          showReferencePicker={false}
+          showFileUpload={false}
+          showCollapseButton={false}
+          showResizeHandle={false}
+          copy={{
+            placeholder: '描述你希望这些对象如何变化...',
+            sendLabel: '澄清',
+          }}
+        />
         <div className="annotation-actions">
-          <button type="submit" disabled={!draft || !draft.description.trim() || draft.status === 'saved'}>
-            <Send size={14} />
-            澄清
-          </button>
           <button type="button" onClick={onSave} disabled={!canSave || saving}>
             <Save size={14} />
             {saving ? '保存中' : '保存'}
           </button>
         </div>
-      </form>
+      </section>
 
       {draft?.messages.length ? (
         <section className="annotation-sidebar-section messages">
@@ -167,6 +195,21 @@ export function AnnotationSidebar({
               </article>
             ))}
           </div>
+        </section>
+      ) : null}
+
+      {streamEvents.length ? (
+        <section className="annotation-sidebar-section stream" aria-label="注释计划事件">
+          <div className="annotation-section-head">
+            <strong>过程</strong>
+            <span className="annotation-context-meter">stream/event model</span>
+          </div>
+          <RunningWorkProcess
+            events={streamEvents}
+            counts={streamCounts}
+            backend="annotation-plan-only"
+            guidanceCount={0}
+          />
         </section>
       ) : null}
 

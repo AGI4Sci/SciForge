@@ -24,6 +24,74 @@ afterEach(() => {
 });
 
 describe('runPromptOrchestrator target instance guard', () => {
+  it('handles annotation-plan-only turnMode before target lookup, compaction, or runtime transport', async () => {
+    const fetched: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      fetched.push(String(input));
+      return jsonResponse({ ok: false, error: 'annotation plan-only must not fetch' }, 500);
+    }) as typeof fetch;
+
+    const events: AgentStreamEvent[] = [];
+    const result = await runPromptOrchestrator(orchestratorInput({
+      prompt: '整理注释草稿',
+      turnMode: 'annotation-plan-only',
+      targetPeer: peer(),
+      onStreamEvent: (event) => events.push(event),
+    }));
+
+    assert.equal(result.status, 'completed');
+    assert.equal(fetched.length, 0);
+    assert.match(result.finalResponse.message.content, /annotation-plan-only policy/);
+    assert.equal(result.finalResponse.message.provenance?.runtimeRequestEligible, false);
+    assert.equal(result.finalResponse.executionUnits.length, 0);
+    assert.equal(events.some((event) => event.type.startsWith('target-')), false);
+    assert.equal(events.some((event) => event.type === 'contextCompaction'), false);
+    assert.equal(events.find((event) => event.type === 'annotation-plan-only')?.label, '注释计划');
+  });
+
+  it('handles annotation-plan-only envelope before target lookup, compaction, or runtime transport', async () => {
+    const fetched: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      fetched.push(String(input));
+      return jsonResponse({ ok: false, error: 'annotation plan-only must not fetch' }, 500);
+    }) as typeof fetch;
+
+    const events: AgentStreamEvent[] = [];
+    const result = await runPromptOrchestrator(orchestratorInput({
+      prompt: '整理注释草稿',
+      conversationEnvelope: annotationEnvelope(),
+      targetPeer: peer(),
+      onStreamEvent: (event) => events.push(event),
+    }));
+
+    assert.equal(result.status, 'completed');
+    assert.equal(fetched.length, 0);
+    assert.equal(result.finalResponse.message.provenance?.runtimeRequestEligible, false);
+    assert.equal(events.some((event) => event.type.startsWith('target-')), false);
+    assert.equal(events.find((event) => event.type === 'annotation-plan-only')?.label, '注释计划');
+  });
+
+  it('fails closed for malformed annotation-plan-only envelopes before runtime transport', async () => {
+    const fetched: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      fetched.push(String(input));
+      return jsonResponse({ ok: false, error: 'annotation plan-only must not fetch' }, 500);
+    }) as typeof fetch;
+
+    const result = await runPromptOrchestrator(orchestratorInput({
+      prompt: '整理注释草稿',
+      conversationEnvelope: {
+        schemaVersion: 'sciforge.annotation-plan-only-envelope.v1',
+        kind: 'annotation-plan-only',
+      },
+      targetPeer: peer(),
+    }));
+
+    assert.equal(result.status, 'failed');
+    assert.match(result.message, /Malformed annotation-plan-only envelope/);
+    assert.equal(fetched.length, 0);
+  });
+
   it('does not dispatch AgentServer or repair current instance when target issue bundle lookup fails', async () => {
     const fetched: string[] = [];
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -579,6 +647,26 @@ function orchestratorInput(overrides: Partial<Parameters<typeof runPromptOrchest
     activeSession: () => baseSession,
     onStreamEvent: () => undefined,
     ...overrides,
+  };
+}
+
+function annotationEnvelope(): Record<string, unknown> {
+  return {
+    schemaVersion: 'sciforge.annotation-plan-only-envelope.v1',
+    kind: 'annotation-plan-only',
+    draftId: 'annotation-plan-test',
+    source: 'annotation-plan',
+    page: 'workbench',
+    scenarioId: 'literature-evidence-review',
+    sessionId: 'session-test',
+    currentUrl: 'http://127.0.0.1:5173/',
+    references: [],
+    allowedOutputs: ['clarifying-question', 'plan-summary', 'feedback-draft', 'acceptance-criteria'],
+    forbiddenSideEffects: ['workspace-write', 'repair-start', 'runtime-execution', 'github-sync', 'code-change'],
+    repairStartAllowed: false,
+    runtimeExecutionAllowed: false,
+    githubSyncAllowed: false,
+    workspaceWriteAllowed: false,
   };
 }
 

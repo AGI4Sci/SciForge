@@ -7,6 +7,8 @@ import {
   buildAnnotationPlanFeedbackComment,
   buildAnnotationPlanOnlyEnvelope,
   createAnnotationPlanDraft,
+  hasAnnotationPlanOnlyEnvelopeMarker,
+  isAnnotationPlanOnlyEnvelope,
   removeAnnotationReferenceFromDraft,
   updateAnnotationPlanDescription,
 } from './annotationPlanModel';
@@ -50,6 +52,10 @@ test('annotation plan envelope is structurally plan-only', () => {
   assert.equal(envelope.repairStartAllowed, false);
   assert.ok(envelope.forbiddenSideEffects.includes('code-change'));
   assert.ok(annotationPlanEnvelopeAllowsOnlyDrafting(envelope));
+  assert.ok(isAnnotationPlanOnlyEnvelope(envelope));
+  assert.ok(hasAnnotationPlanOnlyEnvelopeMarker(envelope));
+  assert.equal(isAnnotationPlanOnlyEnvelope({ ...envelope, runtimeExecutionAllowed: true }), false);
+  assert.equal(hasAnnotationPlanOnlyEnvelopeMarker({ kind: 'annotation-plan-only' }), true);
 });
 
 test('annotation plan saves as feedback inbox record with explicit repair boundary', () => {

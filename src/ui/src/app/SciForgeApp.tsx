@@ -3,10 +3,13 @@ import {
   builtInScenarioIdForRuntimeInput,
   createBuiltInScenarioRecord,
 } from '@sciforge/scenario-core/scenario-routing-policy';
+import { builtInScenarioPackageRef } from '@sciforge/scenario-core/scenario-package';
+import { SCENARIO_SPECS } from '@sciforge/scenario-core/scenario-specs';
 import { referenceComposerMarker } from '../../../../packages/support/object-references';
 import { scenarios, type ScenarioId, type PageId } from '../data';
 import { AnnotationSidebar } from '../feedback/AnnotationSidebar';
 import { FeedbackCaptureLayer, type AnnotationReferenceInput } from '../feedback/FeedbackCaptureLayer';
+import { AppContextMenuLayer } from './contextMenu/AppContextMenuLayer';
 import { saveFeedbackCommentEvidenceBundle } from '../api/workspaceClient';
 import {
   importGithubOpenIssuesAsFeedback as applyGithubOpenIssuesAsFeedback,
@@ -38,6 +41,7 @@ import {
   addAnnotationReferenceToDraft,
   advanceAnnotationPlanClarification,
   buildAnnotationPlanFeedbackComment,
+  buildAnnotationPlanOnlyEnvelope,
   createAnnotationPlanDraft,
   discardAnnotationPlanDraft,
   loadPersistedAnnotationPlanDraft,
@@ -52,6 +56,7 @@ import {
 import {
   makeId,
   nowIso,
+  type AgentStreamEvent,
   type SciForgeSession,
   type SciForgeWorkspaceState,
   type SciForgeConfig,
@@ -67,6 +72,7 @@ import {
   type RuntimeArtifact,
   type ScenarioInstanceId,
   type ScenarioRuntimeOverride,
+  type SciForgeReference,
   type TimelineEventRecord,
 } from '../domain';
 import { compactWorkspaceStateForStorage, createInitialWorkspaceState, createSession, loadWorkspaceState, saveWorkspaceState, shouldUsePersistedWorkspaceState } from '../sessionStore';
@@ -99,7 +105,8 @@ import type { HandoffAutoRunRequest } from './results/viewPlanResolver';
 import { useRuntimeHealth } from './runtimeHealthPanel';
 import { cx } from './uiPrimitives';
 import { resolveSearchNavigation, workbenchNavigationForScenario } from './appShell/navigation';
-import { SettingsPage, Sidebar, TopBar, type ConfigSaveState } from './appShell/ShellPanels';
+import { SettingsPage, Sidebar, TopBar, type ConfigSaveState, type SidebarProjectThreadGroup } from './appShell/ShellPanels';
+import { runPromptOrchestrator } from './chat/runOrchestrator';
 import type { SettingsSectionId } from './appShell/settingsPageModel';
 import { buildWorkspaceProjectActivation } from './appShell/sidebarProjectModel';
 import {
@@ -163,6 +170,7 @@ export function SciForgeApp() {
   const [feedbackAnnotationModeActive, setFeedbackAnnotationModeActive] = useState(false);
   const [annotationSidebarOpen, setAnnotationSidebarOpen] = useState(false);
   const [annotationDraft, setAnnotationDraft] = useState<AnnotationPlanDraft | null>(() => loadPersistedAnnotationPlanDraft());
+  const [annotationStreamEvents, setAnnotationStreamEvents] = useState<AgentStreamEvent[]>([]);
   const [annotationSaving, setAnnotationSaving] = useState(false);
   const [configSaveState, setConfigSaveState] = useState<ConfigSaveState>({ status: 'idle' });
   const [scenarioOverrides, setScenarioOverrides] = useState<Partial<Record<ScenarioInstanceId, ScenarioRuntimeOverride>>>({});
@@ -176,6 +184,11 @@ export function SciForgeApp() {
     sessionId: string;
     workspacePath: string;
   } | null>(null);
+  const [pendingSidebarNewChat, setPendingSidebarNewChat] = useState<{
+    scenarioId: ScenarioInstanceId;
+    workspacePath: string;
+  } | null>(null);
+  const [chatReferenceRequest, setChatReferenceRequest] = useState<{ id: string; reference: SciForgeReference } | null>(null);
 
   const sessions = workspaceState.sessionsByScenario;
   const archivedSessionsByAgent = useMemo(
@@ -337,14 +350,14 @@ export function SciForgeApp() {
 
   useEffect(() => {
     if (!workspaceHydrated) return;
-    if (pendingSidebarThread) return;
+    if (pendingSidebarThread || pendingSidebarNewChat) return;
     if (workspaceRecoveryFocusKey) return;
     const focus = workspaceRecoveryFocusForState(workspaceState);
     setWorkspaceRecoveryFocusKey(focus ? `${focus.sessionId}:${focus.activeRunId}` : 'none');
     if (!focus) return;
     setScenarioId(focus.scenarioId);
     setPage('workbench');
-  }, [workspaceHydrated, workspaceRecoveryFocusKey, workspaceState, pendingSidebarThread]);
+  }, [workspaceHydrated, workspaceRecoveryFocusKey, workspaceState, pendingSidebarThread, pendingSidebarNewChat]);
 
   useEffect(() => {
     if (!workspaceHydrated) return;
@@ -493,12 +506,62 @@ export function SciForgeApp() {
     setAnnotationDraft((current) => updateAnnotationPlanDescription(ensureAnnotationDraft(current), description));
   }
 
+  async function runAnnotationPlanOnlyTurn(content: string, choice?: AnnotationPlanChoice) {
+    const prompt = content.trim();
+    if (!prompt) return;
+    const draftForTurn = ensureAnnotationDraft(annotationDraft);
+    const baseScenarioId = builtInScenarioIdForRuntimeInput({ scenarioId, scenarioOverride: activeScenarioOverride });
+    const scenario = scenarios.find((item) => item.id === baseScenarioId) ?? scenarios[0];
+    const queuedEvent: AgentStreamEvent = {
+      id: makeId('evt'),
+      type: 'queued',
+      label: '已提交',
+      detail: prompt,
+      createdAt: nowIso(),
+    };
+    setAnnotationStreamEvents([queuedEvent]);
+    const emitAnnotationEvent = (event: AgentStreamEvent) => {
+      setAnnotationStreamEvents((current) => [...current, event].slice(-48));
+    };
+    const result = await runPromptOrchestrator({
+      prompt,
+      baseSession: activeSession,
+      references: draftForTurn.references.map((item) => item.reference),
+      scenarioId,
+      baseScenarioId,
+      scenarioName: scenario.name,
+      scenarioDomain: scenario.domain,
+      role: 'annotation planner',
+      config,
+      scenarioOverride: activeScenarioOverride,
+      availableComponentIds: selectedRuntimeComponentIds,
+      defaultComponentIds: activeScenarioOverride?.defaultComponents?.length
+        ? activeScenarioOverride.defaultComponents
+        : SCENARIO_SPECS[baseScenarioId].componentPolicy.defaultComponents,
+      scenarioPackageRef: activeScenarioOverride?.scenarioPackageRef ?? builtInScenarioPackageRef(baseScenarioId),
+      skillPlanRef: activeScenarioOverride?.skillPlanRef ?? `skill-plan.${baseScenarioId}.annotation-plan-only`,
+      uiPlanRef: activeScenarioOverride?.uiPlanRef ?? `ui-plan.${baseScenarioId}.annotation-plan-only`,
+      streamEvents: [],
+      signal: new AbortController().signal,
+      userAbortRequested: () => false,
+      activeSession: () => activeSession,
+      onStreamEvent: emitAnnotationEvent,
+      turnMode: 'annotation-plan-only',
+      conversationEnvelope: buildAnnotationPlanOnlyEnvelope(draftForTurn),
+    });
+    const assistantContent = result.status === 'completed'
+      ? result.finalResponse.message.content
+      : `annotation-plan-only policy 拒绝进入执行路径：${result.message}`;
+    setAnnotationDraft((current) => current ? advanceAnnotationPlanClarification(current, { content: prompt, choice, assistantContent }) : current);
+    setWorkspaceStatus('注释澄清已由 annotation-plan-only conversation kernel 处理，未触发 runtime、repair 或 GitHub sync。');
+  }
+
   function handleAnnotationClarify(content: string) {
-    setAnnotationDraft((current) => current ? advanceAnnotationPlanClarification(current, { content }) : current);
+    void runAnnotationPlanOnlyTurn(content);
   }
 
   function handleAnnotationChoice(choice: AnnotationPlanChoice) {
-    setAnnotationDraft((current) => current ? advanceAnnotationPlanClarification(current, { content: choice.prompt, choice }) : current);
+    void runAnnotationPlanOnlyTurn(choice.prompt, choice);
   }
 
   function discardAnnotationDraft() {
@@ -760,6 +823,18 @@ export function SciForgeApp() {
     ));
   }
 
+  function startProjectNewChat(project: SidebarProjectThreadGroup) {
+    if (project.current) {
+      setScenarioId(scenarioId);
+      setPage('workbench');
+      newChat(scenarioId);
+      return;
+    }
+    const targetPath = sidebarProjectPath(project.detail || config.workspacePath);
+    setPendingSidebarNewChat({ scenarioId, workspacePath: targetPath });
+    activateWorkspaceProject(project);
+  }
+
   useEffect(() => {
     if (!pendingSidebarThread || !workspaceHydrated) return;
     const currentPath = normalizeWorkspaceRootPath(config.workspacePath);
@@ -773,6 +848,17 @@ export function SciForgeApp() {
     setPage('workbench');
     setPendingSidebarThread(null);
   }, [pendingSidebarThread, workspaceHydrated, config.workspacePath, workspaceState.sessionsByScenario]);
+
+  useEffect(() => {
+    if (!pendingSidebarNewChat || !workspaceHydrated) return;
+    const currentPath = normalizeWorkspaceRootPath(config.workspacePath);
+    if (currentPath !== pendingSidebarNewChat.workspacePath) return;
+    const { scenarioId: nextScenarioId } = pendingSidebarNewChat;
+    setScenarioId(nextScenarioId);
+    setPage('workbench');
+    newChat(nextScenarioId);
+    setPendingSidebarNewChat(null);
+  }, [pendingSidebarNewChat, workspaceHydrated, config.workspacePath]);
 
   function archiveThread(nextScenarioId: ScenarioInstanceId, sessionId: string) {
     updateWorkspace((current) => archiveScenarioActiveSession(
@@ -816,6 +902,15 @@ export function SciForgeApp() {
     if (!target) return;
     if (target.scenarioId) setScenarioId(target.scenarioId);
     setPage(target.page);
+  }
+
+  function requestChatReference(reference: SciForgeReference) {
+    setChatReferenceRequest({ id: `chat-ref-${Date.now()}`, reference });
+    if (page !== 'workbench') setPage('workbench');
+  }
+
+  function consumeChatReferenceRequest(requestId: string) {
+    setChatReferenceRequest((current) => (current?.id === requestId ? null : current));
   }
 
   function handleArtifactHandoff(targetScenario: ScenarioId, artifact: RuntimeArtifact) {
@@ -875,11 +970,7 @@ export function SciForgeApp() {
         config={config}
         sessionsByScenario={sessions}
         archivedSessions={workspaceState.archivedSessions}
-        onNewChat={(nextScenarioId) => {
-          setScenarioId(nextScenarioId);
-          setPage('workbench');
-          newChat(nextScenarioId);
-        }}
+        onProjectNewChat={startProjectNewChat}
         onRestoreArchivedSession={restoreArchivedSession}
         onArchiveThread={archiveThread}
         onArchiveAllChats={archiveAllChats}
@@ -894,6 +985,7 @@ export function SciForgeApp() {
         onWorkbenchFileOpened={(file) => setWorkbenchWorkspaceFileEditor({ file, draft: file.content })}
         workbenchEditorFilePath={workbenchWorkspaceFileEditor?.file.path ?? null}
         onWorkbenchEditorPathInvalidated={() => setWorkbenchWorkspaceFileEditor(null)}
+        onReferenceToChat={requestChatReference}
       />
       <div className="main-shell">
         <TopBar
@@ -936,7 +1028,8 @@ export function SciForgeApp() {
               onPreviewPackageRequest={handlePreviewPackageRequest}
               workspaceFileEditor={workbenchWorkspaceFileEditor}
               onWorkspaceFileEditorChange={setWorkbenchWorkspaceFileEditor}
-              onExternalReferenceConsumed={() => undefined}
+              onExternalReferenceConsumed={consumeChatReferenceRequest}
+              externalReferenceRequest={chatReferenceRequest ?? undefined}
               availableComponentIds={selectedRuntimeComponentIds}
               onAvailableComponentIdsChange={setSelectedRuntimeComponentIds}
             />
@@ -1003,6 +1096,11 @@ export function SciForgeApp() {
         onDiscard={discardAnnotationDraft}
         onSave={saveAnnotationDraft}
         onOpenInbox={openFeedbackInboxFromAnnotation}
+        streamEvents={annotationStreamEvents}
+      />
+      <AppContextMenuLayer
+        annotationModeActive={feedbackAnnotationModeActive}
+        onReferenceToChat={requestChatReference}
       />
       <FeedbackCaptureLayer
         page={page}

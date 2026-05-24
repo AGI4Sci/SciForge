@@ -67,7 +67,7 @@ SciForge 当前路线是 **反馈收件箱优先，Runtime Codex/Codex CLI 后�
 - [x] 侧栏中展示已引用对象 chips，chip 显示 `※n`、对象标题、类型和移除按钮。
 - [x] 侧栏底部提供简洁输入框和保存/放弃/继续澄清入口。
 - [x] 工作台主 composer 在注释模式下不承载注释讨论，只显示必要提示或保持不干扰。
-- [ ] 侧栏输入和消息列表复用主对话 composer/message/stream 模型的能力边界，避免实现第二套聊天状态机。
+- [x] 侧栏输入和消息列表复用主对话 composer/message/stream 模型的能力边界，避免实现第二套聊天状态机。
 
 ### AN-02 统一对象引用采集
 
@@ -81,7 +81,7 @@ SciForge 当前路线是 **反馈收件箱优先，Runtime Codex/Codex CLI 后�
 
 - [x] 给注释侧栏建立 plan-only 状态机：drafting、clarifying、ready-to-save、saved、discarded。
 - [x] 定义 `annotation-plan-only` conversation envelope，复用主对话 kernel 的 session、references、guidance queue 和 structured events。
-- [ ] 为主 conversation kernel 增加 annotation-plan-only policy：只允许澄清、选择题、摘要和 feedback draft，不允许进入执行/repair/code path。
+- [x] 为主 conversation kernel 增加 annotation-plan-only policy：只允许澄清、选择题、摘要和 feedback draft，不允许进入执行/repair/code path。
 - [x] 明确禁止 side effects：不写 workspace、不启动 repair、不提交 GitHub、不运行代码修改。
 - [x] 允许 agent 生成澄清问题、选择题和需求摘要，但输出必须保持为 feedback draft。
 - [x] 选择题 UI 支持 2-3 个推荐选项和自由输入，适合“像 Claude 一样”连续澄清。
@@ -128,11 +128,17 @@ SciForge 当前路线是 **反馈收件箱优先，Runtime Codex/Codex CLI 后�
 
 ### AN-09 Evidence（2026-05-24）
 
-- [x] Targeted tests passed: `node --import tsx --test src/ui/src/feedback/AnnotationSidebar.test.tsx src/ui/src/feedback/annotationPlanModel.test.ts src/ui/src/feedback/FeedbackCaptureLayer.test.tsx src/ui/src/app/sciforgeApp/FeedbackInboxPage.test.ts`（24/24）。
+- [x] Targeted tests passed: `node --import tsx --test src/ui/src/feedback/AnnotationSidebar.test.tsx src/ui/src/feedback/annotationPlanModel.test.ts src/ui/src/feedback/FeedbackCaptureLayer.test.tsx src/ui/src/app/sciforgeApp/FeedbackInboxPage.test.ts src/ui/src/api/sciforgeToolsClient.policy.test.ts src/ui/src/app/chat/runOrchestrator.targetInstance.test.ts src/ui/src/themeTokens.test.ts`（pass 54 / skipped 13 / fail 0）。
 - [x] `git diff --check` passed。
-- [x] `npm run typecheck` 已执行并记录阻塞：当前失败来自既有 desktop preload / production shell planner / workspace-directory-picker test / ShellPanels sidebar project / smoke-sidebar-project-switch / vite config 类型问题，和本轮 annotation sidebar 改动无直接归属。
+- [x] `npm run typecheck` 已执行并记录阻塞：当前失败来自既有 desktop preload / production shell planner / workspace-directory-picker test / ShellPanels sidebar project + sidebar model test / smoke-sidebar-project-switch / vite config 类型问题，和本轮 annotation sidebar 改动无直接归属。
 - [x] Codex in-app browser 验收通过：工作台页面和反馈收件箱页面都完成了注释侧栏点选、保存，并在反馈收件箱中看到 `annotation-plan` record。
-- [x] 侧栏遮挡修复已验收：桌面端 `AnnotationSidebar` 改为 right sidecar，browser geometry 显示 `mainRight=1139`、`sidebarX=1139`、`overlap=false`。
+- [x] 侧栏遮挡修复已验收：桌面端 `AnnotationSidebar` 为 right sidecar，latest browser geometry 显示 `mainRight=630`、`sidebarLeft=630`、`position=relative`、`overlap=false`、`.feedback-layer` `pointer-events=none/background=transparent`。
+- [x] 侧栏输入复用 `ChatComposer` shell 和 `MessageContent` 展示，隐藏上传/点选/收起/resize 等执行型 chrome，保留主 composer 的输入、快捷发送和 disabled 边界。
+- [x] 侧栏澄清回合接入 `runPromptOrchestrator` 的 `annotation-plan-only` 分支，只把 plan draft 写回侧栏，不污染主 workbench session。
+- [x] `runPromptOrchestrator` 增加 `annotation-plan-only` 本地 policy：看到 turnMode/envelope 后只返回 plan draft event/message/run，不做 target lookup、preflight compaction、runtime transport 或 repair stage；malformed envelope fail-closed。
+- [x] `sendSciForgeToolMessage` 增加 transport fail-closed guard：任何漏到 Codex Runtime transport 的 `annotation-plan-only` 请求直接拒绝，测试证明 turnMode-only、envelope-only 和 malformed envelope 都未发生 fetch。
+- [x] 清理旧 `.annotation-field` CSS，并修正 light theme 下 `.feedback-layer` 不再绘制全屏 overlay，避免视觉遮挡页面。
+- [x] Codex in-app browser 复验：侧栏澄清展示 `注释计划` stream/event 和 `runtime transport ... skipped`，保存后反馈收件箱出现 `annotation-plan local feedback-mpj5oebe-ouqn2h`。
 
 ## 验证规则
 

@@ -45,6 +45,57 @@ test('silent wait and retry thresholds come from latencyPolicy with safe fallbac
   assert.equal(capped.stallBoundMs, 300_000);
 });
 
+test('annotation-plan-only turnMode cannot reach Codex Runtime transport', async () => {
+  let fetched = false;
+  globalThis.fetch = (async () => {
+    fetched = true;
+    return streamResponse([]);
+  }) as typeof fetch;
+
+  await assert.rejects(
+    sendSciForgeToolMessage(messageInput(undefined, {
+      turnMode: 'annotation-plan-only',
+    })),
+    /annotation-plan-only requests must be resolved/,
+  );
+  assert.equal(fetched, false);
+});
+
+test('annotation-plan-only envelope without turnMode cannot reach Codex Runtime transport', async () => {
+  let fetched = false;
+  globalThis.fetch = (async () => {
+    fetched = true;
+    return streamResponse([]);
+  }) as typeof fetch;
+
+  await assert.rejects(
+    sendSciForgeToolMessage(messageInput(undefined, {
+      conversationEnvelope: annotationEnvelope(),
+    })),
+    /annotation-plan-only requests must be resolved/,
+  );
+  assert.equal(fetched, false);
+});
+
+test('malformed annotation-plan-only envelope is rejected before Codex Runtime transport', async () => {
+  let fetched = false;
+  globalThis.fetch = (async () => {
+    fetched = true;
+    return streamResponse([]);
+  }) as typeof fetch;
+
+  await assert.rejects(
+    sendSciForgeToolMessage(messageInput(undefined, {
+      conversationEnvelope: {
+        schemaVersion: 'sciforge.annotation-plan-only-envelope.v1',
+        kind: 'annotation-plan-only',
+      },
+    })),
+    /annotation-plan-only requests must be resolved/,
+  );
+  assert.equal(fetched, false);
+});
+
 test('conversation policy stream event makes quick status visible before workspace result', async () => {
   globalThis.fetch = (async () => streamResponse([
     {
@@ -130,6 +181,8 @@ test('聊天流式请求连接到 Codex Runtime bridge 并暴露运行元数据'
   assert.equal(runtime.allowOpenAiRuntime, false);
   assert.equal(body.commandText, 'Summarize current context');
   assert.equal(body.codexSessionId, undefined);
+  assert.equal('turnMode' in body, false);
+  assert.equal('conversationEnvelope' in body, false);
   const metadataEvent = events.find((event) => event.type === 'codex-runtime-run');
   assert.ok(metadataEvent);
   assert.match(metadataEvent.detail ?? '', /provider native/);
@@ -1165,6 +1218,26 @@ function messageInput(
       ...scenarioOverride,
     } : undefined,
     ...overrides,
+  };
+}
+
+function annotationEnvelope(): Record<string, unknown> {
+  return {
+    schemaVersion: 'sciforge.annotation-plan-only-envelope.v1',
+    kind: 'annotation-plan-only',
+    draftId: 'annotation-plan-test',
+    source: 'annotation-plan',
+    page: 'workbench',
+    scenarioId: 'literature-evidence-review',
+    sessionId: 'session-test',
+    currentUrl: 'http://127.0.0.1:5173/',
+    references: [],
+    allowedOutputs: ['clarifying-question', 'plan-summary', 'feedback-draft', 'acceptance-criteria'],
+    forbiddenSideEffects: ['workspace-write', 'repair-start', 'runtime-execution', 'github-sync', 'code-change'],
+    repairStartAllowed: false,
+    runtimeExecutionAllowed: false,
+    githubSyncAllowed: false,
+    workspaceWriteAllowed: false,
   };
 }
 

@@ -18,6 +18,7 @@ import { estimateContextWindowState, latestContextWindowState, shouldStartContex
 import type { ScenarioId } from '../../data';
 import { latestLatencyPolicy, latestResponsePlan } from '../../latencyPolicy';
 import { buildInitialResponseProgressEvent } from '../../processProgress';
+import { hasAnnotationPlanOnlyEnvelopeMarker, isAnnotationPlanOnlyEnvelope } from '../../feedback/annotationPlanModel';
 import type {
   AgentStreamEvent,
   NormalizedAgentResponse,
@@ -70,6 +71,8 @@ export interface RunPromptOrchestratorInput {
   onStreamEvent: (event: AgentStreamEvent) => void;
   onOptimisticSession?: (session: SciForgeSession) => void;
   onRealtimeControlReady?: (sender: CodexRealtimeControlSender) => void;
+  turnMode?: 'normal' | 'annotation-plan-only';
+  conversationEnvelope?: unknown;
 }
 
 export type RunPromptOrchestratorResult = {
@@ -99,6 +102,11 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
       if (event.usage) latestRoundTokenUsage = event.usage;
       input.onStreamEvent(event);
     };
+    if (isAnnotationPlanOnlyTurn(input)) {
+      const response = buildAnnotationPlanOnlyOrchestratorResponse(input);
+      handleStreamEvent(annotationPlanOnlyEvent(input, response.run.id));
+      return { status: 'completed', optimisticSession, finalResponse: response };
+    }
     const turnPayload = requestPayloadForTurn(optimisticSession, userMessage, input.references);
     const targetInstanceContext = await buildTargetInstanceContextForPrompt({
       config: input.config,
@@ -204,6 +212,89 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
       message,
     };
   }
+}
+
+function isAnnotationPlanOnlyTurn(input: RunPromptOrchestratorInput) {
+  if (hasAnnotationPlanOnlyEnvelopeMarker(input.conversationEnvelope) && !isAnnotationPlanOnlyEnvelope(input.conversationEnvelope)) {
+    throw new Error('Malformed annotation-plan-only envelope: refusing to continue as a normal runtime turn.');
+  }
+  return input.turnMode === 'annotation-plan-only'
+    || isAnnotationPlanOnlyEnvelope(input.conversationEnvelope);
+}
+
+function buildAnnotationPlanOnlyOrchestratorResponse(input: RunPromptOrchestratorInput): NormalizedAgentResponse {
+  const completedAt = nowIso();
+  const referenceMarkers = input.references
+    .map((reference, index) => `※${index + 1} ${reference.title}`)
+    .join('、');
+  const content = [
+    '已按 annotation-plan-only policy 处理：本轮只整理澄清问题、选择项、摘要和 feedback draft。',
+    '不会启动 Runtime/Codex 执行、repair、workspace write 或 GitHub sync。',
+    input.prompt.trim() ? `当前草稿：${input.prompt.trim()}` : undefined,
+    referenceMarkers ? `关联对象：${referenceMarkers}` : undefined,
+  ].filter(Boolean).join('\n');
+  const raw = {
+    turnMode: 'annotation-plan-only',
+    source: 'runPromptOrchestrator',
+    sideEffects: 'forbidden',
+    conversationEnvelope: input.conversationEnvelope ?? null,
+    allowedOutputs: ['clarifying-question', 'plan-summary', 'feedback-draft', 'acceptance-criteria'],
+    forbiddenSideEffects: ['workspace-write', 'repair-start', 'runtime-execution', 'github-sync', 'code-change'],
+  };
+  return {
+    message: {
+      id: makeId('msg'),
+      role: 'scenario',
+      content,
+      references: input.references,
+      createdAt: completedAt,
+      updatedAt: completedAt,
+      status: 'completed',
+      provenance: {
+        kind: 'annotation-plan-only',
+        source: 'runPromptOrchestrator',
+        runtimeRequestEligible: false,
+        liveAcceptanceEligible: false,
+        conversationEnvelope: input.conversationEnvelope ?? null,
+      },
+    },
+    run: {
+      id: makeId('run'),
+      scenarioId: input.scenarioId,
+      scenarioPackageRef: input.scenarioPackageRef,
+      skillPlanRef: input.skillPlanRef,
+      uiPlanRef: input.uiPlanRef,
+      status: 'completed',
+      prompt: input.prompt,
+      response: content,
+      references: input.references,
+      createdAt: completedAt,
+      completedAt,
+      raw,
+    },
+    uiManifest: [],
+    claims: [],
+    executionUnits: [],
+    artifacts: [],
+    notebook: [],
+  };
+}
+
+function annotationPlanOnlyEvent(input: RunPromptOrchestratorInput, runId: string): AgentStreamEvent {
+  return {
+    id: makeId('evt'),
+    type: 'annotation-plan-only',
+    label: '注释计划',
+    detail: 'annotation-plan-only policy handled locally; runtime transport, repair, workspace writes, and GitHub sync were skipped.',
+    raw: {
+      runId,
+      scenarioId: input.scenarioId,
+      conversationEnvelope: input.conversationEnvelope ?? null,
+      runtimeRequestEligible: false,
+      sideEffects: 'forbidden',
+    },
+    createdAt: nowIso(),
+  };
 }
 
 function emitTargetInstanceEvents(

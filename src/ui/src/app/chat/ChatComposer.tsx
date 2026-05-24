@@ -25,6 +25,11 @@ export function ChatComposer({
   onAbort,
   onBeginResize,
   copy,
+  disabled = false,
+  showReferencePicker = true,
+  showFileUpload = true,
+  showCollapseButton = true,
+  showResizeHandle = true,
 }: {
   expanded: boolean;
   input: string;
@@ -59,6 +64,11 @@ export function ChatComposer({
     sendLabel?: string;
     sendingLabel?: string;
   };
+  disabled?: boolean;
+  showReferencePicker?: boolean;
+  showFileUpload?: boolean;
+  showCollapseButton?: boolean;
+  showResizeHandle?: boolean;
 }) {
   const collapsedText = copy?.collapsedText ?? '输入研究问题，或点选对象后继续追问...';
   const referenceHint = copy?.referenceHint ?? '点选 SciForge 可见对象作为上下文';
@@ -84,45 +94,55 @@ export function ChatComposer({
 
   return (
     <div className="composer" aria-expanded={true}>
-      <button
-        type="button"
-        className="composer-collapse-button"
-        onClick={onCollapse}
-        title="收起输入栏"
-        aria-label="收起输入栏"
-      >
-        <ChevronDown size={15} />
-      </button>
-      <div className="composer-resize-handle" onMouseDown={onBeginResize} title="拖拽调整输入框高度" />
+      {showCollapseButton ? (
+        <button
+          type="button"
+          className="composer-collapse-button"
+          onClick={onCollapse}
+          title="收起输入栏"
+          aria-label="收起输入栏"
+        >
+          <ChevronDown size={15} />
+        </button>
+      ) : null}
+      {showResizeHandle ? <div className="composer-resize-handle" onMouseDown={onBeginResize} title="拖拽调整输入框高度" /> : null}
       {topAddon}
-      <div className="reference-composer">
-        <button
-          type="button"
-          className={cx('reference-trigger', referencePickMode && 'active')}
-          onClick={onToggleReferencePickMode}
-          title="点选模式引用整块 UI；选中文字可右键引用"
-        >
-          <Quote size={14} />
-          点选
-        </button>
-        <button
-          type="button"
-          className="reference-trigger"
-          onClick={() => fileInputRef.current?.click()}
-          title="上传 PDF、图片、表格或任意文件到证据矩阵"
-        >
-          <FileUp size={14} />
-          上传
-        </button>
-        <input
-          ref={fileInputRef}
-          className="sr-only-file-input"
-          type="file"
-          multiple
-          onChange={(event) => onFileUpload(event.currentTarget.files)}
-        />
-        {pendingReferences.length ? referenceChips : <span className="reference-hint">{referenceHint}</span>}
-      </div>
+      {showReferencePicker || showFileUpload || pendingReferences.length ? (
+        <div className="reference-composer">
+          {showReferencePicker ? (
+            <button
+              type="button"
+              className={cx('reference-trigger', referencePickMode && 'active')}
+              onClick={onToggleReferencePickMode}
+              title="点选模式引用整块 UI；选中文字可右键引用"
+            >
+              <Quote size={14} />
+              点选
+            </button>
+          ) : null}
+          {showFileUpload ? (
+            <>
+              <button
+                type="button"
+                className="reference-trigger"
+                onClick={() => fileInputRef.current?.click()}
+                title="上传 PDF、图片、表格或任意文件到证据矩阵"
+              >
+                <FileUp size={14} />
+                上传
+              </button>
+              <input
+                ref={fileInputRef}
+                className="sr-only-file-input"
+                type="file"
+                multiple
+                onChange={(event) => onFileUpload(event.currentTarget.files)}
+              />
+            </>
+          ) : null}
+          {pendingReferences.length ? referenceChips : <span className="reference-hint">{referenceHint}</span>}
+        </div>
+      ) : null}
       {referencePickMode ? (
         <div className="reference-pick-banner">
           <Quote size={14} />
@@ -155,6 +175,7 @@ export function ChatComposer({
           onSend();
         }}
         placeholder={isSending ? sendingPlaceholder : placeholder}
+        disabled={disabled}
         rows={1}
         style={{ height: `${composerHeight}px` }}
       />
@@ -164,7 +185,7 @@ export function ChatComposer({
           中断
         </ActionButton>
       ) : null}
-      <ActionButton icon={Sparkles} onClick={onSend} disabled={!input.trim() && !pendingReferences.length}>
+      <ActionButton icon={Sparkles} onClick={onSend} disabled={disabled || (!input.trim() && !pendingReferences.length)}>
         {isSending ? sendingLabel : sendLabel}
       </ActionButton>
     </div>

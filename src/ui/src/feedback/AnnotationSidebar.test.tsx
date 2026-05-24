@@ -10,6 +10,14 @@ test('annotation sidebar renders plan-only references, choices, and save control
   assert.match(sidebarSource, /annotation-plan/);
   assert.match(sidebarSource, /仅澄清，不改代码/);
   assert.match(sidebarSource, /SciForgeReferenceChips/);
+  assert.match(sidebarSource, /ChatComposer/);
+  assert.match(sidebarSource, /主 composer shell · annotation-plan-only/);
+  assert.match(sidebarSource, /showReferencePicker=\{false\}/);
+  assert.match(sidebarSource, /showFileUpload=\{false\}/);
+  assert.match(sidebarSource, /showCollapseButton=\{false\}/);
+  assert.doesNotMatch(sidebarSource, /<textarea/);
+  assert.match(sidebarSource, /RunningWorkProcess/);
+  assert.match(sidebarSource, /streamEvents/);
   assert.match(sidebarSource, /referenceComposerMarker/);
   assert.match(sidebarSource, /annotationPlanLatestChoices/);
   assert.match(sidebarSource, /onChoice\(choice\)/);

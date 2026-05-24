@@ -83,6 +83,8 @@ DOM / pointer / keyboard / scroll / modal events
 
 注释侧栏复用主 conversation kernel 的 session、references、structured stream/event 和 GUI-TUI 对话能力，但所有请求都必须包在 `annotation-plan-only` envelope 中。这个 projection 只允许澄清问题、选择项、摘要和 feedback draft；禁止 workspace writes、repair、code execution、GitHub side effects、provider/tool route 变更和隐藏 guidance 注入。
 
+这个边界由主 conversation kernel 和 runtime transport 双层保证：`runPromptOrchestrator` 对 `annotation-plan-only` turn 本地生成 plan draft 响应并跳过 target lookup、context compaction、runtime 和 repair stage；`sendSciForgeToolMessage` 对漏到 Codex Runtime transport 的 annotation envelope 直接拒绝。
+
 保存注释时，GUI 只生成本地 feedback inbox `annotation-plan` record，包括引用对象、原始描述、澄清问答摘要、修改建议、验收标准、URL/route、selector/DOM path 和 screenshot/evidence refs。后续 repair/code/GitHub sync 必须由用户在收件箱中显式启动，并经过对应确认边界。
 
 ## TUI 感知 GUI：只读虚拟资源树

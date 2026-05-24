@@ -62,6 +62,7 @@ test('light theme override layer is loaded and covers core app surfaces', () => 
   ]) {
     assert.match(theme, new RegExp(selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
+  assert.match(theme, /\.theme-light \.feedback-layer\s*\{[\s\S]*?background:\s*transparent;/);
 });
 
 test('page styles keep hard-coded dark surface colors scarce', () => {

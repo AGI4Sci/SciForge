@@ -281,9 +281,30 @@ export function annotationPlanEnvelopeAllowsOnlyDrafting(envelope: AnnotationPla
     && PLAN_ONLY_FORBIDDEN_SIDE_EFFECTS.every((sideEffect) => envelope.forbiddenSideEffects.includes(sideEffect));
 }
 
+export function hasAnnotationPlanOnlyEnvelopeMarker(value: unknown) {
+  if (!value || typeof value !== 'object') return false;
+  const envelope = value as Partial<AnnotationPlanOnlyEnvelope> & { mode?: unknown };
+  return envelope.schemaVersion === 'sciforge.annotation-plan-only-envelope.v1'
+    || envelope.kind === 'annotation-plan-only'
+    || envelope.mode === 'annotation-plan-only';
+}
+
+export function isAnnotationPlanOnlyEnvelope(value: unknown): value is AnnotationPlanOnlyEnvelope {
+  if (!value || typeof value !== 'object') return false;
+  const envelope = value as Partial<AnnotationPlanOnlyEnvelope>;
+  return envelope.schemaVersion === 'sciforge.annotation-plan-only-envelope.v1'
+    && envelope.kind === 'annotation-plan-only'
+    && envelope.repairStartAllowed === false
+    && envelope.runtimeExecutionAllowed === false
+    && envelope.githubSyncAllowed === false
+    && envelope.workspaceWriteAllowed === false
+    && Array.isArray(envelope.allowedOutputs)
+    && Array.isArray(envelope.forbiddenSideEffects);
+}
+
 export function advanceAnnotationPlanClarification(
   draft: AnnotationPlanDraft,
-  input: { content: string; choice?: AnnotationPlanChoice; now?: string },
+  input: { content: string; choice?: AnnotationPlanChoice; assistantContent?: string; now?: string },
 ): AnnotationPlanDraft {
   const now = input.now ?? nowIso();
   const content = normalizePlanText(input.content || input.choice?.prompt || '');
@@ -300,7 +321,7 @@ export function advanceAnnotationPlanClarification(
   const assistantMessage: SciForgeMessage = {
     id: makeId('annotation-assistant'),
     role: 'scenario',
-    content: buildPlanOnlyAssistantReply(draft, content),
+    content: input.assistantContent?.trim() || buildPlanOnlyAssistantReply(draft, content),
     references: draft.references.map((item) => item.reference),
     createdAt: now,
     provenance: {

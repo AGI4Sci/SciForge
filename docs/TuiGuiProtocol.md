@@ -52,18 +52,35 @@ GUI 可以通过 stdio、pty、WebSocket、HTTP 或本地进程 API 把文本送
 
 ```ts
 type AnnotationPlanOnlyEnvelope = {
-  mode: 'annotation-plan-only';
-  source: 'annotation-sidebar';
-  page: { url: string; route?: string };
-  references: SciForgeReference[];
-  userText: string;
-  draftState: 'drafting' | 'clarifying' | 'ready-to-save' | 'saved' | 'discarded';
-  allowedOutputs: Array<'clarifying-question' | 'choice' | 'summary' | 'feedback-draft'>;
-  forbiddenSideEffects: Array<'workspace-write' | 'repair' | 'code-execution' | 'github-sync'>;
+  schemaVersion: 'sciforge.annotation-plan-only-envelope.v1';
+  kind: 'annotation-plan-only';
+  source: 'annotation-plan';
+  draftId: string;
+  page: PageId;
+  scenarioId: ScenarioInstanceId;
+  sessionId: string;
+  currentUrl: string;
+  references: Array<{
+    id: string;
+    marker: string;
+    kind: SciForgeReference['kind'];
+    title: string;
+    ref: string;
+    targetSelector: string;
+    selectedText?: string;
+  }>;
+  allowedOutputs: Array<'clarifying-question' | 'plan-summary' | 'feedback-draft' | 'acceptance-criteria'>;
+  forbiddenSideEffects: Array<'workspace-write' | 'repair-start' | 'runtime-execution' | 'github-sync' | 'code-change'>;
+  repairStartAllowed: false;
+  runtimeExecutionAllowed: false;
+  githubSyncAllowed: false;
+  workspaceWriteAllowed: false;
 };
 ```
 
 `annotation-plan-only` projection 只能产出澄清问题、2-3 个选择项、摘要和 feedback draft。它不能启动 repair、修改文件、运行代码、提交 GitHub issue、改变 provider/tool route，或把隐藏 guidance 注入 Runtime Codex。用户可以跳过澄清直接保存。
+
+实现边界必须是双层 fail-closed：`runPromptOrchestrator` 先识别 `turnMode: 'annotation-plan-only'` 或 structural envelope，在主 conversation kernel 内生成本地 plan draft event/message/run，并跳过 target lookup、context compaction、runtime transport 和 repair stage；如果该请求漏到 `sendSciForgeToolMessage`，transport 层必须直接拒绝，不能构造 Codex Runtime stream request。
 
 保存动作只写入反馈收件箱的本地 `annotation-plan` record。record 应包含引用对象列表、原始描述、澄清问答摘要、修改建议、验收标准、页面 URL/route、selector/DOM path、截图和 evidence refs。repair/code/GitHub sync 只能从反馈收件箱中的显式按钮和确认边界开始。
 

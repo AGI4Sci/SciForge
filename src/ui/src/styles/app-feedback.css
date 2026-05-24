@@ -143,12 +143,12 @@
   z-index: 3;
   flex: 0 0 clamp(340px, 30vw, 440px);
   align-self: stretch;
-  grid-template-rows: auto auto auto minmax(0, auto) minmax(0, 1fr) auto auto;
+  grid-template-rows: auto auto auto minmax(0, auto) minmax(0, 1fr) minmax(0, auto) auto auto;
   gap: 10px;
   width: clamp(340px, 30vw, 440px);
   max-width: min(440px, 42vw);
   height: 100vh;
-  overflow: hidden;
+  overflow: hidden auto;
   padding: 14px;
   color: var(--bio-100);
   background: color-mix(in srgb, var(--surface-panel) 94%, #020712 6%);
@@ -309,7 +309,6 @@
 }
 
 .annotation-section-head strong,
-.annotation-field span,
 .annotation-message > span {
   color: var(--bio-200);
   font-size: 11px;
@@ -365,36 +364,56 @@
   padding: 0;
 }
 
-.annotation-field {
-  display: grid;
-  gap: 7px;
-  min-width: 0;
-}
-
-.annotation-field textarea {
-  width: 100%;
-  min-height: 112px;
-  max-height: 220px;
-  resize: vertical;
-  padding: 10px;
-  color: var(--bio-100);
-  background: var(--surface-input);
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  outline: none;
-  font: inherit;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
 .annotation-actions,
 .annotation-sidebar-footer {
   justify-content: space-between;
 }
 
+.annotation-composer-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.annotation-composer-label strong {
+  color: var(--bio-200);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.annotation-composer-label span,
+.annotation-context-meter {
+  color: var(--bio-400);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.annotation-sidebar .composer {
+  padding: 0;
+  background: transparent;
+  border-top: 0;
+}
+
+.annotation-sidebar .composer textarea {
+  width: 100%;
+  flex-basis: 100%;
+  border-radius: 8px;
+}
+
+.annotation-sidebar .composer .action-button {
+  margin-left: auto;
+}
+
 .annotation-sidebar-section.messages {
   min-height: 0;
   overflow: hidden;
+}
+
+.annotation-sidebar-section.stream {
+  min-height: 0;
+  overflow: auto;
 }
 
 .annotation-message-list {

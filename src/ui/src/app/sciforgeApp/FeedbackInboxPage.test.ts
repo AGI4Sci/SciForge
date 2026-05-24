@@ -339,6 +339,10 @@ test('PROJECT.md records the active global annotation sidebar protocol', () => {
   assert.match(projectSource, /不允许修改项目代码、不启动 repair、不触发 runtime 执行/);
   assert.match(projectSource, /在反馈收件箱中区分 `annotation-plan` 来源和传统单对象 comment/);
   assert.match(projectSource, /Codex in-app browser 验收：在工作台页面和至少一个非工作台页面/);
+  assert.match(sciForgeAppSource, /runAnnotationPlanOnlyTurn/);
+  assert.match(sciForgeAppSource, /runPromptOrchestrator/);
+  assert.match(sciForgeAppSource, /turnMode: 'annotation-plan-only'/);
+  assert.match(sciForgeAppSource, /conversationEnvelope: buildAnnotationPlanOnlyEnvelope/);
 });
 
 test('feedback inbox keeps visible selection scope hints and GitHub sync trace visible', () => {

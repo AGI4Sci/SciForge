@@ -163,9 +163,12 @@
   border-color: var(--accent-border);
 }
 
-.theme-light .modal-backdrop,
-.theme-light .feedback-layer {
+.theme-light .modal-backdrop {
   background: var(--overlay);
+}
+
+.theme-light .feedback-layer {
+  background: transparent;
 }
 
 .theme-light .context-menu-vscode,

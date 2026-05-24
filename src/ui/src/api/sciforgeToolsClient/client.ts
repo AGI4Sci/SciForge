@@ -27,6 +27,7 @@ import {
   workspaceResultCompletion,
 } from './runtimeEvents';
 import { assertCodexRealtimeSessionRequestBoundary, createCodexRealtimeSessionClient, CODEX_RUNTIME_STREAM_PATH, type CodexRealtimeControlSender } from './codexRealtimeSession';
+import { hasAnnotationPlanOnlyEnvelopeMarker, isAnnotationPlanOnlyEnvelope } from '../../feedback/annotationPlanModel';
 
 const CODEX_RUNTIME_REQUEST_SCHEMA_VERSION = 'sciforge.codex-runtime-stream-request.v1';
 const DEFAULT_RUNTIME_PROFILE = 'sciforge-runtime-deepseek';
@@ -79,6 +80,7 @@ export async function sendSciForgeToolMessage(
   } = {},
   signal?: AbortSignal,
 ): Promise<NormalizedAgentResponse> {
+  assertNotAnnotationPlanOnlyRuntimeRequest(input);
   const builtInScenarioId = builtInScenarioIdForRuntimeInput(input);
   const referenceSummary = runtimeCodexEligibleReferenceSummary(input);
   let activeRequestController: AbortController | undefined;
@@ -349,6 +351,15 @@ export async function sendSciForgeToolMessage(
     globalThis.clearInterval(silenceWatchdog);
     signal?.removeEventListener('abort', linkedAbort);
   }
+}
+
+function assertNotAnnotationPlanOnlyRuntimeRequest(input: SendAgentMessageInput) {
+  if (
+    input.turnMode !== 'annotation-plan-only'
+    && !isAnnotationPlanOnlyEnvelope(input.conversationEnvelope)
+    && !hasAnnotationPlanOnlyEnvelopeMarker(input.conversationEnvelope)
+  ) return;
+  throw new Error('annotation-plan-only requests must be resolved by the plan-only conversation policy before Codex Runtime transport; runtime execution, repair, workspace writes, and GitHub sync are forbidden.');
 }
 
 function attachRuntimeGuiPresentationToResponse(
@@ -650,6 +661,8 @@ function assertCodexRuntimeStreamRequestBoundary(request: ReturnType<typeof buil
     'selectedComponentIds',
     'selectedVerifierIds',
     'transportAgentContext',
+    'turnMode',
+    'conversationEnvelope',
   ];
   const hits = forbidden.filter((key) => key in request);
   const audit = isRecord(request.auditMetadata) ? request.auditMetadata : {};
