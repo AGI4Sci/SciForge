@@ -35,6 +35,9 @@ test('annotation sidebar renders intent-first references, action ladder, and sav
   assert.match(sidebarSource, /onSendToInbox/);
   assert.match(sidebarSource, /onDiscard/);
   assert.match(sidebarSource, /去收件箱/);
+  assert.match(sidebarSource, /planningRunning/);
+  assert.match(sidebarSource, /isSending=\{planningRunning\}/);
+  assert.match(sidebarSource, /主聊天和其他会话仍可并行发送/);
   assert.match(sidebarCss, /\.annotation-sidebar\s*\{[\s\S]*?position: relative;[\s\S]*?flex: 0 0 clamp\(340px, 30vw, 440px\);/);
   assert.match(sidebarCss, /\.annotation-action-ladder\s*\{[\s\S]*?grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
   assert.match(sidebarCss, /\.annotation-sidebar\s*\{[\s\S]*?height: 100vh;/);

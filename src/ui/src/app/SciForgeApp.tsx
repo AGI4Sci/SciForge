@@ -152,6 +152,13 @@ import { loadStoredAppNavigation, saveStoredAppNavigation } from './sciforgeApp/
 
 const MIN_WORKSPACE_LOADING_VISIBLE_MS = 600;
 
+type AnnotationRunToken = {
+  sequence: number;
+  draftId: string;
+  sessionId: string;
+  scenarioId: ScenarioInstanceId;
+};
+
 function currentBrowserUrl() {
   return typeof window === 'undefined' ? 'about:blank' : window.location.href;
 }
@@ -184,7 +191,11 @@ export function SciForgeApp() {
   });
   const [annotationStreamEvents, setAnnotationStreamEvents] = useState<AgentStreamEvent[]>([]);
   const [annotationSaving, setAnnotationSaving] = useState(false);
+  const [annotationPlanningRunning, setAnnotationPlanningRunning] = useState(false);
   const [annotationQuickActionRunning, setAnnotationQuickActionRunning] = useState(false);
+  const annotationDraftRef = useRef<AnnotationPlanDraft | null>(annotationDraft);
+  const annotationPlanRunTokenRef = useRef(0);
+  const annotationQuickActionRunTokenRef = useRef(0);
   const [configSaveState, setConfigSaveState] = useState<ConfigSaveState>({ status: 'idle' });
   const [scenarioOverrides, setScenarioOverrides] = useState<Partial<Record<ScenarioInstanceId, ScenarioRuntimeOverride>>>({});
   const [selectedRuntimeComponentIds, setSelectedRuntimeComponentIds] = useState<string[]>(() => defaultPublishedRuntimeComponentIds());
@@ -224,6 +235,10 @@ export function SciForgeApp() {
   useEffect(() => {
     if (page !== 'settings') saveStoredAppNavigation({ page, scenarioId });
   }, [page, scenarioId]);
+
+  useEffect(() => {
+    annotationDraftRef.current = annotationDraft;
+  }, [annotationDraft]);
 
   function openSettings(section: SettingsSectionId = 'general') {
     returnPageRef.current = page === 'settings' ? returnPageRef.current : page;
@@ -489,6 +504,61 @@ export function SciForgeApp() {
     };
   }
 
+  function annotationRuntimeLaneId(draft: AnnotationPlanDraft, phase: 'plan' | 'quick-action') {
+    return `annotation:${draft.sessionId}:${draft.id}:${phase}`;
+  }
+
+  function beginAnnotationPlanRun(draft: AnnotationPlanDraft): AnnotationRunToken {
+    const sequence = annotationPlanRunTokenRef.current + 1;
+    annotationPlanRunTokenRef.current = sequence;
+    return {
+      sequence,
+      draftId: draft.id,
+      sessionId: draft.sessionId,
+      scenarioId: draft.scenarioId,
+    };
+  }
+
+  function beginAnnotationQuickActionRun(draft: AnnotationPlanDraft): AnnotationRunToken {
+    const sequence = annotationQuickActionRunTokenRef.current + 1;
+    annotationQuickActionRunTokenRef.current = sequence;
+    return {
+      sequence,
+      draftId: draft.id,
+      sessionId: draft.sessionId,
+      scenarioId: draft.scenarioId,
+    };
+  }
+
+  function annotationRunMatchesDraft(token: AnnotationRunToken, draft: AnnotationPlanDraft | null) {
+    return Boolean(
+      draft
+      && draft.id === token.draftId
+      && draft.sessionId === token.sessionId
+      && draft.scenarioId === token.scenarioId,
+    );
+  }
+
+  function annotationPlanRunIsCurrent(token: AnnotationRunToken) {
+    return annotationPlanRunTokenRef.current === token.sequence
+      && annotationRunMatchesDraft(token, annotationDraftRef.current);
+  }
+
+  function annotationQuickActionRunIsCurrent(token: AnnotationRunToken) {
+    return annotationQuickActionRunTokenRef.current === token.sequence
+      && annotationRunMatchesDraft(token, annotationDraftRef.current);
+  }
+
+  function commitAnnotationDraftIfCurrent(token: AnnotationRunToken, draft: AnnotationPlanDraft, kind: 'plan' | 'quick-action') {
+    const stillCurrent = kind === 'plan'
+      ? annotationPlanRunIsCurrent(token)
+      : annotationQuickActionRunIsCurrent(token);
+    if (!stillCurrent) return false;
+    annotationDraftRef.current = draft;
+    setAnnotationDraft(draft);
+    return true;
+  }
+
   function ensureAnnotationDraft(current: AnnotationPlanDraft | null) {
     const context = annotationDraftContext();
     if (current && current.status !== 'saved' && current.status !== 'discarded') {
@@ -499,7 +569,11 @@ export function SciForgeApp() {
 
   function toggleAnnotationSelectionMode() {
     setAnnotationSidebarOpen(true);
-    setAnnotationDraft((current) => ensureAnnotationDraft(current));
+    setAnnotationDraft((current) => {
+      const next = ensureAnnotationDraft(current);
+      annotationDraftRef.current = next;
+      return next;
+    });
     setFeedbackAnnotationModeActive((current) => !current);
   }
 
@@ -511,18 +585,28 @@ export function SciForgeApp() {
   function handleAnnotationReference(input: AnnotationReferenceInput) {
     setAnnotationSidebarOpen(true);
     setFeedbackAnnotationModeActive(true);
-    setAnnotationDraft((current) => addAnnotationReferenceToDraft(ensureAnnotationDraft(current), input));
+    setAnnotationDraft((current) => {
+      const next = addAnnotationReferenceToDraft(ensureAnnotationDraft(current), input);
+      annotationDraftRef.current = next;
+      return next;
+    });
   }
 
   function handleAnnotationDescriptionChange(description: string) {
     setAnnotationSidebarOpen(true);
-    setAnnotationDraft((current) => updateAnnotationPlanDescription(ensureAnnotationDraft(current), description));
+    setAnnotationDraft((current) => {
+      const next = updateAnnotationPlanDescription(ensureAnnotationDraft(current), description);
+      annotationDraftRef.current = next;
+      return next;
+    });
   }
 
   async function runAnnotationPlanOnlyTurn(content: string, choice?: AnnotationPlanChoice) {
     const prompt = content.trim();
     if (!prompt) return;
     const draftForTurn = ensureAnnotationDraft(annotationDraft);
+    annotationDraftRef.current = draftForTurn;
+    const runToken = beginAnnotationPlanRun(draftForTurn);
     const baseScenarioId = builtInScenarioIdForRuntimeInput({ scenarioId, scenarioOverride: activeScenarioOverride });
     const scenario = scenarios.find((item) => item.id === baseScenarioId) ?? scenarios[0];
     const queuedEvent: AgentStreamEvent = {
@@ -532,41 +616,54 @@ export function SciForgeApp() {
       detail: prompt,
       createdAt: nowIso(),
     };
+    setAnnotationPlanningRunning(true);
     setAnnotationStreamEvents([queuedEvent]);
     const emitAnnotationEvent = (event: AgentStreamEvent) => {
+      if (!annotationPlanRunIsCurrent(runToken)) return;
       setAnnotationStreamEvents((current) => [...current, event].slice(-48));
     };
-    const result = await runPromptOrchestrator({
-      prompt,
-      baseSession: activeSession,
-      references: draftForTurn.references.map((item) => item.reference),
-      scenarioId,
-      baseScenarioId,
-      scenarioName: scenario.name,
-      scenarioDomain: scenario.domain,
-      role: 'annotation planner',
-      config,
-      scenarioOverride: activeScenarioOverride,
-      availableComponentIds: selectedRuntimeComponentIds,
-      defaultComponentIds: activeScenarioOverride?.defaultComponents?.length
-        ? activeScenarioOverride.defaultComponents
-        : SCENARIO_SPECS[baseScenarioId].componentPolicy.defaultComponents,
-      scenarioPackageRef: activeScenarioOverride?.scenarioPackageRef ?? builtInScenarioPackageRef(baseScenarioId),
-      skillPlanRef: activeScenarioOverride?.skillPlanRef ?? `skill-plan.${baseScenarioId}.annotation-plan-only`,
-      uiPlanRef: activeScenarioOverride?.uiPlanRef ?? `ui-plan.${baseScenarioId}.annotation-plan-only`,
-      streamEvents: [],
-      signal: new AbortController().signal,
-      userAbortRequested: () => false,
-      activeSession: () => activeSession,
-      onStreamEvent: emitAnnotationEvent,
-      turnMode: 'annotation-plan-only',
-      conversationEnvelope: buildAnnotationPlanOnlyEnvelope(draftForTurn),
-    });
-    const assistantContent = result.status === 'completed'
-      ? result.finalResponse.message.content
-      : `反馈侧栏整理失败：${result.message}`;
-    setAnnotationDraft((current) => current ? advanceAnnotationPlanClarification(current, { content: prompt, choice, assistantContent }) : current);
-    setWorkspaceStatus('反馈侧栏已整理当前意图；可继续预览、小改动或保存到收件箱。');
+    try {
+      const result = await runPromptOrchestrator({
+        prompt,
+        baseSession: activeSession,
+        references: draftForTurn.references.map((item) => item.reference),
+        scenarioId,
+        baseScenarioId,
+        scenarioName: scenario.name,
+        scenarioDomain: scenario.domain,
+        role: 'annotation planner',
+        config,
+        scenarioOverride: activeScenarioOverride,
+        availableComponentIds: selectedRuntimeComponentIds,
+        defaultComponentIds: activeScenarioOverride?.defaultComponents?.length
+          ? activeScenarioOverride.defaultComponents
+          : SCENARIO_SPECS[baseScenarioId].componentPolicy.defaultComponents,
+        scenarioPackageRef: activeScenarioOverride?.scenarioPackageRef ?? builtInScenarioPackageRef(baseScenarioId),
+        skillPlanRef: activeScenarioOverride?.skillPlanRef ?? `skill-plan.${baseScenarioId}.annotation-plan-only`,
+        uiPlanRef: activeScenarioOverride?.uiPlanRef ?? `ui-plan.${baseScenarioId}.annotation-plan-only`,
+        streamEvents: [],
+        signal: new AbortController().signal,
+        userAbortRequested: () => false,
+        activeSession: () => activeSession,
+        onStreamEvent: emitAnnotationEvent,
+        turnMode: 'annotation-plan-only',
+        conversationEnvelope: buildAnnotationPlanOnlyEnvelope(draftForTurn),
+        conversationLaneId: annotationRuntimeLaneId(draftForTurn, 'plan'),
+        runtimeResumePolicy: 'none',
+      });
+      const assistantContent = result.status === 'completed'
+        ? result.finalResponse.message.content
+        : `反馈侧栏整理失败：${result.message}`;
+      const currentDraft = annotationDraftRef.current;
+      if (annotationRunMatchesDraft(runToken, currentDraft)) {
+        const nextDraft = advanceAnnotationPlanClarification(currentDraft, { content: prompt, choice, assistantContent });
+        if (commitAnnotationDraftIfCurrent(runToken, nextDraft, 'plan')) {
+          setWorkspaceStatus('反馈侧栏已整理当前意图；可继续预览、小改动或保存到收件箱。');
+        }
+      }
+    } finally {
+      if (annotationPlanRunTokenRef.current === runToken.sequence) setAnnotationPlanningRunning(false);
+    }
   }
 
   function handleAnnotationClarify(content: string) {
@@ -593,6 +690,7 @@ export function SciForgeApp() {
         risk: assessment.risk,
         createdAt: now,
       });
+      annotationDraftRef.current = draftWithRoute;
       setAnnotationDraft(draftWithRoute);
       setWorkspaceStatus(`这条反馈需要收件箱确认：${assessment.reason}`);
       await persistAnnotationDraftToInbox(draftWithRoute, {
@@ -610,6 +708,7 @@ export function SciForgeApp() {
       risk: assessment.risk,
       createdAt: now,
     });
+    const runToken = beginAnnotationQuickActionRun(draftWithRequest);
     const prompt = buildAnnotationQuickActionPrompt(draftWithRequest, assessment);
     const baseScenarioId = builtInScenarioIdForRuntimeInput({ scenarioId, scenarioOverride: activeScenarioOverride });
     const scenario = scenarios.find((item) => item.id === baseScenarioId) ?? scenarios[0];
@@ -620,10 +719,12 @@ export function SciForgeApp() {
       detail: assessment.reason,
       createdAt: nowIso(),
     };
+    annotationDraftRef.current = draftWithRequest;
     setAnnotationDraft(draftWithRequest);
     setAnnotationQuickActionRunning(true);
     setAnnotationStreamEvents([queuedEvent]);
     const emitAnnotationEvent = (event: AgentStreamEvent) => {
+      if (!annotationQuickActionRunIsCurrent(runToken)) return;
       setAnnotationStreamEvents((current) => [...current, event].slice(-48));
     };
     try {
@@ -652,6 +753,8 @@ export function SciForgeApp() {
         onStreamEvent: emitAnnotationEvent,
         turnMode: 'annotation-quick-action',
         conversationEnvelope: buildAnnotationQuickActionEnvelope(draftWithRequest, assessment),
+        conversationLaneId: annotationRuntimeLaneId(draftWithRequest, 'quick-action'),
+        runtimeResumePolicy: 'none',
       });
       const assistantContent = result.status === 'completed'
         ? result.finalResponse.message.content
@@ -677,11 +780,12 @@ export function SciForgeApp() {
         },
         assistantContent,
       });
-      setAnnotationDraft(nextDraft);
-      await persistAnnotationDraftToInbox(nextDraft, {
-        action: needsInbox ? 'send-to-inbox' : 'apply-small-change',
-        statusText: needsInbox ? '快捷修改未应用，已转入反馈收件箱' : '低风险小改动结果已记录到反馈收件箱',
-      });
+      if (commitAnnotationDraftIfCurrent(runToken, nextDraft, 'quick-action')) {
+        await persistAnnotationDraftToInbox(nextDraft, {
+          action: needsInbox ? 'send-to-inbox' : 'apply-small-change',
+          statusText: needsInbox ? '快捷修改未应用，已转入反馈收件箱' : '低风险小改动结果已记录到反馈收件箱',
+        });
+      }
     } catch (error) {
       const draftWithFailure = appendAnnotationActionRecord(draftWithRequest, {
         action: 'apply-small-change',
@@ -691,18 +795,20 @@ export function SciForgeApp() {
         writesApplied: false,
         createdAt: nowIso(),
       });
-      setAnnotationDraft(draftWithFailure);
-      await persistAnnotationDraftToInbox(draftWithFailure, {
-        action: 'send-to-inbox',
-        statusText: '快捷修改被阻塞，已转入反馈收件箱',
-      });
+      if (commitAnnotationDraftIfCurrent(runToken, draftWithFailure, 'quick-action')) {
+        await persistAnnotationDraftToInbox(draftWithFailure, {
+          action: 'send-to-inbox',
+          statusText: '快捷修改被阻塞，已转入反馈收件箱',
+        });
+      }
     } finally {
-      setAnnotationQuickActionRunning(false);
+      if (annotationQuickActionRunTokenRef.current === runToken.sequence) setAnnotationQuickActionRunning(false);
     }
   }
 
   function discardAnnotationDraft() {
     setAnnotationDraft((current) => current ? discardAnnotationPlanDraft(current) : current);
+    annotationDraftRef.current = null;
     setAnnotationDraft(null);
     setAnnotationSidebarOpen(false);
     setFeedbackAnnotationModeActive(false);
@@ -783,7 +889,11 @@ export function SciForgeApp() {
         evidenceStatus,
       });
       addFeedbackComment(comment);
-      setAnnotationDraft((current) => current ? markAnnotationPlanDraftSaved(current.id === draftForComment.id ? draftForComment : current, feedbackId, now) : current);
+      setAnnotationDraft((current) => {
+        const next = current ? markAnnotationPlanDraftSaved(current.id === draftForComment.id ? draftForComment : current, feedbackId, now) : current;
+        annotationDraftRef.current = next;
+        return next;
+      });
       setFeedbackAnnotationModeActive(false);
       setWorkspaceStatus(`${options.statusText ?? '反馈已保存到收件箱'}：${feedbackId}`);
       if (options.openInboxAfterSave) {
@@ -1335,7 +1445,11 @@ export function SciForgeApp() {
         onDescriptionChange={handleAnnotationDescriptionChange}
         onClarify={handleAnnotationClarify}
         onChoice={handleAnnotationChoice}
-        onRemoveReference={(referenceId) => setAnnotationDraft((current) => current ? removeAnnotationReferenceFromDraft(current, referenceId) : current)}
+	        onRemoveReference={(referenceId) => setAnnotationDraft((current) => {
+	          const next = current ? removeAnnotationReferenceFromDraft(current, referenceId) : current;
+	          annotationDraftRef.current = next;
+	          return next;
+	        })}
         onReferenceFocus={focusAnnotationReference}
         onDiscard={discardAnnotationDraft}
         onSave={saveAnnotationDraft}
@@ -1344,11 +1458,12 @@ export function SciForgeApp() {
           action: 'send-to-inbox',
           statusText: '复杂改动已保存到反馈收件箱',
         })}
-        onApplySmallChange={() => void runAnnotationQuickAction()}
-        onOpenInbox={openFeedbackInboxFromAnnotation}
-        quickActionRunning={annotationQuickActionRunning}
-        streamEvents={annotationStreamEvents}
-      />
+	        onApplySmallChange={() => void runAnnotationQuickAction()}
+	        onOpenInbox={openFeedbackInboxFromAnnotation}
+	        planningRunning={annotationPlanningRunning}
+	        quickActionRunning={annotationQuickActionRunning}
+	        streamEvents={annotationStreamEvents}
+	      />
       <AppContextMenuLayer
         annotationModeActive={feedbackAnnotationModeActive}
         onReferenceToChat={requestChatReference}

@@ -376,6 +376,7 @@ export function Workbench({
             availableComponentIds={availableComponentIds}
             runtimeHealth={runtimeHealth}
             workspaceObjectReferences={workspaceObjectReferences}
+            conversationLaneId={`workbench:${scenarioId}:${session.sessionId}`}
           />
         </div>
         {!resultsCollapsed ? (

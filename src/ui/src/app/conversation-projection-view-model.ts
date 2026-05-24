@@ -166,11 +166,11 @@ function projectionFromSessionProjectionMap(value: unknown, run?: SciForgeRun): 
   if (!isRecord(value)) return undefined;
   const runId = run?.id;
   if (runId && value[runId]) return value[runId];
+  if (runId && isRecord(value.projections) && value.projections[runId]) return value.projections[runId];
   const currentRunId = asString(value.currentRunId) ?? asString(value.activeRunId);
   if (currentRunId && isRecord(value.projections) && value.projections[currentRunId]) return value.projections[currentRunId];
   if (isRecord(value.current)) return value.current;
   if (isRecord(value.latest)) return value.latest;
-  if (runId && isRecord(value.projections) && value.projections[runId]) return value.projections[runId];
   return undefined;
 }
 

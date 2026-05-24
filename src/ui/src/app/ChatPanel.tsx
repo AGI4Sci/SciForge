@@ -139,6 +139,7 @@ export function ChatPanel({
   availableComponentIds = [],
   runtimeHealth = [],
   workspaceObjectReferences = [],
+  conversationLaneId,
 }: {
   scenarioId: ScenarioInstanceId;
   role: string;
@@ -172,6 +173,7 @@ export function ChatPanel({
   availableComponentIds?: string[];
   runtimeHealth?: RuntimeHealthItem[];
   workspaceObjectReferences?: ObjectReference[];
+  conversationLaneId?: string;
 }) {
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState('');
@@ -578,6 +580,8 @@ export function ChatPanel({
           if (!isCurrentTurn()) return;
           realtimeControlRef.current = sender;
         },
+        conversationLaneId: conversationLaneId ?? `workbench:${scenarioId}:${baseSession.sessionId}`,
+        runtimeResumePolicy: 'same-conversation-lane',
       });
       if (!isCurrentTurn()) return;
       if (result.status === 'failed') {

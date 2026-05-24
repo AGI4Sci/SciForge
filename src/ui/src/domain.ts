@@ -808,6 +808,9 @@ export interface TargetInstanceContext {
   };
 }
 
+export type ConversationTurnMode = 'normal' | 'annotation-plan-only' | 'annotation-quick-action';
+export type RuntimeResumePolicy = 'same-conversation-lane' | 'explicit-reference-only' | 'none';
+
 export interface SendAgentMessageInput {
   sessionId?: string;
   sessionCreatedAt?: string;
@@ -831,8 +834,10 @@ export interface SendAgentMessageInput {
   skillPlanRef?: string;
   uiPlanRef?: string;
   targetInstanceContext?: TargetInstanceContext;
-  turnMode?: 'normal' | 'annotation-plan-only' | 'annotation-quick-action';
+  turnMode?: ConversationTurnMode;
   conversationEnvelope?: unknown;
+  conversationLaneId?: string;
+  runtimeResumePolicy?: RuntimeResumePolicy;
   verificationResult?: Record<string, unknown>;
   recentVerificationResults?: Array<Record<string, unknown>>;
 }
