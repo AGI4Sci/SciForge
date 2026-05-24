@@ -2,15 +2,16 @@
 
 最后更新：2026-05-24
 
-当前目标：把 SciForge 的 `注释` 能力收敛为一个 **全局注释侧栏**。注释侧栏在工作台和非工作台页面行为一致：用户可以在任何页面点选多个 UI 对象，把它们作为 `※1`、`※2` 这类引用 token 进入侧栏；侧栏只做 plan-only 需求澄清和反馈整理，不允许修改项目代码、不启动 repair、不触发 runtime 执行。最终产物沉淀到反馈收件箱，再由用户显式选择是否进入 repair/code 路径。
+当前目标：把 SciForge 的 `注释` 能力收敛为一个 **全局注释侧栏**。注释侧栏在工作台和非工作台页面行为一致：用户可以在任何页面点选多个 UI 对象，把它们作为 `※1`、`※2` 这类引用 token 进入侧栏。侧栏 UI 独立，但聊天接口、会话状态、引用 token、stream/event 展示和 GUI-TUI 对话逻辑必须复用主对话 kernel，不能形成第二套对话系统；区别是请求必须包在 `annotation-plan-only` envelope 里，只做需求澄清和反馈整理，不允许修改项目代码、不启动 repair、不触发 runtime 执行。最终产物沉淀到反馈收件箱，再由用户显式选择是否进入 repair/code 路径。
 
 ## 当前决策
 
 - `注释` 按钮打开全局注释侧栏，而不是把注释讨论塞进工作台主聊天框。
 - 工作台本身也是可注释页面；主聊天栏、结果面板、左侧项目树、设置入口和反馈收件箱都只是可被引用的对象。
 - 工作台和非工作台页面使用同一套注释流程：点选对象 -> 侧栏 plan-only 澄清 -> 保存到反馈收件箱。
-- 注释侧栏不是第二套执行聊天。它可以有轻量多轮讨论、选择题和自由输入，但它的输出是结构化 feedback draft。
-- 注释侧栏可以复用现有 `SciForgeReference`、截图/DOM target、feedback evidence bundle 和 feedback inbox 数据模型；不要复制一套引用或证据格式。
+- 注释侧栏不是第二套对话系统。它是主对话能力的 plan-only projection：UI 容器独立，对话接口和会话逻辑复用主 conversation kernel。
+- 注释侧栏可以复用现有 `SciForgeReference`、引用 token、stream/event 展示、截图/DOM target、feedback evidence bundle 和 feedback inbox 数据模型；不要复制一套引用、证据或聊天协议。
+- `annotation-plan-only` envelope 是能力边界：GUI 只收集对象、问题和选择；底层 conversation kernel 负责澄清、摘要和 feedback draft 输出。
 - Plan-only 模式下 agent 应鼓励澄清，可以提出 1-3 个短问题，也可以给出 2-3 个选择项和自由输入；用户可以跳过讨论直接保存。
 - Plan-only 模式禁止写文件、改代码、启动 repair、提交 GitHub issue 或调用会改变 workspace 的工具。
 - 从反馈收件箱启动 repair/code 必须是后续显式动作，不能由注释侧栏自动触发。
@@ -50,6 +51,7 @@
 - [ ] 侧栏中展示已引用对象 chips，chip 显示 `※n`、对象标题、类型和移除按钮。
 - [ ] 侧栏底部提供简洁输入框和保存/放弃/继续澄清入口。
 - [ ] 工作台主 composer 在注释模式下不承载注释讨论，只显示必要提示或保持不干扰。
+- [ ] 侧栏输入和消息列表复用主对话 composer/message/stream 模型的能力边界，避免实现第二套聊天状态机。
 
 ### AN-02 统一对象引用采集
 
@@ -62,6 +64,8 @@
 ### AN-03 Plan-Only 讨论协议
 
 - [ ] 给注释侧栏建立 plan-only 状态机：drafting、clarifying、ready-to-save、saved、discarded。
+- [ ] 定义 `annotation-plan-only` conversation envelope，复用主对话 kernel 的 session、references、guidance queue 和 structured events。
+- [ ] 为主 conversation kernel 增加 annotation-plan-only policy：只允许澄清、选择题、摘要和 feedback draft，不允许进入执行/repair/code path。
 - [ ] 明确禁止 side effects：不写 workspace、不启动 repair、不提交 GitHub、不运行代码修改。
 - [ ] 允许 agent 生成澄清问题、选择题和需求摘要，但输出必须保持为 feedback draft。
 - [ ] 选择题 UI 支持 2-3 个推荐选项和自由输入，适合“像 Claude 一样”连续澄清。
