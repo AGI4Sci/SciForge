@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { Inbox, MessageSquareText, MousePointer2, Save, Trash2, X } from 'lucide-react';
+import { Eye, Inbox, MessageSquareText, MousePointer2, Save, Sparkles, Trash2, X } from 'lucide-react';
 import type { PageId } from '../data';
 import type { AgentStreamEvent } from '../domain';
 import { Badge, cx } from '../app/uiPrimitives';
@@ -13,6 +13,7 @@ import {
   sciForgeReferenceKindLabel,
 } from '../../../../packages/support/object-references';
 import {
+  assessAnnotationQuickAction,
   annotationPlanLatestChoices,
   buildAnnotationPlanOnlyEnvelope,
   type AnnotationPlanChoice,
@@ -33,7 +34,10 @@ interface AnnotationSidebarProps {
   onRemoveReference: (referenceId: string) => void;
   onDiscard: () => void;
   onSave: () => void;
+  onSendToInbox: () => void;
+  onApplySmallChange: () => void;
   onOpenInbox: () => void;
+  quickActionRunning?: boolean;
   streamEvents?: AgentStreamEvent[];
 }
 
@@ -51,16 +55,23 @@ export function AnnotationSidebar({
   onRemoveReference,
   onDiscard,
   onSave,
+  onSendToInbox,
+  onApplySmallChange,
   onOpenInbox,
+  quickActionRunning = false,
   streamEvents = [],
 }: AnnotationSidebarProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   if (!open) return null;
   const choices = draft ? annotationPlanLatestChoices(draft) : [];
+  const previewChoice = choices.find((choice) => choice.id === 'preview-change');
+  const secondaryChoices = choices.filter((choice) => choice.id !== 'preview-change');
   const envelope = draft ? buildAnnotationPlanOnlyEnvelope(draft) : null;
   const streamCounts = streamEventCounts(streamEvents);
   const canSave = Boolean(draft && draft.status !== 'saved' && (draft.references.length || draft.description.trim() || draft.messages.length));
+  const quickActionAssessment = draft ? assessAnnotationQuickAction(draft) : null;
+  const canApplySmallChange = Boolean(draft && draft.status !== 'saved' && quickActionAssessment?.eligible && !quickActionRunning);
   const statusLabel = draft?.status === 'saved'
     ? '已保存'
     : draft?.status === 'ready-to-save'
@@ -78,9 +89,9 @@ export function AnnotationSidebar({
     <aside className="annotation-sidebar" data-feedback-control="true" aria-label="全局注释侧栏">
       <header className="annotation-sidebar-head">
         <div>
-          <Badge variant="info">annotation-plan</Badge>
-          <h2>注释</h2>
-          <p title={draft?.currentUrl ?? page}>{page} · {annotationRouteLabel(draft?.currentUrl)} · 仅澄清，不改代码</p>
+          <Badge variant="info">feedback flow</Badge>
+          <h2>反馈侧栏</h2>
+          <p title={draft?.currentUrl ?? page}>{page} · {annotationRouteLabel(draft?.currentUrl)} · 先说清楚，再选择下一步</p>
         </div>
         <button type="button" className="annotation-icon-button" onClick={onClose} aria-label="关闭注释侧栏" title="关闭注释侧栏">
           <X size={16} />
@@ -90,17 +101,17 @@ export function AnnotationSidebar({
       <section className="annotation-sidebar-status" aria-label="注释计划状态">
         <span className={cx('annotation-status-dot', selectionActive && 'active')} />
         <strong>{statusLabel}</strong>
-        <span>{draft?.references.length ?? 0} refs</span>
-        <span>{envelope?.kind ?? 'annotation-plan-only'}</span>
+        <span>{draft?.references.length ?? 0} 个对象</span>
+        <span>{quickActionAssessment?.label ?? '意图优先'}</span>
       </section>
 
       {draft?.savedFeedbackId ? (
         <section className="annotation-sidebar-saved">
-          <strong>已进入反馈收件箱</strong>
+          <strong>已保存反馈</strong>
           <code>{draft.savedFeedbackId}</code>
           <button type="button" onClick={onOpenInbox}>
             <Inbox size={14} />
-            打开收件箱
+            去收件箱
           </button>
         </section>
       ) : null}
@@ -141,8 +152,8 @@ export function AnnotationSidebar({
 
       <section className="annotation-sidebar-section grow">
         <div className="annotation-composer-label">
-          <strong>计划草稿</strong>
-          <span>主 composer shell · annotation-plan-only</span>
+          <strong>问题和关系</strong>
+          <span>同一条反馈路径</span>
         </div>
         <ChatComposer
           expanded
@@ -151,7 +162,7 @@ export function AnnotationSidebar({
           composerHeight={118}
           referencePickMode={false}
           pendingReferences={[]}
-          contextMeter={<span className="annotation-context-meter">{draft?.references.length ?? 0} refs · no runtime</span>}
+          contextMeter={<span className="annotation-context-meter">{draft?.references.length ?? 0} 对象 · {quickActionAssessment?.reason ?? '先补充意图'}</span>}
           fileInputRef={fileInputRef}
           referenceChips={null}
           textareaRef={textareaRef}
@@ -169,16 +180,39 @@ export function AnnotationSidebar({
           showCollapseButton={false}
           showResizeHandle={false}
           copy={{
-            placeholder: '描述你希望这些对象如何变化...',
-            sendLabel: '澄清',
+            placeholder: '描述你希望哪里变化、对象之间有什么关系...',
+            sendLabel: '整理',
           }}
         />
-        <div className="annotation-actions">
-          <button type="button" onClick={onSave} disabled={!canSave || saving}>
+        <div className="annotation-action-ladder" aria-label="反馈下一步">
+          <button type="button" className="primary" onClick={onSave} disabled={!canSave || saving}>
             <Save size={14} />
-            {saving ? '保存中' : '保存'}
+            {saving ? '保存中' : '保存反馈'}
+          </button>
+          <button type="button" onClick={() => previewChoice && onChoice(previewChoice)} disabled={!previewChoice || !draft || draft.status === 'saved'}>
+            <Eye size={14} />
+            预览修改
+          </button>
+          <button
+            type="button"
+            className="quick"
+            onClick={onApplySmallChange}
+            disabled={!canApplySmallChange}
+            title={quickActionAssessment?.reason}
+          >
+            <Sparkles size={14} />
+            {quickActionRunning ? '修改中' : '应用小改动'}
+          </button>
+          <button type="button" onClick={onSendToInbox} disabled={!canSave || saving}>
+            <Inbox size={14} />
+            复杂改动进收件箱
           </button>
         </div>
+        <p className="annotation-decision-note">
+          {quickActionAssessment?.eligible
+            ? '当前像低风险小改动；执行后仍会留下反馈记录。'
+            : quickActionAssessment?.reason ?? '先描述问题，系统再判断是小改动还是进收件箱。'}
+        </p>
       </section>
 
       {draft?.messages.length ? (
@@ -213,9 +247,9 @@ export function AnnotationSidebar({
         </section>
       ) : null}
 
-      {draft && draft.status !== 'saved' ? (
+      {draft && draft.status !== 'saved' && secondaryChoices.length ? (
         <section className="annotation-choice-row" aria-label="注释计划选项">
-          {choices.map((choice) => (
+          {secondaryChoices.map((choice) => (
             <button key={choice.id} type="button" onClick={() => onChoice(choice)}>
               {choice.label}
             </button>
@@ -228,7 +262,7 @@ export function AnnotationSidebar({
           <Trash2 size={14} />
           丢弃
         </button>
-        <span>{envelope?.forbiddenSideEffects.length ?? 0} blocked side effects</span>
+        <span title={`${envelope?.forbiddenSideEffects.length ?? 0} 个复杂副作用需要收件箱确认`}>复杂操作需要确认和审计</span>
       </footer>
     </aside>
   );

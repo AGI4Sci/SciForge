@@ -40,8 +40,12 @@ import {
 import {
   addAnnotationReferenceToDraft,
   advanceAnnotationPlanClarification,
+  appendAnnotationActionRecord,
+  assessAnnotationQuickAction,
   buildAnnotationPlanFeedbackComment,
   buildAnnotationPlanOnlyEnvelope,
+  buildAnnotationQuickActionEnvelope,
+  buildAnnotationQuickActionPrompt,
   createAnnotationPlanDraft,
   discardAnnotationPlanDraft,
   loadPersistedAnnotationPlanDraft,
@@ -50,6 +54,7 @@ import {
   refreshAnnotationPlanDraftContext,
   removeAnnotationReferenceFromDraft,
   updateAnnotationPlanDescription,
+  type AnnotationActionRecord,
   type AnnotationPlanChoice,
   type AnnotationPlanDraft,
 } from '../feedback/annotationPlanModel';
@@ -173,6 +178,7 @@ export function SciForgeApp() {
   const [annotationDraft, setAnnotationDraft] = useState<AnnotationPlanDraft | null>(() => loadPersistedAnnotationPlanDraft());
   const [annotationStreamEvents, setAnnotationStreamEvents] = useState<AgentStreamEvent[]>([]);
   const [annotationSaving, setAnnotationSaving] = useState(false);
+  const [annotationQuickActionRunning, setAnnotationQuickActionRunning] = useState(false);
   const [configSaveState, setConfigSaveState] = useState<ConfigSaveState>({ status: 'idle' });
   const [scenarioOverrides, setScenarioOverrides] = useState<Partial<Record<ScenarioInstanceId, ScenarioRuntimeOverride>>>({});
   const [selectedRuntimeComponentIds, setSelectedRuntimeComponentIds] = useState<string[]>(() => defaultPublishedRuntimeComponentIds());
@@ -552,9 +558,9 @@ export function SciForgeApp() {
     });
     const assistantContent = result.status === 'completed'
       ? result.finalResponse.message.content
-      : `annotation-plan-only policy 拒绝进入执行路径：${result.message}`;
+      : `反馈侧栏整理失败：${result.message}`;
     setAnnotationDraft((current) => current ? advanceAnnotationPlanClarification(current, { content: prompt, choice, assistantContent }) : current);
-    setWorkspaceStatus('注释澄清已由 annotation-plan-only conversation kernel 处理，未触发 runtime、repair 或 GitHub sync。');
+    setWorkspaceStatus('反馈侧栏已整理当前意图；可继续预览、小改动或保存到收件箱。');
   }
 
   function handleAnnotationClarify(content: string) {
@@ -565,6 +571,126 @@ export function SciForgeApp() {
     void runAnnotationPlanOnlyTurn(choice.prompt, choice);
   }
 
+  async function runAnnotationQuickAction() {
+    const draftForTurn = ensureAnnotationDraft(annotationDraft);
+    const assessment = assessAnnotationQuickAction(draftForTurn);
+    const now = nowIso();
+    if (!assessment.eligible) {
+      const draftWithRoute = appendAnnotationActionRecord(draftForTurn, {
+        action: 'send-to-inbox',
+        status: 'blocked',
+        summary: assessment.reason,
+        risk: assessment.risk,
+        createdAt: now,
+      });
+      setAnnotationDraft(draftWithRoute);
+      setWorkspaceStatus(`这条反馈需要收件箱确认：${assessment.reason}`);
+      await persistAnnotationDraftToInbox(draftWithRoute, {
+        action: 'send-to-inbox',
+        openInboxAfterSave: true,
+        statusText: '复杂改动已保存到反馈收件箱',
+      });
+      return;
+    }
+
+    const draftWithRequest = appendAnnotationActionRecord(draftForTurn, {
+      action: 'apply-small-change',
+      status: 'requested',
+      summary: assessment.reason,
+      risk: assessment.risk,
+      createdAt: now,
+    });
+    const prompt = buildAnnotationQuickActionPrompt(draftWithRequest, assessment);
+    const baseScenarioId = builtInScenarioIdForRuntimeInput({ scenarioId, scenarioOverride: activeScenarioOverride });
+    const scenario = scenarios.find((item) => item.id === baseScenarioId) ?? scenarios[0];
+    const queuedEvent: AgentStreamEvent = {
+      id: makeId('evt'),
+      type: 'queued',
+      label: '小改动已提交',
+      detail: assessment.reason,
+      createdAt: nowIso(),
+    };
+    setAnnotationDraft(draftWithRequest);
+    setAnnotationQuickActionRunning(true);
+    setAnnotationStreamEvents([queuedEvent]);
+    const emitAnnotationEvent = (event: AgentStreamEvent) => {
+      setAnnotationStreamEvents((current) => [...current, event].slice(-48));
+    };
+    try {
+      const result = await runPromptOrchestrator({
+        prompt,
+        baseSession: activeSession,
+        references: draftWithRequest.references.map((item) => item.reference),
+        scenarioId,
+        baseScenarioId,
+        scenarioName: scenario.name,
+        scenarioDomain: scenario.domain,
+        role: 'annotation quick action',
+        config,
+        scenarioOverride: activeScenarioOverride,
+        availableComponentIds: selectedRuntimeComponentIds,
+        defaultComponentIds: activeScenarioOverride?.defaultComponents?.length
+          ? activeScenarioOverride.defaultComponents
+          : SCENARIO_SPECS[baseScenarioId].componentPolicy.defaultComponents,
+        scenarioPackageRef: activeScenarioOverride?.scenarioPackageRef ?? builtInScenarioPackageRef(baseScenarioId),
+        skillPlanRef: activeScenarioOverride?.skillPlanRef ?? `skill-plan.${baseScenarioId}.annotation-quick-action`,
+        uiPlanRef: activeScenarioOverride?.uiPlanRef ?? `ui-plan.${baseScenarioId}.annotation-quick-action`,
+        streamEvents: annotationStreamEvents,
+        signal: new AbortController().signal,
+        userAbortRequested: () => false,
+        activeSession: () => activeSession,
+        onStreamEvent: emitAnnotationEvent,
+        turnMode: 'annotation-quick-action',
+        conversationEnvelope: buildAnnotationQuickActionEnvelope(draftWithRequest, assessment),
+      });
+      const assistantContent = result.status === 'completed'
+        ? result.finalResponse.message.content
+        : `快捷修改未完成：${result.message}`;
+      const needsInbox = result.status !== 'completed'
+        || /\bNEEDS_INBOX\b|需要.*收件箱|未修改|没有修改|no files changed|no changes/i.test(assistantContent);
+      const runtimeRunId = result.status === 'completed' ? result.finalResponse.run.id : undefined;
+      const draftWithResult = appendAnnotationActionRecord(draftWithRequest, {
+        action: 'apply-small-change',
+        status: needsInbox ? 'blocked' : 'completed',
+        summary: needsInbox ? '快捷修改未应用，转入收件箱确认。' : '低风险小改动已由侧栏提交执行。',
+        risk: assessment.risk,
+        writesApplied: !needsInbox,
+        runtimeRunId,
+        createdAt: nowIso(),
+      });
+      const nextDraft = advanceAnnotationPlanClarification(draftWithResult, {
+        content: '应用小改动',
+        choice: {
+          id: 'apply-small-change',
+          label: '应用小改动',
+          prompt,
+        },
+        assistantContent,
+      });
+      setAnnotationDraft(nextDraft);
+      await persistAnnotationDraftToInbox(nextDraft, {
+        action: needsInbox ? 'send-to-inbox' : 'apply-small-change',
+        statusText: needsInbox ? '快捷修改未应用，已转入反馈收件箱' : '低风险小改动结果已记录到反馈收件箱',
+      });
+    } catch (error) {
+      const draftWithFailure = appendAnnotationActionRecord(draftWithRequest, {
+        action: 'apply-small-change',
+        status: 'blocked',
+        summary: error instanceof Error ? error.message : String(error),
+        risk: assessment.risk,
+        writesApplied: false,
+        createdAt: nowIso(),
+      });
+      setAnnotationDraft(draftWithFailure);
+      await persistAnnotationDraftToInbox(draftWithFailure, {
+        action: 'send-to-inbox',
+        statusText: '快捷修改被阻塞，已转入反馈收件箱',
+      });
+    } finally {
+      setAnnotationQuickActionRunning(false);
+    }
+  }
+
   function discardAnnotationDraft() {
     setAnnotationDraft((current) => current ? discardAnnotationPlanDraft(current) : current);
     setAnnotationDraft(null);
@@ -572,14 +698,33 @@ export function SciForgeApp() {
     setFeedbackAnnotationModeActive(false);
   }
 
-  async function saveAnnotationDraft() {
+  async function saveAnnotationDraft(options: { openInboxAfterSave?: boolean; action?: AnnotationActionRecord['action']; statusText?: string } = {}) {
     if (!annotationDraft || annotationDraft.status === 'saved') return;
+    await persistAnnotationDraftToInbox(annotationDraft, {
+      action: options.action ?? 'save-feedback',
+      openInboxAfterSave: options.openInboxAfterSave,
+      statusText: options.statusText ?? '反馈已保存到收件箱',
+    });
+  }
+
+  async function persistAnnotationDraftToInbox(
+    draftToSave: AnnotationPlanDraft,
+    options: { openInboxAfterSave?: boolean; action?: AnnotationActionRecord['action']; statusText?: string } = {},
+  ) {
+    if (draftToSave.status === 'saved') return;
     setAnnotationSaving(true);
     try {
       const now = nowIso();
       const feedbackId = makeId('feedback');
       const refs = feedbackEvidenceRefs(feedbackId);
-      const firstReference = annotationDraft.references[0];
+      const draftForComment = appendAnnotationActionRecord(draftToSave, {
+        action: options.action ?? 'save-feedback',
+        status: 'saved',
+        summary: options.statusText ?? '反馈已保存到收件箱',
+        feedbackId,
+        createdAt: now,
+      });
+      const firstReference = draftForComment.references[0];
       const target = firstReference?.target ?? buildFeedbackTargetSnapshot(document.body);
       const marker = firstReference ? referenceComposerMarker(firstReference.reference) : 'plan';
       const screenshot = await captureFeedbackScreenshotEvidence(target, now, { annotationLabel: marker });
@@ -604,7 +749,7 @@ export function SciForgeApp() {
         diagnostics: screenshotWithRefs ? [] : ['screenshot capture failed; saved annotation plan target and runtime evidence only'],
       });
       const comment = buildAnnotationPlanFeedbackComment({
-        draft: annotationDraft,
+        draft: draftForComment,
         feedbackId,
         now,
         author: feedbackAuthor,
@@ -622,11 +767,15 @@ export function SciForgeApp() {
         evidenceStatus,
       });
       addFeedbackComment(comment);
-      setAnnotationDraft((current) => current ? markAnnotationPlanDraftSaved(current, feedbackId, now) : current);
+      setAnnotationDraft((current) => current ? markAnnotationPlanDraftSaved(current.id === draftForComment.id ? draftForComment : current, feedbackId, now) : current);
       setFeedbackAnnotationModeActive(false);
-      setWorkspaceStatus(`注释计划已保存到反馈收件箱：${feedbackId}`);
+      setWorkspaceStatus(`${options.statusText ?? '反馈已保存到收件箱'}：${feedbackId}`);
+      if (options.openInboxAfterSave) {
+        setPage('feedback');
+        setAnnotationSidebarOpen(false);
+      }
     } catch (error) {
-      setWorkspaceStatus(`注释计划未保存：${error instanceof Error ? error.message : String(error)}`);
+      setWorkspaceStatus(`反馈未保存：${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setAnnotationSaving(false);
     }
@@ -1173,7 +1322,14 @@ export function SciForgeApp() {
         onRemoveReference={(referenceId) => setAnnotationDraft((current) => current ? removeAnnotationReferenceFromDraft(current, referenceId) : current)}
         onDiscard={discardAnnotationDraft}
         onSave={saveAnnotationDraft}
+        onSendToInbox={() => void saveAnnotationDraft({
+          openInboxAfterSave: true,
+          action: 'send-to-inbox',
+          statusText: '复杂改动已保存到反馈收件箱',
+        })}
+        onApplySmallChange={() => void runAnnotationQuickAction()}
         onOpenInbox={openFeedbackInboxFromAnnotation}
+        quickActionRunning={annotationQuickActionRunning}
         streamEvents={annotationStreamEvents}
       />
       <AppContextMenuLayer

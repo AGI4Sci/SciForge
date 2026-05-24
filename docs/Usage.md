@@ -204,14 +204,14 @@ GUI event
 当前注释收敛目标是全局 `AnnotationSidebar`。用户在工作台或非工作台页面点击 `注释` 后，应进入同一条流程：
 
 1. 在页面上点选一个或多个 UI 对象，侧栏为它们分配 `※1`、`※2` 等引用 token。
-2. 侧栏复用主 conversation kernel 的消息、引用和 stream/event 能力，但请求必须处于 `annotation-plan-only` 模式。
-3. Plan-only 模式只能做需求澄清、选择题、摘要和 feedback draft；不能写 workspace、启动 repair、运行 code、提交 GitHub issue 或触发其他外部副作用。
-4. 用户可以跳过澄清，也可以完成 1-3 个短问题后保存。
-5. 保存只生成反馈收件箱 `annotation-plan` record，包含引用对象、原始描述、澄清摘要、修改建议、验收标准、页面 URL/route、selector/DOM path 和截图/evidence refs。
+2. 侧栏复用主 conversation kernel 的消息、引用和 stream/event 能力；整理/预览使用 `annotation-plan-only`，低风险小改动使用 `annotation-quick-action`。
+3. 用户可以跳过澄清，也可以完成 1-3 个短问题后选择保存反馈、预览修改、应用小改动或把复杂改动送入收件箱。
+4. 低风险小改动只适合单对象、局部、可解释、可回退的 copy/style 类请求；GitHub sync、repair handoff、commit、push、PR、merge 和复杂写入必须进收件箱。
+5. 保存会生成反馈收件箱 `annotation-plan` record，包含引用对象、原始描述、澄清摘要、action log、修改建议、验收标准、页面 URL/route、selector/DOM path 和截图/evidence refs。
 
 工作台主 composer 不承载注释讨论。它仍是执行、研究和普通对话入口；工作台里的消息、结果面板、项目树、设置入口和反馈收件箱条目只是注释侧栏可以引用的对象。
 
-如果用户要把某条 `annotation-plan` 变成 repair/code/GitHub sync，必须先进入反馈收件箱，对该条记录点击显式 repair/code/sync 操作，并通过对应确认边界。侧栏保存本身不能自动触发这些动作。
+如果用户要把某条 `annotation-plan` 变成复杂 repair/code/GitHub sync，必须先进入反馈收件箱，对该条记录点击显式 repair/code/sync 操作，并通过对应确认边界。侧栏保存本身不能自动触发这些复杂动作。
 
 ## Workspace 产物
 

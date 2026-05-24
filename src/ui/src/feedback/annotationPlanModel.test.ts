@@ -3,9 +3,13 @@ import test from 'node:test';
 import type { FeedbackRuntimeSnapshot, FeedbackTargetSnapshot, SciForgeReference } from '../domain';
 import {
   addAnnotationReferenceToDraft,
+  appendAnnotationActionRecord,
   annotationPlanEnvelopeAllowsOnlyDrafting,
+  assessAnnotationQuickAction,
   buildAnnotationPlanFeedbackComment,
   buildAnnotationPlanOnlyEnvelope,
+  buildAnnotationQuickActionEnvelope,
+  buildAnnotationQuickActionPrompt,
   createAnnotationPlanDraft,
   hasAnnotationPlanOnlyEnvelopeMarker,
   isAnnotationPlanOnlyEnvelope,
@@ -58,6 +62,53 @@ test('annotation plan envelope is structurally plan-only', () => {
   assert.equal(hasAnnotationPlanOnlyEnvelopeMarker({ kind: 'annotation-plan-only' }), true);
 });
 
+test('annotation quick actions are a separate low-risk sidebar lane', () => {
+  const draft = addAnnotationReferenceToDraft(updateAnnotationPlanDescription(createAnnotationPlanDraft({
+    page: 'components',
+    scenarioId: 'components',
+    sessionId: 'session-1',
+    url: 'http://127.0.0.1:5173/components',
+    now,
+  }), '把这个按钮文案改得更清楚', now), {
+    reference: reference('button'),
+    target: target('button'),
+    now,
+  });
+  const assessment = assessAnnotationQuickAction(draft);
+  const envelope = buildAnnotationQuickActionEnvelope(draft, assessment);
+  const prompt = buildAnnotationQuickActionPrompt(draft, assessment);
+
+  assert.equal(assessment.eligible, true);
+  assert.equal(assessment.risk, 'low');
+  assert.equal(envelope.kind, 'annotation-quick-action');
+  assert.equal(envelope.runtimeExecutionAllowed, true);
+  assert.equal(envelope.workspaceWriteAllowed, true);
+  assert.equal(envelope.githubSyncAllowed, false);
+  assert.equal(envelope.repairStartAllowed, false);
+  assert.ok(envelope.forbiddenSideEffects.includes('push'));
+  assert.match(prompt, /NEEDS_INBOX/);
+  assert.match(prompt, /low-risk, local UI copy\/style tweak/);
+});
+
+test('annotation quick action routes broad changes to inbox', () => {
+  const draft = addAnnotationReferenceToDraft(updateAnnotationPlanDescription(createAnnotationPlanDraft({
+    page: 'workbench',
+    scenarioId: 'literature',
+    sessionId: 'session-1',
+    url: 'http://127.0.0.1:5173/',
+    now,
+  }), '重构全局 repair 状态机并同步 GitHub', now), {
+    reference: reference('panel'),
+    target: target('panel'),
+    now,
+  });
+  const assessment = assessAnnotationQuickAction(draft);
+
+  assert.equal(assessment.eligible, false);
+  assert.equal(assessment.status, 'needs-inbox');
+  assert.equal(assessment.risk, 'high');
+});
+
 test('annotation plan saves as feedback inbox record with explicit repair boundary', () => {
   const draft = addAnnotationReferenceToDraft(updateAnnotationPlanDescription(createAnnotationPlanDraft({
     page: 'feedback',
@@ -70,8 +121,15 @@ test('annotation plan saves as feedback inbox record with explicit repair bounda
     target: target('filter'),
     now,
   });
+  const draftWithAction = appendAnnotationActionRecord(draft, {
+    action: 'apply-small-change',
+    status: 'completed',
+    summary: '低风险小改动已记录',
+    writesApplied: true,
+    createdAt: now,
+  });
   const record = buildAnnotationPlanFeedbackComment({
-    draft,
+    draft: draftWithAction,
     feedbackId: 'feedback-1',
     now,
     author: { authorId: 'user-1', authorName: 'Tester' },
@@ -86,11 +144,13 @@ test('annotation plan saves as feedback inbox record with explicit repair bounda
   });
 
   assert.equal(record.status, 'open');
-  assert.deepEqual(record.tags, ['annotation-plan', 'plan-only']);
+  assert.deepEqual(record.tags, ['annotation-plan', 'intent-first', 'quick-action']);
   assert.equal(record.metadata?.source, 'annotation-plan');
   assert.equal((record.metadata?.annotationPlan as { planState?: string }).planState, 'draft-ready');
+  assert.equal(((record.metadata?.annotationPlan as { actionLog?: unknown[] }).actionLog ?? []).length, 1);
   assert.equal(record.repairPolicy?.requiresUserConfirmation, true);
-  assert.ok(record.repairPolicy?.forbiddenOperations.includes('runtime-execution'));
+  assert.ok(record.repairPolicy?.allowedOperations.includes('review-quick-action'));
+  assert.ok(record.repairPolicy?.forbiddenOperations.includes('push'));
   assert.ok(record.repairPolicy?.allowedOperations.includes('triage-feedback'));
 });
 

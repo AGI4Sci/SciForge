@@ -1383,7 +1383,7 @@ export function FeedbackInboxPage({
           ) : (
             <>
               <strong>还没有反馈</strong>
-              <p>点击顶栏“注释”打开全局注释侧栏，点选页面目标后保存为 plan-only 反馈。</p>
+              <p>点击顶栏“注释”打开反馈侧栏：先说清楚问题，小改动可快捷处理，复杂改动进入收件箱。</p>
             </>
           )}
         </div>
@@ -1469,7 +1469,7 @@ export function FeedbackInboxPage({
 	                  <span><strong>Evidence</strong> {evidence.ready}/{evidence.total} · {evidence.status}</span>
 	                  <span><strong>Repair</strong> {audit.label}</span>
 	                  <span><strong>Target</strong> {item.target.tagName || 'element'} · {item.runtime.scenarioId}</span>
-                    {annotationPlan ? <span><strong>Plan</strong> {annotationPlan.referenceCount} refs · explicit inbox action</span> : null}
+                    {annotationPlan ? <span><strong>Intent</strong> {annotationPlan.referenceCount} refs · inbox audit ready</span> : null}
 	                </div>
 	                <div className={cx('feedback-card-repair-callout', repairSummary.tone)} aria-label="repair summary">
 	                  <div>

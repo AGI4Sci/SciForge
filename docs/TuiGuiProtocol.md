@@ -44,11 +44,11 @@ GUI 所有输入都必须能还原成用户在终端里手敲的文本：
 
 GUI 可以通过 stdio、pty、WebSocket、HTTP 或本地进程 API 把文本送给 TUI，但这些只是传输细节。SciForge 不把传输方法上升为业务协议。
 
-## AnnotationSidebar Plan-Only 输入
+## AnnotationSidebar 连续反馈输入
 
 全局 `AnnotationSidebar` 是 GUI Shell input/presentation surface，不是独立聊天系统。顶部 `注释` 入口在工作台和非工作台页面都打开这个侧栏；旧的“点选对象后把注释讨论写入工作台主 composer”不再是协议路径。主 composer 继续处理执行、研究和普通对话。
 
-侧栏输入仍复用主 conversation kernel 的 session、reference token、structured stream/event 和 GUI-TUI 对话能力，但必须带显式 `annotation-plan-only` envelope。该 envelope 的稳定语义是：
+侧栏输入仍复用主 conversation kernel 的 session、reference token、structured stream/event 和 GUI-TUI 对话能力。无副作用的整理、预览和保存反馈使用显式 `annotation-plan-only` envelope；低风险即时小改动使用独立 `annotation-quick-action` envelope，不能伪装成 plan-only。
 
 ```ts
 type AnnotationPlanOnlyEnvelope = {
@@ -82,7 +82,9 @@ type AnnotationPlanOnlyEnvelope = {
 
 实现边界必须是双层 fail-closed：`runPromptOrchestrator` 先识别 `turnMode: 'annotation-plan-only'` 或 structural envelope，在主 conversation kernel 内生成本地 plan draft event/message/run，并跳过 target lookup、context compaction、runtime transport 和 repair stage；如果该请求漏到 `sendSciForgeToolMessage`，transport 层必须直接拒绝，不能构造 Codex Runtime stream request。
 
-保存动作只写入反馈收件箱的本地 `annotation-plan` record。record 应包含引用对象列表、原始描述、澄清问答摘要、修改建议、验收标准、页面 URL/route、selector/DOM path、截图和 evidence refs。repair/code/GitHub sync 只能从反馈收件箱中的显式按钮和确认边界开始。
+`annotation-quick-action` 只允许单对象、局部、可解释、可回退的小范围 copy/style 类请求。它可以进入 Runtime Codex text-command path，但必须禁止 GitHub sync、repair handoff、commit、push、PR 和 merge；如果请求范围不清、跨对象、跨文件、需要外部同步或高风险写入，侧栏必须转入收件箱。
+
+保存动作写入反馈收件箱的本地 `annotation-plan` record。record 应包含引用对象列表、原始描述、澄清问答摘要、action log、修改建议、验收标准、页面 URL/route、selector/DOM path、截图和 evidence refs。复杂 repair/code/GitHub sync 只能从反馈收件箱中的显式按钮和确认边界开始。
 
 ## GUI 内部语义事件总线
 
@@ -229,7 +231,7 @@ Resource 内容必须是语义化、有边界、分级披露的：
 - `/gui/regions/<id>/summary.md` 给出该 region 的可读 visible state。
 - `/gui/regions/<id>/refs.json` 给出该 region 中可见的 stable object refs。
 - `/gui/regions/<id>/actions.json` 给出 text-command affordances。
-- `/gui/regions/annotation-sidebar/*` 只披露侧栏的 plan-only visible state、引用对象和草稿摘要，不披露 raw DOM 或把草稿升级为执行命令。
+- `/gui/regions/annotation-sidebar/*` 只披露侧栏的 visible state、引用对象、草稿摘要和 action log，不披露 raw DOM；复杂执行命令必须经过收件箱确认。
 - `/gui/debug/*` 是 opt-in debug/audit material，不应注入默认 agent context。
 
 `gui.search` 搜索的是这个语义投影，而不是 raw DOM。这样保留了 grep-like 的使用体验，同时避免 TUI 依赖 CSS selector、组件内部结构或隐藏页面结构。
@@ -620,7 +622,7 @@ GUI 可以包含确定性的 presentation logic，但这不会让它变成 task 
 - GUI 不从 stdout/stderr/raw payload 判断任务完成态。
 - GUI tools 只能做 presentation、confirmation、input、focus 和 GUI-local transaction。
 - 任何真实任务操作都必须回到 TUI 文本命令或 TUI 原生 tools。
-- `AnnotationSidebar` 只能发送 `annotation-plan-only` 输入并保存反馈草稿；不能把注释写入主 composer，不能触发 repair/code/GitHub side effects。
+- `AnnotationSidebar` 可以发送 `annotation-plan-only` 整理/预览输入和低风险 `annotation-quick-action` 输入；不能把注释写入主 composer，不能触发 repair/GitHub/commit/push/PR/merge side effects。
 - GUI 不直接调用飞书、微信、企业微信、CLI、SDK、AppleScript 或桌面自动化；这些都是 TUI 侧 external connector 能力。
 
 ## 外部软件连接器
@@ -658,5 +660,5 @@ AgentServer 不属于最终协议层。若当前实现仍存在 AgentServer adap
 6. TUI agent 先读 GUI resources/context，再调 `gui.*` intent tools 表达视图意图。
 7. GUI 基于 revision、interaction mode、lastChangeOrigin 和 precondition 执行、延迟、拒绝或建议替代方案。
 8. 算法、capability discovery、harness、provider 都留在 TUI 原生扩展生态。
-9. 全局 `AnnotationSidebar` 复用主 conversation kernel 的 `annotation-plan-only` projection，保存到反馈收件箱 `annotation-plan` record。
-10. 用户级验收必须用 Codex in-app browser 覆盖工作台和至少一个非工作台页面；两处都要验证注释侧栏点选、多对象引用、plan-only 保存和收件箱可见记录。
+9. 全局 `AnnotationSidebar` 复用主 conversation kernel：整理/预览走 `annotation-plan-only`，低风险小改动走 `annotation-quick-action`，复杂改动保存到反馈收件箱 `annotation-plan` record。
+10. 用户级验收必须用 Codex in-app browser 覆盖工作台和至少一个非工作台页面；两处都要验证注释侧栏点选、多对象引用、action ladder、保存和收件箱可见记录。

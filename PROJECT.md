@@ -2,19 +2,19 @@
 
 最后更新：2026-05-24
 
-当前目标：把 SciForge 的 `注释` 能力收敛为一个 **全局注释侧栏**。注释侧栏在工作台和非工作台页面行为一致：用户可以在任何页面点选多个 UI 对象，把它们作为 `※1`、`※2` 这类引用 token 进入侧栏。侧栏 UI 独立，但聊天接口、会话状态、引用 token、stream/event 展示和 GUI-TUI 对话逻辑必须复用主对话 kernel，不能形成第二套对话系统；区别是请求必须包在 `annotation-plan-only` envelope 里，只做需求澄清和反馈整理，不允许修改项目代码、不启动 repair、不触发 runtime 执行。最终产物沉淀到反馈收件箱，再由用户显式选择是否进入 repair/code 路径。
+当前目标：把 SciForge 的 `注释` 能力收敛为一条 **连续反馈体验**。用户在工作台和非工作台页面都可以点选多个 UI 对象，把它们作为 `※1`、`※2` 这类引用 token 进入反馈侧栏。侧栏负责说清楚问题、对象关系和验收意图，也可以承载低风险即时小改动；反馈收件箱负责复杂改动的管理、确认、审计、GitHub 同步和 Runtime Codex repair。即时修改不是独立模式，只是侧栏里的 low-risk quick action；高风险或范围不清的请求必须进入收件箱。
 
 ## 当前决策
 
 - `注释` 按钮打开全局注释侧栏，而不是把注释讨论塞进工作台主聊天框。
 - 工作台本身也是可注释页面；主聊天栏、结果面板、左侧项目树、设置入口和反馈收件箱都只是可被引用的对象。
-- 工作台和非工作台页面使用同一套注释流程：点选对象 -> 侧栏 plan-only 澄清 -> 保存到反馈收件箱。
-- 注释侧栏不是第二套对话系统。它是主对话能力的 plan-only projection：UI 容器独立，对话接口和会话逻辑复用主 conversation kernel。
+- 工作台和非工作台页面使用同一套反馈流程：点选对象 -> 侧栏澄清意图/关系 -> 预览、小改动或送入收件箱。
+- 注释侧栏不是第二套对话系统。它是主对话能力的 intent-first projection：UI 容器独立，对话接口和会话逻辑复用主 conversation kernel。
 - 注释侧栏可以复用现有 `SciForgeReference`、引用 token、stream/event 展示、截图/DOM target、feedback evidence bundle 和 feedback inbox 数据模型；不要复制一套引用、证据或聊天协议。
-- `annotation-plan-only` envelope 是能力边界：GUI 只收集对象、问题和选择；底层 conversation kernel 负责澄清、摘要和 feedback draft 输出。
-- Plan-only 模式下 agent 应鼓励澄清，可以提出 1-3 个短问题，也可以给出 2-3 个选择项和自由输入；用户可以跳过讨论直接保存。
-- Plan-only 模式禁止写文件、改代码、启动 repair、提交 GitHub issue 或调用会改变 workspace 的工具。
-- 从反馈收件箱启动 repair/code 必须是后续显式动作，不能由注释侧栏自动触发。
+- `annotation-plan-only` envelope 仍用于“整理/预览/保存反馈”这条无副作用 lane。
+- `annotation-quick-action` envelope 用于侧栏里的低风险即时小改动：只能处理单对象、局部、可解释、可回退的小范围 copy/style 类请求；不能 GitHub sync、commit、push、PR、merge 或启动 repair handoff。
+- 范围不清、跨对象关系、跨文件推理、外部同步、repair、批量操作和高风险写入必须进入反馈收件箱确认。
+- Agent 应鼓励澄清，可以提出 1-3 个短问题，也可以给出 2-3 个选择项和自由输入；用户可以跳过讨论直接保存。
 
 ## 当前事实
 
@@ -63,7 +63,7 @@ SciForge 当前路线是 **反馈收件箱优先，Runtime Codex/Codex CLI 后�
 ### AN-01 全局侧栏信息架构
 
 - [x] 设计并实现全局 `AnnotationSidebar` 容器，在任何页面打开后固定显示在右侧或等价侧栏区域。
-- [x] 顶部展示 plan-only 状态、当前页面 URL/route 和退出/收起控制。
+- [x] 顶部展示反馈流状态、当前页面 URL/route 和退出/收起控制。
 - [x] 侧栏中展示已引用对象 chips，chip 显示 `※n`、对象标题、类型和移除按钮。
 - [x] 侧栏底部提供简洁输入框和保存/放弃/继续澄清入口。
 - [x] 工作台主 composer 在注释模式下不承载注释讨论，只显示必要提示或保持不干扰。
@@ -77,12 +77,13 @@ SciForge 当前路线是 **反馈收件箱优先，Runtime Codex/Codex CLI 后�
 - [x] 移除或迁移当前“点选后写入主 composer”的工作台专属行为，避免两套注释入口。
 - [x] 引用对象继续使用 `SciForgeReference` 和现有 scrub/safe reference 策略。
 
-### AN-03 Plan-Only 讨论协议
+### AN-03 Intent-First 讨论与动作协议
 
-- [x] 给注释侧栏建立 plan-only 状态机：drafting、clarifying、ready-to-save、saved、discarded。
+- [x] 给注释侧栏建立反馈状态机：drafting、clarifying、ready-to-save、saved、discarded。
 - [x] 定义 `annotation-plan-only` conversation envelope，复用主对话 kernel 的 session、references、guidance queue 和 structured events。
 - [x] 为主 conversation kernel 增加 annotation-plan-only policy：只允许澄清、选择题、摘要和 feedback draft，不允许进入执行/repair/code path。
-- [x] 明确禁止 side effects：不写 workspace、不启动 repair、不提交 GitHub、不运行代码修改。
+- [x] 定义 `annotation-quick-action` lane：低风险小改动可从侧栏启动，但不能 GitHub sync、commit、push、PR、merge 或 repair handoff。
+- [x] 明确复杂 side effects 边界：范围不清或高风险请求必须进收件箱确认和审计。
 - [x] 允许 agent 生成澄清问题、选择题和需求摘要，但输出必须保持为 feedback draft。
 - [x] 选择题 UI 支持 2-3 个推荐选项和自由输入，适合“像 Claude 一样”连续澄清。
 - [x] 用户可以随时跳过澄清，直接把当前描述和引用保存为反馈草稿。
@@ -99,7 +100,7 @@ SciForge 当前路线是 **反馈收件箱优先，Runtime Codex/Codex CLI 后�
 
 - [x] 侧栏宽度、层级和移动端行为不能遮挡关键页面内容；窄屏可转为底部 sheet。
 - [x] 注释模式 hover highlight、selected outline 和侧栏 chips 需要颜色/编号一致。
-- [x] 提供清晰文案：“仅澄清，不改代码”。
+- [x] 提供清晰文案：“先说清楚，再选择下一步”。
 - [x] 支持 Esc 退出注释模式，但不丢弃已写草稿，除非用户选择放弃。
 - [x] 保存成功后给出反馈收件箱入口和本地 evidence 状态。
 
@@ -112,7 +113,7 @@ SciForge 当前路线是 **反馈收件箱优先，Runtime Codex/Codex CLI 后�
 
 ### AN-07 测试与验证
 
-- [x] Unit/model tests：引用加入、移除、token 分配、草稿状态机、plan-only side-effect guard。
+- [x] Unit/model tests：引用加入、移除、token 分配、草稿状态机、quick-action 风险判断和 plan-only side-effect guard。
 - [x] Component tests：侧栏渲染、选择题、保存/放弃、工作台和非工作台一致行为。
 - [x] Feedback inbox tests：annotation-plan record 入队、展示、repair 显式启动边界。
 - [x] `git diff --check`。
@@ -122,7 +123,7 @@ SciForge 当前路线是 **反馈收件箱优先，Runtime Codex/Codex CLI 后�
 ### AN-08 文档与收敛
 
 - [x] 更新 `docs/FeedbackInboxDesignPrinciples.md`，说明全局注释侧栏和 feedback inbox 的关系。
-- [x] 更新 `docs/Architecture.md` 或 `docs/TuiGuiProtocol.md`，说明 plan-only 侧栏不是执行入口。
+- [x] 更新 `docs/Architecture.md` 或 `docs/TuiGuiProtocol.md`，说明反馈侧栏、quick action 和收件箱执行边界。
 - [x] 删除或归档与主 composer 注释讨论相关的旧文案，避免用户误解。
 - [x] 更新 smoke/verification docs，明确 browser 验收必须覆盖工作台和非工作台页面。
 
@@ -134,9 +135,10 @@ SciForge 当前路线是 **反馈收件箱优先，Runtime Codex/Codex CLI 后�
 - [x] Codex in-app browser 验收通过：工作台页面和反馈收件箱页面都完成了注释侧栏点选、保存，并在反馈收件箱中看到 `annotation-plan` record。
 - [x] 侧栏遮挡修复已验收：桌面端 `AnnotationSidebar` 为 right sidecar，latest browser geometry 显示 `mainRight=630`、`sidebarLeft=630`、`position=relative`、`overlap=false`、`.feedback-layer` `pointer-events=none/background=transparent`。
 - [x] 侧栏输入复用 `ChatComposer` shell 和 `MessageContent` 展示，隐藏上传/点选/收起/resize 等执行型 chrome，保留主 composer 的输入、快捷发送和 disabled 边界。
-- [x] 侧栏澄清回合接入 `runPromptOrchestrator` 的 `annotation-plan-only` 分支，只把 plan draft 写回侧栏，不污染主 workbench session。
+- [x] 侧栏澄清回合接入 `runPromptOrchestrator` 的 `annotation-plan-only` 分支，只把 intent draft 写回侧栏，不污染主 workbench session。
 - [x] `runPromptOrchestrator` 增加 `annotation-plan-only` 本地 policy：看到 turnMode/envelope 后只返回 plan draft event/message/run，不做 target lookup、preflight compaction、runtime transport 或 repair stage；malformed envelope fail-closed。
 - [x] `sendSciForgeToolMessage` 增加 transport fail-closed guard：任何漏到 Codex Runtime transport 的 `annotation-plan-only` 请求直接拒绝，测试证明 turnMode-only、envelope-only 和 malformed envelope 都未发生 fetch。
+- [x] 反馈侧栏新增 action ladder：保存反馈、预览修改、应用小改动、复杂改动进收件箱；小改动使用独立 quick-action 风险判断和 action log。
 - [x] 清理旧 `.annotation-field` CSS，并修正 light theme 下 `.feedback-layer` 不再绘制全屏 overlay，避免视觉遮挡页面。
 - [x] Codex in-app browser 复验：侧栏澄清展示 `注释计划` stream/event 和 `runtime transport ... skipped`，保存后反馈收件箱出现 `annotation-plan local feedback-mpj5oebe-ouqn2h`。
 

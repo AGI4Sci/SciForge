@@ -824,7 +824,7 @@ export interface SendAgentMessageInput {
   skillPlanRef?: string;
   uiPlanRef?: string;
   targetInstanceContext?: TargetInstanceContext;
-  turnMode?: 'normal' | 'annotation-plan-only';
+  turnMode?: 'normal' | 'annotation-plan-only' | 'annotation-quick-action';
   conversationEnvelope?: unknown;
   verificationResult?: Record<string, unknown>;
   recentVerificationResults?: Array<Record<string, unknown>>;

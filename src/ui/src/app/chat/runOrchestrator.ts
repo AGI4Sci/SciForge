@@ -71,7 +71,7 @@ export interface RunPromptOrchestratorInput {
   onStreamEvent: (event: AgentStreamEvent) => void;
   onOptimisticSession?: (session: SciForgeSession) => void;
   onRealtimeControlReady?: (sender: CodexRealtimeControlSender) => void;
-  turnMode?: 'normal' | 'annotation-plan-only';
+  turnMode?: 'normal' | 'annotation-plan-only' | 'annotation-quick-action';
   conversationEnvelope?: unknown;
 }
 

@@ -160,6 +160,7 @@
 .annotation-sidebar-head,
 .annotation-section-head,
 .annotation-actions,
+.annotation-action-ladder,
 .annotation-choice-row,
 .annotation-sidebar-footer,
 .annotation-sidebar-status,
@@ -204,6 +205,7 @@
 .annotation-icon-button,
 .annotation-tool-button,
 .annotation-actions button,
+.annotation-action-ladder button,
 .annotation-choice-row button,
 .annotation-sidebar-footer button,
 .annotation-reference-row button,
@@ -232,6 +234,7 @@
 
 .annotation-tool-button.active,
 .annotation-actions button:hover:not(:disabled),
+.annotation-action-ladder button:hover:not(:disabled),
 .annotation-choice-row button:hover,
 .annotation-sidebar-footer button:hover:not(:disabled),
 .annotation-reference-row button:hover,
@@ -242,9 +245,38 @@
 }
 
 .annotation-actions button:disabled,
+.annotation-action-ladder button:disabled,
 .annotation-sidebar-footer button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.annotation-action-ladder {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.annotation-action-ladder button {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  white-space: normal;
+}
+
+.annotation-action-ladder button.primary {
+  color: var(--surface-root);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.annotation-action-ladder button.quick:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+
+.annotation-decision-note {
+  min-height: 16px;
 }
 
 .annotation-sidebar-status {
