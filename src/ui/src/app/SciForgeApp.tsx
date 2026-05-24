@@ -736,8 +736,14 @@ export function SciForgeApp() {
       });
       const firstReference = draftForComment.references[0];
       const target = firstReference?.target ?? buildFeedbackTargetSnapshot(document.body);
-      const marker = firstReference ? referenceComposerMarker(firstReference.reference) : 'plan';
-      const screenshot = await captureFeedbackScreenshotEvidence(target, now, { annotationLabel: marker });
+      const annotations = draftForComment.references.map((item) => ({
+        label: referenceComposerMarker(item.reference),
+        target: item.target,
+      }));
+      const screenshot = await captureFeedbackScreenshotEvidence(target, now, {
+        annotationLabel: annotations[0]?.label ?? 'plan',
+        annotations: annotations.length ? annotations : [{ label: 'plan', target }],
+      });
       const screenshotWithRefs = screenshot
         ? {
           ...screenshot,

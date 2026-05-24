@@ -16,6 +16,38 @@ const SCREENSHOT_MAX_HEIGHT = 10000;
 const REDACTED_FEEDBACK_SECRET = '[redacted-feedback-secret]';
 const REDACTED_FEEDBACK_PATH = '[redacted-feedback-path]';
 const REDACTED_PROVIDER_BODY = '[redacted-provider-body]';
+const HTML2CANVAS_COLOR_PROPERTIES = [
+  { css: 'background-color', js: 'backgroundColor' },
+  { css: 'border-top-color', js: 'borderTopColor' },
+  { css: 'border-right-color', js: 'borderRightColor' },
+  { css: 'border-bottom-color', js: 'borderBottomColor' },
+  { css: 'border-left-color', js: 'borderLeftColor' },
+  { css: 'caret-color', js: 'caretColor' },
+  { css: 'color', js: 'color' },
+  { css: 'column-rule-color', js: 'columnRuleColor' },
+  { css: 'outline-color', js: 'outlineColor' },
+  { css: 'text-decoration-color', js: 'textDecorationColor' },
+] as const;
+
+interface FeedbackScreenshotAnnotationInput {
+  label: string;
+  target: FeedbackTargetSnapshot;
+}
+
+interface FeedbackScreenshotAnnotation {
+  label: string;
+  target: FeedbackTargetSnapshot;
+}
+
+interface FeedbackCaptureArea {
+  width: number;
+  height: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  scrollX: number;
+  scrollY: number;
+  captureMode: 'full-page';
+}
 
 export function buildFeedbackRuntimeSnapshot({
   page,
@@ -86,7 +118,7 @@ export function buildFeedbackTargetSnapshot(element: Element, commentPoint?: { x
 export async function captureFeedbackScreenshotEvidence(
   target: FeedbackTargetSnapshot,
   capturedAt: string,
-  options: { annotationLabel?: string } = {},
+  options: { annotationLabel?: string; annotations?: FeedbackScreenshotAnnotationInput[] } = {},
 ): Promise<FeedbackScreenshotEvidence | undefined> {
   if (typeof window === 'undefined' || typeof document === 'undefined') return undefined;
   const controls = Array.from(document.querySelectorAll<HTMLElement>('[data-feedback-control="true"]'));
@@ -96,10 +128,10 @@ export async function captureFeedbackScreenshotEvidence(
   });
   try {
     const { default: html2canvas } = await import('html2canvas');
-    const captureArea = feedbackVisibleViewportCaptureArea();
-    const pageTarget = feedbackTargetInViewportCoordinates(target);
+    const annotations = feedbackScreenshotAnnotations(target, options);
+    const captureArea = expandFeedbackCaptureAreaForAnnotations(feedbackFullPageCaptureArea(), annotations);
     const scale = feedbackScreenshotScale(captureArea.width, captureArea.height, 1);
-    const canvas = await html2canvas(document.body, {
+    const canvas = await html2canvas(document.documentElement, {
       backgroundColor: '#0a0f1a',
       useCORS: true,
       allowTaint: false,
@@ -107,21 +139,22 @@ export async function captureFeedbackScreenshotEvidence(
       scale,
       width: captureArea.width,
       height: captureArea.height,
-      x: captureArea.scrollX,
-      y: captureArea.scrollY,
-      scrollX: -captureArea.scrollX,
-      scrollY: -captureArea.scrollY,
+      x: 0,
+      y: 0,
+      scrollX: 0,
+      scrollY: 0,
       windowWidth: captureArea.width,
       windowHeight: captureArea.height,
       ignoreElements: (element) => element instanceof HTMLElement && element.dataset.feedbackControl === 'true',
+      onclone: prepareFeedbackScreenshotClone,
     });
-    const annotationLabel = scrubFeedbackText(options.annotationLabel ?? '1').slice(0, 12) || '1';
+    const primaryTarget = feedbackTargetInCaptureCoordinates(annotations[0]?.target ?? target, captureArea);
     const rawDataUrl = canvas.toDataURL('image/png');
-    const annotated = annotateFeedbackCanvas(canvas, pageTarget.rect, pageTarget.commentPoint, annotationLabel, captureArea);
+    const annotated = annotateFeedbackCanvas(canvas, annotations, captureArea);
     const annotatedDataUrl = annotated.toDataURL('image/png');
     return scrubFeedbackScreenshotEvidence({
       schemaVersion: 1,
-      captureMode: 'visible-viewport',
+      captureMode: captureArea.captureMode,
       dataUrl: annotatedDataUrl,
       rawDataUrl,
       annotatedDataUrl,
@@ -129,16 +162,26 @@ export async function captureFeedbackScreenshotEvidence(
       width: annotated.width,
       height: annotated.height,
       capturedAt,
-      targetRect: { ...pageTarget.rect },
-      commentPoint: pageTarget.commentPoint ? { ...pageTarget.commentPoint } : undefined,
+      targetRect: { ...primaryTarget.rect },
+      targetAnnotations: annotations.map((annotation) => {
+        const pageTarget = feedbackTargetInCaptureCoordinates(annotation.target, captureArea);
+        return {
+          label: annotation.label,
+          rect: { ...pageTarget.rect },
+          commentPoint: pageTarget.commentPoint ? { ...pageTarget.commentPoint } : undefined,
+          selector: pageTarget.stableSelector || pageTarget.selector,
+          title: pageTarget.label || pageTarget.text || pageTarget.textSnippet || pageTarget.tagName,
+        };
+      }),
+      commentPoint: primaryTarget.commentPoint ? { ...primaryTarget.commentPoint } : undefined,
       scrollX: captureArea.scrollX,
       scrollY: captureArea.scrollY,
-      annotationLabel,
+      annotationLabel: annotations[0]?.label,
       includeForAgent: false,
-      note: `Visible viewport screenshot captured at ${Math.round(captureArea.width)}x${Math.round(captureArea.height)} CSS px, scroll ${Math.round(captureArea.scrollX)},${Math.round(captureArea.scrollY)}; raw and annotated screenshots are stored as local evidence.`,
+      note: `Full page screenshot captured at ${Math.round(captureArea.width)}x${Math.round(captureArea.height)} CSS px, viewport ${Math.round(captureArea.viewportWidth)}x${Math.round(captureArea.viewportHeight)}, scroll ${Math.round(captureArea.scrollX)},${Math.round(captureArea.scrollY)}; ${annotations.length} target annotation(s) are highlighted in context.`,
     });
-  } catch {
-    return fallbackFeedbackScreenshotEvidence(target, capturedAt, options.annotationLabel);
+  } catch (error) {
+    return fallbackFeedbackScreenshotEvidence(target, capturedAt, options, error);
   } finally {
     controls.forEach((element, index) => {
       element.style.visibility = previousVisibility[index] ?? '';
@@ -149,11 +192,13 @@ export async function captureFeedbackScreenshotEvidence(
 function fallbackFeedbackScreenshotEvidence(
   target: FeedbackTargetSnapshot,
   capturedAt: string,
-  annotationLabelInput = '1',
+  options: { annotationLabel?: string; annotations?: FeedbackScreenshotAnnotationInput[] } = {},
+  cause?: unknown,
 ): FeedbackScreenshotEvidence | undefined {
   if (typeof window === 'undefined' || typeof document === 'undefined') return undefined;
-  const captureArea = feedbackVisibleViewportCaptureArea();
-  const pageTarget = feedbackTargetInViewportCoordinates(target);
+  const annotations = feedbackScreenshotAnnotations(target, options);
+  const captureArea = expandFeedbackCaptureAreaForAnnotations(feedbackFullPageCaptureArea(), annotations);
+  const primaryTarget = feedbackTargetInCaptureCoordinates(annotations[0]?.target ?? target, captureArea);
   const scale = feedbackScreenshotScale(captureArea.width, captureArea.height, 1);
   const width = Math.max(320, Math.round(captureArea.width * scale));
   const height = Math.max(240, Math.round(captureArea.height * scale));
@@ -162,19 +207,18 @@ function fallbackFeedbackScreenshotEvidence(
   raw.height = height;
   const rawContext = raw.getContext('2d');
   if (!rawContext) return undefined;
-  drawFallbackViewport(rawContext, { width, height, scale, target: pageTarget, annotated: false, annotationLabel: '' });
+  drawFallbackPageContext(rawContext, { width, height, scale, captureArea, annotations, annotated: false });
   const annotated = document.createElement('canvas');
   annotated.width = width;
   annotated.height = height;
   const annotatedContext = annotated.getContext('2d');
   if (!annotatedContext) return undefined;
-  const annotationLabel = scrubFeedbackText(annotationLabelInput).slice(0, 12) || '1';
-  drawFallbackViewport(annotatedContext, { width, height, scale, target: pageTarget, annotated: true, annotationLabel });
+  drawFallbackPageContext(annotatedContext, { width, height, scale, captureArea, annotations, annotated: true });
   const rawDataUrl = raw.toDataURL('image/png');
   const annotatedDataUrl = annotated.toDataURL('image/png');
   return scrubFeedbackScreenshotEvidence({
     schemaVersion: 1,
-    captureMode: 'fallback-viewport',
+    captureMode: 'page-structure-fallback',
     dataUrl: annotatedDataUrl,
     rawDataUrl,
     annotatedDataUrl,
@@ -182,23 +226,138 @@ function fallbackFeedbackScreenshotEvidence(
     width,
     height,
     capturedAt,
-    targetRect: { ...pageTarget.rect },
-    commentPoint: pageTarget.commentPoint ? { ...pageTarget.commentPoint } : undefined,
+    targetRect: { ...primaryTarget.rect },
+    targetAnnotations: annotations.map((annotation) => {
+      const pageTarget = feedbackTargetInCaptureCoordinates(annotation.target, captureArea);
+      return {
+        label: annotation.label,
+        rect: { ...pageTarget.rect },
+        commentPoint: pageTarget.commentPoint ? { ...pageTarget.commentPoint } : undefined,
+        selector: pageTarget.stableSelector || pageTarget.selector,
+        title: pageTarget.label || pageTarget.text || pageTarget.textSnippet || pageTarget.tagName,
+      };
+    }),
+    commentPoint: primaryTarget.commentPoint ? { ...primaryTarget.commentPoint } : undefined,
     scrollX: captureArea.scrollX,
     scrollY: captureArea.scrollY,
-    annotationLabel,
+    annotationLabel: annotations[0]?.label,
     includeForAgent: false,
-    note: `html2canvas capture failed; generated a scrubbed visible viewport evidence fallback at ${Math.round(captureArea.width)}x${Math.round(captureArea.height)} CSS px, scroll ${Math.round(captureArea.scrollX)},${Math.round(captureArea.scrollY)} with target geometry, URL, and marker.`,
+    note: `html2canvas capture failed (${scrubFeedbackText(errorMessage(cause)).slice(0, 180) || 'unknown error'}); generated a scrubbed full-page structure fallback at ${Math.round(captureArea.width)}x${Math.round(captureArea.height)} CSS px with ${annotations.length} target annotation(s). The fallback preserves page layout context and target geometry, but not exact pixels.`,
   });
 }
 
-function feedbackVisibleViewportCaptureArea() {
+function feedbackFullPageCaptureArea(): FeedbackCaptureArea {
+  const viewportWidth = Math.max(320, window.innerWidth || document.documentElement.clientWidth || document.body.clientWidth || 0);
+  const viewportHeight = Math.max(240, window.innerHeight || document.documentElement.clientHeight || document.body.clientHeight || 0);
+  const width = Math.max(
+    viewportWidth,
+    document.documentElement.scrollWidth || 0,
+    document.body.scrollWidth || 0,
+    document.documentElement.clientWidth || 0,
+    document.body.clientWidth || 0,
+  );
+  const height = Math.max(
+    viewportHeight,
+    document.documentElement.scrollHeight || 0,
+    document.body.scrollHeight || 0,
+    document.documentElement.clientHeight || 0,
+    document.body.clientHeight || 0,
+  );
   return {
-    width: Math.max(320, window.innerWidth || document.documentElement.clientWidth || document.body.clientWidth || 0),
-    height: Math.max(240, window.innerHeight || document.documentElement.clientHeight || document.body.clientHeight || 0),
+    width,
+    height,
+    viewportWidth,
+    viewportHeight,
     scrollX: Math.max(0, window.scrollX || window.pageXOffset || 0),
     scrollY: Math.max(0, window.scrollY || window.pageYOffset || 0),
+    captureMode: 'full-page',
   };
+}
+
+function expandFeedbackCaptureAreaForAnnotations(
+  captureArea: FeedbackCaptureArea,
+  annotations: FeedbackScreenshotAnnotation[],
+): FeedbackCaptureArea {
+  const padding = 64;
+  const bounds = annotations.reduce((current, annotation) => {
+    const target = feedbackTargetInCaptureCoordinates(annotation.target, captureArea);
+    return {
+      width: Math.max(
+        current.width,
+        target.rect.x + target.rect.width + padding,
+        (target.commentPoint?.x ?? 0) + padding,
+      ),
+      height: Math.max(
+        current.height,
+        target.rect.y + target.rect.height + padding,
+        (target.commentPoint?.y ?? 0) + padding,
+      ),
+    };
+  }, { width: captureArea.width, height: captureArea.height });
+  return {
+    ...captureArea,
+    width: Math.ceil(Math.max(captureArea.viewportWidth, bounds.width)),
+    height: Math.ceil(Math.max(captureArea.viewportHeight, bounds.height)),
+  };
+}
+
+function prepareFeedbackScreenshotClone(clonedDocument: Document) {
+  const clonedWindow = clonedDocument.defaultView;
+  if (!clonedWindow) return;
+  clonedDocument.querySelectorAll<HTMLElement>('*').forEach((element) => {
+    const style = clonedWindow.getComputedStyle(element);
+    HTML2CANVAS_COLOR_PROPERTIES.forEach((property) => {
+      const safeColor = html2CanvasSafeColor(style[property.js], property.js);
+      if (!safeColor) return;
+      element.style.setProperty(property.css, safeColor, 'important');
+      if (property.js === 'backgroundColor') element.style.setProperty('background', safeColor, 'important');
+    });
+    if (hasHtml2CanvasUnsupportedColor(style.boxShadow)) element.style.setProperty('box-shadow', 'none', 'important');
+    if (hasHtml2CanvasUnsupportedColor(style.textShadow)) element.style.setProperty('text-shadow', 'none', 'important');
+    if (hasHtml2CanvasUnsupportedColor(style.backgroundImage)) element.style.setProperty('background-image', 'none', 'important');
+  });
+}
+
+function html2CanvasSafeColor(value: string, property: typeof HTML2CANVAS_COLOR_PROPERTIES[number]['js']) {
+  if (!hasHtml2CanvasUnsupportedColor(value)) return undefined;
+  const colorFunction = cssColorFunctionToRgba(value);
+  if (colorFunction) return colorFunction;
+  if (property.toLowerCase().includes('background')) return 'rgba(10, 15, 26, 0.92)';
+  if (property.toLowerCase().includes('border') || property === 'outlineColor' || property === 'columnRuleColor') {
+    return 'rgba(123, 147, 176, 0.36)';
+  }
+  return 'rgb(231, 245, 255)';
+}
+
+function hasHtml2CanvasUnsupportedColor(value: string) {
+  return /(?:color|color-mix|oklch|oklab|lab|lch)\(/i.test(value);
+}
+
+function cssColorFunctionToRgba(value: string) {
+  const match = value.match(/^color\(\s*[a-z0-9-]+\s+([+-]?\d*\.?\d+%?)\s+([+-]?\d*\.?\d+%?)\s+([+-]?\d*\.?\d+%?)(?:\s*\/\s*([+-]?\d*\.?\d+%?))?\s*\)$/i);
+  if (!match) return undefined;
+  const red = cssColorComponentToByte(match[1]);
+  const green = cssColorComponentToByte(match[2]);
+  const blue = cssColorComponentToByte(match[3]);
+  const alpha = cssAlphaComponent(match[4] ?? '1');
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+function cssColorComponentToByte(value: string) {
+  const trimmed = value.trim();
+  const normalized = trimmed.endsWith('%') ? Number(trimmed.slice(0, -1)) / 100 : Number(trimmed);
+  return Math.round(clampNumber(normalized, 0, 1) * 255);
+}
+
+function cssAlphaComponent(value: string) {
+  const trimmed = value.trim();
+  const normalized = trimmed.endsWith('%') ? Number(trimmed.slice(0, -1)) / 100 : Number(trimmed);
+  return Number(clampNumber(normalized, 0, 1).toFixed(4));
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
 }
 
 function feedbackScreenshotScale(width: number, height: number, preferredScale: number) {
@@ -209,90 +368,132 @@ function feedbackScreenshotScale(width: number, height: number, preferredScale: 
   ));
 }
 
-function feedbackTargetInViewportCoordinates(target: FeedbackTargetSnapshot): FeedbackTargetSnapshot {
+function feedbackScreenshotAnnotations(
+  target: FeedbackTargetSnapshot,
+  options: { annotationLabel?: string; annotations?: FeedbackScreenshotAnnotationInput[] },
+): FeedbackScreenshotAnnotation[] {
+  const annotations = options.annotations?.length
+    ? options.annotations
+    : [{ label: options.annotationLabel ?? '1', target }];
+  return annotations.map((annotation, index) => ({
+    label: scrubFeedbackText(annotation.label || options.annotationLabel || String(index + 1)).slice(0, 12) || String(index + 1),
+    target: annotation.target,
+  }));
+}
+
+function feedbackTargetInCaptureCoordinates(target: FeedbackTargetSnapshot, captureArea: FeedbackCaptureArea): FeedbackTargetSnapshot {
+  const xOffset = captureArea.scrollX;
+  const yOffset = captureArea.scrollY;
   return {
     ...target,
-    rect: { ...target.rect },
-    commentPoint: target.commentPoint ? { ...target.commentPoint } : undefined,
+    rect: {
+      x: target.rect.x + xOffset,
+      y: target.rect.y + yOffset,
+      width: target.rect.width,
+      height: target.rect.height,
+    },
+    commentPoint: target.commentPoint
+      ? { x: target.commentPoint.x + xOffset, y: target.commentPoint.y + yOffset }
+      : undefined,
   };
 }
 
-function drawFallbackViewport(
+function drawFallbackPageContext(
   context: CanvasRenderingContext2D,
   input: {
     width: number;
     height: number;
     scale: number;
-    target: FeedbackTargetSnapshot;
+    captureArea: FeedbackCaptureArea;
+    annotations: FeedbackScreenshotAnnotation[];
     annotated: boolean;
-    annotationLabel: string;
   },
 ) {
-  const { width, height, scale, target } = input;
+  const { width, height, scale, captureArea, annotations } = input;
   context.fillStyle = '#0a0f1a';
   context.fillRect(0, 0, width, height);
   context.fillStyle = '#101a2c';
   context.fillRect(0, 0, width, 46);
   context.fillStyle = '#e7f5ff';
   context.font = '700 14px system-ui, sans-serif';
-  context.fillText('SciForge feedback viewport evidence', 16, 20);
+  context.fillText('SciForge feedback page-structure fallback', 16, 20);
   context.font = '11px system-ui, sans-serif';
   context.fillStyle = '#9fb3c8';
   context.fillText(scrubFeedbackText(window.location.href).slice(0, 120), 16, 38);
-  const rect = {
-    x: Math.max(0, Math.round(target.rect.x * scale)),
-    y: Math.max(0, Math.round(target.rect.y * scale)),
-    width: Math.max(2, Math.round(target.rect.width * scale)),
-    height: Math.max(2, Math.round(target.rect.height * scale)),
-  };
-  context.fillStyle = '#132238';
-  context.strokeStyle = '#2b4664';
+
+  context.strokeStyle = 'rgba(123, 147, 176, 0.24)';
   context.lineWidth = 1;
-  context.fillRect(18, 66, Math.max(160, width - 36), Math.min(160, height - 90));
-  context.strokeRect(18, 66, Math.max(160, width - 36), Math.min(160, height - 90));
-  context.fillStyle = '#d6f7ee';
-  context.font = '700 13px system-ui, sans-serif';
-  context.fillText(`target: ${scrubFeedbackText(target.role || target.tagName).slice(0, 32)}`, 34, 92);
-  context.font = '12px system-ui, sans-serif';
-  context.fillStyle = '#b7c7d8';
-  wrapCanvasText(context, scrubFeedbackText(target.label || target.text || target.textSnippet || target.selector).slice(0, 240), 34, 116, width - 68, 16, 5);
-  context.strokeStyle = input.annotated ? '#ffca57' : '#00e5a0';
-  context.lineWidth = input.annotated ? 4 : 2;
-  context.strokeRect(rect.x, rect.y, rect.width, rect.height);
+  context.strokeRect(0.5, 46.5, width - 1, height - 47);
+
+  const viewport = {
+    x: Math.round(captureArea.scrollX * scale),
+    y: Math.round(captureArea.scrollY * scale),
+    width: Math.round(captureArea.viewportWidth * scale),
+    height: Math.round(captureArea.viewportHeight * scale),
+  };
+  context.save();
+  context.strokeStyle = 'rgba(0, 229, 160, 0.34)';
+  context.setLineDash([7, 6]);
+  context.strokeRect(viewport.x + 0.5, viewport.y + 0.5, Math.max(20, viewport.width - 1), Math.max(20, viewport.height - 1));
+  context.setLineDash([]);
+  context.restore();
+
+  for (const item of fallbackPageContextRects(captureArea).slice(0, 180)) {
+    const x = Math.round(item.rect.x * scale);
+    const y = Math.round(item.rect.y * scale);
+    const rectWidth = Math.max(3, Math.round(item.rect.width * scale));
+    const rectHeight = Math.max(3, Math.round(item.rect.height * scale));
+    context.fillStyle = item.kind === 'landmark' ? 'rgba(19, 34, 56, 0.54)' : 'rgba(19, 34, 56, 0.24)';
+    context.strokeStyle = item.kind === 'action' ? 'rgba(0, 229, 160, 0.36)' : 'rgba(123, 147, 176, 0.28)';
+    context.lineWidth = item.kind === 'landmark' ? 1.4 : 1;
+    context.fillRect(x, y, rectWidth, rectHeight);
+    context.strokeRect(x, y, rectWidth, rectHeight);
+    if (item.label && rectWidth > 50 && rectHeight > 16) {
+      context.fillStyle = item.kind === 'action' ? '#9df9df' : '#b7c7d8';
+      context.font = `${item.kind === 'landmark' ? '700' : '600'} ${Math.max(9, Math.round(10 * scale))}px system-ui, sans-serif`;
+      context.fillText(item.label.slice(0, Math.max(12, Math.floor(rectWidth / 7))), x + 5, y + Math.min(rectHeight - 4, 14));
+    }
+  }
+
   if (input.annotated) {
-    const point = target.commentPoint
-      ? { x: Math.round(target.commentPoint.x * scale), y: Math.round(target.commentPoint.y * scale) }
-      : { x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) };
-    context.fillStyle = '#ffca57';
-    context.beginPath();
-    context.arc(point.x, point.y, 14, 0, Math.PI * 2);
-    context.fill();
-    context.fillStyle = '#0a0f1a';
-    context.font = '900 13px system-ui, sans-serif';
-    context.textAlign = 'center';
-    context.textBaseline = 'middle';
-    context.fillText(input.annotationLabel, point.x, point.y + 0.5);
-    context.textAlign = 'start';
-    context.textBaseline = 'alphabetic';
+    drawFeedbackAnnotations(context, annotations, captureArea, { x: scale, y: scale }, '#ffca57');
   }
 }
 
-function wrapCanvasText(context: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, lineHeight: number, maxLines: number) {
-  const words = text.split(/\s+/).filter(Boolean);
-  let line = '';
-  let lineCount = 0;
-  for (const word of words) {
-    const nextLine = line ? `${line} ${word}` : word;
-    if (context.measureText(nextLine).width > maxWidth && line) {
-      context.fillText(line, x, y + lineCount * lineHeight);
-      line = word;
-      lineCount += 1;
-      if (lineCount >= maxLines) return;
-    } else {
-      line = nextLine;
-    }
-  }
-  if (line && lineCount < maxLines) context.fillText(line, x, y + lineCount * lineHeight);
+function fallbackPageContextRects(captureArea: FeedbackCaptureArea) {
+  const elements = Array.from(document.querySelectorAll<HTMLElement>('header, nav, main, aside, section, article, figure, form, details, summary, [role], button, a, input, textarea, select, [data-sciforge-reference], .message, .feedback-item, .feedback-evidence-review, .chat-panel, .app-shell'));
+  return elements
+    .filter((element) => !element.closest('[data-feedback-control="true"]'))
+    .map((element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return undefined;
+      const pageRect = {
+        x: rect.x + captureArea.scrollX,
+        y: rect.y + captureArea.scrollY,
+        width: rect.width,
+        height: rect.height,
+      };
+      if (pageRect.width < 8 || pageRect.height < 8) return undefined;
+      if (pageRect.x > captureArea.width || pageRect.y > captureArea.height || pageRect.x + pageRect.width < 0 || pageRect.y + pageRect.height < 0) return undefined;
+      const tagName = element.tagName.toLowerCase();
+      const role = element.getAttribute('role') || implicitRoleForElement(element);
+      const kind = /^(header|nav|main|aside|section|article|figure|form)$/.test(tagName) || ['main', 'navigation', 'complementary', 'region'].includes(role ?? '')
+        ? 'landmark'
+        : ['button', 'link', 'textbox', 'combobox', 'checkbox', 'radio'].includes(role ?? '') || /^(button|a|input|textarea|select|summary)$/.test(tagName)
+          ? 'action'
+          : 'content';
+      return {
+        kind,
+        rect: pageRect,
+        label: scrubFeedbackText(element.getAttribute('aria-label') || element.title || element.innerText || element.textContent || tagName).slice(0, 48),
+      };
+    })
+    .filter((item): item is { kind: 'landmark' | 'action' | 'content'; rect: { x: number; y: number; width: number; height: number }; label: string } => Boolean(item))
+    .sort((left, right) => {
+      const rank = (value: typeof left) => value.kind === 'landmark' ? 0 : value.kind === 'content' ? 1 : 2;
+      return rank(left) - rank(right) || (right.rect.width * right.rect.height) - (left.rect.width * left.rect.height);
+    });
 }
 
 export function compactSelectedText(text: string) {
@@ -378,12 +579,14 @@ export function buildFeedbackEvidenceStatus({
   const annotatedScreenshot = Boolean(screenshot?.annotatedDataUrl || screenshot?.dataUrl || screenshot?.annotatedScreenshotRef);
   const targetSnapshot = Boolean(target?.selector && target?.rect);
   const runtimeSnapshot = Boolean(runtime?.page && runtime?.url);
+  const structureFallback = screenshot?.captureMode === 'page-structure-fallback';
   const nextDiagnostics = [...diagnostics];
   if (!rawScreenshot) nextDiagnostics.push('raw screenshot unavailable');
   if (!annotatedScreenshot) nextDiagnostics.push('annotated screenshot unavailable');
   if (!targetSnapshot) nextDiagnostics.push('target snapshot unavailable');
   if (!runtimeSnapshot) nextDiagnostics.push('runtime snapshot unavailable');
-  const status = rawScreenshot && annotatedScreenshot && targetSnapshot && runtimeSnapshot
+  if (structureFallback) nextDiagnostics.push('full page screenshot pixels unavailable; using page structure fallback');
+  const status = rawScreenshot && annotatedScreenshot && targetSnapshot && runtimeSnapshot && !structureFallback
     ? 'complete'
     : targetSnapshot || runtimeSnapshot || rawScreenshot || annotatedScreenshot
       ? 'partial'
@@ -407,6 +610,13 @@ export function scrubFeedbackScreenshotEvidence(evidence: FeedbackScreenshotEvid
     annotatedDataUrl: evidence.annotatedDataUrl ? scrubScreenshotDataUrl(evidence.annotatedDataUrl) : undefined,
     rawScreenshotRef: evidence.rawScreenshotRef ? scrubFeedbackRefText(evidence.rawScreenshotRef) : undefined,
     annotatedScreenshotRef: evidence.annotatedScreenshotRef ? scrubFeedbackRefText(evidence.annotatedScreenshotRef) : undefined,
+    targetAnnotations: evidence.targetAnnotations?.map((annotation) => ({
+      label: scrubFeedbackText(annotation.label).slice(0, 12),
+      rect: { ...annotation.rect },
+      commentPoint: annotation.commentPoint ? { ...annotation.commentPoint } : undefined,
+      selector: annotation.selector ? scrubFeedbackRefText(annotation.selector) : undefined,
+      title: annotation.title ? scrubFeedbackText(annotation.title) : undefined,
+    })),
     annotationLabel: evidence.annotationLabel ? scrubFeedbackText(evidence.annotationLabel).slice(0, 12) : undefined,
     note: evidence.note ? scrubFeedbackText(evidence.note) : undefined,
   };
@@ -505,10 +715,8 @@ function compactFeedbackText(text: string) {
 
 function annotateFeedbackCanvas(
   source: HTMLCanvasElement,
-  rect: FeedbackTargetSnapshot['rect'],
-  commentPoint: FeedbackTargetSnapshot['commentPoint'],
-  annotationLabel: string,
-  captureArea: { width: number; height: number },
+  annotations: FeedbackScreenshotAnnotation[],
+  captureArea: FeedbackCaptureArea,
 ) {
   const scale = Math.min(1, SCREENSHOT_MAX_WIDTH / source.width);
   const canvas = document.createElement('canvas');
@@ -517,39 +725,81 @@ function annotateFeedbackCanvas(
   const context = canvas.getContext('2d');
   if (!context) return source;
   context.drawImage(source, 0, 0, canvas.width, canvas.height);
-  const captureScaleX = source.width / Math.max(1, captureArea.width);
-  const captureScaleY = source.height / Math.max(1, captureArea.height);
-  const x = rect.x * captureScaleX * scale;
-  const y = rect.y * captureScaleY * scale;
-  const width = Math.max(10, rect.width * captureScaleX * scale);
-  const height = Math.max(10, rect.height * captureScaleY * scale);
-  const pointX = (commentPoint?.x ?? rect.x + rect.width / 2) * captureScaleX * scale;
-  const pointY = (commentPoint?.y ?? rect.y + rect.height / 2) * captureScaleY * scale;
-  const markerRadius = Math.max(11, 12 * scale);
+  drawFeedbackAnnotations(context, annotations, captureArea, {
+    x: canvas.width / Math.max(1, captureArea.width),
+    y: canvas.height / Math.max(1, captureArea.height),
+  }, '#00e5a0');
+  return canvas;
+}
+
+function drawFeedbackAnnotations(
+  context: CanvasRenderingContext2D,
+  annotations: FeedbackScreenshotAnnotation[],
+  captureArea: FeedbackCaptureArea,
+  scale: { x: number; y: number },
+  accent: string,
+) {
+  annotations.forEach((annotation, index) => {
+    const target = feedbackTargetInCaptureCoordinates(annotation.target, captureArea);
+    const x = target.rect.x * scale.x;
+    const y = target.rect.y * scale.y;
+    const width = Math.max(10, target.rect.width * scale.x);
+    const height = Math.max(10, target.rect.height * scale.y);
+    const pointX = (target.commentPoint?.x ?? target.rect.x + target.rect.width / 2) * scale.x;
+    const pointY = (target.commentPoint?.y ?? target.rect.y + target.rect.height / 2) * scale.y;
+    const markerRadius = Math.max(12, Math.min(20, 12 / Math.min(1, Math.max(scale.x, scale.y))));
+    const markerLabel = annotation.label || String(index + 1);
+    drawFeedbackAnnotation(context, {
+      accent,
+      height,
+      markerLabel,
+      markerRadius,
+      pointX,
+      pointY,
+      width,
+      x,
+      y,
+    });
+  });
+}
+
+function drawFeedbackAnnotation(
+  context: CanvasRenderingContext2D,
+  input: {
+    accent: string;
+    height: number;
+    markerLabel: string;
+    markerRadius: number;
+    pointX: number;
+    pointY: number;
+    width: number;
+    x: number;
+    y: number;
+  },
+) {
   context.save();
-  context.fillStyle = 'rgba(0, 229, 160, 0.12)';
-  context.strokeStyle = '#00e5a0';
-  context.lineWidth = Math.max(3, 3 * scale);
-  context.shadowColor = 'rgba(0, 229, 160, 0.8)';
+  context.fillStyle = input.accent === '#ffca57' ? 'rgba(255, 202, 87, 0.14)' : 'rgba(0, 229, 160, 0.12)';
+  context.strokeStyle = input.accent;
+  context.lineWidth = 4;
+  context.shadowColor = input.accent === '#ffca57' ? 'rgba(255, 202, 87, 0.72)' : 'rgba(0, 229, 160, 0.8)';
   context.shadowBlur = 14;
-  context.fillRect(x, y, width, height);
-  context.strokeRect(x, y, width, height);
+  context.fillRect(input.x, input.y, input.width, input.height);
+  context.strokeRect(input.x, input.y, input.width, input.height);
   context.shadowBlur = 8;
   context.beginPath();
-  context.arc(pointX, pointY, markerRadius, 0, Math.PI * 2);
-  context.fillStyle = '#00e5a0';
+  context.arc(input.pointX, input.pointY, input.markerRadius, 0, Math.PI * 2);
+  context.fillStyle = input.accent;
   context.fill();
   context.lineWidth = 2;
   context.strokeStyle = '#001b17';
   context.stroke();
   context.shadowBlur = 0;
   context.fillStyle = '#001b17';
-  context.font = `700 ${Math.max(12, Math.round(13 * scale))}px ui-sans-serif, system-ui, sans-serif`;
+  context.font = '900 13px ui-sans-serif, system-ui, sans-serif';
   context.textAlign = 'center';
   context.textBaseline = 'middle';
-  context.fillText(annotationLabel, pointX, pointY + 0.5);
+  context.fillText(input.markerLabel, input.pointX, input.pointY + 0.5);
   context.restore();
-  return canvas;
 }
 
 function feedbackLabelForElement(element: Element) {
@@ -648,6 +898,12 @@ function scrubScreenshotDataUrl(value: string) {
   return /^data:image\/(?:jpeg|jpg|png);base64,[a-z0-9+/=]+$/i.test(value)
     ? value
     : `${REDACTED_PROVIDER_BODY}:screenshot-data:${feedbackHash(value)}`;
+}
+
+function errorMessage(value: unknown) {
+  if (value instanceof Error) return value.message;
+  if (typeof value === 'string') return value;
+  return value === undefined || value === null ? '' : String(value);
 }
 
 function scrubFeedbackValue(value: unknown, key: string, depth = 0): unknown {

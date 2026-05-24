@@ -84,7 +84,7 @@ const target: FeedbackTargetSnapshot = {
 
 const screenshot: FeedbackScreenshotEvidence = {
   schemaVersion: 1,
-  captureMode: 'visible-viewport',
+  captureMode: 'full-page',
   dataUrl: 'data:image/png;base64,abc123',
   rawDataUrl: 'data:image/png;base64,raw123',
   annotatedDataUrl: 'data:image/png;base64,annotated123',
@@ -93,6 +93,13 @@ const screenshot: FeedbackScreenshotEvidence = {
   height: 360,
   capturedAt: '2026-05-07T00:00:00.000Z',
   targetRect: target.rect,
+  targetAnnotations: [{
+    label: '※1',
+    rect: target.rect,
+    commentPoint: target.commentPoint,
+    selector: target.stableSelector,
+    title: target.label,
+  }],
   commentPoint: target.commentPoint,
   scrollX: 0,
   scrollY: 120,
@@ -204,6 +211,15 @@ test('builds complete and partial evidence integrity flags', () => {
   assert.equal(partial.annotatedScreenshot, false);
   assert.match(partial.diagnostics.join(' '), /redacted-feedback-secret/);
   assert.doesNotMatch(partial.diagnostics.join(' '), /sk-diagnostic-secret/i);
+
+  const structureFallback = buildFeedbackEvidenceStatus({
+    screenshot: { ...screenshot, captureMode: 'page-structure-fallback' },
+    target,
+    runtime,
+  });
+
+  assert.equal(structureFallback.status, 'partial');
+  assert.match(structureFallback.diagnostics.join(' '), /page structure fallback/);
 });
 
 test('creates stable local evidence refs without leaking secret-like feedback ids', () => {
@@ -227,7 +243,8 @@ test('scrubs screenshot data and refs while preserving valid image data URLs', (
 
   assert.equal(scrubbed.rawDataUrl, 'data:image/png;base64,raw123');
   assert.match(scrubbed.dataUrl, /redacted-provider-body\]:screenshot-data/);
-  assert.equal(scrubbed.captureMode, 'visible-viewport');
+  assert.equal(scrubbed.captureMode, 'full-page');
+  assert.deepEqual(scrubbed.targetAnnotations?.map((annotation) => annotation.label), ['※1']);
   assert.equal(scrubbed.scrollY, 120);
   assert.equal(scrubbed.rawScreenshotRef, '[redacted-feedback-path]');
   assert.equal(scrubbed.annotatedScreenshotRef, 'feedback-bundle:feedback-1/screenshots/annotated.png');

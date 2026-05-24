@@ -282,7 +282,7 @@ export interface FeedbackRuntimeSnapshot {
 
 export interface FeedbackScreenshotEvidence {
   schemaVersion: 1;
-  captureMode?: 'visible-viewport' | 'full-page' | 'fallback-viewport';
+  captureMode?: 'full-page' | 'page-structure-fallback';
   dataUrl: string;
   rawDataUrl?: string;
   annotatedDataUrl?: string;
@@ -293,6 +293,13 @@ export interface FeedbackScreenshotEvidence {
   height: number;
   capturedAt: string;
   targetRect: { x: number; y: number; width: number; height: number };
+  targetAnnotations?: Array<{
+    label: string;
+    rect: { x: number; y: number; width: number; height: number };
+    commentPoint?: { x: number; y: number };
+    selector?: string;
+    title?: string;
+  }>;
   commentPoint?: { x: number; y: number };
   scrollX?: number;
   scrollY?: number;

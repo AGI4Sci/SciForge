@@ -38,7 +38,7 @@ const baseItem: FeedbackCommentRecord = {
   },
   screenshot: {
     schemaVersion: 1,
-    captureMode: 'visible-viewport',
+    captureMode: 'full-page',
     dataUrl: 'data:image/png;base64,abc123',
     rawDataUrl: 'data:image/png;base64,raw123',
     annotatedDataUrl: 'data:image/png;base64,annotated123',
@@ -52,14 +52,37 @@ const baseItem: FeedbackCommentRecord = {
     scrollY: 120,
     annotationLabel: '1',
     includeForAgent: false,
-    note: 'Visible viewport screenshot captured at 1280x720 CSS px.',
+    note: 'Full page screenshot captured at 1280x720 CSS px.',
   },
 };
 
-test('screenshot preview labels visible viewport evidence honestly', () => {
+test('screenshot preview labels full-page evidence as the default', () => {
   const html = renderToStaticMarkup(<FeedbackScreenshotPreview item={baseItem} />);
 
-  assert.match(html, /可见视口截图证据/);
+  assert.match(html, /整页截图证据/);
   assert.match(html, /1280x720/);
-  assert.doesNotMatch(html, /整页截图证据/);
+  assert.doesNotMatch(html, /可见视口截图证据/);
+});
+
+test('screenshot preview distinguishes page-structure fallback evidence', () => {
+  const html = renderToStaticMarkup(<FeedbackScreenshotPreview item={{
+    ...baseItem,
+    evidenceStatus: {
+      status: 'partial',
+      rawScreenshot: true,
+      annotatedScreenshot: true,
+      targetSnapshot: true,
+      runtimeSnapshot: true,
+      scrubbed: true,
+      diagnostics: ['full page screenshot pixels unavailable; using page structure fallback'],
+    },
+    screenshot: {
+      ...baseItem.screenshot!,
+      captureMode: 'page-structure-fallback',
+      note: 'html2canvas capture failed; generated a scrubbed full-page structure fallback.',
+    },
+  }} />);
+
+  assert.match(html, /整页结构证据 · partial/);
+  assert.match(html, /full page screenshot pixels unavailable/);
 });

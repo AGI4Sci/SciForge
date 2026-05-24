@@ -227,9 +227,9 @@ function screenshotMeta(item: FeedbackCommentRecord) {
 
 function screenshotCaptureLabel(item: FeedbackCommentRecord) {
   const mode = item.screenshot?.captureMode;
-  if (mode === 'visible-viewport' || mode === 'fallback-viewport') return '可见视口截图证据';
   if (mode === 'full-page') return '整页截图证据';
-  if (/visible viewport/i.test(item.screenshot?.note ?? '')) return '可见视口截图证据';
+  if (mode === 'page-structure-fallback') return '整页结构证据';
+  if (/full page/i.test(item.screenshot?.note ?? '')) return '整页截图证据';
   return '截图证据';
 }
 

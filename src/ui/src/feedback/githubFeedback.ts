@@ -1,5 +1,5 @@
 import { checkGithubIssueWriteAccess, checkGithubRepoAccess, createGithubIssue, createGithubIssueComment, fetchOpenGithubIssues, updateGithubIssue, type GithubIssueApiRow } from '../api/githubIssuesApi';
-import { nowIso, type FeedbackCommentRecord, type FeedbackRepairActionRecord, type FeedbackRepairResultRecord, type GithubSyncedOpenIssueRecord, type SciForgeWorkspaceState } from '../domain';
+import { nowIso, type FeedbackCommentRecord, type FeedbackRepairActionRecord, type FeedbackRepairResultRecord, type FeedbackScreenshotEvidence, type GithubSyncedOpenIssueRecord, type SciForgeWorkspaceState } from '../domain';
 import { scrubFeedbackText } from './captureModel';
 
 const GITHUB_FEEDBACK_SOURCE = 'github-feedback';
@@ -590,6 +590,7 @@ function appendScreenshotEvidenceMarkdown(lines: string[], comment: FeedbackComm
     lines.push(`- Screenshot captured at: ${comment.screenshot.capturedAt}`);
     lines.push(`- Screenshot media: ${comment.screenshot.mediaType} ${comment.screenshot.width}x${comment.screenshot.height}`);
     lines.push(`- Target rect in screenshot: x=${Math.round(comment.screenshot.targetRect.x)} y=${Math.round(comment.screenshot.targetRect.y)} w=${Math.round(comment.screenshot.targetRect.width)} h=${Math.round(comment.screenshot.targetRect.height)}`);
+    appendScreenshotTargetAnnotations(lines, comment.screenshot.targetAnnotations);
     lines.push(`- Include for agent: ${inlineCode(String(comment.screenshot.includeForAgent === true))}`);
     if (comment.screenshot.note) lines.push(`- Screenshot note: ${markdownText(comment.screenshot.note)}`);
   }
@@ -730,6 +731,7 @@ function appendFeedbackCommentMarkdown(lines: string[], comment: FeedbackComment
     lines.push(`- raw ref: ${inlineCode(comment.rawScreenshotRef ?? comment.screenshot.rawScreenshotRef ?? comment.screenshotRef ?? 'not provided')}`);
     lines.push(`- capturedAt: ${comment.screenshot.capturedAt}`);
     lines.push(`- targetRect: x=${Math.round(comment.screenshot.targetRect.x)} y=${Math.round(comment.screenshot.targetRect.y)} w=${Math.round(comment.screenshot.targetRect.width)} h=${Math.round(comment.screenshot.targetRect.height)}`);
+    appendScreenshotTargetAnnotations(lines, comment.screenshot.targetAnnotations);
     lines.push(`- includeForAgent: \`${comment.screenshot.includeForAgent === true}\``);
     if (comment.screenshot.note) lines.push(`- note: ${comment.screenshot.note}`);
     lines.push('');
@@ -739,6 +741,22 @@ function appendFeedbackCommentMarkdown(lines: string[], comment: FeedbackComment
   lines.push('');
   lines.push('---');
   lines.push('');
+}
+
+function appendScreenshotTargetAnnotations(lines: string[], annotations: FeedbackScreenshotEvidence['targetAnnotations']) {
+  if (!Array.isArray(annotations) || !annotations.length) return;
+  const summary = annotations
+    .map((annotation) => {
+      if (!annotation || typeof annotation !== 'object') return '';
+      const item = annotation as { label?: string; rect?: { x: number; y: number; width: number; height: number }; title?: string };
+      const rect = item.rect
+        ? `x=${Math.round(item.rect.x)} y=${Math.round(item.rect.y)} w=${Math.round(item.rect.width)} h=${Math.round(item.rect.height)}`
+        : 'rect unavailable';
+      return `${item.label || '?'} ${item.title ? markdownText(item.title) : 'target'} (${rect})`;
+    })
+    .filter(Boolean)
+    .join('; ');
+  if (summary) lines.push(`- Target annotations: ${summary}`);
 }
 
 function redactFeedbackBundleScreenshots(bundle: FeedbackBundle): FeedbackBundle {
