@@ -7,6 +7,7 @@ It answers what SciForge can ask from web providers:
 - `web_search`: search public web or configured search indexes and return ranked result refs with provider diagnostics.
 - `web_fetch`: fetch a public URL or search result URL through a configured network provider and return durable content refs.
 - `browser_search` / `browser_fetch`: use a real browser provider when rendered JavaScript pages or browser-only entry points are required.
+- `browser_runtime`: define the Codex-like browser session/tab/action/snapshot/trace contract that GUI can present but not route or reason about.
 - `playwright_browser_automation`: use the official Playwright MCP server with a headless, isolated browser for TUI agent web observation that does not attach to the human user's active browser.
 - `playwright_edge_browser`: use the official Playwright MCP server with visible Microsoft Edge, a dedicated persistent profile, and structured browser actions for search, clicking, scrolling, forms, downloads, and login handoff.
 
@@ -14,7 +15,9 @@ It does not own where the work runs. The default standalone implementation lives
 
 The headless MCP wrapper in `mcp/playwright-browser.ts` owns the default TUI-agent browser shape: headless, isolated, per-process ports, and no attachment to the user's active browser profile. It can generate Codex/Cursor/Claude-style MCP JSON, parallel worker configs, and SciForge provider availability rows without binding runtime gateway code to a specific MCP client. `mcp/playwright-browser-provider.ts` is the thin provider adapter that connects to an already-running Playwright MCP HTTP endpoint and returns SciForge provider output.
 
-The provider adapter supports a generic `actions[]` queue for safe browser operations such as navigation, waits, clicks, hover, typing, form fill, select, drag/drop, file upload, dialogs, tabs, screenshots, snapshots, console logs, network logs, and page-scoped evaluation. It also supports `extract.kind = "repeated-items"` for stable structured rows and `download` / `downloadLinks` for bounded material downloads into the isolated output directory. This keeps site-specific knowledge in invocation input rather than hard-coding a site such as arXiv into the browser provider.
+The provider adapter supports a generic `actions[]` queue for safe browser operations such as navigation, waits, clicks, scrolls, hover, typing, form fill, select, drag/drop, file upload, dialogs, tabs, screenshots, snapshots, console logs, network logs, and page-scoped evaluation. It also supports `extract.kind = "repeated-items"` for stable structured rows and `download` / `downloadLinks` for bounded material downloads into the isolated output directory. This keeps site-specific knowledge in invocation input rather than hard-coding a site such as arXiv into the browser provider.
+
+`browser-runtime.ts` is the Codex-like browser contract layer above those provider calls. It defines browser sessions, tabs, commands, risk policy, Playwright action projection, snapshots, and refs-first traces. GUI may render its projections and emit terminal-equivalent commands, but task reasoning, provider routing, and prompt assembly remain owned by TUI/Codex runtime.
 
 The Edge MCP wrapper in `mcp/playwright-edge.ts` remains the explicit visible-browser fallback for login, manual takeover, or Edge-specific validation. Keep that path separate from unattended TUI browsing so background research does not steal focus or depend on a human desktop session.
 

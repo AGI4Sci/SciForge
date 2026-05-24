@@ -18,6 +18,8 @@
     "./web_fetch": "./capabilities/web_fetch.manifest.json",
     "./browser_search": "./capabilities/browser_search.manifest.json",
     "./browser_fetch": "./capabilities/browser_fetch.manifest.json",
+    "./browser_runtime": "./capabilities/browser_runtime.manifest.json",
+    "./browser-runtime": "./browser-runtime.ts",
     "./playwright_browser_automation": "./capabilities/playwright_browser_automation.manifest.json",
     "./mcp/playwright-browser": "./mcp/playwright-browser.ts",
     "./mcp/playwright-browser-provider": "./mcp/playwright-browser-provider.ts",
@@ -28,6 +30,7 @@
   "files": [
     "capabilities",
     "mcp",
+    "browser-runtime.ts",
     "manifest.ts",
     "README.md",
     "package.json"

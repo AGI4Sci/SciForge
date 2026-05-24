@@ -108,6 +108,7 @@ import {
 } from '../api/workspaceClient';
 import { TimelinePage } from './AlignmentPages';
 import { ComponentWorkbenchPage } from './ComponentWorkbenchPage';
+import { BrowserRuntimePage } from './BrowserRuntimePage';
 import { previewPackageAutoRunPrompt } from './ResultsRenderer';
 import type { HandoffAutoRunRequest } from './results/viewPlanResolver';
 import { useRuntimeHealth } from './runtimeHealthPanel';
@@ -1278,6 +1279,8 @@ export function SciForgeApp() {
             />
           ) : page === 'components' ? (
             <ComponentWorkbenchPage />
+          ) : page === 'browser' ? (
+            <BrowserRuntimePage />
           ) : page === 'timeline' ? (
             <TimelinePage alignmentContracts={workspaceState.alignmentContracts ?? []} events={workspaceState.timelineEvents ?? []} onOpenScenario={(id) => {
               setScenarioId(id);

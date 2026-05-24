@@ -5,6 +5,7 @@ import {
   Dna,
   FlaskConical,
   GitBranch,
+  Globe2,
   Inbox,
   MessageSquare,
   type LucideIcon,
@@ -19,7 +20,7 @@ import {
 
 export type { ClaimType, EvidenceLevel, ScenarioId };
 
-export type PageId = 'workbench' | 'components' | 'timeline' | 'feedback' | 'settings';
+export type PageId = 'workbench' | 'components' | 'timeline' | 'feedback' | 'browser' | 'settings';
 
 export interface ScenarioViewConfig {
   id: ScenarioId;
@@ -48,6 +49,7 @@ export const scenarios: ScenarioViewConfig[] = builtInScenarioDisplayData.map((s
 export const navItems = [
   { id: 'workbench' as const, label: '聊天工作台', icon: MessageSquare },
   { id: 'components' as const, label: '应用', icon: Blocks },
+  { id: 'browser' as const, label: '内置浏览器', icon: Globe2 },
   { id: 'timeline' as const, label: '研究时间线', icon: GitBranch },
   { id: 'feedback' as const, label: '反馈收件箱', icon: Inbox },
 ];

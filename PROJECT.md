@@ -58,6 +58,35 @@ SciForge 当前路线是 **反馈收件箱优先，Runtime Codex/Codex CLI 后�
 - 最近同步点 `bbde383` 已推送到 `origin/dev`，包含当前工作区状态和基础多对象引用改动。
 - 现有工作台主聊天仍是执行/研究入口；接下来要把注释讨论从主聊天入口中解耦，统一进入全局侧栏。
 
+## 当前任务板：内置浏览器运行时
+
+目标：把 SciForge 的浏览器自动化从“单次 Playwright provider 调用”升级成 Codex-like browser runtime capability。TUI/Codex runtime 拥有浏览器 session、tab、action、snapshot、trace 和安全策略；GUI 只展示 browser projection 和 refs，不做网页任务推理、provider route 或 prompt assembly。
+
+设计文档：[`docs/BrowserRuntimeArchitecture.md`](docs/BrowserRuntimeArchitecture.md)。
+
+### BR-01 Codex-like Browser Runtime Contract
+
+- [x] 总结 Codex in-app browser 能力并映射到 SciForge browser runtime。
+- [x] 定义 `browser_runtime` capability manifest，覆盖 session、tab、navigation、snapshot、action、logs 和 safety。
+- [x] 在 `packages/observe/web` 实现 BrowserRuntime command/risk/trace/projection helper。
+- [x] 根据 Claude Code 反馈补齐硬边界：`BrowserRuntimeStableRef`、`BrowserRuntimePageQuery` 只读 DSL、frames/dialog/network/storage/idle/media/upload command surface 和风险策略。
+- [x] 补齐 `playwright_browser_automation` action queue 的 `scroll` 动作，避免简单滚动退回系统级 Computer Use。
+- [x] 更新 capability registry、web observe package exports 和 scenario builder 默认 manifest 列表。
+- [x] 增加真实可操作的 `内置浏览器` workbench：URL bar、iframe 预览、后退、刷新、读取同源页面状态、页面区域标注、annotation pin、复合 StableRef 和 `/browser ...` refs-first 命令生成。
+- [x] 增加 targeted tests：Codex feature matrix、风险确认、refs-first trace、scroll action projection 和 registry discovery。
+- [x] 验证 `git diff --check` 和 touched tests。
+
+Evidence（2026-05-24）：
+
+- `node --import tsx --test packages/observe/web/browser-runtime.test.ts packages/observe/web/mcp/playwright-browser.test.ts`：12 passed。
+- `node --import tsx --test packages/observe/web/browser-runtime.test.ts packages/observe/web/mcp/playwright-browser.test.ts src/ui/src/app/BrowserRuntimePage.test.tsx`：18 passed。
+- `npm run smoke:capability-manifest-registry`：ok，capabilityManifests=19。
+- `git diff --check`：passed。
+- Claude Code 反馈吸收：`docs/BrowserRuntimeArchitecture.md` 已从“6 子系统/P0-P2”压平为运行时层、能力层、协作层；M1-M6 单序列；新增 7 个硬问题：StableRef、DOM→源码映射、prompt injection、验证闭环、iframe/shadow DOM、上下文经济学、eval/telemetry。
+- Codex in-app browser 验收：打开 `http://127.0.0.1:5173/`，进入侧栏 `内置浏览器` 页面，确认真实 workbench 存在 URL 输入、iframe preview、读取状态、标注页面和终端等价命令；打开 `http://127.0.0.1:5173/` 后 iframe 可见渲染；拖拽页面区域生成标注 draft，保存后显示 annotation pin、annotation list 和 `/browser annotate ... --snapshot --dom --refs-first` 命令。
+- 当前 Web GUI 版本明确标注硬边界：跨域 DOM、console、network 和截图不由 GUI 读取，必须通过 TUI `browser_runtime` provider 生成 refs；未来如果要突破 iframe/CSP 限制，需要桌面壳 `WebContentsView` 或独立 Chromium surface。
+- `npm run typecheck` 已尝试；当前 worktree 依赖安装被 `@homebridge/node-pty-prebuilt-multiarch` 证书/预编译下载问题阻塞，改用主 checkout `node_modules` 后 typecheck 暴露大量 dev 基线/依赖链接错误，包括 `@electron/asar`、`ws`、`@sciforge-ui/runtime-contract/codex-realtime-session`、feedback status union 和现有 `ScenarioBuilderPanel` package export 解析问题；不作为本轮 browser runtime 完成证据。
+
 ## 当前任务板：全局注释侧栏
 
 ### AN-01 全局侧栏信息架构
