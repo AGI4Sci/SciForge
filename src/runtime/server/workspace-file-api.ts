@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -198,18 +199,19 @@ export async function handleWorkspaceFileApiRoutes(
       const config = isRecord(body.config) ? body.config : {};
       const root = normalizeWorkspaceRootPath(resolve(workspacePath));
       const sciforgeDir = join(root, '.sciforge');
+      const stateForFile = await materializeFeedbackScreenshotRefs(root, state);
       await mkdir(join(sciforgeDir, 'sessions'), { recursive: true });
       await mkdir(join(sciforgeDir, 'artifacts'), { recursive: true });
       await mkdir(join(sciforgeDir, 'versions'), { recursive: true });
-      await writeFile(join(sciforgeDir, 'workspace-state.json'), JSON.stringify(state, null, 2));
+      await writeFile(join(sciforgeDir, 'workspace-state.json'), JSON.stringify(stateForFile, null, 2));
       await writeFile(join(sciforgeDir, 'config.json'), JSON.stringify(redactConfigForFile(config), null, 2));
-      await rememberWorkspace(options.stateDir, root, state);
+      await rememberWorkspace(options.stateDir, root, stateForFile);
 
-      const sessions = isRecord(state.sessionsByScenario)
-        ? Object.values(state.sessionsByScenario)
+      const sessions = isRecord(stateForFile.sessionsByScenario)
+        ? Object.values(stateForFile.sessionsByScenario)
         : [];
-      const archivedSessions = Array.isArray(state.archivedSessions)
-        ? state.archivedSessions.filter(isRecord)
+      const archivedSessions = Array.isArray(stateForFile.archivedSessions)
+        ? stateForFile.archivedSessions.filter(isRecord)
         : [];
       for (const session of [...sessions, ...archivedSessions] as Array<Record<string, unknown>>) {
         const sessionId = safeName(String(session.sessionId || 'session'));
@@ -226,7 +228,7 @@ export async function handleWorkspaceFileApiRoutes(
         }
         await writeSessionBundleAudit(root, bundleRel);
       }
-      const alignmentContracts = Array.isArray(state.alignmentContracts) ? state.alignmentContracts : [];
+      const alignmentContracts = Array.isArray(stateForFile.alignmentContracts) ? stateForFile.alignmentContracts : [];
       for (const contract of alignmentContracts as Array<Record<string, unknown>>) {
         const contractId = safeName(String(contract.id || ALIGNMENT_CONTRACT_ARTIFACT_TYPE));
         await writeFile(join(sciforgeDir, 'artifacts', `${contractId}.json`), JSON.stringify(contract, null, 2));
@@ -246,6 +248,51 @@ export async function handleWorkspaceFileApiRoutes(
     return true;
   }
   return false;
+}
+
+export async function materializeFeedbackScreenshotRefs(root: string, state: Record<string, unknown>) {
+  const comments = Array.isArray(state.feedbackComments) ? state.feedbackComments : undefined;
+  if (!comments?.length) return state;
+  const nextComments = await Promise.all(comments.map(async (comment) => {
+    if (!isRecord(comment)) return comment;
+    const screenshot = isRecord(comment.screenshot) ? comment.screenshot : undefined;
+    const parsed = parseFeedbackScreenshotDataUrl(typeof screenshot?.dataUrl === 'string' ? screenshot.dataUrl : '');
+    if (!screenshot || !parsed) return comment;
+    const digest = createHash('sha256').update(parsed.bytes).digest('hex');
+    const id = safeName(typeof comment.id === 'string' && comment.id.trim() ? comment.id : digest.slice(0, 16));
+    const rel = `.sciforge/feedback/screenshots/${id}-${digest.slice(0, 16)}.${parsed.extension}`;
+    const absolutePath = join(root, rel);
+    await mkdir(dirname(absolutePath), { recursive: true });
+    await writeFile(absolutePath, parsed.bytes);
+    const screenshotRef = `file:${rel}`;
+    return {
+      ...comment,
+      screenshotRef,
+      screenshot: {
+        ...screenshot,
+        dataUrl: undefined,
+        screenshotRef,
+        mediaType: parsed.mediaType,
+        sha256: digest,
+        bytes: parsed.bytes.byteLength,
+      },
+    };
+  }));
+  return {
+    ...state,
+    feedbackComments: nextComments,
+  };
+}
+
+function parseFeedbackScreenshotDataUrl(dataUrl: string) {
+  const match = /^data:(image\/(?:jpeg|png));base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl.trim());
+  if (!match) return undefined;
+  const mediaType = match[1] as 'image/jpeg' | 'image/png';
+  return {
+    mediaType,
+    extension: mediaType === 'image/png' ? 'png' : 'jpg',
+    bytes: Buffer.from(match[2], 'base64'),
+  };
 }
 
 async function workspaceMutationRoot(body: Record<string, unknown>, options: WorkspaceFileApiOptions) {

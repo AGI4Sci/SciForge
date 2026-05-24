@@ -423,6 +423,7 @@ export function saveWorkspaceState(state: SciForgeWorkspaceState) {
 export function compactWorkspaceStateForStorage(
   state: SciForgeWorkspaceState,
   mode: 'normal' | 'minimal' = 'normal',
+  options: { preserveFeedbackScreenshotDataUrls?: boolean } = {},
 ): SciForgeWorkspaceState {
   const limits = mode === 'minimal'
     ? { messages: 4, runs: 3, records: 3, versions: 1, archived: 2, timeline: 10, reusable: 5 }
@@ -435,7 +436,10 @@ export function compactWorkspaceStateForStorage(
       compactSessionForStorage(session, limits),
     ])) as Record<ScenarioInstanceId, SciForgeSession>,
     archivedSessions: (state.archivedSessions ?? []).slice(0, limits.archived).map((session) => compactSessionForStorage(session, limits)),
-    feedbackComments: state.feedbackComments?.slice(0, mode === 'minimal' ? 20 : 120),
+    feedbackComments: compactFeedbackCommentsForStorage(
+      state.feedbackComments?.slice(0, mode === 'minimal' ? 20 : 120),
+      options,
+    ),
     feedbackRequests: state.feedbackRequests?.slice(0, mode === 'minimal' ? 8 : 40),
     feedbackRepairRuns: state.feedbackRepairRuns?.slice(0, mode === 'minimal' ? 20 : 120),
     feedbackRepairResults: state.feedbackRepairResults?.slice(0, mode === 'minimal' ? 20 : 120),
@@ -446,6 +450,23 @@ export function compactWorkspaceStateForStorage(
     reusableTaskCandidates: state.reusableTaskCandidates?.slice(0, limits.reusable),
     sessionWriteConflicts: sessionWriteConflictsForState(state).slice(0, mode === 'minimal' ? 5 : SESSION_WRITE_CONFLICT_LIMIT),
   } as WorkspaceWithWriteGuard;
+}
+
+function compactFeedbackCommentsForStorage(
+  comments: SciForgeWorkspaceState['feedbackComments'],
+  options: { preserveFeedbackScreenshotDataUrls?: boolean },
+) {
+  if (!comments) return comments;
+  if (options.preserveFeedbackScreenshotDataUrls) return comments;
+  return comments.map((comment) => {
+    const screenshot = comment.screenshot;
+    if (!screenshot?.dataUrl) return comment;
+    const { dataUrl: _dataUrl, ...screenshotMetadata } = screenshot;
+    return {
+      ...comment,
+      screenshot: screenshotMetadata,
+    };
+  });
 }
 
 function compactSessionForStorage(

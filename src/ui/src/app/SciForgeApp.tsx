@@ -371,7 +371,7 @@ export function SciForgeApp() {
     if (sidebarProjectPath(config.workspacePath) !== sidebarProjectPath(workspaceState.workspacePath)) return;
     saveWorkspaceState(workspaceState);
     if (workspaceState.workspacePath.trim()) {
-      persistWorkspaceState(compactWorkspaceStateForStorage(workspaceState), config)
+      persistWorkspaceState(compactWorkspaceStateForStorage(workspaceState, 'normal', { preserveFeedbackScreenshotDataUrls: true }), config)
         .then(() => setWorkspaceStatus(`已同步到 ${workspaceState.workspacePath}/.sciforge`))
         .catch((err) => setWorkspaceStatus(`Workspace writer 未连接：${err instanceof Error ? err.message : String(err)}`));
     }

@@ -283,7 +283,8 @@ export interface FeedbackRuntimeSnapshot {
 export interface FeedbackScreenshotEvidence {
   schemaVersion: 1;
   captureMode?: 'visible-viewport' | 'full-page' | 'fallback-viewport';
-  dataUrl: string;
+  dataUrl?: string;
+  screenshotRef?: string;
   rawDataUrl?: string;
   annotatedDataUrl?: string;
   rawScreenshotRef?: string;
@@ -297,6 +298,8 @@ export interface FeedbackScreenshotEvidence {
   scrollX?: number;
   scrollY?: number;
   annotationLabel?: string;
+  sha256?: string;
+  bytes?: number;
   includeForAgent?: boolean;
   note?: string;
 }
@@ -488,6 +491,8 @@ export interface FeedbackScreenshotMetadata {
   height?: number;
   capturedAt?: string;
   targetRect?: FeedbackScreenshotEvidence['targetRect'];
+  sha256?: string;
+  bytes?: number;
   includeForAgent?: boolean;
   note?: string;
   hasDataUrl: boolean;

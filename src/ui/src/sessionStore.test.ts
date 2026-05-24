@@ -349,6 +349,62 @@ test('compactWorkspaceStateForStorage strips binary dataUrls from artifacts and 
   assert.ok(serialized.includes('binary-or-data-url'));
 });
 
+test('compactWorkspaceStateForStorage stores feedback screenshots refs-first by default', () => {
+  const dataUrl = `data:image/jpeg;base64,${Buffer.from('feedback-shot'.repeat(1000)).toString('base64')}`;
+  const state = parseWorkspaceState({
+    schemaVersion: 2,
+    workspacePath: '/tmp/sciforge-workspace',
+    sessionsByScenario: {
+      'literature-evidence-review': sessionFixture('feedback-session', ['feedback']),
+    },
+    archivedSessions: [],
+    feedbackComments: [{
+      id: 'feedback-shot',
+      schemaVersion: 1,
+      authorId: 'user-1',
+      authorName: 'User',
+      comment: '截图太重',
+      status: 'open',
+      priority: 'normal',
+      tags: ['feedback'],
+      createdAt: '2026-05-24T00:00:00.000Z',
+      updatedAt: '2026-05-24T00:00:00.000Z',
+      target: {
+        selector: '.target',
+        path: 'body > main',
+        text: 'target',
+        tagName: 'p',
+        rect: { x: 1, y: 2, width: 3, height: 4 },
+      },
+      viewport: { width: 1280, height: 720, devicePixelRatio: 1, scrollX: 0, scrollY: 0 },
+      runtime: {
+        page: 'feedback',
+        url: 'http://127.0.0.1:5173/',
+        scenarioId: 'literature-evidence-review',
+      },
+      screenshotRef: 'file:.sciforge/feedback/screenshots/feedback-shot.jpg',
+      screenshot: {
+        schemaVersion: 1,
+        dataUrl,
+        screenshotRef: 'file:.sciforge/feedback/screenshots/feedback-shot.jpg',
+        mediaType: 'image/jpeg',
+        width: 704,
+        height: 528,
+        capturedAt: '2026-05-24T00:00:00.000Z',
+        targetRect: { x: 1, y: 2, width: 3, height: 4 },
+      },
+    }],
+    updatedAt: '2026-05-24T00:00:00.000Z',
+  });
+
+  const compact = compactWorkspaceStateForStorage(state);
+  const preserved = compactWorkspaceStateForStorage(state, 'normal', { preserveFeedbackScreenshotDataUrls: true });
+
+  assert.equal(compact.feedbackComments?.[0]?.screenshot?.dataUrl, undefined);
+  assert.equal(compact.feedbackComments?.[0]?.screenshotRef, 'file:.sciforge/feedback/screenshots/feedback-shot.jpg');
+  assert.equal(preserved.feedbackComments?.[0]?.screenshot?.dataUrl, dataUrl);
+});
+
 test('compactWorkspaceStateForStorage preserves projection contract keys before raw truncation', () => {
   const raw = Object.fromEntries(Array.from({ length: 32 }, (_, index) => [`debugKey${index}`, `debug-${index}`])) as Record<string, unknown>;
   raw.displayIntent = {

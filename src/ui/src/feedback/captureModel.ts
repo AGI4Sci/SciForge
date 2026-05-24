@@ -402,7 +402,7 @@ export function buildFeedbackEvidenceStatus({
 export function scrubFeedbackScreenshotEvidence(evidence: FeedbackScreenshotEvidence): FeedbackScreenshotEvidence {
   return {
     ...evidence,
-    dataUrl: scrubScreenshotDataUrl(evidence.dataUrl),
+    dataUrl: evidence.dataUrl ? scrubScreenshotDataUrl(evidence.dataUrl) : undefined,
     rawDataUrl: evidence.rawDataUrl ? scrubScreenshotDataUrl(evidence.rawDataUrl) : undefined,
     annotatedDataUrl: evidence.annotatedDataUrl ? scrubScreenshotDataUrl(evidence.annotatedDataUrl) : undefined,
     rawScreenshotRef: evidence.rawScreenshotRef ? scrubFeedbackRefText(evidence.rawScreenshotRef) : undefined,

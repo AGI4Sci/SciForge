@@ -226,7 +226,7 @@ test('scrubs screenshot data and refs while preserving valid image data URLs', (
   });
 
   assert.equal(scrubbed.rawDataUrl, 'data:image/png;base64,raw123');
-  assert.match(scrubbed.dataUrl, /redacted-provider-body\]:screenshot-data/);
+  assert.match(scrubbed.dataUrl ?? '', /redacted-provider-body\]:screenshot-data/);
   assert.equal(scrubbed.captureMode, 'visible-viewport');
   assert.equal(scrubbed.scrollY, 120);
   assert.equal(scrubbed.rawScreenshotRef, '[redacted-feedback-path]');

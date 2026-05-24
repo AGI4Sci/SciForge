@@ -3266,6 +3266,8 @@ function screenshotMetadataForComment(comment: Record<string, unknown>) {
     height: typeof screenshot?.height === 'number' ? screenshot.height : undefined,
     capturedAt: typeof screenshot?.capturedAt === 'string' ? screenshot.capturedAt : undefined,
     targetRect: isRecord(screenshot?.targetRect) ? screenshot?.targetRect : undefined,
+    sha256: typeof screenshot?.sha256 === 'string' ? screenshot.sha256 : undefined,
+    bytes: typeof screenshot?.bytes === 'number' ? screenshot.bytes : undefined,
     includeForAgent: typeof screenshot?.includeForAgent === 'boolean' ? screenshot.includeForAgent : undefined,
     note: typeof screenshot?.note === 'string' ? screenshot.note : undefined,
     hasDataUrl: typeof screenshot?.dataUrl === 'string' && screenshot.dataUrl.length > 0,
