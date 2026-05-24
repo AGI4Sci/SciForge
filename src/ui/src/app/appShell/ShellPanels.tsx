@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsUp, Copy, File, FileCode, FilePlus, FileText, Folder, FolderOpen, FolderPlus, MessageSquare, Moon, Plug, Plus, RefreshCw, Save, Search, Settings, Sun, Target, Workflow } from 'lucide-react';
-import { navItems, scenarios, type PageId } from '../../data';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { Archive, ArrowDown, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsDown, ChevronsUp, Clock, Copy, Edit3, File, FileCode, FilePlus, FileText, Folder, FolderOpen, FolderPlus, MessageSquare, MoreHorizontal, Moon, PanelTopOpen, Pin, Plug, Plus, RefreshCw, Save, Search, Settings, Square, Sun, Workflow } from 'lucide-react';
+import { navItems, scenarios, sidebarViewNavItems, type PageId } from '../../data';
+import { normalizeWorkspaceRootPath } from '../../config';
 import type { SciForgeConfig, SciForgeSession, ScenarioInstanceId } from '../../domain';
 import { listWorkspace, mutateWorkspaceFile, openWorkspaceObject, readWorkspaceFile, writeWorkspaceFile, type WorkspaceEntry, type WorkspaceFileContent } from '../../api/workspaceClient';
 import { Badge, IconButton, cx } from '../uiPrimitives';
@@ -19,6 +20,24 @@ import {
   workspaceOnboardingError,
   type WorkspaceAction,
 } from './explorerModels';
+import {
+  loadSidebarPreferences,
+  moveCurrentProjectDown,
+  saveSidebarPreferences,
+  togglePinnedThreadId,
+  type SidebarLayoutMode,
+  type SidebarPreferences,
+  type SidebarSortMode,
+} from './sidebarPreferences';
+import { resolveWorkspaceDirectoryPath } from './workspaceDirectoryPicker';
+import {
+  SIDEBAR_CHRONOLOGICAL_PROJECT_ID,
+  buildConfiguredSidebarProjects,
+  migrateLegacySidebarProjectId,
+  sidebarProjectPath,
+} from './sidebarProjectModel';
+import { resolveSidebarProjectSessionBundle } from './sidebarProjectSessions';
+export { SettingsPage } from './SettingsPage';
 export { SettingsDialog } from './ShellPanelsSettingsDialog';
 
 function explorerFileGlyph(name: string) {
@@ -44,6 +63,14 @@ export interface SidebarThreadItem {
   updatedAt: string;
 }
 
+export interface SidebarProjectThreadGroup {
+  id: string;
+  label: string;
+  detail: string;
+  current: boolean;
+  threads: SidebarThreadItem[];
+}
+
 export interface SidebarSearchMatch {
   id: string;
   label: string;
@@ -51,6 +78,29 @@ export interface SidebarSearchMatch {
   page: PageId;
   scenarioId?: ScenarioInstanceId;
 }
+
+const SIDEBAR_PROJECT_THREAD_LIMIT = 4;
+const SIDEBAR_RECENT_PROJECT_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+
+export interface SidebarThreadBuildOptions {
+  sort?: SidebarSortMode;
+  pinnedThreadIds?: string[];
+  limit?: number;
+}
+
+export interface SidebarProjectBuildOptions extends SidebarThreadBuildOptions {
+  layout?: SidebarLayoutMode;
+  projectOrder?: string[];
+  activeWorkspacePath?: string;
+  projectSessionsByPath?: Record<string, {
+    sessionsByScenario: Partial<Record<ScenarioInstanceId, SciForgeSession>>;
+    archivedSessions?: SciForgeSession[];
+  }>;
+}
+type SidebarProjectMenu =
+  | { kind: 'global' }
+  | { kind: 'create' }
+  | { kind: 'project'; projectId: string };
 
 export function sidebarSessionActivityScore(session: SciForgeSession) {
   const nonSeedMessages = session.messages.filter((message) => !message.id.startsWith('seed')).length;
@@ -70,26 +120,127 @@ export function sidebarThreadTitle(session: SciForgeSession) {
   return '未命名聊天';
 }
 
-export function buildSidebarThreadItems(sessionsByScenario: Partial<Record<ScenarioInstanceId, SciForgeSession>>): SidebarThreadItem[] {
-  return Object.values(sessionsByScenario)
-    .filter((session): session is SciForgeSession => {
-      if (!session) return false;
-      return sidebarSessionActivityScore(session) > 0;
-    })
+export function buildSidebarThreadItems(
+  sessionsByScenario: Partial<Record<ScenarioInstanceId, SciForgeSession>>,
+  archivedSessions?: SciForgeSession[],
+  options: SidebarThreadBuildOptions = {},
+): SidebarThreadItem[] {
+  const sort = options.sort ?? 'updatedAt';
+  const pinned = new Set(options.pinnedThreadIds ?? []);
+  const limit = options.limit ?? 8;
+  const pool: SciForgeSession[] = Object.values(sessionsByScenario).filter((s): s is SciForgeSession => Boolean(s));
+  if (archivedSessions) {
+    const activeIds = new Set(pool.map((s) => s.sessionId));
+    for (const session of archivedSessions) {
+      if (!activeIds.has(session.sessionId)) pool.push(session);
+    }
+  }
+  const items = pool
+    .filter((session) => sidebarSessionActivityScore(session) > 0)
     .map((session) => ({
       sessionId: session.sessionId,
       scenarioId: session.scenarioId,
       title: sidebarThreadTitle(session),
       detail: sidebarThreadDetail(session),
       updatedAt: session.updatedAt || session.createdAt,
-    }))
-    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
-    .slice(0, 8);
+      createdAt: session.createdAt,
+      pinned: pinned.has(session.sessionId),
+    }));
+  items.sort((a, b) => {
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+    const left = sort === 'createdAt' ? Date.parse(a.createdAt) : Date.parse(a.updatedAt);
+    const right = sort === 'createdAt' ? Date.parse(b.createdAt) : Date.parse(b.updatedAt);
+    return right - left;
+  });
+  return items.slice(0, limit).map(({ pinned: _pinned, createdAt: _createdAt, ...item }) => item);
+}
+
+export function buildSidebarArchivedThreadItems(
+  archivedSessions: SciForgeSession[],
+  options: SidebarThreadBuildOptions = {},
+): SidebarThreadItem[] {
+  const sort = options.sort ?? 'updatedAt';
+  const pinned = new Set(options.pinnedThreadIds ?? []);
+  const items = archivedSessions
+    .filter((session) => sidebarSessionActivityScore(session) > 0)
+    .map((session) => ({
+      sessionId: session.sessionId,
+      scenarioId: session.scenarioId,
+      title: sidebarThreadTitle(session),
+      detail: sidebarThreadDetail(session),
+      updatedAt: session.updatedAt || session.createdAt,
+      createdAt: session.createdAt,
+      pinned: pinned.has(session.sessionId),
+    }));
+  items.sort((a, b) => {
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+    const left = sort === 'createdAt' ? Date.parse(a.createdAt) : Date.parse(a.updatedAt);
+    const right = sort === 'createdAt' ? Date.parse(b.createdAt) : Date.parse(b.updatedAt);
+    return right - left;
+  });
+  return items.map(({ pinned: _pinned, createdAt: _createdAt, ...item }) => item);
+}
+
+export function buildSidebarProjectThreadGroups(
+  config: SciForgeConfig,
+  sessionsByScenario: Partial<Record<ScenarioInstanceId, SciForgeSession>>,
+  archivedSessions?: SciForgeSession[],
+  options: SidebarProjectBuildOptions = {},
+): SidebarProjectThreadGroup[] {
+  const layout = options.layout ?? 'by-project';
+  const threadLimit = layout === 'chronological' ? 12 : 8;
+  const threadItems = buildSidebarThreadItems(sessionsByScenario, archivedSessions, {
+    sort: options.sort,
+    pinnedThreadIds: options.pinnedThreadIds,
+    limit: threadLimit,
+  });
+  if (layout === 'chronological') {
+    return [{
+      id: SIDEBAR_CHRONOLOGICAL_PROJECT_ID,
+      label: '全部对话',
+      detail: config.workspacePath,
+      current: true,
+      threads: threadItems,
+    }];
+  }
+  let projects = buildConfiguredSidebarProjects(config);
+  if (layout === 'recent-projects') {
+    const recentCutoff = Date.now() - SIDEBAR_RECENT_PROJECT_WINDOW_MS;
+    projects = projects.filter((project) => {
+      if (!project.current) return false;
+      return threadItems.some((thread) => Date.parse(thread.updatedAt) >= recentCutoff);
+    });
+    if (!projects.length) projects = buildConfiguredSidebarProjects(config).filter((project) => project.current);
+  }
+  if (options.projectOrder?.length) {
+    const rank = new Map(options.projectOrder.map((id, index) => [
+      migrateLegacySidebarProjectId(config, id),
+      index,
+    ]));
+    projects = [...projects].sort((left, right) => (rank.get(left.id) ?? 999) - (rank.get(right.id) ?? 999));
+  }
+  return projects.map((project) => {
+    const projectPath = sidebarProjectPath(project.detail);
+    const { sessionsByScenario: projectSessions, archivedSessions: projectArchived } = resolveSidebarProjectSessionBundle(
+      projectPath,
+      options.activeWorkspacePath ?? config.workspacePath,
+      sessionsByScenario,
+      archivedSessions,
+      options.projectSessionsByPath,
+    );
+    const threads = buildSidebarThreadItems(projectSessions, projectArchived, {
+      sort: options.sort,
+      pinnedThreadIds: options.pinnedThreadIds,
+      limit: threadLimit,
+    });
+    return { ...project, threads };
+  });
 }
 
 export function buildSidebarSearchMatches(
   query: string,
   sessionsByScenario: Partial<Record<ScenarioInstanceId, SciForgeSession>>,
+  archivedSessions?: SciForgeSession[],
 ): SidebarSearchMatch[] {
   const needle = query.trim().toLocaleLowerCase();
   if (!needle) return [];
@@ -112,7 +263,7 @@ export function buildSidebarSearchMatches(
       });
     }
   }
-  for (const thread of buildSidebarThreadItems(sessionsByScenario)) {
+  for (const thread of buildSidebarThreadItems(sessionsByScenario, archivedSessions)) {
     if (containsNeedle(`${thread.title} ${thread.detail} ${thread.scenarioId}`, needle)) {
       matches.push({
         id: `thread:${thread.sessionId}`,
@@ -196,10 +347,16 @@ export function Sidebar({
   sessionsByScenario,
   archivedSessions,
   onNewChat,
+  onRestoreArchivedSession,
+  onArchiveThread,
+  onArchiveAllChats,
   onSearchNavigate,
   onSettingsOpen,
   workspaceStatus,
   onWorkspacePathChange,
+  onWorkspaceProjectActivate,
+  projectSessionsByPath,
+  activeWorkspacePath,
   deferWorkbenchFilePreview,
   onWorkbenchFileOpened,
   workbenchEditorFilePath,
@@ -213,10 +370,22 @@ export function Sidebar({
   sessionsByScenario?: Record<ScenarioInstanceId, SciForgeSession>;
   archivedSessions?: SciForgeSession[];
   onNewChat?: (scenarioId: ScenarioInstanceId) => void;
+  onRestoreArchivedSession?: (scenarioId: ScenarioInstanceId, sessionId: string) => void;
+  onArchiveThread?: (scenarioId: ScenarioInstanceId, sessionId: string) => void;
+  onArchiveAllChats?: () => void;
   onSearchNavigate?: (query: string) => void;
   onSettingsOpen?: () => void;
   workspaceStatus: string;
   onWorkspacePathChange: (value: string) => void;
+  onWorkspaceProjectActivate?: (
+    project: SidebarProjectThreadGroup,
+    thread?: Pick<SidebarThreadItem, 'scenarioId' | 'sessionId'>,
+  ) => void;
+  projectSessionsByPath?: Record<string, {
+    sessionsByScenario: Partial<Record<ScenarioInstanceId, SciForgeSession>>;
+    archivedSessions?: SciForgeSession[];
+  }>;
+  activeWorkspacePath?: string;
   deferWorkbenchFilePreview?: boolean;
   onWorkbenchFileOpened?: (file: WorkspaceFileContent) => void;
   workbenchEditorFilePath?: string | null;
@@ -236,24 +405,54 @@ export function Sidebar({
   const [previewDirty, setPreviewDirty] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entry?: WorkspaceEntry } | null>(null);
   const [sidebarSearchQuery, setSidebarSearchQuery] = useState('');
+  const [expandedProjectThreads, setExpandedProjectThreads] = useState<Set<string>>(() => new Set());
+  const [allProjectThreadsCollapsed, setAllProjectThreadsCollapsed] = useState(false);
+  const [sidebarProjectMenu, setSidebarProjectMenu] = useState<SidebarProjectMenu | null>(null);
+  const [sidebarPreferences, setSidebarPreferences] = useState<SidebarPreferences>(() => loadSidebarPreferences());
+  const [showArchivedPanel, setShowArchivedPanel] = useState(false);
+  const folderPickerRef = useRef<HTMLDetailsElement | null>(null);
   const resizingRef = useRef(false);
   const sidebarSessions: Partial<Record<ScenarioInstanceId, SciForgeSession>> = sessionsByScenario ?? {};
   const sidebarArchivedSessions = archivedSessions ?? [];
   const sidebarSearchMatches = useMemo(
-    () => buildSidebarSearchMatches(sidebarSearchQuery, sidebarSessions),
-    [sidebarSearchQuery, sidebarSessions],
+    () => buildSidebarSearchMatches(sidebarSearchQuery, sidebarSessions, sidebarArchivedSessions),
+    [sidebarSearchQuery, sidebarSessions, sidebarArchivedSessions],
   );
-  const sidebarThreadItems = useMemo(
-    () => buildSidebarThreadItems(sidebarSessions),
-    [sidebarSessions],
+  const sidebarProjectThreadGroups = useMemo(
+    () => buildSidebarProjectThreadGroups(config, sidebarSessions, sidebarArchivedSessions, {
+      layout: sidebarPreferences.layout,
+      sort: sidebarPreferences.sort,
+      pinnedThreadIds: sidebarPreferences.pinnedThreadIds,
+      projectOrder: sidebarPreferences.projectOrder,
+      projectSessionsByPath,
+      activeWorkspacePath,
+    }),
+    [config, sidebarSessions, sidebarArchivedSessions, sidebarPreferences, projectSessionsByPath, activeWorkspacePath],
   );
+  const sidebarArchivedThreadItems = useMemo(
+    () => buildSidebarArchivedThreadItems(sidebarArchivedSessions, {
+      sort: sidebarPreferences.sort,
+      pinnedThreadIds: sidebarPreferences.pinnedThreadIds,
+      limit: 12,
+    }),
+    [sidebarArchivedSessions, sidebarPreferences],
+  );
+  const pinnedThreadIds = useMemo(() => new Set(sidebarPreferences.pinnedThreadIds), [sidebarPreferences.pinnedThreadIds]);
   const archivedThreadCount = useMemo(
     () => sidebarArchivedSessions.filter((session) => sidebarSessionActivityScore(session) > 0).length,
     [sidebarArchivedSessions],
   );
+  const showWorkbenchNav = page === 'workbench';
+  const sidebarExpanded = showWorkbenchNav && !collapsed;
 
   useEffect(() => {
-    if (collapsed) return;
+    if (page !== 'workbench') {
+      setCollapsed(true);
+    }
+  }, [page]);
+
+  useEffect(() => {
+    if (!sidebarExpanded) return;
     function handleMouseMove(event: MouseEvent) {
       if (!resizingRef.current) return;
       const nextWidth = Math.min(420, Math.max(220, event.clientX));
@@ -268,7 +467,7 @@ export function Sidebar({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [collapsed]);
+  }, [sidebarExpanded]);
 
   useEffect(() => {
     const root = explorerWorkspaceRoot(config);
@@ -282,7 +481,7 @@ export function Sidebar({
   }, [config.workspacePath]);
 
   useEffect(() => {
-    if (collapsed || !workspaceRoot) return;
+    if (!sidebarExpanded || !workspaceRoot) return;
     void (async () => {
       try {
         setWorkspaceError('');
@@ -295,7 +494,7 @@ export function Sidebar({
         setWorkspaceNotice('');
       }
     })();
-  }, [collapsed, workspaceRoot, config.workspaceWriterBaseUrl, config.workspacePath]);
+  }, [sidebarExpanded, workspaceRoot, config.workspaceWriterBaseUrl, config.workspacePath]);
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -305,6 +504,24 @@ export function Sidebar({
     window.addEventListener('click', closeMenu);
     return () => window.removeEventListener('click', closeMenu);
   }, [contextMenu]);
+
+  useEffect(() => {
+    if (!sidebarProjectMenu) return;
+    function closeMenu() {
+      setSidebarProjectMenu(null);
+    }
+    window.addEventListener('click', closeMenu);
+    return () => window.removeEventListener('click', closeMenu);
+  }, [sidebarProjectMenu]);
+
+  useEffect(() => {
+    if (!sidebarProjectMenu) return;
+    function closeMenu() {
+      setSidebarProjectMenu(null);
+    }
+    window.addEventListener('click', closeMenu);
+    return () => window.removeEventListener('click', closeMenu);
+  }, [sidebarProjectMenu]);
 
   function effectiveCreateParentPath(): string {
     const root = explorerWorkspaceRoot(config);
@@ -576,6 +793,307 @@ export function Sidebar({
     onNewChat?.(scenarioId);
   }
 
+  function toggleSidebarProjectMenu(menu: SidebarProjectMenu, event: ReactMouseEvent) {
+    event.stopPropagation();
+    setSidebarProjectMenu((current) => {
+      if (!current || current.kind !== menu.kind) return menu;
+      if (current.kind === 'project' && menu.kind === 'project' && current.projectId !== menu.projectId) return menu;
+      return null;
+    });
+  }
+
+  function closeSidebarProjectMenuWithNotice(message: string) {
+    setSidebarProjectMenu(null);
+    setWorkspaceNotice(message);
+  }
+
+  function updateSidebarPreferences(next: SidebarPreferences | ((current: SidebarPreferences) => SidebarPreferences), message?: string) {
+    setSidebarPreferences((current) => {
+      const resolved = typeof next === 'function' ? next(current) : next;
+      saveSidebarPreferences(resolved);
+      return resolved;
+    });
+    setSidebarProjectMenu(null);
+    if (message) setWorkspaceNotice(message);
+  }
+
+  function applySidebarLayout(layout: SidebarLayoutMode) {
+    updateSidebarPreferences((current) => ({ ...current, layout }), layout === 'by-project'
+      ? '已按项目整理侧边栏。'
+      : layout === 'recent-projects'
+        ? '已切换到近期项目视图。'
+        : '已切换到按时间顺序视图。');
+  }
+
+  function applySidebarSort(sort: SidebarSortMode) {
+    updateSidebarPreferences((current) => ({ ...current, sort }), sort === 'createdAt' ? '已按创建时间排序。' : '已按更新时间排序。');
+  }
+
+  function moveCurrentProjectDownInSidebar() {
+    const currentProject = sidebarProjectThreadGroups.find((project) => project.current);
+    if (!currentProject) {
+      closeSidebarProjectMenuWithNotice('当前没有可下移的项目。');
+      return;
+    }
+    updateSidebarPreferences(
+      (current) => moveCurrentProjectDown(current, sidebarProjectThreadGroups.map((project) => project.id), currentProject.id),
+      `已将 ${currentProject.label} 下移。`,
+    );
+  }
+
+  function toggleSidebarThreadPin(item: SidebarThreadItem) {
+    updateSidebarPreferences(
+      (current) => togglePinnedThreadId(current, item.sessionId),
+      pinnedThreadIds.has(item.sessionId) ? `已取消置顶：${item.title}` : `已置顶：${item.title}`,
+    );
+  }
+
+  function archiveSidebarThread(item: SidebarThreadItem) {
+    setSidebarProjectMenu(null);
+    const activeSession = sidebarSessions[item.scenarioId];
+    if (activeSession?.sessionId === item.sessionId) {
+      onArchiveThread?.(item.scenarioId, item.sessionId);
+      setWorkspaceNotice(`已归档对话：${item.title}`);
+      return;
+    }
+    setWorkspaceNotice(`「${item.title}」已在归档列表中。`);
+  }
+
+  function archiveAllSidebarChats() {
+    setSidebarProjectMenu(null);
+    onArchiveAllChats?.();
+    setWorkspaceNotice('已归档所有活跃聊天。');
+  }
+
+  async function chooseWorkspaceRootPath() {
+    try {
+      setWorkspaceError('');
+      setWorkspaceNotice('正在打开文件夹选择器…');
+      const picked = await resolveWorkspaceDirectoryPath(config, pathEditDraft.trim() || config.workspacePath);
+      if (!picked) {
+        setWorkspaceNotice('');
+        return;
+      }
+      setPathEditDraft(picked);
+      onWorkspacePathChange(picked);
+      setWorkspaceNotice(`已选择项目文件夹：${pathBasename(picked) || picked}`);
+    } catch (err) {
+      setWorkspaceError(err instanceof Error ? err.message : String(err));
+      setWorkspaceNotice('');
+    }
+  }
+
+  function toggleAllProjectThreadsCollapsed() {
+    setAllProjectThreadsCollapsed((current) => {
+      const next = !current;
+      if (next) {
+        setExpandedProjectThreads(new Set());
+      } else {
+        setExpandedProjectThreads(new Set(sidebarProjectThreadGroups.map((project) => project.id)));
+      }
+      setSidebarProjectMenu(null);
+      return next;
+    });
+  }
+
+  function activateSidebarProject(
+    project: SidebarProjectThreadGroup,
+    thread?: Pick<SidebarThreadItem, 'scenarioId' | 'sessionId'>,
+  ) {
+    if (project.current) {
+      if (thread) openSidebarThread(thread, project);
+      return;
+    }
+    setSidebarProjectMenu(null);
+    onWorkspaceProjectActivate?.(project, thread);
+    setPage('workbench');
+    setAllProjectThreadsCollapsed(false);
+    setExpandedProjectThreads(new Set([project.id]));
+    setWorkspaceNotice(`已切换到项目 ${project.label}`);
+  }
+
+  function openProjectNewChat(project: SidebarProjectThreadGroup) {
+    setSidebarProjectMenu(null);
+    if (!project.current) {
+      activateSidebarProject(project);
+    }
+    handleNewChat();
+  }
+
+  async function revealSidebarProject(project: SidebarProjectThreadGroup) {
+    setSidebarProjectMenu(null);
+    if (!project.detail) return;
+    try {
+      setWorkspaceError('');
+      await openWorkspaceObject(config, 'reveal-in-folder', project.detail, config.workspacePath);
+      setWorkspaceNotice(`已在访达中定位 ${project.label}`);
+    } catch (err) {
+      setWorkspaceError(err instanceof Error ? err.message : String(err));
+      setWorkspaceNotice('');
+    }
+  }
+
+  function renderSidebarProjectGlobalMenu() {
+    const { layout, sort } = sidebarPreferences;
+    return (
+      <div className="sidebar-project-menu" role="menu" onClick={(event) => event.stopPropagation()}>
+        <button type="button" role="menuitem" onClick={() => archiveAllSidebarChats()}>
+          <Archive size={14} aria-hidden />
+          <span>归档所有聊天</span>
+        </button>
+        <div className="sidebar-project-menu-group">
+          <button type="button" role="menuitem" aria-haspopup="menu">
+            <Folder size={14} aria-hidden />
+            <span>整理侧边栏</span>
+            <ChevronRight size={13} aria-hidden />
+          </button>
+          <div className="sidebar-project-submenu" role="menu" aria-label="整理侧边栏">
+            <button type="button" onClick={() => applySidebarLayout('by-project')}>
+              <Folder size={14} aria-hidden />
+              <span>按项目</span>
+              {layout === 'by-project' ? <Check size={13} aria-hidden /> : <span aria-hidden />}
+            </button>
+            <button type="button" onClick={() => applySidebarLayout('recent-projects')}>
+              <FolderOpen size={14} aria-hidden />
+              <span>近期项目</span>
+              {layout === 'recent-projects' ? <Check size={13} aria-hidden /> : <span aria-hidden />}
+            </button>
+            <button type="button" onClick={() => applySidebarLayout('chronological')}>
+              <Clock size={14} aria-hidden />
+              <span>按时间顺序</span>
+              {layout === 'chronological' ? <Check size={13} aria-hidden /> : <span aria-hidden />}
+            </button>
+            <button type="button" onClick={() => moveCurrentProjectDownInSidebar()}>
+              <ArrowDown size={14} aria-hidden />
+              <span>下移</span>
+            </button>
+          </div>
+        </div>
+        <div className="sidebar-project-menu-group">
+          <button type="button" role="menuitem" aria-haspopup="menu">
+            <Clock size={14} aria-hidden />
+            <span>排序条件</span>
+            <ChevronRight size={13} aria-hidden />
+          </button>
+          <div className="sidebar-project-submenu" role="menu" aria-label="排序条件">
+            <button type="button" onClick={() => applySidebarSort('createdAt')}>
+              <Clock size={14} aria-hidden />
+              <span>创建时间</span>
+              {sort === 'createdAt' ? <Check size={13} aria-hidden /> : <span aria-hidden />}
+            </button>
+            <button type="button" onClick={() => applySidebarSort('updatedAt')}>
+              <Clock size={14} aria-hidden />
+              <span>更新时间</span>
+              {sort === 'updatedAt' ? <Check size={13} aria-hidden /> : <span aria-hidden />}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderSidebarProjectCreateMenu() {
+    return (
+      <div className="sidebar-project-menu sidebar-project-menu-create" role="menu" onClick={(event) => event.stopPropagation()}>
+        <button type="button" role="menuitem" onClick={() => closeSidebarProjectMenuWithNotice('新建空白项目需要先选择工作区路径。')}>
+          <FolderPlus size={14} aria-hidden />
+          <span>新建空白项目</span>
+        </button>
+        <button type="button" role="menuitem" onClick={() => {
+          setSidebarProjectMenu(null);
+          void chooseWorkspaceRootPath();
+        }}>
+          <FolderOpen size={14} aria-hidden />
+          <span>使用现有文件夹</span>
+        </button>
+      </div>
+    );
+  }
+
+  function renderSidebarProjectActionMenu(project: SidebarProjectThreadGroup) {
+    return (
+      <div className="sidebar-project-menu sidebar-project-menu-project" role="menu" onClick={(event) => event.stopPropagation()}>
+        <button type="button" role="menuitem" onClick={() => closeSidebarProjectMenuWithNotice(`已请求置顶项目 ${project.label}。`)}>
+          <Pin size={14} aria-hidden />
+          <span>置顶项目</span>
+        </button>
+        <button type="button" role="menuitem" onClick={() => void revealSidebarProject(project)}>
+          <FolderOpen size={14} aria-hidden />
+          <span>在“访达”中打开</span>
+        </button>
+        <button type="button" role="menuitem" onClick={() => closeSidebarProjectMenuWithNotice('创建永久工作树稍后接入。')}>
+          <ArrowDown size={14} aria-hidden />
+          <span>创建永久工作树</span>
+        </button>
+        <button type="button" role="menuitem" onClick={() => closeSidebarProjectMenuWithNotice('重命名项目稍后接入。')}>
+          <Edit3 size={14} aria-hidden />
+          <span>重命名项目</span>
+        </button>
+        <button type="button" role="menuitem" onClick={() => archiveProjectChats(project)}>
+          <Archive size={14} aria-hidden />
+          <span>归档对话</span>
+        </button>
+        <button type="button" role="menuitem" onClick={() => closeSidebarProjectMenuWithNotice('移除项目稍后接入。')}>
+          <Square size={14} aria-hidden />
+          <span>移除</span>
+        </button>
+      </div>
+    );
+  }
+
+  function archiveProjectChats(project: SidebarProjectThreadGroup) {
+    setSidebarProjectMenu(null);
+    if (!project.current) {
+      setWorkspaceNotice('只能归档当前项目的对话。');
+      return;
+    }
+    const active = sidebarSessions[scenarioId];
+    if (active && sidebarSessionActivityScore(active) > 0) {
+      onArchiveThread?.(scenarioId, active.sessionId);
+      setWorkspaceNotice(`已归档 ${project.label} 的对话。`);
+      return;
+    }
+    setWorkspaceNotice(`${project.label} 没有可归档的活跃对话。`);
+  }
+
+  function renderSidebarThreadRow(item: SidebarThreadItem, project: SidebarProjectThreadGroup) {
+    const projectPath = sidebarProjectPath(project.detail);
+    const liveWorkspacePath = sidebarProjectPath(activeWorkspacePath || config.workspacePath);
+    const isActive = projectPath === liveWorkspacePath
+      && item.scenarioId === scenarioId
+      && item.sessionId === sidebarSessions[scenarioId]?.sessionId;
+    const isPinned = pinnedThreadIds.has(item.sessionId);
+    return (
+      <div key={`${project.id}:${item.sessionId}`} className={cx('sidebar-thread-row', isActive && 'active', isPinned && 'pinned')}>
+        <button type="button" className="sidebar-thread-main" onClick={() => openSidebarThread(item, project)}>
+          {isPinned ? <Pin size={14} className="sidebar-thread-pin-icon" aria-hidden /> : <MessageSquare size={15} aria-hidden />}
+          <span className="sidebar-thread-title">{item.title}</span>
+          <small className="sidebar-thread-detail">{item.detail}</small>
+        </button>
+        <div className="sidebar-thread-actions" aria-label={`${item.title} 对话操作`}>
+          <button
+            type="button"
+            className={cx('sidebar-project-icon-btn', isPinned && 'active')}
+            onClick={() => toggleSidebarThreadPin(item)}
+            title={isPinned ? '取消置顶' : '置顶对话'}
+            aria-label={isPinned ? `取消置顶：${item.title}` : `置顶对话：${item.title}`}
+          >
+            <Pin size={13} />
+          </button>
+          <button
+            type="button"
+            className="sidebar-project-icon-btn"
+            onClick={() => archiveSidebarThread(item)}
+            title="归档对话"
+            aria-label={`归档对话：${item.title}`}
+          >
+            <Archive size={13} />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   function openSidebarSearchMatch(match: SidebarSearchMatch) {
     if (match.scenarioId) setScenarioId(match.scenarioId);
     setPage(match.page);
@@ -590,6 +1108,29 @@ export function Sidebar({
     }
     const query = sidebarSearchQuery.trim();
     if (query) onSearchNavigate?.(query);
+  }
+
+  function openSidebarThread(item: SidebarThreadItem, project: SidebarProjectThreadGroup) {
+    if (!project.current) {
+      activateSidebarProject(project, item);
+      return;
+    }
+    const activeSession = sidebarSessions[item.scenarioId];
+    if (activeSession?.sessionId !== item.sessionId) {
+      onRestoreArchivedSession?.(item.scenarioId, item.sessionId);
+    }
+    setScenarioId(item.scenarioId);
+    setPage('workbench');
+  }
+
+  function toggleProjectThreadExpansion(projectId: string) {
+    setAllProjectThreadsCollapsed(false);
+    setExpandedProjectThreads((current) => {
+      const next = new Set(current);
+      if (next.has(projectId)) next.delete(projectId);
+      else next.add(projectId);
+      return next;
+    });
   }
 
   function renderExplorerDepth(depth: number, dirPath: string): ReactNode {
@@ -659,27 +1200,40 @@ export function Sidebar({
   }
 
   return (
-    <aside className={cx('sidebar', collapsed && 'collapsed')} style={{ width: collapsed ? 46 : sidebarWidth }}>
-      <div className="sidebar-activitybar">
+    <aside className={cx('sidebar', !sidebarExpanded && 'collapsed')} style={{ width: sidebarExpanded ? sidebarWidth : 46 }}>
+      <div className="sidebar-activitybar" aria-label="工作区视图">
         <div className="brand">
           <div className="brand-mark">BA</div>
         </div>
-        <button
-          className={cx('activity-item', !collapsed && 'active')}
-          onClick={() => setCollapsed(false)}
-          title="导航"
-          aria-label="导航"
-        >
-          <Target size={18} />
-        </button>
-        {collapsed ? (
-          <button className="collapse-button top-toggle" onClick={() => setCollapsed(false)} title="展开侧栏" aria-label="展开侧栏">
+        <div className="sidebar-activitybar-nav">
+          {sidebarViewNavItems.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={cx('activity-item', page === item.id && 'active')}
+              onClick={() => {
+                setPage(item.id);
+                if (item.id === 'workbench') {
+                  setCollapsed(false);
+                }
+              }}
+              title={item.label}
+              aria-label={item.label}
+              aria-current={page === item.id ? 'page' : undefined}
+            >
+              <item.icon size={18} />
+            </button>
+          ))}
+        </div>
+        <div className="sidebar-activitybar-spacer" aria-hidden />
+        {showWorkbenchNav && collapsed ? (
+          <button type="button" className="collapse-button top-toggle" onClick={() => setCollapsed(false)} title="展开侧栏" aria-label="展开侧栏">
             <ChevronRight size={16} />
           </button>
         ) : null}
       </div>
 
-      {!collapsed ? (
+      {showWorkbenchNav && !collapsed ? (
         <div className="sidebar-panel">
           <div className="sidebar-panel-header">
             <span>导航</span>
@@ -723,51 +1277,168 @@ export function Sidebar({
               </section>
               <section className="sidebar-section sidebar-section-threads" aria-labelledby="sidebar-threads-title">
                 <div className="sidebar-section-title" id="sidebar-threads-title">
-                  <span>线程</span>
-                  {archivedThreadCount ? <Badge variant="muted">{archivedThreadCount} 已归档</Badge> : null}
-                </div>
-                {sidebarThreadItems.length ? (
-                  <div className="sidebar-thread-list">
-                    {sidebarThreadItems.map((item) => (
+                  <span>项目对话</span>
+                  <div className="sidebar-project-title-actions">
+                    {archivedThreadCount ? (
                       <button
-                        key={item.sessionId}
                         type="button"
-                        className={cx('sidebar-thread-row', item.sessionId === sidebarSessions[scenarioId]?.sessionId && 'active')}
-                        onClick={() => {
-                          setScenarioId(item.scenarioId);
-                          setPage('workbench');
-                        }}
+                        className={cx('sidebar-archive-badge', showArchivedPanel && 'active')}
+                        onClick={() => setShowArchivedPanel((current) => !current)}
+                        title="查看已归档对话"
+                        aria-label={`${archivedThreadCount} 条已归档对话`}
+                        aria-expanded={showArchivedPanel}
                       >
-                        <MessageSquare size={15} />
-                        <span>{item.title}</span>
-                        <small>{item.detail}</small>
+                        {archivedThreadCount} 已归档
                       </button>
-                    ))}
+                    ) : null}
+                    <button
+                      type="button"
+                      className={cx('sidebar-project-icon-btn', allProjectThreadsCollapsed && 'active')}
+                      onClick={toggleAllProjectThreadsCollapsed}
+                      title={allProjectThreadsCollapsed ? '展开全部对话' : '收起全部对话'}
+                      aria-label={allProjectThreadsCollapsed ? '展开全部对话' : '收起全部对话'}
+                      aria-pressed={allProjectThreadsCollapsed}
+                    >
+                      {allProjectThreadsCollapsed ? <ChevronsDown size={14} /> : <ChevronsUp size={14} />}
+                    </button>
+                    <button
+                      type="button"
+                      className={cx('sidebar-project-icon-btn', sidebarProjectMenu?.kind === 'global' && 'active')}
+                      onClick={(event) => toggleSidebarProjectMenu({ kind: 'global' }, event)}
+                      title="项目对话菜单"
+                      aria-label="项目对话菜单"
+                      aria-haspopup="menu"
+                    >
+                      <MoreHorizontal size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      className={cx('sidebar-project-icon-btn', sidebarProjectMenu?.kind === 'create' && 'active')}
+                      onClick={(event) => toggleSidebarProjectMenu({ kind: 'create' }, event)}
+                      title="添加项目"
+                      aria-label="添加项目"
+                      aria-haspopup="menu"
+                    >
+                      <FolderPlus size={15} />
+                    </button>
+                  </div>
+                  {sidebarProjectMenu?.kind === 'global' ? renderSidebarProjectGlobalMenu() : null}
+                  {sidebarProjectMenu?.kind === 'create' ? renderSidebarProjectCreateMenu() : null}
+                </div>
+                {sidebarProjectThreadGroups.length ? (
+                  <div className="sidebar-project-chat-list">
+                    {sidebarProjectThreadGroups.map((project) => {
+                      const expanded = expandedProjectThreads.has(project.id);
+                      const visibleThreads = allProjectThreadsCollapsed
+                        ? []
+                        : expanded
+                          ? project.threads
+                          : project.threads.slice(0, SIDEBAR_PROJECT_THREAD_LIMIT);
+                      const hiddenThreadCount = Math.max(0, project.threads.length - visibleThreads.length);
+                      return (
+                        <div key={project.id} className="sidebar-project-chat-group">
+                          <div className={cx('sidebar-project-chat-head', project.current && 'current')}>
+                            <button
+                              type="button"
+                              className="sidebar-project-chat-main"
+                              onClick={() => {
+                                if (!project.current) {
+                                  activateSidebarProject(project);
+                                  return;
+                                }
+                                if (project.threads.length) toggleProjectThreadExpansion(project.id);
+                              }}
+                            >
+                              <Folder size={15} aria-hidden />
+                              <span>{project.label}</span>
+                              {project.current ? <Badge variant="muted">当前</Badge> : null}
+                            </button>
+                            <div className="sidebar-project-row-actions">
+                              <button
+                                type="button"
+                                className={cx('sidebar-project-icon-btn', sidebarProjectMenu?.kind === 'project' && sidebarProjectMenu.projectId === project.id && 'active')}
+                                onClick={(event) => toggleSidebarProjectMenu({ kind: 'project', projectId: project.id }, event)}
+                                title="项目操作"
+                                aria-label={`${project.label} 项目操作`}
+                                aria-haspopup="menu"
+                              >
+                                <MoreHorizontal size={14} />
+                              </button>
+                              <button
+                                type="button"
+                                className="sidebar-project-icon-btn"
+                                onClick={() => openProjectNewChat(project)}
+                                title="在 SciForge 中开始新对话"
+                                aria-label={`在 ${project.label} 中开始新对话`}
+                              >
+                                <Edit3 size={14} />
+                              </button>
+                            </div>
+                            {sidebarProjectMenu?.kind === 'project' && sidebarProjectMenu.projectId === project.id ? renderSidebarProjectActionMenu(project) : null}
+                          </div>
+                          {visibleThreads.length ? (
+                            <div className="sidebar-thread-list">
+                              {visibleThreads.map((item) => renderSidebarThreadRow(item, project))}
+                              {hiddenThreadCount ? (
+                                <button
+                                  type="button"
+                                  className="sidebar-thread-more"
+                                  onClick={() => toggleProjectThreadExpansion(project.id)}
+                                >
+                                  <PanelTopOpen size={14} aria-hidden />
+                                  <span>展开显示</span>
+                                  <small>{hiddenThreadCount} 条</small>
+                                </button>
+                              ) : expanded && project.threads.length > SIDEBAR_PROJECT_THREAD_LIMIT ? (
+                                <button
+                                  type="button"
+                                  className="sidebar-thread-more"
+                                  onClick={() => toggleProjectThreadExpansion(project.id)}
+                                >
+                                  <ChevronDown size={14} aria-hidden />
+                                  <span>收起</span>
+                                </button>
+                              ) : null}
+                            </div>
+                          ) : allProjectThreadsCollapsed ? null : (
+                            <p className="sidebar-empty-note sidebar-project-empty">暂无对话</p>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : (
                   <p className="sidebar-empty-note">还没有聊天</p>
                 )}
+                {showArchivedPanel && archivedThreadCount ? (
+                  <div className="sidebar-archived-panel" aria-label="已归档对话">
+                    <div className="sidebar-archived-panel-head">
+                      <Archive size={14} aria-hidden />
+                      <span>已归档对话</span>
+                      <small>{archivedThreadCount} 条</small>
+                    </div>
+                    <div className="sidebar-thread-list">
+                      {sidebarArchivedThreadItems.length
+                        ? sidebarArchivedThreadItems.map((item) => renderSidebarThreadRow(item))
+                        : <p className="sidebar-empty-note">暂无已归档对话</p>}
+                    </div>
+                  </div>
+                ) : null}
               </section>
-              <section className="sidebar-section sidebar-section-tools" aria-label="工具">
-                <button type="button" className={cx('nav-item sidebar-command', page === 'components' && 'active')} onClick={() => setPage('components')}>
-                  <Plug size={17} />
-                  <span>插件</span>
-                </button>
-                <div className="sidebar-static-row" aria-label="自动化">
-                  <Workflow size={17} />
-                  <span>自动化</span>
-                  <Badge variant="muted">0</Badge>
-                </div>
-                <p className="sidebar-empty-note">暂无自动化</p>
-              </section>
-              <section className="sidebar-section sidebar-section-views" aria-label="工作区视图">
-                {navItems.filter((item) => item.id !== 'components').map((item) => (
-                  <button key={item.id} className={cx('nav-item', page === item.id && 'active')} onClick={() => setPage(item.id)}>
-                    <item.icon size={17} />
-                    <span>{item.label}</span>
-                  </button>
-                ))}
-              </section>
+            </div>
+            <div className="sidebar-tools-strip" aria-label="工具">
+              <div className="sidebar-section-title sidebar-tools-title">
+                <span>工具</span>
+              </div>
+              <button type="button" className={cx('nav-item sidebar-command sidebar-tool-item', page === 'components' && 'active')} onClick={() => setPage('components')}>
+                <Plug size={16} />
+                <span>应用</span>
+              </button>
+              <div className="sidebar-static-row sidebar-tool-item muted" aria-label="自动化">
+                <Workflow size={16} />
+                <span>自动化</span>
+                <Badge variant="muted">即将推出</Badge>
+              </div>
             </div>
             <div className="scenario-list scenario-list-workspace">
               <div className="sidebar-section-title sidebar-project-title">
@@ -942,8 +1613,15 @@ export function Sidebar({
                     {contextMenu.entry ? <button type="button" className="danger" onClick={() => void handleContextMenuAction(workspaceActions.delete)}>删除</button> : null}
                   </div>
                 ) : null}
-                <details className="explorer-folder-picker">
-                  <summary>打开其他文件夹…</summary>
+                <button
+                  type="button"
+                  className="explorer-folder-picker-trigger"
+                  onClick={() => void chooseWorkspaceRootPath()}
+                >
+                  打开其他文件夹…
+                </button>
+                <details ref={folderPickerRef} className="explorer-folder-picker explorer-folder-picker-advanced">
+                  <summary>手动输入路径</summary>
                   <div className="explorer-folder-picker-body">
                     <input
                       className="workspace-path-editor explorer-path-input"
@@ -975,7 +1653,7 @@ export function Sidebar({
           </div>
         </div>
       ) : null}
-      {!collapsed ? (
+      {showWorkbenchNav && !collapsed ? (
         <div
           className="resize-handle"
           role="separator"

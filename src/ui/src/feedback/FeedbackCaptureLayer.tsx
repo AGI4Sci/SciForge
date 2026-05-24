@@ -69,6 +69,7 @@ export function FeedbackCaptureLayer({
   const [priority, setPriority] = useState<FeedbackPriority>('normal');
   const [tags, setTags] = useState('');
   const [saveHint, setSaveHint] = useState('');
+  const [annotationReferenceCount, setAnnotationReferenceCount] = useState(0);
 
   function selectableElementFromEvent(event: MouseEvent) {
     const element = event.target instanceof Element ? event.target : null;
@@ -96,9 +97,20 @@ export function FeedbackCaptureLayer({
     onAnnotationModeChange?.(false);
   }
 
+  function addAnnotationReference(element: Element, event: MouseEvent) {
+    const context = contextForElement(element, event, 'menu');
+    const reference = context.objectReference
+      ?? referenceForFeedbackTarget(context.target, context.selectedText, 'object');
+    onReference(reference);
+    setHoverTarget(context.target);
+    setAnnotationReferenceCount((count) => count + 1);
+    setSaveHint('');
+  }
+
   useEffect(() => {
     if (!annotationModeActive) {
       setHoverTarget(null);
+      setAnnotationReferenceCount(0);
       return;
     }
     setContextTarget(null);
@@ -140,7 +152,7 @@ export function FeedbackCaptureLayer({
         if (!element) return;
         event.preventDefault();
         event.stopPropagation();
-        openAnnotationComment(element, event);
+        addAnnotationReference(element, event);
         return;
       }
       if (!element) return;
@@ -262,7 +274,11 @@ export function FeedbackCaptureLayer({
         <div className="feedback-annotation-hint" role="status">
           <div>
             <strong>注释模式</strong>
-            <span>移动鼠标选择页面目标，点击添加精准评论；Esc 退出。</span>
+            <span>
+              {annotationReferenceCount > 0
+                ? `已引用 ${annotationReferenceCount} 个对象到主对话；继续点选，或在输入栏描述关系。`
+                : '点击页面对象引用到主对话；可连续点选多个对象，右键添加反馈评论，Esc 退出。'}
+            </span>
           </div>
           <button type="button" onClick={() => onAnnotationModeChange?.(false)}>退出</button>
         </div>

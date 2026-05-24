@@ -3,7 +3,7 @@ import type { PageId } from '../../data';
 import type { ScenarioInstanceId } from '../../domain';
 
 const APP_NAVIGATION_STORAGE_KEY = 'sciforge.app-navigation.v1';
-const validPages = new Set<PageId>(['dashboard', 'workbench', 'components', 'timeline', 'feedback']);
+const validPages = new Set<PageId>(['workbench', 'components', 'timeline', 'feedback']);
 const defaultNavigation = { page: 'workbench' as const, scenarioId: defaultBuiltInScenarioId };
 
 export function appNavigationStorageKey() {
@@ -18,9 +18,10 @@ export function loadStoredAppNavigation(): { page: PageId; scenarioId: ScenarioI
     const raw = window.localStorage.getItem(appNavigationStorageKey());
     if (!raw) return defaultNavigation;
     const parsed = JSON.parse(raw) as { page?: unknown; scenarioId?: unknown };
-    const page = typeof parsed.page === 'string' && validPages.has(parsed.page as PageId)
-      ? parsed.page as PageId
-      : 'workbench';
+    const storedPage = typeof parsed.page === 'string' ? parsed.page : '';
+    const page = storedPage === 'dashboard' || !validPages.has(storedPage as PageId)
+      ? 'workbench'
+      : storedPage as PageId;
     const scenarioId = typeof parsed.scenarioId === 'string' && parsed.scenarioId.trim()
       ? parsed.scenarioId.trim()
       : defaultBuiltInScenarioId;

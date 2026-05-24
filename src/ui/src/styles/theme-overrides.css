@@ -22,7 +22,6 @@
 .theme-light .scenario-settings,
 .theme-light .scenario-preview-panel,
 .theme-light .scenario-publish-row,
-.theme-light .component-contract-panel,
 .theme-light .feedback-popover {
   background: var(--surface-panel);
   border-color: var(--border);
@@ -36,9 +35,7 @@
 .theme-light .composer,
 .theme-light .reference-composer,
 .theme-light .runtime-health-panel,
-.theme-light .component-workbench-summary,
-.theme-light .component-demo-preview,
-.theme-light .component-workbench-toolbar,
+.theme-light .apps-empty-state,
 .theme-light .feedback-hero,
 .theme-light .feedback-target-summary,
 .theme-light .workspace-preview {
@@ -100,7 +97,6 @@
 .theme-light .feedback-toolbar button,
 .theme-light .feedback-toolbar select,
 .theme-light .feedback-close,
-.theme-light .component-contract-header button,
 .theme-light .object-focus-actions button,
 .theme-light .candidate-action,
 .theme-light .stream-events-toggle,
@@ -126,8 +122,6 @@
 .theme-light .feedback-field input,
 .theme-light .feedback-field select,
 .theme-light .feedback-field textarea,
-.theme-light .component-search input,
-.theme-light .component-filter select,
 .theme-light .editable-block textarea,
 .theme-light .alignment-save-row input {
   background: var(--surface-input);
@@ -159,7 +153,6 @@
 .theme-light .scenario-config-panel,
 .theme-light .runtime-health-item,
 .theme-light .alignment-version-row,
-.theme-light .component-module-row,
 .theme-light .feedback-stats span {
   background: var(--surface-muted);
   border-color: var(--border);
@@ -208,8 +201,7 @@
 .theme-light .reasoning,
 .theme-light .scenario-contract pre,
 .theme-light .scenario-draft-preview pre,
-.theme-light .draft-preview pre,
-.theme-light .component-contract-panel pre {
+.theme-light .draft-preview pre {
   color: var(--text-secondary);
 }
 

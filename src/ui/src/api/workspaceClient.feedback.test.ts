@@ -386,6 +386,7 @@ describe('workspaceClient feedback issue helpers', () => {
       initialMessage: 'Inspect the selected target before changing code.',
       allowOpenAiRuntime: false,
       gitMode: 'manual',
+      launchSurface: 'system-terminal',
       cols: 120,
       rows: 30,
     });

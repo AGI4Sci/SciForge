@@ -371,7 +371,7 @@ export interface FeedbackCommentRecord {
   screenshot?: FeedbackScreenshotEvidence;
   githubIssueUrl?: string;
   githubIssueNumber?: number;
-  githubSyncStatus?: 'not-synced' | 'pending' | 'github-open' | 'conflict' | 'failed';
+  githubSyncStatus?: 'not-synced' | 'pending' | 'github-open' | 'github-closed' | 'conflict' | 'failed';
   githubSyncError?: string;
   githubSyncedAt?: string;
   githubIssueState?: 'open' | 'closed';

@@ -3,6 +3,8 @@ import test from 'node:test';
 import type { SciForgeSession, SciForgeWorkspaceState } from '../domain';
 import { createOptimisticUserTurnSession, requestPayloadForTurn } from '../app/chat/sessionTransforms';
 import {
+  archiveActiveSession,
+  archiveAllActiveSessions,
   clearArchivedSessions,
   deleteActiveChat,
   deleteArchivedSessions,
@@ -54,6 +56,33 @@ function workspace(active = session('active'), archived: SciForgeSession[] = [])
 function sessionsByScenario(items: Record<string, SciForgeSession>): SciForgeWorkspaceState['sessionsByScenario'] {
   return items as unknown as SciForgeWorkspaceState['sessionsByScenario'];
 }
+
+test('archives the active session from the sidebar without deleting history', () => {
+  const state = workspace();
+  const next = archiveActiveSession(state, 'scenario-any', 'active', 'Scenario new chat');
+
+  assert.equal(next.archivedSessions.length, 1);
+  assert.equal(next.archivedSessions[0].sessionId, 'active');
+  assert.notEqual(next.sessionsByScenario['scenario-any'].sessionId, 'active');
+});
+
+test('archives all active sessions that have activity', () => {
+  const active = session('active-a', 'scenario-a');
+  const quiet = session('quiet-b', 'scenario-b', []);
+  quiet.messages = [];
+  const state = {
+    ...workspace(active),
+    sessionsByScenario: sessionsByScenario({
+      'scenario-a': active,
+      'scenario-b': quiet,
+    }),
+  };
+  const next = archiveAllActiveSessions(state, (scenarioId) => `${scenarioId} 新聊天`);
+
+  assert.equal(next.archivedSessions.length, 1);
+  assert.equal(next.archivedSessions[0].sessionId, 'active-a');
+  assert.notEqual(next.sessionsByScenario['scenario-a'].sessionId, 'active-a');
+});
 
 test('starts a new chat while archiving the previous active session', () => {
   const state = workspace();

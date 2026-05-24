@@ -15,6 +15,8 @@ import {
   normalizeFeedbackGithubToken,
   normalizePeerInstances,
   normalizeWorkspaceRootPath,
+  applyWorkspaceProjectSwitch,
+  resolvePeerWorkspaceWriterUrl,
   saveSciForgeConfig,
   updateConfig,
   validatePeerInstances,
@@ -323,7 +325,7 @@ describe('SciForge config persistence', () => {
     });
   });
 
-  it('validates peer instance URLs, required writer URL, and unique names', () => {
+  it('validates peer instance URLs and unique names', () => {
     const peers = normalizePeerInstances([
       { name: 'peer-a', appUrl: 'notaurl', workspaceWriterUrl: '', role: 'main', trustLevel: 'readonly' },
       { name: 'Peer-A', appUrl: 'http://127.0.0.1:5173', workspaceWriterUrl: 'ftp://127.0.0.1:5174' },
@@ -331,10 +333,44 @@ describe('SciForge config persistence', () => {
 
     assert.deepEqual(validatePeerInstances(peers), [
       'peer-a: appUrl must be a valid http(s) URL.',
-      'peer-a: workspaceWriterUrl is required.',
       'Peer-A: name must be unique.',
       'Peer-A: workspaceWriterUrl must be a valid http(s) URL.',
     ]);
+  });
+
+  it('resolvePeerWorkspaceWriterUrl keeps readonly peers on the shared writer', () => {
+    const config = updateConfig(defaultSciForgeConfig, {
+      workspaceWriterBaseUrl: 'http://127.0.0.1:6173',
+      peerInstances: [{
+        name: 'p2',
+        appUrl: '',
+        workspaceWriterUrl: 'http://127.0.0.1:6174',
+        workspacePath: '/tmp/p2',
+        role: 'peer',
+        trustLevel: 'readonly',
+        enabled: true,
+      }],
+    });
+
+    assert.equal(resolvePeerWorkspaceWriterUrl(config, config.peerInstances![0]), 'http://127.0.0.1:6173');
+  });
+
+  it('applyWorkspaceProjectSwitch only changes workspace routing fields', () => {
+    const config = updateConfig(defaultSciForgeConfig, {
+      workspacePath: '/tmp/p1',
+      workspaceWriterBaseUrl: 'http://127.0.0.1:6173',
+      modelName: 'shared-model',
+      apiKey: 'shared-key',
+    });
+    const next = applyWorkspaceProjectSwitch(config, {
+      workspacePath: '/tmp/p2',
+      peerInstances: [{ name: 'p1', appUrl: '', workspaceWriterUrl: '', workspacePath: '/tmp/p1', role: 'peer', trustLevel: 'readonly', enabled: true }],
+    });
+
+    assert.equal(next.workspacePath, '/tmp/p2');
+    assert.equal(next.workspaceWriterBaseUrl, 'http://127.0.0.1:6173');
+    assert.equal(next.modelName, 'shared-model');
+    assert.equal(next.apiKey, 'shared-key');
   });
 
   it('normalizes accidental .sciforge internal paths back to the workspace root', () => {

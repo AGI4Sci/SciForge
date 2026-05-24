@@ -104,6 +104,7 @@ test('R-DESK preload exposes a narrow renderer contract with Node disabled', () 
 	    'runtime:ready',
     'runtime:shutdown',
     'platform:open-external',
+    'platform:pick-directory',
     'platform:reveal-path',
   ]);
   assert.ok(plan.preload.forbiddenRendererCapabilities.includes('start or own Runtime Codex sidecars'));

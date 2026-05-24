@@ -1,10 +1,13 @@
 {
   "schemaVersion": 1,
   "id": "feedback-evidence-feedback-mphmifu5-0521zr-scrubbed-annotated",
-  "feedbackId": "feedback-mphmifu5-0521zr",
   "kind": "scrubbed-annotated-screenshot",
+  "label": "Scrubbed annotated screenshot",
   "ref": "repair-evidence/public/feedback-screenshots/feedback-mphmifu5-0521zr/scrubbed-annotated.png",
   "sourceRef": ".sciforge/feedback/feedback-mphmifu5-0521zr/annotated-screenshot.data-url",
+  "localRef": "repair-evidence/public/feedback-screenshots/feedback-mphmifu5-0521zr/scrubbed-annotated.png",
+  "markdownImageUrl": "https://raw.githubusercontent.com/AGI4Sci/SciForge/dev/repair-evidence/public/feedback-screenshots/feedback-mphmifu5-0521zr/scrubbed-annotated.png",
+  "githubMarkdownUrl": "https://raw.githubusercontent.com/AGI4Sci/SciForge/dev/repair-evidence/public/feedback-screenshots/feedback-mphmifu5-0521zr/scrubbed-annotated.png",
   "mediaType": "image/png",
   "width": 1200,
   "height": 1329,
@@ -13,9 +16,19 @@
   "createdAt": "2026-05-23T00:41:45.788Z",
   "localOnly": false,
   "visibility": "public",
-  "uploadStatus": "local",
+  "uploadStatus": "uploaded",
   "includeForAgent": false,
   "metadata": {
-    "scrubPolicy": "Inline data URL omitted from GitHub and public issue bodies; annotated screenshot pixels are retained as captured evidence."
-  }
+    "scrubPolicy": "Inline data URL omitted from GitHub and public issue bodies; annotated screenshot pixels are retained as captured evidence.",
+    "manifestRef": "repair-evidence/public/feedback-screenshots/feedback-mphmifu5-0521zr/scrubbed-annotated.manifest.json"
+  },
+  "publicUrl": "https://raw.githubusercontent.com/AGI4Sci/SciForge/dev/repair-evidence/public/feedback-screenshots/feedback-mphmifu5-0521zr/scrubbed-annotated.png",
+  "uploadRef": "repair-evidence/public/feedback-screenshots/feedback-mphmifu5-0521zr/scrubbed-annotated.png",
+  "uploadProvider": "github-contents",
+  "uploadedAt": "2026-05-23T23:07:54.748Z",
+  "uploadedBy": "feedback-inbox",
+  "uploadCommitUrl": "https://github.com/AGI4Sci/SciForge/commit/25c3b22efed461ba38a18e08cfa3e101079c8d24",
+  "uploadBranch": "dev",
+  "feedbackId": "feedback-mphmifu5-0521zr",
+  "updatedAt": "2026-05-23T23:08:00.150Z"
 }

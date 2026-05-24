@@ -171,15 +171,10 @@ async function openLiteratureScenario(page: Page) {
   if (await composer.isVisible({ timeout: 1_000 }).catch(() => false)) {
     return;
   }
-  await page.getByText(/Scenario Library|AI Scenario Builder/).first().waitFor({ timeout: 15_000 });
-  const importButton = page.getByRole('button', { name: '导入文献场景', exact: true });
-  if (await importButton.count()) {
-    await importButton.click();
-  } else {
-    const library = page.locator('main');
-    const card = library.locator('.scenario-card', { hasText: 'literature-evidence-review' }).first();
-    await card.getByRole('button', { name: '打开', exact: true }).click();
-  }
+  await page.locator('.sidebar-activitybar').getByRole('button', { name: '聊天工作台' }).click();
+  await page.getByRole('button', { name: '新聊天' }).waitFor({ timeout: 15_000 });
+  await page.getByLabel('搜索聊天、项目、页面').fill('文献');
+  await page.locator('.sidebar-result-row').filter({ hasText: '文献证据评估' }).first().click();
   await openWorkbenchChrome(page);
   await expandComposer(page);
   await composer.waitFor({ timeout: 15_000 });
@@ -208,7 +203,7 @@ async function openWorkbenchChrome(page: Page) {
   if (await textarea.isVisible({ timeout: 1_000 }).catch(() => false) || await collapsed.isVisible({ timeout: 1_000 }).catch(() => false)) {
     return;
   }
-  const workbenchButton = page.getByRole('button', { name: '场景工作台' });
+  const workbenchButton = page.getByRole('button', { name: '聊天工作台' });
   if (await workbenchButton.isVisible({ timeout: 2_000 }).catch(() => false)) {
     await workbenchButton.click();
   }

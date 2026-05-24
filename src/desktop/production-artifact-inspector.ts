@@ -484,6 +484,7 @@ function preloadLooksIsolated(value: string): boolean {
     'runtime:ready',
     'runtime:shutdown',
     'platform:open-external',
+    'platform:pick-directory',
     'platform:reveal-path',
   ];
   return value.includes('contextBridge') &&

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react';
-import { ArchiveRestore, CheckCheck, ExternalLink, GitBranch, Loader2, RefreshCcw, TerminalSquare, Trash2, UploadCloud } from 'lucide-react';
+import { ArchiveRestore, CheckCheck, CheckCircle2, ExternalLink, GitBranch, Loader2, RefreshCcw, TerminalSquare, Trash2 } from 'lucide-react';
 import { defaultSciForgeConfig } from '../../config';
 import {
   confirmFeedbackRepairAction,
@@ -15,7 +15,7 @@ import {
   stopFeedbackRepairHandoff,
   uploadFeedbackEvidenceAssets,
 } from '../../api/workspaceClient';
-import { buildFeedbackBundle, buildFeedbackGithubIssueBody, buildFeedbackGithubIssueTitle, submitFeedbackGithubIssue, syncFeedbackGithubIssues } from '../../feedback/githubFeedback';
+import { buildFeedbackBundle, buildFeedbackGithubIssueBody, buildFeedbackGithubIssueTitle, buildFeedbackRepairClosureReport, submitFeedbackGithubIssue, syncFeedbackGithubIssues, syncFeedbackRepairClosure } from '../../feedback/githubFeedback';
 import { feedbackRepairAuditForIssue, type FeedbackRepairAuditViewModel } from '../../feedback/feedbackWorkspace';
 import { FeedbackRepairAuditPanel, repairSafeMode } from '../../feedback/FeedbackRepairAuditPanel';
 import { FeedbackCodexTerminalPanel } from '../../feedback/FeedbackCodexTerminalPanel';
@@ -29,7 +29,7 @@ import { buildBlockedRepairHandoffResultInput, DEFAULT_FEEDBACK_REPAIR_CONFIRMAT
 import { repairPeerReadinessFromProbe, repairReadinessSummary, workspaceWriterReadinessRows, type RepairPeerReadinessByName, type RepairPeerReadinessProbe } from './feedbackRepairReadiness';
 
 type FeedbackStatusFilter = FeedbackCommentStatus | 'all';
-type PendingGithubActionKind = 'upload-evidence' | 'submit-issue' | 'sync-open-issues';
+type PendingGithubActionKind = 'submit-issue' | 'sync-open-issues';
 type PendingQueueActionKind = 'soft-delete';
 type FeedbackGitOperationMode = 'manual' | 'auto';
 type FeedbackPageStateNoticeState = 'ready' | 'partial' | 'blocked';
@@ -54,6 +54,14 @@ interface PendingRepairAction {
   action: FeedbackRepairActionRecord['action'];
   safeModeActive: boolean;
   safeModeDetail: string;
+}
+
+interface PendingRepairClosure {
+  issueId: string;
+  result?: FeedbackRepairResultRecord;
+  report: string;
+  githubIssueNumber?: number;
+  githubIssueUrl?: string;
 }
 
 interface FeedbackPageStateNotice {
@@ -131,6 +139,7 @@ export function FeedbackInboxPage({
   onGithubIssueSyncPending,
   onGithubIssueSyncFailed,
   onGithubIssueCreated,
+  onGithubIssueClosed,
   onOpenGithubSettings,
 }: {
   config: SciForgeConfig;
@@ -160,6 +169,7 @@ export function FeedbackInboxPage({
   onGithubIssueSyncPending: (commentIds: string[]) => void;
   onGithubIssueSyncFailed: (commentIds: string[], error: unknown) => void;
   onGithubIssueCreated: (commentIds: string[], issue: { number: number; htmlUrl: string; title: string }) => void;
+  onGithubIssueClosed: (commentIds: string[], issue: { number: number; htmlUrl?: string; title?: string; commentUrl?: string; updatedAt?: string }) => void;
   onOpenGithubSettings: () => void;
 }) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -174,6 +184,7 @@ export function FeedbackInboxPage({
   const [pendingGithubAction, setPendingGithubAction] = useState<PendingGithubAction | undefined>();
   const [pendingQueueAction, setPendingQueueAction] = useState<PendingQueueAction | undefined>();
   const [pendingRepairAction, setPendingRepairAction] = useState<PendingRepairAction | undefined>();
+  const [pendingRepairClosure, setPendingRepairClosure] = useState<PendingRepairClosure | undefined>();
   const [repairActionSafeModeConfirmed, setRepairActionSafeModeConfirmed] = useState(false);
   const [gitOperationMode, setGitOperationMode] = useState<FeedbackGitOperationMode>('manual');
   const [handoffBusyById, setHandoffBusyById] = useState<Record<string, boolean>>({});
@@ -398,7 +409,7 @@ export function FeedbackInboxPage({
 
   function requestGithubAction(kind: PendingGithubActionKind) {
     const repo = effectiveGithubRepo;
-    if ((kind === 'submit-issue' || kind === 'sync-open-issues' || kind === 'upload-evidence') && !repo) {
+    if ((kind === 'submit-issue' || kind === 'sync-open-issues') && !repo) {
       setGithubActionHint('请在设置中填写有效的反馈 GitHub 仓库（owner/repo）。');
       return;
     }
@@ -415,19 +426,6 @@ export function FeedbackInboxPage({
       return;
     }
     if (!issueScopeComments.length) return;
-    if (kind === 'upload-evidence') {
-      const uploadable = issueScopeComments.filter(hasUploadableEvidenceAsset);
-      if (!uploadable.length) return;
-      setPendingGithubAction({
-        kind,
-        repo,
-        commentIds: issueScopeComments.map((comment) => comment.id),
-        count: uploadable.length,
-        scopeLabel: issueScopeLabel,
-      });
-      setGithubActionHint(`等待确认：将上传 ${uploadable.length} 条 scrubbed evidence，并回写公开 URL。`);
-      return;
-    }
     if (githubDryRun) {
       void submitGithubIssueApi(issueScopeComments);
       return;
@@ -457,22 +455,7 @@ export function FeedbackInboxPage({
       await syncGithubOpenIssues();
       return;
     }
-    const targetComments = commentsForPendingAction(action);
-    if (action.kind === 'upload-evidence') {
-      await uploadSelectedEvidence(targetComments);
-      return;
-    }
-    await submitGithubIssueApi(targetComments);
-  }
-
-  async function uploadSelectedEvidence(targetComments = issueScopeComments) {
-    if (!targetComments.length) return;
-    setEvidenceUploadBusy(true);
-    try {
-      await uploadEvidenceForComments(targetComments, 'manual');
-    } finally {
-      setEvidenceUploadBusy(false);
-    }
+    await submitGithubIssueApi(commentsForPendingAction(action));
   }
 
   async function submitGithubIssueApi(targetComments = issueScopeComments) {
@@ -485,6 +468,7 @@ export function FeedbackInboxPage({
       return;
     }
     setGithubSubmitBusy(true);
+    if (!githubDryRun) setEvidenceUploadBusy(true);
     const submittedIds = targetComments.map((comment) => comment.id);
     if (!githubDryRun) onGithubIssueSyncPending(submittedIds);
     try {
@@ -519,6 +503,7 @@ export function FeedbackInboxPage({
       setGithubActionHint(error instanceof Error ? error.message : String(error));
     } finally {
       setGithubSubmitBusy(false);
+      if (!githubDryRun) setEvidenceUploadBusy(false);
     }
   }
 
@@ -645,14 +630,14 @@ export function FeedbackInboxPage({
       actor: 'runtime-codex-repair-handoff',
       startedAt,
       note: initialGuidance
-        ? `Runtime Codex repair is preparing for ${target.name}; initial terminal guidance: ${initialGuidance}`
-        : `Runtime Codex repair is preparing for ${target.name}; terminal mirror will stream dispatch events.`,
+        ? `Runtime Codex repair is preparing for ${target.name}; initial repair guidance: ${initialGuidance}`
+        : `Runtime Codex repair is preparing for ${target.name}; repair log evidence will stream dispatch events.`,
       terminalMirrorRef,
       planRef: `${target.workspacePath.replace(/\/+$/, '')}/.sciforge/repair-results/${repairRunId}/repair-request-plan.json`,
       terminalMirror: [
         { timestamp: startedAt, stream: 'event', text: `Feedback Inbox repair requested for ${item.id}.` },
         { timestamp: startedAt, stream: 'event', text: `Target: ${target.name}.` },
-        ...(initialGuidance ? [{ timestamp: startedAt, stream: 'event' as const, text: `Initial user terminal guidance: ${initialGuidance}` }] : []),
+        ...(initialGuidance ? [{ timestamp: startedAt, stream: 'event' as const, text: `Initial user repair guidance: ${initialGuidance}` }] : []),
         { timestamp: startedAt, stream: 'event', text: 'Preparing feedback bundle, target manifest, and Runtime Codex dispatch.' },
       ],
       confirmationPolicy: DEFAULT_FEEDBACK_REPAIR_CONFIRMATION_POLICY,
@@ -719,7 +704,7 @@ export function FeedbackInboxPage({
         externalInstanceId: executorId,
         externalInstanceName: executorName,
         note: initialGuidance
-          ? `Runtime Codex repair handoff started for ${executorName}; initial terminal guidance: ${initialGuidance}`
+          ? `Runtime Codex repair handoff started for ${executorName}; initial repair guidance: ${initialGuidance}`
           : `Runtime Codex repair handoff started for ${executorName}; commit/push/PR/merge remain disabled without explicit confirmation.`,
         terminalMirrorRef: resolvedTerminalMirrorRef,
         planRef: resolvedPlanRef,
@@ -837,7 +822,7 @@ export function FeedbackInboxPage({
       terminalMirror: [
         { timestamp: startedAt, stream: 'event', text: `Feedback Inbox repair requested for ${item.id}.` },
         { timestamp: startedAt, stream: 'event', text: `Target: ${targetName}.` },
-        ...(input.initialGuidance ? [{ timestamp: startedAt, stream: 'event' as const, text: `Initial user terminal guidance: ${input.initialGuidance}` }] : []),
+        ...(input.initialGuidance ? [{ timestamp: startedAt, stream: 'event' as const, text: `Initial user repair guidance: ${input.initialGuidance}` }] : []),
         { timestamp: startedAt, stream: 'stderr', text: `Pre-dispatch blocked [${input.failureKind}]: ${input.message}` },
       ],
       confirmationPolicy: DEFAULT_FEEDBACK_REPAIR_CONFIRMATION_POLICY,
@@ -973,11 +958,103 @@ export function FeedbackInboxPage({
       if (resolution === 'remaining') {
         setRemainingProblemById((current) => ({ ...current, [item.id]: '' }));
       }
-      setHandoffHintById((current) => ({ ...current, [item.id]: record.message }));
+      if (resolution === 'solved') {
+        const closureResult = updatedResult ?? result;
+        if (!requestFeedbackCompletionClosure(item, closureResult, record)) {
+          setHandoffHintById((current) => ({ ...current, [item.id]: `${record.message} 已标记为 fixed。` }));
+        }
+      } else {
+        setHandoffHintById((current) => ({ ...current, [item.id]: record.message }));
+      }
     } catch (error) {
       setHandoffHintById((current) => ({ ...current, [item.id]: `Repair resolution feedback failed closed：${error instanceof Error ? error.message : String(error)}` }));
     } finally {
       setHandoffBusyById((current) => ({ ...current, [item.id]: false }));
+    }
+  }
+
+  function requestFeedbackCompletionClosure(
+    item: FeedbackCommentRecord,
+    result?: FeedbackRepairResultRecord,
+    action?: FeedbackRepairActionRecord,
+  ) {
+    const report = buildFeedbackRepairClosureReport(item, result, action);
+    if (!item.githubIssueNumber) {
+      onStatusChange([item.id], 'fixed');
+      setHandoffHintById((current) => ({ ...current, [item.id]: '已标记为 fixed；这个反馈没有关联 GitHub Issue。' }));
+      return false;
+    }
+    setPendingRepairClosure({
+      issueId: item.id,
+      result,
+      report,
+      githubIssueNumber: item.githubIssueNumber,
+      githubIssueUrl: item.githubIssueUrl,
+    });
+    setHandoffHintById((current) => ({ ...current, [item.id]: `等待确认：将写入完成报告并关闭 GitHub Issue #${item.githubIssueNumber}。` }));
+    return true;
+  }
+
+  async function closePendingRepairClosure(syncGithub: boolean) {
+    const pending = pendingRepairClosure;
+    if (!pending) return;
+    const issueNumber = pending.githubIssueNumber;
+    if (!syncGithub || !issueNumber) {
+      onStatusChange([pending.issueId], 'fixed');
+      setPendingRepairClosure(undefined);
+      setHandoffHintById((current) => ({ ...current, [pending.issueId]: '已标记为 fixed；未同步 GitHub。' }));
+      return;
+    }
+    const repo = effectiveGithubRepo;
+    if (!repo) {
+      setGithubActionHint('请在设置中填写有效的反馈 GitHub 仓库（owner/repo）。');
+      return;
+    }
+    if (!ensureGithubTokenOrOpenSettings()) return;
+    const token = feedbackGithubToken?.trim();
+    setGithubSubmitBusy(true);
+    try {
+      onStatusChange([pending.issueId], 'fixed');
+      const synced = await syncFeedbackRepairClosure({
+        repo,
+        token,
+        issueNumber,
+        reportBody: pending.report,
+        closeIssue: true,
+      });
+      const syncedAt = synced.updatedAt || nowIso();
+      if (pending.result) {
+        onRepairResultWritten({
+          ...pending.result,
+          githubSyncStatus: 'synced',
+          githubSyncError: undefined,
+          githubSyncedAt: syncedAt,
+          githubCommentUrl: synced.commentUrl,
+        });
+      }
+      onGithubIssueClosed([pending.issueId], {
+        number: issueNumber,
+        htmlUrl: synced.htmlUrl || pending.githubIssueUrl,
+        commentUrl: synced.commentUrl,
+        updatedAt: syncedAt,
+      });
+      setPendingRepairClosure(undefined);
+      setGithubActionHint(`已评论并关闭 GitHub Issue #${issueNumber}。`);
+      setHandoffHintById((current) => ({ ...current, [pending.issueId]: `已标记 fixed，并同步关闭 GitHub Issue #${issueNumber}。` }));
+    } catch (error) {
+      onGithubIssueSyncFailed([pending.issueId], error);
+      if (pending.result) {
+        onRepairResultWritten({
+          ...pending.result,
+          githubSyncStatus: 'failed',
+          githubSyncError: error instanceof Error ? error.message : String(error),
+          githubSyncedAt: nowIso(),
+        });
+      }
+      setGithubActionHint(error instanceof Error ? error.message : String(error));
+      setHandoffHintById((current) => ({ ...current, [pending.issueId]: '本地已标记 fixed；GitHub 同步失败，可修正配置后重试。' }));
+    } finally {
+      setGithubSubmitBusy(false);
     }
   }
 
@@ -987,7 +1064,7 @@ export function FeedbackInboxPage({
         <div>
           <Badge variant="info">Feedback Bundle</Badge>
           <h1>反馈收件箱</h1>
-          <p>汇总多用户页面评论、元素定位、证据完整性和 repair terminal mirror，作为 GitHub 同步与 Codex CLI 修复交接面。</p>
+          <p>汇总多用户页面评论、元素定位、证据完整性、修复线程和日志证据，作为 GitHub 同步与 Codex CLI 修复交接面。</p>
         </div>
         <div className="feedback-stats">
           <span><strong>{activeComments.length}</strong> active</span>
@@ -1191,14 +1268,6 @@ export function FeedbackInboxPage({
           导出 Bundle
         </DelayedHelpButton>
         <DelayedHelpButton
-          onClick={() => requestGithubAction('upload-evidence')}
-          disabled={!issueScopeComments.some(hasUploadableEvidenceAsset) || evidenceUploadBusy}
-          help="把已选反馈的 scrubbed screenshot 从 repair-evidence/public 上传到 GitHub Contents 或 writer 配置的对象存储，并回写公开 URL。"
-        >
-          {evidenceUploadBusy ? <Loader2 size={15} className="feedback-inline-spin" aria-hidden /> : <UploadCloud size={14} aria-hidden />}
-          上传 Evidence
-        </DelayedHelpButton>
-        <DelayedHelpButton
           className="feedback-github-primary"
           onClick={() => requestGithubAction('submit-issue')}
           disabled={!issueScopeComments.length || githubSubmitBusy}
@@ -1277,6 +1346,31 @@ export function FeedbackInboxPage({
           </div>
         </section>
       ) : null}
+      {pendingRepairClosure ? (
+        <section className="feedback-repair-closure-confirmation" role="alertdialog" aria-label="确认修复闭环">
+          <div className="feedback-repair-closure-head">
+            <div>
+              <Badge variant="success">resolved</Badge>
+              <strong>确认解决并同步</strong>
+              <p>系统已根据反馈、可用修复结果和用户确认生成简报。确认后会把本地反馈标记为 fixed，并在 GitHub Issue 写入简报后关闭。</p>
+            </div>
+            <Badge variant="info">{pendingRepairClosure.githubIssueNumber ? `#${pendingRepairClosure.githubIssueNumber}` : 'local'}</Badge>
+          </div>
+          <pre>{pendingRepairClosure.report}</pre>
+          <div className="feedback-repair-closure-actions">
+            <button type="button" onClick={() => void closePendingRepairClosure(true)} disabled={githubSubmitBusy}>
+              {githubSubmitBusy ? <Loader2 size={14} className="feedback-inline-spin" aria-hidden /> : <CheckCircle2 size={14} aria-hidden />}
+              同步并关闭 Issue
+            </button>
+            <button type="button" onClick={() => void closePendingRepairClosure(false)} disabled={githubSubmitBusy}>
+              只标记本地 fixed
+            </button>
+            <button type="button" onClick={() => setPendingRepairClosure(undefined)} disabled={githubSubmitBusy}>
+              稍后
+            </button>
+          </div>
+        </section>
+      ) : null}
       {!visibleComments.length ? (
         <div className="empty-runtime-state">
           <Badge variant="muted">empty</Badge>
@@ -1315,6 +1409,9 @@ export function FeedbackInboxPage({
                   const terminalInfo = feedbackCommentTerminalInfo(item);
                   const repairSummary = feedbackRepairCardSummary(audit);
                   const githubTrace = feedbackGithubTrace(item, githubSyncedOpenIssues);
+                  const canUserCloseGithubIssue = Boolean(item.githubIssueNumber)
+                    && item.githubIssueState !== 'closed'
+                    && item.githubSyncStatus !== 'github-closed';
                   return (
                     <>
                 <div className="feedback-card-head">
@@ -1330,16 +1427,31 @@ export function FeedbackInboxPage({
 	                  {item.deletedAt ? ` · soft-deleted ${formatSessionTime(item.deletedAt)}` : ''}
 	                  {item.restoredAt ? ` · restored ${formatSessionTime(item.restoredAt)}` : ''}
 	                </p>
-	                {item.githubIssueUrl ? (
-	                  <a
-                    className="feedback-github-card-link"
-                    href={item.githubIssueUrl}
-                    onClick={(event) => openGithubIssue(event, item.githubIssueUrl!)}
-                    title="打开对应的 GitHub Issue"
-                  >
-                    GitHub #{item.githubIssueNumber ?? '?'}
-	                    <ExternalLink size={13} aria-hidden />
-	                  </a>
+	                {item.githubIssueUrl || canUserCloseGithubIssue ? (
+                    <div className="feedback-github-card-actions">
+                      {item.githubIssueUrl ? (
+                        <a
+                          className="feedback-github-card-link"
+                          href={item.githubIssueUrl}
+                          onClick={(event) => openGithubIssue(event, item.githubIssueUrl!)}
+                          title="打开对应的 GitHub Issue"
+                        >
+                          GitHub #{item.githubIssueNumber ?? '?'}
+                          <ExternalLink size={13} aria-hidden />
+                        </a>
+                      ) : null}
+                      {canUserCloseGithubIssue ? (
+                        <button
+                          type="button"
+                          onClick={() => requestFeedbackCompletionClosure(item, audit.latestResult)}
+                          disabled={githubSubmitBusy}
+                          title="用户确认完成后写入简报并关闭对应的 GitHub Issue"
+                        >
+                          <CheckCheck size={13} aria-hidden />
+                          确认完成并关闭 Issue
+                        </button>
+                      ) : null}
+                    </div>
 	                ) : null}
 	                <div className={cx('feedback-github-trace', githubTrace.tone)} aria-label="GitHub sync trace">
 	                  <span>local <code>{item.id}</code></span>
@@ -1396,26 +1508,7 @@ export function FeedbackInboxPage({
 	                    />
 	                  </section>
 	                ) : null}
-	                <FeedbackScreenshotPreview item={item} config={config} />
-	                {(item.expectedBehavior || item.actualBehavior) ? (
-	                  <details className="feedback-card-section">
-	                    <summary>期望与实际</summary>
-	                    <div className="feedback-behavior-grid">
-	                      {item.expectedBehavior ? (
-	                        <>
-	                          <span>expected</span>
-	                          <p>{item.expectedBehavior}</p>
-	                        </>
-	                      ) : null}
-	                      {item.actualBehavior ? (
-	                        <>
-	                          <span>actual</span>
-	                          <p>{item.actualBehavior}</p>
-	                        </>
-	                      ) : null}
-	                    </div>
-	                  </details>
-	                ) : null}
+		                <FeedbackEvidenceReview item={item} config={config} />
 	                <FeedbackCodexTerminalPanel
 	                  config={config}
 	                  item={item}
@@ -1424,11 +1517,11 @@ export function FeedbackInboxPage({
                     gitMode={gitOperationMode}
 	                  onRepairRunWritten={onRepairRunWritten}
 	                />
-	                <details className="feedback-card-section" open={Boolean(handoffHintById[item.id])}>
-	                  <summary>
-	                    高级 repair 交接与 audit · {audit.label}
-	                    {audit.repairThreads.length ? ` · ${audit.repairThreads.length} 线程` : ''}
-	                  </summary>
+		                {feedbackShouldShowRepairAudit(audit, handoffHintById[item.id]) ? (
+		                <details className="feedback-card-section feedback-card-audit-section" open={Boolean(handoffHintById[item.id] || audit.status === 'blocked')}>
+		                  <summary>
+		                    修复审计 · {audit.label}
+		                  </summary>
 	                  <FeedbackRepairAuditPanel
 	                    audit={audit}
 	                    repairTargets={repairTargets}
@@ -1474,8 +1567,9 @@ export function FeedbackInboxPage({
 	                      onRepairGuidanceWritten(response.guidance);
 	                      return response;
 	                    }}
-	                  />
-	                </details>
+		                  />
+		                </details>
+		                ) : null}
 	                <details className="feedback-card-section">
 	                  <summary>定位、证据完整性与 refs</summary>
 	                  <div className="feedback-target-summary compact">
@@ -1568,6 +1662,36 @@ export function FeedbackInboxPage({
         )}
       </section>
     </main>
+  );
+}
+
+function FeedbackEvidenceReview({ item, config }: { item: FeedbackCommentRecord; config: SciForgeConfig }) {
+  return (
+    <section className="feedback-evidence-review" aria-label="截图证据、用户评论和期望实际">
+      <div className="feedback-evidence-review-shot">
+        <FeedbackScreenshotPreview item={item} config={config} />
+      </div>
+      <div className="feedback-evidence-review-copy">
+        <div>
+          <span>用户评论</span>
+          <strong>{item.comment}</strong>
+        </div>
+        <div>
+          <span>期望</span>
+          <p>{item.expectedBehavior || '未单独填写；以用户评论为准。'}</p>
+        </div>
+        <div>
+          <span>实际</span>
+          <p>{item.actualBehavior || item.comment}</p>
+        </div>
+        <div className="feedback-evidence-review-context">
+          <span>页面</span>
+          <code>{item.runtime.page}</code>
+          <span>目标</span>
+          <code>{item.target.selector || item.target.path}</code>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -1678,7 +1802,7 @@ function feedbackRepairCardSummary(audit: FeedbackRepairAuditViewModel) {
       tone: 'idle',
       title: '尚未开始修复',
       detail: threadCount ? `已有 ${threadCount} 条历史线程；最新线程未开始。` : '这条反馈还没有 repair 线程。',
-      nextAction: '选择这条反馈点“修复选中”，或展开终端输入初始引导。',
+      nextAction: '选择这条反馈点“修复选中”，或在修复会话输入初始引导。',
     };
   }
   if (audit.status === 'fixed' || audit.latestResultVerdict === 'fixed') {
@@ -1686,7 +1810,7 @@ function feedbackRepairCardSummary(audit: FeedbackRepairAuditViewModel) {
       tone: 'fixed',
       title: '修复已完成',
       detail: audit.summary ?? audit.headline,
-      nextAction: audit.latestBrowserVerificationLabel ? '可查看复核、patch 和确认审计。' : '先记录 browser 复核，再按需确认本地 commit。',
+      nextAction: audit.latestBrowserVerificationLabel ? '可确认解决并同步状态。' : '先记录 browser 复核，再确认解决。',
     };
   }
   if (audit.status === 'blocked' || audit.latestResultVerdict === 'failed' || audit.latestResultVerdict === 'wont-fix') {
@@ -1694,7 +1818,7 @@ function feedbackRepairCardSummary(audit: FeedbackRepairAuditViewModel) {
       tone: 'blocked',
       title: '修复受阻',
       detail: failureKind ? `阻塞来源：${feedbackRepairFailureKindLabel(failureKind)}。` : (audit.summary ?? audit.headline),
-      nextAction: audit.latestRun?.id ? '展开终端查看最近日志，补充引导会新开一条修复线程。' : '处理配置或环境阻塞后重新启动 direct repair。',
+      nextAction: audit.latestRun?.id ? '展开日志证据查看最近状态，补充引导会新开一条修复线程。' : '处理配置或环境阻塞后重新启动 direct repair。',
     };
   }
   if (audit.latestRunStatus === 'running' || ['assigned', 'analyzing', 'patching', 'testing'].includes(audit.status)) {
@@ -1702,15 +1826,28 @@ function feedbackRepairCardSummary(audit: FeedbackRepairAuditViewModel) {
       tone: 'running',
       title: '修复进行中',
       detail: audit.executorInstance ? `${audit.executorInstance} 正在处理；${audit.label}` : audit.headline,
-      nextAction: '展开终端观察 Codex CLI 行增长，也可以发送引导介入。',
+      nextAction: '在修复会话观察 Codex CLI 行增长，也可以发送引导介入。',
     };
   }
   return {
     tone: 'attention',
     title: audit.needsHumanVerification ? '需要人工核验' : '修复需要跟进',
     detail: audit.summary ?? audit.headline,
-    nextAction: '展开查看证据完整性、terminal 和确认边界。',
+    nextAction: '查看证据完整性和修复会话后继续处理。',
   };
+}
+
+function feedbackShouldShowRepairAudit(audit: FeedbackRepairAuditViewModel, hint?: string) {
+  return Boolean(
+    hint
+    || audit.status === 'blocked'
+    || audit.latestResultVerdict === 'failed'
+    || audit.latestResultVerdict === 'wont-fix'
+    || audit.needsHumanVerification
+    || audit.missingTestEvidence
+    || audit.actionHistory.length
+    || audit.guidanceHistory.length,
+  );
 }
 
 function feedbackRepairFailureKindLabel(kind: string) {
@@ -1792,7 +1929,7 @@ function feedbackGithubTrace(item: FeedbackCommentRecord, syncedIssues: GithubSy
     syncedAt,
     error,
     publicEvidenceRef,
-    tone: syncStatus === 'failed' || syncStatus === 'conflict' || error ? 'warning' : item.githubIssueNumber ? 'synced' : 'local',
+    tone: syncStatus === 'failed' || syncStatus === 'conflict' || error ? 'warning' : syncStatus === 'github-closed' ? 'closed' : item.githubIssueNumber ? 'synced' : 'local',
   };
 }
 
@@ -1808,7 +1945,6 @@ function publicEvidenceRefForFeedback(item: FeedbackCommentRecord) {
 
 function githubActionTitle(kind: PendingGithubActionKind) {
   return ({
-    'upload-evidence': '确认上传公开 evidence',
     'submit-issue': '确认创建 GitHub Issue',
     'sync-open-issues': '确认从 GitHub 同步',
   } as Record<PendingGithubActionKind, string>)[kind];
@@ -1816,7 +1952,6 @@ function githubActionTitle(kind: PendingGithubActionKind) {
 
 function githubActionImpact(kind: PendingGithubActionKind) {
   return ({
-    'upload-evidence': '会把 scrubbed/public evidence 发送到 GitHub Contents 或配置的对象存储；不会上传 raw/private screenshot。',
     'submit-issue': '会把结构化 issue body 和公开 evidence refs 发送到 GitHub；不会包含 raw data URL、secret 或本地 private evidence。',
     'sync-open-issues': '会使用配置的 token 调用 GitHub API 读取未关闭 Issue，只更新本地同步缓存和导入记录，不创建远端内容。',
   } as Record<PendingGithubActionKind, string>)[kind];
@@ -1824,7 +1959,6 @@ function githubActionImpact(kind: PendingGithubActionKind) {
 
 function githubActionConfirmLabel(kind: PendingGithubActionKind) {
   return ({
-    'upload-evidence': '确认上传 evidence',
     'submit-issue': '确认提交 Issue',
     'sync-open-issues': '确认同步 GitHub',
   } as Record<PendingGithubActionKind, string>)[kind];
@@ -1832,7 +1966,6 @@ function githubActionConfirmLabel(kind: PendingGithubActionKind) {
 
 function githubActionCancelImpact(kind: PendingGithubActionKind) {
   return ({
-    'upload-evidence': '没有发送 token 或上传 evidence，公开 URL 不会被回写。',
     'submit-issue': '没有发送 token、issue payload 或 evidence。',
     'sync-open-issues': '没有向 GitHub 发起读取请求，也没有发送 token 或改动本地同步缓存。',
   } as Record<PendingGithubActionKind, string>)[kind];
@@ -1840,7 +1973,6 @@ function githubActionCancelImpact(kind: PendingGithubActionKind) {
 
 function githubActionDataLabel(action: PendingGithubAction) {
   if (action.kind === 'sync-open-issues') return 'GitHub token for read-only issue sync; up to 500 open issues';
-  if (action.kind === 'upload-evidence') return `${action.count} scrubbed/public screenshot evidence item(s)`;
   return `${action.count} feedback item(s), issue markdown, public evidence refs, labels/assignees/milestone config`;
 }
 
@@ -1852,7 +1984,7 @@ function queueActionTitle(kind: PendingQueueActionKind) {
 
 function queueActionImpact(kind: PendingQueueActionKind) {
   return ({
-    'soft-delete': '只会把当前可见且已选的本地反馈标记为 deleted；不会删除 GitHub Issue、repair audit、workspace patch、terminal mirror 或截图原始证据。',
+    'soft-delete': '只会把当前可见且已选的本地反馈标记为 deleted；不会删除 GitHub Issue、repair audit、workspace patch、repair log evidence 或截图原始证据。',
   } as Record<PendingQueueActionKind, string>)[kind];
 }
 

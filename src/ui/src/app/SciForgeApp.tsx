@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   builtInScenarioIdForRuntimeInput,
   createBuiltInScenarioRecord,
@@ -8,6 +8,7 @@ import { FeedbackCaptureLayer } from '../feedback/FeedbackCaptureLayer';
 import { saveFeedbackCommentEvidenceBundle } from '../api/workspaceClient';
 import {
   importGithubOpenIssuesAsFeedback as applyGithubOpenIssuesAsFeedback,
+  markFeedbackGithubIssueClosed,
   markFeedbackGithubIssueCreated,
   markFeedbackGithubIssueSyncFailed,
   markFeedbackGithubIssueSyncPending,
@@ -53,11 +54,13 @@ import {
   deleteArchivedSessions as deleteScenarioArchivedSessions,
   deleteSessionMessage,
   editSessionMessage,
+  archiveActiveSession as archiveScenarioActiveSession,
+  archiveAllActiveSessions as archiveAllScenarioActiveSessions,
   restoreArchivedSession as restoreScenarioArchivedSession,
   startNewChat,
 } from '../workspace/sessionWorkspace';
 import { markReusableRunInWorkspace } from '../workspace/reusableTaskWorkspace';
-import { loadDesktopRuntimeConfigDefaults, loadSciForgeConfig, normalizeFeedbackGithubRepo, normalizeWorkspaceRootPath, saveSciForgeConfig, updateConfig } from '../config';
+import { loadDesktopRuntimeConfigDefaults, loadSciForgeConfig, normalizeFeedbackGithubRepo, normalizeWorkspaceRootPath, saveSciForgeConfig, applyWorkspaceProjectSwitch, updateConfig } from '../config';
 import {
   loadFileBackedSciForgeConfig,
   loadSciForgeInstanceManifest,
@@ -68,13 +71,21 @@ import {
 } from '../api/workspaceClient';
 import { TimelinePage } from './AlignmentPages';
 import { ComponentWorkbenchPage } from './ComponentWorkbenchPage';
-import { Dashboard } from './Dashboard';
 import { previewPackageAutoRunPrompt } from './ResultsRenderer';
 import type { HandoffAutoRunRequest } from './results/viewPlanResolver';
 import { useRuntimeHealth } from './runtimeHealthPanel';
 import { cx } from './uiPrimitives';
 import { resolveSearchNavigation, workbenchNavigationForScenario } from './appShell/navigation';
-import { SettingsDialog, Sidebar, TopBar, type ConfigSaveState } from './appShell/ShellPanels';
+import { SettingsPage, Sidebar, TopBar, type ConfigSaveState } from './appShell/ShellPanels';
+import type { SettingsSectionId } from './appShell/settingsPageModel';
+import { buildWorkspaceProjectActivation } from './appShell/sidebarProjectModel';
+import {
+  buildSidebarProjectSessionsByPath,
+  loadPeerSidebarProjectSessionSnapshots,
+  peerSidebarProjectSessionTargets,
+  type SidebarProjectSessionsByPath,
+} from './appShell/sidebarProjectSessions';
+import { sidebarProjectPath } from './appShell/sidebarProjectModel';
 import {
   APP_BUILD_ID,
   loadFeedbackAuthor,
@@ -109,7 +120,8 @@ export function SciForgeApp() {
   const [config, setConfig] = useState<SciForgeConfig>(() => loadSciForgeConfig());
   const [configFileHydrated, setConfigFileHydrated] = useState(false);
   const [detectedFeedbackGithubRepo, setDetectedFeedbackGithubRepo] = useState<string | undefined>();
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const returnPageRef = useRef<PageId>(initialNavigation.page);
+  const [settingsSection, setSettingsSection] = useState<SettingsSectionId>('general');
   const [workspaceState, setWorkspaceState] = useState<SciForgeWorkspaceState>(() => {
     const state = loadWorkspaceState();
     const loadedConfig = loadSciForgeConfig();
@@ -129,6 +141,12 @@ export function SciForgeApp() {
   const [drafts, setDrafts] = useState<Record<ScenarioInstanceId, string>>(() => createBuiltInScenarioRecord(''));
   const [messageScrollTops, setMessageScrollTops] = useState<Record<ScenarioInstanceId, number>>(() => createBuiltInScenarioRecord(0));
   const [workspaceRecoveryFocusKey, setWorkspaceRecoveryFocusKey] = useState<string | undefined>();
+  const [peerProjectSessionsByPath, setPeerProjectSessionsByPath] = useState<SidebarProjectSessionsByPath>({});
+  const [pendingSidebarThread, setPendingSidebarThread] = useState<{
+    scenarioId: ScenarioInstanceId;
+    sessionId: string;
+    workspacePath: string;
+  } | null>(null);
 
   const sessions = workspaceState.sessionsByScenario;
   const archivedSessionsByAgent = useMemo(
@@ -139,10 +157,39 @@ export function SciForgeApp() {
     () => buildArchivedSessionCountsByScenario(archivedSessionsByAgent),
     [archivedSessionsByAgent],
   );
+  const peerSessionRefreshKey = useMemo(
+    () => JSON.stringify(peerSidebarProjectSessionTargets(config)),
+    [config],
+  );
+  const projectSessionsByPath = useMemo(
+    () => buildSidebarProjectSessionsByPath(config, workspaceState, peerProjectSessionsByPath),
+    [config, workspaceState, peerProjectSessionsByPath],
+  );
 
   useEffect(() => {
-    saveStoredAppNavigation({ page, scenarioId });
+    if (page !== 'settings') saveStoredAppNavigation({ page, scenarioId });
   }, [page, scenarioId]);
+
+  function openSettings(section: SettingsSectionId = 'general') {
+    returnPageRef.current = page === 'settings' ? returnPageRef.current : page;
+    setSettingsSection(section);
+    setPage('settings');
+  }
+
+  function closeSettings() {
+    setPage(returnPageRef.current);
+  }
+
+  useEffect(() => {
+    if (!configFileHydrated) return;
+    let cancelled = false;
+    void loadPeerSidebarProjectSessionSnapshots(config).then((snapshots) => {
+      if (!cancelled) setPeerProjectSessionsByPath(snapshots);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [config, configFileHydrated, peerSessionRefreshKey]);
 
 	  useEffect(() => {
 	    let cancelled = false;
@@ -261,16 +308,18 @@ export function SciForgeApp() {
 
   useEffect(() => {
     if (!workspaceHydrated) return;
+    if (pendingSidebarThread) return;
     if (workspaceRecoveryFocusKey) return;
     const focus = workspaceRecoveryFocusForState(workspaceState);
     setWorkspaceRecoveryFocusKey(focus ? `${focus.sessionId}:${focus.activeRunId}` : 'none');
     if (!focus) return;
     setScenarioId(focus.scenarioId);
     setPage('workbench');
-  }, [workspaceHydrated, workspaceRecoveryFocusKey, workspaceState]);
+  }, [workspaceHydrated, workspaceRecoveryFocusKey, workspaceState, pendingSidebarThread]);
 
   useEffect(() => {
     if (!workspaceHydrated) return;
+    if (sidebarProjectPath(config.workspacePath) !== sidebarProjectPath(workspaceState.workspacePath)) return;
     saveWorkspaceState(workspaceState);
     if (workspaceState.workspacePath.trim()) {
       persistWorkspaceState(compactWorkspaceStateForStorage(workspaceState), config)
@@ -435,6 +484,10 @@ export function SciForgeApp() {
     updateWorkspace((current) => markFeedbackGithubIssueCreated(current, commentIds, issue));
   }
 
+  function recordGithubIssueClosed(commentIds: string[], issue: { number: number; htmlUrl?: string; title?: string; commentUrl?: string; updatedAt?: string }) {
+    updateWorkspace((current) => markFeedbackGithubIssueClosed(current, commentIds, issue));
+  }
+
   function recordGithubIssueSyncPending(commentIds: string[]) {
     updateWorkspace((current) => markFeedbackGithubIssueSyncPending(current, commentIds));
   }
@@ -454,16 +507,52 @@ export function SciForgeApp() {
     const nextConfig = updateConfig(config, { workspacePath });
     setConfig(nextConfig);
     saveSciForgeConfig(nextConfig);
-    updateWorkspace((current) => ({ ...current, workspacePath }));
     void hydrateWorkspaceSnapshot(workspacePath, nextConfig, 'force');
+  }
+
+  function activateWorkspaceProject(
+    project: Parameters<typeof buildWorkspaceProjectActivation>[1],
+    thread?: { scenarioId: ScenarioInstanceId; sessionId: string },
+  ) {
+    const targetPath = sidebarProjectPath(project.detail || config.workspacePath);
+    const patch = buildWorkspaceProjectActivation(config, project);
+    if (patch) {
+      const departingPath = sidebarProjectPath(config.workspacePath);
+      if (departingPath) {
+        setPeerProjectSessionsByPath((current) => ({
+          ...current,
+          [departingPath]: {
+            sessionsByScenario: workspaceState.sessionsByScenario,
+            archivedSessions: workspaceState.archivedSessions ?? [],
+          },
+        }));
+      }
+    }
+    if (thread) {
+      const needsSwitch = Boolean(patch) || sidebarProjectPath(config.workspacePath) !== targetPath;
+      if (needsSwitch) {
+        setPendingSidebarThread({
+          ...thread,
+          workspacePath: sidebarProjectPath(patch?.workspacePath || targetPath),
+        });
+      } else {
+        restoreArchivedSession(thread.scenarioId, thread.sessionId);
+        setScenarioId(thread.scenarioId);
+        setPage('workbench');
+        return;
+      }
+    }
+    if (!patch) return;
+    updateRuntimeConfig(patch);
   }
 
   function updateRuntimeConfig(patch: Partial<SciForgeConfig>) {
     setConfig((current) => {
-      const next = updateConfig(current, patch);
+      const next = ('workspacePath' in patch && !('workspaceWriterBaseUrl' in patch))
+        ? applyWorkspaceProjectSwitch(current, patch)
+        : updateConfig(current, patch);
       saveSciForgeConfig(next);
       if ('workspacePath' in patch) {
-        updateWorkspace((state) => ({ ...state, workspacePath: next.workspacePath }));
         void hydrateWorkspaceSnapshot(next.workspacePath, next, 'force');
       }
       return next;
@@ -521,6 +610,36 @@ export function SciForgeApp() {
       sessionId,
       nowIso(),
       `${scenarioLabelForInstance(nextScenarioId)} 新聊天`,
+    ));
+  }
+
+  useEffect(() => {
+    if (!pendingSidebarThread || !workspaceHydrated) return;
+    const currentPath = normalizeWorkspaceRootPath(config.workspacePath);
+    if (currentPath !== pendingSidebarThread.workspacePath) return;
+    const { scenarioId: nextScenarioId, sessionId } = pendingSidebarThread;
+    const active = workspaceState.sessionsByScenario[nextScenarioId];
+    if (active?.sessionId !== sessionId) {
+      restoreArchivedSession(nextScenarioId, sessionId);
+    }
+    setScenarioId(nextScenarioId);
+    setPage('workbench');
+    setPendingSidebarThread(null);
+  }, [pendingSidebarThread, workspaceHydrated, config.workspacePath, workspaceState.sessionsByScenario]);
+
+  function archiveThread(nextScenarioId: ScenarioInstanceId, sessionId: string) {
+    updateWorkspace((current) => archiveScenarioActiveSession(
+      current,
+      nextScenarioId,
+      sessionId,
+      `${scenarioLabelForInstance(nextScenarioId)} 新聊天`,
+    ));
+  }
+
+  function archiveAllChats() {
+    updateWorkspace((current) => archiveAllScenarioActiveSessions(
+      current,
+      (nextScenarioId) => `${scenarioLabelForInstance(nextScenarioId)} 新聊天`,
     ));
   }
 
@@ -590,6 +709,17 @@ export function SciForgeApp() {
     <div className={cx('app-shell', `theme-${config.theme ?? 'dark'}`)}>
       <div className="ambient ambient-a" />
       <div className="ambient ambient-b" />
+      {page === 'settings' ? (
+        <SettingsPage
+          config={config}
+          onChange={updateRuntimeConfig}
+          saveState={configSaveState}
+          onSave={saveRuntimeConfigNow}
+          onBack={closeSettings}
+          initialSection={settingsSection}
+        />
+      ) : (
+        <>
       <Sidebar
         page={page}
         setPage={setPage}
@@ -603,10 +733,16 @@ export function SciForgeApp() {
           setPage('workbench');
           newChat(nextScenarioId);
         }}
+        onRestoreArchivedSession={restoreArchivedSession}
+        onArchiveThread={archiveThread}
+        onArchiveAllChats={archiveAllChats}
         onSearchNavigate={handleSearch}
-        onSettingsOpen={() => setSettingsOpen(true)}
+        onSettingsOpen={() => openSettings()}
         workspaceStatus={workspaceStatus}
         onWorkspacePathChange={setWorkspacePath}
+        onWorkspaceProjectActivate={activateWorkspaceProject}
+        projectSessionsByPath={projectSessionsByPath}
+        activeWorkspacePath={workspaceState.workspacePath}
         deferWorkbenchFilePreview={page === 'workbench'}
         onWorkbenchFileOpened={(file) => setWorkbenchWorkspaceFileEditor({ file, draft: file.content })}
         workbenchEditorFilePath={workbenchWorkspaceFileEditor?.file.path ?? null}
@@ -615,7 +751,7 @@ export function SciForgeApp() {
       <div className="main-shell">
         <TopBar
           onSearch={handleSearch}
-          onSettingsOpen={() => setSettingsOpen(true)}
+          onSettingsOpen={() => openSettings()}
           theme={config.theme}
           onThemeToggle={() => updateRuntimeConfig({ theme: (config.theme ?? 'dark') === 'dark' ? 'light' : 'dark' })}
           healthItems={appHealthItems}
@@ -623,16 +759,7 @@ export function SciForgeApp() {
           onAnnotationModeToggle={() => setFeedbackAnnotationModeActive((current) => !current)}
         />
         <div className="content-shell">
-          {page === 'dashboard' ? (
-            <Dashboard
-              setPage={setPage}
-              setScenarioId={setScenarioId}
-              config={config}
-              workspaceState={workspaceState}
-              onApplyScenarioDraft={applyScenarioOverride}
-              onWorkbenchPrompt={updateDraft}
-            />
-          ) : page === 'workbench' ? (
+          {page === 'workbench' ? (
             <Workbench
               scenarioId={scenarioId}
               config={config}
@@ -670,11 +797,7 @@ export function SciForgeApp() {
               onAvailableComponentIdsChange={setSelectedRuntimeComponentIds}
             />
           ) : page === 'components' ? (
-            <ComponentWorkbenchPage
-              config={config}
-              selectedComponentIds={selectedRuntimeComponentIds}
-              onSelectedComponentIdsChange={setSelectedRuntimeComponentIds}
-            />
+            <ComponentWorkbenchPage />
           ) : page === 'timeline' ? (
             <TimelinePage alignmentContracts={workspaceState.alignmentContracts ?? []} events={workspaceState.timelineEvents ?? []} onOpenScenario={(id) => {
               setScenarioId(id);
@@ -715,7 +838,8 @@ export function SciForgeApp() {
               onGithubIssueSyncPending={recordGithubIssueSyncPending}
               onGithubIssueSyncFailed={recordGithubIssueSyncFailed}
               onGithubIssueCreated={recordGithubIssueCreated}
-              onOpenGithubSettings={() => setSettingsOpen(true)}
+              onGithubIssueClosed={recordGithubIssueClosed}
+              onOpenGithubSettings={() => openSettings('feedback')}
             />
           )}
         </div>
@@ -732,15 +856,8 @@ export function SciForgeApp() {
         annotationModeActive={feedbackAnnotationModeActive}
         onAnnotationModeChange={setFeedbackAnnotationModeActive}
       />
-      {settingsOpen ? (
-        <SettingsDialog
-          config={config}
-          onChange={updateRuntimeConfig}
-          saveState={configSaveState}
-          onSave={saveRuntimeConfigNow}
-          onClose={() => setSettingsOpen(false)}
-        />
-      ) : null}
+        </>
+      )}
     </div>
   );
 }

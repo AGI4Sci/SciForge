@@ -60,10 +60,10 @@ try {
   try {
     const page = await newConfiguredPage(browser, { width: 1440, height: 1050 });
     await page.goto(`http://127.0.0.1:${uiPort}/`, { waitUntil: 'domcontentloaded' });
-    logStep('first visit shows Scenario Builder, Runtime Health, and import CTAs');
-    await page.getByText('AI Scenario Builder').waitFor({ timeout: 15_000 });
-    await page.getByText('Runtime Health').first().waitFor({ timeout: 15_000 });
-    await page.getByRole('button', { name: '导入文献场景', exact: true }).waitFor();
+    logStep('first visit opens workbench and settings diagnostics');
+    await page.getByLabel('聊天工作台').waitFor({ timeout: 15_000 });
+    await expandWorkbenchChrome(page);
+    await page.getByText('Scenario Builder').waitFor({ timeout: 15_000 });
     await assertNoRawJsonErrors(page, 'first-visit');
     await assertNoUnexplainedDisabledPrimaryButtons(page, 'first-visit');
     await assertTooltipCoverage(page, 'first-visit');
@@ -91,12 +91,6 @@ try {
     await page.getByRole('status').filter({ hasText: /已加载|当前目录为空/ }).first().waitFor({ timeout: 15_000 });
     logStep('workbench composer is available and timeline stays searchable');
     await openNavigationPanel(page);
-    await page.getByRole('button', { name: '场景工作台' }).click();
-    if (!await page.locator('.chat-panel .composer textarea').isVisible({ timeout: 2_000 }).catch(() => false)) {
-      await openNavigationPanel(page);
-      await page.getByRole('button', { name: '研究概览' }).click();
-      await page.getByRole('button', { name: '导入文献场景', exact: true }).click();
-    }
     await expandWorkbenchChrome(page);
     await expandComposer(page);
     await page.locator('.chat-panel .composer textarea').waitFor({ timeout: 15_000 });
@@ -115,30 +109,20 @@ try {
     await page.getByRole('button', { name: '回到场景' }).first().click();
     await expandWorkbenchChrome(page);
     await page.getByText('Scenario Builder').waitFor({ timeout: 15_000 });
+    logStep('local package import persists to workspace scenario library');
+    await saveScenarioPackageViaWriter(workspace, browserSmokeScenarioPackage());
+    const libraryResponse = await fetch(`http://127.0.0.1:${workspacePort}/api/sciforge/scenarios/library?workspacePath=${encodeURIComponent(workspace)}`);
+    assert.ok(libraryResponse.ok);
+    const library = await libraryResponse.json() as { library: { items: Array<{ id: string }> } };
+    assert.ok(library.library.items.some((item) => item.id === 'browser-smoke-imported-package'));
+
+    logStep('built-in scenarios stay reachable from sidebar search');
     await openNavigationPanel(page);
-    await page.getByRole('button', { name: '研究概览' }).click();
-    await page.getByRole('heading', { name: 'Scenario Library' }).waitFor({ timeout: 15_000 });
-    await page.getByText('last run no runs yet').first().waitFor({ timeout: 15_000 });
-    const catalogSection = page.locator('main', { has: page.getByRole('heading', { name: 'Scenario Library' }) });
-    await catalogSection.locator('.scenario-card', { hasText: 'biomedical-knowledge-graph' }).waitFor({ timeout: 15_000 });
-    const importChooser = page.waitForEvent('filechooser');
-    logStep('local package import jumps directly into its workbench');
-    await page.getByRole('button', { name: '导入 package', exact: true }).click();
-    await (await importChooser).setFiles(importPackagePath);
+    await page.getByLabel('搜索聊天、项目、页面').fill('生物医学');
+    await page.locator('.sidebar-result-row').filter({ hasText: '生物医学知识图谱' }).first().click();
+    await expandWorkbenchChrome(page);
     await page.getByText('Scenario Builder').waitFor({ timeout: 15_000 });
-    await page.getByText('browser-smoke-imported-package').first().waitFor({ timeout: 15_000 });
-    await openNavigationPanel(page);
-    await page.getByRole('button', { name: '研究概览' }).click();
-    await page.getByRole('heading', { name: 'Scenario Library' }).waitFor();
-    await page.getByText(/versions/).first().waitFor({ timeout: 15_000 });
-    const importedCard = page.locator('.scenario-card', { hasText: 'browser-smoke-imported-package' }).first();
-    await importedCard.scrollIntoViewIfNeeded();
-    await page.waitForTimeout(500);
-    await importedCard.getByRole('button', { name: '导出', exact: true }).click({ force: true });
-    await page.getByRole('dialog', { name: 'Package export preview' }).waitFor({ timeout: 15_000 });
-    await page.getByText(/portable manifest|contains workspace refs/).waitFor({ timeout: 15_000 });
-    await page.getByRole('button', { name: '确认导出' }).click();
-    await page.getByText(/已导出 Browser Smoke Imported Package package JSON/).waitFor({ timeout: 15_000 });
+    await page.locator('code', { hasText: /biomedical-knowledge-graph/ }).first().waitFor({ timeout: 15_000 });
     await page.locator('.scenario-builder textarea').fill('构建一个单细胞差异表达场景，输入表达矩阵和metadata，输出火山图、热图、UMAP和execution diagnostics。');
     await page.getByRole('button', { name: '生成场景设置' }).click();
     await page.locator('.draft-preview code').first().waitFor({ timeout: 30_000 });
@@ -272,20 +256,13 @@ try {
     assert.deepEqual((failedRestorePage as Page & { __sciforgePageErrors?: string[] }).__sciforgePageErrors ?? [], [], 'failed run restore workflow should not emit page errors');
     await failedRestorePage.close();
 
+    logStep('omics built-in scenario opens from sidebar search');
     await openNavigationPanel(page);
-    await page.getByRole('button', { name: '研究概览' }).click();
-    await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.getByRole('heading', { name: 'Scenario Library' }).waitFor();
-    await page.getByLabel('搜索 Scenario Library').fill('omics');
-    await page.getByLabel('按 skill domain 过滤').selectOption('omics');
-    const omicsDraftOrBuiltInCard = page.locator('.scenario-card').filter({ hasText: /omics-differential-exploration-workspace-draft|omics-differential-exploration/ }).first();
-    await omicsDraftOrBuiltInCard.waitFor({ timeout: 15_000 });
-    await page.getByLabel('排序 Scenario Library').selectOption('title');
-    await omicsDraftOrBuiltInCard.waitFor({ timeout: 15_000 });
-    await omicsDraftOrBuiltInCard.getByRole('button', { name: /打开|导入并打开/ }).first().click();
+    await page.getByLabel('搜索聊天、项目、页面').fill('组学');
+    await page.locator('.sidebar-result-row').filter({ hasText: '组学差异分析' }).first().click();
     await expandWorkbenchChrome(page);
     await page.getByText('Scenario Builder').waitFor();
-    await page.locator('code', { hasText: /workspace.*@1\.0\.0|omics-differential-exploration.*@/ }).first().waitFor({ timeout: 15_000 });
+    await page.locator('code', { hasText: /omics-differential-exploration/ }).first().waitFor({ timeout: 15_000 });
     await page.getByText(/将使用|输入研究问题后即可运行/).waitFor({ timeout: 15_000 });
 
     await page.setViewportSize({ width: 390, height: 900 });
@@ -329,16 +306,7 @@ try {
 
     const structurePage = await newConfiguredPage(browser, { width: 1280, height: 900 }, true);
     await structurePage.goto(`http://127.0.0.1:${uiPort}/`, { waitUntil: 'domcontentloaded' });
-    await structurePage.getByRole('heading', { name: 'Scenario Library' }).waitFor();
-    const catalog = structurePage.locator('main', { has: structurePage.getByRole('heading', { name: 'Scenario Library' }) });
-    const structurePackageCard = catalog.locator('.scenario-card', { hasText: 'structure-exploration' }).first();
-    await structurePackageCard.scrollIntoViewIfNeeded();
-    const importButton = structurePackageCard.getByRole('button', { name: '导入并打开', exact: true });
-    if (await importButton.count()) {
-      await importButton.click();
-    } else {
-      await structurePackageCard.getByRole('button', { name: '打开', exact: true }).click();
-    }
+    await openBuiltInScenarioViaSidebar(structurePage, '结构', '结构探索');
     await structurePage.getByRole('heading', { name: '结果视图' }).waitFor({ timeout: 15_000 });
     await structurePage.locator('[data-component-id="structure-viewer"], .structure-viewer').first().waitFor({ timeout: 15_000 });
     await structurePage.getByRole('button', { name: '只看图' }).click({ force: true });
@@ -386,14 +354,7 @@ try {
       });
     });
     await referencePage.goto(`http://127.0.0.1:${uiPort}/`, { waitUntil: 'domcontentloaded' });
-    await referencePage.getByRole('heading', { name: 'Scenario Library' }).waitFor({ timeout: 15_000 });
-    const referenceCatalog = referencePage.locator('main', { has: referencePage.getByRole('heading', { name: 'Scenario Library' }) });
-    const omicsReferenceCard = referenceCatalog.locator('.scenario-card').filter({
-      has: referencePage.locator('code').filter({ hasText: /^omics-differential-exploration$/ }),
-    }).first();
-    await omicsReferenceCard.getByRole('button', { name: /打开|导入并打开/ }).first().click();
-    await expandWorkbenchChrome(referencePage);
-    await referencePage.getByText('Scenario Builder').waitFor({ timeout: 15_000 });
+    await openBuiltInScenarioViaSidebar(referencePage, '组学', '组学差异分析');
     await referencePage.getByText('Browser smoke reference seed message').first().waitFor({ timeout: 15_000 });
     await referencePage.getByText('Latest omics summary').first().waitFor({ state: 'attached', timeout: 15_000 });
     await objectReferenceControl(referencePage, 'Browser smoke UMAP').waitFor({ timeout: 15_000 });
@@ -486,17 +447,7 @@ try {
     const cursorUxPage = await newConfiguredPage(browser, { width: 1360, height: 980 }, false);
     await installCursorLikeWorklogFixture(cursorUxPage);
     await cursorUxPage.goto(`http://127.0.0.1:${uiPort}/`, { waitUntil: 'domcontentloaded' });
-    await cursorUxPage.getByRole('heading', { name: 'Scenario Library' }).waitFor({ timeout: 15_000 });
-    const cursorUxCatalog = cursorUxPage.locator('main', { has: cursorUxPage.getByRole('heading', { name: 'Scenario Library' }) });
-    const cursorUxCard = cursorUxCatalog.locator('.scenario-card', { hasText: 'literature-evidence-review' }).first();
-    await cursorUxCard.scrollIntoViewIfNeeded();
-    const cursorUxImportButton = cursorUxCard.getByRole('button', { name: '导入并打开', exact: true });
-    if (await cursorUxImportButton.count()) {
-      await cursorUxImportButton.click();
-    } else {
-      await cursorUxCard.getByRole('button', { name: '打开', exact: true }).click();
-    }
-    await expandWorkbenchChrome(cursorUxPage);
+    await openBuiltInScenarioViaSidebar(cursorUxPage, '文献', '文献证据评估');
     await expandComposer(cursorUxPage);
     await cursorUxPage.getByPlaceholder(/输入研究问题/).waitFor({ timeout: 15_000 });
     logStep('T097/T095 RunningWorkProcess keeps structured work facts compact and raw output folded');
@@ -561,18 +512,7 @@ try {
       });
     });
     await contextPage.goto(`http://127.0.0.1:${uiPort}/`, { waitUntil: 'domcontentloaded' });
-    await contextPage.getByRole('heading', { name: 'Scenario Library' }).waitFor({ timeout: 15_000 });
-    const contextCatalog = contextPage.locator('main', { has: contextPage.getByRole('heading', { name: 'Scenario Library' }) });
-    const literatureCard = contextCatalog.locator('.scenario-card', { hasText: 'literature-evidence-review' }).first();
-    await literatureCard.scrollIntoViewIfNeeded();
-    const literatureImportButton = literatureCard.getByRole('button', { name: '导入并打开', exact: true });
-    if (await literatureImportButton.count()) {
-      await literatureImportButton.click();
-    } else {
-      await literatureCard.getByRole('button', { name: '打开', exact: true }).click();
-    }
-    await expandWorkbenchChrome(contextPage);
-    await contextPage.getByText('Scenario Builder').waitFor({ timeout: 15_000 });
+    await openBuiltInScenarioViaSidebar(contextPage, '文献', '文献证据评估');
     await expandComposer(contextPage);
     await contextPage.getByPlaceholder(/输入研究问题/).waitFor({ timeout: 15_000 });
     logStep('context meter turns watch, then near-limit, from mocked multi-turn usage');
@@ -746,11 +686,16 @@ async function selectTextInLocator(page: Page, locator: Locator, phrase: string)
 }
 
 async function openNavigationPanel(page: Page) {
-  if (await page.getByLabel('展开侧栏').isVisible().catch(() => false)) {
-    await page.getByLabel('展开侧栏').click();
-  }
-  await page.locator('.sidebar-activitybar button[aria-label="导航"]').click();
-  await page.getByRole('button', { name: '研究概览' }).waitFor({ timeout: 15_000 });
+  await page.locator('.sidebar-activitybar').getByRole('button', { name: '聊天工作台' }).click();
+  await page.getByRole('button', { name: '新聊天' }).waitFor({ timeout: 15_000 });
+}
+
+async function openBuiltInScenarioViaSidebar(page: Page, query: string, label: string) {
+  await openNavigationPanel(page);
+  await page.getByLabel('搜索聊天、项目、页面').fill(query);
+  await page.locator('.sidebar-result-row').filter({ hasText: label }).first().click();
+  await expandWorkbenchChrome(page);
+  await page.getByText('Scenario Builder').waitFor({ timeout: 15_000 });
 }
 
 async function clickMobileWorkbenchTab(page: Page, name: 'Builder' | 'Chat' | 'Results') {
@@ -1189,7 +1134,7 @@ async function writeReferenceScenarioPackage() {
 }
 
 async function assertNoCriticalOverflow(page: Page, label: string) {
-  const offenders = await page.evaluate(() => Array.from(document.querySelectorAll('button, .scenario-card, .scenario-settings-chrome-heading, .scenario-publish-row, .manifest-diagnostics'))
+  const offenders = await page.evaluate(() => Array.from(document.querySelectorAll('button, .scenario-settings-chrome-heading, .scenario-publish-row, .manifest-diagnostics'))
     .map((element) => {
       const box = element.getBoundingClientRect();
       const html = element instanceof HTMLElement ? element.innerText.trim().replace(/\s+/g, ' ').slice(0, 80) : element.tagName;
@@ -1304,4 +1249,13 @@ async function waitForHttp(url: string) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`Timed out waiting for ${url}`);
+}
+
+async function saveScenarioPackageViaWriter(workspacePath: string, pkg: ReturnType<typeof browserSmokeScenarioPackage>) {
+  const response = await fetch(`http://127.0.0.1:${workspacePort}/api/sciforge/scenarios/save`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspacePath, package: pkg }),
+  });
+  assert.ok(response.ok, `save scenario failed: ${await response.text()}`);
 }

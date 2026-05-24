@@ -102,6 +102,8 @@ export interface FeedbackRepairAuditViewModel {
     executorInstance?: string;
     terminalMirrorRef?: string;
     planRef?: string;
+    systemTerminalLaunchRef?: string;
+    continuityLabel: string;
     resultId?: string;
     resultStatus?: FeedbackRepairResultRecord['status'];
     resultVerdict?: FeedbackRepairResultRecord['verdict'];
@@ -338,6 +340,8 @@ export function feedbackRepairAuditForIssue(
   const repairThreads = [
     ...issueRuns.map((run) => {
       const result = resultsByRunId.get(run.id);
+      const runMetadata = recordValue(run.metadata);
+      const resultMetadata = recordValue(result?.metadata);
       return {
         id: run.id,
         status: run.status,
@@ -345,6 +349,8 @@ export function feedbackRepairAuditForIssue(
         executorInstance: executorInstanceLabel(run, result),
         terminalMirrorRef: run.terminalMirrorRef ?? result?.terminalMirrorRef,
         planRef: run.planRef ?? result?.planRef,
+        systemTerminalLaunchRef: metadataString(runMetadata, 'systemTerminalLaunchRef') ?? metadataString(resultMetadata, 'systemTerminalLaunchRef'),
+        continuityLabel: repairThreadContinuityLabel(run, result),
         resultId: result?.id,
         resultStatus: result?.status,
         resultVerdict: result?.verdict,
@@ -361,6 +367,8 @@ export function feedbackRepairAuditForIssue(
         executorInstance: executorInstanceLabel(undefined, result),
         terminalMirrorRef: result.terminalMirrorRef,
         planRef: result.planRef,
+        systemTerminalLaunchRef: metadataString(recordValue(result.metadata), 'systemTerminalLaunchRef'),
+        continuityLabel: repairThreadContinuityLabel(undefined, result),
         resultId: result.id,
         resultStatus: result.status,
         resultVerdict: result.verdict,
@@ -548,6 +556,24 @@ function executorInstanceLabel(run?: FeedbackRepairRunRecord, result?: FeedbackR
     ? `${run.externalInstanceName}${run.externalInstanceId ? ` (${run.externalInstanceId})` : ''}`
     : run.externalInstanceId;
   return undefined;
+}
+
+function repairThreadContinuityLabel(run?: FeedbackRepairRunRecord, result?: FeedbackRepairResultRecord) {
+  const runMetadata = recordValue(run?.metadata);
+  const resultMetadata = recordValue(result?.metadata);
+  const refs = recordValue(result?.refs);
+  const terminalMode = metadataString(runMetadata, 'terminalMode') ?? metadataString(resultMetadata, 'terminalMode');
+  const codexSessionId = metadataString(runMetadata, 'codexSessionId') ?? metadataString(resultMetadata, 'codexSessionId');
+  const isolatedWorktree = metadataString(runMetadata, 'isolatedWorktreePath')
+    ?? metadataString(resultMetadata, 'isolatedWorktreePath')
+    ?? metadataString(refs, 'worktreePath');
+  const failureKind = metadataString(runMetadata, 'failureKind') ?? metadataString(resultMetadata, 'failureKind');
+  if (terminalMode === 'system-terminal-codex') return 'system Terminal owns process';
+  if (run?.status === 'running' && !result) return 'live attach may be available';
+  if (codexSessionId && isolatedWorktree && !failureKind) return 'native resume available';
+  if (codexSessionId) return 'resume metadata partial';
+  if (run || result) return 'log-only retry';
+  return 'not started';
 }
 
 function humanVerificationLabel(value?: FeedbackRepairResultRecord['humanVerification']) {

@@ -30,6 +30,8 @@ import { assertCodexRealtimeSessionRequestBoundary, createCodexRealtimeSessionCl
 
 const CODEX_RUNTIME_REQUEST_SCHEMA_VERSION = 'sciforge.codex-runtime-stream-request.v1';
 const DEFAULT_RUNTIME_PROFILE = 'sciforge-runtime-deepseek';
+const UNCONFIGURED_RUNTIME_PROVIDER = 'unconfigured';
+const UNCONFIGURED_RUNTIME_MODEL = 'unconfigured';
 
 const TRANSPORT_SESSION_MESSAGE_LIMIT = 12;
 const TRANSPORT_RUN_LIMIT = 8;
@@ -514,8 +516,8 @@ function buildCodexRuntimeStreamRequest(input: {
 }) {
   const config = input.input.config;
   const profile = config.runtimeProfile?.trim() || DEFAULT_RUNTIME_PROFILE;
-  const provider = config.modelProvider.trim() || 'sciforge-deepseek-proxy';
-  const model = config.modelName.trim() || 'bailian/deepseek-v4-flash';
+  const provider = config.modelProvider.trim() || UNCONFIGURED_RUNTIME_PROVIDER;
+  const model = config.modelName.trim() || UNCONFIGURED_RUNTIME_MODEL;
   const codexSessionId = selectedCodexSessionId(input.input) ?? latestCodexSessionId(input.input.runs);
   const commandText = buildCodexRuntimeCommandText(input, { resumeRequested: Boolean(codexSessionId) });
   const attemptId = `${input.commandId}-attempt-1`;

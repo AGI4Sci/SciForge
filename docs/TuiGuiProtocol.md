@@ -1,6 +1,6 @@
 # TUI / GUI 协议
 
-最后更新：2026-05-21
+最后更新：2026-05-24
 
 ## 结论
 
@@ -574,6 +574,21 @@ GUI 可以包含确定性的 presentation logic，但这不会让它变成 task 
 - GUI 不从 stdout/stderr/raw payload 判断任务完成态。
 - GUI tools 只能做 presentation、confirmation、input、focus 和 GUI-local transaction。
 - 任何真实任务操作都必须回到 TUI 文本命令或 TUI 原生 tools。
+- GUI 不直接调用飞书、微信、企业微信、CLI、SDK、AppleScript 或桌面自动化；这些都是 TUI 侧 external connector 能力。
+
+## 外部软件连接器
+
+第三方 app 接入沿用 TUI 资产模型，不扩展 GUI 协议。飞书 CLI、飞书 API、微信/企业微信 bridge 等能力通过 Codex 原生 tool / plugin / MCP / worker 暴露；repo 内 adapter 可放在 `packages/connectors`。
+
+GUI 侧交互仍然只发送文本：
+
+```text
+/connectors feishu search-docs "实验记录"
+/connectors feishu draft-message --to feishu:chat:xxx --from artifact:artifacts/report.md
+/connectors wechat draft-message --to wechat:chat:xxx --text "请看这份报告"
+```
+
+TUI 调用 connector 后，应优先返回 refs-first 结果：`feishu:*`、`wechat:*`、`artifact:*`、`audit:*`。读操作可以映射为 MCP resources 或 `list/read/search/stat/watch` 风格资源；写、发送、删除、同步等外部副作用操作必须先 draft / dry-run，再通过 TUI approval 或 `gui.ask_user` 收集确认，并携带 idempotency / audit refs。
 
 ## 适配策略
 

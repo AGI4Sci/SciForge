@@ -10,6 +10,7 @@ import { join, resolve } from 'node:path';
 const WORKSPACE_PORT = Number(process.env.SCIFORGE_WORKSPACE_PORT || 5174);
 const UI_PORT = Number(process.env.SCIFORGE_UI_PORT || 5173);
 const AGENT_SERVER_PORT = Number(process.env.SCIFORGE_AGENT_SERVER_PORT || 18080);
+const CODEX_PROXY_PORT = Number(process.env.SCIFORGE_PROXY_PORT || 3891);
 const AGENT_SERVER_ROOT = resolve(process.env.SCIFORGE_AGENT_SERVER_ROOT || '../AgentServer');
 const CONFIG_LOCAL_PATH = resolve(process.env.SCIFORGE_CONFIG_PATH || 'config.local.json');
 const RUNTIME_LOG_DIR = resolve(process.env.SCIFORGE_LOG_DIR || 'workspace/.sciforge/logs');
@@ -43,7 +44,6 @@ export default defineConfig({
           if (id.includes('node_modules/3dmol')) return 'vendor-3dmol';
           if (id.includes('node_modules/recharts') || id.includes('node_modules/d3')) return 'vendor-charts';
           if (id.includes('node_modules/react') || id.includes('node_modules/react-dom')) return 'vendor-react';
-          if (id.includes('src/ui/src/app/Dashboard')) return 'dashboard';
           if (id.includes('src/ui/src/app/ResultsRenderer') || id.includes('src/ui/src/app/results') || id.includes('packages/presentation')) return 'results-rendering';
           if (id.includes('src/ui/src/app/ScenarioBuilderPanel') || id.includes('src/ui/src/scenarioCompiler')) return 'scenario-builder';
           if (id.includes('src/ui/src/app/ComponentWorkbenchPage')) return 'component-workbench';
@@ -62,6 +62,56 @@ function sciForgeRuntimeLauncher() {
   return {
     name: 'sciforge-runtime-launcher',
     configureServer(server: ViteDevServer) {
+      server.middlewares.use('/api/sciforge/provider-models', async (req: IncomingMessage, res: ServerResponse) => {
+        if (req.method === 'OPTIONS') {
+          res.writeHead(204, corsHeaders());
+          res.end();
+          return;
+        }
+        if (req.method !== 'GET') {
+          writeJson(res, 405, { ok: false, error: 'GET required' });
+          return;
+        }
+        try {
+          const response = await fetch(`http://127.0.0.1:${CODEX_PROXY_PORT}/v1/models`, {
+            headers: { Accept: 'application/json' },
+            signal: AbortSignal.timeout(8_000),
+          });
+          const body = await response.json().catch(() => ({}));
+          writeJson(res, response.ok ? 200 : response.status, body);
+        } catch (error) {
+          writeJson(res, 502, {
+            error: {
+              code: 'provider_models_unavailable',
+              message: error instanceof Error ? error.message : String(error),
+            },
+          });
+        }
+      });
+      server.middlewares.use('/api/sciforge/workspace/pick-directory', async (req: IncomingMessage, res: ServerResponse) => {
+        if (req.method === 'OPTIONS') {
+          res.writeHead(204, corsHeaders());
+          res.end();
+          return;
+        }
+        if (req.method !== 'POST') {
+          writeJson(res, 405, { ok: false, error: 'POST required' });
+          return;
+        }
+        try {
+          const body = await readJsonBody(req);
+          const { pickWorkspaceDirectoryPath } = await import('./src/runtime/server/workspace-directory-picker.ts');
+          const path = await pickWorkspaceDirectoryPath({
+            defaultPath: typeof body.defaultPath === 'string' ? body.defaultPath : undefined,
+          });
+          writeJson(res, 200, { ok: true, path, cancelled: !path });
+        } catch (error) {
+          writeJson(res, 400, {
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      });
       server.middlewares.use('/api/sciforge/runtime/start', async (req: IncomingMessage, res: ServerResponse) => {
         if (req.method === 'OPTIONS') {
           res.writeHead(204, corsHeaders());
@@ -238,7 +288,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
   };
 }
@@ -246,4 +296,13 @@ function corsHeaders() {
 function writeJson(res: { writeHead: (status: number, headers?: Record<string, string>) => void; end: (body?: string) => void }, status: number, body: unknown) {
   res.writeHead(status, { ...corsHeaders(), 'Content-Type': 'application/json' });
   res.end(JSON.stringify(body));
+}
+
+async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(Buffer.from(chunk));
+  const raw = Buffer.concat(chunks).toString('utf8').trim();
+  if (!raw) return {};
+  const parsed = JSON.parse(raw) as unknown;
+  return isRecord(parsed) ? parsed : {};
 }

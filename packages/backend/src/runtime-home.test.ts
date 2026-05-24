@@ -18,11 +18,16 @@ import {
   runtimeConfigToml,
 } from './runtime-home';
 
-test('runtime config pins the DeepSeek profile to the local Responses proxy', () => {
-  const config = runtimeConfigToml();
+test('runtime config writes the selected provider/model to the local Responses proxy profile', () => {
+  const config = runtimeConfigToml({
+    provider: 'native',
+    model: 'kimi/kimi-k2.6',
+    proxyBaseUrl: DEFAULT_PROXY_BASE_URL,
+  });
   assert.match(config, new RegExp(`profile = "${RUNTIME_PROFILE}"`));
-  assert.match(config, new RegExp(`model = "${RUNTIME_MODEL}"`));
-  assert.match(config, new RegExp(`model_provider = "${RUNTIME_PROVIDER}"`));
+  assert.match(config, /model = "kimi\/kimi-k2\.6"/);
+  assert.match(config, /model_provider = "native"/);
+  assert.match(config, /\[model_providers\.native\]/);
   assert.match(config, new RegExp(`env_key = "${RUNTIME_KEY_ENV}"`));
   assert.match(config, /wire_api = "responses"/);
   assert.match(config, /\[sandbox_workspace_write\]\s+network_access = true/);
@@ -31,6 +36,12 @@ test('runtime config pins the DeepSeek profile to the local Responses proxy', ()
     'sandbox_workspace_write.network_access=true',
   ]);
   assert.match(config, new RegExp(DEFAULT_PROXY_BASE_URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+});
+
+test('runtime config falls back to the compatibility defaults when no user model is configured', () => {
+  const config = runtimeConfigToml();
+  assert.match(config, new RegExp(`model = "${RUNTIME_MODEL}"`));
+  assert.match(config, new RegExp(`model_provider = "${RUNTIME_PROVIDER}"`));
 });
 
 test('runtime CODEX_HOME and default workspace stay under packages/backend', () => {
@@ -95,7 +106,7 @@ test('runtime readiness rejects OpenAI-looking proxy without explicit opt-in', a
     defaultWorkspace: join(runtimeRoot, 'workspaces', 'default'),
   };
   await mkdir(codexHome, { recursive: true });
-  await writeFile(paths.configPath, runtimeConfigToml('https://api.openai.com/v1'), 'utf8');
+  await writeFile(paths.configPath, runtimeConfigToml({ proxyBaseUrl: 'https://api.openai.com/v1', provider: 'openai-compatible', model: 'gpt-test' }), 'utf8');
   const previousKey = process.env[RUNTIME_KEY_ENV];
   const previousAllow = process.env.SCIFORGE_ALLOW_OPENAI_RUNTIME;
   process.env[RUNTIME_KEY_ENV] = 'test-key';

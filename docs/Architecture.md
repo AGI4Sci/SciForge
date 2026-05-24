@@ -1,6 +1,6 @@
 # SciForge 架构
 
-最后更新：2026-05-21
+最后更新：2026-05-24
 
 ## 北极星
 
@@ -203,6 +203,7 @@ gui.present({
 SciForge 不定义新的 agent extension API。所有算法和策略扩展都使用目标 TUI host 的原生机制：
 
 - Codex CLI plugin / skill / tool / MCP。
+- 第三方软件连接器，例如飞书 CLI、飞书 API、微信/企业微信 bridge，也属于 TUI 侧 tool / MCP / worker / connector。
 - Codex custom model provider / `model_providers.<id>.base_url`。
 - 必要时的本地 Codex provider proxy。
 
@@ -221,8 +222,11 @@ SciForge 不定义新的 agent extension API。所有算法和策略扩展都使
 | Capability Discovery | TUI 原生 plugin/tool/skill。 |
 | Harness / policy / budget / repair | TUI 原生 policy/plugin/skill。 |
 | Provider route / MCP / remote worker | TUI 原生 provider/tool 生态。 |
+| 外部软件连接器，如飞书、微信、企业微信 | TUI 原生 connector/tool/MCP/worker；repo 内 adapter 放在 `packages/connectors`。 |
 | Artifact schema / verifier | TUI 原生 tool 或 skill。 |
 | GUI 展示、确认、输入收集 | SciForge GUI extension 暴露的 intent-based `gui.*` tools。 |
+
+外部连接器遵守同一条边界：GUI 不直接调用第三方 SDK、CLI、桌面自动化或 API。GUI 按钮只生成终端等价文本，例如 `/connectors feishu draft-message ...`；TUI 决定是否调用 connector。连接器输出 refs-first 结果，例如 external refs、artifact refs、audit refs；发送、删除、同步等有外部副作用的操作必须经过 TUI 侧 approval / dry-run / idempotency 规则，并可通过 `gui.ask_user` 收集确认。
 
 ## Desktop Packaging Direction
 

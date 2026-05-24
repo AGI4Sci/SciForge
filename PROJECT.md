@@ -2,7 +2,7 @@
 
 最后更新：2026-05-23
 
-当前目标：把 SciForge 收敛到统一的 **Codex-native realtime session** 模型。主聊天需要实时交互并消费 Codex 结构化事件，UI 负责更好的信息呈现；repair 是带 feedback context 的 Codex CLI interactive PTY session；raw terminal 交互抽成可复用的 presentation component。所有 TUI-GUI 交互必须继续符合 `docs/TuiGuiProtocol.md` 和 `docs/Architecture.md`：GUI 把用户意图变成文本，TUI/Codex 拥有任务逻辑，GUI 只做展示、确认、输入收集和只读状态投影。
+当前目标：把 SciForge 收敛到统一的 **Codex-native realtime session** 模型。主聊天需要实时交互并消费 Codex 结构化事件，UI 负责更好的信息呈现；repair 默认把 Codex CLI 进程交给系统 Terminal / detached control surface，Web terminal 只是可选 attach viewer，repair log evidence 是审计证据而不是第二个工作终端。所有 TUI-GUI 交互必须继续符合 `docs/TuiGuiProtocol.md` 和 `docs/Architecture.md`：GUI 把用户意图变成文本，TUI/Codex 拥有任务逻辑，GUI 只做展示、确认、输入收集和只读状态投影。
 
 ## 当前决策
 
@@ -10,11 +10,11 @@
 - 主聊天底层可以使用 WebSocket session bridge，但 WebSocket/PTY/stdio/HTTP 都只是传输细节，不能成为业务协议或任务真相源。
 - Raw terminal 交互抽成 `terminal-session-viewer` 这类 `packages/presentation/components` 组件，只维护 interactive 模式；它负责 ANSI/xterm 渲染、键盘输入、paste、resize、scrollback、copy/focus 等 UI 能力，通过事件上抛给 host。
 - `terminal-session-viewer` 不是 action provider、不是 verifier、不是 agent host：不能启动进程、选择 provider、执行命令、写 workspace、判断 completion 或 repair verdict。
-- Repair UI 保留一个主路径：feedback context + `启动 Codex` -> WebSocket PTY -> interactive terminal viewer。不要再出现 `HTTP writer` 入口，也不要再有与 `启动 Codex` 语义重复的 `启动并发送`。
+- Repair UI 保留一个主路径：feedback context + `打开系统 Terminal` -> generated launch script -> Codex CLI repair session；`启动 Web Viewer` 只是可选 WebSocket PTY attach 视图。不要再出现 `HTTP writer` 入口，也不要再有与 repair 启动语义重复的 `启动并发送`。
 - 暂时不做多 agent repair 编排。Codex CLI 如需子任务，可由 Codex 自己在 CLI session 内 spawn subagents；SciForge UI 不先做跨 agent 调度层。
-- Direct Codex Terminal 是 Codex CLI 专用交互终端，不是开放系统 shell。短期只允许与当前 feedback repair 绑定的 Codex CLI session 交互。
+- System Terminal 是 Codex CLI repair 的推荐控制面，尤其适合修复 SciForge UI、Vite、workspace writer 或 feedback 控制面本身；Web Viewer 不是进程生命线。
 - Provider 预检可以保留，但它只回答“当前 Codex CLI 配置是否可用”。API key、base URL、profile 等由设置入口让用户配置；页面、日志、GitHub issue 和 docs 不得暴露 secret。
-- Evidence / audit 需要继续存在，但目标是减少用户补充信息：系统自动带上反馈注释、目标元素、截图、DOM/route、terminal refs、patch/test refs；用户只需要确认问题是否解决，以及补充“还有什么问题”。
+- Evidence / audit 需要继续存在，但目标是减少用户补充信息：系统自动带上反馈注释、目标元素、截图、DOM/route、repair log refs、patch/test refs；用户只需要确认问题是否解决，以及补充“还有什么问题”。
 - 用户确认边界改成产品选择：用户可以选择自动操作或手动 git 操作。默认仍不自动 commit/push/PR/merge；未来可以保留自动 merge 方向，但必须有显式策略和确认 gate。
 - 旧的跨实例 repair 编排、HTTP writer、provider 预检、evidence/audit、用户确认边界只保留对当前产品仍有价值的部分；实现上以单一路径、可观察、可删除旧链路为优先。
 
@@ -40,11 +40,11 @@
 
 ## 当前基线
 
-- 反馈收件箱已经有可见 `注释` 按钮、元素选择、截图/标注证据、本地 feedback bundle、GitHub issue 同步、repair audit 展示和 Direct Codex PTY Terminal。
+- 反馈收件箱已经有可见 `注释` 按钮、元素选择、截图/标注证据、本地 feedback bundle、GitHub issue 同步、repair audit 展示、系统 Terminal repair launch 和可选 Web Viewer。
 - 2026-05-23 已验证 Direct Codex PTY：Codex in-app browser 点击 `启动 Codex`，xterm 显示真实 Codex CLI trust prompt，通过 PTY 输入 `1` 后继续运行，terminal mirror 记录 `DIRECT_CODEX_PTY_OK` 和反馈标题。
 - 主聊天已经有 `realtimeSession` envelope + WebSocket structured-events 桥接；HTTP SSE 保留为非浏览器/测试 fallback，`CODEX_REALTIME_SESSION_TRANSPORT_STATUS.websocketComplete` 为 `true`。
 - `packages/presentation/components/terminal-session-viewer/` 已新增 pure presentation renderer 和 registry 入口；Feedback repair host 通过该 component 提供 live PTY mount，host 仍拥有 xterm/WebSocket/stdin/resize/stop 行为。
-- 旧 HTTP writer 产品入口、workspace client 类型、workspace server endpoint/state registry 和重复 `启动并发送` 路径已删除；当前只保留 `启动 Codex` -> WebSocket PTY。
+- 旧 HTTP writer 产品入口、workspace client 类型、workspace server endpoint/state registry 和重复 `启动并发送` 路径已删除；当前只保留 `打开系统 Terminal` 和可选 `启动 Web Viewer`。
 - Runtime Codex/DeepSeek 本地运行依赖本机 ignored 配置或设置页注入的 provider 参数，包括 `SCIFORGE_RUNTIME_API_KEY` 和 provider proxy upstream base URL；任何公开产物不得包含 secret。
 
 ## 当前任务板：Codex Realtime Session 统一化
@@ -84,13 +84,13 @@ RT-03 evidence note (2026-05-23): `node --import tsx --test packages/presentatio
 ### RT-04 Repair Terminal 单一路径
 
 - [x] 移除反馈收件箱里所有 `HTTP writer` 可见按钮、状态标签、help copy 和入口逻辑。
-- [x] 删除 `启动并发送` 与 `启动 Codex` 的重复语义：未运行时只有一个启动动作，textarea 内容作为 initial prompt 进入同一次 Codex PTY session。
+- [x] 删除 `启动并发送` 与 repair 启动的重复语义：未运行时优先 `打开系统 Terminal`，textarea 内容作为 initial prompt 进入同一次 Codex repair session；`启动 Web Viewer` 是可选 attach 路径。
 - [x] 运行中使用 `terminal-session-viewer` 承载 PTY 交互；用户 follow-up 通过 terminal viewer 输入，host 转发到 PTY stdin。
 - [x] 清理 `FeedbackCodexTerminalPanel` / inbox 页面中的 HTTP writer mode、状态分支、按钮分支和样式。
 - [x] 清理 workspace client 中只服务 HTTP writer 的 start/write/tail/stop 类型与调用。
 - [x] 删除 workspace server 中 HTTP writer terminal session 的 endpoint、state registry、poll/tail/write/stop 分支。
-- [x] 删除旧的 direct HTTP writer repair prompt dispatch 适配层；feedback context prompt 只作为 Codex PTY 启动时的 initial message。
-- [x] 保留 terminal mirror、repair result persistence、repair audit 和 confirmation actions，但它们不应依赖 HTTP writer session。
+- [x] 删除旧的 direct HTTP writer repair prompt dispatch 适配层；feedback context prompt 只作为 Codex repair session 启动时的 initial message。
+- [x] 保留 repair log evidence、repair result persistence、repair audit 和 confirmation actions，但它们不应依赖 HTTP writer session 或 Web Viewer 生命周期。
 
 RT-04 evidence note (2026-05-23): `npm run smoke:no-legacy-paths` passed with 609 source files and 0 tracked findings; focused feedback/workspace client tests passed. `FeedbackCodexTerminalPanel` now renders the visible PTY surface through `renderTerminalSessionViewer` using `liveSurfaceRef`; the host keeps ownership of the real xterm instance, WebSocket attach, stdin forwarding, resize, start, and stop behavior.
 
@@ -107,7 +107,7 @@ RT-05 evidence note (2026-05-23): shared `providerReadiness` helpers drive runti
 
 - [x] Repair context 自动包含用户注释、目标元素、截图、DOM/route、workspace/session refs 和 GitHub issue refs，用户不需要重复描述。
 - [x] Repair 结束后 UI 让用户只做两件事：确认问题是否解决；如果没有，补充剩余问题反馈。
-- [x] Audit bundle 保留 plan、terminal mirror/session refs、patch/diff、tests、guard digests、provider preflight 和用户确认记录；展示层默认 summary-first。
+- [x] Audit bundle 保留 plan、repair log/session refs、patch/diff、tests、guard digests、provider preflight 和用户确认记录；展示层默认 summary-first。
 - [x] Terminal transcript 可以作为 evidence ref，但 GUI 不能从 terminal 文本判断 fixed/blocked/completion；verdict 必须来自 Codex/TUI/verifier/harness 输出。
 - [x] Evidence/audit 展示可以复用 terminal viewer 的 session refs，但长期审计摘要仍需要 scrubbed/bounded 表达，不能直接把 raw buffer 写入 GitHub issue 正文。
 

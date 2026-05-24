@@ -90,30 +90,20 @@
 }
 
 @media (max-width: 1180px) {
-  .stats-grid,
   .agent-grid,
   .scenario-grid,
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .dashboard-grid,
   .scenario-builder,
   .alignment-grid,
   .split-grid,
   .contract-strip,
   .scenario-contract,
   .scenario-settings-body,
-  .library-controls,
-  .get-started-panel,
-  .component-workbench-layout,
-  .component-row-main {
+  .library-controls {
     grid-template-columns: 1fr;
-  }
-
-  .component-workbench-summary,
-  .component-row-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .alignment-save-row,
@@ -224,7 +214,6 @@
   }
 
   .page,
-  .dashboard,
   .workbench {
     padding: 16px;
   }
@@ -234,7 +223,6 @@
     width: min(310px, calc(100vw - 32px));
   }
 
-  .stats-grid,
   .agent-grid,
   .scenario-grid,
   .runtime-health-grid,
@@ -259,11 +247,6 @@
   .manifest-banner,
   .contract-strip {
     overflow: auto;
-  }
-
-  .component-contract-panel {
-    position: static;
-    max-height: none;
   }
 
   .stepper {

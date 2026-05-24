@@ -1,4 +1,5 @@
 import type { PeerInstance, SciForgeConfig, TargetInstanceContext } from '../../domain';
+import { resolvePeerWorkspaceWriterUrl } from '../../config';
 import { nowIso } from '../../domain';
 import { listFeedbackIssues, loadFeedbackIssueHandoffBundle } from '../../api/workspaceClient';
 
@@ -117,7 +118,7 @@ export function targetIssueLookupFailureMessage(context: TargetInstanceContext) 
 function configForPeer(config: SciForgeConfig, peer: PeerInstance): SciForgeConfig {
   return {
     ...config,
-    workspaceWriterBaseUrl: peer.workspaceWriterUrl,
+    workspaceWriterBaseUrl: resolvePeerWorkspaceWriterUrl(config, peer),
     workspacePath: peer.workspacePath,
   };
 }

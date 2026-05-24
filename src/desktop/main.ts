@@ -218,6 +218,25 @@ export function registerDesktopIpcHandlers(input: {
     await input.platformService.revealInFolder(path);
     return { ok: true };
   });
+  input.electron.ipcMain.handle('platform:pick-directory', async (_event: unknown, defaultPath: unknown) => {
+    const electron = loadElectronRuntime() as ElectronDesktopModule & {
+      dialog?: {
+        showOpenDialog(options: {
+          title?: string;
+          defaultPath?: string;
+          properties: Array<'openDirectory' | 'createDirectory'>;
+        }): Promise<{ canceled: boolean; filePaths: string[] }>;
+      };
+    };
+    if (!electron.dialog) throw new Error('platform:pick-directory requires Electron dialog support');
+    const result = await electron.dialog.showOpenDialog({
+      title: '选择 SciForge 项目文件夹',
+      defaultPath: typeof defaultPath === 'string' && defaultPath.trim() ? defaultPath.trim() : undefined,
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (result.canceled || !result.filePaths[0]) return { ok: false };
+    return { ok: true, path: result.filePaths[0] };
+  });
 }
 
 function loadElectronRuntime(): ElectronDesktopModule {

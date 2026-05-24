@@ -55,6 +55,7 @@ export type DesktopPreloadContract = {
     | 'runtime:shutdown'
     | 'platform:open-external'
     | 'platform:reveal-path'
+    | 'platform:pick-directory'
   >;
   forbiddenRendererCapabilities: string[];
 };
@@ -353,6 +354,7 @@ export function createDesktopProductionShellPlan(options: DesktopProductionShell
         'requestShutdown',
         'openExternal',
         'revealPath',
+        'pickDirectory',
       ],
 	      ipcChannels: [
 	        'runtime:config',
@@ -361,6 +363,7 @@ export function createDesktopProductionShellPlan(options: DesktopProductionShell
         'runtime:shutdown',
         'platform:open-external',
         'platform:reveal-path',
+        'platform:pick-directory',
       ],
       forbiddenRendererCapabilities: [
         'spawn child processes',

@@ -4,9 +4,7 @@ import {
   getRuntimeHomePaths,
   readRuntimeConfig,
   RUNTIME_KEY_ENV,
-  RUNTIME_MODEL,
   RUNTIME_PROFILE,
-  RUNTIME_PROVIDER,
 } from '../../../packages/backend/src/runtime-home.js';
 
 export interface CodexRuntimeConfig {
@@ -53,26 +51,27 @@ export async function assertCodexRuntimeConfig(options: RuntimeConfigGuardOption
   const profileConfig = profileBlock(configText, RUNTIME_PROFILE);
   const provider = valueForKey(profileConfig, 'model_provider') ?? valueForKey(configText, 'model_provider');
   const model = valueForKey(profileConfig, 'model') ?? valueForKey(configText, 'model');
-  const proxyBaseUrl = valueForKey(providerBlock(configText, RUNTIME_PROVIDER), 'base_url');
-  const envKey = valueForKey(providerBlock(configText, RUNTIME_PROVIDER), 'env_key');
 
   if (!configText.includes(`[profiles.${RUNTIME_PROFILE}]`)) {
     throw new Error(`Runtime Codex config is missing profile ${RUNTIME_PROFILE}.`);
   }
-  if (provider !== RUNTIME_PROVIDER) {
-    throw new Error(`Runtime Codex profile must use provider ${RUNTIME_PROVIDER}; found ${provider || 'missing'}.`);
+  if (!provider) {
+    throw new Error(`Runtime Codex profile ${RUNTIME_PROFILE} is missing model_provider.`);
   }
-  if (model !== RUNTIME_MODEL) {
-    throw new Error(`Runtime Codex profile must use model ${RUNTIME_MODEL}; found ${model || 'missing'}.`);
+  if (!model) {
+    throw new Error(`Runtime Codex profile ${RUNTIME_PROFILE} is missing model.`);
   }
+  const providerConfig = providerBlock(configText, provider);
+  const proxyBaseUrl = valueForKey(providerConfig, 'base_url');
+  const envKey = valueForKey(providerConfig, 'env_key');
   if (!proxyBaseUrl) {
-    throw new Error(`Runtime Codex provider ${RUNTIME_PROVIDER} is missing proxy base_url.`);
+    throw new Error(`Runtime Codex provider ${provider} is missing proxy base_url.`);
   }
   if (envKey !== RUNTIME_KEY_ENV) {
-    throw new Error(`Runtime Codex provider ${RUNTIME_PROVIDER} must use env_key ${RUNTIME_KEY_ENV}.`);
+    throw new Error(`Runtime Codex provider ${provider} must use env_key ${RUNTIME_KEY_ENV}.`);
   }
   if (!env[RUNTIME_KEY_ENV]) {
-    throw new Error(`Missing ${RUNTIME_KEY_ENV}; Runtime Codex fails closed without a DeepSeek proxy key.`);
+    throw new Error(`Missing ${RUNTIME_KEY_ENV}; Runtime Codex fails closed without a configured provider key.`);
   }
   const allowOpenAiRuntime = options.allowOpenAiRuntime === true;
   if (!allowOpenAiRuntime && /openai/i.test(`${provider}\n${model}\n${proxyBaseUrl}`)) {

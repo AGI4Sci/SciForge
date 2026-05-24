@@ -57,7 +57,7 @@ test('light theme override layer is loaded and covers core app surfaces', () => 
     '.theme-light .results-panel',
     '.theme-light .settings-dialog',
     '.theme-light .feedback-layer',
-    '.theme-light .component-contract-panel',
+    '.theme-light .apps-empty-state',
     '.theme-light .workbench-canvas-shell',
   ]) {
     assert.match(theme, new RegExp(selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));

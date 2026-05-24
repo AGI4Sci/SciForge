@@ -124,6 +124,12 @@ for (const route of rawProxyRoutes) {
       assert.equal(result.json.error.code, failureCase.code);
       assert.equal(result.json.error.status, failureCase.fixture.status);
       assert.equal(result.json.error.retryable, failureCase.retryable);
+      assert.deepEqual(result.json.error.bridge, {
+        schemaVersion: 'sciforge.proxy.upstream-bridge.v1',
+        protocol: 'raw-openai-compatible',
+        proxyEndpoint: route.proxyPath,
+        upstreamEndpoint: route.upstreamPath.replace(/^\/v1/, ''),
+      });
       assert.equal(result.json.error.audit.bodyBytes, Buffer.byteLength(failureCase.fixture.body, 'utf8'));
       assert.equal(result.json.error.audit.bodyKind, failureCase.bodyKind);
       assert.equal(result.json.error.audit.contentType, failureCase.fixture.contentType.split(';', 1)[0]);
@@ -155,6 +161,7 @@ test('Responses proxy scrubs raw HTML provider failures from public errors', asy
   assert.equal(result.json.error.code, 'upstream_unavailable');
   assert.equal(result.json.error.status, 502);
   assert.equal(result.json.error.retryable, true);
+  assertResponsesBridge(result.json.error.bridge);
   assert.match(result.json.error.message, /Upstream provider returned HTTP 502 Bad Gateway/);
   assert.equal(result.json.error.audit.bodyBytes, Buffer.byteLength(body, 'utf8'));
   assert.equal(result.json.error.audit.bodyKind, 'html-challenge');
@@ -187,6 +194,7 @@ test('Responses proxy scrubs upstream JSON error message and credential fields',
   assert.equal(result.json.error.code, 'upstream_unauthorized');
   assert.equal(result.json.error.status, 401);
   assert.equal(result.json.error.retryable, false);
+  assertResponsesBridge(result.json.error.bridge);
   assert.equal(result.json.error.audit.bodyKind, 'html-challenge');
   assert.equal(result.json.error.audit.contentType, 'application/json');
   assertNoRawProviderLeak(result.text, [secret, tokenEndpoint, 'Authorization: Bearer', 'provider_bad_auth', 'challenge_html']);
@@ -210,6 +218,7 @@ test('Responses proxy scrubs upstream SSE challenge bodies from public errors', 
   assert.equal(result.status, 403);
   assert.equal(result.json.error.code, 'upstream_forbidden');
   assert.equal(result.json.error.status, 403);
+  assertResponsesBridge(result.json.error.bridge);
   assert.equal(result.json.error.audit.bodyKind, 'html-challenge');
   assert.equal(result.json.error.audit.contentType, 'text/event-stream');
   assertNoRawProviderLeak(result.text, [secret, tokenEndpoint, 'window._cf_chl_opt', 'event: error', 'data: <html>']);
@@ -481,6 +490,15 @@ type ProxyFailureJson = {
     message: string;
     status: number;
     retryable: boolean;
+    bridge?: {
+      schemaVersion: string;
+      protocol: string;
+      proxyEndpoint: string;
+      upstreamEndpoint: string;
+      requestFeatures?: {
+        messageCount?: number;
+      };
+    };
     audit: {
       bodyBytes: number;
       bodyKind: string;
@@ -525,4 +543,13 @@ function assertNoRawProviderLeak(text: string, forbidden: string[]) {
     );
   }
   assert.equal(text.includes('sk-client-secret-that-must-not-echo'), false);
+}
+
+function assertResponsesBridge(bridge: ProxyFailureJson['error']['bridge']) {
+  assert.ok(bridge);
+  assert.equal(bridge.schemaVersion, 'sciforge.proxy.upstream-bridge.v1');
+  assert.equal(bridge.protocol, 'responses-to-chat-completions');
+  assert.equal(bridge.proxyEndpoint, '/v1/responses');
+  assert.equal(bridge.upstreamEndpoint, '/chat/completions');
+  assert.equal(bridge.requestFeatures?.messageCount, 1);
 }

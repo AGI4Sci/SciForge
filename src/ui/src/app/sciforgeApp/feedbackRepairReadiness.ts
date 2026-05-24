@@ -11,6 +11,7 @@ const REQUIRED_REPAIR_PEER_CAPABILITIES = [
 const REQUIRED_WORKSPACE_WRITER_CAPABILITIES = [
   'repair-handoff-runner',
   'feedback-direct-codex-terminal-websocket-pty',
+  'feedback-direct-codex-terminal-system-terminal',
   'feedback-repair-terminal-mirror-tail',
   'runtime-provider-preflight-manifest',
   'runtime-codex-browser-acceptance-manifest',

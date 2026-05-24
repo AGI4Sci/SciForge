@@ -68,7 +68,7 @@ export function FeedbackRepairAuditPanel({
     : '输入给 Codex CLI 的引导，Enter 发送；Shift+Enter 换行...';
   const guidanceBoundary = commandStartsNewRepair
     ? '只把此输入框中的显式用户文字作为 initial guidance；不会附带主会话分析、补丁方案或隐藏上下文。'
-    : '只把此输入框中的显式用户文字追加到 terminal mirror；不会自动补发主会话分析、补丁方案或隐藏上下文。';
+    : '只把此输入框中的显式用户文字追加到 guidance audit 和 repair log；不会自动补发主会话分析、补丁方案或隐藏上下文。';
   const disabledReasons = terminalDisabledReasons({
     busy,
     hasTerminalCommand,
@@ -136,7 +136,7 @@ export function FeedbackRepairAuditPanel({
       try {
         await onHandoff({ initialGuidance: message });
         setGuidanceText('');
-        setGuidanceHint('Repair 启动请求已发送；终端会在 run 写入后开始显示 Codex CLI 行。');
+        setGuidanceHint('Repair 启动请求已发送；修复线程会在 run 写入后开始显示状态和日志证据。');
       } catch (error) {
         setGuidanceHint(`Repair start failed closed: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
@@ -173,14 +173,14 @@ export function FeedbackRepairAuditPanel({
       setGuidanceBusy(true);
       setGuidanceHint('正在启动 repair，并带上当前输入的初始引导...');
     } else {
-      setGuidanceHint('正在启动 repair；终端会先写入 run metadata 和准备事件。');
+      setGuidanceHint('正在启动 repair；修复线程会先写入 run metadata 和准备事件。');
     }
     try {
       await onHandoff(initialGuidance ? { initialGuidance } : undefined);
       if (initialGuidance) setGuidanceText('');
       setGuidanceHint(initialGuidance
         ? 'Repair 启动请求已发送，当前输入已作为初始引导。'
-        : 'Repair 启动请求已发送；终端会在 run 写入后显示 Codex CLI 行。');
+        : 'Repair 启动请求已发送；修复线程会在 run 写入后显示日志证据。');
     } catch (error) {
       setGuidanceHint(`Repair start failed closed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -191,8 +191,8 @@ export function FeedbackRepairAuditPanel({
   function exportTerminalBundle() {
     exportJsonFile(`sciforge-repair-bundle-${safeFilenamePart(audit.issueId)}-${new Date().toISOString().slice(0, 10)}.json`, terminal.exportPayload);
     setExportHint(terminal.ref
-      ? `Bundle exported with terminal ref ${terminal.ref}.`
-      : 'Bundle exported with inline repair metadata; terminal ref is not available yet.');
+      ? `Bundle exported with log evidence ref ${terminal.ref}.`
+      : 'Bundle exported with inline repair metadata; log evidence ref is not available yet.');
   }
   return (
     <div className="feedback-repair-audit" aria-label="repair audit panel">
@@ -232,9 +232,12 @@ export function FeedbackRepairAuditPanel({
                   <Badge variant={thread.resultVerdict === 'fixed' ? 'success' : thread.resultVerdict === 'failed' || thread.status === 'blocked' ? 'danger' : 'muted'}>
                     {thread.resultVerdict ?? thread.status}
                   </Badge>
+                  <Badge variant={thread.continuityLabel.includes('available') || thread.continuityLabel.includes('system Terminal') ? 'info' : 'muted'}>
+                    {thread.continuityLabel}
+                  </Badge>
                 </div>
                 <span>{thread.completedAt ?? thread.startedAt}</span>
-                <p>{thread.resultSummary ?? (thread.terminalMirrorRef ? `terminal ${thread.terminalMirrorRef}` : '等待 repair 写回结果。')}</p>
+                <p>{thread.resultSummary ?? (thread.terminalMirrorRef ? `log ${thread.terminalMirrorRef}` : '等待 repair 写回结果。')}</p>
               </div>
             ))}
           </div>
@@ -255,72 +258,72 @@ export function FeedbackRepairAuditPanel({
           ))}
         </div>
       </div>
-      <div className="feedback-repair-terminal" aria-label="repair terminal mirror">
-        <div className="feedback-repair-terminal-head">
-          <div>
-            <TerminalSquare size={14} aria-hidden />
-            <strong>Codex CLI terminal</strong>
-            <span>{terminal.ref ? terminal.ref : 'waiting for repair run metadata'}</span>
-          </div>
-          <div className="feedback-repair-terminal-actions">
-            <div className="feedback-repair-terminal-launch" aria-label="repair terminal launch controls">
-              <select
-                value={targetValue}
-                onChange={(event) => onTargetChange(event.target.value)}
-                disabled={!repairTargets.length || busy}
-                aria-label="选择 repair 目标实例"
-              >
-                {repairTargets.length ? repairTargets.map((peer) => (
-                  <option key={peer.name} value={peer.name}>{peer.name}</option>
-                )) : <option value="">无 repair 实例</option>}
-              </select>
+        <div className="feedback-repair-terminal" aria-label="repair log evidence">
+          <div className="feedback-repair-terminal-head">
+            <div>
+              <TerminalSquare size={14} aria-hidden />
+              <strong>Repair log evidence</strong>
+              <span>{terminal.ref ? terminal.ref : 'waiting for repair run metadata'}</span>
+            </div>
+            <div className="feedback-repair-terminal-actions">
+              <div className="feedback-repair-terminal-launch" aria-label="repair session launch controls">
+                <select
+                  value={targetValue}
+                  onChange={(event) => onTargetChange(event.target.value)}
+                  disabled={!repairTargets.length || busy}
+                  aria-label="选择 repair 目标实例"
+                >
+                  {repairTargets.length ? repairTargets.map((peer) => (
+                    <option key={peer.name} value={peer.name}>{peer.name}</option>
+                  )) : <option value="">无 repair 实例</option>}
+                </select>
+                <DelayedHelpButton
+                  onClick={() => void startRepairFromTerminal()}
+                  disabled={busy || guidanceBusy}
+                  help={repairTargets.length
+                    ? '启动或重试 Runtime Codex repair；系统 Terminal 是修复控制面的推荐运行位置，如果下方已经输入文字，会把它作为初始引导一起发送。'
+                    : '没有 repair 实例时写入 blocked audit，保留 readiness 诊断。'}
+                >
+                  {busy ? <Loader2 size={14} className="feedback-inline-spin" aria-hidden /> : <ArrowRight size={14} aria-hidden />}
+                  {repairTargets.length ? '启动 repair' : '记录阻断'}
+                </DelayedHelpButton>
+              </div>
               <DelayedHelpButton
-                onClick={() => void startRepairFromTerminal()}
-                disabled={busy || guidanceBusy}
-                help={repairTargets.length
-                  ? '启动或重试 Runtime Codex repair；如果下方已经输入文字，会把它作为初始引导一起发送。'
-                  : '没有 repair 实例时写入 blocked audit，保留 readiness 诊断。'}
+                onClick={() => setTerminalCollapsed((current) => !current)}
+                disabled={!terminal.entries.length}
+                help="折叠或展开按时间顺序记录的 repair log。它是证据，不是第二个工作终端。"
               >
-                {busy ? <Loader2 size={14} className="feedback-inline-spin" aria-hidden /> : <ArrowRight size={14} aria-hidden />}
-                {repairTargets.length ? '启动 repair' : '记录阻断'}
+                {terminalCollapsed ? <ChevronRight size={14} aria-hidden /> : <ChevronDown size={14} aria-hidden />}
+                {terminalCollapsed ? '展开' : '折叠'}
+              </DelayedHelpButton>
+              <DelayedHelpButton
+                onClick={() => void copyTerminalMirror(terminal.copyText, setCopyHint)}
+                disabled={!terminal.copyText}
+                help="复制当前 repair log 文本；写入 GitHub 或 audit summary 前仍需 bounded scrub。"
+              >
+                <Clipboard size={14} aria-hidden />
+                复制
+              </DelayedHelpButton>
+              <DelayedHelpButton
+                onClick={exportTerminalBundle}
+                disabled={!terminal.copyText && !terminal.ref}
+                help="导出 repair run/result metadata、patch/diff/tests/audit refs 和 log evidence，供离线审计。"
+              >
+                <Download size={14} aria-hidden />
+                导出 Bundle
+              </DelayedHelpButton>
+              <DelayedHelpButton
+                onClick={() => void stopRepair()}
+                disabled={!canStop || stopBusy}
+                help={canStop
+                  ? '请求 backend 安全取消当前 Runtime Codex repair turn；不能确认可停时 backend 会 fail closed 并写入 repair log。'
+                  : '当前没有可安全停止的运行中 Runtime Codex repair turn；repair log 保持只读。'}
+              >
+                {stopBusy ? <Loader2 size={14} className="feedback-inline-spin" aria-hidden /> : <Square size={14} aria-hidden />}
+                停止
               </DelayedHelpButton>
             </div>
-            <DelayedHelpButton
-              onClick={() => setTerminalCollapsed((current) => !current)}
-              disabled={!terminal.entries.length}
-              help="折叠或展开按时间顺序透传的 Codex CLI terminal mirror。"
-            >
-              {terminalCollapsed ? <ChevronRight size={14} aria-hidden /> : <ChevronDown size={14} aria-hidden />}
-              {terminalCollapsed ? '展开' : '折叠'}
-            </DelayedHelpButton>
-            <DelayedHelpButton
-              onClick={() => void copyTerminalMirror(terminal.copyText, setCopyHint)}
-              disabled={!terminal.copyText}
-              help="复制当前 terminal mirror 文本；写入 GitHub 或 audit summary 前仍需 bounded scrub。"
-            >
-              <Clipboard size={14} aria-hidden />
-              复制
-            </DelayedHelpButton>
-            <DelayedHelpButton
-              onClick={exportTerminalBundle}
-              disabled={!terminal.copyText && !terminal.ref}
-              help="导出 repair run/result metadata、patch/diff/tests/audit refs 和 terminal mirror，供离线审计。"
-            >
-              <Download size={14} aria-hidden />
-              导出 Bundle
-            </DelayedHelpButton>
-            <DelayedHelpButton
-              onClick={() => void stopRepair()}
-              disabled={!canStop || stopBusy}
-              help={canStop
-                ? '请求 backend 安全取消当前 Runtime Codex repair turn；不能确认可停时 backend 会 fail closed 并写入 terminal mirror。'
-                : '当前没有可安全停止的运行中 Runtime Codex repair turn；terminal mirror 保持只读。'}
-            >
-              {stopBusy ? <Loader2 size={14} className="feedback-inline-spin" aria-hidden /> : <Square size={14} aria-hidden />}
-              停止
-            </DelayedHelpButton>
           </div>
-        </div>
         {disabledReasons.length ? (
           <div className="feedback-repair-terminal-disabled" aria-label="terminal control disabled reasons">
             {disabledReasons.map((reason) => <span key={reason}>{reason}</span>)}
@@ -336,7 +339,7 @@ export function FeedbackRepairAuditPanel({
             ))}
           </pre>
         ) : (
-          <p className="feedback-repair-terminal-empty">尚无 inline terminal lines；等待 repair run 写入 mirror 或 terminalMirrorRef。</p>
+            <p className="feedback-repair-terminal-empty">尚无 repair log lines；等待 repair run 写入日志证据 ref。</p>
         )}
         {copyHint ? <p className="feedback-repair-hint">{copyHint}</p> : null}
         {exportHint ? <p className="feedback-repair-hint">{exportHint}</p> : null}
@@ -363,7 +366,7 @@ export function FeedbackRepairAuditPanel({
             help={audit.latestRun?.id
               ? commandStartsNewRepair
                 ? '当前线程没有可恢复的 Codex session；这行输入会启动一条新的 direct repair 线程。'
-                : '把这行输入写入 audit 和 terminal mirror；若已有 Codex session id，backend 会用 Codex 原生 resume 继续。'
+                  : '把这行输入写入 guidance audit 和 repair log；若已有 Codex session id，backend 会用 Codex 原生 resume 继续。'
               : '没有 repair run 时，这行输入会作为初始引导启动 Runtime Codex repair。'}
           >
             {guidanceBusy ? <Loader2 size={14} className="feedback-inline-spin" aria-hidden /> : <Send size={14} aria-hidden />}
@@ -608,8 +611,8 @@ function repairGuideSteps(input: {
   }
   const steps = [
     input.audit.latestRun?.id && input.guidanceEnabled
-      ? '在透传终端下方发送引导，补充你期望的修复方向或允许的取舍。'
-      : '展开透传终端，查看最近一次 Codex repair 到哪一步停住。',
+      ? '在修复线程下方发送引导，补充你期望的修复方向或允许的取舍。'
+      : '展开 repair log evidence，查看最近一次 Codex repair 到哪一步停住。',
   ];
   if (input.isBlocked) steps.push(input.audit.latestRun?.id
     ? '根据阻塞原因补齐缺失配置、环境或人工判断后，再交给实例重新开一条线程。'
@@ -762,8 +765,8 @@ function terminalDisabledReasons(input: {
 }) {
   const reasons: string[] = [];
   if (input.busy) reasons.push('启动 repair：正在处理上一条请求');
-  if (!input.terminalEntries) reasons.push('展开 / 复制：等待 terminal 行写入');
-  if (!input.exportAvailable) reasons.push('导出 Bundle：等待 run metadata 或 terminal ref');
+  if (!input.terminalEntries) reasons.push('展开 / 复制：等待 repair log 行写入');
+  if (!input.exportAvailable) reasons.push('导出 Bundle：等待 run metadata 或 log evidence ref');
   if (!input.hasTerminalCommand) reasons.push('发送：先输入一行引导');
   if (input.commandStartsNewRepair && !input.hasHandoff) reasons.push('发送：当前页面没有 repair 启动入口');
   if (!input.commandStartsNewRepair && !input.hasGuidance) reasons.push('发送：当前页面没有 native guidance 入口');
@@ -808,7 +811,7 @@ function repairEvidenceCompleteness(audit: FeedbackRepairAuditViewModel, termina
   const resultMetadata = recordValue(recordValue(result)?.metadata);
   const items = [
     { label: 'plan', ready: Boolean(terminal.planRef), detail: terminal.planRef ?? 'missing plan ref' },
-    { label: 'terminal', ready: Boolean(terminal.ref || terminal.entries.length), detail: terminal.ref ?? `${terminal.entries.length} inline lines` },
+    { label: 'log', ready: Boolean(terminal.ref || terminal.entries.length), detail: terminal.ref ?? `${terminal.entries.length} inline lines` },
     { label: 'patch', ready: Boolean(result?.diffRef || result?.refs?.patchRef), detail: result?.diffRef ?? result?.refs?.patchRef ?? 'missing patch ref' },
     { label: 'tests', ready: audit.tests.length > 0, detail: audit.tests.length ? audit.tests.map((test) => `${test.status}:${test.command}`).join(', ') : 'missing test evidence' },
     { label: 'audit', ready: Boolean(terminal.auditBundleRef), detail: terminal.auditBundleRef ?? 'missing audit bundle ref' },

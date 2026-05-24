@@ -6,7 +6,7 @@
 
 ## 定位
 
-反馈收件箱是 issue triage、GitHub sync 和 Codex CLI repair 的主入口。工作台只负责让用户对任意页面元素发起评论、显示相关反馈提示并跳转到收件箱；批量选择、request bundle、GitHub issue、repair queue、terminal mirror、patch approval 和 post-repair browser recheck 都属于收件箱。
+反馈收件箱是 issue triage、GitHub sync 和 Codex CLI repair 的主入口。工作台只负责让用户对任意页面元素发起评论、显示相关反馈提示并跳转到收件箱；批量选择、request bundle、GitHub issue、repair queue、系统 Terminal launch、Web Viewer attach、repair log evidence、patch approval 和 post-repair browser recheck 都属于收件箱。
 
 SciForge GUI 仍然是 TUI agent 的展示和控制扩展。repair executor 是 SciForge 后端以 Runtime Codex / Codex CLI profile 调用的服务，不是当前 Codex App 助手。收件箱可以启动 handoff、显示 mirror、发送 guidance、记录确认动作，但不能把 GUI transcript 拼成 agent truth，也不能从 terminal 文本自行推断成功。
 
@@ -14,7 +14,7 @@ SciForge GUI 仍然是 TUI agent 的展示和控制扩展。repair executor 是 
 
 ### 1. 本地反馈是产品真相源
 
-本地 feedback bundle、screenshot evidence、GitHub sync state、repair run/result/action/guidance 和 terminal mirror refs 是产品数据。GitHub issue 是协作和同步面，不取代本地批注和证据。Codex repair 不能删除、重写或伪造这些数据来制造成功。
+本地 feedback bundle、screenshot evidence、GitHub sync state、repair run/result/action/guidance 和 repair log refs 是产品数据。GitHub issue 是协作和同步面，不取代本地批注和证据。Codex repair 不能删除、重写或伪造这些数据来制造成功。
 
 每条反馈必须有稳定本地 ID 和 refs。关联关系要靠 ID、bundle refs、issue number/url、repair run/result ids 和 evidence refs，而不是标题、截图文件名或可变文本。
 
@@ -50,7 +50,7 @@ GitHub issue body 和公开 JSON 不允许内联 `data:image/...`。GitHub 中�
 
 反馈状态包括 `comment`、`request`、`open`、`github-open`、`triaged`、`planned`、`fixed`、`blocked`、`needs-discussion`、`wont-fix`、`deleted`。筛选、批量选择、批量标记、生成 request、软删除和恢复都必须依赖本地状态机，刷新后可恢复。
 
-删除只能软删除本地条目或取消选择。不能删除 GitHub issue、repair audit、patch、workspace diff、terminal mirror 或截图原始证据。恢复必须保留原有 refs 和 audit。
+删除只能软删除本地条目或取消选择。不能删除 GitHub issue、repair audit、patch、workspace diff、repair log evidence 或截图原始证据。恢复必须保留原有 refs 和 audit。
 
 软删除这类 destructive local queue action 也必须使用收件箱内确认边界，而不是浏览器原生 confirm。确认面板要说明 scope、local effect、不会触碰的 GitHub/repair/evidence 数据，以及取消后的无副作用结果。
 
@@ -84,17 +84,19 @@ enabled + repair trust 的 peer instance、目标 peer writer health 和 instanc
 
 任何真实阻塞都要写 durable blocked repair result/audit，而不是只显示 transient hint。blocked result 应包含 failure kind、readiness rows、provider/browser/peer diagnostics 和下一步命令。
 
-### 8. Terminal mirror 只是真实终端镜像
+### 8. Repair log evidence 不是第二个工作终端
 
-terminal mirror 的目标是让用户像看 Codex CLI terminal 一样看到 repair 进度。它可以主显、复制、折叠、停止、导出，但不能作为 completion verdict 的来源。成功/失败边界必须来自 repair result、test refs、patch/diff refs、audit bundle、guard digests 和 human/browser verification。
+repair log evidence 的目标是让用户审计 Codex repair 进度。它可以复制、折叠、停止、导出，但不能作为第二个工作终端，也不能作为 completion verdict 的来源。成功/失败边界必须来自 repair result、test refs、patch/diff refs、audit bundle、guard digests 和 human/browser verification。
 
-terminal mirror 可实时直出，但进入 GitHub issue、audit summary 或长期报告前必须 bounded/scrubbed，移除 secret、token、raw provider body 和敏感绝对路径。停止 repair 必须只停止当前可识别 active turn，不能杀错 run。
+repair log 可实时直出，但进入 GitHub issue、audit summary 或长期报告前必须 bounded/scrubbed，移除 secret、token、raw provider body 和敏感绝对路径。停止 repair 必须只停止当前可识别 active turn，不能杀错 run。
 
 用户 guidance 是 audit 事件。若 backend 能找到 Runtime Codex native session id，应通过 Codex 原生 resume 继续；如果没有 session id，也必须先持久化 guidance，并标明 resume-unavailable 或 failed-closed。
 
 第一次点击和第一次输入必须先产生本地可见 run：同一反馈卡片 1 秒内应出现 repairRunId、terminalMirrorRef、至少一条 terminal event、当前状态和下一步。启动、发送、复制、导出、停止等按钮被禁用时，禁用原因必须在按钮附近可见；导出和复制成功也必须给出即时反馈。
 
-terminal header、actions、guidance input、confirmation boundaries 和 safe-mode 提示必须能在窄屏下折行。toolbar 的 status filter、search、selection count、token note 和 action buttons 也必须限制在容器宽度内，必要时整行或两列折行；按钮文案可以换行，但不能撑破页面。延迟帮助 tooltip 未显示时不能参与滚动尺寸，进度圈也必须留在按钮盒内。长 terminal ref、patch ref、commit ref、GitHub URL 和 evidence ref 要么截断并提供 title/copy，要么在展开区域用 `overflow-wrap:anywhere`，不能撑破卡片或盖住相邻控件。
+系统 Terminal 是默认推荐控制面，尤其当 repair 会触及反馈收件箱、Vite、workspace writer 或 repair backend/control surface 时。Web Viewer 只负责 attach/status/input convenience；如果浏览器刷新、切换页面或 Vite HMR 破坏了前端，后台 Codex 进程仍应由系统 Terminal 或 detached session 继续拥有。
+
+repair session header、actions、guidance input、confirmation boundaries 和 safe-mode 提示必须能在窄屏下折行。toolbar 的 status filter、search、selection count、token note 和 action buttons 也必须限制在容器宽度内，必要时整行或两列折行；按钮文案可以换行，但不能撑破页面。延迟帮助 tooltip 未显示时不能参与滚动尺寸，进度圈也必须留在按钮盒内。长 log ref、patch ref、commit ref、GitHub URL 和 evidence ref 要么截断并提供 title/copy，要么在展开区域用 `overflow-wrap:anywhere`，不能撑破卡片或盖住相邻控件。
 
 如果 Runtime Codex 在 `codex exec --json` 边界遇到 `unsupported call: apply_patch`，收件箱要把它解释为 runtime 工具桥限制，并记录 repair CLI 自主恢复或 failed-closed 证据。不能把这种 backend limitation 误呈现成用户没有正确操作 terminal，也不能注入主会话的 workaround。
 
@@ -104,7 +106,7 @@ repair request 必须包含 issue refs、feedback evidence、repo config、base 
 
 默认不 commit、不 push、不 PR、不 merge。commit 需要用户确认且只在隔离 repair worktree 创建本地 commit。push 和 PR 需要第二次单独确认。merge 永远不能自动执行，点击也只能 fail closed 或记录被拒绝审计。
 
-如果 repair 触及反馈收件箱、feedback capture、workspace writer、repair handoff runner 或 repair backend/control surface，必须进入 safe mode。safe mode 下 terminal mirror 仍可读，新的 patch apply / commit / push / PR 需要额外确认或外部控制面复核。
+如果 repair 触及反馈收件箱、feedback capture、workspace writer、repair handoff runner 或 repair backend/control surface，必须进入 safe mode。safe mode 下 repair log 仍可读，新的 patch apply / commit / push / PR 需要额外确认或外部控制面复核。
 
 ### 10. Browser 验收优先
 
@@ -127,9 +129,9 @@ post-repair browser recheck 是 first-class repair action。它必须记录结�
 - `src/ui/src/feedback/FeedbackScreenshotPreview.tsx`：截图证据对象、高清打开/放大、复制 refs。
 - `src/ui/src/app/sciforgeApp/feedbackRepairReadiness.ts`：workspace writer、repair peer、provider preflight、strict browser acceptance readiness。
 - `src/ui/src/app/sciforgeApp/feedbackBlockedRepairResult.ts`：blocked repair durable audit。
-- `src/ui/src/feedback/FeedbackRepairAuditPanel.tsx`：terminal mirror、evidence completeness、guidance、stop、browser recheck、commit/push/PR/merge gates。
+- `src/ui/src/feedback/FeedbackRepairAuditPanel.tsx`：repair log evidence、evidence completeness、guidance、stop、browser recheck、commit/push/PR/merge gates。
 - `src/ui/src/feedback/githubFeedback.ts`：GitHub issue body、screenshot data URL omission、evidence refs、sync conflict。
-- `src/runtime/repair-handoff-runner.ts`：Runtime Codex repair handoff、isolated worktree、guard/audit、terminal mirror、provider pre-dispatch gate。
+- `src/runtime/repair-handoff-runner.ts`：Runtime Codex repair handoff、isolated worktree、guard/audit、repair log evidence、provider pre-dispatch gate。
 - 当前 workspace writer direct repair 是默认启动面；peer writer/manifest 是可选同步和 target state mirror，不是 direct dispatch 的硬依赖。
 
 Evidence path policy：
@@ -137,7 +139,7 @@ Evidence path policy：
 - `repair-evidence/public/feedback-screenshots/<feedback-id>/scrubbed-annotated.png` 可上传/托管，可写进 GitHub markdown。
 - `repair-evidence/private/feedback-screenshots/<feedback-id>/raw.png` 本地私有，不进 git，不上传。
 - `.sciforge/feedback/<feedback-id>/` 保存本地 bundle 和 data-url 证据，是 workspace-local source of truth。
-- `.sciforge/repair-results/<repair-run-id>/` 保存 terminal mirror、patch、plan、tests、audit、blocked preflight evidence。
+- `.sciforge/repair-results/<repair-run-id>/` 保存 repair log evidence、patch、plan、tests、audit、blocked preflight evidence。
 
 ## 回归检查清单
 
@@ -148,11 +150,11 @@ Evidence path policy：
 3. 截图是整页 PNG；缩略图可以小，打开/放大必须是高清图。
 4. GitHub issue body 不包含 inline `data:image/`，但包含 screenshot refs 或 markdown image URL。
 5. 缺 token、缺 peer、缺 provider env、peer manifest 不匹配、browser evidence 缺失时都 fail closed，并写 durable blocked audit。
-6. terminal mirror 可读、可复制、可折叠、可停止、可导出，但 UI 不从 terminal 文本判断 fixed。
+6. repair log evidence 可读、可复制、可折叠、可停止、可导出，但 UI 不从日志文本判断 fixed。
 7. commit/push/PR/merge confirmation boundaries 仍然生效，safe mode 仍然要求额外确认。
-8. soft delete / restore 不破坏 evidence、GitHub sync state、repair audit 或 terminal mirror refs。
+8. soft delete / restore 不破坏 evidence、GitHub sync state、repair audit 或 repair log refs。
 9. 搜索、筛选、选择当前列表、批量操作和 GitHub trace 的作用范围清楚；隐藏选择不能被当前可见列表操作误修改；本地软删除必须先出现收件箱内确认边界，GitHub upload/submit/sync 必须先出现外部操作确认边界，取消时不能发送外部请求或改动本地队列。
-10. lightbox 支持关闭按钮 focus、`Esc` 关闭和焦点返回触发按钮；窄屏 toolbar、terminal header/actions、guidance input、safe-mode 行不重叠，页面文档宽度不超过当前 viewport。
+10. lightbox 支持关闭按钮 focus、`Esc` 关闭和焦点返回触发按钮；窄屏 toolbar、repair session header/actions、guidance input、safe-mode 行不重叠，页面文档宽度不超过当前 viewport。
 11. `npm run typecheck`、touched area targeted tests 和 `git diff --check` 通过。
 
 文档或原则变更时，至少跑 `git diff --check`。

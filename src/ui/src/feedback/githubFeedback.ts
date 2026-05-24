@@ -1,5 +1,5 @@
-import { checkGithubIssueWriteAccess, checkGithubRepoAccess, createGithubIssue, fetchOpenGithubIssues, type GithubIssueApiRow } from '../api/githubIssuesApi';
-import { nowIso, type FeedbackCommentRecord, type GithubSyncedOpenIssueRecord, type SciForgeWorkspaceState } from '../domain';
+import { checkGithubIssueWriteAccess, checkGithubRepoAccess, createGithubIssue, createGithubIssueComment, fetchOpenGithubIssues, updateGithubIssue, type GithubIssueApiRow } from '../api/githubIssuesApi';
+import { nowIso, type FeedbackCommentRecord, type FeedbackRepairActionRecord, type FeedbackRepairResultRecord, type GithubSyncedOpenIssueRecord, type SciForgeWorkspaceState } from '../domain';
 import { scrubFeedbackText } from './captureModel';
 
 const GITHUB_FEEDBACK_SOURCE = 'github-feedback';
@@ -27,6 +27,14 @@ export type SubmitFeedbackGithubIssueParams = {
   assignees?: string[];
   milestone?: number | string;
   dryRun?: boolean;
+};
+
+export type SyncFeedbackRepairClosureParams = {
+  repo: string;
+  token?: string;
+  issueNumber: number;
+  reportBody: string;
+  closeIssue?: boolean;
 };
 
 export type FeedbackBundle = {
@@ -126,6 +134,76 @@ export function buildFeedbackGithubIssueBody(
   return limitGithubIssueBody(lines.join('\n'), comments);
 }
 
+export function buildFeedbackRepairClosureReport(
+  comment: FeedbackCommentRecord,
+  result?: FeedbackRepairResultRecord,
+  action?: FeedbackRepairActionRecord,
+  closedAt = nowIso(),
+) {
+  const verification = action?.browserVerification ?? result?.humanVerification;
+  const changedFiles = uniqueStrings(result?.changedFiles ?? []).slice(0, 12);
+  const evidenceRefs = uniqueStrings([
+    ...(result?.evidenceRefs ?? []),
+    ...(verification?.evidenceRefs ?? []),
+    result?.diffRef,
+    result?.auditBundleRef,
+    result?.planRef,
+  ].filter((ref): ref is string => Boolean(ref)));
+  const tests = [...(result?.testResults ?? []), ...(result?.tests ?? [])]
+    .filter((test, index, all) => all.findIndex((candidate) => candidate.command === test.command && candidate.status === test.status) === index)
+    .slice(0, 8);
+  const lines: string[] = [];
+  lines.push('## SciForge repair closure');
+  lines.push('');
+  lines.push(`- Local feedback: ${inlineCode(comment.id)}`);
+  if (result) {
+    lines.push(`- Repair result: ${inlineCode(result.id)} · ${inlineCode(result.verdict)}`);
+  } else {
+    lines.push('- Repair result: not recorded; closure was user-confirmed from the Feedback Inbox.');
+  }
+  lines.push('- Closure basis: user confirmed this feedback item is complete in the Feedback Inbox.');
+  lines.push(`- Closed at: ${closedAt}`);
+  lines.push('');
+  lines.push('### Key issue');
+  lines.push('');
+  lines.push(`- User comment: ${markdownText(comment.comment)}`);
+  lines.push(`- Expected: ${markdownText(comment.expectedBehavior || 'not provided')}`);
+  lines.push(`- Actual: ${markdownText(comment.actualBehavior || comment.comment)}`);
+  lines.push(`- Target: ${inlineCode(comment.target.selector)} on ${inlineCode(comment.runtime.page)}`);
+  lines.push('');
+  lines.push('### What changed');
+  lines.push('');
+  lines.push(result?.summary ? markdownText(result.summary) : 'User confirmed the task is complete; no repair result summary was recorded.');
+  lines.push('');
+  lines.push(changedFiles.length ? `Changed files: ${changedFiles.map(inlineCode).join(', ')}` : 'Changed files: not recorded.');
+  lines.push('');
+  lines.push('### Verification');
+  lines.push('');
+  if (verification) {
+    lines.push(`- Browser/user verification: ${inlineCode(verification.status ?? 'pending')} · ${markdownText(verification.conclusion ?? 'not recorded')}`);
+  } else {
+    lines.push(`- Browser/user verification: ${inlineCode('user-confirmed')} · User confirmed completion in the Feedback Inbox.`);
+  }
+  if (tests.length) {
+    tests.forEach((test) => {
+      lines.push(`- ${inlineCode(test.status ?? 'unknown')} ${inlineCode(test.command ?? 'not recorded')}${test.summary ? `: ${markdownText(test.summary)}` : ''}`);
+    });
+  } else {
+    lines.push('- Tests: no test evidence recorded in the repair result.');
+  }
+  lines.push('');
+  lines.push('### Evidence refs');
+  lines.push('');
+  if (evidenceRefs.length) {
+    evidenceRefs.slice(0, 16).forEach((ref) => lines.push(`- ${inlineCode(ref)}`));
+  } else {
+    lines.push('- No public evidence refs recorded.');
+  }
+  lines.push('');
+  lines.push('Local feedback annotations, screenshot refs, and repair audit records remain the product source of truth.');
+  return lines.join('\n');
+}
+
 export function buildFeedbackGithubIssueLabels(labels: string[] = []) {
   return uniqueStrings(labels.map((label) => label.trim()).filter((label) => label.length > 0 && label.length <= 50));
 }
@@ -165,6 +243,26 @@ export async function syncFeedbackGithubIssues(repo: string, token: string, sync
   await checkGithubRepoAccess(repo, token);
   const rows = await fetchOpenGithubIssues(repo, token);
   return mapGithubIssueRows(rows, syncedAt);
+}
+
+export async function syncFeedbackRepairClosure(params: SyncFeedbackRepairClosureParams) {
+  const repo = params.repo.trim();
+  const token = params.token?.trim();
+  if (!repo) throw new Error('GitHub repair closure blocked: 缺少目标仓库 owner/repo。本地修复结论已保留，可配置仓库后重试。');
+  if (!token) throw new Error('GitHub repair closure blocked: 缺少 GitHub token。本地修复结论已保留，请配置具备 Issues 读写权限的 token 后重试。');
+  await checkGithubRepoAccess(repo, token);
+  await checkGithubIssueWriteAccess(repo, token);
+  const comment = await createGithubIssueComment(repo, token, params.issueNumber, params.reportBody);
+  const issue = params.closeIssue === false
+    ? undefined
+    : await updateGithubIssue(repo, token, params.issueNumber, { state: 'closed' });
+  return {
+    issueNumber: params.issueNumber,
+    commentUrl: comment.htmlUrl,
+    htmlUrl: issue?.htmlUrl,
+    state: issue?.state,
+    updatedAt: issue?.updatedAt ?? nowIso(),
+  };
 }
 
 export function mapGithubIssueRows(rows: GithubIssueApiRow[], syncedAt: string): GithubSyncedOpenIssueRecord[] {
@@ -281,6 +379,36 @@ export function markFeedbackGithubIssueSyncFailed(
       }
       : comment),
     updatedAt,
+  };
+}
+
+export function markFeedbackGithubIssueClosed(
+  state: SciForgeWorkspaceState,
+  commentIds: string[],
+  issue: { number: number; htmlUrl?: string; title?: string; commentUrl?: string; updatedAt?: string },
+  updatedAt = nowIso(),
+): SciForgeWorkspaceState {
+  const selected = new Set(commentIds);
+  if (!selected.size) return state;
+  const closedAt = issue.updatedAt ?? updatedAt;
+  return {
+    ...state,
+    feedbackComments: (state.feedbackComments ?? []).map((comment) => selected.has(comment.id)
+      ? {
+        ...comment,
+        status: comment.status === 'deleted' ? 'deleted' : 'fixed',
+        githubIssueUrl: issue.htmlUrl || comment.githubIssueUrl,
+        githubIssueNumber: issue.number || comment.githubIssueNumber,
+        githubSyncStatus: 'github-closed',
+        githubSyncError: undefined,
+        githubSyncedAt: closedAt,
+        githubIssueState: 'closed',
+        githubIssueUpdatedAt: closedAt,
+        updatedAt: closedAt,
+      }
+      : comment),
+    githubSyncedOpenIssues: (state.githubSyncedOpenIssues ?? []).filter((openIssue) => openIssue.number !== issue.number),
+    updatedAt: closedAt,
   };
 }
 

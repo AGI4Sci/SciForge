@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage } from 'node:http';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { access, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { Duplex } from 'node:stream';
 import { spawn as spawnPty, type IPty } from '@homebridge/node-pty-prebuilt-multiarch';
@@ -70,7 +70,7 @@ function normalizeParallelInstanceId(value: string) {
 }
 
 type FeedbackCodexTerminalStatus = 'starting' | 'running' | 'idle' | 'failed' | 'cancelled';
-type FeedbackCodexTerminalTransport = 'websocket-pty';
+type FeedbackCodexTerminalTransport = 'websocket-pty' | 'system-terminal';
 
 interface FeedbackCodexTerminalSession {
   schemaVersion: 1;
@@ -90,6 +90,8 @@ interface FeedbackCodexTerminalSession {
   allowOpenAiRuntime?: boolean;
   transport: FeedbackCodexTerminalTransport;
   webSocketPath?: string;
+  systemTerminalLaunchRef?: string;
+  systemTerminalCommandPreview?: string;
 }
 
 interface ActiveFeedbackCodexTerminalSession extends FeedbackCodexTerminalSession {
@@ -126,6 +128,7 @@ const workspaceServer = createServer(async (req, res) => {
         'sciforge-tools',
         'repair-handoff-runner',
         'feedback-direct-codex-terminal-websocket-pty',
+        'feedback-direct-codex-terminal-system-terminal',
         'feedback-repair-terminal-mirror-tail',
         'feedback-repair-stop-request',
         'feedback-repair-guidance-input',
@@ -766,6 +769,7 @@ async function buildInstanceManifest(root: string) {
       'feedback-issue-handoff-bundle',
       'feedback-comment-evidence-persistence',
       'feedback-direct-codex-terminal-websocket-pty',
+      'feedback-direct-codex-terminal-system-terminal',
       'feedback-repair-run-record',
       'feedback-repair-result-record',
       'feedback-repair-terminal-mirror-tail',
@@ -1777,7 +1781,7 @@ function repairGuidancePrompt(input: { issueId: string; repairRunId: string; mes
     '',
     input.message,
     '',
-    'Preserve feedback records, screenshots, terminal mirror, repair audit, and GitHub sync state.',
+    'Preserve feedback records, screenshots, repair log evidence, repair audit, and GitHub sync state.',
     'Do not commit, push, open a PR, merge, rewrite ignored secret config, or delete audit/evidence files.',
     'If the guidance changes the repair, update the repair plan or tests inside the isolated repair worktree and keep the patch scoped.',
   ].join('\n');
@@ -1812,6 +1816,7 @@ async function startFeedbackCodexPtyTerminal(root: string, issueId: string, body
   const promptRef = feedbackCodexTerminalPromptRef(root, sessionId);
   const runtimeProfile = stringField(body.runtimeProfile) || RUNTIME_PROFILE;
   const allowOpenAiRuntime = body.allowOpenAiRuntime === true;
+  const launchSurface = stringField(body.launchSurface) === 'web-viewer' ? 'web-viewer' : 'system-terminal';
   const prompt = buildFeedbackCodexTerminalPrompt({
     root,
     bundle,
@@ -1836,21 +1841,27 @@ async function startFeedbackCodexPtyTerminal(root: string, issueId: string, body
     updatedAt: now,
     runtimeProfile,
     allowOpenAiRuntime,
-    transport: 'websocket-pty',
-    webSocketPath,
+    transport: launchSurface === 'web-viewer' ? 'websocket-pty' : 'system-terminal',
+    webSocketPath: launchSurface === 'web-viewer' ? webSocketPath : undefined,
     ptyBacklog: [],
     ptySockets: new Set(),
-    message: 'Direct Codex PTY terminal session is starting.',
+    message: launchSurface === 'web-viewer'
+      ? 'Codex repair session is starting with the Web Viewer attached.'
+      : 'Codex repair session is starting in macOS Terminal; the Web Viewer remains optional.',
   };
   activeFeedbackCodexTerminalSessions.set(session.id, session);
   await persistFeedbackCodexTerminalSession(session);
-  await appendRepairTerminalMirrorEntry(terminalMirrorRef, 'event', `Direct Codex Terminal started for feedback ${canonicalIssueId}. Transport=websocket-pty; workspace=${root}`);
+  await appendRepairTerminalMirrorEntry(terminalMirrorRef, 'event', `Codex repair session started for feedback ${canonicalIssueId}. Launch surface=${launchSurface}; workspace=${root}`);
   await appendRepairTerminalMirrorEntry(terminalMirrorRef, 'event', `Generated feedback prompt saved at ${promptRef}.`);
   const repairRun = feedbackCodexTerminalRepairRun(session, comment, body);
   const next = appendStateRecord(state, 'feedbackRepairRuns', repairRun);
   await persistFeedbackRecord(root, 'repair-runs', repairRun.id, repairRun);
   await writeWorkspaceStateFile(root, next);
-  await launchFeedbackCodexPtySession(session, prompt, body);
+  if (launchSurface === 'web-viewer') {
+    await launchFeedbackCodexPtySession(session, prompt, body);
+  } else {
+    await launchFeedbackCodexSystemTerminalSession(session, prompt);
+  }
   return {
     session: feedbackCodexTerminalPublicSession(session),
     repairRun,
@@ -1913,7 +1924,80 @@ async function launchFeedbackCodexPtySession(
       void finishFeedbackCodexPtySession(session.id, event.exitCode, event.signal).catch(() => undefined);
     });
   } catch (err) {
-    const message = `Direct Codex PTY dispatch failed: ${err instanceof Error ? err.message : String(err)}`;
+    const message = `Codex Web Viewer PTY dispatch failed: ${err instanceof Error ? err.message : String(err)}`;
+    session.status = 'failed';
+    session.message = message;
+    session.updatedAt = new Date().toISOString();
+    await appendRepairTerminalMirrorEntry(session.terminalMirrorRef, 'stderr', message);
+    await persistFeedbackCodexTerminalSession(session);
+    await persistDirectTerminalRepairRunStatus(session, 'failed', message);
+    broadcastFeedbackCodexPtyStatus(session);
+    throw err;
+  }
+}
+
+async function launchFeedbackCodexSystemTerminalSession(
+  session: ActiveFeedbackCodexTerminalSession,
+  prompt: string,
+) {
+  try {
+    const runtimeCodexEnv = await prepareRuntimeCodexEnvFromLocalConfig();
+    const config = await assertCodexRuntimeConfig({
+      workspacePath: session.workspacePath,
+      profile: session.runtimeProfile || RUNTIME_PROFILE,
+      allowOpenAiRuntime: session.allowOpenAiRuntime === true,
+      env: runtimeCodexEnv,
+    });
+    const runtimeSandbox = resolveRuntimeCodexSandbox(runtimeCodexEnv);
+    const codexGate = assertCodexNoForkGate({ codexCommand: runtimeCodexEnv.SCIFORGE_RUNTIME_CODEX_COMMAND });
+    const env = withCodexPtyPath(codexRuntimeEnv(runtimeCodexEnv, config.codexHome));
+    const codexCommand = await resolveCodexPtyCommand(codexGate.codexCommand, env);
+    const args = feedbackCodexPtyArgs({
+      profile: config.profile,
+      workspace: config.workspace,
+      sandbox: runtimeSandbox,
+      prompt,
+    });
+    const commandPreview = systemTerminalCodexCommandPreview({
+      codexCommand,
+      args,
+      prompt,
+      promptRef: session.promptRef,
+      codexHome: config.codexHome,
+      configPath: CONFIG_LOCAL_PATH,
+    });
+    const launchRef = feedbackCodexSystemTerminalLaunchRef(session.workspacePath, session.id);
+    await mkdir(dirname(launchRef), { recursive: true });
+    await writeFile(launchRef, systemTerminalLaunchScript({
+      workspace: config.workspace,
+      codexCommand,
+      args,
+      prompt,
+      promptRef: session.promptRef,
+      codexHome: config.codexHome,
+      configPath: CONFIG_LOCAL_PATH,
+      env,
+      path: env.PATH || process.env.PATH || '',
+    }));
+    await chmod(launchRef, 0o700);
+    session.systemTerminalLaunchRef = launchRef;
+    session.systemTerminalCommandPreview = commandPreview;
+    session.status = 'running';
+    session.message = 'Codex repair session launched in macOS Terminal. The Web Viewer is optional and the durable log remains attached to this repair thread.';
+    session.updatedAt = new Date().toISOString();
+    session.ptyBacklog = [
+      `System Terminal launch script: ${launchRef}\r\n`,
+      'The Codex process is owned by macOS Terminal, not the Vite/React page.\r\n',
+    ];
+    await appendRepairTerminalMirrorEntry(session.terminalMirrorRef, 'event', `System Terminal launch script saved at ${launchRef}.`);
+    await appendRepairTerminalMirrorEntry(session.terminalMirrorRef, 'event', 'Opening macOS Terminal for this Codex repair session; Web Viewer is attach-only.');
+    const opener = spawn('open', ['-a', 'Terminal', launchRef], { detached: true, stdio: 'ignore' });
+    opener.unref();
+    await persistFeedbackCodexTerminalSession(session);
+    await persistDirectTerminalRepairRunStatus(session, 'running', session.message);
+    broadcastFeedbackCodexPtyStatus(session);
+  } catch (err) {
+    const message = `System Terminal Codex launch failed: ${err instanceof Error ? err.message : String(err)}`;
     session.status = 'failed';
     session.message = message;
     session.updatedAt = new Date().toISOString();
@@ -1947,8 +2031,8 @@ async function stopFeedbackCodexPtyTerminal(root: string, sessionId: string, bod
   const session = await activeOrStoredFeedbackCodexTerminalSession(root, sessionId);
   const reason = stringField(body.reason) || 'feedback inbox PTY stop button';
   const message = session.ptyProcess
-    ? `Stop requested for Direct Codex PTY ${session.id}: ${reason}`
-    : `Stop requested for Direct Codex PTY ${session.id}, but no active PTY process is attached.`;
+    ? `Stop requested for Codex repair Web Viewer PTY ${session.id}: ${reason}`
+    : `Stop requested for Codex repair session ${session.id}, but no active backend PTY process is attached.`;
   await appendRepairTerminalMirrorEntry(session.terminalMirrorRef, 'stderr', message);
   if (session.ptyProcess) {
     session.ptyProcess.kill();
@@ -1986,8 +2070,8 @@ async function activeOrStoredFeedbackCodexTerminalSession(root: string, sessionI
   const active = activeFeedbackCodexTerminalSessions.get(sessionId);
   if (active) return active;
   const stored = await readFeedbackCodexTerminalSession(root, sessionId);
-  if (!stored) throw new Error(`Direct Codex Terminal session not found: ${sessionId}`);
-  const wasRunning = stored.status === 'running' || stored.status === 'starting';
+  if (!stored) throw new Error(`Codex repair session not found: ${sessionId}`);
+  const wasRunning = stored.transport === 'websocket-pty' && (stored.status === 'running' || stored.status === 'starting');
   const revived: ActiveFeedbackCodexTerminalSession = {
     ...stored,
     status: wasRunning ? 'idle' : stored.status,
@@ -2021,6 +2105,8 @@ async function readFeedbackCodexTerminalSession(root: string, sessionId: string)
     allowOpenAiRuntime: manifest.allowOpenAiRuntime === true,
     transport: feedbackCodexTerminalTransport(manifest.transport),
     webSocketPath: stringField(manifest.webSocketPath),
+    systemTerminalLaunchRef: stringField(manifest.systemTerminalLaunchRef),
+    systemTerminalCommandPreview: stringField(manifest.systemTerminalCommandPreview),
   };
 }
 
@@ -2048,6 +2134,8 @@ function feedbackCodexTerminalPublicSession(session: FeedbackCodexTerminalSessio
     allowOpenAiRuntime: session.allowOpenAiRuntime,
     transport: session.transport,
     webSocketPath: session.webSocketPath,
+    systemTerminalLaunchRef: session.systemTerminalLaunchRef,
+    systemTerminalCommandPreview: session.systemTerminalCommandPreview,
   };
 }
 
@@ -2063,14 +2151,18 @@ function feedbackCodexTerminalRepairRun(
     status: 'running',
     externalInstanceId: INSTANCE_ID,
     externalInstanceName: INSTANCE_ROLE,
-    actor: 'direct-codex-terminal',
+    actor: session.transport === 'system-terminal' ? 'system-terminal-codex' : 'direct-codex-web-viewer',
     startedAt: session.startedAt,
-    note: 'Direct Codex Terminal started from Feedback Inbox. UI is attached to a WebSocket/xterm PTY running the Codex CLI.',
+    note: session.transport === 'system-terminal'
+      ? 'Codex repair started from Feedback Inbox in macOS Terminal. The web surface is an optional viewer, not the process owner.'
+      : 'Codex repair started from Feedback Inbox. UI is attached to a WebSocket/xterm PTY running the Codex CLI.',
     terminalMirrorRef: session.terminalMirrorRef,
     planRef: session.promptRef,
     terminalMirror: [
-      { timestamp: session.startedAt, stream: 'event' as const, text: `Direct Codex Terminal started for ${session.issueId}.` },
-      { timestamp: session.startedAt, stream: 'event' as const, text: 'Transport=websocket-pty; xterm is attached to a real Codex CLI PTY.' },
+      { timestamp: session.startedAt, stream: 'event' as const, text: `Codex repair session started for ${session.issueId}.` },
+      { timestamp: session.startedAt, stream: 'event' as const, text: session.transport === 'system-terminal'
+        ? 'Launch surface=system-terminal; macOS Terminal owns the Codex process.'
+        : 'Launch surface=web-viewer; xterm is attached to a backend-owned Codex CLI PTY.' },
     ],
     confirmationPolicy: normalizeRepairConfirmationPolicy({
       commit: 'requires-user-confirmation',
@@ -2082,7 +2174,7 @@ function feedbackCodexTerminalRepairRun(
       handoffKind: 'direct-codex-terminal',
       executorBackend: 'runtime-codex',
       terminalTransport: session.transport,
-      terminalMode: 'interactive-codex-pty',
+      terminalMode: session.transport === 'system-terminal' ? 'system-terminal-codex' : 'interactive-codex-pty',
       directCodexTerminalSessionId: session.id,
       codexSessionId: session.codexSessionId,
       runtimeProfile: session.runtimeProfile,
@@ -2090,6 +2182,8 @@ function feedbackCodexTerminalRepairRun(
       targetWorkspacePath: session.workspacePath,
       promptRef: session.promptRef,
       webSocketPath: session.webSocketPath,
+      systemTerminalLaunchRef: session.systemTerminalLaunchRef,
+      systemTerminalCommandPreview: session.systemTerminalCommandPreview,
       evidenceRefs: feedbackPromptEvidenceRefs(comment ?? {}),
       initialTerminalGuidance: stringField(body.initialMessage),
       userGitMode: stringField(body.gitMode) || 'manual-git-default',
@@ -2115,11 +2209,13 @@ async function persistDirectTerminalRepairRunStatus(
     metadata: {
       ...(isRecord(existing.metadata) ? existing.metadata : {}),
       terminalTransport: session.transport,
-      terminalMode: 'interactive-codex-pty',
+      terminalMode: session.transport === 'system-terminal' ? 'system-terminal-codex' : 'interactive-codex-pty',
       directCodexTerminalSessionId: session.id,
       codexSessionId: session.codexSessionId,
       directCodexTerminalStatus: status,
       webSocketPath: session.webSocketPath,
+      systemTerminalLaunchRef: session.systemTerminalLaunchRef,
+      systemTerminalCommandPreview: session.systemTerminalCommandPreview,
       updatedAt: session.updatedAt,
       message,
     },
@@ -2188,7 +2284,7 @@ function buildFeedbackCodexTerminalPrompt(input: {
     'Operation boundaries',
     '- This is a direct Codex terminal session, not the old cross-instance repair runner.',
     '- Do not commit, push, create a PR, merge, or rewrite ignored secret config unless the human explicitly asks in this terminal.',
-    '- Keep feedback records, screenshots, terminal mirror files, and repair audit files intact.',
+    '- Keep feedback records, screenshots, repair log evidence files, and repair audit files intact.',
     '- If provider/config errors appear, report the exact blocker and stop rather than fabricating a repair.',
   ].filter((line) => line !== '').join('\n');
 }
@@ -2231,6 +2327,124 @@ function feedbackCodexPtyArgs(input: {
   ];
 }
 
+function systemTerminalCodexCommandPreview(input: {
+  codexCommand: string;
+  args: string[];
+  prompt: string;
+  promptRef: string;
+  codexHome: string;
+  configPath: string;
+}) {
+  return [
+    `CODEX_HOME=${quoteShellArg(input.codexHome)}`,
+    `SCIFORGE_CONFIG_PATH=${quoteShellArg(input.configPath)}`,
+    'SCIFORGE_RUNTIME_API_KEY=<from config.local.json>',
+    systemTerminalCodexShellCommand(input),
+  ].join(' ');
+}
+
+function systemTerminalLaunchScript(input: {
+  workspace: string;
+  codexCommand: string;
+  args: string[];
+  prompt: string;
+  promptRef: string;
+  codexHome: string;
+  configPath: string;
+  env: NodeJS.ProcessEnv;
+  path: string;
+}) {
+  const command = systemTerminalCodexShellCommand(input);
+  return [
+    '#!/bin/zsh',
+    'set -e',
+    `cd ${quoteShellArg(input.workspace)}`,
+    `export CODEX_HOME=${quoteShellArg(input.codexHome)}`,
+    `export PATH=${quoteShellArg(input.path)}`,
+    ...systemTerminalRuntimeEnvExports(input),
+    `printf '%s\\n' ${quoteShellArg('SciForge Codex repair session')}`,
+    `printf '%s\\n' ${quoteShellArg(`Workspace: ${input.workspace}`)}`,
+    `printf '%s\\n' ${quoteShellArg(`Prompt: ${input.promptRef}`)}`,
+    `printf '%s\\n' ${quoteShellArg('This system Terminal owns the Codex process; the SciForge Web Viewer is optional.')}`,
+    'echo ""',
+    'set +e',
+    command,
+    'status=$?',
+    'echo ""',
+    'echo "Codex exited with status ${status}."',
+    'read "?Press Return to close this window..."',
+    'exit "${status}"',
+    '',
+  ].join('\n');
+}
+
+function systemTerminalCodexShellCommand(input: {
+  codexCommand: string;
+  args: string[];
+  prompt: string;
+  promptRef: string;
+}) {
+  const renderedArgs = input.args.map((arg) => arg === input.prompt
+    ? `"$(cat ${quoteShellArg(input.promptRef)})"`
+    : quoteShellArg(arg));
+  return [quoteShellArg(input.codexCommand), ...renderedArgs].join(' ');
+}
+
+function systemTerminalRuntimeEnvExports(input: {
+  configPath: string;
+  env: NodeJS.ProcessEnv;
+}) {
+  const keys = [
+    'SCIFORGE_CONFIG_PATH',
+    'SCIFORGE_RUNTIME_PROVIDER',
+    'SCIFORGE_RUNTIME_MODEL',
+    'SCIFORGE_RUNTIME_BASE_URL',
+    'SCIFORGE_PROXY_UPSTREAM_BASE_URL',
+    'SCIFORGE_PROXY_BASE_URL',
+    'SCIFORGE_PROXY_PORT',
+    'SCIFORGE_PROXY_DEFAULT_MODEL',
+    'SCIFORGE_PROXY_FORCE_NON_STREAMING_UPSTREAM',
+    'SCIFORGE_RUNTIME_CODEX_SANDBOX',
+    'SCIFORGE_RUNTIME_CODEX_COMMAND',
+    'SCIFORGE_ALLOW_OPENAI_RUNTIME',
+  ];
+  const lines = keys
+    .map((key) => {
+      const value = key === 'SCIFORGE_CONFIG_PATH' ? input.configPath : stringValue(input.env[key]);
+      return value ? `export ${key}=${quoteShellArg(value)}` : '';
+    })
+    .filter(Boolean);
+  lines.push(
+    'if [ -z "${SCIFORGE_RUNTIME_API_KEY:-}" ]; then',
+    `  export SCIFORGE_RUNTIME_API_KEY="$(node -e ${quoteShellArg(systemTerminalRuntimeKeyReaderScript())} ${quoteShellArg(input.configPath)})"`,
+    'fi',
+    'if [ -z "${SCIFORGE_RUNTIME_API_KEY:-}" ]; then',
+    `  printf '%s\\n' ${quoteShellArg('Missing SCIFORGE_RUNTIME_API_KEY. Check the ignored local provider config before Codex starts.')}`,
+    'fi',
+  );
+  return lines;
+}
+
+function systemTerminalRuntimeKeyReaderScript() {
+  return [
+    'const fs = require("fs");',
+    'const path = process.argv[1];',
+    'const isRecord = (value) => value && typeof value === "object" && !Array.isArray(value);',
+    'const stringValue = (value) => typeof value === "string" && value.trim() ? value.trim() : "";',
+    'try {',
+    '  const root = JSON.parse(fs.readFileSync(path, "utf8"));',
+    '  const llm = isRecord(root.llm) ? root.llm : {};',
+    '  const codexProxy = isRecord(root.codexProxy) ? root.codexProxy : isRecord(root.runtimeCodexProxy) ? root.runtimeCodexProxy : {};',
+    '  const key = stringValue(root.apiKey) || stringValue(llm.apiKey) || stringValue(llm.upstreamApiKey) || stringValue(codexProxy.apiKey);',
+    '  if (key) process.stdout.write(key);',
+    '} catch {}',
+  ].join(' ');
+}
+
+function quoteShellArg(value: string) {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
 function withCodexPtyPath(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const fallbackDirs = ['/opt/homebrew/bin', '/usr/local/bin', '/opt/local/bin', '/usr/bin', '/bin'];
   const existing = (env.PATH || '').split(':').filter(Boolean);
@@ -2270,8 +2484,8 @@ function feedbackCodexTerminalStatus(value: unknown): FeedbackCodexTerminalStatu
     : 'idle';
 }
 
-function feedbackCodexTerminalTransport(_value: unknown): FeedbackCodexTerminalTransport {
-  return 'websocket-pty';
+function feedbackCodexTerminalTransport(value: unknown): FeedbackCodexTerminalTransport {
+  return value === 'system-terminal' ? 'system-terminal' : 'websocket-pty';
 }
 
 function feedbackCodexTerminalDir(root: string, sessionId: string) {
@@ -2285,6 +2499,10 @@ function feedbackCodexTerminalMirrorRef(root: string, sessionId: string) {
 
 function feedbackCodexTerminalPromptRef(root: string, sessionId: string) {
   return join(feedbackCodexTerminalDir(root, sessionId), 'feedback-codex-prompt.md');
+}
+
+function feedbackCodexSystemTerminalLaunchRef(root: string, sessionId: string) {
+  return join(feedbackCodexTerminalDir(root, sessionId), 'system-terminal-launch.command');
 }
 
 function feedbackCodexTerminalManifestRef(root: string, sessionId: string) {
@@ -3174,7 +3392,12 @@ async function prepareRuntimeCodexEnvFromLocalConfig(configuredLocalConfig?: Rec
 }
 
 async function syncRuntimeCodexHomeFromLocalConfig(runtimeEnv: NodeJS.ProcessEnv = process.env, proxyBaseUrl = runtimeCodexProxyBaseUrl(runtimeEnv)) {
-  await ensureRuntimeHome({ proxyBaseUrl, overwrite: true });
+  await ensureRuntimeHome({
+    proxyBaseUrl,
+    provider: runtimeEnv.SCIFORGE_RUNTIME_PROVIDER,
+    model: runtimeEnv.SCIFORGE_RUNTIME_MODEL,
+    overwrite: true,
+  });
 }
 
 async function runtimeCodexEnvFromLocalConfig(configuredLocalConfig?: Record<string, unknown>): Promise<NodeJS.ProcessEnv> {

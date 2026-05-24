@@ -33,6 +33,7 @@ type DesktopRuntimeConfigRecord = {
 
 type SciForgeDesktopBridge = {
   getRuntimeConfig?: () => Promise<unknown>;
+  pickDirectory?: (defaultPath?: string) => Promise<{ ok?: boolean; path?: string }>;
 };
 
 declare global {
@@ -337,9 +338,7 @@ export function validatePeerInstances(peerInstances: PeerInstance[]): string[] {
       if (count > 0) errors.push(`${label}: name must be unique.`);
     }
     if (peer.appUrl.trim() && !isValidHttpUrl(peer.appUrl)) errors.push(`${label}: appUrl must be a valid http(s) URL.`);
-    if (!peer.workspaceWriterUrl.trim()) {
-      errors.push(`${label}: workspaceWriterUrl is required.`);
-    } else if (!isValidHttpUrl(peer.workspaceWriterUrl)) {
+    if (peer.workspaceWriterUrl.trim() && !isValidHttpUrl(peer.workspaceWriterUrl)) {
       errors.push(`${label}: workspaceWriterUrl must be a valid http(s) URL.`);
     }
   });
@@ -352,6 +351,25 @@ export function updateConfig(config: SciForgeConfig, patch: Partial<SciForgeConf
     ...patch,
     updatedAt: new Date().toISOString(),
   });
+}
+
+export function applyWorkspaceProjectSwitch(
+  config: SciForgeConfig,
+  patch: Pick<Partial<SciForgeConfig>, 'workspacePath' | 'peerInstances'>,
+): SciForgeConfig {
+  return updateConfig(config, {
+    workspacePath: patch.workspacePath ?? config.workspacePath,
+    peerInstances: patch.peerInstances ?? config.peerInstances,
+  });
+}
+
+export function resolvePeerWorkspaceWriterUrl(config: SciForgeConfig, peer: PeerInstance): string {
+  const sharedWriter = config.workspaceWriterBaseUrl.trim();
+  const dedicatedWriter = peer.workspaceWriterUrl.trim();
+  if (peer.trustLevel === 'repair' && dedicatedWriter && dedicatedWriter !== sharedWriter) {
+    return dedicatedWriter;
+  }
+  return sharedWriter;
 }
 
 function cleanUrl(value: unknown) {

@@ -208,6 +208,7 @@ export function ChatPanel({
   const activeRunTokenRef = useRef(0);
   const messagesRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const autoScrollRef = useRef(true);
   const savedScrollTopRef = useRef(savedScrollTop);
   const reportedScrollTopRef = useRef(savedScrollTop);
@@ -515,6 +516,8 @@ export function ChatPanel({
     pendingReferencesRef.current = next.pendingReferences;
     inputRef.current = next.input;
     onInputChange(next.input);
+    setComposerExpanded(true);
+    window.requestAnimationFrame(() => composerTextareaRef.current?.focus());
   }
 
   function removePendingReference(referenceId: string) {
@@ -1124,6 +1127,7 @@ export function ChatPanel({
         pendingReferences={pendingReferences}
         contextMeter={<ContextWindowMeter state={contextWindowState} running={isSending} />}
         fileInputRef={fileInputRef}
+        textareaRef={composerTextareaRef}
         runtimeContext={{
           provider: config.modelProvider || 'provider unset',
           model: config.modelName.trim() || 'model unset',
@@ -1256,7 +1260,7 @@ function rangeForTextInElement(element: HTMLElement, text: string) {
 
 function textSelectionReferenceTarget(event?: MouseEvent): { element: HTMLElement; reference: SciForgeReference } | undefined {
   const rawTarget = event?.target instanceof Element ? event.target : undefined;
-  if (rawTarget?.closest('.composer, .reference-pick-banner, .settings-dialog, .reference-context-menu')) return undefined;
+  if (rawTarget?.closest('.composer, .reference-pick-banner, .settings-dialog, .settings-page, .settings-page, .reference-context-menu')) return undefined;
   const selection = window.getSelection();
   const selectedText = selection?.toString().trim();
   if (!selection || selection.rangeCount === 0 || !selectedText) return undefined;
@@ -1265,7 +1269,7 @@ function textSelectionReferenceTarget(event?: MouseEvent): { element: HTMLElemen
     ? range.commonAncestorContainer as Element
     : range.commonAncestorContainer.parentElement;
   const element = ancestor?.closest<HTMLElement>('[data-sciforge-reference], .message, .registry-slot, .card, .data-preview-table, table, section');
-  if (!element || element.closest('.composer, .reference-pick-banner, .settings-dialog')) return undefined;
+  if (!element || element.closest('.composer, .reference-pick-banner, .settings-dialog, .settings-page')) return undefined;
   if (rawTarget && !element.contains(rawTarget) && !rawTarget.contains(element)) return undefined;
   const sourceReference = parseSciForgeReferenceAttribute(element.dataset.sciforgeReference) ?? referenceForUiElement(element);
   const reference = referenceForTextSelection({ sourceReference, selectedText });
@@ -1278,14 +1282,14 @@ function textSelectionReferenceTarget(event?: MouseEvent): { element: HTMLElemen
 
 function referenceTargetFromEvent(event: MouseEvent): { element: HTMLElement; reference: SciForgeReference } | undefined {
   const rawTarget = event.target instanceof Element ? event.target : undefined;
-  if (!rawTarget || rawTarget.closest('.composer, .reference-pick-banner, .settings-dialog')) return undefined;
+  if (!rawTarget || rawTarget.closest('.composer, .reference-pick-banner, .settings-dialog, .settings-page')) return undefined;
   const explicit = rawTarget.closest<HTMLElement>('[data-sciforge-reference]');
   if (explicit) {
     const reference = parseSciForgeReferenceAttribute(explicit.dataset.sciforgeReference);
     if (reference) return { element: explicit, reference };
   }
   const implicit = rawTarget.closest<HTMLElement>('button, [role="button"], .registry-slot, .card, .message, .data-preview-table, table, canvas, svg, section');
-  if (!implicit || !(implicit instanceof HTMLElement) || implicit.closest('.composer, .reference-pick-banner, .settings-dialog')) return undefined;
+  if (!implicit || !(implicit instanceof HTMLElement) || implicit.closest('.composer, .reference-pick-banner, .settings-dialog, .settings-page')) return undefined;
   return { element: implicit, reference: referenceForUiElement(implicit) };
 }
 

@@ -30,7 +30,7 @@ test('repair audit panel renders terminal controls without raw audit fields', ()
   );
 
   assert.match(html, /repair audit panel/);
-  assert.match(html, /Codex CLI terminal/);
+  assert.match(html, /Repair log evidence/);
   assert.match(html, /启动 repair/);
   assert.match(html, /输入引导，Enter 会启动一条新的 repair 线程/);
   assert.match(html, /只把此输入框中的显式用户文字作为 initial guidance/);
@@ -63,7 +63,7 @@ test('repair terminal input stays usable before a repair run exists', () => {
   assert.doesNotMatch(html, /<textarea[^>]*disabled/);
   assert.match(html, /没有 repair run 时，这行输入会作为初始引导启动 Runtime Codex repair/);
   assert.match(html, /只把此输入框中的显式用户文字作为 initial guidance/);
-  assert.match(html, /展开 \/ 复制：等待 terminal 行写入/);
+  assert.match(html, /展开 \/ 复制：等待 repair log 行写入/);
   assert.match(html, /发送：先输入一行引导/);
 });
 
@@ -185,7 +185,7 @@ test('repair audit panel renders multiple repair threads as compact history', ()
   assert.match(html, /First pass needs human direction/);
 });
 
-test('repair audit panel renders ordered terminal mirror lines and blocked stop control', () => {
+test('repair audit panel renders ordered repair log lines and blocked stop control', () => {
   const audit = feedbackRepairAuditForIssue('feedback-1', [
     repairRun('running', {
       terminalMirrorRef: '.sciforge/repair-results/run-1/terminal-mirror.ndjson',
@@ -231,7 +231,7 @@ test('repair audit panel renders ordered terminal mirror lines and blocked stop 
   assert.ok(first > 0, 'first terminal line should render');
   assert.ok(second > first, 'result metadata line should be ordered after the first run line');
   assert.ok(third > second, 'later run line should render last');
-  assert.match(html, /Codex CLI terminal/);
+  assert.match(html, /Repair log evidence/);
   assert.match(html, /复制/);
   assert.match(html, /导出 Bundle/);
   assert.match(html, /停止/);
@@ -241,7 +241,7 @@ test('repair audit panel renders ordered terminal mirror lines and blocked stop 
   assert.doesNotMatch(html, /请求 backend 安全取消当前 Runtime Codex repair turn/);
 });
 
-test('terminal mirror export payload preserves refs, copy state, and metadata', () => {
+test('repair log export payload preserves refs, copy state, and metadata', () => {
   const audit = feedbackRepairAuditForIssue('feedback-1', [
     repairRun('running', {
       terminalMirrorRef: '.sciforge/repair-results/run-1/terminal-mirror.ndjson',

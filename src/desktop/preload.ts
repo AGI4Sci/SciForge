@@ -13,6 +13,7 @@ export type SciForgeDesktopPreloadApi = {
   requestShutdown(): Promise<unknown>;
   openExternal(url: string): Promise<unknown>;
   revealPath(path: string): Promise<unknown>;
+  pickDirectory(defaultPath?: string): Promise<{ ok: boolean; path?: string }>;
 };
 
 export const SCIFORGE_DESKTOP_API_NAME = 'sciforgeDesktop';
@@ -25,6 +26,7 @@ export function createSciForgeDesktopPreloadApi(ipcRenderer: DesktopIpcRenderer)
     requestShutdown: () => ipcRenderer.invoke('runtime:shutdown'),
     openExternal: (url: string) => ipcRenderer.invoke('platform:open-external', url),
     revealPath: (path: string) => ipcRenderer.invoke('platform:reveal-path', path),
+    pickDirectory: (defaultPath?: string) => ipcRenderer.invoke('platform:pick-directory', defaultPath),
   };
 }
 

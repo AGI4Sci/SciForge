@@ -4,8 +4,10 @@ import {
   buildFeedbackBundle,
   buildFeedbackGithubIssueBody,
   buildFeedbackGithubIssueTitle,
+  buildFeedbackRepairClosureReport,
   importGithubOpenIssuesAsFeedback,
   mapGithubIssueRows,
+  markFeedbackGithubIssueClosed,
   markFeedbackGithubIssueCreated,
   markFeedbackGithubIssueSyncFailed,
   markFeedbackGithubIssueSyncPending,
@@ -290,6 +292,75 @@ test('marks GitHub submit pending and failure without leaking secrets or local p
   assert.equal(failed.feedbackComments?.[0].githubSyncStatus, 'failed');
   assert.doesNotMatch(failed.feedbackComments?.[0].githubSyncError ?? '', /sk-secret|\/Users\/alice/);
   assert.match(failed.feedbackComments?.[0].githubSyncError ?? '', /\[redacted-feedback-secret\]|\[redacted-feedback-path\]/);
+});
+
+test('builds repair closure report and marks linked GitHub issue closed locally', () => {
+  const synced = markFeedbackGithubIssueCreated(workspace, ['feedback-1'], {
+    number: 7,
+    htmlUrl: 'https://github.com/org/repo/issues/7',
+    title: 'Feedback issue',
+  }, '2026-05-07T01:00:00.000Z');
+  const report = buildFeedbackRepairClosureReport(
+    synced.feedbackComments?.[0] ?? feedback,
+    {
+      schemaVersion: 1,
+      id: 'repair-result-1',
+      issueId: 'feedback-1',
+      verdict: 'fixed',
+      summary: 'Moved expected and actual behavior next to the screenshot.',
+      changedFiles: ['src/ui/src/app/sciforgeApp/FeedbackInboxPage.tsx'],
+      evidenceRefs: ['repair-evidence/public/feedback-1/scrubbed.png'],
+      completedAt: '2026-05-07T02:00:00.000Z',
+    },
+    {
+      schemaVersion: 1,
+      id: 'repair-action-1',
+      issueId: 'feedback-1',
+      repairResultId: 'repair-result-1',
+      action: 'browser-recheck',
+      status: 'completed',
+      sideEffect: 'none',
+      requestedAt: '2026-05-07T02:01:00.000Z',
+      browserVerification: {
+        status: 'passed',
+        verifiedAt: '2026-05-07T02:01:00.000Z',
+        verifier: 'user',
+        conclusion: 'Original issue no longer reproduces.',
+        evidenceRefs: ['browser://evidence/ref'],
+      },
+      message: 'Browser recheck recorded.',
+    },
+    '2026-05-07T02:02:00.000Z',
+  );
+  const closed = markFeedbackGithubIssueClosed(synced, ['feedback-1'], {
+    number: 7,
+    htmlUrl: 'https://github.com/org/repo/issues/7',
+    commentUrl: 'https://github.com/org/repo/issues/7#issuecomment-1',
+    updatedAt: '2026-05-07T02:03:00.000Z',
+  });
+
+  assert.match(report, /SciForge repair closure/);
+  assert.match(report, /Key issue/);
+  assert.match(report, /What changed/);
+  assert.match(report, /Original issue no longer reproduces/);
+  assert.equal(closed.feedbackComments?.[0].status, 'fixed');
+  assert.equal(closed.feedbackComments?.[0].githubSyncStatus, 'github-closed');
+  assert.equal(closed.feedbackComments?.[0].githubIssueState, 'closed');
+  assert.equal(closed.githubSyncedOpenIssues?.length, 0);
+});
+
+test('builds a user-confirmed closure report without a solved repair result', () => {
+  const report = buildFeedbackRepairClosureReport(
+    feedback,
+    undefined,
+    undefined,
+    '2026-05-07T02:02:00.000Z',
+  );
+
+  assert.match(report, /Repair result: not recorded/);
+  assert.match(report, /Closure basis: user confirmed/);
+  assert.match(report, /user-confirmed/);
+  assert.match(report, /User confirmed the task is complete/);
 });
 
 test('imports newer divergent GitHub bodies as visible conflicts without overwriting local feedback', () => {

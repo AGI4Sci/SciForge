@@ -7,6 +7,7 @@ import {
   makeId,
   messageOutputItem,
   responsesToChatCompletions,
+  type ChatCompletionRequest,
   type ChatToolCall,
   type CodexResponsesProxyOptions,
   type JsonObject,
@@ -52,6 +53,50 @@ type UpstreamPreflightResult = {
   releaseAcceptance: 'not-evaluated';
 };
 
+type UpstreamErrorBridge = {
+  protocol: 'raw-openai-compatible' | 'responses-to-chat-completions';
+  proxyEndpoint: string;
+  upstreamEndpoint: string;
+  requestFeatures?: JsonObject;
+  compatibilityRetry?: JsonObject;
+};
+
+type ProviderCapabilityName =
+  | 'streaming'
+  | 'streaming_tools'
+  | 'tool_choice_required'
+  | 'tool_choice_object'
+  | 'parallel_tool_calls'
+  | 'metadata';
+
+type ProviderCompatibilityStrategy =
+  | 'native-chat-completions'
+  | 'non-streaming-chat-completions'
+  | 'simplified-tool-choice-object'
+  | 'relaxed-tool-choice-auto'
+  | 'omit-parallel-tool-calls'
+  | 'omit-metadata';
+
+type ProviderCapabilityProfile = {
+  schemaVersion: 'sciforge.proxy.provider-capabilities.v1';
+  key: string;
+  unsupported: Partial<Record<ProviderCapabilityName, true>>;
+  updatedAt: string;
+};
+
+type ChatCompletionAttempt = {
+  request: ChatCompletionRequest;
+  strategies: ProviderCompatibilityStrategy[];
+};
+
+type ChatCompletionFailure = {
+  status: number;
+  payload: string;
+  contentType?: string;
+  attempt: ChatCompletionAttempt;
+  attemptIndex: number;
+};
+
 type StreamingState = {
   responseId: string;
   model: string;
@@ -73,6 +118,7 @@ type MutableToolCall = {
 export function createCodexResponsesProxyServer(options: CodexResponsesProxyServerOptions): Server {
   const fetchImpl = options.fetchImpl ?? fetch;
   const upstreamPreflightTimeoutMs = 2_500;
+  const capabilityProfiles = new Map<string, ProviderCapabilityProfile>();
 
   return createServer(async (request, response) => {
     try {
@@ -98,13 +144,25 @@ export function createCodexResponsesProxyServer(options: CodexResponsesProxyServ
         });
       }
       if (request.method === 'GET' && url.pathname === '/v1/models') {
-        return await proxyRaw(request, response, fetchImpl, requestOptions, `${upstreamBaseUrl}/models`);
+        return await proxyRaw(request, response, fetchImpl, requestOptions, `${upstreamBaseUrl}/models`, {
+          protocol: 'raw-openai-compatible',
+          proxyEndpoint: '/v1/models',
+          upstreamEndpoint: '/models',
+        });
       }
       if (request.method === 'POST' && url.pathname === '/v1/chat/completions') {
-        return await proxyRaw(request, response, fetchImpl, requestOptions, `${upstreamBaseUrl}/chat/completions`);
+        return await proxyRaw(request, response, fetchImpl, requestOptions, `${upstreamBaseUrl}/chat/completions`, {
+          protocol: 'raw-openai-compatible',
+          proxyEndpoint: '/v1/chat/completions',
+          upstreamEndpoint: '/chat/completions',
+        });
       }
       if (request.method === 'POST' && url.pathname === '/v1/responses') {
-        return await handleResponsesRequest(request, response, fetchImpl, requestOptions, `${upstreamBaseUrl}/chat/completions`);
+        return await handleResponsesRequest(request, response, fetchImpl, requestOptions, capabilityProfiles, upstreamBaseUrl, `${upstreamBaseUrl}/chat/completions`, {
+          protocol: 'responses-to-chat-completions',
+          proxyEndpoint: '/v1/responses',
+          upstreamEndpoint: '/chat/completions',
+        });
       }
       return sendJson(response, 404, { error: { code: 'not_found', message: 'Route not found' } });
     } catch (error) {
@@ -256,40 +314,347 @@ async function handleResponsesRequest(
   response: ServerResponse,
   fetchImpl: typeof fetch,
   options: CodexResponsesProxyServerOptions,
+  capabilityProfiles: Map<string, ProviderCapabilityProfile>,
+  upstreamBaseUrl: string,
   upstreamUrl: string,
+  bridge: UpstreamErrorBridge,
 ) {
   const body = await readJson(request);
   const responsesRequest = body && typeof body === 'object' && !Array.isArray(body) ? body as ResponsesRequest : {};
   const chatRequest = responsesToChatCompletions(responsesRequest, options);
-  const upstreamChatRequest = options.forceNonStreamingUpstream && chatRequest.stream === true
-    ? { ...chatRequest, stream: false }
-    : chatRequest;
-  const upstream = await fetchImpl(upstreamUrl, {
-    method: 'POST',
-    headers: upstreamHeaders(request, options, 'application/json'),
-    body: JSON.stringify(upstreamChatRequest),
-  });
+  const originalFeatures = chatRequestFeatures(chatRequest);
+  const profileKey = providerCapabilityProfileKey(upstreamBaseUrl, chatRequest.model, options, request);
+  const profile = capabilityProfiles.get(profileKey) ?? createProviderCapabilityProfile(profileKey);
+  const requestFeatures = chatRequestFeatures(chatRequest);
+  const responseBridge = {
+    ...bridge,
+    requestFeatures,
+  };
+  const attempts = providerCompatibilityAttempts(chatRequest, profile, options.forceNonStreamingUpstream === true);
+  let firstFailure: ChatCompletionFailure | undefined;
+  let lastFailure: ChatCompletionFailure | undefined;
 
-  if (!upstream.ok) {
-    const payload = await upstream.text();
-    return sendJson(response, upstream.status, normalizeUpstreamError(
-      payload,
-      upstream.status,
-      upstream.headers.get('content-type') ?? undefined,
-    ));
+  for (const [index, attempt] of attempts.entries()) {
+    const upstream = await fetchImpl(upstreamUrl, {
+      method: 'POST',
+      headers: upstreamHeaders(request, options, 'application/json'),
+      body: JSON.stringify(attempt.request),
+    });
+
+    if (upstream.ok) {
+      learnProviderCapabilities(profile, chatRequest, attempt);
+      capabilityProfiles.set(profile.key, profile);
+      if (chatRequest.stream === true && attempt.request.stream !== true) {
+        const completion = await upstream.json();
+        return streamChatCompletionObjectAsResponses(response, completion, responsesRequest);
+      }
+      if (chatRequest.stream === true) {
+        return streamChatCompletionAsResponses(response, upstream, chatRequest.model);
+      }
+      const completion = await upstream.json();
+      return sendJson(response, 200, chatCompletionToResponse(completion, responsesRequest));
+    }
+
+    const failure: ChatCompletionFailure = {
+      status: upstream.status,
+      payload: await upstream.text(),
+      contentType: upstream.headers.get('content-type') ?? undefined,
+      attempt,
+      attemptIndex: index,
+    };
+    firstFailure ??= failure;
+    lastFailure = failure;
+    if (!shouldRetryProviderCompatibility(upstream.status) || index === attempts.length - 1) break;
   }
 
-  if (chatRequest.stream === true && upstreamChatRequest.stream !== true) {
-    const completion = await upstream.json();
-    return streamChatCompletionObjectAsResponses(response, completion, responsesRequest);
+  const failure = lastFailure;
+  if (!failure) {
+    return sendJson(response, 500, {
+      error: {
+        code: 'sciforge_proxy_error',
+        message: 'Provider compatibility attempts were not generated.',
+      },
+    });
   }
 
-  if (chatRequest.stream === true) {
-    return streamChatCompletionAsResponses(response, upstream, chatRequest.model);
-  }
+  return sendJson(response, failure.status, normalizeUpstreamError(
+    failure.payload,
+    failure.status,
+    failure.contentType,
+    {
+      ...responseBridge,
+      compatibilityRetry: compatibilityRetryMetadata(attempts, firstFailure, failure, originalFeatures, profile),
+    },
+  ));
+}
 
-  const completion = await upstream.json();
-  return sendJson(response, 200, chatCompletionToResponse(completion, responsesRequest));
+function shouldRetryProviderCompatibility(status: number) {
+  return status === 400 || status === 415 || status === 422 || status === 501;
+}
+
+function providerCompatibilityAttempts(
+  chatRequest: ChatCompletionRequest,
+  profile: ProviderCapabilityProfile,
+  forceNonStreamingUpstream: boolean,
+): ChatCompletionAttempt[] {
+  const attempts: ChatCompletionAttempt[] = [];
+  const add = (request: ChatCompletionRequest, strategies: ProviderCompatibilityStrategy[]) => {
+    const signature = JSON.stringify(request);
+    if (attempts.some((attempt) => JSON.stringify(attempt.request) === signature)) return request;
+    attempts.push({ request, strategies });
+    return request;
+  };
+
+  const profiled = applyKnownProviderLowering(chatRequest, profile, forceNonStreamingUpstream);
+  let current = add(profiled.request, profiled.strategies);
+
+  const nonStreaming = lowerToNonStreaming(current);
+  if (nonStreaming) current = add(nonStreaming, uniqueStrategies([...profiled.strategies, 'non-streaming-chat-completions']));
+
+  const simplifiedToolChoice = lowerObjectToolChoice(current);
+  if (simplifiedToolChoice) current = add(simplifiedToolChoice, uniqueStrategies([...strategiesForRequest(attempts, current), 'simplified-tool-choice-object']));
+
+  const relaxedToolChoice = lowerToolChoiceToAuto(current);
+  if (relaxedToolChoice) current = add(relaxedToolChoice, uniqueStrategies([...strategiesForRequest(attempts, current), 'relaxed-tool-choice-auto']));
+
+  const withoutParallel = lowerOmitParallelToolCalls(current);
+  if (withoutParallel) current = add(withoutParallel, uniqueStrategies([...strategiesForRequest(attempts, current), 'omit-parallel-tool-calls']));
+
+  const withoutMetadata = lowerOmitMetadata(current);
+  if (withoutMetadata) add(withoutMetadata, uniqueStrategies([...strategiesForRequest(attempts, current), 'omit-metadata']));
+
+  return attempts;
+}
+
+function applyKnownProviderLowering(
+  request: ChatCompletionRequest,
+  profile: ProviderCapabilityProfile,
+  forceNonStreamingUpstream: boolean,
+): ChatCompletionAttempt {
+  let current = request;
+  const strategies: ProviderCompatibilityStrategy[] = [];
+  if (
+    forceNonStreamingUpstream
+    || (profile.unsupported.streaming === true && current.stream === true)
+    || (profile.unsupported.streaming_tools === true && current.stream === true && chatRequestHasTools(current))
+  ) {
+    const lowered = lowerToNonStreaming(current);
+    if (lowered) {
+      current = lowered;
+      strategies.push('non-streaming-chat-completions');
+    }
+  }
+  if (profile.unsupported.tool_choice_object === true) {
+    const lowered = lowerObjectToolChoice(current);
+    if (lowered) {
+      current = lowered;
+      strategies.push('simplified-tool-choice-object');
+    }
+  }
+  if (profile.unsupported.tool_choice_required === true) {
+    const lowered = lowerToolChoiceToAuto(current);
+    if (lowered) {
+      current = lowered;
+      strategies.push('relaxed-tool-choice-auto');
+    }
+  }
+  if (profile.unsupported.parallel_tool_calls === true) {
+    const lowered = lowerOmitParallelToolCalls(current);
+    if (lowered) {
+      current = lowered;
+      strategies.push('omit-parallel-tool-calls');
+    }
+  }
+  if (profile.unsupported.metadata === true) {
+    const lowered = lowerOmitMetadata(current);
+    if (lowered) {
+      current = lowered;
+      strategies.push('omit-metadata');
+    }
+  }
+  return { request: current, strategies: uniqueStrategies(strategies) };
+}
+
+function lowerToNonStreaming(request: ChatCompletionRequest): ChatCompletionRequest | undefined {
+  if (request.stream !== true) return undefined;
+  return { ...request, stream: false };
+}
+
+function lowerObjectToolChoice(request: ChatCompletionRequest): ChatCompletionRequest | undefined {
+  if (!isPlainObject(request.tool_choice)) return undefined;
+  const toolName = toolChoiceFunctionName(request.tool_choice);
+  const lowered: ChatCompletionRequest = {
+    ...request,
+    tool_choice: 'required',
+  };
+  const filteredTools = toolName ? filterChatToolsByName(request.tools, toolName) : undefined;
+  if (filteredTools) lowered.tools = filteredTools;
+  return lowered;
+}
+
+function lowerToolChoiceToAuto(request: ChatCompletionRequest): ChatCompletionRequest | undefined {
+  if (request.tool_choice === undefined || request.tool_choice === 'auto' || request.tool_choice === 'none') return undefined;
+  const lowered: ChatCompletionRequest = {
+    ...request,
+    tool_choice: 'auto',
+  };
+  if (isPlainObject(request.tool_choice)) {
+    const toolName = toolChoiceFunctionName(request.tool_choice);
+    const filteredTools = toolName ? filterChatToolsByName(request.tools, toolName) : undefined;
+    if (filteredTools) lowered.tools = filteredTools;
+  }
+  return lowered;
+}
+
+function lowerOmitParallelToolCalls(request: ChatCompletionRequest): ChatCompletionRequest | undefined {
+  if (request.parallel_tool_calls === undefined) return undefined;
+  const { parallel_tool_calls: _parallelToolCalls, ...lowered } = request;
+  return lowered;
+}
+
+function lowerOmitMetadata(request: ChatCompletionRequest): ChatCompletionRequest | undefined {
+  if (request.metadata === undefined) return undefined;
+  const { metadata: _metadata, ...lowered } = request;
+  return lowered;
+}
+
+function strategiesForRequest(attempts: ChatCompletionAttempt[], request: ChatCompletionRequest): ProviderCompatibilityStrategy[] {
+  const signature = JSON.stringify(request);
+  return attempts.find((attempt) => JSON.stringify(attempt.request) === signature)?.strategies ?? [];
+}
+
+function uniqueStrategies(strategies: ProviderCompatibilityStrategy[]): ProviderCompatibilityStrategy[] {
+  return [...new Set(strategies)];
+}
+
+function chatRequestHasTools(request: ChatCompletionRequest): boolean {
+  return Array.isArray(request.tools) && request.tools.length > 0;
+}
+
+function toolChoiceFunctionName(value: JsonObject): string | undefined {
+  if (typeof value.name === 'string' && value.name) return value.name;
+  if (isPlainObject(value.function) && typeof value.function.name === 'string' && value.function.name) {
+    return value.function.name;
+  }
+  return undefined;
+}
+
+function filterChatToolsByName(tools: unknown, name: string): unknown[] | undefined {
+  if (!Array.isArray(tools)) return undefined;
+  const filtered = tools.filter((tool) => chatToolName(tool) === name);
+  return filtered.length > 0 ? filtered : undefined;
+}
+
+function chatToolName(tool: unknown): string | undefined {
+  if (!isPlainObject(tool)) return undefined;
+  if (typeof tool.name === 'string' && tool.name) return tool.name;
+  if (isPlainObject(tool.function) && typeof tool.function.name === 'string' && tool.function.name) {
+    return tool.function.name;
+  }
+  return undefined;
+}
+
+function learnProviderCapabilities(
+  profile: ProviderCapabilityProfile,
+  originalRequest: ChatCompletionRequest,
+  attempt: ChatCompletionAttempt,
+) {
+  const unsupported = profile.unsupported;
+  const learned = attempt.strategies[attempt.strategies.length - 1];
+  if (learned === 'non-streaming-chat-completions' && originalRequest.stream === true) {
+    if (chatRequestHasTools(originalRequest)) unsupported.streaming_tools = true;
+    else unsupported.streaming = true;
+  }
+  if (learned === 'simplified-tool-choice-object') unsupported.tool_choice_object = true;
+  if (learned === 'relaxed-tool-choice-auto') unsupported.tool_choice_required = true;
+  if (learned === 'omit-parallel-tool-calls') unsupported.parallel_tool_calls = true;
+  if (learned === 'omit-metadata') unsupported.metadata = true;
+  profile.updatedAt = new Date().toISOString();
+}
+
+function compatibilityRetryMetadata(
+  attempts: ChatCompletionAttempt[],
+  firstFailure: ChatCompletionFailure | undefined,
+  finalFailure: ChatCompletionFailure,
+  originalFeatures: JsonObject,
+  profile: ProviderCapabilityProfile,
+): JsonObject {
+  const metadata: JsonObject = {
+    attempted: attempts.length > 1,
+    attemptCount: finalFailure.attemptIndex + 1,
+    generatedAttemptCount: attempts.length,
+    finalStatus: finalFailure.status,
+    strategies: uniqueStrategies(attempts
+      .slice(0, finalFailure.attemptIndex + 1)
+      .flatMap((attempt) => attempt.strategies.length ? attempt.strategies : ['native-chat-completions'])),
+    originalFeatures,
+    providerCapabilities: providerCapabilityPublicSummary(profile),
+  };
+  if (firstFailure) metadata.initialStatus = firstFailure.status;
+  return metadata;
+}
+
+function providerCapabilityPublicSummary(profile: ProviderCapabilityProfile): JsonObject {
+  return {
+    schemaVersion: profile.schemaVersion,
+    keySha256: `sha256:${createHash('sha256').update(profile.key).digest('hex')}`,
+    unsupported: Object.keys(profile.unsupported).sort(),
+    updatedAt: profile.updatedAt,
+  };
+}
+
+function providerCapabilityProfileKey(
+  upstreamBaseUrl: string,
+  model: string,
+  options: CodexResponsesProxyServerOptions,
+  request: IncomingMessage,
+): string {
+  const authorization = options.upstreamApiKey
+    ? `server:${options.upstreamApiKey}`
+    : typeof request.headers.authorization === 'string'
+      ? `incoming:${request.headers.authorization}`
+      : 'no-auth';
+  const authHash = createHash('sha256').update(authorization).digest('hex').slice(0, 16);
+  return [
+    trimTrailingSlash(upstreamBaseUrl),
+    model,
+    authHash,
+  ].join('|');
+}
+
+function createProviderCapabilityProfile(key: string): ProviderCapabilityProfile {
+  return {
+    schemaVersion: 'sciforge.proxy.provider-capabilities.v1',
+    key,
+    unsupported: {},
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function chatRequestFeatures(request: ChatCompletionRequest): JsonObject {
+  return {
+    stream: request.stream === true,
+    messageCount: request.messages.length,
+    toolCount: Array.isArray(request.tools) ? request.tools.length : 0,
+    toolChoiceConfigured: request.tool_choice !== undefined,
+    toolChoiceKind: toolChoiceKind(request.tool_choice),
+    parallelToolCallsConfigured: request.parallel_tool_calls !== undefined,
+    metadataConfigured: request.metadata !== undefined,
+    maxTokensConfigured: request.max_tokens !== undefined,
+  };
+}
+
+function toolChoiceKind(value: unknown) {
+  if (value === undefined) return 'none';
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    if (record.function && typeof record.function === 'object') return 'chat-function-object';
+    if (typeof record.name === 'string') return 'responses-function-object';
+    if (typeof record.type === 'string') return `object:${record.type}`;
+    return 'object';
+  }
+  return typeof value;
 }
 
 function streamChatCompletionObjectAsResponses(
@@ -597,6 +962,7 @@ async function proxyRaw(
   fetchImpl: typeof fetch,
   options: CodexResponsesProxyServerOptions,
   upstreamUrl: string,
+  bridge: UpstreamErrorBridge,
 ) {
   const body = request.method === 'GET' ? undefined : await readRaw(request);
   const upstream = await fetchImpl(upstreamUrl, {
@@ -610,6 +976,7 @@ async function proxyRaw(
       payload,
       upstream.status,
       upstream.headers.get('content-type') ?? undefined,
+      bridge,
     ));
   }
   response.writeHead(upstream.status, Object.fromEntries(upstream.headers.entries()));
@@ -733,17 +1100,28 @@ function upstreamPreflightMessageForStatus(status: number): string {
   return `Provider upstream returned unexpected ${label}; inspect proxy wiring and request compatibility.`;
 }
 
-function normalizeUpstreamError(payload: string, status: number, contentType?: string): JsonObject {
+function normalizeUpstreamError(
+  payload: string,
+  status: number,
+  contentType?: string,
+  bridge?: UpstreamErrorBridge,
+): JsonObject {
   const audit = buildUpstreamErrorAudit(payload, contentType);
+  const bridgeMetadata = bridge ? {
+    schemaVersion: 'sciforge.proxy.upstream-bridge.v1',
+    ...bridge,
+  } : undefined;
+  const error: JsonObject = {
+    code: upstreamErrorCode(status),
+    message: upstreamErrorPublicMessage(status),
+    type: 'upstream_provider_error',
+    status,
+    retryable: isRetryableUpstreamStatus(status),
+    audit,
+  };
+  if (bridgeMetadata) error.bridge = bridgeMetadata;
   return {
-    error: {
-      code: upstreamErrorCode(status),
-      message: upstreamErrorPublicMessage(status),
-      type: 'upstream_provider_error',
-      status,
-      retryable: isRetryableUpstreamStatus(status),
-      audit,
-    },
+    error,
   };
 }
 
@@ -834,6 +1212,10 @@ function parseJsonObject(value: string): JsonObject | undefined {
 
 function isJsonObject(value: unknown): value is JsonObject {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isPlainObject(value: unknown): value is JsonObject {
+  return isJsonObject(value);
 }
 
 function trimTrailingSlash(value: string): string {

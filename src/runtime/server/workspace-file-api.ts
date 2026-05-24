@@ -14,6 +14,7 @@ import { ensureSessionBundle, sessionBundleRel, writeSessionBundleAudit } from '
 import { isBinaryPreviewFile, languageForPath, mimeTypeForPath } from './file-preview.js';
 import { isRecord, readJson, safeName, writeJson } from './http.js';
 import { runWorkspaceOpenAction } from './workspace-open.js';
+import { pickWorkspaceDirectoryPath } from './workspace-directory-picker.js';
 
 export type WorkspaceFileApiOptions = {
   stateDir: string;
@@ -154,6 +155,17 @@ export async function handleWorkspaceFileApiRoutes(
         throw new Error(`Unsupported file action: ${action}`);
       }
       writeJson(res, 200, { ok: true });
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    return true;
+  }
+  if (url.pathname === '/api/sciforge/workspace/pick-directory' && req.method === 'POST') {
+    try {
+      const body = await readJson(req);
+      const defaultPath = typeof body.defaultPath === 'string' ? body.defaultPath : undefined;
+      const path = await pickWorkspaceDirectoryPath({ defaultPath });
+      writeJson(res, 200, { ok: true, path, cancelled: !path });
     } catch (err) {
       writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
     }

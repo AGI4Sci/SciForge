@@ -28,6 +28,23 @@ test('runtime config guard accepts isolated DeepSeek proxy profile', async () =>
   assert.match(config.codexHome, /packages\/backend\/\.codex-runtime\/codex-home$/);
 });
 
+test('runtime config guard accepts the currently selected user model', async () => {
+  const workspace = await tempWorkspace();
+  const config = await assertCodexRuntimeConfig({
+    workspacePath: workspace,
+    env: { [RUNTIME_KEY_ENV]: 'test-key' },
+    configText: runtimeConfig({
+      provider: 'native',
+      model: 'kimi/kimi-k2.6',
+      proxyBaseUrl: 'http://127.0.0.1:3891/v1',
+    }),
+  });
+
+  assert.equal(config.provider, 'native');
+  assert.equal(config.model, 'kimi/kimi-k2.6');
+  assert.equal(config.proxyBaseUrl, 'http://127.0.0.1:3891/v1');
+});
+
 test('runtime config guard reads CODEX_HOME from the supplied runtime env', async () => {
   const workspace = await tempWorkspace();
   const root = await mkdtemp(join(tmpdir(), 'sciforge-runtime-env-root-'));
@@ -143,17 +160,19 @@ async function tempWorkspace() {
   return dir;
 }
 
-function runtimeConfig(options: { proxyBaseUrl?: string } = {}) {
+function runtimeConfig(options: { proxyBaseUrl?: string; provider?: string; model?: string } = {}) {
+  const provider = options.provider ?? RUNTIME_PROVIDER;
+  const model = options.model ?? RUNTIME_MODEL;
   const baseUrlLine = options.proxyBaseUrl === undefined ? `base_url = "${DEFAULT_PROXY_BASE_URL}"` : options.proxyBaseUrl ? `base_url = "${options.proxyBaseUrl}"` : '';
-  return `model = "${RUNTIME_MODEL}"
+  return `model = "${model}"
 profile = "${RUNTIME_PROFILE}"
 
 [profiles.${RUNTIME_PROFILE}]
-model = "${RUNTIME_MODEL}"
-model_provider = "${RUNTIME_PROVIDER}"
+model = "${model}"
+model_provider = "${provider}"
 
-[model_providers.${RUNTIME_PROVIDER}]
-name = "SciForge DeepSeek Proxy"
+[model_providers.${provider}]
+name = "SciForge Runtime Provider"
 ${baseUrlLine}
 env_key = "${RUNTIME_KEY_ENV}"
 wire_api = "responses"

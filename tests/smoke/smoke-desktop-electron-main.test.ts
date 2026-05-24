@@ -85,6 +85,7 @@ test('R-DESK main controller starts launcher before loading dist-ui and wires IP
   assert.equal(loadedFiles[0], join(process.cwd(), 'dist-ui', 'index.html'));
 	  assert.deepEqual(handledChannels.sort(), [
 	    'platform:open-external',
+	    'platform:pick-directory',
 	    'platform:reveal-path',
 	    'runtime:config',
 	    'runtime:health',
@@ -156,6 +157,7 @@ test('R-DESK preload exposes only the narrow desktop bridge API', async () => {
 	  await api.requestShutdown();
   await api.openExternal('https://example.com');
   await api.revealPath('/tmp/example');
+  await api.pickDirectory('/tmp/workspace');
 
   assert.equal(exposed.sciforgeDesktop, api);
   assert.deepEqual(invoked, [
@@ -165,12 +167,14 @@ test('R-DESK preload exposes only the narrow desktop bridge API', async () => {
 	    'runtime:shutdown',
     'platform:open-external',
     'platform:reveal-path',
+    'platform:pick-directory',
   ]);
 	  assert.deepEqual(Object.keys(api).sort(), [
 	    'getRuntimeConfig',
 	    'getRuntimeHealth',
     'getRuntimeReady',
     'openExternal',
+    'pickDirectory',
     'requestShutdown',
     'revealPath',
   ]);

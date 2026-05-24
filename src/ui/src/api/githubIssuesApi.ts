@@ -22,6 +22,10 @@ export type GithubIssueCreateInput = {
   milestone?: number;
 };
 
+export type GithubIssueUpdateInput = {
+  state?: 'open' | 'closed';
+};
+
 export type GithubRepoAccess = {
   fullName: string;
   private: boolean;
@@ -67,7 +71,7 @@ async function githubFetch(input: string | URL, init: RequestInit, operation: st
   }
 }
 
-async function readGithubError(response: Response, context: { operation?: 'create-issue' } = {}): Promise<string> {
+async function readGithubError(response: Response, context: { operation?: 'create-issue' | 'comment-issue' | 'update-issue' } = {}): Promise<string> {
   const text = await response.text();
   let message = '';
   try {
@@ -85,7 +89,7 @@ async function readGithubError(response: Response, context: { operation?: 'creat
 }
 
 function friendlyGithubError(message: string, context: {
-  operation?: 'create-issue';
+  operation?: 'create-issue' | 'comment-issue' | 'update-issue';
   rateLimitRemaining?: string | null;
   rateLimitReset?: string | null;
 } = {}) {
@@ -102,7 +106,7 @@ function friendlyGithubError(message: string, context: {
     return '当前组织禁止使用有效期超过 366 天的 fine-grained PAT。请到 GitHub 重新生成或调整该 token 的 expiration 为 366 天以内，并确保授予目标仓库 Issues 读写权限。';
   }
   if (/resource not accessible by personal access token/i.test(message)) {
-    if (context.operation === 'create-issue') {
+    if (context.operation === 'create-issue' || context.operation === 'comment-issue' || context.operation === 'update-issue') {
       return '仓库访问正常，但当前 PAT 没有创建 Issue 的写权限。请在 GitHub fine-grained token 设置里确认：Repository access 选中 AGI4Sci/SciForge，Repository permissions 里的 Issues 为 Read and write，并确认组织已批准该 token。保存后重新在 SciForge 设置里填写新 token。';
     }
     return '当前 PAT 无法访问该仓库资源。请确认 fine-grained PAT 已选择目标仓库，并授予 Issues 读写权限。';
@@ -171,6 +175,55 @@ export async function createGithubIssue(
     throw new Error('GitHub 返回数据异常：缺少 issue 链接。');
   }
   return { htmlUrl: data.html_url, number: data.number };
+}
+
+export async function createGithubIssueComment(
+  repoFull: string,
+  token: string,
+  issueNumber: number,
+  body: string,
+): Promise<{ htmlUrl: string }> {
+  const parts = requireGithubApiInputs(repoFull, token);
+  if (!Number.isInteger(issueNumber) || issueNumber <= 0) throw new Error('GitHub Issue comment blocked: issue number is required.');
+  const cleanBody = body.trim();
+  if (!cleanBody) throw new Error('GitHub Issue comment blocked: comment body is empty.');
+  const url = `https://api.github.com/repos/${parts.owner}/${parts.repo}/issues/${issueNumber}/comments`;
+  const response = await githubFetch(url, {
+    method: 'POST',
+    headers: githubHeaders(parts.token),
+    body: JSON.stringify({ body: cleanBody }),
+  }, 'issue comment');
+  if (!response.ok) throw new Error(await readGithubError(response, { operation: 'comment-issue' }));
+  const data = await response.json() as { html_url?: string };
+  if (typeof data.html_url !== 'string') throw new Error('GitHub 返回数据异常：缺少 comment 链接。');
+  return { htmlUrl: data.html_url };
+}
+
+export async function updateGithubIssue(
+  repoFull: string,
+  token: string,
+  issueNumber: number,
+  input: GithubIssueUpdateInput,
+): Promise<{ htmlUrl: string; number: number; state?: string; updatedAt?: string }> {
+  const parts = requireGithubApiInputs(repoFull, token);
+  if (!Number.isInteger(issueNumber) || issueNumber <= 0) throw new Error('GitHub Issue update blocked: issue number is required.');
+  const url = `https://api.github.com/repos/${parts.owner}/${parts.repo}/issues/${issueNumber}`;
+  const response = await githubFetch(url, {
+    method: 'PATCH',
+    headers: githubHeaders(parts.token),
+    body: JSON.stringify(input),
+  }, 'issue update');
+  if (!response.ok) throw new Error(await readGithubError(response, { operation: 'update-issue' }));
+  const data = await response.json() as { html_url?: string; number?: number; state?: string; updated_at?: string };
+  if (typeof data.html_url !== 'string' || typeof data.number !== 'number') {
+    throw new Error('GitHub 返回数据异常：缺少 issue 更新结果。');
+  }
+  return {
+    htmlUrl: data.html_url,
+    number: data.number,
+    state: data.state,
+    updatedAt: data.updated_at,
+  };
 }
 
 /** Lists open issues only; excludes pull requests (they appear in `/issues` but carry `pull_request`). */

@@ -15,6 +15,7 @@ export function ChatComposer({
   referenceChips,
   topAddon,
   runtimeContext,
+  textareaRef,
   onExpand,
   onCollapse,
   onToggleReferencePickMode,
@@ -41,6 +42,7 @@ export function ChatComposer({
     workspacePath: string;
     permissionMode: string;
   };
+  textareaRef?: RefObject<HTMLTextAreaElement | null>;
   onExpand: () => void;
   onCollapse: () => void;
   onToggleReferencePickMode: () => void;
@@ -144,6 +146,7 @@ export function ChatComposer({
         </div>
       ) : null}
       <textarea
+        ref={textareaRef}
         value={input}
         onChange={(event) => onInputChange(event.target.value)}
         onKeyDown={(event) => {

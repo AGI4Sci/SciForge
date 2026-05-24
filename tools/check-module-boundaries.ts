@@ -44,16 +44,6 @@ const knownUiPackageDeepImportWarnings: WarningRule[] = [
     match: (edge) => edge.importer.startsWith('src/ui/src/scenarioCompiler/') && edge.resolvedPath?.startsWith('packages/scenarios/core/src/') === true,
   },
   {
-    id: 'ui-component-workbench-fixtures',
-    description: 'componentWorkbenchDemo imports renderer fixtures directly; keep this limited to workbench/demo data or switch to package export aliases.',
-    match: (edge) => edge.importer === 'src/ui/src/componentWorkbenchDemo.ts' && /^packages\/ui-components\/[^/]+\/fixtures\//.test(edge.resolvedPath ?? ''),
-  },
-  {
-    id: 'ui-component-workbench-types',
-    description: 'componentWorkbenchDemo imports ui-components/types through a relative package path; prefer @sciforge-ui/components/types when aliases are available.',
-    match: (edge) => edge.importer === 'src/ui/src/componentWorkbenchDemo.ts' && edge.resolvedPath === 'packages/presentation/components/types',
-  },
-  {
     id: 'ui-scenario-specs-src-import',
     description: 'src/ui/src/scenarioSpecs imports packages/scenarios/core/src/scenarioSpecs; migrate to package public exports with the rest of the scenario bridge.',
     match: (edge) => edge.importer === 'src/ui/src/scenarioSpecs.ts' && edge.resolvedPath === 'packages/scenarios/core/src/scenarioSpecs',
@@ -62,11 +52,6 @@ const knownUiPackageDeepImportWarnings: WarningRule[] = [
     id: 'ui-design-system-src-bridge',
     description: 'src/ui/src/app/uiPrimitives imports packages/presentation/design-system/src; use @agi4sci/design-system or the package root export after aliases are settled.',
     match: (edge) => edge.importer === 'src/ui/src/app/uiPrimitives.tsx' && edge.resolvedPath === 'packages/presentation/design-system/src',
-  },
-  {
-    id: 'ui-workbench-renderer-entry',
-    description: 'ComponentWorkbenchPage imports a component renderer subpath directly; prefer the package export alias when available.',
-    match: (edge) => edge.importer === 'src/ui/src/app/ComponentWorkbenchPage.tsx' && /^packages\/ui-components\/[^/]+\/render$/.test(edge.resolvedPath ?? ''),
   },
 ];
 

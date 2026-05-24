@@ -7,6 +7,7 @@ import type { SciForgeSession, ScenarioInstanceId } from '../../domain';
 import {
   Sidebar,
   TopBar,
+  buildSidebarProjectThreadGroups,
   buildSidebarSearchMatches,
   buildSidebarThreadItems,
   sidebarThreadTitle,
@@ -79,6 +80,75 @@ test('sidebar thread detail folds internal-only latest messages', () => {
   assert.doesNotMatch(`${items[0]?.title} ${items[0]?.detail}`, /provider|model|raw JSONL|stdout|stderr|run-internal/i);
 });
 
+test('sidebar project groups show current project, peer projects, and top-k threads', () => {
+  const sessions = Object.fromEntries(Array.from({ length: 6 }, (_, index) => {
+    const n = index + 1;
+    return [`scenario-${n}`, session({
+      scenarioId: `scenario-${n}`,
+      sessionId: `thread-${n}`,
+      title: `线程 ${n}`,
+      messages: [{ id: `user-${n}`, role: 'user', content: `问题 ${n}`, createdAt: `2026-05-21T00:0${index}:00.000Z` }],
+      updatedAt: `2026-05-21T00:0${index}:00.000Z`,
+    })];
+  })) as Record<ScenarioInstanceId, SciForgeSession>;
+
+  const groups = buildSidebarProjectThreadGroups({
+    ...defaultSciForgeConfig,
+    workspacePath: '/workspace/SciForge',
+    peerInstances: [{
+      name: 'AgentServer',
+      appUrl: 'http://127.0.0.1:5174',
+      workspaceWriterUrl: 'http://127.0.0.1:6174',
+      workspacePath: '/workspace/AgentServer',
+      role: 'peer',
+      trustLevel: 'readonly',
+      enabled: true,
+    }],
+  }, sessions);
+
+  assert.equal(groups[0]?.label, 'SciForge');
+  assert.equal(groups[0]?.threads.length, 6);
+  assert.equal(groups[1]?.label, 'AgentServer');
+  assert.deepEqual(groups[1]?.threads, []);
+});
+
+test('sidebar project chat markup keeps only top-k threads visible by default', () => {
+  const sessions = Object.fromEntries(Array.from({ length: 6 }, (_, index) => {
+    const n = index + 1;
+    return [`scenario-${n}`, session({
+      scenarioId: `scenario-${n}`,
+      sessionId: `thread-${n}`,
+      title: `线程 ${n}`,
+      messages: [{ id: `user-${n}`, role: 'user', content: `问题 ${n}`, createdAt: `2026-05-21T00:0${index}:00.000Z` }],
+      updatedAt: `2026-05-21T00:0${index}:00.000Z`,
+    })];
+  })) as Record<ScenarioInstanceId, SciForgeSession>;
+
+  const html = renderToStaticMarkup(React.createElement(Sidebar, {
+    page: 'workbench',
+    setPage: () => undefined,
+    scenarioId: 'scenario-1',
+    setScenarioId: () => undefined,
+    config: { ...defaultSciForgeConfig, workspacePath: '/tmp/SciForge' },
+    sessionsByScenario: sessions,
+    archivedSessions: [],
+    onNewChat: () => undefined,
+    onSearchNavigate: () => undefined,
+    onSettingsOpen: () => undefined,
+    workspaceStatus: '已连接',
+    onWorkspacePathChange: () => undefined,
+  }));
+
+  assert.match(html, /项目对话/);
+  assert.match(html, /SciForge/);
+  assert.match(html, /展开显示/);
+  assert.match(html, /2 条/);
+  assert.match(html, /线程 6/);
+  assert.match(html, /线程 3/);
+  assert.doesNotMatch(html, /线程 2/);
+  assert.doesNotMatch(html, /线程 1/);
+});
+
 test('sidebar shell renders Codex-style navigation labels without internal runtime terms', () => {
   const html = renderToStaticMarkup(React.createElement(React.Fragment, null,
     React.createElement(Sidebar, {
@@ -127,7 +197,7 @@ test('sidebar shell renders Codex-style navigation labels without internal runti
     }),
   ));
 
-  for (const label of ['新聊天', '搜索聊天、项目、页面', '线程', '项目', '插件', '自动化', '设置', '注释', 'SciForge · 就绪']) {
+  for (const label of ['新聊天', '搜索聊天、项目、页面', '项目对话', '项目', '应用', '自动化', '设置', '注释', 'SciForge · 就绪']) {
     assert.match(html, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
   assert.match(html, /最近回答：已整理计划。/);

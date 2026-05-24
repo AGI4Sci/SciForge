@@ -31,6 +31,9 @@ export type RuntimeHomePaths = {
 
 export type RuntimeHomeOptions = {
   proxyBaseUrl?: string;
+  provider?: string;
+  providerName?: string;
+  model?: string;
   overwrite?: boolean;
   paths?: RuntimeHomePathOptions;
 };
@@ -76,7 +79,12 @@ export async function ensureRuntimeHome(options: RuntimeHomeOptions = {}): Promi
   await mkdir(paths.logsDir, { recursive: true });
   await mkdir(paths.defaultWorkspace, { recursive: true });
 
-  const config = runtimeConfigToml(options.proxyBaseUrl ?? DEFAULT_PROXY_BASE_URL);
+  const config = runtimeConfigToml({
+    proxyBaseUrl: options.proxyBaseUrl ?? DEFAULT_PROXY_BASE_URL,
+    provider: options.provider ?? runtimeProviderForEnv(options.paths?.env),
+    providerName: options.providerName,
+    model: options.model ?? runtimeModelForEnv(options.paths?.env),
+  });
   if (options.overwrite || !(await fileExists(paths.configPath))) {
     await writeFile(paths.configPath, config, 'utf8');
   }
@@ -87,19 +95,30 @@ export async function readRuntimeConfig(path = getRuntimeHomePaths().configPath)
   return readFile(path, 'utf8');
 }
 
-export function runtimeConfigToml(proxyBaseUrl = DEFAULT_PROXY_BASE_URL): string {
-  return `model = "${RUNTIME_MODEL}"
+export function runtimeConfigToml(input: string | {
+  proxyBaseUrl?: string;
+  provider?: string;
+  providerName?: string;
+  model?: string;
+  env?: NodeJS.ProcessEnv;
+} = DEFAULT_PROXY_BASE_URL): string {
+  const options = typeof input === 'string' ? { proxyBaseUrl: input } : input;
+  const proxyBaseUrl = options.proxyBaseUrl ?? DEFAULT_PROXY_BASE_URL;
+  const provider = tomlBareKey(options.provider ?? runtimeProviderForEnv(options.env));
+  const model = options.model?.trim() || runtimeModelForEnv(options.env);
+  const providerName = options.providerName?.trim() || 'SciForge Runtime Provider';
+  return `model = "${tomlString(model)}"
 profile = "${RUNTIME_PROFILE}"
 
 [profiles.${RUNTIME_PROFILE}]
-model = "${RUNTIME_MODEL}"
-model_provider = "${RUNTIME_PROVIDER}"
+model = "${tomlString(model)}"
+model_provider = "${provider}"
 model_reasoning_effort = "low"
 model_reasoning_summary = "none"
 
-[model_providers.${RUNTIME_PROVIDER}]
-name = "SciForge DeepSeek Proxy"
-base_url = "${proxyBaseUrl}"
+[model_providers.${provider}]
+name = "${tomlString(providerName)}"
+base_url = "${tomlString(proxyBaseUrl)}"
 env_key = "${RUNTIME_KEY_ENV}"
 wire_api = "responses"
 
@@ -125,7 +144,7 @@ export async function assertRuntimeReady(paths = getRuntimeHomePaths()): Promise
   assertPathInside(paths.codexHome, paths.runtimeRoot, 'runtime CODEX_HOME');
   resolveRuntimeCodexSandbox(process.env);
   const config = await readRuntimeConfig(paths.configPath);
-  for (const required of [RUNTIME_PROFILE, RUNTIME_PROVIDER, RUNTIME_MODEL, RUNTIME_KEY_ENV, 'wire_api = "responses"']) {
+  for (const required of [RUNTIME_PROFILE, RUNTIME_KEY_ENV, 'wire_api = "responses"']) {
     if (!config.includes(required)) {
       throw new Error(`Runtime Codex config is missing ${required}`);
     }
@@ -136,19 +155,27 @@ export async function assertRuntimeReady(paths = getRuntimeHomePaths()): Promise
   const profileConfig = tableBlock(config, `profiles.${RUNTIME_PROFILE}`);
   const provider = valueForKey(profileConfig, 'model_provider') ?? valueForKey(config, 'model_provider');
   const model = valueForKey(profileConfig, 'model') ?? valueForKey(config, 'model');
-  const proxyBaseUrl = valueForKey(tableBlock(config, `model_providers.${RUNTIME_PROVIDER}`), 'base_url');
-  if (provider !== RUNTIME_PROVIDER) {
-    throw new Error(`Runtime Codex profile must use provider ${RUNTIME_PROVIDER}; found ${provider || 'missing'}.`);
+  if (!provider) {
+    throw new Error(`Runtime Codex profile ${RUNTIME_PROFILE} is missing model_provider.`);
   }
-  if (model !== RUNTIME_MODEL) {
-    throw new Error(`Runtime Codex profile must use model ${RUNTIME_MODEL}; found ${model || 'missing'}.`);
+  if (!model) {
+    throw new Error(`Runtime Codex profile ${RUNTIME_PROFILE} is missing model.`);
   }
+  const proxyBaseUrl = valueForKey(tableBlock(config, `model_providers.${provider}`), 'base_url');
   if (!proxyBaseUrl) {
-    throw new Error(`Runtime Codex provider ${RUNTIME_PROVIDER} is missing proxy base_url.`);
+    throw new Error(`Runtime Codex provider ${provider} is missing proxy base_url.`);
   }
   if (process.env.SCIFORGE_ALLOW_OPENAI_RUNTIME !== '1' && /openai/i.test(`${provider}\n${model}\n${proxyBaseUrl}`)) {
     throw new Error('OpenAI Runtime Codex provider/model is disabled unless SCIFORGE_ALLOW_OPENAI_RUNTIME=1.');
   }
+}
+
+export function runtimeProviderForEnv(env: NodeJS.ProcessEnv = process.env): string {
+  return env.SCIFORGE_RUNTIME_PROVIDER?.trim() || RUNTIME_PROVIDER;
+}
+
+export function runtimeModelForEnv(env: NodeJS.ProcessEnv = process.env): string {
+  return env.SCIFORGE_RUNTIME_MODEL?.trim() || RUNTIME_MODEL;
 }
 
 export function resolveRuntimeCodexSandbox(env: NodeJS.ProcessEnv = process.env): RuntimeCodexSandbox {
@@ -193,4 +220,13 @@ function valueForKey(config: string, key: string): string | undefined {
   const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const match = new RegExp(`^\\s*${escaped}\\s*=\\s*"([^"]+)"`, 'm').exec(config);
   return match?.[1];
+}
+
+function tomlString(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function tomlBareKey(value: string): string {
+  const cleaned = value.trim().replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+  return cleaned || RUNTIME_PROVIDER;
 }
