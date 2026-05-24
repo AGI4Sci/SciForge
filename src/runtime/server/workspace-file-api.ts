@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { basename, dirname, join, resolve } from 'node:path';
 import {
@@ -146,9 +146,12 @@ export async function handleWorkspaceFileApiRoutes(
         await writeFile(targetPath, '', { flag: 'wx' });
       } else if (action === 'create-folder') {
         await mkdir(targetPath, { recursive: true });
-      } else if (action === 'rename') {
+      } else if (action === 'rename' || action === 'move-file') {
         const nextPath = resolveWorkspaceMutationPath(body, 'targetPath', workspaceRoot);
         await rename(targetPath, nextPath);
+      } else if (action === 'copy-file') {
+        const nextPath = resolveWorkspaceMutationPath(body, 'targetPath', workspaceRoot);
+        await cp(targetPath, nextPath, { recursive: true, force: false });
       } else if (action === 'delete') {
         await rm(targetPath, { recursive: true, force: true });
       } else {

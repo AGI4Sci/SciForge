@@ -99,6 +99,18 @@ export function findPeerInstanceForSidebarProject(
   return peers.find((peer) => sidebarProjectIdForPeer(peer) === project.id);
 }
 
+export function removeSidebarProjectFromConfig(
+  config: SciForgeConfig,
+  project: Pick<SidebarProjectDescriptor, 'id' | 'detail' | 'current'>,
+): Partial<SciForgeConfig> | undefined {
+  if (isCurrentSidebarProject(config, project)) return undefined;
+  const peer = findPeerInstanceForSidebarProject(config, project);
+  if (!peer) return undefined;
+  return {
+    peerInstances: (config.peerInstances ?? []).filter((entry) => entry.name !== peer.name),
+  };
+}
+
 export function buildWorkspaceProjectActivation(
   config: SciForgeConfig,
   project: Pick<SidebarProjectDescriptor, 'id' | 'detail' | 'current'>,

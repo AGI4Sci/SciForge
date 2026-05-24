@@ -88,6 +88,8 @@ export const workspaceActionIds = {
   createFile: 'create-file',
   createFolder: 'create-folder',
   rename: 'rename',
+  moveFile: 'move-file',
+  copyFile: 'copy-file',
   delete: 'delete',
 } as const;
 
@@ -97,7 +99,19 @@ export function workspaceActionSuccessMessage(action: WorkspaceActionId) {
   if (action === workspaceActionIds.createFile) return '文件已创建。';
   if (action === workspaceActionIds.createFolder) return '文件夹已创建。';
   if (action === workspaceActionIds.rename) return '资源已重命名。';
+  if (action === workspaceActionIds.moveFile) return '资源已移动。';
+  if (action === workspaceActionIds.copyFile) return '资源已复制。';
   return '资源已删除。';
+}
+
+export function referenceForWorkspaceEntry(entry: { path: string; name: string; kind: 'file' | 'folder'; size?: number }): SciForgeReference {
+  const fileLike: WorkspaceFileReferenceLike = {
+    path: entry.path,
+    name: entry.name,
+    size: entry.size,
+  };
+  const kind = entry.kind === 'folder' ? 'file' : referenceKindForWorkspaceFileLike(fileLike);
+  return referenceForWorkspaceFileLike(fileLike, kind);
 }
 
 export interface TextSelectionReferenceInput {

@@ -37,6 +37,8 @@ test('projects explorer paths and display labels', () => {
 test('exposes package-owned workspace action ids and messages', () => {
   assert.equal(workspaceActions.createFile, 'create-file');
   assert.equal(workspaceActions.delete, 'delete');
+  assert.equal(workspaceActions.moveFile, 'move-file');
+  assert.equal(workspaceActions.copyFile, 'copy-file');
   assert.equal(workspaceActionSuccessMessage(workspaceActions.createFolder), '文件夹已创建。');
 });
 

@@ -1,11 +1,11 @@
 import {
   BookOpen,
-  Brain,
   Blocks,
   Database,
   Dna,
   FlaskConical,
   GitBranch,
+  Inbox,
   MessageSquare,
   type LucideIcon,
 } from 'lucide-react';
@@ -46,10 +46,10 @@ export const scenarios: ScenarioViewConfig[] = builtInScenarioDisplayData.map((s
 }));
 
 export const navItems = [
-  { id: 'workbench' as const, label: '聊天工作台', icon: Brain },
+  { id: 'workbench' as const, label: '聊天工作台', icon: MessageSquare },
   { id: 'components' as const, label: '应用', icon: Blocks },
   { id: 'timeline' as const, label: '研究时间线', icon: GitBranch },
-  { id: 'feedback' as const, label: '反馈收件箱', icon: MessageSquare },
+  { id: 'feedback' as const, label: '反馈收件箱', icon: Inbox },
 ];
 
 /** Primary workspace views shown on the always-visible sidebar activity bar. */

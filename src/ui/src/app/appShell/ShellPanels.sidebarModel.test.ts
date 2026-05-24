@@ -7,11 +7,32 @@ import type { SciForgeSession, ScenarioInstanceId } from '../../domain';
 import {
   Sidebar,
   TopBar,
+  buildSidebarArchivedThreadItems,
   buildSidebarProjectThreadGroups,
   buildSidebarSearchMatches,
   buildSidebarThreadItems,
   sidebarThreadTitle,
 } from './ShellPanels';
+
+test('archived sessions stay out of the active sidebar thread list', () => {
+  const active = session({
+    sessionId: 'active-thread',
+    title: '当前对话',
+    messages: [{ id: 'user-1', role: 'user', content: 'hello', createdAt: '2026-05-21T00:00:00.000Z' }],
+  });
+  const archived = session({
+    sessionId: 'archived-thread',
+    title: '已归档对话',
+    messages: [{ id: 'user-2', role: 'user', content: 'old chat', createdAt: '2026-05-20T00:00:00.000Z' }],
+  });
+
+  const items = buildSidebarThreadItems({
+    'literature-evidence-review': active,
+  });
+
+  assert.deepEqual(items.map((item) => item.sessionId), ['active-thread']);
+  assert.ok(buildSidebarArchivedThreadItems([archived]).some((item) => item.sessionId === 'archived-thread'));
+});
 
 test('sidebar thread list stays empty for seed-only default chats', () => {
   const sessions = {
@@ -131,8 +152,7 @@ test('sidebar project chat markup keeps only top-k threads visible by default', 
     setScenarioId: () => undefined,
     config: { ...defaultSciForgeConfig, workspacePath: '/tmp/SciForge' },
     sessionsByScenario: sessions,
-    archivedSessions: [],
-    onNewChat: () => undefined,
+      onProjectNewChat: () => undefined,
     onSearchNavigate: () => undefined,
     onSettingsOpen: () => undefined,
     workspaceStatus: '已连接',
@@ -182,7 +202,7 @@ test('sidebar shell renders Codex-style navigation labels without internal runti
         }),
       } as Record<ScenarioInstanceId, SciForgeSession>,
       archivedSessions: [],
-      onNewChat: () => undefined,
+      onProjectNewChat: () => undefined,
       onSearchNavigate: () => undefined,
       onSettingsOpen: () => undefined,
       workspaceStatus: '已连接',
@@ -197,7 +217,7 @@ test('sidebar shell renders Codex-style navigation labels without internal runti
     }),
   ));
 
-  for (const label of ['新聊天', '搜索聊天、项目、页面', '项目对话', '项目', '应用', '自动化', '设置', '注释', 'SciForge · 就绪']) {
+  for (const label of ['搜索聊天、项目、页面', '项目对话', '项目', '应用', '自动化', '设置', '注释', 'SciForge · 就绪']) {
     assert.match(html, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
   assert.match(html, /最近回答：已整理计划。/);

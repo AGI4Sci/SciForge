@@ -22,7 +22,6 @@ import { AcceptancePanel } from './chat/AcceptancePanel';
 import { ArchiveDrawer } from './chat/ArchiveDrawer';
 import { ChatComposer } from './chat/ChatComposer';
 import { ChatPanelHeader } from './chat/ChatPanelHeader';
-import { ReferenceContextMenu } from './chat/ReferenceContextMenu';
 import { RunReadinessBar } from './chat/RunReadinessBar';
 import { MessageList } from './chat/MessageList';
 import { RunningWorkProcess } from './chat/RunningWorkProcess';
@@ -45,14 +44,13 @@ import { waitForNextPaint } from './chat/nextPaint';
 import { fileToUploadedArtifact, objectReferenceForUploadedArtifact, referenceForUploadedArtifact } from './chat/uploadedArtifact';
 import type { RuntimeHealthItem } from './runtimeHealthPanel';
 import { createGuiProtocolController } from './guiProtocol';
+import { referenceTargetFromEvent } from './contextMenu/contextMenuModel';
 import {
   sciForgeReferenceAttribute,
   objectReferenceKindLabel,
   parseSciForgeReferenceAttribute,
   referenceForMessage,
   referenceForObjectReference,
-  referenceForTextSelection,
-  referenceForUiElement,
 } from '../../../../packages/support/object-references';
 
 export { objectReferenceKindLabel } from '../../../../packages/support/object-references';
@@ -64,12 +62,6 @@ interface HandoffAutoRunRequest {
   id: string;
   targetScenario: ScenarioInstanceId;
   prompt: string;
-}
-
-interface ReferenceContextMenuState {
-  x: number;
-  y: number;
-  reference: SciForgeReference;
 }
 
 function builtInScenarioIdForInstance(scenarioId: ScenarioInstanceId, scenarioOverride?: ScenarioRuntimeOverride): ScenarioId {
@@ -195,7 +187,6 @@ export function ChatPanel({
   const [referencePickMode, setReferencePickMode] = useState(false);
   const [targetInstanceName, setTargetInstanceName] = useState(CURRENT_TARGET_INSTANCE_VALUE);
   const [pendingReferences, setPendingReferences] = useState<SciForgeReference[]>([]);
-  const [referenceContextMenu, setReferenceContextMenu] = useState<ReferenceContextMenuState | null>(null);
   const activeSessionRef = useRef(session);
   const inputRef = useRef(input);
   const pendingReferencesRef = useRef<SciForgeReference[]>([]);
@@ -390,41 +381,6 @@ export function ChatPanel({
       document.removeEventListener('keydown', handleKeyDown, true);
     };
   }, [referencePickMode]);
-
-  useEffect(() => {
-    const handleContextMenu = (event: MouseEvent) => {
-      const target = textSelectionReferenceTarget(event);
-      if (!target) {
-        setReferenceContextMenu(null);
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-      setReferenceContextMenu({
-        x: Math.min(event.clientX, window.innerWidth - 190),
-        y: Math.min(event.clientY, window.innerHeight - 72),
-        reference: target.reference,
-      });
-    };
-    document.addEventListener('contextmenu', handleContextMenu, true);
-    return () => document.removeEventListener('contextmenu', handleContextMenu, true);
-  }, []);
-
-  useEffect(() => {
-    if (!referenceContextMenu) return undefined;
-    const close = () => setReferenceContextMenu(null);
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') close();
-    };
-    window.addEventListener('click', close);
-    window.addEventListener('scroll', close, true);
-    window.addEventListener('keydown', handleKeyDown, true);
-    return () => {
-      window.removeEventListener('click', close);
-      window.removeEventListener('scroll', close, true);
-      window.removeEventListener('keydown', handleKeyDown, true);
-    };
-  }, [referenceContextMenu]);
 
   useEffect(() => {
     if (!autoRunRequest || autoRunRequest.targetScenario !== scenarioId || isSending) return;
@@ -716,7 +672,6 @@ export function ChatPanel({
     setGuidanceQueue([]);
     setPendingReferences([]);
     setReferencePickMode(false);
-    setReferenceContextMenu(null);
     setErrorText('');
     setIsSending(false);
   }
@@ -1157,17 +1112,6 @@ export function ChatPanel({
         onAbort={handleAbort}
         onBeginResize={beginComposerResize}
       />
-      {referenceContextMenu ? (
-        <ReferenceContextMenu
-          x={referenceContextMenu.x}
-          y={referenceContextMenu.y}
-          reference={referenceContextMenu.reference}
-          onAdd={(reference) => {
-            addPendingReferenceToComposer(reference);
-            setReferenceContextMenu(null);
-          }}
-        />
-      ) : null}
     </div>
   );
 }
@@ -1256,41 +1200,6 @@ function rangeForTextInElement(element: HTMLElement, text: string) {
     node = walker.nextNode();
   }
   return undefined;
-}
-
-function textSelectionReferenceTarget(event?: MouseEvent): { element: HTMLElement; reference: SciForgeReference } | undefined {
-  const rawTarget = event?.target instanceof Element ? event.target : undefined;
-  if (rawTarget?.closest('.composer, .reference-pick-banner, .settings-dialog, .settings-page, .settings-page, .reference-context-menu')) return undefined;
-  const selection = window.getSelection();
-  const selectedText = selection?.toString().trim();
-  if (!selection || selection.rangeCount === 0 || !selectedText) return undefined;
-  const range = selection.getRangeAt(0);
-  const ancestor = range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE
-    ? range.commonAncestorContainer as Element
-    : range.commonAncestorContainer.parentElement;
-  const element = ancestor?.closest<HTMLElement>('[data-sciforge-reference], .message, .registry-slot, .card, .data-preview-table, table, section');
-  if (!element || element.closest('.composer, .reference-pick-banner, .settings-dialog, .settings-page')) return undefined;
-  if (rawTarget && !element.contains(rawTarget) && !rawTarget.contains(element)) return undefined;
-  const sourceReference = parseSciForgeReferenceAttribute(element.dataset.sciforgeReference) ?? referenceForUiElement(element);
-  const reference = referenceForTextSelection({ sourceReference, selectedText });
-  if (!reference) return undefined;
-  return {
-    element,
-    reference,
-  };
-}
-
-function referenceTargetFromEvent(event: MouseEvent): { element: HTMLElement; reference: SciForgeReference } | undefined {
-  const rawTarget = event.target instanceof Element ? event.target : undefined;
-  if (!rawTarget || rawTarget.closest('.composer, .reference-pick-banner, .settings-dialog, .settings-page')) return undefined;
-  const explicit = rawTarget.closest<HTMLElement>('[data-sciforge-reference]');
-  if (explicit) {
-    const reference = parseSciForgeReferenceAttribute(explicit.dataset.sciforgeReference);
-    if (reference) return { element: explicit, reference };
-  }
-  const implicit = rawTarget.closest<HTMLElement>('button, [role="button"], .registry-slot, .card, .message, .data-preview-table, table, canvas, svg, section');
-  if (!implicit || !(implicit instanceof HTMLElement) || implicit.closest('.composer, .reference-pick-banner, .settings-dialog, .settings-page')) return undefined;
-  return { element: implicit, reference: referenceForUiElement(implicit) };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

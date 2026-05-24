@@ -497,7 +497,7 @@ export async function writeWorkspaceFile(
 
 export async function mutateWorkspaceFile(
   config: SciForgeConfig,
-  action: 'create-file' | 'create-folder' | 'rename' | 'delete',
+  action: 'create-file' | 'create-folder' | 'rename' | 'move-file' | 'copy-file' | 'delete',
   payload: { path: string; targetPath?: string },
 ): Promise<void> {
   const operation = `${action} ${payload.path}`;

@@ -143,6 +143,17 @@ try {
   assert.equal(await readFile(safeRenameSourcePath, 'utf8'), 'stay inside');
   assert.equal(await readOptionalText(outsideRenamePath), undefined);
 
+  const copySourcePath = join(workspace, 'notes', 'copy-source.md');
+  const copyTargetPath = join(workspace, 'notes', 'copy-target.md');
+  await writeFile(copySourcePath, 'copy me', 'utf8');
+  response = await fetch(`${baseUrl}/api/sciforge/workspace/file-action`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspacePath: workspace, action: 'copy-file', path: copySourcePath, targetPath: copyTargetPath }),
+  });
+  await assertOk(response);
+  assert.equal(await readFile(copyTargetPath, 'utf8'), 'copy me');
+
   const protectedOutsidePath = join(outsideDir, 'protected.md');
   await writeFile(protectedOutsidePath, 'protected', 'utf8');
   response = await fetch(`${baseUrl}/api/sciforge/workspace/file-action`, {

@@ -61,3 +61,13 @@ export function moveCurrentProjectDown(preferences: SidebarPreferences, projectI
   [nextOrder[index], nextOrder[index + 1]] = [nextOrder[index + 1], nextOrder[index]];
   return { ...preferences, projectOrder: nextOrder };
 }
+
+export function removeProjectFromSidebarPreferences(
+  preferences: SidebarPreferences,
+  projectId: string,
+): SidebarPreferences {
+  return {
+    ...preferences,
+    projectOrder: preferences.projectOrder.filter((id) => id !== projectId),
+  };
+}

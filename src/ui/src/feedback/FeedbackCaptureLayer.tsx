@@ -42,17 +42,14 @@ export interface AnnotationReferenceInput {
   selectedText?: string;
 }
 
-interface ContextTarget {
+interface CommentTarget {
   x: number;
   y: number;
   target: FeedbackTargetSnapshot;
   selectedText: string;
   objectReference?: SciForgeReference;
-  mode: 'menu' | 'comment';
 }
 
-const MENU_WIDTH = 230;
-const MENU_HEIGHT = 160;
 const POPOVER_WIDTH = 380;
 const POPOVER_HEIGHT = 540;
 
@@ -69,7 +66,7 @@ export function FeedbackCaptureLayer({
   annotationModeActive = false,
   onAnnotationModeChange,
 }: FeedbackCaptureLayerProps) {
-  const [contextTarget, setContextTarget] = useState<ContextTarget | null>(null);
+  const [commentTarget, setCommentTarget] = useState<CommentTarget | null>(null);
   const [hoverTarget, setHoverTarget] = useState<FeedbackTargetSnapshot | null>(null);
   const [comment, setComment] = useState('');
   const [expectedBehavior, setExpectedBehavior] = useState('');
@@ -84,28 +81,25 @@ export function FeedbackCaptureLayer({
     return element;
   }
 
-  function contextForElement(element: Element, event: MouseEvent, mode: ContextTarget['mode']): ContextTarget {
-    const width = mode === 'comment' ? POPOVER_WIDTH : MENU_WIDTH;
-    const height = mode === 'comment' ? POPOVER_HEIGHT : MENU_HEIGHT;
+  function commentTargetForElement(element: Element, event: MouseEvent): CommentTarget {
     return {
-      x: clampToViewport(event.clientX, width),
-      y: clampToViewport(event.clientY, height, 'height'),
+      x: clampToViewport(event.clientX, POPOVER_WIDTH),
+      y: clampToViewport(event.clientY, POPOVER_HEIGHT, 'height'),
       target: buildFeedbackTargetSnapshot(element, { x: event.clientX, y: event.clientY }),
       selectedText: compactSelectedText(window.getSelection()?.toString() ?? ''),
       objectReference: sciForgeReferenceFromElement(element),
-      mode,
     };
   }
 
   function openAnnotationComment(element: Element, event: MouseEvent) {
-    setContextTarget(contextForElement(element, event, 'comment'));
+    setCommentTarget(commentTargetForElement(element, event));
     setHoverTarget(null);
     setSaveHint('');
     onAnnotationModeChange?.(false);
   }
 
   function addAnnotationReference(element: Element, event: MouseEvent) {
-    const context = contextForElement(element, event, 'menu');
+    const context = commentTargetForElement(element, event);
     const reference = context.objectReference
       ?? referenceForFeedbackTarget(context.target, context.selectedText, 'object');
     onAnnotationReference({ reference, target: context.target, selectedText: context.selectedText });
@@ -116,9 +110,9 @@ export function FeedbackCaptureLayer({
   useEffect(() => {
     if (!annotationModeActive) {
       setHoverTarget(null);
+      setCommentTarget(null);
       return;
     }
-    setContextTarget(null);
     setSaveHint('');
     const previousCursor = document.body.style.cursor;
     document.body.style.cursor = 'crosshair';
@@ -128,49 +122,30 @@ export function FeedbackCaptureLayer({
   }, [annotationModeActive]);
 
   useEffect(() => {
-    function openMenu(event: MouseEvent) {
+    if (!annotationModeActive) return undefined;
+    function handleContextMenu(event: MouseEvent) {
       const element = selectableElementFromEvent(event);
       if (!element) return;
       event.preventDefault();
       event.stopPropagation();
-      setContextTarget(contextForElement(element, event, 'menu'));
-    }
-    function handleContextMenu(event: MouseEvent) {
-      if (annotationModeActive) {
-        const element = selectableElementFromEvent(event);
-        if (!element) return;
-        event.preventDefault();
-        event.stopPropagation();
-        openAnnotationComment(element, event);
-        return;
-      }
-      openMenu(event);
+      openAnnotationComment(element, event);
     }
     function handleMouseMove(event: MouseEvent) {
-      if (!annotationModeActive) return;
       const element = selectableElementFromEvent(event);
       setHoverTarget(element ? buildFeedbackTargetSnapshot(element, { x: event.clientX, y: event.clientY }) : null);
     }
     function handleClick(event: MouseEvent) {
       const element = selectableElementFromEvent(event);
-      if (annotationModeActive) {
-        if (!element) return;
-        event.preventDefault();
-        event.stopPropagation();
-        addAnnotationReference(element, event);
-        return;
-      }
       if (!element) return;
-      setContextTarget(null);
+      event.preventDefault();
+      event.stopPropagation();
+      addAnnotationReference(element, event);
     }
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== 'Escape') return;
-      if (annotationModeActive) {
-        onAnnotationModeChange?.(false);
-        setHoverTarget(null);
-        return;
-      }
-      setContextTarget(null);
+      onAnnotationModeChange?.(false);
+      setHoverTarget(null);
+      setCommentTarget(null);
     }
     document.addEventListener('contextmenu', handleContextMenu, true);
     document.addEventListener('mousemove', handleMouseMove, true);
@@ -186,11 +161,11 @@ export function FeedbackCaptureLayer({
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!contextTarget || !comment.trim()) return;
+    if (!commentTarget || !comment.trim()) return;
     const now = nowIso();
     const feedbackId = makeId('feedback');
     const refs = feedbackEvidenceRefs(feedbackId);
-    const screenshot = await captureFeedbackScreenshotEvidence(contextTarget.target, now, { annotationLabel: '1' });
+    const screenshot = await captureFeedbackScreenshotEvidence(commentTarget.target, now, { annotationLabel: '1' });
     const screenshotWithRefs = screenshot
       ? {
         ...screenshot,
@@ -201,7 +176,7 @@ export function FeedbackCaptureLayer({
     const runtime = buildFeedbackRuntimeSnapshot({ page, scenarioId, session, url: window.location.href, appVersion });
     const evidenceStatus = buildFeedbackEvidenceStatus({
       screenshot: screenshotWithRefs,
-      target: contextTarget.target,
+      target: commentTarget.target,
       runtime,
       diagnostics: screenshotWithRefs ? [] : ['screenshot capture failed; saved target and runtime evidence only'],
     });
@@ -219,7 +194,7 @@ export function FeedbackCaptureLayer({
       tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean),
       createdAt: now,
       updatedAt: now,
-      target: contextTarget.target,
+      target: commentTarget.target,
       viewport: {
         width: window.innerWidth,
         height: window.innerHeight,
@@ -241,28 +216,8 @@ export function FeedbackCaptureLayer({
     resetDraft();
   }
 
-  function addReference(kind: 'object' | 'selection') {
-    if (!contextTarget) return;
-    const reference = kind === 'object' && contextTarget.objectReference
-      ? contextTarget.objectReference
-      : referenceForFeedbackTarget(contextTarget.target, contextTarget.selectedText, kind);
-    onAnnotationReference({ reference, target: contextTarget.target, selectedText: contextTarget.selectedText });
-    resetDraft();
-  }
-
-  function openComment() {
-    setContextTarget((current) => current
-      ? {
-        ...current,
-        x: clampToViewport(current.x, POPOVER_WIDTH),
-        y: clampToViewport(current.y, POPOVER_HEIGHT, 'height'),
-        mode: 'comment',
-      }
-      : current);
-  }
-
   function resetDraft() {
-    setContextTarget(null);
+    setCommentTarget(null);
     setHoverTarget(null);
     setComment('');
     setExpectedBehavior('');
@@ -271,7 +226,7 @@ export function FeedbackCaptureLayer({
     setPriority('normal');
   }
 
-  const activeHighlightTarget = contextTarget?.mode === 'comment' ? contextTarget.target : annotationModeActive ? hoverTarget : null;
+  const activeHighlightTarget = commentTarget ? commentTarget.target : annotationModeActive ? hoverTarget : null;
 
   return (
     <div className="feedback-layer" data-feedback-control="true" aria-live="polite">
@@ -282,7 +237,7 @@ export function FeedbackCaptureLayer({
             <span>
               {annotationReferenceCount > 0
                 ? `已加入 ${annotationReferenceCount} 个对象到注释侧栏；继续点选，或在侧栏描述关系。`
-                : '点击页面对象加入注释侧栏；可连续点选多个对象，右键添加反馈评论，Esc 退出。'}
+                : '点击页面对象加入注释侧栏；右键可打开精准反馈评论，Esc 退出。'}
             </span>
           </div>
           <button type="button" onClick={() => onAnnotationModeChange?.(false)}>退出</button>
@@ -300,33 +255,22 @@ export function FeedbackCaptureLayer({
           aria-hidden
         />
       ) : null}
-      {contextTarget?.mode === 'menu' ? (
-        <div
-          className="feedback-context-menu"
-          style={{ left: `${contextTarget.x}px`, top: `${contextTarget.y}px` }}
-          onClick={(event) => event.stopPropagation()}
-        >
-          <button type="button" onClick={openComment}>添加评论</button>
-          <button type="button" onClick={() => addReference('object')}>加入注释侧栏</button>
-          <button type="button" onClick={() => addReference('selection')} disabled={!contextTarget.selectedText}>加入选中内容</button>
-        </div>
-      ) : null}
-      {contextTarget?.mode === 'comment' ? (
+      {commentTarget ? (
         <form
           className="feedback-popover"
-          style={{ left: `${contextTarget.x}px`, top: `${contextTarget.y}px` }}
+          style={{ left: `${commentTarget.x}px`, top: `${commentTarget.y}px` }}
           onSubmit={submit}
           onClick={(event) => event.stopPropagation()}
         >
           <div className="feedback-popover-head">
             <strong>添加评论</strong>
-            <button type="button" className="feedback-close" onClick={() => setContextTarget(null)}>关闭</button>
+            <button type="button" className="feedback-close" onClick={() => setCommentTarget(null)}>关闭</button>
           </div>
           <div className="feedback-target-summary">
             <span>selector</span>
-            <code>{contextTarget.target.selector}</code>
+            <code>{commentTarget.target.selector}</code>
             <span>position</span>
-            <code>{Math.round(contextTarget.target.rect.x)}, {Math.round(contextTarget.target.rect.y)} · {Math.round(contextTarget.target.rect.width)}x{Math.round(contextTarget.target.rect.height)}</code>
+            <code>{Math.round(commentTarget.target.rect.x)}, {Math.round(commentTarget.target.rect.y)} · {Math.round(commentTarget.target.rect.width)}x{Math.round(commentTarget.target.rect.height)}</code>
           </div>
           <label className="feedback-field wide">
             <span>评论内容</span>

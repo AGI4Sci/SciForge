@@ -139,6 +139,101 @@
   background: rgba(245, 248, 252, 0.96);
 }
 
+.settings-archived-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.settings-archived-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-muted);
+  border-radius: 10px;
+  background: var(--surface-raised);
+}
+
+.settings-archived-toolbar button {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--bio-100);
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.settings-archived-toolbar button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.settings-archived-list {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-archived-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--border-muted);
+  border-radius: 10px;
+  background: var(--surface-raised);
+}
+
+.settings-archived-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-archived-copy strong,
+.settings-archived-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-archived-copy span {
+  color: var(--bio-300);
+  font-size: 12px;
+}
+
+.settings-archived-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.settings-archived-meta code {
+  font-size: 11px;
+}
+
+.settings-archived-meta small {
+  color: var(--bio-400);
+  font-size: 11px;
+}
+
+.settings-archived-empty {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  padding: 18px;
+  border: 1px dashed var(--border-muted);
+  border-radius: 12px;
+  color: var(--bio-300);
+}
+
+.settings-archived-empty strong {
+  color: var(--bio-100);
+}
+
 @media (max-width: 900px) {
   .settings-page {
     grid-template-columns: 1fr;

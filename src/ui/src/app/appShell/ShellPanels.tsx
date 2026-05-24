@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
-import { Archive, ArrowDown, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsDown, ChevronsUp, Clock, Copy, Edit3, File, FileCode, FilePlus, FileText, Folder, FolderOpen, FolderPlus, MessageSquare, MoreHorizontal, Moon, PanelTopOpen, Pin, Plug, Plus, RefreshCw, Save, Search, Settings, Square, Sun, Workflow } from 'lucide-react';
+import { Archive, ArrowDown, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ChevronsDown, ChevronsUp, Clock, Copy, Edit3, File, FileCode, FilePlus, FileText, Folder, FolderOpen, FolderPlus, MessageSquare, MoreHorizontal, Moon, PanelTopOpen, Pin, Plug, RefreshCw, Save, Search, Settings, Square, Sun, Workflow } from 'lucide-react';
 import { navItems, scenarios, sidebarViewNavItems, type PageId } from '../../data';
 import { normalizeWorkspaceRootPath } from '../../config';
-import type { SciForgeConfig, SciForgeSession, ScenarioInstanceId } from '../../domain';
+import type { SciForgeConfig, SciForgeReference, SciForgeSession, ScenarioInstanceId } from '../../domain';
 import { listWorkspace, mutateWorkspaceFile, openWorkspaceObject, readWorkspaceFile, writeWorkspaceFile, type WorkspaceEntry, type WorkspaceFileContent } from '../../api/workspaceClient';
 import { Badge, IconButton, cx } from '../uiPrimitives';
 import type { RuntimeHealthItem } from '../runtimeHealthPanel';
@@ -23,12 +23,21 @@ import {
 import {
   loadSidebarPreferences,
   moveCurrentProjectDown,
+  removeProjectFromSidebarPreferences,
   saveSidebarPreferences,
   togglePinnedThreadId,
   type SidebarLayoutMode,
   type SidebarPreferences,
   type SidebarSortMode,
 } from './sidebarPreferences';
+import {
+  clampSidebarPanelHeights,
+  loadSidebarPanelLayout,
+  saveSidebarPanelLayout,
+  sidebarExplorerPanelStyle,
+  sidebarPanelBlockStyle,
+  type SidebarPanelLayout,
+} from './sidebarPanelLayout';
 import { resolveWorkspaceDirectoryPath } from './workspaceDirectoryPicker';
 import {
   SIDEBAR_CHRONOLOGICAL_PROJECT_ID,
@@ -37,6 +46,27 @@ import {
   sidebarProjectPath,
 } from './sidebarProjectModel';
 import { resolveSidebarProjectSessionBundle } from './sidebarProjectSessions';
+import { ExplorerContextMenu } from '../contextMenu/ExplorerContextMenu';
+import { resolveAppContextMenuReference } from '../contextMenu/contextMenuModel';
+import {
+  SidebarProjectActionContextMenu,
+  SidebarProjectCreateContextMenu,
+  SidebarThreadsGlobalContextMenu,
+} from '../contextMenu/SidebarProjectContextMenus';
+import { referenceForWorkspaceEntry } from '../../../../../packages/support/object-references';
+import {
+  applyExplorerEntryClickSelection,
+  collectVisibleExplorerEntries,
+  explorerSelectedEntryFromFolderPath,
+  explorerSelectedEntryFromWorkspaceEntry,
+  explorerSelectionIncludesPath,
+  resolveExplorerContextMenuSelection,
+  type ExplorerSelectedEntry,
+} from './explorerSelection';
+import {
+  workspacePasteTargetPath,
+  type WorkspaceClipboardState,
+} from '../contextMenu/workspaceClipboardModel';
 export { SettingsPage } from './SettingsPage';
 export { SettingsDialog } from './ShellPanelsSettingsDialog';
 
@@ -98,9 +128,9 @@ export interface SidebarProjectBuildOptions extends SidebarThreadBuildOptions {
   }>;
 }
 type SidebarProjectMenu =
-  | { kind: 'global' }
-  | { kind: 'create' }
-  | { kind: 'project'; projectId: string };
+  | { kind: 'global'; x: number; y: number; reference?: SciForgeReference }
+  | { kind: 'create'; x: number; y: number }
+  | { kind: 'project'; x: number; y: number; projectId: string; reference?: SciForgeReference };
 
 export function sidebarSessionActivityScore(session: SciForgeSession) {
   const nonSeedMessages = session.messages.filter((message) => !message.id.startsWith('seed')).length;
@@ -122,19 +152,12 @@ export function sidebarThreadTitle(session: SciForgeSession) {
 
 export function buildSidebarThreadItems(
   sessionsByScenario: Partial<Record<ScenarioInstanceId, SciForgeSession>>,
-  archivedSessions?: SciForgeSession[],
   options: SidebarThreadBuildOptions = {},
 ): SidebarThreadItem[] {
   const sort = options.sort ?? 'updatedAt';
   const pinned = new Set(options.pinnedThreadIds ?? []);
   const limit = options.limit ?? 8;
   const pool: SciForgeSession[] = Object.values(sessionsByScenario).filter((s): s is SciForgeSession => Boolean(s));
-  if (archivedSessions) {
-    const activeIds = new Set(pool.map((s) => s.sessionId));
-    for (const session of archivedSessions) {
-      if (!activeIds.has(session.sessionId)) pool.push(session);
-    }
-  }
   const items = pool
     .filter((session) => sidebarSessionActivityScore(session) > 0)
     .map((session) => ({
@@ -189,7 +212,7 @@ export function buildSidebarProjectThreadGroups(
 ): SidebarProjectThreadGroup[] {
   const layout = options.layout ?? 'by-project';
   const threadLimit = layout === 'chronological' ? 12 : 8;
-  const threadItems = buildSidebarThreadItems(sessionsByScenario, archivedSessions, {
+  const threadItems = buildSidebarThreadItems(sessionsByScenario, {
     sort: options.sort,
     pinnedThreadIds: options.pinnedThreadIds,
     limit: threadLimit,
@@ -221,14 +244,14 @@ export function buildSidebarProjectThreadGroups(
   }
   return projects.map((project) => {
     const projectPath = sidebarProjectPath(project.detail);
-    const { sessionsByScenario: projectSessions, archivedSessions: projectArchived } = resolveSidebarProjectSessionBundle(
+    const { sessionsByScenario: projectSessions } = resolveSidebarProjectSessionBundle(
       projectPath,
       options.activeWorkspacePath ?? config.workspacePath,
       sessionsByScenario,
       archivedSessions,
       options.projectSessionsByPath,
     );
-    const threads = buildSidebarThreadItems(projectSessions, projectArchived, {
+    const threads = buildSidebarThreadItems(projectSessions, {
       sort: options.sort,
       pinnedThreadIds: options.pinnedThreadIds,
       limit: threadLimit,
@@ -240,7 +263,6 @@ export function buildSidebarProjectThreadGroups(
 export function buildSidebarSearchMatches(
   query: string,
   sessionsByScenario: Partial<Record<ScenarioInstanceId, SciForgeSession>>,
-  archivedSessions?: SciForgeSession[],
 ): SidebarSearchMatch[] {
   const needle = query.trim().toLocaleLowerCase();
   if (!needle) return [];
@@ -263,7 +285,7 @@ export function buildSidebarSearchMatches(
       });
     }
   }
-  for (const thread of buildSidebarThreadItems(sessionsByScenario, archivedSessions)) {
+  for (const thread of buildSidebarThreadItems(sessionsByScenario)) {
     if (containsNeedle(`${thread.title} ${thread.detail} ${thread.scenarioId}`, needle)) {
       matches.push({
         id: `thread:${thread.sessionId}`,
@@ -345,11 +367,11 @@ export function Sidebar({
   setScenarioId,
   config,
   sessionsByScenario,
-  archivedSessions,
-  onNewChat,
-  onRestoreArchivedSession,
+  onProjectNewChat,
   onArchiveThread,
+  onArchiveProjectChats,
   onArchiveAllChats,
+  onRemoveSidebarProject,
   onSearchNavigate,
   onSettingsOpen,
   workspaceStatus,
@@ -361,6 +383,7 @@ export function Sidebar({
   onWorkbenchFileOpened,
   workbenchEditorFilePath,
   onWorkbenchEditorPathInvalidated,
+  onReferenceToChat,
 }: {
   page: PageId;
   setPage: (page: PageId) => void;
@@ -368,11 +391,11 @@ export function Sidebar({
   setScenarioId: (id: ScenarioInstanceId) => void;
   config: SciForgeConfig;
   sessionsByScenario?: Record<ScenarioInstanceId, SciForgeSession>;
-  archivedSessions?: SciForgeSession[];
-  onNewChat?: (scenarioId: ScenarioInstanceId) => void;
-  onRestoreArchivedSession?: (scenarioId: ScenarioInstanceId, sessionId: string) => void;
+  onProjectNewChat?: (project: SidebarProjectThreadGroup) => void;
   onArchiveThread?: (scenarioId: ScenarioInstanceId, sessionId: string) => void;
+  onArchiveProjectChats?: (project: SidebarProjectThreadGroup) => void | Promise<void>;
   onArchiveAllChats?: () => void;
+  onRemoveSidebarProject?: (project: SidebarProjectThreadGroup) => void;
   onSearchNavigate?: (query: string) => void;
   onSettingsOpen?: () => void;
   workspaceStatus: string;
@@ -390,6 +413,7 @@ export function Sidebar({
   onWorkbenchFileOpened?: (file: WorkspaceFileContent) => void;
   workbenchEditorFilePath?: string | null;
   onWorkbenchEditorPathInvalidated?: () => void;
+  onReferenceToChat?: (reference: SciForgeReference) => void;
 }) {
   const workspaceRoot = explorerWorkspaceRoot(config);
   const [collapsed, setCollapsed] = useState(false);
@@ -398,28 +422,41 @@ export function Sidebar({
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => new Set(workspaceRoot ? [workspaceRoot] : []));
   const [workspaceError, setWorkspaceError] = useState('');
   const [workspaceNotice, setWorkspaceNotice] = useState('');
-  const [selectedEntry, setSelectedEntry] = useState<{ path: string; kind: 'file' | 'folder' } | null>(null);
+  const [selectedEntries, setSelectedEntries] = useState<ExplorerSelectedEntry[]>([]);
+  const [selectionAnchorPath, setSelectionAnchorPath] = useState<string | null>(null);
   const [pathEditDraft, setPathEditDraft] = useState(config.workspacePath);
   const [previewFile, setPreviewFile] = useState<WorkspaceFileContent | null>(null);
   const [previewDraft, setPreviewDraft] = useState('');
   const [previewDirty, setPreviewDirty] = useState(false);
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entry?: WorkspaceEntry } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    entry?: WorkspaceEntry;
+    selectedEntries: ExplorerSelectedEntry[];
+  } | null>(null);
+  const [workspaceClipboard, setWorkspaceClipboard] = useState<WorkspaceClipboardState | null>(null);
   const [sidebarSearchQuery, setSidebarSearchQuery] = useState('');
   const [expandedProjectThreads, setExpandedProjectThreads] = useState<Set<string>>(() => new Set());
   const [allProjectThreadsCollapsed, setAllProjectThreadsCollapsed] = useState(false);
   const [sidebarProjectMenu, setSidebarProjectMenu] = useState<SidebarProjectMenu | null>(null);
   const [sidebarPreferences, setSidebarPreferences] = useState<SidebarPreferences>(() => loadSidebarPreferences());
-  const [showArchivedPanel, setShowArchivedPanel] = useState(false);
+  const [panelLayout, setPanelLayout] = useState<SidebarPanelLayout>(() => loadSidebarPanelLayout());
   const folderPickerRef = useRef<HTMLDetailsElement | null>(null);
   const resizingRef = useRef(false);
+  const panelBodyRef = useRef<HTMLDivElement | null>(null);
+  const panelResizeRef = useRef<{
+    edge: 'threads-tools' | 'tools-explorer';
+    startY: number;
+    startThreads: number;
+    startTools: number;
+  } | null>(null);
   const sidebarSessions: Partial<Record<ScenarioInstanceId, SciForgeSession>> = sessionsByScenario ?? {};
-  const sidebarArchivedSessions = archivedSessions ?? [];
   const sidebarSearchMatches = useMemo(
-    () => buildSidebarSearchMatches(sidebarSearchQuery, sidebarSessions, sidebarArchivedSessions),
-    [sidebarSearchQuery, sidebarSessions, sidebarArchivedSessions],
+    () => buildSidebarSearchMatches(sidebarSearchQuery, sidebarSessions),
+    [sidebarSearchQuery, sidebarSessions],
   );
   const sidebarProjectThreadGroups = useMemo(
-    () => buildSidebarProjectThreadGroups(config, sidebarSessions, sidebarArchivedSessions, {
+    () => buildSidebarProjectThreadGroups(config, sidebarSessions, undefined, {
       layout: sidebarPreferences.layout,
       sort: sidebarPreferences.sort,
       pinnedThreadIds: sidebarPreferences.pinnedThreadIds,
@@ -427,23 +464,21 @@ export function Sidebar({
       projectSessionsByPath,
       activeWorkspacePath,
     }),
-    [config, sidebarSessions, sidebarArchivedSessions, sidebarPreferences, projectSessionsByPath, activeWorkspacePath],
-  );
-  const sidebarArchivedThreadItems = useMemo(
-    () => buildSidebarArchivedThreadItems(sidebarArchivedSessions, {
-      sort: sidebarPreferences.sort,
-      pinnedThreadIds: sidebarPreferences.pinnedThreadIds,
-      limit: 12,
-    }),
-    [sidebarArchivedSessions, sidebarPreferences],
+    [config, sidebarSessions, sidebarPreferences, projectSessionsByPath, activeWorkspacePath],
   );
   const pinnedThreadIds = useMemo(() => new Set(sidebarPreferences.pinnedThreadIds), [sidebarPreferences.pinnedThreadIds]);
-  const archivedThreadCount = useMemo(
-    () => sidebarArchivedSessions.filter((session) => sidebarSessionActivityScore(session) > 0).length,
-    [sidebarArchivedSessions],
+  const sidebarProjectContextMenuProject = useMemo(
+    () => (sidebarProjectMenu?.kind === 'project'
+      ? sidebarProjectThreadGroups.find((project) => project.id === sidebarProjectMenu.projectId)
+      : undefined),
+    [sidebarProjectMenu, sidebarProjectThreadGroups],
   );
   const showWorkbenchNav = page === 'workbench';
   const sidebarExpanded = showWorkbenchNav && !collapsed;
+  const visibleExplorerEntries = useMemo(
+    () => collectVisibleExplorerEntries(workspaceRoot, folderChildren, expandedFolders),
+    [workspaceRoot, folderChildren, expandedFolders],
+  );
 
   useEffect(() => {
     if (page !== 'workbench') {
@@ -470,6 +505,75 @@ export function Sidebar({
   }, [sidebarExpanded]);
 
   useEffect(() => {
+    saveSidebarPanelLayout(panelLayout);
+  }, [panelLayout]);
+
+  useEffect(() => {
+    if (!sidebarExpanded) return;
+    const node = panelBodyRef.current;
+    if (!node) return;
+    function syncPanelHeights() {
+      const available = node?.clientHeight;
+      if (!available) return;
+      setPanelLayout((current) => clampSidebarPanelHeights(current, available));
+    }
+    syncPanelHeights();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', syncPanelHeights);
+      return () => window.removeEventListener('resize', syncPanelHeights);
+    }
+    const observer = new ResizeObserver(() => syncPanelHeights());
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [sidebarExpanded, panelLayout.threadsCollapsed, panelLayout.toolsCollapsed, panelLayout.explorerCollapsed]);
+
+  useEffect(() => {
+    if (!sidebarExpanded) return;
+    function handleMouseMove(event: MouseEvent) {
+      const resize = panelResizeRef.current;
+      const available = panelBodyRef.current?.clientHeight;
+      if (!resize || !available) return;
+      const delta = event.clientY - resize.startY;
+      setPanelLayout((current) => {
+        if (resize.edge === 'threads-tools') {
+          const nextThreads = resize.startThreads + delta;
+          return clampSidebarPanelHeights({ ...current, threadsHeight: nextThreads }, available);
+        }
+        const nextTools = resize.startTools + delta;
+        return clampSidebarPanelHeights({ ...current, toolsHeight: nextTools }, available);
+      });
+    }
+    function handleMouseUp() {
+      panelResizeRef.current = null;
+    }
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [sidebarExpanded]);
+
+  function beginSidebarPanelResize(edge: 'threads-tools' | 'tools-explorer', event: ReactMouseEvent<HTMLDivElement>) {
+    event.preventDefault();
+    panelResizeRef.current = {
+      edge,
+      startY: event.clientY,
+      startThreads: panelLayout.threadsHeight,
+      startTools: panelLayout.toolsHeight,
+    };
+  }
+
+  function toggleSidebarPanelSection(section: 'threads' | 'tools' | 'explorer') {
+    setPanelLayout((current) => ({
+      ...current,
+      threadsCollapsed: section === 'threads' ? !current.threadsCollapsed : current.threadsCollapsed,
+      toolsCollapsed: section === 'tools' ? !current.toolsCollapsed : current.toolsCollapsed,
+      explorerCollapsed: section === 'explorer' ? !current.explorerCollapsed : current.explorerCollapsed,
+    }));
+  }
+
+  useEffect(() => {
     const root = explorerWorkspaceRoot(config);
     setPathEditDraft(config.workspacePath);
     setPreviewFile(null);
@@ -477,7 +581,8 @@ export function Sidebar({
     setPreviewDirty(false);
     setFolderChildren({});
     setExpandedFolders(new Set(root ? [root] : []));
-    setSelectedEntry(root ? { path: root, kind: 'folder' } : null);
+    setSelectedEntries(root ? [explorerSelectedEntryFromFolderPath(root)] : []);
+    setSelectionAnchorPath(root || null);
   }, [config.workspacePath]);
 
   useEffect(() => {
@@ -525,10 +630,47 @@ export function Sidebar({
 
   function effectiveCreateParentPath(): string {
     const root = explorerWorkspaceRoot(config);
-    if (!selectedEntry) return root;
-    if (selectedEntry.kind === 'folder') return selectedEntry.path;
-    const p = parentPath(selectedEntry.path);
+    const primary = selectedEntries[selectedEntries.length - 1];
+    if (!primary) return root;
+    if (primary.kind === 'folder') return primary.path;
+    const p = parentPath(primary.path);
     return p && p.length ? p : root;
+  }
+
+  function contextMenuTargets(menu: NonNullable<typeof contextMenu>): ExplorerSelectedEntry[] {
+    if (menu.selectedEntries.length) return menu.selectedEntries;
+    return menu.entry ? [explorerSelectedEntryFromWorkspaceEntry(menu.entry)] : [];
+  }
+
+  function handleExplorerEntryClick(entry: ExplorerSelectedEntry, event: ReactMouseEvent<HTMLElement>) {
+    if ((event.target as HTMLElement).closest('.explorer-twistie')) return;
+    const next = applyExplorerEntryClickSelection({
+      entry,
+      visibleEntries: visibleExplorerEntries,
+      currentSelection: selectedEntries,
+      anchorPath: selectionAnchorPath,
+      metaKey: event.metaKey || event.ctrlKey,
+      shiftKey: event.shiftKey,
+    });
+    setSelectedEntries(next.selection);
+    setSelectionAnchorPath(next.anchorPath);
+    if (!event.metaKey && !event.ctrlKey && !event.shiftKey && entry.kind === 'file') {
+      void openWorkspaceEntry({ kind: 'file', path: entry.path, name: entry.name, size: 0 });
+    }
+  }
+
+  function handleExplorerContextMenu(entry: ExplorerSelectedEntry, event: ReactMouseEvent<HTMLElement>, workspaceEntry?: WorkspaceEntry) {
+    event.preventDefault();
+    event.stopPropagation();
+    const nextSelection = resolveExplorerContextMenuSelection(entry, selectedEntries);
+    setSelectedEntries(nextSelection);
+    setSelectionAnchorPath(entry.path);
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      entry: workspaceEntry ?? { kind: entry.kind, path: entry.path, name: entry.name, ...(entry.kind === 'file' ? { size: 0 } : {}) },
+      selectedEntries: nextSelection,
+    });
   }
 
   async function ensureFolderLoaded(dirPath: string) {
@@ -577,7 +719,9 @@ export function Sidebar({
 
   async function openWorkspaceEntry(entry: WorkspaceEntry) {
     if (entry.kind === 'folder') return;
-    setSelectedEntry({ path: entry.path, kind: 'file' });
+    const selected = explorerSelectedEntryFromWorkspaceEntry(entry);
+    setSelectedEntries([selected]);
+    setSelectionAnchorPath(selected.path);
     try {
       setWorkspaceError('');
       const file = await readWorkspaceFile(entry.path, config);
@@ -621,7 +765,7 @@ export function Sidebar({
       : entry?.kind === 'file'
         ? (parentPath(entry.path) || root)
         : effectiveCreateParentPath();
-    const selectedPath = entry?.path || selectedEntry?.path || root;
+    const selectedPath = entry?.path || selectedEntries[selectedEntries.length - 1]?.path || root;
     let targetPath = selectedPath;
     let renameTarget: string | undefined;
     if (action === workspaceActions.createFile) {
@@ -683,7 +827,9 @@ export function Sidebar({
   }
 
   async function openFolderFromContext(path: string) {
-    setSelectedEntry({ path, kind: 'folder' });
+    const selected = explorerSelectedEntryFromFolderPath(path);
+    setSelectedEntries([selected]);
+    setSelectionAnchorPath(path);
     setExpandedFolders((prev) => new Set([...prev, path]));
     await ensureFolderLoaded(path);
   }
@@ -700,6 +846,35 @@ export function Sidebar({
       next.delete(path);
       return next;
     });
+  }
+
+  async function handleContextMenuDelete() {
+    const menu = contextMenu;
+    setContextMenu(null);
+    const targets = menu ? contextMenuTargets(menu) : [];
+    if (!targets.length) return;
+    const label = targets.length > 1 ? `${targets.length} 项` : targets[0].name;
+    if (!window.confirm(`删除 ${label}？`)) return;
+    try {
+      setWorkspaceError('');
+      for (const target of targets) {
+        if (workbenchEditorFilePath && target.path === workbenchEditorFilePath) {
+          onWorkbenchEditorPathInvalidated?.();
+        }
+        if (previewFile && previewFile.path === target.path) {
+          setPreviewFile(null);
+          setPreviewDraft('');
+          setPreviewDirty(false);
+        }
+        await mutateWorkspaceFile(config, workspaceActions.delete, { path: target.path });
+      }
+      setSelectedEntries((current) => current.filter((item) => !targets.some((target) => target.path === item.path)));
+      await refreshExplorer();
+      setWorkspaceNotice(targets.length > 1 ? `已删除 ${targets.length} 项` : workspaceActionSuccessMessage(workspaceActions.delete));
+    } catch (err) {
+      setWorkspaceError(err instanceof Error ? err.message : String(err));
+      setWorkspaceNotice('');
+    }
   }
 
   async function handleContextMenuAction(action: WorkspaceAction) {
@@ -727,20 +902,24 @@ export function Sidebar({
   }
 
   async function handleContextMenuCopyPath() {
-    const entry = contextMenu?.entry;
+    const menu = contextMenu;
     setContextMenu(null);
-    if (!entry?.path) return;
-    await navigator.clipboard?.writeText(entry.path);
-    setWorkspaceNotice(`已复制路径 ${entry.path}`);
+    const targets = menu ? contextMenuTargets(menu) : [];
+    if (!targets.length) return;
+    const paths = targets.map((target) => target.path).join('\n');
+    await navigator.clipboard?.writeText(paths);
+    setWorkspaceNotice(targets.length > 1 ? `已复制 ${targets.length} 个路径` : `已复制路径 ${paths}`);
   }
 
   async function handleContextMenuCopyRelativePath() {
-    const entry = contextMenu?.entry;
+    const menu = contextMenu;
     setContextMenu(null);
-    if (!entry?.path) return;
-    const relativePath = toWorkspaceRelativePath(explorerWorkspaceRoot(config), entry.path);
-    await navigator.clipboard?.writeText(relativePath);
-    setWorkspaceNotice(`已复制相对路径 ${relativePath}`);
+    const targets = menu ? contextMenuTargets(menu) : [];
+    if (!targets.length) return;
+    const root = explorerWorkspaceRoot(config);
+    const paths = targets.map((target) => toWorkspaceRelativePath(root, target.path)).join('\n');
+    await navigator.clipboard?.writeText(paths);
+    setWorkspaceNotice(targets.length > 1 ? `已复制 ${targets.length} 个相对路径` : `已复制相对路径 ${paths}`);
   }
 
   async function handleContextMenuRevealInFolder() {
@@ -787,19 +966,142 @@ export function Sidebar({
     }
   }
 
-  function handleNewChat() {
-    setScenarioId(scenarioId);
-    setPage('workbench');
-    onNewChat?.(scenarioId);
+  function handleContextMenuCut() {
+    const menu = contextMenu;
+    setContextMenu(null);
+    const targets = menu ? contextMenuTargets(menu) : [];
+    if (!targets.length) return;
+    setWorkspaceClipboard({
+      mode: 'cut',
+      entries: targets.map((target) => ({ path: target.path, name: target.name, kind: target.kind })),
+    });
+    setWorkspaceNotice(targets.length > 1 ? `已剪切 ${targets.length} 项` : `已剪切 ${targets[0].name}`);
   }
 
-  function toggleSidebarProjectMenu(menu: SidebarProjectMenu, event: ReactMouseEvent) {
+  function handleContextMenuCopy() {
+    const menu = contextMenu;
+    setContextMenu(null);
+    const targets = menu ? contextMenuTargets(menu) : [];
+    if (!targets.length) return;
+    setWorkspaceClipboard({
+      mode: 'copy',
+      entries: targets.map((target) => ({ path: target.path, name: target.name, kind: target.kind })),
+    });
+    setWorkspaceNotice(targets.length > 1 ? `已复制 ${targets.length} 项` : `已复制 ${targets[0].name}`);
+  }
+
+  async function handleContextMenuPaste() {
+    const menu = contextMenu;
+    const clipboard = workspaceClipboard;
+    setContextMenu(null);
+    if (!menu || !clipboard?.entries.length) return;
+    const targetPath = workspacePasteTargetPath({ entry: menu.entry, workspaceRoot });
+    if (!targetPath) return;
+    try {
+      setWorkspaceError('');
+      for (const item of clipboard.entries) {
+        const destination = `${targetPath.replace(/\/+$/, '')}/${item.name}`;
+        const action = clipboard.mode === 'cut' ? workspaceActions.moveFile : workspaceActions.copyFile;
+        await mutateWorkspaceFile(config, action, { path: item.path, targetPath: destination });
+      }
+      if (clipboard.mode === 'cut') setWorkspaceClipboard(null);
+      await refreshExplorer();
+      setWorkspaceNotice(clipboard.mode === 'cut' ? workspaceActionSuccessMessage(workspaceActions.moveFile) : workspaceActionSuccessMessage(workspaceActions.copyFile));
+    } catch (err) {
+      setWorkspaceError(err instanceof Error ? err.message : String(err));
+      setWorkspaceNotice('');
+    }
+  }
+
+  function handleContextMenuReferenceToChat(reference: SciForgeReference) {
+    setContextMenu(null);
+    onReferenceToChat?.(reference);
+  }
+
+  const explorerContextMenuCanPaste = Boolean(
+    contextMenu
+    && workspaceClipboard?.entries.length
+    && workspacePasteTargetPath({ entry: contextMenu.entry, workspaceRoot }),
+  );
+
+  function referenceForSidebarProject(project: Pick<SidebarProjectThreadGroup, 'label' | 'detail'>) {
+    const path = project.detail.trim();
+    if (!path) return undefined;
+    return referenceForWorkspaceEntry({
+      path,
+      name: project.label || pathBasename(path),
+      kind: 'folder',
+    });
+  }
+
+  function resolveSidebarMenuReference(
+    kind: SidebarProjectMenu['kind'],
+    event: ReactMouseEvent,
+    project?: SidebarProjectThreadGroup,
+  ) {
+    if (kind === 'project' && project) return referenceForSidebarProject(project);
+    if (kind === 'global') return resolveAppContextMenuReference(event.nativeEvent);
+    return undefined;
+  }
+
+  function sidebarProjectMenuAt(
+    base: { kind: 'global' } | { kind: 'create' } | { kind: 'project'; projectId: string },
+    event: ReactMouseEvent,
+    project?: SidebarProjectThreadGroup,
+  ): SidebarProjectMenu {
+    return {
+      ...base,
+      x: event.clientX,
+      y: event.clientY,
+      ...(base.kind === 'global' || base.kind === 'project'
+        ? { reference: resolveSidebarMenuReference(base.kind, event, project) }
+        : {}),
+    } as SidebarProjectMenu;
+  }
+
+  function toggleSidebarProjectMenu(
+    base: { kind: 'global' } | { kind: 'create' } | { kind: 'project'; projectId: string },
+    event: ReactMouseEvent,
+    project?: SidebarProjectThreadGroup,
+  ) {
     event.stopPropagation();
+    const menu = sidebarProjectMenuAt(base, event, project);
     setSidebarProjectMenu((current) => {
       if (!current || current.kind !== menu.kind) return menu;
       if (current.kind === 'project' && menu.kind === 'project' && current.projectId !== menu.projectId) return menu;
       return null;
     });
+  }
+
+  function openSidebarProjectMenuAt(
+    base: { kind: 'global' } | { kind: 'create' } | { kind: 'project'; projectId: string },
+    event: ReactMouseEvent,
+    project?: SidebarProjectThreadGroup,
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    setSidebarProjectMenu(sidebarProjectMenuAt(base, event, project));
+  }
+
+  function handleSidebarProjectReferenceToChat(reference: SciForgeReference) {
+    setSidebarProjectMenu(null);
+    onReferenceToChat?.(reference);
+  }
+
+  async function copySidebarProjectPath(project: SidebarProjectThreadGroup) {
+    setSidebarProjectMenu(null);
+    if (!project.detail.trim()) return;
+    await navigator.clipboard?.writeText(project.detail);
+    setWorkspaceNotice(`已复制路径 ${project.detail}`);
+  }
+
+  async function copySidebarProjectRelativePath(project: SidebarProjectThreadGroup) {
+    setSidebarProjectMenu(null);
+    if (!project.detail.trim()) return;
+    const root = explorerWorkspaceRoot(config);
+    const relativePath = toWorkspaceRelativePath(root, project.detail);
+    await navigator.clipboard?.writeText(relativePath);
+    setWorkspaceNotice(`已复制相对路径 ${relativePath}`);
   }
 
   function closeSidebarProjectMenuWithNotice(message: string) {
@@ -912,12 +1214,10 @@ export function Sidebar({
     setWorkspaceNotice(`已切换到项目 ${project.label}`);
   }
 
-  function openProjectNewChat(project: SidebarProjectThreadGroup) {
+  function openProjectNewChat(project: SidebarProjectThreadGroup, event: ReactMouseEvent) {
+    event.stopPropagation();
     setSidebarProjectMenu(null);
-    if (!project.current) {
-      activateSidebarProject(project);
-    }
-    handleNewChat();
+    onProjectNewChat?.(project);
   }
 
   async function revealSidebarProject(project: SidebarProjectThreadGroup) {
@@ -933,127 +1233,40 @@ export function Sidebar({
     }
   }
 
-  function renderSidebarProjectGlobalMenu() {
-    const { layout, sort } = sidebarPreferences;
-    return (
-      <div className="sidebar-project-menu" role="menu" onClick={(event) => event.stopPropagation()}>
-        <button type="button" role="menuitem" onClick={() => archiveAllSidebarChats()}>
-          <Archive size={14} aria-hidden />
-          <span>归档所有聊天</span>
-        </button>
-        <div className="sidebar-project-menu-group">
-          <button type="button" role="menuitem" aria-haspopup="menu">
-            <Folder size={14} aria-hidden />
-            <span>整理侧边栏</span>
-            <ChevronRight size={13} aria-hidden />
-          </button>
-          <div className="sidebar-project-submenu" role="menu" aria-label="整理侧边栏">
-            <button type="button" onClick={() => applySidebarLayout('by-project')}>
-              <Folder size={14} aria-hidden />
-              <span>按项目</span>
-              {layout === 'by-project' ? <Check size={13} aria-hidden /> : <span aria-hidden />}
-            </button>
-            <button type="button" onClick={() => applySidebarLayout('recent-projects')}>
-              <FolderOpen size={14} aria-hidden />
-              <span>近期项目</span>
-              {layout === 'recent-projects' ? <Check size={13} aria-hidden /> : <span aria-hidden />}
-            </button>
-            <button type="button" onClick={() => applySidebarLayout('chronological')}>
-              <Clock size={14} aria-hidden />
-              <span>按时间顺序</span>
-              {layout === 'chronological' ? <Check size={13} aria-hidden /> : <span aria-hidden />}
-            </button>
-            <button type="button" onClick={() => moveCurrentProjectDownInSidebar()}>
-              <ArrowDown size={14} aria-hidden />
-              <span>下移</span>
-            </button>
-          </div>
-        </div>
-        <div className="sidebar-project-menu-group">
-          <button type="button" role="menuitem" aria-haspopup="menu">
-            <Clock size={14} aria-hidden />
-            <span>排序条件</span>
-            <ChevronRight size={13} aria-hidden />
-          </button>
-          <div className="sidebar-project-submenu" role="menu" aria-label="排序条件">
-            <button type="button" onClick={() => applySidebarSort('createdAt')}>
-              <Clock size={14} aria-hidden />
-              <span>创建时间</span>
-              {sort === 'createdAt' ? <Check size={13} aria-hidden /> : <span aria-hidden />}
-            </button>
-            <button type="button" onClick={() => applySidebarSort('updatedAt')}>
-              <Clock size={14} aria-hidden />
-              <span>更新时间</span>
-              {sort === 'updatedAt' ? <Check size={13} aria-hidden /> : <span aria-hidden />}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  function renderSidebarProjectCreateMenu() {
-    return (
-      <div className="sidebar-project-menu sidebar-project-menu-create" role="menu" onClick={(event) => event.stopPropagation()}>
-        <button type="button" role="menuitem" onClick={() => closeSidebarProjectMenuWithNotice('新建空白项目需要先选择工作区路径。')}>
-          <FolderPlus size={14} aria-hidden />
-          <span>新建空白项目</span>
-        </button>
-        <button type="button" role="menuitem" onClick={() => {
-          setSidebarProjectMenu(null);
-          void chooseWorkspaceRootPath();
-        }}>
-          <FolderOpen size={14} aria-hidden />
-          <span>使用现有文件夹</span>
-        </button>
-      </div>
-    );
-  }
-
-  function renderSidebarProjectActionMenu(project: SidebarProjectThreadGroup) {
-    return (
-      <div className="sidebar-project-menu sidebar-project-menu-project" role="menu" onClick={(event) => event.stopPropagation()}>
-        <button type="button" role="menuitem" onClick={() => closeSidebarProjectMenuWithNotice(`已请求置顶项目 ${project.label}。`)}>
-          <Pin size={14} aria-hidden />
-          <span>置顶项目</span>
-        </button>
-        <button type="button" role="menuitem" onClick={() => void revealSidebarProject(project)}>
-          <FolderOpen size={14} aria-hidden />
-          <span>在“访达”中打开</span>
-        </button>
-        <button type="button" role="menuitem" onClick={() => closeSidebarProjectMenuWithNotice('创建永久工作树稍后接入。')}>
-          <ArrowDown size={14} aria-hidden />
-          <span>创建永久工作树</span>
-        </button>
-        <button type="button" role="menuitem" onClick={() => closeSidebarProjectMenuWithNotice('重命名项目稍后接入。')}>
-          <Edit3 size={14} aria-hidden />
-          <span>重命名项目</span>
-        </button>
-        <button type="button" role="menuitem" onClick={() => archiveProjectChats(project)}>
-          <Archive size={14} aria-hidden />
-          <span>归档对话</span>
-        </button>
-        <button type="button" role="menuitem" onClick={() => closeSidebarProjectMenuWithNotice('移除项目稍后接入。')}>
-          <Square size={14} aria-hidden />
-          <span>移除</span>
-        </button>
-      </div>
-    );
-  }
-
-  function archiveProjectChats(project: SidebarProjectThreadGroup) {
+  async function archiveProjectChats(project: SidebarProjectThreadGroup) {
     setSidebarProjectMenu(null);
-    if (!project.current) {
-      setWorkspaceNotice('只能归档当前项目的对话。');
+    if (!onArchiveProjectChats) {
+      setWorkspaceNotice(`${project.label} 没有可归档的活跃对话。`);
       return;
     }
-    const active = sidebarSessions[scenarioId];
-    if (active && sidebarSessionActivityScore(active) > 0) {
-      onArchiveThread?.(scenarioId, active.sessionId);
-      setWorkspaceNotice(`已归档 ${project.label} 的对话。`);
+    try {
+      setWorkspaceError('');
+      await onArchiveProjectChats(project);
+      setWorkspaceNotice(`已归档 ${project.label} 的全部活跃对话。`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setWorkspaceError(message.includes('没有可归档') ? '' : message);
+      setWorkspaceNotice(message);
+    }
+  }
+
+  function removeSidebarProject(project: SidebarProjectThreadGroup) {
+    setSidebarProjectMenu(null);
+    if (project.current) {
+      setWorkspaceNotice('当前项目不能从侧栏移除。');
       return;
     }
-    setWorkspaceNotice(`${project.label} 没有可归档的活跃对话。`);
+    try {
+      setWorkspaceError('');
+      onRemoveSidebarProject?.(project);
+      updateSidebarPreferences(
+        (current) => removeProjectFromSidebarPreferences(current, project.id),
+        `已从侧栏移除 ${project.label}。`,
+      );
+    } catch (err) {
+      setWorkspaceError(err instanceof Error ? err.message : String(err));
+      setWorkspaceNotice('');
+    }
   }
 
   function renderSidebarThreadRow(item: SidebarThreadItem, project: SidebarProjectThreadGroup) {
@@ -1115,10 +1328,6 @@ export function Sidebar({
       activateSidebarProject(project, item);
       return;
     }
-    const activeSession = sidebarSessions[item.scenarioId];
-    if (activeSession?.sessionId !== item.sessionId) {
-      onRestoreArchivedSession?.(item.scenarioId, item.sessionId);
-    }
     setScenarioId(item.scenarioId);
     setPage('workbench');
   }
@@ -1144,24 +1353,17 @@ export function Sidebar({
     }
     return entries.map((entry) => {
       const isExpanded = entry.kind === 'folder' && expandedFolders.has(entry.path);
-      const isSelected = selectedEntry?.path === entry.path;
+      const isSelected = explorerSelectionIncludesPath(selectedEntries, entry.path);
       return (
         <div key={entry.path} className="explorer-node">
           <div
             role="treeitem"
+            aria-selected={isSelected}
             aria-expanded={entry.kind === 'folder' ? isExpanded : undefined}
             className={cx('explorer-row', entry.kind === 'file' && 'is-file', isSelected && 'is-selected')}
             style={{ paddingLeft: 8 + depth * 12 }}
-            onClick={(event) => {
-              if ((event.target as HTMLElement).closest('.explorer-twistie')) return;
-              setSelectedEntry({ path: entry.path, kind: entry.kind });
-              if (entry.kind === 'file') void openWorkspaceEntry(entry);
-            }}
-            onContextMenu={(event) => {
-              event.preventDefault();
-              setSelectedEntry({ path: entry.path, kind: entry.kind });
-              setContextMenu({ x: event.clientX, y: event.clientY, entry });
-            }}
+            onClick={(event) => handleExplorerEntryClick(explorerSelectedEntryFromWorkspaceEntry(entry), event)}
+            onContextMenu={(event) => handleExplorerContextMenu(explorerSelectedEntryFromWorkspaceEntry(entry), event, entry)}
           >
             {entry.kind === 'folder' ? (
               <button
@@ -1202,8 +1404,10 @@ export function Sidebar({
   return (
     <aside className={cx('sidebar', !sidebarExpanded && 'collapsed')} style={{ width: sidebarExpanded ? sidebarWidth : 46 }}>
       <div className="sidebar-activitybar" aria-label="工作区视图">
-        <div className="brand">
-          <div className="brand-mark">BA</div>
+        <div className="brand" title="SciForge">
+          <div className="brand-mark">
+            <img src="/favicon.svg" alt="SciForge" width={38} height={38} />
+          </div>
         </div>
         <div className="sidebar-activitybar-nav">
           {sidebarViewNavItems.map((item) => (
@@ -1241,13 +1445,27 @@ export function Sidebar({
               <ChevronLeft size={16} />
             </button>
           </div>
-          <div className="sidebar-panel-body">
-            <div className="sidebar-scroll">
+          <div className="sidebar-panel-body" ref={panelBodyRef}>
+            <div className="sidebar-panel-sections">
+              <section
+                className={cx('sidebar-panel-block', panelLayout.threadsCollapsed && 'is-collapsed')}
+                style={sidebarPanelBlockStyle(panelLayout.threadsCollapsed, panelLayout.threadsHeight)}
+              >
+                <div className="sidebar-panel-block-head">
+                  <span>对话</span>
+                  <button
+                    type="button"
+                    className="sidebar-panel-toggle"
+                    onClick={() => toggleSidebarPanelSection('threads')}
+                    aria-label={panelLayout.threadsCollapsed ? '展开对话区' : '折叠对话区'}
+                    aria-expanded={!panelLayout.threadsCollapsed}
+                  >
+                    {panelLayout.threadsCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                  </button>
+                </div>
+                {!panelLayout.threadsCollapsed ? (
+                  <div className="sidebar-scroll">
               <section className="sidebar-section sidebar-section-actions" aria-label="主操作">
-                <button type="button" className="nav-item sidebar-command primary" onClick={handleNewChat}>
-                  <Plus size={17} />
-                  <span>新聊天</span>
-                </button>
                 <form className="sidebar-search" onSubmit={handleSidebarSearchSubmit}>
                   <Search size={15} />
                   <input
@@ -1276,21 +1494,15 @@ export function Sidebar({
                 ) : null}
               </section>
               <section className="sidebar-section sidebar-section-threads" aria-labelledby="sidebar-threads-title">
-                <div className="sidebar-section-title" id="sidebar-threads-title">
+                <div
+                  className="sidebar-section-title"
+                  id="sidebar-threads-title"
+                  onContextMenu={(event) => {
+                    openSidebarProjectMenuAt({ kind: 'global' }, event);
+                  }}
+                >
                   <span>项目对话</span>
                   <div className="sidebar-project-title-actions">
-                    {archivedThreadCount ? (
-                      <button
-                        type="button"
-                        className={cx('sidebar-archive-badge', showArchivedPanel && 'active')}
-                        onClick={() => setShowArchivedPanel((current) => !current)}
-                        title="查看已归档对话"
-                        aria-label={`${archivedThreadCount} 条已归档对话`}
-                        aria-expanded={showArchivedPanel}
-                      >
-                        {archivedThreadCount} 已归档
-                      </button>
-                    ) : null}
                     <button
                       type="button"
                       className={cx('sidebar-project-icon-btn', allProjectThreadsCollapsed && 'active')}
@@ -1322,9 +1534,8 @@ export function Sidebar({
                       <FolderPlus size={15} />
                     </button>
                   </div>
-                  {sidebarProjectMenu?.kind === 'global' ? renderSidebarProjectGlobalMenu() : null}
-                  {sidebarProjectMenu?.kind === 'create' ? renderSidebarProjectCreateMenu() : null}
                 </div>
+                <div className="sidebar-project-chat-scroll">
                 {sidebarProjectThreadGroups.length ? (
                   <div className="sidebar-project-chat-list">
                     {sidebarProjectThreadGroups.map((project) => {
@@ -1337,7 +1548,14 @@ export function Sidebar({
                       const hiddenThreadCount = Math.max(0, project.threads.length - visibleThreads.length);
                       return (
                         <div key={project.id} className="sidebar-project-chat-group">
-                          <div className={cx('sidebar-project-chat-head', project.current && 'current')}>
+                          <div
+                            className={cx('sidebar-project-chat-head', project.current && 'current')}
+                            onContextMenu={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              openSidebarProjectMenuAt({ kind: 'project', projectId: project.id }, event, project);
+                            }}
+                          >
                             <button
                               type="button"
                               className="sidebar-project-chat-main"
@@ -1357,7 +1575,7 @@ export function Sidebar({
                               <button
                                 type="button"
                                 className={cx('sidebar-project-icon-btn', sidebarProjectMenu?.kind === 'project' && sidebarProjectMenu.projectId === project.id && 'active')}
-                                onClick={(event) => toggleSidebarProjectMenu({ kind: 'project', projectId: project.id }, event)}
+                                onClick={(event) => toggleSidebarProjectMenu({ kind: 'project', projectId: project.id }, event, project)}
                                 title="项目操作"
                                 aria-label={`${project.label} 项目操作`}
                                 aria-haspopup="menu"
@@ -1367,14 +1585,13 @@ export function Sidebar({
                               <button
                                 type="button"
                                 className="sidebar-project-icon-btn"
-                                onClick={() => openProjectNewChat(project)}
-                                title="在 SciForge 中开始新对话"
-                                aria-label={`在 ${project.label} 中开始新对话`}
+                                onClick={(event) => openProjectNewChat(project, event)}
+                                title="新聊天"
+                                aria-label={`在 ${project.label} 中新聊天`}
                               >
                                 <Edit3 size={14} />
                               </button>
                             </div>
-                            {sidebarProjectMenu?.kind === 'project' && sidebarProjectMenu.projectId === project.id ? renderSidebarProjectActionMenu(project) : null}
                           </div>
                           {visibleThreads.length ? (
                             <div className="sidebar-thread-list">
@@ -1410,26 +1627,36 @@ export function Sidebar({
                 ) : (
                   <p className="sidebar-empty-note">还没有聊天</p>
                 )}
-                {showArchivedPanel && archivedThreadCount ? (
-                  <div className="sidebar-archived-panel" aria-label="已归档对话">
-                    <div className="sidebar-archived-panel-head">
-                      <Archive size={14} aria-hidden />
-                      <span>已归档对话</span>
-                      <small>{archivedThreadCount} 条</small>
-                    </div>
-                    <div className="sidebar-thread-list">
-                      {sidebarArchivedThreadItems.length
-                        ? sidebarArchivedThreadItems.map((item) => renderSidebarThreadRow(item))
-                        : <p className="sidebar-empty-note">暂无已归档对话</p>}
-                    </div>
+                </div>
+              </section>
                   </div>
                 ) : null}
               </section>
-            </div>
-            <div className="sidebar-tools-strip" aria-label="工具">
-              <div className="sidebar-section-title sidebar-tools-title">
-                <span>工具</span>
-              </div>
+              <div
+                className="sidebar-panel-resize-handle"
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label="拖拽调整对话区高度"
+                onMouseDown={(event) => beginSidebarPanelResize('threads-tools', event)}
+              />
+              <section
+                className={cx('sidebar-panel-block', panelLayout.toolsCollapsed && 'is-collapsed')}
+                style={sidebarPanelBlockStyle(panelLayout.toolsCollapsed, panelLayout.toolsHeight)}
+              >
+                <div className="sidebar-panel-block-head">
+                  <span>工具</span>
+                  <button
+                    type="button"
+                    className="sidebar-panel-toggle"
+                    onClick={() => toggleSidebarPanelSection('tools')}
+                    aria-label={panelLayout.toolsCollapsed ? '展开工具区' : '折叠工具区'}
+                    aria-expanded={!panelLayout.toolsCollapsed}
+                  >
+                    {panelLayout.toolsCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                  </button>
+                </div>
+                {!panelLayout.toolsCollapsed ? (
+                  <div className="sidebar-tools-strip" aria-label="工具">
               <button type="button" className={cx('nav-item sidebar-command sidebar-tool-item', page === 'components' && 'active')} onClick={() => setPage('components')}>
                 <Plug size={16} />
                 <span>应用</span>
@@ -1439,12 +1666,37 @@ export function Sidebar({
                 <span>自动化</span>
                 <Badge variant="muted">即将推出</Badge>
               </div>
-            </div>
+                  </div>
+                ) : null}
+              </section>
+              <div
+                className="sidebar-panel-resize-handle"
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label="拖拽调整工具区高度"
+                onMouseDown={(event) => beginSidebarPanelResize('tools-explorer', event)}
+              />
+              <section
+                className={cx('sidebar-panel-block sidebar-panel-block-explorer', panelLayout.explorerCollapsed && 'is-collapsed')}
+                style={sidebarExplorerPanelStyle(panelLayout.explorerCollapsed)}
+              >
+                <div className="sidebar-panel-block-head sidebar-project-title">
+                  <span>项目</span>
+                  <div className="sidebar-panel-block-head-actions">
+                    {workspaceRoot ? <small>{pathBasename(workspaceRoot) || workspaceRoot}</small> : null}
+                    <button
+                      type="button"
+                      className="sidebar-panel-toggle"
+                      onClick={() => toggleSidebarPanelSection('explorer')}
+                      aria-label={panelLayout.explorerCollapsed ? '展开项目区' : '折叠项目区'}
+                      aria-expanded={!panelLayout.explorerCollapsed}
+                    >
+                      {panelLayout.explorerCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                    </button>
+                  </div>
+                </div>
+                {!panelLayout.explorerCollapsed ? (
             <div className="scenario-list scenario-list-workspace">
-              <div className="sidebar-section-title sidebar-project-title">
-                <span>项目</span>
-                {workspaceRoot ? <small>{pathBasename(workspaceRoot) || workspaceRoot}</small> : null}
-              </div>
               <div className="scenario-list-explorer-toolbar">
                 <div className="explorer-view-toolbar">
                   <button
@@ -1480,7 +1732,8 @@ export function Sidebar({
                 onContextMenu={(event) => {
                   if ((event.target as HTMLElement).closest('.explorer-row')) return;
                   event.preventDefault();
-                  setContextMenu({ x: event.clientX, y: event.clientY });
+                  event.stopPropagation();
+                  setContextMenu({ x: event.clientX, y: event.clientY, selectedEntries: [] });
                 }}
               >
                 {workspaceNeedsOnboarding(config.workspacePath, workspaceError, workspaceStatus) ? (
@@ -1498,18 +1751,16 @@ export function Sidebar({
                   <div className="explorer-section">
                     <div
                       role="treeitem"
+                      aria-selected={explorerSelectionIncludesPath(selectedEntries, workspaceRoot)}
                       aria-expanded={expandedFolders.has(workspaceRoot)}
-                      className={cx('explorer-row', 'explorer-root-row', selectedEntry?.path === workspaceRoot && 'is-selected')}
+                      className={cx('explorer-row', 'explorer-root-row', explorerSelectionIncludesPath(selectedEntries, workspaceRoot) && 'is-selected')}
                       style={{ paddingLeft: 8 }}
-                      onClick={(event) => {
-                        if ((event.target as HTMLElement).closest('.explorer-twistie')) return;
-                        setSelectedEntry({ path: workspaceRoot, kind: 'folder' });
-                      }}
-                      onContextMenu={(event) => {
-                        event.preventDefault();
-                        setSelectedEntry({ path: workspaceRoot, kind: 'folder' });
-                        setContextMenu({ x: event.clientX, y: event.clientY, entry: syntheticFolderEntry(workspaceRoot) });
-                      }}
+                      onClick={(event) => handleExplorerEntryClick(explorerSelectedEntryFromFolderPath(workspaceRoot), event)}
+                      onContextMenu={(event) => handleExplorerContextMenu(
+                        explorerSelectedEntryFromFolderPath(workspaceRoot),
+                        event,
+                        syntheticFolderEntry(workspaceRoot),
+                      )}
                     >
                       <button
                         type="button"
@@ -1577,41 +1828,30 @@ export function Sidebar({
                   </div>
                 ) : null}
                 {contextMenu ? (
-                  <div className="context-menu context-menu-vscode" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}>
-                    {contextMenu.entry?.kind === 'folder' ? (
-                      <button
-                        type="button"
-                        onClick={() => void handleContextMenuToggleFolder()}
-                      >
-                        {expandedFolders.has(contextMenu.entry.path) ? '折叠' : '展开'}
-                      </button>
-                    ) : null}
-                    {contextMenu.entry ? (
-                      <button type="button" onClick={() => void handleContextMenuOpen()}>
-                        {contextMenu.entry.kind === 'folder' ? '打开文件夹' : '打开'}
-                      </button>
-                    ) : null}
-                    {contextMenu.entry?.kind === 'file' ? (
-                      <button type="button" onClick={() => void handleContextMenuOpenInWorkbench()}>在工作台打开</button>
-                    ) : null}
-                    <hr className="context-menu-separator" />
-                    <button type="button" onClick={() => void handleContextMenuAction(workspaceActions.createFile)}>新建文件</button>
-                    <button type="button" onClick={() => void handleContextMenuAction(workspaceActions.createFolder)}>新建文件夹</button>
-                    {contextMenu.entry ? <button type="button" onClick={() => void handleContextMenuAction(workspaceActions.rename)}>重命名</button> : null}
-                    {contextMenu.entry ? (
-                      <button type="button" onClick={() => void handleContextMenuCopyPath()}>复制路径</button>
-                    ) : null}
-                    {contextMenu.entry ? (
-                      <button type="button" onClick={() => void handleContextMenuCopyRelativePath()}>复制相对路径</button>
-                    ) : null}
-                    {contextMenu.entry ? (
-                      <button type="button" onClick={() => void handleContextMenuRevealInFolder()}>在文件管理器中显示</button>
-                    ) : null}
-                    {contextMenu.entry ? (
-                      <button type="button" onClick={() => void handleContextMenuOpenExternal()}>系统默认程序打开</button>
-                    ) : null}
-                    {contextMenu.entry ? <button type="button" className="danger" onClick={() => void handleContextMenuAction(workspaceActions.delete)}>删除</button> : null}
-                  </div>
+                  <ExplorerContextMenu
+                    x={contextMenu.x}
+                    y={contextMenu.y}
+                    entry={contextMenu.entry}
+                    selectedEntries={contextMenu.selectedEntries}
+                    expandedFolders={expandedFolders}
+                    clipboard={workspaceClipboard}
+                    canPaste={explorerContextMenuCanPaste}
+                    onOpen={() => void handleContextMenuOpen()}
+                    onOpenInWorkbench={() => void handleContextMenuOpenInWorkbench()}
+                    onOpenExternal={() => void handleContextMenuOpenExternal()}
+                    onRevealInFolder={() => void handleContextMenuRevealInFolder()}
+                    onToggleFolder={() => void handleContextMenuToggleFolder()}
+                    onCreateFile={() => void handleContextMenuAction(workspaceActions.createFile)}
+                    onCreateFolder={() => void handleContextMenuAction(workspaceActions.createFolder)}
+                    onRename={() => void handleContextMenuAction(workspaceActions.rename)}
+                    onDelete={() => void handleContextMenuDelete()}
+                    onCopyPath={() => void handleContextMenuCopyPath()}
+                    onCopyRelativePath={() => void handleContextMenuCopyRelativePath()}
+                    onCut={handleContextMenuCut}
+                    onCopy={handleContextMenuCopy}
+                    onPaste={() => void handleContextMenuPaste()}
+                    onReferenceToChat={handleContextMenuReferenceToChat}
+                  />
                 ) : null}
                 <button
                   type="button"
@@ -1643,6 +1883,9 @@ export function Sidebar({
                   </div>
                 </details>
               </div>
+              </div>
+                ) : null}
+              </section>
             </div>
             <div className="sidebar-footer-actions">
               <button type="button" className="nav-item sidebar-command" onClick={() => onSettingsOpen?.()}>
@@ -1662,6 +1905,47 @@ export function Sidebar({
           onMouseDown={() => {
             resizingRef.current = true;
           }}
+        />
+      ) : null}
+      {sidebarProjectMenu?.kind === 'global' ? (
+        <SidebarThreadsGlobalContextMenu
+          x={sidebarProjectMenu.x}
+          y={sidebarProjectMenu.y}
+          layout={sidebarPreferences.layout}
+          sort={sidebarPreferences.sort}
+          reference={sidebarProjectMenu.reference}
+          onArchiveAllChats={() => archiveAllSidebarChats()}
+          onApplyLayout={applySidebarLayout}
+          onMoveCurrentProjectDown={moveCurrentProjectDownInSidebar}
+          onApplySort={applySidebarSort}
+          onReferenceToChat={handleSidebarProjectReferenceToChat}
+        />
+      ) : null}
+      {sidebarProjectMenu?.kind === 'create' ? (
+        <SidebarProjectCreateContextMenu
+          x={sidebarProjectMenu.x}
+          y={sidebarProjectMenu.y}
+          onCreateBlankProject={() => closeSidebarProjectMenuWithNotice('新建空白项目需要先选择工作区路径。')}
+          onUseExistingFolder={() => {
+            setSidebarProjectMenu(null);
+            void chooseWorkspaceRootPath();
+          }}
+        />
+      ) : null}
+      {sidebarProjectMenu?.kind === 'project' && sidebarProjectContextMenuProject ? (
+        <SidebarProjectActionContextMenu
+          x={sidebarProjectMenu.x}
+          y={sidebarProjectMenu.y}
+          project={sidebarProjectContextMenuProject}
+          reference={sidebarProjectMenu.reference ?? referenceForSidebarProject(sidebarProjectContextMenuProject)}
+          onPinProject={() => closeSidebarProjectMenuWithNotice(`已请求置顶项目 ${sidebarProjectContextMenuProject.label}。`)}
+          onRevealInFolder={() => void revealSidebarProject(sidebarProjectContextMenuProject)}
+          onRenameProject={() => closeSidebarProjectMenuWithNotice('重命名项目稍后接入。')}
+          onArchiveChats={() => void archiveProjectChats(sidebarProjectContextMenuProject)}
+          onCopyPath={() => void copySidebarProjectPath(sidebarProjectContextMenuProject)}
+          onCopyRelativePath={() => void copySidebarProjectRelativePath(sidebarProjectContextMenuProject)}
+          onRemoveProject={() => removeSidebarProject(sidebarProjectContextMenuProject)}
+          onReferenceToChat={handleSidebarProjectReferenceToChat}
         />
       ) : null}
     </aside>

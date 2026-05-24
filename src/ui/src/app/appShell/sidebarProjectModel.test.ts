@@ -5,6 +5,7 @@ import {
   buildConfiguredSidebarProjects,
   buildWorkspaceProjectActivation,
   migrateLegacySidebarProjectId,
+  removeSidebarProjectFromConfig,
   sidebarProjectIdForConfig,
   sidebarProjectIdForPeer,
 } from './sidebarProjectModel';
@@ -44,6 +45,14 @@ test('legacy sidebar project ids migrate to configured workspace paths', () => {
   const config = dualProjectConfig();
   assert.equal(migrateLegacySidebarProjectId(config, 'current'), mainPath);
   assert.equal(migrateLegacySidebarProjectId(config, 'peer:repair'), peerPath);
+});
+
+test('removeSidebarProjectFromConfig drops peer projects but keeps current workspace', () => {
+  const config = dualProjectConfig();
+  const projects = buildConfiguredSidebarProjects(config);
+  assert.equal(removeSidebarProjectFromConfig(config, projects[0]), undefined);
+  const patch = removeSidebarProjectFromConfig(config, projects[1]!);
+  assert.deepEqual(patch?.peerInstances, []);
 });
 
 test('workspace project activation switches workspace path without changing shared writer config', () => {

@@ -75,7 +75,7 @@ import {
   type SciForgeReference,
   type TimelineEventRecord,
 } from '../domain';
-import { compactWorkspaceStateForStorage, createInitialWorkspaceState, createSession, loadWorkspaceState, saveWorkspaceState, shouldUsePersistedWorkspaceState } from '../sessionStore';
+import { compactWorkspaceStateForStorage, createInitialWorkspaceState, createSession, loadWorkspaceState, saveWorkspaceState, sessionActivityScore, shouldUsePersistedWorkspaceState } from '../sessionStore';
 import {
   activeSessionFor as workspaceActiveSessionFor,
   clearArchivedSessions as clearScenarioArchivedSessions,
@@ -94,6 +94,7 @@ import {
   loadFileBackedSciForgeConfig,
   loadSciForgeInstanceManifest,
   loadPersistedWorkspaceState,
+  loadPersistedWorkspaceStateForProject,
   persistWorkspaceState,
   saveFileBackedSciForgeConfig,
   type WorkspaceFileContent,
@@ -108,7 +109,7 @@ import { resolveSearchNavigation, workbenchNavigationForScenario } from './appSh
 import { SettingsPage, Sidebar, TopBar, type ConfigSaveState, type SidebarProjectThreadGroup } from './appShell/ShellPanels';
 import { runPromptOrchestrator } from './chat/runOrchestrator';
 import type { SettingsSectionId } from './appShell/settingsPageModel';
-import { buildWorkspaceProjectActivation } from './appShell/sidebarProjectModel';
+import { buildWorkspaceProjectActivation, findPeerInstanceForSidebarProject, isCurrentSidebarProject, removeSidebarProjectFromConfig } from './appShell/sidebarProjectModel';
 import {
   buildSidebarProjectSessionsByPath,
   loadPeerSidebarProjectSessionSnapshots,
@@ -876,6 +877,67 @@ export function SciForgeApp() {
     ));
   }
 
+  function workspaceHasActiveChats(
+    state: Pick<SciForgeWorkspaceState, 'sessionsByScenario'>,
+  ) {
+    return Object.values(state.sessionsByScenario).some((session) => session && sessionActivityScore(session) > 0);
+  }
+
+  async function archiveSidebarProjectChats(project: SidebarProjectThreadGroup) {
+    if (isCurrentSidebarProject(config, project)) {
+      if (!workspaceHasActiveChats(workspaceState)) {
+        throw new Error(`${project.label} 没有可归档的活跃对话。`);
+      }
+      archiveAllChats();
+      return;
+    }
+
+    const targetPath = sidebarProjectPath(project.detail);
+    const peer = findPeerInstanceForSidebarProject(config, project);
+    if (!targetPath || !peer) {
+      throw new Error(`${project.label} 没有可归档的活跃对话。`);
+    }
+
+    const writerBaseUrl = peer.workspaceWriterUrl?.trim() || config.workspaceWriterBaseUrl;
+    const cachedBundle = projectSessionsByPath[targetPath];
+    let state = await loadPersistedWorkspaceStateForProject(targetPath, config, writerBaseUrl);
+    if (!state && cachedBundle) {
+      state = {
+        ...createInitialWorkspaceState(),
+        workspacePath: targetPath,
+        sessionsByScenario: cachedBundle.sessionsByScenario as SciForgeWorkspaceState['sessionsByScenario'],
+        archivedSessions: cachedBundle.archivedSessions ?? [],
+        updatedAt: nowIso(),
+      };
+    }
+    if (!state || !workspaceHasActiveChats(state)) {
+      throw new Error(`${project.label} 没有可归档的活跃对话。`);
+    }
+
+    const nextState = archiveAllScenarioActiveSessions(
+      state,
+      (scenarioId) => `${scenarioLabelForInstance(scenarioId)} 新聊天`,
+    );
+    await persistWorkspaceState(compactWorkspaceStateForStorage(nextState), {
+      ...config,
+      workspacePath: targetPath,
+      workspaceWriterBaseUrl: writerBaseUrl,
+    });
+    setPeerProjectSessionsByPath((current) => ({
+      ...current,
+      [targetPath]: {
+        sessionsByScenario: nextState.sessionsByScenario,
+        archivedSessions: nextState.archivedSessions ?? [],
+      },
+    }));
+  }
+
+  function removeSidebarProject(project: SidebarProjectThreadGroup) {
+    const patch = removeSidebarProjectFromConfig(config, project);
+    if (!patch) throw new Error('当前项目不能从侧栏移除。');
+    updateRuntimeConfig(patch);
+  }
+
   function deleteArchivedSessions(nextScenarioId: ScenarioInstanceId, sessionIds: string[]) {
     if (!sessionIds.length) return;
     updateWorkspace((current) => deleteScenarioArchivedSessions(current, nextScenarioId, sessionIds));
@@ -895,6 +957,17 @@ export function SciForgeApp() {
 
   function markReusableRun(nextScenarioId: ScenarioInstanceId, runId: string) {
     updateWorkspace((current) => markReusableRunInWorkspace(current, nextScenarioId, runId, nowIso()));
+  }
+
+  function clearAllArchivedSessions() {
+    updateWorkspace((current) => ({ ...current, archivedSessions: [] }));
+  }
+
+  function restoreArchivedAndOpen(nextScenarioId: ScenarioInstanceId, sessionId: string) {
+    restoreArchivedSession(nextScenarioId, sessionId);
+    setScenarioId(nextScenarioId);
+    setPage('workbench');
+    closeSettings();
   }
 
   function handleSearch(query: string) {
@@ -959,6 +1032,11 @@ export function SciForgeApp() {
           onSave={saveRuntimeConfigNow}
           onBack={closeSettings}
           initialSection={settingsSection}
+          archivedSessions={workspaceState.archivedSessions ?? []}
+          scenarioLabelFor={scenarioLabelForInstance}
+          onRestoreArchivedSession={restoreArchivedAndOpen}
+          onDeleteArchivedSessions={deleteArchivedSessions}
+          onClearArchivedSessions={clearAllArchivedSessions}
         />
       ) : (
         <>
@@ -969,11 +1047,11 @@ export function SciForgeApp() {
         setScenarioId={setScenarioId}
         config={config}
         sessionsByScenario={sessions}
-        archivedSessions={workspaceState.archivedSessions}
         onProjectNewChat={startProjectNewChat}
-        onRestoreArchivedSession={restoreArchivedSession}
         onArchiveThread={archiveThread}
+        onArchiveProjectChats={archiveSidebarProjectChats}
         onArchiveAllChats={archiveAllChats}
+        onRemoveSidebarProject={removeSidebarProject}
         onSearchNavigate={handleSearch}
         onSettingsOpen={() => openSettings()}
         workspaceStatus={workspaceStatus}

@@ -27,6 +27,8 @@ import {
   settingsSectionNavItems,
   type SettingsSectionId,
 } from './settingsPageModel';
+import { SettingsArchivedChatsPanel } from './SettingsArchivedChatsPanel';
+import type { SciForgeSession, ScenarioInstanceId } from '../../domain';
 
 export function SettingsPage({
   config,
@@ -35,6 +37,11 @@ export function SettingsPage({
   onSave,
   onBack,
   initialSection = 'general',
+  archivedSessions = [],
+  scenarioLabelFor,
+  onRestoreArchivedSession,
+  onDeleteArchivedSessions,
+  onClearArchivedSessions,
 }: {
   config: SciForgeConfig;
   onChange: (patch: Partial<SciForgeConfig>) => void;
@@ -42,6 +49,11 @@ export function SettingsPage({
   onSave: () => void;
   onBack: () => void;
   initialSection?: SettingsSectionId;
+  archivedSessions?: SciForgeSession[];
+  scenarioLabelFor?: (scenarioId: ScenarioInstanceId) => string;
+  onRestoreArchivedSession?: (scenarioId: ScenarioInstanceId, sessionId: string) => void;
+  onDeleteArchivedSessions?: (scenarioId: ScenarioInstanceId, sessionIds: string[]) => void;
+  onClearArchivedSessions?: () => void;
 }) {
   const [activeSection, setActiveSection] = useState<SettingsSectionId>(initialSection);
   const healthItems = useRuntimeHealth(config);
@@ -355,6 +367,15 @@ export function SettingsPage({
                 <RuntimeHealthPanel items={healthItems} />
               </div>
             </div>
+          ) : null}
+          {activeSection === 'archived' ? (
+            <SettingsArchivedChatsPanel
+              archivedSessions={archivedSessions}
+              scenarioLabelFor={(scenarioId) => scenarioLabelFor?.(scenarioId) ?? scenarioId}
+              onRestore={(scenarioId, sessionId) => onRestoreArchivedSession?.(scenarioId, sessionId)}
+              onDelete={(scenarioId, sessionIds) => onDeleteArchivedSessions?.(scenarioId, sessionIds)}
+              onClearAll={() => onClearArchivedSessions?.()}
+            />
           ) : null}
           {activeSection === 'feedback' ? (
             <div className="settings-grid">
