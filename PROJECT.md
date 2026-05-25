@@ -141,6 +141,9 @@ Evidence（2026-05-25 边界整改）：`node --import tsx --test packages/obser
 - [ ] `src/ui/src/api/sciforgeToolsClient/client.ts`：拆成 request transport、workspace tools、browser/runtime tools、feedback tools 和 typed error normalization。
 - [ ] `src/runtime/repair-handoff-runner.ts`：拆成 handoff parser、repair executor、test evidence collector、promotion gate 和 diagnostics。
 - [ ] `src/ui/src/app/chat/sessionTransforms.ts`：拆成 projection reducer、event normalization、artifact linking、run status mapping 和 compact digest helpers。
+- [ ] `src/ui/src/api/sciforgeToolsClient/runtimeEvents.test.ts`：拆成 transport event fixtures、browser/runtime event cases、feedback event cases 和 regression-only smoke。
+- [ ] `tests/smoke/smoke-runtime-codex-browser-acceptance.ts`：拆成 setup/fixture harness、browser acceptance cases、blocked-manifest cases 和 evidence validation helpers。
+- [ ] `src/runtime/computer-use/package-bridge.ts`：拆成 request translator、host-port adapter、policy gate、trace/result materializer 和 package invocation diagnostics。
 
 ## 验证规则
 

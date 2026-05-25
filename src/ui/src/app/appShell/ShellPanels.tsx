@@ -1319,7 +1319,7 @@ export function Sidebar({
     if (query) onSearchNavigate?.(query);
   }
 
-  function openSidebarThread(item: Pick<SidebarThreadItem, 'scenarioId' | 'sessionId'>, project: SidebarProjectThreadGroup) {
+  function openSidebarThread(item: SidebarThreadItem, project: SidebarProjectThreadGroup) {
     if (!project.current) {
       activateSidebarProject(project, item);
       return;
