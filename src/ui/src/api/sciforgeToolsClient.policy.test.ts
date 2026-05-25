@@ -177,7 +177,7 @@ test('聊天流式请求连接到 Codex Runtime bridge 并暴露运行元数据'
   assert.match(String(body.commandId), /^codex-command-/);
   const auditMetadata = body.auditMetadata as Record<string, unknown>;
   const runtime = auditMetadata.runtime as Record<string, unknown>;
-  assert.equal(runtime.provider, 'native');
+  assert.equal(runtime.provider, 'sciforge-deepseek-proxy');
   assert.equal(runtime.allowOpenAiRuntime, false);
   assert.equal(body.commandText, 'Summarize current context');
   assert.equal(body.codexSessionId, undefined);
@@ -185,10 +185,96 @@ test('聊天流式请求连接到 Codex Runtime bridge 并暴露运行元数据'
   assert.equal('conversationEnvelope' in body, false);
   const metadataEvent = events.find((event) => event.type === 'codex-runtime-run');
   assert.ok(metadataEvent);
-  assert.match(metadataEvent.detail ?? '', /provider native/);
+  assert.match(metadataEvent.detail ?? '', /provider sciforge-deepseek-proxy/);
   assert.match(metadataEvent.detail ?? '', /profile sciforge-runtime-deepseek/);
   assert.match(metadataEvent.detail ?? '', /workspace \/tmp\/current/);
   assert.match(metadataEvent.detail ?? '', /command codex-command-/);
+});
+
+test('/computer-use 默认聊天请求路由到 Workspace Gateway action provider 而不是 Codex Runtime stream', async () => {
+  const urls: string[] = [];
+  const bodies: Array<Record<string, unknown>> = [];
+  const traceRef = '.sciforge/vision-runs/default-chat/vision-trace.json';
+  globalThis.fetch = (async (url, init) => {
+    urls.push(String(url));
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    bodies.push(body);
+    const commandId = String(body.uiState && typeof body.uiState === 'object'
+      ? (body.uiState as Record<string, unknown>).commandId
+      : 'computer-use-command-test');
+    return streamResponse([
+      {
+        event: {
+          type: 'computer-use.tui-host-actions',
+          source: 'computer-use-package-bridge',
+          commandId,
+          attemptId: `${commandId}-attempt-1`,
+          detail: JSON.stringify({
+            actions: [{
+              schemaVersion: 'sciforge.computer-use.tui-host-actions.v1',
+              port: 'gui.present',
+              target: 'computer-use.trace-summary',
+              payload: {
+                title: 'Computer Use result',
+                status: 'needs-confirmation',
+                message: 'Computer Use stopped before the guarded action.',
+                traceRefs: [traceRef],
+              },
+            }, {
+              schemaVersion: 'sciforge.computer-use.tui-host-actions.v1',
+              port: 'gui.ask_user',
+              target: 'computer-use.approval-request',
+              payload: {
+                approvalRequest: {
+                  id: 'approval:computer-use:default-chat',
+                  confirmation_text: 'Allow Computer Use to click the visible Submit button?',
+                  risk_level: 'high',
+                  action_kind: 'click',
+                },
+                relatedRefs: [traceRef],
+              },
+            }],
+          }),
+        },
+      },
+      {
+        result: {
+          status: 'done',
+          message: 'Raw action-provider result should stay behind gui.ask_user.',
+          commandId,
+          executionUnits: [{ id: 'EU-computer-use-default-chat', status: 'done' }],
+        },
+      },
+    ]);
+  }) as typeof fetch;
+
+  const events: AgentStreamEvent[] = [];
+  const response = await sendSciForgeToolMessage(messageInput(undefined, {
+    prompt: '/computer-use click the guarded Submit button',
+  }), {
+    onEvent: (event) => events.push(event),
+  });
+
+  assert.equal(response.message.status, 'completed');
+  assert.match(urls[0] ?? '', /\/api\/sciforge\/tools\/run\/stream$/);
+  assert.doesNotMatch(urls[0] ?? '', /\/api\/sciforge\/runtime\/codex\/stream$/);
+  const body = bodies[0]!;
+  assert.equal(body.prompt, '/computer-use click the guarded Submit button');
+  assert.deepEqual(body.selectedActionIds, ['action.sciforge.computer-use']);
+  assert.ok((body.selectedToolIds as string[]).includes('local.vision-sense'));
+  assert.ok((body.selectedSenseIds as string[]).includes('local.vision-sense'));
+  const uiState = body.uiState as Record<string, unknown>;
+  assert.match(String(uiState.commandId), /^computer-use-command-/);
+  assert.equal((uiState.visionSenseConfig as Record<string, unknown>).desktopBridgeEnabled, true);
+  assert.equal((uiState.visionSenseConfig as Record<string, unknown>).allowSharedSystemInput, true);
+  assert.equal(response.message.provenance?.requiresUserConfirmation, true);
+  assert.match(String(response.message.provenance?.source), /^gui\.ask_user:computer-use-command-.*:computer-use$/);
+  assert.match(response.message.content, /Computer Use confirmation required/);
+  assert.match(response.message.content, /Allow Computer Use to click the visible Submit button/);
+  assert.match(response.message.content, /approval:computer-use:default-chat/);
+  assert.doesNotMatch(response.message.content, /Raw action-provider result/);
+  assert.ok(events.some((event) => event.type === 'computer-use.tui-host-actions'));
+  assert.ok(events.some((event) => event.type === 'current-plan' && /Computer Use action provider/.test(event.detail ?? '')));
 });
 
 test('聊天流式请求用上一轮 native Codex session id 恢复多轮上下文', async () => {

@@ -3,6 +3,8 @@
 from .contracts import (
     ActionPlan,
     ActionTarget,
+    ApprovalRequest,
+    ComputerUseHostPorts,
     ComputerUseRequest,
     ComputerUseResult,
     ExecutionOutcome,
@@ -11,13 +13,15 @@ from .contracts import (
     Observation,
     Verification,
 )
-from .loop import run_computer_use_task
+from .loop import run_computer_use_task, run_task
 from .safety import assess_action_risk
 from .trace import compact_result_for_handoff, result_to_trace
 
 __all__ = [
     "ActionPlan",
     "ActionTarget",
+    "ApprovalRequest",
+    "ComputerUseHostPorts",
     "ComputerUseRequest",
     "ComputerUseResult",
     "ExecutionOutcome",
@@ -29,5 +33,5 @@ __all__ = [
     "compact_result_for_handoff",
     "result_to_trace",
     "run_computer_use_task",
+    "run_task",
 ]
-

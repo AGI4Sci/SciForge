@@ -13,15 +13,10 @@ export const visionSenseEnvKeys = [
   'SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN',
   'SCIFORGE_VISION_RUN_ID',
   'SCIFORGE_VISION_CAPTURE_DISPLAYS',
-  'SCIFORGE_VISION_ACTIONS_JSON',
+  'SCIFORGE_VISION_TEST_ACTION_FIXTURES',
+  'SCIFORGE_VISION_TEST_ACTIONS_JSON',
   'SCIFORGE_VISION_KV_GROUND_URL',
   'SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS',
-  'SCIFORGE_VISION_PLANNER_BASE_URL',
-  'SCIFORGE_VISION_PLANNER_API_KEY',
-  'SCIFORGE_VISION_PLANNER_MODEL',
-  'SCIFORGE_VISION_GROUNDER_LLM_BASE_URL',
-  'SCIFORGE_VISION_GROUNDER_LLM_API_KEY',
-  'SCIFORGE_VISION_GROUNDER_LLM_MODEL',
   'SCIFORGE_VISION_MAX_STEPS',
   'SCIFORGE_VISION_DESKTOP_PLATFORM',
 ] as const;
@@ -63,6 +58,16 @@ export async function runVisionSenseGateway(input: Omit<GatewayInput, 'selectedT
   const uiState = inputUiState
     ? { ...inputUiState, humanApproval: inputUiState.humanApproval ?? dryRunApproval, selectedToolIds: visionSenseToolIds }
     : { humanApproval: dryRunApproval, selectedToolIds: visionSenseToolIds };
+  const uiStateRecord = uiState as Record<string, unknown>;
+  const visionSenseConfig = typeof uiStateRecord.visionSenseConfig === 'object' && uiStateRecord.visionSenseConfig !== null
+    ? uiStateRecord.visionSenseConfig as Record<string, unknown>
+    : {};
+  if (process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON && visionSenseConfig.testActionFixtureMode === undefined) {
+    uiStateRecord.visionSenseConfig = {
+      ...visionSenseConfig,
+      testActionFixtureMode: true,
+    };
+  }
   return runWorkspaceRuntimeGateway({
     ...input,
     selectedToolIds: visionSenseToolIds,

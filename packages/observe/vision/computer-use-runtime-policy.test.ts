@@ -34,7 +34,7 @@ test('vision-sense package owns runtime trace and grounding ids', () => {
   assert.deepEqual(visionSenseTraceContractPolicy.appSpecificShortcuts, []);
   assert.equal(visionSenseSafetyVerifierContract.senseBoundary, 'text-signal-only');
   assert.equal(visionSensePlannerOnlyEvidencePolicy.plannerId, 'vision-sense-policy-planner');
-  assert.equal(visionSenseTraceOutputPolicy.requiredInputs[1], 'VisionPlanner');
+  assert.equal(visionSenseTraceOutputPolicy.requiredInputs[1], 'RuntimeCodexPlanner');
 });
 
 test('vision-sense package owns planner domain prompt policy', () => {

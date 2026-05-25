@@ -114,13 +114,26 @@ export async function readWorkspaceToolStream(
   let buffer = '';
   let result: unknown;
   let error: string | undefined;
+  let guiPresent: Record<string, unknown> | undefined;
+  let guiAskUser: Record<string, unknown> | undefined;
+  const rememberGuiIntent = (event: unknown) => {
+    if (!isRecord(event)) return;
+    if (event.type === 'gui_present') guiPresent = event;
+    if (event.type === 'gui_ask_user') guiAskUser = event;
+    const computerUseGui = guiEventsFromComputerUseTuiHostActions(event);
+    if (computerUseGui.guiPresent) guiPresent = computerUseGui.guiPresent;
+    if (computerUseGui.guiAskUser) guiAskUser = computerUseGui.guiAskUser;
+  };
   function consumeLine(rawLine: string) {
     const line = rawLine.trim();
     if (!line) return;
     const envelope = JSON.parse(line) as unknown;
     if (!isRecord(envelope)) return;
-    if ('event' in envelope) onEvent(envelope.event);
-    if ('result' in envelope) result = envelope.result;
+    if ('event' in envelope) {
+      rememberGuiIntent(envelope.event);
+      onEvent(envelope.event);
+    }
+    if ('result' in envelope) result = withGuiIntentRuntimeResult(envelope.result, guiPresent, guiAskUser);
     if ('error' in envelope) error = asString(envelope.error) || JSON.stringify(envelope.error);
   }
   for (;;) {
@@ -134,7 +147,18 @@ export async function readWorkspaceToolStream(
     if (done) break;
   }
   if (buffer.trim()) consumeLine(buffer);
+  result = withGuiIntentRuntimeResult(result, guiPresent, guiAskUser);
   return { result, error };
+}
+
+function withGuiIntentRuntimeResult(
+  result: unknown,
+  guiPresent: Record<string, unknown> | undefined,
+  guiAskUser: Record<string, unknown> | undefined,
+): unknown {
+  if (guiAskUser) return withGuiAskUserRuntimeResult(result, guiAskUser, guiPresent);
+  if (guiPresent) return withGuiPresentRuntimeResult(result, guiPresent);
+  return result;
 }
 
 async function readWorkspaceToolSse(
@@ -148,6 +172,7 @@ async function readWorkspaceToolSse(
   let result: unknown;
   let error: string | undefined;
   let guiPresent: Record<string, unknown> | undefined;
+  let guiAskUser: Record<string, unknown> | undefined;
   const genericMessages: string[] = [];
   function consumeBlock(block: string) {
     const lines = block.split(/\r?\n/);
@@ -182,8 +207,18 @@ async function readWorkspaceToolSse(
       if (eventName === 'gui_present' || data.type === 'gui_present') {
         guiPresent = data;
       }
+      if (eventName === 'gui_ask_user' || data.type === 'gui_ask_user') {
+        guiAskUser = data;
+      }
+      const computerUseGui = guiEventsFromComputerUseTuiHostActions(data);
+      if (computerUseGui.guiPresent) guiPresent = computerUseGui.guiPresent;
+      if (computerUseGui.guiAskUser) guiAskUser = computerUseGui.guiAskUser;
     }
     if (eventName === 'done' || (isRecord(data) && data.type === 'done')) {
+      if (guiAskUser) {
+        result = withGuiAskUserRuntimeResult(data, guiAskUser, guiPresent);
+        return;
+      }
       if (guiPresent) {
         result = withGuiPresentRuntimeResult(data, guiPresent);
         return;
@@ -237,6 +272,7 @@ function withGuiPresentRuntimeResult(result: unknown, guiPresent: Record<string,
   const output = isRecord(result.output) ? result.output : {};
   const commandId = asString(result.commandId) ?? asString(guiPresent.commandId);
   const auditRefs = asStringArray(result.evidenceRefs) ?? asStringArray(guiPresent.evidenceRefs) ?? [];
+  const runtimeMetadata = runtimeMetadataForProjection(guiPresent, auditRefs);
   return {
     ...result,
     message: presentation.text,
@@ -247,7 +283,7 @@ function withGuiPresentRuntimeResult(result: unknown, guiPresent: Record<string,
         schemaVersion: 'sciforge.conversation-projection.v1',
         conversationId: commandId ? `runtime-codex:${commandId}` : 'runtime-codex:gui-present',
         visibleAnswer: {
-          status: 'satisfied',
+          status: visibleAnswerStatusForGuiPresent(presentation),
           text: presentation.text,
           artifactRefs: presentation.ref ? [presentation.ref] : [],
         },
@@ -264,6 +300,7 @@ function withGuiPresentRuntimeResult(result: unknown, guiPresent: Record<string,
         }],
         recoverActions: [],
         verificationState: { status: 'unverified', verifierRef: presentation.source },
+        runtimeMetadata,
         auditRefs,
         diagnostics: [],
       },
@@ -276,11 +313,92 @@ function withGuiPresentRuntimeResult(result: unknown, guiPresent: Record<string,
   };
 }
 
+function withGuiAskUserRuntimeResult(
+  result: unknown,
+  guiAskUser: Record<string, unknown>,
+  guiPresent?: Record<string, unknown>,
+): unknown {
+  if (!isRecord(result)) return result;
+  const askUser = guiAskUserFromEvent(guiAskUser, result);
+  if (!askUser.text.trim()) return result;
+  const presentation = guiPresent ? guiPresentationFromEvent(guiPresent, result) : undefined;
+  const output = isRecord(result.output) ? result.output : {};
+  const commandId = asString(result.commandId) ?? asString(guiAskUser.commandId);
+  const auditRefs = uniqueStrings([
+    ...(asStringArray(result.evidenceRefs) ?? []),
+    ...(asStringArray(guiAskUser.evidenceRefs) ?? []),
+    ...(presentation?.displayedRefs ?? []),
+    ...(askUser.relatedRefs ?? []),
+  ]);
+  const runtimeMetadata = runtimeMetadataForProjection(guiAskUser, auditRefs);
+  const artifacts = uniqueStrings([
+    ...(presentation?.ref ? [presentation.ref] : []),
+    ...(presentation?.displayedRefs ?? []),
+    ...(askUser.relatedRefs ?? []),
+  ]).map((ref) => ({
+    ref,
+    label: refLabel(ref),
+    mime: refMime(ref),
+  }));
+  const executionProcess = [
+    presentation ? {
+      eventId: `${commandId ?? 'runtime-codex'}:gui-present`,
+      type: 'GuiPresent',
+      summary: `Runtime Codex displayed Computer Use evidence through ${presentation.source}.`,
+      timestamp: asString(result.timestamp) ?? new Date().toISOString(),
+    } : undefined,
+    {
+      eventId: `${commandId ?? 'runtime-codex'}:gui-ask-user`,
+      type: 'GuiAskUser',
+      summary: `Runtime Codex requested user confirmation through ${askUser.source}.`,
+      timestamp: asString(result.timestamp) ?? new Date().toISOString(),
+    },
+  ].filter(Boolean);
+  return {
+    ...result,
+    message: askUser.text,
+    guiPresentation: presentation,
+    guiAskUser: askUser,
+    displayIntent: {
+      source: askUser.source,
+      conversationProjection: {
+        schemaVersion: 'sciforge.conversation-projection.v1',
+        conversationId: commandId ? `runtime-codex:${commandId}` : 'runtime-codex:gui-ask-user',
+        visibleAnswer: {
+          status: 'needs-human',
+          text: askUser.text,
+          artifactRefs: artifacts.map((artifact) => artifact.ref),
+          confirmationStatus: 'needs-confirmation',
+          liveAcceptanceEligible: true,
+        },
+        artifacts,
+        executionProcess,
+        recoverActions: askUser.choices?.map((choice) => choice.commandText) ?? [],
+        verificationState: {
+          status: 'needs-human',
+          verifierRef: askUser.source,
+          liveAcceptanceEligible: true,
+        },
+        runtimeMetadata,
+        auditRefs,
+        diagnostics: [],
+      },
+    },
+    output: {
+      ...output,
+      message: askUser.text,
+      guiPresentation: presentation,
+      guiAskUser: askUser,
+    },
+  };
+}
+
 function withNativeCodexMessageRuntimeResult(result: unknown, message: string): unknown {
   if (!message.trim() || !isRecord(result)) return result;
   const output = isRecord(result.output) ? result.output : {};
   const commandId = asString(result.commandId);
   const auditRefs = asStringArray(result.evidenceRefs) ?? [];
+  const runtimeMetadata = runtimeMetadataForProjection(result, auditRefs);
   return {
     ...result,
     message,
@@ -324,6 +442,7 @@ function withNativeCodexMessageRuntimeResult(result: unknown, message: string): 
           verifierRef: commandId ? `codex.native-message:${commandId}` : 'codex.native-message',
           liveAcceptanceEligible: false,
         },
+        runtimeMetadata,
         auditRefs,
         diagnostics: [],
       },
@@ -334,6 +453,26 @@ function withNativeCodexMessageRuntimeResult(result: unknown, message: string): 
       nativeCodexMessage: true,
     },
   };
+}
+
+function runtimeMetadataForProjection(
+  primary: Record<string, unknown>,
+  auditRefs: string[],
+) {
+  const metadata = {
+    provider: asString(primary.provider),
+    model: asString(primary.model),
+    profile: asString(primary.profile),
+    workspace: asString(primary.workspace),
+    commandId: asString(primary.commandId),
+    attemptId: asString(primary.attemptId),
+    codexSessionId: asString(primary.codexSessionId),
+    auditRefs,
+    foldedAudit: true,
+  };
+  return Object.values(metadata).some((value) => Array.isArray(value) ? value.length > 0 : Boolean(value))
+    ? metadata
+    : undefined;
 }
 
 function guiPresentationFromEvent(event: Record<string, unknown>, result: Record<string, unknown>) {
@@ -353,6 +492,8 @@ function guiPresentationFromEvent(event: Record<string, unknown>, result: Record
     title: asString(nested.title),
     intent: asString(nested.intent),
     hint: asString(nested.hint),
+    status: asString(nested.status) ?? asString(event.status),
+    displayedRefs: asStringArray(nested.displayedRefs),
     placement: isRecord(nested.placement) ? nested.placement : undefined,
     commandId,
     attemptId: asString(event.attemptId) ?? asString(result.attemptId),
@@ -361,6 +502,267 @@ function guiPresentationFromEvent(event: Record<string, unknown>, result: Record
     profile: asString(event.profile) ?? asString(result.profile),
     workspace: asString(event.workspace) ?? asString(result.workspace),
   };
+}
+
+function guiAskUserFromEvent(event: Record<string, unknown>, result: Record<string, unknown>) {
+  const raw = isRecord(event.raw) ? event.raw : {};
+  const nested = isRecord(raw.askUser) ? raw.askUser : {};
+  const approvalRequest = isRecord(nested.approvalRequest) ? nested.approvalRequest : undefined;
+  const relatedRefs = uniqueStrings([
+    ...(asStringArray(nested.relatedRefs) ?? []),
+    ...(asStringArray(nested.displayedRefs) ?? []),
+  ]);
+  const title = asString(nested.title)
+    ?? asString(approvalRequest?.title)
+    ?? 'Computer Use confirmation required';
+  const message = asString(nested.message)
+    ?? asString(approvalRequest?.prompt)
+    ?? asString(approvalRequest?.message)
+    ?? asString(approvalRequest?.confirmationText)
+    ?? asString(approvalRequest?.confirmation_text)
+    ?? asString(approvalRequest?.reason);
+  const choices = guiChoicesFromValue(nested.choices);
+  const text = asString(event.text)
+    ?? asString(event.message)
+    ?? asString(nested.text)
+    ?? formatGuiAskUserText({ title, message, approvalRequest, relatedRefs, choices });
+  const commandId = asString(event.commandId) ?? asString(result.commandId);
+  return {
+    schemaVersion: 'sciforge.runtime-codex-gui-ask-user.v1',
+    source: asString(nested.source) ?? asString(raw.source) ?? (commandId ? `gui.ask_user:${commandId}` : 'gui.ask_user'),
+    kind: asString(nested.kind) ?? 'confirmation',
+    title,
+    message,
+    text,
+    submitCommandTemplate: asString(nested.submitCommandTemplate),
+    choices,
+    approvalRequest,
+    relatedRefs,
+    displayedRefs: relatedRefs,
+    placement: isRecord(nested.placement) ? nested.placement : undefined,
+    commandId,
+    attemptId: asString(event.attemptId) ?? asString(result.attemptId),
+    provider: asString(event.provider) ?? asString(result.provider),
+    model: asString(event.model) ?? asString(result.model),
+    profile: asString(event.profile) ?? asString(result.profile),
+    workspace: asString(event.workspace) ?? asString(result.workspace),
+  };
+}
+
+function guiEventsFromComputerUseTuiHostActions(event: Record<string, unknown>): {
+  guiPresent?: Record<string, unknown>;
+  guiAskUser?: Record<string, unknown>;
+} {
+  if (asString(event.type) !== 'computer-use.tui-host-actions') return {};
+  const actionsEnvelope = isRecord(event.detail)
+    ? event.detail
+    : parseJsonObject(event.detail);
+  const actions = recordList(actionsEnvelope?.actions);
+  if (!actions.length) return {};
+  const commandId = asString(event.commandId);
+  const common = {
+    schemaVersion: 'sciforge.codex.normalized-event.v1',
+    provider: asString(event.provider),
+    model: asString(event.model),
+    profile: asString(event.profile),
+    workspace: asString(event.workspace),
+    commandId,
+    attemptId: asString(event.attemptId),
+    evidenceRefs: asStringArray(event.evidenceRefs),
+  };
+  let guiPresent: Record<string, unknown> | undefined;
+  let guiAskUser: Record<string, unknown> | undefined;
+  for (const action of actions) {
+    const port = asString(action.port);
+    const payload = isRecord(action.payload) ? action.payload : {};
+    if (port === 'gui.present') {
+      const summary = computerUseSummaryFromPresentationPayload(payload);
+      guiPresent = {
+        ...common,
+        type: 'gui_present',
+        status: 'presented',
+        message: summary.text,
+        text: summary.text,
+        raw: {
+          boundary: 'computer-use-tui-host-gui-present',
+          source: commandId ? `gui.present:${commandId}:computer-use` : 'gui.present:computer-use',
+          presentation: {
+            source: commandId ? `gui.present:${commandId}:computer-use` : 'gui.present:computer-use',
+            text: summary.text,
+            intent: 'show-result',
+            ref: summary.displayedRefs[0],
+            displayedRefs: summary.displayedRefs,
+            title: asString(payload.title) ?? 'Computer Use result',
+            status: asString(payload.status),
+            hint: 'markdown',
+          },
+        },
+      };
+    }
+    if (port === 'gui.ask_user') {
+      const ask = computerUseAskUserFromAction(payload);
+      guiAskUser = {
+        ...common,
+        type: 'gui_ask_user',
+        status: 'needs-confirmation',
+        message: ask.text,
+        text: ask.text,
+        raw: {
+          boundary: 'computer-use-tui-host-gui-ask-user',
+          source: commandId ? `gui.ask_user:${commandId}:computer-use` : 'gui.ask_user:computer-use',
+          askUser: {
+            ...ask,
+            source: commandId ? `gui.ask_user:${commandId}:computer-use` : 'gui.ask_user:computer-use',
+          },
+        },
+      };
+    }
+  }
+  return { guiPresent, guiAskUser };
+}
+
+function computerUseSummaryFromPresentationPayload(payload: Record<string, unknown>) {
+  const displayedRefs = uniqueStrings([
+    ...(asStringArray(payload.traceRefs) ?? []),
+    ...(asStringArray(payload.screenshotRefs) ?? []),
+    ...(asStringArray(payload.artifactRefs) ?? []),
+    ...(asStringArray(payload.executionUnitRefs) ?? []),
+    ...(asStringArray(payload.workEvidenceRefs) ?? []),
+  ]);
+  const lines = [
+    '## Computer Use result',
+    asString(payload.status) ? `Status: \`${asString(payload.status)}\`` : undefined,
+    asString(payload.message),
+    displayedRefs.length ? ['Evidence refs:', ...displayedRefs.map((ref) => `- \`${ref}\``)].join('\n') : undefined,
+  ].filter(Boolean);
+  return {
+    text: lines.join('\n\n'),
+    displayedRefs,
+  };
+}
+
+function computerUseAskUserFromAction(payload: Record<string, unknown>) {
+  const approvalRequest = isRecord(payload.approvalRequest) ? payload.approvalRequest : {};
+  const relatedRefs = uniqueStrings(asStringArray(payload.relatedRefs) ?? []);
+  const approvalId = asString(approvalRequest.id)
+    ?? asString(approvalRequest.approvalRef)
+    ?? asString(approvalRequest.approval_ref);
+  const choices = approvalId ? [
+    { label: 'Approve', commandText: `/computer-use approve --approval-ref ${quoteCommandArg(approvalId)}`, style: 'primary' },
+    { label: 'Cancel', commandText: `/computer-use reject --approval-ref ${quoteCommandArg(approvalId)}`, style: 'secondary' },
+  ] : undefined;
+  const title = 'Computer Use confirmation required';
+  const message = asString(approvalRequest.prompt)
+    ?? asString(approvalRequest.message)
+    ?? asString(approvalRequest.confirmationText)
+    ?? asString(approvalRequest.confirmation_text)
+    ?? asString(approvalRequest.reason)
+    ?? 'Computer Use requested confirmation before executing a guarded action.';
+  return {
+    kind: 'confirmation',
+    title,
+    message,
+    text: formatGuiAskUserText({ title, message, approvalRequest, relatedRefs, choices }),
+    choices,
+    approvalRequest,
+    relatedRefs,
+    displayedRefs: relatedRefs,
+  };
+}
+
+function formatGuiAskUserText(input: {
+  title: string;
+  message?: string;
+  approvalRequest?: Record<string, unknown>;
+  relatedRefs?: string[];
+  choices?: Array<{ label: string; commandText: string; style?: string }>;
+}) {
+  const risk = asString(input.approvalRequest?.riskLevel)
+    ?? asString(input.approvalRequest?.risk_level)
+    ?? asString(input.approvalRequest?.risk);
+  const approvalRef = asString(input.approvalRequest?.id)
+    ?? asString(input.approvalRequest?.approvalRef)
+    ?? asString(input.approvalRequest?.approval_ref);
+  const actionRef = asString(input.approvalRequest?.actionRef)
+    ?? asString(input.approvalRequest?.action_ref);
+  const actionKind = asString(input.approvalRequest?.actionKind)
+    ?? asString(input.approvalRequest?.action_kind);
+  const lines = [
+    `## ${input.title}`,
+    input.message,
+    risk ? `Risk: \`${risk}\`` : undefined,
+    approvalRef ? `Approval ref: \`${approvalRef}\`` : undefined,
+    actionRef ? `Action ref: \`${actionRef}\`` : undefined,
+    !actionRef && actionKind ? `Action kind: \`${actionKind}\`` : undefined,
+    input.relatedRefs?.length ? ['Evidence refs:', ...input.relatedRefs.map((ref) => `- \`${ref}\``)].join('\n') : undefined,
+    input.choices?.length ? ['Choices:', ...input.choices.map((choice) => `- ${choice.label}: \`${choice.commandText}\``)].join('\n') : undefined,
+  ].filter(Boolean);
+  return lines.join('\n\n');
+}
+
+function visibleAnswerStatusForGuiPresent(presentation: { source?: string; status?: string }) {
+  if (!isComputerUseGuiPresentation(presentation)) return 'satisfied';
+  const status = presentation.status?.trim().toLowerCase().replace(/[\s_]+/g, '-');
+  if (status === 'needs-confirmation' || status === 'needs-human') return 'needs-human';
+  if (status === 'external-blocked' || status === 'blocked') return 'external-blocked';
+  if (status === 'failed' || status === 'failed-with-reason' || status === 'error' || status === 'repair-needed') return 'repair-needed';
+  if (status === 'completed' || status === 'done' || status === 'succeeded' || status === 'success') return 'output-materialized';
+  return 'partial-ready';
+}
+
+function isComputerUseGuiPresentation(presentation: { source?: string }) {
+  return /(?:^|:)computer-use(?:$|:)/i.test(presentation.source ?? '');
+}
+
+function guiChoicesFromValue(value: unknown): Array<{ label: string; commandText: string; style?: string }> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const choices = value.flatMap((item) => {
+    if (!isRecord(item)) return [];
+    const label = asString(item.label);
+    const commandText = asString(item.commandText);
+    if (!label || !commandText || !isTerminalEquivalentCommandText(commandText)) return [];
+    return [{ label, commandText, style: asString(item.style) }];
+  });
+  return choices.length ? choices : undefined;
+}
+
+function recordList(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function parseJsonObject(value: unknown): Record<string, unknown> | undefined {
+  if (isRecord(value)) return value;
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter((value) => value.trim().length > 0)));
+}
+
+function refLabel(ref: string) {
+  return ref.replace(/^(?:artifact|file|run|execution-unit|folder|url)::?/i, '').split(/[\\/]/).filter(Boolean).at(-1) ?? ref;
+}
+
+function refMime(ref: string) {
+  if (/\.(?:png|jpe?g|gif|webp|svg)(?:$|[?#])/i.test(ref)) return 'image';
+  if (/\.(?:json|jsonl)(?:$|[?#])/i.test(ref)) return 'json';
+  if (/\.(?:md|markdown|txt)(?:$|[?#])/i.test(ref)) return 'markdown';
+  return 'evidence-ref';
+}
+
+function quoteCommandArg(value: string) {
+  return JSON.stringify(value);
+}
+
+function isTerminalEquivalentCommandText(commandText: string) {
+  return commandText.length > 0
+    && !/\b(?:deleteFile|triggerRecover|updateCapabilityPreference|UserActionApi|ProjectionApi)\b/.test(commandText);
 }
 
 function runtimeCodexMissingGuiPresentFailure(result: unknown): { type: 'failed'; status: 'failed'; message: string; raw: Record<string, unknown> } {
@@ -413,8 +815,10 @@ export function normalizeWorkspaceRuntimeEvent(raw: unknown): AgentStreamEvent {
   const rawFallbackDetail = rawEventDetailFallback(record);
   const auditOnlyDetail = isRuntimeAuditOnlyEvent(record) ? runtimeAuditOnlyEventSummary(record) : undefined;
   const providerMessageDetail = runtimeCodexProviderMessageSummary(record);
+  const computerUseGuiDetail = computerUseTuiHostActionsSummary(record);
   const baseDetail = auditOnlyDetail
     || providerMessageDetail
+    || computerUseGuiDetail
     || interactionProgress?.detail
     || safeVisibleDetail(record.detail, rawFallbackDetail)
     || safeVisibleDetail(record.message, rawFallbackDetail)
@@ -437,6 +841,16 @@ export function normalizeWorkspaceRuntimeEvent(raw: unknown): AgentStreamEvent {
     createdAt: nowIso(),
     raw,
   };
+}
+
+function computerUseTuiHostActionsSummary(record: Record<string, unknown>) {
+  if (asString(record.type) !== 'computer-use.tui-host-actions') return undefined;
+  const actionsEnvelope = isRecord(record.detail) ? record.detail : parseJsonObject(record.detail);
+  const actions = recordList(actionsEnvelope?.actions);
+  const ports = uniqueStrings(actions.map((action) => asString(action.port)).filter((port): port is string => Boolean(port)));
+  if (!ports.length) return 'Computer Use result is ready for GUI presentation.';
+  if (ports.includes('gui.ask_user')) return `Computer Use requested visible GUI confirmation via ${ports.join(', ')}.`;
+  return `Computer Use result is ready for visible GUI presentation via ${ports.join(', ')}.`;
 }
 
 function runtimeCodexProviderMessageSummary(record: Record<string, unknown>) {

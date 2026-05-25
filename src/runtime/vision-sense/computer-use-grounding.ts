@@ -5,14 +5,14 @@ import { isRecord, toStringList } from '../gateway-utils.js';
 import { groundingForAction } from '../computer-use/actions.js';
 import { toTraceScreenshotRef } from '../computer-use/capture.js';
 import type { ComputerUseConfig as VisionSenseConfig, FocusRegion, GenericVisionAction, GroundingResolution, ScreenshotRef } from '../computer-use/types.js';
-import { extractChatCompletionContent, extractJsonObject, isDarwinPlatform, numberConfig, parseJson, runCommand, sanitizeId } from '../computer-use/utils.js';
+import { isDarwinPlatform, numberConfig, parseJson, runCommand, sanitizeId } from '../computer-use/utils.js';
 import { isWindowLocalCoordinateSpace } from '../computer-use/window-target.js';
 import {
   visionSenseCrossDisplayWindowDragPolicy,
   visionSenseFocusRegionGroundingId,
   visionSenseGroundingIds,
 } from '../../../packages/observe/vision/computer-use-runtime-policy.js';
-import { postOpenAiChatCompletion, visionModelIssue, withHardTimeout } from './computer-use-plan.js';
+import { withHardTimeout } from './computer-use-plan.js';
 import { inferExecutorCoordinateScale } from './computer-use-window-session.js';
 export async function resolveActionGrounding(
   action: GenericVisionAction,
@@ -278,11 +278,15 @@ export function screenshotToExecutorPoint(x: number, y: number, screenshot: Scre
     const expectedContentWidth = bounds.width * scale;
     const expectedContentHeight = bounds.height * scale;
     const shadowPaddingX = screenshotWidth > expectedContentWidth ? (screenshotWidth - expectedContentWidth) / 2 : 0;
-    const shadowPaddingY = screenshotHeight > expectedContentHeight ? (screenshotHeight - expectedContentHeight) / 2 : 0;
+    const verticalShadow = screenshotHeight > expectedContentHeight ? screenshotHeight - expectedContentHeight : 0;
+    const topShadowPaddingY = verticalShadow > 0
+      ? Math.min(verticalShadow, shadowPaddingX > 0 ? Math.min(verticalShadow / 2, shadowPaddingX * 0.45) : verticalShadow / 2)
+      : 0;
+    const bottomShadowPaddingY = Math.max(0, verticalShadow - topShadowPaddingY);
     const contentImageWidth = Math.max(1, screenshotWidth - shadowPaddingX * 2);
-    const contentImageHeight = Math.max(1, screenshotHeight - shadowPaddingY * 2);
+    const contentImageHeight = Math.max(1, screenshotHeight - topShadowPaddingY - bottomShadowPaddingY);
     const localX = Math.max(0, Math.min(contentImageWidth, x - shadowPaddingX));
-    const localY = Math.max(0, Math.min(contentImageHeight, y - shadowPaddingY));
+    const localY = Math.max(0, Math.min(contentImageHeight, y - topShadowPaddingY));
     const mappedX = bounds.x + (localX / contentImageWidth) * bounds.width;
     const mappedY = bounds.y + (localY / contentImageHeight) * bounds.height;
     return {
@@ -292,7 +296,8 @@ export function screenshotToExecutorPoint(x: number, y: number, screenshot: Scre
       screenshotToWindowScaleX: bounds.width / contentImageWidth,
       screenshotToWindowScaleY: bounds.height / contentImageHeight,
       shadowPaddingX,
-      shadowPaddingY,
+      topShadowPaddingY,
+      bottomShadowPaddingY,
       mapping: 'window-screenshot-content-bounds',
       coordinateSpace: screenshot?.windowTarget?.coordinateSpace ?? config.windowTarget.coordinateSpace,
     };
@@ -376,7 +381,9 @@ export async function refineActionGroundingWithFocusRegion(params: {
   if (action.type !== 'click' && action.type !== 'double_click' && action.type !== 'wait') {
     return { ok: true, action, grounding };
   }
-  const fine = await groundTargetDescription(fineTargetDescription, focusRefs, config);
+  const fine = await groundTargetDescription(fineTargetDescription, focusRefs, config, {
+    coordinateSpace: 'crop-local',
+  });
   if (!fine.ok) {
     return {
       ok: false,
@@ -393,6 +400,31 @@ export async function refineActionGroundingWithFocusRegion(params: {
         fineGrounding: fine.grounding,
       },
       reason: fine.reason,
+    };
+  }
+  const rejectedFineReason = suspiciousFineGroundingReason(fine.x, fine.y, focusRegion, focusRef, fine.grounding);
+  if (rejectedFineReason) {
+    return {
+      ok: true,
+      action,
+      grounding: {
+        ...(grounding ?? {}),
+        status: 'ok',
+        fineGrounding: {
+          ...fine.grounding,
+          status: 'rejected',
+          provider: visionSenseFocusRegionGroundingId(fine.grounding.provider),
+          stage: 'fine',
+          targetDescription: fineTargetDescription,
+          focusScreenshotRef: focusRef.path,
+          focusRegion,
+          cropLocalX: fine.x,
+          cropLocalY: fine.y,
+          rejectionReason: rejectedFineReason,
+        },
+        fineGroundingRejected: true,
+        fineGroundingRejectionReason: rejectedFineReason,
+      },
     };
   }
   const localX = focusRegion.x + fine.x;
@@ -446,6 +478,37 @@ export async function refineActionGroundingWithFocusRegion(params: {
   };
 }
 
+function suspiciousFineGroundingReason(
+  cropLocalX: number,
+  cropLocalY: number,
+  focusRegion: FocusRegion,
+  focusRef: ScreenshotRef,
+  fineGrounding: Record<string, unknown>,
+) {
+  const fineImageSize = isRecord(fineGrounding.imageSize) ? fineGrounding.imageSize : undefined;
+  const fineImageWidth = typeof fineImageSize?.width === 'number' ? fineImageSize.width : undefined;
+  const fineImageHeight = typeof fineImageSize?.height === 'number' ? fineImageSize.height : undefined;
+  const width = fineImageWidth || focusRef.width || focusRegion.width;
+  const height = fineImageHeight || focusRef.height || focusRegion.height;
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return '';
+  const edgeMargin = Math.max(8, Math.min(width, height) * 0.04);
+  const nearEdge = cropLocalX <= edgeMargin
+    || cropLocalY <= edgeMargin
+    || cropLocalX >= width - edgeMargin
+    || cropLocalY >= height - edgeMargin;
+  if (nearEdge) {
+    return `fine grounding landed near focus-crop edge (${cropLocalX.toFixed(1)},${cropLocalY.toFixed(1)}), keeping coarse point`;
+  }
+  const focusCenterX = Number.isFinite(focusRegion.centerX) ? focusRegion.centerX - focusRegion.x : width / 2;
+  const focusCenterY = Number.isFinite(focusRegion.centerY) ? focusRegion.centerY - focusRegion.y : height / 2;
+  const distance = Math.hypot(cropLocalX - focusCenterX, cropLocalY - focusCenterY);
+  const maxAllowedDistance = Math.max(width, height) * 0.4;
+  if (distance > maxAllowedDistance) {
+    return `fine grounding drifted ${distance.toFixed(1)}px from coarse-centered focus core, keeping coarse point`;
+  }
+  return '';
+}
+
 async function visionSenseCoarseToFineRequest(request: Record<string, unknown>) {
   const python = process.env.SCIFORGE_VISION_SENSE_PYTHON || 'python3';
   const modulePath = resolve('packages/observe/vision/sciforge_vision_sense/coarse_to_fine.py');
@@ -469,6 +532,7 @@ async function groundTargetDescription(
   targetDescription: string,
   beforeRefs: ScreenshotRef[],
   config: VisionSenseConfig,
+  options: { coordinateSpace?: 'window-local' | 'crop-local' } = {},
 ): Promise<{ ok: true; x: number; y: number; grounding: Record<string, unknown> } | { ok: false; reason: string; grounding: Record<string, unknown> }> {
   const screenshot = beforeRefs[0];
   if (!screenshot) {
@@ -479,7 +543,11 @@ async function groundTargetDescription(
     };
   }
   if (!config.grounder.baseUrl) {
-    return groundTargetWithVisionModel(targetDescription, screenshot, config);
+    return {
+      ok: false,
+      reason: 'No KV-Ground provider is configured. Set SCIFORGE_VISION_KV_GROUND_URL before running screenshot-grounded Computer Use.',
+      grounding: { status: 'failed', targetDescription, screenshotRef: screenshot.path, provider: visionSenseGroundingIds.kvGround, reason: 'missing KV-Ground provider' },
+    };
   }
   const imagePath = await resolveGrounderImagePath(screenshot, config);
   if (!imagePath.ok) {
@@ -497,59 +565,33 @@ async function groundTargetDescription(
     `Target: ${targetDescription}`,
   ].join(' ');
   const grounderUrl = `${config.grounder.baseUrl.replace(/\/+$/, '')}/predict/`;
+  const coordinateSpace = options.coordinateSpace
+    ?? (screenshot.windowTarget?.coordinateSpace === 'screen' ? 'window-local' : screenshot.windowTarget?.coordinateSpace)
+    ?? 'window-local';
   const response = await postJsonWithTimeout(
     grounderUrl,
     {
       ...(!imagePath.imageBase64 ? { image_path: imagePath.path } : {}),
       ...(imagePath.imageBase64 ? { image_base64: imagePath.imageBase64, image_mime_type: imagePath.imageMimeType ?? 'image/png' } : {}),
       text_prompt: grounderPrompt,
-      coordinate_space: screenshot.windowTarget?.coordinateSpace ?? 'screen',
+      coordinate_space: coordinateSpace,
       window_target: screenshot.windowTarget,
     },
     config.grounder.timeoutMs,
   );
   if (!response.ok) {
-    const fallback = await groundTargetWithVisionModel(targetDescription, screenshot, config);
-    if (fallback.ok) {
-      return {
-        ...fallback,
-        grounding: {
-          ...fallback.grounding,
-          fallbackFrom: visionSenseGroundingIds.kvGround,
-          kvGroundUrl: grounderUrl,
-          kvGroundFailure: response.error,
-        },
-      };
-    }
     return {
       ok: false,
-      reason: [
-        `KV Grounder request failed at ${grounderUrl}: ${response.error}.`,
-        `Fallback visual Grounder failed: ${fallback.reason}`,
-      ].join(' '),
-      grounding: { status: 'failed', targetDescription, screenshotRef: screenshot.path, imagePath: imagePath.path, provider: visionSenseGroundingIds.kvGround, grounderUrl, error: response.error, fallbackReason: fallback.reason },
+      reason: `KV Grounder request failed at ${grounderUrl}: ${response.error}.`,
+      grounding: { status: 'failed', targetDescription, screenshotRef: screenshot.path, imagePath: imagePath.path, provider: visionSenseGroundingIds.kvGround, grounderUrl, error: response.error },
     };
   }
   const coordinates = parseGrounderCoordinates(response.body);
   if (!coordinates) {
-    const fallback = await groundTargetWithVisionModel(targetDescription, screenshot, config);
-    if (fallback.ok) {
-      return {
-        ...fallback,
-        grounding: {
-          ...fallback.grounding,
-          fallbackFrom: visionSenseGroundingIds.kvGround,
-          kvGroundFailure: 'response did not include usable coordinates',
-          kvGroundRawResponse: response.body,
-        },
-      };
-    }
     return {
       ok: false,
-      reason: fallback.reason === 'No visual Grounder is configured.'
-        ? 'Grounder response did not include usable coordinates.'
-        : `Grounder response did not include usable coordinates; fallback visual Grounder also failed: ${fallback.reason}`,
-      grounding: { status: 'failed', targetDescription, screenshotRef: screenshot.path, imagePath: imagePath.path, rawResponse: response.body, fallbackReason: fallback.reason },
+      reason: 'KV Grounder response did not include usable coordinates.',
+      grounding: { status: 'failed', targetDescription, screenshotRef: screenshot.path, imagePath: imagePath.path, provider: visionSenseGroundingIds.kvGround, rawResponse: response.body },
     };
   }
   return {
@@ -563,94 +605,12 @@ async function groundTargetDescription(
       screenshotRef: screenshot.path,
       imagePath: imagePath.path,
       imageUploaded: imagePath.uploaded === true,
+      coordinateSpace,
       x: coordinates.x,
       y: coordinates.y,
-      latencyMs: Date.now() - startedAt,
-      rawResponse: response.body,
-    },
-  };
-}
-
-async function groundTargetWithVisionModel(
-  targetDescription: string,
-  screenshot: ScreenshotRef,
-  config: VisionSenseConfig,
-): Promise<{ ok: true; x: number; y: number; grounding: Record<string, unknown> } | { ok: false; reason: string; grounding: Record<string, unknown> }> {
-  if (!config.grounder.visionBaseUrl || !config.grounder.visionApiKey || !config.grounder.visionModel) {
-    return {
-      ok: false,
-      reason: [
-        'No Grounder is configured. Set SCIFORGE_VISION_KV_GROUND_URL for KV-Ground,',
-        'or configure SCIFORGE_VISION_GROUNDER_LLM_BASE_URL/API_KEY/MODEL for an OpenAI-compatible visual Grounder.',
-      ].join(' '),
-      grounding: { status: 'failed', targetDescription, screenshotRef: screenshot.path, reason: 'missing grounder provider' },
-    };
-  }
-  const modelIssue = visionModelIssue(config.grounder.visionModel);
-  if (modelIssue) {
-    return {
-      ok: false,
-      reason: `OpenAI-compatible visual Grounder model is not configured as a VLM: ${modelIssue}`,
-      grounding: { status: 'failed', provider: visionSenseGroundingIds.openAiCompatibleVisionGrounder, targetDescription, screenshotRef: screenshot.path, reason: 'text-only model configured for visual grounding' },
-    };
-  }
-  const startedAt = Date.now();
-  const imageBase64 = (await readFile(screenshot.absPath)).toString('base64');
-  const response = await postOpenAiChatCompletion(
-    {
-      baseUrl: config.grounder.visionBaseUrl,
-      apiKey: config.grounder.visionApiKey,
-      model: config.grounder.visionModel,
-      timeoutMs: config.grounder.visionTimeoutMs,
-      maxTokens: config.grounder.visionMaxTokens,
-    },
-    [
-      {
-        role: 'system',
-        content: [
-          'You are SciForge Grounder for generic Computer Use.',
-          'Return only JSON with pixel coordinates in the supplied target-window screenshot coordinate system.',
-          'Do not use DOM, accessibility, selectors, app APIs, or private shortcuts.',
-          'Schema: {"coordinates":[x,y],"confidence":0..1,"reason":"short visual evidence"}.',
-        ].join(' '),
-      },
-      {
-        role: 'user',
-        content: [
-          { type: 'text', text: `Locate this visual target: ${targetDescription}\nScreenshot size metadata: width=${screenshot.width ?? 'unknown'} height=${screenshot.height ?? 'unknown'}.\nWindow target metadata: ${JSON.stringify(screenshot.windowTarget ?? { mode: 'display', coordinateSpace: 'screen' })}.` },
-          { type: 'image_url', image_url: { url: `data:image/png;base64,${imageBase64}` } },
-        ],
-      },
-    ],
-  );
-  if (!response.ok) {
-    return {
-      ok: false,
-      reason: `OpenAI-compatible visual Grounder request failed: ${response.error}`,
-      grounding: { status: 'failed', provider: visionSenseGroundingIds.openAiCompatibleVisionGrounder, targetDescription, screenshotRef: screenshot.path, error: response.error },
-    };
-  }
-  const content = extractChatCompletionContent(response.body);
-  const json = typeof content === 'string' ? extractJsonObject(content) : undefined;
-  const coordinates = parseGrounderCoordinates(isRecord(json) ? json : response.body);
-  if (!coordinates) {
-    return {
-      ok: false,
-      reason: 'OpenAI-compatible visual Grounder response did not include usable coordinates.',
-      grounding: { status: 'failed', provider: visionSenseGroundingIds.openAiCompatibleVisionGrounder, targetDescription, screenshotRef: screenshot.path, rawResponse: response.body },
-    };
-  }
-  return {
-    ok: true,
-    x: coordinates.x,
-    y: coordinates.y,
-    grounding: {
-      status: 'ok',
-      provider: visionSenseGroundingIds.openAiCompatibleVisionGrounder,
-      targetDescription,
-      screenshotRef: screenshot.path,
-      x: coordinates.x,
-      y: coordinates.y,
+      confidence: numberConfig(response.body.confidence),
+      rawText: typeof response.body.raw_text === 'string' ? response.body.raw_text : undefined,
+      imageSize: response.body.image_size,
       latencyMs: Date.now() - startedAt,
       rawResponse: response.body,
     },

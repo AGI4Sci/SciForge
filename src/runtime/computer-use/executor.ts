@@ -12,6 +12,7 @@ import {
 import type { ComputerUseConfig, GenericSwiftGuiAction, GenericVisionAction, ResolvedWindowTarget, WindowTargetResolution } from './types.js';
 import { acquireComputerUseSchedulerLease, computerUseSchedulerLockId, schedulerLeaseTrace } from './scheduler.js';
 import { appleScriptString, isDarwinPlatform, runCommand, sleep } from './utils.js';
+import { defaultMacBundleIdForAppName } from './window-target.js';
 
 export async function executeGenericDesktopAction(action: GenericVisionAction, config: ComputerUseConfig, targetResolution: WindowTargetResolution) {
   if (!targetResolution.ok) {
@@ -27,6 +28,13 @@ export async function executeGenericDesktopAction(action: GenericVisionAction, c
       exitCode: 125,
       stdout: '',
       stderr: inputBlockReason,
+    };
+  }
+  if (!config.dryRun && targetResolution.captureKind !== 'window' && action.type !== 'wait' && action.type !== 'open_app') {
+    return {
+      exitCode: 125,
+      stdout: '',
+      stderr: 'Real Computer Use pointer/keyboard action blocked before execution because no target window is resolved. Use open_app or configure WindowTarget before click, type_text, press_key, hotkey, scroll, or drag actions.',
     };
   }
   const lease = await acquireComputerUseSchedulerLease({
@@ -93,9 +101,10 @@ function realInputBlockReason(action: GenericVisionAction, config: ComputerUseCo
 async function executeGenericMacAction(action: GenericVisionAction, config: ComputerUseConfig, targetResolution: ResolvedWindowTarget) {
   if (action.type === 'open_app') {
     const appName = resolveAppAlias(action.appName);
+    const bundleId = defaultMacBundleIdForAppName(action.appName) ?? defaultMacBundleIdForAppName(appName);
     const openResult = await runCommand('open', ['-a', appName], { timeoutMs: 30000 });
     if (openResult.exitCode !== 0) return openResult;
-    const activateResult = await activateMacApp(appName);
+    const activateResult = await activateMacApp(appName, bundleId);
     return activateResult.exitCode === 0
       ? { ...activateResult, stdout: [openResult.stdout, activateResult.stdout, appName !== action.appName ? `app-alias ${action.appName} -> ${appName}` : ''].filter(Boolean).join('\n') }
       : {

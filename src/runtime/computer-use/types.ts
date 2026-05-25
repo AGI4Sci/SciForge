@@ -37,24 +37,25 @@ export interface ComputerUseConfig {
   schedulerLockTimeoutMs?: number;
   schedulerStaleLockMs?: number;
   inputAdapter?: string;
+  independentInputAdapterProvider?: string;
   allowSharedSystemInput?: boolean;
   showVisualCursor?: boolean;
+  visibleTextExtraction?: VisionVisibleTextExtractionConfig;
   completionPolicy?: VisionCompletionPolicy;
-  planner: VisionPlannerConfig;
+  planner: ComputerUsePlannerConfig;
   grounder: VisionGrounderConfig;
-  plannedActions: GenericVisionAction[];
+  testActionFixtureMode: boolean;
+  testOnlyPlannedActions: GenericVisionAction[];
 }
 
 export interface VisionCompletionPolicy {
   mode?: 'planner-confirmed' | 'one-successful-non-wait-action';
   reason?: string;
-  fallbackActions?: GenericVisionAction[];
 }
 
-export interface VisionPlannerConfig {
-  baseUrl?: string;
-  apiKey?: string;
-  model?: string;
+export interface ComputerUsePlannerConfig {
+  profile?: string;
+  allowOpenAiRuntime?: boolean;
   timeoutMs: number;
   maxTokens: number;
 }
@@ -74,11 +75,12 @@ export interface VisionGrounderConfig {
     identityFile?: string;
     remoteUrlPrefix?: string;
   };
-  visionBaseUrl?: string;
-  visionApiKey?: string;
-  visionModel?: string;
-  visionTimeoutMs: number;
-  visionMaxTokens: number;
+}
+
+export interface VisionVisibleTextExtractionConfig {
+  enabled: boolean;
+  provider?: 'macos-vision-framework-ocr';
+  maxItems?: number;
 }
 
 export interface WindowTarget {

@@ -28,6 +28,7 @@ import { RunningWorkProcess } from './chat/RunningWorkProcess';
 import { RunExecutionProcess, RunKeyInfo } from './chat/RunExecutionProcess';
 import { TargetInstanceSelector } from './chat/TargetInstanceSelector';
 import { FinalMessageContent } from './chat/FinalMessageContent';
+import type { RuntimeGuiSurface } from './chat/RuntimeGuiPanel';
 import { ContextWindowMeter } from './chat/ContextWindowMeter';
 import { SciForgeReferenceChips } from './chat/ReferenceChips';
 import { CURRENT_TARGET_INSTANCE_VALUE, enabledPeerInstances, selectedPeerInstance } from './chat/targetInstance';
@@ -903,6 +904,15 @@ export function ChatPanel({
     }
   }
 
+  function handleGuiCommand(commandText: string) {
+    const nextInput = commandText.trim();
+    if (!nextInput) return;
+    inputRef.current = nextInput;
+    onInputChange(nextInput);
+    setComposerExpanded(true);
+    window.requestAnimationFrame(() => composerTextareaRef.current?.focus());
+  }
+
   return (
     <div className="chat-panel">
       <ChatPanelHeader
@@ -1028,6 +1038,8 @@ export function ChatPanel({
                         content={sanitizeUserProjectionText(message.content) ?? message.content}
                         references={inlineObjectReferencesForMessage(message, session, messageRunId, { workspaceObjectReferences })}
                         resultPresentation={resultPresentationForRun(session, messageRunId)}
+                        runtimeGui={runtimeGuiForRun(session, messageRunId)}
+                        onGuiCommand={handleGuiCommand}
                         onObjectFocus={handleObjectReferenceClick}
                       />
                       {messageRunId ? (
@@ -1167,6 +1179,20 @@ function resultPresentationForRun(session: SciForgeSession, runId: string | unde
   // Only use the top-level resultPresentation. raw.displayIntent is runtime audit/diagnostic
   // data used by the results panel; it must NOT drive the chat message body.
   return isRecord(direct) ? direct : undefined;
+}
+
+function runtimeGuiForRun(session: SciForgeSession, runId: string | undefined): RuntimeGuiSurface | undefined {
+  if (!runId) return undefined;
+  const run = session.runs.find((item) => item.id === runId);
+  const raw = isRecord(run?.raw) ? run.raw : undefined;
+  if (!raw) return undefined;
+  const guiPresentation = isRecord(raw.guiPresentation) ? raw.guiPresentation : undefined;
+  const guiAskUser = isRecord(raw.guiAskUser) ? raw.guiAskUser : undefined;
+  if (!guiPresentation && !guiAskUser) return undefined;
+  return {
+    guiPresentation,
+    guiAskUser,
+  };
 }
 
 async function copyTextToClipboard(text: string) {

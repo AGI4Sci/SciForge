@@ -19,6 +19,7 @@ import {
 } from '../../../packages/actions/computer-use/runtime-policy.js';
 import type { ComputerUseConfig, ResolvedWindowTarget, TraceWindowTarget, WindowBounds, WindowTarget, WindowTargetResolution } from './types.js';
 import { computerUseSchedulerLockId } from './scheduler.js';
+import { hasExecutableIndependentInputAdapter } from './independent-input-adapter.js';
 import { booleanConfig, envOrValue, isDarwinPlatform, numberConfig, parseJson, runCommand, stringConfig, swiftOptionalString, swiftString } from './utils.js';
 
 export function parseWindowTarget(requestConfig: Record<string, unknown>, fileConfig: Record<string, unknown>): WindowTarget {
@@ -32,8 +33,8 @@ export function parseWindowTarget(requestConfig: Record<string, unknown>, fileCo
   const targetConfig = isRecordLike(rawTarget) ? rawTarget : {};
   const windowId = numberConfig(process.env.SCIFORGE_VISION_WINDOW_ID, targetConfig.windowId, targetConfig.window_id);
   const processId = numberConfig(process.env.SCIFORGE_VISION_WINDOW_PROCESS_ID, targetConfig.processId, targetConfig.process_id, targetConfig.pid);
-  const bundleId = stringConfig(process.env.SCIFORGE_VISION_WINDOW_BUNDLE_ID, targetConfig.bundleId, targetConfig.bundle_id);
   const appName = stringConfig(process.env.SCIFORGE_VISION_WINDOW_APP_NAME, targetConfig.appName, targetConfig.app_name, targetConfig.application);
+  const bundleId = stringConfig(process.env.SCIFORGE_VISION_WINDOW_BUNDLE_ID, targetConfig.bundleId, targetConfig.bundle_id) ?? defaultMacBundleIdForAppName(appName);
   const title = stringConfig(process.env.SCIFORGE_VISION_WINDOW_TITLE, targetConfig.title, targetConfig.windowTitle, targetConfig.window_title);
   const displayId = numberConfig(process.env.SCIFORGE_VISION_WINDOW_DISPLAY_ID, targetConfig.displayId, targetConfig.display_id);
   const bounds = parseWindowBounds(envOrValue(process.env.SCIFORGE_VISION_WINDOW_BOUNDS, targetConfig.bounds, targetConfig.windowBounds, targetConfig.window_bounds));
@@ -89,7 +90,9 @@ export async function resolveWindowTarget(config: ComputerUseConfig): Promise<Wi
       contentRect: target.contentRect,
       devicePixelRatio: target.devicePixelRatio,
       captureTimestamp: new Date().toISOString(),
-      diagnostics: ['window targeting disabled; using configured display capture for compatibility'],
+      diagnostics: config.dryRun
+        ? ['dry-run display capture accepted without target-window probing']
+        : ['window targeting is not configured; display capture is observation-only until open_app binds a target window'],
     };
   }
   if (config.dryRun) {
@@ -119,42 +122,11 @@ export async function resolveWindowTarget(config: ComputerUseConfig): Promise<Wi
   }
   if (!isDarwinPlatform(config.desktopPlatform)) {
     const reason = `WindowTarget mode="${target.mode}" is configured, but no target-window provider is available for desktopPlatform="${config.desktopPlatform}".`;
-    return target.required
-      ? { ok: false, target, reason, diagnostics: [reason] }
-      : {
-          ok: true,
-          target,
-          captureKind: 'display',
-          coordinateSpace: 'screen',
-          inputIsolation: 'best-effort',
-          schedulerLockId: schedulerLockIdForTarget(target, 'display'),
-          source: 'display-fallback',
-          displayId: target.displayId,
-          bounds: target.bounds,
-          contentRect: target.contentRect,
-          devicePixelRatio: target.devicePixelRatio,
-          captureTimestamp: new Date().toISOString(),
-          diagnostics: [reason, 'falling back to display capture because windowTarget.required=false'],
-        };
+    return { ok: false, target, reason, diagnostics: [reason] };
   }
   const detected = await detectMacWindowTarget(target);
   if (detected.ok) return detected;
-  if (target.required) return detected;
-  return {
-    ok: true,
-    target,
-    captureKind: 'display',
-    coordinateSpace: 'screen',
-    inputIsolation: 'best-effort',
-    schedulerLockId: schedulerLockIdForTarget(target, 'display'),
-    source: 'display-fallback',
-    displayId: target.displayId,
-    bounds: target.bounds,
-    contentRect: target.contentRect,
-    devicePixelRatio: target.devicePixelRatio,
-    captureTimestamp: new Date().toISOString(),
-    diagnostics: [...detected.diagnostics, 'falling back to display capture because windowTarget.required=false'],
-  };
+  return detected;
 }
 
 export function parseWindowBounds(value: unknown): WindowBounds | undefined {
@@ -302,6 +274,7 @@ export function inputChannelContract(config: ComputerUseConfig, targetResolution
     desktopPlatform: config.desktopPlatform,
     dryRun: config.dryRun,
     inputAdapter: config.inputAdapter,
+    independentAdapterReady: hasExecutableIndependentInputAdapter(config),
     allowSharedSystemInput: config.allowSharedSystemInput,
     showVisualCursor: config.showVisualCursor,
     targetResolved: targetResolution.ok,
@@ -318,6 +291,13 @@ function usesSharedSystemInput(config: ComputerUseConfig | undefined) {
 
 export function isWindowLocalCoordinateSpace(value: string | undefined) {
   return isComputerUseWindowLocalCoordinateSpace(value);
+}
+
+export function defaultMacBundleIdForAppName(appName: string | undefined) {
+  const normalized = appName?.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (normalized === 'finder' || normalized === '\u8bbf\u8fbe') return 'com.apple.finder';
+  return undefined;
 }
 
 async function detectMacWindowTarget(target: WindowTarget): Promise<WindowTargetResolution> {
@@ -497,8 +477,9 @@ for window in windows {
   let processId = window[kCGWindowOwnerPID as String] as? Int32
   let runningApp = processId.flatMap { NSRunningApplication(processIdentifier: $0) }
   let bundleId = runningApp?.bundleIdentifier ?? ""
-  if let targetApp, appName.range(of: targetApp, options: [.caseInsensitive]) == nil { continue }
-  if let targetBundle, bundleId.range(of: targetBundle, options: [.caseInsensitive]) == nil { continue }
+  let appMatches = targetApp != nil && appName.range(of: targetApp!, options: [.caseInsensitive]) != nil
+  let bundleMatches = targetBundle != nil && bundleId.range(of: targetBundle!, options: [.caseInsensitive]) != nil
+  if (targetApp != nil || targetBundle != nil) && !appMatches && !bundleMatches { continue }
   let windowId = window[kCGWindowNumber as String] as? UInt32 ?? 0
   let bounds = window[kCGWindowBounds as String] as? [String: Any] ?? [:]
   let x = bounds["X"] as? CGFloat ?? bounds["x"] as? CGFloat ?? 0

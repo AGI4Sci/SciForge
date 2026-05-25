@@ -18,7 +18,7 @@ metadata:
 ## Agent 快速契约
 
 - 类型：sense-plugin tool。输入是 `text + screenshot/image modalities`，输出只允许是文本和 refs。
-- 边界：skill 构造 `SensePluginRequest` 或 `VisionTaskRequest`；本包输出视觉观察、grounding 摘要、trace refs，以及可选的 action suggestion 文本。真实 Computer Use 规划与执行属于独立 consumer/provider，不在本包内。
+- 边界：skill 构造 `SensePluginRequest`；本包输出视觉观察、grounding 摘要、trace refs，以及可选的候选目标描述文本。真实 Computer Use 规划与执行属于独立 consumer/provider，不在本包内。
 - Runtime：Python package 位于 `packages/observe/vision`，import root 是 `sciforge_vision_sense`。
 - 适合：解释截图/图像、生成视觉目标描述、输出 KV-Ground 坐标证据、text-only observation 和 file-ref-only trace memory。
 - 避免：执行代码或桌面动作、持有鼠标/键盘状态、读取 DOM/accessibility tree、处理支付/删除/发送/授权等高风险操作，或在没有外部 Computer Use trace 的情况下声称 GUI action 已执行。

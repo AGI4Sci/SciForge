@@ -261,7 +261,9 @@ npm run smoke:stable-version-registry
 
 ## Computer Use
 
-当前通路由 `local.vision-sense` 触发。它是 sense plugin，负责把截图/图像/GUI 状态转成可审计文本信号和 trace refs；桌面执行由 runtime 的 generic Computer Use loop 和上游桌面 bridge 承担。
+当前目标通路由 TUI Host 调用 `packages/actions/computer-use` 的 `runTask(request, hostPorts)`。`local.vision-sense` / `packages/observe/vision` 是可选 sense provider，只负责截图、视觉观察、focus region、KV-Ground grounding 辅助和 verifier feedback；桌面动作由 Computer Use action provider 经 Host ports 执行。GUI 只发送 `/computer-use ...` 这类 terminal-equivalent text，并由 TUI Host 决定是否调用 `gui.present` / `gui.ask_user`。
+
+默认 Computer Use runtime 已收敛到 package-backed host adapter：desktop bridge preflight 通过后，runtime 会通过 `python -m sciforge_computer_use --host-port-stdio` 调用 Python package 的 `run_task(request, hostPorts)`，再把 package result 映射成 TUI Host 的 `gui.present` / `gui.ask_user` action metadata。该路径证明 package process boundary；最终验收仍必须完成真实 L1/L2/L3 和 Codex in-app browser 可见证据。
 
 启用真实桌面 bridge：
 
@@ -269,16 +271,37 @@ npm run smoke:stable-version-registry
 export SCIFORGE_VISION_DESKTOP_BRIDGE=1
 ```
 
+KV-Ground 默认本地 endpoint 是 `http://127.0.0.1:18081`。接入前先记录实际 endpoint，并至少做一次 health check：
+
+```bash
+export SCIFORGE_VISION_KV_GROUND_URL="http://127.0.0.1:18081"
+export SCIFORGE_VISION_KV_GROUND_UPLOAD_STRATEGY="inline"
+curl "$SCIFORGE_VISION_KV_GROUND_URL/health"
+```
+
+`/predict/` smoke 要使用本机截图或测试图，确认返回包含 `coordinates`、`image_size` 和可解析坐标系。KV-Ground 服务读不到本机路径时保持 `SCIFORGE_VISION_KV_GROUND_UPLOAD_STRATEGY=inline`，由 SciForge 在请求里发送 `image_base64`；只有明确存在共享挂载和路径前缀映射时才传服务端可读 `image_path`。
+
+真实输入优先使用独立 input adapter。当前通用第一片是 `remote-desktop` + `sciforge-simulated-remote-desktop`：它维护 SciForge 自己的虚拟 pointer/keyboard state，写出 `independent-input-adapter.json` 和虚拟 pointer SVG，不移动系统鼠标、不发送全局系统键盘事件。
+
+```bash
+export SCIFORGE_VISION_INPUT_ADAPTER=remote-desktop
+export SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER=sciforge-simulated-remote-desktop
+```
+
+未注册可执行 provider 的 `remote-desktop` 或 `virtual-hid` 会 fail closed。没有独立 adapter 时，系统鼠标键盘是 shared system input：只能在低风险、聚焦窗口 smoke 中显式允许，执行期间不要和用户手动输入并发：
+
+```bash
+export SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT=1
+```
+
+每轮 Computer Use 输出应写到 `.sciforge/vision-runs/<run-id>/`，trace 只保存 file refs、before/after screenshot refs、focus crop refs、sha256、尺寸、target description、坐标、provider metadata、executor lease、verifier verdict、approval/audit refs 和 diagnostics，不内联截图/base64。
+
 常用配置还包括：
 
 - `SCIFORGE_VISION_CAPTURE_DISPLAYS`
-- `SCIFORGE_VISION_PLANNER_BASE_URL`
-- `SCIFORGE_VISION_PLANNER_API_KEY`
-- `SCIFORGE_VISION_PLANNER_MODEL`
+- `SCIFORGE_RUNTIME_API_KEY`
+- `SCIFORGE_COMPUTER_USE_PLANNER_PROFILE`
 - `SCIFORGE_VISION_KV_GROUND_URL`
-- `SCIFORGE_VISION_GROUNDER_LLM_BASE_URL`
-- `SCIFORGE_VISION_GROUNDER_LLM_API_KEY`
-- `SCIFORGE_VISION_GROUNDER_LLM_MODEL`
 
 详细能力边界和排障见 [`../packages/observe/vision/README.md`](../packages/observe/vision/README.md) 与 [`../packages/actions/computer-use/README.md`](../packages/actions/computer-use/README.md)。
 

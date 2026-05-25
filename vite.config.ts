@@ -100,7 +100,7 @@ function sciForgeRuntimeLauncher() {
         }
         try {
           const body = await readJsonBody(req);
-          const { pickWorkspaceDirectoryPath } = await import('./src/runtime/server/workspace-directory-picker.ts');
+          const { pickWorkspaceDirectoryPath } = await import('./src/runtime/server/workspace-directory-picker.js');
           const path = await pickWorkspaceDirectoryPath({
             defaultPath: typeof body.defaultPath === 'string' ? body.defaultPath : undefined,
           });

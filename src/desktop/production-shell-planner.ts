@@ -40,7 +40,8 @@ export type DesktopPreloadApiMethod =
   | 'getRuntimeReady'
   | 'requestShutdown'
   | 'openExternal'
-  | 'revealPath';
+  | 'revealPath'
+  | 'pickDirectory';
 
 export type DesktopPreloadContract = {
   apiName: 'sciforgeDesktop';

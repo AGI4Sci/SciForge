@@ -47,6 +47,7 @@ export function RunExecutionProcess({
   const sections = projection
     ? projectionExecutionProcessSections(projection, auditObjectReferences)
     : executionProcessSections(run, units, auditObjectReferences, trace);
+  const runtimeMetadata = projection?.runtimeMetadata;
   if (!sections.length) return null;
   return (
     <div
@@ -55,6 +56,7 @@ export function RunExecutionProcess({
       data-testid="chat-process-thread"
       data-process-source={projection ? 'semantic-summary' : 'recorded-summary'}
     >
+      {runtimeMetadata ? <RuntimeMetadataRow metadata={runtimeMetadata} /> : null}
       {sections.map((section) => {
         const references = mergeObjectReferences(
           section.references ?? [],
@@ -78,6 +80,29 @@ export function RunExecutionProcess({
           </details>
         );
       })}
+    </div>
+  );
+}
+
+function RuntimeMetadataRow({ metadata }: { metadata: NonNullable<UiConversationProjection['runtimeMetadata']> }) {
+  const entries = [
+    metadata.provider ? ['provider', metadata.provider] : undefined,
+    metadata.model ? ['model', metadata.model] : undefined,
+    metadata.profile ? ['profile', metadata.profile] : undefined,
+    metadata.workspace ? ['workspace', metadata.workspace] : undefined,
+    metadata.commandId ? ['command', metadata.commandId] : undefined,
+  ].filter((entry): entry is [string, string] => Boolean(entry));
+  if (!entries.length) return null;
+  return (
+    <div className="runtime-trace-row" aria-label="Runtime Codex 可见追踪元数据" data-testid="runtime-metadata-row">
+      <span className="runtime-trace-label">Runtime Codex</span>
+      {entries.map(([label, value]) => (
+        <span className="runtime-trace-item" key={label}>
+          <span className="runtime-trace-key">{label}</span>
+          <span className="runtime-trace-value">{value}</span>
+        </span>
+      ))}
+      {metadata.foldedAudit ? <span className="runtime-trace-audit">raw audit folded</span> : null}
     </div>
   );
 }

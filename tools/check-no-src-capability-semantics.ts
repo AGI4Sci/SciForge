@@ -142,7 +142,6 @@ const trackedBaselineCounts: Record<string, number> = {
   'src/runtime/task-projects.ts#artifact-id-hardcode': 0,
   'src/runtime/task-projects.ts#domain-default-routing': 0,
   'src/runtime/vision-sense-runtime.ts#artifact-id-hardcode': 0,
-  'src/runtime/vision-sense/computer-use-action-loop.ts#artifact-id-hardcode': 0,
   'src/runtime/vision-sense/computer-use-grounding.ts#scenario-provider-id-hardcode': 0,
   'src/runtime/vision-sense/computer-use-plan.ts#domain-prompt-regex': 0,
   'src/runtime/vision-sense/computer-use-trace-output.ts#artifact-id-hardcode': 0,

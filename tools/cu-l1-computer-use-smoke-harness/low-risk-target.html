@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>SciForge CU L1 Low Risk Smoke Target</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 3rem;
+        max-width: 56rem;
+      }
+
+      label,
+      button,
+      output {
+        display: block;
+        margin-top: 1rem;
+      }
+
+      label,
+      output {
+        font-size: 1.35rem;
+      }
+
+      input {
+        box-sizing: border-box;
+        display: block;
+        font-size: 1.25rem;
+        height: 3.5rem;
+        margin-top: 0.5rem;
+        padding: 0.4rem 0.75rem;
+        width: min(46rem, calc(100vw - 6rem));
+      }
+
+      button {
+        font-size: 1.25rem;
+        font-weight: 700;
+        height: 4rem;
+        width: 18rem;
+      }
+
+      output {
+        font-weight: 700;
+        min-height: 2rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>SciForge CU L1 Low Risk Smoke Target</h1>
+      <form id="cu-smoke-form" action="#">
+        <label for="cu-smoke-input">Input</label>
+        <input id="cu-smoke-input" name="cu-smoke-input" autocomplete="off" />
+        <button id="cu-smoke-button" type="submit">Write Result</button>
+      </form>
+      <output id="cu-smoke-result" aria-live="polite">Result text: waiting</output>
+    </main>
+    <script>
+      const input = document.querySelector('#cu-smoke-input');
+      const result = document.querySelector('#cu-smoke-result');
+      document.querySelector('#cu-smoke-form').addEventListener('submit', (event) => {
+        event.preventDefault();
+        result.textContent = `Result text: ${input.value || 'empty'}`;
+      });
+    </script>
+  </body>
+</html>

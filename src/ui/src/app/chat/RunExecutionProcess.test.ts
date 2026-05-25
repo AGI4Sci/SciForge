@@ -210,6 +210,65 @@ test('execution process distinguishes verification states from execution success
   assertNoInternalTerms(html);
 });
 
+test('execution process renders final Runtime Codex metadata without raw audit streams', () => {
+  const html = renderToStaticMarkup(createElement(RunExecutionProcess, {
+    runId: 'run-runtime-metadata',
+    session: withMaterializedProjectionFixture({
+      ...session([]),
+      runs: [{
+        id: 'run-runtime-metadata',
+        scenarioId: 'literature-evidence-review',
+        status: 'completed',
+        prompt: 'runtime metadata visible',
+        response: 'done',
+        createdAt: '2026-05-25T00:00:00.000Z',
+        raw: {
+          displayIntent: {
+            conversationProjection: {
+              schemaVersion: 'sciforge.conversation-projection.v1',
+              conversationId: 'runtime-metadata',
+              visibleAnswer: { status: 'satisfied', text: 'Runtime answer rendered.', artifactRefs: [] },
+              artifacts: [],
+              executionProcess: [{
+                eventId: 'runtime-metadata:gui-present',
+                type: 'GuiPresent',
+                summary: 'Runtime Codex answer rendered through gui.present.',
+                timestamp: '2026-05-25T00:00:01.000Z',
+              }],
+              recoverActions: [],
+              verificationState: { status: 'unverified' },
+              runtimeMetadata: {
+                provider: 'sciforge-deepseek-proxy',
+                model: 'bailian/deepseek-v4-flash',
+                profile: 'sciforge-runtime-deepseek',
+                workspace: '/Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p1',
+                commandId: 'codex-command-visible',
+                attemptId: 'codex-command-visible-attempt-1',
+                auditRefs: ['audit:codex-runtime:codex-command-visible:codex-command-visible-attempt-1:raw-jsonl'],
+                foldedAudit: true,
+              },
+              auditRefs: ['audit:codex-runtime:codex-command-visible:codex-command-visible-attempt-1:raw-jsonl'],
+              diagnostics: [],
+            },
+          },
+        },
+      }],
+      executionUnits: [],
+    }),
+    onObjectFocus: () => undefined,
+  }));
+
+  assert.match(html, /Runtime Codex/);
+  assert.match(html, /provider/);
+  assert.match(html, /sciforge-deepseek-proxy/);
+  assert.match(html, /bailian\/deepseek-v4-flash/);
+  assert.match(html, /sciforge-runtime-deepseek/);
+  assert.match(html, /\/Applications\/workspace\/ailab\/research\/app\/SciForge\/workspace\/parallel\/p1/);
+  assert.match(html, /codex-command-visible/);
+  assert.match(html, /raw audit folded/);
+  assert.doesNotMatch(html, /RAW_JSONL|RAW_STDERR|RAW_STDOUT|stderr|stdout/i);
+});
+
 function renderProcess(executionUnits: RuntimeExecutionUnit[]) {
   return renderToStaticMarkup(createElement(RunExecutionProcess, {
     runId: 'run-1',
@@ -274,8 +333,6 @@ function assertNoInternalTerms(html: string) {
     /\bSSE\b/,
     /\bstdout\b/i,
     /\bstderr\b/i,
-    /\bprovider\b/i,
-    /\brun\s*id\b/i,
   ]) {
     assert.doesNotMatch(html, pattern);
   }

@@ -13,11 +13,14 @@ def result_to_trace(result: ComputerUseResult) -> dict[str, Any]:
 
     trace = {
         "schemaVersion": "sciforge.computer-use.loop-trace.v1",
+        "resultSchemaVersion": result.schema_version,
         "status": result.status,
         "reason": result.reason,
+        "approvalRequest": _compact_dataclass(result.approval_request),
         "metrics": dict(result.metrics),
         "failureDiagnostics": dict(result.failure_diagnostics),
         "finalObservationRef": result.final_observation.ref if result.final_observation else None,
+        "traceRefs": list(result.trace_refs),
         "steps": [_step_to_trace(step) for step in result.steps],
         "budgetDebits": [dict(debit) for debit in result.budget_debits],
         "budgetDebitRefs": list(result.budget_debit_refs),
@@ -40,6 +43,7 @@ def compact_result_for_handoff(result: ComputerUseResult) -> dict[str, Any]:
         "status": result.status,
         "reason": result.reason,
         "refs": [ref for ref in refs if ref],
+        "traceRefs": trace["traceRefs"],
         "actions": [
             {
                 "index": step["index"],
@@ -52,6 +56,7 @@ def compact_result_for_handoff(result: ComputerUseResult) -> dict[str, Any]:
             for step in trace["steps"]
         ],
         "failureDiagnostics": trace["failureDiagnostics"],
+        "approvalRequest": trace.get("approvalRequest"),
         "budgetDebits": trace["budgetDebits"],
         "budgetDebitRefs": trace["budgetDebitRefs"],
     }

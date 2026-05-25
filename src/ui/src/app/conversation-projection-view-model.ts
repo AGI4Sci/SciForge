@@ -54,6 +54,17 @@ export interface UiConversationProjection {
     verifierRef?: string;
     verdict?: string;
   };
+  runtimeMetadata?: {
+    provider?: string;
+    model?: string;
+    profile?: string;
+    workspace?: string;
+    commandId?: string;
+    attemptId?: string;
+    codexSessionId?: string;
+    auditRefs?: string[];
+    foldedAudit?: boolean;
+  };
   backgroundState?: {
     status?: string;
     checkpointRefs?: string[];
@@ -290,6 +301,7 @@ function normalizeConversationProjection(value: unknown, fallbackTimestamp?: str
       verifierRef: asString(value.verificationState.verifierRef),
       verdict: asString(value.verificationState.verdict),
     } : undefined,
+    runtimeMetadata: normalizeRuntimeMetadata(value.runtimeMetadata),
     backgroundState: isRecord(value.backgroundState) ? {
       status: asString(value.backgroundState.status),
       checkpointRefs: asStringList(value.backgroundState.checkpointRefs),
@@ -303,6 +315,24 @@ function normalizeConversationProjection(value: unknown, fallbackTimestamp?: str
       refs: recordList(diagnostic.refs).map((ref) => ({ ref: asString(ref.ref) })),
     })),
   };
+}
+
+function normalizeRuntimeMetadata(value: unknown): UiConversationProjection['runtimeMetadata'] {
+  if (!isRecord(value)) return undefined;
+  const metadata = {
+    provider: asString(value.provider),
+    model: asString(value.model),
+    profile: asString(value.profile),
+    workspace: asString(value.workspace),
+    commandId: asString(value.commandId),
+    attemptId: asString(value.attemptId),
+    codexSessionId: asString(value.codexSessionId),
+    auditRefs: asStringList(value.auditRefs),
+    foldedAudit: typeof value.foldedAudit === 'boolean' ? value.foldedAudit : undefined,
+  };
+  return Object.entries(metadata).some(([, entry]) => Array.isArray(entry) ? entry.length > 0 : entry !== undefined)
+    ? metadata
+    : undefined;
 }
 
 function completionCandidateProjectionFromRun(run: SciForgeRun | undefined, fallbackTimestamp?: string): UiConversationProjection | undefined {

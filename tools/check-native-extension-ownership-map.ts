@@ -24,6 +24,7 @@ type OwnershipEntry = {
   enforcementScripts?: unknown;
   allowedGuiCommandVerbs?: unknown;
   forbiddenOwners?: unknown;
+  remainingMigrationSubtasks?: unknown;
   migrationNote?: unknown;
 };
 
@@ -90,10 +91,27 @@ async function main() {
   assert.match(String(providerRoute?.migrationNote), /fail closed/);
 
   const computerUse = entriesById.get('computer-use');
-  assert.equal(computerUse?.owner, 'sense-plugin-plus-upstream-desktop-bridge');
+  assert.equal(computerUse?.owner, 'codex-tui-native-action-provider');
   assert.match(JSON.stringify(computerUse), /packages\/observe\/vision/);
   assert.match(JSON.stringify(computerUse), /packages\/actions\/computer-use/);
   assert.match(JSON.stringify(computerUse), /React\/UI Computer Use executor/);
+  if (computerUse?.status === 'migrating') {
+    const remaining = assertMigrationSubtasks(computerUse.remainingMigrationSubtasks, 'computer-use.remainingMigrationSubtasks');
+    const requiredMigrationIds = [
+      'CU-PKG-01-action-schema',
+      'CU-PKG-02-window-target-contract',
+      'CU-PKG-03-scheduler-lease-contract',
+      'CU-PKG-04-executor-adapter-contract',
+      'CU-PKG-05-package-bridge-plan-locate-verify-trace',
+      'CU-PKG-06-coordinate-and-focus-policy',
+      'CU-PKG-07-stale-policy-wrapper-cleanup',
+      'CU-PKG-08-planner-text-policy',
+      'CU-PKG-09-capture-observation-visible-text',
+      'CU-PKG-10-independent-simulated-input-adapter',
+    ];
+    const remainingIds = new Set(remaining.map((entry) => entry.id));
+    for (const id of requiredMigrationIds) assert.ok(remainingIds.has(id), `missing Computer Use migration subtask ${id}`);
+  }
 
   const dualRepair = entriesById.get('dual-instance-self-repair');
   assert.ok(
@@ -111,6 +129,20 @@ function assertNonEmptyStringArray(value: unknown, label: string) {
   assert.ok(Array.isArray(value), `${label} must be an array`);
   assert.ok(value.length > 0, `${label} must not be empty`);
   for (const item of value) assert.equal(typeof item, 'string', `${label} entries must be strings`);
+}
+
+function assertMigrationSubtasks(value: unknown, label: string): Array<{ id: string }> {
+  assert.ok(Array.isArray(value), `${label} must be an array while status=migrating`);
+  assert.ok(value.length > 0, `${label} must not be empty while status=migrating`);
+  return value.map((entry, index) => {
+    assert.ok(entry && typeof entry === 'object' && !Array.isArray(entry), `${label}[${index}] must be an object`);
+    const record = entry as Record<string, unknown>;
+    if (typeof record.id !== 'string') throw new Error(`${label}[${index}].id must be a string`);
+    assert.equal(typeof record.currentPath, 'string', `${label}[${index}].currentPath must be a string`);
+    assert.equal(typeof record.targetOwner, 'string', `${label}[${index}].targetOwner must be a string`);
+    assert.equal(typeof record.runtimeBoundary, 'string', `${label}[${index}].runtimeBoundary must be a string`);
+    return { id: record.id };
+  });
 }
 
 async function findInvalidCapabilityCommands() {

@@ -34,13 +34,16 @@ test('vision sense package is discoverable as a tool skill with observe-only bou
   assert.match(visionTool.docs.agentSummary, /Computer Use execution is owned by a separate modular consumer\/provider/);
 });
 
-test('vision gui task skill points to the VisionTaskRequest template', () => {
+test('vision gui task skill delegates execution to the Computer Use action provider', () => {
   const visionSkill = skillPackageManifests.find((skill) => skill.id === 'vision-gui-task');
 
   assert.ok(visionSkill);
   assert.equal(
-    visionSkill.inputContract.visionTaskRequest,
-    'packages/observe/vision/sciforge_vision_sense/types.py:VisionTaskRequest',
+    visionSkill.inputContract.sensePluginRequest,
+    'packages/observe/vision/sciforge_vision_sense/types.py:SensePluginRequest',
   );
+  assert.equal(visionSkill.inputContract.actionProvider, 'packages/actions/computer-use');
   assert.ok(visionSkill.requiredCapabilities.some((item) => item.capability === 'vision-sense'));
+  assert.ok(visionSkill.requiredCapabilities.some((item) => item.capability === 'computer-use-action-provider'));
+  assert.doesNotMatch(visionSkill.description, /VisionTaskRequest|ComputerUseTextCommand/);
 });

@@ -1,5 +1,5 @@
 export const allowedActionTypes = new Set(['open_app', 'click', 'double_click', 'drag', 'type_text', 'press_key', 'hotkey', 'scroll', 'wait']);
-export const requiredPipeline = ['WindowTarget', 'VisionPlanner', 'Grounder', 'GuiExecutor', 'Verifier', 'vision-trace'];
+export const requiredPipeline = ['WindowTarget', 'RuntimeCodexPlanner', 'Grounder', 'GuiExecutor', 'Verifier', 'vision-trace'];
 export const requiredTraceMetadata = [
   'windowTarget',
   'window screenshot refs',

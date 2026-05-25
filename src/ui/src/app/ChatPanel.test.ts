@@ -647,6 +647,117 @@ test('chat message DOM and badges distinguish demo seed from live runtime answer
   assert.doesNotMatch(html, /live-runtime-codex|live Runtime Codex|运行结果/);
 });
 
+test('default chat renders Computer Use gui.present and gui.ask_user panels from run raw GUI intent', () => {
+  const traceRef = '.sciforge/vision-runs/cu-risk/vision-trace.json';
+  const screenshotRef = '.sciforge/vision-runs/cu-risk/step-001-before.png';
+  const session: SciForgeSession = {
+    schemaVersion: 2,
+    sessionId: 'session-computer-use-gui',
+    scenarioId: 'literature-evidence-review',
+    title: 'computer use gui',
+    createdAt: '2026-05-25T00:00:00.000Z',
+    updatedAt: '2026-05-25T00:00:10.000Z',
+    messages: [{
+      id: 'msg-cu-user',
+      role: 'user',
+      content: '/computer-use click the guarded Submit button',
+      createdAt: '2026-05-25T00:00:00.000Z',
+    }, {
+      id: 'msg-cu-assistant',
+      role: 'scenario',
+      content: '## Computer Use confirmation required\n\nAllow Computer Use to click the visible Submit button?',
+      createdAt: '2026-05-25T00:00:05.000Z',
+      provenance: {
+        kind: 'live-runtime-codex',
+        source: 'gui.ask_user:codex-command-computer-use',
+        runtimeRequestEligible: false,
+        liveAcceptanceEligible: true,
+        requiresUserConfirmation: true,
+      },
+    }],
+    runs: [{
+      id: 'run-computer-use-gui',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: '/computer-use click the guarded Submit button',
+      response: '## Computer Use confirmation required\n\nAllow Computer Use to click the visible Submit button?',
+      createdAt: '2026-05-25T00:00:01.000Z',
+      raw: {
+        guiPresentation: {
+          source: 'gui.present:codex-command-computer-use',
+          title: 'Computer Use result',
+          status: 'needs-confirmation',
+          text: 'Computer Use stopped before the guarded action.',
+          ref: traceRef,
+          displayedRefs: [traceRef, screenshotRef],
+        },
+        guiAskUser: {
+          source: 'gui.ask_user:codex-command-computer-use',
+          title: 'Computer Use confirmation required',
+          message: 'Allow Computer Use to click the visible Submit button?',
+          approvalRequest: {
+            id: 'approval-1',
+            riskLevel: 'high',
+            actionRef: 'ref:planned-action:submit',
+          },
+          relatedRefs: [traceRef, screenshotRef],
+          choices: [
+            { label: 'Approve', commandText: '/computer-use approve --approval-ref approval-1', style: 'primary' },
+            { label: 'Cancel', commandText: '/computer-use reject --approval-ref approval-1', style: 'secondary' },
+            { label: 'Unsafe legacy', commandText: 'deleteFile("report.md")', style: 'danger' },
+          ],
+        },
+      },
+    }],
+    uiManifest: [],
+    claims: [],
+    executionUnits: [],
+    artifacts: [],
+    notebook: [],
+    versions: [],
+    hiddenResultSlotIds: [],
+  };
+  const html = renderToStaticMarkup(createElement(ChatPanel, {
+    scenarioId: 'literature-evidence-review',
+    role: 'Researcher',
+    config: defaultSciForgeConfig,
+    session,
+    input: '',
+    savedScrollTop: 0,
+    onInputChange: () => undefined,
+    onScrollTopChange: () => undefined,
+    onSessionChange: () => undefined,
+    onNewChat: () => undefined,
+    onDeleteChat: () => undefined,
+    archivedSessions: [],
+    onRestoreArchivedSession: () => undefined,
+    onDeleteArchivedSessions: () => undefined,
+    onClearArchivedSessions: () => undefined,
+    onEditMessage: () => undefined,
+    onDeleteMessage: () => undefined,
+    archivedCount: 0,
+    onAutoRunConsumed: () => undefined,
+    onConfigChange: () => undefined,
+    onTimelineEvent: () => undefined,
+    onActiveRunChange: () => undefined,
+    onMarkReusableRun: () => undefined,
+    onObjectFocus: () => undefined,
+    runtimeHealth: [],
+  }));
+
+  assert.match(html, /data-testid="runtime-gui-present"/);
+  assert.match(html, /data-gui-tool="gui\.present"/);
+  assert.match(html, /Computer Use stopped before the guarded action/);
+  assert.match(html, new RegExp(traceRef.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(html, /data-testid="runtime-gui-ask-user"/);
+  assert.match(html, /data-gui-tool="gui\.ask_user"/);
+  assert.match(html, /approval-1/);
+  assert.match(html, /ref:planned-action:submit/);
+  assert.match(html, /\/computer-use approve --approval-ref approval-1/);
+  assert.match(html, /\/computer-use reject --approval-ref approval-1/);
+  assert.doesNotMatch(html, /deleteFile|RAW_PROVIDER_MESSAGE|stdout|stderr/);
+});
+
 test('default chat shell uses universal workspace copy instead of scenario-first labels', () => {
   const session: SciForgeSession = {
     schemaVersion: 2,

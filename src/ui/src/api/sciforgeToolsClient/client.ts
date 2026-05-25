@@ -22,6 +22,7 @@ import { compactSciForgeReference, compactTransportExecutionUnits } from './tran
 import {
   contextWindowTelemetryEvent,
   normalizeWorkspaceRuntimeEvent,
+  readWorkspaceToolStream,
   toolEvent,
   withConfiguredContextWindowLimit,
   workspaceResultCompletion,
@@ -31,7 +32,7 @@ import { hasAnnotationPlanOnlyEnvelopeMarker, isAnnotationPlanOnlyEnvelope } fro
 
 const CODEX_RUNTIME_REQUEST_SCHEMA_VERSION = 'sciforge.codex-runtime-stream-request.v1';
 const DEFAULT_RUNTIME_PROFILE = 'sciforge-runtime-deepseek';
-const UNCONFIGURED_RUNTIME_PROVIDER = 'unconfigured';
+const DEFAULT_RUNTIME_PROVIDER = 'sciforge-deepseek-proxy';
 const UNCONFIGURED_RUNTIME_MODEL = 'unconfigured';
 
 const TRANSPORT_SESSION_MESSAGE_LIMIT = 12;
@@ -41,6 +42,9 @@ const TRANSPORT_ARTIFACT_LIMIT = 16;
 const TRANSPORT_ARTIFACT_INLINE_DATA_BYTES = 12_000;
 const TRANSPORT_TEXT_PREVIEW_CHARS = 500;
 const TRANSPORT_REF_KEYS = ['ref', 'dataRef', 'path', 'filePath', 'markdownRef', 'contentRef', 'stdoutRef', 'stderrRef', 'outputRef'] as const;
+const WORKSPACE_TOOL_STREAM_PATH = '/api/sciforge/tools/run/stream';
+const COMPUTER_USE_VISION_SENSE_TOOL_ID = 'local.vision-sense';
+const COMPUTER_USE_ACTION_PROVIDER_ID = 'action.sciforge.computer-use';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -202,94 +206,121 @@ export async function sendSciForgeToolMessage(
     }
   }, 10_000);
   try {
-    callbacks.onEvent?.(toolEvent('current-plan', `当前计划：把 GUI 用户操作转换为 terminal-equivalent text，交给 Codex Runtime bridge；任务上下文、记忆、工具和展示意图由 Codex/TUI 原生机制负责。`));
+    const useComputerUseActionProvider = computerUseActionProviderRequested(input);
+    callbacks.onEvent?.(toolEvent('current-plan', useComputerUseActionProvider
+      ? '当前计划：把 /computer-use 终端等价文本交给 Computer Use action provider；Runtime Codex 只作为 planner host port，不再让普通模型自称拥有 GUI 工具。'
+      : `当前计划：把 GUI 用户操作转换为 terminal-equivalent text，交给 Codex Runtime bridge；任务上下文、记忆、工具和展示意图由 Codex/TUI 原生机制负责。`));
     callbacks.onEvent?.(projectToolStartedEvent({ id: makeId('evt'), createdAt: nowIso() }, builtInScenarioId));
-    const commandId = makeId('codex-command');
-    const requestBody = buildCodexRuntimeStreamRequest({
+    const commandId = makeId(useComputerUseActionProvider ? 'computer-use-command' : 'codex-command');
+    const runtimeEvents: AgentStreamEvent[] = [];
+    const handleRuntimeEvent = (event: unknown) => {
+      const normalized = withConfiguredContextWindowLimit(
+        normalizeWorkspaceRuntimeEvent(event),
+        input.config.maxContextWindowTokens,
+      );
+      runtimeEvents.push(normalized);
+      if (isBackendProgressEvent(normalized)) {
+        sawBackendEvent = true;
+        lastRealEventAt = Date.now();
+      }
+      if (isForegroundReadableResultEvent(normalized)) foregroundReadableResultSeen = true;
+      const latencyPolicy = extractLatencyPolicy(normalized.raw);
+      if (latencyPolicy) {
+        latencyThresholds = latencyThresholdsFromPolicy(latencyPolicy, latencyThresholds);
+        scheduleTimeout(latencyThresholds);
+      }
+      if (!emittedInitialResponseStatus) {
+        const initialStatus = buildInitialResponseProgressEvent(extractResponsePlan(normalized.raw));
+        if (initialStatus) {
+          emittedInitialResponseStatus = true;
+          callbacks.onEvent?.(initialStatus);
+        }
+      }
+      callbacks.onEvent?.(normalized);
+    };
+    let response: Response | undefined;
+    let result: unknown;
+    let error: string | undefined;
+    let requestBodyForFailure: ReturnType<typeof buildCodexRuntimeStreamRequest> | undefined;
+    if (useComputerUseActionProvider) {
+      activeRequestController = new AbortController();
+      if (signal?.aborted) activeRequestController.abort();
+      const requestBody = buildComputerUseWorkspaceGatewayRequest(input, commandId);
+      const requestBodyText = JSON.stringify(requestBody);
+      callbacks.onEvent?.(contextWindowTelemetryEvent(
+        input,
+        requestBodyText,
+        'Computer Use action-provider request/projection preflight estimate',
+      ));
+      response = await fetch(`${input.config.workspaceWriterBaseUrl}${WORKSPACE_TOOL_STREAM_PATH}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: requestBodyText,
+        signal: activeRequestController.signal,
+      });
+      const stream = await readWorkspaceToolStream(response, handleRuntimeEvent);
+      result = stream.result;
+      error = stream.error;
+    } else {
+      const requestBody = buildCodexRuntimeStreamRequest({
       input,
       commandId,
       referenceSummary,
       silentStreamRunId,
-    });
-    assertCodexRuntimeStreamRequestBoundary(requestBody);
-    assertCodexRealtimeSessionRequestBoundary(requestBody);
-    const requestBodyText = JSON.stringify(requestBody);
-    callbacks.onEvent?.(contextWindowTelemetryEvent(
-      input,
-      requestBodyText,
-      'Codex Runtime command/projection preflight estimate',
-    ));
-    callbacks.onEvent?.(codexRuntimeRunEvent(requestBody));
-    const runtimeEvents: AgentStreamEvent[] = [];
-    let response: Response | undefined;
-    let result: unknown;
-    let error: string | undefined;
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
-      activeRequestController = new AbortController();
-      retryForSilentFirstEvent = false;
-      sawBackendEvent = false;
-      lastRealEventAt = Date.now();
-      lastSilentNoticeAt = 0;
-      if (attempt > 1) {
-        callbacks.onEvent?.(toolEvent('backend-stream-retry-start', `正在重连 workspace stream（第 ${attempt}/2 次），复用同一个请求 payload。`));
-      }
-      try {
-        if (signal?.aborted) activeRequestController.abort();
-        const client = createCodexRealtimeSessionClient({
-          workspaceWriterBaseUrl: input.config.workspaceWriterBaseUrl,
-          onControlReady: callbacks.onRealtimeControlReady,
-        });
-        const stream = await client.stream(requestBodyText, (event) => {
-          const normalized = withConfiguredContextWindowLimit(
-            normalizeWorkspaceRuntimeEvent(event),
-            input.config.maxContextWindowTokens,
-          );
-          runtimeEvents.push(normalized);
-          if (isBackendProgressEvent(normalized)) {
-            sawBackendEvent = true;
-            lastRealEventAt = Date.now();
-          }
-          if (isForegroundReadableResultEvent(normalized)) foregroundReadableResultSeen = true;
-          const latencyPolicy = extractLatencyPolicy(normalized.raw);
-          if (latencyPolicy) {
-            latencyThresholds = latencyThresholdsFromPolicy(latencyPolicy, latencyThresholds);
-            scheduleTimeout(latencyThresholds);
-          }
-          if (!emittedInitialResponseStatus) {
-            const initialStatus = buildInitialResponseProgressEvent(extractResponsePlan(normalized.raw));
-            if (initialStatus) {
-              emittedInitialResponseStatus = true;
-              callbacks.onEvent?.(initialStatus);
-            }
-          }
-          callbacks.onEvent?.(normalized);
-        }, activeRequestController.signal);
-        response = stream.response;
-        result = stream.result;
-        error = stream.error;
-        break;
-      } catch (streamError) {
-        if (retryForSilentFirstEvent && attempt < 2) {
-          const retryDetail = '首个 stream 已中断；准备重新发送同一请求。';
-          const retryDecision = noteSilentDecision({
-            decision: 'retry',
-            detail: retryDetail,
-            elapsedMs: Date.now() - lastRealEventAt,
-            status: 'retrying-first-backend-event',
-          });
-          callbacks.onEvent?.(toolEvent('backend-stream-retry', retryDetail, {
-            silentStreamRunId,
-            silentStreamDecision: retryDecision,
-          }));
-          continue;
+      });
+      requestBodyForFailure = requestBody;
+      assertCodexRuntimeStreamRequestBoundary(requestBody);
+      assertCodexRealtimeSessionRequestBoundary(requestBody);
+      const requestBodyText = JSON.stringify(requestBody);
+      callbacks.onEvent?.(contextWindowTelemetryEvent(
+        input,
+        requestBodyText,
+        'Codex Runtime command/projection preflight estimate',
+      ));
+      callbacks.onEvent?.(codexRuntimeRunEvent(requestBody));
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        activeRequestController = new AbortController();
+        retryForSilentFirstEvent = false;
+        sawBackendEvent = false;
+        lastRealEventAt = Date.now();
+        lastSilentNoticeAt = 0;
+        if (attempt > 1) {
+          callbacks.onEvent?.(toolEvent('backend-stream-retry-start', `正在重连 workspace stream（第 ${attempt}/2 次），复用同一个请求 payload。`));
         }
-        throw streamError;
+        try {
+          if (signal?.aborted) activeRequestController.abort();
+          const client = createCodexRealtimeSessionClient({
+            workspaceWriterBaseUrl: input.config.workspaceWriterBaseUrl,
+            onControlReady: callbacks.onRealtimeControlReady,
+          });
+          const stream = await client.stream(requestBodyText, handleRuntimeEvent, activeRequestController.signal);
+          response = stream.response;
+          result = stream.result;
+          error = stream.error;
+          break;
+        } catch (streamError) {
+          if (retryForSilentFirstEvent && attempt < 2) {
+            const retryDetail = '首个 stream 已中断；准备重新发送同一请求。';
+            const retryDecision = noteSilentDecision({
+              decision: 'retry',
+              detail: retryDetail,
+              elapsedMs: Date.now() - lastRealEventAt,
+              status: 'retrying-first-backend-event',
+            });
+            callbacks.onEvent?.(toolEvent('backend-stream-retry', retryDetail, {
+              silentStreamRunId,
+              silentStreamDecision: retryDecision,
+            }));
+            continue;
+          }
+          throw streamError;
+        }
       }
     }
-  if (error && runtimeEvents.some(isRuntimeCodexFailedEvent)) {
+  if (!useComputerUseActionProvider && requestBodyForFailure && error && runtimeEvents.some(isRuntimeCodexFailedEvent)) {
     return runtimeCodexFailedResponse({
       input,
-      request: requestBody,
+      request: requestBodyForFailure,
       runtimeEvents,
       error,
     });
@@ -374,9 +405,57 @@ function attachRuntimeGuiPresentationToResponse(
     : isRecord(result) && isRecord(result.output) && isRecord(result.output.guiPresentation)
       ? result.output.guiPresentation
       : undefined;
+  const askUser = isRecord(result) && isRecord(result.guiAskUser)
+    ? result.guiAskUser
+    : isRecord(result) && isRecord(result.output) && isRecord(result.output.guiAskUser)
+      ? result.output.guiAskUser
+      : undefined;
   const source = asString(presentation?.source);
+  const presentedObjectReference = source?.startsWith('gui.present:')
+    ? objectReferenceFromGuiPresentation(presentation, response.run.id)
+    : undefined;
+  const askSource = asString(askUser?.source);
+  if (askSource?.startsWith('gui.ask_user:')) {
+    const askObjectReferences = objectReferencesFromGuiAskUser(askUser, response.run.id);
+    const objectReferences = appendObjectReference(
+      appendObjectReferences(response.message.objectReferences, askObjectReferences),
+      presentedObjectReference,
+    );
+    return {
+      ...response,
+      message: {
+        ...response.message,
+        provenance: {
+          ...(response.message.provenance ?? {}),
+          kind: 'live-runtime-codex',
+          source: askSource,
+          runtimeRequestEligible: false,
+          liveAcceptanceEligible: true,
+          requiresUserConfirmation: true,
+          commandId: asString(askUser?.commandId),
+          attemptId: asString(askUser?.attemptId),
+          provider: asString(askUser?.provider),
+          model: asString(askUser?.model),
+          profile: asString(askUser?.profile),
+          workspace: asString(askUser?.workspace),
+        },
+        objectReferences,
+      },
+      run: {
+        ...response.run,
+        raw: {
+          ...(isRecord(response.run.raw) ? response.run.raw : {}),
+          ...(presentedObjectReference ? { guiPresentation: presentation } : {}),
+          guiAskUser: askUser,
+        },
+        objectReferences: appendObjectReference(
+          appendObjectReferences(response.run.objectReferences, askObjectReferences),
+          presentedObjectReference,
+        ),
+      },
+    };
+  }
   if (source?.startsWith('gui.present:')) {
-    const presentedObjectReference = objectReferenceFromGuiPresentation(presentation, response.run.id);
     return {
       ...response,
       message: {
@@ -479,6 +558,18 @@ function appendObjectReference(
   return [...existing, reference];
 }
 
+function appendObjectReferences(
+  references: ObjectReference[] | undefined,
+  nextReferences: ObjectReference[],
+): ObjectReference[] | undefined {
+  if (!nextReferences.length) return references;
+  let merged = references ?? [];
+  for (const reference of nextReferences) {
+    merged = appendObjectReference(merged, reference) ?? merged;
+  }
+  return merged;
+}
+
 function objectReferenceKindFromPresentationRef(ref: string): ObjectReference['kind'] {
   if (/^https?:\/\//i.test(ref)) return 'url';
   const prefix = ref.match(/^([a-z-]+)::?/i)?.[1]?.toLowerCase();
@@ -487,6 +578,53 @@ function objectReferenceKindFromPresentationRef(ref: string): ObjectReference['k
   }
   if (/[\\/]/.test(ref) || /\.[a-z0-9]+(?:$|[?#])/i.test(ref)) return 'file';
   return 'artifact';
+}
+
+function objectReferencesFromGuiAskUser(askUser: Record<string, unknown> | undefined, runId: string): ObjectReference[] {
+  const refs = uniqueStringList([
+    ...(asStringArray(askUser?.relatedRefs) ?? []),
+    ...(asStringArray(askUser?.displayedRefs) ?? []),
+  ]);
+  return refs.flatMap((ref) => {
+    if (!isUserFacingGuiAskRef(ref)) return [];
+    return [objectReferenceFromGuiRef(ref, runId, 'supporting-evidence')];
+  });
+}
+
+function objectReferenceFromGuiRef(ref: string, runId: string, presentationRole: ObjectReference['presentationRole']): ObjectReference {
+  const kind = objectReferenceKindFromPresentationRef(ref);
+  const target = targetFromPresentationRef(ref, kind);
+  const id = objectReferenceIdFromPresentationRef(kind, target);
+  const isArtifact = kind === 'artifact';
+  return {
+    id,
+    kind,
+    title: presentationTitleFromRef(target),
+    ref: kind === 'url' ? `url:${target}` : `${kind}:${target}`,
+    artifactType: isArtifact ? artifactTypeFromPresentationHint(undefined) : undefined,
+    runId,
+    executionUnitId: kind === 'execution-unit' ? target : undefined,
+    preferredView: preferredViewFromPresentationHint(refHintFromPath(target), kind),
+    presentationRole,
+    status: 'available',
+    summary: ref,
+    provenance: {
+      dataRef: isArtifact || kind === 'url' ? target : undefined,
+      path: kind === 'file' || kind === 'folder' ? target : undefined,
+      producer: 'gui.ask_user',
+    },
+  };
+}
+
+function isUserFacingGuiAskRef(ref: string) {
+  return !/^audit:/i.test(ref) && !/\b(?:stdoutRef|stderrRef|rawRef)\b/i.test(ref);
+}
+
+function refHintFromPath(path: string): string | undefined {
+  if (/\.(?:md|markdown|txt)(?:$|[?#])/i.test(path)) return 'markdown';
+  if (/\.(?:png|jpe?g|gif|webp|svg)(?:$|[?#])/i.test(path)) return 'image';
+  if (/\.(?:json|jsonl)(?:$|[?#])/i.test(path)) return 'auto';
+  return undefined;
 }
 
 function targetFromPresentationRef(ref: string, kind: ObjectReference['kind']): string {
@@ -530,7 +668,7 @@ function buildCodexRuntimeStreamRequest(input: {
 }) {
   const config = input.input.config;
   const profile = config.runtimeProfile?.trim() || DEFAULT_RUNTIME_PROFILE;
-  const provider = config.modelProvider.trim() || UNCONFIGURED_RUNTIME_PROVIDER;
+  const provider = runtimeProviderForVisibleMetadata(config.modelProvider);
   const model = config.modelName.trim() || UNCONFIGURED_RUNTIME_MODEL;
   const codexSessionId = codexSessionIdForRuntimeResume(input.input);
   const commandText = buildCodexRuntimeCommandText(input, { resumeRequested: Boolean(codexSessionId) });
@@ -574,6 +712,12 @@ function buildCodexRuntimeStreamRequest(input: {
       ],
     },
   };
+}
+
+function runtimeProviderForVisibleMetadata(value: string) {
+  const provider = value.trim();
+  if (!provider || provider === 'native') return DEFAULT_RUNTIME_PROVIDER;
+  return provider;
 }
 
 function codexSessionIdForRuntimeResume(input: SendAgentMessageInput): string | undefined {
@@ -705,11 +849,122 @@ function buildCodexRuntimeCommandText(
   const taskText = refs.length
     ? `ask ${refs.map((ref) => `--ref ${quoteTerminalArg(ref)}`).join(' ')} ${quoteTerminalArg(prompt)}`
     : prompt;
+  const continuityContext = !options.resumeRequested
+    ? sameChatContinuityContextForRuntimeCommand(input.input)
+    : undefined;
+  if (continuityContext) {
+    return [
+      continuityContext,
+      'Current request:',
+      taskText,
+    ].join('\n\n');
+  }
   if (!options.resumeRequested) return taskText;
   return [
     'Continue the active Runtime Codex session. Interpret relative references such as "previous turn", "last answer", or "that passphrase" against the immediately preceding non-seed user/assistant exchange in this native Codex session unless selected refs say otherwise.',
     taskText,
   ].join('\n\n');
+}
+
+function sameChatContinuityContextForRuntimeCommand(input: SendAgentMessageInput): string | undefined {
+  if (!/\b(?:previous turn|last (?:answer|response|message)|that passphrase|the passphrase|remember(?:ed)?|上一轮|上(?:一)?条|刚才)\b/i.test(input.prompt)) {
+    return undefined;
+  }
+  const entries = (input.messages ?? [])
+    .filter((message) => !isSeedDemoOrFixtureMessage(message))
+    .map((message) => {
+      const record = (isRecord(message) ? message : {}) as Record<string, unknown>;
+      const content = asString(record.continuityContent);
+      if (!content) return undefined;
+      const role = asString(record.role) ?? 'message';
+      return `- ${role}: ${content}`;
+    })
+    .filter((entry): entry is string => Boolean(entry))
+    .slice(-4);
+  if (!entries.length) return undefined;
+  return [
+    'Same-chat continuity context for relative references. Use this bounded non-seed context only to resolve phrases such as "previous turn", "last answer", or "that passphrase"; do not treat it as artifact content or hidden GUI state.',
+    ...entries,
+  ].join('\n');
+}
+
+function computerUseActionProviderRequested(input: SendAgentMessageInput) {
+  return /^\/(?:computer-use|computer\s+use)\b/i.test(input.prompt.trim());
+}
+
+function buildComputerUseWorkspaceGatewayRequest(input: SendAgentMessageInput, commandId: string) {
+  const scenario = input.scenarioOverride;
+  const selectedToolIds = uniqueRuntimeStringList([
+    ...(scenario?.selectedToolIds ?? []),
+    COMPUTER_USE_VISION_SENSE_TOOL_ID,
+  ]);
+  const selectedSenseIds = uniqueRuntimeStringList([
+    ...(scenario?.selectedSenseIds ?? []),
+    COMPUTER_USE_VISION_SENSE_TOOL_ID,
+  ]);
+  const selectedActionIds = uniqueRuntimeStringList([
+    ...(scenario?.selectedActionIds ?? []),
+    COMPUTER_USE_ACTION_PROVIDER_ID,
+  ]);
+  const selectedComponentIds = selectedComponentsForCurrentTurn(
+    input.prompt,
+    input.availableComponentIds ?? scenario?.defaultComponents ?? [],
+  );
+  const approvalRef = approvalRefFromComputerUsePrompt(input.prompt);
+  return {
+    skillDomain: skillDomainForRuntimeInput(input),
+    prompt: input.prompt,
+    handoffSource: 'ui-chat',
+    workspacePath: input.config.workspacePath,
+    agentServerBaseUrl: input.config.agentServerBaseUrl,
+    agentBackend: input.config.agentBackend,
+    modelProvider: input.config.modelProvider,
+    modelName: input.config.modelName,
+    maxContextWindowTokens: input.config.maxContextWindowTokens,
+    scenarioPackageRef: input.scenarioPackageRef ?? scenario?.scenarioPackageRef,
+    skillPlanRef: input.skillPlanRef ?? scenario?.skillPlanRef,
+    uiPlanRef: input.uiPlanRef ?? scenario?.uiPlanRef,
+    artifacts: input.artifacts ?? [],
+    references: input.references ?? [],
+    selectedToolIds,
+    selectedSenseIds,
+    selectedActionIds,
+    selectedComponentIds,
+    selectedVerifierIds: scenario?.selectedVerifierIds,
+    expectedArtifactTypes: expectedArtifactsForCurrentTurn({
+      scenarioId: builtInScenarioIdForRuntimeInput(input),
+      prompt: input.prompt,
+      selectedComponentIds,
+    }),
+    verificationResult: input.verificationResult,
+    recentVerificationResults: input.recentVerificationResults,
+    humanApproval: approvalRef ? { approvalRef } : undefined,
+    uiState: {
+      commandId,
+      currentTurnId: input.currentTurnId,
+      selectedToolIds,
+      selectedSenseIds,
+      selectedActionIds,
+      selectedVerifierIds: scenario?.selectedVerifierIds,
+      turnExecutionConstraints: scenario?.turnExecutionConstraints,
+      artifactPolicy: scenario?.artifactPolicy,
+      referencePolicy: scenario?.referencePolicy,
+      failureRecoveryPolicy: scenario?.failureRecoveryPolicy,
+      humanApprovalPolicy: scenario?.humanApprovalPolicy,
+      humanApproval: approvalRef ? { approvalRef } : undefined,
+      approvalRef,
+      visionSenseConfig: {
+        desktopBridgeEnabled: true,
+        allowSharedSystemInput: input.config.visionAllowSharedSystemInput === true,
+      },
+    },
+  };
+}
+
+function approvalRefFromComputerUsePrompt(prompt: string) {
+  if (!/^\/(?:computer-use|computer\s+use)\s+approve\b/i.test(prompt.trim())) return undefined;
+  const match = /--approval-ref(?:=|\s+)(?:"([^"]+)"|'([^']+)'|(\S+))/i.exec(prompt);
+  return match?.[1] ?? match?.[2] ?? match?.[3];
 }
 
 function latestCodexSessionIdForConversationLane(input: SendAgentMessageInput): string | undefined {

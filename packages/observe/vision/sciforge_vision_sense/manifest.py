@@ -1,4 +1,4 @@
-"""Default manifest for the SciForge Vision Sense MVP."""
+"""Default manifest for the SciForge Vision Sense package."""
 
 from __future__ import annotations
 
@@ -19,24 +19,48 @@ def build_default_manifest() -> SenseManifest:
             "sense_plugin_text_input_contract",
             "sense_plugin_text_output_contract",
             "screen_observation_contract",
-            "visual_action_planning_contract",
             "kv_ground_contract",
-            "text_command_envelope_contract",
-            "computer_use_command_contract",
             "pixel_diff_verification_contract",
         ],
         inputs={
             "sensePluginRequest": "SensePluginRequest(text + modality refs)",
-            "request": "VisionTaskRequest",
             "screenshots": ["ScreenshotRef"],
-            "supportedActions": ["click", "type_text", "press_key", "scroll"],
+            "grounderRequest": {
+                "schema": "GrounderRequest",
+                "required": {
+                    "screenshot_ref": "ScreenshotRef URI or service-readable screenshot reference",
+                    "target_description": "Natural-language description of the target to ground",
+                },
+                "optional": {
+                    "crop_bbox": "Window-local crop bounds as [x1, y1, x2, y2]",
+                },
+                "coordinate_space": {
+                    "allowed": ["window-local", "crop-local"],
+                    "default": "window-local",
+                    "cropLocalRequires": "crop_bbox",
+                },
+            },
         },
         outputs={
             "sensePluginResult": "SensePluginTextResult(text-only; no desktop execution side effects)",
-            "textEnvelope": "SensePluginTextEnvelope serialized as text",
-            "result": "VisionTaskResult",
-            "trace": "VisionStepRecord[]",
-            "artifacts": "lightweight refs; no inline screenshot base64",
+            "textEnvelope": "SensePluginTextEnvelope serialized as text observations",
+            "artifacts": "lightweight refs and trace refs; no inline screenshot base64",
+            "grounderResult": {
+                "schema": "GrounderResult",
+                "required": {
+                    "window_local_coordinates": (
+                        "Target point or bbox in window-local coordinates, even when the request is crop-local"
+                    ),
+                    "coordinate_space": "Normalized request coordinate space: window-local or crop-local",
+                    "diagnostics": "Structured grounding diagnostics; empty when no diagnostics were emitted",
+                },
+                "optional": {
+                    "crop_local_coordinates": "Target point or bbox in crop-local coordinates for crop-local requests",
+                    "confidence": "Grounder confidence score when provided by the service",
+                    "raw_text": "Raw textual model or service output when available",
+                    "crop_bbox": "Window-local crop bounds used to translate crop-local coordinates",
+                },
+            },
         },
         configSchema={
             "vlm": {
@@ -58,29 +82,21 @@ def build_default_manifest() -> SenseManifest:
                     "required": False,
                 },
                 "healthEndpoint": "/health",
-                "predictEndpoint": "/predict/",
+                "contract": "GrounderRequest -> GrounderResult",
             },
-            "maxStepsDefault": 30,
             "pixelDiffThresholdDefault": 0.005,
         },
         safety={
-            "defaultRiskPolicy": "low-risk-gui-actions-only",
-            "allowedActions": ["click", "type_text", "press_key", "scroll"],
-            "highRiskActions": [
-                "send",
-                "delete",
-                "pay",
-                "authorize",
-                "external_publish",
-            ],
-            "highRiskBehavior": "fail_closed_without_explicit_upstream_approval",
+            "executionBoundary": "sensing-only",
+            "desktopActions": "not-owned-by-vision-sense",
+            "highRiskBehavior": "action provider must fail closed without explicit upstream approval",
         },
         runtimeRequirements={
             "python": ">=3.10",
             "dependencies": [],
             "kvGround": {"baseUrlEnv": KV_GROUND_URL_ENV},
             "desktopExecutorRequired": False,
-            "computerUseExecutor": "external modular consumer of text command envelopes",
+            "computerUseExecutor": "packages/actions/computer-use action provider",
             "privateSciForgeImports": False,
         },
         observability={
@@ -89,10 +105,9 @@ def build_default_manifest() -> SenseManifest:
                 "screenshot_refs",
                 "screen_summary",
                 "visible_texts",
-                "planner_action",
                 "grounding_request_response",
-                "execution_result",
                 "pixel_diff",
+                "verifier_feedback",
                 "failure_reason",
             ],
         },

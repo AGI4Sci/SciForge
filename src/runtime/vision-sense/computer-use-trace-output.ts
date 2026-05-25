@@ -29,12 +29,14 @@ import {
 
 export const VISION_TOOL_ID = visionSenseTraceIds.tool;
 const COMPUTER_USE_CAPABILITY_ID = 'action.sciforge.computer-use';
-const COMPUTER_USE_BUDGET_AUDIT_REF = 'audit:vision-sense-computer-use-loop';
+const COMPUTER_USE_BUDGET_AUDIT_REF = 'audit:computer-use-action-provider-loop';
 
 type ComputerUseWorkEvidence = WorkEvidence & {
   id: string;
   budgetDebitRefs: string[];
 };
+
+type VisibleLoopArtifact = Record<string, unknown>;
 
 export function genericLoopPayload(params: {
   request: GatewayRequest;
@@ -49,15 +51,18 @@ export function genericLoopPayload(params: {
   dryRun: boolean;
   desktopPlatform: string;
   windowTarget?: TraceWindowTarget;
+  visibleArtifacts?: VisibleLoopArtifact[];
   createdAt?: string;
 }): ToolPayload {
   const traceRel = workspaceRel(params.workspace, params.tracePath);
   const allRefs = params.screenshotRefs;
   const beforeRef = allRefs.find((ref) => ref.id.includes('-before-'));
   const afterRef = [...allRefs].reverse().find((ref) => ref.id.includes('-after-'));
+  const visibleArtifacts = normalizeVisibleLoopArtifacts(params.visibleArtifacts);
+  const visibleArtifactRefs = uniqueStrings(visibleArtifacts.flatMap(visibleLoopArtifactRefs));
   const isDone = params.status === 'done';
-  const executionUnitRef = `EU-vision-sense-${params.runId}`;
-  const workEvidenceRef = `workEvidence:vision-sense-computer-use:${params.runId}`;
+  const executionUnitRef = `EU-computer-use-${params.runId}`;
+  const workEvidenceRef = `workEvidence:computer-use-action-provider:${params.runId}`;
   const budgetDebitRecord = createComputerUseBudgetDebitRecord({
     runId: params.runId,
     traceRel,
@@ -89,7 +94,7 @@ export function genericLoopPayload(params: {
     outputSummary: isDone
       ? `Executed ${params.actionCount} generic Computer Use action(s).`
       : `Stopped after ${params.actionCount} generic Computer Use action(s): ${params.failureReason}`,
-    evidenceRefs: [traceRel, ...[afterRef?.path].filter((ref): ref is string => Boolean(ref))],
+    evidenceRefs: [traceRel, ...[afterRef?.path].filter((ref): ref is string => Boolean(ref)), ...visibleArtifactRefs],
     failureReason: params.failureReason || undefined,
     recoverActions: params.status === 'done' ? [] : [...visionSenseTraceOutputPolicy.recoverActions],
     nextStep: params.status === 'done' ? undefined : 'Review the vision trace and rerun with corrected planner, grounder, or bridge configuration.',
@@ -102,8 +107,8 @@ export function genericLoopPayload(params: {
   };
   const payload: ToolPayload = {
     message: isDone
-      ? `vision-sense generic Computer Use loop completed ${params.actionCount} action(s). Trace: ${traceRel}.`
-      : `vision-sense generic Computer Use loop stopped with failed-with-reason: ${params.failureReason}`,
+      ? `Computer Use action provider completed ${params.actionCount} action(s). Trace: ${traceRel}.`
+      : `Computer Use action provider stopped with failed-with-reason: ${params.failureReason}`,
     confidence: isDone ? 0.72 : 0.35,
     claimType: 'execution',
     evidenceLevel: 'runtime',
@@ -138,8 +143,8 @@ export function genericLoopPayload(params: {
         ? `SciForge dry-run generic GUI executor (${platformLabel(params.desktopPlatform)})`
         : `${platformLabel(params.desktopPlatform)} screenshot + generic GUI executor`,
       inputData: [params.request.prompt],
-      outputArtifacts: [traceRel],
-      artifacts: [traceRel],
+      outputArtifacts: [traceRel, ...visibleArtifactRefs],
+      artifacts: [traceRel, ...visibleArtifactRefs],
       codeRef: 'src/runtime/vision-sense-runtime.ts',
       outputRef: traceRel,
       screenshotRef: afterRef?.path,
@@ -151,23 +156,27 @@ export function genericLoopPayload(params: {
       budgetDebitRefs,
     }],
     workEvidence: [workEvidence],
-    artifacts: [{
-      id: visionSenseTraceIds.trace,
-      type: visionSenseTraceIds.traceKind,
-      path: traceRel,
-      dataRef: traceRel,
-      producerTool: VISION_TOOL_ID,
-      schemaVersion: visionSenseTraceIds.traceSchema,
-      metadata: {
-        runId: params.runId,
-        imageMemoryPolicy: visionSenseTraceContractPolicy.imageMemory.policy,
-        screenshotRefs: allRefs.map(toTraceScreenshotRef),
-        windowTarget: params.windowTarget,
-        noInlineImages: true,
-        appSpecificShortcuts: [],
-        budgetDebitRefs,
+    artifacts: [
+      {
+        id: visionSenseTraceIds.trace,
+        type: visionSenseTraceIds.traceKind,
+        path: traceRel,
+        dataRef: traceRel,
+        producerTool: VISION_TOOL_ID,
+        schemaVersion: visionSenseTraceIds.traceSchema,
+        metadata: {
+          runId: params.runId,
+          imageMemoryPolicy: visionSenseTraceContractPolicy.imageMemory.policy,
+          screenshotRefs: allRefs.map(toTraceScreenshotRef),
+          windowTarget: params.windowTarget,
+          noInlineImages: true,
+          appSpecificShortcuts: [],
+          budgetDebitRefs,
+          visibleArtifactRefs,
+        },
       },
-    }],
+      ...visibleArtifacts,
+    ],
     logs: [{
       kind: 'capability-budget-debit-audit',
       ref: COMPUTER_USE_BUDGET_AUDIT_REF,
@@ -181,6 +190,7 @@ export function genericLoopPayload(params: {
     ...params,
     traceRel,
     screenshotRefs: allRefs,
+    visibleArtifactRefs,
     executionUnitRef,
     workEvidenceRef,
     budgetDebitRecord,
@@ -222,6 +232,7 @@ function createComputerUseActionValidationRepairAuditChain(params: {
   runId: string;
   traceRel: string;
   screenshotRefs: ScreenshotRef[];
+  visibleArtifactRefs: string[];
   status: 'done' | 'failed-with-reason';
   failureReason: string;
   actionCount: number;
@@ -235,7 +246,7 @@ function createComputerUseActionValidationRepairAuditChain(params: {
   createdAt?: string;
 }) {
   const safeRunId = sanitizeId(params.runId);
-  const artifactRefs = [params.traceRel, ...params.screenshotRefs.map((ref) => ref.path)];
+  const artifactRefs = [params.traceRel, ...params.screenshotRefs.map((ref) => ref.path), ...params.visibleArtifactRefs];
   const actionResult: ActionResultValidationProjection = {
     id: `action-result:${safeRunId}`,
     status: 'failed',
@@ -298,6 +309,61 @@ function createComputerUseActionValidationRepairAuditChain(params: {
     ],
     createdAt: params.createdAt,
   });
+}
+
+function normalizeVisibleLoopArtifacts(value: unknown): VisibleLoopArtifact[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(isRecord)
+    .map((artifact) => {
+      const id = firstArtifactString(artifact.id, artifact.ref, artifact.dataRef, artifact.path, artifact.sessionRef);
+      const normalized: VisibleLoopArtifact = {
+        ...artifact,
+        ...(id && !artifact.id ? { id } : {}),
+        type: firstArtifactString(artifact.type, artifact.kind) ?? 'computer-use-visible-artifact',
+        producerTool: firstArtifactString(artifact.producerTool) ?? VISION_TOOL_ID,
+      };
+      return normalized;
+    })
+    .filter((artifact) => Boolean(firstArtifactString(artifact.id, artifact.ref, artifact.dataRef, artifact.path, artifact.sessionRef)));
+}
+
+function visibleLoopArtifactRefs(artifact: VisibleLoopArtifact): string[] {
+  const refs = [
+    firstArtifactString(artifact.ref),
+    firstArtifactString(artifact.dataRef),
+    firstArtifactString(artifact.path),
+    firstArtifactString(artifact.sessionRef),
+    artifactIdRef(firstArtifactString(artifact.id)),
+  ].filter((ref): ref is string => Boolean(ref));
+  const metadata = isRecord(artifact.metadata) ? artifact.metadata : undefined;
+  return [
+    ...refs,
+    ...stringArray(metadata?.artifactRefs),
+    ...stringArray(metadata?.sessionRefs),
+  ];
+}
+
+function artifactIdRef(id: string | undefined) {
+  if (!id) return undefined;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(id) || id.startsWith('.sciforge/') || id.startsWith('/')) return id;
+  return `artifact:${id}`;
+}
+
+function firstArtifactString(...values: unknown[]) {
+  return values.find((value): value is string => typeof value === 'string' && value.trim().length > 0);
+}
+
+function stringArray(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : [];
+}
+
+function uniqueStrings(values: string[]) {
+  return Array.from(new Set(values));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function validationRepairAuditPayloadChain(payload: ToolPayload) {

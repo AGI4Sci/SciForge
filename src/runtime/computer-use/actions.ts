@@ -27,19 +27,19 @@ export function normalizePlatformAction(action: GenericVisionAction, config: Com
 export function platformActionIssue(action: GenericVisionAction, config: ComputerUseConfig) {
   if (!isDarwinPlatform(config.desktopPlatform)) return '';
   if (action.type === 'press_key' && isWindowsOnlyKey(action.key)) {
-    return `VisionPlanner emitted Windows-only key "${action.key}" for desktopPlatform="${config.desktopPlatform}".`;
+    return `Runtime Codex text planner emitted Windows-only key "${action.key}" for desktopPlatform="${config.desktopPlatform}".`;
   }
   if (action.type === 'hotkey') {
     const badKey = action.keys.find(isWindowsOnlyKey);
-    if (badKey) return `VisionPlanner emitted Windows-only hotkey modifier "${badKey}" for desktopPlatform="${config.desktopPlatform}".`;
+    if (badKey) return `Runtime Codex text planner emitted Windows-only hotkey modifier "${badKey}" for desktopPlatform="${config.desktopPlatform}".`;
     const normalized = action.keys.map((key) => key.trim().toLowerCase());
     if (normalized.includes('tab') && (normalized.includes('alt') || normalized.includes('option')) && !normalized.some((key) => key === 'cmd' || key === 'command' || key === 'meta')) {
-      return 'VisionPlanner emitted Alt+Tab/Option+Tab for macOS. Use Command+Tab for app switching on darwin, or choose a visible low-risk target in the active window.';
+      return 'Runtime Codex text planner emitted Alt+Tab/Option+Tab for macOS. Use Command+Tab for app switching on darwin, or choose a visible low-risk target in the active window.';
     }
     const combo = normalized.filter((key) => key !== 'cmd' && key !== 'meta').sort().join('+');
     const platformGenericCombos = new Set(['command+n', 'command+space', 'command+tab']);
     if (!platformGenericCombos.has(combo)) {
-      return `VisionPlanner emitted hotkey "${action.keys.join('+')}", which may be an app-specific shortcut. Use visible generic GUI controls, open_app, press_key, click, scroll, or platform recovery hotkeys only.`;
+      return `Runtime Codex text planner emitted hotkey "${action.keys.join('+')}", which may be an app-specific shortcut. Use visible generic GUI controls, open_app, press_key, click, scroll, or platform recovery hotkeys only.`;
     }
   }
   return '';
@@ -59,18 +59,6 @@ export function trimLeadingWaitActions(actions: GenericVisionAction[], done: boo
   if (done) return actions;
   const firstNonWait = actions.findIndex((action) => action.type !== 'wait');
   return firstNonWait > 0 ? actions.slice(firstNonWait) : actions;
-}
-
-export function highRiskBlockReason(action: GenericVisionAction, config: ComputerUseConfig) {
-  if (config.allowHighRiskActions) return '';
-  if (action.requiresConfirmation || action.riskLevel === 'high') {
-    return [
-      'High-risk Computer Use action blocked before execution.',
-      `Action type=${action.type}${action.targetDescription ? ` target="${action.targetDescription}"` : ''}.`,
-      'Set an explicit upstream confirmation and SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS=1 only for trusted runs.',
-    ].join(' ');
-  }
-  return '';
 }
 
 export function groundingForAction(action: GenericVisionAction): Record<string, unknown> | undefined {
@@ -149,7 +137,7 @@ function normalizeGenericAction(value: unknown): GenericVisionAction | undefined
     return direction ? { type, direction, amount, ...metadata } : undefined;
   }
   if (type === 'open_app') {
-    const appName = stringConfig(value.appName, value.app_name, value.application, value.applicationName, value.name, value.target);
+    const appName = stringConfig(value.appName, value.app_name, value.application, value.applicationName, value.name);
     return appName ? { type, appName, ...metadata } : undefined;
   }
   if (type === 'wait') return { type, ms: numberConfig(value.ms, value.durationMs, value.duration, value.amount), ...metadata };

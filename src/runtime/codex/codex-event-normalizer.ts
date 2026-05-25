@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 export type NormalizedAgentEventType =
   | 'run_started'
   | 'gui_present'
+  | 'gui_ask_user'
   | 'message_delta'
   | 'message'
   | 'tool_started'
@@ -53,8 +54,24 @@ export interface GuiPresentRuntimePayload {
   text: string;
   intent?: string;
   ref?: string;
+  displayedRefs?: string[];
   title?: string;
   hint?: string;
+  placement?: { panel?: string; viewId?: string };
+  intentLogId?: string;
+}
+
+export interface GuiAskUserRuntimePayload {
+  source: string;
+  kind: 'confirmation' | 'input' | 'choice' | string;
+  title: string;
+  message?: string;
+  text: string;
+  submitCommandTemplate?: string;
+  choices?: Array<{ label: string; commandText: string; style?: string }>;
+  approvalRequest?: Record<string, unknown>;
+  relatedRefs?: string[];
+  displayedRefs?: string[];
   placement?: { panel?: string; viewId?: string };
   intentLogId?: string;
 }
@@ -124,6 +141,23 @@ export function guiPresentEvent(metadata: CodexRuntimeMetadata, presentation: Om
       source,
       presentation: {
         ...presentation,
+        source,
+      },
+    },
+  });
+}
+
+export function guiAskUserEvent(metadata: CodexRuntimeMetadata, askUser: Omit<GuiAskUserRuntimePayload, 'source'> & { source?: string }): NormalizedAgentEvent {
+  const source = askUser.source ?? `gui.ask_user:${metadata.commandId}`;
+  return event(metadata, 'gui_ask_user', {
+    status: 'needs-confirmation',
+    message: askUser.text,
+    text: askUser.text,
+    raw: {
+      boundary: 'gui-ask-user-confirmation',
+      source,
+      askUser: {
+        ...askUser,
         source,
       },
     },
@@ -229,6 +263,11 @@ export function normalizeCodexJsonlEvent(raw: unknown, metadata: CodexRuntimeMet
     events.push(guiPresentEvent(metadata, guiPresent));
     return events;
   }
+  const guiAskUser = guiAskUserFromRaw(rawEvent, item);
+  if (guiAskUser) {
+    events.push(guiAskUserEvent(metadata, guiAskUser));
+    return events;
+  }
 
   if (/error|failed|failure/i.test(type)) {
     if (text && isCodexSamplingRetryMessage(text)) {
@@ -279,6 +318,65 @@ export function normalizeCodexJsonlEvent(raw: unknown, metadata: CodexRuntimeMet
   return events;
 }
 
+function guiAskUserFromRaw(
+  rawEvent: Record<string, unknown>,
+  item: Record<string, unknown>,
+): Omit<GuiAskUserRuntimePayload, 'source'> | undefined {
+  const type = stringField(rawEvent.type) ?? stringField(rawEvent.event) ?? '';
+  const itemStatus = stringField(item.status) ?? stringField(rawEvent.status) ?? '';
+  const isCompleted = /completed|done|output/i.test(type) || /completed|done|ok|applied/i.test(itemStatus);
+  if (!isCompleted) return undefined;
+  const toolName = stringField(item.name)
+    ?? stringField(item.tool_name)
+    ?? stringField(rawEvent.tool_name)
+    ?? stringField(rawEvent.name);
+  if (toolName !== 'gui.ask_user') return undefined;
+  const args = parseJsonRecord(item.arguments)
+    ?? parseJsonRecord(rawEvent.arguments)
+    ?? parseJsonRecord(item.input)
+    ?? parseJsonRecord(rawEvent.input)
+    ?? {};
+  const result = parseJsonRecord(item.result)
+    ?? parseJsonRecord(rawEvent.result)
+    ?? parseJsonRecord(item.output)
+    ?? parseJsonRecord(rawEvent.output)
+    ?? {};
+  if (result.ok === false || result.applied === false) return undefined;
+  const approvalRequest = parseJsonRecord(args.approvalRequest) ?? parseJsonRecord(args.approval_request);
+  const title = stringField(args.title) ?? stringField(approvalRequest?.title) ?? 'Computer Use confirmation required';
+  const message = stringField(args.message)
+    ?? stringField(approvalRequest?.prompt)
+    ?? stringField(approvalRequest?.message);
+  const kind = stringField(args.kind) ?? 'confirmation';
+  const choices = normalizeGuiChoices(args.choices);
+  const relatedRefs = stringArrayField(args.relatedRefs) ?? stringArrayField(args.displayedRefs);
+  const text = formatGuiAskUserText({
+    title,
+    message,
+    choices,
+    relatedRefs,
+    approvalRequest,
+  });
+  const placement = isRecord(result.placement) ? result.placement : undefined;
+  return {
+    kind,
+    title,
+    message,
+    text,
+    submitCommandTemplate: stringField(args.submitCommandTemplate),
+    choices,
+    approvalRequest,
+    relatedRefs,
+    displayedRefs: relatedRefs,
+    placement: placement
+      ? {
+          panel: stringField(placement.panel),
+          viewId: stringField(placement.viewId),
+        }
+      : undefined,
+  };
+}
+
 function isCodexSamplingRetryMessage(value: string): boolean {
   return /Reconnecting\.\.\.\s+\d+\/\d+/i.test(value)
     || /stream disconnected - retrying sampling request/i.test(value);
@@ -325,6 +423,7 @@ function guiPresentFromRaw(
     text: text.trim(),
     intent,
     ref,
+    displayedRefs: stringArrayField(args.displayedRefs) ?? (ref ? [ref] : undefined),
     title,
     hint,
     placement: placement
@@ -334,6 +433,50 @@ function guiPresentFromRaw(
         }
       : undefined,
   };
+}
+
+function formatGuiAskUserText(input: {
+  title: string;
+  message?: string;
+  choices?: Array<{ label: string; commandText: string; style?: string }>;
+  relatedRefs?: string[];
+  approvalRequest?: Record<string, unknown>;
+}) {
+  const risk = stringField(input.approvalRequest?.riskLevel) ?? stringField(input.approvalRequest?.risk);
+  const approvalId = stringField(input.approvalRequest?.id) ?? stringField(input.approvalRequest?.approvalRef);
+  const actionRef = stringField(input.approvalRequest?.actionRef);
+  const lines = [
+    `## ${input.title}`,
+    input.message,
+    risk ? `Risk: \`${risk}\`` : undefined,
+    approvalId ? `Approval ref: \`${approvalId}\`` : undefined,
+    actionRef ? `Action ref: \`${actionRef}\`` : undefined,
+    input.relatedRefs?.length ? ['Evidence refs:', ...input.relatedRefs.map((ref) => `- \`${ref}\``)].join('\n') : undefined,
+    input.choices?.length ? ['Choices:', ...input.choices.map((choice) => `- ${choice.label}: \`${choice.commandText}\``)].join('\n') : undefined,
+  ].filter(Boolean);
+  return lines.join('\n\n');
+}
+
+function normalizeGuiChoices(value: unknown): Array<{ label: string; commandText: string; style?: string }> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const choices = value.flatMap((item) => {
+    if (!isRecord(item)) return [];
+    const label = stringField(item.label);
+    const commandText = stringField(item.commandText);
+    if (!label || !commandText) return [];
+    return [{
+      label,
+      commandText,
+      style: stringField(item.style),
+    }];
+  });
+  return choices.length ? choices : undefined;
+}
+
+function stringArrayField(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const entries = value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
+  return entries.length ? entries : undefined;
 }
 
 export function codexSessionIdFromRaw(raw: unknown): string | undefined {

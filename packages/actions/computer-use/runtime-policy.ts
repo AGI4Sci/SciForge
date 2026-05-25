@@ -1,9 +1,9 @@
-export type ComputerUseIndependentInputAdapter = 'virtual-hid' | 'remote-desktop' | 'browser-sandbox' | 'accessibility-per-window';
+export type ComputerUseIndependentInputAdapter = 'virtual-hid' | 'remote-desktop';
 export type ComputerUseCaptureKind = 'display' | 'window';
 export type ComputerUseCoordinateSpace = 'screen' | 'window' | 'window-local';
 export type ComputerUseInputIsolation = 'best-effort' | 'require-focused-target';
 export type ComputerUseWindowTargetMode = 'display' | 'active-window' | 'window-id' | 'app-window';
-export type ComputerUsePlannerContractIssue = 'coordinate-output' | 'platform-incompatible-action' | 'unsupported-action' | 'empty-message-content';
+export type ComputerUsePlannerContractIssue = 'coordinate-output' | 'platform-incompatible-action' | 'unsupported-action' | 'empty-message-content' | 'completion-evidence-missing' | 'ambiguous-target-description';
 
 export const computerUseInputPolicyIds = {
   actionType: 'generic-mouse-keyboard',
@@ -18,10 +18,8 @@ export const computerUseInputPolicyIds = {
 } as const;
 
 export const computerUseIndependentInputAdapters = [
-  'browser-sandbox-adapter',
   'remote-desktop-session',
   'virtual-hid-device',
-  'accessibility-per-window-adapter',
 ] as const;
 
 export function computerUseExecutorBoundary(desktopPlatform: string) {
@@ -90,6 +88,7 @@ export function computerUseInputChannelContract(options: {
   desktopPlatform: string;
   dryRun?: boolean;
   inputAdapter?: string;
+  independentAdapterReady?: boolean;
   allowSharedSystemInput?: boolean;
   showVisualCursor?: boolean;
   targetResolved: boolean;
@@ -99,7 +98,7 @@ export function computerUseInputChannelContract(options: {
 }) {
   const dryRun = Boolean(options.dryRun);
   const configuredIndependentAdapter = normalizeComputerUseIndependentInputAdapter(options.inputAdapter);
-  const independentAdapterReady = false;
+  const independentAdapterReady = Boolean(options.independentAdapterReady);
   const independentInput = !dryRun && Boolean(configuredIndependentAdapter) && independentAdapterReady;
   const sharedSystemAllowed = Boolean(options.allowSharedSystemInput);
   const sharedSystemInput = computerUseUsesSharedSystemInput(options);
@@ -119,8 +118,8 @@ export function computerUseInputChannelContract(options: {
         : 'may-affect-frontmost-window';
   return {
     type: computerUseInputPolicyIds.actionType,
-    executor: computerUseInputExecutor({ desktopPlatform: options.desktopPlatform, dryRun }),
-    executorBoundary: dryRun ? computerUseInputPolicyIds.dryRunBoundary : computerUseExecutorBoundary(options.desktopPlatform),
+    executor: independentInput ? provider : computerUseInputExecutor({ desktopPlatform: options.desktopPlatform, dryRun }),
+    executorBoundary: independentInput ? provider : dryRun ? computerUseInputPolicyIds.dryRunBoundary : computerUseExecutorBoundary(options.desktopPlatform),
     provider,
     isolation: options.isolation,
     targetBound: options.targetBound,
@@ -129,13 +128,13 @@ export function computerUseInputChannelContract(options: {
     keyboardMode: dryRun ? 'virtual-no-user-keyboard-events' : independentInput ? 'adapter-window-bound-keyboard' : sharedSystemInput ? 'system-key-events' : 'none',
     visualPointer: dryRun ? 'virtual-trace-only' : options.showVisualCursor ? 'sciforge-distinct-overlay-cursor' : 'off',
     visualPointerShape: options.showVisualCursor ? computerUseInputPolicyIds.visualPointerShape : undefined,
-    executorLockScope: sharedSystemInput ? 'global-shared-system-input' : options.targetBound ? 'target-window' : 'display-fallback',
+    executorLockScope: independentInput ? 'independent-adapter-session' : sharedSystemInput ? 'global-shared-system-input' : options.targetBound ? 'target-window' : 'display-fallback',
     executorLockId: options.executorLockId,
     userDeviceImpact,
     independentAdapterRequiredForNoUserImpact: !dryRun && !independentInput,
     availableIndependentAdapters: [...computerUseIndependentInputAdapters],
     currentIndependentAdapter: dryRun ? 'dry-run' : configuredIndependentAdapter ?? 'not-configured',
-    independentAdapterStatus: dryRun ? 'dry-run' : configuredIndependentAdapter ? 'configured-unimplemented' : 'not-configured',
+    independentAdapterStatus: dryRun ? 'dry-run' : independentInput ? 'ready' : configuredIndependentAdapter ? 'configured-unimplemented' : 'not-configured',
     sharedSystemInputExplicitlyAllowed: !dryRun && !independentInput ? sharedSystemAllowed : undefined,
     failClosed: !options.targetResolved
       || (options.isolation === 'require-focused-target' && !options.targetBound)
@@ -235,7 +234,7 @@ export function computerUseSchedulerRunMetadata(options: {
       mode: 'blocked',
       lockId: computerUseInputPolicyIds.unresolvedWindowLockId,
       lockScope: 'none',
-      policy: 'do not execute real GUI actions until WindowTarget resolves to an isolated target or explicit display fallback',
+      policy: 'do not execute real GUI actions until WindowTarget resolves to an isolated target window',
       actionConcurrency: 'blocked-unresolved-window-target',
       analysisConcurrency: 'parallel-allowed',
       focusPolicy: 'fail-closed-before-action',
@@ -263,8 +262,6 @@ export function normalizeComputerUseIndependentInputAdapter(value: string | unde
   if (!normalized) return undefined;
   if (normalized === 'virtual-hid' || normalized === 'virtual-hid-device') return 'virtual-hid';
   if (normalized === 'remote-desktop' || normalized === 'remote-desktop-session') return 'remote-desktop';
-  if (normalized === 'browser-sandbox' || normalized === 'browser-sandbox-adapter') return 'browser-sandbox';
-  if (normalized === 'accessibility-per-window' || normalized === 'accessibility-per-window-adapter') return 'accessibility-per-window';
   return undefined;
 }
 
@@ -310,6 +307,153 @@ export function computerUseSchedulerLockIdForTarget(target: { mode: string; appN
 
 export function computerUseSystemEventsResultLine(actionType: string, showVisualCursor?: boolean) {
   return `system-events ${actionType} visualCursor=${showVisualCursor ? 'not-shown-system-events-primary' : 'off'}`;
+}
+
+export function computerUseVisibleArtifactGapReason(
+  task: string,
+  executedActions: Array<{ type: string; text?: string }>,
+  options: { finalAttempt?: boolean } = {},
+) {
+  if (!/(create|make|produce|生成|制作|创建).{0,40}(slide|ppt|presentation|deck|artifact|文稿|幻灯片|演示)/i.test(task)) return '';
+  const hasOnlyBootstrapActions = executedActions.every((action) => action.type === 'open_app' || action.type === 'wait');
+  if (hasOnlyBootstrapActions) {
+    return options.finalAttempt
+      ? 'Visible artifact task did not satisfy completion acceptance: app/window bootstrap finished without visible content entry or structure-edit actions.'
+      : '';
+  }
+  if (options.finalAttempt && requiresRichComputerUseArtifactContent(task)) {
+    const typedTexts = executedActions
+      .filter((action) => action.type === 'type_text')
+      .map((action) => String(action.text ?? '').trim())
+      .filter((text) => text && !looksLikeComputerUseNavigationText(text));
+    const totalTypedChars = typedTexts.join('\n').length;
+    const hasChunkedContent = typedTexts.length >= 2 || typedTexts.some((text) => /[\n\r]|(?:^|\n)\s*[-*•]/.test(text));
+    if (totalTypedChars < 60 || !hasChunkedContent) {
+      return 'Visible artifact task did not satisfy completion acceptance: rich slide/facts tasks require visible non-navigation body text entry before completion.';
+    }
+  }
+  const hasContentEntry = executedActions.some((action) => action.type === 'type_text' || action.type === 'click' || action.type === 'press_key' || action.type === 'hotkey');
+  return hasContentEntry
+    ? ''
+    : 'Visible artifact task did not satisfy completion acceptance: no visible content entry or structure-edit action was executed after app/window bootstrap.';
+}
+
+export function computerUseTextEntryContextBlockReason(options: {
+  actionType: string;
+  text?: string;
+  targetAppName?: string;
+  targetTitle?: string;
+  observationSummary?: string;
+  visibleTexts?: string[];
+}) {
+  if (options.actionType !== 'type_text') return '';
+  const text = String(options.text ?? '').trim();
+  if (!looksLikeComputerUseFilePathText(text)) return '';
+  const context = [
+    options.targetAppName,
+    options.targetTitle,
+    options.observationSummary,
+    ...(options.visibleTexts ?? []),
+  ].filter(Boolean).join(' ');
+  if (looksLikeComputerUseFileDialogContext(context)) return '';
+  return [
+    'Filesystem path text entry blocked because the current target window does not look like a save/open/file dialog.',
+    'Use visible Save As or file-dialog controls first; do not type file paths into document or slide editor canvases.',
+  ].join(' ');
+}
+
+export function computerUseActionObservationContextBlockReason(options: {
+  actionType: string;
+  text?: string;
+  targetDescription?: string;
+  targetRegionDescription?: string;
+  targetAppName?: string;
+  targetTitle?: string;
+  observationRef?: string;
+  observationSummary?: string;
+  visibleTexts?: string[];
+  visibleTextExtractionEnabled?: boolean;
+}) {
+  const textEntryBlock = computerUseTextEntryContextBlockReason(options);
+  if (textEntryBlock) return textEntryBlock;
+  return computerUseTargetEvidenceBlockReason(options);
+}
+
+export function computerUseTargetEvidenceBlockReason(options: {
+  actionType: string;
+  targetDescription?: string;
+  targetRegionDescription?: string;
+  targetAppName?: string;
+  targetTitle?: string;
+  observationSummary?: string;
+  visibleTexts?: string[];
+  visibleTextExtractionEnabled?: boolean;
+}) {
+  if (!['click', 'double_click', 'drag'].includes(options.actionType)) return '';
+  if (options.visibleTextExtractionEnabled === false) return '';
+  const target = [
+    options.targetDescription,
+    options.targetRegionDescription,
+  ].filter(Boolean).join(' ');
+  if (!target || !looksLikeComputerUseVisibleTextRequiredFileTarget(target)) return '';
+  const evidence = [
+    options.targetAppName,
+    options.targetTitle,
+    options.observationSummary,
+    ...(options.visibleTexts ?? []),
+  ].filter(Boolean).join(' ');
+  if (looksLikeComputerUseFileDialogContext(evidence) || targetVisibleInComputerUseEvidence(target, evidence)) return '';
+  return [
+    'File/save target blocked because the current compact observation does not show that target or a save/open/file dialog.',
+    'Do not infer File, Save As, Browse, filename/path, or location controls from prior clicks; use only controls visible in the current target observation.',
+  ].join(' ');
+}
+
+function requiresRichComputerUseArtifactContent(task: string) {
+  return /\b(?:three|3)\b|facts?|points?|bullets?|body text|要点|事实|正文/i.test(task);
+}
+
+function looksLikeComputerUseNavigationText(text: string) {
+  return /^(?:https?:\/\/|file:\/\/|www\.)/i.test(text)
+    || /^(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?(?:\/|$)/.test(text);
+}
+
+function looksLikeComputerUseFilePathText(text: string) {
+  return /^(?:\/|~\/|[A-Za-z]:[\\/])/.test(text)
+    || /\.(?:pptx?|key|pdf|docx?|xlsx?|txt|md|csv|png|jpe?g|json)$/i.test(text);
+}
+
+function looksLikeComputerUseFileDialogContext(text: string) {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  const withoutAutosave = compact.replace(/\bauto\s*save\b/gi, '').replace(/自动保存/g, '');
+  return /save as|open|choose|file dialog|filename|file name|where|location|folder|finder|访达|另存|打开|选取|选择|文件名|位置|文件夹/i.test(withoutAutosave)
+    || /\bsave\b/i.test(withoutAutosave);
+}
+
+function looksLikeComputerUseVisibleTextRequiredFileTarget(text: string) {
+  return /(?:\bfile\b.{0,16}\b(?:tab|menu|ribbon|option|pane)\b)|(?:\b(?:save as|browse|filename|file name|path field|location field|where field)\b)|(?:\b(?:file dialog|save dialog|open dialog|choose dialog)\b)|(?:文件.{0,8}(?:选项|标签|菜单|功能区))|(?:另存为|浏览|文件名|路径栏|路径字段|位置栏|位置字段)/i.test(text);
+}
+
+function targetVisibleInComputerUseEvidence(target: string, evidence: string) {
+  const targetLower = target.toLowerCase();
+  const evidenceLower = evidence.toLowerCase();
+  const candidates = [
+    'file',
+    'save as',
+    'browse',
+    'filename',
+    'file name',
+    'path',
+    'location',
+    'where',
+    '文件',
+    '另存为',
+    '浏览',
+    '文件名',
+    '路径',
+    '位置',
+  ].filter((candidate) => targetLower.includes(candidate.toLowerCase()));
+  return candidates.some((candidate) => evidenceLower.includes(candidate.toLowerCase()));
 }
 
 export function isComputerUseDarwinPlatform(value: string | undefined) {

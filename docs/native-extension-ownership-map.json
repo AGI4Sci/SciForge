@@ -1,0 +1,174 @@
+{
+  "schemaVersion": "sciforge.native-extension-ownership-map.v1",
+  "principles": {
+    "guiCapabilityCommands": ["search", "expand", "plan", "explain"],
+    "guiRankingAllowed": false,
+    "runtimeRankingAllowed": false,
+    "rawRuntimeOutputPlacement": "folded-audit-debug-only",
+    "runtimeOpenAiFallback": "explicit-opt-in-only"
+  },
+  "entries": [
+    {
+      "id": "capability-discovery",
+      "status": "target",
+      "owner": "codex-native-plugin-skill-tool-mcp",
+      "targetNativeSurfaces": ["Codex native capability discovery", "/capabilities search", "/capabilities expand", "/capabilities plan", "/capabilities explain"],
+      "currentImplementationPaths": ["src/runtime/capability-discovery.ts", "src/runtime/capability-broker.ts", "packages/skills"],
+      "targetImplementationPaths": ["packages/skills", "Codex native skill/plugin/tool/MCP registry"],
+      "enforcementScripts": ["npm run smoke:package-runtime-boundary", "npm run smoke:native-extension-ownership"],
+      "allowedGuiCommandVerbs": ["search", "expand", "plan", "explain"],
+      "forbiddenOwners": ["React/UI ranking", "runtime gateway ranking"],
+      "migrationNote": "GUI sends terminal-equivalent /capabilities text only; TUI-native discovery owns ranking and expansion."
+    },
+    {
+      "id": "gui-presentation-catalog",
+      "status": "target",
+      "owner": "sciforge-gui-extension",
+      "targetNativeSurfaces": ["/gui/capabilities/presentation.json", "/gui/renderers/<componentId>.json", "gui.search(scope='/gui/capabilities')", "gui.present"],
+      "currentImplementationPaths": ["packages/presentation/components", "packages/presentation/interactive-views", "src/ui"],
+      "targetImplementationPaths": ["packages/presentation/components", "packages/presentation/interactive-views", "SciForge GUI extension surface"],
+      "enforcementScripts": ["npm run smoke:package-runtime-boundary", "npm run smoke:native-extension-ownership"],
+      "forbiddenOwners": ["TUI task skill registry", "Codex capability ranking", "workspace/action/provider execution"],
+      "migrationNote": "Presentation packages expose renderer/viewer/workbench capability only; GUI may render, focus, and collect input, but does not register TUI task skills or execute providers."
+    },
+    {
+      "id": "harness-policy-budget-repair",
+      "status": "target",
+      "owner": "codex-tui-native-extension",
+      "targetNativeSurfaces": ["Codex policy plugin", "Codex harness skill", "MCP verifier or repair tool"],
+      "currentImplementationPaths": ["packages/agent-harness", "src/runtime/gateway", "packages/contracts/runtime"],
+      "targetImplementationPaths": ["packages/agent-harness", "packages/verifiers", "Codex native policy/plugin surfaces"],
+      "enforcementScripts": ["npm run smoke:package-runtime-boundary", "npm run smoke:native-extension-ownership"],
+      "forbiddenOwners": ["React/UI policy decisions", "GUI confidence inference"],
+      "migrationNote": "Policy, budget, confidence, repair, and completion gates remain TUI-native decisions; GUI may display state or collect confirmation only."
+    },
+    {
+      "id": "provider-route",
+      "status": "target",
+      "owner": "codex-provider-mcp-tool-ecosystem",
+      "targetNativeSurfaces": ["Codex custom model provider", "MCP provider route", "native tool route"],
+      "currentImplementationPaths": ["src/runtime/gateway/agent-backend-config.ts", "src/runtime/gateway/capability-provider-preflight.ts", "packages/backend"],
+      "targetImplementationPaths": ["packages/backend", "Codex provider configuration", "MCP server manifests"],
+      "enforcementScripts": ["npm run smoke:runtime-provider-preflight", "npm run smoke:native-extension-ownership"],
+      "forbiddenOwners": ["GUI provider selection", "silent OpenAI fallback"],
+      "migrationNote": "Provider routing must fail closed when the selected route is unavailable; no silent OpenAI fallback is allowed."
+    },
+    {
+      "id": "verifier",
+      "status": "target",
+      "owner": "codex-native-verifier-tool-skill",
+      "targetNativeSurfaces": ["Codex verifier tool", "MCP verifier", "verifier skill"],
+      "currentImplementationPaths": ["packages/verifiers", "src/runtime/gateway/verification-policy.ts", "src/runtime/gateway/runtime-verifier-registry.ts"],
+      "targetImplementationPaths": ["packages/verifiers", "Codex native verifier surfaces"],
+      "enforcementScripts": ["npm run smoke:package-runtime-boundary", "npm run smoke:native-extension-ownership"],
+      "forbiddenOwners": ["GUI completion inference", "raw log confidence inference"],
+      "migrationNote": "Verifier owns verdict, confidence, critique, and repair hints; GUI only renders explicit verifier output."
+    },
+    {
+      "id": "skill-promotion",
+      "status": "target",
+      "owner": "codex-skill-plugin-mcp-promotion",
+      "targetNativeSurfaces": ["Codex skill", "Codex plugin", "MCP tool", "slash command"],
+      "currentImplementationPaths": ["src/runtime/skill-promotion.ts", "packages/skills"],
+      "targetImplementationPaths": ["packages/skills", "Codex native skill/plugin marketplace"],
+      "enforcementScripts": ["npm run smoke:package-runtime-boundary", "npm run smoke:native-extension-ownership"],
+      "forbiddenOwners": ["GUI task skill registry", "presentation component promotion"],
+      "migrationNote": "Workspace proposals are staging artifacts; final promotion target is Codex native."
+    },
+    {
+      "id": "external-app-connectors",
+      "status": "target",
+      "owner": "codex-tui-native-connector-tool-mcp-worker",
+      "targetNativeSurfaces": ["packages/connectors", "MCP resources/tools", "tool-worker manifest/health/invoke", "/connectors terminal-equivalent text"],
+      "currentImplementationPaths": ["packages/connectors", "packages/contracts/tool-worker"],
+      "targetImplementationPaths": ["packages/connectors", "Codex native connector/tool/MCP/worker surfaces"],
+      "enforcementScripts": ["npm run smoke:package-runtime-boundary", "npm run smoke:native-extension-ownership"],
+      "forbiddenOwners": ["GUI third-party SDK caller", "GUI connector CLI caller", "GUI desktop automation"],
+      "migrationNote": "External app connectors talk only to the TUI Host and return refs, drafts, approval requests, or audit refs; GUI sends text, renders refs, and collects confirmation."
+    },
+    {
+      "id": "computer-use",
+      "status": "migrating",
+      "owner": "codex-tui-native-action-provider",
+      "targetNativeSurfaces": ["packages/actions/computer-use runTask(request, hostPorts)", "packages/observe/vision sense provider", "desktop/remote/dry-run host ports"],
+      "currentImplementationPaths": ["packages/actions/computer-use", "packages/observe/vision", "src/runtime/computer-use", "src/runtime/vision-sense"],
+      "targetImplementationPaths": ["packages/actions/computer-use", "packages/observe/vision", "src/runtime host adapter only"],
+      "enforcementScripts": ["python -m pytest packages/actions/computer-use/tests", "npm run smoke:vision-sense-runtime", "npm run smoke:package-runtime-boundary"],
+      "forbiddenOwners": ["React/UI Computer Use executor", "GUI desktop bridge", "Playwright/DOM shortcut as Computer Use success"],
+      "remainingMigrationSubtasks": [
+        {
+          "id": "CU-PKG-01-action-schema",
+          "currentPath": "src/runtime/computer-use/actions.ts",
+          "targetOwner": "packages/actions/computer-use",
+          "runtimeBoundary": "src/runtime keeps only host-specific action transport mapping after package-owned schema validation exists"
+        },
+        {
+          "id": "CU-PKG-02-window-target-contract",
+          "currentPath": "src/runtime/computer-use/window-target.ts",
+          "targetOwner": "packages/actions/computer-use contract plus host adapter implementation",
+          "runtimeBoundary": "src/runtime may keep macOS window probing as a concrete host port, not generic targeting policy"
+        },
+        {
+          "id": "CU-PKG-03-scheduler-lease-contract",
+          "currentPath": "src/runtime/computer-use/scheduler.ts",
+          "targetOwner": "packages/actions/computer-use policy contract",
+          "runtimeBoundary": "src/runtime may keep filesystem lock IO as host implementation after package defines the lease contract"
+        },
+        {
+          "id": "CU-PKG-04-executor-adapter-contract",
+          "currentPath": "src/runtime/computer-use/executor.ts",
+          "targetOwner": "packages/actions/computer-use executor adapter contract",
+          "runtimeBoundary": "src/runtime keeps only platform execution providers such as macOS shared input or future remote desktop adapters"
+        },
+        {
+          "id": "CU-PKG-05-package-bridge-plan-locate-verify-trace",
+          "currentPath": "src/runtime/computer-use/package-bridge.ts",
+          "targetOwner": "packages/actions/computer-use plus packages/observe/vision",
+          "runtimeBoundary": "src/runtime should shrink to request conversion, host port injection, runtime events, and ToolPayload wrapping"
+        },
+        {
+          "id": "CU-PKG-06-coordinate-and-focus-policy",
+          "currentPath": "src/runtime/vision-sense/computer-use-grounding.ts",
+          "targetOwner": "packages/observe/vision for sense and packages/actions/computer-use for action handoff",
+          "runtimeBoundary": "src/runtime keeps only provider process invocation and workspace file refs"
+        },
+    {
+      "id": "CU-PKG-07-stale-policy-wrapper-cleanup",
+      "currentPath": "src/runtime/vision-sense/computer-use-policy-bridge.ts",
+      "targetOwner": "packages/observe/vision policy surface or deleted",
+      "runtimeBoundary": "unused compatibility wrappers are removed instead of kept as parallel policy paths"
+    },
+    {
+      "id": "CU-PKG-08-planner-text-policy",
+      "currentPath": "src/runtime/vision-sense/computer-use-plan.ts",
+      "targetOwner": "packages/actions/computer-use planner policy contract plus packages/observe/vision compact observation and verifier feedback helpers",
+      "runtimeBoundary": "src/runtime may keep only a Runtime Codex planner host-port adapter; planner prompt, retry/repair, schema validation, completion evidence, no-effect guards, and app-switch guards must not remain generic runtime policy"
+    },
+    {
+      "id": "CU-PKG-09-capture-observation-visible-text",
+      "currentPath": "src/runtime/computer-use/capture.ts",
+      "targetOwner": "packages/observe/vision for screenshot/OCR/focus observation policy plus src/runtime for concrete macOS capture host implementation",
+      "runtimeBoundary": "src/runtime may keep macOS screencapture, Swift Vision OCR invocation, and workspace file refs as host implementation after observation policy and trace contracts are package/provider-owned"
+    },
+    {
+      "id": "CU-PKG-10-independent-simulated-input-adapter",
+      "currentPath": "src/runtime/computer-use/executor.ts",
+      "targetOwner": "packages/actions/computer-use executor adapter contract plus host-specific independent input provider",
+      "runtimeBoundary": "src/runtime may keep only the concrete platform host-port implementation; generic Computer Use policy must require an independent simulated pointer/keyboard adapter for final user acceptance, and shared system input must remain diagnostic or blocked evidence until replaced"
+    }
+  ],
+      "migrationNote": "Computer Use is a TUI-owned action provider. It consumes optional vision sense output, returns refs-first results or approvalRequest, and never imports GUI implementation."
+    },
+    {
+      "id": "dual-instance-self-repair",
+      "status": "retired-for-default-runtime",
+      "owner": "codex-native-repair-workflow",
+      "targetNativeSurfaces": ["Codex repair workflow", "external supervisor", "file-backed loop state"],
+      "currentImplementationPaths": ["src/runtime/repair-handoff-runner.ts", "tools/dev-dual.ts", "tools/worktree-dual.ts"],
+      "targetImplementationPaths": ["Codex native repair workflow", "external supervisor"],
+      "enforcementScripts": ["npm run smoke:dual-instance", "npm run smoke:dual-worktree-instance", "npm run smoke:native-extension-ownership"],
+      "forbiddenOwners": ["default two SciForge app instances as repair runtime"],
+      "migrationNote": "The legacy dual-instance app loop is retired for default runtime; only Codex-native or externally supervised repair may re-enable it."
+    }
+  ]
+}

@@ -26,7 +26,18 @@ export function createSciForgeDesktopPreloadApi(ipcRenderer: DesktopIpcRenderer)
     requestShutdown: () => ipcRenderer.invoke('runtime:shutdown'),
     openExternal: (url: string) => ipcRenderer.invoke('platform:open-external', url),
     revealPath: (path: string) => ipcRenderer.invoke('platform:reveal-path', path),
-    pickDirectory: (defaultPath?: string) => ipcRenderer.invoke('platform:pick-directory', defaultPath),
+    pickDirectory: async (defaultPath?: string) => normalizePickDirectoryResult(
+      await ipcRenderer.invoke('platform:pick-directory', defaultPath),
+    ),
+  };
+}
+
+function normalizePickDirectoryResult(value: unknown): { ok: boolean; path?: string } {
+  if (!value || typeof value !== 'object') return { ok: false };
+  const record = value as Record<string, unknown>;
+  return {
+    ok: Boolean(record.ok),
+    path: typeof record.path === 'string' ? record.path : undefined,
   };
 }
 

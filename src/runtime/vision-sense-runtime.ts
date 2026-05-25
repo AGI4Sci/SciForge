@@ -2,12 +2,14 @@ import { resolve } from 'node:path';
 
 import type { GatewayRequest, ToolPayload, WorkspaceRuntimeCallbacks } from './runtime-types.js';
 import { emitWorkspaceRuntimeEvent } from './workspace-runtime-events.js';
-import { genericBridgeBlockedPayload, runGenericVisionComputerUseLoop } from './vision-sense/computer-use-bridge.js';
 import { visionSenseSafetyVerifierContract } from './vision-sense/safety-verifier.js';
 import { loadVisionSenseConfig, looksLikeComputerUseRequest, rebindWindowTargetForPromptAppAlias, visionSenseSelected } from './vision-sense/sense-provider.js';
 import { VISION_SENSE_RUNTIME_ID, VISION_TOOL_ID } from './vision-sense/trace-policy.js';
 import { windowTargetTraceConfig } from './computer-use/window-target.js';
 import { visionSenseRuntimeEventTypes } from '../../packages/observe/vision/computer-use-runtime-policy.js';
+import { computerUseHostPortsContract, gatewayRequestToComputerUseRequest } from './computer-use/host-adapter.js';
+import { runComputerUsePackageBridge } from './computer-use/package-bridge.js';
+import { genericBridgeBlockedPayload } from './vision-sense/computer-use-trace-output.js';
 
 export async function tryRunVisionSenseRuntime(
   request: GatewayRequest,
@@ -20,17 +22,22 @@ export async function tryRunVisionSenseRuntime(
   const workspace = resolve(request.workspacePath || process.cwd());
   const config = await loadVisionSenseConfig(workspace, request);
   rebindWindowTargetForPromptAppAlias(config, request.prompt);
+  const computerUseRequest = gatewayRequestToComputerUseRequest(request, config, workspace);
+  const hostPorts = computerUseHostPortsContract(config);
   emitWorkspaceRuntimeEvent(callbacks, {
     type: visionSenseRuntimeEventTypes.runtimeSelected,
     source: 'workspace-runtime',
     toolName: VISION_TOOL_ID,
     status: 'running',
-    message: 'Selected generic vision-sense Computer Use loop.',
+    message: 'Selected Computer Use action provider with local.vision-sense host adapter.',
     detail: JSON.stringify({
+      actionProviderRequest: computerUseRequest,
+      hostPorts,
       dryRun: config.dryRun,
       captureDisplays: config.captureDisplays,
       windowTarget: windowTargetTraceConfig(config.windowTarget),
-      plannedActions: config.plannedActions.length,
+      testActionFixtureMode: config.testActionFixtureMode,
+      testOnlyPlannedActions: config.testActionFixtureMode ? config.testOnlyPlannedActions.length : 0,
     }),
   });
 
@@ -38,7 +45,7 @@ export async function tryRunVisionSenseRuntime(
     return genericBridgeBlockedPayload(
       request,
       workspace,
-      'local.vision-sense is selected, but the generic desktop bridge is disabled. Enable SCIFORGE_VISION_DESKTOP_BRIDGE=1 or .sciforge/config.json visionSense.desktopBridgeEnabled=true.',
+      'Computer Use action provider host adapter is selected, but desktop bridge is disabled at preflight. Enable SCIFORGE_VISION_DESKTOP_BRIDGE=1 or .sciforge/config.json visionSense.desktopBridgeEnabled=true.',
       {
         selectedRuntime: VISION_SENSE_RUNTIME_ID,
         selectedToolId: VISION_TOOL_ID,
@@ -47,7 +54,7 @@ export async function tryRunVisionSenseRuntime(
     );
   }
 
-  return runGenericVisionComputerUseLoop(request, workspace, config, callbacks);
+  return runComputerUsePackageBridge(request, workspace, config, callbacks);
 }
 
 function looksLikePlaywrightEdgeMcpBrowserRequest(prompt: string) {

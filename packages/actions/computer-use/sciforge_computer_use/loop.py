@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import fields, is_dataclass, replace
 from typing import Any, Mapping, Sequence, TypeVar
 
@@ -9,6 +10,7 @@ from .contracts import (
     ActionPlan,
     ActionPlanner,
     ActionTarget,
+    ApprovalRequest,
     ComputerUseRequest,
     ComputerUseResult,
     ComputerUseStatus,
@@ -20,6 +22,8 @@ from .contracts import (
     SenseProvider,
     Verification,
     Verifier,
+    PlannerContractIssue,
+    ComputerUseHostPorts,
 )
 from .budget import create_loop_budget_debit
 from .safety import assess_action_risk
@@ -44,13 +48,23 @@ def run_computer_use_task(
     """
 
     req = _coerce_request(request)
+    request_issue = _request_contract_issue(req)
+    if request_issue:
+        return ComputerUseResult(
+            status="failed-with-reason",
+            reason=request_issue,
+            final_observation=None,
+            failure_diagnostics={"failedStage": "request-validation"},
+            metrics={},
+        )
     steps: list[LoopStep] = []
     final_observation: Observation | None = None
 
     for index in range(req.max_steps):
         before = _coerce_observation(sense.observe(req, steps))
         final_observation = before
-        plan = _coerce_action_plan(planner.plan(req, before, steps))
+        raw_plan = planner.plan(req, before, steps)
+        plan = _coerce_action_plan(raw_plan)
 
         if plan.done:
             step = LoopStep(index=index, before=before, plan=plan, status="done")
@@ -63,25 +77,34 @@ def run_computer_use_task(
                 before,
             )
 
-        if plan.kind is None:
+        planner_issue = _planner_contract_issue(plan)
+        if planner_issue:
+            contract_reason = _planner_contract_reason(planner_issue, plan)
             step = LoopStep(
                 index=index,
                 before=before,
                 plan=plan,
                 status="failed",
-                failure_reason="Planner returned no action kind.",
+                failure_reason=contract_reason,
             )
             steps.append(step)
             return _result(
                 "failed-with-reason",
-                "Planner returned no executable generic action.",
+                contract_reason,
                 req,
                 steps,
                 before,
+                {"failedStage": "planner", "contractIssue": planner_issue},
             )
 
         risk = assess_action_risk(plan, fail_closed=req.risk_policy == "fail-closed")
-        if risk.blocked:
+        missing_approval_ref = risk.needs_confirmation and req.risk_policy == "allow-confirmed" and not req.approval_ref
+        if risk.blocked or missing_approval_ref:
+            reason = (
+                "High-risk Computer Use action was marked allow-confirmed but no approval_ref was provided."
+                if missing_approval_ref
+                else risk.reason
+            )
             step = LoopStep(
                 index=index,
                 before=before,
@@ -93,16 +116,17 @@ def run_computer_use_task(
                     }
                 ),
                 status="blocked",
-                failure_reason=risk.reason,
+                failure_reason=reason,
             )
             steps.append(step)
             return _result(
                 "needs-confirmation",
-                risk.reason,
+                reason,
                 req,
                 steps,
                 before,
                 {"blockedActionIndex": index, "riskLevel": risk.level},
+                _approval_request(req, plan, risk.level, reason, index, before),
             )
 
         grounding: Grounding | None = None
@@ -193,6 +217,67 @@ def run_computer_use_task(
     )
 
 
+def run_task(
+    request: ComputerUseRequest | Mapping[str, Any] | str,
+    host_ports: ComputerUseHostPorts,
+) -> ComputerUseResult:
+    """Run Computer Use through the public host-ports interface.
+
+    This is the package-level TUI action provider surface. The existing
+    `run_computer_use_task` remains useful for unit tests and custom provider
+    wiring; `run_task` adapts host-injected ports into sense/planner/executor/
+    verifier protocols, writes a trace when the host exposes `write_trace`, and
+    emits compact start/finish events.
+    """
+
+    req = _coerce_request(request)
+    request_issue = _request_contract_issue(req)
+    if request_issue:
+        return ComputerUseResult(
+            status="failed-with-reason",
+            reason=request_issue,
+            final_observation=None,
+            failure_diagnostics={"failedStage": "request-validation"},
+            metrics={},
+        )
+    missing_ports = _missing_required_host_ports(host_ports)
+    if missing_ports:
+        return ComputerUseResult(
+            status="failed-with-reason",
+            reason=f"Computer Use host ports missing required callable(s): {', '.join(missing_ports)}.",
+            final_observation=None,
+            failure_diagnostics={
+                "failedStage": "host-port-validation",
+                "missingPorts": missing_ports,
+            },
+            metrics={},
+        )
+    _call_optional_port(host_ports, "emit_event", {
+        "type": "computer-use.run.started",
+        "schemaVersion": req.schema_version,
+        "task": req.task,
+        "maxSteps": req.max_steps,
+    })
+    result = run_computer_use_task(
+        req,
+        _HostPortSense(host_ports),
+        _HostPortPlanner(host_ports),
+        _HostPortExecutor(host_ports),
+        _HostPortVerifier(host_ports),
+    )
+    trace_ref = _call_optional_port(host_ports, "write_trace", result)
+    if trace_ref:
+        result = replace(result, trace_refs=(str(trace_ref),))
+    _call_optional_port(host_ports, "emit_event", {
+        "type": "computer-use.run.finished",
+        "status": result.status,
+        "reason": result.reason,
+        "traceRefs": list(result.trace_refs),
+        "budgetDebitRefs": list(result.budget_debit_refs),
+    })
+    return result
+
+
 def _requires_grounding(plan: ActionPlan) -> bool:
     return plan.kind in {"click", "double_click", "drag"} and plan.target is not None
 
@@ -204,6 +289,7 @@ def _result(
     steps: Sequence[LoopStep],
     final_observation: Observation | None,
     diagnostics: Mapping[str, Any] | None = None,
+    approval_request: ApprovalRequest | None = None,
 ) -> ComputerUseResult:
     metrics = _result_metrics(steps)
     budget_debit = create_loop_budget_debit(request, steps, status, metrics)
@@ -219,8 +305,10 @@ def _result(
         reason=reason,
         steps=steps_with_refs,
         final_observation=final_observation,
+        approval_request=approval_request,
         failure_diagnostics=dict(diagnostics or {}),
         metrics=metrics,
+        trace_refs=(),
         budget_debits=(budget_debit,),
         budget_debit_refs=budget_debit_refs,
     )
@@ -253,8 +341,11 @@ def _coerce_request(value: ComputerUseRequest | Mapping[str, Any] | str) -> Comp
         return ComputerUseRequest(task=value)
     return ComputerUseRequest(
         task=str(value.get("task") or value.get("text") or ""),
+        schema_version=str(value.get("schema_version") or value.get("schemaVersion") or "sciforge.computer-use.request.v1"),
         max_steps=int(value.get("max_steps") or value.get("maxSteps") or 12),
-        risk_policy=value.get("risk_policy") or value.get("riskPolicy") or "fail-closed",
+        risk_policy=value.get("risk_policy") or value.get("riskPolicy") or "fail-closed",  # type: ignore[arg-type]
+        approval_ref=value.get("approval_ref") or value.get("approvalRef") or value.get("humanApprovalRef"),
+        providers=value.get("providers") or {},
         window_target=value.get("window_target") or value.get("windowTarget"),
         metadata=value.get("metadata") or {},
     )
@@ -294,6 +385,14 @@ def _coerce_action_plan(value: ActionPlan | Mapping[str, Any] | None) -> ActionP
         )
     else:
         target = None
+    metadata = dict(value.get("metadata") or {})
+    coordinate_keys = [
+        key for key in ("x", "y", "fromX", "fromY", "toX", "toY", "coordinates")
+        if key in value
+    ]
+    if coordinate_keys:
+        metadata["plannerContractIssue"] = "coordinate-output"
+        metadata["plannerCoordinateKeys"] = coordinate_keys
     return ActionPlan(
         kind=value.get("kind") or value.get("type"),
         target=target,
@@ -307,7 +406,7 @@ def _coerce_action_plan(value: ActionPlan | Mapping[str, Any] | None) -> ActionP
         reason=str(value.get("reason") or ""),
         risk_level=value.get("risk_level") or value.get("riskLevel") or "low",
         requires_confirmation=bool(value.get("requires_confirmation") or value.get("requiresConfirmation") or False),
-        metadata=value.get("metadata") or {},
+        metadata=metadata,
     )
 
 
@@ -361,3 +460,191 @@ def _asdict(value: Any) -> dict[str, Any]:
     if not is_dataclass(value):
         return dict(value)
     return {field.name: getattr(value, field.name) for field in fields(value)}
+
+
+class _HostPortSense:
+    def __init__(self, host_ports: ComputerUseHostPorts):
+        self.host_ports = host_ports
+
+    def observe(self, request: ComputerUseRequest, history: Sequence[LoopStep], query: str | None = None):
+        return _call_required_port(self.host_ports, "capture", request, history, query=query)
+
+    def query(self, observation: Observation, question: str, history: Sequence[LoopStep]):
+        return _call_optional_port(self.host_ports, "query", observation, question, history) or {
+            "answer": observation.summary,
+            "source": "observation-summary",
+        }
+
+    def locate(self, observation: Observation, target: ActionTarget, history: Sequence[LoopStep]):
+        return _call_required_port(self.host_ports, "locate", observation, target, history)
+
+
+class _HostPortPlanner:
+    def __init__(self, host_ports: ComputerUseHostPorts):
+        self.host_ports = host_ports
+
+    def plan(self, request: ComputerUseRequest, observation: Observation, history: Sequence[LoopStep]):
+        return _call_required_port(self.host_ports, "plan", request, observation, history)
+
+
+class _HostPortExecutor:
+    def __init__(self, host_ports: ComputerUseHostPorts):
+        self.host_ports = host_ports
+
+    def execute(self, action: ActionPlan, grounding: Grounding | None, request: ComputerUseRequest):
+        return _call_required_port(self.host_ports, "execute", action, grounding, request)
+
+
+class _HostPortVerifier:
+    def __init__(self, host_ports: ComputerUseHostPorts):
+        self.host_ports = host_ports
+
+    def verify(
+        self,
+        request: ComputerUseRequest,
+        before: Observation,
+        after: Observation,
+        action: ActionPlan,
+        execution: ExecutionOutcome,
+        history: Sequence[LoopStep],
+    ):
+        return _call_required_port(self.host_ports, "verify", request, before, after, action, execution, history)
+
+
+def _call_required_port(host_ports: Any, name: str, *args: Any, **kwargs: Any) -> Any:
+    port = _port_callable(host_ports, name)
+    if port is None:
+        raise ValueError(f"Computer Use host port {name!r} is required.")
+    return _call_port(port, *args, **kwargs)
+
+
+def _call_optional_port(host_ports: Any, name: str, *args: Any, **kwargs: Any) -> Any:
+    port = _port_callable(host_ports, name)
+    if port is None:
+        return None
+    return _call_port(port, *args, **kwargs)
+
+
+def _port_callable(host_ports: Any, name: str) -> Any:
+    if isinstance(host_ports, Mapping):
+        return host_ports.get(name) or host_ports.get(_snake_to_camel(name))
+    return getattr(host_ports, name, None) or getattr(host_ports, _snake_to_camel(name), None)
+
+
+def _missing_required_host_ports(host_ports: Any) -> list[str]:
+    required = ["capture", "plan", "execute", "locate", "verify"]
+    return [name for name in required if not callable(_port_callable(host_ports, name))]
+
+
+def _call_port(port: Any, *args: Any, **kwargs: Any) -> Any:
+    try:
+        return port(*args, **kwargs)
+    except TypeError:
+        if kwargs:
+            return port(*args)
+        raise
+
+
+def _snake_to_camel(value: str) -> str:
+    head, *tail = value.split("_")
+    return head + "".join(part[:1].upper() + part[1:] for part in tail)
+
+
+_SUPPORTED_ACTION_KINDS = {
+    "open_app",
+    "click",
+    "double_click",
+    "drag",
+    "type_text",
+    "press_key",
+    "hotkey",
+    "scroll",
+    "wait",
+}
+
+
+def _planner_contract_issue(plan: ActionPlan) -> PlannerContractIssue | None:
+    explicit = plan.metadata.get("plannerContractIssue")
+    if explicit in {"coordinate-output", "app-private-shortcut", "unsupported-action", "empty-action"}:
+        return explicit  # type: ignore[return-value]
+    if plan.kind is None:
+        return "empty-action"
+    if plan.kind not in _SUPPORTED_ACTION_KINDS:
+        return "unsupported-action"
+    if plan.kind == "hotkey" and _looks_like_app_private_shortcut(plan):
+        return "app-private-shortcut"
+    return None
+
+
+def _request_contract_issue(request: ComputerUseRequest) -> str:
+    if request.schema_version != "sciforge.computer-use.request.v1":
+        return f"Unsupported Computer Use request schema_version={request.schema_version!r}."
+    if not request.task.strip():
+        return "Computer Use request task must be non-empty."
+    if request.max_steps < 1:
+        return "Computer Use request max_steps must be at least 1."
+    if request.risk_policy not in {"fail-closed", "allow-confirmed"}:
+        return f"Unsupported Computer Use risk_policy={request.risk_policy!r}; failing closed."
+    return ""
+
+
+def _looks_like_app_private_shortcut(plan: ActionPlan) -> bool:
+    if plan.metadata.get("appPrivateShortcut") is True:
+        return True
+    if str(plan.metadata.get("shortcutScope") or "").lower() == "app-private":
+        return True
+    keys = tuple(key.strip().lower() for key in plan.keys if key.strip())
+    if not keys:
+        return True
+    normalized = tuple("command" if key in {"cmd", "meta"} else key for key in keys)
+    combo = "+".join(normalized)
+    return combo not in {
+        "command+n",
+        "command+space",
+        "command+tab",
+        "ctrl+n",
+        "alt+tab",
+    }
+
+
+def _planner_contract_reason(issue: PlannerContractIssue, plan: ActionPlan | None = None) -> str:
+    if issue == "empty-action" and plan and plan.reason:
+        return plan.reason
+    if issue == "coordinate-output":
+        return "Planner output coordinates, which violates the generic planner contract. Coordinates must come from Grounder."
+    if issue == "app-private-shortcut":
+        return "Planner emitted an app-private shortcut. Use generic visible GUI actions or platform launcher/navigation commands."
+    if issue == "unsupported-action":
+        return "Planner emitted an unsupported generic action. Use open_app, click, double_click, drag, type_text, press_key, hotkey, scroll, or wait."
+    return "Planner returned no executable generic action."
+
+
+def _approval_request(
+    request: ComputerUseRequest,
+    plan: ActionPlan,
+    risk_level: str,
+    reason: str,
+    action_index: int,
+    observation: Observation,
+) -> ApprovalRequest:
+    target = plan.target.description if plan.target else plan.app_name or plan.kind or "unknown-action"
+    digest = hashlib.sha256(f"{request.task}\n{action_index}\n{target}".encode("utf8")).hexdigest()[:16]
+    approval_id = f"approval:computer-use:{digest}"
+    return ApprovalRequest(
+        id=approval_id,
+        reason=reason,
+        action_kind=str(plan.kind or "unknown"),
+        risk_level=risk_level,  # type: ignore[arg-type]
+        blocked_action_index=action_index,
+        confirmation_text=(
+            str(plan.metadata.get("confirmationText"))
+            if plan.metadata.get("confirmationText")
+            else f"Approve Computer Use action {plan.kind or 'unknown'} for target {target!r}."
+        ),
+        refs=tuple(ref for ref in [observation.ref, request.approval_ref] if ref),
+        metadata={
+            "riskPolicy": request.risk_policy,
+            "approvalRef": request.approval_ref,
+            "target": target,
+        },
+    )

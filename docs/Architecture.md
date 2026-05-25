@@ -87,6 +87,8 @@ User / GUI gesture
 
 Computer Use 的验收也按这个边界组织。基础真实输入 smoke 只能证明 action provider、Grounder、Executor 和 Verifier 链路可用；用户级 success 至少需要完成一个真实桌面产物任务，例如制作并保存一页 PPT。目标打通需要覆盖多 App 工作流，例如 Browser/资料页、slide app、Finder/保存对话框和 SciForge GUI 结果展示。GUI 在这些验收中仍只发送终端等价文本、展示 refs 和收集确认，不直接执行桌面操作。
 
+Computer Use action provider 可以消费 `packages/observe/vision` 的 observation、focus-region、KV-Ground 坐标和 verifier feedback，但执行所有桌面/远程/dry-run action 的 owner 仍是 `packages/actions/computer-use` 以及 TUI Host 注入的 host ports。`vision-sense` 不拥有 executor、scheduler、desktop bridge、MCP 会话或用户级完成判断；它只产生 refs-first 的视觉信号。KV-Ground 是 Grounder provider，默认 endpoint 为 `http://127.0.0.1:18081`；没有明确共享路径映射时应走 inline image upload。Computer Use trace 只记录截图 refs、focus crop refs、sha256、尺寸、坐标、target description、provider metadata、diagnostics 和 approval/audit refs，不内联截图 payload、base64 或大日志。真实系统鼠标键盘属于 shared system input 风险面，除非存在独立 input adapter，否则只能在低风险、聚焦窗口和显式确认的 smoke/验收中使用。当前 `remote-desktop` 的独立 adapter 只有在 Host 显式注册 `sciforge-simulated-remote-desktop` provider 时才可执行；它写虚拟 pointer/keyboard state refs，不走 CGEvent、osascript 或 shared system input。
+
 ## GUI 状态投影
 
 GUI 可以有内部逻辑，但它属于 presentation behavior。GUI 内部事件先进入 semantic event bus，再投影成 TUI 可用的 progressive context：
@@ -262,7 +264,7 @@ SciForge 不定义新的 agent extension API。所有算法和策略扩展都使
 | Harness / policy / budget / repair | TUI 原生 policy/plugin/skill。 |
 | Provider route / MCP / remote worker | TUI 原生 provider/tool 生态。 |
 | 外部软件连接器，如飞书、微信、企业微信 | TUI 原生 connector/tool/MCP/worker；repo 内 adapter 放在 `packages/connectors`。 |
-| Computer Use | TUI 原生 action provider；repo 内能力主体放在 `packages/actions/computer-use`，可消费 `packages/observe/vision` 的 sense 输出，桌面/远程执行通过 TUI Host ports 接入。 |
+| Computer Use | TUI 原生 action provider；repo 内能力主体放在 `packages/actions/computer-use`，可消费 `packages/observe/vision` 的 sense/grounding/verifier 输出，桌面/远程/dry-run 执行通过 TUI Host ports 接入。 |
 | Artifact schema / verifier | TUI 原生 tool 或 skill。 |
 | GUI 展示、确认、输入收集 | SciForge GUI extension 暴露的 intent-based `gui.*` tools。 |
 

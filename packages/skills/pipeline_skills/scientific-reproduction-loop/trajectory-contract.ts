@@ -159,7 +159,7 @@ export interface ScientificReproductionTrajectory {
   };
   actors: Array<{
     id: string;
-    role: 'human-operator' | 'codex-worker' | 'sciforge-backend' | 'computer-use-bridge';
+    role: 'human-operator' | 'codex-worker' | 'sciforge-backend' | 'vision-sense-observer' | 'computer-use-action-provider';
   }>;
   steps: TrajectoryStep[];
   repairHistory: RepairRecord[];

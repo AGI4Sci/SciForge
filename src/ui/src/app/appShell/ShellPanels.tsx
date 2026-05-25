@@ -45,7 +45,7 @@ import {
   migrateLegacySidebarProjectId,
   sidebarProjectPath,
 } from './sidebarProjectModel';
-import { resolveSidebarProjectSessionBundle } from './sidebarProjectSessions';
+import { resolveSidebarProjectSessionBundle, type SidebarProjectSessionsByPath } from './sidebarProjectSessions';
 import { ExplorerContextMenu } from '../contextMenu/ExplorerContextMenu';
 import { resolveAppContextMenuReference } from '../contextMenu/contextMenuModel';
 import {
@@ -122,10 +122,7 @@ export interface SidebarProjectBuildOptions extends SidebarThreadBuildOptions {
   layout?: SidebarLayoutMode;
   projectOrder?: string[];
   activeWorkspacePath?: string;
-  projectSessionsByPath?: Record<string, {
-    sessionsByScenario: Partial<Record<ScenarioInstanceId, SciForgeSession>>;
-    archivedSessions?: SciForgeSession[];
-  }>;
+  projectSessionsByPath?: SidebarProjectSessionsByPath;
 }
 type SidebarProjectMenu =
   | { kind: 'global'; x: number; y: number; reference?: SciForgeReference }
@@ -367,6 +364,7 @@ export function Sidebar({
   setScenarioId,
   config,
   sessionsByScenario,
+  archivedSessions,
   onProjectNewChat,
   onArchiveThread,
   onArchiveProjectChats,
@@ -391,6 +389,7 @@ export function Sidebar({
   setScenarioId: (id: ScenarioInstanceId) => void;
   config: SciForgeConfig;
   sessionsByScenario?: Record<ScenarioInstanceId, SciForgeSession>;
+  archivedSessions?: SciForgeSession[];
   onProjectNewChat?: (project: SidebarProjectThreadGroup) => void;
   onArchiveThread?: (scenarioId: ScenarioInstanceId, sessionId: string) => void;
   onArchiveProjectChats?: (project: SidebarProjectThreadGroup) => void | Promise<void>;
@@ -404,10 +403,7 @@ export function Sidebar({
     project: SidebarProjectThreadGroup,
     thread?: Pick<SidebarThreadItem, 'scenarioId' | 'sessionId'>,
   ) => void;
-  projectSessionsByPath?: Record<string, {
-    sessionsByScenario: Partial<Record<ScenarioInstanceId, SciForgeSession>>;
-    archivedSessions?: SciForgeSession[];
-  }>;
+  projectSessionsByPath?: SidebarProjectSessionsByPath;
   activeWorkspacePath?: string;
   deferWorkbenchFilePreview?: boolean;
   onWorkbenchFileOpened?: (file: WorkspaceFileContent) => void;
@@ -456,7 +452,7 @@ export function Sidebar({
     [sidebarSearchQuery, sidebarSessions],
   );
   const sidebarProjectThreadGroups = useMemo(
-    () => buildSidebarProjectThreadGroups(config, sidebarSessions, undefined, {
+    () => buildSidebarProjectThreadGroups(config, sidebarSessions, archivedSessions, {
       layout: sidebarPreferences.layout,
       sort: sidebarPreferences.sort,
       pinnedThreadIds: sidebarPreferences.pinnedThreadIds,
@@ -464,7 +460,7 @@ export function Sidebar({
       projectSessionsByPath,
       activeWorkspacePath,
     }),
-    [config, sidebarSessions, sidebarPreferences, projectSessionsByPath, activeWorkspacePath],
+    [config, sidebarSessions, archivedSessions, sidebarPreferences, projectSessionsByPath, activeWorkspacePath],
   );
   const pinnedThreadIds = useMemo(() => new Set(sidebarPreferences.pinnedThreadIds), [sidebarPreferences.pinnedThreadIds]);
   const sidebarProjectContextMenuProject = useMemo(
@@ -1323,7 +1319,7 @@ export function Sidebar({
     if (query) onSearchNavigate?.(query);
   }
 
-  function openSidebarThread(item: SidebarThreadItem, project: SidebarProjectThreadGroup) {
+  function openSidebarThread(item: Pick<SidebarThreadItem, 'scenarioId' | 'sessionId'>, project: SidebarProjectThreadGroup) {
     if (!project.current) {
       activateSidebarProject(project, item);
       return;
@@ -1657,7 +1653,7 @@ export function Sidebar({
                 </div>
                 {!panelLayout.toolsCollapsed ? (
                   <div className="sidebar-tools-strip" aria-label="工具">
-              <button type="button" className={cx('nav-item sidebar-command sidebar-tool-item', page === 'components' && 'active')} onClick={() => setPage('components')}>
+              <button type="button" className={cx('nav-item sidebar-command sidebar-tool-item')} onClick={() => setPage('components')}>
                 <Plug size={16} />
                 <span>应用</span>
               </button>

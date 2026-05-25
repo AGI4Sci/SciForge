@@ -1,6 +1,6 @@
 import type { ComputerUseConfig as VisionSenseConfig, GenericVisionAction, LoopStep, ScreenshotRef, TraceWindowTarget } from '../computer-use/types.js';
 import { isDarwinPlatform, numberConfig } from '../computer-use/utils.js';
-import { isWindowLocalCoordinateSpace } from '../computer-use/window-target.js';
+import { defaultMacBundleIdForAppName, isWindowLocalCoordinateSpace } from '../computer-use/window-target.js';
 import { uniqueStrings, isRecord } from '../gateway-utils.js';
 export function bindWindowTargetFromOpenAppAction(config: VisionSenseConfig, action: GenericVisionAction) {
   if (action.type !== 'open_app') return;
@@ -15,7 +15,7 @@ export function bindWindowTargetFromOpenAppAction(config: VisionSenseConfig, act
     coordinateSpace: config.windowTarget.coordinateSpace === 'screen' ? 'window-local' : config.windowTarget.coordinateSpace,
     windowId: undefined,
     processId: undefined,
-    bundleId: undefined,
+    bundleId: defaultMacBundleIdForAppName(appName),
     title: undefined,
     bounds: undefined,
     contentRect: undefined,
@@ -184,4 +184,3 @@ export function mappedCoordinateMetadata(grounding: Record<string, unknown> | un
   }
   return { space: 'executor' };
 }
-

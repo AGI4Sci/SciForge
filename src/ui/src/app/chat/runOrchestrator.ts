@@ -232,13 +232,14 @@ function isAnnotationPlanOnlyTurn(input: RunPromptOrchestratorInput) {
 
 function buildAnnotationPlanOnlyOrchestratorResponse(input: RunPromptOrchestratorInput): NormalizedAgentResponse {
   const completedAt = nowIso();
+  const draftText = input.prompt.trim();
   const referenceMarkers = input.references
     .map((reference, index) => `※${index + 1} ${reference.title}`)
     .join('、');
   const content = [
     '已按 annotation-plan-only policy 处理：本轮只整理澄清问题、选择项、摘要和 feedback draft。',
     '不会启动 Runtime/Codex 执行、repair、workspace write 或 GitHub sync。',
-    input.prompt.trim() ? `当前草稿：${input.prompt.trim()}` : undefined,
+    draftText ? `当前草稿：${draftText}` : undefined,
     referenceMarkers ? `关联对象：${referenceMarkers}` : undefined,
   ].filter(Boolean).join('\n');
   const raw = {

@@ -64,6 +64,11 @@ export async function runComputerUseLongRound(options: {
   const now = options.now ?? new Date();
   const runId = sanitizeRunId(options.runId || `${manifest.run.id}-round-${String(options.round).padStart(2, '0')}-${now.toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`);
   const prompt = await renderRoundRuntimePrompt(manifest, round, dirname(manifestPath), options.promptSuffix);
+  const gatewayPrompt = renderComputerUseGatewayPrompt(prompt, {
+    scenarioId: manifest.scenarioId,
+    round: round.round,
+    testActionFixtureMode: Boolean(options.actionsJson),
+  });
   const runtimePromptPath = join(evidenceDir, 'runtime-prompt.md');
   const actionLedgerPath = join(evidenceDir, 'action-ledger.json');
   const failureDiagnosticsPath = join(evidenceDir, 'failure-diagnostics.json');
@@ -85,7 +90,7 @@ export async function runComputerUseLongRound(options: {
     : options.dryRun ? 120_000 : 240_000;
   const payload = await withTaskPoolHardTimeout(runWorkspaceRuntimeGateway({
       skillDomain: 'knowledge',
-      prompt,
+      prompt: gatewayPrompt,
       workspacePath,
       selectedToolIds: ['local.vision-sense'],
       uiState: {
@@ -95,19 +100,14 @@ export async function runComputerUseLongRound(options: {
           dryRun: options.dryRun ?? false,
           maxSteps: options.maxSteps ?? 8,
           runId,
-          actions: options.actionsJson ? JSON.parse(options.actionsJson) : [],
+          testActionFixtureMode: Boolean(options.actionsJson),
+          testOnlyActions: options.actionsJson ? JSON.parse(options.actionsJson) : [],
           windowTarget,
           completionPolicy: {
             mode: options.dryRun ? 'one-successful-non-wait-action' : 'planner-confirmed',
             reason: options.dryRun
               ? 'Dry-run T084 CU-LONG rounds are evidence-generation probes; one verified non-wait GUI action produces the required round trace.'
               : 'Real T084 CU-LONG rounds must continue until the planner confirms the visible task state is complete or maxSteps is exhausted.',
-            fallbackActions: [{
-              type: 'scroll',
-              direction: 'down',
-              amount: 4,
-              targetDescription: 'Main content area of the active target window',
-            }],
           },
         },
         computerUseLong: {
@@ -246,6 +246,18 @@ function isExpectedFailClosedRound(
   return /fail\s*closed|blocked|risk|confirmation|高风险|确认|阻断|删除|发送|提交|授权|外发/i.test(text)
     && validation.metrics.blockedCount > 0
     && validation.metrics.nonWaitActionCount > 0;
+}
+
+function renderComputerUseGatewayPrompt(
+  prompt: string,
+  options: { scenarioId: string; round: number; testActionFixtureMode: boolean },
+) {
+  if (options.testActionFixtureMode) {
+    return `/computer-use run operate the target window with generic mouse/keyboard for T084 ${options.scenarioId} round ${options.round}. Use test-only fixture actions and write window screenshot trace evidence.`;
+  }
+  return prompt.trimStart().startsWith('/computer-use')
+    ? prompt
+    : `/computer-use run operate the target window with generic mouse/keyboard. ${prompt}`;
 }
 
 export async function runComputerUseLongScenario(options: {

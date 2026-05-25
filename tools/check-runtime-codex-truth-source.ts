@@ -79,8 +79,8 @@ assertScriptEquals(
 );
 assertScriptEquals(
   realTaskMatrixScript,
-  `tsx tests/smoke/smoke-real-task-matrix.ts && npm run ${realTaskOfflineGatesScript} && node --import tsx --test tests/smoke/real-task-evidence-schema.test.ts`,
-  'Real-task matrix must execute every no-secret offline R-* category gate, not only check script names.',
+  `tsx tests/smoke/smoke-real-task-matrix.ts && npm run ${realTaskOfflineGatesScript}`,
+  'Computer Use task matrix must execute the active CU-* project-board gate, not retired R-* evidence schema checks.',
 );
 assertScriptEquals(
   legacyVerifyScript,
@@ -153,7 +153,7 @@ if (/['"]smoke:agentserver-/i.test(realTaskMatrixText)) {
   findings.push({
     file: 'tests/smoke/smoke-real-task-matrix.ts',
     rule: 'real-task-matrix-agentserver-truth-source',
-    message: 'PROJECT.md R-* real-task gates must not depend on direct AgentServer-first smoke scripts; keep legacy checks in verify:legacy-agentserver-compat only.',
+    message: 'PROJECT.md CU-* task gates must not depend on direct AgentServer-first smoke scripts; keep legacy checks in verify:legacy-agentserver-compat only.',
   });
 }
 

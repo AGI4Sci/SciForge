@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { chromium, type Page } from 'playwright-core';
-import { basename, join } from 'node:path';
+import { basename } from 'node:path';
 import { browserExecutablePath } from './browser-workflows-fixtures';
 import { normalizeWorkspaceRootPath } from '../../src/ui/src/config';
 

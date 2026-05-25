@@ -6922,7 +6922,7 @@ export const skillPackageManifests = [
     "kind": "skill",
     "version": "1.0.0",
     "label": "vision-gui-task",
-    "description": "模板 skill：把低风险 GUI 请求转换为 SciForge VisionTaskRequest，并调用 vision-sense tool。",
+    "description": "模板 skill：为 GUI 任务构造 vision-sense 观察请求，并把执行交给 Computer Use action provider。",
     "source": "package",
     "skillDomains": [
       "knowledge"
@@ -6930,7 +6930,8 @@ export const skillPackageManifests = [
     "inputContract": {
       "prompt": "Free-text request matched against this SKILL.md.",
       "skillMarkdownRef": "packages/skills/installed/local/vision-gui-task/SKILL.md",
-      "visionTaskRequest": "packages/observe/vision/sciforge_vision_sense/types.py:VisionTaskRequest"
+      "sensePluginRequest": "packages/observe/vision/sciforge_vision_sense/types.py:SensePluginRequest",
+      "actionProvider": "packages/actions/computer-use"
     },
     "outputArtifactTypes": [
       "vision-trace"
@@ -6939,6 +6940,10 @@ export const skillPackageManifests = [
     "requiredCapabilities": [
       {
         "capability": "vision-sense",
+        "level": "external-tool"
+      },
+      {
+        "capability": "computer-use-action-provider",
         "level": "external-tool"
       },
       {
@@ -6957,12 +6962,12 @@ export const skillPackageManifests = [
     ],
     "examplePrompts": [
       "vision gui task",
-      "sciforge visiontaskrequest vision",
+      "sciforge vision sense observation",
       "Use vision gui task and return structured SciForge artifacts"
     ],
     "docs": {
       "readmePath": "packages/skills/installed/local/vision-gui-task/SKILL.md",
-      "agentSummary": "模板 skill：把低风险 GUI 请求转换为 SciForge VisionTaskRequest，并调用 vision-sense tool。"
+      "agentSummary": "模板 skill：为 GUI 任务构造 vision-sense 观察请求，并把执行交给 Computer Use action provider。"
     },
     "packageRoot": "packages/skills/installed/local/vision-gui-task",
     "tags": [

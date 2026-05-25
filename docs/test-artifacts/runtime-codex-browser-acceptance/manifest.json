@@ -2,7 +2,7 @@
   "schemaVersion": "sciforge.runtime-codex.browser-acceptance.v1",
   "status": "blocked",
   "source": "codex-in-app-browser",
-  "observedAt": "2026-05-21T19:44:39.073Z",
+  "observedAt": "2026-05-25T04:24:30.543Z",
   "requestedRolePort": 5173,
   "actualWorkspaceWriterPort": 6173,
   "actualWorkspaceWriterUrl": "http://127.0.0.1:6173",
@@ -14,8 +14,8 @@
   "profile": "sciforge-runtime-deepseek",
   "provider": "sciforge-deepseek-proxy",
   "model": "bailian/deepseek-v4-flash",
-  "commandId": "codex-command-mpexwy03-ejaeuy",
-  "startedFromDefaultChatEntry": true,
+  "commandId": "codex-command-mpkc9w3g-yswxeg",
+  "startedFromDefaultChatEntry": false,
   "submittedThroughRuntimeCodex": true,
   "providerModelProfileVisible": true,
   "workspaceVisible": true,
@@ -29,7 +29,7 @@
   "liveAcceptanceScope": "non-seed-runtime-codex-messages-only",
   "acceptanceRubric": {
     "userIntent": "Prove the real default-chat Runtime Codex path can complete single-turn, selected-ref, and multi-turn tasks.",
-    "expectedObservableResult": "Visible live Runtime Codex/gui.present answers with provider/model/profile/workspace/command id and folded audit logs.",
+    "expectedObservableResult": "Gui.present projection or native Runtime Codex assistant answer rendered in default chat with provider/model/profile/workspace/command id and folded audit logs.",
     "actualResult": "Blocked before release acceptance: Current Runtime Codex provider preflight is ready, but Codex in-app browser acceptance is incomplete: missing passed release manifest.",
     "evidenceRefs": [
       "docs/test-artifacts/runtime-codex-browser-acceptance/manifest.json",
@@ -52,7 +52,8 @@
     "missingTaskResultRejected": true,
     "seedDemoEvidenceRejected": true,
     "blockedFailedPartialRejected": true,
-    "rawStdoutJsonlRejected": true
+    "rawStdoutJsonlRejected": true,
+    "nativeAnswerOutsideDefaultChatRejected": true
   },
   "reason": "Current Runtime Codex provider preflight is ready, but Codex in-app browser acceptance is incomplete: missing passed release manifest.",
   "blocker": "Current Runtime Codex provider preflight is ready, but Codex in-app browser acceptance is incomplete: missing passed release manifest.",
@@ -76,20 +77,21 @@
   ],
   "expectedRetestCommand": "npm run smoke:runtime-codex-browser-acceptance",
   "providerPreflightRef": "docs/test-artifacts/runtime-provider-preflight/manifest.json",
-  "providerPreflightCategory": "ready",
-  "providerPreflightCheckedAt": "2026-05-21T19:43:17.974Z",
+  "providerPreflightCategory": "config-secret-source",
+  "providerPreflightCheckedAt": "2026-05-25T04:23:52.921Z",
   "providerPreflightReleaseAcceptance": "not-evaluated",
   "providerPreflightEvidenceMode": "current-env-diagnostic-only",
-  "runtimeApiKeyPresentInServiceEnv": true,
+  "runtimeApiKeyPresentInServiceEnv": false,
   "upstreamBaseUrlPresent": true,
-  "upstreamKeySourceKind": "env",
-  "upstreamBaseUrlSourceKind": "env",
+  "upstreamKeySourceKind": "config-debug-fallback",
+  "upstreamBaseUrlSourceKind": "config",
   "configPathsChecked": [
     "workspace/parallel/p1/.sciforge/config.local.json",
     "config.local.json"
   ],
   "configSecretFallbackPaths": [
-    "workspace/parallel/p1/.sciforge/config.local.json"
+    "workspace/parallel/p1/.sciforge/config.local.json",
+    "config.local.json"
   ],
   "releaseBlocking": true,
   "releaseEligible": false,

@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { copyFile, readFile, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
 import {
@@ -10,6 +12,8 @@ import {
 } from '../../../packages/actions/computer-use/provider-policy.js';
 import type { CaptureDiagnostic, CaptureProviderFailure, FocusRegion, ComputerUseConfig, ResolvedWindowTarget, ScreenshotRef, WindowTargetResolution } from './types.js';
 import { toTraceScreenshotRef } from './types.js';
+import { hasExecutableIndependentInputAdapter, SCIFORGE_SIMULATED_REMOTE_DESKTOP_PROVIDER } from './independent-input-adapter.js';
+import { renderVirtualRemoteSessionCapture } from './virtual-remote-session.js';
 import { isDarwinPlatform, pngDimensions, runCommand, sha256, sleep, workspaceRel } from './utils.js';
 import { toTraceWindowTarget } from './window-target.js';
 
@@ -17,6 +21,10 @@ const ONE_BY_ONE_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADgwGOSyRGjgAAAABJRU5ErkJggg==',
   'base64',
 );
+
+const MACOS_VISION_OCR_PROVIDER = 'macos-vision-framework-ocr';
+
+let macVisionOcrBinaryPromise: Promise<string> | undefined;
 
 export class CaptureProviderError extends Error {
   readonly failure: CaptureProviderFailure;
@@ -37,11 +45,14 @@ export async function captureDisplays(
 ) {
   const refs: ScreenshotRef[] = [];
   if (targetResolution.ok && targetResolution.captureKind === 'window') {
+    const independentAdapterCapture = hasExecutableIndependentInputAdapter(config);
     const displayId = targetResolution.displayId ?? config.captureDisplays[0] ?? 1;
     const absPath = join(runDir, `${prefix}-window-${targetResolution.windowId ?? 'active'}.png`);
     const captureTimestamp = new Date().toISOString();
     const captureScope = 'window' as const;
-    const captureProvider = windowCaptureProvider(targetResolution, config);
+    const captureProvider = independentAdapterCapture
+      ? `${SCIFORGE_SIMULATED_REMOTE_DESKTOP_PROVIDER}-capture`
+      : windowCaptureProvider(targetResolution, config);
     const captureDiagnostics: CaptureDiagnostic[] = [
       diagnostic('info', 'capture.window.start', 'Starting target-window screenshot capture.', {
         provider: captureProvider,
@@ -49,7 +60,25 @@ export async function captureDisplays(
         timestamp: captureTimestamp,
       }),
     ];
-    if (config.dryRun) {
+    if (independentAdapterCapture) {
+      const rendered = await renderVirtualRemoteSessionCapture({
+        workspace,
+        runDir,
+        absPath,
+        prefix,
+        config,
+        targetResolution,
+        captureScope,
+        displayId,
+        captureTimestamp,
+      });
+      captureDiagnostics.push(...rendered.diagnostics);
+      captureDiagnostics.push(diagnostic('info', 'capture.window.independent-input-adapter', 'Rendered independent remote-desktop session screenshot without system screen capture.', {
+        provider: captureProvider,
+        captureScope,
+        timestamp: captureTimestamp,
+      }));
+    } else if (config.dryRun) {
       await writeFile(absPath, ONE_BY_ONE_PNG);
       captureDiagnostics.push(diagnostic('info', 'capture.window.dry-run', 'Wrote dry-run target-window screenshot placeholder.', {
         provider: captureProvider,
@@ -94,10 +123,13 @@ export async function captureDisplays(
   }
 
   for (const displayId of config.captureDisplays) {
+    const independentAdapterCapture = hasExecutableIndependentInputAdapter(config);
     const absPath = join(runDir, `${prefix}-display-${displayId}.png`);
     const captureTimestamp = new Date().toISOString();
     const captureScope = 'display' as const;
-    const captureProvider = config.dryRun ? computerUseCaptureProviderIds.dryRunDisplayPng : captureProviderName(config, captureScope);
+    const captureProvider = independentAdapterCapture
+      ? `${SCIFORGE_SIMULATED_REMOTE_DESKTOP_PROVIDER}-capture`
+      : config.dryRun ? computerUseCaptureProviderIds.dryRunDisplayPng : captureProviderName(config, captureScope);
     const captureDiagnostics: CaptureDiagnostic[] = [
       diagnostic('info', 'capture.display.start', `Starting display screenshot capture for display ${displayId}.`, {
         provider: captureProvider,
@@ -105,7 +137,25 @@ export async function captureDisplays(
         timestamp: captureTimestamp,
       }),
     ];
-    if (config.dryRun) {
+    if (independentAdapterCapture) {
+      const rendered = await renderVirtualRemoteSessionCapture({
+        workspace,
+        runDir,
+        absPath,
+        prefix,
+        config,
+        targetResolution,
+        captureScope,
+        displayId,
+        captureTimestamp,
+      });
+      captureDiagnostics.push(...rendered.diagnostics);
+      captureDiagnostics.push(diagnostic('info', 'capture.display.independent-input-adapter', `Rendered independent remote-desktop session screenshot for display ${displayId} without system screen capture.`, {
+        provider: captureProvider,
+        captureScope,
+        timestamp: captureTimestamp,
+      }));
+    } else if (config.dryRun) {
       await writeFile(absPath, ONE_BY_ONE_PNG);
       captureDiagnostics.push(diagnostic('info', 'capture.display.dry-run', `Wrote dry-run display screenshot placeholder for display ${displayId}.`, {
         provider: captureProvider,
@@ -196,6 +246,57 @@ export function validateRuntimeTraceScreenshots(refs: ScreenshotRef[]) {
 }
 
 export { toTraceScreenshotRef };
+
+export async function extractVisibleTextsFromScreenshotRefs(
+  refs: ScreenshotRef[],
+  config: ComputerUseConfig,
+): Promise<{ visibleTexts: string[]; diagnostics: CaptureDiagnostic[] }> {
+  if (!config.visibleTextExtraction?.enabled) return { visibleTexts: [], diagnostics: [] };
+  if (!isDarwinPlatform(config.desktopPlatform) || config.dryRun) {
+    return {
+      visibleTexts: [],
+      diagnostics: [
+        diagnostic('warning', 'capture.visible-text.unsupported-provider', 'Visible text extraction is enabled, but macOS Vision OCR is unavailable for this capture configuration.', {
+          provider: MACOS_VISION_OCR_PROVIDER,
+          captureScope: refs[0]?.captureScope,
+        }),
+      ],
+    };
+  }
+  const maxItems = Math.max(1, config.visibleTextExtraction.maxItems ?? 24);
+  const visibleTexts: string[] = [];
+  const diagnostics: CaptureDiagnostic[] = [];
+  for (const ref of refs.slice(0, 2)) {
+    const startedAt = new Date().toISOString();
+    try {
+      const binary = await macVisionOcrBinary();
+      const result = await runCommand(binary, [ref.absPath], { timeoutMs: 30000 });
+      diagnostics.push(commandDiagnostic(result.exitCode === 0 ? 'info' : 'warning', 'capture.visible-text.provider-result', {
+        provider: MACOS_VISION_OCR_PROVIDER,
+        captureScope: ref.captureScope ?? 'window',
+        command: binary,
+        args: [ref.path],
+        exitCode: result.exitCode,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        timestamp: startedAt,
+      }));
+      if (result.exitCode !== 0) continue;
+      visibleTexts.push(...parseMacVisionOcrLines(result.stdout));
+    } catch (error) {
+      diagnostics.push(diagnostic('warning', 'capture.visible-text.failed', error instanceof Error ? error.message : String(error), {
+        provider: MACOS_VISION_OCR_PROVIDER,
+        captureScope: ref.captureScope,
+        timestamp: startedAt,
+      }));
+    }
+    if (visibleTexts.length >= maxItems) break;
+  }
+  return {
+    visibleTexts: uniqueVisibleTexts(visibleTexts).slice(0, maxItems),
+    diagnostics,
+  };
+}
 
 export async function createFocusedCropRefs(
   workspace: string,
@@ -390,6 +491,84 @@ function commandDiagnostic(
   options: Partial<CaptureDiagnostic> & { provider: string; captureScope: CaptureDiagnostic['captureScope']; command: string; args: string[]; exitCode: number },
 ) {
   return diagnostic(level, code, `${options.command} exited with code ${options.exitCode}.`, options);
+}
+
+export function parseMacVisionOcrLines(stdout: string): string[] {
+  try {
+    const parsed = JSON.parse(stdout) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item): item is string => typeof item === 'string')
+      .map((item) => item.replace(/\s+/g, ' ').trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function uniqueVisibleTexts(values: string[]) {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const value of values) {
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(value);
+  }
+  return unique;
+}
+
+async function macVisionOcrBinary() {
+  macVisionOcrBinaryPromise ??= compileMacVisionOcrBinary();
+  return macVisionOcrBinaryPromise;
+}
+
+async function compileMacVisionOcrBinary() {
+  const buildDir = join(tmpdir(), `sciforge-visible-text-ocr-${randomUUID()}`);
+  await mkdir(buildDir, { recursive: true });
+  const scriptPath = join(buildDir, 'main.swift');
+  const binaryPath = join(buildDir, 'sciforge-visible-text-ocr');
+  await writeFile(scriptPath, macVisionOcrSwiftSource(), 'utf8');
+  const result = await runCommand('swiftc', ['-framework', 'Vision', '-framework', 'AppKit', scriptPath, '-o', binaryPath], { timeoutMs: 30000 });
+  await unlink(scriptPath).catch(() => undefined);
+  if (result.exitCode !== 0) {
+    throw new Error(`macOS Vision OCR helper compile failed: ${result.stderr || result.stdout || `exit ${result.exitCode}`}`);
+  }
+  return binaryPath;
+}
+
+function macVisionOcrSwiftSource() {
+  return `
+import AppKit
+import Foundation
+import Vision
+
+let path = CommandLine.arguments.dropFirst().first ?? ""
+guard let image = NSImage(contentsOfFile: path),
+      let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+  print("[]")
+  exit(1)
+}
+
+let request = VNRecognizeTextRequest { request, error in
+  if error != nil {
+    print("[]")
+    exit(2)
+  }
+  let values = (request.results as? [VNRecognizedTextObservation] ?? []).compactMap { observation in
+    observation.topCandidates(1).first?.string
+  }
+  let data = try! JSONSerialization.data(withJSONObject: values, options: [])
+  print(String(data: data, encoding: .utf8)!)
+}
+request.recognitionLevel = .accurate
+request.usesLanguageCorrection = true
+if #available(macOS 11.0, *) {
+  request.recognitionLanguages = ["zh-Hans", "en-US"]
+}
+let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+try handler.perform([request])
+`;
 }
 
 function trimDiagnosticText(value: string | undefined) {

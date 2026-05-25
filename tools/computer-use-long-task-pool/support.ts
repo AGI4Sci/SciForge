@@ -159,7 +159,7 @@ export function renderMatrixReportMarkdown(
   lines.push(
     '',
     '## Genericity Rules Rechecked',
-    '- All evidence must come from WindowTarget -> VisionPlanner -> Grounder -> GuiExecutor -> Verifier -> vision-trace.',
+    '- All evidence must come from WindowTarget -> RuntimeCodexPlanner -> Grounder -> GuiExecutor -> Verifier -> vision-trace.',
     '- WindowTarget must select a concrete target window before planning, and all coordinates must be window-local.',
     '- Screenshot refs must be window screenshots with window identity, bounds, dimensions, and sha256 metadata.',
     '- GUI execution must record the generic input channel and serialized scheduler metadata.',
@@ -271,7 +271,7 @@ export function renderRepairPlanMarkdown(summaryPath: string, summary: Record<st
 }
 
 export function categorizeComputerUseIssue(issue: string) {
-  if (/planner|planning|VisionPlanner/i.test(issue)) return 'planner';
+  if (/planner|planning|RuntimeCodexPlanner/i.test(issue)) return 'planner';
   if (/windowTarget|window target|target window|window-local|window screenshot|displayId|window bounds/i.test(issue)) return 'window-target';
   if (/ground|coordinate|targetDescription|KV-Ground/i.test(issue)) return 'grounder';
   if (/executor|execution|mouse|keyboard|click|drag|scroll|type_text|System Events|CGEvent|osascript|Swift/i.test(issue)) return 'executor';
@@ -339,7 +339,7 @@ function repairActionsForIssues(issues: string[]) {
   const actions: string[] = [];
   if (categories.has('window-target')) actions.push('Ensure WindowTarget selects the concrete app/window first, captures window screenshots, and maps every point in window-local coordinates.');
   if (categories.has('planner')) actions.push('Inspect planner prompt/output JSON and ensure it emits generic action schema without coordinates or app-private fields.');
-  if (categories.has('grounder')) actions.push('Check KV-Ground or visual Grounder configuration and ensure screenshot paths are readable by the Grounder.');
+  if (categories.has('grounder')) actions.push('Check KV-Ground configuration and ensure screenshot paths are readable by the Grounder.');
   if (categories.has('executor')) actions.push('Verify the generic mouse/keyboard executor, coordinate scale, display selection, and dry-run/real-run mode.');
   if (categories.has('scheduler')) actions.push('Record generic input-channel metadata and serialize window actions with before/after screenshot boundaries.');
   if (categories.has('verifier')) actions.push('Strengthen step verifier evidence so every GUI action has after-screenshot and pixel/state validation.');
@@ -389,7 +389,7 @@ export async function renderRoundRuntimePrompt(
   return [
     `[T084 ${manifest.scenarioId} round ${round.round}] ${round.prompt}`,
     '',
-    'You must use the generic Computer Use pipeline only: WindowTarget -> VisionPlanner -> Grounder -> GuiExecutor -> Verifier -> vision-trace.',
+    'You must use the generic Computer Use pipeline only: WindowTarget -> RuntimeCodexPlanner -> Grounder -> GuiExecutor -> Verifier -> vision-trace.',
     'WindowTarget must select the target window first; every screenshot ref must be a window screenshot with window id/title, bounds, sha256, width, and height.',
     'Grounding and executor coordinates must be window-local, and every GUI action must record the generic mouse/keyboard input channel plus serialized scheduler metadata.',
     'Do not inspect DOM, accessibility trees, application private APIs, files, source code, or app-specific shortcuts to complete the GUI task.',
@@ -887,7 +887,7 @@ export function renderPreparedRunChecklist(scenario: ComputerUseLongScenario, ma
     `Workspace: ${manifest.run.workspacePath}`,
     '',
     '## Non-Negotiable Genericity Rules',
-    '- Use only the shared WindowTarget -> VisionPlanner -> Grounder -> GuiExecutor -> Verifier -> vision-trace path.',
+    '- Use only the shared WindowTarget -> RuntimeCodexPlanner -> Grounder -> GuiExecutor -> Verifier -> vision-trace path.',
     '- Select a concrete target window before planning; record window id/title, app identity, bounds, displayId, and window-local coordinate space.',
     '- Store only window screenshot refs with path, sha256, width/height, window identity, displayId, and bounds.',
     '- Record generic mouse/keyboard input-channel metadata and serialized scheduler metadata for every executed GUI action.',

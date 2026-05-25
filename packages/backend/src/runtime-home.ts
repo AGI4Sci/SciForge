@@ -171,7 +171,9 @@ export async function assertRuntimeReady(paths = getRuntimeHomePaths()): Promise
 }
 
 export function runtimeProviderForEnv(env: NodeJS.ProcessEnv = process.env): string {
-  return env.SCIFORGE_RUNTIME_PROVIDER?.trim() || RUNTIME_PROVIDER;
+  const configured = env.SCIFORGE_RUNTIME_PROVIDER?.trim();
+  if (!configured || configured === 'native') return RUNTIME_PROVIDER;
+  return configured;
 }
 
 export function runtimeModelForEnv(env: NodeJS.ProcessEnv = process.env): string {

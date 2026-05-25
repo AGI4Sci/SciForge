@@ -15,6 +15,7 @@ import {
   RUNTIME_PROVIDER,
   resolveRuntimeCodexSandbox,
   RUNTIME_WORKSPACE_WRITE_NETWORK_CONFIG_ARGS,
+  runtimeProviderForEnv,
   runtimeConfigToml,
 } from './runtime-home';
 
@@ -42,6 +43,11 @@ test('runtime config falls back to the compatibility defaults when no user model
   const config = runtimeConfigToml();
   assert.match(config, new RegExp(`model = "${RUNTIME_MODEL}"`));
   assert.match(config, new RegExp(`model_provider = "${RUNTIME_PROVIDER}"`));
+});
+
+test('runtime provider env ignores legacy user-facing native provider id', () => {
+  assert.equal(runtimeProviderForEnv({ SCIFORGE_RUNTIME_PROVIDER: 'native' }), RUNTIME_PROVIDER);
+  assert.equal(runtimeProviderForEnv({ SCIFORGE_RUNTIME_PROVIDER: 'sciforge-custom-runtime' }), 'sciforge-custom-runtime');
 });
 
 test('runtime CODEX_HOME and default workspace stay under packages/backend', () => {
