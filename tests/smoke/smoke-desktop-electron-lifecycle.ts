@@ -85,7 +85,21 @@ try {
   assert.equal(await page.evaluate(() => typeof (window as unknown as { sciforgeDesktop?: DesktopBridgeApi }).sciforgeDesktop), 'object');
   assert.deepEqual(
     await page.evaluate(() => Object.keys((window as Window & { sciforgeDesktop?: DesktopBridgeApi }).sciforgeDesktop ?? {}).sort()),
-    ['getRuntimeConfig', 'getRuntimeHealth', 'getRuntimeReady', 'openExternal', 'requestShutdown', 'revealPath'],
+    [
+      'captureNativeBrowserScreenshot',
+      'getNativeBrowserState',
+      'getRuntimeConfig',
+      'getRuntimeHealth',
+      'getRuntimeReady',
+      'nativeBrowserBack',
+      'nativeBrowserForward',
+      'nativeBrowserReload',
+      'openExternal',
+      'openNativeBrowser',
+      'pickDirectory',
+      'requestShutdown',
+      'revealPath',
+    ],
   );
 
   const config = await page.evaluate(() =>

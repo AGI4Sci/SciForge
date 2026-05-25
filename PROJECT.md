@@ -132,10 +132,31 @@
 - [x] 建立 refs-first 快照链路：截图、DOM、console、network、下载和调试证据不进入 workspace state base64。
 - [x] 实现内置浏览器 workbench：URL 输入、后退、刷新、页面状态、区域标注、annotation pin 和 `/browser ...` 命令。
 - [x] 明确硬边界：Web GUI/iframe 不能承担真实浏览器能力；跨域、下载、DevTools、右键菜单、登录态和系统输入必须由 Electron/Playwright/Chrome extension/Computer Use runtime 承担。
+- [x] 2026-05-25 恢复工作台内真实预览：打开页面不再 `window.open` 外跳；普通页面用内置 iframe，PDF/受限资源走 `/api/sciforge/browser/proxy` 同源代理，支持 arXiv PDF 内嵌预览和下载。
+- [x] 精简中文化浏览器运行时说明：默认隐藏 provider id、英文 contract 和长能力矩阵，只保留会话与导航、观察证据、页面操作、安全边界四类说明。
+- [x] 2026-05-25 收口浏览器边界：删除站点特定登录 handoff 规则，登录/账号态统一为 `/browser takeover --auth --approval required`；GUI 不再直接调用 desktop native browser bridge，复杂修复先进入反馈收件箱确认。
 
 Evidence（2026-05-24）：`packages/observe/web/browser-runtime.test.ts`、`packages/observe/web/mcp/playwright-browser.test.ts`、`src/ui/src/app/BrowserRuntimePage.test.tsx` targeted tests 通过；`npm run smoke:capability-manifest-registry` 通过；`git diff --check` 通过。
 
+Evidence（2026-05-25）：`node --import tsx --test src/ui/src/app/BrowserRuntimePage.test.tsx src/runtime/server/workspace-directory-picker.test.ts src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts src/ui/src/app/appShell/sidebarProjectSessions.test.ts` 通过；`npm run typecheck` 通过；`git diff --check` 通过；Playwright 验证 `https://arxiv.org/pdf/2605.00080v1` 在内置预览 iframe 中使用 `/api/sciforge/browser/proxy` 打开，并可下载 `2605.00080v1.pdf`（3,163,855 bytes）。
+
+Evidence（2026-05-25 边界整改）：`node --import tsx --test packages/observe/web/browser-runtime.test.ts src/ui/src/app/BrowserRuntimePage.test.tsx tests/smoke/browser-proxy-html-transform.test.ts` 通过；`npm run typecheck` 通过；`npm run smoke:long-file-budget` 通过；`git diff --check` 通过。
+
 后续只保留两条主线：一是让 GUI 的浏览器区更精炼、中文化、只显示必要状态；二是把真实能力补到宿主层，包括 Electron `WebContentsView`、Playwright/CDP、右键菜单、DevTools、download/dialog/frame/query/assertion/verifier。
+
+## 代码膨胀治理 Watch List
+
+目标：超过 1500 行的源码文件必须有明确拆分任务；构建产物不进入治理扫描。
+
+- [ ] `src/runtime/workspace-server.ts`：拆成 workspace http routes、filesystem/ref store、runtime session coordinator、diagnostics/health、CORS/body parsing 等语义模块。
+- [ ] `src/ui/src/app/sciforgeApp/FeedbackInboxPage.tsx`：拆成 inbox state hooks、list/table、detail drawer、repair request composer、evidence renderer 和 action toolbar。
+- [ ] `tests/smoke/real-task-evidence-schema.test.ts`：拆成 schema fixtures、normalization cases、failure cases 和 end-to-end smoke，避免单测试文件继续承载全量场景。
+- [ ] `src/ui/src/app/appShell/ShellPanels.tsx`：拆成 sidebar model、workspace connection panel、project/session switcher、status/actions panel 和 shell layout 入口。
+- [ ] `src/runtime/gateway/generated-task-runner-generation-lifecycle.ts`：拆成 generation state machine、payload materializer、failure normalizer、verification bridge 和 audit writer。
+- [ ] `src/ui/src/app/SciForgeApp.tsx`：继续拆成 page routing shell、workspace state hooks、feedback integration、runtime health integration 和 browser/workbench integration。
+- [ ] `src/ui/src/api/sciforgeToolsClient/client.ts`：拆成 request transport、workspace tools、browser/runtime tools、feedback tools 和 typed error normalization。
+- [ ] `src/runtime/repair-handoff-runner.ts`：拆成 handoff parser、repair executor、test evidence collector、promotion gate 和 diagnostics。
+- [ ] `src/ui/src/app/chat/sessionTransforms.ts`：拆成 projection reducer、event normalization、artifact linking、run status mapping 和 compact digest helpers。
 
 ## 验证规则
 

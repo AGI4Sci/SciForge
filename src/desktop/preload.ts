@@ -12,6 +12,12 @@ export type SciForgeDesktopPreloadApi = {
   getRuntimeReady(): Promise<unknown>;
   requestShutdown(): Promise<unknown>;
   openExternal(url: string): Promise<unknown>;
+  openNativeBrowser(url: string): Promise<unknown>;
+  nativeBrowserBack(): Promise<unknown>;
+  nativeBrowserForward(): Promise<unknown>;
+  nativeBrowserReload(): Promise<unknown>;
+  getNativeBrowserState(): Promise<unknown>;
+  captureNativeBrowserScreenshot(): Promise<unknown>;
   revealPath(path: string): Promise<unknown>;
   pickDirectory(defaultPath?: string): Promise<{ ok: boolean; path?: string }>;
 };
@@ -25,9 +31,25 @@ export function createSciForgeDesktopPreloadApi(ipcRenderer: DesktopIpcRenderer)
     getRuntimeReady: () => ipcRenderer.invoke('runtime:ready'),
     requestShutdown: () => ipcRenderer.invoke('runtime:shutdown'),
     openExternal: (url: string) => ipcRenderer.invoke('platform:open-external', url),
+    openNativeBrowser: (url: string) => ipcRenderer.invoke('desktop:native-browser:open', url),
+    nativeBrowserBack: () => ipcRenderer.invoke('desktop:native-browser:back'),
+    nativeBrowserForward: () => ipcRenderer.invoke('desktop:native-browser:forward'),
+    nativeBrowserReload: () => ipcRenderer.invoke('desktop:native-browser:reload'),
+    getNativeBrowserState: () => ipcRenderer.invoke('desktop:native-browser:state'),
+    captureNativeBrowserScreenshot: () => ipcRenderer.invoke('desktop:native-browser:screenshot'),
     revealPath: (path: string) => ipcRenderer.invoke('platform:reveal-path', path),
-    pickDirectory: (defaultPath?: string) => ipcRenderer.invoke('platform:pick-directory', defaultPath),
+    pickDirectory: async (defaultPath?: string) => {
+      const result = await ipcRenderer.invoke('platform:pick-directory', defaultPath);
+      if (isPickDirectoryResult(result)) return result;
+      return { ok: false };
+    },
   };
+}
+
+function isPickDirectoryResult(value: unknown): value is { ok: boolean; path?: string } {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as { ok?: unknown; path?: unknown };
+  return typeof record.ok === 'boolean' && (record.path === undefined || typeof record.path === 'string');
 }
 
 export function installSciForgeDesktopPreload(input: {

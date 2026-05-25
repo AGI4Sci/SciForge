@@ -6,6 +6,12 @@ const api = {
   getRuntimeReady: () => ipcRenderer.invoke('runtime:ready'),
   requestShutdown: () => ipcRenderer.invoke('runtime:shutdown'),
   openExternal: (url) => ipcRenderer.invoke('platform:open-external', url),
+  openNativeBrowser: (url) => ipcRenderer.invoke('desktop:native-browser:open', url),
+  nativeBrowserBack: () => ipcRenderer.invoke('desktop:native-browser:back'),
+  nativeBrowserForward: () => ipcRenderer.invoke('desktop:native-browser:forward'),
+  nativeBrowserReload: () => ipcRenderer.invoke('desktop:native-browser:reload'),
+  getNativeBrowserState: () => ipcRenderer.invoke('desktop:native-browser:state'),
+  captureNativeBrowserScreenshot: () => ipcRenderer.invoke('desktop:native-browser:screenshot'),
   revealPath: (path) => ipcRenderer.invoke('platform:reveal-path', path),
   pickDirectory: (defaultPath) => ipcRenderer.invoke('platform:pick-directory', defaultPath),
 };
