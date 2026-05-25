@@ -1319,7 +1319,7 @@ export function Sidebar({
     if (query) onSearchNavigate?.(query);
   }
 
-  function openSidebarThread(item: SidebarThreadItem, project: SidebarProjectThreadGroup) {
+  function openSidebarThread(item: Pick<SidebarThreadItem, 'scenarioId' | 'sessionId'>, project: SidebarProjectThreadGroup) {
     if (!project.current) {
       activateSidebarProject(project, item);
       return;
@@ -1653,7 +1653,7 @@ export function Sidebar({
                 </div>
                 {!panelLayout.toolsCollapsed ? (
                   <div className="sidebar-tools-strip" aria-label="工具">
-              <button type="button" className="nav-item sidebar-command sidebar-tool-item" onClick={() => setPage('components')}>
+              <button type="button" className={cx('nav-item sidebar-command sidebar-tool-item')} onClick={() => setPage('components')}>
                 <Plug size={16} />
                 <span>应用</span>
               </button>

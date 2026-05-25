@@ -133,6 +133,47 @@ test('maps completed gui.present tool calls into explicit completion events', ()
   assert.equal(((events[1]?.raw as { presentation?: { hint?: string } }).presentation)?.hint, 'markdown');
 });
 
+test('maps completed gui.ask_user tool calls into explicit confirmation events', () => {
+  const events = normalizeCodexJsonlEvent({
+    type: 'item.completed',
+    item: {
+      id: 'item-gui-ask-user',
+      type: 'function_call',
+      name: 'gui.ask_user',
+      arguments: JSON.stringify({
+        kind: 'confirmation',
+        title: 'Computer Use confirmation required',
+        message: 'Allow Computer Use to click the visible Submit button?',
+        choices: [
+          { label: 'Approve', commandText: '/computer-use approve --approval-ref approval-1', style: 'primary' },
+          { label: 'Cancel', commandText: '/computer-use reject --approval-ref approval-1' },
+        ],
+        relatedRefs: ['.sciforge/vision-runs/run-1/vision-trace.json'],
+        approvalRequest: {
+          id: 'approval-1',
+          riskLevel: 'high',
+          actionRef: 'ref:planned-action:submit',
+        },
+      }),
+      result: JSON.stringify({
+        ok: true,
+        placement: { panel: 'modal', viewId: 'gui-ask-3' },
+      }),
+    },
+  }, metadata);
+
+  assert.equal(events[0]?.type, 'audit');
+  assert.equal(events[1]?.type, 'gui_ask_user');
+  assert.equal(events[1]?.status, 'needs-confirmation');
+  assert.match(events[1]?.text ?? '', /Computer Use confirmation required/);
+  assert.match(events[1]?.text ?? '', /approval-1/);
+  assert.equal((events[1]?.raw as { boundary?: string }).boundary, 'gui-ask-user-confirmation');
+  const askUser = (events[1]?.raw as { askUser?: { source?: string; relatedRefs?: string[]; choices?: Array<{ commandText?: string }> } }).askUser;
+  assert.equal(askUser?.source, 'gui.ask_user:codex-test');
+  assert.deepEqual(askUser?.relatedRefs, ['.sciforge/vision-runs/run-1/vision-trace.json']);
+  assert.equal(askUser?.choices?.[0]?.commandText, '/computer-use approve --approval-ref approval-1');
+});
+
 test('does not treat gui.present start as completion', () => {
   const events = normalizeCodexJsonlEvent({
     type: 'item.started',

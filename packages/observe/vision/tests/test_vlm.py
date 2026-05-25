@@ -8,7 +8,6 @@ sys.path.insert(0, str(PACKAGE_ROOT))
 from sciforge_vision_sense.prompts import (  # noqa: E402
     build_completion_check_prompt,
     build_crosshair_verification_prompt,
-    build_planner_prompt,
     build_screen_summary_prompt,
     build_visible_texts_prompt,
 )
@@ -50,15 +49,13 @@ def test_image_message_uses_openai_compatible_base64_content_shape():
 
 def test_prompt_builders_define_json_contracts_and_coordinate_ban():
     completion = build_completion_check_prompt(task="finish checkout", step_history=[])
-    planner = build_planner_prompt(task="search paper", screen_summary="A browser page", visible_texts=["Search"], recent_actions=[])
     crosshair = build_crosshair_verification_prompt(target_description="the Search button")
     summary = build_screen_summary_prompt(task="search paper")
     visible_texts = build_visible_texts_prompt(task="search paper")
 
     assert '"done": boolean' in completion
-    assert "target_description" in planner
-    assert "Never include coordinates" in planner
     assert '"hit": boolean' in crosshair
+    assert "Never include coordinates" in crosshair
     assert "one concise sentence" in summary
     assert '"visible_texts"' in visible_texts
     assert "Do not include DOM" in visible_texts

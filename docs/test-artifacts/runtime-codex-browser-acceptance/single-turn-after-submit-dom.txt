@@ -1,38 +1,82 @@
 - complementary:
-  - generic: BA
-  - button "导航":
+  - generic "工作区视图":
+    - generic "SciForge":
+      - img "SciForge"
+    - button "聊天工作台":
+    - button "研究时间线":
+    - button "反馈收件箱":
   - generic: 导航
   - button "收起侧栏":
-  - navigation:
-    - button "研究概览":
-      - generic: 研究概览
-    - button "聊天工作台":
-      - generic: 聊天工作台
-    - button "组件工作台":
-      - generic: 组件工作台
-    - button "研究时间线":
-      - generic: 研究时间线
-    - button "反馈收件箱":
-      - generic: 反馈收件箱
+  - generic: 对话
+  - button "折叠对话区" [expanded]:
+  - region "主操作":
+    - textbox "搜索聊天、项目、页面"
+  - region "项目对话 收起全部对话 项目对话菜单 添加项目":
+    - generic: 项目对话
+    - button "收起全部对话":
+    - button "项目对话菜单":
+    - button "添加项目":
+    - button "p1 当前":
+      - generic: p1
+      - generic: 当前
+    - button "p1 项目操作":
+    - button "在 p1 中新聊天":
+    - button "未命名聊天 最近回答：SCIFORGE CODEX BROWSER MT 20260520A":
+      - generic: 未命名聊天
+      - generic: 最近回答：SCIFORGE CODEX BROWSER MT 20260520A
+    - generic "未命名聊天 对话操作":
+      - button "置顶对话：未命名聊天":
+      - button "归档对话：未命名聊天":
+  - separator "拖拽调整对话区高度"
+  - generic: 工具
+  - button "折叠工具区" [expanded]:
+  - generic "工具":
+    - button "应用":
+      - generic: 应用
+    - generic "自动化":
+      - generic: 自动化
+      - generic: 即将推出
+  - separator "拖拽调整工具区高度"
+  - generic: 项目
+  - generic: p1
+  - button "折叠项目区" [expanded]:
   - button "新建文件":
   - button "新建文件夹":
   - button "刷新":
   - button "全部折叠":
   - tree "工作区文件树":
-    - status: 已加载 2 项
-    - treeitem "折叠 p1" [expanded]:
+    - status: 已加载 8 项
+    - treeitem "折叠 p1" [expanded] [selected]:
       - button "折叠":
       - generic: p1
     - treeitem "展开 .sciforge":
       - button "展开":
       - generic: .sciforge
-    - treeitem "arxiv_multi_agent_report_20260521.md":
-      - generic: arxiv_multi_agent_report_20260521.md
-    - generic "打开其他文件夹…"
+    - treeitem "展开 agentic_rl_papers":
+      - button "展开":
+      - generic: agentic_rl_papers
+    - treeitem "agentic_rl_report_2026-05-24.md":
+      - generic: agentic_rl_report_2026-05-24.md
+    - treeitem "proto_catalog_table_20260521.csv":
+      - generic: proto_catalog_table_20260521.csv
+    - treeitem "ShellPanels.tsx":
+      - generic: ShellPanels.tsx
+    - treeitem "ShellPanels.tsx.bak":
+      - generic: ShellPanels.tsx.bak
+    - treeitem "ShellPanels.tsx.in":
+      - generic: ShellPanels.tsx.in
+    - treeitem "ShellPanels.tsx.src":
+      - generic: ShellPanels.tsx.src
+    - button "打开其他文件夹…"
+    - generic "手动输入路径"
+  - button "设置":
+    - generic: 设置
   - separator "拖拽调整左侧栏宽度"
 - banner:
-  - textbox "搜索文件、报告、运行、问题..."
-  - generic: SciForge · ready
+  - textbox "搜索文件、报告、问题..."
+  - button "打开注释侧栏并开始点选":
+    - generic: 注释
+  - generic: SciForge · 就绪
   - button "切换白天模式":
     - text: 切换白天模式
   - button "设置":
@@ -44,21 +88,6 @@
     - button "vision-sense on" [pressed]:
       - generic: vision-sense
       - generic: "on"
-  - strong: Ask SciForge
-  - generic: sciforge-runtime-deepseek
-  - generic: sciforge-deepseek-proxy
-  - generic: bailian/deepseek-v4-flash
-  - generic: 在线
-  - generic: 5 archived
-  - generic "选择下一次 Runtime Codex 运行使用的兼容 backend 标识":
-    - generic: runtime
-    - combobox "runtime":
-      - option "Codex" [selected]
-      - option "OpenTeam"
-      - option "Claude Code"
-      - option "Hermes"
-      - option "OpenClaw"
-      - option "Gemini"
   - button "开启新聊天":
     - text: 开启新聊天
   - button "历史会话":
@@ -67,47 +96,232 @@
     - text: 导出当前聊天
   - button "删除当前聊天":
     - text: 删除当前聊天
-  - generic: user-authored
   - button "复制"
   - button "编辑"
   - paragraph: "Runtime Codex browser smoke single turn: reply in one short sentence with SCIFORGE-CODEX-BROWSER-SINGLE-20260520A."
   - strong: SciForge
-  - button "run codex-co"
-  - generic: 计算预测
-  - generic: 推断
-  - generic: live-runtime-codex
+  - button "过程"
   - button "复制"
   - button "编辑"
   - paragraph: SCIFORGE-CODEX-BROWSER-SINGLE-20260520A
+  - generic "结果线索"
   - generic "按顺序记录的工作过程":
-    - 'generic "Received Runtime Codex browser smoke single turn: reply in one short sentence with SCIFORGE-CODEX-BROWSE..."':
-      - generic: Received
-      - generic: "Runtime Codex browser smoke single turn: reply in one short sentence with SCIFORGE-CODEX-BROWSE..."
-    - generic "Ran literature-evidence-review.scenario-server-run Done · archived":
-      - generic: Ran
-      - generic: literature-evidence-review.scenario-server-run
-      - generic: Done · archived
-    - generic "Thought briefly":
-      - generic: Thought
-      - generic: briefly
-  - generic: action
+    - generic "Runtime Codex 可见追踪元数据":
+      - generic: Runtime Codex
+      - generic: provider
+      - generic: sciforge-deepseek-proxy
+      - generic: model
+      - generic: bailian/deepseek-v4-flash
+      - generic: profile
+      - generic: sciforge-runtime-deepseek
+      - generic: workspace
+      - generic: /Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p1
+      - generic: command
+      - generic: codex-command-mpkc9w3g-yswxeg
+      - generic: raw audit folded
+    - generic "过程 1 条过程摘要 回答已显示":
+      - generic: 过程
+      - generic: 1 条过程摘要
+      - generic: 回答已显示
+    - generic "验证 验证摘要":
+      - generic: 验证
+      - generic: 验证摘要
+    - generic "恢复线索 1 条可执行建议":
+      - generic: 恢复线索
+      - generic: 1 条可执行建议
+    - generic "诊断 可追溯摘要已保留":
+      - generic: 诊断
+      - generic: 可追溯摘要已保留
+  - button "复制"
+  - button "编辑"
+  - generic: 继续基于当前对话
+  - generic: 和 agentic_rl_report_2026-05-24.md
+  - paragraph: ※1Use only the selected artifact ref and answer what it says in one concise sentence.
+  - generic "引用对象":
+    - button "agentic_rl_report_2026-05-24.md"
+  - generic "用户引用的上下文":
+    - button "※1 agentic_rl_report_2026-05-24.md":
+      - generic: ※1
+      - strong: agentic_rl_report_2026-05-24.md
+  - strong: SciForge
+  - button "过程"
+  - button "复制"
+  - button "编辑"
+  - paragraph: 该报告综述了 2026 年 5 月 24 日 arXiv 上 15 篇 Agentic RL 高相关论文，揭示了三大趋势——RL 驱动的智能体训练与微调、RL 优化的记忆与推理架构、以及 RL 驱动的编排与自演化——并指出 GRPO 成为事实标准框架、记忆×RL 是最热交叉点、以及小模型通过 RL 编排可超越千亿参数闭源模型。
+  - generic "结果线索"
+  - generic "按顺序记录的工作过程":
+    - generic "Runtime Codex 可见追踪元数据":
+      - generic: Runtime Codex
+      - generic: provider
+      - generic: sciforge-deepseek-proxy
+      - generic: model
+      - generic: bailian/deepseek-v4-flash
+      - generic: profile
+      - generic: sciforge-runtime-deepseek
+      - generic: workspace
+      - generic: /Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p1
+      - generic: command
+      - generic: codex-command-mpkcsxyj-ftvko3
+      - generic: raw audit folded
+    - generic "过程 1 条过程摘要 回答已显示":
+      - generic: 过程
+      - generic: 1 条过程摘要
+      - generic: 回答已显示
+    - generic "验证 验证摘要":
+      - generic: 验证
+      - generic: 验证摘要
+    - generic "恢复线索 1 条可执行建议":
+      - generic: 恢复线索
+      - generic: 1 条可执行建议
+    - generic "诊断 可追溯摘要已保留":
+      - generic: 诊断
+      - generic: 可追溯摘要已保留
+  - button "复制"
+  - button "编辑"
+  - paragraph: "Remember this passphrase for the next browser turn: SCIFORGE-CODEX-BROWSER-MT-20260520A. Reply only remembered."
+  - strong: SciForge
+  - button "过程"
+  - button "复制"
+  - button "编辑"
+  - paragraph: Remembered.
+  - generic "结果线索"
+  - generic "按顺序记录的工作过程":
+    - generic "Runtime Codex 可见追踪元数据":
+      - generic: Runtime Codex
+      - generic: provider
+      - generic: sciforge-deepseek-proxy
+      - generic: model
+      - generic: bailian/deepseek-v4-flash
+      - generic: profile
+      - generic: sciforge-runtime-deepseek
+      - generic: workspace
+      - generic: /Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p1
+      - generic: command
+      - generic: codex-command-mpkcums9-8o9fds
+      - generic: raw audit folded
+    - generic "过程 1 条过程摘要 回答已显示":
+      - generic: 过程
+      - generic: 1 条过程摘要
+      - generic: 回答已显示
+    - generic "验证 验证摘要":
+      - generic: 验证
+      - generic: 验证摘要
+    - generic "恢复线索 1 条可执行建议":
+      - generic: 恢复线索
+      - generic: 1 条可执行建议
+    - generic "诊断 可追溯摘要已保留":
+      - generic: 诊断
+      - generic: 可追溯摘要已保留
+  - button "复制"
+  - button "编辑"
+  - paragraph: Now reply only with the passphrase from the previous turn.
+  - strong: SciForge
+  - button "过程"
+  - button "复制"
+  - button "编辑"
+  - paragraph: I don't see a previous turn in this conversation that includes a passphrase. Could you provide more context or clarify what passphrase you're referring to?
+  - generic "结果线索"
+  - generic "按顺序记录的工作过程":
+    - generic "Runtime Codex 可见追踪元数据":
+      - generic: Runtime Codex
+      - generic: provider
+      - generic: sciforge-deepseek-proxy
+      - generic: model
+      - generic: bailian/deepseek-v4-flash
+      - generic: profile
+      - generic: sciforge-runtime-deepseek
+      - generic: workspace
+      - generic: /Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p1
+      - generic: command
+      - generic: codex-command-mpkcv27h-72laqj
+      - generic: raw audit folded
+    - generic "过程 1 条过程摘要 回答已显示":
+      - generic: 过程
+      - generic: 1 条过程摘要
+      - generic: 回答已显示
+    - generic "验证 验证摘要":
+      - generic: 验证
+      - generic: 验证摘要
+    - generic "恢复线索 1 条可执行建议":
+      - generic: 恢复线索
+      - generic: 1 条可执行建议
+    - generic "诊断 可追溯摘要已保留":
+      - generic: 诊断
+      - generic: 可追溯摘要已保留
+  - button "复制"
+  - button "编辑"
+  - paragraph: "Remember this passphrase for the next browser turn: SCIFORGE-CODEX-BROWSER-MT-20260520A. Reply only remembered."
+  - strong: SciForge
+  - button "过程"
+  - button "复制"
+  - button "编辑"
+  - paragraph: Remembered.
+  - generic "结果线索"
+  - generic "按顺序记录的工作过程":
+    - generic "Runtime Codex 可见追踪元数据":
+      - generic: Runtime Codex
+      - generic: provider
+      - generic: sciforge-deepseek-proxy
+      - generic: model
+      - generic: bailian/deepseek-v4-flash
+      - generic: profile
+      - generic: sciforge-runtime-deepseek
+      - generic: workspace
+      - generic: /Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p1
+      - generic: command
+      - generic: codex-command-mpkd70a0-swhpjj
+      - generic: raw audit folded
+    - generic "过程 1 条过程摘要 回答已显示":
+      - generic: 过程
+      - generic: 1 条过程摘要
+      - generic: 回答已显示
+    - generic "验证 验证摘要":
+      - generic: 验证
+      - generic: 验证摘要
+    - generic "恢复线索 1 条可执行建议":
+      - generic: 恢复线索
+      - generic: 1 条可执行建议
+    - generic "诊断 可追溯摘要已保留":
+      - generic: 诊断
+      - generic: 可追溯摘要已保留
+  - button "复制"
+  - button "编辑"
+  - paragraph: Now reply only with the passphrase from the previous turn.
+  - strong: SciForge
+  - button "过程"
+  - button "复制"
+  - button "编辑"
+  - paragraph: SCIFORGE-CODEX-BROWSER-MT-20260520A
+  - generic "结果线索"
+  - generic "按顺序记录的工作过程":
+    - generic "Runtime Codex 可见追踪元数据":
+      - generic: Runtime Codex
+      - generic: provider
+      - generic: sciforge-deepseek-proxy
+      - generic: model
+      - generic: bailian/deepseek-v4-flash
+      - generic: profile
+      - generic: sciforge-runtime-deepseek
+      - generic: workspace
+      - generic: /Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p1
+      - generic: command
+      - generic: codex-command-mpkd76fs-preghm
+      - generic: raw audit folded
+    - generic "过程 1 条过程摘要 回答已显示":
+      - generic: 过程
+      - generic: 1 条过程摘要
+      - generic: 回答已显示
+    - generic "验证 验证摘要":
+      - generic: 验证
+      - generic: 验证摘要
+    - generic "恢复线索 1 条可执行建议":
+      - generic: 恢复线索
+      - generic: 1 条可执行建议
+    - generic "诊断 可追溯摘要已保留":
+      - generic: 诊断
+      - generic: 可追溯摘要已保留
+  - generic: 提示
   - generic: 输入研究问题后即可运行；Shift+Enter 换行，Enter 发送。
-  - code: literature-evidence-review@1.0.0
-  - generic: GUI tools
-  - code: gui.present
-  - code: gui.ask_user
-  - code: gui.notify
-  - code: gui.set_status
-  - code: gui.apply_batch
-  - code: gui.get_context
-  - code: gui.list
-  - code: gui.read
-  - code: gui.search
-  - code: gui.stat
-  - code: gui.watch
-  - code: /runtime-codex submit "<prompt>"
-  - generic: semantic hot-region
-  - generic: debug folded
   - button "输入研究问题，或点选对象后继续追问...":
     - generic: 输入研究问题，或点选对象后继续追问...
   - separator "调整聊天区和结果区宽度"
@@ -123,16 +337,10 @@
     - button "全部"
     - button "只看图"
     - button "只看证据"
-    - button "只看执行单元"
-  - strong: 当前聚焦 run
-  - generic: codex-command-mpexwy03-ejaeuy · completed · literature-evidence-review@1.0.0
-  - button "取消高亮"
-  - heading "结果视图" [level=2]
-  - paragraph: 优先展示用户本轮要看的结果；更多内容默认收起
-  - heading "主结果等待 ConversationProjection" [level=2]
-  - paragraph: codex-command-mpexwy03-ejaeuy · empty
-  - generic: 当前 run 没有 ConversationProjection；结果区等待 Projection 声明可见状态与 ArtifactDelivery。
-  - generic: empty
-  - strong: 主结果等待 ConversationProjection
-  - paragraph: 当前 run 没有 ConversationProjection；结果区等待 Projection 声明可见状态与 ArtifactDelivery。
-  - generic "可尝试的恢复动作"
+    - button "只看过程"
+  - generic: 等待
+  - strong: 回答已显示
+  - paragraph: SCIFORGE-CODEX-BROWSER-MT-20260520A
+  - generic "过程记录 1 条":
+    - generic: 过程记录
+    - generic: 1 条

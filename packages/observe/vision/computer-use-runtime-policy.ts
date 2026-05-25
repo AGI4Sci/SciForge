@@ -1,11 +1,11 @@
 export const visionSenseTraceIds = {
   tool: 'local.vision-sense',
-  runtime: 'vision-sense-generic-computer-use-loop',
-  workspaceRuntime: 'sciforge.workspace-runtime.vision-sense-generic-loop',
+  runtime: 'computer-use-action-provider-package-bridge',
+  workspaceRuntime: 'sciforge.workspace-runtime.computer-use-package-bridge',
   trace: 'vision-sense-trace',
   traceKind: 'vision-trace',
   traceSchema: 'sciforge.vision-trace.v1',
-  execution: 'vision-sense-generic-execution',
+  execution: 'computer-use-package-execution',
 } as const;
 
 export const visionSenseRuntimeEventTypes = {
@@ -23,7 +23,6 @@ export const visionSenseGroundingIds = {
   coarseToFine: 'coarse-to-fine',
   coarseToFineFocusRegion: 'coarse-to-fine-focus-region',
   kvGround: 'kv-ground',
-  openAiCompatibleVisionGrounder: 'openai-compatible-vision-grounder',
 } as const;
 
 export function visionSenseFocusRegionGroundingId(base: unknown) {
@@ -58,7 +57,7 @@ export const visionSenseTraceContractPolicy = {
     beforeAfterWindowConsistency: 'required-or-structured-window-lifecycle-diagnostics',
     completionEvidence: 'window-local screenshots plus pixel diff, no DOM/accessibility',
   },
-  requires: ['WindowTargetProvider', 'VisionPlanner', 'Grounder', 'GuiExecutor', 'Verifier'],
+  requires: ['WindowTargetProvider', 'RuntimeCodexPlanner', 'Grounder', 'GuiExecutor', 'Verifier'],
   visualFocus: {
     strategy: visionSenseGroundingIds.coarseToFineFocusRegion,
     algorithmProvider: 'sciforge_vision_sense.coarse_to_fine',
@@ -72,20 +71,20 @@ export const visionSensePlannerOnlyEvidencePolicy = {
 } as const;
 
 export const visionSenseTraceOutputPolicy = {
-  successClaim: 'SciForge executed generic Computer Use actions and wrote file-ref-only visual memory.',
-  selectedRuntimeReason: 'local.vision-sense was selected and routed to the generic Computer Use loop.',
-  genericActionSchemaReason: 'The runtime uses app-agnostic screenshot refs and generic mouse/keyboard action schema.',
+  successClaim: 'SciForge executed Computer Use action provider steps and wrote file-ref-only visual memory.',
+  selectedRuntimeReason: 'Computer Use action provider was selected through the local.vision-sense host adapter and package-backed TUI extension path.',
+  genericActionSchemaReason: 'The action provider uses Runtime Codex text planning, app-agnostic screenshot refs, and generic mouse/keyboard action schema.',
   noAppSpecificShortcutReason: 'No app-specific shortcut or AgentServer repository scan was used.',
   requiredInputs: visionSenseTraceContractPolicy.requires,
   recoverActions: [
-    'Provide a generic VisionPlanner that emits the action schema recorded in the trace.',
+    'Provide a Runtime Codex text planner that emits the action schema recorded in the trace.',
     'Configure KV-Ground or another Grounder so target descriptions become target-window coordinates.',
     'Keep app-specific APIs out of the primary path; only mouse/keyboard executor actions should be required.',
   ],
   bridgeRecoverActions: [
     'Enable the generic desktop bridge with SCIFORGE_VISION_DESKTOP_BRIDGE=1 or .sciforge/config.json visionSense.desktopBridgeEnabled=true.',
     'Configure capture displays with SCIFORGE_VISION_CAPTURE_DISPLAYS=1,2 or visionSense.captureDisplays.',
-    'Provide a planner/grounder that emits app-agnostic mouse and keyboard actions.',
+    'Provide Runtime Codex planner/Grounder wiring that emits app-agnostic mouse and keyboard actions.',
   ],
 } as const;
 
@@ -101,7 +100,7 @@ export const visionSensePlannerPromptPolicy = {
     extraInstruction?: string;
   }) {
     return [
-      'You are SciForge VisionPlanner for generic Computer Use.',
+      'You are SciForge Runtime Codex text planner for the Computer Use action provider.',
       'Return only JSON. Do not read DOM or accessibility. Do not output application-private APIs, scripts, selectors, files, or shortcuts that depend on one app.',
       `Execution environment: ${options.environmentDescription}.`,
       `Window target contract: ${options.windowTargetDescription}.`,
@@ -149,11 +148,12 @@ export const visionSensePlannerPromptPolicy = {
     return [
       `Your previous action repeats a recent no-visible-effect route: ${repeatedRoute}.`,
       'The Verifier says that route did not visibly change the target window. Do not use the same action type, same targetDescription/targetRegionDescription, or same scroll direction again.',
+      'If the current screenshot is a document/template/gallery chooser where an item is visibly selected and a Create/New/Open/OK button is visible, switch input modality to exactly {"type":"press_key","key":"Enter"} once instead of another mouse click.',
       'Choose a different visible generic GUI route from the current screenshot, switch input modality, ask for a local observation using wait with a different targetRegionDescription, or set done=true with actions=[] only if the screenshot already satisfies the round goal.',
     ].join(' ');
   },
   noEffectRepeatFailureReason(repeatedRoute: string) {
-    return `VisionPlanner repeated a no-visible-effect action route after retry (${repeatedRoute}). The generic planner must choose a different visible route or query a different region before more GUI execution.`;
+    return `Runtime Codex text planner repeated a no-visible-effect action route after retry (${repeatedRoute}). The generic planner must choose a different visible route or query a different region before more GUI execution.`;
   },
   highRiskFallbackAction() {
     return {
@@ -214,6 +214,8 @@ export const visionSensePlannerPromptPolicy = {
     'If the current screenshot already contains an appropriate text placeholder for requested literal text, prefer activating that placeholder and type_text. Do not detour into toolbar/ribbon insertion controls just to create another text box unless no usable placeholder is visible.',
     'For slide or document layout tasks, visible title/subtitle/body placeholders are valid text boxes and can satisfy text-box requirements. Prefer filling existing placeholders with structured text before using toolbar/ribbon controls for new objects.',
     'For low-risk document or slide creation tasks, stop once the screenshot plus run history show an opened editor/canvas and visible typed content that matches the requested artifact. Do not keep polishing layout, font size, placeholder remnants, or visual alignment unless the task explicitly asks for those details.',
+    'For save workflows in document or slide editors, use visible in-window save controls only. On macOS PowerPoint-style title bars, do not target the AutoSave toggle or Home/house icon; target the small floppy-disk Save icon immediately to the right of the Home/house icon, with a targetRegionDescription that excludes AutoSave. Do not use Command+S or other app-specific save shortcuts.',
+    'Do not target a File menu/tab unless it is visibly inside the captured target window. If the File control is only in the macOS menu bar outside the window screenshot, it is out of scope for target-window grounding; choose another visible in-window control or return a structured failure.',
     'If requested title/body text is already visible in a selected placeholder or text box, report done=true instead of retyping the same text or creating another text box.',
     'If run history shows toolbar-or-ribbon actions with no-visible-effect=true, avoid toolbar/ribbon/menu controls in the next action. Work with the visible document/canvas content instead, or report done=true if the visible state already satisfies the task.',
   ],
@@ -236,7 +238,7 @@ export function visionSenseCrossDisplayWindowDragPolicy(params: {
   const wantsRight = /right|右/i.test(description) && !/left|左/i.test(description);
   return {
     provider: visionSenseGroundingIds.windowCrossDisplayDrag,
-    reason: 'Target display is outside the current window screenshot; computed title-bar drag endpoints in window-local coordinates instead of asking the visual Grounder to hallucinate an off-window point.',
+    reason: 'Target display is outside the current window screenshot; computed title-bar drag endpoints in window-local coordinates instead of asking the Grounder to hallucinate an off-window point.',
     fromX,
     fromY,
     toX: wantsRight ? Math.round(width * 1.35) : Math.round(width * -0.35),

@@ -741,7 +741,7 @@ function buildTransportAgentContext(
       'User prompt is carried separately as the authoritative request.',
       'The browser only transports UI/session facts; Python conversation-policy owns context selection, digests, capability brief, handoff, acceptance, and recovery.',
       EXECUTION_LOG_REF_AUDIT_NOTE,
-      'When local.vision-sense is selected, treat it as an optional vision sense plugin: build text + screenshot/image modality requests, emit text-form Computer Use commands, and keep trace refs compact across follow-up turns.',
+      'When local.vision-sense is selected, treat it only as the optional screenshot/grounding/verifier sense provider for the Computer Use action provider; do not generate GUI-side Computer Use command text from transport context, and keep trace refs compact across follow-up turns.',
     ],
   };
 }

@@ -24,7 +24,8 @@ export function buildSampleScientificReproductionTrajectory(): ScientificReprodu
     actors: [
       { id: 'operator.codex-worker-d', role: 'codex-worker' },
       { id: 'sciforge.web-ui', role: 'human-operator' },
-      { id: 'local.vision-sense', role: 'computer-use-bridge' },
+      { id: 'local.vision-sense', role: 'vision-sense-observer' },
+      { id: 'action.sciforge.computer-use', role: 'computer-use-action-provider' },
       { id: 'agentserver.backend', role: 'sciforge-backend' },
     ],
     steps: [

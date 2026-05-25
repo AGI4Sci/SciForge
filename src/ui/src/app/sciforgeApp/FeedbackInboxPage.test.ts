@@ -334,14 +334,11 @@ test('RT-06 repair result closure asks only solved or remaining problem feedback
   assert.match(githubFeedbackSource, /export function markFeedbackGithubIssueClosed/);
 });
 
-test('PROJECT.md records the active global annotation sidebar protocol', () => {
-  assert.match(projectSource, /当前任务板：全局注释侧栏/);
-  assert.match(projectSource, /连续反馈体验/);
-  assert.match(projectSource, /annotation-plan-only/);
-  assert.match(projectSource, /annotation-quick-action/);
-  assert.match(projectSource, /低风险即时小改动/);
-  assert.match(projectSource, /在反馈收件箱中区分 `annotation-plan` 来源和传统单对象 comment/);
-  assert.match(projectSource, /Codex in-app browser 验收：在工作台页面和至少一个非工作台页面/);
+test('PROJECT.md records the current active task board and archives the annotation sidebar protocol', () => {
+  assert.match(projectSource, /当前任务板：Computer Use TUI 拓展打通/);
+  assert.match(projectSource, /Computer Use action provider 消费 vision-sense/);
+  assert.match(projectSource, /旧全局注释侧栏 active task board 已从当前执行面删除/);
+  assert.match(projectSource, /docs\/archive/);
   assert.match(sciForgeAppSource, /runAnnotationPlanOnlyTurn/);
   assert.match(sciForgeAppSource, /runAnnotationQuickAction/);
   assert.match(sciForgeAppSource, /runPromptOrchestrator/);

@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
-
-from .planner import PlannerParseError, extract_json_object, validate_planner_action
 
 
 @dataclass(frozen=True)
@@ -152,8 +151,8 @@ def build_user_message_with_image(
 
 def parse_completion_check_response(response_text: str) -> ParsedCompletionCheck:
     try:
-        payload = extract_json_object(response_text)
-    except PlannerParseError as exc:
+        payload = _extract_json_object(response_text)
+    except VisionVlmError as exc:
         raise VisionVlmError(f"completion check response is not valid JSON: {exc}") from exc
 
     done = payload.get("done")
@@ -172,8 +171,8 @@ def parse_completion_check_response(response_text: str) -> ParsedCompletionCheck
 
 def parse_crosshair_verification_response(response_text: str) -> ParsedCrosshairVerification:
     try:
-        payload = extract_json_object(response_text)
-    except PlannerParseError as exc:
+        payload = _extract_json_object(response_text)
+    except VisionVlmError as exc:
         raise VisionVlmError(f"crosshair verification response is not valid JSON: {exc}") from exc
 
     hit = payload.get("hit")
@@ -200,8 +199,8 @@ def parse_crosshair_verification_response(response_text: str) -> ParsedCrosshair
 
 def parse_visible_texts_response(response_text: str) -> list[ParsedVisibleText]:
     try:
-        payload = extract_json_object(response_text)
-    except PlannerParseError as exc:
+        payload = _extract_json_object(response_text)
+    except VisionVlmError as exc:
         raise VisionVlmError(f"visible texts response is not valid JSON: {exc}") from exc
 
     values = payload.get("visible_texts")
@@ -240,27 +239,88 @@ def _confidence(value: Any, label: str) -> float:
 
 
 def _validate_revised_target_description(value: str) -> None:
-    try:
-        validate_planner_action(
-            {
-                "action_type": "click",
-                "target_description": value,
-            }
-        )
-    except Exception as exc:
-        raise VisionVlmError(
-            "crosshair revised_target_description must not contain coordinates"
-        ) from exc
+    if _contains_coordinate_expression(value):
+        raise VisionVlmError("crosshair revised_target_description must not contain coordinates")
 
 
 def _looks_coordinate_like(value: str) -> bool:
-    try:
-        validate_planner_action(
-            {
-                "action_type": "click",
-                "target_description": value or "visible text region",
-            }
-        )
-    except Exception:
-        return True
-    return False
+    return _contains_coordinate_expression(value)
+
+
+COORDINATE_PATTERNS = [
+    re.compile(r"\b[xy]\s*[:=]\s*-?\d+(?:\.\d+)?\b", re.IGNORECASE),
+    re.compile(r"\b(?:row|column|col)\s*[:#]?\s*\d+\b", re.IGNORECASE),
+    re.compile(r"\b\d+\s*(?:px|pixel|pixels)\b", re.IGNORECASE),
+    re.compile(r"[\(\[]\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?\s*[\)\]]"),
+    re.compile(r"\b(?:coordinate|coordinates|coord|coords|bbox|bounding box|point)\b", re.IGNORECASE),
+]
+
+
+def _extract_json_object(text: str) -> Mapping[str, Any]:
+    if not text or not text.strip():
+        raise VisionVlmError("VLM response is empty")
+
+    candidates = _json_candidates(text)
+    errors: list[str] = []
+    for candidate in candidates:
+        try:
+            value = json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            errors.append(str(exc))
+            continue
+        if not isinstance(value, dict):
+            raise VisionVlmError("VLM JSON must be an object")
+        return value
+
+    raise VisionVlmError(f"No valid JSON object found in VLM response: {errors[:2]}")
+
+
+def _json_candidates(text: str) -> list[str]:
+    stripped = text.strip()
+    candidates = [stripped]
+    candidates.extend(
+        match.group(1).strip()
+        for match in re.finditer(r"```(?:json)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
+    )
+
+    start = text.find("{")
+    while start != -1:
+        end = _matching_json_object_end(text, start)
+        if end is not None:
+            candidates.append(text[start : end + 1])
+        start = text.find("{", start + 1)
+
+    deduped: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in deduped:
+            deduped.append(candidate)
+    return deduped
+
+
+def _matching_json_object_end(text: str, start: int) -> int | None:
+    depth = 0
+    in_string = False
+    escape = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def _contains_coordinate_expression(value: str) -> bool:
+    return any(pattern.search(value) for pattern in COORDINATE_PATTERNS)

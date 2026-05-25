@@ -142,7 +142,7 @@ export async function prepareComputerUseLongRun(options: {
     notes: [
       'This run must validate generic Computer Use behavior only.',
       'Do not add app-specific patches, DOM reads, accessibility reads, repository scans, or synthetic success artifacts.',
-      'If any WindowTarget, VisionPlanner, Grounder, GuiExecutor, or Verifier dependency is missing, record failed-with-reason with real window screenshot refs.',
+      'If any WindowTarget, RuntimeCodexPlanner, Grounder, GuiExecutor, or Verifier dependency is missing, record failed-with-reason with real window screenshot refs.',
     ].join(' '),
   };
   await mkdir(evidenceDir, { recursive: true });

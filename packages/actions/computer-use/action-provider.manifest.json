@@ -13,8 +13,10 @@
     "type": "python-package",
     "package": "sciforge-computer-use",
     "module": "sciforge_computer_use",
-    "symbol": "run_computer_use_task",
+    "symbol": "run_task",
+    "cli": "python -m sciforge_computer_use --request-json '<json>' --host-port-stdio",
     "path": "packages/actions/computer-use",
+    "interface": "runTask(request, hostPorts)",
     "notes": "Computer Use Python action loop、contract、safety 和 trace 的唯一物理真相源。"
   },
   "actionSchema": {
@@ -23,9 +25,12 @@
       "type": "object",
       "required": ["task"],
       "properties": {
+        "schema_version": { "const": "sciforge.computer-use.request.v1" },
         "task": { "type": "string" },
         "max_steps": { "type": "integer", "minimum": 1, "default": 12 },
         "risk_policy": { "enum": ["fail-closed", "allow-confirmed"] },
+        "approval_ref": { "type": "string" },
+        "providers": { "type": "object" },
         "window_target": { "type": "object" },
         "metadata": { "type": "object" }
       }
@@ -38,6 +43,7 @@
         "reason": { "type": "string" },
         "steps": { "type": "array" },
         "final_observation": { "type": ["object", "null"] },
+        "approval_request": { "type": ["object", "null"] },
         "failure_diagnostics": { "type": "object" },
         "metrics": { "type": "object" }
       }
@@ -69,15 +75,52 @@
     "riskClass": "high",
     "defaultPolicy": "fail-closed",
     "highRiskPolicy": "fail-closed",
-    "supportsDryRun": false,
+    "supportsDryRun": true,
     "blockedActions": ["payment", "credential-change", "destructive-delete", "external-send-without-approval"],
     "requiresExplicitTarget": true,
     "notes": "旧实现中 high risk action 在 fail-closed 策略下返回 needs-confirmation，不执行。"
   },
   "confirmationRules": {
     "requiredWhen": ["riskLevel=high", "external side effect", "destructive action", "approvalPolicy missing"],
-    "approvalEvidence": ["ComputerUseRequest.risk_policy=allow-confirmed", "humanApprovalRef"],
+    "approvalEvidence": ["ComputerUseRequest.risk_policy=allow-confirmed", "ComputerUseRequest.approval_ref"],
     "timeoutPolicy": "fail"
+  },
+  "hostPortsContract": {
+    "schemaRef": "sciforge.computer-use.host-ports.v1",
+    "policySource": "packages/actions/computer-use/provider-policy.ts",
+    "requiredPorts": ["capture", "plan", "locate", "execute", "verify"],
+    "optionalPorts": ["crop", "query", "writeTrace", "emitEvent"],
+    "forbiddenPorts": ["requestApproval", "gui.present", "gui.ask_user"],
+    "providerIdPolicy": {
+      "capture": ["display-capture", "target-window-capture"],
+      "crop": "host-focus-region-crop",
+      "actionRequestExecutor": ["dry-run-generic-gui-executor", "<desktopPlatform>-host-port-executor"],
+      "execute": ["dry-run-generic-gui-executor", "<desktopPlatform>-generic-gui-executor"],
+      "writeTrace": "workspace-file-ref-trace-writer",
+      "emitEvent": "workspace-runtime-events"
+    },
+    "stdioProtocol": {
+      "callSchema": "sciforge.computer-use.host-port-call.v1",
+      "resultSchema": "sciforge.computer-use.host-port-result.v1",
+      "finalResultSchema": "sciforge.computer-use.cli-final-result.v1"
+    },
+    "traceHandoff": {
+      "schemaRef": "sciforge.computer-use.trace-handoff.v1",
+      "presentationTarget": "computer-use.trace-summary",
+      "approvalTarget": "computer-use.approval-request",
+      "storagePolicy": "refs-first",
+      "payloadPolicy": "refs-and-compact-summary-only",
+      "forbiddenInlinePayloads": ["rawScreenshot", "base64", "data:image"]
+    },
+    "notes": "Computer Use action provider consumes host-owned platform ports. It never imports GUI implementation and never opens confirmation UI directly."
+  },
+  "plannerContract": {
+    "schemaRef": "sciforge.computer-use.planner-action.v1",
+    "inputs": ["task", "compactObservation", "visibleText", "recentActions", "verifierFeedback"],
+    "output": "exactly one generic action or done=true",
+    "rejectedIssues": ["coordinate-output", "app-private-shortcut", "unsupported-action", "empty-action"],
+    "coordinateOwner": "grounder-provider",
+    "notes": "Planner must not output coordinates, app-private shortcuts, unsupported action types, or empty action blocks."
   },
   "traceContract": {
     "schemaRef": "sciforge.computer-use.loop-trace.v1",

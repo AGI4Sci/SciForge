@@ -64,8 +64,9 @@ function runtimeCodexEnvFromLocalConfig() {
   try {
     const parsed = JSON.parse(readFileSync(configPath, 'utf8'));
     const llm = isRecord(parsed?.llm) ? parsed.llm : {};
+    const codexProxy = isRecord(parsed?.codexProxy) ? parsed.codexProxy : {};
     const apiKey = stringValue(parsed.apiKey) || stringValue(llm.apiKey);
-    const provider = stringValue(parsed.modelProvider) || stringValue(llm.provider);
+    const provider = stringValue(parsed.runtimeProvider) || stringValue(codexProxy.runtimeProvider) || stringValue(codexProxy.provider);
     const baseUrl = stringValue(parsed.modelBaseUrl) || stringValue(llm.baseUrl);
     const model = stringValue(parsed.modelName) || stringValue(llm.model) || stringValue(llm.modelName);
     return {

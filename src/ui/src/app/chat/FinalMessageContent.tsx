@@ -3,25 +3,34 @@ import { mergeObjectReferences, normalizeObjectReferencePresentationRole } from 
 import { MessageContent } from './MessageContent';
 import { splitFinalMessagePresentation } from './finalMessagePresentation';
 import { sanitizeUserProjectionText } from '../conversation-projection-view-model';
+import { hasRuntimeGuiSurface, RuntimeGuiPanel, type RuntimeGuiSurface } from './RuntimeGuiPanel';
 
 export function FinalMessageContent({
   content,
   references,
   resultPresentation,
+  runtimeGui,
+  onGuiCommand,
   onObjectFocus,
 }: {
   content: string;
   references: ObjectReference[];
   resultPresentation?: unknown;
+  runtimeGui?: RuntimeGuiSurface;
+  onGuiCommand?: (commandText: string) => void;
   onObjectFocus: (reference: ObjectReference) => void;
 }) {
   const presentation = splitFinalMessagePresentation(content, resultPresentation);
   const effectiveReferences = mergeResultPresentationReferences(references, resultPresentation);
   const fallbackContent = presentation.primaryContent || content;
   const primaryContent = sanitizeUserProjectionText(fallbackContent) ?? fallbackContent;
+  const showRuntimeGui = hasRuntimeGuiSurface(runtimeGui);
   return (
     <>
       <MessageContent content={primaryContent} references={effectiveReferences} onObjectFocus={onObjectFocus} />
+      {showRuntimeGui ? (
+        <RuntimeGuiPanel surface={runtimeGui} onCommand={onGuiCommand} />
+      ) : null}
       {presentation.auditSections.length ? (
         <details className="message-fold depth-2 final-message-audit-fold" key={finalAuditFoldKey(content, presentation.summary)}>
           <summary>过程与诊断 · {presentation.summary}</summary>

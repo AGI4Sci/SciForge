@@ -18,13 +18,15 @@
 - 真实输入 smoke 只证明基础鼠标键盘闭环，不等于用户级验收。Computer Use 最终验收必须完成用户可感知的桌面工作流，并产出可检查 artifact、截图 refs、trace refs 和 GUI 展示证据。
 - 用户级工作流可以联合多个 App，例如 Browser 收集内容、PowerPoint/Keynote/LibreOffice 制作一页 PPT、Finder 保存/定位产物；这些 App 交互都必须经 Computer Use host ports 执行，而不是由 GUI 或 Playwright/DOM shortcut 代跑。
 - 高风险动作默认 fail closed。发送、删除、支付、授权、发布、外部提交、覆盖、上传或真实桌面输入需要返回 `needs-confirmation` / `approvalRequest`，由 TUI Host 决定是否调用 `gui.ask_user`。
+- 最终输入隔离目标：Computer Use 应使用独立 simulated input adapter，维护自己的虚拟鼠标指针和键盘输入状态，不移动系统鼠标、不发送全局系统键盘事件，也不影响用户正常使用电脑；shared system input 只能作为迁移期诊断证据，不能作为最终 L3 success。
 
 ## 当前事实
 
 - 用户已按 `packages/actions/computer-use/KV_GROUND_SERVICE_GUIDE.md` 启动 KV-Ground-8B 服务；接下来必须用真实 health check 和 predict smoke 记录实际 endpoint。
 - 当前代码已有 `packages/actions/computer-use` Python action loop、manifest、safety、trace 和 tests。
-- 当前代码仍有 `src/runtime/computer-use` 与 `src/runtime/vision-sense/*computer-use*` 装配和执行逻辑；目标是把通用能力迁到 package，runtime 只做 host adapter。
+- 当前代码已删除旧 `src/runtime/vision-sense` 正向 Computer Use loop；`src/runtime/computer-use` 保留 Host adapter、Workspace Gateway 包装和具体 host-port implementation，package 拥有 action loop。
 - 设计文档已明确 native extension 只直连 TUI Host，GUI 只通过 TUI Host 的 `gui.*` 参与展示和确认。
+- Runtime Codex / provider proxy 配置仍必须同时具备本机 `SCIFORGE_RUNTIME_API_KEY` 和 provider proxy upstream base URL（例如 `SCIFORGE_PROXY_UPSTREAM_BASE_URL` 或等价 `upstreamBaseUrl`），缺任一项都只能作为 provider preflight diagnostic，不得 silent fallback。2026-05-25 evidence: runtime CODEX_HOME was regenerated with provider/profile/model/env_key matching the final scheme; `SCIFORGE_RUNTIME_PROVIDER=native` no longer overwrites the final `sciforge-deepseek-proxy` provider id; local provider config is read from `runtimeProvider` / `codexProxy.provider`; config-file secrets remain diagnostic-only. `npm run smoke:runtime-provider-preflight` now reports current env `ready`, and strict `SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 npm run smoke:runtime-codex-browser-acceptance` passed with fresh in-app browser evidence. 2026-05-25 update: a direct Computer Use source-stage rerun injected the SciForge main service env into the local process without writing or printing the secret and produced `.sciforge/vision-runs/cu-l3-edge-source-http-title-20260525T061600Z/vision-trace.json`.
 
 ## 不可妥协原则
 
@@ -34,6 +36,7 @@
 - 所有修改必须通用，不能为当前案例写硬编码补丁。
 - codex cli拓展的核心算法部分优先用python写，方便人类查看、修改
 - 代码路径保持唯一真相源：发现冗余链路时删除或合并旧链路，避免长期并行实现。
+- 旧逻辑和最终方案不一致的时候，需要删除旧逻辑，不需要兼容，直接实现最终方案。
 - 单文件超过约 2000 行时必须拆分或登记拆分任务。
 - 已完成的 TODO 需要打勾，并补充 evidence、日期和最终状态。
 
@@ -49,80 +52,61 @@
 - [`packages/actions/computer-use/KV_GROUND_SERVICE_GUIDE.md`](packages/actions/computer-use/KV_GROUND_SERVICE_GUIDE.md)：KV-Ground-8B 服务启动与调用。
 - [`packages/observe/vision/README.md`](packages/observe/vision/README.md)：vision-sense 边界。
 
-## 当前任务板：Computer Use TUI 拓展打通
+## 当前任务板：下一轮 Computer Use 真实复杂任务
 
-### CU-00 Preflight 与真实环境确认
+这些任务只用于下一轮 Computer Use 实测准备。每个任务都必须组合调用多个真实 App 或独立远程会话中的多个应用视图，走 TUI Host -> `computer_use.runTask(request, hostPorts)`，并保留 trace refs、before/after screenshots、focus crops、grounding diagnostics、final artifact refs、verifier verdict 和 `gui.present` 记录。不得用 DOM、Playwright、accessibility tree、脚本直接生成文件或单 App 快捷路径替代。
 
-- [ ] 记录 KV-Ground endpoint，优先验证 `curl http://127.0.0.1:18081/health`，保存返回摘要。
-- [ ] 用一张本机截图走 `/predict/` smoke，确认 `coordinates`、`image_size` 和坐标系符合输入图片尺寸。
-- [ ] 确认真实 desktop bridge 配置：`SCIFORGE_VISION_DESKTOP_BRIDGE=1`，并明确是否允许 shared system input。
-- [ ] 真实输入前绑定低风险目标窗口；没有独立 input adapter 时，必须显式记录 shared system input acknowledgement。
-- [ ] 建立本轮输出目录，例如 `.sciforge/vision-runs/cu-tui-extension-*`，所有截图、trace、audit refs 只写 file refs，不内联 base64。
+### CU-NEXT-01 文献到汇报材料
 
-### CU-01 Package 边界收敛
+- [ ] 打开 Browser，访问本地或安全网页中的一篇论文摘要页面。
+- [ ] 提取题目、作者、研究问题、方法、主要发现和局限。
+- [ ] 切换到 PowerPoint / Keynote / LibreOffice Impress，制作 3 页汇报：背景、方法与发现、局限与下一步。
+- [ ] 切换到 Finder，把文件保存到 `.sciforge/vision-runs/<run-id>/literature-brief.*`，再回到 SciForge 展示 artifact refs。
 
-- [ ] 在 `packages/actions/computer-use` 中定义或提升稳定 `ComputerUseRequest` / `ComputerUseResult` / `ComputerUseHostPorts` contract。
-- [ ] 将通用 window target、capture、coordinate mapping、scheduler、executor、trace handoff 策略从 `src/runtime/computer-use` 逐步迁到 `packages/actions/computer-use`，或为迁移登记明确子任务。
-- [ ] 保留 `src/runtime` 为薄 Host adapter：只做 config loading、`GatewayRequest` 转换、host port 注入、runtime event 和 `ToolPayload` 包装。
-- [ ] 更新 action provider manifest，使对外 surface 表达 `runTask(request, hostPorts)`、refs-first result、approval request 和 trace contract。
-- [ ] 删除或合并迁移后冗余链路，避免 `vision-sense runtime loop` 与 `computer-use action provider` 长期并行拥有执行逻辑。
+### CU-NEXT-02 表格数据到图表报告
 
-### CU-02 Codex CLI / TUI Planner
+- [ ] 在 Finder 中定位一份本地 CSV 或 XLSX 数据文件。
+- [ ] 用 Numbers / Excel / LibreOffice Calc 打开并检查表头、行数和关键列。
+- [ ] 生成至少一个可见图表或汇总表。
+- [ ] 切换到 Pages / Word / LibreOffice Writer，写一页报告，包含数据摘要、图表截图或导出图、结论和异常值说明。
+- [ ] 保存报告和图表文件，并让 `gui.present` 展示两个 artifact refs。
 
-- [ ] 明确 Planner contract：输入 `task`、compact observation、visible text、recent actions、verifier feedback；输出 exactly one generic action 或 `done=true`。
-- [ ] Planner 由 Codex CLI / TUI 文本 agent 负责，不从 GUI 读取 DOM/accessibility，也不输出坐标。
-- [ ] Planner 需要看图时，只能调用 sense provider 获取 observation summary 或 region detail；视觉模型可以作为 sense helper，不成为 action owner。
-- [ ] 增加 JSON schema validation：拒绝坐标、app-private shortcut、unsupported action、空 action 和高风险未标注 action。
-- [ ] Planner 失败时返回 structured failure 或 repair hint，不假装 GUI action 已执行。
+### CU-NEXT-03 网页资料到邮件草稿
 
-### CU-03 KV-Ground Grounder 接入
+- [ ] 在 Browser 中打开两个本地资料页或安全网页，比较两个产品、论文或方案。
+- [ ] 在 Notes / TextEdit / Word 中整理对比表，至少包含 4 个维度和推荐结论。
+- [ ] 打开 Mail 或本地可替代的邮件草稿应用，创建但不发送一封邮件草稿。
+- [ ] 邮件正文必须引用整理结果，主题包含 `SciForge Computer Use Draft <timestamp>`。
+- [ ] 高风险发送动作必须停在 `needs-confirmation` / `gui.ask_user`，不得真的发送。
 
-- [ ] 将 KV-Ground endpoint 配入 Computer Use grounder provider，默认使用 inline image upload，除非明确存在共享路径映射。
-- [ ] Grounder 输入只接受 screenshot ref + target description；输出 window-local / crop-local 坐标、confidence、raw text 和 diagnostics。
-- [ ] 实现或验证 coarse-to-fine：整窗 coarse region -> focus crop -> KV-Ground fine point -> executor coordinate mapping。
-- [ ] 记录失败诊断：health failure、predict timeout、image path not found、base64 upload failure、坐标越界、低置信度。
-- [ ] 确保 trace 只保存 refs、sha256、尺寸、target description、coordinates、provider metadata，不保存 raw screenshot payload。
+### CU-NEXT-04 文件整理与索引生成
 
-### CU-04 基础真实输入 smoke
+- [ ] 在 Finder 中创建一个新的工作目录。
+- [ ] 从两个不同来源目录复制或移动指定类型文件，例如 PDF、CSV、图片。
+- [ ] 用 Preview / Quick Look / 文档应用打开至少一个文件确认内容。
+- [ ] 在 TextEdit / Markdown 编辑器中生成 `index.md`，列出文件名、来源、用途和检查状态。
+- [ ] 保存并展示目录截图、`index.md`、以及最终文件列表 artifact refs。
 
-- [ ] 准备 disposable 本地 GUI smoke 页面，包含输入框、按钮和结果文本，避免外部账号/API/网络副作用。
-- [ ] 用真实 Computer Use 执行：打开或聚焦目标窗口 -> 点击输入框 -> 输入 `SciForge Computer Use smoke <timestamp>` -> 点击按钮 -> 验证结果文本可见。
-- [ ] 全流程必须经过 TUI Host -> `computer_use.runTask(request, hostPorts)`，不能直接用 GUI、Playwright、DOM、accessibility tree 或 app-specific shortcut 偷跑。
-- [ ] 记录 trace refs、before/after screenshot refs、focus crop refs、grounding metadata、executor lease、verifier feedback 和 final result。
-- [ ] 该任务只标记 `capability-smoke-passed`，不得作为 Computer Use 最终用户级 success。
-- [ ] 如果真实输入被权限、焦点、shared input policy 或 desktop bridge 阻断，返回 `blocked` manifest，并写清楚阻断归属。
+### CU-NEXT-05 失败恢复与多轮修正
 
-### CU-05 用户级 Computer Use 验收
+- [ ] 故意给 Computer Use 一个含糊目标，例如“把刚才那个结果整理成可提交材料”。
+- [ ] 系统必须先返回澄清、blocked manifest 或 repair hint，而不是猜测成功。
+- [ ] 用户补充具体要求后，Computer Use 继续同一 trace/session，跨 Browser、文档编辑器和 Finder 完成最终 artifact。
+- [ ] 验收重点是多轮上下文稳定、失败原因归属、修复后的 artifact refs 和最终 verifier verdict。
 
-- [ ] 设计一个低风险、可重复的单 App 用户产物任务：例如用 PowerPoint、Keynote、LibreOffice Impress 或可离线运行的 slide editor 制作一页 PPT，标题为 `SciForge Computer Use Acceptance <timestamp>`，包含 3 个要点，并保存到 `.sciforge/vision-runs/<run-id>/acceptance-slide.*`。
-- [ ] 设计一个多 App 用户工作流：例如 Browser 打开本地资料页或安全网页 -> Computer Use 提取可见要点 -> 切换到 slide app 生成一页 PPT -> Finder/文件对话框保存 -> 回到 GUI 展示 artifact refs 和最终截图 refs。
-- [ ] 用户级任务仍必须经过 TUI Host -> `computer_use.runTask(request, hostPorts)`；Planner 由 Codex CLI / TUI 文本 agent 负责，Grounder 用 KV-Ground，Observer/Verifier 用 sense provider 和 layered verifier。
-- [ ] 验收证据必须包含：任务文本、App/window 切换 trace、before/after screenshots、focus crops、grounding diagnostics、executor lease、最终 artifact ref、最终可见截图、verifier verdict 和 TUI Host 的 `gui.present` 展示记录。
-- [ ] 如果 PPT app、文件保存、跨 App 切换或系统权限不可用，返回 `blocked` manifest；不得降级为 Playwright/DOM/API 生成文件后宣称 Computer Use 成功。
+### CU-NEXT-06 高风险审批链
 
-### CU-06 TUI-GUI 通信验收
+- [ ] 在 Browser 或表单应用中准备一个看起来像“提交 / 上传 / 发布 / 发送”的低风险测试表单。
+- [ ] Computer Use 填写表单内容，但在点击高风险按钮前必须返回 `needs-confirmation`。
+- [ ] TUI Host 必须调用 `gui.ask_user`，记录 approval request refs。
+- [ ] 用户拒绝时不得执行；用户确认后必须用携带 `approvalRef` 的新调用执行，并记录前后截图和风险审计。
 
-- [ ] GUI 触发路径只发送 terminal-equivalent text，不直接调用 Computer Use module。
-- [ ] TUI Host 接到 Computer Use result 后用 `gui.present` 展示 trace/ref 摘要；GUI 只渲染，不推断 completion/confidence。
-- [ ] 构造一个高风险 dry-run 或 blocked action，验证 Computer Use 返回 `needs-confirmation` / `approvalRequest`，TUI Host 再调用 `gui.ask_user`。
-- [ ] 用户未确认时不得执行真实高风险动作；确认后必须以新的受控调用携带 `approvalRef`。
-- [ ] Codex in-app browser 验收：从 SciForge 可见入口触发 Computer Use 任务，看到 trace/ref 展示和必要的确认交互。
+### CU-NEXT-07 视觉定位压力测试
 
-### CU-07 Verification 与回归
-
-- [ ] Python package tests：`python -m pytest packages/actions/computer-use/tests`。
-- [ ] Vision tests：至少跑 KV-Ground、coordinates、trace contract 相关 tests，或记录现有阻塞。
-- [ ] TypeScript targeted tests：覆盖 runtime adapter、Computer Use policy、trace output、GUI communication guard。
-- [ ] `git diff --check`。
-- [ ] 如改动 runtime/provider 路径，运行 `npm run smoke:runtime-provider-preflight` 并证明没有 silent fallback。
-- [ ] 最终打通前，不得声明 success；只要缺少真实 trace refs、截图 refs 或可见 GUI 展示证据，就标 `partial`。
-
-### CU-08 文档和迁移收口
-
-- [ ] 更新 `docs/Usage.md` 的 Computer Use 操作说明，写清 KV-Ground endpoint、desktop bridge、shared input 风险和 trace 输出。
-- [ ] 如新增 contract 或 host port，更新 `docs/Architecture.md` / `docs/NativeExtensionOwnershipMap.md` / package README。
-- [ ] 清理旧文案中 “vision-sense 触发真实执行” 的模糊表述，改成 “Computer Use action provider 消费 vision-sense”。
-- [ ] 如果 `docs/native-extension-ownership-map.json` 缺失仍阻塞 smoke，补齐或登记为单独 manifest 修复任务。
+- [ ] 打开一个 dense UI 页面或复杂工具栏应用，包含多个相似按钮，例如 Save、AutoSave、Export、Share。
+- [ ] Computer Use 必须通过截图、visible text、focus crop 和 Grounder 选择正确目标，不得用“near AutoSave”之类模糊描述。
+- [ ] 执行动作后切换到 Finder 或目标文件夹验证实际产物。
+- [ ] 验收重点是 coarse-to-fine grounding、错误目标排除、无共享系统输入影响和最终文件证据。
 
 ## 已完成能力：内置浏览器运行时
 

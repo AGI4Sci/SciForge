@@ -22,7 +22,6 @@ import {
   renderMatrixReportMarkdown,
   renderPreflightReport,
   renderRepairPlanMarkdown,
-  visionModelConfigIssue,
   writeMatrixSummary,
 } from './support.js';
 
@@ -370,9 +369,18 @@ export async function preflightComputerUseLong(options: {
       getConfigString(config, ['computerUse', 'inputAdapter']),
     ]),
   );
+  const independentInputAdapterProvider = firstString(
+    process.env.SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER,
+    ...configCandidates.flatMap((config) => [
+      getConfigString(config, ['visionSense', 'independentInputAdapterProvider']),
+      getConfigString(config, ['visionSense', 'inputAdapterProvider']),
+      getConfigString(config, ['computerUse', 'independentInputAdapterProvider']),
+      getConfigString(config, ['computerUse', 'inputAdapterProvider']),
+    ]),
+  );
   const allowSharedSystemInput = /^1|true|yes$/i.test(process.env.SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT || '');
-  const independentInputReady = Boolean(independentInputAdapter && /virtual-hid|remote-desktop|browser-sandbox|accessibility-per-window/i.test(independentInputAdapter));
-  const independentInputExecutable = false;
+  const independentInputReady = Boolean(independentInputAdapter && /virtual-hid|remote-desktop/i.test(independentInputAdapter));
+  const independentInputExecutable = isExecutableIndependentInputAdapter(independentInputAdapter, independentInputAdapterProvider);
   checks.push(dryRun ? {
     id: 'input-isolation',
     status: 'pass',
@@ -382,7 +390,7 @@ export async function preflightComputerUseLong(options: {
     id: 'input-isolation',
     status: 'pass',
     category: 'scheduler',
-    message: `Independent input adapter is configured: ${independentInputAdapter}.`,
+    message: `Independent input adapter is configured and executable: ${independentInputAdapter} via ${independentInputAdapterProvider}.`,
   } : independentInputReady ? {
     id: 'input-isolation',
     status: 'fail',
@@ -394,107 +402,61 @@ export async function preflightComputerUseLong(options: {
     status: 'warn',
     category: 'scheduler',
     message: 'Real run will use shared system mouse/keyboard input with explicit override; window focus checks and executor locks remain required.',
-    repairAction: 'Prefer SCIFORGE_VISION_INPUT_ADAPTER=virtual-hid, remote-desktop, browser-sandbox, or accessibility-per-window before running full real CU-LONG matrices.',
+    repairAction: 'Prefer SCIFORGE_VISION_INPUT_ADAPTER=virtual-hid or remote-desktop before running full real CU-LONG matrices.',
   } : {
     id: 'input-isolation',
     status: 'fail',
     category: 'scheduler',
     message: 'Real run has no independent input adapter and shared system input is not explicitly allowed.',
-    repairAction: 'Configure SCIFORGE_VISION_INPUT_ADAPTER=virtual-hid|remote-desktop|browser-sandbox|accessibility-per-window, or set SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT=1 for an explicitly acknowledged focused-window real smoke only.',
+    repairAction: 'Configure SCIFORGE_VISION_INPUT_ADAPTER=virtual-hid|remote-desktop, or set SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT=1 for an explicitly acknowledged focused-window real smoke only.',
   });
 
-  const hasStaticActions = Boolean(options.actionsJson?.trim());
-  if (hasStaticActions) {
+  const hasTestActionFixtures = Boolean(options.actionsJson?.trim());
+  if (hasTestActionFixtures) {
     checks.push({
-      id: 'static-actions',
+      id: 'test-action-fixtures',
       status: 'warn',
       category: 'planner',
-      message: '--actions-json is set; this is useful for smoke but bypasses real VisionPlanner behavior.',
+      message: '--actions-json is set for test-only fixture actions; this is useful for smoke but bypasses live Runtime Codex text planner calls.',
       repairAction: 'Omit --actions-json for real CU-LONG matrix runs.',
     });
   }
-  const plannerBaseUrl = firstString(
-    process.env.SCIFORGE_VISION_PLANNER_BASE_URL,
+  const plannerProfile = firstString(
+    process.env.SCIFORGE_COMPUTER_USE_PLANNER_PROFILE,
     ...configCandidates.flatMap((config) => [
-      getConfigString(config, ['visionSense', 'plannerBaseUrl']),
-      getConfigString(config, ['modelBaseUrl']),
-      getConfigString(config, ['llm', 'baseUrl']),
-      getConfigString(config, ['llmEndpoint', 'baseUrl']),
+      getConfigString(config, ['computerUse', 'plannerProfile']),
+      getConfigString(config, ['visionSense', 'plannerProfile']),
     ]),
   );
-  const plannerApiKey = firstString(
-    process.env.SCIFORGE_VISION_PLANNER_API_KEY,
-    ...configCandidates.flatMap((config) => [
-      getConfigString(config, ['visionSense', 'plannerApiKey']),
-      getConfigString(config, ['apiKey']),
-      getConfigString(config, ['llm', 'apiKey']),
-      getConfigString(config, ['llmEndpoint', 'apiKey']),
-    ]),
-  );
-  const plannerModel = firstString(
-    process.env.SCIFORGE_VISION_PLANNER_MODEL,
-    ...configCandidates.flatMap((config) => [
-      getConfigString(config, ['visionSense', 'plannerModel']),
-      getConfigString(config, ['visionSense', 'visionPlannerModel']),
-      getConfigString(config, ['visionSense', 'vlmModel']),
-      getConfigString(config, ['visionSense', 'visionModel']),
-      getConfigString(config, ['plannerModel']),
-      getConfigString(config, ['visionPlannerModel']),
-      getConfigString(config, ['vlmModel']),
-      getConfigString(config, ['visionModel']),
-    ]),
-  );
-  const plannerReady = Boolean(plannerBaseUrl && plannerApiKey && plannerModel);
-  const plannerModelIssue = visionModelConfigIssue(plannerModel);
-  checks.push(plannerReady ? {
-    id: 'vision-planner',
-    status: plannerModelIssue ? 'fail' : hasStaticActions ? 'warn' : 'pass',
+  const runtimeCodexReady = Boolean(firstString(process.env.SCIFORGE_RUNTIME_API_KEY));
+  checks.push(runtimeCodexReady ? {
+    id: 'runtime-codex-planner',
+    status: hasTestActionFixtures ? 'warn' : 'pass',
     category: 'planner',
-    message: plannerModelIssue ? `VisionPlanner model is not vision-capable: ${plannerModelIssue}` : hasStaticActions ? 'VisionPlanner config exists, but static actions will bypass it.' : 'OpenAI-compatible VisionPlanner config is present.',
-    repairAction: plannerModelIssue ? 'Set visionSense.plannerModel or SCIFORGE_VISION_PLANNER_MODEL to a VLM such as qwen3.6-plus.' : undefined,
+    message: hasTestActionFixtures
+      ? 'Runtime Codex planner config exists, but test-only fixture actions will bypass it.'
+      : `Runtime Codex text planner config is present${plannerProfile ? ` with profile ${plannerProfile}` : ''}.`,
   } : {
-    id: 'vision-planner',
-    status: hasStaticActions ? 'warn' : 'fail',
+    id: 'runtime-codex-planner',
+    status: hasTestActionFixtures ? 'warn' : 'fail',
     category: 'planner',
-    message: 'VisionPlanner config is incomplete.',
-    repairAction: 'Set SCIFORGE_VISION_PLANNER_BASE_URL/API_KEY/MODEL or configure llm.baseUrl/apiKey/model.',
+    message: 'Runtime Codex text planner config is incomplete.',
+    repairAction: 'Set SCIFORGE_RUNTIME_API_KEY and ensure the Runtime Codex profile/config is initialized; use SCIFORGE_COMPUTER_USE_PLANNER_PROFILE only for an explicit non-default profile.',
   });
 
   const kvGrounderUrl = firstString(process.env.SCIFORGE_VISION_KV_GROUND_URL, ...configCandidates.map((config) => getConfigString(config, ['visionSense', 'grounderBaseUrl'])));
-  const visualGrounderBaseUrl = firstString(
-    process.env.SCIFORGE_VISION_GROUNDER_LLM_BASE_URL,
-    ...configCandidates.map((config) => getConfigString(config, ['visionSense', 'visualGrounderBaseUrl'])),
-    plannerBaseUrl,
-  );
-  const visualGrounderModel = firstString(
-    process.env.SCIFORGE_VISION_GROUNDER_LLM_MODEL,
-    ...configCandidates.flatMap((config) => [
-      getConfigString(config, ['visionSense', 'visualGrounderModel']),
-      getConfigString(config, ['visionSense', 'grounderVisionModel']),
-      getConfigString(config, ['visualGrounderModel']),
-      getConfigString(config, ['grounderVisionModel']),
-    ]),
-    plannerModel,
-  );
-  const visualGrounderApiKey = firstString(
-    process.env.SCIFORGE_VISION_GROUNDER_LLM_API_KEY,
-    ...configCandidates.map((config) => getConfigString(config, ['visionSense', 'visualGrounderApiKey'])),
-    plannerApiKey,
-  );
-  const grounderReady = Boolean(kvGrounderUrl || (visualGrounderBaseUrl && visualGrounderApiKey && visualGrounderModel));
-  const visualGrounderModelIssue = kvGrounderUrl ? '' : visionModelConfigIssue(visualGrounderModel);
+  const grounderReady = Boolean(kvGrounderUrl);
   checks.push(grounderReady ? {
     id: 'grounder',
-    status: visualGrounderModelIssue ? 'fail' : hasStaticActions ? 'warn' : 'pass',
+    status: hasTestActionFixtures ? 'warn' : 'pass',
     category: 'grounder',
-    message: visualGrounderModelIssue ? `Visual Grounder fallback model is not vision-capable: ${visualGrounderModelIssue}` : kvGrounderUrl ? 'KV-Ground-compatible endpoint is configured.' : 'OpenAI-compatible visual Grounder fallback is configured.',
-    repairAction: visualGrounderModelIssue ? 'Prefer SCIFORGE_VISION_KV_GROUND_URL for your self-hosted KV-Ground, or set SCIFORGE_VISION_GROUNDER_LLM_MODEL to a VLM such as qwen3.6-plus.' : undefined,
+    message: 'KV-Ground-compatible endpoint is configured.',
   } : {
     id: 'grounder',
-    status: hasStaticActions ? 'warn' : 'fail',
+    status: hasTestActionFixtures ? 'warn' : 'fail',
     category: 'grounder',
-    message: 'No Grounder config was found.',
-    repairAction: 'Set SCIFORGE_VISION_KV_GROUND_URL or SCIFORGE_VISION_GROUNDER_LLM_BASE_URL/API_KEY/MODEL.',
+    message: 'No KV-Ground config was found.',
+    repairAction: 'Set SCIFORGE_VISION_KV_GROUND_URL.',
   });
 
   const highRiskAllowed = /^1|true|yes$/i.test(firstString(process.env.SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS, ...configCandidates.map((config) => getConfigString(config, ['visionSense', 'allowHighRiskActions']))) || '');
@@ -519,4 +481,11 @@ export async function preflightComputerUseLong(options: {
     await writeFile(reportPath, report);
   }
   return { ok, scenarioIds, dryRun, checks, reportPath };
+}
+
+function isExecutableIndependentInputAdapter(adapter: string | undefined, provider: string | undefined) {
+  const normalizedAdapter = adapter?.trim().toLowerCase().replace(/[_\s]+/g, '-');
+  const normalizedProvider = provider?.trim().toLowerCase().replace(/[_\s]+/g, '-');
+  return normalizedAdapter === 'remote-desktop'
+    && (normalizedProvider === 'sciforge-simulated-remote-desktop' || normalizedProvider === 'simulated-remote-desktop');
 }

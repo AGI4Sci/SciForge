@@ -54,7 +54,7 @@ export function scrubRuntimeCodexAuditValue(value: unknown): unknown {
 }
 
 export function scrubRuntimeCodexEventForAudit(event: NormalizedAgentEvent): NormalizedAgentEvent {
-  if (event.type === 'message' || event.type === 'message_delta' || event.type === 'gui_present') {
+  if (event.type === 'message' || event.type === 'message_delta' || event.type === 'gui_present' || event.type === 'gui_ask_user') {
     return {
       ...event,
       raw: event.raw === undefined ? undefined : scrubRuntimeCodexAuditValue(event.raw),

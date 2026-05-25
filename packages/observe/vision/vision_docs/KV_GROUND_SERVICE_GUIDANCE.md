@@ -1,11 +1,11 @@
 # KV-Ground API 服务启动与 SciForge 接入指南
 
-本文说明如何启动、访问和维护 KV-Ground API 服务，并说明 SciForge `vision-sense` 如何接入该服务。KV-Ground 只负责 grounding：输入截图和文本目标，输出图像坐标。需要理解截图和规划 GUI action 的环节由 VisionPlanner VLM 完成，例如 `qwen3.6-plus`。
+本文说明如何启动、访问和维护 KV-Ground API 服务，并说明 SciForge `vision-sense` 如何接入该服务。KV-Ground 只负责 grounding：输入截图和文本目标，输出图像坐标。规划 GUI action 的生产默认路径由 Runtime Codex 文本 planner 完成，vision-sense 只提供 compact observation、visible text、focus region 和 verifier feedback。
 
 ## 职责划分
 
 ```text
-VisionPlanner: VLM，读取文本 + 截图，输出通用 GUI action
+RuntimeCodexPlanner: Codex CLI / TUI 文本 agent，读取 compact observation、visible text、action history 和 verifier feedback，输出通用 GUI action
 KV-Ground: grounding 模型，读取 image + text_prompt，输出坐标
 GuiExecutor: 根据坐标执行 click/scroll/type/press_key
 Verifier: 重新截图，检查窗口一致性和视觉变化
@@ -13,9 +13,9 @@ Verifier: 重新截图，检查窗口一致性和视觉变化
 
 推荐配置：
 
-- VLM：`qwen3.6-plus`
+- Planner：Runtime Codex 文本 agent
 - Grounder：自部署 KV-Ground API
-- 普通文本模型：可以继续给 AgentServer 或其他文本任务使用，不要混用到 VisionPlanner。
+- 普通文本模型：可以继续给 Runtime Codex、AgentServer 或其他文本任务使用；截图理解应通过 sense provider 生成 compact observation，而不是让 Planner 直接读图。
 
 ## 机器与目录
 
@@ -236,7 +236,6 @@ curl -X POST http://127.0.0.1:18081/predict/ \
   "apiKey": "your-api-key",
   "modelName": "bailian/deepseek-v4-flash",
   "visionSense": {
-    "plannerModel": "qwen3.6-plus",
     "grounderBaseUrl": "http://127.0.0.1:18081",
     "showVisualCursor": true
   }
@@ -245,17 +244,17 @@ curl -X POST http://127.0.0.1:18081/predict/ \
 
 说明：
 
-- `visionSense.plannerModel` 必须是支持图像输入的 VLM，例如 `qwen3.6-plus`。
+- Computer Use Planner 使用 Runtime Codex config；默认 profile 来自 SciForge Runtime Codex 配置，必要时用 `SCIFORGE_COMPUTER_USE_PLANNER_PROFILE` 指定。
 - `visionSense.grounderBaseUrl` 指向 KV-Ground 服务。
 - SciForge `vision-sense` 默认会在没有共享路径映射时发送 `image_base64`，适合远端服务读不到本机截图路径的常见场景。
-- 如果 KV-Ground 已可用，一般不需要配置 `visionSense.visualGrounderModel`。
+- KV-Ground 是 Computer Use 定位的唯一默认 Grounder；如果它不可用，运行应 fail closed 并记录 diagnostics。
 
 等价环境变量：
 
 ```bash
-export SCIFORGE_VISION_PLANNER_BASE_URL="http://your-openai-compatible-endpoint/v1"
-export SCIFORGE_VISION_PLANNER_API_KEY="your-api-key"
-export SCIFORGE_VISION_PLANNER_MODEL="qwen3.6-plus"
+export SCIFORGE_RUNTIME_API_KEY="your-runtime-provider-key"
+# Optional: only set this when using a non-default Runtime Codex planner profile.
+export SCIFORGE_COMPUTER_USE_PLANNER_PROFILE="sciforge-runtime-deepseek"
 
 export SCIFORGE_VISION_KV_GROUND_URL="http://127.0.0.1:18081"
 ```
@@ -350,8 +349,8 @@ $SUP -c /mlplatform/supervisord/supervisord.conf restart kv-ground
 - 确认窗口模式下使用的是目标窗口截图坐标，不是全屏坐标。
 - 检查 Retina / devicePixelRatio 映射；SciForge trace 会记录 `executorCoordinateScale`。
 
-VisionPlanner 无法理解截图：
+Runtime Codex planner 无法选择下一步：
 
-- 检查 `visionSense.plannerModel` 或 `SCIFORGE_VISION_PLANNER_MODEL` 是否是 VLM。
-- 不要把 `deepseek-v4`、`deepseek-v4-flash` 等文本模型配置到 VisionPlanner。
-- 推荐先使用 `qwen3.6-plus` 统一 VLM 行为。
+- 检查 Runtime Codex config、`SCIFORGE_RUNTIME_API_KEY` 和可选 `SCIFORGE_COMPUTER_USE_PLANNER_PROFILE`。
+- 检查 sense provider 是否提供 compact observation、visible text、recent actions 和 verifier feedback。
+- Planner 仍不得直接读截图、DOM、accessibility tree 或输出坐标；需要视觉细节时应由 sense provider 追加 observation/region detail。

@@ -2,82 +2,81 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { assertRealTaskProjectBoardTask } from './real-task-project-board.js';
-import {
-  currentProjectMappingsForSaWebTag,
-} from './web-e2e/case-tags.js';
-
 const root = process.cwd();
 const [
   projectText,
   packageJson,
-  guiProtocol,
-  guiProtocolTest,
-  manifestTest,
-  inlineRefs,
-  messageContent,
-  messageContentTest,
-  responseNormalization,
-  responseNormalizationTest,
-  resultPresentation,
-  resultPresentationTest,
+  architecture,
+  usage,
+  computerUseManifest,
+  computerUseReadme,
+  sciforgeToolsClient,
+  runtimeEvents,
+  packageBridge,
+  packageBridgeTest,
+  planner,
+  plannerTest,
+  noLegacyGate,
+  noHardcodedSuccessGate,
 ] = await Promise.all([
   readText('PROJECT.md'),
   readJson<{ scripts?: Record<string, string> }>('package.json'),
-  readText('src/ui/src/app/guiProtocol.ts'),
-  readText('src/ui/src/app/guiProtocol.test.ts'),
-  readText('src/runtime/codex/gui-extension-manifest.test.ts'),
-  readText('packages/support/object-references/inline-references.ts'),
-  readText('src/ui/src/app/chat/MessageContent.tsx'),
-  readText('src/ui/src/app/chat/MessageContent.test.tsx'),
-  readText('src/ui/src/api/agentClient/responseNormalization.ts'),
-  readText('src/ui/src/api/agentClient/responseNormalization.test.ts'),
-  readText('packages/contracts/runtime/result-presentation.ts'),
-  readText('packages/contracts/runtime/result-presentation.test.ts'),
+  readText('docs/Architecture.md'),
+  readText('docs/Usage.md'),
+  readText('packages/actions/computer-use/action-provider.manifest.json'),
+  readText('packages/actions/computer-use/README.md'),
+  readText('src/ui/src/api/sciforgeToolsClient/client.ts'),
+  readText('src/ui/src/api/sciforgeToolsClient/runtimeEvents.ts'),
+  readText('src/runtime/computer-use/package-bridge.ts'),
+  readText('src/runtime/computer-use/package-bridge.test.ts'),
+  readText('src/runtime/codex/computer-use-text-planner.ts'),
+  readText('src/runtime/codex/computer-use-text-planner.test.ts'),
+  readText('tools/check-no-legacy-paths.ts'),
+  readText('tests/smoke/smoke-no-hardcoded-success.ts'),
 ]);
 
 assert.equal(
   packageJson.scripts?.['smoke:real-task-protocol-gates'],
   'tsx tests/smoke/smoke-real-task-protocol-gates.ts',
-  'package.json must expose the GUI/TUI real-task gate',
+  'package.json must expose the Computer Use project-board gate',
 );
 
-for (const taskId of ['R-PROTO-04', 'R-PROTO-05', 'R-VERIFY-02'] as const) {
-  assertRealTaskProjectBoardTask(projectText, taskId, { root });
+for (const taskId of ['CU-00', 'CU-01', 'CU-02', 'CU-03', 'CU-04', 'CU-05', 'CU-06', 'CU-07', 'CU-08']) {
+  assert.match(projectText, new RegExp(`^### ${taskId}\\b`, 'm'), `${taskId}: must remain in the active PROJECT.md task board`);
 }
+assert.doesNotMatch(projectText, /^- \[[ xX]\]\s+R-[A-Z0-9-]+\b/m, 'PROJECT.md must not restore the retired R-* task board');
 
-const proto04 = currentProjectMappingsForSaWebTag('SA-WEB-39').find((mapping) => mapping.taskId === 'R-PROTO-04');
-assert.ok(proto04, 'R-PROTO-04 must map to SA-WEB-39');
-assert.ok(proto04.contractAssertions.includes('gui-presentation-catalog-discovery'), 'R-PROTO-04 must require GUI presentation catalog discovery');
+assert.match(architecture, /TUI-owned extension|TUI Host/i, 'Architecture must keep Computer Use owned by the TUI Host');
+assert.match(architecture, /gui\.present|gui\.ask_user/, 'Architecture must document TUI-to-GUI presentation and confirmation intents');
+assert.match(usage, /SCIFORGE_RUNTIME_API_KEY/, 'Usage must document Runtime Codex API key preflight');
+assert.match(usage, /SCIFORGE_PROXY_UPSTREAM_BASE_URL|upstream base URL|upstreamBaseUrl/, 'Usage must document provider proxy upstream preflight');
 
-const proto05 = currentProjectMappingsForSaWebTag('SA-WEB-40').find((mapping) => mapping.taskId === 'R-PROTO-05');
-assert.ok(proto05, 'R-PROTO-05 must map to SA-WEB-40');
-assert.ok(proto05.contractAssertions.includes('inline-reference-right-panel-preview'), 'R-PROTO-05 must require inline object reference right-panel preview');
+assert.match(computerUseManifest, /runTask|hostPorts|approvalRequest/, 'Computer Use manifest must expose runTask, host ports, and approval requests');
+assert.match(computerUseManifest, /refs-first|trace/i, 'Computer Use manifest must keep refs-first trace semantics');
+assert.match(computerUseReadme, /packages\/observe\/vision[\s\S]+observation/, 'Computer Use README must describe observe/vision as consumed observation input');
+assert.match(computerUseReadme, /vision-sense[\s\S]+不拥有 executor/, 'Computer Use README must keep vision-sense out of executor ownership');
+assert.match(computerUseReadme, /TUI-owned extension[\s\S]+GUI[\s\S]+gui\.present/, 'Computer Use README must keep GUI participation behind TUI Host presentation');
 
-const verify02 = currentProjectMappingsForSaWebTag('SA-WEB-41').find((mapping) => mapping.taskId === 'R-VERIFY-02');
-assert.ok(verify02, 'R-VERIFY-02 must map to SA-WEB-41');
-assert.ok(verify02.contractAssertions.includes('confidence-source-explanation'), 'R-VERIFY-02 must require confidence source and explanation coverage');
+assert.match(sciforgeToolsClient, /\/api\/sciforge\/tools\/run\/stream/, 'default chat /computer-use must route through the Workspace Gateway tools stream');
+assert.match(sciforgeToolsClient, /action\.sciforge\.computer-use/, 'default chat must select the Computer Use action provider');
+assert.doesNotMatch(sciforgeToolsClient, /computer-use[\s\S]{0,220}\/api\/sciforge\/runtime\/codex\/stream/, 'Computer Use default chat path must not call Runtime Codex stream directly');
+assert.match(runtimeEvents, /computer-use\.tui-host-actions/, 'runtime event projection must consume TUI host action events');
+assert.match(runtimeEvents, /gui\.present/, 'runtime event projection must surface gui.present');
+assert.match(runtimeEvents, /gui\.ask_user/, 'runtime event projection must surface gui.ask_user');
 
-assert.match(guiProtocol, /\/gui\/capabilities\/presentation\.json/, 'R-PROTO-04 must expose the presentation catalog resource');
-assert.match(guiProtocol, /\/gui\/renderers\/<componentId>\.json|\/gui\/renderers\//, 'R-PROTO-04 must expose renderer resources');
-assert.match(guiProtocol, /uiComponentManifests/, 'R-PROTO-04 catalog must come from package manifests');
-assert.match(guiProtocol, /renderer['"]\s*\|\s*['"]artifact-type['"]\s*\|\s*['"]preview-kind/, 'R-PROTO-04 search must index renderer/artifact/preview semantics');
-assert.match(guiProtocolTest, /presentation catalog and renderer resources/, 'R-PROTO-04 protocol tests must cover presentation resources');
-assert.match(manifestTest, /without task rankings or workspace mutation/, 'R-PROTO-04 runtime MCP tests must reject task rankings and workspace mutation');
+assert.match(packageBridge, /sciforge_computer_use|packages\/actions\/computer-use/, 'runtime bridge must call the package action provider');
+assert.match(packageBridge, /withGuiIntentRuntimeResult|gui\.ask_user|gui\.present/, 'runtime bridge must preserve GUI intent metadata from package results');
+assert.match(packageBridgeTest, /gui\.ask_user|approvalRequest|package bridge/i, 'package bridge tests must cover high-risk confirmation projection');
 
-assert.match(inlineRefs, /resolveInlineObjectReferenceToken/, 'R-PROTO-05 must use a shared inline object reference resolver');
-assert.match(inlineRefs, /uniqueReferencesByIdentity/, 'R-PROTO-05 must keep duplicate basename references ambiguous');
-assert.match(messageContent, /onObjectReferenceFocus/, 'R-PROTO-05 message markdown must route clicks to the right-panel focus callback');
-assert.match(messageContentTest, /unique bare filenames and leaves ambiguous code alone/, 'R-PROTO-05 tests must cover unique and ambiguous bare filenames');
+assert.match(planner, /visibleText|recentActions|verifierFeedback|compactObservation/, 'planner input must be compact text context, not GUI internals');
+assert.match(planner, /Do not inspect screenshots[\s\S]+DOM[\s\S]+accessibility trees/, 'planner must explicitly reject screenshots, DOM, and accessibility-tree inspection');
+assert.match(planner, /Never output coordinate fields/, 'planner must explicitly reject coordinate output');
+assert.match(plannerTest, /coordinate|multi-action|app-private|fail/i, 'planner tests must fail closed for invalid action outputs');
 
-assert.doesNotMatch(responseNormalization, /0\.78/, 'R-VERIFY-02 normalizer must not synthesize the old 78% confidence');
-assert.match(responseNormalizationTest, /does not synthesize confidence when runtime payload is unscored/, 'R-VERIFY-02 tests must cover unscored runtime payloads');
-assert.match(resultPresentation, /evidenceDefault/, 'R-VERIFY-02 contract must preserve evidenceDefault');
-assert.match(resultPresentation, /evidenceCap/, 'R-VERIFY-02 contract must preserve evidenceCap');
-assert.match(resultPresentation, /penalties/, 'R-VERIFY-02 contract must preserve verifier penalties');
-assert.match(resultPresentationTest, /structured confidence explanation preserves verifier scoring fields/, 'R-VERIFY-02 tests must cover structured confidence explanation');
+assert.match(noLegacyGate, /SCIFORGE_VISION_PLANNER|computer-use-action-loop|computer-use-bridge/, 'no-legacy gate must ban retired vision-sense Computer Use paths');
+assert.match(noHardcodedSuccessGate, /Computer Use|fake-success|hardcoded/i, 'no-hardcoded-success gate must cover Computer Use success claims');
 
-console.log('[ok] real-task GUI/TUI gates cover R-PROTO-04, R-PROTO-05, and R-VERIFY-02 catalog, inline refs, and confidence-source contracts');
+console.log('[ok] Computer Use protocol gates cover CU-* board, package ownership, Runtime Codex planner, TUI-GUI intents, and old-logic deletion guards');
 
 async function readText(path: string): Promise<string> {
   return readFile(join(root, path), 'utf8');

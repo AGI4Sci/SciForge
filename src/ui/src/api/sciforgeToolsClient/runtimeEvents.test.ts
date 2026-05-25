@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import type { SendAgentMessageInput } from '../../domain';
+import type { AgentStreamEvent, SendAgentMessageInput } from '../../domain';
 import { sendSciForgeToolMessage } from '../sciforgeToolsClient';
 import { CODEX_REALTIME_SESSION_TRANSPORT_STATUS } from './codexRealtimeSession';
 import { normalizeWorkspaceRuntimeEvent, readWorkspaceToolStream } from './runtimeEvents';
@@ -178,6 +178,406 @@ test('SSE reader promotes gui.present into the visible Runtime Codex result', as
   assert.equal(result.displayIntent?.source, `gui.present:${commandId}`);
   assert.equal(result.displayIntent?.conversationProjection?.artifacts?.[0]?.mime, 'markdown');
   assert.doesNotMatch(JSON.stringify(result), /RAW_PROVIDER_MESSAGE_SHOULD_NOT_RENDER/);
+});
+
+test('SSE reader promotes gui.ask_user into a visible confirmation result', async () => {
+  const commandId = 'codex-command-gui-ask-user';
+  const body = [
+    'event: gui_ask_user',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'gui_ask_user',
+      text: [
+        '## Computer Use confirmation required',
+        'Allow Computer Use to click the visible Submit button?',
+        'Evidence refs:',
+        '- `.sciforge/vision-runs/run-1/vision-trace.json`',
+      ].join('\n\n'),
+      provider: 'sciforge-deepseek-proxy',
+      model: 'bailian/deepseek-v4-flash',
+      profile: 'sciforge-runtime-deepseek',
+      workspace: '/tmp/current',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+      evidenceRefs: [`audit:codex-runtime:${commandId}:${commandId}-attempt-1:normalized-events`],
+      raw: {
+        source: `gui.ask_user:${commandId}`,
+        askUser: {
+          source: `gui.ask_user:${commandId}`,
+          kind: 'confirmation',
+          title: 'Computer Use confirmation required',
+          message: 'Allow Computer Use to click the visible Submit button?',
+          relatedRefs: ['.sciforge/vision-runs/run-1/vision-trace.json'],
+          choices: [
+            { label: 'Approve', commandText: '/computer-use approve --approval-ref approval-1', style: 'primary' },
+            { label: 'Cancel', commandText: '/computer-use reject --approval-ref approval-1' },
+            { label: 'Unsafe legacy', commandText: 'triggerRecover({ runId: "run-1" })' },
+          ],
+        },
+      },
+    })}`,
+    '',
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      message: 'Runtime Codex completed successfully.',
+      provider: 'sciforge-deepseek-proxy',
+      model: 'bailian/deepseek-v4-flash',
+      profile: 'sciforge-runtime-deepseek',
+      workspace: '/tmp/current',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+      evidenceRefs: [`audit:codex-runtime:${commandId}:${commandId}-attempt-1:normalized-events`],
+    })}`,
+    '',
+  ].join('\n');
+  const response = new Response(body, {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream; charset=utf-8' },
+  });
+
+  const stream = await readWorkspaceToolStream(response, () => undefined);
+  const result = stream.result as {
+    message?: string;
+    guiAskUser?: { source?: string; relatedRefs?: string[]; choices?: Array<{ commandText?: string }> };
+    displayIntent?: {
+      source?: string;
+      conversationProjection?: {
+        visibleAnswer?: { status?: string; liveAcceptanceEligible?: boolean };
+        artifacts?: Array<{ ref?: string }>;
+        recoverActions?: string[];
+      };
+    };
+  };
+
+  assert.equal(stream.error, undefined);
+  assert.match(result.message ?? '', /Computer Use confirmation required/);
+  assert.match(result.message ?? '', /vision-trace\.json/);
+  assert.equal(result.guiAskUser?.source, `gui.ask_user:${commandId}`);
+  assert.deepEqual(result.guiAskUser?.relatedRefs, ['.sciforge/vision-runs/run-1/vision-trace.json']);
+  assert.equal(result.guiAskUser?.choices?.[0]?.commandText, '/computer-use approve --approval-ref approval-1');
+  assert.equal(result.displayIntent?.source, `gui.ask_user:${commandId}`);
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.status, 'needs-human');
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.liveAcceptanceEligible, true);
+  assert.deepEqual(result.displayIntent?.conversationProjection?.artifacts?.map((artifact) => artifact.ref), ['.sciforge/vision-runs/run-1/vision-trace.json']);
+  assert.deepEqual(result.displayIntent?.conversationProjection?.recoverActions, [
+    '/computer-use approve --approval-ref approval-1',
+    '/computer-use reject --approval-ref approval-1',
+  ]);
+});
+
+test('SSE reader turns Computer Use TUI host action metadata into visible result and confirmation refs', async () => {
+  const commandId = 'codex-command-computer-use-actions';
+  const traceRef = '.sciforge/vision-runs/cu-risk/vision-trace.json';
+  const screenshotRef = '.sciforge/vision-runs/cu-risk/step-001-before.png';
+  const body = [
+    'event: workspace_event',
+    `data: ${JSON.stringify({
+      type: 'computer-use.tui-host-actions',
+      source: 'computer-use-package-bridge',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+      detail: JSON.stringify({
+        actions: [{
+          schemaVersion: 'sciforge.computer-use.tui-host-actions.v1',
+          port: 'gui.present',
+          target: 'computer-use.trace-summary',
+          payload: {
+            title: 'Computer Use result',
+            status: 'needs-confirmation',
+            message: 'Computer Use stopped before the guarded action.',
+            traceRefs: [traceRef],
+            screenshotRefs: [screenshotRef],
+            artifactRefs: [],
+            executionUnitRefs: ['EU-computer-use-risk'],
+            workEvidenceRefs: ['workEvidence:vision-sense-computer-use:cu-risk'],
+          },
+        }, {
+          schemaVersion: 'sciforge.computer-use.tui-host-actions.v1',
+          port: 'gui.ask_user',
+          target: 'computer-use.approval-request',
+          payload: {
+            approvalRequest: {
+              id: 'approval:computer-use:cu-risk',
+              prompt: 'Allow Computer Use to click the visible Submit button?',
+              riskLevel: 'high',
+              actionRef: 'ref:planned-action:submit',
+            },
+            relatedRefs: [traceRef, screenshotRef],
+          },
+        }],
+      }),
+    })}`,
+    '',
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      message: 'Runtime Codex completed successfully.',
+      provider: 'sciforge-deepseek-proxy',
+      model: 'bailian/deepseek-v4-flash',
+      profile: 'sciforge-runtime-deepseek',
+      workspace: '/tmp/current',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+    })}`,
+    '',
+  ].join('\n');
+  const seen: unknown[] = [];
+  const response = new Response(body, {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream; charset=utf-8' },
+  });
+
+  const stream = await readWorkspaceToolStream(response, (event) => seen.push(normalizeWorkspaceRuntimeEvent(event)));
+  const result = stream.result as {
+    message?: string;
+    guiAskUser?: { approvalRequest?: { id?: string }; relatedRefs?: string[] };
+    guiPresentation?: { displayedRefs?: string[] };
+    displayIntent?: { conversationProjection?: { visibleAnswer?: { status?: string }; artifacts?: Array<{ ref?: string }> } };
+  };
+
+  assert.equal(stream.error, undefined);
+  assert.match(result.message ?? '', /Computer Use confirmation required/);
+  assert.match(result.message ?? '', /Allow Computer Use to click/);
+  assert.match(result.message ?? '', /approval:computer-use:cu-risk/);
+  assert.match(result.message ?? '', new RegExp(traceRef.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.equal(result.guiAskUser?.approvalRequest?.id, 'approval:computer-use:cu-risk');
+  assert.deepEqual(result.guiAskUser?.relatedRefs, [traceRef, screenshotRef]);
+  assert.ok(result.guiPresentation?.displayedRefs?.includes(traceRef));
+  assert.deepEqual(result.displayIntent?.conversationProjection?.artifacts?.map((artifact) => artifact.ref), [
+    traceRef,
+    screenshotRef,
+    'EU-computer-use-risk',
+    'workEvidence:vision-sense-computer-use:cu-risk',
+  ]);
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.status, 'needs-human');
+  assert.match((seen[0] as AgentStreamEvent | undefined)?.detail ?? '', /visible GUI confirmation/);
+});
+
+test('NDJSON reader turns Computer Use TUI host action metadata into visible result and confirmation refs', async () => {
+  const commandId = 'computer-use-command-ndjson';
+  const traceRef = '.sciforge/vision-runs/cu-ndjson/vision-trace.json';
+  const screenshotRef = '.sciforge/vision-runs/cu-ndjson/step-001-before.png';
+  const response = new Response([
+    JSON.stringify({
+      event: {
+        type: 'computer-use.tui-host-actions',
+        source: 'computer-use-package-bridge',
+        commandId,
+        attemptId: `${commandId}-attempt-1`,
+        detail: JSON.stringify({
+          actions: [{
+            schemaVersion: 'sciforge.computer-use.tui-host-actions.v1',
+            port: 'gui.present',
+            target: 'computer-use.trace-summary',
+            payload: {
+              title: 'Computer Use result',
+              status: 'needs-confirmation',
+              message: 'Computer Use stopped before the guarded action.',
+              traceRefs: [traceRef],
+              screenshotRefs: [screenshotRef],
+              executionUnitRefs: ['EU-computer-use-ndjson'],
+            },
+          }, {
+            schemaVersion: 'sciforge.computer-use.tui-host-actions.v1',
+            port: 'gui.ask_user',
+            target: 'computer-use.approval-request',
+            payload: {
+              approvalRequest: {
+                id: 'approval:computer-use:ndjson',
+                confirmation_text: 'Allow Computer Use to click the guarded Submit button?',
+                risk_level: 'high',
+                action_kind: 'click',
+              },
+              relatedRefs: [traceRef, screenshotRef],
+            },
+          }],
+        }),
+      },
+    }),
+    JSON.stringify({
+      result: {
+        status: 'done',
+        message: 'Raw provider result should not be the visible answer.',
+        commandId,
+        executionUnits: [{ id: 'EU-computer-use-ndjson', status: 'done' }],
+      },
+    }),
+  ].join('\n'), {
+    status: 200,
+    headers: { 'content-type': 'application/x-ndjson' },
+  });
+
+  const seen: unknown[] = [];
+  const stream = await readWorkspaceToolStream(response, (event) => seen.push(normalizeWorkspaceRuntimeEvent(event)));
+  const result = stream.result as {
+    message?: string;
+    guiAskUser?: { source?: string; choices?: Array<{ commandText?: string }>; relatedRefs?: string[] };
+    guiPresentation?: { source?: string; displayedRefs?: string[] };
+    displayIntent?: { conversationProjection?: { visibleAnswer?: { status?: string }; recoverActions?: string[] } };
+  };
+
+  assert.equal(stream.error, undefined);
+  assert.match(result.message ?? '', /Computer Use confirmation required/);
+  assert.match(result.message ?? '', /Allow Computer Use to click the guarded Submit button/);
+  assert.equal(result.guiAskUser?.source, `gui.ask_user:${commandId}:computer-use`);
+  assert.deepEqual(result.guiAskUser?.relatedRefs, [traceRef, screenshotRef]);
+  assert.equal(result.guiAskUser?.choices?.[0]?.commandText, '/computer-use approve --approval-ref "approval:computer-use:ndjson"');
+  assert.equal(result.guiPresentation?.source, `gui.present:${commandId}:computer-use`);
+  assert.ok(result.guiPresentation?.displayedRefs?.includes(traceRef));
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.status, 'needs-human');
+  assert.deepEqual(result.displayIntent?.conversationProjection?.recoverActions, [
+    '/computer-use approve --approval-ref "approval:computer-use:ndjson"',
+    '/computer-use reject --approval-ref "approval:computer-use:ndjson"',
+  ]);
+  assert.match((seen[0] as AgentStreamEvent | undefined)?.detail ?? '', /visible GUI confirmation/);
+});
+
+test('Runtime Codex foreground Computer Use host actions preserve gui.present and gui.ask_user for default chat', async () => {
+  const originalFetch = globalThis.fetch;
+  const traceRef = '.sciforge/vision-runs/cu-risk/vision-trace.json';
+  const screenshotRef = '.sciforge/vision-runs/cu-risk/step-001-before.png';
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      const commandId = String(body.commandId);
+      const attemptId = `${commandId}-attempt-1`;
+      return new Response([
+        'event: message\n',
+        'data: {"type":"message","text":"RAW_PROVIDER_MESSAGE_SHOULD_NOT_RENDER"}\n\n',
+        'event: workspace_event\n',
+        `data: ${JSON.stringify({
+          type: 'computer-use.tui-host-actions',
+          source: 'computer-use-package-bridge',
+          commandId,
+          attemptId,
+          detail: JSON.stringify({
+            actions: [{
+              schemaVersion: 'sciforge.computer-use.tui-host-actions.v1',
+              port: 'gui.present',
+              target: 'computer-use.trace-summary',
+              payload: {
+                title: 'Computer Use result',
+                status: 'needs-confirmation',
+                message: 'Computer Use stopped before the guarded action.',
+                traceRefs: [traceRef],
+                screenshotRefs: [screenshotRef],
+                artifactRefs: [],
+                executionUnitRefs: ['EU-computer-use-risk'],
+                workEvidenceRefs: ['workEvidence:vision-sense-computer-use:cu-risk'],
+              },
+            }, {
+              schemaVersion: 'sciforge.computer-use.tui-host-actions.v1',
+              port: 'gui.ask_user',
+              target: 'computer-use.approval-request',
+              payload: {
+                approvalRequest: {
+                  id: 'approval:computer-use:cu-risk',
+                  confirmation_text: 'Allow Computer Use to click the visible Submit button?',
+                  risk_level: 'high',
+                  action_kind: 'click',
+                },
+                relatedRefs: [traceRef, screenshotRef],
+              },
+            }],
+          }),
+        })}\n\n`,
+        'event: done\n',
+        `data: ${JSON.stringify({
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'done',
+          status: 'done',
+          message: 'Runtime Codex completed successfully.',
+          provider: 'sciforge-deepseek-proxy',
+          model: 'bailian/deepseek-v4-flash',
+          profile: 'sciforge-runtime-deepseek',
+          workspace: '/tmp/current',
+          commandId,
+          attemptId,
+        })}\n\n`,
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage(runtimeRequestInput());
+    const raw = response.run.raw as Record<string, unknown>;
+    const guiPresentation = raw.guiPresentation as Record<string, unknown>;
+    const guiAskUser = raw.guiAskUser as Record<string, unknown>;
+
+    assert.equal(response.message.provenance?.requiresUserConfirmation, true);
+    assert.match(String(response.message.provenance?.source), /^gui\.ask_user:codex-command-.*:computer-use$/);
+    assert.match(response.message.content, /Allow Computer Use to click the visible Submit button/);
+    assert.match(response.message.content, /Action kind: `click`/);
+    assert.equal(guiPresentation.source, `gui.present:${response.run.id}:computer-use`);
+    assert.equal(guiPresentation.status, 'needs-confirmation');
+    assert.deepEqual(guiPresentation.displayedRefs, [
+      traceRef,
+      screenshotRef,
+      'EU-computer-use-risk',
+      'workEvidence:vision-sense-computer-use:cu-risk',
+    ]);
+    assert.equal(guiAskUser.source, `gui.ask_user:${response.run.id}:computer-use`);
+    assert.equal((guiAskUser.approvalRequest as Record<string, unknown>).id, 'approval:computer-use:cu-risk');
+    assert.deepEqual(guiAskUser.relatedRefs, [traceRef, screenshotRef]);
+    assert.deepEqual(response.message.objectReferences?.map((reference) => reference.ref), [
+      `file:${traceRef}`,
+      `file:${screenshotRef}`,
+    ]);
+    assert.doesNotMatch(response.message.content, /RAW_PROVIDER_MESSAGE_SHOULD_NOT_RENDER/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Computer Use approval retry sends approvalRef only for approve terminal-equivalent text', async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies: Array<Record<string, unknown>> = [];
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      bodies.push(body);
+      return new Response(`${JSON.stringify({
+        result: {
+          status: 'done',
+          message: 'Computer Use approval retry accepted.',
+          claimType: 'execution',
+          evidenceLevel: 'runtime',
+          reasoningTrace: 'test Computer Use approval retry',
+          claims: [],
+          uiManifest: [],
+          executionUnits: [{ id: `EU-${body.commandId}`, status: 'done' }],
+          artifacts: [],
+        },
+      })}\n`, { status: 200, headers: { 'Content-Type': 'application/x-ndjson' } });
+    }) as typeof fetch;
+
+    await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      prompt: '/computer-use approve --approval-ref "approval:computer-use:cu-risk"',
+    });
+    await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      prompt: '/computer-use reject --approval-ref "approval:computer-use:cu-risk"',
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const approveBody = bodies[0]!;
+  const rejectBody = bodies[1]!;
+  const approveUiState = approveBody.uiState as Record<string, unknown>;
+  const rejectUiState = rejectBody.uiState as Record<string, unknown>;
+  assert.equal(approveBody.prompt, '/computer-use approve --approval-ref "approval:computer-use:cu-risk"');
+  assert.deepEqual(approveBody.humanApproval, { approvalRef: 'approval:computer-use:cu-risk' });
+  assert.equal(approveUiState.approvalRef, 'approval:computer-use:cu-risk');
+  assert.deepEqual(approveUiState.humanApproval, { approvalRef: 'approval:computer-use:cu-risk' });
+  assert.equal(rejectBody.prompt, '/computer-use reject --approval-ref "approval:computer-use:cu-risk"');
+  assert.equal(rejectBody.humanApproval, undefined);
+  assert.equal(rejectUiState.approvalRef, undefined);
+  assert.equal(rejectUiState.humanApproval, undefined);
 });
 
 test('Runtime Codex realtime transport marker declares RT-02 WebSocket bridge complete', () => {
@@ -815,6 +1215,56 @@ test('Runtime Codex native resume keeps GUI follow-up as command text plus refs 
   assert.match(commandText, /ask --ref "\.sciforge\/sessions\/session-live\/task-results\/selected-report\.md" --ref "artifact:selected-report" "Extract reusable method notes from the selected report"/);
   assert.doesNotMatch(JSON.stringify(body), /GUI_TRANSCRIPT_SHOULD_NOT_REPLAY|FULL_ARTIFACT_BODY_SHOULD_NOT_REPLAY|SELECTED_REPORT_BODY_SHOULD_NOT_REPLAY/);
   assert.doesNotMatch(commandText, /PREVIOUS_USER_REQUEST_SHOULD_NOT_REPLAY|PREVIOUS_NATIVE_ANSWER_SHOULD_NOT_REPLAY/);
+});
+
+test('Runtime Codex same-chat relative follow-up carries bounded continuity when native thread id is unavailable', async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies: Array<Record<string, unknown>> = [];
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+      return new Response([
+        'event: message\n',
+        'data: {"type":"message","text":"SCIFORGE-CODEX-BROWSER-MT-20260520A"}\n\n',
+        'event: done\n',
+        'data: {"type":"done","status":"done","message":"ok"}\n\n',
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      prompt: 'Now reply only with the passphrase from the previous turn.',
+      references: [],
+      artifacts: [],
+      messages: [
+        {
+          id: 'msg-prior-user',
+          role: 'user',
+          content: '[previous-message omitted]',
+          continuityContent: 'Remember this passphrase: SCIFORGE-CODEX-BROWSER-MT-20260520A.',
+          createdAt: '2026-05-19T00:00:00.000Z',
+          status: 'completed',
+        } as NonNullable<SendAgentMessageInput['messages']>[number] & { continuityContent: string },
+        {
+          id: 'msg-current',
+          role: 'user',
+          content: 'Now reply only with the passphrase from the previous turn.',
+          createdAt: '2026-05-19T00:00:01.000Z',
+          status: 'completed',
+        },
+      ],
+      runs: [],
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const body = bodies[0]!;
+  const commandText = String(body.commandText ?? '');
+  assert.equal(body.codexSessionId, undefined);
+  assert.match(commandText, /^Same-chat continuity context for relative references\./);
+  assert.match(commandText, /SCIFORGE-CODEX-BROWSER-MT-20260520A/);
+  assert.match(commandText, /Current request:\n\nNow reply only with the passphrase from the previous turn\./);
 });
 
 test('Runtime Codex selected artifact resume prefers selected lineage session over latest session', async () => {

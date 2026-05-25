@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { copyFile, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
-import { createServer, type IncomingMessage } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
@@ -60,7 +59,7 @@ for (const scenario of pool.scenarios) {
 const runbook = renderComputerUseLongRunbook(pool);
 assert.match(runbook, /T084/);
 assert.match(runbook, /CU-LONG-006 SciForge 自举测试/);
-assert.match(runbook, /WindowTarget -> VisionPlanner -> Grounder -> GuiExecutor -> Verifier -> vision-trace/);
+assert.match(runbook, /WindowTarget -> RuntimeCodexPlanner -> Grounder -> GuiExecutor -> Verifier -> vision-trace/);
 
 const outDir = await mkdtemp(join(tmpdir(), 'sciforge-cu-long-'));
 const outPath = join(outDir, 'runbook.md');
@@ -98,28 +97,25 @@ const previousBridge = process.env.SCIFORGE_VISION_DESKTOP_BRIDGE;
 const previousDryRun = process.env.SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN;
 const previousRunId = process.env.SCIFORGE_VISION_RUN_ID;
 const previousDisplays = process.env.SCIFORGE_VISION_CAPTURE_DISPLAYS;
-const previousActions = process.env.SCIFORGE_VISION_ACTIONS_JSON;
-const previousPlannerBaseUrl = process.env.SCIFORGE_VISION_PLANNER_BASE_URL;
-const previousPlannerApiKey = process.env.SCIFORGE_VISION_PLANNER_API_KEY;
-const previousPlannerModel = process.env.SCIFORGE_VISION_PLANNER_MODEL;
-const previousGrounderBaseUrl = process.env.SCIFORGE_VISION_GROUNDER_LLM_BASE_URL;
-const previousGrounderApiKey = process.env.SCIFORGE_VISION_GROUNDER_LLM_API_KEY;
-const previousGrounderModel = process.env.SCIFORGE_VISION_GROUNDER_LLM_MODEL;
+const previousTestFixtures = process.env.SCIFORGE_VISION_TEST_ACTION_FIXTURES;
+const previousActions = process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON;
+const previousRuntimeApiKey = process.env.SCIFORGE_RUNTIME_API_KEY;
+const previousPlannerProfile = process.env.SCIFORGE_COMPUTER_USE_PLANNER_PROFILE;
+const previousKvGrounderUrl = process.env.SCIFORGE_VISION_KV_GROUND_URL;
 const previousHighRisk = process.env.SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS;
 const previousInputAdapter = process.env.SCIFORGE_VISION_INPUT_ADAPTER;
+const previousInputAdapterProvider = process.env.SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER;
 const previousAllowSharedInput = process.env.SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT;
 try {
   process.env.SCIFORGE_VISION_DESKTOP_BRIDGE = '1';
   process.env.SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN = '1';
   process.env.SCIFORGE_VISION_CAPTURE_DISPLAYS = '1';
   delete process.env.SCIFORGE_VISION_RUN_ID;
-  process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([{ type: 'wait', ms: 1 }]);
-  process.env.SCIFORGE_VISION_PLANNER_BASE_URL = 'http://127.0.0.1:9999/v1';
-  process.env.SCIFORGE_VISION_PLANNER_API_KEY = 'preflight-key';
-  process.env.SCIFORGE_VISION_PLANNER_MODEL = 'preflight-model';
-  process.env.SCIFORGE_VISION_GROUNDER_LLM_BASE_URL = 'http://127.0.0.1:9999/v1';
-  process.env.SCIFORGE_VISION_GROUNDER_LLM_API_KEY = 'preflight-key';
-  process.env.SCIFORGE_VISION_GROUNDER_LLM_MODEL = 'preflight-model';
+  process.env.SCIFORGE_VISION_TEST_ACTION_FIXTURES = '1';
+  process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = JSON.stringify([{ type: 'wait', ms: 1 }]);
+  process.env.SCIFORGE_RUNTIME_API_KEY = 'preflight-key';
+  process.env.SCIFORGE_COMPUTER_USE_PLANNER_PROFILE = 'preflight-profile';
+  process.env.SCIFORGE_VISION_KV_GROUND_URL = 'http://127.0.0.1:9999';
   delete process.env.SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS;
   delete process.env.SCIFORGE_VISION_INPUT_ADAPTER;
   delete process.env.SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT;
@@ -132,7 +128,7 @@ try {
   });
   assert.equal(preflight.ok, true);
   assert.equal((await stat(String(preflight.reportPath))).isFile(), true);
-  assert.ok(preflight.checks.some((check) => check.id === 'vision-planner' && check.status === 'pass'));
+  assert.ok(preflight.checks.some((check) => check.id === 'runtime-codex-planner' && check.status === 'pass'));
   assert.ok(preflight.checks.some((check) => check.id === 'input-isolation' && check.status === 'pass'));
   const realInputBlockedPreflight = await preflightComputerUseLong({
     scenarioIds: ['CU-LONG-001'],
@@ -150,25 +146,44 @@ try {
     actionsJson: smokeActionsJson,
   });
   assert.equal(realSharedInputPreflight.checks.find((check) => check.id === 'input-isolation')?.status, 'warn');
+  const independentInputAdapters = ['remote-desktop', 'virtual-hid'] as const;
+  for (const inputAdapter of independentInputAdapters) {
+    process.env.SCIFORGE_VISION_INPUT_ADAPTER = inputAdapter;
+    delete process.env.SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT;
+    const realIndependentInputPreflight = await preflightComputerUseLong({
+      scenarioIds: ['CU-LONG-001'],
+      workspacePath: '/tmp/sciforge-cu-workspace',
+      dryRun: false,
+      actionsJson: smokeActionsJson,
+    });
+    const inputIsolationCheck = realIndependentInputPreflight.checks.find((check) => check.id === 'input-isolation');
+    assert.equal(inputIsolationCheck?.status, 'fail', `${inputAdapter} fails closed when no provider is registered`);
+    assert.match(String(inputIsolationCheck?.message), new RegExp(inputAdapter));
+    assert.match(String(inputIsolationCheck?.message), /no executable provider/i);
+  }
   process.env.SCIFORGE_VISION_INPUT_ADAPTER = 'remote-desktop';
+  process.env.SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER = 'sciforge-simulated-remote-desktop';
   delete process.env.SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT;
-  const realIndependentInputPreflight = await preflightComputerUseLong({
+  const executableIndependentInputPreflight = await preflightComputerUseLong({
     scenarioIds: ['CU-LONG-001'],
     workspacePath: '/tmp/sciforge-cu-workspace',
     dryRun: false,
     actionsJson: smokeActionsJson,
   });
-  assert.equal(realIndependentInputPreflight.checks.find((check) => check.id === 'input-isolation')?.status, 'fail');
-  assert.match(String(realIndependentInputPreflight.checks.find((check) => check.id === 'input-isolation')?.message), /no executable provider/i);
+  const executableInputIsolationCheck = executableIndependentInputPreflight.checks.find((check) => check.id === 'input-isolation');
+  assert.equal(executableInputIsolationCheck?.status, 'pass');
+  assert.match(String(executableInputIsolationCheck?.message), /remote-desktop/);
+  assert.match(String(executableInputIsolationCheck?.message), /sciforge-simulated-remote-desktop/);
+  delete process.env.SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER;
   delete process.env.SCIFORGE_VISION_INPUT_ADAPTER;
-  const staticPreflight = await preflightComputerUseLong({
+  const fixturePreflight = await preflightComputerUseLong({
     scenarioIds: ['CU-LONG-001'],
     workspacePath: '/tmp/sciforge-cu-workspace',
     dryRun: true,
     actionsJson: smokeActionsJson,
   });
-  assert.equal(staticPreflight.ok, true);
-  assert.ok(staticPreflight.checks.some((check) => check.id === 'static-actions' && check.status === 'warn'));
+  assert.equal(fixturePreflight.ok, true);
+  assert.ok(fixturePreflight.checks.some((check) => check.id === 'test-action-fixtures' && check.status === 'warn'));
   process.env.SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS = '1';
   const unsafePreflight = await preflightComputerUseLong({
     scenarioIds: ['CU-LONG-001'],
@@ -307,118 +322,48 @@ try {
   assert.equal(passedRepairPlan.ok, true);
   assert.equal(passedRepairPlan.actionCount, 0);
 
-  let dynamicPlannerCalls = 0;
-  let dynamicGrounderCalls = 0;
-  const dynamicPlannerServer = createServer(async (request, response) => {
-    const raw = await readRequestBody(request);
-    dynamicPlannerCalls += 1;
-    assert.match(raw, /image_url|data:image|target-window|Window target contract/i);
-    response.writeHead(200, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({
-      choices: [{
-        message: {
-          content: JSON.stringify({
-            done: true,
-            reason: 'mock visual planner saw the screenshot and selected a generic visible target',
-            actions: [{ actionType: 'click', targetDescription: 'generic visible target from screenshot' }],
-          }),
-        },
-      }],
-    }));
+  process.env.SCIFORGE_RUNTIME_API_KEY = 'runtime-codex-text-planner-key';
+  process.env.SCIFORGE_COMPUTER_USE_PLANNER_PROFILE = 'runtime-codex-text-planner-profile';
+  process.env.SCIFORGE_VISION_KV_GROUND_URL = 'http://127.0.0.1:9999';
+  process.env.SCIFORGE_VISION_TEST_ACTION_FIXTURES = '1';
+  process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = smokeActionsJson;
+  const fixtureActionMatrix = await runComputerUseLongMatrix({
+    outRoot: preparedRoot,
+    workspacePath: '/tmp/sciforge-cu-workspace',
+    dryRun: true,
+    maxSteps: 1,
+    maxConcurrency: 3,
+    actionsJson: smokeActionsJson,
+    now: new Date('2026-05-04T13:05:00.000Z'),
   });
-  const dynamicGrounderServer = createServer(async (request, response) => {
-    const raw = await readRequestBody(request);
-    dynamicGrounderCalls += 1;
-    assert.match(raw, /generic visible target from screenshot/);
-    assert.match(raw, /image|image_path/);
-    response.writeHead(200, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({ coordinates: [24, 24], confidence: 0.93, reason: 'mock visual target center' }));
-  });
-  await new Promise<void>((resolve) => dynamicPlannerServer.listen(0, '127.0.0.1', resolve));
-  await new Promise<void>((resolve) => dynamicGrounderServer.listen(0, '127.0.0.1', resolve));
-  try {
-    const plannerAddress = dynamicPlannerServer.address();
-    const grounderAddress = dynamicGrounderServer.address();
-    assert.ok(plannerAddress && typeof plannerAddress === 'object');
-    assert.ok(grounderAddress && typeof grounderAddress === 'object');
-    process.env.SCIFORGE_VISION_PLANNER_BASE_URL = `http://127.0.0.1:${plannerAddress.port}/v1`;
-    process.env.SCIFORGE_VISION_PLANNER_API_KEY = 'dynamic-visual-planner-key';
-    process.env.SCIFORGE_VISION_PLANNER_MODEL = 'dynamic-visual-planner-model';
-    process.env.SCIFORGE_VISION_KV_GROUND_URL = `http://127.0.0.1:${grounderAddress.port}`;
-    process.env.SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS = '1';
-    process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([{ type: 'wait', ms: 1 }]);
-    const dynamicVisualMatrix = await runComputerUseLongMatrix({
-      outRoot: preparedRoot,
-      workspacePath: '/tmp/sciforge-cu-workspace',
-      dryRun: true,
-      maxSteps: 1,
-      maxConcurrency: 3,
-      now: new Date('2026-05-04T13:05:00.000Z'),
-    });
-    assert.equal(dynamicVisualMatrix.status, 'passed');
-    assert.equal(dynamicVisualMatrix.passedScenarioIds.length, 10);
-    assert.deepEqual(dynamicVisualMatrix.repairNeededScenarioIds, []);
-    assert.ok(dynamicPlannerCalls >= 1);
-    assert.ok(dynamicGrounderCalls >= 1);
-    const dynamicMatrixValidation = await validateComputerUseLongMatrix({ summaryPath: dynamicVisualMatrix.summaryPath });
-    assert.deepEqual(dynamicMatrixValidation.issues, []);
-    assert.equal(dynamicMatrixValidation.metrics.validatedRuns, 10);
-    const firstDynamicManifest = JSON.parse(await readFile(String(dynamicVisualMatrix.results[0]?.manifestPath), 'utf8')) as Record<string, unknown>;
-    const firstDynamicRound = (firstDynamicManifest.rounds as Array<Record<string, unknown>>)[0];
-    const firstDynamicTracePath = join(dirname(String(dynamicVisualMatrix.results[0]?.manifestPath)), String(firstDynamicRound.visionTraceRef));
-    const firstDynamicTrace = JSON.parse(await readFile(firstDynamicTracePath, 'utf8')) as Record<string, unknown>;
-    const firstDynamicSteps = firstDynamicTrace.steps as Array<Record<string, unknown>>;
-    assert.ok(firstDynamicSteps.some((step) => ((step.execution as Record<string, unknown>)?.planner) === 'openai-compatible-vision-planner'));
-    assert.ok(firstDynamicSteps.some((step) => ((step.grounding as Record<string, unknown>)?.provider) === 'coarse-to-fine'));
-    const plannerNames = new Set<string>();
-    for (const result of dynamicVisualMatrix.results) {
-      const manifest = JSON.parse(await readFile(result.manifestPath, 'utf8')) as Record<string, unknown>;
-      const round = (manifest.rounds as Array<Record<string, unknown>>)[0];
-      const tracePath = join(dirname(result.manifestPath), String(round.visionTraceRef));
-      const trace = JSON.parse(await readFile(tracePath, 'utf8')) as Record<string, unknown>;
-      for (const step of trace.steps as Array<Record<string, unknown>>) {
-        const planner = (step.execution as Record<string, unknown> | undefined)?.planner;
-        if (typeof planner === 'string') plannerNames.add(planner);
-      }
-    }
-    assert.ok(plannerNames.has('openai-compatible-vision-planner'));
-    const focusScenarioIds = new Set(['CU-LONG-004', 'CU-LONG-007']);
-    for (const result of dynamicVisualMatrix.results.filter((item) => focusScenarioIds.has(item.scenarioId))) {
-      const manifest = JSON.parse(await readFile(result.manifestPath, 'utf8')) as Record<string, unknown>;
-      const round = (manifest.rounds as Array<Record<string, unknown>>)[0];
-      const tracePath = join(dirname(result.manifestPath), String(round.visionTraceRef));
-      const trace = JSON.parse(await readFile(tracePath, 'utf8')) as Record<string, unknown>;
-      const steps = trace.steps as Array<Record<string, unknown>>;
-      assert.ok(
-        steps.some((step) => typeof step.visualFocus === 'object' && step.visualFocus !== null && ((step.visualFocus as Record<string, unknown>)?.strategy) === 'coarse-to-fine-focus-region')
-          || steps.some((step) => ((step.grounding as Record<string, unknown> | undefined)?.provider) === 'coarse-to-fine')
-          || steps.some((step) => ((step.execution as Record<string, unknown> | undefined)?.planner) === 'vision-sense-policy-planner'),
-        `${result.scenarioId} records focus-region, coarse-to-fine, or policy-planner evidence`,
-      );
-      assert.ok(
-        steps.some((step) => typeof ((step.verifier as Record<string, unknown>)?.regionSemantic) === 'object' && ((step.verifier as Record<string, unknown>)?.regionSemantic) !== null)
-          || steps.some((step) => ((step.execution as Record<string, unknown> | undefined)?.planner) === 'vision-sense-policy-planner'),
-        `${result.scenarioId} records region semantic verifier or policy-planner evidence`,
-      );
-      const refs = ((trace.imageMemory as Record<string, unknown>).refs as Array<Record<string, unknown>>);
-      assert.ok(
-        refs.some((ref) => ref.captureScope === 'focus-region')
-          || steps.some((step) => ((step.execution as Record<string, unknown> | undefined)?.planner) === 'vision-sense-policy-planner'),
-        `${result.scenarioId} image memory includes focus-region refs or policy-planner evidence`,
-      );
-    }
-  } finally {
-    await new Promise<void>((resolve) => dynamicPlannerServer.close(() => resolve()));
-    await new Promise<void>((resolve) => dynamicGrounderServer.close(() => resolve()));
-    process.env.SCIFORGE_VISION_PLANNER_BASE_URL = 'http://127.0.0.1:9999/v1';
-    process.env.SCIFORGE_VISION_PLANNER_API_KEY = 'preflight-key';
-    process.env.SCIFORGE_VISION_PLANNER_MODEL = 'preflight-model';
-    delete process.env.SCIFORGE_VISION_KV_GROUND_URL;
-    process.env.SCIFORGE_VISION_GROUNDER_LLM_BASE_URL = 'http://127.0.0.1:9999/v1';
-    process.env.SCIFORGE_VISION_GROUNDER_LLM_API_KEY = 'preflight-key';
-    process.env.SCIFORGE_VISION_GROUNDER_LLM_MODEL = 'preflight-model';
-    process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([{ type: 'wait', ms: 1 }]);
+  assert.equal(fixtureActionMatrix.status, 'passed');
+  assert.equal(fixtureActionMatrix.passedScenarioIds.length, 10);
+  assert.deepEqual(fixtureActionMatrix.repairNeededScenarioIds, []);
+  assert.equal(fixtureActionMatrix.preflight?.checks.find((check) => check.id === 'test-action-fixtures')?.status, 'warn');
+  assert.equal(fixtureActionMatrix.preflight?.checks.find((check) => check.id === 'runtime-codex-planner')?.status, 'warn');
+  const fixtureMatrixValidation = await validateComputerUseLongMatrix({ summaryPath: fixtureActionMatrix.summaryPath });
+  assert.deepEqual(fixtureMatrixValidation.issues, []);
+  assert.equal(fixtureMatrixValidation.metrics.validatedRuns, 10);
+  const oldPlannerPattern = /openai-compatible-vision-planner|vision-sense-policy-planner|computer-use-action-loop|fallbackActions|image_url|data:image|;base64,/i;
+  for (const result of fixtureActionMatrix.results) {
+    const manifest = JSON.parse(await readFile(result.manifestPath, 'utf8')) as Record<string, unknown>;
+    const round = (manifest.rounds as Array<Record<string, unknown>>)[0];
+    const tracePath = join(dirname(result.manifestPath), String(round.visionTraceRef));
+    const traceText = await readFile(tracePath, 'utf8');
+    assert.doesNotMatch(traceText, oldPlannerPattern, `${result.scenarioId} trace must not contain legacy visual/server planner evidence`);
+    const trace = JSON.parse(traceText) as Record<string, unknown>;
+    const config = trace.config as Record<string, unknown>;
+    assert.equal(config.testActionFixtureMode, true, `${result.scenarioId} records test-only fixture mode`);
+    assert.equal(config.testOnlyPlannedActionCount, 1, `${result.scenarioId} records one test-only fixture action`);
+    const steps = trace.steps as Array<Record<string, unknown>>;
+    assert.ok(steps.some((step) => step.kind === 'gui-execution'), `${result.scenarioId} includes fixture-backed GUI evidence`);
+    assert.ok(steps.every((step) => step.kind !== 'planning'), `${result.scenarioId} does not make dynamic planner calls in fixture smoke`);
   }
+  process.env.SCIFORGE_RUNTIME_API_KEY = 'preflight-key';
+  process.env.SCIFORGE_COMPUTER_USE_PLANNER_PROFILE = 'preflight-profile';
+  process.env.SCIFORGE_VISION_KV_GROUND_URL = 'http://127.0.0.1:9999';
+  process.env.SCIFORGE_VISION_TEST_ACTION_FIXTURES = '1';
+  process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = JSON.stringify([{ type: 'wait', ms: 1 }]);
 
   process.env.SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS = '1';
   const blockedMatrix = await runComputerUseLongMatrix({
@@ -474,15 +419,14 @@ try {
   restoreEnv('SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN', previousDryRun);
   restoreEnv('SCIFORGE_VISION_RUN_ID', previousRunId);
   restoreEnv('SCIFORGE_VISION_CAPTURE_DISPLAYS', previousDisplays);
-  restoreEnv('SCIFORGE_VISION_ACTIONS_JSON', previousActions);
-  restoreEnv('SCIFORGE_VISION_PLANNER_BASE_URL', previousPlannerBaseUrl);
-  restoreEnv('SCIFORGE_VISION_PLANNER_API_KEY', previousPlannerApiKey);
-  restoreEnv('SCIFORGE_VISION_PLANNER_MODEL', previousPlannerModel);
-  restoreEnv('SCIFORGE_VISION_GROUNDER_LLM_BASE_URL', previousGrounderBaseUrl);
-  restoreEnv('SCIFORGE_VISION_GROUNDER_LLM_API_KEY', previousGrounderApiKey);
-  restoreEnv('SCIFORGE_VISION_GROUNDER_LLM_MODEL', previousGrounderModel);
+  restoreEnv('SCIFORGE_VISION_TEST_ACTION_FIXTURES', previousTestFixtures);
+  restoreEnv('SCIFORGE_VISION_TEST_ACTIONS_JSON', previousActions);
+  restoreEnv('SCIFORGE_RUNTIME_API_KEY', previousRuntimeApiKey);
+  restoreEnv('SCIFORGE_COMPUTER_USE_PLANNER_PROFILE', previousPlannerProfile);
+  restoreEnv('SCIFORGE_VISION_KV_GROUND_URL', previousKvGrounderUrl);
   restoreEnv('SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS', previousHighRisk);
   restoreEnv('SCIFORGE_VISION_INPUT_ADAPTER', previousInputAdapter);
+  restoreEnv('SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER', previousInputAdapterProvider);
   restoreEnv('SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT', previousAllowSharedInput);
 }
 
@@ -734,7 +678,7 @@ const plannerOnlyTrace = {
     beforeScreenshotRefs: [plannerWindowRef],
     verifier: { status: 'checked', reason: 'planner-only evidence summary' },
     execution: {
-      planner: 'openai-compatible-vision-planner',
+      planner: 'runtime-codex-tui-text-planner',
       status: 'done',
       rawResponse: {
         choices: [{
@@ -790,12 +734,6 @@ assert.ok(missingWindowValidation.issues.some((issue) => /inputChannel|input-cha
 assert.ok(missingWindowValidation.issues.some((issue) => /window screenshot metadata/.test(issue)));
 
 console.log('[ok] T084 Computer Use long task pool smoke passed');
-
-async function readRequestBody(request: IncomingMessage) {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  return Buffer.concat(chunks).toString('utf8');
-}
 
 function restoreEnv(key: string, value: string | undefined) {
   if (value === undefined) {

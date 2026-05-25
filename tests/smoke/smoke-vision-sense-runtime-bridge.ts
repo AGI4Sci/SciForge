@@ -6,8 +6,11 @@ import { CAPABILITY_BUDGET_DEBIT_CONTRACT_ID } from '@sciforge-ui/runtime-contra
 import { CaptureProviderError, captureDisplays } from '../../src/runtime/computer-use/capture.js';
 import { normalizePlatformAction, platformActionIssue } from '../../src/runtime/computer-use/actions.js';
 import { executeGenericDesktopAction } from '../../src/runtime/computer-use/executor.js';
-import type { ComputerUseConfig, WindowTargetResolution } from '../../src/runtime/computer-use/types.js';
+import { setComputerUsePackageBridgeCodexPlannerAdapterForTests } from '../../src/runtime/computer-use/package-bridge.js';
+import type { ComputerUseConfig, GenericVisionAction, WindowTargetResolution } from '../../src/runtime/computer-use/types.js';
 import { inputChannelContract } from '../../src/runtime/computer-use/window-target.js';
+import type { AgentCliAdapter, AgentCliStartTurnInput } from '../../src/runtime/codex/agent-cli-adapter.js';
+import type { NormalizedAgentEvent } from '../../src/runtime/codex/codex-event-normalizer.js';
 import {
   closeServer,
   createJsonPostServer,
@@ -21,6 +24,46 @@ import {
 } from './vision-sense-runtime-bridge-helpers.js';
 
 const savedEnv = saveVisionSenseEnv();
+
+class FakeRuntimeCodexPlannerAdapter implements AgentCliAdapter {
+  readonly calls: AgentCliStartTurnInput[] = [];
+
+  constructor(private readonly handler: (input: AgentCliStartTurnInput, callNumber: number) => string) {}
+
+  async startTurn(input: AgentCliStartTurnInput) {
+    const callNumber = this.calls.push(input);
+    const message = this.handler(input, callNumber);
+    return {
+      turnId: `fake-runtime-codex-planner-${callNumber}`,
+      attemptId: `fake-runtime-codex-planner-${callNumber}-attempt`,
+      events: fakeRuntimeCodexEvents(message, input),
+    };
+  }
+
+  async cancel() {}
+}
+
+function installFakeRuntimeCodexPlanner(handler: (input: AgentCliStartTurnInput, callNumber: number) => string) {
+  const adapter = new FakeRuntimeCodexPlannerAdapter(handler);
+  setComputerUsePackageBridgeCodexPlannerAdapterForTests(adapter);
+  return adapter;
+}
+
+async function* fakeRuntimeCodexEvents(message: string, input: AgentCliStartTurnInput): AsyncIterable<NormalizedAgentEvent> {
+  const base = {
+    schemaVersion: 'sciforge.codex.normalized-event.v1' as const,
+    timestamp: new Date('2026-05-25T00:00:00.000Z').toISOString(),
+    provider: 'fake-runtime-codex',
+    model: 'fake-runtime-codex-text-planner',
+    profile: input.profile ?? 'sciforge-runtime-deepseek',
+    workspace: input.workspacePath,
+    commandId: input.commandId ?? 'fake-runtime-codex-planner',
+    attemptId: input.attemptId ?? 'fake-runtime-codex-planner-attempt',
+    evidenceRefs: [],
+  };
+  yield { ...base, type: 'message', text: message, message };
+  yield { ...base, type: 'done', status: 'done', message: 'Runtime Codex planner completed successfully.', exitCode: 0, signal: null };
+}
 
 try {
   const darwinHotkeyConfig = { desktopPlatform: 'darwin' } as ComputerUseConfig;
@@ -48,7 +91,7 @@ try {
   process.env.SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN = '1';
   process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-missing-planner-smoke';
   process.env.SCIFORGE_VISION_CAPTURE_DISPLAYS = '1,2';
-  delete process.env.SCIFORGE_VISION_ACTIONS_JSON;
+  delete process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON;
   const missingPlanner = await runVisionSenseGateway({
     skillDomain: 'literature',
     prompt: 'Open any desktop app and complete a GUI Agent task using computer use.',
@@ -58,18 +101,20 @@ try {
   assert.equal(missingPlanner.executionUnits.length, 1);
   assert.equal(missingPlanner.executionUnits[0].tool, 'local.vision-sense');
   assert.equal(missingPlanner.executionUnits[0].status, 'failed-with-reason');
-  assert.match(String(missingPlanner.executionUnits[0].failureReason || missingPlanner.message), /no planner\/grounder actions/i);
+  assert.match(String(missingPlanner.executionUnits[0].failureReason || missingPlanner.message), /Runtime Codex|SCIFORGE_RUNTIME_API_KEY|planner/i);
   assert.doesNotMatch(missingPlanner.message, /Word|PowerPoint|adapter/i);
   const missingTraceArtifact = findVisionTraceArtifact(missingPlanner);
   assert.equal(missingTraceArtifact.path, '.sciforge/vision-runs/generic-cu-missing-planner-smoke/vision-trace.json');
   await stat(join(missingPlannerWorkspace, '.sciforge/vision-runs/generic-cu-missing-planner-smoke/step-000-before-display-1.png'));
-  await stat(join(missingPlannerWorkspace, '.sciforge/vision-runs/generic-cu-missing-planner-smoke/step-000-after-display-2.png'));
+  const { trace: missingPlannerTrace } = await readVisionTraceJson(missingPlannerWorkspace, missingPlanner);
+  assert.ok((missingPlannerTrace.steps as Array<Record<string, unknown>>).some((step) => step.id === 'step-000-plan' && step.status === 'blocked'));
+  assert.doesNotMatch(JSON.stringify(missingPlannerTrace), /step-001-execute-/);
   delete process.env.SCIFORGE_VISION_CAPTURE_DISPLAYS;
 
   const autoDisplaysWorkspace = await createVisionWorkspace('auto-displays');
   process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-auto-displays-smoke';
   process.env.SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN = '1';
-  process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([{ type: 'wait', ms: 1 }]);
+  process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = JSON.stringify([{ type: 'wait', ms: 1 }]);
   const autoDisplays = await runVisionSenseGateway({
     skillDomain: 'literature',
     prompt: 'Use generic computer use with automatically detected displays.',
@@ -83,7 +128,7 @@ try {
   const appWindowBindWorkspace = await createVisionWorkspace('app-window-bind');
   process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-app-window-bind-smoke';
   process.env.SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN = '1';
-  process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([
+  process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = JSON.stringify([
     { type: 'open_app', appName: 'Generic Research Workbench' },
     { type: 'wait', ms: 1 },
   ]);
@@ -106,7 +151,7 @@ try {
   const dryRunWorkspace = await createVisionWorkspace('generic-dryrun');
     process.env.SCIFORGE_VISION_CAPTURE_DISPLAYS = '1,2';
     process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-actions-smoke';
-    process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([
+    process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = JSON.stringify([
       { type: 'wait', ms: 1 },
       { type: 'hotkey', keys: ['command', 'n'] },
       { actionType: 'hotkey', hotkey: 'command+tab' },
@@ -130,8 +175,8 @@ try {
   assert.ok(Array.isArray(completed.workEvidence?.[0]?.budgetDebitRefs) && completed.workEvidence[0].budgetDebitRefs.includes(completedBudgetDebit.debitId));
   assert.equal(completedBudgetDebit.sinkRefs.executionUnitRef, completed.executionUnits[0].id);
   assert.deepEqual(completedBudgetDebit.sinkRefs.workEvidenceRefs, [completed.workEvidence?.[0]?.id]);
-  assert.ok(completedBudgetDebit.sinkRefs.auditRefs.includes('audit:vision-sense-computer-use-loop'));
-  assert.ok(completed.logs?.some((entry) => entry.ref === 'audit:vision-sense-computer-use-loop' && Array.isArray(entry.budgetDebitRefs)));
+  assert.ok(completedBudgetDebit.sinkRefs.auditRefs.includes('audit:computer-use-action-provider-loop'));
+  assert.ok(completed.logs?.some((entry) => entry.ref === 'audit:computer-use-action-provider-loop' && Array.isArray(entry.budgetDebitRefs)));
   assert.ok(completedBudgetDebit.debitLines.some((line) => line.dimension === 'actionSteps' && line.amount === 5));
   assert.ok(completedBudgetDebit.debitLines.some((line) => line.dimension === 'observeCalls' && line.amount === 20));
   const traceArtifact = findVisionTraceArtifact(completed);
@@ -142,11 +187,11 @@ try {
 
   const { text: traceText, trace } = await readVisionTraceJson(dryRunWorkspace, completed);
   assert.doesNotMatch(traceText, /base64|data:image/i);
-  assert.equal(trace.runtime, 'sciforge.workspace-runtime.vision-sense-generic-loop');
+  assert.equal(trace.runtime, 'sciforge.workspace-runtime.computer-use-package-bridge');
   assert.equal((trace.imageMemory as Record<string, unknown>).policy, 'file-ref-only');
   const genericComputerUse = trace.genericComputerUse as Record<string, unknown>;
   assert.deepEqual(genericComputerUse.appSpecificShortcuts, []);
-  assert.deepEqual(genericComputerUse.requires, ['WindowTargetProvider', 'VisionPlanner', 'Grounder', 'GuiExecutor', 'Verifier']);
+  assert.deepEqual(genericComputerUse.requires, ['WindowTargetProvider', 'RuntimeCodexPlanner', 'Grounder', 'GuiExecutor', 'Verifier']);
   const refs = (trace.imageMemory as Record<string, unknown>).refs as Array<Record<string, unknown>>;
   assert.equal(refs.length, 20);
   assert.deepEqual(refs.map((ref) => ref.displayId), [1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2]);
@@ -160,7 +205,7 @@ try {
 
   const prematureCreationWorkspace = await createVisionWorkspace('premature-creation');
   process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-premature-creation-smoke';
-  process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([
+  process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = JSON.stringify([
     { type: 'open_app', appName: 'Microsoft PowerPoint' },
   ]);
   const prematureCreation = await runVisionSenseGateway({
@@ -176,7 +221,7 @@ try {
 
   const highRiskWorkspace = await createVisionWorkspace('high-risk');
   process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-high-risk-smoke';
-  process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([
+  process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = JSON.stringify([
     { type: 'click', x: 10, y: 10, targetDescription: 'final submit button', riskLevel: 'high', requiresConfirmation: true },
   ]);
   const blockedHighRisk = await runVisionSenseGateway({
@@ -190,10 +235,31 @@ try {
   assert.ok((highRiskTrace.steps as Array<Record<string, unknown>>).some((step) => step.status === 'blocked'));
   assert.doesNotMatch(JSON.stringify(highRiskTrace), /base64|data:image/i);
 
+  const inferredHighRiskWorkspace = await createVisionWorkspace('inferred-high-risk');
+  process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-inferred-high-risk-smoke';
+  process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = JSON.stringify([
+    { type: 'click', x: 10, y: 10, targetDescription: 'Submit payment button' },
+  ]);
+  const inferredHighRisk = await runVisionSenseGateway({
+    skillDomain: 'literature',
+    prompt: 'Use computer use to click a submit payment action without confirmation.',
+    workspacePath: inferredHighRiskWorkspace,
+  });
+  assert.equal(inferredHighRisk.executionUnits[0].status, 'failed-with-reason');
+  assert.match(String(inferredHighRisk.executionUnits[0].failureReason), /High-risk Computer Use action blocked/i);
+
+  const grounderRequests: Array<Record<string, unknown>> = [];
   const grounderServer = createJsonPostServer('/predict/', (body) => {
+    grounderRequests.push(body);
     assert.match(String(body.text_prompt), /click coordinates/i);
     assert.match(String(body.text_prompt), /the generic search box/);
-    assert.match(String(body.image_path), /step-001-before-display-1\.png$/);
+    if (grounderRequests.length === 1) {
+      assert.match(String(body.image_path), /step-001-before-display-1\.png$/);
+      assert.equal(body.coordinate_space, 'window-local');
+    } else {
+      assert.match(String(body.image_path), /step-001-before-focus-step-001-before-display-1\.png$/);
+      assert.equal(body.coordinate_space, 'crop-local');
+    }
     return { coordinates: [42, 24], image_size: { width: 100, height: 80 }, text: 'click' };
   });
   const grounderBaseUrl = await listenLocal(grounderServer);
@@ -202,7 +268,7 @@ try {
     process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-grounder-smoke';
     process.env.SCIFORGE_VISION_KV_GROUND_URL = grounderBaseUrl;
     process.env.SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS = '1';
-    process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([
+    process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = JSON.stringify([
       { type: 'click', targetDescription: 'the generic search box' },
     ]);
     const grounded = await runVisionSenseGateway({
@@ -216,88 +282,65 @@ try {
     assert.ok(groundedStep);
     assert.equal(((groundedStep.plannedAction as Record<string, unknown>)?.x), 42);
     assert.equal(((groundedStep.grounding as Record<string, unknown>)?.provider), 'coarse-to-fine');
-    assert.equal((((groundedStep.grounding as Record<string, unknown>)?.fineGrounding as Record<string, unknown>)?.stage), 'fine');
+    const fineGrounding = ((groundedStep.grounding as Record<string, unknown>)?.fineGrounding as Record<string, unknown>);
+    assert.equal(fineGrounding?.stage, 'fine');
+    assert.match(String(fineGrounding?.provider), /kv-ground/);
+    assert.equal(fineGrounding?.cropLocalX, 42);
+    assert.equal(fineGrounding?.cropLocalY, 24);
+    assert.equal(fineGrounding?.windowLocalX, 42);
+    assert.equal(fineGrounding?.windowLocalY, 24);
+    assert.ok(fineGrounding?.focusScreenshotRef);
+    assert.equal(grounderRequests.length, 2);
     assert.equal((((groundedStep.verifier as Record<string, unknown>)?.regionSemantic as Record<string, unknown>)?.schemaVersion), 'sciforge.vision-sense.region-semantic-verifier.v1');
   } finally {
     await closeServer(grounderServer);
   }
 
-  const visualGrounderServer = createJsonPostServer('/chat/completions', (body, raw) => {
-    assert.equal(body.model, 'visual-grounder-smoke-model');
-    assert.match(raw, /visually described fallback target/);
-    return {
-      choices: [{
-        message: {
-          content: JSON.stringify({ coordinates: [66, 77], confidence: 0.8, reason: 'target center' }),
-        },
-      }],
-    };
+  const kvFailureWorkspace = await createVisionWorkspace('kv-ground-fail-closed');
+  process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-kv-ground-fail-closed-smoke';
+  process.env.SCIFORGE_VISION_KV_GROUND_URL = 'http://127.0.0.1:1';
+  process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = JSON.stringify([
+    { type: 'click', targetDescription: 'visually described target that must not use fallback' },
+  ]);
+  const kvGroundFailClosed = await runVisionSenseGateway({
+    skillDomain: 'literature',
+    prompt: 'Use generic computer use to click a target; KV-Ground failure must fail closed instead of using a visual grounder fallback.',
+    workspacePath: kvFailureWorkspace,
   });
-  const visualGrounderBaseUrl = await listenLocal(visualGrounderServer);
-  try {
-    const visualGrounderWorkspace = await createVisionWorkspace('visual-grounder');
-    process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-visual-grounder-smoke';
-    process.env.SCIFORGE_VISION_KV_GROUND_URL = 'http://127.0.0.1:1';
-    process.env.SCIFORGE_VISION_GROUNDER_LLM_BASE_URL = visualGrounderBaseUrl;
-    process.env.SCIFORGE_VISION_GROUNDER_LLM_API_KEY = 'visual-grounder-key';
-    process.env.SCIFORGE_VISION_GROUNDER_LLM_MODEL = 'visual-grounder-smoke-model';
-    process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([
-      { type: 'click', targetDescription: 'visually described fallback target' },
-    ]);
-    const visuallyGrounded = await runVisionSenseGateway({
-      skillDomain: 'literature',
-      prompt: 'Use generic computer use to click a target through visual grounder fallback.',
-      workspacePath: visualGrounderWorkspace,
-    });
-    assert.equal(visuallyGrounded.executionUnits[0].status, 'done');
-    const { trace: visualTrace } = await readVisionTraceJson(visualGrounderWorkspace, visuallyGrounded);
-    const visualStep = (visualTrace.steps as Array<Record<string, unknown>>).find((step) => step.id === 'step-001-execute-click');
-    assert.ok(visualStep);
-    assert.equal(((visualStep.plannedAction as Record<string, unknown>)?.x), 66);
-    assert.equal(((visualStep.grounding as Record<string, unknown>)?.provider), 'coarse-to-fine');
-    assert.equal(((visualStep.grounding as Record<string, unknown>)?.fallbackFrom), 'kv-ground');
-    assert.equal(((visualStep.grounding as Record<string, unknown>)?.kvGroundUrl), 'http://127.0.0.1:1/predict/');
-    assert.equal((((visualStep.grounding as Record<string, unknown>)?.fineGrounding as Record<string, unknown>)?.stage), 'fine');
-  } finally {
-    await closeServer(visualGrounderServer);
-  }
+  assert.equal(kvGroundFailClosed.executionUnits[0].status, 'failed-with-reason');
+  assert.match(String(kvGroundFailClosed.executionUnits[0].failureReason), /KV Grounder request failed/i);
+  const { trace: kvFailureTrace, text: kvFailureTraceText } = await readVisionTraceJson(kvFailureWorkspace, kvGroundFailClosed);
+  assert.doesNotMatch(kvFailureTraceText, /fallbackFrom|openai-compatible-vision-grounder/i);
+  const kvFailureStep = (kvFailureTrace.steps as Array<Record<string, unknown>>).find((step) => step.id === 'step-001-execute-click');
+  assert.ok(kvFailureStep);
+  assert.equal(((kvFailureStep.grounding as Record<string, unknown>)?.provider), 'kv-ground');
+  assert.match(String(kvFailureStep.failureReason), /KV Grounder request failed/i);
 
   let plannerCalls = 0;
   const plannerRawRequests: string[] = [];
-  const plannerServer = createJsonPostServer('/chat/completions', (body, raw) => {
+  installFakeRuntimeCodexPlanner((input) => {
     plannerCalls += 1;
-    plannerRawRequests.push(raw);
-    assert.equal(body.model, 'vision-planner-smoke-model');
-    return {
-      choices: [{
-        message: {
-          content: plannerCalls === 1
-            ? JSON.stringify({
-                done: false,
-                reason: 'click target first',
-                actions: [
-                  { actionType: 'click', target_description: 'the generic planner target' },
-                ],
-              })
-            : JSON.stringify({ done: true, reason: 'target clicked', actions: [] }),
-        },
-      }],
-    };
+    plannerRawRequests.push(input.commandText);
+    return plannerCalls === 1
+      ? JSON.stringify({
+          done: false,
+          reason: 'click target first',
+          actions: [
+            { actionType: 'click', target_description: 'the generic planner target' },
+          ],
+        })
+      : JSON.stringify({ done: true, reason: 'target clicked', actions: [] });
   });
   const plannerGrounderServer = createJsonPostServer('/predict/', (body) => {
     assert.match(String(body.text_prompt), /click coordinates/i);
     assert.match(String(body.text_prompt), /the generic planner target/);
     return { coordinates: [12, 34], image_size: { width: 100, height: 80 } };
   });
-  const plannerBaseUrl = await listenLocal(plannerServer);
   const plannerGrounderBaseUrl = await listenLocal(plannerGrounderServer);
   try {
     const plannerWorkspace = await createVisionWorkspace('planner');
     process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-planner-smoke';
-    delete process.env.SCIFORGE_VISION_ACTIONS_JSON;
-    process.env.SCIFORGE_VISION_PLANNER_BASE_URL = plannerBaseUrl;
-    process.env.SCIFORGE_VISION_PLANNER_API_KEY = 'planner-test-key';
-    process.env.SCIFORGE_VISION_PLANNER_MODEL = 'vision-planner-smoke-model';
+    delete process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON;
     process.env.SCIFORGE_VISION_KV_GROUND_URL = plannerGrounderBaseUrl;
     process.env.SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS = '1';
     const planned = await runVisionSenseGateway({
@@ -317,37 +360,28 @@ try {
     assert.match(plannerRawRequests[1] ?? '', /no-visible-effect=true/);
     assert.deepEqual((plannedTrace.genericComputerUse as Record<string, unknown>).appSpecificShortcuts, []);
   } finally {
-    await closeServer(plannerServer);
     await closeServer(plannerGrounderServer);
+    setComputerUsePackageBridgeCodexPlannerAdapterForTests(undefined);
   }
 
   let maxStepsPlannerCalls = 0;
-  const maxStepsPlannerServer = createJsonPostServer('/chat/completions', (_body, raw) => {
+  installFakeRuntimeCodexPlanner((input) => {
     maxStepsPlannerCalls += 1;
-    assert.match(raw, /Execution environment:/);
-    assert.match(raw, /Set done=true only when the supplied screenshot shows/);
-    return {
-      choices: [{
-        message: {
-          content: JSON.stringify({
-            done: false,
-            reason: 'task still needs more GUI work',
-            actions: [{ actionType: 'press_key', key: 'Escape' }],
-          }),
-        },
-      }],
-    };
+    const raw = input.commandText;
+    assert.match(raw, /Runtime Codex CLI\/TUI/);
+    assert.match(raw, /maxStepsRemaining: 1/);
+    return JSON.stringify({
+      done: false,
+      reason: 'task still needs more GUI work',
+      actions: [{ actionType: 'press_key', key: 'Escape' }],
+    });
   });
-  const maxStepsPlannerBaseUrl = await listenLocal(maxStepsPlannerServer);
   try {
     const maxStepsWorkspace = await createVisionWorkspace('maxsteps');
     process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-maxsteps-smoke';
-    delete process.env.SCIFORGE_VISION_ACTIONS_JSON;
+    delete process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON;
     delete process.env.SCIFORGE_VISION_KV_GROUND_URL;
     process.env.SCIFORGE_VISION_MAX_STEPS = '1';
-    process.env.SCIFORGE_VISION_PLANNER_BASE_URL = maxStepsPlannerBaseUrl;
-    process.env.SCIFORGE_VISION_PLANNER_API_KEY = 'planner-test-key';
-    process.env.SCIFORGE_VISION_PLANNER_MODEL = 'vision-planner-maxsteps-model';
     const maxSteps = await runVisionSenseGateway({
       skillDomain: 'literature',
       prompt: 'Use generic computer use planner and keep going until the visible task is complete.',
@@ -355,47 +389,38 @@ try {
     });
     assert.equal(maxStepsPlannerCalls, 1);
     assert.equal(maxSteps.executionUnits[0].status, 'failed-with-reason');
-    assert.match(String(maxSteps.executionUnits[0].failureReason), /maxSteps=1/i);
+    assert.match(String(maxSteps.executionUnits[0].failureReason), /maxSteps=1|max steps/i);
     const { trace: maxStepsTrace } = await readVisionTraceJson(maxStepsWorkspace, maxSteps);
     assert.ok((maxStepsTrace.steps as Array<Record<string, unknown>>).some((step) => /maxSteps exhausted/.test(String((step.verifier as Record<string, unknown>)?.reason))));
   } finally {
-    await closeServer(maxStepsPlannerServer);
     delete process.env.SCIFORGE_VISION_MAX_STEPS;
+    setComputerUsePackageBridgeCodexPlannerAdapterForTests(undefined);
   }
 
   let platformRetryPlannerCalls = 0;
-  const platformRetryPlannerServer = createJsonPostServer('/chat/completions', (_body, raw) => {
+  installFakeRuntimeCodexPlanner((input) => {
     platformRetryPlannerCalls += 1;
-    if (platformRetryPlannerCalls === 1) assert.match(raw, /desktopPlatform=\\?"darwin\\?"/);
-    if (platformRetryPlannerCalls === 2) assert.match(raw, /cannot be executed in the current operating system/);
-    return {
-      choices: [{
-        message: {
-          content: platformRetryPlannerCalls === 1
-            ? JSON.stringify({
-                done: false,
-                reason: 'bad key plan for configured platform',
-                actions: [{ actionType: 'press_key', key: 'Win' }],
-              })
-            : JSON.stringify({
-                done: false,
-                reason: 'rewrite with configured-platform key',
-                actions: [{ actionType: 'press_key', key: 'Escape' }],
-              }),
-        },
-      }],
-    };
+    const raw = input.commandText;
+    if (platformRetryPlannerCalls === 1) assert.match(raw, /desktopPlatform: darwin/);
+    if (platformRetryPlannerCalls === 2) assert.match(raw, /cannot be executed on this operating system/);
+    return platformRetryPlannerCalls === 1
+      ? JSON.stringify({
+          done: false,
+          reason: 'bad key plan for configured platform',
+          actions: [{ actionType: 'press_key', key: 'Win' }],
+        })
+      : JSON.stringify({
+          done: false,
+          reason: 'rewrite with configured-platform key',
+          actions: [{ actionType: 'press_key', key: 'Escape' }],
+        });
   });
-  const platformRetryPlannerBaseUrl = await listenLocal(platformRetryPlannerServer);
   try {
     const platformRetryWorkspace = await createVisionWorkspace('platform-retry');
     process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-platform-retry-smoke';
-    delete process.env.SCIFORGE_VISION_ACTIONS_JSON;
+    delete process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON;
     process.env.SCIFORGE_VISION_DESKTOP_PLATFORM = 'darwin';
     process.env.SCIFORGE_VISION_MAX_STEPS = '1';
-    process.env.SCIFORGE_VISION_PLANNER_BASE_URL = platformRetryPlannerBaseUrl;
-    process.env.SCIFORGE_VISION_PLANNER_API_KEY = 'planner-test-key';
-    process.env.SCIFORGE_VISION_PLANNER_MODEL = 'vision-planner-platform-retry-model';
     const platformRetry = await runVisionSenseGateway({
       skillDomain: 'literature',
       prompt: 'Use generic computer use planner with platform-compatible keys.',
@@ -407,72 +432,62 @@ try {
     assert.ok((platformTrace.steps as Array<Record<string, unknown>>).some((step) => step.id === 'step-001-execute-press_key'));
     assert.doesNotMatch(JSON.stringify(platformTrace), /"key": "Win"/);
   } finally {
-    await closeServer(platformRetryPlannerServer);
     delete process.env.SCIFORGE_VISION_MAX_STEPS;
     delete process.env.SCIFORGE_VISION_DESKTOP_PLATFORM;
+    setComputerUsePackageBridgeCodexPlannerAdapterForTests(undefined);
   }
 
   let waitRetryPlannerCalls = 0;
-  const waitRetryPlannerServer = createJsonPostServer('/chat/completions', (body, raw) => {
+  installFakeRuntimeCodexPlanner((input) => {
     waitRetryPlannerCalls += 1;
-    assert.equal(body.model, 'vision-planner-wait-retry-model');
-    if (waitRetryPlannerCalls === 2) assert.match(raw, /Do not return an empty action list or wait as the only action/);
-    return {
-      choices: [{
-        message: {
-          content: waitRetryPlannerCalls === 1
-            ? JSON.stringify({
-                done: false,
-                reason: 'need another observation before acting',
-                actions: [{ actionType: 'wait', ms: 100 }],
-              })
-            : waitRetryPlannerCalls === 2
-              ? JSON.stringify({
-                  done: false,
-                  reason: 'act on the supplied screenshot',
-                  actions: [{ actionType: 'click', targetDescription: 'the retry target' }],
-                })
-              : JSON.stringify({ done: true, reason: 'retry target clicked', actions: [] }),
-        },
-      }],
-    };
+    const raw = input.commandText;
+    if (waitRetryPlannerCalls === 2) assert.match(raw, /actions must contain exactly one generic action/);
+    return waitRetryPlannerCalls === 1
+      ? JSON.stringify({
+          done: false,
+          reason: 'need another observation before acting',
+          actions: [{ actionType: 'wait', ms: 100 }],
+        })
+      : waitRetryPlannerCalls === 2
+        ? JSON.stringify({
+            done: false,
+            reason: 'act on the supplied screenshot',
+            actions: [{ actionType: 'click', targetDescription: 'the retry target' }],
+          })
+        : JSON.stringify({ done: true, reason: 'retry target clicked', actions: [] });
   });
   const waitRetryGrounderServer = createJsonPostServer('/predict/', (body) => {
     assert.match(String(body.text_prompt), /click coordinates/i);
     assert.match(String(body.text_prompt), /the retry target/);
     return { coordinates: [22, 44], image_size: { width: 100, height: 80 } };
   });
-  const waitRetryPlannerBaseUrl = await listenLocal(waitRetryPlannerServer);
   const waitRetryGrounderBaseUrl = await listenLocal(waitRetryGrounderServer);
   try {
     const waitRetryWorkspace = await createVisionWorkspace('wait-retry');
     process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-wait-retry-smoke';
-    delete process.env.SCIFORGE_VISION_ACTIONS_JSON;
-    process.env.SCIFORGE_VISION_PLANNER_BASE_URL = waitRetryPlannerBaseUrl;
-    process.env.SCIFORGE_VISION_PLANNER_API_KEY = 'planner-test-key';
-    process.env.SCIFORGE_VISION_PLANNER_MODEL = 'vision-planner-wait-retry-model';
+    delete process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON;
     process.env.SCIFORGE_VISION_KV_GROUND_URL = waitRetryGrounderBaseUrl;
     process.env.SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS = '1';
     const waitRetry = await runVisionSenseGateway({
       skillDomain: 'literature',
-      prompt: 'Use generic computer use planner to avoid wait-only planning.',
+      prompt: 'Use generic computer use planner to handle wait-then-action planning.',
       workspacePath: waitRetryWorkspace,
     });
     assert.equal(waitRetryPlannerCalls, 3);
     assert.equal(waitRetry.executionUnits[0].status, 'done');
     const { trace: waitRetryTrace } = await readVisionTraceJson(waitRetryWorkspace, waitRetry);
-    assert.ok((waitRetryTrace.steps as Array<Record<string, unknown>>).some((step) => step.id === 'step-001-execute-click'));
-    assert.ok(!(waitRetryTrace.steps as Array<Record<string, unknown>>).some((step) => step.id === 'step-001-execute-wait'));
+    assert.ok((waitRetryTrace.steps as Array<Record<string, unknown>>).some((step) => step.id === 'step-001-execute-wait'));
+    assert.ok((waitRetryTrace.steps as Array<Record<string, unknown>>).some((step) => step.id === 'step-002-execute-click'));
   } finally {
-    await closeServer(waitRetryPlannerServer);
     await closeServer(waitRetryGrounderServer);
+    setComputerUsePackageBridgeCodexPlannerAdapterForTests(undefined);
   }
 
   const settingsFormWorkspace = await createVisionWorkspace('settings-form-ledger');
   process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-settings-form-ledger-smoke';
   process.env.SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN = '1';
   process.env.SCIFORGE_VISION_MAX_STEPS = '12';
-  process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([
+  process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = JSON.stringify([
     { type: 'click', x: 12, y: 12, targetDescription: 'visible settings search text input' },
     { type: 'type_text', text: 'test', targetDescription: 'visible settings search text input' },
     { type: 'click', x: 20, y: 20, targetDescription: 'visible preferences dropdown menu' },
@@ -483,9 +498,6 @@ try {
     { type: 'click', x: 60, y: 60, targetDescription: 'visible close button' },
     { type: 'click', x: 70, y: 70, targetDescription: 'unrelated extra control that should not run' },
   ]);
-  delete process.env.SCIFORGE_VISION_PLANNER_BASE_URL;
-  delete process.env.SCIFORGE_VISION_PLANNER_API_KEY;
-  delete process.env.SCIFORGE_VISION_PLANNER_MODEL;
   delete process.env.SCIFORGE_VISION_KV_GROUND_URL;
   const settingsForm = await runVisionSenseGateway({
     skillDomain: 'literature',
@@ -500,33 +512,27 @@ try {
   assert.match(JSON.stringify(settingsFormSteps.at(-1)?.verifier ?? {}), /settings\/form control workflow/);
 
   let coordinateRetryPlannerCalls = 0;
-  const coordinateRetryPlannerServer = createJsonPostServer('/chat/completions', (body, raw) => {
+  installFakeRuntimeCodexPlanner((input) => {
     coordinateRetryPlannerCalls += 1;
-    assert.equal(body.model, 'vision-planner-coordinate-retry-model');
-    if (coordinateRetryPlannerCalls === 2) assert.match(raw, /violated the planner contract by including screen coordinates/);
-    return {
-      choices: [{
-        message: {
-          content: coordinateRetryPlannerCalls === 1
-            ? JSON.stringify({
-                done: false,
-                reason: 'bad coordinate plan',
-                actions: [{ actionType: 'drag', fromX: 0, fromY: 0, toX: 10, toY: 10 }],
-              })
-            : coordinateRetryPlannerCalls === 2
-              ? JSON.stringify({
-                  done: false,
-                  reason: 'rewrite with visual descriptions',
-                  actions: [{
-                    actionType: 'drag',
-                    sourceDescription: 'the generic window title bar',
-                    destinationDescription: 'the visible destination area',
-                  }],
-                })
-              : JSON.stringify({ done: true, reason: 'drag completed', actions: [] }),
-        },
-      }],
-    };
+    const raw = input.commandText;
+    if (coordinateRetryPlannerCalls === 2) assert.match(raw, /violated the planner contract by including coordinates/);
+    return coordinateRetryPlannerCalls === 1
+      ? JSON.stringify({
+          done: false,
+          reason: 'bad coordinate plan',
+          actions: [{ actionType: 'drag', fromX: 0, fromY: 0, toX: 10, toY: 10 }],
+        })
+      : coordinateRetryPlannerCalls === 2
+        ? JSON.stringify({
+            done: false,
+            reason: 'rewrite with visual descriptions',
+            actions: [{
+              actionType: 'drag',
+              sourceDescription: 'the generic window title bar',
+              destinationDescription: 'the visible destination area',
+            }],
+          })
+        : JSON.stringify({ done: true, reason: 'drag completed', actions: [] });
   });
   const coordinateRetryGrounderServer = createJsonPostServer('/predict/', (body) => {
     const textPrompt = String(body.text_prompt);
@@ -536,15 +542,11 @@ try {
       image_size: { width: 100, height: 100 },
     };
   });
-  const coordinateRetryPlannerBaseUrl = await listenLocal(coordinateRetryPlannerServer);
   const coordinateRetryGrounderBaseUrl = await listenLocal(coordinateRetryGrounderServer);
   try {
     const coordinateRetryWorkspace = await createVisionWorkspace('coordinate-retry');
     process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-coordinate-retry-smoke';
-    delete process.env.SCIFORGE_VISION_ACTIONS_JSON;
-    process.env.SCIFORGE_VISION_PLANNER_BASE_URL = coordinateRetryPlannerBaseUrl;
-    process.env.SCIFORGE_VISION_PLANNER_API_KEY = 'planner-test-key';
-    process.env.SCIFORGE_VISION_PLANNER_MODEL = 'vision-planner-coordinate-retry-model';
+    delete process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON;
     process.env.SCIFORGE_VISION_KV_GROUND_URL = coordinateRetryGrounderBaseUrl;
     process.env.SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS = '1';
     const coordinateRetry = await runVisionSenseGateway({
@@ -560,15 +562,15 @@ try {
     assert.equal(((dragStep.plannedAction as Record<string, unknown>)?.fromX), 10);
     assert.equal(((dragStep.plannedAction as Record<string, unknown>)?.toX), 80);
   } finally {
-    await closeServer(coordinateRetryPlannerServer);
     await closeServer(coordinateRetryGrounderServer);
+    setComputerUsePackageBridgeCodexPlannerAdapterForTests(undefined);
   }
 
   const windowTargetWorkspace = await createVisionWorkspace('window-target');
   process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-window-target-smoke';
   process.env.SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN = '1';
   process.env.SCIFORGE_VISION_CAPTURE_DISPLAYS = '1,2';
-  process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([{ type: 'click', targetDescription: 'generic window-local target' }]);
+  process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = JSON.stringify([{ type: 'click', targetDescription: 'generic window-local target' }]);
   process.env.SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS = '1';
   const windowGrounderServer = createJsonPostServer('/predict/', (body) => {
     assert.match(String(body.text_prompt), /click coordinates/i);
@@ -704,9 +706,10 @@ try {
     windowTarget: providerFailureTarget,
     maxSteps: 1,
     allowHighRiskActions: false,
-    planner: { timeoutMs: 1, maxTokens: 1 },
-    grounder: { timeoutMs: 1, allowServiceLocalPaths: false, visionTimeoutMs: 1, visionMaxTokens: 1 },
-    plannedActions: [],
+    planner: { allowOpenAiRuntime: false, timeoutMs: 1, maxTokens: 1 },
+    grounder: { timeoutMs: 1, allowServiceLocalPaths: false },
+    testActionFixtureMode: false,
+    testOnlyPlannedActions: [],
   };
   await assert.rejects(
     () => captureDisplays(providerFailureWorkspace, providerFailureWorkspace, 'step-structured-failure', providerFailureConfig, providerFailureResolution),
@@ -750,36 +753,69 @@ try {
   assert.match(openAppNoPointerResult.stderr, /No real generic GUI executor is configured/i);
   assert.doesNotMatch(openAppNoPointerResult.stderr, /shared system mouse\/keyboard input was not explicitly allowed/i);
   assert.equal((openAppNoPointerResult.schedulerLease as Record<string, unknown>)?.lockId, 'smoke-open-app-lock-424242');
-  const independentInputContract = inputChannelContract({
-    ...providerFailureConfig,
-    dryRun: false,
-    desktopPlatform: 'darwin',
-    inputAdapter: 'remote-desktop',
-  }, {
-    ...providerFailureResolution,
-    captureKind: 'window',
-    inputIsolation: 'require-focused-target',
-  });
-  assert.equal(independentInputContract.currentIndependentAdapter, 'remote-desktop');
-  assert.equal(independentInputContract.independentAdapterStatus, 'configured-unimplemented');
-  assert.equal(independentInputContract.pointerKeyboardOwnership, 'unavailable');
-  assert.equal(independentInputContract.userDeviceImpact, 'fail-closed-unimplemented-independent-adapter');
-  assert.equal(independentInputContract.independentAdapterRequiredForNoUserImpact, true);
-  assert.equal(independentInputContract.failClosed, true);
-  const independentExecutorResult = await executeGenericDesktopAction({ type: 'click', x: 5, y: 5 }, {
-    ...providerFailureConfig,
-    dryRun: false,
-    desktopPlatform: 'darwin',
-    inputAdapter: 'remote-desktop',
-  }, {
-    ...providerFailureResolution,
-    captureKind: 'window',
-    inputIsolation: 'require-focused-target',
-    appName: 'Finder',
-  });
-  assert.equal(independentExecutorResult.exitCode, 125);
-  assert.match(independentExecutorResult.stderr, /no executable adapter provider|Failing closed/i);
-  assert.equal((independentExecutorResult.schedulerLease as Record<string, unknown> | undefined), undefined);
+  const displayFallbackPointerActions: GenericVisionAction[] = [
+    { type: 'click', x: 5, y: 5 },
+    { type: 'double_click', x: 5, y: 5 },
+    { type: 'drag', fromX: 5, fromY: 5, toX: 20, toY: 20 },
+    { type: 'scroll', direction: 'down', amount: 100 },
+    { type: 'type_text', text: 'blocked-display-fallback' },
+    { type: 'press_key', key: 'Enter' },
+    { type: 'hotkey', keys: ['command', 'n'] },
+  ];
+  for (const action of displayFallbackPointerActions) {
+    const displayPointerResult = await executeGenericDesktopAction(action, {
+      ...providerFailureConfig,
+      runId: `display-fallback-pointer-${action.type}`,
+      desktopPlatform: 'darwin',
+      dryRun: false,
+      allowSharedSystemInput: true,
+      showVisualCursor: true,
+    }, {
+      ...providerFailureResolution,
+      captureKind: 'display',
+      source: 'display-fallback',
+      schedulerLockId: `display-fallback-pointer-${action.type}`,
+    });
+    assert.equal(displayPointerResult.exitCode, 125);
+    assert.match(displayPointerResult.stderr, /no target window is resolved/i);
+    assert.equal((displayPointerResult.schedulerLease as Record<string, unknown> | undefined), undefined);
+  }
+  const independentInputAdapters = ['remote-desktop', 'virtual-hid'] as const;
+  for (const inputAdapter of independentInputAdapters) {
+    const independentInputContract = inputChannelContract({
+      ...providerFailureConfig,
+      dryRun: false,
+      desktopPlatform: 'darwin',
+      inputAdapter,
+    }, {
+      ...providerFailureResolution,
+      captureKind: 'window',
+      inputIsolation: 'require-focused-target',
+    });
+    assert.equal(independentInputContract.currentIndependentAdapter, inputAdapter);
+    assert.equal(independentInputContract.provider, `${inputAdapter}-input-adapter-unimplemented`);
+    assert.equal(independentInputContract.independentAdapterStatus, 'configured-unimplemented');
+    assert.equal(independentInputContract.pointerKeyboardOwnership, 'unavailable');
+    assert.equal(independentInputContract.userDeviceImpact, 'fail-closed-unimplemented-independent-adapter');
+    assert.equal(independentInputContract.independentAdapterRequiredForNoUserImpact, true);
+    assert.equal(independentInputContract.failClosed, true);
+    const independentExecutorResult = await executeGenericDesktopAction({ type: 'click', x: 5, y: 5 }, {
+      ...providerFailureConfig,
+      runId: `independent-input-${inputAdapter}-smoke`,
+      dryRun: false,
+      desktopPlatform: 'darwin',
+      inputAdapter,
+    }, {
+      ...providerFailureResolution,
+      captureKind: 'window',
+      inputIsolation: 'require-focused-target',
+      appName: 'Finder',
+    });
+    assert.equal(independentExecutorResult.exitCode, 125);
+    assert.match(independentExecutorResult.stderr, new RegExp(`Independent input adapter "${inputAdapter}"`, 'i'));
+    assert.match(independentExecutorResult.stderr, /no executable adapter provider|Failing closed/i);
+    assert.equal((independentExecutorResult.schedulerLease as Record<string, unknown> | undefined), undefined);
+  }
   const sharedInputContract = inputChannelContract({
     ...providerFailureConfig,
     dryRun: false,
@@ -801,7 +837,7 @@ try {
   const isolatedWindowWorkspace = await createVisionWorkspace('window-isolation');
   process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-window-isolation-smoke';
   process.env.SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN = '0';
-  process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([{ type: 'click', x: 5, y: 5 }]);
+  process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = JSON.stringify([{ type: 'click', x: 5, y: 5 }]);
   delete process.env.SCIFORGE_VISION_KV_GROUND_URL;
   const isolatedWindow = await runVisionSenseGateway({
     skillDomain: 'literature',

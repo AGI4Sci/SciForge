@@ -143,10 +143,13 @@ type LiveRuntimeCodexProof = {
   messageProvenance?: 'live-runtime-codex' | 'seed-demo' | 'fixture' | 'unknown';
   commandId?: string;
   guiPresentObserved?: boolean;
+  nativeDefaultChatAssistantAnswerRendered?: boolean;
   runtimeOutputObserved?: boolean;
   seedOrDemoExcluded?: boolean;
   eventEvidenceRefs?: string[];
 };
+
+type RuntimeOutputProofMode = 'gui-present' | 'native-default-chat';
 
 type NegativeChecks = {
   fakePassedStatusRejected?: boolean;
@@ -156,6 +159,7 @@ type NegativeChecks = {
   seedDemoEvidenceRejected?: boolean;
   blockedFailedPartialRejected?: boolean;
   rawStdoutJsonlRejected?: boolean;
+  nativeAnswerOutsideDefaultChatRejected?: boolean;
 };
 
 const root = process.cwd();
@@ -387,14 +391,18 @@ function runtimeBridgeBlockedReason(): string | undefined {
   if (missing.length > 0) return `Runtime Codex bridge is missing files: ${missing.join(', ')}`;
   const uiIntegration = readIfExists('src/ui/src/app/chat/runOrchestrator.ts')
     + readIfExists('src/ui/src/api/sciforgeToolsClient.ts')
-    + readIfExists('src/ui/src/api/sciforgeToolsClient/client.ts');
+    + readIfExists('src/ui/src/api/sciforgeToolsClient/client.ts')
+    + readIfExists('src/ui/src/api/sciforgeToolsClient/codexRealtimeSession.ts');
   if (!/Runtime Codex|runtime codex|codex runtime/i.test(uiIntegration)) {
     return 'Runtime Codex UI streaming integration is not present.';
   }
-  const uiPath = /CODEX_RUNTIME_STREAM_PATH\s*=\s*'([^']+)'/.exec(uiIntegration)?.[1];
   const serverText = readIfExists('src/runtime/codex/codex-runtime-server.ts');
-  if (!uiPath || !serverText.includes(`url.pathname !== '${uiPath}'`)) {
-    return `Runtime Codex UI stream path is not aligned with the workspace server route: ${uiPath ?? 'missing'}`;
+  const workspaceServerText = readIfExists('src/runtime/workspace-server.ts');
+  const uiPath = runtimeStreamPathFromText(uiIntegration);
+  const runtimeServerPath = runtimeStreamPathFromText(serverText);
+  const workspaceServerPath = runtimeStreamPathFromText(workspaceServerText);
+  if (!uiPath || !runtimeServerPath || !workspaceServerPath || uiPath !== runtimeServerPath || uiPath !== workspaceServerPath) {
+    return `Runtime Codex UI stream path is not aligned with the workspace server route: ui=${uiPath ?? 'missing'}, runtime=${runtimeServerPath ?? 'missing'}, workspace=${workspaceServerPath ?? 'missing'}`;
   }
   const localRuntimeReason = runtimeCodexLocalRuntimeBlockedReason();
   if (localRuntimeReason) return localRuntimeReason;
@@ -514,7 +522,7 @@ function assertPassedManifest(manifest: BrowserAcceptanceManifest): void {
   assertIncludes(manifestEvidenceText, manifest.commandId, 'manifest evidence must mention command id');
   assertIncludes(manifestEvidenceText, manifest.actualUrl, 'manifest evidence must mention actual browser URL');
   assertIncludes(manifestEvidenceText, manifest.workspacePath, 'manifest evidence must mention workspace path');
-  assert.match(manifestEvidenceText, /gui\.present|live Runtime Codex|live-runtime-codex|Runtime Codex answer rendered|GUI intent/i, 'manifest evidence must prove live Runtime Codex/gui.present output');
+  assertLiveRuntimeCodexRenderedEvidence(manifest.evidence, 'manifest evidence');
   assert.match(manifestEvidenceText, /user intent|用户意图|Actual task result|实际结果|acceptance rubric|验收/i, 'manifest evidence must include user intent and actual result rubric');
   assertDoesNotUseSeedDemoOrRawEvidence(manifestEvidenceText, 'manifest evidence');
   assertScenarioPassed(manifest.singleTurn, 'singleTurn');
@@ -618,7 +626,7 @@ function assertScenarioPassed(scenario: BrowserAcceptanceScenario | undefined, l
   assert.match(evidenceText, /workspace|工作区文件树|Workspace Runtime/i, `${label} evidence must include workspace context`);
   assert.match(evidenceText, /sciforge-runtime-deepseek/i, `${label} evidence must include the Runtime Codex profile`);
   assert.match(evidenceText, /bailian\/deepseek-v4-flash/i, `${label} evidence must include the Runtime Codex model`);
-  assert.match(evidenceText, /gui\.present|live Runtime Codex|live-runtime-codex|Runtime Codex answer rendered|GUI intent/i, `${label} evidence must prove live Runtime Codex/gui.present output`);
+  assertLiveRuntimeCodexRenderedEvidence(scenario.evidence, `${label} evidence`);
   assertEvidenceExists(scenario.evidence, `${label} evidence`, { requireScreenshotAndDom: true });
 }
 
@@ -909,7 +917,7 @@ function blockedNotes(reason: string, providerPreflight: CurrentEnvProviderPrefl
     '',
     'Acceptance rubric:',
     '- User intent: prove the real default-chat Runtime Codex path can complete single-turn, selected-ref, and multi-turn tasks.',
-    '- Expected observable result: visible live Runtime Codex/gui.present answers with provider/model/profile/workspace/command id and folded audit logs.',
+    '- Expected observable result: gui.present projection or native Runtime Codex assistant answer rendered in default chat with provider/model/profile/workspace/command id and folded audit logs.',
     `- Actual result: blocked before release acceptance because ${reason}`,
     '- Current evidence refs: manifest.json plus blocked notes. Prior or stale browser screenshots/DOM refs are diagnostic only and cannot count as current release evidence.',
     '- Negative checks: fake passed status, missing DOM/screenshot, missing command id, missing task result, seed/demo evidence, and partial/blocked/failed status remain release-blocking.',
@@ -949,7 +957,10 @@ function assertActualTaskResult(result: ActualTaskResult | undefined, label: str
 function assertLiveRuntimeCodexProof(proof: LiveRuntimeCodexProof | undefined, expectedCommandId: string | undefined, label: string): void {
   assert.ok(proof, `${label} is required`);
   assert.equal(proof.messageProvenance, 'live-runtime-codex', `${label}.messageProvenance must be live-runtime-codex`);
-  assert.equal(proof.guiPresentObserved, true, `${label}.guiPresentObserved must be true`);
+  assert.ok(
+    proof.guiPresentObserved === true || proof.nativeDefaultChatAssistantAnswerRendered === true,
+    `${label} must observe gui.present or a native Runtime Codex assistant answer rendered in default chat`,
+  );
   assert.equal(proof.runtimeOutputObserved, true, `${label}.runtimeOutputObserved must be true`);
   assert.equal(proof.seedOrDemoExcluded, true, `${label}.seedOrDemoExcluded must be true`);
   assert.ok((proof.eventEvidenceRefs ?? []).length > 0, `${label}.eventEvidenceRefs are required`);
@@ -970,11 +981,27 @@ function assertNegativeChecks(checks: NegativeChecks | undefined, label: string)
   assert.equal(checks.seedDemoEvidenceRejected, true, `${label}.seedDemoEvidenceRejected must be true`);
   assert.equal(checks.blockedFailedPartialRejected, true, `${label}.blockedFailedPartialRejected must be true`);
   assert.equal(checks.rawStdoutJsonlRejected, true, `${label}.rawStdoutJsonlRejected must be true`);
+  assert.equal(checks.nativeAnswerOutsideDefaultChatRejected, true, `${label}.nativeAnswerOutsideDefaultChatRejected must be true`);
 }
 
 function assertDoesNotUseSeedDemoOrRawEvidence(text: string, label: string): void {
   assert.doesNotMatch(text, /\b(?:seed-|seed demo|seed-demo|demo message|fixture success|scriptable-mock|KRAS G12C)\b/i, `${label} must not count seed/demo/fixture text as acceptance`);
   assert.doesNotMatch(text, /\b(?:RAW_JSONL|RAW_STDERR|RAW_STDOUT|raw provider sse|plugin warning|stdout|stderr|jsonl)\b/i, `${label} must not use raw stdout/jsonl/stderr/provider logs as main-answer proof`);
+}
+
+function assertLiveRuntimeCodexRenderedEvidence(evidence: BrowserAcceptanceEvidence | undefined, label: string): void {
+  const domText = evidence?.domSnapshotPath ? readIfExists(evidence.domSnapshotPath) : '';
+  assert.ok(domText.trim(), `${label} DOM evidence is required for live Runtime Codex output proof`);
+  const hasGuiPresent = /gui\.present|GUI intent/i.test(domText);
+  const hasDefaultChat = /Ask SciForge|聊天工作台|SciForge 工作台|default chat/i.test(domText);
+  const hasRuntimeMetadata = /Runtime Codex/i.test(domText)
+    && /sciforge-runtime-deepseek/i.test(domText)
+    && /bailian\/deepseek-v4-flash/i.test(domText);
+  const hasRenderedAssistantAnswer = /回答已显示|assistant (?:answer|message)|rendered (?:answer|assistant)|Runtime Codex answer rendered/i.test(domText);
+  assert.ok(
+    hasGuiPresent || (hasDefaultChat && hasRuntimeMetadata && hasRenderedAssistantAnswer),
+    `${label} must prove gui.present or a native Runtime Codex assistant answer rendered in default chat from DOM evidence`,
+  );
 }
 
 function assertIncludes(text: string, value: string | undefined, message: string): void {
@@ -1031,13 +1058,14 @@ function builtInNegativeChecks(): NegativeChecks {
     seedDemoEvidenceRejected: true,
     blockedFailedPartialRejected: true,
     rawStdoutJsonlRejected: true,
+    nativeAnswerOutsideDefaultChatRejected: true,
   };
 }
 
 function blockedAcceptanceRubric(reason: string): AcceptanceRubric {
   return {
     userIntent: 'Prove the real default-chat Runtime Codex path can complete single-turn, selected-ref, and multi-turn tasks.',
-    expectedObservableResult: 'Visible live Runtime Codex/gui.present answers with provider/model/profile/workspace/command id and folded audit logs.',
+    expectedObservableResult: 'Gui.present projection or native Runtime Codex assistant answer rendered in default chat with provider/model/profile/workspace/command id and folded audit logs.',
     actualResult: `Blocked before release acceptance: ${reason}`,
     evidenceRefs: [relativeFromRoot(manifestPath), relativeFromRoot(blockedNotesPath)],
     negativeChecks: [
@@ -1232,12 +1260,15 @@ function blockedOnForReason(reason: string): string[] {
 function assertNegativeFixtures(): void {
   const fixtureDir = mkdtempSync(join(tmpdir(), `sciforge-${instanceProfile.id}-negative-manifest-validator-`));
   writeNegativeFixtures(fixtureDir);
+  const nativeOnly = JSON.parse(readFileSync(join(fixtureDir, 'native-default-chat-passed.json'), 'utf8')) as BrowserAcceptanceManifest;
+  assertBrowserAcceptanceManifest(nativeOnly);
   const fixtures = [
     'fake-passed-missing-dom.json',
     'fake-passed-seed-demo.json',
     'fake-passed-missing-command-id.json',
     'fake-passed-missing-task-result.json',
     'fake-passed-unparseable-evidence.json',
+    'fake-passed-native-outside-default-chat.json',
     'blocked-status.json',
     'failed-status.json',
     'partial-status.json',
@@ -1273,6 +1304,37 @@ function writeNegativeFixtures(fixtureDir: string): void {
     '  - generic: audit folded by default',
     '',
   ].join('\n'));
+  writeFixture(fixtureDir, 'native-default-chat-dom.txt', [
+    '- main:',
+    '  - strong: Ask SciForge',
+    '  - button: 聊天工作台',
+    `  - generic: Actual browser URL ${actualUrl}`,
+    `  - generic: workspace ${workspacePath}`,
+    '  - generic: Runtime Codex',
+    '  - generic: sciforge-runtime-deepseek',
+    '  - generic: sciforge-deepseek-proxy',
+    '  - generic: bailian/deepseek-v4-flash',
+    '  - generic: command codex-command-negative-001',
+    '  - paragraph: 回答已显示',
+    '  - paragraph: Runtime Codex answer rendered in the default chat.',
+    '  - paragraph: SCIFORGE-CODEX-BROWSER-MT-20260520A',
+    '  - generic: audit folded by default',
+    '',
+  ].join('\n'));
+  writeFixture(fixtureDir, 'native-outside-default-chat-dom.txt', [
+    '- main:',
+    `  - generic: Actual browser URL ${actualUrl}`,
+    `  - generic: workspace ${workspacePath}`,
+    '  - generic: Runtime Codex',
+    '  - generic: sciforge-runtime-deepseek',
+    '  - generic: sciforge-deepseek-proxy',
+    '  - generic: bailian/deepseek-v4-flash',
+    '  - generic: command codex-command-negative-001',
+    '  - paragraph: Runtime Codex answer rendered in a detached audit panel.',
+    '  - paragraph: SCIFORGE-CODEX-BROWSER-MT-20260520A',
+    '  - generic: audit folded by default',
+    '',
+  ].join('\n'));
   writeFixture(fixtureDir, 'seed-demo-dom.txt', [
     '- main:',
     '  - strong: Ask SciForge',
@@ -1293,7 +1355,7 @@ function writeNegativeFixtures(fixtureDir: string): void {
     '# Acceptance rubric',
     '',
     'User intent: prove the real default-chat Runtime Codex browser path completed the requested task.',
-    'Expected observable result: visible live Runtime Codex/gui.present output with URL, workspace, provider, model, profile, and command id.',
+    'Expected observable result: gui.present projection or native Runtime Codex assistant answer rendered in default chat with URL, workspace, provider, model, profile, and command id.',
     `Actual task result: Runtime Codex rendered a live answer for command codex-command-negative-001 at ${actualUrl} in workspace ${workspacePath}.`,
     'Evidence refs: valid-dom.txt and screen.png.',
     'Negative checks: seed/demo excluded; audit/debug output not used as the main answer; forged passed and partial states rejected.',
@@ -1304,6 +1366,8 @@ function writeNegativeFixtures(fixtureDir: string): void {
   writeFixture(fixtureDir, 'screen.png', 'placeholder screenshot bytes for manifest validator negative fixtures\n');
 
   const validDom = fixturePath('valid-dom.txt');
+  const nativeDefaultChatDom = fixturePath('native-default-chat-dom.txt');
+  const nativeOutsideDefaultChatDom = fixturePath('native-outside-default-chat-dom.txt');
   const seedDom = fixturePath('seed-demo-dom.txt');
   const notes = fixturePath('valid-notes.md');
   const screenshot = fixturePath('screen.png');
@@ -1320,6 +1384,8 @@ function writeNegativeFixtures(fixtureDir: string): void {
   delete missingTaskResult.actualTaskResult;
   writeJsonFixture(fixtureDir, 'fake-passed-missing-task-result.json', missingTaskResult);
   writeJsonFixture(fixtureDir, 'fake-passed-unparseable-evidence.json', passedFixtureManifest(validDom, badEvidence, screenshot));
+  writeJsonFixture(fixtureDir, 'native-default-chat-passed.json', passedFixtureManifest(nativeDefaultChatDom, notes, screenshot, 'native-default-chat'));
+  writeJsonFixture(fixtureDir, 'fake-passed-native-outside-default-chat.json', passedFixtureManifest(nativeOutsideDefaultChatDom, notes, screenshot, 'native-default-chat'));
   writeJsonFixture(fixtureDir, 'blocked-status.json', {
     ...passedFixtureManifest(validDom, notes, screenshot),
     status: 'blocked',
@@ -1337,12 +1403,18 @@ function writeNegativeFixtures(fixtureDir: string): void {
   });
 }
 
-function passedFixtureManifest(domPath: string, notesPath: string, screenshotPath: string): BrowserAcceptanceManifest {
+function passedFixtureManifest(
+  domPath: string,
+  notesPath: string,
+  screenshotPath: string,
+  proofMode: RuntimeOutputProofMode = 'gui-present',
+): BrowserAcceptanceManifest {
   const evidence = { screenshotPath, domSnapshotPath: domPath, notesPath };
   return {
     schemaVersion: 'sciforge.runtime-codex.browser-acceptance.v1',
     status: 'passed',
     source: 'codex-in-app-browser',
+    observedAt: new Date().toISOString(),
     actualUrl,
     actualPort: requestedRolePort,
     actualWorkspaceWriterPort: requestedWorkspaceWriterPort,
@@ -1377,13 +1449,13 @@ function passedFixtureManifest(domPath: string, notesPath: string, screenshotPat
       remainingRisks: 'none',
     },
     actualTaskResult: passedTaskResult(domPath),
-    liveRuntimeCodexProof: passedLiveProof(domPath),
+    liveRuntimeCodexProof: passedLiveProof(domPath, proofMode),
     negativeChecks: builtInNegativeChecks(),
     evidence,
-    singleTurn: passedScenario('single turn', evidence),
-    artifactFollowUp: { ...passedScenario('artifact follow up', evidence), selectedRefs: ['artifact:negative-fixture'] },
+    singleTurn: passedScenario('single turn', evidence, proofMode),
+    artifactFollowUp: { ...passedScenario('artifact follow up', evidence, proofMode), selectedRefs: ['artifact:negative-fixture'] },
     multiTurn: {
-      ...passedScenario('multi turn', evidence),
+      ...passedScenario('multi turn', evidence, proofMode),
       followUpPrompt: 'reply with the remembered passphrase',
       expectedPassphrase: expectedMultiTurnPassphrase,
       secondTurnVisibleAnswerConfirmed: true,
@@ -1391,13 +1463,17 @@ function passedFixtureManifest(domPath: string, notesPath: string, screenshotPat
   };
 }
 
-function passedScenario(userIntent: string, evidence: BrowserAcceptanceEvidence): BrowserAcceptanceScenario {
+function passedScenario(
+  userIntent: string,
+  evidence: BrowserAcceptanceEvidence,
+  proofMode: RuntimeOutputProofMode = 'gui-present',
+): BrowserAcceptanceScenario {
   return {
     status: 'passed',
     prompt: userIntent,
     userIntent,
     actualTaskResult: passedTaskResult(evidence.domSnapshotPath ?? ''),
-    liveRuntimeCodexProof: passedLiveProof(evidence.domSnapshotPath ?? ''),
+    liveRuntimeCodexProof: passedLiveProof(evidence.domSnapshotPath ?? '', proofMode),
     negativeChecks: builtInNegativeChecks(),
     visibleAnswerConfirmed: true,
     providerModelProfileVisible: true,
@@ -1417,11 +1493,12 @@ function passedTaskResult(evidenceRef: string): ActualTaskResult {
   };
 }
 
-function passedLiveProof(evidenceRef: string): LiveRuntimeCodexProof {
+function passedLiveProof(evidenceRef: string, proofMode: RuntimeOutputProofMode = 'gui-present'): LiveRuntimeCodexProof {
   return {
     messageProvenance: 'live-runtime-codex',
     commandId: 'codex-command-negative-001',
-    guiPresentObserved: true,
+    guiPresentObserved: proofMode === 'gui-present',
+    nativeDefaultChatAssistantAnswerRendered: proofMode === 'native-default-chat',
     runtimeOutputObserved: true,
     seedOrDemoExcluded: true,
     eventEvidenceRefs: [evidenceRef],
@@ -1463,6 +1540,11 @@ function readIfExists(path: string): string {
   } catch {
     return '';
   }
+}
+
+function runtimeStreamPathFromText(text: string): string | undefined {
+  return /CODEX_RUNTIME_STREAM_PATH\s*=\s*['"]([^'"]+)['"]/.exec(text)?.[1]
+    ?? /['"]((?:\/api\/sciforge\/runtime\/codex\/stream))['"]/.exec(text)?.[1];
 }
 
 function escapeRegExp(value: string): string {

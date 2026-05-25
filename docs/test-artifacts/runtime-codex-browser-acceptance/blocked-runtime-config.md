@@ -1,6 +1,6 @@
 # Runtime Codex browser acceptance blocked
 
-Observed at: 2026-05-21T19:44:39.071Z
+Observed at: 2026-05-25T04:24:30.542Z
 Requested UI port: 5173
 Requested workspace writer port: 6173
 Actual/intended URL: http://127.0.0.1:5173/
@@ -12,18 +12,18 @@ Provider: sciforge-deepseek-proxy
 Model: bailian/deepseek-v4-flash
 Reason: Current Runtime Codex provider preflight is ready, but Codex in-app browser acceptance is incomplete: missing passed release manifest.
 Provider preflight artifact: docs/test-artifacts/runtime-provider-preflight/manifest.json
-Provider preflight category: ready
-Provider preflight checked at: 2026-05-21T19:43:17.974Z
+Provider preflight category: config-secret-source
+Provider preflight checked at: 2026-05-25T04:23:52.921Z
 Provider preflight release acceptance: not-evaluated
-Runtime key in service env: present
+Runtime key in service env: missing
 Provider upstream base URL: present
-Runtime key source: env
-Upstream URL source: env
+Runtime key source: config-debug-fallback
+Upstream URL source: config
 Acceptance scope: non-seed Runtime Codex messages only; seed/demo/fixture messages are excluded from success criteria.
 
 Acceptance rubric:
 - User intent: prove the real default-chat Runtime Codex path can complete single-turn, selected-ref, and multi-turn tasks.
-- Expected observable result: visible live Runtime Codex/gui.present answers with provider/model/profile/workspace/command id and folded audit logs.
+- Expected observable result: gui.present projection or native Runtime Codex assistant answer rendered in default chat with provider/model/profile/workspace/command id and folded audit logs.
 - Actual result: blocked before release acceptance because Current Runtime Codex provider preflight is ready, but Codex in-app browser acceptance is incomplete: missing passed release manifest.
 - Current evidence refs: manifest.json plus blocked notes. Prior or stale browser screenshots/DOM refs are diagnostic only and cannot count as current release evidence.
 - Negative checks: fake passed status, missing DOM/screenshot, missing command id, missing task result, seed/demo evidence, and partial/blocked/failed status remain release-blocking.

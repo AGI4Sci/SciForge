@@ -137,7 +137,7 @@ type ComputerUseHostPorts = {
 
 **步骤 3：规划下一步。** Planner 输出一个动作，包含动作类型和目标视觉描述。不生成多个候选，只生成一个最合理的下一步。对于密集 UI、小图标、表格、菜单和弹窗，Planner 可以额外输出 `targetRegionDescription`；runtime 会把它作为 coarse region 先裁剪观察，再在 crop 内精定位。Planner 也可以输出 `wait + targetRegionDescription` 来请求 observation-only 局部观察。
 
-**步骤 4：定位。** Grounder 根据目标描述在窗口截图上定位。使用 coarse-to-fine：先在整窗截图中得到目标区域或粗中心点，再由 vision-sense 生成 focus-region crop，随后用 KV-Ground 或 visual Grounder 在 crop 内二次精定位，把 crop-local 坐标映射回 window-local/executor 坐标。后续执行和验证都使用精定位结果，并记录 coarse/fine grounding 证据。如果精定位失败，trace 会保留 coarse grounding 和 fine failure，供下一轮规划修正。
+**步骤 4：定位。** Grounder 根据目标描述在窗口截图上定位。使用 coarse-to-fine：先在整窗截图中得到目标区域或粗中心点，再由 vision-sense 生成 focus-region crop，随后用 KV-Ground 在 crop 内二次精定位，把 crop-local 坐标映射回 window-local/executor 坐标。后续执行和验证都使用精定位结果，并记录 coarse/fine grounding 证据。如果精定位失败，trace 会保留 coarse grounding 和 fine failure，供下一轮规划修正。
 
 **步骤 5：执行。** Executor 通过 `hostPorts.execute` 执行通用鼠标键盘动作。真实桌面输入、远程桌面输入或 dry-run 都是 host port provider；Computer Use 不调用 GUI，也不通过 GUI 间接执行。
 
@@ -212,7 +212,7 @@ Verifier反馈：{verifier_feedback}
 
 阶段二，focus region：调用 `vision-sense` 的 `build_focus_region` / `build_focus_region_from_trace` 生成 clipped bbox，runtime 只负责把 bbox 裁成 `focus-region` screenshot ref。
 
-阶段三，局部精定位：在 crop 图上用 KV-Ground 或 visual Grounder 精确定位中心点。crop-local 坐标换算回 window-local 坐标，再映射到 executor 坐标。trace 中同时记录 `coarseGrounding`、`fineGrounding`、`focusRegion` 和最终执行坐标。
+阶段三，局部精定位：在 crop 图上用 KV-Ground 精确定位中心点。crop-local 坐标换算回 window-local 坐标，再映射到 executor 坐标。trace 中同时记录 `coarseGrounding`、`fineGrounding`、`focusRegion` 和最终执行坐标。
 
 **准星验证**：在预测点绘制十字准星，让 VLM 判断准星是否落在目标上。如果验证失败，让 VLM 重新描述目标后再做一次两阶段定位。最多重试一次。
 

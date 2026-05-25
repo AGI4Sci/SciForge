@@ -14,7 +14,7 @@ import {
   stringConfig,
   supportsBuiltinDesktopBridge,
 } from '../computer-use/utils.js';
-import { parseWindowTarget } from '../computer-use/window-target.js';
+import { defaultMacBundleIdForAppName, parseWindowTarget } from '../computer-use/window-target.js';
 import {
   looksLikeVisionSenseComputerUseRequest,
   parseVisionSenseAppAliases,
@@ -35,7 +35,7 @@ export function rebindWindowTargetForPromptAppAlias(config: VisionSenseConfig, p
     coordinateSpace: config.windowTarget.coordinateSpace === 'screen' ? 'window-local' : config.windowTarget.coordinateSpace,
     windowId: undefined,
     processId: undefined,
-    bundleId: undefined,
+    bundleId: defaultMacBundleIdForAppName(requestedAppName),
     title: undefined,
     bounds: undefined,
     contentRect: undefined,
@@ -117,6 +117,13 @@ export async function loadVisionSenseConfig(workspace: string, request: GatewayR
       fileConfig.inputAdapter,
       fileConfig.independentInputAdapter,
     ),
+    independentInputAdapterProvider: stringConfig(
+      requestConfig.independentInputAdapterProvider,
+      requestConfig.inputAdapterProvider,
+      process.env.SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER,
+      fileConfig.independentInputAdapterProvider,
+      fileConfig.inputAdapterProvider,
+    ),
     allowSharedSystemInput: booleanConfig(
       requestConfig.allowSharedSystemInput,
       process.env.SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT,
@@ -129,39 +136,22 @@ export async function loadVisionSenseConfig(workspace: string, request: GatewayR
       envOrValue(fileConfig.showVisualCursor, fileConfig.visualCursor),
       !dryRun,
     ),
+    visibleTextExtraction: parseVisibleTextExtractionConfig(requestConfig, fileConfig),
     completionPolicy: parseCompletionPolicy(envOrValue(requestConfig.completionPolicy, fileConfig.completionPolicy)),
     planner: {
-      baseUrl: stringConfig(
-        process.env.SCIFORGE_VISION_PLANNER_BASE_URL,
-        requestConfig.plannerBaseUrl,
-        fileConfig.plannerBaseUrl,
-        configStringAt(fileConfig, ['llm', 'baseUrl']),
-        configStringAt(fileConfig, ['llmEndpoint', 'baseUrl']),
-        fileConfig.modelBaseUrl,
-        request.llmEndpoint?.baseUrl,
+      profile: stringConfig(
+        process.env.SCIFORGE_COMPUTER_USE_PLANNER_PROFILE,
+        requestConfig.plannerProfile,
+        fileConfig.plannerProfile,
       ),
-      apiKey: stringConfig(
-        process.env.SCIFORGE_VISION_PLANNER_API_KEY,
-        requestConfig.plannerApiKey,
-        fileConfig.plannerApiKey,
-        configStringAt(fileConfig, ['llm', 'apiKey']),
-        configStringAt(fileConfig, ['llmEndpoint', 'apiKey']),
-        fileConfig.apiKey,
-        request.llmEndpoint?.apiKey,
+      allowOpenAiRuntime: booleanConfig(
+        process.env.SCIFORGE_COMPUTER_USE_PLANNER_ALLOW_OPENAI_RUNTIME,
+        requestConfig.plannerAllowOpenAiRuntime,
+        fileConfig.plannerAllowOpenAiRuntime,
+        false,
       ),
-      model: stringConfig(
-        process.env.SCIFORGE_VISION_PLANNER_MODEL,
-        requestConfig.plannerModel,
-        requestConfig.visionPlannerModel,
-        requestConfig.vlmModel,
-        requestConfig.visionModel,
-        fileConfig.plannerModel,
-        fileConfig.visionPlannerModel,
-        fileConfig.vlmModel,
-        fileConfig.visionModel,
-      ),
-      timeoutMs: numberConfig(process.env.SCIFORGE_VISION_PLANNER_TIMEOUT_MS, requestConfig.plannerTimeoutMs, fileConfig.plannerTimeoutMs) ?? 120000,
-      maxTokens: numberConfig(process.env.SCIFORGE_VISION_PLANNER_MAX_TOKENS, requestConfig.plannerMaxTokens, fileConfig.plannerMaxTokens) ?? 512,
+      timeoutMs: numberConfig(process.env.SCIFORGE_COMPUTER_USE_PLANNER_TIMEOUT_MS, requestConfig.plannerTimeoutMs, fileConfig.plannerTimeoutMs) ?? 120000,
+      maxTokens: numberConfig(process.env.SCIFORGE_COMPUTER_USE_PLANNER_MAX_TOKENS, requestConfig.plannerMaxTokens, fileConfig.plannerMaxTokens) ?? 512,
     },
     grounder: {
       baseUrl: stringConfig(process.env.SCIFORGE_VISION_KV_GROUND_URL, requestConfig.grounderBaseUrl, fileConfig.grounderBaseUrl),
@@ -183,50 +173,39 @@ export async function loadVisionSenseConfig(workspace: string, request: GatewayR
         identityFile: stringConfig(process.env.SCIFORGE_VISION_KV_GROUND_UPLOAD_IDENTITY_FILE, requestConfig.grounderUploadIdentityFile, fileConfig.grounderUploadIdentityFile),
         remoteUrlPrefix: stringConfig(process.env.SCIFORGE_VISION_KV_GROUND_UPLOAD_REMOTE_URL_PREFIX, requestConfig.grounderUploadRemoteUrlPrefix, fileConfig.grounderUploadRemoteUrlPrefix),
       },
-      visionBaseUrl: stringConfig(
-        process.env.SCIFORGE_VISION_GROUNDER_LLM_BASE_URL,
-        requestConfig.visualGrounderBaseUrl,
-        fileConfig.visualGrounderBaseUrl,
-        process.env.SCIFORGE_VISION_PLANNER_BASE_URL,
-        requestConfig.plannerBaseUrl,
-        fileConfig.plannerBaseUrl,
-        configStringAt(fileConfig, ['llm', 'baseUrl']),
-        configStringAt(fileConfig, ['llmEndpoint', 'baseUrl']),
-        fileConfig.modelBaseUrl,
-        request.llmEndpoint?.baseUrl,
-      ),
-      visionApiKey: stringConfig(
-        process.env.SCIFORGE_VISION_GROUNDER_LLM_API_KEY,
-        requestConfig.visualGrounderApiKey,
-        fileConfig.visualGrounderApiKey,
-        process.env.SCIFORGE_VISION_PLANNER_API_KEY,
-        requestConfig.plannerApiKey,
-        fileConfig.plannerApiKey,
-        configStringAt(fileConfig, ['llm', 'apiKey']),
-        configStringAt(fileConfig, ['llmEndpoint', 'apiKey']),
-        fileConfig.apiKey,
-        request.llmEndpoint?.apiKey,
-      ),
-      visionModel: stringConfig(
-        process.env.SCIFORGE_VISION_GROUNDER_LLM_MODEL,
-        requestConfig.visualGrounderModel,
-        requestConfig.grounderVisionModel,
-        requestConfig.plannerModel,
-        requestConfig.visionPlannerModel,
-        requestConfig.vlmModel,
-        requestConfig.visionModel,
-        fileConfig.visualGrounderModel,
-        fileConfig.grounderVisionModel,
-        process.env.SCIFORGE_VISION_PLANNER_MODEL,
-        fileConfig.plannerModel,
-        fileConfig.visionPlannerModel,
-        fileConfig.vlmModel,
-        fileConfig.visionModel,
-      ),
-      visionTimeoutMs: numberConfig(process.env.SCIFORGE_VISION_GROUNDER_LLM_TIMEOUT_MS, requestConfig.visualGrounderTimeoutMs, fileConfig.visualGrounderTimeoutMs) ?? 60000,
-      visionMaxTokens: numberConfig(process.env.SCIFORGE_VISION_GROUNDER_LLM_MAX_TOKENS, requestConfig.visualGrounderMaxTokens, fileConfig.visualGrounderMaxTokens) ?? 384,
     },
-    plannedActions: parseGenericActions(envOrValue(requestConfig.actions, process.env.SCIFORGE_VISION_ACTIONS_JSON, fileConfig.actions)),
+    testActionFixtureMode: booleanConfig(
+      process.env.SCIFORGE_VISION_TEST_ACTION_FIXTURES,
+      requestConfig.testActionFixtureMode,
+      fileConfig.testActionFixtureMode,
+      false,
+    ),
+    testOnlyPlannedActions: parseTestOnlyActions(requestConfig, fileConfig),
+  };
+}
+
+function parseVisibleTextExtractionConfig(
+  requestConfig: Record<string, unknown>,
+  fileConfig: Record<string, unknown>,
+): VisionSenseConfig['visibleTextExtraction'] {
+  const requestVisibleText = isRecord(requestConfig.visibleTextExtraction) ? requestConfig.visibleTextExtraction : {};
+  const fileVisibleText = isRecord(fileConfig.visibleTextExtraction) ? fileConfig.visibleTextExtraction : {};
+  const enabled = booleanConfig(
+    process.env.SCIFORGE_VISION_EXTRACT_VISIBLE_TEXT,
+    envOrValue(requestConfig.extractVisibleText, requestConfig.enableVisibleTextExtraction, requestVisibleText.enabled),
+    envOrValue(fileConfig.extractVisibleText, fileConfig.enableVisibleTextExtraction, fileVisibleText.enabled),
+    false,
+  );
+  return {
+    enabled,
+    provider: 'macos-vision-framework-ocr',
+    maxItems: numberConfig(
+      process.env.SCIFORGE_VISION_VISIBLE_TEXT_MAX_ITEMS,
+      requestVisibleText.maxItems,
+      requestVisibleText.limit,
+      fileVisibleText.maxItems,
+      fileVisibleText.limit,
+    ) ?? 24,
   };
 }
 
@@ -241,6 +220,26 @@ function normalizeGrounderUploadStrategy(value: string | undefined): 'scp' | 'in
   return undefined;
 }
 
+function parseTestOnlyActions(
+  requestConfig: Record<string, unknown>,
+  fileConfig: Record<string, unknown>,
+) {
+  const enabled = booleanConfig(
+    process.env.SCIFORGE_VISION_TEST_ACTION_FIXTURES,
+    requestConfig.testActionFixtureMode,
+    fileConfig.testActionFixtureMode,
+    false,
+  );
+  if (!enabled) return [];
+  return parseGenericActions(envOrValue(
+    requestConfig.testOnlyActions,
+    requestConfig.testOnlyPlannedActions,
+    process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON,
+    fileConfig.testOnlyActions,
+    fileConfig.testOnlyPlannedActions,
+  ));
+}
+
 function parseCompletionPolicy(value: unknown): VisionSenseConfig['completionPolicy'] {
   if (!isRecord(value)) return undefined;
   const mode = stringConfig(value.mode, value.completionMode, value.kind);
@@ -248,7 +247,6 @@ function parseCompletionPolicy(value: unknown): VisionSenseConfig['completionPol
     return {
       mode,
       reason: stringConfig(value.reason),
-      fallbackActions: parseGenericActions(value.fallbackActions),
     };
   }
   return undefined;

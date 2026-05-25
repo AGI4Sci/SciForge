@@ -27,7 +27,7 @@ const legacyAgentServerCompatScript = 'smoke:legacy-agentserver-compat';
 const legacyAgentServerVerifyScript = 'verify:legacy-agentserver-compat';
 const releaseVerifyScript = 'verify:single-agent-release';
 const webMultiturnFinalCommand = 'tsx tests/smoke/smoke-web-multiturn-final.ts';
-const realTaskMatrixCommand = `tsx tests/smoke/smoke-real-task-matrix.ts && npm run ${realTaskOfflineGatesScript} && node --import tsx --test tests/smoke/real-task-evidence-schema.test.ts`;
+const realTaskMatrixCommand = `tsx tests/smoke/smoke-real-task-matrix.ts && npm run ${realTaskOfflineGatesScript}`;
 const requiredFinalGateOrder = [
   'typecheck',
   'test',
@@ -84,7 +84,7 @@ if (scripts[runtimeCodexStrictBrowserAcceptanceScript] !== `SCIFORGE_REQUIRE_LIV
 }
 
 if (scripts[realTaskMatrixScript] !== realTaskMatrixCommand) {
-  errors.push(`${realTaskMatrixScript} must validate PROJECT.md R-* task coverage, run offline R-* category gates, and real-task evidence schema negatives`);
+  errors.push(`${realTaskMatrixScript} must validate PROJECT.md CU-* Computer Use task coverage and run the Computer Use protocol gate`);
 }
 
 const realTaskOfflineGateSteps = packageScriptSteps(scripts[realTaskOfflineGatesScript]);
@@ -154,7 +154,7 @@ if (errors.length) {
   for (const error of errors) console.error(`- ${error}`);
   process.exitCode = 1;
 } else {
-  console.log(`[ok] ${verifyScript} wires typecheck, core tests, C01-C18, no-legacy/no-hardcoded source hygiene guards, Runtime Codex truth-source/package/platform ownership gates, Runtime Codex final acceptance, provider upstream preflight, browser acceptance evidence, real R-* task matrix coverage, Web final conformance, browser web-multiturn-final, final evidence validation, strict release fail-fast gating, desktop package release gating, and explicit legacy AgentServer compatibility isolation`);
+  console.log(`[ok] ${verifyScript} wires typecheck, core tests, C01-C18, no-legacy/no-hardcoded source hygiene guards, Runtime Codex truth-source/package/platform ownership gates, Runtime Codex final acceptance, provider upstream preflight, browser acceptance evidence, active CU-* Computer Use task matrix coverage, Web final conformance, browser web-multiturn-final, final evidence validation, strict release fail-fast gating, desktop package release gating, and explicit legacy AgentServer compatibility isolation`);
 }
 
 function packageScriptSteps(script: string | undefined): string[] {

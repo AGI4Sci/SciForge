@@ -38,18 +38,19 @@ export function createSciForgeDesktopPreloadApi(ipcRenderer: DesktopIpcRenderer)
     getNativeBrowserState: () => ipcRenderer.invoke('desktop:native-browser:state'),
     captureNativeBrowserScreenshot: () => ipcRenderer.invoke('desktop:native-browser:screenshot'),
     revealPath: (path: string) => ipcRenderer.invoke('platform:reveal-path', path),
-    pickDirectory: async (defaultPath?: string) => {
-      const result = await ipcRenderer.invoke('platform:pick-directory', defaultPath);
-      if (isPickDirectoryResult(result)) return result;
-      return { ok: false };
-    },
+    pickDirectory: async (defaultPath?: string) => normalizePickDirectoryResult(
+      await ipcRenderer.invoke('platform:pick-directory', defaultPath),
+    ),
   };
 }
 
-function isPickDirectoryResult(value: unknown): value is { ok: boolean; path?: string } {
-  if (!value || typeof value !== 'object') return false;
-  const record = value as { ok?: unknown; path?: unknown };
-  return typeof record.ok === 'boolean' && (record.path === undefined || typeof record.path === 'string');
+function normalizePickDirectoryResult(value: unknown): { ok: boolean; path?: string } {
+  if (!value || typeof value !== 'object') return { ok: false };
+  const record = value as Record<string, unknown>;
+  return {
+    ok: Boolean(record.ok),
+    path: typeof record.path === 'string' ? record.path : undefined,
+  };
 }
 
 export function installSciForgeDesktopPreload(input: {

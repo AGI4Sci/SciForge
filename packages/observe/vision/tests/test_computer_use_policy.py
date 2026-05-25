@@ -69,6 +69,92 @@ class ComputerUsePolicyTest(unittest.TestCase):
 
         self.assertIn("Visible artifact task did not satisfy completion acceptance", gap)
 
+    def test_screenshot_grounded_creation_does_not_trigger_window_recovery_completion(self) -> None:
+        steps = [
+            _done_step({"type": "click", "targetDescription": "title placeholder"}),
+            _done_step({"type": "type_text", "text": "SciForge Computer Use Acceptance"}),
+            _done_step({"type": "click", "targetDescription": "subtitle placeholder"}),
+        ]
+
+        result = action_ledger_completion(
+            "Create a PowerPoint slide. Use screenshot-grounded Computer Use only.",
+            steps,
+        )
+
+        self.assertFalse(result["complete"])
+
+    def test_creation_completion_rejects_browser_navigation_before_editor_content(self) -> None:
+        steps = [
+            _done_step(
+                {"type": "click", "targetDescription": "address bar"},
+                app_name="Microsoft Edge",
+            ),
+            _done_step(
+                {"type": "type_text", "text": "http://127.0.0.1:18082/source-page.html"},
+                app_name="Microsoft Edge",
+            ),
+            _done_step(
+                {"type": "open_app", "appName": "Microsoft PowerPoint"},
+                app_name="Microsoft PowerPoint",
+            ),
+        ]
+
+        result = action_ledger_completion(
+            "Create a PowerPoint slide from a browser source page.",
+            steps,
+        )
+
+        self.assertFalse(result["complete"])
+
+    def test_creation_completion_requires_requested_fact_body_not_title_only(self) -> None:
+        steps = [
+            _done_step({"type": "open_app", "appName": "Microsoft PowerPoint"}, app_name="Microsoft PowerPoint"),
+            _done_step({"type": "click", "targetDescription": "PowerPoint title placeholder"}, app_name="Microsoft PowerPoint"),
+            _done_step({"type": "type_text", "text": "SciForge L3 Computer Use Acceptance"}, app_name="Microsoft PowerPoint"),
+            _done_step({"type": "click", "targetDescription": "PowerPoint body placeholder"}, app_name="Microsoft PowerPoint"),
+            _done_step({"type": "click", "targetDescription": "PowerPoint slide content area"}, app_name="Microsoft PowerPoint"),
+            _done_step({"type": "click", "targetDescription": "PowerPoint slide content area"}, app_name="Microsoft PowerPoint"),
+        ]
+
+        result = action_ledger_completion(
+            "Create one slide containing three visible source facts.",
+            steps,
+        )
+
+        self.assertFalse(result["complete"])
+
+    def test_creation_completion_rejects_rich_slide_structure_only_fallback(self) -> None:
+        steps = [
+            _done_step({"type": "open_app", "appName": "Microsoft PowerPoint"}, app_name="Microsoft PowerPoint"),
+            _done_step({"type": "click", "targetDescription": "PowerPoint title placeholder"}, app_name="Microsoft PowerPoint"),
+            _done_step(
+                {"type": "type_text", "text": "SciForge L3 Computer Use Acceptance"},
+                app_name="Microsoft PowerPoint",
+                no_effect=True,
+            ),
+            _done_step({"type": "click", "targetDescription": "PowerPoint body placeholder"}, app_name="Microsoft PowerPoint"),
+            _done_step({"type": "click", "targetDescription": "PowerPoint slide content area"}, app_name="Microsoft PowerPoint"),
+            _done_step({"type": "click", "targetDescription": "PowerPoint slide content area"}, app_name="Microsoft PowerPoint"),
+        ]
+
+        result = action_ledger_completion(
+            "Create a PowerPoint slide with three source facts as body bullets.",
+            steps,
+        )
+
+        self.assertFalse(result["complete"])
+
+    def test_action_ledger_completion_keeps_explicit_window_recovery(self) -> None:
+        steps = [
+            _done_step({"type": "open_app", "appName": "PowerPoint"}),
+            _done_step({"type": "click", "targetDescription": "restore target window button"}),
+        ]
+
+        result = action_ledger_completion("Recover the target window after occlusion", steps)
+
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["kind"], "window-recovery")
+
     def test_rewrite_policy_moves_repeated_chat_text_to_submit(self) -> None:
         steps = [_done_step({"type": "type_text", "text": "missing refs", "targetDescription": "chat input"})]
 
@@ -117,11 +203,12 @@ class ComputerUsePolicyTest(unittest.TestCase):
         )
 
 
-def _done_step(action: dict[str, object], *, no_effect: bool = False) -> dict[str, object]:
+def _done_step(action: dict[str, object], *, no_effect: bool = False, app_name: str | None = None) -> dict[str, object]:
     return {
         "kind": "gui-execution",
         "status": "done",
         "plannedAction": action,
+        "windowTarget": {"appName": app_name} if app_name else {},
         "verifier": {"pixelDiff": {"possiblyNoEffect": no_effect}},
     }
 

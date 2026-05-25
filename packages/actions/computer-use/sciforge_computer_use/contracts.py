@@ -6,6 +6,10 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping, Protocol, Sequence
 
 
+REQUEST_SCHEMA_VERSION = "sciforge.computer-use.request.v1"
+RESULT_SCHEMA_VERSION = "sciforge.computer-use.result.v1"
+
+
 ActionKind = Literal[
     "open_app",
     "click",
@@ -24,13 +28,22 @@ ComputerUseStatus = Literal[
     "max-steps",
 ]
 RiskLevel = Literal["low", "medium", "high"]
+PlannerContractIssue = Literal[
+    "coordinate-output",
+    "app-private-shortcut",
+    "unsupported-action",
+    "empty-action",
+]
 
 
 @dataclass(frozen=True)
 class ComputerUseRequest:
     task: str
+    schema_version: str = REQUEST_SCHEMA_VERSION
     max_steps: int = 12
     risk_policy: Literal["fail-closed", "allow-confirmed"] = "fail-closed"
+    approval_ref: str | None = None
+    providers: Mapping[str, str] = field(default_factory=dict)
     window_target: Mapping[str, Any] | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
@@ -66,6 +79,18 @@ class ActionPlan:
     reason: str = ""
     risk_level: RiskLevel = "low"
     requires_confirmation: bool = False
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ApprovalRequest:
+    id: str
+    reason: str
+    action_kind: str
+    risk_level: RiskLevel
+    blocked_action_index: int
+    confirmation_text: str
+    refs: Sequence[str] = field(default_factory=tuple)
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -116,12 +141,79 @@ class LoopStep:
 class ComputerUseResult:
     status: ComputerUseStatus
     reason: str
+    schema_version: str = RESULT_SCHEMA_VERSION
     steps: Sequence[LoopStep] = field(default_factory=tuple)
     final_observation: Observation | None = None
+    approval_request: ApprovalRequest | None = None
     failure_diagnostics: Mapping[str, Any] = field(default_factory=dict)
     metrics: Mapping[str, Any] = field(default_factory=dict)
+    trace_refs: Sequence[str] = field(default_factory=tuple)
     budget_debits: Sequence[Mapping[str, Any]] = field(default_factory=tuple)
     budget_debit_refs: Sequence[str] = field(default_factory=tuple)
+
+
+class ComputerUseHostPorts(Protocol):
+    def plan(
+        self,
+        request: ComputerUseRequest,
+        observation: Observation,
+        history: Sequence[LoopStep],
+    ) -> ActionPlan | Mapping[str, Any]:
+        """Return exactly one generic action or done=True."""
+
+    def capture(
+        self,
+        request: ComputerUseRequest,
+        history: Sequence[LoopStep],
+        query: str | None = None,
+    ) -> Observation | Mapping[str, Any]:
+        """Capture the current target environment and return a file-ref observation."""
+
+    def crop(
+        self,
+        observation: Observation,
+        region: Mapping[str, Any],
+    ) -> Observation | Mapping[str, Any]:
+        """Create a focus-region observation from an existing screenshot ref."""
+
+    def execute(
+        self,
+        action: ActionPlan,
+        grounding: Grounding | None,
+        request: ComputerUseRequest,
+    ) -> ExecutionOutcome | Mapping[str, Any]:
+        """Execute one generic action through the host-owned input adapter."""
+
+    def locate(
+        self,
+        observation: Observation,
+        target: ActionTarget,
+        history: Sequence[LoopStep],
+    ) -> Grounding | Mapping[str, Any]:
+        """Locate a target description using host-injected sense or grounder providers."""
+
+    def verify(
+        self,
+        request: ComputerUseRequest,
+        before: Observation,
+        after: Observation,
+        action: ActionPlan,
+        execution: ExecutionOutcome,
+        history: Sequence[LoopStep],
+    ) -> Verification | Mapping[str, Any]:
+        """Verify action effect and task completion through host-injected verifier providers."""
+
+    def write_trace(
+        self,
+        result: ComputerUseResult,
+    ) -> str:
+        """Persist a refs-first trace and return its durable ref."""
+
+    def emit_event(
+        self,
+        event: Mapping[str, Any],
+    ) -> None:
+        """Emit a compact runtime event for the TUI Host."""
 
 
 class SenseProvider(Protocol):

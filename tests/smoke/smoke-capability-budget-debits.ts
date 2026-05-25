@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -20,6 +20,7 @@ import {
 import { genericLoopPayload } from '../../src/runtime/vision-sense/computer-use-trace-output.js';
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
 import { runWorkspaceOpenAction } from '../../src/runtime/server/workspace-open.js';
+import { readRecentTaskAttempts } from '../../src/runtime/task-attempt-history.js';
 import { agentVerifierRequestFixture } from '../../packages/verifiers/agent-rubric/fixture.js';
 import { createMockAgentVerifierProvider } from '../../packages/verifiers/agent-rubric/index.js';
 import { createHumanApprovalFixtureProvider } from '../../packages/verifiers/fixtures/human-approval.js';
@@ -192,8 +193,8 @@ assert.deepEqual(computerUsePayload.executionUnits[0]?.budgetDebitRefs, [compute
 assert.deepEqual(computerUsePayload.workEvidence?.[0]?.budgetDebitRefs, [computerUseDebit.debitId]);
 assert.equal(computerUseDebit.sinkRefs.executionUnitRef, computerUsePayload.executionUnits[0]?.id);
 assert.deepEqual(computerUseDebit.sinkRefs.workEvidenceRefs, [computerUsePayload.workEvidence?.[0]?.id]);
-assert.ok(computerUseDebit.sinkRefs.auditRefs.includes('audit:vision-sense-computer-use-loop'));
-assert.ok(computerUsePayload.logs?.some((entry) => entry.ref === 'audit:vision-sense-computer-use-loop' && Array.isArray(entry.budgetDebitRefs)));
+assert.ok(computerUseDebit.sinkRefs.auditRefs.includes('audit:computer-use-action-provider-loop'));
+assert.ok(computerUsePayload.logs?.some((entry) => entry.ref === 'audit:computer-use-action-provider-loop' && Array.isArray(entry.budgetDebitRefs)));
 assert.ok(computerUseDebit.debitLines.some((line) => line.dimension === 'actionSteps' && line.amount === 1 && line.remaining === 2));
 assert.ok(computerUseDebit.debitLines.some((line) => line.dimension === 'observeCalls' && line.amount === 2));
 
@@ -322,13 +323,18 @@ const generatedTaskCode = String.raw`
 import json
 import sys
 
-with open(sys.argv[2], "w", encoding="utf-8") as handle:
+input_path = sys.argv[1]
+output_path = sys.argv[2]
+with open(input_path, encoding="utf-8") as input_handle:
+    request = json.load(input_handle)
+
+with open(output_path, "w", encoding="utf-8") as handle:
     json.dump({
         "message": "Generated budget debit task completed.",
         "confidence": 0.9,
         "claimType": "fact",
         "evidenceLevel": "runtime",
-        "reasoningTrace": "generated budget debit dynamic glue",
+        "reasoningTrace": "generated budget debit dynamic glue for " + request.get("prompt", ""),
         "claims": [{"text": "Generated dynamic glue produced a report.", "confidence": 0.9}],
         "uiManifest": [{"componentId": "report-viewer", "artifactRef": "generated-budget-report"}],
         "executionUnits": [{"id": "generated-budget-unit", "status": "done", "tool": "agentserver.generated.python"}],
@@ -489,9 +495,7 @@ try {
   assert.ok(failureDebit.debitLines.some((line) => line.dimension === 'networkCalls' && line.amount === 1));
   assert.equal(failurePayload.budgetDebits?.filter((debit) => debit.debitId === failureDebit.debitId).length, 1);
 
-  const attemptFiles = await readdir(join(agentServerWorkspace, '.sciforge', 'task-attempts'));
-  const attempts = (await Promise.all(attemptFiles.map(async (file) => JSON.parse(await readFile(join(agentServerWorkspace, '.sciforge', 'task-attempts', file), 'utf8')))))
-    .flatMap((entry) => Array.isArray(entry.attempts) ? entry.attempts : []);
+  const attempts = await readRecentTaskAttempts(agentServerWorkspace, 'literature', 20);
   assert.ok(attempts.some((attempt) => attemptHasBudgetDebitRef(attempt, generatedDebit.debitId)));
   assert.ok(attempts.some((attempt) => attemptHasBudgetDebitRef(attempt, directDebit.debitId)));
   assert.ok(attempts.some((attempt) => attemptHasBudgetDebitRef(attempt, failureDebit.debitId)));

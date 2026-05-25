@@ -1055,12 +1055,17 @@ function runsForRequestPayload(
 }
 
 function compactMessagesForRequestPayload(messages: SciForgeMessage[], currentMessageId: string, selectedRefs = new Set<string>()) {
+  const currentMessage = messages.find((message) => message.id === currentMessageId);
+  const continuityMessageIds = sameChatContinuityMessageIds(messages, currentMessageId, currentMessage?.content);
   return messages
     .filter((message) => !isSeedDemoOrFixtureMessage(message))
     .filter((message) => selectedRefs.size === 0 || message.id === currentMessageId || messageRefs(message).some((ref) => selectedRefs.has(ref)))
     .slice(-REQUEST_PAYLOAD_MESSAGE_LIMIT)
     .map((message) => {
       const isCurrentMessage = message.id === currentMessageId;
+      const continuityContent = !isCurrentMessage && continuityMessageIds.has(message.id)
+        ? clipText(message.content, REQUEST_PAYLOAD_MESSAGE_TEXT_LIMIT)
+        : undefined;
       return {
         id: message.id,
         role: message.role,
@@ -1083,8 +1088,28 @@ function compactMessagesForRequestPayload(messages: SciForgeMessage[], currentMe
         acceptance: compactAcceptanceForRequestPayload(message.acceptance),
         guidanceQueue: compactGuidanceQueueForRequestPayload(message.guidanceQueue),
         contentDigest: isCurrentMessage ? undefined : digestTextField(message.content),
+        continuityContent,
       };
     });
+}
+
+function sameChatContinuityMessageIds(
+  messages: SciForgeMessage[],
+  currentMessageId: string,
+  currentPrompt: string | undefined,
+) {
+  if (!currentPrompt || !sameChatContinuityPrompt(currentPrompt)) return new Set<string>();
+  const currentIndex = messages.findIndex((message) => message.id === currentMessageId);
+  if (currentIndex <= 0) return new Set<string>();
+  return new Set(messages
+    .slice(0, currentIndex)
+    .filter((message) => !isSeedDemoOrFixtureMessage(message))
+    .slice(-4)
+    .map((message) => message.id));
+}
+
+function sameChatContinuityPrompt(prompt: string) {
+  return /\b(?:previous turn|last (?:answer|response|message)|that passphrase|the passphrase|remember(?:ed)?|上一轮|上(?:一)?条|刚才)\b/i.test(prompt);
 }
 
 function filterReferencesForRequestPayload(references: SciForgeReference[] | undefined, selectedRefs: Set<string>) {

@@ -87,7 +87,8 @@ EXPECTED_FAILURE_INTENT_PATTERN = re.compile(
 )
 
 WINDOW_RECOVERY_INTENT_PATTERN = re.compile(
-    r"window|display|monitor|screen|occlusion|restore|recover|migration|move.*window|窗口|显示器|屏幕|遮挡|恢复|迁移|移动目标窗口",
+    r"display|monitor|occlusion|restore|recover|migration|move.*window|window.*(?:restore|recover|move|migration|occlusion)|"
+    r"显示器|遮挡|恢复|迁移|移动目标窗口|窗口.*(?:恢复|迁移|移动|遮挡)",
     re.IGNORECASE,
 )
 
@@ -226,6 +227,18 @@ def _step_observed_app_matches(step: Mapping[str, Any], pattern: re.Pattern[str]
     return any(pattern.search(str(name)) for name in names if isinstance(name, str))
 
 
+def _is_navigation_text(text: str) -> bool:
+    value = text.strip()
+    return bool(
+        re.match(r"^(?:https?://|file://|www\.)", value, re.IGNORECASE)
+        or re.match(r"^(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?(?:/|$)", value)
+    )
+
+
+def _requires_rich_creation_content(task: str) -> bool:
+    return bool(re.search(r"\b(?:three|3)\b|facts?|points?|bullets?|body text|要点|事实|正文", task, re.IGNORECASE))
+
+
 def _settings_form_completion_action_count(task: str) -> int:
     if re.search(r"至少\s*8\s*个|at least\s*8", task, re.IGNORECASE):
         return 12
@@ -255,22 +268,34 @@ def should_complete_from_creation_action_ledger(task: str, steps: list[Mapping[s
         return False
     effective_steps = _done_gui_steps(steps, require_effect=True)
     effective_actions = _effective_actions(steps, require_effect=True)
+    editor_pattern = re.compile(r"powerpoint|word|presentation|document|演示|文档", re.IGNORECASE)
+    structure_pattern = re.compile(
+        r"placeholder|text box|textbox|shape|rectangle|canvas|slide|document|body|title|insert|"
+        r"占位符|文本框|图形|矩形|画布|幻灯片|文档|正文|标题|插入",
+        re.IGNORECASE,
+    )
     typed_text = [
         str(action.get("text") or "").strip()
-        for action in effective_actions
-        if action.get("type") == "type_text" and len(str(action.get("text") or "").strip()) >= 4
+        for step in effective_steps
+        for action in [_step_action(step)]
+        if action
+        and action.get("type") == "type_text"
+        and len(str(action.get("text") or "").strip()) >= 4
+        and not _is_navigation_text(str(action.get("text") or ""))
+        and (
+            _step_observed_app_matches(step, editor_pattern)
+            or structure_pattern.search(_action_route_target(action))
+        )
     ]
     total_typed_chars = len("\n".join(typed_text))
     distinct_typed_chunks = len({_compact_route_text(text) for text in typed_text})
     structural_targets = [
         _compact_route_text(target)
-        for target in (_action_route_target(action) for action in effective_actions)
-        if re.search(
-            r"placeholder|text box|textbox|shape|rectangle|canvas|slide|document|body|title|insert|"
-            r"占位符|文本框|图形|矩形|画布|幻灯片|文档|正文|标题|插入",
-            target,
-            re.IGNORECASE,
-        )
+        for step in effective_steps
+        for action in [_step_action(step)]
+        if action
+        for target in [_action_route_target(action)]
+        if structure_pattern.search(target) and (_step_observed_app_matches(step, editor_pattern) or editor_pattern.search(target))
     ]
     has_structure_edit = any(action.get("type") == "drag" for action in effective_actions) or any(
         re.search(r"shape|rectangle|text box|textbox|canvas|图形|矩形|文本框|画布", target, re.IGNORECASE)
@@ -281,12 +306,22 @@ def should_complete_from_creation_action_ledger(task: str, steps: list[Mapping[s
         and re.search(r"powerpoint|word|presentation|document|演示|文档", str(action.get("appName") or ""), re.IGNORECASE)
         for action in effective_actions
     )
-    observed_editor = any(_step_observed_app_matches(step, re.compile(r"powerpoint|word|presentation|document|演示|文档", re.IGNORECASE)) for step in effective_steps)
+    observed_editor = any(_step_observed_app_matches(step, editor_pattern) for step in effective_steps)
     has_app_or_canvas_setup = any(action.get("type") in {"open_app", "click", "double_click"} for action in effective_actions) or observed_editor or opened_editor
     if not has_app_or_canvas_setup:
         return False
+    requires_rich_content = _requires_rich_creation_content(task)
     if typed_text:
-        return len(effective_actions) >= 6 and total_typed_chars >= 8 and distinct_typed_chunks >= 1 and len(structural_targets) >= 2
+        min_typed_chars = 60 if requires_rich_content else 8
+        min_typed_chunks = 2 if requires_rich_content else 1
+        return (
+            len(effective_actions) >= 6
+            and total_typed_chars >= min_typed_chars
+            and distinct_typed_chunks >= min_typed_chunks
+            and len(structural_targets) >= 2
+        )
+    if requires_rich_content:
+        return False
     return len(effective_actions) >= 5 and len(structural_targets) >= 2 and has_structure_edit
 
 

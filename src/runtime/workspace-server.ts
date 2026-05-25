@@ -3421,7 +3421,7 @@ function localProviderSettings(localConfig: Record<string, unknown>) {
       ? localConfig.runtimeCodexProxy
       : {};
   const apiKey = stringValue(localConfig.apiKey) || stringValue(llm.apiKey) || stringValue(llm.upstreamApiKey) || stringValue(codexProxy.apiKey);
-  const provider = stringValue(localConfig.modelProvider) || stringValue(llm.provider);
+  const provider = stringValue(localConfig.runtimeProvider) || stringValue(codexProxy.runtimeProvider) || stringValue(codexProxy.provider);
   const baseUrl = (
     stringValue(localConfig.modelBaseUrl)
     || stringValue(llm.baseUrl)

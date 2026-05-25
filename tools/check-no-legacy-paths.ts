@@ -214,6 +214,7 @@ async function main() {
   const files = [
     ...await collectSourceFilesIfExists(join(root, 'src')),
     ...await collectSourceFilesIfExists(join(root, 'packages')),
+    ...await collectSourceFilesIfExists(join(root, 'tools')),
   ];
   const findings: Finding[] = [];
 
@@ -244,7 +245,7 @@ async function main() {
 	  const warnings = findings.filter((finding) => !overflowKeys.has(findingKey(finding)) && finding.migration);
 	  const shrinkableKeys = Object.entries(trackedBaselineCounts)
 	    .filter(([key, baseline]) => (counts.get(key) ?? 0) < baseline);
-	  const structuralErrors = await legacyStructuralErrors();
+	  const structuralErrors = await legacyStructuralErrors(files);
 
   if (warnings.length) {
     console.warn('[no-legacy-paths] warnings: tracked T120 legacy paths remain');
@@ -273,7 +274,7 @@ async function main() {
 	  console.log(`[ok] no increased legacy paths found: ${files.length} source files, ${warnings.length} tracked findings.`);
 	}
 
-async function legacyStructuralErrors(): Promise<string[]> {
+async function legacyStructuralErrors(files: string[]): Promise<string[]> {
   const errors: string[] = [];
   const gatewayText = await readTextIfExists(join(root, 'src', 'runtime', 'generation-gateway.ts'));
   if (!gatewayText.includes('agentServerDispatchQuarantinedPayload(context.request)')) {
@@ -288,6 +289,126 @@ async function legacyStructuralErrors(): Promise<string[]> {
   }
   if (/requestLlmEndpoint:\s*Boolean\(/.test(backendConfigText)) {
     errors.push('agent-backend-config.ts must not treat a plain llmEndpoint/baseUrl as AgentServer generation opt-in.');
+  }
+  errors.push(...await computerUseLegacyStructuralErrors(files));
+  return errors;
+}
+
+async function computerUseLegacyStructuralErrors(files: string[]): Promise<string[]> {
+  const errors: string[] = [];
+  for (const rel of [
+    'src/runtime/vision-sense/computer-use-action-loop.ts',
+    'src/runtime/vision-sense/computer-use-bridge.ts',
+    'packages/observe/vision/sciforge_vision_sense/computer_use.py',
+    'packages/observe/vision/sciforge_vision_sense/executor.py',
+    'packages/observe/vision/sciforge_vision_sense/planner.py',
+    'packages/observe/vision/sciforge_vision_sense/runner.py',
+    'packages/observe/vision/sciforge_vision_sense/text_agent_runtime.py',
+  ]) {
+    try {
+      await access(join(root, rel));
+      errors.push(`${rel} must stay deleted; Computer Use execution is owned by packages/actions/computer-use with src/runtime as host adapter only.`);
+    } catch {
+      // deleted is the expected state
+    }
+  }
+
+  const executorText = await readTextIfExists(join(root, 'src', 'runtime', 'computer-use', 'executor.ts'));
+  if (!/targetResolution\.captureKind\s*!==\s*'window'[\s\S]{0,320}no target window is resolved/.test(executorText)) {
+    errors.push('src/runtime/computer-use/executor.ts must fail closed for real pointer/keyboard actions unless WindowTarget resolves to captureKind="window".');
+  }
+
+  const guardedFiles = files
+    .map((file) => relative(root, file).replaceAll('\\', '/'))
+    .filter((rel) => rel !== 'tools/check-no-legacy-paths.ts')
+    .filter((rel) => /^src\/runtime\//.test(rel)
+      || /^packages\/actions\/computer-use\//.test(rel)
+      || /^packages\/observe\/vision\//.test(rel)
+      || /^tools\/computer-use-long-task-pool\//.test(rel));
+  const bannedPatterns: Array<{ id: string; pattern: RegExp; message: string }> = [
+    {
+      id: 'legacy-action-loop',
+      pattern: /\b(?:computer-use-action-loop|runComputerUseActionLoop)\b/,
+      message: 'legacy vision-sense Computer Use action loop import/reference must not return',
+    },
+    {
+      id: 'legacy-completion-fallback-actions',
+      pattern: /\bfallbackActions\b/,
+      message: 'completionPolicy.fallbackActions must not be reintroduced; planner failure must return structured failure',
+    },
+    {
+      id: 'legacy-vision-grounder-env',
+      pattern: /\bSCIFORGE_VISION_GROUNDER_LLM(?:_[A-Z0-9_]+)?\b/,
+      message: 'SCIFORGE_VISION_GROUNDER_LLM visual fallback config must not be reintroduced',
+    },
+    {
+      id: 'legacy-openai-compatible-grounder',
+      pattern: /\bopenai-compatible-vision-grounder\b/,
+      message: 'openai-compatible visual grounder fallback must not be reintroduced; KV-Ground failures fail closed',
+    },
+    {
+      id: 'legacy-visual-grounder-config',
+      pattern: /\bvisualGrounder(?:BaseUrl|ApiKey|Model|TimeoutMs|Config)?\b/,
+      message: 'visualGrounder config fields must not be reintroduced beside the KV-Ground provider',
+    },
+    {
+      id: 'legacy-static-computer-use-actions',
+      pattern: /\b(?:SCIFORGE_VISION_ACTIONS_JSON|plannedActions)\b/,
+      message: 'static Computer Use action injection must stay test-only; production runtime must use the planner host port',
+    },
+    {
+      id: 'legacy-vision-planner-env',
+      pattern: /\bSCIFORGE_VISION_PLANNER(?:_[A-Z0-9_]+)?\b/,
+      message: 'legacy vision planner env vars must not return; Computer Use planner config uses SCIFORGE_COMPUTER_USE_PLANNER_*.',
+    },
+  ];
+
+  for (const rel of guardedFiles) {
+    const text = await readTextIfExists(join(root, rel));
+    for (const rule of bannedPatterns) {
+      const lineIndex = text.split(/\r?\n/).findIndex((line) => rule.pattern.test(line));
+      if (lineIndex >= 0) {
+        errors.push(`${rel}:${lineIndex + 1} ${rule.message} (${rule.id}).`);
+      }
+    }
+  }
+  const oldObserveSurfaceFiles = [
+    'packages/observe/vision/sciforge_vision_sense/__init__.py',
+    'packages/observe/vision/sciforge_vision_sense/manifest.py',
+    'packages/observe/vision/sciforge_vision_sense/prompts.py',
+    'packages/observe/vision/sciforge_vision_sense/types.py',
+    'packages/observe/vision/sciforge_vision_sense/vlm.py',
+    'packages/observe/vision/README.md',
+    'packages/skills/installed/local/vision-gui-task/SKILL.md',
+    'packages/skills/tool_skills/local/vision-sense/SKILL.md',
+    'packages/skills/catalog.ts',
+  ];
+  const oldObservePatterns: Array<{ id: string; pattern: RegExp; message: string }> = [
+    {
+      id: 'legacy-vision-task-request-api',
+      pattern: /\bVisionTaskRequest\b/,
+      message: 'VisionTaskRequest must not remain on the observe/skills surface; use SensePluginRequest and the Computer Use action provider boundary.',
+    },
+    {
+      id: 'legacy-computer-use-text-command-api',
+      pattern: /\bComputerUseTextCommand\b/,
+      message: 'ComputerUseTextCommand must not remain on the observe/skills surface; action commands belong to packages/actions/computer-use.',
+    },
+    {
+      id: 'legacy-positive-vision-runner-api',
+      pattern: /\b(?:run_vision_task|GuiExecutor|ExecutionResult|build_planner_prompt|parse_planner_action|RunnerVision(?:Action|TaskRequest|TaskResult)|text\/x-computer-use-command|computer_use_command_from_action|sense_text_result_for_computer_use)\b/,
+      message: 'legacy positive Computer Use runner/planner/executor APIs must not remain on the observe/skills surface.',
+    },
+  ];
+  for (const rel of oldObserveSurfaceFiles) {
+    const text = await readTextIfExists(join(root, rel));
+    if (!text) continue;
+    for (const rule of oldObservePatterns) {
+      const lineIndex = text.split(/\r?\n/).findIndex((line) => rule.pattern.test(line));
+      if (lineIndex >= 0) {
+        errors.push(`${rel}:${lineIndex + 1} ${rule.message} (${rule.id}).`);
+      }
+    }
   }
   return errors;
 }

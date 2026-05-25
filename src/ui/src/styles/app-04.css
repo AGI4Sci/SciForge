@@ -925,6 +925,45 @@
   margin: 6px 0 10px;
 }
 
+.runtime-trace-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  padding: 4px 0;
+  color: var(--bio-400);
+  font-size: 11px;
+}
+
+.runtime-trace-label {
+  color: var(--bio-300);
+  font-weight: 850;
+}
+
+.runtime-trace-item {
+  display: inline-flex;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  font-family: var(--mono);
+}
+
+.runtime-trace-key {
+  color: var(--bio-500);
+}
+
+.runtime-trace-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--bio-300);
+}
+
+.runtime-trace-audit {
+  color: var(--bio-500);
+  font-family: var(--mono);
+}
+
 .cursor-step-fold {
   min-width: 0;
   border: 0;
@@ -1129,6 +1168,151 @@
   overflow: hidden;
   color: var(--bio-300);
   font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-gui-panel {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.runtime-gui-card {
+  display: grid;
+  gap: 8px;
+  padding: 9px 10px;
+  background: rgba(11, 18, 32, 0.46);
+  border: 1px solid rgba(123, 147, 176, 0.2);
+  border-radius: 8px;
+}
+
+.runtime-gui-card.runtime-gui-ask-user {
+  border-color: rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.runtime-gui-card-head {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+}
+
+.runtime-gui-card-head span {
+  color: var(--teal);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.runtime-gui-card-head strong {
+  min-width: 0;
+  color: var(--bio-50);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-gui-card-head small {
+  color: var(--bio-300);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.runtime-gui-card p {
+  margin: 0;
+  color: var(--bio-100);
+  font-size: 12px;
+  line-height: 1.48;
+}
+
+.runtime-gui-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 8px;
+  margin: 0;
+  font-size: 11px;
+}
+
+.runtime-gui-facts dt {
+  color: var(--bio-300);
+  font-weight: 850;
+}
+
+.runtime-gui-facts dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--bio-100);
+  overflow-wrap: anywhere;
+}
+
+.runtime-gui-ref-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.runtime-gui-ref-list li {
+  min-width: 0;
+}
+
+.runtime-gui-ref-list code {
+  display: inline-block;
+  max-width: 100%;
+  color: var(--teal);
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.runtime-gui-choice-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.runtime-gui-choice {
+  display: inline-grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  min-height: 30px;
+  padding: 5px 9px;
+  color: var(--bio-100);
+  background: rgba(148, 163, 184, 0.08);
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.runtime-gui-choice.primary {
+  color: var(--bio-950);
+  background: var(--teal);
+  border-color: var(--teal);
+}
+
+.runtime-gui-choice.danger {
+  color: #fecaca;
+  border-color: rgba(248, 113, 113, 0.44);
+}
+
+.runtime-gui-choice:hover {
+  border-color: var(--accent-border);
+}
+
+.runtime-gui-choice code {
+  min-width: 0;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
