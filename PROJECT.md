@@ -1,42 +1,38 @@
 # SciForge 项目协议
 
-最后更新：2026-05-24
+最后更新：2026-05-25
 
-当前目标：把 SciForge 的 `注释` 能力收敛为一条 **连续反馈体验**。用户在工作台和非工作台页面都可以点选多个 UI 对象，把它们作为 `※1`、`※2` 这类引用 token 进入反馈侧栏。侧栏负责说清楚问题、对象关系和验收意图，也可以承载低风险即时小改动；反馈收件箱负责复杂改动的管理、确认、审计、GitHub 同步和 Runtime Codex repair。即时修改不是独立模式，只是侧栏里的 low-risk quick action；高风险或范围不清的请求必须进入收件箱。
+当前目标：把 Computer Use 打通为 **TUI 原生 action provider 拓展模块**。模块主体收敛到 `packages/actions/computer-use`，可消费 `packages/observe/vision` 的 sense 输出，并通过清晰的 `runTask(request, hostPorts)` 接口由 TUI Host 调用。SciForge GUI 只通过终端等价文本触发任务，并由 TUI Host 调用 `gui.present` / `gui.ask_user` 展示 trace、收集确认或反馈状态。
 
 ## 当前决策
 
-- `注释` 按钮打开全局注释侧栏，而不是把注释讨论塞进工作台主聊天框。
-- 工作台本身也是可注释页面；主聊天栏、结果面板、左侧项目树、设置入口和反馈收件箱都只是可被引用的对象。
-- 工作台和非工作台页面使用同一套反馈流程：点选对象 -> 侧栏澄清意图/关系 -> 预览、小改动或送入收件箱。
-- 注释侧栏不是第二套对话系统。它是主对话能力的 intent-first projection：UI 容器独立，对话接口和会话逻辑复用主 conversation kernel。
-- 注释侧栏可以复用现有 `SciForgeReference`、引用 token、stream/event 展示、截图/DOM target、feedback evidence bundle 和 feedback inbox 数据模型；不要复制一套引用、证据或聊天协议。
-- `annotation-plan-only` envelope 仍用于“整理/预览/保存反馈”这条无副作用 lane。
-- `annotation-quick-action` envelope 用于侧栏里的低风险即时小改动：只能处理单对象、局部、可解释、可回退的小范围 copy/style 类请求；不能 GitHub sync、commit、push、PR、merge 或启动 repair handoff。
-- 范围不清、跨对象关系、跨文件推理、外部同步、repair、批量操作和高风险写入必须进入反馈收件箱确认。
-- Agent 应鼓励澄清，可以提出 1-3 个短问题，也可以给出 2-3 个选择项和自由输入；用户可以跳过讨论直接保存。
+- Computer Use 是 TUI-owned extension，不是 GUI 功能；它只直接和 TUI Host 通信。
+- GUI 不 import、不调用、不执行 Computer Use、desktop bridge、KV-Ground、connector CLI 或外部 API。
+- 所有 GUI 按钮和用户手势只生成 terminal-equivalent text，例如 `/computer-use run ...`。
+- TUI Host 是唯一编排者：选择 Computer Use、注入 host ports、包装 `ToolPayload`、调用 `gui.present` / `gui.ask_user`。
+- `packages/actions/computer-use` 是 Computer Use action provider 主体，拥有 request/result schema、action loop、safety/approval policy、trace contract、budget debit、host port contract、executor adapter contract 和 compact handoff。
+- `packages/observe/vision` 是可选 sense provider，负责视觉观察、coarse-to-fine focus region、KV-Ground/visual grounding、verifier feedback 和 file-ref-only visual memory；它不执行桌面动作。
+- `src/runtime` 只保留 SciForge Host adapter：`GatewayRequest -> ComputerUseRequest`、host ports、runtime events、`ToolPayload`，不得长期拥有通用 Computer Use 能力。
+- Planner 默认是 Codex CLI / TUI 文本 agent，而不是 GUI 或 KV-Ground。它消费 compact observation、visible text、action history 和 verifier feedback，输出一个不含坐标的 generic action。
+- KV-Ground-8B 只做 Grounder：把目标视觉描述和截图映射为图像坐标；它不决定任务、provider、完成状态或 GUI 呈现。
+- 真实输入 smoke 只证明基础鼠标键盘闭环，不等于用户级验收。Computer Use 最终验收必须完成用户可感知的桌面工作流，并产出可检查 artifact、截图 refs、trace refs 和 GUI 展示证据。
+- 用户级工作流可以联合多个 App，例如 Browser 收集内容、PowerPoint/Keynote/LibreOffice 制作一页 PPT、Finder 保存/定位产物；这些 App 交互都必须经 Computer Use host ports 执行，而不是由 GUI 或 Playwright/DOM shortcut 代跑。
+- 高风险动作默认 fail closed。发送、删除、支付、授权、发布、外部提交、覆盖、上传或真实桌面输入需要返回 `needs-confirmation` / `approvalRequest`，由 TUI Host 决定是否调用 `gui.ask_user`。
 
 ## 当前事实
 
-SciForge 当前路线是 **反馈收件箱优先，Runtime Codex/Codex CLI 后端修复，GUI 作为 TUI extension 和 repair control surface**。
-
-核心架构：
-
-- Codex CLI / TUI 拥有 agent 逻辑、上下文、记忆、工具、插件、修复和执行。
-- SciForge GUI 是翻译壳、观察层和可复用展示层，不是 agent host。
-- GUI -> runtime 只发送 terminal-equivalent text command。
-- runtime -> GUI 只返回 normalized events、audit events 或 intent-based `gui.*` results。
-- GUI 可以做 deterministic presentation behavior，不能做 provider route、capability ranking、repair policy、prompt assembly 或 completion 判断。
-- 多轮对话以 Codex CLI thread/session 为权威状态源；SciForge 只保存 thread id、attempt id、UI metadata 和 evidence refs，继续对话时调用 Codex 原生 resume，而不是拼 GUI transcript。
-- `docs/` 是产品/架构/协议/用法真相源；backend runtime migration 真相源是 `packages/backend/CodexRuntimeMigration.md`。
-- 短中期桌面化选择 Electron；Tauri 只作为 runtime launcher、app data、secret storage 和 platform service 稳定后的长期优化项。
-
+- 用户已按 `packages/actions/computer-use/KV_GROUND_SERVICE_GUIDE.md` 启动 KV-Ground-8B 服务；接下来必须用真实 health check 和 predict smoke 记录实际 endpoint。
+- 当前代码已有 `packages/actions/computer-use` Python action loop、manifest、safety、trace 和 tests。
+- 当前代码仍有 `src/runtime/computer-use` 与 `src/runtime/vision-sense/*computer-use*` 装配和执行逻辑；目标是把通用能力迁到 package，runtime 只做 host adapter。
+- 设计文档已明确 native extension 只直连 TUI Host，GUI 只通过 TUI Host 的 `gui.*` 参与展示和确认。
 
 ## 不可妥协原则
 
 - 用户级 browser 验收必须使用 Codex in-app browser，从真实可见入口开始；系统浏览器、macOS `open`、外部 Chrome 只能作为辅助诊断。
 - 每个 claimed success 都要能对应到实际文件改动、命令输出、browser/DOM/截图证据或明确的 blocked manifest；缺任何一项只能标 `partial` / `blocked`。
+- Computer Use 验收分层：L1 基础真实输入 smoke、L2 单 App 用户产物、L3 多 App 用户工作流。L1 通过后仍只能称为 capability smoke；最终 success 至少需要 L2，目标打通需要 L3。
 - 所有修改必须通用，不能为当前案例写硬编码补丁。
+- codex cli拓展的核心算法部分优先用python写，方便人类查看、修改
 - 代码路径保持唯一真相源：发现冗余链路时删除或合并旧链路，避免长期并行实现。
 - 单文件超过约 2000 行时必须拆分或登记拆分任务。
 - 已完成的 TODO 需要打勾，并补充 evidence、日期和最终状态。
@@ -44,138 +40,110 @@ SciForge 当前路线是 **反馈收件箱优先，Runtime Codex/Codex CLI 后�
 ## 必读文档
 
 - [`docs/README.md`](docs/README.md)：当前文档入口。
-- [`docs/Architecture.md`](docs/Architecture.md)：GUI-as-TUI-extension 总架构。
+- [`docs/Architecture.md`](docs/Architecture.md)：GUI-as-TUI-extension 总架构和拓展模块交互模型。
 - [`docs/TuiGuiProtocol.md`](docs/TuiGuiProtocol.md)：GUI 输入、只读投影和执行边界。
-- [`docs/FeedbackInboxDesignPrinciples.md`](docs/FeedbackInboxDesignPrinciples.md)：反馈收件箱设计原则。
-- [`docs/NativeExtensionOwnershipMap.md`](docs/NativeExtensionOwnershipMap.md)：provider route、verifier、repair 等能力归属。
+- [`docs/NativeExtensionOwnershipMap.md`](docs/NativeExtensionOwnershipMap.md)：provider route、verifier、repair、Computer Use 和 connector 能力归属。
 - [`docs/Usage.md`](docs/Usage.md)：当前启动、配置、运维和 workspace 产物说明。
+- [`packages/actions/computer-use/README.md`](packages/actions/computer-use/README.md)：Computer Use action provider 边界。
+- [`packages/actions/computer-use/vision_computer_use_agent_mvp.md`](packages/actions/computer-use/vision_computer_use_agent_mvp.md)：Computer Use MVP 模块化设计。
+- [`packages/actions/computer-use/KV_GROUND_SERVICE_GUIDE.md`](packages/actions/computer-use/KV_GROUND_SERVICE_GUIDE.md)：KV-Ground-8B 服务启动与调用。
+- [`packages/observe/vision/README.md`](packages/observe/vision/README.md)：vision-sense 边界。
 
-## 当前基线
+## 当前任务板：Computer Use TUI 拓展打通
 
-- 顶部已经有可见 `注释` 按钮和页面元素选择层。
-- 当前注释模式可以高亮目标、采集 target snapshot、生成本地 feedback bundle、保存到反馈收件箱。
-- 右键仍可打开原有单对象反馈评论表单。
-- 最近同步点 `bbde383` 已推送到 `origin/dev`，包含当前工作区状态和基础多对象引用改动。
-- 现有工作台主聊天仍是执行/研究入口；接下来要把注释讨论从主聊天入口中解耦，统一进入全局侧栏。
+### CU-00 Preflight 与真实环境确认
 
-## 当前任务板：内置浏览器运行时
+- [ ] 记录 KV-Ground endpoint，优先验证 `curl http://127.0.0.1:18081/health`，保存返回摘要。
+- [ ] 用一张本机截图走 `/predict/` smoke，确认 `coordinates`、`image_size` 和坐标系符合输入图片尺寸。
+- [ ] 确认真实 desktop bridge 配置：`SCIFORGE_VISION_DESKTOP_BRIDGE=1`，并明确是否允许 shared system input。
+- [ ] 真实输入前绑定低风险目标窗口；没有独立 input adapter 时，必须显式记录 shared system input acknowledgement。
+- [ ] 建立本轮输出目录，例如 `.sciforge/vision-runs/cu-tui-extension-*`，所有截图、trace、audit refs 只写 file refs，不内联 base64。
 
-目标：把 SciForge 的浏览器自动化从“单次 Playwright provider 调用”升级成 Codex-like browser runtime capability。TUI/Codex runtime 拥有浏览器 session、tab、action、snapshot、trace 和安全策略；GUI 只展示 browser projection 和 refs，不做网页任务推理、provider route 或 prompt assembly。
+### CU-01 Package 边界收敛
 
-设计文档：[`docs/BrowserRuntimeArchitecture.md`](docs/BrowserRuntimeArchitecture.md)。
+- [ ] 在 `packages/actions/computer-use` 中定义或提升稳定 `ComputerUseRequest` / `ComputerUseResult` / `ComputerUseHostPorts` contract。
+- [ ] 将通用 window target、capture、coordinate mapping、scheduler、executor、trace handoff 策略从 `src/runtime/computer-use` 逐步迁到 `packages/actions/computer-use`，或为迁移登记明确子任务。
+- [ ] 保留 `src/runtime` 为薄 Host adapter：只做 config loading、`GatewayRequest` 转换、host port 注入、runtime event 和 `ToolPayload` 包装。
+- [ ] 更新 action provider manifest，使对外 surface 表达 `runTask(request, hostPorts)`、refs-first result、approval request 和 trace contract。
+- [ ] 删除或合并迁移后冗余链路，避免 `vision-sense runtime loop` 与 `computer-use action provider` 长期并行拥有执行逻辑。
 
-### BR-01 Codex-like Browser Runtime Contract
+### CU-02 Codex CLI / TUI Planner
 
-- [x] 总结 Codex in-app browser 能力并映射到 SciForge browser runtime。
-- [x] 定义 `browser_runtime` capability manifest，覆盖 session、tab、navigation、snapshot、action、logs 和 safety。
-- [x] 在 `packages/observe/web` 实现 BrowserRuntime command/risk/trace/projection helper。
-- [x] 根据 Claude Code 反馈补齐硬边界：`BrowserRuntimeStableRef`、`BrowserRuntimePageQuery` 只读 DSL、frames/dialog/network/storage/idle/media/upload command surface 和风险策略。
-- [x] 补齐 `playwright_browser_automation` action queue 的 `scroll` 动作，避免简单滚动退回系统级 Computer Use。
-- [x] 更新 capability registry、web observe package exports 和 scenario builder 默认 manifest 列表。
-- [x] 增加真实可操作的 `内置浏览器` workbench：URL bar、iframe 预览、后退、刷新、读取同源页面状态、页面区域标注、annotation pin、复合 StableRef 和 `/browser ...` refs-first 命令生成。
-- [x] 增加 targeted tests：Codex feature matrix、风险确认、refs-first trace、scroll action projection 和 registry discovery。
-- [x] 验证 `git diff --check` 和 touched tests。
+- [ ] 明确 Planner contract：输入 `task`、compact observation、visible text、recent actions、verifier feedback；输出 exactly one generic action 或 `done=true`。
+- [ ] Planner 由 Codex CLI / TUI 文本 agent 负责，不从 GUI 读取 DOM/accessibility，也不输出坐标。
+- [ ] Planner 需要看图时，只能调用 sense provider 获取 observation summary 或 region detail；视觉模型可以作为 sense helper，不成为 action owner。
+- [ ] 增加 JSON schema validation：拒绝坐标、app-private shortcut、unsupported action、空 action 和高风险未标注 action。
+- [ ] Planner 失败时返回 structured failure 或 repair hint，不假装 GUI action 已执行。
 
-Evidence（2026-05-24）：
+### CU-03 KV-Ground Grounder 接入
 
-- `node --import tsx --test packages/observe/web/browser-runtime.test.ts packages/observe/web/mcp/playwright-browser.test.ts`：12 passed。
-- `node --import tsx --test packages/observe/web/browser-runtime.test.ts packages/observe/web/mcp/playwright-browser.test.ts src/ui/src/app/BrowserRuntimePage.test.tsx`：18 passed。
-- `npm run smoke:capability-manifest-registry`：ok，capabilityManifests=19。
-- `git diff --check`：passed。
-- Claude Code 反馈吸收：`docs/BrowserRuntimeArchitecture.md` 已从“6 子系统/P0-P2”压平为运行时层、能力层、协作层；M1-M6 单序列；新增 7 个硬问题：StableRef、DOM→源码映射、prompt injection、验证闭环、iframe/shadow DOM、上下文经济学、eval/telemetry。
-- Codex in-app browser 验收：打开 `http://127.0.0.1:5173/`，进入侧栏 `内置浏览器` 页面，确认真实 workbench 存在 URL 输入、iframe preview、读取状态、标注页面和终端等价命令；打开 `http://127.0.0.1:5173/` 后 iframe 可见渲染；拖拽页面区域生成标注 draft，保存后显示 annotation pin、annotation list 和 `/browser annotate ... --snapshot --dom --refs-first` 命令。
-- 当前 Web GUI 版本明确标注硬边界：跨域 DOM、console、network 和截图不由 GUI 读取，必须通过 TUI `browser_runtime` provider 生成 refs；未来如果要突破 iframe/CSP 限制，需要桌面壳 `WebContentsView` 或独立 Chromium surface。
-- `npm run typecheck` 已尝试；当前 worktree 依赖安装被 `@homebridge/node-pty-prebuilt-multiarch` 证书/预编译下载问题阻塞，改用主 checkout `node_modules` 后 typecheck 暴露大量 dev 基线/依赖链接错误，包括 `@electron/asar`、`ws`、`@sciforge-ui/runtime-contract/codex-realtime-session`、feedback status union 和现有 `ScenarioBuilderPanel` package export 解析问题；不作为本轮 browser runtime 完成证据。
+- [ ] 将 KV-Ground endpoint 配入 Computer Use grounder provider，默认使用 inline image upload，除非明确存在共享路径映射。
+- [ ] Grounder 输入只接受 screenshot ref + target description；输出 window-local / crop-local 坐标、confidence、raw text 和 diagnostics。
+- [ ] 实现或验证 coarse-to-fine：整窗 coarse region -> focus crop -> KV-Ground fine point -> executor coordinate mapping。
+- [ ] 记录失败诊断：health failure、predict timeout、image path not found、base64 upload failure、坐标越界、低置信度。
+- [ ] 确保 trace 只保存 refs、sha256、尺寸、target description、coordinates、provider metadata，不保存 raw screenshot payload。
 
-## 当前任务板：全局注释侧栏
+### CU-04 基础真实输入 smoke
 
-### AN-01 全局侧栏信息架构
+- [ ] 准备 disposable 本地 GUI smoke 页面，包含输入框、按钮和结果文本，避免外部账号/API/网络副作用。
+- [ ] 用真实 Computer Use 执行：打开或聚焦目标窗口 -> 点击输入框 -> 输入 `SciForge Computer Use smoke <timestamp>` -> 点击按钮 -> 验证结果文本可见。
+- [ ] 全流程必须经过 TUI Host -> `computer_use.runTask(request, hostPorts)`，不能直接用 GUI、Playwright、DOM、accessibility tree 或 app-specific shortcut 偷跑。
+- [ ] 记录 trace refs、before/after screenshot refs、focus crop refs、grounding metadata、executor lease、verifier feedback 和 final result。
+- [ ] 该任务只标记 `capability-smoke-passed`，不得作为 Computer Use 最终用户级 success。
+- [ ] 如果真实输入被权限、焦点、shared input policy 或 desktop bridge 阻断，返回 `blocked` manifest，并写清楚阻断归属。
 
-- [x] 设计并实现全局 `AnnotationSidebar` 容器，在任何页面打开后固定显示在右侧或等价侧栏区域。
-- [x] 顶部展示反馈流状态、当前页面 URL/route 和退出/收起控制。
-- [x] 侧栏中展示已引用对象 chips，chip 显示 `※n`、对象标题、类型和移除按钮。
-- [x] 侧栏底部提供简洁输入框和保存/放弃/继续澄清入口。
-- [x] 工作台主 composer 在注释模式下不承载注释讨论，只显示必要提示或保持不干扰。
-- [x] 侧栏输入和消息列表复用主对话 composer/message/stream 模型的能力边界，避免实现第二套聊天状态机。
+### CU-05 用户级 Computer Use 验收
 
-### AN-02 统一对象引用采集
+- [ ] 设计一个低风险、可重复的单 App 用户产物任务：例如用 PowerPoint、Keynote、LibreOffice Impress 或可离线运行的 slide editor 制作一页 PPT，标题为 `SciForge Computer Use Acceptance <timestamp>`，包含 3 个要点，并保存到 `.sciforge/vision-runs/<run-id>/acceptance-slide.*`。
+- [ ] 设计一个多 App 用户工作流：例如 Browser 打开本地资料页或安全网页 -> Computer Use 提取可见要点 -> 切换到 slide app 生成一页 PPT -> Finder/文件对话框保存 -> 回到 GUI 展示 artifact refs 和最终截图 refs。
+- [ ] 用户级任务仍必须经过 TUI Host -> `computer_use.runTask(request, hostPorts)`；Planner 由 Codex CLI / TUI 文本 agent 负责，Grounder 用 KV-Ground，Observer/Verifier 用 sense provider 和 layered verifier。
+- [ ] 验收证据必须包含：任务文本、App/window 切换 trace、before/after screenshots、focus crops、grounding diagnostics、executor lease、最终 artifact ref、最终可见截图、verifier verdict 和 TUI Host 的 `gui.present` 展示记录。
+- [ ] 如果 PPT app、文件保存、跨 App 切换或系统权限不可用，返回 `blocked` manifest；不得降级为 Playwright/DOM/API 生成文件后宣称 Computer Use 成功。
 
-- [x] 注释模式左键点选任意页面对象，连续加入侧栏引用区并分配稳定 `※n` token。
-- [x] 右键保留“添加精准反馈评论”的能力，但默认路径是加入侧栏引用区。
-- [x] 支持引用工作台内部对象，包括主聊天消息、结果面板、左侧项目树、设置按钮和反馈收件箱条目。
-- [x] 移除或迁移当前“点选后写入主 composer”的工作台专属行为，避免两套注释入口。
-- [x] 引用对象继续使用 `SciForgeReference` 和现有 scrub/safe reference 策略。
+### CU-06 TUI-GUI 通信验收
 
-### AN-03 Intent-First 讨论与动作协议
+- [ ] GUI 触发路径只发送 terminal-equivalent text，不直接调用 Computer Use module。
+- [ ] TUI Host 接到 Computer Use result 后用 `gui.present` 展示 trace/ref 摘要；GUI 只渲染，不推断 completion/confidence。
+- [ ] 构造一个高风险 dry-run 或 blocked action，验证 Computer Use 返回 `needs-confirmation` / `approvalRequest`，TUI Host 再调用 `gui.ask_user`。
+- [ ] 用户未确认时不得执行真实高风险动作；确认后必须以新的受控调用携带 `approvalRef`。
+- [ ] Codex in-app browser 验收：从 SciForge 可见入口触发 Computer Use 任务，看到 trace/ref 展示和必要的确认交互。
 
-- [x] 给注释侧栏建立反馈状态机：drafting、clarifying、ready-to-save、saved、discarded。
-- [x] 定义 `annotation-plan-only` conversation envelope，复用主对话 kernel 的 session、references、guidance queue 和 structured events。
-- [x] 为主 conversation kernel 增加 annotation-plan-only policy：只允许澄清、选择题、摘要和 feedback draft，不允许进入执行/repair/code path。
-- [x] 定义 `annotation-quick-action` lane：低风险小改动可从侧栏启动，但不能 GitHub sync、commit、push、PR、merge 或 repair handoff。
-- [x] 明确复杂 side effects 边界：范围不清或高风险请求必须进收件箱确认和审计。
-- [x] 允许 agent 生成澄清问题、选择题和需求摘要，但输出必须保持为 feedback draft。
-- [x] 选择题 UI 支持 2-3 个推荐选项和自由输入，适合“像 Claude 一样”连续澄清。
-- [x] 用户可以随时跳过澄清，直接把当前描述和引用保存为反馈草稿。
+### CU-07 Verification 与回归
 
-### AN-04 反馈收件箱沉淀
+- [ ] Python package tests：`python -m pytest packages/actions/computer-use/tests`。
+- [ ] Vision tests：至少跑 KV-Ground、coordinates、trace contract 相关 tests，或记录现有阻塞。
+- [ ] TypeScript targeted tests：覆盖 runtime adapter、Computer Use policy、trace output、GUI communication guard。
+- [ ] `git diff --check`。
+- [ ] 如改动 runtime/provider 路径，运行 `npm run smoke:runtime-provider-preflight` 并证明没有 silent fallback。
+- [ ] 最终打通前，不得声明 success；只要缺少真实 trace refs、截图 refs 或可见 GUI 展示证据，就标 `partial`。
 
-- [x] 保存时生成结构化 feedback record：引用对象列表、原始用户描述、澄清问答摘要、修改建议、验收标准、页面 URL、selector/DOM path、截图 refs。
-- [x] 在反馈收件箱中区分 `annotation-plan` 来源和传统单对象 comment。
-- [x] 反馈条目默认处于 open/draft-ready 状态，不自动 repair。
-- [x] 从反馈收件箱启动 repair/code 必须有显式按钮和确认边界。
-- [x] GitHub issue sync 只发送 scrubbed summary 和公开 evidence refs，不发送 raw transcript 或 secret。
+### CU-08 文档和迁移收口
 
-### AN-05 视觉与交互细节
+- [ ] 更新 `docs/Usage.md` 的 Computer Use 操作说明，写清 KV-Ground endpoint、desktop bridge、shared input 风险和 trace 输出。
+- [ ] 如新增 contract 或 host port，更新 `docs/Architecture.md` / `docs/NativeExtensionOwnershipMap.md` / package README。
+- [ ] 清理旧文案中 “vision-sense 触发真实执行” 的模糊表述，改成 “Computer Use action provider 消费 vision-sense”。
+- [ ] 如果 `docs/native-extension-ownership-map.json` 缺失仍阻塞 smoke，补齐或登记为单独 manifest 修复任务。
 
-- [x] 侧栏宽度、层级和移动端行为不能遮挡关键页面内容；窄屏可转为底部 sheet。
-- [x] 注释模式 hover highlight、selected outline 和侧栏 chips 需要颜色/编号一致。
-- [x] 提供清晰文案：“先说清楚，再选择下一步”。
-- [x] 支持 Esc 退出注释模式，但不丢弃已写草稿，除非用户选择放弃。
-- [x] 保存成功后给出反馈收件箱入口和本地 evidence 状态。
+## 已完成能力：内置浏览器运行时
 
-### AN-06 数据与持久化
+目标：把浏览器能力收敛为 TUI/Codex runtime 拥有的 `browser_runtime`，GUI 只展示页面投影、注释入口和终端等价命令。
 
-- [x] 为注释侧栏草稿定义最小持久化模型，避免刷新或页面切换时丢失关键草稿。
-- [x] 草稿中保存引用对象、用户输入、澄清问答和 evidence refs，避免保存 raw DOM 或敏感 provider/runtime 内容。
-- [x] 如果页面切换，侧栏保留草稿并标注原始页面 URL。
-- [x] 截图和 target evidence 继续复用现有 `captureFeedbackScreenshotEvidence` / feedback bundle 写入路径。
+- [x] 定义 `browser_runtime` manifest 与 command/risk/trace/projection helper。
+- [x] 建立 refs-first 快照链路：截图、DOM、console、network、下载和调试证据不进入 workspace state base64。
+- [x] 实现内置浏览器 workbench：URL 输入、后退、刷新、页面状态、区域标注、annotation pin 和 `/browser ...` 命令。
+- [x] 明确硬边界：Web GUI/iframe 不能承担真实浏览器能力；跨域、下载、DevTools、右键菜单、登录态和系统输入必须由 Electron/Playwright/Chrome extension/Computer Use runtime 承担。
 
-### AN-07 测试与验证
+Evidence（2026-05-24）：`packages/observe/web/browser-runtime.test.ts`、`packages/observe/web/mcp/playwright-browser.test.ts`、`src/ui/src/app/BrowserRuntimePage.test.tsx` targeted tests 通过；`npm run smoke:capability-manifest-registry` 通过；`git diff --check` 通过。
 
-- [x] Unit/model tests：引用加入、移除、token 分配、草稿状态机、quick-action 风险判断和 plan-only side-effect guard。
-- [x] Component tests：侧栏渲染、选择题、保存/放弃、工作台和非工作台一致行为。
-- [x] Feedback inbox tests：annotation-plan record 入队、展示、repair 显式启动边界。
-- [x] `git diff --check`。
-- [x] `npm run typecheck`，如被已有无关错误阻塞，需要记录具体错误和归属。
-- [x] Codex in-app browser 验收：在工作台页面和至少一个非工作台页面各完成一次点选、多对象讨论、保存到反馈收件箱。
-
-### AN-08 文档与收敛
-
-- [x] 更新 `docs/FeedbackInboxDesignPrinciples.md`，说明全局注释侧栏和 feedback inbox 的关系。
-- [x] 更新 `docs/Architecture.md` 或 `docs/TuiGuiProtocol.md`，说明反馈侧栏、quick action 和收件箱执行边界。
-- [x] 删除或归档与主 composer 注释讨论相关的旧文案，避免用户误解。
-- [x] 更新 smoke/verification docs，明确 browser 验收必须覆盖工作台和非工作台页面。
-
-### AN-09 Evidence（2026-05-24）
-
-- [x] Targeted tests passed: `node --import tsx --test src/ui/src/feedback/AnnotationSidebar.test.tsx src/ui/src/feedback/annotationPlanModel.test.ts src/ui/src/feedback/FeedbackCaptureLayer.test.tsx src/ui/src/app/sciforgeApp/FeedbackInboxPage.test.ts src/ui/src/api/sciforgeToolsClient.policy.test.ts src/ui/src/app/chat/runOrchestrator.targetInstance.test.ts src/ui/src/themeTokens.test.ts`（pass 54 / skipped 13 / fail 0）。
-- [x] `git diff --check` passed。
-- [x] `npm run typecheck` 已执行并记录阻塞：当前失败来自既有 desktop preload / production shell planner / workspace-directory-picker test / ShellPanels sidebar project + sidebar model test / smoke-sidebar-project-switch / vite config 类型问题，和本轮 annotation sidebar 改动无直接归属。
-- [x] Codex in-app browser 验收通过：工作台页面和反馈收件箱页面都完成了注释侧栏点选、保存，并在反馈收件箱中看到 `annotation-plan` record。
-- [x] 侧栏遮挡修复已验收：桌面端 `AnnotationSidebar` 为 right sidecar，latest browser geometry 显示 `mainRight=630`、`sidebarLeft=630`、`position=relative`、`overlap=false`、`.feedback-layer` `pointer-events=none/background=transparent`。
-- [x] 侧栏输入复用 `ChatComposer` shell 和 `MessageContent` 展示，隐藏上传/点选/收起/resize 等执行型 chrome，保留主 composer 的输入、快捷发送和 disabled 边界。
-- [x] 侧栏澄清回合接入 `runPromptOrchestrator` 的 `annotation-plan-only` 分支，只把 intent draft 写回侧栏，不污染主 workbench session。
-- [x] `runPromptOrchestrator` 增加 `annotation-plan-only` 本地 policy：看到 turnMode/envelope 后只返回 plan draft event/message/run，不做 target lookup、preflight compaction、runtime transport 或 repair stage；malformed envelope fail-closed。
-- [x] `sendSciForgeToolMessage` 增加 transport fail-closed guard：任何漏到 Codex Runtime transport 的 `annotation-plan-only` 请求直接拒绝，测试证明 turnMode-only、envelope-only 和 malformed envelope 都未发生 fetch。
-- [x] 反馈侧栏新增 action ladder：保存反馈、预览修改、应用小改动、复杂改动进收件箱；小改动使用独立 quick-action 风险判断和 action log。
-- [x] 清理旧 `.annotation-field` CSS，并修正 light theme 下 `.feedback-layer` 不再绘制全屏 overlay，避免视觉遮挡页面。
-- [x] Codex in-app browser 复验：侧栏澄清展示 `注释计划` stream/event 和 `runtime transport ... skipped`，保存后反馈收件箱出现 `annotation-plan local feedback-mpj5oebe-ouqn2h`。
+后续只保留两条主线：一是让 GUI 的浏览器区更精炼、中文化、只显示必要状态；二是把真实能力补到宿主层，包括 Electron `WebContentsView`、Playwright/CDP、右键菜单、DevTools、download/dialog/frame/query/assertion/verifier。
 
 ## 验证规则
 
 - 文档或任务板修改：`git diff --check`。
-- 代码修改：`npm run typecheck`、touched areas 的 targeted tests、`git diff --check`。
-- 反馈收件箱、GitHub sync 或 repair backend 修改：再跑匹配 touched area 的 targeted tests，并用 Codex in-app browser 完成至少一条用户级验收。
+- Computer Use package 修改：`python -m pytest packages/actions/computer-use/tests`、相关 TypeScript targeted tests、`git diff --check`。
+- KV-Ground 修改或接入：必须记录 `/health` 和至少一次 `/predict/` 真实结果。
+- Computer Use 最终验收：必须完成至少一个 L2 用户产物任务；目标打通需完成 L3 多 App 工作流，且保留 artifact refs、trace refs、截图 refs、verifier verdict 和 `gui.present` 证据。
+- GUI 通信修改：必须用 Codex in-app browser 从真实可见入口验收 `gui.present` / `gui.ask_user` 行为。
 - Runtime/Codex CLI/provider 修改：再跑 `npm run smoke:runtime-provider-preflight`，并证明 Codex CLI backend 被调用，不能 silent fallback 到当前 Codex App 或其他 provider。
 - Release 或大范围迁移：再跑 `npm run smoke:no-hardcoded-success`、`npm run smoke:no-legacy-paths`、`npm run smoke:runtime-codex-truth-source`、`npm run smoke:runtime-provider-preflight`、`npm run verify:single-agent-final`；真正 release 必须跑 `npm run verify:single-agent-release`，必要时 `npm run test` 和 `npm run build`。
 
@@ -189,6 +157,7 @@ Evidence（2026-05-24）：
 
 ## 历史归档说明
 
+- 旧全局注释侧栏 active task board 已从当前执行面删除；状态由 Git history、相关 docs 和 commits 保留。
 - 旧 Codex realtime session、terminal viewer、repair terminal 和真实多轮压测任务已从 active board 删除；当前状态由 Git history、相关 docs 和 commits 保留。
 - `docs/archive/` 保存旧 active task boards 和 detailed run histories。
 - `docs_old/` 保存迁移前设计快照。

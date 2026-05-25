@@ -316,6 +316,7 @@ export async function sendSciForgeToolMessage(
   const presented = attachRuntimeGuiPresentationToResponse(normalized, result);
   const codexSessionId = codexSessionIdFromRuntimeResult(result) ?? codexSessionIdFromRuntimeEvents(runtimeEvents);
   if (!codexSessionId) return presented;
+  const conversationLaneId = runtimeConversationLaneId(input);
   const codexThreadRef = codexThreadObjectReference(codexSessionId, commandId);
   return {
     ...presented,
@@ -324,6 +325,8 @@ export async function sendSciForgeToolMessage(
       raw: {
         ...(isRecord(presented.run.raw) ? presented.run.raw : {}),
         codexSessionId,
+        conversationLaneId,
+        runtimeResumePolicy: runtimeResumePolicy(input),
       },
       objectReferences: [
         ...(presented.run.objectReferences ?? []),
@@ -529,7 +532,7 @@ function buildCodexRuntimeStreamRequest(input: {
   const profile = config.runtimeProfile?.trim() || DEFAULT_RUNTIME_PROFILE;
   const provider = config.modelProvider.trim() || UNCONFIGURED_RUNTIME_PROVIDER;
   const model = config.modelName.trim() || UNCONFIGURED_RUNTIME_MODEL;
-  const codexSessionId = selectedCodexSessionId(input.input) ?? latestCodexSessionId(input.input.runs);
+  const codexSessionId = codexSessionIdForRuntimeResume(input.input);
   const commandText = buildCodexRuntimeCommandText(input, { resumeRequested: Boolean(codexSessionId) });
   const attemptId = `${input.commandId}-attempt-1`;
   return {
@@ -571,6 +574,21 @@ function buildCodexRuntimeStreamRequest(input: {
       ],
     },
   };
+}
+
+function codexSessionIdForRuntimeResume(input: SendAgentMessageInput): string | undefined {
+  const policy = runtimeResumePolicy(input);
+  if (policy === 'none') return undefined;
+  const selectedSessionId = selectedCodexSessionId(input);
+  if (selectedSessionId) return selectedSessionId;
+  if (policy === 'explicit-reference-only') return undefined;
+  return latestCodexSessionIdForConversationLane(input);
+}
+
+function runtimeResumePolicy(input: SendAgentMessageInput): NonNullable<SendAgentMessageInput['runtimeResumePolicy']> {
+  if (input.runtimeResumePolicy) return input.runtimeResumePolicy;
+  if (input.turnMode === 'annotation-quick-action') return 'none';
+  return 'same-conversation-lane';
 }
 
 function runtimeCodexEligibleReferenceSummary(input: SendAgentMessageInput) {
@@ -663,6 +681,8 @@ function assertCodexRuntimeStreamRequestBoundary(request: ReturnType<typeof buil
     'transportAgentContext',
     'turnMode',
     'conversationEnvelope',
+    'conversationLaneId',
+    'runtimeResumePolicy',
   ];
   const hits = forbidden.filter((key) => key in request);
   const audit = isRecord(request.auditMetadata) ? request.auditMetadata : {};
@@ -692,12 +712,38 @@ function buildCodexRuntimeCommandText(
   ].join('\n\n');
 }
 
-function latestCodexSessionId(runs: SendAgentMessageInput['runs']): string | undefined {
-  for (const run of [...(runs ?? [])].reverse()) {
+function latestCodexSessionIdForConversationLane(input: SendAgentMessageInput): string | undefined {
+  const laneId = runtimeConversationLaneId(input);
+  for (const run of [...(input.runs ?? [])].reverse()) {
+    if (!runMatchesConversationLane(run, laneId)) continue;
     const sessionId = codexSessionIdFromRun(run);
     if (sessionId) return sessionId;
   }
   return undefined;
+}
+
+function runtimeConversationLaneId(input: SendAgentMessageInput): string {
+  const explicit = input.conversationLaneId?.trim();
+  if (explicit) return explicit;
+  if (input.sessionId?.trim()) return defaultSessionConversationLaneId(input.sessionId);
+  return `scenario:${input.scenarioId}`;
+}
+
+function defaultSessionConversationLaneId(sessionId: string) {
+  return `session:${sessionId}`;
+}
+
+function runMatchesConversationLane(
+  run: NonNullable<SendAgentMessageInput['runs']>[number],
+  laneId: string,
+) {
+  const raw = isRecord(run.raw) ? run.raw : {};
+  const runLaneId = asString(raw.conversationLaneId)
+    ?? asString(raw.runtimeConversationLaneId)
+    ?? asString(raw.conversationLane);
+  if (runLaneId) return runLaneId === laneId;
+  if (!laneId.startsWith('session:')) return false;
+  return true;
 }
 
 function selectedCodexSessionId(input: SendAgentMessageInput): string | undefined {
@@ -1063,6 +1109,8 @@ function runtimeCodexFailedResponse(input: {
       status: 'failed',
       raw: {
         ...(isRecord(response.run.raw) ? response.run.raw : {}),
+        conversationLaneId: runtimeConversationLaneId(input.input),
+        runtimeResumePolicy: runtimeResumePolicy(input.input),
         codexRuntimeFailure: metadata,
         runtimeAudit: {
           foldedByDefault: true,

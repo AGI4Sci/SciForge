@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "feedbackId": "feedback-mpjf3cuq-k8wtmx",
+  "visibility": "public",
+  "folderRef": "repair-evidence/public/feedback-screenshots/feedback-mpjf3cuq-k8wtmx",
+  "assets": [
+    {
+      "schemaVersion": 1,
+      "id": "feedback-evidence-feedback-mpjf3cuq-k8wtmx-scrubbed-annotated",
+      "feedbackId": "feedback-mpjf3cuq-k8wtmx",
+      "kind": "scrubbed-annotated-screenshot",
+      "ref": "repair-evidence/public/feedback-screenshots/feedback-mpjf3cuq-k8wtmx/scrubbed-annotated.png",
+      "sourceRef": ".sciforge/feedback/feedback-mpjf3cuq-k8wtmx/annotated-screenshot.data-url",
+      "mediaType": "image/png",
+      "width": 1757,
+      "height": 1329,
+      "bytes": 63801,
+      "sha256": "e43a58acb95fcba7146ee74a15f24eb7ce44ec6a5624ba4b88f738e60d4fc710",
+      "createdAt": "2026-05-24T06:49:37.032Z",
+      "localOnly": false,
+      "visibility": "public",
+      "uploadStatus": "local",
+      "includeForAgent": false,
+      "metadata": {
+        "scrubPolicy": "Inline data URL omitted from GitHub and public issue bodies; annotated screenshot pixels are retained as captured evidence."
+      }
+    }
+  ],
+  "updatedAt": "2026-05-24T06:49:37.106Z"
+}

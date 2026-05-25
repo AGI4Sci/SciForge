@@ -16,12 +16,12 @@
 | Provider route                     | Codex provider / MCP / tool 生态             | custom model provider、本地 provider proxy、MCP server、Codex tool                                                                   | Runtime 只审计 profile/provider/model/workspace/command id 并 fail closed；不得静默 fallback 到 OpenAI。  |
 | Verifier                           | Codex 原生 verifier tool / skill             | tool、skill、MCP verifier                                                                                                         | Verifier 输出 evidence、verdict、critique 或 repair hint；GUI 不从 raw logs 推断 completion。             |
 | Skill promotion                    | Codex skill / plugin / MCP / slash command | Codex 原生扩展 artifact                                                                                                             | Workspace proposal 只是 staging，不是最终 promotion 目标。                                               |
-| External app connectors            | Codex TUI 原生 connector / tool / MCP / worker | `packages/connectors`、MCP resources/tools、tool-worker manifest/health/invoke、`/connectors ...` 文本命令                             | GUI 不直接调用飞书、微信、CLI、SDK 或桌面自动化；GUI 只发送文本、展示 refs/audit、收集确认。                                |
-| Computer Use                       | Sense plugin 加上上游 desktop bridge           | `packages/observe/vision`、`packages/actions/computer-use`、desktop bridge                                                        | React/UI 不执行 Computer Use；raw screenshot/log payload 只能进入折叠 audit/debug refs。                  |
+| External app connectors            | Codex TUI 原生 connector / tool / MCP / worker | `packages/connectors`、MCP resources/tools、tool-worker manifest/health/invoke、`/connectors ...` 文本命令                             | GUI 不直接调用飞书、微信、CLI、SDK、API 或桌面自动化；connector 只直连 TUI Host，GUI 只发送文本、展示 refs/audit、收集确认。        |
+| Computer Use                       | Codex TUI 原生 action provider + sense provider | `packages/actions/computer-use`、`packages/observe/vision`、desktop/remote/dry-run host ports                                     | Computer Use 只直连 TUI Host；React/UI 不执行 Computer Use；raw screenshot/log payload 只能进入折叠 audit/debug refs。 |
 | Dual-instance self-repair          | 默认退休；只有 Codex-native 形态可恢复                 | Codex 原生 repair workflow、skill/plugin 或 external supervisor                                                                     | 两个 SciForge app instance 不是默认 repair runtime。                                                  |
 
 
-边界规则：凡是改变任务能力、选择 provider、修复执行、验证真伪、提升 skill、计算可信度、判断 completion，或接触外部账号/API/消息/桌面 app 的功能，都属于 TUI/Codex 原生扩展生态。SciForge GUI 只贡献 presentation、confirmation、focus、folded audit/debug、只读 GUI resource tree 和终端等价文本。
+边界规则：凡是改变任务能力、选择 provider、修复执行、验证真伪、提升 skill、计算可信度、判断 completion，或接触外部账号/API/消息/桌面 app 的功能，都属于 TUI/Codex 原生扩展生态。SciForge GUI 只贡献 presentation、confirmation、focus、folded audit/debug、只读 GUI resource tree 和终端等价文本。拓展模块只直接和 TUI Host 通信；需要 GUI 展示或确认时，由 TUI Host 调用 `gui.present`、`gui.ask_user`、`gui.notify` 或 `gui.set_status`。
 
 ## 当前 packages 归属表
 
@@ -35,8 +35,8 @@
 | `packages/reasoning/conversation-policy`  | TUI    | policy                 | conversation/recovery/acceptance/context policy request-response                                                     | 属于 TUI 侧确定性策略。可以输出 decision、repair hint、context projection，但不展示 UI、不执行 provider。                                                         |
 | `packages/skills`                         | TUI    | catalog + capability   | `SKILL.md`、generated skill catalog、matching/runtime policy                                                           | Skill 是 TUI agent 可发现能力入口。GUI 若触发 skill 选择，只发送终端等价文本；不得读取 skill catalog 做自己的 ranking。                                                    |
 | `packages/observe`                        | TUI    | capability             | observe capability manifest、provider request/result、trace/evidence refs                                              | 只读观察能力，输出 auditable observation。不得修改 workspace 或外部环境；副作用执行转到 `packages/actions`。                                                         |
-| `packages/actions`                        | TUI    | capability             | action provider manifest、approval/safety/trace contract、execution result                                             | 会改变环境的 action provider。React/UI 不执行 action；GUI 只可收集确认或展示 trace/ref。                                                                      |
-| `packages/connectors`                     | TUI    | connector              | Codex tool / MCP / worker adapter、connector manifest、resource refs、draft/approval/audit contract                    | 第三方 app 扩展目录，例如飞书、微信、企业微信。连接器可以读外部资源或发起受控副作用；GUI 不 import connector，也不直接调用外部 SDK/CLI。                                      |
+| `packages/actions`                        | TUI    | capability             | action provider manifest、approval/safety/trace contract、execution result、host port contract                         | 会改变环境的 action provider。Computer Use 能力主体应收敛在这里；React/UI 不执行 action；GUI 只可由 TUI Host 编排来收集确认或展示 trace/ref。                               |
+| `packages/connectors`                     | TUI    | connector              | Codex tool / MCP / worker adapter、connector manifest、resource refs、draft/approval/audit contract                    | 第三方 app 扩展目录，例如飞书、微信、企业微信。连接器可以读外部资源或发起受控副作用；GUI 不 import connector，也不直接调用外部 SDK/CLI/API。                                   |
 | `packages/verifiers`                      | TUI    | capability             | verifier provider manifest、verification request/result、confidence、repair hints                                       | 验证真伪、置信度和 completion evidence 属于 TUI/Codex verifier 或 harness；GUI 只能渲染已给出的结果。                                                            |
 | `packages/workers`                        | TUI    | adapter                | standalone worker manifest、health、invoke transport                                                                   | Worker 是 capability 的部署/transport 形态，不是独立任务 owner。若某 worker 只服务单一 capability，可以保留独立发布，也可以后续并回对应 capability 包。                            |
 | `packages/contracts/runtime`              | shared | contract               | exported TypeScript types、schemas、pure validators/helpers                                                            | 跨 TUI、GUI、runtime 和 package 的纯契约。不得读取文件、调用 provider、import `src/runtime` 或 `src/ui` 私有实现。                                                |
@@ -65,15 +65,17 @@ Role 只描述模块通信契约，不描述目录名。当前可用 role 收敛
 
 ## 模块通信标准
 
-1. **TUI-owned package** 只通过 Codex 原生 plugin / skill / tool / MCP / provider / worker 机制暴露能力。输出必须是 refs-first：artifact refs、external refs、evidence refs、audit refs、verification result、repair hint 或 compact result payload。需要展示或收集输入时，由 TUI host 调用 `gui.present`、`gui.ask_user`、`gui.notify`、`gui.set_status` 或只读 `gui.read/search`，package 自身不得 import GUI implementation。
+1. **TUI-owned package** 只通过 Codex 原生 plugin / skill / tool / MCP / provider / worker 机制暴露能力，并且只直接和 TUI Host 通信。输出必须是 refs-first：artifact refs、external refs、evidence refs、trace refs、draft refs、approval request、audit refs、verification result、repair hint 或 compact result payload。需要展示或收集输入时，由 TUI host 调用 `gui.present`、`gui.ask_user`、`gui.notify`、`gui.set_status` 或只读 `gui.read/search`，package 自身不得 import 或调用 GUI implementation。
 2. **GUI-owned package** 只通过 GUI extension surface 暴露能力：`/gui/capabilities/presentation.json`、`/gui/renderers/<componentId>.json`、hot-region/resource tree 和 intent-based `gui.*` tools。GUI package 可以发出 view-local event、object ref、edit proposal 或 terminal-equivalent text suggestion，但不得执行 workspace/action/provider，也不得做 completion/verdict/confidence 判断。
 3. **Shared package** 只提供纯 contract、schema、validator、normalizer 和 deterministic helper。Shared package 不得 import TUI-owned 或 GUI-owned package，也不得依赖 `src/runtime/`**、`src/ui/**` 私有实现。
 4. **Host 装配层例外**：`src/runtime/`** 可以装配 TUI-owned + shared；`src/ui/**` 可以装配 GUI-owned + shared。TUI 和 GUI 之间仍只能走 `[TuiGuiProtocol.md](TuiGuiProtocol.md)` 中定义的文本输入、intent tools 和只读 GUI resource tree。
-5. **禁止双向注册**：TUI task capability 不注册 GUI renderer；GUI presentation catalog 不注册 TUI skill/tool/provider。两边可以通过 object refs、artifact refs、resource reads 和 `gui.present` 协作，但不能互相 import 或共享 ranking。
+5. **禁止双向注册**：TUI task capability 不注册 GUI renderer；GUI presentation catalog 不注册 TUI skill/tool/provider。两边可以通过 object refs、artifact refs、resource reads 和 TUI Host 发起的 `gui.present` 协作，但不能互相 import、互相调用或共享 ranking。
+6. **副作用先返回意图**：Computer Use、飞书/微信连接器、外部 API connector 等高风险或外部副作用模块，遇到发送、删除、支付、授权、发布、提交、桌面输入等动作时，应返回 `needs-confirmation`、`approvalRequest`、`draftRef` 或 `auditRef`。TUI Host 负责调用 `gui.ask_user` 收集确认，并在确认后发起新的受控调用。
+7. **Computer Use 用户级验收**：一次点击输入框的 smoke 只能证明基础链路。最终 success 至少需要真实用户产物，例如制作并保存一页 PPT；目标打通需要多 App 工作流和 refs-first 证据链。GUI 不因参与展示或确认而拥有 Computer Use 执行权。
 
 最小可靠发现模型：
 
 1. TUI 任务能力通过 Codex 原生 mechanisms 发现。GUI 只发送 `/capabilities search|expand|plan|explain` 文本。
 2. GUI 展示能力通过 `/gui/capabilities/presentation.json` 和 `/gui/renderers/<componentId>.json` 只读暴露。TUI 用 `gui.read/search` 发现，用 `gui.present` 表达展示意图。
-3. 外部 app 连接器通过 TUI 原生 connector/tool/MCP/worker 发现；GUI 只发送 `/connectors ...` 文本，并通过 `gui.ask_user` 收集高风险确认。
+3. 外部 app 连接器和 Computer Use 通过 TUI 原生 connector/tool/MCP/worker/action provider 发现；GUI 只发送 `/connectors ...`、`/computer-use ...` 等终端等价文本。高风险确认由 TUI Host 调用 `gui.ask_user` 收集，connector/action provider 不直接调用 GUI。
 4. 这些目录不互相注册、不互相 import、不共享 ranking。这样可以避免 GUI 变成第二个 agent，也避免 TUI 依赖 React 内部实现。

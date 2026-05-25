@@ -39,6 +39,7 @@ interface AnnotationSidebarProps {
   onSendToInbox: () => void;
   onApplySmallChange: () => void;
   onOpenInbox: () => void;
+  planningRunning?: boolean;
   quickActionRunning?: boolean;
   streamEvents?: AgentStreamEvent[];
 }
@@ -61,6 +62,7 @@ export function AnnotationSidebar({
   onSendToInbox,
   onApplySmallChange,
   onOpenInbox,
+  planningRunning = false,
   quickActionRunning = false,
   streamEvents = [],
 }: AnnotationSidebarProps) {
@@ -74,14 +76,18 @@ export function AnnotationSidebar({
   const streamCounts = streamEventCounts(streamEvents);
   const canSave = Boolean(draft && draft.status !== 'saved' && (draft.references.length || draft.description.trim() || draft.messages.length));
   const quickActionAssessment = draft ? assessAnnotationQuickAction(draft) : null;
-  const canApplySmallChange = Boolean(draft && draft.status !== 'saved' && quickActionAssessment?.eligible && !quickActionRunning);
+  const canApplySmallChange = Boolean(draft && draft.status !== 'saved' && quickActionAssessment?.eligible && !planningRunning && !quickActionRunning);
   const statusLabel = draft?.status === 'saved'
     ? '已保存'
-    : draft?.status === 'ready-to-save'
-      ? '可保存'
-      : draft?.status === 'clarifying'
-        ? '澄清中'
-        : '草稿';
+    : quickActionRunning
+      ? '小改动运行中'
+      : planningRunning
+        ? '侧栏整理中'
+        : draft?.status === 'ready-to-save'
+          ? '可保存'
+          : draft?.status === 'clarifying'
+            ? '澄清中'
+            : '草稿';
 
   function submitClarification() {
     if (!draft || !draft.description.trim()) return;
@@ -177,7 +183,7 @@ export function AnnotationSidebar({
         <ChatComposer
           expanded
           input={draft?.description ?? ''}
-          isSending={false}
+          isSending={planningRunning}
           composerHeight={118}
           referencePickMode={false}
           pendingReferences={[]}
@@ -200,7 +206,9 @@ export function AnnotationSidebar({
           showResizeHandle={false}
           copy={{
             placeholder: '描述你希望哪里变化、对象之间有什么关系...',
+            sendingPlaceholder: '侧栏正在整理；主聊天和其他会话仍可并行发送...',
             sendLabel: '整理',
+            sendingLabel: '整理中',
           }}
         />
         <div className="annotation-action-ladder" aria-label="反馈下一步">

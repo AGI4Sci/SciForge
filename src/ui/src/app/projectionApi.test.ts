@@ -170,6 +170,40 @@ test('ProjectionApi normalizes status token separators from runtime projections'
   assert.doesNotMatch(JSON.stringify(view), /RAW_RESPONSE_SHOULD_NOT_RENDER/);
 });
 
+test('conversation projection map prefers the explicitly focused run over current/latest projections', () => {
+  const session = testSession({
+    runs: [{
+      id: 'run-a',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'first lane run',
+      response: 'run a response',
+      createdAt: '2026-05-17T00:00:00.000Z',
+    }, {
+      id: 'run-b',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'second lane run',
+      response: 'run b response',
+      createdAt: '2026-05-17T00:00:01.000Z',
+    }],
+    materializedConversationProjections: {
+      currentRunId: 'run-b',
+      activeRunId: 'run-b',
+      latest: projectionFixture('run-b', 'Latest projection'),
+      projections: {
+        'run-a': projectionFixture('run-a', 'Focused run projection'),
+        'run-b': projectionFixture('run-b', 'Current run projection'),
+      },
+    } as never,
+  } as Partial<SciForgeSession> & { materializedConversationProjections: unknown });
+
+  const projection = conversationProjectionForSession(session, session.runs[0]);
+
+  assert.equal(projection?.activeRun?.id, 'run-a');
+  assert.equal(projection?.visibleAnswer?.text, 'Focused run projection');
+});
+
 test('completion-candidate salvage creates recoverable projection without promoting raw ToolPayload to success', () => {
   const session = testSession({
     runs: [{
@@ -427,6 +461,25 @@ function testSession(overrides: Partial<SciForgeSession> = {}): SciForgeSession 
     versions: [],
     hiddenResultSlotIds: [],
     ...overrides,
+  };
+}
+
+function projectionFixture(runId: string, text: string) {
+  return {
+    schemaVersion: 'sciforge.conversation-projection.v1',
+    conversationId: 'conversation-projection-map',
+    visibleAnswer: {
+      status: 'satisfied',
+      text,
+      artifactRefs: [],
+    },
+    activeRun: { id: runId, status: 'satisfied' },
+    artifacts: [],
+    executionProcess: [],
+    recoverActions: [],
+    verificationState: { status: 'verified' },
+    auditRefs: [],
+    diagnostics: [],
   };
 }
 

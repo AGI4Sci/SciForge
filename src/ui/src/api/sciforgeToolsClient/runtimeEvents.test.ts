@@ -494,6 +494,81 @@ test('Runtime Codex gui.present stores event session lineage for selected artifa
   assert.match(String(secondBody.commandText ?? ''), /^Continue the active Runtime Codex session\./);
   assert.match(String(secondBody.commandText ?? ''), /artifact:live-selected-report/);
 });
+
+test('Runtime Codex annotation quick action starts a fresh native thread even with selected lineage', async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies: Array<Record<string, unknown>> = [];
+  const previousCodexSessionId = '019e4f00-0000-7000-9000-annotationold';
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+      return new Response([
+        'event: done\n',
+        'data: {"type":"done","status":"done","message":"ok"}\n\n',
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      turnMode: 'annotation-quick-action',
+      conversationLaneId: 'annotation:session-test:draft-quick:quick-action',
+      runtimeResumePolicy: 'none',
+      conversationEnvelope: {
+        schemaVersion: 'sciforge.annotation-quick-action-envelope.v1',
+        kind: 'annotation-quick-action',
+        draftId: 'draft-quick',
+      },
+      prompt: 'Apply a small local wording tweak',
+      references: [{
+        id: 'ref-selected-report',
+        kind: 'task-result',
+        title: 'Selected report',
+        ref: 'artifact:selected-report',
+        runId: 'run-selected-report',
+        payload: {
+          currentReference: {
+            id: 'selected-report',
+            ref: 'artifact:selected-report',
+            runId: 'run-selected-report',
+            provenance: { dataRef: '.sciforge/artifacts/selected-report.md' },
+          },
+        },
+      }],
+      artifacts: [{
+        id: 'selected-report',
+        type: 'research-report',
+        producerScenario: 'literature-evidence-review',
+        schemaVersion: '1',
+        dataRef: '.sciforge/artifacts/selected-report.md',
+        metadata: { runId: 'run-selected-report' },
+      }],
+      runs: [{
+        id: 'run-selected-report',
+        scenarioId: 'literature-evidence-review',
+        status: 'completed',
+        prompt: 'create selected report',
+        response: 'selected report',
+        createdAt: '2026-05-19T00:00:00.000Z',
+        completedAt: '2026-05-19T00:00:01.000Z',
+        raw: { codexSessionId: previousCodexSessionId },
+      }],
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const body = bodies[0]!;
+  const realtimeSession = body.realtimeSession as Record<string, unknown>;
+  assert.equal(body.codexSessionId, undefined);
+  assert.equal(realtimeSession.codexSessionId, undefined);
+  assert.equal(realtimeSession.resumeRequested, false);
+  assert.doesNotMatch(String(body.commandText ?? ''), /^Continue the active Runtime Codex session\./);
+  assert.match(String(body.commandText ?? ''), /artifact:selected-report/);
+  assert.equal('turnMode' in body, false);
+  assert.equal('conversationEnvelope' in body, false);
+  assert.equal('conversationLaneId' in body, false);
+});
+
 test('Runtime Codex stream request carries command text and adapter metadata only', async () => {
   const originalFetch = globalThis.fetch;
   const bodies: Array<Record<string, unknown>> = [];
@@ -567,6 +642,10 @@ test('Runtime Codex stream request carries command text and adapter metadata onl
     'failureRecoveryPolicy',
     'uiState',
     'references',
+    'turnMode',
+    'conversationEnvelope',
+    'conversationLaneId',
+    'runtimeResumePolicy',
   ];
   assert.deepEqual(recursiveForbiddenKeys(body, forbiddenKeys), []);
   assert.doesNotMatch(JSON.stringify(body), /SEED_MESSAGE_SHOULD_NOT_LEAK|ARTIFACT_BODY_SHOULD_NOT_LEAK|CLAIM_BODY_SHOULD_NOT_LEAK/);
@@ -626,6 +705,45 @@ test('Runtime Codex stream request resumes from persisted nested Runtime Codex s
   assert.equal((bodies[0]?.realtimeSession as Record<string, unknown>).codexSessionId, previousCodexSessionId);
   assert.equal((bodies[0]?.realtimeSession as Record<string, unknown>).threadRef, `codex-thread:${previousCodexSessionId}`);
   assert.equal((bodies[0]?.realtimeSession as Record<string, unknown>).resumeRequested, true);
+});
+
+test('Runtime Codex same-lane resume ignores latest native session from another conversation lane', async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies: Array<Record<string, unknown>> = [];
+  const otherLaneCodexSessionId = '019e3e82-9999-79b2-a5d4-otherlane';
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+      return new Response([
+        'event: done\n',
+        'data: {"type":"done","status":"done","message":"ok"}\n\n',
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      conversationLaneId: 'workbench:literature-evidence-review:session-b',
+      runs: [{
+        id: 'codex-command-other-lane',
+        scenarioId: 'literature-evidence-review',
+        status: 'completed',
+        prompt: 'other lane prompt',
+        response: 'other lane answer',
+        createdAt: '2026-05-19T00:00:00.000Z',
+        completedAt: '2026-05-19T00:00:01.000Z',
+        raw: {
+          codexSessionId: otherLaneCodexSessionId,
+          conversationLaneId: 'workbench:literature-evidence-review:session-a',
+        },
+      }],
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(bodies[0]?.codexSessionId, undefined);
+  assert.equal((bodies[0]?.realtimeSession as Record<string, unknown>).resumeRequested, false);
+  assert.doesNotMatch(String(bodies[0]?.commandText ?? ''), /^Continue the active Runtime Codex session\./);
 });
 
 test('Runtime Codex native resume keeps GUI follow-up as command text plus refs only', async () => {

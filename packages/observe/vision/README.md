@@ -2,6 +2,8 @@
 
 `vision-sense` 是 SciForge 的视觉感官包。它只负责把 `instruction + 图像/截图/其它视觉模态` 转成可审计的 `text-response`，例如 JSON、NDJSON、坐标、操作指令、区域摘要、OCR 或普通文本。真实桌面执行由外部 action provider（例如 Computer Use executor）负责；本包不拥有桌面、浏览器、DOM、accessibility tree 或 MCP 会话。
 
+`vision-sense` 和 Computer Use 一样属于 TUI 侧 extension 生态，只直接和 TUI Host 或 action provider 通信。GUI 需要展示截图、trace 或确认时，由 TUI Host 调用 `gui.present` / `gui.ask_user`；本包不得 import React/UI、renderer registry 或 GUI 私有状态。
+
 上层主 agent 可以主动、多次调用本 sense。一次视觉 instruction 不需要覆盖图片全貌；主 agent 可以先问整体布局，再问局部文本、图例、坐标、异常区域或 verifier 复查。`vision-sense` 的职责是回答当前 instruction 并暴露不确定性、能力边界和下一步建议。
 
 ## 设计文档
@@ -77,7 +79,7 @@ assert plan.mode == "parallel-analysis"
 - `build_verifier_planning_feedback`：把 pixel diff、window consistency、grounding、focus bbox 和失败原因压缩成下一轮 Planner 可读反馈。
 - `build_region_semantic_verifier`：基于 action、focus crop diff、整窗 diff 和 focus bbox 输出 `regionSemantic` verdict、confidence、summary 和 nextPlannerHint。
 
-Runtime 的职责是截图、裁剪、执行、坐标映射和写 trace；二次 crop grounding 的策略边界由本包定义，runtime 只把 focus crop 交给 KV-Ground 或 visual Grounder，并把 crop-local 坐标映射回 window-local。
+Computer Use action provider 的 host ports 负责截图、裁剪、执行、坐标映射和写 trace；二次 crop grounding 的策略边界由本包定义，host adapter 只把 focus crop 交给 KV-Ground 或 visual Grounder，并把 crop-local 坐标映射回 window-local。
 
 ## 模型分工
 

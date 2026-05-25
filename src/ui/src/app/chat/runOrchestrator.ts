@@ -30,6 +30,8 @@ import type {
   SciForgeMessage,
   SciForgeReference,
   SciForgeSession,
+  ConversationTurnMode,
+  RuntimeResumePolicy,
 } from '../../domain';
 import { makeId, nowIso } from '../../domain';
 import { buildTargetInstanceContextForPrompt, targetIssueLookupFailureMessage } from './targetInstance';
@@ -71,8 +73,10 @@ export interface RunPromptOrchestratorInput {
   onStreamEvent: (event: AgentStreamEvent) => void;
   onOptimisticSession?: (session: SciForgeSession) => void;
   onRealtimeControlReady?: (sender: CodexRealtimeControlSender) => void;
-  turnMode?: 'normal' | 'annotation-plan-only' | 'annotation-quick-action';
+  turnMode?: ConversationTurnMode;
   conversationEnvelope?: unknown;
+  conversationLaneId?: string;
+  runtimeResumePolicy?: RuntimeResumePolicy;
 }
 
 export type RunPromptOrchestratorResult = {
@@ -144,6 +148,10 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
       skillPlanRef: input.skillPlanRef,
       uiPlanRef: input.uiPlanRef,
       targetInstanceContext,
+      turnMode: input.turnMode,
+      conversationEnvelope: input.conversationEnvelope,
+      conversationLaneId: input.conversationLaneId,
+      runtimeResumePolicy: input.runtimeResumePolicy,
     };
 
     const initialProgress = buildInitialResponseProgressEvent(latestResponsePlan(input.streamEvents));

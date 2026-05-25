@@ -92,6 +92,85 @@ describe('runPromptOrchestrator target instance guard', () => {
     assert.equal(fetched.length, 0);
   });
 
+  it('forwards annotation quick-action lane metadata so runtime transport starts fresh', async () => {
+    const runtimeRequests: Array<Record<string, unknown>> = [];
+    const previousCodexSessionId = '019e4f00-1111-7000-9000-orchestrator';
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url === `http://127.0.0.1:5174${CODEX_RUNTIME_STREAM_PATH}`) {
+        runtimeRequests.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+        return streamResponse([{
+          result: {
+            message: 'Annotation quick action ran on a fresh lane.',
+            executionUnits: [{ id: 'unit-annotation-quick-action', status: 'done' }],
+            artifacts: [],
+          },
+        }]);
+      }
+      return jsonResponse({ ok: false, error: `unexpected ${url}` }, 404);
+    }) as typeof fetch;
+
+    const session: SciForgeSession = {
+      ...emptySession(),
+      runs: [{
+        id: 'run-selected-report',
+        scenarioId: 'literature-evidence-review',
+        status: 'completed',
+        prompt: 'previous native run',
+        response: 'previous answer',
+        createdAt: '2026-05-19T00:00:00.000Z',
+        completedAt: '2026-05-19T00:00:01.000Z',
+        raw: { codexSessionId: previousCodexSessionId },
+      }],
+      artifacts: [{
+        id: 'selected-report',
+        type: 'research-report',
+        producerScenario: 'literature-evidence-review',
+        schemaVersion: '1',
+        dataRef: '.sciforge/artifacts/selected-report.md',
+        metadata: { runId: 'run-selected-report' },
+      }],
+    };
+
+    const result = await runPromptOrchestrator(orchestratorInput({
+      prompt: 'Apply a small annotation tweak',
+      baseSession: session,
+      activeSession: () => session,
+      references: [{
+        id: 'ref-selected-report',
+        kind: 'task-result',
+        title: 'Selected report',
+        ref: 'artifact:selected-report',
+        runId: 'run-selected-report',
+        payload: {
+          currentReference: {
+            id: 'selected-report',
+            ref: 'artifact:selected-report',
+            runId: 'run-selected-report',
+            provenance: { dataRef: '.sciforge/artifacts/selected-report.md' },
+          },
+        },
+      }],
+      turnMode: 'annotation-quick-action',
+      conversationLaneId: 'annotation:session-test:draft-quick:quick-action',
+      runtimeResumePolicy: 'none',
+      conversationEnvelope: {
+        schemaVersion: 'sciforge.annotation-quick-action-envelope.v1',
+        kind: 'annotation-quick-action',
+        draftId: 'draft-quick',
+      },
+    }));
+
+    assert.equal(result.status, 'completed');
+    assert.equal(runtimeRequests.length, 1);
+    assert.equal(runtimeRequests[0]?.codexSessionId, undefined);
+    assert.equal((runtimeRequests[0]?.realtimeSession as Record<string, unknown>).resumeRequested, false);
+    assert.doesNotMatch(String(runtimeRequests[0]?.commandText ?? ''), /^Continue the active Runtime Codex session\./);
+    assert.equal('turnMode' in runtimeRequests[0], false);
+    assert.equal('conversationEnvelope' in runtimeRequests[0], false);
+    assert.equal('conversationLaneId' in runtimeRequests[0], false);
+  });
+
   it('does not dispatch AgentServer or repair current instance when target issue bundle lookup fails', async () => {
     const fetched: string[] = [];
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
