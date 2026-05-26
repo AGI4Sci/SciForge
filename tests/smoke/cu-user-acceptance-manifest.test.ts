@@ -73,9 +73,13 @@ test('CU-05 ready means host chain and executor lease exist but pass evidence is
 });
 
 test('CU-05 records single-app-artifact-passed only with required Computer Use refs and gui.present evidence', () => {
-  const manifest = buildCuUserAcceptanceManifest(validSingleAppPassInput());
+  const manifest = buildCuUserAcceptanceManifest({
+    ...validSingleAppPassInput(),
+    taskId: 'CU-NEXT-01',
+  });
 
   assert.equal(manifest.status, 'single-app-artifact-passed');
+  assert.equal(manifest.taskId, 'CU-NEXT-01');
   assert.equal(manifest.antiShortcutGuard.status, 'passed');
   assert.equal(manifest.executorLease.status, 'present');
   assert.deepEqual(manifest.screenshotRefs.before, ['.sciforge/vision-runs/cu-05-single/before.png']);

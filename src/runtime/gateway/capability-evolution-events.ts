@@ -22,6 +22,10 @@ import {
 import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceTaskRunResult } from '../runtime-types.js';
 import { isRecord, uniqueStrings } from '../gateway-utils.js';
 import { sha1 } from '../workspace-task-runner.js';
+import {
+  GATEWAY_PROVIDER_RUNTIME_REGISTRY,
+  providerRefForRegistryEntry,
+} from './provider-runtime-registry.js';
 
 export interface CapabilityEvolutionRuntimeEventInput {
   workspacePath: string;
@@ -102,7 +106,7 @@ export async function recordCapabilityEvolutionRuntimeEvent(
     goalSummary: compactGoalSummary(input.request.prompt),
     selectedCapabilities: selectedCapabilitiesForCapabilityEvent(input, validationResult),
     providers: uniqueProviders([
-      { id: 'sciforge.workspace-runtime', kind: 'local-runtime' },
+      providerRefForRegistryEntry(GATEWAY_PROVIDER_RUNTIME_REGISTRY.workspaceRuntime),
       {
         id: input.skill.id,
         kind: providerKindForSkill(input.skill),
@@ -189,7 +193,7 @@ function selectedCapabilitiesForCapabilityEvent(
     selected.push({
       id: validationResult.validatorId ?? 'sciforge.payload-validation',
       kind: 'verifier',
-      providerId: 'sciforge.workspace-runtime',
+      providerId: GATEWAY_PROVIDER_RUNTIME_REGISTRY.workspaceRuntime.providerId,
       role: 'validator',
     });
   }
@@ -197,7 +201,7 @@ function selectedCapabilitiesForCapabilityEvent(
     selected.push({
       id: 'sciforge.agentserver.repair-rerun',
       kind: 'tool',
-      providerId: 'sciforge.workspace-runtime',
+      providerId: GATEWAY_PROVIDER_RUNTIME_REGISTRY.workspaceRuntime.providerId,
       role: 'repair',
     });
   }
@@ -208,14 +212,14 @@ function fallbackCapabilitiesForEvent(input: CapabilityEvolutionRuntimeEventInpu
   const fallback: SelectedCapabilityRef[] = [...(input.fallbackCapabilities ?? []), {
     id: 'sciforge.generated-task-runner',
     kind: 'tool',
-    providerId: 'sciforge.workspace-runtime',
+    providerId: GATEWAY_PROVIDER_RUNTIME_REGISTRY.workspaceRuntime.providerId,
     role: 'fallback',
   }];
   if (input.repairAttempt) {
     fallback.push({
       id: 'sciforge.agentserver.repair-rerun',
       kind: 'tool',
-      providerId: 'sciforge.workspace-runtime',
+      providerId: GATEWAY_PROVIDER_RUNTIME_REGISTRY.workspaceRuntime.providerId,
       role: 'repair',
     });
   }

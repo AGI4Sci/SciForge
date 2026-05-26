@@ -39,7 +39,7 @@ test('independent remote-desktop capture renders a virtual session screenshot in
     const targetResolution = resolvedWindowTarget();
     await executeIndependentInputAdapterAction({
       type: 'open_app',
-      appName: 'Browser',
+      appName: 'SciForge T084 Harness',
     }, config, targetResolution, {
       workspace,
       runDir: workspace,
@@ -63,6 +63,18 @@ test('independent remote-desktop capture renders a virtual session screenshot in
     const session = JSON.parse(await readFile(join(workspace, 'virtual-remote-session.json'), 'utf8')) as Record<string, any>;
     assert.equal(session.frames[0]?.screenshotRef, 'step-001-before-window-101.png');
     assert.ok(session.frames[0]?.visibleTexts.includes('Visible source text for virtual capture'));
+    assert.deepEqual(
+      [
+        'Search field',
+        'Filter dropdown',
+        'Export button',
+        'Share button',
+        'Save button',
+        'Auto refresh toggle',
+        'Include archived checkbox',
+      ].filter((text) => !session.frames[0]?.visibleTexts.includes(text)),
+      [],
+    );
     assert.doesNotMatch(await readFile(refs[0]!.absPath, 'utf8').catch(() => ''), /data:image\/|;base64,/);
   } finally {
     await rm(workspace, { recursive: true, force: true });

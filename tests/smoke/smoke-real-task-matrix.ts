@@ -27,6 +27,11 @@ type ComputerUseMatrixEntry = {
     | 'kv-ground-diagnostics'
     | 'real-input-trace'
     | 'gui-present'
+    | 'l2-artifact'
+    | 'l3-multi-app'
+    | 'approval-chain'
+    | 'repair-continuity'
+    | 'dense-grounding'
     | 'no-hardcoded-success'
     | 'no-legacy-paths'
   >;
@@ -37,15 +42,13 @@ const projectText = await readFile(join(root, 'PROJECT.md'), 'utf8');
 const packageJson = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
 
 const matrix: ComputerUseMatrixEntry[] = [
-  task('CU-00', 'preflight-and-real-environment', ['smoke:runtime-provider-preflight', 'smoke:vision-sense-runtime'], ['project-board-evidence', 'kv-ground-diagnostics']),
-  task('CU-01', 'computer-use-package-boundary', ['smoke:package-runtime-boundary', 'smoke:native-extension-ownership'], ['project-board-evidence', 'package-boundary', 'no-legacy-paths']),
-  task('CU-02', 'runtime-codex-text-planner', ['smoke:runtime-codex-final-acceptance', 'smoke:vision-sense-runtime'], ['project-board-evidence', 'runtime-codex-planner']),
-  task('CU-03', 'kv-ground-grounder', ['smoke:vision-sense-runtime'], ['project-board-evidence', 'kv-ground-diagnostics']),
-  task('CU-04', 'l1-real-input-smoke', ['smoke:vision-sense-runtime', 'smoke:capability-budget-debits'], ['project-board-evidence', 'real-input-trace']),
-  task('CU-05', 'user-level-computer-use-acceptance', ['smoke:no-hardcoded-success', 'smoke:runtime-codex-browser-acceptance'], ['project-board-evidence', 'real-input-trace', 'gui-present', 'no-hardcoded-success']),
-  task('CU-06', 'tui-gui-communication-acceptance', ['smoke:runtime-codex-browser-acceptance', 'smoke:runtime-codex-final-acceptance'], ['project-board-evidence', 'gui-present']),
-  task('CU-07', 'verification-and-regression', ['smoke:no-legacy-paths', 'smoke:no-hardcoded-success', 'smoke:runtime-provider-preflight'], ['project-board-evidence', 'no-legacy-paths', 'no-hardcoded-success']),
-  task('CU-08', 'docs-and-migration-closure', ['smoke:package-runtime-boundary', 'smoke:native-extension-ownership'], ['project-board-evidence', 'package-boundary']),
+  task('CU-NEXT-01', 'literature-to-briefing-deck', ['smoke:computer-use-long', 'smoke:runtime-codex-browser-acceptance'], ['project-board-evidence', 'l3-multi-app', 'l2-artifact', 'real-input-trace', 'gui-present']),
+  task('CU-NEXT-02', 'spreadsheet-to-chart-report', ['smoke:computer-use-long', 'smoke:real-task-data-gates'], ['project-board-evidence', 'l3-multi-app', 'l2-artifact', 'real-input-trace', 'gui-present']),
+  task('CU-NEXT-03', 'web-research-to-mail-draft', ['smoke:no-hardcoded-success', 'smoke:runtime-codex-browser-acceptance'], ['project-board-evidence', 'l3-multi-app', 'approval-chain', 'real-input-trace', 'gui-present', 'no-hardcoded-success']),
+  task('CU-NEXT-04', 'file-organization-index', ['smoke:computer-use-long', 'smoke:no-legacy-paths'], ['project-board-evidence', 'l3-multi-app', 'l2-artifact', 'real-input-trace', 'gui-present', 'no-legacy-paths']),
+  task('CU-NEXT-05', 'failure-recovery-multiturn-repair', ['smoke:web-multiturn-final', 'smoke:no-hardcoded-success'], ['project-board-evidence', 'repair-continuity', 'l3-multi-app', 'real-input-trace', 'gui-present', 'no-hardcoded-success']),
+  task('CU-NEXT-06', 'high-risk-approval-chain', ['smoke:runtime-codex-browser-acceptance', 'smoke:no-hardcoded-success'], ['project-board-evidence', 'approval-chain', 'real-input-trace', 'gui-present', 'no-hardcoded-success']),
+  task('CU-NEXT-07', 'visual-grounding-pressure-test', ['smoke:computer-use-long', 'smoke:vision-sense-runtime'], ['project-board-evidence', 'dense-grounding', 'kv-ground-diagnostics', 'real-input-trace']),
 ];
 
 const projectTasks = extractComputerUseTaskBoard(projectText);
@@ -113,7 +116,7 @@ function extractComputerUseTaskBoard(text: string): Map<string, ComputerUseTaskB
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]!;
-    const section = /^### (CU-\d{2})\s+(.+)$/.exec(line);
+    const section = /^### (CU-NEXT-\d{2})\s+(.+)$/.exec(line);
     if (section) {
       current = {
         id: section[1],

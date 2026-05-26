@@ -21,15 +21,17 @@ Computer Use 对外只暴露窄接口：
 ```text
 getManifest()
 runTask(request, hostPorts)
-validateTrace(traceRef)
+validateTrace(traceOrLocalPath, resolver?)
 compactResult(result)
 ```
 
 `hostPorts` 是模块和平台能力的唯一接触面，负责截图、裁剪、桌面/远程/dry-run 执行、trace 写入和事件上报。高风险动作不在模块内部弹 UI；模块返回 `needs-confirmation`、`approvalRequest`、trace refs 或 audit refs，由 TUI Host 决定是否调用 `gui.ask_user`，确认后再发起新的受控调用。
 
-稳定 host-port 命名来自 `provider-policy.ts`：`display-capture` / `target-window-capture`、`host-focus-region-crop`、`<desktopPlatform>-host-port-executor`、`<desktopPlatform>-generic-gui-executor`、`workspace-file-ref-trace-writer` 和 `workspace-runtime-events`。Trace handoff 目标固定为 `computer-use.trace-summary` 与 `computer-use.approval-request`，payload 只允许 refs 和 compact summary。
+稳定 host-port 命名来自 `provider-policy.ts`：`display-capture` / `target-window-capture`、`runtime-codex-tui-text-planner`、`kv-ground` / `host-focus-region-crop`、`<desktopPlatform>-host-port-executor`、`<desktopPlatform>-generic-gui-executor`、`layered-vision-verifier`、`workspace-file-ref-trace-writer` 和 `workspace-runtime-events`。Trace handoff 目标固定为 `computer-use.trace-summary` 与 `computer-use.approval-request`，payload 只允许 refs 和 compact summary。
 
 迁移期的边界规则是：package 拥有 contract、loop、safety gate、trace handoff 名称和通用策略；`src/runtime` 只能在登记的迁移项完成前保留具体 host-port implementation，例如 macOS `screencapture`、Swift/AppleScript/shared-input executor、workspace 文件写入和 runtime event transport。新增 Computer Use 通用策略必须进入 package 或 observe provider，不能继续加厚 `src/runtime/computer-use`。
+
+Runtime Codex text planner 默认通过 `runtime-codex-tui-text-planner` 使用 Codex CLI/TUI。只有当该通道产生明确的 transport/protocol failure（502/gateway/upstream/proxy/network/timeout 等）时，runtime adapter 才允许用 OpenAI-compatible direct chat fallback；fallback 复用 `packages/backend` 的 Responses <-> Chat Completions 转换，保持同一 generic action JSON schema 和 diagnostics，不绕过 DOM/accessibility/tool 禁令。普通 planner JSON 错误、策略错误或缺少当前视觉证据时不得走 fallback。
 
 进程边界下，TUI Host 可以通过 JSON CLI 调用同一个 package loop：
 
@@ -45,9 +47,10 @@ python -m sciforge_computer_use --request-json '{"task":"click visible search bo
 - `ComputerUseRequest.approval_ref` 绑定上游确认；仅设置 `risk_policy=allow-confirmed` 不足以执行高风险动作。
 - `ComputerUseRequest.providers` 记录 TUI Host 注入的 sense、grounder、executor 和 verifier provider id。
 - `ComputerUseResult.schema_version = sciforge.computer-use.result.v1`
+- `ComputerUseResult.final_artifact_refs` 记录当前 run bundle 中由最终观察、verifier metadata 或 visible artifact record 证明的最终产物 refs；JSON/trace/CLI 输出同时提供 `finalArtifactRef` 和 `finalArtifactRefs`。`vision-trace.json`、`tool-payload.json`、`gui-present.json` 等控制/证据文件只能作为 trace/evidence refs，不能被提升为最终产物。
 - `ComputerUseResult.approval_request` 是 refs-first confirmation intent；它不是 GUI 调用。
 
-Planner contract 是一轮只输出一个 generic action 或 `done=true`。Planner 输出坐标、app-private shortcut、unsupported action 或空 action 时，package 直接返回 structured failure；坐标必须来自 Grounder。
+Planner contract 是一轮只输出一个 generic action 或 `done=true`。Planner 输出坐标、app-private shortcut、unsupported action 或空 action 时，package 直接返回 structured failure；坐标必须来自 Grounder。`done=true` 必须由当前观察、focus-region 证据、verifier feedback 或 artifact refs 支撑；artifact-producing task 还必须有当前轮视觉/文件证据证明 bundle-local `final-artifact-ref` 指向真实产物，而不能复用 prior-round ledger、旧截图或旧 trace 摘要。当文本推理不确定、ledger 与当前画面不一致，或只能从历史 action ledger 猜测结果时，planner 必须请求重复观察、聚焦 crop 或扩大/重选区域，不能把 ledger 当作成功证明。
 
 ## KV-Ground、输入与 trace
 
@@ -67,6 +70,8 @@ export SCIFORGE_VISION_KV_GROUND_UPLOAD_STRATEGY="inline"
 ## 验收边界
 
 真实输入 smoke 只证明基础链路可用，不等于用户级成功。Computer Use 的最终验收至少需要一个可见用户产物，例如用可用的 slide app 制作并保存一页 PPT；目标打通需要一个多 App 工作流，例如 Browser/资料页 -> slide app -> Finder/保存对话框 -> TUI Host `gui.present` 展示 artifact refs 和 trace refs。
+
+递进测试可以先做 single-window / single-app probes，用来验证 capture、grounding、executor、verifier、`done=true` 判断和证据打包；这些 probe 即使能产生一个文件，也只能算 L2 前置或诊断证据，不能冒充 CU-NEXT L3 多 App 工作流。Artifact-producing acceptance 必须同时满足：产物 ref 是当前 run bundle 内的 `final-artifact-ref`，result/trace/`ToolPayload` 明确暴露 `finalArtifactRef`，最终截图能看到产物或保存位置，verifier verdict 明确覆盖产物存在/可见性，TUI Host 已用 `gui.present` 展示该 ref 和 trace 摘要。缺任一项时返回 `blocked` / `repair-needed` 或 diagnostic manifest，不得返回用户级完成。
 
 验收不得绕过真实 GUI 操作：不能用 Playwright、DOM、accessibility tree、app-specific private API 或直接文件生成替代 Computer Use 的 observe/ground/execute/verify 链路。若目标 App、系统权限或 shared input policy 不满足，返回 `blocked` manifest。
 
@@ -89,6 +94,8 @@ export SCIFORGE_VISION_KV_GROUND_UPLOAD_STRATEGY="inline"
 ```text
 observe -> planner -> safety -> locate -> execute -> verify -> trace
 ```
+
+`max_steps` 统计可执行动作。可执行动作用尽后，loop 允许一次 final no-execute completion check：再 `observe` 一次，把最终观察、trace/ledger、verifier feedback 和 artifact refs 交给 planner 做 completion-only 判断；该阶段不得调用 safety、grounder 或 executor。只有 planner 明确返回 `done=true` 时，package 才能追加 planning-only done step 并返回 `completed`；否则继续返回正常 `max-steps` failure。
 
 高风险动作默认 fail closed：发送、删除、支付、授权、发布、外部提交、覆盖、上传等动作必须由上游显式确认，或进入 human approval / verifier policy。Trace 不内联截图 payload、base64 或大日志，只写 refs、ledger、diagnostics 和紧凑摘要。
 

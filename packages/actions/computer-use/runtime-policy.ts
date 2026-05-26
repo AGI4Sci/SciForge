@@ -17,6 +17,34 @@ export const computerUseInputPolicyIds = {
   visualPointerShape: 'cyan-diamond-magenta-outline-white-crosshair',
 } as const;
 
+export const computerUsePointerKeyboardOwnershipIds = {
+  dryRun: 'virtual-dry-run-channel',
+  independentAdapter: 'sciforge-independent-input-adapter',
+  sharedSystem: 'shared-system-pointer-keyboard',
+  unavailable: 'unavailable',
+} as const;
+
+export const computerUsePointerModeIds = {
+  dryRun: 'virtual-no-user-pointer-movement',
+  independentAdapter: 'adapter-window-bound-pointer',
+  sharedSystem: 'system-cursor-events',
+  none: 'none',
+} as const;
+
+export const computerUseKeyboardModeIds = {
+  dryRun: 'virtual-no-user-keyboard-events',
+  independentAdapter: 'adapter-window-bound-keyboard',
+  sharedSystem: 'system-key-events',
+  none: 'none',
+} as const;
+
+export const computerUseExecutorLockScopeIds = {
+  independentAdapter: 'independent-adapter-session',
+  sharedSystem: 'global-shared-system-input',
+  targetWindow: 'target-window',
+  displayFallback: 'display-fallback',
+} as const;
+
 export const computerUseIndependentInputAdapters = [
   'remote-desktop-session',
   'virtual-hid-device',
@@ -123,12 +151,36 @@ export function computerUseInputChannelContract(options: {
     provider,
     isolation: options.isolation,
     targetBound: options.targetBound,
-    pointerKeyboardOwnership: dryRun ? 'virtual-dry-run-channel' : independentInput ? 'sciforge-independent-input-adapter' : sharedSystemInput ? 'shared-system-pointer-keyboard' : 'unavailable',
-    pointerMode: dryRun ? 'virtual-no-user-pointer-movement' : independentInput ? 'adapter-window-bound-pointer' : sharedSystemInput ? 'system-cursor-events' : 'none',
-    keyboardMode: dryRun ? 'virtual-no-user-keyboard-events' : independentInput ? 'adapter-window-bound-keyboard' : sharedSystemInput ? 'system-key-events' : 'none',
+    pointerKeyboardOwnership: dryRun
+      ? computerUsePointerKeyboardOwnershipIds.dryRun
+      : independentInput
+        ? computerUsePointerKeyboardOwnershipIds.independentAdapter
+        : sharedSystemInput
+          ? computerUsePointerKeyboardOwnershipIds.sharedSystem
+          : computerUsePointerKeyboardOwnershipIds.unavailable,
+    pointerMode: dryRun
+      ? computerUsePointerModeIds.dryRun
+      : independentInput
+        ? computerUsePointerModeIds.independentAdapter
+        : sharedSystemInput
+          ? computerUsePointerModeIds.sharedSystem
+          : computerUsePointerModeIds.none,
+    keyboardMode: dryRun
+      ? computerUseKeyboardModeIds.dryRun
+      : independentInput
+        ? computerUseKeyboardModeIds.independentAdapter
+        : sharedSystemInput
+          ? computerUseKeyboardModeIds.sharedSystem
+          : computerUseKeyboardModeIds.none,
     visualPointer: dryRun ? 'virtual-trace-only' : options.showVisualCursor ? 'sciforge-distinct-overlay-cursor' : 'off',
     visualPointerShape: options.showVisualCursor ? computerUseInputPolicyIds.visualPointerShape : undefined,
-    executorLockScope: independentInput ? 'independent-adapter-session' : sharedSystemInput ? 'global-shared-system-input' : options.targetBound ? 'target-window' : 'display-fallback',
+    executorLockScope: independentInput
+      ? computerUseExecutorLockScopeIds.independentAdapter
+      : sharedSystemInput
+        ? computerUseExecutorLockScopeIds.sharedSystem
+        : options.targetBound
+          ? computerUseExecutorLockScopeIds.targetWindow
+          : computerUseExecutorLockScopeIds.displayFallback,
     executorLockId: options.executorLockId,
     userDeviceImpact,
     independentAdapterRequiredForNoUserImpact: !dryRun && !independentInput,

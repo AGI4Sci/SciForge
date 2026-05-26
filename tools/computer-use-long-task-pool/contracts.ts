@@ -60,6 +60,18 @@ export interface ComputerUseLongTraceValidation {
 export interface PreparedComputerUseLongRun {
   schemaVersion: '1.0';
   taskId: 'T084';
+  cuNextTaskId?: string;
+  cuNextTask?: {
+    taskId: string;
+    title: string;
+    slug: string;
+    primaryScenarioId: string;
+    longScenarioIds: string[];
+    requirements: string[];
+    recommendedTargetMode?: string;
+    recommendedTargetApp?: string;
+    recommendedMaxSteps?: number;
+  };
   scenarioId: string;
   title: string;
   status: 'not-run' | 'running' | 'passed' | 'repair-needed' | 'failed';

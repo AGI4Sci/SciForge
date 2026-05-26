@@ -143,6 +143,60 @@ npm run backend:codex-runtime:setup -- --overwrite --proxy-base-url http://127.0
 npm run backend:codex-proxy
 ```
 
+### Runtime Codex service-env/browser acceptance 复测路径
+
+当前 no-secret browser acceptance 的本地复测必须从 service 环境取 Runtime Codex key；`config.local.json` 或 `.sciforge/**/config.local.json` 里的 `apiKey` / secret-like key 只用于本机 provider proxy 分诊，不能让 browser/release acceptance 通过。
+
+先做不含 secret 的端口分诊：
+
+```bash
+curl -fsS http://127.0.0.1:18081/health
+curl -fsS http://127.0.0.1:5173/ >/dev/null
+curl -fsS http://127.0.0.1:6173/health
+curl -fsS http://127.0.0.1:18080/health
+curl -fsS http://127.0.0.1:3891/healthz
+```
+
+当前默认 Runtime Codex browser acceptance 拓扑需要这些本地服务同时在线：
+
+```text
+KV-Ground:        http://127.0.0.1:18081/health
+UI:               http://127.0.0.1:5173/
+Workspace writer: http://127.0.0.1:6173/health
+Runtime Codex:    http://127.0.0.1:18080/health
+Provider proxy:   http://127.0.0.1:3891/healthz
+```
+
+no-secret 启动顺序示例：
+
+```bash
+export SCIFORGE_UI_PORT=5173
+export SCIFORGE_WORKSPACE_PORT=6173
+export SCIFORGE_RUNTIME_CODEX_PORT=18080
+export SCIFORGE_PROXY_PORT=3891
+export SCIFORGE_WORKSPACE_PATH="$PWD/workspace/parallel/p1"
+export SCIFORGE_PROXY_UPSTREAM_BASE_URL="https://your-openai-compatible-endpoint.example/v1"
+export SCIFORGE_RUNTIME_API_KEY="<set-in-service-env-only>"
+
+npm run backend:codex-runtime:setup -- --overwrite --proxy-base-url http://127.0.0.1:3891/v1
+npm run backend:codex-proxy
+SCIFORGE_WORKSPACE_PORT=6173 npm run workspace:server
+SCIFORGE_RUNTIME_CODEX_PORT=18080 node --import tsx src/runtime/codex/codex-runtime-standalone-server.ts
+npm run dev:ui -- --host 127.0.0.1 --port 5173 --strictPort
+```
+
+`SCIFORGE_RUNTIME_API_KEY` 的真实值必须由启动 Runtime Codex / provider proxy 的 service manager、shell 或 CI secret store 注入；不要把真实值写进本文件、manifest、blocked note、`config.local.json` 或 `.sciforge/**/config.local.json`。
+
+复测顺序：
+
+```bash
+npm run smoke:runtime-provider-preflight
+npm run smoke:runtime-codex-browser-acceptance
+SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 npm run smoke:runtime-codex-browser-acceptance
+```
+
+provider preflight 和 config fallback 只能说明 upstream/secret-source 分诊状态；只有 Codex in-app browser 的默认聊天入口出现非 seed Runtime Codex 第二轮答案，并且 strict manifest 为 passed，才可以写 browser/release acceptance 通过。
+
 `npm run smoke:runtime-codex-browser-acceptance` 是当前 `npm run verify:single-agent-final` 的一部分。默认模式会验证 fail-closed evidence；如果缺少 `SCIFORGE_RUNTIME_API_KEY` 或 provider proxy upstream base URL，会写出 blocked manifest/notes，而不是假装通过。
 
 `npm run smoke:runtime-provider-preflight` / `GET /healthz?check=upstream` 只做 live default-chat 前的 provider upstream 分诊（`config-missing`、`provider-auth`、`rate-limited`、`upstream-outage`、`repo-bug`）。`verify:single-agent-final` 和 `verify:single-agent-release` 会在 browser acceptance 前运行它，但它的结果仍是 `releaseAcceptance: not-evaluated`，不等同于 browser/release acceptance passed。
@@ -221,6 +275,7 @@ Workspace writer 会在当前 workspace 下维护 `.sciforge/` 状态。常见�
 - `.sciforge/task-attempts/`：迁移期任务尝试、失败原因、修复记录和输出引用；目标架构下应由 TUI CLI 的原生日志/事件流和 SciForge GUI refs 共同承载。
 - `.sciforge/capability-evolution-ledger/`：能力组合、胶水代码、validation result、失败/修复和晋升候选的 compact ledger。
 - `.sciforge/scenarios/<id>/`：workspace scenario package。
+- `.sciforge/vision-runs/<run-id>/`：Computer Use run bundle，包含 refs-first trace、截图、focus crops、host-port evidence、`gui.present` record、user-acceptance manifest 和最终产物文件。Artifact-producing task 的最终产物必须能在 result/trace/`ToolPayload` 中以 bundle-local `finalArtifactRef` / `finalArtifactRefs` 找到。
 - `.sciforge/skill-proposals/<id>/`：可晋升 skill 候选。
 - `.sciforge/evolved-skills/<id>/`：用户接受后的 workspace skill。
 - `.sciforge/repair-worktrees/<run>/`：双实例互修 runner 创建的隔离目标 worktree。
@@ -294,13 +349,17 @@ export SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER=sciforge-simulated-rem
 export SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT=1
 ```
 
-每轮 Computer Use 输出应写到 `.sciforge/vision-runs/<run-id>/`，trace 只保存 file refs、before/after screenshot refs、focus crop refs、sha256、尺寸、target description、坐标、provider metadata、executor lease、verifier verdict、approval/audit refs 和 diagnostics，不内联截图/base64。
+每轮 Computer Use 输出应写到 `.sciforge/vision-runs/<run-id>/`，trace 只保存 file refs、before/after screenshot refs、focus crop refs、sha256、尺寸、target description、坐标、provider metadata、executor lease、verifier verdict、approval/audit refs 和 diagnostics，不内联截图/base64。产物型任务完成时，应检查 package result、`vision-trace.json`、`tool-payload.json` 和 `gui-present.json` 是否同时暴露同一个 bundle-local `finalArtifactRef`；`gui.present` 的 displayed refs 必须包含该 ref 和 trace 摘要。
 
 常用配置还包括：
 
 - `SCIFORGE_VISION_CAPTURE_DISPLAYS`
 - `SCIFORGE_RUNTIME_API_KEY`
 - `SCIFORGE_COMPUTER_USE_PLANNER_PROFILE`
+- `SCIFORGE_COMPUTER_USE_DIRECT_TEXT_PLANNER=0`：关闭 Runtime Codex text planner 的 direct chat fallback。
+- `SCIFORGE_COMPUTER_USE_TEXT_PLANNER_BASE_URL` / `SCIFORGE_PROXY_UPSTREAM_BASE_URL` / `SCIFORGE_RUNTIME_BASE_URL`：direct chat fallback 的 OpenAI-compatible base URL 来源。
+- `SCIFORGE_COMPUTER_USE_TEXT_PLANNER_MODEL` / `SCIFORGE_RUNTIME_MODEL` / `SCIFORGE_PROXY_DEFAULT_MODEL`：direct chat fallback 的模型来源。
+- `SCIFORGE_COMPUTER_USE_DIRECT_TEXT_PLANNER_TIMEOUT_MS`、`SCIFORGE_COMPUTER_USE_DIRECT_TEXT_PLANNER_MAX_TOKENS`
 - `SCIFORGE_VISION_KV_GROUND_URL`
 
 详细能力边界和排障见 [`../packages/observe/vision/README.md`](../packages/observe/vision/README.md) 与 [`../packages/actions/computer-use/README.md`](../packages/actions/computer-use/README.md)。

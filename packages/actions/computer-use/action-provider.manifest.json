@@ -34,20 +34,32 @@
         "window_target": { "type": "object" },
         "metadata": { "type": "object" }
       }
-    },
-    "outputShape": {
-      "type": "object",
-      "required": ["status", "reason", "steps"],
-      "properties": {
-        "status": { "enum": ["completed", "failed-with-reason", "needs-confirmation", "max-steps"] },
-        "reason": { "type": "string" },
-        "steps": { "type": "array" },
-        "final_observation": { "type": ["object", "null"] },
-        "approval_request": { "type": ["object", "null"] },
-        "failure_diagnostics": { "type": "object" },
-        "metrics": { "type": "object" }
-      }
-    },
+      },
+      "outputShape": {
+        "type": "object",
+        "required": ["schemaVersion", "status", "reason", "steps", "traceRefs", "screenshotRefs", "artifactRefs"],
+        "properties": {
+          "schemaVersion": { "const": "sciforge.computer-use.result.v1" },
+          "status": { "enum": ["completed", "failed-with-reason", "needs-confirmation", "max-steps"] },
+          "reason": { "type": "string" },
+          "message": { "type": "string" },
+          "steps": { "type": "array" },
+          "finalObservationRef": { "type": ["string", "null"] },
+          "final_observation": { "type": ["object", "null"] },
+          "traceRefs": { "type": "array", "items": { "type": "string" } },
+          "screenshotRefs": { "type": "array", "items": { "type": "string" } },
+          "artifactRefs": { "type": "array", "items": { "type": "string" } },
+          "finalArtifactRef": { "type": ["string", "null"] },
+          "finalArtifactRefs": { "type": "array", "items": { "type": "string" } },
+          "approvalRequest": { "type": ["object", "null"] },
+          "approval_request": { "type": ["object", "null"] },
+          "failureDiagnostics": { "type": "object" },
+          "failure_diagnostics": { "type": "object" },
+          "metrics": { "type": "object" },
+          "budgetDebits": { "type": "array" },
+          "budgetDebitRefs": { "type": "array", "items": { "type": "string" } }
+        }
+      },
     "examples": [
       {
         "task": "点击目标窗口中可见的搜索框",
@@ -91,14 +103,17 @@
     "requiredPorts": ["capture", "plan", "locate", "execute", "verify"],
     "optionalPorts": ["crop", "query", "writeTrace", "emitEvent"],
     "forbiddenPorts": ["requestApproval", "gui.present", "gui.ask_user"],
-    "providerIdPolicy": {
-      "capture": ["display-capture", "target-window-capture"],
-      "crop": "host-focus-region-crop",
-      "actionRequestExecutor": ["dry-run-generic-gui-executor", "<desktopPlatform>-host-port-executor"],
-      "execute": ["dry-run-generic-gui-executor", "<desktopPlatform>-generic-gui-executor"],
-      "writeTrace": "workspace-file-ref-trace-writer",
-      "emitEvent": "workspace-runtime-events"
-    },
+      "providerIdPolicy": {
+        "capture": ["display-capture", "target-window-capture"],
+        "crop": "host-focus-region-crop",
+        "plan": "runtime-codex-tui-text-planner",
+        "locate": ["kv-ground", "host-focus-region-crop"],
+        "actionRequestExecutor": ["dry-run-generic-gui-executor", "<desktopPlatform>-host-port-executor"],
+        "execute": ["dry-run-generic-gui-executor", "<desktopPlatform>-generic-gui-executor"],
+        "verify": "layered-vision-verifier",
+        "writeTrace": "workspace-file-ref-trace-writer",
+        "emitEvent": "workspace-runtime-events"
+      },
     "stdioProtocol": {
       "callSchema": "sciforge.computer-use.host-port-call.v1",
       "resultSchema": "sciforge.computer-use.host-port-result.v1",

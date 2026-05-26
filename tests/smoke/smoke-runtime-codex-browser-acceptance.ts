@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { resolveProxyCliOptions } from '../../packages/backend/src/cli-config.js';
@@ -70,6 +71,26 @@ type BrowserAcceptanceManifest = {
   upstreamBaseUrlSourceKind?: 'env' | 'config' | 'missing';
   configPathsChecked?: string[];
   configSecretFallbackPaths?: string[];
+  currentPortStatus?: Record<string, PortStatus>;
+  serviceEnvRequired?: {
+    required: string[];
+    missing: string[];
+    runtimeApiKeySource: 'service-env-required';
+    note: string;
+  };
+  exactStartCommands?: string[];
+  exactRetestCommands?: string[];
+  strictRetestCommand?: string;
+  configFallbackWarning?: string;
+};
+
+type PortStatus = {
+  host: string;
+  port: number;
+  listening: boolean;
+  healthOk?: boolean;
+  healthUrl?: string;
+  note?: string;
 };
 
 type CurrentEnvProviderPreflightManifest = {
@@ -162,6 +183,7 @@ type NegativeChecks = {
   nativeAnswerOutsideDefaultChatRejected?: boolean;
 };
 
+const DEFAULT_PROVIDER_PROXY_PORT = 3891;
 const root = process.cwd();
 const requestedInstance = normalizeInstanceName(process.env.SCIFORGE_INSTANCE_ID ?? process.env.SCIFORGE_PARALLEL_INSTANCE);
 const instanceProfile = parallelProfile(requestedInstance);
@@ -189,10 +211,16 @@ const requestedRuntimeCodexPort = portFromEnv(
   process.env[`SCIFORGE_${instanceProfile.id.toUpperCase()}_RUNTIME_CODEX_PORT`],
   Number(instanceProfile.runtimeCodexPort),
 );
+const requestedProviderProxyPort = portFromEnv(
+  process.env.SCIFORGE_PROXY_PORT,
+  process.env[`SCIFORGE_${instanceProfile.id.toUpperCase()}_PROXY_PORT`],
+  DEFAULT_PROVIDER_PROXY_PORT,
+);
 const workspacePath = process.env.SCIFORGE_WORKSPACE_PATH ?? resolve(root, instanceProfile.workspacePath);
 const actualUrl = `http://127.0.0.1:${requestedRolePort}/`;
 const actualWorkspaceWriterUrl = `http://127.0.0.1:${requestedWorkspaceWriterPort}`;
 const actualRuntimeCodexUrl = `http://127.0.0.1:${requestedRuntimeCodexPort}`;
+const runtimeCodexIdentity = readRuntimeCodexIdentity();
 const singleTurnPrompt = 'Runtime Codex browser smoke single turn: reply in one short sentence with SCIFORGE-CODEX-BROWSER-SINGLE-20260520A.';
 const artifactFollowUpPrompt = 'Use only the selected artifact ref and answer what it says in one concise sentence.';
 const multiTurnPrompt = 'Remember this passphrase for the next browser turn: SCIFORGE-CODEX-BROWSER-MT-20260520A. Reply only remembered.';
@@ -265,6 +293,8 @@ async function writeBlockedAcceptanceManifest(blockedReason: string): Promise<Br
     ? preflightOnlyBrowserEvidence(priorBrowserEvidence)
     : priorBrowserEvidence;
   const diagnostics = blockedDiagnosticsForReason(blockedReason);
+  const currentPortStatus = await probeCurrentPortStatus();
+  const exactCommands = exactServiceEnvCommands();
   const manifest: BrowserAcceptanceManifest = {
     schemaVersion: 'sciforge.runtime-codex.browser-acceptance.v1',
     status: 'blocked',
@@ -278,9 +308,9 @@ async function writeBlockedAcceptanceManifest(blockedReason: string): Promise<Br
     actualUrl,
     actualPort: requestedRolePort,
     workspacePath,
-    profile: 'sciforge-runtime-deepseek',
-    provider: 'sciforge-deepseek-proxy',
-    model: 'bailian/deepseek-v4-flash',
+    profile: runtimeCodexIdentity.profile,
+    provider: runtimeCodexIdentity.provider,
+    model: runtimeCodexIdentity.model,
     commandId: browserEvidence.commandId,
     startedFromDefaultChatEntry: browserEvidence.defaultChatEntryObserved,
     submittedThroughRuntimeCodex: browserEvidence.singleTurnSubmitted,
@@ -319,6 +349,17 @@ async function writeBlockedAcceptanceManifest(blockedReason: string): Promise<Br
     upstreamBaseUrlSourceKind: providerPreflight.upstreamBaseUrlSourceKind,
     configPathsChecked: providerPreflight.configPathsChecked,
     configSecretFallbackPaths: providerPreflight.configSecretFallbackPaths,
+    currentPortStatus,
+    serviceEnvRequired: {
+      required: ['SCIFORGE_RUNTIME_API_KEY', 'SCIFORGE_PROXY_UPSTREAM_BASE_URL'],
+      missing: providerPreflight.missingEnv,
+      runtimeApiKeySource: 'service-env-required',
+      note: 'Runtime Codex browser/release acceptance requires the Runtime API key in the service process environment; ignored config-file secret fallbacks are diagnostic-only.',
+    },
+    exactStartCommands: exactCommands.start,
+    exactRetestCommands: exactCommands.retest,
+    strictRetestCommand: exactCommands.strictRetest,
+    configFallbackWarning: `Ignored config secret fallbacks (${providerPreflight.configSecretFallbackPaths.join(', ') || 'none detected'}) can help local proxy diagnostics but cannot satisfy Runtime Codex browser/release acceptance.`,
     releaseBlocking: true,
     releaseEligible: false,
     singleTurn: blockedScenario(
@@ -354,6 +395,98 @@ async function writeBlockedAcceptanceManifest(blockedReason: string): Promise<Br
   return manifest;
 }
 
+async function probeCurrentPortStatus(): Promise<Record<string, PortStatus>> {
+  const host = '127.0.0.1';
+  const statuses: Record<string, PortStatus> = {
+    ui: await probeTcpPort(host, requestedRolePort),
+    workspaceWriter: await probeTcpPort(host, requestedWorkspaceWriterPort),
+    runtimeCodex: await probeTcpPort(host, requestedRuntimeCodexPort),
+    providerProxy: await probeTcpPort(host, requestedProviderProxyPort),
+    kvGround: await probeTcpPort(host, portFromEnv(process.env.SCIFORGE_VISION_KV_GROUND_PORT, undefined, 18081)),
+  };
+  statuses.kvGround.healthUrl = `http://${host}:${statuses.kvGround.port}/health`;
+  statuses.kvGround.healthOk = await probeHttpHealth(statuses.kvGround.healthUrl);
+  statuses.kvGround.note = statuses.kvGround.healthOk
+    ? 'KV-Ground health is reachable; this proves the Grounder service is alive, not browser/release acceptance.'
+    : 'KV-Ground health is not currently reachable from this process.';
+  return statuses;
+}
+
+async function probeTcpPort(host: string, port: number): Promise<PortStatus> {
+  const listening = await new Promise<boolean>((resolvePromise) => {
+    const socket = createConnection({ host, port });
+    const timeout = setTimeout(() => {
+      socket.destroy();
+      resolvePromise(false);
+    }, 500);
+    socket.once('connect', () => {
+      clearTimeout(timeout);
+      socket.end();
+      resolvePromise(true);
+    });
+    socket.once('error', () => {
+      clearTimeout(timeout);
+      resolvePromise(false);
+    });
+  });
+  return { host, port, listening };
+}
+
+async function probeHttpHealth(url: string): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1000);
+    const response = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!response.ok) return false;
+    const data = await response.json().catch(() => undefined) as { ok?: unknown } | undefined;
+    return data?.ok === true;
+  } catch {
+    return false;
+  }
+}
+
+function exactServiceEnvCommands(): {
+  start: string[];
+  retest: string[];
+  strictRetest: string;
+} {
+  const proxyCommand = [
+    'SCIFORGE_RUNTIME_API_KEY="${SCIFORGE_RUNTIME_API_KEY:?set in service env}"',
+    'SCIFORGE_PROXY_UPSTREAM_BASE_URL="${SCIFORGE_PROXY_UPSTREAM_BASE_URL:?set upstream /v1 url}"',
+    'SCIFORGE_PROXY_HOST=127.0.0.1',
+    `SCIFORGE_PROXY_PORT=${requestedProviderProxyPort}`,
+    `npm run backend:codex-proxy -- --host 127.0.0.1 --port ${requestedProviderProxyPort} --upstream-base-url "$SCIFORGE_PROXY_UPSTREAM_BASE_URL" --api-key-env SCIFORGE_RUNTIME_API_KEY`,
+  ].join(' ');
+  const devCommand = [
+    'SCIFORGE_AGENT_SERVER_AUTOSTART=0',
+    'SCIFORGE_CONFIG_PATH=/tmp/sciforge-runtime-nosecret-config.local.json',
+    'SCIFORGE_RUNTIME_API_KEY="${SCIFORGE_RUNTIME_API_KEY:?set in service env}"',
+    'SCIFORGE_PROXY_UPSTREAM_BASE_URL="${SCIFORGE_PROXY_UPSTREAM_BASE_URL:?set upstream /v1 url}"',
+    `SCIFORGE_PROXY_PORT=${requestedProviderProxyPort}`,
+    `SCIFORGE_INSTANCE_ID=${instanceProfile.id}`,
+    `SCIFORGE_UI_PORT=${requestedRolePort}`,
+    `SCIFORGE_WORKSPACE_PORT=${requestedWorkspaceWriterPort}`,
+    `SCIFORGE_RUNTIME_CODEX_PORT=${requestedRuntimeCodexPort}`,
+    `SCIFORGE_WORKSPACE_PATH=${workspacePath}`,
+    `npm run dev -- --instance ${instanceProfile.id}`,
+  ].join(' ');
+  const strictRetest = 'npm run smoke:runtime-provider-preflight && SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 npm run smoke:runtime-codex-browser-acceptance';
+  return {
+    start: [
+      `npm run backend:codex-runtime:setup -- --overwrite --proxy-base-url http://127.0.0.1:${requestedProviderProxyPort}/v1`,
+      proxyCommand,
+      devCommand,
+    ],
+    retest: [
+      'npm run smoke:runtime-provider-preflight',
+      'npm run smoke:runtime-codex-browser-acceptance',
+      strictRetest,
+    ],
+    strictRetest,
+  };
+}
+
 function assertBrowserAcceptanceManifest(manifest: BrowserAcceptanceManifest): void {
   assert.equal(manifest.schemaVersion, 'sciforge.runtime-codex.browser-acceptance.v1');
   assert.equal(manifest.source, 'codex-in-app-browser');
@@ -369,9 +502,9 @@ function assertBrowserAcceptanceManifest(manifest: BrowserAcceptanceManifest): v
   assert.match(manifest.actualRuntimeCodexUrl ?? '', /^http:\/\/(?:127\.0\.0\.1|localhost):\d+\/?$/, 'actual RuntimeCodex URL must be recorded');
   assertUrlPortMatches(manifest.actualRuntimeCodexUrl, manifest.actualRuntimeCodexPort, 'actualRuntimeCodexUrl');
   assert.ok(manifest.workspacePath?.startsWith('/'), 'absolute workspace path must be recorded');
-  assert.equal(manifest.profile, 'sciforge-runtime-deepseek', 'Runtime Codex profile must be recorded');
-  assert.equal(manifest.provider, 'sciforge-deepseek-proxy', 'Runtime Codex provider must be recorded');
-  assert.equal(manifest.model, 'bailian/deepseek-v4-flash', 'Runtime Codex model must be recorded');
+  assert.equal(manifest.profile, runtimeCodexIdentity.profile, 'Runtime Codex profile must match the resolved local runtime config');
+  assert.equal(manifest.provider, runtimeCodexIdentity.provider, 'Runtime Codex provider must match the resolved local runtime config');
+  assert.equal(manifest.model, runtimeCodexIdentity.model, 'Runtime Codex model must match the resolved local runtime config');
   assert.equal(manifest.seedOrDemoMessagesExcluded, true, 'browser acceptance must exclude seed/demo/fixture messages');
   assert.equal(manifest.liveAcceptanceScope, 'non-seed-runtime-codex-messages-only', 'browser acceptance must only count non-seed Runtime Codex messages');
   assert.ok(manifest.reason || manifest.status === 'passed', 'blocked/failed/partial manifests must record a reason');
@@ -456,6 +589,21 @@ function runtimeConfigCandidatePaths(): string[] {
   ].flatMap((path) => typeof path === 'string' && path.trim() ? [path.trim()] : []));
 }
 
+function readRuntimeCodexIdentity(): { profile?: string; provider?: string; model?: string; wireApi?: string } {
+  const configText = readIfExists('packages/backend/.codex-runtime/codex-home/config.toml');
+  return {
+    profile: stringValue(process.env.SCIFORGE_COMPUTER_USE_PLANNER_PROFILE) || extractTomlString(configText, 'profile'),
+    provider: stringValue(process.env.SCIFORGE_RUNTIME_MODEL_PROVIDER) || extractTomlString(configText, 'model_provider'),
+    model: stringValue(process.env.SCIFORGE_RUNTIME_MODEL) || extractTomlString(configText, 'model'),
+    wireApi: extractTomlString(configText, 'wire_api'),
+  };
+}
+
+function extractTomlString(text: string, key: string): string | undefined {
+  const match = new RegExp(`^\\s*${escapeRegExp(key)}\\s*=\\s*"([^"]+)"`, 'm').exec(text);
+  return match?.[1];
+}
+
 function runtimeApiKeyPresentInConfig(path: string): boolean {
   try {
     const parsed = JSON.parse(readFileSync(resolve(root, path), 'utf8')) as unknown;
@@ -478,11 +626,9 @@ function runtimeCodexLocalRuntimeBlockedReason(): string | undefined {
   const configText = readIfExists(configPath);
   if (!configText) return `Runtime Codex home config is missing at ${configPath}.`;
   const requiredConfig: Array<[string, RegExp]> = [
-    ['profile sciforge-runtime-deepseek', /\bprofile\s*=\s*"sciforge-runtime-deepseek"/],
-    ['model bailian/deepseek-v4-flash', /\bmodel\s*=\s*"bailian\/deepseek-v4-flash"/],
-    ['profile table sciforge-runtime-deepseek', /\[profiles\.sciforge-runtime-deepseek\]/],
-    ['provider sciforge-deepseek-proxy', /\bmodel_provider\s*=\s*"sciforge-deepseek-proxy"/],
-    ['provider table sciforge-deepseek-proxy', /\[model_providers\.sciforge-deepseek-proxy\]/],
+    ['active Runtime Codex profile', /\bprofile\s*=\s*"[^"]+"/],
+    ['Runtime Codex model', /\bmodel\s*=\s*"[^"]+"/],
+    ['active profile model_provider', /\bmodel_provider\s*=\s*"[^"]+"/],
     ['env_key SCIFORGE_RUNTIME_API_KEY', /\benv_key\s*=\s*"SCIFORGE_RUNTIME_API_KEY"/],
     ['responses wire_api', /\bwire_api\s*=\s*"responses"/],
   ];
@@ -572,6 +718,8 @@ function assertBlockedOrFailedManifest(manifest: BrowserAcceptanceManifest): voi
   assert.ok(manifest.providerPreflightCheckedAt?.trim(), 'blocked/failed/partial manifest must record providerPreflightCheckedAt');
   assert.equal(manifest.providerPreflightReleaseAcceptance, 'not-evaluated', 'provider preflight must remain diagnostic-only');
   assert.equal(manifest.providerPreflightEvidenceMode, 'current-env-diagnostic-only', 'provider preflight evidence mode must be current-env diagnostic only');
+  assertBlockedRuntimeConfigArtifactFields(manifest);
+  assert.ok((manifest.exactRetestCommands ?? []).some((command) => /SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1/.test(command)), 'blocked/failed/partial manifest must record strict retest command');
   assert.ok(
     manifest.currentRunEvidenceScope === 'preflight-only' || manifest.currentRunEvidenceScope === 'live-browser-current-run',
     'blocked/failed/partial manifest must declare currentRunEvidenceScope',
@@ -600,6 +748,43 @@ function assertBlockedOrFailedManifest(manifest: BrowserAcceptanceManifest): voi
   assertEvidenceExists(manifest.evidence, 'manifest evidence');
 }
 
+function assertBlockedRuntimeConfigArtifactFields(manifest: BrowserAcceptanceManifest): void {
+  const currentPortStatus = manifest.currentPortStatus ?? {};
+  for (const [label, expectedPort] of [
+    ['ui', manifest.actualPort],
+    ['workspaceWriter', manifest.actualWorkspaceWriterPort],
+    ['runtimeCodex', manifest.actualRuntimeCodexPort],
+    ['providerProxy', requestedProviderProxyPort],
+    ['kvGround', portFromEnv(process.env.SCIFORGE_VISION_KV_GROUND_PORT, undefined, 18081)],
+  ] as const) {
+    const status = currentPortStatus[label];
+    assert.ok(status, `blocked/failed/partial manifest must record currentPortStatus.${label}`);
+    assert.equal(status.host, '127.0.0.1', `currentPortStatus.${label}.host must be loopback`);
+    assert.equal(status.port, expectedPort, `currentPortStatus.${label}.port must match configured port`);
+    assert.equal(typeof status.listening, 'boolean', `currentPortStatus.${label}.listening must be boolean`);
+  }
+  assert.match(currentPortStatus.kvGround?.healthUrl ?? '', /^http:\/\/127\.0\.0\.1:\d+\/health$/, 'currentPortStatus.kvGround must record healthUrl');
+  assert.equal(typeof currentPortStatus.kvGround?.healthOk, 'boolean', 'currentPortStatus.kvGround must record healthOk');
+  assert.match(currentPortStatus.kvGround?.note ?? '', /not browser\/release acceptance/i, 'currentPortStatus.kvGround note must stay diagnostic-only');
+
+  const serviceEnv = manifest.serviceEnvRequired;
+  assert.ok(serviceEnv, 'blocked/failed/partial manifest must record serviceEnvRequired');
+  assert.ok(serviceEnv.required.includes('SCIFORGE_RUNTIME_API_KEY'), 'serviceEnvRequired must require SCIFORGE_RUNTIME_API_KEY');
+  assert.ok(serviceEnv.required.includes('SCIFORGE_PROXY_UPSTREAM_BASE_URL'), 'serviceEnvRequired must require SCIFORGE_PROXY_UPSTREAM_BASE_URL');
+  assert.equal(serviceEnv.runtimeApiKeySource, 'service-env-required', 'Runtime API key must be sourced from service env for release acceptance');
+  assert.match(serviceEnv.note, /service process environment/i, 'serviceEnvRequired note must name the service environment requirement');
+  assert.match(serviceEnv.note, /diagnostic-only/i, 'serviceEnvRequired note must keep config fallbacks diagnostic-only');
+
+  const exactStartCommands = manifest.exactStartCommands ?? [];
+  assert.ok(exactStartCommands.length >= 3, 'blocked/failed/partial manifest must record exact no-secret setup/proxy/dev start commands');
+  assert.ok(exactStartCommands.some((command) => /backend:codex-runtime:setup/.test(command)), 'exactStartCommands must include Runtime Codex setup');
+  assert.ok(exactStartCommands.some((command) => /backend:codex-proxy/.test(command)), 'exactStartCommands must include provider proxy start');
+  assert.ok(exactStartCommands.some((command) => /npm run dev/.test(command)), 'exactStartCommands must include dev server start');
+  assert.ok(exactStartCommands.every((command) => !/sk-[A-Za-z0-9_-]+/.test(command)), 'exactStartCommands must not contain literal secrets');
+  assert.ok(exactStartCommands.every((command) => !/api[_-]?key=(?!env\b)[^ "$']+/i.test(command)), 'exactStartCommands must pass API keys by env name, not literal value');
+  assert.match(manifest.configFallbackWarning ?? '', /diagnostic-only|cannot satisfy/i, 'blocked/failed/partial manifest must warn config fallback is diagnostic-only');
+}
+
 function assertScenarioPassed(scenario: BrowserAcceptanceScenario | undefined, label: string): void {
   assert.ok(scenario, `${label} scenario must be present`);
   assert.equal(scenario.status, 'passed', `${label} must pass before manifest can pass`);
@@ -624,8 +809,8 @@ function assertScenarioPassed(scenario: BrowserAcceptanceScenario | undefined, l
   assertDoesNotUseSeedDemoOrRawEvidence(evidenceText, `${label} evidence`);
   assert.match(evidenceText, /codex-command-[a-z0-9-]+/i, `${label} evidence must include the observed command id`);
   assert.match(evidenceText, /workspace|工作区文件树|Workspace Runtime/i, `${label} evidence must include workspace context`);
-  assert.match(evidenceText, /sciforge-runtime-deepseek/i, `${label} evidence must include the Runtime Codex profile`);
-  assert.match(evidenceText, /bailian\/deepseek-v4-flash/i, `${label} evidence must include the Runtime Codex model`);
+  assertIncludes(evidenceText, runtimeCodexIdentity.profile, `${label} evidence must include the Runtime Codex profile`);
+  assertIncludes(evidenceText, runtimeCodexIdentity.model, `${label} evidence must include the Runtime Codex model`);
   assertLiveRuntimeCodexRenderedEvidence(scenario.evidence, `${label} evidence`);
   assertEvidenceExists(scenario.evidence, `${label} evidence`, { requireScreenshotAndDom: true });
 }
@@ -876,9 +1061,7 @@ function scenarioObservation(input: { domCandidates: string[]; screenshotCandida
   const domText = domPath ? readIfExists(domPath) : '';
   return {
     domText,
-    providerModelProfileVisible: domText.includes('sciforge-runtime-deepseek')
-      && domText.includes('bailian/deepseek-v4-flash')
-      && /sciforge-deepseek-proxy|provider/i.test(domText),
+    providerModelProfileVisible: runtimeIdentityVisibleInText(domText),
     workspaceCommandIdVisible: /codex-command|command id|commandId|command\s+codex-command/i.test(domText),
     rawAuditFoldedByDefault: !/RAW_JSONL|RAW_STDERR|RAW_STDOUT|raw provider sse|plugin warning|stderr[^折]|stdout[^折]|jsonl[^折]/i.test(domText),
     commandId: /codex-command-[a-z0-9-]+/i.exec(domText)?.[0],
@@ -888,6 +1071,15 @@ function scenarioObservation(input: { domCandidates: string[]; screenshotCandida
       notesPath: relativeFromRoot(blockedNotesPath),
     },
   };
+}
+
+function runtimeIdentityVisibleInText(text: string): boolean {
+  const required = [
+    runtimeCodexIdentity.profile,
+    runtimeCodexIdentity.model,
+  ].filter((value): value is string => Boolean(value));
+  return required.every((value) => text.includes(value))
+    && (!runtimeCodexIdentity.provider || text.includes(runtimeCodexIdentity.provider) || /provider/i.test(text));
 }
 
 function blockedNotes(reason: string, providerPreflight: CurrentEnvProviderPreflightManifest): string {
@@ -901,9 +1093,9 @@ function blockedNotes(reason: string, providerPreflight: CurrentEnvProviderPrefl
     `Actual/intended workspace writer URL: ${actualWorkspaceWriterUrl}`,
     `Actual/intended RuntimeCodex URL: ${actualRuntimeCodexUrl}`,
     `Workspace path: ${workspacePath}`,
-    'Profile: sciforge-runtime-deepseek',
-    'Provider: sciforge-deepseek-proxy',
-    'Model: bailian/deepseek-v4-flash',
+    `Profile: ${runtimeCodexIdentity.profile ?? 'unresolved'}`,
+    `Provider: ${runtimeCodexIdentity.provider ?? 'unresolved'}`,
+    `Model: ${runtimeCodexIdentity.model ?? 'unresolved'}`,
     `Reason: ${reason}`,
     `Provider preflight artifact: ${relativeFromRoot(providerPreflightManifestPath)}`,
     `Provider preflight category: ${providerPreflight.category}`,
@@ -925,7 +1117,7 @@ function blockedNotes(reason: string, providerPreflight: CurrentEnvProviderPrefl
     '- Config-file apiKey fallback: accepted only for local provider proxy debugging, and rejected as browser/release acceptance evidence.',
     '- Required provider proxy upstream: set SCIFORGE_PROXY_UPSTREAM_BASE_URL or config.local.json codexProxy.upstreamBaseUrl/llm.baseUrl so the local proxy has an upstream OpenAI-compatible endpoint.',
     '- Provider preflight artifact: docs/test-artifacts/runtime-provider-preflight/manifest.json records the current non-secret service-env/upstream diagnostic and remains diagnostic-only, not browser/release acceptance.',
-    '- Required Runtime Codex config: profile sciforge-runtime-deepseek, provider sciforge-deepseek-proxy, model bailian/deepseek-v4-flash, env_key SCIFORGE_RUNTIME_API_KEY, wire_api responses.',
+    '- Required Runtime Codex config: active profile, provider, model, env_key SCIFORGE_RUNTIME_API_KEY, and responses wire_api must be resolved from the local runtime config.',
     '- Re-run strict release acceptance with SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 npm run smoke:runtime-codex-browser-acceptance after the key/upstream are present and the browser shows the second-turn answer.',
     '- Remaining risk: live browser acceptance still requires configured Runtime Codex credentials/upstream and visible second-turn answer.',
     '',
@@ -995,8 +1187,7 @@ function assertLiveRuntimeCodexRenderedEvidence(evidence: BrowserAcceptanceEvide
   const hasGuiPresent = /gui\.present|GUI intent/i.test(domText);
   const hasDefaultChat = /Ask SciForge|聊天工作台|SciForge 工作台|default chat/i.test(domText);
   const hasRuntimeMetadata = /Runtime Codex/i.test(domText)
-    && /sciforge-runtime-deepseek/i.test(domText)
-    && /bailian\/deepseek-v4-flash/i.test(domText);
+    && runtimeIdentityVisibleInText(domText);
   const hasRenderedAssistantAnswer = /回答已显示|assistant (?:answer|message)|rendered (?:answer|assistant)|Runtime Codex answer rendered/i.test(domText);
   assert.ok(
     hasGuiPresent || (hasDefaultChat && hasRuntimeMetadata && hasRenderedAssistantAnswer),
@@ -1289,14 +1480,13 @@ function writeNegativeFixtures(fixtureDir: string): void {
   mkdirSync(fixtureDir, { recursive: true });
   const artifactRoot = relativeFromRoot(fixtureDir);
   const fixturePath = (file: string): string => `${artifactRoot}/${file}`;
+  const runtimeIdentityLines = runtimeIdentityFixtureLines();
   writeFixture(fixtureDir, 'valid-dom.txt', [
     '- main:',
     '  - strong: Ask SciForge',
     `  - generic: Actual browser URL ${actualUrl}`,
     `  - generic: workspace ${workspacePath}`,
-    '  - generic: sciforge-runtime-deepseek',
-    '  - generic: sciforge-deepseek-proxy',
-    '  - generic: bailian/deepseek-v4-flash',
+    ...runtimeIdentityLines,
     '  - generic: command codex-command-negative-001',
     '  - generic: gui.present show-result from live Runtime Codex',
     '  - paragraph: Runtime Codex completed the requested browser task and rendered the answer in the main chat.',
@@ -1311,9 +1501,7 @@ function writeNegativeFixtures(fixtureDir: string): void {
     `  - generic: Actual browser URL ${actualUrl}`,
     `  - generic: workspace ${workspacePath}`,
     '  - generic: Runtime Codex',
-    '  - generic: sciforge-runtime-deepseek',
-    '  - generic: sciforge-deepseek-proxy',
-    '  - generic: bailian/deepseek-v4-flash',
+    ...runtimeIdentityLines,
     '  - generic: command codex-command-negative-001',
     '  - paragraph: 回答已显示',
     '  - paragraph: Runtime Codex answer rendered in the default chat.',
@@ -1326,9 +1514,7 @@ function writeNegativeFixtures(fixtureDir: string): void {
     `  - generic: Actual browser URL ${actualUrl}`,
     `  - generic: workspace ${workspacePath}`,
     '  - generic: Runtime Codex',
-    '  - generic: sciforge-runtime-deepseek',
-    '  - generic: sciforge-deepseek-proxy',
-    '  - generic: bailian/deepseek-v4-flash',
+    ...runtimeIdentityLines,
     '  - generic: command codex-command-negative-001',
     '  - paragraph: Runtime Codex answer rendered in a detached audit panel.',
     '  - paragraph: SCIFORGE-CODEX-BROWSER-MT-20260520A',
@@ -1340,9 +1526,7 @@ function writeNegativeFixtures(fixtureDir: string): void {
     '  - strong: Ask SciForge',
     `  - generic: Actual browser URL ${actualUrl}`,
     `  - generic: workspace ${workspacePath}`,
-    '  - generic: sciforge-runtime-deepseek',
-    '  - generic: sciforge-deepseek-proxy',
-    '  - generic: bailian/deepseek-v4-flash',
+    ...runtimeIdentityLines,
     '  - generic: command codex-command-negative-001',
     '  - generic: gui.present show-result from live Runtime Codex',
     '  - code: literature-evidence-review@1.0.0',
@@ -1422,9 +1606,9 @@ function passedFixtureManifest(
     actualRuntimeCodexPort: requestedRuntimeCodexPort,
     actualRuntimeCodexUrl,
     workspacePath,
-    profile: 'sciforge-runtime-deepseek',
-    provider: 'sciforge-deepseek-proxy',
-    model: 'bailian/deepseek-v4-flash',
+    profile: runtimeCodexIdentity.profile,
+    provider: runtimeCodexIdentity.provider,
+    model: runtimeCodexIdentity.model,
     commandId: 'codex-command-negative-001',
     startedFromDefaultChatEntry: true,
     submittedThroughRuntimeCodex: true,
@@ -1507,6 +1691,16 @@ function passedLiveProof(evidenceRef: string, proofMode: RuntimeOutputProofMode 
 
 function writeFixture(fixtureDir: string, file: string, content: string): void {
   writeFileSync(join(fixtureDir, file), content, 'utf8');
+}
+
+function runtimeIdentityFixtureLines(): string[] {
+  return [
+    runtimeCodexIdentity.profile,
+    runtimeCodexIdentity.provider,
+    runtimeCodexIdentity.model,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .map((value) => `  - generic: ${value}`);
 }
 
 function writeJsonFixture(fixtureDir: string, file: string, content: unknown): void {

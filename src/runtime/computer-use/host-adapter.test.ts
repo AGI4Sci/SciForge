@@ -47,7 +47,7 @@ test('gateway adapter builds stable Computer Use action provider request', () =>
     selectedToolIds: ['local.vision-sense'],
     artifacts: [],
     humanApproval: { decisionRef: 'approval:cu-ok' },
-  }, baseConfig, '/tmp/workspace');
+	  }, baseConfig, '/tmp/workspace');
 
   assert.equal(request.schemaVersion, COMPUTER_USE_REQUEST_SCHEMA);
   assert.equal(request.providers.action, COMPUTER_USE_ACTION_PROVIDER_ID);
@@ -56,8 +56,46 @@ test('gateway adapter builds stable Computer Use action provider request', () =>
   assert.equal(request.riskPolicy, 'allow-confirmed');
   assert.equal(request.approvalRef, 'approval:cu-ok');
   assert.equal(request.windowTarget.mode, 'app-window');
-  const bridge = request.metadata.bridge as { allowSharedSystemInput?: boolean };
-  assert.equal(bridge.allowSharedSystemInput, true);
+	  const bridge = request.metadata.bridge as { allowSharedSystemInput?: boolean };
+	  assert.equal(bridge.allowSharedSystemInput, true);
+	});
+
+test('gateway adapter projects generic planner acceptance contract from UI state', () => {
+  const request = gatewayRequestToComputerUseRequest({
+    skillDomain: 'knowledge',
+    prompt: '/computer-use run operate the target window',
+    workspacePath: '/tmp/workspace',
+    selectedToolIds: ['local.vision-sense'],
+    artifacts: [],
+    uiState: {
+      computerUseLong: {
+        taskId: 'T084',
+        scenarioId: 'CU-LONG-999',
+        cuNextTaskId: 'CU-NEXT-99',
+        round: 2,
+        title: 'Generic acceptance projection',
+        roundPrompt: 'Perform the next visible GUI step.',
+        expectedTrace: ['before screenshot refs', 'generic action ledger'],
+        acceptance: ['at least one non-wait generic action'],
+        requiredEvidence: ['vision-trace.json'],
+        failureRecord: ['failure diagnostics'],
+        requiredPipeline: ['WindowTarget', 'RuntimeCodexPlanner'],
+        safetyBoundary: { noDomAccessibility: true },
+      },
+      computerUseNext: {
+        taskId: 'CU-NEXT-99',
+        requirements: ['l3-workflow-refs', 'no-dom-playwright-accessibility'],
+      },
+    },
+  }, baseConfig, '/tmp/workspace');
+
+  const contract = request.metadata.plannerAcceptanceContract as Record<string, unknown>;
+  assert.equal(contract.schemaVersion, 'sciforge.computer-use.planner-acceptance-contract.v1');
+  assert.equal(contract.scenarioId, 'CU-LONG-999');
+  assert.equal(contract.cuNextTaskId, 'CU-NEXT-99');
+  assert.deepEqual(contract.expectedTrace, ['before screenshot refs', 'generic action ledger']);
+  assert.deepEqual(contract.requirements, ['l3-workflow-refs', 'no-dom-playwright-accessibility']);
+  assert.doesNotMatch(JSON.stringify(contract), /DOMSnapshot|accessibilityTree|data:image/);
 });
 
 test('gateway adapter does not advertise visual grounder fallback when KV-Ground is absent', () => {
@@ -86,7 +124,10 @@ test('host ports contract exposes platform ports and forbids direct GUI calls', 
   assert.equal(contract.schemaVersion, COMPUTER_USE_HOST_PORTS_SCHEMA);
   assert.equal(contract.actionProvider, COMPUTER_USE_ACTION_PROVIDER_ID);
   assert.equal(contract.ports.capture.provider, 'target-window-capture');
+  assert.equal(contract.ports.plan.provider, 'runtime-codex-tui-text-planner');
+  assert.equal(contract.ports.locate.provider, 'kv-ground');
   assert.equal(contract.ports.execute.inputAdapter, 'shared-system-input-acknowledged');
+  assert.equal(contract.ports.verify.provider, 'layered-vision-verifier');
   assert.deepEqual(contract.forbiddenPorts, ['requestApproval', 'gui.present', 'gui.ask_user']);
 });
 

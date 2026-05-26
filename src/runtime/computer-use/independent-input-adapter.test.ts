@@ -56,6 +56,45 @@ test('remote-desktop simulated input adapter keeps virtual pointer and keyboard 
   }
 });
 
+test('remote-desktop simulated input adapter separates window-local pointer and screen executor coordinates', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-independent-input-coordinates-'));
+  try {
+    const config = baseConfig('independent-input-adapter-coordinates');
+    const targetResolution = {
+      ...resolvedWindowTarget(),
+      bounds: { x: -887, y: -949, width: 1125, height: 763 },
+      contentRect: { x: -887, y: -949, width: 1125, height: 763 },
+    };
+    const click = await executeIndependentInputAdapterAction({
+      type: 'click',
+      x: -800,
+      y: -900,
+      targetDescription: 'visible file item',
+    }, config, targetResolution, {
+      workspace,
+      runDir: workspace,
+      stepIndex: 0,
+    });
+    assert.equal(click.exitCode, 0);
+
+    const state = JSON.parse(await readFile(join(workspace, 'independent-input-adapter.json'), 'utf8')) as Record<string, any>;
+    assert.equal(state.virtualPointer.coordinateSpace, 'window-local');
+    assert.equal(state.virtualPointer.x, 87);
+    assert.equal(state.virtualPointer.y, 49);
+    assert.equal(state.virtualPointer.executorCoordinateSpace, 'screen');
+    assert.equal(state.virtualPointer.executorX, -800);
+    assert.equal(state.virtualPointer.executorY, -900);
+    const action = state.actions[0] as Record<string, any>;
+    assert.equal(action.pointer.coordinateSpace, 'window-local');
+    assert.equal(action.pointer.x, 87);
+    assert.equal(action.pointer.y, 49);
+    assert.equal(action.pointer.executorX, -800);
+    assert.equal(action.pointer.executorY, -900);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('remote-desktop simulated input adapter maintains a virtual multi-app session and visible artifact', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-independent-input-session-'));
   try {

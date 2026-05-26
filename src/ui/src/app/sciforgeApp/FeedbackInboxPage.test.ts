@@ -335,8 +335,8 @@ test('RT-06 repair result closure asks only solved or remaining problem feedback
 });
 
 test('PROJECT.md records the current active task board and archives the annotation sidebar protocol', () => {
-  assert.match(projectSource, /当前任务板：Computer Use TUI 拓展打通/);
-  assert.match(projectSource, /Computer Use action provider 消费 vision-sense/);
+  assert.match(projectSource, /当前任务板：下一轮 Computer Use 真实复杂任务/);
+  assert.match(projectSource, /TUI Host -> `computer_use\.runTask\(request, hostPorts\)`/);
   assert.match(projectSource, /旧全局注释侧栏 active task board 已从当前执行面删除/);
   assert.match(projectSource, /docs\/archive/);
   assert.match(sciForgeAppSource, /runAnnotationPlanOnlyTurn/);

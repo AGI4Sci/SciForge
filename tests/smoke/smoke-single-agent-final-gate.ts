@@ -21,13 +21,22 @@ const runtimeCodexTruthSourceScript = 'smoke:runtime-codex-truth-source';
 const packageRuntimeBoundaryScript = 'smoke:package-runtime-boundary';
 const fixedPlatformBoundaryScript = 'smoke:fixed-platform-boundary';
 const realTaskOfflineGatesScript = 'smoke:real-task-offline-gates';
+const cuNextReadinessScript = 'smoke:cu-next-readiness';
+const cuNextRunnerScript = 'smoke:cu-next-runner';
+const cuNextUserAcceptanceContractScript = 'smoke:cu-next-user-acceptance-contract';
 const desktopPackageDirScript = 'desktop:package:dir';
 const smokeAllScript = 'smoke:all';
 const legacyAgentServerCompatScript = 'smoke:legacy-agentserver-compat';
 const legacyAgentServerVerifyScript = 'verify:legacy-agentserver-compat';
 const releaseVerifyScript = 'verify:single-agent-release';
 const webMultiturnFinalCommand = 'tsx tests/smoke/smoke-web-multiturn-final.ts';
-const realTaskMatrixCommand = `tsx tests/smoke/smoke-real-task-matrix.ts && npm run ${realTaskOfflineGatesScript}`;
+const realTaskMatrixCommand = [
+  'tsx tests/smoke/smoke-real-task-matrix.ts',
+  `npm run ${cuNextReadinessScript}`,
+  `npm run ${cuNextRunnerScript}`,
+  `npm run ${cuNextUserAcceptanceContractScript}`,
+  `npm run ${realTaskOfflineGatesScript}`,
+].join(' && ');
 const requiredFinalGateOrder = [
   'typecheck',
   'test',

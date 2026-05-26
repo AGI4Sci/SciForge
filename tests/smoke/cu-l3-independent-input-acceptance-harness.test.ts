@@ -11,12 +11,14 @@ import {
 } from '../../tools/cu-l3-independent-input-acceptance-harness.js';
 
 const execFileAsync = promisify(execFile);
+const fixtureBytes = Buffer.from('fixture evidence');
 
 test('CU L3 independent-input harness projects a non-dry-run package-bridge trace into passable user acceptance', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-l3-independent-input-pass-'));
   try {
     const tracePath = join(workspace, 'vision-trace.json');
     const adapterPath = join(workspace, 'independent-input-adapter.json');
+    const evidence = await writeHarnessEvidenceFiles(workspace);
     await writeFile(join(workspace, 'host-ports.json'), JSON.stringify({ ports: { execute: { provider: 'sciforge-simulated-remote-desktop-input-adapter' } } }));
     await writeFile(join(workspace, 'tool-payload.json'), JSON.stringify({ displayIntent: { kind: 'gui.present' } }));
     await writeFile(join(workspace, 'request.json'), JSON.stringify({ task: 'Create a multi-app acceptance artifact from visible source facts.' }));
@@ -29,33 +31,134 @@ test('CU L3 independent-input harness projects a non-dry-run package-bridge trac
     const result = await runCuL3IndependentInputAcceptanceHarness({
       tracePath,
       adapterPath,
-      finalArtifactRef: '.sciforge/vision-runs/cu-l3-independent-fixture/acceptance-slide.pptx',
-      guiPresentRecordRef: '.sciforge/vision-runs/cu-l3-independent-fixture/gui-present-record.json',
-      guiPresentPayloadRef: '.sciforge/vision-runs/cu-l3-independent-fixture/tool-payload.json',
+      finalArtifactRef: evidence.finalArtifactRef,
+      guiPresentRecordRef: evidence.guiPresentRecordRef,
+      guiPresentPayloadRef: evidence.guiPresentPayloadRef,
     });
 
     assert.equal(result.verifier.status, 'passed');
     assert.equal(result.manifest.status, 'multi-app-workflow-passed');
     assert.equal(result.manifest.level, 'L3');
     assert.deepEqual(result.manifest.appWorkflow.apps, ['Browser', 'Slide Editor', 'File Manager']);
-    assert.deepEqual(result.manifest.appWorkflow.windowSwitchTraceRefs, [tracePath]);
+    assert.deepEqual(result.manifest.appWorkflow.windowSwitchTraceRefs, ['vision-trace.json']);
     assert.ok(result.manifest.screenshotRefs.before.includes(`${workspace}/step-001-before.png`));
     assert.ok(result.manifest.screenshotRefs.before.includes(`${workspace}/step-003-before.png`));
     assert.ok(result.manifest.screenshotRefs.after.includes(`${workspace}/step-001-after.png`));
     assert.ok(result.manifest.screenshotRefs.after.includes(`${workspace}/step-003-after.png`));
     assert.deepEqual(result.manifest.focusCropRefs, [`${workspace}/step-001-before-focus.png`]);
-    assert.deepEqual(result.manifest.groundingDiagnosticsRefs, [tracePath]);
+    assert.deepEqual(result.manifest.groundingDiagnosticsRefs, ['vision-trace.json']);
     const independentClaim = result.manifest.evidenceClaims.find((claim) => claim.kind === 'independent-input-adapter');
     assert.ok(independentClaim);
-    assert.ok(independentClaim.recordRefs?.includes(adapterPath));
-    assert.ok(independentClaim.sessionRefs?.includes(adapterPath));
+    assert.ok(independentClaim.recordRefs?.includes('independent-input-adapter.json'));
+    assert.ok(independentClaim.sessionRefs?.includes('independent-input-adapter.json'));
     assert.equal(result.manifest.executorLease.owner, 'sciforge-independent-input-adapter remote-desktop');
-    assert.equal(result.manifest.verifierVerdict.ref, `${workspace}/cu-l3-independent-input-verifier.json`);
-    assert.ok(result.manifest.guiPresent.displayedRefs?.includes('.sciforge/vision-runs/cu-l3-independent-fixture/acceptance-slide.pptx'));
+    assert.equal(result.manifest.verifierVerdict.ref, 'cu-l3-independent-input-verifier.json');
+    assert.ok(result.manifest.guiPresent.displayedRefs?.includes(evidence.finalArtifactRef));
 
     const writtenVerifier = JSON.parse(await readFile(result.paths.verifier, 'utf8'));
     assert.equal(writtenVerifier.schemaVersion, 'sciforge.computer-use.l3-independent-input-verifier.v1');
     assert.deepEqual(writtenVerifier.issueRefs, []);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('CU L3 independent-input harness discovers package-bridge gui.present sibling evidence by default', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-l3-independent-input-siblings-'));
+  try {
+    const tracePath = join(workspace, 'vision-trace.json');
+    const adapterPath = join(workspace, 'independent-input-adapter.json');
+    const evidence = await writeHarnessEvidenceFiles(workspace);
+    await writeFile(join(workspace, 'host-ports.json'), JSON.stringify({ ports: { execute: { provider: 'sciforge-simulated-remote-desktop-input-adapter' } } }));
+    await writeFile(join(workspace, 'tool-payload.json'), JSON.stringify({ displayIntent: { kind: 'gui.present' } }));
+    await writeFile(join(workspace, 'computer-use-request.json'), JSON.stringify({ task: 'Create a multi-app acceptance artifact from visible source facts.' }));
+    await writeFile(join(workspace, 'gui-present.json'), JSON.stringify({ port: 'gui.present', artifactRef: evidence.finalArtifactRef }));
+    await writeFile(tracePath, JSON.stringify(validTrace({
+      runId: 'cu-l3-sibling-fixture',
+      runRef: workspace,
+    }), null, 2));
+    await writeFile(adapterPath, JSON.stringify(validAdapter('cu-l3-sibling-fixture'), null, 2));
+
+    const result = await runCuL3IndependentInputAcceptanceHarness({
+      tracePath,
+      adapterPath,
+      finalArtifactRef: evidence.finalArtifactRef,
+    });
+
+    assert.equal(result.manifest.status, 'multi-app-workflow-passed');
+    assert.equal(result.manifest.guiPresent.recordRef, 'gui-present.json');
+    assert.equal(result.manifest.guiPresent.payloadRef, 'tool-payload.json');
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('CU L3 independent-input harness discovers generic markdown final artifacts from visible remote evidence', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-l3-visible-md-'));
+  try {
+    const runId = 'cu-l3-visible-md-fixture';
+    const tracePath = join(workspace, 'vision-trace.json');
+    const adapterPath = join(workspace, 'independent-input-adapter.json');
+    const finalArtifactRef = 'index.md';
+    const visibleArtifact = visibleMarkdownArtifact(finalArtifactRef, 'step-003-save');
+    await writeHarnessEvidenceFiles(workspace);
+    await writeFile(join(workspace, finalArtifactRef), '# Acceptance index\n\nVisible final markdown artifact.\n');
+    await writeFile(join(workspace, 'host-ports.json'), JSON.stringify({ ports: { execute: { provider: 'sciforge-simulated-remote-desktop-input-adapter' } } }));
+    await writeFile(join(workspace, 'tool-payload.json'), JSON.stringify({
+      displayIntent: { kind: 'gui.present' },
+      visibleArtifactRefs: [finalArtifactRef],
+      visibleArtifacts: [visibleArtifact],
+    }));
+    await writeFile(join(workspace, 'computer-use-request.json'), JSON.stringify({ task: 'Create a markdown acceptance artifact from visible source facts.' }));
+    await writeFile(join(workspace, 'gui-present.json'), JSON.stringify({
+      port: 'gui.present',
+      artifactRef: finalArtifactRef,
+      visibleArtifactRefs: [finalArtifactRef],
+      visibleArtifacts: [visibleArtifact],
+    }));
+    await writeFile(join(workspace, 'virtual-remote-session.json'), JSON.stringify({
+      schemaVersion: 'sciforge.computer-use.virtual-remote-session-trace.v1',
+      runId,
+      visibleArtifactRefs: [finalArtifactRef],
+      visibleArtifacts: [visibleArtifact],
+    }));
+    const trace = validTrace({ runId, runRef: workspace }) as Record<string, any>;
+    trace.request = { task: 'Create a markdown acceptance artifact from visible source facts.' };
+    trace.toolPayload = {
+      displayIntent: { kind: 'gui.present' },
+      visibleArtifactRefs: [finalArtifactRef],
+      visibleArtifacts: [visibleArtifact],
+    };
+    trace.guiPresent = {
+      recordRef: 'gui-present.json',
+      payloadRef: 'tool-payload.json',
+      displayedRefs: [finalArtifactRef],
+      visibleArtifacts: [visibleArtifact],
+    };
+    trace.virtualRemoteSession = {
+      sessionRef: 'virtual-remote-session.json',
+      visibleArtifactRefs: [finalArtifactRef],
+      visibleArtifacts: [visibleArtifact],
+    };
+    const adapter = validAdapter(runId) as Record<string, any>;
+    adapter.virtualRemoteSession = { stateRef: 'virtual-remote-session.json' };
+    await writeFile(tracePath, JSON.stringify(trace, null, 2));
+    await writeFile(adapterPath, JSON.stringify(adapter, null, 2));
+
+    const result = await runCuL3IndependentInputAcceptanceHarness({
+      tracePath,
+      adapterPath,
+    });
+
+    assert.equal(result.verifier.status, 'passed');
+    assert.equal(result.manifest.status, 'multi-app-workflow-passed');
+    assert.equal(result.manifest.finalArtifactRef, finalArtifactRef);
+    assert.equal(result.manifest.guiPresent.recordRef, 'gui-present.json');
+    assert.equal(result.manifest.guiPresent.payloadRef, 'tool-payload.json');
+    assert.ok(result.manifest.guiPresent.displayedRefs?.includes(finalArtifactRef));
+    assert.ok(result.manifest.guiPresent.artifactRefs?.includes(finalArtifactRef));
+    const guiPresentClaim = result.manifest.evidenceClaims.find((claim) => claim.kind === 'gui-present-record');
+    assert.ok(guiPresentClaim?.artifactRefs?.includes(finalArtifactRef));
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -101,6 +204,60 @@ test('CU L3 independent-input harness blocks shared system input traces even wit
   }
 });
 
+test('CU L3 independent-input harness blocks test action fixture traces even when dryRun is false', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-l3-independent-input-fixture-mode-'));
+  try {
+    const tracePath = join(workspace, 'vision-trace.json');
+    const adapterPath = join(workspace, 'independent-input-adapter.json');
+    const trace = validTrace({ runId: 'cu-l3-test-action-fixture', runRef: workspace }) as Record<string, any>;
+    trace.config.testActionFixtureMode = true;
+    await writeFile(tracePath, JSON.stringify(trace, null, 2));
+    await writeFile(adapterPath, JSON.stringify(validAdapter('cu-l3-test-action-fixture'), null, 2));
+
+    const result = await runCuL3IndependentInputAcceptanceHarness({
+      tracePath,
+      adapterPath,
+      finalArtifactRef: '.sciforge/vision-runs/cu-l3-test-action-fixture/acceptance-slide.pptx',
+      guiPresentRecordRef: '.sciforge/vision-runs/cu-l3-test-action-fixture/gui-present-record.json',
+      guiPresentPayloadRef: '.sciforge/vision-runs/cu-l3-test-action-fixture/tool-payload.json',
+    });
+
+    assert.equal(result.verifier.status, 'blocked');
+    assert.ok(result.verifier.issueRefs.includes('no-test-action-fixture-mode'));
+    assert.equal(result.manifest.status, 'blocked');
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('CU L3 independent-input harness requires structured taskId binding when projecting CU-NEXT evidence', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-l3-independent-input-task-id-'));
+  try {
+    const tracePath = join(workspace, 'vision-trace.json');
+    const adapterPath = join(workspace, 'independent-input-adapter.json');
+    await writeFile(tracePath, JSON.stringify(validTrace({
+      runId: 'cu-l3-missing-task-id',
+      runRef: workspace,
+    }), null, 2));
+    await writeFile(adapterPath, JSON.stringify(validAdapter('cu-l3-missing-task-id'), null, 2));
+
+    const result = await runCuL3IndependentInputAcceptanceHarness({
+      tracePath,
+      adapterPath,
+      taskId: 'CU-NEXT-07',
+      finalArtifactRef: '.sciforge/vision-runs/cu-l3-missing-task-id/acceptance-slide.pptx',
+      guiPresentRecordRef: '.sciforge/vision-runs/cu-l3-missing-task-id/gui-present-record.json',
+      guiPresentPayloadRef: '.sciforge/vision-runs/cu-l3-missing-task-id/tool-payload.json',
+    });
+
+    assert.equal(result.verifier.status, 'blocked');
+    assert.ok(result.verifier.issueRefs.includes('task-id-bound'));
+    assert.equal(result.manifest.status, 'blocked');
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('CU L3 independent-input CLI writes verifier, projected input, and user acceptance manifest', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-l3-independent-input-cli-'));
   try {
@@ -109,6 +266,7 @@ test('CU L3 independent-input CLI writes verifier, projected input, and user acc
     const verifierPath = join(workspace, 'verifier.json');
     const inputPath = join(workspace, 'input.json');
     const manifestPath = join(workspace, 'manifest.json');
+    const evidence = await writeHarnessEvidenceFiles(workspace);
     await writeFile(tracePath, JSON.stringify(validTrace({
       runId: 'cu-l3-independent-cli',
       runRef: workspace,
@@ -130,11 +288,11 @@ test('CU L3 independent-input CLI writes verifier, projected input, and user acc
       '--manifest-out',
       manifestPath,
       '--final-artifact-ref',
-      '.sciforge/vision-runs/cu-l3-independent-cli/acceptance-slide.pptx',
+      evidence.finalArtifactRef,
       '--gui-present-record-ref',
-      '.sciforge/vision-runs/cu-l3-independent-cli/gui-present-record.json',
+      evidence.guiPresentRecordRef,
       '--gui-present-payload-ref',
-      '.sciforge/vision-runs/cu-l3-independent-cli/tool-payload.json',
+      evidence.guiPresentPayloadRef,
     ]);
 
     assert.match(stdout, /\[passed\/multi-app-workflow-passed\]/);
@@ -148,6 +306,26 @@ test('CU L3 independent-input CLI writes verifier, projected input, and user acc
     await rm(workspace, { recursive: true, force: true });
   }
 });
+
+async function writeHarnessEvidenceFiles(workspace: string) {
+  const refs = [
+    'step-001-before.png',
+    'step-001-before-focus.png',
+    'step-001-after.png',
+    'step-002-before.png',
+    'step-002-after.png',
+    'step-003-before.png',
+    'step-003-after.png',
+  ];
+  await Promise.all(refs.map((name) => writeFile(join(workspace, name), fixtureBytes)));
+  const finalArtifactRef = join(workspace, 'acceptance-slide.pptx');
+  const guiPresentRecordRef = join(workspace, 'gui-present-record.json');
+  const guiPresentPayloadRef = join(workspace, 'tool-payload.json');
+  await writeFile(finalArtifactRef, fixtureBytes);
+  await writeFile(guiPresentRecordRef, JSON.stringify({ port: 'gui.present', artifactRef: finalArtifactRef }));
+  await writeFile(guiPresentPayloadRef, JSON.stringify({ displayIntent: { kind: 'gui.present' } }));
+  return { finalArtifactRef, guiPresentRecordRef, guiPresentPayloadRef };
+}
 
 function validTrace(options: { runId: string; runRef: string }) {
   return {
@@ -312,5 +490,21 @@ function validAdapter(runId: string) {
     ],
     createdAt: '2026-05-25T00:00:00.000Z',
     updatedAt: '2026-05-25T00:01:00.000Z',
+  };
+}
+
+function visibleMarkdownArtifact(artifactRef: string, sourceActionId: string): Record<string, unknown> {
+  return {
+    id: 'visible-markdown-index',
+    title: 'Acceptance index',
+    artifactRef,
+    dataRef: artifactRef,
+    path: artifactRef,
+    mimeType: 'text/markdown',
+    appId: 'Browser',
+    delivery: 'virtual-remote-session-artifact',
+    status: 'visible-and-saved',
+    visibleTexts: ['Acceptance index', 'Visible final markdown artifact'],
+    sourceActionIds: [sourceActionId],
   };
 }

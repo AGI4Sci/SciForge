@@ -20,6 +20,7 @@ export const computerUseHostPortProviderIds = {
   focusRegionCrop: 'host-focus-region-crop',
   writeTrace: 'workspace-file-ref-trace-writer',
   emitEvent: 'workspace-runtime-events',
+  runtimeCodexTuiTextPlanner: 'runtime-codex-tui-text-planner',
   layeredVerifier: 'layered-vision-verifier',
   kvGround: 'kv-ground',
 } as const;
@@ -124,6 +125,9 @@ export function computerUseExecuteHostPortProvider(options: {
 export function computerUseHostPortsPolicySummary(options: {
   desktopPlatform?: string;
   dryRun?: boolean;
+  grounder?: {
+    baseUrl?: string;
+  };
   windowTarget?: {
     enabled?: boolean;
     mode?: ComputerUseWindowTargetMode;
@@ -138,7 +142,12 @@ export function computerUseHostPortsPolicySummary(options: {
       actionRequestExecutor: computerUseActionRequestExecutorProvider(options),
       capture: computerUseCaptureHostPortProvider(options.windowTarget ?? {}),
       crop: computerUseHostPortProviderIds.focusRegionCrop,
+      plan: computerUseHostPortProviderIds.runtimeCodexTuiTextPlanner,
+      locate: options.grounder?.baseUrl
+        ? computerUseHostPortProviderIds.kvGround
+        : computerUseHostPortProviderIds.focusRegionCrop,
       execute: computerUseExecuteHostPortProvider(options),
+      verify: computerUseHostPortProviderIds.layeredVerifier,
       writeTrace: computerUseHostPortProviderIds.writeTrace,
       emitEvent: computerUseHostPortProviderIds.emitEvent,
     },

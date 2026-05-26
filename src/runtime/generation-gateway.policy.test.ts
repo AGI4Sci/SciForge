@@ -244,6 +244,44 @@ test('provider preflight blocks before sense or backend dispatch for explicit pr
   }
 });
 
+test('Computer Use vision runtime bypasses prompt-derived browser provider preflight', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-computer-use-provider-prompt-bypass-'));
+  const original = process.env.SCIFORGE_CONVERSATION_POLICY_MODE;
+  process.env.SCIFORGE_CONVERSATION_POLICY_MODE = 'off';
+  const events: any[] = [];
+  try {
+    const payload = await runWorkspaceRuntimeGateway({
+      skillDomain: 'knowledge',
+      prompt: '/computer-use run open Browser, download a safe local PDF, then use generic mouse/keyboard to show the downloaded file in Finder.',
+      workspacePath: workspace,
+      selectedToolIds: ['local.vision-sense'],
+      artifacts: [],
+      references: [],
+      uiState: {
+        selectedToolIds: ['local.vision-sense'],
+        visionSenseConfig: {
+          desktopBridgeEnabled: false,
+          dryRun: true,
+        },
+      },
+    }, {
+      onEvent(event) {
+        events.push(event);
+      },
+    });
+
+    assert.match(payload.message, /generic Computer Use bridge is not ready/);
+    assert.equal(payload.executionUnits[0]?.tool, 'local.vision-sense');
+    assert.doesNotMatch(JSON.stringify(payload), /capability-provider-preflight|browser_fetch|browser_search/);
+    const stageAudits = events.filter((event) => event.type === 'gateway-pipeline-stage-audit');
+    assert.equal(stageAudits.some((event) => event.raw.stage === STAGE_CAPABILITY_PROVIDER_PREFLIGHT && event.raw.shortCircuit === true), false);
+    assert.ok(stageAudits.some((event) => event.raw.stage === STAGE_VISION_SENSE_RUNTIME && event.raw.shortCircuit === true));
+  } finally {
+    restoreEnv('SCIFORGE_CONVERSATION_POLICY_MODE', original);
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('gateway pipeline audit records stage sequence and replayable registry order', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-gateway-pipeline-audit-'));
   const original = process.env.SCIFORGE_CONVERSATION_POLICY_MODE;

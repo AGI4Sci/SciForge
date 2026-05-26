@@ -296,6 +296,41 @@ try {
     await closeServer(grounderServer);
   }
 
+  const observeOnlyGrounderRequests: Array<Record<string, unknown>> = [];
+  const observeOnlyGrounderServer = createJsonPostServer('/predict/', (body) => {
+    observeOnlyGrounderRequests.push(body);
+    assert.match(String(body.text_prompt), /results summary panel/);
+    return { coordinates: [36, 28], image_size: { width: 100, height: 80 }, text: 'click' };
+  });
+  const observeOnlyGrounderBaseUrl = await listenLocal(observeOnlyGrounderServer);
+  try {
+    const observeOnlyWorkspace = await createVisionWorkspace('grounder-observe-only');
+    process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-grounder-observe-only-smoke';
+    process.env.SCIFORGE_VISION_KV_GROUND_URL = observeOnlyGrounderBaseUrl;
+    process.env.SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS = '1';
+    process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = JSON.stringify([
+      { type: 'wait', ms: 1, targetDescription: 'results summary panel' },
+    ]);
+    const observed = await runVisionSenseGateway({
+      skillDomain: 'literature',
+      prompt: 'Use generic computer use to observe a visually described target without clicking it.',
+      workspacePath: observeOnlyWorkspace,
+    });
+    const { trace: observedTrace } = await readVisionTraceJson(observeOnlyWorkspace, observed);
+    const observedStep = (observedTrace.steps as Array<Record<string, unknown>>).find((step) => step.id === 'step-001-execute-wait');
+    assert.ok(observedStep);
+    assert.equal(((observedStep.plannedAction as Record<string, unknown>)?.type), 'wait');
+    assert.equal(((observedStep.grounding as Record<string, unknown>)?.observationOnly), true);
+    assert.equal(((observedStep.grounding as Record<string, unknown>)?.provider), 'coarse-to-fine');
+    assert.equal((observedTrace.steps as Array<Record<string, unknown>>).some((step) => step.id === 'step-001-execute-click'), false);
+    assert.ok((((observedStep.visualFocus as Record<string, unknown>)?.beforeFocusScreenshotRefs) as unknown[]).length > 0);
+    const fineGrounding = ((observedStep.grounding as Record<string, unknown>)?.fineGrounding as Record<string, unknown>);
+    assert.ok(fineGrounding?.focusScreenshotRef);
+    assert.equal(observeOnlyGrounderRequests.length, 2);
+  } finally {
+    await closeServer(observeOnlyGrounderServer);
+  }
+
   const kvFailureWorkspace = await createVisionWorkspace('kv-ground-fail-closed');
   process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-kv-ground-fail-closed-smoke';
   process.env.SCIFORGE_VISION_KV_GROUND_URL = 'http://127.0.0.1:1';
@@ -308,13 +343,13 @@ try {
     workspacePath: kvFailureWorkspace,
   });
   assert.equal(kvGroundFailClosed.executionUnits[0].status, 'failed-with-reason');
-  assert.match(String(kvGroundFailClosed.executionUnits[0].failureReason), /KV Grounder request failed/i);
+  assert.match(String(kvGroundFailClosed.executionUnits[0].failureReason), /KV Grounder (?:health preflight|request) failed/i);
   const { trace: kvFailureTrace, text: kvFailureTraceText } = await readVisionTraceJson(kvFailureWorkspace, kvGroundFailClosed);
   assert.doesNotMatch(kvFailureTraceText, /fallbackFrom|openai-compatible-vision-grounder/i);
   const kvFailureStep = (kvFailureTrace.steps as Array<Record<string, unknown>>).find((step) => step.id === 'step-001-execute-click');
   assert.ok(kvFailureStep);
   assert.equal(((kvFailureStep.grounding as Record<string, unknown>)?.provider), 'kv-ground');
-  assert.match(String(kvFailureStep.failureReason), /KV Grounder request failed/i);
+  assert.match(String(kvFailureStep.failureReason), /KV Grounder (?:health preflight|request) failed/i);
 
   let plannerCalls = 0;
   const plannerRawRequests: string[] = [];

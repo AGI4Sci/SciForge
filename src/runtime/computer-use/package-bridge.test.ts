@@ -38,6 +38,35 @@ function baseConfig(runId: string, actions: ComputerUseConfig['testOnlyPlannedAc
   };
 }
 
+async function readJsonEvidence(path: string): Promise<Record<string, any>> {
+  assert.equal((await stat(path)).isFile(), true);
+  return JSON.parse(await readFile(path, 'utf8')) as Record<string, any>;
+}
+
+async function assertPackageBridgeEvidenceFiles(runDir: string, options: { expectApproval?: boolean } = {}) {
+  const request = await readJsonEvidence(join(runDir, 'computer-use-request.json'));
+  const hostPorts = await readJsonEvidence(join(runDir, 'host-ports.json'));
+  const payload = await readJsonEvidence(join(runDir, 'tool-payload.json'));
+  const guiPresent = await readJsonEvidence(join(runDir, 'gui-present.json'));
+
+  assert.equal(request.schemaVersion, 'sciforge.computer-use.request.v1');
+  assert.equal(hostPorts.schemaVersion, 'sciforge.computer-use.host-ports.v1');
+  assert.ok(hostPorts.ports.capture);
+  assert.match(JSON.stringify(payload), /vision-trace\.json/);
+  assert.match(JSON.stringify(payload), /workEvidence:computer-use-action-provider/);
+  assert.equal(guiPresent.port, 'gui.present');
+  assert.ok(guiPresent.payload.traceRefs.some((ref: string) => ref.endsWith('/vision-trace.json')));
+  assert.ok(guiPresent.payload.artifactRefs.some((ref: string) => ref.endsWith('/vision-trace.json')));
+
+  if (options.expectApproval) {
+    const guiAskUser = await readJsonEvidence(join(runDir, 'gui-ask-user.json'));
+    assert.equal(guiAskUser.port, 'gui.ask_user');
+    assert.ok(guiAskUser.payload.approvalRequest);
+    assert.match(JSON.stringify(guiAskUser.payload.approvalRequest), /approval/i);
+    assert.ok(guiAskUser.payload.relatedRefs.some((ref: string) => ref.endsWith('/vision-trace.json')));
+  }
+}
+
 test('package bridge calls Python run_task through stdio host ports and writes refs-first trace', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-package-bridge-'));
   const events: WorkspaceRuntimeEvent[] = [];
@@ -65,6 +94,7 @@ test('package bridge calls Python run_task through stdio host ports and writes r
     assert.doesNotMatch(JSON.stringify(trace), /data:image\/|;base64,|fallbackActions|computer-use-action-loop/);
     assert.ok(payload.objectReferences?.some((ref) => ref.id === 'ref:computer-use-tui-host-actions'));
     assert.ok(events.some((event) => event.type === 'computer-use.tui-host-actions'));
+    await assertPackageBridgeEvidenceFiles(join(workspace, '.sciforge/vision-runs/cu-package-bridge-ok'));
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -198,6 +228,12 @@ test('package bridge routes registered remote-desktop adapter through independen
     assert.match(traceText, /independent-input-adapter\.json/);
     assert.match(traceText, /sciforge-independent-input-adapter/);
     assert.doesNotMatch(traceText, /macos-cgevent-system-events|swift-cgevent|System Events executor|shared-system-pointer-keyboard/);
+    const guiStep = (trace.steps as Array<Record<string, any>>).find((step) => step.kind === 'gui-execution');
+    assert.equal(guiStep?.scheduler?.executorLease?.mode, 'real-gui-executor-lock');
+    assert.equal(guiStep?.scheduler?.executorLease?.status, undefined);
+    assert.equal(typeof guiStep?.scheduler?.executorLease?.lockId, 'string');
+    assert.equal(typeof guiStep?.scheduler?.executorLease?.acquiredAt, 'string');
+    assert.equal(typeof guiStep?.scheduler?.executorLease?.releasedAt, 'string');
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -235,6 +271,9 @@ test('package bridge projects independent virtual remote session artifacts into 
       ? payload.executionUnits[0]?.outputArtifacts
       : [];
     assert.ok(outputArtifacts.includes('.sciforge/vision-runs/cu-package-bridge-independent-session/virtual-slide-deck.md'));
+    const traceArtifact = payload.artifacts.find((artifact) => artifact.path === '.sciforge/vision-runs/cu-package-bridge-independent-session/vision-trace.json');
+    const traceArtifactMetadata = traceArtifact?.metadata as Record<string, unknown> | undefined;
+    assert.equal(traceArtifactMetadata?.finalArtifactRef, '.sciforge/vision-runs/cu-package-bridge-independent-session/virtual-slide-deck.md');
     const hostActionsRef = payload.objectReferences?.find((ref) => ref.id === 'ref:computer-use-tui-host-actions');
     assert.ok(hostActionsRef);
     assert.match(JSON.stringify(hostActionsRef.data), /virtual-slide-deck\.md/);
@@ -271,24 +310,108 @@ test('package bridge defaults to Runtime Codex text planner when no test fixture
   try {
     const config = baseConfig('cu-package-bridge-codex-planner', []);
     config.testActionFixtureMode = false;
-    const payload = await runComputerUsePackageBridge({
-      skillDomain: 'knowledge',
-      prompt: '/computer-use run type low risk local smoke text using the default planner',
-      workspacePath: workspace,
-      selectedToolIds: ['local.vision-sense'],
-      artifacts: [],
-    }, workspace, config, {}, {
-      codexPlannerAdapter: planner,
-    });
+	    const payload = await runComputerUsePackageBridge({
+	      skillDomain: 'knowledge',
+	      prompt: '/computer-use run type low risk local smoke text using the default planner',
+	      workspacePath: workspace,
+	      selectedToolIds: ['local.vision-sense'],
+	      uiState: {
+	        computerUseLong: {
+	          taskId: 'T084',
+	          scenarioId: 'CU-LONG-999',
+	          cuNextTaskId: 'CU-NEXT-99',
+	          round: 1,
+	          expectedTrace: ['Runtime Codex planner command receives acceptance contract'],
+	          acceptance: ['one generic action then done'],
+	          requiredEvidence: ['vision-trace.json'],
+	        },
+	      },
+	      artifacts: [],
+	    }, workspace, config, {}, {
+	      codexPlannerAdapter: planner,
+	    });
 
     assert.equal(payload.executionUnits[0]?.status, 'done');
-    assert.ok(planner.commandTexts.length >= 1);
-    assert.match(planner.commandTexts[0] ?? '', /Compact observation JSON/);
-    assert.doesNotMatch(planner.commandTexts[0] ?? '', /image_url|data:image|accessibilityTree|DOMSnapshot/);
+	    assert.ok(planner.commandTexts.length >= 1);
+	    assert.match(planner.commandTexts[0] ?? '', /Compact observation JSON/);
+	    assert.match(planner.commandTexts[0] ?? '', /Planner acceptance contract JSON/);
+	    assert.match(planner.commandTexts[0] ?? '', /Runtime Codex planner command receives acceptance contract/);
+	    assert.doesNotMatch(planner.commandTexts[0] ?? '', /image_url|data:image|accessibilityTree|DOMSnapshot/);
     const traceText = await readFile(join(workspace, '.sciforge/vision-runs/cu-package-bridge-codex-planner/vision-trace.json'), 'utf8');
     assert.match(traceText, /runtime-codex-tui-text-planner/);
     assert.doesNotMatch(traceText, /openai-compatible-vision-planner|fallbackActions|computer-use-action-loop/);
   } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('package bridge propagates runtime abort to the text planner and writes a trace', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-package-abort-'));
+  const adapter = new AbortAwarePlannerAdapter();
+  const controller = new AbortController();
+  try {
+    const config = {
+      ...baseConfig('cu-package-bridge-abort', []),
+      testActionFixtureMode: false,
+      testOnlyPlannedActions: [],
+    };
+    const run = runComputerUsePackageBridge({
+      skillDomain: 'knowledge',
+      prompt: '/computer-use run wait for a planner action unless the runtime aborts',
+      workspacePath: workspace,
+      selectedToolIds: ['local.vision-sense'],
+      artifacts: [],
+    }, workspace, config, { signal: controller.signal }, { codexPlannerAdapter: adapter });
+
+    await adapter.started;
+    controller.abort();
+    const payload = await run;
+
+    assert.equal(adapter.abortSignalSeen, true);
+    assert.equal(adapter.aborted, true);
+    assert.equal(payload.executionUnits[0]?.status, 'failed-with-reason');
+    assert.match(String(payload.executionUnits[0]?.failureReason || payload.message), /aborted|cancelled|planner/i);
+    const tracePath = join(workspace, '.sciforge/vision-runs/cu-package-bridge-abort/vision-trace.json');
+    const trace = JSON.parse(await readFile(tracePath, 'utf8')) as Record<string, any>;
+    assert.equal(trace.schemaVersion, 'sciforge.vision-trace.v1');
+    assert.match(JSON.stringify(trace), /planner aborted by test signal|Runtime Codex text planner failed/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('package bridge preserves partial GUI execution trace when runtime aborts before finalResult', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-package-partial-abort-'));
+  const adapter = new AbortAfterFirstActionPlannerAdapter();
+  const controller = new AbortController();
+  try {
+    const config = {
+      ...baseConfig('cu-package-bridge-partial-abort', []),
+      testActionFixtureMode: false,
+      testOnlyPlannedActions: [],
+      maxSteps: 3,
+    };
+    const run = runComputerUsePackageBridge({
+      skillDomain: 'knowledge',
+      prompt: '/computer-use run type two low-risk text snippets and preserve partial trace if interrupted',
+      workspacePath: workspace,
+      selectedToolIds: ['local.vision-sense'],
+      selectedActionIds: ['action.sciforge.computer-use'],
+      artifacts: [],
+    }, workspace, config, { signal: controller.signal }, { codexPlannerAdapter: adapter });
+
+    await adapter.secondStarted;
+    controller.abort(new Error('test round timeout after first action'));
+    const payload = await run;
+
+    assert.equal(payload.executionUnits[0]?.status, 'failed-with-reason');
+    assert.match(String(payload.executionUnits[0]?.failureReason || payload.message), /test round timeout after first action/);
+    const trace = JSON.parse(await readFile(join(workspace, '.sciforge/vision-runs/cu-package-bridge-partial-abort/vision-trace.json'), 'utf8')) as Record<string, any>;
+    assert.ok((trace.steps as Array<Record<string, unknown>>).some((step) => step.kind === 'gui-execution'));
+    assert.ok((trace.steps as Array<Record<string, unknown>>).some((step) => step.kind === 'planning' && step.status === 'done'));
+    assert.equal((trace.steps as Array<Record<string, unknown>>).filter((step) => step.kind === 'gui-execution').length, 1);
+  } finally {
+    controller.abort();
     await rm(workspace, { recursive: true, force: true });
   }
 });
@@ -328,6 +451,7 @@ test('package bridge preserves approvalRequest as gui.ask_user host action metad
     assert.equal(packageSteps[0]?.afterRef, null);
     assert.equal(projectedSteps[0]?.status, 'blocked');
     assert.equal(projectedSteps[0]?.execution, undefined);
+    await assertPackageBridgeEvidenceFiles(join(workspace, '.sciforge/vision-runs/cu-package-bridge-approval'), { expectApproval: true });
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -391,6 +515,114 @@ class FakePlannerAdapter implements AgentCliAdapter {
   }
 
   async cancel(): Promise<void> {}
+}
+
+class AbortAwarePlannerAdapter implements AgentCliAdapter {
+  abortSignalSeen = false;
+  aborted = false;
+  private resolveStarted!: () => void;
+  readonly started = new Promise<void>((resolve) => {
+    this.resolveStarted = resolve;
+  });
+
+  async startTurn(input: AgentCliStartTurnInput): Promise<AgentCliTurn> {
+    this.abortSignalSeen = Boolean(input.abortSignal);
+    this.resolveStarted();
+    const turnId = input.commandId ?? 'abort-aware-turn';
+    const attemptId = input.attemptId ?? 'abort-aware-attempt';
+    return {
+      turnId,
+      attemptId,
+      events: this.events(input, turnId, attemptId),
+    };
+  }
+
+  async cancel(): Promise<void> {}
+
+  private async *events(
+    input: AgentCliStartTurnInput,
+    commandId: string,
+    attemptId: string,
+  ): AsyncIterable<NormalizedAgentEvent> {
+    if (!input.abortSignal?.aborted) {
+      await new Promise<void>((resolve) => input.abortSignal?.addEventListener('abort', () => resolve(), { once: true }));
+    }
+    this.aborted = true;
+    const base = {
+      schemaVersion: 'sciforge.codex.normalized-event.v1' as const,
+      timestamp: '2026-05-25T00:00:00.000Z',
+      provider: 'test',
+      model: 'test',
+      profile: 'test',
+      workspace: input.workspacePath,
+      commandId,
+      attemptId,
+      evidenceRefs: [],
+    };
+    yield { ...base, type: 'failed', status: 'failed', message: 'planner aborted by test signal', exitCode: 143, signal: 'SIGTERM' };
+  }
+}
+
+class AbortAfterFirstActionPlannerAdapter implements AgentCliAdapter {
+  private calls = 0;
+  private resolveSecondStarted!: () => void;
+  readonly secondStarted = new Promise<void>((resolve) => {
+    this.resolveSecondStarted = resolve;
+  });
+
+  async startTurn(input: AgentCliStartTurnInput): Promise<AgentCliTurn> {
+    this.calls += 1;
+    const turnId = input.commandId ?? `partial-abort-turn-${this.calls}`;
+    const attemptId = input.attemptId ?? `partial-abort-attempt-${this.calls}`;
+    if (this.calls === 1) {
+      return {
+        turnId,
+        attemptId,
+        events: eventsForText(JSON.stringify({
+          done: false,
+          reason: 'type first visible text before continuing',
+          actions: [{ type: 'type_text', text: 'first partial trace action' }],
+        }), input.workspacePath, turnId, attemptId),
+      };
+    }
+    this.resolveSecondStarted();
+    return {
+      turnId,
+      attemptId,
+      events: this.waitForAbortEvents(input, turnId, attemptId),
+    };
+  }
+
+  async cancel(): Promise<void> {}
+
+  private async *waitForAbortEvents(
+    input: AgentCliStartTurnInput,
+    commandId: string,
+    attemptId: string,
+  ): AsyncIterable<NormalizedAgentEvent> {
+    if (!input.abortSignal?.aborted) {
+      await new Promise<void>((resolve) => input.abortSignal?.addEventListener('abort', () => resolve(), { once: true }));
+    }
+    const reason = input.abortSignal?.reason instanceof Error
+      ? input.abortSignal.reason.message
+      : String(input.abortSignal?.reason || 'aborted');
+    yield {
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      timestamp: '2026-05-25T00:00:00.000Z',
+      provider: 'test',
+      model: 'test',
+      profile: 'test',
+      workspace: input.workspacePath,
+      commandId,
+      attemptId,
+      evidenceRefs: [],
+      type: 'failed',
+      status: 'failed',
+      message: reason,
+      exitCode: 143,
+      signal: 'SIGTERM',
+    };
+  }
 }
 
 async function* eventsForText(

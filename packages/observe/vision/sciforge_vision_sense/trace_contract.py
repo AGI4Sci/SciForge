@@ -60,7 +60,7 @@ def validate_computer_use_trace_contract(
     issues: list[str] = []
     checked_screenshot_refs: list[str] = []
     trace_dir = str(Path(trace_path).parent) if trace_path else "."
-    if re.search(r"data:image|;base64,", raw_text, re.IGNORECASE):
+    if _contains_inline_image_payload(raw_text):
         issues.append("trace must not include inline image dataUrl/base64 payloads")
     if not isinstance(trace, Mapping):
         return TraceContractValidation(False, [], ["trace must be a JSON object"])
@@ -458,6 +458,13 @@ def _verifier_reports_no_visible_effect(verifier: Mapping[str, Any]) -> bool:
 
 def _has_forbidden_private_fields(value: Any) -> bool:
     return any(FORBIDDEN_KEY_PATTERN.search(key) for key in _collect_keys(value))
+
+
+def _contains_inline_image_payload(text: str) -> bool:
+    return bool(
+        re.search(r"data:image/[a-z0-9.+-]+;base64,", text, re.IGNORECASE)
+        or re.search(r";base64,[A-Za-z0-9+/=]{16,}", text)
+    )
 
 
 def _collect_keys(value: Any) -> list[str]:

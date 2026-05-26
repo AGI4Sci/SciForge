@@ -151,7 +151,15 @@ def run_computer_use_task(
                     {"failedStage": "grounding", "actionIndex": index},
                 )
 
-        execution = _coerce_execution(executor.execute(plan, grounding, req))
+        if _is_observation_only_wait(plan):
+            grounding = _mark_observation_only_grounding(grounding)
+            execution = ExecutionOutcome(
+                ok=True,
+                message="Observation-only wait; executor skipped.",
+                metadata={"observationOnly": True},
+            )
+        else:
+            execution = _coerce_execution(executor.execute(plan, grounding, req))
         if not execution.ok:
             step = LoopStep(
                 index=index,
@@ -207,13 +215,50 @@ def run_computer_use_task(
                 after,
             )
 
+    final_before = _coerce_observation(
+        sense.observe(req, steps, query="final-no-execute-completion-check")
+    )
+    final_observation = final_before
+    final_plan = _coerce_action_plan(planner.plan(req, final_before, steps))
+    final_index = len(steps)
+
+    if final_plan.done:
+        steps.append(
+            LoopStep(
+                index=final_index,
+                before=final_before,
+                plan=final_plan,
+                status="done",
+            )
+        )
+        return _result(
+            "completed",
+            final_plan.reason or "Planner reported task complete after final observation.",
+            req,
+            steps,
+            final_before,
+        )
+
+    diagnostics: dict[str, Any] = {
+        "failedStage": "planner",
+        "maxSteps": req.max_steps,
+        "finalNoExecuteCheck": True,
+    }
+    planner_issue = _planner_contract_issue(final_plan)
+    if planner_issue:
+        diagnostics["finalPlannerContractIssue"] = planner_issue
+    if final_plan.reason:
+        diagnostics["finalPlannerReason"] = final_plan.reason
+    if final_plan.kind:
+        diagnostics["finalPlannerActionKind"] = final_plan.kind
+    failure_reason = f"Computer Use loop reached max_steps={req.max_steps} without completion."
     return _result(
         "max-steps",
-        f"Computer Use loop reached max_steps={req.max_steps} without completion.",
+        failure_reason,
         req,
         steps,
         final_observation,
-        {"failedStage": "planner", "maxSteps": req.max_steps},
+        diagnostics,
     )
 
 
@@ -273,13 +318,31 @@ def run_task(
         "status": result.status,
         "reason": result.reason,
         "traceRefs": list(result.trace_refs),
+        "finalArtifactRef": result.final_artifact_refs[0] if result.final_artifact_refs else None,
+        "finalArtifactRefs": list(result.final_artifact_refs),
         "budgetDebitRefs": list(result.budget_debit_refs),
     })
     return result
 
 
 def _requires_grounding(plan: ActionPlan) -> bool:
-    return plan.kind in {"click", "double_click", "drag"} and plan.target is not None
+    return plan.kind in {"click", "double_click", "drag", "wait"} and plan.target is not None
+
+
+def _is_observation_only_wait(plan: ActionPlan) -> bool:
+    return plan.kind == "wait" and plan.target is not None
+
+
+def _mark_observation_only_grounding(grounding: Grounding | None) -> Grounding | None:
+    if grounding is None:
+        return None
+    return replace(
+        grounding,
+        metadata={
+            **dict(grounding.metadata),
+            "observationOnly": True,
+        },
+    )
 
 
 def _result(
@@ -305,6 +368,7 @@ def _result(
         reason=reason,
         steps=steps_with_refs,
         final_observation=final_observation,
+        final_artifact_refs=tuple(_final_artifact_refs(steps_with_refs, final_observation)),
         approval_request=approval_request,
         failure_diagnostics=dict(diagnostics or {}),
         metrics=metrics,
@@ -332,6 +396,135 @@ def _result_metrics(steps: Sequence[LoopStep]) -> dict[str, Any]:
 
 def _step_spends_budget(step: LoopStep) -> bool:
     return step.plan.kind is not None or step.status in {"blocked", "failed"}
+
+
+def _final_artifact_refs(
+    steps: Sequence[LoopStep],
+    final_observation: Observation | None,
+) -> list[str]:
+    refs: list[str] = []
+    if final_observation is not None:
+        refs.extend(_refs_from_final_artifact_fields(final_observation.artifacts))
+        refs.extend(_refs_from_final_artifact_fields(final_observation.metadata))
+        refs.extend(_refs_from_visible_artifacts(final_observation.artifacts))
+        refs.extend(_refs_from_visible_artifacts(final_observation.metadata))
+    for step in reversed(steps):
+        refs.extend(_refs_from_final_artifact_fields(step.plan.metadata))
+        if step.verification is not None:
+            refs.extend(_refs_from_final_artifact_fields(step.verification.metadata))
+        if refs:
+            break
+    return _unique_strings(ref for ref in refs if _looks_like_final_artifact_ref(ref))
+
+
+def _refs_from_final_artifact_fields(value: Any) -> list[str]:
+    refs: list[str] = []
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            normalized = str(key).replace("_", "").replace("-", "").lower()
+            if normalized in {"finalartifactref", "finalartifactrefs", "finalartifact", "finalartifacts"}:
+                refs.extend(_refs_inside(item))
+            elif isinstance(item, (Mapping, list, tuple)):
+                refs.extend(_refs_from_final_artifact_fields(item))
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            refs.extend(_refs_from_final_artifact_fields(item))
+    return _unique_strings(refs)
+
+
+def _refs_from_visible_artifacts(value: Any) -> list[str]:
+    refs: list[str] = []
+    if isinstance(value, Mapping):
+        if _looks_like_visible_artifact_record(value):
+            refs.extend(_refs_inside({
+                "artifactRef": value.get("artifactRef") or value.get("artifact_ref"),
+                "dataRef": value.get("dataRef") or value.get("data_ref"),
+                "outputRef": value.get("outputRef") or value.get("output_ref"),
+                "path": value.get("path"),
+                "ref": value.get("ref"),
+            }))
+        for item in value.values():
+            if isinstance(item, (Mapping, list, tuple)):
+                refs.extend(_refs_from_visible_artifacts(item))
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            refs.extend(_refs_from_visible_artifacts(item))
+    return _unique_strings(refs)
+
+
+def _looks_like_visible_artifact_record(value: Mapping[str, Any]) -> bool:
+    schema = str(value.get("schemaVersion") or value.get("schema_version") or "")
+    delivery = str(value.get("delivery") or "")
+    status = str(value.get("status") or "")
+    kind = str(value.get("kind") or value.get("type") or "")
+    return (
+        schema == "sciforge.computer-use.virtual-remote-artifact.v1"
+        or delivery == "virtual-remote-session-artifact"
+        or status in {"visible-and-saved", "saved", "final"}
+        or any(token in kind.lower() for token in ("artifact", "document", "index", "report", "deck", "presentation"))
+    )
+
+
+def _refs_inside(value: Any) -> list[str]:
+    refs: list[str] = []
+    if isinstance(value, str):
+        refs.append(value)
+    elif isinstance(value, Mapping):
+        for item in value.values():
+            refs.extend(_refs_inside(item))
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            refs.extend(_refs_inside(item))
+    return _unique_strings(refs)
+
+
+def _looks_like_final_artifact_ref(value: str) -> bool:
+    text = value.strip()
+    if not text or text.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+        return False
+    if _looks_like_control_evidence_ref(text):
+        return False
+    if text.startswith(("artifact:", "file:", "ref:")):
+        return True
+    return (
+        text.startswith((".sciforge/", "/"))
+        or text.lower().endswith((".json", ".md", ".txt", ".csv", ".tsv", ".xlsx", ".ppt", ".pptx", ".pdf", ".doc", ".docx", ".odt", ".ods"))
+    )
+
+
+def _looks_like_control_evidence_ref(value: str) -> bool:
+    name = value.strip().split("/")[-1].lower()
+    return name in {
+        "vision-trace.json",
+        "host-ports.json",
+        "tool-payload.json",
+        "gui-present.json",
+        "gui-ask-user.json",
+        "computer-use-request.json",
+        "gateway-request.json",
+        "request.json",
+        "independent-input-adapter.json",
+        "virtual-remote-session.json",
+        "action-ledger.json",
+        "failure-diagnostics.json",
+        "cu-user-acceptance-manifest.json",
+        "cu-user-acceptance-input.json",
+        "cu-l3-independent-input-verifier.json",
+    }
+
+
+def _unique_strings(values: Sequence[Any] | Any) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        text = value.strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        unique.append(text)
+    return unique
 
 
 def _coerce_request(value: ComputerUseRequest | Mapping[str, Any] | str) -> ComputerUseRequest:

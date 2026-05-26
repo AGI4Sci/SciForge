@@ -144,6 +144,7 @@ class ComputerUseResult:
     schema_version: str = RESULT_SCHEMA_VERSION
     steps: Sequence[LoopStep] = field(default_factory=tuple)
     final_observation: Observation | None = None
+    final_artifact_refs: Sequence[str] = field(default_factory=tuple)
     approval_request: ApprovalRequest | None = None
     failure_diagnostics: Mapping[str, Any] = field(default_factory=dict)
     metrics: Mapping[str, Any] = field(default_factory=dict)

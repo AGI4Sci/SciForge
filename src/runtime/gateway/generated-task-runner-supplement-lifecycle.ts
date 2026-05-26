@@ -5,6 +5,12 @@ import type { RuntimeRefBundle } from './artifact-materializer.js';
 import { recordCapabilityEvolutionRuntimeEvent } from './capability-evolution-events.js';
 import { expectedArtifactTypesForRequest } from './gateway-request.js';
 import type { GeneratedTaskRunnerDeps } from './generated-task-runner.js';
+import {
+  atomicTraceForRegistryEntry,
+  GATEWAY_PROVIDER_RUNTIME_REGISTRY,
+  providerRefForRegistryEntry,
+  selectedCapabilityForRegistryEntry,
+} from './provider-runtime-registry.js';
 import { workspaceCodeTaskPromptPolicy } from '@sciforge-ui/runtime-contract/generated-work-policy';
 import { AGENTSERVER_SUPPLEMENTAL_GENERATION_EVENT_TYPE } from '../../../packages/skills/runtime-policy';
 
@@ -184,38 +190,21 @@ async function recordSupplementalFallbackLedger(
       role: 'primary',
     }],
     fallbackCapabilities: [
-      {
-        id: 'runtime.python-task',
-        kind: 'tool',
-        providerId: 'sciforge.core.runtime.python-task',
-        role: 'fallback',
-      },
-      {
-        id: 'runtime.workspace-write',
-        kind: 'action',
-        providerId: 'sciforge.core.runtime.workspace-write',
-        role: 'fallback',
-      },
-      {
-        id: 'verifier.schema',
-        kind: 'verifier',
-        providerId: 'sciforge.core.verifier.schema',
-        role: 'validator',
-      },
+      selectedCapabilityForRegistryEntry(GATEWAY_PROVIDER_RUNTIME_REGISTRY.pythonTask, 'fallback'),
+      selectedCapabilityForRegistryEntry(GATEWAY_PROVIDER_RUNTIME_REGISTRY.workspaceWrite, 'fallback'),
+      selectedCapabilityForRegistryEntry(GATEWAY_PROVIDER_RUNTIME_REGISTRY.schemaVerifier, 'validator'),
     ],
     providers: [
-      { id: 'sciforge.core.runtime.python-task', kind: 'local-runtime' },
-      { id: 'sciforge.core.runtime.workspace-write', kind: 'local-runtime' },
-      { id: 'sciforge.core.verifier.schema', kind: 'local-runtime' },
+      providerRefForRegistryEntry(GATEWAY_PROVIDER_RUNTIME_REGISTRY.pythonTask),
+      providerRefForRegistryEntry(GATEWAY_PROVIDER_RUNTIME_REGISTRY.workspaceWrite),
+      providerRefForRegistryEntry(GATEWAY_PROVIDER_RUNTIME_REGISTRY.schemaVerifier),
     ],
     inputSchemaRefs: [`capability-fallback:${params.request.skillDomain}:expected-artifacts`],
     outputSchemaRefs: outcome.missingTypes.map((type) => `artifact-schema:${type}`),
     recoverActions: fallbackSucceeded
       ? ['fallback-to-atomic', 'supplement-missing-artifacts', 'merge-supplemental-payload']
       : ['fallback-to-atomic', 'supplement-missing-artifacts', 'preserve-failure-evidence-refs'],
-    atomicTrace: [{
-      capabilityId: 'runtime.python-task',
-      providerId: 'sciforge.core.runtime.python-task',
+    atomicTrace: [atomicTraceForRegistryEntry(GATEWAY_PROVIDER_RUNTIME_REGISTRY.pythonTask, {
       status: fallbackSucceeded ? 'succeeded' : 'failed',
       failureCode: fallbackSucceeded ? undefined : 'missing-artifact',
       executionUnitRefs: supplementExecutionUnitRefs,
@@ -229,7 +218,7 @@ async function recordSupplementalFallbackLedger(
           : `Supplemental fallback did not fill artifact types: ${outcome.missingTypes.join(', ')}`,
         resultRef: params.primaryRefs.outputRel,
       },
-    }],
+    })],
   });
 }
 

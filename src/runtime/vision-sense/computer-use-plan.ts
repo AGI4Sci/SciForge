@@ -7,7 +7,10 @@ import {
 } from '../computer-use/actions.js';
 import { toTraceScreenshotRef } from '../computer-use/capture.js';
 import type { AgentCliAdapter } from '../codex/agent-cli-adapter.js';
-import { runComputerUseCodexTextPlanner } from '../codex/computer-use-text-planner.js';
+import {
+  runComputerUseCodexTextPlanner,
+  runComputerUseDirectChatTextPlannerFallback,
+} from '../codex/computer-use-text-planner.js';
 import type {
   ComputerUseConfig as VisionSenseConfig,
   GenericVisionAction,
@@ -24,26 +27,84 @@ import {
 } from './computer-use-policy-bridge.js';
 
 const TEXT_PLANNER_RAW_SCHEMA = 'sciforge.computer-use.text-planner-result.v1';
+const TEXT_PLANNER_RETRY_RAW_SCHEMA = 'sciforge.computer-use.text-planner-retry-result.v1';
+const TEXT_PLANNER_TIMEOUT_FALLBACK_RAW_SCHEMA = 'sciforge.computer-use.text-planner-timeout-fallback-result.v1';
+
+type PlannerActionSuccess = {
+  ok: true;
+  actions: GenericVisionAction[];
+  done: boolean;
+  reason?: string;
+  rawResponse: unknown;
+};
+
+type PlannerActionFailure = {
+  ok: false;
+  actions: [];
+  done: false;
+  reason: string;
+  rawResponse?: unknown;
+  retryableContractViolation?: boolean;
+  contractIssue?: PlannerContractIssue;
+};
+
+type PlannerActionResult = PlannerActionSuccess | PlannerActionFailure;
 
 export async function appendPlannerStep(params: {
   id: string;
   task: string;
   observation?: Record<string, unknown>;
+  plannerAcceptanceContract?: Record<string, unknown>;
   screenshotRefs: ScreenshotRef[];
   steps: LoopStep[];
   config: VisionSenseConfig;
   workspace: string;
   codexPlannerAdapter?: AgentCliAdapter;
+  abortSignal?: AbortSignal;
 }) {
   const plannerStepTimeoutMs = Math.max(
     params.config.planner.timeoutMs + 10_000,
     params.config.planner.timeoutMs * 2 + 5_000,
   );
+  const plannerStepTimeoutReason = `Runtime Codex text planner step timed out after ${plannerStepTimeoutMs}ms`;
+  let plannerStepTimedOut = false;
   const abort = new AbortController();
-  const plannerResult = await withHardTimeout(
+  const forwardAbort = () => abort.abort(params.abortSignal?.reason);
+  if (params.abortSignal?.aborted) {
+    forwardAbort();
+  } else {
+    params.abortSignal?.addEventListener('abort', forwardAbort, { once: true });
+  }
+  const directFallbackForPlannerTimeout = async (reason: string, timedOutRawResponse?: unknown): Promise<PlannerActionResult> => {
+    const fallback = await planGenericActionsFromDirectChatText({
+      task: params.task,
+      observation: params.observation,
+      plannerAcceptanceContract: params.plannerAcceptanceContract,
+      screenshotRefs: params.screenshotRefs,
+      config: params.config,
+      steps: params.steps,
+      workspace: params.workspace,
+      abortSignal: params.abortSignal,
+      triggerReason: reason,
+    });
+    if (fallback.ok) return fallback;
+    return {
+      ok: false,
+      actions: [],
+      done: false,
+      reason: `${reason}; ${fallback.reason}`,
+      rawResponse: {
+        schemaVersion: TEXT_PLANNER_TIMEOUT_FALLBACK_RAW_SCHEMA,
+        timedOutPlanner: timedOutRawResponse,
+        fallback: fallback.rawResponse,
+      },
+    };
+  };
+  let plannerResult = await withHardTimeout(
     planGenericActionsFromCodexText({
       task: params.task,
       observation: params.observation,
+      plannerAcceptanceContract: params.plannerAcceptanceContract,
       screenshotRefs: params.screenshotRefs,
       config: params.config,
       steps: params.steps,
@@ -52,15 +113,29 @@ export async function appendPlannerStep(params: {
       abortSignal: abort.signal,
     }),
     plannerStepTimeoutMs,
-    `Runtime Codex text planner step timed out after ${plannerStepTimeoutMs}ms`,
-    () => abort.abort(),
-  ).catch((error) => ({
-    ok: false as const,
-    actions: [],
-    done: false as const,
-    reason: error instanceof Error ? error.message : String(error),
-    rawResponse: undefined,
-  }));
+    plannerStepTimeoutReason,
+    () => {
+      plannerStepTimedOut = true;
+      abort.abort(new Error(plannerStepTimeoutReason));
+    },
+  ).catch(async (error) => {
+    const reason = error instanceof Error ? error.message : String(error);
+    if (isRuntimePlannerStepTimeout(reason) && !params.abortSignal?.aborted) {
+      return await directFallbackForPlannerTimeout(reason);
+    }
+    return {
+      ok: false as const,
+      actions: [] as [],
+      done: false as const,
+      reason,
+      rawResponse: undefined,
+    };
+  }).finally(() => {
+    params.abortSignal?.removeEventListener('abort', forwardAbort);
+  });
+  if (plannerStepTimedOut && !params.abortSignal?.aborted && !plannerResult.ok) {
+    plannerResult = await directFallbackForPlannerTimeout(plannerStepTimeoutReason, plannerResult.rawResponse);
+  }
   const hasActions = plannerResult.ok && plannerResult.actions.length === 1;
   params.steps.push({
     id: params.id,
@@ -90,13 +165,14 @@ export async function appendPlannerStep(params: {
 async function planGenericActionsFromCodexText(params: {
   task: string;
   observation?: Record<string, unknown>;
+  plannerAcceptanceContract?: Record<string, unknown>;
   screenshotRefs: ScreenshotRef[];
   config: VisionSenseConfig;
   steps: LoopStep[];
   workspace: string;
   codexPlannerAdapter?: AgentCliAdapter;
   abortSignal?: AbortSignal;
-}): Promise<{ ok: true; actions: GenericVisionAction[]; done: boolean; reason?: string; rawResponse: unknown } | { ok: false; actions: []; done: false; reason: string; rawResponse?: unknown; retryableContractViolation?: boolean; contractIssue?: PlannerContractIssue }> {
+}): Promise<PlannerActionResult> {
   if (!params.screenshotRefs.length && !params.observation) {
     return { ok: false, actions: [], done: false, reason: 'Runtime Codex text planner could not run because no compact observation was captured.' };
   }
@@ -110,14 +186,15 @@ async function planGenericActionsFromCodexText(params: {
     verifierFeedback,
   });
   if (!firstAttempt.ok && firstAttempt.retryableContractViolation) {
+    const extraInstruction = plannerRetryInstruction(firstAttempt.contractIssue, params.config);
     const retry = await requestGenericPlannerActions({
       ...params,
       observation,
       recentActions,
       verifierFeedback,
-      extraInstruction: plannerRetryInstruction(firstAttempt.contractIssue, params.config),
+      extraInstruction,
     });
-    return retry.ok ? retry : firstAttempt;
+    return retry.ok ? retry : plannerRetryFailureResult(firstAttempt, retry, extraInstruction);
   }
   if (!firstAttempt.ok) return firstAttempt;
   const noEffectGuarded = await guardPlannerNoEffectRepeat({
@@ -126,6 +203,7 @@ async function planGenericActionsFromCodexText(params: {
     steps: params.steps,
     attempt: firstAttempt,
     observation,
+    plannerAcceptanceContract: params.plannerAcceptanceContract,
     recentActions,
     verifierFeedback,
     workspace: params.workspace,
@@ -139,6 +217,7 @@ async function planGenericActionsFromCodexText(params: {
     steps: params.steps,
     attempt: noEffectGuarded,
     observation,
+    plannerAcceptanceContract: params.plannerAcceptanceContract,
     recentActions,
     verifierFeedback,
     workspace: params.workspace,
@@ -147,12 +226,73 @@ async function planGenericActionsFromCodexText(params: {
   });
 }
 
+async function planGenericActionsFromDirectChatText(params: {
+  task: string;
+  observation?: Record<string, unknown>;
+  plannerAcceptanceContract?: Record<string, unknown>;
+  screenshotRefs: ScreenshotRef[];
+  config: VisionSenseConfig;
+  steps: LoopStep[];
+  workspace: string;
+  abortSignal?: AbortSignal;
+  triggerReason: string;
+}): Promise<PlannerActionResult> {
+  if (!params.screenshotRefs.length && !params.observation) {
+    return { ok: false, actions: [], done: false, reason: 'Direct chat text planner fallback could not run because no compact observation was captured.' };
+  }
+  const observation = compactComputerUsePlannerObservation(params.observation, params.screenshotRefs, params.config);
+  return await requestGenericPlannerActionsDirectFallback({
+    task: params.task,
+    observation,
+    plannerAcceptanceContract: params.plannerAcceptanceContract,
+    recentActions: plannerRunHistory(params.steps),
+    verifierFeedback: plannerVerifierFeedback(params.steps),
+    steps: params.steps,
+    config: params.config,
+    workspace: params.workspace,
+    abortSignal: params.abortSignal,
+    triggerReason: params.triggerReason,
+  });
+}
+
+function isRuntimePlannerStepTimeout(reason: string) {
+  return /^Runtime Codex text planner step timed out after \d+ms$/.test(reason);
+}
+
+function plannerRetryFailureResult(
+  initial: PlannerActionFailure,
+  retry: PlannerActionFailure,
+  retryInstruction: string,
+): PlannerActionFailure {
+  return {
+    ok: false,
+    actions: [],
+    done: false,
+    reason: [
+      'Runtime Codex text planner retry failed after a contract repair instruction.',
+      `Initial failure: ${initial.reason}`,
+      `Retry failure: ${retry.reason}`,
+    ].join(' '),
+    rawResponse: {
+      schemaVersion: TEXT_PLANNER_RETRY_RAW_SCHEMA,
+      attemptCount: 2,
+      initialContractIssue: initial.contractIssue,
+      retryContractIssue: retry.contractIssue,
+      initial: initial.rawResponse,
+      retry: retry.rawResponse,
+      retryInstruction: compactPlannerHistoryText(retryInstruction, 1000),
+    },
+    contractIssue: retry.contractIssue ?? initial.contractIssue,
+  };
+}
+
 async function guardPlannerNoEffectRepeat(params: {
   task: string;
   config: VisionSenseConfig;
   steps: LoopStep[];
-  attempt: { ok: true; actions: GenericVisionAction[]; done: boolean; reason?: string; rawResponse: unknown };
+  attempt: PlannerActionSuccess;
   observation: Record<string, unknown>;
+  plannerAcceptanceContract?: Record<string, unknown>;
   recentActions: string;
   verifierFeedback: string;
   workspace: string;
@@ -165,8 +305,10 @@ async function guardPlannerNoEffectRepeat(params: {
     task: params.task,
     config: params.config,
     observation: params.observation,
+    plannerAcceptanceContract: params.plannerAcceptanceContract,
     recentActions: params.recentActions,
     verifierFeedback: params.verifierFeedback,
+    steps: params.steps,
     workspace: params.workspace,
     codexPlannerAdapter: params.codexPlannerAdapter,
     abortSignal: params.abortSignal,
@@ -190,8 +332,9 @@ async function guardPlannerRepeatedAppSwitch(params: {
   task: string;
   config: VisionSenseConfig;
   steps: LoopStep[];
-  attempt: { ok: true; actions: GenericVisionAction[]; done: boolean; reason?: string; rawResponse: unknown };
+  attempt: PlannerActionSuccess;
   observation: Record<string, unknown>;
+  plannerAcceptanceContract?: Record<string, unknown>;
   recentActions: string;
   verifierFeedback: string;
   workspace: string;
@@ -204,8 +347,10 @@ async function guardPlannerRepeatedAppSwitch(params: {
     task: params.task,
     config: params.config,
     observation: params.observation,
+    plannerAcceptanceContract: params.plannerAcceptanceContract,
     recentActions: params.recentActions,
     verifierFeedback: params.verifierFeedback,
+    steps: params.steps,
     workspace: params.workspace,
     codexPlannerAdapter: params.codexPlannerAdapter,
     abortSignal: params.abortSignal,
@@ -409,9 +554,18 @@ export function nextPlannerActions(actions: GenericVisionAction[], remainingBudg
   return first ? [first] : [];
 }
 
+function maxStepsRemaining(config: VisionSenseConfig, steps: LoopStep[] | undefined) {
+  const spent = (steps ?? []).filter((step) => step.kind === 'gui-execution').length;
+  return Math.max(0, config.maxSteps - spent);
+}
+
+type TextPlannerRun = Awaited<ReturnType<typeof runComputerUseCodexTextPlanner>>;
+type TextPlannerOkRun = Extract<TextPlannerRun, { ok: true }>;
+
 async function requestGenericPlannerActions(params: {
   task: string;
   observation: Record<string, unknown>;
+  plannerAcceptanceContract?: Record<string, unknown>;
   recentActions: string;
   verifierFeedback: string;
   steps?: LoopStep[];
@@ -420,14 +574,15 @@ async function requestGenericPlannerActions(params: {
   codexPlannerAdapter?: AgentCliAdapter;
   abortSignal?: AbortSignal;
   extraInstruction?: string;
-}): Promise<{ ok: true; actions: GenericVisionAction[]; done: boolean; reason?: string; rawResponse: unknown } | { ok: false; actions: []; done: false; reason: string; rawResponse?: unknown; retryableContractViolation?: boolean; contractIssue?: PlannerContractIssue }> {
+}): Promise<PlannerActionResult> {
   const response = await runComputerUseCodexTextPlanner({
     task: params.task,
     observation: params.observation,
+    plannerAcceptanceContract: params.plannerAcceptanceContract,
     recentActions: params.recentActions,
     verifierFeedback: params.verifierFeedback,
     desktopPlatform: params.config.desktopPlatform,
-    maxStepsRemaining: params.config.maxSteps,
+    maxStepsRemaining: maxStepsRemaining(params.config, params.steps),
     extraInstruction: params.extraInstruction,
   }, {
     workspace: params.workspace,
@@ -446,6 +601,60 @@ async function requestGenericPlannerActions(params: {
       rawResponse: response.raw,
     };
   }
+  return textPlannerActionResultFromResponse(response, params);
+}
+
+async function requestGenericPlannerActionsDirectFallback(params: {
+  task: string;
+  observation: Record<string, unknown>;
+  plannerAcceptanceContract?: Record<string, unknown>;
+  recentActions: string;
+  verifierFeedback: string;
+  steps?: LoopStep[];
+  config: VisionSenseConfig;
+  workspace: string;
+  abortSignal?: AbortSignal;
+  triggerReason: string;
+}): Promise<PlannerActionResult> {
+  const response = await runComputerUseDirectChatTextPlannerFallback({
+    task: params.task,
+    observation: params.observation,
+    plannerAcceptanceContract: params.plannerAcceptanceContract,
+    recentActions: params.recentActions,
+    verifierFeedback: params.verifierFeedback,
+    desktopPlatform: params.config.desktopPlatform,
+    maxStepsRemaining: maxStepsRemaining(params.config, params.steps),
+    extraInstruction: [
+      `Runtime Codex CLI/TUI text planner transport timed out before returning a terminal event: ${params.triggerReason}.`,
+      'Use the same strict generic Computer Use JSON action contract.',
+    ].join(' '),
+  }, {
+    workspace: params.workspace,
+    commandId: `codex-computer-use-plan-direct-chat-${sanitizeId(params.config.runId || 'run')}`,
+    profile: params.config.planner.profile,
+    abortSignal: params.abortSignal,
+    allowOpenAiRuntime: params.config.planner.allowOpenAiRuntime,
+  }, params.triggerReason);
+  if (!response.ok) {
+    return {
+      ok: false,
+      actions: [],
+      done: false,
+      reason: `Runtime Codex direct chat text planner fallback failed: ${response.reason}`,
+      rawResponse: response.raw,
+    };
+  }
+  return textPlannerActionResultFromResponse(response, params);
+}
+
+function textPlannerActionResultFromResponse(
+  response: TextPlannerOkRun,
+  params: {
+    task: string;
+    observation: Record<string, unknown>;
+    config: VisionSenseConfig;
+  },
+): PlannerActionResult {
   const json = extractJsonObject(response.text);
   const rawResponse = {
     schemaVersion: TEXT_PLANNER_RAW_SCHEMA,
@@ -654,6 +863,9 @@ function plannerRetryInstruction(issue: PlannerContractIssue | undefined, config
     return [
       'Your previous JSON used an action that cannot be executed on this operating system.',
       `Rewrite for ${plannerEnvironmentDescription(config)} using only supported keys/modifiers and generic visible GUI actions.`,
+      'Hotkeys are allowed only for platform-level recovery, launcher, new-window, or window-switch flows supported by this runtime.',
+      'Do not use app-specific selection/editing/saving/finding/navigation/browser-tab shortcuts such as Command/Ctrl+A/C/V/X/S/F/L/R/T/W.',
+      'Prefer visible controls plus click, double_click, drag, scroll, press_key, open_app, type_text, wait, or a structured failure when no safe generic action is available.',
       platformLauncherGuidance(config.desktopPlatform),
     ].join(' ');
   }
@@ -870,7 +1082,11 @@ export async function withHardTimeout<T>(promise: Promise<T>, timeoutMs: number,
   let timeout: NodeJS.Timeout | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeout = setTimeout(() => {
-      onTimeout?.();
+      try {
+        onTimeout?.();
+      } catch {
+        // Preserve timeout semantics even if the cancellation hook throws.
+      }
       reject(new Error(message));
     }, Math.max(1, timeoutMs));
   });

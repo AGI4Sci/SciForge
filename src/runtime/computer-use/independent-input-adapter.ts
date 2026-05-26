@@ -3,9 +3,11 @@ import { join } from 'node:path';
 
 import {
   computerUseInputPolicyIds,
+  computerUsePointerKeyboardOwnershipIds,
   normalizeComputerUseIndependentInputAdapter,
 } from '../../../packages/actions/computer-use/runtime-policy.js';
-import type { ComputerUseConfig, GenericVisionAction, WindowTargetResolution } from './types.js';
+import type { ComputerUseConfig, GenericVisionAction, WindowBounds, WindowTargetResolution } from './types.js';
+import { acquireComputerUseSchedulerLease, computerUseSchedulerLockId, schedulerLeaseTrace } from './scheduler.js';
 import { workspaceRel } from './utils.js';
 import {
   applyVirtualRemoteSessionAction,
@@ -28,6 +30,9 @@ type VirtualPointerState = {
   coordinateSpace: string;
   x?: number;
   y?: number;
+  executorCoordinateSpace?: 'screen';
+  executorX?: number;
+  executorY?: number;
   targetDescription?: string;
   targetRegionDescription?: string;
   lastUpdatedAt?: string;
@@ -49,7 +54,7 @@ type IndependentInputAdapterState = {
   userDeviceImpact: 'none';
   systemMouseEvents: 'not-sent';
   systemKeyboardEvents: 'not-sent';
-  pointerKeyboardOwnership: 'sciforge-independent-input-adapter';
+  pointerKeyboardOwnership: typeof computerUsePointerKeyboardOwnershipIds.independentAdapter;
   targetSession: Record<string, unknown>;
   virtualRemoteSession: {
     schemaVersion: typeof SCIFORGE_VIRTUAL_REMOTE_SESSION_SCHEMA;
@@ -89,6 +94,7 @@ export async function executeIndependentInputAdapterAction(
     workspace: string;
     runDir: string;
     stepIndex: number;
+    taskText?: string;
   },
 ) {
   if (!targetResolution.ok) {
@@ -105,6 +111,29 @@ export async function executeIndependentInputAdapterAction(
       stderr: 'No executable independent input adapter provider is registered for this Computer Use run.',
     };
   }
+  const lease = await acquireComputerUseSchedulerLease({
+    targetResolution,
+    lockId: computerUseSchedulerLockId(targetResolution, { sharedSystemInput: false }),
+    runId: config.runId,
+    stepId: action.type,
+    timeoutMs: config.schedulerLockTimeoutMs,
+    staleMs: config.schedulerStaleLockMs,
+  });
+  if (!lease.ok) {
+    return {
+      exitCode: 125,
+      stdout: '',
+      stderr: lease.reason,
+      schedulerLease: {
+        mode: 'real-gui-executor-lock',
+        lockId: lease.lockId,
+        lockPath: lease.lockPath,
+        waitMs: lease.waitMs,
+        status: 'timeout',
+        reason: lease.reason,
+      },
+    };
+  }
   const now = new Date().toISOString();
   const statePath = join(options.runDir, 'independent-input-adapter.json');
   const iconPath = join(options.runDir, 'independent-input-pointer.svg');
@@ -113,60 +142,83 @@ export async function executeIndependentInputAdapterAction(
   const iconRef = workspaceRel(options.workspace, iconPath);
   const sessionRef = workspaceRel(options.workspace, sessionPath);
   await writeFile(iconPath, virtualPointerIconSvg(), 'utf8');
-  const session = await readVirtualRemoteSessionState(options.runDir)
-    ?? initialVirtualRemoteSessionState({
+  let result: {
+    exitCode: number;
+    stdout: string;
+    stderr: string;
+    independentInputAdapter: Record<string, unknown>;
+  } | undefined;
+  try {
+    const session = await readVirtualRemoteSessionState(options.runDir)
+      ?? initialVirtualRemoteSessionState({
+        config,
+        targetResolution,
+        now,
+      });
+    const state = await readAdapterState(statePath) ?? initialAdapterState({
       config,
       targetResolution,
       now,
+      sessionRef,
+      session,
     });
-  const state = await readAdapterState(statePath) ?? initialAdapterState({
-    config,
-    targetResolution,
-    now,
-    sessionRef,
-    session,
-  });
-  const nextSession = await applyVirtualRemoteSessionAction(options.workspace, options.runDir, session, action, {
-    stepIndex: options.stepIndex,
-    now,
-  });
-  const nextState = applyVirtualInputAction(state, action, {
-    stepIndex: options.stepIndex,
-    now,
-    iconRef,
-    sessionRef,
-    session: nextSession,
-  });
-  await writeFile(statePath, `${JSON.stringify(nextState, null, 2)}\n`, 'utf8');
-  await writeVirtualRemoteSessionState(options.workspace, options.runDir, nextSession);
-  const visibleArtifacts = collectVirtualRemoteSessionArtifacts(nextSession);
+    const nextSession = await applyVirtualRemoteSessionAction(options.workspace, options.runDir, session, action, {
+      stepIndex: options.stepIndex,
+      now,
+      taskText: options.taskText,
+    });
+    const nextState = applyVirtualInputAction(state, action, {
+      stepIndex: options.stepIndex,
+      now,
+      iconRef,
+      sessionRef,
+      session: nextSession,
+    });
+    await writeFile(statePath, `${JSON.stringify(nextState, null, 2)}\n`, 'utf8');
+    await writeVirtualRemoteSessionState(options.workspace, options.runDir, nextSession);
+    const visibleArtifacts = collectVirtualRemoteSessionArtifacts(nextSession);
+    result = {
+      exitCode: 0,
+      stdout: [
+        `independent-input-adapter provider=${SCIFORGE_SIMULATED_REMOTE_DESKTOP_PROVIDER}`,
+        `adapter=remote-desktop action=${action.type}`,
+        `stateRef=${stateRef}`,
+        'systemMouseEvents=not-sent systemKeyboardEvents=not-sent',
+      ].join(' '),
+      stderr: '',
+      independentInputAdapter: {
+        schemaVersion: SCIFORGE_INDEPENDENT_INPUT_ADAPTER_SCHEMA,
+        adapter: 'remote-desktop',
+        provider: SCIFORGE_SIMULATED_REMOTE_DESKTOP_PROVIDER,
+        stateRef,
+        pointerIconRef: iconRef,
+        virtualRemoteSessionRef: sessionRef,
+        visibleArtifactRefs: visibleArtifacts.map((artifact) => artifact.artifactRef),
+        visibleArtifacts,
+        visibleTexts: collectVirtualRemoteSessionVisibleTexts(nextSession),
+        pointerKeyboardOwnership: computerUsePointerKeyboardOwnershipIds.independentAdapter,
+        pointerMode: 'adapter-window-bound-pointer',
+        keyboardMode: 'adapter-window-bound-keyboard',
+        userDeviceImpact: 'none',
+        systemMouseEvents: 'not-sent',
+        systemKeyboardEvents: 'not-sent',
+        actionCount: nextState.actions.length,
+      },
+    };
+  } finally {
+    await lease.release();
+  }
+  if (!result) {
+    return {
+      exitCode: 125,
+      stdout: '',
+      stderr: 'Independent input adapter execution failed before producing a result.',
+      schedulerLease: schedulerLeaseTrace(lease.lease),
+    };
+  }
   return {
-    exitCode: 0,
-    stdout: [
-      `independent-input-adapter provider=${SCIFORGE_SIMULATED_REMOTE_DESKTOP_PROVIDER}`,
-      `adapter=remote-desktop action=${action.type}`,
-      `stateRef=${stateRef}`,
-      'systemMouseEvents=not-sent systemKeyboardEvents=not-sent',
-    ].join(' '),
-    stderr: '',
-    independentInputAdapter: {
-      schemaVersion: SCIFORGE_INDEPENDENT_INPUT_ADAPTER_SCHEMA,
-      adapter: 'remote-desktop',
-      provider: SCIFORGE_SIMULATED_REMOTE_DESKTOP_PROVIDER,
-      stateRef,
-      pointerIconRef: iconRef,
-      virtualRemoteSessionRef: sessionRef,
-      visibleArtifactRefs: visibleArtifacts.map((artifact) => artifact.artifactRef),
-      visibleArtifacts,
-      visibleTexts: collectVirtualRemoteSessionVisibleTexts(nextSession),
-      pointerKeyboardOwnership: 'sciforge-independent-input-adapter',
-      pointerMode: 'adapter-window-bound-pointer',
-      keyboardMode: 'adapter-window-bound-keyboard',
-      userDeviceImpact: 'none',
-      systemMouseEvents: 'not-sent',
-      systemKeyboardEvents: 'not-sent',
-      actionCount: nextState.actions.length,
-    },
+    ...result,
+    schedulerLease: schedulerLeaseTrace(lease.lease),
   };
 }
 
@@ -203,7 +255,7 @@ function initialAdapterState(options: {
     userDeviceImpact: 'none',
     systemMouseEvents: 'not-sent',
     systemKeyboardEvents: 'not-sent',
-    pointerKeyboardOwnership: 'sciforge-independent-input-adapter',
+    pointerKeyboardOwnership: computerUsePointerKeyboardOwnershipIds.independentAdapter,
     targetSession: {
       mode: options.targetResolution.captureKind,
       source: options.targetResolution.source,
@@ -211,6 +263,8 @@ function initialAdapterState(options: {
       appName: options.targetResolution.appName,
       title: options.targetResolution.title,
       coordinateSpace: options.targetResolution.coordinateSpace,
+      bounds: options.targetResolution.bounds,
+      contentRect: options.targetResolution.contentRect,
       schedulerLockId: options.targetResolution.schedulerLockId,
     },
     virtualRemoteSession: {
@@ -265,15 +319,13 @@ function applyVirtualInputAction(
     lastUpdatedAt: options.now,
   };
   if (action.type === 'click' || action.type === 'double_click') {
-    virtualPointer.x = action.x;
-    virtualPointer.y = action.y;
+    Object.assign(virtualPointer, virtualPointerCoordinates(state, action.x, action.y));
     virtualPointer.targetDescription = action.targetDescription;
     virtualPointer.targetRegionDescription = action.targetRegionDescription;
     record.clickCount = action.type === 'double_click' ? 2 : 1;
     record.pointer = pointerRecord(virtualPointer, options.iconRef);
   } else if (action.type === 'drag') {
-    virtualPointer.x = action.toX;
-    virtualPointer.y = action.toY;
+    Object.assign(virtualPointer, virtualPointerCoordinates(state, action.toX, action.toY));
     virtualPointer.targetDescription = action.toTargetDescription ?? action.targetDescription;
     virtualPointer.targetRegionDescription = action.targetRegionDescription;
     record.fromTargetDescription = action.fromTargetDescription;
@@ -312,6 +364,31 @@ function applyVirtualInputAction(
   };
 }
 
+function virtualPointerCoordinates(
+  state: IndependentInputAdapterState,
+  executorX: number | undefined,
+  executorY: number | undefined,
+): Partial<VirtualPointerState> {
+  if (typeof executorX !== 'number' || typeof executorY !== 'number') return {};
+  const coordinateSpace = stringField(state.targetSession.coordinateSpace) ?? state.virtualPointer.coordinateSpace;
+  const bounds = windowBoundsAt(state.targetSession, 'contentRect') ?? windowBoundsAt(state.targetSession, 'bounds');
+  if (isWindowBoundCoordinateSpace(coordinateSpace) && bounds) {
+    return {
+      coordinateSpace,
+      x: executorX - bounds.x,
+      y: executorY - bounds.y,
+      executorCoordinateSpace: 'screen',
+      executorX,
+      executorY,
+    };
+  }
+  return {
+    coordinateSpace,
+    x: executorX,
+    y: executorY,
+  };
+}
+
 function pointerRecord(pointer: VirtualPointerState, iconRef: string) {
   return {
     mode: pointer.mode,
@@ -320,6 +397,9 @@ function pointerRecord(pointer: VirtualPointerState, iconRef: string) {
     coordinateSpace: pointer.coordinateSpace,
     x: pointer.x,
     y: pointer.y,
+    executorCoordinateSpace: pointer.executorCoordinateSpace,
+    executorX: pointer.executorX,
+    executorY: pointer.executorY,
     targetDescription: pointer.targetDescription,
   };
 }
@@ -328,6 +408,31 @@ function isAdapterState(value: unknown): value is IndependentInputAdapterState {
   return typeof value === 'object'
     && value !== null
     && (value as { schemaVersion?: unknown }).schemaVersion === SCIFORGE_INDEPENDENT_INPUT_ADAPTER_SCHEMA;
+}
+
+function isWindowBoundCoordinateSpace(value: string | undefined) {
+  return value === 'window' || value === 'window-local';
+}
+
+function windowBoundsAt(value: Record<string, unknown>, key: string): WindowBounds | undefined {
+  const child = value[key];
+  if (!child || typeof child !== 'object' || Array.isArray(child)) return undefined;
+  const record = child as Record<string, unknown>;
+  const x = numberField(record.x);
+  const y = numberField(record.y);
+  const width = numberField(record.width);
+  const height = numberField(record.height);
+  return x === undefined || y === undefined || width === undefined || height === undefined
+    ? undefined
+    : { x, y, width, height };
+}
+
+function numberField(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function stringField(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 function virtualPointerIconSvg() {

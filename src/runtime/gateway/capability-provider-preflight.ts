@@ -3,6 +3,8 @@ import { CAPABILITY_PROVIDER_DISCOVERY_ENDPOINTS, capabilityProviderAvailability
 import { loadCoreCapabilityManifestRegistry } from '../capability-manifest-registry.js';
 import type { GatewayRequest } from '../runtime-types.js';
 import { isRecord } from '../gateway-utils.js';
+import { COMPUTER_USE_ACTION_PROVIDER_ID } from '../computer-use/host-adapter.js';
+import { VISION_TOOL_ID } from '../vision-sense/trace-policy.js';
 
 export interface CapabilityProviderRoute {
   capabilityId: string;
@@ -225,12 +227,34 @@ function inferRequiredCapabilityIds(request: GatewayRequest): string[] {
     for (const capabilityId of requiredCapabilityIdsForSelectedTool(toolId)) ids.add(capabilityId);
   }
   for (const capabilityId of structuredRequiredCapabilityIds(request)) ids.add(capabilityId);
-  for (const capabilityId of capabilityIdsFromProviderPromptPolicy({
-    prompt: stringField(request.prompt),
-    selectedToolIds: [...(request.selectedToolIds ?? []), ...toStringList(request.uiState?.selectedToolIds)],
-    externalIoRequired: request.externalIoRequired,
-  })) ids.add(capabilityId);
+  if (!isVisionSenseComputerUseInvocation(request)) {
+    for (const capabilityId of capabilityIdsFromProviderPromptPolicy({
+      prompt: stringField(request.prompt),
+      selectedToolIds: [...(request.selectedToolIds ?? []), ...toStringList(request.uiState?.selectedToolIds)],
+      externalIoRequired: request.externalIoRequired,
+    })) ids.add(capabilityId);
+  }
   return [...ids].sort();
+}
+
+function isVisionSenseComputerUseInvocation(request: GatewayRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const selected = uniqueStrings([
+    ...(request.selectedToolIds ?? []),
+    ...(request.selectedSenseIds ?? []),
+    ...toStringList(uiState.selectedToolIds),
+    ...toStringList(uiState.selectedSenseIds),
+  ]);
+  const selectedActionIds = uniqueStrings([
+    ...(request.selectedActionIds ?? []),
+    ...toStringList(uiState.selectedActionIds),
+  ]);
+  const hasComputerUseAction = selectedActionIds.includes(COMPUTER_USE_ACTION_PROVIDER_ID);
+  const hasComputerUseConfig = isRecord(uiState.visionSenseConfig)
+    || isRecord(uiState.computerUseLong)
+    || isRecord(uiState.computerUseNext);
+  return selected.includes(VISION_TOOL_ID)
+    && (hasComputerUseAction || hasComputerUseConfig);
 }
 
 function requiredCapabilityIdsForSelectedTool(toolId: string) {

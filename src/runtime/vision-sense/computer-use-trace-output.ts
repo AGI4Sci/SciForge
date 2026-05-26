@@ -52,6 +52,9 @@ export function genericLoopPayload(params: {
   desktopPlatform: string;
   windowTarget?: TraceWindowTarget;
   visibleArtifacts?: VisibleLoopArtifact[];
+  finalArtifactRef?: string;
+  finalArtifactRefs?: string[];
+  finalVisibleScreenshotRef?: string;
   createdAt?: string;
 }): ToolPayload {
   const traceRel = workspaceRel(params.workspace, params.tracePath);
@@ -60,6 +63,11 @@ export function genericLoopPayload(params: {
   const afterRef = [...allRefs].reverse().find((ref) => ref.id.includes('-after-'));
   const visibleArtifacts = normalizeVisibleLoopArtifacts(params.visibleArtifacts);
   const visibleArtifactRefs = uniqueStrings(visibleArtifacts.flatMap(visibleLoopArtifactRefs));
+  const finalArtifactRefs = uniqueStrings([
+    params.finalArtifactRef,
+    ...(params.finalArtifactRefs ?? []),
+  ].filter((ref): ref is string => Boolean(ref?.trim())));
+  const finalArtifactRef = params.finalArtifactRef ?? finalArtifactRefs[0];
   const isDone = params.status === 'done';
   const executionUnitRef = `EU-computer-use-${params.runId}`;
   const workEvidenceRef = `workEvidence:computer-use-action-provider:${params.runId}`;
@@ -94,7 +102,7 @@ export function genericLoopPayload(params: {
     outputSummary: isDone
       ? `Executed ${params.actionCount} generic Computer Use action(s).`
       : `Stopped after ${params.actionCount} generic Computer Use action(s): ${params.failureReason}`,
-    evidenceRefs: [traceRel, ...[afterRef?.path].filter((ref): ref is string => Boolean(ref)), ...visibleArtifactRefs],
+    evidenceRefs: uniqueStrings([traceRel, ...[afterRef?.path].filter((ref): ref is string => Boolean(ref)), ...visibleArtifactRefs, ...finalArtifactRefs]),
     failureReason: params.failureReason || undefined,
     recoverActions: params.status === 'done' ? [] : [...visionSenseTraceOutputPolicy.recoverActions],
     nextStep: params.status === 'done' ? undefined : 'Review the vision trace and rerun with corrected planner, grounder, or bridge configuration.',
@@ -143,8 +151,8 @@ export function genericLoopPayload(params: {
         ? `SciForge dry-run generic GUI executor (${platformLabel(params.desktopPlatform)})`
         : `${platformLabel(params.desktopPlatform)} screenshot + generic GUI executor`,
       inputData: [params.request.prompt],
-      outputArtifacts: [traceRel, ...visibleArtifactRefs],
-      artifacts: [traceRel, ...visibleArtifactRefs],
+      outputArtifacts: uniqueStrings([traceRel, ...visibleArtifactRefs, ...finalArtifactRefs]),
+      artifacts: uniqueStrings([traceRel, ...visibleArtifactRefs, ...finalArtifactRefs]),
       codeRef: 'src/runtime/vision-sense-runtime.ts',
       outputRef: traceRel,
       screenshotRef: afterRef?.path,
@@ -173,6 +181,9 @@ export function genericLoopPayload(params: {
           appSpecificShortcuts: [],
           budgetDebitRefs,
           visibleArtifactRefs,
+          finalArtifactRef,
+          finalArtifactRefs,
+          finalVisibleScreenshotRef: params.finalVisibleScreenshotRef,
         },
       },
       ...visibleArtifacts,

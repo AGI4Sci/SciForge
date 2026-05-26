@@ -42,6 +42,8 @@ npm run backend:codex-proxy -- \
   --api-key-env SCIFORGE_RUNTIME_API_KEY
 ```
 
+For Runtime Codex browser acceptance, the key source is stricter than local proxy debugging: `SCIFORGE_RUNTIME_API_KEY` must be present in the service environment that starts the proxy/runtime process. A key found in `config.local.json` or `.sciforge/**/config.local.json` is diagnostic-only fallback for local proxy troubleshooting and cannot satisfy release acceptance.
+
 ## Isolated Runtime Codex Home
 
 SciForge uses two Codex instances with separate responsibilities:
@@ -86,6 +88,46 @@ npm run backend:codex-runtime:exec -- \
 ```
 
 The wrapper fails closed if the isolated `CODEX_HOME` leaves `packages/backend/.codex-runtime`, if the DeepSeek profile/provider/model is missing, or if `SCIFORGE_RUNTIME_API_KEY` is absent. Secrets stay in the process environment, not in repository files.
+
+## Browser Acceptance Service Checklist
+
+The no-secret Runtime Codex browser acceptance path expects KV-Ground plus four SciForge services to be alive:
+
+```text
+KV-Ground:        http://127.0.0.1:18081/health
+UI:               http://127.0.0.1:5173/
+Workspace writer: http://127.0.0.1:6173/health
+Runtime Codex:    http://127.0.0.1:18080/health
+Provider proxy:   http://127.0.0.1:3891/healthz
+```
+
+No-secret service launch skeleton:
+
+```bash
+export SCIFORGE_UI_PORT=5173
+export SCIFORGE_WORKSPACE_PORT=6173
+export SCIFORGE_RUNTIME_CODEX_PORT=18080
+export SCIFORGE_PROXY_PORT=3891
+export SCIFORGE_WORKSPACE_PATH="$PWD/workspace/parallel/p1"
+export SCIFORGE_PROXY_UPSTREAM_BASE_URL="https://your-openai-compatible-endpoint.example/v1"
+export SCIFORGE_RUNTIME_API_KEY="<set-in-service-env-only>"
+
+npm run backend:codex-runtime:setup -- --overwrite --proxy-base-url http://127.0.0.1:3891/v1
+npm run backend:codex-proxy
+SCIFORGE_WORKSPACE_PORT=6173 npm run workspace:server
+SCIFORGE_RUNTIME_CODEX_PORT=18080 node --import tsx src/runtime/codex/codex-runtime-standalone-server.ts
+npm run dev:ui -- --host 127.0.0.1 --port 5173 --strictPort
+```
+
+Before claiming acceptance, run:
+
+```bash
+npm run smoke:runtime-provider-preflight
+npm run smoke:runtime-codex-browser-acceptance
+SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 npm run smoke:runtime-codex-browser-acceptance
+```
+
+The preflight artifact is diagnostic-only. Browser/release acceptance is still blocked until the Codex in-app browser default chat shows a live non-seed Runtime Codex second-turn answer and the strict manifest is `passed`.
 
 ## Boundary
 

@@ -39,6 +39,8 @@ import {
   windowTargetTraceConfig,
 } from './window-target.js';
 import {
+  COMPUTER_USE_ACTION_PROVIDER_ID,
+  type ComputerUseTuiHostAction,
   computerUseHostPortsContract,
   computerUseResultToTuiHostActions,
   gatewayRequestToComputerUseRequest,
@@ -119,7 +121,7 @@ export async function runComputerUsePackageBridge(
   callbacks: WorkspaceRuntimeCallbacks = {},
   options: ComputerUsePackageBridgeOptions = {},
 ): Promise<ToolPayload> {
-  const runId = sanitizeId(config.runId || `computer-use-package-${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`);
+  const runId = sanitizeId(config.runId || `computer-use-package-${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 17)}`);
   const runDir = resolve(config.outputDir || join(workspace, '.sciforge', 'vision-runs', runId));
   await mkdir(runDir, { recursive: true });
   const fixtureActions = config.testActionFixtureMode
@@ -200,6 +202,14 @@ export async function runComputerUsePackageBridge(
       desktopPlatform: config.desktopPlatform,
       createdAt: new Date().toISOString(),
     });
+    const tuiHostActions = attachPackageResultHostActions(payload, packageResult, callbacks);
+    await writePackageBridgeEvidenceFiles({
+      actionProviderRequest,
+      config,
+      payload,
+      state,
+      tuiHostActions,
+    });
     await writeGenericLoopPayloadValidationRepairAuditSink(payload, { workspacePath: workspace });
     return payload;
   }
@@ -222,6 +232,9 @@ export async function runComputerUsePackageBridge(
   const status = stringAt(packageResult, 'status');
   const succeeded = status === 'completed';
   const failureReason = succeeded ? '' : packageBridgeFailureReason(packageResult, status);
+  const finalVisibleArtifact = finalVisibleArtifactForTrace(state.visibleArtifacts);
+  const finalArtifactRef = finalVisibleArtifact?.artifactRef;
+  const finalVisibleScreenshotRef = finalWindowScreenshotRef(state.screenshotLedger);
   const payload = genericLoopPayload({
     request,
     workspace,
@@ -236,9 +249,19 @@ export async function runComputerUsePackageBridge(
     desktopPlatform: config.desktopPlatform,
     windowTarget: state.targetResolution.ok ? toTraceWindowTarget(state.targetResolution) : undefined,
     visibleArtifacts: state.visibleArtifacts,
+    finalArtifactRef,
+    finalArtifactRefs: finalArtifactRef ? [finalArtifactRef] : [],
+    finalVisibleScreenshotRef,
     createdAt: new Date().toISOString(),
   });
-  attachPackageResultHostActions(payload, packageResult, callbacks);
+  const tuiHostActions = attachPackageResultHostActions(payload, packageResult, callbacks);
+  await writePackageBridgeEvidenceFiles({
+    actionProviderRequest,
+    config,
+    payload,
+    state,
+    tuiHostActions,
+  });
   if (!succeeded) {
     await writeGenericLoopPayloadValidationRepairAuditSink(payload, { workspacePath: workspace });
   }
@@ -253,6 +276,9 @@ function withFinalVisibleArtifactGuard(
   if (stringAt(packageResult, 'status') !== 'completed') return packageResult;
   const finalGap = computerUseVisibleArtifactGapReason(request.prompt, state.executedActions, { finalAttempt: true });
   if (!finalGap) return packageResult;
+  if (state.visibleArtifacts.some((artifact) => artifact.status === 'visible-and-saved' || artifact.artifactRef.trim().length > 0)) {
+    return packageResult;
+  }
   return {
     ...packageResult,
     status: 'failed-with-reason',
@@ -298,6 +324,30 @@ async function runPythonPackageTask(
   let stderr = '';
   let finalResult: Record<string, unknown> | undefined;
   const pending = new Set<Promise<void>>();
+  let aborted = false;
+  let abortReason = '';
+  const runtimeAbortReason = () => {
+    const reason = context.callbacks.signal?.reason;
+    if (reason instanceof Error && reason.message.trim()) return reason.message.trim();
+    if (typeof reason === 'string' && reason.trim()) return reason.trim();
+    return '';
+  };
+  const abortPackageProcess = () => {
+    aborted = true;
+    const reason = runtimeAbortReason();
+    abortReason = reason
+      ? `Computer Use package bridge aborted by workspace runtime signal: ${reason}.`
+      : 'Computer Use package bridge aborted by workspace runtime signal.';
+    if (!child.killed) child.kill('SIGTERM');
+    setTimeout(() => {
+      if (!child.killed) child.kill('SIGKILL');
+    }, 500).unref?.();
+  };
+  if (context.callbacks.signal?.aborted) {
+    abortPackageProcess();
+  } else {
+    context.callbacks.signal?.addEventListener('abort', abortPackageProcess, { once: true });
+  }
 
   const handleLine = (line: string) => {
     if (!line.trim()) return;
@@ -338,14 +388,26 @@ async function runPythonPackageTask(
       stderr = [stderr, error.message].filter(Boolean).join('\n');
       resolveClose({ code: 127, signal: null });
     });
+  }).finally(() => {
+    context.callbacks.signal?.removeEventListener('abort', abortPackageProcess);
   });
   if (stdoutBuffer.trim()) handleLine(stdoutBuffer);
-  if (pending.size) await Promise.allSettled([...pending]);
+  if (pending.size) {
+    if (aborted) {
+      await Promise.race([
+        Promise.allSettled([...pending]),
+        new Promise((resolvePending) => setTimeout(resolvePending, 1_500)),
+      ]);
+    } else {
+      await Promise.allSettled([...pending]);
+    }
+  }
   if (finalResult) return finalResult;
   return {
     schemaVersion: 'sciforge.computer-use.result.v1',
     status: 'failed-with-reason',
     reason: [
+      aborted ? abortReason : undefined,
       'Computer Use package process exited without finalResult.',
       `exitCode=${close.code ?? 'signal'}`,
       close.signal ? `signal=${close.signal}` : undefined,
@@ -368,6 +430,9 @@ async function handleHostPortCall(
     codexPlannerAdapter?: AgentCliAdapter;
   },
 ): Promise<unknown> {
+  if (context.callbacks.signal?.aborted) {
+    throw new Error('Computer Use host port call aborted by workspace runtime signal.');
+  }
   switch (call.port) {
     case 'capture':
       return capturePort(call, context);
@@ -456,11 +521,12 @@ async function capturePort(
 
 async function planPort(
   call: HostPortCall,
-  context: { workspace: string; config: ComputerUseConfig; state: PackageBridgeState; codexPlannerAdapter?: AgentCliAdapter },
+  context: { workspace: string; config: ComputerUseConfig; callbacks: WorkspaceRuntimeCallbacks; state: PackageBridgeState; codexPlannerAdapter?: AgentCliAdapter },
 ) {
   const { workspace, config, state } = context;
   if (!state.actionQueue.length && state.dynamicPlannerEnabled && !state.plannerReportedDone) {
     const requestArg = recordArg(call, 0);
+    const plannerAcceptanceContract = recordAt(recordAt(requestArg, 'metadata'), 'plannerAcceptanceContract');
     const observation = recordArg(call, 1);
     state.latestObservation = observation;
     const observationRefs = state.captureRefsByObservationRef.get(stringAt(observation, 'ref') ?? '') ?? state.screenshotLedger.slice(-Math.max(1, config.captureDisplays.length));
@@ -473,11 +539,13 @@ async function planPort(
       id: plannerStepId,
       task: stringAt(requestArg, 'task') ?? '',
       observation,
+      plannerAcceptanceContract,
       screenshotRefs: observationRefs,
       steps: state.visionHistorySteps,
       config,
       workspace,
       codexPlannerAdapter: context.codexPlannerAdapter,
+      abortSignal: context.callbacks.signal,
     });
     const newPlannerSteps = state.visionHistorySteps
       .slice(historyLength)
@@ -589,6 +657,7 @@ async function executePort(
 ) {
   const { workspace, config, state } = context;
   const action = packagePlanToGenericAction(recordArg(call, 0), state.activeAction, recordArg(call, 1));
+  const requestArg = recordArg(call, 2);
   state.activeAction = action;
   const observationSummary = stringAt(state.latestObservation, 'summary');
   const visibleTexts = [
@@ -627,6 +696,7 @@ async function executePort(
           workspace,
           runDir: state.runDir,
           stepIndex: state.executedActions.length,
+          taskText: computerUseArtifactIntentText(requestArg),
         })
       : await executeGenericDesktopAction(action, config, state.targetResolution);
   state.executedActions.push(action);
@@ -659,6 +729,15 @@ async function executePort(
       visibleArtifacts: state.visibleArtifacts,
     },
   };
+}
+
+function computerUseArtifactIntentText(request: Record<string, unknown>) {
+  const metadata = recordAt(request, 'metadata');
+  return [
+    stringAt(request, 'task'),
+    stringAt(request, 'text'),
+    metadata ? JSON.stringify(recordAt(metadata, 'plannerAcceptanceContract') ?? {}) : '',
+  ].filter((value) => value && value.trim()).join('\n');
 }
 
 async function verifyPort(
@@ -694,6 +773,8 @@ async function verifyPort(
   const historyStatus = executionOk ? 'done' : 'failed';
   const planningFeedback = packageVerifierPlanningFeedback(action, historyGrounding, pixelDiff, windowConsistency, historyStatus);
   const regionSemantic = packageRegionSemanticVerifier(action, historyGrounding, pixelDiff, historyStatus);
+  const executionMetadata = recordAt(execution, 'metadata');
+  const executorLease = isRecord(executionMetadata?.schedulerLease) ? executionMetadata.schedulerLease : undefined;
   const visualFocus = focusRegion ? {
     ...visionSenseTraceContractPolicy.visualFocus,
     region: focusRegion,
@@ -718,12 +799,16 @@ async function verifyPort(
         inputChannel: inputChannelDescription(config, state.targetResolution),
         windowTarget: state.targetResolution.ok ? toTraceWindowTarget(state.targetResolution) : undefined,
         status: executionOk ? 'done' : 'failed',
-        exitCode: numberAt(recordAt(execution, 'metadata')?.exitCode) ?? (executionOk ? 0 : 1),
-        stdout: stringAt(recordAt(execution, 'metadata'), 'stdout'),
-        stderr: stringAt(recordAt(execution, 'metadata'), 'stderr'),
-        independentInputAdapter: recordAt(execution, 'metadata')?.independentInputAdapter,
+        exitCode: numberAt(executionMetadata?.exitCode) ?? (executionOk ? 0 : 1),
+        stdout: stringAt(executionMetadata, 'stdout'),
+        stderr: stringAt(executionMetadata, 'stderr'),
+        schedulerLease: executorLease,
+        independentInputAdapter: executionMetadata?.independentInputAdapter,
       },
-      scheduler: schedulerStepMetadata(state.targetResolution, `step-${stepNumber}`, config),
+      scheduler: {
+        ...schedulerStepMetadata(state.targetResolution, `step-${stepNumber}`, config),
+        executorLease,
+      },
       verifier: {
         status: executionOk ? 'checked' : 'skipped-after-execution-failure',
         method: 'computer-use-package-host-port-verifier',
@@ -870,6 +955,9 @@ async function writePackageBridgeTrace(params: {
 }) {
   const tracePath = join(params.state.runDir, 'vision-trace.json');
   params.state.tracePath = tracePath;
+  const finalVisibleArtifact = finalVisibleArtifactForTrace(params.state.visibleArtifacts);
+  const finalArtifactRef = finalVisibleArtifact?.artifactRef;
+  const finalVisibleScreenshotRef = finalWindowScreenshotRef(params.state.screenshotLedger);
   const trace = {
     schemaVersion: visionSenseTraceIds.traceSchema,
     runId: params.state.runId,
@@ -878,17 +966,21 @@ async function writePackageBridgeTrace(params: {
     packageBridge: {
       schemaVersion: PACKAGE_BRIDGE_TRACE_SCHEMA,
       runtime: 'sciforge.workspace-runtime.computer-use-package-bridge',
-      actionProvider: 'action.sciforge.computer-use',
+      actionProvider: COMPUTER_USE_ACTION_PROVIDER_ID,
       hostPortProtocol: 'stdio-jsonl',
     },
-    actionProvider: 'action.sciforge.computer-use',
+    actionProvider: COMPUTER_USE_ACTION_PROVIDER_ID,
     executionBoundary: params.config.dryRun ? 'dry-run-generic-gui-executor' : independentInputAdapterExecutionBoundary(params.config) ?? executorBoundary(params.config),
     createdAt: new Date().toISOString(),
     completedAt: new Date().toISOString(),
-    request: params.request ? {
-      text: params.request.prompt,
-      selectedToolIds: params.request.selectedToolIds,
-      computerUseRequest: gatewayRequestToComputerUseRequest(params.request, params.config, params.workspace),
+    request: params.request ? packageBridgeTraceRequest(params.request, params.config, params.workspace) : undefined,
+    artifactRefs: params.state.visibleArtifacts.map((artifact) => artifact.artifactRef),
+    finalArtifactRef,
+    finalVisibleScreenshotRef,
+    cuUserAcceptance: finalArtifactRef || finalVisibleScreenshotRef ? {
+      finalArtifactRef,
+      finalVisibleScreenshotRef,
+      visibleArtifactRefs: params.state.visibleArtifacts.map((artifact) => artifact.artifactRef),
     } : undefined,
     config: {
       captureDisplays: params.config.captureDisplays,
@@ -927,8 +1019,8 @@ async function writePackageBridgeTrace(params: {
       visibleArtifacts: params.state.visibleArtifacts,
     } : undefined,
     genericComputerUse: {
-      actionSchema: visionSenseTraceContractPolicy.genericActionSchema,
-      actionProvider: 'action.sciforge.computer-use',
+        actionSchema: visionSenseTraceContractPolicy.genericActionSchema,
+        actionProvider: COMPUTER_USE_ACTION_PROVIDER_ID,
       hostPorts: computerUseHostPortsContract(params.config),
       appSpecificShortcuts: visionSenseTraceContractPolicy.appSpecificShortcuts,
       inputChannel: inputChannelDescription(params.config, params.state.targetResolution),
@@ -979,6 +1071,50 @@ async function writePackageBridgeTrace(params: {
   return tracePath;
 }
 
+function finalVisibleArtifactForTrace(artifacts: VirtualRemoteVisibleArtifact[]) {
+  return [...artifacts].reverse().find((artifact) => (
+    artifact.status === 'visible-and-saved' && isFinalArtifactEvidenceRef(artifact.artifactRef)
+  ))
+    ?? [...artifacts].reverse().find((artifact) => isFinalArtifactEvidenceRef(artifact.artifactRef));
+}
+
+function finalWindowScreenshotRef(refs: ScreenshotRef[]) {
+  return [...refs].reverse().find((ref) => !ref.id.includes('-focus-') && !ref.path.includes('-focus-'))?.path
+    ?? refs.at(-1)?.path;
+}
+
+function isFinalArtifactEvidenceRef(ref: string | undefined) {
+  const text = ref?.trim();
+  if (!text) return false;
+  if (/\.(png|jpe?g|webp)$/i.test(text)) return false;
+  if (/\/?(vision-trace|host-ports|tool-payload|gui-present|gui-ask-user|computer-use-request|gateway-request|request|independent-input-adapter|virtual-remote-session|action-ledger|failure-diagnostics|cu-user-acceptance|cu-l3-independent-input-verifier)\.json$/i.test(text)) {
+    return false;
+  }
+  return /^(artifact|file|ref):/i.test(text)
+    || text.startsWith('.sciforge/')
+    || text.startsWith('/')
+    || /\.(md|txt|csv|tsv|xlsx|pptx?|pdf|docx?|odt|ods|json)$/i.test(text);
+}
+
+function packageBridgeTraceRequest(
+  request: GatewayRequest,
+  config: ComputerUseConfig,
+  workspace: string,
+) {
+  const computerUseLong = recordAt(request.uiState, 'computerUseLong');
+  const cuNextTaskId = stringAt(computerUseLong, 'cuNextTaskId')
+    ?? stringAt(recordAt(request.uiState, 'computerUseNext'), 'taskId')
+    ?? stringAt(request.uiState, 'cuNextTaskId');
+  return {
+    text: request.prompt,
+    selectedToolIds: request.selectedToolIds,
+    taskId: cuNextTaskId,
+    cuNextTaskId,
+    computerUseLong,
+    computerUseRequest: gatewayRequestToComputerUseRequest(request, config, workspace),
+  };
+}
+
 function packageResultStepsToVisionSteps(
   packageResult: Record<string, unknown>,
   state: PackageBridgeState,
@@ -1004,6 +1140,9 @@ function packageResultStepsToVisionSteps(
     const action = recordAt(step, 'action');
     return Boolean(stringAt(action, 'kind') ?? stringAt(action, 'type'));
   });
+  if (!steps.length && state.visionHistorySteps.some((step) => step.kind === 'gui-execution')) {
+    return state.visionHistorySteps;
+  }
   if (!steps.length && state.missingPlannerAfterCaptured) {
     const beforeRefs = refsByName(state, 'step-000-before');
     const afterRefs = refsByName(state, 'step-000-after');
@@ -1042,6 +1181,8 @@ function packageResultStepsToVisionSteps(
     const grounding = normalizeTraceGrounding(recordAt(step, 'grounding') ?? {}, actionRecord);
     const action = packageTraceActionToGenericAction(actionRecord, grounding);
     const execution = recordAt(step, 'execution');
+    const executionMetadata = recordAt(execution, 'metadata');
+    const executorLease = isRecord(executionMetadata?.schedulerLease) ? executionMetadata.schedulerLease : undefined;
     const verification = recordAt(step, 'verification');
     const status = step.status === 'done' ? 'done' : step.status === 'blocked' ? 'blocked' : 'failed';
     const pixelDiff = pixelDiffForScreenshotSets(beforeRefs, afterRefs);
@@ -1078,14 +1219,18 @@ function packageResultStepsToVisionSteps(
         inputChannel: inputChannelDescription(config, state.targetResolution),
         windowTarget: state.targetResolution.ok ? toTraceWindowTarget(state.targetResolution) : undefined,
         status: execution.ok === false ? 'failed' : 'done',
-        exitCode: numberAt(recordAt(execution, 'metadata')?.exitCode) ?? (execution.ok === false ? 1 : 0),
-        stdout: stringAt(recordAt(execution, 'metadata'), 'stdout'),
-        stderr: stringAt(recordAt(execution, 'metadata'), 'stderr'),
-        independentInputAdapter: recordAt(execution, 'metadata')?.independentInputAdapter,
-        virtualRemoteSessionRef: stringAt(recordAt(execution, 'metadata'), 'virtualRemoteSessionRef'),
-        visibleArtifactRefs: stringList(recordAt(execution, 'metadata')?.visibleArtifactRefs),
+        exitCode: numberAt(executionMetadata?.exitCode) ?? (execution.ok === false ? 1 : 0),
+        stdout: stringAt(executionMetadata, 'stdout'),
+        stderr: stringAt(executionMetadata, 'stderr'),
+        schedulerLease: executorLease,
+        independentInputAdapter: executionMetadata?.independentInputAdapter,
+        virtualRemoteSessionRef: stringAt(executionMetadata, 'virtualRemoteSessionRef'),
+        visibleArtifactRefs: stringList(executionMetadata?.visibleArtifactRefs),
       } : undefined,
-      scheduler: schedulerStepMetadata(state.targetResolution, `step-${String(index + 1).padStart(3, '0')}`, config),
+      scheduler: {
+        ...schedulerStepMetadata(state.targetResolution, `step-${String(index + 1).padStart(3, '0')}`, config),
+        executorLease,
+      },
       verifier: {
         status: verification?.ok === false ? 'blocked' : 'checked',
         method: 'computer-use-package-host-port-verifier',
@@ -1292,7 +1437,7 @@ function attachPackageResultHostActions(
   payload: ToolPayload,
   packageResult: Record<string, unknown>,
   callbacks: WorkspaceRuntimeCallbacks,
-) {
+): ComputerUseTuiHostAction[] {
   const tuiHostActions = computerUseResultToTuiHostActions({
     ...packageResult,
     message: payload.message,
@@ -1300,7 +1445,7 @@ function attachPackageResultHostActions(
     workEvidence: payload.workEvidence,
     artifacts: payload.artifacts,
   });
-  if (!tuiHostActions.length) return;
+  if (!tuiHostActions.length) return [];
   payload.objectReferences = [
     ...(payload.objectReferences ?? []),
     {
@@ -1328,6 +1473,29 @@ function attachPackageResultHostActions(
     message: 'Computer Use package result mapped to TUI Host gui.present/gui.ask_user action metadata.',
     detail: JSON.stringify({ actions: tuiHostActions }),
   });
+  return tuiHostActions;
+}
+
+async function writePackageBridgeEvidenceFiles(params: {
+  actionProviderRequest: Record<string, unknown>;
+  config: ComputerUseConfig;
+  payload: ToolPayload;
+  state: PackageBridgeState;
+  tuiHostActions: ComputerUseTuiHostAction[];
+}) {
+  const guiPresent = params.tuiHostActions.find((action) => action.port === 'gui.present');
+  const guiAskUser = params.tuiHostActions.find((action) => action.port === 'gui.ask_user');
+  await Promise.all([
+    writeJson(join(params.state.runDir, 'computer-use-request.json'), params.actionProviderRequest),
+    writeJson(join(params.state.runDir, 'host-ports.json'), computerUseHostPortsContract(params.config)),
+    writeJson(join(params.state.runDir, 'tool-payload.json'), params.payload),
+    guiPresent ? writeJson(join(params.state.runDir, 'gui-present.json'), guiPresent) : Promise.resolve(),
+    guiAskUser ? writeJson(join(params.state.runDir, 'gui-ask-user.json'), guiAskUser) : Promise.resolve(),
+  ]);
+}
+
+async function writeJson(path: string, value: unknown) {
+  await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
 function writeHostPortResult(
@@ -1339,14 +1507,19 @@ function writeHostPortResult(
 ) {
   const stdin = child.stdin;
   if (!stdin) return;
-  stdin.write(`${JSON.stringify({
-    schemaVersion: HOST_PORT_RESULT_SCHEMA,
-    type: 'hostPortResult',
-    id,
-    ok,
-    result,
-    error,
-  })}\n`);
+  if (stdin.destroyed || stdin.writableEnded) return;
+  try {
+    stdin.write(`${JSON.stringify({
+      schemaVersion: HOST_PORT_RESULT_SCHEMA,
+      type: 'hostPortResult',
+      id,
+      ok,
+      result,
+      error,
+    })}\n`);
+  } catch {
+    // The package process may already be closing after an abort.
+  }
 }
 
 function genericActionToPackagePlan(action: GenericVisionAction): Record<string, unknown> {

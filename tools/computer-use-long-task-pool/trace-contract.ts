@@ -48,7 +48,7 @@ export async function validateComputerUseLongTrace(options: {
     };
   }
   const issues: string[] = [];
-  if (/data:image|;base64,/i.test(rawText)) issues.push('trace must not include inline image dataUrl/base64 payloads');
+  if (containsInlineImagePayload(rawText)) issues.push('trace must not include inline image dataUrl/base64 payloads');
   const trace = JSON.parse(rawText) as unknown;
   if (!isRecord(trace)) {
     return emptyTraceValidation(options.scenarioId, tracePath, ['trace must be a JSON object']);
@@ -275,6 +275,10 @@ export async function validateComputerUseLongTrace(options: {
       failedCount,
     },
   };
+}
+
+function containsInlineImagePayload(text: string) {
+  return /data:image\/[a-z0-9.+-]+;base64,/i.test(text) || /;base64,[A-Za-z0-9+/=]{16,}/.test(text);
 }
 
 function isVisualRecheckTrace(text: string) {

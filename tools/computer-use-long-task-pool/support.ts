@@ -13,10 +13,22 @@ import type {
   PreparedComputerUseLongRun,
 } from './contracts.js';
 
-export async function withTaskPoolHardTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+export async function withTaskPoolHardTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+  onTimeout?: () => void,
+): Promise<T> {
   let timeout: NodeJS.Timeout | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => reject(new Error(message)), Math.max(1, timeoutMs));
+    timeout = setTimeout(() => {
+      try {
+        onTimeout?.();
+      } catch {
+        // Keep the timeout error stable even if cancellation itself throws.
+      }
+      reject(new Error(message));
+    }, Math.max(1, timeoutMs));
   });
   try {
     return await Promise.race([promise, timeoutPromise]);

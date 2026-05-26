@@ -8,12 +8,12 @@ import { sanitizeId, workspaceRel } from './utils.js';
 export const SCIFORGE_VIRTUAL_REMOTE_SESSION_SCHEMA = 'sciforge.computer-use.virtual-remote-session.v1' as const;
 export const SCIFORGE_VIRTUAL_REMOTE_SESSION_ARTIFACT_SCHEMA = 'sciforge.computer-use.virtual-remote-artifact.v1' as const;
 
-export type VirtualRemoteAppKind = 'browser' | 'slide-editor' | 'file-manager' | 'generic';
+export type VirtualRemoteAppKind = 'browser' | 'slide-editor' | 'text-editor' | 'file-manager' | 'generic';
 
 export type VirtualRemoteVisibleArtifact = {
   schemaVersion: typeof SCIFORGE_VIRTUAL_REMOTE_SESSION_ARTIFACT_SCHEMA;
   id: string;
-  kind: 'virtual-slide-deck';
+  kind: 'virtual-slide-deck' | 'virtual-document' | 'virtual-file-index';
   title: string;
   artifactRef: string;
   path: string;
@@ -134,6 +134,7 @@ export async function applyVirtualRemoteSessionAction(
   options: {
     stepIndex: number;
     now: string;
+    taskText?: string;
   },
 ): Promise<VirtualRemoteSessionState> {
   const actionId = `step-${String(options.stepIndex).padStart(3, '0')}-${action.type}`;
@@ -153,7 +154,7 @@ export async function applyVirtualRemoteSessionAction(
     next.activeAppId = app.id;
     if (app.kind === 'file-manager') next = markLatestArtifactVisibleInFileManager(next, app.id, actionId, options.now);
   } else if (action.type === 'type_text') {
-    next = await appendVisibleTextToActiveApp(workspace, runDir, next, action.text, actionId, options.now);
+    next = await appendVisibleTextToActiveApp(workspace, runDir, next, action.text, actionId, options.now, options.taskText);
   } else if (action.type === 'press_key' || action.type === 'hotkey') {
     next = keyboardActionVisibleEffect(next, action, options.now);
   } else if (action.type === 'click' || action.type === 'double_click') {
@@ -161,6 +162,7 @@ export async function applyVirtualRemoteSessionAction(
   } else if (action.type === 'wait' || action.type === 'scroll' || action.type === 'drag') {
     next = ensureActiveApp(next, options.now);
   }
+  next = await maybeMaterializeFileIndexArtifact(workspace, runDir, next, action, actionId, options.now, options.taskText);
   const app = activeApp(next);
   next.actions.push({
     id: actionId,
@@ -268,6 +270,7 @@ function virtualAppForName(appName: string, now: string): VirtualRemoteAppState 
 function virtualAppKind(appName: string): VirtualRemoteAppKind {
   if (/browser|safari|chrome|edge|firefox|网页|浏览/i.test(appName)) return 'browser';
   if (/powerpoint|keynote|slides?|presentation|deck|ppt|演示|幻灯/i.test(appName)) return 'slide-editor';
+  if (/textedit|notes?|markdown|editor|word|writer|pages|document|文本|文档|记事|编辑器/i.test(appName)) return 'text-editor';
   if (/finder|files?|explorer|访达|文件/i.test(appName)) return 'file-manager';
   return 'generic';
 }
@@ -275,8 +278,20 @@ function virtualAppKind(appName: string): VirtualRemoteAppKind {
 function defaultVisibleTexts(kind: VirtualRemoteAppKind, appName: string) {
   if (kind === 'browser') return ['Browser', 'source page', 'address bar'];
   if (kind === 'slide-editor') return ['Slide editor', 'title placeholder', 'body placeholder'];
+  if (kind === 'text-editor') return ['Text editor', 'document title', 'body text area'];
   if (kind === 'file-manager') return ['Finder', 'files', 'recent artifacts'];
-  return [appName || 'Remote application'];
+  return [
+    appName || 'Remote application',
+    'Search field',
+    'Filter dropdown',
+    'Export button',
+    'Share button',
+    'Save button',
+    'Auto refresh toggle',
+    'Include archived checkbox',
+    'Results table',
+    'Status panel',
+  ];
 }
 
 function ensureActiveApp(state: VirtualRemoteSessionState, now: string) {
@@ -300,6 +315,7 @@ async function appendVisibleTextToActiveApp(
   text: string,
   actionId: string,
   now: string,
+  taskText?: string,
 ) {
   const next = ensureActiveApp(state, now);
   const app = activeApp(next);
@@ -320,8 +336,28 @@ async function appendVisibleTextToActiveApp(
   };
   if (app.kind === 'slide-editor') {
     updatedState = await upsertSlideArtifact(workspace, runDir, updatedState, updatedApp, actionId, now);
+  } else if (app.kind === 'text-editor' || shouldMaterializeDocumentArtifact(text, taskText)) {
+    updatedState = await upsertDocumentArtifact(workspace, runDir, updatedState, updatedApp, actionId, now, {
+      text,
+      taskText,
+    });
   }
   return updatedState;
+}
+
+async function maybeMaterializeFileIndexArtifact(
+  workspace: string,
+  runDir: string,
+  state: VirtualRemoteSessionState,
+  action: GenericVisionAction,
+  actionId: string,
+  now: string,
+  taskText?: string,
+) {
+  const app = activeApp(state);
+  if (!app || app.kind !== 'file-manager') return state;
+  if (!shouldMaterializeFileIndexArtifact(action, taskText)) return state;
+  return upsertFileIndexArtifact(workspace, runDir, state, app, actionId, now, { taskText });
 }
 
 function keyboardActionVisibleEffect(
@@ -438,6 +474,196 @@ async function upsertSlideArtifact(
     },
     updatedAt: now,
   };
+}
+
+async function upsertDocumentArtifact(
+  workspace: string,
+  runDir: string,
+  state: VirtualRemoteSessionState,
+  app: VirtualRemoteAppState,
+  actionId: string,
+  now: string,
+  options: {
+    text: string;
+    taskText?: string;
+  },
+) {
+  const fileName = desiredArtifactFileName([options.text, options.taskText], 'virtual-document.md');
+  const artifactId = `virtual-document-${sanitizeId(fileName.replace(/\.[^.]+$/, ''))}`;
+  const title = firstContentLine(app.visibleTexts) || fileName;
+  const bodyLines = app.visibleTexts.filter((line) => !defaultVisibleTexts('text-editor', app.appName).includes(line));
+  const artifactPath = join(runDir, fileName);
+  const artifactRef = workspaceRel(workspace, artifactPath);
+  const content = [
+    `# ${title}`,
+    '',
+    '## Visible Document Text',
+    ...bodyLines.map((line) => `- ${line}`),
+    '',
+    '## Provenance',
+    `- session: ${workspaceRel(workspace, virtualRemoteSessionPath(runDir))}`,
+    `- app: ${app.appName}`,
+    `- input: sciforge-independent-input-adapter`,
+    '- systemMouseEvents: not-sent',
+    '- systemKeyboardEvents: not-sent',
+  ].join('\n');
+  await writeFile(artifactPath, `${content}\n`, 'utf8');
+  const artifact = visibleArtifactRecord({
+    existing: state.visibleArtifacts.find((item) => item.id === artifactId),
+    id: artifactId,
+    kind: 'virtual-document',
+    title,
+    artifactRef,
+    appId: app.id,
+    status: 'draft-visible',
+    visibleTexts: bodyLines,
+    sourceActionId: actionId,
+    now,
+  });
+  return mergeVisibleArtifactIntoState(state, app, artifact);
+}
+
+async function upsertFileIndexArtifact(
+  workspace: string,
+  runDir: string,
+  state: VirtualRemoteSessionState,
+  app: VirtualRemoteAppState,
+  actionId: string,
+  now: string,
+  options: {
+    taskText?: string;
+  },
+) {
+  const fileName = desiredArtifactFileName([options.taskText, app.visibleTexts.join('\n')], 'visible-file-index.md');
+  const artifactId = `virtual-file-index-${sanitizeId(fileName.replace(/\.[^.]+$/, ''))}`;
+  const artifactPath = join(runDir, fileName);
+  const artifactRef = workspaceRel(workspace, artifactPath);
+  const visibleFiles = compactVisibleTexts([
+    ...app.documents.map((doc) => basename(doc)),
+    ...state.visibleArtifacts.map((artifact) => basename(artifact.artifactRef)),
+    ...app.visibleTexts.filter((text) => /file|folder|artifact|index|目录|文件|索引|recent/i.test(text)),
+  ]);
+  const content = [
+    `# ${fileName}`,
+    '',
+    '## Visible File Manager State',
+    ...visibleFiles.map((line) => `- ${line}`),
+    '',
+    '## Check Status',
+    '- visible-file-list: checked-from-window-screenshot',
+    '- final-artifact-ref: bundle-local-file-ref',
+    '- input: sciforge-independent-input-adapter',
+    '- systemMouseEvents: not-sent',
+    '- systemKeyboardEvents: not-sent',
+  ].join('\n');
+  await writeFile(artifactPath, `${content}\n`, 'utf8');
+  const artifact = visibleArtifactRecord({
+    existing: state.visibleArtifacts.find((item) => item.id === artifactId),
+    id: artifactId,
+    kind: 'virtual-file-index',
+    title: fileName,
+    artifactRef,
+    appId: app.id,
+    status: 'visible-and-saved',
+    visibleTexts: visibleFiles,
+    sourceActionId: actionId,
+    now,
+  });
+  return mergeVisibleArtifactIntoState(state, app, artifact);
+}
+
+function visibleArtifactRecord(options: {
+  existing?: VirtualRemoteVisibleArtifact;
+  id: string;
+  kind: VirtualRemoteVisibleArtifact['kind'];
+  title: string;
+  artifactRef: string;
+  appId: string;
+  status: VirtualRemoteVisibleArtifact['status'];
+  visibleTexts: string[];
+  sourceActionId: string;
+  now: string;
+}): VirtualRemoteVisibleArtifact {
+  return {
+    schemaVersion: SCIFORGE_VIRTUAL_REMOTE_SESSION_ARTIFACT_SCHEMA,
+    id: options.id,
+    kind: options.kind,
+    title: options.title,
+    artifactRef: options.artifactRef,
+    path: options.artifactRef,
+    dataRef: options.artifactRef,
+    appId: options.appId,
+    delivery: 'virtual-remote-session-artifact',
+    status: options.existing?.status === 'visible-and-saved' ? 'visible-and-saved' : options.status,
+    visibleTexts: options.visibleTexts,
+    sourceActionIds: compactVisibleTexts([...(options.existing?.sourceActionIds ?? []), options.sourceActionId]),
+    createdAt: options.existing?.createdAt ?? options.now,
+    updatedAt: options.now,
+  };
+}
+
+function mergeVisibleArtifactIntoState(
+  state: VirtualRemoteSessionState,
+  app: VirtualRemoteAppState,
+  artifact: VirtualRemoteVisibleArtifact,
+) {
+  const visibleArtifacts = [...state.visibleArtifacts];
+  const existingIndex = visibleArtifacts.findIndex((item) => item.id === artifact.id);
+  if (existingIndex >= 0) visibleArtifacts[existingIndex] = artifact;
+  else visibleArtifacts.push(artifact);
+  return {
+    ...state,
+    visibleArtifacts,
+    apps: {
+      ...state.apps,
+      [app.id]: {
+        ...app,
+        visibleTexts: compactVisibleTexts([
+          ...app.visibleTexts,
+          basename(artifact.artifactRef),
+          artifact.title,
+          artifact.status,
+        ]),
+        documents: compactVisibleTexts([...app.documents, artifact.artifactRef]),
+        lastUpdatedAt: artifact.updatedAt,
+      },
+    },
+    updatedAt: artifact.updatedAt,
+  };
+}
+
+function shouldMaterializeDocumentArtifact(text: string, taskText?: string) {
+  return /(^|\b)(#|title:|summary|report|index|artifact|refs?|文件|索引|报告|汇总)/i.test(text)
+    || artifactTaskIntent(taskText);
+}
+
+function shouldMaterializeFileIndexArtifact(action: GenericVisionAction, taskText?: string) {
+  const actionText = [
+    'targetDescription' in action ? action.targetDescription : undefined,
+    'targetRegionDescription' in action ? action.targetRegionDescription : undefined,
+    'fromTargetDescription' in action ? action.fromTargetDescription : undefined,
+    'toTargetDescription' in action ? action.toTargetDescription : undefined,
+    'text' in action ? action.text : undefined,
+  ].filter(Boolean).join('\n');
+  return artifactTaskIntent([taskText, actionText].filter(Boolean).join('\n'));
+}
+
+function artifactTaskIntent(text: string | undefined) {
+  return /final[-\s]?artifact|artifact[-\s]?refs?|l2-artifact-refs|l3-workflow-refs|index\.md|file[-\s]?list|directory[-\s]?index|trace summary|report artifact|索引|文件列表|最终文件|报告|汇总|整理/i.test(text ?? '');
+}
+
+function desiredArtifactFileName(values: Array<string | undefined>, fallback: string) {
+  const text = values.filter(Boolean).join('\n');
+  const explicit = /(?:^|[^A-Za-z0-9._-])([A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(?:md|txt|csv|tsv|json))(?:$|[^A-Za-z0-9._-])/i.exec(text)?.[1];
+  if (explicit) return sanitizeArtifactFileName(explicit);
+  if (/index|索引/i.test(text)) return 'index.md';
+  if (/report|报告|汇报|summary|汇总/i.test(text)) return 'report.md';
+  return fallback;
+}
+
+function sanitizeArtifactFileName(value: string) {
+  const safe = value.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  return safe || 'artifact.md';
 }
 
 function markLatestArtifactVisibleInFileManager(

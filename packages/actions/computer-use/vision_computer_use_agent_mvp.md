@@ -94,6 +94,9 @@ type ComputerUseResult = {
   reason: string;
   traceRefs: string[];
   screenshotRefs: string[];
+  artifactRefs: string[];
+  finalArtifactRef?: string;
+  finalArtifactRefs: string[];
   finalObservationRef?: string;
   approvalRequest?: {
     reason: string;
@@ -123,6 +126,10 @@ type ComputerUseHostPorts = {
 };
 ```
 
+最终产物不通过新增 GUI port 直接写入。Host ports 的 capture/verify/writeTrace 负责把当前 run bundle 中可检查的 visible artifact record、文件 ref 或 verifier metadata 带回 package；package result、trace 和 compact handoff 将其提升为 refs-first `finalArtifactRef` / `finalArtifactRefs`。`vision-trace.json`、`tool-payload.json`、`gui-present.json`、`action-ledger.json` 等控制/证据文件只能作为 trace/evidence refs，不能被提升为最终产物。TUI Host 再把这些 refs 映射到 `ToolPayload` 和 `gui.present`，并验证它们是 bundle-local 文件证据，而不是历史 ledger 或脚本直写替代。
+
+Runtime Codex text planner 默认仍走 `runtime-codex-tui-text-planner` host port，也就是 Codex CLI/TUI 的文本规划通道。若该通道出现明确的 provider transport/protocol failure（例如 502 Bad Gateway、gateway timeout、upstream/proxy/network error），且进程环境已经提供 OpenAI-compatible base URL、model 和 `SCIFORGE_RUNTIME_API_KEY`，runtime adapter 可以启用 direct non-streaming chat fallback。该 fallback 必须复用 `packages/backend` 的 Responses <-> Chat Completions 转换代码，只返回同一个 generic action JSON schema，并在 diagnostics 中记录 `direct-chat-fallback`；它不能调用 GUI、DOM、accessibility tree、外部工具或私有应用 API。普通 planner JSON/策略错误不得触发该 fallback。
+
 不建议把 `requestApproval` 放进 `hostPorts` 让模块直接弹 UI。高风险动作应返回 `needs-confirmation` 和 `approvalRequest`；TUI Host 决定是否调用 `gui.ask_user`，确认后再以 `riskPolicy='allow-confirmed'` 和 `approvalRef` 发起新的受控调用。
 
 ---
@@ -133,9 +140,9 @@ type ComputerUseHostPorts = {
 
 **步骤 1：观察。** 通过 `hostPorts.capture` 截图，等待屏幕稳定（连续两帧 diff 低于阈值），生成屏幕摘要和可见文本列表。
 
-**步骤 2：判断是否完成。** 将当前截图、任务描述、已执行的动作历史传给 VLM，直接问"任务是否已经完成"。完成则返回成功。
+**步骤 2：判断是否完成。** 将当前截图、任务描述、已执行的动作历史传给 VLM，直接问"任务是否已经完成"。完成则返回成功。完成判断必须基于当前视觉观察、当前轮 verifier feedback 和可检查 artifact refs；artifact-producing task 的 `done=true` 还必须有当前轮视觉/文件证据证明 bundle-local `final-artifact-ref` 指向真实产物。当文本推理、历史 ledger 或前几轮摘要与当前画面不一致或不足以证明结果时，必须先重复观察、请求 focus-region crop 或扩大/重选局部区域，不能只凭 ledger 猜测已经成功。
 
-**步骤 3：规划下一步。** Planner 输出一个动作，包含动作类型和目标视觉描述。不生成多个候选，只生成一个最合理的下一步。对于密集 UI、小图标、表格、菜单和弹窗，Planner 可以额外输出 `targetRegionDescription`；runtime 会把它作为 coarse region 先裁剪观察，再在 crop 内精定位。Planner 也可以输出 `wait + targetRegionDescription` 来请求 observation-only 局部观察。
+**步骤 3：规划下一步。** Planner 输出一个动作，包含动作类型和目标视觉描述。不生成多个候选，只生成一个最合理的下一步。对于密集 UI、小图标、表格、菜单和弹窗，Planner 可以额外输出 `targetRegionDescription`；runtime 会把它作为 coarse region 先裁剪观察，再在 crop 内精定位。Planner 也可以输出 `wait + targetRegionDescription` 来请求 observation-only 局部观察。若 planner 只能从 action history、ledger 或旧截图推断完成状态，而当前观察没有直接证据，下一步必须是 observation-only 观察或聚焦验证，而不是 `done=true`。
 
 **步骤 4：定位。** Grounder 根据目标描述在窗口截图上定位。使用 coarse-to-fine：先在整窗截图中得到目标区域或粗中心点，再由 vision-sense 生成 focus-region crop，随后用 KV-Ground 在 crop 内二次精定位，把 crop-local 坐标映射回 window-local/executor 坐标。后续执行和验证都使用精定位结果，并记录 coarse/fine grounding 证据。如果精定位失败，trace 会保留 coarse grounding 和 fine failure，供下一轮规划修正。
 
@@ -149,9 +156,11 @@ type ComputerUseHostPorts = {
 
 **退出条件**：任务完成、达到最大步数（如 30 步）、Grounding 连续失败 3 次。
 
+当可执行动作 budget 已经用尽时，`max_steps` 只禁止继续执行动作，不禁止一次收尾判断。loop 可以进行一次 final no-execute completion check：额外 `observe` 一次，把最终截图、当前 trace/ledger、verifier feedback 和 artifact refs 交给 planner，只允许 planner 返回完成/失败判断，不允许 safety、grounder 或 executor 再运行。只有该 planning-only 判断明确 `done=true`，才能追加一条 no-execute done step 并返回 `completed`；否则仍按正常 `max-steps` failure 返回，不能把"刚好执行了最后一个有用动作"自动当作成功。
+
 **验收契约**：trace 由 `vision-sense.trace_contract` 和 Computer Use action provider trace contract 共同校验：windowTarget、window screenshot refs、window-local 坐标、generic mouse/keyboard input channel、serialized scheduler metadata、window verifier consistency、file-ref-only image memory、host port provider metadata 和 no DOM/accessibility/GUI-private fields。T084/T085 的长测 runner 只把 trace path、workspace path 和 raw trace text 传入该接口。
 
-**验收分层**：L1 是基础真实输入 smoke，只证明 capture -> ground -> execute -> verify 能穿透；L2 是单 App 用户产物任务，例如用可用的 slide app 制作并保存一页 PPT；L3 是多 App 用户工作流，例如 Browser/资料页 -> slide app -> Finder/保存对话框 -> SciForge GUI 展示 artifact refs。只有 L2/L3 可以声明用户级 Computer Use success，L1 只能声明 capability smoke passed。
+**验收分层**：L1 是基础真实输入 smoke，只证明 capture -> ground -> execute -> verify 能穿透；progressive single-window / single-app probes 用来逐步压测算法、动作类型、证据打包和 completion 判断；L2 是单 App 用户产物任务，例如用可用的 slide app 制作并保存一页 PPT；L3 是多 App 用户工作流，例如 Browser/资料页 -> slide app -> Finder/保存对话框 -> SciForge GUI 展示 artifact refs。只有 L2/L3 可以声明用户级 Computer Use success，L1 只能声明 capability smoke passed；CU-NEXT L3 必须有真实多 App / 多视图 task-scoped acceptance，不能由单窗口或单 App probe 顶替。
 
 ---
 
@@ -269,7 +278,14 @@ next=click produced no visible window effect; avoid repeating same target unless
 回答 yes 或 no，并说明理由。
 ```
 
-这种方式足够处理简单线性任务。它的弱点是对复杂任务可能出现假阳性（过早判定完成），但对 MVP 阶段够用。
+这种方式足够处理简单线性任务。它的弱点是对复杂任务可能出现假阳性（过早判定完成），所以完成判断必须 fail closed：如果当前截图、focus crop、verifier feedback 或 artifact refs 不能独立支撑完成结论，就继续观察或聚焦验证。Planner 可以使用 ledger 作为上下文，但 ledger 不能替代当前视觉证据；尤其在跨轮任务中，不能因为前一轮曾经记录过 `done`、`clicked`、`saved` 或 `verified` 就直接声明当前轮成功。对 artifact-producing task，`done=true` 必须证明当前 run bundle 内的 `final-artifact-ref`、最终可见截图和当前轮文件证据一致，不能只把 prior ledger 当成产物存在证明。
+
+当某一步执行后刚好耗尽 `max_steps`，loop 允许一次无执行收尾检查：
+
+1. 再观察一次当前目标窗口或显示器，保存 final observation ref。
+2. 调用 planner 做 completion-only 判断，只允许输出 `done=true` 或失败理由。
+3. 如果 `done=true`，记录 planning-only done step 并返回 `completed`。
+4. 如果不是 `done=true`，保持 `max-steps` failure；该检查不得触发 safety、grounder、executor 或任何额外 GUI 动作。
 
 ---
 
@@ -322,12 +338,14 @@ next=click produced no visible window effect; avoid repeating same target unless
 基础 GUI smoke 不足以证明 Computer Use 对用户有用。最终验收必须覆盖真实桌面产物和可见交互链路：
 
 - **L1 capability smoke**：在 disposable 本地页面中点击输入框、输入文本、点击按钮、验证结果文本。该层只验证真实输入链路和 trace contract。
-- **L2 single-app artifact**：使用 PowerPoint、Keynote、LibreOffice Impress 或可离线运行的 slide editor 制作一页 PPT/slide，包含任务指定标题和要点，并保存到 `.sciforge/vision-runs/<run-id>/`。验收需要最终文件 ref、保存位置截图 ref、slide 可见截图 ref 和 verifier verdict。
-- **L3 multi-app workflow**：联合多个 App 完成一个问题，例如 Browser 打开本地资料页或安全网页，Computer Use 读取可见信息并切换到 slide app 制作一页 PPT，再通过 Finder/保存对话框保存，最后由 TUI Host 调用 `gui.present` 展示 artifact refs 和 trace 摘要。
+- **Progressive single-window / single-app probes**：先在一个窗口或一个 App 内验证观察、定位、输入、final no-execute completion check、当前轮证据和文件 ref 打包。这些 probe 用来修算法和证据契约；即使能产生一个小文件，也不等于 CU-NEXT L3。
+- **L2 single-app artifact**：使用 PowerPoint、Keynote、LibreOffice Impress 或可离线运行的 slide editor 制作一页 PPT/slide，包含任务指定标题和要点，并保存到 `.sciforge/vision-runs/<run-id>/`。验收需要 bundle-local `final-artifact-ref`、保存位置或产物最终可见截图 ref、slide 可见截图 ref、verifier verdict 和 `gui.present` 展示证据。
+- **L3 multi-app workflow**：联合多个 App 完成一个问题，例如 Browser 打开本地资料页或安全网页，Computer Use 读取可见信息并切换到 slide app 制作一页 PPT，再通过 Finder/保存对话框保存，最后由 TUI Host 调用 `gui.present` 展示 artifact refs 和 trace 摘要。CU-NEXT L3 还必须有 task-scoped acceptance manifest，不能用单 App artifact probe 代替。
 
 验收限制：
 
 - 所有用户级任务必须通过 TUI Host -> `computer_use.run_task(request, host_ports)` 进入模块；GUI 只发送 terminal-equivalent text 和展示结果。
+- Artifact-producing acceptance 必须同时包含 bundle-local `final-artifact-ref`、最终可见产物截图、verifier verdict 和 `gui.present` evidence；缺任何一项只能返回 `blocked` / `repair-needed` / diagnostic，而不是 `completed`。
 - 不允许用 Playwright、DOM、accessibility tree、app-specific private API 或直接文件生成绕过真实 GUI 操作来冒充 Computer Use 成功。
 - 真实外部发送、发布、授权、支付、删除或上传不作为默认验收；如必须覆盖，只能走 dry-run 或 `needs-confirmation` / `approvalRequest`。
 - 若本机缺少目标 App、系统权限或 shared input policy 阻断，应返回 `blocked` manifest，而不是降级为不可验证的抽象成功。

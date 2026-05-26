@@ -83,6 +83,39 @@ test('text planner consumes compact observation without DOM/accessibility/privat
   assert.equal(steps[0]?.execution?.planner, 'runtime-codex-tui-text-planner');
 });
 
+test('text planner receives structured acceptance contract without private GUI sources', async () => {
+  const adapter = new FakePlannerAdapter([
+    JSON.stringify({
+      done: false,
+      reason: 'advance the next required evidence item',
+      actions: [{ type: 'scroll', direction: 'down' }],
+    }),
+  ]);
+  const result = await appendPlannerStep({
+    id: 'step-000-plan',
+    task: 'collect refs-first trace evidence',
+    observation: { ref: 'screen-ref', summary: 'A file list is visible.', visibleTexts: ['Documents'] },
+    plannerAcceptanceContract: {
+      schemaVersion: 'sciforge.computer-use.planner-acceptance-contract.v1',
+      source: 'gateway-ui-state',
+      scenarioId: 'CU-LONG-999',
+      expectedTrace: ['scroll action ledger', 'before/after screenshot refs'],
+      acceptance: ['at least one non-wait generic action'],
+      requirements: ['l3-workflow-refs'],
+    },
+    screenshotRefs: [screenshotRef()],
+    steps: [],
+    config: baseConfig(),
+    workspace: '/tmp',
+    codexPlannerAdapter: adapter,
+  });
+
+  assert.equal(result.ok, true);
+  assert.match(adapter.commandTexts[0] ?? '', /Planner acceptance contract JSON/);
+  assert.match(adapter.commandTexts[0] ?? '', /scroll action ledger/);
+  assert.doesNotMatch(adapter.commandTexts[0] ?? '', /DOM_SHOULD_NOT_LEAK|AX_SHOULD_NOT_LEAK|data:image/);
+});
+
 test('text planner rejects coordinate output instead of passing it to executor', async () => {
   const adapter = new FakePlannerAdapter([
     JSON.stringify({
@@ -111,6 +144,87 @@ test('text planner rejects coordinate output instead of passing it to executor',
   if (result.ok) assert.fail('coordinate planner output should fail closed');
   assert.match(result.reason, /forbidden field "x"|coordinates/i);
   assert.equal(adapter.commandTexts.length, 2);
+});
+
+test('text planner repairs platform-incompatible hotkey output to a generic visible action', async () => {
+  const adapter = new FakePlannerAdapter([
+    JSON.stringify({
+      done: false,
+      reason: 'select everything in the visible file list',
+      actions: [{ type: 'hotkey', keys: ['command', 'a'] }],
+    }),
+    JSON.stringify({
+      done: false,
+      reason: 'click the visible file list item instead of using an app shortcut',
+      actions: [{ type: 'click', targetDescription: 'first visible item in the file list' }],
+    }),
+  ]);
+  const result = await appendPlannerStep({
+    id: 'step-004-plan',
+    task: 'perform the next generic visible GUI action that advances the trace evidence',
+    observation: {
+      ref: 'screen-ref',
+      summary: 'A file list is visible with several selectable items.',
+      visibleTexts: ['Documents', 'Downloads'],
+      windowTarget: { appName: 'Finder' },
+    },
+    screenshotRefs: [screenshotRef()],
+    steps: [],
+    config: baseConfig(),
+    workspace: '/tmp',
+    codexPlannerAdapter: adapter,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.actions[0]?.type, 'click');
+  assert.equal(adapter.commandTexts.length, 2);
+  assert.match(adapter.commandTexts[1] ?? '', /platform-level recovery/);
+  assert.match(adapter.commandTexts[1] ?? '', /Command\/Ctrl\+A/);
+  assert.doesNotMatch(adapter.commandTexts[1] ?? '', /CU-NEXT-04/);
+});
+
+test('text planner preserves retry diagnostics when platform hotkey repair still fails', async () => {
+  const adapter = new FakePlannerAdapter([
+    JSON.stringify({
+      done: false,
+      reason: 'select everything in the visible file list',
+      actions: [{ type: 'hotkey', keys: ['command', 'a'] }],
+    }),
+    JSON.stringify({
+      done: false,
+      reason: 'save with a keyboard shortcut',
+      actions: [{ type: 'hotkey', keys: ['command', 's'] }],
+    }),
+  ]);
+  const result = await appendPlannerStep({
+    id: 'step-004-plan',
+    task: 'perform the next generic visible GUI action that advances the trace evidence',
+    observation: {
+      ref: 'screen-ref',
+      summary: 'A file list is visible with several selectable items.',
+      visibleTexts: ['Documents', 'Downloads'],
+      windowTarget: { appName: 'Finder' },
+    },
+    screenshotRefs: [screenshotRef()],
+    steps: [],
+    config: baseConfig(),
+    workspace: '/tmp',
+    codexPlannerAdapter: adapter,
+  });
+
+  assert.equal(result.ok, false);
+  if (result.ok) assert.fail('platform-incompatible retry should fail closed');
+  assert.equal(adapter.commandTexts.length, 2);
+  assert.match(result.reason, /Initial failure:/);
+  assert.match(result.reason, /Retry failure:/);
+  const rawResponse = result.rawResponse as Record<string, unknown>;
+  assert.equal(rawResponse.schemaVersion, 'sciforge.computer-use.text-planner-retry-result.v1');
+  assert.equal(rawResponse.attemptCount, 2);
+  assert.equal(rawResponse.initialContractIssue, 'platform-incompatible-action');
+  assert.equal(rawResponse.retryContractIssue, 'platform-incompatible-action');
+  assert.ok(rawResponse.initial);
+  assert.ok(rawResponse.retry);
+  assert.match(JSON.stringify(rawResponse.retry), /command.*s/);
 });
 
 test('text planner repairs open_app output to the final appName contract', async () => {
@@ -565,6 +679,62 @@ test('text planner accepts done when required visible marker is present in windo
   assert.equal(adapter.commandTexts.length, 1);
 });
 
+test('text planner uses direct chat fallback when Codex TUI planner times out before terminal event', async () => {
+  const originalFetch = globalThis.fetch;
+  const envKeys = [
+    'SCIFORGE_RUNTIME_API_KEY',
+    'SCIFORGE_PROXY_UPSTREAM_BASE_URL',
+    'SCIFORGE_RUNTIME_MODEL',
+    'SCIFORGE_COMPUTER_USE_DIRECT_TEXT_PLANNER_TIMEOUT_MS',
+  ] as const;
+  const originalEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+  const fetchCalls: Array<{ url: string; body: Record<string, unknown> }> = [];
+  globalThis.fetch = (async (url, init) => {
+    fetchCalls.push({
+      url: String(url),
+      body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+    });
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: '{"done":false,"reason":"fallback after timeout","actions":[{"type":"press_key","key":"Tab"}]}' } }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+  try {
+    process.env.SCIFORGE_RUNTIME_API_KEY = 'test-key';
+    process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL = 'http://provider.example/v1/';
+    process.env.SCIFORGE_RUNTIME_MODEL = 'bailian/deepseek-v4-flash';
+    process.env.SCIFORGE_COMPUTER_USE_DIRECT_TEXT_PLANNER_TIMEOUT_MS = '1000';
+    const config = baseConfig();
+    config.planner.timeoutMs = -9_995;
+    const steps: LoopStep[] = [];
+
+    const result = await appendPlannerStep({
+      id: 'step-000-plan',
+      task: 'focus the visible file list',
+      observation: { ref: 'screen-ref', summary: 'A Finder file list is visible.', visibleTexts: ['Downloads'] },
+      screenshotRefs: [screenshotRef()],
+      steps,
+      config,
+      workspace: '/tmp',
+      codexPlannerAdapter: new HangingPlannerAdapter(),
+    });
+
+    assert.equal(result.ok, true, result.ok ? '' : result.reason);
+    assert.equal(result.actions[0]?.type, 'press_key');
+    assert.equal(fetchCalls[0]?.url, 'http://provider.example/v1/chat/completions');
+    assert.equal(fetchCalls[0]?.body.stream, false);
+    assert.equal(fetchCalls[0]?.body.max_tokens, 768);
+    assert.match(String((fetchCalls[0]?.body.messages as Array<Record<string, unknown>>)?.[0]?.content), /Runtime Codex CLI\/TUI text planner transport timed out/);
+    assert.match(JSON.stringify(steps[0]?.execution?.rawResponse), /directChatFallback=used/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const key of envKeys) {
+      const value = originalEnv[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 test('compact planner observation keeps refs and visible text but not raw private observation metadata', () => {
   const compact = compactComputerUsePlannerObservation({
     ref: 'screen-ref',
@@ -603,6 +773,35 @@ class FakePlannerAdapter implements AgentCliAdapter {
   }
 
   async cancel(): Promise<void> {}
+}
+
+class HangingPlannerAdapter implements AgentCliAdapter {
+  async startTurn(input: AgentCliStartTurnInput): Promise<AgentCliTurn> {
+    return {
+      turnId: input.commandId ?? 'hanging-turn',
+      attemptId: input.attemptId ?? 'hanging-attempt',
+      events: hangingEvents(input),
+    };
+  }
+
+  async cancel(): Promise<void> {}
+}
+
+async function* hangingEvents(input: AgentCliStartTurnInput): AsyncIterable<NormalizedAgentEvent> {
+  yield event('run_started', {
+    message: 'Runtime Codex started.',
+    workspace: input.workspacePath,
+    commandId: input.commandId ?? 'hanging-turn',
+    attemptId: input.attemptId ?? 'hanging-attempt',
+  });
+  await new Promise<void>((resolve) => {
+    if (input.abortSignal?.aborted) {
+      resolve();
+      return;
+    }
+    input.abortSignal?.addEventListener('abort', () => resolve(), { once: true });
+    setTimeout(resolve, 250);
+  });
 }
 
 async function* eventsForText(

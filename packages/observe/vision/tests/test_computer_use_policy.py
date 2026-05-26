@@ -155,6 +155,22 @@ class ComputerUsePolicyTest(unittest.TestCase):
         self.assertTrue(result["complete"])
         self.assertEqual(result["kind"], "window-recovery")
 
+    def test_file_manager_completion_accepts_preselected_finder_window(self) -> None:
+        steps = [
+            _done_step({"type": "click", "targetDescription": "Finder download file list"}, app_name="Finder"),
+            _done_step({"type": "click", "targetDescription": "new folder menu item in Finder"}, app_name="Finder"),
+            _done_step({"type": "press_key", "key": "Enter"}, app_name="Finder"),
+            _done_step({"type": "double_click", "targetDescription": "test folder in Finder file list"}, app_name="Finder"),
+        ]
+
+        result = action_ledger_completion(
+            "Use the file manager to create or enter a low-risk test folder and record file list refs.",
+            steps,
+        )
+
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["kind"], "file-manager")
+
     def test_rewrite_policy_moves_repeated_chat_text_to_submit(self) -> None:
         steps = [_done_step({"type": "type_text", "text": "missing refs", "targetDescription": "chat input"})]
 

@@ -85,7 +85,7 @@ export async function prepareComputerUseLongRun(options: {
   const scenario = pool.scenarios.find((item) => item.id === options.scenarioId);
   if (!scenario) throw new Error(`Unknown CU-LONG scenario: ${options.scenarioId}`);
   const now = options.now ?? new Date();
-  const runId = sanitizeRunId(options.runId || `${scenario.id.toLowerCase()}-${now.toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`);
+  const runId = sanitizeRunId(options.runId || `${scenario.id.toLowerCase()}-${now.toISOString().replace(/[-:.TZ]/g, '').slice(0, 17)}`);
   const outRoot = resolve(options.outRoot || join('docs', 'test-artifacts', 'computer-use-long'));
   const runDir = join(outRoot, scenario.id, runId);
   const manifestPath = join(runDir, 'manifest.json');

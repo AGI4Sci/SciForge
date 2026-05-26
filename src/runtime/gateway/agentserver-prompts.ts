@@ -13,6 +13,11 @@ import { readRecentTaskAttempts } from '../task-attempt-history.js';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { parseJsonErrorMessage, redactSecretText, sanitizeAgentServerError } from './backend-failure-diagnostics.js';
+import {
+  agentServerBackend,
+  configuredAgentServerBaseUrl,
+  requiresUserLlmEndpointForAgentServerBaseUrl,
+} from './agent-backend-config.js';
 import { ignoredLegacyRepairContextPolicyAuditForAgentServer, repairContextPolicySummaryForAgentServer } from './agentserver-repair-context-policy.js';
 import { agentServerArtifactSelectionPromptPolicyLines, agentServerBibliographicVerificationPromptPolicyLines, agentServerCurrentReferencePromptPolicyLines, agentServerShouldIncludeBibliographicVerificationPromptPolicy, agentServerToolPayloadProtocolContractLines } from '@sciforge-ui/runtime-contract/artifact-policy';
 import { collectRuntimeRefsFromValue, runtimePayloadKeyLooksLikeBodyCarrier } from '@sciforge-ui/runtime-contract/references';
@@ -35,20 +40,6 @@ export const AGENT_BACKEND_ANSWER_PRINCIPLE = [
 
 function requestHandoffSource(request: GatewayRequest) {
   return request.handoffSource ?? 'cli';
-}
-
-function agentServerBackend(request?: GatewayRequest, llmEndpoint?: LlmEndpointConfig) {
-  const requestBackend = request?.agentBackend?.trim();
-  if (requestBackend && ['openteam_agent', 'claude-code', 'codex', 'hermes-agent', 'openclaw', 'gemini'].includes(requestBackend)) {
-    return requestBackend;
-  }
-  const requested = process.env.SCIFORGE_AGENTSERVER_BACKEND?.trim();
-  if (requested && ['openteam_agent', 'claude-code', 'codex', 'hermes-agent', 'openclaw', 'gemini'].includes(requested)) {
-    return requested;
-  }
-  const endpoint = llmEndpoint ?? request?.llmEndpoint;
-  if (endpoint?.baseUrl?.trim()) return 'openteam_agent';
-  return 'codex';
 }
 
 function stringField(value: unknown) {
@@ -109,7 +100,7 @@ export async function requestAgentServerRepair(params: {
   try {
     const { llmEndpointSource, ...llmRuntime } = await agentServerLlmRuntime(params.request, params.run.workspace);
     const backend = agentServerBackend(params.request, llmRuntime.llmEndpoint);
-    if (!llmRuntime.llmEndpoint && requiresUserLlmEndpoint(params.baseUrl)) {
+    if (!llmRuntime.llmEndpoint && requiresUserLlmEndpoint(params.baseUrl, params.request)) {
       return { ok: false, error: missingUserLlmEndpointMessage() };
     }
     const priorAttempts = await readRecentTaskAttempts(params.run.workspace, params.request.skillDomain, 8, {
@@ -251,15 +242,16 @@ export async function requestAgentServerRepair(params: {
 }
 
 export async function readConfiguredAgentServerBaseUrl(workspace: string) {
+  let workspaceConfigBaseUrl: string | undefined;
   try {
     const parsed = JSON.parse(await readFile(join(workspace, '.sciforge', 'config.json'), 'utf8'));
     if (isRecord(parsed) && typeof parsed.agentServerBaseUrl === 'string') {
-      return cleanUrl(parsed.agentServerBaseUrl);
+      workspaceConfigBaseUrl = cleanUrl(parsed.agentServerBaseUrl);
     }
   } catch {
     // No persisted UI config is available for this workspace yet.
   }
-  return undefined;
+  return configuredAgentServerBaseUrl({ workspaceConfigBaseUrl });
 }
 
 export async function writeAgentServerDebugArtifact(
@@ -341,14 +333,8 @@ export function hasExplicitRequestLlmConfig(request: GatewayRequest) {
     || request.llmEndpoint !== undefined;
 }
 
-export function requiresUserLlmEndpoint(agentServerBaseUrl: string) {
-  if (process.env.SCIFORGE_ALLOW_AGENTSERVER_DEFAULT_LLM === '1') return false;
-  try {
-    const url = new URL(agentServerBaseUrl);
-    return ['127.0.0.1', 'localhost', '::1'].includes(url.hostname) && url.port === '18080';
-  } catch {
-    return false;
-  }
+export function requiresUserLlmEndpoint(agentServerBaseUrl: string, request?: GatewayRequest) {
+  return requiresUserLlmEndpointForAgentServerBaseUrl(agentServerBaseUrl, request);
 }
 
 export function missingUserLlmEndpointMessage() {

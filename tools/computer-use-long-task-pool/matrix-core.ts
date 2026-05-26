@@ -301,9 +301,13 @@ export async function preflightComputerUseLong(options: {
   const scenarioIds = options.scenarioIds?.length ? options.scenarioIds : pool.scenarios.map((item) => item.id);
   const dryRun = options.dryRun ?? false;
   const workspacePath = resolve(options.workspacePath || 'workspace');
+  const localConfigPath = process.env.SCIFORGE_CONFIG_PATH?.trim()
+    ? resolve(process.env.SCIFORGE_CONFIG_PATH)
+    : resolve('config.local.json');
   const configCandidates = [
-    await readOptionalJson(resolve('config.local.json')),
+    await readOptionalJson(localConfigPath),
     await readOptionalJson(resolve(workspacePath, '.sciforge', 'config.json')),
+    await readOptionalJson(resolve(workspacePath, '.sciforge', 'config.local.json')),
   ].filter(isRecord);
   const checks: ComputerUseLongPreflightResult['checks'] = [];
   for (const issue of poolIssues) {
@@ -428,7 +432,13 @@ export async function preflightComputerUseLong(options: {
       getConfigString(config, ['visionSense', 'plannerProfile']),
     ]),
   );
-  const runtimeCodexReady = Boolean(firstString(process.env.SCIFORGE_RUNTIME_API_KEY));
+  const runtimeApiKeyReady = Boolean(firstString(process.env.SCIFORGE_RUNTIME_API_KEY));
+  const runtimeUpstreamBaseUrlReady = Boolean(runtimeCodexUpstreamBaseUrl(configCandidates));
+  const missingRuntimePlannerConfig = [
+    runtimeApiKeyReady ? undefined : 'SCIFORGE_RUNTIME_API_KEY',
+    runtimeUpstreamBaseUrlReady ? undefined : 'SCIFORGE_PROXY_UPSTREAM_BASE_URL or SCIFORGE_RUNTIME_BASE_URL',
+  ].filter((item): item is string => Boolean(item));
+  const runtimeCodexReady = runtimeApiKeyReady && runtimeUpstreamBaseUrlReady;
   checks.push(runtimeCodexReady ? {
     id: 'runtime-codex-planner',
     status: hasTestActionFixtures ? 'warn' : 'pass',
@@ -440,8 +450,13 @@ export async function preflightComputerUseLong(options: {
     id: 'runtime-codex-planner',
     status: hasTestActionFixtures ? 'warn' : 'fail',
     category: 'planner',
-    message: 'Runtime Codex text planner config is incomplete.',
-    repairAction: 'Set SCIFORGE_RUNTIME_API_KEY and ensure the Runtime Codex profile/config is initialized; use SCIFORGE_COMPUTER_USE_PLANNER_PROFILE only for an explicit non-default profile.',
+    message: `Runtime Codex text planner config is incomplete: missing ${missingRuntimePlannerConfig.join(', ')}.`,
+    repairAction: [
+      'Set SCIFORGE_RUNTIME_API_KEY in the service environment, not via config-file secret fallback.',
+      'Set SCIFORGE_PROXY_UPSTREAM_BASE_URL or SCIFORGE_RUNTIME_BASE_URL in the service environment or ignored local config.',
+      'Start or verify the provider proxy with SCIFORGE_PROXY_PORT=3891.',
+      'Then rerun computer-use-next:preflight without --actions-json before attempting a real CU-NEXT scenario.',
+    ].join(' '),
   });
 
   const kvGrounderUrl = firstString(process.env.SCIFORGE_VISION_KV_GROUND_URL, ...configCandidates.map((config) => getConfigString(config, ['visionSense', 'grounderBaseUrl'])));
@@ -481,6 +496,25 @@ export async function preflightComputerUseLong(options: {
     await writeFile(reportPath, report);
   }
   return { ok, scenarioIds, dryRun, checks, reportPath };
+}
+
+function runtimeCodexUpstreamBaseUrl(configCandidates: Array<Record<string, unknown>>) {
+  if (process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL !== undefined) {
+    return firstString(process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL);
+  }
+  if (process.env.SCIFORGE_RUNTIME_BASE_URL !== undefined) {
+    return firstString(process.env.SCIFORGE_RUNTIME_BASE_URL);
+  }
+  return firstString(
+    ...configCandidates.flatMap((config) => [
+      getConfigString(config, ['llm', 'baseUrl']),
+      getConfigString(config, ['llm', 'upstreamBaseUrl']),
+      getConfigString(config, ['codexProxy', 'upstreamBaseUrl']),
+      getConfigString(config, ['codexProxy', 'baseUrl']),
+      getConfigString(config, ['runtimeCodexProxy', 'upstreamBaseUrl']),
+      getConfigString(config, ['runtimeCodexProxy', 'baseUrl']),
+    ]),
+  );
 }
 
 function isExecutableIndependentInputAdapter(adapter: string | undefined, provider: string | undefined) {

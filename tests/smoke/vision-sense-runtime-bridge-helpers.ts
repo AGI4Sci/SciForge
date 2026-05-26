@@ -103,6 +103,15 @@ export function createJsonPostServer(
   handler: (body: Record<string, unknown>, raw: string) => unknown,
 ) {
   return createServer((request, response) => {
+    if (request.method === 'GET' && request.url === '/health') {
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({
+        ok: true,
+        inline_image_supported: true,
+        max_inline_image_bytes: 20971520,
+      }));
+      return;
+    }
     if (request.method !== 'POST' || request.url !== path) {
       response.statusCode = 404;
       response.end('not found');

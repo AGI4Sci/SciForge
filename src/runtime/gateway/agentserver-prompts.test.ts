@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
-import { buildAgentServerGenerationPrompt } from './agentserver-prompts.js';
+import { buildAgentServerGenerationPrompt, readConfiguredAgentServerBaseUrl } from './agentserver-prompts.js';
 import { AGENTSERVER_BACKEND_HANDOFF_VERSION, type BackendHandoffPacket } from './agentserver-context-contract.js';
+import { AGENTSERVER_BASE_URL_ENV_KEYS } from './agent-backend-config.js';
 import type { ProjectMemoryRef } from '../project-session-memory.js';
 
 test('AgentServer generation prompt projects core snapshot as turn refs without recentTurns or raw bodies', () => {
@@ -48,6 +52,24 @@ test('AgentServer generation prompt projects core snapshot as turn refs without 
   assert.match(prompt, /\.sciforge\/refs\/turn-3\.md/);
   assert.match(prompt, /sha1:turn-3/);
   assert.doesNotMatch(prompt, /recentTurns|RAW_AGENTSERVER_TURN_BODY_SHOULD_NOT_LEAK|RAW_COMPACTION_SUMMARY_SHOULD_NOT_LEAK/);
+});
+
+test('AgentServer prompt gateway config resolves AgentServer base URL through centralized env and workspace policy', async () => {
+  const originals = snapshotEnv(AGENTSERVER_BASE_URL_ENV_KEYS);
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-agentserver-base-url-config-'));
+  await mkdir(join(workspace, '.sciforge'), { recursive: true });
+  await writeFile(join(workspace, '.sciforge', 'config.json'), JSON.stringify({
+    agentServerBaseUrl: 'http://workspace-agent.example.test/',
+  }), 'utf8');
+  try {
+    clearEnv(AGENTSERVER_BASE_URL_ENV_KEYS);
+    assert.equal(await readConfiguredAgentServerBaseUrl(workspace), 'http://workspace-agent.example.test');
+
+    process.env.SCIFORGE_AGENT_SERVER_URL = 'http://env-agent.example.test/';
+    assert.equal(await readConfiguredAgentServerBaseUrl(workspace), 'http://env-agent.example.test');
+  } finally {
+    restoreEnvSnapshot(originals);
+  }
 });
 
 test('AgentServer generation prompt renderer consumes BackendHandoffPacket and bounded render plan only', () => {
@@ -281,4 +303,22 @@ function ref(id: string, kind: ProjectMemoryRef['kind']): ProjectMemoryRef {
     digest: `sha256:${id}`,
     sizeBytes: 128,
   };
+}
+
+function snapshotEnv(keys: readonly string[]) {
+  return new Map(keys.map((key) => [key, process.env[key]]));
+}
+
+function clearEnv(keys: readonly string[]) {
+  for (const key of keys) delete process.env[key];
+}
+
+function restoreEnvSnapshot(snapshot: Map<string, string | undefined>) {
+  for (const [key, value] of snapshot) {
+    if (value === undefined) {
+      delete process.env[key];
+      continue;
+    }
+    process.env[key] = value;
+  }
 }

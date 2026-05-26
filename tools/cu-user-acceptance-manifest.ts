@@ -89,6 +89,7 @@ export interface CuGuiPresentRecord {
 
 export interface CuUserAcceptanceInput {
   runId: string;
+  taskId?: string;
   createdAt: string;
   taskText: string;
   level: 'L2' | 'L3';
@@ -115,6 +116,7 @@ export interface CuUserAcceptanceInput {
 export interface CuUserAcceptanceManifest {
   schemaVersion: typeof CU_USER_ACCEPTANCE_SCHEMA_VERSION;
   runId: string;
+  taskId?: string;
   createdAt: string;
   status: CuUserAcceptanceStatus;
   taskText: string;
@@ -380,6 +382,7 @@ export function buildCuUserAcceptanceManifest(input: CuUserAcceptanceInput): CuU
   return {
     schemaVersion: CU_USER_ACCEPTANCE_SCHEMA_VERSION,
     runId: input.runId,
+    taskId: input.taskId,
     createdAt: input.createdAt,
     status,
     taskText: input.taskText,

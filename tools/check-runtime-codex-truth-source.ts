@@ -51,10 +51,20 @@ const truthSourceScript = 'smoke:runtime-codex-truth-source';
 const packageRuntimeBoundaryScript = 'smoke:package-runtime-boundary';
 const realTaskMatrixScript = 'smoke:real-task-matrix';
 const realTaskOfflineGatesScript = 'smoke:real-task-offline-gates';
+const cuNextReadinessScript = 'smoke:cu-next-readiness';
+const cuNextRunnerScript = 'smoke:cu-next-runner';
+const cuNextUserAcceptanceContractScript = 'smoke:cu-next-user-acceptance-contract';
 const legacyCompatScript = 'smoke:legacy-agentserver-compat';
 const legacyVerifyScript = 'verify:legacy-agentserver-compat';
 const finalVerifyScript = 'verify:single-agent-final';
 const releaseVerifyScript = 'verify:single-agent-release';
+const realTaskMatrixCommand = [
+  'tsx tests/smoke/smoke-real-task-matrix.ts',
+  `npm run ${cuNextReadinessScript}`,
+  `npm run ${cuNextRunnerScript}`,
+  `npm run ${cuNextUserAcceptanceContractScript}`,
+  `npm run ${realTaskOfflineGatesScript}`,
+].join(' && ');
 
 const findings: Finding[] = [];
 
@@ -79,8 +89,8 @@ assertScriptEquals(
 );
 assertScriptEquals(
   realTaskMatrixScript,
-  `tsx tests/smoke/smoke-real-task-matrix.ts && npm run ${realTaskOfflineGatesScript}`,
-  'Computer Use task matrix must execute the active CU-* project-board gate, not retired R-* evidence schema checks.',
+  realTaskMatrixCommand,
+  'Computer Use task matrix must execute the active CU-* project-board gate plus CU-NEXT readiness, runner, acceptance-contract, and protocol gates.',
 );
 assertScriptEquals(
   legacyVerifyScript,

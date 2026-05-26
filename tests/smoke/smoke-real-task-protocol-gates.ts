@@ -41,9 +41,25 @@ assert.equal(
   'package.json must expose the Computer Use project-board gate',
 );
 
-for (const taskId of ['CU-00', 'CU-01', 'CU-02', 'CU-03', 'CU-04', 'CU-05', 'CU-06', 'CU-07', 'CU-08']) {
+const activeComputerUseNextTasks = [
+  'CU-NEXT-01',
+  'CU-NEXT-02',
+  'CU-NEXT-03',
+  'CU-NEXT-04',
+  'CU-NEXT-05',
+  'CU-NEXT-06',
+  'CU-NEXT-07',
+];
+
+assert.match(
+  projectText,
+  /## 当前任务板：下一轮 Computer Use 真实复杂任务/,
+  'PROJECT.md must expose the active CU-NEXT Computer Use task board',
+);
+for (const taskId of activeComputerUseNextTasks) {
   assert.match(projectText, new RegExp(`^### ${taskId}\\b`, 'm'), `${taskId}: must remain in the active PROJECT.md task board`);
 }
+assert.doesNotMatch(projectText, /^### CU-\d{2}\b/m, 'PROJECT.md must not restore the retired CU-00..CU-08 task board');
 assert.doesNotMatch(projectText, /^- \[[ xX]\]\s+R-[A-Z0-9-]+\b/m, 'PROJECT.md must not restore the retired R-* task board');
 
 assert.match(architecture, /TUI-owned extension|TUI Host/i, 'Architecture must keep Computer Use owned by the TUI Host');
@@ -65,7 +81,7 @@ assert.match(runtimeEvents, /gui\.present/, 'runtime event projection must surfa
 assert.match(runtimeEvents, /gui\.ask_user/, 'runtime event projection must surface gui.ask_user');
 
 assert.match(packageBridge, /sciforge_computer_use|packages\/actions\/computer-use/, 'runtime bridge must call the package action provider');
-assert.match(packageBridge, /withGuiIntentRuntimeResult|gui\.ask_user|gui\.present/, 'runtime bridge must preserve GUI intent metadata from package results');
+assert.match(packageBridge, /attachPackageResultHostActions|computer-use\.tui-host-actions|gui\.ask_user|gui\.present/, 'runtime bridge must preserve GUI intent metadata from package results');
 assert.match(packageBridgeTest, /gui\.ask_user|approvalRequest|package bridge/i, 'package bridge tests must cover high-risk confirmation projection');
 
 assert.match(planner, /visibleText|recentActions|verifierFeedback|compactObservation/, 'planner input must be compact text context, not GUI internals');

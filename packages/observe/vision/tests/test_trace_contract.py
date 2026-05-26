@@ -26,7 +26,9 @@ class TraceContractTest(unittest.TestCase):
             image = root / "before.png"
             image.write_bytes(PNG_1X1)
             trace_path = root / "vision-trace.json"
-            trace_path.write_text(json.dumps(_valid_trace("before.png")), encoding="utf-8")
+            trace = _valid_trace("before.png")
+            trace["policy"] = "Screenshot memory must be file refs only; never inline data:image or ;base64, payloads."
+            trace_path.write_text(json.dumps(trace), encoding="utf-8")
 
             result = validate_computer_use_trace_contract_from_request(
                 {"tracePath": str(trace_path), "workspacePath": str(root)}

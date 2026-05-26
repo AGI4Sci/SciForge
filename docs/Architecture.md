@@ -81,7 +81,7 @@ User / GUI gesture
   -> GUI Shell
 ```
 
-这个模型把 GUI 定义为 TUI Host 可调用的 presentation/input service，而不是 extension 的依赖。Extension package 只暴露 typed request/result、manifest、trace/audit refs 和必要的 host port contract；TUI Host 负责把这些结果映射成 `ToolPayload`、事件流、`gui.present` 或 `gui.ask_user`。
+这个模型把 GUI 定义为 TUI Host 可调用的 presentation/input service，而不是 extension 的依赖。Extension package 只暴露 typed request/result、manifest、trace/audit refs 和必要的 host port contract；产物型 extension 结果必须用 refs-first `finalArtifactRef` / `finalArtifactRefs` 标明当前 run bundle 的最终产物。TUI Host 负责把这些结果映射成 `ToolPayload`、事件流、`gui.present` 或 `gui.ask_user`。
 
 高风险副作用必须走同一条路径。Computer Use 的发送、删除、支付、授权、发布、外部提交，或飞书连接器的真实发送/同步/删除，不直接弹 GUI，也不直接执行；extension 返回 `needs-confirmation`、`approvalRequest`、`draftRef` 或 `auditRef`，TUI Host 决定是否调用 `gui.ask_user` 收集确认，确认后再发起下一次受控调用。
 
@@ -212,7 +212,7 @@ GUI 不是无脑像素壳，也不是第二个 agent。它应该“对任务无�
 
 ## 引用与右侧预览契约
 
-agent 回复、报告正文和消息 metadata 中出现的 artifact/file/run 引用必须尽量变成结构化 object reference，而不是只能显示成普通文本。可解析引用包括显式 `artifact:`、`file:`、`run:` ref，也包括能精确匹配当前 session artifact 或 workspace file 的裸文件名，例如 `arxiv_multi_agent_report_20260521.md`。
+agent 回复、报告正文和消息 metadata 中出现的 artifact/file/run 引用必须尽量变成结构化 object reference，而不是只能显示成普通文本。可解析引用包括显式 `artifact:`、`file:`、`run:` ref，也包括 Computer Use run bundle 内的 `finalArtifactRef` / `finalArtifactRefs` 和能精确匹配当前 session artifact 或 workspace file 的裸文件名，例如 `arxiv_multi_agent_report_20260521.md`。
 
 裸文件名只能在“已解析到真实 artifact/file”时升级为可点击引用，避免把任意 Markdown 代码片段误当成文件。用户点击这类引用时，GUI 应聚焦右侧面板，并用展示能力目录中的合适 renderer 预览；TUI 也可以显式调用：
 
@@ -264,7 +264,7 @@ SciForge 不定义新的 agent extension API。所有算法和策略扩展都使
 | Harness / policy / budget / repair | TUI 原生 policy/plugin/skill。 |
 | Provider route / MCP / remote worker | TUI 原生 provider/tool 生态。 |
 | 外部软件连接器，如飞书、微信、企业微信 | TUI 原生 connector/tool/MCP/worker；repo 内 adapter 放在 `packages/connectors`。 |
-| Computer Use | TUI 原生 action provider；repo 内能力主体放在 `packages/actions/computer-use`，可消费 `packages/observe/vision` 的 sense/grounding/verifier 输出，桌面/远程/dry-run 执行通过 TUI Host ports 接入。 |
+| Computer Use | TUI 原生 action provider；repo 内能力主体放在 `packages/actions/computer-use`，可消费 `packages/observe/vision` 的 sense/grounding/verifier 输出，桌面/远程/dry-run 执行通过 TUI Host ports 接入，并在产物任务中输出 bundle-local `finalArtifactRef` / `finalArtifactRefs`。 |
 | Artifact schema / verifier | TUI 原生 tool 或 skill。 |
 | GUI 展示、确认、输入收集 | SciForge GUI extension 暴露的 intent-based `gui.*` tools。 |
 

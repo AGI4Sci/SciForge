@@ -1,5 +1,5 @@
-import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { access, copyFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import type {
   ComputerUseLongRoundRunResult,
@@ -37,6 +37,39 @@ import {
   withTaskPoolHardTimeout,
 } from './support.js';
 
+export const CU_LONG_DEFAULT_DRY_RUN_ROUND_TIMEOUT_MS = 120_000;
+export const CU_LONG_MIN_REAL_ROUND_TIMEOUT_MS = 240_000;
+export const CU_LONG_DEFAULT_PLANNER_TIMEOUT_MS = 120_000;
+export const CU_LONG_DEFAULT_REAL_MAX_STEPS = 8;
+export const CU_LONG_ABORT_GRACE_MS = 15_000;
+export const CU_LONG_FINALIZATION_GRACE_MS = 30_000;
+
+export function computerUsePlannerStepTimeoutMs(plannerTimeoutMs = CU_LONG_DEFAULT_PLANNER_TIMEOUT_MS) {
+  return Math.max(
+    plannerTimeoutMs + 10_000,
+    plannerTimeoutMs * 2 + 5_000,
+  );
+}
+
+export function computerUseLongRoundTimeoutMs(input: {
+  dryRun?: boolean;
+  env?: NodeJS.ProcessEnv;
+  maxSteps?: number;
+} = {}) {
+  const env = input.env ?? process.env;
+  const configuredRoundTimeoutMs = positiveFiniteNumber(env.SCIFORGE_CU_LONG_ROUND_TIMEOUT_MS);
+  if (configuredRoundTimeoutMs !== undefined) return configuredRoundTimeoutMs;
+  if (input.dryRun) return CU_LONG_DEFAULT_DRY_RUN_ROUND_TIMEOUT_MS;
+  const plannerTimeoutMs = positiveFiniteNumber(env.SCIFORGE_COMPUTER_USE_PLANNER_TIMEOUT_MS)
+    ?? CU_LONG_DEFAULT_PLANNER_TIMEOUT_MS;
+  const maxSteps = Math.max(1, Math.ceil(positiveFiniteNumber(input.maxSteps) ?? CU_LONG_DEFAULT_REAL_MAX_STEPS));
+  const minimumBudget = computerUsePlannerStepTimeoutMs(plannerTimeoutMs)
+    * maxSteps
+    + CU_LONG_ABORT_GRACE_MS
+    + CU_LONG_FINALIZATION_GRACE_MS;
+  return Math.max(CU_LONG_MIN_REAL_ROUND_TIMEOUT_MS, minimumBudget);
+}
+
 export async function runComputerUseLongRound(options: {
   manifestPath: string;
   round: number;
@@ -62,7 +95,7 @@ export async function runComputerUseLongRound(options: {
   const evidenceDir = join(dirname(manifestPath), 'evidence', `round-${String(options.round).padStart(2, '0')}`);
   await mkdir(evidenceDir, { recursive: true });
   const now = options.now ?? new Date();
-  const runId = sanitizeRunId(options.runId || `${manifest.run.id}-round-${String(options.round).padStart(2, '0')}-${now.toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`);
+  const runId = sanitizeRunId(options.runId || `${manifest.run.id}-round-${String(options.round).padStart(2, '0')}-${now.toISOString().replace(/[-:.TZ]/g, '').slice(0, 17)}`);
   const prompt = await renderRoundRuntimePrompt(manifest, round, dirname(manifestPath), options.promptSuffix);
   const gatewayPrompt = renderComputerUseGatewayPrompt(prompt, {
     scenarioId: manifest.scenarioId,
@@ -79,26 +112,30 @@ export async function runComputerUseLongRound(options: {
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
   const { runWorkspaceRuntimeGateway } = await import('../../src/runtime/workspace-runtime-gateway.js');
+  const maxSteps = options.maxSteps ?? CU_LONG_DEFAULT_REAL_MAX_STEPS;
   const windowTarget = await defaultWindowTargetForRound(manifest, options.round, options.dryRun ?? false, {
     appName: options.targetAppName,
     title: options.targetTitle,
     mode: options.targetMode,
   });
-  const configuredRoundTimeoutMs = Number(process.env.SCIFORGE_CU_LONG_ROUND_TIMEOUT_MS);
-  const roundTimeoutMs = Number.isFinite(configuredRoundTimeoutMs) && configuredRoundTimeoutMs > 0
-    ? configuredRoundTimeoutMs
-    : options.dryRun ? 120_000 : 240_000;
-  const payload = await withTaskPoolHardTimeout(runWorkspaceRuntimeGateway({
+  const roundTimeoutMs = computerUseLongRoundTimeoutMs({ dryRun: options.dryRun ?? false, maxSteps });
+  const gatewayAbort = new AbortController();
+  const timeoutMessage = `runWorkspaceRuntimeGateway timed out after ${roundTimeoutMs}ms for ${manifest.scenarioId} round ${options.round}`;
+  const gatewayPromise = runWorkspaceRuntimeGateway({
       skillDomain: 'knowledge',
       prompt: gatewayPrompt,
       workspacePath,
       selectedToolIds: ['local.vision-sense'],
+      selectedSenseIds: ['local.vision-sense'],
+      selectedActionIds: ['action.sciforge.computer-use'],
       uiState: {
         selectedToolIds: ['local.vision-sense'],
+        selectedSenseIds: ['local.vision-sense'],
+        selectedActionIds: ['action.sciforge.computer-use'],
         visionSenseConfig: {
           desktopBridgeEnabled: true,
           dryRun: options.dryRun ?? false,
-          maxSteps: options.maxSteps ?? 8,
+          maxSteps,
           runId,
           testActionFixtureMode: Boolean(options.actionsJson),
           testOnlyActions: options.actionsJson ? JSON.parse(options.actionsJson) : [],
@@ -110,18 +147,40 @@ export async function runComputerUseLongRound(options: {
               : 'Real T084 CU-LONG rounds must continue until the planner confirms the visible task state is complete or maxSteps is exhausted.',
           },
         },
-        computerUseLong: {
-          scenarioId: manifest.scenarioId,
-          runId: manifest.run.id,
-          round: options.round,
-          requiredPipeline: manifest.universalPipeline,
-          safetyBoundary: manifest.safetyBoundary,
+          computerUseLong: {
+            taskId: manifest.taskId,
+            scenarioId: manifest.scenarioId,
+            cuNextTaskId: manifest.cuNextTaskId,
+            cuNextTask: manifest.cuNextTask,
+            runId: manifest.run.id,
+            round: options.round,
+            title: manifest.title,
+            roundPrompt: round.prompt,
+            expectedTrace: round.expectedTrace,
+            acceptance: manifest.acceptance,
+            requiredEvidence: manifest.requiredEvidence,
+            failureRecord: manifest.failureRecord,
+            requirements: manifest.cuNextTask?.requirements,
+            requiredPipeline: manifest.universalPipeline,
+            safetyBoundary: manifest.safetyBoundary,
+            validationContract: manifest.validationContract,
+          },
+          computerUseNext: manifest.cuNextTask,
         },
-      },
       artifacts: [],
-    }), roundTimeoutMs, `runWorkspaceRuntimeGateway timed out after ${roundTimeoutMs}ms for ${manifest.scenarioId} round ${options.round}`)
+    }, { signal: gatewayAbort.signal });
+  const payload = await withTaskPoolHardTimeout(gatewayPromise, roundTimeoutMs, timeoutMessage, () => {
+      gatewayAbort.abort(new Error(timeoutMessage));
+    })
     .catch(async (error) => {
-      const message = error instanceof Error ? error.message : String(error);
+      let message = error instanceof Error ? error.message : String(error);
+      if (message === timeoutMessage) {
+        try {
+          return await withTaskPoolHardTimeout(gatewayPromise, CU_LONG_ABORT_GRACE_MS, `${timeoutMessage}; abort grace elapsed`);
+        } catch (abortError) {
+          message = abortError instanceof Error ? abortError.message : String(abortError);
+        }
+      }
       round.status = 'repair-needed';
       round.actionLedgerRefs = [manifestRel(dirname(manifestPath), actionLedgerPath)];
       round.failureDiagnosticsRefs = [manifestRel(dirname(manifestPath), failureDiagnosticsPath)];
@@ -164,17 +223,24 @@ export async function runComputerUseLongRound(options: {
 
   const traceRef = findPayloadTraceRef(payload);
   const tracePath = traceRef ? resolveTraceArtifactPath(traceRef, workspacePath) : undefined;
-  const screenshotRefs = tracePath ? await screenshotRefsFromTrace(tracePath) : [];
   const traceEvidencePath = tracePath ? join(evidenceDir, 'vision-trace.json') : undefined;
   if (tracePath && traceEvidencePath && tracePath !== traceEvidencePath) {
-    await copyFile(tracePath, traceEvidencePath);
+    await copyTraceEvidenceBundle({
+      tracePath,
+      traceEvidencePath,
+      traceDir: dirname(tracePath),
+      evidenceDir,
+      workspacePath,
+    });
   }
+  const validationTracePath = traceEvidencePath ?? tracePath;
+  const screenshotRefs = validationTracePath ? await screenshotRefsFromTrace(validationTracePath) : [];
 
   let validation: ComputerUseLongTraceValidation | undefined;
-  if (tracePath) {
+  if (validationTracePath) {
     validation = await validateComputerUseLongTrace({
       scenarioId: manifest.scenarioId,
-      tracePath,
+      tracePath: validationTracePath,
       workspacePath,
     });
   }
@@ -197,14 +263,14 @@ export async function runComputerUseLongRound(options: {
       : 'not-run';
 
   await writeFile(actionLedgerPath, `${JSON.stringify(renderActionLedger(payload, validation, manifestRel(dirname(manifestPath), runtimePromptPath)), null, 2)}\n`);
-  await writeFile(failureDiagnosticsPath, `${JSON.stringify(renderFailureDiagnostics(payload, validation, tracePath), null, 2)}\n`);
+  await writeFile(failureDiagnosticsPath, `${JSON.stringify(renderFailureDiagnostics(payload, validation, validationTracePath), null, 2)}\n`);
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   await writeScenarioSummaryForManifest(manifestPath, manifest, [{
     manifestPath,
     scenarioId: manifest.scenarioId,
     round: options.round,
     status: round.status,
-    tracePath,
+    tracePath: validationTracePath,
     validation,
     actionLedgerPath,
     failureDiagnosticsPath,
@@ -222,6 +288,121 @@ export async function runComputerUseLongRound(options: {
     failureDiagnosticsPath,
     payloadMessage: payload.message,
   };
+}
+
+function positiveFiniteNumber(value: unknown): number | undefined {
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+async function copyTraceEvidenceBundle(options: {
+  tracePath: string;
+  traceEvidencePath: string;
+  traceDir: string;
+  evidenceDir: string;
+  workspacePath: string;
+}) {
+  const { refMap, copiedJsonPaths } = await copyTraceSiblingEvidenceFiles(options.traceDir, options.evidenceDir, options.workspacePath);
+  try {
+    const trace = JSON.parse(await readFile(options.tracePath, 'utf8')) as unknown;
+    const bundledTrace = rewriteTraceRefsForEvidenceBundle(trace, refMap, options.evidenceDir);
+    await writeFile(options.traceEvidencePath, `${JSON.stringify(bundledTrace, null, 2)}\n`, 'utf8');
+  } catch {
+    await copyFile(options.tracePath, options.traceEvidencePath);
+  }
+  await rewriteCopiedJsonSiblings(copiedJsonPaths, refMap, options.evidenceDir, options.traceEvidencePath);
+}
+
+async function copyTraceSiblingEvidenceFiles(traceDir: string, evidenceDir: string, workspacePath: string) {
+  const siblingEvidenceNames = [
+    'computer-use-request.json',
+    'request.json',
+    'gateway-request.json',
+    'host-ports.json',
+    'tool-payload.json',
+    'gui-present.json',
+    'gui-ask-user.json',
+    'independent-input-adapter.json',
+    'virtual-remote-session.json',
+  ];
+  const refMap = new Map<string, string>();
+  const copiedJsonPaths = (await Promise.all(siblingEvidenceNames.map(async (name) => (
+    copyTraceSiblingFile(traceDir, evidenceDir, workspacePath, name, refMap)
+  )))).filter(isString);
+  try {
+    const entries = await readdir(traceDir, { withFileTypes: true });
+    copiedJsonPaths.push(...(await Promise.all(entries
+      .filter((entry) => entry.isFile())
+      .map((entry) => copyTraceSiblingFile(traceDir, evidenceDir, workspacePath, entry.name, refMap))))
+      .filter(isString));
+  } catch {
+    // A missing original trace directory is handled by the caller's trace copy.
+  }
+  return {
+    refMap,
+    copiedJsonPaths: Array.from(new Set(copiedJsonPaths)),
+  };
+}
+
+async function copyTraceSiblingFile(
+  traceDir: string,
+  evidenceDir: string,
+  workspacePath: string,
+  name: string,
+  refMap: Map<string, string>,
+) {
+  const source = join(traceDir, name);
+  const target = join(evidenceDir, name);
+  try {
+    await access(source);
+    if (source !== target) await copyFile(source, target);
+    const bundledRef = manifestRel(evidenceDir, target);
+    refMap.set(source, bundledRef);
+    refMap.set(manifestRel(workspacePath, source), bundledRef);
+    return name.endsWith('.json') ? target : undefined;
+  } catch {
+    // Older traces may not have every package-bridge evidence sibling.
+  }
+  return undefined;
+}
+
+function rewriteTraceRefsForEvidenceBundle(value: unknown, refMap: Map<string, string>, evidenceDir: string): unknown {
+  if (typeof value === 'string') return refMap.get(value) ?? bundleLocalAbsoluteRef(value, evidenceDir);
+  if (Array.isArray(value)) return value.map((item) => rewriteTraceRefsForEvidenceBundle(item, refMap, evidenceDir));
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(Object.entries(value).map(([key, child]) => [
+    key,
+    rewriteTraceRefsForEvidenceBundle(child, refMap, evidenceDir),
+  ]));
+}
+
+async function rewriteCopiedJsonSiblings(
+  copiedJsonPaths: string[],
+  refMap: Map<string, string>,
+  evidenceDir: string,
+  traceEvidencePath: string,
+) {
+  await Promise.all(copiedJsonPaths
+    .filter((path) => path !== traceEvidencePath)
+    .map(async (path) => {
+      try {
+        const parsed = JSON.parse(await readFile(path, 'utf8')) as unknown;
+        const rewritten = rewriteTraceRefsForEvidenceBundle(parsed, refMap, evidenceDir);
+        await writeFile(path, `${JSON.stringify(rewritten, null, 2)}\n`, 'utf8');
+      } catch {
+        // Non-JSON or partially written diagnostic siblings are copied verbatim.
+      }
+    }));
+}
+
+function bundleLocalAbsoluteRef(value: string, evidenceDir: string): string {
+  if (!isAbsolute(value)) return value;
+  const rel = relative(evidenceDir, value).replace(/\\/g, '/');
+  return rel.startsWith('..') ? value : rel || value.split('/').pop() || value;
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === 'string';
 }
 
 async function writeScenarioSummaryForManifest(
@@ -416,10 +597,12 @@ export async function validateComputerUseLongRun(options: {
     if (round.status !== 'passed') continue;
     checkedRounds.push(round.round);
     passedRounds += 1;
+    let roundTraceDir = manifestDir;
     if (!round.visionTraceRef) {
       issues.push(`round ${round.round} missing visionTraceRef`);
     } else {
       const tracePath = resolveManifestRef(manifestDir, round.visionTraceRef);
+      roundTraceDir = dirname(tracePath);
       const traceValidation = await validateComputerUseLongTrace({
         scenarioId: manifest.scenarioId,
         tracePath,
@@ -441,7 +624,7 @@ export async function validateComputerUseLongRun(options: {
     if (!round.screenshotRefs.length) issues.push(`round ${round.round} missing screenshotRefs`);
     screenshotRefCount += round.screenshotRefs.length;
     for (const ref of round.screenshotRefs) {
-      const resolved = resolveTraceRefPath(ref, resolve(manifest.run.workspacePath), manifestDir);
+      const resolved = resolveTraceRefPath(ref, resolve(manifest.run.workspacePath), roundTraceDir);
       const fileIssues = await validatePngRef(resolved, ref);
       for (const issue of fileIssues) issues.push(`round ${round.round}: ${issue}`);
     }

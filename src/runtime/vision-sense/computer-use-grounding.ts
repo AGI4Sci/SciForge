@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
 
-import { isRecord, toStringList } from '../gateway-utils.js';
+import { isRecord } from '../gateway-utils.js';
 import { groundingForAction } from '../computer-use/actions.js';
 import { toTraceScreenshotRef } from '../computer-use/capture.js';
 import type { ComputerUseConfig as VisionSenseConfig, FocusRegion, GenericVisionAction, GroundingResolution, ScreenshotRef } from '../computer-use/types.js';
@@ -14,6 +14,22 @@ import {
 } from '../../../packages/observe/vision/computer-use-runtime-policy.js';
 import { withHardTimeout } from './computer-use-plan.js';
 import { inferExecutorCoordinateScale } from './computer-use-window-session.js';
+
+type KvGroundHttpDiagnostic = {
+  schemaVersion: 'sciforge.vision-sense.kv-ground-http-diagnostic.v1';
+  provider: string;
+  stage: 'health' | 'predict';
+  method: 'GET' | 'POST';
+  url: string;
+  status: 'ok' | 'failed';
+  blocked?: boolean;
+  httpStatus?: number;
+  latencyMs: number;
+  error?: string;
+  errorEvidence?: Record<string, unknown>;
+  responseBody?: Record<string, unknown>;
+  responseTextSnippet?: string;
+};
 export async function resolveActionGrounding(
   action: GenericVisionAction,
   beforeRefs: ScreenshotRef[],
@@ -549,41 +565,91 @@ async function groundTargetDescription(
       grounding: { status: 'failed', targetDescription, screenshotRef: screenshot.path, provider: visionSenseGroundingIds.kvGround, reason: 'missing KV-Ground provider' },
     };
   }
+  const startedAt = Date.now();
+  const grounderBaseUrl = config.grounder.baseUrl.replace(/\/+$/, '');
+  const healthUrl = `${grounderBaseUrl}/health`;
+  const grounderUrl = `${grounderBaseUrl}/predict/`;
+  const health = await requestJsonWithTimeout({
+    url: healthUrl,
+    method: 'GET',
+    stage: 'health',
+    timeoutMs: config.grounder.timeoutMs,
+  });
+  const diagnostics = [health.diagnostic];
+  if (!health.ok) {
+    return {
+      ok: false,
+      reason: `KV Grounder health preflight failed at ${healthUrl}: ${health.error}.`,
+      grounding: {
+        status: 'failed',
+        targetDescription,
+        screenshotRef: screenshot.path,
+        provider: visionSenseGroundingIds.kvGround,
+        healthUrl,
+        grounderUrl,
+        error: health.error,
+        diagnostics,
+      },
+    };
+  }
+
   const imagePath = await resolveGrounderImagePath(screenshot, config);
   if (!imagePath.ok) {
     return {
       ok: false,
       reason: imagePath.reason,
-      grounding: { status: 'failed', targetDescription, screenshotRef: screenshot.path, reason: imagePath.reason },
+      grounding: {
+        status: 'failed',
+        targetDescription,
+        screenshotRef: screenshot.path,
+        reason: imagePath.reason,
+        provider: visionSenseGroundingIds.kvGround,
+        healthUrl,
+        grounderUrl,
+        health: health.body,
+        diagnostics,
+      },
     };
   }
 
-  const startedAt = Date.now();
   const grounderPrompt = [
     'Locate the UI element for a mouse click in the supplied screenshot.',
     'Return click coordinates only; do not return typing commands, text content, or action plans.',
     `Target: ${targetDescription}`,
   ].join(' ');
-  const grounderUrl = `${config.grounder.baseUrl.replace(/\/+$/, '')}/predict/`;
   const coordinateSpace = options.coordinateSpace
     ?? (screenshot.windowTarget?.coordinateSpace === 'screen' ? 'window-local' : screenshot.windowTarget?.coordinateSpace)
     ?? 'window-local';
-  const response = await postJsonWithTimeout(
-    grounderUrl,
-    {
+  const response = await requestJsonWithTimeout({
+    url: grounderUrl,
+    method: 'POST',
+    stage: 'predict',
+    body: {
       ...(!imagePath.imageBase64 ? { image_path: imagePath.path } : {}),
       ...(imagePath.imageBase64 ? { image_base64: imagePath.imageBase64, image_mime_type: imagePath.imageMimeType ?? 'image/png' } : {}),
       text_prompt: grounderPrompt,
       coordinate_space: coordinateSpace,
       window_target: screenshot.windowTarget,
     },
-    config.grounder.timeoutMs,
-  );
+    timeoutMs: config.grounder.timeoutMs,
+  });
+  diagnostics.push(response.diagnostic);
   if (!response.ok) {
     return {
       ok: false,
       reason: `KV Grounder request failed at ${grounderUrl}: ${response.error}.`,
-      grounding: { status: 'failed', targetDescription, screenshotRef: screenshot.path, imagePath: imagePath.path, provider: visionSenseGroundingIds.kvGround, grounderUrl, error: response.error },
+      grounding: {
+        status: 'failed',
+        targetDescription,
+        screenshotRef: screenshot.path,
+        imagePath: imagePath.path,
+        provider: visionSenseGroundingIds.kvGround,
+        healthUrl,
+        grounderUrl,
+        health: health.body,
+        error: response.error,
+        diagnostics,
+      },
     };
   }
   const coordinates = parseGrounderCoordinates(response.body);
@@ -591,7 +657,18 @@ async function groundTargetDescription(
     return {
       ok: false,
       reason: 'KV Grounder response did not include usable coordinates.',
-      grounding: { status: 'failed', targetDescription, screenshotRef: screenshot.path, imagePath: imagePath.path, provider: visionSenseGroundingIds.kvGround, rawResponse: response.body },
+      grounding: {
+        status: 'failed',
+        targetDescription,
+        screenshotRef: screenshot.path,
+        imagePath: imagePath.path,
+        provider: visionSenseGroundingIds.kvGround,
+        healthUrl,
+        grounderUrl,
+        health: health.body,
+        rawResponse: response.body,
+        diagnostics,
+      },
     };
   }
   return {
@@ -605,6 +682,9 @@ async function groundTargetDescription(
       screenshotRef: screenshot.path,
       imagePath: imagePath.path,
       imageUploaded: imagePath.uploaded === true,
+      healthUrl,
+      grounderUrl,
+      health: health.body,
       coordinateSpace,
       x: coordinates.x,
       y: coordinates.y,
@@ -613,6 +693,7 @@ async function groundTargetDescription(
       imageSize: response.body.image_size,
       latencyMs: Date.now() - startedAt,
       rawResponse: response.body,
+      diagnostics,
     },
   };
 }
@@ -683,29 +764,127 @@ async function uploadGrounderImage(ref: ScreenshotRef, config: VisionSenseConfig
   };
 }
 
-async function postJsonWithTimeout(url: string, body: Record<string, unknown>, timeoutMs: number) {
+async function requestJsonWithTimeout(params: {
+  url: string;
+  method: 'GET' | 'POST';
+  stage: KvGroundHttpDiagnostic['stage'];
+  timeoutMs: number;
+  body?: Record<string, unknown>;
+}) {
   const controller = new AbortController();
+  const startedAt = Date.now();
+  const baseDiagnostic = (): Omit<KvGroundHttpDiagnostic, 'status' | 'latencyMs'> => ({
+    schemaVersion: 'sciforge.vision-sense.kv-ground-http-diagnostic.v1',
+    provider: visionSenseGroundingIds.kvGround,
+    stage: params.stage,
+    method: params.method,
+    url: params.url,
+  });
   try {
-    const response = await withHardTimeout(fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify(body),
+    const response = await withHardTimeout(fetch(params.url, {
+      method: params.method,
+      headers: params.body ? { 'Content-Type': 'application/json', Accept: 'application/json' } : { Accept: 'application/json' },
+      body: params.body ? JSON.stringify(params.body) : undefined,
       signal: controller.signal,
-    }), timeoutMs, `JSON request timed out after ${timeoutMs}ms`, () => controller.abort());
+    }), params.timeoutMs, `JSON request timed out after ${params.timeoutMs}ms`, () => controller.abort());
     const text = await withHardTimeout(
       response.text(),
-      timeoutMs,
-      `JSON response body timed out after ${timeoutMs}ms`,
+      params.timeoutMs,
+      `JSON response body timed out after ${params.timeoutMs}ms`,
       () => controller.abort(),
     );
     const parsed = text ? parseJson(text) : {};
+    const body = isRecord(parsed) ? parsed : { value: parsed };
+    const diagnostic: KvGroundHttpDiagnostic = {
+      ...baseDiagnostic(),
+      status: response.ok ? 'ok' : 'failed',
+      blocked: !response.ok,
+      httpStatus: response.status,
+      latencyMs: Date.now() - startedAt,
+      ...(params.stage === 'health' ? { responseBody: body } : {}),
+      ...(!response.ok ? { responseTextSnippet: text.slice(0, 500) } : {}),
+    };
     if (!response.ok) {
-      return { ok: false as const, error: `HTTP ${response.status}: ${text.slice(0, 500)}` };
+      const error = `HTTP ${response.status}: ${text.slice(0, 500)}`;
+      return {
+        ok: false as const,
+        error,
+        body,
+        diagnostic: { ...diagnostic, error },
+      };
     }
-    return { ok: true as const, body: isRecord(parsed) ? parsed : { value: parsed } };
+    if (params.stage === 'health' && body.ok === false) {
+      const error = 'KV-Ground health returned ok=false';
+      return {
+        ok: false as const,
+        error,
+        body,
+        diagnostic: { ...diagnostic, status: 'failed', blocked: true, error },
+      };
+    }
+    return {
+      ok: true as const,
+      body,
+      diagnostic: { ...diagnostic, blocked: undefined },
+    };
   } catch (error) {
-    return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+    const evidence = errorEvidence(error);
+    const message = errorMessageWithEvidence(error, evidence);
+    return {
+      ok: false as const,
+      error: message,
+      body: {},
+      diagnostic: {
+        ...baseDiagnostic(),
+        status: 'failed',
+        blocked: true,
+        latencyMs: Date.now() - startedAt,
+        error: message,
+        errorEvidence: evidence,
+      },
+    };
   }
+}
+
+function errorEvidence(error: unknown): Record<string, unknown> {
+  const record = isRecord(error) ? error : {};
+  const evidence: Record<string, unknown> = {
+    name: error instanceof Error ? error.name : stringValue(record.name),
+    message: error instanceof Error ? error.message : String(error),
+    code: stringValue(record.code),
+    errno: typeof record.errno === 'number' ? record.errno : stringValue(record.errno),
+    address: stringValue(record.address),
+    port: typeof record.port === 'number' ? record.port : stringValue(record.port),
+  };
+  const cause = record.cause;
+  if (cause !== undefined) evidence.cause = errorEvidence(cause);
+  return compactRecord(evidence);
+}
+
+function errorMessageWithEvidence(error: unknown, evidence: Record<string, unknown>) {
+  const values = [
+    error instanceof Error ? error.message : String(error),
+    ...nestedEvidenceStrings(evidence, ['code', 'errno', 'address', 'port']),
+  ];
+  return Array.from(new Set(values.filter((value): value is string => Boolean(value)))).join(' ');
+}
+
+function nestedEvidenceStrings(record: Record<string, unknown>, keys: string[]): string[] {
+  const own = keys.map((key) => {
+    const value = record[key];
+    if (typeof value === 'string' || typeof value === 'number') return String(value);
+    return undefined;
+  });
+  const cause = isRecord(record.cause) ? nestedEvidenceStrings(record.cause, keys) : [];
+  return [...own, ...cause].filter((value): value is string => Boolean(value));
+}
+
+function stringValue(value: unknown) {
+  return typeof value === 'string' && value.trim().length ? value : undefined;
+}
+
+function compactRecord(record: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
 }
 
 function parseGrounderCoordinates(value: unknown): { x: number; y: number } | undefined {

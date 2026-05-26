@@ -328,19 +328,22 @@ def should_complete_from_creation_action_ledger(task: str, steps: list[Mapping[s
 def should_complete_from_file_manager_action_ledger(task: str, steps: list[Mapping[str, Any]]) -> bool:
     if not is_low_risk_file_manager_task(task):
         return False
+    file_manager_pattern = re.compile(r"finder|file explorer|文件管理器|访达", re.IGNORECASE)
+    effective_steps = _done_gui_steps(steps, require_effect=True)
     actions = _effective_actions(steps, require_effect=True)
     opened_file_manager = any(
         action.get("type") == "open_app"
-        and re.search(r"finder|file explorer|文件管理器|访达", str(action.get("appName") or ""), re.IGNORECASE)
+        and file_manager_pattern.search(str(action.get("appName") or ""))
         for action in actions
     )
+    observed_file_manager = any(_step_observed_app_matches(step, file_manager_pattern) for step in effective_steps)
     file_list_interactions = [
         _action_route_target(action)
         for action in actions
         if re.search(r"file|folder|list|finder|explorer|directory|row|entry|文件|文件夹|列表|目录|访达", _action_route_target(action), re.IGNORECASE)
     ]
     navigation_actions = [action for action in actions if action.get("type") in {"scroll", "click", "double_click", "drag"}]
-    return opened_file_manager and len(actions) >= 4 and len(navigation_actions) >= 2 and len(file_list_interactions) >= 2
+    return (opened_file_manager or observed_file_manager) and len(actions) >= 4 and len(navigation_actions) >= 2 and len(file_list_interactions) >= 2
 
 
 def should_complete_from_settings_form_action_ledger(task: str, steps: list[Mapping[str, Any]]) -> bool:

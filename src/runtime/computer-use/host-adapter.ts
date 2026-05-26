@@ -12,11 +12,13 @@ import {
   computerUseHostPortsContractIds,
   computerUseTraceHandoffContract,
 } from '../../../packages/actions/computer-use/provider-policy.js';
+import { VISION_TOOL_ID } from '../vision-sense/trace-policy.js';
 
 export const COMPUTER_USE_ACTION_PROVIDER_ID = 'action.sciforge.computer-use';
 export const COMPUTER_USE_REQUEST_SCHEMA = 'sciforge.computer-use.request.v1';
 export const COMPUTER_USE_HOST_PORTS_SCHEMA = computerUseHostPortsContractIds.schemaVersion;
 export const COMPUTER_USE_TUI_HOST_ACTIONS_SCHEMA = 'sciforge.computer-use.tui-host-actions.v1';
+export const COMPUTER_USE_PLANNER_ACCEPTANCE_CONTRACT_SCHEMA = 'sciforge.computer-use.planner-acceptance-contract.v1';
 
 export type ComputerUseActionProviderRequest = {
   schemaVersion: typeof COMPUTER_USE_REQUEST_SCHEMA;
@@ -69,6 +71,7 @@ export function gatewayRequestToComputerUseRequest(
   workspace: string,
 ): ComputerUseActionProviderRequest {
   const approvalRef = computerUseApprovalRef(request);
+  const plannerAcceptanceContract = computerUsePlannerAcceptanceContract(request);
   return {
     schemaVersion: COMPUTER_USE_REQUEST_SCHEMA,
     task: request.prompt,
@@ -98,6 +101,7 @@ export function gatewayRequestToComputerUseRequest(
         inputAdapter: config.inputAdapter,
         independentInputAdapterProvider: config.independentInputAdapterProvider,
       },
+      ...(plannerAcceptanceContract ? { plannerAcceptanceContract } : {}),
     },
   };
 }
@@ -112,16 +116,28 @@ export function computerUseHostPortsContract(config: ComputerUseConfig) {
         provider: capturePortProvider(config.windowTarget),
         returns: 'Observation with screenshot/file refs',
       },
+      plan: {
+        provider: computerUseHostPortProviderIds.runtimeCodexTuiTextPlanner,
+        returns: 'Exactly one generic GUI action or done=true',
+      },
       crop: {
         provider: computerUseHostPortProviderIds.focusRegionCrop,
         returns: 'Observation with focus-region file refs',
         optional: true,
+      },
+      locate: {
+        provider: config.grounder.baseUrl ? computerUseHostPortProviderIds.kvGround : computerUseHostPortProviderIds.focusRegionCrop,
+        returns: 'Grounding with target-window or crop-local coordinates and diagnostics',
       },
       execute: {
         provider: independentInputAdapterExecutionBoundary(config) ?? computerUseExecuteHostPortProvider(config),
         inputAdapter: config.inputAdapter ?? (config.allowSharedSystemInput ? 'shared-system-input-acknowledged' : 'not-configured'),
         independentInputAdapterProvider: config.independentInputAdapterProvider,
         sharedSystemInputExplicitlyAllowed: Boolean(config.allowSharedSystemInput),
+      },
+      verify: {
+        provider: computerUseHostPortProviderIds.layeredVerifier,
+        returns: 'Verifier verdict with screenshot-diff, window consistency, and repair feedback',
       },
       writeTrace: {
         provider: computerUseHostPortProviderIds.writeTrace,
@@ -170,8 +186,38 @@ function computerUseSenseProviderId(request: GatewayRequest) {
     ...(request.selectedToolIds ?? []),
     ...toStringList(request.uiState?.selectedToolIds),
   ]);
-  if (selected.includes('local.vision-sense')) return 'local.vision-sense';
+  if (selected.includes(VISION_TOOL_ID)) return VISION_TOOL_ID;
   return selected.find((id) => id.includes('vision') || id.includes('sense'));
+}
+
+function computerUsePlannerAcceptanceContract(request: GatewayRequest): Record<string, unknown> | undefined {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const computerUseLong = recordAt(uiState, 'computerUseLong');
+  const computerUseNext = recordAt(uiState, 'computerUseNext');
+  if (!computerUseLong && !computerUseNext) return undefined;
+  const contract = compactRecord({
+    schemaVersion: COMPUTER_USE_PLANNER_ACCEPTANCE_CONTRACT_SCHEMA,
+    source: 'gateway-ui-state',
+    taskId: stringAt(computerUseLong, 'taskId') ?? stringAt(computerUseNext, 'taskId') ?? stringAt(uiState, 'cuNextTaskId'),
+    cuNextTaskId: stringAt(computerUseLong, 'cuNextTaskId') ?? stringAt(computerUseNext, 'taskId') ?? stringAt(uiState, 'cuNextTaskId'),
+    scenarioId: stringAt(computerUseLong, 'scenarioId'),
+    runId: stringAt(computerUseLong, 'runId'),
+    round: numberAt(computerUseLong, 'round'),
+    title: stringAt(computerUseLong, 'title') ?? stringAt(computerUseNext, 'title'),
+    roundPrompt: stringAt(computerUseLong, 'roundPrompt'),
+    expectedTrace: stringListAt(computerUseLong, 'expectedTrace'),
+    acceptance: stringListAt(computerUseLong, 'acceptance'),
+    requiredEvidence: stringListAt(computerUseLong, 'requiredEvidence'),
+    failureRecord: stringListAt(computerUseLong, 'failureRecord'),
+    requirements: uniqueStrings([
+      ...stringListAt(computerUseLong, 'requirements'),
+      ...stringListAt(computerUseNext, 'requirements'),
+    ]),
+    requiredPipeline: stringListAt(computerUseLong, 'requiredPipeline'),
+    safetyBoundary: recordAt(computerUseLong, 'safetyBoundary'),
+    validationContract: recordAt(computerUseLong, 'validationContract'),
+  });
+  return Object.keys(contract).length > 2 ? contract : undefined;
 }
 
 function computerUseApprovalRef(request: GatewayRequest) {
@@ -187,6 +233,25 @@ function stringAt(value: unknown, key: string) {
   if (!isRecord(value)) return undefined;
   const item = value[key];
   return typeof item === 'string' && item.trim() ? item : undefined;
+}
+
+function numberAt(value: unknown, key: string) {
+  if (!isRecord(value)) return undefined;
+  const item = value[key];
+  return typeof item === 'number' && Number.isFinite(item) ? item : undefined;
+}
+
+function stringListAt(value: unknown, key: string) {
+  if (!isRecord(value)) return [];
+  return toStringList(value[key]);
+}
+
+function compactRecord(value: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => {
+    if (item === undefined) return false;
+    if (Array.isArray(item) && item.length === 0) return false;
+    return true;
+  }));
 }
 
 function capturePortProvider(target: WindowTarget) {
@@ -327,7 +392,8 @@ function firstExecutionUnitStatus(value: unknown) {
   return first ? stringAt(first, 'status') : undefined;
 }
 
-function recordAt(value: Record<string, unknown>, key: string) {
+function recordAt(value: unknown, key: string) {
+  if (!isRecord(value)) return undefined;
   const item = value[key];
   return isRecord(item) ? item : undefined;
 }
@@ -353,5 +419,5 @@ function looksLikeRef(value: string) {
     || value.startsWith('EU-')
     || value.startsWith('.sciforge/')
     || value.startsWith('/')
-    || /\.(json|png|jpe?g|webp)$/i.test(value);
+    || /\.(json|md|txt|csv|tsv|xlsx|pptx?|pdf|docx?|odt|ods|png|jpe?g|webp)$/i.test(value);
 }

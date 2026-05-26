@@ -4,6 +4,12 @@ import { copyFile, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
+  computerUseLongRoundTimeoutMs,
+  computerUsePlannerStepTimeoutMs,
+  CU_LONG_ABORT_GRACE_MS,
+  CU_LONG_DEFAULT_DRY_RUN_ROUND_TIMEOUT_MS,
+  CU_LONG_DEFAULT_REAL_MAX_STEPS,
+  CU_LONG_FINALIZATION_GRACE_MS,
   loadComputerUseLongTaskPool,
   prepareComputerUseLongRun,
   preflightComputerUseLong,
@@ -20,6 +26,7 @@ import {
 } from '../../tools/computer-use-long-task-pool';
 import { toolPackageManifests } from '../../packages/skills/tool_skills';
 
+const inlineImagePayloadPattern = /data:image\/[a-z0-9.+-]+;base64,|;base64,[A-Za-z0-9+/=]{16,}/i;
 const pool = await loadComputerUseLongTaskPool();
 const visionSenseTool = toolPackageManifests.find((tool) => tool.id === 'local.vision-sense');
 assert.ok(visionSenseTool);
@@ -61,6 +68,19 @@ assert.match(runbook, /T084/);
 assert.match(runbook, /CU-LONG-006 SciForge 自举测试/);
 assert.match(runbook, /WindowTarget -> RuntimeCodexPlanner -> Grounder -> GuiExecutor -> Verifier -> vision-trace/);
 
+const defaultRealRoundTimeoutMs = computerUseLongRoundTimeoutMs({ env: {} });
+const defaultPlannerStepTimeoutMs = computerUsePlannerStepTimeoutMs();
+assert.ok(
+  defaultRealRoundTimeoutMs >= defaultPlannerStepTimeoutMs * CU_LONG_DEFAULT_REAL_MAX_STEPS + CU_LONG_ABORT_GRACE_MS + CU_LONG_FINALIZATION_GRACE_MS,
+  'real CU-LONG round timeout must leave room for each RuntimeCodexPlanner step plus abort/finalization grace',
+);
+assert.ok(
+  computerUseLongRoundTimeoutMs({ maxSteps: 3, env: {} }) >= defaultPlannerStepTimeoutMs * 3 + CU_LONG_ABORT_GRACE_MS + CU_LONG_FINALIZATION_GRACE_MS,
+  'real CU-LONG round timeout scales with configured maxSteps',
+);
+assert.equal(computerUseLongRoundTimeoutMs({ dryRun: true, env: {} }), CU_LONG_DEFAULT_DRY_RUN_ROUND_TIMEOUT_MS);
+assert.equal(computerUseLongRoundTimeoutMs({ env: { SCIFORGE_CU_LONG_ROUND_TIMEOUT_MS: '12345' } }), 12345);
+
 const outDir = await mkdtemp(join(tmpdir(), 'sciforge-cu-long-'));
 const outPath = join(outDir, 'runbook.md');
 await import('../../tools/computer-use-long-task-pool').then(async ({ renderComputerUseLongRunbook }) => {
@@ -99,7 +119,10 @@ const previousRunId = process.env.SCIFORGE_VISION_RUN_ID;
 const previousDisplays = process.env.SCIFORGE_VISION_CAPTURE_DISPLAYS;
 const previousTestFixtures = process.env.SCIFORGE_VISION_TEST_ACTION_FIXTURES;
 const previousActions = process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON;
+const previousConfigPath = process.env.SCIFORGE_CONFIG_PATH;
 const previousRuntimeApiKey = process.env.SCIFORGE_RUNTIME_API_KEY;
+const previousProxyUpstreamBaseUrl = process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL;
+const previousRuntimeBaseUrl = process.env.SCIFORGE_RUNTIME_BASE_URL;
 const previousPlannerProfile = process.env.SCIFORGE_COMPUTER_USE_PLANNER_PROFILE;
 const previousKvGrounderUrl = process.env.SCIFORGE_VISION_KV_GROUND_URL;
 const previousHighRisk = process.env.SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS;
@@ -110,10 +133,13 @@ try {
   process.env.SCIFORGE_VISION_DESKTOP_BRIDGE = '1';
   process.env.SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN = '1';
   process.env.SCIFORGE_VISION_CAPTURE_DISPLAYS = '1';
+  process.env.SCIFORGE_CONFIG_PATH = join(preparedRoot, 'empty-config.local.json');
   delete process.env.SCIFORGE_VISION_RUN_ID;
   process.env.SCIFORGE_VISION_TEST_ACTION_FIXTURES = '1';
   process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = JSON.stringify([{ type: 'wait', ms: 1 }]);
   process.env.SCIFORGE_RUNTIME_API_KEY = 'preflight-key';
+  process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL = 'http://127.0.0.1:3888/v1';
+  delete process.env.SCIFORGE_RUNTIME_BASE_URL;
   process.env.SCIFORGE_COMPUTER_USE_PLANNER_PROFILE = 'preflight-profile';
   process.env.SCIFORGE_VISION_KV_GROUND_URL = 'http://127.0.0.1:9999';
   delete process.env.SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS;
@@ -130,6 +156,18 @@ try {
   assert.equal((await stat(String(preflight.reportPath))).isFile(), true);
   assert.ok(preflight.checks.some((check) => check.id === 'runtime-codex-planner' && check.status === 'pass'));
   assert.ok(preflight.checks.some((check) => check.id === 'input-isolation' && check.status === 'pass'));
+  process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL = '';
+  delete process.env.SCIFORGE_RUNTIME_BASE_URL;
+  const missingUpstreamPreflight = await preflightComputerUseLong({
+    scenarioIds: ['CU-LONG-001'],
+    workspacePath: '/tmp/sciforge-cu-workspace',
+    dryRun: true,
+  });
+  const missingUpstreamPlannerCheck = missingUpstreamPreflight.checks.find((check) => check.id === 'runtime-codex-planner');
+  assert.equal(missingUpstreamPreflight.ok, false);
+  assert.equal(missingUpstreamPlannerCheck?.status, 'fail');
+  assert.match(String(missingUpstreamPlannerCheck?.message), /SCIFORGE_PROXY_UPSTREAM_BASE_URL or SCIFORGE_RUNTIME_BASE_URL/);
+  process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL = 'http://127.0.0.1:3888/v1';
   const realInputBlockedPreflight = await preflightComputerUseLong({
     scenarioIds: ['CU-LONG-001'],
     workspacePath: '/tmp/sciforge-cu-workspace',
@@ -228,7 +266,7 @@ try {
   const round2Prompt = await readFile(join(prepared.runDir, 'evidence/round-02/runtime-prompt.md'), 'utf8');
   assert.match(round2Prompt, /Compact prior-round file refs/);
   assert.match(round2Prompt, /trace=evidence\/round-01\/vision-trace\.json/);
-  assert.doesNotMatch(round2Prompt, /data:image|;base64,/i);
+  assert.doesNotMatch(round2Prompt, inlineImagePayloadPattern);
 
   const preparedScenario = await prepareComputerUseLongRun({
     scenarioId: 'CU-LONG-006',
@@ -254,7 +292,7 @@ try {
   assert.equal((await stat(scenarioRun.summaryPath)).isFile(), true);
   const scenarioSummary = await readFile(scenarioRun.summaryPath, 'utf8');
   assert.match(scenarioSummary, /sciforge\.computer-use-long\.scenario-summary\.v1/);
-  assert.doesNotMatch(scenarioSummary, /data:image|;base64,/i);
+  assert.doesNotMatch(scenarioSummary, inlineImagePayloadPattern);
   const runValidation = await validateComputerUseLongRun({ manifestPath: preparedScenario.manifestPath });
   assert.deepEqual(runValidation.issues, []);
   assert.equal(runValidation.metrics.passedRounds, 5);
@@ -270,7 +308,7 @@ try {
   assert.match(round2RuntimePrompt, /verifierFeedback: .*pixel=/);
   assert.match(round2RuntimePrompt, /verifierFeedback: .*window=/);
   assert.match(round2RuntimePrompt, /screenshotMeta: .*sha256=.*size=.*displayId=/);
-  assert.doesNotMatch(round2RuntimePrompt, /data:image|;base64,/i);
+  assert.doesNotMatch(round2RuntimePrompt, inlineImagePayloadPattern);
   const brokenManifestPath = join(preparedScenario.runDir, 'broken-manifest.json');
   await copyFile(preparedScenario.manifestPath, brokenManifestPath);
   const brokenManifest = JSON.parse(await readFile(brokenManifestPath, 'utf8')) as Record<string, unknown>;
@@ -307,7 +345,7 @@ try {
   assert.match(matrixSummary, /parallel-analysis/);
   assert.match(matrixSummary, /CU-LONG-001/);
   assert.match(matrixSummary, /CU-LONG-006/);
-  assert.doesNotMatch(matrixSummary, /data:image|;base64,/i);
+  assert.doesNotMatch(matrixSummary, inlineImagePayloadPattern);
   const matrixValidation = await validateComputerUseLongMatrix({ summaryPath: matrixRun.summaryPath });
   assert.deepEqual(matrixValidation.issues, []);
   assert.equal(matrixValidation.metrics.validatedRuns, 2);
@@ -317,12 +355,13 @@ try {
   assert.match(matrixReport.markdown, /T084 Computer Use Matrix Report/);
   assert.match(matrixReport.markdown, /## Preflight/);
   assert.match(matrixReport.markdown, /Genericity Rules Rechecked/);
-  assert.doesNotMatch(matrixReport.markdown, /data:image|;base64,/i);
+  assert.doesNotMatch(matrixReport.markdown, inlineImagePayloadPattern);
   const passedRepairPlan = await renderComputerUseLongRepairPlan({ summaryPath: matrixRun.summaryPath });
   assert.equal(passedRepairPlan.ok, true);
   assert.equal(passedRepairPlan.actionCount, 0);
 
   process.env.SCIFORGE_RUNTIME_API_KEY = 'runtime-codex-text-planner-key';
+  process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL = 'http://127.0.0.1:3888/v1';
   process.env.SCIFORGE_COMPUTER_USE_PLANNER_PROFILE = 'runtime-codex-text-planner-profile';
   process.env.SCIFORGE_VISION_KV_GROUND_URL = 'http://127.0.0.1:9999';
   process.env.SCIFORGE_VISION_TEST_ACTION_FIXTURES = '1';
@@ -344,7 +383,7 @@ try {
   const fixtureMatrixValidation = await validateComputerUseLongMatrix({ summaryPath: fixtureActionMatrix.summaryPath });
   assert.deepEqual(fixtureMatrixValidation.issues, []);
   assert.equal(fixtureMatrixValidation.metrics.validatedRuns, 10);
-  const oldPlannerPattern = /openai-compatible-vision-planner|vision-sense-policy-planner|computer-use-action-loop|fallbackActions|image_url|data:image|;base64,/i;
+  const oldPlannerPattern = /openai-compatible-vision-planner|vision-sense-policy-planner|computer-use-action-loop|fallbackActions|image_url|data:image\/[a-z0-9.+-]+;base64,|;base64,[A-Za-z0-9+/=]{16,}/i;
   for (const result of fixtureActionMatrix.results) {
     const manifest = JSON.parse(await readFile(result.manifestPath, 'utf8')) as Record<string, unknown>;
     const round = (manifest.rounds as Array<Record<string, unknown>>)[0];
@@ -360,6 +399,7 @@ try {
     assert.ok(steps.every((step) => step.kind !== 'planning'), `${result.scenarioId} does not make dynamic planner calls in fixture smoke`);
   }
   process.env.SCIFORGE_RUNTIME_API_KEY = 'preflight-key';
+  process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL = 'http://127.0.0.1:3888/v1';
   process.env.SCIFORGE_COMPUTER_USE_PLANNER_PROFILE = 'preflight-profile';
   process.env.SCIFORGE_VISION_KV_GROUND_URL = 'http://127.0.0.1:9999';
   process.env.SCIFORGE_VISION_TEST_ACTION_FIXTURES = '1';
@@ -421,7 +461,10 @@ try {
   restoreEnv('SCIFORGE_VISION_CAPTURE_DISPLAYS', previousDisplays);
   restoreEnv('SCIFORGE_VISION_TEST_ACTION_FIXTURES', previousTestFixtures);
   restoreEnv('SCIFORGE_VISION_TEST_ACTIONS_JSON', previousActions);
+  restoreEnv('SCIFORGE_CONFIG_PATH', previousConfigPath);
   restoreEnv('SCIFORGE_RUNTIME_API_KEY', previousRuntimeApiKey);
+  restoreEnv('SCIFORGE_PROXY_UPSTREAM_BASE_URL', previousProxyUpstreamBaseUrl);
+  restoreEnv('SCIFORGE_RUNTIME_BASE_URL', previousRuntimeBaseUrl);
   restoreEnv('SCIFORGE_COMPUTER_USE_PLANNER_PROFILE', previousPlannerProfile);
   restoreEnv('SCIFORGE_VISION_KV_GROUND_URL', previousKvGrounderUrl);
   restoreEnv('SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS', previousHighRisk);

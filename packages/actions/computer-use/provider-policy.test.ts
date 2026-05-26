@@ -81,11 +81,18 @@ test('computer use host port policy names thin host adapter providers', () => {
 
   const policy = computerUseHostPortsPolicySummary({
     desktopPlatform: 'darwin',
+    grounder: { baseUrl: 'http://127.0.0.1:18081' },
     windowTarget: { enabled: true, mode: 'window-id' },
   });
   assert.equal(policy.providers.capture, computerUseHostPortProviderIds.targetWindowCapture);
   assert.equal(policy.providers.crop, computerUseHostPortProviderIds.focusRegionCrop);
+  assert.equal(policy.providers.plan, computerUseHostPortProviderIds.runtimeCodexTuiTextPlanner);
+  assert.equal(policy.providers.locate, computerUseHostPortProviderIds.kvGround);
+  assert.equal(policy.providers.verify, computerUseHostPortProviderIds.layeredVerifier);
   assert.equal(policy.providers.writeTrace, computerUseHostPortProviderIds.writeTrace);
   assert.equal(policy.traceHandoff.presentationTarget, computerUseTraceHandoffContract.presentationTarget);
   assert.deepEqual(policy.traceHandoff.forbiddenInlinePayloads, ['rawScreenshot', 'base64', 'data:image']);
+
+  const fallbackPolicy = computerUseHostPortsPolicySummary({ desktopPlatform: 'darwin' });
+  assert.equal(fallbackPolicy.providers.locate, computerUseHostPortProviderIds.focusRegionCrop);
 });

@@ -12,10 +12,17 @@ from sciforge_computer_use import (
     Grounding,
     Observation,
     Verification,
+    compactResult,
+    compact_result,
     compact_result_for_handoff,
+    getManifest,
+    get_manifest,
     result_to_trace,
     run_task,
+    runTask,
     run_computer_use_task,
+    validateTrace,
+    validate_trace,
 )
 
 
@@ -23,16 +30,25 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 
 
 class FakeSense:
-    def __init__(self, refs=None, grounding=None):
+    def __init__(self, refs=None, grounding=None, artifacts=None, metadata=None):
         self.refs = list(refs or ["before.png", "after.png", "final.png"])
         self.grounding = grounding or Grounding(ok=True, x=10, y=20, confidence=0.9, reason="visible")
+        self.artifacts = artifacts or {}
+        self.metadata = metadata or {}
         self.locate_calls = []
         self.observe_count = 0
 
     def observe(self, request, history, query=None):
         ref = self.refs[min(self.observe_count, len(self.refs) - 1)]
         self.observe_count += 1
-        return Observation(ref=ref, summary=f"screen {ref}", visible_texts=("Search",), window_target=request.window_target)
+        return Observation(
+            ref=ref,
+            summary=f"screen {ref}",
+            visible_texts=("Search",),
+            window_target=request.window_target,
+            artifacts=self.artifacts,
+            metadata=self.metadata,
+        )
 
     def query(self, observation, question, history):
         return {"answer": observation.summary}
@@ -45,8 +61,10 @@ class FakeSense:
 class FakePlanner:
     def __init__(self, plans):
         self.plans = list(plans)
+        self.calls = []
 
     def plan(self, request, observation, history):
+        self.calls.append((observation.ref, len(history)))
         return self.plans[min(len(history), len(self.plans) - 1)]
 
 
@@ -152,6 +170,15 @@ def test_run_task_public_host_ports_surface_writes_trace_and_events():
         "computer-use.run.finished",
     ]
     assert host_ports.traces[0]["status"] == "completed"
+
+
+def test_run_task_camel_case_alias_matches_public_interface_name():
+    result = runTask(
+        {"task": "click visible search field", "maxSteps": 3},
+        FakeHostPorts(),
+    )
+
+    assert result.status == "completed"
 
 
 def test_run_task_missing_required_host_port_fails_closed():
@@ -321,6 +348,199 @@ def test_compact_handoff_is_file_ref_only():
     assert "data:image/" not in str(handoff)
 
 
+def test_public_api_manifest_and_camel_case_aliases_are_stable():
+    manifest = get_manifest()
+
+    assert getManifest() == manifest
+    assert manifest["schemaVersion"] == "sciforge.action-provider.manifest.v1"
+    assert manifest["id"] == "sciforge.computer-use"
+    assert manifest["entrypoint"]["interface"] == "runTask(request, hostPorts)"
+    assert manifest["hostPortsContract"]["requiredPorts"] == ["capture", "plan", "locate", "execute", "verify"]
+    assert manifest["hostPortsContract"]["providerIdPolicy"]["plan"] == "runtime-codex-tui-text-planner"
+    assert manifest["hostPortsContract"]["providerIdPolicy"]["verify"] == "layered-vision-verifier"
+    output_properties = manifest["actionSchema"]["outputShape"]["properties"]
+    for key in (
+        "schemaVersion",
+        "message",
+        "traceRefs",
+        "screenshotRefs",
+        "artifactRefs",
+        "finalArtifactRef",
+        "finalArtifactRefs",
+        "finalObservationRef",
+        "approvalRequest",
+        "budgetDebits",
+        "budgetDebitRefs",
+    ):
+        assert key in output_properties
+
+
+def test_trace_validation_and_compact_result_promote_file_refs(tmp_path):
+    sense = FakeSense(
+        refs=[".sciforge/vision-runs/ref-run/before.png", ".sciforge/vision-runs/ref-run/after.png"],
+        artifacts={
+            "finalArtifactRef": ".sciforge/vision-runs/ref-run/literature-brief.pptx",
+            "visibleArtifactRefs": [
+                ".sciforge/vision-runs/ref-run/literature-brief.pptx",
+                "artifact:computer-use/report.json",
+            ],
+            "visibleArtifacts": [{
+                "schemaVersion": "sciforge.computer-use.virtual-remote-artifact.v1",
+                "kind": "virtual-slide-deck",
+                "artifactRef": ".sciforge/vision-runs/ref-run/literature-brief.pptx",
+                "path": ".sciforge/vision-runs/ref-run/literature-brief.pptx",
+                "dataRef": ".sciforge/vision-runs/ref-run/literature-brief.pptx",
+                "delivery": "virtual-remote-session-artifact",
+                "status": "visible-and-saved",
+            }],
+        },
+        metadata={
+            "focusRefs": [".sciforge/vision-runs/ref-run/focus-crop.png"],
+            "screenshotRefs": [{"path": ".sciforge/vision-runs/ref-run/target-crop.png"}],
+        },
+    )
+    result = run_computer_use_task(
+        ComputerUseRequest(task="create visible artifact", max_steps=2),
+        sense,
+        FakePlanner([ActionPlan(kind="click", target=ActionTarget(description="Create"))]),
+        FakeExecutor(),
+        FakeVerifier(done_after=1),
+    )
+
+    trace = result_to_trace(result)
+    handoff = compact_result(result)
+    trace_path = tmp_path / "computer-use-trace.json"
+    trace_path.write_text(json.dumps(trace), encoding="utf8")
+    validation = validate_trace(trace)
+    path_validation = validateTrace(trace_path)
+
+    assert compactResult(result) == handoff
+    assert validation["ok"] is True
+    assert validation["warnings"] == []
+    assert path_validation["ok"] is True
+    assert path_validation["traceRef"] == str(trace_path)
+    assert validation["screenshotRefs"] == [
+        ".sciforge/vision-runs/ref-run/before.png",
+        ".sciforge/vision-runs/ref-run/focus-crop.png",
+        ".sciforge/vision-runs/ref-run/target-crop.png",
+        ".sciforge/vision-runs/ref-run/after.png",
+    ]
+    assert trace["artifactRefs"] == [
+        ".sciforge/vision-runs/ref-run/literature-brief.pptx",
+        "artifact:computer-use/report.json",
+    ]
+    assert result.final_artifact_refs == (".sciforge/vision-runs/ref-run/literature-brief.pptx",)
+    assert trace["finalArtifactRef"] == ".sciforge/vision-runs/ref-run/literature-brief.pptx"
+    assert trace["finalArtifactRefs"] == [".sciforge/vision-runs/ref-run/literature-brief.pptx"]
+    assert validation["artifactRefs"] == trace["artifactRefs"]
+    assert validation["finalArtifactRefs"] == trace["finalArtifactRefs"]
+    assert all(not ref.startswith("workEvidence:") for ref in validation["artifactRefs"])
+    assert handoff["screenshotRefs"] == validation["screenshotRefs"]
+    assert handoff["artifactRefs"] == trace["artifactRefs"]
+    assert handoff["finalArtifactRef"] == ".sciforge/vision-runs/ref-run/literature-brief.pptx"
+    assert handoff["finalArtifactRefs"] == [".sciforge/vision-runs/ref-run/literature-brief.pptx"]
+    assert handoff["actions"][0]["screenshotRefs"] == validation["screenshotRefs"]
+    assert "data:image/" not in json.dumps(trace)
+
+
+def test_validate_trace_rejects_inline_image_payloads():
+    trace = {
+        "schemaVersion": "sciforge.computer-use.loop-trace.v1",
+        "status": "completed",
+        "reason": "bad trace fixture",
+        "steps": [{"beforeRef": "data:image/png;base64,AAAA"}],
+    }
+
+    validation = validate_trace(trace)
+
+    assert validation["ok"] is False
+    assert validation["errors"] == ["Trace must be file-ref-only and cannot contain inline image payloads."]
+
+
+def test_validate_trace_rejects_forbidden_raw_screenshot_key_even_when_value_is_a_ref():
+    trace = {
+        "schemaVersion": "sciforge.computer-use.loop-trace.v1",
+        "status": "completed",
+        "reason": "bad trace fixture",
+        "steps": [{"rawScreenshot": ".sciforge/vision-runs/raw.png"}],
+    }
+
+    validation = validate_trace(trace)
+
+    assert validation["ok"] is False
+    assert validation["errors"] == ["Trace contains forbidden inline payload key 'rawScreenshot' at $.steps[0]."]
+
+
+def test_validate_trace_does_not_promote_non_image_screenshot_refs_or_work_evidence():
+    trace = {
+        "schemaVersion": "sciforge.computer-use.loop-trace.v1",
+        "status": "completed",
+        "reason": "refs should stay typed",
+        "steps": [
+            {
+                "screenshotRefs": [".sciforge/vision-runs/not-a-screenshot.pdf"],
+                "metadata": {"workEvidenceRefs": ["workEvidence:computer-use-loop:abc123"]},
+            }
+        ],
+    }
+
+    validation = validate_trace(trace)
+
+    assert validation["ok"] is True
+    assert validation["screenshotRefs"] == []
+    assert validation["artifactRefs"] == []
+    assert validation["warnings"] == ["Trace has no promoted screenshotRefs."]
+
+
+def test_final_artifact_refs_ignore_control_evidence_files():
+    result = run_computer_use_task(
+        ComputerUseRequest(task="create final file", max_steps=1),
+        FakeSense(
+            refs=[".sciforge/vision-runs/control/before.png"],
+            artifacts={
+                "finalArtifactRefs": [
+                    ".sciforge/vision-runs/control/vision-trace.json",
+                    ".sciforge/vision-runs/control/index.md",
+                ],
+            },
+        ),
+        FakePlanner([ActionPlan(done=True, reason="Final file is visible.")]),
+        FakeExecutor(),
+        FakeVerifier(),
+    )
+
+    trace = result_to_trace(result)
+
+    assert result.status == "completed"
+    assert result.final_artifact_refs == (".sciforge/vision-runs/control/index.md",)
+    assert trace["finalArtifactRef"] == ".sciforge/vision-runs/control/index.md"
+    assert trace["finalArtifactRefs"] == [".sciforge/vision-runs/control/index.md"]
+
+
+def test_validate_trace_resolves_durable_trace_refs_when_host_resolver_is_supplied():
+    trace = {
+        "schemaVersion": "sciforge.computer-use.loop-trace.v1",
+        "status": "completed",
+        "reason": "resolved durable ref",
+        "steps": [{"beforeRef": ".sciforge/vision-runs/resolved/before.png"}],
+        "screenshotRefs": [".sciforge/vision-runs/resolved/before.png"],
+    }
+
+    validation = validateTrace("trace:resolved/computer-use.json", resolver=lambda ref: trace)
+
+    assert validation["ok"] is True
+    assert validation["traceRef"] == "trace:resolved/computer-use.json"
+    assert validation["screenshotRefs"] == [".sciforge/vision-runs/resolved/before.png"]
+
+
+def test_validate_trace_requires_resolver_for_durable_trace_refs():
+    validation = validate_trace("trace:unresolved/computer-use.json")
+
+    assert validation["ok"] is False
+    assert validation["traceRef"] == "trace:unresolved/computer-use.json"
+    assert "durable refs require a host resolver" in validation["errors"][0]
+
+
 def test_max_steps_when_verifier_never_done():
     planner = FakePlanner([
         ActionPlan(kind="wait", reason="observe again"),
@@ -335,6 +555,82 @@ def test_max_steps_when_verifier_never_done():
 
     assert result.status == "max-steps"
     assert result.metrics["stepCount"] == 2
+
+
+def test_max_steps_boundary_final_planner_completion_does_not_execute_extra_action():
+    sense = FakeSense(refs=[
+        "step-1-before.png",
+        "step-1-after.png",
+        "step-2-before.png",
+        "step-2-after.png",
+        "final-budget-observation.png",
+    ])
+    planner = FakePlanner([
+        ActionPlan(kind="click", target=ActionTarget(description="create folder")),
+        ActionPlan(kind="click", target=ActionTarget(description="save index")),
+        ActionPlan(done=True, reason="Final observation shows requested artifact is complete."),
+    ])
+    executor = FakeExecutor()
+
+    result = run_computer_use_task(
+        ComputerUseRequest(task="finish at action budget boundary", max_steps=2),
+        FakeSense(
+            refs=[
+                "step-1-before.png",
+                "step-1-after.png",
+                "step-2-before.png",
+                "step-2-after.png",
+                "final-budget-observation.png",
+            ],
+            artifacts={"finalArtifactRef": ".sciforge/vision-runs/final-budget/index.md"},
+        ),
+        planner,
+        executor,
+        FakeVerifier(done_after=99),
+    )
+
+    assert result.status == "completed"
+    assert result.reason == "Final observation shows requested artifact is complete."
+    assert result.final_observation is not None
+    assert result.final_observation.ref == "final-budget-observation.png"
+    assert result.final_artifact_refs == (".sciforge/vision-runs/final-budget/index.md",)
+    trace = result_to_trace(result)
+    assert trace["finalArtifactRef"] == ".sciforge/vision-runs/final-budget/index.md"
+    assert planner.calls == [
+        ("step-1-before.png", 0),
+        ("step-2-before.png", 1),
+        ("final-budget-observation.png", 2),
+    ]
+    assert executor.calls == [("click", 10, 20), ("click", 10, 20)]
+    assert result.metrics["actionCount"] == 2
+    assert result.metrics["stepCount"] == 3
+    assert result.steps[-1].plan.done is True
+    assert result.steps[-1].execution is None
+
+
+def test_targeted_wait_uses_grounding_but_skips_executor_as_observation_only():
+    sense = FakeSense()
+    planner = FakePlanner([
+        {"type": "wait", "targetDescription": "results panel", "reason": "inspect local panel"},
+    ])
+    executor = FakeExecutor()
+
+    result = run_computer_use_task(
+        ComputerUseRequest(task="inspect results panel", max_steps=2),
+        sense,
+        planner,
+        executor,
+        FakeVerifier(done_after=1),
+    )
+
+    assert result.status == "completed"
+    assert sense.locate_calls == [("before.png", "results panel")]
+    assert executor.calls == []
+    assert result.steps[0].grounding is not None
+    assert result.steps[0].grounding.metadata["observationOnly"] is True
+    assert result.steps[0].execution is not None
+    assert result.steps[0].execution.metadata["observationOnly"] is True
+    assert result.steps[0].verification is not None
 
 
 def run_cli(*args, stdin=None):
@@ -357,8 +653,19 @@ def run_cli(*args, stdin=None):
 def test_cli_fixture_outputs_structured_result_json():
     fixture = {
         "capture": [
-            {"ref": ".sciforge/vision-runs/cli/before.png", "summary": "before"},
-            {"ref": ".sciforge/vision-runs/cli/after.png", "summary": "after"},
+            {
+                "ref": ".sciforge/vision-runs/cli/before.png",
+                "summary": "before",
+                "metadata": {"focusRefs": [".sciforge/vision-runs/cli/focus.png"]},
+            },
+            {
+                "ref": ".sciforge/vision-runs/cli/after.png",
+                "summary": "after",
+                "artifacts": {
+                    "finalArtifactRef": ".sciforge/vision-runs/cli/result-report.pdf",
+                    "outputRefs": [".sciforge/vision-runs/cli/result-report.pdf"],
+                },
+            },
         ],
         "plans": [
             {"type": "click", "targetDescription": "safe local button"},
@@ -381,6 +688,14 @@ def test_cli_fixture_outputs_structured_result_json():
     assert payload["status"] == "completed"
     assert payload["traceRefs"] == ["trace:cli-fixture/computer-use.json"]
     assert payload["steps"][0]["beforeRef"] == ".sciforge/vision-runs/cli/before.png"
+    assert payload["screenshotRefs"] == [
+        ".sciforge/vision-runs/cli/before.png",
+        ".sciforge/vision-runs/cli/focus.png",
+        ".sciforge/vision-runs/cli/after.png",
+    ]
+    assert payload["artifactRefs"] == [".sciforge/vision-runs/cli/result-report.pdf"]
+    assert payload["finalArtifactRef"] == ".sciforge/vision-runs/cli/result-report.pdf"
+    assert payload["finalArtifactRefs"] == [".sciforge/vision-runs/cli/result-report.pdf"]
     assert "data:image/" not in completed.stdout
 
 
