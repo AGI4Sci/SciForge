@@ -49,6 +49,34 @@ def test_validate_pptx_artifact_rejects_wrong_slide_count(tmp_path):
     assert "pptx slideCount must be 1, got 0" in validation["errors"]
 
 
+def test_render_slide_deck_artifact_supports_multiple_slides_from_spec(tmp_path):
+    path = tmp_path / "multi.pptx"
+    metadata = render_target_artifact(
+        path,
+        document_lines=[],
+        scenario={
+            "artifactSpec": {
+                "kind": "slide-deck",
+                "slides": [
+                    {"title": "First", "bullets": ["one"]},
+                    {"title": "Second", "bullets": ["two"]},
+                    {"title": "Third", "bullets": ["three"]},
+                ],
+            }
+        },
+    )
+
+    validation = validate_pptx_artifact(path, expected_slide_count=3)
+    with zipfile.ZipFile(path) as deck:
+        slide3 = deck.read("ppt/slides/slide3.xml").decode("utf8")
+
+    assert metadata["slideCount"] == 3
+    assert metadata["titles"] == ["First", "Second", "Third"]
+    assert validation["ok"] is True
+    assert validation["slideCount"] == 3
+    assert "Third" in slide3
+
+
 def write_valid_pptx(tmp_path: Path) -> Path:
     path = tmp_path / "valid.pptx"
     render_target_artifact(

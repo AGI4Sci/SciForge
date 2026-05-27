@@ -1,0 +1,214 @@
+{
+  "schemaVersion": "sciforge.computer-use.target-bound-window-scenario.v1",
+  "id": "target-bound-visible-three-page-pptx",
+  "kind": "package-owned-target-bound-window-fixture",
+  "targetWindow": {
+    "title": "Package Owned Slide Editor"
+  },
+  "finalArtifactRef": ".sciforge/vision-runs/target-bound-visible-three-page-pptx/visible-three-page-deck.pptx",
+  "artifactSpec": {
+    "kind": "slide-deck",
+    "slides": [
+      {
+        "title": "Virtual Input, Real Evidence",
+        "subtitle": "A generic Computer Use workflow",
+        "bullets": [
+          "Virtual pointer clicks the editable surface",
+          "Virtual keyboard writes the slide content",
+          "Trace refs prove every current observation"
+        ]
+      },
+      {
+        "title": "Not A PPT-Only Path",
+        "subtitle": "The same action loop drives other targets",
+        "bullets": [
+          "Actions stay generic: click, type_text, press_key, save",
+          "Artifacts are selected by renderer registry",
+          "CSV, DOCX, forms, menus, and previews use the same viewer"
+        ]
+      },
+      {
+        "title": "Safe To Watch",
+        "subtitle": "No shared desktop input",
+        "bullets": [
+          "System pointer is never moved",
+          "Global keyboard events are never sent",
+          "The replay viewer shows frames, actions, and input logs"
+        ]
+      }
+    ]
+  },
+  "workflowRequirements": {
+    "minimumActionCount": 7,
+    "requiredInputModalities": ["pointer", "keyboard"],
+    "requiresCurrentStepScreenshots": true
+  },
+  "screens": [
+    {
+      "id": "deck-start",
+      "ref": ".sciforge/vision-runs/target-bound-visible-three-page-pptx/screen-00-start.png",
+      "summary": "Slide editor opens with an empty first slide.",
+      "visibleTexts": ["Slide title field", "Slide body field", "New slide"],
+      "elements": [
+        {
+          "id": "slide-title-field",
+          "role": "textbox",
+          "label": "slide title field",
+          "description": "slide title field",
+          "bounds": {"x": 80, "y": 80, "width": 740, "height": 96}
+        }
+      ],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "slide-one-focused",
+      "ref": ".sciforge/vision-runs/target-bound-visible-three-page-pptx/screen-01-slide-one-focused.png",
+      "summary": "Virtual pointer focused the first slide title field.",
+      "visibleTexts": ["Slide 1 title field focused"],
+      "elements": [
+        {
+          "id": "slide-title-field",
+          "role": "textbox",
+          "label": "slide title field",
+          "description": "slide title field",
+          "bounds": {"x": 80, "y": 80, "width": 740, "height": 96},
+          "state": {"focused": true}
+        }
+      ],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "slide-one-content",
+      "ref": ".sciforge/vision-runs/target-bound-visible-three-page-pptx/screen-02-slide-one-content.png",
+      "summary": "Slide 1 content is visible after virtual keyboard input.",
+      "visibleTexts": ["Virtual Input, Real Evidence", "Virtual pointer clicks the editable surface", "Virtual keyboard writes the slide content"],
+      "elements": [
+        {
+          "id": "new-slide-command",
+          "role": "button",
+          "label": "New slide",
+          "description": "New slide command",
+          "bounds": {"x": 860, "y": 80, "width": 120, "height": 44}
+        }
+      ],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "slide-two-created",
+      "ref": ".sciforge/vision-runs/target-bound-visible-three-page-pptx/screen-03-slide-two-created.png",
+      "summary": "Virtual keyboard created slide 2 with a standard new-slide hotkey.",
+      "visibleTexts": ["Slide 2", "Slide title field"],
+      "elements": [],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "slide-two-content",
+      "ref": ".sciforge/vision-runs/target-bound-visible-three-page-pptx/screen-04-slide-two-content.png",
+      "summary": "Slide 2 content is visible after virtual keyboard input.",
+      "visibleTexts": ["Not A PPT-Only Path", "Actions stay generic", "Artifacts are selected by renderer registry"],
+      "elements": [
+        {
+          "id": "new-slide-command",
+          "role": "button",
+          "label": "New slide",
+          "description": "New slide command",
+          "bounds": {"x": 860, "y": 80, "width": 120, "height": 44}
+        }
+      ],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "slide-three-created",
+      "ref": ".sciforge/vision-runs/target-bound-visible-three-page-pptx/screen-05-slide-three-created.png",
+      "summary": "Virtual keyboard created slide 3 with a standard new-slide hotkey.",
+      "visibleTexts": ["Slide 3", "Slide title field"],
+      "elements": [],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "slide-three-content",
+      "ref": ".sciforge/vision-runs/target-bound-visible-three-page-pptx/screen-06-slide-three-content.png",
+      "summary": "Slide 3 content is visible after virtual keyboard input.",
+      "visibleTexts": ["Safe To Watch", "System pointer is never moved", "Global keyboard events are never sent"],
+      "elements": [],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "deck-saved",
+      "ref": ".sciforge/vision-runs/target-bound-visible-three-page-pptx/screen-07-saved.png",
+      "summary": "Saved three-page PPTX artifact is visible in the target window.",
+      "visibleTexts": ["visible-three-page-deck.pptx", "Saved", "3 slides"],
+      "elements": [
+        {
+          "id": "saved-pptx-entry",
+          "role": "treeitem",
+          "label": "visible-three-page-deck.pptx saved entry",
+          "description": "visible-three-page-deck.pptx saved entry",
+          "bounds": {"x": 80, "y": 560, "width": 360, "height": 32}
+        }
+      ],
+      "artifacts": {
+        "finalArtifactRef": ".sciforge/vision-runs/target-bound-visible-three-page-pptx/visible-three-page-deck.pptx",
+        "visibleArtifacts": [
+          {
+            "artifactRef": ".sciforge/vision-runs/target-bound-visible-three-page-pptx/visible-three-page-deck.pptx",
+            "kind": "slide-deck",
+            "status": "visible-and-saved"
+          }
+        ]
+      },
+      "metadata": {"realWindowEvidence": true}
+    }
+  ],
+  "plans": [
+    {
+      "type": "click",
+      "targetDescription": "slide title field"
+    },
+    {
+      "type": "type_text",
+      "text": "# Virtual Input, Real Evidence\n\n- Virtual pointer clicks the editable surface\n- Virtual keyboard writes the slide content\n- Trace refs prove every current observation\n"
+    },
+    {
+      "type": "click",
+      "targetDescription": "New slide",
+      "reason": "create slide 2 by clicking the visible New slide command"
+    },
+    {
+      "type": "type_text",
+      "text": "# Not A PPT-Only Path\n\n- Actions stay generic: click, type_text, press_key, save\n- Artifacts are selected by renderer registry\n- CSV, DOCX, forms, menus, and previews use the same viewer\n"
+    },
+    {
+      "type": "click",
+      "targetDescription": "New slide",
+      "reason": "create slide 3 by clicking the visible New slide command"
+    },
+    {
+      "type": "type_text",
+      "text": "# Safe To Watch\n\n- System pointer is never moved\n- Global keyboard events are never sent\n- The replay viewer shows frames, actions, and input logs\n"
+    },
+    {
+      "type": "press_key",
+      "key": "Ctrl+S",
+      "reason": "save the three-page presentation artifact"
+    }
+  ],
+  "verification": [
+    {"ok": true, "done": false, "changed": true, "reason": "slide 1 field is focused"},
+    {"ok": true, "done": false, "changed": true, "reason": "slide 1 content is visible"},
+    {"ok": true, "done": false, "changed": true, "reason": "slide 2 is created"},
+    {"ok": true, "done": false, "changed": true, "reason": "slide 2 content is visible"},
+    {"ok": true, "done": false, "changed": true, "reason": "slide 3 is created"},
+    {"ok": true, "done": false, "changed": true, "reason": "slide 3 content is visible"},
+    {
+      "ok": true,
+      "done": true,
+      "changed": true,
+      "reason": "three-page pptx artifact is saved and visible",
+      "metadata": {
+        "finalArtifactRef": ".sciforge/vision-runs/target-bound-visible-three-page-pptx/visible-three-page-deck.pptx"
+      }
+    }
+  ],
+  "files": {}
+}

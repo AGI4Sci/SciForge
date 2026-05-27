@@ -62,8 +62,8 @@ def build_visible_run_viewer(
         *_nested_ref_list(diagnostics.get("virtualInputStateRefs")),
     ])
     isolation = _isolation_summary(diagnostics)
-    frames = _frames(screenshot_refs, root)
     actions = _actions(payload.get("steps"))
+    frames = _frames(screenshot_refs, root, _frame_context(actions, payload))
     input_summary = _input_summary(input_event_log_refs)
 
     manifest = {
@@ -193,7 +193,7 @@ def _html_for_manifest(manifest: Mapping[str, Any], base_dir: Path) -> str:
     </section>
     <section>
       <h2>Actions</h2>
-      <table><thead><tr><th>#</th><th>Kind</th><th>Status</th><th>Target</th><th>Refs</th></tr></thead><tbody>{action_rows}</tbody></table>
+      <table><thead><tr><th>#</th><th>Kind</th><th>Status</th><th>Target</th><th>Input</th><th>Refs</th></tr></thead><tbody>{action_rows}</tbody></table>
     </section>
   </main>
 </body>
@@ -206,31 +206,37 @@ def _frame_html(frame: Mapping[str, Any], base_dir: Path) -> str:
     src = html.escape(_relative_ref(ref, base_dir))
     label = html.escape(str(frame.get("label") or ref))
     index = html.escape(str(frame.get("index")))
+    summary = html.escape(str(frame.get("summary") or ""))
     image = f'<img src="{src}" alt="{label}">' if ref else ""
-    return f"<figure>{image}<figcaption>Frame {index}: <code>{label}</code></figcaption></figure>"
+    summary_block = f"<div>{summary}</div>" if summary else ""
+    return f"<figure>{image}<figcaption>Frame {index}: <code>{label}</code>{summary_block}</figcaption></figure>"
 
 
 def _action_html(action: Mapping[str, Any]) -> str:
     refs = ", ".join(_string_list(action.get("screenshotRefs")) + _string_list(action.get("artifactRefs")))
+    input_text = _input_label(action)
     return (
         "<tr>"
         f"<td>{html.escape(str(action.get('index')))}</td>"
         f"<td>{html.escape(str(action.get('kind') or ''))}</td>"
         f"<td>{html.escape(str(action.get('status') or ''))}</td>"
         f"<td>{html.escape(str(action.get('target') or ''))}</td>"
+        f"<td>{html.escape(input_text)}</td>"
         f"<td><code>{html.escape(refs)}</code></td>"
         "</tr>"
     )
 
 
-def _frames(refs: Sequence[str], root: Path) -> list[dict[str, Any]]:
+def _frames(refs: Sequence[str], root: Path, context: Mapping[str, str]) -> list[dict[str, Any]]:
     frames: list[dict[str, Any]] = []
     for index, ref in enumerate(_unique_strings(refs)):
         path = Path(ref)
+        absolute_ref = str(path.resolve()) if path.is_absolute() else str((root / path).resolve())
         frames.append({
             "index": index,
             "label": path.name or f"frame-{index}",
-            "screenshotRef": str(path.resolve()) if path.is_absolute() else str((root / path).resolve()),
+            "screenshotRef": absolute_ref,
+            "summary": context.get(ref) or context.get(absolute_ref),
             "kind": "screenshot",
         })
     return frames
@@ -244,8 +250,13 @@ def _actions(steps: Any) -> list[dict[str, Any]]:
             "index": step.get("index", fallback_index),
             "kind": action.get("kind") or action.get("type"),
             "target": _target_text(action.get("target")),
+            "textPreview": _text_preview(action.get("text")),
+            "key": _key_preview(action),
+            "reason": action.get("reason"),
             "status": step.get("status"),
             "verification": step.get("verification"),
+            "beforeSummary": step.get("beforeSummary"),
+            "verificationReason": _mapping(step.get("verification")).get("reason"),
             "screenshotRefs": _unique_strings([
                 *([str(step.get("beforeRef"))] if isinstance(step.get("beforeRef"), str) else []),
                 *([str(step.get("afterRef"))] if isinstance(step.get("afterRef"), str) else []),
@@ -254,6 +265,50 @@ def _actions(steps: Any) -> list[dict[str, Any]]:
             "artifactRefs": _string_list(step.get("artifactRefs")),
         })
     return actions
+
+
+def _frame_context(actions: Sequence[Mapping[str, Any]], payload: Mapping[str, Any]) -> dict[str, str]:
+    context: dict[str, str] = {}
+    for action in actions:
+        refs = _string_list(action.get("screenshotRefs"))
+        if refs and isinstance(action.get("beforeSummary"), str):
+            context.setdefault(refs[0], str(action.get("beforeSummary")))
+        if refs and isinstance(action.get("verificationReason"), str):
+            context[refs[-1]] = str(action.get("verificationReason"))
+    final_ref = payload.get("finalObservationRef")
+    if isinstance(final_ref, str) and isinstance(payload.get("reason"), str):
+        context[final_ref] = str(payload.get("reason"))
+    return context
+
+
+def _input_label(action: Mapping[str, Any]) -> str:
+    pieces: list[str] = []
+    if action.get("key"):
+        pieces.append(f"key={action['key']}")
+    if action.get("textPreview"):
+        pieces.append(f"text={action['textPreview']}")
+    if action.get("reason"):
+        pieces.append(str(action["reason"]))
+    return "; ".join(pieces)
+
+
+def _text_preview(value: Any) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    compact = " ".join(value.split())
+    if len(compact) > 160:
+        return compact[:157] + "..."
+    return compact
+
+
+def _key_preview(action: Mapping[str, Any]) -> str | None:
+    key = action.get("key")
+    if isinstance(key, str) and key:
+        return key
+    keys = action.get("keys")
+    if isinstance(keys, list) and keys:
+        return "+".join(str(item) for item in keys)
+    return None
 
 
 def _input_summary(refs: Sequence[str]) -> dict[str, Any]:

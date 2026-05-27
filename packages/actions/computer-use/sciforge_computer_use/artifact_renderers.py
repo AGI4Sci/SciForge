@@ -28,27 +28,47 @@ def render_target_artifact(
     path.parent.mkdir(parents=True, exist_ok=True)
     artifact_spec = _artifact_spec(scenario)
     kind = _artifact_kind(path, artifact_spec)
-    if kind == "slide-deck":
-        title, subtitle, bullets = _slide_content(document_lines, artifact_spec)
-        _write_one_slide_pptx(path, title=title, subtitle=subtitle, bullets=bullets)
-        validation_ref = path.with_suffix(path.suffix + ".validation.json")
-        validation = validate_pptx_artifact(path)
-        validation_ref.write_text(f"{json.dumps(validation, indent=2, sort_keys=True)}\n", encoding="utf8")
-        return {
-            "artifactKind": "slide-deck",
-            "artifactFormat": "pptx",
-            "slideCount": 1,
-            "title": title,
-            "bulletCount": len(bullets),
-            "artifactValidationRef": str(validation_ref.resolve()),
-            "pptxValidationRef": str(validation_ref.resolve()),
-            "pptxValidation": {
-                "ok": validation["ok"],
-                "slideCount": validation["slideCount"],
-                "sizeBytes": validation["sizeBytes"],
-                "sha256": validation["sha256"],
-            },
-        }
+    renderer = _ARTIFACT_RENDERERS.get(kind, _render_text_artifact)
+    return renderer(path, document_lines=document_lines, artifact_spec=artifact_spec, scenario=scenario)
+
+
+def _render_slide_deck_artifact(
+    path: Path,
+    *,
+    document_lines: Sequence[str],
+    artifact_spec: Mapping[str, Any],
+    scenario: Mapping[str, Any],
+) -> dict[str, Any]:
+    slides = _slide_deck_content(document_lines, artifact_spec)
+    _write_slide_deck_pptx(path, slides=slides)
+    validation_ref = path.with_suffix(path.suffix + ".validation.json")
+    validation = validate_pptx_artifact(path, expected_slide_count=len(slides))
+    validation_ref.write_text(f"{json.dumps(validation, indent=2, sort_keys=True)}\n", encoding="utf8")
+    return {
+        "artifactKind": "slide-deck",
+        "artifactFormat": "pptx",
+        "slideCount": len(slides),
+        "title": slides[0]["title"],
+        "titles": [slide["title"] for slide in slides],
+        "bulletCount": sum(len(slide["bullets"]) for slide in slides),
+        "artifactValidationRef": str(validation_ref.resolve()),
+        "pptxValidationRef": str(validation_ref.resolve()),
+        "pptxValidation": {
+            "ok": validation["ok"],
+            "slideCount": validation["slideCount"],
+            "sizeBytes": validation["sizeBytes"],
+            "sha256": validation["sha256"],
+        },
+    }
+
+
+def _render_text_artifact(
+    path: Path,
+    *,
+    document_lines: Sequence[str],
+    artifact_spec: Mapping[str, Any],
+    scenario: Mapping[str, Any],
+) -> dict[str, Any]:
     text = "\n".join(document_lines).rstrip() + "\n"
     path.write_text(text, encoding="utf8")
     return {
@@ -58,9 +78,15 @@ def render_target_artifact(
     }
 
 
-def validate_pptx_artifact(path: Path) -> dict[str, Any]:
+_ARTIFACT_RENDERERS = {
+    "slide-deck": _render_slide_deck_artifact,
+}
+
+
+def validate_pptx_artifact(path: Path, *, expected_slide_count: int = 1) -> dict[str, Any]:
     errors: list[str] = []
     warnings: list[str] = []
+    expected_slide_count = max(1, int(expected_slide_count))
     required_parts = {
         "[Content_Types].xml",
         "_rels/.rels",
@@ -68,7 +94,7 @@ def validate_pptx_artifact(path: Path) -> dict[str, Any]:
         "docProps/app.xml",
         "ppt/presentation.xml",
         "ppt/_rels/presentation.xml.rels",
-        "ppt/slides/slide1.xml",
+        *{f"ppt/slides/slide{index}.xml" for index in range(1, expected_slide_count + 1)},
     }
     names: set[str] = set()
     slide_count = 0
@@ -118,8 +144,8 @@ def validate_pptx_artifact(path: Path) -> dict[str, Any]:
                     pass
     if size_bytes <= 0:
         errors.append("pptx file is empty")
-    if slide_count != 1:
-        errors.append(f"pptx slideCount must be 1, got {slide_count}")
+    if slide_count != expected_slide_count:
+        errors.append(f"pptx slideCount must be {expected_slide_count}, got {slide_count}")
     return {
         "schemaVersion": "sciforge.computer-use.pptx-validation.v1",
         "ok": not errors,
@@ -129,6 +155,7 @@ def validate_pptx_artifact(path: Path) -> dict[str, Any]:
         "sizeBytes": size_bytes,
         "sha256": sha256,
         "slideCount": slide_count,
+        "expectedSlideCount": expected_slide_count,
         "requiredParts": sorted(required_parts),
         "packageParts": sorted(names),
         "macrosForbidden": True,
@@ -177,37 +204,68 @@ def _slide_content(document_lines: Sequence[str], artifact_spec: Mapping[str, An
     return title or "Untitled Slide", subtitle or "", bullets[:8]
 
 
+def _slide_deck_content(document_lines: Sequence[str], artifact_spec: Mapping[str, Any]) -> list[dict[str, Any]]:
+    spec_slides = artifact_spec.get("slides")
+    slides: list[dict[str, Any]] = []
+    if isinstance(spec_slides, list):
+        for index, value in enumerate(spec_slides, start=1):
+            if not isinstance(value, Mapping):
+                continue
+            title = _string_or_none(value.get("title")) or f"Slide {index}"
+            subtitle = _string_or_none(value.get("subtitle")) or ""
+            bullets = _string_list(value.get("bullets"))[:8]
+            slides.append({"title": title, "subtitle": subtitle, "bullets": bullets})
+    if slides:
+        return slides
+    title, subtitle, bullets = _slide_content(document_lines, artifact_spec)
+    return [{"title": title, "subtitle": subtitle, "bullets": bullets}]
+
+
 def _write_one_slide_pptx(path: Path, *, title: str, subtitle: str, bullets: Sequence[str]) -> None:
+    _write_slide_deck_pptx(path, slides=[{"title": title, "subtitle": subtitle, "bullets": list(bullets)}])
+
+
+def _write_slide_deck_pptx(path: Path, *, slides: Sequence[Mapping[str, Any]]) -> None:
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    slide_count = max(1, len(slides))
     entries = {
-        "[Content_Types].xml": _content_types_xml(),
+        "[Content_Types].xml": _content_types_xml(slide_count),
         "_rels/.rels": _root_rels_xml(),
         "docProps/core.xml": _core_xml(now),
-        "docProps/app.xml": _app_xml(),
-        "ppt/presentation.xml": _presentation_xml(),
-        "ppt/_rels/presentation.xml.rels": _presentation_rels_xml(),
-        "ppt/slides/slide1.xml": _slide_xml(title, subtitle, bullets),
-        "ppt/slides/_rels/slide1.xml.rels": _slide_rels_xml(),
+        "docProps/app.xml": _app_xml(slide_count),
+        "ppt/presentation.xml": _presentation_xml(slide_count),
+        "ppt/_rels/presentation.xml.rels": _presentation_rels_xml(slide_count),
         "ppt/slideLayouts/slideLayout1.xml": _slide_layout_xml(),
         "ppt/slideLayouts/_rels/slideLayout1.xml.rels": _slide_layout_rels_xml(),
         "ppt/slideMasters/slideMaster1.xml": _slide_master_xml(),
         "ppt/slideMasters/_rels/slideMaster1.xml.rels": _slide_master_rels_xml(),
         "ppt/theme/theme1.xml": _theme_xml(),
     }
+    for index, slide in enumerate(slides, start=1):
+        entries[f"ppt/slides/slide{index}.xml"] = _slide_xml(
+            str(slide.get("title") or f"Slide {index}"),
+            str(slide.get("subtitle") or ""),
+            _string_list(slide.get("bullets")),
+        )
+        entries[f"ppt/slides/_rels/slide{index}.xml.rels"] = _slide_rels_xml()
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for name, payload in entries.items():
             archive.writestr(name, payload)
 
 
-def _content_types_xml() -> str:
-    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+def _content_types_xml(slide_count: int) -> str:
+    slide_overrides = "\n".join(
+        f'  <Override PartName="/ppt/slides/slide{index}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>'
+        for index in range(1, slide_count + 1)
+    )
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
   <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
   <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
   <Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>
-  <Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>
+{slide_overrides}
   <Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>
   <Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>
   <Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>
@@ -236,32 +294,44 @@ def _core_xml(timestamp: str) -> str:
 """
 
 
-def _app_xml() -> str:
-    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+def _app_xml(slide_count: int) -> str:
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
   <Application>SciForge Computer Use</Application>
   <PresentationFormat>On-screen Show (16:9)</PresentationFormat>
-  <Slides>1</Slides>
+  <Slides>{slide_count}</Slides>
 </Properties>
 """
 
 
-def _presentation_xml() -> str:
-    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+def _presentation_xml(slide_count: int) -> str:
+    slide_ids = "\n".join(
+        f'    <p:sldId id="{255 + index}" r:id="rId{index}"/>'
+        for index in range(1, slide_count + 1)
+    )
+    master_rel_id = slide_count + 1
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-  <p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId2"/></p:sldMasterIdLst>
-  <p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst>
+  <p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId{master_rel_id}"/></p:sldMasterIdLst>
+  <p:sldIdLst>
+{slide_ids}
+  </p:sldIdLst>
   <p:sldSz cx="12192000" cy="6858000" type="wide"/>
   <p:notesSz cx="6858000" cy="9144000"/>
 </p:presentation>
 """
 
 
-def _presentation_rels_xml() -> str:
-    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+def _presentation_rels_xml(slide_count: int) -> str:
+    slide_rels = "\n".join(
+        f'  <Relationship Id="rId{index}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide{index}.xml"/>'
+        for index in range(1, slide_count + 1)
+    )
+    master_rel_id = slide_count + 1
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/>
-  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster1.xml"/>
+{slide_rels}
+  <Relationship Id="rId{master_rel_id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster1.xml"/>
 </Relationships>
 """
 
