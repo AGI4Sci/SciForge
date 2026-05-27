@@ -1,0 +1,449 @@
+{
+  "schemaVersion": "sciforge.computer-use.virtual-desktop-scenario.v1",
+  "id": "virtual-desktop-ambiguous-before-after",
+  "kind": "package-local-virtual-desktop-fixture",
+  "metadata": {
+    "requiresFinalArtifact": true,
+    "requiresDirectoryEvidence": true,
+    "inputMode": "virtual-session",
+    "inputChannel": "virtual-session",
+    "virtualDesktop": true,
+    "realWindowEvidence": false,
+    "scenarioOnly": true,
+    "workflow": "C-like ambiguity before-after repair scenario"
+  },
+  "recommendedRequest": {
+    "task": "repair an ambiguous virtual Save target and provide artifact evidence",
+    "maxSteps": 2,
+    "metadata": {
+      "requiresFinalArtifact": true,
+      "requiresDirectoryEvidence": true,
+      "inputMode": "virtual-session",
+      "inputChannel": "virtual-session"
+    }
+  },
+  "windows": [
+    {
+      "id": "ambiguous-save-virtual-workspace",
+      "title": "Virtual Save Workspace",
+      "kind": "virtual-window",
+      "source": "package-local scenario fixture",
+      "realWindowEvidence": false,
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 720,
+        "height": 420
+      },
+      "elementRefs": [
+        "top-left-gray-save-button",
+        "middle-toolbar-save-button",
+        "lower-right-blue-save-button",
+        "autosave-toggle",
+        "save-as-menu-item"
+      ]
+    }
+  ],
+  "elements": [
+    {
+      "id": "top-left-gray-save-button",
+      "windowId": "ambiguous-save-virtual-workspace",
+      "role": "virtual-control",
+      "label": "top-left gray Save button",
+      "description": "top-left gray Save button",
+      "bounds": {
+        "x": 32,
+        "y": 32,
+        "width": 92,
+        "height": 36
+      }
+    },
+    {
+      "id": "middle-toolbar-save-button",
+      "windowId": "ambiguous-save-virtual-workspace",
+      "role": "virtual-control",
+      "label": "middle toolbar Save button",
+      "description": "middle toolbar Save button",
+      "bounds": {
+        "x": 304,
+        "y": 32,
+        "width": 104,
+        "height": 36
+      }
+    },
+    {
+      "id": "lower-right-blue-save-button",
+      "windowId": "ambiguous-save-virtual-workspace",
+      "role": "button",
+      "label": "lower-right blue Save button",
+      "description": "lower-right blue Save button",
+      "bounds": {
+        "x": 552,
+        "y": 328,
+        "width": 128,
+        "height": 44
+      }
+    },
+    {
+      "id": "autosave-toggle",
+      "windowId": "ambiguous-save-virtual-workspace",
+      "role": "switch",
+      "label": "AutoSave toggle",
+      "description": "AutoSave toggle",
+      "bounds": {
+        "x": 138,
+        "y": 32,
+        "width": 108,
+        "height": 36
+      }
+    },
+    {
+      "id": "save-as-menu-item",
+      "windowId": "ambiguous-save-virtual-workspace",
+      "role": "menuitem",
+      "label": "Save As menu item",
+      "description": "Save As menu item",
+      "bounds": {
+        "x": 420,
+        "y": 32,
+        "width": 112,
+        "height": 36
+      }
+    }
+  ],
+  "ambiguity": {
+    "before": {
+      "screen": "save-target-ambiguous",
+      "targetDescription": "Save button",
+      "expectedGrounding": "ambiguous",
+      "matchCount": 3,
+      "matchingElementIds": [
+        "top-left-gray-save-button",
+        "middle-toolbar-save-button",
+        "lower-right-blue-save-button"
+      ],
+      "repairHint": "Use color and region text to distinguish the lower-right blue Save button."
+    },
+    "after": {
+      "screen": "save-target-repaired",
+      "targetDescription": "lower-right blue Save button",
+      "expectedGrounding": "single-match",
+      "matchingElementIds": [
+        "lower-right-blue-save-button"
+      ]
+    }
+  },
+  "fileArtifacts": [
+    {
+      "id": "ambiguous-save-final-markdown",
+      "kind": "document-artifact",
+      "schemaVersion": "sciforge.computer-use.virtual-remote-artifact.v1",
+      "artifactRef": ".sciforge/vision-runs/virtual-desktop-ambiguous/saved-note.md",
+      "status": "visible-and-saved"
+    },
+    {
+      "id": "ambiguous-save-file-list-artifact",
+      "kind": "directory-file-list-artifact",
+      "schemaVersion": "sciforge.computer-use.virtual-remote-artifact.v1",
+      "artifactRef": ".sciforge/vision-runs/virtual-desktop-ambiguous/saved-note-file-list.json",
+      "dataRef": ".sciforge/vision-runs/virtual-desktop-ambiguous/saved-note-file-list-data.json",
+      "status": "visible-and-saved"
+    }
+  ],
+  "fileList": {
+    "schemaVersion": "sciforge.computer-use.file-list-evidence.v1",
+    "artifactRef": ".sciforge/vision-runs/virtual-desktop-ambiguous/saved-note-file-list.json",
+    "dataRef": ".sciforge/vision-runs/virtual-desktop-ambiguous/saved-note-file-list-data.json",
+    "cwd": "/workspace/virtual-ambiguous-save",
+    "entries": [
+      {
+        "name": "saved-note.md",
+        "type": "file"
+      },
+      {
+        "name": "saved-note-file-list.json",
+        "type": "file"
+      },
+      {
+        "name": "saved-note-file-list-data.json",
+        "type": "file"
+      }
+    ]
+  },
+  "expectations": {
+    "status": "completed",
+    "realWindowEvidence": false,
+    "inputAdapterStatus": "independent-simulated-input-adapter",
+    "inputChannel": "virtual-session",
+    "inputExecuted": false,
+    "sharedSystemInputUsed": false,
+    "osInputExecuted": false,
+    "finalArtifactRef": ".sciforge/vision-runs/virtual-desktop-ambiguous/saved-note.md",
+    "directoryEvidence": {
+      "fileListArtifactRef": ".sciforge/vision-runs/virtual-desktop-ambiguous/saved-note-file-list.json",
+      "fileListDataRef": ".sciforge/vision-runs/virtual-desktop-ambiguous/saved-note-file-list-data.json"
+    },
+    "virtualInputStateRefs": {
+      "stateDir": "virtual-input-state",
+      "requiredKeys": [
+        "virtualInputStateRef",
+        "virtualPointerStateRef",
+        "virtualKeyboardStateRef"
+      ],
+      "initial": {
+        "stepIndex": 0,
+        "virtualInputStateRef": "virtual-input-state/virtual-desktop-ambiguous-before-after-0000-input-state.json",
+        "virtualPointerStateRef": "virtual-input-state/virtual-desktop-ambiguous-before-after-0000-pointer-state.json",
+        "virtualKeyboardStateRef": "virtual-input-state/virtual-desktop-ambiguous-before-after-0000-keyboard-state.json"
+      },
+      "final": {
+        "stepIndex": 1,
+        "virtualInputStateRef": "virtual-input-state/virtual-desktop-ambiguous-before-after-0001-input-state.json",
+        "virtualPointerStateRef": "virtual-input-state/virtual-desktop-ambiguous-before-after-0001-pointer-state.json",
+        "virtualKeyboardStateRef": "virtual-input-state/virtual-desktop-ambiguous-before-after-0001-keyboard-state.json"
+      }
+    }
+  },
+  "steps": [
+    {
+      "index": 0,
+      "id": "before-ambiguous-grounding",
+      "screen": "save-target-ambiguous",
+      "candidateAction": {
+        "type": "click",
+        "targetDescription": "Save button"
+      },
+      "expect": {
+        "grounding": "ambiguous",
+        "matchCount": 3,
+        "matchingElementIds": [
+          "top-left-gray-save-button",
+          "middle-toolbar-save-button",
+          "lower-right-blue-save-button"
+        ],
+        "executed": false
+      }
+    },
+    {
+      "index": 1,
+      "id": "after-disambiguated-save",
+      "beforeScreen": "save-target-ambiguous",
+      "afterScreen": "save-target-repaired",
+      "action": {
+        "type": "click",
+        "targetDescription": "lower-right blue Save button"
+      },
+      "expect": {
+        "grounding": "single-match",
+        "elementId": "lower-right-blue-save-button",
+        "stateUpdateKind": "click",
+        "stepIndex": 1,
+        "virtualInputStateRef": "virtual-input-state/virtual-desktop-ambiguous-before-after-0001-input-state.json"
+      }
+    }
+  ],
+  "screens": [
+    {
+      "id": "save-target-ambiguous",
+      "ref": ".sciforge/vision-runs/virtual-desktop-ambiguous/screen-00-ambiguous-save.png",
+      "summary": "Virtual workspace with several visually similar save controls before disambiguation.",
+      "windowRefs": [
+        "ambiguous-save-virtual-workspace"
+      ],
+      "visibleTexts": [
+        "Save",
+        "Save As",
+        "AutoSave",
+        "Unsaved note"
+      ],
+      "elements": [
+        {
+          "id": "top-left-gray-save-button",
+          "role": "virtual-control",
+          "label": "top-left gray Save button",
+          "description": "top-left gray Save button",
+          "bounds": {
+            "x": 32,
+            "y": 32,
+            "width": 92,
+            "height": 36
+          }
+        },
+        {
+          "id": "middle-toolbar-save-button",
+          "role": "virtual-control",
+          "label": "middle toolbar Save button",
+          "description": "middle toolbar Save button",
+          "bounds": {
+            "x": 304,
+            "y": 32,
+            "width": 104,
+            "height": 36
+          }
+        },
+        {
+          "id": "lower-right-blue-save-button",
+          "role": "button",
+          "label": "lower-right blue Save button",
+          "description": "lower-right blue Save button",
+          "bounds": {
+            "x": 552,
+            "y": 328,
+            "width": 128,
+            "height": 44
+          }
+        },
+        {
+          "id": "autosave-toggle",
+          "role": "switch",
+          "label": "AutoSave toggle",
+          "description": "AutoSave toggle",
+          "bounds": {
+            "x": 138,
+            "y": 32,
+            "width": 108,
+            "height": 36
+          }
+        },
+        {
+          "id": "save-as-menu-item",
+          "role": "menuitem",
+          "label": "Save As menu item",
+          "description": "Save As menu item",
+          "bounds": {
+            "x": 420,
+            "y": 32,
+            "width": 112,
+            "height": 36
+          }
+        }
+      ],
+      "metadata": {
+        "virtualDesktop": true,
+        "realWindowEvidence": false,
+        "ambiguousTargetDescription": "Save button",
+        "expectedAmbiguousMatchCount": 3
+      }
+    },
+    {
+      "id": "save-target-repaired",
+      "ref": ".sciforge/vision-runs/virtual-desktop-ambiguous/screen-01-repaired-save.png",
+      "summary": "Virtual workspace after selecting the lower-right blue Save button.",
+      "visibleTexts": [
+        "Saved",
+        "saved-note.md",
+        "saved-note-file-list.json",
+        "saved-note-file-list-data.json"
+      ],
+      "elements": [
+        {
+          "id": "lower-right-blue-save-button",
+          "role": "button",
+          "label": "lower-right blue Save button selected",
+          "description": "lower-right blue Save button",
+          "bounds": {
+            "x": 552,
+            "y": 328,
+            "width": 128,
+            "height": 44
+          },
+          "state": {
+            "pressed": true
+          }
+        }
+      ],
+      "artifacts": {
+        "finalArtifactRef": ".sciforge/vision-runs/virtual-desktop-ambiguous/saved-note.md",
+        "fileList": {
+          "artifactRef": ".sciforge/vision-runs/virtual-desktop-ambiguous/saved-note-file-list.json",
+          "dataRef": ".sciforge/vision-runs/virtual-desktop-ambiguous/saved-note-file-list-data.json",
+          "kind": "directory-file-list-artifact",
+          "schemaVersion": "sciforge.computer-use.virtual-remote-artifact.v1",
+          "status": "visible-and-saved"
+        },
+        "visibleArtifacts": [
+          {
+            "artifactRef": ".sciforge/vision-runs/virtual-desktop-ambiguous/saved-note.md",
+            "kind": "document-artifact",
+            "schemaVersion": "sciforge.computer-use.virtual-remote-artifact.v1",
+            "status": "visible-and-saved"
+          }
+        ]
+      },
+      "metadata": {
+        "directoryListingRef": ".sciforge/vision-runs/virtual-desktop-ambiguous/saved-note-file-list.json",
+        "virtualDesktop": true,
+        "realWindowEvidence": false,
+        "repairedTargetDescription": "lower-right blue Save button"
+      }
+    }
+  ],
+  "plans": [
+    {
+      "type": "click",
+      "targetDescription": "lower-right blue Save button",
+      "reason": "disambiguated from the broad Save button target"
+    }
+  ],
+  "grounding": [
+    {
+      "ok": true,
+      "x": 616,
+      "y": 350,
+      "coordinateSpace": "virtual-desktop",
+      "confidence": 0.97,
+      "metadata": {
+        "elementId": "lower-right-blue-save-button"
+      }
+    }
+  ],
+  "execution": [
+    {
+      "ok": true,
+      "message": "fixture records a virtual click on the disambiguated Save target"
+    }
+  ],
+  "verification": [
+    {
+      "ok": true,
+      "done": true,
+      "changed": true,
+      "metadata": {
+        "finalArtifactRef": ".sciforge/vision-runs/virtual-desktop-ambiguous/saved-note.md",
+        "fileListArtifactRef": ".sciforge/vision-runs/virtual-desktop-ambiguous/saved-note-file-list.json",
+        "fileListDataRef": ".sciforge/vision-runs/virtual-desktop-ambiguous/saved-note-file-list-data.json"
+      },
+      "reason": "virtual final artifact is saved after target disambiguation and directory evidence is visible"
+    }
+  ],
+  "files": {
+    ".sciforge/vision-runs/virtual-desktop-ambiguous/saved-note.md": "# Repaired Virtual Save Target\n\nThe lower-right blue Save button was selected after the broad Save button target was detected as ambiguous.\n",
+    ".sciforge/vision-runs/virtual-desktop-ambiguous/saved-note-file-list-data.json": {
+      "cwd": "/workspace/virtual-ambiguous-save",
+      "files": [
+        "saved-note.md",
+        "saved-note-file-list.json",
+        "saved-note-file-list-data.json"
+      ]
+    },
+    ".sciforge/vision-runs/virtual-desktop-ambiguous/saved-note-file-list.json": {
+      "schemaVersion": "sciforge.computer-use.file-list-evidence.v1",
+      "artifactRef": ".sciforge/vision-runs/virtual-desktop-ambiguous/saved-note.md",
+      "dataRef": ".sciforge/vision-runs/virtual-desktop-ambiguous/saved-note-file-list-data.json",
+      "entries": [
+        {
+          "name": "saved-note.md",
+          "type": "file"
+        },
+        {
+          "name": "saved-note-file-list.json",
+          "type": "file"
+        },
+        {
+          "name": "saved-note-file-list-data.json",
+          "type": "file"
+        }
+      ]
+    }
+  }
+}

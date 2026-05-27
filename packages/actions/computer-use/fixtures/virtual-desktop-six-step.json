@@ -1,0 +1,703 @@
+{
+  "schemaVersion": "sciforge.computer-use.virtual-desktop-scenario.v1",
+  "id": "virtual-desktop-six-step",
+  "kind": "package-local-virtual-desktop-fixture",
+  "metadata": {
+    "requiresFinalArtifact": true,
+    "requiresDirectoryEvidence": true,
+    "inputMode": "virtual-session",
+    "inputChannel": "virtual-session",
+    "virtualDesktop": true,
+    "realWindowEvidence": false,
+    "scenarioOnly": true,
+    "workflow": "B-like six-step file artifact and directory evidence workflow"
+  },
+  "recommendedRequest": {
+    "task": "complete a package-local virtual desktop six-step file evidence workflow",
+    "maxSteps": 8,
+    "metadata": {
+      "requiresFinalArtifact": true,
+      "requiresDirectoryEvidence": true,
+      "inputMode": "virtual-session",
+      "inputChannel": "virtual-session"
+    }
+  },
+  "windows": [
+    {
+      "id": "task-b-virtual-workspace",
+      "title": "Virtual Task B Workspace",
+      "kind": "virtual-window",
+      "source": "package-local scenario fixture",
+      "realWindowEvidence": false,
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 960,
+        "height": 640
+      },
+      "elementRefs": [
+        "editor-input",
+        "project-files-tree",
+        "saved-markdown-entry",
+        "file-list-entry",
+        "preview-pane"
+      ]
+    }
+  ],
+  "elements": [
+    {
+      "id": "editor-input",
+      "windowId": "task-b-virtual-workspace",
+      "role": "textarea",
+      "label": "markdown editor input area",
+      "description": "markdown editor input area",
+      "bounds": {
+        "x": 240,
+        "y": 112,
+        "width": 560,
+        "height": 360
+      }
+    },
+    {
+      "id": "project-files-tree",
+      "windowId": "task-b-virtual-workspace",
+      "role": "tree",
+      "label": "Project Files file tree",
+      "description": "Project Files file tree",
+      "bounds": {
+        "x": 28,
+        "y": 92,
+        "width": 176,
+        "height": 456
+      }
+    },
+    {
+      "id": "saved-markdown-entry",
+      "windowId": "task-b-virtual-workspace",
+      "role": "treeitem",
+      "label": "task-b-file-evidence.md preview entry",
+      "description": "task-b-file-evidence.md preview entry",
+      "bounds": {
+        "x": 44,
+        "y": 168,
+        "width": 144,
+        "height": 24
+      }
+    },
+    {
+      "id": "file-list-entry",
+      "windowId": "task-b-virtual-workspace",
+      "role": "treeitem",
+      "label": "task-b-file-list.json directory evidence entry",
+      "description": "task-b-file-list.json directory evidence entry",
+      "bounds": {
+        "x": 44,
+        "y": 200,
+        "width": 152,
+        "height": 24
+      }
+    },
+    {
+      "id": "preview-pane",
+      "windowId": "task-b-virtual-workspace",
+      "role": "document",
+      "label": "Preview pane",
+      "description": "Preview pane showing saved markdown",
+      "bounds": {
+        "x": 246,
+        "y": 104,
+        "width": 548,
+        "height": 376
+      }
+    }
+  ],
+  "fileArtifacts": [
+    {
+      "id": "task-b-final-markdown",
+      "kind": "document-artifact",
+      "schemaVersion": "sciforge.computer-use.virtual-remote-artifact.v1",
+      "artifactRef": ".sciforge/vision-runs/virtual-desktop-six-step/task-b-file-evidence.md",
+      "status": "visible-and-saved"
+    },
+    {
+      "id": "task-b-file-list-artifact",
+      "kind": "directory-file-list-artifact",
+      "schemaVersion": "sciforge.computer-use.virtual-remote-artifact.v1",
+      "artifactRef": ".sciforge/vision-runs/virtual-desktop-six-step/task-b-file-list.json",
+      "dataRef": ".sciforge/vision-runs/virtual-desktop-six-step/task-b-file-list-data.json",
+      "status": "visible-and-saved"
+    }
+  ],
+  "fileList": {
+    "schemaVersion": "sciforge.computer-use.file-list-evidence.v1",
+    "artifactRef": ".sciforge/vision-runs/virtual-desktop-six-step/task-b-file-list.json",
+    "dataRef": ".sciforge/vision-runs/virtual-desktop-six-step/task-b-file-list-data.json",
+    "cwd": "/workspace/virtual-task-b",
+    "entries": [
+      {
+        "name": "task-b-file-evidence.md",
+        "type": "file"
+      },
+      {
+        "name": "task-b-file-list.json",
+        "type": "file"
+      },
+      {
+        "name": "task-b-file-list-data.json",
+        "type": "file"
+      }
+    ]
+  },
+  "expectations": {
+    "status": "completed",
+    "realWindowEvidence": false,
+    "inputAdapterStatus": "independent-simulated-input-adapter",
+    "inputChannel": "virtual-session",
+    "inputExecuted": false,
+    "sharedSystemInputUsed": false,
+    "osInputExecuted": false,
+    "finalArtifactRef": ".sciforge/vision-runs/virtual-desktop-six-step/task-b-file-evidence.md",
+    "directoryEvidence": {
+      "fileListArtifactRef": ".sciforge/vision-runs/virtual-desktop-six-step/task-b-file-list.json",
+      "fileListDataRef": ".sciforge/vision-runs/virtual-desktop-six-step/task-b-file-list-data.json"
+    },
+    "virtualInputStateRefs": {
+      "stateDir": "virtual-input-state",
+      "requiredKeys": [
+        "virtualInputStateRef",
+        "virtualPointerStateRef",
+        "virtualKeyboardStateRef"
+      ],
+      "initial": {
+        "stepIndex": 0,
+        "virtualInputStateRef": "virtual-input-state/virtual-desktop-six-step-0000-input-state.json",
+        "virtualPointerStateRef": "virtual-input-state/virtual-desktop-six-step-0000-pointer-state.json",
+        "virtualKeyboardStateRef": "virtual-input-state/virtual-desktop-six-step-0000-keyboard-state.json"
+      },
+      "final": {
+        "stepIndex": 6,
+        "virtualInputStateRef": "virtual-input-state/virtual-desktop-six-step-0006-input-state.json",
+        "virtualPointerStateRef": "virtual-input-state/virtual-desktop-six-step-0006-pointer-state.json",
+        "virtualKeyboardStateRef": "virtual-input-state/virtual-desktop-six-step-0006-keyboard-state.json"
+      }
+    }
+  },
+  "steps": [
+    {
+      "index": 1,
+      "id": "focus-editor",
+      "beforeScreen": "task-b-start",
+      "afterScreen": "task-b-editor-focused",
+      "action": {
+        "type": "click",
+        "targetDescription": "markdown editor input area"
+      },
+      "expect": {
+        "stateUpdateKind": "click",
+        "stepIndex": 1,
+        "virtualInputStateRef": "virtual-input-state/virtual-desktop-six-step-0001-input-state.json"
+      }
+    },
+    {
+      "index": 2,
+      "id": "type-markdown",
+      "beforeScreen": "task-b-editor-focused",
+      "afterScreen": "task-b-content-visible",
+      "action": {
+        "type": "type_text",
+        "textRef": ".sciforge/vision-runs/virtual-desktop-six-step/task-b-file-evidence.md"
+      },
+      "expect": {
+        "stateUpdateKind": "text-input",
+        "stepIndex": 2,
+        "virtualInputStateRef": "virtual-input-state/virtual-desktop-six-step-0002-input-state.json"
+      }
+    },
+    {
+      "index": 3,
+      "id": "save-markdown",
+      "beforeScreen": "task-b-content-visible",
+      "afterScreen": "task-b-saved",
+      "action": {
+        "type": "press_key",
+        "key": "Ctrl+S",
+        "metadata": {
+          "intent": "save",
+          "finalArtifactRef": ".sciforge/vision-runs/virtual-desktop-six-step/task-b-file-evidence.md"
+        }
+      },
+      "expect": {
+        "stateUpdateKind": "save",
+        "stepIndex": 3,
+        "virtualInputStateRef": "virtual-input-state/virtual-desktop-six-step-0003-input-state.json"
+      }
+    },
+    {
+      "index": 4,
+      "id": "focus-file-tree",
+      "beforeScreen": "task-b-saved",
+      "afterScreen": "task-b-file-tree-focused",
+      "action": {
+        "type": "click",
+        "targetDescription": "Project Files file tree"
+      },
+      "expect": {
+        "stateUpdateKind": "click",
+        "stepIndex": 4,
+        "virtualInputStateRef": "virtual-input-state/virtual-desktop-six-step-0004-input-state.json"
+      }
+    },
+    {
+      "index": 5,
+      "id": "open-preview",
+      "beforeScreen": "task-b-file-tree-focused",
+      "afterScreen": "task-b-preview-open",
+      "action": {
+        "type": "double_click",
+        "targetDescription": "task-b-file-evidence.md preview entry"
+      },
+      "expect": {
+        "stateUpdateKind": "double_click",
+        "stepIndex": 5,
+        "virtualInputStateRef": "virtual-input-state/virtual-desktop-six-step-0005-input-state.json"
+      }
+    },
+    {
+      "index": 6,
+      "id": "capture-directory-evidence",
+      "beforeScreen": "task-b-preview-open",
+      "afterScreen": "task-b-directory-evidence",
+      "action": {
+        "type": "click",
+        "targetDescription": "task-b-file-list.json directory evidence entry"
+      },
+      "expect": {
+        "stateUpdateKind": "click",
+        "stepIndex": 6,
+        "virtualInputStateRef": "virtual-input-state/virtual-desktop-six-step-0006-input-state.json"
+      }
+    }
+  ],
+  "screens": [
+    {
+      "id": "task-b-start",
+      "ref": ".sciforge/vision-runs/virtual-desktop-six-step/screen-00-start.png",
+      "summary": "Virtual workspace before focusing the markdown editor.",
+      "windowRefs": [
+        "task-b-virtual-workspace"
+      ],
+      "visibleTexts": [
+        "Task B",
+        "Untitled.md",
+        "Project Files",
+        "Editor"
+      ],
+      "elements": [
+        {
+          "id": "editor-input",
+          "role": "textarea",
+          "label": "markdown editor input area",
+          "description": "markdown editor input area",
+          "bounds": {
+            "x": 240,
+            "y": 112,
+            "width": 560,
+            "height": 360
+          }
+        }
+      ],
+      "metadata": {
+        "virtualDesktop": true,
+        "realWindowEvidence": false
+      }
+    },
+    {
+      "id": "task-b-editor-focused",
+      "ref": ".sciforge/vision-runs/virtual-desktop-six-step/screen-01-editor-focused.png",
+      "summary": "Virtual editor is focused and ready for markdown input.",
+      "visibleTexts": [
+        "Task B",
+        "Untitled.md",
+        "cursor active"
+      ],
+      "elements": [
+        {
+          "id": "editor-input",
+          "role": "textarea",
+          "label": "markdown editor input area focused",
+          "description": "markdown editor input area",
+          "bounds": {
+            "x": 240,
+            "y": 112,
+            "width": 560,
+            "height": 360
+          },
+          "state": {
+            "focused": true
+          }
+        }
+      ],
+      "metadata": {
+        "virtualDesktop": true,
+        "realWindowEvidence": false
+      }
+    },
+    {
+      "id": "task-b-content-visible",
+      "ref": ".sciforge/vision-runs/virtual-desktop-six-step/screen-02-content-visible.png",
+      "summary": "Typed markdown content is visible in the virtual editor.",
+      "visibleTexts": [
+        "# Task B Virtual Desktop Evidence",
+        "package-local fixture",
+        "directory evidence"
+      ],
+      "elements": [
+        {
+          "id": "editor-input",
+          "role": "textarea",
+          "label": "markdown editor input area with content",
+          "description": "markdown editor input area",
+          "bounds": {
+            "x": 240,
+            "y": 112,
+            "width": 560,
+            "height": 360
+          },
+          "state": {
+            "focused": true
+          }
+        }
+      ],
+      "metadata": {
+        "virtualDesktop": true,
+        "realWindowEvidence": false
+      }
+    },
+    {
+      "id": "task-b-saved",
+      "ref": ".sciforge/vision-runs/virtual-desktop-six-step/screen-03-saved.png",
+      "summary": "Virtual save indicator shows the markdown artifact has been saved.",
+      "visibleTexts": [
+        "Saved",
+        "task-b-file-evidence.md",
+        "Project Files"
+      ],
+      "elements": [
+        {
+          "id": "project-files-tree",
+          "role": "tree",
+          "label": "Project Files file tree",
+          "description": "Project Files file tree",
+          "bounds": {
+            "x": 28,
+            "y": 92,
+            "width": 176,
+            "height": 456
+          }
+        }
+      ],
+      "metadata": {
+        "virtualDesktop": true,
+        "realWindowEvidence": false,
+        "saveStatusRef": ".sciforge/vision-runs/virtual-desktop-six-step/save-status.json"
+      }
+    },
+    {
+      "id": "task-b-file-tree-focused",
+      "ref": ".sciforge/vision-runs/virtual-desktop-six-step/screen-04-file-tree-focused.png",
+      "summary": "Virtual file tree is focused and lists the saved markdown plus evidence files.",
+      "visibleTexts": [
+        "Project Files",
+        "task-b-file-evidence.md",
+        "task-b-file-list.json",
+        "task-b-file-list-data.json"
+      ],
+      "elements": [
+        {
+          "id": "saved-markdown-entry",
+          "role": "treeitem",
+          "label": "task-b-file-evidence.md preview entry",
+          "description": "task-b-file-evidence.md preview entry",
+          "bounds": {
+            "x": 44,
+            "y": 168,
+            "width": 144,
+            "height": 24
+          }
+        },
+        {
+          "id": "file-list-entry",
+          "role": "treeitem",
+          "label": "task-b-file-list.json directory evidence entry",
+          "description": "task-b-file-list.json directory evidence entry",
+          "bounds": {
+            "x": 44,
+            "y": 200,
+            "width": 152,
+            "height": 24
+          }
+        }
+      ],
+      "metadata": {
+        "virtualDesktop": true,
+        "realWindowEvidence": false
+      }
+    },
+    {
+      "id": "task-b-preview-open",
+      "ref": ".sciforge/vision-runs/virtual-desktop-six-step/screen-05-preview-open.png",
+      "summary": "Virtual preview pane shows the saved markdown artifact.",
+      "visibleTexts": [
+        "Preview",
+        "# Task B Virtual Desktop Evidence",
+        "Directory contents will be verified"
+      ],
+      "elements": [
+        {
+          "id": "file-list-entry",
+          "role": "treeitem",
+          "label": "task-b-file-list.json directory evidence entry",
+          "description": "task-b-file-list.json directory evidence entry",
+          "bounds": {
+            "x": 44,
+            "y": 200,
+            "width": 152,
+            "height": 24
+          }
+        },
+        {
+          "id": "preview-pane",
+          "role": "document",
+          "label": "Preview pane",
+          "description": "Preview pane showing saved markdown",
+          "bounds": {
+            "x": 246,
+            "y": 104,
+            "width": 548,
+            "height": 376
+          }
+        }
+      ],
+      "artifacts": {
+        "visibleArtifacts": [
+          {
+            "artifactRef": ".sciforge/vision-runs/virtual-desktop-six-step/task-b-file-evidence.md",
+            "kind": "document-artifact",
+            "schemaVersion": "sciforge.computer-use.virtual-remote-artifact.v1",
+            "status": "visible-and-saved"
+          }
+        ]
+      },
+      "metadata": {
+        "virtualDesktop": true,
+        "realWindowEvidence": false
+      }
+    },
+    {
+      "id": "task-b-directory-evidence",
+      "ref": ".sciforge/vision-runs/virtual-desktop-six-step/screen-06-directory-evidence.png",
+      "summary": "Virtual directory evidence shows the final artifact and file-list refs.",
+      "visibleTexts": [
+        "task-b-file-evidence.md",
+        "task-b-file-list.json",
+        "task-b-file-list-data.json"
+      ],
+      "elements": [
+        {
+          "id": "saved-markdown-entry",
+          "role": "treeitem",
+          "label": "task-b-file-evidence.md preview entry",
+          "description": "task-b-file-evidence.md preview entry",
+          "bounds": {
+            "x": 44,
+            "y": 168,
+            "width": 144,
+            "height": 24
+          }
+        },
+        {
+          "id": "file-list-entry",
+          "role": "treeitem",
+          "label": "task-b-file-list.json directory evidence entry",
+          "description": "task-b-file-list.json directory evidence entry",
+          "bounds": {
+            "x": 44,
+            "y": 200,
+            "width": 152,
+            "height": 24
+          }
+        }
+      ],
+      "artifacts": {
+        "finalArtifactRef": ".sciforge/vision-runs/virtual-desktop-six-step/task-b-file-evidence.md",
+        "fileList": {
+          "artifactRef": ".sciforge/vision-runs/virtual-desktop-six-step/task-b-file-list.json",
+          "dataRef": ".sciforge/vision-runs/virtual-desktop-six-step/task-b-file-list-data.json",
+          "kind": "directory-file-list-artifact",
+          "schemaVersion": "sciforge.computer-use.virtual-remote-artifact.v1",
+          "status": "visible-and-saved"
+        },
+        "visibleArtifacts": [
+          {
+            "artifactRef": ".sciforge/vision-runs/virtual-desktop-six-step/task-b-file-evidence.md",
+            "kind": "document-artifact",
+            "schemaVersion": "sciforge.computer-use.virtual-remote-artifact.v1",
+            "status": "visible-and-saved"
+          }
+        ]
+      },
+      "metadata": {
+        "directoryListingRef": ".sciforge/vision-runs/virtual-desktop-six-step/task-b-file-list.json",
+        "virtualDesktop": true,
+        "realWindowEvidence": false
+      }
+    }
+  ],
+  "plans": [
+    {
+      "type": "click",
+      "targetDescription": "markdown editor input area"
+    },
+    {
+      "type": "type_text",
+      "text": "# Task B Virtual Desktop Evidence\n\n- Created by a package-local virtual desktop scenario fixture.\n- Saved through the independent virtual input state adapter.\n- Final directory evidence is represented by file-list artifact refs.\n"
+    },
+    {
+      "type": "press_key",
+      "key": "Ctrl+S",
+      "reason": "save the virtual markdown artifact",
+      "metadata": {
+        "intent": "save",
+        "saveRef": ".sciforge/vision-runs/virtual-desktop-six-step/task-b-file-evidence.md"
+      }
+    },
+    {
+      "type": "click",
+      "targetDescription": "Project Files file tree"
+    },
+    {
+      "type": "double_click",
+      "targetDescription": "task-b-file-evidence.md preview entry"
+    },
+    {
+      "type": "click",
+      "targetDescription": "task-b-file-list.json directory evidence entry"
+    }
+  ],
+  "grounding": [
+    {
+      "ok": true,
+      "x": 520,
+      "y": 292,
+      "coordinateSpace": "virtual-desktop",
+      "confidence": 0.97
+    }
+  ],
+  "execution": [
+    {
+      "ok": true,
+      "message": "fixture focuses the virtual editor through state refs"
+    },
+    {
+      "ok": true,
+      "message": "fixture records virtual text input state"
+    },
+    {
+      "ok": true,
+      "message": "fixture records virtual save state"
+    },
+    {
+      "ok": true,
+      "message": "fixture focuses the virtual file tree"
+    },
+    {
+      "ok": true,
+      "message": "fixture opens the virtual preview entry"
+    },
+    {
+      "ok": true,
+      "message": "fixture selects the virtual directory evidence entry"
+    }
+  ],
+  "verification": [
+    {
+      "ok": true,
+      "done": false,
+      "changed": true,
+      "reason": "virtual editor focus is visible"
+    },
+    {
+      "ok": true,
+      "done": false,
+      "changed": true,
+      "reason": "virtual markdown text is visible"
+    },
+    {
+      "ok": true,
+      "done": false,
+      "changed": true,
+      "metadata": {
+        "saveStatusRef": ".sciforge/vision-runs/virtual-desktop-six-step/save-status.json"
+      },
+      "reason": "virtual save status is visible"
+    },
+    {
+      "ok": true,
+      "done": false,
+      "changed": true,
+      "reason": "virtual file tree is focused"
+    },
+    {
+      "ok": true,
+      "done": false,
+      "changed": true,
+      "reason": "virtual preview shows the saved markdown artifact"
+    },
+    {
+      "ok": true,
+      "done": true,
+      "changed": true,
+      "metadata": {
+        "finalArtifactRef": ".sciforge/vision-runs/virtual-desktop-six-step/task-b-file-evidence.md",
+        "fileListArtifactRef": ".sciforge/vision-runs/virtual-desktop-six-step/task-b-file-list.json",
+        "fileListDataRef": ".sciforge/vision-runs/virtual-desktop-six-step/task-b-file-list-data.json"
+      },
+      "reason": "virtual final artifact and directory file-list evidence are visible"
+    }
+  ],
+  "files": {
+    ".sciforge/vision-runs/virtual-desktop-six-step/save-status.json": {
+      "saved": true,
+      "target": "task-b-file-evidence.md",
+      "inputChannel": "virtual-session"
+    },
+    ".sciforge/vision-runs/virtual-desktop-six-step/task-b-file-evidence.md": "# Task B Virtual Desktop Evidence\n\n- Created by a package-local virtual desktop scenario fixture.\n- Saved through the independent virtual input state adapter.\n- Final directory evidence is represented by file-list artifact refs.\n",
+    ".sciforge/vision-runs/virtual-desktop-six-step/task-b-file-list-data.json": {
+      "cwd": "/workspace/virtual-task-b",
+      "files": [
+        "task-b-file-evidence.md",
+        "task-b-file-list.json",
+        "task-b-file-list-data.json"
+      ]
+    },
+    ".sciforge/vision-runs/virtual-desktop-six-step/task-b-file-list.json": {
+      "schemaVersion": "sciforge.computer-use.file-list-evidence.v1",
+      "artifactRef": ".sciforge/vision-runs/virtual-desktop-six-step/task-b-file-evidence.md",
+      "dataRef": ".sciforge/vision-runs/virtual-desktop-six-step/task-b-file-list-data.json",
+      "entries": [
+        {
+          "name": "task-b-file-evidence.md",
+          "type": "file"
+        },
+        {
+          "name": "task-b-file-list.json",
+          "type": "file"
+        },
+        {
+          "name": "task-b-file-list-data.json",
+          "type": "file"
+        }
+      ]
+    }
+  }
+}

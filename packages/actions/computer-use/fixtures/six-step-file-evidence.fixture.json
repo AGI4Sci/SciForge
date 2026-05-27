@@ -1,0 +1,329 @@
+{
+  "capture": [
+    {
+      "metadata": {
+        "visibleTexts": [
+          "Task B",
+          "Untitled.md",
+          "Editor"
+        ]
+      },
+      "ref": ".sciforge/vision-runs/fixture-task-b/before-1.png",
+      "summary": "Task B workspace before focusing the markdown editor."
+    },
+    {
+      "metadata": {
+        "focusRefs": [
+          ".sciforge/vision-runs/fixture-task-b/editor-focus.png"
+        ],
+        "visibleTexts": [
+          "Untitled.md",
+          "cursor active"
+        ]
+      },
+      "ref": ".sciforge/vision-runs/fixture-task-b/after-1.png",
+      "summary": "Editor is focused and ready for content."
+    },
+    {
+      "metadata": {
+        "visibleTexts": [
+          "cursor active",
+          "Project Files"
+        ]
+      },
+      "ref": ".sciforge/vision-runs/fixture-task-b/before-2.png",
+      "summary": "Focused editor before typing the task B evidence note."
+    },
+    {
+      "metadata": {
+        "visibleTexts": [
+          "# Task B File Evidence",
+          "artifact manifest",
+          "directory proof"
+        ]
+      },
+      "ref": ".sciforge/vision-runs/fixture-task-b/after-2.png",
+      "summary": "Typed content is visible in the editor."
+    },
+    {
+      "metadata": {
+        "visibleTexts": [
+          "Task B File Evidence",
+          "Save"
+        ]
+      },
+      "ref": ".sciforge/vision-runs/fixture-task-b/before-3.png",
+      "summary": "Document content is ready to save."
+    },
+    {
+      "metadata": {
+        "saveStatusRef": ".sciforge/vision-runs/fixture-task-b/save-status.json",
+        "visibleTexts": [
+          "Saved",
+          "task-b-file-evidence.md"
+        ]
+      },
+      "ref": ".sciforge/vision-runs/fixture-task-b/after-3.png",
+      "summary": "Document has been saved as a local markdown artifact."
+    },
+    {
+      "metadata": {
+        "visibleTexts": [
+          "Project Files",
+          "task-b-file-evidence.md"
+        ]
+      },
+      "ref": ".sciforge/vision-runs/fixture-task-b/before-4.png",
+      "summary": "Workspace before selecting the file tree."
+    },
+    {
+      "metadata": {
+        "focusRefs": [
+          ".sciforge/vision-runs/fixture-task-b/file-view-focus.png"
+        ],
+        "visibleTexts": [
+          "Project Files",
+          "task-b-file-evidence.md",
+          "task-b-file-list.json"
+        ]
+      },
+      "ref": ".sciforge/vision-runs/fixture-task-b/after-4.png",
+      "summary": "File view is focused and shows the saved markdown plus evidence list."
+    },
+    {
+      "metadata": {
+        "visibleTexts": [
+          "Project Files",
+          "task-b-file-evidence.md"
+        ]
+      },
+      "ref": ".sciforge/vision-runs/fixture-task-b/before-5.png",
+      "summary": "Saved markdown is selected for preview."
+    },
+    {
+      "metadata": {
+        "visibleTexts": [
+          "Preview",
+          "Task B File Evidence",
+          "Directory contents verified"
+        ]
+      },
+      "ref": ".sciforge/vision-runs/fixture-task-b/after-5.png",
+      "summary": "Preview pane shows the saved markdown artifact."
+    },
+    {
+      "metadata": {
+        "visibleTexts": [
+          "Project Files",
+          "task-b-file-evidence.md",
+          "task-b-file-list.json",
+          "task-b-file-list-data.json"
+        ]
+      },
+      "ref": ".sciforge/vision-runs/fixture-task-b/before-6.png",
+      "summary": "Directory view before final file-list evidence capture."
+    },
+    {
+      "artifacts": {
+        "fileList": {
+          "artifactRef": ".sciforge/vision-runs/fixture-task-b/task-b-file-list.json",
+          "dataRef": ".sciforge/vision-runs/fixture-task-b/task-b-file-list-data.json",
+          "kind": "directory-file-list-artifact",
+          "schemaVersion": "sciforge.computer-use.virtual-remote-artifact.v1",
+          "status": "visible-and-saved"
+        },
+        "finalArtifactRef": ".sciforge/vision-runs/fixture-task-b/task-b-file-evidence.md",
+        "visibleArtifacts": [
+          {
+            "artifactRef": ".sciforge/vision-runs/fixture-task-b/task-b-file-evidence.md",
+            "dataRef": ".sciforge/vision-runs/fixture-task-b/task-b-file-list-data.json",
+            "kind": "document-artifact",
+            "schemaVersion": "sciforge.computer-use.virtual-remote-artifact.v1",
+            "status": "visible-and-saved"
+          }
+        ]
+      },
+      "metadata": {
+        "directoryListingRef": ".sciforge/vision-runs/fixture-task-b/task-b-file-list.json",
+        "visibleTexts": [
+          "task-b-file-evidence.md",
+          "task-b-file-list.json",
+          "task-b-file-list-data.json"
+        ]
+      },
+      "ref": ".sciforge/vision-runs/fixture-task-b/after-6.png",
+      "summary": "Final directory view lists the saved artifact and file-list evidence refs."
+    }
+  ],
+  "execution": [
+    {
+      "message": "fixture focused the markdown editor",
+      "ok": true
+    },
+    {
+      "message": "fixture typed the task B evidence markdown",
+      "ok": true
+    },
+    {
+      "message": "fixture pressed the save key",
+      "ok": true
+    },
+    {
+      "message": "fixture focused the file tree",
+      "ok": true
+    },
+    {
+      "message": "fixture opened the saved markdown preview",
+      "ok": true
+    },
+    {
+      "message": "fixture opened the final directory listing evidence",
+      "ok": true
+    }
+  ],
+  "files": {
+    ".sciforge/vision-runs/fixture-task-b/save-status.json": {
+      "saved": true,
+      "target": "task-b-file-evidence.md"
+    },
+    ".sciforge/vision-runs/fixture-task-b/task-b-file-evidence.md": "# Task B File Evidence\n\n- Created from a six-action package-local Computer Use fixture.\n- Saved with keyboard input.\n- Reopened in preview before final directory evidence capture.\n",
+    ".sciforge/vision-runs/fixture-task-b/task-b-file-list-data.json": {
+      "cwd": "/workspace/task-b",
+      "files": [
+        "task-b-file-evidence.md",
+        "task-b-file-list.json",
+        "task-b-file-list-data.json"
+      ]
+    },
+    ".sciforge/vision-runs/fixture-task-b/task-b-file-list.json": {
+      "artifactRef": ".sciforge/vision-runs/fixture-task-b/task-b-file-evidence.md",
+      "dataRef": ".sciforge/vision-runs/fixture-task-b/task-b-file-list-data.json",
+      "entries": [
+        {
+          "name": "task-b-file-evidence.md",
+          "type": "file"
+        },
+        {
+          "name": "task-b-file-list.json",
+          "type": "file"
+        },
+        {
+          "name": "task-b-file-list-data.json",
+          "type": "file"
+        }
+      ],
+      "schemaVersion": "sciforge.computer-use.file-list-evidence.v1"
+    }
+  },
+  "grounding": [
+    {
+      "confidence": 0.97,
+      "metadata": {
+        "target": "editor focus"
+      },
+      "ok": true,
+      "x": 180,
+      "y": 144
+    },
+    {
+      "confidence": 0.95,
+      "metadata": {
+        "target": "project file tree"
+      },
+      "ok": true,
+      "x": 42,
+      "y": 184
+    },
+    {
+      "confidence": 0.96,
+      "metadata": {
+        "target": "saved markdown preview"
+      },
+      "ok": true,
+      "x": 118,
+      "y": 232
+    },
+    {
+      "confidence": 0.94,
+      "metadata": {
+        "target": "directory listing evidence"
+      },
+      "ok": true,
+      "x": 96,
+      "y": 268
+    }
+  ],
+  "plans": [
+    {
+      "targetDescription": "markdown editor input area",
+      "type": "click"
+    },
+    {
+      "text": "# Task B File Evidence\n\n- Created from a six-action package-local Computer Use fixture.\n- Saved with keyboard input.\n- Reopened in preview before final directory evidence capture.\n",
+      "type": "type_text"
+    },
+    {
+      "key": "Ctrl+S",
+      "reason": "save the local file",
+      "type": "press_key"
+    },
+    {
+      "targetDescription": "Project Files file tree",
+      "type": "click"
+    },
+    {
+      "targetDescription": "task-b-file-evidence.md preview/open entry",
+      "type": "double_click"
+    },
+    {
+      "targetDescription": "task-b-file-list.json directory evidence entry",
+      "type": "click"
+    }
+  ],
+  "verification": [
+    {
+      "changed": true,
+      "done": false,
+      "ok": true,
+      "reason": "editor focus is visible"
+    },
+    {
+      "changed": true,
+      "done": false,
+      "ok": true,
+      "reason": "typed markdown content is visible"
+    },
+    {
+      "changed": true,
+      "done": false,
+      "metadata": {
+        "saveStatusRef": ".sciforge/vision-runs/fixture-task-b/save-status.json"
+      },
+      "ok": true,
+      "reason": "save indicator is visible"
+    },
+    {
+      "changed": true,
+      "done": false,
+      "ok": true,
+      "reason": "file tree is focused"
+    },
+    {
+      "changed": true,
+      "done": false,
+      "ok": true,
+      "reason": "saved markdown preview is open"
+    },
+    {
+      "changed": true,
+      "done": true,
+      "metadata": {
+        "fileListArtifactRef": ".sciforge/vision-runs/fixture-task-b/task-b-file-list.json",
+        "fileListDataRef": ".sciforge/vision-runs/fixture-task-b/task-b-file-list-data.json",
+        "finalArtifactRef": ".sciforge/vision-runs/fixture-task-b/task-b-file-evidence.md"
+      },
+      "ok": true,
+      "reason": "final artifact and directory file-list evidence are visible"
+    }
+  ]
+}

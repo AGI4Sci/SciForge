@@ -27,6 +27,7 @@ from .contracts import (
 )
 from .budget import create_loop_budget_debit
 from .safety import assess_action_risk
+from .verifier import normalize_verifier_metadata
 
 
 T = TypeVar("T")
@@ -354,6 +355,45 @@ def _result(
     diagnostics: Mapping[str, Any] | None = None,
     approval_request: ApprovalRequest | None = None,
 ) -> ComputerUseResult:
+    failure_diagnostics = dict(diagnostics or {})
+    final_artifact_refs = _final_artifact_refs(steps, final_observation)
+    if status == "completed" and _requires_final_artifact_evidence(request):
+        evidence_refs = _final_artifact_evidence_refs(steps, final_observation)
+        if not evidence_refs:
+            status = "failed-with-reason"
+            reason = (
+                "Final artifact evidence is required, but completion had no final artifact "
+                "ref from the final observation or verifier metadata."
+            )
+            failure_diagnostics = {
+                **failure_diagnostics,
+                "failedStage": "final-artifact-evidence",
+                "finalArtifactEvidenceRequired": True,
+                "plannerFinalArtifactRefs": final_artifact_refs,
+            }
+            final_artifact_refs = []
+        else:
+            final_artifact_refs = evidence_refs
+    if status == "completed" and _requires_directory_evidence(request):
+        directory_evidence_refs = _directory_evidence_refs(steps, final_observation)
+        final_screenshot_ref = _final_observation_screenshot_ref(final_observation)
+        if not final_artifact_refs or not final_screenshot_ref or not directory_evidence_refs["artifactRefs"] or not directory_evidence_refs["dataRefs"]:
+            status = "failed-with-reason"
+            reason = (
+                "Directory evidence is required, but completion did not include a final "
+                "artifact ref, current final observation screenshot, and file-list artifact/data refs."
+            )
+            failure_diagnostics = {
+                **failure_diagnostics,
+                "failedStage": "directory-evidence",
+                "directoryEvidenceRequired": True,
+                "finalArtifactRefs": final_artifact_refs,
+                "finalObservationScreenshotRef": final_screenshot_ref,
+                "fileListArtifactRefs": directory_evidence_refs["artifactRefs"],
+                "fileListDataRefs": directory_evidence_refs["dataRefs"],
+                "plannerFinalArtifactRefs": _final_artifact_refs(steps, final_observation),
+            }
+            final_artifact_refs = []
     metrics = _result_metrics(steps)
     budget_debit = create_loop_budget_debit(request, steps, status, metrics)
     budget_debit_refs = (budget_debit["debitId"],)
@@ -368,9 +408,9 @@ def _result(
         reason=reason,
         steps=steps_with_refs,
         final_observation=final_observation,
-        final_artifact_refs=tuple(_final_artifact_refs(steps_with_refs, final_observation)),
+        final_artifact_refs=tuple(final_artifact_refs),
         approval_request=approval_request,
-        failure_diagnostics=dict(diagnostics or {}),
+        failure_diagnostics=failure_diagnostics,
         metrics=metrics,
         trace_refs=(),
         budget_debits=(budget_debit,),
@@ -417,6 +457,77 @@ def _final_artifact_refs(
     return _unique_strings(ref for ref in refs if _looks_like_final_artifact_ref(ref))
 
 
+def _final_artifact_evidence_refs(
+    steps: Sequence[LoopStep],
+    final_observation: Observation | None,
+) -> list[str]:
+    refs: list[str] = []
+    if final_observation is not None:
+        refs.extend(_refs_from_final_artifact_fields(final_observation.artifacts))
+        refs.extend(_refs_from_final_artifact_fields(final_observation.metadata))
+        refs.extend(_refs_from_visible_artifacts(final_observation.artifacts))
+        refs.extend(_refs_from_visible_artifacts(final_observation.metadata))
+    for step in reversed(steps):
+        if step.verification is not None:
+            refs.extend(_refs_from_final_artifact_fields(step.verification.metadata))
+        if refs:
+            break
+    return _unique_strings(ref for ref in refs if _looks_like_final_artifact_ref(ref))
+
+
+def _requires_final_artifact_evidence(request: ComputerUseRequest) -> bool:
+    return _metadata_requires_final_artifact(request.metadata)
+
+
+def _requires_directory_evidence(request: ComputerUseRequest) -> bool:
+    return _metadata_requires_directory_evidence(request.metadata)
+
+
+def _metadata_requires_final_artifact(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            normalized = str(key).replace("_", "").replace("-", "").lower()
+            if normalized in {"requiresfinalartifact", "finalartifactrequired"} and _truthy_metadata_flag(item):
+                return True
+            if normalized in {"artifactpolicy", "acceptance"} and isinstance(item, Mapping):
+                if _metadata_requires_final_artifact(item):
+                    return True
+        return False
+    if isinstance(value, (list, tuple)):
+        return any(_metadata_requires_final_artifact(item) for item in value)
+    return False
+
+
+def _metadata_requires_directory_evidence(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            normalized = str(key).replace("_", "").replace("-", "").lower()
+            if normalized in {
+                "requiresdirectoryevidence",
+                "directoryevidencerequired",
+                "filelistevidencerequired",
+                "requiresfilelistevidence",
+            } and _truthy_metadata_flag(item):
+                return True
+            if normalized in {"artifactpolicy", "acceptance"} and isinstance(item, Mapping):
+                if _metadata_requires_directory_evidence(item):
+                    return True
+        return False
+    if isinstance(value, (list, tuple)):
+        return any(_metadata_requires_directory_evidence(item) for item in value)
+    return False
+
+
+def _truthy_metadata_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "required", "require"}
+    return False
+
+
 def _refs_from_final_artifact_fields(value: Any) -> list[str]:
     refs: list[str] = []
     if isinstance(value, Mapping):
@@ -452,7 +563,91 @@ def _refs_from_visible_artifacts(value: Any) -> list[str]:
     return _unique_strings(refs)
 
 
+def _final_observation_screenshot_ref(final_observation: Observation | None) -> str | None:
+    if final_observation is None:
+        return None
+    ref = final_observation.ref.strip()
+    if _looks_like_screenshot_ref(ref):
+        return ref
+    return None
+
+
+def _directory_evidence_refs(
+    steps: Sequence[LoopStep],
+    final_observation: Observation | None,
+) -> dict[str, list[str]]:
+    artifact_refs: list[str] = []
+    data_refs: list[str] = []
+    if final_observation is not None:
+        refs = _refs_from_directory_evidence_fields(final_observation.artifacts)
+        artifact_refs.extend(refs["artifactRefs"])
+        data_refs.extend(refs["dataRefs"])
+        refs = _refs_from_directory_evidence_fields(final_observation.metadata)
+        artifact_refs.extend(refs["artifactRefs"])
+        data_refs.extend(refs["dataRefs"])
+    for step in reversed(steps):
+        if step.verification is None:
+            continue
+        refs = _refs_from_directory_evidence_fields(step.verification.metadata)
+        artifact_refs.extend(refs["artifactRefs"])
+        data_refs.extend(refs["dataRefs"])
+        if artifact_refs or data_refs:
+            break
+    return {
+        "artifactRefs": _unique_strings(ref for ref in artifact_refs if _looks_like_artifact_or_data_evidence_ref(ref)),
+        "dataRefs": _unique_strings(ref for ref in data_refs if _looks_like_artifact_or_data_evidence_ref(ref)),
+    }
+
+
+def _refs_from_directory_evidence_fields(value: Any, *, in_directory_record: bool = False) -> dict[str, list[str]]:
+    artifact_refs: list[str] = []
+    data_refs: list[str] = []
+    if isinstance(value, Mapping):
+        record_context = in_directory_record or _looks_like_directory_evidence_record(value)
+        for key, item in value.items():
+            normalized = str(key).replace("_", "").replace("-", "").lower()
+            key_context = record_context or any(token in normalized for token in ("filelist", "directorylisting", "directoryevidence"))
+            if key_context:
+                if normalized in {"dataref", "datarefs", "rawref", "rawrefs", "filelistdataref", "filelistdatarefs"}:
+                    data_refs.extend(_refs_inside(item))
+                elif normalized in {
+                    "artifactref",
+                    "artifactrefs",
+                    "outputref",
+                    "outputrefs",
+                    "ref",
+                    "refs",
+                    "path",
+                    "filelistartifactref",
+                    "filelistartifactrefs",
+                    "directorylistingref",
+                    "directorylistingrefs",
+                }:
+                    artifact_refs.extend(_refs_inside(item))
+            if isinstance(item, (Mapping, list, tuple)):
+                nested = _refs_from_directory_evidence_fields(item, in_directory_record=key_context)
+                artifact_refs.extend(nested["artifactRefs"])
+                data_refs.extend(nested["dataRefs"])
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            nested = _refs_from_directory_evidence_fields(item, in_directory_record=in_directory_record)
+            artifact_refs.extend(nested["artifactRefs"])
+            data_refs.extend(nested["dataRefs"])
+    return {
+        "artifactRefs": _unique_strings(artifact_refs),
+        "dataRefs": _unique_strings(data_refs),
+    }
+
+
+def _looks_like_directory_evidence_record(value: Mapping[str, Any]) -> bool:
+    schema = str(value.get("schemaVersion") or value.get("schema_version") or "").lower()
+    kind = str(value.get("kind") or value.get("type") or "").lower()
+    return "file-list" in schema or "filelist" in schema or "directory" in schema or "file-list" in kind or "filelist" in kind or "directory" in kind
+
+
 def _looks_like_visible_artifact_record(value: Mapping[str, Any]) -> bool:
+    if _looks_like_directory_evidence_record(value):
+        return False
     schema = str(value.get("schemaVersion") or value.get("schema_version") or "")
     delivery = str(value.get("delivery") or "")
     status = str(value.get("status") or "")
@@ -490,6 +685,15 @@ def _looks_like_final_artifact_ref(value: str) -> bool:
         text.startswith((".sciforge/", "/"))
         or text.lower().endswith((".json", ".md", ".txt", ".csv", ".tsv", ".xlsx", ".ppt", ".pptx", ".pdf", ".doc", ".docx", ".odt", ".ods"))
     )
+
+
+def _looks_like_artifact_or_data_evidence_ref(value: str) -> bool:
+    return _looks_like_final_artifact_ref(value)
+
+
+def _looks_like_screenshot_ref(value: str) -> bool:
+    text = value.strip().lower()
+    return text.endswith((".png", ".jpg", ".jpeg", ".webp")) or text.startswith(("screenshot:", "capture:"))
 
 
 def _looks_like_control_evidence_ref(value: str) -> bool:
@@ -638,14 +842,22 @@ def _coerce_execution(value: ExecutionOutcome | Mapping[str, Any]) -> ExecutionO
 
 def _coerce_verification(value: Verification | Mapping[str, Any]) -> Verification:
     if isinstance(value, Verification):
-        return value
+        try:
+            metadata = normalize_verifier_metadata(value.metadata)
+        except ValueError as exc:
+            return Verification(ok=False, done=False, reason=str(exc), metadata={})
+        return replace(value, metadata=metadata)
+    try:
+        metadata = normalize_verifier_metadata(value.get("metadata") or {})
+    except ValueError as exc:
+        return Verification(ok=False, done=False, reason=str(exc), metadata={})
     return Verification(
         ok=bool(value.get("ok", value.get("status") != "failed")),
         done=bool(value.get("done", False)),
         reason=str(value.get("reason") or ""),
         confidence=value.get("confidence"),
         changed=value.get("changed"),
-        metadata=value.get("metadata") or {},
+        metadata=metadata,
     )
 
 
@@ -786,18 +998,41 @@ def _looks_like_app_private_shortcut(plan: ActionPlan) -> bool:
         return True
     if str(plan.metadata.get("shortcutScope") or "").lower() == "app-private":
         return True
-    keys = tuple(key.strip().lower() for key in plan.keys if key.strip())
+    keys = _normalized_hotkey_tokens(plan)
     if not keys:
         return True
-    normalized = tuple("command" if key in {"cmd", "meta"} else key for key in keys)
-    combo = "+".join(normalized)
+    combo = "+".join(keys)
     return combo not in {
         "command+n",
+        "command+s",
         "command+space",
         "command+tab",
         "ctrl+n",
+        "ctrl+s",
         "alt+tab",
     }
+
+
+def _normalized_hotkey_tokens(plan: ActionPlan) -> tuple[str, ...]:
+    raw_keys: Sequence[str]
+    if plan.keys:
+        raw_keys = plan.keys
+    elif plan.key:
+        raw_keys = tuple(part for part in str(plan.key).replace("-", "+").split("+"))
+    else:
+        raw_keys = ()
+    aliases = {
+        "cmd": "command",
+        "meta": "command",
+        "super": "command",
+        "control": "ctrl",
+        "option": "alt",
+    }
+    return tuple(
+        aliases.get(key.strip().lower(), key.strip().lower())
+        for key in raw_keys
+        if key.strip()
+    )
 
 
 def _planner_contract_reason(issue: PlannerContractIssue, plan: ActionPlan | None = None) -> str:

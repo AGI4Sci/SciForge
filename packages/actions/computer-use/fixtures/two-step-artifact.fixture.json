@@ -1,0 +1,66 @@
+{
+  "capture": [
+    {
+      "ref": ".sciforge/vision-runs/fixture/before-1.png",
+      "summary": "Initial fixture screen before selecting the local note editor for a Computer Use CLI note."
+    },
+    {
+      "ref": ".sciforge/vision-runs/fixture/after-1.png",
+      "summary": "Fixture screen after the local note editor is focused."
+    },
+    {
+      "ref": ".sciforge/vision-runs/fixture/before-2.png",
+      "summary": "Fixture screen before entering note content."
+    },
+    {
+      "artifacts": {
+        "finalArtifactRef": ".sciforge/vision-runs/fixture/cu-cli-note.md"
+      },
+      "ref": ".sciforge/vision-runs/fixture/after-2.png",
+      "summary": "Fixture screen showing the saved cu-cli-note.md artifact."
+    }
+  ],
+  "execution": [
+    {
+      "message": "fixture focused local note editor",
+      "ok": true
+    },
+    {
+      "message": "fixture typed note content",
+      "ok": true
+    }
+  ],
+  "files": {
+    ".sciforge/vision-runs/fixture/cu-cli-note.md": "# Computer Use CLI Note\n\nTimestamp: 2026-05-26T15:52:27Z\n\n- [x] package-local host ports\n- [x] refs-first trace\n- [x] final artifact evidence\n"
+  },
+  "grounding": [
+    {
+      "confidence": 0.95,
+      "ok": true,
+      "x": 12,
+      "y": 34
+    }
+  ],
+  "plans": [
+    {
+      "targetDescription": "local note editor",
+      "type": "click"
+    },
+    {
+      "text": "# Computer Use CLI Note\n\nTimestamp: 2026-05-26T15:52:27Z\n\n- [x] package-local host ports\n- [x] refs-first trace\n- [x] final artifact evidence\n",
+      "type": "type_text"
+    }
+  ],
+  "verification": [
+    {
+      "done": false,
+      "ok": true,
+      "reason": "local note editor is focused"
+    },
+    {
+      "done": true,
+      "ok": true,
+      "reason": "final artifact is visible and saved"
+    }
+  ]
+}

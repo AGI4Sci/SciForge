@@ -1,0 +1,25 @@
+{
+  "capture": [
+    {
+      "metadata": {
+        "visibleTexts": [
+          "Save",
+          "Save As",
+          "AutoSave"
+        ]
+      },
+      "ref": ".sciforge/vision-runs/ambiguous/before.png",
+      "summary": "Fixture screen with multiple visually similar Save targets."
+    }
+  ],
+  "grounding": {
+    "ok": false,
+    "reason": "ambiguous target: multiple matching Save buttons"
+  },
+  "plans": [
+    {
+      "targetDescription": "Save button",
+      "type": "click"
+    }
+  ]
+}

@@ -4,17 +4,20 @@
   "version": "0.1.0",
   "kind": "action",
   "displayName": "SciForge Computer Use",
-  "summary": "面向 GUI 的 sense-agnostic action loop，通过目标窗口观察、grounding、执行和验证完成通用电脑操作。",
+  "summary": "面向 GUI 的 refs-first Computer Use action loop；真实桌面完成必须由 host-provided target-bound ports 和 evidence 证明。",
   "domains": ["gui", "automation", "workspace"],
   "triggers": ["operate GUI", "click", "type", "scroll", "press key", "window-bound action"],
   "antiTriggers": ["vision-only question", "artifact rendering", "schema-only validation"],
-  "integrationLevel": "native-runtime",
+  "integrationLevel": "package-local-host-ports",
   "entrypoint": {
     "type": "python-package",
     "package": "sciforge-computer-use",
     "module": "sciforge_computer_use",
     "symbol": "run_task",
     "cli": "python -m sciforge_computer_use --request-json '<json>' --host-port-stdio",
+    "discoveryProbe": "python -m sciforge_computer_use.plugin_probe --output-dir <dir> --run-fixture",
+    "virtualDesktopProbe": "python -m sciforge_computer_use.virtual_desktop_probe --scenario-file <file> --output-dir <dir>",
+    "targetBoundWindowHostProbe": "python -m sciforge_computer_use.target_bound_window_host_probe --scenario-file <file> --output-dir <dir>",
     "path": "packages/actions/computer-use",
     "interface": "runTask(request, hostPorts)",
     "notes": "Computer Use Python action loop、contract、safety 和 trace 的唯一物理真相源。"
@@ -30,7 +33,16 @@
         "max_steps": { "type": "integer", "minimum": 1, "default": 12 },
         "risk_policy": { "enum": ["fail-closed", "allow-confirmed"] },
         "approval_ref": { "type": "string" },
-        "providers": { "type": "object" },
+        "providers": {
+          "type": "object",
+          "properties": {
+            "sense": { "type": "string" },
+            "grounder": { "type": "string" },
+            "executor": { "type": "string" },
+            "verifier": { "type": "string" }
+          },
+          "additionalProperties": true
+        },
         "window_target": { "type": "object" },
         "metadata": { "type": "object" }
       }
@@ -55,6 +67,13 @@
           "approval_request": { "type": ["object", "null"] },
           "failureDiagnostics": { "type": "object" },
           "failure_diagnostics": { "type": "object" },
+          "targetPointerStateRef": { "type": ["string", "null"] },
+          "targetKeyboardStateRef": { "type": ["string", "null"] },
+          "targetInputEventLogRef": { "type": ["string", "null"] },
+          "pointerEventLogRef": { "type": ["string", "null"] },
+          "keyboardEventLogRef": { "type": ["string", "null"] },
+          "inputEventLogRef": { "type": ["string", "null"] },
+          "artifactMetadata": { "type": "object" },
           "metrics": { "type": "object" },
           "budgetDebits": { "type": "array" },
           "budgetDebitRefs": { "type": "array", "items": { "type": "string" } }
@@ -102,22 +121,59 @@
     "policySource": "packages/actions/computer-use/provider-policy.ts",
     "requiredPorts": ["capture", "plan", "locate", "execute", "verify"],
     "optionalPorts": ["crop", "query", "writeTrace", "emitEvent"],
+    "realDesktopEvidenceRequiredPorts": ["capture", "plan", "locate", "execute", "verify", "writeTrace", "emitEvent"],
     "forbiddenPorts": ["requestApproval", "gui.present", "gui.ask_user"],
-      "providerIdPolicy": {
-        "capture": ["display-capture", "target-window-capture"],
-        "crop": "host-focus-region-crop",
-        "plan": "runtime-codex-tui-text-planner",
-        "locate": ["kv-ground", "host-focus-region-crop"],
-        "actionRequestExecutor": ["dry-run-generic-gui-executor", "<desktopPlatform>-host-port-executor"],
-        "execute": ["dry-run-generic-gui-executor", "<desktopPlatform>-generic-gui-executor"],
-        "verify": "layered-vision-verifier",
-        "writeTrace": "workspace-file-ref-trace-writer",
-        "emitEvent": "workspace-runtime-events"
+    "providerIdPolicy": {
+      "capture": ["display-capture", "target-window-capture"],
+      "crop": "host-focus-region-crop",
+      "plan": "runtime-codex-tui-text-planner",
+      "locate": ["kv-ground", "host-focus-region-crop"],
+      "actionRequestExecutor": ["dry-run-generic-gui-executor", "package-target-bound-window-executor", "<desktopPlatform>-host-port-executor"],
+      "execute": ["dry-run-generic-gui-executor", "virtual-input-state-executor", "package-target-bound-window-executor", "<desktopPlatform>-generic-gui-executor"],
+      "verify": "layered-vision-verifier",
+      "writeTrace": "workspace-file-ref-trace-writer",
+      "emitEvent": "workspace-runtime-events"
+    },
+    "executorAdapterContract": {
+      "schemaRef": "sciforge.computer-use.virtual-input-adapter-manifest.v1",
+      "requiredStatus": "independent-simulated-input-adapter",
+      "requiredSideEffects": {
+        "realOsInput": false,
+        "sharedSystemInput": false,
+        "systemPointerMove": false,
+        "systemKeyboardEvent": false
       },
+      "stateRefs": ["virtualInputStateRef", "virtualPointerStateRef", "virtualKeyboardStateRef", "targetPointerStateRef", "targetKeyboardStateRef", "targetInputEventLogRef"],
+      "bindingManifestSchema": "sciforge.computer-use.input-adapter-target-binding.v1",
+      "targetBoundManifestBuilder": "sciforge_computer_use.virtual_input_adapter.build_target_bound_input_adapter_manifest",
+      "adapterManifestValidator": "sciforge_computer_use.virtual_input_adapter.validate_input_adapter_manifest_for_real_desktop",
+      "adapterManifestValidationSchema": "sciforge.computer-use.input-adapter-manifest-validation.v1",
+      "bindingHelper": "sciforge_computer_use.virtual_input_adapter.build_input_adapter_target_binding_manifest",
+      "bindingValidator": "sciforge_computer_use.virtual_input_adapter.validate_input_adapter_target_binding_manifest",
+      "bindingValidationSchema": "sciforge.computer-use.input-adapter-target-binding-validation.v1",
+      "bindingRequiredRefs": ["adapterManifestRef", "targetWindowRef", "evidenceRefs"],
+      "bindingClaimLimit": "Target binding validation is required for real desktop preflight readiness, but is not B/C/VLM completion evidence.",
+      "targetBindingRequiredForRealDesktopEvidence": true,
+      "readyInputChannels": ["isolated-window", "target-bound-simulated-input", "independent-simulated-input-adapter", "remote-desktop-isolated-session"],
+      "diagnosticExecutorProvidersBlockedForReady": ["native-stdio-fail-closed-executor", "fail-closed-executor", "diagnostic-fail-closed-executor", "virtual-input-state-executor"],
+      "shortcutExecutorProvidersBlockedForReady": ["shell-direct-file-write", "accessibility-tree", "ax", "applescript", "dom", "playwright", "private-api", "clipboard"],
+      "virtualOrDiagnosticInputChannelsBlockedForReady": ["virtual-session", "simulated", "state-only", "diagnostic-only"],
+      "diagnosticOnlyUntilHostBound": true
+    },
     "stdioProtocol": {
       "callSchema": "sciforge.computer-use.host-port-call.v1",
       "resultSchema": "sciforge.computer-use.host-port-result.v1",
       "finalResultSchema": "sciforge.computer-use.cli-final-result.v1"
+    },
+    "diagnosticProbes": {
+      "pluginDiscovery": "python -m sciforge_computer_use.plugin_probe --output-dir <dir> --run-fixture",
+      "scriptedHostPorts": "python -m sciforge_computer_use.host_ports_probe --probe-file <file> --output-dir <dir>",
+      "nativePreflight": "python -m sciforge_computer_use.desktop_preflight --output-dir <dir>",
+      "nativeCaptureOnly": "python -m sciforge_computer_use.native_capture_probe --output-dir <dir>",
+      "nativeFailClosedStdio": "python -m sciforge_computer_use.native_host_ports_probe --request-json '<json>' --output-dir <dir>",
+      "virtualDesktopStateOnly": "python -m sciforge_computer_use.virtual_desktop_probe --scenario-file <file> --output-dir <dir> [--source-repair-manifest <blocked-repair-manifest.json>]",
+      "targetBoundWindowHost": "python -m sciforge_computer_use.target_bound_window_host_probe --request-json '<json>' --scenario-file <file> --output-dir <dir> [--source-repair-manifest <blocked-repair-manifest.json>]",
+      "semanticVerifier": "python -m sciforge_computer_use.semantic_verifier_probe --output-dir <dir> [--diagnose-provider]"
     },
     "traceHandoff": {
       "schemaRef": "sciforge.computer-use.trace-handoff.v1",
@@ -125,7 +181,7 @@
       "approvalTarget": "computer-use.approval-request",
       "storagePolicy": "refs-first",
       "payloadPolicy": "refs-and-compact-summary-only",
-      "forbiddenInlinePayloads": ["rawScreenshot", "base64", "data:image"]
+      "forbiddenInlinePayloads": ["rawScreenshot", "base64", "data:image", "rawProviderPayload", "requestBody", "apiKey", "inlineImage"]
     },
     "notes": "Computer Use action provider consumes host-owned platform ports. It never imports GUI implementation and never opens confirmation UI directly."
   },
@@ -144,6 +200,119 @@
     "redaction": ["typedText", "credentials", "privateWindowTitle", "rawScreenshot"],
     "retention": "trace 只保存 refs、紧凑摘要和结构化步骤，大 payload 进入 artifact store。"
   },
+  "repairManifestContract": {
+    "manifestSchemaRef": "sciforge.computer-use.repair-manifest.v1",
+    "validationSchemaRef": "sciforge.computer-use.repair-manifest-validation.v1",
+    "validator": "sciforge_computer_use.repair_manifest.validate_repair_manifest",
+    "requiredRefs": ["resultRef", "traceRefs", "screenshotRefs or finalObservationRef"],
+    "requiredFlags": {
+      "realWindowEvidence": "explicit boolean",
+      "diagnosticOnly": "explicit boolean",
+      "inputExecuted": "explicit boolean",
+      "sharedSystemInputUsed": "explicit boolean",
+      "rawPayloadWritten": false,
+      "inlineImageWritten": false
+    },
+    "validationOptions": {
+      "requireExistingRefs": "optional boolean; when true result, trace, screenshot, observation, artifact, and probe refs must point to existing local files"
+    },
+    "claimLimit": "Blocked repair manifests are refs-first failure diagnostics. Package-local failures with realWindowEvidence=false must remain diagnosticOnly=true and cannot be promoted into real-window success evidence."
+  },
+  "repairReplayContract": {
+    "evidenceSchemaRef": "sciforge.computer-use.repair-replay-evidence.v1",
+    "validationSchemaRef": "sciforge.computer-use.repair-replay-evidence-validation.v1",
+    "builder": "sciforge_computer_use.trace.build_repair_replay_evidence",
+    "validator": "sciforge_computer_use.trace.validate_repair_replay_evidence",
+    "requiredRefs": ["sourceFailureManifestRef", "replayResultRef", "replayTraceRefs"],
+    "validationOptions": {
+      "requireExistingRefs": "optional boolean; when true source failure, replay result, and replay trace refs must point to existing local files"
+    },
+    "claimLimit": "Package-local repair replay evidence can validate disambiguation replay plumbing only; realWindowEvidence=false cannot close PROJECT C or B and is unrelated to VLM completion."
+  },
+  "viewportRecoveryContract": {
+    "evidenceSchemaRef": "sciforge.computer-use.viewport-recovery-evidence.v1",
+    "validationSchemaRef": "sciforge.computer-use.viewport-recovery-evidence-validation.v1",
+    "builder": "sciforge_computer_use.trace.build_viewport_recovery_evidence",
+    "validator": "sciforge_computer_use.trace.validate_viewport_recovery_evidence",
+    "requiredRefs": ["sourceFailureManifestRef", "replayResultRef", "replayTraceRefs", "scrollStateBeforeRef", "scrollStateAfterRef"],
+    "validationOptions": {
+      "requireExistingRefs": "optional boolean; when true source failure, replay result, replay trace, and scroll state refs must point to existing local files"
+    },
+    "claimLimit": "Package-local viewport recovery evidence can validate offscreen scroll recovery plumbing only; realWindowEvidence=false cannot close PROJECT C or B and is unrelated to VLM completion."
+  },
+  "targetBoundRealWindowProbeContract": {
+    "evidenceSchemaRef": "sciforge.computer-use.target-bound-real-window-probe-evidence.v1",
+    "validationSchemaRef": "sciforge.computer-use.target-bound-real-window-probe-evidence-validation.v1",
+    "builder": "sciforge_computer_use.target_bound_evidence.build_target_bound_real_window_probe_evidence",
+    "validator": "sciforge_computer_use.target_bound_evidence.validate_target_bound_real_window_probe_evidence",
+    "requiredRefs": ["preflightRef", "resultRef", "traceRefs", "realWindowEvidenceRefs", "initialScreenshotRef", "finalScreenshotRef", "finalArtifactRef"],
+    "requiredFlags": {
+      "preflightStatus": "ready",
+      "realWindowEvidence": true,
+      "diagnosticOnly": false,
+      "inputExecuted": true,
+      "executeFailClosed": false,
+      "sharedSystemInputUsed": false,
+      "systemPointerMoved": false,
+      "systemKeyboardEventsSent": false
+    },
+    "workflowRequirements": {
+      "minimumActionCount": "optional integer; Task B real-window evidence uses at least 6",
+      "requiredInputModalities": "optional array of pointer and/or keyboard; validator must read both resolved result/trace steps and target-bound input event refs, including targetPointerStateRef, targetKeyboardStateRef, targetInputEventLogRef or their pointer/keyboard/inputEventLogRef aliases",
+      "requiresCurrentStepScreenshots": "optional boolean; when true each step must carry a current screenshot or observation ref",
+      "forbidPriorRoundCompletionEvidence": "optional boolean; when true prior-round ledger/historical done markers are rejected",
+      "requiresDirectoryEvidence": "optional boolean; when true fileListArtifactRef and fileListDataRef must be present and visible in result/trace refs"
+    },
+    "packageOwnedProbe": "sciforge_computer_use.target_bound_window_host_probe",
+    "declaredArtifactOutput": {
+      "selector": "artifactSpec.kind or finalArtifactRef extension",
+      "supportedFormats": ["text", "markdown", "csv", "pptx"],
+      "pptxValidationSchemaRef": "sciforge.computer-use.pptx-validation.v1",
+      "pptxValidationRef": "written next to the final .pptx artifact when a slide-deck artifact is saved",
+      "causalityFields": ["artifactMetadata.finalArtifactRef", "artifactMetadata.savedByActionIndex", "artifactMetadata.savedByInputModality", "artifactMetadata.artifactValidationRef", "artifactMetadata.pptxValidationRef"],
+      "causalityPolicy": "When artifact metadata is present, finalArtifactRef must match evidence finalArtifactRef, savedByActionIndex must point to a generic save or Ctrl/Cmd+S action, and the save action must have a matching keyboard event."
+    },
+    "claimLimit": "This contract validates refs from an actual target-bound run. The package-owned target-bound window host can produce package-level real-window evidence only when its run writes ready preflight, target binding validation, initial/final screenshots, trace/result refs, inputExecuted=true, and no OS/shared/system input side effects."
+  },
+  "semanticVerifierProbeContract": {
+    "summarySchemaRef": "sciforge.computer-use.semantic-verifier-summary.v1",
+    "traceSchemaRef": "sciforge.computer-use.semantic-verifier-trace.v1",
+    "diagnosticsSchemaRef": "sciforge.computer-use.provider-diagnostics.v1",
+    "probe": "sciforge_computer_use.semantic_verifier_probe",
+    "configSourcePolicy": "Reads ignored local visionLLM config only; manifests may record config refs, model id, and URL origin but never API keys.",
+    "endpointResolution": {
+      "acceptedBaseUrlKinds": ["api-base", "chat-completions-endpoint", "responses-endpoint", "models-endpoint"],
+      "derivedEndpoints": ["models", "chatCompletions", "responses"],
+      "recordedEndpointFields": ["method", "path"],
+      "forbiddenEndpointFields": ["authorization", "query-secrets", "request-body", "data-url"]
+    },
+    "attemptStages": ["text-preflight", "multimodal-request"],
+    "textPreflightVariants": ["text-only", "text-only-minimal", "responses-text-only", "responses-text-only-no-temperature"],
+    "multimodalVariants": [
+      "chat-image-url-object",
+      "chat-image-url-string",
+      "responses-input-image",
+      "chat-image-url-object-no-temperature",
+      "chat-image-url-string-no-temperature",
+      "responses-input-image-no-temperature"
+    ],
+    "diagnosticRequests": ["originGet", "modelsGet", "textChat", "textResponses"],
+    "completionVerdictPolicy": "Provider output must parse to JSON with verdict=pass before the probe status can become completed; fail, unknown, or non-JSON output writes a blocked manifest.",
+    "diagnosticRecordFields": ["method", "path", "elapsedMs", "retryable", "errorCategory", "diagnosticTimeoutSeconds", "bodyKind", "bytesRead", "bodyTruncated", "modelCount", "configuredModelPresent"],
+    "modelsDiagnosticPolicy": "The /models diagnostic may summarize body kind, bytes read, model count, and whether the configured model is present; it must not persist raw model ids or raw response bodies.",
+    "projectEvidenceEligibilityFields": ["expectedProjectModelId", "expectedProjectModelIds", "responseModelId", "configuredModelMatchesProject", "responseModelMatchesConfigured", "modelPresenceVerified", "projectVlmEvidenceEligible", "projectVlmEvidenceBlockers"],
+    "projectEvidenceModels": ["qwen3.6-plus", "qwen3.6-plus-2026-04-02", "kimi-k2.6"],
+    "projectEvidenceEligibilityPolicy": "A completed semantic verifier probe is a PROJECT VLM eligible evidence candidate only when the configured model is in projectEvidenceModels, the provider response model does not contradict it, and /models diagnostics verify configuredModelPresent=true.",
+    "transportFallback": "Uses a package-local raw HTTP/1.1 non-streaming transport for Chat/Responses candidates and diagnostics, with urllib retained as fallback for retryable raw transport failures.",
+    "responseCompatibilityHelper": "sciforge_computer_use.response_compat.extract_provider_text",
+    "responseCompatibilityHelpers": {
+      "textExtraction": "sciforge_computer_use.response_compat.extract_provider_text",
+      "responsesToChatCompletions": "sciforge_computer_use.response_compat.responses_to_chat_completions",
+      "chatCompletionsToResponses": "sciforge_computer_use.response_compat.chat_completions_to_responses"
+    },
+    "forbiddenInlinePayloads": ["apiKey", "rawProviderPayload", "requestBody", "data:image", "base64", "inlineImage"],
+    "claimLimit": "Package-local fake HTTP provider tests and provider diagnostics validate wire-shape and refs-first metadata; PROJECT VLM evidence is eligible only after a real projectEvidenceModels provider call returns a completed refs-first semantic verifier summary with model presence verified."
+  },
   "verifierContract": {
     "required": true,
     "defaultVerifierTypes": ["environment", "human"],
@@ -159,7 +328,17 @@
       "reward": "number?",
       "confidence": "number",
       "critique": "string?",
-      "repairHints": "string[]"
+      "repairHints": "string[]",
+      "metadata": {
+        "semanticVerifier": "refs-first optional summary",
+        "endpointDiagnostics": "method/path/elapsed/retry/error-category only"
+      }
+    },
+    "semanticVerifierPolicy": {
+      "storagePolicy": "refs-first",
+      "optional": true,
+      "forbiddenInlinePayloads": ["apiKey", "rawProviderPayload", "requestBody", "inlineImage", "data:image", "base64"],
+      "fakeOrDiagnosticOnlyClaimLimit": "A fake provider or diagnostic-only semantic summary cannot own execution, coordinates, completion, or artifact-producing success."
     }
   },
   "failureModes": [
@@ -190,6 +369,13 @@
       "recoverable": true,
       "description": "执行后验证未通过或不确定。",
       "repairHints": ["把 verification result 带入下一轮", "重新规划动作", "请求人类判断"]
+    },
+    {
+      "code": "semantic-provider-unavailable",
+      "stage": "verification/provider-diagnostic",
+      "recoverable": true,
+      "description": "可选 semantic/VLM provider 不可用、超时、认证失败或 endpoint 诊断被阻断。",
+      "repairHints": ["检查 ignored local visionLLM config", "查看 provider diagnostics 的 method/path/errorCategory", "保持 deterministic verifier 结果为主"]
     }
   ]
 }

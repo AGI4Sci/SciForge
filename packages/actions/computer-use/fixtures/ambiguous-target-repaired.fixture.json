@@ -1,0 +1,49 @@
+{
+  "capture": [
+    {
+      "metadata": {
+        "visibleTexts": [
+          "Save",
+          "Save As",
+          "AutoSave"
+        ]
+      },
+      "ref": ".sciforge/vision-runs/ambiguous-repair/before.png",
+      "summary": "Fixture screen after the planner narrows the target to the blue Save button in the lower-right toolbar."
+    },
+    {
+      "artifacts": {
+        "finalArtifactRef": ".sciforge/vision-runs/ambiguous-repair/saved-note.md"
+      },
+      "ref": ".sciforge/vision-runs/ambiguous-repair/after.png",
+      "summary": "Fixture screen showing the saved note after targeting the correct Save button."
+    }
+  ],
+  "execution": {
+    "message": "fixture clicked the lower-right blue Save button",
+    "ok": true
+  },
+  "files": {
+    ".sciforge/vision-runs/ambiguous-repair/saved-note.md": "# Repaired Save Target\n\nThe lower-right blue Save button was selected after ambiguity was detected.\n"
+  },
+  "grounding": {
+    "confidence": 0.96,
+    "metadata": {
+      "disambiguation": "lower-right blue Save button, not AutoSave or Save As"
+    },
+    "ok": true,
+    "x": 320,
+    "y": 220
+  },
+  "plans": [
+    {
+      "targetDescription": "lower-right blue Save button, not AutoSave or Save As",
+      "type": "click"
+    }
+  ],
+  "verification": {
+    "done": true,
+    "ok": true,
+    "reason": "final artifact is visible after disambiguated save"
+  }
+}

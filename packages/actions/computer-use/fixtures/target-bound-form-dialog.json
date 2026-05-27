@@ -1,0 +1,95 @@
+{
+  "schemaVersion": "sciforge.computer-use.target-bound-window-scenario.v1",
+  "id": "target-bound-form-dialog",
+  "kind": "package-owned-target-bound-window-fixture",
+  "targetWindow": {"title": "Package Owned Form Dialog"},
+  "finalArtifactRef": ".sciforge/vision-runs/target-bound-form/form-confirmation.md",
+  "workflowRequirements": {
+    "minimumActionCount": 5,
+    "requiredInputModalities": ["pointer", "keyboard"],
+    "requiresCurrentStepScreenshots": true
+  },
+  "screens": [
+    {
+      "id": "form-start",
+      "ref": ".sciforge/vision-runs/target-bound-form/screen-00-start.png",
+      "summary": "Form with Name and Email fields.",
+      "visibleTexts": ["Name field", "Email field", "Review button"],
+      "elements": [
+        {"id": "name-field", "role": "textbox", "label": "Name field", "description": "Name field", "bounds": {"x": 72, "y": 96, "width": 360, "height": 36}}
+      ],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "form-name-focused",
+      "ref": ".sciforge/vision-runs/target-bound-form/screen-01-name-focused.png",
+      "summary": "Name field is focused.",
+      "visibleTexts": ["Name field focused", "Email field"],
+      "elements": [
+        {"id": "name-field", "role": "textbox", "label": "Name field", "description": "Name field", "bounds": {"x": 72, "y": 96, "width": 360, "height": 36}, "state": {"focused": true}}
+      ],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "form-name-filled",
+      "ref": ".sciforge/vision-runs/target-bound-form/screen-02-name-filled.png",
+      "summary": "Name value is visible and focus can move to email.",
+      "visibleTexts": ["Name: Ada Lovelace", "Email field"],
+      "elements": [
+        {"id": "email-field", "role": "textbox", "label": "Email field", "description": "Email field", "bounds": {"x": 72, "y": 150, "width": 360, "height": 36}}
+      ],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "form-email-focused",
+      "ref": ".sciforge/vision-runs/target-bound-form/screen-03-email-focused.png",
+      "summary": "Email field is focused after keyboard navigation.",
+      "visibleTexts": ["Name: Ada Lovelace", "Email field focused"],
+      "elements": [
+        {"id": "email-field", "role": "textbox", "label": "Email field", "description": "Email field", "bounds": {"x": 72, "y": 150, "width": 360, "height": 36}, "state": {"focused": true}}
+      ],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "form-review-dialog",
+      "ref": ".sciforge/vision-runs/target-bound-form/screen-04-review-dialog.png",
+      "summary": "Review dialog is open with Confirm button.",
+      "visibleTexts": ["Ada Lovelace", "ada@example.test", "Confirm button"],
+      "elements": [
+        {"id": "confirm-button", "role": "button", "label": "Confirm button", "description": "Confirm button", "bounds": {"x": 320, "y": 340, "width": 132, "height": 40}}
+      ],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "form-confirmed",
+      "ref": ".sciforge/vision-runs/target-bound-form/screen-05-confirmed.png",
+      "summary": "Form confirmation artifact is saved.",
+      "visibleTexts": ["form-confirmation.md", "Confirmed"],
+      "elements": [
+        {"id": "form-confirmation-entry", "role": "treeitem", "label": "form-confirmation.md saved entry", "description": "form-confirmation.md saved entry", "bounds": {"x": 72, "y": 420, "width": 260, "height": 32}}
+      ],
+      "artifacts": {
+        "finalArtifactRef": ".sciforge/vision-runs/target-bound-form/form-confirmation.md",
+        "visibleArtifacts": [
+          {"artifactRef": ".sciforge/vision-runs/target-bound-form/form-confirmation.md", "kind": "document", "status": "visible-and-saved"}
+        ]
+      },
+      "metadata": {"realWindowEvidence": true}
+    }
+  ],
+  "plans": [
+    {"type": "click", "targetDescription": "Name field"},
+    {"type": "type_text", "text": "Name: Ada Lovelace\n"},
+    {"type": "press_key", "key": "Tab", "reason": "move to Email field"},
+    {"type": "type_text", "text": "Email: ada@example.test\n"},
+    {"type": "press_key", "key": "Ctrl+S", "reason": "save the reviewed form confirmation"}
+  ],
+  "verification": [
+    {"ok": true, "done": false, "changed": true, "reason": "name field focused"},
+    {"ok": true, "done": false, "changed": true, "reason": "name value visible"},
+    {"ok": true, "done": false, "changed": true, "reason": "keyboard navigation reached email field"},
+    {"ok": true, "done": false, "changed": true, "reason": "review dialog visible"},
+    {"ok": true, "done": true, "changed": true, "reason": "form confirmation artifact saved", "metadata": {"finalArtifactRef": ".sciforge/vision-runs/target-bound-form/form-confirmation.md"}}
+  ],
+  "files": {}
+}

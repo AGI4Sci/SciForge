@@ -1,0 +1,83 @@
+{
+  "schemaVersion": "sciforge.computer-use.target-bound-window-scenario.v1",
+  "id": "target-bound-menu-hotkey",
+  "kind": "package-owned-target-bound-window-fixture",
+  "targetWindow": {"title": "Package Owned Menu Hotkey Editor"},
+  "finalArtifactRef": ".sciforge/vision-runs/target-bound-menu/menu-hotkey-note.md",
+  "workflowRequirements": {
+    "minimumActionCount": 4,
+    "requiredInputModalities": ["pointer", "keyboard"],
+    "requiresCurrentStepScreenshots": true
+  },
+  "screens": [
+    {
+      "id": "menu-start",
+      "ref": ".sciforge/vision-runs/target-bound-menu/screen-00-start.png",
+      "summary": "Editor with Tools menu and note body.",
+      "visibleTexts": ["Tools menu", "note body"],
+      "elements": [
+        {"id": "tools-menu", "role": "button", "label": "Tools menu", "description": "Tools menu", "bounds": {"x": 24, "y": 24, "width": 112, "height": 32}}
+      ],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "menu-open",
+      "ref": ".sciforge/vision-runs/target-bound-menu/screen-01-menu-open.png",
+      "summary": "Tools menu is open with Insert Summary item.",
+      "visibleTexts": ["Insert Summary item", "Save"],
+      "elements": [
+        {"id": "insert-summary-item", "role": "menuitem", "label": "Insert Summary item", "description": "Insert Summary item", "bounds": {"x": 28, "y": 64, "width": 220, "height": 32}}
+      ],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "menu-summary-ready",
+      "ref": ".sciforge/vision-runs/target-bound-menu/screen-02-summary-ready.png",
+      "summary": "Menu action inserted a summary section.",
+      "visibleTexts": ["Summary:", "Ready to save"],
+      "elements": [
+        {"id": "note-body", "role": "textbox", "label": "note body", "description": "note body", "bounds": {"x": 72, "y": 120, "width": 620, "height": 300}}
+      ],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "menu-content-visible",
+      "ref": ".sciforge/vision-runs/target-bound-menu/screen-03-content-visible.png",
+      "summary": "Menu note content is visible before hotkey save.",
+      "visibleTexts": ["# Menu Hotkey Note", "Opened menu with pointer", "Saved with hotkey"],
+      "elements": [
+        {"id": "note-body", "role": "textbox", "label": "note body", "description": "note body", "bounds": {"x": 72, "y": 120, "width": 620, "height": 300}}
+      ],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "menu-saved",
+      "ref": ".sciforge/vision-runs/target-bound-menu/screen-04-saved.png",
+      "summary": "Menu hotkey note is saved.",
+      "visibleTexts": ["menu-hotkey-note.md", "Saved"],
+      "elements": [
+        {"id": "menu-hotkey-note-entry", "role": "treeitem", "label": "menu-hotkey-note.md saved entry", "description": "menu-hotkey-note.md saved entry", "bounds": {"x": 72, "y": 440, "width": 280, "height": 32}}
+      ],
+      "artifacts": {
+        "finalArtifactRef": ".sciforge/vision-runs/target-bound-menu/menu-hotkey-note.md",
+        "visibleArtifacts": [
+          {"artifactRef": ".sciforge/vision-runs/target-bound-menu/menu-hotkey-note.md", "kind": "document", "status": "visible-and-saved"}
+        ]
+      },
+      "metadata": {"realWindowEvidence": true}
+    }
+  ],
+  "plans": [
+    {"type": "click", "targetDescription": "Tools menu"},
+    {"type": "press_key", "key": "Enter", "reason": "choose Insert Summary item from the open menu"},
+    {"type": "type_text", "text": "# Menu Hotkey Note\n\n- Opened menu with pointer\n- Saved with hotkey\n"},
+    {"type": "hotkey", "key": "Ctrl+S", "reason": "save through generic hotkey"}
+  ],
+  "verification": [
+    {"ok": true, "done": false, "changed": true, "reason": "menu opened"},
+    {"ok": true, "done": false, "changed": true, "reason": "menu item selected"},
+    {"ok": true, "done": false, "changed": true, "reason": "note content visible"},
+    {"ok": true, "done": true, "changed": true, "reason": "menu hotkey note saved", "metadata": {"finalArtifactRef": ".sciforge/vision-runs/target-bound-menu/menu-hotkey-note.md"}}
+  ],
+  "files": {}
+}

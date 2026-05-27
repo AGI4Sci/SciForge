@@ -95,7 +95,7 @@ GUI 自身暴露两类稳定表面：只读虚拟 GUI resource tree 用于状态
 
 ### Computer Use
 
-用视觉优先的方式观察窗口、定位界面元素，并通过 action loop 操作电脑完成任务。当前重点是纯视觉驱动的 GUI 操作；未来可以组合 OCR、窗口元数据、浏览器状态、远程桌面帧和更多 sense provider。
+用视觉优先的方式观察窗口、定位界面元素，并通过 action loop 操作目标环境完成任务。当前严格边界是 package-owned / host-provided target-bound window execution：输入必须隔离到声明目标，result/trace/evidence 只写 refs，shared/system/global input 默认 fail closed。未来可以组合 OCR、窗口元数据、浏览器状态、远程桌面帧和更多 sense provider，但真实完成声明仍必须有当前截图、target binding、trace/result refs 和文件证据支撑。
 
 ### 自定义科研场景
 
@@ -220,7 +220,7 @@ npm run smoke:stable-version-registry
 
 ```text
 src/ui/                  React + Vite 科研工作台
-src/runtime/             Workspace server、gateway、task runner、computer use runtime
+src/runtime/             Workspace server、gateway、task runner、host adapter glue
 src/runtime/gateway/     Agent/backend handoff、payload、context、diagnostics、repair
 packages/contracts/      跨 package/UI/runtime 稳定 contract
 packages/reasoning/      Python 优先的确定性策略算法与 planner
@@ -228,7 +228,7 @@ packages/agent-harness/  规划中的 agent 行为治理策略、阶段 hooks �
 packages/scenarios/      scenario 编译、校验和 runtime smoke fixtures
 packages/observe/        只读观察能力：environment/modality -> observation
 packages/actions/        会改变环境的 action provider
-packages/actions/computer-use/   sense-agnostic GUI action loop
+packages/actions/computer-use/   Computer Use action loop、target-bound window host、isolated executor、evidence/preflight/probe contracts
 packages/presentation/components/  科学 artifact 交互视图注册表
 packages/support/        preview/reference helpers 和迁移兼容支撑
 packages/skills/         可复用科研 skill 与 skill catalog

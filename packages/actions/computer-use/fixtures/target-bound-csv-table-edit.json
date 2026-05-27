@@ -1,0 +1,142 @@
+{
+  "schemaVersion": "sciforge.computer-use.target-bound-window-scenario.v1",
+  "id": "target-bound-csv-table-edit",
+  "kind": "package-owned-target-bound-window-fixture",
+  "targetWindow": {
+    "title": "Package Owned CSV Table Editor"
+  },
+  "finalArtifactRef": ".sciforge/vision-runs/target-bound-csv/table-edit.csv",
+  "artifactSpec": {
+    "kind": "document",
+    "format": "csv"
+  },
+  "workflowRequirements": {
+    "minimumActionCount": 3,
+    "requiredInputModalities": ["pointer", "keyboard"],
+    "requiresCurrentStepScreenshots": true
+  },
+  "screens": [
+    {
+      "id": "csv-start",
+      "ref": ".sciforge/vision-runs/target-bound-csv/screen-00-start.png",
+      "summary": "Package-owned CSV table editor before editing.",
+      "visibleTexts": ["A1 cell", "B1 cell", "CSV table canvas"],
+      "elements": [
+        {
+          "id": "a1-cell",
+          "role": "gridcell",
+          "label": "A1 cell",
+          "description": "A1 cell",
+          "bounds": {"x": 72, "y": 96, "width": 140, "height": 36}
+        }
+      ],
+      "metadata": {
+        "realWindowEvidence": true
+      }
+    },
+    {
+      "id": "csv-cell-focused",
+      "ref": ".sciforge/vision-runs/target-bound-csv/screen-01-cell-focused.png",
+      "summary": "A1 cell is focused in the CSV table editor.",
+      "visibleTexts": ["A1 cell focused", "CSV table canvas"],
+      "elements": [
+        {
+          "id": "a1-cell",
+          "role": "gridcell",
+          "label": "A1 cell",
+          "description": "A1 cell",
+          "bounds": {"x": 72, "y": 96, "width": 140, "height": 36},
+          "state": {"focused": true}
+        }
+      ],
+      "metadata": {
+        "realWindowEvidence": true
+      }
+    },
+    {
+      "id": "csv-content-visible",
+      "ref": ".sciforge/vision-runs/target-bound-csv/screen-02-content-visible.png",
+      "summary": "CSV rows are visible in the table editor.",
+      "visibleTexts": ["Name,Score,Status", "Ada,98,ready", "Grace,95,review"],
+      "elements": [
+        {
+          "id": "csv-table-canvas",
+          "role": "grid",
+          "label": "CSV table canvas",
+          "description": "CSV table canvas",
+          "bounds": {"x": 72, "y": 96, "width": 620, "height": 260}
+        }
+      ],
+      "metadata": {
+        "realWindowEvidence": true
+      }
+    },
+    {
+      "id": "csv-saved",
+      "ref": ".sciforge/vision-runs/target-bound-csv/screen-03-saved.png",
+      "summary": "Saved CSV artifact is visible in the target window.",
+      "visibleTexts": ["table-edit.csv", "Saved"],
+      "elements": [
+        {
+          "id": "saved-csv-entry",
+          "role": "treeitem",
+          "label": "table-edit.csv saved entry",
+          "description": "table-edit.csv saved entry",
+          "bounds": {"x": 72, "y": 420, "width": 260, "height": 32}
+        }
+      ],
+      "artifacts": {
+        "finalArtifactRef": ".sciforge/vision-runs/target-bound-csv/table-edit.csv",
+        "visibleArtifacts": [
+          {
+            "artifactRef": ".sciforge/vision-runs/target-bound-csv/table-edit.csv",
+            "kind": "csv",
+            "status": "visible-and-saved"
+          }
+        ]
+      },
+      "metadata": {
+        "realWindowEvidence": true
+      }
+    }
+  ],
+  "plans": [
+    {
+      "type": "click",
+      "targetDescription": "A1 cell"
+    },
+    {
+      "type": "type_text",
+      "text": "Name,Score,Status\nAda,98,ready\nGrace,95,review\n"
+    },
+    {
+      "type": "press_key",
+      "key": "Ctrl+S",
+      "reason": "save the CSV table artifact"
+    }
+  ],
+  "verification": [
+    {
+      "ok": true,
+      "done": false,
+      "changed": true,
+      "reason": "A1 cell is focused"
+    },
+    {
+      "ok": true,
+      "done": false,
+      "changed": true,
+      "reason": "CSV rows are visible"
+    },
+    {
+      "ok": true,
+      "done": true,
+      "changed": true,
+      "reason": "CSV artifact is saved and visible",
+      "metadata": {
+        "finalArtifactRef": ".sciforge/vision-runs/target-bound-csv/table-edit.csv"
+      }
+    }
+  ],
+  "files": {}
+}

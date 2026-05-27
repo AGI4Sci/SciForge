@@ -1,0 +1,147 @@
+{
+  "schemaVersion": "sciforge.computer-use.target-bound-window-scenario.v1",
+  "id": "target-bound-one-page-pptx",
+  "kind": "package-owned-target-bound-window-fixture",
+  "targetWindow": {
+    "title": "Package Owned Slide Editor"
+  },
+  "finalArtifactRef": ".sciforge/vision-runs/target-bound-pptx/computer-use-one-page.pptx",
+  "artifactSpec": {
+    "kind": "slide-deck",
+    "slideCount": 1
+  },
+  "workflowRequirements": {
+    "minimumActionCount": 3,
+    "requiredInputModalities": ["pointer", "keyboard"],
+    "requiresCurrentStepScreenshots": true
+  },
+  "screens": [
+    {
+      "id": "ppt-start",
+      "ref": ".sciforge/vision-runs/target-bound-pptx/screen-00-start.png",
+      "summary": "Package-owned slide editor before editing.",
+      "visibleTexts": ["Slide title field", "Slide body field"],
+      "elements": [
+        {
+          "id": "slide-title-field",
+          "role": "textbox",
+          "label": "slide title field",
+          "description": "slide title field",
+          "bounds": {"x": 80, "y": 80, "width": 680, "height": 96}
+        }
+      ],
+      "metadata": {
+        "realWindowEvidence": true
+      }
+    },
+    {
+      "id": "ppt-title-focused",
+      "ref": ".sciforge/vision-runs/target-bound-pptx/screen-01-title-focused.png",
+      "summary": "Slide title field is focused.",
+      "visibleTexts": ["Slide title field focused"],
+      "elements": [
+        {
+          "id": "slide-title-field",
+          "role": "textbox",
+          "label": "slide title field",
+          "description": "slide title field",
+          "bounds": {"x": 80, "y": 80, "width": 680, "height": 96},
+          "state": {"focused": true}
+        }
+      ],
+      "metadata": {
+        "realWindowEvidence": true
+      }
+    },
+    {
+      "id": "ppt-content-visible",
+      "ref": ".sciforge/vision-runs/target-bound-pptx/screen-02-content-visible.png",
+      "summary": "One-page slide content is visible in the editor.",
+      "visibleTexts": [
+        "Computer Use Can Make Slides",
+        "Driven by generic actions",
+        "Saved by target-bound window host",
+        "Verified through refs-first evidence"
+      ],
+      "elements": [
+        {
+          "id": "slide-body-field",
+          "role": "textbox",
+          "label": "slide body field",
+          "description": "slide body field",
+          "bounds": {"x": 80, "y": 210, "width": 760, "height": 320}
+        }
+      ],
+      "metadata": {
+        "realWindowEvidence": true
+      }
+    },
+    {
+      "id": "ppt-saved",
+      "ref": ".sciforge/vision-runs/target-bound-pptx/screen-03-saved.png",
+      "summary": "Saved one-page PPTX artifact is visible in the target window.",
+      "visibleTexts": ["computer-use-one-page.pptx", "Saved"],
+      "elements": [
+        {
+          "id": "saved-pptx-entry",
+          "role": "treeitem",
+          "label": "computer-use-one-page.pptx saved entry",
+          "description": "computer-use-one-page.pptx saved entry",
+          "bounds": {"x": 80, "y": 560, "width": 320, "height": 32}
+        }
+      ],
+      "artifacts": {
+        "finalArtifactRef": ".sciforge/vision-runs/target-bound-pptx/computer-use-one-page.pptx",
+        "visibleArtifacts": [
+          {
+            "artifactRef": ".sciforge/vision-runs/target-bound-pptx/computer-use-one-page.pptx",
+            "kind": "slide-deck",
+            "status": "visible-and-saved"
+          }
+        ]
+      },
+      "metadata": {
+        "realWindowEvidence": true
+      }
+    }
+  ],
+  "plans": [
+    {
+      "type": "click",
+      "targetDescription": "slide title field"
+    },
+    {
+      "type": "type_text",
+      "text": "# Computer Use Can Make Slides\n\n- Driven by generic actions\n- Saved by target-bound window host\n- Verified through refs-first evidence\n"
+    },
+    {
+      "type": "press_key",
+      "key": "Ctrl+S",
+      "reason": "save the one-page presentation artifact"
+    }
+  ],
+  "verification": [
+    {
+      "ok": true,
+      "done": false,
+      "changed": true,
+      "reason": "slide title field is focused"
+    },
+    {
+      "ok": true,
+      "done": false,
+      "changed": true,
+      "reason": "slide content is visible"
+    },
+    {
+      "ok": true,
+      "done": true,
+      "changed": true,
+      "reason": "one-page pptx artifact is saved and visible",
+      "metadata": {
+        "finalArtifactRef": ".sciforge/vision-runs/target-bound-pptx/computer-use-one-page.pptx"
+      }
+    }
+  ],
+  "files": {}
+}

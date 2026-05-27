@@ -4,6 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import sciforge_computer_use as computer_use_package
 from sciforge_computer_use import (
     ActionPlan,
     ActionTarget,
@@ -12,6 +13,14 @@ from sciforge_computer_use import (
     Grounding,
     Observation,
     Verification,
+    buildRepairReplayEvidence,
+    buildTargetBoundRealWindowProbeEvidence,
+    buildTargetBoundInputAdapterManifest,
+    buildViewportRecoveryEvidence,
+    build_target_bound_real_window_probe_evidence,
+    build_target_bound_input_adapter_manifest,
+    build_repair_replay_evidence,
+    build_viewport_recovery_evidence,
     compactResult,
     compact_result,
     compact_result_for_handoff,
@@ -21,9 +30,20 @@ from sciforge_computer_use import (
     run_task,
     runTask,
     run_computer_use_task,
+    validateRepairManifest,
+    validateRepairReplayEvidence,
+    validateTargetBoundRealWindowProbeEvidence,
+    validateInputAdapterManifestForRealDesktop,
+    validate_target_bound_real_window_probe_evidence,
+    validate_input_adapter_manifest_for_real_desktop,
+    validateViewportRecoveryEvidence,
+    validate_repair_manifest,
+    validate_repair_replay_evidence,
+    validate_viewport_recovery_evidence,
     validateTrace,
     validate_trace,
 )
+from sciforge_computer_use import api as computer_use_api
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -303,6 +323,20 @@ def test_app_private_hotkey_is_rejected():
     assert result.failure_diagnostics["contractIssue"] == "app-private-shortcut"
 
 
+def test_document_save_hotkey_is_allowed_as_generic_local_action():
+    sense = FakeSense()
+    planner = FakePlanner([
+        {"type": "hotkey", "key": "Ctrl+S", "reason": "save local document"},
+    ])
+    executor = FakeExecutor()
+
+    result = run_computer_use_task("save local document", sense, planner, executor, FakeVerifier())
+
+    assert result.status == "completed"
+    assert executor.calls == [("hotkey", None, None)]
+    assert sense.locate_calls == []
+
+
 def test_failed_step_without_action_kind_keeps_budget_debit_ref():
     sense = FakeSense()
     planner = FakePlanner([
@@ -356,8 +390,166 @@ def test_public_api_manifest_and_camel_case_aliases_are_stable():
     assert manifest["id"] == "sciforge.computer-use"
     assert manifest["entrypoint"]["interface"] == "runTask(request, hostPorts)"
     assert manifest["hostPortsContract"]["requiredPorts"] == ["capture", "plan", "locate", "execute", "verify"]
+    assert manifest["hostPortsContract"]["realDesktopEvidenceRequiredPorts"] == [
+        "capture",
+        "plan",
+        "locate",
+        "execute",
+        "verify",
+        "writeTrace",
+        "emitEvent",
+    ]
+    assert manifest["entrypoint"]["discoveryProbe"].startswith("python -m sciforge_computer_use.plugin_probe")
+    assert manifest["entrypoint"]["virtualDesktopProbe"].startswith(
+        "python -m sciforge_computer_use.virtual_desktop_probe"
+    )
     assert manifest["hostPortsContract"]["providerIdPolicy"]["plan"] == "runtime-codex-tui-text-planner"
     assert manifest["hostPortsContract"]["providerIdPolicy"]["verify"] == "layered-vision-verifier"
+    assert manifest["hostPortsContract"]["executorAdapterContract"]["requiredStatus"] == "independent-simulated-input-adapter"
+    assert manifest["hostPortsContract"]["executorAdapterContract"]["targetBindingRequiredForRealDesktopEvidence"] is True
+    assert manifest["hostPortsContract"]["executorAdapterContract"]["bindingHelper"].endswith(
+        "build_input_adapter_target_binding_manifest"
+    )
+    assert manifest["hostPortsContract"]["executorAdapterContract"]["bindingValidator"].endswith(
+        "validate_input_adapter_target_binding_manifest"
+    )
+    assert manifest["hostPortsContract"]["executorAdapterContract"]["targetBoundManifestBuilder"].endswith(
+        "build_target_bound_input_adapter_manifest"
+    )
+    assert manifest["hostPortsContract"]["executorAdapterContract"]["adapterManifestValidator"].endswith(
+        "validate_input_adapter_manifest_for_real_desktop"
+    )
+    assert manifest["hostPortsContract"]["executorAdapterContract"]["bindingRequiredRefs"] == [
+        "adapterManifestRef",
+        "targetWindowRef",
+        "evidenceRefs",
+    ]
+    assert "isolated-window" in manifest["hostPortsContract"]["executorAdapterContract"]["readyInputChannels"]
+    assert "native-stdio-fail-closed-executor" in (
+        manifest["hostPortsContract"]["executorAdapterContract"]["diagnosticExecutorProvidersBlockedForReady"]
+    )
+    assert "playwright" in manifest["hostPortsContract"]["executorAdapterContract"]["shortcutExecutorProvidersBlockedForReady"]
+    assert "virtual-session" in (
+        manifest["hostPortsContract"]["executorAdapterContract"]["virtualOrDiagnosticInputChannelsBlockedForReady"]
+    )
+    assert manifest["repairManifestContract"]["validator"] == "sciforge_computer_use.repair_manifest.validate_repair_manifest"
+    assert manifest["repairManifestContract"]["requiredRefs"] == [
+        "resultRef",
+        "traceRefs",
+        "screenshotRefs or finalObservationRef",
+    ]
+    assert manifest["repairManifestContract"]["requiredFlags"]["rawPayloadWritten"] is False
+    assert manifest["repairManifestContract"]["requiredFlags"]["inlineImageWritten"] is False
+    assert manifest["repairReplayContract"]["builder"] == "sciforge_computer_use.trace.build_repair_replay_evidence"
+    assert manifest["repairReplayContract"]["validator"] == "sciforge_computer_use.trace.validate_repair_replay_evidence"
+    assert manifest["repairReplayContract"]["requiredRefs"] == [
+        "sourceFailureManifestRef",
+        "replayResultRef",
+        "replayTraceRefs",
+    ]
+    assert "source failure" in manifest["repairReplayContract"]["validationOptions"]["requireExistingRefs"]
+    assert manifest["viewportRecoveryContract"]["builder"] == "sciforge_computer_use.trace.build_viewport_recovery_evidence"
+    assert manifest["viewportRecoveryContract"]["validator"] == (
+        "sciforge_computer_use.trace.validate_viewport_recovery_evidence"
+    )
+    assert manifest["viewportRecoveryContract"]["requiredRefs"] == [
+        "sourceFailureManifestRef",
+        "replayResultRef",
+        "replayTraceRefs",
+        "scrollStateBeforeRef",
+        "scrollStateAfterRef",
+    ]
+    assert "scroll state refs" in manifest["viewportRecoveryContract"]["validationOptions"]["requireExistingRefs"]
+    assert manifest["targetBoundRealWindowProbeContract"]["builder"] == (
+        "sciforge_computer_use.target_bound_evidence.build_target_bound_real_window_probe_evidence"
+    )
+    assert manifest["targetBoundRealWindowProbeContract"]["validator"] == (
+        "sciforge_computer_use.target_bound_evidence.validate_target_bound_real_window_probe_evidence"
+    )
+    assert "preflightRef" in manifest["targetBoundRealWindowProbeContract"]["requiredRefs"]
+    assert manifest["targetBoundRealWindowProbeContract"]["requiredFlags"]["realWindowEvidence"] is True
+    assert "csv" in manifest["targetBoundRealWindowProbeContract"]["declaredArtifactOutput"]["supportedFormats"]
+    assert manifest["targetBoundRealWindowProbeContract"]["workflowRequirements"]["requiresCurrentStepScreenshots"].startswith(
+        "optional boolean"
+    )
+    assert "Task B" in manifest["targetBoundRealWindowProbeContract"]["workflowRequirements"]["minimumActionCount"]
+    assert manifest["hostPortsContract"]["diagnosticProbes"]["virtualDesktopStateOnly"].startswith(
+        "python -m sciforge_computer_use.virtual_desktop_probe"
+    )
+    assert manifest["hostPortsContract"]["diagnosticProbes"]["semanticVerifier"].startswith(
+        "python -m sciforge_computer_use.semantic_verifier_probe"
+    )
+    assert manifest["semanticVerifierProbeContract"]["probe"] == "sciforge_computer_use.semantic_verifier_probe"
+    assert manifest["semanticVerifierProbeContract"]["diagnosticsSchemaRef"] == (
+        "sciforge.computer-use.provider-diagnostics.v1"
+    )
+    assert "textResponses" in manifest["semanticVerifierProbeContract"]["diagnosticRequests"]
+    assert manifest["semanticVerifierProbeContract"]["endpointResolution"]["acceptedBaseUrlKinds"] == [
+        "api-base",
+        "chat-completions-endpoint",
+        "responses-endpoint",
+        "models-endpoint",
+    ]
+    assert manifest["semanticVerifierProbeContract"]["responseCompatibilityHelper"].endswith("extract_provider_text")
+    assert manifest["semanticVerifierProbeContract"]["responseCompatibilityHelpers"] == {
+        "textExtraction": "sciforge_computer_use.response_compat.extract_provider_text",
+        "responsesToChatCompletions": "sciforge_computer_use.response_compat.responses_to_chat_completions",
+        "chatCompletionsToResponses": "sciforge_computer_use.response_compat.chat_completions_to_responses",
+    }
+    assert "responses-text-only" in manifest["semanticVerifierProbeContract"]["textPreflightVariants"]
+    assert "responses-text-only-no-temperature" in manifest["semanticVerifierProbeContract"]["textPreflightVariants"]
+    assert "chat-image-url-object-no-temperature" in manifest["semanticVerifierProbeContract"]["multimodalVariants"]
+    assert "configuredModelPresent" in manifest["semanticVerifierProbeContract"]["diagnosticRecordFields"]
+    assert "expectedProjectModelIds" in manifest["semanticVerifierProbeContract"]["projectEvidenceEligibilityFields"]
+    assert "qwen3.6-plus-2026-04-02" in manifest["semanticVerifierProbeContract"]["projectEvidenceModels"]
+    assert "raw HTTP/1.1" in manifest["semanticVerifierProbeContract"]["transportFallback"]
+    assert "verdict=pass" in manifest["semanticVerifierProbeContract"]["completionVerdictPolicy"]
+    assert "raw model ids" in manifest["semanticVerifierProbeContract"]["modelsDiagnosticPolicy"]
+    assert buildRepairReplayEvidence is build_repair_replay_evidence
+    assert validateRepairReplayEvidence is validate_repair_replay_evidence
+    assert buildViewportRecoveryEvidence is build_viewport_recovery_evidence
+    assert validateViewportRecoveryEvidence is validate_viewport_recovery_evidence
+    assert buildTargetBoundRealWindowProbeEvidence is build_target_bound_real_window_probe_evidence
+    assert validateTargetBoundRealWindowProbeEvidence is validate_target_bound_real_window_probe_evidence
+    assert buildTargetBoundInputAdapterManifest is build_target_bound_input_adapter_manifest
+    assert validateInputAdapterManifestForRealDesktop is validate_input_adapter_manifest_for_real_desktop
+    assert validateRepairManifest is validate_repair_manifest
+    assert computer_use_api.buildRepairReplayEvidence is build_repair_replay_evidence
+    assert computer_use_api.validateRepairReplayEvidence is validate_repair_replay_evidence
+    assert computer_use_api.buildViewportRecoveryEvidence is build_viewport_recovery_evidence
+    assert computer_use_api.validateViewportRecoveryEvidence is validate_viewport_recovery_evidence
+    assert computer_use_api.buildTargetBoundRealWindowProbeEvidence is build_target_bound_real_window_probe_evidence
+    assert computer_use_api.validateTargetBoundRealWindowProbeEvidence is validate_target_bound_real_window_probe_evidence
+    assert computer_use_api.buildTargetBoundInputAdapterManifest is build_target_bound_input_adapter_manifest
+    assert computer_use_api.validateInputAdapterManifestForRealDesktop is validate_input_adapter_manifest_for_real_desktop
+    assert computer_use_api.validateRepairManifest is validate_repair_manifest
+    assert "buildRepairReplayEvidence" in computer_use_api.__all__
+    assert "validateRepairReplayEvidence" in computer_use_api.__all__
+    assert "buildViewportRecoveryEvidence" in computer_use_api.__all__
+    assert "validateViewportRecoveryEvidence" in computer_use_api.__all__
+    assert "buildTargetBoundRealWindowProbeEvidence" in computer_use_api.__all__
+    assert "validateTargetBoundRealWindowProbeEvidence" in computer_use_api.__all__
+    assert "buildTargetBoundInputAdapterManifest" in computer_use_api.__all__
+    assert "validateInputAdapterManifestForRealDesktop" in computer_use_api.__all__
+    assert "validateRepairManifest" in computer_use_api.__all__
+    for symbol in (
+        "buildRepairReplayEvidence",
+        "validateRepairReplayEvidence",
+        "buildViewportRecoveryEvidence",
+        "validateViewportRecoveryEvidence",
+        "buildTargetBoundRealWindowProbeEvidence",
+        "validateTargetBoundRealWindowProbeEvidence",
+        "build_target_bound_real_window_probe_evidence",
+        "validate_target_bound_real_window_probe_evidence",
+        "buildTargetBoundInputAdapterManifest",
+        "validateInputAdapterManifestForRealDesktop",
+        "build_target_bound_input_adapter_manifest",
+        "validate_input_adapter_manifest_for_real_desktop",
+        "validateRepairManifest",
+        "validate_repair_manifest",
+    ):
+        assert symbol in computer_use_package.__all__
+        assert getattr(computer_use_package, symbol) is getattr(computer_use_api, symbol)
     output_properties = manifest["actionSchema"]["outputShape"]["properties"]
     for key in (
         "schemaVersion",
@@ -490,6 +682,67 @@ def test_validate_trace_does_not_promote_non_image_screenshot_refs_or_work_evide
     assert validation["screenshotRefs"] == []
     assert validation["artifactRefs"] == []
     assert validation["warnings"] == ["Trace has no promoted screenshotRefs."]
+
+
+def test_validate_trace_enforces_required_directory_evidence_metadata():
+    trace = {
+        "schemaVersion": "sciforge.computer-use.loop-trace.v1",
+        "status": "completed",
+        "reason": "missing file list evidence",
+        "metadata": {
+            "requiresFinalArtifact": True,
+            "requiresDirectoryEvidence": True,
+        },
+        "finalObservationRef": ".sciforge/vision-runs/trace/final.png",
+        "finalArtifactRef": ".sciforge/vision-runs/trace/report.md",
+        "finalArtifactRefs": [".sciforge/vision-runs/trace/report.md"],
+        "artifactRefs": [],
+        "steps": [
+            {
+                "beforeRef": ".sciforge/vision-runs/trace/before.png",
+                "action": {
+                    "metadata": {
+                        "fileListArtifactRef": ".sciforge/vision-runs/trace/file-list.json",
+                        "fileListDataRef": ".sciforge/vision-runs/trace/file-list-data.json",
+                    },
+                },
+            }
+        ],
+    }
+
+    validation = validate_trace(trace)
+
+    assert validation["ok"] is False
+    assert validation["errors"] == [
+        "Trace completed with directory evidence metadata but has no file-list artifact/data refs."
+    ]
+
+
+def test_validate_trace_accepts_required_directory_evidence_from_artifact_refs():
+    trace = {
+        "schemaVersion": "sciforge.computer-use.loop-trace.v1",
+        "status": "completed",
+        "reason": "has file list evidence",
+        "requestMetadata": {
+            "acceptance": {
+                "requiresFinalArtifact": True,
+                "requiresFileListEvidence": True,
+            },
+        },
+        "finalObservationRef": ".sciforge/vision-runs/trace/final.png",
+        "finalArtifactRef": ".sciforge/vision-runs/trace/report.md",
+        "finalArtifactRefs": [".sciforge/vision-runs/trace/report.md"],
+        "artifactRefs": [
+            ".sciforge/vision-runs/trace/file-list.json",
+            ".sciforge/vision-runs/trace/file-list-data.json",
+        ],
+        "steps": [{"beforeRef": ".sciforge/vision-runs/trace/before.png"}],
+    }
+
+    validation = validate_trace(trace)
+
+    assert validation["ok"] is True
+    assert validation["errors"] == []
 
 
 def test_final_artifact_refs_ignore_control_evidence_files():

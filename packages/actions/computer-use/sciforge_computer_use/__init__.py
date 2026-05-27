@@ -14,9 +14,40 @@ from .contracts import (
     Verification,
 )
 from .loop import run_computer_use_task, run_task
+from .repair_manifest import validate_repair_manifest
 from .safety import assess_action_risk
-from .trace import compact_result, compact_result_for_handoff, result_to_trace, validate_trace
-from .api import compactResult, getManifest, get_manifest, runTask, validateTrace
+from .trace import (
+    build_repair_replay_evidence,
+    build_target_bound_real_window_probe_evidence,
+    build_viewport_recovery_evidence,
+    compact_result,
+    compact_result_for_handoff,
+    result_to_trace,
+    validate_repair_replay_evidence,
+    validate_target_bound_real_window_probe_evidence,
+    validate_trace,
+    validate_viewport_recovery_evidence,
+)
+from .virtual_input_adapter import (
+    build_target_bound_input_adapter_manifest,
+    validate_input_adapter_manifest_for_real_desktop,
+)
+from .api import (
+    buildRepairReplayEvidence,
+    buildTargetBoundRealWindowProbeEvidence,
+    buildTargetBoundInputAdapterManifest,
+    buildViewportRecoveryEvidence,
+    compactResult,
+    getManifest,
+    get_manifest,
+    runTask,
+    validateInputAdapterManifestForRealDesktop,
+    validateRepairManifest,
+    validateRepairReplayEvidence,
+    validateTargetBoundRealWindowProbeEvidence,
+    validateTrace,
+    validateViewportRecoveryEvidence,
+)
 
 __all__ = [
     "ActionPlan",
@@ -31,6 +62,14 @@ __all__ = [
     "Observation",
     "Verification",
     "assess_action_risk",
+    "build_repair_replay_evidence",
+    "buildRepairReplayEvidence",
+    "build_target_bound_real_window_probe_evidence",
+    "buildTargetBoundRealWindowProbeEvidence",
+    "build_target_bound_input_adapter_manifest",
+    "buildTargetBoundInputAdapterManifest",
+    "build_viewport_recovery_evidence",
+    "buildViewportRecoveryEvidence",
     "compact_result",
     "compactResult",
     "compact_result_for_handoff",
@@ -40,6 +79,16 @@ __all__ = [
     "run_computer_use_task",
     "run_task",
     "runTask",
+    "validate_input_adapter_manifest_for_real_desktop",
+    "validateInputAdapterManifestForRealDesktop",
+    "validateRepairManifest",
+    "validate_repair_manifest",
+    "validateRepairReplayEvidence",
+    "validate_repair_replay_evidence",
+    "validate_target_bound_real_window_probe_evidence",
+    "validateTargetBoundRealWindowProbeEvidence",
     "validateTrace",
     "validate_trace",
+    "validateViewportRecoveryEvidence",
+    "validate_viewport_recovery_evidence",
 ]

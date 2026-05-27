@@ -1,0 +1,276 @@
+{
+  "capture": [
+    {
+      "metadata": {
+        "visibleTexts": [
+          "Host Port Probe",
+          "Untitled.md"
+        ]
+      },
+      "ref": ".sciforge/vision-runs/host-port-probe-task-b/before-1.png",
+      "summary": "Probe workspace before focusing the editor."
+    },
+    {
+      "metadata": {
+        "visibleTexts": [
+          "editor focused"
+        ]
+      },
+      "ref": ".sciforge/vision-runs/host-port-probe-task-b/after-1.png",
+      "summary": "Editor is focused."
+    },
+    {
+      "metadata": {
+        "visibleTexts": [
+          "editor focused"
+        ]
+      },
+      "ref": ".sciforge/vision-runs/host-port-probe-task-b/before-2.png",
+      "summary": "Editor before typing."
+    },
+    {
+      "metadata": {
+        "visibleTexts": [
+          "# Host Port Probe Task B"
+        ]
+      },
+      "ref": ".sciforge/vision-runs/host-port-probe-task-b/after-2.png",
+      "summary": "Task B note content is visible."
+    },
+    {
+      "metadata": {
+        "visibleTexts": [
+          "Save",
+          "Host Port Probe Task B"
+        ]
+      },
+      "ref": ".sciforge/vision-runs/host-port-probe-task-b/before-3.png",
+      "summary": "Document is ready to save."
+    },
+    {
+      "metadata": {
+        "visibleTexts": [
+          "Saved",
+          "host-port-probe-task-b.md"
+        ]
+      },
+      "ref": ".sciforge/vision-runs/host-port-probe-task-b/after-3.png",
+      "summary": "Document is saved."
+    },
+    {
+      "metadata": {
+        "visibleTexts": [
+          "Files",
+          "host-port-probe-task-b.md"
+        ]
+      },
+      "ref": ".sciforge/vision-runs/host-port-probe-task-b/before-4.png",
+      "summary": "File view before selecting the saved document."
+    },
+    {
+      "metadata": {
+        "visibleTexts": [
+          "Files",
+          "host-port-probe-task-b.md",
+          "host-port-probe-task-b-file-list.json"
+        ]
+      },
+      "ref": ".sciforge/vision-runs/host-port-probe-task-b/after-4.png",
+      "summary": "File view lists the saved document and file-list evidence."
+    },
+    {
+      "metadata": {
+        "visibleTexts": [
+          "Preview",
+          "Host Port Probe Task B"
+        ]
+      },
+      "ref": ".sciforge/vision-runs/host-port-probe-task-b/before-5.png",
+      "summary": "Preview before opening final artifact."
+    },
+    {
+      "metadata": {
+        "visibleTexts": [
+          "Preview",
+          "# Host Port Probe Task B"
+        ]
+      },
+      "ref": ".sciforge/vision-runs/host-port-probe-task-b/after-5.png",
+      "summary": "Preview shows the saved document."
+    },
+    {
+      "metadata": {
+        "visibleTexts": [
+          "host-port-probe-task-b.md",
+          "host-port-probe-task-b-file-list.json",
+          "host-port-probe-task-b-file-list-data.json"
+        ]
+      },
+      "ref": ".sciforge/vision-runs/host-port-probe-task-b/before-6.png",
+      "summary": "Directory view before final evidence capture."
+    },
+    {
+      "artifacts": {
+        "fileList": {
+          "artifactRef": ".sciforge/vision-runs/host-port-probe-task-b/host-port-probe-task-b-file-list.json",
+          "dataRef": ".sciforge/vision-runs/host-port-probe-task-b/host-port-probe-task-b-file-list-data.json",
+          "kind": "directory-file-list-artifact",
+          "schemaVersion": "sciforge.computer-use.virtual-remote-artifact.v1",
+          "status": "visible-and-saved"
+        },
+        "finalArtifactRef": ".sciforge/vision-runs/host-port-probe-task-b/host-port-probe-task-b.md"
+      },
+      "metadata": {
+        "visibleTexts": [
+          "host-port-probe-task-b.md",
+          "host-port-probe-task-b-file-list.json",
+          "host-port-probe-task-b-file-list-data.json"
+        ]
+      },
+      "ref": ".sciforge/vision-runs/host-port-probe-task-b/after-6.png",
+      "summary": "Final directory evidence is visible."
+    }
+  ],
+  "execution": [
+    {
+      "message": "probe focused editor",
+      "metadata": {
+        "inputChannel": "scripted-probe"
+      },
+      "ok": true
+    },
+    {
+      "message": "probe typed markdown",
+      "metadata": {
+        "inputChannel": "scripted-probe"
+      },
+      "ok": true
+    },
+    {
+      "message": "probe saved markdown",
+      "metadata": {
+        "inputChannel": "scripted-probe"
+      },
+      "ok": true
+    },
+    {
+      "message": "probe focused file view",
+      "metadata": {
+        "inputChannel": "scripted-probe"
+      },
+      "ok": true
+    },
+    {
+      "message": "probe opened preview",
+      "metadata": {
+        "inputChannel": "scripted-probe"
+      },
+      "ok": true
+    },
+    {
+      "message": "probe captured final directory evidence",
+      "metadata": {
+        "inputChannel": "scripted-probe"
+      },
+      "ok": true
+    }
+  ],
+  "files": {
+    ".sciforge/vision-runs/host-port-probe-task-b/host-port-probe-task-b-file-list-data.json": {
+      "files": [
+        "host-port-probe-task-b.md",
+        "host-port-probe-task-b-file-list.json",
+        "host-port-probe-task-b-file-list-data.json"
+      ]
+    },
+    ".sciforge/vision-runs/host-port-probe-task-b/host-port-probe-task-b-file-list.json": {
+      "entries": [
+        {
+          "name": "host-port-probe-task-b.md",
+          "type": "file"
+        },
+        {
+          "name": "host-port-probe-task-b-file-list.json",
+          "type": "file"
+        },
+        {
+          "name": "host-port-probe-task-b-file-list-data.json",
+          "type": "file"
+        }
+      ],
+      "schemaVersion": "sciforge.computer-use.file-list-evidence.v1"
+    },
+    ".sciforge/vision-runs/host-port-probe-task-b/host-port-probe-task-b.md": "# Host Port Probe Task B\n\n- stdio host-port contract\n- six scripted actions\n- directory evidence refs\n"
+  },
+  "grounding": [
+    {
+      "confidence": 0.96,
+      "ok": true,
+      "x": 100,
+      "y": 120
+    }
+  ],
+  "plans": [
+    {
+      "targetDescription": "markdown editor input area",
+      "type": "click"
+    },
+    {
+      "text": "# Host Port Probe Task B\n\n- stdio host-port contract\n- six scripted actions\n- directory evidence refs\n",
+      "type": "type_text"
+    },
+    {
+      "key": "Ctrl+S",
+      "type": "press_key"
+    },
+    {
+      "targetDescription": "Files sidebar",
+      "type": "click"
+    },
+    {
+      "targetDescription": "host-port-probe-task-b.md preview entry",
+      "type": "double_click"
+    },
+    {
+      "targetDescription": "host-port-probe-task-b-file-list.json entry",
+      "type": "click"
+    }
+  ],
+  "verification": [
+    {
+      "done": false,
+      "ok": true,
+      "reason": "editor is focused"
+    },
+    {
+      "done": false,
+      "ok": true,
+      "reason": "markdown content is visible"
+    },
+    {
+      "done": false,
+      "ok": true,
+      "reason": "save completed"
+    },
+    {
+      "done": false,
+      "ok": true,
+      "reason": "file view shows saved document"
+    },
+    {
+      "done": false,
+      "ok": true,
+      "reason": "preview shows saved document"
+    },
+    {
+      "done": true,
+      "metadata": {
+        "fileListArtifactRef": ".sciforge/vision-runs/host-port-probe-task-b/host-port-probe-task-b-file-list.json",
+        "fileListDataRef": ".sciforge/vision-runs/host-port-probe-task-b/host-port-probe-task-b-file-list-data.json",
+        "finalArtifactRef": ".sciforge/vision-runs/host-port-probe-task-b/host-port-probe-task-b.md"
+      },
+      "ok": true,
+      "reason": "final artifact and directory evidence are visible"
+    }
+  ]
+}

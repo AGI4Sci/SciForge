@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "sciforge.computer-use.target-bound-window-scenario.v1",
+  "id": "target-bound-form-high-risk-submit",
+  "kind": "package-owned-target-bound-window-fixture",
+  "targetWindow": {"title": "Package Owned High Risk Form"},
+  "screens": [
+    {
+      "id": "high-risk-form-start",
+      "ref": ".sciforge/vision-runs/target-bound-form-risk/screen-00-start.png",
+      "summary": "High-risk external submit form.",
+      "visibleTexts": ["Submit payment button"],
+      "elements": [
+        {"id": "submit-payment-button", "role": "button", "label": "Submit payment button", "description": "Submit payment button", "bounds": {"x": 240, "y": 220, "width": 220, "height": 48}}
+      ],
+      "metadata": {"realWindowEvidence": true}
+    }
+  ],
+  "plans": [
+    {
+      "type": "click",
+      "targetDescription": "Submit payment button",
+      "riskLevel": "high",
+      "requiresConfirmation": true,
+      "reason": "external high-risk form submission must not execute without approval"
+    }
+  ],
+  "verification": [],
+  "files": {}
+}

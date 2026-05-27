@@ -1,0 +1,29 @@
+{
+  "capture": [
+    {
+      "ref": ".sciforge/vision-runs/host-port-probe-blocked/before.png",
+      "summary": "Probe screen before shared system input would be used."
+    }
+  ],
+  "execution": [
+    {
+      "message": "would use shared system input",
+      "metadata": {
+        "inputChannel": "shared-system"
+      },
+      "ok": true
+    }
+  ],
+  "grounding": {
+    "confidence": 0.9,
+    "ok": true,
+    "x": 10,
+    "y": 10
+  },
+  "plans": [
+    {
+      "targetDescription": "unsafe shared-input button",
+      "type": "click"
+    }
+  ]
+}

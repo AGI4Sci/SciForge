@@ -1,0 +1,113 @@
+{
+  "schemaVersion": "sciforge.computer-use.target-bound-window-scenario.v1",
+  "id": "target-bound-preview-directory",
+  "kind": "package-owned-target-bound-window-fixture",
+  "targetWindow": {"title": "Package Owned Preview Directory"},
+  "finalArtifactRef": ".sciforge/vision-runs/target-bound-preview/preview-note.md",
+  "workflowRequirements": {
+    "minimumActionCount": 5,
+    "requiredInputModalities": ["pointer", "keyboard"],
+    "requiresCurrentStepScreenshots": true,
+    "requiresDirectoryEvidence": true
+  },
+  "screens": [
+    {
+      "id": "preview-start",
+      "ref": ".sciforge/vision-runs/target-bound-preview/screen-00-start.png",
+      "summary": "Editor and file tree before preview workflow.",
+      "visibleTexts": ["preview editor input area", "Project Files tree"],
+      "elements": [
+        {"id": "preview-editor", "role": "textarea", "label": "preview editor input area", "description": "preview editor input area", "bounds": {"x": 220, "y": 96, "width": 520, "height": 320}}
+      ],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "preview-editor-focused",
+      "ref": ".sciforge/vision-runs/target-bound-preview/screen-01-editor-focused.png",
+      "summary": "Preview editor is focused.",
+      "visibleTexts": ["preview editor focused"],
+      "elements": [
+        {"id": "preview-editor", "role": "textarea", "label": "preview editor input area", "description": "preview editor input area", "bounds": {"x": 220, "y": 96, "width": 520, "height": 320}, "state": {"focused": true}}
+      ],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "preview-content-visible",
+      "ref": ".sciforge/vision-runs/target-bound-preview/screen-02-content-visible.png",
+      "summary": "Preview note content is visible.",
+      "visibleTexts": ["# Preview Note", "directory evidence"],
+      "elements": [
+        {"id": "preview-editor", "role": "textarea", "label": "preview editor input area", "description": "preview editor input area", "bounds": {"x": 220, "y": 96, "width": 520, "height": 320}}
+      ],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "preview-saved",
+      "ref": ".sciforge/vision-runs/target-bound-preview/screen-03-saved.png",
+      "summary": "Preview note is saved and file tree is visible.",
+      "visibleTexts": ["preview-note.md", "Project Files tree"],
+      "elements": [
+        {"id": "project-files-tree", "role": "tree", "label": "Project Files tree", "description": "Project Files tree", "bounds": {"x": 28, "y": 92, "width": 176, "height": 456}}
+      ],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "preview-file-selected",
+      "ref": ".sciforge/vision-runs/target-bound-preview/screen-04-file-selected.png",
+      "summary": "Saved preview note entry is selected.",
+      "visibleTexts": ["preview-note.md selected", "preview-file-list.json"],
+      "elements": [
+        {"id": "preview-note-entry", "role": "treeitem", "label": "preview-note.md preview entry", "description": "preview-note.md preview entry", "bounds": {"x": 44, "y": 168, "width": 160, "height": 24}}
+      ],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "preview-pane-visible",
+      "ref": ".sciforge/vision-runs/target-bound-preview/screen-05-preview-pane.png",
+      "summary": "Preview pane and directory evidence are visible.",
+      "visibleTexts": ["Preview pane", "preview-note.md", "preview-file-list.json"],
+      "elements": [
+        {"id": "preview-pane", "role": "document", "label": "Preview pane", "description": "Preview pane showing preview-note.md", "bounds": {"x": 246, "y": 104, "width": 548, "height": 376}}
+      ],
+      "artifacts": {
+        "finalArtifactRef": ".sciforge/vision-runs/target-bound-preview/preview-note.md",
+        "visibleArtifacts": [
+          {"artifactRef": ".sciforge/vision-runs/target-bound-preview/preview-note.md", "kind": "document", "status": "visible-and-saved"}
+        ],
+        "fileList": {
+          "artifactRef": ".sciforge/vision-runs/target-bound-preview/preview-file-list.json",
+          "dataRef": ".sciforge/vision-runs/target-bound-preview/preview-file-list-data.json"
+        }
+      },
+      "metadata": {"realWindowEvidence": true}
+    }
+  ],
+  "plans": [
+    {"type": "click", "targetDescription": "preview editor input area"},
+    {"type": "type_text", "text": "# Preview Note\n\n- saved through target-bound input\n- directory evidence visible\n"},
+    {"type": "press_key", "key": "Ctrl+S", "reason": "save preview note"},
+    {"type": "click", "targetDescription": "Project Files tree"},
+    {"type": "click", "targetDescription": "preview-note.md preview entry"}
+  ],
+  "verification": [
+    {"ok": true, "done": false, "changed": true, "reason": "editor focused"},
+    {"ok": true, "done": false, "changed": true, "reason": "content visible"},
+    {"ok": true, "done": false, "changed": true, "reason": "file saved"},
+    {"ok": true, "done": false, "changed": true, "reason": "file tree focused"},
+    {
+      "ok": true,
+      "done": true,
+      "changed": true,
+      "reason": "preview pane and directory evidence visible",
+      "metadata": {
+        "finalArtifactRef": ".sciforge/vision-runs/target-bound-preview/preview-note.md",
+        "fileListArtifactRef": ".sciforge/vision-runs/target-bound-preview/preview-file-list.json",
+        "fileListDataRef": ".sciforge/vision-runs/target-bound-preview/preview-file-list-data.json"
+      }
+    }
+  ],
+  "files": {
+    ".sciforge/vision-runs/target-bound-preview/preview-file-list.json": "{\"schemaVersion\":\"sciforge.computer-use.file-list-evidence.v1\",\"entries\":[{\"name\":\"preview-note.md\",\"type\":\"file\"},{\"name\":\"preview-file-list.json\",\"type\":\"file\"},{\"name\":\"preview-file-list-data.json\",\"type\":\"file\"}]}\n",
+    ".sciforge/vision-runs/target-bound-preview/preview-file-list-data.json": "{\"files\":[\"preview-note.md\",\"preview-file-list.json\",\"preview-file-list-data.json\"]}\n"
+  }
+}
