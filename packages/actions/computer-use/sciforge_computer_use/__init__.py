@@ -32,10 +32,12 @@ from .virtual_input_adapter import (
     build_target_bound_input_adapter_manifest,
     validate_input_adapter_manifest_for_real_desktop,
 )
+from .visible_viewer import build_visible_run_viewer, validate_visible_run_viewer_manifest
 from .api import (
     buildRepairReplayEvidence,
     buildTargetBoundRealWindowProbeEvidence,
     buildTargetBoundInputAdapterManifest,
+    buildVisibleRunViewer,
     buildViewportRecoveryEvidence,
     compactResult,
     getManifest,
@@ -46,6 +48,7 @@ from .api import (
     validateRepairReplayEvidence,
     validateTargetBoundRealWindowProbeEvidence,
     validateTrace,
+    validateVisibleRunViewerManifest,
     validateViewportRecoveryEvidence,
 )
 
@@ -70,6 +73,8 @@ __all__ = [
     "buildTargetBoundInputAdapterManifest",
     "build_viewport_recovery_evidence",
     "buildViewportRecoveryEvidence",
+    "build_visible_run_viewer",
+    "buildVisibleRunViewer",
     "compact_result",
     "compactResult",
     "compact_result_for_handoff",
@@ -89,6 +94,8 @@ __all__ = [
     "validateTargetBoundRealWindowProbeEvidence",
     "validateTrace",
     "validate_trace",
+    "validate_visible_run_viewer_manifest",
+    "validateVisibleRunViewerManifest",
     "validateViewportRecoveryEvidence",
     "validate_viewport_recovery_evidence",
 ]

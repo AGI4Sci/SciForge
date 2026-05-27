@@ -22,6 +22,7 @@ from .virtual_input_adapter import (
     build_target_bound_input_adapter_manifest,
     validate_input_adapter_manifest_for_real_desktop,
 )
+from .visible_viewer import build_visible_run_viewer, validate_visible_run_viewer_manifest
 
 
 def get_manifest() -> dict[str, Any]:
@@ -47,9 +48,13 @@ validateTargetBoundRealWindowProbeEvidence = validate_target_bound_real_window_p
 buildTargetBoundInputAdapterManifest = build_target_bound_input_adapter_manifest
 validateInputAdapterManifestForRealDesktop = validate_input_adapter_manifest_for_real_desktop
 validateRepairManifest = validate_repair_manifest
+buildVisibleRunViewer = build_visible_run_viewer
+validateVisibleRunViewerManifest = validate_visible_run_viewer_manifest
 
 
 __all__ = [
+    "build_visible_run_viewer",
+    "buildVisibleRunViewer",
     "build_repair_replay_evidence",
     "buildRepairReplayEvidence",
     "build_viewport_recovery_evidence",
@@ -76,4 +81,6 @@ __all__ = [
     "validateInputAdapterManifestForRealDesktop",
     "validate_repair_manifest",
     "validateRepairManifest",
+    "validate_visible_run_viewer_manifest",
+    "validateVisibleRunViewerManifest",
 ]

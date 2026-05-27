@@ -32,6 +32,8 @@ buildTargetBoundRealWindowProbeEvidence(preflightManifestOrRef, resultOrRef, tra
 validateTargetBoundRealWindowProbeEvidence(evidenceOrLocalPath, requireExistingRefs?)
 buildTargetBoundInputAdapterManifest(...)
 validateInputAdapterManifestForRealDesktop(adapterManifestOrLocalPath)
+buildVisibleRunViewer(...)
+validateVisibleRunViewerManifest(manifestOrLocalPath, requireExistingRefs?)
 ```
 
 `hostPorts` 是模块和平台能力的唯一接触面，负责截图、裁剪、桌面/远程/dry-run 执行、trace 写入和事件上报。高风险动作不在模块内部弹 UI；模块返回 `needs-confirmation`、`approvalRequest`、trace refs 或 audit refs，由 TUI Host 决定是否调用 `gui.ask_user`，确认后再发起新的受控调用。
@@ -110,6 +112,19 @@ python -m sciforge_computer_use.target_bound_window_host_probe \
   --scenario-file fixtures/target-bound-one-page-pptx.json \
   --output-dir /tmp/sciforge-computer-use-target-bound-pptx
 ```
+
+若需要用户能看到 agent 的虚拟鼠标和键盘工作过程，可用 visible run wrapper 调同一个 package-owned host，并额外写出 replay viewer：
+
+```bash
+python -m sciforge_computer_use.visible_run \
+  --mode target-bound-window \
+  --request-json '{"task":"create a visible one-page target-bound presentation deck","maxSteps":4,"metadata":{"requiresFinalArtifact":true}}' \
+  --scenario-file fixtures/target-bound-one-page-pptx.json \
+  --output-dir /tmp/sciforge-computer-use-visible-pptx \
+  --title "Visible PPTX run"
+```
+
+该 wrapper 不新增 GUI/runtime 依赖，不移动系统鼠标，也不发送全局键盘事件。它会复用 target-bound 或 virtual desktop host run 的 `computer-use-result.json`、`vision-trace.json`、screenshot refs、artifact refs 和 virtual/target input event refs，再生成 `visible-run-viewer-manifest.json` 与 `visible-run-viewer/index.html`。Viewer 只引用本地截图/产物路径，不内联 data URL 或 raw payload；manifest 的 isolation block 必须保持 `sharedSystemInputUsed=false`、`systemPointerMoved=false` 和 `systemKeyboardEventsSent=false`。
 
 更多复杂任务 fixture 保持同一 generic host/executor contract：`target-bound-csv-table-edit.json` 覆盖 CSV/表格编辑，`target-bound-form-dialog.json` 覆盖表单填写与 Tab 导航，`target-bound-form-high-risk-submit.json` 覆盖高风险外发提交 fail closed，`target-bound-menu-hotkey.json` 覆盖鼠标菜单 + 键盘保存，`target-bound-preview-directory.json` 覆盖保存后预览和目录 file-list refs。Package tests 还覆盖两个不需要单独 fixture 文件的衍生场景：安全表单步骤完成后，高风险确认弹窗按钮仍返回 `needs-confirmation`；保存位置需要连续多次 scroll 后才可见时，viewport recovery evidence 仍保留 scroll action、delta、state refs 和最终选中元素。
 
