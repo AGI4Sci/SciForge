@@ -1,82 +1,128 @@
-# SciForge Project Protocol
+# SciForge 项目协议
 
-Last updated: 2026-05-27
+最后更新：2026-05-27
 
-Current objective: continue developing `packages/actions/computer-use` as a Codex CLI discoverable Computer Use extension that can do complex visible work through its own virtual mouse and keyboard, without moving the user's real mouse, sending global keyboard events, or interrupting normal computer use.
+当前目标：继续开发 `packages/actions/computer-use`，把它推进为 Codex CLI 可发现、可运行、可验证的 Computer Use 拓展包。拓展包应能在每个线程自己的虚拟桌面里完成复杂可见工作，使用虚拟鼠标和虚拟键盘，不移动用户真实鼠标，不发送全局键盘事件，也不打断用户正常使用电脑。
 
-GitHub sync point: old task history and completed package-closure evidence were committed and pushed to `origin/dev` as `691e22e` on 2026-05-27. The old task board can be recovered from Git history; keep this file focused on the next work.
+旧任务历史已在 2026-05-27 同步到 GitHub；旧任务板可从 Git 历史恢复。当前 `PROJECT.md` 只记录下一阶段设计、任务和验收规则。
 
-## Current Scope
+## 当前范围
 
-- Work only in `packages/actions/computer-use` unless a change is strictly required by that package boundary.
-- Use Codex CLI plus the Computer Use extension package for complex work.
-- Do not route validation through SciForge runtime, GUI, CU-NEXT, browser acceptance, AgentServer, or release gates unless the user explicitly moves the project into that integration phase.
-- Complex tasks must go through package CLI/API/stdio/host-port boundaries and produce refs-first evidence: screenshots, trace, result JSON, artifact refs, verifier verdicts, and input isolation manifests.
-- "Visible to the user" means the package produces a live or replayable view of the agent's virtual desktop/actions, such as a viewer HTML, frame sequence, annotated screenshots, or recording refs. It does not mean moving the user's physical pointer or typing into their active desktop.
+- 主要工作范围是 `packages/actions/computer-use`。
+- 只有当 package 边界无法独立推进时，才修改 `packages/observe/vision`、runtime 或 GUI。
+- 复杂工作必须通过 package CLI/API/stdio/host-port 边界完成，不能用 GUI 私有状态、DOM、accessibility tree、Playwright DOM 或 shell 直写文件冒充 Computer Use 成功。
+- “用户能看到”指每个 agent 线程有可观看或可回放的虚拟屏幕、鼠标轨迹、键盘输入、动作时间线、截图帧和 artifact refs；不是指 agent 操作用户当前真实桌面。
+- 当前 package-owned target-bound host 是 deterministic test harness，只证明 package contract，不证明真实应用验收。
 
-## Non-Negotiable Rules
+## 最新算法边界
 
-- The agent must maintain its own virtual pointer and keyboard state.
-- `sharedSystemInputUsed`, `systemPointerMoved`, and `systemKeyboardEventsSent` must stay false for visible package workflows.
-- Any real OS/global input path is diagnostic only unless separately approved and explicitly isolated from the user's active session.
-- High-risk actions fail closed: send, delete, pay, publish, upload, permission changes, account actions, external submissions, or destructive local actions must return `needs-confirmation` / `approvalRequest`.
-- `done=true` requires current visual evidence plus file/artifact evidence. Prior trace summaries or old screenshots are not enough.
-- No secrets, raw provider payloads, inline images, data URLs, API keys, or Authorization headers may be written to tracked files, traces, manifests, or docs.
-- Keep implementations generic. If a complex task exposes an algorithm bug, first add a small reusable fixture/probe/test, then repair the algorithm.
-- Core package logic should stay in Python where practical.
-- If a file approaches 2000 lines, split it or add a concrete split task here.
+Computer Use 采用三层循环：
 
-## Current Task Board
+```text
+Evidence Loop:
+  observe -> inspect/crop/VLM/OCR -> update evidence graph
+  repeat until evidence is enough or blocked
 
-- [x] Sync current package-closure work to GitHub before deleting old tasks.
-  Evidence 2026-05-27: commit `691e22e` pushed to `origin/dev`.
-- [x] Build a visible Codex CLI run harness for Computer Use.
-  Evidence 2026-05-27: `python -m sciforge_computer_use.visible_run` wraps the existing virtual desktop or target-bound host loop and writes `visible-run-viewer/index.html`, `visible-run-viewer-manifest.json`, frame refs, action timeline, virtual/target input event refs, `vision-trace.json`, and `computer-use-result.json`. Focused test `test_visible_run.py` passed, and a visible PPTX run completed under `/tmp/sciforge-computer-use-visible-pptx-20260527`.
-- [ ] Add virtual mouse and keyboard overlay evidence.
-  The visible viewer must show pointer moves, clicks, focus changes, typed text, hotkeys, scroll deltas, and save actions from the virtual input adapter. It must also prove no system pointer or global keyboard event was used.
-- [ ] Test Computer Use making a PPT deck visibly.
-  Create a multi-slide `.pptx` through the package workflow with title/content editing, at least one layout change, save hotkey/menu action, and final preview. Validate OOXML parts, slide count, absence of macros, rendered slide previews, save causality, virtual pointer/keyboard logs, and trace/result refs.
-- [ ] Test Computer Use using Word software or a Word-compatible isolated document target.
-  Create and save a `.docx` with heading, paragraph, bullet list, and a small table. The task must be visible in the package viewer, use virtual mouse/keyboard only, validate DOCX zip/XML structure, and return preview/screenshot/artifact refs. If Microsoft Word cannot be safely isolated, record a blocked manifest and run the same contract against a package-owned Word-compatible target until isolation is available.
-- [ ] Add a cross-document workflow.
-  Use the package workflow to read visible source material, create a Word report or PPT summary, save it, reopen/preview it, and return directory evidence. This should exercise observe -> plan -> locate -> execute -> observe -> verify across multiple visible panes without using DOM shortcuts or shell-written artifacts.
-- [ ] Add a visible high-risk approval demo.
-  Fill safe form fields with virtual input, then stop at a send/upload/delete-style action with `needs-confirmation`. The viewer should make clear what would happen next without executing it.
-- [ ] Add application availability and isolation preflight.
-  Detect whether Word, PowerPoint, LibreOffice, Pages/Keynote, or a package-owned document surface is available. Preflight must select an isolated target or produce a blocked manifest explaining why visible real-app testing cannot proceed safely.
-- [ ] Promote reusable validators for visible artifacts.
-  Keep PPTX validation, add DOCX validation, and make viewer evidence validation reusable across PPT, Word, CSV, forms, menus, and file preview workflows.
-- [ ] Keep package docs aligned with the new visible-work phase.
-  Update `packages/actions/computer-use/README.md` after the visible harness exists. Do not document commands that are only aspirational.
+Action Loop:
+  plan action -> ground -> execute -> verify -> update evidence graph
 
-## Immediate TODO
+Task Loop:
+  evidence loop -> action loop -> evidence loop -> ... -> complete/blocked
+```
 
-- [x] Inspect the current target-bound host and virtual desktop probe for the smallest place to attach a replayable viewer.
-- [x] Design the viewer manifest schema: frames, virtual input events, focused target, artifact refs, verifier verdicts, and isolation flags.
-- [x] Add tests for viewer manifest validation before adding new PPT/Word fixtures.
-- [ ] Add the PPT visible fixture and focused regression.
-- [ ] Add the Word/DOCX visible fixture and focused regression.
-- [ ] Run `PYTHONPATH=packages/actions/computer-use python -m pytest packages/actions/computer-use/tests -q`.
-- [ ] Run `node --test --import tsx packages/actions/computer-use/provider-policy.test.ts packages/actions/computer-use/runtime-policy.test.ts` when package policy files change.
-- [ ] Run `git diff --check` before every commit.
+边界规则：
 
-## Local Model Config
+- Evidence Loop 只允许不改变屏幕、窗口、viewport、focus、菜单、tab 或应用状态的观察型操作。
+- 允许的 evidence 操作包括 recapture、wait until stable、crop、OCR、VLM describe、VLM compare、region detection、visual table/image inspection。
+- 任何会改变可见状态的操作都必须进入 Action Loop，包括 scroll、hover、focus、open menu/dropdown、switch tab/window/panel、zoom view、page up/down、任意鼠标或键盘输入。
+- 只要进入 Action Loop，就必须记录 before/after evidence、grounding、executor outcome、verification 和 action causality。
+- 完成判断必须从当前 evidence ledger 查询得出，不能只依赖历史 trace、旧截图或 action history。
 
-- Local Computer Use debugging may use ignored config files such as `config.computer-use.local.json`.
-- These files may contain provider URLs, API keys, and model names; they must never be committed or printed.
-- Text planning can use a cheap local/project text model. Optional VLM verifier evidence must use the model allowlist enforced by code and must prove model presence through sanitized diagnostics.
+## 不可变规则
 
-## Validation Rules
+- 每个线程必须有自己的 virtual display、virtual mouse、virtual keyboard 和 input lease。
+- package workflow 中 `sharedSystemInputUsed`、`systemPointerMoved`、`systemKeyboardEventsSent` 必须保持 false。
+- 真实 OS/global input 只能作为明确批准后的诊断路径，不能作为默认实现。
+- Planner 不直接输出坐标，只输出探索意图或通用 GUI action；坐标由 grounder/executor adapter 处理。
+- VLM 是感知工具，不是 executor、grounder 的唯一来源，也不单独拥有 completion 决策。
+- 高风险动作必须 fail closed：发送、删除、支付、发布、上传、权限变更、账户动作、外部提交、破坏性本地动作都必须返回 `needs-confirmation` / `approvalRequest`。
+- `done=true` 必须有当前视觉证据、artifact/file evidence、validator 结果和 action causality。
+- 不得把 secrets、raw provider payload、inline images、data URLs、API keys 或 Authorization headers 写入 tracked files、trace、manifest 或文档。
+- 实现必须通用。复杂 demo 暴露的问题应沉淀为 reusable fixture/probe/test，再修复通用算法。
+- Python 仍是 package 核心逻辑的优先实现语言。
+- 文件接近 2000 行时，应拆分文件或在本文件新增明确拆分任务。
 
-- Documentation-only changes: run `git diff --check`.
-- Computer Use package changes: run the package-local Python suite.
-- Policy/manifest TypeScript changes: run the focused Node tests above.
-- Visible complex workflow claims require trace/result refs, screenshot/viewer refs, final artifact refs, verifier verdict, virtual input logs, and explicit isolation flags.
-- Native or real-app blocked states are acceptable only when they write a blocked manifest with concrete missing capability, safety, or isolation reasons.
+## 当前任务板
 
-## Deferred Integration
+- [x] 更新 Computer Use 设计文档为“每线程虚拟桌面 + 主动视觉探索 + evidence ledger”版本。
+  证据：`packages/actions/computer-use/vision_computer_use_agent_mvp.md` 已重写为 v0.3，并明确 Evidence Loop、Action Loop、Task Loop 的边界。
 
-These remain paused until the package-level visible workflow is stable:
+- [ ] 实现 Evidence Ledger MVP。
+  输出 `evidence-log.jsonl`、`evidence-snapshot.json`、`evidence-index.json` 和 compact planner brief。记录 observation、region、text、visual-object、vlm-claim、grounding、action、verification、artifact、uncertainty、completion-claim。索引可从 log 重建，log 是唯一真相源。
+
+- [ ] 把现有 action loop 拆成 Evidence Loop / Action Loop / Task Loop。
+  Evidence Loop 只能做只读观察；scroll、hover、focus、菜单、tab、zoom、键鼠输入全部转入 Action Loop。completion guard 必须读取 evidence ledger，而不是散落的临时状态。
+
+- [ ] 补 freshness / staleness 规则。
+  click、type、press key、scroll、drag 后旧截图、旧 OCR、旧对象位置默认 stale；crop、OCR、VLM describe 不使屏幕 stale；保存文件后目录 listing 必须重新 observe。
+
+- [ ] 让 visible viewer 不再产生不可解释的空白帧。
+  viewer 应展示真实或可解释的 frame refs、虚拟鼠标、点击波纹、键盘输入、滚动、保存动作、action timeline、isolation flags 和 artifact refs。
+
+- [ ] 引入 `VirtualDesktopSession` / `SessionManager` 设计骨架。
+  每个线程绑定独立 virtual display、virtual input queue、filesystem root、capture stream、replay bundle 和 input lease。没有 isolated input adapter 时 fail closed。
+
+- [ ] 接入首个真实隔离桌面 backend。
+  优先使用 Linux desktop + noVNC + LibreOffice/browser，完成 L1 smoke：点击输入框、输入文字、点击按钮、验证屏幕变化，并生成 viewer、trace、input logs 和 isolation flags。
+
+- [ ] 做可见多页 PPT 验收。
+  在 package workflow 中完成多页 `.pptx`，记录通用 GUI action、保存动作、最终可见证据、文件证据、PPTX validator、slide count、无宏检查、viewer 和 input logs。PPT 不能成为特例算法。
+
+- [ ] 做可见 Word/DOCX 验收。
+  使用 Word 或 Word-compatible isolated target 创建 `.docx`，包含标题、段落、项目符号和表格。若真实 Word 无法安全隔离，写 blocked manifest，并先用 Word-compatible target 验证通用 contract。
+
+- [ ] 做跨应用文档工作流。
+  在同一 virtual session 中读取可见资料，创建 Word 报告或 PPT 摘要，保存、预览、返回目录证据。禁止使用 DOM shortcut 或 shell 直写产物冒充 GUI 操作。
+
+- [ ] 做高风险确认 demo。
+  用虚拟输入填写安全字段，到发送/上传/删除类动作前返回 `needs-confirmation`，viewer 展示风险动作上下文但不执行。
+
+- [ ] 提升 artifact validator。
+  保留 PPTX validator，增加 DOCX validator，并让 artifact evidence、file-list evidence、preview evidence、save causality 在 PPT、Word、CSV、表单、菜单、文件预览工作流中复用。
+
+- [ ] 更新 README 与 CLI 示例。
+  只记录已经能跑通并可验证的命令；不要把 roadmap 写成已支持能力。
+
+## 近期 TODO
+
+- [ ] 为 evidence record 定义最小 schema 和 JSONL 写入器。
+- [ ] 为 evidence index 实现 `current`、`byType`、`byRef`、`byActionIndex`、`byTag` 等基础索引。
+- [ ] 为 planner brief 实现 deterministic query：最新观察、当前文本、当前对象、候选目标、阻塞 uncertainty、最近动作、artifact evidence、completion 缺口。
+- [ ] 在现有 target-bound fixture 中记录 evidence log，先不接真实 VLM。
+- [ ] 给“状态改变操作不得进入 Evidence Loop”增加 focused regression。
+- [ ] 给空白 viewer frame 增加显式失败或解释性 placeholder，避免用户误以为真实截图为空白。
+- [ ] 运行 package-local Python 测试：`PYTHONPATH=packages/actions/computer-use python -m pytest packages/actions/computer-use/tests -q`。
+- [ ] policy/manifest TypeScript 改动后运行：`node --test --import tsx packages/actions/computer-use/provider-policy.test.ts packages/actions/computer-use/runtime-policy.test.ts`。
+- [ ] 每次提交前运行：`git diff --check`。
+
+## 本地模型配置
+
+- 本地 Computer Use 调试可以使用 ignored config，例如 `config.computer-use.local.json`。
+- 这些文件可能包含 provider URLs、API keys、model names，绝不能提交或打印。
+- 文本规划可以使用便宜的本地/项目文本模型。
+- 可选 VLM evidence 必须通过代码中的 allowlist 和 sanitized diagnostics 证明模型存在，不能泄露 provider payload。
+
+## 验证规则
+
+- 纯文档改动：运行 `git diff --check`。
+- Computer Use package 代码改动：运行 package-local Python suite。
+- policy/manifest TypeScript 改动：运行 focused Node tests。
+- 可见复杂工作声明必须包含 trace/result refs、screenshot/viewer refs、final artifact refs、verifier verdict、virtual input logs、evidence ledger 和 isolation flags。
+- native 或 real-app blocked 状态可以接受，但必须写 blocked manifest，说明缺失 capability、安全原因或隔离原因。
+
+## 暂缓集成
+
+以下内容等 package-level visible workflow 稳定后再推进：
 
 - SciForge runtime bridge integration
 - GUI `gui.present` / `gui.ask_user`
@@ -85,16 +131,16 @@ These remain paused until the package-level visible workflow is stable:
 - AgentServer/provider registry migration
 - release gates and full-repo verification
 
-## Required Reading
+## 必读文档
 
 - [`packages/actions/computer-use/README.md`](packages/actions/computer-use/README.md)
 - [`packages/actions/computer-use/vision_computer_use_agent_mvp.md`](packages/actions/computer-use/vision_computer_use_agent_mvp.md)
 - [`packages/actions/computer-use/KV_GROUND_SERVICE_GUIDE.md`](packages/actions/computer-use/KV_GROUND_SERVICE_GUIDE.md)
 - [`packages/observe/vision/README.md`](packages/observe/vision/README.md)
 
-## Worktree Policy
+## Worktree 规则
 
-- Development happens on `dev`; long-term branches should stay limited to `main` and `dev`.
-- Local state such as `config.local.json`, `config.computer-use.local.json`, `.sciforge/**`, package caches, and runtime homes must not enter Git.
-- Do not use `git reset --hard` or `git checkout --` to erase user changes.
-- Clean only known generated caches, temporary workspaces, and build outputs.
+- 开发默认在 `dev` 分支；长期分支尽量只保留 `main` 和 `dev`。
+- `config.local.json`、`config.computer-use.local.json`、`.sciforge/**`、package caches、runtime homes 等本地状态不得进入 Git。
+- 不使用 `git reset --hard` 或 `git checkout --` 擦除用户改动。
+- 只清理明确的 generated caches、temporary workspaces 和 build outputs。
