@@ -688,3 +688,19 @@ active visual exploration
 ```
 
 这能同时满足三个目标：用户能看到、用户不被打扰、算法不会被写死在某个软件或某个 demo 场景里。
+
+### 未来发展方向：容器化运行环境 + sandbox policy + isolated desktop
+
+后续长期形态建议采用：
+
+```text
+Host / Orchestrator
+-> task-scoped sandbox policy
+-> ephemeral container runtime
+-> isolated desktop session
+-> virtual input + evidence capture
+```
+
+其中容器负责提供可复现、可销毁、可并发的运行环境；sandbox policy 应由宿主机或编排器在启动容器时施加，而不是依赖容器内部进程自我约束。策略至少应覆盖挂载白名单、网络开关或 allowlist、secret 注入、resource limits、Linux capabilities、seccomp / AppArmor / SELinux profile，以及 evidence/artifact 输出目录。
+
+isolated desktop 仍是 Computer Use 的默认执行目标：任务在虚拟 display、虚拟鼠标、虚拟键盘和独立应用会话中运行，不直接控制用户真实桌面。任务结束后销毁容器并保留 replay/evidence bundle；高风险或不可信二进制任务可升级到 VM / microVM，但常规 Computer Use 不应默认操作宿主机桌面。
