@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import fields, is_dataclass, replace
 from typing import Any, Mapping, Sequence, TypeVar
 
@@ -26,11 +27,617 @@ from .contracts import (
     ComputerUseHostPorts,
 )
 from .budget import create_loop_budget_debit
+from .evidence_ledger import EvidenceLedger, action_mutates_visible_state, build_evidence_index
 from .safety import assess_action_risk
 from .verifier import normalize_verifier_metadata
 
 
 T = TypeVar("T")
+
+
+class EvidenceLoop:
+    """Observation-only phase: gather evidence and update the ledger."""
+
+    def __init__(self, sense: SenseProvider, ledger: EvidenceLedger) -> None:
+        self.sense = sense
+        self.ledger = ledger
+
+    def observe(
+        self,
+        request: ComputerUseRequest,
+        steps: Sequence[LoopStep],
+        *,
+        action_index: int,
+        query: str | None = None,
+    ) -> tuple[Observation, str]:
+        raw = self.sense.observe(request, steps, query=query) if query is not None else self.sense.observe(request, steps)
+        observation = _coerce_observation(raw)
+        evidence_id = self.ledger.append_observation(observation, action_index=action_index, query=query)
+        return _observation_with_evidence_metadata(observation, self.ledger, evidence_id), evidence_id
+
+    def record_grounding(
+        self,
+        grounding: Grounding,
+        *,
+        action_index: int,
+        observation_record_id: str,
+        target_description: str,
+    ) -> str:
+        return self.ledger.append_grounding(
+            grounding,
+            action_index=action_index,
+            observation_record_id=observation_record_id,
+            target_description=target_description,
+        )
+
+    def focus_crop(
+        self,
+        observation: Observation,
+        grounding: Grounding | None,
+        *,
+        action_index: int,
+        observation_record_id: str | None,
+    ) -> tuple[Observation, Grounding | None, str | None]:
+        if grounding is None:
+            return observation, grounding, None
+        crop = getattr(self.sense, "crop", None)
+        if not callable(crop):
+            return observation, grounding, None
+        region = _crop_region_from_grounding(grounding)
+        if region is None:
+            return observation, grounding, None
+        try:
+            cropped = _coerce_observation(crop(observation, region))
+        except Exception as exc:  # Optional evidence must not turn a valid action into a failure.
+            self.record_uncertainty(
+                action_index=action_index,
+                summary=f"Focus crop evidence failed: {exc}",
+                tags=["focus-crop", "optional-evidence"],
+                derived_from=[observation_record_id] if observation_record_id else [],
+                metadata={"failedStage": "focus-crop", "cropRegion": region},
+            )
+            return observation, _grounding_with_focus_crop_metadata(
+                grounding,
+                crop_refs=[],
+                crop_record_id=None,
+                crop_region=region,
+                error=str(exc),
+            ), None
+        crop_record_id = self.ledger.append_observation(cropped, action_index=action_index, query="focus-crop")
+        crop_refs = _focus_crop_refs_from_observation(cropped)
+        return (
+            _observation_with_focus_crop_metadata(observation, crop_refs, crop_record_id, region),
+            _grounding_with_focus_crop_metadata(
+                grounding,
+                crop_refs=crop_refs,
+                crop_record_id=crop_record_id,
+                crop_region=region,
+            ),
+            crop_record_id,
+        )
+
+    def record_action(
+        self,
+        action: ActionPlan,
+        execution: ExecutionOutcome | None,
+        *,
+        action_index: int,
+        before_record_id: str | None,
+        grounding_record_id: str | None,
+        observation_only: bool = False,
+    ) -> str:
+        return self.ledger.append_action(
+            action,
+            execution,
+            action_index=action_index,
+            before_record_id=before_record_id,
+            grounding_record_id=grounding_record_id,
+            observation_only=observation_only,
+        )
+
+    def record_verification(
+        self,
+        verification: Verification,
+        *,
+        action_index: int,
+        action_record_id: str | None,
+        after_record_id: str | None,
+    ) -> str:
+        return self.ledger.append_verification(
+            verification,
+            action_index=action_index,
+            action_record_id=action_record_id,
+            after_record_id=after_record_id,
+        )
+
+    def record_uncertainty(
+        self,
+        *,
+        action_index: int | None,
+        summary: str,
+        tags: Sequence[str] | None = None,
+        derived_from: Sequence[str] | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> str:
+        return self.ledger.append_uncertainty(
+            action_index=action_index,
+            summary=summary,
+            tags=tags,
+            derived_from=derived_from,
+            metadata=metadata,
+        )
+
+
+class ActionLoop:
+    """State-changing phase: plan, ground, execute, and verify one GUI action."""
+
+    def __init__(self, planner: ActionPlanner, executor: GuiExecutor, verifier: Verifier) -> None:
+        self.planner = planner
+        self.executor = executor
+        self.verifier = verifier
+
+    def plan(
+        self,
+        request: ComputerUseRequest,
+        observation: Observation,
+        steps: Sequence[LoopStep],
+    ) -> ActionPlan:
+        return _coerce_action_plan(self.planner.plan(request, observation, steps))
+
+    def ground(
+        self,
+        sense: SenseProvider,
+        observation: Observation,
+        plan: ActionPlan,
+        steps: Sequence[LoopStep],
+    ) -> Grounding | None:
+        if not _requires_grounding(plan):
+            return None
+        return _coerce_grounding(sense.locate(observation, plan.target, steps))  # type: ignore[arg-type]
+
+    def execute(
+        self,
+        request: ComputerUseRequest,
+        plan: ActionPlan,
+        grounding: Grounding | None,
+    ) -> tuple[Grounding | None, ExecutionOutcome]:
+        if _is_observation_only_wait(plan):
+            return (
+                _mark_observation_only_grounding(grounding),
+                ExecutionOutcome(
+                    ok=True,
+                    message="Observation-only wait; executor skipped.",
+                    metadata={"observationOnly": True},
+                ),
+            )
+        return grounding, _coerce_execution(self.executor.execute(plan, grounding, request))
+
+    def verify(
+        self,
+        request: ComputerUseRequest,
+        before: Observation,
+        after: Observation,
+        plan: ActionPlan,
+        execution: ExecutionOutcome,
+        steps: Sequence[LoopStep],
+    ) -> Verification:
+        return _coerce_verification(self.verifier.verify(request, before, after, plan, execution, steps))
+
+
+class CompletionGuard:
+    """Ledger-backed completion guard for planner/verifier done claims."""
+
+    def __init__(self, ledger: EvidenceLedger) -> None:
+        self.ledger = ledger
+
+    def append_claim_if_current(
+        self,
+        *,
+        action_index: int | None,
+        summary: str,
+        status: str,
+        supports: Sequence[str] | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> tuple[str | None, str | None]:
+        support_ids = [support for support in (supports or []) if support]
+        if status == "completed" and not self.supports_current_evidence(support_ids):
+            reason = "Completion guard rejected stale or missing evidence support."
+            self.ledger.append_uncertainty(
+                action_index=action_index,
+                summary=reason,
+                tags=["completion-guard", "stale-evidence"],
+                derived_from=support_ids,
+                metadata={"status": status, **dict(metadata or {})},
+            )
+            return None, reason
+        record_id = self.ledger.append_completion_claim(
+            action_index=action_index,
+            summary=summary,
+            status=status,
+            supports=support_ids,
+            metadata=metadata,
+        )
+        return record_id, None
+
+    def supports_current_evidence(self, supports: Sequence[str]) -> bool:
+        if not supports:
+            return False
+        current_ids = set(build_evidence_index(self.ledger.records)["current"])
+        return any(support in current_ids for support in supports)
+
+
+class TaskLoop:
+    """Task orchestration phase: alternate evidence and action loops to completion."""
+
+    def __init__(
+        self,
+        request: ComputerUseRequest,
+        sense: SenseProvider,
+        planner: ActionPlanner,
+        executor: GuiExecutor,
+        verifier: Verifier,
+        ledger: EvidenceLedger,
+    ) -> None:
+        self.request = request
+        self.evidence = EvidenceLoop(sense, ledger)
+        self.action = ActionLoop(planner, executor, verifier)
+        self.completion_guard = CompletionGuard(ledger)
+        self.ledger = ledger
+
+    def finish(
+        self,
+        status: ComputerUseStatus,
+        reason: str,
+        steps: Sequence[LoopStep],
+        final_observation: Observation | None,
+        diagnostics: Mapping[str, Any] | None = None,
+        approval_request: ApprovalRequest | None = None,
+    ) -> ComputerUseResult:
+        return _result(
+            status,
+            reason,
+            self.request,
+            steps,
+            final_observation,
+            diagnostics,
+            approval_request,
+            evidence_ledger=self.ledger,
+        )
+
+    def run(self) -> ComputerUseResult:
+        req = self.request
+        steps: list[LoopStep] = []
+        final_observation: Observation | None = None
+
+        for index in range(req.max_steps):
+            before, before_evidence_id = self.evidence.observe(req, steps, action_index=index)
+            final_observation = before
+            plan = self.action.plan(req, before, steps)
+
+            if plan.done:
+                _, guard_reason = self.completion_guard.append_claim_if_current(
+                    action_index=index,
+                    summary=plan.reason or "Planner reported task complete.",
+                    status="completed",
+                    supports=[before_evidence_id],
+                    metadata={"source": "planner"},
+                )
+                if guard_reason:
+                    step = LoopStep(index=index, before=before, plan=plan, status="failed", failure_reason=guard_reason)
+                    steps.append(step)
+                    return self.finish("failed-with-reason", guard_reason, steps, before, {"failedStage": "completion-guard"})
+                step = LoopStep(index=index, before=before, plan=plan, status="done")
+                steps.append(step)
+                return self.finish(
+                    "completed",
+                    plan.reason or "Planner reported task complete.",
+                    steps,
+                    before,
+                )
+
+            planner_issue = _planner_contract_issue(plan)
+            if planner_issue:
+                contract_reason = _planner_contract_reason(planner_issue, plan)
+                self.evidence.record_uncertainty(
+                    action_index=index,
+                    summary=contract_reason,
+                    tags=["planner-contract", planner_issue],
+                    derived_from=[before_evidence_id],
+                    metadata={"contractIssue": planner_issue},
+                )
+                step = LoopStep(
+                    index=index,
+                    before=before,
+                    plan=plan,
+                    status="failed",
+                    failure_reason=contract_reason,
+                )
+                steps.append(step)
+                return self.finish(
+                    "failed-with-reason",
+                    contract_reason,
+                    steps,
+                    before,
+                    {"failedStage": "planner", "contractIssue": planner_issue},
+                )
+
+            risk = assess_action_risk(plan, fail_closed=req.risk_policy == "fail-closed")
+            missing_approval_ref = risk.needs_confirmation and req.risk_policy == "allow-confirmed" and not req.approval_ref
+            if risk.blocked or missing_approval_ref:
+                reason = (
+                    "High-risk Computer Use action was marked allow-confirmed but no approval_ref was provided."
+                    if missing_approval_ref
+                    else risk.reason
+                )
+                blocked_plan = ActionPlan(
+                    **{
+                        **_asdict(plan),
+                        "risk_level": risk.level,
+                        "requires_confirmation": risk.needs_confirmation,
+                    }
+                )
+                action_evidence_id = self.evidence.record_action(
+                    blocked_plan,
+                    None,
+                    action_index=index,
+                    before_record_id=before_evidence_id,
+                    grounding_record_id=None,
+                    observation_only=True,
+                )
+                self.evidence.record_uncertainty(
+                    action_index=index,
+                    summary=reason,
+                    tags=["needs-confirmation", risk.level],
+                    derived_from=[before_evidence_id, action_evidence_id],
+                    metadata={"riskLevel": risk.level},
+                )
+                step = LoopStep(
+                    index=index,
+                    before=before,
+                    plan=blocked_plan,
+                    status="blocked",
+                    failure_reason=reason,
+                )
+                steps.append(step)
+                return self.finish(
+                    "needs-confirmation",
+                    reason,
+                    steps,
+                    before,
+                    {"blockedActionIndex": index, "riskLevel": risk.level},
+                    _approval_request(req, plan, risk.level, reason, index, before),
+                )
+
+            grounding = self.action.ground(self.evidence.sense, before, plan, steps)
+            grounding_evidence_id: str | None = None
+            if grounding is not None:
+                before, grounding, _ = self.evidence.focus_crop(
+                    before,
+                    grounding,
+                    action_index=index,
+                    observation_record_id=before_evidence_id,
+                )
+                grounding_evidence_id = self.evidence.record_grounding(
+                    grounding,
+                    action_index=index,
+                    observation_record_id=before_evidence_id,
+                    target_description=plan.target.description if plan.target else "",
+                )
+                if not grounding.ok:
+                    self.evidence.record_uncertainty(
+                        action_index=index,
+                        summary=grounding.reason or "Target grounding failed.",
+                        tags=["grounding"],
+                        derived_from=[before_evidence_id, grounding_evidence_id],
+                        metadata={"failedStage": "grounding"},
+                    )
+                    step = LoopStep(
+                        index=index,
+                        before=before,
+                        plan=plan,
+                        grounding=grounding,
+                        status="failed",
+                        failure_reason=grounding.reason or "Target grounding failed.",
+                    )
+                    steps.append(step)
+                    return self.finish(
+                        "failed-with-reason",
+                        grounding.reason or "Target grounding failed.",
+                        steps,
+                        before,
+                        {"failedStage": "grounding", "actionIndex": index},
+                    )
+
+            grounding, execution = self.action.execute(req, plan, grounding)
+            if not execution.ok:
+                action_mutates = action_mutates_visible_state(
+                    plan.kind or "",
+                    observation_only=_is_observation_only_wait(plan),
+                )
+                action_evidence_id = self.evidence.record_action(
+                    plan,
+                    execution,
+                    action_index=index,
+                    before_record_id=before_evidence_id,
+                    grounding_record_id=grounding_evidence_id,
+                    observation_only=not action_mutates,
+                )
+                after: Observation | None = None
+                after_evidence_id: str | None = None
+                if action_mutates:
+                    try:
+                        after, after_evidence_id = self.evidence.observe(
+                            req,
+                            steps,
+                            action_index=index,
+                            query="after-failed-action",
+                        )
+                        final_observation = after
+                    except Exception as error:  # pragma: no cover - defensive evidence fallback
+                        self.evidence.record_uncertainty(
+                            action_index=index,
+                            summary=f"Failed to capture after-evidence for failed executor action: {error}",
+                            tags=["execution", "after-evidence"],
+                            derived_from=[before_evidence_id, action_evidence_id],
+                            metadata={"failedStage": "after-failed-action-capture"},
+                        )
+                self.evidence.record_uncertainty(
+                    action_index=index,
+                    summary=execution.message or "Executor failed.",
+                    tags=["execution"],
+                    derived_from=[ref for ref in (before_evidence_id, action_evidence_id, after_evidence_id) if ref],
+                    metadata={
+                        "failedStage": "execution",
+                        "afterEvidenceCaptured": after_evidence_id is not None,
+                    },
+                )
+                step = LoopStep(
+                    index=index,
+                    before=before,
+                    plan=plan,
+                    grounding=grounding,
+                    execution=execution,
+                    after=after,
+                    status="failed",
+                    failure_reason=execution.message or "Executor failed.",
+                )
+                steps.append(step)
+                return self.finish(
+                    "failed-with-reason",
+                    execution.message or "Executor failed.",
+                    steps,
+                    after or before,
+                    {
+                        "failedStage": "execution",
+                        "actionIndex": index,
+                        "afterEvidenceCaptured": after_evidence_id is not None,
+                    },
+                )
+
+            action_evidence_id = self.evidence.record_action(
+                plan,
+                execution,
+                action_index=index,
+                before_record_id=before_evidence_id,
+                grounding_record_id=grounding_evidence_id,
+                observation_only=_is_observation_only_wait(plan),
+            )
+            after, after_evidence_id = self.evidence.observe(req, steps, action_index=index, query="after-action")
+            final_observation = after
+            verification = self.action.verify(req, before, after, plan, execution, steps)
+            verification_evidence_id = self.evidence.record_verification(
+                verification,
+                action_index=index,
+                action_record_id=action_evidence_id,
+                after_record_id=after_evidence_id,
+            )
+            step = LoopStep(
+                index=index,
+                before=before,
+                plan=plan,
+                grounding=grounding,
+                execution=execution,
+                after=after,
+                verification=verification,
+                status="done" if verification.ok else "failed",
+                failure_reason=None if verification.ok else verification.reason,
+            )
+            steps.append(step)
+            if not verification.ok:
+                self.evidence.record_uncertainty(
+                    action_index=index,
+                    summary=verification.reason or "Verifier rejected the action result.",
+                    tags=["verification"],
+                    derived_from=[action_evidence_id, verification_evidence_id],
+                    metadata={"failedStage": "verification"},
+                )
+                return self.finish(
+                    "failed-with-reason",
+                    verification.reason or "Verifier rejected the action result.",
+                    steps,
+                    after,
+                    {"failedStage": "verification", "actionIndex": index},
+                )
+            if verification.done:
+                _, guard_reason = self.completion_guard.append_claim_if_current(
+                    action_index=index,
+                    summary=verification.reason or "Verifier reported task complete.",
+                    status="completed",
+                    supports=[verification_evidence_id, after_evidence_id],
+                    metadata={"source": "verifier"},
+                )
+                if guard_reason:
+                    return self.finish("failed-with-reason", guard_reason, steps, after, {"failedStage": "completion-guard"})
+                return self.finish(
+                    "completed",
+                    verification.reason or "Verifier reported task complete.",
+                    steps,
+                    after,
+                )
+
+        final_before, final_before_evidence_id = self.evidence.observe(
+            req,
+            steps,
+            action_index=len(steps),
+            query="final-no-execute-completion-check",
+        )
+        final_observation = final_before
+        final_plan = self.action.plan(req, final_before, steps)
+        final_index = len(steps)
+
+        if final_plan.done:
+            _, guard_reason = self.completion_guard.append_claim_if_current(
+                action_index=final_index,
+                summary=final_plan.reason or "Planner reported task complete after final observation.",
+                status="completed",
+                supports=[final_before_evidence_id],
+                metadata={"source": "final-no-execute-planner"},
+            )
+            steps.append(
+                LoopStep(
+                    index=final_index,
+                    before=final_before,
+                    plan=final_plan,
+                    status="failed" if guard_reason else "done",
+                    failure_reason=guard_reason,
+                )
+            )
+            if guard_reason:
+                return self.finish("failed-with-reason", guard_reason, steps, final_before, {"failedStage": "completion-guard"})
+            return self.finish(
+                "completed",
+                final_plan.reason or "Planner reported task complete after final observation.",
+                steps,
+                final_before,
+            )
+
+        diagnostics: dict[str, Any] = {
+            "failedStage": "planner",
+            "maxSteps": req.max_steps,
+            "finalNoExecuteCheck": True,
+        }
+        planner_issue = _planner_contract_issue(final_plan)
+        if planner_issue:
+            diagnostics["finalPlannerContractIssue"] = planner_issue
+        if final_plan.reason:
+            diagnostics["finalPlannerReason"] = final_plan.reason
+        if final_plan.kind:
+            diagnostics["finalPlannerActionKind"] = final_plan.kind
+        failure_reason = f"Computer Use loop reached max_steps={req.max_steps} without completion."
+        self.evidence.record_uncertainty(
+            action_index=final_index,
+            summary=failure_reason,
+            tags=["completion-gap", "max-steps"],
+            derived_from=[final_before_evidence_id],
+            metadata=diagnostics,
+        )
+        return self.finish(
+            "max-steps",
+            failure_reason,
+            steps,
+            final_observation,
+            diagnostics,
+        )
 
 
 def run_computer_use_task(
@@ -58,209 +665,7 @@ def run_computer_use_task(
             failure_diagnostics={"failedStage": "request-validation"},
             metrics={},
         )
-    steps: list[LoopStep] = []
-    final_observation: Observation | None = None
-
-    for index in range(req.max_steps):
-        before = _coerce_observation(sense.observe(req, steps))
-        final_observation = before
-        raw_plan = planner.plan(req, before, steps)
-        plan = _coerce_action_plan(raw_plan)
-
-        if plan.done:
-            step = LoopStep(index=index, before=before, plan=plan, status="done")
-            steps.append(step)
-            return _result(
-                "completed",
-                plan.reason or "Planner reported task complete.",
-                req,
-                steps,
-                before,
-            )
-
-        planner_issue = _planner_contract_issue(plan)
-        if planner_issue:
-            contract_reason = _planner_contract_reason(planner_issue, plan)
-            step = LoopStep(
-                index=index,
-                before=before,
-                plan=plan,
-                status="failed",
-                failure_reason=contract_reason,
-            )
-            steps.append(step)
-            return _result(
-                "failed-with-reason",
-                contract_reason,
-                req,
-                steps,
-                before,
-                {"failedStage": "planner", "contractIssue": planner_issue},
-            )
-
-        risk = assess_action_risk(plan, fail_closed=req.risk_policy == "fail-closed")
-        missing_approval_ref = risk.needs_confirmation and req.risk_policy == "allow-confirmed" and not req.approval_ref
-        if risk.blocked or missing_approval_ref:
-            reason = (
-                "High-risk Computer Use action was marked allow-confirmed but no approval_ref was provided."
-                if missing_approval_ref
-                else risk.reason
-            )
-            step = LoopStep(
-                index=index,
-                before=before,
-                plan=ActionPlan(
-                    **{
-                        **_asdict(plan),
-                        "risk_level": risk.level,
-                        "requires_confirmation": risk.needs_confirmation,
-                    }
-                ),
-                status="blocked",
-                failure_reason=reason,
-            )
-            steps.append(step)
-            return _result(
-                "needs-confirmation",
-                reason,
-                req,
-                steps,
-                before,
-                {"blockedActionIndex": index, "riskLevel": risk.level},
-                _approval_request(req, plan, risk.level, reason, index, before),
-            )
-
-        grounding: Grounding | None = None
-        if _requires_grounding(plan):
-            grounding = _coerce_grounding(sense.locate(before, plan.target, steps))  # type: ignore[arg-type]
-            if not grounding.ok:
-                step = LoopStep(
-                    index=index,
-                    before=before,
-                    plan=plan,
-                    grounding=grounding,
-                    status="failed",
-                    failure_reason=grounding.reason or "Target grounding failed.",
-                )
-                steps.append(step)
-                return _result(
-                    "failed-with-reason",
-                    grounding.reason or "Target grounding failed.",
-                    req,
-                    steps,
-                    before,
-                    {"failedStage": "grounding", "actionIndex": index},
-                )
-
-        if _is_observation_only_wait(plan):
-            grounding = _mark_observation_only_grounding(grounding)
-            execution = ExecutionOutcome(
-                ok=True,
-                message="Observation-only wait; executor skipped.",
-                metadata={"observationOnly": True},
-            )
-        else:
-            execution = _coerce_execution(executor.execute(plan, grounding, req))
-        if not execution.ok:
-            step = LoopStep(
-                index=index,
-                before=before,
-                plan=plan,
-                grounding=grounding,
-                execution=execution,
-                status="failed",
-                failure_reason=execution.message or "Executor failed.",
-            )
-            steps.append(step)
-            return _result(
-                "failed-with-reason",
-                execution.message or "Executor failed.",
-                req,
-                steps,
-                before,
-                {"failedStage": "execution", "actionIndex": index},
-            )
-
-        after = _coerce_observation(sense.observe(req, steps, query="after-action"))
-        final_observation = after
-        verification = _coerce_verification(
-            verifier.verify(req, before, after, plan, execution, steps)
-        )
-        step = LoopStep(
-            index=index,
-            before=before,
-            plan=plan,
-            grounding=grounding,
-            execution=execution,
-            after=after,
-            verification=verification,
-            status="done" if verification.ok else "failed",
-            failure_reason=None if verification.ok else verification.reason,
-        )
-        steps.append(step)
-        if not verification.ok:
-            return _result(
-                "failed-with-reason",
-                verification.reason or "Verifier rejected the action result.",
-                req,
-                steps,
-                after,
-                {"failedStage": "verification", "actionIndex": index},
-            )
-        if verification.done:
-            return _result(
-                "completed",
-                verification.reason or "Verifier reported task complete.",
-                req,
-                steps,
-                after,
-            )
-
-    final_before = _coerce_observation(
-        sense.observe(req, steps, query="final-no-execute-completion-check")
-    )
-    final_observation = final_before
-    final_plan = _coerce_action_plan(planner.plan(req, final_before, steps))
-    final_index = len(steps)
-
-    if final_plan.done:
-        steps.append(
-            LoopStep(
-                index=final_index,
-                before=final_before,
-                plan=final_plan,
-                status="done",
-            )
-        )
-        return _result(
-            "completed",
-            final_plan.reason or "Planner reported task complete after final observation.",
-            req,
-            steps,
-            final_before,
-        )
-
-    diagnostics: dict[str, Any] = {
-        "failedStage": "planner",
-        "maxSteps": req.max_steps,
-        "finalNoExecuteCheck": True,
-    }
-    planner_issue = _planner_contract_issue(final_plan)
-    if planner_issue:
-        diagnostics["finalPlannerContractIssue"] = planner_issue
-    if final_plan.reason:
-        diagnostics["finalPlannerReason"] = final_plan.reason
-    if final_plan.kind:
-        diagnostics["finalPlannerActionKind"] = final_plan.kind
-    failure_reason = f"Computer Use loop reached max_steps={req.max_steps} without completion."
-    return _result(
-        "max-steps",
-        failure_reason,
-        req,
-        steps,
-        final_observation,
-        diagnostics,
-    )
+    return TaskLoop(req, sense, planner, executor, verifier, EvidenceLedger.from_request(req)).run()
 
 
 def run_task(
@@ -327,7 +732,7 @@ def run_task(
 
 
 def _requires_grounding(plan: ActionPlan) -> bool:
-    return plan.kind in {"click", "double_click", "drag", "wait"} and plan.target is not None
+    return plan.kind in {"click", "double_click", "drag", "wait", "focus"} and plan.target is not None
 
 
 def _is_observation_only_wait(plan: ActionPlan) -> bool:
@@ -346,6 +751,113 @@ def _mark_observation_only_grounding(grounding: Grounding | None) -> Grounding |
     )
 
 
+def _crop_region_from_grounding(grounding: Grounding) -> Mapping[str, Any] | None:
+    metadata = dict(grounding.metadata)
+    for key in ("cropRegion", "focusRegion", "targetRegion", "region", "bounds", "boundingBox", "targetBounds"):
+        region = metadata.get(key)
+        if isinstance(region, Mapping):
+            return {
+                **dict(region),
+                "source": f"grounding.metadata.{key}",
+                "coordinateSpace": region.get("coordinateSpace") or region.get("coordinate_space") or grounding.coordinate_space,
+            }
+    if grounding.x is None or grounding.y is None:
+        return None
+    return {
+        "kind": "point-neighborhood",
+        "x": grounding.x,
+        "y": grounding.y,
+        "coordinateSpace": grounding.coordinate_space,
+        "radius": 64,
+        "source": "grounding.point",
+    }
+
+
+def _focus_crop_refs_from_observation(observation: Observation) -> list[str]:
+    refs: list[str] = []
+    if _looks_like_screenshot_ref(observation.ref):
+        refs.append(observation.ref)
+    refs.extend(_refs_from_focus_crop_fields(observation.metadata))
+    refs.extend(_refs_from_focus_crop_fields(observation.artifacts))
+    return _unique_strings(ref for ref in refs if _looks_like_screenshot_ref(ref))
+
+
+def _refs_from_focus_crop_fields(value: Any) -> list[str]:
+    refs: list[str] = []
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            normalized = str(key).replace("_", "").replace("-", "").lower()
+            if any(token in normalized for token in ("focusref", "focusrefs", "focuscrop", "screenshot", "capture", "image")):
+                refs.extend(_refs_inside(item))
+            elif isinstance(item, (Mapping, list, tuple)):
+                refs.extend(_refs_from_focus_crop_fields(item))
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            refs.extend(_refs_from_focus_crop_fields(item))
+    return _unique_strings(refs)
+
+
+def _observation_with_focus_crop_metadata(
+    observation: Observation,
+    crop_refs: Sequence[str],
+    crop_record_id: str | None,
+    crop_region: Mapping[str, Any],
+) -> Observation:
+    metadata = dict(observation.metadata)
+    metadata["focusRefs"] = _unique_strings([*_refs_inside(metadata.get("focusRefs")), *crop_refs])
+    metadata["focusCropEvidenceRecordIds"] = _unique_strings([
+        *_refs_inside(metadata.get("focusCropEvidenceRecordIds")),
+        *([crop_record_id] if crop_record_id else []),
+    ])
+    metadata["focusCropRegions"] = [
+        *([item for item in metadata.get("focusCropRegions", []) if isinstance(item, Mapping)] if isinstance(metadata.get("focusCropRegions"), list) else []),
+        dict(crop_region),
+    ]
+    return replace(observation, metadata=metadata)
+
+
+def _grounding_with_focus_crop_metadata(
+    grounding: Grounding,
+    *,
+    crop_refs: Sequence[str],
+    crop_record_id: str | None,
+    crop_region: Mapping[str, Any],
+    error: str | None = None,
+) -> Grounding:
+    metadata = dict(grounding.metadata)
+    source_diagnostics = metadata.get("diagnostics")
+    diagnostics = dict(source_diagnostics) if isinstance(source_diagnostics, Mapping) else {}
+    if source_diagnostics and not isinstance(source_diagnostics, Mapping):
+        diagnostics["grounderDiagnostics"] = list(source_diagnostics) if isinstance(source_diagnostics, (list, tuple)) else source_diagnostics
+    diagnostics["focusCropRefs"] = _unique_strings([
+        *_refs_inside(diagnostics.get("focusCropRefs")),
+        *crop_refs,
+    ])
+    if crop_record_id:
+        diagnostics["focusCropEvidenceRecordId"] = crop_record_id
+    diagnostics["focusCropRegion"] = dict(crop_region)
+    if error:
+        diagnostics["focusCropError"] = error
+    metadata["diagnostics"] = diagnostics
+    metadata["focusCropRefs"] = diagnostics["focusCropRefs"]
+    if crop_record_id:
+        metadata["focusCropEvidenceRecordId"] = crop_record_id
+    return replace(grounding, metadata=metadata)
+
+
+def _observation_with_evidence_metadata(
+    observation: Observation,
+    ledger: EvidenceLedger,
+    evidence_record_id: str,
+) -> Observation:
+    metadata = {
+        **dict(observation.metadata),
+        "evidenceRecordId": evidence_record_id,
+        "evidenceLedger": ledger.refs(),
+    }
+    return replace(observation, metadata=metadata)
+
+
 def _result(
     status: ComputerUseStatus,
     reason: str,
@@ -354,8 +866,16 @@ def _result(
     final_observation: Observation | None,
     diagnostics: Mapping[str, Any] | None = None,
     approval_request: ApprovalRequest | None = None,
+    *,
+    evidence_ledger: EvidenceLedger | None = None,
 ) -> ComputerUseResult:
     failure_diagnostics = dict(diagnostics or {})
+    if evidence_ledger is not None:
+        evidence_ledger.write()
+        failure_diagnostics = {
+            **failure_diagnostics,
+            **evidence_ledger.result_diagnostics(),
+        }
     final_artifact_refs = _final_artifact_refs(steps, final_observation)
     if status == "completed" and _requires_final_artifact_evidence(request):
         evidence_refs = _final_artifact_evidence_refs(steps, final_observation)
@@ -395,6 +915,11 @@ def _result(
             }
             final_artifact_refs = []
     metrics = _result_metrics(steps)
+    if evidence_ledger is not None:
+        metrics = {
+            **metrics,
+            "evidenceRecordCount": len(evidence_ledger.records),
+        }
     budget_debit = create_loop_budget_debit(request, steps, status, metrics)
     budget_debit_refs = (budget_debit["debitId"],)
     steps_with_refs = tuple(
@@ -476,7 +1001,11 @@ def _final_artifact_evidence_refs(
 
 
 def _requires_final_artifact_evidence(request: ComputerUseRequest) -> bool:
-    return _metadata_requires_final_artifact(request.metadata)
+    return (
+        _metadata_requires_final_artifact(request.metadata)
+        or _text_requires_final_artifact_evidence(request.task)
+        or _metadata_acceptance_text_requires_final_artifact(request.metadata)
+    )
 
 
 def _requires_directory_evidence(request: ComputerUseRequest) -> bool:
@@ -496,6 +1025,75 @@ def _metadata_requires_final_artifact(value: Any) -> bool:
     if isinstance(value, (list, tuple)):
         return any(_metadata_requires_final_artifact(item) for item in value)
     return False
+
+
+def _metadata_acceptance_text_requires_final_artifact(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            normalized = str(key).replace("_", "").replace("-", "").lower()
+            if normalized in {"planneracceptancecontract", "computeruselong", "acceptancecontract"} and isinstance(item, Mapping):
+                if _metadata_acceptance_text_requires_final_artifact(item):
+                    return True
+            if normalized in {"task", "tasktext", "prompt", "roundprompt", "expectedtrace", "acceptance", "requirements"}:
+                if _metadata_acceptance_text_requires_final_artifact(item):
+                    return True
+        return False
+    if isinstance(value, (list, tuple)):
+        return any(_metadata_acceptance_text_requires_final_artifact(item) for item in value)
+    if isinstance(value, str):
+        return _text_requires_final_artifact_evidence(value)
+    return False
+
+
+def _text_requires_final_artifact_evidence(text: str | None) -> bool:
+    compact = str(text or "")
+    if not compact.strip():
+        return False
+    if _looks_like_inline_text_entry_artifact_task(compact) and not _explicit_final_artifact_intent(compact):
+        return False
+    return bool(
+        re.search(
+            r"(?:create|make|produce|generate|write|draft|build|export|生成|制作|创建|写出|草拟|导出).{0,60}"
+            r"(?:slide|ppt|presentation|deck|artifact|document|docx?|report|summary|index|file|brief|文稿|幻灯片|演示|产物|文档|报告|总结|汇总|索引|文件|简报)",
+            compact,
+            re.IGNORECASE,
+        )
+        or re.search(
+            r"(?:save|保存).{0,60}(?:artifact|report|summary|index|brief|ppt|presentation|deck|产物|报告|总结|汇总|索引|简报|幻灯片|演示)",
+            compact,
+            re.IGNORECASE,
+        )
+        or _explicit_final_artifact_intent(compact)
+        or re.search(
+            r"(?:trace summary|evidence summary|action mapping|field evidence|control evidence|visual evidence (?:summary|refs?|report)|refs-first report|"
+            r"字段证据|控件证据|视觉证据(?:总结|汇总|引用|报告)|动作映射|证据总结|证据汇总|引用报告)",
+            compact,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _explicit_final_artifact_intent(text: str) -> bool:
+    return bool(
+        re.search(
+            r"(?:final[-\s]?artifact|l2-artifact-refs|l3-workflow-refs|visible[-\s]?artifact|"
+            r"gui\.present.{0,40}artifact|report artifact|final report|artifact evidence|最终文件|最终产物|可见产物|报告产物)",
+            text,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _looks_like_inline_text_entry_artifact_task(text: str) -> bool:
+    return bool(
+        re.search(
+            r"(?:write|draft|type|enter|输入|填写|写入|草拟).{0,80}(?:summary|report|brief|总结|报告|简报).{0,80}"
+            r"(?:(?:in|into|inside|to)\s+(?:the\s+)?(?:comment box|comment field|comment|field|input|textbox|text box|form field|message box|chat box)|"
+            r"(?:在|到|进).{0,8}(?:评论框|评论区|字段|输入框|文本框|表单|消息框|聊天框))",
+            text,
+            re.IGNORECASE,
+        )
+    )
 
 
 def _metadata_requires_directory_evidence(value: Any) -> bool:
@@ -704,6 +1302,13 @@ def _looks_like_control_evidence_ref(value: str) -> bool:
         "tool-payload.json",
         "gui-present.json",
         "gui-ask-user.json",
+        "approval-request.json",
+        "risk-audit.json",
+        "confirmed-request.json",
+        "blocked-manifest.json",
+        "repair-hint.json",
+        "continuation-request.json",
+        "directory-listing.json",
         "computer-use-request.json",
         "gateway-request.json",
         "request.json",
@@ -883,6 +1488,9 @@ class _HostPortSense:
     def locate(self, observation: Observation, target: ActionTarget, history: Sequence[LoopStep]):
         return _call_required_port(self.host_ports, "locate", observation, target, history)
 
+    def crop(self, observation: Observation, region: Mapping[str, Any]):
+        return _call_optional_port(self.host_ports, "crop", observation, region)
+
 
 class _HostPortPlanner:
     def __init__(self, host_ports: ComputerUseHostPorts):
@@ -965,6 +1573,8 @@ _SUPPORTED_ACTION_KINDS = {
     "hotkey",
     "scroll",
     "wait",
+    "focus",
+    "save",
 }
 
 
@@ -1043,7 +1653,7 @@ def _planner_contract_reason(issue: PlannerContractIssue, plan: ActionPlan | Non
     if issue == "app-private-shortcut":
         return "Planner emitted an app-private shortcut. Use generic visible GUI actions or platform launcher/navigation commands."
     if issue == "unsupported-action":
-        return "Planner emitted an unsupported generic action. Use open_app, click, double_click, drag, type_text, press_key, hotkey, scroll, or wait."
+        return "Planner emitted an unsupported generic action. Use open_app, click, double_click, drag, type_text, press_key, hotkey, scroll, wait, focus, or save."
     return "Planner returned no executable generic action."
 
 

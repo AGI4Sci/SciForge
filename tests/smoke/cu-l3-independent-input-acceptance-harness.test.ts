@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import test from 'node:test';
 import { promisify } from 'node:util';
 
@@ -54,6 +54,9 @@ test('CU L3 independent-input harness projects a non-dry-run package-bridge trac
     assert.equal(result.manifest.executorLease.owner, 'sciforge-independent-input-adapter remote-desktop');
     assert.equal(result.manifest.verifierVerdict.ref, 'cu-l3-independent-input-verifier.json');
     assert.ok(result.manifest.guiPresent.displayedRefs?.includes(evidence.finalArtifactRef));
+    assert.equal(result.manifest.scenarioId, 'CU-LONG-004');
+    assert.equal(result.manifest.completionEvidence?.evidenceKind, 'isolated-L3');
+    assert.equal(result.manifest.completionEvidenceRef, 'isolated-desktop-l3-workflow-evidence.json');
 
     const writtenVerifier = JSON.parse(await readFile(result.paths.verifier, 'utf8'));
     assert.equal(writtenVerifier.schemaVersion, 'sciforge.computer-use.l3-independent-input-verifier.v1');
@@ -101,7 +104,7 @@ test('CU L3 independent-input harness discovers generic markdown final artifacts
     const adapterPath = join(workspace, 'independent-input-adapter.json');
     const finalArtifactRef = 'index.md';
     const visibleArtifact = visibleMarkdownArtifact(finalArtifactRef, 'step-003-save');
-    await writeHarnessEvidenceFiles(workspace);
+    await writeHarnessEvidenceFiles(workspace, { completionFinalArtifactRef: finalArtifactRef });
     await writeFile(join(workspace, finalArtifactRef), '# Acceptance index\n\nVisible final markdown artifact.\n');
     await writeFile(join(workspace, 'host-ports.json'), JSON.stringify({ ports: { execute: { provider: 'sciforge-simulated-remote-desktop-input-adapter' } } }));
     await writeFile(join(workspace, 'tool-payload.json'), JSON.stringify({
@@ -159,6 +162,200 @@ test('CU L3 independent-input harness discovers generic markdown final artifacts
     assert.ok(result.manifest.guiPresent.artifactRefs?.includes(finalArtifactRef));
     const guiPresentClaim = result.manifest.evidenceClaims.find((claim) => claim.kind === 'gui-present-record');
     assert.ok(guiPresentClaim?.artifactRefs?.includes(finalArtifactRef));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('CU L3 independent-input harness discovers bundle-local final artifacts from sibling sidecars', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-l3-sidecar-final-'));
+  try {
+    const runId = 'cu-l3-sidecar-final-fixture';
+    const tracePath = join(workspace, 'vision-trace.json');
+    const adapterPath = join(workspace, 'independent-input-adapter.json');
+    const finalArtifactRef = 'report.md';
+    const visibleArtifact = visibleMarkdownArtifact(finalArtifactRef, 'step-003-save');
+    await writeHarnessEvidenceFiles(workspace, { completionFinalArtifactRef: finalArtifactRef });
+    await writeFile(join(workspace, finalArtifactRef), '# Report\n\nVisible sidecar final artifact.\n');
+    await writeFile(join(workspace, 'host-ports.json'), JSON.stringify({ ports: { execute: { provider: 'sciforge-simulated-remote-desktop-input-adapter' } } }));
+    await writeFile(join(workspace, 'tool-payload.json'), JSON.stringify({
+      displayIntent: { kind: 'gui.present' },
+      artifacts: [{ path: 'vision-trace.json' }],
+      finalArtifactRefs: [finalArtifactRef],
+      visibleArtifacts: [visibleArtifact],
+    }));
+    await writeFile(join(workspace, 'computer-use-request.json'), JSON.stringify({ task: 'Create a report artifact from visible source facts.' }));
+    await writeFile(join(workspace, 'gui-present.json'), JSON.stringify({
+      port: 'gui.present',
+      payload: {
+        status: 'completed',
+        traceRefs: ['vision-trace.json'],
+        artifactRefs: ['vision-trace.json', finalArtifactRef],
+      },
+    }));
+    await writeFile(join(workspace, 'virtual-remote-session.json'), JSON.stringify({
+      schemaVersion: 'sciforge.computer-use.virtual-remote-session.v1',
+      runId,
+      visibleArtifacts: [visibleArtifact],
+    }));
+    const trace = validTrace({ runId, runRef: workspace }) as Record<string, any>;
+    trace.request = { task: 'Create a report artifact from visible source facts.' };
+    delete trace.guiPresent;
+    await writeFile(tracePath, JSON.stringify(trace, null, 2));
+    await writeFile(adapterPath, JSON.stringify(validAdapter(runId), null, 2));
+
+    const result = await runCuL3IndependentInputAcceptanceHarness({
+      tracePath,
+      adapterPath,
+    });
+
+    assert.equal(result.verifier.status, 'passed');
+    assert.equal(result.manifest.status, 'multi-app-workflow-passed');
+    assert.equal(result.manifest.finalArtifactRef, finalArtifactRef);
+    assert.ok(result.manifest.guiPresent.displayedRefs?.includes(finalArtifactRef));
+    const guiPresentClaim = result.manifest.evidenceClaims.find((claim) => claim.kind === 'gui-present-record');
+    assert.ok(guiPresentClaim?.artifactRefs?.includes(finalArtifactRef));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('CU L3 independent-input harness rejects completion evidence refs outside the current round bundle', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-l3-independent-input-outside-l3-'));
+  const outside = await mkdtemp(join(tmpdir(), 'sciforge-cu-l3-independent-input-outside-source-'));
+  try {
+    const tracePath = join(workspace, 'vision-trace.json');
+    const adapterPath = join(workspace, 'independent-input-adapter.json');
+    const outsideCompletionPath = join(outside, 'isolated-desktop-l3-workflow-evidence.json');
+    const evidence = await writeHarnessEvidenceFiles(workspace, { writeCompletionEvidence: false });
+    const trace = validTrace({
+      runId: 'cu-l3-outside-completion-fixture',
+      runRef: workspace,
+    }) as Record<string, any>;
+    trace.completionEvidenceRef = outsideCompletionPath;
+    await writeFile(outsideCompletionPath, JSON.stringify(isolatedL3CompletionEvidence(), null, 2));
+    await writeFile(join(workspace, 'host-ports.json'), JSON.stringify({ ports: { execute: { provider: 'sciforge-simulated-remote-desktop-input-adapter' } } }));
+    await writeFile(join(workspace, 'tool-payload.json'), JSON.stringify({ displayIntent: { kind: 'gui.present' } }));
+    await writeFile(join(workspace, 'computer-use-request.json'), JSON.stringify({ task: 'Create a multi-app acceptance artifact from visible source facts.' }));
+    await writeFile(join(workspace, 'gui-present.json'), JSON.stringify({ port: 'gui.present', artifactRef: evidence.finalArtifactRef }));
+    await writeFile(tracePath, JSON.stringify(trace, null, 2));
+    await writeFile(adapterPath, JSON.stringify(validAdapter('cu-l3-outside-completion-fixture'), null, 2));
+
+    const result = await runCuL3IndependentInputAcceptanceHarness({
+      tracePath,
+      adapterPath,
+      finalArtifactRef: evidence.finalArtifactRef,
+    });
+
+    assert.equal(result.verifier.status, 'blocked');
+    assert.ok(result.verifier.issueRefs.includes('completion-evidence-ref-bundle-local'));
+    assert.equal(result.manifest.status, 'blocked');
+    assert.equal(result.manifest.completionEvidenceRef, undefined);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
+test('CU L3 independent-input harness rejects cross-round completion evidence refs', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-l3-independent-input-cross-round-l3-'));
+  const previousRound = await mkdtemp(join(tmpdir(), 'sciforge-cu-l3-independent-input-previous-round-'));
+  try {
+    const previousCompletionPath = join(previousRound, 'isolated-desktop-l3-workflow-evidence.json');
+    await writeFile(previousCompletionPath, JSON.stringify(isolatedL3CompletionEvidence(), null, 2));
+
+    await assertHarnessRejectsCompletionEvidenceRef(
+      workspace,
+      relative(workspace, previousCompletionPath),
+      'cross-round completionEvidenceRef should not satisfy the current round bundle',
+    );
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+    await rm(previousRound, { recursive: true, force: true });
+  }
+});
+
+test('CU L3 independent-input harness rejects reserved completion evidence ref names', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-l3-independent-input-reserved-l3-'));
+  try {
+    await writeFile(
+      join(workspace, 'cu-user-acceptance-manifest.json'),
+      JSON.stringify(isolatedL3CompletionEvidence(), null, 2),
+    );
+
+    await assertHarnessRejectsCompletionEvidenceRef(
+      workspace,
+      'cu-user-acceptance-manifest.json',
+      'reserved manifest name should not satisfy completionEvidenceRef',
+    );
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('CU L3 independent-input harness rejects missing completion evidence refs', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-l3-independent-input-missing-l3-'));
+  try {
+    await assertHarnessRejectsCompletionEvidenceRef(
+      workspace,
+      'missing/isolated-desktop-l3-workflow-evidence.json',
+      'missing completionEvidenceRef should not be projected',
+    );
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('CU L3 independent-input harness rejects pseudo completion evidence refs even when a local file exists', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-l3-independent-input-pseudo-l3-'));
+  try {
+    await writeFile(
+      join(workspace, 'artifact:isolated-desktop-l3-workflow-evidence.json'),
+      JSON.stringify(isolatedL3CompletionEvidence(), null, 2),
+    );
+
+    await assertHarnessRejectsCompletionEvidenceRef(
+      workspace,
+      'artifact:isolated-desktop-l3-workflow-evidence.json',
+      'pseudo artifact: completionEvidenceRef should not satisfy the current round bundle',
+    );
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('CU L3 independent-input harness rejects canonical completion evidence symlink escapes', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-l3-independent-input-symlink-l3-'));
+  const outside = await mkdtemp(join(tmpdir(), 'sciforge-cu-l3-independent-input-symlink-source-'));
+  try {
+    const outsideCompletionPath = join(outside, 'isolated-desktop-l3-workflow-evidence.json');
+    await writeFile(outsideCompletionPath, JSON.stringify(isolatedL3CompletionEvidence(), null, 2));
+    await symlink(outsideCompletionPath, join(workspace, 'isolated-desktop-l3-workflow-evidence.json'));
+
+    await assertHarnessRejectsCompletionEvidenceRef(
+      workspace,
+      'isolated-desktop-l3-workflow-evidence.json',
+      'canonical completionEvidenceRef symlink should not satisfy the current round bundle',
+    );
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
+test('CU L3 independent-input harness rejects canonical completion evidence with missing nested refs', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-l3-independent-input-missing-nested-l3-'));
+  try {
+    await writeFile(
+      join(workspace, 'isolated-desktop-l3-workflow-evidence.json'),
+      JSON.stringify(isolatedL3CompletionEvidence(), null, 2),
+    );
+
+    await assertHarnessRejectsCompletionEvidenceRef(
+      workspace,
+      'isolated-desktop-l3-workflow-evidence.json',
+      'canonical completionEvidenceRef with missing nested refs should not satisfy the current round bundle',
+    );
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -277,6 +474,8 @@ test('CU L3 independent-input CLI writes verifier, projected input, and user acc
       '--import',
       'tsx',
       'tools/cu-l3-independent-input-acceptance-harness.ts',
+      '--scenario-id',
+      'CU-LONG-CLI',
       '--trace',
       tracePath,
       '--adapter',
@@ -301,13 +500,58 @@ test('CU L3 independent-input CLI writes verifier, projected input, and user acc
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
     assert.equal(verifier.status, 'passed');
     assert.equal(input.level, 'L3');
+    assert.equal(input.scenarioId, 'CU-LONG-CLI');
+    assert.equal(input.completionEvidence?.evidenceKind, 'isolated-L3');
+    assert.equal(input.completionEvidenceRef, 'isolated-desktop-l3-workflow-evidence.json');
     assert.equal(manifest.status, 'multi-app-workflow-passed');
+    assert.equal(manifest.scenarioId, 'CU-LONG-CLI');
+    assert.equal(manifest.completionEvidence?.evidenceKind, 'isolated-L3');
+    assert.equal(manifest.completionEvidenceRef, 'isolated-desktop-l3-workflow-evidence.json');
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
 });
 
-async function writeHarnessEvidenceFiles(workspace: string) {
+async function assertHarnessRejectsCompletionEvidenceRef(
+  workspace: string,
+  completionEvidenceRef: string,
+  message: string,
+) {
+  const tracePath = join(workspace, 'vision-trace.json');
+  const adapterPath = join(workspace, 'independent-input-adapter.json');
+  const evidence = await writeHarnessEvidenceFiles(workspace, { writeCompletionEvidence: false });
+  const runId = 'cu-l3-invalid-completion-ref-fixture';
+  const trace = validTrace({
+    runId,
+    runRef: workspace,
+  }) as Record<string, any>;
+  trace.completionEvidenceRef = completionEvidenceRef;
+  await writeFile(join(workspace, 'host-ports.json'), JSON.stringify({ ports: { execute: { provider: 'sciforge-simulated-remote-desktop-input-adapter' } } }));
+  await writeFile(join(workspace, 'tool-payload.json'), JSON.stringify({ displayIntent: { kind: 'gui.present' } }));
+  await writeFile(join(workspace, 'computer-use-request.json'), JSON.stringify({ task: 'Create a multi-app acceptance artifact from visible source facts.' }));
+  await writeFile(join(workspace, 'gui-present.json'), JSON.stringify({ port: 'gui.present', artifactRef: evidence.finalArtifactRef }));
+  await writeFile(tracePath, JSON.stringify(trace, null, 2));
+  await writeFile(adapterPath, JSON.stringify(validAdapter(runId), null, 2));
+
+  const result = await runCuL3IndependentInputAcceptanceHarness({
+    tracePath,
+    adapterPath,
+    finalArtifactRef: evidence.finalArtifactRef,
+  });
+
+  assert.equal(result.verifier.status, 'blocked', message);
+  assert.ok(
+    result.verifier.issueRefs.some((issueRef) => issueRef.startsWith('completion-evidence-')),
+    `${message}: expected a completion-evidence verifier issue, got ${result.verifier.issueRefs.join(', ')}`,
+  );
+  assert.equal(result.manifest.status, 'blocked', message);
+  assert.equal(result.manifest.completionEvidenceRef, undefined, message);
+}
+
+async function writeHarnessEvidenceFiles(
+  workspace: string,
+  options: { writeCompletionEvidence?: boolean; completionFinalArtifactRef?: string } = {},
+) {
   const refs = [
     'step-001-before.png',
     'step-001-before-focus.png',
@@ -318,13 +562,56 @@ async function writeHarnessEvidenceFiles(workspace: string) {
     'step-003-after.png',
   ];
   await Promise.all(refs.map((name) => writeFile(join(workspace, name), fixtureBytes)));
-  const finalArtifactRef = join(workspace, 'acceptance-slide.pptx');
-  const guiPresentRecordRef = join(workspace, 'gui-present-record.json');
-  const guiPresentPayloadRef = join(workspace, 'tool-payload.json');
-  await writeFile(finalArtifactRef, fixtureBytes);
-  await writeFile(guiPresentRecordRef, JSON.stringify({ port: 'gui.present', artifactRef: finalArtifactRef }));
-  await writeFile(guiPresentPayloadRef, JSON.stringify({ displayIntent: { kind: 'gui.present' } }));
+  const finalArtifactRef = 'acceptance-slide.pptx';
+  const guiPresentRecordRef = 'gui-present-record.json';
+  const guiPresentPayloadRef = 'tool-payload.json';
+  await writeFile(join(workspace, finalArtifactRef), fixtureBytes);
+  await writeFile(join(workspace, guiPresentRecordRef), JSON.stringify({ port: 'gui.present', artifactRef: finalArtifactRef }));
+  await writeFile(join(workspace, guiPresentPayloadRef), JSON.stringify({ displayIntent: { kind: 'gui.present' } }));
+  if (options.writeCompletionEvidence !== false) {
+    const completionEvidence = isolatedL3CompletionEvidence([options.completionFinalArtifactRef ?? finalArtifactRef]);
+    await materializeCompletionEvidenceRefs(workspace, completionEvidence);
+    await writeFile(
+      join(workspace, 'isolated-desktop-l3-workflow-evidence.json'),
+      JSON.stringify(completionEvidence, null, 2),
+    );
+  }
   return { finalArtifactRef, guiPresentRecordRef, guiPresentPayloadRef };
+}
+
+async function materializeCompletionEvidenceRefs(workspace: string, completionEvidence: Record<string, unknown>) {
+  await Promise.all(collectCompletionEvidenceFileRefs(completionEvidence).map(async (ref) => {
+    const path = join(workspace, ref);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, fixtureBytes);
+  }));
+}
+
+function collectCompletionEvidenceFileRefs(value: unknown, key = ''): string[] {
+  if (typeof value === 'string') {
+    const ref = completionEvidenceFixtureFileRef(value);
+    return ref && looksLikeCompletionEvidenceFileRef(key, value) ? [ref] : [];
+  }
+  if (Array.isArray(value)) return value.flatMap((item) => collectCompletionEvidenceFileRefs(item, key));
+  if (!value || typeof value !== 'object') return [];
+  return Object.entries(value).flatMap(([childKey, child]) => collectCompletionEvidenceFileRefs(child, childKey));
+}
+
+function looksLikeCompletionEvidenceFileRef(key: string, value: string) {
+  const trimmed = value.trim();
+  const fileRef = completionEvidenceFixtureFileRef(trimmed);
+  return /ref/i.test(key)
+    && trimmed.length > 0
+    && Boolean(fileRef)
+    && /\.[a-z0-9][a-z0-9-]{0,15}$/i.test(fileRef?.split('/').at(-1) ?? '');
+}
+
+function completionEvidenceFixtureFileRef(ref: string): string | undefined {
+  const trimmed = ref.trim();
+  if (!trimmed || trimmed.startsWith('/') || /^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return undefined;
+  const fileRef = trimmed.split('#', 1)[0];
+  if (!fileRef || fileRef.split(/[\\/]+/).includes('..')) return undefined;
+  return fileRef;
 }
 
 function validTrace(options: { runId: string; runRef: string }) {
@@ -338,7 +625,11 @@ function validTrace(options: { runId: string; runRef: string }) {
     completedAt: '2026-05-25T00:01:00.000Z',
     request: {
       task: 'Create a generic multi-app acceptance artifact from visible source facts.',
+      computerUseLong: {
+        scenarioId: 'CU-LONG-004',
+      },
     },
+    completionEvidence: isolatedL3CompletionEvidence(),
     config: {
       dryRun: false,
       inputAdapter: 'remote-desktop',
@@ -490,6 +781,157 @@ function validAdapter(runId: string) {
     ],
     createdAt: '2026-05-25T00:00:00.000Z',
     updatedAt: '2026-05-25T00:01:00.000Z',
+  };
+}
+
+function isolatedL3CompletionEvidence(taskFinalArtifactRefs: string[] = []): Record<string, unknown> {
+  const sessionManifestRef = 'evidence/l3/isolated-l3-session/session-manifest.json';
+  const currentTaskFinalArtifactRef = taskFinalArtifactRefs[0];
+  const sourceFirstScreenshotRef = 'evidence/l3/isolated-l3-session/screenshots/source-editor.png';
+  const sourceLastScreenshotRef = 'evidence/l3/isolated-l3-session/screenshots/source-editor-final.png';
+  const writerFirstScreenshotRef = 'evidence/l3/isolated-l3-session/screenshots/writer-editor.png';
+  const writerLastScreenshotRef = 'evidence/l3/isolated-l3-session/screenshots/writer-saved.png';
+  const previewFirstScreenshotRef = 'evidence/l3/isolated-l3-session/screenshots/file-preview-open.png';
+  const previewLastScreenshotRef = 'evidence/l3/isolated-l3-session/screenshots/file-preview.png';
+  const sourceFactRefs = [
+    'evidence/l3/source-facts/recovery.json',
+    'evidence/l3/source-facts/cohorts.json',
+  ];
+  return {
+    schemaVersion: 'sciforge.computer-use.isolated-desktop-l3-workflow-evidence.v1',
+    evidenceKind: 'isolated-L3',
+    status: 'completed',
+    acceptanceTier: 'l3-multi-app-workflow',
+    targetEnvironmentKind: 'linux-isolated-desktop-session',
+    realWindowEvidence: true,
+    userAcceptanceEligible: true,
+    diagnosticOnly: false,
+    errors: [],
+    resultRef: 'evidence/l3/computer-use-result.json',
+    inputEventLogRef: 'evidence/l3/isolated-l3-session/l3-input-events.json',
+    pointerEventLogRef: 'evidence/l3/isolated-l3-session/l3-pointer-events.json',
+    keyboardEventLogRef: 'evidence/l3/isolated-l3-session/l3-keyboard-events.json',
+    executorCommandEventLogRef: 'evidence/l3/isolated-l3-session/l3-executor-command-events.json',
+    backendReadinessProofRef: 'evidence/l3/isolated-l3-session/backend-readiness-proof.json',
+    processRef: 'evidence/l3/isolated-l3-session/backend-processes.json',
+    resourceAllocationRef: 'evidence/l3/isolated-runtime-resource-allocation.json',
+    targetWindowRef: 'evidence/l3/isolated-l3-session/l3-target-window.json',
+    windowBoundPointerProofRef: 'evidence/l3/isolated-l3-session/l3-window-bound-pointer-proof.json',
+    sessionManifestRef,
+    taskFinalArtifactRefs: [
+      'index.md',
+      'report.md',
+      'dense-grounding-export.csv',
+      ...taskFinalArtifactRefs,
+    ],
+    taskArtifactBinding: {
+      finalArtifactRef: currentTaskFinalArtifactRef,
+      finalArtifactRefs: [
+        'index.md',
+        'report.md',
+        'dense-grounding-export.csv',
+        ...taskFinalArtifactRefs,
+      ],
+      source: 'test-fixture-task-final-artifact-binding',
+    },
+    finalArtifactRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/source-summary.docx',
+    artifactValidationRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/source-summary.docx.validation.json',
+    fileListArtifactRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/file-list.json',
+    fileListDataRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/file-list-data.json',
+    guiPresentRef: 'evidence/l3/gui-present.json',
+    viewerManifestRef: 'evidence/l3/visible-run-viewer-manifest.json',
+    evidenceLogRef: 'evidence/l3/evidence/evidence-log.jsonl',
+    evidenceSnapshotRef: 'evidence/l3/evidence/evidence-snapshot.json',
+    evidenceIndexRef: 'evidence/l3/evidence/evidence-index.json',
+    screenshotRefs: [
+      sourceFirstScreenshotRef,
+      writerLastScreenshotRef,
+      previewLastScreenshotRef,
+    ],
+    traceRefs: ['evidence/l3/vision-trace.json'],
+    l3Workflow: {
+      status: 'completed',
+      completed: true,
+      sameSession: true,
+      sameVirtualSession: true,
+      sourceToWriterToPreviewCausality: true,
+    },
+    workflowRequirements: {
+      minimumAppCount: 3,
+      minimumActionCount: 6,
+      requiredInputModalities: ['pointer', 'keyboard'],
+      requiresCurrentStepScreenshots: true,
+      forbidPriorRoundCompletionEvidence: true,
+      requiresDirectoryEvidence: true,
+      requiresArtifactPreview: true,
+      requiresWindowBoundPointerProof: true,
+    },
+    applicationEvidence: [
+      {
+        appKind: 'source-reader',
+        sessionManifestRef,
+        firstScreenshotRef: sourceFirstScreenshotRef,
+        lastScreenshotRef: sourceLastScreenshotRef,
+        windowEvidenceRefs: [sourceFirstScreenshotRef, sourceLastScreenshotRef],
+      },
+      {
+        appKind: 'word-document-writer',
+        sessionManifestRef,
+        firstScreenshotRef: writerFirstScreenshotRef,
+        lastScreenshotRef: writerLastScreenshotRef,
+        windowEvidenceRefs: [writerFirstScreenshotRef, writerLastScreenshotRef],
+      },
+      {
+        appKind: 'file-manager-preview',
+        sessionManifestRef,
+        firstScreenshotRef: previewFirstScreenshotRef,
+        lastScreenshotRef: previewLastScreenshotRef,
+        windowEvidenceRefs: [previewFirstScreenshotRef, previewLastScreenshotRef],
+      },
+    ],
+    crossAppTransitions: [
+      {
+        fromAppKind: 'source-reader',
+        toAppKind: 'word-document-writer',
+        sessionManifestRef,
+        screenshotRef: writerFirstScreenshotRef,
+      },
+      {
+        fromAppKind: 'word-document-writer',
+        toAppKind: 'file-manager-preview',
+        sessionManifestRef,
+        screenshotRef: previewFirstScreenshotRef,
+      },
+    ],
+    sourceEvidence: {
+      sourceObservationRefs: [sourceLastScreenshotRef],
+      sourceFactRefs,
+    },
+    derivedContentEvidence: {
+      supportedFactRefs: sourceFactRefs,
+    },
+    artifactCausality: {
+      savedByActionIndex: 3,
+      savedByInputModality: 'keyboard',
+      savedByCommandEventRef: 'evidence/l3/isolated-l3-session/l3-executor-command-events.json#events/l3-command-003',
+      finalArtifactRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/source-summary.docx',
+      artifactValidationRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/source-summary.docx.validation.json',
+      savedThroughGui: true,
+      shellDirectArtifactWrite: false,
+    },
+    directoryEvidence: {
+      fileListArtifactRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/file-list.json',
+      fileListDataRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/file-list-data.json',
+      previewObservationRef: previewLastScreenshotRef,
+      directoryObservationAfterSaveRef: previewFirstScreenshotRef,
+      previewedByActionIndex: 5,
+      previewedByInputModality: 'pointer',
+      previewedThroughGui: true,
+      shellDirectoryListingOnly: false,
+    },
+    presentationEvidence: {
+      guiPresentRef: 'evidence/l3/gui-present.json',
+    },
   };
 }
 

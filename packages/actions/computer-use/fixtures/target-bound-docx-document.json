@@ -1,0 +1,114 @@
+{
+  "schemaVersion": "sciforge.computer-use.target-bound-window-scenario.v1",
+  "id": "target-bound-docx-document",
+  "targetWindow": {
+    "title": "Package Owned Word-Compatible Editor"
+  },
+  "finalArtifactRef": ".sciforge/vision-runs/target-bound-docx/word-compatible-report.docx",
+  "artifactSpec": {
+    "kind": "word-document"
+  },
+  "workflowRequirements": {
+    "minimumActionCount": 3,
+    "requiredInputModalities": ["pointer", "keyboard"],
+    "requiresCurrentStepScreenshots": true
+  },
+  "screens": [
+    {
+      "id": "docx-start",
+      "ref": ".sciforge/vision-runs/target-bound-docx/screen-00-start.png",
+      "summary": "Word-compatible editor body is visible.",
+      "visibleTexts": ["Document body"],
+      "elements": [
+        {
+          "id": "document-body",
+          "role": "editor",
+          "label": "Document body",
+          "description": "Document body",
+          "bounds": {"x": 20, "y": 20, "width": 360, "height": 220}
+        }
+      ],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "docx-focused",
+      "ref": ".sciforge/vision-runs/target-bound-docx/screen-01-focused.png",
+      "summary": "Document body is focused.",
+      "visibleTexts": ["Document body focused"],
+      "elements": [
+        {
+          "id": "document-body",
+          "role": "editor",
+          "label": "Document body",
+          "description": "Document body",
+          "bounds": {"x": 20, "y": 20, "width": 360, "height": 220}
+        }
+      ],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "docx-typed",
+      "ref": ".sciforge/vision-runs/target-bound-docx/screen-02-typed.png",
+      "summary": "Title, paragraphs, bullets, and table text are visible.",
+      "visibleTexts": ["Study Report", "first finding", "Assay", "Result"],
+      "elements": [
+        {
+          "id": "save-document-button",
+          "role": "button",
+          "label": "Save document",
+          "description": "Save document",
+          "bounds": {"x": 20, "y": 20, "width": 120, "height": 30}
+        }
+      ],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "docx-saved",
+      "ref": ".sciforge/vision-runs/target-bound-docx/screen-03-saved.png",
+      "summary": "word-compatible-report.docx saved entry is visible.",
+      "visibleTexts": ["word-compatible-report.docx", "saved"],
+      "elements": [
+        {
+          "id": "saved-docx-entry",
+          "role": "file",
+          "label": "word-compatible-report.docx",
+          "description": "word-compatible-report.docx saved entry",
+          "bounds": {"x": 20, "y": 20, "width": 260, "height": 30}
+        }
+      ],
+      "artifacts": {
+        "finalArtifactRef": ".sciforge/vision-runs/target-bound-docx/word-compatible-report.docx",
+        "visibleArtifacts": [
+          {
+            "artifactRef": ".sciforge/vision-runs/target-bound-docx/word-compatible-report.docx",
+            "kind": "word-document",
+            "status": "visible-and-saved"
+          }
+        ]
+      },
+      "metadata": {"realWindowEvidence": true}
+    }
+  ],
+  "plans": [
+    {"type": "click", "targetDescription": "Document body"},
+    {
+      "type": "type_text",
+      "text": "# Study Report\n\nThe visible workflow created a Word-compatible document.\n\n- first finding\n- second finding\n\n| Assay | Result |\n| A | Pass |\n"
+    },
+    {"type": "save", "reason": "save Word-compatible document"}
+  ],
+  "verification": [
+    {"ok": true, "done": false, "changed": true, "reason": "document body focused"},
+    {"ok": true, "done": false, "changed": true, "reason": "document content visible"},
+    {
+      "ok": true,
+      "done": true,
+      "changed": true,
+      "reason": "docx artifact saved",
+      "metadata": {
+        "finalArtifactRef": ".sciforge/vision-runs/target-bound-docx/word-compatible-report.docx"
+      }
+    }
+  ],
+  "files": {}
+}

@@ -529,8 +529,309 @@ test('text planner repairs ambiguous Save icon target that names AutoSave as pos
   assert.equal(result.actions[0]?.targetDescription, 'small floppy-disk Save icon immediately to the right of the Home/house icon');
   assert.match(result.actions[0]?.targetRegionDescription ?? '', /excluding AutoSave/);
   assert.equal(adapter.commandTexts.length, 2);
-  assert.match(adapter.commandTexts[1] ?? '', /do not say "near AutoSave"/);
-  assert.match(adapter.commandTexts[1] ?? '', /exclude or avoid AutoSave/);
+  assert.match(adapter.commandTexts[1] ?? '', /nearby non-target control/);
+  assert.match(adapter.commandTexts[1] ?? '', /exclude adjacent non-target controls/);
+});
+
+test('text planner records protocol drift when recovering fenced JSON', async () => {
+  const adapter = new FakePlannerAdapter([
+    [
+      '```json',
+      JSON.stringify({
+        done: false,
+        reason: 'click visible field',
+        actions: [{ type: 'click', targetDescription: 'Search field' }],
+      }),
+      '```',
+    ].join('\n'),
+  ]);
+  const steps: LoopStep[] = [];
+  const result = await appendPlannerStep({
+    id: 'step-000-plan',
+    task: 'click the search field',
+    observation: { ref: 'screen-ref', summary: 'Search is visible.', visibleTexts: ['Search'] },
+    screenshotRefs: [screenshotRef()],
+    steps,
+    config: baseConfig(),
+    workspace: '/tmp',
+    codexPlannerAdapter: adapter,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.actions[0]?.type, 'click');
+  const rawResponse = steps[0]?.execution?.rawResponse as Record<string, any>;
+  assert.equal(rawResponse.protocolDrift.protocolDrift, true);
+  assert.equal(rawResponse.protocolDrift.recovery, 'fenced-json');
+  assert.equal(rawResponse.protocolDrift.textLooksWrapped, true);
+});
+
+test('text planner retries tool-call-like wrapper output instead of executing nested arguments', async () => {
+  const adapter = new FakePlannerAdapter([
+    JSON.stringify({
+      type: 'tool_call',
+      name: 'computer_use_plan',
+      arguments: {
+        done: false,
+        reason: 'nested tool call should not execute',
+        actions: [{ type: 'click', targetDescription: 'Search field' }],
+      },
+    }),
+    JSON.stringify({
+      done: false,
+      reason: 'emit a direct top-level planner JSON object',
+      actions: [{ type: 'click', targetDescription: 'Search field' }],
+    }),
+  ]);
+  const result = await appendPlannerStep({
+    id: 'step-000-plan',
+    task: 'click the search field',
+    observation: { ref: 'screen-ref', summary: 'Search is visible.', visibleTexts: ['Search'] },
+    screenshotRefs: [screenshotRef()],
+    steps: [],
+    config: baseConfig(),
+    workspace: '/tmp',
+    codexPlannerAdapter: adapter,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.actions[0]?.type, 'click');
+  assert.equal(adapter.commandTexts.length, 2);
+  assert.match(adapter.commandTexts[1] ?? '', /tool calls, function calls, or nested tool arguments/);
+});
+
+test('text planner rejects done before current-round action quota is met', async () => {
+  const adapter = new FakePlannerAdapter([
+    JSON.stringify({
+      done: true,
+      reason: 'the visible task looks done after four actions',
+      actions: [],
+    }),
+    JSON.stringify({
+      done: false,
+      reason: 'one more low-risk focus action is needed for quota evidence',
+      actions: [{ type: 'click', targetDescription: 'blank content area in the visible settings page' }],
+    }),
+  ]);
+  const steps: LoopStep[] = Array.from({ length: 4 }, (_, index) => ({
+    id: `step-${String(index + 1).padStart(3, '0')}-execute-click`,
+    kind: 'gui-execution',
+    status: 'done',
+    plannedAction: { type: 'click', targetDescription: `low-risk visible control ${index + 1}` },
+    verifier: { status: 'checked', reason: 'visible evidence recorded' },
+  } as LoopStep));
+  const result = await appendPlannerStep({
+    id: 'step-004-plan',
+    task: 'collect low-risk visual evidence until the round quota is met',
+    observation: { ref: 'screen-ref', summary: 'Settings page is visible.', visibleTexts: ['Settings', 'Search'] },
+    plannerAcceptanceContract: {
+      schemaVersion: 'sciforge.computer-use.planner-acceptance-contract.v1',
+      acceptanceProgress: {
+        schemaVersion: 'sciforge.computer-use-long.acceptance-progress.v1',
+        suggestedCurrentRoundActionTarget: 5,
+        suggestedCurrentRoundNonWaitActionTarget: 5,
+      },
+    },
+    screenshotRefs: [screenshotRef()],
+    steps,
+    config: { ...baseConfig(), maxSteps: 6 },
+    workspace: '/tmp',
+    codexPlannerAdapter: adapter,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.actions[0]?.type, 'click');
+  assert.equal(adapter.commandTexts.length, 2);
+  assert.match(adapter.commandTexts[1] ?? '', /current round action quota/);
+  assert.match(adapter.commandTexts[1] ?? '', /one additional safe low-risk generic visible GUI action/);
+});
+
+test('text planner rejects done before current round has non-wait GUI evidence', async () => {
+  const adapter = new FakePlannerAdapter([
+    JSON.stringify({
+      done: true,
+      reason: 'prior rounds already contain the refs-first summary evidence',
+      actions: [],
+    }),
+    JSON.stringify({
+      done: false,
+      reason: 'focus the target window once before summarizing refs',
+      actions: [{ type: 'click', targetDescription: 'visible target window content area' }],
+    }),
+  ]);
+  const result = await appendPlannerStep({
+    id: 'step-000-plan',
+    task: 'Summarize field evidence refs and action mapping from prior traces.',
+    observation: { ref: 'screen-ref', summary: 'Safari target window is visible.', visibleTexts: ['Safari', 'report.md'] },
+    plannerAcceptanceContract: {
+      schemaVersion: 'sciforge.computer-use.planner-acceptance-contract.v1',
+      taskId: 'T084',
+      scenarioId: 'CU-LONG-004',
+      round: 4,
+      roundPrompt: 'Summarize field evidence refs and action mapping.',
+      acceptanceProgress: {
+        schemaVersion: 'sciforge.computer-use-long.acceptance-progress.v1',
+        currentRoundActionQuotaEligible: false,
+        remainingActionQuotaRounds: 0,
+        observedScenarioActionCount: 20,
+        remainingScenarioActionCount: 0,
+      },
+    },
+    screenshotRefs: [screenshotRef()],
+    steps: [],
+    config: { ...baseConfig(), maxSteps: 4 },
+    workspace: '/tmp',
+    codexPlannerAdapter: adapter,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.actions[0]?.type, 'click');
+  assert.equal(adapter.commandTexts.length, 2);
+  assert.match(adapter.commandTexts[1] ?? '', /before this round produced any non-wait GUI execution evidence/);
+  assert.match(adapter.commandTexts[1] ?? '', /refs-first summary\/report rounds/);
+});
+
+test('text planner rejects done for report artifact intent before visible artifact evidence exists', async () => {
+  const adapter = new FakePlannerAdapter([
+    JSON.stringify({
+      done: true,
+      reason: 'the evidence summary is conceptually complete',
+      actions: [],
+    }),
+    JSON.stringify({
+      done: false,
+      reason: 'type the report artifact content into the visible editor',
+      actions: [{ type: 'type_text', text: '# Evidence summary\n- screenshot refs\n- action mapping' }],
+    }),
+  ]);
+  const result = await appendPlannerStep({
+    id: 'step-001-plan',
+    task: 'Write an evidence summary report with action mapping and field/control evidence refs.',
+    observation: { ref: 'screen-ref', summary: 'Text editor is visible.', visibleTexts: ['Text editor'] },
+    screenshotRefs: [screenshotRef()],
+    steps: [{
+      id: 'step-000-execute-click',
+      kind: 'gui-execution',
+      status: 'done',
+      plannedAction: { type: 'click', targetDescription: 'document body' },
+    }],
+    config: { ...baseConfig(), maxSteps: 4 },
+    workspace: '/tmp',
+    codexPlannerAdapter: adapter,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.actions[0]?.type, 'type_text');
+  assert.equal(adapter.commandTexts.length, 2);
+  assert.match(adapter.commandTexts[1] ?? '', /visible final artifact\/report ref/);
+  assert.match(adapter.commandTexts[1] ?? '', /field\/control evidence/);
+});
+
+test('text planner does not treat inline text entry as final artifact intent', async () => {
+  const adapter = new FakePlannerAdapter([
+    JSON.stringify({
+      done: true,
+      reason: 'the comment field now contains the requested summary',
+      actions: [],
+    }),
+  ]);
+  const result = await appendPlannerStep({
+    id: 'step-001-plan',
+    task: 'write a short summary in the comment box',
+    observation: { ref: 'screen-ref', summary: 'Comment box contains the summary.', visibleTexts: ['Summary sent to comment box'] },
+    screenshotRefs: [screenshotRef()],
+    steps: [{
+      id: 'step-000-execute-type_text',
+      kind: 'gui-execution',
+      status: 'done',
+      plannedAction: { type: 'type_text', text: 'Short summary' },
+    }],
+    config: { ...baseConfig(), maxSteps: 3 },
+    workspace: '/tmp',
+    codexPlannerAdapter: adapter,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.done, true);
+  assert.equal(adapter.commandTexts.length, 1);
+});
+
+test('text planner ignores diagnostic artifact refs when final artifact evidence is required', async () => {
+  const adapter = new FakePlannerAdapter([
+    JSON.stringify({
+      done: true,
+      reason: 'the evidence summary is conceptually complete',
+      actions: [],
+    }),
+    JSON.stringify({
+      done: false,
+      reason: 'produce the current visible report artifact',
+      actions: [{ type: 'type_text', text: '# Evidence summary\n- visible artifact refs' }],
+    }),
+  ]);
+  const result = await appendPlannerStep({
+    id: 'step-001-plan',
+    task: 'Write an evidence summary report with action mapping and field/control evidence refs.',
+    observation: {
+      ref: 'screen-ref',
+      summary: 'Text editor is visible.',
+      visibleTexts: ['Text editor'],
+      metadata: {
+        artifactRefs: ['previous-report.md'],
+        payload: { path: 'diagnostics.json' },
+        visibleArtifactRefs: ['diagnostics.json'],
+      },
+    },
+    screenshotRefs: [screenshotRef()],
+    steps: [{
+      id: 'step-000-execute-type_text',
+      kind: 'gui-execution',
+      status: 'done',
+      plannedAction: { type: 'type_text', text: 'draft evidence text' },
+    }],
+    config: { ...baseConfig(), maxSteps: 4 },
+    workspace: '/tmp',
+    codexPlannerAdapter: adapter,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.actions[0]?.type, 'type_text');
+  assert.equal(adapter.commandTexts.length, 2);
+  assert.match(adapter.commandTexts[1] ?? '', /visible final artifact\/report ref/);
+});
+
+test('text planner accepts current visible saved artifact evidence for report intent', async () => {
+  const adapter = new FakePlannerAdapter([
+    JSON.stringify({
+      done: true,
+      reason: 'the evidence report artifact is visible and saved',
+      actions: [],
+    }),
+  ]);
+  const result = await appendPlannerStep({
+    id: 'step-002-plan',
+    task: 'Write an evidence summary report with action mapping and field/control evidence refs.',
+    observation: {
+      ref: 'screen-ref',
+      summary: 'Report editor shows saved report.md.',
+      metadata: {
+        visibleArtifacts: [{ artifactRef: 'report.md', status: 'visible-and-saved', kind: 'markdown-report' }],
+      },
+    },
+    screenshotRefs: [screenshotRef()],
+    steps: [{
+      id: 'step-001-execute-type_text',
+      kind: 'gui-execution',
+      status: 'done',
+      plannedAction: { type: 'type_text', text: '# Evidence summary\n- action mapping' },
+    }],
+    config: { ...baseConfig(), maxSteps: 4 },
+    workspace: '/tmp',
+    codexPlannerAdapter: adapter,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.done, true);
+  assert.equal(adapter.commandTexts.length, 1);
 });
 
 test('text planner allows text entry after a later visible context change', async () => {

@@ -100,9 +100,8 @@ function realInputBlockReason(action: GenericVisionAction, config: ComputerUseCo
 
 async function executeGenericMacAction(action: GenericVisionAction, config: ComputerUseConfig, targetResolution: ResolvedWindowTarget) {
   if (action.type === 'open_app') {
-    const appName = resolveAppAlias(action.appName);
-    const bundleId = defaultMacBundleIdForAppName(action.appName) ?? defaultMacBundleIdForAppName(appName);
-    const openResult = await runCommand('open', ['-a', appName], { timeoutMs: 30000 });
+    const { appName, bundleId } = resolveMacOpenAppTarget(action.appName);
+    const openResult = await openMacApp(appName, bundleId);
     if (openResult.exitCode !== 0) return openResult;
     const activateResult = await activateMacApp(appName, bundleId);
     return activateResult.exitCode === 0
@@ -145,9 +144,32 @@ async function executeGenericMacAction(action: GenericVisionAction, config: Comp
   return runCommand('osascript', ['-e', script], { timeoutMs: action.type === 'wait' ? Math.max(1000, (action.ms ?? 500) + 1000) : 30000 });
 }
 
+export function resolveMacOpenAppTarget(requestedAppName: string) {
+  const appName = resolveAppAlias(requestedAppName);
+  return {
+    appName,
+    bundleId: defaultMacBundleIdForAppName(appName) ?? defaultMacBundleIdForAppName(requestedAppName),
+  };
+}
+
 function resolveAppAlias(appName: string) {
   const aliases = parseAppAliases(process.env.SCIFORGE_VISION_APP_ALIASES_JSON);
   return aliases[appName] || aliases[appName.toLowerCase()] || appName;
+}
+
+async function openMacApp(appName: string, bundleId?: string) {
+  const attempts: Array<{ label: string; args: string[] }> = [];
+  if (bundleId) attempts.push({ label: `bundle ${bundleId}`, args: ['-b', bundleId] });
+  attempts.push({ label: `app ${appName}`, args: ['-a', appName] });
+  const diagnostics: string[] = [];
+  for (const attempt of attempts) {
+    const result = await runCommand('open', attempt.args, { timeoutMs: 30000 });
+    if (result.exitCode === 0) {
+      return { ...result, stdout: [result.stdout, `open_app target=${attempt.label}`].filter(Boolean).join('\n') };
+    }
+    diagnostics.push(`${attempt.label}: ${compactMacCommandDiagnostic(result.stderr || result.stdout || `exit ${result.exitCode}`)}`);
+  }
+  return { exitCode: 1, stdout: '', stderr: `open_app failed for ${appName}: ${diagnostics.join('; ')}` };
 }
 
 function parseAppAliases(value: string | undefined): Record<string, string> {
@@ -159,6 +181,10 @@ function parseAppAliases(value: string | undefined): Record<string, string> {
   } catch {
     return {};
   }
+}
+
+function compactMacCommandDiagnostic(value: string) {
+  return value.replace(/\s+/g, ' ').trim().slice(0, 500);
 }
 
 async function activateMacApp(appName: string, bundleId?: string) {

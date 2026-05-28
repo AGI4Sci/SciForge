@@ -7,6 +7,7 @@ export const CU_USER_ACCEPTANCE_SCHEMA_VERSION = 'sciforge.computer-use.user-acc
 export type CuUserAcceptanceStatus =
   | 'blocked'
   | 'ready'
+  | 'needs-confirmation'
   | 'single-app-artifact-passed'
   | 'multi-app-workflow-passed';
 
@@ -87,9 +88,17 @@ export interface CuGuiPresentRecord {
   note?: string;
 }
 
+export interface CuUserAcceptanceExplicitStatus {
+  status: 'needs-confirmation';
+  scope: 'high-risk-stop';
+  reason: string;
+  ref?: string;
+}
+
 export interface CuUserAcceptanceInput {
   runId: string;
   taskId?: string;
+  scenarioId?: string;
   createdAt: string;
   taskText: string;
   level: 'L2' | 'L3';
@@ -111,12 +120,17 @@ export interface CuUserAcceptanceInput {
   finalVisibleScreenshotRef?: string;
   verifierVerdict?: CuVerifierVerdictRecord;
   guiPresent?: Partial<CuGuiPresentRecord>;
+  explicitStatus?: CuUserAcceptanceExplicitStatus;
+  evidenceMarkers?: Array<Record<string, unknown>>;
+  completionEvidence?: Record<string, unknown>;
+  completionEvidenceRef?: string;
 }
 
 export interface CuUserAcceptanceManifest {
   schemaVersion: typeof CU_USER_ACCEPTANCE_SCHEMA_VERSION;
   runId: string;
   taskId?: string;
+  scenarioId?: string;
   createdAt: string;
   status: CuUserAcceptanceStatus;
   taskText: string;
@@ -151,6 +165,10 @@ export interface CuUserAcceptanceManifest {
     reason: string;
   }>;
   nonSubstitutes: string[];
+  explicitStatus?: CuUserAcceptanceExplicitStatus;
+  evidenceMarkers?: Array<Record<string, unknown>>;
+  completionEvidence?: Record<string, unknown>;
+  completionEvidenceRef?: string;
 }
 
 const rejectedShortcutKinds = new Set<CuEvidenceClaimKind>([
@@ -331,6 +349,10 @@ export function buildCuUserAcceptanceManifest(input: CuUserAcceptanceInput): CuU
     && hasGuiPresent
     && l3InputAdapterReady
     && workflowReady;
+  const explicitNeedsConfirmation = input.explicitStatus?.status === 'needs-confirmation'
+    && input.explicitStatus.scope === 'high-risk-stop'
+    && input.level === 'L3'
+    && passReady;
   const completeL3FinalPassEvidenceExceptIndependentInput = input.level === 'L3'
     && !hasIndependentInputAdapterEvidence
     && antiShortcutGuard.status === 'passed'
@@ -351,7 +373,9 @@ export function buildCuUserAcceptanceManifest(input: CuUserAcceptanceInput): CuU
     && hostChainReady
     && hasExecutorLease
     && workflowReady;
-  const status: CuUserAcceptanceStatus = passReady
+  const status: CuUserAcceptanceStatus = explicitNeedsConfirmation
+    ? 'needs-confirmation'
+    : passReady
     ? appWorkflow.kind === 'multi-app-workflow'
       ? 'multi-app-workflow-passed'
       : 'single-app-artifact-passed'
@@ -383,6 +407,7 @@ export function buildCuUserAcceptanceManifest(input: CuUserAcceptanceInput): CuU
     schemaVersion: CU_USER_ACCEPTANCE_SCHEMA_VERSION,
     runId: input.runId,
     taskId: input.taskId,
+    scenarioId: input.scenarioId,
     createdAt: input.createdAt,
     status,
     taskText: input.taskText,
@@ -419,6 +444,10 @@ export function buildCuUserAcceptanceManifest(input: CuUserAcceptanceInput): CuU
       'dry-run traces without final visible screenshot and gui.present record',
       'gui.present text without payload or displayed object refs',
     ],
+    explicitStatus: input.explicitStatus,
+    evidenceMarkers: input.evidenceMarkers,
+    completionEvidence: input.completionEvidence,
+    completionEvidenceRef: input.completionEvidenceRef,
   };
 }
 

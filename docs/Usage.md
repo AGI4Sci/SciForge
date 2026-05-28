@@ -320,6 +320,8 @@ npm run smoke:stable-version-registry
 
 默认 Computer Use runtime 已收敛到 package-backed host adapter：desktop bridge preflight 通过后，runtime 会通过 `python -m sciforge_computer_use --host-port-stdio` 调用 Python package 的 `run_task(request, hostPorts)`，再把 package result 映射成 TUI Host 的 `gui.present` / `gui.ask_user` action metadata。该路径证明 package process boundary；最终验收仍必须完成真实 L1/L2/L3 和 Codex in-app browser 可见证据。
 
+每个 package-backed run 还会写 `.sciforge/vision-runs/<run-id>/tui-host-run-task-chain.json`，把 `computer-use-request.json`、`host-ports.json`、`tool-payload.json`、`vision-trace.json` 和可选 `gui-present.json` / `gui-ask-user.json` 绑定成 refs-first 链路清单；trace 的 `packageBridge.tuiHostRunTaskChainRef` 会指向它。这个清单方便 CU-NEXT 和人工复核定位链路 evidence，但不等同于真实任务完成。
+
 启用真实桌面 bridge：
 
 ```bash

@@ -1,0 +1,121 @@
+{
+  "schemaVersion": "sciforge.computer-use.target-bound-window-scenario.v1",
+  "id": "target-bound-cross-app-document-workflow",
+  "kind": "package-owned-target-bound-window-fixture",
+  "targetWindow": {"title": "Package Owned Cross App Workspace"},
+  "finalArtifactRef": ".sciforge/vision-runs/target-bound-cross-app/source-summary.docx",
+  "artifactSpec": {"kind": "word-document"},
+  "workflowRequirements": {
+    "minimumActionCount": 6,
+    "requiredInputModalities": ["pointer", "keyboard"],
+    "requiresCurrentStepScreenshots": true,
+    "requiresDirectoryEvidence": true
+  },
+  "screens": [
+    {
+      "id": "cross-app-source-visible",
+      "ref": ".sciforge/vision-runs/target-bound-cross-app/screen-00-source-visible.png",
+      "summary": "Source reader window is visible with research notes.",
+      "visibleTexts": ["Source Reader", "CRISPR assay improved recovery by 12 percent", "Use two validation cohorts"],
+      "elements": [
+        {"id": "source-reader-window", "role": "document", "label": "Source Reader", "description": "Source Reader window with research notes", "bounds": {"x": 24, "y": 72, "width": 360, "height": 420}},
+        {"id": "writer-window-tab", "role": "tab", "label": "Writer window tab", "description": "Writer window tab", "bounds": {"x": 420, "y": 32, "width": 180, "height": 32}}
+      ],
+      "metadata": {"realWindowEvidence": true, "logicalApp": "source-reader"}
+    },
+    {
+      "id": "cross-app-writer-visible",
+      "ref": ".sciforge/vision-runs/target-bound-cross-app/screen-01-writer-visible.png",
+      "summary": "Word-compatible writer window is visible.",
+      "visibleTexts": ["Writer", "Document body"],
+      "elements": [
+        {"id": "document-body", "role": "editor", "label": "Document body", "description": "Document body", "bounds": {"x": 92, "y": 104, "width": 600, "height": 360}}
+      ],
+      "metadata": {"realWindowEvidence": true, "logicalApp": "word-compatible-writer"}
+    },
+    {
+      "id": "cross-app-writer-focused",
+      "ref": ".sciforge/vision-runs/target-bound-cross-app/screen-02-writer-focused.png",
+      "summary": "Document body is focused in the writer.",
+      "visibleTexts": ["Document body focused"],
+      "elements": [
+        {"id": "document-body", "role": "editor", "label": "Document body", "description": "Document body", "bounds": {"x": 92, "y": 104, "width": 600, "height": 360}, "state": {"focused": true}}
+      ],
+      "metadata": {"realWindowEvidence": true, "logicalApp": "word-compatible-writer"}
+    },
+    {
+      "id": "cross-app-summary-visible",
+      "ref": ".sciforge/vision-runs/target-bound-cross-app/screen-03-summary-visible.png",
+      "summary": "Summary text derived from the source reader is visible in the writer.",
+      "visibleTexts": ["Source Summary", "CRISPR assay improved recovery by 12 percent", "two validation cohorts"],
+      "elements": [
+        {"id": "save-document-button", "role": "button", "label": "Save document", "description": "Save document", "bounds": {"x": 88, "y": 64, "width": 132, "height": 32}}
+      ],
+      "metadata": {"realWindowEvidence": true, "logicalApp": "word-compatible-writer"}
+    },
+    {
+      "id": "cross-app-file-browser-visible",
+      "ref": ".sciforge/vision-runs/target-bound-cross-app/screen-04-file-browser-visible.png",
+      "summary": "File browser shows the saved source summary document.",
+      "visibleTexts": ["File Browser", "source-summary.docx", "cross-app-file-list.json"],
+      "elements": [
+        {"id": "file-browser-window", "role": "tree", "label": "File Browser", "description": "File Browser file tree", "bounds": {"x": 28, "y": 92, "width": 240, "height": 440}},
+        {"id": "source-summary-entry", "role": "treeitem", "label": "source-summary.docx", "description": "source-summary.docx saved entry", "bounds": {"x": 48, "y": 164, "width": 200, "height": 28}}
+      ],
+      "metadata": {"realWindowEvidence": true, "logicalApp": "file-browser"}
+    },
+    {
+      "id": "cross-app-preview-visible",
+      "ref": ".sciforge/vision-runs/target-bound-cross-app/screen-05-preview-visible.png",
+      "summary": "Preview pane and directory evidence are visible for the saved summary.",
+      "visibleTexts": ["Preview pane", "source-summary.docx", "CRISPR assay improved recovery by 12 percent", "cross-app-file-list.json"],
+      "elements": [
+        {"id": "preview-pane", "role": "document", "label": "Preview pane", "description": "Preview pane showing source-summary.docx", "bounds": {"x": 312, "y": 96, "width": 520, "height": 396}}
+      ],
+      "artifacts": {
+        "finalArtifactRef": ".sciforge/vision-runs/target-bound-cross-app/source-summary.docx",
+        "visibleArtifacts": [
+          {"artifactRef": ".sciforge/vision-runs/target-bound-cross-app/source-summary.docx", "kind": "word-document", "status": "visible-and-saved"}
+        ],
+        "fileList": {
+          "artifactRef": ".sciforge/vision-runs/target-bound-cross-app/cross-app-file-list.json",
+          "dataRef": ".sciforge/vision-runs/target-bound-cross-app/cross-app-file-list-data.json"
+        }
+      },
+      "metadata": {"realWindowEvidence": true, "logicalApp": "preview"}
+    }
+  ],
+  "plans": [
+    {"type": "click", "targetDescription": "Writer window tab", "reason": "switch from source reader to writer"},
+    {"type": "click", "targetDescription": "Document body"},
+    {
+      "type": "type_text",
+      "text": "# Source Summary\n\nThe source reader states that the CRISPR assay improved recovery by 12 percent.\n\n- Preserve the two validation cohorts.\n- Mention that this report was derived from visible source text.\n\n| Source Fact | Reported Value |\n| Recovery change | 12 percent improvement |\n"
+    },
+    {"type": "save", "reason": "save the Word-compatible source summary"},
+    {"type": "click", "targetDescription": "File Browser", "reason": "open the file browser"},
+    {"type": "click", "targetDescription": "Preview pane", "reason": "inspect the saved summary preview"}
+  ],
+  "verification": [
+    {"ok": true, "done": false, "changed": true, "reason": "writer window visible after source reader"},
+    {"ok": true, "done": false, "changed": true, "reason": "document body focused"},
+    {"ok": true, "done": false, "changed": true, "reason": "source-derived summary visible"},
+    {"ok": true, "done": false, "changed": true, "reason": "source summary saved"},
+    {"ok": true, "done": false, "changed": true, "reason": "file browser shows saved summary"},
+    {
+      "ok": true,
+      "done": true,
+      "changed": true,
+      "reason": "preview pane and directory evidence visible for source summary",
+      "metadata": {
+        "finalArtifactRef": ".sciforge/vision-runs/target-bound-cross-app/source-summary.docx",
+        "fileListArtifactRef": ".sciforge/vision-runs/target-bound-cross-app/cross-app-file-list.json",
+        "fileListDataRef": ".sciforge/vision-runs/target-bound-cross-app/cross-app-file-list-data.json"
+      }
+    }
+  ],
+  "files": {
+    ".sciforge/vision-runs/target-bound-cross-app/cross-app-file-list.json": "{\"schemaVersion\":\"sciforge.computer-use.file-list-evidence.v1\",\"entries\":[{\"name\":\"source-summary.docx\",\"type\":\"file\"},{\"name\":\"cross-app-file-list.json\",\"type\":\"file\"},{\"name\":\"cross-app-file-list-data.json\",\"type\":\"file\"}]}\n",
+    ".sciforge/vision-runs/target-bound-cross-app/cross-app-file-list-data.json": "{\"files\":[\"source-summary.docx\",\"cross-app-file-list.json\",\"cross-app-file-list-data.json\"]}\n"
+  }
+}

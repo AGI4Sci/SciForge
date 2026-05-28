@@ -2,6 +2,7 @@ import { access, copyFile, mkdir, readdir, readFile, writeFile } from 'node:fs/p
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import type {
+  ComputerUseLongRepairDiagnostics,
   ComputerUseLongRoundRunResult,
   ComputerUseLongRunValidation,
   ComputerUseLongScenarioRunResult,
@@ -12,6 +13,10 @@ import { allowedActionTypes, requiredTraceMetadata } from './contracts.js';
 import { loadComputerUseLongTaskPool } from './task-pool.js';
 import { validateComputerUseLongTrace } from './trace-contract.js';
 import {
+  validateCuNextNeedsConfirmationSidecars,
+  canonicalApprovalRefFromConfirmedSidecar,
+} from '../computer-use-next/approval-chain.js';
+import {
   defaultWindowTargetForRound,
   findPayloadTraceRef,
   firstString,
@@ -19,9 +24,11 @@ import {
   isRealGuiTrace,
   isRecord,
   manifestRel,
+  missingEvidenceRefsFromIssues,
   minimumAcceptanceCount,
   readOptionalJson,
   readOptionalText,
+  repairActionsForIssues,
   renderActionLedger,
   renderFailureDiagnostics,
   renderRoundRuntimePrompt,
@@ -70,6 +77,78 @@ export function computerUseLongRoundTimeoutMs(input: {
   return Math.max(CU_LONG_MIN_REAL_ROUND_TIMEOUT_MS, minimumBudget);
 }
 
+export function computerUseLongAcceptanceProgress(
+  manifest: PreparedComputerUseLongRun,
+  round: number,
+  observed: {
+    observedScenarioActionCount?: number;
+    observedScenarioNonWaitActionCount?: number;
+  } = {},
+) {
+  const roundCount = Math.max(1, manifest.rounds.length);
+  const remainingRounds = Math.max(1, roundCount - Math.max(1, round) + 1);
+  const currentRound = manifest.rounds.find((item) => item.round === round);
+  const currentRoundActionQuotaEligible = currentRound
+    ? isComputerUseLongActionQuotaEligibleRound(currentRound)
+    : true;
+  const remainingActionQuotaRounds = manifest.rounds
+    .filter((item) => item.round >= round && isComputerUseLongActionQuotaEligibleRound(item))
+    .length;
+  const minimumScenarioActionCount = minimumAcceptanceCount(manifest.acceptance, /通用动作|generic actions?/i);
+  const minimumScenarioNonWaitActionCount = minimumAcceptanceCount(manifest.acceptance, /非\s*wait|non[-\s]?wait/i);
+  const observedScenarioActionCount = Math.max(0, Math.floor(observed.observedScenarioActionCount ?? 0));
+  const observedScenarioNonWaitActionCount = Math.max(0, Math.floor(observed.observedScenarioNonWaitActionCount ?? 0));
+  const remainingScenarioActionCount = minimumScenarioActionCount === undefined
+    ? undefined
+    : Math.max(0, minimumScenarioActionCount - observedScenarioActionCount);
+  const remainingScenarioNonWaitActionCount = minimumScenarioNonWaitActionCount === undefined
+    ? undefined
+    : Math.max(0, minimumScenarioNonWaitActionCount - observedScenarioNonWaitActionCount);
+  const suggestedCurrentRoundActionTarget = currentRoundActionQuotaEligible
+    ? suggestedCurrentRoundQuota(remainingScenarioActionCount, Math.max(1, remainingActionQuotaRounds))
+    : undefined;
+  const suggestedCurrentRoundNonWaitActionTarget = currentRoundActionQuotaEligible
+    ? suggestedCurrentRoundQuota(remainingScenarioNonWaitActionCount, Math.max(1, remainingActionQuotaRounds))
+    : undefined;
+  const progress = {
+    schemaVersion: 'sciforge.computer-use-long.acceptance-progress.v1',
+    round,
+    roundCount,
+    remainingRounds,
+    currentRoundActionQuotaEligible,
+    remainingActionQuotaRounds,
+    minimumScenarioActionCount,
+    minimumScenarioNonWaitActionCount,
+    observedScenarioActionCount,
+    observedScenarioNonWaitActionCount,
+    remainingScenarioActionCount,
+    remainingScenarioNonWaitActionCount,
+    suggestedCurrentRoundActionTarget,
+    suggestedCurrentRoundNonWaitActionTarget,
+    actionQuotaEligibilityReason: currentRoundActionQuotaEligible
+      ? 'current round can produce generic GUI action evidence'
+      : 'current round is evidence/report/ref summarization; scenario action quota must already be satisfied by prior action-producing rounds',
+    source: 'scenario-acceptance-minimums',
+  };
+  return Object.fromEntries(Object.entries(progress).filter(([, value]) => value !== undefined));
+}
+
+export function isComputerUseLongActionQuotaEligibleRound(round: {
+  prompt?: string;
+  expectedTrace?: string[];
+}) {
+  const text = [round.prompt, ...(round.expectedTrace ?? [])].join(' ').trim();
+  if (!text) return true;
+  const summaryOnlyIntent = /(?:总结|汇总|复盘|追问|回答|生成(?:测试|回归|regression|跨\s*backend)?报告|比较不同\s*backend|压测\s*context|删除聊天可见上下文|summari[sz]e|summary|report|handoff|success metrics|failure categories)/i.test(text);
+  const explicitGuiActionIntent = /(?:打开|启动|点击|双击|拖|滚动|输入|填写|修改|清除|修正|切换|移动|最小化|遮挡|恢复|创建|保存|重命名|预览|定位|筛选|导航|返回|展开|取消|触发|执行|发送|按\s*(?:Escape|Tab|Enter)|回到\s*SciForge|press[_\s-]?key|hotkey|click|double[_\s-]?click|drag|scroll|type[_\s-]?text|open[_\s-]?app|launch|switch|move|save|rename|preview|filter|navigate)/i.test(text);
+  return !(summaryOnlyIntent && !explicitGuiActionIntent);
+}
+
+function suggestedCurrentRoundQuota(remaining: number | undefined, remainingRounds: number) {
+  if (remaining === undefined || remaining <= 0) return undefined;
+  return Math.max(1, Math.ceil(remaining / Math.max(1, remainingRounds)));
+}
+
 export async function runComputerUseLongRound(options: {
   manifestPath: string;
   round: number;
@@ -78,6 +157,9 @@ export async function runComputerUseLongRound(options: {
   runId?: string;
   actionsJson?: string;
   promptSuffix?: string;
+  approvalRef?: string;
+  approvalSourceDir?: string;
+  approvalProvenance?: Record<string, unknown>;
   targetAppName?: string;
   targetTitle?: string;
   targetMode?: 'active-window' | 'app-window' | 'window-id' | 'display';
@@ -112,12 +194,42 @@ export async function runComputerUseLongRound(options: {
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
   const { runWorkspaceRuntimeGateway } = await import('../../src/runtime/workspace-runtime-gateway.js');
-  const maxSteps = options.maxSteps ?? CU_LONG_DEFAULT_REAL_MAX_STEPS;
+  const priorMetrics = await priorRoundAcceptanceMetrics(manifest, dirname(manifestPath), options.round);
+  const acceptanceProgress = computerUseLongAcceptanceProgress(manifest, options.round, priorMetrics);
+  const targetActionCount = typeof acceptanceProgress.suggestedCurrentRoundActionTarget === 'number'
+    ? acceptanceProgress.suggestedCurrentRoundActionTarget
+    : 0;
+  const targetNonWaitActionCount = typeof acceptanceProgress.suggestedCurrentRoundNonWaitActionTarget === 'number'
+    ? acceptanceProgress.suggestedCurrentRoundNonWaitActionTarget
+    : 0;
+  const maxSteps = Math.max(
+    options.maxSteps ?? CU_LONG_DEFAULT_REAL_MAX_STEPS,
+    targetActionCount ? targetActionCount + 2 : 0,
+    targetNonWaitActionCount ? targetNonWaitActionCount + 2 : 0,
+  );
   const windowTarget = await defaultWindowTargetForRound(manifest, options.round, options.dryRun ?? false, {
     appName: options.targetAppName,
     title: options.targetTitle,
     mode: options.targetMode,
   });
+  const approvalProvenance = options.approvalProvenance
+    ?? await approvalProvenanceFromSourceDir(options.approvalSourceDir, options.approvalRef);
+  const humanApproval = options.approvalRef
+    ? {
+        approvalRef: options.approvalRef,
+        status: 'confirmed',
+        source: 'cu-long-runner-cli',
+        ...(approvalProvenance ? { approvalProvenance } : {}),
+      }
+    : undefined;
+  const humanApprovalPolicy = options.approvalRef
+    ? {
+        status: 'confirmed',
+        approvalRef: options.approvalRef,
+        source: 'cu-long-runner-cli',
+        ...(approvalProvenance ? { approvalProvenance } : {}),
+      }
+    : undefined;
   const roundTimeoutMs = computerUseLongRoundTimeoutMs({ dryRun: options.dryRun ?? false, maxSteps });
   const gatewayAbort = new AbortController();
   const timeoutMessage = `runWorkspaceRuntimeGateway timed out after ${roundTimeoutMs}ms for ${manifest.scenarioId} round ${options.round}`;
@@ -128,10 +240,16 @@ export async function runComputerUseLongRound(options: {
       selectedToolIds: ['local.vision-sense'],
       selectedSenseIds: ['local.vision-sense'],
       selectedActionIds: ['action.sciforge.computer-use'],
+      humanApproval,
+      humanApprovalPolicy,
       uiState: {
         selectedToolIds: ['local.vision-sense'],
         selectedSenseIds: ['local.vision-sense'],
         selectedActionIds: ['action.sciforge.computer-use'],
+	        approvalRef: options.approvalRef,
+	        approvalProvenance,
+	        humanApproval,
+        humanApprovalPolicy,
         visionSenseConfig: {
           desktopBridgeEnabled: true,
           dryRun: options.dryRun ?? false,
@@ -164,6 +282,7 @@ export async function runComputerUseLongRound(options: {
             requiredPipeline: manifest.universalPipeline,
             safetyBoundary: manifest.safetyBoundary,
             validationContract: manifest.validationContract,
+            acceptanceProgress,
           },
           computerUseNext: manifest.cuNextTask,
         },
@@ -293,6 +412,57 @@ export async function runComputerUseLongRound(options: {
 function positiveFiniteNumber(value: unknown): number | undefined {
   const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+async function priorRoundAcceptanceMetrics(
+  manifest: PreparedComputerUseLongRun,
+  manifestDir: string,
+  round: number,
+) {
+  let observedScenarioActionCount = 0;
+  let observedScenarioNonWaitActionCount = 0;
+  for (const priorRound of manifest.rounds.filter((item) => item.round < round)) {
+    const metrics = await firstRoundMetricsFromRefs(
+      manifestDir,
+      [
+        ...(priorRound.actionLedgerRefs ?? []),
+        ...(priorRound.failureDiagnosticsRefs ?? []),
+      ],
+    );
+    observedScenarioActionCount += metrics.actionCount;
+    observedScenarioNonWaitActionCount += metrics.nonWaitActionCount;
+  }
+  return {
+    observedScenarioActionCount,
+    observedScenarioNonWaitActionCount,
+  };
+}
+
+async function firstRoundMetricsFromRefs(manifestDir: string, refs: string[]) {
+  for (const ref of refs) {
+    const data = await readOptionalJson(resolveManifestRef(manifestDir, ref));
+    const metrics = roundMetricsFromRecord(data);
+    if (metrics) return metrics;
+  }
+  return { actionCount: 0, nonWaitActionCount: 0 };
+}
+
+function roundMetricsFromRecord(data: unknown): { actionCount: number; nonWaitActionCount: number } | undefined {
+  if (!isRecord(data)) return undefined;
+  const candidates = [
+    data.validationMetrics,
+    isRecord(data.traceValidation) ? data.traceValidation.metrics : undefined,
+    data.metrics,
+  ];
+  for (const candidate of candidates) {
+    if (!isRecord(candidate)) continue;
+    const actionCount = finiteNumber(candidate.actionCount) ?? 0;
+    const nonWaitActionCount = finiteNumber(candidate.nonWaitActionCount) ?? 0;
+    if (actionCount > 0 || nonWaitActionCount > 0) {
+      return { actionCount, nonWaitActionCount };
+    }
+  }
+  return undefined;
 }
 
 async function copyTraceEvidenceBundle(options: {
@@ -448,6 +618,9 @@ export async function runComputerUseLongScenario(options: {
   maxSteps?: number;
   actionsJson?: string;
   promptSuffix?: string;
+  approvalRef?: string;
+  approvalSourceDir?: string;
+  approvalProvenance?: Record<string, unknown>;
   targetAppName?: string;
   targetTitle?: string;
   targetMode?: 'active-window' | 'app-window' | 'window-id' | 'display';
@@ -478,6 +651,9 @@ export async function runComputerUseLongScenario(options: {
       runId: `${manifest.run.id}-round-${String(round.round).padStart(2, '0')}`,
       actionsJson: options.actionsJson,
       promptSuffix: options.promptSuffix,
+      approvalRef: options.approvalRef,
+      approvalSourceDir: options.approvalSourceDir,
+      approvalProvenance: options.approvalProvenance,
       targetAppName: options.targetAppName,
       targetTitle: options.targetTitle,
       targetMode: options.targetMode,
@@ -500,6 +676,15 @@ export async function runComputerUseLongScenario(options: {
 
   const summaryPath = join(dirname(manifestPath), 'scenario-summary.json');
   await writeFile(summaryPath, `${JSON.stringify(renderScenarioSummary(latestManifest, scenario, roundResults), null, 2)}\n`);
+  const validation = await validateComputerUseLongRun({
+    manifestPath,
+    requirePassed: latestManifest.status === 'passed',
+  });
+  if (latestManifest.status === 'passed' && !validation.ok) {
+    latestManifest.status = 'repair-needed';
+    await writeFile(manifestPath, `${JSON.stringify(latestManifest, null, 2)}\n`);
+  }
+  await writeFile(summaryPath, `${JSON.stringify(renderScenarioSummary(latestManifest, scenario, roundResults, validation), null, 2)}\n`);
   return {
     manifestPath,
     scenarioId: latestManifest.scenarioId,
@@ -507,9 +692,104 @@ export async function runComputerUseLongScenario(options: {
     attemptedRounds,
     passedRounds,
     repairNeededRound,
+    validation,
     summaryPath,
     roundResults,
   };
+}
+
+async function approvalProvenanceFromSourceDir(
+  sourceDir: string | undefined,
+  approvalRef: string | undefined,
+): Promise<Record<string, unknown> | undefined> {
+  if (!sourceDir) return undefined;
+  const dir = resolve(sourceDir);
+  const [approvalRequestSidecar, guiAskUserSidecar, riskAuditSidecar] = await Promise.all([
+    readOptionalJson(join(dir, 'approval-request.json')),
+    readOptionalJson(join(dir, 'gui-ask-user.json')),
+    readOptionalJson(join(dir, 'risk-audit.json')),
+  ]);
+  if (!isRecord(approvalRequestSidecar) || !isRecord(guiAskUserSidecar) || !isRecord(riskAuditSidecar)) {
+    throw new Error(`approval source dir must contain approval-request.json, gui-ask-user.json, and risk-audit.json: ${dir}`);
+  }
+  const validationIssues = validateCuNextNeedsConfirmationSidecars({
+    sidecars: {
+      approvalRequest: approvalRequestSidecar,
+      guiAskUser: guiAskUserSidecar,
+      riskAudit: riskAuditSidecar,
+    },
+    refs: {
+      approvalRequestRef: 'approval-request.json',
+      guiAskUserRecordRef: 'gui-ask-user.json',
+      riskAuditRef: 'risk-audit.json',
+    },
+  });
+  if (validationIssues.length > 0) {
+    throw new Error(`approval source dir is not a valid fail-closed needs-confirmation source: ${validationIssues.map((issue) => issue.reason).join(' ')}`);
+  }
+  const approvalRequest = recordAt(approvalRequestSidecar, 'approvalRequest');
+  const approvalRequestId = firstString(
+    stringAtRecord(approvalRequestSidecar, 'approvalRequestId'),
+    stringAtRecord(approvalRequest, 'id'),
+    stringAtRecord(approvalRequest, 'approvalRequestId'),
+  );
+  const riskActionHash = firstString(
+    stringAtRecord(riskAuditSidecar, 'riskActionHash'),
+    stringAtRecord(approvalRequestSidecar, 'riskActionHash'),
+    stringAtRecord(approvalRequest, 'riskActionHash'),
+  );
+  const sourceApprovalRef = canonicalApprovalRefFromConfirmedSidecar(approvalRequestSidecar)
+    ?? stringAtRecord(approvalRequestSidecar, 'approvalRef')
+    ?? stringAtRecord(approvalRequest, 'approvalRef');
+  if (approvalRef && sourceApprovalRef && approvalRef !== sourceApprovalRef) {
+    throw new Error(`approvalRef must match the prior fail-closed source approvalRef; got ${approvalRef}, expected ${sourceApprovalRef}`);
+  }
+  return compactRecord({
+    source: 'prior-fail-closed-request',
+    sourceStatus: 'needs-confirmation',
+    sourceRunId: firstString(
+      stringAtRecord(riskAuditSidecar, 'runId'),
+      stringAtRecord(approvalRequestSidecar, 'runId'),
+      stringAtRecord(guiAskUserSidecar, 'runId'),
+    ),
+    sourceApprovalRequestRef: 'approval-request.json',
+    sourceGuiAskUserRecordRef: 'gui-ask-user.json',
+    sourceRiskAuditRef: 'risk-audit.json',
+    approvalRequestId,
+    approvalRef: approvalRef ?? sourceApprovalRef,
+    riskActionHash,
+    highRiskAction: recordAt(riskAuditSidecar, 'highRiskAction')
+      ?? recordAt(approvalRequestSidecar, 'highRiskAction')
+      ?? recordAt(approvalRequest, 'highRiskAction'),
+    approvalRequestSidecar,
+    guiAskUserSidecar,
+    riskAuditSidecar,
+    sourceApprovalRequestPath: join(dir, 'approval-request.json'),
+    sourceGuiAskUserPath: join(dir, 'gui-ask-user.json'),
+    sourceRiskAuditPath: join(dir, 'risk-audit.json'),
+    decisionSource: 'cu-long-runner-cli',
+  });
+}
+
+function recordAt(value: unknown, key: string): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return undefined;
+  const child = value[key];
+  return isRecord(child) ? child : undefined;
+}
+
+function stringAtRecord(value: unknown, key: string): string | undefined {
+  if (!isRecord(value)) return undefined;
+  const child = value[key];
+  return typeof child === 'string' && child.trim().length > 0 ? child : undefined;
+}
+
+function compactRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => {
+    if (entry === undefined || entry === null) return false;
+    if (Array.isArray(entry) && entry.length === 0) return false;
+    if (isRecord(entry) && Object.keys(entry).length === 0) return false;
+    return true;
+  }));
 }
 
 export async function validateComputerUseLongRun(options: {
@@ -592,9 +872,19 @@ export async function validateComputerUseLongRun(options: {
   let screenshotRefCount = 0;
   let actionLedgerCount = 0;
   let failureDiagnosticsCount = 0;
+  const repairDiagnostics = emptyRepairDiagnostics();
   const traceWindowTargets: Array<Record<string, unknown>> = [];
   for (const round of manifest.rounds) {
-    if (round.status !== 'passed') continue;
+    if (round.status !== 'passed') {
+      failureDiagnosticsCount += await collectRoundFailureDiagnostics({
+        manifestDir,
+        round,
+        issues,
+        repairDiagnostics,
+        requirePassed: options.requirePassed !== false,
+      });
+      continue;
+    }
     checkedRounds.push(round.round);
     passedRounds += 1;
     let roundTraceDir = manifestDir;
@@ -646,17 +936,13 @@ export async function validateComputerUseLongRun(options: {
         }
       }
     }
-    if (!round.failureDiagnosticsRefs.length) issues.push(`round ${round.round} missing failureDiagnosticsRefs`);
-    for (const ref of round.failureDiagnosticsRefs) {
-      failureDiagnosticsCount += 1;
-      const diagnostics = await readOptionalJson(resolveManifestRef(manifestDir, ref));
-      if (!isRecord(diagnostics)) {
-        issues.push(`round ${round.round} failure diagnostics ${ref} is missing or invalid`);
-      } else {
-        if (diagnostics.schemaVersion !== 'sciforge.computer-use-long.failure-diagnostics.v1') issues.push(`round ${round.round} failure diagnostics schemaVersion is invalid`);
-        if (!isRecord(diagnostics.traceValidation)) issues.push(`round ${round.round} failure diagnostics missing traceValidation`);
-      }
-    }
+    failureDiagnosticsCount += await collectRoundFailureDiagnostics({
+      manifestDir,
+      round,
+      issues,
+      repairDiagnostics,
+      requirePassed: options.requirePassed !== false,
+    });
   }
   if (scenario && options.requirePassed !== false && passedRounds < scenario.minRounds) {
     issues.push(`passed rounds ${passedRounds} is below scenario minRounds ${scenario.minRounds}`);
@@ -665,15 +951,37 @@ export async function validateComputerUseLongRun(options: {
     const minActions = minimumAcceptanceCount(scenario.acceptance, /通用动作|generic actions?/i);
     if (minActions !== undefined && totalActionCount < minActions) {
       issues.push(`real run action count ${totalActionCount} is below acceptance minimum ${minActions}`);
+      repairDiagnostics.actionShortfalls.push({
+        metric: 'actionCount',
+        observed: totalActionCount,
+        minimum: minActions,
+        missing: minActions - totalActionCount,
+        source: 'scenario-acceptance',
+      });
     }
     const minNonWaitActions = minimumAcceptanceCount(scenario.acceptance, /非\s*wait|non[-\s]?wait/i);
     if (minNonWaitActions !== undefined && totalNonWaitActionCount < minNonWaitActions) {
       issues.push(`real run non-wait action count ${totalNonWaitActionCount} is below acceptance minimum ${minNonWaitActions}`);
+      repairDiagnostics.actionShortfalls.push({
+        metric: 'nonWaitActionCount',
+        observed: totalNonWaitActionCount,
+        minimum: minNonWaitActions,
+        missing: minNonWaitActions - totalNonWaitActionCount,
+        source: 'scenario-acceptance',
+      });
     }
     if (scenarioExpectsBrowserTarget(scenario) && !traceWindowTargets.some(isBrowserWindowTarget)) {
       issues.push('real browser scenario did not target a browser window in any trace');
     }
   }
+  if (repairDiagnostics.actionShortfalls[0]) repairDiagnostics.actionShortfall = repairDiagnostics.actionShortfalls[0];
+  repairDiagnostics.missingRefs = dedupeStrings([
+    ...repairDiagnostics.missingRefs,
+    ...missingEvidenceRefsFromIssues(issues),
+  ]);
+  repairDiagnostics.failingRoundDiagnosticsRefs = dedupeStrings(repairDiagnostics.failingRoundDiagnosticsRefs);
+  repairDiagnostics.failureReasons = dedupeStrings(repairDiagnostics.failureReasons);
+  repairDiagnostics.nextRepairFocus = issues.length ? repairActionsForIssues(issues) : [];
 
   return {
     ok: issues.length === 0,
@@ -682,6 +990,7 @@ export async function validateComputerUseLongRun(options: {
     summaryPath,
     checkedRounds,
     issues,
+    repairDiagnostics,
     metrics: {
       passedRounds,
       traceCount,
@@ -693,4 +1002,105 @@ export async function validateComputerUseLongRun(options: {
       failureDiagnosticsCount,
     },
   };
+}
+
+function emptyRepairDiagnostics(): ComputerUseLongRepairDiagnostics {
+  return {
+    actionShortfalls: [],
+    missingRefs: [],
+    failingRoundDiagnosticsRefs: [],
+    failureReasons: [],
+    traceMetricsByRound: [],
+    nextRepairFocus: [],
+  };
+}
+
+async function collectRoundFailureDiagnostics(options: {
+  manifestDir: string;
+  round: PreparedComputerUseLongRun['rounds'][number];
+  issues: string[];
+  repairDiagnostics: ComputerUseLongRepairDiagnostics;
+  requirePassed: boolean;
+}) {
+  const { manifestDir, round, issues, repairDiagnostics } = options;
+  if (!round.failureDiagnosticsRefs.length) {
+    if (round.status !== 'not-run') issues.push(`round ${round.round} missing failureDiagnosticsRefs`);
+    return 0;
+  }
+  let count = 0;
+  for (const ref of round.failureDiagnosticsRefs) {
+    count += 1;
+    if (round.status !== 'passed') repairDiagnostics.failingRoundDiagnosticsRefs.push(ref);
+    const diagnostics = await readOptionalJson(resolveManifestRef(manifestDir, ref));
+    if (!isRecord(diagnostics)) {
+      issues.push(`round ${round.round} failure diagnostics ${ref} is missing or invalid`);
+      continue;
+    }
+    if (diagnostics.schemaVersion !== 'sciforge.computer-use-long.failure-diagnostics.v1') {
+      issues.push(`round ${round.round} failure diagnostics schemaVersion is invalid`);
+    }
+    const traceValidation = isRecord(diagnostics.traceValidation) ? diagnostics.traceValidation : undefined;
+    if (!traceValidation) {
+      issues.push(`round ${round.round} failure diagnostics missing traceValidation`);
+    }
+    const failureReason = firstString(diagnostics.failureReason, diagnostics.message, firstExecutionFailure(diagnostics));
+    if (failureReason) {
+      repairDiagnostics.failureReasons.push(`round ${round.round}: ${failureReason}`);
+      if (options.requirePassed && round.status !== 'passed') {
+        issues.push(`round ${round.round} ${round.status}: ${failureReason}`);
+      }
+    }
+    const metrics = traceValidation && isRecord(traceValidation.metrics) ? traceValidation.metrics : {};
+    repairDiagnostics.traceMetricsByRound.push({
+      round: round.round,
+      status: round.status,
+      diagnosticsRef: ref,
+      traceRef: firstString(diagnostics.tracePath, round.visionTraceRef),
+      actionCount: finiteNumber(metrics.actionCount),
+      nonWaitActionCount: finiteNumber(metrics.nonWaitActionCount),
+      effectiveNonWaitActionCount: finiteNumber(metrics.effectiveNonWaitActionCount),
+      screenshotCount: finiteNumber(metrics.screenshotCount),
+      blockedCount: finiteNumber(metrics.blockedCount),
+      failedCount: finiteNumber(metrics.failedCount),
+      recoverActions: countRecoverActions(diagnostics),
+    });
+  }
+  return count;
+}
+
+function firstExecutionFailure(diagnostics: Record<string, unknown>) {
+  const units = Array.isArray(diagnostics.executionUnits) ? diagnostics.executionUnits.filter(isRecord) : [];
+  for (const unit of units) {
+    const failureReason = firstString(unit.failureReason);
+    if (failureReason) return failureReason;
+    const records = Array.isArray(unit.traceRecords) ? unit.traceRecords.filter(isRecord) : [];
+    for (const record of records) {
+      const execution = isRecord(record.execution) ? record.execution : undefined;
+      const stderr = firstString(execution?.stderr, execution?.stdout);
+      if (stderr) return stderr;
+    }
+  }
+  return undefined;
+}
+
+function countRecoverActions(value: unknown): number {
+  if (Array.isArray(value)) return value.reduce((sum, item) => sum + countRecoverActions(item), 0);
+  if (!isRecord(value)) return 0;
+  let count = 0;
+  for (const [key, item] of Object.entries(value)) {
+    if (/recover|recovery/i.test(key)) {
+      if (Array.isArray(item)) count += item.length;
+      else if (item !== undefined && item !== null) count += 1;
+    }
+    if (isRecord(item) || Array.isArray(item)) count += countRecoverActions(item);
+  }
+  return count;
+}
+
+function finiteNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function dedupeStrings(values: string[]) {
+  return Array.from(new Set(values.filter((value) => value.trim())));
 }

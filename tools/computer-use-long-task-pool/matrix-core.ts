@@ -22,6 +22,7 @@ import {
   renderMatrixReportMarkdown,
   renderPreflightReport,
   renderRepairPlanMarkdown,
+  repairActionsForIssues,
   writeMatrixSummary,
 } from './support.js';
 
@@ -100,11 +101,12 @@ export async function runComputerUseLongMatrix(options: {
       targetMode: options.targetMode,
       now,
     });
-    const validation = await validateComputerUseLongRun({
+    const validation = scenarioRun.validation ?? await validateComputerUseLongRun({
       manifestPath: prepared.manifestPath,
       requirePassed: scenarioRun.status === 'passed',
     });
     const issues = await collectScenarioRunIssues(scenarioRun, validation);
+    const nextRepairFocus = issues.length ? repairActionsForIssues(issues) : [];
     return {
       scenarioId,
       manifestPath: prepared.manifestPath,
@@ -112,6 +114,11 @@ export async function runComputerUseLongMatrix(options: {
       validationOk: validation.ok,
       summaryPath: scenarioRun.summaryPath,
       issues,
+      repairDiagnostics: {
+        ...validation.repairDiagnostics,
+        nextRepairFocus,
+      },
+      nextRepairFocus,
     };
   };
   if (executionPlan.mode === 'parallel-analysis') {
@@ -459,22 +466,39 @@ export async function preflightComputerUseLong(options: {
     ].join(' '),
   });
 
-  const kvGrounderUrl = firstString(process.env.SCIFORGE_VISION_KV_GROUND_URL, ...configCandidates.map((config) => getConfigString(config, ['visionSense', 'grounderBaseUrl'])));
-  const grounderReady = Boolean(kvGrounderUrl);
-  checks.push(grounderReady ? {
-    id: 'grounder',
-    status: hasTestActionFixtures ? 'warn' : 'pass',
-    category: 'grounder',
-    message: 'KV-Ground-compatible endpoint is configured.',
-  } : {
-    id: 'grounder',
-    status: hasTestActionFixtures ? 'warn' : 'fail',
-    category: 'grounder',
-    message: 'No KV-Ground config was found.',
-    repairAction: 'Set SCIFORGE_VISION_KV_GROUND_URL.',
-  });
+  const kvGrounderUrl = stripTrailingSlash(firstString(process.env.SCIFORGE_VISION_KV_GROUND_URL, ...configCandidates.map((config) => getConfigString(config, ['visionSense', 'grounderBaseUrl']))));
+  if (!kvGrounderUrl) {
+    checks.push({
+      id: 'grounder',
+      status: hasTestActionFixtures ? 'warn' : 'fail',
+      category: 'grounder',
+      message: 'No KV-Ground config was found.',
+      repairAction: 'Set SCIFORGE_VISION_KV_GROUND_URL.',
+    });
+  } else if (dryRun || hasTestActionFixtures) {
+    checks.push({
+      id: 'grounder',
+      status: hasTestActionFixtures ? 'warn' : 'pass',
+      category: 'grounder',
+      message: 'KV-Ground-compatible endpoint is configured; live health is not required for dry-run or fixture actions.',
+    });
+  } else {
+    const health = await checkKvGroundHealth(kvGrounderUrl);
+    checks.push(health.ok ? {
+      id: 'grounder',
+      status: 'pass',
+      category: 'grounder',
+      message: `KV-Ground health check passed at ${health.healthUrl}.`,
+    } : {
+      id: 'grounder',
+      status: 'fail',
+      category: 'grounder',
+      message: `KV-Ground health check failed at ${health.healthUrl}: ${health.reason}.`,
+      repairAction: 'Start KV-Ground or its SSH tunnel, then verify curl $SCIFORGE_VISION_KV_GROUND_URL/health before running real CU-LONG/CU-NEXT tasks.',
+    });
+  }
 
-  const highRiskAllowed = /^1|true|yes$/i.test(firstString(process.env.SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS, ...configCandidates.map((config) => getConfigString(config, ['visionSense', 'allowHighRiskActions']))) || '');
+  const highRiskAllowed = /^(?:1|true|yes)$/i.test(firstString(process.env.SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS, ...configCandidates.map((config) => getConfigString(config, ['visionSense', 'allowHighRiskActions']))) || '');
   checks.push(highRiskAllowed ? {
     id: 'high-risk-boundary',
     status: 'fail',
@@ -515,6 +539,86 @@ function runtimeCodexUpstreamBaseUrl(configCandidates: Array<Record<string, unkn
       getConfigString(config, ['runtimeCodexProxy', 'baseUrl']),
     ]),
   );
+}
+
+async function checkKvGroundHealth(baseUrl: string): Promise<{ ok: true; healthUrl: string } | { ok: false; healthUrl: string; reason: string }> {
+  const healthUrl = kvGroundHealthUrl(baseUrl);
+  const diagnosticHealthUrl = sanitizeDiagnosticUrl(healthUrl);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  const fail = (reason: string) => ({
+    ok: false as const,
+    healthUrl: diagnosticHealthUrl,
+    reason: sanitizeDiagnosticText(reason),
+  });
+  try {
+    const response = await fetch(healthUrl, { signal: controller.signal });
+    if (!response.ok) return fail(`HTTP ${response.status}`);
+    const text = await response.text();
+    const payload = parseJson(text);
+    if (!isRecord(payload)) return fail('response was not JSON');
+    if (payload.ok !== true) return fail(`response ok=${String(payload.ok)}`);
+    return { ok: true, healthUrl: diagnosticHealthUrl };
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error));
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function kvGroundHealthUrl(baseUrl: string) {
+  try {
+    const url = new URL(baseUrl);
+    url.pathname = `${url.pathname.replace(/\/+$/, '')}/health`;
+    return url.toString();
+  } catch {
+    return `${baseUrl}/health`;
+  }
+}
+
+function sanitizeDiagnosticUrl(value: string) {
+  try {
+    const url = new URL(value);
+    url.username = '';
+    url.password = '';
+    url.search = '';
+    url.hash = '';
+    return stripTrailingSlash(url.toString()) ?? url.toString();
+  } catch {
+    return redactSensitiveAssignments(redactBearerTokens(stripUrlTail(redactUrlUserinfo(value))));
+  }
+}
+
+function sanitizeDiagnosticText(value: string) {
+  return redactSensitiveAssignments(redactBearerTokens(value.replace(/\bhttps?:\/\/[^\s<>"'`]+/gi, (url) => sanitizeDiagnosticUrl(url))));
+}
+
+function redactBearerTokens(value: string) {
+  return value.replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [redacted]');
+}
+
+function redactSensitiveAssignments(value: string) {
+  return value.replace(/\b(?:token|apiKey|api_key|api-key|secret|password)\b\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;&]+)/gi, '[redacted]');
+}
+
+function redactUrlUserinfo(value: string) {
+  return value.replace(/\/\/[^/@\s]+@/g, '//');
+}
+
+function stripUrlTail(value: string) {
+  return value.replace(/[?#].*$/, '');
+}
+
+function stripTrailingSlash(value: string | undefined) {
+  return value?.replace(/\/+$/, '');
+}
+
+function parseJson(value: string) {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
 }
 
 function isExecutableIndependentInputAdapter(adapter: string | undefined, provider: string | undefined) {

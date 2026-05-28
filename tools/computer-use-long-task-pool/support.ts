@@ -41,6 +41,7 @@ export function renderScenarioSummary(
   manifest: PreparedComputerUseLongRun,
   scenario: ComputerUseLongScenario,
   roundResults: ComputerUseLongRoundRunResult[],
+  validation?: ComputerUseLongRunValidation,
 ) {
   return {
     schemaVersion: 'sciforge.computer-use-long.scenario-summary.v1',
@@ -65,6 +66,12 @@ export function renderScenarioSummary(
       failureDiagnosticsRefs: round.failureDiagnosticsRefs,
       observedBehavior: round.observedBehavior,
     })),
+    validation: validation ? {
+      ok: validation.ok,
+      issues: validation.issues,
+      metrics: validation.metrics,
+      repairDiagnostics: validation.repairDiagnostics,
+    } : undefined,
   };
 }
 
@@ -202,10 +209,14 @@ export function renderMatrixReportMarkdown(
     if (!issues.length) {
       lines.push('- issues: none');
     } else {
+      const repairDiagnostics = isRecord(result.repairDiagnostics) ? result.repairDiagnostics : undefined;
+      const nextRepairFocus = Array.isArray(repairDiagnostics?.nextRepairFocus)
+        ? repairDiagnostics.nextRepairFocus.map(String)
+        : repairActionsForIssues(issues);
       lines.push('- issues:');
       for (const issue of issues) lines.push(`  - [${categorizeComputerUseIssue(issue)}] ${issue}`);
       lines.push('- next repair focus:');
-      for (const action of repairActionsForIssues(issues)) lines.push(`  - ${action}`);
+      for (const action of nextRepairFocus) lines.push(`  - ${action}`);
     }
     lines.push('');
   }
@@ -283,6 +294,7 @@ export function renderRepairPlanMarkdown(summaryPath: string, summary: Record<st
 }
 
 export function categorizeComputerUseIssue(issue: string) {
+  if (/action count|non[-\s]?wait action|generic action|action shortfall|acceptance minimum|maxSteps/i.test(issue)) return 'action-budget';
   if (/planner|planning|RuntimeCodexPlanner/i.test(issue)) return 'planner';
   if (/windowTarget|window target|target window|window-local|window screenshot|displayId|window bounds/i.test(issue)) return 'window-target';
   if (/ground|coordinate|targetDescription|KV-Ground/i.test(issue)) return 'grounder';
@@ -346,9 +358,10 @@ function firstExecutionFailure(diagnostics: Record<string, unknown>) {
   return undefined;
 }
 
-function repairActionsForIssues(issues: string[]) {
+export function repairActionsForIssues(issues: string[]) {
   const categories = new Set(issues.map(categorizeComputerUseIssue));
   const actions: string[] = [];
+  if (categories.has('action-budget')) actions.push('Increase the real-run action budget or continue additional evidence-producing generic mouse/keyboard steps until the scenario acceptance minimum is met.');
   if (categories.has('window-target')) actions.push('Ensure WindowTarget selects the concrete app/window first, captures window screenshots, and maps every point in window-local coordinates.');
   if (categories.has('planner')) actions.push('Inspect planner prompt/output JSON and ensure it emits generic action schema without coordinates or app-private fields.');
   if (categories.has('grounder')) actions.push('Check KV-Ground configuration and ensure screenshot paths are readable by the Grounder.');
@@ -362,6 +375,24 @@ function repairActionsForIssues(issues: string[]) {
   if (categories.has('evidence-ledger')) actions.push('Regenerate action ledger, failure diagnostics, runtime prompt, and scenario summary from real run artifacts.');
   if (!actions.length) actions.push('Inspect the scenario manifest and trace validator issues, then repair the first failed round before continuing.');
   return actions;
+}
+
+export function missingEvidenceRefsFromIssues(issues: string[]) {
+  const refs: string[] = [];
+  for (const issue of issues) {
+    const requiredRef = /required evidence ref (.+?) was not found/i.exec(issue);
+    if (requiredRef?.[1]) refs.push(requiredRef[1].replace(/[.。]\s*$/, '').trim());
+    const localRef = /missing[-\s]?ref(?:erence)?\s*:\s*([^;]+)/i.exec(issue);
+    if (localRef?.[1]) refs.push(localRef[1].replace(/[.。]\s*$/, '').trim());
+    const roundRef = /round\s+(\d+)\s+missing\s+(visionTraceRef|screenshotRefs|actionLedgerRefs|failureDiagnosticsRefs)/i.exec(issue);
+    if (roundRef?.[1] && roundRef?.[2]) refs.push(`round-${roundRef[1]}:${roundRef[2]}`);
+    const requiredPath = /\sat\s+([A-Za-z0-9_.[\]-]+):\s*[^.]*\b(?:required|present|missing)\b/i.exec(issue);
+    if (requiredPath?.[1]) refs.push(requiredPath[1].trim());
+    if (/final[-\s]?artifact[-\s]?ref is missing/i.test(issue)) refs.push('finalArtifactRef');
+    if (/finalArtifactRef\s+is\s+required/i.test(issue)) refs.push('finalArtifactRef');
+    if (/completionEvidenceRef.+(?:missing|required)/i.test(issue) || /completionEvidenceRef\s+is\s+required/i.test(issue)) refs.push('completionEvidenceRef');
+  }
+  return dedupeStrings(refs);
 }
 
 export function firstString(...values: Array<unknown>) {

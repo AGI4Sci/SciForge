@@ -1,12 +1,19 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { promisify } from 'node:util';
 
-import { loadComputerUseLongTaskPool } from '../../tools/computer-use-long-task-pool/internal.js';
+import {
+  computerUseLongAcceptanceProgress,
+  isComputerUseLongActionQuotaEligibleRound,
+  loadComputerUseLongTaskPool,
+  preflightComputerUseLong,
+  renderComputerUseLongRepairPlan,
+} from '../../tools/computer-use-long-task-pool/internal.js';
 import {
   CU_NEXT_TASK_MAPPINGS,
   CU_NEXT_TASK_MAP_SCHEMA_VERSION,
@@ -15,13 +22,28 @@ import {
   loadValidatedCuNextTaskMap,
   scenarioIdsForCuNextTask,
 } from '../../tools/computer-use-next/task-map.js';
-import { projectCuNextAcceptanceForScenarioRun } from '../../tools/cu-next-run.js';
+import {
+  expectedCuNextAcceptanceManifestStatus,
+  isSuccessfulCuNextAcceptanceProjection,
+  parseCuNextRunArgs,
+  projectCuNextAcceptanceForScenarioRun,
+  writeCuNextDiagnosticSummaryIfNeeded,
+} from '../../tools/cu-next-run.js';
+import {
+  cuNextProjectionAdapter,
+  cuNextProjectionTrace,
+  cuNextVisibleMarkdownArtifact,
+  passedBrowserManifest,
+  passedKvGroundManifest,
+  projectFixtureWithOnlyCuNext07Checked,
+  repairDiagnosticsFixture,
+  writeBundleLocalCuNext07Acceptance,
+  writeCuNextProjectionEvidenceFiles,
+  writeCuNextValidateRunLiveAcceptanceFixture,
+  writeCuNextValidateRunStatusFixture,
+} from './helpers/cu-next-runner-fixtures.js';
 
 const execFileAsync = promisify(execFile);
-const fixturePng = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADgwGOSyRGjgAAAABJRU5ErkJggg==',
-  'base64',
-);
 const cuNextRuntimeEnvKeys = [
   'SCIFORGE_CONFIG_PATH',
   'SCIFORGE_RUNTIME_API_KEY',
@@ -43,6 +65,67 @@ function cuNextRuntimeEnv(overrides: NodeJS.ProcessEnv = {}) {
   return { ...env, ...overrides };
 }
 
+async function withProcessEnv<T>(overrides: Record<string, string | undefined>, handler: () => Promise<T>): Promise<T> {
+  const previous = new Map(Object.keys(overrides).map((key) => [key, process.env[key]] as const));
+  try {
+    for (const [key, value] of Object.entries(overrides)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+    return await handler();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
+async function withKvGroundHealthServer<T>(handler: (baseUrl: string) => Promise<T>) {
+  const server = createServer((request, response) => {
+    if (request.url === '/health') {
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({ ok: true, inline_image_supported: true }));
+      return;
+    }
+    response.statusCode = 404;
+    response.end('not found');
+  });
+  await new Promise<void>((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  try {
+    return await handler(`http://127.0.0.1:${address.port}`);
+  } finally {
+    await new Promise<void>((resolvePromise, reject) => server.close((error) => error ? reject(error) : resolvePromise()));
+  }
+}
+
+function assertNoKvGroundSecretDiagnostics(blob: string): void {
+  for (const secret of [
+    'kvuser-redact',
+    'kvpass-redact',
+    'kvtoken-redact',
+    'kvapikey-redact',
+    'kvsecret-redact',
+    'kvquerypass-redact',
+    'kvhash-redact',
+    'kvbearer-redact',
+  ]) {
+    assert.doesNotMatch(blob, new RegExp(secret));
+  }
+  assert.doesNotMatch(blob, /\/\/[^/\s]+@/);
+  assert.doesNotMatch(blob, /[?&](?:token|apiKey|secret|password)=/);
+  assert.doesNotMatch(blob, /\b(?:token|apiKey|secret|password)=/);
+  assert.doesNotMatch(blob, /#kvhash/i);
+}
+
 function customCuNextTaskMap(): Record<string, unknown> {
   return {
     schemaVersion: CU_NEXT_TASK_MAP_SCHEMA_VERSION,
@@ -62,6 +145,68 @@ function customCuNextTaskMap(): Record<string, unknown> {
     ],
   };
 }
+
+test('CU-LONG acceptance progress rolls prior action shortfall into later rounds', () => {
+  const progress = computerUseLongAcceptanceProgress({
+    rounds: [{ round: 1 }, { round: 2 }, { round: 3 }, { round: 4 }],
+    acceptance: ['至少 20 个通用动作。'],
+  } as any, 4, {
+    observedScenarioActionCount: 14,
+  });
+
+  assert.equal(progress.minimumScenarioActionCount, 20);
+  assert.equal(progress.observedScenarioActionCount, 14);
+  assert.equal(progress.remainingScenarioActionCount, 6);
+  assert.equal(progress.remainingRounds, 1);
+  assert.equal(progress.suggestedCurrentRoundActionTarget, 6);
+});
+
+test('CU-LONG acceptance progress does not assign action quota to refs-only summary rounds', () => {
+  const rounds = [
+    {
+      round: 1,
+      prompt: '打开平台设置并执行低风险视觉操作。',
+      expectedTrace: ['control-specific actions'],
+    },
+    {
+      round: 2,
+      prompt: '视觉修改或重新检查 3 个低风险控件。',
+      expectedTrace: ['field before screenshots', 'after state screenshots'],
+    },
+    {
+      round: 3,
+      prompt: '制造一个低风险校验/无结果状态，随后清除或修正该字段。',
+      expectedTrace: ['validation screenshot', 'repair action'],
+    },
+    {
+      round: 4,
+      prompt: '让 SciForge 总结每个字段/控件的视觉证据和对应 action，只引用 screenshot refs、窗口目标、坐标和 action ledger。',
+      expectedTrace: ['field evidence refs', 'action mapping', 'no DOM/accessibility labels'],
+    },
+  ];
+  assert.equal(isComputerUseLongActionQuotaEligibleRound(rounds[2]), true);
+  assert.equal(isComputerUseLongActionQuotaEligibleRound(rounds[3]), false);
+
+  const beforeSummary = computerUseLongAcceptanceProgress({
+    rounds,
+    acceptance: ['至少 20 个通用动作。'],
+  } as any, 3, {
+    observedScenarioActionCount: 14,
+  });
+  assert.equal(beforeSummary.remainingActionQuotaRounds, 1);
+  assert.equal(beforeSummary.suggestedCurrentRoundActionTarget, 6);
+
+  const summaryRound = computerUseLongAcceptanceProgress({
+    rounds,
+    acceptance: ['至少 20 个通用动作。'],
+  } as any, 4, {
+    observedScenarioActionCount: 14,
+  });
+  assert.equal(summaryRound.currentRoundActionQuotaEligible, false);
+  assert.equal(summaryRound.remainingActionQuotaRounds, 0);
+  assert.equal(summaryRound.remainingScenarioActionCount, 6);
+  assert.equal(summaryRound.suggestedCurrentRoundActionTarget, undefined);
+});
 
 test('CU-NEXT task map validates against the CU-LONG task pool', async () => {
   const [map, longPool] = await Promise.all([
@@ -87,6 +232,52 @@ test('CU-NEXT task map validates against the CU-LONG task pool', async () => {
     assert.ok(task.longScenarioIds.every((id) => longScenarioIds.has(id)), `${task.taskId}: all scenarios must exist`);
     assert.ok(task.requirements.includes('no-dom-playwright-accessibility'));
   }
+});
+
+test('CU-NEXT run-scenario CLI accepts approvalRef and prompt suffix for confirmed retries', () => {
+  const parsed = parseCuNextRunArgs([
+    'run-scenario',
+    '--task',
+    'CU-NEXT-06',
+    '--real',
+    '--prompt-suffix',
+    'retry the guarded action after approval',
+    '--approval-ref',
+    'approval:computer-use:cu-next-06-confirmed',
+  ]);
+
+  assert.equal(parsed.command, 'run-scenario');
+  assert.equal(parsed.taskId, 'CU-NEXT-06');
+  assert.equal(parsed.dryRun, false);
+  assert.equal(parsed.promptSuffix, 'retry the guarded action after approval');
+  assert.equal(parsed.approvalRef, 'approval:computer-use:cu-next-06-confirmed');
+});
+
+test('CU-NEXT CLI rejects non approval-token approvalRef values', () => {
+  assert.throws(() => parseCuNextRunArgs([
+    'run-scenario',
+    '--task',
+    'CU-NEXT-06',
+    '--approval-ref',
+    'session:derived',
+  ]), /approval-ref must be a non-empty approval: token/);
+});
+
+test('CU-NEXT acceptance projection success accepts needs-confirmation for mail draft', () => {
+  assert.equal(expectedCuNextAcceptanceManifestStatus('CU-NEXT-03'), 'needs-confirmation');
+  assert.equal(expectedCuNextAcceptanceManifestStatus('CU-NEXT-07'), 'multi-app-workflow-passed');
+  assert.equal(isSuccessfulCuNextAcceptanceProjection('CU-NEXT-03', {
+    status: 'projected',
+    manifestStatus: 'needs-confirmation',
+  }), true);
+  assert.equal(isSuccessfulCuNextAcceptanceProjection('CU-NEXT-03', {
+    status: 'projected',
+    manifestStatus: 'multi-app-workflow-passed',
+  }), false);
+  assert.equal(isSuccessfulCuNextAcceptanceProjection('CU-NEXT-07', {
+    status: 'projected',
+    manifestStatus: 'multi-app-workflow-passed',
+  }), true);
 });
 
 test('CU-NEXT CLI accepts explicit task-map overrides without using the default task list', async () => {
@@ -169,12 +360,12 @@ test('CU-NEXT CLI lists and prepares through the CU-LONG runner without copying 
     const manifestPath = /manifest: (.+)/.exec(prepare.stdout)?.[1]?.trim();
     assert.ok(manifestPath, 'prepare output should include manifest path');
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-	    assert.equal(manifest.taskId, 'T084');
-	    assert.equal(manifest.cuNextTaskId, 'CU-NEXT-07');
-	    assert.equal(manifest.cuNextTask.taskId, 'CU-NEXT-07');
-	    assert.equal(manifest.cuNextTask.primaryScenarioId, 'CU-LONG-004');
-	    assert.ok(manifest.cuNextTask.requirements.includes('dense-grounding'));
-	    assert.equal(manifest.scenarioId, 'CU-LONG-004');
+    assert.equal(manifest.taskId, 'T084');
+    assert.equal(manifest.cuNextTaskId, 'CU-NEXT-07');
+    assert.equal(manifest.cuNextTask.taskId, 'CU-NEXT-07');
+    assert.equal(manifest.cuNextTask.primaryScenarioId, 'CU-LONG-004');
+    assert.ok(manifest.cuNextTask.requirements.includes('dense-grounding'));
+    assert.equal(manifest.scenarioId, 'CU-LONG-004');
     assert.equal(manifest.run.id, 'cu-next-07-runner-test');
   } finally {
     await rm(workspace, { recursive: true, force: true });
@@ -237,44 +428,193 @@ test('CU-NEXT preflight prints no-secret service-env repair actions for missing 
 test('CU-NEXT preflight hydrates runtime env from explicit local config without printing secrets', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-next-preflight-config-'));
   try {
-    const configPath = join(workspace, 'config.local.json');
-    await writeFile(configPath, `${JSON.stringify({
-      llm: {
-        apiKey: 'sk-test-cu-next-local-config-secret',
-        baseUrl: 'http://127.0.0.1:3888/v1',
-        model: 'bailian/deepseek-v4-flash',
-      },
-      computerUse: {
-        plannerProfile: 'sciforge-runtime-deepseek',
-      },
-      visionSense: {
-        grounderBaseUrl: 'http://127.0.0.1:18081',
-        inputAdapter: 'remote-desktop',
-        independentInputAdapterProvider: 'sciforge-simulated-remote-desktop',
-        vlmModel: 'qwen3.6-plus',
-      },
-    }, null, 2)}\n`);
+    await withKvGroundHealthServer(async (grounderBaseUrl) => {
+      const configPath = join(workspace, 'config.local.json');
+      await writeFile(configPath, `${JSON.stringify({
+        llm: {
+          apiKey: 'sk-test-cu-next-local-config-secret',
+          baseUrl: 'http://127.0.0.1:3888/v1',
+          model: 'bailian/deepseek-v4-flash',
+        },
+        computerUse: {
+          plannerProfile: 'sciforge-runtime-deepseek',
+        },
+        visionSense: {
+          grounderBaseUrl,
+          inputAdapter: 'remote-desktop',
+          independentInputAdapterProvider: 'sciforge-simulated-remote-desktop',
+          vlmModel: 'qwen3.6-plus',
+        },
+      }, null, 2)}\n`);
 
+      const reportPath = join(workspace, 'preflight.md');
+      const result = await execFileAsync(process.execPath, [
+        '--import',
+        'tsx',
+        'tools/cu-next-run.ts',
+        'preflight',
+        '--task',
+        'CU-NEXT-04',
+        '--workspace-path',
+        workspace,
+        '--real',
+        '--out',
+        reportPath,
+      ], {
+        env: cuNextRuntimeEnv({
+          SCIFORGE_CONFIG_PATH: configPath,
+        }),
+      });
+
+      assert.match(result.stdout, /\[ok\] CU-NEXT-04 preflight -> CU-LONG-005/);
+      assert.match(await readFile(reportPath, 'utf8'), /grounder\/grounder: KV-Ground health check passed/);
+      assert.doesNotMatch(result.stdout, /sk-test-cu-next-local-config-secret/);
+      assert.doesNotMatch(result.stderr, /sk-test-cu-next-local-config-secret/);
+    });
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('CU-NEXT real preflight fails closed when configured KV-Ground health is unreachable', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-next-preflight-grounder-health-'));
+  try {
     const result = await execFileAsync(process.execPath, [
       '--import',
       'tsx',
       'tools/cu-next-run.ts',
       'preflight',
       '--task',
-      'CU-NEXT-04',
+      'CU-NEXT-07',
       '--workspace-path',
       workspace,
       '--real',
     ], {
       env: cuNextRuntimeEnv({
-        SCIFORGE_CONFIG_PATH: configPath,
+        SCIFORGE_RUNTIME_API_KEY: 'sk-test-cu-next-runtime',
+        SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'http://127.0.0.1:3888/v1',
+        SCIFORGE_VISION_KV_GROUND_URL: 'http://127.0.0.1:1',
+        SCIFORGE_VISION_INPUT_ADAPTER: 'remote-desktop',
+        SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER: 'sciforge-simulated-remote-desktop',
       }),
     });
 
-    assert.match(result.stdout, /\[ok\] CU-NEXT-04 preflight -> CU-LONG-005/);
-    assert.doesNotMatch(result.stdout, /sk-test-cu-next-local-config-secret/);
-    assert.doesNotMatch(result.stderr, /sk-test-cu-next-local-config-secret/);
+    assert.match(result.stdout, /\[repair-needed\] CU-NEXT-07 preflight -> CU-LONG-004/);
+    assert.match(result.stdout, /grounder: KV-Ground health check failed at http:\/\/127\.0\.0\.1:1\/health/);
+    assert.match(result.stdout, /Start KV-Ground or its SSH tunnel/);
   } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('CU-NEXT real KV-Ground preflight redacts health URL secrets from stdout reports and matrix summaries', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-next-preflight-grounder-redaction-'));
+  try {
+    const reportPath = join(workspace, 'preflight.md');
+    const outRoot = join(workspace, 'matrix');
+    const secretGrounderUrl = [
+      'http://kvuser-redact:kvpass-redact@127.0.0.1:1/kv-ground',
+      '?token=kvtoken-redact&apiKey=kvapikey-redact&secret=kvsecret-redact&password=kvquerypass-redact',
+      '#kvhash-redact',
+    ].join('');
+    const env = cuNextRuntimeEnv({
+      SCIFORGE_RUNTIME_API_KEY: 'sk-test-cu-next-runtime',
+      SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'http://127.0.0.1:3888/v1',
+      SCIFORGE_VISION_KV_GROUND_URL: secretGrounderUrl,
+      SCIFORGE_VISION_INPUT_ADAPTER: 'remote-desktop',
+      SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER: 'sciforge-simulated-remote-desktop',
+    });
+    const preflight = await execFileAsync(process.execPath, [
+      '--import',
+      'tsx',
+      'tools/cu-next-run.ts',
+      'preflight',
+      '--task',
+      'CU-NEXT-07',
+      '--workspace-path',
+      workspace,
+      '--real',
+      '--out',
+      reportPath,
+    ], { env });
+    const report = await readFile(reportPath, 'utf8');
+    assert.match(preflight.stdout, /\[repair-needed\] CU-NEXT-07 preflight -> CU-LONG-004/);
+    assert.match(`${preflight.stdout}\n${report}`, /KV-Ground health check failed at http:\/\/127\.0\.0\.1:1\/kv-ground\/health/);
+
+    const matrix = await execFileAsync(process.execPath, [
+      '--import',
+      'tsx',
+      'tools/cu-next-run.ts',
+      'run-matrix',
+      '--task',
+      'CU-NEXT-07',
+      '--out-root',
+      outRoot,
+      '--workspace-path',
+      workspace,
+      '--real',
+    ], { env });
+    const summaryPath = /summary: (.+)/.exec(matrix.stdout)?.[1]?.trim();
+    assert.ok(summaryPath, 'run-matrix output should include summary path');
+    const summary = await readFile(summaryPath, 'utf8');
+    const repair = await renderComputerUseLongRepairPlan({
+      summaryPath,
+      out: join(workspace, 'repair-plan.md'),
+    });
+    const repairMarkdown = await readFile(repair.planPath, 'utf8');
+    assertNoKvGroundSecretDiagnostics([
+      preflight.stdout,
+      preflight.stderr,
+      report,
+      matrix.stdout,
+      matrix.stderr,
+      summary,
+      repair.markdown,
+      repairMarkdown,
+    ].join('\n'));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('CU-LONG KV-Ground preflight scrubs bearer tokens and token URLs from fetch error diagnostics', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-long-preflight-grounder-error-redaction-'));
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async () => {
+      throw new Error([
+        'Bearer kvbearer-redact rejected',
+        'for http://kvuser-redact:kvpass-redact@127.0.0.1:1/kv-ground/health?token=kvtoken-redact#kvhash-redact',
+        'apiKey=kvapikey-redact secret=kvsecret-redact password=kvquerypass-redact',
+      ].join(' '));
+    }) as typeof fetch;
+    await withProcessEnv({
+      SCIFORGE_CONFIG_PATH: join(workspace, 'missing-config.local.json'),
+      SCIFORGE_RUNTIME_API_KEY: 'sk-test-cu-long-runtime',
+      SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'http://127.0.0.1:3888/v1',
+      SCIFORGE_RUNTIME_BASE_URL: undefined,
+      SCIFORGE_VISION_KV_GROUND_URL: 'http://127.0.0.1:1/kv-ground?token=kvtoken-redact#kvhash-redact',
+      SCIFORGE_VISION_INPUT_ADAPTER: 'remote-desktop',
+      SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER: 'sciforge-simulated-remote-desktop',
+      SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS: undefined,
+      SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT: undefined,
+    }, async () => {
+      const reportPath = join(workspace, 'preflight.md');
+      const preflight = await preflightComputerUseLong({
+        scenarioIds: ['CU-LONG-004'],
+        workspacePath: workspace,
+        dryRun: false,
+        out: reportPath,
+      });
+      const report = await readFile(reportPath, 'utf8');
+      const grounderCheck = preflight.checks.find((check) => check.id === 'grounder');
+      assert.equal(grounderCheck?.status, 'fail');
+      assert.match(String(grounderCheck?.message), /Bearer \[redacted\]/);
+      assert.match(`${JSON.stringify(preflight)}\n${report}`, /http:\/\/127\.0\.0\.1:1\/kv-ground\/health/);
+      assertNoKvGroundSecretDiagnostics(`${JSON.stringify(preflight)}\n${report}`);
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
     await rm(workspace, { recursive: true, force: true });
   }
 });
@@ -439,6 +779,153 @@ test('CU-NEXT validate-run requires passed CU-LONG manifest and scenario-summary
   }
 });
 
+test('CU-NEXT validate-run requires task-level live acceptance markers and bindings', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-next-validate-live-'));
+  try {
+    const manifestPath = await writeCuNextValidateRunLiveAcceptanceFixture(workspace, 'missing-live-marker', {
+      includeMarker: false,
+    });
+    const result = await execFileAsync(process.execPath, [
+      '--import',
+      'tsx',
+      'tools/cu-next-run.ts',
+      'validate-run',
+      '--task',
+      'CU-NEXT-07',
+      '--manifest',
+      manifestPath,
+    ]);
+
+    assert.match(result.stdout, /\[repair-needed\] validate-run CU-NEXT-07 -> CU-LONG-004/);
+    assert.match(result.stdout, /live acceptance missing-task-marker/);
+    assert.doesNotMatch(result.stdout, /\[ok\] validate-run/);
+
+    const missingCompletionPath = await writeCuNextValidateRunLiveAcceptanceFixture(workspace, 'missing-completion-evidence', {
+      includeMarker: true,
+      mutateAcceptance: (acceptance) => {
+        delete acceptance.completionEvidence;
+      },
+    });
+    const missingCompletion = await execFileAsync(process.execPath, [
+      '--import',
+      'tsx',
+      'tools/cu-next-run.ts',
+      'validate-run',
+      '--task',
+      'CU-NEXT-07',
+      '--manifest',
+      missingCompletionPath,
+    ]);
+
+    assert.match(missingCompletion.stdout, /\[repair-needed\] validate-run CU-NEXT-07 -> CU-LONG-004/);
+    assert.match(missingCompletion.stdout, /completion-grade/);
+    assert.doesNotMatch(missingCompletion.stdout, /\[ok\] validate-run/);
+
+    const markerReadyPath = await writeCuNextValidateRunLiveAcceptanceFixture(workspace, 'with-live-marker', {
+      includeMarker: true,
+      materializeAcceptanceRefs: true,
+      realTrace: true,
+    });
+    const markerReady = await execFileAsync(process.execPath, [
+      '--import',
+      'tsx',
+      'tools/cu-next-run.ts',
+      'validate-run',
+      '--task',
+      'CU-NEXT-07',
+      '--manifest',
+      markerReadyPath,
+    ]);
+
+    assert.match(markerReady.stdout, /\[ok\] validate-run CU-NEXT-07 -> CU-LONG-004/);
+    assert.doesNotMatch(markerReady.stdout, /live acceptance/);
+
+    const symlinkCompletionPath = await writeCuNextValidateRunLiveAcceptanceFixture(workspace, 'symlink-completion-evidence', {
+      includeMarker: true,
+      materializeAcceptanceRefs: true,
+      realTrace: true,
+    });
+    const symlinkFixture = JSON.parse(await readFile(symlinkCompletionPath, 'utf8')) as Record<string, any>;
+    const finalRound = (symlinkFixture.rounds as Array<Record<string, unknown>>).at(-1);
+    assert.ok(finalRound?.visionTraceRef, 'fixture should include final round trace ref');
+    const acceptanceDir = dirname(join(dirname(symlinkCompletionPath), String(finalRound.visionTraceRef)));
+    const completionEvidencePath = join(acceptanceDir, 'isolated-desktop-l3-workflow-evidence.json');
+    const escapedCompletionEvidencePath = join(workspace, 'outside-isolated-desktop-l3-workflow-evidence.json');
+    await writeFile(escapedCompletionEvidencePath, await readFile(completionEvidencePath, 'utf8'));
+    await rm(completionEvidencePath, { force: true });
+    await symlink(escapedCompletionEvidencePath, completionEvidencePath);
+    const symlinkCompletion = await execFileAsync(process.execPath, [
+      '--import',
+      'tsx',
+      'tools/cu-next-run.ts',
+      'validate-run',
+      '--task',
+      'CU-NEXT-07',
+      '--manifest',
+      symlinkCompletionPath,
+    ]);
+
+    assert.match(symlinkCompletion.stdout, /\[repair-needed\] validate-run CU-NEXT-07 -> CU-LONG-004/);
+    assert.match(symlinkCompletion.stdout, /completion-grade/);
+    assert.match(symlinkCompletion.stdout, /live acceptance missing-ref: required evidence ref isolated-desktop-l3-workflow-evidence\.json/);
+    assert.doesNotMatch(symlinkCompletion.stdout, /\[ok\] validate-run/);
+
+    const shapeOnlyPath = await writeCuNextValidateRunLiveAcceptanceFixture(workspace, 'shape-only-isolated-l3', {
+      includeMarker: true,
+      materializeAcceptanceRefs: true,
+      mutateAcceptance: (acceptance) => {
+        delete (acceptance.completionEvidence as Record<string, unknown>).finalArtifactRef;
+      },
+    });
+    const shapeOnly = await execFileAsync(process.execPath, [
+      '--import',
+      'tsx',
+      'tools/cu-next-run.ts',
+      'validate-run',
+      '--task',
+      'CU-NEXT-07',
+      '--manifest',
+      shapeOnlyPath,
+    ]);
+
+    assert.match(shapeOnly.stdout, /\[repair-needed\] validate-run CU-NEXT-07 -> CU-LONG-004/);
+    assert.match(shapeOnly.stdout, /completion-grade/);
+    assert.match(shapeOnly.stdout, /missing completed L3 ref field finalArtifactRef/);
+    assert.match(shapeOnly.stdout, /non-dry-run Computer Use vision trace/);
+    assert.doesNotMatch(shapeOnly.stdout, /\[ok\] validate-run/);
+
+    const mismatchedPath = await writeCuNextValidateRunLiveAcceptanceFixture(workspace, 'mismatched-live-binding', {
+      includeMarker: true,
+      mutateAcceptance: (acceptance) => {
+        acceptance.taskId = 'CU-NEXT-04';
+        acceptance.scenarioId = 'CU-LONG-005';
+        acceptance.cuNextTask = {
+          taskId: 'CU-NEXT-04',
+          primaryScenarioId: 'CU-LONG-005',
+          longScenarioIds: ['CU-LONG-005'],
+        };
+      },
+    });
+    const mismatched = await execFileAsync(process.execPath, [
+      '--import',
+      'tsx',
+      'tools/cu-next-run.ts',
+      'validate-run',
+      '--task',
+      'CU-NEXT-07',
+      '--manifest',
+      mismatchedPath,
+    ]);
+
+    assert.match(mismatched.stdout, /\[repair-needed\] validate-run CU-NEXT-07 -> CU-LONG-004/);
+    assert.match(mismatched.stdout, /live acceptance task-id-mismatch/);
+    assert.match(mismatched.stdout, /live acceptance scenario-not-mapped/);
+    assert.doesNotMatch(mismatched.stdout, /\[ok\] validate-run/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('CU-NEXT scenario projection writes task-scoped L3 user acceptance evidence from copied round artifacts', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-next-projection-'));
   try {
@@ -494,8 +981,161 @@ test('CU-NEXT scenario projection writes task-scoped L3 user acceptance evidence
     assert.ok(projection.paths?.manifest.endsWith('/cu-user-acceptance-manifest.json'));
     const manifest = JSON.parse(await readFile(String(projection.paths?.manifest), 'utf8'));
     assert.equal(manifest.taskId, 'CU-NEXT-07');
+    assert.equal(manifest.scenarioId, 'CU-LONG-004');
     assert.equal(manifest.level, 'L3');
     assert.equal(manifest.guiPresent.recordRef, 'gui-present.json');
+    assert.equal(manifest.completionEvidence?.evidenceKind, 'isolated-L3');
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('CU-NEXT scenario projection skips repair-needed scenario status', async () => {
+  const projection = await projectCuNextAcceptanceForScenarioRun({
+    taskId: 'CU-NEXT-07',
+    dryRun: false,
+    result: {
+      manifestPath: '/tmp/nonexistent-cu-next-repair-needed-manifest.json',
+      scenarioId: 'CU-LONG-004',
+      status: 'repair-needed',
+      attemptedRounds: [1, 2, 3, 4],
+      passedRounds: [1, 2, 3, 4],
+      summaryPath: '/tmp/nonexistent-cu-next-repair-needed-summary.json',
+      roundResults: [],
+      validation: {
+        ok: false,
+        manifestPath: '/tmp/nonexistent-cu-next-repair-needed-manifest.json',
+        scenarioId: 'CU-LONG-004',
+        checkedRounds: [1, 2, 3, 4],
+        issues: ['real run action count 15 is below acceptance minimum 20'],
+        repairDiagnostics: repairDiagnosticsFixture(),
+        metrics: {
+          passedRounds: 4,
+          traceCount: 4,
+          realTraceCount: 4,
+          actionCount: 15,
+          nonWaitActionCount: 15,
+          screenshotRefCount: 50,
+          actionLedgerCount: 4,
+          failureDiagnosticsCount: 4,
+        },
+      },
+    },
+  });
+
+  assert.equal(projection.status, 'skipped');
+  assert.match(String(projection.reason), /scenario status is repair-needed/);
+});
+
+test('CU-NEXT diagnostic summary preserves machine-readable repair diagnostics', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-next-diagnostic-summary-'));
+  try {
+    const runDir = join(workspace, 'CU-LONG-004', 'cu-next-diagnostic-summary');
+    const evidenceDir = join(runDir, 'evidence', 'round-04');
+    await mkdir(evidenceDir, { recursive: true });
+    const manifestPath = join(runDir, 'manifest.json');
+    const summaryPath = join(runDir, 'scenario-summary.json');
+    const acceptancePath = join(evidenceDir, 'cu-user-acceptance-manifest.json');
+    await writeFile(manifestPath, JSON.stringify({ schemaVersion: '1.0', taskId: 'T084', scenarioId: 'CU-LONG-004' }));
+    await writeFile(summaryPath, JSON.stringify({ schemaVersion: 'sciforge.computer-use-long.scenario-summary.v1', scenarioId: 'CU-LONG-004', status: 'repair-needed' }));
+    await writeFile(acceptancePath, JSON.stringify({
+      schemaVersion: 'sciforge.computer-use.user-acceptance-manifest.v1',
+      taskId: 'CU-NEXT-07',
+      scenarioId: 'CU-LONG-004',
+      status: 'blocked',
+      verifierVerdict: {
+        status: 'blocked',
+        reasons: ['final-artifact-ref is missing'],
+      },
+    }, null, 2));
+
+    const diagnosticPath = await writeCuNextDiagnosticSummaryIfNeeded({
+      taskId: 'CU-NEXT-07',
+      dryRun: false,
+      acceptance: {
+        status: 'projected',
+        manifestStatus: 'blocked',
+        paths: {
+          verifier: join(evidenceDir, 'cu-l3-independent-input-verifier.json'),
+          input: join(evidenceDir, 'cu-user-acceptance-input.json'),
+          manifest: acceptancePath,
+        },
+      },
+      result: {
+        manifestPath,
+        scenarioId: 'CU-LONG-004',
+        status: 'repair-needed',
+        attemptedRounds: [1, 2, 3, 4],
+        passedRounds: [1, 2, 3, 4],
+        summaryPath,
+        roundResults: [],
+        validation: {
+          ok: false,
+          manifestPath,
+          scenarioId: 'CU-LONG-004',
+          checkedRounds: [1, 2, 3, 4],
+          issues: ['real run action count 15 is below acceptance minimum 20'],
+          repairDiagnostics: repairDiagnosticsFixture(),
+          metrics: {
+            passedRounds: 4,
+            traceCount: 4,
+            realTraceCount: 4,
+            actionCount: 15,
+            nonWaitActionCount: 15,
+            screenshotRefCount: 50,
+            actionLedgerCount: 4,
+            failureDiagnosticsCount: 4,
+          },
+        },
+      },
+    });
+
+    assert.ok(diagnosticPath);
+    const diagnostic = JSON.parse(await readFile(diagnosticPath, 'utf8'));
+    assert.equal(diagnostic.repairDiagnostics.actionShortfall.missing, 5);
+    assert.ok(diagnostic.repairDiagnostics.missingRefs.includes('finalArtifactRef'));
+    assert.ok(diagnostic.acceptanceDiagnostics.issues.includes('acceptance finalArtifactRef is missing'));
+    assert.ok(diagnostic.repairDiagnostics.nextRepairFocus.some((item: string) => /action budget/i.test(item)));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('CU-NEXT validate-run --json emits structured action shortfall repair diagnostics', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-next-validate-json-'));
+  try {
+    const manifestPath = await writeCuNextValidateRunLiveAcceptanceFixture(workspace, 'cu-next-validate-json', {
+      includeMarker: true,
+      materializeAcceptanceRefs: true,
+      realTrace: true,
+    });
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    const finalRound = (manifest.rounds as Array<Record<string, unknown>>).at(-1);
+    assert.ok(finalRound?.visionTraceRef);
+    const tracePath = join(dirname(manifestPath), String(finalRound.visionTraceRef));
+    const trace = JSON.parse(await readFile(tracePath, 'utf8'));
+    trace.steps = trace.steps.slice(0, 1);
+    await writeFile(tracePath, `${JSON.stringify(trace, null, 2)}\n`);
+
+    const result = await execFileAsync(process.execPath, [
+      '--import',
+      'tsx',
+      'tools/cu-next-run.ts',
+      'validate-run',
+      '--task',
+      'CU-NEXT-07',
+      '--manifest',
+      manifestPath,
+      '--json',
+    ], { env: cuNextRuntimeEnv() });
+    const parsed = JSON.parse(result.stdout);
+
+    assert.equal(parsed.status, 'repair-needed');
+    assert.equal(parsed.repairDiagnostics.actionShortfall.metric, 'actionCount');
+    assert.equal(parsed.repairDiagnostics.actionShortfall.minimum, 20);
+    assert.equal(parsed.repairDiagnostics.actionShortfall.observed, 16);
+    assert.equal(parsed.repairDiagnostics.actionShortfall.missing, 4);
+    assert.ok(parsed.repairDiagnostics.nextRepairFocus.some((item: string) => /action budget/i.test(item)));
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -596,6 +1236,7 @@ test('CU-NEXT scenario projection preserves discovered generic markdown final ar
     assert.equal(projection.manifestStatus, 'multi-app-workflow-passed');
     const manifest = JSON.parse(await readFile(String(projection.paths?.manifest), 'utf8'));
     assert.equal(manifest.taskId, 'CU-NEXT-07');
+    assert.equal(manifest.scenarioId, 'CU-LONG-004');
     assert.equal(manifest.finalArtifactRef, finalArtifactRef);
     assert.ok(manifest.guiPresent.displayedRefs?.includes(finalArtifactRef));
     assert.ok(manifest.guiPresent.artifactRefs?.includes(finalArtifactRef));
@@ -604,500 +1245,72 @@ test('CU-NEXT scenario projection preserves discovered generic markdown final ar
   }
 });
 
-async function writeCuNextValidateRunStatusFixture(
-  workspace: string,
-  runId: string,
-  options: { manifestStatus: 'passed' | 'repair-needed'; summaryStatus: 'passed' | 'repair-needed' },
-): Promise<string> {
-  const prepare = await execFileAsync(process.execPath, [
-    '--import',
-    'tsx',
-    'tools/cu-next-run.ts',
-    'prepare',
-    '--task',
-    'CU-NEXT-07',
-    '--out-root',
-    workspace,
-    '--run-id',
-    runId,
-    '--workspace-path',
-    workspace,
-  ]);
-  const manifestPath = /manifest: (.+)/.exec(prepare.stdout)?.[1]?.trim();
-  assert.ok(manifestPath, 'prepare output should include manifest path');
-  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-  manifest.status = options.manifestStatus;
-  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-  await writeFile(join(dirname(manifestPath), 'scenario-summary.json'), `${JSON.stringify({
-    schemaVersion: 'sciforge.computer-use-long.scenario-summary.v1',
-    scenarioId: 'CU-LONG-004',
-    status: options.summaryStatus,
-  }, null, 2)}\n`);
-  await writeFile(join(dirname(manifestPath), 'cu-user-acceptance-manifest.json'), `${JSON.stringify(passedCuNext07AcceptanceManifest(), null, 2)}\n`);
-  return manifestPath;
-}
-
-async function writeCuNextProjectionEvidenceFiles(evidenceDir: string) {
-  await Promise.all([
-    'step-001-before.png',
-    'step-001-before-focus.png',
-    'step-001-after.png',
-    'step-002-before.png',
-    'step-002-after.png',
-    'step-003-before.png',
-    'step-003-after.png',
-  ].map((name) => writeFile(join(evidenceDir, name), fixturePng)));
-  await writeFile(join(evidenceDir, 'dense-grounding-export.csv'), 'label,x,y\nexport,100,80\n');
-}
-
-async function writeBundleLocalCuNext07Acceptance(workspace: string): Promise<string> {
-  const runId = 'cu-next-07-wrapper';
-  const bundleDir = join(workspace, '.sciforge', 'vision-runs', runId);
-  await mkdir(bundleDir, { recursive: true });
-  await Promise.all([
-    'before.png',
-    'after.png',
-    'focus-crop.png',
-    'final-visible.png',
-  ].map((name) => writeFile(join(bundleDir, name), fixturePng)));
-  await Promise.all([
-    'window-switch-trace.json',
-    'computer-use-request.json',
-    'host-ports.json',
-    'tool-payload.json',
-    'gui-present.json',
-    'vision-trace.json',
-    'virtual-pointer-events.json',
-    'coarse-fine-rejected-targets.json',
-    'executor-lease.json',
-    'verifier-verdict.json',
-    'gui-present-payload.json',
-  ].map((name) => writeFile(join(bundleDir, name), JSON.stringify({ runId, name }, null, 2))));
-  await writeFile(join(bundleDir, 'dense-grounding-export.csv'), 'label,x,y\nexport,100,80\n');
-  const manifestPath = join(bundleDir, 'cu-user-acceptance-manifest.json');
-  await writeFile(manifestPath, JSON.stringify(passedBundleLocalCuNext07AcceptanceManifest(), null, 2));
-  return manifestPath;
-}
-
-function passedBundleLocalCuNext07AcceptanceManifest(): Record<string, unknown> {
-  return {
-    schemaVersion: 'sciforge.computer-use.user-acceptance-manifest.v1',
-    runId: 'cu-next-07-wrapper',
-    taskId: 'CU-NEXT-07',
-    createdAt: '2026-05-25T00:00:00.000Z',
-    status: 'multi-app-workflow-passed',
-    taskText: 'CU-NEXT-07 visual-grounding-pressure-test coarse fine focus crop rejected excluded targets',
-    level: 'L3',
-    appWorkflow: {
-      kind: 'multi-app-workflow',
-      apps: ['Browser', 'Dense Toolbar App', 'Finder'],
-      windowSwitchTraceRefs: ['window-switch-trace.json'],
-    },
-    antiShortcutGuard: { status: 'passed', rejectedClaims: [] },
-    tuiHostChain: [
-      { id: 'tui-host-runTask', kind: 'tui-host-runTask', status: 'present', requestRef: 'computer-use-request.json', hostPortsRef: 'host-ports.json' },
-      { id: 'computer-use-action-provider', kind: 'computer-use-action-provider', status: 'present', toolPayloadRef: 'tool-payload.json' },
-      { id: 'gui-present', kind: 'gui.present', status: 'present', recordRef: 'gui-present.json' },
-    ],
-    evidenceClaims: [
-      { id: 'real-computer-use-trace', kind: 'real-computer-use', ref: 'vision-trace.json' },
-      {
-        id: 'independent-input-adapter',
-        kind: 'independent-input-adapter',
-        refs: ['virtual-pointer-events.json'],
-        sessionRefs: ['computer-use-session:cu-next-07-wrapper'],
-      },
-      {
-        id: 'gui-present-record',
-        kind: 'gui-present-record',
-        ref: 'gui-present.json',
-        refs: ['gui-present.json'],
-        artifactRefs: ['dense-grounding-export.csv'],
-      },
-    ],
-    screenshotRefs: {
-      before: ['before.png'],
-      after: ['after.png'],
-    },
-    focusCropRefs: ['focus-crop.png'],
-    groundingDiagnosticsRefs: ['coarse-fine-rejected-targets.json'],
-    executorLease: { status: 'present', ref: 'executor-lease.json' },
-    finalArtifactRef: 'dense-grounding-export.csv',
-    finalVisibleScreenshotRef: 'final-visible.png',
-    verifierVerdict: {
-      status: 'passed',
-      verdict: 'multi-app-workflow-passed',
-      ref: 'verifier-verdict.json',
-    },
-    guiPresent: {
-      status: 'present',
-      recordRef: 'gui-present.json',
-      payloadRef: 'gui-present-payload.json',
-      displayedRefs: ['dense-grounding-export.csv'],
-    },
-  };
-}
-
-async function writeProjectedCuNext07Acceptance(workspace: string, runId: string): Promise<string> {
-  const runDir = join(workspace, 'CU-LONG-004', runId);
-  const evidenceDir = join(runDir, 'evidence', 'round-03');
-  await mkdir(evidenceDir, { recursive: true });
-  const manifestPath = join(runDir, 'manifest.json');
-  const summaryPath = join(runDir, 'scenario-summary.json');
-  await writeCuNextProjectionEvidenceFiles(evidenceDir);
-  await writeFile(manifestPath, JSON.stringify({
-    schemaVersion: '1.0',
-    taskId: 'T084',
-    cuNextTaskId: 'CU-NEXT-07',
-    scenarioId: 'CU-LONG-004',
-    title: 'Dense visual grounding',
-    status: 'passed',
-    run: {
-      id: runId,
-      workspacePath: workspace,
-    },
-    rounds: [
-      { round: 1, status: 'passed', visionTraceRef: 'evidence/round-01/vision-trace.json', screenshotRefs: [], actionLedgerRefs: [], failureDiagnosticsRefs: [] },
-      { round: 2, status: 'passed', visionTraceRef: 'evidence/round-02/vision-trace.json', screenshotRefs: [], actionLedgerRefs: [], failureDiagnosticsRefs: [] },
-      { round: 3, status: 'passed', visionTraceRef: 'evidence/round-03/vision-trace.json', screenshotRefs: [], actionLedgerRefs: [], failureDiagnosticsRefs: [] },
-    ],
-  }, null, 2));
-  await writeFile(summaryPath, JSON.stringify({ schemaVersion: 'sciforge.computer-use-long.scenario-summary.v1', scenarioId: 'CU-LONG-004', status: 'passed' }));
-  await writeFile(join(evidenceDir, 'computer-use-request.json'), JSON.stringify({ task: 'CU-NEXT-07 dense grounding acceptance from visible toolbar state.' }));
-  await writeFile(join(evidenceDir, 'host-ports.json'), JSON.stringify({ ports: { execute: { provider: 'sciforge-simulated-remote-desktop-input-adapter' } } }));
-  await writeFile(join(evidenceDir, 'tool-payload.json'), JSON.stringify({ displayIntent: { kind: 'gui.present' } }));
-  await writeFile(join(evidenceDir, 'gui-present.json'), JSON.stringify({ port: 'gui.present', artifactRef: join(evidenceDir, 'dense-grounding-export.csv') }));
-  await writeFile(join(evidenceDir, 'vision-trace.json'), JSON.stringify(cuNextProjectionTrace(runId, evidenceDir), null, 2));
-  await writeFile(join(evidenceDir, 'independent-input-adapter.json'), JSON.stringify(cuNextProjectionAdapter(runId), null, 2));
-  await writeFile(join(evidenceDir, 'virtual-remote-session.json'), JSON.stringify({ runId, mode: 'window' }));
-
-  const projection = await projectCuNextAcceptanceForScenarioRun({
-    taskId: 'CU-NEXT-07',
-    dryRun: false,
-    result: {
-      manifestPath,
-      scenarioId: 'CU-LONG-004',
-      status: 'passed',
-      attemptedRounds: [1, 2, 3],
-      passedRounds: [1, 2, 3],
-      summaryPath,
-      roundResults: [],
-    },
-  });
-  assert.equal(projection.status, 'projected');
-  assert.ok(projection.paths?.manifest);
-  return String(projection.paths.manifest);
-}
-
-function projectFixtureWithOnlyCuNext07Checked(): string {
-  const sections = CU_NEXT_TASK_MAPPINGS.map((mapping) => [
-    `### ${mapping.taskId} ${mapping.title}`,
-    '',
-    `- [${mapping.taskId === 'CU-NEXT-07' ? 'x' : ' '}] Run ${mapping.slug}${mapping.taskId === 'CU-NEXT-07' ? ' - 2026-05-25 evidence: passed with cu-user-acceptance-manifest and verifier status.' : ''}`,
-    `- [${mapping.taskId === 'CU-NEXT-07' ? 'x' : ' '}] Present trace refs${mapping.taskId === 'CU-NEXT-07' ? ' - 2026-05-25 evidence: passed with cu-user-acceptance-manifest and verifier status.' : ''}`,
-    '',
-  ].join('\n')).join('\n');
-  return `# SciForge 项目协议\n\n## 当前任务板：下一轮 Computer Use 真实复杂任务\n\n${sections}\n## 验证规则\n`;
-}
-
-function passedBrowserManifest(options: { observedAt?: string } = {}): Record<string, unknown> {
-  return {
-    schemaVersion: 'sciforge.runtime-codex.browser-acceptance.v1',
-    status: 'passed',
-    source: 'codex-in-app-browser',
-    observedAt: options.observedAt ?? '2026-05-25T00:00:00.000Z',
-    releaseEligible: true,
-    acceptanceConclusionFromRealBrowser: true,
-    automationSubstituteUsed: false,
-    seedDemoFixtureEvidenceUsed: false,
-    startedFromDefaultChatEntry: true,
-    submittedThroughRuntimeCodex: true,
-    providerModelProfileVisible: true,
-    workspaceVisible: true,
-    commandIdVisible: true,
-    singleTurn: browserStep(),
-    artifactFollowUp: browserStep(),
-    multiTurn: {
-      ...browserStep(),
-      secondTurnVisibleAnswerConfirmed: true,
-    },
-  };
-}
-
-function browserStep(): Record<string, unknown> {
-  return {
-    status: 'passed',
-    visibleAnswerConfirmed: true,
-    providerModelProfileVisible: true,
-    workspaceCommandIdVisible: true,
-  };
-}
-
-function passedKvGroundManifest(): Record<string, unknown> {
-  return {
-    schemaVersion: 'sciforge.kv-ground-smoke.v1',
-    runId: 'kv-ground-smoke-20260525T000000Z',
-    createdAt: '2026-05-25T00:00:00.000Z',
-    endpoint: 'http://127.0.0.1:18081',
-    checks: {
-      health: { ok: true },
-      predict: { coordinates: [480, 1062] },
-    },
-    predictRequest: { textPrompt: 'Click the Ask SciForge input box' },
-  };
-}
-
-function passedCuNext07AcceptanceManifest(): Record<string, unknown> {
-  const runId = 'cu-next-07-wrapper';
-  return {
-    schemaVersion: 'sciforge.computer-use.user-acceptance-manifest.v1',
-    runId,
-    taskId: 'CU-NEXT-07',
-    createdAt: '2026-05-25T00:00:00.000Z',
-    status: 'multi-app-workflow-passed',
-    taskText: 'CU-NEXT-07 visual-grounding-pressure-test coarse fine focus crop rejected excluded targets',
-    level: 'L3',
-    appWorkflow: {
-      kind: 'multi-app-workflow',
-      apps: ['Browser', 'Dense Toolbar App', 'Finder'],
-      windowSwitchTraceRefs: [`.sciforge/vision-runs/${runId}/window-switch-trace.json`],
-    },
-    antiShortcutGuard: { status: 'passed', rejectedClaims: [] },
-    tuiHostChain: [
-      {
-        id: 'tui-host-runTask',
-        kind: 'tui-host-runTask',
-        status: 'present',
-        requestRef: `.sciforge/vision-runs/${runId}/computer-use-request.json`,
-        hostPortsRef: `.sciforge/vision-runs/${runId}/host-ports.json`,
-      },
-      {
-        id: 'computer-use-action-provider',
-        kind: 'computer-use-action-provider',
-        status: 'present',
-        toolPayloadRef: `.sciforge/vision-runs/${runId}/tool-payload.json`,
-      },
-      {
-        id: 'gui-present',
-        kind: 'gui.present',
-        status: 'present',
-        recordRef: `.sciforge/vision-runs/${runId}/gui-present.json`,
-      },
-    ],
-    evidenceClaims: [
-      { id: 'real-computer-use-trace', kind: 'real-computer-use', ref: `.sciforge/vision-runs/${runId}/vision-trace.json` },
-      {
-        id: 'independent-input-adapter',
-        kind: 'independent-input-adapter',
-        refs: [`.sciforge/vision-runs/${runId}/virtual-pointer-events.json`],
-        sessionRefs: [`computer-use-session:${runId}`],
-      },
-      {
-        id: 'gui-present-record',
-        kind: 'gui-present-record',
-        ref: `.sciforge/vision-runs/${runId}/gui-present.json`,
-        refs: [`.sciforge/vision-runs/${runId}/gui-present.json`],
-        artifactRefs: [`.sciforge/vision-runs/${runId}/dense-grounding-export.csv`],
-      },
-    ],
-    screenshotRefs: {
-      before: [`.sciforge/vision-runs/${runId}/before.png`],
-      after: [`.sciforge/vision-runs/${runId}/after.png`],
-    },
-    focusCropRefs: [`.sciforge/vision-runs/${runId}/focus-crop.png`],
-    groundingDiagnosticsRefs: [`.sciforge/vision-runs/${runId}/coarse-fine-rejected-targets.json`],
-    executorLease: { status: 'present', ref: `.sciforge/vision-runs/${runId}/executor-lease.json` },
-    finalArtifactRef: `.sciforge/vision-runs/${runId}/dense-grounding-export.csv`,
-    finalVisibleScreenshotRef: `.sciforge/vision-runs/${runId}/final-visible.png`,
-    verifierVerdict: {
-      status: 'passed',
-      verdict: 'multi-app-workflow-passed',
-      ref: `.sciforge/vision-runs/${runId}/verifier-verdict.json`,
-    },
-    guiPresent: {
-      status: 'present',
-      recordRef: `.sciforge/vision-runs/${runId}/gui-present.json`,
-      payloadRef: `.sciforge/vision-runs/${runId}/gui-present-payload.json`,
-      displayedRefs: [`.sciforge/vision-runs/${runId}/dense-grounding-export.csv`],
-    },
-  };
-}
-
-function cuNextProjectionTrace(runId: string, runRef: string): Record<string, unknown> {
-  return {
-    schemaVersion: 'sciforge.vision-trace.v1',
-    runId,
-    tool: 'action.sciforge.computer-use',
-    runtime: 'sciforge.workspace-runtime.computer-use-package-bridge',
-    actionProvider: 'action.sciforge.computer-use',
-    createdAt: '2026-05-25T00:00:00.000Z',
-    completedAt: '2026-05-25T00:01:00.000Z',
-    request: {
-      taskId: 'CU-NEXT-07',
+test('CU-NEXT scenario projection derives final artifact and gui-present claim from sibling gui.present evidence', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-next-projection-gui-present-'));
+  try {
+    const runId = 'cu-next-07-projection-gui-present';
+    const runDir = join(workspace, 'CU-LONG-004', runId);
+    const evidenceDir = join(runDir, 'evidence', 'round-03');
+    await mkdir(evidenceDir, { recursive: true });
+    const manifestPath = join(runDir, 'manifest.json');
+    const summaryPath = join(runDir, 'scenario-summary.json');
+    const finalArtifactRef = 'dense-grounding-export.csv';
+    await writeCuNextProjectionEvidenceFiles(evidenceDir);
+    await writeFile(manifestPath, JSON.stringify({
+      schemaVersion: '1.0',
+      taskId: 'T084',
       cuNextTaskId: 'CU-NEXT-07',
-      task: 'CU-NEXT-07 dense grounding acceptance from visible toolbar state.',
-    },
-    config: {
+      scenarioId: 'CU-LONG-004',
+      title: 'Dense visual grounding',
+      status: 'passed',
+      run: { id: runId, workspacePath: workspace },
+      rounds: [
+        { round: 1, status: 'passed', visionTraceRef: 'evidence/round-01/vision-trace.json', screenshotRefs: [], actionLedgerRefs: [], failureDiagnosticsRefs: [] },
+        { round: 2, status: 'passed', visionTraceRef: 'evidence/round-02/vision-trace.json', screenshotRefs: [], actionLedgerRefs: [], failureDiagnosticsRefs: [] },
+        { round: 3, status: 'passed', visionTraceRef: 'evidence/round-03/vision-trace.json', screenshotRefs: [], actionLedgerRefs: [], failureDiagnosticsRefs: [] },
+      ],
+    }, null, 2));
+    await writeFile(summaryPath, JSON.stringify({ schemaVersion: 'sciforge.computer-use-long.scenario-summary.v1', scenarioId: 'CU-LONG-004', status: 'passed' }));
+    await writeFile(join(evidenceDir, 'computer-use-request.json'), JSON.stringify({ task: 'CU-NEXT-07 gui.present sibling artifact projection.' }));
+    await writeFile(join(evidenceDir, 'host-ports.json'), JSON.stringify({ ports: { execute: { provider: 'sciforge-simulated-remote-desktop-input-adapter' } } }));
+    await writeFile(join(evidenceDir, 'tool-payload.json'), JSON.stringify({ displayIntent: { kind: 'gui.present' } }));
+    await writeFile(join(evidenceDir, 'gui-present.json'), JSON.stringify({
+      port: 'gui.present',
+      status: 'present',
+      artifactRef: finalArtifactRef,
+      displayedRefs: [finalArtifactRef],
+    }));
+    const trace = cuNextProjectionTrace(runId, evidenceDir);
+    delete trace.finalArtifactRef;
+    delete trace.guiPresent;
+    delete trace.toolPayload;
+    await writeFile(join(evidenceDir, 'vision-trace.json'), JSON.stringify(trace, null, 2));
+    await writeFile(join(evidenceDir, 'independent-input-adapter.json'), JSON.stringify(cuNextProjectionAdapter(runId), null, 2));
+    await writeFile(join(evidenceDir, 'virtual-remote-session.json'), JSON.stringify({ runId, mode: 'window' }));
+
+    const projection = await projectCuNextAcceptanceForScenarioRun({
+      taskId: 'CU-NEXT-07',
       dryRun: false,
-      inputAdapter: 'remote-desktop',
-      independentInputAdapterProvider: 'sciforge-simulated-remote-desktop',
-    },
-    hostPorts: {
-      ports: {
-        execute: {
-          provider: 'sciforge-simulated-remote-desktop-input-adapter',
-          inputAdapter: 'remote-desktop',
-          independentInputAdapterProvider: 'sciforge-simulated-remote-desktop',
-        },
+      result: {
+        manifestPath,
+        scenarioId: 'CU-LONG-004',
+        status: 'passed',
+        attemptedRounds: [1, 2, 3],
+        passedRounds: [1, 2, 3],
+        summaryPath,
+        roundResults: [],
       },
-    },
-    genericComputerUse: {
-      inputChannelContract: {
-        currentIndependentAdapter: 'remote-desktop',
-        pointerKeyboardOwnership: 'sciforge-independent-input-adapter',
-        pointerMode: 'adapter-window-bound-pointer',
-        keyboardMode: 'adapter-window-bound-keyboard',
-        userDeviceImpact: 'none',
-      },
-    },
-    finalArtifactRef: `${runRef}/dense-grounding-export.csv`,
-    finalVisibleScreenshotRef: `${runRef}/step-003-after.png`,
-    steps: [
-      {
-        id: 'step-001-browser',
-        status: 'done',
-        beforeScreenshotRefs: [
-          {
-            type: 'screenshot',
-            captureScope: 'window',
-            path: `${runRef}/step-001-before.png`,
-            windowTarget: { appName: 'Browser' },
-          },
-          {
-            type: 'screenshot',
-            captureScope: 'focus-region',
-            path: `${runRef}/step-001-before-focus.png`,
-            windowTarget: { appName: 'Browser' },
-          },
-        ],
-        afterScreenshotRefs: [
-          {
-            type: 'screenshot',
-            captureScope: 'window',
-            path: `${runRef}/step-001-after.png`,
-            windowTarget: { appName: 'Browser' },
-          },
-        ],
-        plannedAction: { type: 'click', appName: 'Browser', targetDescription: 'visible source summary' },
-        grounding: { provider: 'kv-ground', localX: 100, localY: 80 },
-      },
-      {
-        id: 'step-002-dense-app',
-        status: 'done',
-        beforeScreenshotRefs: [
-          {
-            type: 'screenshot',
-            captureScope: 'window',
-            path: `${runRef}/step-002-before.png`,
-            windowTarget: { appName: 'Dense Toolbar App' },
-          },
-        ],
-        afterScreenshotRefs: [
-          {
-            type: 'screenshot',
-            captureScope: 'window',
-            path: `${runRef}/step-002-after.png`,
-            windowTarget: { appName: 'Dense Toolbar App' },
-          },
-        ],
-        plannedAction: { type: 'click', appName: 'Dense Toolbar App', targetDescription: 'export button' },
-        fineGrounding: { provider: 'kv-ground', rejectedTargets: ['Save', 'Share'] },
-      },
-      {
-        id: 'step-003-file-manager',
-        status: 'done',
-        beforeScreenshotRefs: [
-          {
-            type: 'screenshot',
-            captureScope: 'window',
-            path: `${runRef}/step-003-before.png`,
-            windowTarget: { appName: 'File Manager' },
-          },
-        ],
-        afterScreenshotRefs: [
-          {
-            type: 'screenshot',
-            captureScope: 'window',
-            path: `${runRef}/step-003-after.png`,
-            windowTarget: { appName: 'File Manager' },
-          },
-        ],
-        plannedAction: { type: 'click', appName: 'File Manager', targetDescription: 'show exported artifact' },
-      },
-    ],
-  };
-}
+    });
 
-function cuNextProjectionAdapter(runId: string): Record<string, unknown> {
-  return {
-    schemaVersion: 'sciforge.computer-use.independent-input-adapter.v1',
-    adapter: 'remote-desktop',
-    provider: 'sciforge-simulated-remote-desktop',
-    runId,
-    userDeviceImpact: 'none',
-    systemMouseEvents: 'not-sent',
-    systemKeyboardEvents: 'not-sent',
-    pointerKeyboardOwnership: 'sciforge-independent-input-adapter',
-    targetSession: {
-      mode: 'window',
-      appName: 'Dense Toolbar App',
-      coordinateSpace: 'window-local',
-    },
-    virtualPointer: {
-      mode: 'virtual-pointer',
-      coordinateSpace: 'window-local',
-      x: 100,
-      y: 80,
-    },
-    virtualKeyboard: {
-      mode: 'virtual-keyboard',
-      pressedKeys: [],
-      keyEvents: [],
-    },
-    virtualRemoteSession: {
-      stateRef: 'virtual-remote-session.json',
-    },
-    actions: [
-      {
-        id: 'step-001-click',
-        type: 'click',
-        systemMouseEvents: 'not-sent',
-        systemKeyboardEvents: 'not-sent',
-      },
-      {
-        id: 'step-002-click',
-        type: 'click',
-        systemMouseEvents: 'not-sent',
-        systemKeyboardEvents: 'not-sent',
-      },
-    ],
-    createdAt: '2026-05-25T00:00:00.000Z',
-    updatedAt: '2026-05-25T00:01:00.000Z',
-  };
-}
-
-function cuNextVisibleMarkdownArtifact(artifactRef: string, sourceActionId: string): Record<string, unknown> {
-  return {
-    id: 'visible-markdown-index',
-    title: 'Acceptance index',
-    artifactRef,
-    dataRef: artifactRef,
-    path: artifactRef,
-    mimeType: 'text/markdown',
-    appId: 'Browser',
-    delivery: 'virtual-remote-session-artifact',
-    status: 'visible-and-saved',
-    visibleTexts: ['Acceptance index', 'Visible final markdown artifact'],
-    sourceActionIds: [sourceActionId],
-  };
-}
+    assert.equal(projection.status, 'projected');
+    const manifest = JSON.parse(await readFile(String(projection.paths?.manifest), 'utf8'));
+    assert.equal(manifest.finalArtifactRef, finalArtifactRef);
+    assert.equal(manifest.completionEvidenceRef, undefined);
+    assert.ok(manifest.guiPresent.displayedRefs?.includes(finalArtifactRef));
+    const guiClaim = manifest.evidenceClaims.find((claim: Record<string, unknown>) => claim.kind === 'gui-present-record');
+    assert.ok(guiClaim);
+    assert.deepEqual(guiClaim.artifactRefs, [finalArtifactRef]);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});

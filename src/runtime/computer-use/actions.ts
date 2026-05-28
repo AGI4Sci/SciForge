@@ -11,6 +11,7 @@ export function parseGenericActions(value: unknown): GenericVisionAction[] {
 }
 
 export function normalizePlatformAction(action: GenericVisionAction, config: ComputerUseConfig): GenericVisionAction {
+  action = normalizeGenericActionRisk(action);
   if (!isDarwinPlatform(config.desktopPlatform) || action.type !== 'hotkey') return action;
   const normalizedKeys = action.keys.map((key) => {
     const normalized = key.trim().toLowerCase();
@@ -22,6 +23,18 @@ export function normalizePlatformAction(action: GenericVisionAction, config: Com
     && !lowerKeys.includes('command');
   if (isAltTabAlias) return { ...action, keys: ['command', 'tab'] };
   return { ...action, keys: normalizedKeys };
+}
+
+export function normalizeGenericActionRisk<T extends GenericVisionAction>(action: T): T {
+  if (action.riskLevel !== 'high' && action.requiresConfirmation !== true) return action;
+  if (isExplicitSideEffectTarget(action)) return action;
+  if (!isLowRiskGuiInspectionAction(action)) return action;
+  return {
+    ...action,
+    riskLevel: 'low',
+    requiresConfirmation: false,
+    confirmationText: undefined,
+  };
 }
 
 export function platformActionIssue(action: GenericVisionAction, config: ComputerUseConfig) {
@@ -106,41 +119,41 @@ function normalizeGenericAction(value: unknown): GenericVisionAction | undefined
   if (type === 'click' || type === 'double_click') {
     const x = numberConfig(value.x);
     const y = numberConfig(value.y);
-    return x === undefined || y === undefined ? { type, ...metadata } : { type, x, y, ...metadata };
+    return normalizeGenericActionRisk(x === undefined || y === undefined ? { type, ...metadata } : { type, x, y, ...metadata });
   }
   if (type === 'drag') {
     const fromX = numberConfig(value.fromX);
     const fromY = numberConfig(value.fromY);
     const toX = numberConfig(value.toX);
     const toY = numberConfig(value.toY);
-    return [fromX, fromY, toX, toY].some((item) => item === undefined)
+    return normalizeGenericActionRisk([fromX, fromY, toX, toY].some((item) => item === undefined)
       ? {
           type,
           fromTargetDescription: stringConfig(value.fromTargetDescription, value.from_target_description, value.sourceDescription, value.source_description, value.fromTarget, value.source, value.targetDescription, value.target_description, value.target),
           toTargetDescription: stringConfig(value.toTargetDescription, value.to_target_description, value.destinationDescription, value.destination_description, value.targetDescription, value.target_description, value.toTarget, value.destination),
           ...metadata,
         }
-      : { type, fromX: fromX as number, fromY: fromY as number, toX: toX as number, toY: toY as number, ...metadata };
+      : { type, fromX: fromX as number, fromY: fromY as number, toX: toX as number, toY: toY as number, ...metadata });
   }
-  if (type === 'type_text') return typeof value.text === 'string' ? { type, text: value.text, ...metadata } : undefined;
+  if (type === 'type_text') return typeof value.text === 'string' ? normalizeGenericActionRisk({ type, text: value.text, ...metadata }) : undefined;
   if (type === 'press_key') {
     const key = stringConfig(value.key, value.keyName);
-    return key ? { type, key, ...metadata } : undefined;
+    return key ? normalizeGenericActionRisk({ type, key, ...metadata }) : undefined;
   }
   if (type === 'hotkey') {
     const keys = parseHotkeyKeys(value.keys, value.hotkey, value.shortcut, value.keyCombo, value.key_combo);
-    return keys.length ? { type, keys, ...metadata } : undefined;
+    return keys.length ? normalizeGenericActionRisk({ type, keys, ...metadata }) : undefined;
   }
   if (type === 'scroll') {
     const direction = normalizeScrollDirection(value);
     const amount = numberConfig(value.amount, value.scrollAmount, value.scroll_amount, value.delta, value.wheelDelta, value.wheel_delta);
-    return direction ? { type, direction, amount, ...metadata } : undefined;
+    return direction ? normalizeGenericActionRisk({ type, direction, amount, ...metadata }) : undefined;
   }
   if (type === 'open_app') {
     const appName = stringConfig(value.appName, value.app_name, value.application, value.applicationName, value.name);
-    return appName ? { type, appName, ...metadata } : undefined;
+    return appName ? normalizeGenericActionRisk({ type, appName, ...metadata }) : undefined;
   }
-  if (type === 'wait') return { type, ms: numberConfig(value.ms, value.durationMs, value.duration, value.amount), ...metadata };
+  if (type === 'wait') return normalizeGenericActionRisk({ type, ms: numberConfig(value.ms, value.durationMs, value.duration, value.amount), ...metadata });
   return undefined;
 }
 
@@ -182,6 +195,28 @@ function parseHotkeyKeys(...values: unknown[]) {
   }
   return [];
 }
+
+function isLowRiskGuiInspectionAction(action: GenericVisionAction): boolean {
+  if (action.type === 'wait' || action.type === 'scroll' || action.type === 'open_app' || action.type === 'type_text') {
+    return true;
+  }
+  if (action.type !== 'click' && action.type !== 'double_click') return false;
+  return isLowRiskGuiControlText(action.targetDescription);
+}
+
+function isExplicitSideEffectTarget(action: GenericVisionAction): boolean {
+  const primary = action.targetDescription ?? '';
+  const fallback = primary || action.targetRegionDescription || action.confirmationText || '';
+  return highRiskTargetPattern.test(primary || fallback);
+}
+
+function isLowRiskGuiControlText(text: string | undefined): boolean {
+  return lowRiskGuiControlPattern.test(text ?? '') && !highRiskTargetPattern.test(text ?? '');
+}
+
+const lowRiskGuiControlPattern = /\b(?:input|field|text\s*box|textbox|search\s*(?:box|field|input)|address\s*bar|url\s*field|checkbox|check\s*box|radio(?:\s*button)?|dropdown|drop-down|select(?:or)?|menu|toggle|switch|tab|filter|slider|form\s*field)\b|文本框|搜索框|地址栏|复选|单选|下拉|菜单|切换|开关|字段|控件/i;
+
+const highRiskTargetPattern = /\b(?:send|submit|delete|remove|pay|payment|purchase|buy|authorize|authorise|approve|publish|upload|share|post|external|overwrite|replace|deploy|merge|commit|sign\s*in|log\s*in)\b|发送|提交|删除|移除|支付|购买|付款|授权|批准|发布|上传|分享|外发|覆盖|替换|部署|登录/i;
 
 function normalizeScrollDirection(value: Record<string, unknown>): 'up' | 'down' | 'left' | 'right' | undefined {
   if (value.direction === 'up' || value.direction === 'down' || value.direction === 'left' || value.direction === 'right') {

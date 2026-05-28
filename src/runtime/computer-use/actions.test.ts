@@ -28,3 +28,28 @@ test('generic action parser normalizes action discriminator aliases without rela
   assert.deepEqual(parseGenericActions([{ action: 'press_key', targetDescription: 'Enter key' }]), []);
   assert.deepEqual(parseGenericActions([{ kind: 'hotkey', targetDescription: 'Spotlight shortcut' }]), []);
 });
+
+test('generic action parser downgrades false high-risk labels on benign visible controls', () => {
+  const [fieldClick] = parseGenericActions([{
+    type: 'click',
+    targetDescription: 'First Name text input field in the visible form example',
+    targetRegionDescription: 'form area containing text fields, checkboxes, and a Submit button',
+    riskLevel: 'high',
+    requiresConfirmation: true,
+  }]);
+
+  assert.equal(fieldClick?.type, 'click');
+  assert.equal(fieldClick?.riskLevel, 'low');
+  assert.equal(fieldClick?.requiresConfirmation, false);
+
+  const [submitClick] = parseGenericActions([{
+    type: 'click',
+    targetDescription: 'Submit payment button',
+    riskLevel: 'high',
+    requiresConfirmation: true,
+  }]);
+
+  assert.equal(submitClick?.type, 'click');
+  assert.equal(submitClick?.riskLevel, 'high');
+  assert.equal(submitClick?.requiresConfirmation, true);
+});

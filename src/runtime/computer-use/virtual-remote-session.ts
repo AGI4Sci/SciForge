@@ -534,7 +534,7 @@ async function upsertFileIndexArtifact(
     taskText?: string;
   },
 ) {
-  const fileName = desiredArtifactFileName([options.taskText, app.visibleTexts.join('\n')], 'visible-file-index.md');
+  const fileName = desiredFileIndexArtifactFileName([options.taskText, app.visibleTexts.join('\n')]);
   const artifactId = `virtual-file-index-${sanitizeId(fileName.replace(/\.[^.]+$/, ''))}`;
   const artifactPath = join(runDir, fileName);
   const artifactRef = workspaceRel(workspace, artifactPath);
@@ -649,21 +649,39 @@ function shouldMaterializeFileIndexArtifact(action: GenericVisionAction, taskTex
 }
 
 function artifactTaskIntent(text: string | undefined) {
-  return /final[-\s]?artifact|artifact[-\s]?refs?|l2-artifact-refs|l3-workflow-refs|index\.md|file[-\s]?list|directory[-\s]?index|trace summary|report artifact|索引|文件列表|最终文件|报告|汇总|整理/i.test(text ?? '');
+  return /final[-\s]?artifact|artifact[-\s]?refs?|l2-artifact-refs|l3-workflow-refs|index\.md|file[-\s]?list|directory[-\s]?index|trace summary|evidence summary|action mapping|field evidence|control evidence|report artifact|索引|文件列表|最终文件|报告|汇总|总结|整理|视觉证据|动作映射|字段证据|控件证据/i.test(text ?? '');
 }
 
 function desiredArtifactFileName(values: Array<string | undefined>, fallback: string) {
   const text = values.filter(Boolean).join('\n');
   const explicit = /(?:^|[^A-Za-z0-9._-])([A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(?:md|txt|csv|tsv|json))(?:$|[^A-Za-z0-9._-])/i.exec(text)?.[1];
-  if (explicit) return sanitizeArtifactFileName(explicit);
+  const sanitizedExplicit = explicit ? sanitizeArtifactFileName(explicit) : undefined;
+  if (sanitizedExplicit && !isReservedEvidenceFileName(sanitizedExplicit)) return sanitizedExplicit;
   if (/index|索引/i.test(text)) return 'index.md';
-  if (/report|报告|汇报|summary|汇总/i.test(text)) return 'report.md';
+  if (/report|报告|汇报|summary|evidence summary|action mapping|汇总|总结|视觉证据|动作映射/i.test(text)) return 'report.md';
   return fallback;
+}
+
+function desiredFileIndexArtifactFileName(values: Array<string | undefined>) {
+  const text = values.filter(Boolean).join('\n');
+  const explicit = /(?:^|[^A-Za-z0-9._-])([A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(?:md|txt|csv|tsv|json))(?:$|[^A-Za-z0-9._-])/i.exec(text)?.[1];
+  const sanitizedExplicit = explicit ? sanitizeArtifactFileName(explicit) : undefined;
+  if (
+    sanitizedExplicit
+    && !isReservedEvidenceFileName(sanitizedExplicit)
+    && /index|file[-_\s]?list|directory|目录|文件|索引/i.test(sanitizedExplicit)
+  ) return sanitizedExplicit;
+  if (/index|file[-\s]?list|directory|目录|文件|索引/i.test(text)) return 'index.md';
+  return 'visible-file-index.md';
 }
 
 function sanitizeArtifactFileName(value: string) {
   const safe = value.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
   return safe || 'artifact.md';
+}
+
+function isReservedEvidenceFileName(value: string) {
+  return /^(vision-trace|host-ports|tool-payload|gui-present|gui-ask-user|approval-request|risk-audit|confirmed-request|blocked-manifest|repair-hint|continuation-request|directory-listing|tui-host-run-task-chain|computer-use-request|gateway-request|request|independent-input-adapter|virtual-remote-session|action-ledger|failure-diagnostics|cu-user-acceptance|cu-l3-independent-input-verifier)\.json$/i.test(value.trim());
 }
 
 function markLatestArtifactVisibleInFileManager(

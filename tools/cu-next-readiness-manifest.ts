@@ -1,4 +1,4 @@
-import { statSync } from 'node:fs';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,7 +7,15 @@ import {
   CU_NEXT_TASK_MAPPINGS as DEFAULT_CU_NEXT_TASK_MAP_MAPPINGS,
   loadValidatedCuNextTaskMap,
   type CuNextTaskMap,
+  type CuNextTaskMapping as CuNextTaskMapEntry,
 } from './computer-use-next/task-map.js';
+import { cuNextCompletionGradeEvidenceIssues } from './computer-use-next/completion-grade.js';
+import { validateCuNextLiveAcceptanceTaskEvidence } from './computer-use-next/live-acceptance-validator.js';
+import {
+  approvalChainSidecarRefsFromEvidence,
+  validateCuNextApprovalChainSidecars,
+  validateCuNextNeedsConfirmationSidecars,
+} from './computer-use-next/approval-chain.js';
 
 export const CU_NEXT_READINESS_SCHEMA_VERSION = 'sciforge.computer-use.cu-next-readiness.v1' as const;
 const RUNTIME_BROWSER_OBSERVED_AT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -38,13 +46,7 @@ export interface CuNextProjectTask {
   checklist: CuNextProjectChecklistItem[];
 }
 
-export interface CuNextTaskMapping {
-  taskId: CuNextTaskId;
-  title: string;
-  slug: string;
-  requirements: CuNextRequirement[];
-  recommendedTargetApp?: string;
-}
+export type CuNextTaskMapping = CuNextTaskMapEntry;
 
 export interface CuNextEvidenceFile {
   path: string;
@@ -194,25 +196,27 @@ interface UserAcceptanceManifest {
   inputChannel?: unknown;
   trace?: unknown;
   metadata?: unknown;
+  cuNextTask?: unknown;
+  evidenceMarkers?: unknown;
+  completionEvidence?: unknown;
+  completionEvidenceRef?: unknown;
+  evidenceKind?: unknown;
+  kind?: unknown;
+  acceptanceTier?: unknown;
+  targetEnvironmentKind?: unknown;
+  realWindowEvidence?: unknown;
+  userAcceptanceEligible?: unknown;
+  diagnosticOnly?: unknown;
+  sameSession?: unknown;
+  sourceToWriterToPreviewCausality?: unknown;
+  l3Workflow?: unknown;
 }
 
 function readinessMappingsFromTaskMap(map: Pick<CuNextTaskMap, 'tasks'>): CuNextTaskMapping[] {
-  return map.tasks.map((mapping) => ({
-    taskId: mapping.taskId,
-    title: mapping.title,
-    slug: mapping.slug,
-    requirements: mapping.requirements,
-    recommendedTargetApp: mapping.recommendedTargetApp,
-  }));
+  return map.tasks.map((mapping) => ({ ...mapping }));
 }
 
-export const CU_NEXT_TASK_MAPPINGS: CuNextTaskMapping[] = DEFAULT_CU_NEXT_TASK_MAP_MAPPINGS.map((mapping) => ({
-  taskId: mapping.taskId,
-  title: mapping.title,
-  slug: mapping.slug,
-  requirements: mapping.requirements,
-  recommendedTargetApp: mapping.recommendedTargetApp,
-}));
+export const CU_NEXT_TASK_MAPPINGS: CuNextTaskMapping[] = DEFAULT_CU_NEXT_TASK_MAP_MAPPINGS.map((mapping) => ({ ...mapping }));
 
 export interface CuNextReadinessBuildInput {
   root?: string;
@@ -351,9 +355,23 @@ function evaluateTask(
 ): CuNextReadinessTask {
   const matchingAcceptance = userAcceptanceManifests.filter((file) => userAcceptanceMatchesTask(file.data, mapping));
   const strongAcceptance = matchingAcceptance.find((file) => hasStrongTaskEvidence(file, mapping, root));
+  const completionGradeBlockers = uniqueStrings(matchingAcceptance.flatMap((file) => (
+    cuNextCompletionGradeEvidenceIssues(
+      file.data,
+      mapping,
+      loadCompletionEvidenceData(file, root),
+      completionEvidenceBundleContext(file, root),
+    )
+  )));
   const blockedItems: CuNextReadinessTask['blockedItems'] = [];
 
   if (!strongAcceptance) {
+    if (completionGradeBlockers.length > 0) {
+      blockedItems.push({
+        id: 'completion-ineligible-evidence-kind',
+        reason: `${mapping.taskId} matching acceptance evidence is not isolated-L3 completion-grade evidence: ${completionGradeBlockers.join(' ')}`,
+      });
+    }
     blockedItems.push({
       id: 'missing-live-l2-l3-user-acceptance-manifest',
       reason: `${mapping.taskId} needs a matching cu-user-acceptance-manifest with real TUI Host -> computer_use.runTask evidence, screenshots, grounding diagnostics, verifier pass, and gui.present refs.`,
@@ -418,6 +436,12 @@ function hasStrongTaskEvidence(file: CuNextEvidenceFile, mapping: CuNextTaskMapp
   const bundleContext = evidenceBundleContext(root, file.path);
   if (!userAcceptanceMatchesTask(file.data, mapping)) return false;
   if (manifest.schemaVersion !== 'sciforge.computer-use.user-acceptance-manifest.v1') return false;
+  if (cuNextCompletionGradeEvidenceIssues(
+    file.data,
+    mapping,
+    loadCompletionEvidenceData(file, root),
+    completionEvidenceBundleContext(file, root),
+  ).length > 0) return false;
   if (manifest.antiShortcutGuard?.status !== 'passed') return false;
   if (!isArrayEmpty(manifest.antiShortcutGuard.rejectedClaims)) return false;
   if (!hasRequiredTuiHostChain(manifest, bundleContext)) return false;
@@ -425,12 +449,25 @@ function hasStrongTaskEvidence(file: CuNextEvidenceFile, mapping: CuNextTaskMapp
   if (!hasRealComputerUseEvidence(manifest, bundleContext)) return false;
   if (hasStructuredFixtureDisqualifier(file.data)) return false;
   if (hasSharedInputDisqualifier(manifest, mapping)) return false;
+  if (hasShellDirectArtifactWriteDisqualifier(manifest)) return false;
   if (mapping.requirements.includes('l3-workflow-refs') && !hasIndependentInputAdapterEvidence(manifest, bundleContext)) return false;
+  const liveAcceptance = validateCuNextLiveAcceptanceTaskEvidence({
+    taskId: mapping.taskId,
+    evidence: manifest,
+    taskMappings: [mapping],
+    refRecords: approvalChainRefRecords(manifest, bundleContext),
+  });
+  if (!liveAcceptance.ok) return false;
+  if (!hasLiveAcceptanceMarkerRefs(manifest, bundleContext)) return false;
+  if ((mapping.taskId === 'CU-NEXT-03' || mapping.taskId === 'CU-NEXT-06') && !hasValidApprovalChainSidecars(manifest, mapping, bundleContext)) return false;
   if (!hasRequiredStatus(manifest, mapping)) return false;
   if (!hasWorkflowRefs(manifest, mapping, bundleContext)) return false;
   if (!hasRequiredRefs(manifest, bundleContext)) return false;
-  if (mapping.requirements.includes('approval-chain') && !jsonTextContains(file.data, [/needs-confirmation/i, /gui[._-]?ask[._-]?user/i, /approval(ref|:|-request)/i])) {
-    return false;
+  if (mapping.requirements.includes('approval-chain')) {
+    const approvalTextMarkers = mapping.taskId === 'CU-NEXT-03'
+      ? [/needs-confirmation/i, /gui[._-]?ask[._-]?user/i, /approval(ref|:|-request)/i]
+      : [/approval(ref|:|-request)/i, /confirmed[._-]?request/i, /risk[._-]?audit/i];
+    if (!jsonTextContains(file.data, approvalTextMarkers)) return false;
   }
   if (mapping.requirements.includes('repair-continuity') && !jsonTextContains(file.data, [/blocked[._-]?manifest/i, /repair[._-]?hint/i, /continuation/i, /session/i])) {
     return false;
@@ -441,9 +478,56 @@ function hasStrongTaskEvidence(file: CuNextEvidenceFile, mapping: CuNextTaskMapp
   return true;
 }
 
+function hasValidApprovalChainSidecars(
+  manifest: UserAcceptanceManifest,
+  mapping: CuNextTaskMapEntry,
+  context: EvidenceBundleContext,
+): boolean {
+  const refs = approvalChainSidecarRefsFromEvidence(manifest);
+  const sidecars = {
+    approvalRequest: readEvidenceBundleJsonRef(refs.approvalRequestRef, context),
+    guiAskUser: readEvidenceBundleJsonRef(refs.guiAskUserRecordRef, context),
+    confirmedRequest: readEvidenceBundleJsonRef(refs.confirmedRequestRef, context),
+    riskAudit: readEvidenceBundleJsonRef(refs.riskAuditRef, context),
+    sourceApprovalRequest: readEvidenceBundleJsonRef(refs.sourceApprovalRequestRef, context),
+    sourceGuiAskUser: readEvidenceBundleJsonRef(refs.sourceGuiAskUserRecordRef, context),
+    sourceRiskAudit: readEvidenceBundleJsonRef(refs.sourceRiskAuditRef, context),
+    approvalDecision: readEvidenceBundleJsonRef(refs.approvalDecisionRef, context),
+  };
+  const issues = mapping.taskId === 'CU-NEXT-03'
+    ? validateCuNextNeedsConfirmationSidecars({ sidecars, refs })
+    : validateCuNextApprovalChainSidecars({ sidecars, refs });
+  return issues.length === 0;
+}
+
+function approvalChainRefRecords(manifest: UserAcceptanceManifest, context: EvidenceBundleContext): Record<string, unknown> {
+  const refs = approvalChainSidecarRefsFromEvidence(manifest);
+  const markerRefs = markerEvidenceRefs(manifest.evidenceMarkers);
+  return Object.fromEntries(uniqueStrings([
+    ...Object.values(refs).filter((ref): ref is string => Boolean(ref)),
+    ...markerRefs,
+  ]).flatMap((ref) => {
+    const record = readEvidenceBundleJsonRef(ref, context);
+    return record === undefined ? [] : [[ref, record] as const];
+  }));
+}
+
+function readEvidenceBundleJsonRef(ref: string | undefined, context: EvidenceBundleContext): unknown {
+  if (!ref) return undefined;
+  const path = resolveExistingEvidenceBundleRef(ref, context);
+  if (!path) return undefined;
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
 function hasRequiredStatus(manifest: UserAcceptanceManifest, mapping: CuNextTaskMapping): boolean {
   if (mapping.requirements.includes('l3-workflow-refs')) {
-    return manifest.status === 'multi-app-workflow-passed'
+    const statusAccepted = manifest.status === 'multi-app-workflow-passed'
+      || (mapping.taskId === 'CU-NEXT-03' && manifest.status === 'needs-confirmation');
+    return statusAccepted
       && manifest.level === 'L3'
       && manifest.appWorkflow?.kind === 'multi-app-workflow'
       && arrayLength(manifest.appWorkflow.windowSwitchTraceRefs) > 0;
@@ -470,6 +554,7 @@ function hasRequiredRefs(manifest: UserAcceptanceManifest, context: EvidenceBund
   const verifierVerdictRef = stringValue(manifest.verifierVerdict?.ref);
   const guiPresentRecordRef = stringValue(manifest.guiPresent?.recordRef);
   const guiPresentPayloadRef = stringValue(manifest.guiPresent?.payloadRef);
+  const completionEvidenceRef = stringValue(manifest.completionEvidenceRef);
   const criticalRefs = [
     ...stringArray(manifest.screenshotRefs?.before),
     ...stringArray(manifest.screenshotRefs?.after),
@@ -481,6 +566,7 @@ function hasRequiredRefs(manifest: UserAcceptanceManifest, context: EvidenceBund
     verifierVerdictRef,
     guiPresentRecordRef,
     guiPresentPayloadRef,
+    completionEvidenceRef,
     ...stringArray(manifest.guiPresent?.displayedRefs),
   ].filter((ref): ref is string => Boolean(ref));
 
@@ -497,8 +583,36 @@ function hasRequiredRefs(manifest: UserAcceptanceManifest, context: EvidenceBund
     && manifest.guiPresent?.status === 'present'
     && isNonEmptyString(guiPresentRecordRef)
     && isNonEmptyString(guiPresentPayloadRef)
+    && isNonEmptyString(completionEvidenceRef)
     && arrayLength(manifest.guiPresent.displayedRefs) > 0
     && refsExistInEvidenceBundle(criticalRefs, context);
+}
+
+function loadCompletionEvidenceData(file: CuNextEvidenceFile, root: string): unknown {
+  const manifest = file.data as UserAcceptanceManifest;
+  const ref = stringValue(manifest.completionEvidenceRef);
+  if (!ref) return undefined;
+  const context = evidenceBundleContext(root, file.path);
+  const path = resolveExistingEvidenceBundleRef(ref, context);
+  if (!path) return undefined;
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function completionEvidenceBundleContext(file: CuNextEvidenceFile, root: string) {
+  const context = evidenceBundleContext(root, file.path);
+  return {
+    refScopeDescription: 'the current acceptance evidence bundle',
+    refExists: (ref: string) => refExistsInEvidenceBundle(ref, context),
+  };
+}
+
+function hasLiveAcceptanceMarkerRefs(manifest: UserAcceptanceManifest, context: EvidenceBundleContext): boolean {
+  const refs = markerEvidenceRefs(manifest.evidenceMarkers);
+  return refs.length > 0 && refsExistInEvidenceBundle(refs, context);
 }
 
 function hasRequiredTuiHostChain(manifest: UserAcceptanceManifest, context: EvidenceBundleContext): boolean {
@@ -556,12 +670,12 @@ function hasIndependentInputAdapterEvidence(manifest: UserAcceptanceManifest, co
 
 function hasStructuredFixtureDisqualifier(data: unknown): boolean {
   return findRecordValue(data, (key, value) => (
-    (key === 'testActionFixtureMode' || key === 'fixtureMode' || key === 'seedDemoFixtureEvidenceUsed')
+    (key === 'testActionFixtureMode' || key === 'fixtureMode' || key === 'seedDemoFixtureEvidenceUsed' || key === 'fixture')
     && value === true
   )) || findRecordValue(data, (key, value) => (
     key === 'dryRun' && value === true
   )) || findRecordValue(data, (key, value) => (
-    (key === 'evidenceMode' || key === 'sourceMode' || key === 'sourceKind')
+    (key === 'evidenceMode' || key === 'sourceMode' || key === 'sourceKind' || key === 'kind' || key === 'evidenceKind')
     && typeof value === 'string'
     && /fixture|demo|synthetic/i.test(value)
   ));
@@ -572,13 +686,17 @@ function hasSharedInputDisqualifier(manifest: UserAcceptanceManifest, mapping: C
   if (records(manifest.evidenceClaims).some((claim) => claim.kind === 'shared-input-ack')) return true;
   if (typeof manifest.executorLease?.ref === 'string' && /shared-system/i.test(manifest.executorLease.ref)) return true;
   return findRecordValue(manifest, (key, value) => (
-    (key === 'allowSharedSystemInput' && value === true)
+    ((key === 'allowSharedSystemInput' || key === 'sharedSystemInputUsed') && value === true)
     || (
       typeof value === 'string'
       && (key === 'pointerKeyboardOwnership' || key === 'inputOwnership' || key === 'owner')
       && /shared-system|system mouse|system keyboard|shared input/i.test(value)
     )
   ));
+}
+
+function hasShellDirectArtifactWriteDisqualifier(manifest: UserAcceptanceManifest): boolean {
+  return findRecordValue(manifest, (key, value) => key === 'shellDirectArtifactWrite' && value === true);
 }
 
 function userAcceptanceMatchesTask(data: unknown, mapping: CuNextTaskMapping): boolean {
@@ -812,13 +930,17 @@ function refsExistInEvidenceBundle(refs: string[], context: EvidenceBundleContex
 }
 
 function refExistsInEvidenceBundle(ref: string, context: EvidenceBundleContext): boolean {
+  return Boolean(resolveExistingEvidenceBundleRef(ref, context));
+}
+
+function resolveExistingEvidenceBundleRef(ref: string, context: EvidenceBundleContext): string | undefined {
   const refPath = filePathFromRef(ref);
-  if (!refPath) return false;
+  if (!refPath) return undefined;
   const candidates = isAbsolute(refPath)
     ? [resolve(refPath)]
     : [resolve(context.root, refPath), resolve(context.bundleDir, refPath)];
-  return candidates.some((candidate) => (
-    isPathInsideOrSame(context.bundleDir, candidate) && isExistingFile(candidate)
+  return candidates.find((candidate) => (
+    isPathInsideOrSame(context.bundleDir, candidate) && isExistingRegularBundleFile(candidate, context.bundleDir)
   ));
 }
 
@@ -842,9 +964,13 @@ function isPathInsideOrSame(parent: string, child: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
-function isExistingFile(path: string): boolean {
+function isExistingRegularBundleFile(path: string, bundleDir: string): boolean {
   try {
-    return statSync(path).isFile();
+    const info = lstatSync(path);
+    if (!info.isFile() || info.isSymbolicLink()) return false;
+    const realBundle = realpathSync(bundleDir);
+    const realPath = realpathSync(path);
+    return isPathInsideOrSame(realBundle, realPath);
   } catch {
     return false;
   }
@@ -920,6 +1046,10 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter(isNonEmptyString) : [];
 }
 
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.filter((value) => value.trim().length > 0))];
+}
+
 function records(value: unknown): Array<Record<string, unknown>> {
   return Array.isArray(value)
     ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
@@ -934,6 +1064,22 @@ function recordRefs(record: Record<string, unknown>): string[] {
     ...stringArray(record.evidenceRefs),
     ...stringArray(record.artifactRefs),
   ].filter((ref): ref is string => Boolean(ref));
+}
+
+function markerEvidenceRefs(value: unknown, key = '', seen = new Set<unknown>()): string[] {
+  if (typeof value === 'string') {
+    if (!/refs?$/i.test(key) || !filePathFromRef(value)) return [];
+    return [value];
+  }
+  if (!value || typeof value !== 'object') return [];
+  if (seen.has(value)) return [];
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return uniqueStrings(value.flatMap((item) => markerEvidenceRefs(item, key, seen)));
+  }
+  return uniqueStrings(Object.entries(value).flatMap(([childKey, child]) => (
+    markerEvidenceRefs(child, childKey, seen)
+  )));
 }
 
 function findRecordValue(

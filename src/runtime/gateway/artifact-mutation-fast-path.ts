@@ -4,6 +4,7 @@ import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path
 import type { GatewayRequest, ToolPayload } from '../runtime-types.js';
 import { isRecord } from '../gateway-utils.js';
 import { sha1 } from '../workspace-task-runner.js';
+import { COMPUTER_USE_ACTION_PROVIDER_ID } from '../computer-use/host-adapter.js';
 import {
   explicitMarkdownPathsFromPrompt,
   markdownArtifactMutationPolicy,
@@ -28,6 +29,7 @@ type RewriteResult = {
 };
 
 export async function tryRunArtifactMutationFastPath(request: GatewayRequest): Promise<ToolPayload | undefined> {
+  if (isComputerUseProviderRequest(request)) return undefined;
   if (!markdownArtifactMutationPolicy(request.prompt)) return undefined;
   const workspace = resolve(request.workspacePath || process.cwd());
   const constraints = rewriteConstraintsFromMarkdownPrompt(request.prompt);
@@ -116,6 +118,23 @@ export async function tryRunArtifactMutationFastPath(request: GatewayRequest): P
       diagnostics: { runtime: EXECUTION_TOOL_ID, fileCount: written.length },
     }],
   };
+}
+
+function isComputerUseProviderRequest(request: GatewayRequest): boolean {
+  const selectedActionIds = new Set([
+    ...(request.selectedActionIds ?? []),
+    ...stringArray(recordValue(request.uiState).selectedActionIds),
+  ]);
+  return selectedActionIds.has(COMPUTER_USE_ACTION_PROVIDER_ID)
+    || /^\s*\/computer-use\b/i.test(request.prompt);
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : [];
 }
 
 async function artifactRewriteTargets(request: GatewayRequest, workspace: string) {

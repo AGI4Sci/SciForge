@@ -55,6 +55,8 @@ def build_target_bound_real_window_probe_evidence(
     forbid_prior_round_completion_evidence: bool = False,
     requires_directory_evidence: bool = False,
     required_input_modalities: Sequence[str] | None = None,
+    acceptance_tier: str = "package-diagnostic",
+    user_acceptance_eligible: bool = False,
     metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build refs-first evidence for a future target-bound real-window probe."""
@@ -71,6 +73,8 @@ def build_target_bound_real_window_probe_evidence(
         "schemaVersion": TARGET_BOUND_REAL_WINDOW_EVIDENCE_SCHEMA_VERSION,
         "status": "completed",
         "reason": "",
+        "acceptanceTier": acceptance_tier,
+        "userAcceptanceEligible": bool(user_acceptance_eligible),
         "preflightRef": preflight_ref,
         "preflightStatus": preflight_manifest.get("status"),
         "resultRef": result_ref_override or loaded_result_ref,
@@ -142,6 +146,23 @@ def validate_target_bound_real_window_probe_evidence(
         ))
     if evidence.get("status") != "completed":
         errors.append(_repair_replay_error("status_not_completed", "Target-bound real-window evidence status must be completed.", "$.status", expected="completed", actual=evidence.get("status")))
+    acceptance_tier = _string_or_none(evidence.get("acceptanceTier"))
+    if acceptance_tier != "package-diagnostic":
+        errors.append(_repair_replay_error(
+            "target_bound_acceptance_tier_not_package_diagnostic",
+            "Target-bound package harness evidence cannot claim L1/L2/L3 or user acceptance tiers.",
+            "$.acceptanceTier",
+            expected="package-diagnostic",
+            actual=acceptance_tier,
+        ))
+    if evidence.get("userAcceptanceEligible") is not False:
+        errors.append(_repair_replay_error(
+            "target_bound_user_acceptance_eligible",
+            "Target-bound package harness evidence is not user acceptance eligible.",
+            "$.userAcceptanceEligible",
+            expected=False,
+            actual=evidence.get("userAcceptanceEligible"),
+        ))
     if evidence.get("preflightStatus") != "ready":
         errors.append(_repair_replay_error("preflight_not_ready", "Target-bound real-window evidence requires preflightStatus=ready.", "$.preflightStatus", expected="ready", actual=evidence.get("preflightStatus")))
     if evidence.get("inputExecuted") is not True:
@@ -286,6 +307,8 @@ def _target_bound_real_window_validation_result(
         "fileListArtifactRef": evidence.get("fileListArtifactRef") if evidence else None,
         "fileListDataRef": evidence.get("fileListDataRef") if evidence else None,
         "workflowRequirements": _mapping(evidence.get("workflowRequirements")) if evidence else {},
+        "acceptanceTier": evidence.get("acceptanceTier") if evidence else None,
+        "userAcceptanceEligible": evidence.get("userAcceptanceEligible") if evidence else None,
     }
 
 
@@ -823,7 +846,14 @@ def _artifact_metadata_candidates(payloads: Sequence[Mapping[str, Any]]) -> list
 def _is_artifact_causality_metadata(value: Any) -> bool:
     return isinstance(value, Mapping) and any(
         key in value
-        for key in ("finalArtifactRef", "savedByActionIndex", "savedByInputModality", "artifactValidationRef", "pptxValidationRef")
+        for key in (
+            "finalArtifactRef",
+            "savedByActionIndex",
+            "savedByInputModality",
+            "artifactValidationRef",
+            "pptxValidationRef",
+            "docxValidationRef",
+        )
     )
 
 
@@ -878,4 +908,3 @@ def _collect_prior_round_completion_evidence_issues(value: Any, issues: list[str
     if isinstance(value, (list, tuple)):
         for index, item in enumerate(value):
             _collect_prior_round_completion_evidence_issues(item, issues, path=f"{path}[{index}]")
-

@@ -20,6 +20,8 @@ ActionKind = Literal[
     "hotkey",
     "scroll",
     "wait",
+    "focus",
+    "save",
 ]
 ComputerUseStatus = Literal[
     "completed",

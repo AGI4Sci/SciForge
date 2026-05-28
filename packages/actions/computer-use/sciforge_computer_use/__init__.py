@@ -14,6 +14,21 @@ from .contracts import (
     Verification,
 )
 from .loop import run_computer_use_task, run_task
+from .evidence_ledger import (
+    EvidenceLedger,
+    build_evidence_index,
+    build_evidence_snapshot,
+    build_planner_brief,
+)
+from .isolated_desktop_contracts import EXECUTOR_COMMAND_EVENT_LOG_SCHEMA
+from .isolated_desktop_l1_smoke_evidence import (
+    build_isolated_desktop_l1_smoke_evidence,
+    validate_isolated_desktop_l1_smoke_evidence,
+)
+from .isolated_desktop_l3_workflow_evidence import (
+    build_isolated_desktop_l3_workflow_evidence,
+    validate_isolated_desktop_l3_workflow_evidence,
+)
 from .repair_manifest import validate_repair_manifest
 from .safety import assess_action_risk
 from .trace import (
@@ -38,12 +53,20 @@ from .api import (
     buildTargetBoundRealWindowProbeEvidence,
     buildTargetBoundInputAdapterManifest,
     buildVisibleRunViewer,
+    buildEvidenceIndex,
+    buildEvidenceSnapshot,
+    buildIsolatedDesktopL1SmokeEvidence,
+    buildIsolatedDesktopL3WorkflowEvidence,
+    buildPlannerBrief,
     buildViewportRecoveryEvidence,
     compactResult,
+    executorCommandEventLogSchema,
     getManifest,
     get_manifest,
     runTask,
     validateInputAdapterManifestForRealDesktop,
+    validateIsolatedDesktopL1SmokeEvidence,
+    validateIsolatedDesktopL3WorkflowEvidence,
     validateRepairManifest,
     validateRepairReplayEvidence,
     validateTargetBoundRealWindowProbeEvidence,
@@ -64,7 +87,20 @@ __all__ = [
     "LoopStep",
     "Observation",
     "Verification",
+    "EvidenceLedger",
+    "EXECUTOR_COMMAND_EVENT_LOG_SCHEMA",
     "assess_action_risk",
+    "build_evidence_index",
+    "buildEvidenceIndex",
+    "build_evidence_snapshot",
+    "buildEvidenceSnapshot",
+    "build_planner_brief",
+    "buildPlannerBrief",
+    "executorCommandEventLogSchema",
+    "build_isolated_desktop_l1_smoke_evidence",
+    "buildIsolatedDesktopL1SmokeEvidence",
+    "build_isolated_desktop_l3_workflow_evidence",
+    "buildIsolatedDesktopL3WorkflowEvidence",
     "build_repair_replay_evidence",
     "buildRepairReplayEvidence",
     "build_target_bound_real_window_probe_evidence",
@@ -86,6 +122,10 @@ __all__ = [
     "runTask",
     "validate_input_adapter_manifest_for_real_desktop",
     "validateInputAdapterManifestForRealDesktop",
+    "validate_isolated_desktop_l1_smoke_evidence",
+    "validateIsolatedDesktopL1SmokeEvidence",
+    "validate_isolated_desktop_l3_workflow_evidence",
+    "validateIsolatedDesktopL3WorkflowEvidence",
     "validateRepairManifest",
     "validate_repair_manifest",
     "validateRepairReplayEvidence",

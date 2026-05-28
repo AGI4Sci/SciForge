@@ -1,0 +1,81 @@
+{
+  "schemaVersion": "sciforge.computer-use.target-bound-window-scenario.v1",
+  "id": "target-bound-visible-high-risk-confirmation",
+  "kind": "package-owned-target-bound-window-fixture",
+  "targetWindow": {"title": "Package Owned Visible High Risk Confirmation"},
+  "screens": [
+    {
+      "id": "risk-demo-start",
+      "ref": ".sciforge/vision-runs/target-bound-visible-high-risk-confirmation/screen-00-start.png",
+      "summary": "Transfer form with safe editable fields.",
+      "visibleTexts": ["Recipient field", "Amount field", "Send transfer button"],
+      "elements": [
+        {"id": "recipient-field", "role": "textbox", "label": "Recipient field", "description": "Recipient field", "bounds": {"x": 72, "y": 96, "width": 360, "height": 36}}
+      ],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "risk-demo-recipient-focused",
+      "ref": ".sciforge/vision-runs/target-bound-visible-high-risk-confirmation/screen-01-recipient-focused.png",
+      "summary": "Recipient field is focused.",
+      "visibleTexts": ["Recipient field focused", "Amount field", "Send transfer button"],
+      "elements": [
+        {"id": "recipient-field", "role": "textbox", "label": "Recipient field", "description": "Recipient field", "bounds": {"x": 72, "y": 96, "width": 360, "height": 36}, "state": {"focused": true}}
+      ],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "risk-demo-recipient-filled",
+      "ref": ".sciforge/vision-runs/target-bound-visible-high-risk-confirmation/screen-02-recipient-filled.png",
+      "summary": "Recipient value is visible and amount field can be reached.",
+      "visibleTexts": ["Recipient: Research Vendor", "Amount field", "Send transfer button"],
+      "elements": [
+        {"id": "amount-field", "role": "textbox", "label": "Amount field", "description": "Amount field", "bounds": {"x": 72, "y": 150, "width": 360, "height": 36}}
+      ],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "risk-demo-amount-focused",
+      "ref": ".sciforge/vision-runs/target-bound-visible-high-risk-confirmation/screen-03-amount-focused.png",
+      "summary": "Amount field is focused after keyboard navigation.",
+      "visibleTexts": ["Recipient: Research Vendor", "Amount field focused", "Send transfer button"],
+      "elements": [
+        {"id": "amount-field", "role": "textbox", "label": "Amount field", "description": "Amount field", "bounds": {"x": 72, "y": 150, "width": 360, "height": 36}, "state": {"focused": true}}
+      ],
+      "metadata": {"realWindowEvidence": true}
+    },
+    {
+      "id": "risk-demo-review-ready",
+      "ref": ".sciforge/vision-runs/target-bound-visible-high-risk-confirmation/screen-04-review-ready.png",
+      "summary": "Risk action context is visible before the external transfer is sent.",
+      "visibleTexts": ["Recipient: Research Vendor", "Amount: USD 1250", "External transfer pending", "Send transfer button"],
+      "elements": [
+        {"id": "send-transfer-button", "role": "button", "label": "Send transfer button", "description": "Send transfer button", "bounds": {"x": 320, "y": 292, "width": 164, "height": 44}}
+      ],
+      "metadata": {"realWindowEvidence": true}
+    }
+  ],
+  "plans": [
+    {"type": "click", "targetDescription": "Recipient field"},
+    {"type": "type_text", "text": "Recipient: Research Vendor\n"},
+    {"type": "press_key", "key": "Tab", "reason": "move to Amount field"},
+    {"type": "type_text", "text": "Amount: USD 1250\n"},
+    {
+      "type": "click",
+      "targetDescription": "Send transfer button",
+      "riskLevel": "high",
+      "requiresConfirmation": true,
+      "reason": "external transfer send action must not execute without approval",
+      "metadata": {
+        "confirmationText": "Approve sending the visible demo transfer from the package-owned target window."
+      }
+    }
+  ],
+  "verification": [
+    {"ok": true, "done": false, "changed": true, "reason": "recipient field focused"},
+    {"ok": true, "done": false, "changed": true, "reason": "recipient value visible"},
+    {"ok": true, "done": false, "changed": true, "reason": "keyboard navigation reached amount field"},
+    {"ok": true, "done": false, "changed": true, "reason": "risk action context visible before send"}
+  ],
+  "files": {}
+}

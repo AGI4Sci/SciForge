@@ -5,6 +5,7 @@ import sys
 import zipfile
 from pathlib import Path
 
+from sciforge_computer_use.artifact_renderers import validate_docx_artifact
 from sciforge_computer_use.trace import (
     validate_repair_replay_evidence,
     validate_target_bound_real_window_probe_evidence,
@@ -21,6 +22,7 @@ FORM_DIALOG_FIXTURE = PACKAGE_ROOT / "fixtures" / "target-bound-form-dialog.json
 FORM_HIGH_RISK_FIXTURE = PACKAGE_ROOT / "fixtures" / "target-bound-form-high-risk-submit.json"
 MENU_HOTKEY_FIXTURE = PACKAGE_ROOT / "fixtures" / "target-bound-menu-hotkey.json"
 PREVIEW_DIRECTORY_FIXTURE = PACKAGE_ROOT / "fixtures" / "target-bound-preview-directory.json"
+DOCX_FIXTURE = PACKAGE_ROOT / "fixtures" / "target-bound-docx-document.json"
 
 
 def run_target_probe(*args):
@@ -74,6 +76,28 @@ def test_target_bound_window_host_task_a_single_app_artifact_evidence(tmp_path):
     assert validate_target_bound_real_window_probe_evidence(evidence_ref, require_existing_refs=True)["ok"] is True
 
 
+def test_target_bound_window_host_unknown_action_kind_fails_closed(tmp_path):
+    scenario_file = write_scenario(tmp_path, unsupported_action_scenario())
+    output_dir = tmp_path / "target-bound-unsupported"
+    completed = run_target_probe(
+        "--request-json",
+        json.dumps({"task": "reject unsupported target-bound action", "maxSteps": 1}),
+        "--scenario-file",
+        str(scenario_file),
+        "--output-dir",
+        str(output_dir),
+    )
+
+    assert completed.returncode == 1, completed.stdout
+    assert completed.stderr == ""
+    payload = json.loads(completed.stdout)
+
+    assert payload["status"] == "failed-with-reason"
+    assert payload["failureDiagnostics"]["failedStage"] == "execution"
+    assert "does not support action kind 'open_app'" in payload["reason"]
+    assert "targetBoundRealWindowEvidenceRef" not in payload["failureDiagnostics"]
+
+
 def test_target_bound_window_host_can_create_one_page_pptx_artifact(tmp_path):
     output_dir = tmp_path / "target-bound-pptx"
     completed = run_target_probe(
@@ -115,6 +139,46 @@ def test_target_bound_window_host_can_create_one_page_pptx_artifact(tmp_path):
     assert evidence["workflowRequirements"]["requiredInputModalities"] == ["pointer", "keyboard"]
     assert evidence["realWindowEvidence"] is True
     assert evidence["inputExecuted"] is True
+    assert validate_target_bound_real_window_probe_evidence(evidence_ref, require_existing_refs=True)["ok"] is True
+
+
+def test_target_bound_window_host_can_create_word_compatible_docx_artifact(tmp_path):
+    output_dir = tmp_path / "target-bound-docx"
+    completed = run_target_probe(
+        "--request-json",
+        json.dumps({
+            "task": "create a Word-compatible target-bound report",
+            "maxSteps": 4,
+            "metadata": {"requiresFinalArtifact": True},
+        }),
+        "--scenario-file",
+        str(DOCX_FIXTURE),
+        "--output-dir",
+        str(output_dir),
+    )
+
+    assert completed.returncode == 0, completed.stdout
+    payload = json.loads(completed.stdout)
+    artifact_ref = Path(payload["finalArtifactRef"])
+    evidence_ref = Path(payload["failureDiagnostics"]["targetBoundRealWindowEvidenceRef"])
+    evidence = json.loads(evidence_ref.read_text(encoding="utf8"))
+    docx_validation = validate_docx_artifact(artifact_ref)
+
+    assert payload["status"] == "completed"
+    assert artifact_ref.suffix == ".docx"
+    assert docx_validation["ok"] is True
+    assert docx_validation["titleParagraphCount"] == 1
+    assert docx_validation["bulletParagraphCount"] == 2
+    assert docx_validation["tableCount"] == 1
+    assert payload["failureDiagnostics"]["artifactMetadata"]["docxValidationRef"]
+    assert (
+        evidence["metadata"]["artifactMetadata"]["docxValidationRef"]
+        == payload["failureDiagnostics"]["artifactMetadata"]["docxValidationRef"]
+    )
+    assert evidence["finalArtifactRef"] == str(artifact_ref)
+    assert evidence["workflowRequirements"]["requiredInputModalities"] == ["pointer", "keyboard"]
+    assert evidence["realWindowEvidence"] is True
+    assert evidence["diagnosticOnly"] is False
     assert validate_target_bound_real_window_probe_evidence(evidence_ref, require_existing_refs=True)["ok"] is True
 
 
@@ -762,6 +826,21 @@ def viewport_failure_scenario():
         ],
         "plans": [{"type": "click", "targetDescription": "Archive save location"}],
         "verification": [],
+        "files": {},
+    }
+
+
+def unsupported_action_scenario():
+    base = ".sciforge/vision-runs/target-bound-unsupported"
+    return {
+        "schemaVersion": "sciforge.computer-use.target-bound-window-scenario.v1",
+        "id": "target-bound-unsupported-action",
+        "targetWindow": {"title": "Package Owned Unsupported Action Window"},
+        "screens": [
+            screen("unsupported-start", f"{base}/screen-00-start.png", "Tooltip target"),
+        ],
+        "plans": [{"type": "open_app", "appName": "Example App"}],
+        "verification": [{"ok": True, "done": True, "reason": "should not be reached"}],
         "files": {},
     }
 

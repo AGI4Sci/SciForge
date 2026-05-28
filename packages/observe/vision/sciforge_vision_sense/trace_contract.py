@@ -204,6 +204,7 @@ def validate_computer_use_trace_contract(
             action_count += 1
             action = _mapping(step.get("plannedAction"))
             action_type = str(action.get("type") or "")
+            fail_closed_blocked_step = _is_fail_closed_blocked_step(step, action)
             if action_type not in ALLOWED_ACTION_TYPES:
                 issues.append(f"steps[{index}].plannedAction.type is not a generic action")
             non_wait = bool(action_type and action_type != "wait")
@@ -213,14 +214,15 @@ def validate_computer_use_trace_contract(
                 issues.append(f"steps[{index}].plannedAction contains DOM/accessibility/private-app fields")
             if not _non_empty_list(step.get("beforeScreenshotRefs")):
                 issues.append(f"steps[{index}] missing beforeScreenshotRefs")
-            if not _non_empty_list(step.get("afterScreenshotRefs")):
+            if not fail_closed_blocked_step and not _non_empty_list(step.get("afterScreenshotRefs")):
                 issues.append(f"steps[{index}] missing afterScreenshotRefs")
             for ref in [*_screenshot_step_refs(step.get("beforeScreenshotRefs")), *_screenshot_step_refs(step.get("afterScreenshotRefs"))]:
                 if not _screenshot_ref_has_window_metadata(ref):
                     issues.append(f"steps[{index}] screenshot ref missing window metadata")
-            if not isinstance(step.get("execution"), Mapping):
+            execution = _mapping(step.get("execution"))
+            if not fail_closed_blocked_step and not execution:
                 issues.append(f"steps[{index}] missing execution record")
-            elif not _has_input_channel_metadata(_mapping(step.get("execution")), action):
+            if execution and not _has_input_channel_metadata(execution, action):
                 issues.append(f"steps[{index}] execution missing input-channel metadata")
             verifier = _mapping(step.get("verifier"))
             if not verifier:
@@ -400,6 +402,17 @@ def _screenshot_ref_has_window_metadata(value: Any) -> bool:
 
 def _non_empty_list(value: Any) -> bool:
     return isinstance(value, list) and len(value) > 0
+
+
+def _is_fail_closed_blocked_step(step: Mapping[str, Any], action: Mapping[str, Any]) -> bool:
+    if step.get("status") != "blocked":
+        return False
+    risk_level = _first_text(action.get("riskLevel"), action.get("risk_level"))
+    requires_confirmation = action.get("requiresConfirmation") is True or action.get("requires_confirmation") is True
+    reason = _first_text(step.get("failureReason"), step.get("failure_reason"), step.get("reason")) or ""
+    return (risk_level == "high" or requires_confirmation) and bool(
+        re.search(r"confirm|approval|high-risk|高风险|确认|授权", reason, re.IGNORECASE)
+    )
 
 
 def _screenshot_step_refs(value: Any) -> list[Mapping[str, Any]]:

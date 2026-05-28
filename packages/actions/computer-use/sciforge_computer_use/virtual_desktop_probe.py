@@ -42,6 +42,14 @@ CONTROL_FILE_NAMES = {
     "tool-payload.json",
     "gui-present.json",
     "gui-ask-user.json",
+    "approval-request.json",
+    "risk-audit.json",
+    "confirmed-request.json",
+    "blocked-manifest.json",
+    "repair-hint.json",
+    "continuation-request.json",
+    "directory-listing.json",
+    "tui-host-run-task-chain.json",
     "action-ledger.json",
     "failure-diagnostics.json",
 }
@@ -92,9 +100,9 @@ class VirtualDesktopProbeRunner:
         scenario_file: str | None = None,
         source_repair_manifest: Path | None = None,
     ) -> None:
-        self.request = dict(request)
         self.scenario = _normalize_scenario(scenario)
         self.output_dir = output_dir.resolve()
+        self.request = _request_with_evidence_output_dir(request, self.output_dir)
         self.scenario_file = scenario_file
         self.source_repair_manifest = source_repair_manifest.resolve() if source_repair_manifest else None
         self.calls: list[dict[str, Any]] = []
@@ -431,6 +439,10 @@ class VirtualDesktopProbeRunner:
             "artifactRefs": list(payload.get("artifactRefs") or []),
             "finalArtifactRef": payload.get("finalArtifactRef"),
             "finalArtifactRefs": list(payload.get("finalArtifactRefs") or []),
+            "evidenceLogRef": payload.get("evidenceLogRef"),
+            "evidenceSnapshotRef": payload.get("evidenceSnapshotRef"),
+            "evidenceIndexRef": payload.get("evidenceIndexRef"),
+            "plannerBriefRef": payload.get("plannerBriefRef"),
             "steps": list(payload.get("steps") or []),
             "budgetDebits": list(payload.get("budgetDebits") or []),
             "budgetDebitRefs": list(payload.get("budgetDebitRefs") or []),
@@ -460,6 +472,10 @@ class VirtualDesktopProbeRunner:
             "artifactRefs": list(payload.get("artifactRefs") or []),
             "finalArtifactRef": payload.get("finalArtifactRef"),
             "finalArtifactRefs": list(payload.get("finalArtifactRefs") or []),
+            "evidenceLogRef": payload.get("evidenceLogRef"),
+            "evidenceSnapshotRef": payload.get("evidenceSnapshotRef"),
+            "evidenceIndexRef": payload.get("evidenceIndexRef"),
+            "plannerBriefRef": payload.get("plannerBriefRef"),
             "fileListArtifactRef": _file_list_ref(payload, "artifact"),
             "fileListDataRef": _file_list_ref(payload, "data"),
             "inputAdapterManifestRef": str((self.output_dir / "virtual-input-adapter-manifest.json").resolve()),
@@ -649,6 +665,14 @@ def _parse_json(value: str) -> Mapping[str, Any]:
     if not isinstance(parsed, Mapping):
         raise ValueError("Request JSON root must be an object.")
     return parsed
+
+
+def _request_with_evidence_output_dir(request: Mapping[str, Any], output_dir: Path) -> dict[str, Any]:
+    payload = dict(request)
+    metadata = dict(payload.get("metadata") or {})
+    metadata.setdefault("evidenceOutputDir", str(output_dir.resolve()))
+    payload["metadata"] = metadata
+    return payload
 
 
 def _normalize_scenario(scenario: Mapping[str, Any]) -> dict[str, Any]:

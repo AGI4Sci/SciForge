@@ -49,21 +49,37 @@ export function extractChatCompletionContent(value: unknown) {
 }
 
 export function extractJsonObject(text: string): unknown {
+  return extractJsonObjectWithRecovery(text).value;
+}
+
+export type JsonObjectRecovery = 'direct-json' | 'fenced-json' | 'embedded-json' | 'none';
+
+export function extractJsonObjectWithRecovery(text: string): {
+  value: unknown;
+  recovery: JsonObjectRecovery;
+  protocolDrift: boolean;
+} {
   const trimmed = text.trim();
   const direct = parseJson(trimmed);
-  if (direct !== undefined) return direct;
+  if (direct !== undefined) {
+    return { value: direct, recovery: 'direct-json', protocolDrift: false };
+  }
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fenced) {
     const parsed = parseJson(fenced[1].trim());
-    if (parsed !== undefined) return parsed;
+    if (parsed !== undefined) {
+      return { value: parsed, recovery: 'fenced-json', protocolDrift: true };
+    }
   }
   const start = trimmed.indexOf('{');
   const end = trimmed.lastIndexOf('}');
   if (start >= 0 && end > start) {
     const parsed = parseJson(trimmed.slice(start, end + 1));
-    if (parsed !== undefined) return parsed;
+    if (parsed !== undefined) {
+      return { value: parsed, recovery: 'embedded-json', protocolDrift: true };
+    }
   }
-  return undefined;
+  return { value: undefined, recovery: 'none', protocolDrift: trimmed.length > 0 };
 }
 
 export function pngDimensions(bytes: Buffer) {

@@ -1,9 +1,12 @@
+import { lstatSync, realpathSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  type ComputerUseLongRepairDiagnostics,
   type ComputerUseLongScenarioRunResult,
+  type ComputerUseLongRunValidation,
   type PreparedComputerUseLongRun,
   preflightComputerUseLong,
   prepareComputerUseLongRun,
@@ -12,6 +15,10 @@ import {
   validateComputerUseLongRun,
 } from './computer-use-long-task-pool/internal.js';
 import {
+  missingEvidenceRefsFromIssues,
+  repairActionsForIssues,
+} from './computer-use-long-task-pool/support.js';
+import {
   getCuNextTaskMapping,
   isCuNextTaskId,
   loadValidatedCuNextTaskMap,
@@ -19,10 +26,17 @@ import {
   type CuNextTaskMapping,
   type CuNextTaskId,
 } from './computer-use-next/task-map.js';
+import { validateCuNextLiveAcceptanceTaskEvidence } from './computer-use-next/live-acceptance-validator.js';
+import {
+  approvalChainSidecarRefsFromEvidence,
+  validateCuNextApprovalChainSidecars,
+  validateCuNextNeedsConfirmationSidecars,
+} from './computer-use-next/approval-chain.js';
 import {
   buildCuNextReadinessManifest,
   writeCuNextReadinessManifest,
 } from './cu-next-readiness-manifest.js';
+import { cuNextCompletionGradeEvidenceIssues } from './computer-use-next/completion-grade.js';
 import { runCuL3IndependentInputAcceptanceHarness } from './cu-l3-independent-input-acceptance-harness.js';
 
 type CuNextCommand =
@@ -49,6 +63,9 @@ interface CuNextRunCliArgs {
   maxSteps?: number;
   rounds?: number;
   actionsJson?: string;
+  promptSuffix?: string;
+  approvalRef?: string;
+  approvalSourceDir?: string;
   manifestPath?: string;
   targetAppName?: string;
   targetTitle?: string;
@@ -59,9 +76,10 @@ interface CuNextRunCliArgs {
   userAcceptanceManifestPaths?: string[];
   kvGroundSmokePaths?: string[];
   taskMapPath?: string;
+  json?: boolean;
 }
 
-interface CuNextAcceptanceProjection {
+export interface CuNextAcceptanceProjection {
   status: 'projected' | 'skipped' | 'failed';
   reason?: string;
   manifestStatus?: string;
@@ -115,13 +133,38 @@ export async function runCuNextCli(argv = process.argv): Promise<void> {
     }
     const acceptanceValidation = await validateProjectedCuNextAcceptance({
       taskId,
+      mapping,
       manifestPath: args.manifestPath,
-      longRunPassed: validation.ok,
+      longRunValidation: validation,
     });
     issues.push(...acceptanceValidation.issues);
     const ok = validation.ok && issues.length === 0;
+    const repairDiagnostics = mergeCuNextRepairDiagnostics({
+      base: validation.repairDiagnostics,
+      issues,
+      extraMissingRefs: acceptanceValidation.missingRefs,
+    });
+    if (args.json) {
+      process.stdout.write(`${JSON.stringify({
+        schemaVersion: 'sciforge.computer-use.cu-next-validate-run-result.v1',
+        ok,
+        status: ok ? 'ok' : 'repair-needed',
+        taskId,
+        scenarioId: validation.scenarioId,
+        manifestPath: validation.manifestPath,
+        summaryPath: validation.summaryPath,
+        issues,
+        metrics: validation.metrics,
+        repairDiagnostics,
+      }, null, 2)}\n`);
+      return;
+    }
     process.stdout.write(`[${ok ? 'ok' : 'repair-needed'}] validate-run ${taskId} -> ${validation.scenarioId}\n`);
     for (const issue of issues) process.stdout.write(`  - ${issue}\n`);
+    if (!ok && repairDiagnostics.nextRepairFocus.length) {
+      process.stdout.write('  next repair focus:\n');
+      for (const action of repairDiagnostics.nextRepairFocus) process.stdout.write(`    - ${action}\n`);
+    }
     return;
   }
 
@@ -152,7 +195,7 @@ export async function runCuNextCli(argv = process.argv): Promise<void> {
       backend: args.backend,
       operator: args.operator,
     });
-      await bindPreparedRunToCuNextTask(prepared.manifestPath, mapping);
+    await bindPreparedRunToCuNextTask(prepared.manifestPath, mapping);
     process.stdout.write(`[ok] prepared ${taskId} via ${prepared.scenario.id}\n`);
     process.stdout.write(`  manifest: ${prepared.manifestPath}\n`);
     process.stdout.write(`  checklist: ${prepared.checklistPath}\n`);
@@ -170,14 +213,17 @@ export async function runCuNextCli(argv = process.argv): Promise<void> {
       backend: args.backend,
       operator: args.operator,
     });
-      await bindPreparedRunToCuNextTask(prepared.manifestPath, mapping);
+    await bindPreparedRunToCuNextTask(prepared.manifestPath, mapping);
     const result = await runComputerUseLongScenario({
       manifestPath: prepared.manifestPath,
       rounds: args.rounds,
       dryRun: args.dryRun,
       maxSteps: args.maxSteps ?? mapping.recommendedMaxSteps,
       actionsJson: args.actionsJson,
-      targetAppName: args.targetAppName ?? mapping.recommendedTargetApp,
+	      promptSuffix: args.promptSuffix,
+	      approvalRef: args.approvalRef,
+	      approvalSourceDir: args.approvalSourceDir,
+	      targetAppName: args.targetAppName ?? mapping.recommendedTargetApp,
       targetTitle: args.targetTitle,
       targetMode: args.targetMode ?? mapping.recommendedTargetMode,
     });
@@ -278,6 +324,7 @@ export async function projectCuNextAcceptanceForScenarioRun(options: {
     const projection = await runCuL3IndependentInputAcceptanceHarness({
       tracePath,
       taskId: options.taskId,
+      scenarioId: manifest.scenarioId,
       outDir: dirname(tracePath),
     });
     return {
@@ -295,10 +342,10 @@ export async function projectCuNextAcceptanceForScenarioRun(options: {
 
 async function validateProjectedCuNextAcceptance(options: {
   taskId: CuNextTaskId;
+  mapping: CuNextTaskMapping;
   manifestPath: string;
-  longRunPassed: boolean;
-}): Promise<{ issues: string[] }> {
-  if (!options.longRunPassed) return { issues: [] };
+  longRunValidation: ComputerUseLongRunValidation;
+}): Promise<{ issues: string[]; missingRefs: string[] }> {
   const longManifestPath = resolve(options.manifestPath);
   const longManifest = JSON.parse(await readFile(longManifestPath, 'utf8')) as PreparedComputerUseLongRun;
   const traceRef = [...longManifest.rounds].reverse().find((round) => (
@@ -310,6 +357,9 @@ async function validateProjectedCuNextAcceptance(options: {
   try {
     const manifest = JSON.parse(await readFile(acceptancePath, 'utf8')) as Record<string, unknown>;
     const issues: string[] = [];
+    if (options.mapping.requirements.includes('l3-workflow-refs') && options.longRunValidation.metrics.realTraceCount === 0) {
+      issues.push('completion-grade: CU-NEXT L3 validate-run requires at least one non-dry-run Computer Use vision trace; dry-run/fixture traces are diagnostic-only.');
+    }
     if (manifest.schemaVersion !== 'sciforge.computer-use.user-acceptance-manifest.v1') {
       issues.push(`${acceptancePath} is not a CU user acceptance manifest.`);
     }
@@ -317,25 +367,230 @@ async function validateProjectedCuNextAcceptance(options: {
       issues.push(`${acceptancePath} taskId must be ${options.taskId}, got ${String(manifest.taskId ?? 'missing')}.`);
     }
     if (manifest.level !== 'L3') issues.push(`${acceptancePath} level must be L3.`);
-    if (manifest.status !== 'multi-app-workflow-passed') {
-      issues.push(`${acceptancePath} status must be multi-app-workflow-passed for CU-NEXT readiness.`);
+    const requiredStatus = expectedCuNextAcceptanceManifestStatus(options.taskId);
+    if (manifest.status !== requiredStatus) {
+      issues.push(`${acceptancePath} status must be ${requiredStatus} for CU-NEXT readiness.`);
     }
-    return { issues };
+    const refRecords = await readApprovalChainRefRecords(acceptancePath, manifest);
+    const liveAcceptance = validateCuNextLiveAcceptanceTaskEvidence({
+      taskId: options.taskId,
+      evidence: manifest,
+      taskMappings: [options.mapping],
+      refRecords,
+    });
+    if (!liveAcceptance.ok) {
+      for (const issue of liveAcceptance.issues) {
+        issues.push(`${acceptancePath} live acceptance ${issue.id}${issue.path ? ` at ${issue.path}` : ''}: ${issue.reason}`);
+      }
+    }
+    if (options.taskId === 'CU-NEXT-03' || options.taskId === 'CU-NEXT-06') {
+      const approvalChainIssues = await readAndValidateApprovalChainSidecars(acceptancePath, manifest);
+      for (const issue of approvalChainIssues) {
+        issues.push(`${acceptancePath} approval-chain ${issue.id}${issue.path ? ` at ${issue.path}` : ''}: ${issue.reason}`);
+      }
+    }
+    const completionEvidenceData = await readLiveAcceptanceLocalJsonRef(acceptancePath, stringValue(manifest.completionEvidenceRef));
+    const completionGradeIssues = cuNextCompletionGradeEvidenceIssues(
+      manifest,
+      options.mapping,
+      completionEvidenceData,
+      {
+        refScopeDescription: 'the current acceptance evidence bundle',
+        refExists: (ref) => liveAcceptanceRegularRefExists(acceptancePath, ref),
+      },
+    );
+    for (const issue of completionGradeIssues) {
+      issues.push(`${acceptancePath} completion-grade: ${issue}`);
+    }
+    const missingRefs = await missingLiveAcceptanceFileRefs(acceptancePath, manifest);
+    for (const ref of missingRefs) {
+      issues.push(`${acceptancePath} live acceptance missing-ref: required evidence ref ${ref} was not found next to the acceptance manifest.`);
+    }
+    return { issues, missingRefs };
   } catch {
+    if (!options.longRunValidation.ok) return { issues: [], missingRefs: [] };
     return {
       issues: [`cu-user-acceptance-manifest.json is missing for passed ${options.taskId} run; run computer-use-next:run-scenario to project L3 evidence.`],
+      missingRefs: ['cu-user-acceptance-manifest.json'],
     };
   }
 }
 
-async function writeCuNextDiagnosticSummaryIfNeeded(options: {
+async function missingLiveAcceptanceFileRefs(acceptancePath: string, manifest: Record<string, unknown>) {
+  const refs = collectLiveAcceptanceFileRefs(manifest);
+  const missing: string[] = [];
+  for (const ref of refs) {
+    if (!liveAcceptanceRegularRefExists(acceptancePath, ref)) {
+      missing.push(ref);
+    }
+  }
+  return missing;
+}
+
+function liveAcceptanceRegularRefExists(acceptancePath: string, ref: string) {
+  return liveAcceptanceRegularRefPath(acceptancePath, ref) !== undefined;
+}
+
+function liveAcceptanceRegularRefPath(acceptancePath: string, ref: string) {
+  if (!isLocalFileEvidenceRef(ref)) return undefined;
+  const baseDir = dirname(resolve(acceptancePath));
+  const target = resolve(baseDir, ref);
+  try {
+    const info = lstatSync(target);
+    if (!info.isFile() || info.isSymbolicLink()) return undefined;
+    const baseReal = realpathSync(baseDir);
+    const targetReal = realpathSync(target);
+    if (!isPathInsideOrSame(baseReal, targetReal)) return undefined;
+    return target;
+  } catch {
+    return undefined;
+  }
+}
+
+function collectLiveAcceptanceFileRefs(manifest: Record<string, unknown>) {
+  const appWorkflow = recordValue(manifest.appWorkflow);
+  const screenshotRefs = recordValue(manifest.screenshotRefs);
+  const executorLease = recordValue(manifest.executorLease);
+  const verifierVerdict = recordValue(manifest.verifierVerdict);
+  const guiPresent = recordValue(manifest.guiPresent);
+  const refs = [
+    ...stringArray(appWorkflow.windowSwitchTraceRefs),
+    ...stringArray(screenshotRefs.before),
+    ...stringArray(screenshotRefs.after),
+    ...stringArray(manifest.focusCropRefs),
+    ...stringArray(manifest.groundingDiagnosticsRefs),
+    stringValue(executorLease.ref),
+    stringValue(manifest.finalArtifactRef),
+    stringValue(manifest.finalVisibleScreenshotRef),
+    stringValue(verifierVerdict.ref),
+    stringValue(guiPresent.recordRef),
+    stringValue(guiPresent.payloadRef),
+    stringValue(manifest.completionEvidenceRef),
+    ...stringArray(guiPresent.displayedRefs),
+    ...records(manifest.tuiHostChain).flatMap((link) => [
+      stringValue(link.requestRef),
+      stringValue(link.hostPortsRef),
+      stringValue(link.toolPayloadRef),
+      stringValue(link.recordRef),
+    ]),
+    ...records(manifest.evidenceClaims).flatMap((claim) => [
+      stringValue(claim.ref),
+      ...stringArray(claim.refs),
+      ...stringArray(claim.recordRefs),
+      ...stringArray(claim.evidenceRefs),
+      ...stringArray(claim.artifactRefs),
+    ]),
+    ...records(manifest.evidenceMarkers).flatMap(markerFileRefs),
+  ];
+  return [...new Set(refs.filter((ref): ref is string => Boolean(ref)))];
+}
+
+async function readAndValidateApprovalChainSidecars(
+  acceptancePath: string,
+  manifest: Record<string, unknown>,
+) {
+  const refs = approvalChainSidecarRefsFromEvidence(manifest);
+  const sidecars = {
+    approvalRequest: await readLiveAcceptanceLocalJsonRef(acceptancePath, refs.approvalRequestRef),
+    guiAskUser: await readLiveAcceptanceLocalJsonRef(acceptancePath, refs.guiAskUserRecordRef),
+    confirmedRequest: await readLiveAcceptanceLocalJsonRef(acceptancePath, refs.confirmedRequestRef),
+    riskAudit: await readLiveAcceptanceLocalJsonRef(acceptancePath, refs.riskAuditRef),
+    sourceApprovalRequest: await readLiveAcceptanceLocalJsonRef(acceptancePath, refs.sourceApprovalRequestRef),
+    sourceGuiAskUser: await readLiveAcceptanceLocalJsonRef(acceptancePath, refs.sourceGuiAskUserRecordRef),
+    sourceRiskAudit: await readLiveAcceptanceLocalJsonRef(acceptancePath, refs.sourceRiskAuditRef),
+    approvalDecision: await readLiveAcceptanceLocalJsonRef(acceptancePath, refs.approvalDecisionRef),
+  };
+  return manifest.taskId === 'CU-NEXT-03'
+    ? validateCuNextNeedsConfirmationSidecars({ sidecars, refs })
+    : validateCuNextApprovalChainSidecars({ sidecars, refs });
+}
+
+async function readApprovalChainRefRecords(
+  acceptancePath: string,
+  manifest: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const refs = approvalChainSidecarRefsFromEvidence(manifest);
+  const markerRefs = records(manifest.evidenceMarkers).flatMap(markerFileRefs);
+  const recordsByRef: Record<string, unknown> = {};
+  await Promise.all(uniqueStrings([
+    ...Object.values(refs).filter((ref): ref is string => Boolean(ref)),
+    ...markerRefs,
+  ]).map(async (ref) => {
+    const record = await readLiveAcceptanceLocalJsonRef(acceptancePath, ref);
+    if (record !== undefined) recordsByRef[ref] = record;
+  }));
+  return recordsByRef;
+}
+
+async function readLiveAcceptanceLocalJsonRef(acceptancePath: string, ref: string | undefined) {
+  if (!ref) return undefined;
+  const target = liveAcceptanceRegularRefPath(acceptancePath, ref);
+  if (!target) return undefined;
+  try {
+    return JSON.parse(await readFile(target, 'utf8')) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function markerFileRefs(marker: Record<string, unknown>) {
+  const refs: string[] = [];
+  for (const [key, value] of Object.entries(marker)) {
+    if (!/ref/i.test(key)) continue;
+    refs.push(...stringArrayOrSingle(value).filter((ref) => !ref.trim().startsWith('approval:')));
+  }
+  return refs;
+}
+
+function stringArrayOrSingle(value: unknown) {
+  const single = stringValue(value);
+  if (single) return [single];
+  return stringArray(value);
+}
+
+function isLocalFileEvidenceRef(ref: string) {
+  const trimmed = ref.trim();
+  if (!trimmed) return false;
+  if (isAbsolute(trimmed) || trimmed.startsWith('~')) return false;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return false;
+  const parts = trimmed.replace(/\\/g, '/').replace(/^\.\//, '').split('/');
+  return parts.every((part) => part && part !== '.' && part !== '..');
+}
+
+function isPathInsideOrSame(parent: string, child: string): boolean {
+  const rel = relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : [];
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function records(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+    : [];
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.filter((value) => value.trim().length > 0))];
+}
+
+export async function writeCuNextDiagnosticSummaryIfNeeded(options: {
   taskId: CuNextTaskId;
   result: ComputerUseLongScenarioRunResult;
   dryRun: boolean;
   acceptance: CuNextAcceptanceProjection;
 }): Promise<string | undefined> {
-  const acceptancePassed = options.acceptance.status === 'projected'
-    && options.acceptance.manifestStatus === 'multi-app-workflow-passed';
+  const acceptancePassed = isSuccessfulCuNextAcceptanceProjection(options.taskId, options.acceptance);
   if (!options.dryRun && options.result.status === 'passed' && acceptancePassed) return undefined;
 
   const diagnosticPath = join(dirname(options.result.manifestPath), 'cu-next-diagnostic-summary.json');
@@ -347,6 +602,22 @@ async function writeCuNextDiagnosticSummaryIfNeeded(options: {
     !acceptancePassed ? `acceptance projection is ${options.acceptance.status}${options.acceptance.manifestStatus ? `/${options.acceptance.manifestStatus}` : ''}` : undefined,
     options.acceptance.reason,
   ].filter((reason): reason is string => Boolean(reason));
+  const acceptanceRepair = await readAcceptanceProjectionRepairDiagnostics(options.acceptance);
+  const repairDiagnostics = mergeCuNextRepairDiagnostics({
+    base: options.result.validation?.repairDiagnostics,
+    issues: [
+      ...reasons,
+      ...(options.result.validation?.issues ?? []),
+      ...acceptanceRepair.issues,
+    ],
+    extraMissingRefs: [
+      ...missingRefsFromAcceptanceProjection(options.acceptance),
+      ...acceptanceRepair.missingRefs,
+    ],
+    failingRoundDiagnosticsRefs: options.result.roundResults
+      .filter((round) => round.status !== 'passed')
+      .map((round) => round.failureDiagnosticsPath),
+  });
   const summary = {
     schemaVersion: 'sciforge.computer-use.cu-next-diagnostic-summary.v1',
     createdAt: new Date().toISOString(),
@@ -364,10 +635,105 @@ async function writeCuNextDiagnosticSummaryIfNeeded(options: {
     passedRounds: options.result.passedRounds,
     repairNeededRound: options.result.repairNeededRound,
     acceptanceProjection: options.acceptance,
+    acceptanceDiagnostics: acceptanceRepair,
+    repairDiagnostics,
     diagnosis: reasons,
   };
   await writeFile(diagnosticPath, `${JSON.stringify(summary, null, 2)}\n`, 'utf8');
   return diagnosticPath;
+}
+
+function mergeCuNextRepairDiagnostics(options: {
+  base?: ComputerUseLongRepairDiagnostics;
+  issues: string[];
+  extraMissingRefs?: string[];
+  failingRoundDiagnosticsRefs?: string[];
+}): ComputerUseLongRepairDiagnostics {
+  const base = options.base;
+  const actionShortfalls = [...(base?.actionShortfalls ?? [])];
+  const repairIssues = [
+    ...options.issues,
+    ...(base?.failureReasons ?? []),
+  ].filter(Boolean);
+  const missingRefs = dedupeStrings([
+    ...(base?.missingRefs ?? []),
+    ...(options.extraMissingRefs ?? []),
+    ...missingEvidenceRefsFromIssues(options.issues),
+  ]);
+  const nextRepairFocus = repairIssues.length ? repairActionsForIssues(repairIssues) : [];
+  const repairDiagnostics: ComputerUseLongRepairDiagnostics = {
+    actionShortfalls,
+    missingRefs,
+    failingRoundDiagnosticsRefs: dedupeStrings([
+      ...(base?.failingRoundDiagnosticsRefs ?? []),
+      ...(options.failingRoundDiagnosticsRefs ?? []),
+    ]),
+    failureReasons: dedupeStrings(base?.failureReasons ?? []),
+    traceMetricsByRound: base?.traceMetricsByRound ?? [],
+    nextRepairFocus,
+  };
+  if (base?.actionShortfall) repairDiagnostics.actionShortfall = base.actionShortfall;
+  if (!repairDiagnostics.actionShortfall && actionShortfalls[0]) repairDiagnostics.actionShortfall = actionShortfalls[0];
+  return repairDiagnostics;
+}
+
+async function readAcceptanceProjectionRepairDiagnostics(
+  acceptance: CuNextAcceptanceProjection,
+): Promise<{ issues: string[]; missingRefs: string[] }> {
+  const manifestPath = acceptance.paths?.manifest;
+  if (!manifestPath) return { issues: [], missingRefs: [] };
+  try {
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
+    const issues: string[] = [];
+    const missingRefs = await missingLiveAcceptanceFileRefs(manifestPath, manifest);
+    if (manifest.status && manifest.status !== 'multi-app-workflow-passed' && manifest.status !== 'needs-confirmation') {
+      issues.push(`acceptance manifest status is ${String(manifest.status)}`);
+    }
+    if (!stringValue(manifest.finalArtifactRef)) {
+      issues.push('acceptance finalArtifactRef is missing');
+      missingRefs.push('finalArtifactRef');
+    }
+    const verifierVerdict = recordValue(manifest.verifierVerdict);
+    if (verifierVerdict.status && verifierVerdict.status !== 'passed') {
+      issues.push(`acceptance verifierVerdict is ${String(verifierVerdict.status)}`);
+    }
+    for (const reason of stringArray(verifierVerdict.reasons)) issues.push(`acceptance verifier: ${reason}`);
+    for (const issue of stringArray(verifierVerdict.blockers)) issues.push(`acceptance verifier: ${issue}`);
+    return {
+      issues: dedupeStrings(issues),
+      missingRefs: dedupeStrings(missingRefs),
+    };
+  } catch {
+    return {
+      issues: [`acceptance manifest is missing or invalid at ${manifestPath}`],
+      missingRefs: [manifestPath],
+    };
+  }
+}
+
+function missingRefsFromAcceptanceProjection(acceptance: CuNextAcceptanceProjection) {
+  return missingEvidenceRefsFromIssues([
+    acceptance.reason ?? '',
+    acceptance.manifestStatus ? `acceptance projection manifestStatus ${acceptance.manifestStatus}` : '',
+  ]);
+}
+
+function dedupeStrings(values: string[]) {
+  return Array.from(new Set(values.filter((value) => value.trim())));
+}
+
+export function expectedCuNextAcceptanceManifestStatus(taskId: CuNextTaskId): CuNextProjectedAcceptanceManifestStatus {
+  return taskId === 'CU-NEXT-03' ? 'needs-confirmation' : 'multi-app-workflow-passed';
+}
+
+type CuNextProjectedAcceptanceManifestStatus = 'multi-app-workflow-passed' | 'needs-confirmation';
+
+export function isSuccessfulCuNextAcceptanceProjection(
+  taskId: CuNextTaskId,
+  acceptance: Pick<CuNextAcceptanceProjection, 'status' | 'manifestStatus'>,
+): boolean {
+  return acceptance.status === 'projected'
+    && acceptance.manifestStatus === expectedCuNextAcceptanceManifestStatus(taskId);
 }
 
 async function readManifestTaskId(manifestPath: string) {
@@ -392,6 +758,8 @@ export function parseCuNextRunArgs(args: string[]): CuNextRunCliArgs {
       if (!isCuNextTaskId(value)) throw new Error(`Unknown CU-NEXT task: ${value}`);
       parsed.taskId = value;
       index += 1;
+    } else if (arg === '--json') {
+      parsed.json = true;
     } else if (arg === '--all-scenarios') {
       parsed.allScenarios = true;
     } else if (arg === '--out-root') {
@@ -427,6 +795,15 @@ export function parseCuNextRunArgs(args: string[]): CuNextRunCliArgs {
       index += 1;
     } else if (arg === '--actions-json') {
       parsed.actionsJson = readArg(args, index, arg);
+      index += 1;
+    } else if (arg === '--prompt-suffix') {
+      parsed.promptSuffix = readArg(args, index, arg);
+      index += 1;
+    } else if (arg === '--approval-ref') {
+      parsed.approvalRef = normalizeApprovalRef(readArg(args, index, arg));
+      index += 1;
+    } else if (arg === '--approval-source-dir') {
+      parsed.approvalSourceDir = readArg(args, index, arg);
       index += 1;
     } else if (arg === '--manifest') {
       parsed.manifestPath = readArg(args, index, arg);
@@ -605,6 +982,14 @@ function readArg(args: string[], index: number, flag: string): string {
 function normalizeTargetMode(value: string): CuNextRunCliArgs['targetMode'] {
   if (value === 'active-window' || value === 'app-window' || value === 'window-id' || value === 'display') return value;
   throw new Error(`Invalid --target-mode ${value}`);
+}
+
+function normalizeApprovalRef(value: string): string {
+  const trimmed = value.trim();
+  if (!/^approval:[A-Za-z0-9._:@/-]+$/.test(trimmed)) {
+    throw new Error('--approval-ref must be a non-empty approval: token');
+  }
+  return trimmed;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

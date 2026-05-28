@@ -294,9 +294,16 @@ export function isWindowLocalCoordinateSpace(value: string | undefined) {
 }
 
 export function defaultMacBundleIdForAppName(appName: string | undefined) {
-  const normalized = appName?.trim().toLowerCase();
+  const normalized = appName?.trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
   if (!normalized) return undefined;
   if (normalized === 'finder' || normalized === '\u8bbf\u8fbe') return 'com.apple.finder';
+  if (normalized === 'browser' || normalized === 'web browser' || normalized === '\u6d4f\u89c8\u5668') return 'com.apple.Safari';
+  if (normalized === 'safari') return 'com.apple.Safari';
+  if (normalized === 'google chrome' || normalized === 'chrome') return 'com.google.Chrome';
+  if (normalized === 'firefox') return 'org.mozilla.firefox';
+  if (normalized === 'microsoft edge' || normalized === 'edge') return 'com.microsoft.edgemac';
+  if (normalized === 'preview' || normalized === '\u9884\u89c8') return 'com.apple.Preview';
+  if (normalized === 'textedit' || normalized === 'text edit' || normalized === '\u6587\u672c\u7f16\u8f91') return 'com.apple.TextEdit';
   return undefined;
 }
 
@@ -328,7 +335,7 @@ async function detectMacWindowTarget(target: WindowTarget): Promise<WindowTarget
   try {
     const result = await runMacWindowTargetProbe(scriptPath);
     if (shouldRetryAfterActivatingTargetApp(result, target)) {
-      const activation = await activateMacTargetApp(target.appName as string);
+      const activation = await activateMacTargetApp(target);
       await sleep(1000);
       const retry = await runMacWindowTargetProbe(scriptPath);
       const resolved = macWindowTargetResolutionFromProbeResult(retry, target, activation);
@@ -337,6 +344,7 @@ async function detectMacWindowTarget(target: WindowTarget): Promise<WindowTarget
     return macWindowTargetResolutionFromProbeResult(result, target);
   } finally {
     await unlink(scriptPath).catch(() => undefined);
+  }
 }
 
 function macWindowTargetResolutionFromProbeResult(
@@ -344,22 +352,18 @@ function macWindowTargetResolutionFromProbeResult(
   target: WindowTarget,
   diagnosticPrefix?: string,
 ): WindowTargetResolution {
-    if (result.exitCode !== 0) {
-      const reason = `macOS target-window probe failed: ${result.stderr || result.stdout || `exit ${result.exitCode}`}`;
-      return { ok: false, target, reason, diagnostics: [diagnosticPrefix, reason].filter(Boolean) as string[] };
-    }
-    const parsed = parseJson(result.stdout.trim());
-    if (!isRecordLike(parsed)) {
-      const reason = 'macOS target-window probe did not return JSON metadata.';
-      return { ok: false, target, reason, diagnostics: [diagnosticPrefix, reason, result.stdout.trim()].filter(Boolean) as string[] };
-    }
+  const stdout = result.stdout.trim();
+  const stderr = result.stderr.trim();
+  const parsed = parseJson(stdout);
+  const probeDiagnostic = compactProbeDiagnostic(stderr);
+  if (isRecordLike(parsed)) {
     const windowId = numberConfig(parsed.windowId);
     const bounds = parseWindowBounds(parsed.bounds);
     const contentRect = parseWindowBounds(parsed.contentRect);
     const diagnostic = stringConfig(parsed.diagnostic);
     if (windowId === undefined) {
       const reason = String(parsed.reason || 'macOS target-window probe did not find a matching on-screen window.');
-      return { ok: false, target, reason, diagnostics: [diagnosticPrefix, reason].filter(Boolean) as string[] };
+      return { ok: false, target, reason, diagnostics: [diagnosticPrefix, reason, diagnostic, probeDiagnostic].filter(Boolean) as string[] };
     }
     return {
       ok: true,
@@ -382,29 +386,39 @@ function macWindowTargetResolutionFromProbeResult(
       schedulerLockId: schedulerLockIdForTarget(target, windowId),
       source: target.mode === 'active-window' ? 'active-window' : 'config',
       captureTimestamp: new Date().toISOString(),
-      diagnostics: diagnosticPrefix
-        ? [diagnosticPrefix, 'resolved macOS target window through CGWindowList', diagnostic].filter(Boolean) as string[]
-        : diagnostic
-        ? ['resolved macOS target window through CGWindowList', diagnostic]
-        : ['resolved macOS target window through CGWindowList'],
+      diagnostics: [diagnosticPrefix, 'resolved macOS target window through CGWindowList', diagnostic, probeDiagnostic].filter(Boolean) as string[],
     };
   }
+  if (result.exitCode !== 0) {
+    const reason = `macOS target-window probe failed: ${compactProbeDiagnostic(stderr || stdout || `exit ${result.exitCode}`)}`;
+    return { ok: false, target, reason, diagnostics: [diagnosticPrefix, reason].filter(Boolean) as string[] };
+  }
+  const reason = 'macOS target-window probe did not return JSON metadata.';
+  return { ok: false, target, reason, diagnostics: [diagnosticPrefix, reason, stdout].filter(Boolean) as string[] };
 }
 
 function shouldRetryAfterActivatingTargetApp(
   result: { exitCode: number; stdout: string; stderr: string },
   target: WindowTarget,
 ) {
-  if (result.exitCode === 0 || target.mode !== 'app-window' || !target.appName) return false;
+  if (result.exitCode === 0 || target.mode !== 'app-window' || (!target.appName && !target.bundleId)) return false;
   const text = `${result.stdout}\n${result.stderr}`;
   return /no matching target window|did not find a matching/i.test(text);
 }
 
-async function activateMacTargetApp(appName: string) {
-  const result = await runCommand('open', ['-a', appName], { timeoutMs: 15000 });
-  return result.exitCode === 0
-    ? `activated target app "${appName}" before retrying WindowTarget probe`
-    : `failed to activate target app "${appName}" before WindowTarget retry: ${result.stderr || result.stdout || `exit ${result.exitCode}`}`;
+async function activateMacTargetApp(target: WindowTarget) {
+  const attempts: Array<{ label: string; args: string[] }> = [];
+  if (target.bundleId) attempts.push({ label: `bundle "${target.bundleId}"`, args: ['-b', target.bundleId] });
+  if (target.appName) attempts.push({ label: `app "${target.appName}"`, args: ['-a', target.appName] });
+  const diagnostics: string[] = [];
+  for (const attempt of attempts) {
+    const result = await runCommand('open', attempt.args, { timeoutMs: 15000 });
+    if (result.exitCode === 0) {
+      return `activated target ${attempt.label} before retrying WindowTarget probe`;
+    }
+    diagnostics.push(`${attempt.label}: ${compactProbeDiagnostic(result.stderr || result.stdout || `exit ${result.exitCode}`)}`);
+  }
+  return `failed to activate target before WindowTarget retry: ${diagnostics.join('; ') || 'no app identity configured'}`;
 }
 
 async function runMacWindowTargetProbe(scriptPath: string) {
@@ -420,25 +434,23 @@ async function runMacWindowTargetProbe(scriptPath: string) {
         exitCode: compiled.exitCode,
         stdout: [interpreted.stdout, compiled.stdout].filter(Boolean).join('\n'),
         stderr: [
-          `Swift interpreter failed: ${interpreted.stderr || interpreted.stdout || `exit ${interpreted.exitCode}`}`,
-          `swiftc AppKit fallback failed: ${compiled.stderr || compiled.stdout || `exit ${compiled.exitCode}`}`,
+          `Swift interpreter failed: ${compactProbeDiagnostic(interpreted.stderr || interpreted.stdout || `exit ${interpreted.exitCode}`)}`,
+          `swiftc AppKit fallback failed: ${compactProbeDiagnostic(compiled.stderr || compiled.stdout || `exit ${compiled.exitCode}`)}`,
         ].join('\n'),
       };
     }
     const executed = await runCommand(binaryPath, [], { timeoutMs: 15000 });
-    return executed.exitCode === 0
-      ? executed
-      : {
-          exitCode: executed.exitCode,
-          stdout: [interpreted.stdout, compiled.stdout, executed.stdout].filter(Boolean).join('\n'),
-          stderr: [
-            `Swift interpreter failed: ${interpreted.stderr || interpreted.stdout || `exit ${interpreted.exitCode}`}`,
-            `compiled AppKit probe failed: ${executed.stderr || executed.stdout || `exit ${executed.exitCode}`}`,
-          ].join('\n'),
-        };
+    return {
+      ...executed,
+      stderr: [executed.stderr, 'Swift interpreter JIT failed; used swiftc AppKit fallback.'].filter(Boolean).join('\n'),
+    };
   } finally {
     await unlink(binaryPath).catch(() => undefined);
   }
+}
+
+function compactProbeDiagnostic(value: string) {
+  return value.replace(/\s+/g, ' ').trim().slice(0, 500);
 }
 
 function macWindowTargetProbeScript(target: WindowTarget) {
@@ -491,6 +503,7 @@ for window in windows {
   let alpha = window[kCGWindowAlpha as String] as? Double ?? 1
   let isOnscreen = (window[kCGWindowIsOnscreen as String] as? Bool) ?? true
   let focused = processId != nil && frontmostPid == processId
+  if targetMode == "active-window" && !focused { continue }
   var payload: [String: Any] = [
     "windowId": Int(windowId),
     "processId": Int(processId ?? 0),

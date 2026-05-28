@@ -50,6 +50,27 @@ test('artifact mutation fast path rewrites selected mini-grant markdown without 
   assert.doesNotMatch(updated, /120,000|12 months|0\.5 FTE|0\.25 FTE/);
 });
 
+test('artifact mutation fast path yields to Computer Use provider requests', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-artifact-mutation-'));
+  await writeFile(join(workspace, 'report.md'), '# Old Report\n', 'utf8');
+
+  const request: GatewayRequest = {
+    skillDomain: 'knowledge',
+    workspacePath: workspace,
+    artifacts: [],
+    selectedActionIds: ['action.sciforge.computer-use'],
+    uiState: { selectedActionIds: ['action.sciforge.computer-use'] },
+    prompt: [
+      '/computer-use run operate the target window with generic mouse/keyboard.',
+      'Focus a visible editable body and write report.md through GUI evidence.',
+    ].join('\n'),
+  };
+
+  const payload = await tryRunArtifactMutationFastPath(request);
+  assert.equal(payload, undefined);
+  assert.equal(await readFile(join(workspace, 'report.md'), 'utf8'), '# Old Report\n');
+});
+
 test('artifact mutation fast path applies generic constraint rewrites to arbitrary markdown artifacts', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-generic-artifact-mutation-'));
   const packageDir = join(workspace, 'audit-package');

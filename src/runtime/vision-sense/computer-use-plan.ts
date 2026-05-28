@@ -19,8 +19,9 @@ import type {
   ScreenshotRef,
   TraceWindowTarget,
 } from '../computer-use/types.js';
-import { extractJsonObject, platformLabel, sanitizeId } from '../computer-use/utils.js';
+import { extractJsonObjectWithRecovery, platformLabel, sanitizeId } from '../computer-use/utils.js';
 import { visionSensePlannerPromptPolicy } from '../../../packages/observe/vision/computer-use-runtime-policy.js';
+import { computerUseVisibleArtifactGapReason } from '../../../packages/actions/computer-use/runtime-policy.js';
 import {
   actionLedgerCompletionPolicy,
   type ActionLedgerCompletionPolicy,
@@ -379,8 +380,12 @@ export async function actionLedgerCompletion(task: string, steps: LoopStep[]): P
 }
 
 function plannerRunHistory(steps: LoopStep[]) {
-  const executed = steps
-    .filter((step) => step.kind === 'gui-execution')
+  const allExecuted = steps.filter((step) => step.kind === 'gui-execution');
+  const allNonWaitExecuted = allExecuted.filter((step) => {
+    const action: Record<string, unknown> = isRecord(step.plannedAction) ? step.plannedAction : {};
+    return action.type !== 'wait';
+  });
+  const executed = allExecuted
     .slice(-4)
     .map((step, index) => {
       const action: Record<string, unknown> = isRecord(step.plannedAction) ? step.plannedAction : {};
@@ -409,11 +414,13 @@ function plannerRunHistory(steps: LoopStep[]) {
     });
   if (!executed.length) {
     return [
+      'Current run action counts: executed=0 nonWait=0 recentWindow=0.',
       'No GUI actions have executed yet in this run.',
       'Use the compact observation and visible text to choose the first generic action, report done=true, or return a structured failure.',
     ].join('\n');
   }
   return [
+    `Current run action counts: executed=${allExecuted.length} nonWait=${allNonWaitExecuted.length} recentWindow=${executed.length}.`,
     'Already executed generic GUI actions in this run:',
     ...executed,
     'Do not repeat the same action sequence unless verifier feedback shows a different route is required.',
@@ -652,15 +659,20 @@ function textPlannerActionResultFromResponse(
   params: {
     task: string;
     observation: Record<string, unknown>;
+    plannerAcceptanceContract?: Record<string, unknown>;
+    steps?: LoopStep[];
     config: VisionSenseConfig;
   },
 ): PlannerActionResult {
-  const json = extractJsonObject(response.text);
+  const jsonRecovery = extractJsonObjectWithRecovery(response.text);
+  const json = jsonRecovery.value;
+  const protocolDrift = plannerProtocolDriftDiagnostics(response, jsonRecovery);
   const rawResponse = {
     schemaVersion: TEXT_PLANNER_RAW_SCHEMA,
     planner: response.raw,
     text: response.text,
     parsed: json,
+    protocolDrift,
   };
   if (!isRecord(json)) {
     return {
@@ -699,6 +711,42 @@ function textPlannerActionResultFromResponse(
         rawResponse,
         retryableContractViolation: true,
         contractIssue: 'completion-evidence-missing',
+      };
+    }
+    const currentRoundEvidenceIssue = plannerDoneCurrentRoundActionEvidenceIssue(params.plannerAcceptanceContract, params.steps, params.config);
+    if (currentRoundEvidenceIssue) {
+      return {
+        ok: false,
+        actions: [],
+        done: false,
+        reason: currentRoundEvidenceIssue.reason,
+        rawResponse,
+        retryableContractViolation: currentRoundEvidenceIssue.retryable,
+        contractIssue: 'current-round-action-missing',
+      };
+    }
+    const visibleArtifactIssue = plannerDoneVisibleArtifactIssue(params.task, params.observation, params.steps, params.config);
+    if (visibleArtifactIssue) {
+      return {
+        ok: false,
+        actions: [],
+        done: false,
+        reason: visibleArtifactIssue.reason,
+        rawResponse,
+        retryableContractViolation: visibleArtifactIssue.retryable,
+        contractIssue: 'visible-artifact-missing',
+      };
+    }
+    const doneQuotaIssue = plannerDoneQuotaIssue(params.plannerAcceptanceContract, params.steps, params.config);
+    if (doneQuotaIssue) {
+      return {
+        ok: false,
+        actions: [],
+        done: false,
+        reason: doneQuotaIssue.reason,
+        rawResponse,
+        retryableContractViolation: doneQuotaIssue.retryable,
+        contractIssue: 'quota-unmet',
       };
     }
     return { ok: true, actions: [], done: true, reason, rawResponse };
@@ -799,6 +847,11 @@ export function compactComputerUsePlannerObservation(
     ...toStringList(observation?.visible_texts),
   ]).slice(0, 40).map((value) => compactPlannerHistoryText(value, 240));
   const metadata = recordAt(observation, 'metadata');
+  const artifacts = recordAt(observation, 'artifacts');
+  const visibleArtifactRefs = uniqueStrings([
+    ...toStringList(artifacts?.visibleArtifactRefs),
+    ...toStringList(metadata?.visibleArtifactRefs),
+  ]).filter(isPlannerFinalArtifactRef);
   return {
     schemaVersion: 'sciforge.computer-use.compact-observation.v1',
     source: 'host-port-compact-text-observation',
@@ -812,8 +865,28 @@ export function compactComputerUsePlannerObservation(
       screenshotCount: screenshotRefs.length,
       query: stringAt(metadata, 'query'),
     },
+    visibleArtifactRefs,
+    visibleArtifacts: compactVisibleArtifacts([
+      ...unknownRecordList(artifacts?.visibleArtifacts),
+      ...unknownRecordList(metadata?.visibleArtifacts),
+    ]),
     excludedSources: ['dom', 'accessibility-tree', 'selectors', 'html', 'gui-private-state', 'inline-image-bytes'],
   };
+}
+
+function compactVisibleArtifacts(items: Record<string, unknown>[]) {
+  return items
+    .map((item) => ({
+      artifactRef: stringAt(item, 'artifactRef') ?? stringAt(item, 'path') ?? stringAt(item, 'dataRef'),
+      status: stringAt(item, 'status'),
+      kind: stringAt(item, 'kind'),
+      title: stringAt(item, 'title'),
+    }))
+    .filter((item) => item.artifactRef && isPlannerFinalArtifactRef(item.artifactRef) && isCurrentVisibleArtifactStatus(item.status));
+}
+
+function unknownRecordList(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
 }
 
 function compactScreenshotRef(ref: ScreenshotRef) {
@@ -870,7 +943,12 @@ function plannerRetryInstruction(issue: PlannerContractIssue | undefined, config
     ].join(' ');
   }
   if (issue === 'empty-message-content') {
-    return 'Your previous response did not include exactly one action, done=true, or a structured failure. Return one of the three allowed JSON shapes only.';
+    return [
+      'Your previous response did not include exactly one action, done=true, or a structured failure.',
+      'Return one of the three allowed JSON shapes only.',
+      'Do not put the action plan in reasoning_content, analysis text, markdown, code fences, prose, tool calls, function calls, or nested tool arguments.',
+      'The final response must be a single top-level JSON object that directly contains done, reason, actions, and optional failure.',
+    ].join(' ');
   }
   if (issue === 'unsupported-action') {
     return [
@@ -889,7 +967,7 @@ function plannerRetryInstruction(issue: PlannerContractIssue | undefined, config
     return [
       'Your previous targetDescription mixed the intended target with a nearby non-target control.',
       'Rewrite targetDescription and targetRegionDescription so the target is visually specific and any nearby non-target controls are named only as exclusions.',
-      'For save icons near AutoSave, do not say "near AutoSave" or include AutoSave as a positive target region. Target the small floppy-disk Save icon immediately to the right of the Home/house icon, and set targetRegionDescription to exclude or avoid AutoSave.',
+      'Do not describe a target as "near" a non-target control or include neighboring controls as positive target-region context; describe the intended visible label/icon/shape and exclude adjacent non-target controls.',
     ].join(' ');
   }
   if (issue === 'completion-evidence-missing') {
@@ -897,6 +975,30 @@ function plannerRetryInstruction(issue: PlannerContractIssue | undefined, config
       'Your previous JSON set done=true without compact-observation evidence for the visible completion marker requested by the task.',
       'Return done=true only when the compact observation, visibleTexts, or window title already contains the requested visible marker.',
       'If the page or app may still be loading, return exactly one wait action. If a submitted address bar or dialog still needs confirmation, return exactly one generic action such as press_key Enter.',
+    ].join(' ');
+  }
+  if (issue === 'quota-unmet') {
+    return [
+      'Your previous JSON set done=true before the current round action quota was met.',
+      'The planner acceptance contract acceptanceProgress is a minimum evidence-producing action quota for this current round.',
+      'Return exactly one additional safe low-risk generic visible GUI action, or return the structured failure JSON shape if no safe visible action remains.',
+      'Do not use high-risk or externalizing controls as quota filler.',
+    ].join(' ');
+  }
+  if (issue === 'current-round-action-missing') {
+    return [
+      'Your previous JSON set done=true before this round produced any non-wait GUI execution evidence.',
+      'Even refs-first summary/report rounds need at least one current-round visible generic action so the trace has executor and verifier evidence.',
+      'Return exactly one safe low-risk visible generic action, such as focusing the visible target window, selecting a harmless visible field, pressing Escape to clear transient UI, or typing the visible summary/report text when an editable field is visible.',
+      'Return the structured failure JSON shape only if no safe visible action remains.',
+    ].join(' ');
+  }
+  if (issue === 'visible-artifact-missing') {
+    return [
+      'Your previous JSON set done=true before the task produced a current visible final artifact/report ref.',
+      'For final artifact, evidence summary, action mapping, field/control evidence, report, index, or refs-first report tasks, done=true requires a visible artifact ref in the compact observation.',
+      'Return exactly one safe generic action that creates or displays the report artifact, such as type_text with the visible summary/report content when an editable field is visible, or open_app/click to a safe editor or file manager target.',
+      'Return the structured failure JSON shape only if no safe visible artifact-producing action remains.',
     ].join(' ');
   }
   return 'Your previous JSON violated the planner contract by including coordinates, selectors, or private element identifiers. Rewrite without x/y/fromX/fromY/toX/toY/bbox/bounds/selector/elementId/accessibilityId.';
@@ -980,7 +1082,33 @@ function plannerAmbiguousTargetDescriptionIssue(action: GenericVisionAction): st
   if (/(?:\bexclude\b|\bexcluding\b|\bavoid\b|\bavoiding\b|\bnot\b|\bwithout\b|\brather than\b|\binstead of\b|不是|排除|避开|避免|不要|而不是|非)/i.test(route)) {
     return undefined;
   }
-  return 'Runtime Codex text planner emitted an ambiguous save target that names AutoSave as a nearby positive target. Describe the actual Save icon by stable visual anchors and explicitly exclude AutoSave.';
+  return 'Runtime Codex text planner emitted an ambiguous target that names a nearby non-target control as positive context. Describe the actual target by stable visible anchors and explicitly exclude adjacent non-target controls.';
+}
+
+function plannerProtocolDriftDiagnostics(
+  response: TextPlannerOkRun,
+  recovery: { recovery: string; protocolDrift: boolean },
+) {
+  const rawEvents = response.raw.events ?? [];
+  const toolCallLikeEvents = rawEvents.filter((event) => {
+    const text = [
+      event.rawEventType,
+      event.rawPayloadType,
+      event.rawItemType,
+      event.rawStatus,
+      event.status,
+      event.message,
+      event.text,
+    ].filter(Boolean).join(' ').toLowerCase();
+    return /tool[_-]?call|tool[_-]?use|function[_-]?call|function_call/.test(text);
+  }).length;
+  const textLooksWrapped = recovery.recovery === 'fenced-json' || recovery.recovery === 'embedded-json';
+  return {
+    protocolDrift: recovery.protocolDrift || toolCallLikeEvents > 0,
+    recovery: recovery.recovery,
+    textLooksWrapped,
+    toolCallLikeEvents,
+  };
 }
 
 function plannerDoneEvidenceIssue(task: string, observation: Record<string, unknown>): string | undefined {
@@ -990,6 +1118,120 @@ function plannerDoneEvidenceIssue(task: string, observation: Record<string, unkn
   const missing = markers.filter((marker) => !evidence.includes(marker.toLowerCase()));
   if (!missing.length) return undefined;
   return `Runtime Codex text planner set done=true without compact-observation evidence for required visible marker "${missing[0]}".`;
+}
+
+function plannerDoneCurrentRoundActionEvidenceIssue(
+  plannerAcceptanceContract: Record<string, unknown> | undefined,
+  steps: LoopStep[] | undefined,
+  config: VisionSenseConfig,
+): { reason: string; retryable: boolean } | undefined {
+  if (!plannerAcceptanceContract) return undefined;
+  if (numberAt(plannerAcceptanceContract, 'round') === undefined) return undefined;
+  if (stringAt(plannerAcceptanceContract, 'schemaVersion') !== 'sciforge.computer-use.planner-acceptance-contract.v1') return undefined;
+  const counts = plannerCurrentRoundActionCounts(steps ?? []);
+  if (counts.nonWait > 0) return undefined;
+  return {
+    reason: 'Runtime Codex text planner set done=true before this round produced any non-wait GUI execution evidence.',
+    retryable: maxStepsRemaining(config, steps) > 0,
+  };
+}
+
+function plannerDoneQuotaIssue(
+  plannerAcceptanceContract: Record<string, unknown> | undefined,
+  steps: LoopStep[] | undefined,
+  config: VisionSenseConfig,
+): { reason: string; retryable: boolean } | undefined {
+  const progress = recordAt(plannerAcceptanceContract, 'acceptanceProgress');
+  const targetActions = numberAt(progress, 'suggestedCurrentRoundActionTarget');
+  const targetNonWaitActions = numberAt(progress, 'suggestedCurrentRoundNonWaitActionTarget');
+  if (targetActions === undefined && targetNonWaitActions === undefined) return undefined;
+  const counts = plannerCurrentRoundActionCounts(steps ?? []);
+  const actionShortfall = targetActions === undefined ? 0 : Math.max(0, targetActions - counts.executed);
+  const nonWaitShortfall = targetNonWaitActions === undefined ? 0 : Math.max(0, targetNonWaitActions - counts.nonWait);
+  if (actionShortfall === 0 && nonWaitShortfall === 0) return undefined;
+  const remaining = maxStepsRemaining(config, steps);
+  const parts = [
+    targetActions !== undefined ? `executed ${counts.executed}/${targetActions}` : undefined,
+    targetNonWaitActions !== undefined ? `nonWait ${counts.nonWait}/${targetNonWaitActions}` : undefined,
+  ].filter(Boolean).join(', ');
+  return {
+    reason: `Runtime Codex text planner set done=true before satisfying the current-round action quota (${parts}).`,
+    retryable: remaining > 0,
+  };
+}
+
+function plannerDoneVisibleArtifactIssue(
+  task: string,
+  observation: Record<string, unknown>,
+  steps: LoopStep[] | undefined,
+  config: VisionSenseConfig,
+): { reason: string; retryable: boolean } | undefined {
+  const executedActions = plannerExecutedActions(steps ?? []);
+  const reason = computerUseVisibleArtifactGapReason(task, executedActions, { finalAttempt: true });
+  if (!reason) return undefined;
+  if (plannerObservationHasVisibleArtifact(observation)) return undefined;
+  return {
+    reason: `Runtime Codex text planner set done=true before producing visible final artifact evidence. ${reason}`,
+    retryable: maxStepsRemaining(config, steps) > 0,
+  };
+}
+
+function plannerObservationHasVisibleArtifact(observation: Record<string, unknown>) {
+  return collectVisibleArtifactRefs(observation).some((ref) => isPlannerFinalArtifactRef(ref));
+}
+
+function collectVisibleArtifactRefs(value: unknown): string[] {
+  if (!isRecord(value)) return [];
+  return uniqueStrings([
+    ...toStringList(value.finalArtifactRef),
+    ...toStringList(value.finalArtifactRefs),
+    ...toStringList(value.visibleArtifactRefs),
+    ...unknownRecordList(value.visibleArtifacts).flatMap((artifact) => {
+      if (!isCurrentVisibleArtifactStatus(stringAt(artifact, 'status'))) return [];
+      return [
+        stringAt(artifact, 'artifactRef'),
+        stringAt(artifact, 'path'),
+      ].filter((ref): ref is string => Boolean(ref));
+    }),
+  ]);
+}
+
+function isPlannerFinalArtifactRef(ref: string) {
+  const text = ref.trim();
+  if (!text) return false;
+  if (/\.(?:png|jpe?g|webp|gif|svg)$/i.test(text)) return false;
+  if (/\/?(?:vision-trace|host-ports|tool-payload|gui-present|gui-ask-user|approval-request|risk-audit|confirmed-request|blocked-manifest|repair-hint|continuation-request|directory-listing|tui-host-run-task-chain|computer-use-request|gateway-request|request|independent-input-adapter|virtual-remote-session|action-ledger|failure-diagnostics|cu-user-acceptance|cu-l3-independent-input-verifier)\.json$/i.test(text)) return false;
+  return /^(?:artifact|file|ref):/i.test(text)
+    || text.startsWith('.sciforge/')
+    || /\.(?:md|txt|csv|tsv|xlsx|pptx?|pdf|docx?|odt|ods)$/i.test(text);
+}
+
+function isCurrentVisibleArtifactStatus(status: string | undefined) {
+  return Boolean(status && /(?:visible|saved|present|current|displayed)/i.test(status));
+}
+
+function plannerCurrentRoundActionCounts(steps: LoopStep[]) {
+  const executed = steps.filter((step) => step.kind === 'gui-execution');
+  const nonWait = executed.filter((step) => {
+    const action: Record<string, unknown> = isRecord(step.plannedAction) ? step.plannedAction : {};
+    return action.type !== 'wait';
+  });
+  return {
+    executed: executed.length,
+    nonWait: nonWait.length,
+  };
+}
+
+function plannerExecutedActions(steps: LoopStep[]): Array<{ type: string; text?: string }> {
+  return steps
+    .filter((step) => step.kind === 'gui-execution' && isRecord(step.plannedAction))
+    .map((step) => {
+      const action = step.plannedAction as unknown as Record<string, unknown>;
+      return {
+        type: typeof action.type === 'string' ? action.type : 'unknown',
+        text: typeof action.text === 'string' ? action.text : undefined,
+      };
+    });
 }
 
 function visibleCompletionMarkers(task: string) {
@@ -1076,6 +1318,12 @@ function stringAt(value: unknown, key: string) {
   if (!isRecord(value)) return undefined;
   const item = value[key];
   return typeof item === 'string' && item.trim() ? item : undefined;
+}
+
+function numberAt(value: unknown, key: string) {
+  if (!isRecord(value)) return undefined;
+  const item = value[key];
+  return typeof item === 'number' && Number.isFinite(item) ? item : undefined;
 }
 
 export async function withHardTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string, onTimeout?: () => void): Promise<T> {

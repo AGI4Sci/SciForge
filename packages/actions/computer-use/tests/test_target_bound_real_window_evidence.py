@@ -85,6 +85,30 @@ def test_target_bound_real_window_probe_evidence_rejects_preflight_and_input_sho
     assert refs["preflight"].is_file()
 
 
+def test_target_bound_real_window_probe_evidence_rejects_l1_acceptance_tier(tmp_path):
+    evidence = {
+        **valid_evidence_payload(tmp_path),
+        "acceptanceTier": "l1-isolated-smoke",
+        "userAcceptanceEligible": True,
+    }
+
+    codes = {error["code"] for error in validate_target_bound_real_window_probe_evidence(evidence)["errors"]}
+
+    assert "target_bound_acceptance_tier_not_package_diagnostic" in codes
+    assert "target_bound_user_acceptance_eligible" in codes
+
+
+def test_target_bound_real_window_probe_evidence_requires_explicit_package_diagnostic_tier(tmp_path):
+    evidence = valid_evidence_payload(tmp_path)
+    evidence.pop("acceptanceTier")
+    evidence.pop("userAcceptanceEligible")
+
+    codes = {error["code"] for error in validate_target_bound_real_window_probe_evidence(evidence)["errors"]}
+
+    assert "target_bound_acceptance_tier_not_package_diagnostic" in codes
+    assert "target_bound_user_acceptance_eligible" in codes
+
+
 def test_target_bound_real_window_probe_evidence_rejects_shallow_binding_or_inline_payload(tmp_path):
     shallow_binding = {
         **valid_evidence_payload(tmp_path),
@@ -150,6 +174,8 @@ def valid_evidence_payload(tmp_path):
     return {
         "schemaVersion": "sciforge.computer-use.target-bound-real-window-probe-evidence.v1",
         "status": "completed",
+        "acceptanceTier": "package-diagnostic",
+        "userAcceptanceEligible": False,
         "preflightRef": str(refs["preflight"]),
         "preflightStatus": "ready",
         "resultRef": str(refs["result"]),

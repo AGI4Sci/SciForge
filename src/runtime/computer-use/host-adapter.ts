@@ -71,6 +71,7 @@ export function gatewayRequestToComputerUseRequest(
   workspace: string,
 ): ComputerUseActionProviderRequest {
   const approvalRef = computerUseApprovalRef(request);
+  const approvalProvenance = computerUseApprovalProvenance(request);
   const plannerAcceptanceContract = computerUsePlannerAcceptanceContract(request);
   return {
     schemaVersion: COMPUTER_USE_REQUEST_SCHEMA,
@@ -102,6 +103,7 @@ export function gatewayRequestToComputerUseRequest(
         independentInputAdapterProvider: config.independentInputAdapterProvider,
       },
       ...(plannerAcceptanceContract ? { plannerAcceptanceContract } : {}),
+      ...(approvalProvenance ? { approvalProvenance } : {}),
     },
   };
 }
@@ -216,6 +218,7 @@ function computerUsePlannerAcceptanceContract(request: GatewayRequest): Record<s
     requiredPipeline: stringListAt(computerUseLong, 'requiredPipeline'),
     safetyBoundary: recordAt(computerUseLong, 'safetyBoundary'),
     validationContract: recordAt(computerUseLong, 'validationContract'),
+    acceptanceProgress: recordAt(computerUseLong, 'acceptanceProgress'),
   });
   return Object.keys(contract).length > 2 ? contract : undefined;
 }
@@ -227,6 +230,17 @@ function computerUseApprovalRef(request: GatewayRequest) {
     ?? stringAt(request.humanApprovalPolicy, 'approvalRef')
     ?? stringAt(request.uiState, 'computerUseApprovalRef')
     ?? stringAt(request.uiState, 'approvalRef');
+}
+
+function computerUseApprovalProvenance(request: GatewayRequest) {
+  const candidates = [
+    recordAt(request.humanApproval, 'approvalProvenance'),
+    recordAt(request.humanApprovalPolicy, 'approvalProvenance'),
+    recordAt(request.uiState, 'approvalProvenance'),
+    recordAt(recordAt(request.uiState, 'humanApproval'), 'approvalProvenance'),
+    recordAt(recordAt(request.uiState, 'humanApprovalPolicy'), 'approvalProvenance'),
+  ];
+  return candidates.find(Boolean);
 }
 
 function stringAt(value: unknown, key: string) {

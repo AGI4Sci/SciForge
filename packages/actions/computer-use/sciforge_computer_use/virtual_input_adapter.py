@@ -21,6 +21,7 @@ from .contracts import (
     ExecutionOutcome,
     Grounding,
 )
+from .isolated_desktop_contracts import REMOTE_DESKTOP_INPUT_CHANNEL
 from .safety import assess_action_risk
 
 
@@ -42,7 +43,7 @@ TARGET_BOUND_READY_INPUT_CHANNEL_VALUES = frozenset({
     "isolated-window",
     "target-bound-simulated-input",
     "independent-simulated-input-adapter",
-    "remote-desktop-isolated-session",
+    REMOTE_DESKTOP_INPUT_CHANNEL,
 })
 
 SUPPORTED_SIMULATED_ACTIONS = (

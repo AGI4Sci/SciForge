@@ -112,6 +112,62 @@ test('CU-05 records multi-app-workflow-passed only with app switch trace and mat
   assert.deepEqual(manifest.guiPresent.sessionRefs, ['codex-thread:cu-05-multi']);
 });
 
+test('CU-05 records explicit L3 high-risk stop as needs-confirmation without passing user acceptance', () => {
+  const manifest = buildCuUserAcceptanceManifest({
+    ...validMultiAppPassInput('cu-05-needs-confirmation'),
+    explicitStatus: {
+      status: 'needs-confirmation',
+      scope: 'high-risk-stop',
+      reason: 'The workflow reached a destructive action and stopped for user confirmation.',
+      ref: '.sciforge/vision-runs/cu-05-needs-confirmation/confirmation-request.json',
+    },
+  });
+
+  assert.equal(manifest.status, 'needs-confirmation');
+  assert.notEqual(manifest.status, 'multi-app-workflow-passed');
+  assert.equal(manifest.explicitStatus?.status, 'needs-confirmation');
+  assert.equal(manifest.explicitStatus?.scope, 'high-risk-stop');
+  assert.equal(manifest.verifierVerdict.status, 'passed');
+  assert.deepEqual(manifest.blockedItems, []);
+});
+
+test('CU-05 keeps existing pass, ready, and blocked logic without an explicit status', () => {
+  assert.equal(buildCuUserAcceptanceManifest(validMultiAppPassInput('cu-05-no-explicit-pass')).status, 'multi-app-workflow-passed');
+  assert.equal(buildCuUserAcceptanceManifest({
+    runId: 'cu-05-no-explicit-ready',
+    createdAt: '2026-05-25T00:05:00.000Z',
+    taskText: 'Create a one-slide acceptance artifact.',
+    level: 'L2',
+    appWorkflow: {
+      kind: 'single-app-artifact',
+      apps: ['Keynote'],
+    },
+    tuiHostChain: requiredHostChain('cu-05-no-explicit-ready'),
+    executorLease: {
+      status: 'present',
+      ref: '.sciforge/vision-runs/cu-05-no-explicit-ready/executor-lease.json',
+      owner: 'computer-use',
+    },
+  }).status, 'ready');
+  assert.equal(buildCuUserAcceptanceManifest({
+    runId: 'cu-05-no-explicit-blocked',
+    createdAt: '2026-05-25T00:00:00.000Z',
+    taskText: 'Create a one-slide acceptance artifact.',
+    level: 'L2',
+    appWorkflow: {
+      kind: 'single-app-artifact',
+      apps: ['LibreOffice Impress'],
+    },
+    tuiHostChain: [
+      {
+        id: 'host-chain-missing',
+        kind: 'missing',
+        status: 'blocked',
+      },
+    ],
+  }).status, 'blocked');
+});
+
 test('CU-05 L3 final pass requires independent input adapter evidence, not shared system input ack', () => {
   const validInput = validMultiAppPassInput('cu-05-shared-input');
   const manifest = buildCuUserAcceptanceManifest({

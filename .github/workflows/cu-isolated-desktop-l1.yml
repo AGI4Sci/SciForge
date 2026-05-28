@@ -1,0 +1,60 @@
+name: Computer Use isolated L1 smoke
+
+"on":
+  workflow_dispatch:
+    inputs:
+      run_l1_smoke:
+        description: "Run the real Docker/Linux noVNC L1 smoke gate"
+        required: true
+        type: boolean
+        default: false
+      timeout_seconds:
+        description: "L1 smoke runner timeout in seconds"
+        required: true
+        type: string
+        default: "30"
+      base_image:
+        description: "Python base image for the Docker build"
+        required: true
+        type: string
+        default: "python:3.12-slim-bookworm"
+      apt_mirror:
+        description: "Optional Debian apt mirror URL for the Docker build"
+        required: false
+        type: string
+        default: ""
+      security_apt_mirror:
+        description: "Optional Debian security apt mirror URL for the Docker build"
+        required: false
+        type: string
+        default: ""
+      apt_acquire_retries:
+        description: "Apt Acquire::Retries for the Docker build"
+        required: true
+        type: string
+        default: "3"
+
+jobs:
+  l1-smoke:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_l1_smoke }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run isolated desktop L1 smoke
+        run: npm run smoke:cu-isolated-l1:docker
+        env:
+          SCIFORGE_RUN_REAL_L1_SMOKE_TIMEOUT: ${{ inputs.timeout_seconds }}
+          SCIFORGE_DOCKER_BASE_IMAGE: ${{ inputs.base_image }}
+          SCIFORGE_DOCKER_DEBIAN_APT_MIRROR: ${{ inputs.apt_mirror }}
+          SCIFORGE_DOCKER_DEBIAN_SECURITY_APT_MIRROR: ${{ inputs.security_apt_mirror }}
+          SCIFORGE_DOCKER_APT_ACQUIRE_RETRIES: ${{ inputs.apt_acquire_retries }}
+
+      - name: Upload isolated desktop evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cu-isolated-desktop-l1-evidence
+          path: docs/test-artifacts/cu-isolated-l1
+          if-no-files-found: ignore

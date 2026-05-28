@@ -24,6 +24,8 @@ const realTaskOfflineGatesScript = 'smoke:real-task-offline-gates';
 const cuNextReadinessScript = 'smoke:cu-next-readiness';
 const cuNextRunnerScript = 'smoke:cu-next-runner';
 const cuNextUserAcceptanceContractScript = 'smoke:cu-next-user-acceptance-contract';
+const cuNextLiveAcceptanceScript = 'smoke:cu-next-live-acceptance';
+const cuNextEvidenceClassificationScript = 'smoke:cu-next-evidence-classification';
 const desktopPackageDirScript = 'desktop:package:dir';
 const smokeAllScript = 'smoke:all';
 const legacyAgentServerCompatScript = 'smoke:legacy-agentserver-compat';
@@ -35,6 +37,8 @@ const realTaskMatrixCommand = [
   `npm run ${cuNextReadinessScript}`,
   `npm run ${cuNextRunnerScript}`,
   `npm run ${cuNextUserAcceptanceContractScript}`,
+  `npm run ${cuNextLiveAcceptanceScript}`,
+  `npm run ${cuNextEvidenceClassificationScript}`,
   `npm run ${realTaskOfflineGatesScript}`,
 ].join(' && ');
 const requiredFinalGateOrder = [

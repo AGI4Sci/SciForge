@@ -6,7 +6,7 @@ import type { GatewayRequest, ToolPayload, WorkspaceRuntimeCallbacks } from '../
 import { isRecord } from '../gateway-utils.js';
 import type { AgentCliAdapter } from '../codex/agent-cli-adapter.js';
 import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
-import { groundingForAction, normalizePlatformAction } from './actions.js';
+import { groundingForAction, normalizeGenericActionRisk, normalizePlatformAction } from './actions.js';
 import {
   captureDisplays,
   createFocusedCropRefs,
@@ -45,6 +45,11 @@ import {
   computerUseResultToTuiHostActions,
   gatewayRequestToComputerUseRequest,
 } from './host-adapter.js';
+import {
+  isFinalArtifactEvidenceRef,
+  tuiHostRunTaskChainPath,
+  writePackageBridgeEvidenceFiles,
+} from './package-bridge-evidence.js';
 import {
   visionSenseRuntimeEventTypes,
   visionSenseTraceContractPolicy,
@@ -94,6 +99,7 @@ type PackageBridgeState = {
   executedActions: GenericVisionAction[];
   dynamicPlannerEnabled: boolean;
   plannerReportedDone: boolean;
+  plannerAcceptanceContract?: Record<string, unknown>;
   latestObservation?: Record<string, unknown>;
   plannerTraceSteps: LoopStep[];
   visionHistorySteps: LoopStep[];
@@ -206,8 +212,10 @@ export async function runComputerUsePackageBridge(
     await writePackageBridgeEvidenceFiles({
       actionProviderRequest,
       config,
+      packageResult,
       payload,
       state,
+      workspace,
       tuiHostActions,
     });
     await writeGenericLoopPayloadValidationRepairAuditSink(payload, { workspacePath: workspace });
@@ -258,8 +266,10 @@ export async function runComputerUsePackageBridge(
   await writePackageBridgeEvidenceFiles({
     actionProviderRequest,
     config,
+    packageResult,
     payload,
     state,
+    workspace,
     tuiHostActions,
   });
   if (!succeeded) {
@@ -276,7 +286,7 @@ function withFinalVisibleArtifactGuard(
   if (stringAt(packageResult, 'status') !== 'completed') return packageResult;
   const finalGap = computerUseVisibleArtifactGapReason(request.prompt, state.executedActions, { finalAttempt: true });
   if (!finalGap) return packageResult;
-  if (state.visibleArtifacts.some((artifact) => artifact.status === 'visible-and-saved' || artifact.artifactRef.trim().length > 0)) {
+  if (finalVisibleArtifactForTrace(state.visibleArtifacts)) {
     return packageResult;
   }
   return {
@@ -527,6 +537,7 @@ async function planPort(
   if (!state.actionQueue.length && state.dynamicPlannerEnabled && !state.plannerReportedDone) {
     const requestArg = recordArg(call, 0);
     const plannerAcceptanceContract = recordAt(recordAt(requestArg, 'metadata'), 'plannerAcceptanceContract');
+    state.plannerAcceptanceContract = plannerAcceptanceContract;
     const observation = recordArg(call, 1);
     state.latestObservation = observation;
     const observationRefs = state.captureRefsByObservationRef.get(stringAt(observation, 'ref') ?? '') ?? state.screenshotLedger.slice(-Math.max(1, config.captureDisplays.length));
@@ -746,6 +757,7 @@ async function verifyPort(
 ) {
   const { workspace, config, state } = context;
   const request = recordArg(call, 0);
+  const plannerAcceptanceContract = recordAt(recordAt(request, 'metadata'), 'plannerAcceptanceContract') ?? state.plannerAcceptanceContract;
   const before = recordArg(call, 1);
   const after = recordArg(call, 2);
   const action = packagePlanToGenericAction(recordArg(call, 3), state.activeAction);
@@ -763,7 +775,8 @@ async function verifyPort(
   const beforeFocusRefs = state.beforeFocusRefsByObservationRef.get(beforeObservationRef) ?? [];
   const afterFocusRefs = state.afterFocusRefsByObservationRef.get(beforeObservationRef) ?? [];
   const executionOk = execution.ok !== false;
-  const artifactGap = computerUseVisibleArtifactGapReason(stringAt(request, 'task') ?? '', state.executedActions);
+  const artifactIntentText = computerUseArtifactIntentText(request);
+  const artifactGap = computerUseVisibleArtifactGapReason(artifactIntentText, state.executedActions);
   const pixelDiff = pixelDiffForScreenshotSets(beforeRefs, afterRefs);
   const focusPixelDiff = beforeFocusRefs.length && afterFocusRefs.length
     ? pixelDiffForScreenshotSets(beforeFocusRefs, afterFocusRefs)
@@ -840,7 +853,7 @@ async function verifyPort(
   }
   let ledgerCompletion: Awaited<ReturnType<typeof actionLedgerCompletion>> | undefined;
   if (executionOk) {
-    ledgerCompletion = await actionLedgerCompletion(stringAt(request, 'task') ?? '', [
+    ledgerCompletion = await actionLedgerCompletion(artifactIntentText, [
       ...state.visionHistorySteps,
       {
         id: `step-${String(state.executedActions.length).padStart(3, '0')}-execute-${action.type}`,
@@ -859,12 +872,19 @@ async function verifyPort(
       },
     ]);
   }
-  if (ledgerCompletion?.complete) {
+  const ledgerCompletionQuotaIssue = ledgerCompletion?.complete
+    ? packageBridgeLedgerCompletionQuotaIssue(plannerAcceptanceContract, state.executedActions, config.maxSteps)
+    : undefined;
+  const ledgerCompletionArtifactIssue = ledgerCompletion?.complete && !ledgerCompletionQuotaIssue && !finalVisibleArtifactForTrace(state.visibleArtifacts)
+    ? computerUseVisibleArtifactGapReason(artifactIntentText, state.executedActions, { finalAttempt: true })
+    : undefined;
+  const ledgerCompletionAccepted = Boolean(ledgerCompletion?.complete && !ledgerCompletionQuotaIssue && !ledgerCompletionArtifactIssue);
+  if (ledgerCompletionAccepted) {
     state.actionQueue.length = 0;
     state.plannerReportedDone = true;
   }
-  const fixtureQueueExhaustedArtifactGap = executionOk && !state.dynamicPlannerEnabled && state.actionQueue.length === 0 && !ledgerCompletion?.complete
-    ? computerUseVisibleArtifactGapReason(stringAt(request, 'task') ?? '', state.executedActions, { finalAttempt: true })
+  const fixtureQueueExhaustedArtifactGap = executionOk && !state.dynamicPlannerEnabled && state.actionQueue.length === 0 && !ledgerCompletionAccepted
+    ? computerUseVisibleArtifactGapReason(artifactIntentText, state.executedActions, { finalAttempt: true })
     : '';
   if (fixtureQueueExhaustedArtifactGap) {
     const verification = {
@@ -883,15 +903,19 @@ async function verifyPort(
     pushHistoryStep(verification);
     return verification;
   }
-  const done = executionOk && (ledgerCompletion?.complete || (!state.dynamicPlannerEnabled && (state.actionQueue.length === 0 || (
+  const done = executionOk && (ledgerCompletionAccepted || (!state.dynamicPlannerEnabled && (state.actionQueue.length === 0 || (
     config.completionPolicy?.mode === 'one-successful-non-wait-action' && action.type !== 'wait'
   ))));
   const verification = {
     ok: executionOk,
     done,
     reason: executionOk
-      ? ledgerCompletion?.complete
-        ? ledgerCompletion.reason || 'action-ledger completion policy satisfied'
+      ? ledgerCompletionQuotaIssue
+        ? ledgerCompletionQuotaIssue
+        : ledgerCompletionArtifactIssue
+        ? ledgerCompletionArtifactIssue
+        : ledgerCompletionAccepted
+        ? ledgerCompletion?.reason || 'action-ledger completion policy satisfied'
         : done
         ? 'Computer Use package bridge verifier accepted final action.'
         : 'Computer Use package bridge verifier accepted action; more actions remain.'
@@ -904,6 +928,9 @@ async function verifyPort(
       regionSemantic,
       planningFeedback,
       visualFocus,
+      ledgerCompletion: ledgerCompletion?.complete ? ledgerCompletion : undefined,
+      ledgerCompletionQuotaIssue,
+      ledgerCompletionArtifactIssue,
       beforeScreenshotRefs: beforeRefs.map(toTraceScreenshotRef),
       afterScreenshotRefs: afterRefs.map(toTraceScreenshotRef),
       queuedActionsRemaining: state.actionQueue.length,
@@ -968,6 +995,7 @@ async function writePackageBridgeTrace(params: {
       runtime: 'sciforge.workspace-runtime.computer-use-package-bridge',
       actionProvider: COMPUTER_USE_ACTION_PROVIDER_ID,
       hostPortProtocol: 'stdio-jsonl',
+      tuiHostRunTaskChainRef: workspaceRel(params.workspace, tuiHostRunTaskChainPath(params.state.runDir)),
     },
     actionProvider: COMPUTER_USE_ACTION_PROVIDER_ID,
     executionBoundary: params.config.dryRun ? 'dry-run-generic-gui-executor' : independentInputAdapterExecutionBoundary(params.config) ?? executorBoundary(params.config),
@@ -1083,19 +1111,6 @@ function finalWindowScreenshotRef(refs: ScreenshotRef[]) {
     ?? refs.at(-1)?.path;
 }
 
-function isFinalArtifactEvidenceRef(ref: string | undefined) {
-  const text = ref?.trim();
-  if (!text) return false;
-  if (/\.(png|jpe?g|webp)$/i.test(text)) return false;
-  if (/\/?(vision-trace|host-ports|tool-payload|gui-present|gui-ask-user|computer-use-request|gateway-request|request|independent-input-adapter|virtual-remote-session|action-ledger|failure-diagnostics|cu-user-acceptance|cu-l3-independent-input-verifier)\.json$/i.test(text)) {
-    return false;
-  }
-  return /^(artifact|file|ref):/i.test(text)
-    || text.startsWith('.sciforge/')
-    || text.startsWith('/')
-    || /\.(md|txt|csv|tsv|xlsx|pptx?|pdf|docx?|odt|ods|json)$/i.test(text);
-}
-
 function packageBridgeTraceRequest(
   request: GatewayRequest,
   config: ComputerUseConfig,
@@ -1179,12 +1194,16 @@ function packageResultStepsToVisionSteps(
     const beforeFocusRefs = state.beforeFocusRefsByObservationRef.get(beforeObservationRef) ?? [];
     const afterFocusRefs = state.afterFocusRefsByObservationRef.get(beforeObservationRef) ?? [];
     const grounding = normalizeTraceGrounding(recordAt(step, 'grounding') ?? {}, actionRecord);
-    const action = packageTraceActionToGenericAction(actionRecord, grounding);
+    const status = step.status === 'done' ? 'done' : step.status === 'blocked' ? 'blocked' : 'failed';
+    const action = preservePackageBlockedRisk(
+      packageTraceActionToGenericAction(actionRecord, grounding),
+      step,
+      status,
+    );
     const execution = recordAt(step, 'execution');
     const executionMetadata = recordAt(execution, 'metadata');
     const executorLease = isRecord(executionMetadata?.schedulerLease) ? executionMetadata.schedulerLease : undefined;
     const verification = recordAt(step, 'verification');
-    const status = step.status === 'done' ? 'done' : step.status === 'blocked' ? 'blocked' : 'failed';
     const pixelDiff = pixelDiffForScreenshotSets(beforeRefs, afterRefs);
     const focusPixelDiff = beforeFocusRefs.length && afterFocusRefs.length
       ? pixelDiffForScreenshotSets(beforeFocusRefs, afterFocusRefs)
@@ -1246,6 +1265,21 @@ function packageResultStepsToVisionSteps(
     };
   });
   return mergePlannerAndActionTraceSteps(state.plannerTraceSteps, actionSteps);
+}
+
+function preservePackageBlockedRisk(
+  action: GenericVisionAction,
+  step: Record<string, unknown>,
+  status: 'done' | 'blocked' | 'failed',
+): GenericVisionAction {
+  if (status !== 'blocked') return action;
+  const reason = stringAt(step, 'failureReason') ?? stringAt(step, 'failure_reason') ?? '';
+  if (!/confirm|approval|high-risk|高风险|确认|授权/i.test(reason)) return action;
+  return {
+    ...action,
+    riskLevel: 'high',
+    requiresConfirmation: true,
+  };
 }
 
 function mergePlannerAndActionTraceSteps(plannerSteps: LoopStep[], actionSteps: LoopStep[]) {
@@ -1327,10 +1361,10 @@ function packageTraceActionToGenericAction(action: Record<string, unknown>, grou
   };
   const x = numberAt(action.x) ?? numberAt(grounding.x) ?? numberAt(grounding.executorX) ?? numberAt(grounding.localX);
   const y = numberAt(action.y) ?? numberAt(grounding.y) ?? numberAt(grounding.executorY) ?? numberAt(grounding.localY);
-  if (type === 'click') return { ...base, type: 'click', x, y };
-  if (type === 'double_click') return { ...base, type: 'double_click', x, y };
+  if (type === 'click') return normalizeGenericActionRisk({ ...base, type: 'click', x, y });
+  if (type === 'double_click') return normalizeGenericActionRisk({ ...base, type: 'double_click', x, y });
   if (type === 'drag') {
-    return {
+    return normalizeGenericActionRisk({
       ...base,
       type: 'drag',
       fromX: numberAt(action.fromX)
@@ -1347,14 +1381,14 @@ function packageTraceActionToGenericAction(action: Record<string, unknown>, grou
         ?? numberAt(grounding.localToY),
       fromTargetDescription: stringAt(action, 'fromTargetDescription') ?? stringAt(grounding, 'fromTargetDescription'),
       toTargetDescription: stringAt(action, 'toTargetDescription') ?? stringAt(grounding, 'toTargetDescription'),
-    };
+    });
   }
-  if (type === 'type_text') return { ...base, type: 'type_text', text: stringAt(action, 'text') ?? '' };
-  if (type === 'press_key') return { ...base, type: 'press_key', key: stringAt(action, 'key') ?? '' };
-  if (type === 'hotkey') return { ...base, type: 'hotkey', keys: stringList(action.keys) };
-  if (type === 'scroll') return { ...base, type: 'scroll', direction: scrollDirection(stringAt(action, 'direction')), amount: numberAt(action.amount) };
-  if (type === 'open_app') return { ...base, type: 'open_app', appName: stringAt(action, 'appName') ?? '' };
-  return { ...base, type: 'wait' };
+  if (type === 'type_text') return normalizeGenericActionRisk({ ...base, type: 'type_text', text: stringAt(action, 'text') ?? '' });
+  if (type === 'press_key') return normalizeGenericActionRisk({ ...base, type: 'press_key', key: stringAt(action, 'key') ?? '' });
+  if (type === 'hotkey') return normalizeGenericActionRisk({ ...base, type: 'hotkey', keys: stringList(action.keys) });
+  if (type === 'scroll') return normalizeGenericActionRisk({ ...base, type: 'scroll', direction: scrollDirection(stringAt(action, 'direction')), amount: numberAt(action.amount) });
+  if (type === 'open_app') return normalizeGenericActionRisk({ ...base, type: 'open_app', appName: stringAt(action, 'appName') ?? '' });
+  return normalizeGenericActionRisk({ ...base, type: 'wait' });
 }
 
 function packageVerifierPlanningFeedback(
@@ -1476,28 +1510,6 @@ function attachPackageResultHostActions(
   return tuiHostActions;
 }
 
-async function writePackageBridgeEvidenceFiles(params: {
-  actionProviderRequest: Record<string, unknown>;
-  config: ComputerUseConfig;
-  payload: ToolPayload;
-  state: PackageBridgeState;
-  tuiHostActions: ComputerUseTuiHostAction[];
-}) {
-  const guiPresent = params.tuiHostActions.find((action) => action.port === 'gui.present');
-  const guiAskUser = params.tuiHostActions.find((action) => action.port === 'gui.ask_user');
-  await Promise.all([
-    writeJson(join(params.state.runDir, 'computer-use-request.json'), params.actionProviderRequest),
-    writeJson(join(params.state.runDir, 'host-ports.json'), computerUseHostPortsContract(params.config)),
-    writeJson(join(params.state.runDir, 'tool-payload.json'), params.payload),
-    guiPresent ? writeJson(join(params.state.runDir, 'gui-present.json'), guiPresent) : Promise.resolve(),
-    guiAskUser ? writeJson(join(params.state.runDir, 'gui-ask-user.json'), guiAskUser) : Promise.resolve(),
-  ]);
-}
-
-async function writeJson(path: string, value: unknown) {
-  await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-}
-
 function writeHostPortResult(
   child: ReturnType<typeof spawn>,
   id: string,
@@ -1567,8 +1579,8 @@ function packagePlanToGenericAction(
   const y = numberAt(grounding?.y)
     ?? numberAt(groundingMetadata?.executorY)
     ?? (activeAction && 'y' in activeAction ? numberAt(activeAction.y) : undefined);
-  if (type === 'click') return { ...base, type: 'click', x, y };
-  if (type === 'double_click') return { ...base, type: 'double_click', x, y };
+  if (type === 'click') return normalizeGenericActionRisk({ ...base, type: 'click', x, y });
+  if (type === 'double_click') return normalizeGenericActionRisk({ ...base, type: 'double_click', x, y });
   if (type === 'drag') {
     const fromX = numberAt(grounding?.x)
       ?? numberAt(groundingMetadata?.executorFromX)
@@ -1584,7 +1596,7 @@ function packagePlanToGenericAction(
     const toY = numberAt(groundingMetadata?.executorToY)
       ?? numberAt(groundingMetadata?.localToY)
       ?? (activeAction && 'toY' in activeAction ? numberAt(activeAction.toY) : undefined);
-    return {
+    return normalizeGenericActionRisk({
       ...base,
       type,
       fromX,
@@ -1593,14 +1605,14 @@ function packagePlanToGenericAction(
       toY,
       fromTargetDescription: activeAction && 'fromTargetDescription' in activeAction ? activeAction.fromTargetDescription : undefined,
       toTargetDescription: activeAction && 'toTargetDescription' in activeAction ? activeAction.toTargetDescription : undefined,
-    };
+    });
   }
-  if (type === 'type_text') return { ...base, type, text: stringAt(plan, 'text') ?? (activeAction && 'text' in activeAction ? activeAction.text : '') };
-  if (type === 'press_key') return { ...base, type, key: stringAt(plan, 'key') ?? (activeAction && 'key' in activeAction ? activeAction.key : '') };
-  if (type === 'hotkey') return { ...base, type, keys: stringList(plan.keys).length ? stringList(plan.keys) : activeAction && 'keys' in activeAction ? activeAction.keys : [] };
-  if (type === 'scroll') return { ...base, type, direction: scrollDirection(stringAt(plan, 'direction') ?? (activeAction && 'direction' in activeAction ? activeAction.direction : 'down')), amount: numberAt(plan.amount) };
-  if (type === 'open_app') return { ...base, type, appName: stringAt(plan, 'appName') ?? stringAt(plan, 'app_name') ?? (activeAction && 'appName' in activeAction ? activeAction.appName : '') };
-  return { ...base, type: 'wait', ms: activeAction && 'ms' in activeAction ? activeAction.ms : 500 };
+  if (type === 'type_text') return normalizeGenericActionRisk({ ...base, type, text: stringAt(plan, 'text') ?? (activeAction && 'text' in activeAction ? activeAction.text : '') });
+  if (type === 'press_key') return normalizeGenericActionRisk({ ...base, type, key: stringAt(plan, 'key') ?? (activeAction && 'key' in activeAction ? activeAction.key : '') });
+  if (type === 'hotkey') return normalizeGenericActionRisk({ ...base, type, keys: stringList(plan.keys).length ? stringList(plan.keys) : activeAction && 'keys' in activeAction ? activeAction.keys : [] });
+  if (type === 'scroll') return normalizeGenericActionRisk({ ...base, type, direction: scrollDirection(stringAt(plan, 'direction') ?? (activeAction && 'direction' in activeAction ? activeAction.direction : 'down')), amount: numberAt(plan.amount) });
+  if (type === 'open_app') return normalizeGenericActionRisk({ ...base, type, appName: stringAt(plan, 'appName') ?? stringAt(plan, 'app_name') ?? (activeAction && 'appName' in activeAction ? activeAction.appName : '') });
+  return normalizeGenericActionRisk({ ...base, type: 'wait', ms: activeAction && 'ms' in activeAction ? activeAction.ms : 500 });
 }
 
 function actionTarget(action: GenericVisionAction) {
@@ -1625,6 +1637,36 @@ function actionTarget(action: GenericVisionAction) {
 function hasPlannedCoordinates(action: GenericVisionAction) {
   return ('x' in action && typeof action.x === 'number')
     || ('fromX' in action && typeof action.fromX === 'number');
+}
+
+function packageBridgeLedgerCompletionQuotaIssue(
+  plannerAcceptanceContract: Record<string, unknown> | undefined,
+  executedActions: GenericVisionAction[],
+  maxSteps: number,
+) {
+  const progress = recordAt(plannerAcceptanceContract, 'acceptanceProgress');
+  if (!progress) return undefined;
+  const remainingStepBudget = Math.max(0, maxSteps - executedActions.length);
+  if (remainingStepBudget <= 0) return undefined;
+  const actionTarget = positiveQuota(numberAt(progress.suggestedCurrentRoundActionTarget));
+  const nonWaitTarget = positiveQuota(numberAt(progress.suggestedCurrentRoundNonWaitActionTarget));
+  const actionCount = executedActions.length;
+  const nonWaitActionCount = executedActions.filter((action) => action.type !== 'wait').length;
+  const issues = [
+    actionTarget !== undefined && actionCount < actionTarget
+      ? `actions=${actionCount}/${actionTarget}`
+      : '',
+    nonWaitTarget !== undefined && nonWaitActionCount < nonWaitTarget
+      ? `nonWaitActions=${nonWaitActionCount}/${nonWaitTarget}`
+      : '',
+  ].filter(Boolean);
+  if (!issues.length) return undefined;
+  return `Action-ledger completion policy is satisfied, but current-round acceptance quota is not met yet (${issues.join(', ')}); continue with another safe generic action or return structured failure if no safe visible action remains.`;
+}
+
+function positiveQuota(value: number | undefined) {
+  if (value === undefined || value <= 0) return undefined;
+  return Math.ceil(value);
 }
 
 function recordArg(call: HostPortCall, index: number): Record<string, unknown> {

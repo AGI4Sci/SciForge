@@ -185,16 +185,17 @@ export async function validateComputerUseLongTrace(options: {
       actionCount += 1;
       const action = isRecord(step.plannedAction) ? step.plannedAction : undefined;
       const type = typeof action?.type === 'string' ? action.type : '';
+      const failClosedBlockedStep = isFailClosedBlockedStep(step, action);
       if (!allowedActionTypes.has(type)) issues.push(`steps[${index}].plannedAction.type is not a generic action`);
       const nonWaitAction = Boolean(type && type !== 'wait');
       if (nonWaitAction) nonWaitActionCount += 1;
       if (hasForbiddenPrivateFields(action)) issues.push(`steps[${index}].plannedAction contains DOM/accessibility/private-app fields`);
       if (!Array.isArray(step.beforeScreenshotRefs) || !step.beforeScreenshotRefs.length) issues.push(`steps[${index}] missing beforeScreenshotRefs`);
-      if (!Array.isArray(step.afterScreenshotRefs) || !step.afterScreenshotRefs.length) issues.push(`steps[${index}] missing afterScreenshotRefs`);
+      if (!failClosedBlockedStep && (!Array.isArray(step.afterScreenshotRefs) || !step.afterScreenshotRefs.length)) issues.push(`steps[${index}] missing afterScreenshotRefs`);
       for (const ref of [...screenshotStepRefs(step.beforeScreenshotRefs), ...screenshotStepRefs(step.afterScreenshotRefs)]) {
         if (!screenshotRefHasWindowMetadata(ref)) issues.push(`steps[${index}] screenshot ref missing window metadata`);
       }
-      if (!isRecord(step.execution)) issues.push(`steps[${index}] missing execution record`);
+      if (!failClosedBlockedStep && !isRecord(step.execution)) issues.push(`steps[${index}] missing execution record`);
       if (isRecord(step.execution) && !hasInputChannelMetadata(step.execution, action)) issues.push(`steps[${index}] execution missing input-channel metadata`);
       if (!isRecord(step.verifier)) issues.push(`steps[${index}] missing verifier record`);
       if (isRecord(step.verifier) && !hasWindowVerifierMetadata(step.verifier)) issues.push(`steps[${index}] verifier missing window consistency metadata`);
@@ -275,6 +276,15 @@ export async function validateComputerUseLongTrace(options: {
       failedCount,
     },
   };
+}
+
+function isFailClosedBlockedStep(step: Record<string, unknown>, action: Record<string, unknown> | undefined) {
+  if (step.status !== 'blocked') return false;
+  const riskLevel = firstString(action?.riskLevel, action?.risk_level);
+  const requiresConfirmation = action?.requiresConfirmation === true || action?.requires_confirmation === true;
+  const reason = firstString(step.failureReason, step.failure_reason, step.reason);
+  return (riskLevel === 'high' || requiresConfirmation)
+    && /confirm|approval|high-risk|高风险|确认|授权/i.test(reason ?? '');
 }
 
 function containsInlineImagePayload(text: string) {

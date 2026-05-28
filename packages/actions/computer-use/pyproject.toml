@@ -16,7 +16,9 @@ dependencies = []
 where = ["."]
 include = ["sciforge_computer_use*"]
 
+[tool.setuptools.package-data]
+sciforge_computer_use = ["isolated_desktop_backend.Dockerfile"]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
-

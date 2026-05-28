@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
 import { test } from 'node:test';
 
 import type { AgentCliAdapter, AgentCliStartTurnInput, AgentCliTurn } from './agent-cli-adapter.js';
@@ -24,6 +25,11 @@ test('computer use text planner command is strict JSON-only and text-only', () =
       expectedTrace: ['before screenshot refs', 'generic action ledger'],
       acceptance: ['scenario-level drag', 'scenario-level hotkey', 'scenario-level preview'],
       requirements: ['l3-workflow-refs', 'no-dom-playwright-accessibility'],
+      acceptanceProgress: {
+        schemaVersion: 'sciforge.computer-use-long.acceptance-progress.v1',
+        minimumScenarioActionCount: 20,
+        suggestedCurrentRoundActionTarget: 5,
+      },
     },
     recentActions: 'No GUI actions have executed yet.',
     verifierFeedback: 'No verifier feedback yet.',
@@ -39,7 +45,12 @@ test('computer use text planner command is strict JSON-only and text-only', () =
   assert.match(command, /Scenario-level acceptance, requirements, requiredEvidence, validationContract, and safetyBoundary are constraints and future-round context/);
   assert.match(command, /do not try to satisfy every scenario-level acceptance item inside one round/);
   assert.match(command, /Return done=true when the compact observation, Recent actions, and verifier feedback already support that current scope/);
+  assert.match(command, /final artifact, evidence summary, action mapping, field\/control evidence summary/);
+  assert.match(command, /visible typed\/exported artifact/);
   assert.match(command, /current round needs at least one non-wait GUI action in Recent actions/);
+  assert.match(command, /acceptanceProgress specifies suggestedCurrentRoundActionTarget/);
+  assert.match(command, /minimum evidence-producing action quota/);
+  assert.match(command, /remainingScenarioActionCount/);
   assert.match(command, /do not return done=true; emit one safe low-risk visible/);
   assert.match(command, /Do not count prior-round actions or scenario-level summaries as current-round GUI evidence/);
   assert.match(command, /Do not inspect screenshots, files, GUI state, DOM, accessibility trees/);
@@ -55,10 +66,14 @@ test('computer use text planner command is strict JSON-only and text-only', () =
   assert.match(command, /For hotkey, keys is required/);
   assert.match(command, /Never use Command\+S, Ctrl\+S/);
   assert.match(command, /task-required Save, Save As, filename\/path, location, and file dialog UI is in scope/);
-  assert.match(command, /do not target the AutoSave toggle or Home\/house icon/);
-  assert.match(command, /small floppy-disk Save icon immediately to the right of the Home\/house icon/);
-  assert.match(command, /Never describe a Save icon as "near AutoSave"/);
-  assert.match(command, /AutoSave is mentioned at all, mention it only as an excluded\/avoided non-target control/);
+  assert.match(command, /Do not mark ordinary focus, selection, inspection, text-field, search-field, checkbox, radio, dropdown, menu, toggle, switch, or scroll actions as high risk/);
+  assert.match(command, /low-risk controls, inspection, visual evidence, or action quota/);
+  assert.match(command, /Never use Export, Share, Save, Save As, Submit, Send, Delete, Remove, Pay, Purchase, Authorize, Approve, Publish, Upload, Overwrite, Replace, Login, or Sign in controls as low-risk quota filler/);
+  assert.match(command, /visually ambiguous toolbars or title bars/);
+  assert.match(command, /Describe the intended visible label\/icon\/shape/);
+  assert.match(command, /Never describe an intended target as "near" a non-target control/);
+  assert.match(command, /excluded or avoided non-target controls/);
+  assert.doesNotMatch(command, /PowerPoint-style|floppy-disk Save icon immediately to the right of the Home\/house icon/);
   assert.match(command, /do not claim File, Save As, Browse, filename\/path, location, or file-dialog controls are visible/);
   assert.match(command, /current compact observation is the only truth source/);
   assert.match(command, /Recent action targetDescription text and verifier pixel changes are history only/);
@@ -161,7 +176,7 @@ test('computer use text planner falls back to direct chat completions after Code
     { type: 'audit', status: 'raw-jsonl', raw: { type: 'turn.started' } },
     { type: 'failed', status: 'failed', message: 'unexpected status 502 Bad Gateway', exitCode: 1, signal: null },
   ]);
-  const fetchCalls: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const fetchCalls: Array<{ url: string; headers: Record<string, string>; body: Record<string, unknown> }> = [];
   const result = await runComputerUseCodexTextPlanner(basePlannerInput(), {
     workspace: '/tmp',
     adapter,
@@ -174,6 +189,7 @@ test('computer use text planner falls back to direct chat completions after Code
     fetchImpl: async (url, init) => {
       fetchCalls.push({
         url: String(url),
+        headers: init?.headers as Record<string, string>,
         body: JSON.parse(String(init?.body)) as Record<string, unknown>,
       });
       return new Response(JSON.stringify({
@@ -185,6 +201,8 @@ test('computer use text planner falls back to direct chat completions after Code
   assert.equal(result.ok, true);
   assert.match(result.ok ? result.text : '', /"press_key"/);
   assert.equal(fetchCalls[0]?.url, 'http://provider.example/v1/chat/completions');
+  assert.equal(fetchCalls[0]?.headers.accept, 'application/json');
+  assert.equal(fetchCalls[0]?.headers['accept-encoding'], 'identity');
   assert.equal(fetchCalls[0]?.body.model, 'bailian/deepseek-v4-flash');
   assert.equal(fetchCalls[0]?.body.stream, false);
   assert.equal(fetchCalls[0]?.body.max_tokens, 768);
@@ -193,6 +211,76 @@ test('computer use text planner falls back to direct chat completions after Code
   assert.match(String((fetchCalls[0]?.body.messages as Array<Record<string, unknown>>)?.[0]?.content), /Return exactly one JSON object/);
   assert.match(result.ok ? result.raw.diagnosticSummary : '', /directChatFallback=used/);
   assert.ok(result.ok && result.raw.events.some((event) => event.status === 'direct-chat-fallback-started'));
+});
+
+test('computer use text planner raw identity retry handles mislabeled compressed fallback response', async () => {
+  const adapter = new FakePlannerAdapter([
+    { type: 'failed', status: 'failed', message: 'Runtime Codex text planner transport timeout', exitCode: 1, signal: null },
+  ]);
+  const requests: Array<{ acceptEncoding: string | undefined }> = [];
+  const server = createServer((request, response) => {
+    requests.push({ acceptEncoding: request.headers['accept-encoding'] });
+    request.resume();
+    response.statusCode = 200;
+    response.setHeader('content-type', 'application/json');
+    response.setHeader('content-encoding', 'gzip');
+    response.end(JSON.stringify({
+      choices: [{ message: { content: '{"done":false,"reason":"raw fallback action","actions":[{"type":"press_key","key":"Tab"}]}' } }],
+    }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    const result = await runComputerUseCodexTextPlanner(basePlannerInput(), {
+      workspace: '/tmp',
+      adapter,
+      commandId: 'codex-computer-use-plan-raw-fallback-test',
+      env: {
+        SCIFORGE_RUNTIME_API_KEY: 'test-key',
+        SCIFORGE_PROXY_UPSTREAM_BASE_URL: `http://127.0.0.1:${address.port}/v1`,
+        SCIFORGE_RUNTIME_MODEL: 'bailian/deepseek-v4-flash',
+        SCIFORGE_COMPUTER_USE_DIRECT_TEXT_PLANNER_RETRIES: '1',
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.match(result.ok ? result.text : '', /"press_key"/);
+    assert.match(result.ok ? result.raw.diagnosticSummary : '', /directChatAttempts=2\/2/);
+    assert.deepEqual(requests.map((request) => request.acceptEncoding), ['identity', 'identity']);
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    });
+  }
+});
+
+test('computer use text planner redacts direct chat fallback provider errors', async () => {
+  const adapter = new FakePlannerAdapter([
+    { type: 'failed', status: 'failed', message: 'unexpected status 502 Bad Gateway', exitCode: 1, signal: null },
+  ]);
+  const result = await runComputerUseCodexTextPlanner(basePlannerInput(), {
+    workspace: '/tmp',
+    adapter,
+    commandId: 'codex-computer-use-plan-fallback-redaction-test',
+    env: {
+      SCIFORGE_RUNTIME_API_KEY: 'sk-test-secret-should-not-appear',
+      SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'http://provider.example/v1?token=upstream-secret-token',
+      SCIFORGE_RUNTIME_MODEL: 'bailian/deepseek-v4-flash',
+    },
+    fetchImpl: async () => new Response(JSON.stringify({
+      error: {
+        message: 'Bearer abcdefghijklmnop failed for api_key=sk-provider-body-secret at https://provider.example/v1/chat/completions?token=query-secret',
+      },
+    }), { status: 401, headers: { 'content-type': 'application/json' } }),
+  });
+
+  assert.equal(result.ok, false);
+  const reason = result.ok ? '' : result.reason;
+  assert.match(reason, /HTTP 401/);
+  assert.doesNotMatch(reason, /sk-test-secret|sk-provider-body-secret|abcdefghijklmnop|query-secret|upstream-secret-token/);
+  assert.match(reason, /\[redacted-secret:/);
+  assert.match(reason, /\[redacted-url:/);
 });
 
 test('computer use text planner retries direct chat fallback after transient fetch failure', async () => {

@@ -7,6 +7,7 @@ import {
   computerUseInputChannelContract,
   computerUseInputChannelDescription,
   computerUseRealInputBlockReason,
+  computerUseRequiresVisibleArtifact,
   computerUseSchedulerLockIdForTarget,
   computerUseSchedulerRunMetadata,
   computerUseSchedulerStepMetadata,
@@ -176,7 +177,7 @@ test('visible artifact completion gap policy is package-owned', () => {
       ],
       { finalAttempt: true },
     ),
-    '',
+    'Visible artifact task did not satisfy completion acceptance: no current visible final artifact/report ref was produced or displayed.',
   );
   assert.equal(
     computerUseVisibleArtifactGapReason('create a short presentation artifact', [{ type: 'open_app' }, { type: 'scroll' }]),
@@ -186,6 +187,12 @@ test('visible artifact completion gap policy is package-owned', () => {
     computerUseVisibleArtifactGapReason('open the notes app', [{ type: 'open_app' }]),
     '',
   );
+  assert.equal(computerUseRequiresVisibleArtifact('save current file'), false);
+  assert.equal(computerUseRequiresVisibleArtifact('save the local document'), false);
+  assert.equal(computerUseRequiresVisibleArtifact('write a short summary in the comment box'), false);
+  assert.equal(computerUseRequiresVisibleArtifact('metadata contains artifactRefs from a previous diagnostic run'), false);
+  assert.equal(computerUseRequiresVisibleArtifact('write an evidence summary report with action mapping'), true);
+  assert.equal(computerUseRequiresVisibleArtifact('export the final report artifact'), true);
 });
 
 test('filesystem path text entry is blocked outside file dialog context', () => {

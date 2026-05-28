@@ -3,7 +3,7 @@ export type ComputerUseCaptureKind = 'display' | 'window';
 export type ComputerUseCoordinateSpace = 'screen' | 'window' | 'window-local';
 export type ComputerUseInputIsolation = 'best-effort' | 'require-focused-target';
 export type ComputerUseWindowTargetMode = 'display' | 'active-window' | 'window-id' | 'app-window';
-export type ComputerUsePlannerContractIssue = 'coordinate-output' | 'platform-incompatible-action' | 'unsupported-action' | 'empty-message-content' | 'completion-evidence-missing' | 'ambiguous-target-description';
+export type ComputerUsePlannerContractIssue = 'coordinate-output' | 'platform-incompatible-action' | 'unsupported-action' | 'empty-message-content' | 'completion-evidence-missing' | 'ambiguous-target-description' | 'quota-unmet' | 'current-round-action-missing' | 'visible-artifact-missing';
 
 export const computerUseInputPolicyIds = {
   actionType: 'generic-mouse-keyboard',
@@ -366,7 +366,7 @@ export function computerUseVisibleArtifactGapReason(
   executedActions: Array<{ type: string; text?: string }>,
   options: { finalAttempt?: boolean } = {},
 ) {
-  if (!/(create|make|produce|生成|制作|创建).{0,40}(slide|ppt|presentation|deck|artifact|文稿|幻灯片|演示)/i.test(task)) return '';
+  if (!computerUseRequiresVisibleArtifact(task)) return '';
   const hasOnlyBootstrapActions = executedActions.every((action) => action.type === 'open_app' || action.type === 'wait');
   if (hasOnlyBootstrapActions) {
     return options.finalAttempt
@@ -385,9 +385,30 @@ export function computerUseVisibleArtifactGapReason(
     }
   }
   const hasContentEntry = executedActions.some((action) => action.type === 'type_text' || action.type === 'click' || action.type === 'press_key' || action.type === 'hotkey');
-  return hasContentEntry
-    ? ''
-    : 'Visible artifact task did not satisfy completion acceptance: no visible content entry or structure-edit action was executed after app/window bootstrap.';
+  if (!hasContentEntry) {
+    return 'Visible artifact task did not satisfy completion acceptance: no visible content entry or structure-edit action was executed after app/window bootstrap.';
+  }
+  return options.finalAttempt
+    ? 'Visible artifact task did not satisfy completion acceptance: no current visible final artifact/report ref was produced or displayed.'
+    : '';
+}
+
+export function computerUseRequiresVisibleArtifact(task: string) {
+  const text = String(task || '');
+  if (!text.trim()) return false;
+  if (looksLikeInlineTextEntryArtifactTask(text) && !explicitFinalArtifactIntent(text)) return false;
+  return /(?:create|make|produce|generate|write|draft|build|export|生成|制作|创建|写出|草拟|导出).{0,60}(?:slide|ppt|presentation|deck|artifact|document|docx?|report|summary|index|file|brief|文稿|幻灯片|演示|产物|文档|报告|总结|汇总|索引|文件|简报)/i.test(text)
+    || /(?:save|保存).{0,60}(?:artifact|report|summary|index|brief|ppt|presentation|deck|产物|报告|总结|汇总|索引|简报|幻灯片|演示)/i.test(text)
+    || explicitFinalArtifactIntent(text)
+    || /(?:trace summary|evidence summary|action mapping|field evidence|control evidence|visual evidence (?:summary|refs?|report)|refs-first report|字段证据|控件证据|视觉证据(?:总结|汇总|引用|报告)|动作映射|证据总结|证据汇总|引用报告)/i.test(text);
+}
+
+function explicitFinalArtifactIntent(text: string) {
+  return /(?:final[-\s]?artifact|l2-artifact-refs|l3-workflow-refs|visible[-\s]?artifact|gui\.present.{0,40}artifact|report artifact|final report|artifact evidence|最终文件|最终产物|可见产物|报告产物)/i.test(text);
+}
+
+function looksLikeInlineTextEntryArtifactTask(text: string) {
+  return /(?:write|draft|type|enter|输入|填写|写入|草拟).{0,80}(?:summary|report|brief|总结|报告|简报).{0,80}(?:(?:in|into|inside|to)\s+(?:the\s+)?(?:comment box|comment field|comment|field|input|textbox|text box|form field|message box|chat box)|(?:在|到|进).{0,8}(?:评论框|评论区|字段|输入框|文本框|表单|消息框|聊天框))/i.test(text);
 }
 
 export function computerUseTextEntryContextBlockReason(options: {

@@ -48,22 +48,65 @@ async function assertPackageBridgeEvidenceFiles(runDir: string, options: { expec
   const hostPorts = await readJsonEvidence(join(runDir, 'host-ports.json'));
   const payload = await readJsonEvidence(join(runDir, 'tool-payload.json'));
   const guiPresent = await readJsonEvidence(join(runDir, 'gui-present.json'));
+  const tuiHostChain = await readJsonEvidence(join(runDir, 'tui-host-run-task-chain.json'));
+  const directoryListing = await readJsonEvidence(join(runDir, 'directory-listing.json'));
 
   assert.equal(request.schemaVersion, 'sciforge.computer-use.request.v1');
   assert.equal(hostPorts.schemaVersion, 'sciforge.computer-use.host-ports.v1');
   assert.ok(hostPorts.ports.capture);
+  assert.equal(directoryListing.schemaVersion, 'sciforge.computer-use.evidence-directory-listing.v1');
+  assert.ok(directoryListing.fileRefs.some((ref: string) => ref.endsWith('/vision-trace.json')));
+  assert.ok(directoryListing.fileRefs.some((ref: string) => ref.endsWith('/tui-host-run-task-chain.json')));
   assert.match(JSON.stringify(payload), /vision-trace\.json/);
   assert.match(JSON.stringify(payload), /workEvidence:computer-use-action-provider/);
   assert.equal(guiPresent.port, 'gui.present');
   assert.ok(guiPresent.payload.traceRefs.some((ref: string) => ref.endsWith('/vision-trace.json')));
   assert.ok(guiPresent.payload.artifactRefs.some((ref: string) => ref.endsWith('/vision-trace.json')));
+  assert.equal(tuiHostChain.schemaVersion, 'sciforge.computer-use.tui-host-run-task-chain.v1');
+  assert.equal(tuiHostChain.actionProvider, 'action.sciforge.computer-use');
+  assert.equal(tuiHostChain.boundary.packageMayCallGuiDirectly, false);
+  assert.match(JSON.stringify(tuiHostChain), /computer-use-request\.json/);
+  assert.match(JSON.stringify(tuiHostChain), /host-ports\.json/);
+  assert.match(JSON.stringify(tuiHostChain), /tool-payload\.json/);
+  assert.match(JSON.stringify(tuiHostChain), /vision-trace\.json/);
+  assert.match(JSON.stringify(tuiHostChain), /directory-listing\.json/);
+  assert.ok(tuiHostChain.links.some((link: Record<string, unknown>) => link.kind === 'tui-host-runTask' && link.status === 'present'));
+  assert.ok(tuiHostChain.links.some((link: Record<string, unknown>) => link.kind === 'gui.present' && link.status === 'present'));
+  assert.ok(tuiHostChain.links.some((link: Record<string, unknown>) => link.kind === 'directory-listing' && link.status === 'present'));
+  assert.doesNotMatch(JSON.stringify(tuiHostChain), /data:image\/|;base64,/);
 
   if (options.expectApproval) {
     const guiAskUser = await readJsonEvidence(join(runDir, 'gui-ask-user.json'));
+    const approvalRequest = await readJsonEvidence(join(runDir, 'approval-request.json'));
+    const riskAudit = await readJsonEvidence(join(runDir, 'risk-audit.json'));
+    const blockedManifest = await readJsonEvidence(join(runDir, 'blocked-manifest.json'));
+    const repairHint = await readJsonEvidence(join(runDir, 'repair-hint.json'));
+    const continuationRequest = await readJsonEvidence(join(runDir, 'continuation-request.json'));
     assert.equal(guiAskUser.port, 'gui.ask_user');
+    assert.equal(guiAskUser.status, 'needs-confirmation');
     assert.ok(guiAskUser.payload.approvalRequest);
+    assert.equal(guiAskUser.deniedExecuted, false);
+    assert.equal(guiAskUser.packageMayCallGuiDirectly, false);
     assert.match(JSON.stringify(guiAskUser.payload.approvalRequest), /approval/i);
     assert.ok(guiAskUser.payload.relatedRefs.some((ref: string) => ref.endsWith('/vision-trace.json')));
+    assert.equal(approvalRequest.schemaVersion, 'sciforge.computer-use.approval-request-sidecar.v1');
+    assert.equal(approvalRequest.status, 'needs-confirmation');
+    assert.equal(approvalRequest.approvalRequestId, guiAskUser.approvalRequestId);
+    assert.equal(approvalRequest.riskActionHash, guiAskUser.riskActionHash);
+    assert.equal(approvalRequest.approvalRef, guiAskUser.approvalRef);
+    assert.equal(approvalRequest.deniedExecuted, false);
+    assert.equal(riskAudit.schemaVersion, 'sciforge.computer-use.risk-audit-sidecar.v1');
+    assert.equal(riskAudit.approvalRequestId, approvalRequest.approvalRequestId);
+    assert.equal(riskAudit.riskActionHash, approvalRequest.riskActionHash);
+    assert.equal(riskAudit.approvalRef, approvalRequest.approvalRef);
+    assert.equal(riskAudit.deniedExecuted, false);
+    assert.equal(blockedManifest.schemaVersion, 'sciforge.computer-use.blocked-manifest-sidecar.v1');
+    assert.match(String(blockedManifest.approvalRequestRef), /approval-request\.json$/);
+    assert.equal(repairHint.blockedManifestRef, blockedManifest.traceRef.replace(/vision-trace\.json$/, 'blocked-manifest.json'));
+    assert.match(String(continuationRequest.repairHintRef), /repair-hint\.json$/);
+    assert.ok(tuiHostChain.links.some((link: Record<string, unknown>) => link.kind === 'gui.ask_user' && link.status === 'present'));
+    assert.ok(tuiHostChain.links.some((link: Record<string, unknown>) => link.kind === 'approval-request' && link.status === 'present'));
+    assert.ok(tuiHostChain.links.some((link: Record<string, unknown>) => link.kind === 'repair-continuity' && link.status === 'present'));
   }
 }
 
@@ -90,6 +133,10 @@ test('package bridge calls Python run_task through stdio host ports and writes r
     const trace = JSON.parse(await readFile(tracePath, 'utf8')) as Record<string, unknown>;
     assert.equal(trace.schemaVersion, 'sciforge.vision-trace.v1');
     assert.equal((trace.packageBridge as Record<string, unknown>).schemaVersion, 'sciforge.computer-use.package-bridge-trace.v1');
+    assert.equal(
+      (trace.packageBridge as Record<string, unknown>).tuiHostRunTaskChainRef,
+      '.sciforge/vision-runs/cu-package-bridge-ok/tui-host-run-task-chain.json',
+    );
     assert.equal((trace.packageResult as Record<string, unknown>).status, 'completed');
     assert.doesNotMatch(JSON.stringify(trace), /data:image\/|;base64,|fallbackActions|computer-use-action-loop/);
     assert.ok(payload.objectReferences?.some((ref) => ref.id === 'ref:computer-use-tui-host-actions'));
@@ -293,6 +340,63 @@ test('package bridge projects independent virtual remote session artifacts into 
   }
 });
 
+test('package bridge keeps report artifact intent open until a visible final artifact is produced', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-package-report-artifact-'));
+  const planner = new FakePlannerAdapter([
+    JSON.stringify({
+      done: true,
+      reason: 'the report summary is complete from prior trace refs',
+      actions: [],
+    }),
+    JSON.stringify({
+      done: false,
+      reason: 'write the report artifact content',
+      actions: [{ type: 'type_text', text: '# Evidence summary\n- screenshot refs\n- action mapping\n- field/control evidence' }],
+    }),
+    JSON.stringify({
+      done: true,
+      reason: 'visible report artifact exists',
+      actions: [],
+    }),
+  ]);
+  try {
+    const config = baseConfig('cu-package-bridge-report-artifact', []);
+    config.testActionFixtureMode = false;
+    config.dryRun = false;
+    config.maxSteps = 5;
+    config.inputAdapter = 'remote-desktop';
+    config.independentInputAdapterProvider = SCIFORGE_SIMULATED_REMOTE_DESKTOP_PROVIDER;
+    config.allowSharedSystemInput = false;
+
+    const payload = await runComputerUsePackageBridge({
+      skillDomain: 'knowledge',
+      prompt: '/computer-use run write an evidence summary report with action mapping and field/control visual evidence refs',
+      workspacePath: workspace,
+      selectedToolIds: ['local.vision-sense'],
+      artifacts: [],
+    }, workspace, config, {}, {
+      codexPlannerAdapter: planner,
+    });
+
+    assert.equal(payload.executionUnits[0]?.status, 'done');
+    const outputArtifacts = Array.isArray(payload.executionUnits[0]?.outputArtifacts)
+      ? payload.executionUnits[0]?.outputArtifacts
+      : [];
+    assert.ok(outputArtifacts.includes('.sciforge/vision-runs/cu-package-bridge-report-artifact/report.md'));
+    assert.ok(planner.commandTexts.some((command) => /visible final artifact\/report ref/.test(command)));
+
+    const runDir = join(workspace, '.sciforge/vision-runs/cu-package-bridge-report-artifact');
+    const trace = JSON.parse(await readFile(join(runDir, 'vision-trace.json'), 'utf8')) as Record<string, any>;
+    assert.equal(trace.finalArtifactRef, '.sciforge/vision-runs/cu-package-bridge-report-artifact/report.md');
+    assert.equal(trace.packageResult.status, 'completed');
+    assert.ok(JSON.stringify(trace.steps).includes('# Evidence summary'));
+    const guiPresent = JSON.parse(await readFile(join(runDir, 'gui-present.json'), 'utf8')) as Record<string, any>;
+    assert.ok(guiPresent.payload.artifactRefs.includes('.sciforge/vision-runs/cu-package-bridge-report-artifact/report.md'));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('package bridge defaults to Runtime Codex text planner when no test fixture actions are enabled', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-package-codex-planner-'));
   const planner = new FakePlannerAdapter([
@@ -340,6 +444,56 @@ test('package bridge defaults to Runtime Codex text planner when no test fixture
     const traceText = await readFile(join(workspace, '.sciforge/vision-runs/cu-package-bridge-codex-planner/vision-trace.json'), 'utf8');
     assert.match(traceText, /runtime-codex-tui-text-planner/);
     assert.doesNotMatch(traceText, /openai-compatible-vision-planner|fallbackActions|computer-use-action-loop/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('package bridge action-ledger completion waits for current-round quota', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-package-ledger-quota-'));
+  try {
+    const config = baseConfig('cu-package-bridge-ledger-quota', [
+      { type: 'click', targetDescription: 'visible search field for low-risk validation test', x: 120, y: 80 },
+      { type: 'type_text', text: 'nonexistent validation query' },
+      { type: 'click', targetDescription: 'visible empty result or no-result message area', x: 160, y: 110 },
+      { type: 'click', targetDescription: 'clear search field control', x: 190, y: 90 },
+      { type: 'click', targetDescription: 'visible safe search field after clearing', x: 120, y: 80 },
+    ]);
+    config.maxSteps = 5;
+    const payload = await runComputerUsePackageBridge({
+      skillDomain: 'knowledge',
+      prompt: '/computer-use run create a low-risk validation/no-result state in a visible search field, observe it, then clear or correct the field; do not submit, save, send, delete, or authorize anything',
+      workspacePath: workspace,
+      selectedToolIds: ['local.vision-sense'],
+      uiState: {
+        computerUseLong: {
+          taskId: 'T084',
+          scenarioId: 'CU-LONG-004',
+          cuNextTaskId: 'CU-NEXT-07',
+          round: 3,
+          acceptance: ['at least 20 generic actions'],
+          acceptanceProgress: {
+            schemaVersion: 'sciforge.computer-use-long.acceptance-progress.v1',
+            round: 3,
+            roundCount: 4,
+            remainingRounds: 2,
+            minimumScenarioActionCount: 20,
+            observedScenarioActionCount: 15,
+            remainingScenarioActionCount: 5,
+            suggestedCurrentRoundActionTarget: 5,
+          },
+        },
+      },
+      artifacts: [],
+    }, workspace, config, {});
+
+    assert.equal(payload.executionUnits[0]?.status, 'done');
+    const trace = JSON.parse(await readFile(join(workspace, '.sciforge/vision-runs/cu-package-bridge-ledger-quota/vision-trace.json'), 'utf8')) as Record<string, any>;
+    assert.equal((trace.packageResult as Record<string, any>).metrics.actionCount, 5);
+    const verifierReasons = (trace.steps as Array<Record<string, any>>)
+      .filter((step) => step.kind === 'gui-execution')
+      .map((step) => String(step.verifier?.reason ?? ''));
+    assert.ok(verifierReasons.some((reason) => /current-round acceptance quota is not met yet/.test(reason)));
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -460,13 +614,57 @@ test('package bridge preserves approvalRequest as gui.ask_user host action metad
 test('package bridge confirmed retry carries approvalRef and executes guarded dry-run action', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-package-confirmed-'));
   try {
+    const approvalProvenance = {
+      source: 'prior-fail-closed-request',
+      sourceRunId: 'cu-package-bridge-needs-confirmation',
+      sourceApprovalRequestRef: '.sciforge/vision-runs/cu-package-bridge-needs-confirmation/approval-request.json',
+      sourceGuiAskUserRecordRef: '.sciforge/vision-runs/cu-package-bridge-needs-confirmation/gui-ask-user.json',
+      sourceRiskAuditRef: '.sciforge/vision-runs/cu-package-bridge-needs-confirmation/risk-audit.json',
+      approvalRequestId: 'approval-request:cu-confirmed',
+      approvalRef: 'approval:computer-use:cu-confirmed',
+      riskActionHash: 'risk-action:cu-confirmed',
+      highRiskAction: { actionKind: 'type_text', targetDescription: 'confirmed guarded text' },
+      approvalRequestSidecar: {
+        schemaVersion: 'sciforge.computer-use.approval-request-sidecar.v1',
+        status: 'needs-confirmation',
+        approvalRequestId: 'approval-request:cu-confirmed',
+        approvalRef: 'approval:computer-use:cu-confirmed',
+        riskActionHash: 'risk-action:cu-confirmed',
+        approvalRequest: {
+          id: 'approval-request:cu-confirmed',
+          approvalRef: 'approval:computer-use:cu-confirmed',
+          riskActionHash: 'risk-action:cu-confirmed',
+          actionKind: 'type_text',
+          riskLevel: 'high',
+        },
+      },
+      guiAskUserSidecar: {
+        schemaVersion: 'sciforge.computer-use.tui-host-actions.v1',
+        port: 'gui.ask_user',
+        status: 'needs-confirmation',
+        payload: {
+          approvalRequest: {
+            id: 'approval-request:cu-confirmed',
+            approvalRef: 'approval:computer-use:cu-confirmed',
+            riskActionHash: 'risk-action:cu-confirmed',
+          },
+        },
+      },
+      riskAuditSidecar: {
+        schemaVersion: 'sciforge.computer-use.risk-audit-sidecar.v1',
+        status: 'needs-confirmation',
+        approvalRequestId: 'approval-request:cu-confirmed',
+        approvalRef: 'approval:computer-use:cu-confirmed',
+        riskActionHash: 'risk-action:cu-confirmed',
+      },
+    };
     const payload = await runComputerUsePackageBridge({
       skillDomain: 'knowledge',
       prompt: '/computer-use approve --approval-ref "approval:computer-use:cu-confirmed"',
       workspacePath: workspace,
       selectedToolIds: ['local.vision-sense'],
       artifacts: [],
-      humanApproval: { approvalRef: 'approval:computer-use:cu-confirmed' },
+      humanApproval: { approvalRef: 'approval:computer-use:cu-confirmed', approvalProvenance },
     }, workspace, baseConfig('cu-package-bridge-confirmed', [
       {
         type: 'type_text',
@@ -485,11 +683,47 @@ test('package bridge confirmed retry carries approvalRef and executes guarded dr
     const packageSteps = packageResult.steps as Array<Record<string, unknown>>;
     assert.equal(computerUseRequest.riskPolicy, 'allow-confirmed');
     assert.equal(computerUseRequest.approvalRef, 'approval:computer-use:cu-confirmed');
+    assert.deepEqual((computerUseRequest.metadata as Record<string, unknown>).approvalProvenance, approvalProvenance);
     assert.equal(packageResult.status, 'completed');
     assert.equal(packageResult.approvalRequest, null);
     assert.equal(packageSteps[0]?.status, 'done');
     assert.ok(packageSteps[0]?.execution);
     assert.match(JSON.stringify(packageSteps[0]?.execution), /dry-run package bridge/);
+    const confirmedRequest = await readJsonEvidence(join(workspace, '.sciforge/vision-runs/cu-package-bridge-confirmed/confirmed-request.json'));
+    const approvalRequest = await readJsonEvidence(join(workspace, '.sciforge/vision-runs/cu-package-bridge-confirmed/approval-request.json'));
+    const guiAskUser = await readJsonEvidence(join(workspace, '.sciforge/vision-runs/cu-package-bridge-confirmed/gui-ask-user.json'));
+    const riskAudit = await readJsonEvidence(join(workspace, '.sciforge/vision-runs/cu-package-bridge-confirmed/risk-audit.json'));
+    assert.equal(approvalRequest.schemaVersion, 'sciforge.computer-use.approval-request-sidecar.v1');
+    assert.equal(approvalRequest.status, 'needs-confirmation');
+    assert.equal(approvalRequest.approvalRef, 'approval:computer-use:cu-confirmed');
+    assert.equal(approvalRequest.approvalRequestId, 'approval-request:cu-confirmed');
+    assert.equal(approvalRequest.riskActionHash, 'risk-action:cu-confirmed');
+    assert.equal(approvalRequest.approvalRequestId, confirmedRequest.approvalRequestId);
+    assert.equal(approvalRequest.riskActionHash, confirmedRequest.riskActionHash);
+    assert.equal(approvalRequest.confirmedRequestRef, '.sciforge/vision-runs/cu-package-bridge-confirmed/confirmed-request.json');
+    assert.equal(approvalRequest.approvalBoundary.source, 'prior-fail-closed-request');
+    assert.equal(approvalRequest.approvalBoundary.sourceStatus, 'needs-confirmation');
+    assert.equal(guiAskUser.schemaVersion, 'sciforge.computer-use.tui-host-actions.v1');
+    assert.equal(guiAskUser.port, 'gui.ask_user');
+    assert.equal(guiAskUser.status, 'needs-confirmation');
+    assert.equal(guiAskUser.approvalRef, 'approval:computer-use:cu-confirmed');
+    assert.equal(guiAskUser.approvalRequestId, confirmedRequest.approvalRequestId);
+    assert.equal(guiAskUser.riskActionHash, confirmedRequest.riskActionHash);
+    assert.ok(guiAskUser.payload.approvalRequest);
+    assert.equal(confirmedRequest.schemaVersion, 'sciforge.computer-use.confirmed-request-sidecar.v1');
+    assert.equal(confirmedRequest.approvalRef, 'approval:computer-use:cu-confirmed');
+    assert.equal(confirmedRequest.approvalRequestId, 'approval-request:cu-confirmed');
+    assert.equal(confirmedRequest.riskActionHash, 'risk-action:cu-confirmed');
+    assert.equal(confirmedRequest.confirmedRequestRef, '.sciforge/vision-runs/cu-package-bridge-confirmed/confirmed-request.json');
+    assert.equal(confirmedRequest.approvalBoundary.source, 'prior-fail-closed-request');
+    assert.equal(confirmedRequest.approvalBoundary.sourceApprovalRequestRef, '.sciforge/vision-runs/cu-package-bridge-confirmed/approval-source-request.json');
+    assert.equal(confirmedRequest.deniedExecuted, false);
+    assert.equal(confirmedRequest.packageMayCallGuiDirectly, false);
+    assert.equal(riskAudit.approvalRequestId, confirmedRequest.approvalRequestId);
+    assert.equal(riskAudit.riskActionHash, confirmedRequest.riskActionHash);
+    assert.equal(riskAudit.approvalRef, confirmedRequest.approvalRef);
+    assert.equal(riskAudit.confirmedRequestRef, '.sciforge/vision-runs/cu-package-bridge-confirmed/confirmed-request.json');
+    assert.equal(riskAudit.deniedExecuted, false);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

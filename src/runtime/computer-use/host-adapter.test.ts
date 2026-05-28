@@ -81,6 +81,11 @@ test('gateway adapter projects generic planner acceptance contract from UI state
         failureRecord: ['failure diagnostics'],
         requiredPipeline: ['WindowTarget', 'RuntimeCodexPlanner'],
         safetyBoundary: { noDomAccessibility: true },
+        acceptanceProgress: {
+          schemaVersion: 'sciforge.computer-use-long.acceptance-progress.v1',
+          minimumScenarioActionCount: 20,
+          suggestedCurrentRoundActionTarget: 5,
+        },
       },
       computerUseNext: {
         taskId: 'CU-NEXT-99',
@@ -94,6 +99,11 @@ test('gateway adapter projects generic planner acceptance contract from UI state
   assert.equal(contract.scenarioId, 'CU-LONG-999');
   assert.equal(contract.cuNextTaskId, 'CU-NEXT-99');
   assert.deepEqual(contract.expectedTrace, ['before screenshot refs', 'generic action ledger']);
+  assert.deepEqual(contract.acceptanceProgress, {
+    schemaVersion: 'sciforge.computer-use-long.acceptance-progress.v1',
+    minimumScenarioActionCount: 20,
+    suggestedCurrentRoundActionTarget: 5,
+  });
   assert.deepEqual(contract.requirements, ['l3-workflow-refs', 'no-dom-playwright-accessibility']);
   assert.doesNotMatch(JSON.stringify(contract), /DOMSnapshot|accessibilityTree|data:image/);
 });

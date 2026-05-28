@@ -39,6 +39,10 @@ def test_native_stdio_probe_captures_then_fails_closed_without_input(tmp_path, m
         inventory_reader=fake_inventory,
     )
     payload = runner.run()
+    expected_screenshot_refs = [
+        str((output_dir / "native-stdio-before.png").resolve()),
+        str((output_dir / "native-stdio-capture-2.png").resolve()),
+    ]
 
     assert payload["status"] == "failed-with-reason"
     assert "will not execute input" in payload["reason"]
@@ -61,7 +65,7 @@ def test_native_stdio_probe_captures_then_fails_closed_without_input(tmp_path, m
         "native-target-window-binding-proof.json"
     )
     assert payload["traceRefs"] == [str((output_dir / "vision-trace.json").resolve())]
-    assert payload["screenshotRefs"] == [str((output_dir / "native-stdio-before.png").resolve())]
+    assert payload["screenshotRefs"] == expected_screenshot_refs
     assert commands[0][0:2] == ["screencapture", "-x"]
     assert "-l123" in commands[0]
     assert "-i" not in commands[0]
@@ -80,7 +84,9 @@ def test_native_stdio_probe_captures_then_fails_closed_without_input(tmp_path, m
     assert manifest["requestedTargetWindow"] == "Fixture Window"
     assert manifest["targetWindowResolved"] is True
     assert manifest["selectedWindow"]["windowId"] == 123
+    assert manifest["screenshotRefs"] == expected_screenshot_refs
     assert manifest["screenshotMetadataByRef"][payload["screenshotRefs"][0]]["width"] == 13
+    assert manifest["screenshotMetadataByRef"][payload["screenshotRefs"][1]]["width"] == 13
     assert manifest["inputExecuted"] is False
     assert manifest["executeFailClosed"] is True
     assert manifest["inputChannel"] == "isolated-window"
@@ -100,7 +106,7 @@ def test_native_stdio_probe_captures_then_fails_closed_without_input(tmp_path, m
     assert manifest["targetBindingValidation"]["evidenceRefs"] == [
         str((output_dir / "native-window-inventory.json").resolve()),
         str((output_dir / "native-selected-window.json").resolve()),
-        str((output_dir / "native-stdio-before.png").resolve()),
+        *expected_screenshot_refs,
         str((output_dir / "native-target-window-binding-proof.json").resolve()),
     ]
     assert "bindingStatus must be bound" in manifest["targetBindingValidation"]["errors"]
@@ -118,7 +124,7 @@ def test_native_stdio_probe_captures_then_fails_closed_without_input(tmp_path, m
     assert binding["executeChangesTargetEnvironment"] is False
     proof = read_json(output_dir / "native-target-window-binding-proof.json")
     assert proof["selectedWindow"]["windowId"] == 123
-    assert proof["screenshotRef"] == str((output_dir / "native-stdio-before.png").resolve())
+    assert proof["screenshotRef"] == expected_screenshot_refs[-1]
     assert proof["inputExecuted"] is False
     assert [call["port"] for call in manifest["hostPortCalls"]] == [
         "emitEvent",
@@ -126,6 +132,7 @@ def test_native_stdio_probe_captures_then_fails_closed_without_input(tmp_path, m
         "plan",
         "locate",
         "execute",
+        "capture",
         "writeTrace",
         "emitEvent",
     ]

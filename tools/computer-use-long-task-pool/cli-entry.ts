@@ -61,6 +61,7 @@ export async function runComputerUseLongTaskPoolCli(argv = process.argv) {
       process.stdout.write(`  attempted rounds: ${result.attemptedRounds.join(', ')}\n`);
       if (result.repairNeededRound) process.stdout.write(`  repair-needed round: ${result.repairNeededRound}\n`);
       process.stdout.write(`  summary: ${result.summaryPath}\n`);
+      for (const issue of result.validation?.issues ?? []) process.stdout.write(`- ${issue}\n`);
       process.exitCode = 1;
     } else {
       process.stdout.write(`[ok] ${result.scenarioId} scenario run passed\n`);
@@ -260,6 +261,12 @@ function parseRunRoundArgs(args: string[]) {
     } else if (arg === '--prompt-suffix') {
       options.promptSuffix = readArgValue(args, index, arg);
       index += 1;
+    } else if (arg === '--approval-ref') {
+      options.approvalRef = normalizeApprovalRef(readArgValue(args, index, arg));
+      index += 1;
+    } else if (arg === '--approval-source-dir') {
+      options.approvalSourceDir = readArgValue(args, index, arg);
+      index += 1;
     } else {
       throw new Error(`Unknown argument: ${arg}`);
     }
@@ -301,6 +308,12 @@ function parseRunScenarioArgs(args: string[]) {
       index += 1;
     } else if (arg === '--prompt-suffix') {
       options.promptSuffix = readArgValue(args, index, arg);
+      index += 1;
+    } else if (arg === '--approval-ref') {
+      options.approvalRef = normalizeApprovalRef(readArgValue(args, index, arg));
+      index += 1;
+    } else if (arg === '--approval-source-dir') {
+      options.approvalSourceDir = readArgValue(args, index, arg);
       index += 1;
     } else {
       throw new Error(`Unknown argument: ${arg}`);
@@ -472,7 +485,14 @@ function normalizeCliTargetMode(value: string): 'active-window' | 'app-window' |
   throw new Error(`Unsupported --target-mode: ${value}`);
 }
 
+function normalizeApprovalRef(value: string): string {
+  const trimmed = value.trim();
+  if (!/^approval:[A-Za-z0-9._:@/-]+$/.test(trimmed)) {
+    throw new Error('--approval-ref must be a non-empty approval: token');
+  }
+  return trimmed;
+}
+
 function sanitizeRunId(value: string) {
   return value.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 120) || 'cu-long-run';
 }
-

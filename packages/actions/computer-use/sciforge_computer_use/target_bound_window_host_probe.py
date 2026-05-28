@@ -64,6 +64,16 @@ EXECUTOR_PROVIDER = "package-target-bound-window-executor"
 CAPTURE_PROVIDER = "package-owned-target-window-capture"
 INPUT_CHANNEL = "isolated-window"
 TARGET_ENVIRONMENT_KIND = "package-owned-target-bound-window"
+SUPPORTED_TARGET_BOUND_ACTIONS = {
+    "click",
+    "double_click",
+    "focus",
+    "type_text",
+    "press_key",
+    "hotkey",
+    "scroll",
+    "save",
+}
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -315,6 +325,13 @@ class TargetBoundWindowHostProbeRunner(VirtualDesktopProbeRunner):
         kind = str(action_mapping.get("kind") or action_mapping.get("type") or "").strip()
         if not kind:
             return {"ok": False, "blocked": True, "message": "Target-bound executor requires an action kind.", "metadata": {"failedStage": "execution"}}
+        if kind not in SUPPORTED_TARGET_BOUND_ACTIONS:
+            return {
+                "ok": False,
+                "blocked": True,
+                "message": f"Target-bound executor does not support action kind {kind!r}.",
+                "metadata": self._execution_metadata(kind, blocked=True, reason="unsupported-action-kind"),
+            }
         if _blocked_action(action_mapping):
             return {
                 "ok": False,
@@ -955,6 +972,7 @@ def _artifact_causality(metadata: Mapping[str, Any]) -> dict[str, Any]:
         "savedByInputModality": metadata.get("savedByInputModality"),
         "artifactValidationRef": metadata.get("artifactValidationRef"),
         "pptxValidationRef": metadata.get("pptxValidationRef"),
+        "docxValidationRef": metadata.get("docxValidationRef"),
     }
 
 

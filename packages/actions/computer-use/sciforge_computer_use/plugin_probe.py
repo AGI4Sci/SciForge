@@ -25,6 +25,10 @@ PROBE_MANIFEST_NAME = "plugin-probe-manifest.json"
 CLI_RESULT_NAME = "plugin-probe-cli-result.json"
 ACTION_MANIFEST_NAME = "action-provider.manifest.json"
 PACKAGE_MODULE = "sciforge_computer_use"
+REQUIRED_API_VALUE_SYMBOLS = (
+    "executorCommandEventLogSchema",
+    "EXECUTOR_COMMAND_EVENT_LOG_SCHEMA",
+)
 
 ModuleImporter = Callable[[str], Any]
 SubprocessRun = Callable[..., subprocess.CompletedProcess[str]]
@@ -103,6 +107,12 @@ def run_plugin_probe(
             manifest_callable_paths,
             module_importer=module_importer,
         ))
+        diagnostic_probe_modules = _check_manifest_diagnostic_probe_commands(
+            _manifest_diagnostic_probe_commands(action_manifest),
+            checks,
+            module_importer=module_importer,
+        )
+        _check_manifest_diagnostic_claim_semantics(action_manifest, checks)
 
         cli_probe = _not_run_cli_probe()
         cli_trace_refs: list[str] = []
@@ -152,10 +162,20 @@ def run_plugin_probe(
                     "module": entry_module,
                     "moduleRef": _module_file_ref(module_importer, entry_module),
                     "requiredSymbols": required_symbols,
+                    "requiredValueSymbols": list(REQUIRED_API_VALUE_SYMBOLS),
                     "manifestCallablePaths": manifest_callable_paths,
                     "getManifestMatchesActionProvider": api_manifest.get("id") == action_manifest.get("id"),
                 },
+                "diagnosticProbeModules": diagnostic_probe_modules,
                 "cliFixture": cli_probe,
+                "diagnosticOnly": True,
+                "userAcceptanceEligible": False,
+                "l1SmokeCompleted": False,
+                "l3WorkflowCompleted": False,
+                "claimLimit": (
+                    "Plugin discovery only proves package manifest/API/CLI fixture plumbing. "
+                    "It does not execute a real isolated desktop L1 smoke run or L3 multi-app workflow."
+                ),
                 "checks": checks,
                 "rawActionManifestWritten": False,
                 "rawCliStdoutWritten": False,
@@ -236,8 +256,18 @@ def _required_api_symbols(entry_symbol: str, override: Sequence[str] | None) -> 
         "validateViewportRecoveryEvidence",
         "buildTargetBoundRealWindowProbeEvidence",
         "validateTargetBoundRealWindowProbeEvidence",
+        "buildIsolatedDesktopL1SmokeEvidence",
+        "validateIsolatedDesktopL1SmokeEvidence",
+        "buildIsolatedDesktopL3WorkflowEvidence",
+        "validateIsolatedDesktopL3WorkflowEvidence",
         "buildTargetBoundInputAdapterManifest",
         "validateInputAdapterManifestForRealDesktop",
+        "validateRepairManifest",
+        "buildVisibleRunViewer",
+        "validateVisibleRunViewerManifest",
+        "buildEvidenceIndex",
+        "buildEvidenceSnapshot",
+        "buildPlannerBrief",
     ])
     ordered: list[str] = []
     for symbol in symbols:
@@ -337,6 +367,17 @@ def _check_api_symbols(
         checks.append(_check(f"api-symbol:{symbol}", ok, "" if ok else f"Missing callable API symbol {symbol!r}."))
         if not ok:
             raise ProbeFailure("missing-api-symbol", f"Package API is missing callable symbol {symbol!r}.", checks=checks)
+    value_symbol_values: dict[str, Any] = {}
+    for symbol in REQUIRED_API_VALUE_SYMBOLS:
+        value = getattr(module, symbol, None)
+        ok = isinstance(value, str) and bool(value.strip())
+        checks.append(_check(f"api-value-symbol:{symbol}", ok, "" if ok else f"Missing non-empty string API symbol {symbol!r}."))
+        if not ok:
+            raise ProbeFailure("missing-api-symbol", f"Package API is missing value symbol {symbol!r}.", checks=checks)
+        value_symbol_values[symbol] = value
+    if value_symbol_values.get("executorCommandEventLogSchema") != value_symbol_values.get("EXECUTOR_COMMAND_EVENT_LOG_SCHEMA"):
+        checks.append(_check("api-value-symbol:executorCommandEventLogSchema", False, "executorCommandEventLogSchema must match EXECUTOR_COMMAND_EVENT_LOG_SCHEMA."))
+        raise ProbeFailure("api-symbol-mismatch", "Package API executor command event schema aliases do not match.", checks=checks)
 
     api_manifest = getattr(module, "getManifest")()
     if not isinstance(api_manifest, Mapping):
@@ -362,16 +403,48 @@ def _manifest_callable_paths(action_manifest: Mapping[str, Any]) -> list[str]:
         _nested_string(action_manifest, ("viewportRecoveryContract", "validator")),
         _nested_string(action_manifest, ("targetBoundRealWindowProbeContract", "builder")),
         _nested_string(action_manifest, ("targetBoundRealWindowProbeContract", "validator")),
+        _nested_string(action_manifest, ("isolatedDesktopL1SmokeContract", "builder")),
+        _nested_string(action_manifest, ("isolatedDesktopL1SmokeContract", "validator")),
+        _nested_string(action_manifest, ("isolatedDesktopL3WorkflowContract", "builder")),
+        _nested_string(action_manifest, ("isolatedDesktopL3WorkflowContract", "validator")),
         _nested_string(action_manifest, ("semanticVerifierProbeContract", "responseCompatibilityHelper")),
         _nested_string(action_manifest, ("semanticVerifierProbeContract", "responseCompatibilityHelpers", "textExtraction")),
         _nested_string(action_manifest, ("semanticVerifierProbeContract", "responseCompatibilityHelpers", "responsesToChatCompletions")),
         _nested_string(action_manifest, ("semanticVerifierProbeContract", "responseCompatibilityHelpers", "chatCompletionsToResponses")),
+        *_recursive_manifest_callable_paths(action_manifest),
     ]
     ordered: list[str] = []
     for path in paths:
         if path and path not in ordered:
             ordered.append(path)
     return ordered
+
+
+def _recursive_manifest_callable_paths(value: Any, *, parent_key: str = "") -> list[str]:
+    paths: list[str] = []
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            key_text = str(key)
+            if isinstance(item, str) and (_is_callable_manifest_key(key_text) or _is_callable_container_key(parent_key)):
+                if "." in item:
+                    paths.append(item.strip())
+            paths.extend(_recursive_manifest_callable_paths(item, parent_key=key_text))
+    elif isinstance(value, list):
+        for item in value:
+            if isinstance(item, str) and _is_callable_container_key(parent_key) and "." in item:
+                paths.append(item.strip())
+            paths.extend(_recursive_manifest_callable_paths(item, parent_key=parent_key))
+    return paths
+
+
+def _is_callable_manifest_key(key: str) -> bool:
+    normalized = key.replace("_", "").replace("-", "").lower()
+    return normalized in {"assembler", "builder", "validator", "helper"} or normalized.endswith(("assembler", "builder", "validator", "helper"))
+
+
+def _is_callable_container_key(key: str) -> bool:
+    normalized = key.replace("_", "").replace("-", "").lower()
+    return normalized.endswith("helpers")
 
 
 def _check_manifest_callable_paths(
@@ -419,6 +492,192 @@ def _check_manifest_callable_paths(
     return checks
 
 
+def _manifest_diagnostic_probe_commands(action_manifest: Mapping[str, Any]) -> list[dict[str, str]]:
+    commands: list[dict[str, str]] = []
+    entrypoint = action_manifest.get("entrypoint")
+    if isinstance(entrypoint, Mapping):
+        for key, item in entrypoint.items():
+            if str(key).endswith("Probe") and isinstance(item, str) and item.strip():
+                commands.append({"manifestPath": f"entrypoint.{key}", "command": item.strip()})
+
+    diagnostic_probes = _nested_mapping(action_manifest, ("hostPortsContract", "diagnosticProbes"))
+    if diagnostic_probes is not None:
+        commands.extend(_recursive_diagnostic_probe_commands(
+            diagnostic_probes,
+            manifest_path="hostPortsContract.diagnosticProbes",
+        ))
+    return commands
+
+
+def _recursive_diagnostic_probe_commands(value: Any, *, manifest_path: str) -> list[dict[str, str]]:
+    commands: list[dict[str, str]] = []
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            commands.extend(_recursive_diagnostic_probe_commands(item, manifest_path=f"{manifest_path}.{key}"))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            commands.extend(_recursive_diagnostic_probe_commands(item, manifest_path=f"{manifest_path}[{index}]"))
+    elif isinstance(value, str) and value.strip():
+        commands.append({"manifestPath": manifest_path, "command": value.strip()})
+    return commands
+
+
+def _check_manifest_diagnostic_probe_commands(
+    commands: Sequence[Mapping[str, str]],
+    checks: list[dict[str, Any]],
+    *,
+    module_importer: ModuleImporter,
+) -> list[dict[str, str]]:
+    modules: list[dict[str, str]] = []
+    for command_entry in commands:
+        manifest_path = command_entry["manifestPath"]
+        command = command_entry["command"]
+        try:
+            tokens = shlex.split(command)
+        except ValueError as exc:
+            checks.append(_diagnostic_probe_check(
+                manifest_path,
+                False,
+                f"diagnostic probe command cannot be parsed safely: {exc}.",
+            ))
+            raise ProbeFailure(
+                "unsafe-diagnostic-probe-command",
+                f"Manifest diagnostic probe command at {manifest_path} cannot be parsed safely.",
+                checks=checks,
+            ) from exc
+
+        unsafe_token = _unsafe_cli_token(tokens)
+        if unsafe_token:
+            checks.append(_diagnostic_probe_check(
+                manifest_path,
+                False,
+                f"diagnostic probe command contains unsafe token: {unsafe_token!r}.",
+            ))
+            raise ProbeFailure(
+                "unsafe-diagnostic-probe-command",
+                f"Manifest diagnostic probe command at {manifest_path} contains shell control syntax.",
+                checks=checks,
+            )
+
+        module = _python_dash_m_module(tokens)
+        if module is None:
+            checks.append(_diagnostic_probe_check(
+                manifest_path,
+                False,
+                "diagnostic probe command must use python -m <package-module>.",
+            ))
+            raise ProbeFailure(
+                "unsafe-diagnostic-probe-command",
+                f"Manifest diagnostic probe command at {manifest_path} is not a python -m package entrypoint.",
+                checks=checks,
+            )
+        if not _is_package_local_module(module):
+            checks.append(_diagnostic_probe_check(
+                manifest_path,
+                False,
+                f"diagnostic probe module {module!r} is not package-local.",
+                module=module,
+            ))
+            raise ProbeFailure(
+                "diagnostic-probe-module-external",
+                f"Manifest diagnostic probe module {module!r} at {manifest_path} is not package-local.",
+                checks=checks,
+            )
+
+        try:
+            module_importer(module)
+        except Exception as exc:  # noqa: BLE001 - import failure must become blocked probe evidence.
+            checks.append(_diagnostic_probe_check(manifest_path, False, str(exc), module=module))
+            raise ProbeFailure(
+                "diagnostic-probe-module-import-failed",
+                f"Could not import diagnostic probe module {module!r} from {manifest_path}: {exc}.",
+                checks=checks,
+            ) from exc
+
+        checks.append(_diagnostic_probe_check(manifest_path, True, module=module))
+        modules.append({"manifestPath": manifest_path, "module": module})
+    return modules
+
+
+def _check_manifest_diagnostic_claim_semantics(
+    action_manifest: Mapping[str, Any],
+    checks: list[dict[str, Any]],
+) -> None:
+    diagnostic_probes = _nested_mapping(action_manifest, ("hostPortsContract", "diagnosticProbes")) or {}
+    execute_probe = diagnostic_probes.get("isolatedDesktopL3WorkflowExecute")
+    if not isinstance(execute_probe, str) or "--execute" not in execute_probe:
+        checks.append(_check(
+            "diagnostic-claim-semantics:l3-execute-key",
+            False,
+            "L3 workflow diagnostic probes must expose isolatedDesktopL3WorkflowExecute and include --execute now that a completed runner exists.",
+        ))
+        raise ProbeFailure(
+            "diagnostic-claim-semantics-invalid",
+            "Manifest is missing isolatedDesktopL3WorkflowExecute for the completed L3 workflow probe.",
+            checks=checks,
+        )
+    checks.append(_check("diagnostic-claim-semantics:l3-execute-key", True))
+
+    workflow_requirements = _nested_mapping(action_manifest, ("isolatedDesktopL3WorkflowContract", "workflowRequirements")) or {}
+    partial_policy = workflow_requirements.get("partialRuntimeRefsPolicy")
+    if not isinstance(partial_policy, str):
+        checks.append(_check(
+            "diagnostic-claim-semantics:l3-partial-runtime-policy",
+            False,
+            "isolatedDesktopL3WorkflowContract.workflowRequirements.partialRuntimeRefsPolicy must be a string.",
+        ))
+        raise ProbeFailure(
+            "diagnostic-claim-semantics-invalid",
+            "Manifest is missing the L3 partial runtime claim-limit policy.",
+            checks=checks,
+        )
+    missing_policy_markers = [
+        marker
+        for marker in ("eventCount=0", "events=[]", "no-workflow-input", "launcher-completed")
+        if marker not in partial_policy
+    ]
+    if missing_policy_markers:
+        checks.append(_check(
+            "diagnostic-claim-semantics:l3-partial-runtime-policy",
+            False,
+            f"partialRuntimeRefsPolicy is missing markers: {', '.join(missing_policy_markers)}.",
+        ))
+        raise ProbeFailure(
+            "diagnostic-claim-semantics-invalid",
+            "Manifest L3 partial runtime policy does not fully describe empty command-log and file-preview launcher semantics.",
+            checks=checks,
+        )
+    checks.append(_check("diagnostic-claim-semantics:l3-partial-runtime-policy", True))
+
+    claim_limit = _nested_string(action_manifest, ("isolatedDesktopL3WorkflowContract", "claimLimit")) or ""
+    missing_claim_markers = [marker for marker in ("traceRefs", "completionEvidenceRef") if marker not in claim_limit]
+    if missing_claim_markers:
+        checks.append(_check(
+            "diagnostic-claim-semantics:l3-claim-limit",
+            False,
+            f"L3 claimLimit is missing markers: {', '.join(missing_claim_markers)}.",
+        ))
+        raise ProbeFailure(
+            "diagnostic-claim-semantics-invalid",
+            "Manifest L3 claim limit must forbid partial refs from completed traceRefs and completionEvidenceRef.",
+            checks=checks,
+        )
+    checks.append(_check("diagnostic-claim-semantics:l3-claim-limit", True))
+
+
+def _diagnostic_probe_check(
+    manifest_path: str,
+    ok: bool,
+    reason: str = "",
+    *,
+    module: str | None = None,
+) -> dict[str, Any]:
+    check = _check(f"diagnostic-probe-command:{manifest_path}", ok, reason)
+    if module is not None:
+        check["module"] = module
+    return check
+
+
 def _nested_string(root: Mapping[str, Any], path: Sequence[str]) -> str | None:
     value: Any = root
     for part in path:
@@ -426,6 +685,15 @@ def _nested_string(root: Mapping[str, Any], path: Sequence[str]) -> str | None:
             return None
         value = value.get(part)
     return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _nested_mapping(root: Mapping[str, Any], path: Sequence[str]) -> Mapping[str, Any] | None:
+    value: Any = root
+    for part in path:
+        if not isinstance(value, Mapping):
+            return None
+        value = value.get(part)
+    return value if isinstance(value, Mapping) else None
 
 
 def _run_cli_fixture_probe(
@@ -571,6 +839,12 @@ def _module_after_dash_m(tokens: Sequence[str]) -> str | None:
     if index + 1 >= len(tokens):
         return None
     return tokens[index + 1]
+
+
+def _python_dash_m_module(tokens: Sequence[str]) -> str | None:
+    if len(tokens) < 3 or _python_command_name(tokens[0]) is None:
+        return None
+    return _module_after_dash_m(tokens)
 
 
 def _unsafe_cli_token(tokens: Sequence[str]) -> str | None:

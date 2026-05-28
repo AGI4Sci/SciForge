@@ -133,6 +133,38 @@ test('remote-desktop simulated input adapter maintains a virtual multi-app sessi
   }
 });
 
+test('remote-desktop simulated input adapter materializes summary prompts as visible artifacts', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-independent-input-summary-artifact-'));
+  try {
+    const config = baseConfig('independent-input-adapter-summary-artifact');
+    const targetResolution = resolvedWindowTarget();
+    const taskText = '让 SciForge 总结每个字段/控件的视觉证据和对应 action，只引用 screenshot refs、窗口目标、坐标和 action ledger；过程证据 refs 包括 vision-trace.json。';
+    const actions = [
+      { type: 'open_app' as const, appName: 'Browser' },
+      { type: 'type_text' as const, text: '字段视觉证据总结\n- 控件 A: screenshot ref + action ledger ref\n- 控件 B: window-local coordinate evidence\n- Trace: vision-trace.json is process evidence, not the final artifact' },
+      { type: 'open_app' as const, appName: 'Finder' },
+    ];
+    for (const [index, action] of actions.entries()) {
+      const result = await executeIndependentInputAdapterAction(action, config, targetResolution, {
+        workspace,
+        runDir: workspace,
+        stepIndex: index,
+        taskText,
+      });
+      assert.equal(result.exitCode, 0);
+    }
+
+    const session = JSON.parse(await readFile(join(workspace, 'virtual-remote-session.json'), 'utf8')) as Record<string, any>;
+    assert.equal(session.visibleArtifacts[0]?.kind, 'virtual-document');
+    assert.equal(session.visibleArtifacts[0]?.status, 'visible-and-saved');
+    assert.equal(session.visibleArtifacts[0]?.artifactRef, 'report.md');
+    assert.match(await readFile(join(workspace, 'report.md'), 'utf8'), /字段视觉证据总结/);
+    await assert.rejects(readFile(join(workspace, 'vision-trace.json'), 'utf8'));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('independent input adapter requires an executable provider registration', () => {
   assert.equal(hasExecutableIndependentInputAdapter({
     ...baseConfig('missing-provider'),

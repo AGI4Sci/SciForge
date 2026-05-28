@@ -95,7 +95,7 @@ GUI 自身暴露两类稳定表面：只读虚拟 GUI resource tree 用于状态
 
 ### Computer Use
 
-用视觉优先的方式观察窗口、定位界面元素，并通过 action loop 操作目标环境完成任务。当前严格边界是 package-owned / host-provided target-bound window execution：输入必须隔离到声明目标，result/trace/evidence 只写 refs，shared/system/global input 默认 fail closed。未来可以组合 OCR、窗口元数据、浏览器状态、远程桌面帧和更多 sense provider，但真实完成声明仍必须有当前截图、target binding、trace/result refs 和文件证据支撑。
+用视觉优先的方式观察窗口、定位界面元素，并通过 action loop 操作目标环境完成任务。当前严格边界是 package-owned / host-provided target-bound window execution：输入必须隔离到声明目标，result/trace/evidence 只写 refs，shared/system/global input 默认 fail closed。action package 已有 isolated desktop L1/L3 probe/evidence contract、executor command provenance validator、window-bound pointer proof validator 和 Linux/noVNC Docker bundle spec；Docker gate 支持 base image、Debian apt mirror/retry 和 host evidence dir override，并已产出真实 Linux/noVNC completed L1 run 与 same-session completed L3 run。L3 `--execute` 在 isolated session 中完成 source browser -> LibreOffice Writer GUI DOCX save -> Chromium/file-preview directory preview，并由 completed evidence validator 复验；partial/blocked refs 仍不能作为 completed refs。未来可以组合 OCR、窗口元数据、浏览器状态、远程桌面帧和更多 sense provider，真实完成声明仍必须有当前截图、target binding、trace/result refs 和文件证据支撑。
 
 ### 自定义科研场景
 

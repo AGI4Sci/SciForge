@@ -54,6 +54,8 @@ const realTaskOfflineGatesScript = 'smoke:real-task-offline-gates';
 const cuNextReadinessScript = 'smoke:cu-next-readiness';
 const cuNextRunnerScript = 'smoke:cu-next-runner';
 const cuNextUserAcceptanceContractScript = 'smoke:cu-next-user-acceptance-contract';
+const cuNextLiveAcceptanceScript = 'smoke:cu-next-live-acceptance';
+const cuNextEvidenceClassificationScript = 'smoke:cu-next-evidence-classification';
 const legacyCompatScript = 'smoke:legacy-agentserver-compat';
 const legacyVerifyScript = 'verify:legacy-agentserver-compat';
 const finalVerifyScript = 'verify:single-agent-final';
@@ -63,6 +65,8 @@ const realTaskMatrixCommand = [
   `npm run ${cuNextReadinessScript}`,
   `npm run ${cuNextRunnerScript}`,
   `npm run ${cuNextUserAcceptanceContractScript}`,
+  `npm run ${cuNextLiveAcceptanceScript}`,
+  `npm run ${cuNextEvidenceClassificationScript}`,
   `npm run ${realTaskOfflineGatesScript}`,
 ].join(' && ');
 
@@ -90,7 +94,7 @@ assertScriptEquals(
 assertScriptEquals(
   realTaskMatrixScript,
   realTaskMatrixCommand,
-  'Computer Use task matrix must execute the active CU-* project-board gate plus CU-NEXT readiness, runner, acceptance-contract, and protocol gates.',
+  'Computer Use task matrix must execute the active CU-* project-board gate plus CU-NEXT readiness, runner, acceptance-contract, live acceptance, classification, and protocol gates.',
 );
 assertScriptEquals(
   legacyVerifyScript,

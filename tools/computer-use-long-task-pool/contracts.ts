@@ -141,6 +141,7 @@ export interface ComputerUseLongScenarioRunResult {
   attemptedRounds: number[];
   passedRounds: number[];
   repairNeededRound?: number;
+  validation?: ComputerUseLongRunValidation;
   summaryPath: string;
   roundResults: ComputerUseLongRoundRunResult[];
 }
@@ -152,6 +153,7 @@ export interface ComputerUseLongRunValidation {
   summaryPath?: string;
   checkedRounds: number[];
   issues: string[];
+  repairDiagnostics: ComputerUseLongRepairDiagnostics;
   metrics: {
     passedRounds: number;
     traceCount: number;
@@ -162,6 +164,36 @@ export interface ComputerUseLongRunValidation {
     actionLedgerCount: number;
     failureDiagnosticsCount: number;
   };
+}
+
+export interface ComputerUseLongActionShortfall {
+  metric: 'actionCount' | 'nonWaitActionCount';
+  observed: number;
+  minimum: number;
+  missing: number;
+  source: 'scenario-acceptance';
+}
+
+export interface ComputerUseLongRepairDiagnostics {
+  actionShortfall?: ComputerUseLongActionShortfall;
+  actionShortfalls: ComputerUseLongActionShortfall[];
+  missingRefs: string[];
+  failingRoundDiagnosticsRefs: string[];
+  failureReasons: string[];
+  traceMetricsByRound: Array<{
+    round: number;
+    status: string;
+    diagnosticsRef?: string;
+    traceRef?: string;
+    actionCount?: number;
+    nonWaitActionCount?: number;
+    effectiveNonWaitActionCount?: number;
+    screenshotCount?: number;
+    blockedCount?: number;
+    failedCount?: number;
+    recoverActions?: number;
+  }>;
+  nextRepairFocus: string[];
 }
 
 export interface ComputerUseLongMatrixRunResult {
@@ -184,6 +216,8 @@ export interface ComputerUseLongMatrixRunResult {
     validationOk: boolean;
     summaryPath?: string;
     issues: string[];
+    repairDiagnostics?: ComputerUseLongRepairDiagnostics;
+    nextRepairFocus?: string[];
   }>;
 }
 

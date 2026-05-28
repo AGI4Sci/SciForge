@@ -7,6 +7,21 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .loop import run_task
+from .evidence_ledger import (
+    EvidenceLedger,
+    build_evidence_index,
+    build_evidence_snapshot,
+    build_planner_brief,
+)
+from .isolated_desktop_contracts import EXECUTOR_COMMAND_EVENT_LOG_SCHEMA
+from .isolated_desktop_l1_smoke_evidence import (
+    build_isolated_desktop_l1_smoke_evidence,
+    validate_isolated_desktop_l1_smoke_evidence,
+)
+from .isolated_desktop_l3_workflow_evidence import (
+    build_isolated_desktop_l3_workflow_evidence,
+    validate_isolated_desktop_l3_workflow_evidence,
+)
 from .repair_manifest import validate_repair_manifest
 from .trace import (
     build_repair_replay_evidence,
@@ -50,11 +65,32 @@ validateInputAdapterManifestForRealDesktop = validate_input_adapter_manifest_for
 validateRepairManifest = validate_repair_manifest
 buildVisibleRunViewer = build_visible_run_viewer
 validateVisibleRunViewerManifest = validate_visible_run_viewer_manifest
+buildEvidenceIndex = build_evidence_index
+buildEvidenceSnapshot = build_evidence_snapshot
+buildPlannerBrief = build_planner_brief
+executorCommandEventLogSchema = EXECUTOR_COMMAND_EVENT_LOG_SCHEMA
+buildIsolatedDesktopL1SmokeEvidence = build_isolated_desktop_l1_smoke_evidence
+validateIsolatedDesktopL1SmokeEvidence = validate_isolated_desktop_l1_smoke_evidence
+buildIsolatedDesktopL3WorkflowEvidence = build_isolated_desktop_l3_workflow_evidence
+validateIsolatedDesktopL3WorkflowEvidence = validate_isolated_desktop_l3_workflow_evidence
 
 
 __all__ = [
     "build_visible_run_viewer",
     "buildVisibleRunViewer",
+    "EvidenceLedger",
+    "EXECUTOR_COMMAND_EVENT_LOG_SCHEMA",
+    "build_evidence_index",
+    "buildEvidenceIndex",
+    "build_evidence_snapshot",
+    "buildEvidenceSnapshot",
+    "build_planner_brief",
+    "buildPlannerBrief",
+    "executorCommandEventLogSchema",
+    "build_isolated_desktop_l1_smoke_evidence",
+    "buildIsolatedDesktopL1SmokeEvidence",
+    "build_isolated_desktop_l3_workflow_evidence",
+    "buildIsolatedDesktopL3WorkflowEvidence",
     "build_repair_replay_evidence",
     "buildRepairReplayEvidence",
     "build_viewport_recovery_evidence",
@@ -79,6 +115,10 @@ __all__ = [
     "validateTargetBoundRealWindowProbeEvidence",
     "validate_input_adapter_manifest_for_real_desktop",
     "validateInputAdapterManifestForRealDesktop",
+    "validate_isolated_desktop_l1_smoke_evidence",
+    "validateIsolatedDesktopL1SmokeEvidence",
+    "validate_isolated_desktop_l3_workflow_evidence",
+    "validateIsolatedDesktopL3WorkflowEvidence",
     "validate_repair_manifest",
     "validateRepairManifest",
     "validate_visible_run_viewer_manifest",

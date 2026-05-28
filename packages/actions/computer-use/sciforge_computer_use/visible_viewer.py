@@ -34,8 +34,8 @@ def build_visible_run_viewer(
     viewer_dir.mkdir(parents=True, exist_ok=True)
     viewer_html_ref = viewer_dir / "index.html"
     viewer_manifest_ref = root / "visible-run-viewer-manifest.json"
-    trace_refs = _string_list(payload.get("traceRefs"))
-    screenshot_refs = _unique_strings([
+    trace_refs = _safe_ref_strings(payload.get("traceRefs"))
+    raw_screenshot_refs = _unique_strings([
         *_string_list(payload.get("screenshotRefs")),
         *[
             str(step.get("beforeRef"))
@@ -49,6 +49,8 @@ def build_visible_run_viewer(
         ],
         *([str(payload.get("finalObservationRef"))] if isinstance(payload.get("finalObservationRef"), str) else []),
     ])
+    screenshot_refs = _safe_ref_strings(raw_screenshot_refs)
+    omitted_inline_screenshot_ref_count = len(raw_screenshot_refs) - len(screenshot_refs)
     diagnostics = _mapping(payload.get("failureDiagnostics"))
     input_event_log_refs = _unique_strings([
         *_diagnostic_ref_list(diagnostics, [
@@ -63,7 +65,41 @@ def build_visible_run_viewer(
     ])
     isolation = _isolation_summary(diagnostics)
     actions = _actions(payload.get("steps"))
-    frames = _frames(screenshot_refs, root, _frame_context(actions, payload))
+    source_manifest_ref = str(Path(manifest_ref).expanduser().resolve()) if manifest_ref else _source_manifest_ref(diagnostics)
+    final_artifact_ref_values = _safe_ref_strings([payload.get("finalArtifactRef")])
+    final_artifact_ref = final_artifact_ref_values[0] if final_artifact_ref_values else None
+    artifact_refs = _unique_strings([
+        *_safe_ref_strings(payload.get("artifactRefs")),
+        *_safe_ref_strings(payload.get("finalArtifactRefs")),
+        *final_artifact_ref_values,
+    ])
+    source_refs = _unique_strings([
+        str(result_path),
+        *trace_refs,
+        *([source_manifest_ref] if source_manifest_ref else []),
+        *artifact_refs,
+        *input_event_log_refs,
+    ])
+    source_context = _source_context(
+        payload,
+        actions,
+        declared_screenshot_ref_count=len(screenshot_refs),
+        raw_screenshot_ref_count=len(raw_screenshot_refs),
+        omitted_inline_screenshot_ref_count=omitted_inline_screenshot_ref_count,
+    )
+    frames = _frames(
+        screenshot_refs,
+        root,
+        _frame_context(actions, payload),
+        source_refs=source_refs,
+        source_context=source_context,
+        omitted_inline_screenshot_ref_count=omitted_inline_screenshot_ref_count,
+    )
+    real_screenshot_refs = [
+        str(frame["screenshotRef"])
+        for frame in frames
+        if _frame_kind(frame) == "screenshot" and isinstance(frame.get("screenshotRef"), str)
+    ]
     input_summary = _input_summary(input_event_log_refs)
 
     manifest = {
@@ -72,16 +108,12 @@ def build_visible_run_viewer(
         "reason": payload.get("reason") or payload.get("message"),
         "title": title or str(payload.get("task") or "Computer Use visible run"),
         "resultRef": str(result_path),
-        "sourceManifestRef": str(Path(manifest_ref).expanduser().resolve()) if manifest_ref else _source_manifest_ref(diagnostics),
+        "sourceManifestRef": source_manifest_ref,
         "viewerHtmlRef": str(viewer_html_ref),
         "traceRefs": trace_refs,
-        "screenshotRefs": screenshot_refs,
-        "artifactRefs": _unique_strings([
-            *_string_list(payload.get("artifactRefs")),
-            *_string_list(payload.get("finalArtifactRefs")),
-            *([str(payload.get("finalArtifactRef"))] if isinstance(payload.get("finalArtifactRef"), str) else []),
-        ]),
-        "finalArtifactRef": payload.get("finalArtifactRef"),
+        "screenshotRefs": real_screenshot_refs,
+        "artifactRefs": artifact_refs,
+        "finalArtifactRef": final_artifact_ref,
         "frames": frames,
         "actions": actions,
         "inputEventLogRefs": input_event_log_refs,
@@ -106,8 +138,14 @@ def validate_visible_run_viewer_manifest(
 ) -> dict[str, Any]:
     """Validate visible replay refs without reading raw screenshots or artifacts."""
 
+    manifest_base_dir = Path.cwd()
     try:
-        manifest = _load_mapping(manifest_or_ref) if isinstance(manifest_or_ref, (str, Path)) else dict(manifest_or_ref)
+        if isinstance(manifest_or_ref, (str, Path)):
+            manifest_path = Path(manifest_or_ref).expanduser()
+            manifest_base_dir = manifest_path.resolve().parent
+            manifest = _load_mapping(manifest_path)
+        else:
+            manifest = dict(manifest_or_ref)
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         return _validation(False, errors=[_error("manifest_load_failed", str(exc), "$")])
 
@@ -116,8 +154,41 @@ def validate_visible_run_viewer_manifest(
         errors.append(_error("unsupported_schema_version", "Visible viewer schemaVersion is invalid.", "$.schemaVersion"))
     if not isinstance(manifest.get("viewerHtmlRef"), str) or not manifest.get("viewerHtmlRef"):
         errors.append(_error("viewer_html_ref_missing", "Viewer HTML ref is missing.", "$.viewerHtmlRef"))
-    if not _mapping_list(manifest.get("frames")):
+    frames = _mapping_list(manifest.get("frames"))
+    frame_counts = {"screenshot": 0, "placeholder": 0}
+    if not frames:
         errors.append(_error("frames_missing", "Viewer manifest must contain at least one frame.", "$.frames"))
+    for index, frame in enumerate(frames):
+        kind = _frame_kind(frame)
+        if kind == "screenshot":
+            frame_counts["screenshot"] += 1
+            ref = frame.get("screenshotRef")
+            if not isinstance(ref, str) or not ref:
+                errors.append(_error("screenshot_frame_ref_missing", "Screenshot frame must include screenshotRef.", f"$.frames[{index}].screenshotRef"))
+            elif _looks_inline_payload(ref):
+                errors.append(_error("inline_frame_ref", "Screenshot frame must reference a file, not an inline payload.", f"$.frames[{index}].screenshotRef"))
+            elif require_existing_refs and not _existing_file(ref, base_dir=manifest_base_dir):
+                errors.append(_error("ref_missing", "Frame screenshot ref does not exist or is empty.", f"$.frames[{index}].screenshotRef", ref=ref))
+        elif kind == "placeholder":
+            frame_counts["placeholder"] += 1
+            if isinstance(frame.get("screenshotRef"), str) and frame.get("screenshotRef"):
+                errors.append(_error("placeholder_screenshot_ref_present", "Placeholder frames must not pretend to be screenshots.", f"$.frames[{index}].screenshotRef"))
+            if not isinstance(frame.get("reason"), str) or not frame.get("reason"):
+                errors.append(_error("placeholder_reason_missing", "Placeholder frame must include a reason.", f"$.frames[{index}].reason"))
+            if not isinstance(frame.get("explanation"), str) or not frame.get("explanation"):
+                errors.append(_error("placeholder_explanation_missing", "Placeholder frame must explain why the screenshot is unavailable.", f"$.frames[{index}].explanation"))
+            source_refs = _safe_ref_strings(frame.get("sourceRefs"))
+            if not source_refs:
+                errors.append(_error("placeholder_source_refs_missing", "Placeholder frame must include source refs.", f"$.frames[{index}].sourceRefs"))
+            elif require_existing_refs and not any(_existing_file(ref, base_dir=manifest_base_dir) for ref in source_refs):
+                errors.append(_error("placeholder_source_ref_missing", "Placeholder frame must include at least one existing source ref.", f"$.frames[{index}].sourceRefs"))
+            if not _mapping(frame.get("sourceContext")):
+                errors.append(_error("placeholder_source_context_missing", "Placeholder frame must include source context.", f"$.frames[{index}].sourceContext"))
+            missing_ref = frame.get("missingScreenshotRef")
+            if isinstance(missing_ref, str) and _looks_inline_payload(missing_ref):
+                errors.append(_error("inline_frame_ref", "Placeholder missingScreenshotRef must not contain an inline payload.", f"$.frames[{index}].missingScreenshotRef"))
+        else:
+            errors.append(_error("unsupported_frame_kind", "Frame kind must be screenshot or placeholder.", f"$.frames[{index}].kind"))
     if not _mapping_list(manifest.get("actions")):
         errors.append(_error("actions_missing", "Viewer manifest must contain at least one action.", "$.actions"))
     isolation = _mapping(manifest.get("isolation"))
@@ -128,19 +199,18 @@ def validate_visible_run_viewer_manifest(
         errors.append(_error("raw_payload_written", "Visible viewer must not write raw payloads.", "$.rawPayloadWritten"))
     if manifest.get("inlineImageWritten") is not False:
         errors.append(_error("inline_image_written", "Visible viewer must not inline images.", "$.inlineImageWritten"))
+    for index, ref in enumerate(_string_list(manifest.get("screenshotRefs"))):
+        if _looks_inline_payload(ref):
+            errors.append(_error("inline_screenshot_ref", "screenshotRefs must contain refs, not inline image payloads.", f"$.screenshotRefs[{index}]"))
     if require_existing_refs:
         for path_field in ["viewerHtmlRef", "resultRef"]:
             ref = manifest.get(path_field)
-            if isinstance(ref, str) and ref and not Path(ref).is_file():
+            if isinstance(ref, str) and ref and not _existing_file(ref, base_dir=manifest_base_dir):
                 errors.append(_error("ref_missing", f"{path_field} does not exist.", f"$.{path_field}", ref=ref))
-        for index, frame in enumerate(_mapping_list(manifest.get("frames"))):
-            ref = frame.get("screenshotRef")
-            if isinstance(ref, str) and ref and not Path(ref).is_file():
-                errors.append(_error("ref_missing", "Frame screenshot ref does not exist.", f"$.frames[{index}].screenshotRef", ref=ref))
         for index, ref in enumerate(_string_list(manifest.get("inputEventLogRefs"))):
-            if not Path(ref).is_file():
+            if not _existing_file(ref, base_dir=manifest_base_dir):
                 errors.append(_error("ref_missing", "Input event log ref does not exist.", f"$.inputEventLogRefs[{index}]", ref=ref))
-    return _validation(not errors, errors=errors)
+    return _validation(not errors, errors=errors, frame_counts=frame_counts)
 
 
 def _html_for_manifest(manifest: Mapping[str, Any], base_dir: Path) -> str:
@@ -168,6 +238,10 @@ def _html_for_manifest(manifest: Mapping[str, Any], base_dir: Path) -> str:
     figure {{ margin: 0; border: 1px solid #d9dee7; border-radius: 8px; overflow: hidden; background: #fbfcfe; }}
     figure img {{ display: block; width: 100%; height: auto; image-rendering: auto; }}
     figcaption {{ padding: 10px 12px; font-size: 12px; color: #475569; word-break: break-word; }}
+    .placeholder-frame {{ border-style: dashed; background: #fffaf0; }}
+    .placeholder {{ min-height: 180px; padding: 18px; display: grid; align-content: center; gap: 8px; color: #3d2f13; background: #fff6db; }}
+    .placeholder-title {{ font-size: 15px; font-weight: 700; }}
+    .placeholder-note {{ font-size: 12px; color: #634d1b; }}
     table {{ width: 100%; border-collapse: collapse; }}
     th, td {{ padding: 8px 10px; border-bottom: 1px solid #e5e9f0; text-align: left; vertical-align: top; }}
     th {{ font-size: 12px; color: #64748b; text-transform: uppercase; }}
@@ -202,6 +276,8 @@ def _html_for_manifest(manifest: Mapping[str, Any], base_dir: Path) -> str:
 
 
 def _frame_html(frame: Mapping[str, Any], base_dir: Path) -> str:
+    if _frame_kind(frame) == "placeholder":
+        return _placeholder_frame_html(frame)
     ref = str(frame.get("screenshotRef") or "")
     src = html.escape(_relative_ref(ref, base_dir))
     label = html.escape(str(frame.get("label") or ref))
@@ -210,6 +286,30 @@ def _frame_html(frame: Mapping[str, Any], base_dir: Path) -> str:
     image = f'<img src="{src}" alt="{label}">' if ref else ""
     summary_block = f"<div>{summary}</div>" if summary else ""
     return f"<figure>{image}<figcaption>Frame {index}: <code>{label}</code>{summary_block}</figcaption></figure>"
+
+
+def _placeholder_frame_html(frame: Mapping[str, Any]) -> str:
+    index = html.escape(str(frame.get("index")))
+    label = html.escape(str(frame.get("label") or "missing-frame"))
+    reason = html.escape(str(frame.get("reason") or "screenshot unavailable"))
+    explanation = html.escape(str(frame.get("explanation") or "The screenshot for this frame is unavailable."))
+    missing_ref = html.escape(str(frame.get("missingScreenshotRef") or "none declared"))
+    source_refs = html.escape(", ".join(_safe_ref_strings(frame.get("sourceRefs"))) or "none")
+    summary = html.escape(str(frame.get("summary") or ""))
+    summary_block = f"<div>{summary}</div>" if summary else ""
+    return (
+        '<figure class="placeholder-frame">'
+        '<div class="placeholder" role="note" aria-label="Explained missing frame">'
+        '<div class="placeholder-title">Frame unavailable</div>'
+        '<div>This is not a screenshot.</div>'
+        f'<div><strong>Reason:</strong> {reason}</div>'
+        f'<div>{explanation}</div>'
+        f'<div class="placeholder-note"><strong>Missing screenshot ref:</strong> <code>{missing_ref}</code></div>'
+        f'<div class="placeholder-note"><strong>Source refs:</strong> <code>{source_refs}</code></div>'
+        "</div>"
+        f"<figcaption>Frame {index}: <code>{label}</code>{summary_block}</figcaption>"
+        "</figure>"
+    )
 
 
 def _action_html(action: Mapping[str, Any]) -> str:
@@ -227,19 +327,90 @@ def _action_html(action: Mapping[str, Any]) -> str:
     )
 
 
-def _frames(refs: Sequence[str], root: Path, context: Mapping[str, str]) -> list[dict[str, Any]]:
+def _frames(
+    refs: Sequence[str],
+    root: Path,
+    context: Mapping[str, str],
+    *,
+    source_refs: Sequence[str],
+    source_context: Mapping[str, Any],
+    omitted_inline_screenshot_ref_count: int,
+) -> list[dict[str, Any]]:
     frames: list[dict[str, Any]] = []
     for index, ref in enumerate(_unique_strings(refs)):
         path = Path(ref)
         absolute_ref = str(path.resolve()) if path.is_absolute() else str((root / path).resolve())
-        frames.append({
-            "index": index,
-            "label": path.name or f"frame-{index}",
-            "screenshotRef": absolute_ref,
-            "summary": context.get(ref) or context.get(absolute_ref),
-            "kind": "screenshot",
-        })
+        if _existing_file(absolute_ref):
+            frames.append({
+                "index": index,
+                "label": path.name or f"frame-{index}",
+                "screenshotRef": absolute_ref,
+                "summary": context.get(ref) or context.get(absolute_ref),
+                "kind": "screenshot",
+            })
+        else:
+            frames.append(_placeholder_frame(
+                index=index,
+                label=path.name or f"frame-{index}",
+                reason="screenshot_ref_unavailable",
+                explanation=(
+                    "A screenshot ref was declared for this frame, but the local screenshot file is missing or empty. "
+                    "This placeholder is generated from run refs and metadata instead of rendering a blank frame."
+                ),
+                source_refs=source_refs,
+                source_context={**source_context, "missingScreenshotRef": absolute_ref},
+                missing_screenshot_ref=absolute_ref,
+                summary=context.get(ref) or context.get(absolute_ref),
+            ))
+    if not frames:
+        reason = "screenshot_refs_missing"
+        explanation = (
+            "No screenshot refs were available in result.screenshotRefs, step before/after refs, or finalObservationRef. "
+            "This placeholder is generated from run refs and metadata instead of rendering an unexplained blank frame."
+        )
+        if omitted_inline_screenshot_ref_count:
+            reason = "screenshot_refs_omitted_inline_payloads"
+            explanation = (
+                "Screenshot candidates were present only as inline image payloads, so the viewer omitted them and generated "
+                "a refs-first placeholder instead of writing raw image data."
+            )
+        frames.append(_placeholder_frame(
+            index=0,
+            label="missing-frame",
+            reason=reason,
+            explanation=explanation,
+            source_refs=source_refs,
+            source_context=source_context,
+        ))
     return frames
+
+
+def _placeholder_frame(
+    *,
+    index: int,
+    label: str,
+    reason: str,
+    explanation: str,
+    source_refs: Sequence[str],
+    source_context: Mapping[str, Any],
+    missing_screenshot_ref: str | None = None,
+    summary: str | None = None,
+) -> dict[str, Any]:
+    frame: dict[str, Any] = {
+        "index": index,
+        "label": label,
+        "kind": "placeholder",
+        "placeholder": True,
+        "reason": reason,
+        "explanation": explanation,
+        "sourceRefs": _unique_strings(list(source_refs)),
+        "sourceContext": dict(source_context),
+    }
+    if missing_screenshot_ref:
+        frame["missingScreenshotRef"] = missing_screenshot_ref
+    if summary:
+        frame["summary"] = summary
+    return frame
 
 
 def _actions(steps: Any) -> list[dict[str, Any]]:
@@ -257,12 +428,12 @@ def _actions(steps: Any) -> list[dict[str, Any]]:
             "verification": step.get("verification"),
             "beforeSummary": step.get("beforeSummary"),
             "verificationReason": _mapping(step.get("verification")).get("reason"),
-            "screenshotRefs": _unique_strings([
+            "screenshotRefs": _safe_ref_strings([
                 *([str(step.get("beforeRef"))] if isinstance(step.get("beforeRef"), str) else []),
                 *([str(step.get("afterRef"))] if isinstance(step.get("afterRef"), str) else []),
                 *_string_list(step.get("screenshotRefs")),
             ]),
-            "artifactRefs": _string_list(step.get("artifactRefs")),
+            "artifactRefs": _safe_ref_strings(step.get("artifactRefs")),
         })
     return actions
 
@@ -315,6 +486,7 @@ def _input_summary(refs: Sequence[str]) -> dict[str, Any]:
     pointer_count = 0
     keyboard_count = 0
     modalities: set[str] = set()
+    seen_events: set[tuple[str, str, str, str, str]] = set()
     for ref in refs:
         try:
             payload = _load_mapping(ref)
@@ -323,6 +495,16 @@ def _input_summary(refs: Sequence[str]) -> dict[str, Any]:
         events = _mapping_list(payload.get("events"))
         for event in events:
             modality = str(event.get("modality") or "")
+            event_id = (
+                str(event.get("actionIndex") if event.get("actionIndex") is not None else ""),
+                modality,
+                str(event.get("kind") or event.get("actionKind") or ""),
+                str(event.get("target") or ""),
+                str(event.get("key") or event.get("textPreview") or ""),
+            )
+            if event_id in seen_events:
+                continue
+            seen_events.add(event_id)
             if modality == "pointer" or (not modality and "systemPointerMoved" in event):
                 pointer_count += 1
                 modalities.add("pointer")
@@ -375,6 +557,28 @@ def _source_manifest_ref(diagnostics: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _source_context(
+    payload: Mapping[str, Any],
+    actions: Sequence[Mapping[str, Any]],
+    *,
+    declared_screenshot_ref_count: int,
+    raw_screenshot_ref_count: int,
+    omitted_inline_screenshot_ref_count: int,
+) -> dict[str, Any]:
+    diagnostics = _mapping(payload.get("failureDiagnostics"))
+    return {
+        "status": str(payload.get("status") or "unknown"),
+        "reason": str(payload.get("reason") or payload.get("message") or ""),
+        "task": str(payload.get("task") or ""),
+        "failedStage": str(diagnostics.get("failedStage") or ""),
+        "actionCount": len(actions),
+        "declaredScreenshotRefCount": declared_screenshot_ref_count,
+        "rawScreenshotRefCount": raw_screenshot_ref_count,
+        "omittedInlineScreenshotRefCount": omitted_inline_screenshot_ref_count,
+        "source": "computer-use-result steps, screenshotRefs, and finalObservationRef",
+    }
+
+
 def _relative_ref(ref: str, base_dir: Path) -> str:
     if not ref:
         return ""
@@ -423,6 +627,15 @@ def _string_list(value: Any) -> list[str]:
     return []
 
 
+def _safe_ref_strings(value: Any) -> list[str]:
+    values = value if isinstance(value, list) else [value]
+    return _unique_strings([
+        str(item)
+        for item in values
+        if isinstance(item, (str, int, float)) and str(item) and not _looks_inline_payload(str(item))
+    ])
+
+
 def _unique_strings(values: Sequence[str]) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
@@ -434,12 +647,42 @@ def _unique_strings(values: Sequence[str]) -> list[str]:
     return result
 
 
-def _validation(ok: bool, *, errors: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def _frame_kind(frame: Mapping[str, Any]) -> str:
+    raw_kind = str(frame.get("kind") or frame.get("frameType") or "").strip().lower()
+    if frame.get("placeholder") is True or raw_kind in {"placeholder", "explained-placeholder", "missing", "unavailable"}:
+        return "placeholder"
+    if raw_kind == "screenshot" or frame.get("screenshotRef"):
+        return "screenshot"
+    return raw_kind
+
+
+def _existing_file(ref: str, *, base_dir: Path | None = None) -> bool:
+    try:
+        path = Path(ref)
+        if not path.is_absolute() and base_dir is not None:
+            path = base_dir / path
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _looks_inline_payload(value: str) -> bool:
+    text = value.strip().lower()
+    return text.startswith("data:") or text.startswith("base64:") or ";base64," in text
+
+
+def _validation(
+    ok: bool,
+    *,
+    errors: Sequence[Mapping[str, Any]],
+    frame_counts: Mapping[str, int] | None = None,
+) -> dict[str, Any]:
     return {
         "schemaVersion": VISIBLE_RUN_VIEWER_VALIDATION_SCHEMA,
         "ok": ok,
         "errors": [dict(error) for error in errors],
         "warnings": [],
+        "frameCounts": dict(frame_counts or {"screenshot": 0, "placeholder": 0}),
     }
 
 

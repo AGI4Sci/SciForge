@@ -5,18 +5,36 @@ import sys
 from pathlib import Path
 
 import sciforge_computer_use as computer_use_package
+from sciforge_computer_use.evidence_ledger import EvidenceLedger
+from sciforge_computer_use.isolated_desktop_contracts import (
+    BACKEND_KIND,
+    BACKEND_READINESS_PROOF_SCHEMA_VERSION,
+    EXECUTOR_COMMAND_EVENT_LOG_SCHEMA as CONTRACT_EXECUTOR_COMMAND_EVENT_LOG_SCHEMA,
+    ISOLATED_CAPTURE_SOURCE,
+    ISOLATED_RUNTIME_RESOURCE_ALLOCATION_SCHEMA_VERSION,
+    ISOLATED_TARGET_WINDOW_SCHEMA_VERSION,
+    LEGACY_L1_RUNTIME_RESOURCE_ALLOCATION_SCHEMA_VERSION,
+    LEGACY_L1_TARGET_WINDOW_SCHEMA_VERSION,
+    REMOTE_DESKTOP_INPUT_CHANNEL,
+)
+from sciforge_computer_use.loop import ActionLoop, CompletionGuard, EvidenceLoop, TaskLoop
 from sciforge_computer_use import (
     ActionPlan,
     ActionTarget,
     ComputerUseRequest,
+    EXECUTOR_COMMAND_EVENT_LOG_SCHEMA,
     ExecutionOutcome,
     Grounding,
     Observation,
     Verification,
+    buildIsolatedDesktopL1SmokeEvidence,
+    buildIsolatedDesktopL3WorkflowEvidence,
     buildRepairReplayEvidence,
     buildTargetBoundRealWindowProbeEvidence,
     buildTargetBoundInputAdapterManifest,
     buildViewportRecoveryEvidence,
+    build_isolated_desktop_l1_smoke_evidence,
+    build_isolated_desktop_l3_workflow_evidence,
     build_target_bound_real_window_probe_evidence,
     build_target_bound_input_adapter_manifest,
     build_repair_replay_evidence,
@@ -24,6 +42,7 @@ from sciforge_computer_use import (
     compactResult,
     compact_result,
     compact_result_for_handoff,
+    executorCommandEventLogSchema,
     getManifest,
     get_manifest,
     result_to_trace,
@@ -32,8 +51,12 @@ from sciforge_computer_use import (
     run_computer_use_task,
     validateRepairManifest,
     validateRepairReplayEvidence,
+    validateIsolatedDesktopL1SmokeEvidence,
+    validateIsolatedDesktopL3WorkflowEvidence,
     validateTargetBoundRealWindowProbeEvidence,
     validateInputAdapterManifestForRealDesktop,
+    validate_isolated_desktop_l1_smoke_evidence,
+    validate_isolated_desktop_l3_workflow_evidence,
     validate_target_bound_real_window_probe_evidence,
     validate_input_adapter_manifest_for_real_desktop,
     validateViewportRecoveryEvidence,
@@ -47,6 +70,101 @@ from sciforge_computer_use import api as computer_use_api
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_loop_phase_boundaries_and_completion_guard_reject_stale_evidence(tmp_path):
+    assert EvidenceLoop.__name__ == "EvidenceLoop"
+    assert ActionLoop.__name__ == "ActionLoop"
+    assert TaskLoop.__name__ == "TaskLoop"
+
+    ledger = EvidenceLedger(tmp_path)
+    observation_id = ledger.append_observation(
+        Observation(ref="before.png", summary="Old screen", visible_texts=("Old",)),
+        action_index=0,
+        query=None,
+    )
+    ledger.append_action(
+        ActionPlan(kind="click", target=ActionTarget(description="Next"), reason="advance screen"),
+        ExecutionOutcome(ok=True, message="clicked"),
+        action_index=0,
+        before_record_id=observation_id,
+        grounding_record_id=None,
+    )
+
+    claim_id, reason = CompletionGuard(ledger).append_claim_if_current(
+        action_index=0,
+        summary="stale planner claim",
+        status="completed",
+        supports=[observation_id],
+        metadata={"source": "unit-test"},
+    )
+
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "evidence-log.jsonl").read_text(encoding="utf8").splitlines()
+    ]
+    assert claim_id is None
+    assert reason == "Completion guard rejected stale or missing evidence support."
+    assert "completion-claim" not in {record["type"] for record in records}
+    assert any(record["type"] == "uncertainty" and "completion-guard" in record["tags"] for record in records)
+
+
+def test_report_summary_intent_requires_final_artifact_evidence():
+    result = run_computer_use_task(
+        ComputerUseRequest(
+            task="Write an evidence summary report with action mapping and field/control evidence refs.",
+            max_steps=1,
+            metadata={
+                "plannerAcceptanceContract": {
+                    "roundPrompt": "Summarize visual evidence and action mapping.",
+                    "expectedTrace": ["field evidence refs", "action mapping"],
+                },
+            },
+        ),
+        FakeSense(),
+        FakePlanner([ActionPlan(kind="click", target=ActionTarget(description="report body"))]),
+        FakeExecutor(),
+        FakeVerifier(done_after=1),
+    )
+
+    assert result.status == "failed-with-reason"
+    assert result.reason.startswith("Final artifact evidence is required")
+    assert result.failure_diagnostics["failedStage"] == "final-artifact-evidence"
+
+
+def test_plain_save_and_inline_summary_do_not_require_final_artifact_evidence():
+    for task in [
+        "save current file",
+        "save the local document",
+        "write a short summary in the comment box",
+    ]:
+        result = run_computer_use_task(
+            ComputerUseRequest(task=task, max_steps=1),
+            FakeSense(),
+            FakePlanner([ActionPlan(kind="click", target=ActionTarget(description="safe control"))]),
+            FakeExecutor(),
+            FakeVerifier(done_after=1),
+        )
+        assert result.status == "completed"
+
+
+def test_metadata_artifact_refs_do_not_trigger_final_artifact_requirement():
+    result = run_computer_use_task(
+        ComputerUseRequest(
+            task="click the visible toolbar button",
+            max_steps=1,
+            metadata={
+                "artifactRefs": ["previous-report.md"],
+                "visibleArtifacts": [{"artifactRef": "old-report.md", "status": "visible-and-saved"}],
+            },
+        ),
+        FakeSense(),
+        FakePlanner([ActionPlan(kind="click", target=ActionTarget(description="safe toolbar button"))]),
+        FakeExecutor(),
+        FakeVerifier(done_after=1),
+    )
+
+    assert result.status == "completed"
 
 
 class FakeSense:
@@ -97,6 +215,12 @@ class FakeExecutor:
         return ExecutionOutcome(ok=True, message="executed")
 
 
+class FakeFailingExecutor(FakeExecutor):
+    def execute(self, action, grounding, request):
+        self.calls.append((action.kind, grounding.x if grounding else None, grounding.y if grounding else None))
+        return ExecutionOutcome(ok=False, message="executor failed after possible input")
+
+
 class FakeVerifier:
     def __init__(self, done_after=1):
         self.done_after = done_after
@@ -115,9 +239,18 @@ class FakeHostPorts:
         self.verifier = FakeVerifier(done_after=1)
         self.events = []
         self.traces = []
+        self.crop_calls = []
 
     def capture(self, request, history, query=None):
         return self.sense.observe(request, history, query)
+
+    def crop(self, observation, region):
+        self.crop_calls.append((observation.ref, dict(region)))
+        return Observation(
+            ref=f"{observation.ref}-focus.png",
+            summary=f"focus crop for {observation.ref}",
+            metadata={"focusRefs": [f"{observation.ref}-focus.png"]},
+        )
 
     def locate(self, observation, target, history):
         return self.sense.locate(observation, target, history)
@@ -190,6 +323,160 @@ def test_run_task_public_host_ports_surface_writes_trace_and_events():
         "computer-use.run.finished",
     ]
     assert host_ports.traces[0]["status"] == "completed"
+
+
+def test_run_task_optional_crop_port_promotes_focus_ref_and_ledger_record(tmp_path):
+    host_ports = FakeHostPorts()
+    evidence_dir = tmp_path / "evidence"
+
+    result = run_task(
+        {
+            "task": "click visible search field",
+            "maxSteps": 3,
+            "metadata": {"evidenceOutputDir": str(evidence_dir), "runId": "crop-run"},
+        },
+        host_ports,
+    )
+
+    trace = result_to_trace(result)
+    log_records = [
+        json.loads(line)
+        for line in (evidence_dir / "evidence-log.jsonl").read_text(encoding="utf8").splitlines()
+    ]
+
+    assert result.status == "completed"
+    assert host_ports.crop_calls == [
+        (
+            "before.png",
+            {
+                "kind": "point-neighborhood",
+                "x": 10.0,
+                "y": 20.0,
+                "coordinateSpace": "observation",
+                "radius": 64,
+                "source": "grounding.point",
+            },
+        )
+    ]
+    assert "before.png-focus.png" in trace["screenshotRefs"]
+    assert "before.png-focus.png" in trace["steps"][0]["screenshotRefs"]
+    assert trace["steps"][0]["grounding"]["metadata"]["diagnostics"]["focusCropRefs"] == ["before.png-focus.png"]
+    assert any(
+        record["type"] == "observation"
+        and record["metadata"]["query"] == "focus-crop"
+        and record["ref"] == "before.png-focus.png"
+        for record in log_records
+    )
+
+
+def test_run_task_optional_crop_preserves_list_grounder_diagnostics(tmp_path):
+    host_ports = FakeHostPorts()
+    host_ports.sense.grounding = Grounding(
+        ok=True,
+        x=10,
+        y=20,
+        confidence=0.9,
+        reason="visible",
+        metadata={
+            "diagnostics": [
+                {"stage": "health", "status": "ok"},
+                {"stage": "predict", "status": "ok"},
+            ],
+        },
+    )
+
+    result = run_task(
+        {
+            "task": "click visible search field",
+            "maxSteps": 3,
+            "metadata": {"evidenceOutputDir": str(tmp_path / "evidence"), "runId": "crop-diagnostics-list"},
+        },
+        host_ports,
+    )
+
+    trace = result_to_trace(result)
+
+    assert result.status == "completed"
+    diagnostics = trace["steps"][0]["grounding"]["metadata"]["diagnostics"]
+    assert diagnostics["grounderDiagnostics"] == [
+        {"stage": "health", "status": "ok"},
+        {"stage": "predict", "status": "ok"},
+    ]
+    assert diagnostics["focusCropRefs"] == ["before.png-focus.png"]
+
+
+def test_run_task_optional_crop_failure_records_uncertainty_without_blocking(tmp_path):
+    class CropFailingHostPorts(FakeHostPorts):
+        def crop(self, observation, region):
+            self.crop_calls.append((observation.ref, dict(region)))
+            raise RuntimeError("crop backend unavailable")
+
+    host_ports = CropFailingHostPorts()
+    evidence_dir = tmp_path / "evidence"
+
+    result = run_task(
+        {
+            "task": "click visible search field",
+            "maxSteps": 3,
+            "metadata": {"evidenceOutputDir": str(evidence_dir), "runId": "crop-failure-run"},
+        },
+        host_ports,
+    )
+
+    log_records = [
+        json.loads(line)
+        for line in (evidence_dir / "evidence-log.jsonl").read_text(encoding="utf8").splitlines()
+    ]
+
+    assert result.status == "completed"
+    assert host_ports.executor.calls == [("click", 10, 20)]
+    assert any(
+        record["type"] == "uncertainty"
+        and "focus-crop" in record["tags"]
+        and record["metadata"]["failedStage"] == "focus-crop"
+        for record in log_records
+    )
+
+
+def test_failed_mutating_executor_action_captures_after_evidence_and_invalidates_before(tmp_path):
+    sense = FakeSense(refs=["before.png", "after-failed.png"])
+    executor = FakeFailingExecutor()
+    evidence_dir = tmp_path / "evidence"
+
+    result = run_computer_use_task(
+        ComputerUseRequest(
+            task="click visible search field",
+            max_steps=3,
+            metadata={"evidenceOutputDir": str(evidence_dir), "runId": "failed-mutation"},
+        ),
+        sense,
+        FakePlanner([ActionPlan(kind="click", target=ActionTarget(description="search field"))]),
+        executor,
+        FakeVerifier(done_after=1),
+    )
+
+    log_records = [
+        json.loads(line)
+        for line in (evidence_dir / "evidence-log.jsonl").read_text(encoding="utf8").splitlines()
+    ]
+    action_record = next(record for record in log_records if record["type"] == "action")
+    after_record = next(
+        record
+        for record in log_records
+        if record["type"] == "observation" and record["metadata"]["query"] == "after-failed-action"
+    )
+    index = json.loads((evidence_dir / "evidence-index.json").read_text(encoding="utf8"))
+
+    assert result.status == "failed-with-reason"
+    assert result.final_observation and result.final_observation.ref == "after-failed.png"
+    assert result.steps[0].after and result.steps[0].after.ref == "after-failed.png"
+    assert executor.calls == [("click", 10, 20)]
+    assert action_record["metadata"]["observationOnly"] is False
+    assert action_record["metadata"]["mutatesScreen"] is True
+    assert "state-changing" in action_record["tags"]
+    assert action_record["invalidates"]
+    assert after_record["id"] in index["current"]
+    assert result.failure_diagnostics["afterEvidenceCaptured"] is True
 
 
 def test_run_task_camel_case_alias_matches_public_interface_name():
@@ -337,6 +624,34 @@ def test_document_save_hotkey_is_allowed_as_generic_local_action():
     assert sense.locate_calls == []
 
 
+def test_focus_is_a_supported_target_grounded_action():
+    sense = FakeSense()
+    planner = FakePlanner([
+        {"type": "focus", "targetDescription": "document body", "reason": "focus editor"},
+    ])
+    executor = FakeExecutor()
+
+    result = run_computer_use_task("focus editor", sense, planner, executor, FakeVerifier())
+
+    assert result.status == "completed"
+    assert sense.locate_calls == [("before.png", "document body")]
+    assert executor.calls == [("focus", 10, 20)]
+
+
+def test_save_is_a_supported_generic_keyboard_action_without_grounding():
+    sense = FakeSense()
+    planner = FakePlanner([
+        {"type": "save", "reason": "save current local document"},
+    ])
+    executor = FakeExecutor()
+
+    result = run_computer_use_task("save document", sense, planner, executor, FakeVerifier())
+
+    assert result.status == "completed"
+    assert sense.locate_calls == []
+    assert executor.calls == [("save", None, None)]
+
+
 def test_failed_step_without_action_kind_keeps_budget_debit_ref():
     sense = FakeSense()
     planner = FakePlanner([
@@ -469,13 +784,214 @@ def test_public_api_manifest_and_camel_case_aliases_are_stable():
     assert "preflightRef" in manifest["targetBoundRealWindowProbeContract"]["requiredRefs"]
     assert manifest["targetBoundRealWindowProbeContract"]["requiredFlags"]["realWindowEvidence"] is True
     assert "csv" in manifest["targetBoundRealWindowProbeContract"]["declaredArtifactOutput"]["supportedFormats"]
+    assert "textRuns" in manifest["targetBoundRealWindowProbeContract"]["declaredArtifactOutput"]["pptxTextEvidenceFields"]
+    assert "normalizedTextSha256" in manifest["targetBoundRealWindowProbeContract"]["declaredArtifactOutput"]["docxTextEvidenceFields"]
     assert manifest["targetBoundRealWindowProbeContract"]["workflowRequirements"]["requiresCurrentStepScreenshots"].startswith(
         "optional boolean"
     )
     assert "Task B" in manifest["targetBoundRealWindowProbeContract"]["workflowRequirements"]["minimumActionCount"]
+    assert manifest["isolatedDesktopL1SmokeContract"]["builder"] == (
+        "sciforge_computer_use.isolated_desktop_l1_smoke_evidence.build_isolated_desktop_l1_smoke_evidence"
+    )
+    assert manifest["isolatedDesktopL1SmokeContract"]["validator"] == (
+        "sciforge_computer_use.isolated_desktop_l1_smoke_evidence.validate_isolated_desktop_l1_smoke_evidence"
+    )
+    assert manifest["isolatedDesktopL1SmokeContract"]["requiredFlags"]["backendKind"] == BACKEND_KIND
+    assert manifest["isolatedDesktopL1SmokeContract"]["requiredFlags"]["captureSource"] == ISOLATED_CAPTURE_SOURCE
+    assert manifest["isolatedDesktopL1SmokeContract"]["requiredFlags"]["inputChannel"] == REMOTE_DESKTOP_INPUT_CHANNEL
+    assert manifest["isolatedDesktopL1SmokeContract"]["acceptanceTier"] == "l1-isolated-smoke"
+    assert "preflightRef" in manifest["isolatedDesktopL1SmokeContract"]["requiredRefs"]
+    assert "backendReadinessProofRef" in manifest["isolatedDesktopL1SmokeContract"]["requiredRefs"]
+    assert "executorCommandEventLogRef" in manifest["isolatedDesktopL1SmokeContract"]["requiredRefs"]
+    assert "targetWindowRef" in manifest["isolatedDesktopL1SmokeContract"]["requiredRefs"]
+    assert "windowBoundPointerProofRef" in manifest["isolatedDesktopL1SmokeContract"]["requiredRefs"]
+    assert "processRef" in manifest["isolatedDesktopL1SmokeContract"]["requiredRefs"]
+    assert "resourceAllocationRef" in manifest["isolatedDesktopL1SmokeContract"]["requiredRefs"]
+    assert "requiresBackendReadinessProof" in manifest["isolatedDesktopL1SmokeContract"]["workflowRequirements"]
+    assert "requiresPreflightPayloadValidation" in manifest["isolatedDesktopL1SmokeContract"]["workflowRequirements"]
+    assert manifest["isolatedDesktopL1SmokeContract"]["workflowRequirements"]["backendReadinessProofSchemaRef"] == (
+        BACKEND_READINESS_PROOF_SCHEMA_VERSION
+    )
+    assert "requiresXDisplayReadinessProof" in manifest["isolatedDesktopL1SmokeContract"]["workflowRequirements"]
+    assert "requiresBrowserWindowPageReadinessProof" in manifest["isolatedDesktopL1SmokeContract"]["workflowRequirements"]
+    assert "requiresNoVncHttpViewerProof" in manifest["isolatedDesktopL1SmokeContract"]["workflowRequirements"]
+    assert "requiresWindowBoundPointerProof" in manifest["isolatedDesktopL1SmokeContract"]["workflowRequirements"]
+    assert manifest["isolatedDesktopL1SmokeContract"]["workflowRequirements"]["targetWindowSchemaRef"] == ISOLATED_TARGET_WINDOW_SCHEMA_VERSION
+    assert manifest["isolatedDesktopL1SmokeContract"]["workflowRequirements"]["legacyTargetWindowSchemaRef"] == LEGACY_L1_TARGET_WINDOW_SCHEMA_VERSION
+    assert "requiresExecutorCommandProvenance" in manifest["isolatedDesktopL1SmokeContract"]["workflowRequirements"]
+    assert "requiresStepwiseScreenshotContentChange" in manifest["isolatedDesktopL1SmokeContract"]["workflowRequirements"]
+    assert "requiresProcessLogRefs" in manifest["isolatedDesktopL1SmokeContract"]["workflowRequirements"]
+    assert "requiresContainerSafeBrowserLaunch" in manifest["isolatedDesktopL1SmokeContract"]["workflowRequirements"]
+    assert manifest["isolatedDesktopL1SmokeContract"]["workflowRequirements"]["runnerCliOptions"] == [
+        "--display",
+        "--vnc-port",
+        "--novnc-port",
+        "--timeout-seconds",
+        "--resource-lock-root",
+    ]
+    assert manifest["isolatedDesktopL1SmokeContract"]["workflowRequirements"]["executorCommandEventLogSchemaRef"] == EXECUTOR_COMMAND_EVENT_LOG_SCHEMA
+    assert EXECUTOR_COMMAND_EVENT_LOG_SCHEMA == CONTRACT_EXECUTOR_COMMAND_EVENT_LOG_SCHEMA
+    assert manifest["isolatedDesktopL1SmokeContract"]["workflowRequirements"]["inputEventCommandProvenanceFields"] == [
+        "commandEventId",
+        "commandEventRef",
+        "commandEventLogRef",
+    ]
+    assert "stdout" in manifest["isolatedDesktopL1SmokeContract"]["workflowRequirements"]["executorCommandForbiddenRawFields"]
+    assert "sharedSystemInputUsed" in manifest["isolatedDesktopL1SmokeContract"]["workflowRequirements"]["executorCommandSideEffectFlags"]
+    assert "requiresRuntimeProcessProof" in manifest["isolatedDesktopL1SmokeContract"]["workflowRequirements"]
+    assert "virtual-display" in manifest["isolatedDesktopL1SmokeContract"]["workflowRequirements"]["requiresRuntimeProcessProof"]
+    assert "requiresRuntimeResourceAllocation" in manifest["isolatedDesktopL1SmokeContract"]["workflowRequirements"]
+    assert manifest["isolatedDesktopL1SmokeContract"]["workflowRequirements"]["resourceAllocationSchemaRef"] == ISOLATED_RUNTIME_RESOURCE_ALLOCATION_SCHEMA_VERSION
+    assert manifest["isolatedDesktopL1SmokeContract"]["workflowRequirements"]["legacyResourceAllocationSchemaRef"] == LEGACY_L1_RUNTIME_RESOURCE_ALLOCATION_SCHEMA_VERSION
+    assert manifest["isolatedDesktopL3WorkflowContract"]["builder"] == (
+        "sciforge_computer_use.isolated_desktop_l3_workflow_evidence.build_isolated_desktop_l3_workflow_evidence"
+    )
+    assert manifest["isolatedDesktopL3WorkflowContract"]["validator"] == (
+        "sciforge_computer_use.isolated_desktop_l3_workflow_evidence.validate_isolated_desktop_l3_workflow_evidence"
+    )
+    assert manifest["isolatedDesktopL3WorkflowContract"]["requiredFlags"]["backendKind"] == BACKEND_KIND
+    assert manifest["isolatedDesktopL3WorkflowContract"]["requiredFlags"]["captureSource"] == ISOLATED_CAPTURE_SOURCE
+    assert manifest["isolatedDesktopL3WorkflowContract"]["requiredFlags"]["inputChannel"] == REMOTE_DESKTOP_INPUT_CHANNEL
+    assert manifest["isolatedDesktopL3WorkflowContract"]["acceptanceTier"] == "l3-multi-app-workflow"
+    assert manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]["minimumAppCount"] == 3
+    assert "requiresSupportedFactContentInArtifact" in manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]
+    assert manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]["sourceFactEvidenceSchemaRef"] == (
+        "sciforge.computer-use.source-fact-evidence.v1"
+    )
+    assert manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]["sourceFactCompatSchemaRef"] == (
+        "sciforge.computer-use.source-fact.v1"
+    )
+    assert manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]["sourceFactEvidenceBuilder"] == (
+        "sciforge_computer_use.source_fact_evidence.build_source_fact_evidence_payload"
+    )
+    assert manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]["sourceFactEvidenceValidator"] == (
+        "sciforge_computer_use.source_fact_evidence.validate_source_fact_evidence_payload"
+    )
+    assert manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]["artifactBundleEvidenceSchemaRef"] == (
+        "sciforge.computer-use.l3-artifact-bundle-evidence.v1"
+    )
+    assert manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]["artifactBundleEvidenceBuilder"] == (
+        "sciforge_computer_use.l3_artifact_bundle_evidence.build_l3_artifact_bundle_evidence"
+    )
+    assert manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]["artifactBundleEvidenceValidator"] == (
+        "sciforge_computer_use.l3_artifact_bundle_evidence.validate_l3_artifact_bundle_evidence"
+    )
+    assert "requiresGuiSavedArtifactCausality" in manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]
+    assert "requiresGuiDirectoryPreviewCausality" in manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]
+    assert "requiresInputActionIndexCoverage" in manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]
+    assert manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]["actionPlanSchemaRef"] == (
+        "sciforge.computer-use.isolated-desktop-l3-workflow-action-plan.v1"
+    )
+    assert manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]["actionPlanBuilder"] == (
+        "sciforge_computer_use.isolated_desktop_l3_workflow_plan.build_isolated_desktop_l3_workflow_action_plan"
+    )
+    assert manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]["actionPlanValidator"] == (
+        "sciforge_computer_use.isolated_desktop_l3_workflow_plan.validate_isolated_desktop_l3_workflow_action_plan"
+    )
+    assert manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]["completionAssemblySchemaRef"] == (
+        "sciforge.computer-use.isolated-desktop-l3-completion-assembly.v1"
+    )
+    assert manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]["completionAssembler"] == (
+        "sciforge_computer_use.isolated_desktop_l3_workflow_result.assemble_isolated_desktop_l3_workflow_completion"
+    )
+    assert manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]["runnerExecutionBoundarySchemaRef"] == (
+        "sciforge.computer-use.isolated-desktop-l3-runner-execution-boundary.v1"
+    )
+    assert manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]["runnerExecutionBoundaryPhases"] == [
+        "launch-session",
+        "capture-source",
+        "write-artifact",
+        "save-through-gui",
+        "preview-directory",
+        "validate-and-present",
+    ]
+    assert manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]["partialRunSchemaRef"] == (
+        "sciforge.computer-use.isolated-desktop-l3-partial-run.v1"
+    )
+    assert manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]["forbidPartialRefsAsCompletedRefs"] is True
+    assert "partialRuntimeRefsPolicy" in manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]
+    assert "requiresPreflightPayloadValidation" in manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]
+    assert "requiresSameSessionRuntimeRefs" in manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]
+    assert "requiresSessionBoundRuntimeProofs" in manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]
+    assert "backendReadinessProofRef" in manifest["isolatedDesktopL3WorkflowContract"]["requiredRefs"]
+    assert "executorCommandEventLogRef" in manifest["isolatedDesktopL3WorkflowContract"]["requiredRefs"]
+    assert "targetWindowRef" in manifest["isolatedDesktopL3WorkflowContract"]["requiredRefs"]
+    assert "windowBoundPointerProofRef" in manifest["isolatedDesktopL3WorkflowContract"]["requiredRefs"]
+    assert "processRef" in manifest["isolatedDesktopL3WorkflowContract"]["requiredRefs"]
+    assert "resourceAllocationRef" in manifest["isolatedDesktopL3WorkflowContract"]["requiredRefs"]
+    assert "requiresBackendReadinessProof" in manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]
+    assert manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]["backendReadinessProofSchemaRef"] == (
+        BACKEND_READINESS_PROOF_SCHEMA_VERSION
+    )
+    assert "requiresExecutorCommandProvenance" in manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]
+    assert manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]["executorCommandEventLogSchemaRef"] == (
+        CONTRACT_EXECUTOR_COMMAND_EVENT_LOG_SCHEMA
+    )
+    assert "requiresRuntimeResourceAllocation" in manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]
+    assert manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]["resourceAllocationSchemaRef"] == ISOLATED_RUNTIME_RESOURCE_ALLOCATION_SCHEMA_VERSION
+    assert manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]["legacyResourceAllocationSchemaRef"] == LEGACY_L1_RUNTIME_RESOURCE_ALLOCATION_SCHEMA_VERSION
+    assert "requiresProcessLogRefs" in manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]
+    assert "requiresWindowBoundPointerProof" in manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]
+    assert manifest["isolatedDesktopL3WorkflowContract"]["workflowRequirements"]["targetWindowSchemaRef"] == ISOLATED_TARGET_WINDOW_SCHEMA_VERSION
+    assert "target-bound diagnostics" in manifest["isolatedDesktopL3WorkflowContract"]["claimLimit"]
+    assert manifest["isolatedDesktopL3WorkflowContract"]["readinessProbe"].startswith(
+        "python -m sciforge_computer_use.isolated_desktop_l3_workflow_probe"
+    )
     assert manifest["hostPortsContract"]["diagnosticProbes"]["virtualDesktopStateOnly"].startswith(
         "python -m sciforge_computer_use.virtual_desktop_probe"
     )
+    assert manifest["hostPortsContract"]["diagnosticProbes"]["isolatedDesktopBackend"].endswith(
+        "isolated_desktop_backend_probe --output-dir <dir>"
+    )
+    assert manifest["hostPortsContract"]["diagnosticProbes"]["isolatedDesktopBackendBundle"].endswith(
+        "isolated_desktop_backend_bundle --output-dir <dir>"
+    )
+    assert manifest["isolatedDesktopBackendRuntime"]["bundleProbe"].endswith(
+        "isolated_desktop_backend_bundle --output-dir <dir>"
+    )
+    assert manifest["isolatedDesktopBackendRuntime"]["container"]["buildContext"] == "packages/actions/computer-use"
+    assert manifest["isolatedDesktopBackendRuntime"]["container"]["baseImage"] == "python:3.12-slim-bookworm"
+    assert manifest["isolatedDesktopBackendRuntime"]["container"]["baseImageOverrideEnv"] == "SCIFORGE_DOCKER_BASE_IMAGE"
+    assert manifest["isolatedDesktopBackendRuntime"]["container"]["aptMirrorOverrideEnv"] == (
+        "SCIFORGE_DOCKER_DEBIAN_APT_MIRROR"
+    )
+    assert manifest["isolatedDesktopBackendRuntime"]["container"]["securityAptMirrorOverrideEnv"] == (
+        "SCIFORGE_DOCKER_DEBIAN_SECURITY_APT_MIRROR"
+    )
+    assert manifest["isolatedDesktopBackendRuntime"]["container"]["aptAcquireRetriesEnv"] == (
+        "SCIFORGE_DOCKER_APT_ACQUIRE_RETRIES"
+    )
+    assert manifest["isolatedDesktopBackendRuntime"]["container"]["hostEvidenceOutputDirEnv"] == (
+        "SCIFORGE_CU_ISOLATED_L1_EVIDENCE_DIR"
+    )
+    assert manifest["isolatedDesktopBackendRuntime"]["container"]["l3HostEvidenceOutputDirEnv"] == (
+        "SCIFORGE_CU_ISOLATED_L3_EVIDENCE_DIR"
+    )
+    assert manifest["isolatedDesktopBackendRuntime"]["container"]["dockerfile"].endswith(
+        "sciforge_computer_use/isolated_desktop_backend.Dockerfile"
+    )
+    assert "PYTHON_BASE_IMAGE=${SCIFORGE_DOCKER_BASE_IMAGE:-python:3.12-slim-bookworm}" in manifest["isolatedDesktopBackendRuntime"]["dockerBuildCommand"]
+    assert "DEBIAN_APT_MIRROR=${SCIFORGE_DOCKER_DEBIAN_APT_MIRROR:-}" in manifest["isolatedDesktopBackendRuntime"]["dockerBuildCommand"]
+    assert "DEBIAN_SECURITY_APT_MIRROR=${SCIFORGE_DOCKER_DEBIAN_SECURITY_APT_MIRROR:-}" in manifest["isolatedDesktopBackendRuntime"]["dockerBuildCommand"]
+    assert "APT_ACQUIRE_RETRIES=${SCIFORGE_DOCKER_APT_ACQUIRE_RETRIES:-3}" in manifest["isolatedDesktopBackendRuntime"]["dockerBuildCommand"]
+    assert manifest["isolatedDesktopBackendRuntime"]["bundleSpecDiagnosticOnly"] is True
+    assert manifest["isolatedDesktopBackendRuntime"]["diagnosticOnlyUntilCompletedL1Evidence"] is True
+    assert manifest["isolatedDesktopBackendRuntime"]["diagnosticOnlyUntilCompletedL3Evidence"] is True
+    assert manifest["isolatedDesktopBackendRuntime"]["completionEvidenceRef"] is None
+    assert "isolated_desktop_l3_workflow_probe" in manifest["isolatedDesktopBackendRuntime"]["dockerRunL3WorkflowCommand"]
+    assert manifest["hostPortsContract"]["diagnosticProbes"]["isolatedDesktopL1SmokeReadiness"].endswith(
+        "isolated_desktop_l1_smoke_probe --output-dir <dir>"
+    )
+    assert manifest["hostPortsContract"]["diagnosticProbes"]["isolatedDesktopL1SmokeExecute"].endswith(
+        "isolated_desktop_l1_smoke_probe --output-dir <dir> --execute"
+    )
+    assert manifest["hostPortsContract"]["diagnosticProbes"]["isolatedDesktopL3WorkflowReadiness"].endswith(
+        "isolated_desktop_l3_workflow_probe --output-dir <dir>"
+    )
+    assert manifest["hostPortsContract"]["diagnosticProbes"]["isolatedDesktopL3WorkflowExecute"].startswith(
+        "python -m sciforge_computer_use.isolated_desktop_l3_workflow_probe --output-dir <dir> --execute"
+    )
+    assert "--timeout-seconds" in manifest["hostPortsContract"]["diagnosticProbes"]["isolatedDesktopL3WorkflowExecute"]
     assert manifest["hostPortsContract"]["diagnosticProbes"]["semanticVerifier"].startswith(
         "python -m sciforge_computer_use.semantic_verifier_probe"
     )
@@ -511,6 +1027,11 @@ def test_public_api_manifest_and_camel_case_aliases_are_stable():
     assert validateViewportRecoveryEvidence is validate_viewport_recovery_evidence
     assert buildTargetBoundRealWindowProbeEvidence is build_target_bound_real_window_probe_evidence
     assert validateTargetBoundRealWindowProbeEvidence is validate_target_bound_real_window_probe_evidence
+    assert executorCommandEventLogSchema == EXECUTOR_COMMAND_EVENT_LOG_SCHEMA
+    assert buildIsolatedDesktopL1SmokeEvidence is build_isolated_desktop_l1_smoke_evidence
+    assert validateIsolatedDesktopL1SmokeEvidence is validate_isolated_desktop_l1_smoke_evidence
+    assert buildIsolatedDesktopL3WorkflowEvidence is build_isolated_desktop_l3_workflow_evidence
+    assert validateIsolatedDesktopL3WorkflowEvidence is validate_isolated_desktop_l3_workflow_evidence
     assert buildTargetBoundInputAdapterManifest is build_target_bound_input_adapter_manifest
     assert validateInputAdapterManifestForRealDesktop is validate_input_adapter_manifest_for_real_desktop
     assert validateRepairManifest is validate_repair_manifest
@@ -520,6 +1041,11 @@ def test_public_api_manifest_and_camel_case_aliases_are_stable():
     assert computer_use_api.validateViewportRecoveryEvidence is validate_viewport_recovery_evidence
     assert computer_use_api.buildTargetBoundRealWindowProbeEvidence is build_target_bound_real_window_probe_evidence
     assert computer_use_api.validateTargetBoundRealWindowProbeEvidence is validate_target_bound_real_window_probe_evidence
+    assert computer_use_api.executorCommandEventLogSchema == EXECUTOR_COMMAND_EVENT_LOG_SCHEMA
+    assert computer_use_api.buildIsolatedDesktopL1SmokeEvidence is build_isolated_desktop_l1_smoke_evidence
+    assert computer_use_api.validateIsolatedDesktopL1SmokeEvidence is validate_isolated_desktop_l1_smoke_evidence
+    assert computer_use_api.buildIsolatedDesktopL3WorkflowEvidence is build_isolated_desktop_l3_workflow_evidence
+    assert computer_use_api.validateIsolatedDesktopL3WorkflowEvidence is validate_isolated_desktop_l3_workflow_evidence
     assert computer_use_api.buildTargetBoundInputAdapterManifest is build_target_bound_input_adapter_manifest
     assert computer_use_api.validateInputAdapterManifestForRealDesktop is validate_input_adapter_manifest_for_real_desktop
     assert computer_use_api.validateRepairManifest is validate_repair_manifest
@@ -529,6 +1055,12 @@ def test_public_api_manifest_and_camel_case_aliases_are_stable():
     assert "validateViewportRecoveryEvidence" in computer_use_api.__all__
     assert "buildTargetBoundRealWindowProbeEvidence" in computer_use_api.__all__
     assert "validateTargetBoundRealWindowProbeEvidence" in computer_use_api.__all__
+    assert "EXECUTOR_COMMAND_EVENT_LOG_SCHEMA" in computer_use_api.__all__
+    assert "executorCommandEventLogSchema" in computer_use_api.__all__
+    assert "buildIsolatedDesktopL1SmokeEvidence" in computer_use_api.__all__
+    assert "validateIsolatedDesktopL1SmokeEvidence" in computer_use_api.__all__
+    assert "buildIsolatedDesktopL3WorkflowEvidence" in computer_use_api.__all__
+    assert "validateIsolatedDesktopL3WorkflowEvidence" in computer_use_api.__all__
     assert "buildTargetBoundInputAdapterManifest" in computer_use_api.__all__
     assert "validateInputAdapterManifestForRealDesktop" in computer_use_api.__all__
     assert "validateRepairManifest" in computer_use_api.__all__
@@ -541,6 +1073,16 @@ def test_public_api_manifest_and_camel_case_aliases_are_stable():
         "validateTargetBoundRealWindowProbeEvidence",
         "build_target_bound_real_window_probe_evidence",
         "validate_target_bound_real_window_probe_evidence",
+        "EXECUTOR_COMMAND_EVENT_LOG_SCHEMA",
+        "executorCommandEventLogSchema",
+        "buildIsolatedDesktopL1SmokeEvidence",
+        "validateIsolatedDesktopL1SmokeEvidence",
+        "build_isolated_desktop_l1_smoke_evidence",
+        "validate_isolated_desktop_l1_smoke_evidence",
+        "buildIsolatedDesktopL3WorkflowEvidence",
+        "validateIsolatedDesktopL3WorkflowEvidence",
+        "build_isolated_desktop_l3_workflow_evidence",
+        "validate_isolated_desktop_l3_workflow_evidence",
         "buildTargetBoundInputAdapterManifest",
         "validateInputAdapterManifestForRealDesktop",
         "build_target_bound_input_adapter_manifest",
@@ -561,6 +1103,10 @@ def test_public_api_manifest_and_camel_case_aliases_are_stable():
         "finalArtifactRefs",
         "finalObservationRef",
         "approvalRequest",
+        "evidenceLogRef",
+        "evidenceSnapshotRef",
+        "evidenceIndexRef",
+        "plannerBriefRef",
         "budgetDebits",
         "budgetDebitRefs",
     ):
@@ -884,6 +1430,65 @@ def test_targeted_wait_uses_grounding_but_skips_executor_as_observation_only():
     assert result.steps[0].execution is not None
     assert result.steps[0].execution.metadata["observationOnly"] is True
     assert result.steps[0].verification is not None
+
+
+def test_loop_writes_evidence_ledger_refs_and_staleness(tmp_path):
+    result = run_computer_use_task(
+        ComputerUseRequest(
+            task="click visible search field",
+            max_steps=1,
+            metadata={"evidenceOutputDir": str(tmp_path), "runId": "loop-ledger"},
+        ),
+        FakeSense(refs=["before.png", "after.png"]),
+        FakePlanner([ActionPlan(kind="click", target=ActionTarget(description="search field"))]),
+        FakeExecutor(),
+        FakeVerifier(done_after=1),
+    )
+
+    assert result.status == "completed"
+    assert result.failure_diagnostics["evidenceLogRef"] == str(tmp_path / "evidence-log.jsonl")
+    assert result.failure_diagnostics["evidenceSnapshotRef"] == str(tmp_path / "evidence-snapshot.json")
+    assert result.failure_diagnostics["evidenceIndexRef"] == str(tmp_path / "evidence-index.json")
+    assert result.failure_diagnostics["plannerBriefRef"] == str(tmp_path / "planner-brief.json")
+    assert result.metrics["evidenceRecordCount"] >= 6
+
+    index = json.loads((tmp_path / "evidence-index.json").read_text(encoding="utf8"))
+    action_records = index["byType"]["action"]
+    observation_records = index["byType"]["observation"]
+
+    assert len(action_records) == 1
+    assert len(observation_records) == 2
+    assert index["staleBy"][observation_records[0]] == action_records[0]
+    assert observation_records[1] in index["current"]
+    assert result.final_observation is not None
+    assert result.final_observation.metadata["evidenceRecordId"] == observation_records[1]
+
+
+def test_targeted_wait_evidence_record_is_observation_only(tmp_path):
+    result = run_computer_use_task(
+        ComputerUseRequest(
+            task="inspect results panel",
+            max_steps=1,
+            metadata={"evidenceOutputDir": str(tmp_path), "runId": "loop-wait"},
+        ),
+        FakeSense(refs=["before.png", "after.png"]),
+        FakePlanner([{"type": "wait", "targetDescription": "results panel", "reason": "inspect local panel"}]),
+        FakeExecutor(),
+        FakeVerifier(done_after=1),
+    )
+
+    index = json.loads((tmp_path / "evidence-index.json").read_text(encoding="utf8"))
+    log_records = [
+        json.loads(line)
+        for line in (tmp_path / "evidence-log.jsonl").read_text(encoding="utf8").splitlines()
+    ]
+    action_record = next(record for record in log_records if record["type"] == "action")
+
+    assert result.status == "completed"
+    assert action_record["metadata"]["observationOnly"] is True
+    assert action_record["metadata"]["mutatesScreen"] is False
+    assert action_record["invalidates"] == []
+    assert index["staleBy"] == {}
 
 
 def run_cli(*args, stdin=None):

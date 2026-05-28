@@ -1,4 +1,5 @@
-import { access, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { lstatSync, realpathSync } from 'node:fs';
+import { access, lstat, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -8,6 +9,24 @@ import {
   type CuUserAcceptanceManifest,
   writeCuUserAcceptanceManifest,
 } from './cu-user-acceptance-manifest.js';
+import {
+  projectCuNextRuntimeArtifactPresentationEvidence,
+  projectCuNextTaskAcceptanceMarkers,
+} from './computer-use-next/acceptance-projection.js';
+import {
+  canonicalApprovalRefFromConfirmedSidecar,
+  highRiskActionFromApprovalChainSidecars,
+  validateCuNextApprovalChainSidecars,
+  validateCuNextNeedsConfirmationSidecars,
+  type CuNextApprovalChainSidecars,
+} from './computer-use-next/approval-chain.js';
+import {
+  CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF,
+  isCanonicalCuNextCompletionEvidenceRef,
+} from './computer-use-next/evidence-classification.js';
+import {
+  cuNextCompletedL3CompletionEvidenceIssues,
+} from './computer-use-next/completion-grade.js';
 import {
   computerUseExecutorLockScopeIds,
   computerUseInputPolicyIds,
@@ -30,6 +49,7 @@ export const CU_L3_INDEPENDENT_INPUT_ADAPTER_SCHEMA_VERSION =
 export interface CuL3IndependentInputAcceptanceHarnessOptions {
   tracePath: string;
   taskId?: string;
+  scenarioId?: string;
   adapterPath?: string;
   outDir?: string;
   verifierOutPath?: string;
@@ -41,6 +61,10 @@ export interface CuL3IndependentInputAcceptanceHarnessOptions {
   guiPresentPayloadRef?: string;
   guiPresentSourceRef?: string;
   verifierReason?: string;
+  evidenceMarkers?: Array<Record<string, unknown>>;
+  explicitStatus?: CuUserAcceptanceInput['explicitStatus'];
+  completionEvidence?: Record<string, unknown>;
+  completionEvidenceRef?: string;
 }
 
 export interface CuL3IndependentInputVerifier {
@@ -127,8 +151,10 @@ export async function runCuL3IndependentInputAcceptanceHarness(
   const adapterRef = toRef(adapterPath, evidenceBaseDir);
   const runDir = dirname(traceRef);
   const siblingRefs = await discoverSiblingRefs(dirname(tracePath), runDir);
+  const approvalChainSidecars = await discoverApprovalChainSidecars(dirname(tracePath));
   const traceEvidence = deriveTraceEvidence(trace, traceRef);
   const adapterEvidence = deriveAdapterEvidence(adapter, adapterRef);
+  const siblingFinalArtifactRef = await discoverSiblingFinalArtifactRef(evidenceBaseDir);
   const checks = [
     ...validateTrace(trace),
     ...validateAdapter(adapter),
@@ -150,11 +176,49 @@ export async function runCuL3IndependentInputAcceptanceHarness(
     ['request', 'computerUseLong', 'taskId'],
   ]);
   const taskId = options.taskId ?? sourceTaskId;
+  const sourceScenarioId = firstStringAt(trace, [
+    ['scenarioId'],
+    ['cuLongScenarioId'],
+    ['metadata', 'scenarioId'],
+    ['metadata', 'cuLongScenarioId'],
+    ['request', 'scenarioId'],
+    ['request', 'cuLongScenarioId'],
+    ['request', 'metadata', 'scenarioId'],
+    ['request', 'metadata', 'cuLongScenarioId'],
+    ['request', 'computerUseLong', 'scenarioId'],
+    ['request', 'computerUseLong', 'cuLongScenarioId'],
+    ['computerUseLong', 'scenarioId'],
+    ['computerUseLong', 'cuLongScenarioId'],
+  ]);
+  if (taskId === 'CU-NEXT-03' || taskId === 'CU-NEXT-06') {
+    const approvalChainChecks = (taskId === 'CU-NEXT-03'
+      ? validateCuNextNeedsConfirmationSidecars
+      : validateCuNextApprovalChainSidecars)({
+      sidecars: approvalChainSidecars,
+      refs: {
+        approvalRequestRef: siblingRefs.approvalRequestRef,
+        guiAskUserRecordRef: siblingRefs.guiAskUserRecordRef,
+        confirmedRequestRef: siblingRefs.confirmedRequestRef,
+        riskAuditRef: siblingRefs.riskAuditRef,
+        sourceApprovalRequestRef: siblingRefs.sourceApprovalRequestRef,
+        sourceGuiAskUserRecordRef: siblingRefs.sourceGuiAskUserRecordRef,
+        sourceRiskAuditRef: siblingRefs.sourceRiskAuditRef,
+        approvalDecisionRef: siblingRefs.approvalDecisionRef,
+      },
+    }).map((issue) => check(
+      `approval-chain-${issue.path ?? issue.id}`,
+      false,
+      `${taskId} approval sidecar chain is valid.`,
+      issue.reason,
+    ));
+    checks.push(...approvalChainChecks);
+    issueRefs.push(...approvalChainChecks.map((item) => item.id));
+  }
   const finalArtifactRef = options.finalArtifactRef ?? firstStringAt(trace, [
     ['finalArtifactRef'],
     ['acceptance', 'finalArtifactRef'],
     ['cuUserAcceptance', 'finalArtifactRef'],
-  ]) ?? firstVisibleArtifactRef(trace);
+  ]) ?? siblingFinalArtifactRef ?? firstVisibleArtifactRef(trace);
   const finalVisibleScreenshotRef = options.finalVisibleScreenshotRef
     ?? firstStringAt(trace, [
       ['finalVisibleScreenshotRef'],
@@ -176,6 +240,60 @@ export async function runCuL3IndependentInputAcceptanceHarness(
       ['acceptance', 'guiPresent', 'payloadRef'],
       ['cuUserAcceptance', 'guiPresent', 'payloadRef'],
     ]);
+  const guiPresentRecord = await readOptionalRefJsonRecord(dirname(tracePath), guiPresentRecordRef);
+  const guiPresentPayload = await readOptionalRefJsonRecord(dirname(tracePath), guiPresentPayloadRef);
+  const artifactPresentation = projectCuNextRuntimeArtifactPresentationEvidence({
+    traceRef,
+    finalArtifactRef,
+    finalVisibleScreenshotRef,
+    guiPresentRecordRef,
+    guiPresentPayloadRef,
+    guiPresentRecords: [
+      trace,
+      recordAt(trace, 'guiPresent'),
+      recordAt(trace, 'virtualRemoteSession'),
+      guiPresentRecord,
+      guiPresentPayload,
+    ],
+  });
+  const projectedFinalArtifactRef = artifactPresentation.finalArtifactRef;
+  const denseGroundingEvidence = await writeDenseGroundingRejectionEvidence({
+    taskId,
+    trace,
+    traceRef,
+    traceEvidence,
+    outDir,
+    createdAt,
+  });
+  const projectedTaskEvidence = projectCuNextTaskAcceptanceMarkers(taskId, {
+    traceRef,
+    requestRef: siblingRefs.requestRef,
+    verifierRef: toRef(verifierOutPath, outDir),
+    finalArtifactRef: projectedFinalArtifactRef,
+    finalVisibleScreenshotRef,
+    focusCropRefs: traceEvidence.focusCropRefs,
+    groundingDiagnosticsRefs: traceEvidence.groundingDiagnosticsRefs,
+    sessionRefs: adapterEvidence.sessionRefs,
+    approvalRequestRef: siblingRefs.approvalRequestRef,
+    guiAskUserRecordRef: siblingRefs.guiAskUserRecordRef,
+    confirmedRequestRef: siblingRefs.confirmedRequestRef,
+    riskAuditRef: siblingRefs.riskAuditRef,
+    sourceApprovalRequestRef: siblingRefs.sourceApprovalRequestRef,
+    sourceGuiAskUserRecordRef: siblingRefs.sourceGuiAskUserRecordRef,
+    sourceRiskAuditRef: siblingRefs.sourceRiskAuditRef,
+    approvalDecisionRef: siblingRefs.approvalDecisionRef,
+    confirmedApprovalRef: canonicalApprovalRefFromConfirmedSidecar(approvalChainSidecars.confirmedRequest),
+    highRiskAction: highRiskActionFromApprovalChainSidecars(
+      approvalChainSidecars,
+      taskId === 'CU-NEXT-03' ? 'needs-confirmation' : 'confirmed',
+    ),
+    blockedManifestRef: siblingRefs.blockedManifestRef,
+    repairHintRef: siblingRefs.repairHintRef,
+    continuationRequestRef: siblingRefs.continuationRequestRef,
+    directoryListingRef: siblingRefs.directoryListingRef,
+    denseGroundingRejectionRef: denseGroundingEvidence.ref,
+    denseGroundingTargetDescription: denseGroundingEvidence.targetDescription,
+  });
   const taskText = deriveTaskText(trace);
   if (!taskText) {
     checks.push({
@@ -198,7 +316,7 @@ export async function runCuL3IndependentInputAcceptanceHarness(
   const requiredRefChecks = await validateRequiredRefsExist({
     baseDir: dirname(tracePath),
     refs: [
-      { id: 'final-artifact-ref', ref: finalArtifactRef },
+      { id: 'final-artifact-ref', ref: projectedFinalArtifactRef },
       { id: 'final-visible-screenshot-ref', ref: finalVisibleScreenshotRef },
       { id: 'gui-present-record-ref', ref: guiPresentRecordRef },
       { id: 'gui-present-payload-ref', ref: guiPresentPayloadRef },
@@ -211,7 +329,31 @@ export async function runCuL3IndependentInputAcceptanceHarness(
   });
   checks.push(...requiredRefChecks);
   issueRefs.push(...requiredRefChecks.filter((check) => check.status === 'blocked').map((check) => check.id));
+  const explicitCompletionEvidence = options.completionEvidence ?? explicitCompletionEvidenceFromTrace(trace);
+  const explicitCompletionEvidenceRef = options.completionEvidenceRef ?? explicitCompletionEvidenceRefFromTrace(trace);
+  const sameRoundCompletionEvidence = await deriveSameRoundCompletionEvidence({
+    baseDir: dirname(tracePath),
+    explicitRef: explicitCompletionEvidenceRef,
+  });
+  checks.push(...sameRoundCompletionEvidence.checks);
+  issueRefs.push(...sameRoundCompletionEvidence.checks.filter((check) => check.status === 'blocked').map((check) => check.id));
+  const completionBindingCheck = completionEvidenceTaskArtifactBindingCheck({
+    completionEvidence: sameRoundCompletionEvidence.evidence,
+    finalArtifactRef: projectedFinalArtifactRef,
+    guiPresentArtifactRefs: artifactPresentation.guiPresentArtifactRefs,
+    guiPresentDisplayedRefs: artifactPresentation.guiPresentDisplayedRefs,
+  });
+  if (completionBindingCheck) {
+    checks.push(completionBindingCheck);
+    if (completionBindingCheck.status === 'blocked') issueRefs.push(completionBindingCheck.id);
+  }
   const verifierStatus = issueRefs.length === 0 ? 'passed' : 'blocked';
+  const completionEvidence = verifierStatus === 'passed'
+    ? sameRoundCompletionEvidence.evidence ?? explicitCompletionEvidence
+    : undefined;
+  const completionEvidenceRef = verifierStatus === 'passed'
+    ? sameRoundCompletionEvidence.ref
+    : undefined;
   const apps = deriveWorkflowApps(trace);
   const verifier: CuL3IndependentInputVerifier = {
     schemaVersion: CU_L3_INDEPENDENT_INPUT_VERIFIER_SCHEMA_VERSION,
@@ -248,7 +390,7 @@ export async function runCuL3IndependentInputAcceptanceHarness(
       id: 'tui-host-runTask',
       kind: 'tui-host-runTask',
       ref: siblingRefs.requestRef ?? traceRef,
-      refs: [siblingRefs.hostPortsRef ?? traceRef],
+      refs: [siblingRefs.hostPortsRef ?? traceRef, siblingRefs.tuiHostRunTaskChainRef].filter(isNonEmptyString),
       note: 'Computer Use package bridge was invoked through TUI Host runTask evidence.',
     },
     {
@@ -273,14 +415,19 @@ export async function runCuL3IndependentInputAcceptanceHarness(
       id: 'gui-present-record',
       kind: 'gui-present-record',
       ref: guiPresentRecordRef,
-      refs: [guiPresentRecordRef],
-      artifactRefs: [finalArtifactRef].filter(isNonEmptyString),
+      refs: [
+        ...(artifactPresentation.guiPresentEvidenceClaim?.refs as string[] | undefined ?? [guiPresentRecordRef]),
+        siblingRefs.tuiHostRunTaskChainRef,
+      ].filter(isNonEmptyString),
+      recordRefs: artifactPresentation.guiPresentRecordRefs,
+      artifactRefs: artifactPresentation.guiPresentArtifactRefs,
     });
   }
 
   const input: CuUserAcceptanceInput = {
     runId: stringAt(trace, 'runId') ?? basenameWithoutJson(tracePath),
     taskId,
+    scenarioId: options.scenarioId ?? sourceScenarioId,
     createdAt,
     taskText: taskText ?? 'Missing task text in package-bridge vision trace.',
     level: 'L3',
@@ -326,7 +473,7 @@ export async function runCuL3IndependentInputAcceptanceHarness(
       owner: `${independentInputAdapterOwner} ${independentInputAdapterKind}`,
       acquiredAt: adapterEvidence.acquiredAt ?? createdAt,
     },
-    finalArtifactRef,
+    finalArtifactRef: projectedFinalArtifactRef,
     finalVisibleScreenshotRef,
     verifierVerdict: {
       status: verifier.status,
@@ -346,13 +493,27 @@ export async function runCuL3IndependentInputAcceptanceHarness(
       displayedRefs: [
         traceRef,
         finalVisibleScreenshotRef,
-        finalArtifactRef,
+        projectedFinalArtifactRef,
         toRef(verifierOutPath, outDir),
+        ...artifactPresentation.guiPresentDisplayedRefs,
       ].filter(isNonEmptyString),
-      recordRefs: guiPresentRecordRef ? [guiPresentRecordRef] : [],
-      artifactRefs: finalArtifactRef ? [finalArtifactRef] : [],
+      recordRefs: artifactPresentation.guiPresentRecordRefs,
+      artifactRefs: artifactPresentation.guiPresentArtifactRefs,
       sessionRefs: adapterEvidence.sessionRefs,
     },
+    explicitStatus: options.explicitStatus ?? (
+      projectedTaskEvidence.status === 'needs-confirmation'
+        ? {
+            status: 'needs-confirmation',
+            scope: 'high-risk-stop',
+            reason: 'Computer Use stopped before a high-risk action and requested user confirmation.',
+            ref: siblingRefs.approvalRequestRef ?? siblingRefs.guiAskUserRecordRef ?? traceRef,
+          }
+        : undefined
+    ),
+    evidenceMarkers: options.evidenceMarkers ?? projectedTaskEvidence.evidenceMarkers,
+    completionEvidence,
+    completionEvidenceRef,
   };
 
   await mkdir(dirname(inputOutPath), { recursive: true });
@@ -371,6 +532,105 @@ export async function runCuL3IndependentInputAcceptanceHarness(
   };
 }
 
+function completionEvidenceTaskArtifactBindingCheck(input: {
+  completionEvidence?: JsonRecord;
+  finalArtifactRef?: string;
+  guiPresentArtifactRefs: string[];
+  guiPresentDisplayedRefs: string[];
+}): CuL3IndependentInputVerifier['checks'][number] | undefined {
+  if (!input.completionEvidence || !input.finalArtifactRef) return undefined;
+  const artifactCausality = recordAt(input.completionEvidence, 'artifactCausality');
+  const taskArtifactBinding = recordAt(input.completionEvidence, 'taskArtifactBinding');
+  const presentationEvidence = recordAt(input.completionEvidence, 'presentationEvidence');
+  const completionArtifactRefs = unique([
+    stringAt(input.completionEvidence, 'finalArtifactRef'),
+    stringAt(artifactCausality, 'finalArtifactRef'),
+    stringAt(taskArtifactBinding, 'finalArtifactRef'),
+    ...stringArrayAt(input.completionEvidence, 'taskFinalArtifactRefs'),
+    ...stringArrayAt(taskArtifactBinding, 'finalArtifactRefs'),
+    ...stringArrayAt(presentationEvidence, 'artifactRefs'),
+  ].filter(isNonEmptyString));
+  const guiPresentRefs = unique([
+    ...input.guiPresentArtifactRefs,
+    ...input.guiPresentDisplayedRefs,
+  ]);
+  const bound = completionArtifactRefs.includes(input.finalArtifactRef) && guiPresentRefs.includes(input.finalArtifactRef);
+  return check(
+    'completion-evidence-task-artifact-binding',
+    bound,
+    'completionEvidenceRef explicitly binds the task finalArtifactRef and gui.present artifact.',
+    `completionEvidenceRef does not bind task finalArtifactRef ${input.finalArtifactRef} to the completed L3 evidence and gui.present artifact refs.`,
+  );
+}
+
+async function writeDenseGroundingRejectionEvidence(options: {
+  taskId?: string;
+  trace: JsonRecord;
+  traceRef: string;
+  traceEvidence: ReturnType<typeof deriveTraceEvidence>;
+  outDir: string;
+  createdAt: string;
+}): Promise<{ ref?: string; targetDescription?: string }> {
+  if (options.taskId !== 'CU-NEXT-07') return {};
+  const rejectedGroundings = collectRecords(options.trace).filter((record) => (
+    record.fineGroundingRejected === true
+    || stringAt(record, 'fineGroundingRejectionReason')
+    || stringAt(recordAt(record, 'fineGrounding'), 'status') === 'rejected'
+  ));
+  const firstRejected = rejectedGroundings[0];
+  const fineGrounding = recordAt(firstRejected, 'fineGrounding');
+  const targetDescription = firstNonEmptyString(
+    stringAt(firstRejected, 'targetDescription'),
+    stringAt(firstRejected, 'coarseTargetDescription'),
+    stringAt(fineGrounding, 'targetDescription'),
+    stringAt(recordAt(firstRejected, 'plannedAction'), 'targetDescription'),
+    stringAt(recordAt(firstRejected, 'plan'), 'targetDescription'),
+    stringAt(recordAt(firstRejected, 'action'), 'targetDescription'),
+  );
+  const rejectedTargets = rejectedGroundings.map((grounding, index) => {
+    const fine = recordAt(grounding, 'fineGrounding');
+    return compactRecord({
+      id: `rejected-target-${index + 1}`,
+      targetDescription: stringAt(fine, 'targetDescription') ?? stringAt(grounding, 'targetDescription') ?? targetDescription,
+      reason: stringAt(grounding, 'fineGroundingRejectionReason') ?? stringAt(fine, 'rejectionReason') ?? 'fine grounding rejected during dense target disambiguation',
+      provider: stringAt(fine, 'provider') ?? stringAt(grounding, 'provider'),
+      screenshotRef: stringAt(fine, 'screenshotRef') ?? stringAt(grounding, 'screenshotRef'),
+      focusCropRef: stringAt(fine, 'focusScreenshotRef') ?? options.traceEvidence.focusCropRefs[0],
+      coordinateSpace: stringAt(fine, 'coordinateSpace') ?? stringAt(grounding, 'coordinateSpace'),
+      x: numberAt(fine?.x ?? grounding.x),
+      y: numberAt(fine?.y ?? grounding.y),
+      rawText: stringAt(fine, 'rawText') ?? stringAt(grounding, 'rawText'),
+    });
+  }).filter((record) => Object.keys(record).length > 2);
+  if (!targetDescription || rejectedTargets.length === 0) return {};
+  const sidecarPath = join(options.outDir, 'dense-grounding-rejections.json');
+  const sidecar = compactRecord({
+    schemaVersion: 'sciforge.computer-use.dense-grounding-rejections.v1',
+    status: 'recorded',
+    taskId: options.taskId,
+    createdAt: options.createdAt,
+    traceRef: options.traceRef,
+    selectedTarget: {
+      targetDescription,
+      coarseWindowScreenshotRef: options.traceEvidence.screenshotRefs.after.at(-1)
+        ?? options.traceEvidence.screenshotRefs.before.at(-1),
+      focusCropRef: options.traceEvidence.focusCropRefs[0],
+      fineGroundingDiagnosticRef: options.traceRef,
+    },
+    rejectedTargets,
+    coarseWindowScreenshotRef: options.traceEvidence.screenshotRefs.after.at(-1)
+      ?? options.traceEvidence.screenshotRefs.before.at(-1),
+    focusCropRef: options.traceEvidence.focusCropRefs[0],
+    fineGroundingDiagnosticRef: options.traceRef,
+  });
+  await mkdir(options.outDir, { recursive: true });
+  await writeFile(sidecarPath, `${JSON.stringify(sidecar, null, 2)}\n`, 'utf8');
+  return {
+    ref: toRef(sidecarPath, options.outDir),
+    targetDescription,
+  };
+}
+
 export function parseCuL3IndependentInputAcceptanceCliArgs(argv: string[]): CliArgs {
   const args: Partial<CliArgs> = {};
   for (let index = 0; index < argv.length; index += 1) {
@@ -380,6 +640,9 @@ export function parseCuL3IndependentInputAcceptanceCliArgs(argv: string[]): CliA
       index += 1;
     } else if (arg === '--task-id') {
       args.taskId = requiredValue(argv, index, arg);
+      index += 1;
+    } else if (arg === '--scenario-id') {
+      args.scenarioId = requiredValue(argv, index, arg);
       index += 1;
     } else if (arg === '--adapter') {
       args.adapterPath = requiredValue(argv, index, arg);
@@ -592,6 +855,32 @@ function deriveTaskText(trace: JsonRecord): string | undefined {
   ]);
 }
 
+function explicitCompletionEvidenceFromTrace(trace: JsonRecord): Record<string, unknown> | undefined {
+  return firstRecordAt(trace, [
+    ['completionEvidence'],
+    ['cuUserAcceptance', 'completionEvidence'],
+    ['acceptance', 'completionEvidence'],
+    ['computerUseNext', 'completionEvidence'],
+    ['metadata', 'completionEvidence'],
+    ['request', 'completionEvidence'],
+    ['request', 'metadata', 'completionEvidence'],
+    ['request', 'computerUseLong', 'completionEvidence'],
+  ]);
+}
+
+function explicitCompletionEvidenceRefFromTrace(trace: JsonRecord): string | undefined {
+  return firstStringAt(trace, [
+    ['completionEvidenceRef'],
+    ['cuUserAcceptance', 'completionEvidenceRef'],
+    ['acceptance', 'completionEvidenceRef'],
+    ['computerUseNext', 'completionEvidenceRef'],
+    ['metadata', 'completionEvidenceRef'],
+    ['request', 'completionEvidenceRef'],
+    ['request', 'metadata', 'completionEvidenceRef'],
+    ['request', 'computerUseLong', 'completionEvidenceRef'],
+  ]);
+}
+
 function deriveWorkflowApps(trace: JsonRecord): string[] {
   const apps = collectRecords(trace)
     .flatMap((record) => [
@@ -635,11 +924,64 @@ function firstVisibleArtifactRef(trace: JsonRecord): string | undefined {
     .find(isFinalArtifactEvidenceRef);
 }
 
+async function discoverSiblingFinalArtifactRef(baseDir: string): Promise<string | undefined> {
+  const siblingNames = [
+    'gui-present.json',
+    'tool-payload.json',
+    'directory-listing.json',
+    'virtual-remote-session.json',
+    'independent-input-adapter.json',
+    'tui-host-run-task-chain.json',
+  ];
+  const sidecars = await Promise.all(
+    siblingNames.map((name) => readOptionalJsonRecord(join(baseDir, name))),
+  );
+  const candidateRefs = sidecars.flatMap((sidecar) => (
+    sidecar ? finalArtifactCandidateRefs(sidecar) : []
+  ));
+  return firstExistingBundleLocalFinalArtifactRef(baseDir, candidateRefs);
+}
+
+function finalArtifactCandidateRefs(value: unknown): string[] {
+  const refs = collectRecords(value).flatMap((record) => [
+    ...pathRefsFromValue(record.finalArtifactRef),
+    ...pathRefsFromValue(record.finalArtifactRefs),
+    ...pathRefsFromValue(record.artifactRef),
+    ...pathRefsFromValue(record.artifactRefs),
+    ...pathRefsFromValue(record.visibleArtifactRefs),
+    ...pathRefsFromValue(record.outputArtifacts),
+    ...pathRefsFromValue(record.deckRef),
+    ...pathRefsFromValue(record.reportRef),
+    ...pathRefsFromValue(record.indexRef),
+    ...pathRefsFromValue(record.dataRef),
+    ...pathRefsFromValue(record.path),
+  ]);
+  return unique(refs.filter(isNonEmptyString).filter(isFinalArtifactEvidenceRef));
+}
+
+async function firstExistingBundleLocalFinalArtifactRef(
+  baseDir: string,
+  refs: string[],
+): Promise<string | undefined> {
+  const resolvedBaseDir = resolve(baseDir);
+  for (const ref of unique(refs)) {
+    const resolved = resolveEvidenceRef(resolvedBaseDir, ref);
+    if (!isPathInside(resolvedBaseDir, resolved)) continue;
+    try {
+      const info = await stat(resolved);
+      if (info.isFile()) return toRef(resolved, resolvedBaseDir);
+    } catch {
+      // Candidate refs are opportunistic; missing files are not final artifacts.
+    }
+  }
+  return undefined;
+}
+
 function isFinalArtifactEvidenceRef(ref: string): boolean {
   const text = ref.trim();
   if (!text) return false;
   if (/\.(png|jpe?g|webp)$/i.test(text)) return false;
-  if (/\/?(vision-trace|host-ports|tool-payload|gui-present|computer-use-request|gateway-request|request|independent-input-adapter|virtual-remote-session|action-ledger|failure-diagnostics|cu-user-acceptance|cu-l3-independent-input-verifier)\.json$/i.test(text)) {
+  if (/\/?(vision-trace|host-ports|tool-payload|gui-present|gui-ask-user|approval-request|approval-source-request|approval-source-gui-ask-user|approval-source-risk-audit|approval-decision|risk-audit|confirmed-request|blocked-manifest|repair-hint|continuation-request|directory-listing|tui-host-run-task-chain|computer-use-request|gateway-request|request|independent-input-adapter|virtual-remote-session|action-ledger|failure-diagnostics|cu-user-acceptance|cu-l3-independent-input-verifier)\.json$/i.test(text)) {
     return false;
   }
   return /^(artifact|file|workEvidence|ref):/i.test(text)
@@ -652,9 +994,196 @@ async function discoverSiblingRefs(runDirPath: string, runDirRef: string) {
   return {
     requestRef: await existingRef(runDirPath, runDirRef, ['request.json', 'gateway-request.json', 'computer-use-request.json']),
     hostPortsRef: await existingRef(runDirPath, runDirRef, ['host-ports.json']),
+    tuiHostRunTaskChainRef: await existingRef(runDirPath, runDirRef, ['tui-host-run-task-chain.json']),
     toolPayloadRef: await existingRef(runDirPath, runDirRef, ['tool-payload.json']),
     guiPresentRecordRef: await existingRef(runDirPath, runDirRef, ['gui-present.json']),
+    approvalRequestRef: await existingRef(runDirPath, runDirRef, ['approval-request.json']),
+    guiAskUserRecordRef: await existingRef(runDirPath, runDirRef, ['gui-ask-user.json']),
+    confirmedRequestRef: await existingRef(runDirPath, runDirRef, ['confirmed-request.json']),
+    riskAuditRef: await existingRef(runDirPath, runDirRef, ['risk-audit.json']),
+    sourceApprovalRequestRef: await existingRef(runDirPath, runDirRef, ['approval-source-request.json']),
+    sourceGuiAskUserRecordRef: await existingRef(runDirPath, runDirRef, ['approval-source-gui-ask-user.json']),
+    sourceRiskAuditRef: await existingRef(runDirPath, runDirRef, ['approval-source-risk-audit.json']),
+    approvalDecisionRef: await existingRef(runDirPath, runDirRef, ['approval-decision.json']),
+    blockedManifestRef: await existingRef(runDirPath, runDirRef, ['blocked-manifest.json', 'blocked-run.json']),
+    repairHintRef: await existingRef(runDirPath, runDirRef, ['repair-hint.json', 'repair-instruction.json']),
+    continuationRequestRef: await existingRef(runDirPath, runDirRef, ['continuation-request.json', 'resume-request.json']),
+    directoryListingRef: await existingRef(runDirPath, runDirRef, ['directory-listing.json', 'file-list.json']),
   };
+}
+
+async function discoverApprovalChainSidecars(runDirPath: string): Promise<CuNextApprovalChainSidecars> {
+  return {
+    approvalRequest: await readOptionalJsonRecord(join(runDirPath, 'approval-request.json')),
+    guiAskUser: await readOptionalJsonRecord(join(runDirPath, 'gui-ask-user.json')),
+    confirmedRequest: await readOptionalJsonRecord(join(runDirPath, 'confirmed-request.json')),
+    riskAudit: await readOptionalJsonRecord(join(runDirPath, 'risk-audit.json')),
+    sourceApprovalRequest: await readOptionalJsonRecord(join(runDirPath, 'approval-source-request.json')),
+    sourceGuiAskUser: await readOptionalJsonRecord(join(runDirPath, 'approval-source-gui-ask-user.json')),
+    sourceRiskAudit: await readOptionalJsonRecord(join(runDirPath, 'approval-source-risk-audit.json')),
+    approvalDecision: await readOptionalJsonRecord(join(runDirPath, 'approval-decision.json')),
+  };
+}
+
+async function deriveSameRoundCompletionEvidence(options: {
+  baseDir: string;
+  explicitRef?: string;
+}): Promise<{
+  ref?: string;
+  evidence?: JsonRecord;
+  checks: CuL3IndependentInputVerifier['checks'];
+}> {
+  const baseDir = resolve(options.baseDir);
+  const candidates = await completionEvidenceCandidates(baseDir, options.explicitRef);
+  const checks: CuL3IndependentInputVerifier['checks'] = [];
+  for (const candidate of candidates) {
+    const resolved = resolveEvidenceRef(baseDir, candidate.ref);
+    if (!isPathInside(baseDir, resolved)) {
+      checks.push(check(
+        'completion-evidence-ref-bundle-local',
+        false,
+        'completionEvidenceRef resolves inside the current round evidence bundle.',
+        `${candidate.ref} resolves outside the current round evidence bundle and cannot be projected as same-session completion evidence.`,
+      ));
+      return { checks };
+    }
+    if (!isCanonicalCuNextCompletionEvidenceRef(candidate.ref)) {
+      checks.push(check(
+        'completion-evidence-ref-canonical',
+        false,
+        `completionEvidenceRef is the canonical ${CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF} file in the current round evidence bundle.`,
+        `${candidate.ref} is not the canonical same-round ${CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF} completion evidence file.`,
+      ));
+      return { checks };
+    }
+    const localFileCheck = await validateBundleLocalRegularFile(baseDir, resolved, candidate.ref);
+    if (localFileCheck) {
+      checks.push(localFileCheck);
+      return { checks };
+    }
+    let evidence: JsonRecord;
+    try {
+      evidence = await readJsonRecord(resolved);
+    } catch {
+      checks.push(check(
+        'completion-evidence-ref-loadable',
+        false,
+        'completionEvidenceRef is loadable JSON from the current round evidence bundle.',
+        `${candidate.ref} could not be loaded as a JSON object from the current round evidence bundle.`,
+      ));
+      return { checks };
+    }
+    const issues = cuNextCompletedL3CompletionEvidenceIssues(evidence, {
+      refScopeDescription: 'the current round evidence bundle',
+      refExists: (ref) => bundleLocalRegularRefExists(baseDir, ref),
+    });
+    if (issues.length > 0) {
+      checks.push(check(
+        'completion-evidence-validator-accepted',
+        false,
+        'completionEvidenceRef points at validator-accepted completed isolated L3 evidence.',
+        `${candidate.ref} is not validator-accepted completed isolated L3 evidence: ${issues.join(' ')}`,
+      ));
+      return { checks };
+    }
+    checks.push(check(
+      'completion-evidence-validator-accepted',
+      true,
+      `${candidate.ref} is validator-accepted completed isolated L3 evidence from the current round bundle.`,
+      `${candidate.ref} is not validator-accepted completed isolated L3 evidence.`,
+    ));
+    return {
+      ref: toRef(resolved, baseDir),
+      evidence,
+      checks,
+    };
+  }
+  return { checks };
+}
+
+async function validateBundleLocalRegularFile(
+  baseDir: string,
+  resolved: string,
+  ref: string,
+): Promise<CuL3IndependentInputVerifier['checks'][number] | undefined> {
+  try {
+    const linkInfo = await lstat(resolved);
+    if (linkInfo.isSymbolicLink()) {
+      return check(
+        'completion-evidence-ref-regular-file',
+        false,
+        'completionEvidenceRef is a regular file in the current round evidence bundle.',
+        `${ref} is a symlink and cannot be used as same-round completion evidence.`,
+      );
+    }
+    if (!linkInfo.isFile()) {
+      return check(
+        'completion-evidence-ref-regular-file',
+        false,
+        'completionEvidenceRef is a regular file in the current round evidence bundle.',
+        `${ref} is not a regular file in the current round evidence bundle.`,
+      );
+    }
+    const realBase = await realpath(baseDir);
+    const realResolved = await realpath(resolved);
+    if (!isPathInside(realBase, realResolved)) {
+      return check(
+        'completion-evidence-ref-realpath-bundle-local',
+        false,
+        'completionEvidenceRef realpath stays inside the current round evidence bundle.',
+        `${ref} resolves outside the current round evidence bundle after realpath resolution.`,
+      );
+    }
+  } catch {
+    return check(
+      'completion-evidence-ref-loadable',
+      false,
+      'completionEvidenceRef is loadable JSON from the current round evidence bundle.',
+      `${ref} could not be loaded from the current round evidence bundle.`,
+    );
+  }
+  return undefined;
+}
+
+async function completionEvidenceCandidates(baseDir: string, explicitRef: string | undefined) {
+  const candidates: Array<{ ref: string; source: string }> = [];
+  const seen = new Set<string>();
+  const add = (ref: string | undefined, source: string) => {
+    if (!isNonEmptyString(ref)) return;
+    if (seen.has(ref)) return;
+    seen.add(ref);
+    candidates.push({ ref, source });
+  };
+  add(explicitRef, 'explicit');
+  try {
+    await access(join(baseDir, CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF));
+    add(CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF, 'conventional');
+  } catch {
+    // Missing same-round L3 completion evidence leaves completionEvidenceRef unset.
+  }
+  for (const manifestName of [
+    'isolated-desktop-l3-completion-assembly-manifest.json',
+    'isolated-desktop-l3-workflow-probe-manifest.json',
+  ]) {
+    const manifest = await readOptionalJsonRecord(join(baseDir, manifestName));
+    add(stringAt(manifest, 'completionEvidenceRef'), manifestName);
+  }
+  return candidates;
+}
+
+async function readOptionalJsonRecord(path: string): Promise<JsonRecord | undefined> {
+  try {
+    return await readJsonRecord(path);
+  } catch {
+    return undefined;
+  }
+}
+
+async function readOptionalRefJsonRecord(baseDir: string, ref: string | undefined): Promise<JsonRecord | undefined> {
+  if (!isNonEmptyString(ref)) return undefined;
+  const resolved = resolveEvidenceRef(resolve(baseDir), ref);
+  if (!isPathInside(resolve(baseDir), resolved)) return undefined;
+  return readOptionalJsonRecord(resolved);
 }
 
 async function validateRequiredRefsExist(options: {
@@ -710,6 +1239,18 @@ function isPathInside(baseDir: string, path: string): boolean {
   const resolved = resolve(path);
   const rel = resolved.slice(baseDir.length);
   return resolved === baseDir || (resolved.startsWith(`${baseDir}/`) && !rel.startsWith('/../'));
+}
+
+function bundleLocalRegularRefExists(baseDir: string, ref: string): boolean {
+  const resolved = resolveEvidenceRef(baseDir, ref);
+  if (!isPathInside(baseDir, resolved)) return false;
+  try {
+    const info = lstatSync(resolved);
+    if (!info.isFile() || info.isSymbolicLink()) return false;
+    return isPathInside(realpathSync(baseDir), realpathSync(resolved));
+  } catch {
+    return false;
+  }
 }
 
 async function existingRef(runDirPath: string, runDirRef: string, names: string[]) {
@@ -826,6 +1367,18 @@ function firstStringAt(record: JsonRecord, paths: string[][]): string | undefine
   return undefined;
 }
 
+function firstNonEmptyString(...values: Array<unknown>): string | undefined {
+  return values.find(isNonEmptyString);
+}
+
+function firstRecordAt(record: JsonRecord, paths: string[][]): Record<string, unknown> | undefined {
+  for (const path of paths) {
+    const value = valueAt(record, path);
+    if (isRecord(value)) return value;
+  }
+  return undefined;
+}
+
 function valueAt(record: JsonRecord, path: string[]): unknown {
   let current: unknown = record;
   for (const part of path) {
@@ -853,10 +1406,29 @@ function stringAt(value: unknown, key: string): string | undefined {
   return isNonEmptyString(child) ? child : undefined;
 }
 
+function stringArrayAt(value: unknown, key: string): string[] {
+  if (!isRecord(value)) return [];
+  const child = value[key];
+  return Array.isArray(child) ? child.filter(isNonEmptyString) : [];
+}
+
 function booleanAt(value: unknown, key: string): boolean | undefined {
   if (!isRecord(value)) return undefined;
   const child = value[key];
   return typeof child === 'boolean' ? child : undefined;
+}
+
+function numberAt(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function compactRecord<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => {
+    if (item === undefined || item === null) return false;
+    if (Array.isArray(item) && item.length === 0) return false;
+    if (isRecord(item) && Object.keys(item).length === 0) return false;
+    return true;
+  })) as T;
 }
 
 function isRecord(value: unknown): value is JsonRecord {

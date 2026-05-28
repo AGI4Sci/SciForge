@@ -56,8 +56,22 @@ def test_plugin_probe_discovers_manifest_api_and_runs_cli_fixture(tmp_path):
         "validateViewportRecoveryEvidence",
         "buildTargetBoundRealWindowProbeEvidence",
         "validateTargetBoundRealWindowProbeEvidence",
+        "buildIsolatedDesktopL1SmokeEvidence",
+        "validateIsolatedDesktopL1SmokeEvidence",
+        "buildIsolatedDesktopL3WorkflowEvidence",
+        "validateIsolatedDesktopL3WorkflowEvidence",
         "buildTargetBoundInputAdapterManifest",
         "validateInputAdapterManifestForRealDesktop",
+        "validateRepairManifest",
+        "buildVisibleRunViewer",
+        "validateVisibleRunViewerManifest",
+        "buildEvidenceIndex",
+        "buildEvidenceSnapshot",
+        "buildPlannerBrief",
+    ]
+    assert manifest["api"]["requiredValueSymbols"] == [
+        "executorCommandEventLogSchema",
+        "EXECUTOR_COMMAND_EVENT_LOG_SCHEMA",
     ]
     assert {
         "sciforge_computer_use.virtual_input_adapter.build_target_bound_input_adapter_manifest",
@@ -67,11 +81,63 @@ def test_plugin_probe_discovers_manifest_api_and_runs_cli_fixture(tmp_path):
         "sciforge_computer_use.trace.validate_viewport_recovery_evidence",
         "sciforge_computer_use.target_bound_evidence.build_target_bound_real_window_probe_evidence",
         "sciforge_computer_use.target_bound_evidence.validate_target_bound_real_window_probe_evidence",
+        "sciforge_computer_use.isolated_desktop_l1_smoke_evidence.build_isolated_desktop_l1_smoke_evidence",
+        "sciforge_computer_use.isolated_desktop_l1_smoke_evidence.validate_isolated_desktop_l1_smoke_evidence",
+        "sciforge_computer_use.isolated_desktop_l3_workflow_evidence.build_isolated_desktop_l3_workflow_evidence",
+        "sciforge_computer_use.isolated_desktop_l3_workflow_evidence.validate_isolated_desktop_l3_workflow_evidence",
+        "sciforge_computer_use.isolated_desktop_l3_workflow_plan.build_isolated_desktop_l3_workflow_action_plan",
+        "sciforge_computer_use.isolated_desktop_l3_workflow_plan.validate_isolated_desktop_l3_workflow_action_plan",
+        "sciforge_computer_use.isolated_desktop_l3_workflow_result.assemble_isolated_desktop_l3_workflow_completion",
+        "sciforge_computer_use.source_fact_evidence.build_source_fact_evidence_payload",
+        "sciforge_computer_use.source_fact_evidence.validate_source_fact_evidence_payload",
+        "sciforge_computer_use.l3_artifact_bundle_evidence.build_l3_artifact_bundle_evidence",
+        "sciforge_computer_use.l3_artifact_bundle_evidence.validate_l3_artifact_bundle_evidence",
         "sciforge_computer_use.response_compat.extract_provider_text",
         "sciforge_computer_use.response_compat.responses_to_chat_completions",
         "sciforge_computer_use.response_compat.chat_completions_to_responses",
     } <= set(manifest["api"]["manifestCallablePaths"])
     assert manifest["api"]["getManifestMatchesActionProvider"] is True
+    diagnostic_probe_modules = {
+        (probe["manifestPath"], probe["module"])
+        for probe in manifest["diagnosticProbeModules"]
+    }
+    assert {
+        ("entrypoint.discoveryProbe", "sciforge_computer_use.plugin_probe"),
+        ("entrypoint.virtualDesktopProbe", "sciforge_computer_use.virtual_desktop_probe"),
+        ("entrypoint.targetBoundWindowHostProbe", "sciforge_computer_use.target_bound_window_host_probe"),
+        ("hostPortsContract.diagnosticProbes.pluginDiscovery", "sciforge_computer_use.plugin_probe"),
+        ("hostPortsContract.diagnosticProbes.nativePreflight", "sciforge_computer_use.desktop_preflight"),
+        (
+            "hostPortsContract.diagnosticProbes.isolatedDesktopBackend",
+            "sciforge_computer_use.isolated_desktop_backend_probe",
+        ),
+        (
+            "hostPortsContract.diagnosticProbes.isolatedDesktopBackendBundle",
+            "sciforge_computer_use.isolated_desktop_backend_bundle",
+        ),
+        (
+            "hostPortsContract.diagnosticProbes.isolatedDesktopL1SmokeReadiness",
+            "sciforge_computer_use.isolated_desktop_l1_smoke_probe",
+        ),
+        (
+            "hostPortsContract.diagnosticProbes.isolatedDesktopL1SmokeExecute",
+            "sciforge_computer_use.isolated_desktop_l1_smoke_probe",
+        ),
+        (
+            "hostPortsContract.diagnosticProbes.isolatedDesktopL3WorkflowReadiness",
+            "sciforge_computer_use.isolated_desktop_l3_workflow_probe",
+        ),
+        (
+            "hostPortsContract.diagnosticProbes.isolatedDesktopL3WorkflowExecute",
+            "sciforge_computer_use.isolated_desktop_l3_workflow_probe",
+        ),
+    } <= diagnostic_probe_modules
+    assert any(
+        check["category"] == "diagnostic-probe-command:hostPortsContract.diagnosticProbes.pluginDiscovery"
+        and check["ok"]
+        and check["module"] == "sciforge_computer_use.plugin_probe"
+        for check in manifest["checks"]
+    )
     assert manifest["cliFixture"]["ran"] is True
     assert manifest["cliFixture"]["mode"] == "stdin-request-plus-fixture-json"
     assert manifest["cliFixture"]["resultRef"].endswith("plugin-probe-cli-result.json")
@@ -80,6 +146,10 @@ def test_plugin_probe_discovers_manifest_api_and_runs_cli_fixture(tmp_path):
     assert manifest["artifactRefs"] == ["artifact:plugin-probe/report.md"]
     assert manifest["rawActionManifestWritten"] is False
     assert manifest["rawCliStdoutWritten"] is False
+    assert manifest["diagnosticOnly"] is True
+    assert manifest["userAcceptanceEligible"] is False
+    assert manifest["l1SmokeCompleted"] is False
+    assert manifest["l3WorkflowCompleted"] is False
     assert manifest["sciForgeRuntimeTouched"] is False
     assert manifest["guiTouched"] is False
     assert "actionSchema" not in manifest
@@ -205,6 +275,149 @@ def test_plugin_probe_blocks_when_manifest_callable_path_is_missing(tmp_path):
     assert "missing_adapter_manifest_validator" in manifest["reason"]
     assert any(
         check["category"].endswith("missing_adapter_manifest_validator") and not check["ok"]
+        for check in manifest["checks"]
+    )
+
+
+def test_plugin_probe_recursively_checks_new_manifest_callable_paths(tmp_path):
+    manifest_payload = json.loads(ACTION_MANIFEST.read_text(encoding="utf8"))
+    manifest_payload["futureContract"] = {
+        "builder": "sciforge_computer_use.future_contract.missing_builder",
+        "claimLimit": "test-only synthetic contract for recursive callable path discovery",
+    }
+    manifest_path = tmp_path / "action-provider.manifest.json"
+    manifest_path.write_text(json.dumps(manifest_payload), encoding="utf8")
+
+    manifest = run_plugin_probe(
+        manifest_path=manifest_path,
+        output_dir=tmp_path / "probe",
+    )
+
+    assert manifest["status"] == "blocked"
+    assert manifest["category"] == "manifest-api-path-import-failed"
+    assert "future_contract" in manifest["reason"]
+
+
+def test_plugin_probe_recursively_checks_callable_paths_inside_helper_arrays(tmp_path):
+    manifest_payload = json.loads(ACTION_MANIFEST.read_text(encoding="utf8"))
+    manifest_payload["futureHelpers"] = ["sciforge_computer_use.future_contract.missing_helper"]
+    manifest_path = tmp_path / "action-provider.manifest.json"
+    manifest_path.write_text(json.dumps(manifest_payload), encoding="utf8")
+
+    manifest = run_plugin_probe(
+        manifest_path=manifest_path,
+        output_dir=tmp_path / "probe",
+    )
+
+    assert manifest["status"] == "blocked"
+    assert manifest["category"] == "manifest-api-path-import-failed"
+    assert "future_contract" in manifest["reason"]
+
+
+def test_plugin_probe_recursively_rejects_external_callable_path(tmp_path):
+    manifest_payload = json.loads(ACTION_MANIFEST.read_text(encoding="utf8"))
+    manifest_payload["futureContract"] = {"validator": "os.system"}
+    manifest_path = tmp_path / "action-provider.manifest.json"
+    manifest_path.write_text(json.dumps(manifest_payload), encoding="utf8")
+
+    manifest = run_plugin_probe(
+        manifest_path=manifest_path,
+        output_dir=tmp_path / "probe",
+    )
+
+    assert manifest["status"] == "blocked"
+    assert manifest["category"] == "manifest-api-path-invalid"
+    assert "os.system" in manifest["reason"]
+
+
+def test_plugin_probe_blocks_missing_diagnostic_probe_module(tmp_path):
+    manifest_payload = json.loads(ACTION_MANIFEST.read_text(encoding="utf8"))
+    manifest_payload["hostPortsContract"]["diagnosticProbes"]["nativePreflight"] = (
+        "python -m sciforge_computer_use.missing_diagnostic_probe --output-dir <dir>"
+    )
+    manifest_path = tmp_path / "action-provider.manifest.json"
+    manifest_path.write_text(json.dumps(manifest_payload), encoding="utf8")
+
+    manifest = run_plugin_probe(
+        manifest_path=manifest_path,
+        output_dir=tmp_path / "probe",
+    )
+
+    assert manifest["status"] == "blocked"
+    assert manifest["category"] == "diagnostic-probe-module-import-failed"
+    assert "sciforge_computer_use.missing_diagnostic_probe" in manifest["reason"]
+    assert any(
+        check["category"] == "diagnostic-probe-command:hostPortsContract.diagnosticProbes.nativePreflight"
+        and not check["ok"]
+        and check["module"] == "sciforge_computer_use.missing_diagnostic_probe"
+        for check in manifest["checks"]
+    )
+
+
+def test_plugin_probe_rejects_external_diagnostic_probe_module(tmp_path):
+    manifest_payload = json.loads(ACTION_MANIFEST.read_text(encoding="utf8"))
+    manifest_payload["hostPortsContract"]["diagnosticProbes"]["nativePreflight"] = "python -m os --output-dir <dir>"
+    manifest_path = tmp_path / "action-provider.manifest.json"
+    manifest_path.write_text(json.dumps(manifest_payload), encoding="utf8")
+
+    manifest = run_plugin_probe(
+        manifest_path=manifest_path,
+        output_dir=tmp_path / "probe",
+    )
+
+    assert manifest["status"] == "blocked"
+    assert manifest["category"] == "diagnostic-probe-module-external"
+    assert "os" in manifest["reason"]
+    assert any(
+        check["category"] == "diagnostic-probe-command:hostPortsContract.diagnosticProbes.nativePreflight"
+        and not check["ok"]
+        and check["module"] == "os"
+        for check in manifest["checks"]
+    )
+
+
+def test_plugin_probe_requires_l3_execute_diagnostic_key(tmp_path):
+    manifest_payload = json.loads(ACTION_MANIFEST.read_text(encoding="utf8"))
+    manifest_payload["hostPortsContract"]["diagnosticProbes"].pop("isolatedDesktopL3WorkflowExecute", None)
+    manifest_path = tmp_path / "action-provider.manifest.json"
+    manifest_path.write_text(json.dumps(manifest_payload), encoding="utf8")
+
+    manifest = run_plugin_probe(
+        manifest_path=manifest_path,
+        output_dir=tmp_path / "probe",
+    )
+
+    assert manifest["status"] == "blocked"
+    assert manifest["category"] == "diagnostic-claim-semantics-invalid"
+    assert "missing isolatedDesktopL3WorkflowExecute" in manifest["reason"]
+    assert any(
+        check["category"] == "diagnostic-claim-semantics:l3-execute-key"
+        and not check["ok"]
+        for check in manifest["checks"]
+    )
+
+
+def test_plugin_probe_blocks_unsafe_diagnostic_probe_command(tmp_path):
+    bad_manifest = _write_manifest(
+        tmp_path,
+        {
+            "virtualDesktopProbe": (
+                "python -m sciforge_computer_use.virtual_desktop_probe; "
+                "rm -rf / --scenario-file <file> --output-dir <dir>"
+            ),
+        },
+    )
+
+    manifest = run_plugin_probe(
+        manifest_path=bad_manifest,
+        output_dir=tmp_path / "probe",
+    )
+
+    assert manifest["status"] == "blocked"
+    assert manifest["category"] == "unsafe-diagnostic-probe-command"
+    assert "shell control" in manifest["reason"]
+    assert any(
+        check["category"] == "diagnostic-probe-command:entrypoint.virtualDesktopProbe" and not check["ok"]
         for check in manifest["checks"]
     )
 

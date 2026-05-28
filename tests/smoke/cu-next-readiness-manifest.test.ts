@@ -15,28 +15,32 @@ import { buildCuUserAcceptanceManifest } from '../../tools/cu-user-acceptance-ma
 
 const execFileAsync = promisify(execFile);
 
-test('current CU-NEXT readiness manifest stays blocked until real task evidence and PROJECT checkboxes exist', async () => {
+test('current CU-NEXT readiness manifest requires both checked PROJECT items and task evidence gates', async () => {
   const manifest = await buildCuNextReadinessManifest({
     generatedAt: '2026-05-25T00:00:00.000Z',
   });
 
   assert.equal(manifest.schemaVersion, 'sciforge.computer-use.cu-next-readiness.v1');
-  assert.equal(manifest.status, 'blocked');
-  assert.equal(manifest.completionEligible, false);
+  assert.ok(['ready', 'blocked'].includes(manifest.status));
+  assert.equal(manifest.completionEligible, manifest.status === 'ready');
   assert.equal(manifest.tasks.length, CU_NEXT_TASK_MAPPINGS.length);
   assert.deepEqual(manifest.tasks.map((task) => task.id), CU_NEXT_TASK_MAPPINGS.map((mapping) => mapping.taskId));
   assert.equal(manifest.globalEvidence.kvGround.status, 'passed');
   assert.equal(manifest.globalEvidence.kvGround.endpoint, 'http://127.0.0.1:18081');
-  assert.equal(manifest.globalEvidence.runtimeBrowser.status, 'blocked');
+  assert.ok(['passed', 'blocked'].includes(manifest.globalEvidence.runtimeBrowser.status));
 
   for (const task of manifest.tasks) {
-    assert.equal(task.status, 'blocked', `${task.id} must not pass from unchecked PROJECT.md items or synthetic evidence`);
-    assert.equal(task.checkedChecklistItems, 0, `${task.id} current PROJECT.md checkboxes should remain unchecked`);
-    assert.ok(task.blockedItems.some((item) => item.id === 'project-checklist-unchecked'), `${task.id} should report unchecked PROJECT.md work`);
+    assert.equal(task.checkedChecklistItems, 2, `${task.id} current PROJECT.md acknowledgement should be checked with inline evidence`);
+    assert.equal(task.totalChecklistItems, 2);
+    assert.equal(task.blockedItems.some((item) => item.id.startsWith('project-checklist')), false);
+    assert.ok(
+      task.status === 'passed' || task.blockedItems.some((item) => item.id === 'missing-live-l2-l3-user-acceptance-manifest'),
+      `${task.id} may pass when local live evidence is present, otherwise it must be blocked on evidence rather than PROJECT acknowledgement`,
+    );
   }
-  assert.ok(
-    manifest.blockedItems.some((item) => item.id === 'runtime-codex-browser-acceptance-not-passed'),
-    'current browser manifest must stay a release blocker',
+  assert.equal(
+    manifest.blockedItems.some((item) => item.id.endsWith('-not-passed')),
+    manifest.status !== 'ready',
   );
 });
 
@@ -81,7 +85,11 @@ test('readiness manifest rejects fixture, shared-input, and shortcut-substitute 
       userAcceptanceManifests: [
         {
           path: acceptanceRef,
-          data: passedCuNextAcceptanceManifest('CU-NEXT-07', { fixture: true }),
+          data: {
+            ...passedCuNextAcceptanceManifest('CU-NEXT-07'),
+            kind: 'fixture',
+            fixture: true,
+          },
         },
       ],
     });
@@ -108,6 +116,22 @@ test('readiness manifest rejects fixture, shared-input, and shortcut-substitute 
       ],
     });
     assert.equal(sharedInput.tasks.find((task) => task.id === 'CU-NEXT-07')?.status, 'blocked');
+
+    const shellDirectArtifactWrite = buildCuNextReadinessManifestFromData({
+      ...base,
+      userAcceptanceManifests: [
+        {
+          path: acceptanceRef,
+          data: {
+            ...passedCuNextAcceptanceManifest('CU-NEXT-07'),
+            artifactCausality: {
+              shellDirectArtifactWrite: true,
+            },
+          },
+        },
+      ],
+    });
+    assert.equal(shellDirectArtifactWrite.tasks.find((task) => task.id === 'CU-NEXT-07')?.status, 'blocked');
 
     const missingGuiPresentClaim = buildCuNextReadinessManifestFromData({
       ...base,
@@ -201,6 +225,182 @@ test('readiness manifest distinguishes evidence-ready from fully passed PROJECT 
     assert.equal(checkedTask?.status, 'passed');
     assert.deepEqual(checkedTask?.blockedItems, []);
     assert.equal(checked.completionEligible, false, 'one task passed is not enough to complete the full CU-NEXT board');
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('readiness manifest only promotes completion-grade isolated-L3 evidence', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-next-readiness-'));
+  try {
+    const acceptanceRef = denseGroundingAcceptanceRef('CU-NEXT-07');
+    const targetBoundAcceptance = passedCuNextAcceptanceManifest('CU-NEXT-07', {
+      completionEvidence: {
+        evidenceKind: 'target-bound-real',
+        status: 'completed',
+        targetEnvironmentKind: 'package-owned-target-bound-window',
+        realWindowEvidence: true,
+        userAcceptanceEligible: false,
+        diagnosticOnly: false,
+        l3Workflow: {
+          status: 'completed',
+          completed: true,
+          sameSession: true,
+          sourceToWriterToPreviewCausality: true,
+        },
+      },
+    });
+    await writeEvidenceBundle(workspace, acceptanceRef, targetBoundAcceptance);
+    const base = {
+      root: workspace,
+      projectText: cuNextProjectFixture({ checkedTask: 'CU-NEXT-07' }),
+      projectRef: 'PROJECT.md',
+      generatedAt: '2026-05-25T00:00:00.000Z',
+      runtimeBrowserManifest: {
+        path: 'docs/test-artifacts/runtime-codex-browser-acceptance/manifest.json',
+        data: passedBrowserManifest(),
+      },
+      kvGroundSmokeManifests: [
+        {
+          path: '.sciforge/vision-runs/kv-ground-smoke/kv-ground-smoke.json',
+          data: passedKvGroundManifest(),
+        },
+      ],
+    };
+
+    const targetBound = buildCuNextReadinessManifestFromData({
+      ...base,
+      userAcceptanceManifests: [
+        {
+          path: acceptanceRef,
+          data: targetBoundAcceptance,
+        },
+      ],
+    });
+    const blockedTask = targetBound.tasks.find((task) => task.id === 'CU-NEXT-07');
+    assert.equal(blockedTask?.status, 'blocked');
+    assert.equal(blockedTask?.acceptedEvidenceRef, undefined);
+    assert.ok(blockedTask?.blockedItems.some((item) => item.id === 'completion-ineligible-evidence-kind'));
+    assert.match(blockedTask?.blockedItems.map((item) => item.reason).join('\n') ?? '', /target-bound-real evidence is diagnostic or candidate-only/);
+
+    const missingCompletedEvidence = isolatedL3CompletionEvidence();
+    delete (missingCompletedEvidence.l3Workflow as Record<string, unknown>).completed;
+    await writeEvidenceBundle(workspace, acceptanceRef, passedCuNextAcceptanceManifest('CU-NEXT-07', {
+      completionEvidence: missingCompletedEvidence,
+    }));
+    const missingCompleted = buildCuNextReadinessManifestFromData({
+      ...base,
+      userAcceptanceManifests: [
+        {
+          path: acceptanceRef,
+          data: passedCuNextAcceptanceManifest('CU-NEXT-07', {
+            completionEvidence: missingCompletedEvidence,
+          }),
+        },
+      ],
+    });
+    const missingCompletedTask = missingCompleted.tasks.find((task) => task.id === 'CU-NEXT-07');
+    assert.equal(missingCompletedTask?.status, 'blocked');
+    assert.equal(missingCompletedTask?.acceptedEvidenceRef, undefined);
+    assert.ok(missingCompletedTask?.blockedItems.some((item) => item.id === 'completion-ineligible-evidence-kind'));
+
+    const missingRefEvidence = isolatedL3CompletionEvidence();
+    delete missingRefEvidence.finalArtifactRef;
+    await writeEvidenceBundle(workspace, acceptanceRef, passedCuNextAcceptanceManifest('CU-NEXT-07', {
+      completionEvidence: missingRefEvidence,
+    }));
+    const missingRef = buildCuNextReadinessManifestFromData({
+      ...base,
+      userAcceptanceManifests: [
+        {
+          path: acceptanceRef,
+          data: passedCuNextAcceptanceManifest('CU-NEXT-07', {
+            completionEvidence: missingRefEvidence,
+          }),
+        },
+      ],
+    });
+    const missingRefTask = missingRef.tasks.find((task) => task.id === 'CU-NEXT-07');
+    assert.equal(missingRefTask?.status, 'blocked');
+    assert.equal(missingRefTask?.acceptedEvidenceRef, undefined);
+    assert.match(
+      missingRefTask?.blockedItems.map((item) => item.reason).join('\n') ?? '',
+      /missing completed L3 ref field finalArtifactRef/,
+    );
+
+    const forgedMissingBlocksEvidence = isolatedL3CompletionEvidence();
+    for (const field of [
+      'workflowRequirements',
+      'applicationEvidence',
+      'crossAppTransitions',
+      'sourceEvidence',
+      'derivedContentEvidence',
+      'artifactCausality',
+      'directoryEvidence',
+      'presentationEvidence',
+    ]) {
+      delete forgedMissingBlocksEvidence[field];
+    }
+    await writeEvidenceBundle(workspace, acceptanceRef, passedCuNextAcceptanceManifest('CU-NEXT-07', {
+      completionEvidence: forgedMissingBlocksEvidence,
+    }));
+    const forgedMissingBlocks = buildCuNextReadinessManifestFromData({
+      ...base,
+      userAcceptanceManifests: [
+        {
+          path: acceptanceRef,
+          data: passedCuNextAcceptanceManifest('CU-NEXT-07', {
+            completionEvidence: forgedMissingBlocksEvidence,
+          }),
+        },
+      ],
+    });
+    const forgedMissingBlocksTask = forgedMissingBlocks.tasks.find((task) => task.id === 'CU-NEXT-07');
+    assert.equal(forgedMissingBlocksTask?.status, 'blocked');
+    assert.equal(forgedMissingBlocksTask?.acceptedEvidenceRef, undefined);
+    assert.match(
+      forgedMissingBlocksTask?.blockedItems.map((item) => item.reason).join('\n') ?? '',
+      /missing critical L3 semantic block applicationEvidence/,
+    );
+
+    const nestedParentEscapeEvidence = isolatedL3CompletionEvidence();
+    const applicationEvidence = nestedParentEscapeEvidence.applicationEvidence as Array<Record<string, unknown>>;
+    applicationEvidence[0].firstScreenshotRef = '../escape.png';
+    await writeEvidenceBundle(workspace, acceptanceRef, passedCuNextAcceptanceManifest('CU-NEXT-07', {
+      completionEvidence: nestedParentEscapeEvidence,
+    }));
+    const nestedParentEscape = buildCuNextReadinessManifestFromData({
+      ...base,
+      userAcceptanceManifests: [
+        {
+          path: acceptanceRef,
+          data: passedCuNextAcceptanceManifest('CU-NEXT-07', {
+            completionEvidence: nestedParentEscapeEvidence,
+          }),
+        },
+      ],
+    });
+    const nestedParentEscapeTask = nestedParentEscape.tasks.find((task) => task.id === 'CU-NEXT-07');
+    assert.equal(nestedParentEscapeTask?.status, 'blocked');
+    assert.equal(nestedParentEscapeTask?.acceptedEvidenceRef, undefined);
+    assert.match(
+      nestedParentEscapeTask?.blockedItems.map((item) => item.reason).join('\n') ?? '',
+      /applicationEvidence\[0\]\.firstScreenshotRef.*\.\.\/escape\.png.*parent-directory escapes/,
+    );
+
+    await writeEvidenceBundle(workspace, acceptanceRef, passedCuNextAcceptanceManifest('CU-NEXT-07'));
+    const isolatedL3 = buildCuNextReadinessManifestFromData({
+      ...base,
+      userAcceptanceManifests: [
+        {
+          path: acceptanceRef,
+          data: passedCuNextAcceptanceManifest('CU-NEXT-07'),
+        },
+      ],
+    });
+    const readyTask = isolatedL3.tasks.find((task) => task.id === 'CU-NEXT-07');
+    assert.equal(readyTask?.status, 'passed');
+    assert.equal(readyTask?.acceptedEvidenceRef, acceptanceRef);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -408,9 +608,22 @@ async function writeEvidenceBundle(
   options: { skipRefs?: string[] } = {},
 ): Promise<void> {
   await writeJsonRef(root, manifestRef, data);
+  const manifestDir = dirname(resolveLocalFixtureRef(root, manifestRef));
   const skipRefs = new Set(options.skipRefs ?? []);
-  const refs = collectLocalEvidenceRefs(data).filter((ref) => !skipRefs.has(ref));
+  const completionEvidenceRef = isRecord(data) && typeof data.completionEvidenceRef === 'string'
+    ? data.completionEvidenceRef
+    : undefined;
+  const refs = collectLocalEvidenceRefs(data).filter((ref) => ref !== completionEvidenceRef && !skipRefs.has(ref));
   await Promise.all(refs.map((ref) => writeFixtureFile(root, ref)));
+  if (completionEvidenceRef && !skipRefs.has(completionEvidenceRef)) {
+    const completionEvidence = isRecord(data) && isRecord(data.completionEvidence)
+      ? data.completionEvidence
+      : {};
+    const path = resolve(manifestDir, completionEvidenceRef);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, JSON.stringify(completionEvidence, null, 2));
+    await materializeCompletionEvidenceRefs(manifestDir, completionEvidence);
+  }
 }
 
 async function writeJsonRef(root: string, ref: string, data: unknown): Promise<void> {
@@ -422,7 +635,27 @@ async function writeJsonRef(root: string, ref: string, data: unknown): Promise<v
 async function writeFixtureFile(root: string, ref: string): Promise<void> {
   const path = resolveLocalFixtureRef(root, ref);
   await mkdir(dirname(path), { recursive: true });
+  if (/rejected-.+-target\.json$|coarse-fine-rejected-targets\.json$/.test(ref)) {
+    await writeFile(path, JSON.stringify(denseGroundingRejectedTargetFixture(ref), null, 2));
+    return;
+  }
   await writeFile(path, 'fixture evidence\n');
+}
+
+function denseGroundingRejectedTargetFixture(ref: string): Record<string, unknown> {
+  return {
+    schemaVersion: 'sciforge.computer-use.dense-grounding-rejections.v1',
+    status: 'recorded',
+    selectedTarget: {
+      targetDescription: 'Export button in the toolbar.',
+    },
+    rejectedTargets: [
+      { targetDescription: ref.includes('share') ? 'Share button' : 'Save button', reason: 'neighboring decoy target' },
+    ],
+    coarseWindowScreenshotRef: ref.replace(/rejected-.+-target\.json$/, 'coarse-window.png'),
+    focusCropRef: ref.replace(/rejected-.+-target\.json$/, 'focus-crop.png'),
+    fineGroundingDiagnosticRef: ref.replace(/rejected-.+-target\.json$/, 'fine-grounding-diagnostic.json'),
+  };
 }
 
 function collectLocalEvidenceRefs(value: unknown, seen = new Set<unknown>()): string[] {
@@ -439,9 +672,48 @@ function isLocalFixtureRef(ref: string): boolean {
   return filePath.startsWith('.sciforge/');
 }
 
+async function materializeCompletionEvidenceRefs(bundleDir: string, completionEvidence: Record<string, unknown>) {
+  await Promise.all(collectCompletionEvidenceFileRefs(completionEvidence).map(async (ref) => {
+    const path = resolve(bundleDir, ref);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, 'fixture completion evidence ref\n');
+  }));
+}
+
+function collectCompletionEvidenceFileRefs(value: unknown, key = ''): string[] {
+  if (typeof value === 'string') {
+    const ref = completionEvidenceFixtureFileRef(value);
+    return ref && looksLikeCompletionEvidenceFileRef(key, value) ? [ref] : [];
+  }
+  if (Array.isArray(value)) return value.flatMap((item) => collectCompletionEvidenceFileRefs(item, key));
+  if (!value || typeof value !== 'object') return [];
+  return Object.entries(value).flatMap(([childKey, child]) => collectCompletionEvidenceFileRefs(child, childKey));
+}
+
+function looksLikeCompletionEvidenceFileRef(key: string, value: string): boolean {
+  const trimmed = value.trim();
+  const fileRef = completionEvidenceFixtureFileRef(trimmed);
+  return /ref/i.test(key)
+    && trimmed.length > 0
+    && Boolean(fileRef)
+    && /\.[a-z0-9][a-z0-9-]{0,15}$/i.test(fileRef?.split('/').at(-1) ?? '');
+}
+
+function completionEvidenceFixtureFileRef(ref: string): string | undefined {
+  const trimmed = ref.trim();
+  if (!trimmed || trimmed.startsWith('/') || /^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return undefined;
+  const fileRef = trimmed.split('#', 1)[0];
+  if (!fileRef || fileRef.split(/[\\/]+/).includes('..')) return undefined;
+  return fileRef;
+}
+
 function resolveLocalFixtureRef(root: string, ref: string): string {
   const filePath = ref.startsWith('file:') ? ref.slice('file:'.length) : ref;
   return resolve(root, filePath);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function passedBrowserManifest(options: { observedAt?: string } = {}): Record<string, unknown> {
@@ -510,9 +782,11 @@ function passedCuNextAcceptanceManifest(
     dryRun?: boolean;
     sharedSystemInput?: boolean;
     omitGuiPresentClaim?: boolean;
+    completionEvidence?: Record<string, unknown>;
   } = {},
 ): Record<string, unknown> {
   const runId = `${taskId.toLowerCase()}-dense-grounding`;
+  const finalArtifactRef = `.sciforge/vision-runs/${runId}/dense-grounding-export.csv`;
   return {
     schemaVersion: 'sciforge.computer-use.user-acceptance-manifest.v1',
     runId,
@@ -562,7 +836,7 @@ function passedCuNextAcceptanceManifest(
       status: 'present',
       ref: `.sciforge/vision-runs/${runId}/executor-lease.json`,
     },
-    finalArtifactRef: `.sciforge/vision-runs/${runId}/dense-grounding-export.csv`,
+    finalArtifactRef,
     finalVisibleScreenshotRef: `.sciforge/vision-runs/${runId}/final-visible.png`,
     verifierVerdict: {
       status: 'passed',
@@ -573,7 +847,7 @@ function passedCuNextAcceptanceManifest(
       status: 'present',
       recordRef: `.sciforge/vision-runs/${runId}/gui-present.json`,
       payloadRef: `.sciforge/vision-runs/${runId}/gui-present-payload.json`,
-      displayedRefs: [`.sciforge/vision-runs/${runId}/dense-grounding-export.csv`],
+      displayedRefs: [finalArtifactRef],
     },
     evidenceClaims: [
       {
@@ -600,10 +874,13 @@ function passedCuNextAcceptanceManifest(
               kind: 'gui-present-record',
               ref: `.sciforge/vision-runs/${runId}/gui-present.json`,
               refs: [`.sciforge/vision-runs/${runId}/gui-present.json`],
-              artifactRefs: [`.sciforge/vision-runs/${runId}/dense-grounding-export.csv`],
+              artifactRefs: [finalArtifactRef],
             },
           ]),
     ],
+    evidenceMarkers: [denseGroundingMarker(runId)],
+    completionEvidence: options.completionEvidence ?? isolatedL3CompletionEvidence(finalArtifactRef),
+    completionEvidenceRef: 'isolated-desktop-l3-workflow-evidence.json',
     trace: {
       testActionFixtureMode: options.fixture ? true : false,
       dryRun: options.dryRun ? true : false,
@@ -617,9 +894,11 @@ function passedCuNextAcceptanceManifest(
 
 function realCuNextAcceptanceInput(taskId: string): Parameters<typeof buildCuUserAcceptanceManifest>[0] {
   const runId = `${taskId.toLowerCase()}-real-builder`;
+  const finalArtifactRef = `.sciforge/vision-runs/${runId}/dense-grounding-export.csv`;
   return {
     runId,
     taskId,
+    scenarioId: 'CU-LONG-004',
     createdAt: '2026-05-25T00:00:00.000Z',
     taskText: `${taskId} visual-grounding-pressure-test with coarse fine focus crop rejected excluded targets`,
     level: 'L3',
@@ -679,7 +958,7 @@ function realCuNextAcceptanceInput(taskId: string): Parameters<typeof buildCuUse
       status: 'present',
       ref: `.sciforge/vision-runs/${runId}/executor-lease.json`,
     },
-    finalArtifactRef: `.sciforge/vision-runs/${runId}/dense-grounding-export.csv`,
+    finalArtifactRef,
     finalVisibleScreenshotRef: `.sciforge/vision-runs/${runId}/final-visible.png`,
     verifierVerdict: {
       status: 'passed',
@@ -691,7 +970,164 @@ function realCuNextAcceptanceInput(taskId: string): Parameters<typeof buildCuUse
       status: 'present',
       recordRef: `.sciforge/vision-runs/${runId}/gui-present.json`,
       payloadRef: `.sciforge/vision-runs/${runId}/gui-present-payload.json`,
-      displayedRefs: [`.sciforge/vision-runs/${runId}/dense-grounding-export.csv`],
+      displayedRefs: [finalArtifactRef],
     },
+    evidenceMarkers: [denseGroundingMarker(runId)],
+    completionEvidence: isolatedL3CompletionEvidence(finalArtifactRef),
+    completionEvidenceRef: 'isolated-desktop-l3-workflow-evidence.json',
+  };
+}
+
+function isolatedL3CompletionEvidence(taskFinalArtifactRef?: string): Record<string, unknown> {
+  const sessionManifestRef = 'evidence/l3/isolated-l3-session/session-manifest.json';
+  const sourceFirstScreenshotRef = 'evidence/l3/isolated-l3-session/screenshots/source-editor.png';
+  const sourceLastScreenshotRef = 'evidence/l3/isolated-l3-session/screenshots/source-editor-final.png';
+  const writerFirstScreenshotRef = 'evidence/l3/isolated-l3-session/screenshots/writer-editor.png';
+  const writerLastScreenshotRef = 'evidence/l3/isolated-l3-session/screenshots/writer-saved.png';
+  const previewFirstScreenshotRef = 'evidence/l3/isolated-l3-session/screenshots/file-preview-open.png';
+  const previewLastScreenshotRef = 'evidence/l3/isolated-l3-session/screenshots/file-preview.png';
+  const sourceFactRefs = [
+    'evidence/l3/source-facts/recovery.json',
+    'evidence/l3/source-facts/cohorts.json',
+  ];
+  return {
+    schemaVersion: 'sciforge.computer-use.isolated-desktop-l3-workflow-evidence.v1',
+    evidenceKind: 'isolated-L3',
+    status: 'completed',
+    targetEnvironmentKind: 'linux-isolated-desktop-session',
+    acceptanceTier: 'l3-multi-app-workflow',
+    realWindowEvidence: true,
+    userAcceptanceEligible: true,
+    diagnosticOnly: false,
+    errors: [],
+    resultRef: 'evidence/l3/computer-use-result.json',
+    inputEventLogRef: 'evidence/l3/isolated-l3-session/l3-input-events.json',
+    pointerEventLogRef: 'evidence/l3/isolated-l3-session/l3-pointer-events.json',
+    keyboardEventLogRef: 'evidence/l3/isolated-l3-session/l3-keyboard-events.json',
+    executorCommandEventLogRef: 'evidence/l3/isolated-l3-session/l3-executor-command-events.json',
+    backendReadinessProofRef: 'evidence/l3/isolated-l3-session/backend-readiness-proof.json',
+    processRef: 'evidence/l3/isolated-l3-session/backend-processes.json',
+    resourceAllocationRef: 'evidence/l3/isolated-runtime-resource-allocation.json',
+    targetWindowRef: 'evidence/l3/isolated-l3-session/l3-target-window.json',
+    windowBoundPointerProofRef: 'evidence/l3/isolated-l3-session/l3-window-bound-pointer-proof.json',
+    sessionManifestRef,
+    taskFinalArtifactRefs: taskFinalArtifactRef ? [taskFinalArtifactRef] : [],
+    taskArtifactBinding: taskFinalArtifactRef ? {
+      finalArtifactRef: taskFinalArtifactRef,
+      finalArtifactRefs: [taskFinalArtifactRef],
+      source: 'test-fixture-task-final-artifact-binding',
+    } : undefined,
+    finalArtifactRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/source-summary.docx',
+    artifactValidationRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/source-summary.docx.validation.json',
+    fileListArtifactRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/file-list.json',
+    fileListDataRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/file-list-data.json',
+    guiPresentRef: 'evidence/l3/gui-present.json',
+    viewerManifestRef: 'evidence/l3/visible-run-viewer-manifest.json',
+    evidenceLogRef: 'evidence/l3/evidence/evidence-log.jsonl',
+    evidenceSnapshotRef: 'evidence/l3/evidence/evidence-snapshot.json',
+    evidenceIndexRef: 'evidence/l3/evidence/evidence-index.json',
+    screenshotRefs: [
+      sourceFirstScreenshotRef,
+      writerLastScreenshotRef,
+      previewLastScreenshotRef,
+    ],
+    traceRefs: ['evidence/l3/vision-trace.json'],
+    l3Workflow: {
+      status: 'completed',
+      completed: true,
+      sameSession: true,
+      sameVirtualSession: true,
+      sourceToWriterToPreviewCausality: true,
+    },
+    workflowRequirements: {
+      minimumAppCount: 3,
+      minimumActionCount: 6,
+      requiredInputModalities: ['pointer', 'keyboard'],
+      requiresCurrentStepScreenshots: true,
+      forbidPriorRoundCompletionEvidence: true,
+      requiresDirectoryEvidence: true,
+      requiresArtifactPreview: true,
+      requiresWindowBoundPointerProof: true,
+    },
+    applicationEvidence: [
+      {
+        appKind: 'source-reader',
+        sessionManifestRef,
+        firstScreenshotRef: sourceFirstScreenshotRef,
+        lastScreenshotRef: sourceLastScreenshotRef,
+        windowEvidenceRefs: [sourceFirstScreenshotRef, sourceLastScreenshotRef],
+      },
+      {
+        appKind: 'word-document-writer',
+        sessionManifestRef,
+        firstScreenshotRef: writerFirstScreenshotRef,
+        lastScreenshotRef: writerLastScreenshotRef,
+        windowEvidenceRefs: [writerFirstScreenshotRef, writerLastScreenshotRef],
+      },
+      {
+        appKind: 'file-manager-preview',
+        sessionManifestRef,
+        firstScreenshotRef: previewFirstScreenshotRef,
+        lastScreenshotRef: previewLastScreenshotRef,
+        windowEvidenceRefs: [previewFirstScreenshotRef, previewLastScreenshotRef],
+      },
+    ],
+    crossAppTransitions: [
+      {
+        fromAppKind: 'source-reader',
+        toAppKind: 'word-document-writer',
+        sessionManifestRef,
+        screenshotRef: writerFirstScreenshotRef,
+      },
+      {
+        fromAppKind: 'word-document-writer',
+        toAppKind: 'file-manager-preview',
+        sessionManifestRef,
+        screenshotRef: previewFirstScreenshotRef,
+      },
+    ],
+    sourceEvidence: {
+      sourceObservationRefs: [sourceLastScreenshotRef],
+      sourceFactRefs,
+    },
+    derivedContentEvidence: {
+      supportedFactRefs: sourceFactRefs,
+    },
+    artifactCausality: {
+      savedByActionIndex: 3,
+      savedByInputModality: 'keyboard',
+      savedByCommandEventRef: 'evidence/l3/isolated-l3-session/l3-executor-command-events.json#events/l3-command-003',
+      finalArtifactRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/source-summary.docx',
+      artifactValidationRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/source-summary.docx.validation.json',
+      savedThroughGui: true,
+      shellDirectArtifactWrite: false,
+    },
+    directoryEvidence: {
+      fileListArtifactRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/file-list.json',
+      fileListDataRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/file-list-data.json',
+      previewObservationRef: previewLastScreenshotRef,
+      directoryObservationAfterSaveRef: previewFirstScreenshotRef,
+      previewedByActionIndex: 5,
+      previewedByInputModality: 'pointer',
+      previewedThroughGui: true,
+      shellDirectoryListingOnly: false,
+    },
+    presentationEvidence: {
+      guiPresentRef: 'evidence/l3/gui-present.json',
+    },
+  };
+}
+
+function denseGroundingMarker(runId: string): Record<string, unknown> {
+  return {
+    kind: 'dense-grounding',
+    targetDescription: 'Export button in the toolbar, excluding Save, AutoSave, and Share.',
+    coarseWindowScreenshotRef: `.sciforge/vision-runs/${runId}/coarse-window.png`,
+    focusCropRef: `.sciforge/vision-runs/${runId}/focus-crop.png`,
+    fineGroundingDiagnosticRef: `.sciforge/vision-runs/${runId}/fine-grounding-diagnostic.json`,
+    rejectedTargetRefs: [
+      `.sciforge/vision-runs/${runId}/rejected-save-target.json`,
+      `.sciforge/vision-runs/${runId}/rejected-share-target.json`,
+    ],
   };
 }

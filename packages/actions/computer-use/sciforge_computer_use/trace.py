@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
+from urllib.parse import urlparse
 
 from .contracts import ComputerUseResult
 
@@ -36,6 +39,10 @@ def result_to_trace(result: ComputerUseResult) -> dict[str, Any]:
         "artifactRefs": artifact_refs,
         "finalArtifactRef": final_artifact_refs[0] if final_artifact_refs else None,
         "finalArtifactRefs": final_artifact_refs,
+        "evidenceLogRef": result.failure_diagnostics.get("evidenceLogRef"),
+        "evidenceSnapshotRef": result.failure_diagnostics.get("evidenceSnapshotRef"),
+        "evidenceIndexRef": result.failure_diagnostics.get("evidenceIndexRef"),
+        "plannerBriefRef": result.failure_diagnostics.get("plannerBriefRef"),
         "steps": [_step_to_trace(step) for step in result.steps],
         "budgetDebits": [dict(debit) for debit in result.budget_debits],
         "budgetDebitRefs": list(result.budget_debit_refs),
@@ -53,6 +60,16 @@ def compact_result_for_handoff(result: ComputerUseResult) -> dict[str, Any]:
         *trace["artifactRefs"],
         *trace["finalArtifactRefs"],
         *trace["traceRefs"],
+        *[
+            ref
+            for ref in (
+                trace.get("evidenceLogRef"),
+                trace.get("evidenceSnapshotRef"),
+                trace.get("evidenceIndexRef"),
+                trace.get("plannerBriefRef"),
+            )
+            if isinstance(ref, str)
+        ],
     ])
     return {
         "schemaVersion": "sciforge.computer-use.compact-handoff.v1",
@@ -64,6 +81,10 @@ def compact_result_for_handoff(result: ComputerUseResult) -> dict[str, Any]:
         "artifactRefs": trace["artifactRefs"],
         "finalArtifactRef": trace.get("finalArtifactRef"),
         "finalArtifactRefs": trace["finalArtifactRefs"],
+        "evidenceLogRef": trace.get("evidenceLogRef"),
+        "evidenceSnapshotRef": trace.get("evidenceSnapshotRef"),
+        "evidenceIndexRef": trace.get("evidenceIndexRef"),
+        "plannerBriefRef": trace.get("plannerBriefRef"),
         "actions": [
             {
                 "index": step["index"],
@@ -1102,6 +1123,14 @@ def _looks_like_control_evidence_ref(value: str) -> bool:
         "tool-payload.json",
         "gui-present.json",
         "gui-ask-user.json",
+        "approval-request.json",
+        "risk-audit.json",
+        "confirmed-request.json",
+        "blocked-manifest.json",
+        "repair-hint.json",
+        "continuation-request.json",
+        "directory-listing.json",
+        "tui-host-run-task-chain.json",
         "computer-use-request.json",
         "gateway-request.json",
         "request.json",
@@ -1436,16 +1465,220 @@ def _real_window_target_binding_validation_errors(
     return errors
 
 
-def _existing_ref_errors(refs: Sequence[Any]) -> list[dict[str, Any]]:
-    for ref in _unique_strings(ref for ref in refs if isinstance(ref, str) and ref):
-        if not Path(ref).expanduser().is_file():
-            return [_repair_replay_error(
+def _existing_ref_errors(
+    refs: Sequence[Any],
+    *,
+    bundle_root: str | Path | None = None,
+    allow_absolute_refs: bool = True,
+) -> list[dict[str, Any]]:
+    local_refs = _unique_strings(ref for ref in refs if isinstance(ref, str) and ref)
+    absolute_refs_allowed = allow_absolute_refs and not _has_relative_local_refs(local_refs)
+    root = _existing_refs_bundle_root(
+        local_refs,
+        bundle_root=bundle_root,
+        allow_absolute_refs=absolute_refs_allowed,
+    )
+    try:
+        real_root = root.resolve(strict=True)
+    except OSError:
+        real_root = root.resolve(strict=False)
+    errors: list[dict[str, Any]] = []
+    for ref in local_refs:
+        path_text = _local_ref_path_text(ref)
+        shape_error = _existing_ref_shape_error(
+            ref,
+            path_text,
+            allow_absolute_refs=absolute_refs_allowed,
+        )
+        if shape_error is not None:
+            errors.append(shape_error)
+            continue
+        path = Path(path_text)
+        candidate = path.expanduser() if path.is_absolute() else root / path
+        try:
+            if _path_has_symlink_component(candidate, root):
+                errors.append(_repair_replay_error(
+                    "evidence_ref_symlink_forbidden",
+                    "Evidence ref must not point through a symlink.",
+                    "$",
+                    actual=ref,
+                ))
+                continue
+            info = candidate.lstat()
+        except OSError:
+            errors.append(_repair_replay_error(
                 "evidence_ref_not_found",
                 "Evidence ref must point to an existing local file.",
                 "$",
                 actual=ref,
-            )]
-    return []
+            ))
+            continue
+        if not stat.S_ISREG(info.st_mode):
+            errors.append(_repair_replay_error(
+                "evidence_ref_not_regular_file",
+                "Evidence ref must point to a regular local file.",
+                "$",
+                actual=ref,
+            ))
+            continue
+        try:
+            real_candidate = candidate.resolve(strict=True)
+        except OSError:
+            errors.append(_repair_replay_error(
+                "evidence_ref_not_found",
+                "Evidence ref must point to an existing local file.",
+                "$",
+                actual=ref,
+            ))
+            continue
+        if not _path_is_relative_to(real_candidate, real_root):
+            errors.append(_repair_replay_error(
+                "evidence_ref_realpath_escape",
+                "Evidence ref realpath must stay inside the evidence bundle/root.",
+                "$",
+                actual=ref,
+            ))
+    return errors
+
+
+def _has_relative_local_refs(refs: Sequence[str]) -> bool:
+    for ref in refs:
+        path_text = _local_ref_path_text(ref)
+        if not path_text or urlparse(path_text).scheme:
+            continue
+        if not Path(path_text).expanduser().is_absolute():
+            return True
+    return False
+
+
+def _existing_refs_bundle_root(
+    refs: Sequence[str],
+    *,
+    bundle_root: str | Path | None,
+    allow_absolute_refs: bool,
+) -> Path:
+    if bundle_root is not None:
+        return Path(bundle_root).expanduser()
+    if not allow_absolute_refs:
+        return Path.cwd()
+    parents: list[Path] = []
+    for ref in refs:
+        path_text = _local_ref_path_text(ref)
+        if not path_text or urlparse(path_text).scheme:
+            continue
+        path = Path(path_text).expanduser()
+        if any(part == ".." for part in path.parts):
+            continue
+        parents.append(path.parent if path.is_absolute() else Path.cwd())
+    if not parents:
+        return Path.cwd()
+    try:
+        common = Path(os.path.commonpath([str(parent) for parent in parents]))
+    except ValueError:
+        return Path.cwd()
+    if len(parents) > 1 and str(common) == common.anchor:
+        return parents[0]
+    return common
+
+
+def _local_ref_path_text(ref: str) -> str:
+    return ref.split("#", 1)[0].strip()
+
+
+def _existing_ref_shape_error(
+    ref: str,
+    path_text: str,
+    *,
+    allow_absolute_refs: bool,
+) -> dict[str, Any] | None:
+    if not path_text:
+        return _repair_replay_error(
+            "evidence_ref_reserved",
+            "Evidence ref must be a non-empty local file ref.",
+            "$",
+            actual=ref,
+        )
+    parsed = urlparse(path_text)
+    if parsed.scheme:
+        if path_text.startswith(f"{parsed.scheme}://") or parsed.scheme.lower() in {
+            "data",
+            "file",
+            "http",
+            "https",
+        }:
+            return _repair_replay_error(
+                "evidence_ref_url_forbidden",
+                "Evidence ref must not be an absolute URL.",
+                "$",
+                actual=ref,
+            )
+        return _repair_replay_error(
+            "evidence_ref_pseudo_forbidden",
+            "Evidence ref must be a local bundle file ref, not a pseudo/durable ref.",
+            "$",
+            actual=ref,
+        )
+    path = Path(path_text)
+    if path.is_absolute() and not allow_absolute_refs:
+        return _repair_replay_error(
+            "evidence_ref_absolute_forbidden",
+            "Evidence ref must be bundle/root-relative, not absolute.",
+            "$",
+            actual=ref,
+        )
+    if path_text.startswith("~"):
+        return _repair_replay_error(
+            "evidence_ref_home_forbidden",
+            "Evidence ref must not use home-directory expansion.",
+            "$",
+            actual=ref,
+        )
+    parts = [part for part in path.parts if part not in {path.anchor, os.sep, ""}]
+    if any(part == ".." for part in parts):
+        return _repair_replay_error(
+            "evidence_ref_parent_traversal_forbidden",
+            "Evidence ref must not contain parent traversal.",
+            "$",
+            actual=ref,
+        )
+    reserved_names = {"", ".", "..", "con", "prn", "aux", "nul"}
+    reserved_names.update({f"com{index}" for index in range(1, 10)})
+    reserved_names.update({f"lpt{index}" for index in range(1, 10)})
+    if any(part.lower().rstrip(". ") in reserved_names for part in parts):
+        return _repair_replay_error(
+            "evidence_ref_reserved",
+            "Evidence ref must not use a reserved path segment.",
+            "$",
+            actual=ref,
+        )
+    return None
+
+
+def _path_has_symlink_component(path: Path, root: Path) -> bool:
+    try:
+        relative_parts = path.relative_to(root).parts
+        current = root
+    except ValueError:
+        relative_parts = path.parts
+        current = Path(path.anchor) if path.is_absolute() else Path()
+    for part in relative_parts:
+        if part in {"", path.anchor, os.sep}:
+            continue
+        current = current / part
+        try:
+            if current.is_symlink():
+                return True
+        except OSError:
+            return False
+    return False
+
+
+def _path_is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
 
 
 def _target_environment_is_virtual_or_diagnostic(value: str) -> bool:

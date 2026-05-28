@@ -1,3 +1,7 @@
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
+import { brotliDecompressSync, gunzipSync, inflateSync } from 'node:zlib';
+
 import type { AgentCliAdapter } from './agent-cli-adapter.js';
 import { CodexExecJsonAdapter } from './codex-exec-json-adapter.js';
 import type { NormalizedAgentEvent } from './codex-event-normalizer.js';
@@ -6,6 +10,7 @@ import {
   responsesToChatCompletions,
   type ResponsesRequest,
 } from '../../../packages/backend/src/response-compat.js';
+import { scrubRuntimeCodexAuditText } from './codex-runtime-audit-bundle.js';
 
 export const COMPUTER_USE_TEXT_PLANNER_SCHEMA = 'sciforge.computer-use.codex-text-planner.v1';
 
@@ -258,19 +263,17 @@ async function runDirectChatPlannerFallback(
   try {
     const maxAttempts = Math.min(5, 1 + (positiveInteger(env.SCIFORGE_COMPUTER_USE_DIRECT_TEXT_PLANNER_RETRIES) ?? 2));
     let lastFailure: string | undefined;
+    let useRawIdentityTransport = false;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       let bodyText = '';
       try {
-        const response = await (options.fetchImpl ?? fetch)(`${config.value.baseUrl}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            authorization: `Bearer ${config.value.apiKey}`,
-          },
-          body: JSON.stringify(directChatPlannerRequest(commandText, config.value, env)),
-          signal: controller.signal,
-        });
-        bodyText = await response.text();
+        const url = `${config.value.baseUrl}/chat/completions`;
+        const requestBody = JSON.stringify(directChatPlannerRequest(commandText, config.value, env));
+        const requestHeaders = directChatPlannerRequestHeaders(config.value.apiKey);
+        const response = useRawIdentityTransport && !options.fetchImpl
+          ? await directChatPlannerRawHttpRequest(url, requestHeaders, requestBody, controller.signal)
+          : await directChatPlannerFetchRequest(options.fetchImpl ?? fetch, url, requestHeaders, requestBody, controller.signal);
+        bodyText = response.bodyText;
         if (!response.ok) {
           lastFailure = `HTTP ${response.status}: ${scrubDirectChatText(bodyText)}`;
           if (attempt < maxAttempts && shouldRetryDirectChatFallbackStatus(response.status)) {
@@ -285,6 +288,12 @@ async function runDirectChatPlannerFallback(
       } catch (error) {
         if (error instanceof Error && error.name === 'AbortError') throw error;
         lastFailure = directChatPlannerErrorMessage(error);
+        if (!options.fetchImpl && !useRawIdentityTransport && isContentEncodingDecodeFailure(error) && attempt < maxAttempts) {
+          useRawIdentityTransport = true;
+          lastFailure = `${lastFailure}; retrying with raw identity transport`;
+          await sleep(directChatPlannerRetryDelayMs(attempt), controller.signal);
+          continue;
+        }
         if (attempt < maxAttempts) {
           await sleep(directChatPlannerRetryDelayMs(attempt), controller.signal);
           continue;
@@ -353,6 +362,107 @@ async function runDirectChatPlannerFallback(
     clearTimeout(timeout);
     options.abortSignal?.removeEventListener('abort', abort);
   }
+}
+
+type DirectChatHttpResponse = {
+  ok: boolean;
+  status: number;
+  bodyText: string;
+};
+
+function directChatPlannerRequestHeaders(apiKey: string): Record<string, string> {
+  return {
+    accept: 'application/json',
+    'accept-encoding': 'identity',
+    'content-type': 'application/json',
+    authorization: `Bearer ${apiKey}`,
+  };
+}
+
+async function directChatPlannerFetchRequest(
+  fetchImpl: typeof fetch,
+  url: string,
+  headers: Record<string, string>,
+  body: string,
+  signal: AbortSignal,
+): Promise<DirectChatHttpResponse> {
+  const response = await fetchImpl(url, {
+    method: 'POST',
+    headers,
+    body,
+    signal,
+  });
+  return {
+    ok: response.ok,
+    status: response.status,
+    bodyText: await response.text(),
+  };
+}
+
+async function directChatPlannerRawHttpRequest(
+  urlText: string,
+  headers: Record<string, string>,
+  body: string,
+  signal: AbortSignal,
+): Promise<DirectChatHttpResponse> {
+  const url = new URL(urlText);
+  const requestImpl = url.protocol === 'http:' ? httpRequest : url.protocol === 'https:' ? httpsRequest : undefined;
+  if (!requestImpl) throw new Error(`Unsupported direct chat planner fallback URL protocol: ${url.protocol}`);
+
+  return await new Promise<DirectChatHttpResponse>((resolve, reject) => {
+    const request = requestImpl(url, {
+      method: 'POST',
+      headers: {
+        ...headers,
+        'content-length': String(Buffer.byteLength(body)),
+      },
+    }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+      response.on('end', () => {
+        try {
+          const buffer = Buffer.concat(chunks);
+          resolve({
+            ok: response.statusCode !== undefined && response.statusCode >= 200 && response.statusCode < 300,
+            status: response.statusCode ?? 0,
+            bodyText: decodeDirectChatRawBody(buffer, response.headers['content-encoding']),
+          });
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+    const abort = () => request.destroy(new DOMException('Aborted', 'AbortError'));
+    request.on('error', reject);
+    request.on('close', () => signal.removeEventListener('abort', abort));
+    if (signal.aborted) {
+      abort();
+      return;
+    }
+    signal.addEventListener('abort', abort, { once: true });
+    request.end(body);
+  });
+}
+
+function decodeDirectChatRawBody(buffer: Buffer, contentEncoding: string | string[] | undefined) {
+  const encoding = Array.isArray(contentEncoding) ? contentEncoding[0] : contentEncoding;
+  const normalized = encoding?.split(';')[0]?.trim().toLowerCase();
+  if (!normalized || normalized === 'identity') return buffer.toString('utf8');
+  try {
+    if (normalized === 'gzip' || normalized === 'x-gzip') return gunzipSync(buffer).toString('utf8');
+    if (normalized === 'deflate') return inflateSync(buffer).toString('utf8');
+    if (normalized === 'br') return brotliDecompressSync(buffer).toString('utf8');
+  } catch (error) {
+    const rawText = buffer.toString('utf8').trimStart();
+    if (rawText.startsWith('{') || rawText.startsWith('[')) return buffer.toString('utf8');
+    throw error;
+  }
+  return buffer.toString('utf8');
+}
+
+function isContentEncodingDecodeFailure(error: unknown) {
+  const message = (directChatPlannerErrorMessage(error) ?? '').toLowerCase();
+  return /incorrect header check|invalid distance|invalid block|invalid stored block lengths|unexpected end of file|decompress|content-encoding|terminated/.test(message);
 }
 
 function shouldRetryDirectChatFallbackStatus(status: number) {
@@ -453,7 +563,7 @@ function shouldUseDirectChatPlannerFallback(events: PlannerEventSummary[]) {
 }
 
 function scrubDirectChatText(value: string) {
-  return boundText(value.replace(/sk-[A-Za-z0-9_-]+/g, '[REDACTED_API_KEY]'), 320);
+  return boundText(scrubRuntimeCodexAuditText(value), 320);
 }
 
 function directChatPlannerErrorMessage(error: unknown) {
@@ -505,8 +615,8 @@ export function buildComputerUseTextPlannerCommand(input: ComputerUseTextPlanner
     'Hotkeys must be generic platform recovery only, not app-private shortcuts.',
     'Never use Command+S, Ctrl+S, browser/app save shortcuts, or menu shortcuts for save/export workflows. Use visible in-window controls, file dialogs, filename/path fields, and visible Save/Open/OK buttons only.',
     'If the task explicitly requires saving/exporting an artifact, task-required Save, Save As, filename/path, location, and file dialog UI is in scope. Do not dismiss those dialogs. Dismiss only unrelated save/login/permission dialogs.',
-    'For macOS PowerPoint-style title bars, do not target the AutoSave toggle or Home/house icon. If saving from the editor, target the small floppy-disk Save icon immediately to the right of the Home/house icon, and name a targetRegionDescription that excludes AutoSave.',
-    'Never describe a Save icon as "near AutoSave" or put AutoSave in the positive target region. If AutoSave is mentioned at all, mention it only as an excluded/avoided non-target control; use stable anchors such as the Home/house icon and undo controls.',
+    'For visually ambiguous toolbars or title bars, do not target neighboring toggles, navigation icons, or action clusters by proximity alone. Describe the intended visible label/icon/shape, and name a targetRegionDescription that excludes nearby non-target controls.',
+    'Never describe an intended target as "near" a non-target control or put the non-target control in the positive target region. If nearby controls must be mentioned, mention them only as excluded or avoided non-target controls.',
     'Do not target a File menu/tab unless it is visibly inside the captured target window. If a File menu is only in the macOS menu bar outside a target-window screenshot, choose another visible in-window save control or return the structured failure JSON shape.',
     'The current compact observation is the only truth source for what is visible now. Recent action targetDescription text and verifier pixel changes are history only; they do not prove a File, Save As, Browse, filename/path field, or dialog is currently visible.',
     'For save workflows, do not claim File, Save As, Browse, filename/path, location, or file-dialog controls are visible unless the current compact observation summary, visibleTexts, or window title explicitly contains that label or a save/open/file-dialog marker.',
@@ -515,11 +625,17 @@ export function buildComputerUseTextPlannerCommand(input: ComputerUseTextPlanner
     'Never say a dialog "should now be visible." If the window title is still a document title and visibleTexts still show editor/ribbon/canvas text, treat the dialog as absent. Choose another currently visible control or return the structured failure JSON shape.',
     'Do not type a filesystem path until the compact observation shows a visible Save/Save As/Open/Choose dialog or filename/path/location field. First click that visible filename/path/location field; then type the literal path in a later planner turn.',
     'High-risk send/delete/pay/authorize/publish/submit actions must use riskLevel="high" and requiresConfirmation=true.',
+    'Do not mark ordinary focus, selection, inspection, text-field, search-field, checkbox, radio, dropdown, menu, toggle, switch, or scroll actions as high risk unless the target itself is a high-risk send/delete/pay/authorize/publish/submit/upload/share/overwrite control.',
+    'When the task or current round asks for low-risk controls, inspection, visual evidence, or action quota, use only visibly safe targets such as text fields, search/filter fields, checkboxes, radios, dropdowns, menus, tabs, toggles, scroll areas, blank content areas, or focus/selection targets.',
+    'Never use Export, Share, Save, Save As, Submit, Send, Delete, Remove, Pay, Purchase, Authorize, Approve, Publish, Upload, Overwrite, Replace, Login, or Sign in controls as low-risk quota filler. If only those controls are visible, return the structured failure JSON shape instead of choosing them.',
     'If Planner acceptance contract JSON is present, use it to scope this planner turn without inventing evidence.',
     'When the contract includes roundPrompt or expectedTrace, treat that current round as the completion scope: satisfy the visible round prompt and expectedTrace with compact observation, Recent actions, and verifier feedback.',
     'Scenario-level acceptance, requirements, requiredEvidence, validationContract, and safetyBoundary are constraints and future-round context; do not try to satisfy every scenario-level acceptance item inside one round unless the current roundPrompt or expectedTrace explicitly asks for it.',
     'Use the acceptance contract to choose the next missing evidence-producing generic action for the current completion scope. Return done=true when the compact observation, Recent actions, and verifier feedback already support that current scope.',
+    'If the current roundPrompt, expectedTrace, or requirements ask for a final artifact, evidence summary, action mapping, field/control evidence summary, or refs-first report, do not finish with only screenshots or clicks. First produce a visible typed/exported artifact using safe generic actions, then let the host surface its artifact refs and gui.present metadata.',
     'For round-scoped Computer Use validation, the current round needs at least one non-wait GUI action in Recent actions to produce executor and verifier evidence. If this round has no executed GUI actions yet, do not return done=true; emit one safe low-risk visible focus, cancel, navigation, selection, or inspection action, or return a structured failure if none is safe.',
+    'If acceptanceProgress specifies suggestedCurrentRoundActionTarget or suggestedCurrentRoundNonWaitActionTarget, treat it as a minimum evidence-producing action quota for this current round. While Recent actions show fewer current-round executed GUI actions than that quota and maxStepsRemaining is positive, prefer the next safe visible generic action over done=true; return structured failure only when no safe visible action remains.',
+    'If acceptanceProgress includes observedScenarioActionCount or remainingScenarioActionCount, the current-round quota may include prior-round shortfall; do not stop at an even per-round average when the contract asks this round to cover remaining scenario actions.',
     'Do not count prior-round actions or scenario-level summaries as current-round GUI evidence. Prior-round refs may guide safety, but only this round Recent actions and verifier feedback prove current-round execution.',
     'Never invent evidence from the acceptance contract; it describes required outcomes, not current GUI state.',
     input.extraInstruction ? `Additional contract instruction: ${input.extraInstruction}` : undefined,

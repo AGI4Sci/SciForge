@@ -333,6 +333,10 @@ def _result_payload(result: ComputerUseResult) -> dict[str, Any]:
         "steps": trace.get("steps", []),
         "budgetDebits": trace.get("budgetDebits", []),
         "budgetDebitRefs": trace.get("budgetDebitRefs", []),
+        "evidenceLogRef": result.failure_diagnostics.get("evidenceLogRef"),
+        "evidenceSnapshotRef": result.failure_diagnostics.get("evidenceSnapshotRef"),
+        "evidenceIndexRef": result.failure_diagnostics.get("evidenceIndexRef"),
+        "plannerBriefRef": result.failure_diagnostics.get("plannerBriefRef"),
     }
 
 
