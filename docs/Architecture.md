@@ -114,6 +114,14 @@ DOM / pointer / keyboard / scroll / modal events
 
 保存注释时，GUI 生成本地 feedback inbox `annotation-plan` record，包括引用对象、原始描述、澄清问答摘要、action log、修改建议、验收标准、URL/route、selector/DOM path 和 screenshot/evidence refs。复杂后续 repair/code/GitHub sync 必须由用户在收件箱中显式启动，并经过对应确认边界。
 
+## 内置浏览器运行时
+
+SciForge 的内置浏览器是 TUI/Codex runtime 的 `browser_runtime` capability，不是 GUI 自己实现的网页 agent。GUI 可以展示 browser session、tabs、当前 URL、截图 refs、DOM snapshot refs、console/network refs 和 human takeover 状态，也可以把按钮转换成 `/browser ...` 这类终端等价文本；但 GUI 不判断网页任务意图、不选择 Playwright provider、不拼 browser prompt、不把网页正文或截图 base64 写进 workspace state。
+
+默认浏览器路径使用 `playwright_browser_automation`：headless、isolated、后台运行，不附着用户主浏览器。需要登录、验证码、2FA、账户权限或人工接管时，才显式切到 `playwright_edge_browser` visible takeover，并要求用户确认。截图、DOM、console、network 和下载结果必须 refs-first；projection 只保存 ref、摘要、尺寸/hash/targetRect 等可审计元数据。
+
+详细设计见 [`BrowserRuntimeArchitecture.md`](BrowserRuntimeArchitecture.md)。
+
 ## TUI 感知 GUI：只读虚拟资源树
 
 TUI 不应该通过截图、DOM dump、ANSI buffer 或 GUI 私有对象理解界面状态。更稳的模型是把 GUI 看成一个只读虚拟资源树，像读文件系统一样分层探测：

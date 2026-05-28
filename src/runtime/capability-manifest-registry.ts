@@ -389,6 +389,7 @@ function defaultPackageCapabilityManifestDiscovery(): PackageCapabilityManifestD
         loadJsonFile<CapabilityManifest>('../../packages/observe/web/capabilities/web_fetch.manifest.json'),
         loadJsonFile<CapabilityManifest>('../../packages/observe/web/capabilities/browser_search.manifest.json'),
         loadJsonFile<CapabilityManifest>('../../packages/observe/web/capabilities/browser_fetch.manifest.json'),
+        loadJsonFile<CapabilityManifest>('../../packages/observe/web/capabilities/browser_runtime.manifest.json'),
         loadJsonFile<CapabilityManifest>('../../packages/observe/web/capabilities/playwright_browser_automation.manifest.json'),
         loadJsonFile<CapabilityManifest>('../../packages/observe/web/capabilities/playwright_edge_browser.manifest.json'),
       ],

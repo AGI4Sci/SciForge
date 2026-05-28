@@ -77,6 +77,7 @@ export type PlaywrightBrowserActionType =
   | 'back'
   | 'wait'
   | 'click'
+  | 'scroll'
   | 'hover'
   | 'type'
   | 'fillForm'
@@ -569,6 +570,23 @@ function browserActionToolCall(
         doubleClick: action.doubleClick === true,
         button: enumStringField(action.button, ['left', 'right', 'middle']),
         modifiers: stringArrayField(action.modifiers),
+      }) };
+    case 'scroll':
+      return { toolName: 'browser_evaluate', args: compactRecord({
+        target: stringField(action.target),
+        element: stringField(action.element),
+        function: `() => {
+          const dx = ${JSON.stringify(clampNumber(action.deltaX, 0, -10000, 10000))};
+          const dy = ${JSON.stringify(clampNumber(action.deltaY, 600, -10000, 10000))};
+          const selector = ${JSON.stringify(stringField(action.selector))};
+          const target = selector ? document.querySelector(selector) : null;
+          if (target && typeof target.scrollBy === 'function') {
+            target.scrollBy({ left: dx, top: dy, behavior: 'auto' });
+          } else {
+            window.scrollBy({ left: dx, top: dy, behavior: 'auto' });
+          }
+          return { scrollX: window.scrollX, scrollY: window.scrollY };
+        }`,
       }) };
     case 'hover':
       return { toolName: 'browser_hover', args: compactRecord({

@@ -456,6 +456,7 @@ function mainLooksProduction(value: string): boolean {
     'packages/backend/src/cli.ts',
     'codex-runtime-standalone-server.ts',
   ];
+  const loadUrlOnlyForNativeBrowser = !value.includes('loadURL') || value.includes('desktop:native-browser:open');
   return value.includes('BrowserWindow') &&
     value.includes('loadFile') &&
     value.includes('requestedControlPort: 0') &&
@@ -465,7 +466,7 @@ function mainLooksProduction(value: string): boolean {
     value.includes('dist-desktop') &&
     DEFAULT_SIDECAR_PATHS.every((filePath) => value.includes(basename(filePath))) &&
     value.includes('runtime-codex') &&
-    !value.includes('loadURL') &&
+    loadUrlOnlyForNativeBrowser &&
     forbidden.every((token) => !value.includes(token));
 }
 
@@ -483,6 +484,12 @@ function preloadLooksIsolated(value: string): boolean {
     'runtime:health',
     'runtime:ready',
     'runtime:shutdown',
+    'desktop:native-browser:open',
+    'desktop:native-browser:back',
+    'desktop:native-browser:forward',
+    'desktop:native-browser:reload',
+    'desktop:native-browser:state',
+    'desktop:native-browser:screenshot',
     'platform:open-external',
     'platform:pick-directory',
     'platform:reveal-path',

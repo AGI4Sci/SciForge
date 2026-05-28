@@ -40,6 +40,12 @@ export type DesktopPreloadApiMethod =
   | 'getRuntimeReady'
   | 'requestShutdown'
   | 'openExternal'
+  | 'openNativeBrowser'
+  | 'nativeBrowserBack'
+  | 'nativeBrowserForward'
+  | 'nativeBrowserReload'
+  | 'getNativeBrowserState'
+  | 'captureNativeBrowserScreenshot'
   | 'revealPath'
   | 'pickDirectory';
 
@@ -52,8 +58,14 @@ export type DesktopPreloadContract = {
 	  ipcChannels: Array<
 	    | 'runtime:config'
 	    | 'runtime:health'
-	    | 'runtime:ready'
+    | 'runtime:ready'
     | 'runtime:shutdown'
+    | 'desktop:native-browser:open'
+    | 'desktop:native-browser:back'
+    | 'desktop:native-browser:forward'
+    | 'desktop:native-browser:reload'
+    | 'desktop:native-browser:state'
+    | 'desktop:native-browser:screenshot'
     | 'platform:open-external'
     | 'platform:reveal-path'
     | 'platform:pick-directory'
@@ -351,9 +363,15 @@ export function createDesktopProductionShellPlan(options: DesktopProductionShell
 	      exposedMethods: [
 	        'getRuntimeConfig',
 	        'getRuntimeHealth',
-	        'getRuntimeReady',
+        'getRuntimeReady',
         'requestShutdown',
         'openExternal',
+        'openNativeBrowser',
+        'nativeBrowserBack',
+        'nativeBrowserForward',
+        'nativeBrowserReload',
+        'getNativeBrowserState',
+        'captureNativeBrowserScreenshot',
         'revealPath',
         'pickDirectory',
       ],
@@ -362,6 +380,12 @@ export function createDesktopProductionShellPlan(options: DesktopProductionShell
 	        'runtime:health',
 	        'runtime:ready',
         'runtime:shutdown',
+        'desktop:native-browser:open',
+        'desktop:native-browser:back',
+        'desktop:native-browser:forward',
+        'desktop:native-browser:reload',
+        'desktop:native-browser:state',
+        'desktop:native-browser:screenshot',
         'platform:open-external',
         'platform:reveal-path',
         'platform:pick-directory',

@@ -3,7 +3,7 @@ import type { PageId } from '../../data';
 import type { ScenarioInstanceId } from '../../domain';
 
 const APP_NAVIGATION_STORAGE_KEY = 'sciforge.app-navigation.v1';
-const validPages = new Set<PageId>(['workbench', 'components', 'timeline', 'feedback']);
+const validPages = new Set<PageId>(['workbench', 'components', 'timeline', 'feedback', 'browser']);
 const defaultNavigation = { page: 'workbench' as const, scenarioId: defaultBuiltInScenarioId };
 
 export function appNavigationStorageKey() {

@@ -1,10 +1,33 @@
 import browserFetchManifest from './capabilities/browser_fetch.manifest.json';
+import browserRuntimeManifest from './capabilities/browser_runtime.manifest.json';
 import browserSearchManifest from './capabilities/browser_search.manifest.json';
 import playwrightBrowserAutomationManifest from './capabilities/playwright_browser_automation.manifest.json';
 import playwrightEdgeBrowserManifest from './capabilities/playwright_edge_browser.manifest.json';
 import webFetchManifest from './capabilities/web_fetch.manifest.json';
 import webSearchManifest from './capabilities/web_search.manifest.json';
 
+export {
+  BROWSER_RUNTIME_CAPABILITY_ID,
+  BROWSER_RUNTIME_PROVIDER_ID,
+  browserRuntimeCodexFeatureMatrix,
+  browserRuntimeCommandRisk,
+  browserRuntimePlaywrightActionsForCommand,
+  browserRuntimeProjection,
+  browserRuntimeSnapshotFromRefs,
+  browserRuntimeTraceForCommand,
+  type BrowserRuntimeCodexFeature,
+  type BrowserRuntimeCommand,
+  type BrowserRuntimeCommandRisk,
+  type BrowserRuntimeMode,
+  type BrowserRuntimePlaywrightAction,
+  type BrowserRuntimeProjection,
+  type BrowserRuntimeSession,
+  type BrowserRuntimeSnapshot,
+  type BrowserRuntimeTab,
+  type BrowserRuntimeTrace,
+  type BrowserRuntimeTraceRef,
+  type BrowserRuntimeTraceRefKind,
+} from './browser-runtime';
 export {
   buildParallelPlaywrightBrowserMcpServersConfig,
   buildPlaywrightBrowserMcpCodexTomlSnippet,
@@ -74,6 +97,7 @@ export const webObserveCapabilityManifests = [
   webFetchManifest,
   browserSearchManifest,
   browserFetchManifest,
+  browserRuntimeManifest,
   playwrightBrowserAutomationManifest,
   playwrightEdgeBrowserManifest,
 ];

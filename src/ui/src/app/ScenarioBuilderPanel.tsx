@@ -30,6 +30,7 @@ import {
   type CapabilityManifest,
 } from '@sciforge-ui/runtime-contract';
 import browserFetchManifest from '@sciforge-observe/web/browser_fetch';
+import browserRuntimeManifest from '@sciforge-observe/web/browser_runtime';
 import browserSearchManifest from '@sciforge-observe/web/browser_search';
 import playwrightBrowserAutomationManifest from '@sciforge-observe/web/playwright_browser_automation';
 import playwrightEdgeBrowserManifest from '@sciforge-observe/web/playwright_edge_browser';
@@ -50,6 +51,7 @@ const webObserveCapabilityManifests = [
   webFetchManifest,
   browserSearchManifest,
   browserFetchManifest,
+  browserRuntimeManifest,
   playwrightBrowserAutomationManifest,
   playwrightEdgeBrowserManifest,
 ] as CapabilityManifest[];

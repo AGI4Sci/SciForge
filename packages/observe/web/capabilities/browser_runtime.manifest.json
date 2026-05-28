@@ -1,0 +1,190 @@
+{
+  "contract": "sciforge.capability-manifest.v1",
+  "id": "browser_runtime",
+  "name": "Built-in browser runtime",
+  "version": "0.1.0",
+  "ownerPackage": "packages/observe/web",
+  "kind": "observe",
+  "brief": "Provide a Codex-like browser runtime contract for agent-owned browser sessions, tabs, navigation, snapshots, screenshots, console/network logs, DOM-targeted actions, and refs-first traces while keeping GUI as a presentation surface.",
+  "routingTags": [
+    "web",
+    "browser",
+    "browser-runtime",
+    "codex-in-app-browser",
+    "session",
+    "tabs",
+    "snapshot",
+    "screenshot",
+    "console-logs",
+    "network-logs",
+    "dom-actions",
+    "scroll"
+  ],
+  "domains": ["web", "knowledge", "literature", "gui"],
+  "requiredCapabilities": ["browser_runtime", "playwright_browser_automation"],
+  "inputSchema": {
+    "type": "object",
+    "required": ["command"],
+    "properties": {
+      "command": {
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "session.open",
+              "session.list",
+              "browser.visibility.set",
+              "browser.viewport.set",
+              "browser.viewport.reset",
+              "browser.user.openTabs",
+              "browser.list_frames",
+              "browser.switch_frame",
+              "browser.list_dialogs",
+              "browser.handle_dialog",
+              "browser.get_network_log",
+              "browser.wait_for_idle",
+              "browser.get_storage",
+              "browser.upload_file",
+              "browser.emulate_media",
+              "tab.new",
+              "tab.select",
+              "tab.close",
+              "tab.navigate",
+              "tab.back",
+              "tab.reload",
+              "tab.snapshot",
+              "page.click",
+              "page.type",
+              "page.keypress",
+              "page.scroll",
+              "cua.click",
+              "cua.double_click",
+              "cua.drag",
+              "cua.move",
+              "cua.scroll",
+              "cua.type",
+              "dom_cua.visible_dom",
+              "dom_cua.click",
+              "dom_cua.double_click",
+              "dom_cua.scroll",
+              "dom_cua.type",
+              "playwright.locator",
+              "playwright.evaluate",
+              "logs.console",
+              "logs.network",
+              "dev.logs",
+              "clipboard.read",
+              "clipboard.write",
+              "browser.close"
+            ]
+          },
+          "sessionId": { "type": "string" },
+          "tabId": { "type": "string" },
+          "url": { "type": "string" },
+          "startUrl": { "type": "string" },
+          "target": { "type": "string" },
+          "text": { "type": "string" },
+          "key": { "type": "string" },
+          "deltaX": { "type": "number" },
+          "deltaY": { "type": "number" },
+          "screenshot": { "type": "boolean" },
+          "dom": { "type": "boolean" },
+          "logs": { "type": "boolean" },
+          "visible": { "type": "boolean" },
+          "requiresHumanTakeover": { "type": "boolean" },
+          "timeoutMs": { "type": "number" }
+        }
+      },
+      "approval": {
+        "type": "object",
+        "properties": {
+          "confirmed": { "type": "boolean" },
+          "reason": { "type": "string" }
+        }
+      }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "required": ["status", "session", "trace"],
+    "properties": {
+      "status": { "type": "string", "enum": ["succeeded", "partial", "failed", "needs-human"] },
+      "session": { "type": "object" },
+      "activeTab": { "type": "object" },
+      "snapshot": { "type": "object" },
+      "trace": { "type": "object" },
+      "providerDiagnostics": { "type": "object" }
+    }
+  },
+  "sideEffects": ["network", "browser-session"],
+  "costClass": "medium",
+  "latencyClass": "high",
+  "sideEffectClass": "network",
+  "safety": {
+    "risk": "medium",
+    "dataScopes": ["public-web", "isolated-browser-session", "refs-first-screenshots"],
+    "requiresHumanApproval": false
+  },
+  "examples": [
+    {
+      "title": "open a page and capture a refs-first snapshot",
+      "inputRef": "capability:browser_runtime/input.snapshot.example",
+      "outputRef": "capability:browser_runtime/output.snapshot.example"
+    }
+  ],
+  "validators": [
+    {
+      "id": "browser_runtime.refs-first",
+      "kind": "contract",
+      "summary": "Browser snapshots must reference screenshot/DOM/log refs instead of inlining base64 screenshots, full DOM, or unbounded logs."
+    }
+  ],
+  "repairHints": [
+    {
+      "failureCode": "browser-runtime-provider-unavailable",
+      "summary": "Start or configure the headless Playwright browser provider route before claiming browser-observed evidence.",
+      "recoverActions": ["start-playwright-browser-mcp", "check-mcp-client-config", "retry-browser-runtime-command"]
+    },
+    {
+      "failureCode": "browser-runtime-human-approval-required",
+      "summary": "High-risk browser actions such as login, upload, download, external submit, authorization, clipboard write, or persistent profile use require explicit human approval.",
+      "recoverActions": ["request-human-approval", "switch-to-visible-takeover", "record-needs-human"]
+    },
+    {
+      "failureCode": "browser-runtime-inline-large-object",
+      "summary": "Write screenshots, DOM snapshots, console logs, and network logs to refs before saving browser state.",
+      "recoverActions": ["materialize-browser-evidence-ref", "rewrite-browser-projection-refs-first"]
+    }
+  ],
+  "providers": [
+    {
+      "id": "sciforge.observe.browser-runtime",
+      "label": "SciForge browser runtime over Playwright MCP",
+      "kind": "external",
+      "contractRef": "packages/observe/web/capabilities/browser_runtime.manifest.json",
+      "requiredConfig": ["mcpServers.playwright-browser"],
+      "priority": 1,
+      "capabilityId": "browser_runtime",
+      "source": "mcp",
+      "transport": "mcp",
+      "mcpServer": "playwright-browser",
+      "runtimeLocation": "packages/observe/web/browser-runtime.ts",
+      "permissions": ["network", "filesystem"],
+      "auth": { "required": false },
+      "fallbackEligible": true,
+      "status": "unknown"
+    }
+  ],
+  "lifecycle": {
+    "status": "draft",
+    "sourceRef": "packages/observe/web/capabilities/browser_runtime.manifest.json"
+  },
+  "metadata": {
+    "defaultProvider": "playwright_browser_automation",
+    "visibleTakeoverProvider": "playwright_edge_browser",
+    "guiBoundary": "GUI displays browser projections and sends terminal-equivalent browser commands; TUI/runtime owns provider routing and browser state.",
+    "tracePolicy": "refs-first"
+  }
+}

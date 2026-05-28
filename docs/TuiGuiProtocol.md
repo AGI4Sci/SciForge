@@ -40,9 +40,18 @@ GUI 所有输入都必须能还原成用户在终端里手敲的文本：
 打开 artifact     -> "open artifacts/report.md"
 能力偏好          -> "/capabilities plan --prefer literature.search pdf.extract"
 选中对象后追问    -> "ask --ref artifacts/table.csv \"这些异常点是什么？\""
+打开内置浏览器    -> "/browser open https://example.com"
+请求浏览器截图    -> "/browser snapshot --tab current --screenshot --dom"
+浏览器人工接管    -> "/browser takeover browser-session-1"
 ```
 
 GUI 可以通过 stdio、pty、WebSocket、HTTP 或本地进程 API 把文本送给 TUI，但这些只是传输细节。SciForge 不把传输方法上升为业务协议。
+
+## Built-in Browser 输入边界
+
+`browser_runtime` 属于 TUI/Codex runtime capability。GUI 可以展示 session/tabs/snapshot refs，也可以把用户点击翻译成 `/browser ...` 文本命令；它不能自己选择 `playwright_browser_automation`、`playwright_edge_browser` 或其它 provider。
+
+浏览器截图、DOM snapshot、console logs、network logs 和下载文件必须通过 refs 进入 GUI projection。GUI state 不保存 `data:image/...;base64,...`、完整 DOM 或完整日志。登录、上传、下载、外部提交、授权、支付、删除、发送、写剪贴板和 visible takeover 都必须先由 TUI 发起 confirmation/handoff。
 
 ## AnnotationSidebar 连续反馈输入
 

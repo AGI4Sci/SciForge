@@ -9,6 +9,7 @@ const ignoredDirs = new Set([
   '.git',
   'node_modules',
   'dist',
+  'dist-desktop',
   'dist-ui',
   'build',
   'coverage',

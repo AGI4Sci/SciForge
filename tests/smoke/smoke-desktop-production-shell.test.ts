@@ -103,9 +103,15 @@ test('R-DESK preload exposes a narrow renderer contract with Node disabled', () 
 	    'runtime:health',
 	    'runtime:ready',
     'runtime:shutdown',
+    'desktop:native-browser:open',
+    'desktop:native-browser:back',
+    'desktop:native-browser:forward',
+    'desktop:native-browser:reload',
+    'desktop:native-browser:state',
+    'desktop:native-browser:screenshot',
     'platform:open-external',
-    'platform:pick-directory',
     'platform:reveal-path',
+    'platform:pick-directory',
   ]);
   assert.ok(plan.preload.forbiddenRendererCapabilities.includes('start or own Runtime Codex sidecars'));
 });

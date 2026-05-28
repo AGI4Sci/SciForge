@@ -1196,14 +1196,14 @@ export function Sidebar({
 
   function activateSidebarProject(
     project: SidebarProjectThreadGroup,
-    thread?: Pick<SidebarThreadItem, 'scenarioId' | 'sessionId'>,
+    thread?: SidebarThreadItem,
   ) {
     if (project.current) {
       if (thread) openSidebarThread(thread, project);
       return;
     }
     setSidebarProjectMenu(null);
-    onWorkspaceProjectActivate?.(project, thread);
+    onWorkspaceProjectActivate?.(project, thread ? { scenarioId: thread.scenarioId, sessionId: thread.sessionId } : undefined);
     setPage('workbench');
     setAllProjectThreadsCollapsed(false);
     setExpandedProjectThreads(new Set([project.id]));
@@ -1319,7 +1319,7 @@ export function Sidebar({
     if (query) onSearchNavigate?.(query);
   }
 
-  function openSidebarThread(item: Pick<SidebarThreadItem, 'scenarioId' | 'sessionId'>, project: SidebarProjectThreadGroup) {
+  function openSidebarThread(item: SidebarThreadItem, project: SidebarProjectThreadGroup) {
     if (!project.current) {
       activateSidebarProject(project, item);
       return;

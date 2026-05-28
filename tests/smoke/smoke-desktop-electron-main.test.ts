@@ -6,6 +6,7 @@ import test from 'node:test';
 import {
   createDefaultDesktopManagedServices,
   createDesktopBrowserWindowOptions,
+  createDesktopNativeBrowserController,
   createElectronDesktopMainController,
   installSciForgeDesktopPreload,
   resolveDesktopAppPaths,
@@ -83,7 +84,13 @@ test('R-DESK main controller starts launcher before loading dist-ui and wires IP
 
   assert.equal(started.plan.fullElectronEntrypointImplemented, true);
   assert.equal(loadedFiles[0], join(process.cwd(), 'dist-ui', 'index.html'));
-	  assert.deepEqual(handledChannels.sort(), [
+  assert.deepEqual(handledChannels.sort(), [
+	    'desktop:native-browser:back',
+	    'desktop:native-browser:forward',
+	    'desktop:native-browser:open',
+	    'desktop:native-browser:reload',
+	    'desktop:native-browser:screenshot',
+	    'desktop:native-browser:state',
 	    'platform:open-external',
 	    'platform:pick-directory',
 	    'platform:reveal-path',
@@ -156,6 +163,12 @@ test('R-DESK preload exposes only the narrow desktop bridge API', async () => {
 	  await api.getRuntimeConfig();
 	  await api.requestShutdown();
   await api.openExternal('https://example.com');
+  await api.openNativeBrowser('https://www.bing.com');
+  await api.nativeBrowserBack();
+  await api.nativeBrowserForward();
+  await api.nativeBrowserReload();
+  await api.getNativeBrowserState();
+  await api.captureNativeBrowserScreenshot();
   await api.revealPath('/tmp/example');
   await api.pickDirectory('/tmp/workspace');
 
@@ -166,17 +179,100 @@ test('R-DESK preload exposes only the narrow desktop bridge API', async () => {
 	    'runtime:config',
 	    'runtime:shutdown',
     'platform:open-external',
+    'desktop:native-browser:open',
+    'desktop:native-browser:back',
+    'desktop:native-browser:forward',
+    'desktop:native-browser:reload',
+    'desktop:native-browser:state',
+    'desktop:native-browser:screenshot',
     'platform:reveal-path',
     'platform:pick-directory',
   ]);
 	  assert.deepEqual(Object.keys(api).sort(), [
+	    'captureNativeBrowserScreenshot',
+	    'getNativeBrowserState',
 	    'getRuntimeConfig',
 	    'getRuntimeHealth',
     'getRuntimeReady',
+    'nativeBrowserBack',
+    'nativeBrowserForward',
+    'nativeBrowserReload',
     'openExternal',
+    'openNativeBrowser',
     'pickDirectory',
     'requestShutdown',
     'revealPath',
+  ]);
+});
+
+test('R-DESK native browser controller opens frame-blocked sites in an Electron-owned top-level window', async () => {
+  const events: string[] = [];
+  const clipboardImages: unknown[] = [];
+  class FakeNativeBrowserWindow {
+    webContents = {
+      currentUrl: '',
+      getURL: () => this.webContents.currentUrl,
+      canGoBack: () => true,
+      canGoForward: () => false,
+      goBack: () => events.push('goBack'),
+      goForward: () => events.push('goForward'),
+      reload: () => events.push('reload'),
+      async capturePage() {
+        return { toDataURL: () => 'data:image/png;base64,test' };
+      },
+    };
+
+    constructor(readonly options: ElectronBrowserWindowOptions) {}
+
+    async loadFile(): Promise<void> {}
+
+    async loadURL(url: string): Promise<void> {
+      this.webContents.currentUrl = url;
+      events.push(`loadURL:${url}`);
+    }
+
+    on(): void {}
+    setMenuBarVisibility(visible: boolean): void { events.push(`menu:${visible}`); }
+    show(): void { events.push('show'); }
+    focus(): void { events.push('focus'); }
+    isDestroyed(): boolean { return false; }
+  }
+
+  const controller = createDesktopNativeBrowserController({
+    BrowserWindow: FakeNativeBrowserWindow,
+    clipboard: {
+      writeImage(image) {
+        clipboardImages.push(image);
+        events.push('clipboard.writeImage');
+      },
+    },
+  });
+  const opened = await controller.open('www.bing.com');
+  const screenshot = await controller.screenshot();
+  const back = controller.back();
+  const forward = controller.forward();
+  const reload = controller.reload();
+
+  assert.equal(opened.ok, true);
+  assert.equal(opened.url, 'https://www.bing.com');
+  assert.equal(opened.surface, 'electron-browser-window');
+  assert.equal(screenshot.dataUrl, 'data:image/png;base64,test');
+  assert.equal(screenshot.clipboardWritten, true);
+  assert.equal(clipboardImages.length, 1);
+  assert.equal(back.canGoBack, true);
+  assert.equal(forward.canGoForward, false);
+  assert.equal(reload.ok, true);
+  assert.deepEqual(events, [
+    'menu:false',
+    'loadURL:https://www.bing.com',
+    'show',
+    'focus',
+    'clipboard.writeImage',
+    'goBack',
+    'focus',
+    'focus',
+    'reload',
+    'focus',
   ]);
 });
 

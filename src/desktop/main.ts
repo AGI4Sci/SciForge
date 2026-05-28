@@ -25,9 +25,30 @@ type ElectronIpcMainLike = {
   handle(channel: string, listener: (...args: unknown[]) => unknown): void;
 };
 
+type ElectronNativeBrowserWebContentsLike = {
+  getURL?(): string;
+  canGoBack?(): boolean;
+  canGoForward?(): boolean;
+  goBack?(): void;
+  goForward?(): void;
+  reload?(): void;
+  capturePage?(): Promise<{ toDataURL?(): string; toPNG?(): Uint8Array }>;
+};
+
+type ElectronClipboardLike = {
+  writeImage?(image: unknown): void;
+};
+
 type ElectronBrowserWindowLike = {
   loadFile(filePath: string): Promise<void>;
+  loadURL?(url: string): Promise<void>;
   on(event: string, listener: (...args: unknown[]) => void): void;
+  show?(): void;
+  focus?(): void;
+  close?(): void;
+  isDestroyed?(): boolean;
+  setMenuBarVisibility?(visible: boolean): void;
+  webContents?: ElectronNativeBrowserWebContentsLike;
 };
 
 type ElectronBrowserWindowConstructor = new(options: ElectronBrowserWindowOptions) => ElectronBrowserWindowLike;
@@ -38,8 +59,9 @@ export type ElectronBrowserWindowOptions = {
   minWidth: number;
   minHeight: number;
   show: boolean;
+  title?: string;
   webPreferences: {
-    preload: string;
+    preload?: string;
     contextIsolation: true;
     nodeIntegration: false;
     sandbox: true;
@@ -50,6 +72,7 @@ export type ElectronDesktopModule = {
   app: ElectronAppLike;
   BrowserWindow: ElectronBrowserWindowConstructor;
   ipcMain: ElectronIpcMainLike;
+  clipboard?: ElectronClipboardLike;
 };
 
 export type DesktopMainStartResult = {
@@ -79,6 +102,16 @@ export type DesktopRuntimeConfig = {
   appRoot: string;
   sidecarCwd: string;
   ports: RuntimeLauncherStartResult['ports'];
+};
+
+export type DesktopNativeBrowserState = {
+  ok: boolean;
+  surface: 'electron-browser-window';
+  url?: string;
+  canGoBack?: boolean;
+  canGoForward?: boolean;
+  clipboardWritten?: boolean;
+  reason?: string;
 };
 
 export type DesktopAppPaths = {
@@ -195,12 +228,13 @@ export function createElectronDesktopMainController(
 }
 
 export function registerDesktopIpcHandlers(input: {
-  electron: Pick<ElectronDesktopModule, 'ipcMain'>;
+  electron: Pick<ElectronDesktopModule, 'ipcMain' | 'BrowserWindow' | 'clipboard'>;
   launcher: Pick<ProductionRuntimeLauncher, 'health' | 'ready' | 'shutdown'>;
   launcherResult: RuntimeLauncherStartResult;
   runtimeConfig: DesktopRuntimeConfig;
   platformService: DesktopPlatformService;
 }): void {
+  const nativeBrowser = createDesktopNativeBrowserController(input.electron);
   input.electron.ipcMain.handle('runtime:health', () => input.launcher.health());
   input.electron.ipcMain.handle('runtime:ready', () => ({ ok: input.launcher.ready(), ready: input.launcher.ready() }));
   input.electron.ipcMain.handle('runtime:config', () => input.runtimeConfig);
@@ -213,6 +247,15 @@ export function registerDesktopIpcHandlers(input: {
     await input.platformService.openExternal(url);
     return { ok: true };
   });
+  input.electron.ipcMain.handle('desktop:native-browser:open', async (_event: unknown, url: unknown) => {
+    if (typeof url !== 'string') throw new Error('desktop:native-browser:open requires a URL string');
+    return nativeBrowser.open(url);
+  });
+  input.electron.ipcMain.handle('desktop:native-browser:back', () => nativeBrowser.back());
+  input.electron.ipcMain.handle('desktop:native-browser:forward', () => nativeBrowser.forward());
+  input.electron.ipcMain.handle('desktop:native-browser:reload', () => nativeBrowser.reload());
+  input.electron.ipcMain.handle('desktop:native-browser:state', () => nativeBrowser.state());
+  input.electron.ipcMain.handle('desktop:native-browser:screenshot', () => nativeBrowser.screenshot());
   input.electron.ipcMain.handle('platform:reveal-path', async (_event: unknown, path: unknown) => {
     if (typeof path !== 'string') throw new Error('platform:reveal-path requires a path string');
     await input.platformService.revealInFolder(path);
@@ -237,6 +280,106 @@ export function registerDesktopIpcHandlers(input: {
     if (result.canceled || !result.filePaths[0]) return { ok: false };
     return { ok: true, path: result.filePaths[0] };
   });
+}
+
+export function createDesktopNativeBrowserWindowOptions(): ElectronBrowserWindowOptions {
+  return {
+    width: 1280,
+    height: 900,
+    minWidth: 960,
+    minHeight: 640,
+    show: true,
+    title: 'SciForge 原生浏览器',
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  };
+}
+
+export function createDesktopNativeBrowserController(
+  electron: Pick<ElectronDesktopModule, 'BrowserWindow' | 'clipboard'>,
+) {
+  let window: ElectronBrowserWindowLike | undefined;
+
+  function currentWindow(): ElectronBrowserWindowLike | undefined {
+    if (window?.isDestroyed?.() === true) window = undefined;
+    return window;
+  }
+
+  function state(reason?: string): DesktopNativeBrowserState {
+    const active = currentWindow();
+    if (!active) return { ok: false, surface: 'electron-browser-window', reason: reason ?? 'native-browser-not-open' };
+    return {
+      ok: true,
+      surface: 'electron-browser-window',
+      url: active.webContents?.getURL?.() ?? undefined,
+      canGoBack: active.webContents?.canGoBack?.() ?? false,
+      canGoForward: active.webContents?.canGoForward?.() ?? false,
+      reason,
+    };
+  }
+
+  async function open(url: string): Promise<DesktopNativeBrowserState> {
+    const normalized = normalizeDesktopNativeBrowserUrl(url);
+    const active = currentWindow() ?? new electron.BrowserWindow(createDesktopNativeBrowserWindowOptions());
+    if (!window) {
+      window = active;
+      active.setMenuBarVisibility?.(false);
+      active.on('closed', () => {
+        window = undefined;
+      });
+    }
+    if (!active.loadURL) return { ok: false, surface: 'electron-browser-window', reason: 'native-browser-load-url-unavailable' };
+    await active.loadURL(normalized);
+    active.show?.();
+    active.focus?.();
+    return state();
+  }
+
+  return {
+    open,
+    state,
+    back(): DesktopNativeBrowserState {
+      const active = currentWindow();
+      if (active?.webContents?.canGoBack?.()) active.webContents.goBack?.();
+      active?.focus?.();
+      return state();
+    },
+    forward(): DesktopNativeBrowserState {
+      const active = currentWindow();
+      if (active?.webContents?.canGoForward?.()) active.webContents.goForward?.();
+      active?.focus?.();
+      return state();
+    },
+    reload(): DesktopNativeBrowserState {
+      const active = currentWindow();
+      active?.webContents?.reload?.();
+      active?.focus?.();
+      return state();
+    },
+    async screenshot(): Promise<DesktopNativeBrowserState & { mimeType?: 'image/png'; dataUrl?: string }> {
+      const active = currentWindow();
+      const image = await active?.webContents?.capturePage?.();
+      const dataUrl = image?.toDataURL?.();
+      let clipboardWritten = false;
+      if (image && electron.clipboard?.writeImage) {
+        electron.clipboard.writeImage(image);
+        clipboardWritten = true;
+      }
+      if (!dataUrl) return { ...state('native-browser-screenshot-unavailable') };
+      return { ...state(), mimeType: 'image/png', dataUrl, clipboardWritten };
+    },
+  };
+}
+
+function normalizeDesktopNativeBrowserUrl(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return 'about:blank';
+  if (/^(?:https?:|file:|about:)/i.test(trimmed)) return trimmed;
+  if (/^(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(?::\d+)?(?:\/|$)/i.test(trimmed)) return `http://${trimmed}`;
+  return `https://${trimmed}`;
 }
 
 function loadElectronRuntime(): ElectronDesktopModule {
