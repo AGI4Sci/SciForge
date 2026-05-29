@@ -1,7 +1,6 @@
 import { presentStreamEvent } from '../../streamEventPresentation';
 import type { AgentStreamEvent, GuidanceQueueRecord, NormalizedAgentResponse, SciForgeSession } from '../../domain';
 import type { BadgeVariant } from '../uiPrimitives';
-import { streamProcessTranscript } from './RunningWorkProcess';
 import { attachGuidanceQueueToResponse, attachProcessRecoveryToFailedSession } from './sessionTransforms';
 
 export function guidanceStatusLabel(status: GuidanceQueueRecord['status']) {
@@ -18,33 +17,22 @@ export function guidanceBadgeVariant(status: GuidanceQueueRecord['status']): Bad
 }
 
 export function attachStreamProcessToResponse(response: NormalizedAgentResponse, events: AgentStreamEvent[], guidanceQueue: GuidanceQueueRecord[] = []): NormalizedAgentResponse {
-  const transcript = streamProcessTranscript(events);
   const responseWithGuidance = attachGuidanceQueueToResponse(
     response,
     guidanceQueue,
     'deferred',
     '当前 run 已经在执行中，追加引导已接收并等待下一轮合并处理。',
   );
-  if (!transcript) return responseWithGuidance;
-  const expandable = [response.message.expandable, transcript].filter(Boolean).join('\n\n');
+  if (!events.length) return responseWithGuidance;
   return {
     ...responseWithGuidance,
-    message: {
-      ...responseWithGuidance.message,
-      expandable,
-    },
     run: {
       ...responseWithGuidance.run,
       raw: {
         ...(typeof responseWithGuidance.run.raw === 'object' && responseWithGuidance.run.raw !== null ? responseWithGuidance.run.raw : {}),
         streamProcess: {
           eventCount: events.length,
-          events: events.slice(-80).map((event) => ({
-            type: event.type,
-            label: event.label,
-            detail: presentStreamEvent(event).detail || presentStreamEvent(event).usageDetail,
-            createdAt: event.createdAt,
-          })),
+          events: events.slice(-80).map(nativeStreamEventRecord),
         },
       },
     },
@@ -52,23 +40,41 @@ export function attachStreamProcessToResponse(response: NormalizedAgentResponse,
 }
 
 export function attachStreamProcessToFailedSession(session: SciForgeSession, failedRunId: string, events: AgentStreamEvent[]): SciForgeSession {
-  const transcript = streamProcessTranscript(events);
   return attachProcessRecoveryToFailedSession({
     session,
     failedRunId,
-    transcript,
-    events: events.slice(-80).map((event) => ({
-      type: event.type,
-      label: event.label,
-      detail: presentStreamEvent(event).detail || presentStreamEvent(event).usageDetail,
-      createdAt: event.createdAt,
-    })),
+    events: events.slice(-80).map(nativeStreamEventRecord),
   });
+}
+
+function nativeStreamEventRecord(event: AgentStreamEvent) {
+  const presentation = presentStreamEvent(event);
+  const raw = isRecord(event.raw) ? event.raw : {};
+  return {
+    type: event.type,
+    label: event.label,
+    detail: presentation.detail || presentation.usageDetail,
+    createdAt: event.createdAt,
+    native: {
+      backend: stringField(raw.backend),
+      rawType: stringField(raw.type),
+      toolName: stringField(raw.toolName),
+      command: stringField(raw.command),
+      outputSummary: stringField(raw.outputSummary),
+      status: stringField(raw.status),
+      exitCode: numberField(raw.exitCode),
+      itemId: stringField(raw.itemId),
+      traceStepId: stringField(raw.traceStepId),
+      text: stringField(raw.text),
+      message: stringField(raw.message),
+    },
+  };
 }
 
 export function compactFailureNotice(value: string) {
   const primary = value
     .replace(/\n\s*工作过程摘要[:：][\s\S]*$/i, '')
+    .replace(/\n\s*Backend stream[:：][\s\S]*$/i, '')
     .replace(/\s+/g, ' ')
     .trim();
   if (!primary) return '任务未完成，执行过程已保存到运行详情。';
@@ -91,6 +97,18 @@ function looksLikeRawFailureNotice(value: string) {
     || /\bhttps?:\/\/[^\s"'<>]+/i.test(value)
     || /\bHTTP\s+(?:401|403|429|5\d\d)\b/i.test(value)
     || /\b(?:Invalid token|Unauthorized|Forbidden)\b/i.test(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function numberField(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 export function latestTokenUsage(events: AgentStreamEvent[]) {

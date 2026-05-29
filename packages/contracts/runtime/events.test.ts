@@ -187,6 +187,11 @@ test('runtime event projection exports stable fallback types and diagnostics', (
   assert.equal(PROJECT_TOOL_STARTED_EVENT_TYPE, 'project-tool-start');
   assert.equal(PROJECT_TOOL_DONE_EVENT_TYPE, 'project-tool-done');
   assert.equal(PROJECT_TOOL_FAILED_EVENT_TYPE, 'project-tool-failed');
+  assert.equal(normalizeRuntimeWorkspaceEventType('message_delta', {}), TEXT_DELTA_EVENT_TYPE);
+  assert.equal(normalizeRuntimeWorkspaceEventType('tool_started', {}), TOOL_CALL_EVENT_TYPE);
+  assert.equal(normalizeRuntimeWorkspaceEventType('tool_completed', {}), TOOL_RESULT_EVENT_TYPE);
+  assert.equal(normalizeRuntimeWorkspaceEventType('operation_progress', {}), PROCESS_PROGRESS_EVENT_TYPE);
+  assert.equal(normalizeRuntimeWorkspaceEventType('approval_requested', {}), HUMAN_APPROVAL_REQUIRED_EVENT_TYPE);
   assert.equal(runtimeStreamEventLabel('tool-call', 'workspace-runtime', 'read_artifact'), '调用 read_artifact');
   assert.equal(runtimeDetailIndicatesAbort('request cancelled by user'), true);
   assert.equal(projectToolFailureDetail('network down'), 'SciForge project tool unavailable: network down');

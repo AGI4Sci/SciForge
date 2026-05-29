@@ -1,5 +1,4 @@
 import type {
-  AgentStreamEvent,
   ScenarioInstanceId,
   ScenarioPackageRef,
   SciForgeMessage,
@@ -10,7 +9,6 @@ import type {
 } from '../../domain';
 import { makeId, nowIso } from '../../domain';
 import type { RunTerminationRecord } from '@sciforge-ui/runtime-contract/events';
-import { digestTextField } from './sessionPayloadText';
 
 export function appendFailedRunToSession({
   optimisticSession,
@@ -182,21 +180,13 @@ function uniqueStringRefs(values: unknown[]) {
 export function attachProcessRecoveryToFailedSession({
   session,
   failedRunId,
-  transcript,
   events,
 }: {
   session: SciForgeSession;
   failedRunId: string;
-  transcript: string;
-  events: Array<Pick<AgentStreamEvent, 'type' | 'label' | 'detail' | 'createdAt'>>;
+  events: Array<Record<string, unknown>>;
 }): SciForgeSession {
-  if (!transcript) return session;
-  const eventSummaries = events.slice(-24).map((event) => ({
-    type: event.type,
-    label: event.label,
-    createdAt: event.createdAt,
-    detailDigest: digestTextField(event.detail),
-  }));
+  if (!events.length) return session;
   return {
     ...session,
     runs: session.runs.map((run) => run.id === failedRunId
@@ -206,8 +196,7 @@ export function attachProcessRecoveryToFailedSession({
             ...(typeof run.raw === 'object' && run.raw !== null ? run.raw : {}),
             streamProcess: {
               eventCount: events.length,
-              summaryDigest: digestTextField(transcript),
-              eventSummaries,
+              events,
             },
           },
         }

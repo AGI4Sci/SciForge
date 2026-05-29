@@ -795,6 +795,166 @@
   margin-top: 8px;
 }
 
+.native-event-stream {
+  display: grid;
+  gap: 6px;
+  padding: 2px 0 2px 14px;
+  border-left: 1px solid rgba(0, 229, 160, 0.28);
+  color: var(--bio-200);
+}
+
+.native-event-stream.is-recorded {
+  border-left-color: rgba(121, 214, 255, 0.24);
+}
+
+.native-event-stream-head {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  color: var(--bio-300);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.native-event-stream-head strong,
+.native-event-stream-head span,
+.native-event-stream-head small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.native-event-stream-head strong {
+  color: var(--bio-050);
+  font-size: 12px;
+}
+
+.native-event-stream-head small {
+  margin-left: auto;
+  color: var(--bio-400);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.native-event-list {
+  display: grid;
+  gap: 3px;
+}
+
+.native-event-row {
+  min-width: 0;
+  color: var(--bio-200);
+}
+
+.native-event-row > summary {
+  min-width: 0;
+  min-height: 25px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 5px 8px;
+  padding: 2px 0;
+  cursor: pointer;
+  list-style: none;
+}
+
+.native-event-row > summary::-webkit-details-marker {
+  display: none;
+}
+
+.native-event-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: rgba(123, 147, 176, 0.75);
+}
+
+.native-event-row.active .native-event-dot {
+  background: var(--accent);
+  box-shadow: 0 0 12px rgba(0, 229, 160, 0.62);
+}
+
+.native-event-kind {
+  flex: 0 1 auto;
+  max-width: 148px;
+  color: var(--teal);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.native-event-title {
+  flex: 1 1 170px;
+  min-width: 0;
+  color: var(--bio-100);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.native-event-usage,
+.native-event-row time {
+  flex: 0 1 auto;
+  max-width: 100%;
+  color: var(--bio-400);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.native-event-expanded {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 4px 15px;
+  padding: 2px 0 3px 10px;
+  border-left: 1px solid rgba(121, 214, 255, 0.16);
+}
+
+.native-event-expanded pre {
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  color: var(--bio-200);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.native-event-audit-fold {
+  margin-left: 15px;
+  color: var(--bio-400);
+}
+
+.native-event-audit-fold > summary {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 8px;
+  align-items: center;
+  color: var(--bio-400);
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 10px;
+  list-style: none;
+}
+
+.native-event-audit-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.native-event-audit-fold small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .process-progress-card {
   display: grid;
   gap: 6px;

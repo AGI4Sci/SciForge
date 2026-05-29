@@ -1,8 +1,12 @@
 import type { AgentStreamEvent, SendAgentMessageInput } from '../../domain';
 import { makeId, nowIso } from '../../domain';
 import {
+  TEXT_DELTA_EVENT_TYPE,
+  TOOL_CALL_EVENT_TYPE,
+  TOOL_RESULT_EVENT_TYPE,
   WORKSPACE_RUNTIME_EVENT_TYPE,
   compactCapabilityForBackend,
+  normalizeRuntimeWorkspaceEventType,
   normalizeRuntimeCompactCapability,
   normalizeRuntimeContextCompactionStatus,
   normalizeRuntimeContextWindowSource,
@@ -116,8 +120,11 @@ export async function readWorkspaceToolStream(
   let error: string | undefined;
   let guiPresent: Record<string, unknown> | undefined;
   let guiAskUser: Record<string, unknown> | undefined;
+  const genericMessages: string[] = [];
   const rememberGuiIntent = (event: unknown) => {
     if (!isRecord(event)) return;
+    const assistantText = assistantTextFromStreamEventRecord('', event);
+    if (assistantText) genericMessages.push(assistantText);
     if (event.type === 'gui_present') guiPresent = event;
     if (event.type === 'gui_ask_user') guiAskUser = event;
     const computerUseGui = guiEventsFromComputerUseTuiHostActions(event);
@@ -133,7 +140,7 @@ export async function readWorkspaceToolStream(
       rememberGuiIntent(envelope.event);
       onEvent(envelope.event);
     }
-    if ('result' in envelope) result = withGuiIntentRuntimeResult(envelope.result, guiPresent, guiAskUser);
+    if ('result' in envelope) result = withStreamRuntimeResult(envelope.result, guiPresent, guiAskUser, genericMessages.join('\n').trim());
     if ('error' in envelope) error = asString(envelope.error) || JSON.stringify(envelope.error);
   }
   for (;;) {
@@ -147,17 +154,19 @@ export async function readWorkspaceToolStream(
     if (done) break;
   }
   if (buffer.trim()) consumeLine(buffer);
-  result = withGuiIntentRuntimeResult(result, guiPresent, guiAskUser);
+  result = withStreamRuntimeResult(result, guiPresent, guiAskUser, genericMessages.join('\n').trim());
   return { result, error };
 }
 
-function withGuiIntentRuntimeResult(
+function withStreamRuntimeResult(
   result: unknown,
   guiPresent: Record<string, unknown> | undefined,
   guiAskUser: Record<string, unknown> | undefined,
+  nativeMessage: string,
 ): unknown {
   if (guiAskUser) return withGuiAskUserRuntimeResult(result, guiAskUser, guiPresent);
   if (guiPresent) return withGuiPresentRuntimeResult(result, guiPresent);
+  if (nativeMessage.trim()) return withAssistantMessageRuntimeResult(result, nativeMessage);
   return result;
 }
 
@@ -198,12 +207,8 @@ async function readWorkspaceToolSse(
     }
     onEvent(data);
     if (isRecord(data)) {
-      if ((eventName === 'message_delta' || data.type === 'message_delta') && asString(data.text)) {
-        genericMessages.push(asString(data.text)!);
-      }
-      if ((eventName === 'message' || data.type === 'message') && asString(data.text)) {
-        genericMessages.push(asString(data.text)!);
-      }
+      const assistantText = assistantTextFromStreamEventRecord(eventName, data);
+      if (assistantText) genericMessages.push(assistantText);
       if (eventName === 'gui_present' || data.type === 'gui_present') {
         guiPresent = data;
       }
@@ -224,12 +229,8 @@ async function readWorkspaceToolSse(
         return;
       }
       const nativeMessage = genericMessages.join('\n').trim();
-      if (isRuntimeCodexDoneEvent(data) && nativeMessage) {
-        result = withNativeCodexMessageRuntimeResult(data, nativeMessage);
-        return;
-      }
-      if (!isRuntimeCodexDoneEvent(data)) {
-        result = withVisibleRuntimeMessage(data, nativeMessage);
+      if (nativeMessage) {
+        result = withAssistantMessageRuntimeResult(data, nativeMessage);
         return;
       }
       const failed = runtimeCodexMissingGuiPresentFailure(data);
@@ -250,6 +251,29 @@ async function readWorkspaceToolSse(
   }
   if (buffer.trim()) consumeBlock(buffer);
   return { result, error };
+}
+
+function assistantTextFromStreamEventRecord(eventName: string, data: Record<string, unknown>): string | undefined {
+  const eventType = asString(data.type) ?? asString(data.kind) ?? eventName;
+  const normalized = normalizeRuntimeWorkspaceEventType(eventType, data);
+  const lowerEventName = eventName.trim().toLowerCase();
+  const isAssistantText = normalized === 'text-delta'
+    || normalized === 'output'
+    || lowerEventName === 'message'
+    || lowerEventName === 'message_delta'
+    || lowerEventName === 'text-delta'
+    || lowerEventName === 'text_delta';
+  if (!isAssistantText) return undefined;
+  return asString(data.text)
+    ?? asString(data.delta)
+    ?? asString(data.detail)
+    ?? asString(data.message);
+}
+
+function withAssistantMessageRuntimeResult(result: unknown, message: string): unknown {
+  if (!message.trim() || !isRecord(result)) return result;
+  if (isRuntimeCodexDoneEvent(result)) return withNativeCodexMessageRuntimeResult(result, message);
+  return withVisibleRuntimeMessage(result, message);
 }
 
 function withVisibleRuntimeMessage(result: unknown, message: string): unknown {
@@ -895,7 +919,8 @@ export function normalizeWorkspaceRuntimeEvent(raw: unknown): AgentStreamEvent {
   const record = isRecord(raw) ? raw : {};
   const interactionProgressRecord = runtimeInteractionProgressEventFromCompactRecord(record);
   const interactionProgress = interactionProgressRecord ? runtimeInteractionProgressPresentation(interactionProgressRecord) : undefined;
-  const type = interactionProgressRecord?.type ?? (asString(record.type) || asString(record.kind) || WORKSPACE_RUNTIME_EVENT_TYPE);
+  const rawType = asString(record.type) || asString(record.kind) || WORKSPACE_RUNTIME_EVENT_TYPE;
+  const type = interactionProgressRecord?.type ?? normalizeRuntimeWorkspaceEventType(rawType, record);
   const source = asString(record.source);
   const toolName = asString(record.toolName);
   const usage = normalizeTokenUsage(record.usage)
@@ -909,9 +934,13 @@ export function normalizeWorkspaceRuntimeEvent(raw: unknown): AgentStreamEvent {
   const auditOnlyDetail = isRuntimeAuditOnlyEvent(record) ? runtimeAuditOnlyEventSummary(record) : undefined;
   const providerMessageDetail = runtimeCodexProviderMessageSummary(record);
   const computerUseGuiDetail = computerUseTuiHostActionsSummary(record);
-  const baseDetail = auditOnlyDetail
+  const textDeltaDetail = type === TEXT_DELTA_EVENT_TYPE ? safeVisibleDetail(record.text, rawFallbackDetail) : undefined;
+  const toolLifecycleDetail = runtimeToolLifecycleDetail(record, type, toolName);
+  const baseDetail = textDeltaDetail
+    || auditOnlyDetail
     || providerMessageDetail
     || computerUseGuiDetail
+    || toolLifecycleDetail
     || interactionProgress?.detail
     || safeVisibleDetail(record.detail, rawFallbackDetail)
     || safeVisibleDetail(record.message, rawFallbackDetail)
@@ -936,6 +965,44 @@ export function normalizeWorkspaceRuntimeEvent(raw: unknown): AgentStreamEvent {
   };
 }
 
+function runtimeToolLifecycleDetail(record: Record<string, unknown>, type: string, toolName: string | undefined) {
+  if (type !== TOOL_CALL_EVENT_TYPE && type !== TOOL_RESULT_EVENT_TYPE) return undefined;
+  const command = boundedRuntimeLifecycleText(record.command);
+  const outputSummary = boundedRuntimeLifecycleText(record.outputSummary ?? record.output_summary);
+  const status = asString(record.status);
+  const exitCode = asNumber(record.exitCode ?? record.exit_code);
+  const phase = type === TOOL_CALL_EVENT_TYPE ? 'started' : 'completed';
+  const title = command
+    ? `Shell command ${phase}: ${command}`
+    : toolName
+      ? `Tool ${phase}: ${toolName}`
+      : `Tool ${phase}.`;
+  const suffix = [
+    status ? `status=${status}` : undefined,
+    exitCode !== undefined ? `exit=${exitCode}` : undefined,
+    outputSummary ? `output=${outputSummary}` : undefined,
+  ].filter(Boolean);
+  return suffix.length ? `${title} (${suffix.join(', ')})` : title;
+}
+
+function boundedRuntimeLifecycleText(value: unknown) {
+  const text = asString(value);
+  if (!text) return undefined;
+  const redacted = text
+    .replace(/\bBearer\s+([A-Za-z0-9._~+/=-]{8,})/gi, 'Bearer [redacted-secret]')
+    .replace(
+      /\b(api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password|authorization)\b\s*[:=]\s*["']?([^"'\s,;)}\]]{8,})/gi,
+      (_match, label: string) => `${label}=[redacted-secret]`,
+    )
+    .replace(/\b(?:sk|rk|pk)-[A-Za-z0-9_-]{8,}\b/g, '[redacted-secret]')
+    .replace(/https?:\/\/[^\s"'<>\\)]+/gi, '[redacted-url]')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!redacted || runtimeTextLooksAuditOnly(redacted)) return undefined;
+  if (redacted.length <= 320) return redacted;
+  return `${redacted.slice(0, 284).replace(/\s+\S*$/, '')} ... ${redacted.slice(-24)}`;
+}
+
 function computerUseTuiHostActionsSummary(record: Record<string, unknown>) {
   if (asString(record.type) !== 'computer-use.tui-host-actions') return undefined;
   const actionsEnvelope = isRecord(record.detail) ? record.detail : parseJsonObject(record.detail);
@@ -948,7 +1015,7 @@ function computerUseTuiHostActionsSummary(record: Record<string, unknown>) {
 
 function runtimeCodexProviderMessageSummary(record: Record<string, unknown>) {
   const type = asString(record.type)?.toLowerCase();
-  if (type !== 'message' && type !== 'message_delta') return undefined;
+  if (type !== 'message') return undefined;
   if (!isRuntimeCodexEventRecord(record)) return undefined;
   return 'Runtime Codex native assistant message recorded; the final assistant answer can render as the primary reply, while raw JSONL, stderr, and plugin diagnostics stay folded in the run audit.';
 }

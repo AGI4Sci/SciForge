@@ -192,6 +192,51 @@ test('execution process uses projection events instead of raw audit execution un
   assertNoInternalTerms(html);
 });
 
+test('execution process replays backend native stream without SciForge summary folds', () => {
+  const html = renderToStaticMarkup(createElement(RunExecutionProcess, {
+    runId: 'run-native-stream',
+    session: {
+      ...session([]),
+      runs: [{
+        id: 'run-native-stream',
+        scenarioId: 'literature-evidence-review',
+        status: 'completed',
+        prompt: 'native stream please',
+        response: 'done',
+        createdAt: '2026-05-25T00:00:00.000Z',
+        raw: {
+          streamProcess: {
+            eventCount: 4,
+            events: [
+              nativeEvent('text-delta', 'Assistant text', { rawType: 'text-delta', text: 'Reading PROJECT.md directly from the backend stream.' }),
+              nativeEvent('tool-call', 'Tool call', { rawType: 'tool_started', toolName: 'read_file', status: 'running' }),
+              nativeEvent('tool-result', 'Tool result', { rawType: 'tool_completed', toolName: 'read_file', status: 'completed', text: 'PROJECT.md loaded' }),
+              nativeEvent('human-approval-required', 'Approval', { rawType: 'approval_requested', text: 'Continue with native presentation?' }),
+            ],
+          },
+        },
+      }],
+      executionUnits: [executionUnit({
+        id: 'EU-legacy',
+        tool: 'legacy.summary',
+        status: 'repair-needed',
+        failureReason: 'LEGACY_SUMMARY_SHOULD_NOT_RENDER',
+      })],
+    },
+    onObjectFocus: () => undefined,
+  }));
+
+  assert.match(html, /data-process-source="native-event-stream"/);
+  assert.match(html, /Codex native stream/);
+  assert.match(html, /Codex assistant/);
+  assert.match(html, /Codex tool/);
+  assert.match(html, /Codex result/);
+  assert.match(html, /Codex approval/);
+  assert.match(html, /Reading PROJECT\.md directly from the backend stream/);
+  assert.doesNotMatch(html, /<span class="cursor-step-kind">(?:过程|验证|恢复线索|诊断)<\/span>/);
+  assert.doesNotMatch(html, /LEGACY_SUMMARY_SHOULD_NOT_RENDER|legacy\.summary/);
+});
+
 test('execution process distinguishes verification states from execution success', () => {
   const html = renderProcess([
     executionUnit({ id: 'ordinary', status: 'done' }),
@@ -319,6 +364,19 @@ function executionUnit(overrides: Partial<RuntimeExecutionUnit>): RuntimeExecuti
     hash: 'hash',
     runId: 'run-1',
     ...overrides,
+  };
+}
+
+function nativeEvent(type: string, label: string, native: Record<string, string>) {
+  return {
+    type,
+    label,
+    detail: native.text,
+    createdAt: '2026-05-25T00:00:01.000Z',
+    native: {
+      backend: 'codex-app-server',
+      ...native,
+    },
   };
 }
 

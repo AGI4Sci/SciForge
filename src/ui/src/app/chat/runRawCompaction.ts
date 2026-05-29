@@ -39,10 +39,6 @@ export function compactRunRawForRequestPayload(raw: unknown, limits: RunRawCompa
     streamProcess: streamProcess
       ? {
           eventCount: streamProcess.eventCount,
-          summaryDigest: compactDigestField(streamProcess.summaryDigest),
-          eventTypes: Array.isArray(streamProcess.events)
-            ? streamProcess.events.slice(-24).map((event) => compactRawEventSummary(event)).filter(Boolean)
-            : undefined,
         }
       : undefined,
   };
@@ -97,10 +93,6 @@ function compactInlineValue(value: unknown, maxChars: number): { value: unknown;
   }
 }
 
-function clipText(value: string, maxChars: number) {
-  return value.length > maxChars ? `${value.slice(0, maxChars)}...[truncated]` : value;
-}
-
 function digestTextField(value: unknown) {
   if (typeof value !== 'string' || !value.trim()) return undefined;
   return {
@@ -108,18 +100,6 @@ function digestTextField(value: unknown) {
     chars: value.length,
     hash: stableTextHash(value),
     refs: refsFromRawValue(value).slice(0, 12),
-  };
-}
-
-function compactDigestField(value: unknown) {
-  const record = recordField(value);
-  const hash = stringField(record.hash);
-  if (!hash) return undefined;
-  return {
-    omitted: stringField(record.omitted) ?? 'text-body',
-    chars: typeof record.chars === 'number' ? record.chars : undefined,
-    hash,
-    refs: Array.isArray(record.refs) ? record.refs.filter((ref): ref is string => typeof ref === 'string').slice(0, 12) : undefined,
   };
 }
 

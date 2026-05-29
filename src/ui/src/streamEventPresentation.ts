@@ -42,6 +42,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export type StreamEventImportance = 'key' | 'background' | 'debug';
 export type StreamEventTone = 'info' | 'warning' | 'danger' | 'success' | 'muted';
 export type StreamWorklogOperationKind = WorkEventKind;
+export type BackendPresentationProfileId = 'sciforge-default' | 'codex-cli-like' | 'claude-code-like';
+
+export interface StreamEventPresentationOptions {
+  profile?: BackendPresentationProfileId;
+}
 
 export interface StreamEventPresentation {
   typeLabel: string;
@@ -73,11 +78,12 @@ export interface StreamWorklogPresentation {
   initiallyCollapsed: boolean;
 }
 
-export function presentStreamEvent(event: AgentStreamEvent): StreamEventPresentation {
+export function presentStreamEvent(event: AgentStreamEvent, options: StreamEventPresentationOptions = {}): StreamEventPresentation {
+  const profile = resolveBackendPresentationProfile(event, options.profile);
   const detail = readableStreamEventDetail(event);
   const usageDetail = formatAgentTokenUsage(event.usage);
-  const importance = streamEventImportance(event, detail);
-  const typeLabel = streamEventTypeLabel(event.type, event, detail);
+  const importance = streamEventImportance(event, detail, profile);
+  const typeLabel = streamEventTypeLabel(event.type, event, detail, profile);
   const tone = streamEventTone(event.type, importance, event);
   return {
     typeLabel,
@@ -87,8 +93,8 @@ export function presentStreamEvent(event: AgentStreamEvent): StreamEventPresenta
     importance,
     tone,
     uiClass: streamEventUiClass(event.type, importance),
-    initiallyCollapsed: importance !== 'key',
-    visibleInRunningMessage: importance === 'key' && Boolean(detail || usageDetail),
+    initiallyCollapsed: streamEventInitiallyCollapsed(event, importance, profile),
+    visibleInRunningMessage: streamEventVisibleInRunningMessage(event, importance, detail, usageDetail, profile),
   };
 }
 
@@ -98,11 +104,12 @@ export function presentStreamWorklog(
     limit?: number;
     guidanceCount?: number;
     counts?: ReturnType<typeof streamEventCounts>;
+    profile?: BackendPresentationProfileId;
   } = {},
 ): StreamWorklogPresentation {
-  const counts = options.counts ?? streamEventCounts(events);
-  const operationCounts = worklogOperationCounts(events);
-  const entries = latestWorklogEntries(events, options.limit ?? 48);
+  const counts = options.counts ?? streamEventCounts(events, { profile: options.profile });
+  const operationCounts = worklogOperationCounts(events, options.profile);
+  const entries = latestWorklogEntries(events, options.limit ?? 48, options.profile);
   return {
     summary: summarizeStructuredWorklog(entries) || summarizeWorklog(operationCounts, counts, options.guidanceCount ?? 0),
     entries,
@@ -112,10 +119,10 @@ export function presentStreamWorklog(
   };
 }
 
-export function latestWorklogEntries(events: AgentStreamEvent[], limit: number): StreamWorklogEntry[] {
+export function latestWorklogEntries(events: AgentStreamEvent[], limit: number, profile?: BackendPresentationProfileId): StreamWorklogEntry[] {
   const seen = new Set<string>();
   return events
-    .map(worklogEntryForEvent)
+    .map((event) => worklogEntryForEvent(event, { profile }))
     .filter((entry) => {
       const progressKey = isRecord(entry.event.raw) && isRecord(entry.event.raw.progress)
         ? [entry.event.raw.progress.phase, entry.event.raw.progress.title, entry.event.raw.progress.detail].join(':')
@@ -130,8 +137,8 @@ export function latestWorklogEntries(events: AgentStreamEvent[], limit: number):
     .slice(-limit);
 }
 
-export function worklogEntryForEvent(event: AgentStreamEvent): StreamWorklogEntry {
-  const presentation = presentStreamEvent(event);
+export function worklogEntryForEvent(event: AgentStreamEvent, options: StreamEventPresentationOptions = {}): StreamWorklogEntry {
+  const presentation = presentStreamEvent(event, options);
   const structured = structuredWorkEventSummary(event);
   const interactionProgress = interactionProgressSummary(event);
   const operationKind = interactionProgress?.operationKind ?? classifyWorkEvent(event, presentation.detail, presentation.shortDetail);
@@ -147,20 +154,20 @@ export function worklogEntryForEvent(event: AgentStreamEvent): StreamWorklogEntr
   };
 }
 
-export function latestRunningEvent(events: AgentStreamEvent[]) {
-  const latestKey = [...events].reverse().find((event) => presentStreamEvent(event).visibleInRunningMessage);
-  if (latestKey) return presentStreamEvent(latestKey).detail || presentStreamEvent(latestKey).usageDetail;
+export function latestRunningEvent(events: AgentStreamEvent[], options: StreamEventPresentationOptions = {}) {
+  const latestKey = [...events].reverse().find((event) => presentStreamEvent(event, options).visibleInRunningMessage);
+  if (latestKey) return presentStreamEvent(latestKey, options).detail || presentStreamEvent(latestKey, options).usageDetail;
   const latestBackground = [...events].reverse().find((event) => {
-    const presentation = presentStreamEvent(event);
+    const presentation = presentStreamEvent(event, options);
     return presentation.importance !== 'debug' && readableStreamEventDetail(event);
   });
   return latestBackground ? '后台正在探索或执行，过程日志已折叠。' : undefined;
 }
 
-export function streamEventCounts(events: AgentStreamEvent[]) {
+export function streamEventCounts(events: AgentStreamEvent[], options: StreamEventPresentationOptions = {}) {
   return events.reduce(
     (counts, event) => {
-      const presentation = presentStreamEvent(event);
+      const presentation = presentStreamEvent(event, options);
       counts.total += 1;
       counts[presentation.importance] += 1;
       return counts;
@@ -169,10 +176,10 @@ export function streamEventCounts(events: AgentStreamEvent[]) {
   );
 }
 
-function worklogOperationCounts(events: AgentStreamEvent[]) {
+function worklogOperationCounts(events: AgentStreamEvent[], profile?: BackendPresentationProfileId) {
   return events.reduce(
     (memo, event) => {
-      const presentation = presentStreamEvent(event);
+      const presentation = presentStreamEvent(event, { profile });
       const kind = interactionProgressSummary(event)?.operationKind ?? classifyWorkEvent(event, presentation.detail, presentation.shortDetail);
       memo.total += 1;
       memo[kind] += 1;
@@ -285,11 +292,13 @@ export function readableStreamEventDetail(event: AgentStreamEvent) {
   return usageDetail ? detail.replace(` | ${usageDetail}`, '').replace(usageDetail, '').trim() : detail;
 }
 
-function streamEventImportance(event: AgentStreamEvent, detail: string): StreamEventImportance {
+function streamEventImportance(event: AgentStreamEvent, detail: string, profile: BackendPresentationProfileId = 'sciforge-default'): StreamEventImportance {
   const type = event.type.toLowerCase();
   const interactionProgress = interactionProgressSummary(event);
   const runningChatAuditImportance = streamImportanceForRunningChatAudit(event);
   if (runningChatAuditImportance) return runningChatAuditImportance;
+  const profileImportance = streamImportanceForBackendProfile(event, profile);
+  if (profileImportance) return profileImportance;
   if (isRawRuntimeAuditEvent(event)) return 'debug';
   if (interactionProgress) return interactionProgress.importance;
   const structured = structuredWorkEventSummary(event);
@@ -366,7 +375,9 @@ function isRunningChatInternalEvent(event: AgentStreamEvent) {
   return false;
 }
 
-function streamEventTypeLabel(type: string, event?: AgentStreamEvent, detail = '') {
+function streamEventTypeLabel(type: string, event?: AgentStreamEvent, detail = '', profile: BackendPresentationProfileId = 'sciforge-default') {
+  const profileLabel = event ? streamEventTypeLabelForBackendProfile(type, event, profile) : undefined;
+  if (profileLabel) return profileLabel;
   const interactionProgress = event ? interactionProgressSummary(event) : undefined;
   if (interactionProgress) return interactionProgress.typeLabel;
   const structured = event ? structuredWorkEventSummary(event) : undefined;
@@ -383,6 +394,89 @@ function streamEventTypeLabel(type: string, event?: AgentStreamEvent, detail = '
   if (type === PROCESS_PROGRESS_EVENT_TYPE) return '工作过程';
   if (type === 'codex-runtime-run') return 'Codex Runtime';
   return type;
+}
+
+export function resolveBackendPresentationProfile(
+  event: AgentStreamEvent | undefined,
+  explicit?: BackendPresentationProfileId,
+): BackendPresentationProfileId {
+  if (explicit) return explicit;
+  const raw = isRecord(event?.raw) ? event.raw : undefined;
+  const backend = stringField(raw?.backend)
+    ?? (isRecord(raw?.event) ? stringField(raw.event.backend) : undefined)
+    ?? (isRecord(raw?.raw) ? stringField(raw.raw.backend) : undefined);
+  if (backend === 'codex-exec-json') return 'codex-cli-like';
+  if (backend === 'claude-stream-json') return 'claude-code-like';
+  return 'sciforge-default';
+}
+
+function streamImportanceForBackendProfile(
+  event: AgentStreamEvent,
+  profile: BackendPresentationProfileId,
+): StreamEventImportance | undefined {
+  const type = event.type.toLowerCase();
+  const raw = isRecord(event.raw) ? event.raw : {};
+  const status = stringField(raw.status)?.toLowerCase() ?? '';
+  if (profile === 'codex-cli-like') {
+    if (type === 'audit' || type === 'run_started' || status === 'raw-jsonl' || status === 'stderr') return 'debug';
+    if (type === 'tool_started' || type === 'tool_completed') return 'background';
+  }
+  if (profile === 'claude-code-like') {
+    if (type === 'audit' || type === 'run_started') return 'debug';
+    if (type === 'approval_requested' || type === 'gui_ask_user') return 'key';
+    if (type === 'tool_started' || type === 'tool_completed') return 'background';
+    if (type === 'message_delta') return 'background';
+  }
+  return undefined;
+}
+
+function streamEventTypeLabelForBackendProfile(
+  type: string,
+  event: AgentStreamEvent,
+  profile: BackendPresentationProfileId,
+): string | undefined {
+  const normalizedType = type.toLowerCase();
+  if (profile === 'codex-cli-like') {
+    if (normalizedType === 'run_started') return 'Codex CLI';
+    if (normalizedType === 'tool_started') return 'Codex tool';
+    if (normalizedType === 'tool_completed') return 'Codex tool done';
+    if (normalizedType === 'message_delta') return 'Codex delta';
+    if (normalizedType === 'message') return 'Codex message';
+    if (normalizedType === 'audit') return 'Codex audit';
+  }
+  if (profile === 'claude-code-like') {
+    if (normalizedType === 'run_started') return 'Claude Code';
+    if (normalizedType === 'tool_started') return 'Claude tool';
+    if (normalizedType === 'tool_completed') return 'Claude tool done';
+    if (normalizedType === 'approval_requested' || normalizedType === 'gui_ask_user') return 'Claude approval';
+    if (normalizedType === 'approval_resolved') return 'Claude approval done';
+    if (normalizedType === 'message_delta') return 'Claude delta';
+    if (normalizedType === 'message') return 'Claude message';
+  }
+  if (resolveBackendPresentationProfile(event, undefined) !== 'sciforge-default' && normalizedType === 'audit') return 'Backend audit';
+  return undefined;
+}
+
+function streamEventInitiallyCollapsed(
+  event: AgentStreamEvent,
+  importance: StreamEventImportance,
+  profile: BackendPresentationProfileId,
+) {
+  if (profile === 'codex-cli-like' && ['audit', 'run_started'].includes(event.type.toLowerCase())) return true;
+  if (profile === 'claude-code-like' && event.type.toLowerCase() === 'audit') return true;
+  return importance !== 'key';
+}
+
+function streamEventVisibleInRunningMessage(
+  event: AgentStreamEvent,
+  importance: StreamEventImportance,
+  detail: string,
+  usageDetail: string,
+  profile: BackendPresentationProfileId,
+) {
+  if (profile === 'codex-cli-like' && ['audit', 'run_started'].includes(event.type.toLowerCase())) return false;
+  if (profile === 'claude-code-like' && event.type.toLowerCase() === 'audit') return false;
+  return importance === 'key' && Boolean(detail || usageDetail);
 }
 
 function streamEventTone(type: string, importance: StreamEventImportance, event?: AgentStreamEvent): StreamEventTone {

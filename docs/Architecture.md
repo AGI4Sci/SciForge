@@ -1,12 +1,12 @@
 # SciForge 架构
 
-最后更新：2026-05-24
+最后更新：2026-05-29
 
 ## 北极星
 
 SciForge 是 TUI agent 的 GUI extension，不是 agent host。
 
-> **TUI / agent host 拥有全部任务逻辑；GUI 把用户意图变成文本，并把自己作为 intent-based `gui.*` extension 暴露给 TUI。**
+> **TUI / agent host 拥有全部任务逻辑；GUI 把用户意图变成文本，并把自己作为 `module.*` GUI extension 暴露给 TUI；`gui.*` 只作为迁移 shim。**
 
 Codex backend 负责上下文、记忆、工具、插件、算法、修复和执行。SciForge 长期只支持 Codex backend；DeepSeek `deepseek-v4-flash` 是默认 model provider，而不是另一个 backend。SciForge GUI 负责人体工学输入、可视化展示、确认、输入收集和焦点控制。
 
@@ -17,14 +17,14 @@ GUI Shell
   将用户手势翻译成文本
   维护语义 GUI event bus 和 hot-region projection
   暴露只读虚拟 GUI resource tree 供 TUI 探测状态
-  向 TUI agent 暴露 intent-based gui.* tools
+  向 TUI agent 暴露 GUI module intents；legacy gui.* 只在 adapter shim 中存在
   协商 placement、timing、conflicts 和 rendering
 
 TUI Agent Host
   接收文本
   拥有 reasoning、command parsing、context、memory、planning 和 repair
   使用原生 plugins / skills / tools / MCP / providers
-  有 presentation 或 user-interaction intent 时调用 gui.* tools
+  有 presentation 或 user-interaction intent 时调用 GUI module intents
 
 Native Agent Extensions
   capability discovery、scientific algorithms、policy/harness、providers、
@@ -32,6 +32,71 @@ Native Agent Extensions
   只向 TUI Agent Host 暴露原生 tool/plugin/MCP/provider/worker surface
   不直接 import 或调用 GUI implementation
 ```
+
+## Agent Host Semantic Pipeline
+
+SciForge 的跨模块组合采用 Agent Host Semantic Pipeline，而不是让 GUI 或 runtime 成为第二个 agent host。
+
+> **Agent Host 负责编排；模块只暴露统一的标准函数；复杂功能通过 typed semantic pipeline 组合完成；GUI 也是一个特殊模块。**
+
+这借鉴 Linux 管道的小工具组合思想，但管道中传递的不是裸字节流，而是 typed envelope、resource ref、operation result、approval request 和可审计 trace。
+
+| 角色 | 职责 |
+|---|---|
+| Agent Host | Codex app-server 或 Claude Code 等成熟 agent host。负责推理、规划、模块选择、调用顺序、重试、取消、repair 和 pipeline trace。 |
+| Module | 单步能力提供者。只通过标准函数暴露资源、能力和意图，不直接调用其它模块。 |
+| Runtime Adapter | 把 Codex app-server、Claude stream-json、MCP 或本地进程事件规范化为 SciForge 内部事件和 trace。 |
+| GUI Module | 特殊模块。提供热状态、展示、确认、用户输入和 presentation autonomy，但不拥有任务推理或 capability ranking。 |
+
+所有暴露给 Agent Host 的边界模块都必须通过同名函数进入；内部 helper、纯算法函数、React component、validator 和 package-private adapter 不需要直接实现这组函数。在运行形态上，可以是每个模块实现同名 handler，也可以是一个中央 dispatcher 接收 `moduleId` 后转发。对 Agent Host 来说，canonical public surface 始终只有：
+
+```text
+module.describe
+module.query
+module.read
+module.invoke
+```
+
+语义边界：
+
+| 函数 | 语义 | 副作用 |
+|---|---|---|
+| `module.describe` | 发现模块、resource kind、intent、权限、成本、延迟和可选 facet。 | 无 |
+| `module.query` | 查找候选对象、能力、记忆、skill、资源或动作入口。 | 无 |
+| `module.read` | 读取一个具体 ref 的小型语义内容或 metadata。 | 无 |
+| `module.invoke` | 请求模块执行一个明确 intent。可能返回结果、approval request 或 operation ref。 | 可有 |
+
+`module.describe` 是唯一硬必备能力。模块如果不支持 `query`、`read` 或 `invoke`，必须在 `describe` 中声明不支持；Host 对未声明能力的调用应 fail closed，而不是猜测 fallback。
+
+`list/search` 收敛为 `query`，`stat` 收敛为 `read({ includeMeta: true })`，`watch/subscribe/present/ask_user/apply_batch` 收敛为特定 `invoke` intent。这样公共函数少，但能力不被削弱。
+
+`events`、`refs`、`approval`、`subscription/watch` 和 `batch` 是按需 facet，不是所有模块的必备项。它们必须能被 `module.describe` 查询到；没有被声明的 facet，Agent Host 不得假设存在。
+
+| Facet | 何时需要 | 例子 |
+|---|---|---|
+| `events` | 长任务、实时进度、partial message、tool lifecycle。 | browser run、computer-use、Claude stream-json、Codex app-server turn。 |
+| `refs` | 大 payload、敏感内容、可复用对象、审计证据。 | file ref、artifact ref、trace ref、memory ref、screenshot ref。 |
+| `approval` | 有外部副作用、高风险写入、发送、删除、支付、授权。 | connector send、desktop input、workspace destructive action。 |
+| `subscription` | 热状态或缓存变化。 | GUI hot region、browser tab state、long-running index status。 |
+| `batch` | 多步 GUI-local transaction 或需要 revision/precondition。 | `gui.apply_batch`、bulk annotation update。 |
+
+推荐的 `describe` 输出至少包含 module id/title/summary、resource kinds/ref prefixes、intent names/side effect/approval/operation-return flags、supported facets 和 inline/latency limits。具体注册仍走 Codex dynamic tools、MCP、Claude Code MCP tools 或本地 adapter；这不是新的 plugin runtime。
+
+跨模块交互由 Agent Host 组合，不允许模块之间互相 import 或直接调用：
+
+```text
+module.query(memory, "用户之前如何定义 GUI-TUI 边界")
+  -> module.read(memoryRef)
+  -> module.query(skills, "pdf extraction")
+  -> module.invoke(capabilities, "plan", ...)
+  -> module.invoke(actions, "run", ...)
+  -> module.invoke(verifier, "check", ...)
+  -> module.invoke(gui, "present", ...)
+```
+
+默认是 trace-first：Agent Host 可以隐式组合模块，但必须记录结构化 pipeline trace；高风险、长任务、跨外部系统或多副作用流程，应先生成显式 pipeline plan。GUI 可以展示 pipeline trace、approval request 和运行状态，但不决定 pipeline。模块可以返回 suggested next steps，但下一步是否执行由 Agent Host 决定。
+
+GUI 模块的 canonical 调用也是 `module.*`。迁移期只能在 adapter shim 中继续暴露 host-specific `gui.*` alias，例如 `gui.present`、`gui.read`、`gui.search`。稳定设计以 `module.describe/query/read/invoke` 为主接口，`gui.*` 只是 GUI 模块的兼容映射。
 
 ## 两个方向
 
@@ -141,20 +206,19 @@ TUI 使用原子读操作获取状态：
 
 | 操作 | 作用 |
 |---|---|
-| `gui.list(path)` | 列出可见的 GUI resource 子节点。 |
-| `gui.read(path)` | 读取某个 resource 的语义快照。 |
-| `gui.search(query, scope)` | 在语义索引里搜索 ref、标题、可见文本、action label。 |
-| `gui.stat(path)` | 获取 revision、更新时间、大小、披露级别和权限。 |
-| `gui.watch(path)` | 订阅语义变化事件，而不是低级 DOM 事件。 |
+| `module.query({ moduleId: 'gui', scope })` | 列出或搜索可见 GUI resource 子节点。 |
+| `module.read({ ref: 'gui:/...' })` | 读取某个 resource 的语义快照。 |
+| `module.read({ ref, includeMeta: true })` | 获取 revision、更新时间、大小、披露级别和权限。 |
+| `module.invoke({ moduleId: 'gui', intent: 'subscribe' })` | 订阅语义变化事件，而不是低级 DOM 事件。 |
 
-如果目标 TUI host 支持 MCP resources、LSP-like resources 或原生 context provider，应优先复用这些机制；否则把同名操作作为 `gui.*` read-only tools 注入。它们只读 GUI 语义状态，不触发任务操作。
+如果目标 TUI host 支持 MCP resources、LSP-like resources 或原生 context provider，应优先复用这些机制；否则只能由 adapter shim 把同名操作作为 `gui.*` read-only tools 注入。它们只读 GUI 语义状态，不触发任务操作。
 
 这个模型解决两件事：
 
 - TUI 可用熟悉的 `list/read/search/stat/watch` 组合逐层探测 GUI，而不需要一次吃完整页面。
 - GUI 可以隐藏大多数同时无关的区域，只暴露 shell、hot region 和按需 region detail。
 
-`gui.search` 不是让 TUI grep 原始 DOM。它搜索的是 GUI projector 生成的语义文本和结构化 refs；debug resource 只用于审计/排障，默认不进入 agent context。
+GUI resource search 不是让 TUI grep 原始 DOM。它搜索的是 GUI projector 生成的语义文本和结构化 refs；debug resource 只用于审计/排障，默认不进入 agent context。迁移期可继续暴露 `gui.list/read/search/stat/watch` alias；稳定范式中的 canonical 入口是 `module.query/read/invoke`。
 
 ## 双目录能力发现
 
@@ -173,13 +237,13 @@ GUI 展示能力通过只读资源暴露给 TUI：
 TUI 的最小发现流程是：
 
 ```text
-gui.list('/gui/capabilities')
-gui.read('/gui/capabilities/presentation.json')
-gui.search({ query: 'markdown report viewer', scope: '/gui/capabilities' })
-gui.present({ ref: 'artifacts/report.md', hint: 'markdown' })
+module.query({ moduleId: 'gui', scope: 'gui:/capabilities' })
+module.read({ ref: 'gui:/capabilities/presentation.json' })
+module.query({ moduleId: 'gui', query: 'markdown report viewer', scope: 'gui:/capabilities' })
+module.invoke({ moduleId: 'gui', intent: 'present', input: { ref: 'artifacts/report.md', hint: 'markdown' } })
 ```
 
-这个方案的可靠性来自单一归属：TUI 不 import React 组件、不维护 GUI renderer registry；GUI 不注册任务 skills/tools、不做 capability ranking。双方只通过现有的 `gui.read/search` 和 `gui.present` 协作。
+这个方案的可靠性来自单一归属：TUI 不 import React 组件、不维护 GUI renderer registry；GUI 不注册任务 skills/tools、不做 capability ranking。双方只通过标准 `module.*` 函数协作；`gui.*` 只能作为 host-specific adapter alias 暂留。
 
 ## GUI 智能边界
 
@@ -256,9 +320,9 @@ SciForge 不定义新的 agent extension API。所有算法和策略扩展都使
 - Codex custom model provider / `model_providers.<id>.base_url`。
 - 必要时的本地 Codex provider proxy。
 
-默认生产集成目标是上游 Codex backend + custom model provider，优先通过配置接入 DeepSeek `deepseek-v4-flash` 或用户配置的低成本 provider endpoint。GUI 启动或连接 Codex app-server / Codex CLI 进程，把用户操作翻译成文本写入该进程，再消费其结构化事件流或 JSONL 输出。SciForge 不再要求常驻 AgentServer；历史 `AgentServer` / `runtime gateway` 只能作为当前代码兼容层或迁移来源，不是最终架构依赖。
+默认生产集成目标是上游 Codex app-server + custom model provider，优先通过配置接入 DeepSeek `deepseek-v4-flash` 或用户配置的低成本 provider endpoint。GUI 启动或连接 Codex app-server，把用户操作翻译成文本写入 agent host，再消费其 thread/turn/item/approval 事件流。`codex exec --json` 只作为迁移兼容路径；Claude Code stream-json 可作为可选 backend adapter。SciForge 不再要求常驻 AgentServer；历史 `AgentServer` / `runtime gateway` 只能作为当前代码兼容层或迁移来源，不是最终架构依赖，也不得出现在新增 public API 中。
 
-迁移只做两阶段：Phase 1 使用 `codex exec --json` 作为轻量事件源；Phase 2 抽出 `AgentCliAdapter` 隔离进程和 JSONL 细节。Codex app-server 暂不作为主迁移路径，等需要长期 thread、审批和富客户端状态时再接入。细节见 [`CodexRuntimeMigration.md`](CodexRuntimeMigration.md)。
+迁移目标应收敛为 `CodexAppServerAdapter` 首选、`CodexExecJsonAdapter` 兼容、`ClaudeStreamJsonAdapter` 可选。现有 `AgentCliAdapter` 继续隔离进程和 JSONL 细节，但不能把 `codex exec --json` 视为长期富客户端体验上限。细节见 [`CodexRuntimeMigration.md`](CodexRuntimeMigration.md)。
 
 因此 SciForge 不再定义 `registerCommand`、`registerTool`、`registerPolicy`、`HarnessRuntime`、`CapabilityGateway` 或自己的 TUI plugin manifest。
 
@@ -274,7 +338,7 @@ SciForge 不定义新的 agent extension API。所有算法和策略扩展都使
 | 外部软件连接器，如飞书、微信、企业微信 | TUI 原生 connector/tool/MCP/worker；repo 内 adapter 放在 `packages/connectors`。 |
 | Computer Use | TUI 原生 action provider；repo 内能力主体放在 `packages/actions/computer-use`，可消费 `packages/observe/vision` 的 sense/grounding/verifier 输出，桌面/远程/dry-run 执行通过 TUI Host ports 接入，并在产物任务中输出 bundle-local `finalArtifactRef` / `finalArtifactRefs`。 |
 | Artifact schema / verifier | TUI 原生 tool 或 skill。 |
-| GUI 展示、确认、输入收集 | SciForge GUI extension 暴露的 intent-based `gui.*` tools。 |
+| GUI 展示、确认、输入收集 | SciForge GUI module 暴露的 `module.invoke({ moduleId: 'gui', intent })`；`gui.*` 只作为 adapter shim。 |
 
 外部连接器和 Computer Use 遵守同一条边界：GUI 不直接调用第三方 SDK、CLI、桌面自动化、Computer Use executor 或 API。GUI 按钮只生成终端等价文本，例如 `/connectors feishu draft-message ...` 或 `/computer-use run ...`；TUI 决定是否调用 connector/action provider。拓展模块输出 refs-first 结果，例如 external refs、artifact refs、trace refs、draft refs、approval request、audit refs；发送、删除、同步、桌面输入等有外部副作用的操作必须经过 TUI 侧 approval / dry-run / idempotency 规则，并由 TUI Host 通过 `gui.ask_user` 收集确认。
 
@@ -307,7 +371,7 @@ Capability Discovery 不属于 GUI/runtime。用户若从 GUI 触发能力发现
 /capabilities explain literature.search
 ```
 
-工具名可以沿用 `capability_discovery.search/expand/plan/explain`，但注册、权限、审计、provider readiness、progressive disclosure 都由 TUI host 原生机制负责。Discovery plan 不构成 completion evidence；展示必须通过 `gui.present` 或 `gui.ask_user`。
+工具名可以在迁移期通过 adapter shim 沿用 `capability_discovery.search/expand/plan/explain`，但 canonical surface 是 `module.query/read/invoke(moduleId='capabilities')`；注册、权限、审计、provider readiness、progressive disclosure 都由 TUI host 原生机制负责。Discovery plan 不构成 completion evidence；展示必须通过 GUI module intent，legacy host 可由 shim 转成 `gui.present` 或 `gui.ask_user`。
 
 ## Harness / Policy
 

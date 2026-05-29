@@ -18,63 +18,210 @@ export function RunningWorkProcess({
 }) {
   const usageLabel = formatAgentTokenUsage(tokenUsage);
   const worklog = presentStreamWorklog(events, { counts, guidanceCount, limit: 48 });
-  const progress = latestProgressModel(worklog.entries.map((entry) => entry.event));
-  const highlightedEntries = visibleRunningWorkEntries(worklog, 8);
-  const completedEntries = highlightedEntries.slice(0, -1);
-  const activeEntry = highlightedEntries.at(-1);
   if (!worklog.entries.length && !guidanceCount && !usageLabel) return null;
   return (
     <div className="running-work-process">
-      {progress ? <ProcessProgressCard progress={progress} /> : null}
-      {highlightedEntries.length ? (
-        <div className="running-work-live running-work-timeline" aria-label="正在执行的工作轨迹">
-          {completedEntries.length ? (
-            <details className="message-fold depth-3 running-work-completed-fold cursor-step-fold">
-              <summary>
-                <span className="cursor-step-kind">已完成</span>
-                <span className="stream-event-detail compact">{completedTimelineSummary(completedEntries)}</span>
-              </summary>
-              <div className="running-work-completed-body">
-                {completedEntries.map((entry) => renderLiveWorkRow(entry, 'completed'))}
-              </div>
-            </details>
-          ) : null}
-          {activeEntry ? renderLiveWorkRow(activeEntry, 'active') : null}
-        </div>
-      ) : null}
-      <details className="message-fold depth-2 running-work-process-raw cursor-like-worklog">
-        <summary>
-          <span className="worklog-summary-title">执行轨迹</span>
-          <span className="worklog-summary-detail">{processFoldSummary(worklog, highlightedEntries)}</span>
-          {usageLabel ? <span className="worklog-summary-usage">{usageLabel}</span> : null}
-        </summary>
-        <div className="running-work-process-body">
-          <div className="running-work-process-meta">
-            {guidanceCount ? <Badge variant="warning">{guidanceCount} 条引导排队</Badge> : null}
-            {counts.debug ? <Badge variant="muted">{counts.debug} 条审计事件已折叠</Badge> : null}
-          </div>
-          <div className="stream-events-list inline">
-            {worklog.entries.map((entry) => {
-              const { event, presentation } = entry;
-              return (
-                <details className={cx('stream-event', presentation.uiClass, 'cursor-step-fold')} key={event.id} open={!presentation.initiallyCollapsed}>
-                  <summary>
-                    <span className="cursor-step-kind">{runningOperationLabel(entry)}</span>
-                    {presentation.usageDetail ? <span className="stream-event-usage">{presentation.usageDetail}</span> : null}
-                    <span className="stream-event-detail compact">{compactRunningLine(entry) || presentation.typeLabel || '无详细文本'}</span>
-                  </summary>
-                  <div className="stream-event-expanded">
-                    {entry.structured ? <StructuredWorkEventFacts entry={entry} /> : null}
-                    {presentation.detail ? <pre>{presentation.detail}</pre> : <span>无额外详情。</span>}
-                  </div>
-                </details>
-              );
-            })}
-          </div>
-        </div>
-      </details>
+      <NativeEventStream
+        events={events}
+        counts={counts}
+        tokenUsage={tokenUsage}
+        guidanceCount={guidanceCount}
+        mode="live"
+      />
     </div>
   );
+}
+
+export function NativeEventStream({
+  events,
+  counts,
+  tokenUsage,
+  guidanceCount = 0,
+  mode = 'recorded',
+  limit = 18,
+}: {
+  events: AgentStreamEvent[];
+  counts?: ReturnType<typeof streamEventCounts>;
+  tokenUsage?: AgentStreamEvent['usage'];
+  guidanceCount?: number;
+  mode?: 'live' | 'recorded';
+  limit?: number;
+}) {
+  const resolvedCounts = counts ?? streamEventCounts(events);
+  const usageLabel = formatAgentTokenUsage(tokenUsage);
+  const visibleEntries = nativeStreamEntries(events, limit);
+  const hiddenAuditCount = Math.max(0, events.length - visibleEntries.length);
+  const progress = latestProgressModel(visibleEntries.map((entry) => entry.event));
+  const activeId = visibleEntries.at(-1)?.event.id;
+  if (!visibleEntries.length && !guidanceCount && !usageLabel) return null;
+  return (
+    <section className={cx('native-event-stream', mode === 'live' ? 'is-live' : 'is-recorded')} aria-label={mode === 'live' ? 'Backend native realtime stream' : 'Backend native stream replay'}>
+      <div className="native-event-stream-head">
+        <Badge variant={mode === 'live' ? 'success' : 'muted'}>{mode === 'live' ? 'live' : 'replay'}</Badge>
+        <strong>{nativeBackendTitle(visibleEntries)}</strong>
+        <span>{nativeStreamHeadline(progress, visibleEntries)}</span>
+        {usageLabel ? <small>{usageLabel}</small> : null}
+      </div>
+      <div className="native-event-list">
+        {visibleEntries.map((entry) => (
+          <NativeEventRow
+            key={`${entry.event.id}-${entry.event.createdAt}`}
+            entry={entry}
+            active={entry.event.id === activeId && mode === 'live'}
+          />
+        ))}
+      </div>
+      {(guidanceCount || resolvedCounts.debug || hiddenAuditCount) ? (
+        <details className="native-event-audit-fold">
+          <summary>
+            <span>Audit</span>
+            {guidanceCount ? <small>{guidanceCount} queued guidance</small> : null}
+            {resolvedCounts.debug || hiddenAuditCount ? <small>{Math.max(resolvedCounts.debug, hiddenAuditCount)} folded low-level events</small> : null}
+          </summary>
+        </details>
+      ) : null}
+    </section>
+  );
+}
+
+function nativeStreamEntries(events: AgentStreamEvent[], limit: number): StreamWorklogEntry[] {
+  const entries = events
+    .map((event) => worklogEntryForNativeEvent(event))
+    .filter((entry) => nativeEventShouldRender(entry));
+  const hasSubstantiveBackendEvents = entries.some((entry) => isSubstantiveNativeEvent(entry));
+  const foreground = hasSubstantiveBackendEvents
+    ? entries.filter((entry) => !isBackendPlaceholderEntry(entry))
+    : compactBackendWaitPlaceholders(entries);
+  return foreground
+    .slice(-limit);
+}
+
+function worklogEntryForNativeEvent(event: AgentStreamEvent): StreamWorklogEntry {
+  const entry = presentStreamWorklog([event], { limit: 1 }).entries[0];
+  if (entry) return entry;
+  const presentation = presentStreamEvent(event);
+  return {
+    event,
+    presentation,
+    operationKind: 'diagnostic',
+    operationLine: presentation.detail || presentation.shortDetail || event.detail || presentation.typeLabel,
+    rawOutput: '',
+    rawInitiallyCollapsed: true,
+  };
+}
+
+function nativeEventShouldRender(entry: StreamWorklogEntry) {
+  const type = (backendRawType(entry.event) || entry.event.type).toLowerCase();
+  if (entry.presentation.importance === 'debug') return false;
+  if (type === 'audit' || type.includes('raw_jsonl') || type.includes('stderr')) return false;
+  if (isBackendGenericLifecyclePlaceholder(entry)) return false;
+  if (isBackendGenericWrapperPlaceholder(entry)) return false;
+  return Boolean(nativeEventDetail(entry) || entry.presentation.usageDetail || entry.event.label);
+}
+
+function isSubstantiveNativeEvent(entry: StreamWorklogEntry) {
+  if (isBackendPlaceholderEntry(entry)) return false;
+  const type = (backendRawType(entry.event) || entry.event.type).toLowerCase();
+  return [
+    'thread_started',
+    'turn_started',
+    'run_started',
+    'item_started',
+    'text-delta',
+    'message_delta',
+    'assistant_delta',
+    'message',
+    'tool-call',
+    'tool_started',
+    'tool-result',
+    'tool_completed',
+    'human-approval-required',
+    'approval_requested',
+    'gui_ask_user',
+    'control_request',
+    'done',
+    'failed',
+    'cancelled',
+  ].some((candidate) => type === candidate || type.includes(candidate));
+}
+
+function isBackendWaitPlaceholder(entry: StreamWorklogEntry) {
+  const type = (backendRawType(entry.event) || entry.event.type).toLowerCase();
+  if (type === 'backend-silent' || type === 'silent-stream-wait') return true;
+  if (backendWaitPlaceholderText(entry)) return true;
+  if (type !== 'process-progress' && type !== 'operation_progress' && type !== 'status') return false;
+  return isSilentWaitEntry(entry);
+}
+
+function isBackendPlaceholderEntry(entry: StreamWorklogEntry) {
+  return isBackendWaitPlaceholder(entry) || isBackendGenericProgressPlaceholder(entry);
+}
+
+function isBackendGenericLifecyclePlaceholder(entry: StreamWorklogEntry) {
+  const type = (backendRawType(entry.event) || entry.event.type).toLowerCase();
+  if (type !== 'tool_started' && type !== 'tool_completed' && type !== 'tool-call' && type !== 'tool-result') return false;
+  if (nativeToolName(entry.event) || backendLifecycleField(entry.event, 'command') || backendLifecycleField(entry.event, 'outputSummary')) return false;
+  const detail = normalizeTimelineText([
+    nativeStringField(entry.event, 'message'),
+    nativeStringField(entry.event, 'text'),
+    entry.event.detail,
+    entry.presentation.detail,
+    entry.presentation.shortDetail,
+  ].filter(Boolean).join(' '));
+  return /^(?:tool started\.?\s*)+(?:backend tool)?$/.test(detail)
+    || /^(?:tool completed\.?\s*)+(?:backend result|backend tool)?$/.test(detail);
+}
+
+function isBackendGenericProgressPlaceholder(entry: StreamWorklogEntry) {
+  const type = (backendRawType(entry.event) || entry.event.type).toLowerCase();
+  if (type !== 'process-progress' && type !== 'operation_progress' && type !== 'status') return false;
+  if (backendProgressHasFacts(entry.event)) return false;
+  const detail = normalizeTimelineText(nativeEventDetail(entry) || compactRunningLine(entry) || entry.presentation.detail || entry.presentation.shortDetail || entry.event.label || '');
+  return detail === '' || detail === '进展' || detail === 'progress' || detail === 'status' || detail === 'backend progress';
+}
+
+function isBackendGenericWrapperPlaceholder(entry: StreamWorklogEntry) {
+  if (entry.structured || entry.presentation.usageDetail) return false;
+  const type = (backendRawType(entry.event) || entry.event.type).toLowerCase();
+  const detail = normalizeTimelineText(nativeEventDetail(entry) || entry.presentation.detail || entry.presentation.shortDetail || '');
+  if ((type === 'workspace-runtime-event' || type === 'workspace_runtime_event') && (!detail || detail === 'workspace runtime')) return true;
+  if (type === 'contextwindowstate' || type === 'context-window-state') {
+    const status = entry.event.contextWindowState?.status;
+    return status !== 'near-limit' && status !== 'exceeded' && (!detail || detail === '上下文窗口' || detail === 'context window');
+  }
+  return false;
+}
+
+function backendLifecycleField(event: AgentStreamEvent, key: 'command' | 'outputSummary') {
+  return nativeStringField(event, key);
+}
+
+function backendProgressHasFacts(event: AgentStreamEvent) {
+  const raw = isRecord(event.raw) ? event.raw : {};
+  const native = isRecord(raw.native) ? raw.native : raw;
+  const progress = isRecord(raw.progress)
+    ? raw.progress
+    : isRecord(native.progress)
+      ? native.progress
+      : {};
+  return Boolean(
+    stringField(progress.phase)
+    || stringField(progress.title)
+    || stringField(progress.detail)
+    || stringField(progress.waitingFor)
+    || stringField(progress.nextStep)
+    || (Array.isArray(progress.reading) && progress.reading.length)
+    || (Array.isArray(progress.writing) && progress.writing.length),
+  );
+}
+
+function compactBackendWaitPlaceholders(entries: StreamWorklogEntry[]) {
+  const waits = entries.filter((entry) => isBackendPlaceholderEntry(entry));
+  if (!waits.length) return entries;
+  return [
+    ...entries.filter((entry) => !isBackendPlaceholderEntry(entry)),
+    waits.at(-1)!,
+  ];
 }
 
 export function visibleRunningWorkEntries(worklog: StreamWorklogPresentation, limit = 5): StreamWorklogEntry[] {
@@ -84,10 +231,6 @@ export function visibleRunningWorkEntries(worklog: StreamWorklogPresentation, li
     ? operationEntries
     : compactTimelineEntries(worklog.entries.filter((entry) => entry.presentation.visibleInRunningMessage));
   return keepTimelineAnchors(entries, limit);
-}
-
-export function latestVisibleWorkEvents(events: AgentStreamEvent[], limit: number) {
-  return presentStreamWorklog(events, { limit }).entries.map((entry) => entry.event);
 }
 
 function runningOperationLabel(entry: StreamWorklogEntry) {
@@ -132,14 +275,301 @@ function fallbackRunningLine(entry: StreamWorklogEntry): string {
   return [project, stage, recent].filter(Boolean).join(' · ') || stripOperationVerb(entry, entry.operationLine);
 }
 
-function renderLiveWorkRow(entry: StreamWorklogEntry, state: 'active' | 'completed') {
+function NativeEventRow({ entry, active }: { entry: StreamWorklogEntry; active: boolean }) {
   const presentation = entry.presentation;
+  const lifecycle = nativeLifecyclePresentation(entry);
+  const detail = nativeEventDetail(entry) || compactRunningLine(entry) || presentation.shortDetail || presentation.detail || presentation.typeLabel;
+  const expandedDetail = nativeEventExpandedDetail(entry);
+  const hasExpandedContent = Boolean(entry.structured || expandedDetail || presentation.detail || presentation.usageDetail);
+  const open = lifecycle
+    ? active && lifecycle.running
+    : isNativeApprovalEvent(entry) || (active && nativeEventIsRunning(entry));
   return (
-    <div className={cx('running-work-live-row', `timeline-${state}`, presentation.uiClass)} key={`${entry.event.id}-live-${state}`}>
-      <Badge variant={state === 'completed' ? 'muted' : presentation.tone}>{runningOperationLabel(entry)}</Badge>
-      <span>{compactRunningLine(entry)}</span>
-    </div>
+    <details
+      className={cx('native-event-row', presentation.uiClass, active && 'active')}
+      open={open}
+    >
+      <summary>
+        <span className="native-event-dot" aria-hidden="true" />
+        <span className="native-event-kind">{nativeEventKindLabel(entry)}</span>
+        <span className="native-event-title">{shortSummaryText(detail, active ? 180 : 132)}</span>
+        {presentation.usageDetail ? <span className="native-event-usage">{presentation.usageDetail}</span> : null}
+        <time>{formatEventTime(entry.event.createdAt)}</time>
+      </summary>
+      {hasExpandedContent ? (
+        <div className="native-event-expanded">
+          {entry.structured ? <StructuredWorkEventFacts entry={entry} /> : null}
+          {expandedDetail || presentation.detail ? <pre>{expandedDetail || presentation.detail}</pre> : null}
+          {!expandedDetail && !presentation.detail && presentation.usageDetail ? <pre>{presentation.usageDetail}</pre> : null}
+        </div>
+      ) : null}
+    </details>
   );
+}
+
+function nativeStreamHeadline(
+  progress: ProcessProgressModel | undefined,
+  entries: StreamWorklogEntry[],
+) {
+  if (progress) return formatProgressHeadline(progress, entries.at(-1) ? nativeEventDetail(entries.at(-1)!) : undefined) || progress.title;
+  const latest = entries.at(-1);
+  if (latest) return `${nativeEventKindLabel(latest)} · ${shortSummaryText(nativeEventDetail(latest), 120)}`;
+  return 'waiting for backend events';
+}
+
+function nativeEventKindLabel(entry: StreamWorklogEntry) {
+  const lifecycle = nativeLifecyclePresentation(entry);
+  if (lifecycle) return lifecycle.kindLabel;
+  const type = (backendRawType(entry.event) || entry.event.type).toLowerCase();
+  const backend = backendName(entry.event);
+  const toolName = (nativeToolName(entry.event) || '').toLowerCase();
+  if (type === 'thread_started') return `${backend} thread`;
+  if (type === 'turn_started' || type === 'run_started') return `${backend} turn`;
+  if (type === 'text-delta' || type === 'message_delta' || type === 'assistant_delta') return `${backend} assistant`;
+  if (type === 'message') return `${backend} message`;
+  if (type === 'tool-call' || type === 'tool_started') return toolName === 'shell' || toolName === 'command_execution' ? `${backend} shell` : `${backend} tool`;
+  if (type === 'tool-result' || type === 'tool_completed') return toolName === 'shell' || toolName === 'command_execution' ? `${backend} shell result` : `${backend} result`;
+  if (type === 'human-approval-required' || type === 'approval_requested' || type === 'gui_ask_user' || type === 'control_request') return `${backend} approval`;
+  if (type === 'process-progress' || type === 'operation_progress') return `${backend} progress`;
+  if (type.includes('error') || type.includes('failed')) return 'Error';
+  if (type.includes('done') || type.includes('completed')) return 'Done';
+  return entry.presentation.typeLabel || type;
+}
+
+function nativeBackendTitle(entries: StreamWorklogEntry[]) {
+  const backend = entries.map((entry) => backendName(entry.event)).find((value) => value !== 'Backend');
+  return `${backend ?? 'Backend'} native stream`;
+}
+
+function nativeEventDetail(entry: StreamWorklogEntry) {
+  const lifecycle = nativeLifecyclePresentation(entry);
+  if (lifecycle) return lifecycle.summary;
+  const raw = isRecord(entry.event.raw) ? entry.event.raw : {};
+  const native = isRecord(raw.native) ? raw.native : raw;
+  const toolName = nativeToolName(entry.event);
+  const status = nativeStringField(entry.event, 'status');
+  const command = nativeStringField(entry.event, 'command');
+  const outputSummary = nativeStringField(entry.event, 'outputSummary');
+  const text = stringField(native.text)
+    ?? stringField(raw.text)
+    ?? stringField(native.message)
+    ?? stringField(raw.message)
+    ?? entry.presentation.detail
+    ?? entry.presentation.shortDetail
+    ?? entry.event.detail
+    ?? '';
+  const type = (backendRawType(entry.event) || entry.event.type).toLowerCase();
+  if ((type === 'tool_started' || type === 'tool-call') && (command || toolName)) return [command || toolName, status].filter(Boolean).join(' · ');
+  if ((type === 'tool_completed' || type === 'tool-result') && (command || toolName)) return [command || toolName, status || 'completed', outputSummary || text].filter(Boolean).join(' · ');
+  if ((type === 'approval_requested' || type === 'human-approval-required' || type === 'gui_ask_user') && text) return text;
+  return text;
+}
+
+function nativeEventExpandedDetail(entry: StreamWorklogEntry) {
+  return nativeLifecyclePresentation(entry)?.expanded;
+}
+
+function nativeEventIsRunning(entry: StreamWorklogEntry) {
+  const lifecycle = nativeLifecyclePresentation(entry);
+  if (lifecycle) return lifecycle.running;
+  const type = (backendRawType(entry.event) || entry.event.type).toLowerCase();
+  const status = nativeStringField(entry.event, 'status')?.toLowerCase();
+  return type.includes('started') || status === 'running' || status === 'in_progress' || status === 'started';
+}
+
+function isNativeApprovalEvent(entry: StreamWorklogEntry) {
+  const type = (backendRawType(entry.event) || entry.event.type).toLowerCase();
+  return type === 'approval_requested'
+    || type === 'human-approval-required'
+    || type === 'gui_ask_user'
+    || type === 'control_request';
+}
+
+function nativeLifecyclePresentation(entry: StreamWorklogEntry) {
+  const type = (backendRawType(entry.event) || entry.event.type).toLowerCase();
+  if (type !== 'tool_started' && type !== 'tool_completed' && type !== 'tool-call' && type !== 'tool-result') return undefined;
+  const started = type === 'tool_started' || type === 'tool-call';
+  const completed = type === 'tool_completed' || type === 'tool-result';
+  const backend = backendName(entry.event);
+  const toolName = nativeToolName(entry.event);
+  const command = nativeStringField(entry.event, 'command');
+  const outputSummary = nativeStringField(entry.event, 'outputSummary') ?? nativeStringField(entry.event, 'output_summary');
+  const status = nativeStringField(entry.event, 'status');
+  const exitCode = nativeNumberField(entry.event, 'exitCode') ?? nativeNumberField(entry.event, 'exit_code');
+  const rawText = nativeLifecycleRawText(entry);
+  const action = nativeLifecycleAction(toolName, command, rawText);
+  const target = action === 'file-edit'
+    ? nativeEditedFileTarget(rawText) ?? command ?? toolName ?? 'workspace file'
+    : action === 'subagent'
+      ? nativeSubagentTarget(rawText) ?? toolName ?? 'sub agent'
+      : action === 'command'
+        ? (command ?? rawText) || toolName || 'command'
+        : rawText || toolName || 'tool';
+  const running = started && !nativeStatusIsTerminal(status);
+  const failed = nativeStatusIsFailure(status) || (typeof exitCode === 'number' && exitCode !== 0);
+  const terminalParts = [
+    status && !running ? `status=${status}` : undefined,
+    exitCode !== undefined && exitCode !== null ? `exit=${exitCode}` : undefined,
+  ].filter(Boolean);
+  const outputLine = outputSummary ? `Output: ${outputSummary}` : undefined;
+
+  if (action === 'command') {
+    const kindLabel = failed ? `${backend} 命令失败` : completed ? `${backend} 命令完成` : `${backend} 正在运行命令`;
+    const summary = completed
+      ? [`已完成：${target}`, ...terminalParts].filter(Boolean).join(' · ')
+      : `正在运行：${target}`;
+    return {
+      kindLabel,
+      summary,
+      expanded: [`Command: ${target}`, terminalParts.join(', '), outputLine].filter(Boolean).join('\n'),
+      running,
+    };
+  }
+
+  if (action === 'file-edit') {
+    const kindLabel = failed ? `${backend} 编辑失败` : completed ? `${backend} 已编辑` : `${backend} 正在编辑`;
+    const summary = completed
+      ? [`已编辑：${target}`, ...terminalParts].filter(Boolean).join(' · ')
+      : `正在编辑：${target}`;
+    return {
+      kindLabel,
+      summary,
+      expanded: [`File edit: ${target}`, command ? `Command: ${command}` : undefined, terminalParts.join(', '), outputLine].filter(Boolean).join('\n'),
+      running,
+    };
+  }
+
+  if (action === 'subagent') {
+    const kindLabel = failed ? `${backend} sub agent 失败` : completed ? `${backend} sub agent 完成` : `${backend} 正在创建 sub agent`;
+    const summary = completed
+      ? [`sub agent 完成：${target}`, ...terminalParts].filter(Boolean).join(' · ')
+      : `正在创建 sub agent：${target}`;
+    return {
+      kindLabel,
+      summary,
+      expanded: [`Sub agent: ${target}`, command ? `Command: ${command}` : undefined, terminalParts.join(', '), outputLine].filter(Boolean).join('\n'),
+      running,
+    };
+  }
+
+  const kindLabel = failed ? `${backend} tool failed` : completed ? `${backend} result` : `${backend} tool`;
+  const summary = completed
+    ? [target, ...terminalParts, outputSummary].filter(Boolean).join(' · ')
+    : rawText || `${toolName ?? 'tool'} running${status ? ` · ${status}` : ''}`;
+  return {
+    kindLabel,
+    summary,
+    expanded: [`Tool: ${toolName ?? 'tool'}`, rawText && rawText !== toolName ? rawText : undefined, command ? `Command: ${command}` : undefined, terminalParts.join(', '), outputLine].filter(Boolean).join('\n'),
+    running,
+  };
+}
+
+function nativeLifecycleAction(toolName: string | undefined, command: string | undefined, text: string): 'command' | 'file-edit' | 'subagent' | 'tool' {
+  const haystack = `${toolName ?? ''}\n${command ?? ''}\n${text}`.toLowerCase();
+  if (/\b(?:multi_agent_v1\.spawn_agent|spawn_agent|subagent|sub-agent|sub agent)\b/.test(haystack)) return 'subagent';
+  if (/\b(?:apply_patch|write_file|edit_file|create_file|delete_file|move_file|file_write)\b|(?:\*\*\* (?:update|add|delete) file:)|\b(?:edited|created|modified|patched)\s+[\w./-]+/i.test(haystack)) return 'file-edit';
+  if (/^(?:shell|command_execution|exec|terminal|bash|run_command|exec_command)$/i.test(toolName ?? '') || command) return 'command';
+  return 'tool';
+}
+
+function nativeLifecycleRawText(entry: StreamWorklogEntry) {
+  return [
+    nativeStringField(entry.event, 'message'),
+    nativeStringField(entry.event, 'text'),
+    nativeStringField(entry.event, 'detail'),
+    entry.presentation.detail,
+    entry.presentation.shortDetail,
+    entry.event.detail,
+    entry.event.label,
+  ].filter(Boolean).join('\n');
+}
+
+function nativeEditedFileTarget(text: string) {
+  const match = text.match(/^\s*\*\*\* (?:Update|Add|Delete) File:\s*(.+)$/mi)
+    ?? text.match(/\b(?:path|file|target)\s*[:=]\s*["']?([^"',\n\r)]+)["']?/i)
+    ?? text.match(/\b(?:edited|created|modified|patched|wrote)\s+([./\w-]+\.[\w.-]+)/i);
+  return match?.[1]?.trim();
+}
+
+function nativeSubagentTarget(text: string) {
+  const match = text.match(/\b(?:agent|subagent|sub-agent)\s*(?:id|name|target)?\s*[:=]\s*["']?([A-Za-z0-9_.:-]{3,})/i)
+    ?? text.match(/\b(?:worker|explorer)\s+([A-Za-z0-9_.:-]{3,})/i);
+  return match?.[1]?.trim();
+}
+
+function nativeStatusIsTerminal(status: string | undefined) {
+  return /^(?:completed|done|success|succeeded|failed|error|cancelled|canceled|rejected)$/i.test(status ?? '');
+}
+
+function nativeStatusIsFailure(status: string | undefined) {
+  return /^(?:failed|error|cancelled|canceled|rejected)$/i.test(status ?? '');
+}
+
+function backendRawType(event: AgentStreamEvent) {
+  const raw = isRecord(event.raw) ? event.raw : {};
+  const native = isRecord(raw.native) ? raw.native : raw;
+  const nestedRaw = isRecord(raw.raw) ? raw.raw : {};
+  const nestedEvent = isRecord(nestedRaw.event) ? nestedRaw.event : {};
+  return stringField(native.rawType)
+    ?? stringField(native.type)
+    ?? stringField(raw.rawType)
+    ?? stringField(raw.type)
+    ?? stringField(nestedEvent.type);
+}
+
+function nativeToolName(event: AgentStreamEvent) {
+  const raw = isRecord(event.raw) ? event.raw : {};
+  const native = isRecord(raw.native) ? raw.native : raw;
+  const nestedRaw = isRecord(raw.raw) ? raw.raw : {};
+  const nestedEvent = isRecord(nestedRaw.event) ? nestedRaw.event : {};
+  return stringField(native.toolName) ?? stringField(raw.toolName) ?? stringField(nestedEvent.toolName);
+}
+
+function nativeStringField(event: AgentStreamEvent, key: string): string | undefined {
+  const raw = isRecord(event.raw) ? event.raw : {};
+  const native = isRecord(raw.native) ? raw.native : raw;
+  const nestedRaw = isRecord(raw.raw) ? raw.raw : {};
+  const nestedEvent = isRecord(nestedRaw.event) ? nestedRaw.event : {};
+  return stringField(native[key]) ?? stringField(raw[key]) ?? stringField(nestedEvent[key]);
+}
+
+function nativeNumberField(event: AgentStreamEvent, key: string): number | null | undefined {
+  const raw = isRecord(event.raw) ? event.raw : {};
+  const native = isRecord(raw.native) ? raw.native : raw;
+  const nestedRaw = isRecord(raw.raw) ? raw.raw : {};
+  const nestedEvent = isRecord(nestedRaw.event) ? nestedRaw.event : {};
+  return numberField(native[key]) ?? numberField(raw[key]) ?? numberField(nestedEvent[key]);
+}
+
+function backendName(event: AgentStreamEvent) {
+  const raw = isRecord(event.raw) ? event.raw : {};
+  const native = isRecord(raw.native) ? raw.native : raw;
+  const backend = stringField(native.backend) ?? stringField(raw.backend);
+  if (backend === 'claude-stream-json') return 'Claude';
+  if (backend === 'codex-exec-json') return 'Codex CLI';
+  if (backend === 'codex-app-server') return 'Codex';
+  if (stringField(raw.schemaVersion)?.startsWith('sciforge.codex.')) return 'Codex';
+  return 'Backend';
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function numberField(value: unknown): number | null | undefined {
+  if (value === null) return null;
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function formatEventTime(value?: string) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
 function compactTimelineEntries(entries: StreamWorklogEntry[]) {
@@ -175,14 +605,32 @@ function timelineDedupeKey(entry: StreamWorklogEntry) {
 }
 
 function isSilentWaitEntry(entry: StreamWorklogEntry) {
-  if (entry.operationKind !== 'wait') return false;
+  const text = backendWaitPlaceholderText(entry);
+  if (!text) return false;
+  if (entry.operationKind !== 'wait') return /下一条|jsonl|http stream|没有输出新事件|没有收到新事件|silent/.test(text);
+  return true;
+}
+
+function backendWaitPlaceholderText(entry: StreamWorklogEntry) {
+  const raw = isRecord(entry.event.raw) ? entry.event.raw : {};
+  const progress = isRecord(raw.progress) ? raw.progress : {};
+  if (raw.silentStreamWaiting === true || raw.backendSilent === true) return 'silent stream wait';
   const text = normalizeTimelineText([
     entry.operationLine,
     entry.presentation.detail,
     entry.presentation.shortDetail,
     compactRunningLine(entry),
+    stringField(progress.phase),
+    stringField(progress.reason),
+    stringField(progress.title),
+    stringField(progress.waitingFor),
+    stringField(progress.nextStep),
+    stringField(raw.reason),
+    stringField(raw.waitingFor),
   ].join(' '));
-  return /没有输出新事件|没有收到新事件|http stream|codex cli|jsonl|backend|后端/.test(text);
+  return /没有输出新事件|没有收到新事件|http stream|codex cli|jsonl|后端\s*(?:<elapsed>|正在等|等待|没有|仍在)/.test(text)
+    ? text
+    : undefined;
 }
 
 function normalizeTimelineText(value: string) {
@@ -213,22 +661,6 @@ function operationVerbPattern(kind: StreamWorklogEntry['operationKind']) {
   if (kind === 'artifact') return /^Created\s+/i;
   if (kind === 'recover') return /^Recovered\s+/i;
   return undefined;
-}
-
-function completedTimelineSummary(entries: StreamWorklogEntry[]) {
-  const labels = entries.map(runningOperationLabel);
-  return `${entries.length} 步 · ${labels.slice(-5).join(' · ')}`;
-}
-
-function processFoldSummary(worklog: StreamWorklogPresentation, timeline: StreamWorklogEntry[]) {
-  const active = timeline.at(-1);
-  const completedCount = Math.max(0, timeline.length - 1);
-  const parts = [
-    completedCount ? `已折叠 ${completedCount} 步` : '',
-    active ? `当前 ${runningOperationLabel(active)}：${shortSummaryText(compactRunningLine(active), 110)}` : worklog.summary,
-    worklog.counts.debug ? `${worklog.counts.debug} 条审计事件已折叠` : '',
-  ].filter(Boolean);
-  return parts.join(' · ') || worklog.summary;
 }
 
 function shortSummaryText(value: string, limit: number) {
@@ -267,19 +699,6 @@ function StructuredWorkEventFacts({ entry }: { entry: StreamWorklogEntry }) {
   );
 }
 
-
-export function streamProcessTranscript(events: AgentStreamEvent[]) {
-  const lines = latestVisibleWorkEvents(events, 24)
-    .map((event) => {
-      const presentation = presentStreamEvent(event);
-      const progress = progressModelFromEvent(event);
-      const detail = progress ? formatProgressHeadline(progress) : presentation.detail || presentation.usageDetail || presentation.shortDetail;
-      return detail ? `- ${event.label || presentation.typeLabel}: ${detail}` : '';
-    })
-    .filter(Boolean);
-  if (!lines.length) return '';
-  return ['工作过程摘要:', ...lines].join('\n');
-}
 
 function ProcessProgressCard({ progress }: { progress: ProcessProgressModel }) {
   const items = [

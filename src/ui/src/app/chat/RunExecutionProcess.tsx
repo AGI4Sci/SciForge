@@ -1,5 +1,6 @@
-import type { ObjectReference, RuntimeExecutionUnit, SciForgeRun, SciForgeSession } from '../../domain';
+import type { AgentStreamEvent, ObjectReference, RuntimeExecutionUnit, SciForgeRun, SciForgeSession } from '../../domain';
 import { MessageContent } from './MessageContent';
+import { NativeEventStream } from './RunningWorkProcess';
 import {
   artifactHasUserFacingDelivery,
   displayTitleForObjectReference,
@@ -44,44 +45,81 @@ export function RunExecutionProcess({
   const auditObjectReferences = projection
     ? objectReferencesForProjection(projection, session, runId)
     : objectReferencesForAudit(run, session, runId);
+  const nativeEvents = nativeStreamEventsForRun(run);
   const sections = projection
     ? projectionExecutionProcessSections(projection, auditObjectReferences)
     : executionProcessSections(run, units, auditObjectReferences, trace);
   const runtimeMetadata = projection?.runtimeMetadata;
-  if (!sections.length) return null;
+  if (!sections.length && !nativeEvents.length) return null;
   return (
     <div
       className="execution-process-thread"
       aria-label="按顺序记录的工作过程"
       data-testid="chat-process-thread"
-      data-process-source={projection ? 'semantic-summary' : 'recorded-summary'}
+      data-process-source={nativeEvents.length ? 'native-event-stream' : projection ? 'semantic-summary' : 'recorded-summary'}
     >
-      {runtimeMetadata ? <RuntimeMetadataRow metadata={runtimeMetadata} /> : null}
-      {sections.map((section) => {
-        const references = mergeObjectReferences(
-          section.references ?? [],
-          [],
-          40,
-        );
-        return (
-          <details className="message-fold depth-2 execution-process-fold cursor-step-fold" key={section.id}>
-            <summary>
-              <span className="cursor-step-kind">{section.label}</span>
-              <span className="cursor-step-title">{section.title}</span>
-              {section.meta ? <span className="cursor-step-meta">{section.meta}</span> : null}
-            </summary>
-            <div className="execution-process-body">
-              <MessageContent
-                content={section.content}
-                references={references}
-                onObjectFocus={onObjectFocus}
-              />
-            </div>
-          </details>
-        );
-      })}
+      {!nativeEvents.length && runtimeMetadata ? <RuntimeMetadataRow metadata={runtimeMetadata} /> : null}
+      {nativeEvents.length ? <NativeEventStream events={nativeEvents} mode="recorded" limit={18} /> : null}
+      {!nativeEvents.length && sections.length ? sections.map((section) => renderExecutionProcessSection(section, onObjectFocus)) : null}
     </div>
   );
+}
+
+function renderExecutionProcessSection(
+  section: ExecutionProcessSection,
+  onObjectFocus: (reference: ObjectReference) => void,
+) {
+  const references = mergeObjectReferences(
+    section.references ?? [],
+    [],
+    40,
+  );
+  return (
+    <details className="message-fold depth-2 execution-process-fold cursor-step-fold" key={section.id}>
+      <summary>
+        <span className="cursor-step-kind">{section.label}</span>
+        <span className="cursor-step-title">{section.title}</span>
+        {section.meta ? <span className="cursor-step-meta">{section.meta}</span> : null}
+      </summary>
+      <div className="execution-process-body">
+        <MessageContent
+          content={section.content}
+          references={references}
+          onObjectFocus={onObjectFocus}
+        />
+      </div>
+    </details>
+  );
+}
+
+function nativeStreamEventsForRun(run: SciForgeRun | undefined): AgentStreamEvent[] {
+  const raw = isRecord(run?.raw) ? run.raw : undefined;
+  const streamProcess = isRecord(raw?.streamProcess) ? raw.streamProcess : undefined;
+  const events = Array.isArray(streamProcess?.events) ? streamProcess.events : [];
+  return events
+    .map((event, index): AgentStreamEvent | undefined => {
+      if (!isRecord(event)) return undefined;
+      if (!isRecord(event.native)) return undefined;
+      const type = typeof event.type === 'string' && event.type.trim() ? event.type : 'workspace-runtime-event';
+      const createdAt = typeof event.createdAt === 'string' && event.createdAt.trim()
+        ? event.createdAt
+        : run?.createdAt ?? new Date(0).toISOString();
+      const label = typeof event.label === 'string' && event.label.trim() ? event.label : type;
+      const detail = typeof event.detail === 'string' ? event.detail : undefined;
+      return {
+        id: `${run?.id ?? 'run'}-stream-${index}`,
+        type,
+        label,
+        detail,
+        createdAt,
+        raw: event,
+      };
+    })
+    .filter((event): event is AgentStreamEvent => Boolean(event));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function RuntimeMetadataRow({ metadata }: { metadata: NonNullable<UiConversationProjection['runtimeMetadata']> }) {

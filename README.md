@@ -55,17 +55,17 @@ SciForge 提供注册式科学 UI 组件和 interactive views，例如 evidence 
 
 ### 4. TUI CLI 优先：把成熟 Agent 接到同一个科研工作台
 
-SciForge 的目标不是维护自己的 AgentServer，而是直接连接 Codex app-server / CLI bridge。生产默认让 Codex 使用 DeepSeek `deepseek-v4-flash` 或用户配置的低成本 provider/proxy；OpenAI provider 只能显式 opt in。GUI 把用户动作翻译成终端等价文本，写入 Codex 进程；再消费 Codex 的结构化事件流、JSONL 输出或 app-server stream 来渲染过程。
+SciForge 的目标不是维护自己的 AgentServer，而是直接连接 Codex app-server；`codex exec --json`/CLI bridge 只作为迁移兼容路径，并可把 Claude Code stream-json 作为可选 backend。生产默认让 Codex 使用 DeepSeek `deepseek-v4-flash` 或用户配置的低成本 provider/proxy；OpenAI provider 只能显式 opt in。GUI 把用户动作翻译成终端等价文本，写入 agent host；再消费 Codex app-server、Codex JSONL 或 Claude stream-json 的结构化事件流来渲染过程。
 
 Codex backend 负责理解、规划、工具调用、文件操作、修复和插件生态；SciForge 负责 GUI 输入、GUI 状态资源、UI 渲染、确认、反馈交接和科研 artifact 呈现。这样可以复用 Codex 的成熟能力，同时避免 SciForge 变成第二个 agent runtime。
 
-迁移期代码中仍可能出现 AgentServer/backend gateway 字段；它们只代表当前实现兼容层，不是最终架构依赖。
+历史代码或兼容 adapter 中仍可能出现 AgentServer/backend gateway 字段；它们只代表迁移来源或 shim，不是最终架构依赖，也不得作为新增 public surface。
 
 ### 5. GUI-as-extension：让成熟 TUI agent 拥有逻辑
 
 新的架构方向是让 SciForge GUI 成为 Codex backend 的 GUI extension。GUI 把用户操作翻译成终端等价文本；Codex 继续使用原生 plugin/skill/tool/MCP 和 custom model provider 机制承载 capability discovery、harness/policy、provider route、verifier 和 workspace 操作。
 
-GUI 自身暴露两类稳定表面：只读虚拟 GUI resource tree 用于状态感知，例如 `gui.list/read/search/stat/watch`；intent-based `gui.*` tools 用于展示和交互，例如 `gui.present`、`gui.ask_user`、`gui.notify`、`gui.set_status` 和 `gui.apply_batch`。TUI 读取 shell/hot-region/region-detail 来理解界面，再表达展示意图；GUI 基于 hot region、interaction mode、revision 和本地 presentation rules 执行、延迟、拒绝或建议替代方案。
+SciForge 的长期模块范式是 Agent Host Semantic Pipeline：所有模块统一暴露 `module.describe/query/read/invoke`，Agent Host 负责编排 semantic pipeline 和 trace，GUI、skills、memory、capability、verifier、browser/computer-use 都是模块。GUI 模块提供只读虚拟 GUI resource tree 和展示/确认 intent；迁移期 `gui.*` alias 只能由 adapter shim 暴露，例如 `gui.present`、`gui.ask_user`、`gui.notify`、`gui.set_status` 和 `gui.apply_batch`。
 
 当前设计真相源见 [`docs/Architecture.md`](docs/Architecture.md) 和 [`docs/TuiGuiProtocol.md`](docs/TuiGuiProtocol.md)。
 
@@ -106,7 +106,7 @@ GUI 自身暴露两类稳定表面：只读虚拟 GUI resource tree 用于状态
 ```text
 Scientific question / paper / dataset / UI feedback
   -> GUI translates input to terminal-equivalent text
-  -> Codex app-server / CLI bridge
+  -> Codex app-server (preferred) / CLI JSON compatibility bridge
   -> Codex custom model provider
   -> DeepSeek deepseek-v4-flash / configured provider proxy by default
   -> native plugins / skills / tools / MCP
@@ -142,7 +142,7 @@ Present   interactive views：科学 artifact 的可读、可点选、可评论�
 - Node.js 20+
 - npm
 - 一个本地 workspace 目录
-- Codex app-server / CLI bridge，用于真实 agent-backed task execution
+- Codex app-server 用于首选 agent-backed task execution；CLI JSON bridge 仅保留为迁移兼容路径
 - DeepSeek `deepseek-v4-flash` 或 provider proxy，用于默认低成本 model provider
 
 安装并启动完整本地应用：
@@ -173,7 +173,7 @@ npm run workspace:server
 在 Settings 中配置：
 
 - `Workspace Path`：`.sciforge/` 状态、任务文件、日志、artifact 和 scenario packages 的存储目录。
-- 迁移期设置里可能仍有 `AgentServer Base URL` / `Agent Backend` 字段；目标架构下应改为 Codex app-server / CLI bridge 连接、事件流、provider/model 和权限配置。默认 provider/model 应为 DeepSeek `deepseek-v4-flash` 或 provider proxy，不得静默 fallback 到 OpenAI。
+- 迁移期设置里可能仍有 `AgentServer Base URL` / `Agent Backend` 字段；目标架构下应改为 Codex app-server 连接、CLI JSON 兼容路径、事件流、provider/model 和权限配置。默认 provider/model 应为 DeepSeek `deepseek-v4-flash` 或 provider proxy，不得静默 fallback 到 OpenAI。
 - provider、base URL、model、API key、timeout 和 context-window budget。
 
 ## 使用说明
@@ -185,7 +185,7 @@ npm run workspace:server
 - 论文复现工作流
 - 自我进化修复工作流
 - Computer Use 工作流
-- Codex app-server / CLI bridge 连接
+- Codex app-server 连接和 CLI JSON 兼容路径
 - 双实例互修开发模式
 - 常用验证命令
 

@@ -1,6 +1,6 @@
 # Native Extension 归属图
 
-最后更新：2026-05-24
+最后更新：2026-05-29
 
 本文是 `[native-extension-ownership-map.json](native-extension-ownership-map.json)` 的可读版摘要。JSON 文件是可验证清单；本文说明每类能力最终归谁拥有、通过什么 surface 暴露，以及 GUI/runtime 的边界在哪里。
 
@@ -9,8 +9,8 @@
 
 | 领域                                 | 归属                                         | 目标 surface                                                                                                                      | GUI/runtime 边界                                                                                 |
 | ---------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Capability discovery               | Codex 原生 plugin / skill / tool / MCP       | `/capabilities search`、`expand`、`plan`、`explain`；展示通过 `gui.present` / `gui.ask_user`                                            | GUI 只发送文本命令；GUI 和 runtime 都不做 capability ranking。                                              |
-| GUI 展示组件目录                         | SciForge GUI extension                     | `/gui/capabilities/presentation.json`、`/gui/renderers/<componentId>.json`、`gui.search(scope='/gui/capabilities')`、`gui.present` | `packages/presentation/components` 只声明 renderer/viewer/workbench 能力；不得注册成 TUI task skill/tool。 |
+| Capability discovery               | Agent Host 原生 plugin / skill / tool / MCP  | `module.query/read/invoke(moduleId='capabilities')`；迁移期可保留 `/capabilities search`、`expand`、`plan`、`explain` 文本命令，旧 tool alias 只能作为 adapter shim。 | GUI 只发送文本命令或展示 host 结果；GUI 和 runtime 都不做 capability ranking。                                  |
+| GUI 展示组件目录                         | SciForge GUI module                        | `module.query/read(moduleId='gui')` 读取 `gui:/capabilities/presentation.json`、`gui:/renderers/<componentId>.json`；`module.invoke(moduleId='gui', intent='present')` | `packages/presentation/components` 只声明 renderer/viewer/workbench 能力；不得注册成 TUI task skill/tool。 |
 | Confidence / 置信度                   | Codex 原生 verifier / harness / policy       | result payload 的 `confidence`、`confidenceExplanation`，或 MCP verifier 结果                                                         | GUI 只能渲染 TUI 给出的可解释分数；不得补默认值、不得从日志或文案推断可信度。                                                    |
 | Harness / policy / budget / repair | Codex TUI 原生扩展                             | Codex policy plugin、skill 或 MCP surface                                                                                         | GUI 可以展示状态或收集确认；不选择策略。                                                                         |
 | Provider route                     | Codex provider / MCP / tool 生态             | custom model provider、本地 provider proxy、MCP server、Codex tool                                                                   | Runtime 只审计 profile/provider/model/workspace/command id 并 fail closed；不得静默 fallback 到 OpenAI。  |
@@ -21,7 +21,7 @@
 | Dual-instance self-repair          | 默认退休；只有 Codex-native 形态可恢复                 | Codex 原生 repair workflow、skill/plugin 或 external supervisor                                                                     | 两个 SciForge app instance 不是默认 repair runtime。                                                  |
 
 
-边界规则：凡是改变任务能力、选择 provider、修复执行、验证真伪、提升 skill、计算可信度、判断 completion，或接触外部账号/API/消息/桌面 app 的功能，都属于 TUI/Codex 原生扩展生态。SciForge GUI 只贡献 presentation、confirmation、focus、folded audit/debug、只读 GUI resource tree 和终端等价文本。拓展模块只直接和 TUI Host 通信；需要 GUI 展示或确认时，由 TUI Host 调用 `gui.present`、`gui.ask_user`、`gui.notify` 或 `gui.set_status`。
+边界规则：凡是改变任务能力、选择 provider、修复执行、验证真伪、提升 skill、计算可信度、判断 completion，或接触外部账号/API/消息/桌面 app 的功能，都属于 Agent Host 原生扩展生态。SciForge GUI 只贡献 presentation、confirmation、focus、folded audit/debug、只读 GUI resource tree 和终端等价文本。拓展模块只直接和 Agent Host 通信；需要 GUI 展示或确认时，由 Agent Host 调用 `module.invoke({ moduleId: 'gui', intent })`。迁移期 `gui.present`、`gui.ask_user`、`gui.notify` 和 `gui.set_status` 只能作为 host-specific adapter alias。
 
 Computer Use 的内部拆分必须保持单一执行 owner：`packages/actions/computer-use` 拥有 request/result schema、action loop、safety/approval、executor adapter contract、trace contract 和 compact handoff；`packages/observe/vision` 只提供 sense、coarse-to-fine focus region、KV-Ground/visual grounding helper、verifier feedback 和 file-ref-only visual memory。KV-Ground 默认 endpoint 为 `http://127.0.0.1:18081`，Computer Use grounder provider 应记录实际 `/health` 与 `/predict/` endpoint；没有共享路径映射时使用 inline image upload，避免把本机截图路径误当服务端路径。最终输入隔离目标是独立 simulated input adapter：SciForge 维护自己的虚拟 pointer/keyboard state，不移动系统鼠标、不发送全局系统键盘事件；真实输入如果没有独立 input adapter，就属于 shared system input，只能作为迁移期诊断或 blocked evidence，必须绑定低风险目标窗口、显式确认并串行持有 executor lease。当前第一片实现只让 `remote-desktop` 在 Host 注册 `sciforge-simulated-remote-desktop` provider 时可执行，并写出 `independent-input-adapter.json` / pointer icon refs；`virtual-hid` 和未注册 provider 仍 fail closed。Trace 输出只保存 refs、sha256、尺寸、target description、window/crop-local coordinates、provider metadata、diagnostics、approval/audit refs，不保存 raw screenshot/base64。
 
@@ -69,17 +69,17 @@ Role 只描述模块通信契约，不描述目录名。当前可用 role 收敛
 
 ## 模块通信标准
 
-1. **TUI-owned package** 只通过 Codex 原生 plugin / skill / tool / MCP / provider / worker 机制暴露能力，并且只直接和 TUI Host 通信。输出必须是 refs-first：artifact refs、external refs、evidence refs、trace refs、draft refs、approval request、audit refs、verification result、repair hint 或 compact result payload。需要展示或收集输入时，由 TUI host 调用 `gui.present`、`gui.ask_user`、`gui.notify`、`gui.set_status` 或只读 `gui.read/search`，package 自身不得 import 或调用 GUI implementation。
-2. **GUI-owned package** 只通过 GUI extension surface 暴露能力：`/gui/capabilities/presentation.json`、`/gui/renderers/<componentId>.json`、hot-region/resource tree 和 intent-based `gui.*` tools。GUI package 可以发出 view-local event、object ref、edit proposal 或 terminal-equivalent text suggestion，但不得执行 workspace/action/provider，也不得做 completion/verdict/confidence 判断。
+1. **TUI-owned package** 只通过 Agent Host 原生 plugin / skill / tool / MCP / provider / worker 机制暴露能力，并且只直接和 Agent Host 通信。小型 compact result 可以 inline；大 payload、敏感内容、可复用对象和审计材料必须输出 refs，例如 artifact refs、external refs、evidence refs、trace refs、draft refs、audit refs。需要展示或收集输入时，由 Agent Host 调用 `module.invoke({ moduleId: 'gui', intent })` 或只读 `module.query/read(moduleId='gui')`，package 自身不得 import 或调用 GUI implementation。
+2. **GUI-owned package** 只通过 GUI module surface 暴露能力：`gui:/capabilities/presentation.json`、`gui:/renderers/<componentId>.json`、hot-region/resource tree 和 presentation/input intents。GUI package 可以发出 view-local event、object ref、edit proposal 或 terminal-equivalent text suggestion，但不得执行 workspace/action/provider，也不得做 completion/verdict/confidence 判断。
 3. **Shared package** 只提供纯 contract、schema、validator、normalizer 和 deterministic helper。Shared package 不得 import TUI-owned 或 GUI-owned package，也不得依赖 `src/runtime/`**、`src/ui/**` 私有实现。
 4. **Host 装配层例外**：`src/runtime/`** 可以装配 TUI-owned + shared；`src/ui/**` 可以装配 GUI-owned + shared。TUI 和 GUI 之间仍只能走 `[TuiGuiProtocol.md](TuiGuiProtocol.md)` 中定义的文本输入、intent tools 和只读 GUI resource tree。
-5. **禁止双向注册**：TUI task capability 不注册 GUI renderer；GUI presentation catalog 不注册 TUI skill/tool/provider。两边可以通过 object refs、artifact refs、resource reads 和 TUI Host 发起的 `gui.present` 协作，但不能互相 import、互相调用或共享 ranking。
+5. **禁止双向注册**：TUI task capability 不注册 GUI renderer；GUI presentation catalog 不注册 TUI skill/tool/provider。两边可以通过 object refs、artifact refs、resource reads 和 Agent Host 发起的 `module.invoke(moduleId='gui', intent='present')` 协作，但不能互相 import、互相调用或共享 ranking。
 6. **副作用先返回意图**：Computer Use、飞书/微信连接器、外部 API connector 等高风险或外部副作用模块，遇到发送、删除、支付、授权、发布、提交、桌面输入等动作时，应返回 `needs-confirmation`、`approvalRequest`、`draftRef` 或 `auditRef`。TUI Host 负责调用 `gui.ask_user` 收集确认，并在确认后发起新的受控调用。
 7. **Computer Use 用户级验收**：一次点击输入框的 smoke 只能证明基础链路。最终 success 至少需要真实用户产物，例如制作并保存一页 PPT；目标打通需要多 App 工作流和 refs-first 证据链。GUI 不因参与展示或确认而拥有 Computer Use 执行权。
 
 最小可靠发现模型：
 
-1. TUI 任务能力通过 Codex 原生 mechanisms 发现。GUI 只发送 `/capabilities search|expand|plan|explain` 文本。
-2. GUI 展示能力通过 `/gui/capabilities/presentation.json` 和 `/gui/renderers/<componentId>.json` 只读暴露。TUI 用 `gui.read/search` 发现，用 `gui.present` 表达展示意图。
+1. TUI 任务能力通过 Agent Host 原生 mechanisms 发现。GUI 只发送文本，或展示 `module.query/read/invoke(moduleId='capabilities')` 的结果。
+2. GUI 展示能力通过 `gui:/capabilities/presentation.json` 和 `gui:/renderers/<componentId>.json` 只读暴露。TUI 用 `module.query/read(moduleId='gui')` 发现，用 `module.invoke(moduleId='gui', intent='present')` 表达展示意图。
 3. 外部 app 连接器和 Computer Use 通过 TUI 原生 connector/tool/MCP/worker/action provider 发现；GUI 只发送 `/connectors ...`、`/computer-use ...` 等终端等价文本。高风险确认由 TUI Host 调用 `gui.ask_user` 收集，connector/action provider 不直接调用 GUI。
 4. 这些目录不互相注册、不互相 import、不共享 ranking。这样可以避免 GUI 变成第二个 agent，也避免 TUI 依赖 React 内部实现。

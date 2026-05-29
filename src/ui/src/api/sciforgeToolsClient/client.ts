@@ -15,6 +15,7 @@ import {
   isSeedDemoOrFixtureMessage,
   projectToolDoneEvent,
   projectToolStartedEvent,
+  TEXT_DELTA_EVENT_TYPE,
   type SilentStreamDecisionRecord,
 } from '@sciforge-ui/runtime-contract';
 import { compactSciForgeReference, compactTransportExecutionUnits } from './transportContext';
@@ -1202,12 +1203,17 @@ function isBackendProgressEvent(event: AgentStreamEvent) {
 function isForegroundReadableResultEvent(event: AgentStreamEvent) {
   const raw = isRecord(event.raw) ? event.raw : {};
   const type = String(event.type || raw.type || raw.kind || '').trim().toLowerCase();
+  const rawType = String(raw.type || raw.kind || '').trim().toLowerCase();
   const status = String(raw['status'] || '').trim().toLowerCase();
   const readableRef = asString(raw.readableRef) || asString(raw.foregroundPartialRef);
   const refs = asStringArray(raw.refs) ?? asStringArray(raw.evidenceRefs) ?? asStringArray(raw.artifactRefs);
   const qualitySignals = isRecord(raw.qualitySignals) ? raw.qualitySignals : undefined;
   if (type === 'first-readable-result') return true;
-  if ((type === 'message' || type === 'message_delta') && asString(raw.text) && String(raw.schemaVersion || '').startsWith('sciforge.codex.')) return true;
+  if (
+    (type === TEXT_DELTA_EVENT_TYPE || type === 'message' || type === 'message_delta' || rawType === 'message_delta')
+    && asString(raw.text)
+    && String(raw.schemaVersion || '').startsWith('sciforge.codex.')
+  ) return true;
   if (qualitySignals?.userVisible === true && (qualitySignals.partialResult === true || readableRef || refs?.length)) return true;
   if (readableRef && /partial|readable|foreground|background-running/.test(type || status)) return true;
   return false;

@@ -8,6 +8,7 @@ export type NormalizedAgentEventType =
   | 'message'
   | 'tool_started'
   | 'tool_completed'
+  | 'operation_progress'
   | 'audit'
   | 'done'
   | 'failed'
@@ -43,6 +44,8 @@ export interface NormalizedAgentEvent {
   text?: string;
   itemId?: string;
   toolName?: string;
+  command?: string;
+  outputSummary?: string;
   status?: string;
   exitCode?: number | null;
   signal?: NodeJS.Signals | string | null;
@@ -256,6 +259,11 @@ export function normalizeCodexJsonlEvent(raw: unknown, metadata: CodexRuntimeMet
     ?? stringField(rawEvent.tool_name)
     ?? stringField(rawEvent.name)
     ?? stringField(payload?.name);
+  const command = commandFromRaw(rawEvent, item, payload);
+  const normalizedToolName = toolName ?? toolNameFromItemType(itemType, command);
+  const itemStatus = stringField(item.status) ?? stringField(rawEvent.status) ?? stringField(payload?.status);
+  const exitCode = numberField(item.exit_code) ?? numberField(item.exitCode) ?? numberField(rawEvent.exit_code) ?? numberField(rawEvent.exitCode);
+  const outputSummary = commandOutputSummary(item) ?? (payload ? commandOutputSummary(payload) : undefined) ?? commandOutputSummary(rawEvent);
 
   const events: NormalizedAgentEvent[] = [rawJsonlAuditEvent(metadata, raw)];
   const guiPresent = guiPresentFromRaw(rawEvent, item);
@@ -301,8 +309,10 @@ export function normalizeCodexJsonlEvent(raw: unknown, metadata: CodexRuntimeMet
   if (/item\.started|tool.*started|function_call.*started|exec.*started/i.test(type)) {
     events.push(event(metadata, 'tool_started', {
       itemId,
-      toolName,
-      message: toolName ? `Tool started: ${toolName}` : 'Tool started.',
+      toolName: normalizedToolName,
+      command,
+      status: itemStatus ?? 'in_progress',
+      message: toolLifecycleMessage('started', normalizedToolName, command, itemStatus),
     }));
     return events;
   }
@@ -310,8 +320,12 @@ export function normalizeCodexJsonlEvent(raw: unknown, metadata: CodexRuntimeMet
   if (/item\.completed|tool.*completed|function_call.*completed|exec.*completed/i.test(type)) {
     events.push(event(metadata, 'tool_completed', {
       itemId,
-      toolName,
-      message: toolName ? `Tool completed: ${toolName}` : 'Tool completed.',
+      toolName: normalizedToolName,
+      command,
+      outputSummary,
+      status: itemStatus ?? 'completed',
+      exitCode,
+      message: toolLifecycleMessage('completed', normalizedToolName, command, itemStatus, exitCode, outputSummary),
     }));
   }
 
@@ -321,7 +335,7 @@ export function normalizeCodexJsonlEvent(raw: unknown, metadata: CodexRuntimeMet
 function guiAskUserFromRaw(
   rawEvent: Record<string, unknown>,
   item: Record<string, unknown>,
-): Omit<GuiAskUserRuntimePayload, 'source'> | undefined {
+): Omit<GuiAskUserRuntimePayload, 'source'> & { source?: string } | undefined {
   const type = stringField(rawEvent.type) ?? stringField(rawEvent.event) ?? '';
   const itemStatus = stringField(item.status) ?? stringField(rawEvent.status) ?? '';
   const isCompleted = /completed|done|output/i.test(type) || /completed|done|ok|applied/i.test(itemStatus);
@@ -330,17 +344,19 @@ function guiAskUserFromRaw(
     ?? stringField(item.tool_name)
     ?? stringField(rawEvent.tool_name)
     ?? stringField(rawEvent.name);
-  if (toolName !== 'gui.ask_user') return undefined;
-  const args = parseJsonRecord(item.arguments)
+  const rawArgs = parseJsonRecord(item.arguments)
     ?? parseJsonRecord(rawEvent.arguments)
     ?? parseJsonRecord(item.input)
     ?? parseJsonRecord(rawEvent.input)
     ?? {};
-  const result = parseJsonRecord(item.result)
+  const guiIntent = guiIntentFromToolCall(toolName, rawArgs);
+  if (guiIntent.name !== 'gui.ask_user') return undefined;
+  const args = guiIntent.args;
+  const result = moduleResultValue(parseJsonRecord(item.result)
     ?? parseJsonRecord(rawEvent.result)
     ?? parseJsonRecord(item.output)
     ?? parseJsonRecord(rawEvent.output)
-    ?? {};
+    ?? {});
   if (result.ok === false || result.applied === false) return undefined;
   const approvalRequest = parseJsonRecord(args.approvalRequest) ?? parseJsonRecord(args.approval_request);
   const title = stringField(args.title) ?? stringField(approvalRequest?.title) ?? 'Computer Use confirmation required';
@@ -368,6 +384,7 @@ function guiAskUserFromRaw(
     approvalRequest,
     relatedRefs,
     displayedRefs: relatedRefs,
+    source: guiIntent.source,
     placement: placement
       ? {
           panel: stringField(placement.panel),
@@ -385,7 +402,7 @@ function isCodexSamplingRetryMessage(value: string): boolean {
 function guiPresentFromRaw(
   rawEvent: Record<string, unknown>,
   item: Record<string, unknown>,
-): Omit<GuiPresentRuntimePayload, 'source'> | undefined {
+): Omit<GuiPresentRuntimePayload, 'source'> & { source?: string } | undefined {
   const type = stringField(rawEvent.type) ?? stringField(rawEvent.event) ?? '';
   const itemStatus = stringField(item.status) ?? stringField(rawEvent.status) ?? '';
   const isCompleted = /completed|done|output/i.test(type) || /completed|done|ok|applied/i.test(itemStatus);
@@ -394,17 +411,19 @@ function guiPresentFromRaw(
     ?? stringField(item.tool_name)
     ?? stringField(rawEvent.tool_name)
     ?? stringField(rawEvent.name);
-  if (toolName !== 'gui.present') return undefined;
-  const args = parseJsonRecord(item.arguments)
+  const rawArgs = parseJsonRecord(item.arguments)
     ?? parseJsonRecord(rawEvent.arguments)
     ?? parseJsonRecord(item.input)
     ?? parseJsonRecord(rawEvent.input)
     ?? {};
-  const result = parseJsonRecord(item.result)
+  const guiIntent = guiIntentFromToolCall(toolName, rawArgs);
+  if (guiIntent.name !== 'gui.present') return undefined;
+  const args = guiIntent.args;
+  const result = moduleResultValue(parseJsonRecord(item.result)
     ?? parseJsonRecord(rawEvent.result)
     ?? parseJsonRecord(item.output)
     ?? parseJsonRecord(rawEvent.output)
-    ?? {};
+    ?? {});
   if (result.ok === false || result.applied === false) return undefined;
   const content = isRecord(args.content) ? args.content : {};
   const contentText = typeof content.value === 'string' ? content.value : undefined;
@@ -426,6 +445,7 @@ function guiPresentFromRaw(
     displayedRefs: stringArrayField(args.displayedRefs) ?? (ref ? [ref] : undefined),
     title,
     hint,
+    source: guiIntent.source,
     placement: placement
       ? {
           panel: stringField(placement.panel),
@@ -455,6 +475,27 @@ function formatGuiAskUserText(input: {
     input.choices?.length ? ['Choices:', ...input.choices.map((choice) => `- ${choice.label}: \`${choice.commandText}\``)].join('\n') : undefined,
   ].filter(Boolean);
   return lines.join('\n\n');
+}
+
+function guiIntentFromToolCall(
+  toolName: string | undefined,
+  args: Record<string, unknown>,
+): { name?: string; args: Record<string, unknown>; source?: string } {
+  // Legacy gui.* names are normalized only for event compatibility; module.invoke is canonical.
+  if (toolName === 'gui.present' || toolName === 'gui.ask_user') return { name: toolName, args };
+  if (toolName !== 'module.invoke') return { args };
+  const moduleId = stringField(args.moduleId);
+  const intent = stringField(args.intent);
+  if (moduleId !== 'gui' || !intent) return { args };
+  const input = parseJsonRecord(args.input) ?? {};
+  if (intent === 'present') return { name: 'gui.present', args: input, source: 'gui.present:module.invoke' };
+  if (intent === 'ask_user') return { name: 'gui.ask_user', args: input, source: 'gui.ask_user:module.invoke' };
+  return { args };
+}
+
+function moduleResultValue(result: Record<string, unknown>): Record<string, unknown> {
+  if (result.schemaVersion === 'sciforge.module-contract.v1' && isRecord(result.value)) return result.value;
+  return result;
 }
 
 function normalizeGuiChoices(value: unknown): Array<{ label: string; commandText: string; style?: string }> | undefined {
@@ -530,6 +571,83 @@ function textFromRaw(value: Record<string, unknown>): string | undefined {
     ?? stringField(value.output_text)
     ?? stringField(value.content)
     ?? textFromContent(value.content);
+}
+
+function commandFromRaw(
+  rawEvent: Record<string, unknown>,
+  item: Record<string, unknown>,
+  payload: Record<string, unknown> | undefined,
+): string | undefined {
+  return compactRuntimeText(
+    stringField(item.command)
+      ?? stringField(item.cmd)
+      ?? stringField(rawEvent.command)
+      ?? stringField(rawEvent.cmd)
+      ?? stringField(payload?.command)
+      ?? stringField(payload?.cmd),
+    260,
+  );
+}
+
+function toolNameFromItemType(itemType: string, command: string | undefined): string | undefined {
+  if (/command_execution|exec|shell|terminal/i.test(itemType) || command) return 'shell';
+  if (/function_call/i.test(itemType)) return 'function_call';
+  return itemType || undefined;
+}
+
+function commandOutputSummary(value: Record<string, unknown>): string | undefined {
+  return compactRuntimeText(
+    stringField(value.output_summary)
+      ?? stringField(value.outputSummary)
+      ?? stringField(value.aggregated_output)
+      ?? stringField(value.output)
+      ?? stringField(value.result),
+    320,
+  );
+}
+
+function toolLifecycleMessage(
+  phase: 'started' | 'completed',
+  toolName: string | undefined,
+  command: string | undefined,
+  status: string | undefined,
+  exitCode?: number | null,
+  outputSummary?: string,
+) {
+  const title = command
+    ? `Shell command ${phase}: ${command}`
+    : toolName
+      ? `Tool ${phase}: ${toolName}`
+      : `Tool ${phase}.`;
+  const suffix = [
+    status ? `status=${status}` : undefined,
+    exitCode !== undefined && exitCode !== null ? `exit=${exitCode}` : undefined,
+    outputSummary ? `output=${outputSummary}` : undefined,
+  ].filter(Boolean);
+  return suffix.length ? `${title} (${suffix.join(', ')})` : title;
+}
+
+function compactRuntimeText(value: string | undefined, limit: number): string | undefined {
+  if (!value?.trim()) return undefined;
+  const redacted = redactRuntimeText(value).replace(/\s+/g, ' ').trim();
+  if (redacted.length <= limit) return redacted;
+  return `${redacted.slice(0, Math.max(0, limit - 18)).replace(/\s+\S*$/, '')} ... ${redacted.slice(-14)}`;
+}
+
+function redactRuntimeText(value: string): string {
+  return value
+    .replace(/\bBearer\s+([A-Za-z0-9._~+/=-]{8,})/gi, 'Bearer [redacted-secret]')
+    .replace(
+      /\b(api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password|authorization)\b\s*[:=]\s*["']?([^"'\s,;)}\]]{8,})/gi,
+      (_match, label: string) => `${label}=[redacted-secret]`,
+    )
+    .replace(/\b(?:sk|rk|pk)-[A-Za-z0-9_-]{8,}\b/g, '[redacted-secret]')
+    .replace(/https?:\/\/[^\s"'<>\\)]+/gi, '[redacted-url]');
+}
+
+function numberField(value: unknown): number | null | undefined {
+  if (value === null) return null;
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function stringField(value: unknown): string | undefined {

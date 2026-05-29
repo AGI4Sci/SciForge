@@ -24,7 +24,6 @@ import {
   updateGuidanceQueueRecords,
 } from './sessionTransforms';
 import { enrichRepairRaw } from './sessionRepairRaw';
-import { streamProcessTranscript } from './RunningWorkProcess';
 import { latestProgressModelFromCompactTrace } from '../../processProgress';
 import { conversationProjectionMigrationAuditFixtureForRun } from '../conversation-projection-view-model';
 
@@ -161,7 +160,7 @@ test('compacts prior work payloads for multi-turn requests', () => {
   assert.equal((payload.runs[0]?.raw as { streamProcess?: { summaryDigest?: { hash?: string } } }).streamProcess?.summaryDigest, undefined);
 });
 
-test('compact prior run payload keeps stream transcript as digest only', () => {
+test('compact prior run payload drops legacy stream transcript bodies', () => {
   const userMessage = message('msg-user', 'user', 'continue', '2026-05-07T01:00:00.000Z');
   const priorRun = {
     id: 'run-progress',
@@ -173,10 +172,6 @@ test('compact prior run payload keeps stream transcript as digest only', () => {
     raw: {
       streamProcess: {
         eventCount: 80,
-        summary: [
-          '工作过程摘要:',
-          '- 等待: 正在等待后端返回新事件 · 等 后端返回新事件 · 最近 读取: 正在读取 /workspace/input/papers.csv · 下一步 收到新事件后继续执行；也可以安全中止当前 stream 或继续补充指令排队。',
-        ].join('\n'),
         events: Array.from({ length: 80 }, (_, index) => ({ label: `event-${index}` })),
       },
     },
@@ -969,7 +964,6 @@ test('running guidance keeps queue status in UI message, event transcript, final
   const nextPayload = requestPayloadForTurn({ ...mergedForNextTurn, messages: [...mergedForNextTurn.messages, nextUser] }, nextUser, []);
 
   assert.equal(queued.messages.at(-1)?.guidanceQueue?.status, 'queued');
-  assert.match(streamProcessTranscript(events), /引导已排队: .*等待当前 run 结束后合并到下一轮/);
   assert.equal(responseWithGuidance.run.guidanceQueue?.[0]?.status, 'deferred');
   assert.equal((responseWithGuidance.run.raw as { guidanceQueue?: Array<{ prompt: string }> }).guidanceQueue?.[0]?.prompt, guidance.prompt);
   assert.equal(mergedForNextTurn.messages.find((item) => item.guidanceQueue?.id === guidance.id)?.guidanceQueue?.status, 'merged');
@@ -1127,19 +1121,19 @@ test('failed runs preserve silent waiting recovery clues for the next turn paylo
     references: [],
     goalSnapshot,
   });
-  const transcript = [
-    '工作过程摘要:',
-    '- 等待: 正在等待后端返回新事件 · 最近 读取: 正在读取 /workspace/input/papers.csv · 下一步 收到新事件后继续执行；也可以安全中止当前 stream 或继续补充指令排队。',
-  ].join('\n');
   const recovered = attachProcessRecoveryToFailedSession({
     session: failed.session,
     failedRunId: failed.failedRunId,
-    transcript,
     events: [{
       type: 'process-progress',
       label: '等待',
       detail: 'HTTP stream 仍在等待；最近事件：读取 - 正在读取 /workspace/input/papers.csv',
       createdAt: '2026-05-08T00:01:05.000Z',
+      native: {
+        backend: 'codex-app-server',
+        rawType: 'operation_progress',
+        text: 'HTTP stream 仍在等待；最近事件：读取 - 正在读取 /workspace/input/papers.csv',
+      },
     }],
   });
   const nextUser = message('msg-next', 'user', '继续上一轮', '2026-05-08T00:02:00.000Z');
@@ -1148,10 +1142,10 @@ test('failed runs preserve silent waiting recovery clues for the next turn paylo
 
   assert.doesNotMatch(recovered.messages.at(-1)?.content ?? '', /工作过程摘要/);
   assert.doesNotMatch(recovered.runs.at(-1)?.response ?? '', /安全中止当前 stream/);
-  assert.deepEqual((recovered.runs.at(-1)?.raw as { streamProcess?: { eventSummaries?: unknown[] } }).streamProcess?.eventSummaries?.length, 1);
+  assert.deepEqual((recovered.runs.at(-1)?.raw as { streamProcess?: { events?: unknown[] } }).streamProcess?.events?.length, 1);
   assert.doesNotMatch(JSON.stringify(failedRunPayload?.raw), /最近 读取/);
   assert.doesNotMatch(JSON.stringify(failedRunPayload?.raw), /继续补充指令/);
-  assert.match(String((failedRunPayload?.raw as { streamProcess?: { summaryDigest?: { hash?: string } } } | undefined)?.streamProcess?.summaryDigest?.hash ?? ''), /^fnv1a-/);
+  assert.equal((failedRunPayload?.raw as { streamProcess?: { summaryDigest?: unknown } } | undefined)?.streamProcess?.summaryDigest, undefined);
 });
 
 test('background completion initial response creates a running run and assistant message with stable refs', () => {

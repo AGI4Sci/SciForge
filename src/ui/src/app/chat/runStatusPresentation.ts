@@ -10,9 +10,9 @@ export function runningMessageContentFromStream(assistantDraft: string, streamEv
   if (assistantDraft) return assistantDraft;
   if (latestWorklogLine) return latestWorklogLine;
   if (streamEvents.some(isRuntimeAuditOnlyEvent)) {
-    return '正在等待工作区进度；详细日志已收起。';
+    return '正在等待 backend 事件；底层审计日志已收起。';
   }
-  return '正在规划或执行任务，过程细节默认收起。';
+  return '正在连接 backend 实时流。';
 }
 
 export function runReadiness({

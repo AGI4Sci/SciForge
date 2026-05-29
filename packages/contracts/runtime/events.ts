@@ -430,7 +430,11 @@ export function acceptanceRepairRerunToolId() {
 
 export function normalizeRuntimeWorkspaceEventType(type: string, record: Record<string, unknown>) {
   const lower = type.toLowerCase();
-  if (lower === 'text_delta' || lower === 'token_delta' || lower === 'content_delta') return TEXT_DELTA_EVENT_TYPE;
+  if (lower === 'text_delta' || lower === 'token_delta' || lower === 'content_delta' || lower === 'message_delta' || lower === 'assistant_delta' || lower === 'agent_message_delta') return TEXT_DELTA_EVENT_TYPE;
+  if (lower === 'tool_started' || lower === 'tool_call' || lower === 'tool_call_started' || lower === 'function_call_started') return TOOL_CALL_EVENT_TYPE;
+  if (lower === 'tool_completed' || lower === 'tool_result' || lower === 'tool_call_completed' || lower === 'function_call_completed') return TOOL_RESULT_EVENT_TYPE;
+  if (lower === 'operation_progress' || lower === 'process_progress' || lower === 'progress' || lower.includes('operation.progress')) return PROCESS_PROGRESS_EVENT_TYPE;
+  if (lower === 'approval_requested' || lower === 'approval_required' || lower === 'control_request') return HUMAN_APPROVAL_REQUIRED_EVENT_TYPE;
   if (lower === 'context_compressor' || lower === 'context-compressor') return CONTEXT_COMPACTION_EVENT_TYPE;
   if (lower === 'ratelimit' || lower === 'rate_limit' || lower === 'rate-limit') return RATE_LIMIT_EVENT_TYPE;
   if (lower.includes('context_compressor') || record.context_compressor || record.contextCompressor) return CONTEXT_COMPACTION_EVENT_TYPE;

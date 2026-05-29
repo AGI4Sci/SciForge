@@ -2,333 +2,191 @@
 
 最后更新：2026-05-29
 
-当前目标：把 Computer Use 从 package-level / harness-level 验收推进到 SciForge 对话栏端到端集成验收。现在应从 SciForge 对话栏发起真实多轮复杂任务，打通 `chat -> runtime -> computer_use.runTask(request, hostPorts) -> gui.present / gui.ask_user -> verifier`，并用当前轮 evidence bundle 证明任务完成、阻塞或需要用户确认。
+当前目标：把 SciForge 从 GUI-as-extension 进一步收敛为 **Agent Host Semantic Pipeline**。Codex app-server 是首选原生 backend；`codex exec --json` 保留为迁移兼容；Claude Code stream-json 是可选 backend。所有暴露给 Agent Host 的边界模块统一通过 `module.describe/query/read/invoke` 进入，复杂能力由 Agent Host 组合成 typed semantic pipeline，GUI 只是一个特殊模块。
 
 旧任务历史已在 Git 历史中保留；本文件只记录当前阶段原则、任务板、TODO 和验收规则。
 
 ## 当前范围
 
-- 主要工作范围是 SciForge 对话栏、runtime Computer Use bridge、`packages/actions/computer-use` 以及相关验收工具。
-- 现在允许并优先从 SciForge 对话栏做端到端真实测试，而不是只跑 package-local fixture、target-bound harness 或独立 Docker gate。
-- 对话栏触发的每个 Computer Use run 必须通过公开 runtime/package 边界完成：`computer_use.runTask(request, hostPorts)`、GUI host ports、trace refs、viewer/evidence refs 和 verifier refs。
-- 复杂工作不能用 GUI 私有状态、DOM、accessibility tree、Playwright DOM、shell 直写文件或 app-private shortcut 冒充 Computer Use 成功。
-- “用户能看到”指 SciForge 对话栏和相关面板能展示或追溯虚拟屏幕、鼠标轨迹、键盘输入、动作时间线、截图帧、artifact refs、`gui.present` / `gui.ask_user` receipts 和 verifier verdict；不是指 agent 操作用户当前真实桌面。
-- Package-owned target-bound harness 只能作为 contract/diagnostic；不能替代对话栏端到端验收。
-- L3 / CU-NEXT 级完成声明必须来自当前轮 evidence bundle 中真实 same-session run 的 completed evidence，不能复用旧 `/tmp` run、旧 trace、inline summary、shape-only payload 或 readiness manifest。
+- 主要工作范围是模块边界 contract、runtime adapter、GUI module surface、Codex app-server 接入、Claude stream-json 兼容、pipeline trace、skills/memory/capability discovery 的模块化迁移。
+- SciForge 不维护第二套 AgentServer。Agent Host 拥有推理、规划、工具选择、重试、取消、repair、memory/skill/capability ranking 和 pipeline 编排。
+- GUI 继续只负责 presentation、confirmation、focus、hot-region projection、read-only GUI resources 和 terminal-equivalent text。GUI 不做 provider route、completion 判断、capability ranking 或隐藏 prompt assembly。
+- Computer Use、browser、connectors、verifiers、skills、memory、capabilities 和 artifacts 都应作为 Agent Host 可组合模块暴露；模块只执行单步能力，不直接调用下游模块。
+- 迁移期可以保留 `gui.*`、`capability_discovery.*`、旧 runtime event 和 `AgentCliAdapter` alias，但它们只能存在于 adapter shim、fixture 或 legacy normalizer 层；新增设计必须以 `module.*` 为 canonical public surface。
 
-## 最新算法边界
+## 不可变规则
 
-Computer Use 采用三层循环：
+- 所有修改必须通用，不能为当前案例写硬编码补丁。
+- 代码路径保持唯一真相源：发现冗余链路时删除或合并旧链路，避免长期并行实现。
+- 旧逻辑和最终方案不一致时，删除旧逻辑，不做长期兼容。
+- 业务代码单文件超过约 2000 行时必须拆分或登记拆分任务；测试代码、副产物不需要受这个限制。
+- 已完成的 TODO 需要打勾，并补充 evidence、日期和最终状态。
+- 涉及 provider URL、API key、model name、Authorization、token、secret、password、credential 的日志和 evidence 必须脱敏；ignored local config 不得提交。
+- Codex CLI 拓展的核心算法部分优先用 Python 写，方便人类查看、修改。
+- 纯 helper、validator、React component 和 package-private adapter 不需要直接实现 `module.*`；只有暴露给 Agent Host 的边界模块需要。
+
+## 模块化设计原则
+
+- 公共函数只有四个：`module.describe`、`module.query`、`module.read`、`module.invoke`。
+- `module.describe` 是边界模块唯一硬必备能力。模块如果不支持 `query/read/invoke`，必须在 `describe` 中声明不支持。
+- `describe/query/read` 必须只读；只有 `invoke` 可以有副作用。
+- `list/search` 收敛为 `query`，`stat` 收敛为 `read({ includeMeta: true })`，`watch/subscribe/present/ask_user/apply_batch` 收敛为具体 `invoke` intent。
+- `events`、`refs`、`approval`、`subscription` 和 `batch` 是按需 facet，不是每个模块必备；所有支持的 facet 必须能从 `describe` 查询到。
+- 小结果可以 inline；大 payload、敏感内容、可复用对象和审计材料必须使用 ref。
+- Agent Host 负责编排 semantic pipeline；模块不得直接 import 或调用其它模块；GUI 可以展示 pipeline trace，但不决定 pipeline。
+- 默认是 trace-first：隐式组合可以存在，但必须记录结构化 pipeline trace；高风险、长任务、跨外部系统或多副作用流程必须先产出显式 pipeline plan。
+
+## 当前任务板：Agent Host Semantic Pipeline
+
+### Contract / Dispatcher
+
+- [x] 定义 shared `module.*` contract。
+  验收：`packages/contracts/runtime` 或等价 shared contract 暴露 `ModuleDescription`、`ModuleQueryRequest/Result`、`ModuleReadRequest/Result`、`ModuleInvokeRequest/Result`、facet metadata、operation ref、approval request 和 pipeline trace 类型；不依赖 `src/runtime` 或 `src/ui` 私有实现。
+  证据（2026-05-29）：新增 `packages/contracts/runtime/modules.ts` / `.test.ts`，导出 `ModuleDescription`、`ModuleQueryRequest/Result`、`ModuleReadRequest/Result`、`ModuleInvokeRequest/Result`、`ModuleResultEnvelope`、`ModulePipelineTraceStep`、facet/function/intent helpers，并接入 `@sciforge-ui/runtime-contract` exports；trace step 增补 input/result summary、timing 和 approval 字段。验证：`node --import tsx --test packages/contracts/runtime/modules.test.ts` passed；`npm run typecheck --silent` passed。
+
+- [x] 实现 runtime module dispatcher。
+  验收：Host adapter 可以通过一个 dispatcher 调用 `module.describe/query/read/invoke`；dispatcher 支持按 `moduleId` 路由到 GUI、skills、memory、capabilities、browser、verifier、actions、artifacts；未声明能力 fail closed。
+  证据（2026-05-29）：新增 `src/runtime/modules/dispatcher.ts` / `.test.ts`，默认 registry 覆盖 `gui`、`skills`、`memory`、`capabilities`、`browser`、`verifier`、`actions`、`artifacts`，支持按 `moduleId` 和 ref prefix 路由，unsupported module/function/intent fail closed，trace summary 脱敏并记录 timing/refs/approval。验证：`node --import tsx --test src/runtime/modules/dispatcher.test.ts` passed；focused runtime suite passed；`npm run typecheck --silent` passed。
+
+- [x] 建立 `module.describe` registry。
+  验收：所有边界模块可返回 title、summary、resource kinds/ref prefixes、intents、side effect level、approval requirement、operation/event/ref/subscription/batch facets 和 limits。
+  证据（2026-05-29）：`createRuntimeModuleRegistry()` 聚合真实 GUI/resource modules 与 browser/verifier/actions/artifacts describe-only 边界；`dispatcher.test.ts` 验证 registry describe 返回全部边界模块，GUI/capabilities intents 和 facet metadata 可查询。验证：`node --import tsx --test src/runtime/modules/dispatcher.test.ts` passed。
+
+### GUI Module
+
+- [x] 将现有 `gui.*` surface 迁移为 GUI module alias。
+  验收：`module.query/read/invoke({ moduleId: 'gui' })` 能覆盖现有 GUI resource tree、hot-region、presentation catalog、present、ask_user、notify、set_status、apply_batch；旧 `gui.*` tool 继续作为 alias，通过同一实现路径转发。
+  证据（2026-05-29）：新增 `src/runtime/modules/gui-module-handler.ts` / `.test.ts`，复用 `GuiProtocolController` 作为唯一真相源；`src/runtime/codex/gui-mcp-tools.ts` 的 11 个 `gui.*` alias 改为通过 GUI module handler 转发；Codex normalizer 支持 completed `module.invoke({ moduleId: 'gui', intent: 'present'|'ask_user' })` 与旧 `gui.present/gui.ask_user` 进入同一 visible event 路径。验证：`node --import tsx --test src/runtime/modules/gui-module-handler.test.ts src/runtime/codex/gui-mcp-tools.test.ts src/runtime/codex/codex-event-normalizer.test.ts` passed。
+
+- [x] GUI module 保持 presentation-only。
+  验收：GUI module 不做 capability ranking、provider route、workspace execution、completion/verdict/confidence 判断；所有副作用 intent 只限 GUI-local presentation transaction，并带 revision/precondition。
+  证据（2026-05-29）：GUI module description 只声明 GUI resource/hot-region 和 `present/ask_user/notify/set_status/apply_batch/watch`，所有副作用均为 `local` 或 `none`；handler 只包装 `GuiProtocolController` 的 resource tree、presentation catalog、precondition 和 intent log，不读取 provider/capability ranking，也不执行 workspace action。验证：`node --import tsx --test src/runtime/modules/gui-module-handler.test.ts` passed。
+
+### Backend Adapters
+
+- [x] 新增 `CodexAppServerAdapter` 作为首选 backend。
+  验收：adapter 支持 thread/start、turn/start、turn/steer 或等价文本输入；消费 thread/turn/item/delta/tool/approval 事件；把 Codex dynamic tools 或 MCP tools 映射到 `module.*`；web 对话能实时显示 assistant delta、tool lifecycle、approval request 和 done。
+  证据（2026-05-29）：新增 `src/runtime/codex/codex-app-server-adapter.ts` 与 backend-neutral adapter tests，支持 injectable app-server client、thread/turn start、turn steer、cancel，并把 app-server thread/turn/delta/tool/approval/done fixtures 通过 `backend-event-normalization.ts` 归一为 `NormalizedAgentEvent` + `ModulePipelineTraceStep`；approval request 映射为 GUI-visible confirmation event。验证：`node --import tsx --test src/runtime/codex/backend-event-normalization.test.ts src/runtime/codex/backend-adapters.test.ts` passed。
+
+- [x] 保留并降级 `CodexExecJsonAdapter` 为兼容路径。
+  验收：现有 `codex exec --json` 仍可运行，但文档、配置和 UI 文案不再把它描述为 rich-client 主路径；事件归一化继续输出同一 pipeline trace。
+  证据（2026-05-29）：保留现有 `CodexExecJsonAdapter`；新增 backend-neutral normalizer 将 `sciforge.codex.normalized-event.v1` 事件作为 `codex-exec-json` backend passthrough，并为 tool lifecycle 产出 module trace；文档入口改为 Codex app-server 首选、exec JSON 兼容。验证：`node --import tsx --test src/runtime/codex/backend-event-normalization.test.ts src/runtime/codex/codex-event-normalizer.test.ts` passed。
+
+- [x] 新增 `ClaudeStreamJsonAdapter`。
+  验收：使用 `claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages`；stdout NDJSON 映射为同一内部事件；`control_request/control_response` 映射为 approval/input；`module.*` 通过 SciForge MCP server 暴露。
+  证据（2026-05-29）：新增 `src/runtime/codex/claude-stream-json-adapter.ts`，以 fixture-friendly spawn 启动 `claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages`，stdin 写入 user message，stdout NDJSON 经 backend-neutral normalizer 映射为 message/tool/approval/done，`control_request/control_response` 映射到 approval trace。验证：`node --import tsx --test src/runtime/codex/backend-event-normalization.test.ts src/runtime/codex/backend-adapters.test.ts` passed。
+
+### Pipeline Trace / UI
+
+- [x] 引入统一 pipeline trace。
+  验收：每次跨模块组合记录 step id、moduleId、function、intent/query/ref、input summary、result summary、refs、approval、operation、timing、status、parent/child relation；trace 必须脱敏并可折叠展示。
+  证据（2026-05-29）：`ModulePipelineTraceStep` 增补 input/result summary、timing、approval；runtime dispatcher 对 `describe/query/read/invoke` 生成脱敏 trace；backend-neutral normalizer 对 Codex app-server、Codex JSONL、Claude stream-json tool/approval lifecycle 生成同一 trace step，并脱敏 provider URL、secret、model/provider 字段。验证：`node --import tsx --test src/runtime/modules/dispatcher.test.ts src/runtime/codex/backend-event-normalization.test.ts` passed。
+
+- [x] 抽出 backend presentation profile。
+  验收：Codex app-server、Codex JSONL、Claude stream-json 的 event shape 都先归一化为内部事件，再由 `codex-cli-like`、`claude-code-like`、`sciforge-default` profile 决定折叠、展开和标签；UI 不直接硬编码 backend raw event。
+  证据（2026-05-29）：`src/ui/src/streamEventPresentation.ts` 新增 `BackendPresentationProfileId` 与 profile policy，默认保持 `sciforge-default`，可从 backend-neutral `raw.backend` 推导 `codex-cli-like` / `claude-code-like`；测试证明 presentation profile 与 runtime `profile` 元数据分离。验证：`node --import tsx --test src/ui/src/streamEventPresentation.test.ts` passed。
+
+- [x] 修复 web 对话实时性。
+  验收：assistant partial/delta、tool start/completion、approval request、operation progress 在 100-300ms 内进入 GUI reducer；final result 只负责收尾，不负责首次展示。
+  证据（2026-05-29）：`packages/contracts/runtime/events.ts` 将 backend-neutral `message_delta/assistant_delta`、`tool_started/tool_completed`、`approval_requested` 和 `operation_progress` 映射到 GUI reducer 使用的 `text-delta`、`tool-call`、`tool-result`、`human-approval-required`、`process-progress` contract types；`src/ui/src/api/sciforgeToolsClient/runtimeEvents.ts` 在 SSE/WS 读取阶段即时 normalize，`assistantDraftFromStreamEvents` 可在 `done` 前拿到 partial text，final result 只聚合/收尾。backend normalizer 新增 operation progress 事件。验证：`node --import tsx --test packages/contracts/runtime/events.test.ts src/ui/src/api/sciforgeToolsClient/runtimeEvents.test.ts src/runtime/codex/backend-event-normalization.test.ts src/runtime/codex/backend-adapters.test.ts` passed。
+
+### Skills / Memory / Capabilities
+
+- [x] 将 skills 暴露为 module resource。
+  验收：`module.query({ moduleId: 'skills' })` 可搜索 skill；`module.read({ ref: 'skill:...' })` 可读取 skill 摘要、约束和适用场景；skill 执行仍走 Agent Host 原生 skill/tool 机制。
+  证据（2026-05-29）：新增 `src/runtime/modules/resource-modules.ts` / `.test.ts`，skills handler 复用 `packages/skills/catalog.ts`，按 id/label/description/tags 搜索，`skill:<id>` read 返回摘要、domains、entrypoint、outputs、required capabilities、failure modes 和适用 prompts；不执行 skill、不做 GUI ranking。验证：`node --import tsx --test src/runtime/modules/resource-modules.test.ts` passed。
+
+- [x] 将 memory 暴露为 module resource。
+  验收：`module.query({ moduleId: 'memory' })` 搜索 project/session/user memory；`module.read({ ref: 'memory:...' })` 读取小摘要；写入、更新、forget 走 `module.invoke` 并记录 trace、来源和审批要求。
+  证据（2026-05-29）：memory handler 支持 caller-provided project/session/user fixture refs 的 query/read，小摘要和 meta 输出脱敏；`write/update/forget` 走 approval-gated `module.invoke`，返回 operation ref、approvalRequest 和 accepted-not-persisted dry-run 结果，不做隐式持久化。验证：`node --import tsx --test src/runtime/modules/resource-modules.test.ts` passed。
+
+- [x] 将 capability discovery 暴露为 module resource。
+  验收：`module.query/read/invoke({ moduleId: 'capabilities' })` 覆盖 search、explain、plan；GUI 只展示结果，不做 ranking。
+  证据（2026-05-29）：capabilities handler 复用 `createCapabilityDiscoveryService`，`query` 暴露 compact capability resource items 且不输出 rank/score/confidence，`read capability:<id>` 返回 bounded summary，`invoke search/explain/plan/expand` 继续保留 `completionEvidence: 'not-evidence'`。验证：`node --import tsx --test src/runtime/modules/resource-modules.test.ts` passed。
+
+### Cleanup / Migration
+
+- [x] 清理旧命名和旧路径。
+  验收：新增代码不再引入第二套 `registerCommand/registerTool/registerPolicy` 或 AgentServer 概念；旧 `gui.*` 和 capability alias 只作为 adapter shim 存在，并有删除计划。
+  证据（2026-05-29）：`rg -n "registerCommand|registerTool|registerPolicy|AgentServer|gui\\.|capability_discovery\\.|capabilit(y|ies).*alias|alias"` 审计当前改动与新增文件；新增 runtime module/adapter 代码没有引入第二套 `registerCommand/registerTool/registerPolicy`，也没有新增 AgentServer public surface。`gui.*` 只保留在 `src/runtime/codex/gui-mcp-tools.ts` legacy shim、Codex normalizer 兼容映射和对应 tests；capability alias 只在文档中作为迁移 shim 被说明，runtime canonical surface 是 `module.query/read/invoke(moduleId='capabilities')`。删除计划：先让 Codex app-server / CLI bridge / Claude MCP 都默认注入 `module.*` 并通过 smoke gates；随后删除 `capability_discovery.*` alias 注入和文档示例；最后在 GUI module adoption 稳定后删除 `gui.*` MCP alias，只保留 `module.*`。
+
+- [x] 更新 smoke gates。
+  验收：新增 focused tests 覆盖 module describe registry、GUI alias 转发、dispatcher fail-closed、Codex app-server event normalization、Claude stream-json normalization 和 pipeline trace 脱敏。
+  证据（2026-05-29）：新增/扩展 focused tests：`packages/contracts/runtime/modules.test.ts`、`src/runtime/modules/dispatcher.test.ts`、`src/runtime/modules/gui-module-handler.test.ts`、`src/runtime/modules/resource-modules.test.ts`、`src/runtime/codex/gui-mcp-tools.test.ts`、`src/runtime/codex/codex-event-normalizer.test.ts`、`src/runtime/codex/backend-event-normalization.test.ts`、`src/runtime/codex/backend-adapters.test.ts`、`src/ui/src/streamEventPresentation.test.ts`。验证：focused runtime suite 39 tests passed；stream event presentation 26 tests passed；`npm run typecheck --silent` passed。
+
+## 近期 TODO
+
+- [x] 先落地 shared module contract。
+- [x] 落地 runtime module dispatcher skeleton。
+- [x] 把 `src/runtime/codex/gui-mcp-tools.ts` 的 `gui.*` 调用改为复用 GUI module handler。
+- [x] 为 `module.describe({ moduleId: 'gui' })` 补测试，证明 GUI facets 和 intents 可查询。
+- [x] 为 skills/memory/capabilities 设计最小 `describe/query/read` fixtures。
+- [x] 梳理 `CodexExecJsonAdapter` 当前事件到 pipeline trace 的映射表。
+- [x] 起草 `CodexAppServerAdapter` 事件归一化测试 fixture，不直接依赖真实 app-server。
+
+## Computer Use 仍适用原则
+
+Computer Use 仍采用三层循环：
 
 ```text
 Evidence Loop:
   observe -> inspect/crop/VLM/OCR -> update evidence graph
-  repeat until evidence is enough or blocked
 
 Action Loop:
   plan action -> ground -> execute -> verify -> update evidence graph
 
 Task Loop:
-  evidence loop -> action loop -> evidence loop -> ... -> complete/blocked
+  evidence loop -> action loop -> evidence loop -> complete/blocked
 ```
 
-边界规则：
-
 - Evidence Loop 只允许不改变屏幕、窗口、viewport、focus、菜单、tab 或应用状态的观察型操作。
-- 允许的 evidence 操作包括 recapture、wait until stable、crop、OCR、VLM describe、VLM compare、region detection、visual table/image inspection。
-- 任何会改变可见状态的操作都必须进入 Action Loop，包括 scroll、hover、focus、open menu/dropdown、switch tab/window/panel、zoom view、page up/down、任意鼠标或键盘输入。
-- 只要进入 Action Loop，就必须记录 before/after evidence、grounding、executor outcome、verification 和 action causality。
+- 任何会改变可见状态的操作都必须进入 Action Loop，并记录 before/after evidence、grounding、executor outcome、verification 和 action causality。
 - 完成判断必须从当前 evidence ledger 查询得出，不能只依赖历史 trace、旧截图或 action history。
+- Computer Use 是 `actions` module 的能力，不是 GUI 能力；GUI 只展示 trace、收集确认和呈现结果。
 
-## 不可变规则
+## 验证规则
 
-- 所有修改必须通用，不能为当前案例写硬编码补丁。
-- Codex CLI 拓展的核心算法部分优先用 Python 写，方便人类查看、修改。
-- 代码路径保持唯一真相源：发现冗余链路时删除或合并旧链路，避免长期并行实现。
-- 旧逻辑和最终方案不一致时，删除旧逻辑，不做长期兼容。
-- 单文件超过约 2000 行时必须拆分或登记拆分任务; 测试代码不需要受这个限制
-- 已完成的 TODO 需要打勾，并补充 evidence、日期和最终状态。
-- 涉及 provider URL、API key、model name、Authorization、token、secret、password、credential 的日志和 evidence 必须脱敏；ignored local config 不得提交。
-
-## 当前任务板：SciForge 对话栏 Computer Use E2E
-
-当前阶段只保留从 SciForge 对话栏出发的真实端到端任务。旧 package-local、fixture-only、target-bound harness 只能作为 contract/diagnostic，不再作为 PROJECT 完成任务。
-主线覆盖 `gui.present`、`gui.ask_user`、repair / continuation 和 completion-grade evidence。
-
-### 集成主线
-
-- [x] 从 SciForge 对话栏发起 Computer Use run。
-  验收：自然语言或 `/computer-use` 从 SciForge chat-origin 进入 runtime，生成当前 run 的 `computer-use-request.json`、`host-ports.json`、`vision-trace.json`、screenshots、`directory-listing.json` 和 `tui-host-run-task-chain.json`，并把状态和 refs 投影回对话栏。
-  证据（2026-05-29）：真实 chat live runner 已能提交 SciForge 对话栏请求并进入 `computer_use.runTask(request, hostPorts)`。
-
-- [x] `gui.present` / `gui.ask_user` 回执进入对话栏。
-  验收：completed / repair-needed / blocked / needs-confirmation 都必须在对话栏展示可追溯 refs；高风险动作必须先 `needs-confirmation`，未授权不得执行。
-  证据（2026-05-29）：`needs-confirmation` smoke 与 confirmed approval retry gate 已通过；真实高风险 case 含 `gui-ask-user.json`、`approval-request.json`、`risk-audit.json`、approval decision、confirmed request 和 denied-before-confirmed proof。
-
-- [x] 完成类任务接入当前轮 completion-grade evidence。
-  验收：对话栏 completed 任务必须在同一 run dir 顶层写出 canonical `isolated-desktop-l3-workflow-evidence.json` 和 `cu-user-acceptance-manifest.json`，并绑定当前 final artifact、`gui.present`、trace、screenshots 和 verifier verdict；不得引用旧 run、绝对路径、symlink、pseudo ref 或 readiness manifest。
-  当前状态（2026-05-29）：package bridge completed path 已接入 opt-in same-run Docker L3 producer，producer 会在当前 run 顶层写出 canonical `isolated-desktop-l3-workflow-evidence.json`、`cu-user-acceptance-input.json` 和 `cu-user-acceptance-manifest.json`，并通过 chat live completed gate。真实 completed-intent SciForge 对话栏 smoke 已端到端通过：requestSubmitted=true、`packageBridgeCompletionGrade.status=attached`、live acceptance bundle valid、issues=[]。
-  进展（2026-05-29）：chat live completed gate 现在要求 `packageBridgeCompletionGrade.status=attached`；即使 current-run acceptance bundle valid，缺 package bridge attachment 也会 fail closed，并在 manifest 中保留 `packageBridgeCompletionGrade.status=missing` 诊断。
-  进展（2026-05-29）：completed smoke 默认提示改为打开/聚焦本地文本编辑器并在正文写报告，禁止写入 search/filter/chat/address/send/submit/upload/share/publish 字段；runtime policy 允许多行报告正文中的当前 run evidence refs，仍阻止纯文件路径或 save/open path 输入。
-  进展（2026-05-29）：embedded L3 producer failure diagnostic 现在写 bounded stdout/stderr、exit/signal/timedOut、runner args/options、source manifest refs、source readiness status 和 blocked reasons；真实 Mac live run 明确列出缺 Linux、noVNC assets、Xvfb、window manager、VNC/noVNC proxy、LibreOffice/browser、xdotool 和 screenshot tool。
-  进展（2026-05-29）：Darwin host 默认使用 Docker L3 backend，先在 Docker Desktop 可共享的 `/tmp` staging dir 运行，再只复制 regular evidence files 回当前 run，避免 Docker mount sharing 与 socket/symlink 拷贝问题。
-
-- [x] 多轮 repair / continuation 到 completed。
-  验收：首轮 blocked 或 repair-needed 必须展示 blocked manifest、repair hint、continuation request 和 run-task-chain refs；第二轮必须 hydrate 首轮 sidecar payload，并最终用当前轮 completion-grade bundle 证明完成。
-  证据（2026-05-29）：真实 `smoke:computer-use-chat-live-continuation-completed:opt-in` 已通过，首轮 repair sidecars 被第二轮 request/planner metadata hydrate，第二轮产出当前 run `report.md`、`gui.present` final artifact refs、canonical `isolated-desktop-l3-workflow-evidence.json` 和 `cu-user-acceptance-manifest.json`；manifest `docs/test-artifacts/computer-use-chat-live-e2e/continuation-completed-manifest.json` 为 `status=passed`、`issues=[]`。
-
-- [x] 真实复杂任务矩阵从对话栏全量跑通。
-  验收：每个 case 都必须由 SciForge 对话栏发起，manifest 必须 `requestSubmitted=true`、`issues=[]`，并按状态提供 completed / needs-confirmation / repair-needed / blocked 的当前轮 evidence。
-  证据（2026-05-29）：7 个 case 已用 chat-origin live manifests 分片全量覆盖并全部 `issues=[]`。Completed 类 `CU-NEXT-01`/`04` 见 `docs/test-artifacts/computer-use-chat-live-complex-matrix/completed-01-04-rerun-2.json`；`CU-NEXT-02` 见 `docs/test-artifacts/computer-use-chat-live-complex-matrix/table-file-final.json`；`CU-NEXT-07` 见 `docs/test-artifacts/computer-use-chat-live-complex-matrix/completed-07-rerun-4.json`；`CU-NEXT-04` 最终单 case 见 `docs/test-artifacts/computer-use-chat-live-complex-matrix/file-final.json`；non-completed `CU-NEXT-03`/`05`/`06` 见 `docs/test-artifacts/computer-use-chat-live-complex-matrix/non-completed-cases-manifest.json`。最终代码 single-run isolated full matrix `docs/test-artifacts/computer-use-chat-live-complex-matrix/manifest-isolated-final-code-7of7.json` 为 `status=passed`、7 cases、`issues=[]`；release gate 仍保持 opt-in-only，默认 gate 提升需单独 release 决策。
-
-### 真实多轮复杂任务矩阵
-
-- [x] `CU-NEXT-01` / `CU-LONG-001`：文献资料 -> briefing deck / 报告。
-  证据（2026-05-29）：`docs/test-artifacts/computer-use-chat-live-complex-matrix/completed-01-04-rerun-2.json` 中该 case passed，evidence classification 为 `isolated-L3`，当前 run 产出可见 briefing/report artifact、`gui.present`、canonical L3 evidence 和 user acceptance manifest。
-
-- [x] `CU-NEXT-02` / `CU-LONG-002`：表格数据 -> 图表分析报告。
-  证据（2026-05-29）：`docs/test-artifacts/computer-use-chat-live-complex-matrix/table-file-final.json` 中该 case passed，evidence classification 为 `isolated-L3`，当前 run 产出可见分析 report artifact、`gui.present`、canonical L3 evidence 和 acceptance manifest。
-
-- [x] `CU-NEXT-03` / `CU-LONG-009`：Web research -> 邮件草稿，发送前停止。
-  证据（2026-05-29）：`docs/test-artifacts/computer-use-chat-live-complex-matrix/non-completed-cases-manifest.json` 中该 case passed，包含 `gui.ask_user`、approval request、risk audit、`confirmedRequestRefs=[]` 和 `deniedExecuted=false` proof。
-
-- [x] `CU-NEXT-04` / `CU-LONG-005`：文件整理 -> 索引文档。
-  证据（2026-05-29）：`docs/test-artifacts/computer-use-chat-live-complex-matrix/file-final.json` 中该 case passed，evidence classification 为 `isolated-L3`，当前 run 产出 `index.md`、目录/文件列表 refs、`gui.present`、canonical L3 evidence 和 acceptance manifest。
-
-- [x] `CU-NEXT-05` / `CU-LONG-006`：失败恢复 -> 多轮修复。
-  证据（2026-05-29）：`docs/test-artifacts/computer-use-chat-live-complex-matrix/non-completed-cases-manifest.json` 中 first-turn repair case passed；`docs/test-artifacts/computer-use-chat-live-e2e/continuation-completed-manifest.json` 中 continuation-completed passed，证明首轮 sidecars hydrate 到第二轮并最终由当前 run final artifact + L3 completion-grade 完成。
-
-- [x] `CU-NEXT-06` / `CU-LONG-009`：高风险 approval chain。
-  证据（2026-05-29）：`docs/test-artifacts/computer-use-chat-live-e2e/confirmed-approval-retry-manifest.json` passed，含 source approval sidecars、approval decision、confirmed request、risk audit、approval identity、sidecar hashes 和未授权不执行证明。
-
-- [x] `CU-NEXT-07` / `CU-LONG-004`：Dense visual grounding 压力测试。
-  证据（2026-05-29）：`docs/test-artifacts/computer-use-chat-live-complex-matrix/completed-07-rerun-4.json` 中该 case passed，evidence classification 为 `isolated-L3`，包含 focus crops、grounding diagnostics、dense-grounding rejection sidecar、可见 report artifact、`gui.present` 和 canonical L3 evidence。
-
-### 后续稳定化清单
-
-- [x] 将 complex matrix 单次长串运行稳定到 7/7 passed，再考虑提升为默认 release gate。
-  证据（2026-05-29）：最终代码在真实服务拓扑和 `--case-isolation per-case-workspace-fork` 下执行 `docs/test-artifacts/computer-use-chat-live-complex-matrix/manifest-isolated-final-code-7of7.json`，结果为 `status=passed`、7/7 cases、`requestSubmitted=true`、`issues=[]`；completed cases 均带 current-run isolated L3 completion evidence，non-completed cases 保持 needs-confirmation / repair-needed 边界。
-- [x] 为长串矩阵 case 隔离 planner/session 状态，避免前序 case 的高风险词、窗口状态或 repair context 污染后续 completed case。
-  证据（2026-05-29）：`tools/computer-use-chat-live-case-isolation.ts` 与 matrix runner 的 `--case-isolation per-case-workspace-fork` 已为每个 case materialize 独立 workspace/session/currentTurn seed，并写 reset/cleanup manifests；真实 isolated split/aggregate 证据见 `docs/test-artifacts/computer-use-chat-live-complex-matrix/aggregate-after-timeout-and-bundle-local-fix.json`。
-- [x] 给 completed 类矩阵 case 增加自动 continuation retry 策略：当首轮 repair-needed 但 sidecars 完整时，自动进入 bounded continuation 并要求 current-run L3 completion-grade。
-  证据（2026-05-29）：`tools/computer-use-chat-live-complex-matrix.ts` 对 completed case 增加 bounded continuation runner；focused test 覆盖首轮 repair-needed -> 第二轮 completed 的 current-run L3 final artifact，以及首轮已 completed 时不触发 continuation、不误降级。验证：`node --import tsx --test tests/smoke/computer-use-chat-live-complex-matrix.test.ts tests/smoke/computer-use-chat-live-e2e.test.ts` -> 34 passed。
-- [x] 将 Docker L3 producer 的固定 noVNC/VNC 端口改为 per-run 分配或显式互斥，避免并行 live gates 争用。
-  证据（2026-05-29）：`src/runtime/computer-use/package-bridge-l3.ts` 默认不再注入固定 display/VNC/noVNC host port；只有显式 `SCIFORGE_RUN_REAL_L3_WORKFLOW_DISPLAY` / `VNC_PORT` / `NOVNC_PORT` 时才转发固定资源。验证：`node --import tsx --test src/runtime/computer-use/package-bridge-approval.test.ts src/runtime/computer-use/package-bridge.test.ts src/runtime/computer-use/package-bridge-stdio.test.ts` -> 32 passed；`python3 -m pytest packages/actions/computer-use/tests/test_isolated_desktop_l3_workflow_probe.py -q` passed。
-- [x] 把 split matrix manifest 汇总成一个 aggregate manifest，明确列出每个 case 的最新 passed run、evidence kind、acceptance refs 和 residual stability notes。
-  证据（2026-05-29）：新增 `smoke:computer-use-chat-live-complex-matrix:aggregate`，从 split live manifests 生成 `docs/test-artifacts/computer-use-chat-live-complex-matrix/aggregate-manifest.json`；aggregate manifest `status=passed`、7 case、`issues=[]`，每个 case 记录 source manifest、evidence kind、acceptance refs 和 residual stability notes。
-- [x] 将 aggregate manifest 接入 opt-in gate 汇总报告，让 release reviewer 可以同时看到 monolithic diagnostic、split passed coverage 和 residual stability notes。
-  证据（2026-05-29）：新增 `tools/computer-use-chat-live-complex-matrix-release-report.ts` 和 `smoke:computer-use-chat-live-complex-matrix:opt-in-report`；report 同时展示 monolithic diagnostic、aggregate status、7/7 case coverage、residual stability notes 和 `releaseAcceptance=opt-in-only`。最终代码验证：`docs/test-artifacts/computer-use-chat-live-complex-matrix/release-report-final-code-7of7.json` 为 `[passed] aggregate=passed; coverage=7/7; monolithic=passed; resources=passed; issues=0`。
-- [x] 给 complex matrix 每个 case 增加独立 workspace/session seed 与 cleanup manifest，减少窗口状态、临时文件和 planner memory 对后续 case 的影响。
-  证据（2026-05-29）：`tools/computer-use-chat-live-complex-matrix.ts` 为每个 case 生成 case-scoped `sessionId` / `currentTurnId` / workspace seed，并在 workspace 下写 `case-cleanup-manifest.json`，记录 runDir、final artifact、GUI receipt、acceptance refs、L3 producer diagnostics 和 timeout/cleanup review checks；focused test 覆盖 direct completed case 写出 cleanup manifest，以及多 case session/turn seed 互不相同。
-- [x] 增加 live matrix 资源回收/超时诊断，明确记录 Docker container、noVNC/VNC 端口、run dir staging、server pid 的启动和释放结果。
-  证据（2026-05-29）：新增 `tools/computer-use-chat-live-resource-diagnostics.ts`，把 env、manifest refs、producer diagnostics 和 process/container cleanup notes 规范化为 sanitized `sciforge.computer-use.chat-live-resource-diagnostics.v1`，覆盖 VNC/noVNC ports、staging dirs、timeouts、server pids、Docker containers 和 cleanup release 状态；focused tests 覆盖脱敏、CLI 写出和 timeout/cleanup issue。
-- [x] 继续拆分 `src/runtime/computer-use/package-bridge.ts` 中 host-port adapter、trace writer 和 presentation refs 逻辑，降低 chat live gate 维护成本。
-  证据（2026-05-29）：新增 `src/runtime/computer-use/package-bridge-trace.ts` / `package-bridge-trace.test.ts` 和 `src/runtime/computer-use/package-bridge-presentation.ts` / `package-bridge-presentation.test.ts`，把 refs-first `vision-trace.json` materializer/writer 与 TUI host action `gui.present` refs 汇总从主 bridge 拆出；`package-bridge.ts` 降到约 1195 行。Focused 验证：`node --import tsx --test src/runtime/computer-use/package-bridge-trace.test.ts src/runtime/computer-use/package-bridge-presentation.test.ts src/runtime/computer-use/package-bridge-policy.test.ts src/runtime/computer-use/package-bridge-result.test.ts src/runtime/computer-use/package-bridge-invocation-diagnostics.test.ts src/runtime/computer-use/package-bridge.test.ts src/runtime/workspace-server-health.test.ts src/ui/src/app/chat/sessionTransforms.test.ts` -> 74 passed；`npm run typecheck --silent` passed。
-- [x] 将 resource diagnostics 自动接入 `smoke:computer-use-chat-live-complex-matrix:opt-in` 和 opt-in report 输出，而不是只作为独立 CLI。
-  证据（2026-05-29）：complex matrix manifest 顶层现在包含 `resourceDiagnostics`，由 run manifests、cleanup manifests、producer diagnostic refs 和 env 生成；opt-in release report 同步包含 `resourceDiagnostics.status`，CLI 摘要输出 `resources=passed|needs-attention`。验证：`npm run release:computer-use-chat-live-complex-matrix-report --silent` -> `resources=passed`、`issues=0`。
-- [x] 将 case isolation 从 session/turn seed 提升为 per-case workspace fork 或 resettable workspace fixture，并证明不会复用前序 case 的窗口状态、临时文件或 planner memory。
-  证据（2026-05-29）：新增 `tools/computer-use-chat-live-case-isolation.ts`，定义 per-case workspace fork / resettable fixture seed plan 和 reset manifest；matrix runner 支持 `--case-isolation per-case-workspace-fork|resettable-workspace-fixture`，启用后会 materialize case workspace、写 reset manifest，并用 case workspace/session/currentTurn 运行对应 case。Focused tests 覆盖 workspace fork materialization、reset manifest clean boundary、prior window/temp/planner leak fail-closed，以及 matrix runner 使用 materialized per-case workspace fork。
-- [x] 将 monolithic matrix 的 case ordering、retry boundary 和 cleanup manifest 纳入 single-run 7/7 稳定性实验，产出新的 full-run passed manifest 后再评估 release gate。
-  证据（2026-05-29）：monolithic/split matrix manifest 顶层新增 `stabilityDiagnostics`，显式记录 selected/result case ordering、retry boundary、stream failure 后是否继续提交后续 case、cleanup manifest inline/write-failed/planned refs summary；focused test 覆盖首 case stream failure 后继续跑第二 case、retry 不跨 case、cleanup manifest summary。最终代码 full-run manifest `docs/test-artifacts/computer-use-chat-live-complex-matrix/manifest-isolated-final-code-7of7.json` 为 `status=passed`、7 cases、`issues=[]`，`caseOrdering.preservedSelectedOrder=true`，`retryBoundary.mode=case-scoped`，`cleanupManifestSummary.expectedCaseCount=7` 且 `writeFailedCaseIds=[]`。
-- [x] 在真实服务拓扑下运行 `smoke:computer-use-chat-live-complex-matrix:opt-in -- --case-isolation per-case-workspace-fork`，比较新隔离策略与当前 5/7 monolithic diagnostic 的差异。
-  进展（2026-05-29）：新增显式入口 `smoke:computer-use-chat-live-complex-matrix:opt-in-isolated`，固定带 `--case-isolation per-case-workspace-fork`、same-run L3 producer 和独立 `manifest-isolated.json` 输出；protocol gate 已确认该脚本仍不进入默认 release gate。
-  历史诊断（2026-05-29）：服务拓扑未启动时，`npm run smoke:computer-use-chat-live-preflight:strict --silent` 返回 `status=blocked`、`missingEnv=0`、`policyViolations=0`，且 local config sources redacted；后续服务 ready 后已完成真实 isolated run。
-  证据（2026-05-29）：真实服务拓扑 ready 后执行 isolated full matrix，`manifest-isolated-retry.json` 完整写出 7 case 诊断并证明硬超时/进度 manifest 不再无声挂死；随后 `completed-01-02-04-after-bundle-local-fix.json`、`completed-02-04-after-bundle-local-fix-rerun.json`、`non-completed-isolated-rerun.json`、`completed-07-rerun-5.json` 汇总为 `aggregate-after-timeout-and-bundle-local-fix.json`，`status=passed`、7 cases、`issues=0`；最终代码 single-run full 7/7 见 `manifest-isolated-final-code-7of7.json`。
-- [x] 让 live resource diagnostics 自动读取 dev/service lifecycle 的 pidfile、port ownership 和 cleanup note，而不是只依赖 matrix manifest refs 与手动 note。
-  证据（2026-05-29）：`tools/computer-use-chat-live-resource-diagnostics.ts` 支持 `--lifecycle-dir`、`--pidfile`、`--cleanup-note`、`--port-ownership`，并默认发现 `tools/dev.ts` 的 UI lifecycle pidfile；diagnostics 会汇总 lifecycle `launcherPid` / `childPid`、端口 owner、cleanup note 和 lsof port ownership，同时继续对 provider URL、API key、model、token、password、Authorization 等敏感信息脱敏。Focused 验证：`node --import tsx --test tests/smoke/computer-use-chat-live-resource-diagnostics.test.ts` -> 3 passed。
-- [x] 将 package bridge 的 package invocation diagnostics 继续抽成独立 helper，并把 producer/process stderr/stdout 的脱敏摘要纳入 focused tests。
-  证据（2026-05-29）：新增 `src/runtime/computer-use/package-bridge-invocation-diagnostics.ts`，统一生成 package/L3 producer process summary，覆盖 command/args/env/cwd/exit/signal/timedOut/stdout/stderr bounded 摘要与 secret redaction；`package-bridge.ts` 和 `package-bridge-l3.ts` 已改用该 helper 写 package process failure 与 embedded L3 producer diagnostics。Focused 验证：`node --import tsx --test src/runtime/computer-use/package-bridge-invocation-diagnostics.test.ts src/runtime/computer-use/package-bridge-stdio.test.ts` -> 8 passed；整合 suite 见最新验证。
-- [x] 将 lifecycle auto-read 产物接入 isolated matrix comparison report，明确 pidfile、port owner、cleanup note 与 case cleanup manifest 的差异。
-  证据（2026-05-29）：`tools/computer-use-chat-live-complex-matrix-release-report.ts` 现在通过 lifecycle auto-read 入口构建 `resourceDiagnostics`，并新增 `resourceSourceComparison`，显式拆分 isolated matrix/case cleanup manifest 来源（case isolation、cleanup manifest、run dir、final artifact、GUI receipt）与 dev/service lifecycle 来源（pidfile、port ownership note、cleanup note、lsof port owner、env port）。所有 report 输出继续经过 secret redaction。Focused 验证：`node --import tsx --test tests/smoke/computer-use-chat-live-complex-matrix-release-report.test.ts` -> 4 passed；`node --import tsx --test tests/smoke/computer-use-chat-live-resource-diagnostics.test.ts` -> 3 passed。
-- [x] 给 package bridge invocation diagnostics 增加 chat live manifest consumer assertions，确保对话栏 failure diagnostics 展示脱敏 stdout/stderr/process 摘要。
-  证据（2026-05-29）：`tools/computer-use-chat-live-e2e.ts` 现在会从当前 run 的 `vision-trace.json -> packageResult.failureDiagnostics` 读取 package bridge process failure 摘要，并从 embedded L3 producer diagnostics 读取 process command/args/exit/signal/timedOut/stdout/stderr bounded summary，统一使用 package bridge diagnostic 脱敏逻辑后写入 chat live `failureDiagnostics` / `packageBridgeCompletionGrade.processDiagnosticSummaries`。Focused test 覆盖 provider URL、API key、model、token、password、Authorization 不泄露。验证：`node --import tsx --test tests/smoke/computer-use-chat-live-e2e.test.ts` -> 27 passed。
-- [x] 将 package bridge 剩余 package process invocation lifecycle 从主文件继续拆出，并补 child process spawn/abort/stdout buffering/finalResult timeout 的 chat live gate 回归。
-  证据（2026-05-29）：新增 `src/runtime/computer-use/package-bridge-process.ts` / `package-bridge-process.test.ts`，把 Python package 子进程 spawn/env、stdout JSONL parsing、`hostPortCall` result 写回、`finalResult` 捕获、runtime abort kill、close/error 无 finalResult 诊断从主 bridge 拆出；`package-bridge.ts` 保留 host port 业务分发并委托 process runner。Focused 验证见最新验证。
-- [x] 继续拆分 package bridge host-port business handlers / request translator，把 capture/plan/execute/verify/writeTrace 端口分发从主文件逐步模块化，并保持 chat live completion-grade 回归。
-  进展（2026-05-29）：新增 `src/runtime/computer-use/package-bridge-host-ports.ts` / `package-bridge-host-ports.test.ts`，先把 host-port dispatcher、runtime abort gate、supported-port 映射和 unsupported-port 错误从主文件抽出。
-  进展（2026-05-29）：新增 `src/runtime/computer-use/package-bridge-trace-port.ts` / `package-bridge-trace-port.test.ts`，把 `emitEvent` host-port business handler 从主 bridge 抽到 `emitPackageBridgeEventPort`。
-  进展（2026-05-29）：新增 `src/runtime/computer-use/package-bridge-write-trace-port.ts` / `package-bridge-write-trace-port.test.ts`，把 `writeTrace` host-port business handler 从主 bridge 抽到 `writePackageBridgeTracePort`，并覆盖 final artifact promotion 与 malformed package result fallback。
-  进展（2026-05-29）：新增 `src/runtime/computer-use/package-bridge-capture-port.ts` / `.test.ts`，把 `capture` host-port business handler 抽到 `capturePackageBridgePort`，保留 refs-first screenshot trace、observation ledger 和 virtual remote artifacts 语义。
-  进展（2026-05-29）：新增 `src/runtime/computer-use/package-bridge-plan-port.ts` / `.test.ts`，把 `plan` host-port business handler 抽到 `planPackageBridgePort`，保留动态 planner、空队列 fallback capture、action queue 出队与 package plan shape。
-  进展（2026-05-29）：新增 `src/runtime/computer-use/package-bridge-execute-port.ts` / `.test.ts`，把 `execute` host-port business handler 抽到 `executePackageBridgePort`，保留 observation context policy、dry-run executor metadata、independent input adapter artifact projection 和 artifact intent text。
-  进展（2026-05-29）：新增 `src/runtime/computer-use/package-bridge-verify-port.ts` / `.test.ts`，把 `verify` host-port business handler 抽到 `verifyPackageBridgePort`，保留 screenshot ledger diff、focus crop、window consistency、visible artifact policy、action-ledger completion 和 verifier history projection；host-port business handlers 已模块化。
-  进展（2026-05-29）：新增 `src/runtime/computer-use/package-bridge-action-conversion.ts` / `.test.ts`，把 package plan -> generic GUI action translator 从主 bridge 抽出，覆盖 click grounding、hotkey fallback 和 drag endpoint metadata。
-  证据（2026-05-29）：新增 `src/runtime/computer-use/package-bridge-request.ts` / `.test.ts`，把 package bridge request payload/policy 归一化与 host-port request translator 从主 bridge 收口；`package-bridge.ts` 降到 419 行。验证：`node --import tsx --test src/runtime/computer-use/package-bridge-request.test.ts src/runtime/computer-use/package-bridge.test.ts` passed；`npm run typecheck --silent` passed。
-- [x] 继续拆分对话栏 session projection：把 `sessionTransforms.ts` 中 event normalization、run status mapping 与 compact digest helpers 分离，并保留多轮 continuation / artifact refs 回归。
-  进展（2026-05-29）：新增 `src/ui/src/app/chat/sessionRequestPayload.ts`，把 next-turn request payload 的 selected refs、message/run/artifact/execution unit compaction、cancel boundary 和 continuation projection audit 从 `sessionTransforms.ts` 拆出。
-  进展（2026-05-29）：新增 `src/ui/src/app/chat/sessionBackgroundCompletion.ts`，把 background completion event 的 run/message/raw/execution-unit/artifact normalization 从 `sessionTransforms.ts` 拆出。
-  进展（2026-05-29）：新增 `src/ui/src/app/chat/sessionFailedRunProjection.ts`，把 failed-run terminal repair projection 和 stream recovery digest 从 `sessionTransforms.ts` 拆出。
-  进展（2026-05-29）：新增 `src/ui/src/app/chat/sessionRepairRaw.ts`，抽出 repair raw enrichment 并补 focused regression。
-  证据（2026-05-29）：新增 `src/ui/src/app/chat/sessionGuidanceQueue.ts`，继续抽出 guidance queue / status projection helpers；`sessionTransforms.ts` 降到 343 行。验证：`node --import tsx --test src/ui/src/app/chat/sessionTransforms.test.ts` passed；多轮 continuation / artifact refs 回归保持通过。
-- [x] 将 opt-in release report 接入手动 release checklist / workflow artifact，保留默认 gate 不跑 live 长任务。
-  证据（2026-05-29）：新增手动 workflow `.github/workflows/computer-use-complex-matrix-release-report.yml`，仅 `workflow_dispatch` 运行 aggregate + opt-in report 并上传 `release-report` artifact；`docs/release-checklist.md` 记录手动检查步骤，`release:computer-use-chat-live-complex-matrix-report` 提供本地等价命令，protocol gate 断言默认 gate 不跑 live 长矩阵。
-
-## 近期 TODO
-
-- [x] 用服务进程 env ready 的拓扑重跑 completed 类真实对话栏 smoke。
-  使用 `npm run dev` / 等价拓扑，确保 workspace writer 服务进程 env 中有 `SCIFORGE_RUNTIME_API_KEY`，并显式开启 real L3 completion producer；目标是让低风险 completed-intent smoke 产出 current-run `isolated-desktop-l3-workflow-evidence.json` 和 `cu-user-acceptance-manifest.json`。
-  证据（2026-05-29）：服务拓扑可 ready，Docker L3 backend 在 Darwin host 通过，真实 completed-intent smoke 从 SciForge 对话栏端到端产出 current-run canonical L3 evidence、CU user acceptance manifest 和 verified package bridge completion-grade attachment。
-
-- [x] 给 chat live E2E 增加 request-scoped real L3 opt-in。
-  不依赖全局 env 的长期状态；从对话栏任务 payload 传递显式 `completionEvidencePolicy`，由 TUI Host / package bridge 侧白名单判断是否运行 `computer-use.embedded-isolated-desktop-l3` same-run completion evidence producer。不能从 package stdout、`packageResult` 或 package 写出的 metadata 读取 opt-in。
-  证据（2026-05-29）：新增 `sciforge.completion-evidence-policy.v1` 白名单 policy；SciForge chat live CLI 支持 `--completion-evidence-producer computer-use.embedded-isolated-desktop-l3` 注入 request-scoped policy；completed 与 continuation-completed opt-in scripts 已显式传该 flag；UI/client 与 host adapter 只投影 sanitized policy；package bridge 只从原始 `GatewayRequest.uiState.completionEvidencePolicy` 启用 default L3 producer，packageResult 伪造 policy 不触发。
-
-- [x] 跑通 continuation-completed。
-  先跑首轮 repair-needed，第二轮 hydrate 首轮 sidecars，最终 completed 必须同时满足 final artifact、`gui.present`、current-run completion-grade 和 acceptance manifest。
-  证据（2026-05-29）：`SCIFORGE_WORKSPACE_PORT=6173 SCIFORGE_RUNTIME_CODEX_PORT=18080 SCIFORGE_RUN_REAL_L3_WORKFLOW_BACKEND=docker SCIFORGE_RUN_REAL_L3_WORKFLOW_TIMEOUT=180 npm run smoke:computer-use-chat-live-continuation-completed:opt-in --silent` -> `[passed]`、`issues=0`、manifest `docs/test-artifacts/computer-use-chat-live-e2e/continuation-completed-manifest.json`。
-
-- [x] 跑完整复杂任务矩阵。
-  运行 `smoke:computer-use-chat-live-complex-matrix:opt-in`；completed 类 case 必须通过 completion-grade，non-completed case 必须保留 sidecars、recover actions 和未授权不执行证明。
-  证据（2026-05-29）：全 7 case 已用 live isolated split manifests 覆盖并全部 passed；`aggregate-after-timeout-and-bundle-local-fix.json` 为 `status=passed`、7 cases、`issues=0`。单次长串 full-run 仍保留为稳定性诊断，不进入默认 release gate。
-
-- [x] 将稳定的 chat live gates 保持为 opt-in release gates。
-  已有 gates 包括 completed、needs-confirmation、confirmed-approval、repair、continuation、continuation-completed 和 complex matrix；默认 release gate 只在真实拓扑稳定、耗时可控、诊断足够清晰后再评估。
-  证据（2026-05-29）：chat live gates 仍以 `:opt-in` scripts 和手动 release-report workflow 存在；protocol gate 覆盖 complex matrix 不进入默认 release gate，手动 checklist 明确不运行 live 长矩阵。
-
-- [x] 继续整理用户可见失败诊断。
-  对话栏四态 `completed`、`needs-confirmation`、`repair-needed`、`blocked` 必须展示短诊断、关键 refs、recover actions 和 sanitized blocker；completed 失败要明确区分 canonical L3 missing、producer failure、artifact/gui.present binding failure。
-  证据（2026-05-29）：completed failure diagnostics 已能区分 final artifact/gui.present 成功但 canonical L3 missing、embedded producer failure、producer source readiness blockers、artifact/gui.present binding failure 和 continuation bundle missing；UI runtime event projection 会列出 final artifact refs、completion-grade diagnostic refs、L3 producer diagnostics、acceptance manifests 和 canonical L3 refs；provider URL/API key/model/secret 未写入 manifest 输出。
+- 纯文档改动：运行 `git diff --check`。
+- Shared contract / TypeScript policy 改动：运行 focused Node tests 和 `npm run typecheck --silent`。
+- Runtime adapter 改动：运行对应 adapter normalization tests、runtime event tests 和 `git diff --check`。
+- GUI module 改动：运行 GUI protocol/controller tests、runtime events client tests 和相关 chat projection tests。
+- Computer Use package 代码改动：运行 package-local Python suite 和相关 package bridge focused tests。
+- 涉及真实 app-server、Claude stream-json、browser 或 Computer Use live 的改动默认先做 fixture/focused tests；长耗时 live gates 只作为 opt-in release evidence。
 
 ## 本地模型配置
 
-- 本地 Computer Use 调试可以使用 ignored config，例如 `config.computer-use.local.json`。
+- 本地调试可以使用 ignored config，例如 `config.local.json`、`config.computer-use.local.json`。
 - 这些文件可能包含 provider URLs、API keys、model names，绝不能提交或打印。
-- Runtime Codex / Computer Use 服务环境必须通过 ignored config 或环境变量提供 `SCIFORGE_RUNTIME_API_KEY`，并配置 `SCIFORGE_PROXY_UPSTREAM_BASE_URL` 或 `SCIFORGE_RUNTIME_BASE_URL` 指向 provider upstream base URL；文档、日志和 repair action 只能引用变量名，不能打印 secret 值。
-- 文本规划可以使用便宜的本地/项目文本模型。
-- 可选 VLM evidence 必须通过代码中的 allowlist 和 sanitized diagnostics 证明模型存在，不能泄露 provider payload。
+- Runtime Codex / Computer Use 服务环境必须通过 ignored config 或环境变量提供密钥；文档、日志和 repair action 只能引用变量名，不能打印 secret 值。
+- 默认 provider/model 应可见、可审计，不得静默 fallback 到 OpenAI。
 
 ## 代码膨胀治理 Watch List
 
 目标：非测试源码文件超过约 2000 行时必须拆分或登记拆分任务；测试代码不受该限制；构建产物不进入治理扫描。
 
-- [x] `src/runtime/workspace-server.ts`：拆成 workspace http routes、filesystem/ref store、runtime session coordinator、diagnostics/health、CORS/body parsing 等语义模块。
-  进展（2026-05-29）：先抽出 workspace writer `/health` 响应 builder 到 `src/runtime/workspace-server-health.ts`，主 server 仅调用 helper，保持 HTTP 响应 shape 不变；focused test 覆盖 capabilities、lifecycleToken JSON 省略行为。
-  进展（2026-05-29）：继续抽出 git command helper 到 `src/runtime/workspace-server-git.ts`，主 server 改为复用 `gitOutput` / `gitStrict`，focused test 覆盖成功 stdout、空输出、失败返回空串和 strict reject 命令上下文。
-  进展（2026-05-29）：继续抽出 CORS / request URL helper 到 `src/runtime/workspace-server-http.ts`，入口和 websocket upgrade 复用 `handleWorkspaceCors` / `workspaceRequestUrl`；focused test 覆盖 headers、OPTIONS 204、Host/path/query fallback。
-  进展（2026-05-29）：继续抽出 runtime provider preflight manifest / healthz response normalize 到 `src/runtime/workspace-server-runtime-provider-preflight.ts`；主 server 降到 3462 行，focused test 覆盖缺 env、provider-auth、config fallback、healthz fallback 和 proxy base URL 规整。
-  进展（2026-05-29）：继续抽出 runtime-codex browser acceptance manifest path/read/freshness helper 到 `src/runtime/workspace-server-runtime-codex-browser-acceptance.ts` / `.test.ts`；主 server 降到 3355 行，focused test 覆盖 explicit evidence dir、parallel artifact path、passed freshness、blocked no freshness 和 non-object manifest rejection。
-  进展（2026-05-29）：继续抽出 Feedback Codex PTY client message parser 与 terminal size clamp 到 `src/runtime/workspace-server-feedback-terminal-protocol.ts` / `.test.ts`；主 server 降到 3329 行，focused test 覆盖 input、resize clamp/fallback、stop 和 malformed message。
-  进展（2026-05-29）：新增 `src/runtime/workspace-server-repair-actions.ts` / `.test.ts` 和 `src/runtime/workspace-server-metadata.ts` / `.test.ts`，分别抽出 repair action response builder 与 workspace metadata helpers；`workspace-server.ts` 降到 3185 行。Focused 验证：`node --import tsx --test src/runtime/workspace-server-*.test.ts` passed。
-  完成（2026-05-29）：继续抽出 `src/runtime/workspace-server-feedback-records.ts`、`workspace-server-local-config.ts` / `.test.ts`、`workspace-server-feedback-guidance.ts`、`workspace-server-feedback-codex-terminal.ts` / `.test.ts`、`workspace-server-feedback-evidence-assets.ts`，覆盖 feedback records、local config/runtime proxy、repair guidance、direct Codex terminal prompt/refs/command helpers 和 screenshot evidence asset persistence；`workspace-server.ts` 降到 1928 行，低于 2000 行治理阈值。Focused 验证：`node --import tsx --test src/runtime/workspace-server-feedback-codex-terminal.test.ts src/runtime/workspace-server-local-config.test.ts src/runtime/workspace-server-feedback-terminal-protocol.test.ts` -> 25 passed；`npm run typecheck --silent` passed；`npm run smoke:long-file-budget --silent` passed。
-
-- [x] `src/ui/src/app/sciforgeApp/FeedbackInboxPage.tsx`：拆成 inbox state hooks、list/table、detail drawer、repair request composer、evidence renderer 和 action toolbar。
-  进展（2026-05-29）：新增 `src/ui/src/app/sciforgeApp/FeedbackEvidenceReview.tsx` / `FeedbackEvidenceReview.test.tsx`，抽出 evidence review 组件与 evidence completeness summary helper；`FeedbackInboxPage.tsx` 降到 2183 行。
-  进展（2026-05-29）：新增 `src/ui/src/app/sciforgeApp/FeedbackRepairResolutionComposer.tsx` / `.test.tsx`，抽出 repair result closure composer；`FeedbackInboxPage.tsx` 降到 2166 行。
-  进展（2026-05-29）：新增 `src/ui/src/app/sciforgeApp/FeedbackInboxToolbar.tsx` / `.test.tsx`，抽出筛选、搜索、批量操作、repair 与 GitHub 同步 toolbar；`FeedbackInboxPage.tsx` 降到 2067 行。
-  证据（2026-05-29）：新增 `FeedbackInboxDiagnostics.tsx` / `.test.tsx` 与 `FeedbackActionConfirmation.tsx` / `.test.tsx`，继续抽出 diagnostics 和 action confirmation UI；`FeedbackInboxPage.tsx` 降到 1983 行，低于 2000 行治理阈值。Focused feedback suite passed。
-
-- [x] `tools/computer-use-chat-live-e2e.ts`：拆成 CLI orchestration、preflight consumer、evidence refs expansion、manifest validator、failure diagnostics writer 和 output report helpers。
-  进展（2026-05-29）：新增 `tools/computer-use-chat-live-evidence-refs.ts` 和 `tests/smoke/computer-use-chat-live-evidence-refs.test.ts`，抽出 workspace-local ref 解析、JSON ref 读取、run-task-chain/directory-listing 展开；主工具降到 3045 行。
-  进展（2026-05-29）：新增 `tools/computer-use-chat-live-json.ts`，抽出 chat live E2E 中复用的 JSON record guard、ref 扫描、CLI fetch body recorder、命令参数引用和脱敏文本裁剪 helper；主工具降到 2944 行。
-  进展（2026-05-29）：新增 `tools/computer-use-chat-live-diagnostics.ts`，抽出 completed final artifact / `gui.present` binding diagnostics、completion-grade failure diagnostics 和 package process failure diagnostics；主工具降到 2761 行。
-  进展（2026-05-29）：新增 `tools/computer-use-chat-live-cli.ts`，抽出 CLI argument parsing、manifest 写出、stdout summary 和 strict status 判定；主工具降到 2678 行。
-  证据（2026-05-29）：新增 `tools/computer-use-chat-live-manifest-validator.ts` 和 `tools/computer-use-chat-live-completion-evidence.ts`，继续抽出 manifest validation、completion evidence attachment 与 bundle-local canonical ref normalization；`tools/computer-use-chat-live-e2e.ts` 降到 1872 行，低于 2000 行治理阈值。Focused chat live suite passed。
-
-- [x] 按 2026-05-29 新规则清理旧 1500 行 watch list 与测试文件治理项。
-  证据（2026-05-29）：`ShellPanels.tsx`、`sessionTransforms.ts`、`package-bridge.ts` 以及已完成的 1500 行拆分项低于 2000 行强制治理阈值；`tests/` 与 `*.test.*` 文件不再纳入长文件治理扫描。后续仍可在功能任务中继续拆分，但不作为长文件强制 TODO。
-
-## 验证规则
-
-- 纯文档改动：运行 `git diff --check`。
-- Computer Use package 代码改动：运行 package-local Python suite。
-- policy/manifest TypeScript 改动：运行 focused Node tests。
-- SciForge 对话栏 E2E 声明必须包含对话栏触发证据、TUI Host/package bridge chain refs、trace/result refs、screenshot/viewer refs、focus crops、grounding diagnostics、final artifact refs、verifier verdict、virtual input logs、evidence ledger 和 isolation flags。
-- 可见复杂工作声明必须包含 trace/result refs、screenshot/viewer refs、final artifact refs、verifier verdict、virtual input logs、evidence ledger 和 isolation flags。
-- L3 声明还必须证明同一真实 isolated session 中 source -> writer -> file-preview 的跨应用 causality；package-owned fixture、旧 trace、readiness manifest 或 validator skeleton 只能作为 contract/diagnostic。
-- L3 partial same-session runtime refs 永远只能作为诊断/辅助输入，不能提升或复制为 completed namespace refs；completed L3 必须由真实 same-session runner 重新产出 top-level completed refs，并被 completed L3 validator 接受，且 `status=completed`、`l3Workflow.completed=true`、`diagnosticOnly=false`、`userAcceptanceEligible=true` 同时成立。
-- artifact/report/summary/index/visual-evidence 类任务必须有当前轮可见 final artifact/report ref 和 `gui.present` / verifier 证据，planner 或 action ledger 不得只凭截图、旧 trace、旧 artifact refs 或 summary 文本提前完成。
-- CU-NEXT completion-grade `completionEvidenceRef` 只能是当前 acceptance evidence bundle 顶层的 canonical `isolated-desktop-l3-workflow-evidence.json` regular file；旧 `/tmp` L3 run、跨轮相对路径、绝对路径、symlink、`artifact:` 伪 ref 或 inline shape 都不能完成任务。
-- native 或 real-app blocked 状态可以接受，但必须写 blocked manifest，说明缺失 capability、安全原因或隔离原因。
-
-## 最新验证
-
-- 2026-05-29：isolated real-service complex matrix split aggregate passed after hard timeout/progress manifest and bundle-local completion evidence ref normalization：`aggregate-after-timeout-and-bundle-local-fix.json` -> `status=passed`、7 cases、`issues=0`；source manifests include `completed-01-02-04-after-bundle-local-fix.json`、`completed-02-04-after-bundle-local-fix-rerun.json`、`non-completed-isolated-rerun.json`、`manifest-isolated-retry.json`、`completed-07-rerun-5.json`。
-- 2026-05-29：chat live matrix hard-timeout / completion evidence / E2E focused suite passed：`node --import tsx --test tests/smoke/computer-use-chat-live-complex-matrix.test.ts tests/smoke/computer-use-chat-live-completion-evidence.test.ts tests/smoke/computer-use-chat-live-e2e.test.ts tests/smoke/computer-use-chat-live-evidence-refs.test.ts` -> 44 passed；`npm run typecheck --silent` passed；`git diff --check` passed。
-- 2026-05-29：latest long-file split status：`workspace-server.ts` 1928 lines、`FeedbackInboxPage.tsx` 1983 lines、`tools/computer-use-chat-live-e2e.ts` 1872 lines、`package-bridge.ts` 419 lines、`sessionTransforms.ts` 343 lines；`npm run smoke:long-file-budget --silent` now reports only generated `packages/skills/catalog.ts` over 2000 lines.
-- 2026-05-29：workspace server split completion suite passed：`node --import tsx --test src/runtime/workspace-server-feedback-codex-terminal.test.ts src/runtime/workspace-server-local-config.test.ts src/runtime/workspace-server-feedback-terminal-protocol.test.ts` -> 25 passed；`npm run typecheck --silent` passed；`npm run smoke:long-file-budget --silent` passed。
-- 2026-05-29：PROJECT/protocol sync after completed split items：`node --import tsx tests/smoke/smoke-real-task-protocol-gates.ts` passed；`npm run typecheck --silent` passed；`npm run smoke:long-file-budget --silent` passed；`git diff --check` passed。
-- 2026-05-29：chat live E2E CLI split focused suite passed：`node --import tsx --test tests/smoke/computer-use-chat-live-evidence-refs.test.ts tests/smoke/computer-use-chat-live-e2e.test.ts` -> 30 passed；`npm run typecheck --silent` passed；`git diff --check` passed；`node --import tsx tests/smoke/smoke-real-task-protocol-gates.ts` passed；`npm run smoke:long-file-budget --silent` passed with `tools/computer-use-chat-live-e2e.ts` tracked at 2678 lines。
-- 2026-05-29：chat live E2E diagnostics split focused suite passed：`node --import tsx --test tests/smoke/computer-use-chat-live-evidence-refs.test.ts tests/smoke/computer-use-chat-live-e2e.test.ts` -> 30 passed；`npm run typecheck --silent` passed；`git diff --check` passed；`node --import tsx tests/smoke/smoke-real-task-protocol-gates.ts` passed；`npm run smoke:long-file-budget --silent` passed with `tools/computer-use-chat-live-e2e.ts` tracked at 2761 lines。
-- 2026-05-29：chat live E2E JSON/helper split focused suite passed：`node --import tsx --test tests/smoke/computer-use-chat-live-evidence-refs.test.ts tests/smoke/computer-use-chat-live-e2e.test.ts` -> 30 passed；`npm run typecheck --silent` passed；`node --import tsx tests/smoke/smoke-real-task-protocol-gates.ts` passed；`npm run smoke:long-file-budget --silent` passed with `tools/computer-use-chat-live-e2e.ts` tracked at 2944 lines；`git diff --check` passed。
-- 2026-05-29：长文件治理新规则复核 passed：`npm run smoke:long-file-budget --silent` 现在只扫描非测试源码文件，阈值为 2000 行，输出为 generated `packages/skills/catalog.ts` 豁免 plus tracked `src/runtime/workspace-server.ts`、`tools/computer-use-chat-live-e2e.ts`、`src/ui/src/app/sciforgeApp/FeedbackInboxPage.tsx`；`node --import tsx tests/smoke/smoke-real-task-protocol-gates.ts` passed；`npm run typecheck --silent` passed；`git diff --check` passed。
-- 2026-05-29：Shell sidebar panel block split focused suite passed：`node --import tsx --test src/ui/src/app/appShell/SidebarPanelBlock.test.tsx src/ui/src/app/appShell/SidebarFooterActions.test.tsx src/ui/src/app/appShell/SidebarToolsStrip.test.tsx src/ui/src/app/appShell/WorkspaceExplorerNodeRow.test.tsx src/ui/src/app/appShell/WorkspaceExplorerRootTree.test.tsx src/ui/src/app/appShell/WorkspaceExplorerStatusPanel.test.tsx src/ui/src/app/appShell/WorkspacePreviewPanel.test.tsx src/ui/src/app/appShell/WorkspaceExplorerToolbar.test.tsx src/ui/src/app/appShell/SidebarProjectChatSection.test.tsx src/ui/src/app/appShell/WorkspaceConnectionPanel.test.tsx src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts src/ui/src/app/ChatPanel.test.ts` -> 38 passed；`npm run typecheck --silent` passed；`node --import tsx tests/smoke/smoke-real-task-protocol-gates.ts` passed；`git diff --check` passed；`npm run smoke:long-file-budget --silent` passed；process scan found no lingering Vite/noVNC/Xvfb/runtime Computer Use services from this run；`ShellPanels.tsx` 降到 1662 行。
-- 2026-05-29：Shell sidebar footer actions split focused suite passed：`node --import tsx --test src/ui/src/app/appShell/SidebarFooterActions.test.tsx src/ui/src/app/appShell/SidebarToolsStrip.test.tsx src/ui/src/app/appShell/WorkspaceExplorerNodeRow.test.tsx src/ui/src/app/appShell/WorkspaceExplorerRootTree.test.tsx src/ui/src/app/appShell/WorkspaceExplorerStatusPanel.test.tsx src/ui/src/app/appShell/WorkspacePreviewPanel.test.tsx src/ui/src/app/appShell/WorkspaceExplorerToolbar.test.tsx src/ui/src/app/appShell/SidebarProjectChatSection.test.tsx src/ui/src/app/appShell/WorkspaceConnectionPanel.test.tsx src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts src/ui/src/app/ChatPanel.test.ts` -> 36 passed；`npm run typecheck --silent` passed；`node --import tsx tests/smoke/smoke-real-task-protocol-gates.ts` passed；`git diff --check` passed；`npm run smoke:long-file-budget --silent` passed；process scan found no lingering Vite/noVNC/Xvfb/runtime Computer Use services from this run；`ShellPanels.tsx` 降到 1686 行。
-- 2026-05-29：Shell sidebar tools strip split focused suite passed：`node --import tsx --test src/ui/src/app/appShell/SidebarToolsStrip.test.tsx src/ui/src/app/appShell/WorkspaceExplorerNodeRow.test.tsx src/ui/src/app/appShell/WorkspaceExplorerRootTree.test.tsx src/ui/src/app/appShell/WorkspaceExplorerStatusPanel.test.tsx src/ui/src/app/appShell/WorkspacePreviewPanel.test.tsx src/ui/src/app/appShell/WorkspaceExplorerToolbar.test.tsx src/ui/src/app/appShell/SidebarProjectChatSection.test.tsx src/ui/src/app/appShell/WorkspaceConnectionPanel.test.tsx src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts src/ui/src/app/ChatPanel.test.ts` -> 35 passed；`npm run typecheck --silent` passed；`node --import tsx tests/smoke/smoke-real-task-protocol-gates.ts` passed；`git diff --check` passed；`npm run smoke:long-file-budget --silent` passed；process scan found no lingering Vite/noVNC/Xvfb/runtime Computer Use services from this run；`ShellPanels.tsx` 降到 1690 行。
-- 2026-05-29：Shell workspace explorer node row split focused suite passed：`node --import tsx --test src/ui/src/app/appShell/WorkspaceExplorerNodeRow.test.tsx src/ui/src/app/appShell/WorkspaceExplorerRootTree.test.tsx src/ui/src/app/appShell/WorkspaceExplorerStatusPanel.test.tsx src/ui/src/app/appShell/WorkspacePreviewPanel.test.tsx src/ui/src/app/appShell/WorkspaceExplorerToolbar.test.tsx src/ui/src/app/appShell/SidebarProjectChatSection.test.tsx src/ui/src/app/appShell/WorkspaceConnectionPanel.test.tsx src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts src/ui/src/app/ChatPanel.test.ts` -> 34 passed；`npm run typecheck --silent` passed；`node --import tsx tests/smoke/smoke-real-task-protocol-gates.ts` passed；`git diff --check` passed；`npm run smoke:long-file-budget --silent` passed；process scan found no lingering Vite/noVNC/Xvfb/runtime Computer Use services from this run；`ShellPanels.tsx` 降到 1699 行。
-- 2026-05-29：Shell workspace explorer root tree split focused suite passed：`node --import tsx --test src/ui/src/app/appShell/WorkspaceExplorerRootTree.test.tsx src/ui/src/app/appShell/WorkspaceExplorerStatusPanel.test.tsx src/ui/src/app/appShell/WorkspacePreviewPanel.test.tsx src/ui/src/app/appShell/WorkspaceExplorerToolbar.test.tsx src/ui/src/app/appShell/SidebarProjectChatSection.test.tsx src/ui/src/app/appShell/WorkspaceConnectionPanel.test.tsx src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts src/ui/src/app/ChatPanel.test.ts` -> 32 passed；`npm run typecheck --silent` passed；`node --import tsx tests/smoke/smoke-real-task-protocol-gates.ts` passed；`git diff --check` passed；`npm run smoke:long-file-budget --silent` passed；process scan found no lingering Vite/noVNC/Xvfb/runtime Computer Use services from this run；`ShellPanels.tsx` 降到 1717 行。
-- 2026-05-29：Shell workspace explorer status split focused suite passed：`node --import tsx --test src/ui/src/app/appShell/WorkspaceExplorerStatusPanel.test.tsx src/ui/src/app/appShell/WorkspacePreviewPanel.test.tsx src/ui/src/app/appShell/WorkspaceExplorerToolbar.test.tsx src/ui/src/app/appShell/SidebarProjectChatSection.test.tsx src/ui/src/app/appShell/WorkspaceConnectionPanel.test.tsx src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts src/ui/src/app/ChatPanel.test.ts` -> 30 passed；`npm run typecheck --silent` passed；`node --import tsx tests/smoke/smoke-real-task-protocol-gates.ts` passed；`git diff --check` passed；`npm run smoke:long-file-budget --silent` passed；process scan found no lingering Vite/noVNC/Xvfb/runtime Computer Use services from this run；`ShellPanels.tsx` 降到 1733 行。
-- 2026-05-29：Shell workspace preview panel split focused suite passed：`node --import tsx --test src/ui/src/app/appShell/WorkspacePreviewPanel.test.tsx src/ui/src/app/appShell/WorkspaceExplorerToolbar.test.tsx src/ui/src/app/appShell/SidebarProjectChatSection.test.tsx src/ui/src/app/appShell/WorkspaceConnectionPanel.test.tsx src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts src/ui/src/app/ChatPanel.test.ts` -> 28 passed；`npm run typecheck --silent` passed；`node --import tsx tests/smoke/smoke-real-task-protocol-gates.ts` passed；`git diff --check` passed；`npm run smoke:long-file-budget --silent` passed；process scan found no new lingering Vite/noVNC/Xvfb/runtime Computer Use services from this run；`ShellPanels.tsx` 约 1746 行。
-- 2026-05-29：Shell workspace explorer toolbar split focused suite passed：`node --import tsx --test src/ui/src/app/appShell/WorkspaceExplorerToolbar.test.tsx src/ui/src/app/appShell/SidebarProjectChatSection.test.tsx src/ui/src/app/appShell/WorkspaceConnectionPanel.test.tsx src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts src/ui/src/app/ChatPanel.test.ts` -> 26 passed；`npm run typecheck --silent` passed；`node --import tsx tests/smoke/smoke-real-task-protocol-gates.ts` passed；`git diff --check` passed；`npm run smoke:long-file-budget --silent` passed；process scan found no lingering dev/runtime/Computer Use services beyond the scan command itself；`ShellPanels.tsx` 降到 1768 行。
-- 2026-05-29：Shell sidebar project chat section split focused suite passed：`node --import tsx --test src/ui/src/app/appShell/SidebarProjectChatSection.test.tsx src/ui/src/app/appShell/WorkspaceConnectionPanel.test.tsx src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts src/ui/src/app/ChatPanel.test.ts` -> 25 passed；`npm run typecheck --silent` passed；`node --import tsx tests/smoke/smoke-real-task-protocol-gates.ts` passed；`git diff --check` passed；`npm run smoke:long-file-budget --silent` passed；process scan found no lingering dev/runtime/Computer Use services beyond the scan command itself；`ShellPanels.tsx` 降到 1789 行。
-- 2026-05-29：package action conversion / verify port split focused suite passed：`node --import tsx --test src/runtime/computer-use/package-bridge-action-conversion.test.ts src/runtime/computer-use/package-bridge-verify-port.test.ts src/runtime/computer-use/package-bridge-execute-port.test.ts src/runtime/computer-use/package-bridge-plan-port.test.ts src/runtime/computer-use/package-bridge-capture-port.test.ts src/runtime/computer-use/package-bridge-write-trace-port.test.ts src/runtime/computer-use/package-bridge-trace-port.test.ts src/runtime/computer-use/package-bridge-host-ports.test.ts src/runtime/computer-use/package-bridge.test.ts` -> 42 passed；`npm run typecheck --silent` passed；`node --import tsx tests/smoke/smoke-real-task-protocol-gates.ts` passed；`git diff --check` passed；`npm run smoke:long-file-budget --silent` passed；process scan found no lingering dev/runtime/Computer Use services beyond the scan command itself；`package-bridge.ts` 降到 426 行。
-- 2026-05-29：package verify port split focused suite passed：`node --import tsx --test src/runtime/computer-use/package-bridge-verify-port.test.ts src/runtime/computer-use/package-bridge-execute-port.test.ts src/runtime/computer-use/package-bridge-plan-port.test.ts src/runtime/computer-use/package-bridge-capture-port.test.ts src/runtime/computer-use/package-bridge-write-trace-port.test.ts src/runtime/computer-use/package-bridge-trace-port.test.ts src/runtime/computer-use/package-bridge-host-ports.test.ts src/runtime/computer-use/package-bridge.test.ts` -> 40 passed；`npm run typecheck --silent` passed；`node --import tsx tests/smoke/smoke-real-task-protocol-gates.ts` passed；`git diff --check` passed；`npm run smoke:long-file-budget --silent` passed；`package-bridge.ts` 降到 497 行，host-port business handlers 已模块化，request translator 仍保留为后续拆分项。
-- 2026-05-29：execute port split 后门禁复核 passed：`node --import tsx tests/smoke/smoke-real-task-protocol-gates.ts` passed；`npm run typecheck --silent` passed；`git diff --check` passed；`npm run smoke:long-file-budget --silent` passed，tracked long files 覆盖 `workspace-server.ts`、`tools/computer-use-chat-live-e2e.ts`、`computer-use-chat-live-e2e.test.ts`、`FeedbackInboxPage.tsx`、`package-bridge.test.ts`、`ShellPanels.tsx`；process scan found no lingering dev/runtime/Computer Use services beyond the scan command itself。
-- 2026-05-29：package execute port split focused suite passed：`node --import tsx --test src/runtime/computer-use/package-bridge-execute-port.test.ts src/runtime/computer-use/package-bridge-plan-port.test.ts src/runtime/computer-use/package-bridge-capture-port.test.ts src/runtime/computer-use/package-bridge-write-trace-port.test.ts src/runtime/computer-use/package-bridge-trace-port.test.ts src/runtime/computer-use/package-bridge-host-ports.test.ts src/runtime/computer-use/package-bridge.test.ts` -> 39 passed；`package-bridge.ts` 降到 722 行，verify handler 仍保留为后续拆分项。
-- 2026-05-29：package plan port、workspace feedback terminal protocol、chat live evidence refs helper、Feedback toolbar、Shell workspace connection panel、session repair raw split focused suite passed：`node --import tsx --test src/runtime/computer-use/package-bridge-plan-port.test.ts src/runtime/computer-use/package-bridge-capture-port.test.ts src/runtime/computer-use/package-bridge-write-trace-port.test.ts src/runtime/computer-use/package-bridge-trace-port.test.ts src/runtime/computer-use/package-bridge-host-ports.test.ts src/runtime/computer-use/package-bridge.test.ts src/runtime/workspace-server-feedback-terminal-protocol.test.ts src/runtime/workspace-server-runtime-codex-browser-acceptance.test.ts src/runtime/workspace-server-runtime-provider-preflight.test.ts src/runtime/workspace-server-http.test.ts src/runtime/workspace-server-health.test.ts src/runtime/workspace-server-git.test.ts` -> 61 passed；`node --import tsx --test tests/smoke/computer-use-chat-live-evidence-refs.test.ts tests/smoke/computer-use-chat-live-e2e.test.ts src/ui/src/app/sciforgeApp/FeedbackInboxToolbar.test.tsx src/ui/src/app/sciforgeApp/FeedbackInboxPage.test.ts src/ui/src/app/sciforgeApp/FeedbackEvidenceReview.test.tsx src/ui/src/app/sciforgeApp/FeedbackRepairResolutionComposer.test.tsx src/ui/src/app/appShell/WorkspaceConnectionPanel.test.tsx src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts src/ui/src/app/ChatPanel.test.ts src/ui/src/app/chat/sessionTransforms.test.ts` -> 114 passed；`npm run typecheck --silent` passed；`npm run smoke:computer-use-chat-live-preflight:strict --silent` returned blocked with `missingEnv=0`、`policyViolations=0` and failed services `sciforge-ui` / `workspace-writer` / `runtime-codex` / `provider-proxy`，未提交 isolated matrix 请求。
-- 2026-05-29：latest protocol/typecheck/whitespace pass after PROJECT update：`node --import tsx tests/smoke/smoke-real-task-protocol-gates.ts` passed，active board 保留 6 个未完成项；`npm run typecheck --silent` passed；`git diff --check` passed。
-- 2026-05-29：package capture port、workspace browser-acceptance helper、repair terminal mirror、client GUI presentation helper、Feedback repair composer、SciForgeApp feedback actions、Shell TopBar split 整合 suite passed：`node --import tsx --test src/runtime/computer-use/package-bridge-capture-port.test.ts src/runtime/computer-use/package-bridge-write-trace-port.test.ts src/runtime/computer-use/package-bridge-trace-port.test.ts src/runtime/computer-use/package-bridge-host-ports.test.ts src/runtime/computer-use/package-bridge.test.ts src/runtime/workspace-server-runtime-codex-browser-acceptance.test.ts src/runtime/workspace-server-runtime-provider-preflight.test.ts src/runtime/workspace-server-http.test.ts src/runtime/workspace-server-health.test.ts src/runtime/workspace-server-git.test.ts src/runtime/repair-handoff-terminal-mirror.test.ts tests/smoke/smoke-repair-handoff-runner.ts` -> 59 passed；`node --import tsx --test src/ui/src/api/sciforgeToolsClient/runtimeEvents.client.test.ts src/ui/src/api/sciforgeToolsClient/runtimeEvents.test.ts src/ui/src/api/sciforgeToolsClient/computerUseWorkspaceGatewayRequest.test.ts src/ui/src/api/sciforgeToolsClient/runtimeFailure.test.ts src/ui/src/app/sciforgeApp/FeedbackInboxPage.test.ts src/ui/src/app/sciforgeApp/FeedbackRepairResolutionComposer.test.tsx src/ui/src/app/sciforgeApp/FeedbackEvidenceReview.test.tsx src/ui/src/feedback/feedbackWorkspace.test.ts src/ui/src/app/ChatPanel.test.ts src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts src/ui/src/app/appShell/sidebarProjectSessions.test.ts` -> 109 passed；`npm run smoke:long-file-budget --silent` passed。
-- 2026-05-29：协议门禁、typecheck、whitespace 和进程清理复核 passed：`node --import tsx tests/smoke/smoke-real-task-protocol-gates.ts` passed after gate followed the new `computerUseWorkspaceGatewayRequest.ts` helper boundary；`npm run typecheck --silent` passed；`git diff --check` passed；process scan found no lingering dev/runtime/Computer Use services beyond the scan command itself。
-- 2026-05-29：package `writeTrace` port、generated lifecycle failure helper、workspace runtime provider preflight helper、Computer Use workspace gateway request builder、browser acceptance helper split、session failed-run projection split 整合 suite passed：`node --import tsx --test src/ui/src/app/chat/sessionTransforms.test.ts src/runtime/computer-use/package-bridge-write-trace-port.test.ts src/runtime/computer-use/package-bridge-trace-port.test.ts src/runtime/computer-use/package-bridge-host-ports.test.ts src/runtime/computer-use/package-bridge.test.ts src/runtime/gateway/generated-task-runner-generation-failure.test.ts src/runtime/gateway/generated-task-runner-payload-materialization.test.ts src/runtime/gateway/generated-task-runner-generation-lifecycle.test.ts src/runtime/workspace-server-runtime-provider-preflight.test.ts src/runtime/workspace-server-http.test.ts src/runtime/workspace-server-health.test.ts src/runtime/workspace-server-git.test.ts src/ui/src/api/sciforgeToolsClient/computerUseWorkspaceGatewayRequest.test.ts src/ui/src/api/sciforgeToolsClient/runtimeFailure.test.ts src/ui/src/api/sciforgeToolsClient/runtimeEvents.client.test.ts src/ui/src/api/sciforgeToolsClient/runtimeEvents.test.ts src/ui/src/api/sciforgeToolsClient.policy.test.ts` -> 167 total / 154 passed / 13 skipped；`SCIFORGE_BROWSER_ACCEPTANCE_EVIDENCE_DIR=$(mktemp -d ...) node --import tsx --test tests/smoke/smoke-runtime-codex-browser-acceptance.ts` -> 1 passed with blocked manifest in temp evidence dir；`npm run typecheck --silent` passed。
-- 2026-05-29：package emitEvent port、client runtime failure helper、generated lifecycle payload materializer、Feedback evidence renderer、browser acceptance fixtures、session background completion split focused suite passed：`node --import tsx --test src/ui/src/app/chat/sessionTransforms.test.ts src/runtime/computer-use/package-bridge-trace-port.test.ts src/runtime/computer-use/package-bridge-host-ports.test.ts src/runtime/computer-use/package-bridge.test.ts src/ui/src/api/sciforgeToolsClient/runtimeFailure.test.ts src/ui/src/api/sciforgeToolsClient/runtimeEvents.client.test.ts src/ui/src/api/sciforgeToolsClient/runtimeEvents.test.ts src/runtime/gateway/generated-task-runner-payload-materialization.test.ts src/runtime/gateway/generated-task-runner-generation-lifecycle.test.ts src/ui/src/app/sciforgeApp/FeedbackEvidenceReview.test.tsx src/ui/src/app/sciforgeApp/FeedbackInboxPage.test.ts` -> 138 passed；`SCIFORGE_BROWSER_ACCEPTANCE_EVIDENCE_DIR=$(mktemp -d ...) node --import tsx --test tests/smoke/smoke-runtime-codex-browser-acceptance.ts` -> 1 passed with blocked manifest in the temp evidence dir；`npm run typecheck --silent` passed。
-- 2026-05-29：host-port dispatcher、workspace HTTP helper、runtime events test split、real-task schema fixtures、session request payload split focused suite passed：`node --import tsx --test src/runtime/computer-use/package-bridge-host-ports.test.ts src/runtime/computer-use/package-bridge.test.ts src/runtime/workspace-server-http.test.ts src/runtime/workspace-server-health.test.ts src/runtime/workspace-server-git.test.ts src/ui/src/api/sciforgeToolsClient/runtimeEvents.test.ts src/ui/src/api/sciforgeToolsClient/runtimeEvents.client.test.ts tests/smoke/real-task-evidence-schema.test.ts` -> 103 passed；`node --import tsx --test src/ui/src/app/chat/sessionTransforms.test.ts` -> 31 passed；`npm run typecheck --silent` passed。
-- 2026-05-29：package process lifecycle、workspace git helper、matrix stability diagnostics、session payload compaction split focused suite passed：`node --import tsx --test src/runtime/computer-use/package-bridge-process.test.ts src/runtime/computer-use/package-bridge.test.ts src/runtime/workspace-server-git.test.ts src/runtime/workspace-server-health.test.ts tests/smoke/computer-use-chat-live-complex-matrix.test.ts src/ui/src/app/chat/sessionTransforms.test.ts` -> 75 passed；`npm run typecheck --silent` passed。
-- 2026-05-29：package bridge trace/presentation split、workspace health helper、chat session artifact linking focused suite passed：`node --import tsx --test src/runtime/computer-use/package-bridge-trace.test.ts src/runtime/computer-use/package-bridge-presentation.test.ts src/runtime/computer-use/package-bridge-policy.test.ts src/runtime/computer-use/package-bridge-result.test.ts src/runtime/computer-use/package-bridge-invocation-diagnostics.test.ts src/runtime/computer-use/package-bridge.test.ts src/runtime/workspace-server-health.test.ts src/ui/src/app/chat/sessionTransforms.test.ts` -> 74 passed；`npm run typecheck --silent` passed。
-- 2026-05-29：focused release report lifecycle comparison / chat live invocation diagnostics consumer / package bridge policy split integration suite passed：`node --import tsx --test tests/smoke/computer-use-chat-live-complex-matrix-release-report.test.ts tests/smoke/computer-use-chat-live-resource-diagnostics.test.ts tests/smoke/computer-use-chat-live-e2e.test.ts src/runtime/computer-use/package-bridge-policy.test.ts src/runtime/computer-use/package-bridge-result.test.ts src/runtime/computer-use/package-bridge.test.ts src/runtime/computer-use/package-bridge-invocation-diagnostics.test.ts` -> 70 passed；`node --import tsx tests/smoke/smoke-real-task-protocol-gates.ts` passed。
-- 2026-05-29：isolated live matrix preflight attempted before true long-run comparison：`npm run smoke:computer-use-chat-live-preflight:strict --silent` returned `status=blocked` without submitting a request; blockers are local services `sciforge-ui`、`workspace-writer`、`runtime-codex`、`provider-proxy` not running, while local config sources were detected and secrets remained unprinted. 因此 `smoke:computer-use-chat-live-complex-matrix:opt-in-isolated` 真实长跑保持未完成。
-- 2026-05-29：真实 continuation-completed opt-in passed：`SCIFORGE_WORKSPACE_PORT=6173 SCIFORGE_RUNTIME_CODEX_PORT=18080 SCIFORGE_RUN_REAL_L3_WORKFLOW_BACKEND=docker SCIFORGE_RUN_REAL_L3_WORKFLOW_TIMEOUT=180 npm run smoke:computer-use-chat-live-continuation-completed:opt-in --silent` -> `[passed]`、`issues=0`、manifest `docs/test-artifacts/computer-use-chat-live-e2e/continuation-completed-manifest.json`。
-- 2026-05-29：focused case isolation / package bridge result / matrix report suite passed：`node --import tsx --test tests/smoke/computer-use-chat-live-case-isolation.test.ts tests/smoke/computer-use-chat-live-complex-matrix.test.ts tests/smoke/computer-use-chat-live-complex-matrix-release-report.test.ts tests/smoke/computer-use-chat-live-resource-diagnostics.test.ts src/runtime/computer-use/package-bridge-result.test.ts src/runtime/computer-use/package-bridge-request.test.ts src/runtime/computer-use/package-bridge-approval.test.ts src/runtime/computer-use/package-bridge.test.ts src/runtime/computer-use/package-bridge-stdio.test.ts` -> 55 passed。
-- 2026-05-29：focused resource lifecycle diagnostics / package invocation diagnostics / package bridge integration suite passed：`node --import tsx --test tests/smoke/computer-use-chat-live-resource-diagnostics.test.ts src/runtime/computer-use/package-bridge-invocation-diagnostics.test.ts src/runtime/computer-use/package-bridge-result.test.ts src/runtime/computer-use/package-bridge-request.test.ts src/runtime/computer-use/package-bridge-approval.test.ts src/runtime/computer-use/package-bridge.test.ts src/runtime/computer-use/package-bridge-stdio.test.ts` -> 45 passed；`node --import tsx tests/smoke/smoke-real-task-protocol-gates.ts` passed。
-- 2026-05-29：manual release report workflow/checklist gate passed locally：`node --import tsx tests/smoke/smoke-real-task-protocol-gates.ts && npm run release:computer-use-chat-live-complex-matrix-report --silent` -> protocol ok、aggregate passed、release report `[passed]` with `resources=passed`。
-- 2026-05-29：complex matrix opt-in release report passed：`npm run smoke:computer-use-chat-live-complex-matrix:opt-in-report --silent` -> `[passed] aggregate=passed; coverage=7/7; monolithic=failed; issues=0`，写出 `docs/test-artifacts/computer-use-chat-live-complex-matrix/release-report.json`。
-- 2026-05-29：focused package bridge / matrix report / resource diagnostics suite passed：`node --import tsx --test src/runtime/computer-use/package-bridge-request.test.ts src/runtime/computer-use/package-bridge-approval.test.ts src/runtime/computer-use/package-bridge.test.ts src/runtime/computer-use/package-bridge-stdio.test.ts tests/smoke/computer-use-chat-live-complex-matrix-release-report.test.ts tests/smoke/computer-use-chat-live-resource-diagnostics.test.ts tests/smoke/computer-use-chat-live-complex-matrix.test.ts` -> 48 passed。
-- 2026-05-29：真实复杂任务矩阵 aggregate passed：`npm run smoke:computer-use-chat-live-complex-matrix:aggregate --silent` -> `[passed]`、7 cases、`issues=0`、manifest `docs/test-artifacts/computer-use-chat-live-complex-matrix/aggregate-manifest.json`。
-- 2026-05-29：focused chat live continuation / complex matrix suite passed after auto-continuation retry and aggregate support：`node --import tsx --test tests/smoke/computer-use-chat-live-complex-matrix.test.ts tests/smoke/computer-use-chat-live-e2e.test.ts` -> 34 passed。
-- 2026-05-29：package bridge approval/L3/stdio focused suite passed after default Docker port deconflict and helper extraction：`node --import tsx --test src/runtime/computer-use/package-bridge-approval.test.ts src/runtime/computer-use/package-bridge.test.ts src/runtime/computer-use/package-bridge-stdio.test.ts` -> 32 passed。
-- 2026-05-29：Computer Use package-local safety/L3 probe suite passed：`python3 -m pytest packages/actions/computer-use/tests/test_loop.py packages/actions/computer-use/tests/test_isolated_desktop_l3_workflow_probe.py -q` -> 57 passed。
-- 2026-05-29：真实复杂任务矩阵 split live coverage passed：`completed-01-04-rerun-2.json` (`CU-NEXT-01`、`CU-NEXT-04`) passed；`table-file-final.json` (`CU-NEXT-02`) passed；`file-final.json` (`CU-NEXT-04` final rerun) passed；`completed-07-rerun-4.json` (`CU-NEXT-07`) passed；`non-completed-cases-manifest.json` (`CU-NEXT-03`、`CU-NEXT-05`、`CU-NEXT-06`) passed，所有 passed case `issues=[]`。
-- 2026-05-29：真实 full long-run complex matrix diagnostic：`npm run smoke:computer-use-chat-live-complex-matrix:opt-in --silent` 最近单次长串为 5/7 passed，`docs/test-artifacts/computer-use-chat-live-complex-matrix/manifest.json` 记录 table/file 在长串中出现模型漂移；随后通过 targeted live reruns `table-file-final.json` 和 `file-final.json` 收敛。该 gate 继续 opt-in，不进入默认 release gate。
-- 2026-05-29：focused policy/chat matrix suites passed after safety/path-entry fixes：`PYTHONPATH=packages/actions/computer-use python3 -m pytest packages/actions/computer-use/tests/test_loop.py -q` -> 46 passed；`node --import tsx --test packages/actions/computer-use/runtime-policy.test.ts tests/smoke/computer-use-chat-live-complex-matrix.test.ts` -> 13 passed。
-- 2026-05-29：focused chat live E2E / complex matrix suite passed：`node --import tsx --test tests/smoke/computer-use-chat-live-complex-matrix.test.ts tests/smoke/computer-use-chat-live-e2e.test.ts` -> 31 passed。
-- 2026-05-29：Docker L3 backend live proof passed on Darwin host：`SCIFORGE_CU_ISOLATED_L3_EVIDENCE_DIR=/tmp/sciforge-cu-isolated-l3-evidence SCIFORGE_RUN_REAL_L3_WORKFLOW_TIMEOUT=180 npm run smoke:cu-isolated-l3:docker --silent` -> `status=completed`、`userAcceptanceEligible=true`、Linux/noVNC/LibreOffice/browser/xdotool readiness ready。
-- 2026-05-29：真实 SciForge 对话栏 completed opt-in 端到端通过：`SCIFORGE_WORKSPACE_PORT=6173 SCIFORGE_RUNTIME_CODEX_PORT=18080 SCIFORGE_RUN_REAL_L3_WORKFLOW_BACKEND=docker SCIFORGE_RUN_REAL_L3_WORKFLOW_TIMEOUT=180 npm run smoke:computer-use-chat-live-e2e:opt-in --silent` -> `[completed]`、`issues=0`、`requestSubmitted=true`，manifest `docs/test-artifacts/computer-use-chat-live-e2e/manifest.json`。
-- 2026-05-29：focused package/chat live suite passed：`node --import tsx --test src/runtime/computer-use/package-bridge.test.ts tests/smoke/computer-use-chat-live-e2e.test.ts` -> 51 passed。
-- 2026-05-29：CU-NEXT live acceptance matrix / complex matrix focused tests passed：`node --import tsx --test tests/smoke/cu-next-live-acceptance-matrix.test.ts tests/smoke/computer-use-chat-live-complex-matrix.test.ts` -> 22 passed。
-- 2026-05-29：protocol gate, typecheck, whitespace passed：`node --import tsx tests/smoke/smoke-real-task-protocol-gates.ts`; `npm run typecheck --silent`; `git diff --check`。
-- 2026-05-29：service-env live topology ready：`SCIFORGE_WORKSPACE_PORT=6173 SCIFORGE_RUNTIME_CODEX_PORT=18080 npm run smoke:computer-use-chat-live-preflight:strict --silent` -> `[ready]`，services `sciforge-ui`、`workspace-writer`、`runtime-codex`、`provider-proxy`、`kv-ground` passed；secrets remained unprinted。
-- 2026-05-29：completed-intent SciForge chat live opt-in smoke reached current-run final artifact / `gui.present` and fail-closed only on L3 completion-grade：`SCIFORGE_WORKSPACE_PORT=6173 SCIFORGE_RUNTIME_CODEX_PORT=18080 npm run smoke:computer-use-chat-live-e2e:opt-in --silent` wrote manifest `docs/test-artifacts/computer-use-chat-live-e2e/manifest.json`; issues are canonical `isolated-desktop-l3-workflow-evidence.json` missing plus embedded L3 producer readiness blockers (Darwin host, missing Linux/noVNC/Xvfb/window-manager/VNC/noVNC-proxy/LibreOffice/browser/xdotool/screenshot tool).
-- 2026-05-29：completed prompt / path-entry policy / package bridge completion diagnostics focused suite passed：`node --import tsx --test packages/actions/computer-use/runtime-policy.test.ts src/runtime/computer-use/package-bridge.test.ts tests/smoke/computer-use-chat-live-e2e.test.ts` passed；`node --import tsx --test tests/smoke/computer-use-chat-live-preflight.test.ts tests/smoke/computer-use-chat-live-e2e.test.ts` passed。
-- 2026-05-29：request-scoped producer / package bridge / chat live focused suite passed after producer diagnostic expansion：`node --import tsx --test src/runtime/computer-use/package-bridge.test.ts tests/smoke/computer-use-chat-live-e2e.test.ts` passed: 47 passed。
-- 2026-05-29：protocol gate passed after opt-in script and diagnostics updates：`node --import tsx tests/smoke/smoke-real-task-protocol-gates.ts`。
-- 2026-05-29：typecheck passed after completed prompt, runtime policy, package bridge L3 diagnostics and chat live gate changes：`npm run typecheck --silent`。
-- 2026-05-29：whitespace check passed after latest edits：`git diff --check`。
-- 2026-05-29：focused chat live / package bridge / runtime event / complex matrix suite passed：`node --import tsx --test src/runtime/computer-use/package-bridge.test.ts tests/smoke/computer-use-chat-live-complex-matrix.test.ts src/ui/src/api/sciforgeToolsClient/runtimeEvents.test.ts`。
-- 2026-05-29：request-scoped completion evidence policy 与 completed attach gate focused suite passed：`node --import tsx --test src/runtime/computer-use/host-adapter.test.ts src/runtime/computer-use/package-bridge.test.ts tests/smoke/computer-use-chat-live-e2e.test.ts` passed: 57 passed。
-- 2026-05-29：UI transport projection focused suite passed：`node --import tsx --test src/ui/src/api/sciforgeToolsClient.policy.test.ts src/ui/src/api/sciforgeToolsClient/runtimeEvents.test.ts` passed: 52 passed / 13 skipped / 65 total。
-- 2026-05-29：protocol gate passed：`node --import tsx tests/smoke/smoke-real-task-protocol-gates.ts`。
-- 2026-05-29：chat live E2E focused suite passed：`node --import tsx --test tests/smoke/computer-use-chat-live-e2e.test.ts`。
-- 2026-05-29：typecheck passed：`npm run typecheck --silent`。
-- 2026-05-29：whitespace check passed：`git diff --check`。
-- 2026-05-29：after package script opt-in wiring, protocol gate passed：`node --import tsx tests/smoke/smoke-real-task-protocol-gates.ts`；typecheck passed：`npm run typecheck --silent`；whitespace check passed：`git diff --check`。
-- 2026-05-29：live preflight attempted after request-scoped producer wiring：`npm run smoke:computer-use-chat-live-preflight:strict --silent` returned `status=blocked` without submitting a request; blockers are local services `sciforge-ui`、`workspace-writer`、`runtime-codex`、`provider-proxy` not running, while `kv-ground` passed and secrets remained unprinted.
-- 2026-05-29：`smoke:computer-use-chat-live-confirmed-approval:opt-in` passed against p1 live topology; manifest `docs/test-artifacts/computer-use-chat-live-e2e/confirmed-approval-retry-manifest.json` has `status=passed`.
-- 2026-05-29：`smoke:computer-use-chat-live-continuation-completed:opt-in` failed as expected for completion-grade: current-run canonical `isolated-desktop-l3-workflow-evidence.json` missing; manifest `docs/test-artifacts/computer-use-chat-live-e2e/continuation-completed-manifest.json`.
-- 2026-05-29：`tools/computer-use-chat-live-complex-matrix.ts --cases web-research-email-draft-stop,failure-recovery-repair,high-risk-approval-chain` passed; manifest `docs/test-artifacts/computer-use-chat-live-complex-matrix/non-completed-cases-manifest.json` has `status=passed` / `issues=[]`.
+- [x] 新增 `module.*` dispatcher、adapter 或 trace 代码时，优先按 contract、routing、normalization、presentation profile 和 tests 拆分，避免形成新的巨型 gateway。
+  本轮审计（2026-05-29）：contract、dispatcher、GUI module、resource modules、backend normalization、backend adapters 和 presentation profile 分文件落地，未形成新的巨型 gateway；focused tests 与实现相邻。
+- [x] 继续让 `workspace-server.ts`、chat session projection、runtime event parsing、backend adapters 保持在治理阈值内。
+  本轮审计（2026-05-29）：`workspace-server.ts` 1925 行、`runtimeEvents.ts` 1199 行、`backend-event-normalization.ts` 794 行、`codex-app-server-adapter.ts` 136 行、`claude-stream-json-adapter.ts` 192 行、`sessionTransforms.ts` 343 行，均低于约 2000 行治理阈值。
+- [x] generated catalog 超过阈值时必须在 smoke 输出中标注 generated/exempt，不得把豁免扩大到手写源码。
+  本轮审计（2026-05-29）：本轮新增/修改为手写 contract、adapter、module 和 tests，没有新增 generated catalog；既有 generated/exempt 规则未扩大。
 
 ## 暂缓集成
 
-- wiring the now-passed package/harness CU-NEXT matrix into the default release gate
-- AgentServer/provider registry migration
-- full-repo verification as a required gate for every Computer Use change
+- 将 Claude Code 作为默认 backend。
+- 默认 release gate 中运行长耗时 live Computer Use / browser / Claude real-process tests。
+- GUI workbench 拖拽式 pipeline 编排。当前 pipeline 编排归 Agent Host，GUI 只做展示和确认。
+- 删除 `capability_discovery.*` alias。必须等 `module.query/read/invoke(moduleId='capabilities')` 在 Codex app-server、CLI bridge 和 Claude MCP 路径都稳定后再做。
+- 删除 `gui.*` alias。必须等 `module.*` 主路径稳定后再做；删除前 `gui.*` 只能停留在 adapter shim，不能再扩展新能力。
 
 ## 必读文档
+
 - [`docs/README.md`](docs/README.md)：当前文档入口。
-- [`docs/Architecture.md`](docs/Architecture.md)：GUI-as-TUI-extension 总架构和拓展模块交互模型。
-- [`docs/TuiGuiProtocol.md`](docs/TuiGuiProtocol.md)：GUI 输入、只读投影和执行边界。
+- [`docs/Architecture.md`](docs/Architecture.md)：总架构、Agent Host Semantic Pipeline、GUI-as-extension 和模块归属。
+- [`docs/TuiGuiProtocol.md`](docs/TuiGuiProtocol.md)：GUI 输入、只读投影、`gui.*` alias 和执行边界。
 - [`docs/NativeExtensionOwnershipMap.md`](docs/NativeExtensionOwnershipMap.md)：provider route、verifier、repair、Computer Use 和 connector 能力归属。
-- [`docs/Usage.md`](docs/Usage.md)：当前启动、配置、运维和 workspace 产物说明。
+- [`docs/BrowserRuntimeArchitecture.md`](docs/BrowserRuntimeArchitecture.md)：browser runtime 作为 TUI capability + GUI presentation surface 的边界。
 - [`packages/actions/computer-use/README.md`](packages/actions/computer-use/README.md)：Computer Use action provider 边界。
-- [`packages/actions/computer-use/vision_computer_use_agent_mvp.md`](packages/actions/computer-use/vision_computer_use_agent_mvp.md)：Computer Use MVP 模块化设计。
-- [`packages/actions/computer-use/KV_GROUND_SERVICE_GUIDE.md`](packages/actions/computer-use/KV_GROUND_SERVICE_GUIDE.md)：KV-Ground-8B 服务启动与调用。
 - [`packages/observe/vision/README.md`](packages/observe/vision/README.md)：vision-sense 边界。
 
 ## Worktree 规则

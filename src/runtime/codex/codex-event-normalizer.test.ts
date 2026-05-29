@@ -47,6 +47,38 @@ test('maps Codex tool activity into normalized tool lifecycle events', () => {
   assert.equal(events.at(-1)?.itemId, 'item-1');
 });
 
+test('maps Codex command_execution items into shell lifecycle details', () => {
+  const started = normalizeCodexJsonlEvent({
+    type: 'item.started',
+    item: {
+      id: 'item-shell',
+      type: 'command_execution',
+      command: "/bin/zsh -lc 'cat PROJECT.md | head -20'",
+      status: 'in_progress',
+    },
+  }, metadata);
+  const completed = normalizeCodexJsonlEvent({
+    type: 'item.completed',
+    item: {
+      id: 'item-shell',
+      type: 'command_execution',
+      command: "/bin/zsh -lc 'cat PROJECT.md | head -20'",
+      aggregated_output: 'PROJECT heading and protocol summary\nsecond line',
+      exit_code: 0,
+      status: 'completed',
+    },
+  }, metadata);
+
+  assert.equal(started.at(-1)?.type, 'tool_started');
+  assert.equal(started.at(-1)?.toolName, 'shell');
+  assert.equal(started.at(-1)?.command, "/bin/zsh -lc 'cat PROJECT.md | head -20'");
+  assert.match(started.at(-1)?.message ?? '', /Shell command started/);
+  assert.equal(completed.at(-1)?.type, 'tool_completed');
+  assert.equal(completed.at(-1)?.toolName, 'shell');
+  assert.equal(completed.at(-1)?.exitCode, 0);
+  assert.match(completed.at(-1)?.message ?? '', /output=PROJECT heading/);
+});
+
 test('maps Codex item.completed agent_message into a visible message event', () => {
   const events = normalizeCodexJsonlEvent({
     type: 'item.completed',
@@ -172,6 +204,78 @@ test('maps completed gui.ask_user tool calls into explicit confirmation events',
   assert.equal(askUser?.source, 'gui.ask_user:codex-test');
   assert.deepEqual(askUser?.relatedRefs, ['.sciforge/vision-runs/run-1/vision-trace.json']);
   assert.equal(askUser?.choices?.[0]?.commandText, '/computer-use approve --approval-ref approval-1');
+});
+
+test('maps completed module.invoke gui present into the same visible GUI event', () => {
+  const events = normalizeCodexJsonlEvent({
+    type: 'item.completed',
+    item: {
+      id: 'item-module-gui-present',
+      type: 'function_call',
+      name: 'module.invoke',
+      arguments: JSON.stringify({
+        moduleId: 'gui',
+        intent: 'present',
+        input: {
+          intent: 'show-result',
+          title: 'Runtime answer',
+          content: { kind: 'markdown', value: 'VISIBLE_MODULE_GUI_PRESENT_RESULT' },
+          hint: 'markdown',
+        },
+      }),
+      result: JSON.stringify({
+        schemaVersion: 'sciforge.module-contract.v1',
+        moduleId: 'gui',
+        ok: true,
+        value: {
+          ok: true,
+          placement: { panel: 'chat', viewId: 'runtime-answer' },
+        },
+      }),
+    },
+  }, metadata);
+
+  assert.equal(events[0]?.type, 'audit');
+  assert.equal(events[1]?.type, 'gui_present');
+  assert.equal(events[1]?.text, 'VISIBLE_MODULE_GUI_PRESENT_RESULT');
+  assert.equal(((events[1]?.raw as { presentation?: { source?: string } }).presentation)?.source, 'gui.present:module.invoke');
+});
+
+test('maps completed module.invoke gui ask_user into the same visible confirmation event', () => {
+  const events = normalizeCodexJsonlEvent({
+    type: 'item.completed',
+    item: {
+      id: 'item-module-gui-ask',
+      type: 'function_call',
+      name: 'module.invoke',
+      arguments: JSON.stringify({
+        moduleId: 'gui',
+        intent: 'ask_user',
+        input: {
+          kind: 'choice',
+          title: 'Choose next step',
+          message: 'Pick a terminal-equivalent action.',
+          choices: [
+            { label: 'Continue', commandText: '/continue', style: 'primary' },
+          ],
+        },
+      }),
+      result: JSON.stringify({
+        schemaVersion: 'sciforge.module-contract.v1',
+        moduleId: 'gui',
+        ok: true,
+        value: {
+          ok: true,
+          placement: { panel: 'modal', viewId: 'gui-ask-3' },
+        },
+      }),
+    },
+  }, metadata);
+
+  assert.equal(events[0]?.type, 'audit');
+  assert.equal(events[1]?.type, 'gui_ask_user');
+  assert.match(events[1]?.text ?? '', /Choose next step/);
+  assert.equal(((events[1]?.raw as { askUser?: { source?: string } }).askUser)?.source, 'gui.ask_user:module.invoke');
 });
 
 test('does not treat gui.present start as completion', () => {

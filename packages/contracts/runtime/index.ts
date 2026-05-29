@@ -2,6 +2,33 @@ import type { ReactNode } from 'react';
 import type { ArtifactDelivery } from './artifacts';
 
 export {
+  MODULE_CONTRACT_SCHEMA_VERSION,
+  createModuleDescription,
+  moduleIntent,
+  moduleIntentRequiresApproval,
+  moduleResult,
+  moduleSupportsFacet,
+  moduleSupportsFunction,
+} from './modules';
+export type {
+  ModuleDescription,
+  ModuleDescriptionInput,
+  ModuleFacetName,
+  ModuleFunctionName,
+  ModuleIntentDescription,
+  ModuleInvokeRequest,
+  ModuleInvokeResult,
+  ModulePipelineTraceStep,
+  ModuleQueryRequest,
+  ModuleQueryResult,
+  ModuleReadRequest,
+  ModuleReadResult,
+  ModuleResourceDescription,
+  ModuleResultEnvelope,
+  ModuleSideEffect,
+} from './modules';
+
+export {
   EVENT_RELAY_SCHEMA_VERSION,
   FAILURE_NORMALIZER_SCHEMA_VERSION,
   HARNESS_POLICY_REFS_SCHEMA_VERSION,

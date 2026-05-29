@@ -1,6 +1,6 @@
 # TUI / GUI 协议
 
-最后更新：2026-05-24
+最后更新：2026-05-29
 
 ## 结论
 
@@ -9,6 +9,8 @@ SciForge 不定义新的 TUI plugin/runtime 协议。最终协议只有两个方
 > **GUI 给 TUI 的输入全部是文本；TUI 通过原生 tool/plugin/MCP 机制向 GUI 表达展示意图。**
 
 Codex CLI / app-server 如何注册 tool、plugin、skill、MCP、slash command 和 custom model provider，全部使用 Codex 原生机制。SciForge 不定义 `registerCommand`、`registerTool`、`registerPolicy` 这类 host API，也不要求独立 AgentServer。
+
+跨 GUI、skills、memory、capabilities、verifier、browser 和 actions 的通用模块边界见 [`Architecture.md`](Architecture.md#agent-host-semantic-pipeline)：canonical 函数是 `module.describe/query/read/invoke`。本文件中的 `gui.*` 是 GUI 模块的 host-specific adapter alias，用于说明当前 GUI-TUI 迁移语义；稳定范式中等价于 `module.*` 调用。
 
 ## 数据方向
 
@@ -208,28 +210,33 @@ Debug snapshot 只用于 audit/debug 视图，不应进入默认 agent context�
 稳定读取操作：
 
 ```ts
-gui.list({ path: '/gui/regions' })
+module.query({ moduleId: 'gui', scope: 'gui:/regions' })
 
-gui.read({
-  path: '/gui/hot-region.json',
+module.read({
+  ref: 'gui:/hot-region.json',
   maxBytes?: number
 })
 
-gui.search({
+module.query({
+  moduleId: 'gui',
   query: 'report.md',
-  scope?: '/gui' | '/gui/hot-region.json' | '/gui/regions/results',
+  scope?: 'gui:/' | 'gui:/hot-region.json' | 'gui:/regions/results',
   kinds?: Array<'ref' | 'title' | 'visible-text' | 'action' | 'status'>
 })
 
-gui.stat({ path: '/gui/regions/results/summary.md' })
+module.read({ ref: 'gui:/regions/results/summary.md', includeMeta: true })
 
-gui.watch({
-  path: '/gui/hot-region.json',
-  events?: Array<'changed' | 'removed' | 'permission-changed'>
+module.invoke({
+  moduleId: 'gui',
+  intent: 'subscribe',
+  input: {
+    ref: 'gui:/hot-region.json',
+    events?: Array<'changed' | 'removed' | 'permission-changed'>
+  }
 })
 ```
 
-如果 host 支持 MCP resources、LSP-like resource providers 或原生 file/context API，这些操作应映射到原生机制。否则就作为只读 `gui.*` tools 暴露。无论采用哪种方式，它们都只是 GUI state read，不会修改 GUI state 或 workspace state。
+如果 host 支持 MCP resources、LSP-like resource providers 或原生 file/context API，这些操作应映射到原生机制。否则只能通过 adapter shim 作为只读 `gui.*` tools 暴露。无论采用哪种方式，它们都只是 GUI state read，不会修改 GUI state 或 workspace state。
 
 Resource 内容必须是语义化、有边界、分级披露的：
 
@@ -282,7 +289,7 @@ gui.read({ path: '/gui/renderers/report-viewer.json' })
 
 发现规则：
 
-- TUI 可以 `gui.list('/gui/capabilities')`、`gui.read('/gui/capabilities/presentation.json')` 或 `gui.search({ scope: '/gui/capabilities', query })`。
+- TUI 可以 `module.query({ moduleId: 'gui', scope: 'gui:/capabilities' })`、`module.read({ ref: 'gui:/capabilities/presentation.json' })` 或 `module.query({ moduleId: 'gui', scope: 'gui:/capabilities', query })`。迁移期 `gui.list/read/search` alias 只能在 adapter shim 中继续存在。
 - TUI 不能 import React 组件，也不能把 GUI component 当成 task skill/tool。
 - GUI 不能把展示组件注册成 TUI capability，也不能用组件目录做算法、provider 或 skill ranking。
 - GUI 组件只通过 `gui.present`、右侧预览和 GUI-local renderer negotiation 发挥作用。
@@ -302,7 +309,28 @@ TUI 和 GUI 对彼此的感知是非对称的：
 
 ## Intent-Based GUI Tools / 基于意图的 GUI 工具
 
-TUI 应表达意图，而不是远程命令布局。主要 tool surface 是：
+TUI 应表达意图，而不是远程命令布局。canonical surface 是：
+
+```ts
+module.invoke({
+  moduleId: 'gui',
+  intent: 'present' | 'ask_user' | 'notify' | 'set_status' | 'apply_batch' | 'subscribe',
+  input: Record<string, unknown>
+})
+
+module.read({
+  ref: 'gui:/...',
+  includeMeta?: boolean
+})
+
+module.query({
+  moduleId: 'gui',
+  query?: string,
+  scope?: string
+})
+```
+
+迁移期或 host-specific tool surface 可以继续暴露：
 
 ```ts
 type GuiTool =
@@ -319,7 +347,7 @@ type GuiTool =
   | gui.watch;
 ```
 
-`gui.list/read/search/stat/watch` 是只读 state operations。`gui.present/ask_user/notify/set_status/apply_batch` 是 intent operations。`gui.show_table` 或 `gui.show_artifact` 这类低层名称可以作为 host-specific alias 存在，但稳定设计使用 intent tools。
+`gui.list/read/search/stat/watch` 是只读 state operations 的 alias。`gui.present/ask_user/notify/set_status/apply_batch` 是 `module.invoke({ moduleId: 'gui', intent })` 的 alias。`gui.show_table` 或 `gui.show_artifact` 这类低层名称只能作为 host-specific alias 存在，稳定设计使用 intent。
 
 ## `gui.present`
 
@@ -652,21 +680,22 @@ TUI 调用 connector 后，应优先返回 refs-first 结果：`feishu:*`、`wec
 
 | Host | 适配方式 |
 |---|---|
-| Codex CLI / `codex exec --json` | Phase 1 生产迁移路径。GUI 或 bridge 启动 Codex CLI，注入同一组 `gui.*` tools / resources，并消费 JSONL event stream。 |
-| `AgentCliAdapter` | Phase 2 抽象层。隔离 Codex 进程启动、profile、workspace、JSONL parsing、stderr audit 和 exit code handling。 |
-| Codex app-server | 后续可选路径。只有当需要长期 thread、审批、历史和富客户端状态时再接入。 |
+| Codex app-server | 首选原生后端。注入 `module.*` dynamic tools 或 MCP tools，消费 thread/turn/item/approval 富客户端事件流。 |
+| Codex CLI / `codex exec --json` | 迁移兼容路径。GUI 或 bridge 启动 Codex CLI，注入 `module.*`；legacy host 需要时由 adapter shim 额外暴露 `gui.*` alias，并消费 JSONL event stream。 |
+| `AgentCliAdapter` | 迁移抽象层。隔离 Codex 进程启动、profile、workspace、JSONL parsing、stderr audit 和 exit code handling。 |
+| Claude Code stream-json | 可选兼容后端。通过 MCP 暴露 `module.*`，stdout NDJSON 映射为 SciForge event/trace，`control_request/control_response` 映射为 approval/input。 |
 | Codex custom provider / proxy | 默认成本路径。Codex backend 使用 DeepSeek `deepseek-v4-flash` 或本地 provider proxy；SciForge 不直接维护第二个 agent backend。 |
 
-AgentServer 不属于最终协议层。若当前实现仍存在 AgentServer adapter，它只是迁移期兼容层，目标是被 Codex app-server / CLI bridge 取代。
+AgentServer 不属于最终协议层。若当前实现仍存在 AgentServer adapter，它只是迁移期兼容层，目标是被 Codex app-server / CLI bridge 取代；新增协议和 adapter 不得继续扩展 AgentServer public surface。
 
 ## 最小实现
 
 1. GUI 把用户输入和所有按钮都转成文本发给 TUI。
 2. GUI 内部建立 semantic event bus 和 hot-region projector。
 3. 把 shell、hot-region、region detail 和 debug material 暴露为只读 GUI resource tree。
-4. 通过目标 TUI 的原生方式注入 `gui.present`、`gui.ask_user`、`gui.notify`、`gui.set_status`、`gui.apply_batch`、`gui.get_context` 和只读 `gui.list/read/search/stat/watch`。
+4. 通过目标 TUI 的原生方式注入 `module.describe/query/read/invoke`；迁移期 legacy host 可通过 adapter shim 同时注入 `gui.present`、`gui.ask_user`、`gui.notify`、`gui.set_status`、`gui.apply_batch`、`gui.get_context` 和只读 `gui.list/read/search/stat/watch` alias。
 5. GUI 直接连接 Codex backend；Codex 默认 model provider 走 DeepSeek `deepseek-v4-flash` 或用户配置的低成本 provider/proxy，OpenAI provider 仅在显式选择时使用。
-6. TUI agent 先读 GUI resources/context，再调 `gui.*` intent tools 表达视图意图。
+6. TUI agent 先读 GUI resources/context，再调 `module.invoke({ moduleId: 'gui', intent })` 表达视图意图；legacy `gui.*` 调用由 shim 转发。
 7. GUI 基于 revision、interaction mode、lastChangeOrigin 和 precondition 执行、延迟、拒绝或建议替代方案。
 8. 算法、capability discovery、harness、provider 都留在 TUI 原生扩展生态。
 9. 全局 `AnnotationSidebar` 复用主 conversation kernel：整理/预览走 `annotation-plan-only`，低风险小改动走 `annotation-quick-action`，复杂改动保存到反馈收件箱 `annotation-plan` record。

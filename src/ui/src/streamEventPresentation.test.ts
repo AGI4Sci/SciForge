@@ -32,6 +32,53 @@ test('usage updates stay in background instead of becoming visible work content'
   assert.equal(streamEventCounts([usageEvent]).background, 1);
 });
 
+test('backend presentation profiles are separate from runtime profile metadata', () => {
+  const codexAudit = event({
+    type: 'audit',
+    label: 'raw-jsonl',
+    detail: 'raw JSONL folded in audit',
+    raw: {
+      backend: 'codex-exec-json',
+      status: 'raw-jsonl',
+      profile: 'sciforge-runtime-deepseek',
+    },
+  });
+  const claudeApproval = event({
+    type: 'gui_ask_user',
+    label: 'approval',
+    detail: 'Approval ref: `control-1`',
+    raw: {
+      backend: 'claude-stream-json',
+      status: 'approval-required',
+      profile: 'claude-code-runtime-profile',
+    },
+  });
+  const claudeTool = event({
+    type: 'tool_started',
+    label: 'tool',
+    detail: 'module.invoke actions.execute',
+    raw: { backend: 'claude-stream-json' },
+  });
+
+  const codexPresentation = presentStreamEvent(codexAudit);
+  assert.equal(codexPresentation.typeLabel, 'Codex audit');
+  assert.equal(codexPresentation.importance, 'debug');
+  assert.equal(codexPresentation.initiallyCollapsed, true);
+  assert.equal(codexPresentation.visibleInRunningMessage, false);
+
+  const approvalPresentation = presentStreamEvent(claudeApproval);
+  assert.equal(approvalPresentation.typeLabel, 'Claude approval');
+  assert.equal(approvalPresentation.importance, 'key');
+  assert.equal(approvalPresentation.initiallyCollapsed, false);
+
+  const toolPresentation = presentStreamEvent(claudeTool);
+  assert.equal(toolPresentation.typeLabel, 'Claude tool');
+  assert.equal(toolPresentation.importance, 'background');
+  assert.equal(streamEventCounts([codexAudit, claudeApproval, claudeTool]).key, 1);
+  assert.match(latestRunningEvent([codexAudit, claudeApproval, claudeTool]) ?? '', /Approval ref/);
+  assert.equal(presentStreamEvent(claudeApproval, { profile: 'sciforge-default' }).typeLabel, 'gui_ask_user');
+});
+
 test('context warnings stay visible without exposing runtime window internals', () => {
   const contextEvent = event({
     type: 'contextWindowState',
@@ -469,12 +516,147 @@ test('running work timeline keeps order while collapsing completed and repeated 
 
   assert.deepEqual(visible.map((entry) => entry.event.id), ['search', 'wait-25']);
   assert.equal(visible.filter((entry) => entry.operationKind === 'wait').length, 1);
-  assert.match(markup, /running-work-completed-fold/);
-  assert.match(markup, /已完成/);
-  assert.match(markup, /执行轨迹/);
+  assert.match(markup, /native-event-stream is-live/);
+  assert.match(markup, /native-event-row[^"]*active/);
+  assert.doesNotMatch(markup, /running-work-completed-fold|执行轨迹|已完成/);
   assert.match(markup, /检索/);
-  assert.match(markup, /等待/);
+  assert.doesNotMatch(markup, /后端 25s 没有输出新事件|Backend progress/);
   assert.doesNotMatch(markup, /Search<\/span><span>Searched/);
+});
+
+test('native stream promotes shell command lifecycle over backend wait placeholders', () => {
+  const events = [
+    normalizeWorkspaceRuntimeEvent({
+      type: 'process-progress',
+      progress: {
+        phase: 'wait',
+        status: 'running',
+        title: 'Codex CLI 正在运行',
+        waitingFor: '下一条 Codex CLI JSONL 事件',
+        nextStep: '收到事件后继续按顺序展示执行轨迹。',
+      },
+    }),
+    normalizeWorkspaceRuntimeEvent({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'tool_started',
+      toolName: 'shell',
+      command: "/bin/zsh -lc 'cat PROJECT.md | head -20'",
+      status: 'in_progress',
+      message: "Shell command started: /bin/zsh -lc 'cat PROJECT.md | head -20' (status=in_progress)",
+    }),
+    normalizeWorkspaceRuntimeEvent({
+      type: 'backend-silent',
+      detail: '后端 25s 没有输出新事件；HTTP stream 仍在等待 codex 返回。',
+    }),
+  ];
+  const markup = renderToStaticMarkup(React.createElement(RunningWorkProcess, {
+    events,
+    counts: streamEventCounts(events),
+    backend: 'codex',
+    guidanceCount: 0,
+  }));
+
+  assert.match(markup, /Codex 正在运行命令/);
+  assert.match(markup, /cat PROJECT\.md/);
+  assert.doesNotMatch(markup, /下一条 Codex CLI JSONL|后端 25s 没有输出新事件|Backend progress/);
+});
+
+test('native stream drops generic backend lifecycle placeholders once real backend content exists', () => {
+  const events = [
+    event({
+      id: 'generic-progress',
+      type: 'process-progress',
+      label: 'Backend progress',
+      detail: '进展',
+      raw: { backend: 'codex-exec-json', type: 'process-progress' },
+    }),
+    event({
+      id: 'generic-tool',
+      type: 'tool_started',
+      label: 'Backend tool',
+      detail: 'Tool started.',
+      raw: { backend: 'codex-exec-json', type: 'tool_started', message: 'Tool started.' },
+    }),
+    event({
+      id: 'backend-message',
+      type: 'message',
+      label: 'Backend message',
+      detail: 'Codex backend emitted a real assistant message.',
+      raw: { backend: 'codex-exec-json', type: 'message', message: 'Codex backend emitted a real assistant message.' },
+    }),
+  ];
+  const markup = renderToStaticMarkup(React.createElement(RunningWorkProcess, {
+    events,
+    counts: streamEventCounts(events),
+    backend: 'codex',
+    guidanceCount: 0,
+  }));
+
+  assert.match(markup, /Codex backend emitted a real assistant message/);
+  assert.doesNotMatch(markup, /Backend progress|Tool started/);
+});
+
+test('native stream mirrors Codex lifecycle affordances for command, file edit, and subagent rows', () => {
+  const runningCommandMarkup = renderToStaticMarkup(React.createElement(RunningWorkProcess, {
+    events: [normalizeWorkspaceRuntimeEvent({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'tool_started',
+      toolName: 'shell',
+      command: "/bin/zsh -lc 'npm run typecheck --silent'",
+      status: 'in_progress',
+    })],
+    counts: streamEventCounts([]),
+    backend: 'codex',
+    guidanceCount: 0,
+  }));
+  assert.match(runningCommandMarkup, /Codex 正在运行命令/);
+  assert.match(runningCommandMarkup, /正在运行：\/bin\/zsh -lc/);
+  assert.match(runningCommandMarkup, /<details[^>]*open=""/);
+
+  const completedCommandMarkup = renderToStaticMarkup(React.createElement(RunningWorkProcess, {
+    events: [normalizeWorkspaceRuntimeEvent({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'tool_completed',
+      toolName: 'shell',
+      command: "/bin/zsh -lc 'npm run typecheck --silent'",
+      status: 'completed',
+      exitCode: 0,
+      outputSummary: 'typecheck clean',
+    })],
+    counts: streamEventCounts([]),
+    backend: 'codex',
+    guidanceCount: 0,
+  }));
+  assert.match(completedCommandMarkup, /Codex 命令完成/);
+  assert.match(completedCommandMarkup, /typecheck clean/);
+  assert.doesNotMatch(completedCommandMarkup, /<details[^>]*open=""/);
+
+  const fileEditMarkup = renderToStaticMarkup(React.createElement(RunningWorkProcess, {
+    events: [event({
+      type: 'tool_completed',
+      label: 'apply_patch',
+      detail: '*** Update File: src/ui/src/app/chat/RunningWorkProcess.tsx',
+      raw: { backend: 'codex-exec-json', type: 'tool_completed', toolName: 'apply_patch', status: 'completed' },
+    })],
+    counts: streamEventCounts([]),
+    backend: 'codex',
+    guidanceCount: 0,
+  }));
+  assert.match(fileEditMarkup, /Codex CLI 已编辑/);
+  assert.match(fileEditMarkup, /src\/ui\/src\/app\/chat\/RunningWorkProcess\.tsx/);
+
+  const subagentMarkup = renderToStaticMarkup(React.createElement(RunningWorkProcess, {
+    events: [event({
+      type: 'tool_started',
+      label: 'spawn_agent',
+      detail: 'multi_agent_v1.spawn_agent agent_type=worker',
+      raw: { backend: 'codex-exec-json', type: 'tool_started', toolName: 'multi_agent_v1.spawn_agent', status: 'started' },
+    })],
+    counts: streamEventCounts([]),
+    backend: 'codex',
+    guidanceCount: 0,
+  }));
+  assert.match(subagentMarkup, /Codex CLI 正在创建 sub agent/);
 });
 
 test('live chat worklog filters internal runtime events but keeps meaningful work steps', () => {

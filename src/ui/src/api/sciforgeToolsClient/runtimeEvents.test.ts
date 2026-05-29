@@ -4,6 +4,7 @@ import type { AgentStreamEvent } from '../../domain';
 import { CODEX_REALTIME_SESSION_TRANSPORT_STATUS } from './codexRealtimeSession';
 import { normalizeWorkspaceRuntimeEvent, readWorkspaceToolStream } from './runtimeEvents';
 import { createNdjsonResponse, createSseResponse } from './runtimeEvents.testHelpers';
+import { assistantDraftFromStreamEvents } from '../../streamEventPresentation';
 
 test('SSE reader preserves generic workspace message events without synthesizing GUI projection', async () => {
   const body = [
@@ -23,6 +24,81 @@ test('SSE reader preserves generic workspace message events without synthesizing
   assert.equal((stream.result as { message?: string }).message, 'SCIFORGE-MT-FIXED-5173');
   assert.equal((stream.result as { output?: { message?: string } }).output?.message, 'SCIFORGE-MT-FIXED-5173');
   assert.equal('displayIntent' in (stream.result as Record<string, unknown>), false);
+});
+
+test('SSE reader pushes backend deltas, tool lifecycle, approval, and progress before final result', async () => {
+  const commandId = 'codex-command-realtime-reducer';
+  const body = [
+    'event: message_delta',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'message_delta',
+      text: 'Partial answer',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+    })}`,
+    '',
+    'event: tool_started',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'tool_started',
+      toolName: 'module.query',
+      message: 'Querying skills module',
+      commandId,
+    })}`,
+    '',
+    'event: tool_completed',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'tool_completed',
+      toolName: 'module.query',
+      message: 'Skills query completed',
+      commandId,
+    })}`,
+    '',
+    'event: operation_progress',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'operation_progress',
+      progress: { phase: 'execute', title: 'Operation running', detail: 'Streaming operation progress' },
+      status: 'running',
+      commandId,
+    })}`,
+    '',
+    'event: approval_requested',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'approval_requested',
+      message: 'Confirm external action',
+      commandId,
+    })}`,
+    '',
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      message: 'Runtime Codex completed successfully.',
+      commandId,
+    })}`,
+    '',
+  ].join('\n');
+  const seen: AgentStreamEvent[] = [];
+  const response = createSseResponse(body);
+
+  await readWorkspaceToolStream(response, (event) => seen.push(normalizeWorkspaceRuntimeEvent(event)));
+
+  assert.deepEqual(seen.slice(0, -1).map((event) => event.type), [
+    'text-delta',
+    'tool-call',
+    'tool-result',
+    'process-progress',
+    'human-approval-required',
+  ]);
+  assert.equal(seen.at(-1)?.type, 'done');
+  assert.equal(seen[0]?.detail, 'Partial answer');
+  assert.equal(assistantDraftFromStreamEvents(seen.slice(0, 1)), 'Partial answer');
+  assert.equal(seen.find((event) => event.type === 'process-progress')?.raw, seen[3]?.raw);
 });
 
 test('SSE reader still requires gui.present or a native assistant message for Runtime Codex completion', async () => {
@@ -645,6 +721,34 @@ test('Runtime Codex raw JSONL and stderr warnings normalize to folded audit summ
   assert.match(stderr.detail ?? '', /plugin manifest warning recorded/i);
   assert.doesNotMatch(rawJsonl.detail ?? '', /RAW_JSONL_SHOULD_NOT_RENDER/);
   assert.doesNotMatch(stderr.detail ?? '', /failed to load plugin|\/tmp\/plugin\.json/);
+});
+
+test('Runtime Codex shell lifecycle details prefer structured command fields', () => {
+  const started = normalizeWorkspaceRuntimeEvent({
+    schemaVersion: 'sciforge.codex.normalized-event.v1',
+    type: 'tool_started',
+    toolName: 'shell',
+    command: "/bin/zsh -lc 'cat PROJECT.md | head -20'",
+    status: 'in_progress',
+  });
+  const completed = normalizeWorkspaceRuntimeEvent({
+    schemaVersion: 'sciforge.codex.normalized-event.v1',
+    type: 'tool_completed',
+    toolName: 'shell',
+    command: "/bin/zsh -lc 'cat PROJECT.md | head -20'",
+    status: 'completed',
+    exitCode: 0,
+    outputSummary: 'PROJECT heading and contract summary',
+  });
+
+  assert.equal(started.type, 'tool-call');
+  assert.equal(started.label, '调用 shell');
+  assert.match(started.detail ?? '', /Shell command started/);
+  assert.match(started.detail ?? '', /cat PROJECT\.md/);
+  assert.equal(completed.type, 'tool-result');
+  assert.match(completed.detail ?? '', /Shell command completed/);
+  assert.match(completed.detail ?? '', /exit=0/);
+  assert.match(completed.detail ?? '', /PROJECT heading/);
 });
 
 test('Runtime Codex provider message events summarize native-message layering without leaking raw payload internals', () => {

@@ -1,5 +1,7 @@
 import type { GuiProtocolController } from '../../ui/src/app/guiProtocol.js';
+import { callGuiAliasThroughModule } from '../modules/gui-module-handler.js';
 
+// Legacy host-specific shim. New GUI behavior belongs in the GUI module handler.
 export type GuiMcpToolName =
   | 'gui.get_context'
   | 'gui.list'
@@ -19,7 +21,7 @@ export interface GuiMcpToolCallResult extends Record<string, unknown> {
 }
 
 export function callGuiMcpTool(controller: GuiProtocolController, name: GuiMcpToolName, args: Record<string, unknown>): GuiMcpToolCallResult {
-  const structuredContent = structuredContentObject(callGuiTool(controller, name, args));
+  const structuredContent = structuredContentObject(callGuiToolAlias(controller, name, args));
   return {
     content: [{ type: 'text', text: JSON.stringify(structuredContent, null, 2) }],
     structuredContent,
@@ -31,53 +33,18 @@ function structuredContentObject(value: unknown): Record<string, unknown> {
   return { value };
 }
 
-function callGuiTool(controller: GuiProtocolController, name: GuiMcpToolName, args: Record<string, unknown>): unknown {
-  switch (name) {
-    case 'gui.get_context':
-      return controller.getContext({
-        level: stringField(args.level) as never,
-        regionId: stringField(args.regionId),
-      });
-    case 'gui.list':
-      return controller.list({ path: requiredString(args.path, 'path') });
-    case 'gui.read':
-      return controller.read({ path: requiredString(args.path, 'path'), maxBytes: numberField(args.maxBytes) });
-    case 'gui.search':
-      return controller.search({
-        query: requiredString(args.query, 'query'),
-        scope: stringField(args.scope),
-        kinds: Array.isArray(args.kinds) ? args.kinds.filter((item): item is never => typeof item === 'string') : undefined,
-      });
-    case 'gui.stat':
-      return controller.stat({ path: requiredString(args.path, 'path') });
-    case 'gui.watch':
-      return controller.watch({
-        path: requiredString(args.path, 'path'),
-        events: Array.isArray(args.events) ? args.events.filter((item): item is never => typeof item === 'string') : undefined,
-        sinceRevision: numberField(args.sinceRevision),
-      });
-    case 'gui.present':
-      return controller.present(args as never);
-    case 'gui.ask_user':
-      return controller.askUser(args as never);
-    case 'gui.notify':
-      return controller.notify(args as never);
-    case 'gui.set_status':
-      return controller.setStatus(args as never);
-    case 'gui.apply_batch':
-      return controller.applyBatch(args as never);
+function callGuiToolAlias(controller: GuiProtocolController, name: GuiMcpToolName, args: Record<string, unknown>): unknown {
+  const result = callGuiAliasThroughModule(controller, name, args);
+  if (!result.ok) throw new Error(result.error ?? `GUI module alias failed: ${name}`);
+  if (name === 'gui.list' && isRecord(result.value) && Array.isArray(result.value.entries)) return result.value.entries;
+  if (name === 'gui.search' && isRecord(result.value) && Array.isArray(result.value.matches)) return result.value.matches;
+  if (isRecord(result.value) && 'ref' in result.value && 'path' in result.value) {
+    const { ref: _ref, meta: _meta, ...legacyRead } = result.value;
+    return legacyRead;
   }
+  return result.value;
 }
 
-function requiredString(value: unknown, name: string): string {
-  if (typeof value === 'string' && value.trim()) return value;
-  throw new Error(`gui.${name} must be a non-empty string`);
-}
-
-function stringField(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value : undefined;
-}
-
-function numberField(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
