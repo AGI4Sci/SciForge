@@ -43,11 +43,13 @@ test('gateway adapter builds stable Computer Use action provider request', () =>
   const request = gatewayRequestToComputerUseRequest({
     skillDomain: 'knowledge',
     prompt: '/computer-use run click visible search box',
+    handoffSource: 'ui-chat',
     workspacePath: '/tmp/workspace',
     selectedToolIds: ['local.vision-sense'],
+    selectedActionIds: ['action.sciforge.computer-use'],
     artifacts: [],
     humanApproval: { decisionRef: 'approval:cu-ok' },
-	  }, baseConfig, '/tmp/workspace');
+  }, baseConfig, '/tmp/workspace');
 
   assert.equal(request.schemaVersion, COMPUTER_USE_REQUEST_SCHEMA);
   assert.equal(request.providers.action, COMPUTER_USE_ACTION_PROVIDER_ID);
@@ -56,9 +58,54 @@ test('gateway adapter builds stable Computer Use action provider request', () =>
   assert.equal(request.riskPolicy, 'allow-confirmed');
   assert.equal(request.approvalRef, 'approval:cu-ok');
   assert.equal(request.windowTarget.mode, 'app-window');
-	  const bridge = request.metadata.bridge as { allowSharedSystemInput?: boolean };
-	  assert.equal(bridge.allowSharedSystemInput, true);
-	});
+  const bridge = request.metadata.bridge as { allowSharedSystemInput?: boolean };
+  assert.equal(bridge.allowSharedSystemInput, true);
+  assert.deepEqual(request.metadata.chatOrigin, {
+    schemaVersion: 'sciforge.computer-use.chat-origin.v1',
+    handoffSource: 'ui-chat',
+    entrypoint: 'sciforge-chat',
+    terminalEquivalentText: true,
+    selectedActionProvider: 'action.sciforge.computer-use',
+    selectedToolIds: ['local.vision-sense'],
+  });
+});
+
+test('gateway adapter expands confirmed approval retry into prior approved action context', () => {
+  const request = gatewayRequestToComputerUseRequest({
+    skillDomain: 'knowledge',
+    prompt: '/computer-use approve --approval-ref "approval:computer-use:cu-risk"',
+    handoffSource: 'ui-chat',
+    workspacePath: '/tmp/workspace',
+    selectedActionIds: ['action.sciforge.computer-use'],
+    artifacts: [],
+    humanApproval: {
+      approvalRef: 'approval:computer-use:cu-risk',
+      approvalProvenance: {
+        schemaVersion: 'sciforge.computer-use.approval-provenance.v1',
+        source: 'prior-gui-ask-user',
+        approvalRef: 'approval:computer-use:cu-risk',
+        approvalRequest: {
+          approvalRef: 'approval:computer-use:cu-risk',
+          confirmation_text: 'Allow Computer Use to click Export?',
+          action_kind: 'click',
+        },
+        highRiskAction: {
+          actionKind: 'click',
+          targetDescription: 'Export button',
+        },
+      },
+    },
+  }, baseConfig, '/tmp/workspace');
+
+  assert.match(request.task, /^\/computer-use approve --approval-ref/);
+  assert.match(request.task, /Continue the prior approved action/);
+  assert.match(request.task, /do not look for a visible Approve button/);
+  assert.match(request.task, /Approved action kind: click/);
+  assert.match(request.task, /Approved target: Export button/);
+  assert.equal(request.riskPolicy, 'allow-confirmed');
+  assert.equal(request.approvalRef, 'approval:computer-use:cu-risk');
+  assert.ok((request.metadata.approvalProvenance as Record<string, unknown>).highRiskAction);
+});
 
 test('gateway adapter projects generic planner acceptance contract from UI state', () => {
   const request = gatewayRequestToComputerUseRequest({
@@ -106,6 +153,112 @@ test('gateway adapter projects generic planner acceptance contract from UI state
   });
   assert.deepEqual(contract.requirements, ['l3-workflow-refs', 'no-dom-playwright-accessibility']);
   assert.doesNotMatch(JSON.stringify(contract), /DOMSnapshot|accessibilityTree|data:image/);
+});
+
+test('gateway adapter projects sanitized completion evidence policy from UI state', () => {
+  const request = gatewayRequestToComputerUseRequest({
+    skillDomain: 'knowledge',
+    prompt: '/computer-use run operate the target window',
+    workspacePath: '/tmp/workspace',
+    selectedToolIds: ['local.vision-sense'],
+    artifacts: [],
+    uiState: {
+      completionEvidencePolicy: {
+        schemaVersion: 'sciforge.completion-evidence-policy.v1',
+        secret: 'SECRET_SHOULD_NOT_LEAK',
+        producers: [
+          {
+            id: 'computer-use.embedded-isolated-desktop-l3',
+            enabled: true,
+            trigger: 'on-completed-current-run',
+            apiKey: 'SECRET_PRODUCER_KEY',
+          },
+          {
+            id: 'computer-use.embedded-isolated-desktop-l3',
+            enabled: true,
+            secret: 'MISSING_TRIGGER_SHOULD_NOT_LEAK',
+          },
+          {
+            id: 'computer-use.unknown-producer',
+            enabled: true,
+            trigger: 'on-completed-current-run',
+            secret: 'UNKNOWN_PRODUCER_SHOULD_NOT_LEAK',
+          },
+        ],
+      },
+    },
+  }, baseConfig, '/tmp/workspace');
+
+  assert.deepEqual(request.metadata.completionEvidencePolicy, {
+    schemaVersion: 'sciforge.completion-evidence-policy.v1',
+    producers: [{
+      id: 'computer-use.embedded-isolated-desktop-l3',
+      enabled: true,
+      trigger: 'on-completed-current-run',
+    }],
+  });
+  assert.doesNotMatch(
+    JSON.stringify(request.metadata.completionEvidencePolicy),
+    /SECRET_SHOULD_NOT_LEAK|SECRET_PRODUCER_KEY|MISSING_TRIGGER_SHOULD_NOT_LEAK|UNKNOWN_PRODUCER_SHOULD_NOT_LEAK|unknown-producer/,
+  );
+});
+
+test('gateway adapter projects bounded Computer Use continuation sidecar context from references', () => {
+  const request = gatewayRequestToComputerUseRequest({
+    skillDomain: 'knowledge',
+    prompt: '/computer-use continue --continuation-request-ref ".sciforge/vision-runs/run-repair/continuation-request.json"',
+    workspacePath: '/tmp/workspace',
+    selectedToolIds: ['local.vision-sense'],
+    artifacts: [],
+    references: [
+      {
+        kind: 'file',
+        ref: '.sciforge/vision-runs/run-repair/blocked-manifest.json',
+        payload: {
+          sidecar: {
+            schemaVersion: 'sciforge.computer-use.blocked-manifest-sidecar.v1',
+            status: 'blocked',
+            reason: 'Verifier could not confirm the visible artifact.',
+            failedStage: 'visible-artifact-final-guard',
+            continuationRequestRef: '.sciforge/vision-runs/run-repair/continuation-request.json',
+          },
+        },
+      },
+      {
+        kind: 'file',
+        ref: '.sciforge/vision-runs/run-repair/repair-hint.json',
+        payload: {
+          sidecar: {
+            schemaVersion: 'sciforge.computer-use.repair-hint-sidecar.v1',
+            status: 'repair-needed',
+            reason: 'Produce the report with a fresh visible observation.',
+            nextAttempt: {
+              reuseTraceRef: '.sciforge/vision-runs/run-repair/vision-trace.json',
+              reuseRunTaskChainRef: '.sciforge/vision-runs/run-repair/tui-host-run-task-chain.json',
+              requireFreshObservation: true,
+              preserveInputIsolation: true,
+              privateHugeField: 'must not leak',
+            },
+          },
+        },
+      },
+      {
+        kind: 'file',
+        ref: '.sciforge/vision-runs/run-repair/tui-host-run-task-chain.json',
+      },
+    ],
+  }, baseConfig, '/tmp/workspace');
+
+  const contract = request.metadata.plannerAcceptanceContract as Record<string, unknown>;
+  assert.equal(contract.schemaVersion, 'sciforge.computer-use.planner-acceptance-contract.v1');
+  const continuation = contract.computerUseContinuation as Record<string, unknown>;
+  assert.equal(continuation.schemaVersion, 'sciforge.computer-use.continuation-context.v1');
+  assert.deepEqual(continuation.continuationRequestRefs, ['.sciforge/vision-runs/run-repair/continuation-request.json']);
+  assert.deepEqual(continuation.repairHintRefs, ['.sciforge/vision-runs/run-repair/repair-hint.json']);
+  assert.deepEqual(continuation.runTaskChainRefs, ['.sciforge/vision-runs/run-repair/tui-host-run-task-chain.json']);
+  assert.match(JSON.stringify(continuation), /Verifier could not confirm the visible artifact/);
+  assert.match(JSON.stringify(continuation), /Produce the report with a fresh visible observation/);
+  assert.doesNotMatch(JSON.stringify(continuation), /privateHugeField|must not leak|data:image|accessibilityTree|DOMSnapshot/);
 });
 
 test('gateway adapter does not advertise visual grounder fallback when KV-Ground is absent', () => {
@@ -184,6 +337,11 @@ test('result adapter maps approvalRequest to gui.ask_user while preserving relat
   const actions = computerUseResultToTuiHostActions({
     status: 'blocked',
     traceRef: '.sciforge/vision-runs/run-2/vision-trace.json',
+    packageBridge: {
+      guiAskUserRecordRef: '.sciforge/vision-runs/run-2/gui-ask-user.json',
+      approvalRequestRef: '.sciforge/vision-runs/run-2/approval-request.json',
+      riskAuditRef: '.sciforge/vision-runs/run-2/risk-audit.json',
+    },
     approvalRequest: {
       id: 'approval:computer-use:run-2',
       prompt: 'Allow Computer Use to click the visible Submit button?',
@@ -194,6 +352,9 @@ test('result adapter maps approvalRequest to gui.ask_user while preserving relat
 
   assert.equal(actions.length, 2);
   assert.equal(actions[0]?.port, 'gui.present');
+  assert.deepEqual(actions[0]?.payload.guiAskUserRefs, ['.sciforge/vision-runs/run-2/gui-ask-user.json']);
+  assert.deepEqual(actions[0]?.payload.approvalRequestRefs, ['.sciforge/vision-runs/run-2/approval-request.json']);
+  assert.deepEqual(actions[0]?.payload.riskAuditRefs, ['.sciforge/vision-runs/run-2/risk-audit.json']);
   assert.equal(actions[1]?.schemaVersion, COMPUTER_USE_TUI_HOST_ACTIONS_SCHEMA);
   assert.equal(actions[1]?.port, 'gui.ask_user');
   assert.equal(actions[1]?.target, 'computer-use.approval-request');
@@ -203,5 +364,33 @@ test('result adapter maps approvalRequest to gui.ask_user while preserving relat
     riskLevel: 'high',
     actionRef: 'ref:planned-action:submit',
   });
-  assert.deepEqual(actions[1]?.payload.relatedRefs, ['.sciforge/vision-runs/run-2/vision-trace.json']);
+  assert.deepEqual(actions[1]?.payload.relatedRefs, [
+    '.sciforge/vision-runs/run-2/vision-trace.json',
+    '.sciforge/vision-runs/run-2/gui-ask-user.json',
+    '.sciforge/vision-runs/run-2/approval-request.json',
+    '.sciforge/vision-runs/run-2/risk-audit.json',
+  ]);
+});
+
+test('result adapter preserves repair sidecar refs for blocked Computer Use runs', () => {
+  const actions = computerUseResultToTuiHostActions({
+    status: 'blocked',
+    message: 'Verifier could not confirm completion.',
+    traceRef: '.sciforge/vision-runs/run-repair/vision-trace.json',
+    packageBridge: {
+      blockedManifestRef: '.sciforge/vision-runs/run-repair/blocked-manifest.json',
+      repairHintRef: '.sciforge/vision-runs/run-repair/repair-hint.json',
+      continuationRequestRef: '.sciforge/vision-runs/run-repair/continuation-request.json',
+      directoryListingRef: '.sciforge/vision-runs/run-repair/directory-listing.json',
+      tuiHostRunTaskChainRef: '.sciforge/vision-runs/run-repair/tui-host-run-task-chain.json',
+    },
+  });
+
+  assert.equal(actions.length, 1);
+  assert.equal(actions[0]?.port, 'gui.present');
+  assert.deepEqual(actions[0]?.payload.blockedManifestRefs, ['.sciforge/vision-runs/run-repair/blocked-manifest.json']);
+  assert.deepEqual(actions[0]?.payload.repairHintRefs, ['.sciforge/vision-runs/run-repair/repair-hint.json']);
+  assert.deepEqual(actions[0]?.payload.continuationRequestRefs, ['.sciforge/vision-runs/run-repair/continuation-request.json']);
+  assert.deepEqual(actions[0]?.payload.directoryListingRefs, ['.sciforge/vision-runs/run-repair/directory-listing.json']);
+  assert.deepEqual(actions[0]?.payload.runTaskChainRefs, ['.sciforge/vision-runs/run-repair/tui-host-run-task-chain.json']);
 });

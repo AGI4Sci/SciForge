@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
-import { writeFile } from 'node:fs/promises';
-import { join, relative } from 'node:path';
+import { lstatSync, realpathSync } from 'node:fs';
+import { lstat, readFile, realpath, writeFile } from 'node:fs/promises';
+import { basename, join, relative, resolve } from 'node:path';
 
 import type { ToolPayload } from '../runtime-types.js';
 import { isRecord } from '../gateway-utils.js';
@@ -12,8 +13,23 @@ import {
   computerUseHostPortsContract,
 } from './host-adapter.js';
 import { workspaceRel } from './utils.js';
+import {
+  CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF,
+} from '../../../tools/computer-use-next/evidence-classification.js';
+import {
+  cuNextCompletionGradeEvidenceIssues,
+  cuNextCompletedL3CompletionEvidenceIssues,
+} from '../../../tools/computer-use-next/completion-grade.js';
+import { projectCuNextTaskAcceptanceMarkers } from '../../../tools/computer-use-next/acceptance-projection.js';
+import type { CuNextTaskId, CuNextTaskMapping } from '../../../tools/computer-use-next/task-map.js';
+import {
+  buildCuUserAcceptanceManifest,
+  type CuEvidenceClaim,
+  type CuUserAcceptanceInput,
+} from '../../../tools/cu-user-acceptance-manifest.js';
 
 const TUI_HOST_RUN_TASK_CHAIN_SCHEMA = 'sciforge.computer-use.tui-host-run-task-chain.v1';
+const COMPLETION_GRADE_DIAGNOSTIC_SCHEMA = 'sciforge.computer-use.completion-grade-diagnostic.v1';
 
 type PackageBridgeEvidenceState = {
   runId: string;
@@ -26,6 +42,7 @@ type PackageBridgeEvidenceState = {
 export async function writePackageBridgeEvidenceFiles(params: {
   actionProviderRequest: Record<string, unknown>;
   config: ComputerUseConfig;
+  completionGrade?: PackageBridgeCompletionGradeAttachment;
   packageResult: Record<string, unknown>;
   payload: ToolPayload;
   state: PackageBridgeEvidenceState;
@@ -42,6 +59,7 @@ export async function writePackageBridgeEvidenceFiles(params: {
     workspace: params.workspace,
     guiPresent,
     guiAskUser,
+    completionGrade: params.completionGrade,
   });
   const tuiHostRunTaskChain = buildPackageBridgeTuiHostRunTaskChain({
     actionProviderRequest: params.actionProviderRequest,
@@ -52,6 +70,7 @@ export async function writePackageBridgeEvidenceFiles(params: {
     workspace: params.workspace,
     guiPresent,
     guiAskUser,
+    completionGrade: params.completionGrade,
   });
   const writes: Array<Promise<void>> = [
     writeJson(join(params.state.runDir, 'computer-use-request.json'), params.actionProviderRequest),
@@ -94,6 +113,160 @@ export type PackageBridgeEvidenceSidecars = {
   directoryListing: Record<string, unknown>;
 };
 
+export type PackageBridgeCompletionGradeAttachment = {
+  status: 'not-applicable' | 'attached' | 'blocked';
+  reason?: string;
+  issues: string[];
+  acceptanceManifestRef?: string;
+  acceptanceInputRef?: string;
+  completionEvidenceRef?: string;
+  completionEvidenceBundleRef?: string;
+  diagnosticRef?: string;
+  producerDiagnosticRef?: string;
+};
+
+export async function materializePackageBridgeCompletionGradeEvidence(params: {
+  actionProviderRequest: Record<string, unknown>;
+  config: ComputerUseConfig;
+  packageResult: Record<string, unknown>;
+  payload: ToolPayload;
+  producerDiagnosticRef?: string;
+  state: PackageBridgeEvidenceState;
+  workspace: string;
+}): Promise<PackageBridgeCompletionGradeAttachment> {
+  if (stringAt(params.packageResult, 'status') !== 'completed') {
+    return { status: 'not-applicable', issues: [] };
+  }
+
+  const runDirRef = workspaceRel(params.workspace, params.state.runDir);
+  const ref = (name: string) => `${runDirRef}/${name}`;
+  const diagnosticRef = ref('completion-grade-diagnostics.json');
+  const completionEvidencePath = join(params.state.runDir, CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF);
+  const completionEvidenceBundleRef = ref(CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF);
+  const missingCanonical = await validateBundleLocalRegularFile(params.state.runDir, completionEvidencePath);
+  if (missingCanonical) {
+    const reason = `completed Computer Use package bridge run is fail-closed for completion-grade evidence: ${CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF} is missing or not a current-run regular file.`;
+    await writeCompletionGradeDiagnostic(join(params.state.runDir, 'completion-grade-diagnostics.json'), {
+      status: 'blocked',
+      runId: params.state.runId,
+      reason,
+      issues: [missingCanonical],
+      expectedCompletionEvidenceRef: completionEvidenceBundleRef,
+    });
+    return { status: 'blocked', reason, issues: [missingCanonical], diagnosticRef, producerDiagnosticRef: params.producerDiagnosticRef };
+  }
+
+  let completionEvidence: Record<string, unknown>;
+  try {
+    completionEvidence = await readJsonRecord(completionEvidencePath);
+  } catch (error) {
+    const reason = `completed Computer Use package bridge run is fail-closed because ${CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF} could not be parsed as a JSON object.`;
+    const issue = error instanceof Error ? error.message : String(error);
+    await writeCompletionGradeDiagnostic(join(params.state.runDir, 'completion-grade-diagnostics.json'), {
+      status: 'blocked',
+      runId: params.state.runId,
+      reason,
+      issues: [issue],
+      expectedCompletionEvidenceRef: completionEvidenceBundleRef,
+    });
+    return { status: 'blocked', reason, issues: [issue], diagnosticRef, completionEvidenceBundleRef, producerDiagnosticRef: params.producerDiagnosticRef };
+  }
+  const completionIssues = cuNextCompletedL3CompletionEvidenceIssues(completionEvidence, {
+    refScopeDescription: 'the current package bridge run bundle',
+    refExists: (candidateRef) => bundleLocalRegularRefExists(params.state.runDir, candidateRef),
+  });
+  if (completionIssues.length > 0) {
+    const reason = `completed Computer Use package bridge run is fail-closed because ${CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF} was present but not validator-accepted isolated L3 evidence.`;
+    await writeCompletionGradeDiagnostic(join(params.state.runDir, 'completion-grade-diagnostics.json'), {
+      status: 'blocked',
+      runId: params.state.runId,
+      reason,
+      issues: completionIssues,
+      expectedCompletionEvidenceRef: completionEvidenceBundleRef,
+    });
+    return { status: 'blocked', reason, issues: completionIssues, diagnosticRef, completionEvidenceBundleRef, producerDiagnosticRef: params.producerDiagnosticRef };
+  }
+
+  const acceptanceInput = buildPackageBridgeAcceptanceInput({
+    actionProviderRequest: params.actionProviderRequest,
+    completionEvidence,
+    config: params.config,
+    packageResult: params.packageResult,
+    payload: params.payload,
+    state: params.state,
+    workspace: params.workspace,
+  });
+  const acceptanceManifest = buildCuUserAcceptanceManifest(acceptanceInput);
+  const bindingIssues = cuNextCompletionGradeEvidenceIssues(
+    acceptanceManifest,
+    packageBridgeCompletionGradeMapping(acceptanceInput),
+    completionEvidence,
+    {
+      refScopeDescription: 'the current package bridge run bundle',
+      refExists: (candidateRef) => bundleLocalRegularRefExists(params.state.runDir, candidateRef),
+    },
+  );
+  if (bindingIssues.length > 0) {
+    const reason = `completed Computer Use package bridge run is fail-closed because ${CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF} is not bound to the current package bridge final artifact and gui.present evidence.`;
+    await writeCompletionGradeDiagnostic(join(params.state.runDir, 'completion-grade-diagnostics.json'), {
+      status: 'blocked',
+      runId: params.state.runId,
+      reason,
+      issues: bindingIssues,
+      expectedCompletionEvidenceRef: completionEvidenceBundleRef,
+    });
+    return { status: 'blocked', reason, issues: bindingIssues, diagnosticRef, completionEvidenceBundleRef, producerDiagnosticRef: params.producerDiagnosticRef };
+  }
+  const acceptanceInputRef = ref('cu-user-acceptance-input.json');
+  const acceptanceManifestRef = ref('cu-user-acceptance-manifest.json');
+  await writeJson(join(params.state.runDir, 'cu-user-acceptance-input.json'), acceptanceInput);
+  await writeJson(join(params.state.runDir, 'cu-user-acceptance-manifest.json'), acceptanceManifest);
+  return {
+    status: acceptanceManifest.status === 'multi-app-workflow-passed' || acceptanceManifest.status === 'single-app-artifact-passed'
+      ? 'attached'
+      : 'blocked',
+    reason: acceptanceManifest.blockedItems.map((item) => item.reason).join(' ') || undefined,
+    issues: acceptanceManifest.blockedItems.map((item) => item.reason),
+    acceptanceInputRef,
+    acceptanceManifestRef,
+    completionEvidenceRef: CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF,
+    completionEvidenceBundleRef,
+    producerDiagnosticRef: params.producerDiagnosticRef,
+  };
+}
+
+export function attachPackageBridgeCompletionGradeWorkEvidence(
+  payload: ToolPayload,
+  completionGrade: PackageBridgeCompletionGradeAttachment,
+) {
+  if (completionGrade.status === 'not-applicable') return;
+  const refs = uniqueStrings([
+    completionGrade.acceptanceManifestRef,
+    completionGrade.acceptanceInputRef,
+    completionGrade.completionEvidenceBundleRef,
+    completionGrade.diagnosticRef,
+    completionGrade.producerDiagnosticRef,
+  ].filter((ref): ref is string => Boolean(ref)));
+  const recoverActions = completionGrade.status === 'blocked'
+    ? [`Produce canonical ${CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF} in the same Computer Use run dir; package bridge will not synthesize L3 evidence.`]
+    : [];
+  const completionWorkEvidence: NonNullable<ToolPayload['workEvidence']>[number] = {
+    id: completionGrade.acceptanceManifestRef ?? completionGrade.diagnosticRef ?? 'workEvidence:computer-use-completion-grade',
+    kind: 'validate',
+    provider: 'computer-use-package-bridge',
+    status: completionGrade.status === 'attached' ? 'verified' : 'blocked',
+    outputSummary: 'Computer Use completion-grade evidence',
+    evidenceRefs: refs,
+    failureReason: completionGrade.status === 'blocked' ? completionGrade.reason ?? completionGrade.issues.join(' ') : undefined,
+    recoverActions,
+    nextStep: recoverActions[0],
+  };
+  payload.workEvidence = [
+    ...(payload.workEvidence ?? []),
+    completionWorkEvidence,
+  ];
+}
+
 export function buildPackageBridgeEvidenceSidecars(params: {
   actionProviderRequest: Record<string, unknown>;
   packageResult: Record<string, unknown>;
@@ -102,6 +275,7 @@ export function buildPackageBridgeEvidenceSidecars(params: {
   workspace: string;
   guiPresent?: ComputerUseTuiHostAction;
   guiAskUser?: ComputerUseTuiHostAction;
+  completionGrade?: PackageBridgeCompletionGradeAttachment;
 }): PackageBridgeEvidenceSidecars {
   const ref = (name: string) => workspaceRel(params.workspace, join(params.state.runDir, name));
   const resultStatus = stringAt(params.packageResult, 'status') ?? String(params.payload.executionUnits?.[0]?.status ?? 'unknown');
@@ -109,6 +283,7 @@ export function buildPackageBridgeEvidenceSidecars(params: {
     ?? stringAt(params.actionProviderRequest, 'approval_ref')
     ?? stringAt(recordAt(params.actionProviderRequest, 'metadata'), 'approvalRef');
   const approvalProvenance = approvalProvenanceFromActionProviderRequest(params.actionProviderRequest);
+  const continuationContext = continuationContextFromActionProviderRequest(params.actionProviderRequest);
   const createdAt = new Date().toISOString();
   const highRiskAction = highRiskActionFromPackageResult(params.packageResult);
   const directApprovalRequest = approvalRequestFromPackageBridge(params.packageResult, params.guiAskUser);
@@ -210,6 +385,7 @@ export function buildPackageBridgeEvidenceSidecars(params: {
     confirmedRequestRef: approvalSidecarRefs.confirmedRequestRef,
     approvalBoundary,
     decisionSource: stringAt(approvalProvenance, 'decisionSource') ?? 'external-human-approval',
+    deniedExecuted: false,
     packageMayCallGuiDirectly: false,
   }) : undefined;
   const guiAskUserSidecar = guiAskUserAction ? compactEvidenceRecord({
@@ -263,7 +439,14 @@ export function buildPackageBridgeEvidenceSidecars(params: {
     packageMayCallGuiDirectly: false,
   }) : undefined;
   const blocked = resultStatus !== 'completed';
-  const blockedManifest = blocked ? compactEvidenceRecord({
+  const continuationSidecars = recordAt(continuationContext, 'sidecars');
+  const continuationBlockedSummary = recordAt(continuationSidecars, 'blockedManifest');
+  const continuationRepairSummary = recordAt(continuationSidecars, 'repairHint');
+  const continuationRequestSummary = recordAt(continuationSidecars, 'continuationRequest');
+  const continuationBlockedSourceRef = stringArrayAt(continuationContext, 'blockedManifestRefs')[0];
+  const continuationRepairSourceRef = stringArrayAt(continuationContext, 'repairHintRefs')[0];
+  const continuationRequestSourceRef = stringArrayAt(continuationContext, 'continuationRequestRefs')[0];
+  const currentBlockedManifest = blocked ? compactEvidenceRecord({
     schemaVersion: 'sciforge.computer-use.blocked-manifest-sidecar.v1',
     ...common,
     status: 'blocked',
@@ -273,7 +456,7 @@ export function buildPackageBridgeEvidenceSidecars(params: {
     repairHintRef: ref('repair-hint.json'),
     continuationRequestRef: ref('continuation-request.json'),
   }) : undefined;
-  const repairHint = blocked ? compactEvidenceRecord({
+  const currentRepairHint = blocked ? compactEvidenceRecord({
     schemaVersion: 'sciforge.computer-use.repair-hint-sidecar.v1',
     ...common,
     status: 'repair-needed',
@@ -286,7 +469,7 @@ export function buildPackageBridgeEvidenceSidecars(params: {
       preserveInputIsolation: true,
     },
   }) : undefined;
-  const continuationRequest = blocked ? compactEvidenceRecord({
+  const currentContinuationRequest = blocked ? compactEvidenceRecord({
     schemaVersion: 'sciforge.computer-use.continuation-request-sidecar.v1',
     ...common,
     status: 'ready-for-continuation',
@@ -295,6 +478,48 @@ export function buildPackageBridgeEvidenceSidecars(params: {
     sameTraceSessionRef: ref('tui-host-run-task-chain.json'),
     requestRef: ref('computer-use-request.json'),
   }) : undefined;
+  const hydratedContinuationBlockedManifest = !blocked && continuationContext ? compactEvidenceRecord({
+    schemaVersion: 'sciforge.computer-use.blocked-manifest-sidecar.v1',
+    ...common,
+    status: stringAt(continuationBlockedSummary, 'status') ?? 'blocked',
+    failedStage: stringAt(continuationBlockedSummary, 'failedStage'),
+    reason: stringAt(continuationBlockedSummary, 'reason') ?? 'Prior repair turn supplied bounded continuation context.',
+    sourceRef: continuationBlockedSourceRef,
+    sourceRefs: stringArrayAt(continuationContext, 'blockedManifestRefs'),
+    repairHintRef: ref('repair-hint.json'),
+    continuationRequestRef: ref('continuation-request.json'),
+  }) : undefined;
+  const hydratedContinuationRepairHint = !blocked && continuationContext ? compactEvidenceRecord({
+    schemaVersion: 'sciforge.computer-use.repair-hint-sidecar.v1',
+    ...common,
+    status: stringAt(continuationRepairSummary, 'status') ?? 'repair-needed',
+    blockedManifestRef: ref('blocked-manifest.json'),
+    reason: stringAt(continuationRepairSummary, 'reason') ?? 'Prior repair hint supplied bounded continuation context.',
+    sourceRef: continuationRepairSourceRef,
+    sourceRefs: stringArrayAt(continuationContext, 'repairHintRefs'),
+    nextAttempt: recordAt(continuationRepairSummary, 'nextAttempt') ?? {
+      reuseTraceRef: stringAt(continuationRequestSummary, 'sameTraceSessionRef'),
+      reuseRunTaskChainRef: stringAt(continuationRequestSummary, 'sameTraceSessionRef'),
+      requireFreshObservation: true,
+      preserveInputIsolation: true,
+    },
+  }) : undefined;
+  const hydratedContinuationRequest = !blocked && continuationContext ? compactEvidenceRecord({
+    schemaVersion: 'sciforge.computer-use.continuation-request-sidecar.v1',
+    ...common,
+    status: stringAt(continuationRequestSummary, 'status') ?? 'ready-for-continuation',
+    blockedManifestRef: ref('blocked-manifest.json'),
+    repairHintRef: ref('repair-hint.json'),
+    sameTraceSessionRef: stringAt(continuationRequestSummary, 'sameTraceSessionRef')
+      ?? stringArrayAt(continuationContext, 'runTaskChainRefs')[0]
+      ?? ref('tui-host-run-task-chain.json'),
+    requestRef: ref('computer-use-request.json'),
+    sourceRef: continuationRequestSourceRef,
+    sourceRefs: stringArrayAt(continuationContext, 'continuationRequestRefs'),
+  }) : undefined;
+  const blockedManifest = currentBlockedManifest ?? hydratedContinuationBlockedManifest;
+  const repairHint = currentRepairHint ?? hydratedContinuationRepairHint;
+  const continuationRequest = currentContinuationRequest ?? hydratedContinuationRequest;
   const directoryListing = compactEvidenceRecord({
     schemaVersion: 'sciforge.computer-use.evidence-directory-listing.v1',
     ...common,
@@ -315,7 +540,14 @@ export function buildPackageBridgeEvidenceSidecars(params: {
       ...(sourceGuiAskUser ? [ref('approval-source-gui-ask-user.json')] : []),
       ...(sourceRiskAudit ? [ref('approval-source-risk-audit.json')] : []),
       ...(approvalDecision ? [ref('approval-decision.json')] : []),
-      ...(blocked ? [ref('blocked-manifest.json'), ref('repair-hint.json'), ref('continuation-request.json')] : []),
+      ...(blockedManifest ? [ref('blocked-manifest.json')] : []),
+      ...(repairHint ? [ref('repair-hint.json')] : []),
+      ...(continuationRequest ? [ref('continuation-request.json')] : []),
+      ...(params.completionGrade?.acceptanceInputRef ? [params.completionGrade.acceptanceInputRef] : []),
+      ...(params.completionGrade?.acceptanceManifestRef ? [params.completionGrade.acceptanceManifestRef] : []),
+      ...(params.completionGrade?.completionEvidenceBundleRef ? [params.completionGrade.completionEvidenceBundleRef] : []),
+      ...(params.completionGrade?.diagnosticRef ? [params.completionGrade.diagnosticRef] : []),
+      ...(params.completionGrade?.producerDiagnosticRef ? [params.completionGrade.producerDiagnosticRef] : []),
       ...params.state.visibleArtifacts.map((artifact) => artifact.artifactRef).filter(isFinalArtifactEvidenceRef),
     ],
     finalArtifactRefs: params.state.visibleArtifacts.map((artifact) => artifact.artifactRef).filter(isFinalArtifactEvidenceRef),
@@ -589,6 +821,13 @@ function approvalProvenanceFromActionProviderRequest(request: Record<string, unk
     ?? recordAt(request, 'approvalProvenance');
 }
 
+function continuationContextFromActionProviderRequest(request: Record<string, unknown>): Record<string, unknown> | undefined {
+  const metadata = recordAt(request, 'metadata');
+  return recordAt(recordAt(metadata, 'plannerAcceptanceContract'), 'computerUseContinuation')
+    ?? recordAt(metadata, 'computerUseContinuation')
+    ?? recordAt(request, 'computerUseContinuation');
+}
+
 function approvalBoundaryRecord(input: {
   approvalRef?: string;
   approvalRequest?: Record<string, unknown>;
@@ -644,6 +883,115 @@ function compactEvidenceRecord<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(entries) as T;
 }
 
+async function readJsonRecord(path: string): Promise<Record<string, unknown>> {
+  const data = JSON.parse(await readFile(path, 'utf8')) as unknown;
+  if (!isRecord(data)) throw new Error(`${path} did not contain a JSON object.`);
+  return data;
+}
+
+async function validateBundleLocalRegularFile(baseDir: string, path: string): Promise<string | undefined> {
+  try {
+    const info = await lstat(path);
+    if (info.isSymbolicLink()) return `${path} is a symlink.`;
+    if (!info.isFile()) return `${path} is not a regular file.`;
+    const baseReal = await realpath(baseDir);
+    const pathReal = await realpath(path);
+    if (!isPathInside(baseReal, pathReal)) return `${path} resolves outside the current run dir.`;
+    return undefined;
+  } catch {
+    return `${path} does not exist.`;
+  }
+}
+
+function bundleLocalRegularRefExists(baseDir: string, ref: string): boolean {
+  if (!isBundleLocalRef(ref)) return false;
+  const resolved = resolve(baseDir, bundleLocalOrCurrentRunRefPath(baseDir, ref));
+  if (!isPathInside(resolve(baseDir), resolved)) return false;
+  try {
+    const info = lstatSync(resolved);
+    if (!info.isFile() || info.isSymbolicLink()) return false;
+    return isPathInside(realpathSync(baseDir), realpathSync(resolved));
+  } catch {
+    return false;
+  }
+}
+
+function bundleLocalOrCurrentRunRefPath(baseDir: string, ref: string): string {
+  const normalized = ref.trim().replace(/\\/g, '/');
+  const currentRunPrefix = `.sciforge/vision-runs/${basename(resolve(baseDir))}/`;
+  return normalized.startsWith(currentRunPrefix)
+    ? normalized.slice(currentRunPrefix.length)
+    : ref;
+}
+
+function isBundleLocalRef(ref: string) {
+  return Boolean(ref.trim())
+    && !ref.startsWith('/')
+    && !/^[a-z][a-z0-9+.-]*:/i.test(ref)
+    && !ref.split(/[\\/]+/).includes('..');
+}
+
+function isCurrentRunTaskFinalArtifactRef(ref: string, runDirRef: string) {
+  const normalized = ref.replace(/\\/g, '/').replace(/^\.\//, '');
+  const normalizedRunDir = runDirRef.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+  return normalized.startsWith(`${normalizedRunDir}/`)
+    && isFinalArtifactEvidenceRef(ref);
+}
+
+function isPathInside(baseDir: string, path: string): boolean {
+  const base = resolve(baseDir);
+  const target = resolve(path);
+  return target === base || target.startsWith(`${base}/`);
+}
+
+async function writeCompletionGradeDiagnostic(path: string, diagnostic: Record<string, unknown>) {
+  await writeJson(path, {
+    schemaVersion: COMPLETION_GRADE_DIAGNOSTIC_SCHEMA,
+    createdAt: new Date().toISOString(),
+    policy: 'Package bridge may attach existing same-run canonical isolated L3 evidence, but must not synthesize or borrow L3 evidence.',
+    ...diagnostic,
+  });
+}
+
+function firstStringAt(value: unknown, paths: string[][]) {
+  for (const path of paths) {
+    let current = value;
+    for (const key of path) current = isRecord(current) ? current[key] : undefined;
+    if (typeof current === 'string' && current.trim()) return current;
+  }
+  return undefined;
+}
+
+function recordArrayAt(value: unknown, key: string): Record<string, unknown>[] {
+  if (!isRecord(value)) return [];
+  const item = value[key];
+  return Array.isArray(item) ? item.filter(isRecord) : [];
+}
+
+function screenshotRefsForAcceptance(
+  state: PackageBridgeEvidenceState,
+  completionEvidence: Record<string, unknown>,
+) {
+  const windowScreenshots = state.screenshotLedger
+    .filter((item) => !item.id.includes('-focus-') && !item.path.includes('-focus-'))
+    .map((item) => item.path);
+  const completionScreenshots = stringArrayAt(completionEvidence, 'screenshotRefs');
+  const refs = uniqueStrings([...windowScreenshots, ...completionScreenshots]);
+  const midpoint = Math.max(1, Math.floor(refs.length / 2));
+  return {
+    before: refs.length > 1 ? refs.slice(0, midpoint) : refs.slice(0, 1),
+    after: refs.length > 1 ? refs.slice(midpoint) : refs.slice(-1),
+  };
+}
+
+function completionEvidenceRef(completionEvidence: Record<string, unknown>, key: string) {
+  return stringAt(completionEvidence, key);
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.filter((value) => value.trim().length > 0))];
+}
+
 export function buildPackageBridgeTuiHostRunTaskChain(params: {
   actionProviderRequest: Record<string, unknown>;
   config: ComputerUseConfig;
@@ -653,6 +1001,7 @@ export function buildPackageBridgeTuiHostRunTaskChain(params: {
   workspace: string;
   guiPresent?: ComputerUseTuiHostAction;
   guiAskUser?: ComputerUseTuiHostAction;
+  completionGrade?: PackageBridgeCompletionGradeAttachment;
 }) {
   const ref = (name: string) => workspaceRel(params.workspace, join(params.state.runDir, name));
   const traceRef = params.state.tracePath
@@ -670,6 +1019,7 @@ export function buildPackageBridgeTuiHostRunTaskChain(params: {
   const repairHintRef = params.sidecars.repairHint ? ref('repair-hint.json') : undefined;
   const continuationRequestRef = params.sidecars.continuationRequest ? ref('continuation-request.json') : undefined;
   const directoryListingRef = ref('directory-listing.json');
+  const chatOrigin = chatOriginFromActionProviderRequest(params.actionProviderRequest);
   return {
     schemaVersion: TUI_HOST_RUN_TASK_CHAIN_SCHEMA,
     runId: params.state.runId,
@@ -679,6 +1029,7 @@ export function buildPackageBridgeTuiHostRunTaskChain(params: {
     hostPortProtocol: 'stdio-jsonl',
     status: params.guiPresent ? 'presented' : 'recorded',
     resultStatus: params.payload.executionUnits?.[0]?.status,
+    origin: chatOrigin,
     refs: {
       requestRef,
       hostPortsRef,
@@ -695,6 +1046,15 @@ export function buildPackageBridgeTuiHostRunTaskChain(params: {
       directoryListingRef,
     },
     links: [
+      {
+        id: 'chat-origin',
+        kind: 'sciForge-chat-origin',
+        status: chatOrigin ? 'present' : 'missing',
+        requestRef,
+        note: chatOrigin
+          ? 'SciForge chat originated this Computer Use run and handed terminal-equivalent text to TUI Host.'
+          : 'No SciForge chat-origin proof was present on the Computer Use request.',
+      },
       {
         id: 'computer-use-request',
         kind: 'gui-terminal-equivalent-text',
@@ -764,6 +1124,17 @@ export function buildPackageBridgeTuiHostRunTaskChain(params: {
         recordRef: directoryListingRef,
         note: 'TUI Host wrote a refs-first evidence bundle directory listing sidecar.',
       },
+      {
+        id: 'completion-grade',
+        kind: 'completion-grade-evidence',
+        status: params.completionGrade?.status === 'attached' ? 'present' : params.completionGrade?.status === 'blocked' ? 'blocked' : 'missing',
+        recordRef: params.completionGrade?.acceptanceManifestRef ?? params.completionGrade?.diagnosticRef,
+        note: params.completionGrade?.status === 'attached'
+          ? 'Package bridge attached current-run CU user acceptance manifest and canonical isolated L3 completion evidence refs.'
+          : params.completionGrade?.status === 'blocked'
+            ? 'Package bridge did not synthesize L3 evidence; completion-grade remains fail-closed with diagnostics.'
+            : 'No completed current-run completion-grade evidence was attached.',
+      },
     ],
     providerRefs: {
       action: COMPUTER_USE_ACTION_PROVIDER_ID,
@@ -779,7 +1150,251 @@ export function buildPackageBridgeTuiHostRunTaskChain(params: {
       forbiddenPackagePorts: ['requestApproval', 'gui.present', 'gui.ask_user'],
       policy: 'Computer Use package returns refs-first result or approvalRequest; TUI Host owns GUI presentation and confirmation intents.',
     },
+    completionGrade: params.completionGrade?.status === 'not-applicable' ? undefined : params.completionGrade,
   };
+}
+
+function buildPackageBridgeAcceptanceInput(params: {
+  actionProviderRequest: Record<string, unknown>;
+  completionEvidence: Record<string, unknown>;
+  config: ComputerUseConfig;
+  packageResult: Record<string, unknown>;
+  payload: ToolPayload;
+  state: PackageBridgeEvidenceState;
+  workspace: string;
+}): CuUserAcceptanceInput {
+  const runDirRef = workspaceRel(params.workspace, params.state.runDir);
+  const ref = (name: string) => `${runDirRef}/${name}`;
+  const requestMetadata = recordAt(params.actionProviderRequest, 'metadata');
+  const plannerAcceptance = recordAt(requestMetadata, 'plannerAcceptanceContract');
+  const finalArtifactRef = [
+    ...params.state.visibleArtifacts.map((artifact) => artifact.artifactRef),
+    firstStringAt(params.completionEvidence, [
+      ['taskArtifactBinding', 'finalArtifactRef'],
+      ['artifactCausality', 'finalArtifactRef'],
+    ]),
+  ].find((candidate): candidate is string => (
+    typeof candidate === 'string'
+    && isCurrentRunTaskFinalArtifactRef(candidate, runDirRef)
+  ));
+  const finalVisibleScreenshotRef = finalWindowScreenshotRef(params.state.screenshotLedger)
+    ?? firstStringAt(params.completionEvidence, [['presentationEvidence', 'finalVisibleScreenshotRef']])
+    ?? stringArrayAt(params.completionEvidence, 'screenshotRefs').at(-1);
+  const screenshotRefs = screenshotRefsForAcceptance(params.state, params.completionEvidence);
+  const focusCropRefs = uniqueStrings([
+    ...params.state.screenshotLedger
+      .filter((item) => item.id.includes('-focus-') || item.path.includes('-focus-'))
+      .map((item) => item.path),
+    ...stringArrayAt(params.completionEvidence, 'focusCropRefs'),
+  ]);
+  const groundingDiagnosticsRefs = uniqueStrings([
+    ...stringArrayAt(params.completionEvidence, 'groundingDiagnosticsRefs'),
+    ...stringArrayAt(recordAt(params.completionEvidence, 'groundingEvidence'), 'diagnosticRefs'),
+  ]);
+  const effectiveFocusCropRefs = focusCropRefs.length > 0
+    ? focusCropRefs
+    : uniqueStrings([finalVisibleScreenshotRef].filter((item): item is string => Boolean(item)));
+  const effectiveGroundingDiagnosticsRefs = groundingDiagnosticsRefs.length > 0
+    ? groundingDiagnosticsRefs
+    : [ref('vision-trace.json')];
+  const applicationEvidence = recordArrayAt(params.completionEvidence, 'applicationEvidence');
+  const workflowApps = uniqueStrings(applicationEvidence.map((item) => (
+    stringAt(item, 'appName') ?? stringAt(item, 'appKind')
+  )).filter((item): item is string => Boolean(item)));
+  const windowSwitchTraceRefs = uniqueStrings([
+    ...stringArrayAt(params.completionEvidence, 'traceRefs'),
+    ...recordArrayAt(params.completionEvidence, 'crossAppTransitions')
+      .flatMap((transition) => [
+        stringAt(transition, 'screenshotRef'),
+        stringAt(transition, 'traceRef'),
+        stringAt(transition, 'sessionManifestRef'),
+      ])
+      .filter((item): item is string => Boolean(item)),
+  ]);
+  const taskId = stringAt(plannerAcceptance, 'cuNextTaskId')
+    ?? stringAt(plannerAcceptance, 'taskId')
+    ?? firstStringAt(params.completionEvidence, [['taskId'], ['cuNextTaskId']]);
+  const scenarioId = stringAt(plannerAcceptance, 'scenarioId')
+    ?? firstStringAt(params.completionEvidence, [['scenarioId'], ['cuLongScenarioId']]);
+  const continuationContext = continuationContextFromActionProviderRequest(params.actionProviderRequest);
+  const independentInputSessionRefs = uniqueStrings([
+    completionEvidenceRef(params.completionEvidence, 'sessionManifestRef'),
+    completionEvidenceRef(params.completionEvidence, 'targetWindowRef'),
+  ].filter((item): item is string => Boolean(item)));
+  const projectedTaskAcceptance = projectCuNextTaskAcceptanceMarkers(taskId as CuNextTaskId | undefined, {
+    traceRef: ref('vision-trace.json'),
+    requestRef: ref('computer-use-request.json'),
+    verifierRef: ref(CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF),
+    finalArtifactRef,
+    finalVisibleScreenshotRef,
+    focusCropRefs: effectiveFocusCropRefs,
+    groundingDiagnosticsRefs: effectiveGroundingDiagnosticsRefs,
+    sessionRefs: independentInputSessionRefs,
+    blockedManifestRef: continuationContext ? ref('blocked-manifest.json') : undefined,
+    repairHintRef: continuationContext ? ref('repair-hint.json') : undefined,
+    continuationRequestRef: continuationContext ? ref('continuation-request.json') : undefined,
+    directoryListingRef: ref('directory-listing.json'),
+    denseGroundingRejectionRef: effectiveGroundingDiagnosticsRefs[0],
+  });
+  const evidenceClaims: CuEvidenceClaim[] = [
+    {
+      id: 'package-bridge-vision-trace',
+      kind: 'real-computer-use',
+      ref: ref('vision-trace.json'),
+      refs: [ref('vision-trace.json')],
+      note: 'Completed package bridge Computer Use vision trace from the current run.',
+    },
+    {
+      id: 'tui-host-runTask',
+      kind: 'tui-host-runTask',
+      ref: ref('computer-use-request.json'),
+      refs: [ref('computer-use-request.json'), ref('host-ports.json'), ref('tui-host-run-task-chain.json')],
+      note: 'Computer Use package bridge was invoked through TUI Host runTask evidence.',
+    },
+    {
+      id: 'independent-input-adapter',
+      kind: 'independent-input-adapter',
+      ref: completionEvidenceRef(params.completionEvidence, 'inputEventLogRef') ?? ref(CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF),
+      refs: uniqueStrings([
+        completionEvidenceRef(params.completionEvidence, 'inputEventLogRef'),
+        completionEvidenceRef(params.completionEvidence, 'pointerEventLogRef'),
+        completionEvidenceRef(params.completionEvidence, 'keyboardEventLogRef'),
+        completionEvidenceRef(params.completionEvidence, 'executorCommandEventLogRef'),
+        completionEvidenceRef(params.completionEvidence, 'windowBoundPointerProofRef'),
+      ].filter((item): item is string => Boolean(item))),
+      sessionRefs: independentInputSessionRefs,
+      note: 'Existing isolated L3 evidence proves virtual pointer and keyboard ownership; package bridge does not synthesize it.',
+    },
+    {
+      id: 'gui-present-record',
+      kind: 'gui-present-record',
+      ref: ref('gui-present.json'),
+      refs: [ref('gui-present.json'), ref('tool-payload.json')],
+      artifactRefs: finalArtifactRef ? [finalArtifactRef] : [],
+    },
+    {
+      id: 'completion-grade-evidence',
+      kind: 'verifier-ref',
+      ref: ref(CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF),
+      refs: [ref(CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF)],
+      note: 'Canonical current-run isolated desktop L3 workflow evidence was present before package bridge materialization.',
+    },
+  ];
+  const chatOrigin = recordAt(requestMetadata, 'chatOrigin');
+  if (chatOrigin) {
+    evidenceClaims.unshift({
+      id: 'chat-origin',
+      kind: 'sciForge-chat-origin',
+      status: 'present',
+      ref: ref('computer-use-request.json'),
+      refs: [ref('computer-use-request.json')],
+      sessionRefs: [ref('computer-use-request.json')],
+      origin: chatOrigin,
+    });
+  }
+  return {
+    runId: params.state.runId,
+    taskId,
+    scenarioId,
+    createdAt: new Date().toISOString(),
+    taskText: stringAt(params.actionProviderRequest, 'task') ?? stringAt(params.packageResult, 'message') ?? 'Completed Computer Use package bridge task.',
+    level: 'L3',
+    appWorkflow: {
+      kind: 'multi-app-workflow',
+      apps: workflowApps.length ? workflowApps : ['isolated-source-app', 'isolated-writer-app', 'isolated-preview-app'],
+      windowSwitchTraceRefs,
+    },
+    tuiHostChain: [
+      {
+        id: 'chat-origin',
+        kind: 'sciForge-chat-origin',
+        status: chatOrigin ? 'present' : 'missing',
+        requestRef: ref('computer-use-request.json'),
+        origin: chatOrigin,
+      },
+      {
+        id: 'tui-host-runTask',
+        kind: 'tui-host-runTask',
+        status: 'present',
+        requestRef: ref('computer-use-request.json'),
+        hostPortsRef: ref('host-ports.json'),
+      },
+      {
+        id: 'computer-use-action-provider',
+        kind: 'computer-use-action-provider',
+        status: 'present',
+        toolPayloadRef: ref('tool-payload.json'),
+      },
+      {
+        id: 'gui-present',
+        kind: 'gui.present',
+        status: 'present',
+        recordRef: ref('gui-present.json'),
+      },
+    ],
+    evidenceClaims,
+    screenshotRefs,
+    focusCropRefs: effectiveFocusCropRefs,
+    groundingDiagnosticsRefs: effectiveGroundingDiagnosticsRefs,
+    executorLease: {
+      status: 'present',
+      ref: completionEvidenceRef(params.completionEvidence, 'executorCommandEventLogRef')
+        ?? completionEvidenceRef(params.completionEvidence, 'inputEventLogRef')
+        ?? ref('host-ports.json'),
+      owner: 'sciforge-independent-input-adapter isolated-L3',
+    },
+    finalArtifactRef,
+    finalVisibleScreenshotRef,
+    verifierVerdict: {
+      status: 'passed',
+      verdict: 'multi-app-workflow-passed',
+      ref: ref(CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF),
+      reason: 'Canonical current-run isolated desktop L3 workflow evidence was validator-accepted before manifest materialization.',
+    },
+    guiPresent: {
+      status: 'present',
+      recordRef: ref('gui-present.json'),
+      payloadRef: ref('tool-payload.json'),
+      displayedRefs: uniqueStrings([finalArtifactRef, finalVisibleScreenshotRef].filter((item): item is string => Boolean(item))),
+      recordRefs: [ref('gui-present.json')],
+      artifactRefs: finalArtifactRef ? [finalArtifactRef] : [],
+      sessionRefs: independentInputSessionRefs,
+    },
+    evidenceMarkers: [
+      ...recordArrayAt(params.completionEvidence, 'evidenceMarkers'),
+      ...projectedTaskAcceptance.evidenceMarkers,
+    ],
+    completionEvidence: params.completionEvidence,
+    completionEvidenceRef: CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF,
+  };
+}
+
+function packageBridgeCompletionGradeMapping(input: CuUserAcceptanceInput): CuNextTaskMapping {
+  return {
+    taskId: input.taskId ?? 'CU-NEXT-PACKAGE-BRIDGE',
+    title: 'Computer Use package bridge completion-grade evidence',
+    slug: 'package-bridge-completion-grade',
+    priority: 1,
+    primaryScenarioId: input.scenarioId ?? 'CU-LONG-PACKAGE-BRIDGE',
+    longScenarioIds: [input.scenarioId ?? 'CU-LONG-PACKAGE-BRIDGE'],
+    requirements: ['l3-workflow-refs', 'no-dom-playwright-accessibility'],
+    recommendedTargetMode: 'active-window',
+    recommendedMaxSteps: 1,
+  };
+}
+
+function chatOriginFromActionProviderRequest(request: Record<string, unknown>) {
+  const metadata = recordAt(request, 'metadata');
+  const chatOrigin = recordAt(metadata, 'chatOrigin');
+  if (!chatOrigin) return undefined;
+  return compactEvidenceRecord({
+    schemaVersion: stringAt(chatOrigin, 'schemaVersion') ?? 'sciforge.computer-use.chat-origin.v1',
+    handoffSource: stringAt(chatOrigin, 'handoffSource'),
+    entrypoint: stringAt(chatOrigin, 'entrypoint'),
+    terminalEquivalentText: booleanAt(chatOrigin, 'terminalEquivalentText'),
+    selectedActionProvider: stringAt(chatOrigin, 'selectedActionProvider'),
+    requestRef: 'computer-use-request.json',
+  });
 }
 
 export function isFinalArtifactEvidenceRef(ref: string | undefined) {

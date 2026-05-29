@@ -165,7 +165,7 @@ function normalizeGuiAskUser(value: unknown): NormalizedGuiAskUser | undefined {
     title,
     message,
     risk: stringField(approvalRequest.riskLevel) ?? stringField(approvalRequest.risk_level) ?? stringField(approvalRequest.risk),
-    approvalRef: stringField(approvalRequest.id) ?? stringField(approvalRequest.approvalRef) ?? stringField(approvalRequest.approval_ref),
+    approvalRef: stringField(approvalRequest.approvalRef) ?? stringField(approvalRequest.approval_ref) ?? stringField(approvalRequest.id),
     actionRef: stringField(approvalRequest.actionRef) ?? stringField(approvalRequest.action_ref) ?? stringField(approvalRequest.actionKind) ?? stringField(approvalRequest.action_kind),
     relatedRefs,
     choices,

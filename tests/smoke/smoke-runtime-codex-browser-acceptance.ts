@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createConnection } from 'node:net';
-import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { resolveProxyCliOptions } from '../../packages/backend/src/cli-config.js';
 import { normalizeInstanceName, parallelProfile } from '../../src/runtime/parallel-instance-profile.js';
+import { blockedOnForReason } from './helpers/runtime-codex-browser-acceptance-blockers.js';
+import { assertRuntimeCodexBrowserAcceptanceNegativeFixtures } from './helpers/runtime-codex-browser-acceptance-negative-fixtures.js';
 
 type BrowserAcceptanceStatus = 'blocked' | 'failed' | 'partial' | 'passed';
 
@@ -170,8 +171,6 @@ type LiveRuntimeCodexProof = {
   eventEvidenceRefs?: string[];
 };
 
-type RuntimeOutputProofMode = 'gui-present' | 'native-default-chat';
-
 type NegativeChecks = {
   fakePassedStatusRejected?: boolean;
   missingDomOrScreenshotRejected?: boolean;
@@ -231,7 +230,21 @@ const validateOnly = process.env.SCIFORGE_BROWSER_ACCEPTANCE_VALIDATE_ONLY === '
 const passedManifestMaxAgeMs = positiveNumberFromEnv(process.env.SCIFORGE_BROWSER_ACCEPTANCE_MAX_AGE_MINUTES, 30) * 60 * 1000;
 const evidenceMtimeToleranceMs = positiveNumberFromEnv(process.env.SCIFORGE_BROWSER_ACCEPTANCE_EVIDENCE_MTIME_TOLERANCE_MINUTES, 10) * 60 * 1000;
 
-assertNegativeFixtures();
+assertRuntimeCodexBrowserAcceptanceNegativeFixtures({
+  root,
+  instanceId: instanceProfile.id,
+  actualUrl,
+  requestedRolePort,
+  requestedWorkspaceWriterPort,
+  actualWorkspaceWriterUrl,
+  requestedRuntimeCodexPort,
+  actualRuntimeCodexUrl,
+  workspacePath,
+  runtimeCodexIdentity,
+  expectedMultiTurnPassphrase,
+  negativeChecks: builtInNegativeChecks(),
+  assertBrowserAcceptanceManifest,
+});
 
 const blockedReason = runtimeBridgeBlockedReason();
 if (blockedReason) {
@@ -390,8 +403,8 @@ async function writeBlockedAcceptanceManifest(blockedReason: string): Promise<Br
     },
     evidence: browserEvidence.evidence,
   };
-  assertBlockedOrFailedManifest(manifest);
   await writeManifest(manifest);
+  assertBlockedOrFailedManifest(manifest);
   return manifest;
 }
 
@@ -1414,297 +1427,6 @@ function blockedDiagnosticsForReason(reason: string): Pick<
     nextActions,
     expectedRetestCommand: 'npm run smoke:runtime-codex-browser-acceptance',
   };
-}
-
-function blockedOnForReason(reason: string): string[] {
-  if (/selected[- ]artifact|selected ref|artifact follow-up/i.test(reason)) {
-    return [
-      'selected artifact/report live browser follow-up',
-      'visible Runtime Codex answer for the selected-ref task',
-      'artifactFollowUp scenario evidence refs',
-    ];
-  }
-  if (/config file debug fallback|service environment/i.test(reason) && /SCIFORGE_RUNTIME_API_KEY|secret/i.test(reason)) {
-    return [
-      'Runtime Codex service environment secret configuration',
-      'config-file debug secret fallback must not satisfy release acceptance',
-      'Codex in-app browser execution',
-    ];
-  }
-  if (/API key|upstream base URL|environment/i.test(reason)) {
-    return [
-      'Runtime Codex environment configuration',
-      'Runtime Codex provider proxy upstream configuration',
-      'Codex in-app browser execution',
-    ];
-  }
-  if (/502|Bad Gateway|429|timeout|DNS|provider|upstream|outage/i.test(reason)) {
-    return [
-      'provider proxy upstream availability',
-      'visible Runtime Codex answer not produced',
-      'selected artifact follow-up not reached',
-    ];
-  }
-  return ['Runtime Codex bridge integration', 'UI Runtime Codex integration'];
-}
-
-function assertNegativeFixtures(): void {
-  const fixtureDir = mkdtempSync(join(tmpdir(), `sciforge-${instanceProfile.id}-negative-manifest-validator-`));
-  writeNegativeFixtures(fixtureDir);
-  const nativeOnly = JSON.parse(readFileSync(join(fixtureDir, 'native-default-chat-passed.json'), 'utf8')) as BrowserAcceptanceManifest;
-  assertBrowserAcceptanceManifest(nativeOnly);
-  const fixtures = [
-    'fake-passed-missing-dom.json',
-    'fake-passed-seed-demo.json',
-    'fake-passed-missing-command-id.json',
-    'fake-passed-missing-task-result.json',
-    'fake-passed-unparseable-evidence.json',
-    'fake-passed-native-outside-default-chat.json',
-    'blocked-status.json',
-    'failed-status.json',
-    'partial-status.json',
-  ];
-  for (const fixture of fixtures) {
-    const manifest = JSON.parse(readFileSync(join(fixtureDir, fixture), 'utf8')) as BrowserAcceptanceManifest;
-    let rejected = false;
-    try {
-      assertBrowserAcceptanceManifest(manifest);
-    } catch {
-      rejected = true;
-    }
-    assert.equal(rejected, true, `negative fixture must be rejected: ${fixture}`);
-  }
-}
-
-function writeNegativeFixtures(fixtureDir: string): void {
-  mkdirSync(fixtureDir, { recursive: true });
-  const artifactRoot = relativeFromRoot(fixtureDir);
-  const fixturePath = (file: string): string => `${artifactRoot}/${file}`;
-  const runtimeIdentityLines = runtimeIdentityFixtureLines();
-  writeFixture(fixtureDir, 'valid-dom.txt', [
-    '- main:',
-    '  - strong: Ask SciForge',
-    `  - generic: Actual browser URL ${actualUrl}`,
-    `  - generic: workspace ${workspacePath}`,
-    ...runtimeIdentityLines,
-    '  - generic: command codex-command-negative-001',
-    '  - generic: gui.present show-result from live Runtime Codex',
-    '  - paragraph: Runtime Codex completed the requested browser task and rendered the answer in the main chat.',
-    '  - paragraph: SCIFORGE-CODEX-BROWSER-MT-20260519',
-    '  - generic: audit folded by default',
-    '',
-  ].join('\n'));
-  writeFixture(fixtureDir, 'native-default-chat-dom.txt', [
-    '- main:',
-    '  - strong: Ask SciForge',
-    '  - button: 聊天工作台',
-    `  - generic: Actual browser URL ${actualUrl}`,
-    `  - generic: workspace ${workspacePath}`,
-    '  - generic: Runtime Codex',
-    ...runtimeIdentityLines,
-    '  - generic: command codex-command-negative-001',
-    '  - paragraph: 回答已显示',
-    '  - paragraph: Runtime Codex answer rendered in the default chat.',
-    '  - paragraph: SCIFORGE-CODEX-BROWSER-MT-20260520A',
-    '  - generic: audit folded by default',
-    '',
-  ].join('\n'));
-  writeFixture(fixtureDir, 'native-outside-default-chat-dom.txt', [
-    '- main:',
-    `  - generic: Actual browser URL ${actualUrl}`,
-    `  - generic: workspace ${workspacePath}`,
-    '  - generic: Runtime Codex',
-    ...runtimeIdentityLines,
-    '  - generic: command codex-command-negative-001',
-    '  - paragraph: Runtime Codex answer rendered in a detached audit panel.',
-    '  - paragraph: SCIFORGE-CODEX-BROWSER-MT-20260520A',
-    '  - generic: audit folded by default',
-    '',
-  ].join('\n'));
-  writeFixture(fixtureDir, 'seed-demo-dom.txt', [
-    '- main:',
-    '  - strong: Ask SciForge',
-    `  - generic: Actual browser URL ${actualUrl}`,
-    `  - generic: workspace ${workspacePath}`,
-    ...runtimeIdentityLines,
-    '  - generic: command codex-command-negative-001',
-    '  - generic: gui.present show-result from live Runtime Codex',
-    '  - code: literature-evidence-review@1.0.0',
-    '  - paragraph: seed-demo fixture success for KRAS G12C should never count as live Runtime Codex acceptance.',
-    '  - paragraph: SCIFORGE-CODEX-BROWSER-MT-20260519',
-    '  - generic: audit folded by default',
-    '',
-  ].join('\n'));
-  writeFixture(fixtureDir, 'valid-notes.md', [
-    '# Acceptance rubric',
-    '',
-    'User intent: prove the real default-chat Runtime Codex browser path completed the requested task.',
-    'Expected observable result: gui.present projection or native Runtime Codex assistant answer rendered in default chat with URL, workspace, provider, model, profile, and command id.',
-    `Actual task result: Runtime Codex rendered a live answer for command codex-command-negative-001 at ${actualUrl} in workspace ${workspacePath}.`,
-    'Evidence refs: valid-dom.txt and screen.png.',
-    'Negative checks: seed/demo excluded; audit/debug output not used as the main answer; forged passed and partial states rejected.',
-    'Remaining risks: none for this validator fixture.',
-    '',
-  ].join('\n'));
-  writeFixture(fixtureDir, 'bad-evidence.json', '{ "this": "is not parseable"\n');
-  writeFixture(fixtureDir, 'screen.png', 'placeholder screenshot bytes for manifest validator negative fixtures\n');
-
-  const validDom = fixturePath('valid-dom.txt');
-  const nativeDefaultChatDom = fixturePath('native-default-chat-dom.txt');
-  const nativeOutsideDefaultChatDom = fixturePath('native-outside-default-chat-dom.txt');
-  const seedDom = fixturePath('seed-demo-dom.txt');
-  const notes = fixturePath('valid-notes.md');
-  const screenshot = fixturePath('screen.png');
-  const badEvidence = fixturePath('bad-evidence.json');
-  writeJsonFixture(fixtureDir, 'fake-passed-missing-dom.json', {
-    ...passedFixtureManifest(validDom, notes, screenshot),
-    evidence: { screenshotPath: screenshot, notesPath: notes },
-  });
-  writeJsonFixture(fixtureDir, 'fake-passed-seed-demo.json', passedFixtureManifest(seedDom, notes, screenshot));
-  const missingCommandId = passedFixtureManifest(validDom, notes, screenshot);
-  delete missingCommandId.commandId;
-  writeJsonFixture(fixtureDir, 'fake-passed-missing-command-id.json', missingCommandId);
-  const missingTaskResult = passedFixtureManifest(validDom, notes, screenshot);
-  delete missingTaskResult.actualTaskResult;
-  writeJsonFixture(fixtureDir, 'fake-passed-missing-task-result.json', missingTaskResult);
-  writeJsonFixture(fixtureDir, 'fake-passed-unparseable-evidence.json', passedFixtureManifest(validDom, badEvidence, screenshot));
-  writeJsonFixture(fixtureDir, 'native-default-chat-passed.json', passedFixtureManifest(nativeDefaultChatDom, notes, screenshot, 'native-default-chat'));
-  writeJsonFixture(fixtureDir, 'fake-passed-native-outside-default-chat.json', passedFixtureManifest(nativeOutsideDefaultChatDom, notes, screenshot, 'native-default-chat'));
-  writeJsonFixture(fixtureDir, 'blocked-status.json', {
-    ...passedFixtureManifest(validDom, notes, screenshot),
-    status: 'blocked',
-    reason: 'blocked status must remain release-blocking',
-  });
-  writeJsonFixture(fixtureDir, 'failed-status.json', {
-    ...passedFixtureManifest(validDom, notes, screenshot),
-    status: 'failed',
-    reason: 'failed status must remain release-blocking',
-  });
-  writeJsonFixture(fixtureDir, 'partial-status.json', {
-    ...passedFixtureManifest(validDom, notes, screenshot),
-    status: 'partial',
-    reason: 'partial status must remain release-blocking',
-  });
-}
-
-function passedFixtureManifest(
-  domPath: string,
-  notesPath: string,
-  screenshotPath: string,
-  proofMode: RuntimeOutputProofMode = 'gui-present',
-): BrowserAcceptanceManifest {
-  const evidence = { screenshotPath, domSnapshotPath: domPath, notesPath };
-  return {
-    schemaVersion: 'sciforge.runtime-codex.browser-acceptance.v1',
-    status: 'passed',
-    source: 'codex-in-app-browser',
-    observedAt: new Date().toISOString(),
-    actualUrl,
-    actualPort: requestedRolePort,
-    actualWorkspaceWriterPort: requestedWorkspaceWriterPort,
-    actualWorkspaceWriterUrl,
-    actualRuntimeCodexPort: requestedRuntimeCodexPort,
-    actualRuntimeCodexUrl,
-    workspacePath,
-    profile: runtimeCodexIdentity.profile,
-    provider: runtimeCodexIdentity.provider,
-    model: runtimeCodexIdentity.model,
-    commandId: 'codex-command-negative-001',
-    startedFromDefaultChatEntry: true,
-    submittedThroughRuntimeCodex: true,
-    providerModelProfileVisible: true,
-    workspaceVisible: true,
-    commandIdVisible: true,
-    mainAnswerVisible: true,
-    rawAuditFoldedByDefault: true,
-    releaseBlocking: false,
-    releaseEligible: true,
-    automationSubstituteUsed: false,
-    seedDemoFixtureEvidenceUsed: false,
-    acceptanceConclusionFromRealBrowser: true,
-    seedOrDemoMessagesExcluded: true,
-    liveAcceptanceScope: 'non-seed-runtime-codex-messages-only',
-    acceptanceRubric: {
-      userIntent: 'prove browser acceptance',
-      expectedObservableResult: 'visible live Runtime Codex result',
-      actualResult: 'visible live Runtime Codex result',
-      evidenceRefs: [domPath, notesPath],
-      negativeChecks: ['seed/demo excluded'],
-      remainingRisks: 'none',
-    },
-    actualTaskResult: passedTaskResult(domPath),
-    liveRuntimeCodexProof: passedLiveProof(domPath, proofMode),
-    negativeChecks: builtInNegativeChecks(),
-    evidence,
-    singleTurn: passedScenario('single turn', evidence, proofMode),
-    artifactFollowUp: { ...passedScenario('artifact follow up', evidence, proofMode), selectedRefs: ['artifact:negative-fixture'] },
-    multiTurn: {
-      ...passedScenario('multi turn', evidence, proofMode),
-      followUpPrompt: 'reply with the remembered passphrase',
-      expectedPassphrase: expectedMultiTurnPassphrase,
-      secondTurnVisibleAnswerConfirmed: true,
-    },
-  };
-}
-
-function passedScenario(
-  userIntent: string,
-  evidence: BrowserAcceptanceEvidence,
-  proofMode: RuntimeOutputProofMode = 'gui-present',
-): BrowserAcceptanceScenario {
-  return {
-    status: 'passed',
-    prompt: userIntent,
-    userIntent,
-    actualTaskResult: passedTaskResult(evidence.domSnapshotPath ?? ''),
-    liveRuntimeCodexProof: passedLiveProof(evidence.domSnapshotPath ?? '', proofMode),
-    negativeChecks: builtInNegativeChecks(),
-    visibleAnswerConfirmed: true,
-    providerModelProfileVisible: true,
-    workspaceCommandIdVisible: true,
-    rawAuditFoldedByDefault: true,
-    evidence,
-  };
-}
-
-function passedTaskResult(evidenceRef: string): ActualTaskResult {
-  return {
-    status: 'passed',
-    summary: 'Runtime Codex completed the requested browser task.',
-    userIntentSatisfied: true,
-    outputVerified: true,
-    evidenceRefs: [evidenceRef],
-  };
-}
-
-function passedLiveProof(evidenceRef: string, proofMode: RuntimeOutputProofMode = 'gui-present'): LiveRuntimeCodexProof {
-  return {
-    messageProvenance: 'live-runtime-codex',
-    commandId: 'codex-command-negative-001',
-    guiPresentObserved: proofMode === 'gui-present',
-    nativeDefaultChatAssistantAnswerRendered: proofMode === 'native-default-chat',
-    runtimeOutputObserved: true,
-    seedOrDemoExcluded: true,
-    eventEvidenceRefs: [evidenceRef],
-  };
-}
-
-function writeFixture(fixtureDir: string, file: string, content: string): void {
-  writeFileSync(join(fixtureDir, file), content, 'utf8');
-}
-
-function runtimeIdentityFixtureLines(): string[] {
-  return [
-    runtimeCodexIdentity.profile,
-    runtimeCodexIdentity.provider,
-    runtimeCodexIdentity.model,
-  ]
-    .filter((value): value is string => Boolean(value))
-    .map((value) => `  - generic: ${value}`);
-}
-
-function writeJsonFixture(fixtureDir: string, file: string, content: unknown): void {
-  writeFixture(fixtureDir, file, `${JSON.stringify(content, null, 2)}\n`);
 }
 
 function firstExisting(paths: string[]): string | undefined {

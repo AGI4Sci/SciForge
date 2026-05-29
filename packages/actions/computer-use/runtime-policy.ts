@@ -422,6 +422,7 @@ export function computerUseTextEntryContextBlockReason(options: {
   if (options.actionType !== 'type_text') return '';
   const text = String(options.text ?? '').trim();
   if (!looksLikeComputerUseFilePathText(text)) return '';
+  if (looksLikeComputerUseEvidenceReportText(text)) return '';
   const context = [
     options.targetAppName,
     options.targetTitle,
@@ -492,8 +493,25 @@ function looksLikeComputerUseNavigationText(text: string) {
 }
 
 function looksLikeComputerUseFilePathText(text: string) {
-  return /^(?:\/|~\/|[A-Za-z]:[\\/])/.test(text)
-    || /\.(?:pptx?|key|pdf|docx?|xlsx?|txt|md|csv|png|jpe?g|json)$/i.test(text);
+  const compact = text.trim();
+  const fileExtension = /\.(?:pptx?|key|pdf|docx?|xlsx?|txt|md|csv|png|jpe?g|json)$/i;
+  return /^(?:\/(?=\S*(?:[\\/]|(?:\.[A-Za-z0-9]{1,8}\b)))|~\/|[A-Za-z]:[\\/]|file:\/\/|\.{1,2}[\\/])/.test(compact)
+    || /[\\/][^\\/\s]+(?:\.(?:pptx?|key|pdf|docx?|xlsx?|txt|md|csv|png|jpe?g|json))\b/i.test(compact)
+    || (/^\S+$/.test(compact) && fileExtension.test(compact));
+}
+
+function looksLikeComputerUseEvidenceReportText(text: string) {
+  const compact = text.trim();
+  if (!/[\n\r]/.test(compact)) return false;
+  if (!/(?:report|summary|evidence\s+refs?|visible\s+(?:app|window|ui|fact)|报告|总结|证据引用|可见)/i.test(compact)) return false;
+  if (/^(?:\/|~\/|[A-Za-z]:[\\/]|file:\/\/|\.{1,2}[\\/])/.test(compact)) return false;
+  const fileLikeTokens = compact.match(/(?:\.sciforge\/[^\s,;)]*|[A-Za-z0-9_.-]+\.(?:pptx?|key|pdf|docx?|xlsx?|txt|md|csv|png|jpe?g|json))/gi) ?? [];
+  if (!fileLikeTokens.length) return false;
+  return fileLikeTokens.every((token) => (
+    /^\.sciforge\/vision-runs\/[^/\s]+\/[^,\s)]+$/i.test(token)
+    || /^step-\d{3}-(?:before|after)(?:-[A-Za-z0-9]+)*\.(?:png|jpe?g|webp)$/i.test(token)
+    || /^(?:vision-trace|tool-payload|gui-present|tui-host-run-task-chain|computer-use-request|host-ports|directory-listing)\.json$/i.test(token)
+  ));
 }
 
 function looksLikeComputerUseFileDialogContext(text: string) {

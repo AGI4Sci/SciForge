@@ -38,6 +38,10 @@ interface ConversationProjectionContinuationSummary {
   visibleText?: string;
   diagnostic?: string;
   artifactRefs: string[];
+  blockedManifestRefs: string[];
+  repairHintRefs: string[];
+  continuationRequestRefs: string[];
+  runTaskChainRefs: string[];
   recoverActions: string[];
   backgroundState?: {
     status?: string;
@@ -107,6 +111,11 @@ function compactConversationProjectionForRequestPayload(
   selectedRefs: ConversationProjectionContinuationSummary['selectedRefs'],
   auditRefs: string[],
 ): ConversationProjectionContinuationSummary {
+  const projectionRefs = uniqueStringRefs([
+    ...conversationProjectionArtifactRefs(projection),
+    ...auditRefs,
+    ...projection.recoverActions.flatMap(extractRefsFromText),
+  ]);
   return {
     schemaVersion: 'sciforge.conversation-projection-continuation.v1',
     source: 'conversation-projection',
@@ -116,6 +125,10 @@ function compactConversationProjectionForRequestPayload(
     visibleText: clipOptionalText(conversationProjectionVisibleText(projection), REQUEST_PAYLOAD_PROJECTION_TEXT_LIMIT),
     diagnostic: clipOptionalText(conversationProjectionPrimaryDiagnostic(projection), 600),
     artifactRefs: conversationProjectionArtifactRefs(projection).slice(0, 12),
+    blockedManifestRefs: refsEndingWith(projectionRefs, 'blocked-manifest.json'),
+    repairHintRefs: refsEndingWith(projectionRefs, 'repair-hint.json'),
+    continuationRequestRefs: refsEndingWith(projectionRefs, 'continuation-request.json'),
+    runTaskChainRefs: refsEndingWith(projectionRefs, 'tui-host-run-task-chain.json'),
     recoverActions: projection.recoverActions.slice(0, 6).map((action) => clipText(action, 500)),
     backgroundState: projection.backgroundState ? {
       status: projection.backgroundState.status,
@@ -200,6 +213,10 @@ function projectionContinuationParams(contexts: ProjectionContinuationContext[])
     currentTurnId: context.summary.currentTurnId,
     diagnostic: clipOptionalText(context.summary.diagnostic, 120),
     artifactRefs: context.summary.artifactRefs.slice(0, 4),
+    blockedManifestRefs: context.summary.blockedManifestRefs.slice(0, 2),
+    repairHintRefs: context.summary.repairHintRefs.slice(0, 2),
+    continuationRequestRefs: context.summary.continuationRequestRefs.slice(0, 2),
+    runTaskChainRefs: context.summary.runTaskChainRefs.slice(0, 2),
     recoverActions: context.summary.recoverActions.map((action) => clipText(action, 120)).slice(0, 2),
     selectedRefs: context.summary.selectedRefs.map((ref) => ({
       id: ref.id,
@@ -208,6 +225,14 @@ function projectionContinuationParams(contexts: ProjectionContinuationContext[])
     })).slice(0, 4),
     auditRefs: context.summary.auditRefs.slice(0, 8),
   })));
+}
+
+function refsEndingWith(refs: string[], filename: string) {
+  return refs.filter((ref) => ref.endsWith(`/${filename}`) || ref.endsWith(filename)).slice(0, 4);
+}
+
+function extractRefsFromText(value: string) {
+  return [...value.matchAll(/(?:\.sciforge|\/)[^"'`\s)]*/g)].map((match) => match[0]);
 }
 
 function executionUnitBelongsToProjectionAudit(

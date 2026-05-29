@@ -319,13 +319,43 @@ function validateRequiredRefs(
   }
   requireRef(issues, 'guiPresent.recordRef', stringValue(guiPresent?.recordRef));
   requireRef(issues, 'guiPresent.payloadRef', stringValue(guiPresent?.payloadRef));
-  requireRefs(issues, 'guiPresent.displayedRefs', stringArray(guiPresent?.displayedRefs));
+  const guiPresentDisplayedRefs = stringArray(guiPresent?.displayedRefs);
+  const finalArtifactRef = stringValue(evidence.finalArtifactRef);
+  requireRefs(issues, 'guiPresent.displayedRefs', guiPresentDisplayedRefs);
+  if (finalArtifactRef && guiPresentDisplayedRefs.length > 0 && !guiPresentDisplayedRefs.includes(finalArtifactRef)) {
+    issues.push({
+      id: 'missing-required-ref',
+      path: 'guiPresent.displayedRefs',
+      reason: 'guiPresent.displayedRefs must include the same finalArtifactRef shown to the user.',
+    });
+  }
   if (guiPresent?.status !== 'present') {
     issues.push({
       id: 'missing-required-ref',
       path: 'guiPresent.status',
       reason: 'guiPresent.status must be present.',
     });
+  }
+
+  const chatOriginLink = tuiHostChain.find((link) => (
+    link.kind === 'sciForge-chat-origin'
+    && link.status === 'present'
+  ));
+  if (!chatOriginLink) {
+    issues.push({
+      id: 'missing-required-ref',
+      path: 'tuiHostChain',
+      reason: 'tuiHostChain must include present SciForge chat-origin proof.',
+    });
+  } else {
+    requireRef(issues, 'tuiHostChain[sciForge-chat-origin].requestRef', stringValue(chatOriginLink.requestRef));
+    if (!isSciForgeChatOrigin(chatOriginLink.origin)) {
+      issues.push({
+        id: 'missing-required-ref',
+        path: 'tuiHostChain[sciForge-chat-origin].origin',
+        reason: 'SciForge chat-origin proof must carry ui-chat/sciforge-chat origin metadata with terminalEquivalentText=true.',
+      });
+    }
   }
 
   const runTaskLink = tuiHostChain.find((link) => link.kind === 'tui-host-runTask' && link.status === 'present');
@@ -379,7 +409,14 @@ function validateRequiredRefs(
       reason: 'L3 evidenceClaims must include independent-input-adapter refs and sessionRefs.',
     });
   }
-  if (!hasGuiPresentClaim(evidenceClaims, stringValue(guiPresent?.recordRef), stringArray(guiPresent?.displayedRefs))) {
+  if (!hasSciForgeChatOriginClaim(evidenceClaims, stringValue(chatOriginLink?.requestRef))) {
+    issues.push({
+      id: 'missing-required-evidence-claim',
+      path: 'evidenceClaims',
+      reason: 'evidenceClaims must include SciForge chat-origin refs from the UI chat handoff.',
+    });
+  }
+  if (!hasGuiPresentClaim(evidenceClaims, stringValue(guiPresent?.recordRef), guiPresentDisplayedRefs, finalArtifactRef)) {
     issues.push({
       id: 'missing-required-evidence-claim',
       path: 'evidenceClaims',
@@ -397,6 +434,10 @@ function validateLiveDisqualifiers(evidence: Record<string, unknown>): CuNextLiv
     && value === true
   )) || findRecordValue(evidence, (key, value) => (
     isModeKey(key)
+    && typeof value === 'string'
+    && /fixture|demo|synthetic/i.test(value)
+  )) || findRecordValue(evidence, (key, value) => (
+    isOriginKey(key)
     && typeof value === 'string'
     && /fixture|demo|synthetic/i.test(value)
   ))) {
@@ -1017,18 +1058,43 @@ function hasIndependentInputAdapterClaim(claims: Array<Record<string, unknown>>)
   ));
 }
 
+function hasSciForgeChatOriginClaim(
+  claims: Array<Record<string, unknown>>,
+  requestRef: string | undefined,
+): boolean {
+  if (!requestRef) return false;
+  return claims.some((claim) => (
+    claim.kind === 'sciForge-chat-origin'
+    && claim.status === 'present'
+    && refsFromClaim(claim).includes(requestRef)
+    && stringArray(claim.sessionRefs).length > 0
+    && isSciForgeChatOrigin(claim.origin)
+  ));
+}
+
 function hasGuiPresentClaim(
   claims: Array<Record<string, unknown>>,
   guiPresentRecordRef: string | undefined,
   displayedRefs: string[],
+  finalArtifactRef: string | undefined,
 ): boolean {
-  if (!guiPresentRecordRef || displayedRefs.length === 0) return false;
+  if (!guiPresentRecordRef || !finalArtifactRef || displayedRefs.length === 0) return false;
   return claims.some((claim) => {
     if (claim.kind !== 'gui-present-record') return false;
     const claimRefs = refsFromClaim(claim);
     return claimRefs.includes(guiPresentRecordRef)
-      && displayedRefs.some((ref) => claimRefs.includes(ref) || stringArray(claim.artifactRefs).includes(ref));
+      && displayedRefs.includes(finalArtifactRef)
+      && (claimRefs.includes(finalArtifactRef) || stringArray(claim.artifactRefs).includes(finalArtifactRef));
   });
+}
+
+function isSciForgeChatOrigin(value: unknown): boolean {
+  const origin = asRecord(value);
+  if (!origin) return false;
+  return origin.schemaVersion === 'sciforge.computer-use.chat-origin.v1'
+    && origin.handoffSource === 'ui-chat'
+    && origin.entrypoint === 'sciforge-chat'
+    && origin.terminalEquivalentText === true;
 }
 
 function refsFromClaim(claim: Record<string, unknown>): string[] {
@@ -1076,6 +1142,15 @@ function isModeKey(key: string): boolean {
     || key === 'evidenceMode'
     || key === 'runMode'
     || key === 'mode';
+}
+
+function isOriginKey(key: string): boolean {
+  return key === 'origin'
+    || key === 'evidenceOrigin'
+    || key === 'provenance'
+    || key === 'source'
+    || key === 'generatedFrom'
+    || key === 'materializedFrom';
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

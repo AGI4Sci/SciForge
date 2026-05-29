@@ -10,6 +10,11 @@ import {
 } from './dev-health';
 import { isOwnedSciForgeViteDevProcess, parseListeningPids, type DevProcessOwnershipRecord } from './dev-process';
 import { normalizeInstanceName, parallelProfile } from '../src/runtime/parallel-instance-profile.js';
+import {
+  agentServerEnvFromLocalSettings,
+  providerEnvFromLocalSettings,
+  readLocalProviderSettings,
+} from '../packages/backend/src/local-provider-config.js';
 
 applyInstanceDefaults();
 
@@ -38,46 +43,11 @@ if (process.env.SCIFORGE_AGENT_SERVER_AUTOSTART !== '0') {
 }
 
 function agentServerModelEnvFromLocalConfig() {
-  const configPath = CONFIG_LOCAL_PATH;
-  if (!existsSync(configPath)) return {};
-  try {
-    const parsed = JSON.parse(readFileSync(configPath, 'utf8'));
-    const llm = isRecord(parsed?.llm) ? parsed.llm : {};
-    const provider = typeof llm.provider === 'string' ? llm.provider.trim() : '';
-    const baseUrl = typeof llm.baseUrl === 'string' ? llm.baseUrl.trim().replace(/\/+$/, '') : '';
-    const apiKey = typeof llm.apiKey === 'string' ? llm.apiKey.trim() : '';
-    const model = typeof llm.model === 'string' ? llm.model.trim() : typeof llm.modelName === 'string' ? llm.modelName.trim() : '';
-    return {
-      ...(provider ? { AGENT_SERVER_MODEL_PROVIDER: provider, AGENT_SERVER_ADAPTER_LLM_PROVIDER: provider } : {}),
-      ...(baseUrl ? { AGENT_SERVER_MODEL_BASE_URL: baseUrl, AGENT_SERVER_ADAPTER_LLM_BASE_URL: baseUrl } : {}),
-      ...(apiKey ? { AGENT_SERVER_MODEL_API_KEY: apiKey, AGENT_SERVER_ADAPTER_LLM_API_KEY: apiKey } : {}),
-      ...(model ? { AGENT_SERVER_MODEL: model, AGENT_SERVER_MODEL_NAME: model, AGENT_SERVER_ADAPTER_LLM_MODEL: model } : {}),
-    };
-  } catch {
-    return {};
-  }
+  return agentServerEnvFromLocalSettings(readLocalProviderSettings(CONFIG_LOCAL_PATH));
 }
 
 function runtimeCodexEnvFromLocalConfig() {
-  const configPath = CONFIG_LOCAL_PATH;
-  if (!existsSync(configPath)) return {};
-  try {
-    const parsed = JSON.parse(readFileSync(configPath, 'utf8'));
-    const llm = isRecord(parsed?.llm) ? parsed.llm : {};
-    const codexProxy = isRecord(parsed?.codexProxy) ? parsed.codexProxy : {};
-    const apiKey = stringValue(parsed.apiKey) || stringValue(llm.apiKey);
-    const provider = stringValue(parsed.runtimeProvider) || stringValue(codexProxy.runtimeProvider) || stringValue(codexProxy.provider);
-    const baseUrl = stringValue(parsed.modelBaseUrl) || stringValue(llm.baseUrl);
-    const model = stringValue(parsed.modelName) || stringValue(llm.model) || stringValue(llm.modelName);
-    return {
-      ...(apiKey ? { SCIFORGE_RUNTIME_API_KEY: apiKey } : {}),
-      ...(provider ? { SCIFORGE_RUNTIME_PROVIDER: provider } : {}),
-      ...(baseUrl ? { SCIFORGE_RUNTIME_BASE_URL: baseUrl.replace(/\/+$/, ''), SCIFORGE_PROXY_UPSTREAM_BASE_URL: baseUrl.replace(/\/+$/, '') } : {}),
-      ...(model ? { SCIFORGE_RUNTIME_MODEL: model } : {}),
-    };
-  } catch {
-    return {};
-  }
+  return providerEnvFromLocalSettings(readLocalProviderSettings(CONFIG_LOCAL_PATH));
 }
 
 function stringValue(value: unknown) {

@@ -16,6 +16,8 @@ import { buildCuUserAcceptanceManifest } from '../../tools/cu-user-acceptance-ma
 const execFileAsync = promisify(execFile);
 
 test('current CU-NEXT readiness manifest requires both checked PROJECT items and task evidence gates', async () => {
+  const projectText = await readFile('PROJECT.md', 'utf8');
+  const hasCurrentCuNextBoard = projectText.includes('## 当前任务板：下一轮 Computer Use 真实复杂任务');
   const manifest = await buildCuNextReadinessManifest({
     generatedAt: '2026-05-25T00:00:00.000Z',
   });
@@ -30,11 +32,23 @@ test('current CU-NEXT readiness manifest requires both checked PROJECT items and
   assert.ok(['passed', 'blocked'].includes(manifest.globalEvidence.runtimeBrowser.status));
 
   for (const task of manifest.tasks) {
-    assert.equal(task.checkedChecklistItems, 2, `${task.id} current PROJECT.md acknowledgement should be checked with inline evidence`);
-    assert.equal(task.totalChecklistItems, 2);
-    assert.equal(task.blockedItems.some((item) => item.id.startsWith('project-checklist')), false);
+    if (hasCurrentCuNextBoard) {
+      assert.equal(task.totalChecklistItems, 2);
+      assert.equal(task.checkedChecklistItems, 2, `${task.id} current PROJECT.md acknowledgement should be checked with inline evidence`);
+      assert.equal(task.blockedItems.some((item) => item.id.startsWith('project-checklist')), false);
+    } else {
+      assert.equal(task.totalChecklistItems, 0);
+      assert.equal(task.checkedChecklistItems, 0, `${task.id} old CU-NEXT checklist should not be inferred from a replaced PROJECT board`);
+      assert.equal(task.blockedItems.some((item) => (
+        item.id.startsWith('project-checklist') || item.id === 'project-section-missing'
+      )), true);
+    }
     assert.ok(
-      task.status === 'passed' || task.blockedItems.some((item) => item.id === 'missing-live-l2-l3-user-acceptance-manifest'),
+      task.status === 'passed'
+        || task.blockedItems.some((item) => item.id === 'missing-live-l2-l3-user-acceptance-manifest')
+        || (!hasCurrentCuNextBoard && task.blockedItems.some((item) => (
+          item.id.startsWith('project-checklist') || item.id === 'project-section-missing'
+        ))),
       `${task.id} may pass when local live evidence is present, otherwise it must be blocked on evidence rather than PROJECT acknowledgement`,
     );
   }
@@ -774,6 +788,18 @@ function passedKvGroundManifest(): Record<string, unknown> {
   };
 }
 
+function sciForgeChatOrigin(runId: string): Record<string, unknown> {
+  return {
+    schemaVersion: 'sciforge.computer-use.chat-origin.v1',
+    handoffSource: 'ui-chat',
+    entrypoint: 'sciforge-chat',
+    terminalEquivalentText: true,
+    selectedActionProvider: 'action.sciforge.computer-use',
+    selectedToolIds: ['local.vision-sense'],
+    sessionRefs: [`computer-use-session:${runId}`],
+  };
+}
+
 function passedCuNextAcceptanceManifest(
   taskId: string,
   options: {
@@ -787,6 +813,7 @@ function passedCuNextAcceptanceManifest(
 ): Record<string, unknown> {
   const runId = `${taskId.toLowerCase()}-dense-grounding`;
   const finalArtifactRef = `.sciforge/vision-runs/${runId}/dense-grounding-export.csv`;
+  const chatOrigin = sciForgeChatOrigin(runId);
   return {
     schemaVersion: 'sciforge.computer-use.user-acceptance-manifest.v1',
     runId,
@@ -806,6 +833,13 @@ function passedCuNextAcceptanceManifest(
       rejectedClaims: options.antiShortcutRejectedClaims ?? [],
     },
     tuiHostChain: [
+      {
+        id: 'chat-origin',
+        kind: 'sciForge-chat-origin',
+        status: 'present',
+        requestRef: `.sciforge/vision-runs/${runId}/computer-use-request.json`,
+        origin: chatOrigin,
+      },
       {
         id: 'tui-host-runTask',
         kind: 'tui-host-runTask',
@@ -851,6 +885,15 @@ function passedCuNextAcceptanceManifest(
     },
     evidenceClaims: [
       {
+        id: 'chat-origin',
+        kind: 'sciForge-chat-origin',
+        status: 'present',
+        ref: `.sciforge/vision-runs/${runId}/computer-use-request.json`,
+        refs: [`.sciforge/vision-runs/${runId}/computer-use-request.json`],
+        origin: chatOrigin,
+        sessionRefs: [`computer-use-session:${runId}`],
+      },
+      {
         id: 'real-computer-use-trace',
         kind: 'real-computer-use',
         ref: `.sciforge/vision-runs/${runId}/vision-trace.json`,
@@ -895,6 +938,7 @@ function passedCuNextAcceptanceManifest(
 function realCuNextAcceptanceInput(taskId: string): Parameters<typeof buildCuUserAcceptanceManifest>[0] {
   const runId = `${taskId.toLowerCase()}-real-builder`;
   const finalArtifactRef = `.sciforge/vision-runs/${runId}/dense-grounding-export.csv`;
+  const chatOrigin = sciForgeChatOrigin(runId);
   return {
     runId,
     taskId,
@@ -908,6 +952,13 @@ function realCuNextAcceptanceInput(taskId: string): Parameters<typeof buildCuUse
       windowSwitchTraceRefs: [`.sciforge/vision-runs/${runId}/window-switch-trace.json`],
     },
     tuiHostChain: [
+      {
+        id: 'chat-origin',
+        kind: 'sciForge-chat-origin',
+        status: 'present',
+        requestRef: `.sciforge/vision-runs/${runId}/computer-use-request.json`,
+        origin: chatOrigin,
+      },
       {
         id: 'tui-host-runTask',
         kind: 'tui-host-runTask',
@@ -929,6 +980,15 @@ function realCuNextAcceptanceInput(taskId: string): Parameters<typeof buildCuUse
       },
     ],
     evidenceClaims: [
+      {
+        id: 'chat-origin',
+        kind: 'sciForge-chat-origin',
+        status: 'present',
+        ref: `.sciforge/vision-runs/${runId}/computer-use-request.json`,
+        refs: [`.sciforge/vision-runs/${runId}/computer-use-request.json`],
+        origin: chatOrigin,
+        sessionRefs: [`computer-use-session:${runId}`],
+      },
       {
         id: 'real-computer-use-trace',
         kind: 'real-computer-use',
@@ -1015,7 +1075,7 @@ function isolatedL3CompletionEvidence(taskFinalArtifactRef?: string): Record<str
     taskArtifactBinding: taskFinalArtifactRef ? {
       finalArtifactRef: taskFinalArtifactRef,
       finalArtifactRefs: [taskFinalArtifactRef],
-      source: 'test-fixture-task-final-artifact-binding',
+      source: 'task-final-artifact-binding',
     } : undefined,
     finalArtifactRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/source-summary.docx',
     artifactValidationRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/source-summary.docx.validation.json',

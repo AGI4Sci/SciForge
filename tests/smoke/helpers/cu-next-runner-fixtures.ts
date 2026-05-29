@@ -12,6 +12,19 @@ const fixturePng = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADgwGOSyRGjgAAAABJRU5ErkJggg==',
   'base64',
 );
+
+function sciForgeChatOrigin(runId: string): Record<string, unknown> {
+  return {
+    schemaVersion: 'sciforge.computer-use.chat-origin.v1',
+    handoffSource: 'ui-chat',
+    entrypoint: 'sciforge-chat',
+    terminalEquivalentText: true,
+    selectedActionProvider: 'action.sciforge.computer-use',
+    selectedToolIds: ['local.vision-sense'],
+    sessionRefs: [`computer-use-session:${runId}`],
+  };
+}
+
 export async function writeCuNextValidateRunStatusFixture(
   workspace: string,
   runId: string,
@@ -384,6 +397,7 @@ export async function writeCuNextProjectionEvidenceFiles(evidenceDir: string) {
 
 export async function writeBundleLocalCuNext07Acceptance(workspace: string): Promise<string> {
   const runId = 'cu-next-07-wrapper';
+  const runDirRef = `.sciforge/vision-runs/${runId}`;
   const bundleDir = join(workspace, '.sciforge', 'vision-runs', runId);
   const acceptance = passedBundleLocalCuNext07AcceptanceManifest();
   await mkdir(bundleDir, { recursive: true });
@@ -419,6 +433,46 @@ export async function writeBundleLocalCuNext07Acceptance(workspace: string): Pro
   await writeFile(join(bundleDir, 'dense-grounding-export.csv'), 'label,x,y\nexport,100,80\n');
   const manifestPath = join(bundleDir, 'cu-user-acceptance-manifest.json');
   await writeFile(manifestPath, JSON.stringify(acceptance, null, 2));
+  const acceptanceManifestRef = `${runDirRef}/cu-user-acceptance-manifest.json`;
+  const completionEvidenceRef = `${runDirRef}/isolated-desktop-l3-workflow-evidence.json`;
+  const directoryListingRef = `${runDirRef}/directory-listing.json`;
+  const runTaskChainRef = `${runDirRef}/tui-host-run-task-chain.json`;
+  await writeFile(join(bundleDir, 'tui-host-run-task-chain.json'), `${JSON.stringify({
+    schemaVersion: 'sciforge.computer-use.tui-host-run-task-chain.v1',
+    runId,
+    refs: [
+      `${runDirRef}/tool-payload.json`,
+      `${runDirRef}/gui-present.json`,
+      `${runDirRef}/vision-trace.json`,
+      acceptanceManifestRef,
+      completionEvidenceRef,
+    ],
+    links: [
+      { kind: 'directory-listing', status: 'present', recordRef: directoryListingRef },
+      { kind: 'user-acceptance-manifest', status: 'present', recordRef: acceptanceManifestRef },
+      { kind: 'completion-grade-evidence', status: 'attached', recordRef: completionEvidenceRef },
+    ],
+    completionGrade: {
+      status: 'attached',
+      acceptanceManifestRef,
+      completionEvidenceRef,
+    },
+  }, null, 2)}\n`);
+  await writeFile(join(bundleDir, 'directory-listing.json'), `${JSON.stringify({
+    schemaVersion: 'sciforge.computer-use.evidence-directory-listing.v1',
+    runId,
+    fileRefs: [
+      runTaskChainRef,
+      directoryListingRef,
+      `${runDirRef}/computer-use-request.json`,
+      `${runDirRef}/tool-payload.json`,
+      `${runDirRef}/gui-present.json`,
+      `${runDirRef}/vision-trace.json`,
+      `${runDirRef}/dense-grounding-export.csv`,
+      acceptanceManifestRef,
+      completionEvidenceRef,
+    ],
+  }, null, 2)}\n`);
   return manifestPath;
 }
 
@@ -440,11 +494,27 @@ export function passedBundleLocalCuNext07AcceptanceManifest(): Record<string, un
     },
     antiShortcutGuard: { status: 'passed', rejectedClaims: [] },
     tuiHostChain: [
+      {
+        id: 'chat-origin',
+        kind: 'sciForge-chat-origin',
+        status: 'present',
+        requestRef: 'computer-use-request.json',
+        origin: sciForgeChatOrigin('cu-next-07-wrapper'),
+      },
       { id: 'tui-host-runTask', kind: 'tui-host-runTask', status: 'present', requestRef: 'computer-use-request.json', hostPortsRef: 'host-ports.json' },
       { id: 'computer-use-action-provider', kind: 'computer-use-action-provider', status: 'present', toolPayloadRef: 'tool-payload.json' },
       { id: 'gui-present', kind: 'gui.present', status: 'present', recordRef: 'gui-present.json' },
     ],
     evidenceClaims: [
+      {
+        id: 'chat-origin',
+        kind: 'sciForge-chat-origin',
+        status: 'present',
+        ref: 'computer-use-request.json',
+        refs: ['computer-use-request.json'],
+        origin: sciForgeChatOrigin('cu-next-07-wrapper'),
+        sessionRefs: ['computer-use-session:cu-next-07-wrapper'],
+      },
       { id: 'real-computer-use-trace', kind: 'real-computer-use', ref: 'vision-trace.json' },
       {
         id: 'independent-input-adapter',
@@ -616,6 +686,13 @@ export function passedCuNext07AcceptanceManifest(): Record<string, unknown> {
     antiShortcutGuard: { status: 'passed', rejectedClaims: [] },
     tuiHostChain: [
       {
+        id: 'chat-origin',
+        kind: 'sciForge-chat-origin',
+        status: 'present',
+        requestRef: `.sciforge/vision-runs/${runId}/computer-use-request.json`,
+        origin: sciForgeChatOrigin(runId),
+      },
+      {
         id: 'tui-host-runTask',
         kind: 'tui-host-runTask',
         status: 'present',
@@ -636,6 +713,15 @@ export function passedCuNext07AcceptanceManifest(): Record<string, unknown> {
       },
     ],
     evidenceClaims: [
+      {
+        id: 'chat-origin',
+        kind: 'sciForge-chat-origin',
+        status: 'present',
+        ref: `.sciforge/vision-runs/${runId}/computer-use-request.json`,
+        refs: [`.sciforge/vision-runs/${runId}/computer-use-request.json`],
+        origin: sciForgeChatOrigin(runId),
+        sessionRefs: [`computer-use-session:${runId}`],
+      },
       { id: 'real-computer-use-trace', kind: 'real-computer-use', ref: `.sciforge/vision-runs/${runId}/vision-trace.json` },
       {
         id: 'independent-input-adapter',
@@ -740,7 +826,7 @@ export function isolatedL3CompletionEvidence(taskFinalArtifactRefs: string | str
       finalArtifactRef: currentTaskFinalArtifactRef,
       finalArtifactRefs: boundTaskFinalArtifactRefs,
       supportingL3FinalArtifactRef: l3FinalArtifactRef,
-      source: 'test-fixture-task-final-artifact-binding',
+      source: 'task-final-artifact-binding',
     },
     finalArtifactRef: l3FinalArtifactRef,
     artifactValidationRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/source-summary.docx.validation.json',

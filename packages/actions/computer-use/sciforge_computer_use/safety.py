@@ -26,20 +26,22 @@ class RiskAssessment:
 def assess_action_risk(action: ActionPlan, *, fail_closed: bool = True) -> RiskAssessment:
     """Classify a generic GUI action before execution."""
 
-    text = " ".join(
+    inferred_parts = [
+        action.kind or "",
+        action.reason,
+        action.key or "",
+        action.app_name or "",
+        action.target.description if action.target else "",
+        action.target.region_description if action.target else "",
+        " ".join(action.keys),
+    ]
+    if action.kind != "type_text":
+        inferred_parts.append(action.text or "")
+    text = _risk_text_for_inference(" ".join(
         str(part)
-        for part in [
-            action.kind or "",
-            action.reason,
-            action.text or "",
-            action.key or "",
-            action.app_name or "",
-            action.target.description if action.target else "",
-            action.target.region_description if action.target else "",
-            " ".join(action.keys),
-        ]
+        for part in inferred_parts
         if part
-    )
+    ))
     explicit_high = action.risk_level == "high" or action.requires_confirmation
     inferred_high = bool(_HIGH_RISK_RE.search(text))
     if explicit_high or inferred_high:
@@ -63,3 +65,13 @@ def assess_action_risk(action: ActionPlan, *, fail_closed: bool = True) -> RiskA
         reason="Low-risk generic GUI action.",
     )
 
+
+def _risk_text_for_inference(text: str) -> str:
+    """Drop explicit negative/exclusion clauses before keyword inference."""
+
+    return re.sub(
+        r"\b(?:excluding|except|avoid|do not|don't|not)\b[^.;\n]*",
+        " ",
+        text,
+        flags=re.IGNORECASE,
+    )

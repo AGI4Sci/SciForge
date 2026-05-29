@@ -1,6 +1,12 @@
 import type { GatewayRequest } from '../runtime-types.js';
 import { isRecord, toStringList, uniqueStrings } from '../gateway-utils.js';
 import type { ComputerUseConfig, WindowTarget } from './types.js';
+import {
+  COMPLETION_EVIDENCE_POLICY_SCHEMA,
+  COMPLETION_EVIDENCE_TRIGGER_ON_COMPLETED_CURRENT_RUN,
+  EMBEDDED_ISOLATED_DESKTOP_L3_PRODUCER_ID,
+  sanitizeCompletionEvidencePolicy,
+} from './completion-evidence-policy.js';
 import { windowTargetTraceConfig } from './window-target.js';
 import { independentInputAdapterExecutionBoundary } from './independent-input-adapter.js';
 import {
@@ -63,6 +69,17 @@ export type ComputerUsePresentationSummary = {
   artifactRefs: string[];
   executionUnitRefs: string[];
   workEvidenceRefs: string[];
+  blockedManifestRefs: string[];
+  repairHintRefs: string[];
+  continuationRequestRefs: string[];
+  directoryListingRefs: string[];
+  runTaskChainRefs: string[];
+  guiAskUserRefs: string[];
+  approvalRequestRefs: string[];
+  riskAuditRefs: string[];
+  confirmedRequestRefs: string[];
+  approvalDecisionRefs: string[];
+  sourceApprovalRefs: string[];
 };
 
 export function gatewayRequestToComputerUseRequest(
@@ -72,10 +89,14 @@ export function gatewayRequestToComputerUseRequest(
 ): ComputerUseActionProviderRequest {
   const approvalRef = computerUseApprovalRef(request);
   const approvalProvenance = computerUseApprovalProvenance(request);
-  const plannerAcceptanceContract = computerUsePlannerAcceptanceContract(request);
+  const plannerAcceptanceContract = withComputerUseContinuationContract(
+    computerUsePlannerAcceptanceContract(request),
+    computerUseContinuationContract(request),
+  );
+  const completionEvidencePolicy = computerUseCompletionEvidencePolicy(request);
   return {
     schemaVersion: COMPUTER_USE_REQUEST_SCHEMA,
-    task: request.prompt,
+    task: computerUseTaskForPlanner(request.prompt, approvalRef, approvalProvenance),
     maxSteps: config.maxSteps,
     riskPolicy: approvalRef ? 'allow-confirmed' : 'fail-closed',
     approvalRef,
@@ -95,6 +116,7 @@ export function gatewayRequestToComputerUseRequest(
       ]),
       selectedActionIds: request.selectedActionIds ?? [],
       selectedSenseIds: request.selectedSenseIds ?? [],
+      chatOrigin: computerUseChatOrigin(request),
       bridge: {
         desktopBridgeEnabled: config.desktopBridgeEnabled,
         dryRun: config.dryRun,
@@ -102,10 +124,79 @@ export function gatewayRequestToComputerUseRequest(
         inputAdapter: config.inputAdapter,
         independentInputAdapterProvider: config.independentInputAdapterProvider,
       },
+      ...(completionEvidencePolicy ? { completionEvidencePolicy } : {}),
       ...(plannerAcceptanceContract ? { plannerAcceptanceContract } : {}),
       ...(approvalProvenance ? { approvalProvenance } : {}),
     },
   };
+}
+
+function computerUseCompletionEvidencePolicy(request: GatewayRequest) {
+  const policy = sanitizeCompletionEvidencePolicy(recordAt(request.uiState, 'completionEvidencePolicy'));
+  const producers = policy?.producers
+    .filter((producer) => (
+      producer.id === EMBEDDED_ISOLATED_DESKTOP_L3_PRODUCER_ID
+      && producer.enabled === true
+      && producer.trigger === COMPLETION_EVIDENCE_TRIGGER_ON_COMPLETED_CURRENT_RUN
+    ))
+    .map(() => ({
+      id: EMBEDDED_ISOLATED_DESKTOP_L3_PRODUCER_ID,
+      enabled: true,
+      trigger: COMPLETION_EVIDENCE_TRIGGER_ON_COMPLETED_CURRENT_RUN,
+    })) ?? [];
+  if (!producers.length) return undefined;
+  return {
+    schemaVersion: COMPLETION_EVIDENCE_POLICY_SCHEMA,
+    producers,
+  };
+}
+
+function computerUseTaskForPlanner(
+  prompt: string,
+  approvalRef: string | undefined,
+  approvalProvenance: Record<string, unknown> | undefined,
+) {
+  if (!approvalRef || !approvalProvenance || !isComputerUseApprovePrompt(prompt)) return prompt;
+  const approvalRequest = recordAt(approvalProvenance, 'approvalRequest');
+  const highRiskAction = recordAt(approvalProvenance, 'highRiskAction')
+    ?? recordAt(recordAt(approvalProvenance, 'riskAuditSidecar'), 'highRiskAction');
+  const actionKind = stringAt(highRiskAction, 'actionKind')
+    ?? stringAt(highRiskAction, 'action_kind')
+    ?? stringAt(approvalRequest, 'action_kind')
+    ?? stringAt(approvalRequest, 'actionKind');
+  const targetDescription = stringAt(highRiskAction, 'targetDescription')
+    ?? stringAt(highRiskAction, 'target_description')
+    ?? stringAt(approvalRequest, 'targetDescription')
+    ?? stringAt(approvalRequest, 'target_description');
+  const confirmationText = stringAt(approvalRequest, 'confirmation_text')
+    ?? stringAt(approvalRequest, 'confirmationText');
+  const contextLines = [
+    'The user approved the prior Computer Use high-risk request referenced above.',
+    'Continue the prior approved action under riskPolicy=allow-confirmed; do not look for a visible Approve button.',
+    `Approval ref: ${approvalRef}`,
+    actionKind ? `Approved action kind: ${actionKind}` : undefined,
+    targetDescription ? `Approved target: ${targetDescription}` : undefined,
+    confirmationText ? `Prior confirmation text: ${confirmationText}` : undefined,
+  ].filter((line): line is string => Boolean(line));
+  return `${prompt}\n\nApproved retry context:\n${contextLines.map((line) => `- ${line}`).join('\n')}`;
+}
+
+function isComputerUseApprovePrompt(prompt: string) {
+  return /^\/(?:computer-use|computer\s+use)\s+approve\b/i.test(prompt.trim());
+}
+
+function computerUseChatOrigin(request: GatewayRequest) {
+  if (request.handoffSource !== 'ui-chat') return undefined;
+  return compactRecord({
+    schemaVersion: 'sciforge.computer-use.chat-origin.v1',
+    handoffSource: request.handoffSource,
+    entrypoint: request.handoffSource === 'ui-chat' ? 'sciforge-chat' : undefined,
+    terminalEquivalentText: request.handoffSource === 'ui-chat',
+    selectedActionProvider: (request.selectedActionIds ?? []).includes(COMPUTER_USE_ACTION_PROVIDER_ID)
+      ? COMPUTER_USE_ACTION_PROVIDER_ID
+      : undefined,
+    selectedToolIds: request.selectedToolIds,
+  });
 }
 
 export function computerUseHostPortsContract(config: ComputerUseConfig) {
@@ -223,6 +314,108 @@ function computerUsePlannerAcceptanceContract(request: GatewayRequest): Record<s
   return Object.keys(contract).length > 2 ? contract : undefined;
 }
 
+function withComputerUseContinuationContract(
+  plannerAcceptanceContract: Record<string, unknown> | undefined,
+  continuationContract: Record<string, unknown> | undefined,
+) {
+  if (!continuationContract) return plannerAcceptanceContract;
+  return compactRecord({
+    schemaVersion: COMPUTER_USE_PLANNER_ACCEPTANCE_CONTRACT_SCHEMA,
+    source: plannerAcceptanceContract ? stringAt(plannerAcceptanceContract, 'source') : 'gateway-computer-use-continuation',
+    ...(plannerAcceptanceContract ?? {}),
+    computerUseContinuation: continuationContract,
+  });
+}
+
+function computerUseContinuationContract(request: GatewayRequest): Record<string, unknown> | undefined {
+  const references = computerUseContinuationReferenceRecords(request);
+  const promptRefs = refsFromText(request.prompt);
+  const blockedManifestRefs = uniqueStrings([
+    ...refsFromUnknown(references, sidecarRefKey('blocked-manifest.json', /blockedManifestRef/i)),
+    ...promptRefs.filter((ref) => ref.endsWith('blocked-manifest.json')),
+  ]);
+  const repairHintRefs = uniqueStrings([
+    ...refsFromUnknown(references, sidecarRefKey('repair-hint.json', /repairHintRef/i)),
+    ...promptRefs.filter((ref) => ref.endsWith('repair-hint.json')),
+  ]);
+  const continuationRequestRefs = uniqueStrings([
+    ...refsFromUnknown(references, sidecarRefKey('continuation-request.json', /continuationRequestRef/i)),
+    ...promptRefs.filter((ref) => ref.endsWith('continuation-request.json')),
+  ]);
+  const runTaskChainRefs = uniqueStrings([
+    ...refsFromUnknown(references, sidecarRefKey('tui-host-run-task-chain.json', /tuiHostRunTaskChainRef|runTaskChainRef/i)),
+    ...promptRefs.filter((ref) => ref.endsWith('tui-host-run-task-chain.json')),
+  ]);
+  const hasRefs = blockedManifestRefs.length > 0
+    || repairHintRefs.length > 0
+    || continuationRequestRefs.length > 0
+    || runTaskChainRefs.length > 0;
+  if (!hasRefs) return undefined;
+  const sidecars = compactRecord({
+    blockedManifest: continuationSidecarSummary(references, 'blocked-manifest.json'),
+    repairHint: continuationSidecarSummary(references, 'repair-hint.json'),
+    continuationRequest: continuationSidecarSummary(references, 'continuation-request.json'),
+  });
+  return compactRecord({
+    schemaVersion: 'sciforge.computer-use.continuation-context.v1',
+    source: 'gateway-request-references',
+    blockedManifestRefs,
+    repairHintRefs,
+    continuationRequestRefs,
+    runTaskChainRefs,
+    sidecars: Object.keys(sidecars).length ? sidecars : undefined,
+    requirements: [
+      'Reuse these prior repair refs only as bounded continuation context.',
+      'Use current compact observation and current-round Recent actions as execution truth.',
+      'Do not reopen or inspect sidecar files; use only this sanitized summary.',
+    ],
+  });
+}
+
+function computerUseContinuationReferenceRecords(request: GatewayRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  return [
+    ...recordList(request.references),
+    ...recordList(uiState.currentReferences),
+  ];
+}
+
+function continuationSidecarSummary(references: Record<string, unknown>[], filename: string) {
+  const reference = references.find((item) => {
+    const ref = stringAt(item, 'ref') ?? stringAt(recordAt(item, 'payload'), 'path');
+    return ref ? ref.endsWith(filename) : false;
+  });
+  if (!reference) return undefined;
+  const payload = recordAt(reference, 'payload');
+  const sidecar = recordAt(payload, 'sidecar')
+    ?? recordAt(payload, 'json')
+    ?? recordAt(payload, 'record')
+    ?? recordAt(reference, 'sidecar');
+  if (!sidecar) return undefined;
+  return compactRecord({
+    schemaVersion: stringAt(sidecar, 'schemaVersion'),
+    status: stringAt(sidecar, 'status'),
+    reason: stringAt(sidecar, 'reason'),
+    failedStage: stringAt(sidecar, 'failedStage'),
+    blockedManifestRef: stringAt(sidecar, 'blockedManifestRef'),
+    repairHintRef: stringAt(sidecar, 'repairHintRef'),
+    continuationRequestRef: stringAt(sidecar, 'continuationRequestRef'),
+    sameTraceSessionRef: stringAt(sidecar, 'sameTraceSessionRef'),
+    requestRef: stringAt(sidecar, 'requestRef'),
+    nextAttempt: continuationNextAttemptSummary(recordAt(sidecar, 'nextAttempt')),
+  });
+}
+
+function continuationNextAttemptSummary(nextAttempt: Record<string, unknown> | undefined) {
+  if (!nextAttempt) return undefined;
+  return compactRecord({
+    reuseTraceRef: stringAt(nextAttempt, 'reuseTraceRef'),
+    reuseRunTaskChainRef: stringAt(nextAttempt, 'reuseRunTaskChainRef'),
+    requireFreshObservation: nextAttempt.requireFreshObservation === true,
+    preserveInputIsolation: nextAttempt.preserveInputIsolation === true,
+  });
+}
+
 function computerUseApprovalRef(request: GatewayRequest) {
   return stringAt(request.humanApproval, 'approvalRef')
     ?? stringAt(request.humanApproval, 'decisionRef')
@@ -292,9 +485,39 @@ function computerUsePresentationSummary(result: Record<string, unknown>): Comput
   ]);
   const executionUnitRefs = uniqueStrings(recordIds(result.executionUnits));
   const workEvidenceRefs = uniqueStrings(recordIds(result.workEvidence));
+  const blockedManifestRefs = uniqueStrings(refsFromUnknown(result, sidecarRefKey('blocked-manifest.json', /blockedManifestRef/i)));
+  const repairHintRefs = uniqueStrings(refsFromUnknown(result, sidecarRefKey('repair-hint.json', /repairHintRef/i)));
+  const continuationRequestRefs = uniqueStrings(refsFromUnknown(result, sidecarRefKey('continuation-request.json', /continuationRequestRef/i)));
+  const directoryListingRefs = uniqueStrings(refsFromUnknown(result, sidecarRefKey('directory-listing.json', /directoryListingRef/i)));
+  const runTaskChainRefs = uniqueStrings(refsFromUnknown(result, sidecarRefKey('tui-host-run-task-chain.json', /tuiHostRunTaskChainRef|runTaskChainRef/i)));
+  const guiAskUserRefs = uniqueStrings(refsFromUnknown(result, sidecarRefKey('gui-ask-user.json', /guiAskUser(?:Record)?Ref/i)));
+  const approvalRequestRefs = uniqueStrings(refsFromUnknown(result, sidecarRefKey('approval-request.json', /approvalRequestRef/i)));
+  const riskAuditRefs = uniqueStrings(refsFromUnknown(result, sidecarRefKey('risk-audit.json', /riskAuditRef/i)));
+  const confirmedRequestRefs = uniqueStrings(refsFromUnknown(result, sidecarRefKey('confirmed-request.json', /confirmedRequestRef/i)));
+  const approvalDecisionRefs = uniqueStrings(refsFromUnknown(result, sidecarRefKey('approval-decision.json', /approvalDecisionRef/i)));
+  const sourceApprovalRefs = uniqueStrings([
+    ...refsFromUnknown(result, sidecarRefKey('approval-source-request.json', /sourceApprovalRequestRef/i)),
+    ...refsFromUnknown(result, sidecarRefKey('approval-source-gui-ask-user.json', /sourceGuiAskUser(?:Record)?Ref/i)),
+    ...refsFromUnknown(result, sidecarRefKey('approval-source-risk-audit.json', /sourceRiskAuditRef/i)),
+  ]);
   const status = stringAt(result, 'status') ?? firstExecutionUnitStatus(result.executionUnits);
   const message = stringAt(result, 'message');
-  const hasRefs = traceRefs.length > 0 || screenshotRefs.length > 0 || artifactRefs.length > 0 || executionUnitRefs.length > 0 || workEvidenceRefs.length > 0;
+  const hasRefs = traceRefs.length > 0
+    || screenshotRefs.length > 0
+    || artifactRefs.length > 0
+    || executionUnitRefs.length > 0
+    || workEvidenceRefs.length > 0
+    || blockedManifestRefs.length > 0
+    || repairHintRefs.length > 0
+    || continuationRequestRefs.length > 0
+    || directoryListingRefs.length > 0
+    || runTaskChainRefs.length > 0
+    || guiAskUserRefs.length > 0
+    || approvalRequestRefs.length > 0
+    || riskAuditRefs.length > 0
+    || confirmedRequestRefs.length > 0
+    || approvalDecisionRefs.length > 0
+    || sourceApprovalRefs.length > 0;
   if (!hasRefs && !status && !message) return undefined;
   return {
     title: 'Computer Use result',
@@ -305,6 +528,17 @@ function computerUsePresentationSummary(result: Record<string, unknown>): Comput
     artifactRefs,
     executionUnitRefs,
     workEvidenceRefs,
+    blockedManifestRefs,
+    repairHintRefs,
+    continuationRequestRefs,
+    directoryListingRefs,
+    runTaskChainRefs,
+    guiAskUserRefs,
+    approvalRequestRefs,
+    riskAuditRefs,
+    confirmedRequestRefs,
+    approvalDecisionRefs,
+    sourceApprovalRefs,
   };
 }
 
@@ -322,6 +556,17 @@ function summaryRefs(summary: ComputerUsePresentationSummary) {
     ...summary.artifactRefs,
     ...summary.executionUnitRefs,
     ...summary.workEvidenceRefs,
+    ...summary.blockedManifestRefs,
+    ...summary.repairHintRefs,
+    ...summary.continuationRequestRefs,
+    ...summary.directoryListingRefs,
+    ...summary.runTaskChainRefs,
+    ...summary.guiAskUserRefs,
+    ...summary.approvalRequestRefs,
+    ...summary.riskAuditRefs,
+    ...summary.confirmedRequestRefs,
+    ...summary.approvalDecisionRefs,
+    ...summary.sourceApprovalRefs,
   ]);
 }
 
@@ -332,6 +577,22 @@ function refsFromRecord(record: Record<string, unknown>, predicate: (key: string
     if (Array.isArray(value) && predicate(key)) refs.push(...toStringList(value).filter(looksLikeRef));
   }
   return refs;
+}
+
+function refsFromUnknown(value: unknown, predicate: (key: string, value?: string) => boolean, key = '', depth = 0): string[] {
+  if (depth > 6) return [];
+  if (typeof value === 'string') return predicate(key, value) && looksLikeRef(value) ? [value] : [];
+  if (Array.isArray(value)) return value.flatMap((item) => refsFromUnknown(item, predicate, key, depth + 1));
+  if (!isRecord(value)) return [];
+  return Object.entries(value).flatMap(([itemKey, item]) => refsFromUnknown(item, predicate, itemKey, depth + 1));
+}
+
+function refsFromText(value: string) {
+  return uniqueStrings(value.match(/(?:\.sciforge\/|\/)[^\s"')\]}<>]+/g) ?? []);
+}
+
+function sidecarRefKey(filename: string, keyPattern: RegExp) {
+  return (key: string, value?: string) => keyPattern.test(key) || (value ? value.endsWith(`/${filename}`) || value.endsWith(filename) : false);
 }
 
 function traceRefsFromArtifacts(value: unknown) {

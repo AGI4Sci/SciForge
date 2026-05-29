@@ -7,7 +7,11 @@ import {
 } from './cu-next-evidence-classification';
 import {
   cuNextCompletionClassificationInput,
+  cuNextCompletionGradeEvidenceIssues,
 } from '../../tools/computer-use-next/completion-grade.js';
+import { projectCuNextRuntimeArtifactPresentationEvidence } from '../../tools/computer-use-next/acceptance-projection.js';
+import { CU_NEXT_TASK_MAPPINGS } from '../../tools/computer-use-next/task-map.js';
+import { isolatedL3CompletionEvidence } from './helpers/cu-next-runner-fixtures.js';
 
 test('CU-NEXT classification keeps fixture and package-local evidence out of PROJECT completion', () => {
   const fixture = classifyCuNextEvidence({
@@ -71,6 +75,48 @@ test('CU-NEXT completion classification projects gui-present artifact claims wit
   const result = validateCuNextEvidenceForProjectCompletion(input, 'l3-workflow');
   assert.equal(result.ok, false);
   assert.ok(result.reasons.some((reason) => reason.includes('target-bound-real evidence')));
+});
+
+test('CU-NEXT presentation projection does not synthesize gui-present claims from mismatched finalArtifactRef', () => {
+  const projection = projectCuNextRuntimeArtifactPresentationEvidence({
+    finalArtifactRef: 'dense-grounding-export.csv',
+    guiPresentRecordRef: 'gui-present.json',
+    guiPresentRecords: [{
+      status: 'present',
+      recordRef: 'gui-present.json',
+      displayedRefs: ['other-artifact.csv'],
+      artifactRefs: ['other-artifact.csv'],
+    }],
+  });
+
+  assert.equal(projection.finalArtifactRef, 'dense-grounding-export.csv');
+  assert.equal(projection.guiPresentEvidenceClaim, undefined);
+});
+
+test('CU-NEXT completion-grade evidence requires gui-present claim artifactRefs to match finalArtifactRef', () => {
+  const mapping = CU_NEXT_TASK_MAPPINGS.find((candidate) => candidate.taskId === 'CU-NEXT-07');
+  assert.ok(mapping);
+  const finalArtifactRef = 'dense-grounding-export.csv';
+  const issues = cuNextCompletionGradeEvidenceIssues(
+    {
+      finalArtifactRef,
+      completionEvidenceRef: 'isolated-desktop-l3-workflow-evidence.json',
+      guiPresent: {
+        status: 'present',
+        recordRef: 'gui-present.json',
+        displayedRefs: [finalArtifactRef],
+      },
+      evidenceClaims: [{
+        kind: 'gui-present-record',
+        refs: ['gui-present.json'],
+        artifactRefs: ['other-artifact.csv'],
+      }],
+    },
+    mapping,
+    isolatedL3CompletionEvidence([finalArtifactRef]),
+  );
+
+  assert.ok(issues.some((issue) => issue.includes('gui-present-record evidence claim')));
 });
 
 test('CU-NEXT classification lets isolated L1 complete backend but not L3', () => {

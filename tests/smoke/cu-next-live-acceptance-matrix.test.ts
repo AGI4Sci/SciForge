@@ -47,9 +47,12 @@ test('CU-NEXT live acceptance semantic rules cover CU-NEXT-01..07 with task-spec
 });
 
 test('CU-NEXT live acceptance matrix accepts complete task-level semantic evidence markers', () => {
-  const results = validateCuNextLiveAcceptanceMatrix(
-    (Object.keys(expectedMarkerKinds) as CuNextTaskId[]).map((taskId) => liveAcceptanceInput(taskId)),
-  );
+  const inputs = (Object.keys(expectedMarkerKinds) as CuNextTaskId[]).map((taskId) => liveAcceptanceInput(taskId));
+  for (const input of inputs) {
+    assertHasSciForgeChatOriginProof(input.taskId, input.evidence);
+  }
+
+  const results = validateCuNextLiveAcceptanceMatrix(inputs);
 
   assert.deepEqual(results.map((result) => result.ok), [true, true, true, true, true, true, true]);
   assert.deepEqual(results.map((result) => result.markerKind), Object.values(expectedMarkerKinds));
@@ -60,6 +63,21 @@ test('CU-NEXT live acceptance matrix accepts complete task-level semantic eviden
     assert.equal(result.checks.disqualifiersClean, true, result.taskId);
     assert.equal(result.checks.taskMarker, true, result.taskId);
   }
+});
+
+test('CU-NEXT live acceptance rejects evidence without SciForge chat-origin proof', () => {
+  const evidence = withoutSciForgeChatOriginProof(liveAcceptanceEvidence('CU-NEXT-07'));
+
+  const result = validateCuNextLiveAcceptanceTaskEvidence({
+    taskId: 'CU-NEXT-07',
+    evidence,
+    refRecords: denseGroundingRefRecords('CU-NEXT-07'),
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.checks.requiredRefs, false);
+  assert.ok(hasIssue(result, 'missing-required-ref') || hasIssue(result, 'missing-required-evidence-claim'));
+  assert.match(result.issues.map((issue) => issue.reason).join('\n'), /chat-origin|SciForge chat/i);
 });
 
 test('CU-NEXT task marker projector emits validator-accepted markers for CU-NEXT-01..07', () => {
@@ -167,6 +185,24 @@ test('CU-NEXT live acceptance rejects fixture, dry-run, shared input, shell dire
   assert.ok(hasIssue(result, 'forbidden-shared-input'));
   assert.ok(hasIssue(result, 'forbidden-shell-direct-artifact-write'));
   assert.ok(hasIssue(result, 'forbidden-shortcut-substitute'));
+});
+
+test('CU-NEXT live acceptance rejects synthetic fixture origin strings', () => {
+  const evidence = liveAcceptanceEvidence('CU-NEXT-07', {
+    provenance: {
+      origin: 'synthetic-fixture',
+    },
+  });
+
+  const result = validateCuNextLiveAcceptanceTaskEvidence({
+    taskId: 'CU-NEXT-07',
+    evidence,
+    refRecords: denseGroundingRefRecords('CU-NEXT-07'),
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.checks.disqualifiersClean, false);
+  assert.ok(hasIssue(result, 'forbidden-fixture'));
 });
 
 test('CU-NEXT live acceptance requires structured task markers, not marker words in taskText', () => {
@@ -479,6 +515,13 @@ function liveAcceptanceEvidence(
       rejectedClaims: [],
     },
     tuiHostChain: [
+      {
+        id: 'chat-origin',
+        kind: 'sciForge-chat-origin',
+        status: 'present',
+        requestRef: ref(taskId, 'computer-use-request.json'),
+        origin: sciForgeChatOrigin(),
+      },
       {
         id: 'tui-host-runTask',
         kind: 'tui-host-runTask',
@@ -825,6 +868,15 @@ function isApprovalTask(taskId: CuNextTaskId): boolean {
 function commonEvidenceClaims(taskId: CuNextTaskId): Array<Record<string, unknown>> {
   return [
     {
+      id: 'chat-origin',
+      kind: 'sciForge-chat-origin',
+      status: 'present',
+      ref: ref(taskId, 'computer-use-request.json'),
+      refs: [ref(taskId, 'computer-use-request.json')],
+      origin: sciForgeChatOrigin(),
+      sessionRefs: [sessionRef(taskId)],
+    },
+    {
       id: 'real-computer-use-trace',
       kind: 'real-computer-use',
       ref: ref(taskId, 'vision-trace.json'),
@@ -846,6 +898,53 @@ function commonEvidenceClaims(taskId: CuNextTaskId): Array<Record<string, unknow
       sessionRefs: [sessionRef(taskId)],
     },
   ];
+}
+
+function sciForgeChatOrigin(): Record<string, unknown> {
+  return {
+    schemaVersion: 'sciforge.computer-use.chat-origin.v1',
+    handoffSource: 'ui-chat',
+    entrypoint: 'sciforge-chat',
+    terminalEquivalentText: true,
+    selectedActionProvider: 'action.sciforge.computer-use',
+    selectedToolIds: ['local.vision-sense'],
+  };
+}
+
+function assertHasSciForgeChatOriginProof(taskId: CuNextTaskId, evidence: unknown): void {
+  const record = evidence as Record<string, unknown>;
+  const tuiHostChain = Array.isArray(record.tuiHostChain)
+    ? record.tuiHostChain as Array<Record<string, unknown>>
+    : [];
+  const evidenceClaims = Array.isArray(record.evidenceClaims)
+    ? record.evidenceClaims as Array<Record<string, unknown>>
+    : [];
+
+  assert.ok(tuiHostChain.some((link) => (
+    link.kind === 'sciForge-chat-origin'
+    && link.status === 'present'
+    && link.requestRef === ref(taskId, 'computer-use-request.json')
+    && (link.origin as Record<string, unknown> | undefined)?.entrypoint === 'sciforge-chat'
+    && (link.origin as Record<string, unknown> | undefined)?.terminalEquivalentText === true
+  )), `${taskId}: accepted evidence must include present tuiHostChain SciForge chat-origin proof`);
+  assert.ok(evidenceClaims.some((claim) => (
+    claim.kind === 'sciForge-chat-origin'
+    && claim.status === 'present'
+    && Array.isArray(claim.refs)
+    && claim.refs.includes(ref(taskId, 'computer-use-request.json'))
+    && (claim.origin as Record<string, unknown> | undefined)?.entrypoint === 'sciforge-chat'
+    && (claim.origin as Record<string, unknown> | undefined)?.terminalEquivalentText === true
+  )), `${taskId}: accepted evidence must include SciForge chat-origin evidenceClaim`);
+}
+
+function withoutSciForgeChatOriginProof(evidence: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...evidence,
+    tuiHostChain: (Array.isArray(evidence.tuiHostChain) ? evidence.tuiHostChain : [])
+      .filter((link) => (link as Record<string, unknown>).kind !== 'sciForge-chat-origin'),
+    evidenceClaims: (Array.isArray(evidence.evidenceClaims) ? evidence.evidenceClaims : [])
+      .filter((claim) => (claim as Record<string, unknown>).kind !== 'sciForge-chat-origin'),
+  };
 }
 
 function mappingFor(taskId: CuNextTaskId): typeof CU_NEXT_TASK_MAPPINGS[number] {

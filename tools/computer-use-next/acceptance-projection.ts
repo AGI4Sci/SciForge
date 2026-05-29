@@ -76,7 +76,15 @@ export function projectCuNextRuntimeArtifactPresentationEvidence(
     ...artifactRefs,
     ...guiPresentRecords.flatMap(artifactRefsFromValue),
   ]).filter(isFinalArtifactEvidenceRef);
-  const guiPresentEvidenceClaim = input.guiPresentRecordRef && finalArtifactRef
+  const actualGuiPresentArtifactRefs = uniqueRefs(guiPresentRecords.flatMap(artifactRefsFromValue))
+    .filter(isFinalArtifactEvidenceRef);
+  const actualGuiPresentDisplayedRefs = uniqueRefs(guiPresentRecords.flatMap(displayedRefsFromValue));
+  const guiPresentCarriesFinalArtifact = finalArtifactRef
+    && (
+      actualGuiPresentArtifactRefs.includes(finalArtifactRef)
+      || actualGuiPresentDisplayedRefs.includes(finalArtifactRef)
+    );
+  const guiPresentEvidenceClaim = input.guiPresentRecordRef && finalArtifactRef && guiPresentCarriesFinalArtifact
     ? {
         id: 'gui-present-record',
         kind: 'gui-present-record',

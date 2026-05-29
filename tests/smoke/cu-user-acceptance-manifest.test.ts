@@ -94,6 +94,50 @@ test('CU-05 records single-app-artifact-passed only with required Computer Use r
   assert.deepEqual(manifest.blockedItems, []);
 });
 
+test('CU-05 preserves SciForge chat-origin chain and evidence claims', () => {
+  const runId = 'cu-05-chat-origin';
+  const chatOrigin = {
+    schemaVersion: 'sciforge.computer-use.chat-origin.v1',
+    handoffSource: 'ui-chat',
+    entrypoint: 'sciforge-chat',
+    terminalEquivalentText: true,
+    selectedActionProvider: 'action.sciforge.computer-use',
+  };
+  const manifest = buildCuUserAcceptanceManifest({
+    ...validSingleAppPassInput(runId),
+    tuiHostChain: [
+      {
+        id: 'chat-origin',
+        kind: 'sciForge-chat-origin',
+        status: 'present',
+        requestRef: `.sciforge/vision-runs/${runId}/computer-use-request.json`,
+        origin: chatOrigin,
+      },
+      ...requiredHostChain(runId),
+    ],
+    evidenceClaims: [
+      {
+        id: 'chat-origin',
+        kind: 'sciForge-chat-origin',
+        status: 'present',
+        ref: `.sciforge/vision-runs/${runId}/computer-use-request.json`,
+        refs: [`.sciforge/vision-runs/${runId}/computer-use-request.json`],
+        origin: chatOrigin,
+        sessionRefs: [`computer-use-session:${runId}`],
+      },
+      ...(validSingleAppPassInput(runId).evidenceClaims ?? []),
+    ],
+  });
+
+  assert.equal(manifest.status, 'single-app-artifact-passed');
+  const chainLink = manifest.tuiHostChain.find((link) => link.kind === 'sciForge-chat-origin');
+  assert.equal(chainLink?.status, 'present');
+  assert.deepEqual(chainLink?.origin, chatOrigin);
+  const claim = manifest.evidenceClaims.find((item) => item.kind === 'sciForge-chat-origin');
+  assert.equal(claim?.status, 'present');
+  assert.deepEqual(claim?.origin, chatOrigin);
+});
+
 test('CU-05 records multi-app-workflow-passed only with app switch trace and matching verifier verdict', () => {
   const manifest = buildCuUserAcceptanceManifest(validMultiAppPassInput());
 

@@ -1,5 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readLocalProviderSettings } from './local-provider-config.js';
 
 export type ProxyCliOptions = {
   host: string;
@@ -21,7 +20,7 @@ export function resolveProxyCliOptions(
     return index >= 0 ? args[index + 1] : undefined;
   };
   const configPath = get('--config') ?? env.SCIFORGE_CONFIG_PATH ?? 'config.local.json';
-  const local = readLocalProxyConfig(configPath);
+  const local = readLocalProviderSettings(configPath);
   const apiKeyEnv = get('--api-key-env') ?? env.SCIFORGE_PROXY_API_KEY_ENV ?? 'SCIFORGE_RUNTIME_API_KEY';
   const apiKeyFromEnv = stringValue(env[apiKeyEnv]);
   const apiKeyFromLocal = stringValue(local.apiKey);
@@ -29,7 +28,7 @@ export function resolveProxyCliOptions(
   const upstreamBaseUrl = normalizeOpenAiCompatibleBaseUrl(
     get('--upstream-base-url')
     ?? env.SCIFORGE_PROXY_UPSTREAM_BASE_URL
-    ?? stringValue(local.upstreamBaseUrl)
+    ?? stringValue(local.baseUrl)
     ?? '',
   );
 
@@ -39,47 +38,12 @@ export function resolveProxyCliOptions(
     upstreamBaseUrl,
     upstreamApiKey,
     upstreamKeySource: apiKeyFromEnv ? apiKeyEnv : apiKeyFromLocal ? local.apiKeySource : undefined,
-    defaultModel: get('--default-model') ?? env.SCIFORGE_PROXY_DEFAULT_MODEL ?? stringValue(local.defaultModel),
+    defaultModel: get('--default-model') ?? env.SCIFORGE_PROXY_DEFAULT_MODEL ?? stringValue(local.model),
     forceNonStreamingUpstream: args.includes('--force-non-streaming-upstream')
       || env.SCIFORGE_PROXY_FORCE_NON_STREAMING_UPSTREAM === '1'
       || local.forceNonStreamingUpstream === true,
     quiet: args.includes('--quiet') || env.SCIFORGE_PROXY_QUIET === '1',
   };
-}
-
-function readLocalProxyConfig(path: string) {
-  const configPath = resolve(path);
-  if (!existsSync(configPath)) return {};
-  try {
-    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as unknown;
-    const root = isRecord(parsed) ? parsed : {};
-    const codexProxy = isRecord(root.codexProxy)
-      ? root.codexProxy
-      : isRecord(root.runtimeCodexProxy)
-        ? root.runtimeCodexProxy
-        : {};
-    const llm = isRecord(root.llm) ? root.llm : {};
-    const upstreamBaseUrl = stringValue(llm.baseUrl)
-      ?? stringValue(llm.upstreamBaseUrl)
-      ?? stringValue(codexProxy.upstreamBaseUrl)
-      ?? stringValue(codexProxy.baseUrl);
-    const llmApiKey = stringValue(llm.apiKey) ?? stringValue(llm.upstreamApiKey);
-    const codexProxyApiKey = stringValue(codexProxy.apiKey);
-    const defaultModel = stringValue(llm.model)
-      ?? stringValue(llm.modelName)
-      ?? stringValue(llm.defaultModel)
-      ?? stringValue(codexProxy.defaultModel)
-      ?? stringValue(codexProxy.model);
-    return {
-      upstreamBaseUrl,
-      apiKey: llmApiKey ?? codexProxyApiKey,
-      apiKeySource: llmApiKey ? `${configPath}:llm.apiKey` : codexProxyApiKey ? `${configPath}:codexProxy.apiKey` : undefined,
-      defaultModel,
-      forceNonStreamingUpstream: codexProxy.forceNonStreamingUpstream === true,
-    };
-  } catch {
-    return {};
-  }
 }
 
 function normalizeOpenAiCompatibleBaseUrl(value: string) {
@@ -96,8 +60,4 @@ function normalizeOpenAiCompatibleBaseUrl(value: string) {
 
 function stringValue(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

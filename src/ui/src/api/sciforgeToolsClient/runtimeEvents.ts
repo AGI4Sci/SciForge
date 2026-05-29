@@ -271,8 +271,21 @@ function withGuiPresentRuntimeResult(result: unknown, guiPresent: Record<string,
   if (!presentation.text.trim()) return result;
   const output = isRecord(result.output) ? result.output : {};
   const commandId = asString(result.commandId) ?? asString(guiPresent.commandId);
-  const auditRefs = asStringArray(result.evidenceRefs) ?? asStringArray(guiPresent.evidenceRefs) ?? [];
+  const auditRefs = uniqueStrings([
+    ...(asStringArray(result.evidenceRefs) ?? []),
+    ...(asStringArray(guiPresent.evidenceRefs) ?? []),
+    ...(presentation.displayedRefs ?? []),
+  ]);
   const runtimeMetadata = runtimeMetadataForProjection(guiPresent, auditRefs);
+  const artifactRefs = uniqueStrings([
+    ...(presentation.ref ? [presentation.ref] : []),
+    ...(presentation.displayedRefs ?? []),
+  ]);
+  const artifacts = artifactRefs.map((ref) => ({
+    ref,
+    label: ref === presentation.ref ? (presentation.title ?? refLabel(ref)) : refLabel(ref),
+    mime: ref === presentation.ref ? (presentation.hint ?? refMime(ref)) : refMime(ref),
+  }));
   return {
     ...result,
     message: presentation.text,
@@ -285,20 +298,16 @@ function withGuiPresentRuntimeResult(result: unknown, guiPresent: Record<string,
         visibleAnswer: {
           status: visibleAnswerStatusForGuiPresent(presentation),
           text: presentation.text,
-          artifactRefs: presentation.ref ? [presentation.ref] : [],
+          artifactRefs,
         },
-        artifacts: presentation.ref ? [{
-          ref: presentation.ref,
-          label: presentation.title ?? presentation.ref,
-          mime: presentation.hint ?? 'markdown',
-        }] : [],
+        artifacts,
         executionProcess: [{
           eventId: `${commandId ?? 'runtime-codex'}:gui-present`,
           type: 'GuiPresent',
           summary: `Runtime Codex rendered completion through ${presentation.source}.`,
           timestamp: asString(result.timestamp) ?? new Date().toISOString(),
         }],
-        recoverActions: [],
+        recoverActions: recoverActionsForGuiPresentation(presentation),
         verificationState: { status: 'unverified', verifierRef: presentation.source },
         runtimeMetadata,
         auditRefs,
@@ -590,7 +599,7 @@ function guiEventsFromComputerUseTuiHostActions(event: Record<string, unknown>):
             source: commandId ? `gui.present:${commandId}:computer-use` : 'gui.present:computer-use',
             text: summary.text,
             intent: 'show-result',
-            ref: summary.displayedRefs[0],
+            ref: summary.primaryRef,
             displayedRefs: summary.displayedRefs,
             title: asString(payload.title) ?? 'Computer Use result',
             status: asString(payload.status),
@@ -622,31 +631,100 @@ function guiEventsFromComputerUseTuiHostActions(event: Record<string, unknown>):
 }
 
 function computerUseSummaryFromPresentationPayload(payload: Record<string, unknown>) {
+  const artifactRefs = asStringArray(payload.artifactRefs) ?? [];
+  const blockedManifestRefs = asStringArray(payload.blockedManifestRefs) ?? [];
+  const repairHintRefs = asStringArray(payload.repairHintRefs) ?? [];
+  const continuationRequestRefs = asStringArray(payload.continuationRequestRefs) ?? [];
+  const directoryListingRefs = asStringArray(payload.directoryListingRefs) ?? [];
+  const runTaskChainRefs = asStringArray(payload.runTaskChainRefs) ?? [];
+  const guiAskUserRefs = asStringArray(payload.guiAskUserRefs) ?? [];
+  const approvalRequestRefs = asStringArray(payload.approvalRequestRefs) ?? [];
+  const riskAuditRefs = asStringArray(payload.riskAuditRefs) ?? [];
+  const confirmedRequestRefs = asStringArray(payload.confirmedRequestRefs) ?? [];
+  const approvalDecisionRefs = asStringArray(payload.approvalDecisionRefs) ?? [];
+  const sourceApprovalRefs = asStringArray(payload.sourceApprovalRefs) ?? [];
+  const completionGradeDiagnosticRefs = uniqueStrings([
+    ...(asStringArray(payload.completionGradeDiagnosticRefs) ?? []),
+    ...artifactRefs.filter((ref) => /(?:^|\/)completion-grade-diagnostics\.json$/i.test(ref)),
+  ]);
+  const producerDiagnosticRefs = uniqueStrings([
+    ...(asStringArray(payload.producerDiagnosticRefs) ?? []),
+    ...(asStringArray(payload.completionProducerDiagnosticRefs) ?? []),
+    ...artifactRefs.filter((ref) => /(?:^|\/)embedded-l3-completion-producer-diagnostics\.json$/i.test(ref)),
+  ]);
+  const acceptanceManifestRefs = uniqueStrings([
+    ...(asStringArray(payload.acceptanceManifestRefs) ?? []),
+    ...artifactRefs.filter((ref) => /(?:^|\/)cu-user-acceptance-manifest\.json$/i.test(ref)),
+  ]);
+  const completionEvidenceRefs = uniqueStrings([
+    ...(asStringArray(payload.completionEvidenceRefs) ?? []),
+    ...artifactRefs.filter((ref) => /(?:^|\/)isolated-desktop-l3-workflow-evidence\.json$/i.test(ref)),
+  ]);
+  const finalArtifactRefs = artifactRefs.filter((ref) => !isComputerUseControlEvidenceRef(ref));
   const displayedRefs = uniqueStrings([
     ...(asStringArray(payload.traceRefs) ?? []),
     ...(asStringArray(payload.screenshotRefs) ?? []),
-    ...(asStringArray(payload.artifactRefs) ?? []),
+    ...artifactRefs,
     ...(asStringArray(payload.executionUnitRefs) ?? []),
     ...(asStringArray(payload.workEvidenceRefs) ?? []),
+    ...blockedManifestRefs,
+    ...repairHintRefs,
+    ...continuationRequestRefs,
+    ...directoryListingRefs,
+    ...runTaskChainRefs,
+    ...guiAskUserRefs,
+    ...approvalRequestRefs,
+    ...riskAuditRefs,
+    ...confirmedRequestRefs,
+    ...approvalDecisionRefs,
+    ...sourceApprovalRefs,
+    ...completionGradeDiagnosticRefs,
+    ...producerDiagnosticRefs,
+    ...acceptanceManifestRefs,
+    ...completionEvidenceRefs,
   ]);
+  const completedWithoutFinalArtifact = /^(?:completed|done|succeeded|success)$/i.test(asString(payload.status) ?? '')
+    && finalArtifactRefs.length === 0;
   const lines = [
     '## Computer Use result',
     asString(payload.status) ? `Status: \`${asString(payload.status)}\`` : undefined,
     asString(payload.message),
+    completedWithoutFinalArtifact
+      ? 'Completion diagnostic: completed status did not include a visible final artifact ref, so completion remains fail-closed.'
+      : undefined,
+    finalArtifactRefs.length ? ['Final artifact refs:', ...finalArtifactRefs.map((ref) => `- \`${ref}\``)].join('\n') : undefined,
+    completionGradeDiagnosticRefs.length ? ['Completion-grade diagnostic refs:', ...completionGradeDiagnosticRefs.map((ref) => `- \`${ref}\``)].join('\n') : undefined,
+    producerDiagnosticRefs.length ? ['L3 producer diagnostic refs:', ...producerDiagnosticRefs.map((ref) => `- \`${ref}\``)].join('\n') : undefined,
+    acceptanceManifestRefs.length ? ['Acceptance manifest refs:', ...acceptanceManifestRefs.map((ref) => `- \`${ref}\``)].join('\n') : undefined,
+    completionEvidenceRefs.length ? ['Canonical L3 evidence refs:', ...completionEvidenceRefs.map((ref) => `- \`${ref}\``)].join('\n') : undefined,
+    blockedManifestRefs.length ? ['Blocked manifest refs:', ...blockedManifestRefs.map((ref) => `- \`${ref}\``)].join('\n') : undefined,
+    repairHintRefs.length ? ['Repair hint refs:', ...repairHintRefs.map((ref) => `- \`${ref}\``)].join('\n') : undefined,
+    continuationRequestRefs.length ? ['Continuation request refs:', ...continuationRequestRefs.map((ref) => `- \`${ref}\``)].join('\n') : undefined,
+    directoryListingRefs.length ? ['Directory listing refs:', ...directoryListingRefs.map((ref) => `- \`${ref}\``)].join('\n') : undefined,
+    runTaskChainRefs.length ? ['Run task chain refs:', ...runTaskChainRefs.map((ref) => `- \`${ref}\``)].join('\n') : undefined,
+    approvalRequestRefs.length ? ['Approval request refs:', ...approvalRequestRefs.map((ref) => `- \`${ref}\``)].join('\n') : undefined,
+    riskAuditRefs.length ? ['Risk audit refs:', ...riskAuditRefs.map((ref) => `- \`${ref}\``)].join('\n') : undefined,
+    confirmedRequestRefs.length ? ['Confirmed request refs:', ...confirmedRequestRefs.map((ref) => `- \`${ref}\``)].join('\n') : undefined,
+    approvalDecisionRefs.length ? ['Approval decision refs:', ...approvalDecisionRefs.map((ref) => `- \`${ref}\``)].join('\n') : undefined,
+    sourceApprovalRefs.length ? ['Source approval refs:', ...sourceApprovalRefs.map((ref) => `- \`${ref}\``)].join('\n') : undefined,
     displayedRefs.length ? ['Evidence refs:', ...displayedRefs.map((ref) => `- \`${ref}\``)].join('\n') : undefined,
   ].filter(Boolean);
   return {
     text: lines.join('\n\n'),
+    primaryRef: finalArtifactRefs[0] ?? artifactRefs[0] ?? displayedRefs[0],
     displayedRefs,
   };
+}
+
+function isComputerUseControlEvidenceRef(ref: string) {
+  return /(?:^|\/)(?:vision-trace|host-ports|tool-payload|gui-present|gui-ask-user|approval-request|approval-source-request|approval-source-gui-ask-user|approval-source-risk-audit|approval-decision|risk-audit|confirmed-request|blocked-manifest|repair-hint|continuation-request|directory-listing|tui-host-run-task-chain|computer-use-request|gateway-request|request|independent-input-adapter|virtual-remote-session|action-ledger|failure-diagnostics|completion-grade-diagnostics|embedded-l3-completion-producer-diagnostics|cu-user-acceptance|cu-l3-independent-input-verifier|isolated-desktop-l3-workflow-evidence)\.json$/i.test(ref)
+    || /^(?:artifact|audit|workEvidence|EU):/i.test(ref);
 }
 
 function computerUseAskUserFromAction(payload: Record<string, unknown>) {
   const approvalRequest = isRecord(payload.approvalRequest) ? payload.approvalRequest : {};
   const relatedRefs = uniqueStrings(asStringArray(payload.relatedRefs) ?? []);
-  const approvalId = asString(approvalRequest.id)
-    ?? asString(approvalRequest.approvalRef)
-    ?? asString(approvalRequest.approval_ref);
+  const approvalId = approvalRefFromRequest(approvalRequest);
   const choices = approvalId ? [
     { label: 'Approve', commandText: `/computer-use approve --approval-ref ${quoteCommandArg(approvalId)}`, style: 'primary' },
     { label: 'Cancel', commandText: `/computer-use reject --approval-ref ${quoteCommandArg(approvalId)}`, style: 'secondary' },
@@ -680,9 +758,7 @@ function formatGuiAskUserText(input: {
   const risk = asString(input.approvalRequest?.riskLevel)
     ?? asString(input.approvalRequest?.risk_level)
     ?? asString(input.approvalRequest?.risk);
-  const approvalRef = asString(input.approvalRequest?.id)
-    ?? asString(input.approvalRequest?.approvalRef)
-    ?? asString(input.approvalRequest?.approval_ref);
+  const approvalRef = approvalRefFromRequest(input.approvalRequest);
   const actionRef = asString(input.approvalRequest?.actionRef)
     ?? asString(input.approvalRequest?.action_ref);
   const actionKind = asString(input.approvalRequest?.actionKind)
@@ -698,6 +774,23 @@ function formatGuiAskUserText(input: {
     input.choices?.length ? ['Choices:', ...input.choices.map((choice) => `- ${choice.label}: \`${choice.commandText}\``)].join('\n') : undefined,
   ].filter(Boolean);
   return lines.join('\n\n');
+}
+
+function approvalRefFromRequest(approvalRequest?: Record<string, unknown>) {
+  return asString(approvalRequest?.approvalRef)
+    ?? asString(approvalRequest?.approval_ref)
+    ?? asString(approvalRequest?.id);
+}
+
+function recoverActionsForGuiPresentation(presentation: { source?: string; status?: string; displayedRefs?: string[] }) {
+  if (!isComputerUseGuiPresentation(presentation)) return [];
+  const status = visibleAnswerStatusForGuiPresent(presentation);
+  if (status !== 'external-blocked' && status !== 'repair-needed') return [];
+  const continuationRef = presentation.displayedRefs?.find((ref) => /(?:^|\/)continuation-request\.json$/i.test(ref));
+  if (continuationRef) return [`/computer-use continue --continuation-request-ref ${quoteCommandArg(continuationRef)}`];
+  const repairHintRef = presentation.displayedRefs?.find((ref) => /(?:^|\/)repair-hint\.json$/i.test(ref));
+  if (repairHintRef) return [`/computer-use repair --repair-hint-ref ${quoteCommandArg(repairHintRef)}`];
+  return ['Review the Computer Use evidence refs and rerun from the latest repair hint.'];
 }
 
 function visibleAnswerStatusForGuiPresent(presentation: { source?: string; status?: string }) {

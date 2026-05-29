@@ -1,89 +1,67 @@
-import { spawn } from 'node:child_process';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { delimiter, join, resolve } from 'node:path';
+import { mkdir } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 
 import type { GatewayRequest, ToolPayload, WorkspaceRuntimeCallbacks } from '../runtime-types.js';
 import { isRecord } from '../gateway-utils.js';
 import type { AgentCliAdapter } from '../codex/agent-cli-adapter.js';
 import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
-import { groundingForAction, normalizeGenericActionRisk, normalizePlatformAction } from './actions.js';
+import { normalizePlatformAction } from './actions.js';
 import {
-  captureDisplays,
   createFocusedCropRefs,
-  extractVisibleTextsFromScreenshotRefs,
-  pixelDiffForScreenshotSets,
-  toTraceScreenshotRef,
 } from './capture.js';
-import { executeGenericDesktopAction, executorBoundary } from './executor.js';
 import {
-  executeIndependentInputAdapterAction,
-  hasExecutableIndependentInputAdapter,
-  independentInputAdapterExecutionBoundary,
-} from './independent-input-adapter.js';
-import {
-  collectVirtualRemoteSessionArtifacts,
-  collectVirtualRemoteSessionVisibleTexts,
-  readVirtualRemoteSessionState,
   type VirtualRemoteVisibleArtifact,
 } from './virtual-remote-session.js';
 import type { ComputerUseConfig, FocusRegion, GenericVisionAction, LoopStep, ScreenshotRef, WindowTargetResolution } from './types.js';
-import { sanitizeId, workspaceRel } from './utils.js';
+import { sanitizeId } from './utils.js';
 import {
-  inputChannelContract,
-  inputChannelDescription,
   resolveWindowTarget,
-  schedulerRunMetadata,
-  schedulerStepMetadata,
-  stepInputChannelMetadata,
   toTraceWindowTarget,
-  windowTargetTraceConfig,
 } from './window-target.js';
 import {
-  COMPUTER_USE_ACTION_PROVIDER_ID,
-  type ComputerUseTuiHostAction,
-  computerUseHostPortsContract,
-  computerUseResultToTuiHostActions,
-  gatewayRequestToComputerUseRequest,
-} from './host-adapter.js';
-import {
-  isFinalArtifactEvidenceRef,
-  tuiHostRunTaskChainPath,
+  attachPackageBridgeCompletionGradeWorkEvidence,
+  materializePackageBridgeCompletionGradeEvidence,
   writePackageBridgeEvidenceFiles,
 } from './package-bridge-evidence.js';
 import {
-  visionSenseRuntimeEventTypes,
-  visionSenseTraceContractPolicy,
-  visionSenseTraceIds,
-} from '../../../packages/observe/vision/computer-use-runtime-policy.js';
+  promotePackageResultFinalArtifactRefs,
+} from './package-bridge-final-artifacts.js';
 import {
-  computerUseActionObservationContextBlockReason,
-  computerUseVisibleArtifactGapReason,
-} from '../../../packages/actions/computer-use/runtime-policy.js';
+  maybeProducePackageBridgeL3CompletionEvidence,
+  type PackageBridgeL3CompletionProducer,
+} from './package-bridge-l3.js';
+import {
+  materializePackageBridgeRunTaskInvocation,
+  materializePackageBridgeRuntimeSelectionDetail,
+} from './package-bridge-request.js';
+import { materializePackageBridgeResult } from './package-bridge-result.js';
+import {
+  type HostPortCall,
+} from './package-bridge-stdio.js';
+import { dispatchPackageBridgeHostPortCall } from './package-bridge-host-ports.js';
+import { runComputerUsePackageProcess } from './package-bridge-process.js';
+import { attachPackageResultHostActions } from './package-bridge-presentation.js';
+import { packagePlanToGenericAction } from './package-bridge-action-conversion.js';
+import { capturePackageBridgePort } from './package-bridge-capture-port.js';
+import {
+  executePackageBridgePort,
+} from './package-bridge-execute-port.js';
+import { planPackageBridgePort } from './package-bridge-plan-port.js';
+import { emitPackageBridgeEventPort } from './package-bridge-trace-port.js';
+import { writePackageBridgeTracePort } from './package-bridge-write-trace-port.js';
+import {
+  visionSenseRuntimeEventTypes,
+} from '../../../packages/observe/vision/computer-use-runtime-policy.js';
 import {
   genericLoopPayload,
   VISION_TOOL_ID,
   writeGenericLoopPayloadValidationRepairAuditSink,
 } from '../vision-sense/computer-use-trace-output.js';
 import {
-  bindWindowTargetFromOpenAppAction,
-  localCoordinateMetadata,
-  mappedCoordinateMetadata,
-  windowConsistencyMetadata,
-  windowLifecycleTrace,
-} from '../vision-sense/computer-use-window-session.js';
+  writePackageBridgeTrace,
+} from './package-bridge-trace.js';
 import { buildFocusRegionFromVisionSense, refineActionGroundingWithFocusRegion, resolveActionGrounding } from '../vision-sense/computer-use-grounding.js';
-import { actionLedgerCompletion, appendPlannerStep, nextPlannerActions } from '../vision-sense/computer-use-plan.js';
-
-const HOST_PORT_RESULT_SCHEMA = 'sciforge.computer-use.host-port-result.v1';
-const PACKAGE_BRIDGE_TRACE_SCHEMA = 'sciforge.computer-use.package-bridge-trace.v1';
-
-type HostPortCall = {
-  type: 'hostPortCall';
-  id: string;
-  port: string;
-  args?: unknown[];
-  kwargs?: Record<string, unknown>;
-};
+import { verifyPackageBridgePort } from './package-bridge-verify-port.js';
 
 type PackageBridgeState = {
   runId: string;
@@ -112,6 +90,7 @@ type PackageBridgeState = {
 
 export type ComputerUsePackageBridgeOptions = {
   codexPlannerAdapter?: AgentCliAdapter;
+  l3CompletionProducer?: PackageBridgeL3CompletionProducer;
 };
 
 let codexPlannerAdapterForTests: AgentCliAdapter | undefined;
@@ -153,9 +132,7 @@ export async function runComputerUsePackageBridge(
     missingPlannerAfterCaptured: false,
     visibleArtifacts: [],
   };
-  const actionProviderRequest = normalizePackageBridgeApprovalRequest(
-    gatewayRequestToComputerUseRequest(request, config, workspace),
-  );
+  const packageInvocation = materializePackageBridgeRunTaskInvocation(request, config, workspace);
 
   emitWorkspaceRuntimeEvent(callbacks, {
     type: visionSenseRuntimeEventTypes.runtimeSelected,
@@ -163,15 +140,12 @@ export async function runComputerUsePackageBridge(
     toolName: VISION_TOOL_ID,
     status: 'running',
     message: 'Calling Computer Use package run_task through TUI Host stdio host ports.',
-    detail: JSON.stringify({
-      actionProviderRequest,
-      hostPorts: computerUseHostPortsContract(config),
-      bridge: 'python-package-stdio-host-ports',
+    detail: JSON.stringify(materializePackageBridgeRuntimeSelectionDetail(packageInvocation, {
       runId,
       testActionFixtureMode: config.testActionFixtureMode,
       testOnlyPlannedActions: fixtureActions.length,
       planner: state.dynamicPlannerEnabled ? 'runtime-codex-tui-text-planner' : 'test-only-fixture-actions',
-    }),
+    })),
   });
 
   if (!state.targetResolution.ok) {
@@ -192,6 +166,7 @@ export async function runComputerUsePackageBridge(
       config,
       state,
       request,
+      actionProviderRequest: packageInvocation.request,
       packageResult,
     });
     const payload = genericLoopPayload({
@@ -208,9 +183,9 @@ export async function runComputerUsePackageBridge(
       desktopPlatform: config.desktopPlatform,
       createdAt: new Date().toISOString(),
     });
-    const tuiHostActions = attachPackageResultHostActions(payload, packageResult, callbacks);
+    const tuiHostActions = attachPackageResultHostActions(payload, packageResult, callbacks, { workspace, state, toolName: VISION_TOOL_ID });
     await writePackageBridgeEvidenceFiles({
-      actionProviderRequest,
+      actionProviderRequest: packageInvocation.request,
       config,
       packageResult,
       payload,
@@ -222,83 +197,83 @@ export async function runComputerUsePackageBridge(
     return payload;
   }
 
-  const rawPackageResult = await runPythonPackageTask(actionProviderRequest, {
+  const rawPackageResult = await runPythonPackageTask(packageInvocation.request, {
     workspace,
     config,
     callbacks,
     state,
     codexPlannerAdapter: options.codexPlannerAdapter ?? codexPlannerAdapterForTests,
   });
-  const packageResult = withFinalVisibleArtifactGuard(rawPackageResult, request, state);
+  promotePackageResultFinalArtifactRefs(rawPackageResult, workspace, state);
+  const materializedResult = materializePackageBridgeResult({
+    packageResult: rawPackageResult,
+    task: request.prompt,
+    executedActions: state.executedActions,
+    visibleArtifacts: state.visibleArtifacts,
+    screenshotLedger: state.screenshotLedger,
+  });
+  const { packageResult } = materializedResult;
   const tracePath = await writePackageBridgeTrace({
     workspace,
     config,
     state,
     request,
+    actionProviderRequest: packageInvocation.request,
     packageResult,
   });
-  const status = stringAt(packageResult, 'status');
-  const succeeded = status === 'completed';
-  const failureReason = succeeded ? '' : packageBridgeFailureReason(packageResult, status);
-  const finalVisibleArtifact = finalVisibleArtifactForTrace(state.visibleArtifacts);
-  const finalArtifactRef = finalVisibleArtifact?.artifactRef;
-  const finalVisibleScreenshotRef = finalWindowScreenshotRef(state.screenshotLedger);
   const payload = genericLoopPayload({
     request,
     workspace,
     runId,
     tracePath,
     screenshotRefs: state.screenshotLedger,
-    status: succeeded ? 'done' : 'failed-with-reason',
-    failureReason,
+    status: materializedResult.payloadStatus,
+    failureReason: materializedResult.failureReason,
     actionCount: numberAt(recordAt(packageResult, 'metrics')?.actionCount) ?? state.executedActions.length,
     maxSteps: config.maxSteps,
     dryRun: config.dryRun,
     desktopPlatform: config.desktopPlatform,
     windowTarget: state.targetResolution.ok ? toTraceWindowTarget(state.targetResolution) : undefined,
     visibleArtifacts: state.visibleArtifacts,
-    finalArtifactRef,
-    finalArtifactRefs: finalArtifactRef ? [finalArtifactRef] : [],
-    finalVisibleScreenshotRef,
+    finalArtifactRef: materializedResult.finalArtifactRef,
+    finalArtifactRefs: materializedResult.finalArtifactRefs,
+    finalVisibleScreenshotRef: materializedResult.finalVisibleScreenshotRef,
     createdAt: new Date().toISOString(),
   });
-  const tuiHostActions = attachPackageResultHostActions(payload, packageResult, callbacks);
-  await writePackageBridgeEvidenceFiles({
-    actionProviderRequest,
+  const l3CompletionProduction = await maybeProducePackageBridgeL3CompletionEvidence({
     config,
+    defaultProducerOptIn: packageInvocation.completionProducerOptIn,
+    finalArtifactRef: materializedResult.finalArtifactRef,
+    packageResult,
+    producer: options.l3CompletionProducer,
+    state,
+    workspace,
+  });
+  const completionGrade = await materializePackageBridgeCompletionGradeEvidence({
+    actionProviderRequest: packageInvocation.request,
+    config,
+    packageResult,
+    payload,
+    producerDiagnosticRef: l3CompletionProduction.producerDiagnosticRef,
+    state,
+    workspace,
+  });
+  attachPackageBridgeCompletionGradeWorkEvidence(payload, completionGrade);
+  const tuiHostActions = attachPackageResultHostActions(payload, packageResult, callbacks, { workspace, state, toolName: VISION_TOOL_ID });
+  await writePackageBridgeEvidenceFiles({
+    actionProviderRequest: packageInvocation.request,
+    config,
+    completionGrade,
     packageResult,
     payload,
     state,
     workspace,
     tuiHostActions,
   });
-  if (!succeeded) {
+  if (!materializedResult.succeeded) {
     await writeGenericLoopPayloadValidationRepairAuditSink(payload, { workspacePath: workspace });
   }
   return payload;
-}
-
-function withFinalVisibleArtifactGuard(
-  packageResult: Record<string, unknown>,
-  request: GatewayRequest,
-  state: PackageBridgeState,
-): Record<string, unknown> {
-  if (stringAt(packageResult, 'status') !== 'completed') return packageResult;
-  const finalGap = computerUseVisibleArtifactGapReason(request.prompt, state.executedActions, { finalAttempt: true });
-  if (!finalGap) return packageResult;
-  if (finalVisibleArtifactForTrace(state.visibleArtifacts)) {
-    return packageResult;
-  }
-  return {
-    ...packageResult,
-    status: 'failed-with-reason',
-    reason: finalGap,
-    failureDiagnostics: {
-      ...recordAt(packageResult, 'failureDiagnostics'),
-      failedStage: 'visible-artifact-final-guard',
-      reason: finalGap,
-    },
-  };
 }
 
 async function runPythonPackageTask(
@@ -311,123 +286,12 @@ async function runPythonPackageTask(
     codexPlannerAdapter?: AgentCliAdapter;
   },
 ): Promise<Record<string, unknown>> {
-  const packageDir = resolve('packages/actions/computer-use');
-  const python = process.env.SCIFORGE_COMPUTER_USE_PACKAGE_PYTHON
-    || process.env.SCIFORGE_VISION_SENSE_PYTHON
-    || 'python3';
-  const child = spawn(python, [
-    '-m',
-    'sciforge_computer_use',
-    '--request-json',
-    JSON.stringify(actionProviderRequest),
-    '--host-port-stdio',
-  ], {
-    cwd: packageDir,
-    env: {
-      ...process.env,
-      PYTHONPATH: [packageDir, process.env.PYTHONPATH].filter(Boolean).join(delimiter),
-    },
-    stdio: ['pipe', 'pipe', 'pipe'],
+  // The stdio process runner is the bridge to packages/actions/computer-use (sciforge_computer_use).
+  return runComputerUsePackageProcess({
+    actionProviderRequest,
+    callbacks: context.callbacks,
+    handleHostPortCall: (call) => handleHostPortCall(call, context),
   });
-
-  let stdoutBuffer = '';
-  let stderr = '';
-  let finalResult: Record<string, unknown> | undefined;
-  const pending = new Set<Promise<void>>();
-  let aborted = false;
-  let abortReason = '';
-  const runtimeAbortReason = () => {
-    const reason = context.callbacks.signal?.reason;
-    if (reason instanceof Error && reason.message.trim()) return reason.message.trim();
-    if (typeof reason === 'string' && reason.trim()) return reason.trim();
-    return '';
-  };
-  const abortPackageProcess = () => {
-    aborted = true;
-    const reason = runtimeAbortReason();
-    abortReason = reason
-      ? `Computer Use package bridge aborted by workspace runtime signal: ${reason}.`
-      : 'Computer Use package bridge aborted by workspace runtime signal.';
-    if (!child.killed) child.kill('SIGTERM');
-    setTimeout(() => {
-      if (!child.killed) child.kill('SIGKILL');
-    }, 500).unref?.();
-  };
-  if (context.callbacks.signal?.aborted) {
-    abortPackageProcess();
-  } else {
-    context.callbacks.signal?.addEventListener('abort', abortPackageProcess, { once: true });
-  }
-
-  const handleLine = (line: string) => {
-    if (!line.trim()) return;
-    let message: unknown;
-    try {
-      message = JSON.parse(line) as unknown;
-    } catch {
-      stderr = [stderr, `Non-JSON stdout from Computer Use package: ${line}`].filter(Boolean).join('\n');
-      return;
-    }
-    if (!isRecord(message)) return;
-    if (message.type === 'hostPortCall') {
-      const task = handleHostPortCall(message as HostPortCall, context)
-        .then((result) => writeHostPortResult(child, String(message.id), true, result))
-        .catch((error) => writeHostPortResult(child, String(message.id), false, undefined, error instanceof Error ? error.message : String(error)))
-        .finally(() => pending.delete(task));
-      pending.add(task);
-      return;
-    }
-    if (message.type === 'finalResult' && isRecord(message.result)) {
-      finalResult = message.result;
-    }
-  };
-
-  child.stdout.on('data', (chunk) => {
-    stdoutBuffer += String(chunk);
-    const lines = stdoutBuffer.split(/\r?\n/);
-    stdoutBuffer = lines.pop() ?? '';
-    for (const line of lines) handleLine(line);
-  });
-  child.stderr.on('data', (chunk) => {
-    stderr += String(chunk);
-  });
-
-  const close = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolveClose) => {
-    child.on('close', (code, signal) => resolveClose({ code, signal }));
-    child.on('error', (error) => {
-      stderr = [stderr, error.message].filter(Boolean).join('\n');
-      resolveClose({ code: 127, signal: null });
-    });
-  }).finally(() => {
-    context.callbacks.signal?.removeEventListener('abort', abortPackageProcess);
-  });
-  if (stdoutBuffer.trim()) handleLine(stdoutBuffer);
-  if (pending.size) {
-    if (aborted) {
-      await Promise.race([
-        Promise.allSettled([...pending]),
-        new Promise((resolvePending) => setTimeout(resolvePending, 1_500)),
-      ]);
-    } else {
-      await Promise.allSettled([...pending]);
-    }
-  }
-  if (finalResult) return finalResult;
-  return {
-    schemaVersion: 'sciforge.computer-use.result.v1',
-    status: 'failed-with-reason',
-    reason: [
-      aborted ? abortReason : undefined,
-      'Computer Use package process exited without finalResult.',
-      `exitCode=${close.code ?? 'signal'}`,
-      close.signal ? `signal=${close.signal}` : undefined,
-      stderr.trim() || undefined,
-    ].filter(Boolean).join(' '),
-    message: stderr.trim(),
-    failureDiagnostics: { failedStage: 'package-bridge', stderr: stderr.trim() },
-    traceRefs: [],
-    metrics: {},
-  };
 }
 
 async function handleHostPortCall(
@@ -440,165 +304,24 @@ async function handleHostPortCall(
     codexPlannerAdapter?: AgentCliAdapter;
   },
 ): Promise<unknown> {
-  if (context.callbacks.signal?.aborted) {
-    throw new Error('Computer Use host port call aborted by workspace runtime signal.');
-  }
-  switch (call.port) {
-    case 'capture':
-      return capturePort(call, context);
-    case 'plan':
-      return planPort(call, context);
-    case 'locate':
-      return locatePort(call, context);
-    case 'execute':
-      return executePort(call, context);
-    case 'verify':
-      return verifyPort(call, context);
-    case 'writeTrace':
-      return writeTracePort(call, context);
-    case 'emitEvent':
-      return emitEventPort(call, context);
-    default:
-      throw new Error(`Unsupported Computer Use host port: ${call.port}`);
-  }
-}
-
-async function capturePort(
-  call: HostPortCall,
-  context: {
-    workspace: string;
-    config: ComputerUseConfig;
-    state: PackageBridgeState;
-  },
-) {
-  const { workspace, config, state } = context;
-  const query = typeof call.kwargs?.query === 'string' ? call.kwargs.query : undefined;
-  const historyLength = Array.isArray(call.args?.[1]) ? call.args[1].length : 0;
-  state.targetResolution = await resolveWindowTarget(config);
-  const isMissingPlannerInitialCapture = state.captureIndex === 0 && !query && state.actionQueue.length === 0;
-  state.captureIndex += 1;
-  const prefix = isMissingPlannerInitialCapture
-    ? 'step-000-before'
-    : `step-${String(historyLength + 1).padStart(3, '0')}-${query === 'after-action' ? 'after' : 'before'}`;
-  const refs = await captureDisplays(workspace, state.runDir, prefix, config, state.targetResolution);
-  state.screenshotLedger.push(...refs);
-  const visibleTextExtraction = await extractVisibleTextsFromScreenshotRefs(refs, config);
-  const virtualSession = hasExecutableIndependentInputAdapter(config)
-    ? await readVirtualRemoteSessionState(state.runDir)
-    : undefined;
-  const virtualVisibleTexts = collectVirtualRemoteSessionVisibleTexts(virtualSession);
-  const virtualArtifacts = collectVirtualRemoteSessionArtifacts(virtualSession);
-  if (virtualSession) state.virtualRemoteSessionRef = workspaceRel(workspace, join(state.runDir, 'virtual-remote-session.json'));
-  state.visibleArtifacts = mergeVisibleArtifacts(state.visibleArtifacts, virtualArtifacts);
-  const visibleTexts = uniqueStrings([
-    ...visibleTextExtraction.visibleTexts,
-    ...virtualVisibleTexts,
-  ]);
-  const primary = refs[0];
-  const observation = {
-    ref: primary?.path ?? workspaceRel(workspace, join(state.runDir, `${prefix}.png`)),
-    summary: [
-      `Captured ${refs.length} screenshot ref(s) for ${query ?? 'before-action'}.`,
-      state.targetResolution.ok ? `target=${state.targetResolution.captureKind}:${state.targetResolution.source}` : state.targetResolution.reason,
-      visibleTexts.length
-        ? `visibleText=${visibleTexts.slice(0, 8).join(' | ')}`
-        : undefined,
-      virtualArtifacts.length
-        ? `visibleArtifacts=${virtualArtifacts.map((artifact) => artifact.artifactRef).join(' | ')}`
-        : undefined,
-    ].filter(Boolean).join(' '),
-    visibleTexts,
-    windowTarget: state.targetResolution.ok ? toTraceWindowTarget(state.targetResolution) : undefined,
-    artifacts: {
-      screenshotRefs: refs.map(toTraceScreenshotRef),
-      virtualRemoteSessionRef: state.virtualRemoteSessionRef,
-      visibleArtifactRefs: virtualArtifacts.map((artifact) => artifact.artifactRef),
-      visibleArtifacts: virtualArtifacts,
+  return dispatchPackageBridgeHostPortCall(call, {
+    callbacks: context.callbacks,
+    handlers: {
+      capture: (hostPortCall) => capturePackageBridgePort(hostPortCall, context),
+      plan: (hostPortCall) => planPackageBridgePort(hostPortCall, context),
+      locate: (hostPortCall) => locatePort(hostPortCall, context),
+      execute: (hostPortCall) => executePackageBridgePort(hostPortCall, {
+        ...context,
+        packagePlanToGenericAction,
+      }),
+      verify: (hostPortCall) => verifyPackageBridgePort(hostPortCall, {
+        ...context,
+        packagePlanToGenericAction,
+      }),
+      writeTrace: (hostPortCall) => writePackageBridgeTracePort(hostPortCall, context),
+      emitEvent: (hostPortCall) => emitEventPort(hostPortCall, context),
     },
-    metadata: {
-      query,
-      screenshotRefs: refs.map(toTraceScreenshotRef),
-      visibleTexts,
-      visibleTextExtractionDiagnostics: visibleTextExtraction.diagnostics,
-      virtualRemoteSessionRef: state.virtualRemoteSessionRef,
-      visibleArtifactRefs: virtualArtifacts.map((artifact) => artifact.artifactRef),
-    },
-  };
-  state.captureRefsByObservationRef.set(observation.ref, refs);
-  state.latestObservation = observation;
-  return observation;
-}
-
-async function planPort(
-  call: HostPortCall,
-  context: { workspace: string; config: ComputerUseConfig; callbacks: WorkspaceRuntimeCallbacks; state: PackageBridgeState; codexPlannerAdapter?: AgentCliAdapter },
-) {
-  const { workspace, config, state } = context;
-  if (!state.actionQueue.length && state.dynamicPlannerEnabled && !state.plannerReportedDone) {
-    const requestArg = recordArg(call, 0);
-    const plannerAcceptanceContract = recordAt(recordAt(requestArg, 'metadata'), 'plannerAcceptanceContract');
-    state.plannerAcceptanceContract = plannerAcceptanceContract;
-    const observation = recordArg(call, 1);
-    state.latestObservation = observation;
-    const observationRefs = state.captureRefsByObservationRef.get(stringAt(observation, 'ref') ?? '') ?? state.screenshotLedger.slice(-Math.max(1, config.captureDisplays.length));
-    const stepIndex = state.executedActions.length;
-    const plannerStepId = stepIndex === 0
-      ? 'step-000-plan'
-      : `step-${String(stepIndex).padStart(3, '0')}-replan`;
-    const historyLength = state.visionHistorySteps.length;
-    const planned = await appendPlannerStep({
-      id: plannerStepId,
-      task: stringAt(requestArg, 'task') ?? '',
-      observation,
-      plannerAcceptanceContract,
-      screenshotRefs: observationRefs,
-      steps: state.visionHistorySteps,
-      config,
-      workspace,
-      codexPlannerAdapter: context.codexPlannerAdapter,
-      abortSignal: context.callbacks.signal,
-    });
-    const newPlannerSteps = state.visionHistorySteps
-      .slice(historyLength)
-      .filter((step) => step.kind === 'planning');
-    state.plannerTraceSteps.push(...newPlannerSteps);
-    state.plannerReportedDone = planned.done;
-    if (!planned.ok) {
-      state.activeAction = undefined;
-      return { done: false, reason: planned.reason };
-    } else if (planned.done) {
-      state.activeAction = undefined;
-      return { done: true, reason: planned.reason || 'Codex text planner reported task done.' };
-    } else {
-      state.actionQueue.push(...nextPlannerActions(planned.actions, config.maxSteps - state.executedActions.length));
-    }
-  }
-  const next = state.actionQueue.shift();
-  if (!next) {
-    state.activeAction = undefined;
-    if (!state.missingPlannerAfterCaptured) {
-      state.targetResolution = await resolveWindowTarget(config);
-      const refs = await captureDisplays(workspace, state.runDir, 'step-000-after', config, state.targetResolution);
-      state.screenshotLedger.push(...refs);
-      const primary = refs[0];
-      if (primary) state.captureRefsByObservationRef.set(primary.path, refs);
-      state.missingPlannerAfterCaptured = true;
-    }
-    return {
-      done: false,
-      reason: state.dynamicPlannerEnabled
-        ? [
-            'Generic Computer Use loop is active, but the Runtime Codex text planner emitted no action.',
-            'SciForge must provide a Runtime Codex planner plus Grounder that emits generic visible GUI actions.',
-          ].join(' ')
-        : [
-            'Computer Use test-only fixture action queue is exhausted.',
-            'Production planning must use the Runtime Codex TUI text planner host port.',
-          ].join(' '),
-    };
-  }
-  state.activeAction = normalizePlatformAction(next, config);
-  return genericActionToPackagePlan(state.activeAction);
+  });
 }
 
 async function locatePort(
@@ -662,1011 +385,15 @@ async function locatePort(
   };
 }
 
-async function executePort(
-  call: HostPortCall,
-  context: { workspace: string; config: ComputerUseConfig; state: PackageBridgeState },
-) {
-  const { workspace, config, state } = context;
-  const action = packagePlanToGenericAction(recordArg(call, 0), state.activeAction, recordArg(call, 1));
-  const requestArg = recordArg(call, 2);
-  state.activeAction = action;
-  const observationSummary = stringAt(state.latestObservation, 'summary');
-  const visibleTexts = [
-    ...stringList(state.latestObservation?.visibleTexts),
-    ...stringList(recordAt(state.latestObservation, 'metadata')?.visibleTexts),
-  ];
-  const contextBlockReason = computerUseActionObservationContextBlockReason({
-    actionType: action.type,
-    text: action.type === 'type_text' ? action.text : undefined,
-    targetDescription: action.targetDescription,
-    targetRegionDescription: action.targetRegionDescription,
-    targetAppName: state.targetResolution.ok ? state.targetResolution.appName : undefined,
-    targetTitle: state.targetResolution.ok ? state.targetResolution.title : undefined,
-    observationSummary,
-    visibleTexts,
-    visibleTextExtractionEnabled: Boolean(config.visibleTextExtraction?.enabled),
-  });
-  if (contextBlockReason) {
-    return {
-      ok: false,
-      message: contextBlockReason,
-      blocked: true,
-      metadata: {
-        executor: config.dryRun ? 'dry-run-generic-gui-executor' : executorBoundary(config),
-        exitCode: 125,
-        stderr: contextBlockReason,
-        inputChannel: inputChannelDescription(config, state.targetResolution),
-        windowTarget: state.targetResolution.ok ? toTraceWindowTarget(state.targetResolution) : undefined,
-      },
-    };
-  }
-  const result = config.dryRun
-    ? { exitCode: 0, stdout: 'dry-run package bridge', stderr: '' }
-    : hasExecutableIndependentInputAdapter(config)
-      ? await executeIndependentInputAdapterAction(action, config, state.targetResolution, {
-          workspace,
-          runDir: state.runDir,
-          stepIndex: state.executedActions.length,
-          taskText: computerUseArtifactIntentText(requestArg),
-        })
-      : await executeGenericDesktopAction(action, config, state.targetResolution);
-  state.executedActions.push(action);
-  if (result.exitCode === 0 && !hasExecutableIndependentInputAdapter(config)) {
-    bindWindowTargetFromOpenAppAction(config, action);
-  }
-  const rawIndependentAdapterMetadata = (result as { independentInputAdapter?: unknown }).independentInputAdapter;
-  const independentAdapterMetadata = isRecord(rawIndependentAdapterMetadata)
-    ? rawIndependentAdapterMetadata
-    : undefined;
-  const virtualArtifacts = recordList(independentAdapterMetadata?.visibleArtifacts).filter(isVirtualRemoteVisibleArtifact);
-  state.visibleArtifacts = mergeVisibleArtifacts(state.visibleArtifacts, virtualArtifacts);
-  const virtualRemoteSessionRef = stringAt(independentAdapterMetadata, 'virtualRemoteSessionRef');
-  if (virtualRemoteSessionRef) state.virtualRemoteSessionRef = virtualRemoteSessionRef;
-  return {
-    ok: result.exitCode === 0,
-    message: result.stderr || result.stdout || `exitCode=${result.exitCode}`,
-    blocked: result.exitCode !== 0,
-    metadata: {
-      executor: config.dryRun ? 'dry-run-generic-gui-executor' : independentInputAdapterExecutionBoundary(config) ?? executorBoundary(config),
-      exitCode: result.exitCode,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      inputChannel: inputChannelDescription(config, state.targetResolution),
-      windowTarget: state.targetResolution.ok ? toTraceWindowTarget(state.targetResolution) : undefined,
-      schedulerLease: isRecord((result as { schedulerLease?: unknown }).schedulerLease) ? (result as { schedulerLease?: unknown }).schedulerLease : undefined,
-      independentInputAdapter: independentAdapterMetadata,
-      virtualRemoteSessionRef: state.virtualRemoteSessionRef,
-      visibleArtifactRefs: state.visibleArtifacts.map((artifact) => artifact.artifactRef),
-      visibleArtifacts: state.visibleArtifacts,
-    },
-  };
-}
-
-function computerUseArtifactIntentText(request: Record<string, unknown>) {
-  const metadata = recordAt(request, 'metadata');
-  return [
-    stringAt(request, 'task'),
-    stringAt(request, 'text'),
-    metadata ? JSON.stringify(recordAt(metadata, 'plannerAcceptanceContract') ?? {}) : '',
-  ].filter((value) => value && value.trim()).join('\n');
-}
-
-async function verifyPort(
-  call: HostPortCall,
-  context: { workspace: string; config: ComputerUseConfig; state: PackageBridgeState },
-) {
-  const { workspace, config, state } = context;
-  const request = recordArg(call, 0);
-  const plannerAcceptanceContract = recordAt(recordAt(request, 'metadata'), 'plannerAcceptanceContract') ?? state.plannerAcceptanceContract;
-  const before = recordArg(call, 1);
-  const after = recordArg(call, 2);
-  const action = packagePlanToGenericAction(recordArg(call, 3), state.activeAction);
-  const execution = recordArg(call, 4);
-  const beforeObservationRef = stringAt(before, 'ref') ?? '';
-  const beforeRefs = state.captureRefsByObservationRef.get(beforeObservationRef) ?? [];
-  const afterRefs = state.captureRefsByObservationRef.get(stringAt(after, 'ref') ?? '') ?? [];
-  const focusRegion = state.focusRegionByObservationRef.get(beforeObservationRef);
-  if (focusRegion && afterRefs.length && !state.afterFocusRefsByObservationRef.has(beforeObservationRef)) {
-    const stepNumber = String(state.executedActions.length).padStart(3, '0');
-    const afterFocusRefs = await createFocusedCropRefs(workspace, state.runDir, `step-${stepNumber}-after`, afterRefs, focusRegion, config);
-    state.screenshotLedger.push(...afterFocusRefs);
-    state.afterFocusRefsByObservationRef.set(beforeObservationRef, afterFocusRefs);
-  }
-  const beforeFocusRefs = state.beforeFocusRefsByObservationRef.get(beforeObservationRef) ?? [];
-  const afterFocusRefs = state.afterFocusRefsByObservationRef.get(beforeObservationRef) ?? [];
-  const executionOk = execution.ok !== false;
-  const artifactIntentText = computerUseArtifactIntentText(request);
-  const artifactGap = computerUseVisibleArtifactGapReason(artifactIntentText, state.executedActions);
-  const pixelDiff = pixelDiffForScreenshotSets(beforeRefs, afterRefs);
-  const focusPixelDiff = beforeFocusRefs.length && afterFocusRefs.length
-    ? pixelDiffForScreenshotSets(beforeFocusRefs, afterFocusRefs)
-    : undefined;
-  const windowConsistency = windowConsistencyMetadata(beforeRefs, afterRefs, config);
-  const historyGrounding = groundingForAction(action) ?? {};
-  const historyStatus = executionOk ? 'done' : 'failed';
-  const planningFeedback = packageVerifierPlanningFeedback(action, historyGrounding, pixelDiff, windowConsistency, historyStatus);
-  const regionSemantic = packageRegionSemanticVerifier(action, historyGrounding, pixelDiff, historyStatus);
-  const executionMetadata = recordAt(execution, 'metadata');
-  const executorLease = isRecord(executionMetadata?.schedulerLease) ? executionMetadata.schedulerLease : undefined;
-  const visualFocus = focusRegion ? {
-    ...visionSenseTraceContractPolicy.visualFocus,
-    region: focusRegion,
-    beforeFocusScreenshotRefs: beforeFocusRefs.map(toTraceScreenshotRef),
-    afterFocusScreenshotRefs: afterFocusRefs.map(toTraceScreenshotRef),
-    pixelDiff: focusPixelDiff,
-    fineGrounding: isRecord(historyGrounding.fineGrounding) ? historyGrounding.fineGrounding : undefined,
-  } : undefined;
-  const pushHistoryStep = (verification: Record<string, unknown>) => {
-    const stepNumber = String(state.executedActions.length).padStart(3, '0');
-    state.visionHistorySteps.push({
-      id: `step-${stepNumber}-execute-${action.type}`,
-      kind: 'gui-execution',
-      status: executionOk ? 'done' : 'failed',
-      beforeScreenshotRefs: beforeRefs.map(toTraceScreenshotRef),
-      afterScreenshotRefs: afterRefs.map(toTraceScreenshotRef),
-      plannedAction: action,
-      grounding: historyGrounding,
-      visualFocus,
-      execution: {
-        executor: config.dryRun ? 'dry-run-generic-gui-executor' : independentInputAdapterExecutionBoundary(config) ?? executorBoundary(config),
-        inputChannel: inputChannelDescription(config, state.targetResolution),
-        windowTarget: state.targetResolution.ok ? toTraceWindowTarget(state.targetResolution) : undefined,
-        status: executionOk ? 'done' : 'failed',
-        exitCode: numberAt(executionMetadata?.exitCode) ?? (executionOk ? 0 : 1),
-        stdout: stringAt(executionMetadata, 'stdout'),
-        stderr: stringAt(executionMetadata, 'stderr'),
-        schedulerLease: executorLease,
-        independentInputAdapter: executionMetadata?.independentInputAdapter,
-      },
-      scheduler: {
-        ...schedulerStepMetadata(state.targetResolution, `step-${stepNumber}`, config),
-        executorLease,
-      },
-      verifier: {
-        status: executionOk ? 'checked' : 'skipped-after-execution-failure',
-        method: 'computer-use-package-host-port-verifier',
-        reason: stringAt(verification, 'reason'),
-        pixelDiff,
-        focusRegionPixelDiff: focusPixelDiff,
-        windowConsistency,
-        regionSemantic,
-        planningFeedback,
-      },
-      failureReason: executionOk ? undefined : stringAt(execution, 'message') || 'Computer Use package bridge executor failed.',
-    });
-  };
-  if (executionOk && artifactGap) {
-    const verification = {
-      ok: false,
-      done: false,
-      reason: artifactGap,
-      changed: false,
-      metadata: {
-        method: 'package-bridge-visible-artifact-policy',
-        pixelDiff,
-        focusRegionPixelDiff: focusPixelDiff,
-        visualFocus,
-      },
-    };
-    pushHistoryStep(verification);
-    return verification;
-  }
-  let ledgerCompletion: Awaited<ReturnType<typeof actionLedgerCompletion>> | undefined;
-  if (executionOk) {
-    ledgerCompletion = await actionLedgerCompletion(artifactIntentText, [
-      ...state.visionHistorySteps,
-      {
-        id: `step-${String(state.executedActions.length).padStart(3, '0')}-execute-${action.type}`,
-        kind: 'gui-execution',
-        status: 'done',
-        plannedAction: action,
-        verifier: {
-          status: 'checked',
-          pixelDiff,
-          focusRegionPixelDiff: focusPixelDiff,
-          windowConsistency,
-          planningFeedback,
-          regionSemantic,
-          visualFocus,
-        },
-      },
-    ]);
-  }
-  const ledgerCompletionQuotaIssue = ledgerCompletion?.complete
-    ? packageBridgeLedgerCompletionQuotaIssue(plannerAcceptanceContract, state.executedActions, config.maxSteps)
-    : undefined;
-  const ledgerCompletionArtifactIssue = ledgerCompletion?.complete && !ledgerCompletionQuotaIssue && !finalVisibleArtifactForTrace(state.visibleArtifacts)
-    ? computerUseVisibleArtifactGapReason(artifactIntentText, state.executedActions, { finalAttempt: true })
-    : undefined;
-  const ledgerCompletionAccepted = Boolean(ledgerCompletion?.complete && !ledgerCompletionQuotaIssue && !ledgerCompletionArtifactIssue);
-  if (ledgerCompletionAccepted) {
-    state.actionQueue.length = 0;
-    state.plannerReportedDone = true;
-  }
-  const fixtureQueueExhaustedArtifactGap = executionOk && !state.dynamicPlannerEnabled && state.actionQueue.length === 0 && !ledgerCompletionAccepted
-    ? computerUseVisibleArtifactGapReason(artifactIntentText, state.executedActions, { finalAttempt: true })
-    : '';
-  if (fixtureQueueExhaustedArtifactGap) {
-    const verification = {
-      ok: false,
-      done: false,
-      reason: fixtureQueueExhaustedArtifactGap,
-      changed: false,
-      metadata: {
-        method: 'package-bridge-visible-artifact-policy',
-        pixelDiff,
-        focusRegionPixelDiff: focusPixelDiff,
-        visualFocus,
-        finalAttempt: true,
-      },
-    };
-    pushHistoryStep(verification);
-    return verification;
-  }
-  const done = executionOk && (ledgerCompletionAccepted || (!state.dynamicPlannerEnabled && (state.actionQueue.length === 0 || (
-    config.completionPolicy?.mode === 'one-successful-non-wait-action' && action.type !== 'wait'
-  ))));
-  const verification = {
-    ok: executionOk,
-    done,
-    reason: executionOk
-      ? ledgerCompletionQuotaIssue
-        ? ledgerCompletionQuotaIssue
-        : ledgerCompletionArtifactIssue
-        ? ledgerCompletionArtifactIssue
-        : ledgerCompletionAccepted
-        ? ledgerCompletion?.reason || 'action-ledger completion policy satisfied'
-        : done
-        ? 'Computer Use package bridge verifier accepted final action.'
-        : 'Computer Use package bridge verifier accepted action; more actions remain.'
-      : stringAt(execution, 'message') || 'Computer Use package bridge executor failed.',
-    changed: pixelDiff.possiblyNoEffect === false,
-    metadata: {
-      method: 'host-port-screenshot-ledger',
-      pixelDiff,
-      focusRegionPixelDiff: focusPixelDiff,
-      regionSemantic,
-      planningFeedback,
-      visualFocus,
-      ledgerCompletion: ledgerCompletion?.complete ? ledgerCompletion : undefined,
-      ledgerCompletionQuotaIssue,
-      ledgerCompletionArtifactIssue,
-      beforeScreenshotRefs: beforeRefs.map(toTraceScreenshotRef),
-      afterScreenshotRefs: afterRefs.map(toTraceScreenshotRef),
-      queuedActionsRemaining: state.actionQueue.length,
-    },
-  };
-  pushHistoryStep(verification);
-  return verification;
-}
-
-async function writeTracePort(
-  call: HostPortCall,
-  context: {
-    workspace: string;
-    config: ComputerUseConfig;
-    callbacks: WorkspaceRuntimeCallbacks;
-    state: PackageBridgeState;
-  },
-) {
-  const packageResult = recordArg(call, 0);
-  return workspaceRel(context.workspace, await writePackageBridgeTrace({
-    ...context,
-    request: undefined,
-    packageResult,
-  }));
-}
-
 function emitEventPort(
   call: HostPortCall,
   context: { callbacks: WorkspaceRuntimeCallbacks },
 ) {
-  const event = recordArg(call, 0);
-  emitWorkspaceRuntimeEvent(context.callbacks, {
-    type: stringAt(event, 'type') ?? 'computer-use.package.event',
-    source: 'computer-use-package-bridge',
-    toolName: VISION_TOOL_ID,
-    status: stringAt(event, 'status') ?? 'running',
-    message: stringAt(event, 'reason') ?? stringAt(event, 'task') ?? stringAt(event, 'type'),
-    detail: JSON.stringify(event),
-  });
-  return { ok: true };
-}
-
-async function writePackageBridgeTrace(params: {
-  workspace: string;
-  config: ComputerUseConfig;
-  state: PackageBridgeState;
-  request?: GatewayRequest;
-  packageResult: Record<string, unknown>;
-}) {
-  const tracePath = join(params.state.runDir, 'vision-trace.json');
-  params.state.tracePath = tracePath;
-  const finalVisibleArtifact = finalVisibleArtifactForTrace(params.state.visibleArtifacts);
-  const finalArtifactRef = finalVisibleArtifact?.artifactRef;
-  const finalVisibleScreenshotRef = finalWindowScreenshotRef(params.state.screenshotLedger);
-  const trace = {
-    schemaVersion: visionSenseTraceIds.traceSchema,
-    runId: params.state.runId,
-    tool: VISION_TOOL_ID,
-    runtime: visionSenseTraceIds.workspaceRuntime,
-    packageBridge: {
-      schemaVersion: PACKAGE_BRIDGE_TRACE_SCHEMA,
-      runtime: 'sciforge.workspace-runtime.computer-use-package-bridge',
-      actionProvider: COMPUTER_USE_ACTION_PROVIDER_ID,
-      hostPortProtocol: 'stdio-jsonl',
-      tuiHostRunTaskChainRef: workspaceRel(params.workspace, tuiHostRunTaskChainPath(params.state.runDir)),
-    },
-    actionProvider: COMPUTER_USE_ACTION_PROVIDER_ID,
-    executionBoundary: params.config.dryRun ? 'dry-run-generic-gui-executor' : independentInputAdapterExecutionBoundary(params.config) ?? executorBoundary(params.config),
-    createdAt: new Date().toISOString(),
-    completedAt: new Date().toISOString(),
-    request: params.request ? packageBridgeTraceRequest(params.request, params.config, params.workspace) : undefined,
-    artifactRefs: params.state.visibleArtifacts.map((artifact) => artifact.artifactRef),
-    finalArtifactRef,
-    finalVisibleScreenshotRef,
-    cuUserAcceptance: finalArtifactRef || finalVisibleScreenshotRef ? {
-      finalArtifactRef,
-      finalVisibleScreenshotRef,
-      visibleArtifactRefs: params.state.visibleArtifacts.map((artifact) => artifact.artifactRef),
-    } : undefined,
-    config: {
-      captureDisplays: params.config.captureDisplays,
-      desktopPlatform: params.config.desktopPlatform,
-      windowTarget: params.state.targetResolution.ok
-        ? toTraceWindowTarget(params.state.targetResolution)
-        : {
-            ...windowTargetTraceConfig(params.state.targetResolution.target),
-            status: 'unresolved',
-            diagnostics: params.state.targetResolution.diagnostics,
-          },
-      outputDir: workspaceRel(params.workspace, params.state.runDir),
-      maxSteps: params.config.maxSteps,
-      dryRun: params.config.dryRun,
-      allowHighRiskActions: params.config.allowHighRiskActions,
-      schedulerLockTimeoutMs: params.config.schedulerLockTimeoutMs,
-      schedulerStaleLockMs: params.config.schedulerStaleLockMs,
-      inputAdapter: params.config.inputAdapter,
-      independentInputAdapterProvider: params.config.independentInputAdapterProvider,
-      allowSharedSystemInput: params.config.allowSharedSystemInput,
-      showVisualCursor: params.config.showVisualCursor,
-      completionPolicy: params.config.completionPolicy,
-      visibleTextExtraction: params.config.visibleTextExtraction,
-      testActionFixtureMode: params.config.testActionFixtureMode,
-      testOnlyPlannedActionCount: params.config.testActionFixtureMode ? params.config.testOnlyPlannedActions.length : 0,
-    },
-    hostPorts: computerUseHostPortsContract(params.config),
-    imageMemory: {
-      ...visionSenseTraceContractPolicy.imageMemory,
-      refs: params.state.screenshotLedger.map(toTraceScreenshotRef),
-    },
-    virtualRemoteSession: params.state.virtualRemoteSessionRef ? {
-      schemaVersion: 'sciforge.computer-use.virtual-remote-session-trace.v1',
-      sessionRef: params.state.virtualRemoteSessionRef,
-      visibleArtifactRefs: params.state.visibleArtifacts.map((artifact) => artifact.artifactRef),
-      visibleArtifacts: params.state.visibleArtifacts,
-    } : undefined,
-    genericComputerUse: {
-        actionSchema: visionSenseTraceContractPolicy.genericActionSchema,
-        actionProvider: COMPUTER_USE_ACTION_PROVIDER_ID,
-      hostPorts: computerUseHostPortsContract(params.config),
-      appSpecificShortcuts: visionSenseTraceContractPolicy.appSpecificShortcuts,
-      inputChannel: inputChannelDescription(params.config, params.state.targetResolution),
-      inputChannelContract: inputChannelContract(params.config, params.state.targetResolution),
-      coordinateContract: visionSenseTraceContractPolicy.coordinateContract(
-        params.state.targetResolution.ok ? params.state.targetResolution.coordinateSpace : params.config.windowTarget.coordinateSpace,
-      ),
-      verifierContract: visionSenseTraceContractPolicy.verifierContract,
-      inputIsolation: params.state.targetResolution.ok ? params.state.targetResolution.inputIsolation : params.config.windowTarget.inputIsolation,
-      requires: visionSenseTraceContractPolicy.requires,
-    },
-    windowLifecycle: windowLifecycleTrace(
-      params.state.targetResolution.ok
-        ? toTraceWindowTarget(params.state.targetResolution)
-        : {
-            ...windowTargetTraceConfig(params.config.windowTarget),
-            captureKind: 'display',
-            source: 'display-fallback',
-          },
-      params.state.screenshotLedger,
-    ),
-    scheduler: {
-      ...schedulerRunMetadata(params.state.targetResolution, params.config),
-      executorLock: {
-        provider: 'filesystem-lease',
-        pathRoot: '/tmp/sciforge-computer-use-locks',
-        timeoutMs: params.config.schedulerLockTimeoutMs ?? 60000,
-        staleLockMs: params.config.schedulerStaleLockMs ?? 120000,
-        appliesTo: params.config.dryRun
-          ? 'none-dry-run'
-          : independentInputAdapterExecutionBoundary(params.config) ?? 'real-gui-executor',
-      },
-    },
-    validation: {
-      ok: params.state.screenshotLedger.every((ref) => Boolean(ref.bytes && ref.sha256 && ref.width && ref.height)),
-      checkedRefs: params.state.screenshotLedger.map((ref) => ref.path),
-      missingRefs: params.state.screenshotLedger
-        .filter((ref) => !ref.bytes || !ref.sha256 || !ref.width || !ref.height)
-        .map((ref) => ref.path),
-      invalidRefs: [],
-      diagnostics: [],
-      noInlineImages: !/data:image\/|;base64,/.test(JSON.stringify(params.packageResult)),
-    },
-    steps: packageResultStepsToVisionSteps(params.packageResult, params.state, params.config),
-    packageResult: params.packageResult,
-  };
-  await writeFile(tracePath, `${JSON.stringify(trace, null, 2)}\n`, 'utf8');
-  return tracePath;
-}
-
-function finalVisibleArtifactForTrace(artifacts: VirtualRemoteVisibleArtifact[]) {
-  return [...artifacts].reverse().find((artifact) => (
-    artifact.status === 'visible-and-saved' && isFinalArtifactEvidenceRef(artifact.artifactRef)
-  ))
-    ?? [...artifacts].reverse().find((artifact) => isFinalArtifactEvidenceRef(artifact.artifactRef));
-}
-
-function finalWindowScreenshotRef(refs: ScreenshotRef[]) {
-  return [...refs].reverse().find((ref) => !ref.id.includes('-focus-') && !ref.path.includes('-focus-'))?.path
-    ?? refs.at(-1)?.path;
-}
-
-function packageBridgeTraceRequest(
-  request: GatewayRequest,
-  config: ComputerUseConfig,
-  workspace: string,
-) {
-  const computerUseLong = recordAt(request.uiState, 'computerUseLong');
-  const cuNextTaskId = stringAt(computerUseLong, 'cuNextTaskId')
-    ?? stringAt(recordAt(request.uiState, 'computerUseNext'), 'taskId')
-    ?? stringAt(request.uiState, 'cuNextTaskId');
-  return {
-    text: request.prompt,
-    selectedToolIds: request.selectedToolIds,
-    taskId: cuNextTaskId,
-    cuNextTaskId,
-    computerUseLong,
-    computerUseRequest: gatewayRequestToComputerUseRequest(request, config, workspace),
-  };
-}
-
-function packageResultStepsToVisionSteps(
-  packageResult: Record<string, unknown>,
-  state: PackageBridgeState,
-  config: ComputerUseConfig,
-): LoopStep[] {
-  if (!state.targetResolution.ok) {
-    return [{
-      id: 'step-000-blocked-window-target',
-      kind: 'planning',
-      status: 'blocked',
-      verifier: {
-        status: 'blocked',
-        reason: 'target window contract could not be resolved',
-        diagnostics: state.targetResolution.diagnostics,
-        windowTarget: windowTargetTraceConfig(state.targetResolution.target),
-        windowConsistency: windowConsistencyMetadata([], [], config),
-      },
-      failureReason: state.targetResolution.reason,
-    }];
-  }
-  const packageSteps = Array.isArray(packageResult.steps) ? packageResult.steps.filter(isRecord) : [];
-  const steps = packageSteps.filter((step) => {
-    const action = recordAt(step, 'action');
-    return Boolean(stringAt(action, 'kind') ?? stringAt(action, 'type'));
-  });
-  if (!steps.length && state.visionHistorySteps.some((step) => step.kind === 'gui-execution')) {
-    return state.visionHistorySteps;
-  }
-  if (!steps.length && state.missingPlannerAfterCaptured) {
-    const beforeRefs = refsByName(state, 'step-000-before');
-    const afterRefs = refsByName(state, 'step-000-after');
-    return [{
-      id: 'step-000-plan',
-      kind: 'planning',
-      status: 'blocked',
-      beforeScreenshotRefs: beforeRefs.map(toTraceScreenshotRef),
-      afterScreenshotRefs: afterRefs.map(toTraceScreenshotRef),
-      verifier: {
-        status: 'blocked',
-        reason: stringAt(packageResult, 'reason') || 'missing Runtime Codex planner/Grounder action plan',
-        pixelDiff: pixelDiffForScreenshotSets(beforeRefs, afterRefs),
-        windowConsistency: windowConsistencyMetadata(beforeRefs, afterRefs, config),
-      },
-      execution: {
-        planner: 'computer-use-package-host-port-planner',
-        status: 'blocked',
-        rawResponse: {
-          done: false,
-          actions: [],
-          reason: stringAt(packageResult, 'reason') || 'Computer Use package planner emitted no action.',
-        },
-      },
-      failureReason: stringAt(packageResult, 'reason') || 'Computer Use package planner emitted no action.',
-    }];
-  }
-  const actionSteps = steps.map((step, index): LoopStep => {
-    const actionRecord = recordAt(step, 'action') ?? {};
-    const beforeObservationRef = stringAt(step, 'beforeRef') ?? '';
-    const beforeRefs = state.captureRefsByObservationRef.get(beforeObservationRef) ?? refsForStepIndex(state, index, 'before');
-    const afterRefs = state.captureRefsByObservationRef.get(stringAt(step, 'afterRef') ?? '') ?? refsForStepIndex(state, index, 'after');
-    const focusRegion = state.focusRegionByObservationRef.get(beforeObservationRef);
-    const beforeFocusRefs = state.beforeFocusRefsByObservationRef.get(beforeObservationRef) ?? [];
-    const afterFocusRefs = state.afterFocusRefsByObservationRef.get(beforeObservationRef) ?? [];
-    const grounding = normalizeTraceGrounding(recordAt(step, 'grounding') ?? {}, actionRecord);
-    const status = step.status === 'done' ? 'done' : step.status === 'blocked' ? 'blocked' : 'failed';
-    const action = preservePackageBlockedRisk(
-      packageTraceActionToGenericAction(actionRecord, grounding),
-      step,
-      status,
-    );
-    const execution = recordAt(step, 'execution');
-    const executionMetadata = recordAt(execution, 'metadata');
-    const executorLease = isRecord(executionMetadata?.schedulerLease) ? executionMetadata.schedulerLease : undefined;
-    const verification = recordAt(step, 'verification');
-    const pixelDiff = pixelDiffForScreenshotSets(beforeRefs, afterRefs);
-    const focusPixelDiff = beforeFocusRefs.length && afterFocusRefs.length
-      ? pixelDiffForScreenshotSets(beforeFocusRefs, afterFocusRefs)
-      : undefined;
-    const windowConsistency = windowConsistencyMetadata(beforeRefs, afterRefs, config);
-    const planningFeedback = packageVerifierPlanningFeedback(action, grounding, pixelDiff, windowConsistency, status);
-    const regionSemantic = packageRegionSemanticVerifier(action, grounding, pixelDiff, status);
-    const maxStepsExhausted = stringAt(packageResult, 'status') === 'max-steps' && index === steps.length - 1;
-    const visualFocus = focusRegion ? {
-      ...visionSenseTraceContractPolicy.visualFocus,
-      region: focusRegion,
-      beforeFocusScreenshotRefs: beforeFocusRefs.map(toTraceScreenshotRef),
-      afterFocusScreenshotRefs: afterFocusRefs.map(toTraceScreenshotRef),
-      pixelDiff: focusPixelDiff,
-      fineGrounding: isRecord(grounding.fineGrounding) ? grounding.fineGrounding : undefined,
-    } : undefined;
-    return {
-      id: `step-${String(index + 1).padStart(3, '0')}-${status === 'blocked' ? 'blocked' : 'execute'}-${action.type}`,
-      kind: 'gui-execution',
-      status,
-      beforeScreenshotRefs: beforeRefs.map(toTraceScreenshotRef),
-      afterScreenshotRefs: afterRefs.map(toTraceScreenshotRef),
-      plannedAction: action,
-      grounding,
-      windowTarget: state.targetResolution.ok ? toTraceWindowTarget(state.targetResolution) : undefined,
-      localCoordinate: localCoordinateMetadata(grounding, action, beforeRefs[0]),
-      mappedCoordinate: mappedCoordinateMetadata(grounding, action),
-      inputChannel: stepInputChannelMetadata(config, state.targetResolution),
-      visualFocus,
-      execution: execution ? {
-        executor: config.dryRun ? 'dry-run-generic-gui-executor' : independentInputAdapterExecutionBoundary(config) ?? executorBoundary(config),
-        inputChannel: inputChannelDescription(config, state.targetResolution),
-        windowTarget: state.targetResolution.ok ? toTraceWindowTarget(state.targetResolution) : undefined,
-        status: execution.ok === false ? 'failed' : 'done',
-        exitCode: numberAt(executionMetadata?.exitCode) ?? (execution.ok === false ? 1 : 0),
-        stdout: stringAt(executionMetadata, 'stdout'),
-        stderr: stringAt(executionMetadata, 'stderr'),
-        schedulerLease: executorLease,
-        independentInputAdapter: executionMetadata?.independentInputAdapter,
-        virtualRemoteSessionRef: stringAt(executionMetadata, 'virtualRemoteSessionRef'),
-        visibleArtifactRefs: stringList(executionMetadata?.visibleArtifactRefs),
-      } : undefined,
-      scheduler: {
-        ...schedulerStepMetadata(state.targetResolution, `step-${String(index + 1).padStart(3, '0')}`, config),
-        executorLease,
-      },
-      verifier: {
-        status: verification?.ok === false ? 'blocked' : 'checked',
-        method: 'computer-use-package-host-port-verifier',
-        reason: maxStepsExhausted ? 'maxSteps exhausted before planner reported done=true' : stringAt(verification, 'reason'),
-        pixelDiff,
-        focusRegionPixelDiff: focusPixelDiff,
-        windowConsistency,
-        regionSemantic,
-        planningFeedback,
-        packageVerification: verification,
-      },
-      failureReason: stringAt(step, 'failureReason') ?? stringAt(step, 'failure_reason') ?? undefined,
-    };
-  });
-  return mergePlannerAndActionTraceSteps(state.plannerTraceSteps, actionSteps);
-}
-
-function preservePackageBlockedRisk(
-  action: GenericVisionAction,
-  step: Record<string, unknown>,
-  status: 'done' | 'blocked' | 'failed',
-): GenericVisionAction {
-  if (status !== 'blocked') return action;
-  const reason = stringAt(step, 'failureReason') ?? stringAt(step, 'failure_reason') ?? '';
-  if (!/confirm|approval|high-risk|高风险|确认|授权/i.test(reason)) return action;
-  return {
-    ...action,
-    riskLevel: 'high',
-    requiresConfirmation: true,
-  };
-}
-
-function mergePlannerAndActionTraceSteps(plannerSteps: LoopStep[], actionSteps: LoopStep[]) {
-  if (!plannerSteps.length) return actionSteps;
-  const remaining = new Map(plannerSteps.map((step) => [step.id, step]));
-  const merged: LoopStep[] = [];
-  const pushPlanner = (id: string) => {
-    const step = remaining.get(id);
-    if (!step) return;
-    merged.push(step);
-    remaining.delete(id);
-  };
-  pushPlanner('step-000-plan');
-  for (const actionStep of actionSteps) {
-    merged.push(actionStep);
-    const match = /^step-(\d{3})-/.exec(actionStep.id);
-    if (match) pushPlanner(`step-${match[1]}-replan`);
-  }
-  merged.push(...remaining.values());
-  return merged;
-}
-
-function refsByName(state: PackageBridgeState, fragment: string) {
-  return state.screenshotLedger.filter((ref) => ref.id.includes(fragment) || ref.path.includes(fragment));
-}
-
-function refsForStepIndex(state: PackageBridgeState, index: number, phase: 'before' | 'after') {
-  const stepNumber = String(index + 1).padStart(3, '0');
-  return refsByName(state, `step-${stepNumber}-${phase}`);
-}
-
-function mergeVisibleArtifacts(
-  existing: VirtualRemoteVisibleArtifact[],
-  next: VirtualRemoteVisibleArtifact[],
-) {
-  const merged = new Map(existing.map((artifact) => [artifact.artifactRef, artifact]));
-  for (const artifact of next) merged.set(artifact.artifactRef, artifact);
-  return [...merged.values()];
-}
-
-function isVirtualRemoteVisibleArtifact(record: Record<string, unknown>): record is VirtualRemoteVisibleArtifact {
-  return typeof record.artifactRef === 'string'
-    && typeof record.dataRef === 'string'
-    && typeof record.path === 'string'
-    && typeof record.id === 'string'
-    && typeof record.title === 'string'
-    && typeof record.appId === 'string'
-    && record.delivery === 'virtual-remote-session-artifact'
-    && Array.isArray(record.visibleTexts)
-    && Array.isArray(record.sourceActionIds);
-}
-
-function uniqueStrings(values: string[]) {
-  return Array.from(new Set(values.filter((value) => value.trim().length > 0)));
-}
-
-function normalizeTraceGrounding(grounding: Record<string, unknown>, action: Record<string, unknown>) {
-  const metadata = recordAt(grounding, 'metadata') ?? {};
-  return {
-    ...metadata,
-    ...grounding,
-  };
+  return emitPackageBridgeEventPort(call, context);
 }
 
 function shouldRunFineGroundingPass(grounding: Record<string, unknown>) {
   return stringAt(grounding, 'provider') === 'kv-ground';
-}
-
-function packageTraceActionToGenericAction(action: Record<string, unknown>, grounding: Record<string, unknown> = {}): GenericVisionAction {
-  const type = (stringAt(action, 'kind') ?? 'wait') as GenericVisionAction['type'];
-  const targetDescription = stringAt(action, 'target');
-  const targetRegionDescription = stringAt(action, 'targetRegion');
-  const riskLevel = parseRiskLevel(stringAt(action, 'riskLevel'));
-  const base = {
-    targetDescription,
-    targetRegionDescription,
-    riskLevel,
-    requiresConfirmation: action.requiresConfirmation === true,
-  };
-  const x = numberAt(action.x) ?? numberAt(grounding.x) ?? numberAt(grounding.executorX) ?? numberAt(grounding.localX);
-  const y = numberAt(action.y) ?? numberAt(grounding.y) ?? numberAt(grounding.executorY) ?? numberAt(grounding.localY);
-  if (type === 'click') return normalizeGenericActionRisk({ ...base, type: 'click', x, y });
-  if (type === 'double_click') return normalizeGenericActionRisk({ ...base, type: 'double_click', x, y });
-  if (type === 'drag') {
-    return normalizeGenericActionRisk({
-      ...base,
-      type: 'drag',
-      fromX: numberAt(action.fromX)
-        ?? numberAt(grounding.executorFromX)
-        ?? numberAt(grounding.localFromX),
-      fromY: numberAt(action.fromY)
-        ?? numberAt(grounding.executorFromY)
-        ?? numberAt(grounding.localFromY),
-      toX: numberAt(action.toX)
-        ?? numberAt(grounding.executorToX)
-        ?? numberAt(grounding.localToX),
-      toY: numberAt(action.toY)
-        ?? numberAt(grounding.executorToY)
-        ?? numberAt(grounding.localToY),
-      fromTargetDescription: stringAt(action, 'fromTargetDescription') ?? stringAt(grounding, 'fromTargetDescription'),
-      toTargetDescription: stringAt(action, 'toTargetDescription') ?? stringAt(grounding, 'toTargetDescription'),
-    });
-  }
-  if (type === 'type_text') return normalizeGenericActionRisk({ ...base, type: 'type_text', text: stringAt(action, 'text') ?? '' });
-  if (type === 'press_key') return normalizeGenericActionRisk({ ...base, type: 'press_key', key: stringAt(action, 'key') ?? '' });
-  if (type === 'hotkey') return normalizeGenericActionRisk({ ...base, type: 'hotkey', keys: stringList(action.keys) });
-  if (type === 'scroll') return normalizeGenericActionRisk({ ...base, type: 'scroll', direction: scrollDirection(stringAt(action, 'direction')), amount: numberAt(action.amount) });
-  if (type === 'open_app') return normalizeGenericActionRisk({ ...base, type: 'open_app', appName: stringAt(action, 'appName') ?? '' });
-  return normalizeGenericActionRisk({ ...base, type: 'wait' });
-}
-
-function packageVerifierPlanningFeedback(
-  action: GenericVisionAction,
-  grounding: Record<string, unknown>,
-  pixelDiff: Record<string, unknown>,
-  windowConsistency: Record<string, unknown>,
-  status: 'done' | 'blocked' | 'failed',
-) {
-  const noVisibleEffect = pixelDiff.possiblyNoEffect === true;
-  const ratios = Array.isArray(pixelDiff.pairs)
-    ? pixelDiff.pairs
-      .filter(isRecord)
-      .map((pair) => numberAt(pair.changedByteRatio)?.toFixed(4) ?? 'unknown')
-      .join(',')
-    : 'unknown';
-  const target = action.targetDescription ? ` target="${action.targetDescription}"` : '';
-  const local = numberAt(grounding.localX) !== undefined && numberAt(grounding.localY) !== undefined
-    ? ` local=${numberAt(grounding.localX)},${numberAt(grounding.localY)}`
-    : '';
-  const executor = numberAt(grounding.executorX) !== undefined && numberAt(grounding.executorY) !== undefined
-    ? ` executor=${numberAt(grounding.executorX)},${numberAt(grounding.executorY)}`
-    : '';
-  const next = status === 'done' && noVisibleEffect
-    ? `${action.type} produced no visible window effect; avoid repeating same target unless screenshot changed`
-    : status === 'done'
-      ? 'continue only if the visible task is not complete'
-      : 'repair the blocked or failed action before retrying';
-  return [
-    `pixel=${noVisibleEffect ? 'no-visible-effect' : 'changed'} ratios=${ratios}`,
-    `window=${stringAt(windowConsistency, 'status') ?? 'unknown'} sameWindow=${windowConsistency.sameWindow === true} scopeOk=${windowConsistency.scopeOk === true}`,
-    `grounding=${stringAt(grounding, 'status') ?? 'ok'}${target}${local}${executor}`,
-    `next=${next}`,
-  ].join(' | ');
-}
-
-function packageRegionSemanticVerifier(
-  action: GenericVisionAction,
-  grounding: Record<string, unknown>,
-  pixelDiff: Record<string, unknown>,
-  status: 'done' | 'blocked' | 'failed',
-) {
-  const noVisibleEffect = pixelDiff.possiblyNoEffect === true;
-  const verdict = status !== 'done'
-    ? 'action-not-applied'
-    : noVisibleEffect
-      ? 'focused-target-no-visible-effect'
-      : 'focused-target-reacted';
-  const nextPlannerHint = status !== 'done'
-    ? 'repair the blocked or failed action before retrying'
-    : noVisibleEffect
-      ? 'switch modality, choose a different visible control, or request a wider focus region'
-      : 'continue only if the visible task is not complete';
-  return {
-    schemaVersion: 'sciforge.vision-sense.region-semantic-verifier.v1',
-    verdict,
-    confidence: noVisibleEffect ? 0.78 : 0.72,
-    targetDescription: action.targetDescription,
-    actionType: action.type,
-    focusChanged: !noVisibleEffect,
-    windowChanged: !noVisibleEffect,
-    possiblyNoEffect: noVisibleEffect,
-    grounding: {
-      localX: numberAt(grounding.localX),
-      localY: numberAt(grounding.localY),
-      executorX: numberAt(grounding.executorX),
-      executorY: numberAt(grounding.executorY),
-    },
-    nextPlannerHint,
-    summary: [
-      `regionSemantic=${verdict}`,
-      `action=${action.type}`,
-      action.targetDescription ? `target="${action.targetDescription}"` : undefined,
-      `next=${nextPlannerHint}`,
-    ].filter(Boolean).join(' | '),
-  };
-}
-
-function attachPackageResultHostActions(
-  payload: ToolPayload,
-  packageResult: Record<string, unknown>,
-  callbacks: WorkspaceRuntimeCallbacks,
-): ComputerUseTuiHostAction[] {
-  const tuiHostActions = computerUseResultToTuiHostActions({
-    ...packageResult,
-    message: payload.message,
-    executionUnits: payload.executionUnits,
-    workEvidence: payload.workEvidence,
-    artifacts: payload.artifacts,
-  });
-  if (!tuiHostActions.length) return [];
-  payload.objectReferences = [
-    ...(payload.objectReferences ?? []),
-    {
-      id: 'ref:computer-use-tui-host-actions',
-      type: 'computer-use-tui-host-actions',
-      data: {
-        schemaVersion: 'sciforge.computer-use.tui-host-actions.bundle.v1',
-        actions: tuiHostActions,
-      },
-    },
-  ];
-  payload.logs = [
-    ...(payload.logs ?? []),
-    {
-      kind: 'computer-use-tui-host-actions',
-      ref: 'audit:computer-use-tui-host-actions',
-      actions: tuiHostActions,
-    },
-  ];
-  emitWorkspaceRuntimeEvent(callbacks, {
-    type: 'computer-use.tui-host-actions',
-    source: 'computer-use-package-bridge',
-    toolName: VISION_TOOL_ID,
-    status: 'done',
-    message: 'Computer Use package result mapped to TUI Host gui.present/gui.ask_user action metadata.',
-    detail: JSON.stringify({ actions: tuiHostActions }),
-  });
-  return tuiHostActions;
-}
-
-function writeHostPortResult(
-  child: ReturnType<typeof spawn>,
-  id: string,
-  ok: boolean,
-  result?: unknown,
-  error?: string,
-) {
-  const stdin = child.stdin;
-  if (!stdin) return;
-  if (stdin.destroyed || stdin.writableEnded) return;
-  try {
-    stdin.write(`${JSON.stringify({
-      schemaVersion: HOST_PORT_RESULT_SCHEMA,
-      type: 'hostPortResult',
-      id,
-      ok,
-      result,
-      error,
-    })}\n`);
-  } catch {
-    // The package process may already be closing after an abort.
-  }
-}
-
-function genericActionToPackagePlan(action: GenericVisionAction): Record<string, unknown> {
-  return {
-    kind: action.type,
-    target: actionTarget(action),
-    text: 'text' in action ? action.text : undefined,
-    key: 'key' in action ? action.key : undefined,
-    keys: 'keys' in action ? action.keys : undefined,
-    direction: 'direction' in action ? action.direction : undefined,
-    amount: 'amount' in action ? action.amount : undefined,
-    appName: 'appName' in action ? action.appName : undefined,
-    riskLevel: action.riskLevel,
-    requiresConfirmation: action.requiresConfirmation,
-    metadata: {
-      targetDescription: action.targetDescription,
-      targetRegionDescription: action.targetRegionDescription,
-      hasHostPlannedCoordinates: hasPlannedCoordinates(action),
-      confirmationText: action.confirmationText,
-    },
-  };
-}
-
-function packagePlanToGenericAction(
-  plan: Record<string, unknown>,
-  activeAction?: GenericVisionAction,
-  grounding?: Record<string, unknown>,
-): GenericVisionAction {
-  const type = (stringAt(plan, 'kind') ?? stringAt(plan, 'type') ?? activeAction?.type ?? 'wait') as GenericVisionAction['type'];
-  const target = recordAt(plan, 'target');
-  const targetDescription = stringAt(target, 'description') ?? stringAt(plan, 'targetDescription') ?? activeAction?.targetDescription;
-  const targetRegionDescription = stringAt(target, 'region_description') ?? stringAt(target, 'targetRegionDescription') ?? activeAction?.targetRegionDescription;
-  const riskLevel = parseRiskLevel(stringAt(plan, 'risk_level') ?? stringAt(plan, 'riskLevel') ?? activeAction?.riskLevel);
-  const base = {
-    targetDescription,
-    targetRegionDescription,
-    riskLevel,
-    requiresConfirmation: Boolean(plan.requires_confirmation ?? plan.requiresConfirmation ?? activeAction?.requiresConfirmation),
-    confirmationText: stringAt(plan, 'confirmationText') ?? activeAction?.confirmationText,
-  };
-  const groundingMetadata = recordAt(grounding, 'metadata');
-  const x = numberAt(grounding?.x)
-    ?? numberAt(groundingMetadata?.executorX)
-    ?? (activeAction && 'x' in activeAction ? numberAt(activeAction.x) : undefined);
-  const y = numberAt(grounding?.y)
-    ?? numberAt(groundingMetadata?.executorY)
-    ?? (activeAction && 'y' in activeAction ? numberAt(activeAction.y) : undefined);
-  if (type === 'click') return normalizeGenericActionRisk({ ...base, type: 'click', x, y });
-  if (type === 'double_click') return normalizeGenericActionRisk({ ...base, type: 'double_click', x, y });
-  if (type === 'drag') {
-    const fromX = numberAt(grounding?.x)
-      ?? numberAt(groundingMetadata?.executorFromX)
-      ?? numberAt(groundingMetadata?.localFromX)
-      ?? (activeAction && 'fromX' in activeAction ? numberAt(activeAction.fromX) : undefined);
-    const fromY = numberAt(grounding?.y)
-      ?? numberAt(groundingMetadata?.executorFromY)
-      ?? numberAt(groundingMetadata?.localFromY)
-      ?? (activeAction && 'fromY' in activeAction ? numberAt(activeAction.fromY) : undefined);
-    const toX = numberAt(groundingMetadata?.executorToX)
-      ?? numberAt(groundingMetadata?.localToX)
-      ?? (activeAction && 'toX' in activeAction ? numberAt(activeAction.toX) : undefined);
-    const toY = numberAt(groundingMetadata?.executorToY)
-      ?? numberAt(groundingMetadata?.localToY)
-      ?? (activeAction && 'toY' in activeAction ? numberAt(activeAction.toY) : undefined);
-    return normalizeGenericActionRisk({
-      ...base,
-      type,
-      fromX,
-      fromY,
-      toX,
-      toY,
-      fromTargetDescription: activeAction && 'fromTargetDescription' in activeAction ? activeAction.fromTargetDescription : undefined,
-      toTargetDescription: activeAction && 'toTargetDescription' in activeAction ? activeAction.toTargetDescription : undefined,
-    });
-  }
-  if (type === 'type_text') return normalizeGenericActionRisk({ ...base, type, text: stringAt(plan, 'text') ?? (activeAction && 'text' in activeAction ? activeAction.text : '') });
-  if (type === 'press_key') return normalizeGenericActionRisk({ ...base, type, key: stringAt(plan, 'key') ?? (activeAction && 'key' in activeAction ? activeAction.key : '') });
-  if (type === 'hotkey') return normalizeGenericActionRisk({ ...base, type, keys: stringList(plan.keys).length ? stringList(plan.keys) : activeAction && 'keys' in activeAction ? activeAction.keys : [] });
-  if (type === 'scroll') return normalizeGenericActionRisk({ ...base, type, direction: scrollDirection(stringAt(plan, 'direction') ?? (activeAction && 'direction' in activeAction ? activeAction.direction : 'down')), amount: numberAt(plan.amount) });
-  if (type === 'open_app') return normalizeGenericActionRisk({ ...base, type, appName: stringAt(plan, 'appName') ?? stringAt(plan, 'app_name') ?? (activeAction && 'appName' in activeAction ? activeAction.appName : '') });
-  return normalizeGenericActionRisk({ ...base, type: 'wait', ms: activeAction && 'ms' in activeAction ? activeAction.ms : 500 });
-}
-
-function actionTarget(action: GenericVisionAction) {
-  if (action.type === 'drag') {
-    const description = action.fromTargetDescription ?? action.targetDescription;
-    const regionDescription = action.toTargetDescription ?? action.targetRegionDescription;
-    if (description || regionDescription) {
-      return {
-        description: description ?? regionDescription,
-        region_description: regionDescription,
-      };
-    }
-  }
-  const description = action.targetDescription ?? ('appName' in action ? action.appName : undefined);
-  if (!description) return undefined;
-  return {
-    description,
-    region_description: action.targetRegionDescription,
-  };
-}
-
-function hasPlannedCoordinates(action: GenericVisionAction) {
-  return ('x' in action && typeof action.x === 'number')
-    || ('fromX' in action && typeof action.fromX === 'number');
-}
-
-function packageBridgeLedgerCompletionQuotaIssue(
-  plannerAcceptanceContract: Record<string, unknown> | undefined,
-  executedActions: GenericVisionAction[],
-  maxSteps: number,
-) {
-  const progress = recordAt(plannerAcceptanceContract, 'acceptanceProgress');
-  if (!progress) return undefined;
-  const remainingStepBudget = Math.max(0, maxSteps - executedActions.length);
-  if (remainingStepBudget <= 0) return undefined;
-  const actionTarget = positiveQuota(numberAt(progress.suggestedCurrentRoundActionTarget));
-  const nonWaitTarget = positiveQuota(numberAt(progress.suggestedCurrentRoundNonWaitActionTarget));
-  const actionCount = executedActions.length;
-  const nonWaitActionCount = executedActions.filter((action) => action.type !== 'wait').length;
-  const issues = [
-    actionTarget !== undefined && actionCount < actionTarget
-      ? `actions=${actionCount}/${actionTarget}`
-      : '',
-    nonWaitTarget !== undefined && nonWaitActionCount < nonWaitTarget
-      ? `nonWaitActions=${nonWaitActionCount}/${nonWaitTarget}`
-      : '',
-  ].filter(Boolean);
-  if (!issues.length) return undefined;
-  return `Action-ledger completion policy is satisfied, but current-round acceptance quota is not met yet (${issues.join(', ')}); continue with another safe generic action or return structured failure if no safe visible action remains.`;
-}
-
-function positiveQuota(value: number | undefined) {
-  if (value === undefined || value <= 0) return undefined;
-  return Math.ceil(value);
 }
 
 function recordArg(call: HostPortCall, index: number): Record<string, unknown> {
@@ -1689,45 +416,4 @@ function stringAt(value: unknown, key: string) {
 function numberAt(value: unknown) {
   const numeric = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN;
   return Number.isFinite(numeric) ? numeric : undefined;
-}
-
-function stringList(value: unknown) {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
-}
-
-function recordList(value: unknown) {
-  return Array.isArray(value) ? value.filter(isRecord) : [];
-}
-
-function scrollDirection(value: string | undefined): 'up' | 'down' | 'left' | 'right' {
-  return value === 'up' || value === 'left' || value === 'right' ? value : 'down';
-}
-
-function parseRiskLevel(value: string | undefined): 'low' | 'medium' | 'high' | undefined {
-  return value === 'low' || value === 'medium' || value === 'high' ? value : undefined;
-}
-
-function packageBridgeFailureReason(packageResult: Record<string, unknown>, status: string | undefined) {
-  const reason = stringAt(packageResult, 'reason') || stringAt(packageResult, 'message') || `Computer Use package returned status=${status || 'unknown'}.`;
-  if (status === 'max-steps') {
-    return reason.replace(/\bmax_steps=/g, 'maxSteps=');
-  }
-  if (status === 'needs-confirmation' && /high-risk|confirmation/i.test(reason)) {
-    return `High-risk Computer Use action blocked: ${reason}`;
-  }
-  return reason;
-}
-
-function normalizePackageBridgeApprovalRequest(request: ReturnType<typeof gatewayRequestToComputerUseRequest>) {
-  if (request.approvalRef !== 'approval:vision-sense-dry-run-smoke') return request;
-  return {
-    ...request,
-    riskPolicy: 'fail-closed' as const,
-    approvalRef: undefined,
-    metadata: {
-      ...request.metadata,
-      ignoredApprovalRef: request.approvalRef,
-      ignoredApprovalReason: 'vision-sense dry-run smoke approval does not authorize high-risk Computer Use actions',
-    },
-  };
 }

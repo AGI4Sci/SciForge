@@ -1,32 +1,28 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 import type { AgentServerGenerationResponse, GatewayRequest, SkillAvailability, ToolPayload, WorkspaceRuntimeCallbacks } from '../runtime-types.js';
 import { errorMessage, isRecord, safeWorkspaceRel } from '../gateway-utils.js';
-import { ensureSessionBundle, sessionBundleRelForRequest, sessionBundleResourceRel } from '../session-bundle.js';
+import { ensureSessionBundle, sessionBundleRelForRequest } from '../session-bundle.js';
 import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
 import { fileExists, sha1 } from '../workspace-task-runner.js';
-import { materializeBackendPayloadOutput, type RuntimeRefBundle } from './artifact-materializer.js';
+import { materializeBackendPayloadOutput } from './artifact-materializer.js';
 import {
   attachGeneratedTaskSuccessBudgetDebit,
-  attachGeneratedTaskFailureBudgetDebit,
   appendGeneratedTaskDirectPayloadAttemptLifecycle,
-  appendGeneratedTaskGenerationFailureLifecycle,
   assessGeneratedTaskDirectPayloadLifecycle,
   annotateGeneratedTaskGuardValidationFailurePayload,
   capabilityEvolutionLedgerRefsFromResult,
-  generatedTaskFailureBudgetDebitAuditRefs,
-  generatedTaskFailureBudgetDebitId,
   generatedTaskSuccessBudgetDebitAuditRefs,
   generatedTaskSuccessBudgetDebitId,
   recordAgentServerDirectPayloadSuccessLedgerLifecycle,
 } from './generated-task-runner-validation-lifecycle.js';
 import { reportRuntimeResultViewSlots } from '../../../packages/presentation/interactive-views';
 import { CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_DETAIL, CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_MESSAGE, CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_TYPE, CURRENT_REFERENCE_DIGEST_RECOVERY_LOG_LINE, CURRENT_REFERENCE_DIGEST_RECOVERY_REF_PATH, CURRENT_REFERENCE_DIGEST_RECOVERY_REPORT_ARTIFACT_ID, CURRENT_REFERENCE_DIGEST_RECOVERY_RUNTIME_LABEL, buildCurrentReferenceDigestRecoveryPayload, currentReferenceDigestFailureCanRecover, currentReferenceDigestRecoveryCandidates, type CurrentReferenceDigestRecoverySource } from '../../../packages/contracts/runtime/artifact-policy';
-import { AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE, agentServerGeneratedEntrypointContractReason, agentServerGeneratedTaskInterfaceContractReason, agentServerGeneratedTaskRetryDetail, agentServerPathOnlyStrictRetryDirectPayloadReason, agentServerPathOnlyStrictRetryStillMissingReason, agentServerPathOnlyTaskFilesReason, agentServerStablePayloadTaskId, workspaceTaskPythonCommandCandidates } from '../../../packages/skills/runtime-policy';
+import { AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE, agentServerGeneratedEntrypointContractReason, agentServerGeneratedTaskInterfaceContractReason, agentServerGeneratedTaskRetryDetail, agentServerPathOnlyStrictRetryDirectPayloadReason, agentServerPathOnlyStrictRetryStillMissingReason, agentServerPathOnlyTaskFilesReason, workspaceTaskPythonCommandCandidates } from '../../../packages/skills/runtime-policy';
 import {
   generatedTaskLiteratureDeliverablesExpected,
   generatedTaskRecoveryTaskPath,
@@ -41,12 +37,19 @@ import {
   generatedTaskPayloadPreflightFailureReason,
   isGeneratedTaskCapabilityFirstPolicyIssue,
 } from './generated-task-payload-preflight.js';
-import { attachAgentServerCompletionCandidateArtifacts } from './agentserver-completion-candidate.js';
 import { literatureDirectPayloadRecoveryReason, literatureGenerationFailureRecoveryPayload, shouldUseLiteratureMetadataRecoveryAdapter } from './generated-task-runner-literature-recovery.js';
+import { completeAgentServerGenerationFailureRepairPayload, type AgentServerGenerationFailure, type GeneratedTaskGenerationFailureLifecycleDeps } from './generated-task-runner-generation-failure.js';
+import {
+  backendPayloadRefs,
+  materializeAgentServerGenerationLifecyclePayload,
+  stableAgentServerPayloadTaskId,
+  writeBackendPayloadLogs,
+} from './generated-task-runner-payload-materialization.js';
 export { literatureDirectPayloadRecoveryReason } from './generated-task-runner-literature-recovery.js';
+export type { AgentServerGenerationFailure, GeneratedTaskGenerationFailureLifecycleDeps } from './generated-task-runner-generation-failure.js';
+export { backendPayloadRefs, stableAgentServerPayloadTaskId, writeBackendPayloadLogs } from './generated-task-runner-payload-materialization.js';
 
 export const AGENTSERVER_DIRECT_PAYLOAD_TASK_REF = 'agentserver://direct-payload' as const;
-const AGENTSERVER_GENERATION_FAILURE_TASK_REF = 'agentserver://generation-failure' as const;
 const AGENTSERVER_GENERATION_RETRY_REPAIR_TASK_REF = 'agentserver://generation-retry-repair' as const;
 
 const execFileAsync = promisify(execFile);
@@ -55,12 +58,6 @@ export type AgentServerGenerationResult =
   | AgentServerTaskFilesGeneration
   | AgentServerDirectPayloadGeneration
   | AgentServerGenerationFailure;
-
-export interface AgentServerGenerationFailure {
-  ok: false;
-  error: string;
-  diagnostics?: any;
-}
 
 export interface AgentServerTaskFilesGeneration {
   ok: true;
@@ -100,19 +97,6 @@ export interface GeneratedTaskGenerationLifecycleDeps {
   payloadHasFailureStatus(payload: ToolPayload): boolean;
 }
 
-export interface GeneratedTaskGenerationFailureLifecycleDeps {
-  attemptPlanRefs: AttemptPlanRefs;
-  agentServerFailurePayloadRefs(diagnostics?: any): Record<string, unknown>;
-  agentServerGenerationFailureReason(error: string, diagnostics?: any): string;
-  repairNeededPayload(request: GatewayRequest, skill: SkillAvailability, reason: string, refs?: Record<string, unknown>): ToolPayload;
-  validateAndNormalizePayload(
-    payload: ToolPayload,
-    request: GatewayRequest,
-    skill: SkillAvailability,
-    refs: { taskRel: string; outputRel: string; stdoutRel: string; stderrRel: string; runtimeFingerprint: Record<string, unknown> },
-  ): Promise<ToolPayload>;
-}
-
 export interface ResolveGeneratedTaskGenerationLifecycleInput {
   baseUrl: string;
   request: GatewayRequest;
@@ -139,75 +123,7 @@ export async function completeAgentServerGenerationFailureLifecycle(input: {
   const digestRecovery = await currentReferenceDigestRecoveryPayload(input);
   if (digestRecovery) return digestRecovery;
 
-  const failureReason = input.deps.agentServerGenerationFailureReason(input.generation.error, input.generation.diagnostics);
-  const failedRequestId = `agentserver-generation-${input.request.skillDomain}-${sha1(`${input.request.prompt}:${input.generation.error}`).slice(0, 12)}`;
-  const budgetDebitInput = {
-    request: input.request,
-    skill: input.skill,
-    failedRequestId,
-    failureReason,
-    diagnostics: input.generation.diagnostics,
-  };
-  await appendGeneratedTaskGenerationFailureLifecycle({
-    workspacePath: input.workspace,
-    request: input.request,
-    skill: input.skill,
-    failedRequestId,
-    failureReason,
-    diagnostics: input.generation.diagnostics,
-    attemptPlanRefs: input.deps.attemptPlanRefs,
-    budgetDebitRefs: [generatedTaskFailureBudgetDebitId(budgetDebitInput)],
-    budgetDebitAuditRefs: generatedTaskFailureBudgetDebitAuditRefs(budgetDebitInput),
-  });
-  const repairPayload = input.deps.repairNeededPayload(
-    input.request,
-    input.skill,
-    failureReason,
-    input.deps.agentServerFailurePayloadRefs(input.generation.diagnostics),
-  );
-  const salvagedPayload = attachAgentServerCompletionCandidateArtifacts({
-    payload: repairPayload,
-    workspace: input.workspace,
-    workEvidence: input.generation.diagnostics?.sideEffectWorkEvidence,
-    failureKind: input.generation.diagnostics?.kind,
-  });
-  const hasAgentServerSideEffectWork = Array.isArray(input.generation.diagnostics?.sideEffectWorkEvidence)
-    && input.generation.diagnostics.sideEffectWorkEvidence.some((entry: unknown) => (
-      isRecord(entry) && entry.kind === 'write' && entry.status === 'success'
-    ));
-  const shouldPreferLiteratureRecovery = !hasAgentServerSideEffectWork
-    || /malformed|incomplete|AgentServerGenerationResponse|taskFiles/i.test(failureReason);
-  const literatureRecovery = shouldPreferLiteratureRecovery
-    ? await literatureGenerationFailureRecoveryPayload(input.request, failureReason)
-    : undefined;
-  if (literatureRecovery) {
-    const payload = attachGeneratedTaskFailureBudgetDebit({
-      ...budgetDebitInput,
-      payload: literatureRecovery,
-    });
-    return await materializeAgentServerGenerationLifecyclePayload({
-      workspace: input.workspace,
-      request: input.request,
-      skill: input.skill,
-      payload,
-      reason: failureReason,
-      kind: 'generation-failure-recovery',
-      taskRel: AGENTSERVER_GENERATION_FAILURE_TASK_REF,
-    });
-  }
-  const payload = attachGeneratedTaskFailureBudgetDebit({
-    ...budgetDebitInput,
-    payload: salvagedPayload,
-  });
-  return await materializeAgentServerGenerationLifecyclePayload({
-    workspace: input.workspace,
-    request: input.request,
-    skill: input.skill,
-    payload,
-    reason: failureReason,
-    kind: 'generation-failure-repair',
-    taskRel: AGENTSERVER_GENERATION_FAILURE_TASK_REF,
-  });
+  return await completeAgentServerGenerationFailureRepairPayload(input);
 }
 
 export async function resolveGeneratedTaskGenerationRetryLifecycle(
@@ -417,51 +333,6 @@ export async function completeAgentServerDirectPayloadLifecycle(input: {
     });
   }
   return await materializeBackendPayloadOutput(input.workspace, input.request, completedWithDebit, refs);
-}
-
-export function backendPayloadRefs(taskId: string, taskRel: string, sessionBundleRel?: string): RuntimeRefBundle {
-  return {
-    taskRel,
-    outputRel: sessionBundleResourceRel(sessionBundleRel, 'task-results', `${taskId}.json`),
-    stdoutRel: sessionBundleResourceRel(sessionBundleRel, 'logs', `${taskId}.stdout.log`),
-    stderrRel: sessionBundleResourceRel(sessionBundleRel, 'logs', `${taskId}.stderr.log`),
-  };
-}
-
-export function stableAgentServerPayloadTaskId(
-  kind: string,
-  request: GatewayRequest,
-  skill: SkillAvailability,
-  runId: string | undefined,
-) {
-  return agentServerStablePayloadTaskId({
-    kind,
-    skillDomain: request.skillDomain,
-    skillId: skill.id,
-    prompt: request.prompt,
-    runId,
-    shortHash: (value) => sha1(value).slice(0, 12),
-  });
-}
-
-export async function writeBackendPayloadLogs(
-  workspace: string,
-  refs: RuntimeRefBundle,
-  stdout: string,
-  stderr = '',
-) {
-  try {
-    await Promise.all([
-      mkdir(dirname(join(workspace, refs.stdoutRel)), { recursive: true }),
-      mkdir(dirname(join(workspace, refs.stderrRel)), { recursive: true }),
-    ]);
-    await Promise.all([
-      writeFile(join(workspace, refs.stdoutRel), stdout),
-      writeFile(join(workspace, refs.stderrRel), stderr),
-    ]);
-  } catch {
-    // Stable output materialization is the contract; direct-payload logs are best effort.
-  }
 }
 
 export async function readGeneratedTaskFileIfPresent(workspace: string, path: string) {
@@ -1519,24 +1390,6 @@ async function repairNeeded(
       taskRel: AGENTSERVER_GENERATION_RETRY_REPAIR_TASK_REF,
     }),
   };
-}
-
-async function materializeAgentServerGenerationLifecyclePayload(input: {
-  workspace: string;
-  request: GatewayRequest;
-  skill: SkillAvailability;
-  payload: ToolPayload;
-  reason: string;
-  kind: string;
-  taskRel: string;
-}) {
-  const refs = backendPayloadRefs(
-    stableAgentServerPayloadTaskId(input.kind, input.request, input.skill, sha1(input.reason).slice(0, 8)),
-    input.taskRel,
-    sessionBundleRelForRequest(input.request),
-  );
-  await writeBackendPayloadLogs(input.workspace, refs, `${input.kind}: ${input.reason}\n`);
-  return await materializeBackendPayloadOutput(input.workspace, input.request, input.payload, refs);
 }
 
 async function currentReferenceDigestRecoveryPayload(input: {

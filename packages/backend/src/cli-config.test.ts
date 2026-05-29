@@ -88,3 +88,41 @@ test('proxy CLI enables non-streaming upstream compatibility mode from env or lo
   }).forceNonStreamingUpstream, true);
   assert.equal(resolveProxyCliOptions(['--force-non-streaming-upstream'], {}).forceNonStreamingUpstream, true);
 });
+
+test('proxy CLI reads root provider settings from shared local config parser', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sciforge-proxy-config-'));
+  const configPath = join(dir, 'config.local.json');
+  writeFileSync(configPath, JSON.stringify({
+    apiKey: 'root-secret',
+    modelBaseUrl: 'http://root-provider.local:3888',
+    modelName: 'root-model',
+  }));
+
+  const options = resolveProxyCliOptions(['--config', configPath], {});
+
+  assert.equal(options.upstreamBaseUrl, 'http://root-provider.local:3888/v1');
+  assert.equal(options.upstreamApiKey, 'root-secret');
+  assert.equal(options.upstreamKeySource, `${configPath}:apiKey`);
+  assert.equal(options.defaultModel, 'root-model');
+});
+
+test('proxy CLI reads textLLM-only provider config and normalizes bare upstream to /v1', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sciforge-proxy-config-'));
+  const configPath = join(dir, 'config.local.json');
+  writeFileSync(configPath, JSON.stringify({
+    textLLM: {
+      modelName: 'text-model',
+      env: {
+        SCIFORGE_RUNTIME_API_KEY: 'text-secret',
+        SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'http://text-provider.local:3888',
+      },
+    },
+  }));
+
+  const options = resolveProxyCliOptions(['--config', configPath], {});
+
+  assert.equal(options.upstreamBaseUrl, 'http://text-provider.local:3888/v1');
+  assert.equal(options.upstreamApiKey, 'text-secret');
+  assert.equal(options.upstreamKeySource, `${configPath}:textLLM.env.SCIFORGE_RUNTIME_API_KEY`);
+  assert.equal(options.defaultModel, 'text-model');
+});

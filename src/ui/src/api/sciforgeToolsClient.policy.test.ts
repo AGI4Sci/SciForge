@@ -139,6 +139,39 @@ test('conversation policy stream event makes quick status visible before workspa
   assert.ok(events.find((event) => event.type === 'conversation-policy'));
 });
 
+test('selected Computer Use action provider routes natural-language chat through workspace tools stream', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (url, init) => {
+    bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+    assert.match(String(url), /\/api\/sciforge\/tools\/run\/stream$/);
+    return streamResponse([{
+      result: {
+        status: 'done',
+        message: 'Computer Use natural-language provider selection routed.',
+        executionUnits: [{ id: 'EU-computer-use-natural-language', status: 'done' }],
+        artifacts: [],
+      },
+    }]);
+  }) as typeof fetch;
+
+  await sendSciForgeToolMessage(messageInput({
+    selectedActionIds: ['action.sciforge.computer-use'],
+    computerUseNext: { taskId: 'CU-NEXT-01', requirements: ['chat-origin-current-run'] },
+    computerUseLong: { cuNextTaskId: 'CU-NEXT-01', scenarioId: 'CU-LONG-LIVE-01' },
+  }, {
+    prompt: 'Use the visible desktop to inspect the files and produce a short index.',
+  }));
+
+  assert.equal(bodies.length, 1);
+  assert.equal(bodies[0]?.handoffSource, 'ui-chat');
+  assert.equal(bodies[0]?.prompt, 'Use the visible desktop to inspect the files and produce a short index.');
+  assert.deepEqual(bodies[0]?.selectedActionIds, ['action.sciforge.computer-use']);
+  assert.ok((bodies[0]?.selectedToolIds as string[]).includes('local.vision-sense'));
+  const uiState = bodies[0]?.uiState as Record<string, unknown>;
+  assert.deepEqual(uiState.computerUseNext, { taskId: 'CU-NEXT-01', requirements: ['chat-origin-current-run'] });
+  assert.deepEqual(uiState.computerUseLong, { cuNextTaskId: 'CU-NEXT-01', scenarioId: 'CU-LONG-LIVE-01' });
+});
+
 test('聊天流式请求连接到 Codex Runtime bridge 并暴露运行元数据', async () => {
   const urls: string[] = [];
   const bodies: Array<Record<string, unknown>> = [];

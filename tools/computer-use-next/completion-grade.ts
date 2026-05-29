@@ -165,13 +165,16 @@ function cuNextCompletionEvidenceTaskArtifactBindingIssues(
   }
   const guiPresentArtifactRefs = uniqueStrings([
     ...stringArray(recordValue(acceptance.guiPresent).artifactRefs),
-    ...stringArray(recordValue(acceptance.guiPresent).displayedRefs),
     ...records(acceptance.evidenceClaims)
       .filter((claim) => stringValue(claim.kind) === 'gui-present-record')
       .flatMap((claim) => stringArray(claim.artifactRefs)),
   ]);
-  if (!guiPresentArtifactRefs.includes(finalArtifactRef)) {
+  const guiPresentDisplayedRefs = stringArray(recordValue(acceptance.guiPresent).displayedRefs);
+  if (!guiPresentDisplayedRefs.includes(finalArtifactRef)) {
     issues.push('acceptance gui.present evidence must display the same finalArtifactRef bound by completionEvidenceRef.');
+  }
+  if (!guiPresentArtifactRefs.includes(finalArtifactRef)) {
+    issues.push('acceptance gui-present-record evidence claim must include artifactRefs containing the same finalArtifactRef bound by completionEvidenceRef.');
   }
   return issues;
 }
@@ -236,7 +239,7 @@ function strictReferencedCompletionEvidenceIssues(
 function completionEvidenceRequiredRefs(data: Record<string, unknown>): string[] {
   return uniqueStrings(
     completionEvidenceRefCandidates(data)
-      .filter((candidate) => !nonRegularCompletionEvidenceRefKeys.has(candidate.key))
+      .filter((candidate) => !nonRegularCompletionEvidenceRefKeys.has(candidate.key) && !isTaskArtifactBindingRefCandidate(candidate))
       .map((candidate) => regularFileRefFromCompletionEvidenceRef(candidate.ref))
       .filter((ref): ref is string => Boolean(ref)),
   );
@@ -501,6 +504,12 @@ function isCompletionEvidenceRefKey(key: string): boolean {
 const nonRegularCompletionEvidenceRefKeys = new Set([
   'filesystemRootRef',
 ]);
+
+function isTaskArtifactBindingRefCandidate(candidate: CompletionEvidenceRefCandidate): boolean {
+  return candidate.path === '$.taskFinalArtifactRefs'
+    || candidate.path.startsWith('$.taskFinalArtifactRefs[')
+    || candidate.path.startsWith('$.taskArtifactBinding.');
+}
 
 function jsonPath(parent: string, key: string): string {
   return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key)

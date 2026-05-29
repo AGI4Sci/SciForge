@@ -9,6 +9,7 @@ import {
   appendRunningGuidance,
   appendRunningGuidanceRecord,
   attachGuidanceQueueToResponse,
+  attachGuidanceQueueToSessionRun,
   attachProcessRecoveryToFailedSession,
   createGuidanceQueueRecord,
   createOptimisticUserTurnSession,
@@ -22,6 +23,7 @@ import {
   titleFromPrompt,
   updateGuidanceQueueRecords,
 } from './sessionTransforms';
+import { enrichRepairRaw } from './sessionRepairRaw';
 import { streamProcessTranscript } from './RunningWorkProcess';
 import { latestProgressModelFromCompactTrace } from '../../processProgress';
 import { conversationProjectionMigrationAuditFixtureForRun } from '../conversation-projection-view-model';
@@ -400,6 +402,64 @@ test('next-turn continuation payload omits prior message expandable and raw task
   assert.doesNotMatch(serialized, /requests\.get/);
   assert.doesNotMatch(serialized, /urllib\.request/);
   assert.doesNotMatch(serialized, /generated_task\.py/);
+});
+
+test('Computer Use repair continuation carries sidecar refs into next-turn payload', () => {
+  const blockedManifestRef = '.sciforge/vision-runs/cu-repair/blocked-manifest.json';
+  const repairHintRef = '.sciforge/vision-runs/cu-repair/repair-hint.json';
+  const continuationRequestRef = '.sciforge/vision-runs/cu-repair/continuation-request.json';
+  const runTaskChainRef = '.sciforge/vision-runs/cu-repair/tui-host-run-task-chain.json';
+  const traceRef = '.sciforge/vision-runs/cu-repair/vision-trace.json';
+  const nextUser = message('msg-next-computer-use', 'user', `/computer-use continue --continuation-request-ref "${continuationRequestRef}"`, '2026-05-07T01:00:00.000Z');
+  const repairRun: SciForgeRun = {
+    id: 'run-computer-use-repair',
+    scenarioId: 'literature-evidence-review',
+    status: 'failed',
+    prompt: 'Computer Use first round',
+    response: 'Computer Use needs repair.',
+    createdAt: '2026-05-07T00:10:00.000Z',
+    raw: {
+      displayIntent: {
+        conversationProjection: {
+          schemaVersion: 'sciforge.conversation-projection.v1',
+          conversationId: 'runtime-codex:run-computer-use-repair',
+          visibleAnswer: {
+            status: 'repair-needed',
+            text: 'Computer Use needs another round.',
+            artifactRefs: [traceRef, blockedManifestRef, repairHintRef, continuationRequestRef, runTaskChainRef],
+          },
+          artifacts: [
+            { ref: traceRef },
+            { ref: blockedManifestRef },
+            { ref: repairHintRef },
+            { ref: continuationRequestRef },
+            { ref: runTaskChainRef },
+          ],
+          executionProcess: [],
+          recoverActions: [`/computer-use continue --continuation-request-ref "${continuationRequestRef}"`],
+          verificationState: { status: 'unverified', verifierRef: 'gui.present:run-computer-use-repair:computer-use' },
+          auditRefs: [traceRef, blockedManifestRef, repairHintRef, continuationRequestRef, runTaskChainRef],
+        },
+      },
+    },
+  };
+
+  const payload = requestPayloadForTurn(session({
+    messages: [message('msg-prior-computer-use', 'scenario', 'Computer Use needs repair.', '2026-05-07T00:10:00.000Z'), nextUser],
+    runs: [repairRun],
+  }), nextUser, []);
+  const projectionUnit = payload.executionUnits.find((unit) => unit.tool === 'conversation.projection.continuation');
+  const params = projectionUnit?.params ?? '';
+
+  assert.match(params, /continuation-request\.json/);
+  assert.match(params, /repair-hint\.json/);
+  assert.match(params, /blocked-manifest\.json/);
+  assert.match(params, /tui-host-run-task-chain\.json/);
+  assert.match(params, /continuationRequestRefs/);
+  assert.match(params, /repairHintRefs/);
+  assert.match(params, /blockedManifestRefs/);
+  assert.match(params, /runTaskChainRefs/);
+  assert.match(params, /\/computer-use continue --continuation-request-ref/);
 });
 
 test('explicit old artifact follow-up only carries selected refs in request payload', () => {
@@ -827,6 +887,30 @@ test('merge helpers keep recent repair-needed refs when compacting crowded sessi
   assert.equal(mergedArtifacts.at(-1)?.id, 'artifact-recent');
 });
 
+test('repair raw enrichment preserves existing raw objects and wraps primitive raw values', () => {
+  const repairHistory = [{ attempt: 1, status: 'failed-with-reason' }];
+  const objectRaw = enrichRepairRaw({ codexSessionId: 'codex-1', previous: true }, repairHistory, 'run-source');
+  const primitiveRaw = enrichRepairRaw('raw-provider-error', repairHistory, 'run-source', 'backend retry failed');
+
+  assert.deepEqual(objectRaw, {
+    codexSessionId: 'codex-1',
+    previous: true,
+    acceptanceRepair: {
+      sourceRunId: 'run-source',
+      repairHistory,
+      failureReason: undefined,
+    },
+  });
+  assert.deepEqual(primitiveRaw, {
+    raw: 'raw-provider-error',
+    acceptanceRepair: {
+      sourceRunId: 'run-source',
+      repairHistory,
+      failureReason: 'backend retry failed',
+    },
+  });
+});
+
 test('appends running guidance as a queued user message', () => {
   const guided = appendRunningGuidance(session(), 'add controls');
 
@@ -892,6 +976,39 @@ test('running guidance keeps queue status in UI message, event transcript, final
   assert.equal(mergedForNextTurn.messages.find((item) => item.guidanceQueue?.id === guidance.id)?.guidanceQueue?.handlingRunId, 'run-guidance');
   assert.match(nextPayload.messages.map((item) => item.content).join('\n'), /skip broad web fetches/);
   assert.equal(nextPayload.runs.at(-1)?.guidanceQueue?.[0]?.status, 'merged');
+});
+
+test('attaches running guidance status to a session run without dropping raw metadata', () => {
+  const guidance = createGuidanceQueueRecord('keep current artifact refs when retrying', {
+    id: 'guidance-session-run',
+    receivedAt: '2026-05-08T00:01:00.000Z',
+  });
+  const base = session({
+    runs: [{
+      id: 'run-active',
+      scenarioId: 'literature-evidence-review',
+      status: 'running',
+      prompt: 'prepare report',
+      response: 'working',
+      createdAt: '2026-05-08T00:00:00.000Z',
+      raw: { existingDiagnosticRef: 'file:.sciforge/run-active/diagnostic.json' },
+    }],
+  });
+  const updated = attachGuidanceQueueToSessionRun(
+    base,
+    'run-active',
+    [guidance],
+    'deferred',
+    '当前 run 已经在执行中，追加引导等待下一轮。',
+  );
+  const run = updated.runs[0];
+  const raw = run.raw as { existingDiagnosticRef?: string; guidanceQueue?: Array<{ status?: string; activeRunId?: string; reason?: string }> };
+
+  assert.equal(run.guidanceQueue?.[0]?.status, 'deferred');
+  assert.equal(run.guidanceQueue?.[0]?.activeRunId, 'run-active');
+  assert.equal(raw.existingDiagnosticRef, 'file:.sciforge/run-active/diagnostic.json');
+  assert.equal(raw.guidanceQueue?.[0]?.status, 'deferred');
+  assert.equal(raw.guidanceQueue?.[0]?.reason, '当前 run 已经在执行中，追加引导等待下一轮。');
 });
 
 test('user cancel rejects queued guidance instead of replaying it across the cancel boundary', () => {

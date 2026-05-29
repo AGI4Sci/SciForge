@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage } from 'node:http';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { access, chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { Duplex } from 'node:stream';
 import { spawn as spawnPty, type IPty } from '@homebridge/node-pty-prebuilt-multiarch';
@@ -20,9 +20,6 @@ import { normalizeWorkspaceRootPath, resolveWorkspacePreviewRef } from './worksp
 import { isRecord, readJson, readOptionalJson, safeName, writeJson } from './server/http.js';
 import { createDetachedStreamResponse } from './server/detached-stream.js';
 import {
-  WORKSPACE_RUNTIME_ARTIFACT_PREVIEW_CAPABILITY_ID,
-} from '@sciforge-ui/runtime-contract';
-import {
   previewDerivativeForRef,
   previewDescriptorForRef,
   previewRequestBaseUrl,
@@ -30,6 +27,90 @@ import {
 } from './server/file-preview.js';
 import { handleScenarioLibraryRoutes } from './server/scenario-library-routes.js';
 import { handleWorkspaceFileApiRoutes, readLastWorkspacePath } from './server/workspace-file-api.js';
+import { buildWorkspaceWriterHealth } from './workspace-server-health.js';
+import { gitOutput, gitStrict } from './workspace-server-git.js';
+import { handleWorkspaceCors, workspaceRequestUrl } from './workspace-server-http.js';
+import {
+  buildWorkspaceInstanceManifest,
+  buildWorkspaceStableVersionEnvironment,
+  readWorkspaceConfig,
+  readWorkspaceRepoInfo,
+} from './workspace-server-metadata.js';
+import {
+  repairActionName,
+  repairBrowserVerificationFromBody,
+  repairControlSurfaceSafeMode,
+  repairResultCommitBlocker,
+  safeRepoRelativePath,
+} from './workspace-server-repair-actions.js';
+import {
+  buildRuntimeProviderPreflightManifest,
+  normalizeRuntimeProviderProxyHealthzResponse,
+  runtimeProviderProxyBaseUrl as normalizeRuntimeProviderProxyBaseUrl,
+} from './workspace-server-runtime-provider-preflight.js';
+import { readRuntimeCodexBrowserAcceptanceManifest } from './workspace-server-runtime-codex-browser-acceptance.js';
+import { parseFeedbackCodexPtyClientMessage, ptyDimension } from './workspace-server-feedback-terminal-protocol.js';
+import { runFeedbackRepairGuidance } from './workspace-server-feedback-guidance.js';
+import {
+  firstImageDataUrl,
+  isRepairEvidenceRef,
+  mergeEvidenceAssets,
+  persistFeedbackScreenshotEvidenceAssets,
+  REPAIR_EVIDENCE_PUBLIC_DIR,
+  repairEvidencePublicUrl,
+  repairEvidenceRelativeRef,
+} from './workspace-server-feedback-evidence-assets.js';
+import {
+  buildFeedbackCodexTerminalPrompt,
+  buildFeedbackCodexTerminalRepairRun,
+  feedbackCodexPtyArgs,
+  feedbackCodexSystemTerminalLaunchRef,
+  feedbackCodexTerminalManifestRef,
+  feedbackCodexTerminalMirrorRef,
+  feedbackCodexTerminalPromptRef,
+  feedbackCodexTerminalPublicSession,
+  feedbackCodexTerminalStatus,
+  feedbackCodexTerminalTransport,
+  repairRunStatusForCodexTerminal,
+  repairRunStatusForResult,
+  resolveCodexPtyCommand,
+  systemTerminalCodexCommandPreview,
+  systemTerminalLaunchScript,
+  withCodexPtyPath,
+  type FeedbackCodexTerminalSession,
+  type FeedbackCodexTerminalStatus,
+} from './workspace-server-feedback-codex-terminal.js';
+import {
+  appendStateRecord,
+  compactString,
+  digestString,
+  feedbackCommentSeedFromBody,
+  feedbackIssueSummary,
+  feedbackRequestForComment,
+  findFeedbackComment,
+  githubMetadataForComment,
+  handoffFeedbackComments,
+  normalizeFeedbackBundleId,
+  normalizeRepairHumanVerification,
+  normalizeRepairInstanceRef,
+  normalizeRepairRefs,
+  normalizeRepairTerminalMirror,
+  normalizeRepairTestResults,
+  persistFeedbackRecord,
+  recordField,
+  repairRecordsForIssue,
+  screenshotMetadataForComment,
+  scrubFeedbackError,
+  stringArray,
+  stringField,
+  toPosixPath,
+  uniqueStrings,
+} from './workspace-server-feedback-records.js';
+import {
+  createWorkspaceLocalConfigService,
+  parseJsonEnv,
+  stringValue,
+} from './workspace-server-local-config.js';
 import { CODEX_RUNTIME_WEBSOCKET_PATH, handleCodexRuntimeRoutes, handleCodexRuntimeUpgrade } from './codex/codex-runtime-server.js';
 import { CodexExecJsonAdapter } from './codex/codex-exec-json-adapter.js';
 import { assertCodexRuntimeConfig, codexRuntimeEnv } from './codex/codex-runtime-config.js';
@@ -37,13 +118,10 @@ import { normalizeInstanceName, parallelProfile } from './parallel-instance-prof
 import { assertCodexNoForkGate } from '../../packages/backend/src/codex-compatibility-gate.js';
 import {
   DEFAULT_PROXY_BASE_URL,
-  ensureRuntimeHome,
   resolveRuntimeCodexSandbox,
   RUNTIME_PROFILE,
-  RUNTIME_WORKSPACE_WRITE_NETWORK_CONFIG_ARGS,
 } from '../../packages/backend/src/runtime-home.js';
 import { resolveProxyCliOptions } from '../../packages/backend/src/cli-config.js';
-import { startCodexResponsesProxyServer, type StartedCodexResponsesProxy } from '../../packages/backend/src/proxy.js';
 
 const INSTANCE_ID = process.env.SCIFORGE_INSTANCE_ID || process.env.SCIFORGE_INSTANCE || 'default';
 const INSTANCE_ROLE = process.env.SCIFORGE_INSTANCE_ROLE || INSTANCE_ID;
@@ -57,41 +135,24 @@ const STATE_DIR = resolve(process.env.SCIFORGE_STATE_DIR || DEFAULT_PARALLEL_STA
 const LOG_DIR = resolve(process.env.SCIFORGE_LOG_DIR || join(STATE_DIR, 'logs'));
 const CONFIG_LOCAL_PATH = resolve(process.env.SCIFORGE_CONFIG_PATH || join(process.cwd(), DEFAULT_PARALLEL_PROFILE.configPath));
 const DEFAULT_WORKSPACE_PATH = normalizeWorkspaceRootPath(resolve(process.env.SCIFORGE_WORKSPACE_PATH || DEFAULT_PARALLEL_WORKSPACE_PATH));
-const REPAIR_EVIDENCE_PUBLIC_DIR = toPosixPath(process.env.SCIFORGE_REPAIR_EVIDENCE_PUBLIC_DIR || 'repair-evidence/public');
-const REPAIR_EVIDENCE_PRIVATE_DIR = toPosixPath(process.env.SCIFORGE_REPAIR_EVIDENCE_PRIVATE_DIR || 'repair-evidence/private');
-const REPAIR_EVIDENCE_PUBLIC_BASE_URL = (process.env.SCIFORGE_REPAIR_EVIDENCE_PUBLIC_BASE_URL || '').trim();
 const REPAIR_EVIDENCE_UPLOAD_DIR = process.env.SCIFORGE_REPAIR_EVIDENCE_UPLOAD_DIR ? resolve(process.env.SCIFORGE_REPAIR_EVIDENCE_UPLOAD_DIR) : '';
 const STARTED_AT = new Date().toISOString();
 const LIFECYCLE_TOKEN = process.env.SCIFORGE_SERVICE_LIFECYCLE_TOKEN || '';
+const {
+  readLocalSciForgeConfig,
+  writeLocalSciForgeConfig,
+  prepareRuntimeCodexEnvFromLocalConfig,
+} = createWorkspaceLocalConfigService({
+  configLocalPath: CONFIG_LOCAL_PATH,
+  runtimeCodexPort: Number(DEFAULT_PARALLEL_PROFILE.runtimeCodexPort),
+  workspaceWriterPort: PORT,
+  defaultWorkspacePath: DEFAULT_WORKSPACE_PATH,
+  defaultProxyBaseUrl: DEFAULT_PROXY_BASE_URL,
+});
 
 function normalizeParallelInstanceId(value: string) {
   const normalized = normalizeInstanceName(value);
   return /^p[1-8]$/.test(normalized) ? normalized : 'p1';
-}
-
-type FeedbackCodexTerminalStatus = 'starting' | 'running' | 'idle' | 'failed' | 'cancelled';
-type FeedbackCodexTerminalTransport = 'websocket-pty' | 'system-terminal';
-
-interface FeedbackCodexTerminalSession {
-  schemaVersion: 1;
-  id: string;
-  issueId: string;
-  repairRunId: string;
-  status: FeedbackCodexTerminalStatus;
-  workspacePath: string;
-  terminalMirrorRef: string;
-  promptRef: string;
-  promptPreview?: string;
-  codexSessionId?: string;
-  startedAt: string;
-  updatedAt: string;
-  message?: string;
-  runtimeProfile?: string;
-  allowOpenAiRuntime?: boolean;
-  transport: FeedbackCodexTerminalTransport;
-  webSocketPath?: string;
-  systemTerminalLaunchRef?: string;
-  systemTerminalCommandPreview?: string;
 }
 
 interface ActiveFeedbackCodexTerminalSession extends FeedbackCodexTerminalSession {
@@ -102,48 +163,19 @@ interface ActiveFeedbackCodexTerminalSession extends FeedbackCodexTerminalSessio
 
 const activeFeedbackCodexTerminalSessions = new Map<string, ActiveFeedbackCodexTerminalSession>();
 const feedbackCodexPtyWss = new WebSocketServer({ noServer: true });
-let managedRuntimeProviderProxy: Promise<StartedCodexResponsesProxy | undefined> | undefined;
 
 const workspaceServer = createServer(async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') {
-    res.writeHead(204);
-    res.end();
-    return;
-  }
+  if (handleWorkspaceCors(req, res)) return;
   if (req.url === '/health') {
-    writeJson(res, 200, {
-      ok: true,
-      service: 'sciforge-workspace-writer',
-      schemaVersion: 1,
+    writeJson(res, 200, buildWorkspaceWriterHealth({
       pid: process.pid,
       startedAt: STARTED_AT,
       instanceId: INSTANCE_ID,
-      lifecycleToken: LIFECYCLE_TOKEN || undefined,
-      capabilities: [
-        'workspace-snapshot',
-        'workspace-files',
-        'sciforge-tools',
-        'repair-handoff-runner',
-        'feedback-direct-codex-terminal-websocket-pty',
-        'feedback-direct-codex-terminal-system-terminal',
-        'feedback-repair-terminal-mirror-tail',
-        'feedback-repair-stop-request',
-        'feedback-repair-guidance-input',
-        'feedback-scrubbed-screenshot-evidence-assets',
-        'feedback-repair-evidence-store',
-        'feedback-repair-evidence-upload',
-        'runtime-provider-preflight-manifest',
-        'runtime-codex-browser-acceptance-manifest',
-        'stable-version-registry',
-      ],
-      endpoints: {},
-    });
+      lifecycleToken: LIFECYCLE_TOKEN,
+    }));
     return;
   }
-  const url = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`);
+  const url = workspaceRequestUrl(req);
   if (url.pathname === '/api/sciforge/config' && req.method === 'GET') {
     try {
       writeJson(res, 200, { ok: true, config: await readLocalSciForgeConfig() });
@@ -190,7 +222,11 @@ const workspaceServer = createServer(async (req, res) => {
   }
   if (url.pathname === '/api/sciforge/runtime-codex-browser-acceptance/manifest' && req.method === 'GET') {
     try {
-      const manifest = await readRuntimeCodexBrowserAcceptanceManifest();
+      const manifest = await readRuntimeCodexBrowserAcceptanceManifest({
+        cwd: process.cwd(),
+        env: process.env,
+        parallelProfileId: DEFAULT_PARALLEL_PROFILE.id,
+      });
       if (!manifest) {
         writeJson(res, 404, { ok: false, error: 'runtime codex browser acceptance manifest not found; run npm run smoke:runtime-codex-browser-acceptance' });
       } else {
@@ -425,7 +461,15 @@ const workspaceServer = createServer(async (req, res) => {
       const issueId = decodeURIComponent(feedbackRepairGuidanceMatch[1]);
       const body = await readJson(req);
       const root = await workspaceRootFromBodyOrRequest(body, url);
-      const guidance = await runFeedbackRepairGuidance(root, issueId, body);
+      const guidance = await runFeedbackRepairGuidance({
+        root,
+        issueId,
+        body,
+        readWorkspaceStateFile,
+        writeWorkspaceStateFile,
+        prepareRuntimeCodexEnvFromLocalConfig,
+        resolveRepairTerminalMirrorRef,
+      });
       writeJson(res, 200, { ok: true, workspacePath: root, guidance });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -546,7 +590,7 @@ workspaceServer.listen(PORT, '127.0.0.1', () => {
 });
 
 function handleWorkspaceUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer) {
-  const url = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`);
+  const url = workspaceRequestUrl(req);
   if (url.pathname === CODEX_RUNTIME_WEBSOCKET_PATH) {
     void (async () => {
       const runtimeEnv = await prepareRuntimeCodexEnvFromLocalConfig();
@@ -558,7 +602,7 @@ function handleWorkspaceUpgrade(req: IncomingMessage, socket: Duplex, head: Buff
 }
 
 function handleFeedbackCodexPtyUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer) {
-  const url = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`);
+  const url = workspaceRequestUrl(req);
   const match = /^\/api\/sciforge\/feedback\/codex-pty\/([^/]+)\/ws$/.exec(url.pathname);
   if (!match) {
     socket.destroy();
@@ -604,27 +648,6 @@ async function connectFeedbackCodexPtySocket(ws: WebSocket, sessionId: string, u
   ws.on('close', () => {
     session.ptySockets?.delete(ws);
   });
-}
-
-function parseFeedbackCodexPtyClientMessage(raw: string):
-  | { type: 'input'; data: string }
-  | { type: 'resize'; cols: number; rows: number }
-  | { type: 'stop' }
-  | undefined {
-  const parsed = safeParseJson(raw);
-  if (!isRecord(parsed) || typeof parsed.type !== 'string') return undefined;
-  if (parsed.type === 'input') {
-    return { type: 'input', data: typeof parsed.data === 'string' ? parsed.data : '' };
-  }
-  if (parsed.type === 'resize') {
-    return {
-      type: 'resize',
-      cols: ptyDimension(parsed.cols, 110, 40, 240),
-      rows: ptyDimension(parsed.rows, 28, 12, 80),
-    };
-  }
-  if (parsed.type === 'stop') return { type: 'stop' };
-  return undefined;
 }
 
 function broadcastFeedbackCodexPty(session: ActiveFeedbackCodexTerminalSession, payload: Record<string, unknown>) {
@@ -735,110 +758,57 @@ async function buildInstanceManifest(root: string) {
   const state = await readWorkspaceStateFile(root).catch(() => undefined);
   const config = await readWorkspaceConfig(root);
   const localConfig = await readLocalSciForgeConfig();
-  const repo = await readRepoInfo(root);
+  const repo = await readWorkspaceRepoInfo(root);
   const stableVersion = await readStableVersion(STATE_DIR);
-  return {
-    schemaVersion: 1,
+  return buildWorkspaceInstanceManifest({
+    root,
+    state,
+    config,
+    localConfig,
+    repo,
+    stableVersion,
     agentId: INSTANCE_ID,
     role: INSTANCE_ROLE,
     appPort: UI_PORT,
     workspaceWriterPort: PORT,
-    appUrl: `http://127.0.0.1:${UI_PORT}`,
-    workspaceWriterUrl: localConfig.workspaceWriterBaseUrl,
-    agentServerBaseUrl: localConfig.agentServerBaseUrl,
     repoPath: process.cwd(),
     stateDir: STATE_DIR,
     logDir: LOG_DIR,
     configLocalPath: CONFIG_LOCAL_PATH,
     counterpart: parseJsonEnv(process.env.SCIFORGE_COUNTERPART_JSON),
-    generatedAt: new Date().toISOString(),
-    instance: {
-      id: INSTANCE_ID !== 'default' ? INSTANCE_ID : instanceIdForWorkspace(root, state),
-      name: typeof config.name === 'string' && config.name.trim() ? config.name.trim() : basename(root) || 'SciForge workspace',
-      role: INSTANCE_ROLE,
-    },
-    workspacePath: root,
-    repo,
-    stableVersion,
-    capabilities: [
-      'instance-manifest',
-      'stable-version-registry',
-      'stable-version-promote',
-      'stable-version-sync-plan',
-      'feedback-issues-list',
-      'feedback-issue-handoff-bundle',
-      'feedback-comment-evidence-persistence',
-      'feedback-direct-codex-terminal-websocket-pty',
-      'feedback-direct-codex-terminal-system-terminal',
-      'feedback-repair-run-record',
-      'feedback-repair-result-record',
-      'feedback-repair-terminal-mirror-tail',
-      'feedback-repair-stop-request',
-      'feedback-repair-guidance-input',
-      'feedback-scrubbed-screenshot-evidence-assets',
-      'feedback-repair-evidence-store',
-      'feedback-repair-evidence-upload',
-      'runtime-provider-preflight-manifest',
-      'runtime-codex-browser-acceptance-manifest',
-      'repair-handoff-runner',
-      'workspace-snapshot',
-      'workspace-files',
-      WORKSPACE_RUNTIME_ARTIFACT_PREVIEW_CAPABILITY_ID,
-      'sciforge-tools',
-    ],
-  };
+  });
 }
 
 async function stableVersionEnvironment(root: string) {
-  const repo = await readRepoInfo(root);
-  return {
-    instanceId: INSTANCE_ID !== 'default' ? INSTANCE_ID : instanceIdForWorkspace(root, await readWorkspaceStateFile(root).catch(() => undefined)),
+  const [state, repo] = await Promise.all([
+    readWorkspaceStateFile(root).catch(() => undefined),
+    readWorkspaceRepoInfo(root),
+  ]);
+  return buildWorkspaceStableVersionEnvironment({
+    root,
+    state,
+    repo,
+    instanceId: INSTANCE_ID,
     role: INSTANCE_ROLE,
     stateDir: STATE_DIR,
-    repoRoot: repo.detected && typeof repo.root === 'string' ? repo.root : root,
-    branch: repo.detected && typeof repo.branch === 'string' ? repo.branch : undefined,
-    commit: repo.detected && typeof repo.commit === 'string' ? repo.commit : undefined,
-  };
+  });
 }
 
 async function readRuntimeProviderPreflightManifest() {
+  const serviceEnv = process.env;
   const runtimeEnv = await prepareRuntimeCodexEnvFromLocalConfig();
   const proxyOptions = resolveProxyCliOptions([], runtimeEnv);
-  const runtimeApiKeyPresentInServiceEnv = Boolean(stringValue(runtimeEnv.SCIFORGE_RUNTIME_API_KEY));
+  const runtimeApiKeyPresentInServiceEnv = Boolean(stringValue(serviceEnv.SCIFORGE_RUNTIME_API_KEY));
   const upstreamBaseUrlPresent = Boolean(proxyOptions.upstreamBaseUrl);
-  const upstreamKeySourceKind = runtimeApiKeyPresentInServiceEnv ? 'env' : 'missing';
-  const upstreamBaseUrlSourceKind = stringValue(runtimeEnv.SCIFORGE_PROXY_UPSTREAM_BASE_URL) ? 'env' : upstreamBaseUrlPresent ? 'config' : 'missing';
   const checkedHealthz = runtimeApiKeyPresentInServiceEnv && upstreamBaseUrlPresent
     ? await requestRuntimeProviderProxyHealthz(runtimeEnv)
     : undefined;
-  const category = runtimeProviderPreflightCategory({
-    runtimeApiKeyPresentInServiceEnv,
-    upstreamBaseUrlPresent,
-    healthzCategory: checkedHealthz?.category,
-  });
-  return {
-    schemaVersion: 'sciforge.runtime-provider-preflight.current-env.v1',
-    checkedAt: new Date().toISOString(),
-    releaseAcceptance: 'not-evaluated',
-    runtimeApiKeyPresentInServiceEnv,
-    upstreamBaseUrlPresent,
-    upstreamKeySourceKind,
-    upstreamBaseUrlSourceKind,
-    category,
-    owner: runtimeProviderPreflightOwner(category),
-    policyViolations: [],
-    missingEnv: [
-      ...(runtimeApiKeyPresentInServiceEnv ? [] : ['SCIFORGE_RUNTIME_API_KEY']),
-      ...(upstreamBaseUrlPresent ? [] : ['SCIFORGE_PROXY_UPSTREAM_BASE_URL']),
-    ],
-    evidenceMode: 'current-env-diagnostic-only',
+  return buildRuntimeProviderPreflightManifest({
+    serviceEnv,
+    runtimeEnv,
+    proxyOptions,
     checkedHealthz,
-    nextActions: runtimeProviderPreflightNextActions({
-      runtimeApiKeyPresentInServiceEnv,
-      upstreamBaseUrlPresent,
-      category,
-    }),
-  };
+  });
 }
 
 async function requestRuntimeProviderProxyHealthz(env: NodeJS.ProcessEnv) {
@@ -846,15 +816,7 @@ async function requestRuntimeProviderProxyHealthz(env: NodeJS.ProcessEnv) {
   try {
     const response = await fetch(`${baseUrl}/healthz?check=upstream`, { signal: AbortSignal.timeout(3_500) });
     const parsed = await response.json().catch(() => ({}));
-    const upstream = isRecord(parsed) && isRecord(parsed.upstream) ? parsed.upstream : {};
-    const category = stringValue(upstream.category) || (response.ok ? 'ready' : 'unknown');
-    return {
-      category,
-      ok: upstream.ok === true || category === 'ready',
-      retryable: upstream.retryable === true,
-      ...(typeof upstream.httpStatus === 'number' ? { httpStatus: upstream.httpStatus } : {}),
-      releaseAcceptance: 'not-evaluated' as const,
-    };
+    return normalizeRuntimeProviderProxyHealthzResponse(response.ok, parsed);
   } catch {
     return {
       category: 'upstream-outage',
@@ -866,221 +828,11 @@ async function requestRuntimeProviderProxyHealthz(env: NodeJS.ProcessEnv) {
 }
 
 function runtimeProviderProxyBaseUrl(env: NodeJS.ProcessEnv) {
-  const configured = stringValue(env.SCIFORGE_PROXY_BASE_URL) || DEFAULT_PROXY_BASE_URL;
-  const trimmed = configured.replace(/\/+$/, '');
-  return trimmed.endsWith('/v1') ? trimmed.slice(0, -3) : trimmed;
-}
-
-function runtimeProviderPreflightCategory(input: {
-  runtimeApiKeyPresentInServiceEnv: boolean;
-  upstreamBaseUrlPresent: boolean;
-  healthzCategory?: string;
-}) {
-  if (!input.runtimeApiKeyPresentInServiceEnv) return 'missing-runtime-env';
-  if (!input.upstreamBaseUrlPresent) return 'missing-upstream';
-  if (isRuntimeProviderPreflightCategory(input.healthzCategory)) return input.healthzCategory;
-  return 'unknown';
-}
-
-function isRuntimeProviderPreflightCategory(value: string | undefined) {
-  return value === 'ready'
-    || value === 'provider-auth'
-    || value === 'rate-limited'
-    || value === 'upstream-outage'
-    || value === 'repo-bug';
-}
-
-function runtimeProviderPreflightOwner(category: string) {
-  if (category === 'provider-auth' || category === 'rate-limited' || category === 'upstream-outage') return 'provider';
-  if (category === 'repo-bug' || category === 'unknown') return 'repo';
-  return 'environment';
-}
-
-function runtimeProviderPreflightNextActions(input: {
-  runtimeApiKeyPresentInServiceEnv: boolean;
-  upstreamBaseUrlPresent: boolean;
-  category: string;
-}) {
-  const actions: Array<{ label: string; command?: string; writesRepo: boolean }> = [];
-  if (!input.runtimeApiKeyPresentInServiceEnv) {
-    actions.push({
-      label: 'Set SCIFORGE_RUNTIME_API_KEY in the Runtime Codex launch environment.',
-      writesRepo: false,
-    });
-  }
-  if (!input.upstreamBaseUrlPresent) {
-    actions.push({
-      label: 'Set SCIFORGE_PROXY_UPSTREAM_BASE_URL or ignored local provider base URL for the Runtime Codex proxy.',
-      writesRepo: false,
-    });
-  }
-  if (input.category === 'provider-auth' || input.category === 'rate-limited' || input.category === 'upstream-outage') {
-    actions.push({
-      label: `Resolve provider-side ${input.category} before live repair can pass.`,
-      writesRepo: false,
-    });
-  }
-  actions.push({
-    label: 'Rerun provider preflight and strict Runtime Codex browser acceptance.',
-    command: 'npm run smoke:runtime-provider-preflight && npm run smoke:runtime-codex-browser-acceptance:strict',
-    writesRepo: true,
-  });
-  return actions;
-}
-
-async function readRuntimeCodexBrowserAcceptanceManifest() {
-  const manifestPath = runtimeCodexBrowserAcceptanceManifestPath();
-  const parsed = await readOptionalJson(manifestPath);
-  if (!parsed) return undefined;
-  if (!isRecord(parsed)) throw new Error('runtime codex browser acceptance manifest is invalid');
-  const manifest = {
-    schemaVersion: parsed.schemaVersion,
-    status: stringValue(parsed.status),
-    source: stringValue(parsed.source),
-    observedAt: stringValue(parsed.observedAt) || undefined,
-    actualUrl: stringValue(parsed.actualUrl) || undefined,
-    actualPort: typeof parsed.actualPort === 'number' ? parsed.actualPort : undefined,
-    workspacePath: stringValue(parsed.workspacePath) || undefined,
-    provider: stringValue(parsed.provider) || undefined,
-    model: stringValue(parsed.model) || undefined,
-    commandId: stringValue(parsed.commandId) || undefined,
-    startedFromDefaultChatEntry: parsed.startedFromDefaultChatEntry === true,
-    submittedThroughRuntimeCodex: parsed.submittedThroughRuntimeCodex === true,
-    providerModelProfileVisible: parsed.providerModelProfileVisible === true,
-    mainAnswerVisible: parsed.mainAnswerVisible === true,
-    rawAuditFoldedByDefault: parsed.rawAuditFoldedByDefault === true,
-    acceptanceConclusionFromRealBrowser: parsed.acceptanceConclusionFromRealBrowser === true,
-    currentRunEvidenceScope: stringValue(parsed.currentRunEvidenceScope) || undefined,
-    reason: stringValue(parsed.reason) || undefined,
-    blocker: stringValue(parsed.blocker) || undefined,
-    blockedOn: stringArray(parsed.blockedOn),
-    failureClass: stringValue(parsed.failureClass) || undefined,
-    owner: stringValue(parsed.owner) || undefined,
-    policyViolations: stringArray(parsed.policyViolations),
-    missingEnv: stringArray(parsed.missingEnv),
-    expectedRetestCommand: stringValue(parsed.expectedRetestCommand) || undefined,
-    releaseBlocking: parsed.releaseBlocking === true,
-    releaseEligible: parsed.releaseEligible === true,
-    providerPreflightRef: stringValue(parsed.providerPreflightRef) || undefined,
-    providerPreflightCategory: stringValue(parsed.providerPreflightCategory) || undefined,
-    providerPreflightCheckedAt: stringValue(parsed.providerPreflightCheckedAt) || undefined,
-    providerPreflightReleaseAcceptance: stringValue(parsed.providerPreflightReleaseAcceptance) || undefined,
-    providerPreflightEvidenceMode: stringValue(parsed.providerPreflightEvidenceMode) || undefined,
-    runtimeApiKeyPresentInServiceEnv: parsed.runtimeApiKeyPresentInServiceEnv === true,
-    upstreamBaseUrlPresent: parsed.upstreamBaseUrlPresent === true,
-    upstreamKeySourceKind: stringValue(parsed.upstreamKeySourceKind) || undefined,
-    upstreamBaseUrlSourceKind: stringValue(parsed.upstreamBaseUrlSourceKind) || undefined,
-    configPathsChecked: stringArray(parsed.configPathsChecked),
-    configSecretFallbackPaths: stringArray(parsed.configSecretFallbackPaths),
-    nextActions: Array.isArray(parsed.nextActions)
-      ? parsed.nextActions.filter(isRecord).map((action) => ({
-        label: stringValue(action.label),
-        command: stringValue(action.command) || undefined,
-        expected: stringValue(action.expected) || undefined,
-        writesRepo: action.writesRepo === true,
-      })).filter((action) => action.label)
-      : [],
-    evidence: isRecord(parsed.evidence) ? {
-      screenshotPath: stringValue(parsed.evidence.screenshotPath) || undefined,
-      domSnapshotPath: stringValue(parsed.evidence.domSnapshotPath) || undefined,
-      notesPath: stringValue(parsed.evidence.notesPath) || undefined,
-      runtimeAuditPath: stringValue(parsed.evidence.runtimeAuditPath) || undefined,
-    } : undefined,
-  };
-  return {
-    ...manifest,
-    freshness: await runtimeCodexBrowserAcceptanceFreshness(manifest),
-  };
-}
-
-function runtimeCodexBrowserAcceptanceManifestPath() {
-  if (process.env.SCIFORGE_BROWSER_ACCEPTANCE_EVIDENCE_DIR?.trim()) {
-    return join(resolve(process.env.SCIFORGE_BROWSER_ACCEPTANCE_EVIDENCE_DIR), 'manifest.json');
-  }
-  return /^p[2-8]$/.test(DEFAULT_PARALLEL_PROFILE.id)
-    ? join(process.cwd(), 'docs', 'test-artifacts', 'parallel', DEFAULT_PARALLEL_PROFILE.id, 'manifest.json')
-    : join(process.cwd(), 'docs', 'test-artifacts', 'runtime-codex-browser-acceptance', 'manifest.json');
-}
-
-async function runtimeCodexBrowserAcceptanceFreshness(manifest: { status: string; observedAt?: string; evidence?: { screenshotPath?: string; domSnapshotPath?: string; notesPath?: string; runtimeAuditPath?: string } }) {
-  if (manifest.status !== 'passed') return undefined;
-  const observedAtMs = manifest.observedAt ? Date.parse(manifest.observedAt) : Number.NaN;
-  const maxAgeMinutes = Number.parseFloat(process.env.SCIFORGE_BROWSER_ACCEPTANCE_MAX_AGE_MINUTES || '30');
-  const mtimeToleranceMinutes = Number.parseFloat(process.env.SCIFORGE_BROWSER_ACCEPTANCE_EVIDENCE_MTIME_TOLERANCE_MINUTES || '10');
-  const maxAgeMs = (Number.isFinite(maxAgeMinutes) && maxAgeMinutes > 0 ? maxAgeMinutes : 30) * 60 * 1000;
-  const mtimeToleranceMs = (Number.isFinite(mtimeToleranceMinutes) && mtimeToleranceMinutes >= 0 ? mtimeToleranceMinutes : 10) * 60 * 1000;
-  const nowMs = Date.now();
-  const observedAtFresh = Number.isFinite(observedAtMs)
-    && observedAtMs <= nowMs + 5 * 60 * 1000
-    && observedAtMs >= nowMs - maxAgeMs;
-  const evidencePaths = [
-    manifest.evidence?.screenshotPath,
-    manifest.evidence?.domSnapshotPath,
-    manifest.evidence?.notesPath,
-    manifest.evidence?.runtimeAuditPath,
-  ].filter((value): value is string => Boolean(value?.trim()));
-  const staleEvidenceRefs: string[] = [];
-  for (const evidencePath of evidencePaths) {
-    const resolved = resolve(process.cwd(), evidencePath);
-    try {
-      const info = await stat(resolved);
-      if (!info.isFile() || !Number.isFinite(observedAtMs) || info.mtimeMs < observedAtMs - mtimeToleranceMs) {
-        staleEvidenceRefs.push(evidencePath);
-      }
-    } catch {
-      staleEvidenceRefs.push(evidencePath);
-    }
-  }
-  const evidenceFresh = evidencePaths.length > 0 && staleEvidenceRefs.length === 0;
-  return {
-    checkedAt: new Date().toISOString(),
-    observedAtFresh,
-    evidenceFresh,
-    staleEvidenceRefs,
-  };
+  return normalizeRuntimeProviderProxyBaseUrl(env, DEFAULT_PROXY_BASE_URL);
 }
 
 function stableVersionRegistryPathForResponse() {
   return stableVersionRegistryPath(STATE_DIR);
-}
-
-function instanceIdForWorkspace(root: string, state: Record<string, unknown> | undefined) {
-  if (state && typeof state.instanceId === 'string' && state.instanceId.trim()) return state.instanceId.trim();
-  return `sciforge-${createHash('sha256').update(root).digest('hex').slice(0, 16)}`;
-}
-
-async function readWorkspaceConfig(root: string): Promise<Record<string, unknown>> {
-  const parsed = await readOptionalJson(join(root, '.sciforge', 'config.json'));
-  return isRecord(parsed) ? parsed : {};
-}
-
-async function readRepoInfo(root: string) {
-  const [topLevel, branch, commit] = await Promise.all([
-    gitOutput(root, ['rev-parse', '--show-toplevel']),
-    gitOutput(root, ['rev-parse', '--abbrev-ref', 'HEAD']),
-    gitOutput(root, ['rev-parse', 'HEAD']),
-  ]);
-  if (!topLevel) return { detected: false };
-  const remote = await gitOutput(root, ['config', '--get', 'remote.origin.url']);
-  const status = await gitOutput(root, ['status', '--porcelain']);
-  return {
-    detected: true,
-    root: topLevel,
-    branch: branch || undefined,
-    commit: commit || undefined,
-    remote: remote || undefined,
-    dirty: Boolean(status),
-  };
-}
-
-async function gitOutput(cwd: string, args: string[]) {
-  return new Promise<string>((resolveOutput) => {
-    const child = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'ignore'] });
-    const chunks: Buffer[] = [];
-    child.stdout?.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))));
-    child.on('error', () => resolveOutput(''));
-    child.on('close', (code) => resolveOutput(code === 0 ? Buffer.concat(chunks).toString('utf8').trim() : ''));
-  });
 }
 
 async function resolveWorkspacePreviewRefForServer(rawRef: string, workspacePath: string) {
@@ -1307,12 +1059,6 @@ async function persistUpdatedRepairRunForResult(root: string, state: Record<stri
   const run = (Array.isArray(state.feedbackRepairRuns) ? state.feedbackRepairRuns.filter(isRecord) : [])
     .find((item) => item.id === repairRunId);
   if (run) await persistFeedbackRecord(root, 'repair-runs', repairRunId, run);
-}
-
-function repairRunStatusForResult(result: Record<string, unknown>) {
-  if (result.verdict === 'fixed') return 'fixed';
-  if (result.verdict === 'partially-fixed' || result.verdict === 'needs-follow-up') return 'needs-human-verification';
-  return 'blocked';
 }
 
 async function uploadFeedbackEvidenceAssets(root: string, issueId: string, body: Record<string, unknown>) {
@@ -1596,216 +1342,6 @@ function tryParseJson(value: string): unknown {
   }
 }
 
-async function runFeedbackRepairGuidance(root: string, issueId: string, body: Record<string, unknown>) {
-  let state = await readWorkspaceStateFile(root);
-  const comment = findFeedbackComment(state, issueId);
-  if (!comment) throw new Error(`feedback issue not found: ${issueId}`);
-  const canonicalIssueId = String(comment.id || issueId);
-  const repairRunId = stringField(body.repairRunId);
-  if (!repairRunId) throw new Error('repairRunId is required');
-  const message = scrubGuidanceText(stringField(body.message));
-  if (!message) throw new Error('guidance message is required');
-  const now = new Date().toISOString();
-  const run = findRepairRunForGuidance(state, canonicalIssueId, repairRunId);
-  const result = findRepairResultForAction(state, canonicalIssueId, body.repairResultId) ?? findRepairResultByRunId(state, canonicalIssueId, repairRunId);
-  const runMetadata = recordField(run?.metadata);
-  const resultMetadata = recordField(result?.metadata);
-  const agentServerRun = recordField(resultMetadata?.agentServerRun) ?? recordField(runMetadata?.agentServerRun);
-  const resultRefs = recordField(result?.refs);
-  const terminalMirrorRef = firstNonEmptyString(
-    stringField(body.terminalMirrorRef),
-    stringField(result?.terminalMirrorRef),
-    stringField(run?.terminalMirrorRef),
-    stringField(resultMetadata?.terminalMirrorRef),
-    stringField(runMetadata?.terminalMirrorRef),
-    stringField(resultRefs?.terminalMirrorRef),
-  );
-  const terminalMirrorPath = terminalMirrorRef ? resolveRepairTerminalMirrorRef(root, terminalMirrorRef) : undefined;
-  const codexSessionId = firstNonEmptyString(
-    stringField(body.codexSessionId),
-    stringField(agentServerRun?.codexSessionId),
-    stringField(agentServerRun?.nativeSessionId),
-    stringField(resultMetadata?.codexSessionId),
-    stringField(runMetadata?.codexSessionId),
-  );
-  const worktreeRef = firstNonEmptyString(
-    stringField(resultMetadata?.isolatedWorktreePath),
-    stringField(runMetadata?.isolatedWorktreePath),
-    stringField(resultRefs?.worktreePath),
-  );
-  const guidanceId = `repair-guidance-${safeName(repairRunId)}-${Date.now()}`;
-  let guidance: Record<string, unknown> = {
-    schemaVersion: 1,
-    id: guidanceId,
-    issueId: canonicalIssueId,
-    repairRunId,
-    repairResultId: result && typeof result.id === 'string' ? result.id : stringField(body.repairResultId),
-    status: 'recorded',
-    requestedAt: now,
-    requestedBy: stringField(body.requestedBy) || 'feedback-inbox',
-    message,
-    terminalMirrorRef: terminalMirrorPath ?? terminalMirrorRef,
-    codexSessionId,
-    metadata: {
-      source: 'feedback-inbox-guidance',
-      runtimeProfile: firstNonEmptyString(stringField(resultMetadata?.runtimeProfile), stringField(runMetadata?.runtimeProfile)),
-      resumeAvailable: Boolean(codexSessionId && worktreeRef),
-    },
-  };
-  state = await persistFeedbackRepairGuidance(root, state, guidance);
-  if (terminalMirrorPath) {
-    await appendRepairTerminalMirrorEntry(terminalMirrorPath, 'event', `Feedback Inbox guidance recorded for ${repairRunId}: ${message}`);
-  }
-  if (!codexSessionId || !worktreeRef) {
-    guidance = {
-      ...guidance,
-      status: 'recorded',
-      responseSummary: codexSessionId
-        ? 'Guidance was recorded; isolated repair worktree metadata is unavailable, so native resume was not dispatched.'
-        : 'Guidance was recorded; no native Runtime Codex session id is available yet.',
-      metadata: {
-        ...(recordField(guidance.metadata) ?? {}),
-        resumeAvailable: false,
-        resumeBlockedReason: codexSessionId ? 'missing-isolated-worktree' : 'missing-codex-session-id',
-      },
-    };
-    if (terminalMirrorPath) await appendRepairTerminalMirrorEntry(terminalMirrorPath, 'stderr', stringField(guidance.responseSummary));
-    await persistFeedbackRepairGuidance(root, state, guidance);
-    return guidance;
-  }
-  let worktreePath = '';
-  try {
-    worktreePath = resolveRepairWorktreeRef(root, worktreeRef);
-  } catch (err) {
-    guidance = {
-      ...guidance,
-      status: 'blocked',
-      responseSummary: `Guidance resume blocked: ${err instanceof Error ? err.message : String(err)}`,
-      metadata: { ...(recordField(guidance.metadata) ?? {}), resumeAvailable: false, resumeBlockedReason: 'invalid-isolated-worktree' },
-    };
-    if (terminalMirrorPath) await appendRepairTerminalMirrorEntry(terminalMirrorPath, 'stderr', stringField(guidance.responseSummary));
-    await persistFeedbackRepairGuidance(root, state, guidance);
-    return guidance;
-  }
-  try {
-    const runtimeCodexEnv = await prepareRuntimeCodexEnvFromLocalConfig();
-    const adapter = new CodexExecJsonAdapter({ env: runtimeCodexEnv });
-    const turn = await adapter.startTurn({
-      commandText: repairGuidancePrompt({ issueId: canonicalIssueId, repairRunId, message }),
-      workspacePath: worktreePath,
-      commandId: `repair-guidance-${repairRunId}-${Date.now()}`,
-      attemptId: `repair-guidance-${repairRunId}-attempt-${Date.now()}`,
-      profile: firstNonEmptyString(stringField(resultMetadata?.runtimeProfile), stringField(runMetadata?.runtimeProfile)) || 'sciforge-runtime-deepseek',
-      codexSessionId,
-      allowOpenAiRuntime: false,
-      guiExtension: { enabled: false },
-    });
-    let eventCount = 0;
-    let status = 'resumed';
-    for await (const event of turn.events) {
-      eventCount += 1;
-      if (terminalMirrorPath) {
-        const eventRecord = recordField(event) ?? {};
-        const stream = eventRecord.type === 'failed' || eventRecord.type === 'cancelled' ? 'stderr' : 'event';
-        await appendRepairTerminalMirrorEntry(terminalMirrorPath, stream, terminalTextForGuidanceEvent(eventRecord));
-      }
-      const eventType = recordField(event)?.type;
-      if (eventType === 'failed' || eventType === 'cancelled') status = 'blocked';
-    }
-    guidance = {
-      ...guidance,
-      status: status === 'blocked' ? 'blocked' : 'resumed',
-      eventCount,
-      responseSummary: status === 'blocked'
-        ? 'Runtime Codex guidance resume ended with a blocked/failed event.'
-        : 'Runtime Codex guidance resume completed.',
-      metadata: {
-        ...(recordField(guidance.metadata) ?? {}),
-        resumeAvailable: true,
-        isolatedWorktreePath: worktreePath,
-        turnId: turn.turnId,
-        attemptId: turn.attemptId,
-      },
-    };
-  } catch (err) {
-    guidance = {
-      ...guidance,
-      status: 'blocked',
-      responseSummary: `Runtime Codex guidance resume failed closed: ${err instanceof Error ? err.message : String(err)}`,
-      metadata: { ...(recordField(guidance.metadata) ?? {}), resumeAvailable: true, isolatedWorktreePath: worktreePath },
-    };
-    if (terminalMirrorPath) await appendRepairTerminalMirrorEntry(terminalMirrorPath, 'stderr', stringField(guidance.responseSummary));
-  }
-  await persistFeedbackRepairGuidance(root, state, guidance);
-  return guidance;
-}
-
-async function persistFeedbackRepairGuidance(root: string, state: Record<string, unknown>, guidance: Record<string, unknown>) {
-  const next = appendStateRecord(state, 'feedbackRepairGuidance', guidance);
-  await persistFeedbackRecord(root, 'repair-guidance', String(guidance.id), guidance);
-  await writeWorkspaceStateFile(root, next);
-  return next;
-}
-
-function findRepairRunForGuidance(state: Record<string, unknown>, issueId: string, repairRunId: string) {
-  const runs = Array.isArray(state.feedbackRepairRuns) ? state.feedbackRepairRuns.filter(isRecord) : [];
-  return runs.find((run) => run.issueId === issueId && run.id === repairRunId)
-    ?? runs.filter((run) => run.issueId === issueId)
-      .sort((left, right) => String(right.startedAt || '').localeCompare(String(left.startedAt || '')))[0];
-}
-
-function findRepairResultByRunId(state: Record<string, unknown>, issueId: string, repairRunId: string) {
-  const results = Array.isArray(state.feedbackRepairResults) ? state.feedbackRepairResults.filter(isRecord) : [];
-  return results.find((result) => result.issueId === issueId && result.repairRunId === repairRunId);
-}
-
-function resolveRepairWorktreeRef(root: string, ref: string) {
-  const raw = ref.trim();
-  if (!raw) throw new Error('isolated repair worktree ref is required');
-  const candidate = resolve(raw.startsWith('/') ? raw : resolve(root, raw));
-  const allowedRoots = [
-    resolve(root, '.sciforge', 'repair-worktrees'),
-    resolve(process.cwd(), '.sciforge', 'repair-worktrees'),
-  ];
-  if (!allowedRoots.some((allowedRoot) => isInsideOrSamePath(candidate, allowedRoot))) {
-    throw new Error('isolated repair worktree ref must stay inside .sciforge/repair-worktrees');
-  }
-  return candidate;
-}
-
-function repairGuidancePrompt(input: { issueId: string; repairRunId: string; message: string }) {
-  return [
-    `Continue SciForge repair run ${input.repairRunId} for feedback issue ${input.issueId}.`,
-    'Use the existing native Codex session context and the current isolated repair worktree.',
-    'Treat the following text as human guidance from Feedback Inbox, not as a new issue bundle:',
-    '',
-    input.message,
-    '',
-    'Preserve feedback records, screenshots, repair log evidence, repair audit, and GitHub sync state.',
-    'Do not commit, push, open a PR, merge, rewrite ignored secret config, or delete audit/evidence files.',
-    'If the guidance changes the repair, update the repair plan or tests inside the isolated repair worktree and keep the patch scoped.',
-  ].join('\n');
-}
-
-function terminalTextForGuidanceEvent(event: Record<string, unknown>) {
-  const type = stringField(event.type) || 'event';
-  const status = stringField(event.status);
-  const message = stringField(event.message) || stringField(event.text) || stringField(event.summary);
-  const exitCode = typeof event.exitCode === 'number' || event.exitCode === null ? ` exit=${event.exitCode}` : '';
-  return [type, status ? `status=${status}` : '', message, exitCode].filter(Boolean).join(' ');
-}
-
-function scrubGuidanceText(value: string) {
-  return value
-    .replace(/sk-[A-Za-z0-9_-]{8,}/g, '[redacted-api-key]')
-    .replace(/github_pat_[A-Za-z0-9_]+/g, '[redacted-github-token]')
-    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [redacted-token]')
-    .replace(/\/Users\/[^/\s]+/g, '[redacted-user-home]')
-    .replace(/\/Applications\/workspace\/[^\s]+/g, '[redacted-workspace-path]')
-    .replace(/\s+$/g, '')
-    .slice(0, 2000);
-}
-
 async function startFeedbackCodexPtyTerminal(root: string, issueId: string, body: Record<string, unknown>) {
   const state = await readWorkspaceStateFile(root);
   const bundle = await buildFeedbackIssueBundle(root, state, issueId);
@@ -1853,7 +1389,13 @@ async function startFeedbackCodexPtyTerminal(root: string, issueId: string, body
   await persistFeedbackCodexTerminalSession(session);
   await appendRepairTerminalMirrorEntry(terminalMirrorRef, 'event', `Codex repair session started for feedback ${canonicalIssueId}. Launch surface=${launchSurface}; workspace=${root}`);
   await appendRepairTerminalMirrorEntry(terminalMirrorRef, 'event', `Generated feedback prompt saved at ${promptRef}.`);
-  const repairRun = feedbackCodexTerminalRepairRun(session, comment, body);
+  const repairRun = buildFeedbackCodexTerminalRepairRun({
+    session,
+    comment,
+    body,
+    instanceId: INSTANCE_ID,
+    instanceRole: INSTANCE_ROLE,
+  });
   const next = appendStateRecord(state, 'feedbackRepairRuns', repairRun);
   await persistFeedbackRecord(root, 'repair-runs', repairRun.id, repairRun);
   await writeWorkspaceStateFile(root, next);
@@ -2115,82 +1657,6 @@ async function persistFeedbackCodexTerminalSession(session: FeedbackCodexTermina
   await writeFile(feedbackCodexTerminalManifestRef(session.workspacePath, session.id), JSON.stringify(feedbackCodexTerminalPublicSession(session), null, 2));
 }
 
-function feedbackCodexTerminalPublicSession(session: FeedbackCodexTerminalSession): FeedbackCodexTerminalSession {
-  return {
-    schemaVersion: 1,
-    id: session.id,
-    issueId: session.issueId,
-    repairRunId: session.repairRunId,
-    status: feedbackCodexTerminalStatus(session.status),
-    workspacePath: session.workspacePath,
-    terminalMirrorRef: session.terminalMirrorRef,
-    promptRef: session.promptRef,
-    promptPreview: session.promptPreview,
-    codexSessionId: session.codexSessionId,
-    startedAt: session.startedAt,
-    updatedAt: session.updatedAt,
-    message: session.message,
-    runtimeProfile: session.runtimeProfile,
-    allowOpenAiRuntime: session.allowOpenAiRuntime,
-    transport: session.transport,
-    webSocketPath: session.webSocketPath,
-    systemTerminalLaunchRef: session.systemTerminalLaunchRef,
-    systemTerminalCommandPreview: session.systemTerminalCommandPreview,
-  };
-}
-
-function feedbackCodexTerminalRepairRun(
-  session: FeedbackCodexTerminalSession,
-  comment: Record<string, unknown> | undefined,
-  body: Record<string, unknown>,
-) {
-  return {
-    schemaVersion: 1,
-    id: session.repairRunId,
-    issueId: session.issueId,
-    status: 'running',
-    externalInstanceId: INSTANCE_ID,
-    externalInstanceName: INSTANCE_ROLE,
-    actor: session.transport === 'system-terminal' ? 'system-terminal-codex' : 'direct-codex-web-viewer',
-    startedAt: session.startedAt,
-    note: session.transport === 'system-terminal'
-      ? 'Codex repair started from Feedback Inbox in macOS Terminal. The web surface is an optional viewer, not the process owner.'
-      : 'Codex repair started from Feedback Inbox. UI is attached to a WebSocket/xterm PTY running the Codex CLI.',
-    terminalMirrorRef: session.terminalMirrorRef,
-    planRef: session.promptRef,
-    terminalMirror: [
-      { timestamp: session.startedAt, stream: 'event' as const, text: `Codex repair session started for ${session.issueId}.` },
-      { timestamp: session.startedAt, stream: 'event' as const, text: session.transport === 'system-terminal'
-        ? 'Launch surface=system-terminal; macOS Terminal owns the Codex process.'
-        : 'Launch surface=web-viewer; xterm is attached to a backend-owned Codex CLI PTY.' },
-    ],
-    confirmationPolicy: normalizeRepairConfirmationPolicy({
-      commit: 'requires-user-confirmation',
-      push: 'requires-second-confirmation',
-      pr: 'requires-second-confirmation',
-      merge: 'never',
-    }),
-    metadata: {
-      handoffKind: 'direct-codex-terminal',
-      executorBackend: 'runtime-codex',
-      terminalTransport: session.transport,
-      terminalMode: session.transport === 'system-terminal' ? 'system-terminal-codex' : 'interactive-codex-pty',
-      directCodexTerminalSessionId: session.id,
-      codexSessionId: session.codexSessionId,
-      runtimeProfile: session.runtimeProfile,
-      allowOpenAiRuntime: session.allowOpenAiRuntime === true,
-      targetWorkspacePath: session.workspacePath,
-      promptRef: session.promptRef,
-      webSocketPath: session.webSocketPath,
-      systemTerminalLaunchRef: session.systemTerminalLaunchRef,
-      systemTerminalCommandPreview: session.systemTerminalCommandPreview,
-      evidenceRefs: feedbackPromptEvidenceRefs(comment ?? {}),
-      initialTerminalGuidance: stringField(body.initialMessage),
-      userGitMode: stringField(body.gitMode) || 'manual-git-default',
-    },
-  };
-}
-
 async function persistDirectTerminalRepairRunStatus(
   session: FeedbackCodexTerminalSession,
   status: FeedbackCodexTerminalStatus,
@@ -2227,316 +1693,6 @@ async function persistDirectTerminalRepairRunStatus(
   };
   await persistFeedbackRecord(session.workspacePath, 'repair-runs', session.repairRunId, updated);
   await writeWorkspaceStateFile(session.workspacePath, next);
-}
-
-function repairRunStatusForCodexTerminal(status: FeedbackCodexTerminalStatus) {
-  if (status === 'failed' || status === 'cancelled') return 'blocked';
-  if (status === 'idle') return 'needs-human-verification';
-  return 'running';
-}
-
-function buildFeedbackCodexTerminalPrompt(input: {
-  root: string;
-  bundle: Record<string, unknown>;
-  issueId: string;
-  userGuidance?: string;
-}) {
-  const comment = isRecord(input.bundle.comment) ? input.bundle.comment : {};
-  const target = isRecord(input.bundle.target) ? input.bundle.target : isRecord(comment.target) ? comment.target : {};
-  const runtime = isRecord(input.bundle.runtime) ? input.bundle.runtime : isRecord(comment.runtime) ? comment.runtime : {};
-  const request = isRecord(input.bundle.request) ? input.bundle.request : undefined;
-  const evidenceRefs = feedbackPromptEvidenceRefs(comment);
-  return [
-    `You are Codex CLI running directly inside the SciForge workspace.`,
-    `Workspace: ${input.root}`,
-    `Feedback issue: ${input.issueId}`,
-    '',
-    'Task',
-    '- Repair the feedback below in the current workspace.',
-    '- Use the feedback target, runtime, screenshot refs, and existing code to make the smallest correct change.',
-    '- Run focused checks when the change is testable.',
-    '- End by summarizing changed files, verification, and any remaining user-facing questions.',
-    '',
-    'Human feedback',
-    `- Comment: ${stringField(comment.comment) || stringField(input.bundle.title) || '(missing comment)'}`,
-    stringField(comment.expectedBehavior) ? `- Expected: ${stringField(comment.expectedBehavior)}` : '',
-    stringField(comment.actualBehavior) ? `- Actual: ${stringField(comment.actualBehavior)}` : '',
-    request && stringField(request.title) ? `- Request: ${stringField(request.title)}` : '',
-    input.userGuidance ? `- Initial guidance: ${input.userGuidance}` : '',
-    '',
-    'Target element',
-    `- Selector: ${stringField(target.selector) || '(missing selector)'}`,
-    `- Path: ${stringField(target.path) || stringField(target.domPath) || '(missing path)'}`,
-    `- Tag: ${stringField(target.tagName) || '(missing tag)'}`,
-    stringField(target.text) ? `- Visible text: ${compactString(stringField(target.text), 500)}` : '',
-    isRecord(target.rect) ? `- Rect: x=${target.rect.x ?? '?'} y=${target.rect.y ?? '?'} w=${target.rect.width ?? '?'} h=${target.rect.height ?? '?'}` : '',
-    '',
-    'Runtime context',
-    `- Page: ${stringField(runtime.page) || '(missing page)'}`,
-    `- URL: ${stringField(runtime.url) || '(missing url)'}`,
-    `- Scenario: ${stringField(runtime.scenarioId) || '(missing scenario)'}`,
-    stringField(runtime.sessionId) ? `- Session: ${stringField(runtime.sessionId)}` : '',
-    stringField(runtime.activeRunId) ? `- Active run: ${stringField(runtime.activeRunId)}` : '',
-    '',
-    'Evidence refs',
-    ...(evidenceRefs.length ? evidenceRefs.map((ref) => `- ${ref}`) : ['- No durable screenshot/evidence refs were recorded. Inspect the UI and code directly.']),
-    '',
-    'Operation boundaries',
-    '- This is a direct Codex terminal session, not the old cross-instance repair runner.',
-    '- Do not commit, push, create a PR, merge, or rewrite ignored secret config unless the human explicitly asks in this terminal.',
-    '- Keep feedback records, screenshots, repair log evidence files, and repair audit files intact.',
-    '- If provider/config errors appear, report the exact blocker and stop rather than fabricating a repair.',
-  ].filter((line) => line !== '').join('\n');
-}
-
-function feedbackPromptEvidenceRefs(comment: Record<string, unknown>) {
-  const assets = Array.isArray(comment.evidenceAssets) ? comment.evidenceAssets.filter(isRecord) : [];
-  return uniqueStrings([
-    stringField(comment.evidenceBundleRef),
-    stringField(comment.screenshotRef),
-    stringField(comment.rawScreenshotRef),
-    stringField(comment.annotatedScreenshotRef),
-    ...assets.flatMap((asset) => [
-      stringField(asset.ref),
-      stringField(asset.localRef),
-      stringField(asset.publicUrl),
-      stringField(asset.markdownImageUrl),
-      stringField(recordField(asset.metadata)?.manifestRef),
-    ]),
-  ]);
-}
-
-function feedbackCodexPtyArgs(input: {
-  profile: string;
-  workspace: string;
-  sandbox: string;
-  prompt: string;
-}): string[] {
-  return [
-    ...RUNTIME_WORKSPACE_WRITE_NETWORK_CONFIG_ARGS,
-    '--profile',
-    input.profile,
-    '--cd',
-    input.workspace,
-    '--sandbox',
-    input.sandbox,
-    '--ask-for-approval',
-    'never',
-    '--no-alt-screen',
-    input.prompt,
-  ];
-}
-
-function systemTerminalCodexCommandPreview(input: {
-  codexCommand: string;
-  args: string[];
-  prompt: string;
-  promptRef: string;
-  codexHome: string;
-  configPath: string;
-}) {
-  return [
-    `CODEX_HOME=${quoteShellArg(input.codexHome)}`,
-    `SCIFORGE_CONFIG_PATH=${quoteShellArg(input.configPath)}`,
-    'SCIFORGE_RUNTIME_API_KEY=<from config.local.json>',
-    systemTerminalCodexShellCommand(input),
-  ].join(' ');
-}
-
-function systemTerminalLaunchScript(input: {
-  workspace: string;
-  codexCommand: string;
-  args: string[];
-  prompt: string;
-  promptRef: string;
-  codexHome: string;
-  configPath: string;
-  env: NodeJS.ProcessEnv;
-  path: string;
-}) {
-  const command = systemTerminalCodexShellCommand(input);
-  return [
-    '#!/bin/zsh',
-    'set -e',
-    `cd ${quoteShellArg(input.workspace)}`,
-    `export CODEX_HOME=${quoteShellArg(input.codexHome)}`,
-    `export PATH=${quoteShellArg(input.path)}`,
-    ...systemTerminalRuntimeEnvExports(input),
-    `printf '%s\\n' ${quoteShellArg('SciForge Codex repair session')}`,
-    `printf '%s\\n' ${quoteShellArg(`Workspace: ${input.workspace}`)}`,
-    `printf '%s\\n' ${quoteShellArg(`Prompt: ${input.promptRef}`)}`,
-    `printf '%s\\n' ${quoteShellArg('This system Terminal owns the Codex process; the SciForge Web Viewer is optional.')}`,
-    'echo ""',
-    'set +e',
-    command,
-    'status=$?',
-    'echo ""',
-    'echo "Codex exited with status ${status}."',
-    'read "?Press Return to close this window..."',
-    'exit "${status}"',
-    '',
-  ].join('\n');
-}
-
-function systemTerminalCodexShellCommand(input: {
-  codexCommand: string;
-  args: string[];
-  prompt: string;
-  promptRef: string;
-}) {
-  const renderedArgs = input.args.map((arg) => arg === input.prompt
-    ? `"$(cat ${quoteShellArg(input.promptRef)})"`
-    : quoteShellArg(arg));
-  return [quoteShellArg(input.codexCommand), ...renderedArgs].join(' ');
-}
-
-function systemTerminalRuntimeEnvExports(input: {
-  configPath: string;
-  env: NodeJS.ProcessEnv;
-}) {
-  const keys = [
-    'SCIFORGE_CONFIG_PATH',
-    'SCIFORGE_RUNTIME_PROVIDER',
-    'SCIFORGE_RUNTIME_MODEL',
-    'SCIFORGE_RUNTIME_BASE_URL',
-    'SCIFORGE_PROXY_UPSTREAM_BASE_URL',
-    'SCIFORGE_PROXY_BASE_URL',
-    'SCIFORGE_PROXY_PORT',
-    'SCIFORGE_PROXY_DEFAULT_MODEL',
-    'SCIFORGE_PROXY_FORCE_NON_STREAMING_UPSTREAM',
-    'SCIFORGE_RUNTIME_CODEX_SANDBOX',
-    'SCIFORGE_RUNTIME_CODEX_COMMAND',
-    'SCIFORGE_ALLOW_OPENAI_RUNTIME',
-  ];
-  const lines = keys
-    .map((key) => {
-      const value = key === 'SCIFORGE_CONFIG_PATH' ? input.configPath : stringValue(input.env[key]);
-      return value ? `export ${key}=${quoteShellArg(value)}` : '';
-    })
-    .filter(Boolean);
-  lines.push(
-    'if [ -z "${SCIFORGE_RUNTIME_API_KEY:-}" ]; then',
-    `  export SCIFORGE_RUNTIME_API_KEY="$(node -e ${quoteShellArg(systemTerminalRuntimeKeyReaderScript())} ${quoteShellArg(input.configPath)})"`,
-    'fi',
-    'if [ -z "${SCIFORGE_RUNTIME_API_KEY:-}" ]; then',
-    `  printf '%s\\n' ${quoteShellArg('Missing SCIFORGE_RUNTIME_API_KEY. Check the ignored local provider config before Codex starts.')}`,
-    'fi',
-  );
-  return lines;
-}
-
-function systemTerminalRuntimeKeyReaderScript() {
-  return [
-    'const fs = require("fs");',
-    'const path = process.argv[1];',
-    'const isRecord = (value) => value && typeof value === "object" && !Array.isArray(value);',
-    'const stringValue = (value) => typeof value === "string" && value.trim() ? value.trim() : "";',
-    'try {',
-    '  const root = JSON.parse(fs.readFileSync(path, "utf8"));',
-    '  const llm = isRecord(root.llm) ? root.llm : {};',
-    '  const codexProxy = isRecord(root.codexProxy) ? root.codexProxy : isRecord(root.runtimeCodexProxy) ? root.runtimeCodexProxy : {};',
-    '  const key = stringValue(root.apiKey) || stringValue(llm.apiKey) || stringValue(llm.upstreamApiKey) || stringValue(codexProxy.apiKey);',
-    '  if (key) process.stdout.write(key);',
-    '} catch {}',
-  ].join(' ');
-}
-
-function quoteShellArg(value: string) {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-function withCodexPtyPath(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const fallbackDirs = ['/opt/homebrew/bin', '/usr/local/bin', '/opt/local/bin', '/usr/bin', '/bin'];
-  const existing = (env.PATH || '').split(':').filter(Boolean);
-  return {
-    ...env,
-    PATH: uniqueStrings([...existing, ...fallbackDirs]).join(':'),
-  };
-}
-
-async function resolveCodexPtyCommand(command: string, env: NodeJS.ProcessEnv) {
-  if (isAbsolute(command) || command.includes(sep)) return command;
-  for (const dir of (env.PATH || '').split(':').filter(Boolean)) {
-    const candidate = join(dir, command);
-    if (await fileExists(candidate)) return candidate;
-  }
-  return command;
-}
-
-async function fileExists(path: string) {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function ptyDimension(value: unknown, fallback: number, min: number, max: number) {
-  const parsed = typeof value === 'number' ? value : Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.min(max, Math.max(min, Math.floor(parsed)));
-}
-
-function feedbackCodexTerminalStatus(value: unknown): FeedbackCodexTerminalStatus {
-  return value === 'starting' || value === 'running' || value === 'idle' || value === 'failed' || value === 'cancelled'
-    ? value
-    : 'idle';
-}
-
-function feedbackCodexTerminalTransport(value: unknown): FeedbackCodexTerminalTransport {
-  return value === 'system-terminal' ? 'system-terminal' : 'websocket-pty';
-}
-
-function feedbackCodexTerminalDir(root: string, sessionId: string) {
-  const normalized = normalizeFeedbackBundleId(sessionId);
-  return join(root, '.sciforge', 'repair-results', normalized);
-}
-
-function feedbackCodexTerminalMirrorRef(root: string, sessionId: string) {
-  return join(feedbackCodexTerminalDir(root, sessionId), 'terminal-mirror.ndjson');
-}
-
-function feedbackCodexTerminalPromptRef(root: string, sessionId: string) {
-  return join(feedbackCodexTerminalDir(root, sessionId), 'feedback-codex-prompt.md');
-}
-
-function feedbackCodexSystemTerminalLaunchRef(root: string, sessionId: string) {
-  return join(feedbackCodexTerminalDir(root, sessionId), 'system-terminal-launch.command');
-}
-
-function feedbackCodexTerminalManifestRef(root: string, sessionId: string) {
-  return join(feedbackCodexTerminalDir(root, sessionId), 'direct-codex-terminal.json');
-}
-
-function scrubFeedbackError(value: string) {
-  return value
-    .replace(/sk-[A-Za-z0-9_-]{8,}/g, '[redacted-api-key]')
-    .replace(/\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{8,}\b/g, '[redacted-github-token]')
-    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [redacted-token]')
-    .replace(/\/Users\/[^/\s]+/g, '[redacted-user-home]')
-    .replace(/\/Applications\/workspace\/[^\s]+/g, '[redacted-workspace-path]')
-    .slice(0, 1200);
-}
-
-function stringField(value: unknown) {
-  return typeof value === 'string' && value.trim() ? value.trim() : '';
-}
-
-function recordField(value: unknown): Record<string, unknown> | undefined {
-  return isRecord(value) ? value : undefined;
-}
-
-function safeParseJson(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return undefined;
-  }
-}
-
-function firstNonEmptyString(...values: Array<string | undefined>) {
-  return values.find((value) => typeof value === 'string' && value.trim())?.trim();
 }
 
 async function runFeedbackRepairAction(root: string, issueId: string, body: Record<string, unknown>) {
@@ -2700,90 +1856,6 @@ async function runFeedbackRepairAction(root: string, issueId: string, body: Reco
   return persistRepairAction(root, state, updatedResult, actionRecord);
 }
 
-const REPAIR_CONTROL_SURFACE_SAFE_MODE_SCOPES = [
-  'src/ui/src/app/sciforgeApp/FeedbackInboxPage.tsx',
-  'src/ui/src/feedback',
-  'src/ui/src/api/workspaceClient.ts',
-  'src/runtime/workspace-server.ts',
-  'src/runtime/repair-handoff-runner.ts',
-];
-
-function repairResultCommitBlocker(result: Record<string, unknown>) {
-  if (result.verdict !== 'fixed') return `Repair commit blocked: result verdict is ${String(result.verdict || 'missing')}, not fixed.`;
-  const metadata = isRecord(result.metadata) ? result.metadata : {};
-  const dirty = isRecord(metadata.dirtyWorktreeCollaboration) ? metadata.dirtyWorktreeCollaboration : undefined;
-  if (!dirty) return 'Repair commit blocked: dirty worktree guard metadata is missing.';
-  if (dirty.status !== 'passed') return `Repair commit blocked: dirty worktree guard status is ${String(dirty.status || 'missing')}.`;
-  const protectedPaths = stringArray(dirty.changedProtectedPaths);
-  if (protectedPaths.length) return `Repair commit blocked: protected paths changed: ${protectedPaths.join(', ')}.`;
-  const forbiddenPaths = stringArray(dirty.changedForbiddenPaths);
-  if (forbiddenPaths.length) return `Repair commit blocked: forbidden paths changed: ${forbiddenPaths.join(', ')}.`;
-  const outsideAllowedPaths = stringArray(dirty.changedOutsideAllowedPaths);
-  if (outsideAllowedPaths.length) return `Repair commit blocked: paths outside allowed scope changed: ${outsideAllowedPaths.join(', ')}.`;
-  const executorRepairPlan = isRecord(dirty.executorRepairPlan) ? dirty.executorRepairPlan : undefined;
-  if (executorRepairPlan && executorRepairPlan.exists !== true) return 'Repair commit blocked: executor repair plan evidence is missing.';
-  const commitAudit = isRecord(dirty.commitAudit) ? dirty.commitAudit : undefined;
-  if (!commitAudit) return 'Repair commit blocked: executor commit audit metadata is missing.';
-  if (commitAudit.created === true) return 'Repair commit blocked: executor already created a commit in the isolated worktree.';
-  const humanVerification = isRecord(result.humanVerification) ? result.humanVerification : undefined;
-  if (humanVerification?.status === 'failed' || humanVerification?.status === 'rejected') {
-    return `Repair commit blocked: human verification status is ${humanVerification.status}.`;
-  }
-  return '';
-}
-
-function repairControlSurfaceSafeMode(result: Record<string, unknown>) {
-  const metadata = isRecord(result.metadata) ? result.metadata : {};
-  const existing = isRecord(metadata.safeMode) ? metadata.safeMode : undefined;
-  const existingMatched = Array.isArray(existing?.matchedPaths) ? existing.matchedPaths.filter((item): item is string => typeof item === 'string') : [];
-  const changedFiles = Array.isArray(result.changedFiles) ? result.changedFiles.filter((item): item is string => typeof item === 'string') : [];
-  const matchedPaths = uniqueStrings([...existingMatched, ...changedFiles.filter((file) => pathMatchesAnySafeModeScope(file))]);
-  const active = existing?.active === true || matchedPaths.length > 0;
-  return {
-    active,
-    reason: active
-      ? 'Repair touches the feedback inbox or repair backend/control surface.'
-      : 'Repair does not touch the feedback inbox or repair backend/control surface.',
-    matchedPaths,
-    requiresExternalControlSurface: active,
-  };
-}
-
-function pathMatchesAnySafeModeScope(value: string) {
-  const normalized = value.replace(/\\/g, '/').replace(/^\.?\//, '').replace(/\/+$/, '');
-  return REPAIR_CONTROL_SURFACE_SAFE_MODE_SCOPES.some((scope) => normalized === scope || normalized.startsWith(`${scope}/`));
-}
-
-function repairActionName(value: unknown): 'commit' | 'push' | 'pr' | 'merge' | 'browser-recheck' {
-  if (value === 'commit' || value === 'push' || value === 'pr' || value === 'merge' || value === 'browser-recheck') return value;
-  throw new Error('repair action must be one of commit, push, pr, merge, browser-recheck');
-}
-
-function repairBrowserVerificationFromBody(body: Record<string, unknown>, now: string) {
-  const input = isRecord(body.browserVerification) ? body.browserVerification : {};
-  const requestedStatus = typeof input.status === 'string' ? input.status : typeof body.status === 'string' ? body.status : 'pending';
-  let status = requestedStatus === 'verified' || requestedStatus === 'rejected' || requestedStatus === 'pending' || requestedStatus === 'not-run'
-    || requestedStatus === 'required' || requestedStatus === 'not-required' || requestedStatus === 'passed' || requestedStatus === 'failed'
-    ? requestedStatus
-    : 'pending';
-  const evidenceRefs = uniqueStrings([
-    ...stringArray(input.evidenceRefs),
-    ...stringArray(body.evidenceRefs),
-  ]);
-  if ((status === 'passed' || status === 'verified' || status === 'not-required') && evidenceRefs.length === 0) {
-    status = 'pending';
-  }
-  return {
-    status,
-    verifier: typeof input.verifier === 'string' && input.verifier.trim() ? input.verifier.trim() : 'codex-in-app-browser',
-    reviewer: typeof input.reviewer === 'string' && input.reviewer.trim() ? input.reviewer.trim() : 'feedback-inbox',
-    conclusion: typeof input.conclusion === 'string' ? input.conclusion : typeof body.conclusion === 'string' ? body.conclusion : undefined,
-    evidenceRefs,
-    verifiedAt: typeof input.verifiedAt === 'string' && input.verifiedAt.trim() ? input.verifiedAt.trim() : now,
-    note: typeof input.note === 'string' ? input.note : undefined,
-  };
-}
-
 function findRepairResultForAction(state: Record<string, unknown>, issueId: string, resultId: unknown) {
   const results = Array.isArray(state.feedbackRepairResults) ? state.feedbackRepairResults.filter(isRecord) : [];
   const matching = results.filter((result) => result.issueId === issueId);
@@ -2809,34 +1881,6 @@ async function persistRepairAction(
   await persistFeedbackRecord(root, 'repair-actions', String(action.id), action);
   await writeWorkspaceStateFile(root, next);
   return { action, result };
-}
-
-async function gitStrict(cwd: string, args: string[]) {
-  return new Promise<string>((resolveOutput, reject) => {
-    const child = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    child.stdout?.on('data', (chunk) => stdout.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))));
-    child.stderr?.on('data', (chunk) => stderr.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))));
-    child.on('error', reject);
-    child.on('close', (code) => {
-      const out = Buffer.concat(stdout).toString('utf8').trim();
-      const err = Buffer.concat(stderr).toString('utf8').trim();
-      if (code === 0) resolveOutput(out);
-      else reject(new Error(`git ${args.join(' ')} failed in ${cwd}: ${err || out}`));
-    });
-  });
-}
-
-function safeRepoRelativePath(value: string) {
-  const normalized = value.replace(/\\/g, '/').replace(/^\.?\//, '');
-  return Boolean(normalized)
-    && normalized !== '.'
-    && normalized !== '..'
-    && !normalized.startsWith('../')
-    && !normalized.includes('/../')
-    && normalized !== '.git'
-    && !normalized.startsWith('.git/');
 }
 
 function isInsideOrSamePath(candidate: string, parent: string) {
@@ -2878,743 +1922,4 @@ async function syncRepairResultGithubComment(comment: Record<string, unknown>, r
     },
     result: result as Parameters<typeof syncRepairResultToGithubIssue>[0]['result'],
   });
-}
-
-function normalizeRepairTestResults(value: unknown) {
-  if (!Array.isArray(value)) return undefined;
-  return value.filter(isRecord).map((item) => ({
-    name: typeof item.name === 'string' ? item.name : undefined,
-    command: typeof item.command === 'string' ? item.command : undefined,
-    status: item.status === 'passed' || item.status === 'failed' || item.status === 'skipped' ? item.status : 'skipped',
-    summary: typeof item.summary === 'string' ? item.summary : undefined,
-    outputRef: typeof item.outputRef === 'string' ? item.outputRef : undefined,
-  }));
-}
-
-function normalizeRepairTerminalMirror(value: unknown) {
-  if (!Array.isArray(value)) return undefined;
-  const entries = value.filter(isRecord).map((entry) => ({
-    timestamp: typeof entry.timestamp === 'string' ? entry.timestamp : '',
-    stream: entry.stream === 'stdout' || entry.stream === 'stderr' || entry.stream === 'event' ? entry.stream : undefined,
-    text: typeof entry.text === 'string' ? entry.text : '',
-  })).filter((entry) => entry.timestamp && entry.stream && entry.text);
-  return entries.length ? entries.slice(-500) : undefined;
-}
-
-function digestString(value: unknown, key: string) {
-  if (!isRecord(value)) return undefined;
-  const digest = value[key];
-  return typeof digest === 'string' && digest.trim() ? digest.trim() : undefined;
-}
-
-function normalizeRepairHumanVerification(value: unknown) {
-  if (!isRecord(value)) return undefined;
-  return {
-    status: value.status === 'verified' || value.status === 'rejected' || value.status === 'pending' || value.status === 'not-run'
-      || value.status === 'required' || value.status === 'not-required' || value.status === 'passed' || value.status === 'failed'
-      ? value.status
-      : undefined,
-    verifier: typeof value.verifier === 'string' ? value.verifier : undefined,
-    conclusion: typeof value.conclusion === 'string' ? value.conclusion : undefined,
-    evidenceRefs: Array.isArray(value.evidenceRefs) ? value.evidenceRefs.filter((item): item is string => typeof item === 'string') : undefined,
-    verifiedAt: typeof value.verifiedAt === 'string' ? value.verifiedAt : undefined,
-    reviewer: typeof value.reviewer === 'string' ? value.reviewer : undefined,
-    note: typeof value.note === 'string' ? value.note : undefined,
-  };
-}
-
-function normalizeRepairRefs(value: unknown) {
-  if (!isRecord(value)) return undefined;
-  return {
-    commitSha: typeof value.commitSha === 'string' ? value.commitSha : undefined,
-    commitUrl: typeof value.commitUrl === 'string' ? value.commitUrl : undefined,
-    prUrl: typeof value.prUrl === 'string' ? value.prUrl : undefined,
-    patchRef: typeof value.patchRef === 'string' ? value.patchRef : undefined,
-  };
-}
-
-function normalizeRepairInstanceRef(value: unknown) {
-  if (!isRecord(value)) return undefined;
-  return {
-    id: typeof value.id === 'string' ? value.id : undefined,
-    name: typeof value.name === 'string' ? value.name : undefined,
-    appUrl: typeof value.appUrl === 'string' ? value.appUrl : undefined,
-    workspaceWriterUrl: typeof value.workspaceWriterUrl === 'string' ? value.workspaceWriterUrl : undefined,
-    workspacePath: typeof value.workspacePath === 'string' ? value.workspacePath : undefined,
-  };
-}
-
-function feedbackCommentSeedFromBody(issueId: string, body: Record<string, unknown>) {
-  const issueBundle = isRecord(body.issueBundle) ? body.issueBundle : undefined;
-  const rawComment = isRecord(body.comment)
-    ? body.comment
-    : isRecord(body.feedbackComment)
-      ? body.feedbackComment
-      : isRecord(issueBundle?.comment)
-        ? issueBundle.comment
-        : undefined;
-  if (!rawComment) return undefined;
-  const now = new Date().toISOString();
-  return {
-    ...rawComment,
-    id: typeof rawComment.id === 'string' && rawComment.id.trim() ? rawComment.id.trim() : issueId,
-    status: typeof rawComment.status === 'string' ? rawComment.status : 'open',
-    createdAt: typeof rawComment.createdAt === 'string' ? rawComment.createdAt : now,
-    updatedAt: now,
-  };
-}
-
-function appendStateRecord(state: Record<string, unknown>, key: string, record: Record<string, unknown>) {
-  const records = Array.isArray(state[key]) ? state[key].filter(isRecord) : [];
-  return {
-    ...state,
-    [key]: [record, ...records.filter((item) => item.id !== record.id)].slice(0, 200),
-    updatedAt: new Date().toISOString(),
-  };
-}
-
-async function persistFeedbackRecord(root: string, folder: string, id: string, record: Record<string, unknown>) {
-  const dir = join(root, '.sciforge', 'feedback', folder);
-  await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, `${safeName(id)}.json`), JSON.stringify(record, null, 2));
-}
-
-function normalizeFeedbackBundleId(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) throw new Error('feedback comment id is required');
-  const normalized = safeName(trimmed).replace(/^\.+/, '');
-  if (normalized && normalized !== '.' && normalized !== '..') return normalized;
-  return `feedback-${createHash('sha256').update(trimmed).digest('hex').slice(0, 12)}`;
-}
-
-function firstImageDataUrl(values: unknown[], label: string) {
-  for (const value of values) {
-    if (value === undefined || value === null || value === '') continue;
-    if (typeof value !== 'string') throw new Error(`${label} data URL must be a string`);
-    if (!/^data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/.test(value)) {
-      throw new Error(`${label} data URL must be a base64 png or jpeg data URL`);
-    }
-    return value;
-  }
-  return undefined;
-}
-
-async function persistFeedbackScreenshotEvidenceAssets(
-  root: string,
-  id: string,
-  screenshot: Record<string, unknown> | undefined,
-  rawDataUrl: string | undefined,
-  annotatedDataUrl: string | undefined,
-  createdAt: string,
-) {
-  const assets: Record<string, unknown>[] = [];
-  if (rawDataUrl) {
-    const raw = await writeFeedbackEvidenceImageAsset(root, id, rawDataUrl, {
-      kind: 'raw-screenshot',
-      filenameBase: 'raw',
-      label: 'Raw screenshot',
-      sourceRef: join('.sciforge', 'feedback', id, 'raw-screenshot.data-url'),
-      width: numberField(screenshot?.width),
-      height: numberField(screenshot?.height),
-      createdAt,
-      visibility: 'private',
-      includeForAgent: false,
-    });
-    assets.push(raw);
-  }
-  if (annotatedDataUrl) {
-    const annotated = await writeFeedbackEvidenceImageAsset(root, id, annotatedDataUrl, {
-      kind: 'scrubbed-annotated-screenshot',
-      filenameBase: 'scrubbed-annotated',
-      label: 'Scrubbed annotated screenshot',
-      sourceRef: join('.sciforge', 'feedback', id, 'annotated-screenshot.data-url'),
-      width: numberField(screenshot?.width),
-      height: numberField(screenshot?.height),
-      createdAt,
-      visibility: 'public',
-      includeForAgent: false,
-      metadata: {
-        scrubPolicy: 'Inline data URL omitted from GitHub and public issue bodies; annotated screenshot pixels are retained as captured evidence.',
-      },
-    });
-    assets.push(annotated);
-  }
-  return assets;
-}
-
-async function writeFeedbackEvidenceImageAsset(
-  root: string,
-  id: string,
-  dataUrl: string,
-  input: {
-    kind: 'raw-screenshot' | 'annotated-screenshot' | 'scrubbed-annotated-screenshot';
-    filenameBase: string;
-    label: string;
-    sourceRef: string;
-    width?: number;
-    height?: number;
-    createdAt: string;
-    visibility: 'public' | 'private';
-    includeForAgent?: boolean;
-    metadata?: Record<string, unknown>;
-  },
-) {
-  const parsed = parseImageDataUrl(dataUrl, input.label);
-  const repoRoot = await gitOutput(root, ['rev-parse', '--show-toplevel']) || root;
-  const relativeRef = repairEvidenceRelativeRef(input.visibility, id, `${input.filenameBase}.${parsed.extension}`);
-  const assetPath = resolve(repoRoot, relativeRef);
-  const rel = relative(repoRoot, assetPath);
-  if (rel === '..' || rel.startsWith(`..${sep}`)) throw new Error('feedback evidence asset path escaped repo root');
-  await mkdir(dirname(assetPath), { recursive: true });
-  await writeFile(assetPath, parsed.bytes);
-  const sha256 = createHash('sha256').update(parsed.bytes).digest('hex');
-  const manifestPath = resolve(repoRoot, repairEvidenceRelativeRef(input.visibility, id, `${input.filenameBase}.manifest.json`));
-  const publicUrl = input.visibility === 'public' ? repairEvidencePublicUrl(relativeRef) : undefined;
-  const uploadStatus = input.visibility === 'public'
-    ? publicUrl
-      ? 'ready'
-      : 'local'
-    : 'private';
-  const manifest = {
-    schemaVersion: 1,
-    id: `feedback-evidence-${id}-${input.filenameBase}`,
-    feedbackId: id,
-    kind: input.kind,
-    ref: toPosixPath(relativeRef),
-    sourceRef: toPosixPath(input.sourceRef),
-    mediaType: parsed.mediaType,
-    width: input.width,
-    height: input.height,
-    bytes: parsed.bytes.length,
-    sha256,
-    createdAt: input.createdAt,
-    localOnly: input.visibility !== 'public',
-    visibility: input.visibility,
-    uploadStatus,
-    publicUrl,
-    includeForAgent: input.includeForAgent === true,
-    metadata: input.metadata,
-  };
-  await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
-  await writeRepairEvidenceIndex(repoRoot, id, input.visibility, manifest);
-  return {
-    schemaVersion: 1,
-    id: manifest.id,
-    kind: input.kind,
-    label: input.label,
-    ref: toPosixPath(relativeRef),
-    sourceRef: toPosixPath(input.sourceRef),
-    localRef: toPosixPath(relativeRef),
-    markdownImageUrl: publicUrl || toPosixPath(relativeRef),
-    githubMarkdownUrl: publicUrl || toPosixPath(relativeRef),
-    mediaType: parsed.mediaType,
-    width: input.width,
-    height: input.height,
-    bytes: parsed.bytes.length,
-    sha256,
-    createdAt: input.createdAt,
-    localOnly: input.visibility !== 'public',
-    visibility: input.visibility,
-    uploadStatus,
-    publicUrl,
-    includeForAgent: input.includeForAgent === true,
-    metadata: {
-      ...(input.metadata ?? {}),
-      manifestRef: toPosixPath(relative(repoRoot, manifestPath)),
-    },
-  };
-}
-
-function repairEvidenceRelativeRef(visibility: 'public' | 'private', feedbackId: string, filename: string) {
-  const base = visibility === 'public' ? REPAIR_EVIDENCE_PUBLIC_DIR : REPAIR_EVIDENCE_PRIVATE_DIR;
-  return join(base, 'feedback-screenshots', safeName(feedbackId), safeName(filename));
-}
-
-function isRepairEvidenceRef(value: string) {
-  const normalized = toPosixPath(value.trim().replace(/^(file|path|artifact):/i, ''));
-  return normalized.startsWith(`${REPAIR_EVIDENCE_PUBLIC_DIR}/`)
-    || normalized.startsWith(`${REPAIR_EVIDENCE_PRIVATE_DIR}/`)
-    || normalized.startsWith('repair-evidence/');
-}
-
-function repairEvidencePublicUrl(relativeRef: string) {
-  if (!REPAIR_EVIDENCE_PUBLIC_BASE_URL) return undefined;
-  return `${REPAIR_EVIDENCE_PUBLIC_BASE_URL.replace(/\/+$/, '')}/${toPosixPath(relativeRef).replace(/^\/+/, '')}`;
-}
-
-async function writeRepairEvidenceIndex(repoRoot: string, feedbackId: string, visibility: 'public' | 'private', manifest: Record<string, unknown>) {
-  const indexRef = repairEvidenceRelativeRef(visibility, feedbackId, 'index.json');
-  const indexPath = resolve(repoRoot, indexRef);
-  const existing = await readOptionalJson(indexPath).catch(() => undefined);
-  const existingAssets = isRecord(existing) && Array.isArray(existing.assets) ? existing.assets.filter(isRecord) : [];
-  const assets = mergeEvidenceAssets(existingAssets, [manifest]);
-  await mkdir(dirname(indexPath), { recursive: true });
-  await writeFile(indexPath, JSON.stringify({
-    schemaVersion: 1,
-    feedbackId,
-    visibility,
-    folderRef: toPosixPath(dirname(indexRef)),
-    assets,
-    updatedAt: new Date().toISOString(),
-  }, null, 2));
-}
-
-function mergeEvidenceAssets(existing: Record<string, unknown>[], next: Record<string, unknown>[]) {
-  const byId = new Map<string, Record<string, unknown>>();
-  for (const asset of [...existing, ...next]) {
-    const id = typeof asset.id === 'string' && asset.id.trim()
-      ? asset.id.trim()
-      : typeof asset.ref === 'string' && asset.ref.trim()
-        ? asset.ref.trim()
-        : '';
-    if (id) byId.set(id, asset);
-  }
-  return [...byId.values()];
-}
-
-function parseImageDataUrl(dataUrl: string, label: string) {
-  const match = /^data:(image\/(?:png|jpeg));base64,([A-Za-z0-9+/]+={0,2})$/.exec(dataUrl);
-  if (!match) throw new Error(`${label} data URL must be a base64 png or jpeg data URL`);
-  const mediaType = match[1] as 'image/png' | 'image/jpeg';
-  const bytes = Buffer.from(match[2], 'base64');
-  if (!bytes.length) throw new Error(`${label} data URL decoded to an empty image`);
-  return {
-    mediaType,
-    extension: mediaType === 'image/png' ? 'png' : 'jpg',
-    bytes,
-  };
-}
-
-function toPosixPath(value: string) {
-  return value.replace(/\\/g, '/');
-}
-
-function numberField(value: unknown) {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
-function handoffFeedbackComments(state: Record<string, unknown>) {
-  const comments = Array.isArray(state.feedbackComments) ? state.feedbackComments.filter(isRecord) : [];
-  return comments
-    .filter((comment) => {
-      const status = typeof comment.status === 'string' ? comment.status : 'open';
-      return !['fixed', 'wont-fix'].includes(status);
-    })
-    .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')));
-}
-
-function findFeedbackComment(state: Record<string, unknown>, issueId: string) {
-  return handoffFeedbackComments(state).find((comment) => comment.id === issueId || String(comment.githubIssueNumber || '') === issueId);
-}
-
-function feedbackIssueSummary(state: Record<string, unknown>, comment: Record<string, unknown>) {
-  const request = feedbackRequestForComment(state, comment);
-  const github = githubMetadataForComment(state, comment);
-  const runtime = isRecord(comment.runtime) ? comment.runtime : {};
-  return {
-    schemaVersion: 1,
-    id: String(comment.id || ''),
-    kind: 'feedback-comment',
-    title: request && typeof request.title === 'string' && request.title.trim()
-      ? request.title
-      : compactString(typeof comment.comment === 'string' ? comment.comment : '', 80) || 'SciForge feedback issue',
-    status: typeof comment.status === 'string' ? comment.status : 'open',
-    priority: typeof comment.priority === 'string' ? comment.priority : 'normal',
-    tags: Array.isArray(comment.tags) ? comment.tags.filter((tag): tag is string => typeof tag === 'string') : [],
-    createdAt: typeof comment.createdAt === 'string' ? comment.createdAt : '',
-    updatedAt: typeof comment.updatedAt === 'string' ? comment.updatedAt : '',
-    comment: compactString(typeof comment.comment === 'string' ? comment.comment : '', 240),
-    requestId: typeof comment.requestId === 'string' ? comment.requestId : request && typeof request.id === 'string' ? request.id : undefined,
-    runtime: {
-      page: typeof runtime.page === 'string' ? runtime.page : '',
-      scenarioId: typeof runtime.scenarioId === 'string' ? runtime.scenarioId : '',
-      sessionId: typeof runtime.sessionId === 'string' ? runtime.sessionId : undefined,
-      activeRunId: typeof runtime.activeRunId === 'string' ? runtime.activeRunId : undefined,
-    },
-    screenshot: screenshotMetadataForComment(comment),
-    github,
-  };
-}
-
-function feedbackRequestForComment(state: Record<string, unknown>, comment: Record<string, unknown>) {
-  const requests = Array.isArray(state.feedbackRequests) ? state.feedbackRequests.filter(isRecord) : [];
-  const requestId = typeof comment.requestId === 'string' ? comment.requestId : '';
-  return requests.find((request) => request.id === requestId || (Array.isArray(request.feedbackIds) && request.feedbackIds.includes(comment.id)));
-}
-
-function githubMetadataForComment(state: Record<string, unknown>, comment: Record<string, unknown>) {
-  const issueNumber = typeof comment.githubIssueNumber === 'number' ? comment.githubIssueNumber : undefined;
-  const synced = Array.isArray(state.githubSyncedOpenIssues)
-    ? state.githubSyncedOpenIssues.filter(isRecord).find((issue) => issue.number === issueNumber || issue.htmlUrl === comment.githubIssueUrl)
-    : undefined;
-  if (!issueNumber && typeof comment.githubIssueUrl !== 'string' && !synced) return undefined;
-  return {
-    issueNumber,
-    issueUrl: typeof comment.githubIssueUrl === 'string' ? comment.githubIssueUrl : synced && typeof synced.htmlUrl === 'string' ? synced.htmlUrl : undefined,
-    openIssue: synced,
-  };
-}
-
-function screenshotMetadataForComment(comment: Record<string, unknown>) {
-  const screenshot = isRecord(comment.screenshot) ? comment.screenshot : undefined;
-  if (!screenshot && typeof comment.screenshotRef !== 'string') return undefined;
-  return {
-    screenshotRef: typeof comment.screenshotRef === 'string' ? comment.screenshotRef : undefined,
-    schemaVersion: screenshot?.schemaVersion,
-    mediaType: typeof screenshot?.mediaType === 'string' ? screenshot.mediaType : undefined,
-    width: typeof screenshot?.width === 'number' ? screenshot.width : undefined,
-    height: typeof screenshot?.height === 'number' ? screenshot.height : undefined,
-    capturedAt: typeof screenshot?.capturedAt === 'string' ? screenshot.capturedAt : undefined,
-    targetRect: isRecord(screenshot?.targetRect) ? screenshot?.targetRect : undefined,
-    includeForAgent: typeof screenshot?.includeForAgent === 'boolean' ? screenshot.includeForAgent : undefined,
-    note: typeof screenshot?.note === 'string' ? screenshot.note : undefined,
-    hasDataUrl: typeof screenshot?.dataUrl === 'string' && screenshot.dataUrl.length > 0,
-    dataUrlBytes: typeof screenshot?.dataUrl === 'string' ? Buffer.byteLength(screenshot.dataUrl, 'utf8') : undefined,
-  };
-}
-
-function repairRecordsForIssue(state: Record<string, unknown>, key: string, issueId: string) {
-  return (Array.isArray(state[key]) ? state[key].filter(isRecord) : [])
-    .filter((record) => record.issueId === issueId)
-    .sort((left, right) => String(right.startedAt || right.completedAt || '').localeCompare(String(left.startedAt || left.completedAt || '')));
-}
-
-function compactString(value: string, limit: number) {
-  const compact = value.replace(/\s+/g, ' ').trim();
-  return compact.length > limit ? `${compact.slice(0, Math.max(0, limit - 3))}...` : compact;
-}
-
-function uniqueStrings(values: string[]) {
-  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
-}
-
-async function readLocalSciForgeConfig() {
-  const parsed = await readConfigLocalJson();
-  const llm = isRecord(parsed.llm) ? parsed.llm : {};
-  const sciforge = isRecord(parsed.sciforge) ? parsed.sciforge : {};
-  const visionSense = isRecord(parsed.visionSense) ? parsed.visionSense : {};
-  const agentServerBaseUrl = process.env.SCIFORGE_AGENT_SERVER_URL
-    || (typeof sciforge.agentServerBaseUrl === 'string' ? sciforge.agentServerBaseUrl : `http://127.0.0.1:${DEFAULT_PARALLEL_PROFILE.runtimeCodexPort}`);
-  const runtimeCodexBaseUrl = process.env.SCIFORGE_RUNTIME_CODEX_URL
-    || (typeof sciforge.runtimeCodexBaseUrl === 'string' ? sciforge.runtimeCodexBaseUrl : `http://127.0.0.1:${DEFAULT_PARALLEL_PROFILE.runtimeCodexPort}`);
-  const workspaceWriterBaseUrl = process.env.SCIFORGE_WORKSPACE_WRITER_URL
-    || (typeof sciforge.workspaceWriterBaseUrl === 'string' ? sciforge.workspaceWriterBaseUrl : `http://127.0.0.1:${PORT}`);
-  const workspacePath = process.env.SCIFORGE_WORKSPACE_PATH
-    || (typeof sciforge.workspacePath === 'string' ? sciforge.workspacePath : DEFAULT_WORKSPACE_PATH);
-  const configuredPeerInstances = Array.isArray(sciforge.peerInstances)
-    ? normalizePeerInstances(sciforge.peerInstances)
-    : repairPeerInstancesFromCounterpart();
-  return {
-    schemaVersion: 1,
-    agentServerBaseUrl,
-    runtimeCodexBaseUrl,
-    workspaceWriterBaseUrl,
-    workspacePath: normalizeWorkspaceRootPath(resolve(workspacePath)),
-    peerInstances: configuredPeerInstances,
-    modelProvider: typeof llm.provider === 'string' ? llm.provider : 'native',
-    modelBaseUrl: typeof llm.baseUrl === 'string' ? llm.baseUrl.replace(/\/+$/, '') : '',
-    modelName: typeof llm.model === 'string' ? llm.model : typeof llm.modelName === 'string' ? llm.modelName : '',
-    apiKey: typeof llm.apiKey === 'string' ? llm.apiKey : '',
-    requestTimeoutMs: typeof sciforge.requestTimeoutMs === 'number' ? sciforge.requestTimeoutMs : 900000,
-    feedbackGithubRepo: typeof sciforge.feedbackGithubRepo === 'string' ? sciforge.feedbackGithubRepo : undefined,
-    feedbackGithubToken: typeof sciforge.feedbackGithubToken === 'string' ? sciforge.feedbackGithubToken : undefined,
-    feedbackGithubLabels: Array.isArray(sciforge.feedbackGithubLabels) ? sciforge.feedbackGithubLabels.filter((item): item is string => typeof item === 'string') : undefined,
-    feedbackGithubAssignees: Array.isArray(sciforge.feedbackGithubAssignees) ? sciforge.feedbackGithubAssignees.filter((item): item is string => typeof item === 'string') : undefined,
-    feedbackGithubMilestone: typeof sciforge.feedbackGithubMilestone === 'number' || typeof sciforge.feedbackGithubMilestone === 'string' ? sciforge.feedbackGithubMilestone : undefined,
-    feedbackGithubDryRun: sciforge.feedbackGithubDryRun === true,
-    visionAllowSharedSystemInput: typeof visionSense.allowSharedSystemInput === 'boolean' ? visionSense.allowSharedSystemInput : true,
-    toolProviderRoutes: normalizeToolProviderRoutes(sciforge.toolProviderRoutes),
-    updatedAt: typeof sciforge.updatedAt === 'string' ? sciforge.updatedAt : new Date().toISOString(),
-    source: 'config.local.json',
-  };
-}
-
-async function writeLocalSciForgeConfig(config: Record<string, unknown>) {
-  const parsed = await readConfigLocalJson();
-  const llm = isRecord(parsed.llm) ? parsed.llm : {};
-  const sciforge = isRecord(parsed.sciforge) ? parsed.sciforge : {};
-  const visionSense = isRecord(parsed.visionSense) ? parsed.visionSense : {};
-  const codexProxy = isRecord(parsed.codexProxy) ? parsed.codexProxy : {};
-  const { runtimeCodexBaseUrl: _discardRuntimeCodexBaseUrl, ...storedSciforge } = sciforge;
-  void _discardRuntimeCodexBaseUrl;
-  const next = {
-    ...parsed,
-    llm: {
-      ...llm,
-      provider: typeof config.modelProvider === 'string' ? config.modelProvider : llm.provider,
-      baseUrl: configuredString(config.modelBaseUrl, llm.baseUrl).replace(/\/+$/, ''),
-      apiKey: preserveConfiguredSecretString(config.apiKey, llm.apiKey),
-      model: preserveConfiguredSecretString(config.modelName, llm.model),
-    },
-    codexProxy: {
-      ...codexProxy,
-      upstreamBaseUrl: configuredString(config.modelBaseUrl, codexProxy.upstreamBaseUrl ?? llm.baseUrl).replace(/\/+$/, ''),
-      apiKey: preserveConfiguredSecretString(config.apiKey, codexProxy.apiKey ?? llm.apiKey),
-      defaultModel: preserveConfiguredSecretString(config.modelName, codexProxy.defaultModel ?? llm.model),
-    },
-    sciforge: {
-      ...storedSciforge,
-      agentServerBaseUrl: typeof config.agentServerBaseUrl === 'string' ? config.agentServerBaseUrl : sciforge.agentServerBaseUrl,
-      workspaceWriterBaseUrl: typeof config.workspaceWriterBaseUrl === 'string' ? config.workspaceWriterBaseUrl : sciforge.workspaceWriterBaseUrl,
-      workspacePath: normalizeWorkspaceRootPath(resolve(typeof config.workspacePath === 'string' ? config.workspacePath : typeof sciforge.workspacePath === 'string' ? sciforge.workspacePath : '')),
-      peerInstances: Array.isArray(config.peerInstances) ? normalizePeerInstances(config.peerInstances) : normalizePeerInstances(sciforge.peerInstances),
-      requestTimeoutMs: typeof config.requestTimeoutMs === 'number' ? config.requestTimeoutMs : sciforge.requestTimeoutMs,
-      feedbackGithubRepo: typeof config.feedbackGithubRepo === 'string' ? config.feedbackGithubRepo : sciforge.feedbackGithubRepo,
-      feedbackGithubToken: preserveConfiguredSecretString(config.feedbackGithubToken, sciforge.feedbackGithubToken),
-      feedbackGithubLabels: Array.isArray(config.feedbackGithubLabels) ? uniqueStrings(config.feedbackGithubLabels.filter((item): item is string => typeof item === 'string')) : sciforge.feedbackGithubLabels,
-      feedbackGithubAssignees: Array.isArray(config.feedbackGithubAssignees) ? uniqueStrings(config.feedbackGithubAssignees.filter((item): item is string => typeof item === 'string')) : sciforge.feedbackGithubAssignees,
-      feedbackGithubMilestone: typeof config.feedbackGithubMilestone === 'number' || typeof config.feedbackGithubMilestone === 'string' ? config.feedbackGithubMilestone : sciforge.feedbackGithubMilestone,
-      feedbackGithubDryRun: typeof config.feedbackGithubDryRun === 'boolean' ? config.feedbackGithubDryRun : sciforge.feedbackGithubDryRun === true,
-      toolProviderRoutes: isRecord(config.toolProviderRoutes)
-        ? normalizeToolProviderRoutes(config.toolProviderRoutes)
-        : normalizeToolProviderRoutes(sciforge.toolProviderRoutes),
-      updatedAt: new Date().toISOString(),
-    },
-    visionSense: {
-      ...visionSense,
-      allowSharedSystemInput: typeof config.visionAllowSharedSystemInput === 'boolean'
-        ? config.visionAllowSharedSystemInput
-        : typeof visionSense.allowSharedSystemInput === 'boolean'
-          ? visionSense.allowSharedSystemInput
-          : true,
-    },
-  };
-  await mkdir(dirname(configLocalPath()), { recursive: true });
-  await writeFile(configLocalPath(), JSON.stringify(next, null, 2));
-  await prepareRuntimeCodexEnvFromLocalConfig(next);
-}
-
-async function prepareRuntimeCodexEnvFromLocalConfig(configuredLocalConfig?: Record<string, unknown>): Promise<NodeJS.ProcessEnv> {
-  const runtimeEnv = await runtimeCodexEnvFromLocalConfig(configuredLocalConfig);
-  const proxyBaseUrl = await ensureRuntimeProviderProxy(runtimeEnv);
-  await syncRuntimeCodexHomeFromLocalConfig(runtimeEnv, proxyBaseUrl);
-  return runtimeEnv;
-}
-
-async function syncRuntimeCodexHomeFromLocalConfig(runtimeEnv: NodeJS.ProcessEnv = process.env, proxyBaseUrl = runtimeCodexProxyBaseUrl(runtimeEnv)) {
-  await ensureRuntimeHome({
-    proxyBaseUrl,
-    provider: runtimeEnv.SCIFORGE_RUNTIME_PROVIDER,
-    model: runtimeEnv.SCIFORGE_RUNTIME_MODEL,
-    overwrite: true,
-  });
-}
-
-async function runtimeCodexEnvFromLocalConfig(configuredLocalConfig?: Record<string, unknown>): Promise<NodeJS.ProcessEnv> {
-  const localConfig = configuredLocalConfig ?? await readConfigLocalJson();
-  const settings = localProviderSettings(localConfig);
-  return {
-    ...process.env,
-    SCIFORGE_CONFIG_PATH: CONFIG_LOCAL_PATH,
-    ...(settings.apiKey ? { SCIFORGE_RUNTIME_API_KEY: settings.apiKey } : {}),
-    ...(settings.provider ? { SCIFORGE_RUNTIME_PROVIDER: settings.provider } : {}),
-    ...(settings.baseUrl ? { SCIFORGE_RUNTIME_BASE_URL: settings.baseUrl, SCIFORGE_PROXY_UPSTREAM_BASE_URL: settings.baseUrl } : {}),
-    ...(settings.model ? { SCIFORGE_RUNTIME_MODEL: settings.model } : {}),
-  };
-}
-
-function localProviderSettings(localConfig: Record<string, unknown>) {
-  const llm = isRecord(localConfig.llm) ? localConfig.llm : {};
-  const codexProxy = isRecord(localConfig.codexProxy)
-    ? localConfig.codexProxy
-    : isRecord(localConfig.runtimeCodexProxy)
-      ? localConfig.runtimeCodexProxy
-      : {};
-  const apiKey = stringValue(localConfig.apiKey) || stringValue(llm.apiKey) || stringValue(llm.upstreamApiKey) || stringValue(codexProxy.apiKey);
-  const provider = stringValue(localConfig.runtimeProvider) || stringValue(codexProxy.runtimeProvider) || stringValue(codexProxy.provider);
-  const baseUrl = (
-    stringValue(localConfig.modelBaseUrl)
-    || stringValue(llm.baseUrl)
-    || stringValue(llm.upstreamBaseUrl)
-    || stringValue(codexProxy.upstreamBaseUrl)
-    || stringValue(codexProxy.baseUrl)
-    || ''
-  ).replace(/\/+$/, '');
-  const model = stringValue(localConfig.modelName)
-    || stringValue(llm.model)
-    || stringValue(llm.modelName)
-    || stringValue(llm.defaultModel)
-    || stringValue(codexProxy.defaultModel)
-    || stringValue(codexProxy.model);
-  return { apiKey, provider, baseUrl, model };
-}
-
-async function ensureRuntimeProviderProxy(runtimeEnv: NodeJS.ProcessEnv): Promise<string> {
-  const configuredProxyBaseUrl = runtimeProviderProxyBaseUrl(runtimeEnv);
-  if (await runtimeProviderProxyLocalReady(configuredProxyBaseUrl)) return runtimeCodexProxyBaseUrl(runtimeEnv);
-
-  if (!managedRuntimeProviderProxy) {
-    managedRuntimeProviderProxy = startManagedRuntimeProviderProxy(runtimeEnv).catch((error) => {
-      managedRuntimeProviderProxy = undefined;
-      throw error;
-    });
-  }
-  const proxy = await managedRuntimeProviderProxy;
-  if (!proxy) return runtimeCodexProxyBaseUrl(runtimeEnv);
-  runtimeEnv.SCIFORGE_PROXY_BASE_URL = proxy.url;
-  runtimeEnv.SCIFORGE_PROXY_PORT = String(proxy.port);
-  return `${proxy.url.replace(/\/+$/, '')}/v1`;
-}
-
-async function startManagedRuntimeProviderProxy(runtimeEnv: NodeJS.ProcessEnv): Promise<StartedCodexResponsesProxy | undefined> {
-  const options = resolveProxyCliOptions([], runtimeEnv);
-  try {
-    const proxy = await startCodexResponsesProxyServer({
-      host: options.host,
-      port: options.port,
-      upstreamBaseUrl: options.upstreamBaseUrl,
-      upstreamApiKey: options.upstreamApiKey,
-      defaultModel: options.defaultModel,
-      forceNonStreamingUpstream: options.forceNonStreamingUpstream,
-      resolveDynamicOptions: () => {
-        const latest = resolveProxyCliOptions([], {
-          ...process.env,
-          SCIFORGE_CONFIG_PATH: CONFIG_LOCAL_PATH,
-        });
-        return {
-          upstreamBaseUrl: latest.upstreamBaseUrl,
-          upstreamApiKey: latest.upstreamApiKey,
-          defaultModel: latest.defaultModel,
-          forceNonStreamingUpstream: latest.forceNonStreamingUpstream,
-        };
-      },
-      log: (message) => console.error(`[sciforge-managed-codex-proxy] ${message}`),
-    });
-    console.log(`SciForge managed Codex Responses proxy: ${proxy.url}/v1`);
-    return proxy;
-  } catch (error) {
-    if (isAddrInUse(error) && await runtimeProviderProxyLocalReady(runtimeProviderProxyBaseUrl(runtimeEnv))) return undefined;
-    throw error;
-  }
-}
-
-async function runtimeProviderProxyLocalReady(baseUrl: string): Promise<boolean> {
-  try {
-    const response = await fetch(`${baseUrl}/healthz`, { signal: AbortSignal.timeout(900) });
-    const parsed = await response.json().catch(() => ({}));
-    return response.ok && isRecord(parsed) && typeof parsed.upstreamBaseUrl === 'string';
-  } catch {
-    return false;
-  }
-}
-
-function runtimeCodexProxyBaseUrl(env: NodeJS.ProcessEnv): string {
-  const proxyBase = runtimeProviderProxyBaseUrl(env);
-  return proxyBase.endsWith('/v1') ? proxyBase : `${proxyBase}/v1`;
-}
-
-function isAddrInUse(error: unknown): boolean {
-  return isRecord(error) && error.code === 'EADDRINUSE';
-}
-
-function preserveConfiguredSecretString(nextValue: unknown, currentValue: unknown) {
-  const current = typeof currentValue === 'string' ? currentValue : '';
-  if (typeof nextValue !== 'string') return current;
-  const next = nextValue.trim();
-  if (/^••••/.test(next)) return current;
-  if (!next && current.trim()) return current;
-  return nextValue;
-}
-
-function configuredString(nextValue: unknown, currentValue: unknown) {
-  if (typeof nextValue === 'string') return nextValue.trim();
-  return typeof currentValue === 'string' ? currentValue.trim() : '';
-}
-
-function stringValue(value: unknown) {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-async function readConfigLocalJson(): Promise<Record<string, unknown>> {
-  try {
-    const parsed = JSON.parse(await readFile(configLocalPath(), 'utf8'));
-    return isRecord(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function configLocalPath() {
-  return CONFIG_LOCAL_PATH;
-}
-
-function parseJsonEnv(value: string | undefined) {
-  if (!value?.trim()) return undefined;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value;
-  }
-}
-
-function normalizePeerInstances(value: unknown) {
-  if (!Array.isArray(value)) return [];
-  return value
-    .filter((item): item is Record<string, unknown> => isRecord(item))
-    .map((item) => ({
-      name: typeof item.name === 'string' ? item.name.trim() : '',
-      appUrl: cleanUrlString(item.appUrl),
-      workspaceWriterUrl: cleanUrlString(item.workspaceWriterUrl),
-      workspacePath: normalizeWorkspaceRootPath(typeof item.workspacePath === 'string' ? item.workspacePath : ''),
-      role: item.role === 'main' || item.role === 'repair' || item.role === 'peer' ? item.role : 'peer',
-      trustLevel: item.trustLevel === 'readonly' || item.trustLevel === 'repair' || item.trustLevel === 'sync' ? item.trustLevel : 'readonly',
-      enabled: typeof item.enabled === 'boolean' ? item.enabled : true,
-    }));
-}
-
-function repairPeerInstancesFromCounterpart() {
-  const counterpart = parseJsonEnv(process.env.SCIFORGE_COUNTERPART_JSON);
-  if (!isRecord(counterpart)) return [];
-  const workspaceWriterUrl = cleanUrlString(counterpart.workspaceWriterUrl);
-  if (!workspaceWriterUrl) return [];
-  return [{
-    name: stringValue(counterpart.agentId) || stringValue(counterpart.name) || 'counterpart',
-    appUrl: cleanUrlString(counterpart.appUrl),
-    workspaceWriterUrl,
-    workspacePath: normalizeWorkspaceRootPath(stringValue(counterpart.workspacePath)),
-    role: 'repair' as const,
-    trustLevel: 'repair' as const,
-    enabled: true,
-  }];
-}
-
-function normalizeToolProviderRoutes(value: unknown) {
-  if (!isRecord(value)) return undefined;
-  const out: Record<string, Record<string, unknown>> = {};
-  for (const [rawKey, rawRoute] of Object.entries(value)) {
-    const routeKey = rawKey.trim();
-    if (!routeKey || !isRecord(rawRoute)) continue;
-    const route: Record<string, unknown> = {};
-    if (typeof rawRoute.enabled === 'boolean') route.enabled = rawRoute.enabled;
-    if (typeof rawRoute.capabilityId === 'string' && rawRoute.capabilityId.trim()) route.capabilityId = rawRoute.capabilityId.trim();
-    const source = typeof rawRoute.source === 'string' ? rawRoute.source.trim() : '';
-    if (['local', 'agentserver', 'mcp', 'http', 'ssh', 'client-worker', 'backend-native', 'package', 'workspace', 'external'].includes(source)) route.source = source;
-    if (typeof rawRoute.primaryProviderId === 'string' && rawRoute.primaryProviderId.trim()) route.primaryProviderId = rawRoute.primaryProviderId.trim();
-    const fallbackProviderIds = stringArray(rawRoute.fallbackProviderIds);
-    if (fallbackProviderIds.length) route.fallbackProviderIds = fallbackProviderIds;
-    const permissions = stringArray(rawRoute.permissions);
-    if (permissions.length) route.permissions = permissions;
-    const requiredConfig = stringArray(rawRoute.requiredConfig);
-    if (requiredConfig.length) route.requiredConfig = requiredConfig;
-    const health = typeof rawRoute.health === 'string' ? rawRoute.health.trim() : '';
-    if (['ready', 'unknown', 'unavailable', 'unauthorized', 'rate-limited'].includes(health)) route.health = health;
-    for (const keyName of ['endpoint', 'baseUrl', 'url', 'invokeUrl', 'invokePath'] as const) {
-      const routeValue = rawRoute[keyName];
-      if (typeof routeValue === 'string' && routeValue.trim()) route[keyName] = routeValue.trim().replace(/\/+$/, '');
-    }
-    if (typeof rawRoute.timeoutMs === 'number' && Number.isFinite(rawRoute.timeoutMs)) route.timeoutMs = Math.max(1_000, Math.trunc(rawRoute.timeoutMs));
-    if (Object.keys(route).length) out[routeKey] = route;
-  }
-  return Object.keys(out).length ? out : undefined;
-}
-
-function stringArray(value: unknown) {
-  if (!Array.isArray(value)) return [];
-  return Array.from(new Set(value
-    .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
-    .map((entry) => entry.trim())));
-}
-
-function cleanUrlString(value: unknown) {
-  return typeof value === 'string' ? value.trim().replace(/\/+$/, '') : '';
 }

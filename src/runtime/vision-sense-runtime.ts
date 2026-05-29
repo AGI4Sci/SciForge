@@ -7,9 +7,10 @@ import { loadVisionSenseConfig, looksLikeComputerUseRequest, rebindWindowTargetF
 import { VISION_SENSE_RUNTIME_ID, VISION_TOOL_ID } from './vision-sense/trace-policy.js';
 import { windowTargetTraceConfig } from './computer-use/window-target.js';
 import { visionSenseRuntimeEventTypes } from '../../packages/observe/vision/computer-use-runtime-policy.js';
-import { computerUseHostPortsContract, gatewayRequestToComputerUseRequest } from './computer-use/host-adapter.js';
+import { COMPUTER_USE_ACTION_PROVIDER_ID, computerUseHostPortsContract, gatewayRequestToComputerUseRequest } from './computer-use/host-adapter.js';
 import { runComputerUsePackageBridge } from './computer-use/package-bridge.js';
 import { genericBridgeBlockedPayload } from './vision-sense/computer-use-trace-output.js';
+import { isRecord, toStringList, uniqueStrings } from './gateway-utils.js';
 
 export async function tryRunVisionSenseRuntime(
   request: GatewayRequest,
@@ -17,7 +18,7 @@ export async function tryRunVisionSenseRuntime(
 ): Promise<ToolPayload | undefined> {
   if (!visionSenseSelected(request)) return undefined;
   if (looksLikePlaywrightEdgeMcpBrowserRequest(request.prompt)) return undefined;
-  if (!looksLikeComputerUseRequest(request.prompt)) return undefined;
+  if (!computerUseActionProviderSelected(request) && !looksLikeComputerUseRequest(request.prompt)) return undefined;
 
   const workspace = resolve(request.workspacePath || process.cwd());
   const config = await loadVisionSenseConfig(workspace, request);
@@ -62,4 +63,14 @@ function looksLikePlaywrightEdgeMcpBrowserRequest(prompt: string) {
   return /\bplaywright_edge_browser\b/.test(text)
     || /sciforge\.observe\.playwright-edge-mcp/.test(text)
     || (/\bplaywright\s+mcp\b/.test(text) && /\b(edge|msedge|microsoft\s+edge)\b/.test(text));
+}
+
+function computerUseActionProviderSelected(request: GatewayRequest) {
+  if (/^\/(?:computer-use|computer\s+use)\b/i.test(request.prompt.trim())) return true;
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const selectedActionIds = uniqueStrings([
+    ...(request.selectedActionIds ?? []),
+    ...toStringList(uiState.selectedActionIds),
+  ]);
+  return selectedActionIds.includes(COMPUTER_USE_ACTION_PROVIDER_ID);
 }

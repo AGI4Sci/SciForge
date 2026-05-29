@@ -12,6 +12,7 @@ export type CuUserAcceptanceStatus =
   | 'multi-app-workflow-passed';
 
 export type CuEvidenceClaimKind =
+  | 'sciForge-chat-origin'
   | 'real-computer-use'
   | 'tui-host-runTask'
   | 'desktop-bridge-ack'
@@ -29,18 +30,21 @@ export type CuEvidenceClaimKind =
 export interface CuEvidenceClaim {
   id: string;
   kind: CuEvidenceClaimKind;
+  status?: 'present' | 'missing' | 'blocked';
   ref?: string;
   refs?: string[];
   recordRefs?: string[];
   evidenceRefs?: string[];
   artifactRefs?: string[];
   sessionRefs?: string[];
+  origin?: Record<string, unknown>;
   note?: string;
 }
 
 export interface CuTuiHostChainLink {
   id: string;
   kind:
+    | 'sciForge-chat-origin'
     | 'gui-terminal-equivalent-text'
     | 'tui-host-runTask'
     | 'computer-use-action-provider'
@@ -52,6 +56,7 @@ export interface CuTuiHostChainLink {
   hostPortsRef?: string;
   toolPayloadRef?: string;
   recordRef?: string;
+  origin?: Record<string, unknown>;
   note?: string;
 }
 

@@ -862,10 +862,13 @@ export interface ScenarioRuntimeOverride {
   failureRecoveryPolicy?: Record<string, unknown>;
   verificationPolicy?: Record<string, unknown>;
   humanApprovalPolicy?: Record<string, unknown>;
+  completionEvidencePolicy?: Record<string, unknown>;
   unverifiedReason?: string;
   scenarioPackageRef?: ScenarioPackageRef;
   skillPlanRef?: string;
   uiPlanRef?: string;
+  computerUseLong?: Record<string, unknown>;
+  computerUseNext?: Record<string, unknown>;
 }
 
 export type ToolProviderSource = 'local' | 'agentserver' | 'mcp' | 'http' | 'ssh' | 'client-worker' | 'backend-native' | 'package' | 'workspace' | 'external';

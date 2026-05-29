@@ -4,8 +4,7 @@ import { makeId, nowIso } from '../../domain';
 import { extractLatencyPolicy, extractResponsePlan, latencyThresholdsFromPolicy, type RuntimeLatencyThresholds } from '../../latencyPolicy';
 import { buildInitialResponseProgressEvent } from '../../processProgress';
 import { SCENARIO_SPECS } from '@sciforge/scenario-core/scenario-specs';
-import { builtInScenarioIdForRuntimeInput, skillDomainForRuntimeInput } from '@sciforge/scenario-core/scenario-routing-policy';
-import { expectedArtifactsForCurrentTurn, selectedComponentsForCurrentTurn } from '../../artifactIntent';
+import { builtInScenarioIdForRuntimeInput } from '@sciforge/scenario-core/scenario-routing-policy';
 import { normalizeAgentResponse } from '../agentClient';
 import { DEFAULT_AGENT_REQUEST_TIMEOUT_MS } from '@sciforge-ui/runtime-contract/handoff';
 import { collectRuntimeRefsFromValue } from '@sciforge-ui/runtime-contract/references';
@@ -27,7 +26,10 @@ import {
   withConfiguredContextWindowLimit,
   workspaceResultCompletion,
 } from './runtimeEvents';
+import { actionableRuntimeStderrSummary, classifyRuntimeFailure } from './runtimeFailure';
 import { assertCodexRealtimeSessionRequestBoundary, createCodexRealtimeSessionClient, CODEX_RUNTIME_STREAM_PATH, type CodexRealtimeControlSender } from './codexRealtimeSession';
+import { buildComputerUseWorkspaceGatewayRequest, computerUseActionProviderRequested } from './computerUseWorkspaceGatewayRequest';
+import { attachRuntimeGuiPresentationToResponse } from './runtimeGuiPresentation';
 import { hasAnnotationPlanOnlyEnvelopeMarker, isAnnotationPlanOnlyEnvelope } from '../../feedback/annotationPlanModel';
 
 const CODEX_RUNTIME_REQUEST_SCHEMA_VERSION = 'sciforge.codex-runtime-stream-request.v1';
@@ -43,8 +45,6 @@ const TRANSPORT_ARTIFACT_INLINE_DATA_BYTES = 12_000;
 const TRANSPORT_TEXT_PREVIEW_CHARS = 500;
 const TRANSPORT_REF_KEYS = ['ref', 'dataRef', 'path', 'filePath', 'markdownRef', 'contentRef', 'stdoutRef', 'stderrRef', 'outputRef'] as const;
 const WORKSPACE_TOOL_STREAM_PATH = '/api/sciforge/tools/run/stream';
-const COMPUTER_USE_VISION_SENSE_TOOL_ID = 'local.vision-sense';
-const COMPUTER_USE_ACTION_PROVIDER_ID = 'action.sciforge.computer-use';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -396,270 +396,6 @@ function assertNotAnnotationPlanOnlyRuntimeRequest(input: SendAgentMessageInput)
   throw new Error('annotation-plan-only requests must be resolved by the plan-only conversation policy before Codex Runtime transport; runtime execution, repair, workspace writes, and GitHub sync are forbidden.');
 }
 
-function attachRuntimeGuiPresentationToResponse(
-  response: NormalizedAgentResponse,
-  result: unknown,
-): NormalizedAgentResponse {
-  const presentation = isRecord(result) && isRecord(result.guiPresentation)
-    ? result.guiPresentation
-    : isRecord(result) && isRecord(result.output) && isRecord(result.output.guiPresentation)
-      ? result.output.guiPresentation
-      : undefined;
-  const askUser = isRecord(result) && isRecord(result.guiAskUser)
-    ? result.guiAskUser
-    : isRecord(result) && isRecord(result.output) && isRecord(result.output.guiAskUser)
-      ? result.output.guiAskUser
-      : undefined;
-  const source = asString(presentation?.source);
-  const presentedObjectReference = source?.startsWith('gui.present:')
-    ? objectReferenceFromGuiPresentation(presentation, response.run.id)
-    : undefined;
-  const askSource = asString(askUser?.source);
-  if (askSource?.startsWith('gui.ask_user:')) {
-    const askObjectReferences = objectReferencesFromGuiAskUser(askUser, response.run.id);
-    const objectReferences = appendObjectReference(
-      appendObjectReferences(response.message.objectReferences, askObjectReferences),
-      presentedObjectReference,
-    );
-    return {
-      ...response,
-      message: {
-        ...response.message,
-        provenance: {
-          ...(response.message.provenance ?? {}),
-          kind: 'live-runtime-codex',
-          source: askSource,
-          runtimeRequestEligible: false,
-          liveAcceptanceEligible: true,
-          requiresUserConfirmation: true,
-          commandId: asString(askUser?.commandId),
-          attemptId: asString(askUser?.attemptId),
-          provider: asString(askUser?.provider),
-          model: asString(askUser?.model),
-          profile: asString(askUser?.profile),
-          workspace: asString(askUser?.workspace),
-        },
-        objectReferences,
-      },
-      run: {
-        ...response.run,
-        raw: {
-          ...(isRecord(response.run.raw) ? response.run.raw : {}),
-          ...(presentedObjectReference ? { guiPresentation: presentation } : {}),
-          guiAskUser: askUser,
-        },
-        objectReferences: appendObjectReference(
-          appendObjectReferences(response.run.objectReferences, askObjectReferences),
-          presentedObjectReference,
-        ),
-      },
-    };
-  }
-  if (source?.startsWith('gui.present:')) {
-    return {
-      ...response,
-      message: {
-        ...response.message,
-        provenance: {
-          ...(response.message.provenance ?? {}),
-          kind: 'live-runtime-codex',
-          source,
-          runtimeRequestEligible: false,
-          liveAcceptanceEligible: true,
-          commandId: asString(presentation?.commandId),
-          attemptId: asString(presentation?.attemptId),
-          provider: asString(presentation?.provider),
-          model: asString(presentation?.model),
-          profile: asString(presentation?.profile),
-          workspace: asString(presentation?.workspace),
-        },
-        objectReferences: appendObjectReference(response.message.objectReferences, presentedObjectReference),
-      },
-      run: {
-        ...response.run,
-        raw: {
-          ...(isRecord(response.run.raw) ? response.run.raw : {}),
-          guiPresentation: presentation,
-        },
-        objectReferences: appendObjectReference(response.run.objectReferences, presentedObjectReference),
-      },
-    };
-  }
-  const nativeMessage = isRecord(result) && isRecord(result.nativeCodexMessage)
-    ? result.nativeCodexMessage
-    : isRecord(result) && isRecord(result.output) && isRecord(result.output.nativeCodexMessage)
-      ? result.output.nativeCodexMessage
-      : undefined;
-  const nativeSource = asString(nativeMessage?.source);
-  if (!nativeSource?.startsWith('codex.native-message:')) return response;
-  return {
-    ...response,
-    message: {
-      ...response.message,
-      provenance: {
-        ...(response.message.provenance ?? {}),
-        kind: 'live-runtime-codex',
-        source: nativeSource,
-        runtimeRequestEligible: false,
-        liveAcceptanceEligible: false,
-        commandId: asString(nativeMessage?.commandId),
-        attemptId: asString(nativeMessage?.attemptId),
-        provider: asString(nativeMessage?.provider),
-        model: asString(nativeMessage?.model),
-        profile: asString(nativeMessage?.profile),
-        workspace: asString(nativeMessage?.workspace),
-      },
-    },
-    run: {
-      ...response.run,
-      raw: {
-        ...(isRecord(response.run.raw) ? response.run.raw : {}),
-        nativeCodexMessage: nativeMessage,
-      },
-    },
-  };
-}
-
-function objectReferenceFromGuiPresentation(presentation: Record<string, unknown> | undefined, runId: string): ObjectReference | undefined {
-  const rawRef = asString(presentation?.ref);
-  if (!rawRef) return undefined;
-  const kind = objectReferenceKindFromPresentationRef(rawRef);
-  const target = targetFromPresentationRef(rawRef, kind);
-  const id = objectReferenceIdFromPresentationRef(kind, target);
-  const hint = asString(presentation?.hint);
-  const isArtifact = kind === 'artifact';
-  return {
-    id,
-    kind,
-    title: asString(presentation?.title) ?? presentationTitleFromRef(target),
-    ref: kind === 'url' ? `url:${target}` : `${kind}:${target}`,
-    artifactType: isArtifact ? artifactTypeFromPresentationHint(hint) : undefined,
-    runId,
-    executionUnitId: kind === 'execution-unit' ? target : undefined,
-    preferredView: preferredViewFromPresentationHint(hint, kind),
-    presentationRole: 'primary-deliverable',
-    status: 'available',
-    summary: asString(presentation?.text)?.slice(0, 360) ?? rawRef,
-    provenance: {
-      dataRef: isArtifact || kind === 'url' ? target : undefined,
-      path: kind === 'file' || kind === 'folder' ? target : undefined,
-      producer: asString(presentation?.source),
-    },
-  };
-}
-
-function appendObjectReference(
-  references: ObjectReference[] | undefined,
-  reference: ObjectReference | undefined,
-): ObjectReference[] | undefined {
-  if (!reference) return references;
-  const existing = references ?? [];
-  if (existing.some((item) => item.ref === reference.ref || item.id === reference.id)) return existing;
-  return [...existing, reference];
-}
-
-function appendObjectReferences(
-  references: ObjectReference[] | undefined,
-  nextReferences: ObjectReference[],
-): ObjectReference[] | undefined {
-  if (!nextReferences.length) return references;
-  let merged = references ?? [];
-  for (const reference of nextReferences) {
-    merged = appendObjectReference(merged, reference) ?? merged;
-  }
-  return merged;
-}
-
-function objectReferenceKindFromPresentationRef(ref: string): ObjectReference['kind'] {
-  if (/^https?:\/\//i.test(ref)) return 'url';
-  const prefix = ref.match(/^([a-z-]+)::?/i)?.[1]?.toLowerCase();
-  if (prefix === 'artifact' || prefix === 'file' || prefix === 'folder' || prefix === 'run' || prefix === 'execution-unit' || prefix === 'scenario-package' || prefix === 'url') {
-    return prefix;
-  }
-  if (/[\\/]/.test(ref) || /\.[a-z0-9]+(?:$|[?#])/i.test(ref)) return 'file';
-  return 'artifact';
-}
-
-function objectReferencesFromGuiAskUser(askUser: Record<string, unknown> | undefined, runId: string): ObjectReference[] {
-  const refs = uniqueStringList([
-    ...(asStringArray(askUser?.relatedRefs) ?? []),
-    ...(asStringArray(askUser?.displayedRefs) ?? []),
-  ]);
-  return refs.flatMap((ref) => {
-    if (!isUserFacingGuiAskRef(ref)) return [];
-    return [objectReferenceFromGuiRef(ref, runId, 'supporting-evidence')];
-  });
-}
-
-function objectReferenceFromGuiRef(ref: string, runId: string, presentationRole: ObjectReference['presentationRole']): ObjectReference {
-  const kind = objectReferenceKindFromPresentationRef(ref);
-  const target = targetFromPresentationRef(ref, kind);
-  const id = objectReferenceIdFromPresentationRef(kind, target);
-  const isArtifact = kind === 'artifact';
-  return {
-    id,
-    kind,
-    title: presentationTitleFromRef(target),
-    ref: kind === 'url' ? `url:${target}` : `${kind}:${target}`,
-    artifactType: isArtifact ? artifactTypeFromPresentationHint(undefined) : undefined,
-    runId,
-    executionUnitId: kind === 'execution-unit' ? target : undefined,
-    preferredView: preferredViewFromPresentationHint(refHintFromPath(target), kind),
-    presentationRole,
-    status: 'available',
-    summary: ref,
-    provenance: {
-      dataRef: isArtifact || kind === 'url' ? target : undefined,
-      path: kind === 'file' || kind === 'folder' ? target : undefined,
-      producer: 'gui.ask_user',
-    },
-  };
-}
-
-function isUserFacingGuiAskRef(ref: string) {
-  return !/^audit:/i.test(ref) && !/\b(?:stdoutRef|stderrRef|rawRef)\b/i.test(ref);
-}
-
-function refHintFromPath(path: string): string | undefined {
-  if (/\.(?:md|markdown|txt)(?:$|[?#])/i.test(path)) return 'markdown';
-  if (/\.(?:png|jpe?g|gif|webp|svg)(?:$|[?#])/i.test(path)) return 'image';
-  if (/\.(?:json|jsonl)(?:$|[?#])/i.test(path)) return 'auto';
-  return undefined;
-}
-
-function targetFromPresentationRef(ref: string, kind: ObjectReference['kind']): string {
-  if (kind === 'url') return ref.replace(/^url::?/i, '');
-  return ref.replace(new RegExp(`^${kind}::?`, 'i'), '');
-}
-
-function objectReferenceIdFromPresentationRef(kind: ObjectReference['kind'], target: string): string {
-  return `gui-present-${kind}-${target.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 72) || 'ref'}`;
-}
-
-function presentationTitleFromRef(ref: string): string {
-  const lastSegment = ref.split(/[\\/]/).filter(Boolean).at(-1) ?? ref;
-  return lastSegment || ref;
-}
-
-function artifactTypeFromPresentationHint(hint: string | undefined): string {
-  if (hint === 'table') return 'table';
-  if (hint === 'diff') return 'diff';
-  if (hint === 'image') return 'image';
-  if (hint === 'notebook') return 'notebook';
-  return 'research-report';
-}
-
-function preferredViewFromPresentationHint(hint: string | undefined, kind: ObjectReference['kind']): string | undefined {
-  if (kind === 'file' && hint === 'markdown') return 'report-viewer';
-  if (kind !== 'artifact' && kind !== 'file') return undefined;
-  if (hint === 'table') return 'record-table';
-  if (hint === 'diff') return 'diff-viewer';
-  if (hint === 'image') return 'image-viewer';
-  if (hint === 'notebook') return 'notebook-viewer';
-  if (hint === 'markdown' || hint === 'auto' || !hint) return 'report-viewer';
-  return undefined;
-}
-
 function buildCodexRuntimeStreamRequest(input: {
   input: SendAgentMessageInput;
   commandId: string;
@@ -886,85 +622,6 @@ function sameChatContinuityContextForRuntimeCommand(input: SendAgentMessageInput
     'Same-chat continuity context for relative references. Use this bounded non-seed context only to resolve phrases such as "previous turn", "last answer", or "that passphrase"; do not treat it as artifact content or hidden GUI state.',
     ...entries,
   ].join('\n');
-}
-
-function computerUseActionProviderRequested(input: SendAgentMessageInput) {
-  return /^\/(?:computer-use|computer\s+use)\b/i.test(input.prompt.trim());
-}
-
-function buildComputerUseWorkspaceGatewayRequest(input: SendAgentMessageInput, commandId: string) {
-  const scenario = input.scenarioOverride;
-  const selectedToolIds = uniqueRuntimeStringList([
-    ...(scenario?.selectedToolIds ?? []),
-    COMPUTER_USE_VISION_SENSE_TOOL_ID,
-  ]);
-  const selectedSenseIds = uniqueRuntimeStringList([
-    ...(scenario?.selectedSenseIds ?? []),
-    COMPUTER_USE_VISION_SENSE_TOOL_ID,
-  ]);
-  const selectedActionIds = uniqueRuntimeStringList([
-    ...(scenario?.selectedActionIds ?? []),
-    COMPUTER_USE_ACTION_PROVIDER_ID,
-  ]);
-  const selectedComponentIds = selectedComponentsForCurrentTurn(
-    input.prompt,
-    input.availableComponentIds ?? scenario?.defaultComponents ?? [],
-  );
-  const approvalRef = approvalRefFromComputerUsePrompt(input.prompt);
-  return {
-    skillDomain: skillDomainForRuntimeInput(input),
-    prompt: input.prompt,
-    handoffSource: 'ui-chat',
-    workspacePath: input.config.workspacePath,
-    agentServerBaseUrl: input.config.agentServerBaseUrl,
-    agentBackend: input.config.agentBackend,
-    modelProvider: input.config.modelProvider,
-    modelName: input.config.modelName,
-    maxContextWindowTokens: input.config.maxContextWindowTokens,
-    scenarioPackageRef: input.scenarioPackageRef ?? scenario?.scenarioPackageRef,
-    skillPlanRef: input.skillPlanRef ?? scenario?.skillPlanRef,
-    uiPlanRef: input.uiPlanRef ?? scenario?.uiPlanRef,
-    artifacts: input.artifacts ?? [],
-    references: input.references ?? [],
-    selectedToolIds,
-    selectedSenseIds,
-    selectedActionIds,
-    selectedComponentIds,
-    selectedVerifierIds: scenario?.selectedVerifierIds,
-    expectedArtifactTypes: expectedArtifactsForCurrentTurn({
-      scenarioId: builtInScenarioIdForRuntimeInput(input),
-      prompt: input.prompt,
-      selectedComponentIds,
-    }),
-    verificationResult: input.verificationResult,
-    recentVerificationResults: input.recentVerificationResults,
-    humanApproval: approvalRef ? { approvalRef } : undefined,
-    uiState: {
-      commandId,
-      currentTurnId: input.currentTurnId,
-      selectedToolIds,
-      selectedSenseIds,
-      selectedActionIds,
-      selectedVerifierIds: scenario?.selectedVerifierIds,
-      turnExecutionConstraints: scenario?.turnExecutionConstraints,
-      artifactPolicy: scenario?.artifactPolicy,
-      referencePolicy: scenario?.referencePolicy,
-      failureRecoveryPolicy: scenario?.failureRecoveryPolicy,
-      humanApprovalPolicy: scenario?.humanApprovalPolicy,
-      humanApproval: approvalRef ? { approvalRef } : undefined,
-      approvalRef,
-      visionSenseConfig: {
-        desktopBridgeEnabled: true,
-        allowSharedSystemInput: input.config.visionAllowSharedSystemInput === true,
-      },
-    },
-  };
-}
-
-function approvalRefFromComputerUsePrompt(prompt: string) {
-  if (!/^\/(?:computer-use|computer\s+use)\s+approve\b/i.test(prompt.trim())) return undefined;
-  const match = /--approval-ref(?:=|\s+)(?:"([^"]+)"|'([^']+)'|(\S+))/i.exec(prompt);
-  return match?.[1] ?? match?.[2] ?? match?.[3];
 }
 
 function latestCodexSessionIdForConversationLane(input: SendAgentMessageInput): string | undefined {
@@ -1464,56 +1121,6 @@ function runtimeFailureMetadata(
   };
 }
 
-function publicRuntimeFailureReason(stderrSummary: string | undefined, exitCode: number | undefined) {
-  return classifyRuntimeFailure(stderrSummary, exitCode).publicFailureReason;
-}
-
-function classifyRuntimeFailure(stderrSummary: string | undefined, exitCode: number | undefined) {
-  const text = stderrSummary ?? '';
-  if (/completed without gui\.present|gui-present-required/i.test(text)) {
-    return runtimeFailureClassification('missing-gui-present', 'runtime-projection', true, 'Runtime Codex completed without gui.present; SciForge withheld raw provider text from the primary result.');
-  }
-  if (/401|unauthorized|invalid token/i.test(text)) {
-    return runtimeFailureClassification('provider-auth', 'provider-config', false, 'Runtime Codex provider rejected credentials (401 Unauthorized). Check SCIFORGE_RUNTIME_API_KEY and the configured proxy upstream.');
-  }
-  if (/403|forbidden/i.test(text)) {
-    return runtimeFailureClassification('provider-forbidden', 'provider-access', false, 'Runtime Codex provider or plugin access was forbidden (403). Check the configured proxy upstream credentials and account access.');
-  }
-  if (/429|rate limit|quota|insufficient_quota/i.test(text)) {
-    return runtimeFailureClassification('provider-quota', 'provider-budget', false, 'Runtime Codex provider rate limit or quota blocked the run. Check the configured proxy upstream account limits.');
-  }
-  if (/502|bad gateway/i.test(text)) {
-    return runtimeFailureClassification('provider-gateway', 'provider-upstream', true, 'Runtime Codex provider gateway returned 502 Bad Gateway. Treat this as an upstream/transient provider failure and retry with preserved audit refs.');
-  }
-  if (/ECONNREFUSED|connection refused|failed to connect/i.test(text)) {
-    return runtimeFailureClassification('provider-proxy-unreachable', 'provider-proxy', true, 'Runtime Codex could not reach the configured provider proxy. Check that the proxy is running and the base URL is correct.');
-  }
-  if (/ENOTFOUND|EAI_AGAIN|getaddrinfo|nodename nor servname|DNS|network|timeout|timed out/i.test(text)) {
-    return runtimeFailureClassification('external-network', 'external-network', true, 'Runtime Codex provider network request failed. Check network access and the configured proxy upstream.');
-  }
-  if (/ENOENT|spawn .*ENOENT|command not found|executable not found|No such file or directory/i.test(text)) {
-    return runtimeFailureClassification('runtime-tool-missing', 'local-runtime', false, 'Runtime Codex could not start a required local tool or executable. Check the Runtime Codex installation and PATH.');
-  }
-  if (/ENOSPC|no space left|tmpdir|temporary directory|permission denied|EACCES/i.test(text)) {
-    return runtimeFailureClassification('local-environment', 'local-environment', false, 'Runtime Codex failed in the local environment. Check disk space, temporary directory access, and workspace permissions.');
-  }
-  return runtimeFailureClassification('runtime-exit', 'runtime-codex', true, `Runtime Codex exited with code ${exitCode ?? 'unknown'}.`);
-}
-
-function runtimeFailureClassification(
-  failureKind: string,
-  ownerLayer: string,
-  retryable: boolean,
-  publicFailureReason: string,
-) {
-  return {
-    failureKind,
-    ownerLayer,
-    retryable,
-    publicFailureReason,
-  };
-}
-
 function summarizeRuntimeStderr(events: AgentStreamEvent[]) {
   const chunks = events.flatMap((event) => {
     const raw = isRecord(event.raw) ? event.raw : {};
@@ -1544,28 +1151,6 @@ function summarizeRuntimeFailureMessages(events: AgentStreamEvent[]) {
   }).filter((value): value is string => Boolean(value)).join(' ').replace(/\s+/g, ' ').trim();
   if (!compact) return undefined;
   return actionableRuntimeStderrSummary(compact) ?? (compact.length > 240 ? `${compact.slice(0, 237)}...` : compact);
-}
-
-function actionableRuntimeStderrSummary(compact: string): string | undefined {
-  for (const pattern of [
-    /unexpected status\s+401[^.]*|401\s+Unauthorized[^.]*|Invalid token[^.]*/i,
-    /unexpected status\s+429[^.]*|429\s+Too Many Requests[^.]*|rate limit[^.]*|quota[^.]*/i,
-    /unexpected status\s+502[^.]*|502\s+Bad Gateway[^.]*|Bad Gateway[^.]*/i,
-    /ECONNREFUSED[^.]*|connection refused[^.]*|failed to connect[^.]*/i,
-    /ENOTFOUND[^.]*|timed out[^.]*/i,
-    /unexpected status\s+403[^.]*|403\s+Forbidden[^.]*/i,
-  ]) {
-    const match = pattern.exec(compact);
-    if (match?.[0] && !isRemotePluginAuthWarning(compact, match.index)) {
-      return match[0].length > 240 ? `${match[0].slice(0, 237)}...` : match[0];
-    }
-  }
-  return undefined;
-}
-
-function isRemotePluginAuthWarning(text: string, matchIndex: number) {
-  const context = text.slice(Math.max(0, matchIndex - 180), matchIndex + 240);
-  return /codex_core_plugins|remote plugin sync|chatgpt\.com\/backend-api\/plugins|featured plugin ids/i.test(context);
 }
 
 function runtimeAuditEventSummary(event: AgentStreamEvent) {

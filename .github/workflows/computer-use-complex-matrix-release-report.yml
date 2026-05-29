@@ -1,0 +1,42 @@
+name: Computer Use complex matrix release report
+
+"on":
+  workflow_dispatch:
+    inputs:
+      regenerate_aggregate:
+        description: "Rebuild aggregate-manifest.json from committed split live manifests before writing the report"
+        required: true
+        type: boolean
+        default: true
+
+jobs:
+  release-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Rebuild split aggregate manifest
+        if: ${{ inputs.regenerate_aggregate }}
+        run: npm run smoke:computer-use-chat-live-complex-matrix:aggregate --silent
+
+      - name: Generate opt-in release report
+        run: npm run smoke:computer-use-chat-live-complex-matrix:opt-in-report --silent
+
+      - name: Upload release report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-report
+          path: |
+            docs/test-artifacts/computer-use-chat-live-complex-matrix/release-report.json
+            docs/test-artifacts/computer-use-chat-live-complex-matrix/aggregate-manifest.json
+          if-no-files-found: error

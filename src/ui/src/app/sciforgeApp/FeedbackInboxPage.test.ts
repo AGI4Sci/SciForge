@@ -6,6 +6,10 @@ import { buildBlockedRepairHandoffResultInput } from './feedbackBlockedRepairRes
 import type { FeedbackCommentRecord, PeerInstance, RuntimeCodexBrowserAcceptanceManifest, RuntimeProviderPreflightManifest } from '../../domain';
 
 const feedbackInboxSource = readFileSync(new URL('./FeedbackInboxPage.tsx', import.meta.url), 'utf8');
+const feedbackActionConfirmationSource = readFileSync(new URL('./FeedbackActionConfirmation.tsx', import.meta.url), 'utf8');
+const feedbackInboxToolbarSource = readFileSync(new URL('./FeedbackInboxToolbar.tsx', import.meta.url), 'utf8');
+const feedbackInboxDiagnosticsSource = readFileSync(new URL('./FeedbackInboxDiagnostics.tsx', import.meta.url), 'utf8');
+const feedbackEvidenceReviewSource = readFileSync(new URL('./FeedbackEvidenceReview.tsx', import.meta.url), 'utf8');
 const projectSource = readFileSync(new URL('../../../../../PROJECT.md', import.meta.url), 'utf8');
 const feedbackInboxCss = readFileSync(new URL('../../styles/app-feedback.css', import.meta.url), 'utf8');
 const directCodexTerminalSource = readFileSync(new URL('../../feedback/FeedbackCodexTerminalPanel.tsx', import.meta.url), 'utf8');
@@ -205,10 +209,12 @@ test('blocked provider handoff builds durable repair audit payload', () => {
 });
 
 test('feedback inbox keeps search field wired to no-match empty state copy', () => {
-  assert.match(feedbackInboxSource, /value=\{searchQuery\}/);
-  assert.match(feedbackInboxSource, /onChange=\{\(event\) => setSearchQuery\(event\.target\.value\)\}/);
-  assert.match(feedbackInboxSource, /aria-label="搜索反馈、GitHub Issue 或证据 ref"/);
-  assert.match(feedbackInboxSource, /placeholder="搜索反馈、Issue、ref\.\.\."/);
+  assert.match(feedbackInboxSource, /searchQuery=\{searchQuery\}/);
+  assert.match(feedbackInboxSource, /onSearchQueryChange=\{setSearchQuery\}/);
+  assert.match(feedbackInboxToolbarSource, /value=\{searchQuery\}/);
+  assert.match(feedbackInboxToolbarSource, /onChange=\{\(event\) => onSearchQueryChange\(event\.target\.value\)\}/);
+  assert.match(feedbackInboxToolbarSource, /aria-label="搜索反馈、GitHub Issue 或证据 ref"/);
+  assert.match(feedbackInboxToolbarSource, /placeholder="搜索反馈、Issue、ref\.\.\."/);
   assert.match(feedbackInboxSource, /没有匹配当前筛选或搜索的反馈/);
   assert.match(feedbackInboxSource, /调整状态筛选、清空搜索/);
   assert.match(feedbackInboxSource, /点击顶栏“注释”打开反馈侧栏/);
@@ -229,7 +235,7 @@ test('feedback inbox defaults repair to system Terminal with optional Web Viewer
   assert.match(feedbackInboxSource, /providerReady=\{repairReadiness\.providerReady === true\}/);
   assert.match(feedbackInboxSource, /providerBlocker=\{repairReadiness\.providerBlocker\}/);
   assert.match(feedbackInboxSource, /gitMode=\{gitOperationMode\}/);
-  assert.match(feedbackInboxSource, /Provider 设置/);
+  assert.match(feedbackInboxDiagnosticsSource, /Provider 设置/);
   assert.doesNotMatch(feedbackInboxSource, /repairReadiness\.providerReady !== true/);
   assert.match(feedbackInboxSource, /onRepairRunWritten=\{onRepairRunWritten\}/);
   assert.doesNotMatch(feedbackInboxSource, /高级 repair 交接与 audit/);
@@ -335,10 +341,10 @@ test('RT-06 repair result closure asks only solved or remaining problem feedback
 });
 
 test('PROJECT.md records the current active task board and archives the annotation sidebar protocol', () => {
-  assert.match(projectSource, /当前任务板：下一轮 Computer Use 真实复杂任务/);
-  assert.match(projectSource, /TUI Host -> `computer_use\.runTask\(request, hostPorts\)`/);
-  assert.match(projectSource, /旧全局注释侧栏 active task board 已从当前执行面删除/);
-  assert.match(projectSource, /docs\/archive/);
+  assert.match(projectSource, /当前任务板：SciForge 对话栏 Computer Use E2E/);
+  assert.match(projectSource, /chat -> runtime -> computer_use\.runTask\(request, hostPorts\) -> gui\.present \/ gui\.ask_user -> verifier/);
+  assert.match(projectSource, /旧任务历史已在 Git 历史中保留/);
+  assert.match(projectSource, /旧 package-local、fixture-only、target-bound harness 只能作为 contract\/diagnostic/);
   assert.match(sciForgeAppSource, /runAnnotationPlanOnlyTurn/);
   assert.match(sciForgeAppSource, /runAnnotationQuickAction/);
   assert.match(sciForgeAppSource, /runPromptOrchestrator/);
@@ -351,9 +357,9 @@ test('PROJECT.md records the current active task board and archives the annotati
 test('feedback inbox keeps visible selection scope hints and GitHub sync trace visible', () => {
   assert.match(feedbackInboxSource, /selectedVisibleActiveComments\.length \? selectedVisibleActiveComments : visibleComments\.filter/);
   assert.match(feedbackInboxSource, /当前列表已选 \$\{visibleSelectedCount\} 条；另有 \$\{hiddenSelectedCount\} 条隐藏选择不参与当前操作/);
-  assert.match(feedbackInboxSource, /选择当前筛选和搜索结果中的所有反馈；隐藏选择不会参与当前操作。/);
-  assert.match(feedbackInboxSource, /只把当前可见且已选的未删除反馈标记为下拉框中的共享状态；隐藏选择不会被修改。/);
-  assert.match(feedbackInboxSource, /导出当前可见已选反馈；如果当前列表没有可见选择，则导出当前筛选和搜索结果。/);
+  assert.match(feedbackInboxToolbarSource, /选择当前筛选和搜索结果中的所有反馈；隐藏选择不会参与当前操作。/);
+  assert.match(feedbackInboxToolbarSource, /只把当前可见且已选的未删除反馈标记为下拉框中的共享状态；隐藏选择不会被修改。/);
+  assert.match(feedbackInboxToolbarSource, /导出当前可见已选反馈；如果当前列表没有可见选择，则导出当前筛选和搜索结果。/);
   assert.match(feedbackInboxSource, /aria-label="GitHub sync trace"/);
   assert.match(feedbackInboxSource, /local <code>\{item\.id\}<\/code>/);
   assert.match(feedbackInboxSource, /sync <strong>\{githubTrace\.syncStatus\}<\/strong>/);
@@ -364,11 +370,13 @@ test('feedback inbox keeps visible selection scope hints and GitHub sync trace v
 
 test('feedback inbox surfaces page state diagnostics for incomplete states', () => {
   assert.match(feedbackInboxSource, /function feedbackPageStateNotices/);
-  assert.match(feedbackInboxSource, /aria-label="页面状态诊断"/);
+  assert.match(feedbackInboxSource, /<FeedbackInboxDiagnostics/);
+  assert.match(feedbackInboxDiagnosticsSource, /aria-label="页面状态诊断"/);
   assert.match(feedbackInboxSource, /const \[diagnosticProbeKey, setDiagnosticProbeKey\] = useState\(0\)/);
   assert.match(feedbackInboxSource, /function refreshPageDiagnostics\(\) \{[\s\S]*?setDiagnosticProbeKey\(\(key\) => key \+ 1\);[\s\S]*?\}/);
-  assert.match(feedbackInboxSource, /aria-label="重新检查页面状态诊断"/);
-  assert.match(feedbackInboxSource, /<RefreshCcw size=\{14\} aria-hidden \/>/);
+  assert.match(feedbackInboxSource, /onRefreshPageDiagnostics=\{refreshPageDiagnostics\}/);
+  assert.match(feedbackInboxDiagnosticsSource, /aria-label="重新检查页面状态诊断"/);
+  assert.match(feedbackInboxDiagnosticsSource, /<RefreshCcw size=\{14\} aria-hidden \/>/);
   assert.match(feedbackInboxSource, /workspace writer/);
   assert.match(feedbackInboxSource, /workspaceLoading = false/);
   assert.match(feedbackInboxSource, /workspaceLoadingDetail/);
@@ -398,8 +406,9 @@ test('feedback inbox surfaces page state diagnostics for incomplete states', () 
 });
 
 test('feedback screenshot preview explains missing images instead of disappearing', () => {
-  assert.match(feedbackInboxSource, /function FeedbackEvidenceReview/);
-  assert.match(feedbackInboxSource, /aria-label="截图证据、用户评论和期望实际"/);
+  assert.match(feedbackInboxSource, /<FeedbackEvidenceReview item=\{item\} config=\{config\} \/>/);
+  assert.match(feedbackEvidenceReviewSource, /function FeedbackEvidenceReview/);
+  assert.match(feedbackEvidenceReviewSource, /aria-label="截图证据、用户评论和期望实际"/);
   assert.match(feedbackInboxCss, /\.feedback-evidence-review\s*\{[\s\S]*?grid-template-columns: minmax\(280px, 0\.95fr\) minmax\(260px, 1\.05fr\);/);
   assert.match(feedbackScreenshotPreviewSource, /className=\{cx\('feedback-screenshot-empty', evidenceStatus\)\} role="status"/);
   assert.match(feedbackScreenshotPreviewSource, /截图预览缺失/);
@@ -417,11 +426,13 @@ test('feedback inbox confirms destructive local queue actions inside the inbox',
   assert.match(feedbackInboxSource, /function requestSoftDeleteSelected\(ids: string\[\]\)/);
   assert.doesNotMatch(softDeleteRequest, /window\.confirm/);
   assert.doesNotMatch(softDeleteConfirm, /window\.confirm/);
-  assert.match(feedbackInboxSource, /role="alertdialog" aria-label="确认本地队列操作"/);
+  assert.match(feedbackInboxSource, /<FeedbackActionConfirmation/);
+  assert.match(feedbackInboxSource, /ariaLabel="确认本地队列操作"/);
+  assert.match(feedbackActionConfirmationSource, /role="alertdialog" aria-label=\{ariaLabel\}/);
   assert.match(feedbackInboxSource, /确认软删除本地反馈/);
   assert.match(feedbackInboxSource, /不会删除 GitHub Issue、repair audit、workspace patch、repair log evidence 或截图原始证据/);
   assert.match(feedbackInboxSource, /已取消本地队列操作/);
-  assert.match(feedbackInboxSource, /onClick=\{\(\) => requestSoftDeleteSelected\(selectedVisibleActiveComments\.map/);
+  assert.match(feedbackInboxSource, /onSoftDeleteSelected=\{\(\) => requestSoftDeleteSelected\(selectedVisibleActiveComments\.map/);
   assert.match(feedbackInboxCss, /\.feedback-queue-confirmation\s*\{/);
   assert.match(feedbackInboxCss, /\.feedback-queue-confirmation-grid,[\s\S]*?\.feedback-github-confirmation-grid\s*\{[\s\S]*?grid-template-columns: max-content minmax\(0, 1fr\);/);
   assert.match(feedbackInboxCss, /@media \(max-width: 720px\)\s*\{[\s\S]*?\.feedback-queue-confirmation-grid\s*\{[\s\S]*?grid-template-columns: 1fr;/);
@@ -433,12 +444,15 @@ test('feedback inbox requires confirmation before GitHub external actions', () =
   assert.doesNotMatch(feedbackInboxSource, /上传 Evidence/);
   assert.match(feedbackInboxSource, /const \[pendingGithubAction, setPendingGithubAction\]/);
   assert.match(feedbackInboxSource, /function requestGithubAction\(kind: PendingGithubActionKind\)/);
-  assert.match(feedbackInboxSource, /role="alertdialog" aria-label="确认 GitHub 外部操作"/);
+  assert.match(feedbackInboxSource, /ariaLabel="确认 GitHub 外部操作"/);
+  assert.match(feedbackActionConfirmationSource, /role="alertdialog" aria-label=\{ariaLabel\}/);
+  assert.match(feedbackInboxSource, /confirmDisabled=\{githubSubmitBusy \|\| githubSyncBusy \|\| evidenceUploadBusy\}/);
   assert.match(feedbackInboxSource, /确认创建 GitHub Issue/);
   assert.match(feedbackInboxSource, /会把结构化 issue body 和公开 evidence refs 发送到 GitHub/);
   assert.match(feedbackInboxSource, /await uploadEvidenceForComments\(targetComments, 'github-submit'\)/);
-  assert.match(feedbackInboxSource, /onClick=\{\(\) => requestGithubAction\('submit-issue'\)\}/);
-  assert.match(feedbackInboxSource, /onClick=\{\(\) => requestGithubAction\('sync-open-issues'\)\}/);
+  assert.match(feedbackInboxSource, /onRequestGithubAction=\{requestGithubAction\}/);
+  assert.match(feedbackInboxToolbarSource, /onClick=\{\(\) => onRequestGithubAction\('submit-issue'\)\}/);
+  assert.match(feedbackInboxToolbarSource, /onClick=\{\(\) => onRequestGithubAction\('sync-open-issues'\)\}/);
   assert.match(feedbackInboxSource, /已取消 GitHub 外部操作/);
   assert.match(feedbackInboxSource, /function githubActionCancelImpact/);
   assert.match(feedbackInboxSource, /没有向 GitHub 发起读取请求，也没有发送 token 或改动本地同步缓存/);

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFile, mkdir, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import {
   buildDirtyWorktreeCollaborationPlan,
@@ -14,6 +14,13 @@ import { RUNTIME_PROFILE } from '../../packages/backend/src/runtime-home.js';
 import { CodexExecJsonAdapter } from './codex/codex-exec-json-adapter.js';
 import type { AgentCliAdapter } from './codex/agent-cli-adapter.js';
 import type { NormalizedAgentEvent } from './codex/codex-event-normalizer.js';
+import { scrubTerminalMirrorText, TerminalMirrorLog } from './repair-handoff-terminal-mirror.js';
+export {
+  appendRepairTerminalMirrorEntry,
+  parseRepairTerminalMirrorNdjson,
+  type RepairTerminalMirrorEntry,
+  type RepairTerminalMirrorTail,
+} from './repair-handoff-terminal-mirror.js';
 
 export interface RepairHandoffInstanceRef {
   id?: string;
@@ -141,20 +148,6 @@ interface RuntimeCodexPreDispatchBlock {
   runtimeApiKeyPresentInAdapterEnv: boolean;
   upstreamBaseUrlPresent: boolean;
   upstreamBaseUrlSource: 'service-env' | 'adapter-env-or-config' | 'missing';
-}
-
-export interface RepairTerminalMirrorEntry {
-  timestamp: string;
-  stream: 'stdout' | 'stderr' | 'event';
-  text: string;
-}
-
-export interface RepairTerminalMirrorTail {
-  terminalMirrorRef: string;
-  entries: RepairTerminalMirrorEntry[];
-  cursor: number;
-  nextCursor: number;
-  totalEntries: number;
 }
 
 export interface RepairHandoffStopResult {
@@ -533,27 +526,6 @@ export async function stopRepairHandoffRun(repairRunId: string, options: { reaso
     terminalMirrorRef: active.terminalMirror.path,
     executorMode: active.executorMode,
     message,
-  };
-}
-
-export async function appendRepairTerminalMirrorEntry(path: string, stream: 'stdout' | 'stderr' | 'event', text: string) {
-  await new TerminalMirrorLog(path).append(stream, text);
-}
-
-export function parseRepairTerminalMirrorNdjson(text: string, options: { cursor?: number; limit?: number; terminalMirrorRef?: string } = {}): RepairTerminalMirrorTail {
-  const cursor = Math.max(0, Math.floor(options.cursor ?? 0));
-  const limit = Math.min(500, Math.max(1, Math.floor(options.limit ?? 200)));
-  const entries = text
-    .split(/\r?\n/)
-    .filter((line) => line.trim())
-    .map((line) => safeParseJson(line))
-    .filter(isRepairTerminalMirrorEntry);
-  return {
-    terminalMirrorRef: options.terminalMirrorRef || '',
-    entries: entries.slice(cursor, cursor + limit),
-    cursor,
-    nextCursor: Math.min(entries.length, cursor + limit),
-    totalEntries: entries.length,
   };
 }
 
@@ -1310,20 +1282,6 @@ function redactForAgent(value: unknown): unknown {
   return out;
 }
 
-class TerminalMirrorLog {
-  constructor(readonly path: string) {}
-
-  async append(stream: 'stdout' | 'stderr' | 'event', text: string) {
-    await mkdir(dirname(this.path), { recursive: true });
-    const entry = {
-      timestamp: new Date().toISOString(),
-      stream,
-      text: scrubTerminalMirrorText(text),
-    };
-    await appendFile(this.path, `${JSON.stringify(entry)}\n`, 'utf8');
-  }
-}
-
 function repairExecutorMode(contract: RepairHandoffRunnerContract): 'agent-server' | 'runtime-codex' {
   return contract.executorBackend === 'runtime-codex' ? 'runtime-codex' : 'agent-server';
 }
@@ -1486,35 +1444,6 @@ function terminalTextForCodexEvent(event: NormalizedAgentEvent) {
     event.message ?? event.text,
     event.toolName ? `tool=${event.toolName}` : undefined,
   ].filter(Boolean).join(' ');
-}
-
-function scrubTerminalMirrorText(text: string) {
-  return text
-    .replace(/\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[a-z0-9_]{20,}\b/gi, '[redacted github token]')
-    .replace(/\b(?:sk|pat|token)_[a-z0-9_-]{20,}\b/gi, '[redacted token]')
-    .replace(/authorization:\s*[^\s]+(?:\s+[^\s]+)?/gi, 'authorization: [redacted]')
-    .replace(/\b(?:x-api-key|api-key|proxy-authorization):\s*[^\s]+/gi, (match) => `${match.split(':')[0]}: [redacted]`)
-    .replace(/\b(rawProviderBody|providerRawBody|raw_provider_body)\b\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;}]+)/gi, '$1: [redacted provider body]')
-    .replace(/\/Users\/[^\s"'`<>]+/g, '[redacted local path]')
-    .replace(/\/home\/[^\s"'`<>]+/g, '[redacted local path]')
-    .replace(/\/private\/(?:tmp|var)\/[^\s"'`<>]+/g, '[redacted local path]')
-    .replace(/\b[A-Za-z]:\\Users\\[^\s"'`<>]+/g, '[redacted local path]')
-    .slice(0, 12_000);
-}
-
-function safeParseJson(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return undefined;
-  }
-}
-
-function isRepairTerminalMirrorEntry(value: unknown): value is RepairTerminalMirrorEntry {
-  if (!isRecord(value)) return false;
-  return typeof value.timestamp === 'string'
-    && (value.stream === 'stdout' || value.stream === 'stderr' || value.stream === 'event')
-    && typeof value.text === 'string';
 }
 
 function normalizeRepoPath(path: string) {

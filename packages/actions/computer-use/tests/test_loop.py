@@ -544,6 +544,76 @@ def test_high_risk_action_needs_confirmation_and_does_not_execute():
     assert trace["approvalRequest"]["action_kind"] == "click"
 
 
+def test_type_text_report_body_can_mention_high_risk_ui_labels_without_confirmation():
+    sense = FakeSense()
+    planner = FakePlanner([
+        ActionPlan(
+            kind="type_text",
+            text="Visible UI fact: the toolbar contains a Share button, but this is only report text.",
+        ),
+    ])
+    executor = FakeExecutor()
+
+    result = run_computer_use_task(
+        "type local notes into a text editor body",
+        sense,
+        planner,
+        executor,
+        FakeVerifier(done_after=1),
+    )
+
+    assert result.status == "completed"
+    assert len(executor.calls) == 1
+
+
+def test_type_text_into_high_risk_target_still_needs_confirmation():
+    sense = FakeSense()
+    planner = FakePlanner([
+        ActionPlan(
+            kind="type_text",
+            target=ActionTarget(description="external post composer"),
+            text="Local report body",
+        ),
+    ])
+    executor = FakeExecutor()
+
+    result = run_computer_use_task(
+        "type local notes into a text editor body",
+        sense,
+        planner,
+        executor,
+        FakeVerifier(done_after=1),
+    )
+
+    assert result.status == "needs-confirmation"
+    assert executor.calls == []
+
+
+def test_click_target_excluding_high_risk_controls_is_low_risk():
+    sense = FakeSense()
+    planner = FakePlanner([
+        ActionPlan(
+            kind="click",
+            target=ActionTarget(
+                description="central results table",
+                region_description="Central data area, excluding Export, Share, Save, and Submit toolbar controls",
+            ),
+        ),
+    ])
+    executor = FakeExecutor()
+
+    result = run_computer_use_task(
+        "inspect visible table data",
+        sense,
+        planner,
+        executor,
+        FakeVerifier(done_after=1),
+    )
+
+    assert result.status == "completed"
+    assert len(executor.calls) == 1
+
+
 def test_allow_confirmed_high_risk_still_requires_approval_ref():
     sense = FakeSense()
     planner = FakePlanner([

@@ -1106,6 +1106,7 @@ async function startProxyHealthFixture(): Promise<{ server: Server; url: string 
       response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
       response.end(JSON.stringify({
         ok: true,
+        upstreamBaseUrl: 'http://provider.example/v1',
         upstream: {
           category: 'ready',
           ok: true,

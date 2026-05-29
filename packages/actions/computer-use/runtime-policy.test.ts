@@ -223,6 +223,53 @@ test('filesystem path text entry is blocked outside file dialog context', () => 
     }),
     '',
   );
+  assert.equal(
+    computerUseTextEntryContextBlockReason({
+      actionType: 'type_text',
+      text: '/Tests & Validation',
+      targetAppName: 'TextEdit',
+      targetTitle: 'Untitled',
+    }),
+    '',
+  );
+  assert.equal(
+    computerUseTextEntryContextBlockReason({
+      actionType: 'type_text',
+      text: [
+        'Computer Use Report',
+        'Visible App/Window: TextEdit',
+        'Evidence Refs: step-002-before-display-1.png, step-002-before-display-2.png',
+      ].join('\n'),
+      targetAppName: 'TextEdit',
+      targetTitle: 'Untitled',
+    }),
+    '',
+  );
+  assert.equal(
+    computerUseTextEntryContextBlockReason({
+      actionType: 'type_text',
+      text: [
+        'Computer Use Local Report',
+        'Visible app/window: TextEdit',
+        'Visible UI fact: The document body is ready for input.',
+        'Evidence refs:',
+        '- .sciforge/vision-runs/computer-use-package-live/step-003-before-display-1.png',
+        '- .sciforge/vision-runs/computer-use-package-live/step-003-before-display-2.png',
+      ].join('\n'),
+      targetAppName: 'TextEdit',
+      targetTitle: 'Untitled',
+    }),
+    '',
+  );
+  assert.match(
+    computerUseTextEntryContextBlockReason({
+      actionType: 'type_text',
+      text: '.sciforge/vision-runs/computer-use-package-live/report.md',
+      targetAppName: 'TextEdit',
+      targetTitle: 'Untitled',
+    }),
+    /does not look like a save\/open\/file dialog/,
+  );
 });
 
 test('file workflow click targets require current visible observation evidence', () => {

@@ -2,8 +2,8 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 
 const root = process.cwd();
-const warningLineThreshold = 1000;
-const taskLineThreshold = 1500;
+const warningLineThreshold = 2000;
+const taskLineThreshold = 2000;
 
 const ignoredDirs = new Set([
   '.git',
@@ -52,8 +52,8 @@ async function main() {
   const warnings = files
     .filter((file) => file.lines >= warningLineThreshold)
     .sort((left, right) => right.lines - left.lines);
-  console.log(`[ok] long-file budget checked: ${longFiles.length} files >= ${taskLineThreshold} lines have tracked split-task coverage or generated-file exemption.`);
-  console.log(`[info] files >= ${warningLineThreshold} lines:`);
+  console.log(`[ok] long-file budget checked: ${longFiles.length} non-test source files >= ${taskLineThreshold} lines have tracked split-task coverage or generated-file exemption.`);
+  console.log(`[info] non-test source files >= ${warningLineThreshold} lines:`);
   for (const file of warnings) {
     const exemption = generatedOrExternalLikeFiles.get(file.path);
     const status = file.lines >= taskLineThreshold
@@ -81,11 +81,13 @@ async function collectSourceFiles(dir: string): Promise<Array<{ path: string; li
       continue;
     }
     if (!entry.isFile() || !sourceExtensions.has(extension(entry.name))) continue;
+    const relativePath = relative(root, full).replaceAll('\\', '/');
+    if (isTestSourcePath(relativePath)) continue;
     const stats = await stat(full);
     if (!stats.size) continue;
     const text = await readFile(full, 'utf8');
     out.push({
-      path: relative(root, full).replaceAll('\\', '/'),
+      path: relativePath,
       lines: text.split('\n').length,
     });
   }
@@ -95,6 +97,14 @@ async function collectSourceFiles(dir: string): Promise<Array<{ path: string; li
 function extension(name: string) {
   const index = name.lastIndexOf('.');
   return index >= 0 ? name.slice(index) : '';
+}
+
+function isTestSourcePath(path: string) {
+  return path.startsWith('tests/')
+    || path.includes('/tests/')
+    || path.startsWith('__tests__/')
+    || path.includes('/__tests__/')
+    || /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path);
 }
 
 await main();

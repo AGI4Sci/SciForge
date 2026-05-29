@@ -1,14 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
-import { Archive, ArrowDown, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ChevronsDown, ChevronsUp, Clock, Copy, Edit3, File, FileCode, FilePlus, FileText, Folder, FolderOpen, FolderPlus, MessageSquare, MoreHorizontal, Moon, PanelTopOpen, Pin, Plug, RefreshCw, Save, Search, Settings, Square, Sun, Workflow } from 'lucide-react';
+import { Archive, ArrowDown, ChevronLeft, ChevronRight, Clock, File, FileCode, FileText, MessageSquare, Pin, Square } from 'lucide-react';
 import { navItems, scenarios, sidebarViewNavItems, type PageId } from '../../data';
 import { normalizeWorkspaceRootPath } from '../../config';
 import type { SciForgeConfig, SciForgeReference, SciForgeSession, ScenarioInstanceId } from '../../domain';
 import { listWorkspace, mutateWorkspaceFile, openWorkspaceObject, readWorkspaceFile, writeWorkspaceFile, type WorkspaceEntry, type WorkspaceFileContent } from '../../api/workspaceClient';
-import { Badge, IconButton, cx } from '../uiPrimitives';
-import type { RuntimeHealthItem } from '../runtimeHealthPanel';
+import { cx } from '../uiPrimitives';
 import {
   explorerWorkspaceRoot,
-  formatBytes,
   parentPath,
   pathBasename,
   sortWorkspaceEntries,
@@ -39,6 +37,16 @@ import {
   type SidebarPanelLayout,
 } from './sidebarPanelLayout';
 import { resolveWorkspaceDirectoryPath } from './workspaceDirectoryPicker';
+import { WorkspaceConnectionPanel } from './WorkspaceConnectionPanel';
+import { WorkspaceExplorerToolbar } from './WorkspaceExplorerToolbar';
+import { WorkspaceExplorerStatusPanel } from './WorkspaceExplorerStatusPanel';
+import { WorkspaceExplorerRootTree } from './WorkspaceExplorerRootTree';
+import { WorkspaceExplorerNodeRow } from './WorkspaceExplorerNodeRow';
+import { WorkspacePreviewPanel } from './WorkspacePreviewPanel';
+import { SidebarProjectChatSection } from './SidebarProjectChatSection';
+import { SidebarToolsStrip } from './SidebarToolsStrip';
+import { SidebarFooterActions } from './SidebarFooterActions';
+import { SidebarPanelBlock, SidebarPanelToggleButton } from './SidebarPanelBlock';
 import {
   SIDEBAR_CHRONOLOGICAL_PROJECT_ID,
   buildConfiguredSidebarProjects,
@@ -69,6 +77,7 @@ import {
 } from '../contextMenu/workspaceClipboardModel';
 export { SettingsPage } from './SettingsPage';
 export { SettingsDialog } from './ShellPanelsSettingsDialog';
+export { TopBar } from './TopBar';
 
 function explorerFileGlyph(name: string) {
   const dot = name.lastIndexOf('.');
@@ -347,14 +356,6 @@ function uniqueSidebarMatches(matches: SidebarSearchMatch[]) {
     seen.add(match.id);
     return true;
   });
-}
-
-function conciseWorkspaceOnboardingReason(path: string, workspaceError: string, workspaceStatus: string) {
-  if (!path.trim()) return '还没有项目。选择项目路径后会显示文件。';
-  const diagnostic = `${workspaceError} ${workspaceStatus}`;
-  if (/EACCES|EPERM|permission|权限/i.test(diagnostic)) return '无法读取当前项目；请检查权限。';
-  if (/ENOENT|not found|未找到/i.test(diagnostic)) return '未找到项目工作区。';
-  return '项目尚未初始化。';
 }
 
 export function Sidebar({
@@ -1351,48 +1352,29 @@ export function Sidebar({
       const isExpanded = entry.kind === 'folder' && expandedFolders.has(entry.path);
       const isSelected = explorerSelectionIncludesPath(selectedEntries, entry.path);
       return (
-        <div key={entry.path} className="explorer-node">
-          <div
-            role="treeitem"
-            aria-selected={isSelected}
-            aria-expanded={entry.kind === 'folder' ? isExpanded : undefined}
-            className={cx('explorer-row', entry.kind === 'file' && 'is-file', isSelected && 'is-selected')}
-            style={{ paddingLeft: 8 + depth * 12 }}
-            onClick={(event) => handleExplorerEntryClick(explorerSelectedEntryFromWorkspaceEntry(entry), event)}
-            onContextMenu={(event) => handleExplorerContextMenu(explorerSelectedEntryFromWorkspaceEntry(entry), event, entry)}
-          >
-            {entry.kind === 'folder' ? (
-              <button
-                type="button"
-                className="explorer-twistie"
-                aria-label={isExpanded ? '折叠' : '展开'}
-                onClick={(ev) => {
-                  ev.stopPropagation();
-                  setExpandedFolders((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(entry.path)) next.delete(entry.path);
-                    else {
-                      next.add(entry.path);
-                      void ensureFolderLoaded(entry.path);
-                    }
-                    return next;
-                  });
-                }}
-              >
-                {isExpanded ? <ChevronDown size={14} strokeWidth={1.75} /> : <ChevronRight size={14} strokeWidth={1.75} />}
-              </button>
-            ) : (
-              <span className="explorer-twistie-placeholder" aria-hidden />
-            )}
-            {entry.kind === 'folder' ? <Folder size={16} className="explorer-type-icon" aria-hidden /> : explorerFileGlyph(entry.name)}
-            <span className="explorer-label">{entry.name}</span>
-          </div>
-          {entry.kind === 'folder' && isExpanded ? (
-            <div className="explorer-branch" role="group">
-              {renderExplorerDepth(depth + 1, entry.path)}
-            </div>
-          ) : null}
-        </div>
+        <WorkspaceExplorerNodeRow
+          key={entry.path}
+          entry={entry}
+          depth={depth}
+          expanded={isExpanded}
+          selected={isSelected}
+          icon={explorerFileGlyph(entry.name)}
+          onEntryClick={(event) => handleExplorerEntryClick(explorerSelectedEntryFromWorkspaceEntry(entry), event)}
+          onEntryContextMenu={(event) => handleExplorerContextMenu(explorerSelectedEntryFromWorkspaceEntry(entry), event, entry)}
+          onToggleFolder={() => {
+            setExpandedFolders((prev) => {
+              const next = new Set(prev);
+              if (next.has(entry.path)) next.delete(entry.path);
+              else {
+                next.add(entry.path);
+                void ensureFolderLoaded(entry.path);
+              }
+              return next;
+            });
+          }}
+        >
+          {entry.kind === 'folder' && isExpanded ? renderExplorerDepth(depth + 1, entry.path) : null}
+        </WorkspaceExplorerNodeRow>
       );
     });
   }
@@ -1443,191 +1425,36 @@ export function Sidebar({
           </div>
           <div className="sidebar-panel-body" ref={panelBodyRef}>
             <div className="sidebar-panel-sections">
-              <section
-                className={cx('sidebar-panel-block', panelLayout.threadsCollapsed && 'is-collapsed')}
+              <SidebarPanelBlock
+                title="对话"
+                collapsed={panelLayout.threadsCollapsed}
                 style={sidebarPanelBlockStyle(panelLayout.threadsCollapsed, panelLayout.threadsHeight)}
+                toggleLabel={{ collapsed: '展开对话区', expanded: '折叠对话区' }}
+                onToggle={() => toggleSidebarPanelSection('threads')}
               >
-                <div className="sidebar-panel-block-head">
-                  <span>对话</span>
-                  <button
-                    type="button"
-                    className="sidebar-panel-toggle"
-                    onClick={() => toggleSidebarPanelSection('threads')}
-                    aria-label={panelLayout.threadsCollapsed ? '展开对话区' : '折叠对话区'}
-                    aria-expanded={!panelLayout.threadsCollapsed}
-                  >
-                    {panelLayout.threadsCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
-                  </button>
-                </div>
-                {!panelLayout.threadsCollapsed ? (
                   <div className="sidebar-scroll">
-              <section className="sidebar-section sidebar-section-actions" aria-label="主操作">
-                <form className="sidebar-search" onSubmit={handleSidebarSearchSubmit}>
-                  <Search size={15} />
-                  <input
-                    value={sidebarSearchQuery}
-                    onChange={(event) => setSidebarSearchQuery(event.target.value)}
-                    placeholder="搜索聊天、项目、页面"
-                    aria-label="搜索聊天、项目、页面"
-                  />
-                </form>
-                {sidebarSearchQuery.trim() ? (
-                  <div className="sidebar-search-results" aria-label="侧边栏搜索结果">
-                    {sidebarSearchMatches.length ? sidebarSearchMatches.map((match) => (
-                      <button
-                        key={match.id}
-                        type="button"
-                        className="sidebar-result-row"
-                        onClick={() => openSidebarSearchMatch(match)}
-                      >
-                        <span>{match.label}</span>
-                        <small>{match.detail}</small>
-                      </button>
-                    )) : (
-                      <p className="sidebar-empty-note">无搜索结果</p>
-                    )}
+              <SidebarProjectChatSection
+                sidebarSearchQuery={sidebarSearchQuery}
+                sidebarSearchMatches={sidebarSearchMatches}
+                allProjectThreadsCollapsed={allProjectThreadsCollapsed}
+                activeMenuKind={sidebarProjectMenu?.kind}
+                activeProjectMenuId={sidebarProjectMenu?.kind === 'project' ? sidebarProjectMenu.projectId : undefined}
+                projectThreadLimit={SIDEBAR_PROJECT_THREAD_LIMIT}
+                sidebarProjectThreadGroups={sidebarProjectThreadGroups}
+                expandedProjectThreads={expandedProjectThreads}
+                onSearchQueryChange={setSidebarSearchQuery}
+                onSearchSubmit={handleSidebarSearchSubmit}
+                onOpenSearchMatch={openSidebarSearchMatch}
+                onOpenProjectMenuAt={openSidebarProjectMenuAt}
+                onToggleProjectMenu={toggleSidebarProjectMenu}
+                onToggleAllProjectThreadsCollapsed={toggleAllProjectThreadsCollapsed}
+                onActivateProject={activateSidebarProject}
+                onToggleProjectThreadExpansion={toggleProjectThreadExpansion}
+                onOpenProjectNewChat={openProjectNewChat}
+                renderSidebarThreadRow={renderSidebarThreadRow}
+              />
                   </div>
-                ) : null}
-              </section>
-              <section className="sidebar-section sidebar-section-threads" aria-labelledby="sidebar-threads-title">
-                <div
-                  className="sidebar-section-title"
-                  id="sidebar-threads-title"
-                  onContextMenu={(event) => {
-                    openSidebarProjectMenuAt({ kind: 'global' }, event);
-                  }}
-                >
-                  <span>项目对话</span>
-                  <div className="sidebar-project-title-actions">
-                    <button
-                      type="button"
-                      className={cx('sidebar-project-icon-btn', allProjectThreadsCollapsed && 'active')}
-                      onClick={toggleAllProjectThreadsCollapsed}
-                      title={allProjectThreadsCollapsed ? '展开全部对话' : '收起全部对话'}
-                      aria-label={allProjectThreadsCollapsed ? '展开全部对话' : '收起全部对话'}
-                      aria-pressed={allProjectThreadsCollapsed}
-                    >
-                      {allProjectThreadsCollapsed ? <ChevronsDown size={14} /> : <ChevronsUp size={14} />}
-                    </button>
-                    <button
-                      type="button"
-                      className={cx('sidebar-project-icon-btn', sidebarProjectMenu?.kind === 'global' && 'active')}
-                      onClick={(event) => toggleSidebarProjectMenu({ kind: 'global' }, event)}
-                      title="项目对话菜单"
-                      aria-label="项目对话菜单"
-                      aria-haspopup="menu"
-                    >
-                      <MoreHorizontal size={15} />
-                    </button>
-                    <button
-                      type="button"
-                      className={cx('sidebar-project-icon-btn', sidebarProjectMenu?.kind === 'create' && 'active')}
-                      onClick={(event) => toggleSidebarProjectMenu({ kind: 'create' }, event)}
-                      title="添加项目"
-                      aria-label="添加项目"
-                      aria-haspopup="menu"
-                    >
-                      <FolderPlus size={15} />
-                    </button>
-                  </div>
-                </div>
-                <div className="sidebar-project-chat-scroll">
-                {sidebarProjectThreadGroups.length ? (
-                  <div className="sidebar-project-chat-list">
-                    {sidebarProjectThreadGroups.map((project) => {
-                      const expanded = expandedProjectThreads.has(project.id);
-                      const visibleThreads = allProjectThreadsCollapsed
-                        ? []
-                        : expanded
-                          ? project.threads
-                          : project.threads.slice(0, SIDEBAR_PROJECT_THREAD_LIMIT);
-                      const hiddenThreadCount = Math.max(0, project.threads.length - visibleThreads.length);
-                      return (
-                        <div key={project.id} className="sidebar-project-chat-group">
-                          <div
-                            className={cx('sidebar-project-chat-head', project.current && 'current')}
-                            onContextMenu={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              openSidebarProjectMenuAt({ kind: 'project', projectId: project.id }, event, project);
-                            }}
-                          >
-                            <button
-                              type="button"
-                              className="sidebar-project-chat-main"
-                              onClick={() => {
-                                if (!project.current) {
-                                  activateSidebarProject(project);
-                                  return;
-                                }
-                                if (project.threads.length) toggleProjectThreadExpansion(project.id);
-                              }}
-                            >
-                              <Folder size={15} aria-hidden />
-                              <span>{project.label}</span>
-                              {project.current ? <Badge variant="muted">当前</Badge> : null}
-                            </button>
-                            <div className="sidebar-project-row-actions">
-                              <button
-                                type="button"
-                                className={cx('sidebar-project-icon-btn', sidebarProjectMenu?.kind === 'project' && sidebarProjectMenu.projectId === project.id && 'active')}
-                                onClick={(event) => toggleSidebarProjectMenu({ kind: 'project', projectId: project.id }, event, project)}
-                                title="项目操作"
-                                aria-label={`${project.label} 项目操作`}
-                                aria-haspopup="menu"
-                              >
-                                <MoreHorizontal size={14} />
-                              </button>
-                              <button
-                                type="button"
-                                className="sidebar-project-icon-btn"
-                                onClick={(event) => openProjectNewChat(project, event)}
-                                title="新聊天"
-                                aria-label={`在 ${project.label} 中新聊天`}
-                              >
-                                <Edit3 size={14} />
-                              </button>
-                            </div>
-                          </div>
-                          {visibleThreads.length ? (
-                            <div className="sidebar-thread-list">
-                              {visibleThreads.map((item) => renderSidebarThreadRow(item, project))}
-                              {hiddenThreadCount ? (
-                                <button
-                                  type="button"
-                                  className="sidebar-thread-more"
-                                  onClick={() => toggleProjectThreadExpansion(project.id)}
-                                >
-                                  <PanelTopOpen size={14} aria-hidden />
-                                  <span>展开显示</span>
-                                  <small>{hiddenThreadCount} 条</small>
-                                </button>
-                              ) : expanded && project.threads.length > SIDEBAR_PROJECT_THREAD_LIMIT ? (
-                                <button
-                                  type="button"
-                                  className="sidebar-thread-more"
-                                  onClick={() => toggleProjectThreadExpansion(project.id)}
-                                >
-                                  <ChevronDown size={14} aria-hidden />
-                                  <span>收起</span>
-                                </button>
-                              ) : null}
-                            </div>
-                          ) : allProjectThreadsCollapsed ? null : (
-                            <p className="sidebar-empty-note sidebar-project-empty">暂无对话</p>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <p className="sidebar-empty-note">还没有聊天</p>
-                )}
-                </div>
-              </section>
-                  </div>
-                ) : null}
-              </section>
+              </SidebarPanelBlock>
               <div
                 className="sidebar-panel-resize-handle"
                 role="separator"
@@ -1635,36 +1462,15 @@ export function Sidebar({
                 aria-label="拖拽调整对话区高度"
                 onMouseDown={(event) => beginSidebarPanelResize('threads-tools', event)}
               />
-              <section
-                className={cx('sidebar-panel-block', panelLayout.toolsCollapsed && 'is-collapsed')}
+              <SidebarPanelBlock
+                title="工具"
+                collapsed={panelLayout.toolsCollapsed}
                 style={sidebarPanelBlockStyle(panelLayout.toolsCollapsed, panelLayout.toolsHeight)}
+                toggleLabel={{ collapsed: '展开工具区', expanded: '折叠工具区' }}
+                onToggle={() => toggleSidebarPanelSection('tools')}
               >
-                <div className="sidebar-panel-block-head">
-                  <span>工具</span>
-                  <button
-                    type="button"
-                    className="sidebar-panel-toggle"
-                    onClick={() => toggleSidebarPanelSection('tools')}
-                    aria-label={panelLayout.toolsCollapsed ? '展开工具区' : '折叠工具区'}
-                    aria-expanded={!panelLayout.toolsCollapsed}
-                  >
-                    {panelLayout.toolsCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
-                  </button>
-                </div>
-                {!panelLayout.toolsCollapsed ? (
-                  <div className="sidebar-tools-strip" aria-label="工具">
-              <button type="button" className={cx('nav-item sidebar-command sidebar-tool-item')} onClick={() => setPage('components')}>
-                <Plug size={16} />
-                <span>应用</span>
-              </button>
-              <div className="sidebar-static-row sidebar-tool-item muted" aria-label="自动化">
-                <Workflow size={16} />
-                <span>自动化</span>
-                <Badge variant="muted">即将推出</Badge>
-              </div>
-                  </div>
-                ) : null}
-              </section>
+                <SidebarToolsStrip onOpenComponents={() => setPage('components')} />
+              </SidebarPanelBlock>
               <div
                 className="sidebar-panel-resize-handle"
                 role="separator"
@@ -1672,55 +1478,31 @@ export function Sidebar({
                 aria-label="拖拽调整工具区高度"
                 onMouseDown={(event) => beginSidebarPanelResize('tools-explorer', event)}
               />
-              <section
-                className={cx('sidebar-panel-block sidebar-panel-block-explorer', panelLayout.explorerCollapsed && 'is-collapsed')}
+              <SidebarPanelBlock
+                title="项目"
+                collapsed={panelLayout.explorerCollapsed}
+                className="sidebar-panel-block-explorer"
                 style={sidebarExplorerPanelStyle(panelLayout.explorerCollapsed)}
-              >
-                <div className="sidebar-panel-block-head sidebar-project-title">
-                  <span>项目</span>
-                  <div className="sidebar-panel-block-head-actions">
+                headerExtra={(
+                  <>
                     {workspaceRoot ? <small>{pathBasename(workspaceRoot) || workspaceRoot}</small> : null}
-                    <button
-                      type="button"
-                      className="sidebar-panel-toggle"
-                      onClick={() => toggleSidebarPanelSection('explorer')}
-                      aria-label={panelLayout.explorerCollapsed ? '展开项目区' : '折叠项目区'}
-                      aria-expanded={!panelLayout.explorerCollapsed}
-                    >
-                      {panelLayout.explorerCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
-                    </button>
-                  </div>
-                </div>
-                {!panelLayout.explorerCollapsed ? (
+                    <SidebarPanelToggleButton
+                      collapsed={panelLayout.explorerCollapsed}
+                      toggleLabel={{ collapsed: '展开项目区', expanded: '折叠项目区' }}
+                      onToggle={() => toggleSidebarPanelSection('explorer')}
+                    />
+                  </>
+                )}
+                toggleLabel={{ collapsed: '展开项目区', expanded: '折叠项目区' }}
+                onToggle={() => toggleSidebarPanelSection('explorer')}
+              >
             <div className="scenario-list scenario-list-workspace">
-              <div className="scenario-list-explorer-toolbar">
-                <div className="explorer-view-toolbar">
-                  <button
-                    type="button"
-                    className="explorer-icon-btn"
-                    onClick={() => void runWorkspaceAction(workspaceActions.createFile)}
-                    title="新建文件"
-                    aria-label="新建文件"
-                  >
-                    <FilePlus size={16} />
-                  </button>
-                  <button
-                    type="button"
-                    className="explorer-icon-btn"
-                    onClick={() => void runWorkspaceAction(workspaceActions.createFolder)}
-                    title="新建文件夹"
-                    aria-label="新建文件夹"
-                  >
-                    <FolderPlus size={16} />
-                  </button>
-                  <button type="button" className="explorer-icon-btn" onClick={() => void refreshExplorer()} title="刷新" aria-label="刷新">
-                    <RefreshCw size={16} />
-                  </button>
-                  <button type="button" className="explorer-icon-btn" onClick={collapseExplorerFolders} title="全部折叠" aria-label="全部折叠">
-                    <ChevronsUp size={16} />
-                  </button>
-                </div>
-              </div>
+              <WorkspaceExplorerToolbar
+                onCreateFile={() => runWorkspaceAction(workspaceActions.createFile)}
+                onCreateFolder={() => runWorkspaceAction(workspaceActions.createFolder)}
+                onRefresh={refreshExplorer}
+                onCollapseAll={collapseExplorerFolders}
+              />
               <div
                 className="sidebar-tree explorer-surface scenario-list-explorer-tree"
                 role="tree"
@@ -1732,96 +1514,51 @@ export function Sidebar({
                   setContextMenu({ x: event.clientX, y: event.clientY, selectedEntries: [] });
                 }}
               >
-                {workspaceNeedsOnboarding(config.workspacePath, workspaceError, workspaceStatus) ? (
-                  <div className="workspace-onboarding">
-                    <strong>{config.workspacePath.trim() ? '初始化 SciForge 项目' : '设置项目路径'}</strong>
-                    <p>{conciseWorkspaceOnboardingReason(config.workspacePath, workspaceError, workspaceStatus)}</p>
-                    <button type="button" onClick={() => void initializeWorkspacePath()}>
-                      创建项目工作区
-                    </button>
-                  </div>
-                ) : null}
-                {workspaceNotice ? <p className="workspace-status explorer-muted-line" role="status">{workspaceNotice}</p> : null}
-                {workspaceError ? <p className="workspace-error">{workspaceError}</p> : null}
+                <WorkspaceExplorerStatusPanel
+                  workspacePath={config.workspacePath}
+                  workspaceError={workspaceError}
+                  workspaceStatus={workspaceStatus}
+                  workspaceNotice={workspaceNotice}
+                  onInitializeWorkspacePath={initializeWorkspacePath}
+                />
                 {!workspaceNeedsOnboarding(config.workspacePath, workspaceError, workspaceStatus) && workspaceRoot ? (
-                  <div className="explorer-section">
-                    <div
-                      role="treeitem"
-                      aria-selected={explorerSelectionIncludesPath(selectedEntries, workspaceRoot)}
-                      aria-expanded={expandedFolders.has(workspaceRoot)}
-                      className={cx('explorer-row', 'explorer-root-row', explorerSelectionIncludesPath(selectedEntries, workspaceRoot) && 'is-selected')}
-                      style={{ paddingLeft: 8 }}
-                      onClick={(event) => handleExplorerEntryClick(explorerSelectedEntryFromFolderPath(workspaceRoot), event)}
-                      onContextMenu={(event) => handleExplorerContextMenu(
-                        explorerSelectedEntryFromFolderPath(workspaceRoot),
-                        event,
-                        syntheticFolderEntry(workspaceRoot),
-                      )}
-                    >
-                      <button
-                        type="button"
-                        className="explorer-twistie"
-                        aria-label={expandedFolders.has(workspaceRoot) ? '折叠' : '展开'}
-                        onClick={(ev) => {
-                          ev.stopPropagation();
-                          setExpandedFolders((prev) => {
-                            const next = new Set(prev);
-                            if (next.has(workspaceRoot)) next.delete(workspaceRoot);
-                            else {
-                              next.add(workspaceRoot);
-                              void ensureFolderLoaded(workspaceRoot);
-                            }
-                            return next;
-                          });
-                        }}
-                      >
-                        {expandedFolders.has(workspaceRoot) ? <ChevronDown size={14} strokeWidth={1.75} /> : <ChevronRight size={14} strokeWidth={1.75} />}
-                      </button>
-                      <FolderOpen size={16} className="explorer-type-icon" aria-hidden />
-                      <span className="explorer-label">{pathBasename(workspaceRoot) || workspaceRoot}</span>
-                    </div>
-                    {expandedFolders.has(workspaceRoot) ? (
-                      <div className="explorer-branch explorer-root-children" role="group">
-                        {renderExplorerDepth(0, workspaceRoot)}
-                      </div>
-                    ) : null}
-                  </div>
+                  <WorkspaceExplorerRootTree
+                    workspaceRoot={workspaceRoot}
+                    rootLabel={pathBasename(workspaceRoot)}
+                    expanded={expandedFolders.has(workspaceRoot)}
+                    selected={explorerSelectionIncludesPath(selectedEntries, workspaceRoot)}
+                    onRootClick={(event) => handleExplorerEntryClick(explorerSelectedEntryFromFolderPath(workspaceRoot), event)}
+                    onRootContextMenu={(event) => handleExplorerContextMenu(
+                      explorerSelectedEntryFromFolderPath(workspaceRoot),
+                      event,
+                      syntheticFolderEntry(workspaceRoot),
+                    )}
+                    onToggleRoot={() => {
+                      setExpandedFolders((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(workspaceRoot)) next.delete(workspaceRoot);
+                        else {
+                          next.add(workspaceRoot);
+                          void ensureFolderLoaded(workspaceRoot);
+                        }
+                        return next;
+                      });
+                    }}
+                  >
+                    {renderExplorerDepth(0, workspaceRoot)}
+                  </WorkspaceExplorerRootTree>
                 ) : null}
                 {previewFile ? (
-                  <div className="workspace-preview" aria-label="文件预览">
-                    <div className="workspace-preview-head">
-                      <span>
-                        <FileText size={13} />
-                        <strong>{previewFile.name}</strong>
-                        {previewDirty ? <Badge variant="warning">未保存</Badge> : <Badge variant="success">已保存</Badge>}
-                      </span>
-                      <div>
-                        <button type="button" onClick={() => void navigator.clipboard?.writeText(previewFile.path)} title="复制路径" aria-label="复制路径"><Copy size={13} /></button>
-                        <button type="button" onClick={() => void navigator.clipboard?.writeText(previewDraft)} title="复制内容" aria-label="复制内容"><Copy size={13} /></button>
-                        <button type="button" onClick={() => void savePreviewFile()} disabled={!previewDirty} title="保存文件" aria-label="保存文件"><Save size={13} /></button>
-                      </div>
-                    </div>
-                    <textarea
-                      value={previewDraft}
-                      spellCheck={false}
-                      onChange={(event) => {
-                        setPreviewDraft(event.target.value);
-                        setPreviewDirty(event.target.value !== previewFile.content);
-                      }}
-                      onKeyDown={(event) => {
-                        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
-                          event.preventDefault();
-                          void savePreviewFile();
-                        }
-                      }}
-                      aria-label={`${previewFile.name} 文件内容`}
-                    />
-                    <div className="workspace-preview-meta">
-                      <code>{previewFile.language}</code>
-                      <span>{formatBytes(previewFile.size)}</span>
-                      {previewFile.modifiedAt ? <span>{new Date(previewFile.modifiedAt).toLocaleString('zh-CN', { hour12: false })}</span> : null}
-                    </div>
-                  </div>
+                  <WorkspacePreviewPanel
+                    file={previewFile}
+                    draft={previewDraft}
+                    dirty={previewDirty}
+                    onDraftChange={(value) => {
+                      setPreviewDraft(value);
+                      setPreviewDirty(value !== previewFile.content);
+                    }}
+                    onSave={savePreviewFile}
+                  />
                 ) : null}
                 {contextMenu ? (
                   <ExplorerContextMenu
@@ -1849,46 +1586,20 @@ export function Sidebar({
                     onReferenceToChat={handleContextMenuReferenceToChat}
                   />
                 ) : null}
-                <button
-                  type="button"
-                  className="explorer-folder-picker-trigger"
-                  onClick={() => void chooseWorkspaceRootPath()}
-                >
-                  打开其他文件夹…
-                </button>
-                <details ref={folderPickerRef} className="explorer-folder-picker explorer-folder-picker-advanced">
-                  <summary>手动输入路径</summary>
-                  <div className="explorer-folder-picker-body">
-                    <input
-                      className="workspace-path-editor explorer-path-input"
-                      value={pathEditDraft}
-                      onChange={(event) => setPathEditDraft(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') void refreshExplorer();
-                      }}
-                      spellCheck={false}
-                      title={workspaceStatus || '项目根路径'}
-                      aria-label="项目根路径"
-                    />
-                    <div className="explorer-folder-picker-actions">
-                      <button type="button" className="explorer-cta-btn" onClick={() => onWorkspacePathChange(pathEditDraft.trim())}>
-                        <Check size={14} />
-                        用作工作区根目录
-                      </button>
-                    </div>
-                  </div>
-                </details>
+                <WorkspaceConnectionPanel
+                  folderPickerRef={folderPickerRef}
+                  pathEditDraft={pathEditDraft}
+                  workspaceStatus={workspaceStatus}
+                  onPathEditDraftChange={setPathEditDraft}
+                  onChooseWorkspaceRootPath={chooseWorkspaceRootPath}
+                  onRefreshExplorer={refreshExplorer}
+                  onWorkspacePathChange={onWorkspacePathChange}
+                />
               </div>
               </div>
-                ) : null}
-              </section>
+              </SidebarPanelBlock>
             </div>
-            <div className="sidebar-footer-actions">
-              <button type="button" className="nav-item sidebar-command" onClick={() => onSettingsOpen?.()}>
-                <Settings size={17} />
-                <span>设置</span>
-              </button>
-            </div>
+            <SidebarFooterActions onSettingsOpen={onSettingsOpen} />
           </div>
         </div>
       ) : null}
@@ -1945,57 +1656,6 @@ export function Sidebar({
         />
       ) : null}
     </aside>
-  );
-}
-
-export function TopBar({
-  onSearch,
-  onSettingsOpen,
-  theme,
-  onThemeToggle,
-  healthItems,
-  annotationModeActive = false,
-  onAnnotationModeToggle = () => undefined,
-}: {
-  onSearch: (query: string) => void;
-  onSettingsOpen: () => void;
-  theme: SciForgeConfig['theme'];
-  onThemeToggle: () => void;
-  healthItems: RuntimeHealthItem[];
-  annotationModeActive?: boolean;
-  onAnnotationModeToggle?: () => void;
-}) {
-  const [query, setQuery] = useState('');
-  const healthProblems = healthItems.filter((item) => item.status === 'offline' || item.status === 'not-configured' || item.status === 'checking').length;
-  function handleSubmit(event: FormEvent) {
-    event.preventDefault();
-    onSearch(query);
-  }
-  return (
-    <header className="topbar">
-      <form className="searchbox" onSubmit={handleSubmit}>
-        <Search size={15} />
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索文件、报告、问题..." />
-      </form>
-      <div className="topbar-actions">
-        <button
-          type="button"
-          className={cx('topbar-annotation-button', annotationModeActive && 'active')}
-          onClick={onAnnotationModeToggle}
-          aria-pressed={annotationModeActive}
-          aria-label={annotationModeActive ? '暂停注释点选' : '打开注释侧栏并开始点选'}
-          data-feedback-control="true"
-        >
-          <MessageSquare size={15} aria-hidden />
-          <span>注释</span>
-        </button>
-        <Badge variant={healthProblems ? 'warning' : 'success'} glow>
-          SciForge · {healthProblems ? `${healthProblems} 项需处理` : '就绪'}
-        </Badge>
-        <IconButton icon={(theme ?? 'dark') === 'dark' ? Sun : Moon} label={(theme ?? 'dark') === 'dark' ? '切换白天模式' : '切换黑夜模式'} onClick={onThemeToggle} />
-        <IconButton icon={Settings} label="设置" onClick={onSettingsOpen} />
-      </div>
-    </header>
   );
 }
 

@@ -58,6 +58,38 @@ test('vision-sense does not intercept literature research topics that mention co
   }
 });
 
+test('vision-sense honors explicit Computer Use action selection even when the prompt asks for a report', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-explicit-cu-action-selection-'));
+  try {
+    const payload = await tryRunVisionSenseRuntime({
+      skillDomain: 'literature',
+      prompt: '/computer-use Use the visible desktop to inspect the current active window and produce a short visible report naming the visible app/window, one visible UI fact, and the evidence refs. Do not click, type, scroll, send, delete, upload, submit, or modify files.',
+      workspacePath: workspace,
+      selectedToolIds: ['local.vision-sense'],
+      selectedActionIds: ['action.sciforge.computer-use'],
+      artifacts: [],
+      uiState: {
+        selectedToolIds: ['local.vision-sense'],
+        selectedActionIds: ['action.sciforge.computer-use'],
+        visionSenseConfig: {
+          desktopBridgeEnabled: true,
+          dryRun: true,
+          runId: 'cu-explicit-action-selection',
+          captureDisplays: [1],
+          testActionFixtureMode: true,
+          testOnlyActions: [],
+        },
+      },
+    });
+
+    assert.equal(payload?.executionUnits[0]?.tool, 'local.vision-sense');
+    const trace = JSON.parse(await readFile(join(workspace, '.sciforge/vision-runs/cu-explicit-action-selection/vision-trace.json'), 'utf8')) as Record<string, unknown>;
+    assert.equal((trace.packageBridge as Record<string, unknown>).actionProvider, 'action.sciforge.computer-use');
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('vision-sense keeps Computer Use blocked when the desktop bridge is disabled', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-desktop-bridge-blocked-'));
   try {

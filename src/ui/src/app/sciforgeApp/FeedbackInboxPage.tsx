@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react';
-import { ArchiveRestore, CheckCheck, CheckCircle2, ExternalLink, GitBranch, Loader2, RefreshCcw, TerminalSquare, Trash2 } from 'lucide-react';
+import { CheckCheck, CheckCircle2, ExternalLink, Loader2 } from 'lucide-react';
 import { defaultSciForgeConfig } from '../../config';
 import {
   confirmFeedbackRepairAction,
@@ -19,21 +19,21 @@ import { buildFeedbackBundle, buildFeedbackGithubIssueBody, buildFeedbackGithubI
 import { feedbackRepairAuditForIssue, type FeedbackRepairAuditViewModel } from '../../feedback/feedbackWorkspace';
 import { FeedbackRepairAuditPanel, repairSafeMode } from '../../feedback/FeedbackRepairAuditPanel';
 import { FeedbackCodexTerminalPanel } from '../../feedback/FeedbackCodexTerminalPanel';
-import { FeedbackScreenshotPreview } from '../../feedback/FeedbackScreenshotPreview';
 import { ANNOTATION_PLAN_SOURCE } from '../../feedback/annotationPlanModel';
 import { makeId, nowIso, type FeedbackCommentRecord, type FeedbackCommentStatus, type FeedbackRepairActionRecord, type FeedbackRepairGuidanceRecord, type FeedbackRepairHumanVerification, type FeedbackRepairResultRecord, type FeedbackRepairRunRecord, type GithubSyncedOpenIssueRecord, type PeerInstance, type RuntimeCodexBrowserAcceptanceManifest, type RuntimeProviderPreflightManifest, type SciForgeConfig, type SciForgeWorkspaceState, type SciForgeWorkspaceWriterHealth } from '../../domain';
-import { DelayedHelpButton } from '../DelayedHelpButton';
 import { exportJsonFile } from '../exportUtils';
 import { APP_BUILD_ID, feedbackStatusVariant, formatSessionTime, requestTitleFromFeedback } from '../appShell/appHelpers';
 import { Badge, cx } from '../uiPrimitives';
+import { FeedbackActionConfirmation } from './FeedbackActionConfirmation';
+import { FeedbackEvidenceReview, feedbackEvidenceSummary } from './FeedbackEvidenceReview';
+import { FeedbackInboxDiagnostics, type FeedbackPageStateNotice } from './FeedbackInboxDiagnostics';
+import { FeedbackInboxToolbar, FEEDBACK_STATUS_FILTERS, type FeedbackGitOperationMode, type FeedbackStatusFilter } from './FeedbackInboxToolbar';
+import { FeedbackRepairResolutionComposer } from './FeedbackRepairResolutionComposer';
 import { buildBlockedRepairHandoffResultInput, DEFAULT_FEEDBACK_REPAIR_CONFIRMATION_POLICY, type RepairBlockedFailureKind } from './feedbackBlockedRepairResult';
 import { repairPeerReadinessFromProbe, repairReadinessSummary, workspaceWriterReadinessRows, type RepairPeerReadinessByName, type RepairPeerReadinessProbe } from './feedbackRepairReadiness';
 
-type FeedbackStatusFilter = FeedbackCommentStatus | 'all';
 type PendingGithubActionKind = 'submit-issue' | 'sync-open-issues';
 type PendingQueueActionKind = 'soft-delete';
-type FeedbackGitOperationMode = 'manual' | 'auto';
-type FeedbackPageStateNoticeState = 'ready' | 'partial' | 'blocked';
 
 interface PendingGithubAction {
   kind: PendingGithubActionKind;
@@ -64,42 +64,6 @@ interface PendingRepairClosure {
   githubIssueNumber?: number;
   githubIssueUrl?: string;
 }
-
-interface FeedbackPageStateNotice {
-  id: string;
-  label: string;
-  value: string;
-  detail: string;
-  state: FeedbackPageStateNoticeState;
-}
-
-const FEEDBACK_STATUS_FILTERS: Array<{ value: FeedbackStatusFilter; label: string }> = [
-  { value: 'all', label: '全部未删除' },
-  { value: 'comment', label: 'comment' },
-  { value: 'request', label: 'request' },
-  { value: 'open', label: 'open' },
-  { value: 'github-open', label: 'GitHub open' },
-  { value: 'triaged', label: 'triaged' },
-  { value: 'planned', label: 'planned' },
-  { value: 'fixed', label: 'fixed' },
-  { value: 'blocked', label: 'blocked' },
-  { value: 'needs-discussion', label: 'needs-discussion' },
-  { value: 'wont-fix', label: 'wont-fix' },
-  { value: 'deleted', label: 'deleted' },
-];
-
-const BULK_STATUS_OPTIONS: Array<{ value: FeedbackCommentStatus; label: string }> = [
-  { value: 'comment', label: 'comment' },
-  { value: 'request', label: 'request' },
-  { value: 'open', label: 'open' },
-  { value: 'github-open', label: 'GitHub open' },
-  { value: 'triaged', label: 'triaged' },
-  { value: 'planned', label: 'planned' },
-  { value: 'fixed', label: 'fixed' },
-  { value: 'blocked', label: 'blocked' },
-  { value: 'needs-discussion', label: 'needs-discussion' },
-  { value: 'wont-fix', label: 'wont-fix' },
-];
 
 const DEFAULT_FEEDBACK_REPAIR_TESTS = [
   { name: 'typecheck', command: 'npm run typecheck' },
@@ -1059,6 +1023,18 @@ export function FeedbackInboxPage({
     }
   }
 
+  function createRequestFromSelectedFeedback() {
+    onCreateRequest(selectedVisibleActiveComments.map((comment) => comment.id), requestTitleFromFeedback(selectedVisibleActiveComments));
+    setQueueActionHint(`已从当前可见已选 ${selectedVisibleActiveComments.length} 条反馈生成本地 Request。`);
+  }
+
+  function exportFeedbackBundle() {
+    exportJsonFile(`sciforge-feedback-${nowIso().slice(0, 10)}.json`, bundle);
+    setQueueActionHint(`已导出 ${bundleScopeComments.length} 条反馈的 Bundle；范围为${selectedVisibleComments.length ? '当前可见已选' : '当前可见列表'}。`);
+  }
+
+  const selectedRepairBusy = Boolean(selectedRepairCandidate && handoffBusyById[selectedRepairCandidate.id]);
+
   return (
     <main className="feedback-page">
       <section className="feedback-hero">
@@ -1078,67 +1054,7 @@ export function FeedbackInboxPage({
           <span><strong>{statusCounts.deleted ?? 0}</strong> deleted</span>
         </div>
       </section>
-      <section className={cx('feedback-repair-readiness', repairReadiness.status)} aria-label="Repair readiness">
-        <div className="feedback-repair-readiness-head">
-          <div>
-            <strong>DeepSeek repair readiness</strong>
-            <span>{repairReadiness.summary}</span>
-          </div>
-          <Badge variant={repairReadiness.status === 'ready' ? 'success' : repairReadiness.status === 'partial' ? 'warning' : 'danger'}>
-            {repairReadiness.status}
-          </Badge>
-        </div>
-        <div className="feedback-repair-readiness-grid">
-          {[...writerReadinessRows, ...repairReadiness.rows].map((row) => (
-            <div className={cx('feedback-repair-readiness-row', row.state)} key={row.label}>
-              <span>{row.label}</span>
-              <strong>{row.value}</strong>
-              {row.detail ? <code>{row.detail}</code> : null}
-            </div>
-          ))}
-        </div>
-        {repairReadiness.nextAction ? (
-          <div className="feedback-repair-readiness-action">
-            <code>{repairReadiness.nextAction}</code>
-            {repairReadiness.needsPeerSettings ? (
-              <DelayedHelpButton onClick={onOpenGithubSettings} help="打开设置，添加 enabled + repair trust 的 peer instance。">
-                打开设置
-              </DelayedHelpButton>
-            ) : null}
-            {!repairReadiness.providerReady ? (
-              <DelayedHelpButton onClick={onOpenGithubSettings} help="打开设置中的 Model Provider / API Key；provider 状态只提示，不改变 repair 目标路由。">
-                Provider 设置
-              </DelayedHelpButton>
-            ) : null}
-          </div>
-        ) : null}
-      </section>
-      <section className="feedback-page-state" aria-label="页面状态诊断">
-        <div className="feedback-page-state-head">
-          <div>
-            <strong>页面状态诊断</strong>
-            <span>把用户下一步会撞到的本地状态、凭据、证据、确认门槛和 repair 环境提前摊开。</span>
-          </div>
-          <div className="feedback-page-state-actions">
-            <button type="button" className="feedback-page-state-refresh" onClick={refreshPageDiagnostics} aria-label="重新检查页面状态诊断">
-              <RefreshCcw size={14} aria-hidden />
-              重新检查
-            </button>
-            <Badge variant={pageStateNotices.some((notice) => notice.state === 'blocked') ? 'warning' : 'success'}>
-              {pageStateNotices.filter((notice) => notice.state !== 'ready').length} needs attention
-            </Badge>
-          </div>
-        </div>
-        <div className="feedback-page-state-grid">
-          {pageStateNotices.map((notice) => (
-            <div className={cx('feedback-page-state-row', notice.state)} key={notice.id}>
-              <span>{notice.label}</span>
-              <strong>{notice.value}</strong>
-              <code>{notice.detail}</code>
-            </div>
-          ))}
-        </div>
-      </section>
+      <FeedbackInboxDiagnostics pageStateNotices={pageStateNotices} repairReadiness={repairReadiness} writerReadinessRows={writerReadinessRows} onOpenGithubSettings={onOpenGithubSettings} onRefreshPageDiagnostics={refreshPageDiagnostics} />
       {pendingRepairAction ? (
         <section className="feedback-page-state" aria-label="repair git action confirmation">
           <div className="feedback-page-state-head">
@@ -1178,174 +1094,76 @@ export function FeedbackInboxPage({
           </div>
         </section>
       ) : null}
-      <section className="feedback-toolbar">
-        <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as FeedbackStatusFilter)} aria-label="按反馈状态筛选">
-          {FEEDBACK_STATUS_FILTERS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label} ({option.value === 'all' ? activeComments.length : statusCounts[option.value] ?? 0})
-            </option>
-          ))}
-        </select>
-        <input
-          type="search"
-          value={searchQuery}
-          onChange={(event) => setSearchQuery(event.target.value)}
-          placeholder="搜索反馈、Issue、ref..."
-          aria-label="搜索反馈、GitHub Issue 或证据 ref"
-        />
-        <span className="feedback-selection-count">{selectionSummary}</span>
-        <label className="feedback-selection-count" aria-label="git operation mode">
-          Git:
-          <select value={gitOperationMode} onChange={(event) => setGitOperationMode(event.target.value === 'auto' ? 'auto' : 'manual')}>
-            <option value="manual">手动操作</option>
-            <option value="auto">自动操作</option>
-          </select>
-        </label>
-        <DelayedHelpButton
-          onClick={() => setSelectedIds(visibleIds)}
-          disabled={!visibleIds.length || visibleSelectedCount === visibleIds.length}
-          help="选择当前筛选和搜索结果中的所有反馈；隐藏选择不会参与当前操作。"
-        >
-          选择当前列表
-        </DelayedHelpButton>
-        <select value={bulkStatus} onChange={(event) => setBulkStatus(event.target.value as FeedbackCommentStatus)} aria-label="批量标记状态">
-          {BULK_STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-        </select>
-        <DelayedHelpButton
-          onClick={() => markSelected(bulkStatus)}
-          disabled={!selectedVisibleActiveComments.length}
-          help="只把当前可见且已选的未删除反馈标记为下拉框中的共享状态；隐藏选择不会被修改。"
-        >
-          <CheckCheck size={14} aria-hidden />
-          批量标记
-        </DelayedHelpButton>
-        <DelayedHelpButton
-          onClick={() => restoreSelected(selectedDeletedIds)}
-          disabled={!selectedDeletedIds.length}
-          help="把当前可见且已选的软删除反馈恢复到删除前状态；不会改动 GitHub Issue、repair audit、patch 或截图证据。"
-        >
-          <ArchiveRestore size={14} aria-hidden />
-          恢复选中
-        </DelayedHelpButton>
-        <DelayedHelpButton
-          className="danger"
-          onClick={() => requestSoftDeleteSelected(selectedVisibleActiveComments.map((comment) => comment.id))}
-          disabled={!selectedVisibleActiveComments.length}
-          help="软删除当前可见且已选的本地反馈；不会删除 GitHub Issue、repair audit、workspace patch 或截图原始证据。"
-        >
-          <Trash2 size={14} aria-hidden />
-          软删除
-        </DelayedHelpButton>
-        <DelayedHelpButton
-          onClick={() => {
-            onCreateRequest(selectedVisibleActiveComments.map((comment) => comment.id), requestTitleFromFeedback(selectedVisibleActiveComments));
-            setQueueActionHint(`已从当前可见已选 ${selectedVisibleActiveComments.length} 条反馈生成本地 Request。`);
-          }}
-          disabled={!selectedVisibleActiveComments.length}
-          help="把当前可见且已选的反馈合并成一个本地 Request，便于后续按任务追踪。"
-        >
-          <GitBranch size={14} aria-hidden />
-          生成 Request
-        </DelayedHelpButton>
-        <DelayedHelpButton
-          onClick={() => selectedRepairCandidate && void handoffFeedbackIssue(selectedRepairCandidate)}
-          disabled={!selectedRepairCandidate || Boolean(selectedRepairCandidate && handoffBusyById[selectedRepairCandidate.id])}
-          help={selectedVisibleActiveComments.length > 1
-            ? '一次只启动一条 repair 线程；先只选择一条反馈，避免批量误触发。'
-            : selectedRepairCandidate
-              ? '对已选反馈启动 Runtime Codex repair；同一反馈下会新增一条可追踪修复线程。'
-              : '先选择一条未删除反馈。'}
-        >
-          {selectedRepairCandidate && handoffBusyById[selectedRepairCandidate.id] ? <Loader2 size={15} className="feedback-inline-spin" aria-hidden /> : <TerminalSquare size={14} aria-hidden />}
-          修复选中
-        </DelayedHelpButton>
-        <DelayedHelpButton
-          onClick={() => {
-            exportJsonFile(`sciforge-feedback-${nowIso().slice(0, 10)}.json`, bundle);
-            setQueueActionHint(`已导出 ${bundleScopeComments.length} 条反馈的 Bundle；范围为${selectedVisibleComments.length ? '当前可见已选' : '当前可见列表'}。`);
-          }}
-          help="导出当前可见已选反馈；如果当前列表没有可见选择，则导出当前筛选和搜索结果。"
-        >
-          导出 Bundle
-        </DelayedHelpButton>
-        <DelayedHelpButton
-          className="feedback-github-primary"
-          onClick={() => requestGithubAction('submit-issue')}
-          disabled={!issueScopeComments.length || githubSubmitBusy}
-          help={githubDryRun
-            ? `Dry-run：生成 ${effectiveGithubRepo || '配置仓库'} Issue payload，不调用 GitHub API，也不改本地 GitHub-open 状态。`
-            : `向 ${effectiveGithubRepo || '配置仓库'} 创建 GitHub Issue；需要在设置中填写具备 Issues 读写权限的 PAT。`}
-        >
-          {githubSubmitBusy ? <Loader2 size={15} className="feedback-inline-spin" aria-hidden /> : null}
-          {githubDryRun ? 'Dry-run GitHub' : '提交到 GitHub'}
-        </DelayedHelpButton>
-        <DelayedHelpButton
-          onClick={() => requestGithubAction('sync-open-issues')}
-          disabled={githubSyncBusy}
-          help={`从 ${effectiveGithubRepo || '配置仓库'} 拉取未关闭 Issue，并导入为本地反馈；Pull Request 会自动排除。`}
-        >
-          {githubSyncBusy ? <Loader2 size={15} className="feedback-inline-spin" aria-hidden /> : null}
-          从 GitHub 同步
-        </DelayedHelpButton>
-        {!feedbackGithubToken?.trim() ? (
-          <span className="feedback-toolbar-token-note" title="GitHub API 匿名不可用">
-            未配置 Token：点「提交 / 同步」将打开设置并提示填写 PAT
-          </span>
-        ) : null}
-        {queueActionHint ? <span className="feedback-queue-hint" role="status">{queueActionHint}</span> : null}
-        {githubActionHint ? <span className="feedback-github-hint" role="status">{githubActionHint}</span> : null}
-      </section>
+      <FeedbackInboxToolbar
+        activeCommentsLength={activeComments.length}
+        allVisibleSelected={visibleSelectedCount === visibleIds.length}
+        bulkStatus={bulkStatus}
+        effectiveGithubRepo={effectiveGithubRepo}
+        feedbackGithubToken={feedbackGithubToken}
+        gitOperationMode={gitOperationMode}
+        githubActionHint={githubActionHint}
+        githubDryRun={githubDryRun}
+        githubSubmitBusy={githubSubmitBusy}
+        githubSyncBusy={githubSyncBusy}
+        issueScopeCommentsLength={issueScopeComments.length}
+        queueActionHint={queueActionHint}
+        searchQuery={searchQuery}
+        selectedDeletedCount={selectedDeletedIds.length}
+        selectedRepairBusy={selectedRepairBusy}
+        selectedRepairCandidateId={selectedRepairCandidate?.id}
+        selectedVisibleActiveCount={selectedVisibleActiveComments.length}
+        selectionSummary={selectionSummary}
+        statusCounts={statusCounts}
+        statusFilter={statusFilter}
+        visibleIdsLength={visibleIds.length}
+        onBulkStatusChange={setBulkStatus}
+        onCreateRequest={createRequestFromSelectedFeedback}
+        onExportBundle={exportFeedbackBundle}
+        onGitOperationModeChange={setGitOperationMode}
+        onMarkSelected={() => markSelected(bulkStatus)}
+        onRepairSelected={() => selectedRepairCandidate && void handoffFeedbackIssue(selectedRepairCandidate)}
+        onRequestGithubAction={requestGithubAction}
+        onRestoreSelected={() => restoreSelected(selectedDeletedIds)}
+        onSearchQueryChange={setSearchQuery}
+        onSelectCurrentList={() => setSelectedIds(visibleIds)}
+        onSoftDeleteSelected={() => requestSoftDeleteSelected(selectedVisibleActiveComments.map((comment) => comment.id))}
+        onStatusFilterChange={setStatusFilter}
+      />
       {pendingQueueAction ? (
-        <section className="feedback-queue-confirmation" role="alertdialog" aria-label="确认本地队列操作">
-          <div>
-            <Badge variant="warning">confirm</Badge>
-            <strong>{queueActionTitle(pendingQueueAction.kind)}</strong>
-            <p>{queueActionImpact(pendingQueueAction.kind)}</p>
-          </div>
-          <div className="feedback-queue-confirmation-grid">
-            <span>Scope</span>
-            <code>{pendingQueueAction.scopeLabel}</code>
-            <span>Local effect</span>
-            <code>{queueActionDataLabel(pendingQueueAction)}</code>
-          </div>
-          <div className="feedback-queue-confirmation-actions">
-            <button type="button" onClick={confirmPendingQueueAction}>
-              {queueActionConfirmLabel(pendingQueueAction.kind)}
-            </button>
-            <button type="button" onClick={cancelPendingQueueAction}>
-              取消
-            </button>
-          </div>
-        </section>
+        <FeedbackActionConfirmation
+          actionsClassName="feedback-queue-confirmation-actions"
+          ariaLabel="确认本地队列操作"
+          className="feedback-queue-confirmation"
+          confirmLabel={queueActionConfirmLabel(pendingQueueAction.kind)}
+          gridClassName="feedback-queue-confirmation-grid"
+          impact={queueActionImpact(pendingQueueAction.kind)}
+          rows={[
+            { label: 'Scope', value: pendingQueueAction.scopeLabel },
+            { label: 'Local effect', value: queueActionDataLabel(pendingQueueAction) },
+          ]}
+          title={queueActionTitle(pendingQueueAction.kind)}
+          onCancel={cancelPendingQueueAction}
+          onConfirm={confirmPendingQueueAction}
+        />
       ) : null}
       {pendingGithubAction ? (
-        <section className="feedback-github-confirmation" role="alertdialog" aria-label="确认 GitHub 外部操作">
-          <div>
-            <Badge variant="warning">confirm</Badge>
-            <strong>{githubActionTitle(pendingGithubAction.kind)}</strong>
-            <p>{githubActionImpact(pendingGithubAction.kind)}</p>
-          </div>
-          <div className="feedback-github-confirmation-grid">
-            <span>Destination</span>
-            <code>{pendingGithubAction.repo}</code>
-            <span>Scope</span>
-            <code>{pendingGithubAction.scopeLabel}</code>
-            <span>Data</span>
-            <code>{githubActionDataLabel(pendingGithubAction)}</code>
-          </div>
-          <div className="feedback-github-confirmation-actions">
-            <button
-              type="button"
-              onClick={() => void confirmPendingGithubAction()}
-              disabled={githubSubmitBusy || githubSyncBusy || evidenceUploadBusy}
-            >
-              {githubActionConfirmLabel(pendingGithubAction.kind)}
-            </button>
-            <button type="button" onClick={cancelPendingGithubAction}>
-              取消
-            </button>
-          </div>
-        </section>
+        <FeedbackActionConfirmation
+          actionsClassName="feedback-github-confirmation-actions"
+          ariaLabel="确认 GitHub 外部操作"
+          className="feedback-github-confirmation"
+          confirmDisabled={githubSubmitBusy || githubSyncBusy || evidenceUploadBusy}
+          confirmLabel={githubActionConfirmLabel(pendingGithubAction.kind)}
+          gridClassName="feedback-github-confirmation-grid"
+          impact={githubActionImpact(pendingGithubAction.kind)}
+          rows={[
+            { label: 'Destination', value: pendingGithubAction.repo },
+            { label: 'Scope', value: pendingGithubAction.scopeLabel },
+            { label: 'Data', value: githubActionDataLabel(pendingGithubAction) },
+          ]}
+          title={githubActionTitle(pendingGithubAction.kind)}
+          onCancel={cancelPendingGithubAction}
+          onConfirm={() => void confirmPendingGithubAction()}
+        />
       ) : null}
       {pendingRepairClosure ? (
         <section className="feedback-repair-closure-confirmation" role="alertdialog" aria-label="确认修复闭环">
@@ -1479,38 +1297,20 @@ export function FeedbackInboxPage({
 	                  <span>{repairSummary.nextAction}</span>
 	                </div>
 	                {audit.latestResult ? (
-	                  <section className="feedback-repair-guidance" aria-label="repair result user closure">
-	                    <div className="feedback-repair-subhead">
-	                      <div>
-	                        <strong>确认修复结果</strong>
-	                        <span>只需要确认这个问题是否已解决；仍有问题时再补充剩余现象。</span>
-	                      </div>
-	                      {audit.latestBrowserVerificationLabel ? <Badge variant="info">{audit.latestBrowserVerificationLabel}</Badge> : null}
-	                    </div>
-	                    <div className="feedback-repair-action-row">
-	                      <button
-	                        type="button"
-	                        disabled={Boolean(handoffBusyById[item.id])}
-	                        onClick={() => audit.latestResult && void recordRepairResolutionFeedback(item, audit.latestResult, 'solved')}
-	                      >
-	                        问题已解决
-	                      </button>
-	                      <button
-	                        type="button"
-	                        disabled={Boolean(handoffBusyById[item.id]) || !remainingProblemById[item.id]?.trim()}
-	                        onClick={() => audit.latestResult && void recordRepairResolutionFeedback(item, audit.latestResult, 'remaining')}
-	                      >
-	                        仍有问题
-	                      </button>
-	                    </div>
-	                    <textarea
-	                      value={remainingProblemById[item.id] ?? ''}
-	                      onChange={(event) => setRemainingProblemById((current) => ({ ...current, [item.id]: event.target.value }))}
-	                      placeholder="如果仍未解决，写下现在还存在的问题..."
-	                      aria-label="记录修复后仍然存在的问题"
-	                      disabled={Boolean(handoffBusyById[item.id])}
-	                    />
-	                  </section>
+	                  <FeedbackRepairResolutionComposer
+	                    aria-label="repair result user closure"
+	                    browserVerificationLabel={audit.latestBrowserVerificationLabel}
+	                    busy={Boolean(handoffBusyById[item.id])}
+	                    helpText="只需要确认这个问题是否已解决；仍有问题时再补充剩余现象。"
+	                    placeholder="如果仍未解决，写下现在还存在的问题..."
+	                    remainingProblem={remainingProblemById[item.id] ?? ''}
+	                    remaining-problem-aria-label="记录修复后仍然存在的问题"
+	                    remainingLabel="仍有问题"
+	                    solvedLabel="问题已解决"
+	                    onSolved={() => audit.latestResult && void recordRepairResolutionFeedback(item, audit.latestResult, 'solved')}
+	                    onRemaining={() => audit.latestResult && void recordRepairResolutionFeedback(item, audit.latestResult, 'remaining')}
+	                    onRemainingProblemChange={(value) => setRemainingProblemById((current) => ({ ...current, [item.id]: value }))}
+	                  />
 	                ) : null}
 		                <FeedbackEvidenceReview item={item} config={config} />
 	                <FeedbackCodexTerminalPanel
@@ -1666,36 +1466,6 @@ export function FeedbackInboxPage({
         )}
       </section>
     </main>
-  );
-}
-
-function FeedbackEvidenceReview({ item, config }: { item: FeedbackCommentRecord; config: SciForgeConfig }) {
-  return (
-    <section className="feedback-evidence-review" aria-label="截图证据、用户评论和期望实际">
-      <div className="feedback-evidence-review-shot">
-        <FeedbackScreenshotPreview item={item} config={config} />
-      </div>
-      <div className="feedback-evidence-review-copy">
-        <div>
-          <span>用户评论</span>
-          <strong>{item.comment}</strong>
-        </div>
-        <div>
-          <span>期望</span>
-          <p>{item.expectedBehavior || '未单独填写；以用户评论为准。'}</p>
-        </div>
-        <div>
-          <span>实际</span>
-          <p>{item.actualBehavior || item.comment}</p>
-        </div>
-        <div className="feedback-evidence-review-context">
-          <span>页面</span>
-          <code>{item.runtime.page}</code>
-          <span>目标</span>
-          <code>{item.target.selector || item.target.path}</code>
-        </div>
-      </div>
-    </section>
   );
 }
 
@@ -2001,40 +1771,6 @@ function queueActionConfirmLabel(kind: PendingQueueActionKind) {
 function queueActionDataLabel(action: PendingQueueAction) {
   if (action.kind === 'soft-delete') return `${action.count} local feedback status update(s); evidence and repair refs preserved`;
   return `${action.count} local feedback item(s)`;
-}
-
-function feedbackEvidenceSummary(item: FeedbackCommentRecord) {
-  const checks = [
-    {
-      label: 'raw screenshot',
-      ok: item.evidenceStatus?.rawScreenshot ?? Boolean(item.rawScreenshotRef || item.screenshotRef || item.screenshot?.rawScreenshotRef || item.screenshot?.rawDataUrl || item.screenshot?.dataUrl),
-    },
-    {
-      label: 'annotated screenshot',
-      ok: item.evidenceStatus?.annotatedScreenshot ?? Boolean(item.annotatedScreenshotRef || item.screenshot?.annotatedScreenshotRef || item.screenshot?.annotatedDataUrl || item.evidenceAssets?.some((asset) => asset.kind === 'scrubbed-annotated-screenshot')),
-    },
-    {
-      label: 'target snapshot',
-      ok: item.evidenceStatus?.targetSnapshot ?? Boolean(item.target.selector && item.target.path),
-    },
-    {
-      label: 'runtime snapshot',
-      ok: item.evidenceStatus?.runtimeSnapshot ?? Boolean(item.runtime.page && item.runtime.scenarioId),
-    },
-    {
-      label: 'scrubbed',
-      ok: item.evidenceStatus?.scrubbed ?? Boolean(item.evidenceAssets?.some((asset) => asset.kind === 'scrubbed-annotated-screenshot')),
-    },
-  ];
-  const ready = checks.filter((check) => check.ok).length;
-  const computedStatus = ready === checks.length ? 'complete' : ready > 0 ? 'partial' : 'missing';
-  return {
-    status: item.evidenceStatus?.status ?? computedStatus,
-    ready,
-    total: checks.length,
-    checks,
-    diagnostics: item.evidenceStatus?.diagnostics ?? [],
-  };
 }
 
 function feedbackCommentTerminalInfo(item: FeedbackCommentRecord) {
