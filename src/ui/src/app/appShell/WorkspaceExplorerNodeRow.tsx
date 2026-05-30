@@ -1,6 +1,7 @@
 import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { ChevronDown, ChevronRight, Folder } from 'lucide-react';
 import type { WorkspaceEntry } from '../../api/workspaceClient';
+import { useI18n } from '../../i18nContext';
 import { cx } from '../uiPrimitives';
 
 export function WorkspaceExplorerNodeRow({
@@ -24,6 +25,7 @@ export function WorkspaceExplorerNodeRow({
   onEntryContextMenu: (event: ReactMouseEvent<HTMLDivElement>) => void;
   onToggleFolder: () => void;
 }) {
+  const { t } = useI18n();
   const isFolder = entry.kind === 'folder';
   return (
     <div className="explorer-node">
@@ -40,7 +42,9 @@ export function WorkspaceExplorerNodeRow({
           <button
             type="button"
             className="explorer-twistie"
-            aria-label={expanded ? '折叠' : '展开'}
+            aria-label={expanded
+              ? t({ 'zh-CN': '折叠', 'en-US': 'Collapse' })
+              : t({ 'zh-CN': '展开', 'en-US': 'Expand' })}
             onClick={(event) => {
               event.stopPropagation();
               onToggleFolder();

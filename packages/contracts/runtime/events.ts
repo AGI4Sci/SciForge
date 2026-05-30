@@ -767,23 +767,23 @@ export function normalizeRuntimeContextCompactionStatus(
 }
 
 export function runtimeStreamEventLabel(type: string, source?: string, toolName?: string) {
-  if (type === CONTEXT_WINDOW_STATE_EVENT_TYPE) return '上下文窗口';
-  if (type === CONTEXT_COMPACTION_EVENT_TYPE) return '上下文压缩';
-  if (type === RUN_PLAN_EVENT_TYPE) return '计划';
-  if (type === STAGE_START_EVENT_TYPE) return '阶段';
-  if (type === PROCESS_PROGRESS_EVENT_TYPE) return '过程';
-  if (type === CLARIFICATION_NEEDED_EVENT_TYPE) return '需要澄清';
-  if (type === HUMAN_APPROVAL_REQUIRED_EVENT_TYPE) return '需要确认';
-  if (type === INTERACTION_REQUEST_EVENT_TYPE) return '需要交互';
-  if (type === GUIDANCE_QUEUED_EVENT_TYPE) return '引导已排队';
-  if (type === RUN_CANCELLED_EVENT_TYPE) return '运行取消';
-  if (type === TEXT_DELTA_EVENT_TYPE) return '思考';
-  if (type === TOOL_CALL_EVENT_TYPE) return toolName ? `调用 ${toolName}` : '工具调用';
-  if (type === TOOL_RESULT_EVENT_TYPE) return toolName ? `结果 ${toolName}` : '工具结果';
-  if (type === 'status') return source === 'agentserver' ? 'AgentServer 状态' : '运行状态';
-  if (type.includes('error')) return '错误';
-  if (type.includes('silent')) return '等待';
-  return source === 'agentserver' ? 'AgentServer' : 'Workspace Runtime';
+  if (type === CONTEXT_WINDOW_STATE_EVENT_TYPE) return 'Context';
+  if (type === CONTEXT_COMPACTION_EVENT_TYPE) return 'Context';
+  if (type === RUN_PLAN_EVENT_TYPE) return 'Plan';
+  if (type === STAGE_START_EVENT_TYPE) return 'Step';
+  if (type === PROCESS_PROGRESS_EVENT_TYPE) return 'Activity';
+  if (type === CLARIFICATION_NEEDED_EVENT_TYPE) return 'Needs clarification';
+  if (type === HUMAN_APPROVAL_REQUIRED_EVENT_TYPE) return 'Needs approval';
+  if (type === INTERACTION_REQUEST_EVENT_TYPE) return 'Needs input';
+  if (type === GUIDANCE_QUEUED_EVENT_TYPE) return 'Guidance queued';
+  if (type === RUN_CANCELLED_EVENT_TYPE) return 'Run cancelled';
+  if (type === TEXT_DELTA_EVENT_TYPE) return 'Assistant';
+  if (type === TOOL_CALL_EVENT_TYPE) return toolName ? `Calling ${toolName}` : 'Tool call';
+  if (type === TOOL_RESULT_EVENT_TYPE) return toolName ? `${toolName} result` : 'Tool result';
+  if (type === 'status') return source === 'agentserver' ? 'Agent status' : 'Status';
+  if (type.includes('error')) return 'Error';
+  if (type.includes('silent')) return 'Waiting';
+  return source === 'agentserver' ? 'Agent' : 'Workspace Runtime';
 }
 
 export function runtimeDetailIndicatesAbort(detail: string) {
@@ -843,8 +843,8 @@ export function guidanceQueuedEvent(identity: RuntimeEventIdentity, guidance: Gu
   return {
     id: identity.id,
     type: GUIDANCE_QUEUED_EVENT_TYPE,
-    label: '引导已排队',
-    detail: `${guidance.prompt}\n状态：已排队，等待当前 run 结束后合并到下一轮。`,
+    label: 'Guidance queued',
+    detail: `${guidance.prompt}\nStatus: queued; it will merge into the next turn after the current run ends.`,
     createdAt: identity.createdAt,
     raw: {
       schemaVersion: INTERACTION_PROGRESS_EVENT_SCHEMA_VERSION,

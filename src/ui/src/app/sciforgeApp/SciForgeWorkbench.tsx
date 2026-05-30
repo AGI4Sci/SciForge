@@ -15,6 +15,7 @@ import {
 import { ChatPanel } from '../ChatPanel';
 import { ResultsRenderer } from '../ResultsRenderer';
 import { recoverableRunFocusForSession } from '../appShell/workspaceState';
+import { runPresentationState } from '../results-renderer-execution-model';
 import { composerReferenceForObjectReference } from '../chat/composerReferences';
 import { recordUIActionInSession, type CommandTextUIAction, type OpenDebugAuditUIAction, type UIAction } from '../uiActionBoundary';
 import type { HandoffAutoRunRequest } from '../results/viewPlanResolver';
@@ -38,6 +39,10 @@ const WORKSPACE_REFERENCE_SKIP_FOLDERS = new Set([
   'coverage',
   'out',
 ]);
+
+function emptyRunAutoCollapseKey(sessionId: string, run: SciForgeSession['runs'][number]) {
+  return `${sessionId}:${run.id}:${run.status}:${run.completedAt ?? run.createdAt}`;
+}
 
 export function Workbench({
   scenarioId,
@@ -128,6 +133,7 @@ export function Workbench({
   const [chatColumnWidth, setChatColumnWidth] = useState(42);
   const workbenchResizeRef = useRef<{ startX: number; startWidth: number; gridWidth: number } | null>(null);
   const autoFocusedRunKeyRef = useRef<string | undefined>(undefined);
+  const autoCollapsedEmptyRunKeyRef = useRef<string | undefined>(undefined);
   const runtimeHealth = useRuntimeHealth(config);
   const visionSenseActive = (runtimeScenario.selectedToolIds ?? [visionSenseToolId]).includes(visionSenseToolId);
   const defaultResultSlots = useMemo(
@@ -169,6 +175,11 @@ export function Workbench({
   const showWorkbenchChromeBody = workbenchChromeExpanded;
   const recoveryFocus = recoverableRunFocusForSession(session);
   const recoveryRunKey = recoveryFocus ? `${recoveryFocus.sessionId}:${recoveryFocus.activeRunId}` : undefined;
+  const activeResultRun = activeRunId ? session.runs.find((run) => run.id === activeRunId) : session.runs.at(-1);
+  const activeResultPresentation = useMemo(
+    () => activeResultRun ? runPresentationState(session, activeResultRun) : undefined,
+    [session, activeResultRun],
+  );
   useEffect(() => {
     if (activeRunId && !session.runs.some((run) => run.id === activeRunId)) {
       setActiveRunId(undefined);
@@ -183,6 +194,21 @@ export function Workbench({
     setMobilePane('results');
   }, [recoveryFocus, recoveryRunKey, session.runs]);
 
+  useEffect(() => {
+    if (!activeResultRun || !activeResultPresentation) return;
+    if (activeResultPresentation.kind !== 'empty') return;
+    const key = emptyRunAutoCollapseKey(session.sessionId, activeResultRun);
+    if (autoCollapsedEmptyRunKeyRef.current === key) return;
+    autoCollapsedEmptyRunKeyRef.current = key;
+    setResultsCollapsed(true);
+    if (mobilePane === 'results') setMobilePane('chat');
+  }, [
+    activeResultPresentation,
+    activeResultRun,
+    mobilePane,
+    session.sessionId,
+  ]);
+
   function handleActiveRunChange(runId: string | undefined) {
     setActiveRunId(runId);
   }
@@ -190,11 +216,18 @@ export function Workbench({
   const workspaceFilePathForLayout = workspaceFileEditor?.file.path;
   useEffect(() => {
     if (!workspaceFilePathForLayout) return;
+    if (activeResultRun && activeResultPresentation?.kind === 'empty') {
+      autoCollapsedEmptyRunKeyRef.current = emptyRunAutoCollapseKey(session.sessionId, activeResultRun);
+    }
     setResultsCollapsed(false);
     setMobilePane('results');
-  }, [workspaceFilePathForLayout]);
+  }, [activeResultPresentation?.kind, activeResultRun, session.sessionId, workspaceFilePathForLayout]);
 
   function handleObjectFocus(reference: ObjectReference) {
+    const referenceRun = reference.runId ? session.runs.find((run) => run.id === reference.runId) : undefined;
+    if (referenceRun && runPresentationState(session, referenceRun).kind === 'empty') {
+      autoCollapsedEmptyRunKeyRef.current = emptyRunAutoCollapseKey(session.sessionId, referenceRun);
+    }
     setFocusedObjectReference(reference);
     if (reference.runId) setActiveRunId(reference.runId);
     setResultsCollapsed(false);
@@ -293,16 +326,16 @@ export function Workbench({
             <div className="scenario-large-icon workbench-chrome-icon" style={{ color: scenarioView.color, background: `${scenarioView.color}18` }}>
               <scenarioView.icon size={22} />
             </div>
-            <span className="workbench-chrome-title">SciForge 工作台</span>
+            <span className="workbench-chrome-title">SciForge Workspace</span>
             {workbenchChromeExpanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
           </button>
-          <div className="workbench-sense-actions" aria-label="感官插件">
+          <div className="workbench-sense-actions" aria-label="Senses">
             <button
               type="button"
               className={cx('sense-toggle', visionSenseActive && 'active')}
               aria-pressed={visionSenseActive}
               onClick={toggleVisionSense}
-              title={visionSenseActive ? '取消 vision-sense 感官' : '激活 vision-sense 感官'}
+              title={visionSenseActive ? 'Disable vision-sense' : 'Enable vision-sense'}
             >
               <Eye size={14} />
               <span>vision-sense</span>

@@ -83,7 +83,7 @@ export function runtimeAuditOnlyEventSummary(value: unknown): string {
     return 'Runtime Codex stdout output recorded; details are available in the folded run audit.';
   }
   if (/raw[-_\s]?jsonl|jsonl/.test(haystack)) {
-    return 'Runtime Codex raw JSONL recorded; details are available in the folded run audit.';
+    return 'Runtime Codex raw runtime events recorded; details are available in the folded run audit.';
   }
   if (/cloudflare|<!doctype\s+html|<html\b|provider\s*sse/.test(haystack)) {
     return 'Runtime provider transport output recorded; details are available in the folded run audit.';

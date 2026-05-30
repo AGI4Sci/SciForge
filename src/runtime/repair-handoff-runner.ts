@@ -11,7 +11,7 @@ import {
   type DirtyWorktreePlannedChange,
 } from '@sciforge-ui/runtime-contract/dirty-worktree-collaboration';
 import { RUNTIME_PROFILE } from '../../packages/backend/src/runtime-home.js';
-import { CodexExecJsonAdapter } from './codex/codex-exec-json-adapter.js';
+import { createCodexAppServerRuntimeAdapter } from './codex/codex-runtime-adapter.js';
 import type { AgentCliAdapter } from './codex/agent-cli-adapter.js';
 import type { NormalizedAgentEvent } from './codex/codex-event-normalizer.js';
 import { scrubTerminalMirrorText, TerminalMirrorLog } from './repair-handoff-terminal-mirror.js';
@@ -730,7 +730,7 @@ async function dispatchRuntimeCodexRepair(
   environment: RepairHandoffRunnerEnvironment,
   options: { issueId: string; repairRunId: string; branch: string; worktreePath: string; terminalMirror: TerminalMirrorLog; activeRepairRun: ActiveRepairHandoffRun },
 ): Promise<RepairExecutorRun> {
-  const adapter = environment.runtimeCodexAdapter ?? new CodexExecJsonAdapter({ env: environment.runtimeCodexEnv });
+  const adapter = environment.runtimeCodexAdapter ?? createCodexAppServerRuntimeAdapter({ env: environment.runtimeCodexEnv });
   try {
     const abortController = new AbortController();
     options.activeRepairRun.adapter = adapter;

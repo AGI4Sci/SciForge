@@ -11,6 +11,7 @@ export type BackendNeutralEventType =
   | 'thread_started'
   | 'turn_started'
   | 'item_started'
+  | 'item_completed'
   | 'message_delta'
   | 'message'
   | 'gui_present'
@@ -43,8 +44,17 @@ export interface BackendNormalizedEvent {
   status?: string;
   toolName?: string;
   command?: string;
+  diff?: string;
   outputSummary?: string;
+  resultSummary?: string;
   exitCode?: number | null;
+  filePath?: string;
+  fileRef?: string;
+  ref?: string;
+  agentId?: string;
+  parentAgentId?: string;
+  transcriptRef?: string;
+  refs?: string[];
   approvalId?: string;
   traceStepId?: string;
   raw?: unknown;
@@ -142,6 +152,8 @@ function normalizeCodexExecJsonEvent(
 
   const codex = raw as Partial<NormalizedAgentEvent> & Record<string, unknown>;
   const type = normalizeCodexExecJsonType(stringField(codex.type));
+  const filePath = safeBackendRelativePath(stringField(codex.filePath) ?? stringField(codex.file_path));
+  const fileRef = safeBackendPreviewRef(stringField(codex.fileRef) ?? stringField(codex.file_ref)) ?? (filePath ? `file:${filePath}` : undefined);
   const event = backendEvent('codex-exec-json', type, raw, options, {
     provider: stringField(codex.provider),
     model: stringField(codex.model),
@@ -155,8 +167,17 @@ function normalizeCodexExecJsonEvent(
     status: stringField(codex.status),
     toolName: stringField(codex.toolName),
     command: compactBackendText(stringField(codex.command), 260),
+    diff: compactBackendBlockText(stringField(codex.diff), 12_000),
     outputSummary: compactBackendText(stringField(codex.outputSummary), 320),
+    resultSummary: compactBackendText(stringField(codex.resultSummary), 320),
     exitCode: numberField(codex.exitCode),
+    filePath,
+    fileRef,
+    ref: safeBackendPreviewRef(stringField(codex.ref)),
+    agentId: safeBackendIdentifier(stringField(codex.agentId)),
+    parentAgentId: safeBackendIdentifier(stringField(codex.parentAgentId)),
+    transcriptRef: safeBackendRef(stringField(codex.transcriptRef)),
+    refs: safeBackendRefs(codex.refs),
   });
   const traceStep = traceStepFromTool({
     backend: 'codex-exec-json',
@@ -167,8 +188,9 @@ function normalizeCodexExecJsonEvent(
     toolName: event.toolName,
     startedAt: event.timestamp,
   });
+  const eventWithTraceFields = traceStep ? promoteTraceFields(event, traceStep) : event;
   return {
-    events: [traceStep ? { ...event, traceStepId: traceStep.id } : event],
+    events: [eventWithTraceFields],
     traceSteps: traceStep ? [traceStep] : [],
   };
 }
@@ -186,32 +208,37 @@ function normalizeCodexAppServerEvent(
 
   const backend = options.backend ?? 'codex-app-server';
   const type = eventType(raw);
-  const payload = recordField(raw.payload) ?? raw;
+  const payload = recordField(raw.payload) ?? recordField(raw.params) ?? raw;
   const item = recordField(raw.item) ?? recordField(payload.item) ?? recordField(raw.tool) ?? {};
   const lowerType = type.toLowerCase();
 
-  if (/thread.*(created|started)|thread\.created|thread\.started/.test(lowerType)) {
+  if (/thread[./](?:created|started|start)|thread.*(?:created|started)/.test(lowerType)) {
     return singleEvent(backendEvent(backend, 'thread_started', raw, options, commonFields(raw, payload, item)));
   }
 
-  if (/turn.*(created|started)|turn\.created|turn\.started/.test(lowerType)) {
+  if (/turn[./](?:created|started|start)|turn.*(?:created|started)/.test(lowerType)) {
     return singleEvent(backendEvent(backend, 'turn_started', raw, options, commonFields(raw, payload, item)));
   }
 
-  if (/approval.*(requested|required|created)|control_request/.test(lowerType)) {
+  if (/approval.*(requested|required|created)|requestapproval|request_approval|request\/approval|requestuserinput|elicitation\/request|control_request/.test(lowerType)) {
     return eventWithTrace(backend, 'approval_requested', raw, options, 'approval-required');
   }
 
-  if (/approval.*(resolved|responded|response|completed)|control_response/.test(lowerType)) {
+  if (/approval.*(resolved|responded|response|completed)|serverrequest\/resolved|control_response/.test(lowerType)) {
     return eventWithTrace(backend, 'approval_resolved', raw, options, approvalTraceStatus(raw));
   }
 
-  if (/tool.*(started|call_started)|item\.started|function_call.*started/.test(lowerType) && toolNameFromRaw(raw, item)) {
+  if (/tool.*(started|call_started)|item[./]started|function_call.*started/.test(lowerType) && toolNameFromRaw(raw, item)) {
     return eventWithTrace(backend, 'tool_started', raw, options, 'started');
   }
 
-  if (/tool.*(completed|done|call_completed)|item\.completed|function_call.*completed/.test(lowerType) && toolNameFromRaw(raw, item)) {
-    return eventWithTrace(backend, 'tool_completed', raw, options, terminalTraceStatus(raw));
+  if (/tool.*(completed|done|call_completed)|item[./]completed|function_call.*completed/.test(lowerType) && toolNameFromRaw(raw, item)) {
+    const guiType = guiEventTypeFromTool(raw, item);
+    return eventWithTrace(backend, guiType ?? 'tool_completed', raw, options, terminalTraceStatus(raw));
+  }
+
+  if (/item[./]completed/.test(lowerType)) {
+    return singleEvent(backendEvent(backend, 'item_completed', raw, options, { ...commonFields(raw, payload, item), status: 'completed' }));
   }
 
   const text = textFromRaw(raw) ?? textFromRaw(payload) ?? textFromRaw(item);
@@ -232,11 +259,11 @@ function normalizeCodexAppServerEvent(
     }));
   }
 
-  if (/item\.started/.test(lowerType)) {
+  if (/item[./]started/.test(lowerType)) {
     return singleEvent(backendEvent(backend, 'item_started', raw, options, commonFields(raw, payload, item)));
   }
 
-  if (/(done|completed|finished)$|turn\.done|turn\.completed/.test(lowerType)) {
+  if (/(done|completed|finished)$|turn[./](?:done|completed)/.test(lowerType)) {
     return singleEvent(backendEvent(backend, 'done', raw, options, { ...commonFields(raw, payload, item), status: 'done' }));
   }
 
@@ -313,13 +340,17 @@ function eventWithTrace(
   options: BackendEventNormalizationOptions,
   traceStatus: TraceStatus | undefined,
 ): BackendEventNormalizationResult {
-  const payload = recordField(raw.payload) ?? raw;
+  const payload = recordField(raw.payload) ?? recordField(raw.params) ?? raw;
   const item = recordField(raw.item) ?? recordField(payload.item) ?? recordField(raw.tool) ?? {};
   const fields = commonFields(raw, payload, item);
+  const toolName = toolNameFromRaw(raw, item);
+  const fileFields = backendFileFields(raw, payload, item, toolName);
   const event = backendEvent(backend, type, raw, options, {
     ...fields,
-    toolName: toolNameFromRaw(raw, item),
+    ...fileFields,
+    toolName,
     command: commandFromRaw(raw, item),
+    diff: diffFromRaw(raw, item),
     outputSummary: outputSummaryFromRaw(raw, item),
     exitCode: exitCodeFromRaw(raw, item),
     approvalId: approvalIdFromRaw(raw),
@@ -336,8 +367,9 @@ function eventWithTrace(
     approval: approvalFromRaw(raw),
     startedAt: event.timestamp,
   });
+  const eventWithTraceFields = traceStep ? promoteTraceFields(event, traceStep) : event;
   return {
-    events: [traceStep ? { ...event, traceStepId: traceStep.id } : event],
+    events: [eventWithTraceFields],
     traceSteps: traceStep ? [traceStep] : [],
   };
 }
@@ -367,8 +399,17 @@ function backendEvent(
     status: fields.status,
     toolName: fields.toolName,
     command: fields.command,
+    diff: fields.diff,
     outputSummary: fields.outputSummary,
+    resultSummary: fields.resultSummary,
     exitCode: fields.exitCode,
+    filePath: fields.filePath,
+    fileRef: fields.fileRef,
+    ref: fields.ref,
+    agentId: fields.agentId,
+    parentAgentId: fields.parentAgentId,
+    transcriptRef: fields.transcriptRef,
+    refs: fields.refs,
     approvalId: fields.approvalId,
     traceStepId: fields.traceStepId,
     raw: redactBackendEventValue(raw),
@@ -387,7 +428,7 @@ function traceStepFromTool(input: {
 }): ModulePipelineTraceStep | undefined {
   if (!input.status) return undefined;
   const raw = isRecord(input.raw) ? input.raw : {};
-  const payload = recordField(raw.payload) ?? raw;
+  const payload = recordField(raw.payload) ?? recordField(raw.params) ?? raw;
   const item = recordField(raw.item) ?? recordField(payload.item) ?? recordField(raw.tool) ?? {};
   const toolName = input.toolName ?? toolNameFromRaw(raw, item);
   const toolInput = toolInputFromRaw(raw, item);
@@ -423,6 +464,16 @@ function traceStepFromTool(input: {
     summary: summarizeForTrace({ backend: input.backend, toolName, status: input.status }),
   };
   return step;
+}
+
+function promoteTraceFields(event: BackendNormalizedEvent, traceStep: ModulePipelineTraceStep): BackendNormalizedEvent {
+  return {
+    ...event,
+    traceStepId: traceStep.id,
+    ref: event.ref ?? safeBackendPreviewRef(traceStep.ref),
+    resultSummary: event.resultSummary ?? compactBackendText(traceStep.resultSummary, 320),
+    refs: mergeBackendRefs(event.refs, traceStep.refs),
+  };
 }
 
 function approvalModuleToolCall(approval: Record<string, unknown> | undefined, status: TraceStatus): ModuleToolCall | undefined {
@@ -489,11 +540,30 @@ function moduleToolCall(toolName: string | undefined, input: unknown): ModuleToo
   return undefined;
 }
 
+function guiEventTypeFromTool(raw: Record<string, unknown>, item: Record<string, unknown>): 'gui_present' | 'gui_ask_user' | undefined {
+  const toolName = toolNameFromRaw(raw, item);
+  if (toolName === 'gui.present') return 'gui_present';
+  if (toolName === 'gui.ask_user') return 'gui_ask_user';
+  if (toolName !== 'module.invoke') return undefined;
+  const input = parseJsonRecord(toolInputFromRaw(raw, item)) ?? {};
+  const moduleId = stringField(input.moduleId) ?? stringField(input.module_id);
+  const intent = stringField(input.intent);
+  if (moduleId !== 'gui') return undefined;
+  if (intent === 'present') return 'gui_present';
+  if (intent === 'ask_user') return 'gui_ask_user';
+  return undefined;
+}
+
 function commonFields(
   raw: Record<string, unknown>,
   payload: Record<string, unknown>,
   item: Record<string, unknown>,
 ): Partial<BackendNormalizedEvent> {
+  const refs = backendReferenceFields(raw, payload, item);
+  const toolName = toolNameFromRaw(raw, item);
+  const fileFields = backendFileFields(raw, payload, item, toolName);
+  const thread = recordField(raw.thread) ?? recordField(payload.thread);
+  const turn = recordField(raw.turn) ?? recordField(payload.turn);
   return {
     provider: stringField(raw.provider) ?? stringField(payload.provider),
     model: stringField(raw.model) ?? stringField(payload.model),
@@ -501,26 +571,86 @@ function commonFields(
     workspace: stringField(raw.workspace) ?? stringField(payload.workspace),
     threadId: stringField(raw.thread_id)
       ?? stringField(raw.threadId)
+      ?? stringField(thread?.id)
       ?? stringField(raw.session_id)
       ?? stringField(raw.sessionId)
       ?? stringField(raw.conversation_id)
       ?? stringField(raw.conversationId)
       ?? stringField(payload.thread_id)
       ?? stringField(payload.threadId)
+      ?? stringField(thread?.threadId)
       ?? stringField(payload.session_id)
       ?? stringField(payload.sessionId),
     turnId: stringField(raw.turn_id)
       ?? stringField(raw.turnId)
+      ?? stringField(turn?.id)
       ?? stringField(raw.request_id)
       ?? stringField(raw.requestId)
       ?? stringField(payload.turn_id)
       ?? stringField(payload.turnId)
+      ?? stringField(turn?.turnId)
       ?? stringField(payload.request_id)
       ?? stringField(payload.requestId),
-    itemId: stringField(raw.item_id) ?? stringField(raw.itemId) ?? stringField(raw.id) ?? stringField(item.id) ?? stringField(payload.item_id),
+    itemId: stringField(raw.item_id)
+      ?? stringField(raw.itemId)
+      ?? stringField(raw.call_id)
+      ?? stringField(raw.callId)
+      ?? stringField(raw.id)
+      ?? stringField(item.call_id)
+      ?? stringField(item.callId)
+      ?? stringField(item.id)
+      ?? stringField(payload.call_id)
+      ?? stringField(payload.callId)
+      ?? stringField(payload.item_id)
+      ?? stringField(payload.itemId),
     role: stringField(raw.role) ?? stringField(item.role) ?? stringField(payload.role),
     status: statusFromRaw(raw) ?? statusFromRaw(payload) ?? stringField(item.status),
+    ...fileFields,
+    ...refs,
   };
+}
+
+function backendFileFields(
+  raw: Record<string, unknown>,
+  payload: Record<string, unknown>,
+  item: Record<string, unknown>,
+  toolName: string | undefined,
+): Pick<BackendNormalizedEvent, 'filePath' | 'fileRef'> {
+  const records = backendFileRecords(raw, payload, item);
+  const explicitRef = firstSafeBackendPreviewRef(records, 'fileRef', 'file_ref', 'previewRef', 'preview_ref', 'ref');
+  const explicitPath = firstSafeBackendRelativePath(records, 'filePath', 'file_path', 'path', 'file', 'filename');
+  const refPath = explicitRef?.startsWith('file:') ? safeBackendRelativePath(explicitRef.slice('file:'.length)) : undefined;
+  const filePath = explicitPath ?? refPath;
+  if (!filePath) return {};
+  if (!toolSupportsFilePreview(toolName) && !explicitRef?.startsWith('file:')) return {};
+  return {
+    filePath,
+    fileRef: explicitRef?.startsWith('file:') ? explicitRef : `file:${filePath}`,
+  };
+}
+
+function backendFileRecords(raw: Record<string, unknown>, payload: Record<string, unknown>, item: Record<string, unknown>) {
+  return [
+    ...nestedBackendRecords(toolInputFromRaw(raw, item)),
+    ...nestedBackendRecords(toolResultFromRaw(raw, item)),
+    item,
+    recordField(raw.item),
+    recordField(payload.item),
+    recordField(raw.tool),
+    recordField(payload.tool),
+    raw,
+    payload,
+  ].filter((entry): entry is Record<string, unknown> => Boolean(entry));
+}
+
+function firstSafeBackendRelativePath(records: Record<string, unknown>[], ...keys: string[]) {
+  return records
+    .flatMap((record) => keys.map((key) => safeBackendRelativePath(stringField(record[key]))))
+    .find(Boolean);
+}
+
+function toolSupportsFilePreview(toolName: string | undefined) {
+  return /^(?:read_file|file_read|open_file|read|cat|edit|write_file|file_write|apply_patch|patch|diff|write)$/i.test(toolName ?? '');
 }
 
 function detectBackend(raw: unknown): BackendEventSource {
@@ -562,7 +692,7 @@ function terminalTraceStatus(raw: Record<string, unknown>): TraceStatus {
   const result = toolResultFromRaw(raw, recordField(raw.item) ?? {});
   if (status === 'cancelled') return 'cancelled';
   if (status === 'failed' || status === 'error') return 'failed';
-  if (isRecord(result) && (result.ok === false || result.error)) return 'failed';
+  if (isRecord(result) && (result.ok === false || result.success === false || result.error)) return 'failed';
   return 'completed';
 }
 
@@ -571,6 +701,7 @@ function statusForEventType(type: BackendNeutralEventType): string | undefined {
   if (type === 'approval_resolved') return 'resolved';
   if (type === 'tool_started') return 'started';
   if (type === 'tool_completed') return 'completed';
+  if (type === 'item_completed') return 'completed';
   return undefined;
 }
 
@@ -579,7 +710,7 @@ function singleEvent(event: BackendNormalizedEvent): BackendEventNormalizationRe
 }
 
 function eventType(raw: Record<string, unknown>): string {
-  return stringField(raw.type) ?? stringField(raw.event) ?? stringField(raw.kind) ?? '';
+  return stringField(raw.type) ?? stringField(raw.event) ?? stringField(raw.kind) ?? stringField(raw.method) ?? '';
 }
 
 function timestampFromRaw(raw: unknown, options: BackendEventNormalizationOptions): string {
@@ -591,10 +722,17 @@ function timestampFromRaw(raw: unknown, options: BackendEventNormalizationOption
 }
 
 function toolNameFromRaw(raw: Record<string, unknown>, item: Record<string, unknown>): string | undefined {
-  const payload = recordField(raw.payload) ?? {};
+  const payload = recordField(raw.payload) ?? recordField(raw.params) ?? {};
   const tool = recordField(raw.tool) ?? recordField(payload.tool) ?? {};
   const request = recordField(raw.request) ?? recordField(raw.control_request) ?? {};
   const itemType = stringField(item.type) ?? stringField(payload.type) ?? stringField(raw.item_type);
+  const namespace = stringField(item.namespace) ?? stringField(payload.namespace);
+  const dynamicTool = stringField(item.tool) ?? stringField(payload.tool);
+  const mcpServer = stringField(item.server) ?? stringField(payload.server);
+  if (dynamicTool && /mcptoolcall/i.test(itemType ?? '')) return mcpServer ? `${mcpServer}.${dynamicTool}` : dynamicTool;
+  if (dynamicTool) return namespace ? `${namespace}.${dynamicTool}` : dynamicTool;
+  const mcpTool = stringField(tool.tool);
+  if (mcpTool) return mcpServer ? `${mcpServer}.${mcpTool}` : mcpTool;
   return stringField(item.name)
     ?? stringField(item.tool_name)
     ?? stringField(tool.name)
@@ -610,11 +748,13 @@ function toolNameFromRaw(raw: Record<string, unknown>, item: Record<string, unkn
 function toolNameFromItemType(itemType: string | undefined, command: string | undefined): string | undefined {
   if (/command_execution|exec|shell|terminal/i.test(itemType ?? '') || command) return 'shell';
   if (/function_call/i.test(itemType ?? '')) return 'function_call';
+  if (/dynamictoolcall/i.test(itemType ?? '')) return 'dynamic_tool';
+  if (/mcptoolcall/i.test(itemType ?? '')) return 'mcp_tool';
   return undefined;
 }
 
 function commandFromRaw(raw: Record<string, unknown>, item: Record<string, unknown>): string | undefined {
-  const payload = recordField(raw.payload) ?? {};
+  const payload = recordField(raw.payload) ?? recordField(raw.params) ?? {};
   const tool = recordField(raw.tool) ?? recordField(payload.tool) ?? {};
   const request = recordField(raw.request) ?? recordField(raw.control_request) ?? {};
   return compactBackendText(
@@ -633,27 +773,88 @@ function commandFromRaw(raw: Record<string, unknown>, item: Record<string, unkno
 }
 
 function outputSummaryFromRaw(raw: Record<string, unknown>, item: Record<string, unknown>): string | undefined {
-  const payload = recordField(raw.payload) ?? {};
+  return compactBackendText(outputTextFromRaw(raw, item), 320);
+}
+
+function outputTextFromRaw(raw: Record<string, unknown>, item: Record<string, unknown>): string | undefined {
+  const payload = recordField(raw.payload) ?? recordField(raw.params) ?? {};
   const tool = recordField(raw.tool) ?? recordField(payload.tool) ?? {};
   const response = recordField(raw.response) ?? recordField(raw.control_response) ?? {};
-  return compactBackendText(
-    stringField(item.outputSummary)
-      ?? stringField(item.output_summary)
-      ?? stringField(item.aggregated_output)
-      ?? stringField(tool.outputSummary)
-      ?? stringField(tool.output_summary)
-      ?? stringField(response.outputSummary)
-      ?? stringField(response.output_summary)
-      ?? stringField(raw.outputSummary)
-      ?? stringField(raw.output_summary)
-      ?? stringField(payload.outputSummary)
-      ?? stringField(payload.output_summary),
-    320,
-  );
+  return stringField(item.outputSummary)
+    ?? stringField(item.output_summary)
+    ?? stringField(item.aggregated_output)
+    ?? stringField(item.output)
+    ?? textFromDynamicContentItems(item.contentItems)
+    ?? textFromDynamicContentItems(item.content_items)
+    ?? stringField(tool.outputSummary)
+    ?? stringField(tool.output_summary)
+    ?? stringField(tool.output)
+    ?? stringField(response.outputSummary)
+    ?? stringField(response.output_summary)
+    ?? stringField(response.output)
+    ?? stringField(raw.outputSummary)
+    ?? stringField(raw.output_summary)
+    ?? stringField(raw.output)
+    ?? stringField(payload.outputSummary)
+    ?? stringField(payload.output_summary)
+    ?? stringField(payload.output)
+    ?? textFromDynamicContentItems(payload.contentItems)
+    ?? textFromDynamicContentItems(payload.content_items);
+}
+
+function diffFromRaw(raw: Record<string, unknown>, item: Record<string, unknown>): string | undefined {
+  const payload = recordField(raw.payload) ?? recordField(raw.params) ?? {};
+  const tool = recordField(raw.tool) ?? recordField(payload.tool) ?? {};
+  const response = recordField(raw.response) ?? recordField(raw.control_response) ?? {};
+  const text = firstUnifiedDiffText([
+    item.diff,
+    item.patch,
+    item.aggregated_output,
+    item.output,
+    item.result,
+    tool.diff,
+    tool.patch,
+    tool.aggregated_output,
+    tool.output,
+    tool.result,
+    response.diff,
+    response.patch,
+    response.aggregated_output,
+    response.output,
+    response.result,
+    raw.diff,
+    raw.patch,
+    raw.aggregated_output,
+    raw.output,
+    raw.result,
+    payload.diff,
+    payload.patch,
+    payload.aggregated_output,
+    payload.output,
+    payload.result,
+    item.outputSummary,
+    item.output_summary,
+    tool.outputSummary,
+    tool.output_summary,
+    response.outputSummary,
+    response.output_summary,
+    raw.outputSummary,
+    raw.output_summary,
+    payload.outputSummary,
+    payload.output_summary,
+  ]);
+  if (!looksLikeUnifiedDiff(text)) return undefined;
+  return compactBackendBlockText(text, 12_000);
+}
+
+function firstUnifiedDiffText(values: unknown[]) {
+  return values
+    .map(stringField)
+    .find((value) => looksLikeUnifiedDiff(value));
 }
 
 function exitCodeFromRaw(raw: Record<string, unknown>, item: Record<string, unknown>): number | null | undefined {
-  const payload = recordField(raw.payload) ?? {};
+  const payload = recordField(raw.payload) ?? recordField(raw.params) ?? {};
   const tool = recordField(raw.tool) ?? recordField(payload.tool) ?? {};
   const response = recordField(raw.response) ?? recordField(raw.control_response) ?? {};
   return numberField(item.exitCode)
@@ -669,7 +870,7 @@ function exitCodeFromRaw(raw: Record<string, unknown>, item: Record<string, unkn
 }
 
 function toolInputFromRaw(raw: Record<string, unknown>, item: Record<string, unknown>): unknown {
-  const payload = recordField(raw.payload) ?? {};
+  const payload = recordField(raw.payload) ?? recordField(raw.params) ?? {};
   const tool = recordField(raw.tool) ?? recordField(payload.tool) ?? {};
   const request = recordField(raw.request) ?? recordField(raw.control_request) ?? {};
   return item.input
@@ -685,11 +886,13 @@ function toolInputFromRaw(raw: Record<string, unknown>, item: Record<string, unk
 }
 
 function toolResultFromRaw(raw: Record<string, unknown>, item: Record<string, unknown>): unknown {
-  const payload = recordField(raw.payload) ?? {};
+  const payload = recordField(raw.payload) ?? recordField(raw.params) ?? {};
   const tool = recordField(raw.tool) ?? recordField(payload.tool) ?? {};
   const response = recordField(raw.response) ?? recordField(raw.control_response) ?? {};
   return item.result
     ?? item.output
+    ?? dynamicToolResultFromContentItems(item.contentItems)
+    ?? dynamicToolResultFromContentItems(item.content_items)
     ?? tool.result
     ?? tool.output
     ?? response.result
@@ -697,13 +900,17 @@ function toolResultFromRaw(raw: Record<string, unknown>, item: Record<string, un
     ?? raw.result
     ?? raw.output
     ?? payload.result
-    ?? payload.output;
+    ?? payload.output
+    ?? dynamicToolResultFromContentItems(payload.contentItems)
+    ?? dynamicToolResultFromContentItems(payload.content_items);
 }
 
 function approvalFromRaw(raw: Record<string, unknown>): Record<string, unknown> | undefined {
+  const params = recordField(raw.params);
   return recordField(raw.approval)
     ?? recordField(raw.approval_request)
     ?? recordField(raw.approvalRequest)
+    ?? params
     ?? recordField(raw.request)
     ?? recordField(raw.control_request);
 }
@@ -720,20 +927,213 @@ function approvalIdFromRaw(raw: Record<string, unknown>): string | undefined {
 
 function statusFromRaw(raw: Record<string, unknown>): string | undefined {
   const response = recordField(raw.response) ?? {};
-  return stringField(raw.status) ?? stringField(raw.subtype) ?? stringField(response.status);
+  const params = recordField(raw.params) ?? {};
+  return stringField(raw.status) ?? stringField(raw.subtype) ?? stringField(params.status) ?? stringField(response.status);
+}
+
+function backendReferenceFields(
+  raw: Record<string, unknown>,
+  payload: Record<string, unknown>,
+  item: Record<string, unknown>,
+): Partial<Pick<BackendNormalizedEvent, 'ref' | 'agentId' | 'parentAgentId' | 'transcriptRef' | 'resultSummary' | 'refs'>> {
+  const records = backendReferenceRecords(raw, payload, item);
+  const ref = firstSafeBackendPreviewRef(records, 'ref', 'resultRef', 'result_ref', 'artifactRef', 'artifact_ref', 'outputRef', 'output_ref')
+    ?? firstSafeBackendPreviewRefFromArrays(records, 'refs', 'evidenceRefs', 'evidence_refs', 'artifactRefs', 'artifact_refs', 'outputRefs', 'output_refs');
+  const transcriptRef = firstSafeBackendRef(records, 'transcriptRef', 'transcript_ref', 'transcriptArtifactRef', 'transcript_artifact_ref');
+  const refs = mergeBackendRefs(
+    backendRefsFromArrays(records, 'refs', 'evidenceRefs', 'evidence_refs', 'artifactRefs', 'artifact_refs', 'outputRefs', 'output_refs'),
+    [ref, transcriptRef],
+  );
+  return {
+    ref,
+    agentId: firstSafeBackendIdentifier(records, 'agentId', 'agent_id', 'agentPath', 'agent_path'),
+    parentAgentId: firstSafeBackendIdentifier(records, 'parentAgentId', 'parent_agent_id', 'parentId', 'parent_id'),
+    transcriptRef,
+    resultSummary: compactBackendText(firstStringFromRecords(records, 'resultSummary', 'result_summary', 'summary'), 320),
+    refs,
+  };
+}
+
+function backendReferenceRecords(raw: Record<string, unknown>, payload: Record<string, unknown>, item: Record<string, unknown>) {
+  const resultRecords = nestedBackendRecords(toolResultFromRaw(raw, item));
+  const inputRecords = nestedBackendRecords(toolInputFromRaw(raw, item));
+  return [
+    ...resultRecords,
+    raw,
+    payload,
+    item,
+    recordField(raw.params),
+    recordField(raw.response),
+    recordField(raw.control_response),
+    recordField(raw.tool),
+    recordField(payload.tool),
+    ...inputRecords,
+  ].filter((entry): entry is Record<string, unknown> => Boolean(entry));
+}
+
+function nestedBackendRecords(value: unknown): Record<string, unknown>[] {
+  const root = parseJsonRecord(value);
+  if (!root) return [];
+  const records = [root];
+  for (const key of ['value', 'result', 'output', 'input', 'arguments', 'args', 'structuredContent', 'structured_content'] as const) {
+    const nested = parseJsonRecord(root[key]);
+    if (nested) records.push(nested);
+  }
+  const contentItems = Array.isArray(root.contentItems) ? root.contentItems : Array.isArray(root.content_items) ? root.content_items : [];
+  for (const item of contentItems) {
+    const nested = parseJsonRecord(isRecord(item) ? item.text ?? item.content : item);
+    if (nested) records.push(nested, ...nestedBackendRecords(nested.structuredContent ?? nested.structured_content));
+  }
+  return records;
+}
+
+function firstStringFromRecords(records: Record<string, unknown>[], ...keys: string[]) {
+  for (const record of records) {
+    for (const key of keys) {
+      const value = stringField(record[key]);
+      if (value) return value;
+    }
+  }
+  return undefined;
+}
+
+function firstSafeBackendRef(records: Record<string, unknown>[], ...keys: string[]) {
+  return records
+    .flatMap((record) => keys.map((key) => safeBackendRef(stringField(record[key]))))
+    .find(Boolean);
+}
+
+function firstSafeBackendIdentifier(records: Record<string, unknown>[], ...keys: string[]) {
+  return records
+    .flatMap((record) => keys.map((key) => safeBackendIdentifier(stringField(record[key]))))
+    .find(Boolean);
+}
+
+function firstSafeBackendPreviewRef(records: Record<string, unknown>[], ...keys: string[]) {
+  return records
+    .flatMap((record) => keys.map((key) => safeBackendPreviewRef(stringField(record[key]))))
+    .find(Boolean);
+}
+
+function firstSafeBackendPreviewRefFromArrays(records: Record<string, unknown>[], ...keys: string[]) {
+  return records
+    .flatMap((record) => keys.flatMap((key) => stringArrayField(record[key]) ?? []))
+    .map(safeBackendPreviewRef)
+    .find(Boolean);
+}
+
+function backendRefsFromArrays(records: Record<string, unknown>[], ...keys: string[]) {
+  return safeBackendRefs(records.flatMap((record) => keys.flatMap((key) => stringArrayField(record[key]) ?? [])));
+}
+
+function safeBackendPreviewRef(value: string | undefined): string | undefined {
+  const text = value?.trim().replace(/\\/g, '/');
+  if (!text) return undefined;
+  if (text.startsWith('file:')) {
+    const path = safeBackendRelativePath(text.slice('file:'.length));
+    return path ? `file:${path}` : undefined;
+  }
+  if (text.startsWith('artifact:')) {
+    const payload = text.slice('artifact:'.length);
+    return isSafeBackendOpaqueRef(payload) ? `artifact:${payload}` : undefined;
+  }
+  if (/^(?:[\w.-]+\/|[\w.-]+\.(?:diff|patch|txt|md|json|csv|tsv|yaml|yml))/.test(text)) {
+    const path = safeBackendRelativePath(text);
+    return path ? `file:${path}` : undefined;
+  }
+  return undefined;
+}
+
+function safeBackendRef(value: string | undefined): string | undefined {
+  const text = value?.trim().replace(/\\/g, '/');
+  if (!text) return undefined;
+  if (text.startsWith('file:') || text.startsWith('artifact:')) return safeBackendPreviewRef(text);
+  return isSafeBackendOpaqueRef(text) ? text : undefined;
+}
+
+function safeBackendIdentifier(value: string | undefined): string | undefined {
+  const text = value?.trim().replace(/\\/g, '/');
+  if (!text) return undefined;
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(text)) return undefined;
+  if (text.startsWith('/') || text.startsWith('~') || text.includes('://')) return undefined;
+  if (text.includes('..')) return undefined;
+  if (/^(?:audit|trace|raw|stdout|stderr|provider):/i.test(text)) return undefined;
+  if (/(?:^|[_.:-])(?:stdout|stderr|raw|log|logs|Users|Applications|Volumes|private|var|tmp|\.sciforge)(?:$|[_.:-])/i.test(text)) return undefined;
+  if (/\[local-path\]|\[redacted\]|\[url\]/i.test(text)) return undefined;
+  if (/\b(?:Authorization|api[-_ ]?key|token|secret|password|credential)\b|sk-[A-Za-z0-9._-]+/i.test(text)) return undefined;
+  return text;
+}
+
+function safeBackendRefs(value: unknown): string[] | undefined {
+  const refs = Array.isArray(value)
+    ? value.map((entry) => typeof entry === 'string' ? entry : undefined).map(safeBackendRef)
+    : [];
+  const unique = Array.from(new Set(refs.filter((entry): entry is string => Boolean(entry))));
+  return unique.length ? unique : undefined;
+}
+
+function mergeBackendRefs(...refs: Array<Array<string | undefined> | undefined>): string[] | undefined {
+  const unique = Array.from(new Set(refs.flatMap((entry) => entry ?? []).map(safeBackendRef).filter((entry): entry is string => Boolean(entry))));
+  return unique.length ? unique : undefined;
+}
+
+function safeBackendRelativePath(value: string | undefined): string | undefined {
+  const text = value?.trim().replace(/\\/g, '/');
+  if (!text) return undefined;
+  if (text.startsWith('file:')) return safeBackendRelativePath(text.slice('file:'.length));
+  if (/^(?:\/|[A-Za-z]:\/)/.test(text) || text.includes('://') || text.startsWith('~')) return undefined;
+  if (/[\r\n\t<>|?*:]/.test(text)) return undefined;
+  if (text.split('/').some((part) => part === '..')) return undefined;
+  if (/(?:^|\/)(?:Users|Applications|Volumes|private|var|tmp)(?:\/|$)/i.test(text)) return undefined;
+  if (/(?:^|\/)\.sciforge\/(?:raw|audit|logs?|task-results)(?:\/|$)/i.test(text)) return undefined;
+  if (/(?:^|[\/_.:-])(?:stdout|stderr|raw|logs?)(?:$|[\/_.:-])/i.test(text)) return undefined;
+  if (/\b(?:Authorization|api[-_ ]?key|token|secret|password|credential)\b|sk-[A-Za-z0-9._-]+/i.test(text)) return undefined;
+  return text;
+}
+
+function isSafeBackendOpaqueRef(value: string) {
+  const text = value.trim();
+  if (!text || text.includes('://') || text.startsWith('/') || text.startsWith('~')) return false;
+  if (!/^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/.test(text)) return false;
+  if (/^(?:audit|trace|raw|stdout|stderr|provider):/i.test(text)) return false;
+  if (/(?:^|[_.:-])(?:stdout|stderr|raw|log|logs)(?:$|[_.:-])/i.test(text)) return false;
+  if (text.includes('..')) return false;
+  if (/(?:^|[_.:-])(?:Users|Applications|Volumes|private|var|tmp|\.sciforge)(?:$|[_.:-])/i.test(text)) return false;
+  if (/\[local-path\]|\[redacted\]|\[url\]/i.test(text)) return false;
+  if (/\b(?:Authorization|api[-_ ]?key|token|secret|password|credential)\b|sk-[A-Za-z0-9._-]+/i.test(text)) return false;
+  return true;
 }
 
 function refsFromRaw(raw: Record<string, unknown>, result: unknown): string[] | undefined {
-  const refs = stringArrayField(raw.refs)
-    ?? stringArrayField(raw.evidenceRefs)
-    ?? (isRecord(result) ? stringArrayField(result.refs) ?? stringArrayField(result.evidenceRefs) : undefined);
-  return refs?.length ? refs : undefined;
+  const structured = isRecord(result)
+    ? recordField(result.structuredContent) ?? recordField(result.structured_content)
+    : undefined;
+  return safeBackendRefs([
+    ...(stringArrayField(raw.refs) ?? []),
+    ...(stringArrayField(raw.evidenceRefs) ?? []),
+    ...(isRecord(result) ? [
+      ...(stringArrayField(result.refs) ?? []),
+      ...(stringArrayField(result.evidenceRefs) ?? []),
+      ...(stringArrayField(result.artifactRefs) ?? []),
+      ...(stringArrayField(result.outputRefs) ?? []),
+    ] : []),
+    ...(structured ? [
+      ...(stringArrayField(structured.refs) ?? []),
+      ...(stringArrayField(structured.evidenceRefs) ?? []),
+      ...(stringArrayField(structured.artifactRefs) ?? []),
+      ...(stringArrayField(structured.outputRefs) ?? []),
+    ] : []),
+  ]);
 }
 
 function operationRefFromRaw(raw: Record<string, unknown>, result: unknown): string | undefined {
-  return stringField(raw.operationRef)
+  const structured = isRecord(result)
+    ? recordField(result.structuredContent) ?? recordField(result.structured_content)
+    : undefined;
+  return safeBackendRef(stringField(raw.operationRef)
     ?? stringField(raw.operation_ref)
-    ?? (isRecord(result) ? stringField(result.operationRef) ?? stringField(result.operation_ref) : undefined);
+    ?? (isRecord(result) ? stringField(result.operationRef) ?? stringField(result.operation_ref) : undefined)
+    ?? (structured ? stringField(structured.operationRef) ?? stringField(structured.operation_ref) : undefined));
 }
 
 function durationFromRaw(raw: Record<string, unknown>): { durationMs?: number } | undefined {
@@ -780,6 +1180,26 @@ function textFromContent(value: unknown): string | undefined {
   return text || undefined;
 }
 
+function textFromDynamicContentItems(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const text = value.map((entry) => {
+    if (typeof entry === 'string') return entry;
+    if (!isRecord(entry)) return undefined;
+    return stringField(entry.text)
+      ?? stringField(entry.content)
+      ?? stringField(entry.inputText)
+      ?? stringField(entry.input_text);
+  }).filter((entry): entry is string => Boolean(entry)).join('');
+  return text || undefined;
+}
+
+function dynamicToolResultFromContentItems(value: unknown): unknown {
+  const text = textFromDynamicContentItems(value);
+  if (!text) return undefined;
+  const parsed = parseJsonRecord(text);
+  return parsed ?? { output: text };
+}
+
 function summarizeForTrace(value: unknown): string {
   const text = safeJsonStringify(redactBackendEventValue(value));
   if (text.length <= 320) return text;
@@ -791,6 +1211,26 @@ function compactBackendText(value: string | undefined, limit: number): string | 
   const redacted = redactBackendText(value).replace(/\s+/g, ' ').trim();
   if (redacted.length <= limit) return redacted;
   return `${redacted.slice(0, Math.max(0, limit - 18)).replace(/\s+\S*$/, '')} ... ${redacted.slice(-14)}`;
+}
+
+function compactBackendBlockText(value: string | undefined, limit: number): string | undefined {
+  if (!value?.trim()) return undefined;
+  const redacted = redactBackendText(value)
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .trim();
+  if (!redacted) return undefined;
+  if (redacted.length <= limit) return redacted;
+  return `${redacted.slice(0, Math.max(0, limit - 2_000)).replace(/\s+\S*$/, '')}\n...\n${redacted.slice(-1_500)}`;
+}
+
+function looksLikeUnifiedDiff(value: string | undefined) {
+  const text = value?.trim();
+  if (!text) return false;
+  return /^diff --git\s+/m.test(text)
+    || /^@@\s+-\d+(?:,\d+)?\s+\d+(?:,\d+)?\s+@@/m.test(text)
+    || /^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/m.test(text)
+    || (/^---\s+\S+/m.test(text) && /^\+\+\+\s+\S+/m.test(text));
 }
 
 function safeJsonStringify(value: unknown): string {

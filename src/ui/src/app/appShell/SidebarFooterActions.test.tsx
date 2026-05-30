@@ -11,5 +11,5 @@ test('sidebar footer actions render settings command', () => {
 
   assert.match(html, /sidebar-footer-actions/);
   assert.match(html, /nav-item sidebar-command/);
-  assert.match(html, />设置</);
+  assert.match(html, />Settings</);
 });

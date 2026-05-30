@@ -1,0 +1,504 @@
+{
+  "buttons": [
+    {
+      "aria": "聊天工作台",
+      "className": "activity-item active",
+      "index": 0,
+      "text": "",
+      "title": "聊天工作台"
+    },
+    {
+      "aria": "内置浏览器",
+      "className": "activity-item",
+      "index": 1,
+      "text": "",
+      "title": "内置浏览器"
+    },
+    {
+      "aria": "研究时间线",
+      "className": "activity-item",
+      "index": 2,
+      "text": "",
+      "title": "研究时间线"
+    },
+    {
+      "aria": "反馈收件箱",
+      "className": "activity-item",
+      "index": 3,
+      "text": "",
+      "title": "反馈收件箱"
+    },
+    {
+      "aria": "收起侧栏",
+      "className": "panel-collapse-button",
+      "index": 4,
+      "text": "",
+      "title": "收起侧栏"
+    },
+    {
+      "aria": "折叠对话区",
+      "className": "sidebar-panel-toggle",
+      "index": 5,
+      "text": "",
+      "title": null
+    },
+    {
+      "aria": "New Agent in workspace",
+      "className": "sidebar-command primary sidebar-new-agent-command",
+      "index": 6,
+      "text": "New Agent⌘N",
+      "title": "New Agent in workspace"
+    },
+    {
+      "aria": null,
+      "className": "sidebar-result-row",
+      "index": 7,
+      "text": "workspace当前项目",
+      "title": null
+    },
+    {
+      "aria": "收起全部对话",
+      "className": "sidebar-project-icon-btn",
+      "index": 8,
+      "text": "",
+      "title": "收起全部对话"
+    },
+    {
+      "aria": "项目对话菜单",
+      "className": "sidebar-project-icon-btn",
+      "index": 9,
+      "text": "",
+      "title": "项目对话菜单"
+    },
+    {
+      "aria": "添加项目",
+      "className": "sidebar-project-icon-btn",
+      "index": 10,
+      "text": "",
+      "title": "添加项目"
+    },
+    {
+      "aria": null,
+      "className": "sidebar-project-chat-main",
+      "index": 11,
+      "text": "workspace当前",
+      "title": null
+    },
+    {
+      "aria": "workspace 项目操作",
+      "className": "sidebar-project-icon-btn",
+      "index": 12,
+      "text": "",
+      "title": "项目操作"
+    },
+    {
+      "aria": "New Agent in workspace",
+      "className": "sidebar-project-icon-btn",
+      "index": 13,
+      "text": "",
+      "title": "New Agent"
+    },
+    {
+      "aria": null,
+      "className": "sidebar-thread-main",
+      "index": 14,
+      "text": "只读检查：请读取 PROJECT.md 的目标摘要，用一句中文概括当前阶最近有新进展",
+      "title": null
+    },
+    {
+      "aria": "置顶对话：只读检查：请读取 PROJECT.md 的目标摘要，用一句中文概括当前阶",
+      "className": "sidebar-project-icon-btn",
+      "index": 15,
+      "text": "",
+      "title": "置顶对话"
+    },
+    {
+      "aria": "归档对话：只读检查：请读取 PROJECT.md 的目标摘要，用一句中文概括当前阶",
+      "className": "sidebar-project-icon-btn",
+      "index": 16,
+      "text": "",
+      "title": "归档对话"
+    },
+    {
+      "aria": "折叠工具区",
+      "className": "sidebar-panel-toggle",
+      "index": 17,
+      "text": "",
+      "title": null
+    },
+    {
+      "aria": null,
+      "className": "nav-item sidebar-command sidebar-tool-item",
+      "index": 18,
+      "text": "应用",
+      "title": null
+    },
+    {
+      "aria": "折叠项目区",
+      "className": "sidebar-panel-toggle",
+      "index": 19,
+      "text": "",
+      "title": null
+    },
+    {
+      "aria": "新建文件",
+      "className": "explorer-icon-btn",
+      "index": 20,
+      "text": "",
+      "title": "新建文件"
+    },
+    {
+      "aria": "新建文件夹",
+      "className": "explorer-icon-btn",
+      "index": 21,
+      "text": "",
+      "title": "新建文件夹"
+    },
+    {
+      "aria": "刷新",
+      "className": "explorer-icon-btn",
+      "index": 22,
+      "text": "",
+      "title": "刷新"
+    },
+    {
+      "aria": "全部折叠",
+      "className": "explorer-icon-btn",
+      "index": 23,
+      "text": "",
+      "title": "全部折叠"
+    },
+    {
+      "aria": "折叠",
+      "className": "explorer-twistie",
+      "index": 24,
+      "text": "",
+      "title": null
+    },
+    {
+      "aria": "展开",
+      "className": "explorer-twistie",
+      "index": 25,
+      "text": "",
+      "title": null
+    },
+    {
+      "aria": "展开",
+      "className": "explorer-twistie",
+      "index": 26,
+      "text": "",
+      "title": null
+    },
+    {
+      "aria": null,
+      "className": "explorer-folder-picker-trigger",
+      "index": 27,
+      "text": "打开其他文件夹…",
+      "title": null
+    },
+    {
+      "aria": null,
+      "className": "explorer-cta-btn",
+      "index": 28,
+      "text": "用作工作区根目录",
+      "title": null
+    },
+    {
+      "aria": null,
+      "className": "nav-item sidebar-command",
+      "index": 29,
+      "text": "设置",
+      "title": null
+    },
+    {
+      "aria": "打开注释侧栏并开始点选",
+      "className": "topbar-annotation-button",
+      "index": 30,
+      "text": "注释",
+      "title": null
+    },
+    {
+      "aria": "切换白天模式",
+      "className": "icon-button",
+      "index": 31,
+      "text": "",
+      "title": "切换白天模式"
+    },
+    {
+      "aria": "设置",
+      "className": "icon-button",
+      "index": 32,
+      "text": "",
+      "title": "设置"
+    },
+    {
+      "aria": null,
+      "className": "workbench-chrome-toggle-main",
+      "index": 33,
+      "text": "SciForge 工作台",
+      "title": null
+    },
+    {
+      "aria": null,
+      "className": "sense-toggle active",
+      "index": 34,
+      "text": "vision-senseon",
+      "title": "取消 vision-sense 感官"
+    },
+    {
+      "aria": null,
+      "className": "",
+      "index": 35,
+      "text": "Builder",
+      "title": null
+    },
+    {
+      "aria": null,
+      "className": "",
+      "index": 36,
+      "text": "Chat",
+      "title": null
+    },
+    {
+      "aria": null,
+      "className": "active",
+      "index": 37,
+      "text": "Results",
+      "title": null
+    },
+    {
+      "aria": "开启新聊天",
+      "className": "icon-button",
+      "index": 38,
+      "text": "",
+      "title": "开启新聊天"
+    },
+    {
+      "aria": "历史会话",
+      "className": "icon-button",
+      "index": 39,
+      "text": "",
+      "title": "历史会话"
+    },
+    {
+      "aria": "导出当前聊天",
+      "className": "icon-button",
+      "index": 40,
+      "text": "",
+      "title": "导出当前聊天"
+    },
+    {
+      "aria": "删除当前聊天",
+      "className": "icon-button",
+      "index": 41,
+      "text": "",
+      "title": "删除当前聊天"
+    },
+    {
+      "aria": null,
+      "className": "message-run-link",
+      "index": 42,
+      "text": "过程",
+      "title": "查看本轮过程"
+    },
+    {
+      "aria": null,
+      "className": "",
+      "index": 43,
+      "text": "复制",
+      "title": "复制 Markdown"
+    },
+    {
+      "aria": null,
+      "className": "",
+      "index": 44,
+      "text": "编辑",
+      "title": null
+    },
+    {
+      "aria": null,
+      "className": "message-run-link",
+      "index": 45,
+      "text": "过程",
+      "title": "查看本轮过程"
+    },
+    {
+      "aria": null,
+      "className": "",
+      "index": 46,
+      "text": "复制",
+      "title": "复制 Markdown"
+    },
+    {
+      "aria": null,
+      "className": "",
+      "index": 47,
+      "text": "编辑",
+      "title": null
+    },
+    {
+      "aria": "收起输入栏",
+      "className": "composer-collapse-button",
+      "index": 48,
+      "text": "",
+      "title": "收起输入栏"
+    },
+    {
+      "aria": null,
+      "className": "reference-trigger",
+      "index": 49,
+      "text": "点选",
+      "title": "点选模式引用整块 UI；选中文字可右键引用"
+    },
+    {
+      "aria": null,
+      "className": "reference-trigger",
+      "index": 50,
+      "text": "上传",
+      "title": "上传 PDF、图片、表格或任意文件到证据矩阵"
+    },
+    {
+      "aria": null,
+      "className": "action-button action-primary",
+      "index": 51,
+      "text": "发送",
+      "title": null
+    },
+    {
+      "aria": null,
+      "className": "results-collapse-button",
+      "index": 52,
+      "text": "",
+      "title": "向右收缩结果面板"
+    },
+    {
+      "aria": null,
+      "className": "tab active",
+      "index": 53,
+      "text": "结果视图",
+      "title": "结果视图"
+    },
+    {
+      "aria": null,
+      "className": "tab",
+      "index": 54,
+      "text": "证据矩阵",
+      "title": "证据矩阵"
+    },
+    {
+      "aria": null,
+      "className": "active",
+      "index": 55,
+      "text": "全部",
+      "title": null
+    },
+    {
+      "aria": null,
+      "className": "",
+      "index": 56,
+      "text": "只看图",
+      "title": null
+    },
+    {
+      "aria": null,
+      "className": "",
+      "index": 57,
+      "text": "只看证据",
+      "title": null
+    },
+    {
+      "aria": null,
+      "className": "",
+      "index": 58,
+      "text": "只看过程",
+      "title": null
+    }
+  ],
+  "details": [
+    {
+      "className": "explorer-folder-picker explorer-folder-picker-advanced",
+      "index": 0,
+      "open": false,
+      "summary": "手动输入路径",
+      "text": "手动输入路径用作工作区根目录"
+    },
+    {
+      "className": "message-fold depth-2 codex-result-clues-fold",
+      "index": 1,
+      "open": false,
+      "summary": "结果线索",
+      "text": "结果线索"
+    },
+    {
+      "className": "native-event-row cursor-agent-group cursor-agent-worked status-running",
+      "index": 2,
+      "open": true,
+      "summary": "WorkedWorked for 25s5 actions",
+      "text": "WorkedWorked for 25s5 actionsAction上下文窗口07:07:20上下文窗口ActionWorkspace Runtime07:07:20Workspace RuntimeActionRuntime Codex started with configured runtimerunning07:07:20Runtime Codex started with configured runtimeActionWe're currently experiencing high demand, which may cause temporary errors.failed07:07:45We're currently experiencing high demand, which may cause temporary errors.ActionRuntime Codex exited with code 1.failed07:07:45exit1Runtime Codex exited with code 1."
+    },
+    {
+      "className": "native-event-row cursor-agent-action cursor-agent-action-other status-unknown",
+      "index": 3,
+      "open": false,
+      "summary": "Action上下文窗口07:07:20",
+      "text": "Action上下文窗口07:07:20上下文窗口"
+    },
+    {
+      "className": "native-event-row cursor-agent-action cursor-agent-action-other status-unknown",
+      "index": 4,
+      "open": false,
+      "summary": "ActionWorkspace Runtime07:07:20",
+      "text": "ActionWorkspace Runtime07:07:20Workspace Runtime"
+    },
+    {
+      "className": "native-event-row cursor-agent-action cursor-agent-action-other status-running active",
+      "index": 5,
+      "open": false,
+      "summary": "ActionRuntime Codex started with configured runtimerunning07:07:20",
+      "text": "ActionRuntime Codex started with configured runtimerunning07:07:20Runtime Codex started with configured runtime"
+    },
+    {
+      "className": "native-event-row cursor-agent-action cursor-agent-action-other status-failed",
+      "index": 6,
+      "open": false,
+      "summary": "ActionWe're currently experiencing high demand, which may cause temporary errors.failed07:07:45",
+      "text": "ActionWe're currently experiencing high demand, which may cause temporary errors.failed07:07:45We're currently experiencing high demand, which may cause temporary errors."
+    },
+    {
+      "className": "native-event-row cursor-agent-action cursor-agent-action-other status-failed",
+      "index": 7,
+      "open": false,
+      "summary": "ActionRuntime Codex exited with code 1.failed07:07:45",
+      "text": "ActionRuntime Codex exited with code 1.failed07:07:45exit1Runtime Codex exited with code 1."
+    },
+    {
+      "className": "native-event-row cursor-agent-group cursor-agent-explored status-unknown",
+      "index": 8,
+      "open": false,
+      "summary": "ExploredExplored 1 file1 file",
+      "text": "ExploredExplored 1 file1 fileReadRead 只读检查：请读取 PROJECT.md 的目标摘要，用一句中文概括当前阶段目标；不要修改任何文件。07:07:20只读检查：请读取 PROJECT.md 的目标摘要，用一句中文概括当前阶段目标；不要修改任何文件。"
+    },
+    {
+      "className": "native-event-row cursor-agent-action cursor-agent-action-read status-unknown",
+      "index": 9,
+      "open": false,
+      "summary": "ReadRead 只读检查：请读取 PROJECT.md 的目标摘要，用一句中文概括当前阶段目标；不要修改任何文件。07:07:20",
+      "text": "ReadRead 只读检查：请读取 PROJECT.md 的目标摘要，用一句中文概括当前阶段目标；不要修改任何文件。07:07:20只读检查：请读取 PROJECT.md 的目标摘要，用一句中文概括当前阶段目标；不要修改任何文件。"
+    },
+    {
+      "className": "native-event-audit-fold",
+      "index": 10,
+      "open": false,
+      "summary": "Audit36 folded low-level events",
+      "text": "Audit36 folded low-level eventsfolded low-level event refs: 36 Raw audit payloads stay outside the chat process view."
+    },
+    {
+      "className": "result-details-panel audit-details-panel",
+      "index": 11,
+      "open": false,
+      "summary": "过程记录1 条",
+      "text": "过程记录1 条"
+    }
+  ],
+  "processText": "replayWork replayRuntime Codex started with configured runtimeWorkedWorked for 25s5 actionsAction上下文窗口07:07:20上下文窗口ActionWorkspace Runtime07:07:20Workspace RuntimeActionRuntime Codex started with configured runtimerunning07:07:20Runtime Codex started with configured runtimeActionWe're currently experiencing high demand, which may cause temporary errors.failed07:07:45We're currently experiencing high demand, which may cause temporary errors.ActionRuntime Codex exited with code 1.failed07:07:45exit1Runtime Codex exited with code 1.ExploredExplored 1 file1 fileReadRead 只读检查：请读取 PROJECT.md 的目标摘要，用一句中文概括当前阶段目标；不要修改任何文件。07:07:20只读检查：请读取 PROJECT.md 的目标摘要，用一句中文概括当前阶段目标；不要修改任何文件。Audit36 folded low-level eventsfolded low-level event refs: 36 Raw audit payloads stay outside the chat process view."
+}

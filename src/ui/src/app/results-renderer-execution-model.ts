@@ -16,6 +16,8 @@ import {
   type UiConversationProjection,
 } from './conversation-projection-view-model';
 import { runtimeDebugValueHasRawLeak, sanitizeRuntimeDebugValue } from '../runtimeDebugScrubber';
+import { sanitizeRightPanePreviewValue } from './results/previewSafety';
+import { splitFinalMessagePresentation } from './chat/finalMessagePresentation';
 
 export type BackendRepairState = {
   id: string;
@@ -194,10 +196,10 @@ function projectionlessRunPresentationState(
   const refs = runAuditRefs(session, run).slice(0, 8);
   return {
     kind: 'empty',
-    title: '等待本轮结果',
+    title: 'Waiting for results',
     reason: hasAuditDiagnostics
-      ? '本轮还没有可展示的主结果；执行记录、校验和恢复线索已保留在折叠过程里，不抢占主视图。'
-      : '当前还没有可展示的结果；回答或产物准备好后会出现在这里。',
+      ? 'No primary result is ready yet. Supporting activity is folded out of the main view.'
+      : 'No result is ready yet. Answers and deliverables will appear here.',
     nextSteps: [],
     availableArtifacts: [],
     refs,
@@ -478,8 +480,8 @@ export function rawAuditItems(session: SciForgeSession, activeRun: SciForgeRun |
     run ? { id: `run-${run.id}`, label: '本轮记录', value: JSON.stringify(sanitizeAuditValue(run.raw ?? run), null, 2) } : undefined,
     scopedArtifacts.length ? { id: 'artifacts', label: `结果材料（${scopedArtifacts.length}）`, value: JSON.stringify(sanitizeAuditValue(scopedArtifacts), null, 2) } : undefined,
     scopedExecutionUnits.length ? { id: 'execution-units', label: `过程记录（${scopedExecutionUnits.length}）`, value: JSON.stringify(sanitizeAuditValue(scopedExecutionUnits), null, 2) } : undefined,
-    session.notebook.length ? { id: 'notebook', label: `时间线（${session.notebook.length}）`, value: JSON.stringify(session.notebook, null, 2) } : undefined,
-    viewPlan.allItems.length ? { id: 'view-plan', label: `展示摘要（${viewPlan.allItems.length}）`, value: JSON.stringify(viewPlan.allItems, null, 2) } : undefined,
+    session.notebook.length ? { id: 'notebook', label: `时间线（${session.notebook.length}）`, value: JSON.stringify(sanitizeAuditValue(session.notebook), null, 2) } : undefined,
+    viewPlan.allItems.length ? { id: 'view-plan', label: `展示摘要（${viewPlan.allItems.length}）`, value: JSON.stringify(sanitizeAuditValue(viewPlan.allItems), null, 2) } : undefined,
   ].filter((item): item is { id: string; label: string; value: string } => Boolean(item));
 }
 
@@ -544,14 +546,34 @@ function projectionPresentationKind(
   artifacts: RunPresentationState['availableArtifacts'],
 ): RunPresentationStateKind {
   const status = conversationProjectionStatus(projection);
-  if (status === 'satisfied') return artifacts.length || conversationProjectionVisibleText(projection) ? 'ready' : 'empty';
-  if (status === 'visible-not-live-acceptance') return conversationProjectionVisibleText(projection) ? 'ready' : 'empty';
+  if (status === 'satisfied') return projectionVisibleTextHasRightPaneValue(projection, artifacts) ? 'ready' : 'empty';
+  if (status === 'visible-not-live-acceptance') {
+    return projectionVisibleTextHasRightPaneValue(projection, artifacts) ? 'ready' : 'empty';
+  }
   if (status === 'needs-human') return 'needs-human';
   if (status === 'external-blocked' || status === 'repair-needed') return conversationProjectionIsRecoverable(projection) ? 'recoverable' : 'failed';
   if (status === 'degraded-result' && !artifacts.length && projectionHasEmptyResultRecovery(projection)) return 'recoverable';
   if (status === 'degraded-result' || status === 'partial-ready' || status === 'output-materialized' || status === 'background-running') return 'partial';
   if (status === 'planned' || status === 'dispatched' || status === 'validated') return 'running';
   return artifacts.length ? 'ready' : 'empty';
+}
+
+function projectionVisibleTextHasRightPaneValue(
+  projection: UiConversationProjection,
+  artifacts: RunPresentationState['availableArtifacts'],
+) {
+  if (artifacts.length) return true;
+  if (conversationProjectionArtifactRefs(projection).some(isPublicBrowserStateRef)) return true;
+  const visibleText = conversationProjectionVisibleText(projection);
+  if (!visibleText) return false;
+  const presentation = splitFinalMessagePresentation(visibleText);
+  if (!presentation.auditSections.length) return false;
+  const primaryText = presentation.primaryContent;
+  const auditText = presentation.auditSections.map((section) => section.text).join('\n');
+  const primaryLooksDiagnostic = /(?:task did not finish|error details are folded|additional details|Traceback \(most recent call last\)|\b(?:failureReason|stderrRef|stdoutRef|traceRef|recoverActions?|execution-failed|raw JSONL|tool payload|runtime metadata|MaxRetryError|ProxyError|ConnectionError|TimeoutError|HTTPError)\b|(?:失败原因|错误输出|标准输出|恢复动作|执行失败|诊断|调试信息|运行日志|原始输出))/i.test(primaryText);
+  const foldedTraceback = /(?:Traceback \(most recent call last\)|\b(?:MaxRetryError|ProxyError|ConnectionError|TimeoutError|HTTPError)\b)/i.test(auditText)
+    && /(?:task did not finish|error details are folded|未完成|错误详情)/i.test(primaryText);
+  return primaryLooksDiagnostic || foldedTraceback;
 }
 
 function projectionHasEmptyResultRecovery(projection: UiConversationProjection) {
@@ -566,14 +588,14 @@ function projectionPresentationTitle(
   status: ReturnType<typeof conversationProjectionStatus>,
   artifacts: RunPresentationState['availableArtifacts'],
 ) {
-  if (status === 'visible-not-live-acceptance' && !artifacts.length) return '回答已显示';
-  if (kind === 'ready') return '结果可展示';
-  if (kind === 'partial') return status === 'background-running' ? '已有部分结果，后台仍在继续' : '只得到部分结果';
-  if (kind === 'needs-human') return '需要人工处理后继续';
-  if (kind === 'recoverable') return '运行需要恢复';
-  if (kind === 'failed') return '运行失败';
-  if (kind === 'running') return '运行仍在进行';
-  return artifacts.length ? '结果可展示' : '本轮没有生成可展示内容';
+  if ((status === 'visible-not-live-acceptance' || status === 'satisfied') && kind !== 'empty' && !artifacts.length) return 'Answer shown';
+  if (kind === 'ready') return 'Results ready';
+  if (kind === 'partial') return status === 'background-running' ? 'Partial results ready; still working' : 'Partial result';
+  if (kind === 'needs-human') return 'Needs input';
+  if (kind === 'recoverable') return 'Needs recovery';
+  if (kind === 'failed') return 'Run failed';
+  if (kind === 'running') return 'Still running';
+  return artifacts.length ? 'Results ready' : 'No previewable content';
 }
 
 function projectionPresentationReason(
@@ -582,14 +604,14 @@ function projectionPresentationReason(
   run: SciForgeRun | undefined,
 ) {
   if (conversationProjectionStatus(projection) === 'visible-not-live-acceptance') {
-    return compactHumanReason(conversationProjectionVisibleText(projection) ?? '回答已在聊天中显示；本轮没有生成独立内容。');
+    return compactHumanReason(conversationProjectionVisibleText(projection) ?? 'The answer is shown in chat; no separate result was created.');
   }
   const explicit = conversationProjectionPrimaryDiagnostic(projection) ?? conversationProjectionVisibleText(projection);
   if (explicit) return compactHumanReason(explicit);
   if (projection.backgroundState?.revisionPlan) return compactHumanReason(projection.backgroundState.revisionPlan);
-  if (!artifacts.length && run?.status === 'completed') return '运行已结束，但没有生成可在右侧展示的内容。';
-  if (conversationProjectionStatus(projection) === 'background-running') return '后台仍在生成结果，当前只显示已经准备好的内容。';
-  return artifacts.length ? `${artifacts.length} 个结果可用于右侧展示。` : '当前还没有可展示结果。';
+  if (!artifacts.length && run?.status === 'completed') return 'The run finished without a separate right-pane result.';
+  if (conversationProjectionStatus(projection) === 'background-running') return 'Results are still being prepared. Ready items are shown first.';
+  return artifacts.length ? `${artifacts.length} result${artifacts.length === 1 ? '' : 's'} available.` : 'No result is ready yet.';
 }
 
 function projectionPresentationProgress(
@@ -598,7 +620,7 @@ function projectionPresentationProgress(
 ): RunPresentationProgress {
   const completedParts = artifacts.slice(0, 8).map((artifact) => ({
     id: artifact.id,
-    label: artifact.title ?? '结果',
+    label: artifact.title ?? 'Result',
     ref: `artifact:${artifact.id}`,
     status: 'available',
   }));
@@ -617,7 +639,7 @@ function projectionPresentationProgress(
       kind: 'continue' as const,
       label: step,
       safe: true,
-      reason: '来自本轮结果的恢复动作，不从底层执行状态推断。',
+      reason: 'Recovery action from the current result, not inferred from raw execution state.',
     })).slice(0, 6),
   };
 }
@@ -628,32 +650,33 @@ function artifactTitle(artifact: RuntimeArtifact) {
 }
 
 function compactHumanReason(value: string) {
-  const text = value.replace(/\s+/g, ' ').trim();
+  const presentation = splitFinalMessagePresentation(value);
+  const text = (presentation.primaryContent || value).replace(/\s+/g, ' ').trim();
   return text.length > 320 ? `${text.slice(0, 317).trim()}...` : text;
 }
 
 function projectionProgressEventLabel(value: string, status: ReturnType<typeof conversationProjectionStatus>) {
   if (status === 'visible-not-live-acceptance' || /native.?codex.?message/i.test(value)) {
-    return '回答已在聊天中显示';
+    return 'Answer shown in chat';
   }
   return value;
 }
 
 function projectionStatusLabel(status: ReturnType<typeof conversationProjectionStatus>) {
   const labels: Record<ReturnType<typeof conversationProjectionStatus>, string> = {
-    idle: '未执行',
-    planned: '已计划',
-    dispatched: '已分发',
-    'partial-ready': '部分结果',
-    'output-materialized': '已保存输出',
-    validated: '已验证边界',
-    'visible-not-live-acceptance': '回答已显示',
-    satisfied: '完成',
-    'degraded-result': '降级结果',
-    'external-blocked': '外部阻塞',
-    'repair-needed': '需恢复',
-    'needs-human': '需人工处理',
-    'background-running': '后台继续中',
+    idle: 'Not run',
+    planned: 'Planned',
+    dispatched: 'Started',
+    'partial-ready': 'Partial result',
+    'output-materialized': 'Output saved',
+    validated: 'Validated',
+    'visible-not-live-acceptance': 'Answer shown',
+    satisfied: 'Complete',
+    'degraded-result': 'Partial result',
+    'external-blocked': 'Blocked',
+    'repair-needed': 'Needs recovery',
+    'needs-human': 'Needs input',
+    'background-running': 'Still running',
   };
   return labels[status];
 }
@@ -669,5 +692,5 @@ function runHasCurrentFailureBoundary(run?: SciForgeRun) {
 }
 
 function sanitizeAuditValue(value: unknown, key = '', depth = 0): unknown {
-  return sanitizeRuntimeDebugValue(value, key, depth);
+  return sanitizeRightPanePreviewValue(sanitizeRuntimeDebugValue(value, key, depth));
 }

@@ -1,16 +1,24 @@
-import { useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
-import { AlertTriangle, ChevronDown, ChevronUp, Clock, Copy, FileCode, FileText, Lock, Save, Shield, Sparkles, Terminal, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { AlertTriangle, ChevronDown, ChevronUp, Clock, Lock, Shield, Sparkles, Terminal } from 'lucide-react';
 import type { ScenarioId } from '../data';
 import { artifactPreviewActions, objectReferenceKinds, previewDescriptorKinds, runtimeContractSchemas, schemaPreview, validateRuntimeContract } from '../runtimeContracts';
-import { readPreviewDerivative, readPreviewDescriptor, writeWorkspaceFile, type WorkspaceFileContent } from '../api/workspaceClient';
+import { listWorkspace, readPreviewDerivative, readPreviewDescriptor, readWorkspaceFile, writeWorkspaceFile, type WorkspaceEntry, type WorkspaceFileContent } from '../api/workspaceClient';
 import { uiModuleRegistry } from '../uiModuleRegistry';
 import { interactiveViewResultSummaryPresentation } from '../../../../packages/presentation/interactive-views';
+import {
+  WorkspaceFileViewer,
+  workspaceFileViewerBasename,
+  workspaceFileViewerParentPath,
+  type WorkspaceFileViewerEntry,
+} from '../../../../packages/presentation/components';
 import type { ContractValidationFailure } from '@sciforge-ui/runtime-contract';
 import { exportJsonFile } from './exportUtils';
 import { Badge, Card, EmptyArtifactState, SectionHeader, cx } from './uiPrimitives';
 import { ResultShell, type ResultFocusMode } from './results/ResultShell';
 import { PreviewDescriptorActions } from './results/PreviewActions';
 import { EvidenceMatrix, ExecutionPanel, NotebookTimeline } from './results/ExecutionNotebookPanels';
+import { resultCountText, resultLocale, resultText, type ResultLocale } from './results/resultLocale';
+import { normalizeWorkspaceRootPath } from '../config';
 export { handoffAutoRunPrompt, previewPackageAutoRunPrompt } from './results/autoRunPrompts';
 import {
   createResultsRendererViewModel,
@@ -24,20 +32,19 @@ export { coerceReportPayload } from './results/reportContent';
 import {
   compactParams,
   exportExecutionBundle,
-  formatResultFileBytes,
   isRecord,
   toRecordList,
 } from './results/resultArtifactHelpers';
+import { boundedRightPaneText, rightPaneInlineLabel, rightPaneSafeRefs } from './results/previewSafety';
 import { artifactsForRun, auditExecutionUnitsForRun } from './results/executionUnitsForRun';
 import {
   descriptorCanUseWorkspacePreview,
   descriptorDerivativeKind,
-  fileKindForPath,
   normalizeArtifactPreviewDescriptor,
   previewNeedsPackage,
   uploadedArtifactPreview,
 } from './results/previewDescriptor';
-import { UploadedDataUrlPreview, WorkspaceObjectPreview } from './results/WorkspaceObjectPreview';
+import { canHydrateWorkspaceObjectPath, UploadedDataUrlPreview, WorkspaceObjectPreview } from './results/WorkspaceObjectPreview';
 import { type EvidenceClaim, type SciForgeConfig, type SciForgeRun, type SciForgeSession, type ObjectAction, type ObjectReference, type PreviewDescriptor, type RuntimeArtifact, type RuntimeCompatibilityDiagnostic, type RuntimeExecutionUnit, type UIManifestSlot } from '../domain';
 import {
   conversationProjectionForSession,
@@ -72,6 +79,7 @@ import {
 } from '../../../../packages/support/object-references';
 import {
   objectReferenceKindLabel,
+  pathForObjectReference,
   referenceKindForWorkspaceFileLike,
   referenceForObjectReference,
   referenceForWorkspaceFileLike,
@@ -98,79 +106,276 @@ import { capabilityPlanSummaryForSession, createLocalUserActionApi, type Capabil
 export { renderRegisteredWorkbenchSlot };
 export type { WorkbenchSlotRenderProps };
 
-function ResultPaneWorkspaceFileEditor({
+function ResultPaneWorkspaceFileViewer({
   state,
   config,
+  locale,
   onChange,
   onClose,
 }: {
   state: { file: WorkspaceFileContent; draft: string };
   config: SciForgeConfig;
+  locale?: ResultLocale;
   onChange: (next: { file: WorkspaceFileContent; draft: string }) => void;
   onClose: () => void;
 }) {
+  const workspaceRoot = config.workspacePath.trim();
   const dirty = state.draft !== state.file.content;
+  const [folderChildren, setFolderChildren] = useState<Record<string, WorkspaceFileViewerEntry[] | undefined>>({});
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => new Set(workspaceRoot ? [workspaceRoot] : []));
+  const [workspaceError, setWorkspaceError] = useState('');
+  const [workspaceNotice, setWorkspaceNotice] = useState('');
   const [saveError, setSaveError] = useState('');
   const fileReference = referenceForWorkspaceFileLike(state.file, referenceKindForWorkspaceFileLike(state.file));
+
+  useEffect(() => {
+    setFolderChildren({});
+    setExpandedFolders(new Set(workspaceRoot ? [workspaceRoot] : []));
+    setWorkspaceError('');
+    setWorkspaceNotice('');
+  }, [workspaceRoot]);
+
+  useEffect(() => {
+    if (!workspaceRoot) return undefined;
+    let cancelled = false;
+    void loadFolder(workspaceRoot, { cancelled: () => cancelled, quiet: true });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceRoot, config.workspaceWriterBaseUrl]);
+
+  useEffect(() => {
+    if (!workspaceRoot || !state.file.path) return;
+    const ancestors = workspaceFileAncestors(workspaceRoot, state.file.path);
+    if (!ancestors.length) return;
+    setExpandedFolders((current) => new Set([...current, ...ancestors]));
+    for (const ancestor of ancestors) {
+      if (folderChildren[ancestor] === undefined) {
+        void loadFolder(ancestor, { quiet: true });
+      }
+    }
+  }, [workspaceRoot, state.file.path]);
+
+  async function loadFolder(path: string, options: { cancelled?: () => boolean; quiet?: boolean } = {}) {
+    if (!path.trim()) return;
+    try {
+      if (!options.quiet) setWorkspaceError('');
+      const entries = await listWorkspace(path, config);
+      if (options.cancelled?.()) return;
+      setFolderChildren((previous) => ({ ...previous, [path]: entries.map(workspaceFileViewerEntryFromWorkspaceEntry) }));
+      if (!options.quiet) {
+        setWorkspaceNotice(entries.length
+          ? resultText(locale, { 'zh-CN': `已加载 ${entries.length} 项`, 'en-US': `${entries.length} items loaded` })
+          : resultText(locale, { 'zh-CN': '文件夹为空', 'en-US': 'Folder is empty' }));
+      }
+    } catch (error) {
+      if (options.cancelled?.()) return;
+      setWorkspaceError(error instanceof Error ? error.message : String(error));
+      if (!options.quiet) setWorkspaceNotice('');
+    }
+  }
+
+  function toggleFolder(path: string) {
+    setExpandedFolders((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else {
+        next.add(path);
+        if (folderChildren[path] === undefined) void loadFolder(path, { quiet: true });
+      }
+      return next;
+    });
+  }
+
+  async function refreshTree() {
+    if (!workspaceRoot) return;
+    try {
+      setWorkspaceError('');
+      const folders = Array.from(new Set([workspaceRoot, ...expandedFolders])).filter(Boolean);
+      const loaded = await Promise.all(folders.map(async (folder) => [folder, await listWorkspace(folder, config)] as const));
+      setFolderChildren((previous) => ({
+        ...previous,
+        ...Object.fromEntries(loaded.map(([folder, entries]) => [folder, entries.map(workspaceFileViewerEntryFromWorkspaceEntry)])),
+      }));
+      setWorkspaceNotice(resultText(locale, { 'zh-CN': '目录已刷新', 'en-US': 'Tree refreshed' }));
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : String(error));
+      setWorkspaceNotice('');
+    }
+  }
+
+  function collapseTree() {
+    setExpandedFolders(new Set(workspaceRoot ? [workspaceRoot] : []));
+  }
+
+  async function openFile(entry: WorkspaceFileViewerEntry) {
+    if (entry.kind !== 'file') return;
+    try {
+      setWorkspaceError('');
+      const file = await readWorkspaceFile(entry.path, config);
+      onChange({ file, draft: file.content });
+      setWorkspaceNotice(resultText(locale, { 'zh-CN': `已打开 ${file.name}`, 'en-US': `Opened ${file.name}` }));
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : String(error));
+      setWorkspaceNotice('');
+    }
+  }
+
   async function save() {
     try {
       setSaveError('');
       const file = await writeWorkspaceFile(state.file.path, state.draft, config);
       onChange({ file, draft: file.content });
+      setWorkspaceNotice(resultText(locale, { 'zh-CN': `已保存 ${file.name}`, 'en-US': `Saved ${file.name}` }));
+      const parent = workspaceFileViewerParentPath(file.path) || workspaceRoot;
+      if (parent) await loadFolder(parent, { quiet: true });
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : String(err));
     }
   }
   return (
     <div
-      className="workspace-preview result-workspace-file-editor"
-      aria-label="工作区文件"
+      className="result-workspace-file-viewer"
+      aria-label={resultText(locale, { 'zh-CN': '工作区文件', 'en-US': 'Workspace file' })}
       data-sciforge-reference={sciForgeReferenceAttribute(fileReference)}
     >
-      <div className="workspace-preview-head">
-        <span>
-          <FileText size={13} />
-          <strong title={state.file.path}>{state.file.name}</strong>
-          {dirty ? <Badge variant="warning">未保存</Badge> : <Badge variant="success">已保存</Badge>}
-        </span>
-        <div>
-          <button type="button" onClick={() => void navigator.clipboard?.writeText(state.file.path)} title="复制路径" aria-label="复制路径">
-            <Copy size={13} />
-          </button>
-          <button type="button" onClick={() => void navigator.clipboard?.writeText(state.draft)} title="复制内容" aria-label="复制内容">
-            <Copy size={13} />
-          </button>
-          <button type="button" onClick={() => void save()} disabled={!dirty} title="保存文件" aria-label="保存文件">
-            <Save size={13} />
-          </button>
-          <button type="button" onClick={onClose} title="关闭文件视图" aria-label="关闭文件视图">
-            <X size={13} />
-          </button>
-        </div>
-      </div>
-      {saveError ? <div className="object-action-error">{saveError}</div> : null}
-      <textarea
-        value={state.draft}
-        spellCheck={false}
-        onChange={(event) => {
-          const draft = event.target.value;
-          onChange({ file: state.file, draft });
-        }}
-        onKeyDown={(event) => {
-          if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
-            event.preventDefault();
-            void save();
-          }
-        }}
-        aria-label={`${state.file.name} 文件内容`}
+      <WorkspaceFileViewer
+        rootPath={workspaceRoot}
+        rootLabel={workspaceFileViewerBasename(workspaceRoot)}
+        entriesByFolder={folderChildren}
+        expandedFolderPaths={Array.from(expandedFolders)}
+        selectedPath={state.file.path}
+        file={state.file}
+        draft={state.draft}
+        dirty={dirty}
+        notice={workspaceNotice}
+        error={boundedRightPaneText(workspaceError, 800)}
+        saveError={boundedRightPaneText(saveError, 800)}
+        labels={workspaceFileViewerLabels(locale)}
+        onToggleFolder={toggleFolder}
+        onOpenFile={(entry) => void openFile(entry)}
+        onRefresh={() => void refreshTree()}
+        onCollapseAll={collapseTree}
+        onDraftChange={(draft) => onChange({ file: state.file, draft })}
+        onSave={() => void save()}
+        onClose={onClose}
+        onCopyPath={(path) => void navigator.clipboard?.writeText(path)}
+        onCopyContents={(content) => void navigator.clipboard?.writeText(content)}
       />
-      <div className="workspace-preview-meta">
-        <code>{state.file.language}</code>
-        <span>{formatResultFileBytes(state.file.size)}</span>
-        {state.file.modifiedAt ? <span>{new Date(state.file.modifiedAt).toLocaleString('zh-CN', { hour12: false })}</span> : null}
-      </div>
     </div>
   );
+}
+
+function workspaceFileViewerEntryFromWorkspaceEntry(entry: WorkspaceEntry): WorkspaceFileViewerEntry {
+  return {
+    kind: entry.kind,
+    name: entry.name,
+    path: entry.path,
+    size: entry.size,
+    modifiedAt: entry.modifiedAt,
+  };
+}
+
+function workspaceFileAncestors(workspaceRoot: string, filePath: string) {
+  const root = normalizeWorkspaceViewerPath(workspaceRoot);
+  let current = normalizeWorkspaceViewerPath(workspaceFileViewerParentPath(filePath));
+  const ancestors: string[] = [];
+  while (current && (current === root || current.startsWith(`${root}/`))) {
+    ancestors.unshift(current);
+    if (current === root) break;
+    current = normalizeWorkspaceViewerPath(workspaceFileViewerParentPath(current));
+  }
+  return ancestors;
+}
+
+function normalizeWorkspaceViewerPath(path: string | undefined) {
+  return (path ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+function workspaceFileEditorMatchesPath(editorPath: string | undefined, requestedPath: string, workspaceRoot: string) {
+  const editor = normalizeWorkspaceViewerPath(editorPath);
+  const requested = normalizeWorkspaceViewerPath(requestedPath);
+  const root = normalizeWorkspaceViewerPath(workspaceRoot);
+  if (!editor || !requested) return false;
+  if (editor === requested) return true;
+  return Boolean(root && editor === `${root}/${requested.replace(/^\/+/, '')}`);
+}
+
+function focusedWorkspaceRootForReference(reference: ObjectReference | undefined, session: SciForgeSession, fallbackWorkspaceRoot: string) {
+  if (reference?.kind !== 'file' || reference.provenance?.producer !== 'cursor-agent-process') {
+    return normalizeWorkspaceRootPath(fallbackWorkspaceRoot);
+  }
+  const runWorkspace = workspaceRootForRun(session, reference.runId);
+  return normalizeWorkspaceRootPath(runWorkspace || fallbackWorkspaceRoot);
+}
+
+function workspaceRootForRun(session: SciForgeSession, runId: string | undefined) {
+  if (!runId) return '';
+  const run = session.runs.find((item) => item.id === runId);
+  if (!run) return '';
+  return firstNonEmptyString(
+    conversationProjectionForSession(session, run)?.runtimeMetadata?.workspace,
+    workspaceRootFromRunRaw(run),
+    workspaceRootFromStreamProcess(run),
+  );
+}
+
+function workspaceRootFromRunRaw(run: SciForgeRun) {
+  const raw = isRecord(run.raw) ? run.raw : undefined;
+  const payload = isRecord(raw?.payload) ? raw.payload : undefined;
+  const runtimeMetadata = isRecord(raw?.runtimeMetadata)
+    ? raw.runtimeMetadata
+    : isRecord(payload?.runtimeMetadata)
+      ? payload.runtimeMetadata
+      : undefined;
+  return stringField(runtimeMetadata?.workspace) || stringField(runtimeMetadata?.workspacePath);
+}
+
+function workspaceRootFromStreamProcess(run: SciForgeRun) {
+  const raw = isRecord(run.raw) ? run.raw : undefined;
+  const streamProcess = isRecord(raw?.streamProcess) ? raw.streamProcess : undefined;
+  const events = Array.isArray(streamProcess?.events) ? streamProcess.events : [];
+  for (const event of events) {
+    if (!isRecord(event)) continue;
+    const native = isRecord(event.native) ? event.native : undefined;
+    const workspace = firstNonEmptyString(
+      stringField(native?.workspace),
+      stringField(native?.workspacePath),
+      stringField(native?.workspace_path),
+      stringField(event.workspace),
+      stringField(event.workspacePath),
+      stringField(event.workspace_path),
+    );
+    if (workspace) return workspace;
+  }
+  return '';
+}
+
+function firstNonEmptyString(...values: Array<string | undefined>) {
+  return values.find((value) => typeof value === 'string' && value.trim())?.trim() ?? '';
+}
+
+function stringField(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function workspaceFileViewerLabels(locale?: ResultLocale) {
+  return {
+    title: resultText(locale, { 'zh-CN': '工作区文件', 'en-US': 'Workspace files' }),
+    treeLabel: resultText(locale, { 'zh-CN': '工作区文件树', 'en-US': 'Workspace file tree' }),
+    editorLabel: resultText(locale, { 'zh-CN': '工作区文件编辑器', 'en-US': 'Workspace file editor' }),
+    loading: resultText(locale, { 'zh-CN': '加载中...', 'en-US': 'Loading...' }),
+    emptyTree: resultText(locale, { 'zh-CN': '没有可显示的文件。', 'en-US': 'No files to show.' }),
+    emptyEditor: resultText(locale, { 'zh-CN': '选择一个文件查看内容。', 'en-US': 'Select a file to inspect it.' }),
+    refresh: resultText(locale, { 'zh-CN': '刷新目录', 'en-US': 'Refresh tree' }),
+    collapseAll: resultText(locale, { 'zh-CN': '折叠目录', 'en-US': 'Collapse tree' }),
+    copyPath: resultText(locale, { 'zh-CN': '复制路径', 'en-US': 'Copy path' }),
+    copyContents: resultText(locale, { 'zh-CN': '复制内容', 'en-US': 'Copy contents' }),
+    save: resultText(locale, { 'zh-CN': '保存文件', 'en-US': 'Save file' }),
+    close: resultText(locale, { 'zh-CN': '关闭文件视图', 'en-US': 'Close file view' }),
+    saved: resultText(locale, { 'zh-CN': '已保存', 'en-US': 'Saved' }),
+    unsaved: resultText(locale, { 'zh-CN': '未保存', 'en-US': 'Unsaved' }),
+  };
 }
 
 export function ResultsRenderer({
@@ -214,6 +419,7 @@ export function ResultsRenderer({
   /** Test hook for rendering a non-default focus mode without browser events. */
   initialFocusMode?: ResultFocusMode;
 }) {
+  const locale = resultLocale(config.locale);
   const [resultTab, setResultTab] = useState('primary');
   const [focusMode, setFocusMode] = useState<ResultFocusMode>(initialFocusMode);
   const [inspectedArtifact, setInspectedArtifact] = useState<RuntimeArtifact | undefined>();
@@ -230,7 +436,8 @@ export function ResultsRenderer({
     focusedObjectReference,
     pinnedObjectReferences,
     focusMode,
-  }), [scenarioId, session, defaultSlots, activeRun, focusedObjectReference, pinnedObjectReferences, focusMode]);
+    locale,
+  }), [scenarioId, session, defaultSlots, activeRun, focusedObjectReference, pinnedObjectReferences, focusMode, locale]);
   function handleFocusModeChange(mode: ResultFocusMode) {
     setFocusMode(mode);
     if (mode === 'evidence') setResultTab('evidence');
@@ -256,6 +463,44 @@ export function ResultsRenderer({
     if (result.notice) setObjectActionNotice(result.notice);
     if (result.error) setObjectActionError(result.error);
   };
+  const focusedWorkspaceFilePath = useMemo(() => {
+    if (!focusedObjectReference || focusedObjectReference.kind !== 'file') return '';
+    const path = pathForObjectReference(focusedObjectReference, session)?.trim() ?? '';
+    if (!path || !canHydrateWorkspaceObjectPath(path)) return '';
+    return path;
+  }, [focusedObjectReference, session]);
+  const focusedWorkspaceRoot = useMemo(
+    () => focusedWorkspaceRootForReference(focusedObjectReference, session, config.workspacePath),
+    [config.workspacePath, focusedObjectReference, session],
+  );
+  const workspaceFileConfig = useMemo(
+    () => focusedWorkspaceRoot && focusedWorkspaceRoot !== config.workspacePath
+      ? { ...config, workspacePath: focusedWorkspaceRoot }
+      : config,
+    [config, focusedWorkspaceRoot],
+  );
+  useEffect(() => {
+    if (executionFocus || !focusedWorkspaceFilePath) return undefined;
+    if (workspaceFileEditorMatchesPath(workspaceFileEditor?.file.path, focusedWorkspaceFilePath, workspaceFileConfig.workspacePath)) return undefined;
+    let cancelled = false;
+    setObjectActionError('');
+    void readWorkspaceFile(focusedWorkspaceFilePath, workspaceFileConfig)
+      .then((file) => {
+        if (!cancelled) onWorkspaceFileEditorChange({ file, draft: file.content });
+      })
+      .catch((error) => {
+        if (!cancelled) setObjectActionError(error instanceof Error ? error.message : String(error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    executionFocus,
+    focusedWorkspaceFilePath,
+    onWorkspaceFileEditorChange,
+    workspaceFileConfig,
+    workspaceFileEditor?.file.path,
+  ]);
 
   return (
     <ResultShell
@@ -264,6 +509,7 @@ export function ResultsRenderer({
       focusMode={focusMode}
       activeRun={undefined}
       scenarioId={scenarioId}
+      locale={locale}
       onToggleCollapse={onToggleCollapse}
       onResultTabChange={setResultTab}
       onFocusModeChange={handleFocusModeChange}
@@ -279,9 +525,10 @@ export function ResultsRenderer({
       ) : null}
     >
             {workspaceFileEditor ? (
-              <ResultPaneWorkspaceFileEditor
+              <ResultPaneWorkspaceFileViewer
                 state={workspaceFileEditor}
-                config={config}
+                config={workspaceFileConfig}
+                locale={locale}
                 onChange={onWorkspaceFileEditorChange}
                 onClose={() => onWorkspaceFileEditorChange(null)}
               />
@@ -293,17 +540,19 @@ export function ResultsRenderer({
                 actions={availableObjectActions(focusedObjectReference, session)}
                 error={objectActionError}
                 notice={objectActionNotice}
+                locale={locale}
                 onAction={handleObjectAction}
                 onClear={() => onFocusedObjectChange(undefined)}
               />
             ) : objectActionError ? (
               <div className="object-action-error">{objectActionError}</div>
             ) : null}
-            {!executionFocus && focusedObjectReference ? (
+            {!workspaceFileEditor && !executionFocus && focusedObjectReference ? (
               <WorkspaceObjectPreview
                 reference={focusedObjectReference}
                 session={session}
                 config={config}
+                locale={locale}
                 onPreviewPackageRequest={onPreviewPackageRequest}
                 onObjectReferenceFocus={onFocusedObjectChange}
               />
@@ -316,6 +565,7 @@ export function ResultsRenderer({
                 activeRun={activeRun}
                 focusMode={focusMode}
                 model={rendererModel}
+                locale={locale}
                 onArtifactHandoff={onArtifactHandoff}
                 onInspectArtifact={setInspectedArtifact}
                 onObjectReferenceFocus={onFocusedObjectChange}
@@ -324,7 +574,7 @@ export function ResultsRenderer({
                 onOpenDebugAuditAction={onOpenDebugAuditAction}
               />
             ) : resultTab === 'evidence' ? (
-              <EvidenceMatrix claims={evidenceClaimsForRun(session, activeRun)} artifacts={artifactsForRun(session, activeRun)} />
+              <EvidenceMatrix claims={evidenceClaimsForRun(session, activeRun)} artifacts={artifactsForRun(session, activeRun)} locale={locale} />
             ) : null}
     </ResultShell>
   );
@@ -337,6 +587,7 @@ function PrimaryResult({
   activeRun,
   focusMode,
   model,
+  locale,
   onArtifactHandoff,
   onInspectArtifact,
   onObjectReferenceFocus,
@@ -350,6 +601,7 @@ function PrimaryResult({
   activeRun?: SciForgeRun;
   focusMode: ResultFocusMode;
   model: ResultsRendererViewModel;
+  locale?: ResultLocale;
   onArtifactHandoff: (targetScenario: ScenarioId, artifact: RuntimeArtifact) => void;
   onInspectArtifact: (artifact: RuntimeArtifact) => void;
   onObjectReferenceFocus?: (reference: ObjectReference) => void;
@@ -361,8 +613,14 @@ function PrimaryResult({
   const runtimeState = browserVisibleRuntimeState(session, activeRun, viewPlan);
   const hasResultPreview = model.visibleItems.length > 0 || model.deferredItems.length > 0;
   const compatibilityDiagnostics = runtimeCompatibilityDiagnosticsForPresentation(session, activeRun);
+  const capabilitySummary = capabilityPlanSummaryForSession(session, activeRun?.id);
+  const hasSupportDetails = hasResultPreview
+    || (capabilitySummary && capabilitySummary.status !== 'none')
+    || (!hasResultPreview && compatibilityDiagnostics.length > 0)
+    || model.auditOpen
+    || viewPlan.allItems.length > 0;
   if (focusMode === 'execution') {
-    return <ExecutionOnlyResult session={session} activeRun={activeRun} />;
+    return <ExecutionOnlyResult session={session} activeRun={activeRun} locale={locale} />;
   }
   return (
     <div className="stack">
@@ -387,24 +645,7 @@ function PrimaryResult({
         data-diagnostic-leak={runtimeState.rawLeak ? 'true' : 'false'}
         aria-hidden="true"
       />
-      {viewPlan.blockedDesign ? <UIDesignBlockerCard blocker={viewPlan.blockedDesign} /> : null}
-      {hasResultPreview ? (
-        <RunStatusSummary
-          session={session}
-          activeRun={activeRun}
-          viewPlan={viewPlan}
-          onCommandTextAction={onCommandTextAction}
-        />
-      ) : null}
-      <CapabilityPlanSummaryCard
-        summary={capabilityPlanSummaryForSession(session, activeRun?.id)}
-        session={session}
-        activeRun={activeRun}
-        onOpenDebugAuditAction={onOpenDebugAuditAction}
-      />
-      {!hasResultPreview && compatibilityDiagnostics.length ? (
-        <RuntimeCompatibilityDetails diagnostics={compatibilityDiagnostics} />
-      ) : null}
+      {viewPlan.blockedDesign ? <UIDesignBlockerCard blocker={viewPlan.blockedDesign} locale={locale} /> : null}
       {model.emptyState ? (
         <EmptyArtifactState
           title={model.emptyState.title}
@@ -422,12 +663,16 @@ function PrimaryResult({
         onInspectArtifact={onInspectArtifact}
         onObjectReferenceFocus={onObjectReferenceFocus}
         onDismissResultSlotPresentation={onDismissResultSlotPresentation}
+        locale={locale}
       />
       {model.deferredSections.length ? (
         <details className="result-details-panel">
           <summary>
-            <span>更多结果</span>
-            <Badge variant="muted">{model.deferredItems.length} hidden</Badge>
+            <span>{resultText(locale, { 'zh-CN': '更多结果', 'en-US': 'More results' })}</span>
+            <Badge variant="muted">{resultCountText(locale, model.deferredItems.length, {
+              zh: (count) => `${count} 项已折叠`,
+              en: (count) => `${count} folded`,
+            })}</Badge>
           </summary>
           {model.deferredSections.map((section) => (
             <ResultItemsSection
@@ -441,25 +686,66 @@ function PrimaryResult({
               onInspectArtifact={onInspectArtifact}
               onObjectReferenceFocus={onObjectReferenceFocus}
               onDismissResultSlotPresentation={onDismissResultSlotPresentation}
+              locale={locale}
             />
           ))}
         </details>
       ) : null}
-      {model.auditOpen ? (
-        <RunAuditDetails
-          scenarioId={scenarioId}
-          session={session}
-          activeRun={activeRun}
-          viewPlan={viewPlan}
-          defaultOpen={model.auditDefaultOpen}
-          onOpenDebugAuditAction={onOpenDebugAuditAction}
-          onCommandTextAction={onCommandTextAction}
-        />
-      ) : null}
-      {viewPlan.allItems.length ? (
-        <ViewPlanDetails viewPlan={viewPlan} session={session} activeRun={activeRun} items={model.manifestDiagnostics} />
+      {hasSupportDetails ? (
+        <ResultSupportDetails locale={locale}>
+          {hasResultPreview ? (
+            <RunStatusSummary
+              session={session}
+              activeRun={activeRun}
+              viewPlan={viewPlan}
+              locale={locale}
+              onCommandTextAction={onCommandTextAction}
+            />
+          ) : null}
+          <CapabilityPlanSummaryCard
+            summary={capabilitySummary}
+            session={session}
+            activeRun={activeRun}
+            locale={locale}
+            onOpenDebugAuditAction={onOpenDebugAuditAction}
+          />
+          {!hasResultPreview && compatibilityDiagnostics.length ? (
+            <RuntimeCompatibilityDetails diagnostics={compatibilityDiagnostics} locale={locale} />
+          ) : null}
+          {model.auditOpen ? (
+            <RunAuditDetails
+              scenarioId={scenarioId}
+              session={session}
+              activeRun={activeRun}
+              viewPlan={viewPlan}
+              defaultOpen={model.auditDefaultOpen}
+              locale={locale}
+              onOpenDebugAuditAction={onOpenDebugAuditAction}
+              onCommandTextAction={onCommandTextAction}
+            />
+          ) : null}
+          {viewPlan.allItems.length ? (
+            <ViewPlanDetails viewPlan={viewPlan} session={session} activeRun={activeRun} items={model.manifestDiagnostics} locale={locale} />
+          ) : null}
+        </ResultSupportDetails>
       ) : null}
     </div>
+  );
+}
+
+function ResultSupportDetails({ children, locale }: { children: ReactNode; locale?: ResultLocale }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <details
+      className="result-details-panel subtle"
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
+      <summary>
+        <span>{resultText(locale, { 'zh-CN': '更多', 'en-US': 'More' })}</span>
+        <Badge variant="muted">{resultText(locale, { 'zh-CN': '已折叠', 'en-US': 'folded' })}</Badge>
+      </summary>
+      {expanded ? <div className="stack">{children}</div> : null}
+    </details>
   );
 }
 
@@ -467,11 +753,13 @@ function CapabilityPlanSummaryCard({
   summary,
   session,
   activeRun,
+  locale,
   onOpenDebugAuditAction,
 }: {
   summary?: CapabilityPlanSummary;
   session: SciForgeSession;
   activeRun?: SciForgeRun;
+  locale?: ResultLocale;
   onOpenDebugAuditAction?: (action: OpenDebugAuditUIAction) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -491,20 +779,25 @@ function CapabilityPlanSummaryCard({
       }}
     >
       <summary>
-        <span>能力计划</span>
-        <Badge variant="muted">{summary.debugRefs.length ? `${summary.debugRefs.length} 条` : '已记录'}</Badge>
+        <span>{resultText(locale, { 'zh-CN': '计划', 'en-US': 'Plan' })}</span>
+        <Badge variant="muted">{summary.debugRefs.length
+          ? resultCountText(locale, summary.debugRefs.length, {
+            zh: (count) => `${count} 条来源`,
+            en: (count) => `${count} sources`,
+          })
+          : resultText(locale, { 'zh-CN': '已记录', 'en-US': 'saved' })}</Badge>
       </summary>
       {expanded ? (
         <Card className="capability-plan-summary">
           <SectionHeader
             icon={Sparkles}
-            title="能力计划"
-            subtitle="自动发现的能力组合"
+            title={resultText(locale, { 'zh-CN': '运行计划', 'en-US': 'Run plan' })}
+            subtitle={resultText(locale, { 'zh-CN': '已选择的工具', 'en-US': 'Selected tools' })}
           />
-          <p>{summary.summary}</p>
+          <p>{boundedRightPaneText(summary.summary, 800)}</p>
           {summary.debugRefs.length ? (
             <div className="inspector-ref-list">
-              {summary.debugRefs.slice(0, 8).map((ref) => <code key={ref}>{ref}</code>)}
+              {rightPaneSafeRefs(summary.debugRefs, 8).map((ref) => <code key={ref}>{ref}</code>)}
             </div>
           ) : null}
         </Card>
@@ -513,71 +806,71 @@ function CapabilityPlanSummaryCard({
   );
 }
 
-function ExecutionOnlyResult({ session, activeRun }: { session: SciForgeSession; activeRun?: SciForgeRun }) {
+function ExecutionOnlyResult({ session, activeRun, locale }: { session: SciForgeSession; activeRun?: SciForgeRun; locale?: ResultLocale }) {
   const projection = conversationProjectionForSession(session, activeRun ?? session.runs.at(-1));
   const units = auditExecutionUnitsForRun(session, activeRun);
   if (projection) {
     return (
       <div className="stack">
-        <ProjectionExecutionOnlyResult projection={projection} />
-        <ExecutionPanel session={session} executionUnits={units} activeRun={activeRun} embedded />
+        <ProjectionExecutionOnlyResult projection={projection} locale={locale} />
+        <ExecutionPanel session={session} executionUnits={units} activeRun={activeRun} embedded locale={locale} />
       </div>
     );
   }
   return (
     <div className="stack">
-      <ExecutionPanel session={session} executionUnits={units} activeRun={activeRun} embedded />
+      <ExecutionPanel session={session} executionUnits={units} activeRun={activeRun} embedded locale={locale} />
     </div>
   );
 }
 
-function ProjectionExecutionOnlyResult({ projection }: { projection: UiConversationProjection }) {
+function ProjectionExecutionOnlyResult({ projection, locale }: { projection: UiConversationProjection; locale?: ResultLocale }) {
   const events = projection.executionProcess.slice(-12);
   const status = conversationProjectionStatus(projection);
   return (
     <div className="stack">
       <Card className="code-card">
-        <SectionHeader icon={Terminal} title="运行过程" subtitle={projectionStatusLabel(status)} />
+        <SectionHeader icon={Terminal} title={resultText(locale, { 'zh-CN': '活动', 'en-US': 'Activity' })} subtitle={projectionStatusLabel(status, locale)} />
         {events.length ? (
           <div className="run-status-lines">
             {events.map((event) => (
-              <span key={event.eventId}>{projectionEventLabel(event.type, status)}: {projectionEventSummary(event.summary || event.eventId, status)}</span>
+              <span key={event.eventId}>{projectionEventLabel(event.type, status, locale)}: {boundedRightPaneText(projectionEventSummary(event.summary || event.eventId, status, locale), 500)}</span>
             ))}
           </div>
-        ) : <p className="empty-state">当前结果没有声明执行过程事件。</p>}
+        ) : <p className="empty-state">{resultText(locale, { 'zh-CN': '此结果还没有关联活动。', 'en-US': 'No activity has been attached to this result yet.' })}</p>}
       </Card>
     </div>
   );
 }
 
-function projectionStatusLabel(status: ReturnType<typeof conversationProjectionStatus>) {
-  const labels: Record<ReturnType<typeof conversationProjectionStatus>, string> = {
-    idle: '未执行',
-    planned: '已计划',
-    dispatched: '已分发',
-    'partial-ready': '部分结果',
-    'output-materialized': '已保存输出',
-    validated: '已验证边界',
-    'visible-not-live-acceptance': '回答已显示',
-    satisfied: '完成',
-    'degraded-result': '降级结果',
-    'external-blocked': '外部阻塞',
-    'repair-needed': '需恢复',
-    'needs-human': '需人工处理',
-    'background-running': '后台继续中',
+function projectionStatusLabel(status: ReturnType<typeof conversationProjectionStatus>, locale?: ResultLocale) {
+  const labels: Record<ReturnType<typeof conversationProjectionStatus>, Record<ResultLocale, string>> = {
+    idle: { 'zh-CN': '未运行', 'en-US': 'Not run' },
+    planned: { 'zh-CN': '已计划', 'en-US': 'Planned' },
+    dispatched: { 'zh-CN': '已开始', 'en-US': 'Started' },
+    'partial-ready': { 'zh-CN': '部分结果', 'en-US': 'Partial result' },
+    'output-materialized': { 'zh-CN': '输出已保存', 'en-US': 'Output saved' },
+    validated: { 'zh-CN': '已验证', 'en-US': 'Validated' },
+    'visible-not-live-acceptance': { 'zh-CN': '回答已显示', 'en-US': 'Answer shown' },
+    satisfied: { 'zh-CN': '完成', 'en-US': 'Complete' },
+    'degraded-result': { 'zh-CN': '部分结果', 'en-US': 'Partial result' },
+    'external-blocked': { 'zh-CN': '已阻塞', 'en-US': 'Blocked' },
+    'repair-needed': { 'zh-CN': '需要恢复', 'en-US': 'Needs recovery' },
+    'needs-human': { 'zh-CN': '需要输入', 'en-US': 'Needs input' },
+    'background-running': { 'zh-CN': '仍在运行', 'en-US': 'Still running' },
   };
-  return labels[status];
+  return resultText(locale, labels[status]);
 }
 
-function projectionEventLabel(type: string, status: ReturnType<typeof conversationProjectionStatus>) {
-  if (status === 'visible-not-live-acceptance' || /native.?codex.?message/i.test(type)) return '回答';
-  if (/artifact|output|materialized/i.test(type)) return '产物';
-  if (/verification|validated/i.test(type)) return '验证';
-  return '过程';
+function projectionEventLabel(type: string, status: ReturnType<typeof conversationProjectionStatus>, locale?: ResultLocale) {
+  if (status === 'visible-not-live-acceptance' || /native.?codex.?message/i.test(type)) return resultText(locale, { 'zh-CN': '回答', 'en-US': 'Answer' });
+  if (/artifact|output|materialized/i.test(type)) return resultText(locale, { 'zh-CN': '输出', 'en-US': 'Output' });
+  if (/verification|validated/i.test(type)) return resultText(locale, { 'zh-CN': '检查', 'en-US': 'Check' });
+  return resultText(locale, { 'zh-CN': '活动', 'en-US': 'Activity' });
 }
 
-function projectionEventSummary(summary: string, status: ReturnType<typeof conversationProjectionStatus>) {
-  if (status === 'visible-not-live-acceptance' || /native.?codex.?message/i.test(summary)) return '回答已在聊天中显示';
+function projectionEventSummary(summary: string, status: ReturnType<typeof conversationProjectionStatus>, locale?: ResultLocale) {
+  if (status === 'visible-not-live-acceptance' || /native.?codex.?message/i.test(summary)) return resultText(locale, { 'zh-CN': '回答已显示在聊天中', 'en-US': 'Answer shown in chat' });
   return summary;
 }
 
@@ -585,11 +878,13 @@ function RunStatusSummary({
   session,
   activeRun,
   viewPlan,
+  locale,
   onCommandTextAction,
 }: {
   session: SciForgeSession;
   activeRun?: SciForgeRun;
   viewPlan: RuntimeResolvedViewPlan;
+  locale?: ResultLocale;
   onCommandTextAction?: (action: CommandTextUIAction) => void;
 }) {
   const run = activeRun ?? session.runs.at(-1);
@@ -613,25 +908,28 @@ function RunStatusSummary({
     <Card className={cx('run-status-summary', failureDriven ? 'failed' : presentationState.kind)}>
       <SectionHeader
         icon={runtimeDriftDiagnostics.length && !statusDriven ? Shield : AlertTriangle}
-        title={failureDriven ? '运行需要处理' : projectionStateDriven ? presentationState.title : runtimeDriftDiagnostics.length ? '历史 session 需要兼容性检查' : presentationState.title}
-        subtitle={run ? runStatusSubtitle(run.status, presentationState.kind) : '等待本轮结果'}
+        title={failureDriven ? resultText(locale, { 'zh-CN': '需要处理', 'en-US': 'Needs attention' }) : projectionStateDriven ? presentationState.title : runtimeDriftDiagnostics.length ? resultText(locale, { 'zh-CN': '兼容性检查', 'en-US': 'Compatibility check' }) : presentationState.title}
+        subtitle={run ? runStatusSubtitle(run.status, presentationState.kind, locale) : resultText(locale, { 'zh-CN': '等待结果', 'en-US': 'Waiting for results' })}
       />
-      <RunPresentationStateSummary state={presentationState} />
-      {runtimeDriftDiagnostics.map((diagnostic) => <RuntimeCompatibilityDiagnosticSummary key={diagnostic.id} diagnostic={diagnostic} />)}
+      <RunPresentationStateSummary state={presentationState} locale={locale} />
+      {runtimeDriftDiagnostics.map((diagnostic) => <RuntimeCompatibilityDiagnosticSummary key={diagnostic.id} diagnostic={diagnostic} locale={locale} />)}
       {blockers.length ? (
         <div className="run-status-lines">
-          {blockers.map((line) => <span key={line}>{compactVisibleFailureText(line)}</span>)}
+          {blockers.map((line) => <span key={line}>{boundedRightPaneText(compactVisibleFailureText(line, locale), 500)}</span>)}
         </div>
       ) : null}
       {failures.map((unit) => (
         <div className="run-failure-card" key={unit.id}>
-          <strong>过程需要处理</strong>
-          <p>{compactVisibleFailureText(unit.failureReason || unit.selfHealReason || unit.nextStep || '执行失败，详情已保留在运行审计中。')}</p>
-          <p className="empty-state">已保留 {executionUnitRefCount(unit)} 条恢复线索。</p>
+          <strong>{resultText(locale, { 'zh-CN': '动作需要处理', 'en-US': 'Action needs attention' })}</strong>
+          <p>{boundedRightPaneText(compactVisibleFailureText(unit.failureReason || unit.selfHealReason || unit.nextStep || resultText(locale, { 'zh-CN': '动作失败，详情在下方可查看。', 'en-US': 'The action failed. Details are available below.' }), locale), 500)}</p>
+          <p className="empty-state">{resultCountText(locale, executionUnitRefCount(unit), {
+            zh: (count) => `已保存 ${count} 条恢复引用。`,
+            en: (count) => `${count} recovery reference${count === 1 ? '' : 's'} saved.`,
+          })}</p>
         </div>
       ))}
-      {validationFailures.map((failure) => <ContractValidationFailureSummary key={contractValidationFailureKey(failure)} failure={failure} compact />)}
-      {repairStates.map((state) => <BackendRepairStateSummary key={state.id} state={state} compact />)}
+      {validationFailures.map((failure) => <ContractValidationFailureSummary key={contractValidationFailureKey(failure)} failure={failure} compact locale={locale} />)}
+      {repairStates.map((state) => <BackendRepairStateSummary key={state.id} state={state} compact locale={locale} />)}
       {recoverActions.length ? (
         <div className="run-recover-actions">
           {recoverActions.map((action) => (
@@ -643,7 +941,7 @@ function RunStatusSummary({
                   if (commandAction) onCommandTextAction?.(commandAction);
                 })}
             >
-              {action}
+              {boundedRightPaneText(action, 500)}
             </button>
           ))}
         </div>
@@ -652,35 +950,35 @@ function RunStatusSummary({
   );
 }
 
-function runStatusSubtitle(status: SciForgeRun['status'], presentationKind: RunPresentationState['kind']) {
-  if (status === 'running') return '正在执行';
-  if (status === 'failed') return '需要处理';
-  if (status === 'cancelled') return '已取消';
-  if (presentationKind === 'empty') return '等待可展示结果';
-  if (presentationKind === 'partial') return '部分结果已就绪';
-  if (presentationKind === 'recoverable') return '可继续恢复';
-  if (presentationKind === 'needs-human') return '需要确认';
-  return '已完成';
+function runStatusSubtitle(status: SciForgeRun['status'], presentationKind: RunPresentationState['kind'], locale?: ResultLocale) {
+  if (status === 'running') return resultText(locale, { 'zh-CN': '运行中', 'en-US': 'Running' });
+  if (status === 'failed') return resultText(locale, { 'zh-CN': '需要处理', 'en-US': 'Needs attention' });
+  if (status === 'cancelled') return resultText(locale, { 'zh-CN': '已取消', 'en-US': 'Cancelled' });
+  if (presentationKind === 'empty') return resultText(locale, { 'zh-CN': '等待结果', 'en-US': 'Waiting for results' });
+  if (presentationKind === 'partial') return resultText(locale, { 'zh-CN': '部分结果已就绪', 'en-US': 'Partial results ready' });
+  if (presentationKind === 'recoverable') return resultText(locale, { 'zh-CN': '可恢复', 'en-US': 'Recoverable' });
+  if (presentationKind === 'needs-human') return resultText(locale, { 'zh-CN': '需要确认', 'en-US': 'Needs confirmation' });
+  return resultText(locale, { 'zh-CN': '完成', 'en-US': 'Done' });
 }
 
-function RuntimeCompatibilityDiagnosticSummary({ diagnostic }: { diagnostic: RuntimeCompatibilityDiagnostic }) {
+function RuntimeCompatibilityDiagnosticSummary({ diagnostic, locale }: { diagnostic: RuntimeCompatibilityDiagnostic; locale?: ResultLocale }) {
   return (
     <div className="run-failure-card">
       <strong>{diagnostic.kind}</strong>
-      <p>{compactVisibleFailureText(diagnostic.reason)}</p>
+      <p>{boundedRightPaneText(compactVisibleFailureText(diagnostic.reason, locale), 500)}</p>
       <div className="slot-meta">
-        <strong>兼容性指纹</strong>
-        <code>current: {diagnostic.current.compatibilityVersion}</code>
-        {diagnostic.persisted ? <code>persisted: {diagnostic.persisted.compatibilityVersion}</code> : null}
+        <strong>{resultText(locale, { 'zh-CN': '兼容性', 'en-US': 'Compatibility' })}</strong>
+        <code>{resultText(locale, { 'zh-CN': '当前', 'en-US': 'current' })}: {diagnostic.current.compatibilityVersion}</code>
+        {diagnostic.persisted ? <code>{resultText(locale, { 'zh-CN': '已保存', 'en-US': 'persisted' })}: {diagnostic.persisted.compatibilityVersion}</code> : null}
       </div>
       <div className="run-recover-actions">
-        {diagnostic.recoverableActions.map((action) => <code key={action}>{action}</code>)}
+        {diagnostic.recoverableActions.map((action) => <code key={action}>{rightPaneInlineLabel(action)}</code>)}
       </div>
     </div>
   );
 }
 
-function RuntimeCompatibilityDetails({ diagnostics }: { diagnostics: RuntimeCompatibilityDiagnostic[] }) {
+function RuntimeCompatibilityDetails({ diagnostics, locale }: { diagnostics: RuntimeCompatibilityDiagnostic[]; locale?: ResultLocale }) {
   const [expanded, setExpanded] = useState(false);
   if (!diagnostics.length) return null;
   return (
@@ -689,44 +987,47 @@ function RuntimeCompatibilityDetails({ diagnostics }: { diagnostics: RuntimeComp
       onToggle={(event) => setExpanded(event.currentTarget.open)}
     >
       <summary>
-        <span>验证</span>
-        <Badge variant="muted">{diagnostics.length} 条</Badge>
+        <span>{resultText(locale, { 'zh-CN': '检查', 'en-US': 'Checks' })}</span>
+        <Badge variant="muted">{resultCountText(locale, diagnostics.length, {
+          zh: (count) => `${count} 项检查`,
+          en: (count) => `${count} check${count === 1 ? '' : 's'}`,
+        })}</Badge>
       </summary>
       {expanded ? (
         <div className="stack">
-          {diagnostics.map((diagnostic) => <RuntimeCompatibilityDiagnosticSummary key={diagnostic.id} diagnostic={diagnostic} />)}
+          {diagnostics.map((diagnostic) => <RuntimeCompatibilityDiagnosticSummary key={diagnostic.id} diagnostic={diagnostic} locale={locale} />)}
         </div>
       ) : null}
     </details>
   );
 }
 
-function RunPresentationStateSummary({ state }: { state: RunPresentationState }) {
+function RunPresentationStateSummary({ state, locale }: { state: RunPresentationState; locale?: ResultLocale }) {
   if (state.kind === 'ready' && !state.nextSteps.length) return null;
   return (
     <div className="run-presentation-state">
       <div className="run-status-lines">
-        <span>{state.reason}</span>
+        <span>{boundedRightPaneText(state.reason, 800)}</span>
       </div>
       {state.availableArtifacts.length ? (
         <div className="slot-meta">
-          <strong>可用结果</strong>
+          <strong>{resultText(locale, { 'zh-CN': '结果', 'en-US': 'Results' })}</strong>
           {state.availableArtifacts.slice(0, 6).map((artifact) => (
-            <code key={artifact.id}>{artifact.title ?? '结果'}</code>
+            <code key={artifact.id}>{rightPaneInlineLabel(artifact.title ?? resultText(locale, { 'zh-CN': '结果', 'en-US': 'Result' }))}</code>
           ))}
         </div>
       ) : null}
-      {state.progress ? <RunProgressSummary progress={state.progress} /> : null}
+      {state.progress ? <RunProgressSummary progress={state.progress} locale={locale} /> : null}
       {state.nextSteps.length ? (
         <div className="run-recover-actions">
-          {state.nextSteps.map((action) => <code key={action}>{action}</code>)}
+          {state.nextSteps.map((action) => <code key={action}>{boundedRightPaneText(action, 500)}</code>)}
         </div>
       ) : null}
     </div>
   );
 }
 
-function RunProgressSummary({ progress }: { progress: NonNullable<RunPresentationState['progress']> }) {
+function RunProgressSummary({ progress, locale }: { progress: NonNullable<RunPresentationState['progress']>; locale?: ResultLocale }) {
   const hasProgress = progress.completedParts.length || progress.currentStage || progress.backgroundStatus || progress.safeActions.length;
   if (!hasProgress) return null;
   return (
@@ -739,22 +1040,22 @@ function RunProgressSummary({ progress }: { progress: NonNullable<RunPresentatio
     >
       {progress.completedParts.length ? (
         <div className="slot-meta">
-          <strong>已完成部分</strong>
+          <strong>{resultText(locale, { 'zh-CN': '已完成', 'en-US': 'Completed' })}</strong>
           {progress.completedParts.slice(0, 6).map((part) => (
-            <code key={`${part.id}-${part.ref ?? ''}`}>{part.label}</code>
+            <code key={`${part.id}-${part.ref ?? ''}`}>{rightPaneInlineLabel(part.label)}</code>
           ))}
         </div>
       ) : null}
       {progress.currentStage || progress.backgroundStatus ? (
         <div className="run-status-lines">
-          {progress.currentStage ? <span>当前阶段：{progress.currentStage.label} · {progress.currentStage.status}</span> : null}
-          {progress.backgroundStatus ? <span>后台状态：{progress.backgroundStatus}</span> : null}
+          {progress.currentStage ? <span>{resultText(locale, { 'zh-CN': '当前步骤', 'en-US': 'Current step' })}: {rightPaneInlineLabel(progress.currentStage.label)} · {rightPaneInlineLabel(progress.currentStage.status)}</span> : null}
+          {progress.backgroundStatus ? <span>{resultText(locale, { 'zh-CN': '后台', 'en-US': 'Background' })}: {rightPaneInlineLabel(progress.backgroundStatus)}</span> : null}
         </div>
       ) : null}
       {progress.safeActions.length ? (
         <div className="run-recover-actions">
           {progress.safeActions.map((action) => (
-            <code key={`${action.kind}-${action.label}-${action.ref ?? ''}`}>{action.safe ? '可继续' : '需确认'} · {action.label}</code>
+            <code key={`${action.kind}-${action.label}-${action.ref ?? ''}`}>{action.safe ? resultText(locale, { 'zh-CN': '可用', 'en-US': 'Ready' }) : resultText(locale, { 'zh-CN': '需确认', 'en-US': 'Confirm' })} · {rightPaneInlineLabel(action.label)}</code>
           ))}
         </div>
       ) : null}
@@ -768,6 +1069,7 @@ function RunAuditDetails({
   activeRun,
   viewPlan,
   defaultOpen,
+  locale,
   onOpenDebugAuditAction,
   onCommandTextAction,
 }: {
@@ -776,6 +1078,7 @@ function RunAuditDetails({
   activeRun?: SciForgeRun;
   viewPlan: RuntimeResolvedViewPlan;
   defaultOpen?: boolean;
+  locale?: ResultLocale;
   onOpenDebugAuditAction?: (action: OpenDebugAuditUIAction) => void;
   onCommandTextAction?: (action: CommandTextUIAction) => void;
 }) {
@@ -799,19 +1102,30 @@ function RunAuditDetails({
       }}
     >
       <summary>
-        <span>过程记录</span>
+        <span>{resultText(locale, { 'zh-CN': '活动', 'en-US': 'Activity' })}</span>
         <Badge variant={failureCount ? 'danger' : 'muted'}>
-          {failureCount ? `${failureCount} 项需处理` : `${units.length} 条`}
+          {failureCount
+            ? resultCountText(locale, failureCount, {
+              zh: (count) => `${count} 个问题`,
+              en: (count) => `${count} issue${count === 1 ? '' : 's'}`,
+            })
+            : resultCountText(locale, units.length, {
+              zh: (count) => `${count} 步`,
+              en: (count) => `${count} steps`,
+            })}
         </Badge>
       </summary>
       {expanded ? (
         <>
-          <RunAuditOverview session={session} activeRun={activeRun} onCommandTextAction={onCommandTextAction} />
-          <ExecutionPanel session={session} executionUnits={units} embedded />
-          <NotebookTimeline scenarioId={scenarioId} notebook={session.notebook} embedded />
+          <RunAuditOverview session={session} activeRun={activeRun} locale={locale} onCommandTextAction={onCommandTextAction} />
+          <ExecutionPanel session={session} executionUnits={units} embedded locale={locale} />
+          <NotebookTimeline scenarioId={scenarioId} notebook={session.notebook} embedded locale={locale} />
           <Card className="code-card">
-            <SectionHeader icon={Terminal} title="过程记录" />
-            <p className="empty-state">已保留 {rawItems.length} 条过程材料，可用于排查与复现。</p>
+            <SectionHeader icon={Terminal} title={resultText(locale, { 'zh-CN': '支持活动', 'en-US': 'Supporting Activity' })} />
+            <p className="empty-state">{resultCountText(locale, rawItems.length, {
+              zh: (count) => `已保存 ${count} 条支持记录供查看。`,
+              en: (count) => `Saved ${count} supporting records for review.`,
+            })}</p>
           </Card>
         </>
       ) : null}
@@ -822,10 +1136,12 @@ function RunAuditDetails({
 function RunAuditOverview({
   session,
   activeRun,
+  locale,
   onCommandTextAction,
 }: {
   session: SciForgeSession;
   activeRun?: SciForgeRun;
+  locale?: ResultLocale;
   onCommandTextAction?: (action: CommandTextUIAction) => void;
 }) {
   const blockers = runAuditBlockers(session, activeRun);
@@ -835,12 +1151,12 @@ function RunAuditOverview({
   const repairStates = backendRepairStates(session, activeRun);
   return (
     <Card className="audit-overview">
-      <SectionHeader icon={Shield} title="审计摘要" subtitle="验证、恢复和复现线索" />
+      <SectionHeader icon={Shield} title={resultText(locale, { 'zh-CN': '问题摘要', 'en-US': 'Issue Summary' })} subtitle={resultText(locale, { 'zh-CN': '检查和恢复记录', 'en-US': 'Checks and recovery notes' })} />
       {blockers.length ? (
         <div className="run-status-lines">
-          {blockers.map((line) => <span key={line}>{line}</span>)}
+          {blockers.map((line) => <span key={line}>{boundedRightPaneText(line, 500)}</span>)}
         </div>
-      ) : <p className="empty-state">没有阻塞项；过程材料已在下方保留。</p>}
+      ) : <p className="empty-state">{resultText(locale, { 'zh-CN': '没有阻塞项。支持活动保留在下方。', 'en-US': 'No blockers. Supporting activity is kept below.' })}</p>}
       {recoverActions.length ? (
         <div className="run-recover-actions">
           {recoverActions.map((action) => (
@@ -852,22 +1168,25 @@ function RunAuditOverview({
                   if (commandAction) onCommandTextAction?.(commandAction);
                 })}
             >
-              {action}
+              {boundedRightPaneText(action, 500)}
             </button>
           ))}
         </div>
       ) : null}
       {validationFailures.length ? (
         <div className="stack">
-          {validationFailures.map((failure) => <ContractValidationFailureSummary key={contractValidationFailureKey(failure)} failure={failure} />)}
+          {validationFailures.map((failure) => <ContractValidationFailureSummary key={contractValidationFailureKey(failure)} failure={failure} locale={locale} />)}
         </div>
       ) : null}
       {repairStates.length ? (
         <div className="stack">
-          {repairStates.map((state) => <BackendRepairStateSummary key={state.id} state={state} />)}
+          {repairStates.map((state) => <BackendRepairStateSummary key={state.id} state={state} locale={locale} />)}
         </div>
       ) : null}
-      {refs.length ? <p className="empty-state">已保留 {refs.length} 条恢复线索。</p> : null}
+      {refs.length ? <p className="empty-state">{resultCountText(locale, refs.length, {
+        zh: (count) => `已保存 ${count} 条恢复引用。`,
+        en: (count) => `${count} recovery reference${count === 1 ? '' : 's'} saved.`,
+      })}</p> : null}
     </Card>
   );
 }
@@ -876,60 +1195,60 @@ function executionUnitRefCount(unit: RuntimeExecutionUnit) {
   return [unit.codeRef, unit.stdoutRef, unit.stderrRef, unit.outputRef, unit.diffRef].filter(Boolean).length;
 }
 
-function ContractValidationFailureSummary({ failure, compact = false }: { failure: ContractValidationFailure; compact?: boolean }) {
+function ContractValidationFailureSummary({ failure, compact = false, locale }: { failure: ContractValidationFailure; compact?: boolean; locale?: ResultLocale }) {
   const issueLines = failure.issues.map((issue) => [
     issue.path || issue.missingField || issue.invalidRef || issue.unresolvedUri || 'issue',
     issue.message,
   ].filter(Boolean).join(': '));
   return (
     <div className="run-failure-card">
-      <strong>验证未通过 · {contractFailureKindLabel(failure.failureKind)}</strong>
-      <p>{compact ? compactVisibleFailureText(failure.failureReason) : failure.failureReason}</p>
+      <strong>{resultText(locale, { 'zh-CN': '验证未通过', 'en-US': 'Validation failed' })} · {contractFailureKindLabel(failure.failureKind, locale)}</strong>
+      <p>{boundedRightPaneText(compact ? compactVisibleFailureText(failure.failureReason, locale) : failure.failureReason, 800)}</p>
       <div className="slot-meta">
-        <code>规则：{failure.contractId}</code>
-        <code>能力：{failure.capabilityId}</code>
-        {failure.schemaPath ? <code>位置：{failure.schemaPath}</code> : null}
+        <code>{resultText(locale, { 'zh-CN': '规则', 'en-US': 'Rule' })}: {rightPaneInlineLabel(failure.contractId)}</code>
+        <code>{resultText(locale, { 'zh-CN': '能力', 'en-US': 'Capability' })}: {rightPaneInlineLabel(failure.capabilityId)}</code>
+        {failure.schemaPath ? <code>{resultText(locale, { 'zh-CN': '位置', 'en-US': 'Location' })}: {rightPaneInlineLabel(failure.schemaPath)}</code> : null}
       </div>
       {failure.missingFields.length || failure.invalidRefs.length || failure.unresolvedUris.length ? (
         <div className="slot-meta">
-          {failure.missingFields.map((field) => <code key={`missing-${field}`}>缺少字段：{field}</code>)}
-          {failure.invalidRefs.map((ref) => <code key={`invalid-${ref}`}>不可用线索：{ref}</code>)}
-          {failure.unresolvedUris.map((uri) => <code key={`unresolved-${uri}`}>无法打开：{uri}</code>)}
+          {failure.missingFields.map((field) => <code key={`missing-${field}`}>{resultText(locale, { 'zh-CN': '缺少字段', 'en-US': 'Missing field' })}: {rightPaneInlineLabel(field)}</code>)}
+          {failure.invalidRefs.map((ref) => <code key={`invalid-${ref}`}>{resultText(locale, { 'zh-CN': '不可用线索', 'en-US': 'Unavailable reference' })}: {rightPaneInlineLabel(ref)}</code>)}
+          {failure.unresolvedUris.map((uri) => <code key={`unresolved-${uri}`}>{resultText(locale, { 'zh-CN': '无法打开', 'en-US': 'Cannot open' })}: {rightPaneInlineLabel(uri)}</code>)}
         </div>
       ) : null}
       {!compact && issueLines.length ? (
         <div className="run-status-lines">
-          {issueLines.slice(0, 6).map((line) => <span key={line}>{line}</span>)}
+          {issueLines.slice(0, 6).map((line) => <span key={line}>{boundedRightPaneText(line, 500)}</span>)}
         </div>
       ) : null}
       {failure.relatedRefs.length ? (
         <div className="inspector-ref-list">
-          {failure.relatedRefs.map((ref) => <code key={`related-${ref}`}>相关线索：{ref}</code>)}
+          {rightPaneSafeRefs(failure.relatedRefs, 8).map((ref) => <code key={`related-${ref}`}>{resultText(locale, { 'zh-CN': '相关线索', 'en-US': 'Related reference' })}: {ref}</code>)}
         </div>
       ) : null}
-      {failure.nextStep ? <p className="empty-state">建议：{failure.nextStep}</p> : null}
+      {failure.nextStep ? <p className="empty-state">{resultText(locale, { 'zh-CN': '建议', 'en-US': 'Suggestion' })}: {boundedRightPaneText(failure.nextStep, 500)}</p> : null}
     </div>
   );
 }
 
-function BackendRepairStateSummary({ state, compact = false }: { state: BackendRepairState; compact?: boolean }) {
-  const statusText = [state.status ? `状态：${state.status}` : undefined, state.failureReason].filter(Boolean).join(' · ') || '已记录恢复线索';
+function BackendRepairStateSummary({ state, compact = false, locale }: { state: BackendRepairState; compact?: boolean; locale?: ResultLocale }) {
+  const statusText = [state.status ? `${resultText(locale, { 'zh-CN': '状态', 'en-US': 'Status' })}: ${state.status}` : undefined, state.failureReason].filter(Boolean).join(' · ') || resultText(locale, { 'zh-CN': '已记录恢复线索', 'en-US': 'Recovery note saved' });
   return (
     <div className="run-failure-card">
-      <strong>恢复线索 · {repairStateLabel(state.label)}</strong>
-      <p>{compact ? compactVisibleFailureText(statusText) : statusText}</p>
+      <strong>{resultText(locale, { 'zh-CN': '恢复线索', 'en-US': 'Recovery note' })} · {repairStateLabel(state.label, locale)}</strong>
+      <p>{boundedRightPaneText(compact ? compactVisibleFailureText(statusText, locale) : statusText, 800)}</p>
       <div className="slot-meta">
-        {state.sourceRunId ? <code>来源记录：{state.sourceRunId}</code> : null}
-        {state.repairRunId ? <code>恢复记录：{state.repairRunId}</code> : null}
+        {state.sourceRunId ? <code>{resultText(locale, { 'zh-CN': '来源记录', 'en-US': 'Source record' })}: {rightPaneInlineLabel(state.sourceRunId)}</code> : null}
+        {state.repairRunId ? <code>{resultText(locale, { 'zh-CN': '恢复记录', 'en-US': 'Repair record' })}: {rightPaneInlineLabel(state.repairRunId)}</code> : null}
       </div>
       {state.refs.length ? (
         <div className="inspector-ref-list">
-          {state.refs.map((ref) => <code key={`${state.id}-${ref}`}>{ref}</code>)}
+          {rightPaneSafeRefs(state.refs, 8).map((ref) => <code key={`${state.id}-${ref}`}>{ref}</code>)}
         </div>
       ) : null}
       {!compact && state.history.length ? (
         <div className="run-status-lines">
-          {state.history.slice(0, 6).map((line) => <span key={line}>{line}</span>)}
+          {state.history.slice(0, 6).map((line) => <span key={line}>{boundedRightPaneText(line, 500)}</span>)}
         </div>
       ) : null}
     </div>
@@ -1004,13 +1323,13 @@ function evidenceClaimsForRun(session: SciForgeSession, activeRun?: SciForgeRun)
   });
 }
 
-function compactVisibleFailureText(value: string) {
+function compactVisibleFailureText(value: string, locale?: ResultLocale) {
   const text = value.replace(/\s+/g, ' ').trim();
   const reasonMatch = text.match(/reason=([^.;]+(?:[.;]|$))/i);
   const previousFailureMatch = text.match(/Previous failure:\s*([^.;]+(?:[.;]|$))/i);
   const contractMatch = text.match(/ContractValidationFailure(?:\s+|\()([a-z-]+)/i);
   const pieces = [
-    contractMatch ? `验证未通过 · ${contractFailureKindLabel(contractMatch[1])}` : undefined,
+    contractMatch ? `${resultText(locale, { 'zh-CN': '验证未通过', 'en-US': 'Validation failed' })} · ${contractFailureKindLabel(contractMatch[1], locale)}` : undefined,
     previousFailureMatch?.[1]?.replace(/[.;]\s*$/, ''),
     reasonMatch?.[1]?.replace(/[.;]\s*$/, ''),
   ].filter((piece): piece is string => Boolean(piece));
@@ -1018,27 +1337,27 @@ function compactVisibleFailureText(value: string) {
   return compact.length > 260 ? `${compact.slice(0, 257).trim()}...` : compact;
 }
 
-function contractFailureKindLabel(kind: string) {
-  const labels: Record<string, string> = {
-    'payload-schema': '结果格式',
-    'artifact-schema': '结果内容',
-    reference: '线索',
-    'ui-manifest': '展示配置',
-    'work-evidence': '工作证据',
-    verifier: '验证',
-    unknown: '未知',
+function contractFailureKindLabel(kind: string, locale?: ResultLocale) {
+  const labels: Record<string, Record<ResultLocale, string>> = {
+    'payload-schema': { 'zh-CN': '结果格式', 'en-US': 'Result format' },
+    'artifact-schema': { 'zh-CN': '结果内容', 'en-US': 'Result content' },
+    reference: { 'zh-CN': '引用', 'en-US': 'Reference' },
+    'ui-manifest': { 'zh-CN': '视图配置', 'en-US': 'View config' },
+    'work-evidence': { 'zh-CN': '工作证据', 'en-US': 'Work evidence' },
+    verifier: { 'zh-CN': '检查', 'en-US': 'Check' },
+    unknown: { 'zh-CN': '未知', 'en-US': 'Unknown' },
   };
-  return labels[kind] ?? kind;
+  return labels[kind] ? resultText(locale, labels[kind]) : kind;
 }
 
-function repairStateLabel(label: string) {
-  if (/acceptance/i.test(label)) return '验收恢复';
-  if (/background/i.test(label)) return '后台恢复';
-  if (/repair/i.test(label)) return '恢复记录';
-  return '恢复记录';
+function repairStateLabel(label: string, locale?: ResultLocale) {
+  if (/acceptance/i.test(label)) return resultText(locale, { 'zh-CN': '验收恢复', 'en-US': 'Acceptance recovery' });
+  if (/background/i.test(label)) return resultText(locale, { 'zh-CN': '后台恢复', 'en-US': 'Background recovery' });
+  if (/repair/i.test(label)) return resultText(locale, { 'zh-CN': '恢复记录', 'en-US': 'Repair record' });
+  return resultText(locale, { 'zh-CN': '恢复记录', 'en-US': 'Repair record' });
 }
 
-function ViewPlanSummary({ viewPlan, session, activeRun }: { viewPlan: RuntimeResolvedViewPlan; session: SciForgeSession; activeRun?: SciForgeRun }) {
+function ViewPlanSummary({ viewPlan, session, activeRun }: { viewPlan: RuntimeResolvedViewPlan; session: SciForgeSession; activeRun?: SciForgeRun; locale?: ResultLocale }) {
   const run = activeRun ?? session.runs.at(-1);
   const projection = conversationProjectionForSession(session, run);
   const presentationState = runPresentationState(session, activeRun, viewPlan);
@@ -1057,8 +1376,8 @@ function ViewPlanSummary({ viewPlan, session, activeRun }: { viewPlan: RuntimeRe
     <div className="view-plan-summary">
       <div>
         <Badge variant={summary.badgeVariant}>{summary.badgeLabel}</Badge>
-        <strong>{viewPlan.displayIntent.primaryGoal}</strong>
-        <span>{summary.summaryText}</span>
+        <strong>{rightPaneInlineLabel(viewPlan.displayIntent.primaryGoal)}</strong>
+        <span>{boundedRightPaneText(summary.summaryText, 500)}</span>
       </div>
     </div>
   );
@@ -1077,11 +1396,13 @@ function ViewPlanDetails({
   session,
   activeRun,
   items,
+  locale,
 }: {
   viewPlan: RuntimeResolvedViewPlan;
   session: SciForgeSession;
   activeRun?: SciForgeRun;
   items: ResultsRendererManifestDiagnostic[];
+  locale?: ResultLocale;
 }) {
   const [expanded, setExpanded] = useState(false);
   return (
@@ -1090,28 +1411,31 @@ function ViewPlanDetails({
       onToggle={(event) => setExpanded(event.currentTarget.open)}
     >
       <summary>
-        <span>展示摘要</span>
-        <Badge variant="muted">{items.length} 项</Badge>
+        <span>{resultText(locale, { 'zh-CN': '展示', 'en-US': 'Presentation' })}</span>
+        <Badge variant="muted">{resultCountText(locale, items.length, {
+          zh: (count) => `${count} 项`,
+          en: (count) => `${count} items`,
+        })}</Badge>
       </summary>
       {expanded ? (
         <>
-          <ViewPlanSummary viewPlan={viewPlan} session={session} activeRun={activeRun} />
-          <ManifestDiagnostics items={items} />
+          <ViewPlanSummary viewPlan={viewPlan} session={session} activeRun={activeRun} locale={locale} />
+          <ManifestDiagnostics items={items} locale={locale} />
         </>
       ) : null}
     </details>
   );
 }
 
-function UIDesignBlockerCard({ blocker }: { blocker: NonNullable<RuntimeResolvedViewPlan['blockedDesign']> }) {
+function UIDesignBlockerCard({ blocker, locale }: { blocker: NonNullable<RuntimeResolvedViewPlan['blockedDesign']>; locale?: ResultLocale }) {
   return (
     <div className="ui-design-blocker">
       <Badge variant="warning">blocked-awaiting-ui-design</Badge>
-      <strong>需要先设计并发布一个 UI 模块</strong>
-      <p>{blocker.reason}</p>
+      <strong>{resultText(locale, { 'zh-CN': '需要先设计并发布一个 UI 模块', 'en-US': 'Design and publish a UI module first' })}</strong>
+      <p>{boundedRightPaneText(blocker.reason, 800)}</p>
       <div className="slot-meta">
-        <code>{blocker.requiredModuleCapability}</code>
-        {blocker.resumeRunId ? <code>resumeRunId={blocker.resumeRunId}</code> : null}
+        <code>{rightPaneInlineLabel(blocker.requiredModuleCapability)}</code>
+        {blocker.resumeRunId ? <code>resumeRunId={rightPaneInlineLabel(blocker.resumeRunId)}</code> : null}
       </div>
     </div>
   );
@@ -1123,6 +1447,7 @@ function ObjectFocusBanner({
   actions,
   error,
   notice,
+  locale,
   onAction,
   onClear,
 }: {
@@ -1131,6 +1456,7 @@ function ObjectFocusBanner({
   actions: ObjectAction[];
   error?: string;
   notice?: string;
+  locale?: ResultLocale;
   onAction: (reference: ObjectReference, action: ObjectAction) => void | Promise<void>;
   onClear: () => void;
 }) {
@@ -1139,8 +1465,8 @@ function ObjectFocusBanner({
     <div className="object-focus-banner">
       <div>
         <Badge variant="info">{objectReferenceKindLabel(reference.kind)}</Badge>
-        <strong>{reference.title}</strong>
-        <span>{reference.summary || reference.ref}</span>
+        <strong>{rightPaneInlineLabel(reference.title)}</strong>
+        <span>{rightPaneInlineLabel(reference.summary || reference.ref)}</span>
       </div>
       <div className="object-focus-actions">
         {visibleActions.slice(0, 6).map((action) => (
@@ -1148,16 +1474,16 @@ function ObjectFocusBanner({
             {objectActionLabel(action)}
           </button>
         ))}
-        <button type="button" onClick={onClear}>清除</button>
+        <button type="button" onClick={onClear}>{resultText(locale, { 'zh-CN': '清除', 'en-US': 'Clear' })}</button>
       </div>
       {pinnedReferences.length ? (
         <div className="pinned-object-row">
-          <span>pinned</span>
-          {pinnedReferences.map((item) => <code key={item.id}>{item.title}</code>)}
+          <span>{resultText(locale, { 'zh-CN': '已固定', 'en-US': 'pinned' })}</span>
+          {pinnedReferences.map((item) => <code key={item.id}>{rightPaneInlineLabel(item.title)}</code>)}
         </div>
       ) : null}
-      {notice ? <p className="object-action-notice">{notice}</p> : null}
-      {error ? <p className="object-action-error">{error}</p> : null}
+      {notice ? <p className="object-action-notice">{boundedRightPaneText(notice, 800)}</p> : null}
+      {error ? <p className="object-action-error">{boundedRightPaneText(error, 800)}</p> : null}
     </div>
   );
 }
@@ -1205,12 +1531,12 @@ function UIDesignStudioPanel({ viewPlan }: { viewPlan: RuntimeResolvedViewPlan }
   ];
   return (
     <div className="stack">
-      <SectionHeader icon={Sparkles} title="UI Design Studio" subtitle="先设计模块，运行期只组合和绑定已发布能力" />
+      <SectionHeader icon={Sparkles} title="UI Design Studio" subtitle="Design modules first; runtime only composes published capabilities." />
       {viewPlan.blockedDesign ? <UIDesignBlockerCard blocker={viewPlan.blockedDesign} /> : (
         <div className="ui-design-blocker ready">
           <Badge variant="success">module match ready</Badge>
-          <strong>当前展示需求可由已发布 UI modules 满足</strong>
-          <p>Runtime View Planner 已完成模块匹配；如果用户提出新展示方式，可在这里沉淀为 View Preset 或新 UI Module。</p>
+          <strong>Published UI modules can satisfy this view request</strong>
+          <p>Runtime View Planner matched the modules. New display needs can become a View Preset or UI Module here.</p>
         </div>
       )}
       <div className="ui-module-package-preview">
@@ -1275,6 +1601,7 @@ function ResultItemsSection({
   scenarioId,
   config,
   session,
+  locale,
   onArtifactHandoff,
   onInspectArtifact,
   onObjectReferenceFocus,
@@ -1285,6 +1612,7 @@ function ResultItemsSection({
   scenarioId: ScenarioId;
   config: SciForgeConfig;
   session: SciForgeSession;
+  locale?: ResultLocale;
   onArtifactHandoff: (targetScenario: ScenarioId, artifact: RuntimeArtifact) => void;
   onInspectArtifact: (artifact: RuntimeArtifact) => void;
   onObjectReferenceFocus?: (reference: ObjectReference) => void;
@@ -1309,6 +1637,7 @@ function ResultItemsSection({
             onInspectArtifact={onInspectArtifact}
             onObjectReferenceFocus={onObjectReferenceFocus}
             onDismissResultSlotPresentation={onDismissResultSlotPresentation}
+            locale={locale}
           />
         ))}
       </div>
@@ -1316,9 +1645,9 @@ function ResultItemsSection({
   );
 }
 
-function DataPreviewTable({ rows }: { rows: Record<string, unknown>[] }) {
+function DataPreviewTable({ rows, locale }: { rows: Record<string, unknown>[]; locale?: ResultLocale }) {
   const columns = Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).slice(0, 8);
-  if (!rows.length || !columns.length) return <p className="empty-state">没有可展示 rows。</p>;
+  if (!rows.length || !columns.length) return <p className="empty-state">{resultText(locale, { 'zh-CN': '没有可展示的行。', 'en-US': 'No rows to display.' })}</p>;
   return (
     <div className="data-preview-table">
       <table>
@@ -1328,7 +1657,7 @@ function DataPreviewTable({ rows }: { rows: Record<string, unknown>[] }) {
         <tbody>
           {rows.slice(0, 12).map((row, index) => (
             <tr key={index}>
-              {columns.map((column) => <td key={column}>{compactParams(formatCellValue(row[column]))}</td>)}
+              {columns.map((column) => <td key={column}>{compactParams(rightPaneInlineLabel(formatCellValue(row[column])))}</td>)}
             </tr>
           ))}
         </tbody>
@@ -1338,10 +1667,10 @@ function DataPreviewTable({ rows }: { rows: Record<string, unknown>[] }) {
 }
 
 function formatCellValue(value: unknown): string {
-  if (typeof value === 'string') return value;
+  if (typeof value === 'string') return boundedRightPaneText(value, 800);
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   if (Array.isArray(value)) return value.map(formatCellValue).join(', ');
-  if (isRecord(value)) return JSON.stringify(value);
+  if (isRecord(value)) return boundedRightPaneText(JSON.stringify(value), 800);
   return '';
 }
 
@@ -1349,22 +1678,22 @@ function humanizeKey(key: string) {
   return key.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function ManifestDiagnostics({ items }: { items: ResultsRendererManifestDiagnostic[] }) {
+function ManifestDiagnostics({ items, locale }: { items: ResultsRendererManifestDiagnostic[]; locale?: ResultLocale }) {
   return (
     <div className="manifest-diagnostics">
       {items.map((item) => (
-        <code key={item.id} title={item.detail}>
-          {item.label} · {resultStatusLabel(item.status)}
+        <code key={item.id} title={rightPaneInlineLabel(item.detail)}>
+          {rightPaneInlineLabel(item.label)} · {resultStatusLabel(item.status, locale)}
         </code>
       ))}
     </div>
   );
 }
 
-function resultStatusLabel(status: string) {
-  if (status === 'bound') return '可展示';
-  if (status === 'fallback') return '已降级';
-  if (status === 'missing-artifact') return '等待内容';
-  if (status === 'missing-component') return '等待展示';
-  return '已记录';
+function resultStatusLabel(status: string, locale?: ResultLocale) {
+  if (status === 'bound') return resultText(locale, { 'zh-CN': '可用', 'en-US': 'Ready' });
+  if (status === 'fallback') return resultText(locale, { 'zh-CN': '备用视图', 'en-US': 'Alternate view' });
+  if (status === 'missing-artifact') return resultText(locale, { 'zh-CN': '等待内容', 'en-US': 'Waiting for content' });
+  if (status === 'missing-component') return resultText(locale, { 'zh-CN': '等待视图', 'en-US': 'Waiting for view' });
+  return resultText(locale, { 'zh-CN': '已保存', 'en-US': 'Saved' });
 }

@@ -65,7 +65,7 @@ export function FeedbackRepairAuditPanel({
     ? audit.latestRun?.id
       ? '输入引导，Enter 会启动一条新的 repair 线程；Shift+Enter 换行...'
       : '输入初始引导，Enter 会启动 repair；Shift+Enter 换行...'
-    : '输入给 Codex CLI 的引导，Enter 发送；Shift+Enter 换行...';
+    : '输入给 Runtime Codex repair turn 的引导，Enter 发送；Shift+Enter 换行...';
   const guidanceBoundary = commandStartsNewRepair
     ? '只把此输入框中的显式用户文字作为 initial guidance；不会附带主会话分析、补丁方案或隐藏上下文。'
     : '只把此输入框中的显式用户文字追加到 guidance audit 和 repair log；不会自动补发主会话分析、补丁方案或隐藏上下文。';

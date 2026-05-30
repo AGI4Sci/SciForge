@@ -47,6 +47,153 @@ test('maps Codex tool activity into normalized tool lifecycle events', () => {
   assert.equal(events.at(-1)?.itemId, 'item-1');
 });
 
+test('promotes safe structured file tool paths into trusted preview refs', () => {
+  const events = normalizeCodexJsonlEvent({
+    type: 'item.completed',
+    item: {
+      id: 'item-read',
+      type: 'function_call',
+      name: 'read_file',
+      arguments: JSON.stringify({ path: 'PROJECT.md' }),
+      status: 'completed',
+    },
+  }, metadata);
+
+  const toolEvent = events.at(-1);
+  assert.equal(toolEvent?.type, 'tool_completed');
+  assert.equal(toolEvent?.toolName, 'read_file');
+  assert.equal(toolEvent?.filePath, 'PROJECT.md');
+  assert.equal(toolEvent?.fileRef, 'file:PROJECT.md');
+});
+
+test('promotes safe sub-agent lifecycle refs without exposing transcript bodies', () => {
+  const events = normalizeCodexJsonlEvent({
+    type: 'item.completed',
+    item: {
+      id: 'subagent-call-1',
+      type: 'function_call',
+      name: 'multi_agent_v1.spawn_agent',
+      arguments: JSON.stringify({
+        agentId: '019e7649-worker',
+        parentAgentId: 'root-agent',
+        ref: 'artifact:input-placeholder',
+        transcriptRef: 'transcript:input-placeholder',
+        refs: ['artifact:input-placeholder'],
+      }),
+      result: JSON.stringify({
+        agentId: '019e7649-worker',
+        parentAgentId: 'root-agent',
+        ref: 'artifact:subagent-result',
+        transcriptRef: 'transcript:worker-1',
+        resultSummary: 'Read-only diff audit completed.',
+        transcript: 'RAW TRANSCRIPT BODY SHOULD STAY RAW-ONLY',
+        refs: ['artifact:subagent-result', 'trace:unsafe-ref'],
+      }),
+      status: 'completed',
+    },
+  }, metadata);
+
+  const toolEvent = events.at(-1);
+  assert.equal(toolEvent?.type, 'tool_completed');
+  assert.equal(toolEvent?.toolName, 'multi_agent_v1.spawn_agent');
+  assert.equal(toolEvent?.agentId, '019e7649-worker');
+  assert.equal(toolEvent?.parentAgentId, 'root-agent');
+  assert.equal(toolEvent?.ref, 'artifact:subagent-result');
+  assert.equal(toolEvent?.transcriptRef, 'transcript:worker-1');
+  assert.deepEqual(toolEvent?.refs, ['artifact:subagent-result']);
+  assert.match(toolEvent?.resultSummary ?? '', /Read-only diff audit/);
+  assert.doesNotMatch(JSON.stringify(toolEvent), /RAW TRANSCRIPT BODY|trace:unsafe-ref|input-placeholder/);
+});
+
+test('drops unsafe sub-agent transcript refs', () => {
+  for (const transcriptRef of [
+    '.sciforge/raw/transcript.json',
+    'trace:subagent-transcript',
+    'audit:subagent-transcript',
+    '/tmp/subagent-transcript.json',
+    'artifact:../secret',
+  ]) {
+    const events = normalizeCodexJsonlEvent({
+      type: 'item.completed',
+      item: {
+        id: 'subagent-call-unsafe',
+        type: 'function_call',
+        name: 'spawn_agent',
+        result: JSON.stringify({ agentId: 'worker-safe', transcriptRef }),
+        status: 'completed',
+      },
+    }, metadata);
+
+    const toolEvent = events.at(-1);
+    assert.equal(toolEvent?.agentId, 'worker-safe');
+    assert.equal(toolEvent?.transcriptRef, undefined, transcriptRef);
+  }
+});
+
+test('promotes safe file paths from started and payload-shaped tool events', () => {
+  const started = normalizeCodexJsonlEvent({
+    type: 'item.started',
+    payload: {
+      item: {
+        id: 'item-start-read',
+        type: 'function_call',
+        name: 'read_file',
+        input: { file_path: 'docs/agent-desktop-alignment-evidence/live-ledger-2026-05-30.json' },
+        status: 'in_progress',
+      },
+    },
+  }, metadata);
+  const edited = normalizeCodexJsonlEvent({
+    type: 'item.completed',
+    item: {
+      id: 'item-edit',
+      type: 'function_call',
+      name: 'edit',
+      parameters: { input: { filename: 'src/ui/src/app/chat/cursorAgentProcess.ts' } },
+      status: 'completed',
+    },
+  }, metadata);
+
+  assert.equal(started.at(-1)?.type, 'tool_started');
+  assert.equal(started.at(-1)?.filePath, 'docs/agent-desktop-alignment-evidence/live-ledger-2026-05-30.json');
+  assert.equal(started.at(-1)?.fileRef, 'file:docs/agent-desktop-alignment-evidence/live-ledger-2026-05-30.json');
+  assert.equal(edited.at(-1)?.toolName, 'edit');
+  assert.equal(edited.at(-1)?.filePath, 'src/ui/src/app/chat/cursorAgentProcess.ts');
+  assert.equal(edited.at(-1)?.fileRef, 'file:src/ui/src/app/chat/cursorAgentProcess.ts');
+});
+
+test('does not promote unsafe file tool paths or opaque refs into previews', () => {
+  for (const ref of [
+    'trace:read-file',
+    'file:.sciforge/logs/stdout.log',
+    'artifact:/tmp/private-report',
+    'artifact:../secret',
+    'artifact:.sciforge/raw/provider',
+    'artifact:~/secret',
+    'artifact:reports/private-report',
+  ]) {
+    const events = normalizeCodexJsonlEvent({
+      type: 'item.completed',
+      item: {
+        id: 'item-read-unsafe',
+        type: 'function_call',
+        name: 'read_file',
+        arguments: JSON.stringify({
+          path: '/tmp/private-note.md',
+          ref,
+          fileRef: ref,
+        }),
+        status: 'completed',
+      },
+    }, metadata);
+
+    const toolEvent = events.at(-1);
+    assert.equal(toolEvent?.type, 'tool_completed');
+    assert.equal(toolEvent?.filePath, undefined, ref);
+    assert.equal(toolEvent?.fileRef, undefined, ref);
+  }
+});
+
 test('maps Codex command_execution items into shell lifecycle details', () => {
   const started = normalizeCodexJsonlEvent({
     type: 'item.started',
@@ -77,6 +224,68 @@ test('maps Codex command_execution items into shell lifecycle details', () => {
   assert.equal(completed.at(-1)?.toolName, 'shell');
   assert.equal(completed.at(-1)?.exitCode, 0);
   assert.match(completed.at(-1)?.message ?? '', /output=PROJECT heading/);
+});
+
+test('preserves command_execution unified diff output as structured diff detail', () => {
+  const completed = normalizeCodexJsonlEvent({
+    type: 'item.completed',
+    item: {
+      id: 'item-diff',
+      type: 'command_execution',
+      command: "/bin/zsh -lc 'diff -u old.ts new.ts'",
+      aggregated_output: [
+        '--- old.ts',
+        '+++ new.ts',
+        '@@ -1 +1 @@',
+        '-before',
+        '+after',
+      ].join('\n'),
+      exit_code: 1,
+      status: 'failed',
+    },
+  }, metadata);
+
+  const event = completed.at(-1);
+  assert.equal(event?.type, 'tool_completed');
+  assert.equal(event?.exitCode, 1);
+  assert.match(event?.diff ?? '', /@@ -1 \+1 @@/);
+  assert.match(event?.outputSummary ?? '', /^--- old\.ts \+\+\+ new\.ts/);
+});
+
+test('maps native Codex response_item function calls into tool lifecycle events', () => {
+  const started = normalizeCodexJsonlEvent({
+    type: 'response_item',
+    payload: {
+      id: 'fc-1',
+      type: 'function_call',
+      call_id: 'call-shell-1',
+      name: 'shell',
+      arguments: JSON.stringify({ cmd: "diff -u old.ts new.ts" }),
+      status: 'in_progress',
+    },
+  }, metadata);
+  const completed = normalizeCodexJsonlEvent({
+    type: 'response_item',
+    payload: {
+      type: 'function_call_output',
+      call_id: 'call-shell-1',
+      output: [
+        '--- old.ts',
+        '+++ new.ts',
+        '@@ -1 +1 @@',
+        '-before',
+        '+after',
+      ].join('\n'),
+    },
+  }, metadata);
+
+  assert.equal(started.at(-1)?.type, 'tool_started');
+  assert.equal(started.at(-1)?.itemId, 'call-shell-1');
+  assert.equal(started.at(-1)?.toolName, 'shell');
+  assert.equal(started.at(-1)?.command, 'diff -u old.ts new.ts');
+  assert.equal(completed.at(-1)?.type, 'tool_completed');
+  assert.equal(completed.at(-1)?.itemId, 'call-shell-1');
+  assert.match(completed.at(-1)?.diff ?? '', /@@ -1 \+1 @@/);
 });
 
 test('maps Codex item.completed agent_message into a visible message event', () => {

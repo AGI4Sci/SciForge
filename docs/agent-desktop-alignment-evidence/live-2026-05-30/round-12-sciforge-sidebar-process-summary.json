@@ -1,0 +1,45 @@
+{
+  "schemaVersion": "sciforge.live-evidence-summary.v1",
+  "roundId": "live-round-12",
+  "side": "sciforge-browser",
+  "capturedAt": "2026-05-30T14:15:00+08:00",
+  "entryPoint": "http://localhost:5174/",
+  "summary": "SciForge Browser post-sidebar/process hardening showed Cursor-like project chat rows from the unified active/draft/archived/discarded source, no product-visible Runtime Backend Selector or Codex CLI copy, no replay chrome, and sub-agent refs before summaries without prompt echo or raw JSON.",
+  "observations": {
+    "newAgentVisible": true,
+    "sidebarRows": [
+      "state-draft rows render DRAFT badge and Discard action",
+      "active row renders Discard action",
+      "unified project list includes draft rows before active rows and a folded count"
+    ],
+    "processRows": [
+      "sub-agent rows keep worker id",
+      "artifact:subagent-result-* appears before result summary",
+      "artifact:subagent-transcript-* appears before result summary",
+      "prompt echo and raw JSON are absent"
+    ],
+    "rightPanePreview": [
+      "safe sub-agent refs are filtered to artifact/file refs",
+      "unsafe trace/audit/.sciforge refs are not shown by tests"
+    ],
+    "productWording": [
+      "Runtime Backend Selector absent",
+      "Codex CLI absent",
+      "Work replay and replay badge absent"
+    ]
+  },
+  "verificationRefs": [
+    "src/ui/src/app/appShell/SidebarProjectChatSection.test.tsx",
+    "src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts",
+    "src/ui/src/app/appShell/sidebarCursorAgentModel.test.ts",
+    "src/ui/src/app/chat/RunExecutionProcess.test.ts",
+    "src/ui/src/app/results/WorkspaceObjectPreview.test.ts",
+    "src/ui/src/streamEventPresentation.test.ts",
+    "src/ui/src/workspace/sessionWorkspace.test.ts"
+  ],
+  "privacy": {
+    "rawTranscriptEmbedded": false,
+    "providerSecretEmbedded": false,
+    "localAbsolutePathEmbedded": false
+  }
+}

@@ -34,7 +34,7 @@ test('results renderer execution model projects failure audit data without React
 
   assert.equal(shouldOpenRunAuditDetails(session, activeRun), true);
   assert.equal(state.kind, 'empty');
-  assert.equal(state.title, '等待本轮结果');
+  assert.equal(state.title, 'Waiting for results');
   assert.equal(failures.length, 0);
   assert.deepEqual(runRecoverActions(session, activeRun), []);
   assert.deepEqual(runAuditBlockers(session, activeRun), []);
@@ -108,9 +108,9 @@ test('results renderer execution model prefers conversation projection recover a
   const state = runPresentationState(session, session.runs[0]);
 
   assert.equal(state.kind, 'recoverable');
-  assert.match(state.reason, /Provider closed the connection/);
-  assert.ok(state.nextSteps.includes('retry provider from projection checkpoint'));
-  assert.deepEqual(runRecoverActions(session, session.runs[0]), ['retry provider from projection checkpoint']);
+  assert.match(state.reason, /service closed the connection/);
+  assert.ok(state.nextSteps.includes('retry service from projection checkpoint'));
+  assert.deepEqual(runRecoverActions(session, session.runs[0]), ['retry service from projection checkpoint']);
   assert.ok(runAuditRefs(session, session.runs[0]).includes('file:.sciforge/logs/provider.stderr.log'));
 });
 
@@ -231,8 +231,8 @@ test('results renderer execution model surfaces run display intent projection wi
 
   assert.equal(state.kind, 'recoverable');
   assert.match(state.reason, /direct urllib network access/);
-  assert.notEqual(state.title, '等待本轮结果');
-  assert.deepEqual(runRecoverActions(session, session.runs[0]), ['Regenerate task code through ready web_fetch/web_search provider routes.']);
+  assert.notEqual(state.title, 'Waiting for results');
+  assert.deepEqual(runRecoverActions(session, session.runs[0]), ['Regenerate task code through ready web_fetch/web_search service routes.']);
   assert.ok(runAuditRefs(session, session.runs[0]).includes('artifact:provider-policy-diagnostic'));
 });
 
@@ -296,8 +296,8 @@ test('results renderer execution model does not call completed empty runs ready'
   const state = runPresentationState(session, session.runs[0]);
 
   assert.equal(state.kind, 'empty');
-  assert.equal(state.title, '等待本轮结果');
-  assert.match(state.reason, /当前还没有可展示的结果/);
+  assert.equal(state.title, 'Waiting for results');
+  assert.match(state.reason, /No result is ready yet/);
 });
 
 test('results renderer execution model lets conversation projection override raw failed state', () => {
@@ -537,7 +537,7 @@ test('results renderer execution model treats zero-result projections with recov
   const state = runPresentationState(session, session.runs[0]);
 
   assert.equal(state.kind, 'recoverable');
-  assert.equal(state.title, '运行需要恢复');
+  assert.equal(state.title, 'Needs recovery');
   assert.match(state.reason, /empty-results/);
   assert.deepEqual(state.nextSteps, ['broaden the query', 'relax the date range']);
 });
@@ -619,7 +619,7 @@ test('results renderer execution model treats cited historical execution units a
 
   assert.equal(failedExecutionUnits(session, session.runs[0]).some((unit) => unit.id === 'EU-old-failed'), false);
   assert.equal(state.kind, 'empty');
-  assert.equal(state.title, '等待本轮结果');
+  assert.equal(state.title, 'Waiting for results');
   assert.equal(state.availableArtifacts.some((artifact) => artifact.id === 'direct-context-summary'), false);
 
   const compactedSession = structuredClone(session);
@@ -791,7 +791,7 @@ test('results renderer execution model scopes failed direct-context runs by stru
   assert.equal(failedExecutionUnits(session, session.runs[0]).some((unit) => unit.id === 'EU-direct-context-missing'), false);
   assert.deepEqual(runAuditBlockers(session, session.runs[0]), []);
   assert.equal(state.kind, 'empty');
-  assert.match(state.reason, /已保留在折叠过程里，不抢占主视图/);
+  assert.match(state.reason, /No primary result is ready yet. Supporting activity is folded out of the main view./);
   assert.deepEqual(runRecoverActions(session, session.runs[0]), []);
   assert.equal(state.availableArtifacts.some((artifact) => artifact.id === 'old-runtime-diagnostic'), false);
   assert.match(rawItems.find((item) => item.id === 'execution-units')?.value ?? '', /EU-direct-context-missing/);
@@ -834,7 +834,7 @@ test('results renderer execution model keeps current-run repair state scoped to 
   const state = runPresentationState(session, session.runs[0]);
 
   assert.equal(state.kind, 'empty');
-  assert.match(state.reason, /已保留在折叠过程里，不抢占主视图/);
+  assert.match(state.reason, /No primary result is ready yet. Supporting activity is folded out of the main view./);
   assert.deepEqual(runRecoverActions(session, session.runs[0]), []);
   assert.deepEqual(runAuditBlockers(session, session.runs[0]), []);
   assert.ok(runAuditRefs(session, session.runs[0]).includes('log:current-repair'));
@@ -893,7 +893,7 @@ test('results renderer execution model does not let raw running progress drive m
   const state = runPresentationState(session, session.runs[0]);
 
   assert.equal(state.kind, 'empty');
-  assert.equal(state.title, '等待本轮结果');
+  assert.equal(state.title, 'Waiting for results');
   assert.equal(state.progress, undefined);
   assert.equal(state.availableArtifacts.some((artifact) => artifact.id === 'partial-report'), false);
   assert.deepEqual(state.nextSteps, []);
@@ -1067,6 +1067,38 @@ test('raw audit items scrub endpoint tokens and stdout bodies from debug JSON', 
   assert.match(serialized, /runtime-debug-sensitive/);
 });
 
+test('raw audit items scrub notebook and view-plan debug payloads', () => {
+  const session = emptySession();
+  session.runs = [{
+    id: 'run-right-pane-audit',
+    scenarioId: 'literature-evidence-review',
+    status: 'completed',
+    prompt: 'debug right pane',
+    response: 'done',
+    createdAt: '2026-05-16T00:00:00.000Z',
+  }];
+  session.notebook = [{
+    id: 'note-sensitive',
+    scenario: 'literature-evidence-review',
+    time: '2026-05-16 00:00',
+    title: 'Sensitive note',
+    desc: 'Authorization: Bearer sk-notebook-secret-1234567890 from https://provider.example.test/v1',
+    claimType: 'fact',
+    confidence: 0.8,
+  }];
+
+  const serialized = rawAuditItems(session, session.runs[0], {
+    allItems: [{
+      id: 'view-sensitive',
+      status: 'fallback',
+      reason: 'raw stdout at /Users/alice/private/stdout.log contained RAW_VIEW_PLAN_BODY',
+    }],
+  } as never).map((item) => item.value).join('\n');
+
+  assert.doesNotMatch(serialized, /sk-notebook-secret|provider\.example|\/Users\/alice|RAW_VIEW_PLAN_BODY/);
+  assert.match(serialized, /runtime-debug-sensitive/);
+});
+
 test('browser visible runtime state exposes projection status without raw fallback', () => {
   const session = withMaterializedProjectionFixture({
     ...emptySession(),
@@ -1201,7 +1233,7 @@ test('presentation state ignores natural-language partial and needs-human words 
   const state = runPresentationState(session, session.runs[0]);
 
   assert.equal(state.kind, 'empty');
-  assert.equal(state.title, '等待本轮结果');
+  assert.equal(state.title, 'Waiting for results');
 });
 
 function deliveryArtifact(

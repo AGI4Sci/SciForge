@@ -62,7 +62,7 @@ test('normalizes Python process-progress events into visible work model', () => 
   assert.equal(model?.phase, PROCESS_PROGRESS_PHASE.WAIT);
   assert.deepEqual(model?.reading, ['/workspace/input/papers.csv']);
   assert.deepEqual(model?.writing, ['/workspace/tasks/review.py']);
-  assert.match(formatProgressHeadline(model) ?? '', /下一步 收到新事件后继续执行/);
+  assert.match(formatProgressHeadline(model) ?? '', /Next 收到新事件后继续执行/);
 });
 
 test('builds generic waiting progress after 5s without new backend events and keeps last real event', () => {
@@ -78,11 +78,11 @@ test('builds generic waiting progress after 5s without new backend events and ke
   const model = silent ? progressModelFromEvent(silent) : undefined;
   assert.equal(model?.phase, PROCESS_PROGRESS_PHASE.WAIT);
   assert.equal(model?.reason, PROCESS_PROGRESS_REASON.BACKEND_WAITING);
-  assert.equal(model?.waitingFor, '后端返回新事件');
+  assert.equal(model?.waitingFor, 'workspace activity');
   assert.equal(model?.lastEvent?.label, '读取');
   assert.equal(model?.canAbort, true);
   assert.equal(model?.canContinue, true);
-  assert.match(formatProgressHeadline(model) ?? '', /最近 读取/);
+  assert.match(formatProgressHeadline(model) ?? '', /Latest 读取/);
 });
 
 test('silent waiting progress does not use audit-only stderr as the recent foreground event', () => {
@@ -119,8 +119,8 @@ test('builds generic waiting progress after 5s without any real backend event', 
   const model = silent ? progressModelFromEvent(silent) : undefined;
   assert.equal(model?.phase, PROCESS_PROGRESS_PHASE.WAIT);
   assert.equal(model?.lastEvent, undefined);
-  assert.match(model?.detail ?? '', /尚无可展示的后端事件/);
-  assert.match(model?.nextStep ?? '', /中止当前 stream/);
+  assert.match(model?.detail ?? '', /Still waiting for workspace activity/);
+  assert.match(model?.nextStep ?? '', /stop the task/);
 });
 
 test('does not show backend waiting before the silent threshold', () => {
@@ -212,7 +212,7 @@ test('builds immediate request accepted progress before backend stream starts', 
   assert.equal(model?.phase, PROCESS_PROGRESS_PHASE.PLAN);
   assert.equal(progress.type, PROCESS_PROGRESS_EVENT_TYPE);
   assert.equal(model?.reason, PROCESS_PROGRESS_REASON.REQUEST_ACCEPTED_BEFORE_BACKEND_STREAM);
-  assert.equal(model?.waitingFor, 'workspace runtime 首个事件');
+  assert.equal(model?.waitingFor, 'first workspace agent event');
   assert.match(model?.detail ?? '', /继续上一轮/);
 });
 
@@ -225,7 +225,7 @@ test('builds visible quick status from responsePlan without waiting for workspac
   const model = progress ? progressModelFromEvent(progress) : undefined;
   assert.equal(model?.phase, PROCESS_PROGRESS_PHASE.PLAN);
   assert.equal(model?.status, PROCESS_PROGRESS_STATUS.RUNNING);
-  assert.match(model?.detail ?? '', /已收到请求/);
+  assert.match(model?.detail ?? '', /Request received/);
   assert.equal(model?.nextStep, PROCESS_PROGRESS_PHASE.PLAN);
 });
 
@@ -238,7 +238,7 @@ test('builds direct-context visible status from responsePlan', () => {
   const model = progress ? progressModelFromEvent(progress) : undefined;
   assert.equal(model?.phase, PROCESS_PROGRESS_PHASE.READ);
   assert.equal(model?.waitingFor, undefined);
-  assert.match(formatProgressHeadline(model) ?? '', /正在整理当前上下文/);
+  assert.match(formatProgressHeadline(model) ?? '', /Reading current context/);
 });
 
 test('maps structured interaction contract events into process progress without prompt or scenario semantics', () => {
@@ -263,10 +263,10 @@ test('maps structured interaction contract events into process progress without 
   const headline = formatProgressHeadline(model);
 
   assert.equal(normalized.type, HUMAN_APPROVAL_REQUIRED_EVENT_TYPE);
-  assert.equal(normalized.label, '需要确认');
+  assert.equal(normalized.label, 'Needs approval');
   assert.equal(model?.phase, PROCESS_PROGRESS_PHASE.OBSERVE);
   assert.equal(model?.status, PROCESS_PROGRESS_STATUS.RUNNING);
-  assert.equal(model?.waitingFor, '人工确认');
+  assert.equal(model?.waitingFor, 'approval');
   assert.match(model?.detail ?? '', /Interaction: human-approval required/);
   assert.doesNotMatch(normalized.detail ?? '', /PROMPT_TEXT_SHOULD_NOT_DECIDE/);
   assert.doesNotMatch(normalized.detail ?? '', /SCENARIO_TEXT_SHOULD_NOT_DECIDE/);
@@ -285,9 +285,9 @@ test('maps structured run cancellation into process progress cancellation status
   });
 
   const model = progressModelFromEvent(normalized);
-  assert.equal(model?.title, '运行取消');
+  assert.equal(model?.title, 'Run cancelled');
   assert.equal(model?.status, PROCESS_PROGRESS_STATUS.CANCELLED);
-  assert.equal(model?.nextStep, '运行已结束，保留结构化终止原因供下一轮恢复或审计。');
+  assert.equal(model?.nextStep, 'The run ended; the structured termination reason is saved for the next turn.');
   assert.match(model?.detail ?? '', /Cancellation: system-aborted/);
 });
 
@@ -337,10 +337,10 @@ test('restores compact interaction progress streamProcess events without prompt 
     }],
   });
 
-  assert.deepEqual(models.map((model) => model.title), ['需要澄清', '需要确认', '引导已排队', '运行取消']);
-  assert.equal(models[0].waitingFor, '澄清信息');
-  assert.equal(models[1].waitingFor, '人工确认');
-  assert.equal(models[2].waitingFor, '当前 run 结束后合并引导');
+  assert.deepEqual(models.map((model) => model.title), ['Needs clarification', 'Needs approval', 'Guidance queued', 'Run cancelled']);
+  assert.equal(models[0].waitingFor, 'clarification');
+  assert.equal(models[1].waitingFor, 'approval');
+  assert.equal(models[2].waitingFor, 'merge guidance after the current run');
   assert.equal(models[3].status, PROCESS_PROGRESS_STATUS.CANCELLED);
   const visible = models.map((model) => formatProgressHeadline(model) || model.detail).join('\n');
   assert.doesNotMatch(visible, /PROMPT_TEXT_SHOULD_NOT_DECIDE/);

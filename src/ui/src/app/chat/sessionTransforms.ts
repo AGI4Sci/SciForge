@@ -106,7 +106,7 @@ export function appendUploadMessageToSession({
   const uploadMessage: SciForgeMessage = {
     id: makeId('msg'),
     role: 'system',
-    content: `已上传 ${uploaded.length} 个文件到证据矩阵：${uploaded.map((artifact) => artifact.metadata?.title ?? artifact.id).join('、')}`,
+    content: `已上传 ${uploaded.length} 个文件作为引用：${uploaded.map((artifact) => artifact.metadata?.title ?? artifact.id).join('、')}`,
     createdAt: now,
     status: 'completed',
     references,

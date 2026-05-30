@@ -19,7 +19,7 @@ export function startNewChat(
 ): SciForgeWorkspaceState {
   const currentSession = activeSessionFor(state, scenarioId, newSessionTitle);
   const archivedSessions = sessionActivityScore(currentSession) > 0
-    ? [versionSession(currentSession, 'new chat archived previous session'), ...state.archivedSessions]
+    ? [archiveSessionCopy(currentSession, 'new chat archived previous session', 'archived'), ...state.archivedSessions]
     : state.archivedSessions;
   return {
     ...state,
@@ -37,7 +37,7 @@ export function deleteActiveChat(
   fallbackTitle: string,
   archiveLimit = DEFAULT_ARCHIVE_LIMIT,
 ): SciForgeWorkspaceState {
-  const deleted = versionSession(activeSessionFor(state, scenarioId, fallbackTitle), 'deleted current chat');
+  const deleted = archiveSessionCopy(activeSessionFor(state, scenarioId, fallbackTitle), 'deleted current chat', 'discarded');
   return {
     ...state,
     archivedSessions: [{ ...deleted, title: `${deleted.title}（已删除）` }, ...state.archivedSessions].slice(0, archiveLimit),
@@ -59,7 +59,7 @@ export function archiveActiveSession(
   if (active.sessionId !== sessionId || sessionActivityScore(active) === 0) return state;
   return {
     ...state,
-    archivedSessions: [versionSession(active, 'archived from sidebar'), ...state.archivedSessions].slice(0, archiveLimit),
+    archivedSessions: [archiveSessionCopy(active, 'archived from sidebar', 'archived'), ...state.archivedSessions].slice(0, archiveLimit),
     sessionsByScenario: {
       ...state.sessionsByScenario,
       [scenarioId]: createSession(scenarioId, fallbackTitle),
@@ -76,7 +76,7 @@ export function archiveAllActiveSessions(
   const nextSessions = { ...state.sessionsByScenario };
   for (const [scenarioId, session] of Object.entries(state.sessionsByScenario) as Array<[ScenarioInstanceId, SciForgeSession | undefined]>) {
     if (!session || sessionActivityScore(session) === 0) continue;
-    archived.push(versionSession(session, 'archived all chats'));
+    archived.push(archiveSessionCopy(session, 'archived all chats', 'archived'));
     nextSessions[scenarioId] = createSession(scenarioId, fallbackTitleFor(scenarioId));
   }
   if (!archived.length) return state;
@@ -100,19 +100,33 @@ export function restoreArchivedSession(
   const active = activeSessionFor(state, scenarioId, fallbackTitle);
   const nextArchived = state.archivedSessions.filter((session) => session.sessionId !== sessionId);
   const archivedActive = sessionActivityScore(active) > 0
-    ? [versionSession(active, `restored archived session ${sessionId}`), ...nextArchived]
+    ? [archiveSessionCopy(active, `restored archived session ${sessionId}`, 'archived'), ...nextArchived]
     : nextArchived;
   return {
     ...state,
     archivedSessions: archivedActive.slice(0, archiveLimit),
     sessionsByScenario: {
       ...state.sessionsByScenario,
-      [scenarioId]: {
-        ...restored,
-        updatedAt: restoredAt,
-      },
+      [scenarioId]: restoredSessionCopy(restored, restoredAt),
     },
   };
+}
+
+function archiveSessionCopy(
+  session: SciForgeSession,
+  reason: string,
+  archiveState: NonNullable<SciForgeSession['archiveState']>,
+): SciForgeSession {
+  return {
+    ...versionSession(session, reason),
+    archiveState,
+  };
+}
+
+function restoredSessionCopy(session: SciForgeSession, updatedAt: string): SciForgeSession {
+  const next: SciForgeSession = { ...session, updatedAt };
+  delete next.archiveState;
+  return next;
 }
 
 export function deleteArchivedSessions(

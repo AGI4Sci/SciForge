@@ -69,7 +69,9 @@ packages/backend/.codex-runtime/workspaces/default/
 
 `packages/backend/.codex-runtime/**` is intentionally ignored by git. It is the local state boundary for runtime Codex config, memories, sessions, logs, and the default scratch workspace.
 
-Run Runtime Codex through the isolated home:
+Legacy exec JSON compatibility smoke only:
+
+The product Runtime Codex path uses `codex app-server` and the SciForge web/browser acceptance flow. The wrapper below only preserves the legacy `codex exec --json` compatibility smoke path and does not satisfy product runtime or release acceptance on its own.
 
 ```bash
 SCIFORGE_RUNTIME_API_KEY="..." \

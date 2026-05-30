@@ -14,7 +14,7 @@ test('report-viewer package exposes manifest and renders markdown presentation i
       MarkdownBlock: ({ markdown }) => <article>{markdown}</article>,
     },
   }));
-  assert.match(html, /正在读取 Markdown 报告正文/);
+  assert.match(html, /Loading Markdown report/);
   assert.match(html, /\.sciforge\/workbench\/literature-report\.md/);
 });
 

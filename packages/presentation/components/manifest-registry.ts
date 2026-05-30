@@ -25,6 +25,7 @@ import { manifest as structureViewer } from './structure-viewer/manifest';
 import { manifest as terminalSessionViewer } from './terminal-session-viewer/manifest';
 import { manifest as timeSeriesViewer } from './time-series-viewer/manifest';
 import { manifest as unknownArtifactInspector } from './unknown-artifact-inspector/manifest';
+import { manifest as workspaceFileViewer } from './workspace-file-viewer/manifest';
 import type { UIComponentManifest } from './types';
 
 export const uiComponentManifests: UIComponentManifest[] = [
@@ -54,6 +55,7 @@ export const uiComponentManifests: UIComponentManifest[] = [
   protocolEditor,
   publicationFigureBuilder,
   statisticalAnnotationLayer,
+  workspaceFileViewer,
   unknownArtifactInspector,
 ];
 

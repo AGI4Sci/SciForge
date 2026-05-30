@@ -2,6 +2,10 @@ import { createHash } from 'node:crypto';
 
 export type NormalizedAgentEventType =
   | 'run_started'
+  | 'thread_started'
+  | 'turn_started'
+  | 'item_started'
+  | 'item_completed'
   | 'gui_present'
   | 'gui_ask_user'
   | 'message_delta'
@@ -45,9 +49,19 @@ export interface NormalizedAgentEvent {
   itemId?: string;
   toolName?: string;
   command?: string;
+  filePath?: string;
+  fileRef?: string;
+  ref?: string;
+  diff?: string;
   outputSummary?: string;
+  resultSummary?: string;
   status?: string;
   exitCode?: number | null;
+  agentId?: string;
+  parentAgentId?: string;
+  transcriptRef?: string;
+  refs?: string[];
+  traceStepId?: string;
   signal?: NodeJS.Signals | string | null;
   raw?: unknown;
 }
@@ -253,7 +267,7 @@ export function normalizeCodexJsonlEvent(raw: unknown, metadata: CodexRuntimeMet
   const item = isRecord(rawEvent.item) ? rawEvent.item : isRecord(payload?.item) ? payload.item : payload ?? rawEvent;
   const itemType = stringField(item.type) ?? stringField(payload?.type) ?? '';
   const text = textFromRaw(rawEvent) ?? textFromRaw(item) ?? (payload ? textFromRaw(payload) : undefined);
-  const itemId = stringField(item.id) ?? stringField(rawEvent.item_id) ?? stringField(rawEvent.id);
+  const itemId = stringField(item.call_id) ?? stringField(rawEvent.call_id) ?? stringField(payload?.call_id) ?? stringField(item.id) ?? stringField(rawEvent.item_id) ?? stringField(rawEvent.id);
   const toolName = stringField(item.name)
     ?? stringField(item.tool_name)
     ?? stringField(rawEvent.tool_name)
@@ -263,7 +277,14 @@ export function normalizeCodexJsonlEvent(raw: unknown, metadata: CodexRuntimeMet
   const normalizedToolName = toolName ?? toolNameFromItemType(itemType, command);
   const itemStatus = stringField(item.status) ?? stringField(rawEvent.status) ?? stringField(payload?.status);
   const exitCode = numberField(item.exit_code) ?? numberField(item.exitCode) ?? numberField(rawEvent.exit_code) ?? numberField(rawEvent.exitCode);
-  const outputSummary = commandOutputSummary(item) ?? (payload ? commandOutputSummary(payload) : undefined) ?? commandOutputSummary(rawEvent);
+  const rawOutputText = commandOutputText(item) ?? (payload ? commandOutputText(payload) : undefined) ?? commandOutputText(rawEvent);
+  const rawOutputSummary = commandOutputSummary(item) ?? (payload ? commandOutputSummary(payload) : undefined) ?? commandOutputSummary(rawEvent);
+  const diff = diffTextFromToolOutput(rawOutputText);
+  const filePreview = filePreviewMetadataFromTool(rawEvent, item, payload, normalizedToolName);
+  const subagent = subagentMetadataFromTool(rawEvent, item, payload, normalizedToolName);
+  const outputSummary = subagent.agentId || subagent.transcriptRef || subagent.ref
+    ? subagent.resultSummary
+    : rawOutputSummary;
 
   const events: NormalizedAgentEvent[] = [rawJsonlAuditEvent(metadata, raw)];
   const guiPresent = guiPresentFromRaw(rawEvent, item);
@@ -306,22 +327,27 @@ export function normalizeCodexJsonlEvent(raw: unknown, metadata: CodexRuntimeMet
     return events;
   }
 
-  if (/item\.started|tool.*started|function_call.*started|exec.*started/i.test(type)) {
+  if (isToolStartEvent(type, itemType)) {
     events.push(event(metadata, 'tool_started', {
       itemId,
       toolName: normalizedToolName,
       command,
+      ...filePreview,
+      ...subagent,
       status: itemStatus ?? 'in_progress',
       message: toolLifecycleMessage('started', normalizedToolName, command, itemStatus),
     }));
     return events;
   }
 
-  if (/item\.completed|tool.*completed|function_call.*completed|exec.*completed/i.test(type)) {
+  if (isToolCompleteEvent(type, itemType)) {
     events.push(event(metadata, 'tool_completed', {
       itemId,
       toolName: normalizedToolName,
       command,
+      ...filePreview,
+      ...subagent,
+      diff,
       outputSummary,
       status: itemStatus ?? 'completed',
       exitCode,
@@ -463,18 +489,38 @@ function formatGuiAskUserText(input: {
   approvalRequest?: Record<string, unknown>;
 }) {
   const risk = stringField(input.approvalRequest?.riskLevel) ?? stringField(input.approvalRequest?.risk);
-  const approvalId = stringField(input.approvalRequest?.id) ?? stringField(input.approvalRequest?.approvalRef);
-  const actionRef = stringField(input.approvalRequest?.actionRef);
   const lines = [
-    `## ${input.title}`,
-    input.message,
-    risk ? `Risk: \`${risk}\`` : undefined,
-    approvalId ? `Approval ref: \`${approvalId}\`` : undefined,
-    actionRef ? `Action ref: \`${actionRef}\`` : undefined,
-    input.relatedRefs?.length ? ['Evidence refs:', ...input.relatedRefs.map((ref) => `- \`${ref}\``)].join('\n') : undefined,
-    input.choices?.length ? ['Choices:', ...input.choices.map((choice) => `- ${choice.label}: \`${choice.commandText}\``)].join('\n') : undefined,
+    `## ${humanGuiAskUserTitle(input.title)}`,
+    humanGuiAskUserMessage(input.message),
+    risk ? `Risk: ${humanGuiRiskLabel(risk)}` : undefined,
+    input.relatedRefs?.length ? `${input.relatedRefs.length} related item${input.relatedRefs.length === 1 ? '' : 's'} available.` : undefined,
   ].filter(Boolean);
   return lines.join('\n\n');
+}
+
+function humanGuiAskUserTitle(value: string) {
+  return (value || 'Confirmation required')
+    .replace(/\bComputer Use confirmation required\b/gi, 'Confirmation required')
+    .replace(/\bComputer Use\b/gi, 'Operation')
+    .replace(/\bgui\.(?:present|ask_user)\b/gi, 'Operation')
+    .replace(/\s+/g, ' ')
+    .trim() || 'Confirmation required';
+}
+
+function humanGuiAskUserMessage(value: string | undefined) {
+  return (value || 'Confirmation is required before continuing.')
+    .replace(/\bComputer Use\b/gi, 'the operation')
+    .replace(/\bgui\.(?:present|ask_user)\b/gi, 'the operation')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function humanGuiRiskLabel(value: string) {
+  const risk = value.trim().toLowerCase();
+  if (risk === 'high') return 'High';
+  if (risk === 'medium') return 'Medium';
+  if (risk === 'low') return 'Low';
+  return value.trim();
 }
 
 function guiIntentFromToolCall(
@@ -578,9 +624,16 @@ function commandFromRaw(
   item: Record<string, unknown>,
   payload: Record<string, unknown> | undefined,
 ): string | undefined {
+  const argumentCommand = commandFromToolArguments(item.arguments)
+    ?? commandFromToolArguments(item.input)
+    ?? commandFromToolArguments(rawEvent.arguments)
+    ?? commandFromToolArguments(rawEvent.input)
+    ?? commandFromToolArguments(payload?.arguments)
+    ?? commandFromToolArguments(payload?.input);
   return compactRuntimeText(
     stringField(item.command)
       ?? stringField(item.cmd)
+      ?? argumentCommand
       ?? stringField(rawEvent.command)
       ?? stringField(rawEvent.cmd)
       ?? stringField(payload?.command)
@@ -589,21 +642,264 @@ function commandFromRaw(
   );
 }
 
+function commandFromToolArguments(value: unknown): string | undefined {
+  const record = parseJsonRecord(value) ?? (isRecord(value) ? value : undefined);
+  if (!record) return undefined;
+  const nested = parseJsonRecord(record.input) ?? parseJsonRecord(record.args) ?? parseJsonRecord(record.arguments);
+  const candidate = firstString(
+    stringField(record.command),
+    stringField(record.cmd),
+    stringField(record.shellCommand),
+    stringField(record.shell_command),
+    stringField(record.script),
+    stringField(nested?.command),
+    stringField(nested?.cmd),
+    stringField(nested?.shellCommand),
+    stringField(nested?.shell_command),
+    stringField(nested?.script),
+  );
+  return compactRuntimeText(candidate, 260);
+}
+
 function toolNameFromItemType(itemType: string, command: string | undefined): string | undefined {
   if (/command_execution|exec|shell|terminal/i.test(itemType) || command) return 'shell';
   if (/function_call/i.test(itemType)) return 'function_call';
   return itemType || undefined;
 }
 
+function isToolStartEvent(type: string, itemType: string) {
+  return /item\.started|tool.*started|function_call.*started|exec.*started/i.test(type)
+    || (/^response_item$/i.test(type) && /^function_call$/i.test(itemType));
+}
+
+function isToolCompleteEvent(type: string, itemType: string) {
+  return /item\.completed|tool.*completed|function_call.*completed|exec.*completed/i.test(type)
+    || (/^response_item$/i.test(type) && /^function_call_output$/i.test(itemType));
+}
+
+function commandOutputText(value: Record<string, unknown>): string | undefined {
+  return stringField(value.output_summary)
+    ?? stringField(value.outputSummary)
+    ?? stringField(value.aggregated_output)
+    ?? stringField(value.output)
+    ?? stringField(value.result);
+}
+
 function commandOutputSummary(value: Record<string, unknown>): string | undefined {
   return compactRuntimeText(
-    stringField(value.output_summary)
-      ?? stringField(value.outputSummary)
-      ?? stringField(value.aggregated_output)
-      ?? stringField(value.output)
-      ?? stringField(value.result),
+    commandOutputText(value),
     320,
   );
+}
+
+function diffTextFromToolOutput(value: string | undefined): string | undefined {
+  if (!looksLikeUnifiedDiff(value)) return undefined;
+  return compactRuntimeBlockText(value, 12_000);
+}
+
+function filePreviewMetadataFromTool(
+  rawEvent: Record<string, unknown>,
+  item: Record<string, unknown>,
+  payload: Record<string, unknown> | undefined,
+  toolName: string | undefined,
+): Pick<NormalizedAgentEvent, 'filePath' | 'fileRef'> {
+  if (!isFilePreviewToolName(toolName)) return {};
+  const records = filePreviewCandidateRecords(rawEvent, item, payload);
+  const explicitRef = firstStringField(records, 'fileRef', 'file_ref', 'ref');
+  const safeExplicitRef = safeExplicitPreviewRef(explicitRef);
+  if (safeExplicitRef?.startsWith('artifact:')) return { fileRef: safeExplicitRef };
+  const explicitRefPath = safeExplicitRef?.startsWith('file:')
+    ? safeExplicitRef.slice('file:'.length)
+    : undefined;
+  const structuredPath = firstStringField(records, 'filePath', 'file_path', 'path', 'file', 'filename');
+  const safePath = safeRelativePreviewPath(structuredPath) ?? explicitRefPath;
+  return {
+    filePath: safePath,
+    fileRef: safePath ? `file:${safePath}` : safeExplicitRef,
+  };
+}
+
+function subagentMetadataFromTool(
+  rawEvent: Record<string, unknown>,
+  item: Record<string, unknown>,
+  payload: Record<string, unknown> | undefined,
+  toolName: string | undefined,
+): Pick<NormalizedAgentEvent, 'ref' | 'agentId' | 'parentAgentId' | 'transcriptRef' | 'resultSummary' | 'refs'> {
+  const candidates = subagentCandidateRecords(rawEvent, item, payload);
+  const records = candidates.ordered;
+  const resultRecords = candidates.resultRecords.length ? candidates.resultRecords : records;
+  const hasSubagentShape = isSubagentToolName(toolName)
+    || records.some((record) => firstStringField([record], 'agentId', 'agent_id', 'parentAgentId', 'parent_agent_id', 'transcriptRef', 'transcript_ref'));
+  if (!hasSubagentShape) return {};
+  const ref = resultRecords
+    .flatMap((record) => [
+      firstStringField([record], 'ref', 'resultRef', 'result_ref', 'artifactRef', 'artifact_ref', 'outputRef', 'output_ref'),
+      ...(stringArrayField(record.refs) ?? []),
+      ...(stringArrayField(record.evidenceRefs) ?? []),
+      ...(stringArrayField(record.evidence_refs) ?? []),
+      ...(stringArrayField(record.artifactRefs) ?? []),
+      ...(stringArrayField(record.artifact_refs) ?? []),
+    ].map(safeExplicitPreviewRef))
+    .find(Boolean);
+  const refs = uniqueRuntimeRefs(resultRecords.flatMap((record) => [
+    ...(stringArrayField(record.refs) ?? []),
+    ...(stringArrayField(record.evidenceRefs) ?? []),
+    ...(stringArrayField(record.evidence_refs) ?? []),
+    ...(stringArrayField(record.artifactRefs) ?? []),
+    ...(stringArrayField(record.artifact_refs) ?? []),
+  ].map(safeOpaqueRuntimeRef)));
+  return {
+    ref,
+    agentId: safeRuntimeIdentifier(firstStringField(records, 'agentId', 'agent_id', 'agentPath', 'agent_path')),
+    parentAgentId: safeRuntimeIdentifier(firstStringField(records, 'parentAgentId', 'parent_agent_id', 'parentId', 'parent_id')),
+    transcriptRef: safeOpaqueRuntimeRef(firstStringField(resultRecords, 'transcriptRef', 'transcript_ref', 'transcriptArtifactRef', 'transcript_artifact_ref'))
+      ?? safeOpaqueRuntimeRef(firstStringField(records, 'transcriptRef', 'transcript_ref', 'transcriptArtifactRef', 'transcript_artifact_ref')),
+    resultSummary: compactRuntimeText(firstStringField(resultRecords, 'resultSummary', 'result_summary', 'summary') ?? firstStringField(records, 'resultSummary', 'result_summary', 'summary'), 320),
+    refs: refs.length ? refs : undefined,
+  };
+}
+
+function subagentCandidateRecords(
+  rawEvent: Record<string, unknown>,
+  item: Record<string, unknown>,
+  payload: Record<string, unknown> | undefined,
+) {
+  const roots = [item, rawEvent, payload].filter((entry): entry is Record<string, unknown> => Boolean(entry));
+  const rootRecords: Record<string, unknown>[] = [];
+  const resultRecords: Record<string, unknown>[] = [];
+  const inputRecords: Record<string, unknown>[] = [];
+  for (const root of roots) {
+    rootRecords.push(root);
+    for (const key of ['result', 'output'] as const) pushParsedCandidateRecords(resultRecords, root[key]);
+    for (const key of ['arguments', 'args', 'input', 'parameters', 'params'] as const) pushParsedCandidateRecords(inputRecords, root[key]);
+  }
+  return {
+    resultRecords,
+    ordered: uniqueRecordReferences([...resultRecords, ...rootRecords, ...inputRecords]),
+  };
+}
+
+function pushParsedCandidateRecords(out: Record<string, unknown>[], value: unknown) {
+  const parsed = parseJsonRecord(value);
+  if (!parsed) return;
+  out.push(parsed);
+  for (const key of ['value', 'result', 'output', 'input', 'arguments', 'args'] as const) {
+    const nested = parseJsonRecord(parsed[key]);
+    if (nested) out.push(nested);
+  }
+}
+
+function uniqueRecordReferences(records: Record<string, unknown>[]) {
+  return records.filter((record, index) => records.indexOf(record) === index);
+}
+
+function filePreviewCandidateRecords(
+  rawEvent: Record<string, unknown>,
+  item: Record<string, unknown>,
+  payload: Record<string, unknown> | undefined,
+): Record<string, unknown>[] {
+  const roots = [item, rawEvent, payload].filter((entry): entry is Record<string, unknown> => Boolean(entry));
+  const records: Record<string, unknown>[] = [];
+  for (const root of roots) {
+    records.push(root);
+    for (const key of ['arguments', 'args', 'input', 'parameters', 'params', 'result', 'output'] as const) {
+      const parsed = parseJsonRecord(root[key]);
+      if (!parsed) continue;
+      records.push(parsed);
+      const nestedInput = parseJsonRecord(parsed.input);
+      if (nestedInput) records.push(nestedInput);
+      const nestedValue = parseJsonRecord(parsed.value);
+      if (nestedValue) records.push(nestedValue);
+    }
+  }
+  return records;
+}
+
+function firstStringField(records: Record<string, unknown>[], ...keys: string[]): string | undefined {
+  for (const record of records) {
+    for (const key of keys) {
+      const value = stringField(record[key]);
+      if (value?.trim()) return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function firstString(...values: Array<string | undefined>): string | undefined {
+  return values.find((value) => Boolean(value?.trim()));
+}
+
+function isFilePreviewToolName(toolName: string | undefined) {
+  return /^(?:read_file|file_read|open_file|read|open|cat|write_file|file_write|write|edit_file|file_edit|edit|create_file|create|delete_file|delete|move_file|move|apply_patch|diff|patch)$/i.test(toolName ?? '');
+}
+
+function isSubagentToolName(toolName: string | undefined) {
+  return /^(?:multi_agent_v1\.spawn_agent|spawn_agent|subagent|sub_agent|sub-agent|agent_spawn|delegate)$/i.test(toolName ?? '');
+}
+
+function safeExplicitPreviewRef(value: string | undefined): string | undefined {
+  const text = value?.trim().replace(/\\/g, '/');
+  if (!text) return undefined;
+  if (text.startsWith('file:')) {
+    const path = safeRelativePreviewPath(text.slice('file:'.length));
+    return path ? `file:${path}` : undefined;
+  }
+  if (text.startsWith('artifact:')) {
+    const opaque = text.slice('artifact:'.length);
+    return isSafeOpaquePreviewRef(opaque) ? `artifact:${opaque}` : undefined;
+  }
+  return undefined;
+}
+
+function safeOpaqueRuntimeRef(value: string | undefined): string | undefined {
+  const text = value?.trim().replace(/\\/g, '/');
+  if (!text) return undefined;
+  if (text.startsWith('file:') || text.startsWith('artifact:')) return safeExplicitPreviewRef(text);
+  return isSafeOpaquePreviewRef(text) ? text : undefined;
+}
+
+function safeRuntimeIdentifier(value: string | undefined): string | undefined {
+  const text = value?.trim().replace(/\\/g, '/');
+  if (!text) return undefined;
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(text)) return undefined;
+  if (text.startsWith('/') || text.startsWith('~') || text.includes('://')) return undefined;
+  if (text.includes('..')) return undefined;
+  if (/^(?:audit|trace|raw|stdout|stderr|provider):/i.test(text)) return undefined;
+  if (/(?:^|[_.:-])(?:stdout|stderr|raw|log|logs|Users|Applications|Volumes|private|var|tmp|\.sciforge)(?:$|[_.:-])/i.test(text)) return undefined;
+  if (/\[local-path\]|\[redacted\]|\[url\]/i.test(text)) return undefined;
+  if (/\b(?:Authorization|api[-_ ]?key|token|secret|password|credential)\b|sk-[A-Za-z0-9._-]+/i.test(text)) return undefined;
+  return text;
+}
+
+function uniqueRuntimeRefs(values: Array<string | undefined>) {
+  return Array.from(new Set(values.filter((value): value is string => Boolean(value))));
+}
+
+function safeRelativePreviewPath(value: string | undefined): string | undefined {
+  const text = value?.trim().replace(/\\/g, '/');
+  if (!text) return undefined;
+  if (text.startsWith('file:')) return safeRelativePreviewPath(text.slice('file:'.length));
+  if (text.startsWith('artifact:')) return undefined;
+  if (/^(?:\/|[A-Za-z]:\/)/.test(text) || text.includes('://')) return undefined;
+  if (/[\r\n\t<>|?*:]/.test(text)) return undefined;
+  if (text.split('/').some((part) => part === '..')) return undefined;
+  if (/(?:^|\/)(?:Users|Applications|Volumes|private|var|tmp|\.sciforge)(?:\/|$)/i.test(text)) return undefined;
+  if (/\b(?:Authorization|api[-_ ]?key|token|secret|password|credential)\b|sk-[A-Za-z0-9._-]+/i.test(text)) return undefined;
+  return text;
+}
+
+function isSafeOpaquePreviewRef(value: string) {
+  const text = value.trim();
+  if (!text || text.startsWith('/') || text.startsWith('~') || text.includes('://')) return false;
+  if (!/^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/.test(text)) return false;
+  if (/[\r\n\t<>|?*]/.test(text)) return false;
+  if (text.includes('..')) return false;
+  if (/^(?:audit|trace|raw|stdout|stderr|provider):/i.test(text)) return false;
+  if (/(?:^|[_.:-])(?:stdout|stderr|raw|log|logs)(?:$|[_.:-])/i.test(text)) return false;
+  if (/(?:^|[_.:-])(?:Users|Applications|Volumes|private|var|tmp|\.sciforge)(?:$|[_.:-])/i.test(text)) return false;
+  if (/\[local-path\]|\[redacted\]|\[url\]/i.test(text)) return false;
+  if (/\b(?:Authorization|api[-_ ]?key|token|secret|password|credential)\b|sk-[A-Za-z0-9._-]+/i.test(text)) return false;
+  return true;
 }
 
 function toolLifecycleMessage(
@@ -632,6 +928,25 @@ function compactRuntimeText(value: string | undefined, limit: number): string | 
   const redacted = redactRuntimeText(value).replace(/\s+/g, ' ').trim();
   if (redacted.length <= limit) return redacted;
   return `${redacted.slice(0, Math.max(0, limit - 18)).replace(/\s+\S*$/, '')} ... ${redacted.slice(-14)}`;
+}
+
+function compactRuntimeBlockText(value: string | undefined, limit: number): string | undefined {
+  if (!value?.trim()) return undefined;
+  const redacted = redactRuntimeText(value)
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .trim();
+  if (!redacted) return undefined;
+  if (redacted.length <= limit) return redacted;
+  return `${redacted.slice(0, Math.max(0, limit - 2_000)).replace(/\s+\S*$/, '')}\n...\n${redacted.slice(-1_500)}`;
+}
+
+function looksLikeUnifiedDiff(value: string | undefined) {
+  const text = value?.trim();
+  if (!text) return false;
+  return /^diff --git\s+/m.test(text)
+    || /^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/m.test(text)
+    || (/^---\s+\S+/m.test(text) && /^\+\+\+\s+\S+/m.test(text));
 }
 
 function redactRuntimeText(value: string): string {

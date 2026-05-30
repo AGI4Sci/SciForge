@@ -3,7 +3,7 @@ import { request as httpsRequest } from 'node:https';
 import { brotliDecompressSync, gunzipSync, inflateSync } from 'node:zlib';
 
 import type { AgentCliAdapter } from './agent-cli-adapter.js';
-import { CodexExecJsonAdapter } from './codex-exec-json-adapter.js';
+import { createCodexAppServerRuntimeAdapter } from './codex-runtime-adapter.js';
 import type { NormalizedAgentEvent } from './codex-event-normalizer.js';
 import {
   chatCompletionToResponse,
@@ -100,7 +100,7 @@ export async function runComputerUseCodexTextPlanner(
   options: ComputerUseTextPlannerOptions,
 ): Promise<ComputerUseTextPlannerRun> {
   const env = plannerRuntimeEnv(options.env ?? process.env);
-  const adapter = options.adapter ?? new CodexExecJsonAdapter({ env });
+  const adapter = options.adapter ?? createCodexAppServerRuntimeAdapter({ env });
   const commandText = buildComputerUseTextPlannerCommand(input);
   const turn = await adapter.startTurn({
     commandText,

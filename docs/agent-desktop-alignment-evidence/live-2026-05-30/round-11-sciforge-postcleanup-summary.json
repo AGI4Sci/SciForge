@@ -1,0 +1,26 @@
+{
+  "roundId": "live-round-11",
+  "side": "sciforge-browser",
+  "capturedAt": "2026-05-30T13:49:00+08:00",
+  "entryPoint": "SciForge Browser post-cleanup sub-agent process and right-pane result preview",
+  "refs": [
+    "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-sciforge-postcleanup-subagent-preview.png",
+    "browser:round-11-sciforge-postcleanup-subagent-preview"
+  ],
+  "checks": {
+    "processGroupCount": 2,
+    "processActionCount": 2,
+    "rightPanePreviewCount": 1,
+    "hasWorkReplayHeader": false,
+    "hasReplayBadge": false,
+    "subagentRefsBeforeSummary": true,
+    "subagentRefsBeforeDetails": true,
+    "processHasRawJsonOutput": false,
+    "processHasPromptEcho": false,
+    "processHasSubagentSubagentTitle": false,
+    "rightPaneHasPromptEcho": false,
+    "rightPaneHasRawJson": false,
+    "rightPaneHasUnsafeLoading": false
+  },
+  "summary": "Browser retest after generic cleanup showed completed sub-agent process rows keep worker ids, hide prompt echoes/raw JSON, remove the recorded replay header, show sub-agent refs before summaries/details, and open a safe right-pane sub-agent preview with transcript/result refs."
+}

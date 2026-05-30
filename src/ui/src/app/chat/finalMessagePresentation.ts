@@ -1,4 +1,5 @@
 import { resultPresentationTextLooksLikeRawJson } from '@sciforge-ui/runtime-contract';
+import { normalizeAssistantProseForDisplay } from '../../assistantText';
 
 export type FinalMessageAuditSection = {
   label: string;
@@ -51,6 +52,7 @@ export function splitFinalMessagePresentation(content: string, resultPresentatio
       continue;
     }
     if (decision.fold) {
+      if (looksLikeRedactedPathPlanningLeak(block.text)) continue;
       auditSections.push({
         label: decision.label,
         text: block.text,
@@ -68,7 +70,7 @@ export function splitFinalMessagePresentation(content: string, resultPresentatio
   }
 
   return {
-    primaryContent: primary.join('\n\n').trim(),
+    primaryContent: normalizeAssistantProseForDisplay(primary.join('\n\n')),
     auditSections,
     summary: auditSectionsSummary(auditSections),
   };
@@ -103,7 +105,7 @@ function presentationFromResultContract(contract: ResultPresentationContractLike
     };
   }
   return {
-    primaryContent: primary.join('\n\n').trim(),
+    primaryContent: normalizeAssistantProseForDisplay(primary.join('\n\n')),
     auditSections,
     summary: auditSectionsSummary(auditSections),
   };
@@ -191,7 +193,7 @@ function structuredAuditSections(contract: ResultPresentationContractLike, fallb
     ].filter(Boolean).join('\n');
     if (processText) {
       sections.push({
-        label: '过程',
+        label: 'Process',
         text: processText,
         evidenceType: 'execution-audit',
         importance: 'diagnostic',
@@ -213,7 +215,7 @@ function structuredAuditSections(contract: ResultPresentationContractLike, fallb
   }
   if (fallbackContent.trim() && looksLikeRuntimeMetadataBlock(fallbackContent)) {
     sections.push({
-      label: '诊断',
+      label: 'Details',
       text: fallbackContent,
       evidenceType: 'tool-output',
       importance: 'supporting',
@@ -287,15 +289,17 @@ function classifyFinalMessageBlock(block: ContentBlock, pendingAuditHeading: str
   const rawJson = looksLikeRawJson(text);
   const logOutput = looksLikeLogOutput(block.language, text);
   const runtimeAuditLog = looksLikeRuntimeAuditLogBlock(text);
-  const failureDiagnostic = looksLikeFailureDiagnostic(text);
+  const failureDiagnostic = looksLikeFailureDiagnostic(text) || looksLikeTracebackDiagnostic(text);
   const systemEnvelope = looksLikeSystemEnvelope(text);
   const runtimeMetadata = looksLikeRuntimeMetadataBlock(text);
   const processTranscript = looksLikeProcessTranscript(text);
+  const localPathListing = looksLikeLocalPathListing(text);
+  const redactedPathPlanningLeak = looksLikeRedactedPathPlanningLeak(text);
   const userFacingPlanningList = looksLikeUserFacingPlanningList(block.kind, text);
   const structuralEvidenceType = rawJson ? 'raw-json' : logOutput || runtimeAuditLog ? 'log-output' : undefined;
   const evidenceType = block.kind === 'code'
     ? structuralEvidenceType ?? auditEvidenceType(haystack) ?? codeEvidenceType(block.language, text)
-    : (failureDiagnostic || runtimeMetadata || processTranscript ? 'execution-audit' : undefined)
+    : (failureDiagnostic || runtimeMetadata || processTranscript || localPathListing || redactedPathPlanningLeak ? 'execution-audit' : undefined)
       ?? (systemEnvelope ? 'tool-output' : undefined)
       ?? auditEvidenceType(haystack)
       ?? auditHeadingEvidenceType(text)
@@ -306,6 +310,8 @@ function classifyFinalMessageBlock(block: ContentBlock, pendingAuditHeading: str
       || systemEnvelope
       || runtimeMetadata
       || processTranscript
+      || localPathListing
+      || redactedPathPlanningLeak
       || runtimeAuditLog
       || (block.kind === 'code' && (evidenceType || rawJson || logOutput))
       || (block.kind !== 'heading' && failureDiagnostic)
@@ -383,6 +389,22 @@ function looksLikeFailureDiagnostic(text: string) {
   return false;
 }
 
+function looksLikeTracebackDiagnostic(text: string) {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  if (!compact) return false;
+  if (/traceback \(most recent call last\):/i.test(compact)
+    && /\b(?:file ["'][^"']+["'], line \d+|raise |exception|error|urllib3|requests|http\.client)\b/i.test(compact)) {
+    return true;
+  }
+  if (/^(?:the above exception was the direct cause|during handling of the above exception)/i.test(compact)) return true;
+  if (/\b(?:urllib3|requests|http\.client)\.exceptions\.[A-Za-z]+Error\b/i.test(compact)) return true;
+  if (/\b(?:MaxRetryError|ProxyError|RemoteDisconnected|ConnectionError|TimeoutError|HTTPError)\b/i.test(compact)
+    && /\b(?:Traceback|File ["']|line \d+|exception|request|connection|proxy|http)\b/i.test(compact)) {
+    return true;
+  }
+  return false;
+}
+
 function looksLikeSystemEnvelope(text: string) {
   const compact = text.replace(/\s+/g, ' ').trim();
   if (!compact) return false;
@@ -405,6 +427,23 @@ function looksLikeProcessTranscript(text: string) {
   return processLines.length >= Math.max(3, Math.ceil(lines.length * 0.6));
 }
 
+function looksLikeLocalPathListing(text: string) {
+  const lines = text.split('\n').map((line) => line.trim()).filter(Boolean);
+  if (!lines.length || hasInlineObjectReference(text)) return false;
+  const absolutePathLines = lines.filter((line) => /^(?:[-*]\s*)?(?:\/(?:Applications|Users|Volumes|private|var|tmp)\/|[A-Za-z]:\\)/.test(line));
+  const pathHeavyLines = lines.filter((line) => /(?:\/(?:Applications|Users|Volumes|private|var|tmp)\/|[A-Za-z]:\\|(?:^|\s)(?:\.{1,2}\/)?(?:[\w .-]+\/){2,}[\w .-]+\.[A-Za-z0-9]{1,12})(?!\w)/.test(line));
+  const projectContextPathLines = lines.filter((line) => /\/Applications\/(?:workspace|project context)\//i.test(line));
+  if (absolutePathLines.length >= 2 || projectContextPathLines.length >= 2) return true;
+  return pathHeavyLines.length >= 4 && pathHeavyLines.length >= Math.ceil(lines.length * 0.6);
+}
+
+function looksLikeRedactedPathPlanningLeak(text: string) {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  if (!compact) return false;
+  const redactedPathCount = compact.match(/\[local path\]/gi)?.length ?? 0;
+  return redactedPathCount >= 2 && /\b(?:let me|i(?:'ll| will)|now|check|read|inspect|look|open)\b/i.test(compact);
+}
+
 function hasInlineObjectReference(text: string) {
   return /\b(?:artifact|file|verification|claim|view|dataset|table|figure|image|notebook|diff|run|execution-unit)::[^\s),.;]+/i.test(text);
 }
@@ -418,11 +457,8 @@ function headingText(text: string) {
 }
 
 function labelForEvidence(evidenceType: FinalMessageAuditSection['evidenceType']) {
-  if (evidenceType === 'execution-audit') return '过程';
-  if (evidenceType === 'raw-trace') return '诊断';
-  if (evidenceType === 'raw-json') return '诊断';
-  if (evidenceType === 'log-output') return '诊断';
-  return '诊断';
+  if (evidenceType === 'execution-audit') return 'Process';
+  return 'Details';
 }
 
 function auditSectionsSummary(sections: FinalMessageAuditSection[]) {
@@ -431,12 +467,12 @@ function auditSectionsSummary(sections: FinalMessageAuditSection[]) {
     return memo;
   }, {} as Record<FinalMessageAuditSection['evidenceType'], number>);
   return [
-    counts['execution-audit'] ? `${counts['execution-audit']} 条过程` : '',
-    counts['tool-output'] ? `${counts['tool-output']} 条诊断` : '',
-    counts['raw-json'] ? `${counts['raw-json']} 条诊断` : '',
-    counts['log-output'] ? `${counts['log-output']} 条诊断` : '',
-    counts['raw-trace'] ? `${counts['raw-trace']} 条诊断` : '',
-  ].filter(Boolean).join(' · ') || `${sections.length} 条明细`;
+    counts['execution-audit'] ? `${counts['execution-audit']} process` : '',
+    counts['tool-output'] ? `${counts['tool-output']} details` : '',
+    counts['raw-json'] ? `${counts['raw-json']} details` : '',
+    counts['log-output'] ? `${counts['log-output']} details` : '',
+    counts['raw-trace'] ? `${counts['raw-trace']} details` : '',
+  ].filter(Boolean).join(' · ') || `${sections.length} details`;
 }
 
 function compactAuditFallback(text: string, evidenceType: FinalMessageAuditSection['evidenceType']) {
@@ -444,12 +480,18 @@ function compactAuditFallback(text: string, evidenceType: FinalMessageAuditSecti
   const humanText = extractHumanTextFromRawPayload(text);
   if (humanText) return humanText;
   if (looksLikeFailureDiagnostic(compact)) {
-    return '任务未完成，诊断和恢复线索已折叠在下方，可展开查看后继续追问或重试。';
+    return 'The task did not finish. Details and recovery hints are folded below.';
+  }
+  if (looksLikeTracebackDiagnostic(compact)) {
+    return 'The task did not finish. Error details are folded below.';
   }
   if (looksLikeRuntimeAuditLogBlock(compact)) {
-    return '任务返回了运行期诊断；详细材料已折叠在下方，可展开查看。';
+    return 'The task returned additional details. Expand below to inspect them.';
   }
-  return `任务已返回 ${labelForEvidence(evidenceType)}。${compact.slice(0, 220)}${compact.length > 220 ? '...' : ''}`;
+  if (looksLikeLocalPathListing(text)) {
+    return 'The answer references project context. Details are folded below.';
+  }
+  return `The task returned ${labelForEvidence(evidenceType)}. ${compact.slice(0, 220)}${compact.length > 220 ? '...' : ''}`;
 }
 
 function safeAuditLabel(label: string | undefined, evidenceType: FinalMessageAuditSection['evidenceType']) {
@@ -458,7 +500,7 @@ function safeAuditLabel(label: string | undefined, evidenceType: FinalMessageAud
   if (/raw|jsonl?|stdout|stderr|tool\s*output|tool\s*payload|payload|trace|debug|audit|provider|runtime|backend|execution\s*units?|executionunit|ConversationProjection|ArtifactDelivery/i.test(compact)) {
     return labelForEvidence(evidenceType);
   }
-  if (/执行|过程|验证|恢复|诊断|线索/.test(compact)) return compact;
+  if (/执行|过程|验证|恢复|诊断|线索/.test(compact)) return labelForEvidence(evidenceType);
   return labelForEvidence(evidenceType);
 }
 

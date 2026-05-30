@@ -1,4 +1,5 @@
 import type { PeerInstance, PeerInstanceRole, PeerInstanceTrustLevel, SciForgeConfig, ToolProviderRouteOverride, ToolProviderSource } from './domain';
+import { DEFAULT_LOCALE, normalizeLocale } from './i18n';
 
 const buildDefaults = (import.meta as ImportMeta & {
   env?: Record<string, string | undefined>;
@@ -54,6 +55,7 @@ export const defaultSciForgeConfig: SciForgeConfig = {
   feedbackGithubAssignees: [],
   feedbackGithubDryRun: false,
   theme: 'dark',
+  locale: DEFAULT_LOCALE,
   agentBackend: 'codex',
   runtimeProfile: DEFAULT_CODEX_RUNTIME_PROFILE,
   allowOpenAiRuntime: false,
@@ -213,6 +215,7 @@ export function normalizeConfig(value: unknown): SciForgeConfig {
     workspacePath: normalizeWorkspaceRootPath(typeof raw.workspacePath === 'string' ? raw.workspacePath : defaultSciForgeConfig.workspacePath),
     peerInstances: normalizePeerInstances(raw.peerInstances),
     theme: raw.theme === 'light' ? 'light' : 'dark',
+    locale: normalizeLocale(raw.locale),
     agentBackend: normalizeAgentBackend(raw.agentBackend),
     runtimeProfile: normalizeRuntimeProfile(raw.runtimeProfile),
     allowOpenAiRuntime: raw.allowOpenAiRuntime === true,

@@ -69,6 +69,57 @@ test('Codex realtime session client sends terminal-equivalent request over WebSo
   assert.deepEqual(events.map((event) => (event as Record<string, unknown>).type), ['message', 'realtime_control', 'done']);
 });
 
+test('Codex realtime session client preserves adjacent tool lifecycle events before socket close', async () => {
+  let socket: MockSocket | undefined;
+  const client = createCodexRealtimeSessionClient({
+    workspaceWriterBaseUrl: 'http://127.0.0.1:5174',
+    webSocketFactory(url) {
+      socket = new MockSocket(url);
+      return socket as unknown as WebSocket;
+    },
+  });
+  const events: unknown[] = [];
+  const request = {
+    realtimeSession: createCodexRealtimeSessionEnvelope({
+      commandId: 'codex-command-ws-tools',
+      attemptId: 'codex-command-ws-tools-attempt-1',
+    }),
+    commandText: 'run diff',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-ws-tools',
+    attemptId: 'codex-command-ws-tools-attempt-1',
+  };
+  const pending = client.stream(JSON.stringify(request), (event) => events.push(event));
+
+  socket?.open();
+  socket?.message({
+    type: 'event',
+    event: 'tool_started',
+    data: { type: 'tool_started', toolName: 'shell', itemId: 'item_0', command: 'diff -u old.ts new.ts' },
+  });
+  socket?.message({
+    type: 'event',
+    event: 'tool_completed',
+    data: {
+      type: 'tool_completed',
+      toolName: 'shell',
+      itemId: 'item_0',
+      command: 'diff -u old.ts new.ts',
+      status: 'failed',
+      exitCode: 1,
+      diff: ['--- old.ts', '+++ new.ts', '@@ -1 +1 @@', '-before', '+after'].join('\n'),
+    },
+  });
+  socket?.message({ type: 'event', event: 'message', data: { type: 'message', text: 'done' } });
+  socket?.message({ type: 'event', event: 'done', data: { type: 'done', status: 'done' } });
+  socket?.close();
+
+  const stream = await pending;
+  assert.equal(stream.error, undefined);
+  assert.deepEqual(events.map((event) => (event as Record<string, unknown>).type), ['tool_started', 'tool_completed', 'message', 'done']);
+  assert.match(String((events[1] as Record<string, unknown>).diff), /@@ -1 \+1 @@/);
+});
+
 class MockSocket {
   readonly sent: string[] = [];
   readyState = 0;

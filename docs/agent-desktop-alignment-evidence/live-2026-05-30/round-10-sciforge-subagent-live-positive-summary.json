@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "sciforge.agent-desktop-alignment-live-evidence-summary.v1",
+  "id": "sciforge-round-10-subagent-live-positive",
+  "capturedAt": "2026-05-30T04:57:11.070Z",
+  "side": "sciforge-browser",
+  "promptMode": "Browser virtual clipboard unavailable; typed ASCII equivalent prompt key-by-key through the visible SciForge composer.",
+  "productPath": "Codex app-server Runtime Codex via SciForge UI, explicit multi_agent_v1.spawn_agent MCP call; no codex exec --json or shell fallback evidence.",
+  "observations": [
+    "New SciForge chat created from visible UI and prompt submitted through the composer.",
+    "First turn completed with a visible Work replay group summarizing 1 sub agent.",
+    "Expanded action showed Sub agent row, done status, agent id worker-7c7f1110108a, parent codex-command-mprvfy11-6oh25u, transcript ref artifact:subagent-transcript-7c7f1110108a, result ref artifact:subagent-result-7c7f1110108a, and file refs PROJECT.md plus live-ledger JSON.",
+    "Right pane result preview rendered as a sub-agent preview with safe summary and refs instead of a raw JSON/log fallback.",
+    "Same-thread follow-up completed after resume with a second visible 1 sub agent Work replay and result/transcript refs worker-9b4fbc214392.",
+    "Visible chat did not show NO_SUBAGENT_TOOL_AVAILABLE, codex exec fallback, raw app-server transport dump, traceback, or local absolute paths."
+  ],
+  "refsObserved": {
+    "firstTurn": {
+      "agentId": "worker-7c7f1110108a",
+      "resultRef": "artifact:subagent-result-7c7f1110108a",
+      "transcriptRef": "artifact:subagent-transcript-7c7f1110108a",
+      "fileRefs": [
+        "file:PROJECT.md",
+        "file:docs/agent-desktop-alignment-evidence/live-ledger-2026-05-30.json"
+      ]
+    },
+    "resumeTurn": {
+      "agentId": "worker-9b4fbc214392",
+      "resultRef": "artifact:subagent-result-9b4fbc214392",
+      "transcriptRef": "artifact:subagent-transcript-9b4fbc214392"
+    }
+  },
+  "screenshotRef": "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-sciforge-subagent-live-positive.png"
+}

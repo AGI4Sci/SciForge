@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createGuiProtocolController } from './guiProtocol';
+import { buildSidebarCursorAgentProjection, sidebarCursorAgentRegionDetail } from './appShell/sidebarCursorAgentModel';
 
 test('GuiProtocol exposes shell, hot-region, and intent-log resources as bounded semantic reads', () => {
   const gui = createGuiProtocolController({
@@ -57,6 +58,65 @@ test('GuiProtocol exposes shell, hot-region, and intent-log resources as bounded
   ]);
   assert.equal(hotRegion.hotRegion.primaryRef, 'artifact:report');
   assert.deepEqual(intentLog.entries, []);
+});
+
+test('GuiProtocol default sidebar placeholder is read-only and exposes no mutating command affordance', () => {
+  const gui = createGuiProtocolController();
+  const summary = gui.read({ path: '/gui/regions/sidebar/summary.md' }).content;
+  const actions = JSON.parse(gui.read({ path: '/gui/regions/sidebar/actions.json' }).content) as { actions: Array<{ commandText: string }> };
+
+  assert.match(summary, /not been published/);
+  assert.deepEqual(actions.actions, []);
+});
+
+test('GuiProtocol exposes sidebar region as Cursor Agent-like read-only resources', () => {
+  const sidebar = sidebarCursorAgentRegionDetail(buildSidebarCursorAgentProjection({
+    workspace: {
+      id: 'workspace-a',
+      label: 'SciForge',
+      path: '/tmp/SciForge',
+      currentBranch: 'dev',
+      localEnvironment: { label: 'Local', detail: 'ready', state: 'ready' },
+      context: { used: 12_000, limit: 64_000, state: 'ready' },
+    },
+    projects: [{
+      id: 'project-a',
+      label: 'SciForge',
+      current: true,
+      threads: [{
+        sessionId: 'thread-a',
+        title: 'Align process view',
+        messages: [{ id: 'user-1', role: 'user', content: 'align the process view' }],
+        pinned: true,
+      }],
+    }],
+    selection: { projectId: 'project-a', threadId: 'thread-a' },
+    presentation: { searchQuery: 'process' },
+  }));
+  const gui = createGuiProtocolController({
+    revision: 9,
+    focusedPanel: 'sidebar',
+    regions: [sidebar],
+  });
+
+  const entries = gui.list({ path: '/gui/regions/sidebar' }).map((entry) => entry.path);
+  const summary = gui.read({ path: '/gui/regions/sidebar/summary.md' }).content;
+  const refs = JSON.parse(gui.read({ path: '/gui/regions/sidebar/refs.json' }).content) as { refs: string[] };
+  const actions = JSON.parse(gui.read({ path: '/gui/regions/sidebar/actions.json' }).content) as { actions: Array<{ commandText: string }> };
+  const search = gui.search({ scope: '/gui/regions/sidebar', query: 'project chats', kinds: ['title', 'visible-text', 'action', 'ref'] });
+
+  assert.deepEqual(entries, [
+    '/gui/regions/sidebar/actions.json',
+    '/gui/regions/sidebar/refs.json',
+    '/gui/regions/sidebar/summary.md',
+    '/gui/regions/sidebar/viewport.json',
+  ]);
+  assert.match(summary, /Project chats/);
+  assert.match(summary, /1 project, 1 chat, 1 pinned/);
+  assert.ok(refs.refs.every((ref) => ref.startsWith('gui:/gui/regions/sidebar')));
+  assert.ok(actions.actions.some((action) => action.commandText.startsWith('sciforge chat new')));
+  assert.ok(search.some((item) => item.path === '/gui/regions/sidebar/summary.md'));
+  assert.doesNotMatch(`${summary}\n${JSON.stringify(actions)}`, /provider|model|raw JSONL|stdout|stderr|ExecutionUnit/i);
 });
 
 test('GuiProtocol exposes presentation catalog and renderer resources from package manifests', () => {

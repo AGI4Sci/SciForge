@@ -4,6 +4,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { PROCESS_PROGRESS_EVENT_TYPE, PROCESS_PROGRESS_PHASE, PROCESS_PROGRESS_STATUS } from '@sciforge-ui/runtime-contract';
 import { defaultSciForgeConfig } from '../config';
+import { I18nProvider } from '../i18nContext';
 import { navItems } from '../data';
 import { ChatPanel } from './ChatPanel';
 import { TopBar } from './appShell/ShellPanels';
@@ -27,6 +28,10 @@ const runs: SciForgeRun[] = [{
   response: '已生成总结报告',
   createdAt: '2026-05-07T00:02:00.000Z',
 }];
+
+function renderChatPanel(element: ReturnType<typeof createElement>) {
+  return renderToStaticMarkup(createElement(I18nProvider, { locale: 'en-US', children: element }));
+}
 
 test('run key info attaches to scenario answer, not system upload message', () => {
   assert.equal(runIdForMessage(messages[0], 0, messages, runs), undefined);
@@ -88,9 +93,9 @@ test('running message follows structured progress fields instead of prompt or sc
   const content = runningMessageContentFromStream('', events);
 
   assert.match(content, /结构化等待状态/);
-  assert.match(content, /读 \/structured\/read\.csv/);
-  assert.match(content, /等 structured backend event/);
-  assert.match(content, /下一步 structured next step/);
+  assert.match(content, /Reading \/structured\/read\.csv/);
+  assert.match(content, /Waiting for structured backend event/);
+  assert.match(content, /Next structured next step/);
   assert.doesNotMatch(content, /PROMPT_TEXT_SHOULD_NOT_DECIDE/);
   assert.doesNotMatch(content, /SCENARIO_TEXT_SHOULD_NOT_DECIDE/);
   assert.doesNotMatch(content, /search write failed approval/);
@@ -183,12 +188,8 @@ test('chat run process and key info prefer projection over raw failed execution 
     onObjectFocus: () => undefined,
   }));
 
-  assert.match(processHtml, /GUI intent summarized the durable report ref/);
-  assert.doesNotMatch(processHtml, /ConversationProjection/);
-  assert.match(processHtml, /完成/);
-  assert.doesNotMatch(processHtml, /LEGACY_EXECUTION_UNIT_SHOULD_NOT_RENDER/);
-  assert.doesNotMatch(processHtml, /legacy\.raw/);
-  assert.match(keyInfoHtml, /本轮结果/);
+  assert.equal(processHtml, '');
+  assert.match(keyInfoHtml, /Results/);
   assert.match(keyInfoHtml, /Projection Report/);
 });
 
@@ -258,7 +259,7 @@ test('assistant message follows Codex-style answer, results, process, verificati
     versions: [],
     hiddenResultSlotIds: [],
   } as SciForgeSession;
-  const html = renderToStaticMarkup(createElement(ChatPanel, {
+  const html = renderChatPanel(createElement(ChatPanel, {
     scenarioId: 'literature-evidence-review',
     role: 'Researcher',
     config: defaultSciForgeConfig,
@@ -287,17 +288,13 @@ test('assistant message follows Codex-style answer, results, process, verificati
   }));
 
   const mainAnswerIndex = html.indexOf('ORDER_MAIN_ANSWER');
-  const keyInfoIndex = html.indexOf('本轮结果');
-  const processIndex = html.indexOf('<span class="cursor-step-kind">过程</span>');
-  const verificationIndex = html.indexOf('<span class="cursor-step-kind">验证</span>');
-  const recoveryIndex = html.indexOf('<span class="cursor-step-kind">恢复线索</span>');
-  const diagnosticsIndex = html.indexOf('<span class="cursor-step-kind">诊断</span>');
+  const keyInfoIndex = html.indexOf('Results');
+  const processIndex = html.indexOf('data-testid="chat-process-thread"');
   assert.ok(mainAnswerIndex >= 0);
+  assert.match(html, /class="message scenario assistant-message(?: [^"]*)?"/);
+  assert.match(html, /final-answer-prose/);
   assert.ok(keyInfoIndex > mainAnswerIndex);
-  assert.ok(processIndex > keyInfoIndex);
-  assert.ok(verificationIndex > processIndex);
-  assert.ok(recoveryIndex > verificationIndex);
-  assert.ok(diagnosticsIndex > recoveryIndex);
+  assert.equal(processIndex, -1);
   assert.doesNotMatch(html, /ConversationProjection|ExecutionUnit|ArtifactDelivery|native-message|live-runtime-codex|raw JSONL|SSE|stdout|stderr|provider|run id/);
 });
 
@@ -338,7 +335,7 @@ test('run key info counts durable file refs as user-visible objects', () => {
     onObjectFocus: () => undefined,
   }));
 
-  assert.match(html, /1 个对象 · 0 条判断/);
+  assert.match(html, /1 objects · 0 findings/);
   assert.match(html, /file:p6-mini-grant\/timeline-budget\.md/);
 });
 
@@ -503,7 +500,7 @@ test('chat final message body ignores raw displayIntent resultPresentation', () 
     versions: [],
     hiddenResultSlotIds: [],
   } as SciForgeSession;
-  const html = renderToStaticMarkup(createElement(ChatPanel, {
+  const html = renderChatPanel(createElement(ChatPanel, {
     scenarioId: 'literature-evidence-review',
     role: 'Researcher',
     config: defaultSciForgeConfig,
@@ -601,7 +598,7 @@ test('chat message DOM and badges distinguish demo seed from live runtime answer
     hiddenResultSlotIds: [],
   };
 
-  const html = renderToStaticMarkup(createElement(ChatPanel, {
+  const html = renderChatPanel(createElement(ChatPanel, {
     scenarioId: 'literature-evidence-review',
     role: 'Researcher',
     config: defaultSciForgeConfig,
@@ -647,7 +644,7 @@ test('chat message DOM and badges distinguish demo seed from live runtime answer
   assert.doesNotMatch(html, /live-runtime-codex|live Runtime Codex|运行结果/);
 });
 
-test('default chat renders Computer Use gui.present and gui.ask_user panels from run raw GUI intent', () => {
+test('default chat renders Computer Use confirmation panels without protocol command chrome', () => {
   const traceRef = '.sciforge/vision-runs/cu-risk/vision-trace.json';
   const screenshotRef = '.sciforge/vision-runs/cu-risk/step-001-before.png';
   const session: SciForgeSession = {
@@ -717,7 +714,7 @@ test('default chat renders Computer Use gui.present and gui.ask_user panels from
     versions: [],
     hiddenResultSlotIds: [],
   };
-  const html = renderToStaticMarkup(createElement(ChatPanel, {
+  const html = renderChatPanel(createElement(ChatPanel, {
     scenarioId: 'literature-evidence-review',
     role: 'Researcher',
     config: defaultSciForgeConfig,
@@ -746,16 +743,16 @@ test('default chat renders Computer Use gui.present and gui.ask_user panels from
   }));
 
   assert.match(html, /data-testid="runtime-gui-present"/);
-  assert.match(html, /data-gui-tool="gui\.present"/);
-  assert.match(html, /Computer Use stopped before the guarded action/);
-  assert.match(html, new RegExp(traceRef.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(html, /data-gui-surface="presentation"/);
+  assert.match(html, /the operation stopped before the guarded action/);
+  assert.doesNotMatch(html, new RegExp(traceRef.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.match(html, /data-testid="runtime-gui-ask-user"/);
-  assert.match(html, /data-gui-tool="gui\.ask_user"/);
-  assert.match(html, /approval-1/);
-  assert.match(html, /ref:planned-action:submit/);
-  assert.match(html, /\/computer-use approve --approval-ref approval-1/);
-  assert.match(html, /\/computer-use reject --approval-ref approval-1/);
-  assert.doesNotMatch(html, /deleteFile|RAW_PROVIDER_MESSAGE|stdout|stderr/);
+  assert.match(html, /data-gui-surface="confirmation"/);
+  assert.match(html, /Confirmation/);
+  assert.match(html, /Approve/);
+  assert.match(html, /Cancel/);
+  assert.doesNotMatch(html, /Computer Use|gui\.present|gui\.ask_user|approval-1|ref:planned-action:submit/);
+  assert.doesNotMatch(html, /\/computer-use approve|\/computer-use reject|deleteFile|RAW_PROVIDER_MESSAGE|stdout|stderr/);
 });
 
 test('default chat shell uses universal workspace copy instead of scenario-first labels', () => {
@@ -775,7 +772,7 @@ test('default chat shell uses universal workspace copy instead of scenario-first
     notebook: [],
     versions: [],
   };
-  const chatHtml = renderToStaticMarkup(createElement(ChatPanel, {
+  const chatHtml = renderChatPanel(createElement(ChatPanel, {
     scenarioId: 'literature-evidence-review',
     role: 'Researcher',
     config: defaultSciForgeConfig,
@@ -810,11 +807,11 @@ test('default chat shell uses universal workspace copy instead of scenario-first
     healthItems: [],
   }));
 
-  assert.match(chatHtml, /Ask SciForge/);
-  assert.match(chatHtml, /当前上下文/);
-  assert.match(chatHtml, /助手已连接|连接待配置/);
-  assert.match(chatHtml, /可写工作区/);
-  assert.match(topbarHtml, /注释/);
+  assert.match(chatHtml, /Ask/);
+  assert.match(chatHtml, /Context/);
+  assert.match(chatHtml, /Assistant connected|Connection not configured/);
+  assert.match(chatHtml, /Permission set/);
+  assert.match(topbarHtml, /Annotate/);
   assert.match(topbarHtml, /aria-pressed="false"/);
   assert.doesNotMatch(chatHtml, /workspace-write/);
   assert.doesNotMatch(chatHtml, /sciforge-runtime-deepseek/);
@@ -824,11 +821,11 @@ test('default chat shell uses universal workspace copy instead of scenario-first
   assert.doesNotMatch(chatHtml, /used\/window|Codex Runtime owns|provider unset|model unset/);
   assert.doesNotMatch(chatHtml, /文献证据评估场景/);
   assert.doesNotMatch(chatHtml, /Scenario Runtime/);
-  assert.match(topbarHtml, /SciForge · 就绪/);
-  assert.match(topbarHtml, /搜索文件、报告、问题/);
-  assert.doesNotMatch(topbarHtml, /搜索文件、报告、运行、问题|>\d+ actions<|>ready</);
+  assert.match(topbarHtml, /SciForge · Ready/);
+  assert.match(topbarHtml, /Search files, reports, questions/);
+  assert.doesNotMatch(topbarHtml, />\d+ actions<|>ready</);
   assert.doesNotMatch(topbarHtml, /Execution Unit/);
-  assert.equal(navItems.find((item) => item.id === 'workbench')?.label, '聊天工作台');
+  assert.equal(navItems.find((item) => item.id === 'workbench')?.label, 'Chat');
 });
 
 test('chat panel primary DOM omits runtime implementation terms', () => {
@@ -863,6 +860,29 @@ test('chat panel primary DOM omits runtime implementation terms', () => {
       prompt: '请总结当前 UI。',
       response: '已按 subagent 风格整理。',
       createdAt: '2026-05-21T00:00:01.000Z',
+      raw: {
+        displayIntent: {
+          conversationProjection: {
+            schemaVersion: 'sciforge.conversation-projection.v1',
+            conversationId: 'runtime-surface',
+            visibleAnswer: {
+              status: 'repair-needed',
+              text: '已按 subagent 风格整理。',
+              artifactRefs: [],
+              diagnostic: 'Runtime Codex started with sciforge-deepseek-proxy/bailian/deepseek-v4-flash profile sciforge-runtime-deepseek.',
+            },
+            activeRun: { id: 'run-codex-runtime-surface', status: 'repair-needed' },
+            artifacts: [],
+            executionProcess: [],
+            recoverActions: [
+              'Retry or continue from this failed Runtime Codex run with the preserved command id, attempt id, profile, workspace, and audit refs.',
+            ],
+            verificationState: { status: 'failed' },
+            auditRefs: [],
+            diagnostics: [],
+          },
+        },
+      },
     }],
     uiManifest: [],
     claims: [],
@@ -872,7 +892,7 @@ test('chat panel primary DOM omits runtime implementation terms', () => {
     versions: [],
     hiddenResultSlotIds: [],
   };
-  const html = renderToStaticMarkup(createElement(ChatPanel, {
+  const html = renderChatPanel(createElement(ChatPanel, {
     scenarioId: 'literature-evidence-review',
     role: 'Researcher',
     config: {
@@ -919,6 +939,8 @@ test('chat panel primary DOM omits runtime implementation terms', () => {
     'provider',
     'model',
     'profile',
+    'command id',
+    'attempt id',
     'used/window',
     'raw output',
     'run id',
@@ -927,7 +949,7 @@ test('chat panel primary DOM omits runtime implementation terms', () => {
     assert.doesNotMatch(html, new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
   assert.match(html, /已按 subagent 风格整理/);
-  assert.match(html, /过程/);
+  assert.match(html, /Activity|过程/);
 });
 
 test('selected-reference follow-up messages show compact continuity context', () => {
@@ -961,7 +983,7 @@ test('selected-reference follow-up messages show compact continuity context', ()
     versions: [],
     hiddenResultSlotIds: [],
   };
-  const html = renderToStaticMarkup(createElement(ChatPanel, {
+  const html = renderChatPanel(createElement(ChatPanel, {
     scenarioId: 'literature-evidence-review',
     role: 'Researcher',
     config: defaultSciForgeConfig,
@@ -989,7 +1011,7 @@ test('selected-reference follow-up messages show compact continuity context', ()
     runtimeHealth: [],
   }));
 
-  assert.match(html, /继续基于当前对话/);
+  assert.match(html, /Continuing with/);
   assert.match(html, /Selected research report/);
   assert.match(html, /session-selected-followup|selected-/);
 });

@@ -1,0 +1,81 @@
+{
+  "schemaVersion": "sciforge.agent-desktop-alignment-evidence.v1",
+  "recordId": "agent-desktop-alignment-2026-05-30",
+  "recordedAt": "2026-05-30T01:45:00+08:00",
+  "policy": {
+    "refsFirst": true,
+    "redaction": "required",
+    "forbiddenContent": [
+      "provider secret",
+      "API key",
+      "Authorization header",
+      "raw token or credential",
+      "full private dialog",
+      "unrelated desktop or other-application state",
+      "inline screenshot/base64/html/transcript payloads"
+    ]
+  },
+  "change": {
+    "kind": "repair-run",
+    "summary": "Cursor Agent-like sidebar and chat process presentation alignment.",
+    "refs": [
+      "src/ui/src/app/chat/cursorAgentProcess.ts",
+      "src/ui/src/app/chat/RunningWorkProcess.tsx",
+      "src/ui/src/app/chat/RunExecutionProcess.tsx",
+      "src/ui/src/app/appShell/sidebarCursorAgentModel.ts",
+      "src/ui/src/app/appShell/ShellPanels.tsx",
+      "src/ui/src/app/agentDesktopAlignmentEvidence.ts"
+    ],
+    "surfaces": ["sidebar", "chat", "presentation"]
+  },
+  "evidence": [
+    {
+      "id": "browser-sidebar-new-project-new-chat",
+      "side": "sciforge-browser",
+      "source": { "tool": "browser", "target": "sciforge-web", "ref": "docs/agent-desktop-alignment-evidence/sciforge-browser-alignment-2026-05-30.png" },
+      "requirementIds": ["sidebar-new-project-new-chat"],
+      "refs": ["docs/agent-desktop-alignment-evidence/sciforge-browser-alignment-2026-05-30.png"],
+      "summary": "SciForge browser rendered the app shell with the left sidebar present; code refs publish the sidebar as a Cursor Agent-like GUI region."
+    },
+    {
+      "id": "cursor-sidebar-new-project-new-chat",
+      "side": "cursor-agent-computer-use",
+      "source": { "tool": "computer-use", "target": "cursor-agent-desktop" },
+      "requirementIds": ["sidebar-new-project-new-chat"],
+      "refs": ["computer-use:cursor-agents-sidebar-observation-2026-05-30"],
+      "summary": "Cursor Agent desktop sidebar was observed in read-only mode with repository groups, New Agent entry, draft/archive/discard affordances, branch, local, and context status."
+    },
+    {
+      "id": "browser-completed-state-collapsed",
+      "side": "sciforge-browser",
+      "source": { "tool": "browser", "target": "sciforge-web", "ref": "docs/agent-desktop-alignment-evidence/sciforge-browser-alignment-2026-05-30.png" },
+      "requirementIds": ["completed-state-collapsed"],
+      "refs": ["src/ui/src/app/chat/RunExecutionProcess.test.ts", "src/ui/src/streamEventPresentation.test.ts"],
+      "summary": "SciForge component tests verify completed native process replay uses folded Cursor Agent-like groups and does not render legacy summary folds."
+    },
+    {
+      "id": "cursor-completed-state-collapsed",
+      "side": "cursor-agent-computer-use",
+      "source": { "tool": "computer-use", "target": "cursor-agent-desktop" },
+      "requirementIds": ["completed-state-collapsed"],
+      "refs": ["computer-use:cursor-agents-completed-fold-observation-2026-05-30"],
+      "summary": "Cursor Agent desktop completed task was observed with an assistant progress line and collapsed explored/worked aggregate."
+    },
+    {
+      "id": "browser-running-command-edit-file-subagent",
+      "side": "sciforge-browser",
+      "source": { "tool": "browser", "target": "sciforge-web", "ref": "docs/agent-desktop-alignment-evidence/sciforge-browser-alignment-2026-05-30.png" },
+      "requirementIds": ["running-state-live-updates", "command-expansion", "edit-diff-expansion", "file-preview", "sub-agent-expansion", "right-side-result-presentation"],
+      "refs": ["src/ui/src/streamEventPresentation.test.ts", "src/ui/src/app/chat/RunExecutionProcess.test.ts", "src/ui/src/app/ChatPanel.test.ts"],
+      "summary": "SciForge focused tests cover live running rows, command details, edit/diff details when provided, trusted file preview refs, sub-agent rows, and right-side result ordering."
+    },
+    {
+      "id": "cursor-running-command-edit-file-subagent",
+      "side": "cursor-agent-computer-use",
+      "source": { "tool": "computer-use", "target": "cursor-agent-desktop" },
+      "requirementIds": ["running-state-live-updates", "command-expansion", "edit-diff-expansion", "file-preview", "sub-agent-expansion", "right-side-result-presentation"],
+      "refs": ["computer-use:cursor-agents-process-observation-2026-05-30"],
+      "summary": "Cursor Agent desktop was observed in read-only mode with running worked/explored groups, shell command expansion, edit diff expansion, file preview, sub-agent transcript refs, and final answer surface."
+    }
+  ]
+}

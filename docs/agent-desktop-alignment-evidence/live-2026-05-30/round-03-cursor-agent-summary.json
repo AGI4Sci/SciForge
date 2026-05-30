@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "sciforge.cursor-agent-redacted-live-summary.v1",
+  "capturedAt": "2026-05-30T07:18:00+08:00",
+  "source": {
+    "tool": "computer-use",
+    "target": "Cursor Agent desktop app",
+    "capturePolicy": "redacted structural summary only; raw accessibility tree and full private dialog are not persisted"
+  },
+  "coverage": {
+    "surfaces": ["sidebar", "chat", "presentation"],
+    "requirementIds": [
+      "sidebar-new-project-new-chat",
+      "completed-state-collapsed",
+      "file-preview",
+      "right-side-result-presentation"
+    ]
+  },
+  "observations": {
+    "leftSidebar": {
+      "topLevelActions": ["New Agent with keyboard shortcut", "Search", "Automations", "Customize"],
+      "repositoryGroups": "Repositories list groups chats by repository/workspace and exposes a per-repository New Agent action.",
+      "threadRows": "Thread rows show status, pin, title, relative time, and archive or discard actions.",
+      "bottomStatus": "Bottom area exposes Local environment and Context status."
+    },
+    "chatProcess": {
+      "completedAggregate": "A completed turn shows a collapsed Worked for duration aggregate above the final answer.",
+      "expandedAggregate": "Opening the Worked aggregate reveals a progress sentence and an Explored files aggregate.",
+      "expandedExplored": "Opening Explored reveals individual Read action rows with file name and line range."
+    },
+    "rightPane": {
+      "filePreview": "Clicking a Read action opens the referenced file in a separate right-side editor/preview tab.",
+      "tabs": "The right pane keeps file previews in tabs independent from the chat transcript.",
+      "sourceVsPreview": "The opened file supports source/preview style controls where available."
+    }
+  },
+  "redactionCheck": {
+    "passed": true,
+    "notes": [
+      "No raw accessibility tree is stored in this file.",
+      "No full private conversation is stored.",
+      "No provider secret, API key, model name, Authorization header, token, password, credential, local absolute path, screenshot payload, or unrelated desktop state is stored."
+    ]
+  }
+}

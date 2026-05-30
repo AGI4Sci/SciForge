@@ -1,0 +1,3520 @@
+{
+  "schemaVersion": "sciforge.agent-desktop-alignment-live-ledger.v1",
+  "ledgerId": "agent-desktop-live-ledger-2026-05-30",
+  "recordedAt": "2026-05-30T14:39:31.957Z",
+  "status": "active",
+  "policy": {
+    "refsFirst": true,
+    "redaction": "required",
+    "continuousLiveEvidence": true,
+    "requiredSides": [
+      "sciforge-browser",
+      "cursor-agent-computer-use"
+    ],
+    "requiredLoop": [
+      "observe-sciforge",
+      "observe-cursor-agent",
+      "record-differences",
+      "update-project-todo",
+      "implement-generic-fix",
+      "verify",
+      "retest-both-sides"
+    ],
+    "forbiddenContent": [
+      "provider URL",
+      "provider secret",
+      "API key",
+      "model name",
+      "Authorization header",
+      "raw token or credential",
+      "local absolute path",
+      "full private dialog",
+      "unrelated desktop or other-application state",
+      "inline screenshot/base64/html/transcript payloads"
+    ]
+  },
+  "rounds": [
+    {
+      "roundId": "live-round-01",
+      "status": "observed",
+      "startedAt": "2026-05-30T02:10:00+08:00",
+      "completedAt": "2026-05-30T06:54:00+08:00",
+      "observationEntryPoints": [
+        {
+          "side": "sciforge-browser",
+          "entryPoint": "SciForge Browser initial app shell with writer URL pointing at UI HTML response",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-dom-snapshot.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-visible-text.txt"
+          ],
+          "summary": "Initial SciForge Browser observation plus bounded writer diagnostic retest."
+        },
+        {
+          "side": "cursor-agent-computer-use",
+          "entryPoint": "Cursor Agent desktop read-only sidebar and completed chat baseline",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-cursor-summary.json"
+          ],
+          "summary": "Redacted Cursor summary for initial sidebar, completed aggregate, and right preview baseline."
+        }
+      ],
+      "coverage": {
+        "surfaces": [
+          "sidebar",
+          "chat",
+          "presentation"
+        ],
+        "requirementIds": [
+          "sidebar-new-project-new-chat",
+          "completed-state-collapsed",
+          "right-side-result-presentation"
+        ],
+        "summary": "Round 01 established the live loop and fixed the non-JSON Workspace Writer diagnostic."
+      },
+      "steps": [
+        {
+          "id": "observe-sciforge",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-dom-snapshot.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-cursor-summary.json"
+          ],
+          "summary": "observe-sciforge completed"
+        },
+        {
+          "id": "observe-cursor-agent",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-dom-snapshot.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-cursor-summary.json"
+          ],
+          "summary": "observe-cursor-agent completed"
+        },
+        {
+          "id": "record-differences",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-dom-snapshot.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-cursor-summary.json"
+          ],
+          "summary": "record-differences completed"
+        },
+        {
+          "id": "update-project-todo",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-dom-snapshot.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-cursor-summary.json"
+          ],
+          "summary": "update-project-todo completed"
+        },
+        {
+          "id": "implement-generic-fix",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-dom-snapshot.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-cursor-summary.json"
+          ],
+          "summary": "implement-generic-fix completed"
+        },
+        {
+          "id": "verify",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-dom-snapshot.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-cursor-summary.json"
+          ],
+          "summary": "verify completed"
+        },
+        {
+          "id": "retest-both-sides",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-dom-snapshot.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-cursor-summary.json"
+          ],
+          "summary": "retest-both-sides completed"
+        }
+      ],
+      "evidence": [
+        {
+          "id": "live-round-01-sciforge-writer-diagnostic",
+          "side": "sciforge-browser",
+          "source": {
+            "tool": "browser",
+            "target": "sciforge-web",
+            "ref": "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-screenshot.png"
+          },
+          "requirementIds": [
+            "sidebar-new-project-new-chat",
+            "completed-state-collapsed",
+            "right-side-result-presentation"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-dom-snapshot.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-visible-text.txt"
+          ],
+          "summary": "SciForge Browser evidence showed the app shell and a bounded non-JSON Workspace Writer diagnostic after the generic client fix.",
+          "status": "accepted",
+          "policyDiagnostics": []
+        },
+        {
+          "id": "live-round-01-cursor-partial-baseline",
+          "side": "cursor-agent-computer-use",
+          "source": {
+            "tool": "computer-use",
+            "target": "cursor-agent-desktop",
+            "ref": "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-cursor-summary.json"
+          },
+          "requirementIds": [
+            "sidebar-new-project-new-chat",
+            "completed-state-collapsed",
+            "right-side-result-presentation"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-cursor-summary.json"
+          ],
+          "summary": "Cursor Agent redacted summary covered sidebar grouping, completed aggregate folding, and a separate right preview pane.",
+          "status": "accepted",
+          "policyDiagnostics": []
+        }
+      ],
+      "evidenceCoverage": {
+        "sciforgeBrowserRefs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-screenshot.png",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-dom-snapshot.txt",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-visible-text.txt",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-screenshot.png",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-visible-text.txt"
+        ],
+        "cursorAgentComputerUseRefs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-cursor-summary.json"
+        ],
+        "missingSides": [],
+        "requirementCoverage": [
+          {
+            "requirementId": "sidebar-new-project-new-chat",
+            "sciforgeBrowserRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-screenshot.png",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-dom-snapshot.txt",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-visible-text.txt",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-screenshot.png",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-visible-text.txt"
+            ],
+            "cursorAgentComputerUseRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-cursor-summary.json"
+            ],
+            "missingSides": []
+          },
+          {
+            "requirementId": "completed-state-collapsed",
+            "sciforgeBrowserRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-screenshot.png",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-dom-snapshot.txt",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-visible-text.txt",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-screenshot.png",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-visible-text.txt"
+            ],
+            "cursorAgentComputerUseRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-cursor-summary.json"
+            ],
+            "missingSides": []
+          },
+          {
+            "requirementId": "right-side-result-presentation",
+            "sciforgeBrowserRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-screenshot.png",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-dom-snapshot.txt",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-visible-text.txt",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-screenshot.png",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-visible-text.txt"
+            ],
+            "cursorAgentComputerUseRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-cursor-summary.json"
+            ],
+            "missingSides": []
+          }
+        ]
+      },
+      "differences": [
+        {
+          "id": "diff:round-01-sidebar-writer-html-response",
+          "category": "sidebar",
+          "surface": "sidebar",
+          "requirementIds": [
+            "sidebar-new-project-new-chat"
+          ],
+          "status": "closed",
+          "impactScope": "SciForge previously displayed a low-level non-JSON Workspace Writer parse failure when the configured writer URL returned UI HTML.",
+          "requires": {
+            "code": true,
+            "test": true,
+            "live-evidence": true
+          },
+          "minimumGenericFix": "Normalize non-JSON Workspace Writer responses into bounded redacted diagnostics before rendering sidebar errors.",
+          "decision": "fix-generically",
+          "evidenceRefs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-dom-snapshot.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-visible-text.txt"
+          ],
+          "testRefs": [
+            "src/ui/src/api/workspaceClient.preview-cache.test.ts"
+          ],
+          "retestEvidenceRefs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-visible-text.txt"
+          ],
+          "summary": "Closed by workspaceClient diagnostic guard and Browser retest.",
+          "policyDiagnostics": []
+        },
+        {
+          "id": "diff:round-01-uncovered-interactive-chat-and-right-pane-actions",
+          "category": "test-coverage",
+          "surface": "chat",
+          "requirementIds": [
+            "edit-diff-expansion",
+            "sub-agent-expansion"
+          ],
+          "status": "closed",
+          "impactScope": "Later live rounds supplied running-state, command expansion, file/right-pane presentation, and expanded diff-detail coverage; the broad Round 01 interactive gap is closed and the remaining sub-agent work is tracked by a narrower live-evidence item.",
+          "requires": {
+            "live-evidence": true,
+            "documentation": true
+          },
+          "minimumGenericFix": "Closed by the Round 04 and Round 05 dual-side retests; keep the remaining sub-agent transcript/ref gap in its dedicated open difference.",
+          "decision": "document-no-code-change",
+          "evidenceRefs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-dom-snapshot.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-cursor-summary.json"
+          ],
+          "testRefs": [
+            "src/ui/src/app/agentDesktopAlignmentEvidence.test.ts"
+          ],
+          "retestEvidenceRefs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-cursor-interactive-right-pane-summary.json",
+            "computer-use:round-04-cursor-interactive-right-pane",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-cursor-visible-diff-baseline-summary.json",
+            "computer-use:round-05-cursor-visible-diff-baseline"
+          ],
+          "projectTodoRef": "PROJECT.md",
+          "summary": "Closed after Round 05: broad interactive/right-pane coverage is now represented by focused command, diff, preview, and right-pane evidence; sub-agent parity remains in the Round 03 open item.",
+          "policyDiagnostics": []
+        }
+      ],
+      "correctionDecision": {
+        "status": "implemented",
+        "summary": "Implemented bounded writer diagnostics and live ledger schema; interactive coverage remained open.",
+        "refs": [
+          "src/ui/src/api/workspaceClient.ts",
+          "src/ui/src/app/agentDesktopAlignmentEvidence.ts"
+        ]
+      },
+      "verification": {
+        "status": "passed",
+        "summary": "Focused writer and evidence tests passed.",
+        "refs": [
+          "src/ui/src/api/workspaceClient.preview-cache.test.ts",
+          "src/ui/src/app/agentDesktopAlignmentEvidence.test.ts"
+        ]
+      },
+      "redactionCheck": {
+        "status": "passed",
+        "summary": "Refs-first summaries only; raw Cursor trees and raw HTML bodies were not persisted.",
+        "refs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-screenshot.png",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-dom-snapshot.txt",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-visible-text.txt",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-screenshot.png",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-01-sciforge-after-concise-writer-diagnostic-visible-text.txt"
+        ]
+      },
+      "policyDiagnostics": []
+    },
+    {
+      "roundId": "live-round-02",
+      "status": "passed",
+      "startedAt": "2026-05-30T06:55:00+08:00",
+      "completedAt": "2026-05-30T07:02:00+08:00",
+      "observationEntryPoints": [
+        {
+          "side": "sciforge-browser",
+          "entryPoint": "SciForge Browser sidebar with healthy Workspace Writer, New Agent, Search, Repositories, status, and new chat interaction",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-current-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-current-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-new-agent-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-search-summary.json"
+          ],
+          "summary": "Browser exercised sidebar labels, writer health, New Agent, and search."
+        },
+        {
+          "side": "cursor-agent-computer-use",
+          "entryPoint": "Cursor Agent desktop sidebar baseline with New Agent, Search, Repositories, thread rows, draft discard, Local, and Context",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json"
+          ],
+          "summary": "Cursor redacted summary includes the same sidebar information architecture."
+        }
+      ],
+      "coverage": {
+        "surfaces": [
+          "sidebar"
+        ],
+        "requirementIds": [
+          "sidebar-new-project-new-chat"
+        ],
+        "summary": "Round 02 focused on live sidebar information architecture and non-destructive New Agent/search behavior."
+      },
+      "steps": [
+        {
+          "id": "observe-sciforge",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-current-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-current-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-new-agent-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-search-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json"
+          ],
+          "summary": "observe-sciforge completed"
+        },
+        {
+          "id": "observe-cursor-agent",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-current-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-current-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-new-agent-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-search-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json"
+          ],
+          "summary": "observe-cursor-agent completed"
+        },
+        {
+          "id": "record-differences",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-current-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-current-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-new-agent-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-search-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json"
+          ],
+          "summary": "record-differences completed"
+        },
+        {
+          "id": "update-project-todo",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-current-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-current-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-new-agent-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-search-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json"
+          ],
+          "summary": "update-project-todo completed"
+        },
+        {
+          "id": "implement-generic-fix",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-current-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-current-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-new-agent-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-search-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json"
+          ],
+          "summary": "implement-generic-fix completed"
+        },
+        {
+          "id": "verify",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-current-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-current-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-new-agent-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-search-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json"
+          ],
+          "summary": "verify completed"
+        },
+        {
+          "id": "retest-both-sides",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-current-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-current-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-new-agent-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-search-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json"
+          ],
+          "summary": "retest-both-sides completed"
+        }
+      ],
+      "evidence": [
+        {
+          "id": "live-round-02-sciforge-sidebar",
+          "side": "sciforge-browser",
+          "source": {
+            "tool": "browser",
+            "target": "sciforge-web",
+            "ref": "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-screenshot.png"
+          },
+          "requirementIds": [
+            "sidebar-new-project-new-chat"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-current-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-current-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-new-agent-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-search-summary.json"
+          ],
+          "summary": "SciForge Browser sidebar exposes New Agent, Search, Repositories, active workspace, readable project status, and search results with a healthy Workspace Writer.",
+          "status": "accepted",
+          "policyDiagnostics": []
+        },
+        {
+          "id": "live-round-02-cursor-sidebar",
+          "side": "cursor-agent-computer-use",
+          "source": {
+            "tool": "computer-use",
+            "target": "cursor-agent-desktop",
+            "ref": "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json"
+          },
+          "requirementIds": [
+            "sidebar-new-project-new-chat"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json"
+          ],
+          "summary": "Cursor Agent sidebar summary covers New Agent, Search, Repositories, per-repository New Agent, Pin, Archive, Discard, Local, and Context.",
+          "status": "accepted",
+          "policyDiagnostics": []
+        }
+      ],
+      "evidenceCoverage": {
+        "sciforgeBrowserRefs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-screenshot.png",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-visible-text.txt",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-current-screenshot.png",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-current-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-new-agent-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-search-summary.json"
+        ],
+        "cursorAgentComputerUseRefs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json"
+        ],
+        "missingSides": [],
+        "requirementCoverage": [
+          {
+            "requirementId": "sidebar-new-project-new-chat",
+            "sciforgeBrowserRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-screenshot.png",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-visible-text.txt",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-current-screenshot.png",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-current-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-new-agent-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-search-summary.json"
+            ],
+            "cursorAgentComputerUseRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json"
+            ],
+            "missingSides": []
+          }
+        ]
+      },
+      "differences": [
+        {
+          "id": "diff:round-02-sciforge-live-writer-not-running",
+          "category": "sidebar",
+          "surface": "sidebar",
+          "requirementIds": [
+            "sidebar-new-project-new-chat"
+          ],
+          "status": "closed",
+          "impactScope": "Round 01 could not complete real sidebar file interactions because Workspace Writer was unavailable at the configured URL.",
+          "requires": {
+            "live-evidence": true,
+            "documentation": true
+          },
+          "minimumGenericFix": "Run live parity against a healthy writer URL and record the retest refs.",
+          "decision": "document-no-code-change",
+          "evidenceRefs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-visible-text.txt",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-current-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-current-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-new-agent-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-search-summary.json"
+          ],
+          "testRefs": [
+            "src/ui/src/api/workspaceClient.preview-cache.test.ts"
+          ],
+          "retestEvidenceRefs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-visible-text.txt"
+          ],
+          "summary": "Closed for this session by starting a real Workspace Writer and configuring the UI to use it.",
+          "policyDiagnostics": []
+        }
+      ],
+      "correctionDecision": {
+        "status": "implemented",
+        "summary": "Sidebar labels and status layout were aligned with Cursor Agent semantics without changing Agent Host ownership boundaries.",
+        "refs": [
+          "src/ui/src/app/appShell/SidebarProjectChatSection.tsx",
+          "src/ui/src/styles/app-01.css"
+        ]
+      },
+      "verification": {
+        "status": "passed",
+        "summary": "Focused sidebar tests and typecheck passed during the round.",
+        "refs": [
+          "src/ui/src/app/appShell/SidebarProjectChatSection.test.tsx",
+          "src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts"
+        ]
+      },
+      "redactionCheck": {
+        "status": "passed",
+        "summary": "Sidebar evidence stores refs and bounded summaries only.",
+        "refs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-screenshot.png",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-writer-healthy-visible-text.txt",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-current-screenshot.png",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-current-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-new-agent-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-02-sciforge-search-summary.json"
+        ]
+      },
+      "policyDiagnostics": []
+    },
+    {
+      "roundId": "live-round-03",
+      "status": "retest-needed",
+      "startedAt": "2026-05-30T07:03:00+08:00",
+      "observationEntryPoints": [
+        {
+          "side": "sciforge-browser",
+          "entryPoint": "SciForge Browser real read-only chat run, failed-runtime recovery state, process expansion, read action, and right result pane",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-clean-retest-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-screenshot.png"
+          ],
+          "summary": "Browser exercised a real read-only chat turn, running state, failed recovery state, process groups, redaction retests, and read action title retest."
+        },
+        {
+          "side": "cursor-agent-computer-use",
+          "entryPoint": "Cursor Agent desktop completed process expansion and read action file-preview click",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json"
+          ],
+          "summary": "Computer Use opened Worked, Explored, Read action rows, and the right-side file preview tab."
+        }
+      ],
+      "coverage": {
+        "surfaces": [
+          "chat",
+          "presentation"
+        ],
+        "requirementIds": [
+          "completed-state-collapsed",
+          "running-state-live-updates",
+          "file-preview",
+          "right-side-result-presentation"
+        ],
+        "summary": "Round 03 covered SciForge live running/error/recovery state and Cursor completed read/file-preview baseline; command, diff, and sub-agent live coverage remains open."
+      },
+      "steps": [
+        {
+          "id": "observe-sciforge",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-clean-retest-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json"
+          ],
+          "summary": "observe-sciforge completed"
+        },
+        {
+          "id": "observe-cursor-agent",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-clean-retest-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json"
+          ],
+          "summary": "observe-cursor-agent completed"
+        },
+        {
+          "id": "record-differences",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-clean-retest-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json"
+          ],
+          "summary": "record-differences completed"
+        },
+        {
+          "id": "update-project-todo",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-clean-retest-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json"
+          ],
+          "summary": "update-project-todo completed"
+        },
+        {
+          "id": "implement-generic-fix",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-clean-retest-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json"
+          ],
+          "summary": "implement-generic-fix completed"
+        },
+        {
+          "id": "verify",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-clean-retest-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json"
+          ],
+          "summary": "verify completed"
+        },
+        {
+          "id": "retest-both-sides",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-clean-retest-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json"
+          ],
+          "summary": "retest-both-sides completed"
+        }
+      ],
+      "evidence": [
+        {
+          "id": "live-round-03-sciforge-chat-presentation",
+          "side": "sciforge-browser",
+          "source": {
+            "tool": "browser",
+            "target": "sciforge-web",
+            "ref": "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-summary.json"
+          },
+          "requirementIds": [
+            "completed-state-collapsed",
+            "running-state-live-updates",
+            "file-preview",
+            "right-side-result-presentation"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-clean-retest-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-screenshot.png"
+          ],
+          "summary": "SciForge Browser shows live Working/Worked/Explored process groups, bounded failed-runtime recovery, redacted runtime metadata, right-pane recovery state, and a corrected Read PROJECT.md action title.",
+          "status": "accepted",
+          "policyDiagnostics": []
+        },
+        {
+          "id": "live-round-03-cursor-chat-file-preview",
+          "side": "cursor-agent-computer-use",
+          "source": {
+            "tool": "computer-use",
+            "target": "cursor-agent-desktop",
+            "ref": "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json"
+          },
+          "requirementIds": [
+            "completed-state-collapsed",
+            "file-preview",
+            "right-side-result-presentation"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json"
+          ],
+          "summary": "Cursor Agent summary shows completed Worked aggregate, nested Explored files aggregate, individual Read file rows, and right-side file preview tab opened from a Read action.",
+          "status": "accepted",
+          "policyDiagnostics": []
+        },
+        {
+          "id": "live-round-03-cursor-running-state-supplemental",
+          "side": "cursor-agent-computer-use",
+          "source": {
+            "tool": "computer-use",
+            "target": "cursor-agent-desktop",
+            "ref": "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-cursor-interactive-right-pane-summary.json"
+          },
+          "requirementIds": [
+            "running-state-live-updates"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-cursor-interactive-right-pane-summary.json",
+            "computer-use:round-04-cursor-interactive-right-pane"
+          ],
+          "summary": "Supplemental Cursor Agent running-state evidence captured during Round 04 to close the Round 03 validation gap; it observed live Exploring/Ran rows, Stop generation, context percentage changes, and an expanded shell command row.",
+          "capturedAt": "2026-05-30T08:05:30+08:00",
+          "status": "accepted",
+          "policyDiagnostics": []
+        }
+      ],
+      "evidenceCoverage": {
+        "sciforgeBrowserRefs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-screenshot.png",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-screenshot.png",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-clean-retest-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-screenshot.png"
+        ],
+        "cursorAgentComputerUseRefs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-cursor-interactive-right-pane-summary.json",
+          "computer-use:round-04-cursor-interactive-right-pane"
+        ],
+        "missingSides": [],
+        "requirementCoverage": [
+          {
+            "requirementId": "completed-state-collapsed",
+            "sciforgeBrowserRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-screenshot.png",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-screenshot.png",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-clean-retest-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-screenshot.png"
+            ],
+            "cursorAgentComputerUseRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json"
+            ],
+            "missingSides": []
+          },
+          {
+            "requirementId": "running-state-live-updates",
+            "sciforgeBrowserRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-screenshot.png",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-screenshot.png",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-clean-retest-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-screenshot.png"
+            ],
+            "cursorAgentComputerUseRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-cursor-interactive-right-pane-summary.json",
+              "computer-use:round-04-cursor-interactive-right-pane"
+            ],
+            "missingSides": []
+          },
+          {
+            "requirementId": "file-preview",
+            "sciforgeBrowserRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-screenshot.png",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-screenshot.png",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-clean-retest-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-screenshot.png"
+            ],
+            "cursorAgentComputerUseRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json"
+            ],
+            "missingSides": []
+          },
+          {
+            "requirementId": "right-side-result-presentation",
+            "sciforgeBrowserRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-screenshot.png",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-screenshot.png",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-clean-retest-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-screenshot.png"
+            ],
+            "cursorAgentComputerUseRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json"
+            ],
+            "missingSides": []
+          }
+        ]
+      },
+      "differences": [
+        {
+          "id": "diff:round-03-runtime-metadata-visible-in-process",
+          "category": "redaction",
+          "surface": "chat",
+          "requirementIds": [
+            "running-state-live-updates",
+            "right-side-result-presentation"
+          ],
+          "status": "closed",
+          "impactScope": "SciForge live process and recovery copy displayed concrete runtime configuration values and internal recovery terms in user-facing process rows.",
+          "requires": {
+            "code": true,
+            "test": true,
+            "live-evidence": true
+          },
+          "minimumGenericFix": "Sanitize natural-language runtime metadata and recovery actions at process and projection presentation boundaries.",
+          "decision": "fix-generically",
+          "evidenceRefs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-summary.json"
+          ],
+          "testRefs": [
+            "src/ui/src/streamEventPresentation.test.ts",
+            "src/ui/src/app/ChatPanel.test.ts",
+            "src/ui/src/app/results-renderer-execution-model.test.ts"
+          ],
+          "retestEvidenceRefs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-clean-retest-summary.json"
+          ],
+          "summary": "Closed after Browser retest showed no specific runtime configuration or internal recovery terms.",
+          "policyDiagnostics": []
+        },
+        {
+          "id": "diff:round-03-read-action-target-used-prompt",
+          "category": "chat-process",
+          "surface": "chat",
+          "requirementIds": [
+            "file-preview"
+          ],
+          "status": "closed",
+          "impactScope": "SciForge read action title used the user prompt as the visible target instead of a file-like target.",
+          "requires": {
+            "code": true,
+            "test": true,
+            "live-evidence": true
+          },
+          "minimumGenericFix": "Infer safe relative file-like targets for action titles while avoiding synthetic preview refs.",
+          "decision": "fix-generically",
+          "evidenceRefs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-process-detail-index.json"
+          ],
+          "testRefs": [
+            "src/ui/src/streamEventPresentation.test.ts"
+          ],
+          "retestEvidenceRefs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-summary.json"
+          ],
+          "summary": "Closed after Browser retest showed Read PROJECT.md and no prompt-as-target leakage.",
+          "policyDiagnostics": []
+        },
+        {
+          "id": "diff:round-03-sciforge-read-preview-ref-missing",
+          "category": "right-side-presentation",
+          "surface": "presentation",
+          "requirementIds": [
+            "file-preview",
+            "right-side-result-presentation"
+          ],
+          "status": "closed",
+          "impactScope": "SciForge read rows now expose a trusted workspace-relative Preview file action and open the right-side Markdown preview, matching the Cursor Agent read-preview interaction for valid file refs.",
+          "requires": {
+            "protocol": true,
+            "code": true,
+            "live-evidence": true,
+            "documentation": true
+          },
+          "minimumGenericFix": "Preserve trusted relative file or artifact refs from backend-native file events through runtime normalization, persistence, and presentation; reject prompt-derived or unsafe local refs.",
+          "decision": "fix-generically",
+          "evidenceRefs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-clean-retest-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json"
+          ],
+          "testRefs": [
+            "src/runtime/codex/codex-event-normalizer.test.ts",
+            "src/ui/src/app/chat/RunExecutionProcess.test.ts",
+            "src/ui/src/streamEventPresentation.test.ts"
+          ],
+          "retestEvidenceRefs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-screenshot.png"
+          ],
+          "summary": "Closed by Round 04: a successful SciForge read action showed Preview file from a trusted workspace-relative ref and opened the right-side Markdown preview.",
+          "policyDiagnostics": []
+        },
+        {
+          "id": "diff:round-03-missing-command-diff-subagent-live-coverage",
+          "category": "test-coverage",
+          "surface": "chat",
+          "requirementIds": [
+            "sub-agent-expansion"
+          ],
+          "status": "open",
+          "impactScope": "Round 10 proved the SciForge Codex app-server product path now emits a live sub-agent transcript/ref action, including resumed-thread coverage; the remaining parity blocker is that Cursor Agent with the same prompt still reports NO_SUBAGENT_TOOL_AVAILABLE and has no positive sub-agent transcript/ref baseline.",
+          "requires": {
+            "live-evidence": true,
+            "documentation": true,
+            "code": true,
+            "protocol": true
+          },
+          "minimumGenericFix": "Keep Codex app-server sub-agent tool surface, safe refs, resumed dynamic tools, and right-pane previews tested. Close only after Cursor positive sub-agent baseline or documented product-scope parity-gate change.",
+          "decision": "fix-generically",
+          "evidenceRefs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-running-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-clean-retest-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-read-action-retest-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-cursor-interactive-right-pane-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-cursor-visible-diff-baseline-summary.json",
+            "computer-use:round-05-cursor-visible-diff-baseline",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-sciforge-subagent-tool-unavailable-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-sciforge-subagent-tool-unavailable-screenshot.png",
+            "audit:codex-runtime:codex-command-mprph50n-zfp0dk:codex-command-mprph50n-zfp0dk-attempt-1:normalized-events",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-07-exec-mcp-subagent-tool-unavailable-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-cursor-subagent-baseline-unobserved-summary.json",
+            "computer-use:round-06-cursor-subagent-baseline-unobserved",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-sciforge-subagent-live-positive-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-sciforge-subagent-live-positive.png",
+            "browser:round-10-sciforge-subagent-live-positive",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-cursor-subagent-tool-unavailable-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-cursor-subagent-tool-unavailable-summary.png",
+            "computer-use:round-10-cursor-subagent-tool-unavailable",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-sciforge-postcleanup-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-sciforge-postcleanup-subagent-preview.png",
+            "browser:round-11-sciforge-postcleanup-subagent-preview",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-cursor-subagent-still-unavailable-summary.json",
+            "computer-use:round-11-cursor-subagent-still-unavailable"
+          ],
+          "testRefs": [
+            "src/ui/src/app/agentDesktopAlignmentEvidence.test.ts",
+            "src/ui/src/app/chat/RunExecutionProcess.test.ts",
+            "src/runtime/codex/codex-event-normalizer.test.ts",
+            "src/runtime/codex/backend-event-normalization.test.ts",
+            "src/runtime/codex/backend-adapters.test.ts",
+            "src/ui/src/api/sciforgeToolsClient/codexRealtimeSession.test.ts",
+            "src/ui/src/api/sciforgeToolsClient/runtimeEvents.test.ts",
+            "src/runtime/codex/codex-app-server-client.test.ts",
+            "src/runtime/codex/subagent-mcp-tools.test.ts",
+            "src/ui/src/app/results/WorkspaceObjectPreview.test.ts",
+            "src/runtime/codex/codex-runtime-server.test.ts",
+            "src/ui/src/streamEventPresentation.test.ts",
+            "src/ui/src/app/chat/cursorAgentProcess.ts",
+            "src/ui/src/app/results/WorkspaceObjectPreview.tsx",
+            "src/ui/src/api/sciforgeToolsClient/client.ts",
+            "src/ui/src/api/sciforgeToolsClient/runtimeEvents.ts",
+            "src/ui/src/runtimeAuditEvents.ts",
+            "packages/backend/README.md"
+          ],
+          "retestEvidenceRefs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-cursor-visible-diff-baseline-summary.json",
+            "computer-use:round-05-cursor-visible-diff-baseline",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-sciforge-subagent-tool-unavailable-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-sciforge-subagent-tool-unavailable-screenshot.png",
+            "audit:codex-runtime:codex-command-mprph50n-zfp0dk:codex-command-mprph50n-zfp0dk-attempt-1:normalized-events",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-07-exec-mcp-subagent-tool-unavailable-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-cursor-subagent-baseline-unobserved-summary.json",
+            "computer-use:round-06-cursor-subagent-baseline-unobserved",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-sciforge-subagent-live-positive-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-sciforge-subagent-live-positive.png",
+            "browser:round-10-sciforge-subagent-live-positive",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-cursor-subagent-tool-unavailable-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-cursor-subagent-tool-unavailable-summary.png",
+            "computer-use:round-10-cursor-subagent-tool-unavailable",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-sciforge-postcleanup-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-sciforge-postcleanup-subagent-preview.png",
+            "browser:round-11-sciforge-postcleanup-subagent-preview",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-cursor-subagent-still-unavailable-summary.json",
+            "computer-use:round-11-cursor-subagent-still-unavailable"
+          ],
+          "projectTodoRef": "PROJECT.md",
+          "summary": "Round 11 reconfirmed Codex app-server sub-agent evidence remains positive after cleanup: SciForge keeps worker-id rows, hides prompt echoes/raw JSON, removes replay header copy, shows refs before summaries, and opens safe previews. Cursor Agent still reports NO_SUBAGENT_TOOL_AVAILABLE.",
+          "policyDiagnostics": []
+        }
+      ],
+      "correctionDecision": {
+        "status": "implemented",
+        "summary": "Applied generic process/projection redaction and read-action target fixes; kept missing trusted preview refs and command/diff/sub-agent live coverage as open differences.",
+        "refs": [
+          "src/ui/src/app/chat/cursorAgentProcess.ts",
+          "src/ui/src/app/conversation-projection-view-model.ts",
+          "src/ui/src/api/sciforgeToolsClient/client.ts"
+        ]
+      },
+      "verification": {
+        "status": "passed",
+        "summary": "Focused chat/presentation tests passed after the round fixes.",
+        "refs": [
+          "src/ui/src/streamEventPresentation.test.ts",
+          "src/ui/src/app/ChatPanel.test.ts",
+          "src/ui/src/app/results-renderer-execution-model.test.ts",
+          "src/ui/src/app/chat/RunExecutionProcess.test.ts"
+        ]
+      },
+      "redactionCheck": {
+        "status": "passed",
+        "summary": "Round 03 refs are redacted summaries/screenshots only; no raw Cursor accessibility tree, raw DOM payload, specific runtime configuration, provider secret, local absolute path, or full private dialog is persisted.",
+        "refs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-cursor-agent-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-03-sciforge-chat-final-clean-retest-summary.json"
+        ]
+      },
+      "policyDiagnostics": []
+    },
+    {
+      "roundId": "live-round-04",
+      "status": "retest-needed",
+      "startedAt": "2026-05-30T07:45:00+08:00",
+      "completedAt": "2026-05-30T08:05:30+08:00",
+      "observationEntryPoints": [
+        {
+          "side": "sciforge-browser",
+          "entryPoint": "SciForge Browser successful chat turn with trusted file preview, bounded command/file action detail, and partial diff action retest",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-screenshot.png"
+          ],
+          "capturedAt": "2026-05-30T08:05:30+08:00",
+          "summary": "Browser operated the live SciForge web chat after the base URL fix and verified running, completed, read preview, command/file action detail, and right-side Markdown preview behavior."
+        },
+        {
+          "side": "cursor-agent-computer-use",
+          "entryPoint": "Cursor Agent desktop running/completed process, shell command, right Source Control/file preview baseline",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-cursor-interactive-right-pane-summary.json",
+            "computer-use:round-04-cursor-interactive-right-pane"
+          ],
+          "capturedAt": "2026-05-30T08:05:30+08:00",
+          "summary": "Computer Use recorded redacted Cursor Agent structure covering running rows, completed Worked aggregates, command detail, right Source Control/diff-like panel, and file preview tabs."
+        }
+      ],
+      "coverage": {
+        "surfaces": [
+          "chat",
+          "presentation"
+        ],
+        "requirementIds": [
+          "completed-state-collapsed",
+          "running-state-live-updates",
+          "command-expansion",
+          "file-preview",
+          "right-side-result-presentation"
+        ],
+        "summary": "Round 04 covered successful SciForge chat after the base URL fix plus Cursor Agent running/completed/right-pane baselines; full diff-detail and sub-agent transcript/ref parity remain separate open items."
+      },
+      "steps": [
+        {
+          "id": "observe-sciforge",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-screenshot.png"
+          ],
+          "summary": "Observed SciForge live chat success, action rows, preview control, and right preview."
+        },
+        {
+          "id": "observe-cursor-agent",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-cursor-interactive-right-pane-summary.json",
+            "computer-use:round-04-cursor-interactive-right-pane"
+          ],
+          "summary": "Observed Cursor Agent running/completed process and right-side source/result panel."
+        },
+        {
+          "id": "record-differences",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-ledger-2026-05-30.json"
+          ],
+          "summary": "Closed the trusted SciForge read-preview gap and narrowed remaining diff/sub-agent coverage."
+        },
+        {
+          "id": "update-project-todo",
+          "status": "completed",
+          "refs": [
+            "PROJECT.md"
+          ],
+          "summary": "Updated live parity progress and remaining TODO boundaries."
+        },
+        {
+          "id": "implement-generic-fix",
+          "status": "completed",
+          "refs": [
+            "src/runtime/codex/codex-event-normalizer.ts",
+            "src/ui/src/app/chat/cursorAgentProcess.ts",
+            "src/ui/src/app/chat/runPresentation.ts"
+          ],
+          "summary": "Preserved trusted structured file refs through runtime normalization, stream persistence, and presentation safety gates."
+        },
+        {
+          "id": "verify",
+          "status": "completed",
+          "refs": [
+            "src/runtime/codex/codex-event-normalizer.test.ts",
+            "src/ui/src/app/chat/RunExecutionProcess.test.ts",
+            "src/ui/src/streamEventPresentation.test.ts"
+          ],
+          "summary": "Focused runtime/presentation tests passed for trusted file previews and unsafe ref rejection."
+        },
+        {
+          "id": "retest-both-sides",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-cursor-interactive-right-pane-summary.json"
+          ],
+          "summary": "Retested SciForge Browser and Cursor Agent Computer Use with redacted evidence summaries."
+        }
+      ],
+      "evidence": [
+        {
+          "id": "live-round-04-sciforge-trusted-preview-command-right-pane",
+          "side": "sciforge-browser",
+          "source": {
+            "tool": "browser",
+            "target": "sciforge-web",
+            "ref": "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-summary.json"
+          },
+          "requirementIds": [
+            "completed-state-collapsed",
+            "running-state-live-updates",
+            "command-expansion",
+            "file-preview",
+            "right-side-result-presentation"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-screenshot.png"
+          ],
+          "summary": "SciForge Browser successful run showed live Working/Worked/Explored groups, bounded command/file facts, a trusted Preview file action, completed collapsed state, and right-side Markdown preview from a workspace-relative ref.",
+          "capturedAt": "2026-05-30T08:05:30+08:00",
+          "status": "accepted",
+          "policyDiagnostics": []
+        },
+        {
+          "id": "live-round-04-cursor-running-command-right-pane",
+          "side": "cursor-agent-computer-use",
+          "source": {
+            "tool": "computer-use",
+            "target": "cursor-agent-desktop",
+            "ref": "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-cursor-interactive-right-pane-summary.json"
+          },
+          "requirementIds": [
+            "completed-state-collapsed",
+            "running-state-live-updates",
+            "command-expansion",
+            "file-preview",
+            "right-side-result-presentation"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-cursor-interactive-right-pane-summary.json",
+            "computer-use:round-04-cursor-interactive-right-pane"
+          ],
+          "summary": "Cursor Agent redacted summary covers live running process rows, command expansion, completed Worked aggregates, file/right-pane preview surfaces, and Source Control diff-like right pane behavior.",
+          "capturedAt": "2026-05-30T08:05:30+08:00",
+          "status": "accepted",
+          "policyDiagnostics": []
+        }
+      ],
+      "evidenceCoverage": {
+        "sciforgeBrowserRefs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-screenshot.png"
+        ],
+        "cursorAgentComputerUseRefs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-cursor-interactive-right-pane-summary.json",
+          "computer-use:round-04-cursor-interactive-right-pane"
+        ],
+        "missingSides": [],
+        "requirementCoverage": [
+          {
+            "requirementId": "completed-state-collapsed",
+            "sciforgeBrowserRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-screenshot.png"
+            ],
+            "cursorAgentComputerUseRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-cursor-interactive-right-pane-summary.json",
+              "computer-use:round-04-cursor-interactive-right-pane"
+            ],
+            "missingSides": []
+          },
+          {
+            "requirementId": "running-state-live-updates",
+            "sciforgeBrowserRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-screenshot.png"
+            ],
+            "cursorAgentComputerUseRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-cursor-interactive-right-pane-summary.json",
+              "computer-use:round-04-cursor-interactive-right-pane"
+            ],
+            "missingSides": []
+          },
+          {
+            "requirementId": "command-expansion",
+            "sciforgeBrowserRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-screenshot.png"
+            ],
+            "cursorAgentComputerUseRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-cursor-interactive-right-pane-summary.json",
+              "computer-use:round-04-cursor-interactive-right-pane"
+            ],
+            "missingSides": []
+          },
+          {
+            "requirementId": "file-preview",
+            "sciforgeBrowserRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-screenshot.png"
+            ],
+            "cursorAgentComputerUseRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-cursor-interactive-right-pane-summary.json",
+              "computer-use:round-04-cursor-interactive-right-pane"
+            ],
+            "missingSides": []
+          },
+          {
+            "requirementId": "right-side-result-presentation",
+            "sciforgeBrowserRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-screenshot.png"
+            ],
+            "cursorAgentComputerUseRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-cursor-interactive-right-pane-summary.json",
+              "computer-use:round-04-cursor-interactive-right-pane"
+            ],
+            "missingSides": []
+          }
+        ]
+      },
+      "differences": [],
+      "correctionDecision": {
+        "status": "implemented",
+        "summary": "Applied generic trusted file-ref propagation, replay/internal-ref filtering, command-target preview guards, right-pane hydration guards, and lightweight Cursor-like process/result-pane polish; retained full diff-detail and sub-agent transcript/ref parity as open live-evidence work.",
+        "refs": [
+          "src/runtime/codex/codex-event-normalizer.ts",
+          "src/ui/src/app/chat/cursorAgentProcess.ts",
+          "src/ui/src/app/chat/runPresentation.ts",
+          "src/ui/src/app/chat/RunningWorkProcess.tsx",
+          "src/ui/src/app/results/ResultShell.tsx",
+          "src/ui/src/app/results/WorkspaceObjectPreview.tsx",
+          "PROJECT.md"
+        ]
+      },
+      "verification": {
+        "status": "passed",
+        "summary": "Focused runtime/presentation/result preview tests, live ledger schema tests, typecheck, Browser render inspection, and diff check passed after the Round 04 fixes.",
+        "refs": [
+          "src/runtime/codex/codex-event-normalizer.test.ts",
+          "src/ui/src/app/chat/RunExecutionProcess.test.ts",
+          "src/ui/src/streamEventPresentation.test.ts",
+          "src/ui/src/app/results/WorkspaceObjectPreview.test.ts",
+          "src/ui/src/app/agentDesktopAlignmentEvidence.test.ts"
+        ]
+      },
+      "redactionCheck": {
+        "status": "passed",
+        "summary": "Round 04 stores only redacted structural summaries, logical refs, and a screenshot; no raw DOM, raw accessibility tree, provider secrets, local absolute paths, or full private dialog is persisted.",
+        "refs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-cursor-interactive-right-pane-summary.json"
+        ]
+      },
+      "policyDiagnostics": []
+    },
+    {
+      "roundId": "live-round-05",
+      "status": "passed",
+      "startedAt": "2026-05-30T09:40:00+08:00",
+      "completedAt": "2026-05-30T09:52:20+08:00",
+      "observationEntryPoints": [
+        {
+          "side": "sciforge-browser",
+          "entryPoint": "SciForge Browser completed live diff-detail retest after the base URL fix",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-screenshot.png"
+          ],
+          "capturedAt": "2026-05-30T09:52:20+08:00",
+          "summary": "Browser expanded the completed historical pre-cleanup diff action detail, showing command, exit badge, file ref, and unified diff hunk markers."
+        },
+        {
+          "side": "cursor-agent-computer-use",
+          "entryPoint": "Cursor Agent desktop visible sidebar, completed Worked aggregates, and right Source Control/file-diff baseline",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-cursor-visible-diff-baseline-summary.json",
+            "computer-use:round-05-cursor-visible-diff-baseline"
+          ],
+          "capturedAt": "2026-05-30T09:52:20+08:00",
+          "summary": "Computer Use observed a redacted Cursor Agent structure with repository/sidebar controls, completed Worked aggregates, and a separate right-side changed-file surface."
+        }
+      ],
+      "coverage": {
+        "surfaces": [
+          "chat",
+          "presentation"
+        ],
+        "requirementIds": [
+          "completed-state-collapsed",
+          "command-expansion",
+          "edit-diff-expansion",
+          "right-side-result-presentation"
+        ],
+        "summary": "Round 05 covers the restored live SciForge diff-detail flow and Cursor Agent right-pane/diff baseline; sub-agent transcript/ref parity remains outside this round."
+      },
+      "steps": [
+        {
+          "id": "observe-sciforge",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-screenshot.png"
+          ],
+          "summary": "Observed SciForge live diff action detail expanded in the web app."
+        },
+        {
+          "id": "observe-cursor-agent",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-cursor-visible-diff-baseline-summary.json",
+            "computer-use:round-05-cursor-visible-diff-baseline"
+          ],
+          "summary": "Observed Cursor Agent visible baseline for sidebar, completed process groups, and right-side changed-file surface."
+        },
+        {
+          "id": "record-differences",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-ledger-2026-05-30.json"
+          ],
+          "summary": "Closed the broad Round 01 gap and narrowed the Round 03 open item to sub-agent transcript/ref live parity."
+        },
+        {
+          "id": "update-project-todo",
+          "status": "completed",
+          "refs": [
+            "PROJECT.md"
+          ],
+          "summary": "Updated live parity progress to mention Round 05 diff-detail coverage and remaining sub-agent work."
+        },
+        {
+          "id": "implement-generic-fix",
+          "status": "completed",
+          "refs": [
+            "src/runtime/codex/codex-event-normalizer.ts",
+            "src/runtime/codex/backend-event-normalization.ts",
+            "src/runtime/codex/backend-agent-event-adapter.ts",
+            "src/ui/src/api/sciforgeToolsClient/codexRealtimeSession.ts",
+            "src/ui/src/app/chat/cursorAgentProcess.ts"
+          ],
+          "summary": "Preserved backend-native diff payloads through normalization, adapter, realtime stream ordering, and Cursor-like action presentation."
+        },
+        {
+          "id": "verify",
+          "status": "completed",
+          "refs": [
+            "src/runtime/codex/codex-event-normalizer.test.ts",
+            "src/runtime/codex/backend-event-normalization.test.ts",
+            "src/runtime/codex/backend-adapters.test.ts",
+            "src/ui/src/api/sciforgeToolsClient/codexRealtimeSession.test.ts",
+            "src/ui/src/api/sciforgeToolsClient/runtimeEvents.test.ts",
+            "src/ui/src/app/chat/RunExecutionProcess.test.ts",
+            "src/ui/src/app/agentDesktopAlignmentEvidence.test.ts"
+          ],
+          "summary": "Focused normalization, realtime session, and process presentation tests plus typecheck passed for the diff-detail fix."
+        },
+        {
+          "id": "retest-both-sides",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-screenshot.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-cursor-visible-diff-baseline-summary.json",
+            "computer-use:round-05-cursor-visible-diff-baseline"
+          ],
+          "summary": "Retested SciForge Browser and Cursor Agent Computer Use with redacted evidence summaries."
+        }
+      ],
+      "evidence": [
+        {
+          "id": "live-round-05-sciforge-expanded-diff-detail",
+          "side": "sciforge-browser",
+          "source": {
+            "tool": "browser",
+            "target": "sciforge-web",
+            "ref": "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-summary.json"
+          },
+          "requirementIds": [
+            "completed-state-collapsed",
+            "command-expansion",
+            "edit-diff-expansion",
+            "right-side-result-presentation"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-screenshot.png"
+          ],
+          "summary": "SciForge Browser expanded a completed historical pre-cleanup Diff action and showed done state, command detail, exit badge, workspace-relative file ref, and unified diff hunk markers.",
+          "capturedAt": "2026-05-30T09:52:20+08:00",
+          "status": "accepted",
+          "policyDiagnostics": []
+        },
+        {
+          "id": "live-round-05-cursor-visible-diff-baseline",
+          "side": "cursor-agent-computer-use",
+          "source": {
+            "tool": "computer-use",
+            "target": "cursor-agent-desktop",
+            "ref": "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-cursor-visible-diff-baseline-summary.json"
+          },
+          "requirementIds": [
+            "completed-state-collapsed",
+            "command-expansion",
+            "edit-diff-expansion",
+            "right-side-result-presentation"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-cursor-visible-diff-baseline-summary.json",
+            "computer-use:round-05-cursor-visible-diff-baseline"
+          ],
+          "summary": "Cursor Agent Computer Use observed completed Worked aggregates and a separate right-side Source Control changed-file surface, preserving the Cursor baseline for diff/right-pane presentation.",
+          "capturedAt": "2026-05-30T09:52:20+08:00",
+          "status": "accepted",
+          "policyDiagnostics": []
+        }
+      ],
+      "evidenceCoverage": {
+        "sciforgeBrowserRefs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-screenshot.png"
+        ],
+        "cursorAgentComputerUseRefs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-cursor-visible-diff-baseline-summary.json",
+          "computer-use:round-05-cursor-visible-diff-baseline"
+        ],
+        "missingSides": [],
+        "requirementCoverage": [
+          {
+            "requirementId": "completed-state-collapsed",
+            "sciforgeBrowserRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-screenshot.png"
+            ],
+            "cursorAgentComputerUseRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-cursor-visible-diff-baseline-summary.json",
+              "computer-use:round-05-cursor-visible-diff-baseline"
+            ],
+            "missingSides": []
+          },
+          {
+            "requirementId": "command-expansion",
+            "sciforgeBrowserRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-screenshot.png"
+            ],
+            "cursorAgentComputerUseRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-cursor-visible-diff-baseline-summary.json",
+              "computer-use:round-05-cursor-visible-diff-baseline"
+            ],
+            "missingSides": []
+          },
+          {
+            "requirementId": "edit-diff-expansion",
+            "sciforgeBrowserRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-screenshot.png"
+            ],
+            "cursorAgentComputerUseRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-cursor-visible-diff-baseline-summary.json",
+              "computer-use:round-05-cursor-visible-diff-baseline"
+            ],
+            "missingSides": []
+          },
+          {
+            "requirementId": "right-side-result-presentation",
+            "sciforgeBrowserRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-screenshot.png"
+            ],
+            "cursorAgentComputerUseRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-cursor-visible-diff-baseline-summary.json",
+              "computer-use:round-05-cursor-visible-diff-baseline"
+            ],
+            "missingSides": []
+          }
+        ]
+      },
+      "differences": [],
+      "correctionDecision": {
+        "status": "implemented",
+        "summary": "Applied generic backend diff propagation and realtime stream ordering fixes, then verified the live SciForge diff detail expanded without raw stream dumps.",
+        "refs": [
+          "src/runtime/codex/codex-event-normalizer.ts",
+          "src/runtime/codex/backend-event-normalization.ts",
+          "src/runtime/codex/backend-agent-event-adapter.ts",
+          "src/ui/src/api/sciforgeToolsClient/codexRealtimeSession.ts",
+          "src/ui/src/app/chat/cursorAgentProcess.ts"
+        ]
+      },
+      "verification": {
+        "status": "passed",
+        "summary": "Diff propagation, backend adapter, realtime stream, process rendering, preview safety, evidence ledger tests, typecheck, and diff check passed.",
+        "refs": [
+          "src/runtime/codex/codex-event-normalizer.test.ts",
+          "src/runtime/codex/backend-event-normalization.test.ts",
+          "src/runtime/codex/backend-adapters.test.ts",
+          "src/ui/src/api/sciforgeToolsClient/codexRealtimeSession.test.ts",
+          "src/ui/src/api/sciforgeToolsClient/runtimeEvents.test.ts",
+          "src/ui/src/app/chat/RunExecutionProcess.test.ts",
+          "src/ui/src/app/agentDesktopAlignmentEvidence.test.ts"
+        ]
+      },
+      "redactionCheck": {
+        "status": "passed",
+        "summary": "Round 05 stores redacted summaries, logical refs, and a screenshot only; no provider secrets, local absolute paths, raw DOM, raw accessibility tree, or full private dialog is persisted.",
+        "refs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-cursor-visible-diff-baseline-summary.json"
+        ]
+      },
+      "policyDiagnostics": []
+    },
+    {
+      "roundId": "live-round-06",
+      "status": "blocked",
+      "startedAt": "2026-05-30T10:00:00+08:00",
+      "completedAt": "2026-05-30T10:02:30+08:00",
+      "observationEntryPoints": [
+        {
+          "side": "sciforge-browser",
+          "entryPoint": "SciForge Browser live sub-agent availability probe",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-sciforge-subagent-tool-unavailable-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-sciforge-subagent-tool-unavailable-screenshot.png",
+            "audit:codex-runtime:codex-command-mprph50n-zfp0dk:codex-command-mprph50n-zfp0dk-attempt-1:normalized-events"
+          ],
+          "capturedAt": "2026-05-30T10:02:30+08:00",
+          "summary": "Browser sent a read-only sub-agent spawn request; the runtime completed with a tool-unavailable answer and no sub-agent lifecycle row."
+        },
+        {
+          "side": "cursor-agent-computer-use",
+          "entryPoint": "Cursor Agent desktop current visible session sub-agent baseline check",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-cursor-subagent-baseline-unobserved-summary.json",
+            "computer-use:round-06-cursor-subagent-baseline-unobserved"
+          ],
+          "capturedAt": "2026-05-30T10:02:30+08:00",
+          "summary": "Computer Use re-read the visible Cursor Agent session; no positive sub-agent transcript/ref baseline was present."
+        }
+      ],
+      "coverage": {
+        "surfaces": [
+          "chat"
+        ],
+        "requirementIds": [
+          "sub-agent-expansion"
+        ],
+        "summary": "Round 06 attempted the remaining sub-agent expansion parity check and captured blocked evidence instead of a passing sub-agent action row."
+      },
+      "steps": [
+        {
+          "id": "observe-sciforge",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-sciforge-subagent-tool-unavailable-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-sciforge-subagent-tool-unavailable-screenshot.png",
+            "audit:codex-runtime:codex-command-mprph50n-zfp0dk:codex-command-mprph50n-zfp0dk-attempt-1:normalized-events"
+          ],
+          "summary": "Observed SciForge runtime report that no sub-agent or delegated-worker tool was available."
+        },
+        {
+          "id": "observe-cursor-agent",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-cursor-subagent-baseline-unobserved-summary.json",
+            "computer-use:round-06-cursor-subagent-baseline-unobserved"
+          ],
+          "summary": "Observed Cursor Agent current visible session without a positive sub-agent transcript/ref baseline."
+        },
+        {
+          "id": "record-differences",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-ledger-2026-05-30.json"
+          ],
+          "summary": "Updated the remaining open difference with the missing Runtime Codex sub-agent tool surface as the current blocker."
+        },
+        {
+          "id": "update-project-todo",
+          "status": "completed",
+          "refs": [
+            "PROJECT.md"
+          ],
+          "summary": "Updated PROJECT.md to keep sub-agent parity open and describe the runtime tool-surface blocker."
+        },
+        {
+          "id": "implement-generic-fix",
+          "status": "skipped",
+          "refs": [],
+          "summary": "No code fix was applied in this round; the next generic fix is to expose or enable the runtime sub-agent tool surface."
+        },
+        {
+          "id": "verify",
+          "status": "completed",
+          "refs": [
+            "src/runtime/codex/codex-event-normalizer.test.ts",
+            "src/runtime/codex/backend-event-normalization.test.ts",
+            "src/runtime/codex/backend-adapters.test.ts",
+            "src/ui/src/app/chat/RunExecutionProcess.test.ts",
+            "src/ui/src/app/agentDesktopAlignmentEvidence.test.ts"
+          ],
+          "summary": "Existing focused tests still cover sub-agent event normalization and UI rendering once a backend emits lifecycle refs."
+        },
+        {
+          "id": "retest-both-sides",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-sciforge-subagent-tool-unavailable-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-sciforge-subagent-tool-unavailable-screenshot.png",
+            "audit:codex-runtime:codex-command-mprph50n-zfp0dk:codex-command-mprph50n-zfp0dk-attempt-1:normalized-events",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-cursor-subagent-baseline-unobserved-summary.json",
+            "computer-use:round-06-cursor-subagent-baseline-unobserved"
+          ],
+          "summary": "Retested SciForge Browser and Cursor Agent Computer Use; the result remains blocked on live sub-agent tool availability and a positive Cursor baseline."
+        }
+      ],
+      "evidence": [
+        {
+          "id": "live-round-06-sciforge-subagent-tool-unavailable",
+          "side": "sciforge-browser",
+          "source": {
+            "tool": "browser",
+            "target": "sciforge-web",
+            "ref": "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-sciforge-subagent-tool-unavailable-summary.json"
+          },
+          "requirementIds": [
+            "sub-agent-expansion"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-sciforge-subagent-tool-unavailable-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-sciforge-subagent-tool-unavailable-screenshot.png",
+            "audit:codex-runtime:codex-command-mprph50n-zfp0dk:codex-command-mprph50n-zfp0dk-attempt-1:normalized-events"
+          ],
+          "summary": "SciForge Browser live probe completed with NO_SUBAGENT_TOOL_AVAILABLE, no sub-agent action row, no transcript ref, and no result ref.",
+          "capturedAt": "2026-05-30T10:02:30+08:00",
+          "status": "accepted",
+          "policyDiagnostics": []
+        },
+        {
+          "id": "live-round-06-cursor-subagent-baseline-unobserved",
+          "side": "cursor-agent-computer-use",
+          "source": {
+            "tool": "computer-use",
+            "target": "cursor-agent-desktop",
+            "ref": "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-cursor-subagent-baseline-unobserved-summary.json"
+          },
+          "requirementIds": [
+            "sub-agent-expansion"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-cursor-subagent-baseline-unobserved-summary.json",
+            "computer-use:round-06-cursor-subagent-baseline-unobserved"
+          ],
+          "summary": "Cursor Agent Computer Use re-read the current visible session; no positive sub-agent transcript/ref baseline was present.",
+          "capturedAt": "2026-05-30T10:02:30+08:00",
+          "status": "accepted",
+          "policyDiagnostics": []
+        }
+      ],
+      "evidenceCoverage": {
+        "sciforgeBrowserRefs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-sciforge-subagent-tool-unavailable-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-sciforge-subagent-tool-unavailable-screenshot.png",
+          "audit:codex-runtime:codex-command-mprph50n-zfp0dk:codex-command-mprph50n-zfp0dk-attempt-1:normalized-events"
+        ],
+        "cursorAgentComputerUseRefs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-cursor-subagent-baseline-unobserved-summary.json",
+          "computer-use:round-06-cursor-subagent-baseline-unobserved"
+        ],
+        "missingSides": [],
+        "requirementCoverage": [
+          {
+            "requirementId": "sub-agent-expansion",
+            "sciforgeBrowserRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-sciforge-subagent-tool-unavailable-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-sciforge-subagent-tool-unavailable-screenshot.png",
+              "audit:codex-runtime:codex-command-mprph50n-zfp0dk:codex-command-mprph50n-zfp0dk-attempt-1:normalized-events"
+            ],
+            "cursorAgentComputerUseRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-cursor-subagent-baseline-unobserved-summary.json",
+              "computer-use:round-06-cursor-subagent-baseline-unobserved"
+            ],
+            "missingSides": []
+          }
+        ]
+      },
+      "differences": [],
+      "correctionDecision": {
+        "status": "planned",
+        "summary": "Plan a generic Runtime Codex sub-agent tool-surface fix before claiming sub-agent live parity; current rendering code already handles safe lifecycle refs when emitted.",
+        "refs": [
+          "src/runtime/codex/codex-event-normalizer.ts",
+          "src/runtime/codex/backend-event-normalization.ts",
+          "src/runtime/codex/backend-agent-event-adapter.ts",
+          "src/ui/src/app/chat/cursorAgentProcess.ts",
+          "src/ui/src/app/chat/RunningWorkProcess.tsx",
+          "PROJECT.md"
+        ]
+      },
+      "verification": {
+        "status": "passed",
+        "summary": "Focused sub-agent normalization and presentation tests pass for synthetic/native events, but the live runtime did not expose a sub-agent tool.",
+        "refs": [
+          "src/runtime/codex/codex-event-normalizer.test.ts",
+          "src/runtime/codex/backend-event-normalization.test.ts",
+          "src/runtime/codex/backend-adapters.test.ts",
+          "src/ui/src/app/chat/RunExecutionProcess.test.ts",
+          "src/ui/src/app/agentDesktopAlignmentEvidence.test.ts"
+        ]
+      },
+      "redactionCheck": {
+        "status": "passed",
+        "summary": "Round 06 stores only redacted structural summaries, logical refs, and a screenshot; raw runtime JSONL, raw stderr, raw accessibility tree, secrets, local absolute paths, and full private dialog are not embedded.",
+        "refs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-sciforge-subagent-tool-unavailable-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-cursor-subagent-baseline-unobserved-summary.json"
+        ]
+      },
+      "policyDiagnostics": []
+    },
+    {
+      "roundId": "live-round-09",
+      "status": "passed",
+      "startedAt": "2026-05-30T11:35:00+08:00",
+      "completedAt": "2026-05-30T12:35:00+08:00",
+      "observationEntryPoints": [
+        {
+          "side": "cursor-agent-computer-use",
+          "entryPoint": "Cursor Agent existing and new arXiv Agentic RL conversations with exact Chinese prompt",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-cursor-arxiv-existing-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-cursor-arxiv-new-summary.json",
+            "computer-use:round-09-cursor-arxiv-existing-and-new"
+          ],
+          "summary": "Cursor showed user prompt, progress prose, Worked/Explored aggregates, expandable search/fetch/run/edit rows, and final report without raw lifecycle diagnostics."
+        },
+        {
+          "side": "sciforge-browser",
+          "entryPoint": "SciForge Browser new arXiv Agentic RL conversation and post-fix retest",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-before-fix-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-postfix-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-postfix.png"
+          ],
+          "summary": "SciForge initially exposed transport lifecycle and raw traceback; after the generic fix, chat and support pane hid raw diagnostics behind concise process folds."
+        }
+      ],
+      "coverage": {
+        "surfaces": [
+          "chat",
+          "presentation"
+        ],
+        "requirementIds": [
+          "completed-state-collapsed",
+          "running-state-live-updates",
+          "command-expansion",
+          "right-side-result-presentation"
+        ],
+        "summary": "Round 09 covered long-running research-chat presentation order, folded process diagnostics, expandable action aggregates, and right-side support-pane treatment for failed raw traces."
+      },
+      "steps": [
+        {
+          "id": "observe-sciforge",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-before-fix-summary.json"
+          ],
+          "summary": "Observed the SciForge arXiv run before the fix: transport copy and raw traceback were visible."
+        },
+        {
+          "id": "observe-cursor-agent",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-cursor-arxiv-existing-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-cursor-arxiv-new-summary.json",
+            "computer-use:round-09-cursor-arxiv-existing-and-new"
+          ],
+          "summary": "Observed Cursor existing and newly-created arXiv conversations with exact Chinese prompt."
+        },
+        {
+          "id": "record-differences",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-ledger-2026-05-30.json"
+          ],
+          "summary": "Recorded the visible transport/traceback mismatch without changing the existing sub-agent open difference."
+        },
+        {
+          "id": "update-project-todo",
+          "status": "completed",
+          "refs": [
+            "PROJECT.md"
+          ],
+          "summary": "PROJECT progress remains active; this round strengthens conversation/right-pane coverage and does not close sub-agent parity."
+        },
+        {
+          "id": "implement-generic-fix",
+          "status": "completed",
+          "refs": [
+            "src/ui/src/app/chat/cursorAgentProcess.ts",
+            "src/ui/src/app/chat/finalMessagePresentation.ts",
+            "src/ui/src/app/chat/runStatusPresentation.ts",
+            "src/ui/src/app/chat/RunningWorkProcess.tsx",
+            "src/ui/src/app/chat/RunExecutionProcess.tsx",
+            "src/ui/src/app/results-renderer-execution-model.ts",
+            "src/ui/src/app/results/reportContent.tsx"
+          ],
+          "summary": "Implemented generic folding and ordering changes for transport lifecycle, raw traceback diagnostics, long-task anchors, and right-pane summaries."
+        },
+        {
+          "id": "verify",
+          "status": "completed",
+          "refs": [
+            "src/ui/src/app/chat/RunExecutionProcess.test.ts",
+            "src/ui/src/app/chat/finalMessagePresentation.test.tsx",
+            "src/ui/src/app/chat/runStatusPresentation.test.ts",
+            "src/ui/src/app/ResultsRenderer.test.ts",
+            "src/ui/src/app/results-renderer-execution-model.test.ts"
+          ],
+          "summary": "Focused tests cover transport-status hiding, long research anchors, traceback folding, and right-pane summary behavior."
+        },
+        {
+          "id": "retest-both-sides",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-postfix-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-postfix.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-cursor-arxiv-new-summary.json",
+            "computer-use:round-09-cursor-arxiv-existing-and-new"
+          ],
+          "summary": "Retested SciForge Browser after the fix and compared against Cursor Agent existing/new conversation evidence."
+        }
+      ],
+      "evidence": [
+        {
+          "id": "live-round-09-sciforge-arxiv-postfix",
+          "side": "sciforge-browser",
+          "source": {
+            "tool": "browser",
+            "target": "sciforge-web",
+            "ref": "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-postfix-summary.json"
+          },
+          "requirementIds": [
+            "completed-state-collapsed",
+            "running-state-live-updates",
+            "command-expansion",
+            "right-side-result-presentation"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-before-fix-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-postfix-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-postfix.png"
+          ],
+          "summary": "SciForge Browser post-fix retest showed no visible app-server/rich-client transport copy and no visible traceback in chat or right pane.",
+          "capturedAt": "2026-05-30T12:32:18+08:00",
+          "status": "accepted",
+          "policyDiagnostics": []
+        },
+        {
+          "id": "live-round-09-cursor-arxiv-baseline",
+          "side": "cursor-agent-computer-use",
+          "source": {
+            "tool": "computer-use",
+            "target": "cursor-agent-desktop",
+            "ref": "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-cursor-arxiv-new-summary.json"
+          },
+          "requirementIds": [
+            "completed-state-collapsed",
+            "running-state-live-updates",
+            "command-expansion",
+            "right-side-result-presentation"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-cursor-arxiv-existing-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-cursor-arxiv-new-summary.json",
+            "computer-use:round-09-cursor-arxiv-existing-and-new"
+          ],
+          "summary": "Cursor Agent baseline used progress prose and Worked/Explored aggregates with expandable search/fetch/run/edit rows; final state stayed free of raw lifecycle diagnostics.",
+          "capturedAt": "2026-05-30T12:05:00+08:00",
+          "status": "accepted",
+          "policyDiagnostics": []
+        }
+      ],
+      "evidenceCoverage": {
+        "sciforgeBrowserRefs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-before-fix-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-postfix-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-postfix.png"
+        ],
+        "cursorAgentComputerUseRefs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-cursor-arxiv-existing-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-cursor-arxiv-new-summary.json",
+          "computer-use:round-09-cursor-arxiv-existing-and-new"
+        ],
+        "missingSides": [],
+        "requirementCoverage": [
+          {
+            "requirementId": "completed-state-collapsed",
+            "sciforgeBrowserRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-before-fix-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-postfix-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-postfix.png"
+            ],
+            "cursorAgentComputerUseRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-cursor-arxiv-existing-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-cursor-arxiv-new-summary.json",
+              "computer-use:round-09-cursor-arxiv-existing-and-new"
+            ],
+            "missingSides": []
+          },
+          {
+            "requirementId": "running-state-live-updates",
+            "sciforgeBrowserRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-before-fix-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-postfix-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-postfix.png"
+            ],
+            "cursorAgentComputerUseRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-cursor-arxiv-existing-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-cursor-arxiv-new-summary.json",
+              "computer-use:round-09-cursor-arxiv-existing-and-new"
+            ],
+            "missingSides": []
+          },
+          {
+            "requirementId": "command-expansion",
+            "sciforgeBrowserRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-before-fix-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-postfix-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-postfix.png"
+            ],
+            "cursorAgentComputerUseRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-cursor-arxiv-existing-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-cursor-arxiv-new-summary.json",
+              "computer-use:round-09-cursor-arxiv-existing-and-new"
+            ],
+            "missingSides": []
+          },
+          {
+            "requirementId": "right-side-result-presentation",
+            "sciforgeBrowserRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-before-fix-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-postfix-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-postfix.png"
+            ],
+            "cursorAgentComputerUseRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-cursor-arxiv-existing-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-cursor-arxiv-new-summary.json",
+              "computer-use:round-09-cursor-arxiv-existing-and-new"
+            ],
+            "missingSides": []
+          }
+        ]
+      },
+      "differences": [
+        {
+          "id": "diff:round-09-transport-traceback-visible-in-chat-and-support-pane",
+          "category": "chat-process",
+          "surface": "chat",
+          "requirementIds": [
+            "completed-state-collapsed",
+            "running-state-live-updates",
+            "command-expansion",
+            "right-side-result-presentation"
+          ],
+          "status": "closed",
+          "impactScope": "SciForge exposed app-server transport lifecycle rows and raw Python traceback text in the main answer/right support pane while Cursor kept process diagnostics behind concise aggregates.",
+          "requires": {
+            "code": true,
+            "test": true,
+            "live-evidence": true,
+            "documentation": true
+          },
+          "minimumGenericFix": "Fold backend transport lifecycle and raw traceback diagnostics across chat and right-pane markdown/result summaries; preserve meaningful command/diff/ref actions and long-task anchors.",
+          "decision": "fix-generically",
+          "evidenceRefs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-before-fix-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-cursor-arxiv-existing-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-cursor-arxiv-new-summary.json"
+          ],
+          "testRefs": [
+            "src/ui/src/app/chat/RunExecutionProcess.test.ts",
+            "src/ui/src/app/chat/finalMessagePresentation.test.tsx",
+            "src/ui/src/app/chat/runStatusPresentation.test.ts",
+            "src/ui/src/app/ResultsRenderer.test.ts",
+            "src/ui/src/app/results-renderer-execution-model.test.ts"
+          ],
+          "retestEvidenceRefs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-postfix-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-postfix.png"
+          ],
+          "projectTodoRef": "PROJECT.md",
+          "summary": "Closed in Round 09 by generic process presentation and final/right-pane diagnostic folding; sub-agent parity remains tracked by the existing open difference.",
+          "policyDiagnostics": []
+        }
+      ],
+      "correctionDecision": {
+        "status": "implemented",
+        "summary": "Implemented generic Cursor-like presentation changes for transport lifecycle hiding, raw traceback folding, long-task process anchors, and support-pane summaries.",
+        "refs": [
+          "src/ui/src/app/chat/cursorAgentProcess.ts",
+          "src/ui/src/app/chat/finalMessagePresentation.ts",
+          "src/ui/src/app/chat/runStatusPresentation.ts",
+          "src/ui/src/app/chat/RunningWorkProcess.tsx",
+          "src/ui/src/app/chat/RunExecutionProcess.tsx",
+          "src/ui/src/app/results-renderer-execution-model.ts",
+          "src/ui/src/app/results/reportContent.tsx"
+        ]
+      },
+      "verification": {
+        "status": "passed",
+        "summary": "Focused UI tests passed for process ordering/folding, final traceback folding, running status copy, and right-pane summary behavior.",
+        "refs": [
+          "src/ui/src/app/chat/RunExecutionProcess.test.ts",
+          "src/ui/src/app/chat/finalMessagePresentation.test.tsx",
+          "src/ui/src/app/chat/runStatusPresentation.test.ts",
+          "src/ui/src/app/ResultsRenderer.test.ts",
+          "src/ui/src/app/results-renderer-execution-model.test.ts"
+        ]
+      },
+      "redactionCheck": {
+        "status": "passed",
+        "summary": "Round 09 stores redacted summaries and one post-fix screenshot only; raw browser snapshots, raw DOM/AX dumps, full private dialogs, provider URLs/secrets, model identifiers, and local absolute paths are not embedded.",
+        "refs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-before-fix-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-sciforge-arxiv-postfix-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-cursor-arxiv-existing-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-09-cursor-arxiv-new-summary.json"
+        ]
+      },
+      "policyDiagnostics": []
+    },
+    {
+      "roundId": "live-round-10",
+      "status": "blocked",
+      "startedAt": "2026-05-30T12:40:00+08:00",
+      "completedAt": "2026-05-30T13:00:00+08:00",
+      "observationEntryPoints": [
+        {
+          "side": "sciforge-browser",
+          "entryPoint": "SciForge Browser same-prompt sub-agent positive retest through Codex app-server product path",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-sciforge-subagent-live-positive-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-sciforge-subagent-live-positive.png",
+            "browser:round-10-sciforge-subagent-live-positive"
+          ],
+          "capturedAt": "2026-05-30T12:57:11+08:00",
+          "summary": "Browser created a new SciForge chat, called multi_agent_v1.spawn_agent, observed a completed sub-agent row, safe transcript/result refs, right-pane sub-agent preview, and a same-thread resumed follow-up with a second sub-agent ref."
+        },
+        {
+          "side": "cursor-agent-computer-use",
+          "entryPoint": "Cursor Agent desktop same-prompt sub-agent tool baseline retest",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-cursor-subagent-tool-unavailable-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-cursor-subagent-tool-unavailable-summary.png",
+            "computer-use:round-10-cursor-subagent-tool-unavailable"
+          ],
+          "capturedAt": "2026-05-30T12:58:00+08:00",
+          "summary": "Computer Use created a new Cursor Agent conversation with the same prompt; Cursor showed progress/read/MCP rows and final NO_SUBAGENT_TOOL_AVAILABLE, with no positive sub-agent transcript/result refs."
+        }
+      ],
+      "coverage": {
+        "surfaces": [
+          "chat",
+          "presentation"
+        ],
+        "requirementIds": [
+          "sub-agent-expansion",
+          "right-side-result-presentation"
+        ],
+        "summary": "Round 10 covered the remaining sub-agent lifecycle and right-pane result-preview surface. SciForge now passes on the Codex app-server path; Cursor currently lacks a positive same-tool baseline."
+      },
+      "steps": [
+        {
+          "id": "observe-sciforge",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-sciforge-subagent-live-positive-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-sciforge-subagent-live-positive.png",
+            "browser:round-10-sciforge-subagent-live-positive"
+          ],
+          "summary": "Observed positive SciForge sub-agent lifecycle, refs, right-pane preview, and resumed-thread coverage."
+        },
+        {
+          "id": "observe-cursor-agent",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-cursor-subagent-tool-unavailable-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-cursor-subagent-tool-unavailable-summary.png",
+            "computer-use:round-10-cursor-subagent-tool-unavailable"
+          ],
+          "summary": "Observed Cursor Agent same-prompt result: progress rows and explicit NO_SUBAGENT_TOOL_AVAILABLE, no fake shell substitute."
+        },
+        {
+          "id": "record-differences",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-ledger-2026-05-30.json"
+          ],
+          "summary": "Updated the existing open sub-agent difference instead of creating a duplicate open item."
+        },
+        {
+          "id": "update-project-todo",
+          "status": "completed",
+          "refs": [
+            "PROJECT.md"
+          ],
+          "summary": "PROJECT.md now records that SciForge is positive and Cursor's current same-prompt session remains tool-unavailable."
+        },
+        {
+          "id": "implement-generic-fix",
+          "status": "completed",
+          "refs": [
+            "src/runtime/codex/codex-app-server-client.ts",
+            "src/runtime/codex/subagent-mcp-tools.ts",
+            "src/ui/src/app/chat/cursorAgentProcess.ts",
+            "src/ui/src/app/results/WorkspaceObjectPreview.tsx"
+          ],
+          "summary": "Preserved runtime dynamic tools on resume, kept structured progress visible, and rendered sub-agent artifact refs through a safe right-pane preview."
+        },
+        {
+          "id": "verify",
+          "status": "completed",
+          "refs": [
+            "src/runtime/codex/codex-app-server-client.test.ts",
+            "src/runtime/codex/subagent-mcp-tools.test.ts",
+            "src/ui/src/streamEventPresentation.test.ts",
+            "src/ui/src/app/results/WorkspaceObjectPreview.test.ts",
+            "src/ui/src/app/agentDesktopAlignmentEvidence.test.ts"
+          ],
+          "summary": "Focused tests cover resumed dynamic tools, sub-agent MCP wiring, progress folding, sub-agent right-pane previews, and ledger validation."
+        },
+        {
+          "id": "retest-both-sides",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-sciforge-subagent-live-positive-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-sciforge-subagent-live-positive.png",
+            "browser:round-10-sciforge-subagent-live-positive",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-cursor-subagent-tool-unavailable-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-cursor-subagent-tool-unavailable-summary.png",
+            "computer-use:round-10-cursor-subagent-tool-unavailable"
+          ],
+          "summary": "Retested both sides with the same prompt. SciForge is positive; Cursor remains unavailable, so final sub-agent parity stays open."
+        }
+      ],
+      "evidence": [
+        {
+          "id": "live-round-10-sciforge-subagent-live-positive",
+          "side": "sciforge-browser",
+          "source": {
+            "tool": "browser",
+            "target": "sciforge-web",
+            "ref": "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-sciforge-subagent-live-positive-summary.json"
+          },
+          "requirementIds": [
+            "sub-agent-expansion",
+            "right-side-result-presentation"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-sciforge-subagent-live-positive-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-sciforge-subagent-live-positive.png",
+            "browser:round-10-sciforge-subagent-live-positive"
+          ],
+          "summary": "SciForge Browser showed completed sub-agent action rows with worker ids, result/transcript artifact refs, safe file refs, right-pane sub-agent preview, and resumed-thread sub-agent availability.",
+          "capturedAt": "2026-05-30T12:57:11+08:00",
+          "status": "accepted",
+          "policyDiagnostics": []
+        },
+        {
+          "id": "live-round-10-cursor-subagent-tool-unavailable",
+          "side": "cursor-agent-computer-use",
+          "source": {
+            "tool": "computer-use",
+            "target": "cursor-agent-desktop",
+            "ref": "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-cursor-subagent-tool-unavailable-summary.json"
+          },
+          "requirementIds": [
+            "sub-agent-expansion",
+            "right-side-result-presentation"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-cursor-subagent-tool-unavailable-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-cursor-subagent-tool-unavailable-summary.png",
+            "computer-use:round-10-cursor-subagent-tool-unavailable"
+          ],
+          "summary": "Cursor Agent same-prompt retest showed progress/read/MCP rows and explicit NO_SUBAGENT_TOOL_AVAILABLE, with no positive sub-agent transcript/result baseline and no shell substitute.",
+          "capturedAt": "2026-05-30T12:58:00+08:00",
+          "status": "accepted",
+          "policyDiagnostics": []
+        }
+      ],
+      "evidenceCoverage": {
+        "sciforgeBrowserRefs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-sciforge-subagent-live-positive-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-sciforge-subagent-live-positive.png",
+          "browser:round-10-sciforge-subagent-live-positive"
+        ],
+        "cursorAgentComputerUseRefs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-cursor-subagent-tool-unavailable-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-cursor-subagent-tool-unavailable-summary.png",
+          "computer-use:round-10-cursor-subagent-tool-unavailable"
+        ],
+        "missingSides": [],
+        "requirementCoverage": [
+          {
+            "requirementId": "sub-agent-expansion",
+            "sciforgeBrowserRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-sciforge-subagent-live-positive-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-sciforge-subagent-live-positive.png",
+              "browser:round-10-sciforge-subagent-live-positive"
+            ],
+            "cursorAgentComputerUseRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-cursor-subagent-tool-unavailable-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-cursor-subagent-tool-unavailable-summary.png",
+              "computer-use:round-10-cursor-subagent-tool-unavailable"
+            ],
+            "missingSides": []
+          },
+          {
+            "requirementId": "right-side-result-presentation",
+            "sciforgeBrowserRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-sciforge-subagent-live-positive-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-sciforge-subagent-live-positive.png",
+              "browser:round-10-sciforge-subagent-live-positive"
+            ],
+            "cursorAgentComputerUseRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-cursor-subagent-tool-unavailable-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-cursor-subagent-tool-unavailable-summary.png",
+              "computer-use:round-10-cursor-subagent-tool-unavailable"
+            ],
+            "missingSides": []
+          }
+        ]
+      },
+      "differences": [],
+      "correctionDecision": {
+        "status": "implemented",
+        "summary": "SciForge-side generic fix is implemented through Codex app-server dynamic tools, MCP sub-agent lifecycle refs, and right-pane artifact previews; final closure is deferred until Cursor positive-baseline availability is resolved.",
+        "refs": [
+          "src/runtime/codex/codex-app-server-client.ts",
+          "src/runtime/codex/subagent-mcp-tools.ts",
+          "src/ui/src/app/chat/cursorAgentProcess.ts",
+          "src/ui/src/app/results/WorkspaceObjectPreview.tsx",
+          "PROJECT.md"
+        ]
+      },
+      "verification": {
+        "status": "passed",
+        "summary": "Focused tests cover the SciForge code paths changed for Round 10; Cursor same-prompt live result remains tool-unavailable rather than a failing SciForge test.",
+        "refs": [
+          "src/runtime/codex/codex-app-server-client.test.ts",
+          "src/runtime/codex/subagent-mcp-tools.test.ts",
+          "src/ui/src/streamEventPresentation.test.ts",
+          "src/ui/src/app/results/WorkspaceObjectPreview.test.ts",
+          "src/ui/src/app/agentDesktopAlignmentEvidence.test.ts"
+        ]
+      },
+      "redactionCheck": {
+        "status": "passed",
+        "summary": "Round 10 stores refs-first summaries and screenshots only; no provider secrets, API keys, full private dialogs, raw transcripts, raw DOM dumps, or unrelated desktop contents are embedded.",
+        "refs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-sciforge-subagent-live-positive-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-cursor-subagent-tool-unavailable-summary.json"
+        ]
+      },
+      "policyDiagnostics": []
+    },
+    {
+      "roundId": "live-round-11",
+      "status": "blocked",
+      "startedAt": "2026-05-30T13:40:00+08:00",
+      "completedAt": "2026-05-30T13:52:00+08:00",
+      "observationEntryPoints": [
+        {
+          "side": "sciforge-browser",
+          "entryPoint": "SciForge Browser post-cleanup sub-agent process and right-pane result preview",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-sciforge-postcleanup-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-sciforge-postcleanup-subagent-preview.png",
+            "browser:round-11-sciforge-postcleanup-subagent-preview"
+          ],
+          "summary": "Browser retested the existing positive sub-agent conversation after cleanup; replay header copy was absent and refs appeared before summaries/details."
+        },
+        {
+          "side": "cursor-agent-computer-use",
+          "entryPoint": "Cursor Agent desktop same-prompt sub-agent baseline re-observation",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-cursor-subagent-still-unavailable-summary.json",
+            "computer-use:round-11-cursor-subagent-still-unavailable"
+          ],
+          "summary": "Computer Use re-observed the same-prompt Cursor Agent conversation; it still reports NO_SUBAGENT_TOOL_AVAILABLE and has no positive transcript/result refs."
+        }
+      ],
+      "coverage": {
+        "surfaces": [
+          "chat",
+          "presentation"
+        ],
+        "requirementIds": [
+          "sub-agent-expansion",
+          "right-side-result-presentation"
+        ],
+        "summary": "Round 11 retested sub-agent process rows, refs-first detail order, and right-pane result presentation after generic cleanup, then rechecked Cursor same-prompt baseline."
+      },
+      "steps": [
+        {
+          "id": "observe-sciforge",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-sciforge-postcleanup-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-sciforge-postcleanup-subagent-preview.png",
+            "browser:round-11-sciforge-postcleanup-subagent-preview"
+          ],
+          "summary": "Observed SciForge process rows, refs-first sub-agent detail order, and right-pane sub-agent preview after cleanup."
+        },
+        {
+          "id": "observe-cursor-agent",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-cursor-subagent-still-unavailable-summary.json",
+            "computer-use:round-11-cursor-subagent-still-unavailable"
+          ],
+          "summary": "Observed Cursor same-prompt conversation still lacks positive sub-agent transcript/result refs."
+        },
+        {
+          "id": "record-differences",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-sciforge-postcleanup-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-sciforge-postcleanup-subagent-preview.png",
+            "browser:round-11-sciforge-postcleanup-subagent-preview",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-cursor-subagent-still-unavailable-summary.json",
+            "computer-use:round-11-cursor-subagent-still-unavailable",
+            "PROJECT.md"
+          ],
+          "summary": "Updated the existing sub-agent open difference; no new independent difference was introduced."
+        },
+        {
+          "id": "update-project-todo",
+          "status": "completed",
+          "refs": [
+            "PROJECT.md",
+            "docs/agent-desktop-alignment-evidence/live-ledger-2026-05-30.json"
+          ],
+          "summary": "Recorded Round 11 status and evidence refs in PROJECT and the canonical ledger."
+        },
+        {
+          "id": "implement-generic-fix",
+          "status": "completed",
+          "refs": [
+            "src/ui/src/app/chat/cursorAgentProcess.ts",
+            "src/ui/src/app/chat/RunExecutionProcess.test.ts",
+            "src/ui/src/app/results/WorkspaceObjectPreview.tsx",
+            "src/ui/src/app/results/WorkspaceObjectPreview.test.ts",
+            "src/ui/src/api/sciforgeToolsClient/client.ts",
+            "src/ui/src/api/sciforgeToolsClient/runtimeEvents.ts",
+            "src/ui/src/api/sciforgeToolsClient/runtimeEvents.test.ts",
+            "src/ui/src/runtimeAuditEvents.ts",
+            "packages/backend/README.md"
+          ],
+          "summary": "Applied generic presentation cleanup for chronological chunks, sub-agent prompt-tail removal, worker-id title retention, refs-first detail order, recorded replay header removal, raw-events terminology, and unsafe preview fallback."
+        },
+        {
+          "id": "verify",
+          "status": "completed",
+          "refs": [
+            "src/runtime/codex/codex-runtime-server.test.ts",
+            "src/ui/src/api/sciforgeToolsClient/runtimeEvents.test.ts",
+            "src/ui/src/app/chat/RunExecutionProcess.test.ts",
+            "src/ui/src/app/results/WorkspaceObjectPreview.test.ts",
+            "src/ui/src/streamEventPresentation.test.ts"
+          ],
+          "summary": "Focused presentation/runtime tests, typecheck, and diff check passed."
+        },
+        {
+          "id": "retest-both-sides",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-sciforge-postcleanup-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-sciforge-postcleanup-subagent-preview.png",
+            "browser:round-11-sciforge-postcleanup-subagent-preview",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-cursor-subagent-still-unavailable-summary.json",
+            "computer-use:round-11-cursor-subagent-still-unavailable"
+          ],
+          "summary": "Retested SciForge Browser and Cursor Agent Computer Use; parity remains blocked only by missing Cursor positive baseline."
+        }
+      ],
+      "evidence": [
+        {
+          "id": "live-round-11-sciforge-postcleanup-subagent-preview",
+          "side": "sciforge-browser",
+          "source": {
+            "tool": "browser",
+            "target": "sciforge-web",
+            "ref": "browser:round-11-sciforge-postcleanup-subagent-preview"
+          },
+          "requirementIds": [
+            "sub-agent-expansion",
+            "right-side-result-presentation"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-sciforge-postcleanup-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-sciforge-postcleanup-subagent-preview.png",
+            "browser:round-11-sciforge-postcleanup-subagent-preview"
+          ],
+          "summary": "SciForge Browser showed worker-id sub-agent rows, refs before summaries/details, safe transcript/result refs, and a right-pane sub-agent preview without prompt echoes, raw JSON, replay header copy, or unsafe loading.",
+          "capturedAt": "2026-05-30T13:49:00+08:00",
+          "status": "accepted",
+          "policyDiagnostics": []
+        },
+        {
+          "id": "live-round-11-cursor-subagent-still-unavailable",
+          "side": "cursor-agent-computer-use",
+          "source": {
+            "tool": "computer-use",
+            "target": "cursor-agent-desktop",
+            "ref": "computer-use:round-11-cursor-subagent-still-unavailable"
+          },
+          "requirementIds": [
+            "sub-agent-expansion",
+            "right-side-result-presentation"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-cursor-subagent-still-unavailable-summary.json",
+            "computer-use:round-11-cursor-subagent-still-unavailable"
+          ],
+          "summary": "Cursor Agent same-prompt conversation still reports NO_SUBAGENT_TOOL_AVAILABLE and exposes no positive sub-agent transcript/result refs.",
+          "capturedAt": "2026-05-30T13:52:00+08:00",
+          "status": "accepted",
+          "policyDiagnostics": []
+        }
+      ],
+      "evidenceCoverage": {
+        "sciforgeBrowserRefs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-sciforge-postcleanup-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-sciforge-postcleanup-subagent-preview.png",
+          "browser:round-11-sciforge-postcleanup-subagent-preview"
+        ],
+        "cursorAgentComputerUseRefs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-cursor-subagent-still-unavailable-summary.json",
+          "computer-use:round-11-cursor-subagent-still-unavailable"
+        ],
+        "missingSides": [],
+        "requirementCoverage": [
+          {
+            "requirementId": "sub-agent-expansion",
+            "sciforgeBrowserRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-sciforge-postcleanup-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-sciforge-postcleanup-subagent-preview.png",
+              "browser:round-11-sciforge-postcleanup-subagent-preview"
+            ],
+            "cursorAgentComputerUseRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-cursor-subagent-still-unavailable-summary.json",
+              "computer-use:round-11-cursor-subagent-still-unavailable"
+            ],
+            "missingSides": []
+          },
+          {
+            "requirementId": "right-side-result-presentation",
+            "sciforgeBrowserRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-sciforge-postcleanup-summary.json",
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-sciforge-postcleanup-subagent-preview.png",
+              "browser:round-11-sciforge-postcleanup-subagent-preview"
+            ],
+            "cursorAgentComputerUseRefs": [
+              "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-cursor-subagent-still-unavailable-summary.json",
+              "computer-use:round-11-cursor-subagent-still-unavailable"
+            ],
+            "missingSides": []
+          }
+        ]
+      },
+      "differences": [],
+      "correctionDecision": {
+        "status": "implemented",
+        "summary": "Implemented generic SciForge presentation cleanup; no Cursor-scope code change can manufacture a positive Cursor baseline.",
+        "refs": [
+          "src/ui/src/app/chat/cursorAgentProcess.ts",
+          "src/ui/src/app/chat/RunExecutionProcess.test.ts",
+          "src/ui/src/app/results/WorkspaceObjectPreview.tsx",
+          "src/ui/src/app/results/WorkspaceObjectPreview.test.ts",
+          "src/ui/src/api/sciforgeToolsClient/client.ts",
+          "src/ui/src/api/sciforgeToolsClient/runtimeEvents.ts",
+          "src/ui/src/api/sciforgeToolsClient/runtimeEvents.test.ts",
+          "src/ui/src/runtimeAuditEvents.ts",
+          "packages/backend/README.md",
+          "PROJECT.md"
+        ]
+      },
+      "verification": {
+        "status": "passed",
+        "summary": "Focused tests passed; typecheck and git diff check passed.",
+        "refs": [
+          "src/runtime/codex/codex-runtime-server.test.ts",
+          "src/ui/src/api/sciforgeToolsClient/runtimeEvents.test.ts",
+          "src/ui/src/app/chat/RunExecutionProcess.test.ts",
+          "src/ui/src/app/results/WorkspaceObjectPreview.test.ts",
+          "src/ui/src/streamEventPresentation.test.ts"
+        ]
+      },
+      "redactionCheck": {
+        "status": "passed",
+        "summary": "Evidence remains refs-first and redacted; no provider secrets, raw transcripts, local absolute paths, or unrelated desktop state are embedded.",
+        "refs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-sciforge-postcleanup-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-sciforge-postcleanup-subagent-preview.png",
+          "browser:round-11-sciforge-postcleanup-subagent-preview",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-11-cursor-subagent-still-unavailable-summary.json",
+          "computer-use:round-11-cursor-subagent-still-unavailable"
+        ]
+      },
+      "policyDiagnostics": []
+    },
+    {
+      "roundId": "live-round-12",
+      "status": "blocked",
+      "startedAt": "2026-05-30T14:05:00+08:00",
+      "completedAt": "2026-05-30T14:16:00+08:00",
+      "observationEntryPoints": [
+        {
+          "side": "sciforge-browser",
+          "entryPoint": "SciForge Browser localhost sidebar, process rows, and sub-agent preview after unified sidebar/process cleanup",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-12-sciforge-sidebar-process-summary.json",
+            "browser:round-12-sciforge-sidebar-process"
+          ]
+        },
+        {
+          "side": "cursor-agent-computer-use",
+          "entryPoint": "Cursor Agents desktop same-prompt conversation and sidebar baseline",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-12-cursor-subagent-still-unavailable-summary.json",
+            "computer-use:round-12-cursor-subagent-still-unavailable"
+          ]
+        }
+      ],
+      "coverage": {
+        "surfaces": [
+          "sidebar",
+          "chat",
+          "presentation"
+        ],
+        "requirementIds": [
+          "sidebar-new-project-new-chat",
+          "completed-state-collapsed",
+          "running-state-live-updates",
+          "command-expansion",
+          "sub-agent-expansion",
+          "right-side-result-presentation"
+        ],
+        "summary": "Round 12 retested SciForge sidebar/process/right-pane hardening and Cursor Agent same-prompt state; final parity remains blocked only by missing Cursor positive sub-agent baseline."
+      },
+      "steps": [
+        {
+          "id": "observe-sciforge",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-12-sciforge-sidebar-process-summary.json",
+            "browser:round-12-sciforge-sidebar-process"
+          ],
+          "summary": "Observed unified sidebar thread rows, no replay chrome, no Runtime Backend Selector/Codex CLI product copy, and sub-agent refs-before-summary process rows."
+        },
+        {
+          "id": "observe-cursor-agent",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-12-cursor-subagent-still-unavailable-summary.json",
+            "computer-use:round-12-cursor-subagent-still-unavailable"
+          ],
+          "summary": "Observed Cursor sidebar baseline and same-prompt NO_SUBAGENT_TOOL_AVAILABLE result."
+        },
+        {
+          "id": "record-differences",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-ledger-2026-05-30.json",
+            "PROJECT.md"
+          ],
+          "summary": "No new independent difference was introduced; the existing sub-agent parity difference remains open."
+        },
+        {
+          "id": "update-project-todo",
+          "status": "completed",
+          "refs": [
+            "PROJECT.md",
+            "docs/agent-desktop-alignment-evidence/live-ledger-2026-05-30.json"
+          ],
+          "summary": "Recorded Round 12 hardening and live retest status."
+        },
+        {
+          "id": "implement-generic-fix",
+          "status": "completed",
+          "refs": [
+            "src/ui/src/app/appShell/SidebarProjectChatSection.tsx",
+            "src/ui/src/app/appShell/ShellPanels.tsx",
+            "src/ui/src/app/appShell/sidebarProjectThreadList.ts",
+            "src/ui/src/workspace/sessionWorkspace.ts",
+            "src/ui/src/app/chat/RunningWorkProcess.tsx",
+            "src/ui/src/app/chat/cursorAgentProcess.ts",
+            "src/ui/src/app/results/WorkspaceObjectPreview.tsx",
+            "src/ui/src/app/appShell/SettingsPage.tsx",
+            "src/ui/src/feedback/FeedbackRepairAuditPanel.tsx",
+            "src/ui/src/app/sciforgeApp/FeedbackInboxPage.tsx"
+          ],
+          "summary": "Implemented unified sidebar rendering/actions, archiveState metadata, neutral process chrome, folded-action summaries, tool-labeled prompt echo filtering, refs-first safe sub-agent preview, and app-server wording cleanup."
+        },
+        {
+          "id": "verify",
+          "status": "completed",
+          "refs": [
+            "src/ui/src/app/chat/RunExecutionProcess.test.ts",
+            "src/ui/src/app/results/WorkspaceObjectPreview.test.ts",
+            "src/ui/src/streamEventPresentation.test.ts",
+            "src/ui/src/app/appShell/SidebarProjectChatSection.test.tsx",
+            "src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts",
+            "src/ui/src/app/appShell/sidebarCursorAgentModel.test.ts",
+            "src/ui/src/workspace/sessionWorkspace.test.ts",
+            "src/ui/src/app/appShell/ShellPanelsSettingsDialog.test.ts",
+            "src/ui/src/app/agentDesktopAlignmentEvidence.test.ts"
+          ],
+          "summary": "Focused tests passed; typecheck and git diff check passed."
+        },
+        {
+          "id": "retest-both-sides",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-12-sciforge-sidebar-process-summary.json",
+            "browser:round-12-sciforge-sidebar-process",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-12-cursor-subagent-still-unavailable-summary.json",
+            "computer-use:round-12-cursor-subagent-still-unavailable"
+          ],
+          "summary": "Retested SciForge Browser and Cursor Agent Computer Use; parity remains blocked only by missing Cursor positive sub-agent baseline."
+        }
+      ],
+      "evidence": [
+        {
+          "id": "live-round-12-sciforge-sidebar-process",
+          "side": "sciforge-browser",
+          "source": {
+            "tool": "browser",
+            "target": "sciforge-web",
+            "ref": "browser:round-12-sciforge-sidebar-process"
+          },
+          "requirementIds": [
+            "sidebar-new-project-new-chat",
+            "completed-state-collapsed",
+            "running-state-live-updates",
+            "command-expansion",
+            "sub-agent-expansion",
+            "right-side-result-presentation"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-12-sciforge-sidebar-process-summary.json",
+            "browser:round-12-sciforge-sidebar-process"
+          ],
+          "summary": "SciForge Browser showed unified sidebar rows, neutral process chrome, folded process counts, safe sub-agent refs before summaries, and no product-visible legacy backend wording.",
+          "capturedAt": "2026-05-30T14:15:00+08:00",
+          "status": "accepted",
+          "policyDiagnostics": []
+        },
+        {
+          "id": "live-round-12-cursor-subagent-still-unavailable",
+          "side": "cursor-agent-computer-use",
+          "source": {
+            "tool": "computer-use",
+            "target": "cursor-agent-desktop",
+            "ref": "computer-use:round-12-cursor-subagent-still-unavailable"
+          },
+          "requirementIds": [
+            "sidebar-new-project-new-chat",
+            "completed-state-collapsed",
+            "running-state-live-updates",
+            "command-expansion",
+            "sub-agent-expansion",
+            "right-side-result-presentation"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-12-cursor-subagent-still-unavailable-summary.json",
+            "computer-use:round-12-cursor-subagent-still-unavailable"
+          ],
+          "summary": "Cursor Agent showed the sidebar/process baseline and still reports NO_SUBAGENT_TOOL_AVAILABLE for the same sub-agent prompt, with no positive transcript/result refs.",
+          "capturedAt": "2026-05-30T14:16:00+08:00",
+          "status": "accepted",
+          "policyDiagnostics": []
+        }
+      ],
+      "differences": [],
+      "correctionDecision": {
+        "status": "implemented",
+        "summary": "Implemented generic SciForge sidebar/process/presentation hardening; no Cursor-scope code change can manufacture a positive Cursor sub-agent baseline.",
+        "refs": [
+          "src/ui/src/app/appShell/SidebarProjectChatSection.tsx",
+          "src/ui/src/app/appShell/ShellPanels.tsx",
+          "src/ui/src/app/chat/cursorAgentProcess.ts",
+          "src/ui/src/app/results/WorkspaceObjectPreview.tsx",
+          "PROJECT.md"
+        ]
+      },
+      "verification": {
+        "status": "passed",
+        "summary": "Focused tests passed; typecheck and git diff check passed.",
+        "refs": [
+          "src/ui/src/app/chat/RunExecutionProcess.test.ts",
+          "src/ui/src/app/results/WorkspaceObjectPreview.test.ts",
+          "src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts",
+          "src/ui/src/app/agentDesktopAlignmentEvidence.test.ts"
+        ]
+      },
+      "redactionCheck": {
+        "status": "passed",
+        "summary": "Evidence remains refs-first and bounded; no provider secrets, raw transcripts, or local absolute paths are embedded.",
+        "refs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-12-sciforge-sidebar-process-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-12-cursor-subagent-still-unavailable-summary.json"
+        ]
+      },
+      "policyDiagnostics": []
+    },
+    {
+      "roundId": "live-round-13",
+      "status": "passed",
+      "startedAt": "2026-05-30T19:58:00+08:00",
+      "completedAt": "2026-05-30T20:36:00+08:00",
+      "observationEntryPoints": [
+        {
+          "side": "sciforge-browser",
+          "entryPoint": "SciForge Browser complex same-prompt chat process expanded state",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-sciforge-complex-same-prompt-fold-expand-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-sciforge-complex-same-prompt-expanded.png",
+            "browser:round-13-sciforge-complex-same-prompt-fold-expand"
+          ],
+          "summary": "SciForge Browser retest showed low-chrome expanded process rows, hidden completed leaf status/timestamps, muted More activity, no raw ref prefixes, and no final audit labels."
+        },
+        {
+          "side": "cursor-agent-computer-use",
+          "entryPoint": "Cursor Agent desktop complex same-prompt expanded process baseline",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-cursor-complex-same-prompt-fold-expand-summary.json",
+            "computer-use:round-13-cursor-complex-same-prompt-fold-expand"
+          ],
+          "summary": "Cursor Agent reference shows expanded Thought/read rows as page-flow prose with right editor/preview separate from the answer."
+        }
+      ],
+      "coverage": {
+        "surfaces": [
+          "chat",
+          "presentation"
+        ],
+        "requirementIds": [
+          "completed-state-collapsed",
+          "running-state-live-updates",
+          "file-preview",
+          "right-side-result-presentation"
+        ],
+        "summary": "Round 13 compared a complex same prompt and the user-provided Cursor expanded-state screenshot, then hardened SciForge final answer/process expansion/file preview/right-pane presentation without adding new open differences."
+      },
+      "steps": [
+        {
+          "id": "observe-sciforge",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-sciforge-complex-same-prompt-fold-expand-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-sciforge-complex-same-prompt-expanded.png",
+            "browser:round-13-sciforge-complex-same-prompt-fold-expand"
+          ],
+          "summary": "Observed SciForge Browser complex same-prompt chat and expanded process state."
+        },
+        {
+          "id": "observe-cursor-agent",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-cursor-complex-same-prompt-fold-expand-summary.json",
+            "computer-use:round-13-cursor-complex-same-prompt-fold-expand"
+          ],
+          "summary": "Observed Cursor Agent desktop same-prompt conversation and used the user-provided expanded-state screenshot as the visual baseline."
+        },
+        {
+          "id": "record-differences",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-sciforge-complex-same-prompt-fold-expand-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-sciforge-complex-same-prompt-expanded.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-cursor-complex-same-prompt-fold-expand-summary.json",
+            "browser:round-13-sciforge-complex-same-prompt-fold-expand",
+            "computer-use:round-13-cursor-complex-same-prompt-fold-expand"
+          ],
+          "summary": "Recorded residual visual differences: process rows had status/time chrome, prose details used log-like blocks, final audit labels were too prominent, and refs exposed raw prefixes."
+        },
+        {
+          "id": "update-project-todo",
+          "status": "completed",
+          "refs": [
+            "PROJECT.md",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-sciforge-complex-same-prompt-fold-expand-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-sciforge-complex-same-prompt-expanded.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-cursor-complex-same-prompt-fold-expand-summary.json",
+            "browser:round-13-sciforge-complex-same-prompt-fold-expand",
+            "computer-use:round-13-cursor-complex-same-prompt-fold-expand"
+          ],
+          "summary": "Updated the live parity progress notes for Round 13 while leaving final live parity open."
+        },
+        {
+          "id": "implement-generic-fix",
+          "status": "completed",
+          "refs": [
+            "src/ui/src/app/chat/RunningWorkProcess.tsx",
+            "src/ui/src/app/chat/FinalMessageContent.tsx",
+            "src/ui/src/app/chat/cursorAgentProcess.ts",
+            "src/ui/src/app/chat/runStatusPresentation.ts",
+            "src/ui/src/assistantText.ts",
+            "src/ui/src/styles/app-04.css",
+            "src/ui/src/app/chat/RunExecutionProcess.test.ts",
+            "src/ui/src/app/chat/finalMessagePresentation.test.tsx",
+            "src/ui/src/streamEventPresentation.test.ts",
+            "src/ui/src/app/chat/runStatusPresentation.test.ts",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-sciforge-complex-same-prompt-fold-expand-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-sciforge-complex-same-prompt-expanded.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-cursor-complex-same-prompt-fold-expand-summary.json",
+            "browser:round-13-sciforge-complex-same-prompt-fold-expand",
+            "computer-use:round-13-cursor-complex-same-prompt-fold-expand"
+          ],
+          "summary": "Implemented generic presentation fixes for active assistant normalization, expanded process prose, row-click previews, ref display, command-output labels, and final audit chrome."
+        },
+        {
+          "id": "verify",
+          "status": "completed",
+          "refs": [
+            "src/ui/src/app/chat/RunExecutionProcess.test.ts",
+            "src/ui/src/streamEventPresentation.test.ts",
+            "src/ui/src/app/chat/finalMessagePresentation.test.tsx",
+            "src/ui/src/app/chat/runStatusPresentation.test.ts",
+            "src/ui/src/app/ResultsRenderer.test.ts",
+            "src/ui/src/app/ChatPanel.test.ts",
+            "src/ui/src/app/results/WorkspaceObjectPreview.test.ts",
+            "src/ui/src/app/agentDesktopAlignmentEvidence.test.ts",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-sciforge-complex-same-prompt-expanded.png",
+            "browser:round-13-sciforge-complex-same-prompt-fold-expand"
+          ],
+          "summary": "Focused and wider UI/process/evidence tests passed; typecheck and git diff check passed; Browser retest checked computed visibility/redaction signals."
+        },
+        {
+          "id": "retest-both-sides",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-sciforge-complex-same-prompt-fold-expand-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-sciforge-complex-same-prompt-expanded.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-cursor-complex-same-prompt-fold-expand-summary.json",
+            "browser:round-13-sciforge-complex-same-prompt-fold-expand",
+            "computer-use:round-13-cursor-complex-same-prompt-fold-expand"
+          ],
+          "summary": "Retested SciForge Browser after the generic fixes and compared against Cursor Agent expanded-state visual baseline; no new open differences were added."
+        }
+      ],
+      "evidence": [
+        {
+          "id": "live-round-13-sciforge-complex-fold-expand",
+          "side": "sciforge-browser",
+          "source": {
+            "tool": "browser",
+            "target": "sciforge-web",
+            "ref": "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-sciforge-complex-same-prompt-fold-expand-summary.json"
+          },
+          "requirementIds": [
+            "completed-state-collapsed",
+            "running-state-live-updates",
+            "file-preview",
+            "right-side-result-presentation"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-sciforge-complex-same-prompt-fold-expand-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-sciforge-complex-same-prompt-expanded.png",
+            "browser:round-13-sciforge-complex-same-prompt-fold-expand"
+          ],
+          "summary": "SciForge Browser evidence for complex same-prompt folded/expanded process, row-click preview affordance, and right-pane separation after generic cleanup.",
+          "status": "accepted",
+          "policyDiagnostics": []
+        },
+        {
+          "id": "live-round-13-cursor-complex-fold-expand",
+          "side": "cursor-agent-computer-use",
+          "source": {
+            "tool": "computer-use",
+            "target": "cursor-agent-desktop",
+            "ref": "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-cursor-complex-same-prompt-fold-expand-summary.json"
+          },
+          "requirementIds": [
+            "completed-state-collapsed",
+            "running-state-live-updates",
+            "file-preview",
+            "right-side-result-presentation"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-cursor-complex-same-prompt-fold-expand-summary.json",
+            "computer-use:round-13-cursor-complex-same-prompt-fold-expand"
+          ],
+          "summary": "Cursor Agent Computer Use summary for the same prompt and expanded-state visual baseline, with page-flow thought/read rows and separate right editor/preview.",
+          "status": "accepted",
+          "policyDiagnostics": []
+        }
+      ],
+      "differences": [],
+      "correctionDecision": {
+        "status": "implemented",
+        "summary": "Implemented generic SciForge chat/process/final-answer presentation cleanup; no new product-scope difference remains beyond the existing sub-agent positive baseline gap.",
+        "refs": [
+          "src/ui/src/app/chat/RunningWorkProcess.tsx",
+          "src/ui/src/app/chat/FinalMessageContent.tsx",
+          "src/ui/src/app/chat/cursorAgentProcess.ts",
+          "src/ui/src/assistantText.ts",
+          "src/ui/src/styles/app-04.css",
+          "PROJECT.md"
+        ]
+      },
+      "verification": {
+        "status": "passed",
+        "summary": "Focused chat/process/final-message tests passed; wider UI/process/evidence suite passed; typecheck passed; git diff check passed; Browser retest confirmed no visible Stdout/Stderr labels, raw action ref prefixes, final audit labels, or completed leaf timestamps/status chrome.",
+        "refs": [
+          "src/ui/src/app/chat/RunExecutionProcess.test.ts",
+          "src/ui/src/streamEventPresentation.test.ts",
+          "src/ui/src/app/chat/finalMessagePresentation.test.tsx",
+          "src/ui/src/app/chat/runStatusPresentation.test.ts",
+          "src/ui/src/app/ResultsRenderer.test.ts",
+          "src/ui/src/app/ChatPanel.test.ts",
+          "src/ui/src/app/results/WorkspaceObjectPreview.test.ts",
+          "src/ui/src/app/agentDesktopAlignmentEvidence.test.ts",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-sciforge-complex-same-prompt-expanded.png",
+          "browser:round-13-sciforge-complex-same-prompt-fold-expand"
+        ]
+      },
+      "redactionCheck": {
+        "status": "passed",
+        "summary": "Evidence remains refs-first and bounded; raw DOM, raw accessibility trees, full transcripts, secrets, provider details, and local absolute paths are not embedded.",
+        "refs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-sciforge-complex-same-prompt-fold-expand-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-cursor-complex-same-prompt-fold-expand-summary.json"
+        ]
+      },
+      "policyDiagnostics": []
+    },
+    {
+      "roundId": "live-round-14",
+      "status": "passed",
+      "startedAt": "2026-05-30T20:50:00+08:00",
+      "completedAt": "2026-05-30T21:28:00+08:00",
+      "observationEntryPoints": [
+        {
+          "side": "sciforge-browser",
+          "entryPoint": "SciForge Browser sidebar and right-pane file viewer retest after moving file tree out of the default left sidebar",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-14-sciforge-file-viewer-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-14-sciforge-sidebar-no-file-tree.png",
+            "browser:round-14-sciforge-sidebar-no-file-tree"
+          ],
+          "summary": "Browser reload confirmed the default left sidebar has no workspace file tree; focused tests cover the new right-pane tree plus editable file viewer."
+        },
+        {
+          "side": "cursor-agent-computer-use",
+          "entryPoint": "Cursor Agent desktop file ref baseline with right-side project tree and editable file editor",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-14-cursor-file-tree-editor-summary.json",
+            "computer-use:round-14-cursor-file-tree-editor-baseline"
+          ],
+          "summary": "Computer Use read-only observation confirmed Cursor keeps the chat canvas separate from a right-side project tree and editable file editor."
+        }
+      ],
+      "coverage": {
+        "surfaces": [
+          "sidebar",
+          "presentation"
+        ],
+        "requirementIds": [
+          "sidebar-new-project-new-chat",
+          "file-preview",
+          "right-side-result-presentation"
+        ],
+        "summary": "Round 14 implements the user-requested Cursor-like file viewing rule: no default project tree in the left chat sidebar; a clicked/read file opens a right-side tree plus editable file surface owned by the presentation component package."
+      },
+      "steps": [
+        {
+          "id": "observe-sciforge",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-14-sciforge-file-viewer-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-14-sciforge-sidebar-no-file-tree.png",
+            "browser:round-14-sciforge-sidebar-no-file-tree"
+          ],
+          "summary": "Observed SciForge Browser after reload and confirmed the sidebar file tree is gone from the default left sidebar."
+        },
+        {
+          "id": "observe-cursor-agent",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-14-cursor-file-tree-editor-summary.json",
+            "computer-use:round-14-cursor-file-tree-editor-baseline"
+          ],
+          "summary": "Observed Cursor Agent desktop showing chat on the left and a right editor surface with a project tree and editable PROJECT.md."
+        },
+        {
+          "id": "record-differences",
+          "status": "completed",
+          "refs": [
+            "PROJECT.md",
+            "docs/NativeExtensionOwnershipMap.md",
+            "docs/Architecture.md",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-14-cursor-file-tree-editor-summary.json"
+          ],
+          "summary": "Recorded the right-side presentation difference: SciForge kept the project tree in the left sidebar and file reads opened a read-only preview instead of a right tree plus editable file surface."
+        },
+        {
+          "id": "update-project-todo",
+          "status": "completed",
+          "refs": [
+            "PROJECT.md",
+            "docs/agent-desktop-alignment-evidence/live-ledger-2026-05-30.json"
+          ],
+          "summary": "Updated the live parity progress notes and canonical ledger with Round 14 evidence while keeping final live parity active."
+        },
+        {
+          "id": "implement-generic-fix",
+          "status": "completed",
+          "refs": [
+            "packages/presentation/components/workspace-file-viewer/manifest.ts",
+            "packages/presentation/components/workspace-file-viewer/render.tsx",
+            "src/ui/src/app/ResultsRenderer.tsx",
+            "src/ui/src/app/appShell/ShellPanels.tsx",
+            "src/ui/src/styles/app-04.css"
+          ],
+          "summary": "Added a package-owned workspace-file-viewer presentation component, wired ResultsRenderer to list/read/write safely, and hid the default left sidebar file tree."
+        },
+        {
+          "id": "verify",
+          "status": "completed",
+          "refs": [
+            "packages/presentation/components/workspace-file-viewer/render.test.tsx",
+            "src/ui/src/app/ResultsRenderer.test.ts",
+            "src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts",
+            "npm --workspace @sciforge-ui/components run packages:check --silent",
+            "npm run typecheck --silent"
+          ],
+          "summary": "Package boundary check, focused component/results/sidebar tests, and typecheck passed."
+        },
+        {
+          "id": "retest-both-sides",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-14-sciforge-file-viewer-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-14-sciforge-sidebar-no-file-tree.png",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-14-cursor-file-tree-editor-summary.json",
+            "browser:round-14-sciforge-sidebar-no-file-tree",
+            "computer-use:round-14-cursor-file-tree-editor-baseline"
+          ],
+          "summary": "Retested SciForge Browser and Cursor Agent desktop for the file tree/editor placement rule; no new open difference was added."
+        }
+      ],
+      "evidence": [
+        {
+          "id": "live-round-14-sciforge-file-viewer-placement",
+          "side": "sciforge-browser",
+          "source": {
+            "tool": "browser",
+            "target": "sciforge-web",
+            "ref": "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-14-sciforge-file-viewer-summary.json"
+          },
+          "requirementIds": [
+            "sidebar-new-project-new-chat",
+            "file-preview",
+            "right-side-result-presentation"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-14-sciforge-file-viewer-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-14-sciforge-sidebar-no-file-tree.png",
+            "browser:round-14-sciforge-sidebar-no-file-tree"
+          ],
+          "summary": "SciForge Browser evidence for no default left file tree, plus right-pane file tree/editor coverage from package and ResultsRenderer tests."
+        },
+        {
+          "id": "live-round-14-cursor-file-tree-editor-baseline",
+          "side": "cursor-agent-computer-use",
+          "source": {
+            "tool": "computer-use",
+            "target": "cursor-agent-desktop",
+            "ref": "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-14-cursor-file-tree-editor-summary.json"
+          },
+          "requirementIds": [
+            "sidebar-new-project-new-chat",
+            "file-preview",
+            "right-side-result-presentation"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-14-cursor-file-tree-editor-summary.json",
+            "computer-use:round-14-cursor-file-tree-editor-baseline"
+          ],
+          "summary": "Cursor Agent baseline for chat-left/editor-right file viewing, including right project tree and editable PROJECT.md."
+        }
+      ],
+      "differences": [],
+      "correctionDecision": {
+        "status": "implemented",
+        "summary": "Implemented the right-side file tree/editor placement generically within GUI presentation boundaries; the existing Cursor positive sub-agent baseline gap remains the only open ledger difference.",
+        "refs": [
+          "packages/presentation/components/workspace-file-viewer",
+          "src/ui/src/app/ResultsRenderer.tsx",
+          "src/ui/src/app/appShell/ShellPanels.tsx",
+          "PROJECT.md"
+        ]
+      },
+      "verification": {
+        "status": "passed",
+        "summary": "Focused package/results/sidebar tests passed; package boundary check and typecheck passed; Browser and Computer Use observations matched the placement rule.",
+        "refs": [
+          "packages/presentation/components/workspace-file-viewer/render.test.tsx",
+          "src/ui/src/app/ResultsRenderer.test.ts",
+          "src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-14-sciforge-file-viewer-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-14-cursor-file-tree-editor-summary.json"
+        ]
+      },
+      "redactionCheck": {
+        "status": "passed",
+        "summary": "Evidence remains refs-first and bounded; no raw accessibility tree, raw DOM, full transcript, provider secret, model detail, or absolute local path is embedded.",
+        "refs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-14-sciforge-file-viewer-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-14-cursor-file-tree-editor-summary.json"
+        ]
+      },
+      "policyDiagnostics": []
+    },
+    {
+      "roundId": "live-round-15",
+      "status": "retest-needed",
+      "startedAt": "2026-05-30T22:10:00+08:00",
+      "completedAt": "2026-05-30T14:39:31.957Z",
+      "observationEntryPoints": [
+        {
+          "side": "sciforge-browser",
+          "entryPoint": "SciForge Browser fresh same-prompt file-viewer retest after run-id/workspace-root fix",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-15-sciforge-file-viewer-opened-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-15-sciforge-file-viewer-opened.png",
+            "browser:round-15-sciforge-file-viewer-opened"
+          ],
+          "summary": "Browser retest sent a fresh read-only PROJECT.md prompt, expanded the completed file action, and confirmed the right pane opens a project tree plus editable PROJECT.md viewer with no object error."
+        },
+        {
+          "side": "cursor-agent-computer-use",
+          "entryPoint": "Cursor Agent file-viewer baseline from user screenshot and prior Computer Use reference; current helper unavailable",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-15-cursor-file-tree-editor-reference-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-14-cursor-file-tree-editor-summary.json",
+            "computer-use:round-14-cursor-file-tree-editor-baseline",
+            "thread:user-provided-cursor-file-viewer-screenshot-2026-05-30"
+          ],
+          "summary": "Cursor reference remains the file-viewer baseline: chat canvas left, right project tree and editable PROJECT.md editor. Current-turn Computer Use helper returned procNotFound, so this round still needs a fresh Cursor live retest when the helper recovers."
+        }
+      ],
+      "coverage": {
+        "surfaces": [
+          "chat",
+          "presentation"
+        ],
+        "requirementIds": [
+          "completed-state-collapsed",
+          "file-preview",
+          "right-side-result-presentation"
+        ],
+        "summary": "Round 15 verifies that a fresh SciForge read-file action keeps Cursor-like collapsed process structure and opens the right-side tree plus editable file viewer; Cursor file-viewer baseline is referenced, but current-turn Cursor retest is still blocked by Computer Use helper availability."
+      },
+      "steps": [
+        {
+          "id": "observe-sciforge",
+          "status": "completed",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-15-sciforge-file-viewer-opened-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-15-sciforge-file-viewer-opened.png",
+            "browser:round-15-sciforge-file-viewer-opened"
+          ],
+          "summary": "Observed SciForge Browser after a fresh same-prompt run and confirmed the right-pane file viewer opens from the read action."
+        },
+        {
+          "id": "observe-cursor-agent",
+          "status": "blocked",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-15-cursor-file-tree-editor-reference-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-14-cursor-file-tree-editor-summary.json",
+            "computer-use:round-14-cursor-file-tree-editor-baseline",
+            "thread:user-provided-cursor-file-viewer-screenshot-2026-05-30"
+          ],
+          "summary": "Current-turn Computer Use failed with procNotFound before a new Cursor interaction; retained the user screenshot and existing Computer Use file-viewer baseline as the comparison reference."
+        },
+        {
+          "id": "record-differences",
+          "status": "completed",
+          "refs": [
+            "PROJECT.md",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-15-sciforge-file-viewer-opened-summary.json"
+          ],
+          "summary": "Recorded the implementation issue found by the fresh SciForge run: read actions could lack run-scoped focus metadata and historical runs could use a workspace root that did not contain the clicked file."
+        },
+        {
+          "id": "update-project-todo",
+          "status": "completed",
+          "refs": [
+            "PROJECT.md",
+            "docs/agent-desktop-alignment-evidence/live-ledger-2026-05-30.json"
+          ],
+          "summary": "Updated the live parity notes and canonical ledger to include Round 15 and the current Cursor retest limitation."
+        },
+        {
+          "id": "implement-generic-fix",
+          "status": "completed",
+          "refs": [
+            "src/ui/src/app/chat/cursorAgentProcess.ts",
+            "src/ui/src/app/chat/RunningWorkProcess.tsx",
+            "src/ui/src/app/chat/RunExecutionProcess.tsx",
+            "src/ui/src/app/ResultsRenderer.tsx"
+          ],
+          "summary": "Added run-scoped file action refs, marked cursor-process file provenance, trimmed prompt-derived file target punctuation, and scoped the right-pane file viewer to the originating run workspace metadata."
+        },
+        {
+          "id": "verify",
+          "status": "completed",
+          "refs": [
+            "src/ui/src/app/chat/RunExecutionProcess.test.ts",
+            "src/ui/src/app/ResultsRenderer.test.ts",
+            "src/runtime/codex/backend-event-normalization.test.ts",
+            "src/runtime/codex/backend-adapters.test.ts",
+            "npm --workspace @sciforge-ui/components run packages:check --silent",
+            "browser:round-15-sciforge-file-viewer-opened"
+          ],
+          "summary": "Focused runtime/process/results tests passed, component package check passed, and Browser retest confirmed the right-pane file tree/editor opens."
+        },
+        {
+          "id": "retest-both-sides",
+          "status": "blocked",
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-15-sciforge-file-viewer-opened-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-15-cursor-file-tree-editor-reference-summary.json",
+            "computer-use-helper:procNotFound"
+          ],
+          "summary": "SciForge Browser retest passed; fresh Cursor Agent Computer Use retest remains blocked by the local helper process error and should be repeated when Computer Use is available."
+        }
+      ],
+      "evidence": [
+        {
+          "id": "live-round-15-sciforge-file-viewer-opened",
+          "side": "sciforge-browser",
+          "source": {
+            "tool": "browser",
+            "target": "sciforge-web",
+            "ref": "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-15-sciforge-file-viewer-opened-summary.json"
+          },
+          "requirementIds": [
+            "completed-state-collapsed",
+            "file-preview",
+            "right-side-result-presentation"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-15-sciforge-file-viewer-opened-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-15-sciforge-file-viewer-opened.png",
+            "browser:round-15-sciforge-file-viewer-opened"
+          ],
+          "summary": "SciForge Browser fresh prompt evidence: completed process folded to Explored 1 file; expanded read action opened right-pane workspace-file-viewer with tree, selected PROJECT.md, editable textarea, and Saved state."
+        },
+        {
+          "id": "live-round-15-cursor-file-viewer-reference",
+          "side": "cursor-agent-computer-use",
+          "source": {
+            "tool": "computer-use",
+            "target": "cursor-agent-desktop",
+            "ref": "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-15-cursor-file-tree-editor-reference-summary.json"
+          },
+          "requirementIds": [
+            "completed-state-collapsed",
+            "file-preview",
+            "right-side-result-presentation"
+          ],
+          "refs": [
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-15-cursor-file-tree-editor-reference-summary.json",
+            "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-14-cursor-file-tree-editor-summary.json",
+            "computer-use:round-14-cursor-file-tree-editor-baseline",
+            "thread:user-provided-cursor-file-viewer-screenshot-2026-05-30"
+          ],
+          "summary": "Cursor file-viewer baseline reference confirms the target layout: chat/process canvas on the left and right-side project tree plus editable PROJECT.md editor; current-turn Computer Use helper was unavailable for a fresh retest."
+        }
+      ],
+      "differences": [],
+      "correctionDecision": {
+        "status": "implemented",
+        "summary": "Implemented the SciForge generic file-viewer fixes found by the fresh same-prompt run; no new product difference is added, but current-turn Cursor live retest is still pending because Computer Use helper failed before observation.",
+        "refs": [
+          "src/ui/src/app/chat/cursorAgentProcess.ts",
+          "src/ui/src/app/chat/RunningWorkProcess.tsx",
+          "src/ui/src/app/chat/RunExecutionProcess.tsx",
+          "src/ui/src/app/ResultsRenderer.tsx",
+          "PROJECT.md"
+        ]
+      },
+      "verification": {
+        "status": "blocked",
+        "summary": "SciForge Browser and focused tests passed. Full Round 15 dual-side fresh retest is blocked only on Computer Use helper availability for Cursor Agent.",
+        "refs": [
+          "src/ui/src/app/chat/RunExecutionProcess.test.ts",
+          "src/ui/src/app/ResultsRenderer.test.ts",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-15-sciforge-file-viewer-opened-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-15-cursor-file-tree-editor-reference-summary.json",
+          "computer-use-helper:procNotFound"
+        ]
+      },
+      "redactionCheck": {
+        "status": "passed",
+        "summary": "Round 15 evidence remains refs-first and bounded; no raw provider secret, full transcript, raw accessibility tree, raw DOM dump, or local absolute path is embedded in the ledger summaries.",
+        "refs": [
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-15-sciforge-file-viewer-opened-summary.json",
+          "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-15-cursor-file-tree-editor-reference-summary.json"
+        ]
+      }
+    }
+  ],
+  "validation": {
+    "ok": true,
+    "diagnostics": [],
+    "rejectedEvidenceIds": [],
+    "openDifferenceIds": [
+      "diff:round-03-missing-command-diff-subagent-live-coverage"
+    ],
+    "missingLiveEvidence": []
+  }
+}

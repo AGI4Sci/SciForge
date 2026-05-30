@@ -43,7 +43,7 @@ export const PREVIEW_FILE_EXTENSIONS_BY_KIND = {
   html: ['html', 'htm'],
   structure: ['pdb', 'cif', 'mmcif'],
   office: ['doc', 'docx', 'ppt', 'pptx'],
-  text: ['txt', 'log', 'ts', 'tsx', 'js', 'jsx', 'py', 'r', 'sh', 'css'],
+  text: ['txt', 'log', 'diff', 'patch', 'ts', 'tsx', 'js', 'jsx', 'py', 'r', 'sh', 'css'],
 } as const satisfies Partial<Record<PreviewDescriptor['kind'], readonly string[]>>;
 
 const STABLE_PREVIEW_DELIVERABLE_EXTENSIONS = new Set([
@@ -53,6 +53,8 @@ const STABLE_PREVIEW_DELIVERABLE_EXTENSIONS = new Set([
   'csv',
   'tsv',
   'txt',
+  'diff',
+  'patch',
   'pdf',
   'doc',
   'docx',
@@ -216,13 +218,13 @@ export function previewDescriptorKindFromArtifactPath(path: string, language = '
 }
 
 export function fileKindForPath(path: string, language = '') {
+  const extension = previewFileExtensionForPath(path);
+  if (extension === 'diff' || extension === 'patch') return 'diff';
   const kind = previewDescriptorKindFromArtifactPath(path, language);
   if (kind === 'table') {
-    const extension = previewFileExtensionForPath(path);
     if (extension === 'csv' || extension === 'tsv') return extension;
   }
   if (kind === 'office') {
-    const extension = previewFileExtensionForPath(path);
     if (extension === 'xls' || extension === 'xlsx') return 'spreadsheet';
     if (extension === 'ppt' || extension === 'pptx') return 'presentation';
     return 'document';
@@ -415,7 +417,7 @@ function previewDescriptorKindFromLooseValue(value: string | undefined): Preview
   if (/\b(html?)\b|\.html?\b/.test(text)) return 'html';
   if (/\b(pdb|cif|mmcif|structure|molecule)\b|\.(pdb|cif|mmcif)\b/.test(text)) return 'structure';
   if (/\b(docx?|pptx?|office|presentation|document)\b|\.(docx?|pptx?|rtf|odp|ods)\b/.test(text)) return 'office';
-  if (/\b(text|log|txt)\b|\.(txt|log)\b/.test(text)) return 'text';
+  if (/\b(text|log|txt|diff|patch|text\/x-diff|text\/x-patch)\b|\.(txt|log|diff|patch)\b/.test(text)) return 'text';
   return undefined;
 }
 

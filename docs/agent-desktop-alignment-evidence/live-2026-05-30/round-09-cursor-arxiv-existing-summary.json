@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "sciforge.agent-desktop-alignment-summary.v1",
+  "roundId": "live-round-09",
+  "side": "cursor-agent-computer-use",
+  "tool": "computer-use",
+  "target": "Cursor Agent desktop",
+  "capturedAt": "2026-05-30T11:45:00+08:00",
+  "promptDate": "2026-05-30",
+  "promptObserved": "搜索一下今天arxiv上agentic RL相关的工作，下载并阅读原文，然后写一份系统的总结报告",
+  "observations": {
+    "collapsedOrder": [
+      "user prompt",
+      "Worked for 6m 31s aggregate",
+      "final Markdown report",
+      "Finished task row"
+    ],
+    "expandedOrder": [
+      "natural language progress sentence",
+      "Explored aggregate with searches/fetches/commands",
+      "background monitor row",
+      "later Explored aggregate",
+      "progress sentence about report writing and downloaded PDFs",
+      "Created summary-report.md action with diff affordance",
+      "final rendered report"
+    ],
+    "expandedActionRows": [
+      "Searched web query rows",
+      "Thought rows",
+      "Ran command rows for API queries and downloads",
+      "Fetched arXiv page rows"
+    ]
+  },
+  "redactionCheck": {
+    "status": "passed",
+    "notes": [
+      "Only structural UI order and public prompt text are recorded.",
+      "No raw Cursor transcript, local absolute path, or full report body is embedded."
+    ]
+  }
+}

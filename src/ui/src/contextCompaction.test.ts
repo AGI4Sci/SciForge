@@ -42,7 +42,7 @@ test('buildContextCompactionOutcome records successful compact as a light system
   assert.equal(outcome.event.contextWindowState?.lastCompactedAt, '2026-05-02T00:00:01.000Z');
   assert.equal(outcome.message.role, 'system');
   assert.equal(outcome.message.status, 'completed');
-  assert.match(outcome.message.content, /上下文压缩完成/);
+  assert.match(outcome.message.content, /Conversation summary updated/);
   assert.equal(outcome.message.references?.[0]?.ref, 'agentserver://run/compact-1');
   assert.match(outcome.message.expandable ?? '', /"before"/);
 });
@@ -68,10 +68,10 @@ test('buildContextCompactionFailureResult keeps failure recoverable for the next
 
   assert.equal(outcome.event.contextCompaction?.status, 'failed');
   assert.equal(outcome.event.contextWindowState?.pendingCompact, false);
-  assert.match(outcome.message.content, /上下文压缩未完成/);
+  assert.match(outcome.message.content, /Conversation summary did not finish/);
   assert.equal(outcome.message.status, 'completed');
   assert.equal(outcome.message.references?.[0]?.kind, 'message');
-  assert.match(outcome.message.references?.[0]?.ref ?? '', /context-compaction-failure/);
+  assert.match(outcome.message.references?.[0]?.ref ?? '', /conversation-summary-failure/);
   assert.match(JSON.stringify(outcome.message.references?.[0]?.payload), /compact API unavailable/);
 });
 
@@ -93,8 +93,8 @@ test('buildContextCompactionOutcome avoids duplicate pending failure wording', (
     fallbackBackend: 'codex',
   });
 
-  assert.equal(outcome.message.content, '上下文压缩已提交，等待后台返回完成状态。');
-  assert.doesNotMatch(outcome.message.content, /上下文压缩未完成：上下文压缩未完成/);
+  assert.equal(outcome.message.content, 'Conversation summary started and is waiting for completion.');
+  assert.doesNotMatch(outcome.message.content, /Conversation summary did not finish: Conversation summary did not finish/);
 });
 
 test('context meter display reflects ratio, status, and source trust level', () => {
@@ -106,19 +106,19 @@ test('context meter display reflects ratio, status, and source trust level', () 
     status: 'healthy',
   }, false);
   assert.equal(nativeHealthy.level, 'ok');
-  assert.equal(nativeHealthy.sourceLabel, '本机');
-  assert.equal(nativeHealthy.statusLabel, '良好');
+  assert.equal(nativeHealthy.sourceLabel, 'Native');
+  assert.equal(nativeHealthy.statusLabel, 'Good');
   assert.equal(nativeHealthy.ratioLabel, '42%');
   assert.equal(nativeHealthy.ratioStyle, '42%');
   assert.equal(nativeHealthy.ratioDetail, '42%');
   assert.equal(nativeHealthy.remainingExact, '58,000');
-  assert.match(nativeHealthy.title, /上下文 42% · 良好/);
+  assert.match(nativeHealthy.title, /Context 42% · Good/);
   assert.deepEqual(
     nativeHealthy.detailRows.slice(0, 3),
     [
-      { label: '已用', value: '42% 上下文' },
-      { label: '剩余', value: '58k tokens' },
-      { label: '状态', value: '良好' },
+      { label: 'Used', value: '42% context' },
+      { label: 'Remaining', value: '58k tokens' },
+      { label: 'Status', value: 'Good' },
     ],
   );
 
@@ -130,8 +130,8 @@ test('context meter display reflects ratio, status, and source trust level', () 
     status: 'watch',
   }, true);
   assert.equal(providerWatch.level, 'watch');
-  assert.equal(providerWatch.sourceLabel, '用量');
-  assert.match(providerWatch.title, /上下文 74% · 注意/);
+  assert.equal(providerWatch.sourceLabel, 'Usage');
+  assert.match(providerWatch.title, /Context 74% · Watch/);
 
   const estimatedNearLimit = buildContextWindowMeterModel({
     ...beforeState,
@@ -149,11 +149,11 @@ test('context meter display reflects ratio, status, and source trust level', () 
     },
   }, false);
   assert.equal(estimatedNearLimit.level, 'near-limit');
-  assert.equal(estimatedNearLimit.statusLabel, '接近上限');
-  assert.equal(estimatedNearLimit.sourceLabel, '估算');
+  assert.equal(estimatedNearLimit.statusLabel, 'Near limit');
+  assert.equal(estimatedNearLimit.sourceLabel, 'Estimate');
   assert.equal(estimatedNearLimit.isEstimated, true);
-  assert.ok(estimatedNearLimit.detailRows.some((row) => row.label === '请求大小' && row.value === '38k / 160k tokens'));
-  assert.ok(estimatedNearLimit.detailRows.some((row) => row.label === '已节省' && row.value === '122k tokens'));
+  assert.ok(estimatedNearLimit.detailRows.some((row) => row.label === 'Request size' && row.value === '38k / 160k tokens'));
+  assert.ok(estimatedNearLimit.detailRows.some((row) => row.label === 'Saved' && row.value === '122k tokens'));
 
   const unknownBlocked = buildContextWindowMeterModel({
     source: 'unknown',
@@ -162,8 +162,8 @@ test('context meter display reflects ratio, status, and source trust level', () 
   }, false);
   assert.equal(unknownBlocked.level, 'near-limit');
   assert.equal(unknownBlocked.isUnknown, true);
-  assert.equal(unknownBlocked.ratioLabel, '未知');
-  assert.match(unknownBlocked.title, /未知/);
+  assert.equal(unknownBlocked.ratioLabel, 'Unknown');
+  assert.match(unknownBlocked.title, /Unknown/);
 });
 
 test('context meter uses ratio as the final authority when backend status is stale', () => {
@@ -177,7 +177,7 @@ test('context meter uses ratio as the final authority when backend status is sta
   }, false);
 
   assert.equal(exceeded.level, 'near-limit');
-  assert.equal(exceeded.statusLabel, '超限');
+  assert.equal(exceeded.statusLabel, 'Exceeded');
   assert.equal(exceeded.ratioLabel, '105%');
 });
 
@@ -189,9 +189,9 @@ test('empty estimated context window reports zero usage when the model window is
   assert.equal(state.ratio, 0);
   const meter = buildContextWindowMeterModel(state, false);
   assert.deepEqual(meter.detailRows.slice(0, 3), [
-    { label: '已用', value: '0% 上下文' },
-    { label: '剩余', value: '200k tokens' },
-    { label: '状态', value: '良好' },
+    { label: 'Used', value: '0% context' },
+    { label: 'Remaining', value: '200k tokens' },
+    { label: 'Status', value: 'Good' },
   ]);
 });
 

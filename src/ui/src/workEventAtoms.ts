@@ -129,22 +129,22 @@ export function summarizeWorklog(
   guidanceCount: number,
 ) {
   const parts = [
-    operations.explore ? `${operations.explore} 探索` : '',
-    operations.search ? `${operations.search} 搜索` : '',
-    operations.fetch ? `${operations.fetch} 抓取` : '',
-    operations.analyze ? `${operations.analyze} 分析` : '',
-    operations.read ? `${operations.read} 读取` : '',
-    operations.write ? `${operations.write} 写入` : '',
-    operations.command ? `${operations.command} 执行` : '',
-    operations.wait ? `${operations.wait} 等待` : '',
-    operations.validate ? `${operations.validate} 验证` : '',
-    operations.emit ? `${operations.emit} 输出` : '',
-    operations.artifact ? `${operations.artifact} 产物` : '',
-    operations.recover ? `${operations.recover} 恢复` : '',
-    guidanceCount ? `${guidanceCount} 引导` : '',
+    operations.explore ? `${operations.explore} explored` : '',
+    operations.search ? `${operations.search} searched` : '',
+    operations.fetch ? `${operations.fetch} fetched` : '',
+    operations.analyze ? `${operations.analyze} analyzed` : '',
+    operations.read ? `${operations.read} read` : '',
+    operations.write ? `${operations.write} wrote` : '',
+    operations.command ? `${operations.command} ran` : '',
+    operations.wait ? `${operations.wait} waited` : '',
+    operations.validate ? `${operations.validate} checked` : '',
+    operations.emit ? `${operations.emit} emitted` : '',
+    operations.artifact ? `${operations.artifact} created` : '',
+    operations.recover ? `${operations.recover} recovered` : '',
+    guidanceCount ? `${guidanceCount} guided` : '',
   ].filter(Boolean);
   if (parts.length) return parts.join(' · ');
-  return `${counts.total} 条操作 · ${counts.key} 关键 · ${counts.background} 过程`;
+  return `${counts.total} actions · ${counts.key} key · ${counts.background} background`;
 }
 
 export function formatRawWorkEventOutput(event: AgentStreamEvent) {

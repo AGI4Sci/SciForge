@@ -1,32 +1,33 @@
 import type { RuntimeExecutionUnit } from '../../domain';
+import { resultText, type ResultLocale } from './resultLocale';
 
 export type ExecutionPresentationVariant = 'info' | 'success' | 'warning' | 'danger' | 'muted' | 'coral';
 
-export function executionStatusLabel(status: RuntimeExecutionUnit['status'] | string | undefined) {
-  if (status === 'done') return '完成';
-  if (status === 'self-healed') return '已自动修复';
-  if (status === 'failed' || status === 'failed-with-reason') return '失败';
-  if (status === 'repair-needed') return '待修复';
-  if (status === 'needs-human') return '需要确认';
-  if (status === 'record-only') return '仅记录';
-  if (status === 'planned') return '计划中';
-  if (status === 'running') return '进行中';
-  return status || '未知';
+export function executionStatusLabel(status: RuntimeExecutionUnit['status'] | string | undefined, locale?: ResultLocale) {
+  if (status === 'done') return resultText(locale, { 'zh-CN': '完成', 'en-US': 'Done' });
+  if (status === 'self-healed') return resultText(locale, { 'zh-CN': '已恢复', 'en-US': 'Recovered' });
+  if (status === 'failed' || status === 'failed-with-reason') return resultText(locale, { 'zh-CN': '失败', 'en-US': 'Failed' });
+  if (status === 'repair-needed') return resultText(locale, { 'zh-CN': '需要恢复', 'en-US': 'Needs recovery' });
+  if (status === 'needs-human') return resultText(locale, { 'zh-CN': '需要输入', 'en-US': 'Needs input' });
+  if (status === 'record-only') return resultText(locale, { 'zh-CN': '已记录', 'en-US': 'Recorded' });
+  if (status === 'planned') return resultText(locale, { 'zh-CN': '已计划', 'en-US': 'Planned' });
+  if (status === 'running') return resultText(locale, { 'zh-CN': '运行中', 'en-US': 'Running' });
+  return status || resultText(locale, { 'zh-CN': '未知', 'en-US': 'Unknown' });
 }
 
-export function executionStatusShortLabel(status: RuntimeExecutionUnit['status'] | string | undefined) {
-  if (status === 'repair-needed') return '修复';
-  if (status === 'needs-human') return '确认';
-  return executionStatusLabel(status);
+export function executionStatusShortLabel(status: RuntimeExecutionUnit['status'] | string | undefined, locale?: ResultLocale) {
+  if (status === 'repair-needed') return resultText(locale, { 'zh-CN': '恢复', 'en-US': 'Recover' });
+  if (status === 'needs-human') return resultText(locale, { 'zh-CN': '输入', 'en-US': 'Input' });
+  return executionStatusLabel(status, locale);
 }
 
-export function objectReferenceStatusLabel(kind: string, status: string | undefined) {
+export function objectReferenceStatusLabel(kind: string, status: string | undefined, locale?: ResultLocale) {
   if (!status || status === 'available') return undefined;
-  if (kind === 'execution-unit' && status === 'blocked') return '待修复';
-  if (status === 'blocked') return '受阻';
-  if (status === 'missing') return '缺失';
-  if (status === 'expired') return '已过期';
-  if (status === 'external') return '外部材料';
+  if (kind === 'execution-unit' && status === 'blocked') return resultText(locale, { 'zh-CN': '需要恢复', 'en-US': 'Needs recovery' });
+  if (status === 'blocked') return resultText(locale, { 'zh-CN': '已阻塞', 'en-US': 'Blocked' });
+  if (status === 'missing') return resultText(locale, { 'zh-CN': '缺失', 'en-US': 'Missing' });
+  if (status === 'expired') return resultText(locale, { 'zh-CN': '已过期', 'en-US': 'Expired' });
+  if (status === 'external') return resultText(locale, { 'zh-CN': '外部', 'en-US': 'External' });
   return status;
 }
 
@@ -37,59 +38,59 @@ export type ExecutionVerificationPresentation = {
   variant: ExecutionPresentationVariant;
 };
 
-export function executionVerificationPresentation(unit: RuntimeExecutionUnit): ExecutionVerificationPresentation {
+export function executionVerificationPresentation(unit: RuntimeExecutionUnit, locale?: ResultLocale): ExecutionVerificationPresentation {
   if (unit.verificationVerdict === 'pass') {
     return {
       state: 'passed',
-      label: '验证通过',
-      detail: '结果已通过验证',
+      label: resultText(locale, { 'zh-CN': '检查通过', 'en-US': 'Check passed' }),
+      detail: resultText(locale, { 'zh-CN': '结果已通过验证。', 'en-US': 'The result passed verification.' }),
       variant: 'success',
     };
   }
   if (unit.verificationVerdict === 'fail') {
     return {
       state: 'failed',
-      label: '验证失败',
-      detail: '结果验证失败',
+      label: resultText(locale, { 'zh-CN': '检查失败', 'en-US': 'Check failed' }),
+      detail: resultText(locale, { 'zh-CN': '结果未通过验证。', 'en-US': 'The result did not pass verification.' }),
       variant: 'danger',
     };
   }
   if (unit.verificationVerdict === 'needs-human') {
     return {
       state: 'needs-human',
-      label: '需要确认',
-      detail: '验证需要人工确认',
+      label: resultText(locale, { 'zh-CN': '需要输入', 'en-US': 'Needs input' }),
+      detail: resultText(locale, { 'zh-CN': '验证需要人工确认。', 'en-US': 'Verification needs human confirmation.' }),
       variant: 'warning',
     };
   }
   if (unit.verificationVerdict === 'uncertain') {
     return {
       state: 'uncertain',
-      label: '验证不确定',
-      detail: '验证结论不确定',
+      label: resultText(locale, { 'zh-CN': '不确定', 'en-US': 'Uncertain' }),
+      detail: resultText(locale, { 'zh-CN': '验证结果不确定。', 'en-US': 'Verification is inconclusive.' }),
       variant: 'warning',
     };
   }
   if (unit.verificationVerdict === 'unverified') {
     return {
       state: 'unverified',
-      label: '未验证',
-      detail: '结果尚未验证',
+      label: resultText(locale, { 'zh-CN': '未检查', 'en-US': 'Not checked' }),
+      detail: resultText(locale, { 'zh-CN': '结果尚未验证。', 'en-US': 'The result has not been verified.' }),
       variant: 'muted',
     };
   }
   if (unit.status === 'running' && (unit.verificationRef || unit.outputArtifacts?.length || unit.artifacts?.length || unit.outputRef)) {
     return {
       state: 'verifying',
-      label: '验证中',
-      detail: '验证仍在进行',
+      label: resultText(locale, { 'zh-CN': '检查中', 'en-US': 'Checking' }),
+      detail: resultText(locale, { 'zh-CN': '验证仍在运行。', 'en-US': 'Verification is still running.' }),
       variant: 'info',
     };
   }
   return {
     state: 'ordinary',
-    label: '未要求验证',
-    detail: '本步骤未要求验证',
+    label: resultText(locale, { 'zh-CN': '未请求检查', 'en-US': 'No check requested' }),
+    detail: resultText(locale, { 'zh-CN': '此步骤未请求验证。', 'en-US': 'This step did not request verification.' }),
     variant: 'muted',
   };
 }

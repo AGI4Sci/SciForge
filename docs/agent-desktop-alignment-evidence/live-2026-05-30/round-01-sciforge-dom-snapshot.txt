@@ -1,0 +1,108 @@
+- complementary:
+  - generic "工作区视图":
+    - generic "SciForge":
+      - img "SciForge"
+    - button "聊天工作台":
+    - button "内置浏览器":
+    - button "研究时间线":
+    - button "反馈收件箱":
+  - generic: 导航
+  - button "收起侧栏":
+  - generic: 对话
+  - button "折叠对话区" [expanded]:
+  - region "主操作":
+    - textbox "搜索聊天、项目、页面"
+  - region "项目对话 收起全部对话 项目对话菜单 添加项目":
+    - generic: 项目对话
+    - button "收起全部对话":
+    - button "项目对话菜单":
+    - button "添加项目":
+    - button "workspace 当前":
+      - generic: workspace
+      - generic: 当前
+    - button "workspace 项目操作":
+    - button "在 workspace 中新聊天":
+    - button "hello 最近提问：hello":
+      - generic: hello
+      - generic: 最近提问：hello
+    - generic "hello 对话操作":
+      - button "置顶对话：hello":
+      - button "归档对话：hello":
+  - separator "拖拽调整对话区高度"
+  - generic: 工具
+  - button "折叠工具区" [expanded]:
+  - generic "工具":
+    - button "应用":
+      - generic: 应用
+    - generic "自动化":
+      - generic: 自动化
+      - generic: 即将推出
+  - separator "拖拽调整工具区高度"
+  - generic: 项目
+  - generic: workspace
+  - button "折叠项目区" [expanded]:
+  - button "新建文件":
+  - button "新建文件夹":
+  - button "刷新":
+  - button "全部折叠":
+  - tree "工作区文件树":
+    - paragraph: Unexpected token '<', "<!doctype "... is not valid JSON
+    - treeitem "折叠 workspace" [expanded] [selected]:
+      - button "折叠":
+      - generic: workspace
+    - generic: 加载中…
+    - button "打开其他文件夹…"
+    - generic "手动输入路径"
+  - button "设置":
+    - generic: 设置
+  - separator "拖拽调整左侧栏宽度"
+- banner:
+  - textbox "搜索文件、报告、问题..."
+  - button "打开注释侧栏并开始点选":
+    - generic: 注释
+  - generic: SciForge · 1 项需处理
+  - button "切换白天模式":
+    - text: 切换白天模式
+  - button "设置":
+    - text: 设置
+- main:
+  - button "SciForge 工作台":
+    - generic: SciForge 工作台
+  - generic "感官插件":
+    - button "vision-sense on" [pressed]:
+      - generic: vision-sense
+      - generic: "on"
+  - strong: Ask SciForge
+  - generic: 在线
+  - button "开启新聊天":
+    - text: 开启新聊天
+  - button "历史会话":
+    - text: 历史会话
+  - button "导出当前聊天":
+    - text: 导出当前聊天
+  - button "删除当前聊天":
+    - text: 删除当前聊天
+  - button "复制"
+  - button "编辑"
+  - paragraph: hello
+  - generic: 提示
+  - generic: 输入研究问题后即可运行；Shift+Enter 换行，Enter 发送。
+  - button "输入研究问题，或点选对象后继续追问...":
+    - generic: 输入研究问题，或点选对象后继续追问...
+  - separator "调整聊天区和结果区宽度"
+  - button "向右收缩结果面板":
+  - tablist:
+    - tab "结果视图 结果视图" [selected]:
+      - generic: 结果视图
+      - text: 结果视图
+    - tab "证据矩阵 证据矩阵":
+      - generic: 证据矩阵
+      - text: 证据矩阵
+  - generic "结果区 focus mode":
+    - button "全部"
+    - button "只看图"
+    - button "只看证据"
+    - button "只看过程"
+  - generic: 等待
+  - strong: 暂无可预览内容
+  - paragraph: 主回答优先保留在聊天中；有可预览内容时会显示在这里。

@@ -231,7 +231,7 @@ export async function sendSciForgeToolMessage(
         scheduleTimeout(latencyThresholds);
       }
       if (!emittedInitialResponseStatus) {
-        const initialStatus = buildInitialResponseProgressEvent(extractResponsePlan(normalized.raw));
+        const initialStatus = buildInitialResponseProgressEvent(extractResponsePlan(normalized.raw), input.config.locale);
         if (initialStatus) {
           emittedInitialResponseStatus = true;
           callbacks.onEvent?.(initialStatus);
@@ -443,7 +443,7 @@ function buildCodexRuntimeStreamRequest(input: {
       guiLocalProjection: auditOnlyGuiProjectionRefs(input.input, input.referenceSummary),
       silentStreamRunId: input.silentStreamRunId,
       evidenceRefs: [
-        `audit:codex-runtime:${input.commandId}:${attemptId}:raw-jsonl`,
+        `audit:codex-app-server:${input.commandId}:${attemptId}:raw-events`,
         `audit:codex-runtime:${input.commandId}:${attemptId}:stderr`,
         `audit:codex-runtime:${input.commandId}:${attemptId}:normalized-events`,
       ],
@@ -956,8 +956,8 @@ function runtimeCodexFailedResponse(input: {
           timestamp: nowIso(),
         }],
         recoverActions: [
-          'Retry or continue from this failed Runtime Codex run with the preserved command id, attempt id, profile, workspace, and audit refs.',
-          'Inspect folded audit/debug refs before rerunning if the same profile or workspace may fail again.',
+          'Retry or continue from the preserved audit refs for this failed Runtime Codex run.',
+          'Inspect folded audit/debug refs before rerunning if the same runtime configuration may fail again.',
         ],
         verificationState: {
           status: 'failed',
@@ -994,7 +994,7 @@ function runtimeCodexFailedResponse(input: {
       id: `audit-${stableRefId(ref)}`,
       kind: 'run',
       ref,
-      title: ref.includes('stderr') ? 'Runtime Codex stderr audit' : ref.includes('raw-jsonl') ? 'Runtime Codex raw JSONL audit' : 'Runtime Codex audit',
+      title: ref.includes('stderr') ? 'Runtime Codex stderr audit' : ref.includes('raw-events') ? 'Runtime Codex runtime-event audit' : 'Runtime Codex audit',
       status: 'available',
       actions: ['inspect'] satisfies ObjectAction[],
       runId: input.request.commandId,
@@ -1114,9 +1114,9 @@ function runtimeFailureMetadata(
       evidenceRefs,
       recoverActions: [
         codexSessionId
-          ? 'Resume the native Runtime Codex session with the preserved codexSessionId and audit refs.'
-          : 'Retry this Runtime Codex command from preserved audit refs; native resume is unavailable because no codexSessionId was produced.',
-        'Keep the same Runtime Codex profile/workspace unless the audit refs show a configuration failure.',
+          ? 'Resume this native Runtime Codex session from preserved audit refs.'
+          : 'Retry this Runtime Codex turn from preserved audit refs; native resume is unavailable for this run.',
+        'Keep the same runtime configuration unless the audit refs show a configuration failure.',
       ],
     },
   };

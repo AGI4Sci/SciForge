@@ -51,7 +51,7 @@ test('archive drawer shows compact run boundary, refs, and restore impact', () =
   assert.match(html, /External retrieval returned zero results/);
   assert.match(html, /execution-unit:EU-literature/);
   assert.doesNotMatch(html, /expand provider-neutral query/);
-  assert.match(html, /不会自动重跑历史任务/);
+  assert.match(html, /without rerunning it/);
 });
 
 test('archive drawer prefers TaskRunCard contract over legacy raw compact summary', () => {
@@ -162,8 +162,8 @@ test('archive drawer prefers conversation projection summary over legacy raw run
     onClear: () => undefined,
   }));
 
-  assert.match(html, /需恢复：Projection repair boundary is authoritative/);
-  assert.match(html, /projection 需恢复/);
+  assert.match(html, /Needs recovery: Projection repair boundary is authoritative/);
+  assert.match(html, /projection Needs recovery/);
   assert.match(html, /execution-unit:EU-projection/);
   assert.match(html, /Continue from projection refs/);
   assert.doesNotMatch(html, /last run failed/);
@@ -218,7 +218,7 @@ test('archive drawer shows diagnostic-only boundary for historical literature do
   assert.match(html, /PDF retrieval partially failed/);
   assert.match(html, /file:.sciforge\/task-results\/pdfs\/downloaded-paper.pdf/);
   assert.match(html, /Open diagnostics and reuse retained refs first/);
-  assert.match(html, /不会自动重跑历史任务/);
+  assert.match(html, /without rerunning it/);
 });
 
 function session(overrides: Partial<SciForgeSession> & Record<string, unknown> = {}): SciForgeSession {

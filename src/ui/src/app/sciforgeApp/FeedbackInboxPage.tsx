@@ -629,7 +629,7 @@ export function FeedbackInboxPage({
     };
     repairRun = preparingRun;
     onRepairRunWritten(preparingRun);
-    setHandoffHintById((current) => ({ ...current, [item.id]: `Repair run ${repairRunId} 已创建，正在准备 ${target.name} 的 Codex CLI 调度...` }));
+    setHandoffHintById((current) => ({ ...current, [item.id]: `Repair run ${repairRunId} 已创建，正在准备 ${target.name} 的 Runtime Codex 调度...` }));
     try {
       const executorManifestPromise = loadSciForgeInstanceManifest(config, config.workspacePath).catch(() => undefined);
       const targetManifestPromise = loadSciForgeInstanceManifest(targetConfig, target.workspacePath)
@@ -1041,7 +1041,7 @@ export function FeedbackInboxPage({
         <div>
           <Badge variant="info">Feedback Bundle</Badge>
           <h1>反馈收件箱</h1>
-          <p>汇总多用户页面评论、元素定位、证据完整性、修复线程和日志证据，作为 GitHub 同步与 Codex CLI 修复交接面。</p>
+          <p>汇总多用户页面评论、元素定位、证据完整性、修复线程和日志证据，作为 GitHub 同步与 Runtime Codex 修复交接面。</p>
         </div>
         <div className="feedback-stats">
           <span><strong>{activeComments.length}</strong> active</span>
@@ -1600,7 +1600,7 @@ function feedbackRepairCardSummary(audit: FeedbackRepairAuditViewModel) {
       tone: 'running',
       title: '修复进行中',
       detail: audit.executorInstance ? `${audit.executorInstance} 正在处理；${audit.label}` : audit.headline,
-      nextAction: '在修复会话观察 Codex CLI 行增长，也可以发送引导介入。',
+      nextAction: '在修复会话观察 Runtime Codex 行增长，也可以发送引导介入。',
     };
   }
   return {

@@ -60,8 +60,8 @@ export function SettingsArchivedChatsPanel({
     return (
       <div className="settings-archived-empty">
         <Archive size={18} aria-hidden />
-        <strong>暂无已归档对话</strong>
-        <p>在侧栏项目对话中归档后，历史会话会出现在这里。</p>
+        <strong>No archived chats</strong>
+        <p>Chats archived from the sidebar will appear here.</p>
       </div>
     );
   }
@@ -75,11 +75,11 @@ export function SettingsArchivedChatsPanel({
             checked={allSelected}
             onChange={(event) => setSelectedIds(event.target.checked ? items.map((item) => item.sessionId) : [])}
           />
-          <span>全选</span>
+          <span>Select all</span>
         </label>
-        <Badge variant={selectedIds.length ? 'info' : 'muted'}>{selectedIds.length} 已选</Badge>
-        <button type="button" onClick={deleteSelected} disabled={!selectedIds.length}>删除选中</button>
-        <button type="button" onClick={clearAll}>清空全部</button>
+        <Badge variant={selectedIds.length ? 'info' : 'muted'}>{selectedIds.length} selected</Badge>
+        <button type="button" onClick={deleteSelected} disabled={!selectedIds.length}>Delete selected</button>
+        <button type="button" onClick={clearAll}>Clear all</button>
       </div>
       <div className="settings-archived-list">
         {items.map((item) => {
@@ -91,7 +91,7 @@ export function SettingsArchivedChatsPanel({
                 type="checkbox"
                 checked={selectedIds.includes(item.sessionId)}
                 onChange={() => toggleSelected(item.sessionId)}
-                aria-label={`选择已归档对话 ${item.title}`}
+                aria-label={`Select archived chat ${item.title}`}
               />
               <div className="settings-archived-copy">
                 <strong>{item.title}</strong>
@@ -102,14 +102,14 @@ export function SettingsArchivedChatsPanel({
                 </div>
               </div>
               <ActionButton icon={Clock} variant="secondary" onClick={() => onRestore(item.scenarioId, item.sessionId)}>
-                恢复
+                Restore
               </ActionButton>
               <ActionButton
                 icon={Trash2}
                 variant="secondary"
                 onClick={() => onDelete(item.scenarioId, [item.sessionId])}
               >
-                删除
+                Delete
               </ActionButton>
             </div>
           );
@@ -121,6 +121,6 @@ export function SettingsArchivedChatsPanel({
 
 function formatArchivedTime(value: string) {
   const time = Date.parse(value);
-  if (!Number.isFinite(time)) return '未知时间';
-  return new Date(time).toLocaleString('zh-CN', { hour12: false });
+  if (!Number.isFinite(time)) return 'Unknown time';
+  return new Date(time).toLocaleString(undefined, { hour12: false });
 }

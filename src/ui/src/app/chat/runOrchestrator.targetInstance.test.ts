@@ -46,7 +46,7 @@ describe('runPromptOrchestrator target instance guard', () => {
     assert.equal(result.finalResponse.executionUnits.length, 0);
     assert.equal(events.some((event) => event.type.startsWith('target-')), false);
     assert.equal(events.some((event) => event.type === 'contextCompaction'), false);
-    assert.equal(events.find((event) => event.type === 'annotation-plan-only')?.label, '注释计划');
+    assert.equal(events.find((event) => event.type === 'annotation-plan-only')?.label, 'Annotation plan');
   });
 
   it('handles annotation-plan-only envelope before target lookup, compaction, or runtime transport', async () => {
@@ -68,7 +68,7 @@ describe('runPromptOrchestrator target instance guard', () => {
     assert.equal(fetched.length, 0);
     assert.equal(result.finalResponse.message.provenance?.runtimeRequestEligible, false);
     assert.equal(events.some((event) => event.type.startsWith('target-')), false);
-    assert.equal(events.find((event) => event.type === 'annotation-plan-only')?.label, '注释计划');
+    assert.equal(events.find((event) => event.type === 'annotation-plan-only')?.label, 'Annotation plan');
   });
 
   it('fails closed for malformed annotation-plan-only envelopes before runtime transport', async () => {
@@ -324,7 +324,7 @@ describe('runPromptOrchestrator target instance guard', () => {
     assert.equal(shouldBlockOnPreflightContextCompaction(events), false);
     assert.equal(compactFetches, 1);
     assert.ok(Date.now() - started < 25, 'preflight compaction should return before background compact fetch resolves');
-    assert.match(emitted[0]?.detail ?? '', /非阻塞上下文压缩/);
+    assert.match(emitted[0]?.detail ?? '', /Context compaction started in the background/);
   });
 
   it('dispatches report artifact follow-ups to the backend instead of resolving them in the UI', async () => {
@@ -509,7 +509,7 @@ describe('runPromptOrchestrator target instance guard', () => {
     }));
 
     assert.equal(result.status, 'failed');
-    assert.match(result.message, /当前 backend 运行被系统或网络中断/);
+    assert.match(result.message, /The current task was interrupted by the system or network/);
     assert.equal(result.failedSession.runs[0]?.status, 'failed');
     assert.equal((result.failedSession.runs[0]?.raw as { termination?: { reason?: string; sessionStatus?: string } }).termination?.reason, 'system-aborted');
     assert.equal((result.failedSession.runs[0]?.raw as { termination?: { reason?: string; sessionStatus?: string } }).termination?.sessionStatus, 'failed');
@@ -530,7 +530,7 @@ describe('runPromptOrchestrator target instance guard', () => {
     }));
 
     assert.equal(result.status, 'failed');
-    assert.match(result.message, /当前 backend 运行被系统或网络中断/);
+    assert.match(result.message, /The current task was interrupted by the system or network/);
     assert.equal(result.failedSession.executionUnits.some((unit) => unit.status === 'self-healed'), false);
   });
 });

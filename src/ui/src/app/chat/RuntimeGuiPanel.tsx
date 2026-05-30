@@ -15,8 +15,6 @@ interface NormalizedGuiAskUser {
   title: string;
   message?: string;
   risk?: string;
-  approvalRef?: string;
-  actionRef?: string;
   relatedRefs: string[];
   choices: Array<{
     label: string;
@@ -45,15 +43,15 @@ export function RuntimeGuiPanel({
         <section
           className="runtime-gui-card runtime-gui-present"
           data-testid="runtime-gui-present"
-          data-gui-tool="gui.present"
-          aria-label="Computer Use gui.present"
+          data-gui-surface="presentation"
+          aria-label="Presented result"
         >
           <div className="runtime-gui-card-head">
-            <span>gui.present</span>
-            <strong>{presentation.title ?? 'Computer Use result'}</strong>
-            {presentation.status ? <small>{presentation.status}</small> : null}
+            <span>Operation result</span>
+            <strong>{humanGuiTitle(presentation.title) ?? 'Result ready'}</strong>
+            {presentation.status ? <small>{humanStatusLabel(presentation.status)}</small> : null}
           </div>
-          {presentation.text ? <p>{compactText(presentation.text, 220)}</p> : null}
+          {presentation.text ? <p>{humanGuiMessage(presentation.text)}</p> : null}
           <RuntimeGuiRefList refs={uniqueStrings([presentation.ref, ...presentation.displayedRefs])} />
         </section>
       ) : null}
@@ -61,31 +59,15 @@ export function RuntimeGuiPanel({
         <section
           className="runtime-gui-card runtime-gui-ask-user"
           data-testid="runtime-gui-ask-user"
-          data-gui-tool="gui.ask_user"
-          aria-label="Computer Use gui.ask_user"
+          data-gui-surface="confirmation"
+          aria-label="Confirmation request"
         >
           <div className="runtime-gui-card-head">
-            <span>gui.ask_user</span>
-            <strong>{askUser.title}</strong>
-            {askUser.risk ? <small>{askUser.risk}</small> : null}
+            <span>Needs confirmation</span>
+            <strong>{humanGuiTitle(askUser.title) ?? 'Confirm before continuing'}</strong>
+            {askUser.risk ? <small>{humanRiskLabel(askUser.risk)}</small> : null}
           </div>
-          {askUser.message ? <p>{askUser.message}</p> : null}
-          {(askUser.approvalRef || askUser.actionRef) ? (
-            <dl className="runtime-gui-facts">
-              {askUser.approvalRef ? (
-                <>
-                  <dt>approval</dt>
-                  <dd>{askUser.approvalRef}</dd>
-                </>
-              ) : null}
-              {askUser.actionRef ? (
-                <>
-                  <dt>action</dt>
-                  <dd>{askUser.actionRef}</dd>
-                </>
-              ) : null}
-            </dl>
-          ) : null}
+          {askUser.message ? <p>{humanGuiMessage(askUser.message)}</p> : null}
           <RuntimeGuiRefList refs={askUser.relatedRefs} />
           {askUser.choices.length ? (
             <div className="runtime-gui-choice-row">
@@ -95,11 +77,9 @@ export function RuntimeGuiPanel({
                   key={`${choice.label}-${choice.commandText}`}
                   className={`runtime-gui-choice ${choice.style === 'danger' ? 'danger' : choice.style === 'primary' ? 'primary' : ''}`}
                   onClick={() => onCommand?.(choice.commandText)}
-                  title={choice.commandText}
-                  data-command-text={choice.commandText}
+                  title={choice.label}
                 >
                   <span>{choice.label}</span>
-                  <code>{choice.commandText}</code>
                 </button>
               ))}
             </div>
@@ -111,16 +91,10 @@ export function RuntimeGuiPanel({
 }
 
 function RuntimeGuiRefList({ refs }: { refs: string[] }) {
-  const visibleRefs = uniqueStrings(refs).slice(0, 8);
+  const visibleRefs = uniqueStrings(refs).filter(isSafeUserFacingGuiRef).slice(0, 8);
   if (!visibleRefs.length) return null;
   return (
-    <ul className="runtime-gui-ref-list">
-      {visibleRefs.map((ref) => (
-        <li key={ref}>
-          <code>{ref}</code>
-        </li>
-      ))}
-    </ul>
+    <p className="runtime-gui-ref-list">{visibleRefs.length} related item{visibleRefs.length === 1 ? '' : 's'} available.</p>
   );
 }
 
@@ -148,7 +122,7 @@ function normalizeGuiAskUser(value: unknown): NormalizedGuiAskUser | undefined {
     if (!label || !commandText || !isTerminalEquivalentCommandText(commandText)) return [];
     return [{ label, commandText, style: stringField(choice.style) }];
   });
-  const title = stringField(value.title) ?? stringField(approvalRequest.title) ?? 'Computer Use confirmation required';
+  const title = stringField(value.title) ?? stringField(approvalRequest.title) ?? 'Confirm before continuing';
   const message = stringField(value.message)
     ?? stringField(approvalRequest.prompt)
     ?? stringField(approvalRequest.message)
@@ -165,8 +139,6 @@ function normalizeGuiAskUser(value: unknown): NormalizedGuiAskUser | undefined {
     title,
     message,
     risk: stringField(approvalRequest.riskLevel) ?? stringField(approvalRequest.risk_level) ?? stringField(approvalRequest.risk),
-    approvalRef: stringField(approvalRequest.approvalRef) ?? stringField(approvalRequest.approval_ref) ?? stringField(approvalRequest.id),
-    actionRef: stringField(approvalRequest.actionRef) ?? stringField(approvalRequest.action_ref) ?? stringField(approvalRequest.actionKind) ?? stringField(approvalRequest.action_kind),
     relatedRefs,
     choices,
   };
@@ -199,7 +171,52 @@ function compactText(value: string, limit: number) {
   return text.length > limit ? `${text.slice(0, limit - 1).trim()}...` : text;
 }
 
+function humanGuiTitle(value: string | undefined) {
+  if (!value) return undefined;
+  const title = value
+    .replace(/\bComputer Use confirmation required\b/gi, 'Confirmation required')
+    .replace(/\bComputer Use result\b/gi, 'Operation result')
+    .replace(/\bComputer Use\b/gi, 'Operation')
+    .replace(/\bgui\.(?:present|ask_user)\b/gi, 'Operation')
+    .replace(/\bcodex-command[-:\w]*\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return title ? compactText(title, 80) : undefined;
+}
+
+function humanGuiMessage(value: string) {
+  return compactText(value
+    .replace(/\bComputer Use\b/gi, 'the operation')
+    .replace(/\bgui\.(?:present|ask_user)\b/gi, 'the operation')
+    .replace(/\bcodex-command[-:\w]*\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim(), 220);
+}
+
+function humanStatusLabel(value: string) {
+  const status = value.trim().toLowerCase().replace(/[_-]+/g, ' ');
+  if (status === 'needs confirmation') return 'Needs confirmation';
+  if (status === 'completed' || status === 'done') return 'Done';
+  if (status === 'failed' || status === 'error') return 'Needs attention';
+  return compactText(value, 40);
+}
+
+function humanRiskLabel(value: string) {
+  const risk = value.trim().toLowerCase();
+  if (risk === 'high') return 'High risk';
+  if (risk === 'medium') return 'Medium risk';
+  if (risk === 'low') return 'Low risk';
+  return compactText(value, 40);
+}
+
 function isTerminalEquivalentCommandText(commandText: string) {
   return commandText.length > 0
     && !/\b(?:deleteFile|triggerRecover|updateCapabilityPreference|UserActionApi|ProjectionApi)\b/.test(commandText);
+}
+
+function isSafeUserFacingGuiRef(ref: string) {
+  return /^(?:artifact|file)::?/i.test(ref)
+    && !/(?:^|[:/])(?:audit|raw|logs?|trace|stdout|stderr|codex-command|provider)\b/i.test(ref)
+    && !/^\s*file:(?:\/|~|[A-Za-z]:|\.{2})/.test(ref)
+    && !/^\s*file:\.sciforge\/(?:raw|logs?|audit)\b/i.test(ref);
 }

@@ -1,10 +1,16 @@
 import { createServer } from 'node:http';
 import { once } from 'node:events';
+import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import { WebSocket } from 'ws';
-import { CODEX_RUNTIME_WEBSOCKET_PATH, handleCodexRuntimeRoutes, handleCodexRuntimeUpgrade } from './codex-runtime-server.js';
+import {
+  CODEX_RUNTIME_WEBSOCKET_PATH,
+  codexRuntimeBridgeRequested,
+  handleCodexRuntimeRoutes,
+  handleCodexRuntimeUpgrade,
+} from './codex-runtime-server.js';
 import type { AgentCliAdapter, AgentCliStartTurnInput } from './agent-cli-adapter.js';
 import type { NormalizedAgentEvent } from './codex-event-normalizer.js';
 
@@ -47,12 +53,83 @@ test('HTTP/SSE endpoint streams normalized runtime events without raw JSONL as m
     assert.match(text, /structured-events-plus-terminal-equivalent-text/);
     assert.match(text, /"rawTerminal":false/);
     assert.match(text, /codex-thread:019e3e82-164d-79b2-a5d4-b16241620b10/);
-    assert.match(text, /正在启动 Codex CLI/);
+    assert.match(text, /正在启动 Codex app-server/);
     assert.equal(adapter.lastInput?.commandText, 'say hello');
     assert.equal(adapter.lastInput?.workspacePath, '/tmp/workspace');
     assert.equal(adapter.lastInput?.commandId, 'codex-command-ui');
     assert.equal(adapter.lastInput?.attemptId, 'codex-command-ui-attempt-1');
     assert.equal(adapter.lastInput?.codexSessionId, '019e3e82-164d-79b2-a5d4-b16241620b10');
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('runtime bridge request detection does not treat legacy exec JSON as a product backend', () => {
+  assert.equal(codexRuntimeBridgeRequested({ runtimeBridge: 'codex-app-server' }), true);
+  assert.equal(codexRuntimeBridgeRequested({ runtimeBridge: 'codex-exec-json' }), false);
+  assert.equal(codexRuntimeBridgeRequested({ uiState: { runtimeBridge: 'codex-exec-json' } }), false);
+  assert.equal(codexRuntimeBridgeRequested({ useCodexRuntimeBridge: true }), true);
+});
+
+test('product Runtime Codex factory stays on Codex app-server and does not import exec JSON fallback', async () => {
+  const productSources = [
+    ['runtime factory', './codex-runtime-adapter.ts'],
+    ['runtime gateway', './codex-runtime-gateway.ts'],
+    ['standalone server', './codex-runtime-standalone-server.ts'],
+    ['workspace server', '../workspace-server.ts'],
+    ['repair handoff runner', '../repair-handoff-runner.ts'],
+    ['feedback guidance', '../workspace-server-feedback-guidance.ts'],
+    ['computer-use planner', './computer-use-text-planner.ts'],
+    ['ui runtime client', '../../ui/src/api/sciforgeToolsClient/client.ts'],
+    ['ui realtime client', '../../ui/src/api/sciforgeToolsClient/codexRealtimeSession.ts'],
+  ] as const;
+  const appServerSources = new Set(['runtime factory', 'runtime gateway', 'standalone server']);
+
+  for (const [label, file] of productSources) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    if (appServerSources.has(label)) {
+      assert.match(source, /createCodexAppServerRuntimeAdapter|CodexAppServerAdapter/, label);
+    }
+    assert.doesNotMatch(source, /codex-exec-json-adapter|CodexExecJsonAdapter|codex exec --json/i, label);
+  }
+});
+
+test('HTTP/SSE endpoint fails closed when the Codex app-server adapter is unavailable', async () => {
+  const adapter: AgentCliAdapter = {
+    async startTurn() {
+      throw new Error('Codex app-server unavailable');
+    },
+    async cancel() {},
+  };
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter);
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText: 'say hello',
+        workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-fail-closed',
+        attemptId: 'codex-command-fail-closed-attempt-1',
+      }),
+    });
+    const text = await response.text();
+
+    assert.match(text, /event: realtime_session/);
+    assert.match(text, /event: process-progress/);
+    assert.match(text, /event: error/);
+    assert.match(text, /Codex app-server unavailable/);
+    assert.doesNotMatch(text, /codex-exec-json|CodexExecJsonAdapter|exec --json/i);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

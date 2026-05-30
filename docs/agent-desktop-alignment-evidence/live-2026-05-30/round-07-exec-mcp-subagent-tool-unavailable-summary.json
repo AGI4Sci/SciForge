@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "sciforge.agent-desktop-alignment.live-summary.v1",
+  "id": "round-07-exec-mcp-subagent-tool-unavailable",
+  "capturedAt": "2026-05-30T10:35:24+08:00",
+  "side": "runtime-probe",
+  "tool": "exec-mcp",
+  "target": "legacy-test-only-exec-mcp",
+  "requirementsObserved": [
+    "sub-agent-expansion"
+  ],
+  "observations": [
+    "Round 07 used an exec-MCP probe only as a legacy/test-only diagnostic, not as a product runtime fallback direction.",
+    "The live attempt still reported NO_SUBAGENT_TOOL_AVAILABLE.",
+    "No real sub-agent or delegated-worker lifecycle row, transcript ref, or result ref was produced by the attempt.",
+    "The product runtime direction remains Codex app-server required; the generic fix must expose the sub-agent or delegated-worker MCP tool surface there before live parity can be claimed."
+  ],
+  "evidenceRefs": [
+    "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-07-exec-mcp-subagent-tool-unavailable-summary.json"
+  ],
+  "limitations": [
+    "This is supplemental blocked evidence, not a formal dual-side parity round.",
+    "No raw runtime JSONL, raw stderr, raw DOM, raw accessibility tree, local absolute path, secret, or full private transcript is embedded in this summary.",
+    "This summary does not make exec-MCP a product runtime backend or fallback."
+  ],
+  "redaction": {
+    "rawDomSaved": false,
+    "rawDesktopTreeSaved": false,
+    "rawRuntimePayloadSaved": false,
+    "secretsIncluded": false,
+    "localAbsolutePathsIncluded": false
+  }
+}

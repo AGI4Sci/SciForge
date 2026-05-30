@@ -1,19 +1,20 @@
 # Codex CLI Compatibility Notes
 
-Last updated: 2026-05-19
+Last updated: 2026-05-30
 
 ## Current Decision
 
-SciForge should keep using the upstream Codex CLI as an external runtime boundary:
+SciForge should keep using upstream Codex as an external runtime boundary, but the product runtime now targets Codex app-server:
 
 ```text
 SciForge runtime bridge
--> codex exec --json --profile sciforge-runtime-deepseek
+-> codex app-server --listen stdio://
+-> thread/start or thread/resume + turn/start
 -> packages/backend local Responses proxy
 -> DeepSeek-compatible Chat Completions upstream
 ```
 
-Do not vendor or fork Codex CLI into `packages/backend` by default. The current integration problem is provider compatibility, not a confirmed need to change Codex CLI agent logic.
+`codex exec --json` is retained only for legacy/test-only compatibility and historical evidence. Do not vendor or fork Codex CLI into `packages/backend` by default. The current integration problem is provider compatibility and app-server event integration, not a confirmed need to change Codex CLI agent logic.
 
 ## Why Not Fork Now
 
@@ -58,17 +59,18 @@ packages/backend/.codex-runtime/
 
 Secrets must stay in process environment variables, especially `SCIFORGE_RUNTIME_API_KEY`.
 
-## Native Session Resume
+## Native Thread Resume
 
-Current upstream Codex CLI exposes:
+Current product runtime uses Codex app-server thread semantics:
 
 ```bash
-codex exec resume --json <SESSION_ID> <PROMPT>
+thread/resume <THREAD_ID>
+turn/start <PROMPT>
 ```
 
-SciForge runtime may use that native path for multi-turn continuity when the previous turn surfaced a `codexSessionId` from Codex JSONL `session_meta.payload.id` or the isolated Codex session store. The resumed prompt must remain terminal-equivalent user text; GUI transcript replay, custom AgentServer session logs, provider/capability policy injection, and artifact-body prompt stuffing are outside the runtime bridge boundary.
+SciForge runtime may use that native app-server path for multi-turn continuity when the previous turn surfaced a `threadId`/`codexSessionId` from Codex app-server. The resumed prompt must remain terminal-equivalent user text; GUI transcript replay, custom AgentServer session logs, provider/capability policy injection, and artifact-body prompt stuffing are outside the runtime bridge boundary.
 
-If `codex exec resume` is unavailable or cannot recover the native session inside `packages/backend/.codex-runtime/codex-home`, browser acceptance should report: single-turn Runtime Codex works, multi-turn is blocked by Phase 1 Codex exec capability and must move to Phase 2 Codex app-server/thread integration.
+Legacy `codex exec resume --json` remains test-only compatibility evidence. It must not be used to satisfy product runtime, release acceptance, or app-server parity requirements.
 
 ## Known DeepSeek Compatibility Fix
 
@@ -127,14 +129,14 @@ Keep three layers:
 raw upstream SSE
   audit/debug only
 
-raw codex exec --json JSONL
-  audit/debug only
+raw legacy codex exec --json JSONL
+  legacy/test-only audit/debug only
 
 normalized SciForge runtime events
   GUI-facing stream
 ```
 
-Codex JSONL is the runtime boundary. It does not have to be the final UI protocol. The backend runtime bridge may translate JSONL into a more direct local SSE or normalized event stream for the existing SciForge UI.
+Codex app-server rich-client events are the product runtime boundary. Legacy JSONL may still be translated into normalized events for fixture replay and regression coverage, but it is not a product fallback.
 
 ## Verification Commands
 
@@ -160,7 +162,7 @@ SCIFORGE_PROXY_UPSTREAM_BASE_URL="http://35.220.164.252:3888/v1" \
 npm run backend:codex-proxy
 ```
 
-Smoke Runtime Codex through the isolated home:
+Smoke the legacy exec JSON path only when auditing compatibility fixtures:
 
 ```bash
 SCIFORGE_RUNTIME_API_KEY="..." \
@@ -168,10 +170,9 @@ npm run backend:codex-runtime:exec -- \
   --prompt "Reply with exactly: SCIFORGE_DEEPSEEK_OK"
 ```
 
-Complex tool-use acceptance should verify all of the following:
+Product runtime acceptance should use Codex app-server and verify all of the following:
 
-- `codex_exit=0`
-- JSONL contains `item.started` / `item.completed` tool activity, not only `agent_message`
+- app-server emits `thread/*`, `turn/*`, `item/*`, approval, and dynamic-tool lifecycle events
 - a command is actually executed by Codex
 - workspace files are created or modified as requested
 - generated artifacts pass deterministic validation

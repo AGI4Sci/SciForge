@@ -1,0 +1,18 @@
+{
+  "roundId": "live-round-11",
+  "side": "cursor-agent-computer-use",
+  "capturedAt": "2026-05-30T13:52:00+08:00",
+  "entryPoint": "Cursor Agent desktop same-prompt sub-agent baseline re-observation",
+  "refs": [
+    "computer-use:round-11-cursor-subagent-still-unavailable"
+  ],
+  "checks": {
+    "hasProjectSidebarGroups": true,
+    "hasWorkedExploredAggregates": true,
+    "hasFileRefs": true,
+    "hasPositiveSubagentTranscriptRef": false,
+    "hasPositiveSubagentResultRef": false,
+    "hasNoSubagentToolAvailable": true
+  },
+  "summary": "Computer Use re-observed the Cursor Agent same-prompt conversation. Cursor still reports NO_SUBAGENT_TOOL_AVAILABLE and has no positive sub-agent transcript/result baseline, so the existing open difference remains active."
+}

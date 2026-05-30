@@ -23,6 +23,7 @@ import {
 import { runtimeInteractionProgressEventFromCompactRecord } from '@sciforge-ui/runtime-contract/events';
 import type { RuntimeInteractionProgressEvent } from '@sciforge-ui/runtime-contract';
 import type { AgentStreamEvent } from './domain';
+import { joinAssistantTextFragments } from './assistantText';
 import { isRuntimeAuditOnlyEvent, runtimeAuditOnlyEventSummary } from './runtimeAuditEvents';
 import {
   classifyWorkEvent,
@@ -42,7 +43,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export type StreamEventImportance = 'key' | 'background' | 'debug';
 export type StreamEventTone = 'info' | 'warning' | 'danger' | 'success' | 'muted';
 export type StreamWorklogOperationKind = WorkEventKind;
-export type BackendPresentationProfileId = 'sciforge-default' | 'codex-cli-like' | 'claude-code-like';
+export type BackendPresentationProfileId = 'sciforge-default' | 'codex-cli-like' | 'claude-code-like' | 'cursor-agent-like';
 
 export interface StreamEventPresentationOptions {
   profile?: BackendPresentationProfileId;
@@ -161,7 +162,7 @@ export function latestRunningEvent(events: AgentStreamEvent[], options: StreamEv
     const presentation = presentStreamEvent(event, options);
     return presentation.importance !== 'debug' && readableStreamEventDetail(event);
   });
-  return latestBackground ? '后台正在探索或执行，过程日志已折叠。' : undefined;
+  return latestBackground ? 'Working in the background. Activity is folded below.' : undefined;
 }
 
 export function streamEventCounts(events: AgentStreamEvent[], options: StreamEventPresentationOptions = {}) {
@@ -211,8 +212,7 @@ export function formatAgentTokenUsage(usage: AgentStreamEvent['usage'] | undefin
     usage.cacheRead !== undefined ? `cache read ${usage.cacheRead}` : '',
     usage.cacheWrite !== undefined ? `cache write ${usage.cacheWrite}` : '',
   ].filter(Boolean);
-  const model = [usage.provider, usage.model].filter(Boolean).join('/');
-  const suffix = [model, usage.source].filter(Boolean).join(' ');
+  const suffix = usage.source ? usage.source : '';
   return `tokens ${parts.join(', ')}${suffix ? ` (${suffix})` : ''}`;
 }
 
@@ -255,10 +255,27 @@ export function assistantDraftFromStreamEvents(events: AgentStreamEvent[]) {
 
 export function assistantDraftDeltaFromStreamEvent(event: AgentStreamEvent) {
   const type = event.type.toLowerCase();
-  if (type !== TEXT_DELTA_EVENT_TYPE && type !== OUTPUT_EVENT_TYPE) return '';
-  const detail = readableStreamEventDetail(event);
+  if (type !== TEXT_DELTA_EVENT_TYPE && type !== OUTPUT_EVENT_TYPE && type !== 'message_delta' && type !== 'assistant_delta') return '';
+  const detail = readableStreamEventDetail(event) || assistantDeltaTextFromRaw(event);
   if (!detail || isScriptOrArtifactGenerationDetail(detail) || looksLikeTransportJson(detail)) return '';
   return detail;
+}
+
+function assistantDeltaTextFromRaw(event: AgentStreamEvent) {
+  const raw = isRecord(event.raw) ? event.raw : {};
+  const native = isRecord(raw.native) ? raw.native : raw;
+  const nestedRaw = isRecord(raw.raw) ? raw.raw : {};
+  const nestedEvent = isRecord(nestedRaw.event) ? nestedRaw.event : {};
+  return stringField(native.text)
+    ?? stringField(native.delta)
+    ?? stringField(native.message)
+    ?? stringField(raw.text)
+    ?? stringField(raw.delta)
+    ?? stringField(raw.message)
+    ?? stringField(nestedEvent.text)
+    ?? stringField(nestedEvent.delta)
+    ?? stringField(nestedEvent.message)
+    ?? '';
 }
 
 export function readableStreamEventDetail(event: AgentStreamEvent) {
@@ -268,7 +285,7 @@ export function readableStreamEventDetail(event: AgentStreamEvent) {
   if (event.contextWindowState) {
     const state = event.contextWindowState;
     const meter = buildContextWindowMeterModel(state, false);
-    return `used/window ${meter.used}/${meter.windowSize}, ratio ${meter.ratioLabel}, source ${meter.sourceLabel}, status ${meter.statusLabel}, runtime ${state.backend || 'unknown'}, ${meter.compactLine}, last ${state.lastCompactedAt || 'never'}`;
+    return `Context ${meter.ratioLabel} used. ${meter.compactLine}. Last compacted ${state.lastCompactedAt || 'never'}.`;
   }
   if (event.contextCompaction) {
     const compaction = event.contextCompaction;
@@ -331,9 +348,9 @@ function readableRunningChatAuditDetail(event: AgentStreamEvent): string | undef
   const type = event.type.toLowerCase();
   if (type === CONTEXT_WINDOW_STATE_EVENT_TYPE.toLowerCase() && event.contextWindowState) {
     const state = event.contextWindowState;
-    if (state.pendingCompact || state.status === 'compacting') return '上下文接近上限，正在准备压缩。';
-    if (state.status === 'blocked' || state.status === 'exceeded') return '上下文已接近上限，需要压缩或恢复后继续。';
-    if (state.status === 'near-limit') return '上下文接近上限，后续会优先保留关键上下文。';
+    if (state.pendingCompact || state.status === 'compacting') return 'Context is near the limit; preparing compaction.';
+    if (state.status === 'blocked' || state.status === 'exceeded') return 'Context is near the limit; compact or recover before continuing.';
+    if (state.status === 'near-limit') return 'Context is near the limit; key context will be preserved first.';
     return '';
   }
   if (isRunningChatInternalEvent(event)) return '';
@@ -364,7 +381,7 @@ function isRunningChatInternalEvent(event: AgentStreamEvent) {
     .map((item) => typeof item === 'string' ? item.toLowerCase() : '')
     .join(' ');
   if (/runtime codex native assistant message recorded|raw jsonl|folded in the run audit/.test(detailText)) return true;
-  if (/正在把本轮请求交给 workspace runtime|workspace runtime 首个事件|已收到请求/.test(detailText)) return true;
+  if (/sending this request to the workspace agent|first workspace agent event|已收到请求/.test(detailText)) return true;
   const role = [event.label, raw.presentationRole, raw.role, raw.displayRole]
     .map((item) => typeof item === 'string' ? item.toLowerCase() : '')
     .join(' ');
@@ -383,15 +400,15 @@ function streamEventTypeLabel(type: string, event?: AgentStreamEvent, detail = '
   const structured = event ? structuredWorkEventSummary(event) : undefined;
   if (structured?.stage) return 'Stage';
   if (structured?.project) return 'Project';
-  if (type === CONTEXT_WINDOW_STATE_EVENT_TYPE) return '上下文窗口';
-  if (type === CONTEXT_COMPACTION_EVENT_TYPE) return '上下文压缩';
-  if (type === TEXT_DELTA_EVENT_TYPE) return isScriptOrArtifactGenerationDetail(detail) ? '生成脚本/任务' : '生成内容';
-  if (type === TOOL_CALL_EVENT_TYPE) return toolEventActionLabel(event, detail, '工具调用');
-  if (type === TOOL_RESULT_EVENT_TYPE) return toolEventActionLabel(event, detail, '工具结果');
-  if (type === RUN_PLAN_EVENT_TYPE) return '执行计划';
-  if (type === STAGE_START_EVENT_TYPE) return '阶段开始';
-  if (type === USAGE_UPDATE_EVENT_TYPE) return '用量';
-  if (type === PROCESS_PROGRESS_EVENT_TYPE) return '工作过程';
+  if (type === CONTEXT_WINDOW_STATE_EVENT_TYPE) return 'Context';
+  if (type === CONTEXT_COMPACTION_EVENT_TYPE) return 'Context';
+  if (type === TEXT_DELTA_EVENT_TYPE) return isScriptOrArtifactGenerationDetail(detail) ? 'Writing' : 'Assistant';
+  if (type === TOOL_CALL_EVENT_TYPE) return toolEventActionLabel(event, detail, 'Tool');
+  if (type === TOOL_RESULT_EVENT_TYPE) return toolEventActionLabel(event, detail, 'Result');
+  if (type === RUN_PLAN_EVENT_TYPE) return 'Plan';
+  if (type === STAGE_START_EVENT_TYPE) return 'Step started';
+  if (type === USAGE_UPDATE_EVENT_TYPE) return 'Context';
+  if (type === PROCESS_PROGRESS_EVENT_TYPE) return 'Activity';
   if (type === 'codex-runtime-run') return 'Codex Runtime';
   return type;
 }
@@ -405,6 +422,7 @@ export function resolveBackendPresentationProfile(
   const backend = stringField(raw?.backend)
     ?? (isRecord(raw?.event) ? stringField(raw.event.backend) : undefined)
     ?? (isRecord(raw?.raw) ? stringField(raw.raw.backend) : undefined);
+  if (backend === 'codex-app-server') return 'cursor-agent-like';
   if (backend === 'codex-exec-json') return 'codex-cli-like';
   if (backend === 'claude-stream-json') return 'claude-code-like';
   return 'sciforge-default';
@@ -417,6 +435,11 @@ function streamImportanceForBackendProfile(
   const type = event.type.toLowerCase();
   const raw = isRecord(event.raw) ? event.raw : {};
   const status = stringField(raw.status)?.toLowerCase() ?? '';
+  if (profile === 'cursor-agent-like') {
+    if (type === 'audit' || type === 'run_started' || status === 'raw-jsonl' || status === 'stderr') return 'debug';
+    if (type === 'tool_started' || type === 'tool_completed' || type === 'message_delta' || type === 'assistant_delta') return 'background';
+    if (type === 'approval_requested' || type === 'gui_ask_user') return 'key';
+  }
   if (profile === 'codex-cli-like') {
     if (type === 'audit' || type === 'run_started' || status === 'raw-jsonl' || status === 'stderr') return 'debug';
     if (type === 'tool_started' || type === 'tool_completed') return 'background';
@@ -425,7 +448,7 @@ function streamImportanceForBackendProfile(
     if (type === 'audit' || type === 'run_started') return 'debug';
     if (type === 'approval_requested' || type === 'gui_ask_user') return 'key';
     if (type === 'tool_started' || type === 'tool_completed') return 'background';
-    if (type === 'message_delta') return 'background';
+    if (type === 'message_delta' || type === 'assistant_delta') return 'background';
   }
   return undefined;
 }
@@ -436,11 +459,20 @@ function streamEventTypeLabelForBackendProfile(
   profile: BackendPresentationProfileId,
 ): string | undefined {
   const normalizedType = type.toLowerCase();
+  if (profile === 'cursor-agent-like') {
+    if (normalizedType === 'run_started') return 'Agent run';
+    if (normalizedType === 'tool_started') return 'Action';
+    if (normalizedType === 'tool_completed') return 'Action done';
+    if (normalizedType === 'approval_requested' || normalizedType === 'gui_ask_user') return 'Approval';
+    if (normalizedType === 'message_delta' || normalizedType === 'assistant_delta') return 'Assistant progress';
+    if (normalizedType === 'message') return 'Assistant';
+    if (normalizedType === 'audit') return 'Agent audit';
+  }
   if (profile === 'codex-cli-like') {
     if (normalizedType === 'run_started') return 'Codex CLI';
     if (normalizedType === 'tool_started') return 'Codex tool';
     if (normalizedType === 'tool_completed') return 'Codex tool done';
-    if (normalizedType === 'message_delta') return 'Codex delta';
+    if (normalizedType === 'message_delta' || normalizedType === 'assistant_delta') return 'Codex delta';
     if (normalizedType === 'message') return 'Codex message';
     if (normalizedType === 'audit') return 'Codex audit';
   }
@@ -450,7 +482,7 @@ function streamEventTypeLabelForBackendProfile(
     if (normalizedType === 'tool_completed') return 'Claude tool done';
     if (normalizedType === 'approval_requested' || normalizedType === 'gui_ask_user') return 'Claude approval';
     if (normalizedType === 'approval_resolved') return 'Claude approval done';
-    if (normalizedType === 'message_delta') return 'Claude delta';
+    if (normalizedType === 'message_delta' || normalizedType === 'assistant_delta') return 'Claude delta';
     if (normalizedType === 'message') return 'Claude message';
   }
   if (resolveBackendPresentationProfile(event, undefined) !== 'sciforge-default' && normalizedType === 'audit') return 'Backend audit';
@@ -462,6 +494,7 @@ function streamEventInitiallyCollapsed(
   importance: StreamEventImportance,
   profile: BackendPresentationProfileId,
 ) {
+  if (profile === 'cursor-agent-like' && ['audit', 'run_started'].includes(event.type.toLowerCase())) return true;
   if (profile === 'codex-cli-like' && ['audit', 'run_started'].includes(event.type.toLowerCase())) return true;
   if (profile === 'claude-code-like' && event.type.toLowerCase() === 'audit') return true;
   return importance !== 'key';
@@ -474,6 +507,7 @@ function streamEventVisibleInRunningMessage(
   usageDetail: string,
   profile: BackendPresentationProfileId,
 ) {
+  if (profile === 'cursor-agent-like' && ['audit', 'run_started'].includes(event.type.toLowerCase())) return false;
   if (profile === 'codex-cli-like' && ['audit', 'run_started'].includes(event.type.toLowerCase())) return false;
   if (profile === 'claude-code-like' && event.type.toLowerCase() === 'audit') return false;
   return importance === 'key' && Boolean(detail || usageDetail);
@@ -515,11 +549,7 @@ function shortStreamEventDetail(value: string) {
 }
 
 function mergeTextDeltaDetail(previous: string, next: string) {
-  if (!previous.trim()) return next;
-  if (!next.trim()) return previous;
-  if (/^[,.;:!?，。；：！？)\]}]/.test(next)) return tidyReadableText(`${previous}${next}`);
-  if (/[(\[{]$/.test(previous)) return `${previous}${next}`;
-  return tidyReadableText(`${previous} ${next}`);
+  return tidyReadableText(joinAssistantTextFragments([previous, next]));
 }
 
 function normalizeStreamTextDelta(value?: string) {
@@ -554,8 +584,8 @@ function toolEventActionLabel(event: AgentStreamEvent | undefined, detail: strin
   const toolName = typeof raw.toolName === 'string' ? raw.toolName : '';
   const action = runtimeToolEventActionKind({ toolName, detail });
   const isToolResult = event?.type === TOOL_RESULT_EVENT_TYPE;
-  if (action === 'script-write') return isToolResult ? '写入完成' : '写入脚本';
-  if (action === 'command') return isToolResult ? '命令结果' : '执行命令';
+  if (action === 'script-write') return isToolResult ? 'Write complete' : 'Writing';
+  if (action === 'command') return isToolResult ? 'Command result' : 'Run command';
   return fallback;
 }
 
@@ -572,8 +602,8 @@ function detailFromRawToolEvent(event: AgentStreamEvent) {
     const parsed = parseJsonObject(detail);
     const path = typeof parsed?.path === 'string' ? parsed.path : extractPathLike(detail);
     const content = typeof parsed?.content === 'string' ? parsed.content : '';
-    if (event.type === TOOL_RESULT_EVENT_TYPE) return tidyReadableText(`写入完成${path ? `：${path}` : ''}${output ? `\n${output}` : ''}`);
-    return tidyReadableText(`正在写入脚本${path ? `：${path}` : ''}${content ? `\n${previewCode(content)}` : ''}`);
+    if (event.type === TOOL_RESULT_EVENT_TYPE) return tidyReadableText(`Write complete${path ? `: ${path}` : ''}${output ? `\n${output}` : ''}`);
+    return tidyReadableText(`Writing${path ? `: ${path}` : ''}${content ? `\n${previewCode(content)}` : ''}`);
   }
   if (output && runtimeToolOutputLooksLikeFailure(output)) {
     return tidyReadableText(`${detail}\n${tailText(output, 1400)}`);
@@ -591,10 +621,10 @@ function detailFromRawProgressEvent(event: AgentStreamEvent) {
   const writing = Array.isArray(progress.writing) ? progress.writing.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : [];
   const waitingFor = typeof progress.waitingFor === 'string' ? progress.waitingFor : '';
   const nextStep = typeof progress.nextStep === 'string' ? progress.nextStep : '';
-  if (reading.length) parts.push(`正在读：${reading.join('、')}`);
-  if (writing.length) parts.push(`正在写：${writing.join('、')}`);
-  if (waitingFor) parts.push(`正在等：${waitingFor}`);
-  if (nextStep) parts.push(`下一步：${nextStep}`);
+  if (reading.length) parts.push(`Reading: ${reading.join(', ')}`);
+  if (writing.length) parts.push(`Writing: ${writing.join(', ')}`);
+  if (waitingFor) parts.push(`Waiting for: ${waitingFor}`);
+  if (nextStep) parts.push(`Next: ${nextStep}`);
   return tidyReadableText(parts.filter(Boolean).join('\n'));
 }
 

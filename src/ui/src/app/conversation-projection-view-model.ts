@@ -460,6 +460,22 @@ function asString(value: unknown): string | undefined {
 export function sanitizeUserProjectionText(value: string | undefined): string | undefined {
   if (!value) return undefined;
   return value
+    .replace(/\bstarted\s+with\s+[^"'\s,;)]+\/[^"'\s,;)]+(?:\s+profile\s+[^"'\s,;)]+)?/gi, 'started with configured runtime')
+    .replace(/\b(?:calling\s+local\s+model|using\s+model)\s+[^"'\s,;)]+\/[^"'\s,;)]+/gi, 'using configured model')
+    .replace(/\b(provider|model)\b\s*[:=]\s*["']?[^"'\s,;)]+/gi, '$1=[redacted]')
+    .replace(/\b(runtime\s+profile|profile)\b\s*[:=]?\s*["']?[^"'\s,;)]+/gi, '$1 [redacted]')
+    .replace(/(?:^|[\s(["'])\/(?:Applications|Users|Volumes|private|var|tmp)\/[^\s`"'<>),;]+/g, (match) => `${match.match(/^[\s(["']+/)?.[0] ?? ''}[local path]`)
+    .replace(/\bcommand\s+id\b/gi, 'run reference')
+    .replace(/\battempt\s+id\b/gi, 'attempt reference')
+    .replace(/\bcodexSessionId\b/gi, 'session reference')
+    .replace(/\bprofile\/workspace\b/gi, 'runtime configuration')
+    .replace(/\bprofile\b/gi, 'runtime configuration')
+    .replace(/\bworkspace\b/gi, 'project context')
+    .replace(/with the preserved run reference, attempt reference, runtime configuration, project context, and audit refs/gi, 'with preserved audit context')
+    .replace(/preserved run reference, attempt reference, runtime configuration, project context, and audit refs/gi, 'preserved audit context')
+    .replace(/\baudit refs\b/gi, 'audit references')
+    .replace(/\bprovider\b/gi, 'service')
+    .replace(/\bmodel\b/gi, 'runtime')
     .replace(/\bSciForge ToolPayload\b/g, 'SciForge structured task result')
     .replace(/\bToolPayload\b/g, 'structured task result')
     .replace(/\btaskFiles\b/g, 'generated task files')

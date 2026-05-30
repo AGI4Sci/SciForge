@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "sciforge.agent-desktop-alignment-summary.v1",
+  "roundId": "live-round-09",
+  "side": "sciforge-browser",
+  "tool": "browser",
+  "target": "http://localhost:5174/",
+  "capturedAt": "2026-05-30T12:10:00+08:00",
+  "promptDate": "2026-05-30",
+  "promptUsed": "search today on arxiv for agentic rl related work, download and read the original papers, then write a systematic summary report",
+  "promptNote": "Browser automation could not paste Chinese text in this environment, so this was the same task in English; Cursor Agent was tested with the exact Chinese prompt.",
+  "observedDifferences": [
+    "Visible running state exposed app-server/rich-client transport lifecycle copy before useful work.",
+    "The failed assistant response surfaced a long Python/urllib request traceback as primary chat content.",
+    "The right support pane also rendered the raw traceback instead of a concise failed-task summary.",
+    "Action grouping lost early research anchors in long recorded streams because it kept only the tail of process events."
+  ],
+  "correctionNeeded": "Generic presentation fix: fold transport lifecycle and raw traceback diagnostics, preserve long-task action anchors, and keep right-pane summaries on the same presentation policy as chat answers.",
+  "redactionCheck": {
+    "status": "passed",
+    "notes": [
+      "This summary records only structural observations.",
+      "The raw browser snapshot and pre-fix screenshot were removed because they contained raw diagnostic text and local path-shaped stack frames."
+    ]
+  }
+}

@@ -1,5 +1,6 @@
 import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { ChevronDown, ChevronRight, FolderOpen } from 'lucide-react';
+import { useI18n } from '../../i18nContext';
 import { cx } from '../uiPrimitives';
 
 export function WorkspaceExplorerRootTree({
@@ -21,6 +22,7 @@ export function WorkspaceExplorerRootTree({
   onRootContextMenu: (event: ReactMouseEvent<HTMLDivElement>) => void;
   onToggleRoot: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <div className="explorer-section">
       <div
@@ -35,7 +37,9 @@ export function WorkspaceExplorerRootTree({
         <button
           type="button"
           className="explorer-twistie"
-          aria-label={expanded ? '折叠' : '展开'}
+          aria-label={expanded
+            ? t({ 'zh-CN': '折叠', 'en-US': 'Collapse' })
+            : t({ 'zh-CN': '展开', 'en-US': 'Expand' })}
           onClick={(event) => {
             event.stopPropagation();
             onToggleRoot();

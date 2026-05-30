@@ -4,9 +4,11 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { defaultSciForgeConfig } from '../../config';
 import type { SciForgeSession, ScenarioInstanceId } from '../../domain';
+import { I18nProvider } from '../../i18nContext';
 import {
   Sidebar,
   TopBar,
+  buildSidebarCursorAgentProjectionForShell,
   buildSidebarArchivedThreadItems,
   buildSidebarProjectThreadGroups,
   buildSidebarSearchMatches,
@@ -17,12 +19,12 @@ import {
 test('archived sessions stay out of the active sidebar thread list', () => {
   const active = session({
     sessionId: 'active-thread',
-    title: '当前对话',
+    title: 'Current chat',
     messages: [{ id: 'user-1', role: 'user', content: 'hello', createdAt: '2026-05-21T00:00:00.000Z' }],
   });
   const archived = session({
     sessionId: 'archived-thread',
-    title: '已归档对话',
+    title: 'Archived chat',
     messages: [{ id: 'user-2', role: 'user', content: 'old chat', createdAt: '2026-05-20T00:00:00.000Z' }],
   });
 
@@ -81,7 +83,7 @@ test('sidebar thread detail uses user semantics instead of internal counts', () 
   });
 
   assert.equal(items[0]?.title, '请总结这篇论文的局限');
-  assert.equal(items[0]?.detail, '最近回答：已生成一份总结报告。');
+  assert.equal(items[0]?.detail, 'Last answer: 已生成一份总结报告。');
   assert.doesNotMatch(`${items[0]?.title} ${items[0]?.detail}`, /messages?|runs?|artifacts?|ExecutionUnit|provider|model|profile|runtime codex|run id|run-internal|stdout|stderr/i);
 });
 
@@ -97,7 +99,7 @@ test('sidebar thread detail folds internal-only latest messages', () => {
     }),
   });
 
-  assert.equal(items[0]?.detail, '最近有新进展');
+  assert.equal(items[0]?.detail, 'Recent progress');
   assert.doesNotMatch(`${items[0]?.title} ${items[0]?.detail}`, /provider|model|raw JSONL|stdout|stderr|run-internal/i);
 });
 
@@ -133,6 +135,96 @@ test('sidebar project groups show current project, peer projects, and top-k thre
   assert.deepEqual(groups[1]?.threads, []);
 });
 
+test('shell sidebar publishes Cursor Agent-like projection without local path refs', () => {
+  const sessions = {
+    'literature-evidence-review': session({
+      sessionId: 'thread-main',
+      title: '实验计划',
+      messages: [{ id: 'user-1', role: 'user', content: '整理下一步实验', createdAt: '2026-05-21T00:00:00.000Z' }],
+    }),
+  } as Record<ScenarioInstanceId, SciForgeSession>;
+  const archived = session({
+    scenarioId: 'structure-exploration',
+    sessionId: 'archived-main',
+    title: '归档实验',
+    messages: [{ id: 'user-2', role: 'user', content: '旧实验记录', createdAt: '2026-05-20T00:00:00.000Z' }],
+  });
+  const discarded = session({
+    scenarioId: 'paper-qa',
+    sessionId: 'discarded-main',
+    title: 'Temporary chat (deleted)',
+    messages: [{ id: 'user-3', role: 'user', content: '不要保留这段探索', createdAt: '2026-05-19T00:00:00.000Z' }],
+    versions: [{
+      id: 'version-deleted',
+      reason: 'deleted current chat',
+      createdAt: '2026-05-19T00:01:00.000Z',
+      messageCount: 1,
+      runCount: 0,
+      artifactCount: 0,
+      checksum: 'checksum',
+      snapshot: {} as never,
+    }],
+  });
+  const config = {
+    ...defaultSciForgeConfig,
+    workspacePath: '/tmp/sciforge-project',
+    peerInstances: [{
+      name: 'Peer Project',
+      appUrl: 'http://127.0.0.1:5174',
+      workspaceWriterUrl: 'http://127.0.0.1:6174',
+      workspacePath: '/tmp/sciforge-peer-project',
+      role: 'peer' as const,
+      trustLevel: 'readonly' as const,
+      enabled: true,
+    }],
+  };
+  const groups = buildSidebarProjectThreadGroups(config, sessions, [archived, discarded], {
+    pinnedThreadIds: ['thread-main'],
+  });
+  const projection = buildSidebarCursorAgentProjectionForShell(config, groups, {
+    searchQuery: '实验',
+    workspaceStatus: 'Connected',
+    currentBranch: 'feature/sidebar',
+    activeThreadId: 'thread-main',
+    pinnedThreadIds: ['thread-main'],
+  });
+
+  assert.equal(projection.kind, 'cursor-agent-like-sidebar');
+  assert.equal(projection.groups[0]?.threads[0]?.title, '实验计划');
+  assert.equal(projection.groups[0]?.threads[0]?.pinned, true);
+  assert.equal(projection.groups[0]?.threads.some((thread) => thread.state === 'archived'), true);
+  assert.equal(projection.groups[0]?.threads.some((thread) => thread.state === 'discarded'), true);
+  assert.equal(projection.groups[0]?.selected, true);
+  assert.equal(projection.groups[0]?.threads.some((thread) => thread.selected), true);
+  assert.equal(projection.groups[0]?.status.branch.label, 'feature/sidebar');
+  assert.equal(projection.groups[0]?.status.context.detail, '200k available');
+  assert.ok(projection.actions.some((action) => action.intent === 'new-project' && action.commandText?.includes('--workspace-ref')));
+  assert.ok(projection.actions.some((action) => action.intent === 'open-workspace' && action.commandText?.includes('open-workspace')));
+  assert.ok(projection.groups.some((group) => group.actions.some((action) => action.intent === 'new-chat')));
+  assert.ok(projection.groups.some((group) => !group.current && group.actions.some((action) => action.intent === 'remove-project' && action.commandText?.includes('--keep-files'))));
+  assert.doesNotMatch(JSON.stringify(projection), /\/tmp\/sciforge-(?:project|peer-project)|file:\/tmp|provider|model|Authorization|secret|token/i);
+});
+
+test('shell sidebar projection keeps seed-only active chat as draft without rendering it as active thread', () => {
+  const sessions = {
+    'literature-evidence-review': session({
+      sessionId: 'draft-thread',
+      messages: [{ id: 'seed-1', role: 'scenario', content: 'provider model bootstrap', createdAt: '2026-05-21T00:00:00.000Z' }],
+    }),
+  } as Record<ScenarioInstanceId, SciForgeSession>;
+  const config = { ...defaultSciForgeConfig, workspacePath: '/tmp/sciforge-project' };
+  const groups = buildSidebarProjectThreadGroups(config, sessions);
+  const projection = buildSidebarCursorAgentProjectionForShell(config, groups, {
+    activeThreadId: 'draft-thread',
+  });
+
+  assert.deepEqual(groups[0]?.threads, []);
+  assert.equal(projection.groups[0]?.threads[0]?.state, 'draft');
+  assert.equal(projection.groups[0]?.threads[0]?.selected, true);
+  assert.equal(projection.groups[0]?.threads[0]?.title, 'New chat');
+  assert.doesNotMatch(JSON.stringify(projection), /provider|model|bootstrap|\/tmp\/sciforge-project/i);
+});
+
 test('sidebar project chat markup keeps only top-k threads visible by default', () => {
   const sessions = Object.fromEntries(Array.from({ length: 6 }, (_, index) => {
     const n = index + 1;
@@ -155,18 +247,77 @@ test('sidebar project chat markup keeps only top-k threads visible by default', 
       onProjectNewChat: () => undefined,
     onSearchNavigate: () => undefined,
     onSettingsOpen: () => undefined,
-    workspaceStatus: '已连接',
+    workspaceStatus: 'Connected',
     onWorkspacePathChange: () => undefined,
   }));
 
-  assert.match(html, /项目对话/);
+  assert.match(html, /Repositories/);
+  assert.match(html, /New Agent/);
   assert.match(html, /SciForge/);
-  assert.match(html, /展开显示/);
-  assert.match(html, /2 条/);
+  assert.match(html, /Show more/);
+  assert.match(html, /<span>Show more<\/span><small>2<\/small>/);
   assert.match(html, /线程 6/);
   assert.match(html, /线程 3/);
   assert.doesNotMatch(html, /线程 2/);
   assert.doesNotMatch(html, /线程 1/);
+});
+
+test('sidebar shell DOM renders draft archived and discarded thread rows from the unified list', () => {
+  const html = renderToStaticMarkup(React.createElement(Sidebar, {
+    page: 'workbench',
+    setPage: () => undefined,
+    scenarioId: 'literature-evidence-review',
+    setScenarioId: () => undefined,
+    config: { ...defaultSciForgeConfig, workspacePath: '/tmp/SciForge' },
+    sessionsByScenario: {
+      'literature-evidence-review': session({
+        scenarioId: 'literature-evidence-review',
+        sessionId: 'active-thread',
+        title: 'Active research thread',
+        messages: [{ id: 'user-active', role: 'user', content: '继续总结论文', createdAt: '2026-05-21T00:00:00.000Z' }],
+      }),
+      'structure-exploration': session({
+        scenarioId: 'structure-exploration',
+        sessionId: 'draft-thread',
+        messages: [{ id: 'seed-structure', role: 'scenario', content: 'seed prompt', createdAt: '2026-05-21T00:00:00.000Z' }],
+      }),
+    } as Record<ScenarioInstanceId, SciForgeSession>,
+    archivedSessions: [
+      session({
+        scenarioId: 'paper-qa',
+        sessionId: 'archived-thread',
+        title: 'Archived paper notes',
+        archiveState: 'archived',
+        messages: [{ id: 'user-archived', role: 'user', content: '旧论文笔记', createdAt: '2026-05-20T00:00:00.000Z' }],
+      }),
+      session({
+        scenarioId: 'browser-task',
+        sessionId: 'discarded-thread',
+        title: 'Discarded scratch chat',
+        archiveState: 'discarded',
+        messages: [{ id: 'user-discarded', role: 'user', content: '临时探索', createdAt: '2026-05-19T00:00:00.000Z' }],
+      }),
+    ],
+    onProjectNewChat: () => undefined,
+    onArchiveThread: () => undefined,
+    onDiscardThread: () => undefined,
+    onRestoreThread: () => undefined,
+    onSearchNavigate: () => undefined,
+    onSettingsOpen: () => undefined,
+    workspaceStatus: 'Connected',
+    onWorkspacePathChange: () => undefined,
+  }));
+
+  assert.match(html, /Active research thread/);
+  assert.match(html, /New chat/);
+  assert.match(html, /Draft ready|Draft/);
+  assert.match(html, /Archived paper notes/);
+  assert.match(html, /Discarded scratch chat/);
+  assert.match(html, /Archived/);
+  assert.match(html, /Discarded/);
+  assert.match(html, /aria-label="Restore chat: Archived paper notes"/);
+  assert.match(html, /aria-label="Restore chat: Discarded scratch chat"/);
+  assert.match(html, /aria-label="Discard chat: Active research thread"/);
 });
 
 test('sidebar shell renders Codex-style navigation labels without internal runtime terms', () => {
@@ -205,7 +356,7 @@ test('sidebar shell renders Codex-style navigation labels without internal runti
       onProjectNewChat: () => undefined,
       onSearchNavigate: () => undefined,
       onSettingsOpen: () => undefined,
-      workspaceStatus: '已连接',
+      workspaceStatus: 'Connected',
       onWorkspacePathChange: () => undefined,
     }),
     React.createElement(TopBar, {
@@ -217,14 +368,56 @@ test('sidebar shell renders Codex-style navigation labels without internal runti
     }),
   ));
 
-  for (const label of ['搜索聊天、项目、页面', '项目对话', '项目', '应用', '自动化', '设置', '注释', 'SciForge · 就绪']) {
+  for (const label of ['Navigation', 'Chat', 'Browser', 'Timeline', 'Feedback', 'Agents', 'Tools', 'Search chats, projects, pages', 'Repositories', 'Customize Sidebar', 'Open Workspace', 'New Agent', 'Apps', 'Automations', 'Settings', 'Annotate', 'SciForge · Ready', 'No branch', 'Local environment', 'Context']) {
     assert.match(html, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
-  assert.match(html, /最近回答：已整理计划。/);
+  assert.doesNotMatch(html, /Workspace file tree|sidebar-panel-block-explorer|>Files</);
+  assert.match(html, /Last answer: 已整理计划。/);
+  assert.match(html, /data-gui-region-id="sidebar"/);
+  assert.match(html, /data-gui-region-ref="gui:\/gui\/regions\/sidebar"/);
   assert.doesNotMatch(html, /sciforge-runtime-deepseek|sciforge-deepseek-proxy|bailian\/deepseek-v4-flash/);
   assert.doesNotMatch(html, /\b\d+\s+(?:messages?|runs?|artifacts?)\b|>\d+\s+(?:条消息|轮处理|个结果)</i);
   assert.doesNotMatch(html, /ExecutionUnit|provider|model|profile|runtime codex|run id|run-internal|stdout|stderr|raw JSONL|ConversationProjection|ArtifactDelivery/i);
-  assert.doesNotMatch(html, />Threads<|>Projects<|>Plugins<|>Automations<|>Settings<|>\d+ actions<|>ready</);
+  assert.doesNotMatch(html, />Threads<|>Projects<|>Plugins<|>\d+ actions<|>ready</);
+});
+
+test('sidebar shell follows the selected app locale', () => {
+  const html = renderToStaticMarkup(React.createElement(I18nProvider, {
+    locale: 'zh-CN',
+    children: React.createElement(React.Fragment, null,
+      React.createElement(Sidebar, {
+        page: 'workbench',
+        setPage: () => undefined,
+        scenarioId: 'literature-evidence-review',
+        setScenarioId: () => undefined,
+        config: {
+          ...defaultSciForgeConfig,
+          locale: 'zh-CN',
+          workspacePath: '/tmp/sciforge-project',
+        },
+        sessionsByScenario: {} as Record<ScenarioInstanceId, SciForgeSession>,
+        archivedSessions: [],
+        onProjectNewChat: () => undefined,
+        onSearchNavigate: () => undefined,
+        onSettingsOpen: () => undefined,
+        workspaceStatus: 'Connected',
+        onWorkspacePathChange: () => undefined,
+      }),
+      React.createElement(TopBar, {
+        onSearch: () => undefined,
+        onSettingsOpen: () => undefined,
+        theme: 'dark',
+        onThemeToggle: () => undefined,
+        healthItems: [],
+      }),
+    ),
+  }));
+
+  for (const label of ['导航', '聊天', '浏览器', '时间线', '反馈', '智能体', '工具', '搜索聊天、项目、页面', '仓库', '打开工作区', '新建智能体', '应用', '自动化', '设置', '标注', 'SciForge · 就绪']) {
+    assert.match(html, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+  assert.doesNotMatch(html, /工作区文件树|sidebar-panel-block-explorer|>文件</);
+  assert.doesNotMatch(html, /Search chats, projects, pages|Repositories|New Agent|SciForge · Ready/);
 });
 
 test('sidebar search returns concise matches and empty arrays for misses', () => {
@@ -240,6 +433,22 @@ test('sidebar search returns concise matches and empty arrays for misses', () =>
   assert.ok(buildSidebarSearchMatches('protein', sessions).some((match) => match.id === 'thread:protein-thread'));
   assert.ok(buildSidebarSearchMatches('timeline', sessions).some((match) => match.page === 'timeline'));
   assert.deepEqual(buildSidebarSearchMatches('zzzz-no-result', sessions), []);
+});
+
+test('sidebar search includes projects and archived threads without exposing local paths', () => {
+  const config = { ...defaultSciForgeConfig, workspacePath: '/tmp/protein-project' };
+  const archived = session({
+    scenarioId: 'structure-exploration',
+    sessionId: 'archived-search-thread',
+    title: 'Protein archive note',
+    messages: [{ id: 'user-1', role: 'user', content: 'archive protein note', createdAt: '2026-05-21T00:00:00.000Z' }],
+  });
+  const groups = buildSidebarProjectThreadGroups(config, {}, [archived]);
+  const matches = buildSidebarSearchMatches('protein', {}, { groups });
+
+  assert.ok(matches.some((match) => match.id === 'archived-thread:archived-search-thread'));
+  assert.ok(matches.some((match) => match.id.startsWith('project:') && match.detail === 'Current project'));
+  assert.doesNotMatch(JSON.stringify(matches), /\/tmp\/protein-project/);
 });
 
 function session(patch: Partial<SciForgeSession> = {}): SciForgeSession {

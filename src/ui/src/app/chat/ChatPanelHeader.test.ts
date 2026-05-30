@@ -39,10 +39,9 @@ test('聊天头部保持 Codex-style 低噪声，不展示 runtime/provider/mode
     onDeleteChat: () => undefined,
   }));
 
-  assert.match(html, /Ask SciForge/);
-  assert.match(html, /在线/);
-  assert.match(html, /2 已归档/);
-  assert.doesNotMatch(html, /archived/);
+  assert.match(html, /Ask/);
+  assert.match(html, /Online/);
+  assert.match(html, /2 archived/);
   assert.doesNotMatch(html, /sciforge-runtime-deepseek/);
   assert.doesNotMatch(html, /sciforge-deepseek-proxy/);
   assert.doesNotMatch(html, /bailian\/deepseek-v4-flash/);

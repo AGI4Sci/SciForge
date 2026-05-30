@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Activity as ActivityIcon, ClipboardCopy, Pencil } from 'lucide-react';
 import { scenarios, type ScenarioId } from '../data';
 import { SCENARIO_SPECS } from '@sciforge/scenario-core/scenario-specs';
 import { buildSilentStreamRunId, guidanceQueuedEvent, isLiveRuntimeCodexMessage, isSeedDemoOrFixtureMessage, userInterruptEvent } from '@sciforge-ui/runtime-contract';
@@ -9,6 +10,7 @@ import { resetSession } from '../sessionStore';
 import { buildRequestAcceptedProgressEvent, buildSilentStreamProgressEvent, silentStreamWaitThresholdMs } from '../processProgress';
 import { assistantDraftFromStreamEvents, coalesceStreamEvents, streamEventCounts } from '../streamEventPresentation';
 import { makeId, nowIso, type AgentContextWindowState, type AgentStreamEvent, type GuidanceQueueRecord, type GuidanceQueueStatus, type SciForgeConfig, type SciForgeMessage, type SciForgeReference, type SciForgeRun, type SciForgeSession, type ObjectReference, type ScenarioInstanceId, type ScenarioRuntimeOverride, type TimelineEventRecord } from '../domain';
+import { useI18n } from '../i18nContext';
 import { exportJsonFile } from './exportUtils';
 import { Badge, ClaimTag, ConfidenceBar, EvidenceTag, cx } from './uiPrimitives';
 import {
@@ -25,7 +27,7 @@ import { ChatPanelHeader } from './chat/ChatPanelHeader';
 import { RunReadinessBar } from './chat/RunReadinessBar';
 import { MessageList } from './chat/MessageList';
 import { RunningWorkProcess } from './chat/RunningWorkProcess';
-import { RunExecutionProcess, RunKeyInfo } from './chat/RunExecutionProcess';
+import { RunExecutionProcess, RunKeyInfo, runKeyInfoHasContent } from './chat/RunExecutionProcess';
 import { TargetInstanceSelector } from './chat/TargetInstanceSelector';
 import { FinalMessageContent } from './chat/FinalMessageContent';
 import type { RuntimeGuiSurface } from './chat/RuntimeGuiPanel';
@@ -44,6 +46,7 @@ import { RunVerificationTag, runIdForMessage } from './chat/messageRunPresentati
 import { runReadiness, runningMessageContentFromStream, runtimeReadinessIssue } from './chat/runStatusPresentation';
 import { waitForNextPaint } from './chat/nextPaint';
 import { fileToUploadedArtifact, objectReferenceForUploadedArtifact, referenceForUploadedArtifact } from './chat/uploadedArtifact';
+import type { SupportedLocale } from '../i18n';
 import type { RuntimeHealthItem } from './runtimeHealthPanel';
 import { createGuiProtocolController } from './guiProtocol';
 import { referenceTargetFromEvent } from './contextMenu/contextMenuModel';
@@ -103,8 +106,36 @@ function shouldShowMessageDiagnosticBadges(message: SciForgeMessage, provenanceK
   return message.role !== 'user' && provenanceKind !== 'live-runtime-codex' && provenanceKind !== 'runtime-result';
 }
 
+function messageHasPersistentMeta(
+  message: SciForgeMessage,
+  provenanceKind: string,
+  showMessageConfidence: boolean,
+  showDiagnosticBadges: boolean,
+) {
+  return Boolean(
+    showMessageConfidence
+      || message.status === 'failed'
+      || message.guidanceQueue
+      || message.acceptance
+      || (showDiagnosticBadges && (message.evidence || message.claimType || provenanceKind === 'seed-demo' || provenanceKind === 'fixture')),
+  );
+}
+
 function visibleMessageReference(message: SciForgeMessage) {
-  return referenceForMessage(message);
+  const reference = referenceForMessage(message);
+  if (looksLikeRuntimeGuiPlaceholderMessage(message.content)) {
+    return {
+      ...reference,
+      title: message.role === 'user' ? reference.title : 'Assistant · Confirmation request',
+      summary: message.role === 'user' ? reference.summary : 'Confirmation required before continuing.',
+    };
+  }
+  return reference;
+}
+
+function looksLikeRuntimeGuiPlaceholderMessage(content: string) {
+  return /^#{0,2}\s*(?:Computer Use )?(?:confirmation required|operation result)\b/i.test(content.replace(/\s+/g, ' ').trim())
+    || /\/computer-use\s+(?:approve|reject)\b|Approval ref:|Action ref:|Evidence refs:|Choices:/i.test(content);
 }
 
 export function ChatPanel({
@@ -208,17 +239,18 @@ export function ChatPanel({
   const reportedScrollTopRef = useRef(savedScrollTop);
   const resizeStateRef = useRef<{ startY: number; startHeight: number } | null>(null);
   const messages = session.messages;
+  const { locale, t } = useI18n();
   const baseScenarioId = builtInScenarioIdForInstance(scenarioId, scenarioOverride);
   const scenario = scenarios.find((item) => item.id === baseScenarioId) ?? scenarios[0];
   const scenarioPackageRef = scenarioOverride?.scenarioPackageRef ?? builtInScenarioPackageRef(baseScenarioId);
   const skillPlanRef = scenarioOverride?.skillPlanRef ?? `skill-plan.${baseScenarioId}.default`;
   const uiPlanRef = scenarioOverride?.uiPlanRef ?? `ui-plan.${baseScenarioId}.default`;
   const activeRun = activeRunId ? session.runs.find((run) => run.id === activeRunId) : undefined;
-  const visibleMessageStart = 0;
+  const visibleMessageStart = Math.max(0, messages.length - 40);
   const visibleMessages = messages.slice(visibleMessageStart);
   const liveTokenUsage = latestTokenUsage(streamEvents);
   const worklogCounts = streamEventCounts(streamEvents);
-  const runningMessageContent = runningMessageContentFromStream(assistantDraft, streamEvents);
+  const runningMessageContent = runningMessageContentFromStream(assistantDraft, streamEvents, locale);
   const latestStreamEventAt = streamEvents.at(-1)?.createdAt;
   const contextWindowState = latestContextWindowState(streamEvents)
     ?? retainedContextWindowState
@@ -420,7 +452,7 @@ export function ChatPanel({
       handleRunningGuidance(prompt, currentPendingReferences);
       return;
     }
-    const runtimeIssue = runtimeReadinessIssue(runtimeHealth);
+    const runtimeIssue = runtimeReadinessIssue(runtimeHealth, locale);
     if (runtimeIssue) {
       setErrorText(runtimeIssue.message);
       setComposerExpanded(true);
@@ -521,11 +553,11 @@ export function ChatPanel({
     const queuedEvent: AgentStreamEvent = {
       id: makeId('evt'),
       type: 'queued',
-      label: '已提交',
+      label: 'Submitted',
       detail: prompt,
       createdAt: nowIso(),
     };
-    const acceptedEvent = buildRequestAcceptedProgressEvent(prompt);
+    const acceptedEvent = buildRequestAcceptedProgressEvent(prompt, locale);
     const initialEvents = [queuedEvent, acceptedEvent];
     streamEventsRef.current = initialEvents;
     setStreamEvents(initialEvents);
@@ -587,7 +619,7 @@ export function ChatPanel({
       if (!isCurrentTurn()) return;
       if (result.status === 'failed') {
         runFailed = true;
-        runEndedReason = '当前 run 失败；追加引导已保留为 deferred，等待用户确认、修复或重新运行后再合并。';
+        runEndedReason = 'The run failed. Additional guidance was saved for the next turn.';
         restoreSubmittedDraftAfterFailure(prompt, references, sourceGuidance);
         const activeGuidanceForRun = guidanceForCurrentRun(sourceGuidance, guidanceQueueRef.current);
         const failedSessionWithProcess = attachGuidanceQueueToSessionRun(
@@ -595,10 +627,10 @@ export function ChatPanel({
           result.failedRunId,
           activeGuidanceForRun,
           'deferred',
-          '当前 run 失败或中断前已接收追加引导，等待 run orchestration 下一轮处理。',
+          'Additional guidance was received before the run ended and will be handled in the next turn.',
         );
         const failedMessage = failedSessionWithProcess.messages.at(-1)?.content ?? result.message;
-        setErrorText(compactFailureNotice(failedMessage));
+        setErrorText(compactFailureNotice(failedMessage, locale));
         const failedSessionWithHandledGuidance = markGuidanceTerminalOutcome(failedSessionWithProcess, sourceGuidance, {
           status: 'deferred',
           handlingRunId: result.failedRunId,
@@ -626,11 +658,11 @@ export function ChatPanel({
       const wasUserCancelled = userAbortRequestedRef.current;
       runFailed = !wasUserCancelled;
       runEndedReason = wasUserCancelled
-        ? '用户显式中断当前 backend run；正在处理的追加引导已跨过 cancel boundary，不能自动恢复。'
-        : '当前 run 在 backend orchestration 期间异常结束；追加引导已保留为 deferred，等待用户确认、修复或重新运行后再合并。';
+        ? 'The current run was stopped by the user. Queued guidance was not auto-resumed.'
+        : 'The current run ended unexpectedly. Additional guidance was saved for the next turn.';
       const message = error instanceof Error ? error.message : String(error);
       restoreSubmittedDraftAfterFailure(prompt, references, sourceGuidance);
-      setErrorText(compactFailureNotice(message || runEndedReason));
+      setErrorText(compactFailureNotice(message || runEndedReason, locale));
       const sessionWithSourceGuidance = markGuidanceTerminalOutcome(activeSessionRef.current, sourceGuidance, {
         status: wasUserCancelled ? 'rejected' : 'deferred',
         handlingRunId: wasUserCancelled ? 'cancelled-before-run-result' : 'orchestrator-throw',
@@ -697,7 +729,7 @@ export function ChatPanel({
     return markGuidanceTerminalOutcome(session, guidance, {
       status: 'merged',
       handlingRunId,
-      reason: '排队引导已作为独立下一轮发送，并绑定到实际处理 run。',
+      reason: 'Queued guidance was sent as a separate next turn.',
     });
   }
 
@@ -755,7 +787,7 @@ export function ChatPanel({
       references,
       receivedAt: now,
       activeRunId,
-      reason: '当前 backend run 正在执行，已排队等待 run orchestration 下一轮处理。',
+      reason: 'A run is in progress, so this guidance was queued for the next turn.',
     });
     const { session: nextSession } = appendRunningGuidanceRecord(activeSessionRef.current, guidance);
     activeSessionRef.current = nextSession;
@@ -792,7 +824,7 @@ export function ChatPanel({
     if (rejectedIds.length) {
       const rejectedSession = updateGuidanceQueueRecords(activeSessionRef.current, rejectedIds, {
         status: 'rejected',
-        reason: '用户中断当前 backend run；尚未处理的排队引导已被清空。',
+        reason: 'The user stopped the current run; unprocessed queued guidance was cleared.',
       });
       activeSessionRef.current = rejectedSession;
       onSessionChange(rejectedSession);
@@ -853,6 +885,7 @@ export function ChatPanel({
     isSending,
     config,
     runtimeHealth,
+    locale,
   });
 
   function beginEditMessage(message: SciForgeMessage) {
@@ -877,7 +910,10 @@ export function ChatPanel({
       activeSessionRef.current = editResult.session;
       onSessionChange(editResult.session);
       if (editResult.branch?.requiresUserConfirmation) {
-        setErrorText('历史消息已更新；下游结果存在冲突，请确认是否保留受影响 refs 或从编辑边界重新运行。');
+        setErrorText(t({
+          'zh-CN': '历史已更新。请检查受影响的引用，或从编辑点重新运行。',
+          'en-US': 'History was updated. Review affected references or rerun from the edit point.',
+        }));
         return;
       }
       void submitTurn(content, editedMessage.references ?? []);
@@ -900,17 +936,36 @@ export function ChatPanel({
       await copyTextToClipboard(content);
       setErrorText('');
     } catch (error) {
-      setErrorText(error instanceof Error ? error.message : '复制失败：浏览器拒绝访问剪贴板。');
+      setErrorText(error instanceof Error ? error.message : t({
+        'zh-CN': '复制失败：剪贴板访问被阻止。',
+        'en-US': 'Copy failed: clipboard access was blocked.',
+      }));
     }
   }
 
   function handleGuiCommand(commandText: string) {
     const nextInput = commandText.trim();
     if (!nextInput) return;
-    inputRef.current = nextInput;
-    onInputChange(nextInput);
-    setComposerExpanded(true);
-    window.requestAnimationFrame(() => composerTextareaRef.current?.focus());
+    const lower = nextInput.toLowerCase();
+    const approved = /\bapprove\b/.test(lower) && !/\b(?:reject|cancel)\b/.test(lower);
+    const rejected = /\b(?:reject|cancel)\b/.test(lower);
+    if (approved || rejected) {
+      const sent = realtimeControlRef.current?.send({
+        controlType: 'approval_response',
+        approved,
+        requestId: makeId('approval'),
+        reason: approved ? 'user-approved' : 'user-rejected',
+      }) === true;
+      setErrorText(sent ? '' : t({
+        'zh-CN': '这个确认请求已不再活跃。请发起新的请求后再响应。',
+        'en-US': 'This confirmation request is no longer active. Start a new request to respond.',
+      }));
+      return;
+    }
+    setErrorText(t({
+      'zh-CN': '只有请求处于活跃状态时才能发送这个操作。',
+      'en-US': 'This action can only be sent while the request is active.',
+    }));
   }
 
   return (
@@ -946,12 +1001,13 @@ export function ChatPanel({
         visibleMessageCount={visibleMessages.length}
         collapsedBeforeCount={visibleMessageStart}
         onScroll={handleMessagesScroll}
+        locale={locale}
         runningMessage={isSending ? (
-          <div className="message scenario">
+          <div className="message scenario assistant-message">
             <div className="message-body">
               <div className="message-meta">
-                <strong>SciForge</strong>
-                <Badge variant="info">进行中</Badge>
+                <strong className="message-role-label">{t({ 'zh-CN': '助手', 'en-US': 'Assistant' })}</strong>
+                <Badge variant="info">{t({ 'zh-CN': '运行中', 'en-US': 'Running' })}</Badge>
               </div>
               <MessageContent content={runningMessageContent} references={[]} onObjectFocus={onObjectFocus} />
               <RunningWorkProcess
@@ -960,6 +1016,8 @@ export function ChatPanel({
                 tokenUsage={liveTokenUsage}
                 backend={config.agentBackend}
                 guidanceCount={guidanceQueue.length}
+                onObjectFocus={handleObjectReferenceClick}
+                locale={locale}
               />
             </div>
           </div>
@@ -974,7 +1032,13 @@ export function ChatPanel({
           return (
           <div
             key={message.id}
-            className={cx('message', message.role, activeRunId && messageRunId === activeRunId && 'active-run')}
+            className={cx(
+              'message',
+              message.role,
+              message.role !== 'user' && message.role !== 'system' && 'assistant-message',
+              message.role !== 'user' && message.role !== 'system' && messageHasPersistentMeta(message, provenanceKind, showMessageConfidence, showDiagnosticBadges) && 'message-has-persistent-meta',
+              activeRunId && messageRunId === activeRunId && 'active-run',
+            )}
             data-testid="chat-message"
             data-message-id={message.id}
             data-message-provenance={messageProvenanceAttribute(provenanceKind)}
@@ -984,48 +1048,66 @@ export function ChatPanel({
           >
             <div className="message-body">
               <div className="message-meta">
-                <strong>{message.role === 'user' ? '你' : message.role === 'system' ? '系统' : 'SciForge'}</strong>
+                <strong className="message-role-label">{message.role === 'user'
+                  ? t({ 'zh-CN': '你', 'en-US': 'You' })
+                  : message.role === 'system'
+                    ? t({ 'zh-CN': '系统', 'en-US': 'System' })
+                    : t({ 'zh-CN': '助手', 'en-US': 'Assistant' })}</strong>
                 {messageRunId ? (
-                  <button type="button" className="message-run-link" onClick={() => onActiveRunChange(messageRunId)} title="查看本轮过程">
-                    过程
+                  <button
+                    type="button"
+                    className="message-run-link"
+                    onClick={() => onActiveRunChange(messageRunId)}
+                    title={t({ 'zh-CN': '活动', 'en-US': 'Activity' })}
+                    aria-label={t({ 'zh-CN': '查看本轮活动', 'en-US': 'View activity for this turn' })}
+                  >
+                    <ActivityIcon size={13} aria-hidden />
                   </button>
                 ) : null}
                 {showMessageConfidence ? <ConfidenceBar value={message.confidence as number} /> : null}
                 {showDiagnosticBadges && message.evidence ? <EvidenceTag level={message.evidence} /> : null}
                 {showDiagnosticBadges && message.claimType ? <ClaimTag type={message.claimType} /> : null}
                 <MessageProvenanceBadge message={message} />
-                <RunVerificationTag session={session} runId={messageRunId} />
-                {message.status === 'failed' ? <Badge variant="danger">未完成</Badge> : null}
-                {message.guidanceQueue ? <Badge variant={guidanceBadgeVariant(message.guidanceQueue.status)}>{guidanceStatusLabel(message.guidanceQueue.status)}</Badge> : null}
+                <RunVerificationTag session={session} runId={messageRunId} locale={locale} />
+                {message.status === 'failed' ? <Badge variant="danger">{t({ 'zh-CN': '未完成', 'en-US': 'Incomplete' })}</Badge> : null}
+                {message.guidanceQueue ? <Badge variant={guidanceBadgeVariant(message.guidanceQueue.status)}>{guidanceStatusLabel(message.guidanceQueue.status, locale)}</Badge> : null}
                 {message.acceptance ? (
                   <Badge variant={message.acceptance.pass ? 'success' : message.acceptance.severity === 'repairable' ? 'warning' : 'danger'}>
-                    验收：{acceptanceSeverityLabel(message.acceptance.severity)}
+                    {t({ 'zh-CN': '检查', 'en-US': 'Check' })}: {acceptanceSeverityLabel(message.acceptance.severity, locale)}
                   </Badge>
                 ) : null}
                 <div className="message-actions">
                   <button
                     type="button"
                     onClick={() => void copyMessageContent(message.content)}
-                    title="复制 Markdown"
+                    title={t({ 'zh-CN': '复制 Markdown', 'en-US': 'Copy Markdown' })}
+                    aria-label={t({ 'zh-CN': '复制 Markdown', 'en-US': 'Copy Markdown' })}
                   >
-                    复制
+                    <ClipboardCopy size={13} aria-hidden />
                   </button>
-                  <button onClick={() => beginEditMessage(message)}>编辑</button>
+                  <button
+                    type="button"
+                    onClick={() => beginEditMessage(message)}
+                    title={t({ 'zh-CN': '编辑消息', 'en-US': 'Edit message' })}
+                    aria-label={t({ 'zh-CN': '编辑消息', 'en-US': 'Edit message' })}
+                  >
+                    <Pencil size={13} aria-hidden />
+                  </button>
                 </div>
               </div>
               {editingMessageId === message.id ? (
                 <div className="message-editor">
                   <textarea value={editingContent} onChange={(event) => setEditingContent(event.target.value)} />
                   <div>
-                    <button onClick={saveEditMessage}>保存</button>
-                    <button onClick={() => setEditingMessageId(null)}>取消</button>
+                    <button onClick={saveEditMessage}>{t({ 'zh-CN': '保存', 'en-US': 'Save' })}</button>
+                    <button onClick={() => setEditingMessageId(null)}>{t({ 'zh-CN': '取消', 'en-US': 'Cancel' })}</button>
                   </div>
                 </div>
               ) : (
                 <>
                   {message.role === 'user' ? (
                     <>
-                      <FollowupBindingLine message={message} />
+                      <FollowupBindingLine message={message} locale={locale} />
                       <MessageContent
                         content={sanitizeUserProjectionText(message.content) ?? message.content}
                         references={inlineObjectReferencesForMessage(message, session)}
@@ -1042,15 +1124,16 @@ export function ChatPanel({
                         onGuiCommand={handleGuiCommand}
                         onObjectFocus={handleObjectReferenceClick}
                       />
-                      {messageRunId ? (
+                      {messageRunId && runKeyInfoHasContent(session, messageRunId) ? (
                         <details className="message-fold depth-2 codex-result-clues-fold">
                           <summary>
-                            <span>结果线索</span>
+                            <span>{t({ 'zh-CN': '结果', 'en-US': 'Results' })}</span>
                           </summary>
                           <RunKeyInfo
                             runId={messageRunId}
                             session={session}
                             onObjectFocus={handleObjectReferenceClick}
+                            locale={locale}
                           />
                         </details>
                       ) : null}
@@ -1060,6 +1143,7 @@ export function ChatPanel({
                           session={session}
                           trace={message.expandable}
                           onObjectFocus={handleObjectReferenceClick}
+                          locale={locale}
                         />
                       ) : null}
                     </>
@@ -1081,13 +1165,17 @@ export function ChatPanel({
       {errorText ? (
         <div className="composer-error">
           <span>{errorText}</span>
-          <small>可检查 Runtime Health、启动缺失服务，或改用当前场景的 workspace capability 重试。</small>
+          <small>{t({
+            'zh-CN': '检查 runtime 健康状态、启动缺失服务，或从当前工作区重试。',
+            'en-US': 'Check runtime health, start missing services, or retry from the current workspace.',
+          })}</small>
         </div>
       ) : null}
       <RunReadinessBar
         ok={readiness.ok}
         severity={readiness.severity}
         message={readiness.message}
+        locale={locale}
       />
       <ChatComposer
         expanded={composerExpanded}
@@ -1096,14 +1184,14 @@ export function ChatPanel({
         composerHeight={composerHeight}
         referencePickMode={referencePickMode}
         pendingReferences={pendingReferences}
-        contextMeter={<ContextWindowMeter state={contextWindowState} running={isSending} />}
+        contextMeter={<ContextWindowMeter state={contextWindowState} running={isSending} locale={locale} />}
         fileInputRef={fileInputRef}
         textareaRef={composerTextareaRef}
         runtimeContext={{
-          provider: config.modelProvider || 'provider unset',
-          model: config.modelName.trim() || 'model unset',
+          provider: config.modelProvider || t({ 'zh-CN': '未设置 provider', 'en-US': 'provider unset' }),
+          model: config.modelName.trim() || t({ 'zh-CN': '未设置 model', 'en-US': 'model unset' }),
           workspacePath: config.workspacePath,
-          permissionMode: '可写工作区',
+          permissionMode: t({ 'zh-CN': '工作区可写', 'en-US': 'workspace writable' }),
         }}
         topAddon={(
           <TargetInstanceSelector
@@ -1132,25 +1220,25 @@ export function ChatPanel({
   );
 }
 
-function acceptanceSeverityLabel(value: string) {
-  if (value === 'repairable') return '可恢复';
-  if (value === 'blocking') return '阻塞';
-  if (value === 'warning') return '需留意';
+function acceptanceSeverityLabel(value: string, locale?: SupportedLocale) {
+  if (value === 'repairable') return locale === 'zh-CN' ? '可修复' : 'repairable';
+  if (value === 'blocking') return locale === 'zh-CN' ? '被阻止' : 'blocked';
+  if (value === 'warning') return locale === 'zh-CN' ? '警告' : 'warning';
   return value;
 }
 
-function FollowupBindingLine({ message }: { message: SciForgeMessage }) {
+function FollowupBindingLine({ message, locale }: { message: SciForgeMessage; locale?: SupportedLocale }) {
   const references = message.references ?? [];
   if (!references.length) return null;
   const labels = references
     .slice(0, 3)
     .map((reference) => reference.title || reference.ref)
-    .join('、');
+    .join(', ');
   const overflow = references.length > 3 ? ` +${references.length - 3}` : '';
   return (
     <div className="message-continuity-line">
-      <span>继续基于当前对话</span>
-      <span>和 {labels}{overflow}</span>
+      <span>{locale === 'zh-CN' ? '继续基于' : 'Continuing with'}</span>
+      <span>{labels}{overflow}</span>
     </div>
   );
 }
@@ -1215,7 +1303,7 @@ async function copyTextToClipboard(text: string) {
   textarea.select();
   textarea.setSelectionRange(0, text.length);
   try {
-    if (!document.execCommand('copy')) throw new Error('复制失败：浏览器拒绝访问剪贴板。');
+    if (!document.execCommand('copy')) throw new Error('Copy failed: clipboard access was blocked.');
   } finally {
     textarea.remove();
   }

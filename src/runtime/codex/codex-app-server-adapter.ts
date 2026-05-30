@@ -19,12 +19,21 @@ export interface CodexAppServerStartTurnRequest {
   commandId: string;
   attemptId: string;
   profile?: string;
+  allowOpenAiRuntime?: boolean;
+  guiExtension?: {
+    enabled?: boolean;
+    statePath?: string;
+  };
   abortSignal?: AbortSignal;
 }
 
 export interface CodexAppServerTurnStream {
   threadId?: string;
   turnId?: string;
+  provider?: string;
+  model?: string;
+  profile?: string;
+  workspacePath?: string;
   events: AsyncIterable<unknown>;
 }
 
@@ -63,15 +72,17 @@ export class CodexAppServerAdapter implements AgentCliAdapter {
       commandId,
       attemptId,
       profile: input.profile ?? this.options.profile,
+      allowOpenAiRuntime: input.allowOpenAiRuntime,
+      guiExtension: input.guiExtension,
       abortSignal: input.abortSignal,
     });
     const turnId = stream.turnId ?? commandId;
     this.activeTurns.set(commandId, { threadId: stream.threadId ?? input.codexSessionId, turnId });
     const metadata: CodexRuntimeMetadata = {
-      provider: this.options.provider ?? 'codex-app-server',
-      model: this.options.model ?? 'app-server-native',
-      profile: input.profile ?? this.options.profile ?? 'codex-app-server',
-      workspace,
+      provider: stream.provider ?? this.options.provider ?? 'codex-app-server',
+      model: stream.model ?? this.options.model ?? 'app-server-native',
+      profile: stream.profile ?? input.profile ?? this.options.profile ?? 'codex-app-server',
+      workspace: stream.workspacePath ?? workspace,
       commandId,
       attemptId,
       commandText,

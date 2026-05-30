@@ -20,7 +20,7 @@ test('workspace explorer root tree renders selected expanded root and children',
   assert.match(html, /aria-selected="true"/);
   assert.match(html, /aria-expanded="true"/);
   assert.match(html, /is-selected/);
-  assert.match(html, /aria-label="折叠"/);
+  assert.match(html, /aria-label="Collapse"/);
   assert.match(html, /SciForge/);
   assert.match(html, /child-node/);
   assert.match(html, /role="group"/);
@@ -39,7 +39,7 @@ test('workspace explorer root tree hides children when collapsed', () => {
   }));
 
   assert.match(html, /aria-expanded="false"/);
-  assert.match(html, /aria-label="展开"/);
+  assert.match(html, /aria-label="Expand"/);
   assert.match(html, /\/tmp\/SciForge/);
   assert.doesNotMatch(html, /child-node/);
 });

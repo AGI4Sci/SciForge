@@ -25,7 +25,7 @@ export function ReferenceContextMenu({
         onClick={() => onAdd(reference)}
       >
         <Quote size={14} />
-        引用到对话栏
+        Add to chat
       </button>
     </div>
   );

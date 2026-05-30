@@ -17,13 +17,13 @@ export function TargetInstanceSelector({
     <div className="target-instance-selector" data-peer-active={selectedPeer ? 'true' : 'false'}>
       <label>
         <ServerCog size={14} />
-        <span>目标工作区</span>
+        <span>Target workspace</span>
         <select
           value={selectedPeer ? selectedPeer.name : CURRENT_TARGET_INSTANCE_VALUE}
           onChange={(event) => onSelect(event.currentTarget.value)}
-          aria-label="目标工作区"
+          aria-label="Target workspace"
         >
-          <option value={CURRENT_TARGET_INSTANCE_VALUE}>当前实例</option>
+          <option value={CURRENT_TARGET_INSTANCE_VALUE}>Current workspace</option>
           {peers.map((peer) => (
             <option key={`${peer.name}-${peer.workspaceWriterUrl}`} value={peer.name}>
               {peer.name}
@@ -33,8 +33,8 @@ export function TargetInstanceSelector({
       </label>
       {selectedPeer ? (
         <div className="target-instance-warning" role="status">
-          <strong>当前正在读取并修改目标工作区</strong>
-          <span>{selectedPeer.name}{selectedPeer.workspacePath ? ` · ${selectedPeer.workspacePath}` : ' · 已连接目标 writer'}</span>
+          <strong>Using target workspace</strong>
+          <span>{selectedPeer.name}{selectedPeer.workspacePath ? ` · ${selectedPeer.workspacePath}` : ' · connected'}</span>
         </div>
       ) : null}
     </div>

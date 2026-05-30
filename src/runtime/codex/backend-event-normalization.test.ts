@@ -190,6 +190,247 @@ test('preserves backend command lifecycle fields for native shell execution', ()
   assert.doesNotMatch(normalized.events[1]?.outputSummary ?? '', /provider\.example/);
 });
 
+test('uses app-server call ids to merge command lifecycles and preserves full diff output over summaries', () => {
+  const normalized = normalizeBackendEvents([
+    {
+      type: 'item.started',
+      thread_id: 'thread-1',
+      turn_id: 'turn-1',
+      payload: {
+        item: {
+          call_id: 'call-diff-1',
+          type: 'command_execution',
+          command: "/bin/zsh -lc 'diff -u old.ts new.ts'",
+          status: 'in_progress',
+        },
+      },
+    },
+    {
+      type: 'item.completed',
+      thread_id: 'thread-1',
+      turn_id: 'turn-1',
+      payload: {
+        item: {
+          call_id: 'call-diff-1',
+          type: 'command_execution',
+          outputSummary: 'diff exited 1',
+          output: [
+            '--- old.ts',
+            '+++ new.ts',
+            '@@ -1 +1 @@',
+            '-before',
+            '+after',
+          ].join('\n'),
+          exit_code: 1,
+          status: 'failed',
+        },
+      },
+    },
+  ], { backend: 'codex-app-server', now: fixedNow });
+
+  assert.deepEqual(normalized.events.map((event) => event.type), ['tool_started', 'tool_completed']);
+  assert.equal(normalized.events[0]?.itemId, 'call-diff-1');
+  assert.equal(normalized.events[1]?.itemId, 'call-diff-1');
+  assert.equal(normalized.events[1]?.outputSummary, 'diff exited 1');
+  assert.match(normalized.events[1]?.diff ?? '', /@@ -1 \+1 @@/);
+});
+
+test('promotes app-server sub-agent refs from result payloads before input refs', () => {
+  const normalized = normalizeBackendEvents([
+    {
+      type: 'tool.completed',
+      thread_id: 'thread-1',
+      turn_id: 'turn-1',
+      item: {
+        id: 'subagent-tool-1',
+        name: 'multi_agent_v1.spawn_agent',
+        input: {
+          agentId: '019e7649-worker',
+          ref: 'artifact:input-placeholder',
+          transcriptRef: '.sciforge/raw/input-transcript.json',
+        },
+        result: {
+          agentId: '019e7649-worker',
+          parentAgentId: 'root-agent',
+          ref: 'artifact:subagent-result',
+          transcriptRef: 'transcript:worker-1',
+          resultSummary: 'Sub-agent audit completed.',
+          refs: ['artifact:subagent-result', 'trace:unsafe-ref'],
+        },
+      },
+    },
+  ], { backend: 'codex-app-server', now: fixedNow });
+
+  const event = normalized.events[0];
+  assert.equal(event?.type, 'tool_completed');
+  assert.equal(event?.ref, 'artifact:subagent-result');
+  assert.equal(event?.agentId, '019e7649-worker');
+  assert.equal(event?.parentAgentId, 'root-agent');
+  assert.equal(event?.transcriptRef, 'transcript:worker-1');
+  assert.equal(event?.resultSummary, 'Sub-agent audit completed.');
+  assert.deepEqual(event?.refs, ['artifact:subagent-result', 'transcript:worker-1']);
+  assert.doesNotMatch(JSON.stringify({ ref: event?.ref, transcriptRef: event?.transcriptRef, refs: event?.refs }), /\.sciforge\/raw|trace:unsafe-ref|input-placeholder/);
+});
+
+test('promotes app-server read file tool inputs into trusted file preview refs', () => {
+  const normalized = normalizeBackendEvents([
+    {
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-app-1',
+        turnId: 'turn-app-1',
+        item: {
+          id: 'dyn-read-1',
+          type: 'dynamicToolCall',
+          tool: 'read_file',
+          arguments: { path: 'PROJECT.md' },
+          status: 'completed',
+        },
+      },
+    },
+    {
+      type: 'tool.completed',
+      thread_id: 'thread-app-1',
+      turn_id: 'turn-app-1',
+      item: {
+        id: 'unsafe-read-1',
+        name: 'read_file',
+        input: { path: '/tmp/private-note.md', fileRef: 'file:.sciforge/raw/private.json' },
+        status: 'completed',
+      },
+    },
+  ], { backend: 'codex-app-server', now: fixedNow });
+
+  const trusted = normalized.events[0];
+  assert.equal(trusted?.type, 'tool_completed');
+  assert.equal(trusted?.toolName, 'read_file');
+  assert.equal(trusted?.filePath, 'PROJECT.md');
+  assert.equal(trusted?.fileRef, 'file:PROJECT.md');
+
+  const unsafe = normalized.events[1];
+  assert.equal(unsafe?.type, 'tool_completed');
+  assert.equal(unsafe?.toolName, 'read_file');
+  assert.equal(unsafe?.filePath, undefined);
+  assert.equal(unsafe?.fileRef, undefined);
+});
+
+test('normalizes Codex app-server slash-form rich client events and structured dynamic tool output', () => {
+  const structuredContent = {
+    agentId: '019e7649-worker',
+    parentAgentId: 'root-agent',
+    ref: 'artifact:subagent-result',
+    transcriptRef: 'transcript:worker-1',
+    resultSummary: 'Sub-agent audit completed.',
+    refs: ['artifact:subagent-result', 'transcript:worker-1'],
+  };
+  const normalized = normalizeBackendEvents([
+    { method: 'thread/started', params: { thread: { id: 'thread-app-1', cwd: '/tmp/sciforge-workspace' } } },
+    { method: 'turn/started', params: { threadId: 'thread-app-1', turn: { id: 'turn-app-1' } } },
+    { method: 'item/started', params: { threadId: 'thread-app-1', turnId: 'turn-app-1', item: { id: 'user-message-1', type: 'userMessage', text: 'Prompt' } } },
+    { method: 'item/completed', params: { threadId: 'thread-app-1', turnId: 'turn-app-1', item: { id: 'user-message-1', type: 'userMessage', text: 'Prompt' } } },
+    { method: 'item/started', params: { threadId: 'thread-app-1', turnId: 'turn-app-1', item: { id: 'message-1', type: 'agentMessage', text: '' } } },
+    { method: 'item/agentMessage/delta', params: { threadId: 'thread-app-1', turnId: 'turn-app-1', itemId: 'message-1', delta: 'Working' } },
+    {
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-app-1',
+        turnId: 'turn-app-1',
+        item: {
+          id: 'dyn-subagent-1',
+          type: 'dynamicToolCall',
+          namespace: 'multi_agent_v1',
+          tool: 'spawn_agent',
+          arguments: { message: 'inspect PROJECT.md' },
+          status: 'completed',
+          success: true,
+          contentItems: [{ type: 'inputText', text: JSON.stringify({ structuredContent }) }],
+          durationMs: 4,
+        },
+      },
+    },
+    { method: 'turn/completed', params: { threadId: 'thread-app-1', turn: { id: 'turn-app-1', status: 'completed' } } },
+  ], { backend: 'codex-app-server', now: fixedNow });
+
+  assert.deepEqual(normalized.events.map((event) => event.type), [
+    'thread_started',
+    'turn_started',
+    'item_started',
+    'item_completed',
+    'item_started',
+    'message_delta',
+    'tool_completed',
+    'done',
+  ]);
+  assert.equal(normalized.events[5]?.text, 'Working');
+  const subagent = normalized.events[6];
+  assert.equal(subagent?.toolName, 'multi_agent_v1.spawn_agent');
+  assert.equal(subagent?.agentId, '019e7649-worker');
+  assert.equal(subagent?.parentAgentId, 'root-agent');
+  assert.equal(subagent?.ref, 'artifact:subagent-result');
+  assert.equal(subagent?.transcriptRef, 'transcript:worker-1');
+  assert.deepEqual(subagent?.refs, ['artifact:subagent-result', 'transcript:worker-1']);
+  assert.match(subagent?.resultSummary ?? '', /Sub-agent audit/);
+});
+
+test('promotes app-server GUI module completions into GUI events', () => {
+  const normalized = normalizeBackendEvents([
+    {
+      type: 'tool.completed',
+      thread_id: 'thread-1',
+      turn_id: 'turn-1',
+      item: {
+        id: 'gui-present-1',
+        name: 'module.invoke',
+        input: { moduleId: 'gui', intent: 'present', input: { text: 'Shown in GUI' } },
+        result: { ok: true, refs: ['artifact:gui-present'] },
+      },
+    },
+    {
+      type: 'tool.completed',
+      thread_id: 'thread-1',
+      turn_id: 'turn-1',
+      item: {
+        id: 'gui-ask-1',
+        name: 'gui.ask_user',
+        input: { title: 'Confirm', message: 'Continue?' },
+        result: { ok: false },
+      },
+    },
+  ], { backend: 'codex-app-server', now: fixedNow });
+
+  assert.deepEqual(normalized.events.map((event) => event.type), ['gui_present', 'gui_ask_user']);
+  assert.equal(normalized.traceSteps[0]?.moduleId, 'gui');
+  assert.equal(normalized.traceSteps[0]?.intent, 'present');
+  assert.equal(normalized.traceSteps[1]?.moduleId, 'gui');
+  assert.equal(normalized.traceSteps[1]?.intent, 'ask_user');
+});
+
+test('maps unknown app-server dynamic tools to actions trace intent', () => {
+  const normalized = normalizeBackendEvents([
+    {
+      method: 'item/started',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          id: 'dyn-web-1',
+          type: 'dynamicToolCall',
+          namespace: 'web',
+          tool: 'search',
+          arguments: { query: 'agentic research' },
+          status: 'inProgress',
+        },
+      },
+    },
+  ], { backend: 'codex-app-server', now: fixedNow });
+
+  assert.equal(normalized.events[0]?.type, 'tool_started');
+  assert.equal(normalized.events[0]?.toolName, 'web.search');
+  assert.equal(normalized.traceSteps[0]?.moduleId, 'actions');
+  assert.equal(normalized.traceSteps[0]?.functionName, 'invoke');
+  assert.equal(normalized.traceSteps[0]?.intent, 'web.search');
+});
+
 test('passes Codex exec JSONL normalized events through the backend-neutral stream', () => {
   const metadata: CodexRuntimeMetadata = {
     provider: 'sciforge-private-provider',
@@ -218,6 +459,30 @@ test('passes Codex exec JSONL normalized events through the backend-neutral stre
 
   const serialized = JSON.stringify(normalized);
   assert.doesNotMatch(serialized, /stdout-secret|provider\.example|sciforge-private-provider|private-runtime-model/);
+});
+
+test('passes Codex exec JSONL structured diff through the backend-neutral stream', () => {
+  const normalized = normalizeBackendEvents([{
+    schemaVersion: 'sciforge.codex.normalized-event.v1',
+    type: 'tool_completed',
+    toolName: 'shell',
+    command: "/bin/zsh -lc 'diff -u old.ts new.ts'",
+    itemId: 'item-diff',
+    status: 'failed',
+    exitCode: 1,
+    outputSummary: 'diff exited 1',
+    diff: [
+      '--- old.ts',
+      '+++ new.ts',
+      '@@ -1 +1 @@',
+      '-before',
+      '+after',
+    ].join('\n'),
+  }], { backend: 'codex-exec-json', now: fixedNow });
+
+  assert.equal(normalized.events[0]?.type, 'tool_completed');
+  assert.match(normalized.events[0]?.diff ?? '', /@@ -1 \+1 @@/);
+  assert.equal(normalized.events[0]?.outputSummary, 'diff exited 1');
 });
 
 test('redacts secret, url, provider, and model fields in nested backend payloads', () => {

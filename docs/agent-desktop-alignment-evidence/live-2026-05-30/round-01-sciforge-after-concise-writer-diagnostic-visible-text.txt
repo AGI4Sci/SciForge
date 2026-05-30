@@ -1,0 +1,44 @@
+导航
+对话
+项目对话
+workspace
+当前
+hello
+最近提问：hello
+工具
+应用
+自动化
+即将推出
+项目
+workspace
+
+Workspace Writer 响应不是 JSON：http://127.0.0.1:5174 返回的是 SciForge UI 页面，不是 Workspace Writer JSON；请把 Workspace Writer URL 指向 writer 服务。 下一步：确认 Workspace Writer URL 正确；启动 npm run workspace:server；检查 workspace path 是否存在且可写 [workspace-writer-html-response]
+
+workspace
+加载中…
+打开其他文件夹…
+手动输入路径
+设置
+注释
+SciForge · 1 项需处理
+SciForge 工作台
+vision-sense
+on
+复制
+编辑
+
+hello
+
+提示
+输入研究问题后即可运行；Shift+Enter 换行，Enter 发送。
+输入研究问题，或点选对象后继续追问...
+结果视图
+证据矩阵
+全部
+只看图
+只看证据
+只看过程
+等待
+暂无可预览内容
+
+主回答优先保留在聊天中；有可预览内容时会显示在这里。

@@ -1,4 +1,5 @@
 import { ChevronsUp, FilePlus, FolderPlus, RefreshCw } from 'lucide-react';
+import { useI18n } from '../../i18nContext';
 
 export function WorkspaceExplorerToolbar({
   onCreateFile,
@@ -11,6 +12,11 @@ export function WorkspaceExplorerToolbar({
   onRefresh: () => void | Promise<void>;
   onCollapseAll: () => void;
 }) {
+  const { t } = useI18n();
+  const newFileLabel = t({ 'zh-CN': '新建文件', 'en-US': 'New file' });
+  const newFolderLabel = t({ 'zh-CN': '新建文件夹', 'en-US': 'New folder' });
+  const refreshLabel = t({ 'zh-CN': '刷新', 'en-US': 'Refresh' });
+  const collapseAllLabel = t({ 'zh-CN': '全部折叠', 'en-US': 'Collapse all' });
   return (
     <div className="scenario-list-explorer-toolbar">
       <div className="explorer-view-toolbar">
@@ -18,8 +24,8 @@ export function WorkspaceExplorerToolbar({
           type="button"
           className="explorer-icon-btn"
           onClick={() => void onCreateFile()}
-          title="新建文件"
-          aria-label="新建文件"
+          title={newFileLabel}
+          aria-label={newFileLabel}
         >
           <FilePlus size={16} />
         </button>
@@ -27,15 +33,15 @@ export function WorkspaceExplorerToolbar({
           type="button"
           className="explorer-icon-btn"
           onClick={() => void onCreateFolder()}
-          title="新建文件夹"
-          aria-label="新建文件夹"
+          title={newFolderLabel}
+          aria-label={newFolderLabel}
         >
           <FolderPlus size={16} />
         </button>
-        <button type="button" className="explorer-icon-btn" onClick={() => void onRefresh()} title="刷新" aria-label="刷新">
+        <button type="button" className="explorer-icon-btn" onClick={() => void onRefresh()} title={refreshLabel} aria-label={refreshLabel}>
           <RefreshCw size={16} />
         </button>
-        <button type="button" className="explorer-icon-btn" onClick={onCollapseAll} title="全部折叠" aria-label="全部折叠">
+        <button type="button" className="explorer-icon-btn" onClick={onCollapseAll} title={collapseAllLabel} aria-label={collapseAllLabel}>
           <ChevronsUp size={16} />
         </button>
       </div>

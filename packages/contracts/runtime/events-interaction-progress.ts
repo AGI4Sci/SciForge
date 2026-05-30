@@ -156,10 +156,10 @@ export function runtimeRequestAcceptedProgressCopy(prompt: string): RuntimeReque
   const compactPrompt = compactRuntimePromptSummary(prompt);
   return {
     detail: compactPrompt
-      ? `正在把本轮请求交给 workspace runtime：${compactPrompt}`
-      : '正在把本轮请求交给 workspace runtime。',
-    waitingFor: 'workspace runtime 首个事件',
-    nextStep: '收到后端事件后继续展示读取、执行、写入和验证进展。',
+      ? `Sending this request to the workspace agent: ${compactPrompt}`
+      : 'Sending this request to the workspace agent.',
+    waitingFor: 'first workspace agent event',
+    nextStep: 'Show reading, running, writing, and checking progress as events arrive.',
     reason: PROCESS_PROGRESS_REASON.REQUEST_ACCEPTED_BEFORE_BACKEND_STREAM,
   };
 }
@@ -266,12 +266,12 @@ export function runtimeInteractionProgressBudgetSummary(budget: RuntimeInteracti
 }
 
 function interactionProgressEventLabel(type: RuntimeInteractionProgressEventType) {
-  if (type === PROCESS_PROGRESS_EVENT_TYPE) return '过程';
-  if (type === CLARIFICATION_NEEDED_EVENT_TYPE) return '需要澄清';
-  if (type === HUMAN_APPROVAL_REQUIRED_EVENT_TYPE) return '需要确认';
-  if (type === INTERACTION_REQUEST_EVENT_TYPE) return '需要交互';
-  if (type === GUIDANCE_QUEUED_EVENT_TYPE) return '引导已排队';
-  if (type === RUN_CANCELLED_EVENT_TYPE) return '运行取消';
+  if (type === PROCESS_PROGRESS_EVENT_TYPE) return 'Activity';
+  if (type === CLARIFICATION_NEEDED_EVENT_TYPE) return 'Needs clarification';
+  if (type === HUMAN_APPROVAL_REQUIRED_EVENT_TYPE) return 'Needs approval';
+  if (type === INTERACTION_REQUEST_EVENT_TYPE) return 'Needs input';
+  if (type === GUIDANCE_QUEUED_EVENT_TYPE) return 'Guidance queued';
+  if (type === RUN_CANCELLED_EVENT_TYPE) return 'Run cancelled';
   return 'Workspace Runtime';
 }
 

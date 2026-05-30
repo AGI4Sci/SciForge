@@ -320,9 +320,9 @@ SciForge 不定义新的 agent extension API。所有算法和策略扩展都使
 - Codex custom model provider / `model_providers.<id>.base_url`。
 - 必要时的本地 Codex provider proxy。
 
-默认生产集成目标是上游 Codex app-server + custom model provider，优先通过配置接入 DeepSeek `deepseek-v4-flash` 或用户配置的低成本 provider endpoint。GUI 启动或连接 Codex app-server，把用户操作翻译成文本写入 agent host，再消费其 thread/turn/item/approval 事件流。`codex exec --json` 只作为迁移兼容路径；Claude Code stream-json 可作为可选 backend adapter。SciForge 不再要求常驻 AgentServer；历史 `AgentServer` / `runtime gateway` 只能作为当前代码兼容层或迁移来源，不是最终架构依赖，也不得出现在新增 public API 中。
+默认生产集成目标是上游 Codex app-server + custom model provider，优先通过配置接入 DeepSeek `deepseek-v4-flash` 或用户配置的低成本 provider endpoint。GUI 启动或连接 Codex app-server，把用户操作翻译成文本写入 agent host，再消费其 thread/turn/item/approval 事件流。`codex exec --json` 只作为 legacy/test-only 兼容和历史证据；Claude Code stream-json 可作为可选 backend adapter。SciForge 不再要求常驻 AgentServer；历史 `AgentServer` / `runtime gateway` 只能作为当前代码兼容层或迁移来源，不是最终架构依赖，也不得出现在新增 public API 中。
 
-迁移目标应收敛为 `CodexAppServerAdapter` 首选、`CodexExecJsonAdapter` 兼容、`ClaudeStreamJsonAdapter` 可选。现有 `AgentCliAdapter` 继续隔离进程和 JSONL 细节，但不能把 `codex exec --json` 视为长期富客户端体验上限。细节见 [`CodexRuntimeMigration.md`](CodexRuntimeMigration.md)。
+迁移目标应收敛为 `CodexAppServerAdapter` 生产默认、`CodexExecJsonAdapter` legacy/test-only、`ClaudeStreamJsonAdapter` 可选。现有 `AgentCliAdapter` 继续隔离进程和事件细节，但不能把 `codex exec --json` 视为产品 fallback。细节见 [`CodexRuntimeMigration.md`](CodexRuntimeMigration.md)。
 
 因此 SciForge 不再定义 `registerCommand`、`registerTool`、`registerPolicy`、`HarnessRuntime`、`CapabilityGateway` 或自己的 TUI plugin manifest。
 
@@ -344,7 +344,7 @@ SciForge 不定义新的 agent extension API。所有算法和策略扩展都使
 
 ## Desktop Packaging Direction
 
-SciForge 的本地软件形态应复用现有 React + Vite GUI、Node/TypeScript workspace runtime、`packages/backend` proxy 和上游 Codex CLI bridge，而不是重写一套原生 UI 或 agent host。第一阶段桌面壳选型为 **Electron**：
+SciForge 的本地软件形态应复用现有 React + Vite GUI、Node/TypeScript workspace runtime、`packages/backend` proxy 和上游 Codex app-server，而不是重写一套原生 UI 或 agent host。第一阶段桌面壳选型为 **Electron**：
 
 - Electron main process 负责窗口、菜单、协议、系统权限、日志目录、自动更新入口和本地 runtime 生命周期。
 - Vite build 产物作为 renderer 加载；React/UI 继续遵守上面的 presentation boundary，不引入 Electron-only 业务逻辑。

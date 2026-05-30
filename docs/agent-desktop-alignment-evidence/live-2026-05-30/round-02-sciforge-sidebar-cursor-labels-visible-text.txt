@@ -1,0 +1,61 @@
+导航
+对话
+New Agent
+⌘N
+REPOSITORIES
+workspace
+当前
+No branch
+Local environment
+Context
+
+暂无对话
+
+工具
+应用
+自动化
+即将推出
+项目
+workspace
+
+已加载 2 项
+
+workspace
+.sciforge
+parallel
+打开其他文件夹…
+手动输入路径
+设置
+注释
+SciForge · 1 项需处理
+SciForge 工作台
+vision-sense
+on
+复制
+编辑
+
+检索近三年关于 KRAS G12C 抑制剂耐药机制的文献，并标注证据强度。
+
+SciForge
+91%
+队列研究
+推断
+seed-demo
+复制
+编辑
+
+已形成可审计文献证据矩阵：47 篇相关文献中，12 篇直接研究耐药机制。EGFR/MET 旁路激活是当前支持最强的机制，KRAS Y96D 二次突变和组织学转化为需要并排展示的备选机制。
+
+提示
+输入研究问题后即可运行；Shift+Enter 换行，Enter 发送。
+输入研究问题，或点选对象后继续追问...
+结果视图
+证据矩阵
+全部
+只看图
+只看证据
+只看过程
+等待
+暂无可预览内容
+
+主回答优先保留在聊天中；有可预览内容时会显示在这里。

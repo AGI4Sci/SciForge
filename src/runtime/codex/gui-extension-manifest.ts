@@ -44,6 +44,9 @@ export const GUI_NATIVE_RESOURCE_URIS = [
   'sciforge-gui:/gui/shell.json',
   'sciforge-gui:/gui/hot-region.json',
   'sciforge-gui:/gui/intent-log.json',
+  'sciforge-gui:/gui/regions/sidebar/summary.md',
+  'sciforge-gui:/gui/regions/sidebar/refs.json',
+  'sciforge-gui:/gui/regions/sidebar/actions.json',
   ...guiPresentationResourcePaths().map((path) => `sciforge-gui:${path}`),
 ] as const;
 

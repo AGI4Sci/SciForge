@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import type { AgentStreamEvent } from '../../domain';
 import { CODEX_REALTIME_SESSION_TRANSPORT_STATUS } from './codexRealtimeSession';
 import { normalizeWorkspaceRuntimeEvent, readWorkspaceToolStream } from './runtimeEvents';
@@ -183,6 +184,57 @@ test('SSE reader promotes native Runtime Codex assistant messages when gui.prese
   assert.equal(result.displayIntent?.conversationProjection?.verificationState?.liveAcceptanceEligible, false);
 });
 
+test('SSE reader joins CJK native assistant deltas without inserting word spaces', async () => {
+  const commandId = 'codex-command-native-cjk-message';
+  const body = [
+    'event: message_delta',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'message_delta',
+      text: '简洁直',
+      commandId,
+    })}`,
+    '',
+    'event: message_delta',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'message_delta',
+      text: '给 / 少说',
+      commandId,
+    })}`,
+    '',
+    'event: message_delta',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'message_delta',
+      text: '废话',
+      commandId,
+    })}`,
+    '',
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      message: 'Runtime Codex completed successfully.',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+    })}`,
+    '',
+  ].join('\n');
+  const response = createSseResponse(body);
+
+  const stream = await readWorkspaceToolStream(response, () => undefined);
+  const result = stream.result as {
+    message?: string;
+    displayIntent?: { conversationProjection?: { visibleAnswer?: { text?: string } } };
+  };
+
+  assert.equal(stream.error, undefined);
+  assert.equal(result.message, '简洁直给 / 少说废话');
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.text, '简洁直给 / 少说废话');
+});
+
 test('SSE reader promotes gui.present into the visible Runtime Codex result', async () => {
   const commandId = 'codex-command-gui-present';
   const body = [
@@ -314,8 +366,8 @@ test('SSE reader promotes gui.ask_user into a visible confirmation result', asyn
   };
 
   assert.equal(stream.error, undefined);
-  assert.match(result.message ?? '', /Computer Use confirmation required/);
-  assert.match(result.message ?? '', /vision-trace\.json/);
+  assert.match(result.message ?? '', /Confirmation required/);
+  assert.doesNotMatch(result.message ?? '', /vision-trace\.json|Approval ref|Action ref|Choices|\/computer-use approve/);
   assert.equal(result.guiAskUser?.source, `gui.ask_user:${commandId}`);
   assert.deepEqual(result.guiAskUser?.relatedRefs, ['.sciforge/vision-runs/run-1/vision-trace.json']);
   assert.equal(result.guiAskUser?.choices?.[0]?.commandText, '/computer-use approve --approval-ref approval-1');
@@ -323,10 +375,7 @@ test('SSE reader promotes gui.ask_user into a visible confirmation result', asyn
   assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.status, 'needs-human');
   assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.liveAcceptanceEligible, true);
   assert.deepEqual(result.displayIntent?.conversationProjection?.artifacts?.map((artifact) => artifact.ref), ['.sciforge/vision-runs/run-1/vision-trace.json']);
-  assert.deepEqual(result.displayIntent?.conversationProjection?.recoverActions, [
-    '/computer-use approve --approval-ref approval-1',
-    '/computer-use reject --approval-ref approval-1',
-  ]);
+  assert.deepEqual(result.displayIntent?.conversationProjection?.recoverActions, []);
 });
 
 test('SSE reader turns Computer Use TUI host action metadata into visible result and confirmation refs', async () => {
@@ -399,10 +448,9 @@ test('SSE reader turns Computer Use TUI host action metadata into visible result
   };
 
   assert.equal(stream.error, undefined);
-  assert.match(result.message ?? '', /Computer Use confirmation required/);
-  assert.match(result.message ?? '', /Allow Computer Use to click/);
-  assert.match(result.message ?? '', /approval:computer-use:cu-risk/);
-  assert.match(result.message ?? '', new RegExp(traceRef.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(result.message ?? '', /Confirmation required/);
+  assert.match(result.message ?? '', /Allow the operation to click/);
+  assert.doesNotMatch(result.message ?? '', /approval:computer-use:cu-risk|vision-trace|Approval ref|Evidence refs|Choices|\/computer-use/);
   assert.equal(result.guiAskUser?.approvalRequest?.id, 'approval:computer-use:cu-risk');
   assert.deepEqual(result.guiAskUser?.relatedRefs, [traceRef, screenshotRef]);
   assert.ok(result.guiPresentation?.displayedRefs?.includes(traceRef));
@@ -478,18 +526,16 @@ test('NDJSON reader turns Computer Use TUI host action metadata into visible res
   };
 
   assert.equal(stream.error, undefined);
-  assert.match(result.message ?? '', /Computer Use confirmation required/);
-  assert.match(result.message ?? '', /Allow Computer Use to click the guarded Submit button/);
+  assert.match(result.message ?? '', /Confirmation required/);
+  assert.match(result.message ?? '', /Allow the operation to click the guarded Submit button/);
+  assert.doesNotMatch(result.message ?? '', /approval:computer-use:ndjson|\/computer-use approve|\/computer-use reject|Evidence refs|Choices/);
   assert.equal(result.guiAskUser?.source, `gui.ask_user:${commandId}:computer-use`);
   assert.deepEqual(result.guiAskUser?.relatedRefs, [traceRef, screenshotRef]);
   assert.equal(result.guiAskUser?.choices?.[0]?.commandText, '/computer-use approve --approval-ref "approval:computer-use:ndjson"');
   assert.equal(result.guiPresentation?.source, `gui.present:${commandId}:computer-use`);
   assert.ok(result.guiPresentation?.displayedRefs?.includes(traceRef));
   assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.status, 'needs-human');
-  assert.deepEqual(result.displayIntent?.conversationProjection?.recoverActions, [
-    '/computer-use approve --approval-ref "approval:computer-use:ndjson"',
-    '/computer-use reject --approval-ref "approval:computer-use:ndjson"',
-  ]);
+  assert.deepEqual(result.displayIntent?.conversationProjection?.recoverActions, []);
   assert.match((seen[0] as AgentStreamEvent | undefined)?.detail ?? '', /visible GUI confirmation/);
 });
 
@@ -704,7 +750,7 @@ test('Runtime Codex realtime transport marker declares RT-02 WebSocket bridge co
   assert.deepEqual(CODEX_REALTIME_SESSION_TRANSPORT_STATUS.blockers, []);
 });
 
-test('Runtime Codex raw JSONL and stderr warnings normalize to folded audit summaries', () => {
+test('Runtime Codex raw runtime events and stderr warnings normalize to folded audit summaries', () => {
   const rawJsonl = normalizeWorkspaceRuntimeEvent({
     type: 'raw_jsonl',
     rawJsonl: '{"secret":"RAW_JSONL_SHOULD_NOT_RENDER"}',
@@ -717,10 +763,20 @@ test('Runtime Codex raw JSONL and stderr warnings normalize to folded audit summ
     raw: { stream: 'stderr', chunk: 'Plugin manifest warning: failed to load plugin manifest from /tmp/plugin.json' },
   });
 
-  assert.match(rawJsonl.detail ?? '', /raw JSONL recorded/i);
+  assert.match(rawJsonl.detail ?? '', /raw runtime events recorded/i);
+  assert.doesNotMatch(rawJsonl.detail ?? '', /raw JSONL/i);
   assert.match(stderr.detail ?? '', /plugin manifest warning recorded/i);
   assert.doesNotMatch(rawJsonl.detail ?? '', /RAW_JSONL_SHOULD_NOT_RENDER/);
   assert.doesNotMatch(stderr.detail ?? '', /failed to load plugin|\/tmp\/plugin\.json/);
+});
+
+test('Runtime Codex product client does not predeclare raw JSONL audit refs', async () => {
+  const source = await readFile(new URL('./client.ts', import.meta.url), 'utf8');
+
+  assert.doesNotMatch(source, /audit:codex-runtime:[^`]*:raw-jsonl/);
+  assert.doesNotMatch(source, /Runtime Codex raw JSONL audit/);
+  assert.match(source, /audit:codex-app-server:[^`]*:raw-events/);
+  assert.match(source, /Runtime Codex runtime-event audit/);
 });
 
 test('Runtime Codex shell lifecycle details prefer structured command fields', () => {
@@ -742,7 +798,7 @@ test('Runtime Codex shell lifecycle details prefer structured command fields', (
   });
 
   assert.equal(started.type, 'tool-call');
-  assert.equal(started.label, '调用 shell');
+  assert.equal(started.label, 'Calling shell');
   assert.match(started.detail ?? '', /Shell command started/);
   assert.match(started.detail ?? '', /cat PROJECT\.md/);
   assert.equal(completed.type, 'tool-result');

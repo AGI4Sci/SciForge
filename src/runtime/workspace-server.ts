@@ -111,8 +111,8 @@ import {
   parseJsonEnv,
   stringValue,
 } from './workspace-server-local-config.js';
-import { CODEX_RUNTIME_WEBSOCKET_PATH, handleCodexRuntimeRoutes, handleCodexRuntimeUpgrade } from './codex/codex-runtime-server.js';
-import { CodexExecJsonAdapter } from './codex/codex-exec-json-adapter.js';
+import { CODEX_RUNTIME_STREAM_PATH, CODEX_RUNTIME_WEBSOCKET_PATH, handleCodexRuntimeRoutes, handleCodexRuntimeUpgrade } from './codex/codex-runtime-server.js';
+import { createCodexAppServerRuntimeAdapter } from './codex/codex-runtime-adapter.js';
 import { assertCodexRuntimeConfig, codexRuntimeEnv } from './codex/codex-runtime-config.js';
 import { normalizeInstanceName, parallelProfile } from './parallel-instance-profile.js';
 import { assertCodexNoForkGate } from '../../packages/backend/src/codex-compatibility-gate.js';
@@ -237,11 +237,10 @@ const workspaceServer = createServer(async (req, res) => {
     }
     return;
   }
-  if (url.pathname === '/api/sciforge/runtime/codex/stream') {
+  if (url.pathname === CODEX_RUNTIME_STREAM_PATH) {
     const runtimeEnv = await prepareRuntimeCodexEnvFromLocalConfig();
-    if (await handleCodexRuntimeRoutes(req, res, url, new CodexExecJsonAdapter({ env: runtimeEnv }))) return;
+    if (await handleCodexRuntimeRoutes(req, res, url, createCodexAppServerRuntimeAdapter({ env: runtimeEnv }))) return;
   }
-  if (await handleCodexRuntimeRoutes(req, res, url)) return;
   if (url.pathname === '/api/sciforge/instance/stable-version' && req.method === 'GET') {
     try {
       writeJson(res, 200, {
@@ -594,7 +593,7 @@ function handleWorkspaceUpgrade(req: IncomingMessage, socket: Duplex, head: Buff
   if (url.pathname === CODEX_RUNTIME_WEBSOCKET_PATH) {
     void (async () => {
       const runtimeEnv = await prepareRuntimeCodexEnvFromLocalConfig();
-      if (!handleCodexRuntimeUpgrade(req, socket, head, new CodexExecJsonAdapter({ env: runtimeEnv }))) socket.destroy();
+      if (!handleCodexRuntimeUpgrade(req, socket, head, createCodexAppServerRuntimeAdapter({ env: runtimeEnv }))) socket.destroy();
     })().catch(() => socket.destroy());
     return;
   }

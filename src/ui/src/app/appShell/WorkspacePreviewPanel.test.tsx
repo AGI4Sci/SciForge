@@ -21,15 +21,15 @@ test('workspace preview panel renders file metadata and save/copy controls', () 
     onCopyText: () => undefined,
   }));
 
-  assert.match(html, /文件预览/);
+  assert.match(html, /File preview/);
   assert.match(html, /report\.md/);
-  assert.match(html, /未保存/);
-  assert.match(html, /aria-label="复制路径"/);
-  assert.match(html, /aria-label="复制内容"/);
-  assert.match(html, /aria-label="保存文件"/);
+  assert.match(html, /Unsaved/);
+  assert.match(html, /aria-label="Copy path"/);
+  assert.match(html, /aria-label="Copy contents"/);
+  assert.match(html, /aria-label="Save file"/);
   assert.match(html, /markdown/);
   assert.match(html, /2\.0 KB/);
-  assert.match(html, /report\.md 文件内容/);
+  assert.match(html, /report\.md contents/);
 });
 
 test('workspace preview panel renders clean state with disabled save', () => {
@@ -48,7 +48,7 @@ test('workspace preview panel renders clean state with disabled save', () => {
     onCopyText: () => undefined,
   }));
 
-  assert.match(html, /已保存/);
+  assert.match(html, /Saved/);
   assert.match(html, /disabled=""/);
-  assert.match(html, /notes\.txt 文件内容/);
+  assert.match(html, /notes\.txt contents/);
 });

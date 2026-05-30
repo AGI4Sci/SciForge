@@ -12,9 +12,9 @@ test('workspace explorer toolbar keeps file, folder, refresh, and collapse comma
     onCollapseAll: () => undefined,
   }));
 
-  assert.match(html, /aria-label="新建文件"/);
-  assert.match(html, /aria-label="新建文件夹"/);
-  assert.match(html, /aria-label="刷新"/);
-  assert.match(html, /aria-label="全部折叠"/);
+  assert.match(html, /aria-label="New file"/);
+  assert.match(html, /aria-label="New folder"/);
+  assert.match(html, /aria-label="Refresh"/);
+  assert.match(html, /aria-label="Collapse all"/);
   assert.match(html, /explorer-view-toolbar/);
 });

@@ -249,9 +249,9 @@ export function resolveViewPlan({
     const artifact = findBestInteractiveArtifactForType(resultArtifacts, artifactType);
     const module = findBestInteractiveViewModuleForArtifactType(uiModuleRegistry, artifact?.type ?? artifactType, displayIntent.preferredModules);
     if (module) {
-      addItem(module, artifact, interactiveViewPlanSourceIds.displayIntent, {}, artifact ? undefined : `等待 artifact type=${artifactType}`);
+      addItem(module, artifact, interactiveViewPlanSourceIds.displayIntent, {}, artifact ? undefined : `Waiting for result type=${artifactType}`);
     } else {
-      diagnostics.push(`没有已发布 UI module 可消费 artifact type=${artifactType}`);
+      diagnostics.push(`No published UI module can preview result type=${artifactType}`);
     }
   }
 
@@ -339,7 +339,7 @@ function displayIntentFromConversationProjection(
     primaryGoal: conversationProjectionVisibleText(projection)
       ?? firstProjectionArtifact?.label
       ?? conversationProjectionPrimaryDiagnostic(projection)
-      ?? '展示本轮产物',
+      ?? 'Show latest result',
     requiredArtifactTypes: artifactTypes,
     preferredModules: [],
     fallbackAcceptable: [],
@@ -350,7 +350,7 @@ function displayIntentFromConversationProjection(
 
 function projectionlessDisplayIntent(): DisplayIntent {
   return {
-    primaryGoal: '等待本轮结果',
+    primaryGoal: 'Waiting for results',
     requiredArtifactTypes: [],
     preferredModules: [],
     fallbackAcceptable: [],
@@ -497,7 +497,7 @@ function isUserVisibleDeliveryArtifact(artifact: RuntimeArtifact) {
 
 function projectionlessAuditDiagnostics(session: SciForgeSession, activeRun?: SciForgeRun) {
   return projectionlessRunHasAuditMaterial(session, activeRun)
-    ? ['本轮还没有可展示的主结果；执行记录、校验和恢复线索仅作为审计材料，不生成主视图。']
+    ? ['No main result is ready yet. Work records, checks, and recovery notes stay folded as supporting details.']
     : [];
 }
 
@@ -567,10 +567,10 @@ function itemMatchesFocusMode(item: ResolvedViewPlanItem, focusMode: ResultFocus
 
 
 export function viewPlanSectionLabel(section: ViewPlanSection) {
-  if (section === 'primary') return '核心结果';
-  if (section === 'supporting') return '支撑证据';
-  if (section === 'provenance') return '执行记录';
-  return '原始数据 / fallback';
+  if (section === 'primary') return 'Primary';
+  if (section === 'supporting') return 'Sources';
+  if (section === 'provenance') return 'Activity';
+  return 'Raw data';
 }
 
 export function selectDefaultResultItems(items: ResolvedViewPlanItem[], focusMode: ResultFocusMode) {

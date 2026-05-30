@@ -60,8 +60,8 @@ export function ExplorerContextMenu({
   if (!entry) {
     return (
       <ContextMenu x={x} y={y}>
-        <ContextMenuItem onClick={onCreateFile}>新建文件</ContextMenuItem>
-        <ContextMenuItem onClick={onCreateFolder}>新建文件夹</ContextMenuItem>
+        <ContextMenuItem onClick={onCreateFile}>New file</ContextMenuItem>
+        <ContextMenuItem onClick={onCreateFolder}>New folder</ContextMenuItem>
       </ContextMenu>
     );
   }
@@ -70,64 +70,64 @@ export function ExplorerContextMenu({
     const singleFolder = !multiSelect && entry.kind === 'folder';
     return (
       <ContextMenu x={x} y={y}>
-        <ContextMenuItem onClick={onCreateFile}>新建文件</ContextMenuItem>
-        <ContextMenuItem onClick={onCreateFolder}>新建文件夹</ContextMenuItem>
+        <ContextMenuItem onClick={onCreateFile}>New file</ContextMenuItem>
+        <ContextMenuItem onClick={onCreateFolder}>New folder</ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem onClick={onOpen} disabled={!singleFolder}>打开文件夹</ContextMenuItem>
+        <ContextMenuItem onClick={onOpen} disabled={!singleFolder}>Open folder</ContextMenuItem>
         <ContextMenuItem onClick={onToggleFolder} disabled={!singleFolder}>
-          {singleFolder && expandedFolders.has(entry.path) ? '折叠' : '展开'}
+          {singleFolder && expandedFolders.has(entry.path) ? 'Collapse' : 'Expand'}
         </ContextMenuItem>
-        <ContextMenuItem onClick={onRevealInFolder} disabled={multiSelect}>在文件管理器中显示</ContextMenuItem>
+        <ContextMenuItem onClick={onRevealInFolder} disabled={multiSelect}>Reveal in Finder</ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onClick={() => onReferenceToChat(referenceForWorkspaceEntry(entry))} disabled={multiSelect}>
-          <span className="context-menu-item-leading"><Quote size={14} aria-hidden />引用到对话栏</span>
+          <span className="context-menu-item-leading"><Quote size={14} aria-hidden />Add to chat</span>
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onClick={onCut}>
-          <span className="context-menu-item-leading"><Scissors size={14} aria-hidden />剪切{batchLabel}</span>
+          <span className="context-menu-item-leading"><Scissors size={14} aria-hidden />Cut{batchLabel}</span>
         </ContextMenuItem>
         <ContextMenuItem onClick={onCopy}>
-          <span className="context-menu-item-leading"><ClipboardCopy size={14} aria-hidden />复制{batchLabel}</span>
+          <span className="context-menu-item-leading"><ClipboardCopy size={14} aria-hidden />Copy{batchLabel}</span>
         </ContextMenuItem>
         <ContextMenuItem onClick={onPaste} disabled={!canPaste}>
-          <span className="context-menu-item-leading"><ClipboardPaste size={14} aria-hidden />粘贴</span>
+          <span className="context-menu-item-leading"><ClipboardPaste size={14} aria-hidden />Paste</span>
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem onClick={onCopyPath}>复制路径{batchLabel}</ContextMenuItem>
-        <ContextMenuItem onClick={onCopyRelativePath}>复制相对路径{batchLabel}</ContextMenuItem>
+        <ContextMenuItem onClick={onCopyPath}>Copy path{batchLabel}</ContextMenuItem>
+        <ContextMenuItem onClick={onCopyRelativePath}>Copy relative path{batchLabel}</ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem onClick={onRename} disabled={multiSelect}>重命名</ContextMenuItem>
-        <ContextMenuItem danger onClick={onDelete}>删除{batchLabel}</ContextMenuItem>
+        <ContextMenuItem onClick={onRename} disabled={multiSelect}>Rename</ContextMenuItem>
+        <ContextMenuItem danger onClick={onDelete}>Delete{batchLabel}</ContextMenuItem>
       </ContextMenu>
     );
   }
 
   return (
     <ContextMenu x={x} y={y}>
-      <ContextMenuItem onClick={onOpen}>打开</ContextMenuItem>
-      <ContextMenuItem onClick={onOpenInWorkbench}>在工作台打开</ContextMenuItem>
-      <ContextMenuItem onClick={onOpenExternal}>系统默认程序打开</ContextMenuItem>
-      <ContextMenuItem onClick={onRevealInFolder}>在文件管理器中显示</ContextMenuItem>
+      <ContextMenuItem onClick={onOpen}>Open</ContextMenuItem>
+      <ContextMenuItem onClick={onOpenInWorkbench}>Open in workspace</ContextMenuItem>
+      <ContextMenuItem onClick={onOpenExternal}>Open externally</ContextMenuItem>
+      <ContextMenuItem onClick={onRevealInFolder}>Reveal in Finder</ContextMenuItem>
       <ContextMenuSeparator />
       <ContextMenuItem onClick={() => onReferenceToChat(referenceForWorkspaceEntry(entry))}>
-        <span className="context-menu-item-leading"><Quote size={14} aria-hidden />引用到对话栏</span>
+        <span className="context-menu-item-leading"><Quote size={14} aria-hidden />Add to chat</span>
       </ContextMenuItem>
       <ContextMenuSeparator />
       <ContextMenuItem onClick={onCut}>
-        <span className="context-menu-item-leading"><Scissors size={14} aria-hidden />剪切</span>
+        <span className="context-menu-item-leading"><Scissors size={14} aria-hidden />Cut</span>
       </ContextMenuItem>
       <ContextMenuItem onClick={onCopy}>
-        <span className="context-menu-item-leading"><ClipboardCopy size={14} aria-hidden />复制</span>
+        <span className="context-menu-item-leading"><ClipboardCopy size={14} aria-hidden />Copy</span>
       </ContextMenuItem>
       <ContextMenuItem onClick={onPaste} disabled={!canPaste}>
-        <span className="context-menu-item-leading"><ClipboardPaste size={14} aria-hidden />粘贴</span>
+        <span className="context-menu-item-leading"><ClipboardPaste size={14} aria-hidden />Paste</span>
       </ContextMenuItem>
       <ContextMenuSeparator />
-      <ContextMenuItem onClick={onCopyPath}>复制路径</ContextMenuItem>
-      <ContextMenuItem onClick={onCopyRelativePath}>复制相对路径</ContextMenuItem>
+      <ContextMenuItem onClick={onCopyPath}>Copy path</ContextMenuItem>
+      <ContextMenuItem onClick={onCopyRelativePath}>Copy relative path</ContextMenuItem>
       <ContextMenuSeparator />
-      <ContextMenuItem onClick={onRename}>重命名</ContextMenuItem>
-      <ContextMenuItem danger onClick={onDelete}>删除</ContextMenuItem>
+      <ContextMenuItem onClick={onRename}>Rename</ContextMenuItem>
+      <ContextMenuItem danger onClick={onDelete}>Delete</ContextMenuItem>
     </ContextMenu>
   );
 }

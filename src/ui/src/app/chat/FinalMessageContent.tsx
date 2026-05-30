@@ -1,5 +1,5 @@
 import type { ObjectReference } from '../../domain';
-import { mergeObjectReferences, normalizeObjectReferencePresentationRole } from '../../../../../packages/support/object-references';
+import { isUserFacingObjectReference, mergeObjectReferences, normalizeObjectReferencePresentationRole } from '../../../../../packages/support/object-references';
 import { MessageContent } from './MessageContent';
 import { splitFinalMessagePresentation } from './finalMessagePresentation';
 import { sanitizeUserProjectionText } from '../conversation-projection-view-model';
@@ -23,24 +23,28 @@ export function FinalMessageContent({
   const presentation = splitFinalMessagePresentation(content, resultPresentation);
   const effectiveReferences = mergeResultPresentationReferences(references, resultPresentation);
   const fallbackContent = presentation.primaryContent || content;
-  const primaryContent = sanitizeUserProjectionText(fallbackContent) ?? fallbackContent;
   const showRuntimeGui = hasRuntimeGuiSurface(runtimeGui);
+  const sanitizedContent = sanitizeUserProjectionText(fallbackContent) ?? fallbackContent;
+  const primaryContent = showRuntimeGui && looksLikeRuntimeGuiPlaceholderAnswer(sanitizedContent) ? '' : sanitizedContent;
   return (
     <>
-      <MessageContent content={primaryContent} references={effectiveReferences} onObjectFocus={onObjectFocus} />
+      {primaryContent.trim() ? (
+        <MessageContent
+          content={primaryContent}
+          references={effectiveReferences}
+          onObjectFocus={onObjectFocus}
+          className="final-answer-prose"
+        />
+      ) : null}
       {showRuntimeGui ? (
         <RuntimeGuiPanel surface={runtimeGui} onCommand={onGuiCommand} />
       ) : null}
       {presentation.auditSections.length ? (
         <details className="message-fold depth-2 final-message-audit-fold" key={finalAuditFoldKey(content, presentation.summary)}>
-          <summary>过程与诊断 · {presentation.summary}</summary>
+          <summary>More activity · {presentation.summary}</summary>
           <div className="execution-process-body">
             {presentation.auditSections.map((section, index) => (
               <div className="final-message-audit-section" key={`${section.evidenceType}-${index}`}>
-                <div className="final-message-audit-label">
-                  <strong>{section.label}</strong>
-                  <span>{section.evidenceType} · {section.importance}</span>
-                </div>
                 <MessageContent content={sanitizeUserProjectionText(section.text) ?? section.text} references={effectiveReferences} onObjectFocus={onObjectFocus} />
               </div>
             ))}
@@ -52,7 +56,25 @@ export function FinalMessageContent({
 }
 
 function mergeResultPresentationReferences(references: ObjectReference[], resultPresentation: unknown) {
-  return mergeObjectReferences(references, resultPresentationReferences(resultPresentation), 24);
+  return mergeObjectReferences(references, resultPresentationReferences(resultPresentation), 24)
+    .filter(isVisibleFinalMessageReference);
+}
+
+function isVisibleFinalMessageReference(reference: ObjectReference) {
+  return isUserFacingObjectReference(reference)
+    && !isInternalFinalMessageRefText(reference.ref)
+    && !isInternalFinalMessageRefText(reference.title)
+    && !isInternalFinalMessageRefText(reference.summary)
+    && !isInternalFinalMessageRefText(reference.provenance?.path)
+    && !isInternalFinalMessageRefText(reference.provenance?.dataRef);
+}
+
+function isInternalFinalMessageRefText(value: string | undefined) {
+  return typeof value === 'string' && (
+    /(?:^|[/#:])\.sciforge(?:[/#:]|$)/i.test(value)
+    || /(?:^|[/#:])(?:stdout|stderr|raw|trace|diagnostic|diagnostics|audit|execution-unit|execution_unit)(?:[/#:]|$)/i.test(value)
+    || /^run:/i.test(value)
+  );
 }
 
 function resultPresentationReferences(resultPresentation: unknown): ObjectReference[] {
@@ -146,4 +168,10 @@ function finalAuditFoldKey(content: string, summary: string) {
     hash = Math.imul(31, hash) + value.charCodeAt(index) | 0;
   }
   return `final-audit-${Math.abs(hash).toString(36)}`;
+}
+
+function looksLikeRuntimeGuiPlaceholderAnswer(content: string) {
+  const compact = content.replace(/\s+/g, ' ').trim();
+  return /^#{0,2}\s*(?:Computer Use )?(?:confirmation required|operation result)\b/i.test(compact)
+    || /\/computer-use\s+(?:approve|reject)\b|Approval ref:|Action ref:|Evidence refs:|Choices:/i.test(compact);
 }

@@ -1,0 +1,46 @@
+{
+  "schemaVersion": "sciforge.agent-desktop-alignment.live-summary.v1",
+  "id": "round-13-cursor-complex-same-prompt-fold-expand-summary",
+  "roundId": "live-round-13",
+  "side": "cursor-agent-computer-use",
+  "tool": "computer-use",
+  "target": "cursor-agent-desktop",
+  "capturedAt": "2026-05-30T20:35:15+08:00",
+  "promptId": "complex-same-prompt-fold-expand",
+  "promptDigest": "sha256:4e7496a2b04a00cc",
+  "promptSummary": "Read PROJECT.md and chat/result-renderer implementation, answer in Chinese with concise conclusions, bullets for final answer/process expansion/tool preview/right canvas/verification, no table, no raw local paths or logs.",
+  "requirementsObserved": [
+    "completed-state-collapsed",
+    "running-state-live-updates",
+    "file-preview",
+    "right-side-result-presentation"
+  ],
+  "visualStates": {
+    "collapsed": "Cursor Agent shows lightweight Worked/Explored rows inside the same conversation canvas.",
+    "expanded": "Expanded content reads like page text: action rows remain plain, read rows expose line ranges without status badges, and thought text flows as ordinary paragraphs under a single subtle disclosure row."
+  },
+  "alignmentChecks": [
+    "same complex prompt comparison was used",
+    "expanded process content is not framed as a web card",
+    "file read actions act as the preview affordance rather than a separate Preview button",
+    "right editor/preview area is separate from the answer and does not duplicate process text",
+    "raw transcript/log/provider details are absent from the visible expanded answer"
+  ],
+  "observations": [
+    "User-provided Cursor screenshot for the same prompt shows the expanded Thought section as low-chrome prose in the same page flow.",
+    "Computer Use confirmed the Cursor Agent conversation title and file-preview/editor state for the same SciForge chat alignment task.",
+    "Cursor remains the visual baseline for this round; no positive sub-agent transcript/result baseline was added."
+  ],
+  "evidenceRefs": [
+    "computer-use:round-13-cursor-complex-same-prompt-fold-expand",
+    "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-cursor-complex-same-prompt-fold-expand-summary.json"
+  ],
+  "limitations": [
+    "Cursor screenshot content was used as visual reference without storing raw accessibility tree or full transcript.",
+    "Sub-agent positive parity remains governed by the existing open difference and is not claimed by this round."
+  ],
+  "redaction": {
+    "status": "passed",
+    "notes": "Summary is refs-first and excludes raw desktop tree, raw transcript, provider details, secrets, and local absolute paths."
+  }
+}

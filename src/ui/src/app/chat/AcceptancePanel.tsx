@@ -24,10 +24,6 @@ export function AcceptancePanel({
             {diagnostic.secondary.map((item) => <span key={item}>{item}</span>)}
           </div>
         ) : null}
-        <details className="turn-acceptance-raw">
-          <summary>查看原始诊断</summary>
-          <pre>{diagnostic.rawDetails}</pre>
-        </details>
       </div>
     </div>
   );

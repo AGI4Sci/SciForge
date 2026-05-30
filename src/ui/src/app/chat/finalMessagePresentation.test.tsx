@@ -58,8 +58,11 @@ test('final message audit details render collapsed while object references stay 
   );
 
   assert.match(markup, /Result:/);
+  assert.match(markup, /final-answer-prose/);
   assert.match(markup, /data-sciforge-reference=/);
   assert.match(markup, /final-message-audit-fold/);
+  assert.match(markup, /More activity/);
+  assert.doesNotMatch(markup, /过程与诊断|execution-audit|raw-json|log-output|tool-output|diagnostic|Supporting detail|Detail/);
   assert.doesNotMatch(markup, /<details class="message-fold depth-2 final-message-audit-fold" open/);
 });
 
@@ -71,11 +74,38 @@ test('plain failure diagnostics are folded out of the primary chat answer', () =
 
   const presentation = splitFinalMessagePresentation(content);
 
-  assert.match(presentation.primaryContent, /任务未完成/);
+  assert.match(presentation.primaryContent, /The task did not finish/);
   assert.doesNotMatch(presentation.primaryContent, /stderrRef=/);
   assert.equal(presentation.auditSections.length, 1);
   assert.equal(presentation.auditSections[0].evidenceType, 'execution-audit');
   assert.match(presentation.auditSections[0].text, /failureReason/);
+});
+
+test('python tracebacks from failed research runs collapse behind a concise failure summary', () => {
+  const content = [
+    '0 0 Traceback (most recent call last):',
+    '  File "/opt/homebrew/Caskroom/miniconda/base/lib/python3.13/site-packages/urllib3/connectionpool.py", line 787, in urlopen',
+    '    response = self._make_request(conn)',
+    'http.client.RemoteDisconnected: Remote end closed connection without response',
+    '',
+    'The above exception was the direct cause of the following exception:',
+    '',
+    'urllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host="export.arxiv.org", port=443): Max retries exceeded with url: /api/query (Caused by ProxyError("Unable to connect to proxy"))',
+    '',
+    'During handling of the above exception, another exception occurred:',
+    '',
+    'Traceback (most recent call last):',
+    '  File "<string>", line 1, in <module>',
+    'requests.exceptions.ProxyError: HTTPSConnectionPool(host="export.arxiv.org", port=443): Max retries exceeded',
+  ].join('\n');
+
+  const presentation = splitFinalMessagePresentation(content);
+
+  assert.match(presentation.primaryContent, /The task did not finish/);
+  assert.doesNotMatch(presentation.primaryContent, /Traceback|urllib3|\/opt\/homebrew|export\.arxiv\.org/i);
+  assert.ok(presentation.auditSections.length >= 3);
+  assert.equal(new Set(presentation.auditSections.map((section) => section.evidenceType)).has('execution-audit'), true);
+  assert.match(presentation.auditSections.map((section) => section.text).join('\n'), /requests\.exceptions\.ProxyError/);
 });
 
 test('timeout work-process transcripts stay collapsed behind a concise failure summary', () => {
@@ -91,11 +121,94 @@ test('timeout work-process transcripts stay collapsed behind a concise failure s
 
   const presentation = splitFinalMessagePresentation(content);
 
-  assert.match(presentation.primaryContent, /任务未完成/);
+  assert.match(presentation.primaryContent, /The task did not finish/);
   assert.doesNotMatch(presentation.primaryContent, /Workspace Runtime/);
   assert.equal(presentation.auditSections.length, 2);
   assert.deepEqual(presentation.auditSections.map((section) => section.evidenceType), ['execution-audit', 'execution-audit']);
   assert.match(presentation.auditSections.map((section) => section.text).join('\n'), /Workspace Runtime/);
+});
+
+test('local path-only context listings stay folded out of the primary answer', () => {
+  const content = [
+    '/Applications/workspace/ailab/research/app/SciForge/repair-evidence/README.md',
+    '/Applications/workspace/ailab/research/app/SciForge/node_modules/pkce-challenge/README.md',
+    '/Applications/workspace/ailab/research/app/SciForge/node_modules/pkce-challenge/package.json',
+    '/Users/alice/private/SciForge/.sciforge/raw/runtime.json',
+  ].join('\n');
+
+  const presentation = splitFinalMessagePresentation(content);
+
+  assert.match(presentation.primaryContent, /project context/i);
+  assert.doesNotMatch(presentation.primaryContent, /\/Applications|\/Users|node_modules|\.sciforge/);
+  assert.equal(presentation.auditSections.length, 1);
+});
+
+test('final message presentation repairs CJK soft wraps in primary prose', () => {
+  const presentation = splitFinalMessagePresentation([
+    '**',
+    '简洁直',
+    '给，',
+    '少说',
+    '废话**',
+    '回复',
+    '直奔',
+    '主题。',
+  ].join('\n'));
+
+  assert.equal(presentation.primaryContent, '**简洁直给，少说废话** 回复直奔主题。');
+  assert.equal(presentation.auditSections.length, 0);
+});
+
+test('final message presentation removes redacted path planning leaks and repairs split technical identifiers', () => {
+  const presentation = splitFinalMessagePresentation([
+    '[local path] [local path] [local path] Now let me also check the architecture docs.好的。回答如下：',
+    '',
+    '**两句结论**',
+    '',
+    'Sci Forge 要更像 C ursor Agent，Run ExecutionProcess 的 recorded 过程和 normal ization 输出要稳定。',
+    '点击 appro val 行时，右侧画布只展示 refs-first 详情。',
+  ].join('\n'));
+
+  assert.doesNotMatch(presentation.primaryContent, /\[local path\]|Now let me/i);
+  assert.match(presentation.primaryContent, /SciForge/);
+  assert.match(presentation.primaryContent, /Cursor Agent/);
+  assert.match(presentation.primaryContent, /RunExecutionProcess/);
+  assert.match(presentation.primaryContent, /recorded/);
+  assert.match(presentation.primaryContent, /normalization/);
+  assert.match(presentation.primaryContent, /approval/);
+  assert.equal(presentation.auditSections.length, 0);
+});
+
+test('final message presentation repairs spaced markdown emphasis from streamed answers', () => {
+  const presentation = splitFinalMessagePresentation([
+    '** 两句结论**',
+    '',
+    'Sci Forge 要像 Cursor Agent 一样，把回复写成连续页面，而不是网页块。',
+    '** 展开态** 只展示真实过程行。',
+  ].join('\n'));
+
+  assert.match(presentation.primaryContent, /\*\*两句结论\*\*/);
+  assert.match(presentation.primaryContent, /\*\*展开态\*\*/);
+  assert.doesNotMatch(presentation.primaryContent, /\*\*\s+两句结论|\*\*\s+展开态/);
+
+  const markup = renderToStaticMarkup(
+    <FinalMessageContent
+      content={presentation.primaryContent}
+      references={[]}
+      onObjectFocus={() => undefined}
+    />,
+  );
+  assert.match(markup, /<strong>两句结论<\/strong>/);
+  assert.match(markup, /<strong>展开态<\/strong>/);
+  assert.doesNotMatch(markup, /\*\* 两句结论|\*\* 展开态/);
+});
+
+test('final message presentation keeps scientific single-letter terms readable', () => {
+  const presentation = splitFinalMessagePresentation('T cell and B cells remain separate while Cursor Agent identifiers stay repaired.');
+
+  assert.match(presentation.primaryContent, /T cell/);
+  assert.match(presentation.primaryContent, /B cells/);
+  assert.doesNotMatch(presentation.primaryContent, /Tcell|Bcells/);
 });
 
 test('raw payload-only messages promote embedded human answer and fold payload metadata', () => {
@@ -300,7 +413,10 @@ test('structured result presentation references remain clickable', () => {
       resultPresentation={{
         answerBlocks: [{ id: 'answer-1', kind: 'paragraph', text: 'Open artifact::analysis-report.', citationIds: ['citation-report'] }],
         keyFindings: [],
-        inlineCitations: [{ id: 'citation-report', label: 'Report', kind: 'artifact', ref: 'artifact:analysis-report' }],
+        inlineCitations: [
+          { id: 'citation-report', label: 'Report', kind: 'artifact', ref: 'artifact:analysis-report' },
+          { id: 'citation-table', label: 'Internal table row', kind: 'file', ref: '.sciforge/data/table.csv#row-b' },
+        ],
         artifactActions: [{ id: 'artifact-1', label: 'Open report', ref: 'artifact:analysis-report' }],
         nextActions: [],
         diagnosticsRefs: [],
@@ -311,6 +427,7 @@ test('structured result presentation references remain clickable', () => {
 
   assert.match(markup, /data-sciforge-reference=/);
   assert.match(markup, /artifact::analysis-report/);
+  assert.doesNotMatch(markup, /\.sciforge\/data\/table\.csv|Internal table row/);
   assert.doesNotMatch(markup, /Received ToolPayload/);
 });
 
@@ -400,7 +517,7 @@ test('raw HTTP diagnostic payload-only messages stay folded behind a concise sum
 
   const presentation = splitFinalMessagePresentation(content);
 
-  assert.match(presentation.primaryContent, /任务未完成|任务已返回/);
+  assert.match(presentation.primaryContent, /The task (?:did not finish|returned)/);
   assert.doesNotMatch(presentation.primaryContent, /Invalid token|https?:\/\/|stdoutRef|stderrRef|runtimeEventsRef/);
   assert.equal(presentation.auditSections.length, 1);
   assert.ok(['raw-json', 'execution-audit'].includes(presentation.auditSections[0]?.evidenceType ?? ''));

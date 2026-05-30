@@ -84,6 +84,55 @@ test('ProjectionApi exposes manual artifact preview and selected artifact action
   assert.equal(selected.auditRef?.startsWith('ui-action:select-object-'), true);
 });
 
+test('ProjectionApi returns refs-first bounded previews without leaking sensitive artifact bodies', async () => {
+  const session = testSession({
+    artifacts: [deliveryArtifact('sensitive-report', {
+      metadata: { title: 'Sensitive report token=sk-title-secret-1234567890' },
+      data: {
+        markdown: [
+          '# Sensitive report',
+          'Authorization: Bearer sk-body-secret-1234567890',
+          'provider https://provider.example.test/v1?api_key=abc123',
+          '/Users/alice/private/config.local.json',
+          '.sciforge/sessions/session/logs/stdout.log',
+          'artifact:evidence-table',
+          'x'.repeat(13_000),
+        ].join('\n'),
+        rows: [{ ref: 'artifact:evidence-table', note: 'safe row' }],
+        rawProviderPayload: { body: 'RAW_PROVIDER_BODY_SHOULD_NOT_LEAK' },
+      },
+      delivery: {
+        contractId: 'sciforge.artifact-delivery.v1',
+        ref: 'artifact:sensitive-report',
+        role: 'primary-deliverable',
+        declaredMediaType: 'text/markdown',
+        declaredExtension: 'md',
+        contentShape: 'raw-file',
+        readableRef: '.sciforge/artifacts/sensitive-report.md',
+        rawRef: '.sciforge/sessions/session/logs/raw-output.json',
+        previewPolicy: 'inline',
+        sizeBytes: 128,
+      } as never,
+    })],
+  });
+
+  const preview = await createLocalProjectionApi().getArtifactPreview({
+    session,
+    artifactRef: 'artifact:sensitive-report',
+    mode: 'inline',
+  });
+  const serialized = JSON.stringify(preview);
+
+  assert.equal(preview.status, 'ready');
+  assert.equal(preview.refs?.[0], 'artifact:sensitive-report');
+  assert.ok(preview.refs?.includes('.sciforge/artifacts/sensitive-report.md'));
+  assert.match(preview.title, /redacted-secret/);
+  assert.match(preview.preview ?? '', /preview truncated/);
+  assert.equal(Object.keys(preview.structuredData as Record<string, unknown>)[0], 'refs');
+  assert.doesNotMatch(serialized, /sk-body-secret|sk-title-secret|provider\.example|api_key=abc123|\/Users\/alice|stdout\.log|RAW_PROVIDER_BODY/);
+  assert.match(serialized, /redacted-secret|right-pane-sensitive-object/);
+});
+
 test('ProjectionSubscriptionApi publishes canonical projection without exposing raw run text', async () => {
   const projection = {
     schemaVersion: 'sciforge.conversation-projection.v1',

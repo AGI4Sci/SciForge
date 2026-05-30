@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "sciforge.agent-desktop-alignment-evidence.v1",
+  "roundId": "live-round-15",
+  "side": "sciforge-browser",
+  "recordedAt": "2026-05-30T14:31:33.766Z",
+  "screenshotRef": "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-15-sciforge-file-viewer-opened.png",
+  "leftPane": {
+    "sidebarWorkspaceExplorerCount": 0
+  },
+  "process": {
+    "focusedRows": [
+      {
+        "runIdPresent": true,
+        "text": "Read PROJECT.md"
+      }
+    ],
+    "groupSummaries": [
+      "Explored 1 file1 file"
+    ]
+  },
+  "prompt": "Read only. Do not edit files or run shell commands. Read PROJECT.md. Answer in Chinese with two short sentences about Cursor Agent-like file viewing.",
+  "rightPane": {
+    "editorCount": 1,
+    "editorTitle": "PROJECT.md",
+    "objectErrorVisible": false,
+    "panelClass": "results-panel",
+    "selectedRows": 1,
+    "stateLabel": "Saved",
+    "textareaLabel": "PROJECT.md contents",
+    "textareaStartsWithProjectHeader": true,
+    "treeCount": 1,
+    "treeRows": 31,
+    "viewerCount": 1
+  },
+  "url": "http://localhost:5173/?verify=1780151297873"
+}

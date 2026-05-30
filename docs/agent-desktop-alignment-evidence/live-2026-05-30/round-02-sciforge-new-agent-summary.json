@@ -1,0 +1,257 @@
+{
+  "activeRegion": "sidebar",
+  "buttons": [
+    {
+      "aria": "聊天工作台",
+      "text": "",
+      "title": "聊天工作台"
+    },
+    {
+      "aria": "内置浏览器",
+      "text": "",
+      "title": "内置浏览器"
+    },
+    {
+      "aria": "研究时间线",
+      "text": "",
+      "title": "研究时间线"
+    },
+    {
+      "aria": "反馈收件箱",
+      "text": "",
+      "title": "反馈收件箱"
+    },
+    {
+      "aria": "收起侧栏",
+      "text": "",
+      "title": "收起侧栏"
+    },
+    {
+      "aria": "折叠对话区",
+      "text": "",
+      "title": null
+    },
+    {
+      "aria": "New Agent in workspace",
+      "text": "New Agent⌘N",
+      "title": "New Agent in workspace"
+    },
+    {
+      "aria": null,
+      "text": "workspace当前项目",
+      "title": null
+    },
+    {
+      "aria": "收起全部对话",
+      "text": "",
+      "title": "收起全部对话"
+    },
+    {
+      "aria": "项目对话菜单",
+      "text": "",
+      "title": "项目对话菜单"
+    },
+    {
+      "aria": "添加项目",
+      "text": "",
+      "title": "添加项目"
+    },
+    {
+      "aria": null,
+      "text": "workspace当前",
+      "title": null
+    },
+    {
+      "aria": "workspace 项目操作",
+      "text": "",
+      "title": "项目操作"
+    },
+    {
+      "aria": "New Agent in workspace",
+      "text": "",
+      "title": "New Agent"
+    },
+    {
+      "aria": "折叠工具区",
+      "text": "",
+      "title": null
+    },
+    {
+      "aria": null,
+      "text": "应用",
+      "title": null
+    },
+    {
+      "aria": "折叠项目区",
+      "text": "",
+      "title": null
+    },
+    {
+      "aria": "新建文件",
+      "text": "",
+      "title": "新建文件"
+    },
+    {
+      "aria": "新建文件夹",
+      "text": "",
+      "title": "新建文件夹"
+    },
+    {
+      "aria": "刷新",
+      "text": "",
+      "title": "刷新"
+    },
+    {
+      "aria": "全部折叠",
+      "text": "",
+      "title": "全部折叠"
+    },
+    {
+      "aria": "折叠",
+      "text": "",
+      "title": null
+    },
+    {
+      "aria": "展开",
+      "text": "",
+      "title": null
+    },
+    {
+      "aria": "展开",
+      "text": "",
+      "title": null
+    },
+    {
+      "aria": null,
+      "text": "打开其他文件夹…",
+      "title": null
+    },
+    {
+      "aria": null,
+      "text": "用作工作区根目录",
+      "title": null
+    },
+    {
+      "aria": null,
+      "text": "设置",
+      "title": null
+    },
+    {
+      "aria": "打开注释侧栏并开始点选",
+      "text": "注释",
+      "title": null
+    },
+    {
+      "aria": "切换白天模式",
+      "text": "",
+      "title": "切换白天模式"
+    },
+    {
+      "aria": "设置",
+      "text": "",
+      "title": "设置"
+    },
+    {
+      "aria": null,
+      "text": "SciForge 工作台",
+      "title": null
+    },
+    {
+      "aria": null,
+      "text": "vision-senseon",
+      "title": "取消 vision-sense 感官"
+    },
+    {
+      "aria": null,
+      "text": "Builder",
+      "title": null
+    },
+    {
+      "aria": null,
+      "text": "Chat",
+      "title": null
+    },
+    {
+      "aria": null,
+      "text": "Results",
+      "title": null
+    },
+    {
+      "aria": "开启新聊天",
+      "text": "",
+      "title": "开启新聊天"
+    },
+    {
+      "aria": "历史会话",
+      "text": "",
+      "title": "历史会话"
+    },
+    {
+      "aria": "导出当前聊天",
+      "text": "",
+      "title": "导出当前聊天"
+    },
+    {
+      "aria": "删除当前聊天",
+      "text": "",
+      "title": "删除当前聊天"
+    },
+    {
+      "aria": "收起输入栏",
+      "text": "",
+      "title": "收起输入栏"
+    },
+    {
+      "aria": null,
+      "text": "点选",
+      "title": "点选模式引用整块 UI；选中文字可右键引用"
+    },
+    {
+      "aria": null,
+      "text": "上传",
+      "title": "上传 PDF、图片、表格或任意文件到证据矩阵"
+    },
+    {
+      "aria": null,
+      "text": "发送",
+      "title": null
+    },
+    {
+      "aria": null,
+      "text": "",
+      "title": "向右收缩结果面板"
+    },
+    {
+      "aria": null,
+      "text": "结果视图",
+      "title": "结果视图"
+    },
+    {
+      "aria": null,
+      "text": "证据矩阵",
+      "title": "证据矩阵"
+    },
+    {
+      "aria": null,
+      "text": "全部",
+      "title": null
+    },
+    {
+      "aria": null,
+      "text": "只看图",
+      "title": null
+    },
+    {
+      "aria": null,
+      "text": "只看证据",
+      "title": null
+    },
+    {
+      "aria": null,
+      "text": "只看过程",
+      "title": null
+    }
+  ],
+  "prompt": "输入研究问题，或点选对象后继续追问...",
+  "visibleText": "导航 对话 New Agent ⌘N workspace 当前项目 REPOSITORIES workspace 当前 No branch Local environment Context 暂无对话 工具 应用 自动化 即将推出 项目 workspace 已加载 2 项 workspace .sciforge parallel 打开其他文件夹… 手动输入路径 设置 注释 SciForge · 1 项需处理 SciForge 工作台 vision-sense on 新聊天已就绪 输入研究问题，或点选文件、历史消息和结果对象作为当前上下文。 提示 输入研究问题后即可运行；Shift+Enter 换行，Enter 发送。 点选 上传 点选 SciForge 可见对象作为上下文 当前项目 助手已连接 可写工作区 0% 当前上下文 良好 已用 0% 上下文 剩余 200k tokens 状态 良好 压缩 自动管理 SciForge 会保留当前对话、选中对象和必要摘要。 发送 结果视图 证据矩阵 全部 只看图 只看证据 只看过程 等待 暂无可预览内容 主回答优先保留在聊天中；有可预览内容时会显示在这里。"
+}

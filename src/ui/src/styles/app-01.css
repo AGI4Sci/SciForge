@@ -322,6 +322,29 @@
   gap: 8px;
 }
 
+.sidebar-new-agent-command {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 0 10px;
+  text-align: left;
+}
+
+.sidebar-new-agent-command span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-new-agent-command small {
+  color: var(--bio-400);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
 .sidebar-command.primary {
   min-height: 36px;
   color: var(--bio-50);
@@ -578,6 +601,52 @@
   box-shadow: inset 2px 0 0 var(--accent-muted);
 }
 
+.sidebar-project-status-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+  padding: 2px 4px 3px 27px;
+}
+
+.sidebar-project-status-pill {
+  min-width: 0;
+  height: 19px;
+  border: 1px solid var(--border-muted);
+  border-radius: 6px;
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  align-items: center;
+  gap: 4px;
+  padding: 0 5px;
+  color: var(--bio-400);
+  background: color-mix(in srgb, var(--surface-elevated) 58%, transparent);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.sidebar-project-status-pill.ready {
+  color: var(--bio-200);
+  border-color: color-mix(in srgb, var(--teal) 24%, var(--border-muted));
+}
+
+.sidebar-project-status-pill.syncing {
+  color: var(--gold);
+  border-color: color-mix(in srgb, var(--gold) 28%, var(--border-muted));
+}
+
+.sidebar-project-status-pill.warning,
+.sidebar-project-status-pill.unavailable {
+  color: var(--coral);
+  border-color: color-mix(in srgb, var(--coral) 28%, var(--border-muted));
+}
+
+.sidebar-project-status-pill span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sidebar-archive-badge {
   min-height: 20px;
   padding: 0 7px;
@@ -661,6 +730,15 @@
   background: color-mix(in srgb, var(--surface-hover) 72%, transparent);
 }
 
+.sidebar-thread-row.state-archived,
+.sidebar-thread-row.state-discarded {
+  color: var(--bio-400);
+}
+
+.sidebar-thread-row.state-discarded .sidebar-thread-title {
+  color: var(--bio-300);
+}
+
 .sidebar-thread-main {
   min-width: 0;
   border: 0;
@@ -681,7 +759,6 @@
 }
 
 .sidebar-thread-title {
-  grid-column: 2;
   min-width: 0;
   overflow: hidden;
   color: var(--bio-100);
@@ -689,6 +766,30 @@
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sidebar-thread-title-line {
+  grid-column: 2;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sidebar-thread-title-line .sidebar-thread-title {
+  flex: 1 1 auto;
+}
+
+.sidebar-thread-state-badge {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 5px;
+  color: var(--bio-400);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-transform: uppercase;
 }
 
 .sidebar-thread-detail {

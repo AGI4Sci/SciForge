@@ -4,11 +4,13 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { backendRepairStates, coerceReportPayload, contractValidationFailures, renderRegisteredWorkbenchSlot, requestOpenDebugAuditThroughUserActionApi, requestRecoverCommandTextAction, ResultsRenderer, runAuditRefs, runRecoverActions, shouldOpenRunAuditDetails } from './ResultsRenderer';
 import { ArtifactInspectorDrawer } from './results-renderer-artifact-inspector';
+import { MarkdownBlock } from './results/reportContent';
 import { nextPinnedObjectReferences, performObjectReferenceAction, resolveObjectReferenceActionPlan } from './results-renderer-object-actions';
 import { RegistrySlot } from './results-renderer-registry-slot';
 import { createResultsRendererViewModel } from './results-renderer-view-model';
 import { applyBackgroundCompletionEventToSession } from './chat/sessionTransforms';
 import { conversationProjectionMigrationAuditFixtureForRun } from './conversation-projection-view-model';
+import type { WorkspaceFileContent } from '../api/workspaceClient';
 import type { ContractValidationFailure } from '@sciforge-ui/runtime-contract';
 import type { ObjectReference, RuntimeArtifact, SciForgeConfig, SciForgeRun, SciForgeSession } from '../domain';
 
@@ -53,6 +55,26 @@ test('coerceReportPayload keeps normal markdown report bodies unchanged', () => 
 
   assert.equal(report.markdown, markdown);
   assert.equal(report.reportRef, undefined);
+});
+
+test('right pane markdown block folds traceback diagnostics like chat answers', () => {
+  const markdown = [
+    'Traceback (most recent call last):',
+    '  File "/opt/homebrew/Caskroom/miniconda/base/lib/python3.13/site-packages/requests/adapters.py", line 644, in send',
+    '    resp = conn.urlopen(method=request.method)',
+    'urllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host="export.arxiv.org", port=443): Max retries exceeded',
+    '',
+    'During handling of the above exception, another exception occurred:',
+    '',
+    'requests.exceptions.ProxyError: HTTPSConnectionPool(host="export.arxiv.org", port=443): Max retries exceeded',
+  ].join('\n');
+  const html = renderToStaticMarkup(createElement(MarkdownBlock, { markdown }));
+  const foldStart = html.indexOf('final-message-audit-fold');
+  const primaryHtml = foldStart >= 0 ? html.slice(0, foldStart) : html;
+
+  assert.match(primaryHtml, /The task did not finish/);
+  assert.doesNotMatch(primaryHtml, /Traceback|urllib3|requests\.exceptions|export\.arxiv|\/opt\/homebrew/i);
+  assert.match(html, /Process/);
 });
 
 test('ResultsRenderer exposes stable browser runtime state hook from Projection', () => {
@@ -214,12 +236,92 @@ test('ResultsRenderer keeps raw ContractValidationFailure audit-only without syn
     onWorkspaceFileEditorChange: () => undefined,
   }));
 
-  assert.match(html, /暂无可预览内容/);
-  assert.doesNotMatch(html, /运行需要处理/);
-  assert.match(html, /过程记录/);
+  assert.match(html, /Nothing to preview yet/);
+  assert.doesNotMatch(html, /Needs attention/);
+  assert.match(html, /More/);
   assert.doesNotMatch(stripRuntimeStateHook(html), /structured audit|audit ref|EU-report|ContractValidationFailure|Backend repair|debug/i);
   assert.doesNotMatch(stripRuntimeStateHook(html), /raw JSONL|stdout|stderr|provider|run id|ConversationProjection|ArtifactDelivery|ExecutionUnit|modules|refs/i);
-  assert.doesNotMatch(html, /已完成报告|ready result/);
+  assert.doesNotMatch(html, /Completed report|ready result/);
+});
+
+test('ResultsRenderer shows clicked workspace files as editable right-pane tree view', () => {
+  const fileReference: ObjectReference = {
+    id: 'file-project',
+    kind: 'file',
+    title: 'PROJECT.md',
+    ref: 'file:PROJECT.md',
+    status: 'available',
+    actions: ['focus-right-pane'],
+  };
+  const html = renderResultsRenderer(emptySession(), {
+    focusedObjectReference: fileReference,
+    workspaceFileEditor: {
+      file: {
+        path: '/tmp/sciforge/PROJECT.md',
+        name: 'PROJECT.md',
+        content: '# Project\n',
+        size: 10,
+        language: 'markdown',
+      },
+      draft: '# Project\n\nEdited draft.\n',
+    },
+  });
+
+  assert.match(html, /workspace-file-viewer/);
+  assert.match(html, /workspace-file-viewer-tree/);
+  assert.match(html, /workspace-file-viewer-editor/);
+  assert.match(html, /PROJECT\.md/);
+  assert.match(html, /textarea/);
+  assert.match(html, /Edited draft/);
+  assert.doesNotMatch(html, /workspace-file-inline-viewer/);
+});
+
+test('ResultsRenderer scopes cursor process file views to the originating run workspace', () => {
+  const fileReference: ObjectReference = {
+    id: 'file-project',
+    kind: 'file',
+    title: 'PROJECT.md',
+    ref: 'file:PROJECT.md',
+    runId: 'run-with-workspace',
+    status: 'available',
+    provenance: { path: 'PROJECT.md', producer: 'cursor-agent-process' },
+  };
+  const session: SciForgeSession = {
+    ...emptySession(),
+    runs: [{
+      id: 'run-with-workspace',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'read file',
+      response: 'done',
+      createdAt: '2026-05-09T00:00:00.000Z',
+      raw: {
+        streamProcess: {
+          events: [{
+            type: 'workspace-runtime-event',
+            native: { workspace: '/tmp/runtime-root', rawType: 'run_started' },
+          }],
+        },
+      },
+    }],
+  };
+  const html = renderResultsRenderer(session, {
+    activeRunId: 'run-with-workspace',
+    focusedObjectReference: fileReference,
+    workspaceFileEditor: {
+      file: {
+        path: '/tmp/runtime-root/PROJECT.md',
+        name: 'PROJECT.md',
+        content: '# Project\n',
+        size: 10,
+        language: 'markdown',
+      },
+      draft: '# Project\n',
+    },
+  });
+
+  assert.match(html, /runtime-root/);
+  assert.doesNotMatch(html, /tmp\/sciforge/);
 });
 
 test('ResultsRenderer keeps raw failure text out of the first-screen main summary while preserving audit details', () => {
@@ -244,7 +346,7 @@ test('ResultsRenderer keeps raw failure text out of the first-screen main summar
   assert.doesNotMatch(summaryHtml, /External retrieval returned zero results while the task marked itself completed/);
   assert.doesNotMatch(summaryHtml, /retry\/fallback attempts, rate-limit diagnostics, and durable refs/);
   assert.doesNotMatch(supportHtml, /retry\/fallback attempts, rate-limit diagnostics, and durable refs/);
-  assert.match(supportHtml, /过程记录/);
+  assert.match(supportHtml, /More/);
   assert.doesNotMatch(html, /raw payload|ToolPayload|stdout|stderr|task attempts|handoff JSON/i);
   assert.doesNotMatch(html, /<details class="result-details-panel audit-details-panel" open/);
 });
@@ -348,10 +450,116 @@ test('ResultsRenderer empty completed run is presented as empty rather than read
 
   const html = renderResultsRenderer(session, { activeRunId: 'run-empty-artifacts' });
 
-  assert.match(html, /暂无可预览内容/);
-  assert.match(html, /主回答优先保留在聊天中；有可预览内容时会显示在这里。/);
+  assert.match(html, /Nothing to preview yet/);
+  assert.match(html, /The main answer stays in chat\. Previewable files and artifacts appear here when available\./);
   assert.doesNotMatch(html, /重新运行或要求生成可展示 artifact/);
   assert.doesNotMatch(html, /ready result/);
+});
+
+test('ResultsRenderer support pane summarizes projection tracebacks instead of showing raw error text', () => {
+  const traceback = [
+    'Traceback (most recent call last):',
+    '  File "/opt/homebrew/Caskroom/miniconda/base/lib/python3.13/site-packages/urllib3/connectionpool.py", line 787, in urlopen',
+    '    response = self._make_request(conn)',
+    'urllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host="export.arxiv.org", port=443): Max retries exceeded',
+  ].join('\n');
+  const session = {
+    ...emptySession(),
+    runs: [{
+      ...completedRun('run-projection-traceback'),
+      raw: {
+        resultPresentation: {
+          conversationProjection: {
+            schemaVersion: 'sciforge.conversation-projection.v1',
+            conversationId: 'conversation-traceback',
+            visibleAnswer: {
+              status: 'visible-not-live-acceptance',
+              text: traceback,
+              artifactRefs: [],
+            },
+            artifacts: [],
+            executionProcess: [],
+            recoverActions: [],
+            auditRefs: [],
+            diagnostics: [],
+          },
+        },
+      },
+    }],
+  } as SciForgeSession;
+
+  const html = renderResultsRenderer(session, { activeRunId: 'run-projection-traceback' });
+
+  assert.match(html, /Answer shown/);
+  assert.match(html, /The task did not finish/);
+  assert.doesNotMatch(stripRuntimeStateHook(html), /Traceback|urllib3|export\.arxiv|\/opt\/homebrew/i);
+});
+
+test('ResultsRenderer keeps plain native answers in chat instead of duplicating them in the right pane', () => {
+  const answer = '简洁直给，少说废话。回复直奔主题，先给结论再展开。';
+  const session = {
+    ...emptySession(),
+    runs: [{
+      ...completedRun('run-plain-native-answer'),
+      raw: {
+        resultPresentation: {
+          conversationProjection: {
+            schemaVersion: 'sciforge.conversation-projection.v1',
+            conversationId: 'conversation-plain-answer',
+            visibleAnswer: {
+              status: 'visible-not-live-acceptance',
+              text: answer,
+              artifactRefs: [],
+            },
+            artifacts: [],
+            executionProcess: [],
+            recoverActions: [],
+            auditRefs: [],
+            diagnostics: [],
+          },
+        },
+      },
+    }],
+  } as SciForgeSession;
+
+  const html = renderResultsRenderer(session, { activeRunId: 'run-plain-native-answer' });
+
+  assert.match(html, /Nothing to preview yet/);
+  assert.doesNotMatch(html, /Answer shown/);
+  assert.doesNotMatch(html, /简洁直给/);
+});
+
+test('ResultsRenderer keeps satisfied plain text answers out of the right pane', () => {
+  const answer = '过程入口要轻，普通文字回答留在聊天里。';
+  const session = {
+    ...emptySession(),
+    runs: [{
+      ...completedRun('run-satisfied-plain-answer'),
+      raw: {
+        resultPresentation: {
+          conversationProjection: {
+            schemaVersion: 'sciforge.conversation-projection.v1',
+            conversationId: 'conversation-satisfied-plain-answer',
+            visibleAnswer: {
+              status: 'satisfied',
+              text: answer,
+              artifactRefs: [],
+            },
+            artifacts: [],
+            executionProcess: [],
+            recoverActions: [],
+            auditRefs: [],
+            diagnostics: [],
+          },
+        },
+      },
+    }],
+  } as SciForgeSession;
+
+  const html = renderResultsRenderer(session, { activeRunId: 'run-satisfied-plain-answer' });
+
+  assert.match(html, /Nothing to preview yet/);
+  assert.doesNotMatch(html, /Answer shown|过程入口要轻/);
 });
 
 test('ResultsRenderer lets projection satisfied state suppress raw failed run and execution unit UI', () => {
@@ -395,8 +603,9 @@ test('ResultsRenderer lets projection satisfied state suppress raw failed run an
 
   const html = renderResultsRenderer(session, { activeRunId: 'run-projection-visible-ready' });
 
-  assert.match(html, /Projection-visible answer is authoritative/);
-  assert.doesNotMatch(html, /运行需要处理/);
+  assert.match(html, /Nothing to preview yet/);
+  assert.doesNotMatch(html, /Projection-visible answer is authoritative/);
+  assert.doesNotMatch(html, /Needs attention/);
   assert.doesNotMatch(html, /LEGACY_RAW_FAILURE_SHOULD_NOT_RENDER/);
   assert.doesNotMatch(html, /LEGACY_EXECUTION_UNIT_SHOULD_NOT_RENDER/);
   assert.doesNotMatch(html, /audit-details-panel/);
@@ -519,8 +728,8 @@ test('ResultsRenderer uses projection execution process instead of raw execution
     focusMode: 'all',
   });
 
-  assert.match(html, /运行过程/);
-  assert.match(html, /产物: Projection output was materialized from event log/);
+  assert.match(html, /Activity/);
+  assert.match(html, /Output: Projection output was materialized from event log/);
   assert.doesNotMatch(html, /legacy\.raw\.execution/);
   assert.doesNotMatch(html, /LEGACY_RAW_EU_SHOULD_NOT_RENDER_IN_MAIN_EXECUTION_FOCUS/);
   assert.equal(model.viewPlan.allItems.some((item) => item.module.moduleId === 'execution-provenance-table'), false);
@@ -560,7 +769,7 @@ test('ResultsRenderer surfaces runtime compatibility drift without rerunning old
 
   const html = renderResultsRenderer(session);
 
-  assert.match(html, /验证/);
+  assert.match(html, /More/);
   assert.doesNotMatch(html, /capability-version-drift/);
   assert.doesNotMatch(html, /Historical session contract differs/);
   assert.doesNotMatch(html, /persisted: old-runtime/);
@@ -605,12 +814,12 @@ test('ResultsRenderer does not let raw running progress drive the main summary w
 
   const html = renderResultsRenderer(session, { activeRunId: 'run-partial-first' });
 
-  assert.match(html, /暂无可预览内容/);
-  assert.match(html, /主回答优先保留在聊天中；有可预览内容时会显示在这里。/);
+  assert.match(html, /Nothing to preview yet/);
+  assert.match(html, /The main answer stays in chat\. Previewable files and artifacts appear here when available\./);
   assert.doesNotMatch(html, /report: Partial report/);
-  assert.doesNotMatch(html, /已有部分结果，后台仍在继续/);
-  assert.doesNotMatch(html, /当前阶段：stage fulltext · running|当前阶段：fulltext · running/);
-  assert.doesNotMatch(html, /safe · 安全中止当前后台任务/);
+  assert.doesNotMatch(html, /Partial results ready|Still running/);
+  assert.doesNotMatch(html, /Current stage: stage fulltext · running|Current stage: fulltext · running/);
+  assert.doesNotMatch(html, /safe · Stop current background task/);
   assert.doesNotMatch(html, /safe · Use completed refs/);
 });
 
@@ -628,10 +837,10 @@ test('ResultsRenderer execution focus renders only execution unit body', () => {
 
   const html = renderResultsRenderer(session, { activeRunId: 'run-contract-failure', initialFocusMode: 'execution' });
 
-  assert.match(html, /可复现过程/);
-  assert.match(html, /待修复/);
+  assert.match(html, /Activity/);
+  assert.match(html, /Needs recovery/);
   assert.doesNotMatch(html, /<h2>结果视图<\/h2>/);
-  assert.doesNotMatch(html, /运行需要处理/);
+  assert.doesNotMatch(html, /Needs attention/);
   assert.doesNotMatch(html, /Notebook note/);
   assert.doesNotMatch(html, /Raw JSON \/ stdout \/ stderr refs/);
   assert.doesNotMatch(html, /展示摘要/);
@@ -659,9 +868,9 @@ test('ResultsRenderer execution focus shows background artifact stages as execut
 
   const html = renderResultsRenderer(session, { activeRunId: 'run-bg-render', initialFocusMode: 'execution' });
 
-  assert.match(html, /可复现过程/);
-  assert.match(html, /进行中/);
-  assert.match(html, /验证通过/);
+  assert.match(html, /Activity/);
+  assert.match(html, /Running/);
+  assert.match(html, /Check passed/);
   assert.doesNotMatch(html, /EU-run-bg-render-stage-report|sciforge\.background-completion|audit ref\(s\) retained|verification:verify-bg-render|verdict=pass|run-bg-render|stage-report/);
 });
 
@@ -680,16 +889,16 @@ test('ResultsRenderer execution table separates verification states from complet
 
   const html = renderResultsRenderer(session, { activeRunId: 'run-verification-states', initialFocusMode: 'execution' });
 
-  assert.match(html, /未要求验证/);
-  assert.match(html, /未验证/);
-  assert.match(html, /验证中/);
-  assert.match(html, /验证失败/);
-  assert.match(html, /验证通过/);
-  assert.match(html, /验证：本步骤未要求验证/);
-  assert.match(html, /验证：结果尚未验证/);
-  assert.match(html, /验证：验证仍在进行/);
-  assert.match(html, /验证：结果验证失败/);
-  assert.match(html, /验证：结果已通过验证/);
+  assert.match(html, /No check requested/);
+  assert.match(html, /Not checked/);
+  assert.match(html, /Checking/);
+  assert.match(html, /Check failed/);
+  assert.match(html, /Check passed/);
+  assert.match(html, /Check: This step did not request verification/);
+  assert.match(html, /Check: The result has not been verified/);
+  assert.match(html, /Check: Verification is still running/);
+  assert.match(html, /Check: The result did not pass verification/);
+  assert.match(html, /Check: The result passed verification/);
   assert.doesNotMatch(html, /verificationStatus=|runtime verification|verification:unverified|verification:failed|verification:passed/);
 });
 
@@ -715,7 +924,7 @@ test('ResultsRenderer execution focus scopes execution units to the active run',
   const html = renderResultsRenderer(session, { activeRunId: 'run-old', initialFocusMode: 'execution' });
 
   assert.match(html, /<code>old<\/code>/);
-  assert.match(html, /完成/);
+  assert.match(html, /Done/);
   assert.doesNotMatch(html, /EU-new/);
   assert.doesNotMatch(html, /new\.tool/);
 });
@@ -750,9 +959,9 @@ test('ResultsRenderer failed run audit renders execution units from failed paylo
 
   const html = renderResultsRenderer(session, { activeRunId: 'run-failed-payload' });
 
-  assert.match(html, /暂无可预览内容/);
-  assert.doesNotMatch(html, /运行需要处理/);
-  assert.match(html, /过程记录/);
+  assert.match(html, /Nothing to preview yet/);
+  assert.doesNotMatch(html, /Needs attention/);
+  assert.match(html, /More/);
   assert.doesNotMatch(stripRuntimeStateHook(html), /1 EU|EU-failed-payload|web\.probe|probe failed before rendering/);
   assert.doesNotMatch(html, /等待真实 ExecutionUnit/);
   assert.doesNotMatch(html, /0 EU/);
@@ -810,8 +1019,8 @@ test('registry slot renders unknown component fallback with artifact diagnostics
 
   assert.match(html, /Custom fallback slot/);
   assert.match(html, /missing-widget/);
-  assert.match(html, /材料引用 未找到：ghost-材料/);
-  assert.match(html, /等待结果材料/);
+  assert.match(html, /result reference not found: ghost-result/);
+  assert.match(html, /Waiting for results/);
   assert.doesNotMatch(html, /artifactRef|no runtime artifact|runtime-artifact/);
 });
 
@@ -862,12 +1071,58 @@ test('registry slot uses unknown component artifact fallback without dropping ar
 
   assert.match(html, /Lab-specific table/);
   assert.match(html, /lab-specific-widget/);
-  assert.match(html, /运行结果/);
-  assert.match(html, /过程材料已保留/);
+  assert.match(html, /Result/);
+  assert.match(html, /supporting record saved/);
   assert.match(html, /fallback-table\.csv · 2 rows/);
   assert.match(html, /TP53/);
   assert.doesNotMatch(html, /artifactRef 未找到/);
   assert.doesNotMatch(html, /no runtime artifact|runtime-artifact|\.sciforge\/artifacts/);
+});
+
+test('registry slot redacts sensitive data object previews while preserving safe refs', () => {
+  const artifact: RuntimeArtifact = {
+    id: 'sensitive-data-object',
+    type: 'runtime-artifact',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    data: {
+      rows: [{
+        ref: 'artifact:safe-table',
+        token: 'sk-row-secret-1234567890',
+        endpoint: 'https://provider.example.test/v1?api_key=abc123',
+        path: '/Applications/workspace/private/config.local.json',
+      }],
+      rawProviderPayload: { body: 'RAW_PROVIDER_BODY_SHOULD_NOT_RENDER' },
+    },
+  };
+  const session = {
+    ...emptySession(),
+    artifacts: [artifact],
+  };
+  const html = renderToStaticMarkup(createElement(RegistrySlot, {
+    scenarioId: 'literature-evidence-review',
+    config: testConfig(),
+    session,
+    item: {
+      id: 'slot-sensitive-data-object',
+      slot: {
+        componentId: 'lab-specific-widget',
+        artifactRef: 'sensitive-data-object',
+        title: 'Sensitive data object',
+      },
+      artifact,
+      section: 'primary',
+      status: 'fallback',
+      source: 'manifest',
+      module: {},
+    } as never,
+    onArtifactHandoff: () => undefined,
+    onInspectArtifact: () => undefined,
+  }));
+
+  assert.match(html, /artifact:safe-table/);
+  assert.match(html, /redacted-secret|redacted-url|redacted-local-path/);
+  assert.doesNotMatch(html, /sk-row-secret|provider\.example|api_key=abc123|\/Applications\/workspace|RAW_PROVIDER_BODY/);
 });
 
 test('ResultsRenderer explains missing ArtifactDelivery through the package empty-state fallback', () => {
@@ -887,8 +1142,8 @@ test('ResultsRenderer explains missing ArtifactDelivery through the package empt
   };
   const html = renderResultsRenderer(session, { activeRunId: 'run-broken-report' });
 
-  assert.match(html, /暂无可预览内容/);
-  assert.match(html, /主回答优先保留在聊天中；有可预览内容时会显示在这里。/);
+  assert.match(html, /Nothing to preview yet/);
+  assert.match(html, /The main answer stays in chat\. Previewable files and artifacts appear here when available\./);
   assert.doesNotMatch(html, /Awaiting research-report/);
   assert.doesNotMatch(html, /contract drift: markdown was not produced/);
 });
@@ -935,7 +1190,7 @@ test('ResultsRenderer falls back from mismatched manifest component to artifact-
     focusMode: 'all',
   });
 
-  assert.match(html, /正在读取 Markdown 报告正文/);
+  assert.match(html, /Loading Markdown report/);
   assert.match(html, /\.sciforge\/artifacts\/report-owned-artifact\.md/);
   assert.doesNotMatch(html, /当前 paper-list artifact 缺少 papers\/rows 数组/);
   assert.ok(model.viewPlan.diagnostics.some((item) => item.includes('paper-card-list -> research-report 已改由 report-viewer 渲染')));
@@ -994,7 +1249,7 @@ test('results renderer view model projects hidden result empty state and manifes
 
   assert.equal(hidden.visibleItems.length, 0);
   assert.equal(hidden.emptyState?.dismissedAllInFilter, true);
-  assert.equal(hidden.emptyState?.title, '当前筛选下的视图已全部从界面移除');
+  assert.equal(hidden.emptyState?.title, 'All views are hidden for this filter');
 });
 
 test('object reference action helper resolves pin and workspace path plans without UI state', () => {
@@ -1185,18 +1440,52 @@ test('artifact inspector drawer renders lineage, reproducible refs, preview, and
     onArtifactHandoff: () => undefined,
   }));
 
-  assert.match(html, /材料详情/);
+  assert.match(html, /Result details/);
   assert.match(html, /report-artifact/);
-  assert.match(html, /生成能力: report.writer/);
-  assert.match(html, /过程状态: 过程材料已匹配/);
-  assert.match(html, /衍生方式: summary/);
-  assert.match(html, /父级材料: 已保留/);
-  assert.match(html, /来源材料: 2 条已保留/);
-  assert.match(html, /材料: 源文件已归档/);
+  assert.match(html, /Generated by: report.writer/);
+  assert.match(html, /Activity status: supporting activity matched/);
+  assert.match(html, /Derivation: summary/);
+  assert.match(html, /Parent result: saved/);
+  assert.match(html, /Source results: 2 saved/);
+  assert.match(html, /Result: source file saved/);
   assert.match(html, /Inspector report/);
   assert.doesNotMatch(html, /Artifact Inspector|execution unit|EU-inspector|provider:openalex|dataRef:|audit ref\(s\) retained|\.sciforge\/artifacts/);
   assert.match(html, /Inspector report/);
   assert.match(html, /结构探索/);
+});
+
+test('artifact inspector drawer uses refs-first redacted previews for artifact data', () => {
+  const artifact: RuntimeArtifact = {
+    id: 'sensitive-inspector-artifact',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    metadata: { title: 'Sensitive inspector artifact' },
+    data: {
+      sourceRef: 'artifact:public-evidence',
+      markdown: [
+        '# Sensitive inspector body',
+        'Authorization: Bearer sk-inspector-secret-1234567890',
+        'https://provider.example.test/v1?api_key=abc123',
+        '/Users/alice/private/config.local.json',
+      ].join('\n'),
+      rawProviderPayload: { body: 'RAW_INSPECTOR_BODY_SHOULD_NOT_RENDER' },
+    },
+  };
+  const html = renderToStaticMarkup(createElement(ArtifactInspectorDrawer, {
+    scenarioId: 'literature-evidence-review',
+    session: { ...emptySession(), artifacts: [artifact] },
+    artifact,
+    onClose: () => undefined,
+    onArtifactHandoff: () => undefined,
+  }));
+  const refIndex = html.indexOf('artifact:public-evidence');
+  const bodyIndex = html.indexOf('Sensitive inspector body');
+
+  assert.ok(refIndex >= 0);
+  assert.ok(bodyIndex > refIndex);
+  assert.match(html, /redacted-secret|redacted-url|redacted-local-path|right-pane-sensitive-object/);
+  assert.doesNotMatch(html, /sk-inspector-secret|provider\.example|api_key=abc123|\/Users\/alice|RAW_INSPECTOR_BODY/);
 });
 
 test('requestRecoverCommandTextAction routes result recover buttons to terminal-equivalent commandText', async () => {
@@ -1276,10 +1565,11 @@ test('ResultsRenderer shows capability discovery plan summary without exposing u
 
   const html = renderResultsRenderer(session, { activeRunId: 'run-discovery-plan' });
 
-  assert.match(html, /能力计划/);
+  assert.match(html, /More/);
+  assert.doesNotMatch(html, /Selected capabilities|Use literature search/);
   assert.doesNotMatch(html, /Use literature search, pdf extraction, and evidence validation/);
   assert.doesNotMatch(html, /web_search|records\/capability-discovery\/plan-audit\.json/);
-  assert.doesNotMatch(html, /能力发现本身不是任务完成证据/);
+  assert.doesNotMatch(html, /not completion evidence/);
   assert.doesNotMatch(html, /127\.0\.0\.1|Applications\/workspace|token=abc123/);
 });
 
@@ -1287,8 +1577,8 @@ test('ResultsRenderer collapsed support pane summaries avoid internal runtime vo
   const session = contractFailureSession();
   const html = stripRuntimeStateHook(renderResultsRenderer(session, { activeRunId: 'run-contract-failure' }));
 
-  assert.match(html, /暂无可预览内容/);
-  assert.match(html, /过程记录/);
+  assert.match(html, /Nothing to preview yet/);
+  assert.match(html, /More/);
   assert.doesNotMatch(html, /raw audit|raw JSONL|stdout|stderr|provider|run id|ConversationProjection|ArtifactDelivery|ExecutionUnit|modules|refs|EU|failure/i);
   assert.doesNotMatch(html, /ContractValidationFailure|Backend repair|sourceRunId|repairRunId|relatedRef|nextStep/);
 });
@@ -1412,7 +1702,12 @@ function projectionResultPresentation(runId: string, artifactRefs: string[]) {
   };
 }
 
-function renderResultsRenderer(session: SciForgeSession, options: { activeRunId?: string; initialFocusMode?: 'all' | 'visual' | 'evidence' | 'execution' } = {}) {
+function renderResultsRenderer(session: SciForgeSession, options: {
+  activeRunId?: string;
+  initialFocusMode?: 'all' | 'visual' | 'evidence' | 'execution';
+  focusedObjectReference?: ObjectReference;
+  workspaceFileEditor?: { file: WorkspaceFileContent; draft: string } | null;
+} = {}) {
   const effectiveSession = withMaterializedProjectionFixture(session);
   return renderToStaticMarkup(createElement(ResultsRenderer, {
     scenarioId: 'literature-evidence-review',
@@ -1424,8 +1719,9 @@ function renderResultsRenderer(session: SciForgeSession, options: { activeRunId?
     onToggleCollapse: () => undefined,
     activeRunId: options.activeRunId,
     onActiveRunChange: () => undefined,
+    focusedObjectReference: options.focusedObjectReference,
     onFocusedObjectChange: () => undefined,
-    workspaceFileEditor: null,
+    workspaceFileEditor: options.workspaceFileEditor ?? null,
     onWorkspaceFileEditorChange: () => undefined,
     initialFocusMode: options.initialFocusMode,
   }));

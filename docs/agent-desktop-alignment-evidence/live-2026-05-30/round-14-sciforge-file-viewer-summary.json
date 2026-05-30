@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "round-14-sciforge-file-viewer-summary",
+  "capturedAt": "2026-05-30T13:18:00.576Z",
+  "side": "sciforge-browser",
+  "summary": "Browser reload confirmed the default left sidebar no longer renders the workspace file tree. The editable right-pane workspace-file-viewer is covered by package/component tests and ResultsRenderer SSR because no focused file action was visible in the current restored live conversation.",
+  "checks": {
+    "sidebarExplorerCount": 0,
+    "textareaCount": 0,
+    "url": "http://localhost:5173/?verify=1780138734649",
+    "visibleSidebarLabels": "NavigationAgentsNew Agent⌘NRepositoriesp1CurrentNo branchLocal environmentContextNew chatDraftDraft readyNew chatDraftDraft readyNew chatDraftDraft ready请只读，不要修改文件。请阅读 PROJECT.md 和 src/ui/sLast answer: [local-path]…Show more6p2No branchLocal environmentContextNo chats yetToolsAppsAutomationsSoonSettings",
+    "workspaceFileViewerCount": 0
+  },
+  "refs": [
+    "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-14-sciforge-sidebar-no-file-tree.png",
+    "packages/presentation/components/workspace-file-viewer/render.test.tsx",
+    "src/ui/src/app/ResultsRenderer.test.ts"
+  ],
+  "redaction": "No raw DOM dump, provider secret, API key, model name, or full private transcript embedded."
+}

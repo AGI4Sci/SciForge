@@ -49,11 +49,13 @@ export function ContextMenuItem({
   onClick,
   disabled,
   danger,
+  title,
 }: {
   children: ReactNode;
   onClick?: () => void;
   disabled?: boolean;
   danger?: boolean;
+  title?: string;
 }) {
   return (
     <button
@@ -61,6 +63,7 @@ export function ContextMenuItem({
       role="menuitem"
       className={danger ? 'danger' : undefined}
       disabled={disabled}
+      title={title}
       onClick={() => {
         if (disabled) return;
         onClick?.();

@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "sciforge.agent-desktop-alignment.live-summary.v1",
+  "id": "round-06-cursor-subagent-baseline-unobserved",
+  "capturedAt": "2026-05-30T10:02:30+08:00",
+  "side": "cursor-agent-computer-use",
+  "tool": "computer-use",
+  "target": "cursor-agent-desktop",
+  "requirementsObserved": [
+    "sub-agent-expansion"
+  ],
+  "observations": [
+    "Cursor Agent desktop was re-read in read-only mode during Round 06.",
+    "The visible session still showed repository/sidebar controls, completed Worked aggregates, composer controls, and the right Source Control/file surface.",
+    "No visible Cursor sub-agent transcript/ref row was present in the current session, so Cursor sub-agent parity remains unproven rather than accepted."
+  ],
+  "evidenceRefs": [
+    "computer-use:round-06-cursor-subagent-baseline-unobserved"
+  ],
+  "limitations": [
+    "This observation stores a redacted structural summary only; no raw accessibility tree or screenshot payload is embedded.",
+    "The current Cursor session did not provide a positive sub-agent transcript/ref baseline."
+  ],
+  "redaction": {
+    "rawDomSaved": false,
+    "rawDesktopTreeSaved": false,
+    "secretsIncluded": false,
+    "localAbsolutePathsIncluded": false
+  }
+}

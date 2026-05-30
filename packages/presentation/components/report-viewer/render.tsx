@@ -41,20 +41,20 @@ export function ReportViewerRenderer(props: UIComponentRendererProps) {
   const ComponentEmptyState = helpers?.ComponentEmptyState;
   const MarkdownBlock = helpers?.MarkdownBlock;
   if (!artifact || !reportRef) {
-    return ComponentEmptyState ? <ComponentEmptyState componentId="report-viewer" artifactType="research-report" detail={!artifact ? undefined : '当前 artifact 没有通过 ArtifactDelivery 解析出 markdown PresentationInput。'} /> : <p className="empty-state">No markdown input available.</p>;
+    return ComponentEmptyState ? <ComponentEmptyState componentId="report-viewer" artifactType="research-report" detail={!artifact ? undefined : 'No markdown input is available for this result.'} /> : <p className="empty-state">No markdown input available.</p>;
   }
   return (
     <div className="stack">
       <div className="report-viewer">
         <div className="report-actions">
           <button type="button" onClick={() => void navigator.clipboard?.writeText(markdown ?? '')} disabled={!markdown}>
-            复制 Markdown
+            Copy Markdown
           </button>
         </div>
-        {!markdown && !loadError ? <p className="empty-state">正在读取 Markdown 报告正文：{reportRef}</p> : null}
+        {!markdown && !loadError ? <p className="empty-state">Loading Markdown report: {reportRef}</p> : null}
         {loadError ? (
           <details className="report-read-warning">
-            <summary>Markdown 报告正文暂不可读</summary>
+            <summary>Markdown report is not readable yet</summary>
             <p>{loadError}</p>
           </details>
         ) : null}

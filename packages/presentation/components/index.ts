@@ -26,6 +26,16 @@ export { renderPointSetViewer } from './point-set-viewer/render';
 export { renderMatrixViewer } from './matrix-viewer/render';
 export { renderStructureViewer } from './structure-viewer/render';
 export { renderTerminalSessionViewer } from './terminal-session-viewer/render';
+export {
+  renderWorkspaceFileViewer,
+  sortWorkspaceFileViewerEntries,
+  WorkspaceFileViewer,
+  workspaceFileViewerBasename,
+  workspaceFileViewerParentPath,
+  type WorkspaceFileViewerEntry,
+  type WorkspaceFileViewerFile,
+  type WorkspaceFileViewerProps,
+} from './workspace-file-viewer/render';
 
 export { interactiveViewManifests, uiComponentManifests } from './manifest-registry';
 

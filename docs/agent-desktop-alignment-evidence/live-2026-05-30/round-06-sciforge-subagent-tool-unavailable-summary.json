@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "sciforge.agent-desktop-alignment.live-summary.v1",
+  "id": "round-06-sciforge-subagent-tool-unavailable",
+  "capturedAt": "2026-05-30T10:02:30+08:00",
+  "side": "sciforge-browser",
+  "tool": "browser",
+  "target": "sciforge-web",
+  "requirementsObserved": [
+    "sub-agent-expansion"
+  ],
+  "observations": [
+    "A live SciForge chat asked the current runtime to spawn exactly one read-only sub-agent if a sub-agent or delegated-worker tool was available.",
+    "The runtime completed the turn without any sub-agent action row, transcript ref, result ref, or spawn lifecycle event.",
+    "The visible assistant response reported NO_SUBAGENT_TOOL_AVAILABLE and stated that the current toolset had no sub-agent or delegated-worker function.",
+    "The runtime audit for the same turn also reported a remote plugin sync authentication warning, which is consistent with the missing live sub-agent tool surface."
+  ],
+  "safeRuntimeRefs": [
+    "audit:codex-runtime:codex-command-mprph50n-zfp0dk:codex-command-mprph50n-zfp0dk-attempt-1:normalized-events",
+    "audit:codex-runtime:codex-command-mprph50n-zfp0dk:codex-command-mprph50n-zfp0dk-attempt-1:stderr"
+  ],
+  "visibleFacts": {
+    "subAgentActionRowVisible": false,
+    "transcriptRefVisible": false,
+    "resultRefVisible": false,
+    "toolUnavailableResponseVisible": true
+  },
+  "evidenceRefs": [
+    "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-06-sciforge-subagent-tool-unavailable-screenshot.png",
+    "audit:codex-runtime:codex-command-mprph50n-zfp0dk:codex-command-mprph50n-zfp0dk-attempt-1:normalized-events"
+  ],
+  "limitations": [
+    "This is blocked evidence rather than a passing parity observation: it proves the current SciForge runtime did not expose a live sub-agent tool.",
+    "No raw DOM, raw runtime JSONL, raw stderr, or full private transcript is embedded in this summary."
+  ],
+  "redaction": {
+    "rawDomSaved": false,
+    "rawDesktopTreeSaved": false,
+    "secretsIncluded": false,
+    "localAbsolutePathsIncluded": false
+  }
+}

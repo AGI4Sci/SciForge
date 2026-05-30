@@ -120,6 +120,8 @@ async function streamCodexRealtimeWebSocket(input: {
   const writer = stream.writable.getWriter();
   const encoder = new TextEncoder();
   let responseError: string | undefined;
+  let writeChain = Promise.resolve();
+  let writerClosed = false;
   const ws = input.webSocketFactory(codexRuntimeWebSocketUrl(input.workspaceWriterBaseUrl));
   const requestIds = commandIdsFromRequestBody(input.requestBodyText);
   const controlSender: CodexRealtimeControlSender = {
@@ -137,13 +139,23 @@ async function streamCodexRealtimeWebSocket(input: {
   };
   const closeStream = async () => {
     try {
+      await writeChain;
+      writerClosed = true;
       await writer.close();
     } catch {
       // The readable side may already be cancelled by the parser.
     }
   };
-  const writeSseBlock = async (event: string, data: unknown) => {
-    await writer.write(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+  const writeSseBlock = (event: string, data: unknown) => {
+    const chunk = encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    writeChain = writeChain.then(async () => {
+      if (writerClosed) return;
+      await writer.write(chunk);
+    }).catch((error: unknown) => {
+      responseError = responseError ?? (error instanceof Error ? error.message : String(error));
+      if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) ws.close(1011, 'codex realtime stream write error');
+    });
+    return writeChain;
   };
   const socketDone = new Promise<void>((resolve) => {
     ws.addEventListener('open', () => {
@@ -154,10 +166,10 @@ async function streamCodexRealtimeWebSocket(input: {
       void (async () => {
         const payload = parseRuntimeSocketMessage(event.data);
         if (!payload) return;
-        if (payload.type === 'event') await writeSseBlock(payload.event, payload.data);
+        if (payload.type === 'event') writeSseBlock(payload.event, payload.data);
         if (payload.type === 'error') {
           responseError = payload.error;
-          await writeSseBlock('error', { ok: false, error: payload.error });
+          writeSseBlock('error', { ok: false, error: payload.error });
         }
       })().catch((error: unknown) => {
         responseError = error instanceof Error ? error.message : String(error);

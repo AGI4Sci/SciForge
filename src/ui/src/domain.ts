@@ -762,6 +762,7 @@ export interface SciForgeConfig {
   feedbackGithubMilestone?: number | string;
   feedbackGithubDryRun?: boolean;
   theme?: 'dark' | 'light';
+  locale?: 'zh-CN' | 'en-US';
   agentBackend: string;
   runtimeProfile?: string;
   allowOpenAiRuntime?: boolean;

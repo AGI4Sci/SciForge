@@ -5,6 +5,7 @@ import { Badge } from './uiPrimitives';
 import { artifactSource } from './results/resultArtifactHelpers';
 import { artifactInspectorModel } from './results-renderer-artifact-normalizer';
 import { exportTextFile } from './exportUtils';
+import { formatRightPaneStructuredPreviewJson, rightPaneInlineLabel, rightPaneSafeRefs } from './results/previewSafety';
 
 export function ArtifactInspectorDrawer({
   scenarioId,
@@ -26,64 +27,70 @@ export function ArtifactInspectorDrawer({
     currentScenarioId: scenarioId,
     downloads,
   });
+  const previewRefs = rightPaneSafeRefs(artifact.data ?? artifact, 8);
   return (
     <div className="artifact-inspector-layer">
-      <button className="artifact-inspector-backdrop" type="button" aria-label="关闭材料详情" onClick={onClose} />
-      <aside className="artifact-inspector-drawer" role="dialog" aria-modal="false" aria-label="材料详情">
+      <button className="artifact-inspector-backdrop" type="button" aria-label="Close result details" onClick={onClose} />
+      <aside className="artifact-inspector-drawer" role="dialog" aria-modal="false" aria-label="Result details">
         <div className="artifact-inspector-head">
           <div>
-            <Badge variant="info">材料详情</Badge>
+            <Badge variant="info">Result details</Badge>
             <h2>{artifact.id}</h2>
-            <p>{artifact.type} · 版本 {artifact.schemaVersion}</p>
+            <p>{artifact.type} · v{artifact.schemaVersion}</p>
           </div>
-          <button type="button" onClick={onClose} aria-label="关闭材料详情">关闭</button>
+          <button type="button" onClick={onClose} aria-label="Close result details">Close</button>
         </div>
         <section>
-          <h3>结构</h3>
+          <h3>Structure</h3>
           <div className="handoff-field-grid">
-            <span><em>类型</em><code>{artifact.type}</code></span>
-            <span><em>版本</em><code>{artifact.schemaVersion}</code></span>
-            <span><em>来源</em><code>{artifactSourceLabel(artifactSource(artifact))}</code></span>
+            <span><em>Type</em><code>{artifact.type}</code></span>
+            <span><em>Version</em><code>{artifact.schemaVersion}</code></span>
+            <span><em>Source</em><code>{artifactSourceLabel(artifactSource(artifact))}</code></span>
           </div>
         </section>
         <section>
-          <h3>来源</h3>
+          <h3>Lineage</h3>
           <div className="inspector-ref-list">
-            {lineage.map(([label, value]) => <code key={label}>{label}: {value}</code>)}
+            {lineage.map(([label, value]) => <code key={label}>{label}: {rightPaneInlineLabel(value)}</code>)}
           </div>
         </section>
         <section>
-          <h3>材料</h3>
+          <h3>Files</h3>
           {files.length ? (
             <div className="inspector-ref-list">
-              {files.map(([label, value]) => <code key={`${label}-${value}`}>{label}: {value}</code>)}
+              {files.map(([label, value]) => <code key={`${label}-${value}`}>{label}: {rightPaneInlineLabel(value)}</code>)}
             </div>
           ) : (
-            <p className="empty-state">还没有可展示的过程材料。</p>
+            <p className="empty-state">No supporting files are ready yet.</p>
           )}
         </section>
         {downloads.length ? (
           <section>
-            <h3>导出</h3>
+            <h3>Export</h3>
             <div className="artifact-card-actions">
               {downloads.map((item) => (
                 <button
                   key={`${item.name}-${item.path ?? item.key ?? ''}`}
                   type="button"
-                  onClick={() => exportTextFile(item.name, item.content, item.contentType)}
-                >
-                  {item.name}{typeof item.rowCount === 'number' ? ` · ${item.rowCount} rows` : ''}
+                onClick={() => exportTextFile(item.name, item.content, item.contentType)}
+              >
+                  {rightPaneInlineLabel(item.name)}{typeof item.rowCount === 'number' ? ` · ${item.rowCount} rows` : ''}
                 </button>
               ))}
             </div>
           </section>
         ) : null}
         <section>
-          <h3>预览</h3>
-          <pre className="inspector-json">{JSON.stringify(artifact.data ?? artifact, null, 2)}</pre>
+          <h3>Preview</h3>
+          {previewRefs.length ? (
+            <div className="inspector-ref-list">
+              {previewRefs.map((ref) => <code key={ref}>{ref}</code>)}
+            </div>
+          ) : null}
+          <pre className="inspector-json">{formatRightPaneStructuredPreviewJson(artifact.data ?? artifact)}</pre>
         </section>
         <section>
-          <h3>后续目标</h3>
+          <h3>Next Targets</h3>
           {handoffTargets.length ? (
             <div className="handoff-actions compact">
               {handoffTargets.map((target) => {
@@ -96,7 +103,7 @@ export function ArtifactInspectorDrawer({
               })}
             </div>
           ) : (
-            <p className="empty-state">当前材料没有声明可衔接的目标场景。</p>
+            <p className="empty-state">No handoff target is declared for this result.</p>
           )}
         </section>
       </aside>
@@ -105,10 +112,10 @@ export function ArtifactInspectorDrawer({
 }
 
 function artifactSourceLabel(source: string) {
-  if (source === 'runtime-artifact') return '运行结果';
-  if (source === 'project-tool') return '运行结果';
-  if (source === 'user-upload') return '用户上传';
-  if (source === 'external') return '外部材料';
-  if (source === 'empty') return '等待材料';
-  return source.replace(/runtime|artifact/gi, '材料');
+  if (source === 'runtime-artifact') return 'Result';
+  if (source === 'project-tool') return 'Result';
+  if (source === 'user-upload') return 'Uploaded';
+  if (source === 'external') return 'External';
+  if (source === 'empty') return 'Waiting';
+  return source.replace(/runtime|artifact/gi, 'result');
 }

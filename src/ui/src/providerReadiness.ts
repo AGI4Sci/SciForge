@@ -60,8 +60,8 @@ export function providerReadinessNoticeFromConfig(config: SciForgeConfig): Provi
         ready: false,
         state: 'blocked',
         value: 'native',
-        detail: 'native · user model not set',
-        recoverAction: '填写 Model / Base URL / API Key；Runtime Codex 不会回退到其它 provider',
+        detail: 'Custom model is not configured',
+        recoverAction: 'Set Model, Base URL, or API Key. SciForge will not switch providers automatically.',
         source: 'settings',
       };
     }
@@ -79,7 +79,7 @@ export function providerReadinessNoticeFromConfig(config: SciForgeConfig): Provi
       state: 'blocked',
       value: provider,
       detail: provider,
-      recoverAction: '填写 Base URL；默认应指向 packages/backend proxy',
+      recoverAction: 'Set the Base URL for your configured model endpoint.',
       source: 'settings',
     };
   }
@@ -89,7 +89,7 @@ export function providerReadinessNoticeFromConfig(config: SciForgeConfig): Provi
       state: 'blocked',
       value: provider,
       detail: `${provider}${model ? ` · ${model}` : ''}`,
-      recoverAction: '填写 API Key；allowOpenAiRuntime 默认 false，不会自动改用 OpenAI',
+      recoverAction: 'Set an API Key. SciForge will not switch providers automatically.',
       source: 'settings',
     };
   }

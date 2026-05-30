@@ -47,11 +47,11 @@ export const scenarios: ScenarioViewConfig[] = builtInScenarioDisplayData.map((s
 }));
 
 export const navItems = [
-  { id: 'workbench' as const, label: '聊天工作台', icon: MessageSquare },
-  { id: 'components' as const, label: '应用', icon: Blocks },
-  { id: 'browser' as const, label: '内置浏览器', icon: Globe2 },
-  { id: 'timeline' as const, label: '研究时间线', icon: GitBranch },
-  { id: 'feedback' as const, label: '反馈收件箱', icon: Inbox },
+  { id: 'workbench' as const, label: 'Chat', icon: MessageSquare },
+  { id: 'components' as const, label: 'Apps', icon: Blocks },
+  { id: 'browser' as const, label: 'Browser', icon: Globe2 },
+  { id: 'timeline' as const, label: 'Timeline', icon: GitBranch },
+  { id: 'feedback' as const, label: 'Feedback', icon: Inbox },
 ];
 
 /** Primary workspace views shown on the always-visible sidebar activity bar. */

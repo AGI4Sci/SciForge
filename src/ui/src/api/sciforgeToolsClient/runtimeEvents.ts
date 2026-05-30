@@ -17,6 +17,7 @@ import {
 } from '@sciforge-ui/runtime-contract';
 import { runtimeInteractionProgressEventFromCompactRecord } from '@sciforge-ui/runtime-contract/events';
 import { isRuntimeAuditOnlyEvent, runtimeAuditOnlyEventSummary, runtimeTextLooksAuditOnly } from '../../runtimeAuditEvents';
+import { joinAssistantTextFragments } from '../../assistantText';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -140,7 +141,7 @@ export async function readWorkspaceToolStream(
       rememberGuiIntent(envelope.event);
       onEvent(envelope.event);
     }
-    if ('result' in envelope) result = withStreamRuntimeResult(envelope.result, guiPresent, guiAskUser, genericMessages.join('\n').trim());
+    if ('result' in envelope) result = withStreamRuntimeResult(envelope.result, guiPresent, guiAskUser, joinAssistantTextFragments(genericMessages));
     if ('error' in envelope) error = asString(envelope.error) || JSON.stringify(envelope.error);
   }
   for (;;) {
@@ -154,7 +155,7 @@ export async function readWorkspaceToolStream(
     if (done) break;
   }
   if (buffer.trim()) consumeLine(buffer);
-  result = withStreamRuntimeResult(result, guiPresent, guiAskUser, genericMessages.join('\n').trim());
+  result = withStreamRuntimeResult(result, guiPresent, guiAskUser, joinAssistantTextFragments(genericMessages));
   return { result, error };
 }
 
@@ -228,7 +229,7 @@ async function readWorkspaceToolSse(
         result = withGuiPresentRuntimeResult(data, guiPresent);
         return;
       }
-      const nativeMessage = genericMessages.join('\n').trim();
+      const nativeMessage = joinAssistantTextFragments(genericMessages);
       if (nativeMessage) {
         result = withAssistantMessageRuntimeResult(data, nativeMessage);
         return;
@@ -406,7 +407,7 @@ function withGuiAskUserRuntimeResult(
         },
         artifacts,
         executionProcess,
-        recoverActions: askUser.choices?.map((choice) => choice.commandText) ?? [],
+        recoverActions: [],
         verificationState: {
           status: 'needs-human',
           verifierRef: askUser.source,
@@ -555,10 +556,7 @@ function guiAskUserFromEvent(event: Record<string, unknown>, result: Record<stri
     ?? asString(approvalRequest?.confirmation_text)
     ?? asString(approvalRequest?.reason);
   const choices = guiChoicesFromValue(nested.choices);
-  const text = asString(event.text)
-    ?? asString(event.message)
-    ?? asString(nested.text)
-    ?? formatGuiAskUserText({ title, message, approvalRequest, relatedRefs, choices });
+  const text = formatGuiAskUserText({ title, message, approvalRequest, relatedRefs, choices });
   const commandId = asString(event.commandId) ?? asString(result.commandId);
   return {
     schemaVersion: 'sciforge.runtime-codex-gui-ask-user.v1',
@@ -782,22 +780,38 @@ function formatGuiAskUserText(input: {
   const risk = asString(input.approvalRequest?.riskLevel)
     ?? asString(input.approvalRequest?.risk_level)
     ?? asString(input.approvalRequest?.risk);
-  const approvalRef = approvalRefFromRequest(input.approvalRequest);
-  const actionRef = asString(input.approvalRequest?.actionRef)
-    ?? asString(input.approvalRequest?.action_ref);
-  const actionKind = asString(input.approvalRequest?.actionKind)
-    ?? asString(input.approvalRequest?.action_kind);
   const lines = [
-    `## ${input.title}`,
-    input.message,
-    risk ? `Risk: \`${risk}\`` : undefined,
-    approvalRef ? `Approval ref: \`${approvalRef}\`` : undefined,
-    actionRef ? `Action ref: \`${actionRef}\`` : undefined,
-    !actionRef && actionKind ? `Action kind: \`${actionKind}\`` : undefined,
-    input.relatedRefs?.length ? ['Evidence refs:', ...input.relatedRefs.map((ref) => `- \`${ref}\``)].join('\n') : undefined,
-    input.choices?.length ? ['Choices:', ...input.choices.map((choice) => `- ${choice.label}: \`${choice.commandText}\``)].join('\n') : undefined,
+    `## ${humanGuiAskUserTitle(input.title)}`,
+    humanGuiAskUserMessage(input.message),
+    risk ? `Risk: ${humanGuiRiskLabel(risk)}` : undefined,
+    input.relatedRefs?.length ? `${input.relatedRefs.length} related item${input.relatedRefs.length === 1 ? '' : 's'} available.` : undefined,
   ].filter(Boolean);
   return lines.join('\n\n');
+}
+
+function humanGuiAskUserTitle(value: string) {
+  return (value || 'Confirmation required')
+    .replace(/\bComputer Use confirmation required\b/gi, 'Confirmation required')
+    .replace(/\bComputer Use\b/gi, 'Operation')
+    .replace(/\bgui\.(?:present|ask_user)\b/gi, 'Operation')
+    .replace(/\s+/g, ' ')
+    .trim() || 'Confirmation required';
+}
+
+function humanGuiAskUserMessage(value: string | undefined) {
+  return (value || 'Confirmation is required before continuing.')
+    .replace(/\bComputer Use\b/gi, 'the operation')
+    .replace(/\bgui\.(?:present|ask_user)\b/gi, 'the operation')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function humanGuiRiskLabel(value: string) {
+  const risk = value.trim().toLowerCase();
+  if (risk === 'high') return 'High';
+  if (risk === 'medium') return 'Medium';
+  if (risk === 'low') return 'Low';
+  return value.trim();
 }
 
 function approvalRefFromRequest(approvalRequest?: Record<string, unknown>) {
@@ -1017,7 +1031,7 @@ function runtimeCodexProviderMessageSummary(record: Record<string, unknown>) {
   const type = asString(record.type)?.toLowerCase();
   if (type !== 'message') return undefined;
   if (!isRuntimeCodexEventRecord(record)) return undefined;
-  return 'Runtime Codex native assistant message recorded; the final assistant answer can render as the primary reply, while raw JSONL, stderr, and plugin diagnostics stay folded in the run audit.';
+  return 'Runtime Codex native assistant message recorded; the final assistant answer can render as the primary reply, while raw runtime events, stderr, and plugin diagnostics stay folded in the run audit.';
 }
 
 function rawEventDetailFallback(record: Record<string, unknown>) {

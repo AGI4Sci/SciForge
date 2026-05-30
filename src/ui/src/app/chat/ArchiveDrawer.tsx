@@ -61,8 +61,8 @@ export function ArchiveDrawer({
     <div className="session-history-panel">
       <div className="session-history-head">
         <div>
-          <strong>历史会话</strong>
-          <span>当前：{currentSession.title}</span>
+          <strong>History</strong>
+          <span>Current: {currentSession.title}</span>
         </div>
         <Badge variant="muted">{currentStats}</Badge>
       </div>
@@ -74,18 +74,18 @@ export function ArchiveDrawer({
               checked={allSelected}
               onChange={(event) => setSelectedIds(event.target.checked ? archivedSessions.map((item) => item.sessionId) : [])}
             />
-            全选
+            Select all
           </label>
           <Badge variant={selectedIds.length ? 'info' : 'muted'}>{selectedIds.length} selected</Badge>
-          <button type="button" onClick={deleteSelected} disabled={!selectedIds.length}>删除选中</button>
-          <button type="button" onClick={clearAll}>清空历史</button>
+          <button type="button" onClick={deleteSelected} disabled={!selectedIds.length}>Delete selected</button>
+          <button type="button" onClick={clearAll}>Clear history</button>
         </div>
       ) : null}
       {!archivedSessions.length ? (
         <div className="empty-runtime-state compact">
           <Badge variant="muted">empty</Badge>
-          <strong>暂无归档会话</strong>
-          <p>点击开启新聊天或删除当前聊天后，旧会话会进入这里。</p>
+          <strong>No archived chats</strong>
+          <p>Archived or deleted chats will appear here.</p>
         </div>
       ) : (
         <div className="session-history-list">
@@ -97,7 +97,7 @@ export function ArchiveDrawer({
                 type="checkbox"
                 checked={selectedIds.includes(item.sessionId)}
                 onChange={() => toggleSelected(item.sessionId)}
-                aria-label={`选择历史会话 ${item.title}`}
+                aria-label={`Select history chat ${item.title}`}
               />
               <div className="session-history-copy">
                 <strong>{item.title}</strong>
@@ -114,9 +114,9 @@ export function ArchiveDrawer({
                     {summary.recoverActions.map((action) => <code key={`${item.sessionId}-${action}`}>{action}</code>)}
                   </div>
                 ) : null}
-                <small>恢复后当前工作台会切换到该历史会话，右侧结果同步显示对应 run，不会自动重跑历史任务。</small>
+                <small>Restoring switches to this chat and syncs the result pane without rerunning it.</small>
               </div>
-              <ActionButton icon={Clock} variant="secondary" onClick={() => onRestore(item.sessionId)}>恢复</ActionButton>
+              <ActionButton icon={Clock} variant="secondary" onClick={() => onRestore(item.sessionId)}>Restore</ActionButton>
             </div>
             );
           })}
@@ -136,7 +136,7 @@ function sessionHistoryRunSummary(session: SciForgeSession) {
     const userMessages = session.messages.filter((message) => message.role === 'user' && !message.id.startsWith('seed')).length;
     return {
       runId: '',
-      main: userMessages ? '未执行：仅保留用户消息和草稿上下文。' : '未执行：空草稿会话。',
+      main: userMessages ? 'Not run: user messages and draft context are saved.' : 'Not run: empty draft chat.',
       refs: [] as string[],
       recoverActions: [] as string[],
     };
@@ -149,10 +149,10 @@ function sessionHistoryRunSummary(session: SciForgeSession) {
   const recoverActions = runRecoverActions(session, lastRun).map(compactHistoryText).slice(0, 2);
   const artifactRefs = session.artifacts.slice(0, 3).map((artifact) => artifact.id);
   const statusText = lastRun.status === 'completed'
-    ? `完成：${artifactRefs.length ? `产物 ${artifactRefs.join(', ')}` : '没有可见 artifact'}。`
+    ? `Complete: ${artifactRefs.length ? `Artifacts ${artifactRefs.join(', ')}` : 'No visible artifact'}.`
     : lastRun.status === 'failed'
-      ? `失败边界：${rawFailure ?? blockers.find((line) => !/^blocker: run\b/i.test(line)) ?? blockers[0] ?? compactHistoryText(lastRun.response || '失败原因未记录')}。`
-      : `${lastRun.status}：${compactHistoryText(lastRun.response || lastRun.prompt || '运行状态已记录')}。`;
+      ? `Failure boundary: ${rawFailure ?? blockers.find((line) => !/^blocker: run\b/i.test(line)) ?? blockers[0] ?? compactHistoryText(lastRun.response || 'Failure reason not recorded')}.`
+      : `${lastRun.status}: ${compactHistoryText(lastRun.response || lastRun.prompt || 'Run status saved')}.`;
   return {
     runId: shortRunId(lastRun.id),
     main: statusText,
@@ -171,7 +171,7 @@ function sessionHistoryConversationProjectionSummary(projection: UiConversationP
     .slice(0, 4);
   return {
     runId: shortRunId(lastRun?.id ?? projection.activeRun?.id ?? projection.conversationId),
-    main: `${conversationProjectionStatusLabel(conversationProjectionStatus(projection))}：${compactHistoryText(reason)}。`,
+    main: `${conversationProjectionStatusLabel(conversationProjectionStatus(projection))}: ${compactHistoryText(reason)}.`,
     refs,
     recoverActions: conversationProjectionRecoverActions(projection).map(compactHistoryText).slice(0, 2),
   };
@@ -179,19 +179,19 @@ function sessionHistoryConversationProjectionSummary(projection: UiConversationP
 
 function conversationProjectionStatusLabel(status: ReturnType<typeof conversationProjectionStatus>) {
   const labels: Record<ReturnType<typeof conversationProjectionStatus>, string> = {
-    idle: '未执行',
-    planned: '已计划',
-    dispatched: '已分发',
-    'partial-ready': '部分结果',
-    'output-materialized': '已保存输出',
-    validated: '已验证边界',
-    'visible-not-live-acceptance': '可见验证待确认',
-    satisfied: '完成',
-    'degraded-result': '降级结果',
-    'external-blocked': '外部阻塞',
-    'repair-needed': '需恢复',
-    'needs-human': '需人工处理',
-    'background-running': '后台继续中',
+    idle: 'Not run',
+    planned: 'Planned',
+    dispatched: 'Started',
+    'partial-ready': 'Partial result',
+    'output-materialized': 'Output saved',
+    validated: 'Validated',
+    'visible-not-live-acceptance': 'Visible check pending',
+    satisfied: 'Complete',
+    'degraded-result': 'Partial result',
+    'external-blocked': 'Blocked',
+    'repair-needed': 'Needs recovery',
+    'needs-human': 'Needs input',
+    'background-running': 'Still running',
   };
   return labels[status];
 }
@@ -200,10 +200,10 @@ function sessionHistoryTaskRunCardSummary(card: TaskRunCard, lastRun: SciForgeRu
   const failureBoundary = card.failureSignatures[0]?.message;
   const completedRefs = card.refs.filter((ref) => ref.kind === 'artifact').slice(0, 3).map(compactTaskRunCardRef);
   const summary = failureBoundary
-    ? `失败边界：${compactHistoryText(failureBoundary)}。`
+    ? `Failure boundary: ${compactHistoryText(failureBoundary)}.`
     : card.taskOutcome === 'satisfied'
-      ? `${taskRunCardStatusLabel(card.status)}：${completedRefs.length ? `产物 ${completedRefs.join(', ')}` : compactHistoryText(card.goal)}。`
-      : `${taskRunCardStatusLabel(card.status)}：${compactHistoryText(card.nextStep || card.rounds.at(-1)?.observed || card.goal)}。`;
+      ? `${taskRunCardStatusLabel(card.status)}: ${completedRefs.length ? `Artifacts ${completedRefs.join(', ')}` : compactHistoryText(card.goal)}.`
+      : `${taskRunCardStatusLabel(card.status)}: ${compactHistoryText(card.nextStep || card.rounds.at(-1)?.observed || card.goal)}.`;
   const refs = card.refs
     .filter((ref) => ['artifact', 'execution-unit', 'verification', 'log', 'bundle', 'file'].includes(ref.kind))
     .slice(0, 4)
@@ -234,14 +234,14 @@ function compactTaskRunCardRef(ref: TaskRunCardRef) {
 
 function taskRunCardStatusLabel(status: TaskRunCard['status']) {
   const labels: Record<TaskRunCard['status'], string> = {
-    running: '运行中',
-    complete: '完成',
-    partial: '部分完成',
-    'needs-work': '需继续',
-    'needs-human': '需人工处理',
-    failed: '失败',
-    cancelled: '已取消',
-    'not-run': '未执行',
+    running: 'Running',
+    complete: 'Complete',
+    partial: 'Partial',
+    'needs-work': 'Needs work',
+    'needs-human': 'Needs input',
+    failed: 'Failed',
+    cancelled: 'Cancelled',
+    'not-run': 'Not run',
   };
   return labels[status];
 }

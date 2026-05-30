@@ -15,13 +15,13 @@ test('sidebar project groups bind threads to each project workspace snapshot', (
   const mainSessions = {
     'literature-evidence-review': session({
       sessionId: 'main-thread',
-      title: '主项目对话',
+      title: 'Main project chat',
     }),
   } as Record<ScenarioInstanceId, SciForgeSession>;
   const peerSessions = {
     'literature-evidence-review': session({
       sessionId: 'peer-thread',
-      title: 'Peer 项目对话',
+      title: 'Peer project chat',
     }),
   } as Record<ScenarioInstanceId, SciForgeSession>;
 
@@ -53,10 +53,10 @@ test('sidebar project groups bind threads to each project workspace snapshot', (
 
 test('switching active workspace does not move peer project threads into current project', () => {
   const mainSessions = {
-    'literature-evidence-review': session({ sessionId: 'main-thread', title: '主项目对话' }),
+    'literature-evidence-review': session({ sessionId: 'main-thread', title: 'Main project chat' }),
   } as Record<ScenarioInstanceId, SciForgeSession>;
   const peerSessions = {
-    'literature-evidence-review': session({ sessionId: 'peer-thread', title: 'Peer 项目对话' }),
+    'literature-evidence-review': session({ sessionId: 'peer-thread', title: 'Peer project chat' }),
   } as Record<ScenarioInstanceId, SciForgeSession>;
   const config = {
     ...defaultSciForgeConfig,
@@ -86,7 +86,7 @@ test('switching active workspace does not move peer project threads into current
 
 test('project switch mid-hydrate keeps stale sessions under previous workspace path', () => {
   const mainSessions = {
-    'literature-evidence-review': session({ sessionId: 'main-thread', title: '主项目对话' }),
+    'literature-evidence-review': session({ sessionId: 'main-thread', title: 'Main project chat' }),
   } as Record<ScenarioInstanceId, SciForgeSession>;
   const config = {
     ...defaultSciForgeConfig,

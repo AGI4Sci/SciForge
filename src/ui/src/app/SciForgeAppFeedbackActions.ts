@@ -114,10 +114,10 @@ export function createSciForgeFeedbackActions({
             }
             : item),
         }));
-        setWorkspaceStatus(`反馈证据已写入 ${bundle.evidenceBundleRef}`);
+        setWorkspaceStatus(`Feedback evidence saved to ${bundle.evidenceBundleRef}`);
       })
       .catch((error) => {
-        setWorkspaceStatus(`反馈已保存在本地状态，但证据 bundle 未落盘：${error instanceof Error ? error.message : String(error)}`);
+        setWorkspaceStatus(`Feedback was saved locally, but the evidence bundle was not written: ${error instanceof Error ? error.message : String(error)}`);
       });
   }
 
@@ -147,11 +147,11 @@ export function createSciForgeFeedbackActions({
       authorName: feedbackAuthor.authorName.trim() || 'Anonymous',
       comment: bundle.comment,
       expectedBehavior: bundle.kind === 'annotation'
-        ? `按浏览器标注修复页面区域：${bundle.comment}`
-        : 'browser runtime 应产出截图/DOM refs，并基于页面状态形成可修复问题。',
+        ? `Fix the annotated page region: ${bundle.comment}`
+        : 'Browser runtime should produce screenshot and DOM references and turn the page state into a fixable issue.',
       actualBehavior: bundle.kind === 'annotation'
-        ? `浏览器页面存在用户标注的问题区域：${bundle.summary}`
-        : '用户点击了浏览器截图按钮；当前网页端只能提交截图请求，真实截图证据由 browser runtime 产出。',
+        ? `The page contains the annotated issue area: ${bundle.summary}`
+        : 'The user clicked the browser screenshot button; the web UI submits the screenshot request and browser runtime produces the evidence.',
       status: 'open',
       priority: 'normal',
       severity: 'normal',
@@ -201,12 +201,12 @@ export function createSciForgeFeedbackActions({
       },
     };
     addFeedbackComment(comment);
-    setWorkspaceStatus(`浏览器反馈已提交到收件箱：${feedbackId}`);
+    setWorkspaceStatus(`Browser feedback submitted to the inbox: ${feedbackId}`);
     return feedbackId;
   }
 
   function requestBrowserFeedbackRepair({ feedbackId }: { feedbackId: string; bundle: BrowserWorkbenchFeedbackBundle }) {
-    setWorkspaceStatus(`已打开反馈收件箱，请确认后再派发修复：${feedbackId}`);
+    setWorkspaceStatus(`Feedback inbox opened. Confirm before dispatching repair: ${feedbackId}`);
     setPage('feedback');
   }
 

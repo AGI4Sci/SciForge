@@ -1,0 +1,46 @@
+导航
+对话
+项目对话
+workspace
+当前
+hello
+最近提问：hello
+工具
+应用
+自动化
+即将推出
+项目
+workspace
+
+Unexpected token '<', "<!doctype "... is not valid JSON
+
+workspace
+加载中…
+打开其他文件夹…
+手动输入路径
+设置
+注释
+SciForge · 1 项需处理
+SciForge 工作台
+vision-sense
+on
+Ask SciForge
+在线
+复制
+编辑
+
+hello
+
+提示
+输入研究问题后即可运行；Shift+Enter 换行，Enter 发送。
+输入研究问题，或点选对象后继续追问...
+结果视图
+证据矩阵
+全部
+只看图
+只看证据
+只看过程
+等待
+暂无可预览内容
+
+主回答优先保留在聊天中；有可预览内容时会显示在这里。

@@ -5,7 +5,6 @@ import type { WorkspaceFileContent } from '../../api/workspaceClient';
 import { Badge, cx } from '../uiPrimitives';
 import { MarkdownBlock } from './reportContent';
 import { PreviewDescriptorActions } from './PreviewActions';
-import { lightweightPreviewNoticeForDescriptor, unsupportedPreviewNoticeModel } from '../../../../../packages/support/artifact-preview';
 import {
   descriptorCanUseWorkspacePreview,
   fileKindForPath,
@@ -13,6 +12,8 @@ import {
   uploadedArtifactPreview,
 } from './previewDescriptor';
 import { createWorkspacePreviewHydrationApi, type ArtifactPreviewHydrationApi } from './artifactPreviewHydrationApi';
+import { boundedRightPaneText, formatRightPanePreviewJson, rightPaneInlineLabel, rightPaneTextIsSensitive } from './previewSafety';
+import { resultLocale, resultText, type ResultLocale } from './resultLocale';
 import { resolvePresentationInputForArtifact } from '../../../../../packages/presentation/interactive-views';
 import { createLocalUserActionApi, type UserActionApi } from '../projectionApi';
 import {
@@ -30,10 +31,24 @@ import {
 
 const WORKSPACE_OBJECT_INLINE_PREVIEW_LIMIT_BYTES = 1024 * 1024;
 
+export function canHydrateWorkspaceObjectPath(value: string | undefined) {
+  const path = value?.trim().replace(/\\/g, '/');
+  if (!path) return false;
+  if (/^(?:\/|[A-Za-z]:\/|~\/?)/.test(path) || path.includes('://')) return false;
+  if (/[\r\n\t<>|?*:]/.test(path)) return false;
+  if (path.split('/').some((part) => part === '..')) return false;
+  if (/^(?:Users|Applications|Volumes|private|var|tmp)(?:\/|$)/i.test(path)) return false;
+  if (/^\.sciforge\//i.test(path) && !/^\.sciforge\/artifacts\//i.test(path)) return false;
+  if (/(?:^|\/)(?:audit|logs?|stdout|stderr|raw)(?:\/|\.|$)/i.test(path)) return false;
+  if (/\b(?:Authorization|api[-_ ]?key|token|secret|password|credential)\b|sk-[A-Za-z0-9._-]+/i.test(path)) return false;
+  return true;
+}
+
 export function WorkspaceObjectPreview({
   reference,
   session,
   config,
+  locale: localeProp,
   onPreviewPackageRequest,
   onObjectReferenceFocus,
   userActionApi,
@@ -42,16 +57,19 @@ export function WorkspaceObjectPreview({
   reference: ObjectReference;
   session: SciForgeSession;
   config: SciForgeConfig;
+  locale?: ResultLocale;
   onPreviewPackageRequest?: (reference: ObjectReference, path?: string, descriptor?: PreviewDescriptor) => void;
   onObjectReferenceFocus?: (reference: ObjectReference) => void;
   userActionApi?: UserActionApi;
   hydrationApi?: ArtifactPreviewHydrationApi;
 }) {
+  const locale = resultLocale(localeProp ?? config.locale);
   const artifact = artifactForObjectReference(reference, session);
   const objectReferences = useMemo(() => workspacePreviewObjectReferences(session, reference, artifact), [artifact, reference, session]);
   const inlinePreview = useMemo(() => uploadedArtifactPreview(artifact), [artifact]);
   const presentationInput = useMemo(() => resolvePresentationInputForArtifact(artifact), [artifact]);
   const path = presentationInput?.ref ?? pathForObjectReference(reference, session);
+  const subagentPreview = useMemo(() => subagentPreviewForReference(session, reference), [reference.ref, session]);
   const previewConfig = useMemo(() => config, [config.workspacePath, config.workspaceWriterBaseUrl]);
   const resolvedUserActionApi = useMemo(() => userActionApi ?? createLocalUserActionApi(), [userActionApi]);
   const resolvedHydrationApi = useMemo(() => hydrationApi ?? createWorkspacePreviewHydrationApi(), [hydrationApi]);
@@ -65,7 +83,7 @@ export function WorkspaceObjectPreview({
     setError('');
     if (inlinePreview) return undefined;
     if (presentationInput?.kind === 'binary' || presentationInput?.kind === 'unsupported') return undefined;
-    if (!path || (reference.kind !== 'file' && reference.kind !== 'artifact') || /^https?:\/\//i.test(path)) return undefined;
+    if (!path || (reference.kind !== 'file' && reference.kind !== 'artifact') || !canHydrateWorkspaceObjectPath(path)) return undefined;
     let cancelled = false;
     setLoadingPath(path);
     void resolvedHydrationApi.hydrateWorkspaceObjectPreview({ artifact, path, config: previewConfig })
@@ -86,13 +104,15 @@ export function WorkspaceObjectPreview({
 
   if (reference.kind === 'url') {
     const url = reference.ref.replace(/^url:/i, '');
+    const safeUrl = rightPaneInlineLabel(url);
+    const href = safeExternalPreviewHref(url);
     return (
       <div className="workspace-object-preview">
         <div className="workspace-object-preview-head">
           <Badge variant="info">url</Badge>
-          <strong>{reference.title}</strong>
+          <strong>{rightPaneInlineLabel(reference.title)}</strong>
         </div>
-        <a href={url} target="_blank" rel="noreferrer">{url}</a>
+        {href ? <a href={href} target="_blank" rel="noreferrer">{safeUrl}</a> : <code>{safeUrl}</code>}
       </div>
     );
   }
@@ -101,9 +121,9 @@ export function WorkspaceObjectPreview({
       <div className="workspace-object-preview">
         <div className="workspace-object-preview-head">
           <Badge variant="info">folder</Badge>
-          <strong>{path || reference.ref}</strong>
+          <strong>{rightPaneInlineLabel(path || reference.ref)}</strong>
         </div>
-        <p>这是一个 workspace 文件夹引用；可用“系统打开”或“打开文件夹”查看内容。</p>
+        <p>{resultText(locale, { 'zh-CN': '此项目文件夹已作为上下文附加。请在外部打开以查看内容。', 'en-US': 'This project folder is attached as context. Open it externally to inspect its contents.' })}</p>
       </div>
     );
   }
@@ -114,7 +134,7 @@ export function WorkspaceObjectPreview({
       <div className="workspace-object-preview" data-sciforge-reference={sciForgeReferenceAttribute(previewReference)}>
         <div className="workspace-object-preview-head">
           <Badge variant="info">{inlinePreview.kind}</Badge>
-          <strong>{inlinePreview.title}</strong>
+          <strong>{rightPaneInlineLabel(inlinePreview.title)}</strong>
           {inlinePreview.size ? <span>{formatBytes(inlinePreview.size)}</span> : null}
         </div>
         <UploadedDataUrlPreview
@@ -123,13 +143,36 @@ export function WorkspaceObjectPreview({
           title={inlinePreview.title}
           mimeType={inlinePreview.mimeType}
           reference={previewReference}
+          locale={locale}
         />
       </div>
     );
   }
   if (presentationInput?.kind === 'binary' || presentationInput?.kind === 'unsupported') {
     return (
-      <PresentationInputNotice reference={reference} input={presentationInput} path={path} onRequest={onPreviewPackageRequest} />
+      <PresentationInputNotice reference={reference} input={presentationInput} path={path} locale={locale} onRequest={onPreviewPackageRequest} />
+    );
+  }
+  if (subagentPreview) {
+    return (
+      <SubagentArtifactPreview
+        preview={subagentPreview}
+        reference={reference}
+        locale={locale}
+        onObjectReferenceFocus={onObjectReferenceFocus}
+      />
+    );
+  }
+  if (path && (reference.kind === 'file' || reference.kind === 'artifact') && !canHydrateWorkspaceObjectPath(path)) {
+    return (
+      <ArtifactFallbackPreview
+        reference={redactedUnsafeWorkspacePreviewReference(reference)}
+        artifact={artifact}
+        diagnostic={resultText(locale, { 'zh-CN': '此文件无法在这里预览。', 'en-US': 'This file cannot be previewed from here.' })}
+        reason="read-failed"
+        locale={locale}
+        onRequest={onPreviewPackageRequest}
+      />
     );
   }
   if (!path) {
@@ -138,6 +181,7 @@ export function WorkspaceObjectPreview({
         reference={reference}
         artifact={artifact}
         reason="missing-path"
+        locale={locale}
       />
     );
   }
@@ -146,9 +190,9 @@ export function WorkspaceObjectPreview({
       <div className="workspace-object-preview">
         <div className="workspace-object-preview-head">
           <Badge variant="muted">loading</Badge>
-          <strong>{loadingPath}</strong>
+          <strong>{rightPaneInlineLabel(loadingPath)}</strong>
         </div>
-        <p>正在读取 workspace 文件内容...</p>
+        <p>{resultText(locale, { 'zh-CN': '正在读取工作区文件内容...', 'en-US': 'Reading workspace file content...' })}</p>
       </div>
     );
   }
@@ -160,6 +204,7 @@ export function WorkspaceObjectPreview({
         path={path}
         diagnostic={error}
         reason="read-failed"
+        locale={locale}
         onRequest={onPreviewPackageRequest}
       />
     );
@@ -170,7 +215,7 @@ export function WorkspaceObjectPreview({
       <div className="workspace-object-preview" data-sciforge-reference={sciForgeReferenceAttribute(descriptorReference)}>
         <div className="workspace-object-preview-head">
           <Badge variant="info">{descriptor.kind}</Badge>
-          <strong>{descriptor.title || descriptor.ref}</strong>
+          <strong>{rightPaneInlineLabel(descriptor.title || descriptor.ref)}</strong>
           {descriptor.sizeBytes !== undefined ? <span>{formatBytes(descriptor.sizeBytes)}</span> : null}
         </div>
         {previewNeedsPackage(descriptor) ? (
@@ -178,6 +223,7 @@ export function WorkspaceObjectPreview({
             reference={reference}
             path={path}
             descriptor={descriptor}
+            locale={locale}
             onRequest={onPreviewPackageRequest}
           />
         ) : (
@@ -190,6 +236,7 @@ export function WorkspaceObjectPreview({
             session={session}
             userActionApi={resolvedUserActionApi}
             hydrationApi={resolvedHydrationApi}
+            locale={locale}
             onObjectReferenceFocus={onObjectReferenceFocus}
           />
         )}
@@ -201,9 +248,9 @@ export function WorkspaceObjectPreview({
       <div className="workspace-object-preview">
         <div className="workspace-object-preview-head">
           <Badge variant="muted">loading</Badge>
-          <strong>{path}</strong>
+          <strong>{rightPaneInlineLabel(path)}</strong>
         </div>
-        <p>正在读取 workspace 文件内容...</p>
+        <p>{resultText(locale, { 'zh-CN': '正在读取工作区文件内容...', 'en-US': 'Reading workspace file content...' })}</p>
       </div>
     ) : null;
   }
@@ -212,16 +259,197 @@ export function WorkspaceObjectPreview({
     <div className="workspace-object-preview" data-sciforge-reference={sciForgeReferenceAttribute(fileReference)}>
       <div className="workspace-object-preview-head">
         <Badge variant="info">{file.language || fileKindForPath(file.path)}</Badge>
-        <strong>{file.path}</strong>
+        <strong>{rightPaneInlineLabel(file.path)}</strong>
         <span>{formatBytes(file.size)}</span>
       </div>
       <WorkspaceFileInlineViewer
         file={file}
         objectReferences={objectReferences}
+        locale={locale}
         onObjectReferenceFocus={onObjectReferenceFocus}
       />
     </div>
   );
+}
+
+interface SubagentArtifactPreviewModel {
+  agentId?: string;
+  parentAgentId?: string;
+  status?: string;
+  createdAt?: string;
+  resultSummary?: string;
+  resultRef?: string;
+  transcriptRef?: string;
+  refs: string[];
+}
+
+function SubagentArtifactPreview({
+  preview,
+  reference,
+  locale,
+  onObjectReferenceFocus,
+}: {
+  preview: SubagentArtifactPreviewModel;
+  reference: ObjectReference;
+  locale?: ResultLocale;
+  onObjectReferenceFocus?: (reference: ObjectReference) => void;
+}) {
+  const safeTitle = preview.agentId ? resultText(locale, { 'zh-CN': '子任务结果', 'en-US': 'Subtask result' }) : reference.title || reference.ref;
+  const summary = subagentPreviewSummary(preview.resultSummary, reference, locale);
+  const refs = uniqueStrings([
+    preview.resultRef,
+    preview.transcriptRef,
+    ...preview.refs,
+  ].filter((ref): ref is string => typeof ref === 'string' && safeSubagentPreviewRef(ref)));
+  return (
+    <div className="workspace-object-preview" data-sciforge-reference={sciForgeReferenceAttribute(referenceForObjectReference(reference))}>
+      <div className="workspace-object-preview-head">
+        <Badge variant="info">{resultText(locale, { 'zh-CN': '子任务结果', 'en-US': 'Subtask result' })}</Badge>
+        <strong>{rightPaneInlineLabel(safeTitle)}</strong>
+        {preview.status ? <span>{rightPaneInlineLabel(preview.status)}</span> : null}
+      </div>
+      {refs.length ? (
+        <div className="source-list">
+          {refs.map((ref) => (
+            onObjectReferenceFocus ? (
+              <button
+                type="button"
+                key={ref}
+                title={rightPaneInlineLabel(ref)}
+                onClick={() => onObjectReferenceFocus(objectReferenceForSubagentPreviewRef(ref))}
+              >
+                {rightPaneInlineLabel(ref)}
+              </button>
+            ) : <code key={ref} title={rightPaneInlineLabel(ref)}>{rightPaneInlineLabel(ref)}</code>
+          ))}
+        </div>
+      ) : null}
+      {preview.createdAt ? <p className="muted-inline">{resultText(locale, { 'zh-CN': '完成于', 'en-US': 'Completed at' })} {rightPaneInlineLabel(preview.createdAt)}</p> : null}
+      <p>{boundedRightPaneText(summary, 1600)}</p>
+    </div>
+  );
+}
+
+function redactedUnsafeWorkspacePreviewReference(reference: ObjectReference): ObjectReference {
+  const label = reference.kind === 'file' ? 'file:[redacted-unsafe-preview-ref]' : 'artifact:[redacted-unsafe-preview-ref]';
+  return {
+    ...reference,
+    title: label,
+    ref: label,
+    summary: 'Preview ref is outside the trusted workspace preview boundary.',
+    provenance: undefined,
+  };
+}
+
+function subagentPreviewSummary(value: string | undefined, reference: ObjectReference, locale?: ResultLocale) {
+  const cleaned = cleanSubagentPreviewSummary(value);
+  if (cleaned) return cleaned;
+  return reference.ref.includes('transcript')
+    ? resultText(locale, { 'zh-CN': '委托 worker transcript 引用如下。', 'en-US': 'Delegated worker transcript ref is available below.' })
+    : resultText(locale, { 'zh-CN': '只读委托 worker 已完成；安全引用如下。', 'en-US': 'Read-only delegated worker completed; safe refs are available below.' });
+}
+
+function cleanSubagentPreviewSummary(value: string | undefined) {
+  const text = stripTruncatedSubagentPreviewPromptTail(boundedRightPaneText(value ?? '', 1600)).trim();
+  if (!text) return '';
+  const segments = text
+    .split(/(?:\r?\n|(?<=[.!?。！？])\s+)/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  const cleaned = segments
+    .filter((segment) => !isPromptEchoSubagentSummarySegment(segment))
+    .join(' ')
+    .trim();
+  return cleaned === text && isPromptEchoSubagentSummarySegment(cleaned) ? '' : cleaned;
+}
+
+function stripTruncatedSubagentPreviewPromptTail(value: string) {
+  return value.replace(/\s*\.\.\.\s*[^.!?。！？]{0,120}\bsubstitute\b[.!?。！？]?/gi, '');
+}
+
+function isPromptEchoSubagentSummarySegment(segment: string) {
+  const text = segment.toLowerCase();
+  return /\b(?:request|prompt|input)\s+summary\b/.test(text)
+    || /\bdo not (?:edit|modify|write|use\s+(?:shell|ordinary|terminal)|use shell substitute)\b/.test(text)
+    || /\bdo not use\b.*\bsubstitute\b/.test(text)
+    || (/\bsubstitute\b/.test(text) && /(?:\.\.\.|shell|ordinary|terminal|do not|use)/.test(text))
+    || /\bif (?:no|unavailable|current runtime lacks|there is no)\b/.test(text)
+    || /^(?:read[-\s]?only|只读)\.?$/.test(text)
+    || /^read\b.*\bonly\b\.?$/.test(text)
+    || /^sub[-\s]?agent\s+reads?\b/.test(text)
+    || /^delegated\s+worker\s+reads?\b/.test(text)
+    || /^report\b.*\b(?:open difference|evidence refs?|refs needed|current status|todo)\b/.test(text)
+    || /^main agent\b.*\bsummar/i.test(segment)
+    || (/\bno_subagent_tool_available\b/.test(text) && /\b(?:if|prompt|request|summary)\b/.test(text));
+}
+
+function subagentPreviewForReference(session: SciForgeSession, reference: ObjectReference): SubagentArtifactPreviewModel | undefined {
+  if (!/^artifact:subagent-(?:result|transcript)-[A-Za-z0-9_.:-]+$/i.test(reference.ref)) return undefined;
+  for (const run of [...session.runs].reverse()) {
+    for (const event of [...streamProcessEvents(run.raw)].reverse()) {
+      const native = recordField(event.native);
+      if (!native) continue;
+      const refs = stringArrayField(native.refs);
+      const resultRef = stringField(native.ref) ?? refs.find((ref) => /^artifact:subagent-result-/i.test(ref));
+      const transcriptRef = stringField(native.transcriptRef) ?? refs.find((ref) => /^artifact:subagent-transcript-/i.test(ref));
+      if (![resultRef, transcriptRef, ...refs].includes(reference.ref)) continue;
+      return {
+        agentId: stringField(native.agentId),
+        parentAgentId: stringField(native.parentAgentId),
+        status: stringField(native.status),
+        createdAt: stringField(event.createdAt),
+        resultSummary: stringField(native.resultSummary),
+        resultRef,
+        transcriptRef,
+        refs,
+      };
+    }
+  }
+  return undefined;
+}
+
+function streamProcessEvents(raw: unknown): Record<string, unknown>[] {
+  const record = recordField(raw);
+  const process = recordField(record?.streamProcess);
+  const events = process?.events;
+  return Array.isArray(events) ? events.filter(recordField) : [];
+}
+
+function objectReferenceForSubagentPreviewRef(ref: string): ObjectReference {
+  const kind = ref.startsWith('file:') ? 'file' : 'artifact';
+  const title = ref.startsWith('file:') ? ref.slice('file:'.length) : ref;
+  return {
+    id: `subagent-preview-${ref.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 96)}`,
+    title,
+    kind,
+    ref,
+    status: 'available',
+    actions: kind === 'artifact' ? ['inspect'] : ['focus-right-pane', 'inspect'],
+    presentationRole: kind === 'artifact' ? 'audit' : 'supporting-evidence',
+  };
+}
+
+function safeSubagentPreviewRef(ref: string) {
+  const value = ref.trim();
+  if (!value || rightPaneTextIsSensitive(value)) return false;
+  if (value.startsWith('file:')) return canHydrateWorkspaceObjectPath(value.slice('file:'.length));
+  if (!value.startsWith('artifact:')) return false;
+  const artifactRef = value.slice('artifact:'.length).trim();
+  if (!artifactRef || artifactRef.startsWith('/') || artifactRef.startsWith('~') || artifactRef.includes('://')) return false;
+  if (/[\r\n\t<>|?*]/.test(artifactRef)) return false;
+  if (artifactRef.split('/').some((part) => part === '..')) return false;
+  if (/(?:^|\/)(?:\.sciforge|raw|provider|stdout|stderr|trace|tmp|private)(?:\/|$)/i.test(artifactRef)) return false;
+  return true;
+}
+
+function safeExternalPreviewHref(value: string): string | undefined {
+  if (rightPaneTextIsSensitive(value)) return undefined;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function ArtifactFallbackPreview({
@@ -230,6 +458,7 @@ function ArtifactFallbackPreview({
   path,
   diagnostic,
   reason,
+  locale,
   onRequest,
 }: {
   reference: ObjectReference;
@@ -237,29 +466,32 @@ function ArtifactFallbackPreview({
   path?: string;
   diagnostic?: string;
   reason: 'missing-path' | 'read-failed' | 'inline-data';
+  locale?: ResultLocale;
   onRequest?: (reference: ObjectReference, path?: string, descriptor?: PreviewDescriptor) => void;
 }) {
-  const fallbackReference = referenceForObjectReference(reference);
   const title = artifactFallbackTitle(reference, artifact, path);
+  const fallbackReference = referenceForObjectReference({
+    ...reference,
+    title,
+    ref: `${reference.kind}:preview-unavailable`,
+    summary: resultText(locale, { 'zh-CN': '预览不可用', 'en-US': 'Preview unavailable' }),
+    provenance: undefined,
+  });
   return (
     <div className="workspace-object-preview" data-sciforge-reference={sciForgeReferenceAttribute(fallbackReference)}>
       <div className="workspace-object-preview-head">
-        <Badge variant="warning">fallback</Badge>
-        <strong>{title}</strong>
+        <Badge variant="warning">{resultText(locale, { 'zh-CN': '预览不可用', 'en-US': 'Preview unavailable' })}</Badge>
+        <strong>{rightPaneInlineLabel(title)}</strong>
       </div>
-      <p>{artifactFallbackReasonLabel(reason)}</p>
-      <div className="source-list">
-        <code>{reference.ref}</code>
-        {artifact?.id ? <code>artifact:{artifact.id}</code> : null}
-        {artifact?.type ? <code>{artifact.type}</code> : null}
-        {path ? <code>{path}</code> : null}
-      </div>
-      <p>这个对象的可读文件暂时打不开。预览失败只影响展示，不改变本轮任务结果；引用和诊断仍保留在运行细节中。</p>
-      {diagnostic ? <PreviewDiagnosticFold diagnostic={diagnostic} /> : null}
+      <p>{artifactFallbackReasonLabel(reason, locale)}</p>
+      <p className="muted-inline">{resultText(locale, { 'zh-CN': '此项仍附加在对话中，可继续跟进。', 'en-US': 'This item is still attached to the conversation for follow-up.' })}</p>
+      <p>{resultText(locale, { 'zh-CN': '这个结果仍可在对话中使用。预览问题只影响此侧边面板。', 'en-US': 'This result is still available to use in the conversation. The preview issue only affects this side panel.' })}</p>
+      {diagnostic ? <PreviewDiagnosticFold diagnostic={diagnostic} locale={locale} /> : null}
       {path ? (
         <UnsupportedPreviewPackageNotice
           reference={reference}
           path={path}
+          locale={locale}
           onRequest={onRequest}
         />
       ) : null}
@@ -271,39 +503,38 @@ function PresentationInputNotice({
   reference,
   input,
   path,
+  locale,
   onRequest,
 }: {
   reference: ObjectReference;
   input: NonNullable<ReturnType<typeof resolvePresentationInputForArtifact>>;
   path?: string;
+  locale?: ResultLocale;
   onRequest?: (reference: ObjectReference, path?: string, descriptor?: PreviewDescriptor) => void;
 }) {
   return (
     <div className="workspace-object-preview" data-sciforge-reference={sciForgeReferenceAttribute(referenceForObjectReference(reference))}>
       <div className="workspace-object-preview-head">
-        <Badge variant={input.kind === 'binary' ? 'info' : 'warning'}>{input.kind}</Badge>
-        <strong>{input.title || path || reference.title}</strong>
+        <Badge variant={input.kind === 'binary' ? 'info' : 'warning'}>{input.kind === 'binary' ? resultText(locale, { 'zh-CN': '外部打开', 'en-US': 'Open externally' }) : resultText(locale, { 'zh-CN': '预览不可用', 'en-US': 'Preview unavailable' })}</Badge>
+        <strong>{rightPaneInlineLabel(input.title || path || reference.title)}</strong>
       </div>
       {input.kind === 'unsupported' ? (
-        <p>{input.reason}</p>
+        <p>{resultText(locale, { 'zh-CN': '此结果暂时无法内联预览。', 'en-US': 'This result cannot be previewed inline yet.' })}</p>
       ) : input.kind === 'binary' ? (
-        <p>这个文件更适合用系统默认程序打开，浏览器内联视图不展开原始内容。</p>
+        <p>{resultText(locale, { 'zh-CN': '此文件更适合用系统应用打开。内联预览会保持简洁。', 'en-US': 'This file is better opened with the system app. Inline preview stays compact.' })}</p>
       ) : (
-        <p>这个交付物当前不走浏览器内联预览。</p>
+        <p>{resultText(locale, { 'zh-CN': '此结果已附加，但不会内联显示。', 'en-US': 'This result is attached, but it is not shown inline.' })}</p>
       )}
-      <div className="source-list">
-        {path ? <code>{path}</code> : null}
-        {input.rawRef ? <span className="muted-inline">原始材料已保留用于审计</span> : null}
-      </div>
-      {path ? <UnsupportedPreviewPackageNotice reference={reference} path={path} onRequest={onRequest} /> : null}
+      {path || input.rawRef ? <p className="muted-inline">{resultText(locale, { 'zh-CN': '源材料可从运行详情查看。', 'en-US': 'Source material is available from run details.' })}</p> : null}
+      {path ? <UnsupportedPreviewPackageNotice reference={reference} path={path} locale={locale} onRequest={onRequest} /> : null}
     </div>
   );
 }
 
-function artifactFallbackReasonLabel(reason: 'missing-path' | 'read-failed' | 'inline-data') {
-  if (reason === 'missing-path') return '这个对象缺少可读取的 workspace 文件路径，无法生成内联预览。';
-  if (reason === 'inline-data') return '这个对象只有运行记录，没有可直接阅读的交付文件。';
-  return 'workspace 文件暂时不可读，已保留引用和诊断信息。';
+function artifactFallbackReasonLabel(reason: 'missing-path' | 'read-failed' | 'inline-data', locale?: ResultLocale) {
+  if (reason === 'missing-path') return resultText(locale, { 'zh-CN': '预览不可用：此结果没有附加可读取文件。', 'en-US': 'Preview unavailable: no readable file is attached to this result.' });
+  if (reason === 'inline-data') return resultText(locale, { 'zh-CN': '预览不可用：此结果没有可读取交付文件。', 'en-US': 'Preview unavailable: this result does not include a readable delivery file.' });
+  return resultText(locale, { 'zh-CN': '预览不可用：已保存文件无法在这里打开。', 'en-US': 'Preview unavailable: the saved file could not be opened here.' });
 }
 
 function DescriptorPreview({
@@ -315,6 +546,7 @@ function DescriptorPreview({
   session,
   userActionApi,
   hydrationApi,
+  locale,
   onObjectReferenceFocus,
 }: {
   descriptor: PreviewDescriptor;
@@ -325,6 +557,7 @@ function DescriptorPreview({
   session: SciForgeSession;
   userActionApi: UserActionApi;
   hydrationApi: ArtifactPreviewHydrationApi;
+  locale?: ResultLocale;
   onObjectReferenceFocus?: (reference: ObjectReference) => void;
 }) {
   const previewConfig = useMemo(() => config, [config.workspacePath, config.workspaceWriterBaseUrl]);
@@ -380,13 +613,16 @@ function DescriptorPreview({
         title={descriptor.title || descriptor.ref}
         mimeType={descriptor.mimeType}
         reference={reference}
+        locale={locale}
       />
     );
   }
   if (descriptor.kind === 'markdown' || descriptor.kind === 'text' || descriptor.kind === 'json' || descriptor.kind === 'table' || descriptor.kind === 'html') {
     return (
       <div className="workspace-object-media-note">
-        <p>此 artifact 使用 workspace descriptor 预览；小文件直接读取，大文件按需生成 text/schema 派生预览。这只调用本地 workspace 函数，不增加 LLM token 开销。</p>
+        <p>{needsManualLoad
+          ? resultText(locale, { 'zh-CN': '大文件预览。需要在这里检查结果时，可加载可读预览。', 'en-US': 'Large file preview. Load a readable preview when you need to inspect this result here.' })
+          : resultText(locale, { 'zh-CN': '正在预览已保存的结果内容。', 'en-US': 'Previewing saved result content.' })}</p>
         {needsManualLoad && !derivedFile ? (
           <button
             type="button"
@@ -403,29 +639,32 @@ function DescriptorPreview({
             disabled={derivedLoading}
           >
             <Eye size={14} />
-            {derivedLoading ? '正在加载预览' : '加载预览'}
+            {derivedLoading
+              ? resultText(locale, { 'zh-CN': '正在加载预览', 'en-US': 'Loading preview' })
+              : resultText(locale, { 'zh-CN': '加载预览', 'en-US': 'Load preview' })}
           </button>
         ) : null}
-        {derivedLoading ? <p>正在生成或读取预览...</p> : null}
+        {derivedLoading ? <p>{resultText(locale, { 'zh-CN': '正在生成或读取预览...', 'en-US': 'Generating or reading preview...' })}</p> : null}
         {derivedFile ? (
           <div className="descriptor-derived-preview">
             <Badge variant="info">{derivedLabel}</Badge>
             <WorkspaceFileInlineViewer
               file={derivedFile}
               objectReferences={objectReferences}
+              locale={locale}
               onObjectReferenceFocus={onObjectReferenceFocus}
             />
           </div>
         ) : null}
-        {derivedError ? <PreviewDiagnosticFold diagnostic={derivedError} /> : null}
-        <PreviewDescriptorActions descriptor={descriptor} reference={reference} />
+        {derivedError ? <PreviewDiagnosticFold diagnostic={derivedError} locale={locale} /> : null}
+        <PreviewDescriptorActions descriptor={descriptor} reference={reference} locale={locale} />
       </div>
     );
   }
   return (
     <div className="workspace-object-media-note">
-      <p>{lightweightPreviewNoticeForDescriptor(descriptor)}</p>
-      <PreviewDescriptorActions descriptor={descriptor} reference={reference} />
+      <p>{userPreviewNoticeForDescriptor(descriptor, locale)}</p>
+      <PreviewDescriptorActions descriptor={descriptor} reference={reference} locale={locale} />
     </div>
   );
 }
@@ -450,27 +689,71 @@ export function descriptorNeedsManualPreviewLoad(descriptor: PreviewDescriptor) 
   return (descriptor.sizeBytes ?? 0) > WORKSPACE_OBJECT_INLINE_PREVIEW_LIMIT_BYTES;
 }
 
+function userPreviewNoticeForDescriptor(descriptor: PreviewDescriptor, locale?: ResultLocale) {
+  if (descriptorNeedsManualPreviewLoad(descriptor)) {
+    return resultText(locale, { 'zh-CN': '大文件预览。需要在这里检查结果时，可加载可读预览。', 'en-US': 'Large file preview. Load a readable preview when you need to inspect this result here.' });
+  }
+  return resultText(locale, {
+    'zh-CN': `无法预览此${userPreviewKindLabel(descriptor.kind, locale)}。你仍可将它作为结果引用使用。`,
+    'en-US': `Preview unavailable for this ${userPreviewKindLabel(descriptor.kind, locale)}. You can still use it as a result reference.`,
+  });
+}
+
+function unsupportedPreviewNoticeForUser(input: {
+  reference: Pick<ObjectReference, 'ref' | 'artifactType'>;
+  path?: string;
+  descriptor?: PreviewDescriptor;
+  locale?: ResultLocale;
+}) {
+  const kindLabel = userPreviewKindLabel(input.descriptor?.kind || input.reference.artifactType, input.locale);
+  const codeLabels = [
+    input.path || input.descriptor?.ref || input.reference.ref,
+    input.descriptor?.mimeType,
+  ].filter((label): label is string => Boolean(label));
+  return {
+    message: resultText(input.locale, {
+      'zh-CN': `无法预览此${kindLabel}。你仍可将它作为结果引用使用。`,
+      'en-US': `Preview unavailable for this ${kindLabel}. You can still use it as a result reference.`,
+    }),
+    requestLabel: resultText(input.locale, { 'zh-CN': '请求预览支持', 'en-US': 'Request preview support' }),
+    codeLabels,
+  };
+}
+
+function userPreviewKindLabel(kind: string | undefined, locale?: ResultLocale) {
+  if (kind === 'pdf') return 'PDF';
+  if (kind === 'image') return resultText(locale, { 'zh-CN': '图像', 'en-US': 'image' });
+  if (kind === 'table') return resultText(locale, { 'zh-CN': '表格', 'en-US': 'table' });
+  if (kind === 'markdown' || kind === 'text' || kind === 'json' || kind === 'html') return resultText(locale, { 'zh-CN': '文档', 'en-US': 'document' });
+  if (kind === 'presentation') return resultText(locale, { 'zh-CN': '演示文稿', 'en-US': 'presentation' });
+  if (kind === 'spreadsheet') return resultText(locale, { 'zh-CN': '电子表格', 'en-US': 'spreadsheet' });
+  if (kind === 'document') return resultText(locale, { 'zh-CN': '文档', 'en-US': 'document' });
+  return resultText(locale, { 'zh-CN': '文件', 'en-US': 'file' });
+}
+
 function UnsupportedPreviewPackageNotice({
   reference,
   path,
   descriptor,
   diagnostic,
+  locale,
   onRequest,
 }: {
   reference: ObjectReference;
   path?: string;
   descriptor?: PreviewDescriptor;
   diagnostic?: string;
+  locale?: ResultLocale;
   onRequest?: (reference: ObjectReference, path?: string, descriptor?: PreviewDescriptor) => void;
 }) {
-  const notice = unsupportedPreviewNoticeModel({ reference, path, descriptor });
+  const notice = unsupportedPreviewNoticeForUser({ reference, path, descriptor, locale });
   return (
     <div className="unsupported-preview-package">
       <p>{notice.message}</p>
       <div className="source-list">
-        {notice.codeLabels.map((label) => <code key={label}>{label}</code>)}
+        {notice.codeLabels.map((label) => <code key={label}>{rightPaneInlineLabel(label)}</code>)}
       </div>
-      {diagnostic ? <PreviewDiagnosticFold diagnostic={diagnostic} /> : null}
+      {diagnostic ? <PreviewDiagnosticFold diagnostic={diagnostic} locale={locale} /> : null}
       <button
         type="button"
         className="unsupported-preview-package-action"
@@ -484,11 +767,11 @@ function UnsupportedPreviewPackageNotice({
   );
 }
 
-function PreviewDiagnosticFold({ diagnostic }: { diagnostic: string }) {
+function PreviewDiagnosticFold({ diagnostic, locale }: { diagnostic: string; locale?: ResultLocale }) {
   return (
     <details className="message-fold depth-3 workspace-object-diagnostic-fold">
-      <summary>预览诊断已折叠</summary>
-      <pre className="workspace-object-code">{diagnostic}</pre>
+      <summary>{resultText(locale, { 'zh-CN': '预览详情', 'en-US': 'Preview details' })}</summary>
+      <pre className="workspace-object-code">{boundedRightPaneText(diagnostic, 4_000)}</pre>
     </details>
   );
 }
@@ -496,36 +779,46 @@ function PreviewDiagnosticFold({ diagnostic }: { diagnostic: string }) {
 export function WorkspaceFileInlineViewer({
   file,
   objectReferences = [],
+  locale,
   onObjectReferenceFocus,
 }: {
   file: WorkspaceFileContent;
   objectReferences?: ObjectReference[];
+  locale?: ResultLocale;
   onObjectReferenceFocus?: (reference: ObjectReference) => void;
 }) {
   const kind = fileKindForPath(file.path, file.language);
+  const safeContent = boundedRightPaneText(file.content);
+  if (kind === 'diff') {
+    return (
+      <div className="workspace-object-diff-preview">
+        <pre className="workspace-object-code workspace-object-diff">{safeContent}</pre>
+      </div>
+    );
+  }
   if (kind === 'markdown') {
     return (
       <MarkdownBlock
-        markdown={file.content}
+        markdown={safeContent}
         objectReferences={objectReferences}
         onObjectReferenceFocus={onObjectReferenceFocus}
       />
     );
   }
   if (kind === 'json') return <pre className="workspace-object-code">{formatJsonLike(file.content)}</pre>;
-  if (kind === 'csv' || kind === 'tsv') return <DelimitedTextPreview content={file.content} delimiter={kind === 'tsv' ? '\t' : ','} />;
+  if (kind === 'csv' || kind === 'tsv') return <DelimitedTextPreview content={safeContent} delimiter={kind === 'tsv' ? '\t' : ','} locale={locale} />;
   if (kind === 'image') {
     if (file.encoding === 'base64') {
       return (
         <div className="workspace-object-image-frame">
-          <img src={`data:${file.mimeType || 'image/png'};base64,${file.content}`} alt={file.name} />
+          <img src={`data:${file.mimeType || 'image/png'};base64,${file.content}`} alt={rightPaneInlineLabel(file.name)} />
         </div>
       );
     }
     return (
       <div className="workspace-object-media-note">
-        图片文件已解析为 workspace 引用，但当前 workspace server 未返回 base64 预览；可使用“系统打开”查看。
-        <pre className="workspace-object-code">{file.content.slice(0, 4000)}</pre>
+        {resultText(locale, { 'zh-CN': '图像已附加，但没有返回内联图像数据。请在外部打开查看。', 'en-US': 'This image is attached, but no inline image data was returned. Open it externally to inspect it.' })}
+        <pre className="workspace-object-code">{boundedRightPaneText(file.content, 4_000)}</pre>
       </div>
     );
   }
@@ -539,15 +832,16 @@ export function WorkspaceFileInlineViewer({
           title={file.name}
           mimeType={file.mimeType || 'application/pdf'}
           reference={pdfReference}
+          locale={locale}
         />
       );
     }
     return (
       <div className="workspace-object-media-note">
-        <p>PDF 已作为可点击文件引用聚焦。点击对话栏“点选”后选中这张卡片，即可把 PDF 文件作为上下文；如需页码、段落或图表区域，请在问题中补充页码/图号/坐标描述。</p>
+        <p>{resultText(locale, { 'zh-CN': 'PDF 已作为可点击文件引用附加。选择此卡片作为上下文后，可带页码、章节、图号或区域细节提问。', 'en-US': 'The PDF is attached as a clickable file reference. Select this card as context, then ask with page, section, figure, or region details.' })}</p>
         <div className="source-list">
-          <code>{file.path}</code>
-          <button type="button" onClick={() => void navigator.clipboard?.writeText(JSON.stringify(pdfReference, null, 2))}>复制 PDF 引用</button>
+          <code>{rightPaneInlineLabel(file.path)}</code>
+          <button type="button" onClick={() => void navigator.clipboard?.writeText(JSON.stringify(pdfReference, null, 2))}>{resultText(locale, { 'zh-CN': '复制 PDF 引用', 'en-US': 'Copy PDF reference' })}</button>
         </div>
       </div>
     );
@@ -555,22 +849,25 @@ export function WorkspaceFileInlineViewer({
   if (kind === 'document' || kind === 'spreadsheet' || kind === 'presentation') {
     return (
       <div className="workspace-object-media-note">
-        <p>{officePreviewLabel(kind)} 已作为可点击文件引用聚焦。浏览器内联预览暂不展开此类二进制文件，可用“系统打开”查看完整内容，或继续把它作为上下文引用给 SciForge。</p>
+        <p>{resultText(locale, {
+          'zh-CN': `${officePreviewLabel(kind, locale)}已作为可点击文件引用附加。请在外部打开完整文件，或继续作为上下文保留。`,
+          'en-US': `${officePreviewLabel(kind, locale)} is attached as a clickable file reference. Open it externally for the full file, or keep it attached as context.`,
+        })}</p>
         <div className="source-list">
-          <code>{file.path}</code>
-          <code>{file.mimeType || 'application/octet-stream'}</code>
+          <code>{rightPaneInlineLabel(file.path)}</code>
+          <code>{rightPaneInlineLabel(file.mimeType || 'application/octet-stream')}</code>
         </div>
       </div>
     );
   }
-  if (kind === 'html') return <pre className="workspace-object-code">{file.content.slice(0, 12000)}</pre>;
-  return <pre className="workspace-object-code">{file.content.slice(0, 12000)}</pre>;
+  if (kind === 'html') return <pre className="workspace-object-code">{safeContent}</pre>;
+  return <pre className="workspace-object-code">{safeContent}</pre>;
 }
 
-function officePreviewLabel(kind: string) {
-  if (kind === 'spreadsheet') return '表格文件';
-  if (kind === 'presentation') return '演示文稿';
-  return '文档文件';
+function officePreviewLabel(kind: string, locale?: ResultLocale) {
+  if (kind === 'spreadsheet') return resultText(locale, { 'zh-CN': '表格文件', 'en-US': 'Spreadsheet file' });
+  if (kind === 'presentation') return resultText(locale, { 'zh-CN': '演示文稿', 'en-US': 'Presentation file' });
+  return resultText(locale, { 'zh-CN': '文档文件', 'en-US': 'Document file' });
 }
 
 function workspacePreviewObjectReferences(
@@ -589,23 +886,43 @@ function workspacePreviewObjectReferences(
   ], [], 100);
 }
 
+function recordField(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function stringArrayField(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values));
+}
+
 export function UploadedDataUrlPreview({
   kind,
   dataUrl,
   title,
   mimeType,
   reference,
+  locale,
 }: {
   kind: 'image' | 'pdf';
   dataUrl: string;
   title: string;
   mimeType?: string;
   reference?: SciForgeReference;
+  locale?: ResultLocale;
 }) {
   const [objectUrl, setObjectUrl] = useState('');
   const [regionPick, setRegionPick] = useState<RegionPickState | null>(null);
   const [pickedRegion, setPickedRegion] = useState<string>('');
   const regionRef = useRef<HTMLDivElement | null>(null);
+  const safeTitle = rightPaneInlineLabel(title);
   useEffect(() => {
     if (kind !== 'pdf') return undefined;
     let cancelled = false;
@@ -636,19 +953,29 @@ export function UploadedDataUrlPreview({
   if (kind === 'image') {
     return (
       <div className="workspace-object-image-frame" data-sciforge-reference={sciForgeReferenceAttribute(reference)}>
-        <img src={dataUrl} alt={title} />
+        <img src={dataUrl} alt={safeTitle} />
         {regionLayer}
-        <PreviewReferenceHint reference={reference} label="点选图片或拖选区域作为图像上下文" onPickRegion={reference ? beginRegionPick : undefined} />
+        <PreviewReferenceHint
+          reference={reference}
+          label={resultText(locale, { 'zh-CN': '点选图片或拖选区域作为图像上下文', 'en-US': 'Select the image or drag a region to use it as image context' })}
+          locale={locale}
+          onPickRegion={reference ? beginRegionPick : undefined}
+        />
       </div>
     );
   }
   return (
     <div className="workspace-object-pdf-shell" data-sciforge-reference={sciForgeReferenceAttribute(reference)}>
-      <object className="workspace-object-pdf-frame" data={objectUrl || dataUrl} type={mimeType || 'application/pdf'} aria-label={title}>
-        <iframe className="workspace-object-pdf-frame" title={title} src={objectUrl || dataUrl} />
+      <object className="workspace-object-pdf-frame" data={objectUrl || dataUrl} type={mimeType || 'application/pdf'} aria-label={safeTitle}>
+        <iframe className="workspace-object-pdf-frame" title={safeTitle} src={objectUrl || dataUrl} />
       </object>
       {regionLayer}
-      <PreviewReferenceHint reference={reference} label="点选整份 PDF，或拖选页面区域作为上下文" onPickRegion={reference ? beginRegionPick : undefined} />
+      <PreviewReferenceHint
+        reference={reference}
+        label={resultText(locale, { 'zh-CN': '点选整份 PDF，或拖选页面区域作为上下文', 'en-US': 'Select the whole PDF, or drag a page region as context' })}
+        locale={locale}
+        onPickRegion={reference ? beginRegionPick : undefined}
+      />
     </div>
   );
 
@@ -709,18 +1036,20 @@ type RegionPickState = {
 function PreviewReferenceHint({
   reference,
   label,
+  locale,
   onPickRegion,
 }: {
   reference?: SciForgeReference;
   label: string;
+  locale?: ResultLocale;
   onPickRegion?: () => void;
 }) {
   return (
     <div className="workspace-object-reference-hint">
       <span>{label}</span>
       <div>
-        {onPickRegion ? <button type="button" onClick={onPickRegion}>区域选择</button> : null}
-        {reference ? <button type="button" onClick={() => void navigator.clipboard?.writeText(JSON.stringify(reference, null, 2))}>复制引用</button> : null}
+        {onPickRegion ? <button type="button" onClick={onPickRegion}>{resultText(locale, { 'zh-CN': '选择区域', 'en-US': 'Select region' })}</button> : null}
+        {reference ? <button type="button" onClick={() => void navigator.clipboard?.writeText(JSON.stringify(reference, null, 2))}>{resultText(locale, { 'zh-CN': '复制引用', 'en-US': 'Copy reference' })}</button> : null}
       </div>
     </div>
   );
@@ -744,9 +1073,9 @@ function referenceForWorkspaceFile(file: WorkspaceFileContent): SciForgeReferenc
   return referenceForWorkspaceFileLike(file, referenceKindForWorkspaceFileLike(file));
 }
 
-function DelimitedTextPreview({ content, delimiter }: { content: string; delimiter: ',' | '\t' }) {
+function DelimitedTextPreview({ content, delimiter, locale }: { content: string; delimiter: ',' | '\t'; locale?: ResultLocale }) {
   const rows = content.split(/\r?\n/).filter(Boolean).slice(0, 12).map((line) => line.split(delimiter).slice(0, 8));
-  if (!rows.length) return <p className="empty-state">表格文件为空。</p>;
+  if (!rows.length) return <p className="empty-state">{resultText(locale, { 'zh-CN': '表格文件为空。', 'en-US': 'The table file is empty.' })}</p>;
   return (
     <div className="data-table-wrap compact">
       <table className="data-preview-table">
@@ -768,9 +1097,9 @@ function DelimitedTextPreview({ content, delimiter }: { content: string; delimit
 
 function formatJsonLike(content: string) {
   try {
-    return JSON.stringify(JSON.parse(content), null, 2);
+    return formatRightPanePreviewJson(JSON.parse(content));
   } catch {
-    return content.slice(0, 12000);
+    return boundedRightPaneText(content);
   }
 }
 

@@ -22,13 +22,15 @@ export function MessageContent({
   content,
   references,
   onObjectFocus,
+  className,
 }: {
   content: string;
   references: ObjectReference[];
   onObjectFocus: (reference: ObjectReference) => void;
+  className?: string;
 }) {
   return (
-    <div className="message-content">
+    <div className={['message-content', className].filter(Boolean).join(' ')}>
       <MarkdownRenderer
         markdown={content}
         className="message-markdown"

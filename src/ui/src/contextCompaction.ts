@@ -48,7 +48,7 @@ export function buildContextCompactionOutcome({
     event: {
       id: eventId,
       type: 'contextCompaction',
-      label: '上下文压缩',
+      label: 'Conversation summarized',
       detail,
       contextCompaction: normalizedResult,
       contextWindowState: afterState,
@@ -59,15 +59,13 @@ export function buildContextCompactionOutcome({
       id: messageId,
       role: 'system',
       content: succeeded
-        ? `上下文压缩完成：${compactReasonLabel(reason)}。`
-        : detail.startsWith('上下文压缩')
+        ? `Conversation summary updated: ${compactReasonLabel(reason)}.`
+        : detail.startsWith('Conversation summary')
           ? detail
-          : `上下文压缩未完成：${detail}`,
+          : `Conversation summary did not finish: ${detail}`,
       expandable: JSON.stringify({
         reason,
         status: normalizedResult.status,
-        backend: normalizedResult.backend,
-        compactCapability: normalizedResult.compactCapability,
         startedAt,
         completedAt,
         auditRefs: normalizedResult.auditRefs ?? [],
@@ -105,7 +103,7 @@ export function buildContextCompactionFailureResult({
     startedAt,
     reason,
     message,
-    auditRefs: [`context-compaction-failure:${backend}:${reason}:${startedAt}`],
+    auditRefs: [`conversation-summary-failure:${backend}:${reason}:${startedAt}`],
   };
 }
 
@@ -114,7 +112,7 @@ function contextCompactionReference(compaction: AgentContextCompaction, messageI
   return {
     id: `ref-${messageId}`,
     kind: 'message',
-    title: compaction.status === 'completed' ? 'context compaction result' : 'context compaction recovery ref',
+    title: compaction.status === 'completed' ? 'conversation summary result' : 'conversation summary recovery ref',
     ref,
     summary: detail,
     payload: {
@@ -130,14 +128,14 @@ function contextCompactionReference(compaction: AgentContextCompaction, messageI
 }
 
 function compactReasonLabel(reason: string) {
-  if (reason === 'manual-meter-click') return '手动触发';
-  if (reason === 'auto-threshold-before-send') return '发送前自动触发';
+  if (reason === 'manual-meter-click') return 'started manually';
+  if (reason === 'auto-threshold-before-send') return 'started before sending';
   return reason;
 }
 
 function contextCompactionStatusDetail(status: AgentContextCompaction['status']) {
-  if (status === 'pending' || status === 'started') return '上下文压缩已提交，等待后台返回完成状态。';
-  if (status === 'skipped') return '上下文压缩已跳过：当前 backend 不支持原生压缩或将使用轻量 handoff。';
-  if (status === 'failed') return '上下文压缩未完成：后台 compact API 返回失败。';
-  return '上下文压缩完成';
+  if (status === 'pending' || status === 'started') return 'Conversation summary started and is waiting for completion.';
+  if (status === 'skipped') return 'Conversation summary was skipped; SciForge will keep a lightweight handoff instead.';
+  if (status === 'failed') return 'Conversation summary did not finish.';
+  return 'Conversation summary updated.';
 }

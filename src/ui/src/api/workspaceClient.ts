@@ -293,8 +293,12 @@ export interface FeedbackCodexPtyTerminalStartResult {
 export async function loadFileBackedSciForgeConfig(config: SciForgeConfig): Promise<SciForgeConfig | undefined> {
   const response = await fetchWorkspaceConfigWithFallback(config);
   if (response.status === 404) return undefined;
-  if (!response.ok) throw new Error(await workspaceResponseError(response, `Load config failed: HTTP ${response.status}`));
-  const json = await response.json() as { config?: unknown };
+  const json = await readWorkspaceJson<{ config?: unknown }>(
+    config,
+    'load config.local.json',
+    response,
+    `Load config failed: HTTP ${response.status}`,
+  );
   return isSciForgeConfig(json.config) ? normalizeConfig(json.config) : undefined;
 }
 
@@ -319,8 +323,12 @@ export async function saveFileBackedSciForgeConfig(config: SciForgeConfig): Prom
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ config }),
   });
-  if (!response.ok) throw new Error(await workspaceResponseError(response, `Save config failed: HTTP ${response.status}`));
-  const json = await response.json() as { config?: unknown };
+  const json = await readWorkspaceJson<{ config?: unknown }>(
+    config,
+    'save config.local.json',
+    response,
+    `Save config failed: HTTP ${response.status}`,
+  );
   return isSciForgeConfig(json.config) ? normalizeConfig(json.config) : undefined;
 }
 
@@ -402,8 +410,12 @@ async function fetchPersistedWorkspaceState(path: string, config: SciForgeConfig
   const label = path.trim() || 'last workspace';
   const response = await fetchWorkspace(config, `load workspace snapshot ${label}`, url);
   if (response.status === 404) return undefined;
-  if (!response.ok) throw new Error(await workspaceResponseError(response, `Load snapshot failed: HTTP ${response.status}`));
-  const json = await response.json() as { workspacePath?: unknown; state?: unknown };
+  const json = await readWorkspaceJson<{ workspacePath?: unknown; state?: unknown }>(
+    config,
+    `load workspace snapshot ${label}`,
+    response,
+    `Load snapshot failed: HTTP ${response.status}`,
+  );
   if (!json.state) return undefined;
   const state = parseWorkspaceState(json.state);
   return typeof json.workspacePath === 'string'
@@ -416,8 +428,12 @@ export async function listWorkspace(path: string, config: SciForgeConfig): Promi
   const url = new URL(`${config.workspaceWriterBaseUrl}/api/sciforge/workspace/list`);
   url.searchParams.set('path', path);
   const response = await fetchWorkspace(config, `list workspace ${path}`, url);
-  if (!response.ok) throw new Error(await workspaceResponseError(response, `List failed: HTTP ${response.status}`));
-  const json = await response.json() as { entries?: WorkspaceEntry[] };
+  const json = await readWorkspaceJson<{ entries?: WorkspaceEntry[] }>(
+    config,
+    `list workspace ${path}`,
+    response,
+    `List failed: HTTP ${response.status}`,
+  );
   return Array.isArray(json.entries) ? json.entries : [];
 }
 
@@ -431,8 +447,12 @@ export async function readWorkspaceFile(path: string, config: SciForgeConfig): P
       url.searchParams.set('path', path);
       if (config.workspacePath.trim()) url.searchParams.set('workspacePath', config.workspacePath.trim());
       const response = await fetchWorkspace(config, `read workspace file ${path}`, url);
-      if (!response.ok) throw await workspaceRequestError(response, `Read file failed: HTTP ${response.status}`);
-      const json = await response.json() as { file?: WorkspaceFileContent };
+      const json = await readWorkspaceJson<{ file?: WorkspaceFileContent }>(
+        config,
+        `read workspace file ${path}`,
+        response,
+        `Read file failed: HTTP ${response.status}`,
+      );
       if (!json.file) throw new Error(`Read file ${path} returned no file payload.`);
       return json.file;
     },
@@ -449,8 +469,12 @@ export async function readPreviewDescriptor(ref: string, config: SciForgeConfig)
       url.searchParams.set('ref', ref);
       if (config.workspacePath.trim()) url.searchParams.set('workspacePath', config.workspacePath.trim());
       const response = await fetchWorkspace(config, `read preview descriptor ${ref}`, url);
-      if (!response.ok) throw await workspaceRequestError(response, `Read preview descriptor failed: HTTP ${response.status}`);
-      const json = await response.json() as { descriptor?: PreviewDescriptor };
+      const json = await readWorkspaceJson<{ descriptor?: PreviewDescriptor }>(
+        config,
+        `read preview descriptor ${ref}`,
+        response,
+        `Read preview descriptor failed: HTTP ${response.status}`,
+      );
       if (!json.descriptor) throw new Error(`Preview descriptor ${ref} returned no descriptor payload.`);
       return json.descriptor;
     },
@@ -468,8 +492,12 @@ export async function readPreviewDerivative(ref: string, kind: PreviewDerivative
       url.searchParams.set('kind', kind);
       if (config.workspacePath.trim()) url.searchParams.set('workspacePath', config.workspacePath.trim());
       const response = await fetchWorkspace(config, `read preview derivative ${kind} ${ref}`, url);
-      if (!response.ok) throw await workspaceRequestError(response, `Read preview derivative failed: HTTP ${response.status}`);
-      const json = await response.json() as { derivative?: PreviewDerivative };
+      const json = await readWorkspaceJson<{ derivative?: PreviewDerivative }>(
+        config,
+        `read preview derivative ${kind} ${ref}`,
+        response,
+        `Read preview derivative failed: HTTP ${response.status}`,
+      );
       if (!json.derivative) throw new Error(`Preview derivative ${ref} returned no derivative payload.`);
       return json.derivative;
     },
@@ -1010,11 +1038,37 @@ async function writeWorkspaceScenario(config: SciForgeConfig, action: 'save' | '
   if (!response.ok) throw new Error(await workspaceResponseError(response, `${action} scenario failed: HTTP ${response.status}`));
 }
 
+async function readWorkspaceJson<T>(
+  config: SciForgeConfig,
+  operation: string,
+  response: Response,
+  fallback: string,
+): Promise<T> {
+  if (!response.ok) throw await workspaceRequestError(response, fallback);
+  const text = await response.text();
+  const contentType = response.headers.get('content-type') ?? '';
+  try {
+    return JSON.parse(text) as T;
+  } catch (error) {
+    const looksLikeHtml = /text\/html/i.test(contentType) || /^\s*<!doctype\b|^\s*<html[\s>]/i.test(text);
+    const reason = looksLikeHtml
+      ? `${sanitizeWorkspaceDiagnosticText(config.workspaceWriterBaseUrl)} 返回的是 SciForge UI 页面，不是 Workspace Writer JSON；请把 Workspace Writer URL 指向 writer 服务。`
+      : `${sanitizeWorkspaceDiagnosticText(operation)} returned a non-JSON response (${contentType || 'unknown content type'}).`;
+    throw new Error(new SciForgeClientError({
+      title: 'Workspace Writer 响应不是 JSON',
+      reason: sanitizeWorkspaceDiagnosticText(reason),
+      recoverActions: recoverActionsForService('workspace'),
+      diagnosticRef: looksLikeHtml ? 'workspace-writer-html-response' : 'workspace-writer-invalid-json',
+      cause: error,
+    }).message);
+  }
+}
+
 async function workspaceResponseError(response: Response, fallback: string) {
   const text = await response.text();
   return new SciForgeClientError({
     title: 'Workspace Writer 请求失败',
-    reason: reasonFromResponseText(text, fallback),
+    reason: sanitizeWorkspaceDiagnosticText(reasonFromResponseText(text, sanitizeWorkspaceDiagnosticText(fallback))),
     recoverActions: recoverActionsForService('workspace'),
     diagnosticRef: `workspace-http-${response.status}`,
   }).message;
@@ -1032,6 +1086,22 @@ class WorkspaceHttpError extends Error {
 
 async function workspaceRequestError(response: Response, fallback: string) {
   return new WorkspaceHttpError(response.status, await workspaceResponseError(response, fallback));
+}
+
+function sanitizeWorkspaceDiagnosticText(value: string) {
+  return value
+    .replace(/\bAuthorization\s*[:=]\s*Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Authorization: Bearer [redacted]')
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [redacted]')
+    .replace(/\b(?:sk|rk|pk)-[A-Za-z0-9][A-Za-z0-9_-]{8,}\b/g, '[redacted-token]')
+    .replace(
+      /\b(api[_-]?key|authorization|credential|password|secret|token)\b(\s*[:=]\s*)(["']?)[^"',}\]\s]+/gi,
+      (_match, key: string, separator: string, quote: string) => `${key}${separator}${quote}[redacted]`,
+    )
+    .replace(/\bhttps?:\/\/[^\s"'<>\\)]+/gi, '[url]')
+    .replace(/\b(?:api|[a-z0-9-]*(?:openai|anthropic|provider|openrouter|azure|googleapis)[a-z0-9-]*)(?:\.[a-z0-9-]+)+(?:\:\d+)?\b/gi, '[host]')
+    .replace(/\bfile:\/\/\/[^\s"'<>\\)]+/gi, '[workspace-path]')
+    .replace(/\/(?:Applications|Users|home|private|var|tmp)\/[^\s"'<>\\)]+/gi, '[workspace-path]')
+    .replace(/\b[A-Za-z]:\\Users\\[^\s"'<>]+/gi, '[workspace-path]');
 }
 
 function cachedWorkspacePreviewRequest<T>(
@@ -1109,7 +1179,7 @@ async function fetchWorkspace(
     const detail = error instanceof Error ? error.message : String(error);
     throw new SciForgeClientError({
       title: 'Workspace Writer 未连接',
-      reason: `${config.workspaceWriterBaseUrl} 无法访问，操作：${operation}。${detail}`,
+      reason: sanitizeWorkspaceDiagnosticText(`${config.workspaceWriterBaseUrl} 无法访问，操作：${operation}。${detail}`),
       recoverActions: recoverActionsForService('workspace'),
       diagnosticRef: 'workspace-connection',
       cause: error,

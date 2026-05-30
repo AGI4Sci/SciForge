@@ -53,12 +53,23 @@ test('merges descriptor derivatives and diagnostics', () => {
 
 test('owns file preview kind, derivative, action, and locator policy', () => {
   assert.equal(previewDescriptorKindForPath('report.md'), 'markdown');
+  assert.equal(previewDescriptorKindForPath('changes.diff'), 'text');
+  assert.equal(previewDescriptorKindForPath('fix.patch'), 'text');
   assert.equal(previewDescriptorKindForExtension('.cif'), 'structure');
   assert.equal(previewFileExtensionForPath('reports/final.csv?download=1'), 'csv');
   assert.equal(previewPathHasRecognizedFileExtension('src/runtime/payload-validation.ts'), true);
+  assert.equal(previewPathHasRecognizedFileExtension('fix.patch'), true);
   assert.equal(previewPathHasStableDeliverableExtension('src/runtime/payload-validation.ts'), false);
   assert.equal(previewPathHasStableDeliverableExtension('reports/final.csv?download=1'), true);
+  assert.equal(previewPathHasStableDeliverableExtension('fix.patch'), true);
   assert.equal(previewDescriptorKindForPath('1crn.cif'), 'structure');
+  assert.equal(normalizeArtifactPreviewDescriptor({
+    id: 'patch-artifact',
+    type: 'workspace-artifact',
+    producerScenario: 'general',
+    schemaVersion: '1',
+    path: '.sciforge/artifacts/fix.patch',
+  })?.kind, 'text');
   assert.equal(inlinePolicyForPreviewKind('markdown', 512), 'inline');
   assert.equal(inlinePolicyForPreviewKind('structure', 512), 'external');
   assert.deepEqual(derivativeDescriptorsForPreviewTarget('1crn.cif', 'structure', 10), [

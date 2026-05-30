@@ -1,18 +1,18 @@
 # Codex Runtime Migration
 
-最后更新：2026-05-20
+最后更新：2026-05-30
 
 ## 结论
 
-SciForge 长期只支持 Codex backend。迁移路线只做两阶段：
+SciForge 长期只支持 Codex backend。生产 runtime 的默认入口必须是上游 Codex app-server：
 
-1. **Phase 1：`codex exec --json`**
-   SciForge 通过一个轻量 bridge 启动 Codex CLI，向 stdin / prompt 发送 terminal-equivalent text，消费 stdout JSONL event stream，并归一化为 GUI event bus。
+1. **Product path：Codex app-server**
+   SciForge 启动或连接 `codex app-server`，通过 `thread/start`、`turn/start`、`item/started`、`item/agentMessage/delta`、`item/completed`、approval request 和 dynamic tool request 等 rich-client 事件驱动 GUI。
 
-2. **Phase 2：`AgentCliAdapter`**
-   抽象出最小 CLI adapter，使同一条 GUI -> text、CLI -> events 的链路可测试、可 mock、可替换。虽然长期只支持 Codex backend，但 adapter 能避免 SciForge 直接散落 `spawn("codex", ...)` 细节。
+2. **Adapter boundary：`AgentCliAdapter`**
+   `AgentCliAdapter` 只隔离 runtime 进程、JSON-RPC/event normalization 和测试替身；它不得把 `codex exec --json` 重新引入产品默认路径。
 
-暂不把 Codex app-server 作为迁移主路径。app-server 适合后续需要长期 thread、审批、历史和富客户端状态时再接入。当前先用 `codex exec --json` 降低迁移复杂度。
+`CodexExecJsonAdapter` / `codex exec --json` 只保留为 legacy/test-only 兼容和历史证据。新产品入口不能自动 fallback 到 exec；缺 app-server、runtime profile、provider proxy 或必要配置时必须 fail closed。
 
 ## 不 Fork Codex
 
@@ -89,15 +89,10 @@ npm run backend:codex-runtime:setup -- --overwrite --proxy-base-url http://127.0
 export SCIFORGE_RUNTIME_API_KEY="<provider-api-key>"
 ```
 
-SciForge 启动 runtime Codex 时必须显式指定 profile：
+SciForge 启动 runtime Codex app-server 时必须使用隔离 runtime profile。app-server thread/turn 请求负责携带 workspace、model/provider、approval policy 和 sandbox：
 
 ```bash
-codex exec --json \
-  --config sandbox_workspace_write.network_access=true \
-  --profile sciforge-runtime-deepseek \
-  --cd "$SCIFORGE_USER_WORKSPACE" \
-  --sandbox workspace-write \
-  "$SCIFORGE_USER_TEXT_COMMAND"
+codex app-server --listen stdio://
 ```
 
 文献检索、PDF/full-text 读取、PubMed/网页核查等任务依赖 Runtime Codex shell 内可用 DNS/HTTP。保持 `workspace-write` sandbox，但显式配置 `sandbox_workspace_write.network_access=true`；不要用 host shell 成功替代 Runtime Codex live evidence。
@@ -168,34 +163,25 @@ type AgentCliAdapter = {
 };
 ```
 
-Codex adapter：
+Codex app-server adapter：
 
 ```text
-spawn codex exec --json --profile <profile> --cd <workspace> <commandText>
-stdout JSONL -> NormalizedAgentEvent
-stderr -> audit/debug event
-exit code -> turn completed / failed
+spawn/connect codex app-server --listen stdio://
+initialize -> thread/start or thread/resume -> turn/start
+thread/turn/item/approval/dynamic-tool JSON-RPC events -> NormalizedAgentEvent
+stderr/process lifecycle -> audit/debug event
 ```
 
-Phase 1 的默认新会话路径仍然是独立 `codex exec --json` turn。当前上游 Codex CLI 还提供原生恢复路径：
+新会话走 `thread/start`，多轮上下文走 `thread/resume` + `turn/start`。GUI 历史 transcript、provider route、capability policy 或 artifact body 不得拼进 `commandText`；上下文恢复必须依赖 Codex app-server thread 语义。
 
-```bash
-codex --profile sciforge-runtime-deepseek --cd "$SCIFORGE_USER_WORKSPACE" \
-  exec resume --json "$CODEX_SESSION_ID" "$SCIFORGE_USER_TEXT_COMMAND"
-```
+## Adapter Boundary
 
-SciForge 可以把 Codex JSONL `session_meta.payload.id` 作为 `codexSessionId` 元数据保存到 GUI run raw 中，并在下一轮作为 adapter 元数据传回。这个字段只能用于调用 Codex 原生 `exec resume`，不得把 GUI 历史 transcript、provider route、capability policy 或 artifact body 拼进 `commandText`。
-
-如果当前 Codex CLI 版本没有 `codex exec resume`，或 resume 不能在 isolated `CODEX_HOME` 中恢复上下文，Phase 1 必须把多轮标记为 unsupported；完整长会话、审批和富客户端状态仍归 Phase 2 Codex app-server/thread 需求。
-
-## Phase 2 Adapter
-
-Phase 2 只抽象 CLI 细节，不扩展 backend 范围：
+Adapter 只抽象 runtime host 细节，不扩展 backend 范围：
 
 - `AgentCliAdapter` 负责进程生命周期和事件归一化。
-- `CodexExecJsonAdapter` 是唯一生产 adapter。
-- 其它 adapter 只能用于测试或实验，不进入默认产品路径。
-- GUI 只消费 `NormalizedAgentEvent`，不直接解析 Codex JSONL。
+- `CodexAppServerAdapter` 是唯一生产 runtime adapter。
+- `CodexExecJsonAdapter` 只能用于 legacy/test-only 兼容和历史回归，不进入默认产品路径，也不能作为自动 fallback。
+- GUI 只消费 `NormalizedAgentEvent`，不直接解析 Codex JSON-RPC 或 legacy JSONL。
 
 ## Desktop Runtime Productization
 

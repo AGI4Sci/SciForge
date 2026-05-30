@@ -62,11 +62,11 @@ export function ConfidenceBar({ value }: { value: number }) {
 export function EmptyArtifactState({ title, detail, recoverActions }: { title: string; detail: string; recoverActions?: string[] }) {
   const actions = recoverActions === undefined ? [...DEFAULT_EMPTY_ARTIFACT_RECOVER_ACTIONS] : recoverActions;
   return (
-    <EmptyState label="等待" title={title} detail={detail}>
+    <EmptyState label="Waiting" title={title} detail={detail}>
       {actions.length ? (
         <details className="empty-recover-details">
-          <summary>可尝试的恢复动作</summary>
-          <div className="empty-recover-actions" aria-label="恢复动作">
+          <summary>Possible recovery actions</summary>
+          <div className="empty-recover-actions" aria-label="Recovery actions">
             {actions.map((action) => (
               <span key={action}>{recoverActionLabel(action)}</span>
             ))}

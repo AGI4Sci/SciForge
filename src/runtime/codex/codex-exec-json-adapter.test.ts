@@ -16,6 +16,7 @@ import {
 import { CodexExecJsonAdapter, type SpawnCodexProcess } from './codex-exec-json-adapter.js';
 import { defaultGuiExtensionStatePath, GUI_EXTENSION_STATE_ENV, GUI_MCP_SERVER_NAME } from './gui-extension-manifest.js';
 import { saveGuiExtensionSnapshot } from './gui-extension-state.js';
+import { SUBAGENT_MCP_ENV, SUBAGENT_MCP_SERVER_NAME } from './subagent-extension-manifest.js';
 
 test('adapter spawns codex exec --json with isolated CODEX_HOME and plain text command', async () => {
   const child = fakeChild();
@@ -56,6 +57,12 @@ test('adapter spawns codex exec --json with isolated CODEX_HOME and plain text c
   assert.ok(argv.includes(`mcp_servers.${GUI_MCP_SERVER_NAME}.command="node"`));
   assert.ok(argv.some((arg) => arg.startsWith(`mcp_servers.${GUI_MCP_SERVER_NAME}.args=`) && arg.includes('gui-mcp-server.ts')));
   assert.ok(argv.includes(`mcp_servers.${GUI_MCP_SERVER_NAME}.env.${GUI_EXTENSION_STATE_ENV}="${guiStatePath}"`));
+  assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.command="node"`));
+  assert.ok(argv.some((arg) => arg.startsWith(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.args=`) && arg.includes('subagent-mcp-server.ts')));
+  assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.workspace}="${workspace}"`));
+  assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.profile}="${RUNTIME_PROFILE}"`));
+  assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.sandbox}="workspace-write"`));
+  assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.codexCommand}="codex"`));
   assert.equal(argv[argv.indexOf('--profile') + 1], RUNTIME_PROFILE);
   assert.equal(argv[argv.indexOf('--cd') + 1], workspace);
   assert.deepEqual(argv.slice(-5), ['exec', '--json', '--skip-git-repo-check', '--ignore-rules', 'Summarize the workspace']);
@@ -67,6 +74,38 @@ test('adapter spawns codex exec --json with isolated CODEX_HOME and plain text c
   await access(join(spawnCall?.[2].env.PATH?.split(':')[0] ?? '', 'gui'));
   assert.equal(events.find((event) => event.type === 'message')?.text, 'OK');
   assert.equal(events.at(-1)?.type, 'done');
+});
+
+test('adapter injects local sub-agent MCP server by default when GUI extension is disabled', async () => {
+  const child = fakeChild();
+  let spawnCall: Parameters<SpawnCodexProcess> | undefined;
+  const workspace = await tempWorkspace();
+  const adapter = new CodexExecJsonAdapter({
+    env: { [RUNTIME_KEY_ENV]: 'test-key' },
+    spawnProcess(command, args, options) {
+      spawnCall = [command, args, options];
+      setTimeout(() => child.close(0), 0);
+      return child.process;
+    },
+  });
+
+  const turn = await adapter.startTurn({
+    commandText: 'Delegate safely',
+    workspacePath: workspace,
+    guiExtension: { enabled: false },
+  });
+  await collect(turn.events);
+
+  const argv = spawnCall?.[1] ?? [];
+  assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.command="node"`));
+  assert.ok(argv.some((arg) => arg.startsWith(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.args=`) && arg.includes('subagent-mcp-server.ts')));
+  assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.workspace}="${workspace}"`));
+  assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.profile}="${RUNTIME_PROFILE}"`));
+  assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.codexHome}="${spawnCall?.[2].env.CODEX_HOME}"`));
+  assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.parentCommandId}="${turn.turnId}"`));
+  assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.parentAttemptId}="${turn.attemptId}"`));
+  assert.equal(argv.some((arg) => arg.includes(`mcp_servers.${GUI_MCP_SERVER_NAME}.`)), false);
+  assert.deepEqual(argv.slice(-5), ['exec', '--json', '--skip-git-repo-check', '--ignore-rules', 'Delegate safely']);
 });
 
 test('adapter converts stderr to audit events and nonzero exit to failed', async () => {

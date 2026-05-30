@@ -63,8 +63,8 @@ test('CodexAppServerAdapter maps app-server lifecycle, tool, approval, and done 
   assert.equal(turn.codexSessionId, 'thread-app-1');
   assert.deepEqual(events.map((event) => event.type), [
     'run_started',
-    'audit',
-    'audit',
+    'thread_started',
+    'turn_started',
     'message_delta',
     'tool_started',
     'gui_ask_user',
@@ -135,6 +135,166 @@ test('CodexAppServerAdapter preserves native shell command lifecycle details', a
   assert.equal(toolCompleted?.toolName, 'shell');
   assert.equal(toolCompleted?.exitCode, 0);
   assert.equal(toolCompleted?.outputSummary, 'clean');
+});
+
+test('CodexAppServerAdapter promotes sub-agent refs into normalized events', async () => {
+  const client: CodexAppServerClient = {
+    async startTurn() {
+      return {
+        threadId: 'thread-app-subagent',
+        turnId: 'turn-app-subagent',
+        events: asyncGenerator([
+          {
+            type: 'tool.completed',
+            thread_id: 'thread-app-subagent',
+            turn_id: 'turn-app-subagent',
+            item: {
+              id: 'subagent-tool-1',
+              name: 'multi_agent_v1.spawn_agent',
+              result: {
+                agentId: '019e7649-worker',
+                parentAgentId: 'root-agent',
+                ref: 'artifact:subagent-result',
+                transcriptRef: 'transcript:worker-1',
+                resultSummary: 'Sub-agent audit completed.',
+                refs: ['artifact:subagent-result'],
+              },
+            },
+          },
+        ]),
+      };
+    },
+  };
+  const adapter = new CodexAppServerAdapter({ client });
+
+  const turn = await adapter.startTurn({
+    commandText: 'Delegate an audit',
+    workspacePath: '/tmp/sciforge-workspace',
+    commandId: 'app-command-subagent',
+    attemptId: 'attempt-1',
+  });
+  const events = await collect(turn.events);
+  const toolCompleted = events.find((event) => event.type === 'tool_completed');
+
+  assert.equal(toolCompleted?.toolName, 'multi_agent_v1.spawn_agent');
+  assert.equal(toolCompleted?.agentId, '019e7649-worker');
+  assert.equal(toolCompleted?.parentAgentId, 'root-agent');
+  assert.equal(toolCompleted?.ref, 'artifact:subagent-result');
+  assert.equal(toolCompleted?.transcriptRef, 'transcript:worker-1');
+  assert.deepEqual(toolCompleted?.refs, ['artifact:subagent-result', 'transcript:worker-1']);
+  assert.match(toolCompleted?.resultSummary ?? '', /Sub-agent audit/);
+});
+
+test('CodexAppServerAdapter preserves trusted read-file preview refs', async () => {
+  const client: CodexAppServerClient = {
+    async startTurn() {
+      return {
+        threadId: 'thread-app-read',
+        turnId: 'turn-app-read',
+        events: asyncGenerator([
+          {
+            method: 'item/completed',
+            params: {
+              threadId: 'thread-app-read',
+              turnId: 'turn-app-read',
+              item: {
+                id: 'dyn-read-1',
+                type: 'dynamicToolCall',
+                tool: 'read_file',
+                arguments: { path: 'PROJECT.md' },
+                status: 'completed',
+              },
+            },
+          },
+        ]),
+      };
+    },
+  };
+  const adapter = new CodexAppServerAdapter({ client });
+
+  const turn = await adapter.startTurn({
+    commandText: 'Read project docs',
+    workspacePath: '/tmp/sciforge-workspace',
+    commandId: 'app-command-read',
+    attemptId: 'attempt-1',
+  });
+  const events = await collect(turn.events);
+  const toolCompleted = events.find((event) => event.type === 'tool_completed');
+
+  assert.equal(toolCompleted?.toolName, 'read_file');
+  assert.equal(toolCompleted?.filePath, 'PROJECT.md');
+  assert.equal(toolCompleted?.fileRef, 'file:PROJECT.md');
+});
+
+test('CodexAppServerAdapter streams slash-form app-server lifecycle and dynamic sub-agent events', async () => {
+  const client: CodexAppServerClient = {
+    async startTurn() {
+      return {
+        threadId: 'thread-app-slash',
+        turnId: 'turn-app-slash',
+        events: asyncGenerator([
+          { method: 'thread/started', params: { thread: { id: 'thread-app-slash' } } },
+          { method: 'turn/started', params: { threadId: 'thread-app-slash', turn: { id: 'turn-app-slash' } } },
+          { method: 'item/started', params: { threadId: 'thread-app-slash', turnId: 'turn-app-slash', item: { id: 'user-message-1', type: 'userMessage' } } },
+          { method: 'item/completed', params: { threadId: 'thread-app-slash', turnId: 'turn-app-slash', item: { id: 'user-message-1', type: 'userMessage' } } },
+          { method: 'item/agentMessage/delta', params: { threadId: 'thread-app-slash', turnId: 'turn-app-slash', itemId: 'msg-1', delta: 'Working' } },
+          {
+            method: 'item/completed',
+            params: {
+              threadId: 'thread-app-slash',
+              turnId: 'turn-app-slash',
+              item: {
+                id: 'dyn-subagent-1',
+                type: 'dynamicToolCall',
+                namespace: 'multi_agent_v1',
+                tool: 'spawn_agent',
+                status: 'completed',
+                success: true,
+                contentItems: [{
+                  type: 'inputText',
+                  text: JSON.stringify({
+                    structuredContent: {
+                      agentId: '019e7649-worker',
+                      ref: 'artifact:subagent-result',
+                      transcriptRef: 'transcript:worker-1',
+                      resultSummary: 'Sub-agent audit completed.',
+                      refs: ['artifact:subagent-result', 'transcript:worker-1'],
+                    },
+                  }),
+                }],
+              },
+            },
+          },
+          { method: 'turn/completed', params: { threadId: 'thread-app-slash', turn: { id: 'turn-app-slash', status: 'completed' } } },
+        ]),
+      };
+    },
+  };
+  const adapter = new CodexAppServerAdapter({ client });
+
+  const turn = await adapter.startTurn({
+    commandText: 'Delegate an audit',
+    workspacePath: '/tmp/sciforge-workspace',
+    commandId: 'app-command-slash',
+    attemptId: 'attempt-1',
+  });
+  const events = await collect(turn.events);
+
+  assert.deepEqual(events.map((event) => event.type), [
+    'run_started',
+    'thread_started',
+    'turn_started',
+    'item_started',
+    'item_completed',
+    'message_delta',
+    'tool_completed',
+    'done',
+  ]);
+  const subagent = events.find((event) => event.type === 'tool_completed');
+  assert.equal(subagent?.toolName, 'multi_agent_v1.spawn_agent');
+  assert.equal(subagent?.agentId, '019e7649-worker');
+  assert.equal(subagent?.ref, 'artifact:subagent-result');
+  assert.equal(subagent?.transcriptRef, 'transcript:worker-1');
 });
 
 test('ClaudeStreamJsonAdapter spawns Claude stream-json and maps partial plus control request', async () => {

@@ -59,6 +59,17 @@ test('backend presentation profiles are separate from runtime profile metadata',
     detail: 'module.invoke actions.execute',
     raw: { backend: 'claude-stream-json' },
   });
+  const codexAppTool = event({
+    type: 'tool_started',
+    label: 'tool',
+    detail: 'module.read gui:/gui/regions/sidebar/summary.md',
+    raw: { backend: 'codex-app-server' },
+  });
+  const codexAppAssistantDelta = event({
+    type: 'assistant_delta',
+    label: 'assistant delta',
+    raw: { backend: 'codex-app-server', type: 'assistant_delta', text: 'Cursor-like assistant draft delta.' },
+  });
 
   const codexPresentation = presentStreamEvent(codexAudit);
   assert.equal(codexPresentation.typeLabel, 'Codex audit');
@@ -74,6 +85,14 @@ test('backend presentation profiles are separate from runtime profile metadata',
   const toolPresentation = presentStreamEvent(claudeTool);
   assert.equal(toolPresentation.typeLabel, 'Claude tool');
   assert.equal(toolPresentation.importance, 'background');
+  const cursorPresentation = presentStreamEvent(codexAppTool);
+  assert.equal(cursorPresentation.typeLabel, 'Action');
+  assert.equal(cursorPresentation.importance, 'background');
+  const cursorDeltaPresentation = presentStreamEvent(codexAppAssistantDelta);
+  assert.equal(cursorDeltaPresentation.typeLabel, 'Assistant progress');
+  assert.equal(cursorDeltaPresentation.importance, 'background');
+  assert.equal(cursorDeltaPresentation.visibleInRunningMessage, false);
+  assert.equal(assistantDraftDeltaFromStreamEvent(codexAppAssistantDelta), 'Cursor-like assistant draft delta.');
   assert.equal(streamEventCounts([codexAudit, claudeApproval, claudeTool]).key, 1);
   assert.match(latestRunningEvent([codexAudit, claudeApproval, claudeTool]) ?? '', /Approval ref/);
   assert.equal(presentStreamEvent(claudeApproval, { profile: 'sciforge-default' }).typeLabel, 'gui_ask_user');
@@ -101,7 +120,7 @@ test('context warnings stay visible without exposing runtime window internals', 
   const contextPresentation = presentStreamEvent(contextEvent);
   assert.equal(contextPresentation.importance, 'key');
   assert.equal(contextPresentation.initiallyCollapsed, false);
-  assert.match(contextPresentation.detail, /上下文接近上限/);
+  assert.match(contextPresentation.detail, /Context is near the limit/);
   assert.doesNotMatch(contextPresentation.detail, /used\/window|runtime|source|last|codex/i);
   assert.equal(presentStreamEvent(repairEvent).visibleInRunningMessage, true);
   assert.match(latestRunningEvent([contextEvent, repairEvent]) || '', /TurnAcceptanceGate/);
@@ -118,7 +137,7 @@ test('text deltas coalesce and remain folded as background process detail', () =
   assert.match(events[0].detail || '', /正在读取 文件。|正在读取文件。/);
   assert.equal(presentation.importance, 'background');
   assert.equal(presentation.initiallyCollapsed, true);
-  assert.equal(latestRunningEvent(events), '后台正在探索或执行，过程日志已折叠。');
+  assert.equal(latestRunningEvent(events), 'Working in the background. Activity is folded below.');
 });
 
 test('assistant draft extracts natural language text deltas but skips task JSON', () => {
@@ -136,6 +155,29 @@ test('assistant draft extracts natural language text deltas but skips task JSON'
   assert.match(draft, /已确认收到/);
   assert.match(draft, /当前正在整理结果/);
   assert.doesNotMatch(draft, /taskFiles/);
+  assert.equal(assistantDraftFromStreamEvents([
+    event({ id: 'delta-cjk-1', type: 'text-delta', label: '生成内容', detail: '简洁直' }),
+    event({ id: 'delta-cjk-2', type: 'text-delta', label: '生成内容', detail: '给 / 少说' }),
+    event({ id: 'delta-cjk-3', type: 'text-delta', label: '生成内容', detail: '废话' }),
+  ]), '简洁直给 / 少说废话');
+});
+
+test('assistant draft hides redacted path placeholders and repairs split technical identifiers', () => {
+  const draft = assistantDraftFromStreamEvents([
+    event({ id: 'delta-paths', type: 'text-delta', label: '生成内容', detail: '[local path] [local path] [redacted-path] SciForge 需要保持 final- answer-pro se 纯净，' }),
+    event({ id: 'delta-style', type: 'text-delta', label: '生成内容', detail: '过程用 worked /explored 分组，状态包含 com pleted 和 f ailed。' }),
+    event({ id: 'delta-identifiers', type: 'text-delta', label: '生成内容', detail: ' splitFinal Message Presentation、init iallyExp anded、Object Reference 和 onObject Focus 也要稳定。' }),
+  ]);
+
+  assert.doesNotMatch(draft, /\[local path\]|\[redacted-path\]/i);
+  assert.match(draft, /final-answer-prose/);
+  assert.match(draft, /worked\/explored/);
+  assert.match(draft, /completed/);
+  assert.match(draft, /failed/);
+  assert.match(draft, /splitFinalMessagePresentation/);
+  assert.match(draft, /initiallyExpanded/);
+  assert.match(draft, /ObjectReference/);
+  assert.match(draft, /onObjectFocus/);
 });
 
 test('assistant draft can use output events when they contain natural language', () => {
@@ -173,12 +215,12 @@ test('script generation and write-file events stay visible in the running chat m
 
   assert.equal(generation.importance, 'key');
   assert.equal(generation.visibleInRunningMessage, true);
-  assert.match(generation.typeLabel, /生成脚本/);
+  assert.match(generation.typeLabel, /Writing/);
   assert.equal(write.importance, 'key');
   assert.equal(write.visibleInRunningMessage, true);
-  assert.match(write.typeLabel, /写入脚本/);
+  assert.match(write.typeLabel, /Writing/);
   assert.match(write.detail, /arxiv_agent_literature_review\.py/);
-  assert.match(latestRunningEvent([generationEvent, writeEvent]) || '', /正在写入脚本/);
+  assert.match(latestRunningEvent([generationEvent, writeEvent]) || '', /Writing/);
 });
 
 test('AgentServer task file payloads show as concise write work instead of raw searched JSON', () => {
@@ -226,9 +268,9 @@ test('process-progress events expose read write wait and next step details', () 
 
   assert.equal(presentation.importance, 'key');
   assert.equal(presentation.visibleInRunningMessage, true);
-  assert.match(presentation.detail, /正在读：\/workspace\/input\/papers\.csv/);
-  assert.match(presentation.detail, /正在写：\/workspace\/tasks\/review\.py/);
-  assert.match(presentation.detail, /下一步：收到新事件后继续执行/);
+  assert.match(presentation.detail, /Reading: \/workspace\/input\/papers\.csv/);
+  assert.match(presentation.detail, /Writing: \/workspace\/tasks\/review\.py/);
+  assert.match(presentation.detail, /Next: 收到新事件后继续执行/);
 });
 
 test('structured interaction progress fields drive presentation without prompt or scenario semantics', () => {
@@ -268,7 +310,7 @@ test('structured interaction progress fields drive presentation without prompt o
   assert.equal(entry.operationKind, 'validate');
   assert.match(entry.operationLine, /^Validated Phase: verification/);
   assert.equal(worklog.operationCounts.validate, 1);
-  assert.match(worklog.summary, /1 验证/);
+  assert.match(worklog.summary, /1 checked/);
 });
 
 test('interaction progress presentation covers blocked guidance and cancellation from structured contract fields', () => {
@@ -307,7 +349,7 @@ test('interaction progress presentation covers blocked guidance and cancellation
 
   const worklog = presentStreamWorklog(events);
 
-  assert.deepEqual(worklog.entries.map((entry) => entry.presentation.typeLabel), ['需要确认', '引导已排队', '运行取消']);
+  assert.deepEqual(worklog.entries.map((entry) => entry.presentation.typeLabel), ['Needs approval', 'Guidance queued', 'Run cancelled']);
   assert.deepEqual(worklog.entries.map((entry) => entry.operationKind), ['wait', 'wait', 'diagnostic']);
   assert.equal(worklog.entries[0].presentation.tone, 'warning');
   assert.equal(worklog.entries[2].presentation.tone, 'danger');
@@ -362,7 +404,7 @@ test('worklog restores compact interaction progress from structured detail only'
   const poisonPresentation = presentStreamEvent(poison);
   const worklog = presentStreamWorklog([compact, poison]);
 
-  assert.equal(compactPresentation.typeLabel, '需要确认');
+  assert.equal(compactPresentation.typeLabel, 'Needs approval');
   assert.equal(compactPresentation.importance, 'key');
   assert.match(compactPresentation.detail, /Interaction: human-approval required/);
   assert.equal(poisonPresentation.typeLabel, 'human-approval-required');
@@ -456,13 +498,13 @@ test('cursor-like worklog fixture summarizes operations and keeps runtime intern
   const worklog = presentStreamWorklog(events, { guidanceCount: 1 });
 
   assert.equal(worklog.initiallyCollapsed, true);
-  assert.match(worklog.summary, /1 探索/);
-  assert.match(worklog.summary, /1 搜索/);
-  assert.match(worklog.summary, /1 读取/);
-  assert.match(worklog.summary, /1 写入/);
-  assert.match(worklog.summary, /1 执行/);
-  assert.match(worklog.summary, /1 等待/);
-  assert.match(worklog.summary, /1 引导/);
+  assert.match(worklog.summary, /1 explored/);
+  assert.match(worklog.summary, /1 searched/);
+  assert.match(worklog.summary, /1 read/);
+  assert.match(worklog.summary, /1 wrote/);
+  assert.match(worklog.summary, /1 ran/);
+  assert.match(worklog.summary, /1 waited/);
+  assert.match(worklog.summary, /1 guided/);
   assert.equal(worklog.operationCounts.explore, 1);
   assert.equal(worklog.operationCounts.search, 1);
   assert.equal(worklog.operationCounts.read, 1);
@@ -518,13 +560,14 @@ test('running work timeline keeps order while collapsing completed and repeated 
   assert.equal(visible.filter((entry) => entry.operationKind === 'wait').length, 1);
   assert.match(markup, /native-event-stream is-live/);
   assert.match(markup, /native-event-row[^"]*active/);
+  assert.doesNotMatch(markup, />live<|>Working<|Agent process replay/);
   assert.doesNotMatch(markup, /running-work-completed-fold|执行轨迹|已完成/);
   assert.match(markup, /检索/);
   assert.doesNotMatch(markup, /后端 25s 没有输出新事件|Backend progress/);
   assert.doesNotMatch(markup, /Search<\/span><span>Searched/);
 });
 
-test('native stream promotes shell command lifecycle over backend wait placeholders', () => {
+test('native stream promotes shell read lifecycle over backend wait placeholders', () => {
   const events = [
     normalizeWorkspaceRuntimeEvent({
       type: 'process-progress',
@@ -556,9 +599,10 @@ test('native stream promotes shell command lifecycle over backend wait placehold
     guidanceCount: 0,
   }));
 
-  assert.match(markup, /Codex 正在运行命令/);
-  assert.match(markup, /cat PROJECT\.md/);
-  assert.doesNotMatch(markup, /下一条 Codex CLI JSONL|后端 25s 没有输出新事件|Backend progress/);
+  assert.match(markup, /Explored 1 file/);
+  assert.match(markup, /Read PROJECT\.md running/);
+  assert.doesNotMatch(markup, /cat PROJECT\.md/);
+  assert.doesNotMatch(markup, /Shell command started|下一条 Codex CLI JSONL|后端 25s 没有输出新事件|Backend progress/);
 });
 
 test('native stream drops generic backend lifecycle placeholders once real backend content exists', () => {
@@ -592,7 +636,7 @@ test('native stream drops generic backend lifecycle placeholders once real backe
     guidanceCount: 0,
   }));
 
-  assert.match(markup, /Codex backend emitted a real assistant message/);
+  assert.equal(markup, '');
   assert.doesNotMatch(markup, /Backend progress|Tool started/);
 });
 
@@ -609,8 +653,8 @@ test('native stream mirrors Codex lifecycle affordances for command, file edit, 
     backend: 'codex',
     guidanceCount: 0,
   }));
-  assert.match(runningCommandMarkup, /Codex 正在运行命令/);
-  assert.match(runningCommandMarkup, /正在运行：\/bin\/zsh -lc/);
+  assert.match(runningCommandMarkup, /Worked for/);
+  assert.match(runningCommandMarkup, /Ran \/bin\/zsh -lc/);
   assert.match(runningCommandMarkup, /<details[^>]*open=""/);
 
   const completedCommandMarkup = renderToStaticMarkup(React.createElement(RunningWorkProcess, {
@@ -627,7 +671,7 @@ test('native stream mirrors Codex lifecycle affordances for command, file edit, 
     backend: 'codex',
     guidanceCount: 0,
   }));
-  assert.match(completedCommandMarkup, /Codex 命令完成/);
+  assert.match(completedCommandMarkup, /Ran \/bin\/zsh -lc/);
   assert.match(completedCommandMarkup, /typecheck clean/);
   assert.doesNotMatch(completedCommandMarkup, /<details[^>]*open=""/);
 
@@ -642,7 +686,7 @@ test('native stream mirrors Codex lifecycle affordances for command, file edit, 
     backend: 'codex',
     guidanceCount: 0,
   }));
-  assert.match(fileEditMarkup, /Codex CLI 已编辑/);
+  assert.match(fileEditMarkup, /Edited/);
   assert.match(fileEditMarkup, /src\/ui\/src\/app\/chat\/RunningWorkProcess\.tsx/);
 
   const subagentMarkup = renderToStaticMarkup(React.createElement(RunningWorkProcess, {
@@ -656,7 +700,308 @@ test('native stream mirrors Codex lifecycle affordances for command, file edit, 
     backend: 'codex',
     guidanceCount: 0,
   }));
-  assert.match(subagentMarkup, /Codex CLI 正在创建 sub agent/);
+  assert.match(subagentMarkup, /Sub agent/);
+});
+
+test('cursor process aggregates read and search actions and expands output, diff, and terminal states', () => {
+  const events = [
+    normalizeWorkspaceRuntimeEvent({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'tool_completed',
+      toolName: 'shell',
+      command: "/bin/zsh -lc 'sed -n 1,20p PROJECT.md'",
+      status: 'completed',
+      message: "Shell command completed: /bin/zsh -lc 'sed -n 1,20p PROJECT.md'",
+    }),
+    normalizeWorkspaceRuntimeEvent({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'tool_completed',
+      toolName: 'shell',
+      command: "rg -n 'TODO' src/ui/src",
+      status: 'completed',
+    }),
+    event({
+      id: 'command-output',
+      type: 'tool_completed',
+      label: 'shell',
+      detail: 'npm test',
+      createdAt: '2026-05-25T00:00:01.000Z',
+      raw: {
+        backend: 'codex-app-server',
+        type: 'tool_completed',
+        toolName: 'shell',
+        command: 'npm test',
+        status: 'completed',
+        stdout: 'tests passed\nsecret=sk-secret',
+        stderr: 'warning provider=https://provider.example/v1',
+      },
+    }),
+    normalizeWorkspaceRuntimeEvent({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'tool_completed',
+      toolName: 'apply_patch',
+      filePath: 'src/ui/src/app/chat/RunningWorkProcess.tsx',
+      status: 'completed',
+      outputSummary: '+1 -1',
+      diff: [
+        'diff --git a/src/ui/src/app/chat/RunningWorkProcess.tsx b/src/ui/src/app/chat/RunningWorkProcess.tsx',
+        '-old line',
+        '+new line',
+      ].join('\n'),
+    }),
+    normalizeWorkspaceRuntimeEvent({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'tool_completed',
+      toolName: 'shell',
+      command: 'npm run failing-check',
+      status: 'failed',
+      exitCode: 1,
+      outputSummary: 'check failed',
+    }),
+    normalizeWorkspaceRuntimeEvent({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'tool_completed',
+      toolName: 'shell',
+      command: 'npm run long-watch',
+      status: 'cancelled',
+    }),
+  ];
+  const markup = renderToStaticMarkup(React.createElement(RunningWorkProcess, {
+    events,
+    counts: streamEventCounts(events),
+    backend: 'codex',
+    guidanceCount: 0,
+  }));
+
+  assert.match(markup, /Explored 1 file, 1 search/);
+  assert.match(markup, /Read PROJECT\.md/);
+  assert.match(markup, /Searched TODO src\/ui\/src/);
+  assert.match(markup, /tests passed/);
+  assert.match(markup, /provider=\[redacted\]/);
+  assert.doesNotMatch(markup, /Stdout:|Stderr:/);
+  assert.match(markup, /Edited src\/ui\/src\/app\/chat\/RunningWorkProcess\.tsx \+1 -1/);
+  assert.equal((markup.match(/\+new line/g) ?? []).length, 1);
+  assert.match(markup, /failed/);
+  assert.match(markup, /cancelled/);
+  assert.doesNotMatch(markup, /Runtime event recorded|Shell command completed|sk-secret|provider\.example/);
+});
+
+test('cursor process keeps interleaved worked and explored chunks in chronological order', () => {
+  const events = [
+    event({
+      id: 'run-install',
+      type: 'tool_completed',
+      label: 'shell',
+      detail: 'npm install',
+      createdAt: '2026-05-25T00:00:00.000Z',
+      raw: {
+        backend: 'codex-app-server',
+        type: 'tool_completed',
+        toolName: 'shell',
+        command: 'npm install',
+        status: 'completed',
+      },
+    }),
+    event({
+      id: 'read-project',
+      type: 'tool_completed',
+      label: 'read_file',
+      detail: 'PROJECT.md loaded',
+      createdAt: '2026-05-25T00:00:01.000Z',
+      raw: {
+        backend: 'codex-app-server',
+        type: 'tool_completed',
+        toolName: 'read_file',
+        filePath: 'PROJECT.md',
+        status: 'completed',
+        text: 'PROJECT.md loaded',
+      },
+    }),
+    event({
+      id: 'run-typecheck',
+      type: 'tool_completed',
+      label: 'shell',
+      detail: 'npm run typecheck --silent',
+      createdAt: '2026-05-25T00:00:02.000Z',
+      raw: {
+        backend: 'codex-app-server',
+        type: 'tool_completed',
+        toolName: 'shell',
+        command: 'npm run typecheck --silent',
+        status: 'completed',
+      },
+    }),
+  ];
+  const markup = renderToStaticMarkup(React.createElement(RunningWorkProcess, {
+    events,
+    counts: streamEventCounts(events),
+    backend: 'codex',
+    guidanceCount: 0,
+  }));
+  const timelineMarkup = markup.slice(markup.indexOf('native-event-list'));
+  const firstRun = timelineMarkup.indexOf('Ran npm install');
+  const read = timelineMarkup.indexOf('Read PROJECT.md');
+  const secondRun = timelineMarkup.indexOf('Ran npm run typecheck --silent');
+
+  assert.ok(firstRun >= 0 && read > firstRun && secondRun > read, timelineMarkup);
+  assert.equal((markup.match(/Worked for/g) ?? []).length, 2);
+  assert.equal((markup.match(/Explored 1 file/g) ?? []).length, 1);
+});
+
+test('live cursor process keeps forty eight actions and separates action overflow from diagnostics', () => {
+  const events = Array.from({ length: 50 }, (_, index) => event({
+    id: `cmd-${index}`,
+    type: 'tool_completed',
+    label: 'shell',
+    detail: `echo command-${index}`,
+    createdAt: `2026-05-25T00:00:${String(index).padStart(2, '0')}.000Z`,
+    raw: {
+      backend: 'codex-app-server',
+      type: 'tool_completed',
+      toolName: 'shell',
+      command: `echo command-${index}`,
+      status: 'completed',
+    },
+  }));
+  const markup = renderToStaticMarkup(React.createElement(RunningWorkProcess, {
+    events,
+    counts: streamEventCounts(events),
+    backend: 'codex',
+    guidanceCount: 0,
+  }));
+
+  assert.match(markup, /Ran echo command-0/);
+  assert.match(markup, /Ran echo command-49/);
+  assert.doesNotMatch(markup, /条底层诊断已收起/);
+  assert.doesNotMatch(markup, /底层诊断事件：/);
+  assert.equal((markup.match(/cursor-agent-action-shell_command/g) ?? []).length, 48);
+  assert.match(markup, /2 earlier actions hidden/);
+});
+
+test('cursor action details are redacted and file previews require trusted refs', () => {
+  const runtimePhraseMarkup = renderToStaticMarkup(React.createElement(RunningWorkProcess, {
+    events: [event({
+      type: 'tool-result',
+      label: 'Runtime Codex',
+      detail: 'Runtime Codex started with sciforge-deepseek-proxy/bailian/deepseek-v4-flash profile sciforge-runtime-deepseek.',
+      raw: {
+        type: 'tool_completed',
+        toolName: 'process_summary',
+        status: 'completed',
+        detail: 'Runtime Codex started with sciforge-deepseek-proxy/bailian/deepseek-v4-flash profile sciforge-runtime-deepseek.',
+      },
+    })],
+    counts: streamEventCounts([]),
+    backend: 'codex',
+    guidanceCount: 0,
+  }));
+  assert.match(runtimePhraseMarkup, /configured runtime/);
+  assert.doesNotMatch(runtimePhraseMarkup, /sciforge-deepseek-proxy|bailian\/deepseek-v4-flash|sciforge-runtime-deepseek/);
+
+  const redactedCommandMarkup = renderToStaticMarkup(React.createElement(RunningWorkProcess, {
+    events: [normalizeWorkspaceRuntimeEvent({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'tool_completed',
+      toolName: 'shell',
+      command: "curl https://provider.example/v1 -H 'Authorization: Bearer sk-secret' --model bailian/deepseek-v4-flash --cwd /Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p1",
+      status: 'completed',
+      exitCode: 0,
+      outputSummary: 'provider=https://provider.example token=sk-secret path=/Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p1',
+    })],
+    counts: streamEventCounts([]),
+    backend: 'codex',
+    guidanceCount: 0,
+  }));
+  assert.match(redactedCommandMarkup, /\[url\]/);
+  assert.match(redactedCommandMarkup, /\[redacted\]/);
+  assert.match(redactedCommandMarkup, /p1/);
+  assert.doesNotMatch(redactedCommandMarkup, /provider\.example|sk-secret|bailian\/deepseek-v4-flash|\/Applications\/workspace/);
+
+  const rawPathOnlyMarkup = renderToStaticMarkup(React.createElement(RunningWorkProcess, {
+    events: [normalizeWorkspaceRuntimeEvent({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'tool_completed',
+      toolName: 'read_file',
+      filePath: 'PROJECT.md',
+      status: 'completed',
+      outputSummary: 'loaded',
+    })],
+    counts: streamEventCounts([]),
+    backend: 'codex',
+    guidanceCount: 0,
+    onObjectFocus: () => undefined,
+  }));
+  assert.match(rawPathOnlyMarkup, /Read PROJECT\.md/);
+  assert.match(rawPathOnlyMarkup, /cursor-agent-action-focus/);
+
+  const inferredReadTargetMarkup = renderToStaticMarkup(React.createElement(RunningWorkProcess, {
+    events: [event({
+      type: 'tool-result',
+      label: 'Read',
+      detail: '只读检查：请读取 PROJECT.md 的目标摘要，用一句中文概括当前阶段目标。',
+      raw: {
+        type: 'tool_completed',
+        toolName: 'read_file',
+        status: 'completed',
+        detail: '只读检查：请读取 PROJECT.md 的目标摘要，用一句中文概括当前阶段目标。',
+      },
+    })],
+    counts: streamEventCounts([]),
+    backend: 'codex',
+    guidanceCount: 0,
+    onObjectFocus: () => undefined,
+  }));
+  assert.match(inferredReadTargetMarkup, /Read PROJECT\.md/);
+  assert.doesNotMatch(inferredReadTargetMarkup, /只读检查：请读取 PROJECT\.md/);
+  assert.doesNotMatch(inferredReadTargetMarkup, /Preview file/);
+
+  const unsafeRefMarkup = renderToStaticMarkup(React.createElement(RunningWorkProcess, {
+    events: [normalizeWorkspaceRuntimeEvent({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'tool_completed',
+      toolName: 'read_file',
+      filePath: '/tmp/private-note.md',
+      fileRef: 'file:/tmp/private-note.md',
+      status: 'completed',
+      outputSummary: 'loaded /tmp/private-note.md',
+    })],
+    counts: streamEventCounts([]),
+    backend: 'codex',
+    guidanceCount: 0,
+    onObjectFocus: () => undefined,
+  }));
+  assert.match(unsafeRefMarkup, /Read private-note\.md/);
+  assert.doesNotMatch(unsafeRefMarkup, /Preview file|file:\/tmp|\/tmp\/private-note/);
+
+  const trustedRefMarkup = renderToStaticMarkup(React.createElement(RunningWorkProcess, {
+    events: [normalizeWorkspaceRuntimeEvent({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'tool_completed',
+      toolName: 'read_file',
+      filePath: 'PROJECT.md',
+      fileRef: 'file:PROJECT.md',
+      status: 'completed',
+      outputSummary: 'loaded',
+    })],
+    counts: streamEventCounts([]),
+    backend: 'codex',
+    guidanceCount: 0,
+    onObjectFocus: () => undefined,
+  }));
+  assert.match(trustedRefMarkup, /cursor-agent-action-focus/);
+
+  const assistantDeltaMarkup = renderToStaticMarkup(React.createElement(RunningWorkProcess, {
+    events: [event({
+      type: 'text-delta',
+      label: 'Assistant text',
+      detail: 'This belongs in the assistant answer, not the process transcript.',
+      raw: { backend: 'codex-app-server', type: 'text-delta', text: 'This belongs in the assistant answer, not the process transcript.' },
+    })],
+    counts: streamEventCounts([]),
+    backend: 'codex',
+    guidanceCount: 0,
+  }));
+  assert.equal(assistantDeltaMarkup, '');
 });
 
 test('live chat worklog filters internal runtime events but keeps meaningful work steps', () => {
@@ -1098,7 +1443,7 @@ test('running work process renders structured progress without prompt or scenari
   const visibleMarkup = markup.replace(/<details class="message-fold depth-3 stream-event-raw-fold"[\s\S]*?<\/details>/g, '');
 
   assert.match(visibleMarkup, /结构化等待状态/);
-  assert.match(visibleMarkup, /正在读/);
+  assert.match(visibleMarkup, /Reading:/);
   assert.match(visibleMarkup, /\/structured\/read\.csv/);
   assert.match(visibleMarkup, /structured backend event/);
   assert.match(visibleMarkup, /structured next step/);

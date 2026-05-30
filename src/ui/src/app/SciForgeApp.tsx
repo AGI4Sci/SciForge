@@ -87,12 +87,14 @@ import { previewPackageAutoRunPrompt } from './ResultsRenderer';
 import type { HandoffAutoRunRequest } from './results/viewPlanResolver';
 import { useRuntimeHealth } from './runtimeHealthPanel';
 import { cx } from './uiPrimitives';
+import { documentLangForLocale, localeText, normalizeLocale, type SupportedLocale } from '../i18n';
+import { I18nProvider } from '../i18nContext';
 import { resolveSearchNavigation, workbenchNavigationForScenario } from './appShell/navigation';
 import { SettingsPage, Sidebar, TopBar, type ConfigSaveState, type SidebarProjectThreadGroup } from './appShell/ShellPanels';
 import { runPromptOrchestrator } from './chat/runOrchestrator';
 import { highlightFeedbackTargetSnapshot } from './chat/referenceFocus';
 import type { SettingsSectionId } from './appShell/settingsPageModel';
-import { buildWorkspaceProjectActivation, findPeerInstanceForSidebarProject, isCurrentSidebarProject, removeSidebarProjectFromConfig } from './appShell/sidebarProjectModel';
+import { buildWorkspaceDirectorySwitchPatch, buildWorkspaceProjectActivation, findPeerInstanceForSidebarProject, isCurrentSidebarProject, removeSidebarProjectFromConfig } from './appShell/sidebarProjectModel';
 import {
   buildSidebarProjectSessionsByPath,
   loadPeerSidebarProjectSessionSnapshots,
@@ -189,6 +191,8 @@ export function SciForgeApp() {
     workspacePath: string;
   } | null>(null);
   const [chatReferenceRequest, setChatReferenceRequest] = useState<{ id: string; reference: SciForgeReference } | null>(null);
+  const locale = normalizeLocale(config.locale);
+  const t = (copy: Record<SupportedLocale, string>) => localeText(locale, copy);
 
   const sessions = workspaceState.sessionsByScenario;
   const archivedSessionsByAgent = useMemo(
@@ -260,12 +264,21 @@ export function SciForgeApp() {
 	            }));
 	          }
 	          setWorkspaceStatus(desktopRuntimeConfig
-	            ? '已从 Electron runtime config 加载桌面运行时配置'
-	            : '已从 config.local.json 加载统一配置');
+	            ? t({
+	              'zh-CN': '已从 Electron runtime config 加载桌面运行时配置',
+	              'en-US': 'Loaded desktop runtime config from Electron runtime config',
+	            })
+	            : t({
+	              'zh-CN': '已从 config.local.json 加载统一配置',
+	              'en-US': 'Loaded unified config from config.local.json',
+	            }));
 	        }
 	      })
       .catch((err) => {
-        if (!cancelled) setWorkspaceStatus(`config.local.json 未加载：${err instanceof Error ? err.message : String(err)}`);
+        if (!cancelled) setWorkspaceStatus(t({
+          'zh-CN': `config.local.json 未加载：${err instanceof Error ? err.message : String(err)}`,
+          'en-US': `config.local.json was not loaded: ${err instanceof Error ? err.message : String(err)}`,
+        }));
       })
       .finally(() => {
         if (!cancelled) setConfigFileHydrated(true);
@@ -295,15 +308,29 @@ export function SciForgeApp() {
             return next;
           });
         }
-        setWorkspaceStatus(`已从 ${restoredPath || '最近工作区'}/.sciforge 恢复工作区`);
+        setWorkspaceStatus(t({
+          'zh-CN': `已从 ${restoredPath || '最近工作区'}/.sciforge 恢复工作区`,
+          'en-US': `Restored workspace from ${restoredPath || 'recent workspace'}/.sciforge`,
+        }));
       } else {
         if (requestedPath) {
           setWorkspaceState({ ...createInitialWorkspaceState(), workspacePath: requestedPath });
         }
-        setWorkspaceStatus(requestedPath ? `未找到 ${requestedPath}/.sciforge/workspace-state.json` : '未找到最近工作区快照');
+        setWorkspaceStatus(requestedPath
+          ? t({
+            'zh-CN': `未找到 ${requestedPath}/.sciforge/workspace-state.json`,
+            'en-US': `Did not find ${requestedPath}/.sciforge/workspace-state.json`,
+          })
+          : t({
+            'zh-CN': '未找到最近工作区快照',
+            'en-US': 'Did not find a recent workspace snapshot',
+          }));
       }
     } catch (err) {
-      setWorkspaceStatus(`Workspace snapshot 未加载：${err instanceof Error ? err.message : String(err)}`);
+      setWorkspaceStatus(t({
+        'zh-CN': `Workspace snapshot 未加载：${err instanceof Error ? err.message : String(err)}`,
+        'en-US': `Workspace snapshot was not loaded: ${err instanceof Error ? err.message : String(err)}`,
+      }));
     } finally {
       setWorkspaceHydrated(true);
     }
@@ -331,17 +358,31 @@ export function SciForgeApp() {
             saveSciForgeConfig(next);
             return next;
           });
-          setWorkspaceStatus(`已从 ${restoredPath}/.sciforge 恢复工作区`);
+          setWorkspaceStatus(t({
+            'zh-CN': `已从 ${restoredPath}/.sciforge 恢复工作区`,
+            'en-US': `Restored workspace from ${restoredPath}/.sciforge`,
+          }));
         } else {
           if (workspacePath) {
             setWorkspaceState({ ...createInitialWorkspaceState(), workspacePath });
           }
-          setWorkspaceStatus(workspacePath ? `未找到 ${workspacePath}/.sciforge/workspace-state.json` : '未找到最近工作区快照');
+          setWorkspaceStatus(workspacePath
+            ? t({
+              'zh-CN': `未找到 ${workspacePath}/.sciforge/workspace-state.json`,
+              'en-US': `Did not find ${workspacePath}/.sciforge/workspace-state.json`,
+            })
+            : t({
+              'zh-CN': '未找到最近工作区快照',
+              'en-US': 'Did not find a recent workspace snapshot',
+            }));
         }
       })
       .catch((err) => {
         if (!cancelled) {
-          setWorkspaceStatus(`Workspace snapshot 未加载：${err instanceof Error ? err.message : String(err)}`);
+          setWorkspaceStatus(t({
+            'zh-CN': `Workspace snapshot 未加载：${err instanceof Error ? err.message : String(err)}`,
+            'en-US': `Workspace snapshot was not loaded: ${err instanceof Error ? err.message : String(err)}`,
+          }));
         }
       })
       .finally(() => {
@@ -558,7 +599,7 @@ export function SciForgeApp() {
     const queuedEvent: AgentStreamEvent = {
       id: makeId('evt'),
       type: 'queued',
-      label: '已提交',
+      label: 'Submitted',
       detail: prompt,
       createdAt: nowIso(),
     };
@@ -599,12 +640,12 @@ export function SciForgeApp() {
       });
       const assistantContent = result.status === 'completed'
         ? result.finalResponse.message.content
-        : `反馈侧栏整理失败：${result.message}`;
+        : `Feedback planning failed: ${result.message}`;
       const currentDraft = annotationDraftRef.current;
       if (annotationRunMatchesDraft(runToken, currentDraft)) {
         const nextDraft = advanceAnnotationPlanClarification(currentDraft, { content: prompt, choice, assistantContent });
         if (commitAnnotationDraftIfCurrent(runToken, nextDraft, 'plan')) {
-          setWorkspaceStatus('反馈侧栏已整理当前意图；可继续预览、小改动或保存到收件箱。');
+          setWorkspaceStatus('Feedback plan is ready. You can preview it, make a small edit, or save it to the inbox.');
         }
       }
     } finally {
@@ -638,11 +679,11 @@ export function SciForgeApp() {
       });
       annotationDraftRef.current = draftWithRoute;
       setAnnotationDraft(draftWithRoute);
-      setWorkspaceStatus(`这条反馈需要收件箱确认：${assessment.reason}`);
+      setWorkspaceStatus(`This feedback needs inbox confirmation: ${assessment.reason}`);
       await persistAnnotationDraftToInbox(draftWithRoute, {
         action: 'send-to-inbox',
         openInboxAfterSave: true,
-        statusText: '复杂改动已保存到反馈收件箱',
+        statusText: 'Complex change saved to the feedback inbox',
       });
       return;
     }
@@ -661,7 +702,7 @@ export function SciForgeApp() {
     const queuedEvent: AgentStreamEvent = {
       id: makeId('evt'),
       type: 'queued',
-      label: '小改动已提交',
+      label: 'Small edit submitted',
       detail: assessment.reason,
       createdAt: nowIso(),
     };
@@ -704,24 +745,24 @@ export function SciForgeApp() {
       });
       const assistantContent = result.status === 'completed'
         ? result.finalResponse.message.content
-        : `快捷修改未完成：${result.message}`;
+        : `Quick edit did not finish: ${result.message}`;
       const needsInbox = result.status !== 'completed'
         || /\bNEEDS_INBOX\b|需要.*收件箱|未修改|没有修改|no files changed|no changes/i.test(assistantContent);
       const runtimeRunId = result.status === 'completed' ? result.finalResponse.run.id : undefined;
       const draftWithResult = appendAnnotationActionRecord(draftWithRequest, {
         action: 'apply-small-change',
         status: needsInbox ? 'blocked' : 'completed',
-        summary: needsInbox ? '快捷修改未应用，转入收件箱确认。' : '低风险小改动已由侧栏提交执行。',
+        summary: needsInbox ? 'Quick edit was not applied and needs inbox confirmation.' : 'Small low-risk edit was submitted from the sidebar.',
         risk: assessment.risk,
         writesApplied: !needsInbox,
         runtimeRunId,
         createdAt: nowIso(),
       });
       const nextDraft = advanceAnnotationPlanClarification(draftWithResult, {
-        content: '应用小改动',
+        content: 'Apply small edit',
         choice: {
           id: 'apply-small-change',
-          label: '应用小改动',
+          label: 'Apply small edit',
           prompt,
         },
         assistantContent,
@@ -729,7 +770,7 @@ export function SciForgeApp() {
       if (commitAnnotationDraftIfCurrent(runToken, nextDraft, 'quick-action')) {
         await persistAnnotationDraftToInbox(nextDraft, {
           action: needsInbox ? 'send-to-inbox' : 'apply-small-change',
-          statusText: needsInbox ? '快捷修改未应用，已转入反馈收件箱' : '低风险小改动结果已记录到反馈收件箱',
+          statusText: needsInbox ? 'Quick edit moved to the feedback inbox' : 'Small edit result saved to the feedback inbox',
         });
       }
     } catch (error) {
@@ -744,7 +785,7 @@ export function SciForgeApp() {
       if (commitAnnotationDraftIfCurrent(runToken, draftWithFailure, 'quick-action')) {
         await persistAnnotationDraftToInbox(draftWithFailure, {
           action: 'send-to-inbox',
-          statusText: '快捷修改被阻塞，已转入反馈收件箱',
+          statusText: 'Quick edit was blocked and moved to the feedback inbox',
         });
       }
     } finally {
@@ -765,7 +806,7 @@ export function SciForgeApp() {
     await persistAnnotationDraftToInbox(annotationDraft, {
       action: options.action ?? 'save-feedback',
       openInboxAfterSave: options.openInboxAfterSave,
-      statusText: options.statusText ?? '反馈已保存到收件箱',
+      statusText: options.statusText ?? 'Feedback saved to the inbox',
     });
   }
 
@@ -782,7 +823,7 @@ export function SciForgeApp() {
       const draftForComment = appendAnnotationActionRecord(draftToSave, {
         action: options.action ?? 'save-feedback',
         status: 'saved',
-        summary: options.statusText ?? '反馈已保存到收件箱',
+        summary: options.statusText ?? 'Feedback saved to the inbox',
         feedbackId,
         createdAt: now,
       });
@@ -841,13 +882,13 @@ export function SciForgeApp() {
         return next;
       });
       setFeedbackAnnotationModeActive(false);
-      setWorkspaceStatus(`${options.statusText ?? '反馈已保存到收件箱'}：${feedbackId}`);
+      setWorkspaceStatus(`${options.statusText ?? 'Feedback saved to the inbox'}: ${feedbackId}`);
       if (options.openInboxAfterSave) {
         setPage('feedback');
         setAnnotationSidebarOpen(false);
       }
     } catch (error) {
-      setWorkspaceStatus(`反馈未保存：${error instanceof Error ? error.message : String(error)}`);
+      setWorkspaceStatus(`Feedback was not saved: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setAnnotationSaving(false);
     }
@@ -861,10 +902,18 @@ export function SciForgeApp() {
 
   function setWorkspacePath(value: string) {
     const workspacePath = normalizeWorkspaceRootPath(value);
-    const nextConfig = updateConfig(config, { workspacePath });
+    const patch = buildWorkspaceDirectorySwitchPatch(config, workspacePath);
+    if (!patch) {
+      setWorkspaceStatus(t({
+        'zh-CN': '请选择一个有效的工作区目录。',
+        'en-US': 'Choose a valid workspace directory.',
+      }));
+      return;
+    }
+    const nextConfig = updateConfig(config, patch);
     setConfig(nextConfig);
     saveSciForgeConfig(nextConfig);
-    void hydrateWorkspaceSnapshot(workspacePath, nextConfig, 'force');
+    void hydrateWorkspaceSnapshot(nextConfig.workspacePath, nextConfig, 'force');
   }
 
   function activateWorkspaceProject(
@@ -924,10 +973,16 @@ export function SciForgeApp() {
       .then(() => {
         const savedAt = nowIso();
         setConfigSaveState({ status: 'saved', savedAt });
-        setWorkspaceStatus('设置已保存并对下一次 Codex Runtime 请求生效');
+        setWorkspaceStatus(t({
+          'zh-CN': '设置已保存并对下一次 Codex Runtime 请求生效',
+          'en-US': 'Settings saved and will apply to the next Codex Runtime request',
+        }));
       })
       .catch((err) => {
-        const message = `设置未保存：${err instanceof Error ? err.message : String(err)}`;
+        const message = t({
+          'zh-CN': `设置未保存：${err instanceof Error ? err.message : String(err)}`,
+          'en-US': `Settings were not saved: ${err instanceof Error ? err.message : String(err)}`,
+        });
         setConfigSaveState({ status: 'error', message });
         setWorkspaceStatus(message);
       });
@@ -1007,13 +1062,72 @@ export function SciForgeApp() {
     setPendingSidebarNewChat(null);
   }, [pendingSidebarNewChat, workspaceHydrated, config.workspacePath]);
 
-  function archiveThread(nextScenarioId: ScenarioInstanceId, sessionId: string) {
+  async function archiveThread(nextScenarioId: ScenarioInstanceId, sessionId: string, project?: SidebarProjectThreadGroup) {
+    if (project && !isCurrentSidebarProject(config, project)) {
+      const peerState = await loadPeerSidebarProjectWorkspaceState(project);
+      const active = peerState.state.sessionsByScenario[nextScenarioId];
+      if (active?.sessionId !== sessionId) {
+        throw new Error(`${project.label} 没有可归档的这条对话。`);
+      }
+      const nextState = archiveScenarioActiveSession(
+        peerState.state,
+        nextScenarioId,
+        sessionId,
+        `${scenarioLabelForInstance(nextScenarioId)} 新聊天`,
+      );
+      if (nextState === peerState.state) {
+        throw new Error(`${project.label} 没有可归档的这条对话。`);
+      }
+      await persistPeerSidebarProjectWorkspaceState(peerState, nextState);
+      return;
+    }
     updateWorkspace((current) => archiveScenarioActiveSession(
       current,
       nextScenarioId,
       sessionId,
       `${scenarioLabelForInstance(nextScenarioId)} 新聊天`,
     ));
+  }
+
+  async function discardThread(nextScenarioId: ScenarioInstanceId, sessionId: string, project?: SidebarProjectThreadGroup) {
+    if (project && !isCurrentSidebarProject(config, project)) {
+      const peerState = await loadPeerSidebarProjectWorkspaceState(project);
+      const active = peerState.state.sessionsByScenario[nextScenarioId];
+      if (active?.sessionId !== sessionId) {
+        throw new Error(`${project.label} 没有可丢弃的这条对话。`);
+      }
+      const nextState = deleteActiveChat(
+        peerState.state,
+        nextScenarioId,
+        `${scenarioLabelForInstance(nextScenarioId)} 新聊天`,
+      );
+      await persistPeerSidebarProjectWorkspaceState(peerState, nextState);
+      return;
+    }
+    updateWorkspace((current) => {
+      const active = current.sessionsByScenario[nextScenarioId];
+      if (active?.sessionId !== sessionId) return current;
+      return deleteActiveChat(current, nextScenarioId, `${scenarioLabelForInstance(nextScenarioId)} 新聊天`);
+    });
+  }
+
+  async function restoreSidebarThread(nextScenarioId: ScenarioInstanceId, sessionId: string, project?: SidebarProjectThreadGroup) {
+    if (project && !isCurrentSidebarProject(config, project)) {
+      const peerState = await loadPeerSidebarProjectWorkspaceState(project);
+      if (!peerState.state.archivedSessions.some((session) => session.scenarioId === nextScenarioId && session.sessionId === sessionId)) {
+        throw new Error(`${project.label} 没有可恢复的这条对话。`);
+      }
+      const nextState = restoreScenarioArchivedSession(
+        peerState.state,
+        nextScenarioId,
+        sessionId,
+        nowIso(),
+        `${scenarioLabelForInstance(nextScenarioId)} 新聊天`,
+      );
+      await persistPeerSidebarProjectWorkspaceState(peerState, nextState);
+      return;
+    }
+    restoreArchivedSession(nextScenarioId, sessionId);
   }
 
   function archiveAllChats() {
@@ -1029,21 +1143,16 @@ export function SciForgeApp() {
     return Object.values(state.sessionsByScenario).some((session) => session && sessionActivityScore(session) > 0);
   }
 
-  async function archiveSidebarProjectChats(project: SidebarProjectThreadGroup) {
-    if (isCurrentSidebarProject(config, project)) {
-      if (!workspaceHasActiveChats(workspaceState)) {
-        throw new Error(`${project.label} 没有可归档的活跃对话。`);
-      }
-      archiveAllChats();
-      return;
-    }
-
+  async function loadPeerSidebarProjectWorkspaceState(project: SidebarProjectThreadGroup): Promise<{
+    targetPath: string;
+    writerBaseUrl: string;
+    state: SciForgeWorkspaceState;
+  }> {
     const targetPath = sidebarProjectPath(project.detail);
     const peer = findPeerInstanceForSidebarProject(config, project);
     if (!targetPath || !peer) {
-      throw new Error(`${project.label} 没有可归档的活跃对话。`);
+      throw new Error(`${project.label} 没有可写入的项目状态。`);
     }
-
     const writerBaseUrl = peer.workspaceWriterUrl?.trim() || config.workspaceWriterBaseUrl;
     const cachedBundle = projectSessionsByPath[targetPath];
     let state = await loadPersistedWorkspaceStateForProject(targetPath, config, writerBaseUrl);
@@ -1056,31 +1165,54 @@ export function SciForgeApp() {
         updatedAt: nowIso(),
       };
     }
-    if (!state || !workspaceHasActiveChats(state)) {
-      throw new Error(`${project.label} 没有可归档的活跃对话。`);
+    if (!state) {
+      throw new Error(`${project.label} 没有可写入的项目状态。`);
     }
+    return { targetPath, writerBaseUrl, state };
+  }
 
-    const nextState = archiveAllScenarioActiveSessions(
-      state,
-      (scenarioId) => `${scenarioLabelForInstance(scenarioId)} 新聊天`,
-    );
+  async function persistPeerSidebarProjectWorkspaceState(
+    peerState: { targetPath: string; writerBaseUrl: string },
+    nextState: SciForgeWorkspaceState,
+  ) {
     await persistWorkspaceState(compactWorkspaceStateForStorage(nextState), {
       ...config,
-      workspacePath: targetPath,
-      workspaceWriterBaseUrl: writerBaseUrl,
+      workspacePath: peerState.targetPath,
+      workspaceWriterBaseUrl: peerState.writerBaseUrl,
     });
     setPeerProjectSessionsByPath((current) => ({
       ...current,
-      [targetPath]: {
+      [peerState.targetPath]: {
         sessionsByScenario: nextState.sessionsByScenario,
         archivedSessions: nextState.archivedSessions ?? [],
       },
     }));
   }
 
+  async function archiveSidebarProjectChats(project: SidebarProjectThreadGroup) {
+    if (isCurrentSidebarProject(config, project)) {
+      if (!workspaceHasActiveChats(workspaceState)) {
+        throw new Error(`${project.label} 没有可归档的活跃对话。`);
+      }
+      archiveAllChats();
+      return;
+    }
+
+    const peerState = await loadPeerSidebarProjectWorkspaceState(project);
+    if (!workspaceHasActiveChats(peerState.state)) {
+      throw new Error(`${project.label} 没有可归档的活跃对话。`);
+    }
+
+    const nextState = archiveAllScenarioActiveSessions(
+      peerState.state,
+      (scenarioId) => `${scenarioLabelForInstance(scenarioId)} 新聊天`,
+    );
+    await persistPeerSidebarProjectWorkspaceState(peerState, nextState);
+  }
+
   function removeSidebarProject(project: SidebarProjectThreadGroup) {
     const patch = removeSidebarProjectFromConfig(config, project);
-    if (!patch) throw new Error('当前项目不能从侧栏移除。');
+    if (!patch) throw new Error('Open another workspace before removing this project from the sidebar. Local files are not deleted.');
     updateRuntimeConfig(patch);
   }
 
@@ -1178,7 +1310,8 @@ export function SciForgeApp() {
   const appHealthItems = useRuntimeHealth(config, Object.keys(sessions).length);
 
   return (
-    <div className={cx('app-shell', `theme-${config.theme ?? 'dark'}`)}>
+    <I18nProvider locale={config.locale}>
+    <div className={cx('app-shell', `theme-${config.theme ?? 'dark'}`)} lang={documentLangForLocale(config.locale)}>
       <div className="ambient ambient-a" />
       <div className="ambient ambient-b" />
       {page === 'settings' ? (
@@ -1206,6 +1339,8 @@ export function SciForgeApp() {
         sessionsByScenario={sessions}
         onProjectNewChat={startProjectNewChat}
         onArchiveThread={archiveThread}
+        onDiscardThread={discardThread}
+        onRestoreThread={restoreSidebarThread}
         onArchiveProjectChats={archiveSidebarProjectChats}
         onArchiveAllChats={archiveAllChats}
         onRemoveSidebarProject={removeSidebarProject}
@@ -1304,11 +1439,11 @@ export function SciForgeApp() {
               feedbackGithubToken={config.feedbackGithubToken}
               workspaceLoading={workspaceLoadingVisible}
               workspaceLoadingDetail={!configFileHydrated
-                ? '正在加载 config.local.json；反馈列表会先使用浏览器缓存，GitHub/repair 操作等待配置完成。'
+                ? 'Loading local config. The feedback list will use browser cache until configuration is ready.'
                 : !workspaceHydrated
-                  ? '正在恢复 .sciforge/workspace-state.json；反馈计数、筛选和操作范围会在加载完成后刷新。'
+                  ? 'Restoring workspace state. Feedback counts, filters, and action scopes will refresh when loading finishes.'
                   : workspaceLoadingVisible
-                    ? '正在完成 workspace 状态刷新；反馈计数、筛选和操作范围已经恢复，将在片刻后切换为 loaded。'
+                    ? 'Finishing workspace state refresh. Feedback counts, filters, and action scopes are restored.'
                     : workspaceStatus || 'workspace snapshot loaded'}
               githubSyncedOpenIssues={workspaceState.githubSyncedOpenIssues ?? []}
               onReplaceGithubSyncedOpenIssues={feedbackActions.replaceGithubSyncedOpenIssues}
@@ -1344,7 +1479,7 @@ export function SciForgeApp() {
         onSendToInbox={() => void saveAnnotationDraft({
           openInboxAfterSave: true,
           action: 'send-to-inbox',
-          statusText: '复杂改动已保存到反馈收件箱',
+          statusText: 'Complex change saved to the feedback inbox',
         })}
 	        onApplySmallChange={() => void runAnnotationQuickAction()}
 	        onOpenInbox={openFeedbackInboxFromAnnotation}
@@ -1372,5 +1507,6 @@ export function SciForgeApp() {
         </>
       )}
     </div>
+    </I18nProvider>
   );
 }

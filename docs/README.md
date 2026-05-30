@@ -6,7 +6,7 @@
 
 > **SciForge GUI 是 TUI agent 的 GUI extension。TUI / agent host 拥有全部逻辑。**
 
-GUI 给 TUI 的操作输入全部是文本。默认 TUI 服务首选 Codex app-server；`codex exec --json` 是迁移兼容路径，Claude Code stream-json 是可选 backend，不需要独立 AgentServer。生产默认 model provider 应是 DeepSeek `deepseek-v4-flash` 或用户配置的低成本 provider/proxy。跨模块组合采用 Agent Host Semantic Pipeline：所有模块对外收敛到 `module.describe/query/read/invoke`，Agent Host 负责 pipeline 编排和 trace，GUI 只是其中一个特殊模块。迁移期 `gui.*` alias 只能作为 adapter shim 暴露；稳定心智模型是统一 `module.*` 函数。
+GUI 给 TUI 的操作输入全部是文本。默认 TUI 服务必须走 Codex app-server；`codex exec --json` 只作为 legacy/test-only 兼容和历史证据，Claude Code stream-json 是可选 backend，不需要独立 AgentServer。生产默认 model provider 应是 DeepSeek `deepseek-v4-flash` 或用户配置的低成本 provider/proxy。跨模块组合采用 Agent Host Semantic Pipeline：所有模块对外收敛到 `module.describe/query/read/invoke`，Agent Host 负责 pipeline 编排和 trace，GUI 只是其中一个特殊模块。迁移期 `gui.*` alias 只能作为 adapter shim 暴露；稳定心智模型是统一 `module.*` 函数。
 
 当前注释路线是连续反馈体验：全局 `AnnotationSidebar` 负责点选对象、澄清问题和对象关系，并可承载低风险 quick action；反馈收件箱负责复杂改动的管理、确认、审计、GitHub sync 和 Runtime Codex repair。`annotation-plan-only` 仍用于无副作用的整理/预览 lane，`annotation-quick-action` 用于侧栏低风险小改动。
 
@@ -18,7 +18,7 @@ GUI 给 TUI 的操作输入全部是文本。默认 TUI 服务首选 Codex app-s
 | [`TuiGuiProtocol.md`](TuiGuiProtocol.md) | **当前协议真相源** | GUI → TUI 文本输入，TUI 通过 `module.query/read/invoke(moduleId='gui')` 读取 GUI resource tree 并表达展示/确认意图；迁移期 `gui.*` adapter shim、annotation feedback envelopes、展示组件目录、对象引用、confidence、hot region、precondition 和协商。 |
 | [`BrowserRuntimeArchitecture.md`](BrowserRuntimeArchitecture.md) | **内置浏览器运行时设计** | Codex-like browser session、tab、action、snapshot、trace、安全确认和 GUI presentation surface 边界。 |
 | [`NativeExtensionOwnershipMap.md`](NativeExtensionOwnershipMap.md) / [`native-extension-ownership-map.json`](native-extension-ownership-map.json) | **TUI native extension 归属图** | capability discovery、GUI 展示组件目录、confidence、harness/policy、provider route、verifier、skill promotion、Computer Use 和 dual-instance repair 的 Codex 原生/GUI extension 归属与可验证 manifest。 |
-| [`CodexRuntimeMigration.md`](CodexRuntimeMigration.md) | 当前迁移路线 | Codex app-server 首选，`CodexExecJsonAdapter`/`codex exec --json` 作为兼容路径，`ClaudeStreamJsonAdapter` 作为可选 backend；统一归一化为内部事件、module pipeline trace 和 backend presentation profile。 |
+| [`CodexRuntimeMigration.md`](CodexRuntimeMigration.md) | 当前迁移路线 | Codex app-server 为默认生产 runtime；`CodexExecJsonAdapter`/`codex exec --json` 仅 legacy/test-only，`ClaudeStreamJsonAdapter` 作为可选 backend；统一归一化为内部事件、module pipeline trace 和 backend presentation profile。 |
 | [`Usage.md`](Usage.md) | 当前操作手册 | 当前代码启动、配置、验证命令；它描述现状，不代表最终职责归属。 |
 | [`FeedbackInboxDesignPrinciples.md`](FeedbackInboxDesignPrinciples.md) | **反馈收件箱设计原则** | 反馈收件箱作为本地反馈、`annotation-plan` 记录、GitHub sync、Runtime Codex repair 和证据审计控制面的设计边界、证据策略、readiness gate、系统 Terminal/Web Viewer、repair log evidence 和确认原则。 |
 

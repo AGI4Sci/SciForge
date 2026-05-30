@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "sciforge.agent-desktop-alignment-summary.v1",
+  "roundId": "live-round-09",
+  "side": "cursor-agent-computer-use",
+  "tool": "computer-use",
+  "target": "Cursor Agent desktop",
+  "capturedAt": "2026-05-30T12:05:00+08:00",
+  "promptDate": "2026-05-30",
+  "promptUsed": "搜索一下今天arxiv上agentic RL相关的工作，下载并阅读原文，然后写一份系统的总结报告",
+  "observations": {
+    "createdNewConversation": true,
+    "initialRunningState": "User prompt followed by a compact Planning next moves state.",
+    "completedState": "Final state showed the user prompt and rendered report body without visible raw lifecycle diagnostics in the current scroll position.",
+    "reportSummary": "Cursor reported that 2026-05-30 had no new arXiv batch and summarized recent 2026-05-26 to 2026-05-28 agentic reinforcement-learning related papers.",
+    "sidebarState": "New conversation title became Agentic reinforcement learning summary."
+  },
+  "redactionCheck": {
+    "status": "passed",
+    "notes": [
+      "Only structural UI state, dates, and public task summary are recorded.",
+      "No raw Cursor transcript, local absolute path, or full report body is embedded."
+    ]
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "sciforge.agent-desktop-alignment-live-evidence-summary.v1",
+  "id": "cursor-round-10-subagent-tool-unavailable",
+  "capturedAt": "2026-05-30T04:58:00.000Z",
+  "side": "cursor-agent-computer-use",
+  "prompt": "call multi_agent_v1.spawn_agent once. read only. sub agent reads PROJECT.md and docs/agent-desktop-alignment-evidence/live-ledger-2026-05-30.json. report current open difference and evidence refs needed. main agent summarize. do not edit files. if no real sub-agent tool output NO_SUBAGENT_TOOL_AVAILABLE. do not use shell substitute.",
+  "observations": [
+    "A new Cursor Agent conversation was created in the sciforge repository with the same ASCII prompt used for the SciForge Browser retest.",
+    "Cursor showed progress in the familiar order: user prompt, planning/progress prose, collapsed Explored groups, a Run MCP attempted row, and read rows for PROJECT.md plus the live ledger.",
+    "Cursor final answer explicitly reported NO_SUBAGENT_TOOL_AVAILABLE for multi_agent_v1.spawn_agent in the current Cursor MCP session.",
+    "Cursor did not create a positive sub-agent/delegated-worker lifecycle row with transcript/result refs; it instead summarized the open difference and evidence still required.",
+    "Cursor did not use shell or an ordinary command as a fake sub-agent substitute."
+  ],
+  "result": {
+    "subagentToolAvailable": false,
+    "positiveSubagentBaselineObserved": false,
+    "cursorPresentationBaseline": [
+      "Explored 2 files, 6 searches",
+      "Run MCP attempted",
+      "Read PROJECT.md",
+      "Read live-ledger-2026-05-30.json",
+      "Final report with NO_SUBAGENT_TOOL_AVAILABLE and evidence checklist"
+    ]
+  },
+  "screenshotRef": "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-10-cursor-subagent-tool-unavailable-summary.png"
+}

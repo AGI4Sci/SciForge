@@ -68,14 +68,28 @@ function baseEvent(
     status: event.status,
     ...extra,
     command: event.command,
+    diff: event.diff,
     outputSummary: event.outputSummary,
+    resultSummary: event.resultSummary,
     exitCode: event.exitCode,
+    filePath: event.filePath,
+    fileRef: event.fileRef,
+    ref: event.ref,
+    agentId: event.agentId,
+    parentAgentId: event.parentAgentId,
+    transcriptRef: event.transcriptRef,
+    refs: event.refs,
+    traceStepId: event.traceStepId,
   };
 }
 
 function agentEventType(event: BackendNormalizedEvent): NormalizedAgentEventType {
   if (event.type === 'message_delta') return 'message_delta';
   if (event.type === 'message') return 'message';
+  if (event.type === 'thread_started') return 'thread_started';
+  if (event.type === 'turn_started') return 'turn_started';
+  if (event.type === 'item_started') return 'item_started';
+  if (event.type === 'item_completed') return 'item_completed';
   if (event.type === 'gui_present') return 'gui_present';
   if (event.type === 'gui_ask_user') return 'gui_ask_user';
   if (event.type === 'tool_started') return 'tool_started';
@@ -88,10 +102,9 @@ function agentEventType(event: BackendNormalizedEvent): NormalizedAgentEventType
 }
 
 function formatApprovalText(event: BackendNormalizedEvent): string {
+  const title = event.message ?? event.text ?? (event.approvalId ? `Confirmation required ${event.approvalId}` : 'Confirmation required');
   return [
-    `## ${event.message ?? event.text ?? 'Approval requested'}`,
-    event.approvalId ? `Approval ref: \`${event.approvalId}\`` : undefined,
-    event.toolName ? `Tool: \`${event.toolName}\`` : undefined,
-    event.traceStepId ? `Trace step: \`${event.traceStepId}\`` : undefined,
+    `## ${title}`,
+    'Confirm before continuing.',
   ].filter(Boolean).join('\n\n');
 }

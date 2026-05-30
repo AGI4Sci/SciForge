@@ -562,7 +562,9 @@
 }
 
 .source-list button {
+  max-width: 100%;
   min-height: 22px;
+  overflow: hidden;
   padding: 0 7px;
   color: var(--bio-100);
   background: var(--surface-input);
@@ -571,6 +573,8 @@
   cursor: pointer;
   font-size: 10px;
   font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .source-list button:hover {

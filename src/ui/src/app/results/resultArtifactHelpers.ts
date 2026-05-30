@@ -26,7 +26,7 @@ export function toRecordList(value: unknown): Record<string, unknown>[] {
 
 export function artifactMeta(artifact?: RuntimeArtifact) {
   if (!artifact) return 'empty';
-  return `${artifact.type} · ${artifact.schemaVersion}`;
+  return `${artifact.type} · v${artifact.schemaVersion}`;
 }
 
 export function artifactSource(artifact?: RuntimeArtifact): ArtifactProvenanceSource {

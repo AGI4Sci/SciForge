@@ -1,29 +1,34 @@
 import type { AgentContextWindowState, AgentStreamEvent, SciForgeConfig, SciForgeSession } from './domain';
+import { localeText, type SupportedLocale } from './i18n';
 
-export function buildContextWindowMeterModel(state: AgentContextWindowState, running: boolean) {
+export function buildContextWindowMeterModel(state: AgentContextWindowState, running: boolean, locale?: SupportedLocale) {
+  const t = (copy: Record<SupportedLocale, string>) => localeText(locale ?? 'en-US', copy);
   const ratio = state.ratio ?? 0;
   const level = contextWindowLevel(state);
   const sourceLabel = contextWindowSourceLabel(state.source);
-  const used = state.usedTokens !== undefined ? formatCompactNumber(state.usedTokens) : '未知';
-  const windowSize = state.windowTokens !== undefined ? formatCompactNumber(state.windowTokens) : '未知';
+  const used = state.usedTokens !== undefined ? formatCompactNumber(state.usedTokens) : t({ 'zh-CN': '未知', 'en-US': 'Unknown' });
+  const windowSize = state.windowTokens !== undefined ? formatCompactNumber(state.windowTokens) : t({ 'zh-CN': '未知', 'en-US': 'Unknown' });
   const remainingTokens = state.usedTokens !== undefined && state.windowTokens !== undefined
     ? Math.max(0, state.windowTokens - state.usedTokens)
     : undefined;
-  const ratioLabel = state.ratio !== undefined ? `${Math.round(state.ratio * 100)}%` : '未知';
-  const ratioDetail = state.ratio !== undefined ? `${Math.round(state.ratio * 1000) / 10}%` : '未知';
-  const statusLabel = contextWindowStatusLabel(state);
-  const thresholdDetail = contextCompactLabel(state);
-  const budgetRows = contextBudgetRows(state);
+  const ratioLabel = state.ratio !== undefined ? `${Math.round(state.ratio * 100)}%` : t({ 'zh-CN': '未知', 'en-US': 'Unknown' });
+  const ratioDetail = state.ratio !== undefined ? `${Math.round(state.ratio * 1000) / 10}%` : t({ 'zh-CN': '未知', 'en-US': 'Unknown' });
+  const statusLabel = contextWindowStatusLabel(state, locale);
+  const thresholdDetail = contextCompactLabel(state, locale);
+  const budgetRows = contextBudgetRows(state, locale);
   const detailRows = [
-    { label: '已用', value: `${ratioDetail} 上下文` },
-    { label: '剩余', value: remainingTokens !== undefined ? `${formatCompactNumber(remainingTokens)} tokens` : '未知' },
-    { label: '状态', value: statusLabel },
-    { label: '压缩', value: thresholdDetail },
+    { label: t({ 'zh-CN': '已使用', 'en-US': 'Used' }), value: t({ 'zh-CN': `${ratioDetail} 上下文`, 'en-US': `${ratioDetail} context` }) },
+    { label: t({ 'zh-CN': '剩余', 'en-US': 'Remaining' }), value: remainingTokens !== undefined ? `${formatCompactNumber(remainingTokens)} tokens` : t({ 'zh-CN': '未知', 'en-US': 'Unknown' }) },
+    { label: t({ 'zh-CN': '状态', 'en-US': 'Status' }), value: statusLabel },
+    { label: t({ 'zh-CN': '压缩', 'en-US': 'Compaction' }), value: thresholdDetail },
     ...budgetRows,
   ];
-  const title = `上下文 ${ratioDetail} · ${statusLabel}`;
+  const title = t({ 'zh-CN': `上下文 ${ratioDetail} · ${statusLabel}`, 'en-US': `Context ${ratioDetail} · ${statusLabel}` });
 
-  const memoryBoundaryLine = 'SciForge 会保留当前对话、选中对象和必要摘要。';
+  const memoryBoundaryLine = t({
+    'zh-CN': '当前对话、已选对象和必要摘要会被保留。',
+    'en-US': 'The current chat, selected objects, and essential summaries are retained.',
+  });
   return {
     ratio,
     ratioStyle: `${Math.min(100, Math.max(0, ratio * 100))}%`,
@@ -35,10 +40,10 @@ export function buildContextWindowMeterModel(state: AgentContextWindowState, run
     windowSize,
     isEstimated: state.source === 'estimate' || state.source === 'agentserver-estimate',
     isUnknown: state.source === 'unknown',
-    compactLine: `压缩 ${contextCompactCapabilityLabel(state.compactCapability)}${state.pendingCompact ? ' · 排队中' : ''}`,
-    lastLine: `上次 ${state.lastCompactedAt ? formatShortTime(state.lastCompactedAt) : '未压缩'}`,
-    remaining: remainingTokens !== undefined ? formatCompactNumber(remainingTokens) : '未知',
-    remainingExact: remainingTokens !== undefined ? formatExactNumber(remainingTokens) : '未知',
+    compactLine: `${t({ 'zh-CN': '摘要', 'en-US': 'Summary' })} ${contextCompactCapabilityLabel(state.compactCapability, locale)}${state.pendingCompact ? ` · ${t({ 'zh-CN': '已排队', 'en-US': 'queued' })}` : ''}`,
+    lastLine: `${t({ 'zh-CN': '上次', 'en-US': 'Last' })} ${state.lastCompactedAt ? formatShortTime(state.lastCompactedAt) : t({ 'zh-CN': '从未压缩', 'en-US': 'never compacted' })}`,
+    remaining: remainingTokens !== undefined ? formatCompactNumber(remainingTokens) : t({ 'zh-CN': '未知', 'en-US': 'Unknown' }),
+    remainingExact: remainingTokens !== undefined ? formatExactNumber(remainingTokens) : t({ 'zh-CN': '未知', 'en-US': 'Unknown' }),
     ratioDetail,
     thresholdDetail,
     detailRows,
@@ -167,11 +172,11 @@ export function contextWindowLevel(state: AgentContextWindowState) {
 }
 
 export function contextWindowSourceLabel(source: AgentContextWindowState['source']) {
-  if (source === 'estimate' || source === 'agentserver-estimate') return '估算';
-  if (source === 'unknown') return '未知';
-  if (source === 'native') return '本机';
-  if (source === 'provider-usage') return '用量';
-  return source === 'agentserver' ? '服务端' : '运行时';
+  if (source === 'estimate' || source === 'agentserver-estimate') return 'Estimate';
+  if (source === 'unknown') return 'Unknown';
+  if (source === 'native') return 'Native';
+  if (source === 'provider-usage') return 'Usage';
+  return source === 'agentserver' ? 'Service' : 'Runtime';
 }
 
 function estimateModelContextWindow(modelName: string) {
@@ -201,22 +206,34 @@ function wasRecentlyCompacted(value?: string) {
   return Date.now() - time < 60_000;
 }
 
-function contextWindowStatusLabel(state: AgentContextWindowState) {
-  if (state.ratio !== undefined && state.ratio >= 1) return '超限';
-  if (state.ratio !== undefined && state.ratio >= (state.nearLimitThreshold ?? 0.86)) return '接近上限';
-  if (state.ratio !== undefined && state.ratio >= (state.watchThreshold ?? 0.68) && (state.status === 'healthy' || state.status === 'unknown' || !state.status)) return '注意';
-  if (state.status === 'healthy') return '良好';
-  if (state.status === 'watch') return '注意';
-  if (state.status === 'near-limit') return '接近上限';
-  if (state.status === 'exceeded') return '超限';
-  if (state.status === 'compacting') return '压缩中';
-  if (state.status === 'blocked') return '已阻塞';
-  if (state.status === 'unknown') return '未知';
+function contextWindowStatusLabel(state: AgentContextWindowState, locale?: SupportedLocale) {
+  const label = (key: 'exceeded' | 'near-limit' | 'watch' | 'good' | 'compacting' | 'blocked' | 'unknown') => {
+    const labels: Record<typeof key, Record<SupportedLocale, string>> = {
+      exceeded: { 'zh-CN': '已超出', 'en-US': 'Exceeded' },
+      'near-limit': { 'zh-CN': '接近上限', 'en-US': 'Near limit' },
+      watch: { 'zh-CN': '观察中', 'en-US': 'Watch' },
+      good: { 'zh-CN': '良好', 'en-US': 'Good' },
+      compacting: { 'zh-CN': '压缩中', 'en-US': 'Compacting' },
+      blocked: { 'zh-CN': '已阻塞', 'en-US': 'Blocked' },
+      unknown: { 'zh-CN': '未知', 'en-US': 'Unknown' },
+    };
+    return localeText(locale ?? 'en-US', labels[key]);
+  };
+  if (state.ratio !== undefined && state.ratio >= 1) return label('exceeded');
+  if (state.ratio !== undefined && state.ratio >= (state.nearLimitThreshold ?? 0.86)) return label('near-limit');
+  if (state.ratio !== undefined && state.ratio >= (state.watchThreshold ?? 0.68) && (state.status === 'healthy' || state.status === 'unknown' || !state.status)) return label('watch');
+  if (state.status === 'healthy') return label('good');
+  if (state.status === 'watch') return label('watch');
+  if (state.status === 'near-limit') return label('near-limit');
+  if (state.status === 'exceeded') return label('exceeded');
+  if (state.status === 'compacting') return label('compacting');
+  if (state.status === 'blocked') return label('blocked');
+  if (state.status === 'unknown') return label('unknown');
   const level = contextWindowLevel(state);
-  if (level === 'ok') return '良好';
-  if (level === 'watch') return '注意';
-  if (level === 'near-limit') return '接近上限';
-  return '未知';
+  if (level === 'ok') return label('good');
+  if (level === 'watch') return label('watch');
+  if (level === 'near-limit') return label('near-limit');
+  return label('unknown');
 }
 
 function formatCompactNumber(value: number) {
@@ -226,24 +243,24 @@ function formatCompactNumber(value: number) {
 }
 
 function formatExactNumber(value?: number) {
-  if (value === undefined || !Number.isFinite(value)) return '未知';
+  if (value === undefined || !Number.isFinite(value)) return 'Unknown';
   return Math.trunc(value).toLocaleString('en-US');
 }
 
-function contextCompactLabel(state: AgentContextWindowState) {
-  if (state.pendingCompact) return '准备压缩';
-  if (state.compactCapability === 'native') return '自动管理';
-  if (state.compactCapability && state.compactCapability !== 'unknown') return '可压缩';
-  return '按需保留';
+function contextCompactLabel(state: AgentContextWindowState, locale?: SupportedLocale) {
+  if (state.pendingCompact) return localeText(locale ?? 'en-US', { 'zh-CN': '准备中', 'en-US': 'Preparing' });
+  if (state.compactCapability === 'native') return localeText(locale ?? 'en-US', { 'zh-CN': '自动', 'en-US': 'Automatic' });
+  if (state.compactCapability && state.compactCapability !== 'unknown') return localeText(locale ?? 'en-US', { 'zh-CN': '可用', 'en-US': 'Available' });
+  return localeText(locale ?? 'en-US', { 'zh-CN': '按需', 'en-US': 'On demand' });
 }
 
-function contextCompactCapabilityLabel(capability: AgentContextWindowState['compactCapability']) {
-  if (capability === 'native') return '自动';
-  if (capability === 'agentserver') return '服务端';
-  if (capability === 'session-rotate') return '轮转';
-  if (capability === 'handoff-slimming') return '精简';
-  if (capability === 'none') return '关闭';
-  return '按需';
+function contextCompactCapabilityLabel(capability: AgentContextWindowState['compactCapability'], locale?: SupportedLocale) {
+  if (capability === 'native') return localeText(locale ?? 'en-US', { 'zh-CN': '自动', 'en-US': 'automatic' });
+  if (capability === 'agentserver') return localeText(locale ?? 'en-US', { 'zh-CN': '服务', 'en-US': 'service' });
+  if (capability === 'session-rotate') return localeText(locale ?? 'en-US', { 'zh-CN': '轮换', 'en-US': 'rotation' });
+  if (capability === 'handoff-slimming') return localeText(locale ?? 'en-US', { 'zh-CN': '瘦身', 'en-US': 'slimming' });
+  if (capability === 'none') return localeText(locale ?? 'en-US', { 'zh-CN': '关闭', 'en-US': 'off' });
+  return localeText(locale ?? 'en-US', { 'zh-CN': '按需', 'en-US': 'on demand' });
 }
 
 function formatShortTime(value: string) {
@@ -252,21 +269,22 @@ function formatShortTime(value: string) {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function contextBudgetRows(state: AgentContextWindowState) {
+function contextBudgetRows(state: AgentContextWindowState, locale?: SupportedLocale) {
   const budget = state.budget;
   if (!budget) return [];
+  const t = (copy: Record<SupportedLocale, string>) => localeText(locale ?? 'en-US', copy);
   return [
     budget.rawTokens !== undefined || budget.normalizedTokens !== undefined
-      ? { label: '请求大小', value: `${formatCompactNumber(budget.normalizedTokens ?? 0)} / ${formatCompactNumber(budget.rawTokens ?? 0)} tokens` }
+      ? { label: t({ 'zh-CN': '请求大小', 'en-US': 'Request size' }), value: `${formatCompactNumber(budget.normalizedTokens ?? 0)} / ${formatCompactNumber(budget.rawTokens ?? 0)} tokens` }
       : undefined,
     budget.savedTokens !== undefined
-      ? { label: '已节省', value: `${formatCompactNumber(budget.savedTokens)} tokens` }
+      ? { label: t({ 'zh-CN': '已节省', 'en-US': 'Saved' }), value: `${formatCompactNumber(budget.savedTokens)} tokens` }
       : undefined,
     budget.maxPayloadBytes !== undefined || budget.normalizedBytes !== undefined
-      ? { label: '请求体积', value: `${formatCompactNumber(budget.normalizedBytes ?? 0)} / ${formatCompactNumber(budget.maxPayloadBytes ?? 0)} bytes` }
+      ? { label: t({ 'zh-CN': 'Payload 大小', 'en-US': 'Payload size' }), value: `${formatCompactNumber(budget.normalizedBytes ?? 0)} / ${formatCompactNumber(budget.maxPayloadBytes ?? 0)} bytes` }
       : undefined,
     budget.normalizedBudgetRatio !== undefined
-      ? { label: '请求预算', value: `${Math.round(budget.normalizedBudgetRatio * 1000) / 10}%` }
+      ? { label: t({ 'zh-CN': '预算', 'en-US': 'Budget' }), value: `${Math.round(budget.normalizedBudgetRatio * 1000) / 10}%` }
       : undefined,
   ].filter((row): row is { label: string; value: string } => Boolean(row));
 }

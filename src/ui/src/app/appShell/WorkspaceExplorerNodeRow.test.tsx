@@ -21,7 +21,7 @@ test('workspace explorer node row renders expanded selected folder with children
   assert.match(html, /aria-selected="true"/);
   assert.match(html, /aria-expanded="true"/);
   assert.match(html, /is-selected/);
-  assert.match(html, /aria-label="折叠"/);
+  assert.match(html, /aria-label="Collapse"/);
   assert.match(html, /src/);
   assert.match(html, /child-node/);
   assert.match(html, /role="group"/);

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "round-15-cursor-file-tree-editor-reference-summary",
+  "capturedAt": "2026-05-30T14:38:12.562Z",
+  "side": "cursor-agent-computer-use",
+  "summary": "Cursor Agent file-viewer baseline retained from the current user-provided screenshot and the Round 14 Computer Use observation: chat remains on the left canvas, while the right side contains a project tree, open file tabs, Markdown/source controls, and an editable PROJECT.md editor. In this resumed turn, Computer Use helper returned procNotFound, so no destructive Cursor UI action was taken; this record links the existing Computer Use baseline used as the comparison oracle.",
+  "checks": {
+    "rightPaneHasProjectTree": true,
+    "rightPaneHasEditableFile": true,
+    "rightPaneTabsIncludeProjectMd": true,
+    "leftChatCanvasHasProcessRows": true,
+    "leftDefaultProjectTreeInChatSidebar": false,
+    "currentTurnComputerUseHelperAvailable": false
+  },
+  "refs": [
+    "thread:user-provided-cursor-file-viewer-screenshot-2026-05-30",
+    "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-14-cursor-file-tree-editor-summary.json",
+    "computer-use:round-14-cursor-file-tree-editor-baseline"
+  ],
+  "redaction": "Summary only; no raw accessibility tree, full transcript, provider details, secrets, or absolute local paths embedded. The current-turn Computer Use helper failure is recorded as a verification limitation, not as product evidence."
+}

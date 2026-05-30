@@ -4,7 +4,7 @@
 
 本文描述当前代码已经落地的用法，以及当前目标架构要求的操作边界。脚本真相源是 [`../package.json`](../package.json)，配置默认值真相源是 [`../src/ui/src/config.ts`](../src/ui/src/config.ts)。
 
-架构目标已经调整为 **SciForge GUI 是 Codex backend 的 GUI extension**；见 [`Architecture.md`](Architecture.md) 和 [`TuiGuiProtocol.md`](TuiGuiProtocol.md)。最终形态默认连接 Codex app-server / CLI bridge，生产默认让 Codex 使用 DeepSeek/proxy `bailian/deepseek-v4-flash` 或用户配置的低成本 provider/proxy，不需要独立 AgentServer。本文件里的 `workspace writer`、`AgentServer`、`runtime gateway`、`scenario` 等仍是当前实现路径或迁移期兼容层，不代表最终职责归属。
+架构目标已经调整为 **SciForge GUI 是 Codex backend 的 GUI extension**；见 [`Architecture.md`](Architecture.md) 和 [`TuiGuiProtocol.md`](TuiGuiProtocol.md)。最终形态默认连接 Codex app-server，生产默认让 Codex 使用 DeepSeek/proxy `bailian/deepseek-v4-flash` 或用户配置的低成本 provider/proxy，不需要独立 AgentServer。本文件里的 `workspace writer`、`AgentServer`、`runtime gateway`、`scenario` 等仍是当前实现路径或迁移期兼容层，不代表最终职责归属。
 
 ## 快速启动
 
@@ -13,7 +13,7 @@
 - Node.js 20+
 - npm
 - 一个本地 workspace 目录
-- 目标架构下的 Codex app-server / CLI bridge，以及 DeepSeek provider/proxy 配置；Runtime Codex browser/release acceptance secret 只放进进程环境变量，ignored local config key 只可作为本机 proxy 调试 fallback
+- 目标架构下的 Codex app-server，以及 DeepSeek provider/proxy 配置；Runtime Codex browser/release acceptance secret 只放进进程环境变量，ignored local config key 只可作为本机 proxy 调试 fallback
 
 安装依赖并启动完整本地工作台：
 
@@ -53,7 +53,7 @@ UI 配置存于浏览器 `localStorage`，workspace writer 的本地配置可通
 
 核心字段：
 
-- `agentServerBaseUrl`：迁移期兼容字段。最终应替换为 Codex app-server / CLI bridge 连接配置。
+- `agentServerBaseUrl`：迁移期兼容字段。最终应替换为 Codex app-server 连接配置。
 - `workspaceWriterBaseUrl`：workspace writer，默认 `http://127.0.0.1:5174`。
 - `workspacePath`：当前工作区根目录。代码会把传入的 `/.sciforge` 子路径归一回 workspace 根。
 - `agentBackend`：当前允许值为 `codex`、`openteam_agent`、`claude-code`、`hermes-agent`、`openclaw`、`gemini`。
@@ -87,12 +87,7 @@ codex --model gpt-5.5 -C /path/to/SciForge
 ```
 
 ```bash
-codex exec --json \
-  --config sandbox_workspace_write.network_access=true \
-  --profile sciforge-runtime-deepseek \
-  --cd "$SCIFORGE_USER_WORKSPACE" \
-  --sandbox workspace-write \
-  "$SCIFORGE_USER_TEXT_COMMAND"
+codex app-server --listen stdio://
 ```
 
 Runtime Codex 不能静默继承开发者 profile；缺少 `SCIFORGE_RUNTIME_API_KEY`、runtime profile 或 provider proxy upstream 时必须 fail closed。完整迁移教程见 [`CodexRuntimeMigration.md`](CodexRuntimeMigration.md)。
@@ -237,12 +232,12 @@ ChatPanel
 
 用户不需要手工拼现有 HTTP payload。选择 scenario、添加文件/结果引用、输入问题后，当前 SciForge 会把 turn、显式 refs、最近 run、artifact summary、组件选择和 backend 配置组装成 handoff payload。
 
-上面是当前代码路径，不是目标路径。目标架构应删除 AgentServer 这一层，让 Codex app-server / CLI bridge 在终端中直接承担 agent host：
+上面是当前代码路径，不是目标路径。目标架构应删除 AgentServer 这一层，让 Codex app-server 直接承担 agent host：
 
 ```text
 GUI event
   -> terminal-equivalent text
-  -> Codex app-server / CLI bridge
+  -> Codex app-server
   -> Codex custom model provider
   -> DeepSeek/proxy bailian/deepseek-v4-flash / configured provider proxy by default
   -> native plugins / skills / tools / MCP

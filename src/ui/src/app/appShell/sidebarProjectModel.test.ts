@@ -3,6 +3,7 @@ import test from 'node:test';
 import { defaultSciForgeConfig, normalizeWorkspaceRootPath } from '../../config';
 import {
   buildConfiguredSidebarProjects,
+  buildWorkspaceDirectorySwitchPatch,
   buildWorkspaceProjectActivation,
   migrateLegacySidebarProjectId,
   removeSidebarProjectFromConfig,
@@ -67,4 +68,35 @@ test('workspace project activation switches workspace path without changing shar
   assert.equal(patch?.workspaceWriterBaseUrl, undefined);
   assert.equal(patch?.peerInstances?.[0]?.workspacePath, mainPath);
   assert.equal(patch?.peerInstances?.[0]?.workspaceWriterUrl, peerWriter);
+});
+
+test('workspace directory switch preserves previous workspace as a removable sidebar project', () => {
+  const targetPath = normalizeWorkspaceRootPath('/tmp/sciforge-projects/new-project');
+  const config = {
+    ...defaultSciForgeConfig,
+    workspacePath: mainPath,
+    agentServerBaseUrl: 'http://127.0.0.1:27301',
+    workspaceWriterBaseUrl: mainWriter,
+    peerInstances: [],
+  };
+  const patch = buildWorkspaceDirectorySwitchPatch(config, targetPath);
+
+  assert.equal(patch?.workspacePath, targetPath);
+  assert.equal(patch?.peerInstances?.[0]?.workspacePath, mainPath);
+  assert.equal(patch?.peerInstances?.[0]?.workspaceWriterUrl, mainWriter);
+  assert.equal(patch?.peerInstances?.[0]?.enabled, true);
+});
+
+test('workspace directory switch activates existing projects without duplicating sidebar entries', () => {
+  const config = dualProjectConfig();
+  const patch = buildWorkspaceDirectorySwitchPatch(config, peerPath);
+
+  assert.equal(patch?.workspacePath, peerPath);
+  assert.equal(patch?.peerInstances?.length, 1);
+  assert.equal(patch?.peerInstances?.[0]?.workspacePath, mainPath);
+  assert.equal(patch?.peerInstances?.[0]?.workspaceWriterUrl, peerWriter);
+});
+
+test('workspace directory switch ignores blank paths', () => {
+  assert.equal(buildWorkspaceDirectorySwitchPatch(dualProjectConfig(), '   '), undefined);
 });

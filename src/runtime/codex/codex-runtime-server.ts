@@ -1,7 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
-import { CodexExecJsonAdapter } from './codex-exec-json-adapter.js';
 import type { AgentCliAdapter } from './agent-cli-adapter.js';
 import { isRecord, readJson, writeJson } from '../server/http.js';
 import {
@@ -22,7 +21,7 @@ export async function handleCodexRuntimeRoutes(
   req: IncomingMessage,
   res: ServerResponse,
   url: URL,
-  adapter: AgentCliAdapter = new CodexExecJsonAdapter(),
+  adapter: AgentCliAdapter,
 ): Promise<boolean> {
   if (url.pathname !== CODEX_RUNTIME_STREAM_PATH) return false;
   if (req.method !== 'POST') {
@@ -59,7 +58,7 @@ export function handleCodexRuntimeUpgrade(
   req: IncomingMessage,
   socket: Duplex,
   head: Buffer,
-  adapter: AgentCliAdapter = new CodexExecJsonAdapter(),
+  adapter: AgentCliAdapter,
 ): boolean {
   const url = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`);
   if (url.pathname !== CODEX_RUNTIME_WEBSOCKET_PATH) return false;
@@ -260,7 +259,7 @@ async function applyCodexRealtimeControlMessage(
         delivery: control.mode === 'cancel-current' ? 'adapter-cancel' : 'next-turn-required',
         detail: control.mode === 'cancel-current'
           ? '已接收结构化干预请求，正在取消当前 turn；GUI 可把引导作为下一轮 terminal-equivalent text 发送。'
-          : '已接收结构化干预请求；当前 Codex exec JSON adapter 不接收 raw stdin，GUI 会把引导保留为下一轮 terminal-equivalent text。',
+          : '已接收结构化干预请求；当前 Codex app-server turn 不接收 raw terminal stdin，GUI 会把引导保留为下一轮 terminal-equivalent text。',
       }));
       if (control.mode === 'cancel-current') await cancelActiveCodexTurn(input.adapter, input.abort, input.state);
       return;
@@ -269,7 +268,7 @@ async function applyCodexRealtimeControlMessage(
         control,
         status: 'recorded',
         delivery: 'next-turn-required',
-        detail: '已接收结构化输入响应；当前 Codex exec JSON adapter 暂无活动 input request 通道，响应不会写入 raw terminal。',
+        detail: '已接收结构化输入响应；当前 Codex app-server product path 暂无 GUI approval/input response bridge，响应不会写入 raw terminal。',
       }));
       return;
     case 'approval_response':
@@ -277,7 +276,7 @@ async function applyCodexRealtimeControlMessage(
         control,
         status: 'recorded',
         delivery: 'next-turn-required',
-        detail: '已接收结构化审批响应；当前 Codex exec JSON adapter 暂无活动 approval request 通道，响应不会写入 raw terminal。',
+        detail: '已接收结构化审批响应；当前 Codex app-server product path 暂无 GUI approval/input response bridge，响应不会写入 raw terminal。',
       }));
       return;
   }
@@ -317,7 +316,7 @@ function codexRuntimeAcceptedProgressEvent({
   commandId?: string;
   attemptId?: string;
 }) {
-  const detail = '已接收文本命令，正在启动 Codex CLI stream。';
+  const detail = '已接收文本命令，正在启动 Codex app-server turn。';
   return {
     type: 'process-progress',
     label: 'Codex Runtime',
@@ -326,9 +325,9 @@ function codexRuntimeAcceptedProgressEvent({
     attemptId,
     progress: {
       phase: 'execute',
-      title: '正在启动 Codex CLI',
+      title: '正在启动 Codex app-server',
       detail,
-      waitingFor: 'Codex CLI 首个 JSONL 事件',
+      waitingFor: 'Codex app-server 首个 rich-client 事件',
       nextStep: '收到事件后按顺序展示执行轨迹。',
       reason: 'runtime-codex-request-accepted',
       canAbort: true,
@@ -357,7 +356,7 @@ function codexRuntimeHeartbeatEvent({
 }) {
   const now = Date.now();
   const quietSeconds = Math.max(0, Math.floor((now - lastRuntimeEventAt) / 1000));
-  const detail = `Codex CLI stream 仍然连接；已等待 ${quietSeconds}s，正在等待下一条 JSONL 事件。`;
+  const detail = `Codex app-server stream 仍然连接；已等待 ${quietSeconds}s，正在等待下一条 rich-client 事件。`;
   return {
     type: 'process-progress',
     label: 'Codex Runtime',
@@ -365,17 +364,17 @@ function codexRuntimeHeartbeatEvent({
     commandId,
     attemptId,
     heartbeat: {
-      status: 'waiting-for-codex-jsonl',
+      status: 'waiting-for-codex-app-server-event',
       elapsedMs: now - streamStartedAt,
       quietMs: now - lastRuntimeEventAt,
     },
     progress: {
       phase: 'wait',
-      title: 'Codex CLI 正在运行',
+      title: 'Codex app-server 正在运行',
       detail,
-      waitingFor: '下一条 Codex CLI JSONL 事件',
+      waitingFor: '下一条 Codex app-server rich-client 事件',
       nextStep: '收到事件后继续按顺序展示执行轨迹。',
-      reason: 'runtime-codex-waiting-for-jsonl',
+      reason: 'runtime-codex-waiting-for-app-server-event',
       canAbort: true,
       canContinue: true,
       status: 'running',
@@ -389,9 +388,9 @@ function stringField(value: unknown): string | undefined {
 
 export function codexRuntimeBridgeRequested(body: Record<string, unknown>): boolean {
   const uiState = isRecord(body.uiState) ? body.uiState : {};
-  return body.runtimeBridge === 'codex-exec-json'
+  return body.runtimeBridge === 'codex-app-server'
     || body.useCodexRuntimeBridge === true
-    || uiState.runtimeBridge === 'codex-exec-json'
+    || uiState.runtimeBridge === 'codex-app-server'
     || uiState.useCodexRuntimeBridge === true;
 }
 

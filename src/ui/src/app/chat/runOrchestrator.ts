@@ -154,7 +154,7 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
       runtimeResumePolicy: input.runtimeResumePolicy,
     };
 
-    const initialProgress = buildInitialResponseProgressEvent(latestResponsePlan(input.streamEvents));
+    const initialProgress = buildInitialResponseProgressEvent(latestResponsePlan(input.streamEvents), input.config.locale);
     if (initialProgress) input.onStreamEvent(initialProgress);
 
     await runPreflightContextCompaction({
@@ -167,7 +167,7 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
     });
 
     emitPeerRepairStage(targetInstanceContext, input.onStreamEvent, targetRepairModifyingEvent);
-    const response = await runWithBackendFallback(request, input.signal, handleStreamEvent, input.onStreamEvent, input.onRealtimeControlReady);
+    const response = await runWithProjectBackend(request, input.signal, handleStreamEvent, input.onStreamEvent, input.onRealtimeControlReady);
     emitPeerRepairStage(targetInstanceContext, input.onStreamEvent, targetRepairTestingEvent);
     emitPeerRepairStage(targetInstanceContext, input.onStreamEvent, targetRepairWrittenBackEvent);
     const responseWithUsage = latestRoundTokenUsage
@@ -197,9 +197,9 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
       backendError: !wasUserInterrupted && !wasSystemInterrupted,
     });
     const message = wasUserInterrupted
-      ? '用户已中断当前 backend 运行。'
+      ? 'You stopped the current task.'
       : wasSystemInterrupted
-        ? `当前 backend 运行被系统或网络中断：${rawMessage}`
+        ? `The current task was interrupted by the system or network: ${rawMessage}`
         : rawMessage;
     const { failedRunId, session } = appendFailedRunToSession({
       optimisticSession,
@@ -293,7 +293,7 @@ function annotationPlanOnlyEvent(input: RunPromptOrchestratorInput, runId: strin
   return {
     id: makeId('evt'),
     type: 'annotation-plan-only',
-    label: '注释计划',
+    label: 'Annotation plan',
     detail: 'annotation-plan-only policy handled locally; runtime transport, repair, workspace writes, and GitHub sync were skipped.',
     raw: {
       runId,
@@ -372,10 +372,10 @@ export async function runPreflightContextCompaction({
   onStreamEvent({
     id: makeId('evt'),
     type: 'contextCompaction',
-      label: '上下文压缩',
+      label: 'Context',
       detail: blockOnContextCompaction
-      ? '发送前达到阈值，正在请求 Codex Runtime 上下文压缩。'
-      : '发送前达到阈值，已启动非阻塞上下文压缩；当前请求继续发送。',
+      ? 'Context is being compacted before sending.'
+      : 'Context compaction started in the background; the request will continue.',
     contextWindowState: {
       ...preflightState,
       pendingCompact: true,
@@ -390,8 +390,8 @@ export async function runPreflightContextCompaction({
       startedAt,
       reason: 'auto-threshold-before-send',
       message: blockOnContextCompaction
-        ? '发送前达到阈值，正在请求 Codex Runtime 上下文压缩。'
-        : '发送前达到阈值，已启动非阻塞上下文压缩；当前请求继续发送。',
+        ? 'Context is being compacted before sending.'
+        : 'Context compaction started in the background; the request will continue.',
     },
     raw: { latencyPolicy: { blockOnContextCompaction } },
     createdAt: startedAt,
@@ -444,7 +444,7 @@ export function shouldBlockOnPreflightContextCompaction(events: AgentStreamEvent
   return latestLatencyPolicy(events)?.blockOnContextCompaction !== false;
 }
 
-export async function runWithBackendFallback(
+export async function runWithProjectBackend(
   request: AgentRequest,
   signal: AbortSignal,
   onEvent: (event: AgentStreamEvent) => void,

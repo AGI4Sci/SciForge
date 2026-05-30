@@ -9,10 +9,10 @@ test('sidebar tools strip renders app entry and automation placeholder', () => {
     onOpenComponents: () => undefined,
   }));
 
-  assert.match(html, /aria-label="工具"/);
+  assert.match(html, /aria-label="Tools"/);
   assert.match(html, /sidebar-tool-item/);
-  assert.match(html, />应用</);
-  assert.match(html, /aria-label="自动化"/);
-  assert.match(html, />自动化</);
-  assert.match(html, /即将推出/);
+  assert.match(html, />Apps</);
+  assert.match(html, /aria-label="Automations"/);
+  assert.match(html, />Automations</);
+  assert.match(html, />Soon</);
 });

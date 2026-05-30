@@ -192,7 +192,7 @@ test('runtime event projection exports stable fallback types and diagnostics', (
   assert.equal(normalizeRuntimeWorkspaceEventType('tool_completed', {}), TOOL_RESULT_EVENT_TYPE);
   assert.equal(normalizeRuntimeWorkspaceEventType('operation_progress', {}), PROCESS_PROGRESS_EVENT_TYPE);
   assert.equal(normalizeRuntimeWorkspaceEventType('approval_requested', {}), HUMAN_APPROVAL_REQUIRED_EVENT_TYPE);
-  assert.equal(runtimeStreamEventLabel('tool-call', 'workspace-runtime', 'read_artifact'), '调用 read_artifact');
+  assert.equal(runtimeStreamEventLabel('tool-call', 'workspace-runtime', 'read_artifact'), 'Calling read_artifact');
   assert.equal(runtimeDetailIndicatesAbort('request cancelled by user'), true);
   assert.equal(projectToolFailureDetail('network down'), 'SciForge project tool unavailable: network down');
 });
@@ -250,19 +250,19 @@ test('runtime events policy owns gateway event classification and latency refs',
   });
   assert.equal(LATENCY_DIAGNOSTICS_REF, 'runtime://latency-diagnostics');
   assert.equal(PROCESS_EVENTS_SCHEMA_VERSION, 'sciforge.process-events.v1');
-  assert.equal(runtimeStreamEventLabel(PROCESS_PROGRESS_EVENT_TYPE), '过程');
+  assert.equal(runtimeStreamEventLabel(PROCESS_PROGRESS_EVENT_TYPE), 'Activity');
 });
 
 test('runtime events policy owns accepted prompt compaction copy', () => {
   assert.equal(compactRuntimePromptSummary('  first\n\nsecond\tthird  '), 'first second third');
   assert.equal(compactRuntimePromptSummary('x'.repeat(200)).length, 160);
   assert.deepEqual(runtimeRequestAcceptedProgressCopy('  compare\nartifacts  '), {
-    detail: '正在把本轮请求交给 workspace runtime：compare artifacts',
-    waitingFor: 'workspace runtime 首个事件',
-    nextStep: '收到后端事件后继续展示读取、执行、写入和验证进展。',
+    detail: 'Sending this request to the workspace agent: compare artifacts',
+    waitingFor: 'first workspace agent event',
+    nextStep: 'Show reading, running, writing, and checking progress as events arrive.',
     reason: PROCESS_PROGRESS_REASON.REQUEST_ACCEPTED_BEFORE_BACKEND_STREAM,
   });
-  assert.match(runtimeRequestAcceptedProgressCopy('').detail, /workspace runtime。/);
+  assert.match(runtimeRequestAcceptedProgressCopy('').detail, /workspace agent\./);
 });
 
 test('runtime events policy owns process progress and health status literals', () => {
@@ -321,7 +321,7 @@ test('runtime events policy owns structured interaction progress contracts', () 
 
   assert.equal(normalized?.type, HUMAN_APPROVAL_REQUIRED_EVENT_TYPE);
   assert.equal(normalized?.interaction?.kind, 'human-approval');
-  assert.equal(presentation?.label, '需要确认');
+  assert.equal(presentation?.label, 'Needs approval');
   assert.match(presentation?.detail ?? '', /Phase: verification/);
   assert.match(presentation?.detail ?? '', /Interaction: human-approval required/);
   assert.doesNotMatch(presentation?.detail ?? '', /PROMPT_TEXT_SHOULD_NOT_DRIVE_UI/);
@@ -374,7 +374,7 @@ test('runtime events policy restores compact interaction progress records from s
   }), undefined);
   assert.equal(runtimeInteractionProgressEventFromCompactRecord({
     type: PROCESS_PROGRESS_EVENT_TYPE,
-    label: '过程',
+    label: 'Activity',
     detail: 'search write failed approval retrieval repair blocked',
     prompt: 'PROMPT_TEXT_SHOULD_NOT_DRIVE_UI',
     scenario: 'SCENARIO_TEXT_SHOULD_NOT_DRIVE_UI',
@@ -393,9 +393,9 @@ test('runtime events policy owns stream event presentation literals', () => {
     PROCESS_PROGRESS: PROCESS_PROGRESS_EVENT_TYPE,
   });
   assert.deepEqual(STREAM_EVENT_TYPES, Object.values(STREAM_EVENT_TYPE));
-  assert.equal(runtimeStreamEventLabel(RUN_PLAN_EVENT_TYPE), '计划');
-  assert.equal(runtimeStreamEventLabel(STAGE_START_EVENT_TYPE), '阶段');
-  assert.equal(runtimeStreamEventLabel(TOOL_RESULT_EVENT_TYPE, undefined, 'write_file'), '结果 write_file');
+  assert.equal(runtimeStreamEventLabel(RUN_PLAN_EVENT_TYPE), 'Plan');
+  assert.equal(runtimeStreamEventLabel(STAGE_START_EVENT_TYPE), 'Step');
+  assert.equal(runtimeStreamEventLabel(TOOL_RESULT_EVENT_TYPE, undefined, 'write_file'), 'write_file result');
 });
 
 test('project tool event projection owns stable ids and user-visible copy', () => {
@@ -432,8 +432,8 @@ test('chat shell event projection owns guidance and interrupt contracts', () => 
   assert.deepEqual(guidanceQueuedEvent(identity, guidance), {
     id: identity.id,
     type: GUIDANCE_QUEUED_EVENT_TYPE,
-    label: '引导已排队',
-    detail: `${guidance.prompt}\n状态：已排队，等待当前 run 结束后合并到下一轮。`,
+    label: 'Guidance queued',
+    detail: `${guidance.prompt}\nStatus: queued; it will merge into the next turn after the current run ends.`,
     createdAt: identity.createdAt,
     raw: {
       schemaVersion: INTERACTION_PROGRESS_EVENT_SCHEMA_VERSION,

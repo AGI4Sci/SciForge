@@ -13,7 +13,7 @@ test('composer shows Codex-style context hints without provider, model, profile,
     composerHeight: 58,
     referencePickMode: false,
     pendingReferences: [],
-    contextMeter: React.createElement('span', null, '当前上下文'),
+    contextMeter: React.createElement('span', null, 'Context'),
     fileInputRef: React.createRef<HTMLInputElement>(),
     referenceChips: null,
     runtimeContext: {
@@ -32,10 +32,10 @@ test('composer shows Codex-style context hints without provider, model, profile,
     onBeginResize: () => undefined,
   }));
 
-  assert.match(html, /当前项目/);
-  assert.match(html, /助手已连接/);
-  assert.match(html, /可写工作区/);
-  assert.match(html, /当前上下文/);
+  assert.match(html, /Workspace/);
+  assert.match(html, /Assistant connected/);
+  assert.match(html, /Writable/);
+  assert.match(html, /Context/);
   for (const term of [
     'sciforge-deepseek-proxy',
     'bailian/deepseek-v4-flash',
@@ -79,8 +79,8 @@ test('composer keeps unset runtime context generic', () => {
     onBeginResize: () => undefined,
   }));
 
-  assert.match(html, /项目未选择/);
-  assert.match(html, /连接待配置/);
-  assert.match(html, /权限待确认/);
+  assert.match(html, /No workspace/);
+  assert.match(html, /Connection not configured/);
+  assert.match(html, /Permission not set/);
   assert.doesNotMatch(html, /provider|model|profile|runtime codex|run id/i);
 });

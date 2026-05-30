@@ -1,7 +1,7 @@
 import { relative, resolve, sep } from 'node:path';
 import { appendRepairTerminalMirrorEntry } from './repair-handoff-runner.js';
 import { isRecord, safeName } from './server/http.js';
-import { CodexExecJsonAdapter } from './codex/codex-exec-json-adapter.js';
+import { createCodexAppServerRuntimeAdapter } from './codex/codex-runtime-adapter.js';
 import {
   appendStateRecord,
   findFeedbackComment,
@@ -116,7 +116,7 @@ export async function runFeedbackRepairGuidance(input: RunFeedbackRepairGuidance
   }
   try {
     const runtimeCodexEnv = await input.prepareRuntimeCodexEnvFromLocalConfig();
-    const adapter = new CodexExecJsonAdapter({ env: runtimeCodexEnv });
+    const adapter = createCodexAppServerRuntimeAdapter({ env: runtimeCodexEnv });
     const turn = await adapter.startTurn({
       commandText: repairGuidancePrompt({ issueId: canonicalIssueId, repairRunId, message }),
       workspacePath: worktreePath,

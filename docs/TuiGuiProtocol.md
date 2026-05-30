@@ -299,7 +299,7 @@ gui.read({ path: '/gui/renderers/report-viewer.json' })
 
 TUI 和 GUI 对彼此的感知是非对称的：
 
-- GUI 通过 app-server 或 JSONL event stream 感知 TUI/Core，并渲染 streamed agent events。
+- GUI 通过 app-server rich-client event stream 感知 TUI/Core，并渲染 streamed agent events；legacy JSONL event stream 只用于 fixture/replay/test-only 兼容。
 - TUI 通过 shell/hot-region context 加只读 resource operations 感知 GUI。
 - GUI 只推送 semantic event bus 的语义变化；TUI 不轮询整页。
 - TUI 只有在当前任务真正需要时才读取更深的 region detail。
@@ -681,12 +681,12 @@ TUI 调用 connector 后，应优先返回 refs-first 结果：`feishu:*`、`wec
 | Host | 适配方式 |
 |---|---|
 | Codex app-server | 首选原生后端。注入 `module.*` dynamic tools 或 MCP tools，消费 thread/turn/item/approval 富客户端事件流。 |
-| Codex CLI / `codex exec --json` | 迁移兼容路径。GUI 或 bridge 启动 Codex CLI，注入 `module.*`；legacy host 需要时由 adapter shim 额外暴露 `gui.*` alias，并消费 JSONL event stream。 |
+| Codex CLI / `codex exec --json` | Legacy/test-only 兼容和历史证据。不得作为产品默认 fallback；legacy host 需要时由 adapter shim 额外暴露 `gui.*` alias，并消费 JSONL event stream。 |
 | `AgentCliAdapter` | 迁移抽象层。隔离 Codex 进程启动、profile、workspace、JSONL parsing、stderr audit 和 exit code handling。 |
 | Claude Code stream-json | 可选兼容后端。通过 MCP 暴露 `module.*`，stdout NDJSON 映射为 SciForge event/trace，`control_request/control_response` 映射为 approval/input。 |
 | Codex custom provider / proxy | 默认成本路径。Codex backend 使用 DeepSeek `deepseek-v4-flash` 或本地 provider proxy；SciForge 不直接维护第二个 agent backend。 |
 
-AgentServer 不属于最终协议层。若当前实现仍存在 AgentServer adapter，它只是迁移期兼容层，目标是被 Codex app-server / CLI bridge 取代；新增协议和 adapter 不得继续扩展 AgentServer public surface。
+AgentServer 不属于最终协议层。若当前实现仍存在 AgentServer adapter，它只是迁移期兼容层，目标是被 Codex app-server 取代；CLI bridge、exec-MCP 和 `codex exec --json` 只能作为 legacy/test-only adapter、fixture 或历史 evidence。新增协议和 adapter 不得继续扩展 AgentServer public surface。
 
 ## 最小实现
 

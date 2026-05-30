@@ -16,6 +16,12 @@ import {
   type ModelCatalogState,
 } from './settingsModelCatalog';
 import {
+  SUPPORTED_LOCALES,
+  localeText,
+  normalizeLocale,
+  type SupportedLocale,
+} from '../../i18n';
+import {
   maskedSecretValue,
   secretInputPlaceholder,
   secretPresenceLabel,
@@ -24,7 +30,7 @@ import {
 } from './settingsModels';
 import {
   settingsSectionLabel,
-  settingsSectionNavItems,
+  settingsSectionNavItemsForLocale,
   type SettingsSectionId,
 } from './settingsPageModel';
 import { SettingsArchivedChatsPanel } from './SettingsArchivedChatsPanel';
@@ -56,6 +62,10 @@ export function SettingsPage({
   onClearArchivedSessions?: () => void;
 }) {
   const [activeSection, setActiveSection] = useState<SettingsSectionId>(initialSection);
+  const locale = normalizeLocale(config.locale);
+  const t = (copy: Record<SupportedLocale, string>) => localeText(locale, copy);
+  const settingsNavItems = settingsSectionNavItemsForLocale(locale);
+  const activeNavItem = settingsNavItems.find((item) => item.id === activeSection);
   const healthItems = useRuntimeHealth(config);
   const peerInstances = config.peerInstances ?? [];
   const peerValidationErrors = validatePeerInstances(peerInstances);
@@ -99,14 +109,14 @@ export function SettingsPage({
   };
 
   return (
-    <div className="settings-page" aria-label="SciForge 设置">
-      <nav className="settings-page-nav" aria-label="设置分类">
+    <div className="settings-page" aria-label={t({ 'zh-CN': 'SciForge 设置', 'en-US': 'SciForge settings' })}>
+      <nav className="settings-page-nav" aria-label={t({ 'zh-CN': '设置分类', 'en-US': 'Settings sections' })}>
         <button type="button" className="settings-page-back" onClick={onBack}>
           <ArrowLeft size={16} aria-hidden />
-          返回应用
+          {t({ 'zh-CN': '返回应用', 'en-US': 'Back to app' })}
         </button>
         <ul className="settings-page-nav-list">
-          {settingsSectionNavItems.map((item) => {
+          {settingsNavItems.map((item) => {
             const Icon = item.icon;
             return (
               <li key={item.id}>
@@ -126,14 +136,14 @@ export function SettingsPage({
       </nav>
       <div className="settings-page-main">
         <header className="settings-page-header">
-          <h1>{settingsSectionLabel(activeSection)}</h1>
-          <p>{settingsSectionNavItems.find((item) => item.id === activeSection)?.description}</p>
+          <h1>{settingsSectionLabel(activeSection, locale)}</h1>
+          <p>{activeNavItem?.description}</p>
         </header>
         <div className="settings-page-body">
           {activeSection === 'general' ? (
             <div className="settings-grid">
               <label>
-                <span>Timeout ms</span>
+                <span>{t({ 'zh-CN': '超时时间 ms', 'en-US': 'Timeout ms' })}</span>
                 <input
                   type="number"
                   min={30000}
@@ -143,7 +153,7 @@ export function SettingsPage({
                 />
               </label>
               <label>
-                <span>Max Context Window (k tokens)</span>
+                <span>{t({ 'zh-CN': '最大上下文窗口（k tokens）', 'en-US': 'Max context window (k tokens)' })}</span>
                 <input
                   type="number"
                   min={1}
@@ -158,17 +168,25 @@ export function SettingsPage({
                   checked={config.visionAllowSharedSystemInput}
                   onChange={(event) => onChange({ visionAllowSharedSystemInput: event.target.checked })}
                 />
-                <span>默认允许 vision-sense 使用共享系统鼠标/键盘</span>
+                <span>{t({ 'zh-CN': '默认允许 vision-sense 使用共享系统鼠标/键盘', 'en-US': 'Allow vision-sense to use shared system mouse and keyboard by default' })}</span>
               </label>
             </div>
           ) : null}
           {activeSection === 'appearance' ? (
             <div className="settings-grid">
               <label>
-                <span>界面主题</span>
-                <select value={config.theme} onChange={(event) => onChange({ theme: event.target.value === 'light' ? 'light' : 'dark' })}>
-                  <option value="dark">黑夜</option>
-                  <option value="light">白天</option>
+                <span>{t({ 'zh-CN': '界面主题', 'en-US': 'Interface theme' })}</span>
+                <select value={config.theme ?? 'dark'} onChange={(event) => onChange({ theme: event.target.value === 'light' ? 'light' : 'dark' })}>
+                  <option value="dark">{t({ 'zh-CN': '深色', 'en-US': 'Dark' })}</option>
+                  <option value="light">{t({ 'zh-CN': '浅色', 'en-US': 'Light' })}</option>
+                </select>
+              </label>
+              <label>
+                <span>{t({ 'zh-CN': '应用语言', 'en-US': 'App language' })}</span>
+                <select value={locale} onChange={(event) => onChange({ locale: normalizeLocale(event.target.value) })}>
+                  {SUPPORTED_LOCALES.map((item) => (
+                    <option key={item.id} value={item.id}>{item.nativeLabel}</option>
+                  ))}
                 </select>
               </label>
             </div>
@@ -186,7 +204,9 @@ export function SettingsPage({
               <div className="wide settings-peer-section">
                 <div className="settings-peer-section-head">
                   <span>Peer Instances</span>
-                  <ActionButton icon={Plus} variant="secondary" onClick={addPeerInstance}>新增 Peer</ActionButton>
+                  <ActionButton icon={Plus} variant="secondary" onClick={addPeerInstance}>
+                    {t({ 'zh-CN': '新增 Peer', 'en-US': 'Add peer' })}
+                  </ActionButton>
                 </div>
                 {peerInstances.length ? (
                   <div className="settings-peer-list">
@@ -198,7 +218,7 @@ export function SettingsPage({
                             checked={peer.enabled}
                             onChange={(event) => updatePeerInstance(index, { enabled: event.target.checked })}
                           />
-                          <span>{peer.enabled ? '启用' : '禁用'}</span>
+                          <span>{peer.enabled ? t({ 'zh-CN': '启用', 'en-US': 'Enabled' }) : t({ 'zh-CN': '禁用', 'en-US': 'Disabled' })}</span>
                         </label>
                         <label>
                           <span>Name</span>
@@ -232,12 +252,14 @@ export function SettingsPage({
                           <span>Workspace Path</span>
                           <input value={peer.workspacePath} onChange={(event) => updatePeerInstance(index, { workspacePath: event.target.value })} />
                         </label>
-                        <ActionButton icon={Trash2} variant="secondary" onClick={() => removePeerInstance(index)}>删除</ActionButton>
+                        <ActionButton icon={Trash2} variant="secondary" onClick={() => removePeerInstance(index)}>
+                          {t({ 'zh-CN': '删除', 'en-US': 'Delete' })}
+                        </ActionButton>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <p className="settings-peer-empty">还没有配置 Peer Instance。</p>
+                  <p className="settings-peer-empty">{t({ 'zh-CN': '尚未配置 peer 实例。', 'en-US': 'No peer instances configured.' })}</p>
                 )}
                 {peerValidationErrors.length ? (
                   <div className="settings-validation" role="alert">
@@ -251,15 +273,22 @@ export function SettingsPage({
             <div className="settings-grid">
               <div className="wide settings-peer-section" aria-label="Runtime provider settings">
                 <div className="settings-peer-section-head">
-                  <span>Runtime Provider</span>
-                  <code>{config.apiKey.trim() ? 'API key configured: yes (masked)' : 'API key configured: no'}</code>
+                  <span>{t({ 'zh-CN': 'Runtime Provider', 'en-US': 'Runtime Provider' })}</span>
+                  <code>{config.apiKey.trim()
+                    ? t({ 'zh-CN': 'API key 已配置：是（已隐藏）', 'en-US': 'API key configured: yes (masked)' })
+                    : t({ 'zh-CN': 'API key 已配置：否', 'en-US': 'API key configured: no' })}</code>
                 </div>
-                <p className="settings-peer-empty">Main chat Runtime Codex and repair Codex CLI share this provider, model, upstream Chat Completions URL, Runtime Profile, and API key. The local Responses proxy is internal compatibility plumbing.</p>
+                <p className="settings-peer-empty">
+                  {t({
+                    'zh-CN': '主对话和 repair 流程使用 Codex app-server 路径，并复用这里的模型端点和 API key。本地兼容管线不会暴露在聊天界面中。',
+                    'en-US': 'Main chat and repair flows use the Codex app-server path with this model endpoint and API key. Local compatibility plumbing stays hidden from the chat surface.',
+                  })}
+                </p>
               </div>
               <label>
-                <span>Runtime Backend</span>
+                <span>Runtime Adapter</span>
                 <select value={config.agentBackend} onChange={(event) => onChange({ agentBackend: event.target.value })}>
-                  <option value="codex">Codex</option>
+                  <option value="codex">Codex app-server</option>
                   <option value="openteam_agent">OpenTeam Agent</option>
                   <option value="claude-code">Claude Code</option>
                   <option value="hermes-agent">Hermes Agent</option>
@@ -295,12 +324,14 @@ export function SettingsPage({
                     onClick={() => void refreshModelCatalog(config, setModelCatalog)}
                     disabled={modelCatalog.status === 'loading'}
                   >
-                    {modelCatalog.status === 'loading' ? '查询中' : '刷新模型'}
+                    {modelCatalog.status === 'loading'
+                      ? t({ 'zh-CN': '加载中', 'en-US': 'Loading' })
+                      : t({ 'zh-CN': '刷新模型', 'en-US': 'Refresh models' })}
                   </ActionButton>
                 </div>
                 <div className="settings-model-picker">
                   <label>
-                    <span>可用模型</span>
+                    <span>Available models</span>
                     <select
                       value={modelCatalog.models.includes(config.modelName) ? config.modelName : ''}
                       onChange={(event) => {
@@ -308,14 +339,14 @@ export function SettingsPage({
                       }}
                       disabled={!modelCatalog.models.length}
                     >
-                      <option value="">{modelCatalogPlaceholder(modelCatalog)}</option>
+                      <option value="">{modelCatalogPlaceholder(modelCatalog, locale)}</option>
                       {modelCatalog.models.map((model) => (
                         <option key={model} value={model}>{model}</option>
                       ))}
                     </select>
                   </label>
                   <p className={cx('settings-model-catalog-status', modelCatalog.status === 'error' ? 'error' : undefined)}>
-                    {modelCatalogStatusText(modelCatalog)}
+                    {modelCatalogStatusText(modelCatalog, locale)}
                   </p>
                 </div>
               </div>
@@ -332,20 +363,20 @@ export function SettingsPage({
                     value={apiKeyInputValue}
                     readOnly={apiKeyConfigured && !apiKeyVisible}
                     onChange={(event) => onChange({ apiKey: event.target.value })}
-                    placeholder={secretInputPlaceholder(config.apiKey, 'stored in local config.json')}
+                    placeholder={secretInputPlaceholder(config.apiKey, t({ 'zh-CN': '存储在本地 config.json', 'en-US': 'stored in local config.json' }), locale)}
                     aria-describedby="settings-api-key-status"
                   />
                   <button
                     type="button"
                     className="settings-secret-toggle"
-                    aria-label={apiKeyVisible ? '隐藏 API key' : '查看 API key'}
-                    title={apiKeyVisible ? '隐藏 API key' : '查看 API key'}
+                    aria-label={apiKeyVisible ? t({ 'zh-CN': '隐藏 API key', 'en-US': 'Hide API key' }) : t({ 'zh-CN': '显示 API key', 'en-US': 'Show API key' })}
+                    title={apiKeyVisible ? t({ 'zh-CN': '隐藏 API key', 'en-US': 'Hide API key' }) : t({ 'zh-CN': '显示 API key', 'en-US': 'Show API key' })}
                     onClick={() => setApiKeyVisible((visible) => !visible)}
                   >
                     {apiKeyVisible ? <EyeOff size={14} aria-hidden /> : <Eye size={14} aria-hidden />}
                   </button>
                 </div>
-                <small id="settings-api-key-status">{secretPresenceLabel(config.apiKey, 'API key')}</small>
+                <small id="settings-api-key-status">{secretPresenceLabel(config.apiKey, 'API key', locale)}</small>
               </label>
               <label className="wide settings-check-row">
                 <input
@@ -353,14 +384,14 @@ export function SettingsPage({
                   checked={config.allowOpenAiRuntime === true}
                   onChange={(event) => onChange({ allowOpenAiRuntime: event.target.checked })}
                 />
-                <span>显式允许 Runtime Codex 使用 OpenAI provider</span>
+                <span>{t({ 'zh-CN': '显式允许 OpenAI 作为 runtime provider', 'en-US': 'Explicitly allow OpenAI as a runtime provider' })}</span>
               </label>
             </div>
           ) : null}
           {activeSection === 'connections' ? (
             <div className="settings-grid">
               <label className="wide">
-                <span>Codex Runtime Base URL</span>
+                <span>Codex Runtime Connection URL</span>
                 <input value={config.agentServerBaseUrl} onChange={(event) => onChange({ agentServerBaseUrl: event.target.value })} />
               </label>
               <div className="wide">
@@ -380,27 +411,34 @@ export function SettingsPage({
           {activeSection === 'feedback' ? (
             <div className="settings-grid">
               <label className="wide">
-                <span>反馈 GitHub 仓库</span>
+                <span>Feedback GitHub repository</span>
                 <input
                   value={config.feedbackGithubRepo ?? ''}
                   onChange={(event) => onChange({ feedbackGithubRepo: event.target.value.trim() || undefined })}
-                  placeholder="默认 AGI4Sci/SciForge；可改为 fork 或完整 https://github.com/… URL"
+                  placeholder={t({ 'zh-CN': '默认 AGI4Sci/SciForge、fork 或完整 GitHub URL', 'en-US': 'Default AGI4Sci/SciForge, fork, or full GitHub URL' })}
                 />
               </label>
               <label className="wide">
-                <span>反馈 GitHub Token（可选）</span>
+                <span>Feedback GitHub token (optional)</span>
                 <input
                   type="password"
                   autoComplete="off"
                   value=""
                   onChange={(event) => onChange({ feedbackGithubToken: event.target.value.trim() || undefined })}
-                  placeholder={secretInputPlaceholder(config.feedbackGithubToken, 'classic PAT 或 fine-grained PAT（需 Issues 读写；仅存本地）')}
+                  placeholder={secretInputPlaceholder(
+                    config.feedbackGithubToken,
+                    t({
+                      'zh-CN': 'classic 或 fine-grained PAT，需要 Issues 权限，本地存储',
+                      'en-US': 'classic or fine-grained PAT with Issues access, stored locally',
+                    }),
+                    locale,
+                  )}
                   aria-describedby="settings-feedback-github-token-status"
                 />
-                <small id="settings-feedback-github-token-status">{secretPresenceLabel(config.feedbackGithubToken, 'GitHub token')}</small>
+                <small id="settings-feedback-github-token-status">{secretPresenceLabel(config.feedbackGithubToken, 'GitHub token', locale)}</small>
               </label>
               <label className="wide">
-                <span>反馈 GitHub Labels</span>
+                <span>Feedback GitHub labels</span>
                 <input
                   value={(config.feedbackGithubLabels ?? []).join(', ')}
                   onChange={(event) => onChange({ feedbackGithubLabels: event.target.value.split(',').map((label) => label.trim()).filter(Boolean) })}
@@ -408,7 +446,7 @@ export function SettingsPage({
                 />
               </label>
               <label className="wide">
-                <span>反馈 GitHub Assignees</span>
+                <span>Feedback GitHub assignees</span>
                 <input
                   value={(config.feedbackGithubAssignees ?? []).join(', ')}
                   onChange={(event) => onChange({ feedbackGithubAssignees: event.target.value.split(',').map((login) => login.trim()).filter(Boolean) })}
@@ -416,7 +454,7 @@ export function SettingsPage({
                 />
               </label>
               <label>
-                <span>反馈 GitHub Milestone</span>
+                <span>Feedback GitHub milestone</span>
                 <input
                   value={config.feedbackGithubMilestone ?? ''}
                   onChange={(event) => {
@@ -424,7 +462,7 @@ export function SettingsPage({
                     const numeric = Number(value);
                     onChange({ feedbackGithubMilestone: value && Number.isFinite(numeric) ? numeric : value || undefined });
                   }}
-                  placeholder="number 或 title"
+                  placeholder="number or title"
                 />
               </label>
               <label className="settings-check-row">
@@ -441,18 +479,20 @@ export function SettingsPage({
         <footer className="settings-page-footer settings-save-state" role="status">
           <span className={cx('status-dot', saveState.status === 'error' ? 'offline' : saveState.status === 'saving' ? 'optional' : 'online')} />
           <span>
-            {settingsSaveStateText(saveState)}
+            {settingsSaveStateText(saveState, locale)}
             {' '}
-            下一次 Codex Runtime 请求会使用：
+            {t({ 'zh-CN': '下一次 Codex Runtime 请求会使用：', 'en-US': 'Next Codex Runtime request will use:' })}
             {' '}
             <code>{config.runtimeProfile || 'sciforge-runtime-deepseek'}</code>
             <strong>{config.modelProvider || 'native'}</strong>
-            {config.modelName.trim() ? <code>{config.modelName.trim()}</code> : <em>user model not set</em>}
+            {config.modelName.trim() ? <code>{config.modelName.trim()}</code> : <em>{t({ 'zh-CN': '用户模型未设置', 'en-US': 'user model not set' })}</em>}
           </span>
           <ActionButton icon={Save} variant="primary" onClick={onSave} disabled={saveState.status === 'saving' || peerValidationErrors.length > 0}>
-            {saveState.status === 'saving' ? '保存中' : '保存并生效'}
+            {saveState.status === 'saving' ? t({ 'zh-CN': '保存中', 'en-US': 'Saving' }) : t({ 'zh-CN': '保存', 'en-US': 'Save' })}
           </ActionButton>
-          <ActionButton icon={RefreshCw} variant="secondary" onClick={() => window.location.reload()}>重新检测连接</ActionButton>
+          <ActionButton icon={RefreshCw} variant="secondary" onClick={() => window.location.reload()}>
+            {t({ 'zh-CN': '重新检测连接', 'en-US': 'Recheck connection' })}
+          </ActionButton>
         </footer>
       </div>
     </div>

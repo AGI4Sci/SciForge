@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "sciforge.live-evidence-summary.v1",
+  "roundId": "live-round-12",
+  "side": "cursor-agent-computer-use",
+  "capturedAt": "2026-05-30T14:16:00+08:00",
+  "entryPoint": "Cursor Agents window, selected conversation \"Multi-agent file reading and reporting\"",
+  "summary": "Cursor Agent still provides the positive sidebar/process baseline but the same sub-agent prompt remains blocked by NO_SUBAGENT_TOOL_AVAILABLE, with no positive transcript/result refs to close the final parity gate.",
+  "observations": {
+    "sidebar": [
+      "New Agent, Automations, Customize, Repositories, project groups, Pin, Archive, draft Discard, Local environment, and Context are visible",
+      "Current sciforge project selected thread is Multi-agent file reading and reporting"
+    ],
+    "conversation": [
+      "Same prompt asks to call multi_agent_v1.spawn_agent and avoid shell substitute",
+      "Visible result states NO_SUBAGENT_TOOL_AVAILABLE",
+      "Available tools do not include sciforge_subagents or multi_agent_v1.spawn_agent",
+      "No positive artifact:subagent-transcript-* or artifact:subagent-result-* baseline is visible"
+    ],
+    "openDifference": "diff:round-03-missing-command-diff-subagent-live-coverage remains open only for sub-agent-expansion parity"
+  },
+  "privacy": {
+    "rawTranscriptEmbedded": false,
+    "providerSecretEmbedded": false,
+    "localAbsolutePathEmbedded": false
+  }
+}

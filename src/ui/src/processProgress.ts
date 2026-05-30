@@ -14,6 +14,7 @@ import {
 import { runtimeInteractionProgressEventFromCompactRecord } from '@sciforge-ui/runtime-contract/events';
 import type { ProcessProgressModel, ProcessProgressPhase, RuntimeInteractionProgressEvent } from '@sciforge-ui/runtime-contract';
 import type { AgentStreamEvent } from './domain';
+import { localeText, type SupportedLocale } from './i18n';
 import { makeId, nowIso } from './domain';
 import type { RuntimeResponsePlan } from './latencyPolicy';
 import { isRuntimeAuditOnlyEvent } from './runtimeAuditEvents';
@@ -72,14 +73,15 @@ export function progressModelsFromCompactTrace(source: unknown): ProcessProgress
     .filter((model): model is ProcessProgressModel => Boolean(model));
 }
 
-export function formatProgressHeadline(model: ProcessProgressModel | undefined, fallback?: string) {
+export function formatProgressHeadline(model: ProcessProgressModel | undefined, fallback?: string, locale?: SupportedLocale) {
   if (!model) return fallback;
+  const t = (copy: Record<SupportedLocale, string>) => localeText(locale ?? 'en-US', copy);
   const parts = [model.title];
-  if (model.reading.length) parts.push(`读 ${model.reading[0]}`);
-  if (model.writing.length) parts.push(`写 ${model.writing[0]}`);
-  if (model.waitingFor) parts.push(`等 ${model.waitingFor}`);
-  if (model.lastEvent) parts.push(`最近 ${model.lastEvent.label}: ${model.lastEvent.detail}`);
-  if (model.nextStep) parts.push(`下一步 ${model.nextStep}`);
+  if (model.reading.length) parts.push(t({ 'zh-CN': `读取 ${model.reading[0]}`, 'en-US': `Reading ${model.reading[0]}` }));
+  if (model.writing.length) parts.push(t({ 'zh-CN': `写入 ${model.writing[0]}`, 'en-US': `Writing ${model.writing[0]}` }));
+  if (model.waitingFor) parts.push(t({ 'zh-CN': `等待 ${model.waitingFor}`, 'en-US': `Waiting for ${model.waitingFor}` }));
+  if (model.lastEvent) parts.push(t({ 'zh-CN': `最近 ${model.lastEvent.label}: ${model.lastEvent.detail}`, 'en-US': `Latest ${model.lastEvent.label}: ${model.lastEvent.detail}` }));
+  if (model.nextStep) parts.push(t({ 'zh-CN': `下一步 ${model.nextStep}`, 'en-US': `Next ${model.nextStep}` }));
   return parts.join(' · ');
 }
 
@@ -105,8 +107,8 @@ export function buildSilentStreamProgressEvent({
   const lastEventSummary = lastEvent ? summarizeLastEvent(lastEvent) : undefined;
   const elapsedSeconds = Math.max(0, Math.floor(elapsedMs / 1000));
   const detail = lastEventSummary
-    ? `HTTP stream 仍在等待；已 ${elapsedSeconds}s 没有收到新事件。最近事件：${lastEventSummary.label} - ${lastEventSummary.detail}`
-    : `HTTP stream 仍在等待；已 ${elapsedSeconds}s 没有收到新事件，尚无可展示的后端事件。`;
+    ? `Still waiting for workspace activity after ${elapsedSeconds}s. Latest event: ${lastEventSummary.label} - ${lastEventSummary.detail}`
+    : `Still waiting for workspace activity after ${elapsedSeconds}s.`;
   const existingDecision = latestSilentStreamDecision(events);
   const silentStreamDecision = buildSilentStreamDecisionRecord({
     existing: existingDecision,
@@ -124,20 +126,20 @@ export function buildSilentStreamProgressEvent({
   return {
     id: 'evt-silent-stream-wait',
     type: PROCESS_PROGRESS_EVENT_TYPE,
-    label: '等待',
+    label: 'Waiting',
     detail,
     createdAt: new Date(nowMs).toISOString(),
     raw: {
       type: PROCESS_PROGRESS_EVENT_TYPE,
       progress: {
         phase: PROCESS_PROGRESS_PHASE.WAIT,
-        title: '正在等待后端返回新事件',
+        title: 'Waiting for workspace activity',
         detail,
-        waitingFor: '后端返回新事件',
-        nextStep: '收到新事件后继续执行；也可以安全中止当前 stream 或继续补充指令排队。',
+        waitingFor: 'workspace activity',
+        nextStep: 'SciForge will continue when new activity arrives. You can also stop the task or queue more guidance.',
         lastEvent: lastEventSummary,
         reason: PROCESS_PROGRESS_REASON.BACKEND_WAITING,
-        recoveryHint: '保留最近真实事件和等待原因，下一轮可基于这些线索继续或恢复。',
+        recoveryHint: 'Recent activity and waiting state are kept so the next turn can continue.',
         canAbort: true,
         canContinue: true,
         status: PROCESS_PROGRESS_STATUS.RUNNING,
@@ -157,44 +159,58 @@ export function silentStreamWaitThresholdMs(events: AgentStreamEvent[]) {
   return silentStreamPolicyFromEvents(events)?.timeoutMs ?? SILENT_STREAM_WAIT_THRESHOLD_MS;
 }
 
-export function buildInitialResponseProgressEvent(responsePlan: RuntimeResponsePlan | undefined): AgentStreamEvent | undefined {
+export function buildInitialResponseProgressEvent(responsePlan: RuntimeResponsePlan | undefined, locale?: SupportedLocale): AgentStreamEvent | undefined {
+  const t = (copy: Record<SupportedLocale, string>) => localeText(locale ?? 'en-US', copy);
   const mode = responsePlan?.initialResponseMode;
   if (!mode) return undefined;
   if (mode === 'wait-for-result') {
     return progressEvent({
       phase: PROCESS_PROGRESS_PHASE.PLAN,
-      title: '正在规划工作区任务',
-      detail: '已收到请求，正在规划需要执行和验证的工作。',
-      waitingFor: '工作区任务进展',
-      nextStep: firstProgressPhase(responsePlan) ?? '继续执行并流式显示进展。',
+      title: t({ 'zh-CN': '正在规划工作区任务', 'en-US': 'Planning workspace task' }),
+      detail: t({ 'zh-CN': '已收到请求；正在规划要执行的工作和检查。', 'en-US': 'Request received; planning the work and checks to run.' }),
+      waitingFor: t({ 'zh-CN': '工作区任务进展', 'en-US': 'workspace task progress' }),
+      nextStep: firstProgressPhase(responsePlan) ?? t({ 'zh-CN': '继续运行并流式展示进展。', 'en-US': 'Continue running and stream progress.' }),
       reason: 'initial-response-wait-for-result',
+      locale,
     });
   }
   if (mode === 'quick-status' || mode === 'direct-context-answer' || mode === 'streaming-draft') {
     const direct = mode === 'direct-context-answer';
     return progressEvent({
       phase: direct ? PROCESS_PROGRESS_PHASE.READ : PROCESS_PROGRESS_PHASE.PLAN,
-      title: direct ? '正在整理当前上下文' : '正在准备可读进展',
+      title: direct
+        ? t({ 'zh-CN': '正在读取当前上下文', 'en-US': 'Reading current context' })
+        : t({ 'zh-CN': '正在准备可读进展', 'en-US': 'Preparing readable progress' }),
       detail: direct
-        ? '已收到请求，正在基于当前上下文整理可读回复。'
-        : '已收到请求，正在准备可读状态并继续执行所需工作。',
-      waitingFor: direct ? undefined : '后续工作区事件',
-      nextStep: firstProgressPhase(responsePlan) ?? '继续流式显示进展。',
+        ? t({ 'zh-CN': '已收到请求；正在从当前上下文准备可读回答。', 'en-US': 'Request received; preparing a readable answer from the current context.' })
+        : t({ 'zh-CN': '已收到请求；任务继续运行时会展示可读状态。', 'en-US': 'Request received; preparing a readable status while the work continues.' }),
+      waitingFor: direct ? undefined : t({ 'zh-CN': '后续工作区事件', 'en-US': 'following workspace events' }),
+      nextStep: firstProgressPhase(responsePlan) ?? t({ 'zh-CN': '继续流式展示进展。', 'en-US': 'Continue streaming progress.' }),
       reason: `initial-response-${mode}`,
+      locale,
     });
   }
   return undefined;
 }
 
-export function buildRequestAcceptedProgressEvent(prompt: string): AgentStreamEvent {
+export function buildRequestAcceptedProgressEvent(prompt: string, locale?: SupportedLocale): AgentStreamEvent {
   const copy = runtimeRequestAcceptedProgressCopy(prompt);
+  const localizedCopy = locale === 'zh-CN'
+    ? {
+      detail: `正在把请求发送给 workspace agent：${prompt}`,
+      waitingFor: '第一个 workspace agent 事件',
+      nextStep: '收到新事件后继续展示实时进展。',
+      reason: copy.reason,
+    }
+    : copy;
   return progressEvent({
     phase: PROCESS_PROGRESS_PHASE.PLAN,
-    title: '已收到请求',
-    detail: copy.detail,
-    waitingFor: copy.waitingFor,
-    nextStep: copy.nextStep,
-    reason: copy.reason,
+    title: localeText(locale ?? 'en-US', { 'zh-CN': '已收到请求', 'en-US': 'Request received' }),
+    detail: localizedCopy.detail,
+    waitingFor: localizedCopy.waitingFor,
+    nextStep: localizedCopy.nextStep,
+    reason: localizedCopy.reason,
+    locale,
   });
 }
 
@@ -205,6 +221,7 @@ function progressEvent({
   waitingFor,
   nextStep,
   reason,
+  locale,
 }: {
   phase: ProcessProgressPhase;
   title: string;
@@ -212,11 +229,12 @@ function progressEvent({
   waitingFor?: string;
   nextStep?: string;
   reason: string;
+  locale?: SupportedLocale;
 }): AgentStreamEvent {
   return {
     id: makeId('evt'),
     type: PROCESS_PROGRESS_EVENT_TYPE,
-    label: '进展',
+    label: localeText(locale ?? 'en-US', { 'zh-CN': '进展', 'en-US': 'Progress' }),
     detail,
     createdAt: nowIso(),
     raw: {
@@ -382,7 +400,7 @@ function progressModelFromTranscriptLine(line: string): ProcessProgressModel | u
   const separator = line.indexOf(':');
   const label = separator > 0 ? line.slice(0, separator).trim() : '';
   const headline = separator > 0 ? line.slice(separator + 1).trim() : line;
-  if (!headline || (!label && !/读 |写 |等 |最近 |下一步 |Phase:|Status:/i.test(headline))) return undefined;
+  if (!headline || (!label && !/读 |写 |等 |最近 |下一步 |Reading |Writing |Waiting for |Latest |Next |Phase:|Status:/i.test(headline))) return undefined;
   const parts = headline.split(/\s+·\s+/).map((part) => part.trim()).filter(Boolean);
   const title = parts[0] || label || headline;
   const reading: string[] = [];
@@ -391,15 +409,15 @@ function progressModelFromTranscriptLine(line: string): ProcessProgressModel | u
   let nextStep: string | undefined;
   let lastEvent: ProcessProgressModel['lastEvent'];
   for (const part of parts.slice(1)) {
-    const read = part.match(/^读\s+(.+)$/);
+    const read = part.match(/^(?:读|Reading)\s+(.+)$/);
     if (read?.[1]) reading.push(...splitCompactList(read[1]));
-    const write = part.match(/^写\s+(.+)$/);
+    const write = part.match(/^(?:写|Writing)\s+(.+)$/);
     if (write?.[1]) writing.push(...splitCompactList(write[1]));
-    const wait = part.match(/^等\s+(.+)$/);
+    const wait = part.match(/^(?:等|Waiting for)\s+(.+)$/);
     if (wait?.[1]) waitingFor = wait[1].trim();
-    const recent = part.match(/^最近\s+([^:：]+)[:：]\s*(.+)$/);
+    const recent = part.match(/^(?:最近|Latest)\s+([^:：]+)[:：]\s*(.+)$/);
     if (recent?.[1] && recent?.[2]) lastEvent = { label: recent[1].trim(), detail: recent[2].trim() };
-    const next = part.match(/^下一步\s+(.+)$/);
+    const next = part.match(/^(?:下一步|Next)\s+(.+)$/);
     if (next?.[1]) nextStep = next[1].trim();
   }
   const phase = normalizePhase([label, title, waitingFor, nextStep].filter(Boolean).join(' '));
@@ -440,12 +458,12 @@ function progressModelFromStructuredDetail(line: string): ProcessProgressModel |
   ].filter(Boolean).join('\n') || line;
   return {
     phase,
-    title: titleForPhase(phase, phaseText ?? '进展'),
+    title: titleForPhase(phase, phaseText ?? 'progress'),
     detail,
     reading: [],
     writing: [],
-    waitingFor: interaction?.includes('human-approval') ? '人工确认' : interaction?.includes('clarification') ? '澄清信息' : undefined,
-    nextStep: interaction?.includes('human-approval') ? '等待确认后继续执行需要人工批准的步骤。' : undefined,
+    waitingFor: interaction?.includes('human-approval') ? 'approval' : interaction?.includes('clarification') ? 'clarification' : undefined,
+    nextStep: interaction?.includes('human-approval') ? 'Wait for approval before continuing the guarded step.' : undefined,
     lastEvent: undefined,
     reason,
     recoveryHint: cancellation,
@@ -533,8 +551,8 @@ function latestSilentStreamDecision(events: AgentStreamEvent[]) {
 
 function summarizeLastEvent(event: AgentStreamEvent) {
   return {
-    label: event.label || event.type || '事件',
-    detail: (event.detail || event.type || event.label || '后端事件').trim().slice(0, 180),
+    label: event.label || event.type || 'Event',
+    detail: (event.detail || event.type || event.label || 'event').trim().slice(0, 180),
     createdAt: event.createdAt,
   };
 }
@@ -584,18 +602,18 @@ function normalizeInteractionStatus(progress: RuntimeInteractionProgressEvent): 
 
 function waitingForInteraction(type: string, interactionKind: string | undefined, required: boolean | undefined) {
   if (type === 'run-cancelled') return undefined;
-  if (interactionKind === 'human-approval') return '人工确认';
-  if (interactionKind === 'clarification') return '澄清信息';
-  if (interactionKind === 'guidance') return '当前 run 结束后合并引导';
-  if (required) return '用户交互';
-  return type === GUIDANCE_QUEUED_EVENT_TYPE ? '当前 run 结束后合并引导' : undefined;
+  if (interactionKind === 'human-approval') return 'approval';
+  if (interactionKind === 'clarification') return 'clarification';
+  if (interactionKind === 'guidance') return 'merge guidance after the current run';
+  if (required) return 'user input';
+  return type === GUIDANCE_QUEUED_EVENT_TYPE ? 'merge guidance after the current run' : undefined;
 }
 
 function nextStepForInteraction(type: string, interactionKind: string | undefined) {
-  if (type === 'run-cancelled') return '运行已结束，保留结构化终止原因供下一轮恢复或审计。';
-  if (interactionKind === 'guidance') return '等待当前 run 结束后合并到下一轮。';
-  if (interactionKind === 'human-approval') return '等待确认后继续执行需要人工批准的步骤。';
-  if (interactionKind === 'clarification') return '等待补充澄清后继续执行。';
+  if (type === 'run-cancelled') return 'The run ended; the structured termination reason is saved for the next turn.';
+  if (interactionKind === 'guidance') return 'Wait for the current run to end, then merge into the next turn.';
+  if (interactionKind === 'human-approval') return 'Wait for approval before continuing the guarded step.';
+  if (interactionKind === 'clarification') return 'Wait for clarification before continuing.';
   return undefined;
 }
 
@@ -609,12 +627,12 @@ function isInteractionProgressCompactType(type: string) {
 }
 
 function titleForPhase(phase: ProcessProgressPhase, fallback: string) {
-  if (phase === PROCESS_PROGRESS_PHASE.READ) return '正在读取';
-  if (phase === PROCESS_PROGRESS_PHASE.WRITE) return '正在写入';
-  if (phase === PROCESS_PROGRESS_PHASE.EXECUTE) return '正在执行';
-  if (phase === PROCESS_PROGRESS_PHASE.WAIT) return '正在等待';
-  if (phase === PROCESS_PROGRESS_PHASE.PLAN) return '正在规划下一步';
-  if (phase === PROCESS_PROGRESS_PHASE.COMPLETE) return '阶段完成';
-  if (phase === PROCESS_PROGRESS_PHASE.ERROR) return '遇到阻断';
-  return fallback || '正在观察后端状态';
+  if (phase === PROCESS_PROGRESS_PHASE.READ) return 'Reading';
+  if (phase === PROCESS_PROGRESS_PHASE.WRITE) return 'Writing';
+  if (phase === PROCESS_PROGRESS_PHASE.EXECUTE) return 'Running';
+  if (phase === PROCESS_PROGRESS_PHASE.WAIT) return 'Waiting';
+  if (phase === PROCESS_PROGRESS_PHASE.PLAN) return 'Planning next step';
+  if (phase === PROCESS_PROGRESS_PHASE.COMPLETE) return 'Step complete';
+  if (phase === PROCESS_PROGRESS_PHASE.ERROR) return 'Blocked';
+  return fallback || 'Watching activity';
 }

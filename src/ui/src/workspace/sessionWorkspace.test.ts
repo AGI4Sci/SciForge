@@ -153,17 +153,20 @@ test('deletes active chat by archiving a marked copy and resetting the active se
   const next = deleteActiveChat(state, 'scenario-any', 'Fallback new chat');
 
   assert.match(next.archivedSessions[0].title, /已删除/);
+  assert.equal(next.archivedSessions[0].archiveState, 'discarded');
   assert.notEqual(next.sessionsByScenario['scenario-any'].sessionId, 'active');
 });
 
 test('restores an archived session and archives the active session only when it has activity', () => {
-  const archived = session('archived');
+  const archived = { ...session('archived'), archiveState: 'discarded' as const };
   const state = workspace(session('active'), [archived]);
   const next = restoreArchivedSession(state, 'scenario-any', 'archived', '2026-05-07T01:00:00.000Z', 'Fallback');
 
   assert.equal(next.sessionsByScenario['scenario-any'].sessionId, 'archived');
+  assert.equal(next.sessionsByScenario['scenario-any'].archiveState, undefined);
   assert.equal(next.sessionsByScenario['scenario-any'].updatedAt, '2026-05-07T01:00:00.000Z');
   assert.equal(next.archivedSessions[0].sessionId, 'active');
+  assert.equal(next.archivedSessions[0].archiveState, 'archived');
 });
 
 test('deletes selected archived sessions without touching other scenarios', () => {

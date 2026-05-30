@@ -56,6 +56,21 @@
   box-shadow: 0 16px 38px rgba(52, 65, 86, 0.12);
 }
 
+.theme-light .codex-quiet-shell .workbench-canvas .chat-panel,
+.theme-light .codex-quiet-shell .workbench-canvas .results-panel {
+  background: rgba(255, 255, 255, 0.82);
+  border-color: rgba(151, 163, 183, 0.48);
+  box-shadow: none;
+}
+
+.theme-light .codex-quiet-shell .workbench-canvas .chat-panel {
+  border-right-color: rgba(151, 163, 183, 0.32);
+}
+
+.theme-light .codex-quiet-shell .workbench-canvas .results-panel {
+  border-left-color: rgba(151, 163, 183, 0.32);
+}
+
 .theme-light .activity-item:hover,
 .theme-light .panel-collapse-button:hover,
 .theme-light .collapse-button:hover,
@@ -161,6 +176,17 @@
 .theme-light .message.user {
   background: linear-gradient(135deg, rgba(0, 159, 114, 0.1), rgba(8, 127, 122, 0.08));
   border-color: var(--accent-border);
+}
+
+.theme-light .codex-quiet-shell .message.assistant-message {
+  background: transparent;
+  border-color: transparent;
+}
+
+.theme-light .codex-quiet-shell .message.assistant-message .message-body {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
 }
 
 .theme-light .modal-backdrop {

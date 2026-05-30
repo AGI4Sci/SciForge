@@ -49,9 +49,9 @@ export function ObjectReferenceChips({
           className="object-reference-more"
           onClick={() => setExpanded((value) => !value)}
           aria-expanded={expanded}
-          title={expanded ? '收起对象列表' : `展开剩余 ${chipModel.hiddenCount} 个对象`}
+          title={expanded ? 'Hide object list' : `Show ${chipModel.hiddenCount} more object${chipModel.hiddenCount === 1 ? '' : 's'}`}
         >
-          {expanded ? '收起对象' : `+${chipModel.hiddenCount} objects`}
+          {expanded ? 'Hide objects' : `+${chipModel.hiddenCount} objects`}
         </button>
       ) : null}
     </div>

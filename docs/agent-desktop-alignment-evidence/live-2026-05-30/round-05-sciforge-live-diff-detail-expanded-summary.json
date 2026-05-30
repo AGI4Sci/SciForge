@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "sciforge.agent-desktop-alignment.live-summary.v1",
+  "id": "round-05-sciforge-live-diff-detail-expanded",
+  "capturedAt": "2026-05-30T09:52:20+08:00",
+  "side": "sciforge-browser",
+  "tool": "browser",
+  "target": "sciforge-web",
+  "requirementsObserved": [
+    "completed-state-collapsed",
+    "command-expansion",
+    "edit-diff-expansion",
+    "right-side-result-presentation"
+  ],
+  "observations": [
+    "After the base URL was restored, a live SciForge chat completed a read-only shell diff request successfully.",
+    "The completed process rendered a Cursor-like Work replay aggregate with a Diff action row, done state, timestamp, command details, exit badge, file ref, and an expanded Diff detail section.",
+    "The expanded detail showed the requested shell command, exit code 1, a workspace-relative file ref, and unified diff hunk markers for the changed file.",
+    "The right result pane remained a separate result surface and exposed a process-record count for the completed chat instead of dumping raw stream events."
+  ],
+  "safeWorkspaceRefs": [
+    "parallel/p1/ShellPanels.tsx.bak",
+    "parallel/p1/ShellPanels.tsx"
+  ],
+  "commandFacts": {
+    "kind": "read-only-diff",
+    "exitCode": 1,
+    "unifiedDiffHunkMarkers": [
+      "@@ -78,7 +78,7 @@",
+      "@@ -204,6 +204,7 @@",
+      "@@ -221,6 +222,7 @@",
+      "@@ -742,6 +744,10 @@"
+    ]
+  },
+  "evidenceRefs": [
+    "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-05-sciforge-live-diff-detail-expanded-screenshot.png"
+  ],
+  "limitations": [
+    "This SciForge run does not cover sub-agent transcript/ref expansion.",
+    "The evidence stores hunk markers and structural facts only; it does not embed the full raw stream, raw DOM, or complete diff payload."
+  ],
+  "redaction": {
+    "rawDomSaved": false,
+    "rawDesktopTreeSaved": false,
+    "secretsIncluded": false,
+    "localAbsolutePathsIncluded": false
+  }
+}

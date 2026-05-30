@@ -1,0 +1,37 @@
+{
+  "schemaVersion": "sciforge.agent-desktop-alignment.live-summary.v1",
+  "id": "round-04-cursor-interactive-right-pane",
+  "capturedAt": "2026-05-30T00:01:29.612Z",
+  "side": "cursor-agent-computer-use",
+  "tool": "computer-use",
+  "target": "cursor-agent-desktop",
+  "requirementsObserved": [
+    "sidebar-new-project-new-chat",
+    "completed-state-collapsed",
+    "running-state-live-updates",
+    "command-expansion",
+    "edit-diff-expansion",
+    "file-preview",
+    "right-side-result-presentation"
+  ],
+  "observations": [
+    "Cursor Agent desktop sidebar showed repository groups, New Agent entry, thread rows, archive/pin/discard affordances, account/status controls, and context percentage.",
+    "A running Cursor Agent task was observed earlier in this round with live Exploring/Ran rows, Stop generation, context percentage changes, and an expanded shell command row.",
+    "A completed development chat showed Worked aggregates in the main stream.",
+    "The right pane showed Source Control with uncommitted changes, expandable changed-file cards, and an expanded file/diff-like card with line-numbered content.",
+    "Cursor right pane also had editor tabs including a file preview tab, confirming the separate right-side result/source surface baseline."
+  ],
+  "evidenceRefs": [
+    "computer-use:round-04-cursor-interactive-right-pane"
+  ],
+  "limitations": [
+    "This summary stores only a redacted structural observation; no raw accessibility tree or screenshot payload is embedded.",
+    "No Cursor sub-agent transcript/ref was observed in the available visible sessions."
+  ],
+  "redaction": {
+    "rawDomSaved": false,
+    "rawDesktopTreeSaved": false,
+    "secretsIncluded": false,
+    "localAbsolutePathsIncluded": false
+  }
+}

@@ -17,6 +17,7 @@ config.local.json
 config.*.local.json
 docs/test-artifacts/
 docs/evidence/
+reports/
 repair-evidence/private/
 workspace/*
 !workspace/.gitkeep

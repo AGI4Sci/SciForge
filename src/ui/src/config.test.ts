@@ -61,6 +61,13 @@ describe('SciForge config persistence', () => {
     assert.equal(defaultSciForgeConfig.feedbackGithubDryRun, false);
   });
 
+  it('defaults to English locale and normalizes supported app languages', () => {
+    assert.equal(defaultSciForgeConfig.locale, 'en-US');
+    assert.equal(normalizeConfig({ locale: 'en' }).locale, 'en-US');
+    assert.equal(normalizeConfig({ locale: 'zh-Hans' }).locale, 'zh-CN');
+    assert.equal(updateConfig(defaultSciForgeConfig, { locale: 'en-US' }).locale, 'en-US');
+  });
+
   it('默认 Runtime Codex 使用 DeepSeek profile 且不允许 OpenAI 自动回退', () => {
     assert.equal(defaultSciForgeConfig.runtimeProfile, DEFAULT_CODEX_RUNTIME_PROFILE);
     assert.equal(defaultSciForgeConfig.modelProvider, DEFAULT_CODEX_RUNTIME_PROVIDER);

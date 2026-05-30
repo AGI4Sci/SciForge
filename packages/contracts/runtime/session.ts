@@ -91,6 +91,7 @@ export interface SciForgeSession {
   sessionId: string;
   scenarioId: ScenarioInstanceId;
   title: string;
+  archiveState?: 'archived' | 'discarded';
   createdAt: string;
   messages: SciForgeMessage[];
   runs: SciForgeRun[];

@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "sciforge.agent-desktop-live-cursor-observation-summary.v1",
+  "roundId": "live-parity-round-01",
+  "capturedAt": "2026-05-30T06:49:00+08:00",
+  "source": {
+    "tool": "computer-use",
+    "target": "cursor-agent-desktop",
+    "ref": "computer-use:cursor-agents-round-01-accessibility-observation"
+  },
+  "privacy": {
+    "scope": "task-relevant-redacted-summary",
+    "rawAccessibilityTreeStored": false,
+    "rawTranscriptStored": false,
+    "screenshotPayloadStored": false
+  },
+  "observedSurfaces": [
+    {
+      "surface": "sidebar",
+      "summary": "Cursor Agents exposes New Agent, repository groups, per-repository New Agent entries, thread rows with pin/archive/discard affordances, a draft row, account/settings/status controls, and repository grouping."
+    },
+    {
+      "surface": "chat",
+      "summary": "The selected completed conversation shows a user message, a collapsed Worked for ... aggregate, and the final assistant answer in the main column."
+    },
+    {
+      "surface": "right-pane",
+      "summary": "The right pane is a separate tabbed preview area with a file tab visible, not a log dump inside the chat stream."
+    }
+  ],
+  "coveredRequirementIds": [
+    "sidebar-new-project-new-chat",
+    "completed-state-collapsed",
+    "right-side-result-presentation"
+  ],
+  "notes": [
+    "Observation was read-only. No Cursor Agent actions were clicked or submitted in this round.",
+    "Private conversation content and local file paths are intentionally omitted."
+  ]
+}

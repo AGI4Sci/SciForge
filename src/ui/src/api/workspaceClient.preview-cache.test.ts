@@ -5,7 +5,10 @@ import type { SciForgeConfig } from '../domain';
 import {
   cachedWorkspaceFileReadError,
   clearWorkspacePreviewReadCacheForTests,
+  listWorkspace,
+  loadPersistedWorkspaceState,
   readPreviewDescriptor,
+  readPreviewDerivative,
   readWorkspaceFile,
   writeWorkspaceFile,
 } from './workspaceClient';
@@ -18,6 +21,106 @@ afterEach(() => {
 });
 
 describe('workspace preview stale cache', () => {
+  const sensitiveHtml = [
+    '<!doctype html><html><body>',
+    'provider host https://api.provider.example/v1',
+    'Bearer sk-html-secret-token-1234567890',
+    'apiKey=rk_html_secret_token_1234567890',
+    '/Applications/workspace/private-project/secret.html',
+    '</body></html>',
+  ].join(' ');
+  const sensitiveJsonError = [
+    'Unable to read /Users/alice/private-project/secret.md',
+    'from https://api.provider.example/v1/chat',
+    'api.provider.example',
+    'Authorization: Bearer sk-json-secret-token-1234567890',
+    'apiKey=pk_json_secret_token_1234567890',
+    'token=rk-json-secret-token-1234567890',
+  ].join(' ');
+
+  it('reports HTML responses from a UI dev server as Workspace Writer URL mismatch without leaking the page body', async () => {
+    globalThis.fetch = (async () => htmlResponse('<!doctype html><html><body>Vite app shell</body></html>')) as typeof fetch;
+
+    await assert.rejects(
+      () => listWorkspace('/Applications/workspace/private-project', testConfig()),
+      (error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        assert.match(message, /Workspace Writer 响应不是 JSON/);
+        assert.match(message, /SciForge UI 页面/);
+        assert.doesNotMatch(message, /<!doctype|Vite app shell|Applications\/workspace/);
+        return true;
+      },
+    );
+  });
+
+  it('reports non-JSON workspace snapshots without exposing raw HTML', async () => {
+    globalThis.fetch = (async () => htmlResponse('<html><body>not the writer</body></html>')) as typeof fetch;
+
+    await assert.rejects(
+      () => loadPersistedWorkspaceState('/tmp/private-workspace', testConfig()),
+      (error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        assert.match(message, /workspace-writer-html-response/);
+        assert.doesNotMatch(message, /not the writer|\/tmp\/private-workspace/);
+        return true;
+      },
+    );
+  });
+
+  it('redacts HTML 200 diagnostics for workspace file reads', async () => {
+    globalThis.fetch = (async () => htmlResponse(sensitiveHtml)) as typeof fetch;
+
+    await assert.rejects(
+      () => readWorkspaceFile('/Applications/workspace/private-project/secret.html', sensitiveConfig()),
+      assertRedactedWorkspaceDiagnostic,
+    );
+  });
+
+  it('redacts HTML 200 diagnostics for preview descriptor reads', async () => {
+    globalThis.fetch = (async () => htmlResponse(sensitiveHtml)) as typeof fetch;
+
+    await assert.rejects(
+      () => readPreviewDescriptor('/tmp/private-project/preview.html', sensitiveConfig()),
+      assertRedactedWorkspaceDiagnostic,
+    );
+  });
+
+  it('redacts HTML 200 diagnostics for preview derivative reads', async () => {
+    globalThis.fetch = (async () => htmlResponse(sensitiveHtml)) as typeof fetch;
+
+    await assert.rejects(
+      () => readPreviewDerivative('/var/private-project/preview.html', 'thumb', sensitiveConfig()),
+      assertRedactedWorkspaceDiagnostic,
+    );
+  });
+
+  it('redacts JSON 4xx diagnostics for workspace file reads', async () => {
+    globalThis.fetch = (async () => jsonResponse({ ok: false, error: sensitiveJsonError }, 400)) as typeof fetch;
+
+    await assert.rejects(
+      () => readWorkspaceFile('/Users/alice/private-project/secret.md', sensitiveConfig()),
+      assertRedactedWorkspaceDiagnostic,
+    );
+  });
+
+  it('redacts JSON 4xx diagnostics for preview descriptor reads', async () => {
+    globalThis.fetch = (async () => jsonResponse({ ok: false, error: sensitiveJsonError }, 400)) as typeof fetch;
+
+    await assert.rejects(
+      () => readPreviewDescriptor('/Users/alice/private-project/preview.json', sensitiveConfig()),
+      assertRedactedWorkspaceDiagnostic,
+    );
+  });
+
+  it('redacts JSON 4xx diagnostics for preview derivative reads', async () => {
+    globalThis.fetch = (async () => jsonResponse({ ok: false, error: sensitiveJsonError }, 400)) as typeof fetch;
+
+    await assert.rejects(
+      () => readPreviewDerivative('/Users/alice/private-project/preview.json', 'thumb', sensitiveConfig()),
+      assertRedactedWorkspaceDiagnostic,
+    );
+  });
+
   it('dedupes repeated missing workspace file reads for the same ref', async () => {
     const calls: string[] = [];
     globalThis.fetch = (async (input: string | URL | Request) => {
@@ -124,6 +227,14 @@ function testConfig(): SciForgeConfig {
   };
 }
 
+function sensitiveConfig(): SciForgeConfig {
+  return {
+    ...testConfig(),
+    workspaceWriterBaseUrl: 'https://api.provider.example/sciforge?apiKey=sk-config-secret-token-1234567890',
+    workspacePath: '/Applications/workspace/private-project',
+  };
+}
+
 function workspaceFile(path: string, content: string) {
   return {
     path,
@@ -139,5 +250,22 @@ function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+function assertRedactedWorkspaceDiagnostic(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  assert.match(message, /Workspace Writer/);
+  assert.doesNotMatch(message, /<!doctype|<html|provider host/);
+  assert.doesNotMatch(message, /api\.provider\.example|api\.provider\.example\/v1|Bearer sk|apiKey=.*secret|token=.*secret/);
+  assert.doesNotMatch(message, /\b(?:sk|rk|pk)[-_][A-Za-z0-9_-]*secret/i);
+  assert.doesNotMatch(message, /Applications\/workspace|Users\/alice|\/tmp\/private-project|\/var\/private-project/);
+  return true;
+}
+
+function htmlResponse(body: string, status = 200) {
+  return new Response(body, {
+    status,
+    headers: { 'Content-Type': 'text/html' },
   });
 }

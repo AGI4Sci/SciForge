@@ -32,6 +32,9 @@ test('Runtime GUI extension manifest exposes native MCP resources and gui tools 
   assert.ok(injection.resourceUris.includes('sciforge-gui:/gui/shell.json'));
   assert.ok(injection.resourceUris.includes('sciforge-gui:/gui/hot-region.json'));
   assert.ok(injection.resourceUris.includes('sciforge-gui:/gui/intent-log.json'));
+  assert.ok(injection.resourceUris.includes('sciforge-gui:/gui/regions/sidebar/summary.md'));
+  assert.ok(injection.resourceUris.includes('sciforge-gui:/gui/regions/sidebar/refs.json'));
+  assert.ok(injection.resourceUris.includes('sciforge-gui:/gui/regions/sidebar/actions.json'));
   assert.ok(injection.resourceUris.includes('sciforge-gui:/gui/capabilities/presentation.json'));
   assert.ok(injection.resourceUris.includes('sciforge-gui:/gui/renderers/report-viewer.json'));
   assert.ok(injection.resourceUris.every((uri) => uri.startsWith('sciforge-gui:/gui/')));

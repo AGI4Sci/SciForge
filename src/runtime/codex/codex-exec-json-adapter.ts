@@ -17,6 +17,7 @@ import {
 } from './codex-runtime-audit-bundle.js';
 import { defaultGuiExtensionStatePath, prepareRuntimeGuiExtensionInjection } from './gui-extension-manifest.js';
 import { loadGuiExtensionSnapshot } from './gui-extension-state.js';
+import { prepareRuntimeSubagentInjection } from './subagent-extension-manifest.js';
 
 const RUNTIME_CODEX_EXEC_ISOLATION_ARGS = ['--skip-git-repo-check', '--ignore-rules'];
 
@@ -55,13 +56,23 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
     const attemptId = input.attemptId?.trim() || attemptIdForCommand(commandId);
     const resumeRequested = Boolean(input.codexSessionId);
     const evidenceRefs = evidenceRefsForTurn(commandId, attemptId);
+    const runtimeEnv = this.options.env ?? process.env;
+    const runtimeSandbox = resolveRuntimeCodexSandbox(runtimeEnv);
+    const codexGate = assertCodexNoForkGate({ codexCommand: runtimeEnv.SCIFORGE_RUNTIME_CODEX_COMMAND });
     const guiInjection = await prepareRuntimeGuiExtensionInjection(guiExtensionOptions(input.guiExtension, {
       workspace: config.workspace,
       commandId,
       attemptId,
     }));
-    const runtimeEnv = this.options.env ?? process.env;
-    const runtimeSandbox = resolveRuntimeCodexSandbox(runtimeEnv);
+    const subagentInjection = await prepareRuntimeSubagentInjection({
+      workspace: config.workspace,
+      profile: config.profile,
+      sandbox: runtimeSandbox,
+      codexHome: config.codexHome,
+      codexCommand: codexGate.codexCommand,
+      parentCommandId: commandId,
+      parentAttemptId: attemptId,
+    });
     const metadata: CodexRuntimeMetadata = {
       provider: config.provider,
       model: config.model,
@@ -83,9 +94,11 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
       commandText,
       codexSessionId: input.codexSessionId,
       sandbox: runtimeSandbox,
-      configArgs: guiInjection?.configArgs ?? [],
+      configArgs: [
+        ...(guiInjection?.configArgs ?? []),
+        ...subagentInjection.configArgs,
+      ],
     });
-    const codexGate = assertCodexNoForkGate({ codexCommand: runtimeEnv.SCIFORGE_RUNTIME_CODEX_COMMAND });
     const env = codexRuntimeEnv(runtimeEnv, config.codexHome);
     if (guiInjection) {
       env.PATH = [guiInjection.binDir, env.PATH].filter(Boolean).join(':');

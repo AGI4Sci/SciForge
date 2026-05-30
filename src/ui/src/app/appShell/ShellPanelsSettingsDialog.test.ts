@@ -10,12 +10,12 @@ test('settings API key defaults to masked stars and can be revealed explicitly',
   assert.match(settingsPageSource, /const \[apiKeyVisible, setApiKeyVisible\] = useState\(false\)/);
   assert.match(settingsPageSource, /type=\{apiKeyVisible \? 'text' : 'password'\}/);
   assert.match(settingsPageSource, /readOnly=\{apiKeyConfigured && !apiKeyVisible\}/);
-  assert.match(settingsPageSource, /aria-label=\{apiKeyVisible \? '隐藏 API key' : '查看 API key'\}/);
+  assert.match(settingsPageSource, /aria-label=\{apiKeyVisible \? t\(\{ 'zh-CN': '隐藏 API key', 'en-US': 'Hide API key' \}\)/);
 });
 
 test('settings copy states main chat and repair share the same LLM provider config', () => {
-  assert.match(settingsPageSource, /Main chat Runtime Codex and repair Codex CLI share this provider, model, upstream Chat Completions URL, Runtime Profile, and API key/);
-  assert.match(settingsPageSource, /local Responses proxy is internal compatibility plumbing/);
+  assert.match(settingsPageSource, /Main chat and repair flows use the Codex app-server path with this model endpoint and API key/);
+  assert.match(settingsPageSource, /Local compatibility plumbing stays hidden from the chat surface/);
 });
 
 test('settings exposes provider model catalog refresh and selection', () => {
@@ -28,6 +28,13 @@ test('settings exposes provider model catalog refresh and selection', () => {
 
 test('settings page uses sidebar navigation layout', () => {
   assert.match(settingsPageSource, /settings-page-nav/);
-  assert.match(settingsPageSource, /返回应用/);
-  assert.match(settingsPageSource, /settingsSectionNavItems/);
+  assert.match(settingsPageSource, /Back to app/);
+  assert.match(settingsPageSource, /settingsSectionNavItemsForLocale/);
+});
+
+test('settings page exposes app-wide language switching', () => {
+  assert.match(settingsPageSource, /应用语言/);
+  assert.match(settingsPageSource, /App language/);
+  assert.match(settingsPageSource, /SUPPORTED_LOCALES/);
+  assert.match(settingsPageSource, /onChange\(\{ locale: normalizeLocale\(event\.target\.value\) \}\)/);
 });

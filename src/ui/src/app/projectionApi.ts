@@ -1,6 +1,7 @@
 import type { PreviewDescriptor, RuntimeArtifact, SciForgeRun, SciForgeSession } from '../domain';
 import { artifactHasUserFacingDelivery } from '../../../../packages/support/object-references';
 import { normalizeArtifactPreviewDescriptor } from './results/previewDescriptor';
+import { boundedRightPaneText, rightPaneInlineLabel, rightPaneSafeRefs, rightPaneStructuredPreview } from './results/previewSafety';
 import {
   conversationProjectionArtifactRefs,
   conversationProjectionForSession,
@@ -90,6 +91,7 @@ export interface ArtifactPreview {
   title: string;
   mediaType?: string;
   sizeBytes?: number;
+  refs?: string[];
   preview?: string;
   structuredData?: unknown;
   actions: UserActionDescriptor[];
@@ -379,7 +381,8 @@ function artifactPreviewView(
     return {
       artifactRef,
       status: 'unavailable',
-      title: artifactRef,
+      title: rightPaneInlineLabel(artifactRef),
+      refs: rightPaneSafeRefs(artifactRef),
       actions: [],
     };
   }
@@ -387,8 +390,9 @@ function artifactPreviewView(
     return {
       artifactRef,
       status: 'unsupported',
-      title: artifactTitle(artifact),
+      title: rightPaneInlineLabel(artifactTitle(artifact)),
       mediaType: artifact.type,
+      refs: artifactPreviewRefs(artifact),
       actions: [{ id: `debug:${artifactRef}`, label: '查看调试信息', kind: 'debug', ref: artifactRef, commandText: commandTextForOpen(artifactRef) }],
     };
   }
@@ -400,9 +404,10 @@ function artifactPreviewView(
   return {
     artifactRef,
     status: manual ? 'requires-manual-load' : 'ready',
-    title: artifactTitle(artifact),
+    title: rightPaneInlineLabel(artifactTitle(artifact)),
     mediaType: stringField(artifact.delivery?.declaredMediaType) ?? artifact.type,
     sizeBytes,
+    refs: artifactPreviewRefs(artifact, descriptor),
     preview: manual ? undefined : inlineArtifactPreview(artifact, descriptor),
     structuredData: manual || mode === 'raw' ? undefined : structuredArtifactData(artifact),
     actions: manual
@@ -539,16 +544,28 @@ function artifactPath(artifact: RuntimeArtifact) {
 function inlineArtifactPreview(artifact: RuntimeArtifact, descriptor?: PreviewDescriptor) {
   if (descriptor?.inlinePolicy && descriptor.inlinePolicy !== 'inline') return undefined;
   const data = artifact.data;
-  if (typeof data === 'string') return data.slice(0, 12_000);
+  if (typeof data === 'string') return boundedRightPaneText(data);
   if (isRecord(data)) {
     const markdown = stringField(data.markdown) ?? stringField(data.content) ?? stringField(data.text);
-    if (markdown) return markdown.slice(0, 12_000);
+    if (markdown) return boundedRightPaneText(markdown);
   }
   return undefined;
 }
 
 function structuredArtifactData(artifact: RuntimeArtifact) {
-  return typeof artifact.data === 'string' ? undefined : artifact.data;
+  return typeof artifact.data === 'string' ? undefined : rightPaneStructuredPreview(artifact.data);
+}
+
+function artifactPreviewRefs(artifact: RuntimeArtifact, descriptor?: PreviewDescriptor) {
+  return rightPaneSafeRefs({
+    artifactRef: artifact.delivery?.ref ?? `artifact:${artifact.id}`,
+    readableRef: artifact.delivery?.readableRef,
+    dataRef: artifact.dataRef,
+    path: artifact.path,
+    descriptorRef: descriptor?.ref,
+    derivatives: descriptor?.derivatives,
+    data: artifact.data,
+  }, 12);
 }
 
 function actionId(prefix: string) {

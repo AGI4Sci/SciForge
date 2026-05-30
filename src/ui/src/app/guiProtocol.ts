@@ -1,5 +1,10 @@
 import { uiComponentManifests } from '../../../../packages/presentation/components/manifest-registry';
 import type { UIComponentManifest } from '../../../../packages/presentation/components/types';
+import {
+  SIDEBAR_CURSOR_AGENT_REGION_ID,
+  sidebarCursorAgentRegionDetail,
+  buildSidebarCursorAgentProjection,
+} from './appShell/sidebarCursorAgentModel';
 
 export type GuiContextLevel = 'shell' | 'hot-region' | 'region-detail' | 'debug';
 export type GuiLayoutMode = 'desktop' | 'tablet' | 'mobile';
@@ -313,6 +318,7 @@ export function createGuiProtocolController(input: GuiProtocolSnapshotInput = {}
   let status = input.status;
   let intentLog = [...(input.intentLog ?? [])];
   let regions = normalizeRegions(input.regions);
+  regions = ensureSidebarRegion(regions);
   let hotRegion = normalizeHotRegion(input.hotRegion, focusedPanel, updatedAt, regions);
 
   const controller: GuiProtocolController = {
@@ -765,6 +771,33 @@ function normalizeRegions(regions: GuiRegionDetail[] | undefined): GuiRegionDeta
     affordances: [],
     summary: 'Main chat region is visible.',
   }];
+}
+
+function ensureSidebarRegion(regions: GuiRegionDetail[]): GuiRegionDetail[] {
+  if (regions.some((region) => region.regionId === SIDEBAR_CURSOR_AGENT_REGION_ID)) return regions;
+  const projection = buildSidebarCursorAgentProjection({
+    workspace: { id: 'sidebar-projection', label: 'Sidebar projection' },
+    projects: [],
+  });
+  const region = sidebarCursorAgentRegionDetail(projection);
+  return [
+    ...regions,
+    {
+      ...region,
+      visibleRefs: [projection.sidebarResourceRef],
+      selectionSummary: 'Sidebar projection unavailable',
+      rendererState: {
+        kind: 'cursor-agent-like-sidebar',
+        projection: {
+          ...projection,
+          actions: [],
+          presentationActions: [],
+        },
+      },
+      affordances: [],
+      summary: 'Sidebar projection has not been published by the application shell yet.',
+    },
+  ];
 }
 
 function normalizeHotRegion(

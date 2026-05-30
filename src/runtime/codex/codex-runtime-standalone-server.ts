@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import { handleCodexRuntimeRoutes, handleCodexRuntimeUpgrade } from './codex-runtime-server.js';
+import { createCodexAppServerRuntimeAdapter } from './codex-runtime-adapter.js';
 import { writeJson } from '../server/http.js';
 
 const port = Number(process.env.SCIFORGE_RUNTIME_CODEX_PORT || 0);
@@ -28,12 +29,12 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  if (await handleCodexRuntimeRoutes(req, res, url)) return;
+  if (await handleCodexRuntimeRoutes(req, res, url, createCodexAppServerRuntimeAdapter({ env: process.env }))) return;
   writeJson(res, 404, { ok: false, error: 'not found' });
 });
 
 server.on('upgrade', (req, socket, head) => {
-  if (!handleCodexRuntimeUpgrade(req, socket, head)) socket.destroy();
+  if (!handleCodexRuntimeUpgrade(req, socket, head, createCodexAppServerRuntimeAdapter({ env: process.env }))) socket.destroy();
 });
 
 server.listen(port, host, () => {

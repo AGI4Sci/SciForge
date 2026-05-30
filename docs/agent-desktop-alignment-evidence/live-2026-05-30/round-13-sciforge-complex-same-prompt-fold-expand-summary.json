@@ -1,0 +1,51 @@
+{
+  "schemaVersion": "sciforge.agent-desktop-alignment.live-summary.v1",
+  "id": "round-13-sciforge-complex-same-prompt-fold-expand-summary",
+  "roundId": "live-round-13",
+  "side": "sciforge-browser",
+  "tool": "browser",
+  "target": "sciforge-web",
+  "capturedAt": "2026-05-30T20:35:15+08:00",
+  "promptId": "complex-same-prompt-fold-expand",
+  "promptDigest": "sha256:4e7496a2b04a00cc",
+  "promptSummary": "Read PROJECT.md and chat/result-renderer implementation, answer in Chinese with concise conclusions, bullets for final answer/process expansion/tool preview/right canvas/verification, no table, no raw local paths or logs.",
+  "requirementsObserved": [
+    "completed-state-collapsed",
+    "running-state-live-updates",
+    "file-preview",
+    "right-side-result-presentation"
+  ],
+  "visualStates": {
+    "collapsed": "Completed process groups render as lightweight Worked/Explored rows without replay headers or SciForge summary cards.",
+    "expanded": "Expanded process content sits in the same chat page flow: file/search leaf rows have no visible completion timestamp, More activity is muted, and final audit labels are hidden."
+  },
+  "alignmentChecks": [
+    "same complex prompt was used as the comparison prompt",
+    "completed read/search rows default to compact Cursor-like group rows",
+    "expanded rows avoid Details, Preview file, Stdout, Stderr, raw artifact/file prefixes, and log-block prose",
+    "trusted file action remains row-clickable while right-pane content stays separate from the chat answer",
+    "active assistant draft normalization removes redacted path placeholders and repaired split technical identifiers"
+  ],
+  "observations": [
+    "Browser retest found no visible Stdout/Stderr labels, no raw artifact/file prefixes in action refs, and no final audit Detail/Supporting detail text.",
+    "Leaf action completion usage and action timestamps compute to display:none, matching Cursor's plain Read/Search rows.",
+    "SciForge still preserves failures and running state when they are meaningful, but completed leaf rows do not carry status chrome."
+  ],
+  "evidenceRefs": [
+    "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-13-sciforge-complex-same-prompt-expanded.png",
+    "browser:round-13-sciforge-complex-same-prompt-fold-expand",
+    "src/ui/src/app/chat/RunningWorkProcess.tsx",
+    "src/ui/src/app/chat/FinalMessageContent.tsx",
+    "src/ui/src/app/chat/cursorAgentProcess.ts",
+    "src/ui/src/assistantText.ts",
+    "src/ui/src/styles/app-04.css"
+  ],
+  "limitations": [
+    "The current SciForge live run included failed read rows from backend path handling; this evidence focuses on presentation shape and redaction rather than answer correctness.",
+    "Sub-agent positive parity remains governed by the existing open difference and is not claimed by this round."
+  ],
+  "redaction": {
+    "status": "passed",
+    "notes": "Summary is refs-first and excludes raw DOM, raw accessibility tree, full transcript, provider details, secrets, and local absolute paths."
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "sciforge.agent-desktop-alignment.live-summary.v1",
+  "id": "round-04-sciforge-read-diff-right-preview",
+  "capturedAt": "2026-05-30T00:01:29.611Z",
+  "side": "sciforge-browser",
+  "tool": "browser",
+  "target": "sciforge-web",
+  "requirementsObserved": [
+    "running-state-live-updates",
+    "completed-state-collapsed",
+    "command-expansion",
+    "file-preview",
+    "right-side-result-presentation"
+  ],
+  "observations": [
+    "A fresh SciForge chat was started from the left sidebar/main toolbar and submitted through the web composer.",
+    "During the successful read-only run, the chat showed a live Working header, a Worked aggregate, an Explored aggregate, and individual Read action rows for a workspace-relative markdown file.",
+    "The Read action detail exposed bounded command/file facts and a Preview file control backed by a trusted workspace-relative file ref.",
+    "Opening the read action focused the right result pane on the markdown file preview; the pane rendered document content and object controls instead of a raw audit or log dump.",
+    "A second read-only diff request produced a Worked aggregate with a Diff action row and expandable action detail; this was recorded as partial diff evidence pending a full expanded diff-detail parity pass."
+  ],
+  "safeWorkspaceRefs": [
+    "parallel/prompts/gui-tui-extension-workers-20260521.md",
+    "parallel/p1/ShellPanels.tsx.bak",
+    "parallel/p1/ShellPanels.tsx"
+  ],
+  "evidenceRefs": [
+    "docs/agent-desktop-alignment-evidence/live-2026-05-30/round-04-sciforge-read-diff-right-preview-screenshot.png"
+  ],
+  "limitations": [
+    "Sub-agent transcript/ref expansion was not observed in this SciForge run.",
+    "The diff run exposed a Diff action and expandable detail, but this summary does not claim a full side-by-side diff viewer parity pass."
+  ],
+  "redaction": {
+    "rawDomSaved": false,
+    "rawDesktopTreeSaved": false,
+    "secretsIncluded": false,
+    "localAbsolutePathsIncluded": false
+  }
+}

@@ -59,7 +59,7 @@ export function sidebarProjectFromConfig(
   fallbackLabel?: string,
 ): SidebarProjectDescriptor {
   const normalizedPath = sidebarProjectPath(path);
-  const label = pathBasename(normalizedPath) || fallbackLabel || (current ? '当前项目' : '未命名项目');
+  const label = pathBasename(normalizedPath) || fallbackLabel || (current ? 'Current project' : 'Untitled project');
   return {
     id: sidebarProjectIdForPath(normalizedPath || fallbackLabel || ''),
     label,
@@ -111,6 +111,32 @@ export function removeSidebarProjectFromConfig(
   };
 }
 
+export function buildWorkspaceDirectorySwitchPatch(
+  config: SciForgeConfig,
+  nextPath: string,
+): Partial<SciForgeConfig> | undefined {
+  const targetPath = sidebarProjectPath(nextPath);
+  if (!targetPath) return undefined;
+
+  const currentPath = sidebarProjectIdForConfig(config);
+  if (targetPath === currentPath) return { workspacePath: targetPath };
+
+  const activationPatch = buildWorkspaceProjectActivation(config, {
+    id: sidebarProjectIdForPath(targetPath),
+    detail: targetPath,
+    current: false,
+  });
+  if (activationPatch?.peerInstances) return activationPatch;
+
+  const peerInstances = preserveCurrentWorkspaceAsPeer(config, currentPath)
+    .filter((peer) => sidebarProjectPath(peer.workspacePath) !== targetPath);
+
+  return {
+    workspacePath: targetPath,
+    peerInstances,
+  };
+}
+
 export function buildWorkspaceProjectActivation(
   config: SciForgeConfig,
   project: Pick<SidebarProjectDescriptor, 'id' | 'detail' | 'current'>,
@@ -140,6 +166,38 @@ export function buildWorkspaceProjectActivation(
     workspacePath: targetPath,
     peerInstances: nextPeers,
   };
+}
+
+function preserveCurrentWorkspaceAsPeer(config: SciForgeConfig, currentPath: string): PeerInstance[] {
+  const peers = [...(config.peerInstances ?? [])];
+  if (!currentPath) return peers;
+  if (peers.some((peer) => sidebarProjectPath(peer.workspacePath) === currentPath)) return peers;
+
+  const baseName = pathBasename(currentPath) || 'Workspace';
+  const peerName = uniquePeerName(peers, baseName);
+  return [
+    {
+      name: peerName,
+      appUrl: config.agentServerBaseUrl,
+      workspaceWriterUrl: config.workspaceWriterBaseUrl,
+      workspacePath: currentPath,
+      role: 'peer',
+      trustLevel: 'readonly',
+      enabled: true,
+    },
+    ...peers,
+  ];
+}
+
+function uniquePeerName(peers: PeerInstance[], baseName: string): string {
+  const names = new Set(peers.map((peer) => peer.name.trim().toLowerCase()).filter(Boolean));
+  let candidate = baseName.trim() || 'Workspace';
+  let suffix = 2;
+  while (names.has(candidate.toLowerCase())) {
+    candidate = `${baseName} ${suffix}`;
+    suffix += 1;
+  }
+  return candidate;
 }
 
 function uniqueSidebarProjects(projects: SidebarProjectDescriptor[]): SidebarProjectDescriptor[] {

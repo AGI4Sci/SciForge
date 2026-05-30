@@ -23,6 +23,7 @@ import { exportTextFile } from './exportUtils';
 import { ActionButton, Badge, Card, EmptyArtifactState, SectionHeader, cx } from './uiPrimitives';
 import { HandoffPreview, HandoffTargetButtons } from './results/HandoffControls';
 import { ArtifactCardControls } from './results/ArtifactCardControls';
+import type { ResultLocale } from './results/resultLocale';
 import { EvidenceMatrix, ExecutionPanel, NotebookTimeline } from './results/ExecutionNotebookPanels';
 import { MarkdownBlock } from './results/reportContent';
 import {
@@ -32,6 +33,7 @@ import {
   sourceVariant,
   viewCompositionSummary,
 } from './results/resultArtifactHelpers';
+import { boundedRightPaneText, formatRightPaneStructuredPreviewJson, rightPaneInlineLabel, sanitizeRightPanePreviewValue } from './results/previewSafety';
 import type { ResolvedViewPlanItem } from './results-renderer-view-model';
 import {
   artifactReferenceKind,
@@ -63,7 +65,8 @@ type RegistryEntry = {
 
 function UnknownArtifactInspector({ slot, artifact, session }: RegistryRendererProps) {
   const payload = artifact?.data ?? slot.props ?? {};
-  const table = interactiveArtifactInspectorTablePolicy(payload);
+  const safePayload = sanitizeRightPanePreviewValue(payload);
+  const table = interactiveArtifactInspectorTablePolicy(safePayload);
   const unit = session ? executionUnitForArtifact(session, artifact) : undefined;
   const refs = [
     artifact?.dataRef ? { label: 'dataRef', value: artifact.dataRef } : undefined,
@@ -77,28 +80,28 @@ function UnknownArtifactInspector({ slot, artifact, session }: RegistryRendererP
       <ArtifactSourceBar artifact={artifact} session={session} />
       <ArtifactDownloads artifact={artifact} />
       <div className="slot-meta">
-        <Badge variant="warning">详情</Badge>
-        {artifact ? <code>{artifactTypeLabel(artifact.type)}</code> : null}
-        {viewCompositionSummary(slot) ? <code>{viewCompositionSummary(slot)}</code> : null}
+        <Badge variant="warning">Details</Badge>
+        {artifact ? <code>{rightPaneInlineLabel(artifactTypeLabel(artifact.type))}</code> : null}
+        {viewCompositionSummary(slot) ? <code>{rightPaneInlineLabel(viewCompositionSummary(slot))}</code> : null}
       </div>
       {refs.length ? (
         <div className="slot-meta">
-          <span className="muted-inline">{refs.length} 条过程材料已保留。</span>
+          <span className="muted-inline">{refs.length} supporting record{refs.length === 1 ? '' : 's'} saved.</span>
         </div>
       ) : null}
       {table.rows.length ? (
         <div className="artifact-table">
           <div className="artifact-table-head" style={{ gridTemplateColumns: table.gridTemplateColumns }}>
-            {table.columns.map((column) => <span key={column}>{column}</span>)}
+            {table.columns.map((column) => <span key={column}>{rightPaneInlineLabel(column)}</span>)}
           </div>
           {table.rows.slice(0, table.rowLimit).map((row, index) => (
             <div className="artifact-table-row" key={index} style={{ gridTemplateColumns: table.gridTemplateColumns }}>
-              {table.columns.map((column) => <span key={column}>{String(row[column] ?? '-')}</span>)}
+              {table.columns.map((column) => <span key={column}>{rightPaneInlineLabel(row[column] ?? '-')}</span>)}
             </div>
           ))}
         </div>
       ) : (
-        <pre className="inspector-json">{JSON.stringify(payload, null, 2)}</pre>
+        <pre className="inspector-json">{formatRightPaneStructuredPreviewJson(payload)}</pre>
       )}
     </div>
   );
@@ -116,7 +119,7 @@ function ArtifactDownloads({ artifact }: { artifact?: RuntimeArtifact }) {
           variant="secondary"
           onClick={() => exportTextFile(item.name, item.content, item.contentType)}
         >
-          {item.name}{typeof item.rowCount === 'number' ? ` · ${item.rowCount} rows` : ''}
+          {rightPaneInlineLabel(item.name)}{typeof item.rowCount === 'number' ? ` · ${item.rowCount} rows` : ''}
         </ActionButton>
       ))}
     </div>
@@ -144,8 +147,8 @@ function ComponentEmptyState({
   ];
   return (
     <EmptyArtifactState
-      title={title ?? component?.emptyState.title ?? '等待结果材料'}
-      detail={detail ?? component?.emptyState.detail ?? '当前组件没有可展示材料；请运行场景或导入匹配数据。'}
+      title={title ?? component?.emptyState.title ?? 'Waiting for results'}
+      detail={detail ?? component?.emptyState.detail ?? 'Run a task or import matching data to preview it here.'}
       recoverActions={Array.from(new Set(recoverActions))}
     />
   );
@@ -158,18 +161,18 @@ function ArtifactSourceBar({ artifact, session }: { artifact?: RuntimeArtifact; 
     return (
       <div className="artifact-source-bar">
         <Badge variant="muted">empty</Badge>
-        <code>等待结果材料</code>
+        <code>Waiting for results</code>
       </div>
     );
   }
   return (
     <div className="artifact-source-bar" data-sciforge-reference={sciForgeReferenceAttribute(referenceForArtifact(artifact, artifactReferenceKind(artifact)))}>
       <Badge variant={sourceVariant(source)}>{artifactSourceLabel(source)}</Badge>
-      <code>{artifact.id}</code>
-      <code>{artifactTypeLabel(artifact.type)}</code>
-      <code>版本 {artifact.schemaVersion}</code>
-      {artifact.path || artifact.dataRef ? <code title="材料路径已归档">材料已归档</code> : null}
-      {unit ? <code title="过程材料已匹配">{safeSourceBarLabel(`${unit.tool} ${unit.status}`)}</code> : <code>等待过程线索</code>}
+      <code>{rightPaneInlineLabel(artifact.id)}</code>
+      <code>{rightPaneInlineLabel(artifactTypeLabel(artifact.type))}</code>
+      <code>v{artifact.schemaVersion}</code>
+      {artifact.path || artifact.dataRef ? <code title="Source path saved">Source saved</code> : null}
+      {unit ? <code title="Activity matched">{safeSourceBarLabel(`${unit.tool} ${unit.status}`)}</code> : <code>Waiting for activity</code>}
     </div>
   );
 }
@@ -180,22 +183,24 @@ function safeSourceBarLabel(value: string) {
       .replace(/\bExecutionUnit\b/gi, '过程步骤')
       .replace(/\bEU-[\w:-]+/g, '过程步骤')
       .replace(/\bstdout|stderr|provider|runtime|debug|raw|tool\b/gi, '过程')
-      .replace(/\brun[-:]?[\w:-]+/gi, '本轮任务');
-  return compactParams(safe.trim() || '过程材料已匹配');
+      .replace(/\brun[-:]?[\w:-]+/gi, 'current run')
+      .replace(/过程步骤/g, 'activity step')
+      .replace(/过程/g, 'activity');
+  return compactParams(safe.trim() || 'Activity matched');
 }
 
 function artifactSourceLabel(source: string) {
-  if (source === 'runtime-artifact') return '运行结果';
-  if (source === 'project-tool') return '运行结果';
-  if (source === 'user-upload') return '用户上传';
-  if (source === 'external') return '外部材料';
-  if (source === 'empty') return '等待材料';
-  return source.replace(/runtime|artifact/gi, '材料');
+  if (source === 'runtime-artifact') return 'Result';
+  if (source === 'project-tool') return 'Result';
+  if (source === 'user-upload') return 'Upload';
+  if (source === 'external') return 'External';
+  if (source === 'empty') return 'Waiting';
+  return source.replace(/runtime|artifact/gi, 'result');
 }
 
 function artifactTypeLabel(type: string) {
-  if (type === 'runtime-artifact') return '结果材料';
-  return type.replace(/runtime-artifact/gi, '结果材料');
+  if (type === 'runtime-artifact') return 'Result';
+  return type.replace(/runtime-artifact/gi, 'Result');
 }
 
 function packageRendererProps(props: RegistryRendererProps): UIComponentRendererProps {
@@ -288,6 +293,7 @@ export function RegistrySlot({
   config,
   session,
   item,
+  locale: _locale,
   onArtifactHandoff,
   onInspectArtifact,
   onObjectReferenceFocus,
@@ -297,6 +303,7 @@ export function RegistrySlot({
   config: SciForgeConfig;
   session: SciForgeSession;
   item: ResolvedViewPlanItem;
+  locale?: ResultLocale;
   onArtifactHandoff: (targetScenario: ScenarioId, artifact: RuntimeArtifact) => void;
   onInspectArtifact: (artifact: RuntimeArtifact) => void;
   onObjectReferenceFocus?: (reference: ObjectReference) => void;
@@ -337,12 +344,12 @@ export function RegistrySlot({
                     .catch((error) => setDeliveryOpenError(error instanceof Error ? error.message : String(error)));
                 }}
               >
-                系统打开
+                Open externally
               </button>
             ) : null}
-            {artifact.delivery?.rawRef ? <span className="muted-inline">原始材料已保留用于审计</span> : null}
+            {artifact.delivery?.rawRef ? <span className="muted-inline">Source material saved for review</span> : null}
           </div>
-          {deliveryOpenError ? <p className="object-action-error">{deliveryOpenError}</p> : null}
+          {deliveryOpenError ? <p className="object-action-error">{boundedRightPaneText(deliveryOpenError, 800)}</p> : null}
         </div>
       </Card>
     );
@@ -406,14 +413,21 @@ export function RegistrySlot({
 }
 
 function safeFallbackText(value: string) {
-  return value
-    .replace(/componentId/gi, '组件')
-    .replace(/\bScenario\b/g, '场景')
-    .replace(/\bartifactRef\b/gi, '材料引用')
-    .replace(/\bartifact\b/gi, '材料')
-    .replace(/\bmanifest\b/gi, '展示配置')
-    .replace(/\binspector\b/gi, '详情视图')
-    .replace(/日志引用/g, '过程材料');
+  return boundedRightPaneText(value
+    .replace(/componentId/gi, 'component')
+    .replace(/\bScenario\b/g, 'chat mode')
+    .replace(/\bartifactRef\b/gi, 'result reference')
+    .replace(/\bartifact\b/gi, 'result')
+    .replace(/\bmanifest\b/gi, 'view settings')
+    .replace(/\binspector\b/gi, 'preview')
+    .replace(/日志引用/g, 'supporting record')
+    .replace(/返回了未知 component/g, 'returned an unknown component')
+    .replace(/当前使用通用 preview 展示/g, 'using a generic preview for')
+    .replace(/未找到/g, 'not found')
+    .replace(/：/g, ': ')
+    .replace(/。/g, '.')
+    .replace(/、/g, ', ')
+    .replace(/\s+和\s+/g, ' and '), 800);
 }
 
 function artifactDeliveryPreview(artifact?: RuntimeArtifact): { subtitle: string; detail: string; openRef?: string } | undefined {
